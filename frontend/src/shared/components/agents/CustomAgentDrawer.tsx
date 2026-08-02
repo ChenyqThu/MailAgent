@@ -1,7 +1,7 @@
 // S5 W2 — 完全自定义 Agent（type='custom'）配置抽屉。复刻 SearchConfigDrawer 三段式
 // 脚手架（进/退场动效 + header/body/footer glass 面板），字段扩为 custom agent 所需：
 // title / prompt / model / enabled + trigger 判别式（无 | cron | email_filter）+ allowed_tools
-// 多选 + budget 三门 + run 历史（8 状态穷举）。
+// 多选 + budget 两门 + run 历史（9 状态穷举）。
 //
 // 纪律：
 //  • 校验只做浅校验（必填 / 数值范围 / cron 5 段 / email 谓词至少一个）；深校验（croniter /
@@ -18,6 +18,7 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import type {
+  AgentAvatarConfig,
   CustomAgentToolPolicy,
   CustomAgentTrigger,
   ReportAgentConfig,
@@ -51,25 +52,23 @@ import {
   useSetConfig,
   useToolOptions
 } from './hooks'
-import { groupToolOptions } from './toolGroups'
 import { ModelSelectItems } from './drawers/ModelSelectItems'
 import { errText, type WebGrant } from './custom-agent/shared'
 import { RunHistorySection } from './custom-agent/RunHistorySection'
 import { AutomationPolicySection } from './custom-agent/AutomationPolicySection'
-import { ExtraCapabilitiesSection } from './custom-agent/ExtraCapabilitiesSection'
+import { CapabilityCards } from './custom-agent/CapabilityCards'
+import { AgentAvatarEditor } from './AgentAvatar'
 
 export { RunStateBadge } from './custom-agent/RunHistorySection'
 
-// budget 三门默认 + 上限（与 src/agents/trigger.py DEFAULT_*/CEILING 对齐；浅校验用）。
-const DEFAULT_MAX_STEPS = 8
-const MAX_STEPS_CEILING = 16
+// budget 两门默认 + 上限（与 src/agents/trigger.py DEFAULT_*/CEILING 对齐；浅校验用）。
 const DEFAULT_MAX_RUNS_PER_DAY = 24
-const DEFAULT_MAX_RUN_SECONDS = 300
+const DEFAULT_MAX_RUN_SECONDS = 1800
 const MAX_RUN_SECONDS_CEILING = 1800
 
 // per-agent skill 挂载默认集（S6 W3-3；与 src/api/routers/agent_runs.py 的
 // DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS 同源，NULL 挂载 → 默认集，工具面与现存 agent 逐字节一致）。
-const DEFAULT_MOUNTED_SKILLS = ['email', 'search']
+const DEFAULT_MOUNTED_SKILLS = ['email', 'search', 'report']
 
 type TriggerKind = 'none' | 'cron' | 'email_filter'
 const TRIGGER_KINDS: TriggerKind[] = ['none', 'cron', 'email_filter']
@@ -134,6 +133,8 @@ export function CustomAgentDrawer({
 
   const [enabled, setEnabled] = useState(false)
   const [title, setTitle] = useState('')
+  const [avatar, setAvatar] = useState<AgentAvatarConfig | null>(null)
+  const [avatarDirty, setAvatarDirty] = useState(false)
   const [prompt, setPrompt] = useState('')
   const [promptDirty, setPromptDirty] = useState(false)
   const [model, setModel] = useState<string>('')
@@ -170,7 +171,6 @@ export function CustomAgentDrawer({
   const [mountedSkills, setMountedSkills] = useState<string[]>([])
   const [skillsMode, setSkillsMode] = useState<'defaults' | 'explicit'>('defaults')
   const [skillsDirty, setSkillsDirty] = useState(false)
-  const [maxSteps, setMaxSteps] = useState(DEFAULT_MAX_STEPS)
   const [maxRunsPerDay, setMaxRunsPerDay] = useState(DEFAULT_MAX_RUNS_PER_DAY)
   const [maxRunSeconds, setMaxRunSeconds] = useState(DEFAULT_MAX_RUN_SECONDS)
   const [err, setErr] = useState<string | null>(null)
@@ -192,6 +192,8 @@ export function CustomAgentDrawer({
     if (create || !cfg) {
       setEnabled(false)
       setTitle('')
+      setAvatar(null)
+      setAvatarDirty(false)
       setPrompt('')
       setPromptDirty(false)
       setModel('')
@@ -216,13 +218,14 @@ export function CustomAgentDrawer({
       setMountedSkills(DEFAULT_MOUNTED_SKILLS)
       setSkillsMode('defaults')
       setSkillsDirty(false)
-      setMaxSteps(DEFAULT_MAX_STEPS)
       setMaxRunsPerDay(DEFAULT_MAX_RUNS_PER_DAY)
       setMaxRunSeconds(DEFAULT_MAX_RUN_SECONDS)
       return
     }
     setEnabled(cfg.enabled)
     setTitle(cfg.title)
+    setAvatar(cfg.avatar ?? null)
+    setAvatarDirty(false)
     setPrompt(cfg.prompt_is_default ? '' : cfg.prompt)
     setPromptDirty(false)
     setModel(cfg.model || '')
@@ -292,7 +295,6 @@ export function CustomAgentDrawer({
       setSkillsMode('defaults')
     }
     setSkillsDirty(false)
-    setMaxSteps(cfg.budget?.max_steps ?? DEFAULT_MAX_STEPS)
     setMaxRunsPerDay(cfg.budget?.max_runs_per_day ?? DEFAULT_MAX_RUNS_PER_DAY)
     setMaxRunSeconds(cfg.budget?.max_run_seconds ?? DEFAULT_MAX_RUN_SECONDS)
   }, [open, cfg, create])
@@ -321,23 +323,6 @@ export function CustomAgentDrawer({
     border: '1px solid rgb(var(--ink-border))',
     borderRadius: 8,
     padding: '9px 11px'
-  }
-
-  const toggleTool = (name: string): void => {
-    setToolsDirty(true)
-    setSelectedTools((prev) =>
-      prev.includes(name) ? prev.filter((x) => x !== name) : [...prev, name]
-    )
-  }
-
-  // R3 — 组级批量（全选/清空一个家族）。与 toggleTool 同一 toolsDirty 纪律（触碰即显式）。
-  const setGroupTools = (names: string[], on: boolean): void => {
-    setToolsDirty(true)
-    setSelectedTools((prev) =>
-      on
-        ? [...prev, ...names.filter((n) => !prev.includes(n))]
-        : prev.filter((x) => !names.includes(x))
-    )
   }
 
   // trigger tagged-union 构造（none → null = 草稿/禁用触发）。
@@ -376,9 +361,6 @@ export function CustomAgentDrawer({
     ) {
       return t('agents.custom.errEmailPredicate')
     }
-    if (maxSteps < 1 || maxSteps > MAX_STEPS_CEILING) {
-      return t('agents.custom.errMaxSteps', { max: MAX_STEPS_CEILING })
-    }
     if (maxRunSeconds < 1 || maxRunSeconds > MAX_RUN_SECONDS_CEILING) {
       return t('agents.custom.errMaxRunSeconds', { max: MAX_RUN_SECONDS_CEILING })
     }
@@ -398,7 +380,6 @@ export function CustomAgentDrawer({
     const trigger = buildTrigger()
     const budget = {
       v: 1 as const,
-      max_steps: maxSteps,
       max_runs_per_day: maxRunsPerDay,
       max_run_seconds: maxRunSeconds
     }
@@ -433,7 +414,8 @@ export function CustomAgentDrawer({
             prompt: prompt.trim() || null,
             trigger,
             tool_policy: toolPolicy,
-            budget
+            budget,
+            ...(avatarDirty ? { avatar } : {})
           })
         )
         .then(onClose)
@@ -452,6 +434,7 @@ export function CustomAgentDrawer({
       trigger,
       budget
     }
+    if (avatarDirty) editPatch.avatar = avatar
     // 编辑「按需发送」tool_policy：仅当用户本次会话触碰过工具区（toolsDirty）或 grant 开关
     // （grantDirty，S5 W5b —— 触碰 grant 即触碰 tool_policy）才发。未触碰 → 省略字段（PATCH
     // 语义：字段缺席=不动）——NULL 行仅改 prompt 保存后仍是 NULL（投影层默认安全集继续生效），
@@ -556,6 +539,20 @@ export function CustomAgentDrawer({
               placeholder={t('agents.custom.titlePlaceholder')}
               onChange={(e) => setTitle(e.target.value)}
               style={inputStyle}
+            />
+          </Field>
+
+          <Field label={t('agents.custom.avatar.label')} hint={t('agents.custom.avatar.hint')}>
+            <AgentAvatarEditor
+              agentId={cfg?.id ?? slugifyTitle(title)}
+              value={avatar}
+              onChange={(next) => {
+                setAvatar(next)
+                setAvatarDirty(true)
+              }}
+              shuffleLabel={t('agents.custom.avatar.shuffle')}
+              shapeLabel={t('agents.custom.avatar.shape')}
+              paletteLabel={t('agents.custom.avatar.palette')}
             />
           </Field>
 
@@ -717,185 +714,31 @@ export function CustomAgentDrawer({
             )}
           </Field>
 
-          {/* allowed_tools 多选 */}
-          <Field label={t('agents.custom.tools.label')} hint={t('agents.custom.tools.hint')}>
-            {toolOptions.tools.length === 0 ? (
-              // 工具清单无法加载（端点未就绪 / flag off）→ 禁用该区编辑（无可点 chip →
-              // toolsDirty 永不置真 → 编辑保存省略 tool_policy，绝不在信息缺失下写错集合）。
-              // 已有显式集合只读展示，让用户看清当前配置。
-              <div>
-                <div
-                  style={{
-                    fontSize: 12.5,
-                    color: 'rgb(var(--ink-fg-3))',
-                    padding: '11px 13px',
-                    borderRadius: 9,
-                    background: 'rgb(var(--ink-1) / 0.5)',
-                    border: '1px solid rgb(var(--ink-border-soft))'
-                  }}
-                >
-                  {t('agents.custom.tools.unavailable')}
-                </div>
-                {selectedTools.length > 0 && (
-                  <div
-                    className="flex items-center"
-                    style={{ gap: 6, flexWrap: 'wrap', marginTop: 8 }}
-                  >
-                    {selectedTools.map((name) => (
-                      <span
-                        key={name}
-                        style={{
-                          padding: '5px 10px',
-                          borderRadius: 8,
-                          fontFamily: 'var(--font-mono, monospace)',
-                          fontSize: 12,
-                          color: 'rgb(var(--ink-fg-2))',
-                          background: 'rgb(var(--ink-1) / 0.5)',
-                          border: '1px solid rgb(var(--ink-border))'
-                        }}
-                      >
-                        {name}
-                      </span>
-                    ))}
-                  </div>
-                )}
-              </div>
-            ) : (
-              // R3 — 按家族分组渲染（toolGroups.ts 常量；未映射工具落「其他」组不静默丢）。
-              // 组级批量 = 全选/清空（走 setGroupTools，同 toolsDirty 纪律）；组内 chip 单控不变。
-              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-                {groupToolOptions(toolOptions.tools).map((group) => {
-                  const names = group.tools.map((tl) => tl.name)
-                  const selectedCount = names.filter((n) => selectedTools.includes(n)).length
-                  return (
-                    <div key={group.id}>
-                      <div className="flex items-center" style={{ gap: 8, marginBottom: 6 }}>
-                        <span
-                          style={{ fontSize: 12, fontWeight: 500, color: 'rgb(var(--ink-fg-2))' }}
-                        >
-                          {t(`agents.custom.tools.group.${group.id}`)}
-                        </span>
-                        <span style={{ fontSize: 11, color: 'rgb(var(--ink-fg-3))' }}>
-                          {selectedCount}/{names.length}
-                        </span>
-                        <span style={{ flex: 1 }} />
-                        <button
-                          type="button"
-                          onClick={() => setGroupTools(names, true)}
-                          style={{
-                            fontFamily: 'inherit',
-                            fontSize: 11.5,
-                            padding: '2px 8px',
-                            borderRadius: 6,
-                            cursor: 'pointer',
-                            color: 'rgb(var(--ink-fg-2))',
-                            background: 'transparent',
-                            border: '1px solid rgb(var(--ink-border))'
-                          }}
-                        >
-                          {t('agents.custom.tools.groupSelectAll')}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setGroupTools(names, false)}
-                          style={{
-                            fontFamily: 'inherit',
-                            fontSize: 11.5,
-                            padding: '2px 8px',
-                            borderRadius: 6,
-                            cursor: 'pointer',
-                            color: 'rgb(var(--ink-fg-2))',
-                            background: 'transparent',
-                            border: '1px solid rgb(var(--ink-border))'
-                          }}
-                        >
-                          {t('agents.custom.tools.groupClearAll')}
-                        </button>
-                      </div>
-                      <div className="flex items-center" style={{ gap: 8, flexWrap: 'wrap' }}>
-                        {group.tools.map((tool) => {
-                          const on = selectedTools.includes(tool.name)
-                          const isWrite = tool.class === 'domain_write'
-                          return (
-                            <button
-                              key={tool.name}
-                              type="button"
-                              aria-pressed={on}
-                              onClick={() => toggleTool(tool.name)}
-                              title={isWrite ? t('agents.custom.tools.writeTag') : undefined}
-                              style={{
-                                display: 'inline-flex',
-                                alignItems: 'center',
-                                gap: 5,
-                                padding: '6px 11px',
-                                borderRadius: 8,
-                                fontFamily: 'var(--font-mono, monospace)',
-                                fontSize: 12.5,
-                                cursor: 'pointer',
-                                color: on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-fg-2))',
-                                background: on
-                                  ? 'rgb(var(--c-accent) / 0.14)'
-                                  : 'rgb(var(--ink-1) / 0.5)',
-                                border: `1px solid ${on ? 'rgb(var(--c-accent))' : 'rgb(var(--ink-border))'}`
-                              }}
-                            >
-                              {tool.name}
-                              {isWrite && (
-                                <span
-                                  style={{
-                                    fontSize: 10,
-                                    fontFamily: 'inherit',
-                                    color: 'rgb(var(--c-warn))'
-                                  }}
-                                >
-                                  {t('agents.custom.tools.writeBadge')}
-                                </span>
-                              )}
-                            </button>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )
-                })}
-              </div>
-            )}
-          </Field>
-
-          {/* 额外能力（R3）：grant_web / grant_exec 授权 —— 工具白名单之外的能力面，
-                紧邻工具区提升可发现性；新建模式也渲染（create 二段 setConfig 接受 grant 键）。 */}
-          <ExtraCapabilitiesSection
+          <CapabilityCards
+            selectedTools={selectedTools}
+            onSelectedToolsChange={(next) => {
+              setSelectedTools(next)
+              setToolsDirty(true)
+            }}
             agentTitle={title.trim() || (cfg ? cfg.title : t('agents.custom.newTitle'))}
             triggerKind={create ? triggerKind : (cfg?.trigger?.kind ?? null)}
             grantExec={grantExec}
-            onGrantChange={(next) => {
+            onGrantExecChange={(next) => {
               setGrantExec(next)
               setGrantDirty(true)
             }}
             grantWeb={grantWeb}
-            onWebChange={(next) => {
+            onGrantWebChange={(next) => {
               setGrantWeb(next)
               setWebDirty(true)
             }}
             flags={opennessFlags}
+            toolOptions={toolOptions}
           />
 
-          {/* budget 三门 */}
+          {/* budget 两门 */}
           <Field label={t('agents.custom.budget.label')} hint={t('agents.custom.budget.hint')}>
             <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-              <div className="flex items-center" style={{ gap: 10 }}>
-                <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
-                  {t('agents.custom.budget.maxSteps', { max: MAX_STEPS_CEILING })}
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  max={MAX_STEPS_CEILING}
-                  value={maxSteps}
-                  onChange={(e) => setMaxSteps(Number(e.target.value))}
-                  style={{ ...inputStyle, width: 110 }}
-                />
-              </div>
               <div className="flex items-center" style={{ gap: 10 }}>
                 <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
                   {t('agents.custom.budget.maxRunsPerDay')}

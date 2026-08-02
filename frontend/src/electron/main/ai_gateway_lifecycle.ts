@@ -79,6 +79,7 @@ interface ChatConfigResponse {
   memorySummary?: string | null
   kosConfigured?: boolean
   advertisedSkills?: string[] | null
+  trustedSkillFragments?: string | null
 }
 
 let _handle: AiGatewayHandle | null = null
@@ -275,7 +276,10 @@ async function getSystemPromptConfig(
       kosConfigured: cfg.kosConfigured ?? false,
       // M4a — advertised (enabled && available) skill names for skill→tool gating (read by the
       // buildTools factory, NOT the prompt). null when /chat/config omits it → gateway fails open.
-      advertisedSkills: cfg.advertisedSkills ?? null
+      advertisedSkills: cfg.advertisedSkills ?? null,
+      // W6 — backend-filtered code-owned workflow guidance. Never carries installed third-party
+      // prompt fragments; null/empty preserves the post-cutover no-fragment behaviour.
+      trustedSkillFragments: cfg.trustedSkillFragments ?? null
     }
   } catch (err) {
     console.warn('[ai-gateway] /chat/config fetch failed — context-light system prompt', err)

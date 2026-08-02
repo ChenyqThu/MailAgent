@@ -38,16 +38,37 @@ export interface GatewaySystemPromptConfig {
    *  on this cached projection only because it shares the same /chat/config fetch + TTL cache as the
    *  prompt fields. null/undefined → unknown → gating fails open (no filtering). */
   advertisedSkills?: string[] | null
+  /** Code-owned enabled skill guidance from /chat/config. This deliberately excludes installed
+   *  third-party prompt fragments; W6 currently contributes only the Custom Agent builder flow. */
+  trustedSkillFragments?: string | null
+}
+
+/** Code-owned runtime discipline for unattended custom-agent runs. This is intentionally not a
+ *  configurable string: no request/spec/installed-skill content can enter this trusted section. */
+export const HEADLESS_AGENT_EXECUTION_DISCIPLINE = [
+  '# Headless execution discipline',
+  'If the same tool operation fails in the same way 2-3 times, stop repeating it. Change approach,',
+  'use a different available tool, or report the task as incomplete with the observed reason and',
+  'evidence. Never claim success after repeated identical failures.'
+].join('\n')
+
+/** Add the code-owned headless discipline to the legacy body.system path used by pure harnesses. */
+export function appendHeadlessAgentExecutionDiscipline(system?: string): string {
+  return [system ?? '', HEADLESS_AGENT_EXECUTION_DISCIPLINE]
+    .filter((segment) => segment.length > 0)
+    .join('\n\n')
 }
 
 /** Build the streamText `system` string for an AI SDK gateway run. Always returns a non-empty
  *  string: the stable prefix is never empty (it falls back to SOUL_MARKDOWN when nothing is
  *  configured), and the typed context block (with untrusted fences) is appended when a snapshot
- *  carries usable context. `skillFragments` is intentionally NOT injected here — the gateway conveys
- *  skill capability + honest unavailability through the snapshot's capabilities block instead. */
+ *  carries usable context. Only backend-selected, code-owned skill fragments are injected; generic
+ *  installed-skill fragments remain excluded from the gateway prompt. */
 export function buildGatewaySystemPrompt(args: {
   promptConfig: GatewaySystemPromptConfig | null
   contextSnapshot: AgentContextSnapshot | null
+  /** Trusted runtime provenance, set only by prepareChatRun for a server-derived headless agent. */
+  headlessAgentRun?: boolean
 }): string {
   const pc = args.promptConfig
   const cfg: ChatModelConfig = {
@@ -57,7 +78,10 @@ export function buildGatewaySystemPrompt(args: {
     kosL1HotBlockEnabled: false, // the gateway does no L1 sender-digest prefetch
     userContext: pc?.userContext && pc.userContext.length > 0 ? pc.userContext : null,
     memorySummary: pc?.memorySummary && pc.memorySummary.length > 0 ? pc.memorySummary : null,
-    skillFragments: null, // conveyed via the snapshot's capabilities block, not the legacy section
+    skillFragments:
+      pc?.trustedSkillFragments && pc.trustedSkillFragments.length > 0
+        ? pc.trustedSkillFragments
+        : null,
     standingContext:
       pc?.standingContext && pc.standingContext.length > 0 ? pc.standingContext : null
   }
@@ -68,14 +92,15 @@ export function buildGatewaySystemPrompt(args: {
   // byte-identical flag-off. This replaces the retired M2 per-query recall block.
   const stable = buildStableSystemPrompt(null, cfg, () => null)
   const contextBlock = args.contextSnapshot ? buildContextSystemBlock(args.contextSnapshot) : ''
-  // Order: stable (cacheable, incl. memory.md) → context (current view) → current-date (always). Each
-  // segment is joined only when non-empty; the date block is ALWAYS non-empty so both the general
-  // agent (empty contextBlock) and the email chat carry it. It is the LAST segment so the whole
-  // stable+context prefix stays a stable prompt-cache prefix — only the trailing date line changes,
-  // and at DATE granularity it changes at most once per day (no minute/second stamp that would bust
-  // the cache every turn).
+  const executionDiscipline = args.headlessAgentRun ? HEADLESS_AGENT_EXECUTION_DISCIPLINE : ''
+  // Order: stable (cacheable, incl. memory.md) → context (current view) → trusted headless runtime
+  // discipline (when applicable) → current-date (always). Each segment is joined only when
+  // non-empty; the date block is ALWAYS non-empty and remains LAST so the preceding prompt stays a
+  // stable cache prefix and the date changes at most once per day.
   const dateBlock = buildCurrentDateBlock(args.contextSnapshot)
-  return [stable, contextBlock, dateBlock].filter((s) => s.length > 0).join('\n\n')
+  return [stable, contextBlock, executionDiscipline, dateBlock]
+    .filter((s) => s.length > 0)
+    .join('\n\n')
 }
 
 /** Build the always-present "current date" segment appended last to the gateway system prompt.

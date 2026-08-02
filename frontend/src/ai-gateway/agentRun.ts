@@ -45,11 +45,15 @@ import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // (tsx) must be able to load this module without resolving vite aliases.
 import type { AgentRunSpec, HeadlessAgentResult } from '../shared/api/types'
 
-/** ADR-003 D7 — max_steps hard ceiling (mirrors the Python parse_budget clamp, trigger.py
- *  MAX_STEPS_CEILING=16). Python already clamps spec.budget.maxSteps into [1,16]; this is a
- *  defensive re-clamp so a malformed spec still lands in range. */
-export const HEADLESS_MAX_STEPS_CEILING = 16
-const HEADLESS_DEFAULT_MAX_STEPS = 8
+export const DEFAULT_AGENT_RUN_SECONDS = 1800
+export const MAX_AGENT_RUN_SECONDS = 1800
+
+/** Mirror the backend Budget clamp at the gateway boundary so stale or malformed specs cannot
+ * silently restore the retired five-minute timeout or bypass the 30-minute ceiling. */
+export function resolveAgentRunSeconds(value: unknown): number {
+  if (typeof value !== 'number' || !Number.isFinite(value)) return DEFAULT_AGENT_RUN_SECONDS
+  return Math.max(1, Math.min(MAX_AGENT_RUN_SECONDS, Math.trunc(value)))
+}
 
 export interface RunHeadlessAgentOpts {
   jobId: number
@@ -188,13 +192,6 @@ export function wrapCfgForAgentRun(
   }
 }
 
-/** Defensive re-clamp of the budget step ceiling. */
-function clampMaxSteps(raw: unknown): number {
-  const n =
-    typeof raw === 'number' && Number.isFinite(raw) ? Math.floor(raw) : HEADLESS_DEFAULT_MAX_STEPS
-  return Math.max(1, Math.min(HEADLESS_MAX_STEPS_CEILING, n))
-}
-
 /** Map a drain failure to a structured error code (mirrors searchAgentRun.normalizeLoopError):
  *  HTTP 429 → E_QUOTA, other upstream API errors → E_UPSTREAM, anything else → E_AGENT. */
 function normalizeAgentError(err: unknown): { code: string; message: string } {
@@ -222,7 +219,7 @@ async function resolveSteps(result: { steps?: unknown }): Promise<number> {
 
 /**
  * Run one headless custom-agent turn: build a synthetic body from the spec, wrap cfg with the
- * per-agent tool narrowing + budget step cap, prepareChatRun under the DERIVED context mode, then
+ * per-agent tool narrowing, prepareChatRun under the DERIVED context mode, then
  * drain the stream server-side (driving the tool loop → execute → guard.verify/consume → write →
  * makePersistOnFinish). Never throws — every failure normalizes into { ok:false, outcome:'error' }.
  *
@@ -239,10 +236,12 @@ export async function runHeadlessAgent(
   const { spec, sessionId } = opts
   const contextMode = deriveContextMode(spec)
 
-  // Synthetic body: the owner-configured taskPrompt (TRUSTED) + the server-fenced emailEnvelope
-  // (already an UNTRUSTED_EMAIL_BODY block from W2). Physically ONE user message — the envelope
-  // carries its own fence, so we concatenate verbatim WITHOUT re-wrapping. A stable message id
-  // (derived from jobId) lets persistTurn's eager-write dedup behave.
+  // Synthetic body: the owner-configured taskPrompt + the server-fenced emailEnvelope (already an
+  // UNTRUSTED_EMAIL_BODY block from W2). The code-owned repeated-failure discipline is injected by
+  // prepareChatRun into the trusted system channel when it sees this headless cfg's agentRunContext;
+  // no spec/body string participates in that trusted section. Physically ONE user message — the
+  // envelope carries its own fence, so concatenate it verbatim WITHOUT re-wrapping. A stable message
+  // id (derived from jobId) lets persistTurn's eager-write dedup behave.
   const taskPrompt = spec.prompt?.taskPrompt ?? ''
   const envelope = spec.prompt?.emailEnvelope ?? ''
   const userText = envelope ? `${taskPrompt}\n\n${envelope}` : taskPrompt
@@ -260,14 +259,10 @@ export async function runHeadlessAgent(
   // whitelist agentId). So a headless run's tool面 is: (the matrix's product under the derived
   // mode, incl. the per-agent exec grant) ∩ allowedTools. There is no body/prompt control surface.
   // wrapCfgForAgentRun is the SHARED wrapper the island resume also rebuilds through, so a
-  // pause→resume chain keeps the exact same tool face; maxSteps stays fresh-spawn-only (it is not
-  // part of the frozen context — a resumed drain runs under the base default, and the worker's
-  // run-seconds abort still bounds it).
+  // pause→resume chain keeps the exact same tool face. Both fresh and resumed drains use chatRun's
+  // internal 10k termination sentinel; the worker's run-seconds abort remains the actual budget.
   const agentRunContext = agentRunContextFromSpec(spec, opts.jobId)
-  const cfg2: AiGatewayConfig = {
-    ...wrapCfgForAgentRun(cfg, agentRunContext),
-    maxSteps: clampMaxSteps(spec.budget?.maxSteps)
-  }
+  const cfg2 = wrapCfgForAgentRun(cfg, agentRunContext)
 
   const prepared = await prepareChatRun(body, cfg2, abortSignal, contextMode)
   if (!prepared.ok) {

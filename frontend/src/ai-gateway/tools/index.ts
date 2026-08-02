@@ -15,7 +15,7 @@ import type { MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
 import { createEmailReadTools } from './email'
 import { createKosReadTools } from './kos'
-import { createReportReadTools } from './report'
+import { createReportTools } from './report'
 import { createWriteTools } from './write'
 import { createSendTools } from './send'
 import { applySkillGating } from './skill_gating'
@@ -172,6 +172,10 @@ export const GATEWAY_READ_TOOL_NAMES = [
   'report_get'
 ] as const
 
+/** Tools present in the minimum gateway assembly. `report_write` is a local, silent artifact
+ * primitive, so it is available without enabling the approval-gated domain write families. */
+export const GATEWAY_DEFAULT_TOOL_NAMES = [...GATEWAY_READ_TOOL_NAMES, 'report_write'] as const
+
 /** Compose the gateway tool set. 03a → read tools only. The optional `collector` is
  *  the per-request audit sink each tool's execute pushes into (closure-bound); the
  *  gateway (server.ts) creates one per /api/ai/chat request and drains it in onFinish. */
@@ -186,7 +190,7 @@ export function buildGatewayTools(
   const tools: ToolSet = {
     ...createEmailReadTools(opts.domain, collector),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
-    ...createReportReadTools(opts.domain, collector)
+    ...createReportTools(opts.domain, collector, opts.agentRunContext?.agentId)
   }
   // S1 R1 — chat-session read tools behind MAILAGENT_OPENNESS_SESSION_TOOLS (default off →
   // not added, byte-identical to the v1.2.0 set). Silent reads with CHAT_HISTORY-fenced output;

@@ -12,6 +12,31 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
 REPORT_DOC_VERSION = 1
+REPORT_CADENCES = ("daily", "weekly", "monthly", "custom")
+
+# Public block vocabulary. Frontend runtime schemas mirror this tuple and
+# tests/reports/test_block_contract_consistency.py fails loudly on extraction/drift.
+REPORT_BLOCK_TYPES = (
+    "header",
+    "overview",
+    "stat_row",
+    "section",
+    "email_item",
+    "key_points",
+    "callout",
+    "kos_context",
+    "action_suggestion",
+    "trend",
+    "divider",
+    "markdown",
+    "timeline",
+    "checklist",
+    "progress",
+    "quote",
+    "metric_delta",
+    "image",
+)
+REPORT_BLOCK_TYPE_SET = frozenset(REPORT_BLOCK_TYPES)
 
 # Tone enum（与前端 TS Tone 一致）
 TONE_NEUTRAL = "neutral"
@@ -158,15 +183,59 @@ def action_suggestion(
     return b
 
 
-def trend(metric: str, points: List[Dict[str, Any]], compare: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def trend(
+    metric: str,
+    points: List[Dict[str, Any]],
+    compare: Optional[Dict[str, Any]] = None,
+    variant: str = "bar",
+) -> Dict[str, Any]:
     b: Dict[str, Any] = {"type": "trend", "metric": metric, "points": points}
     if compare:
         b["compare"] = compare
+    if variant != "bar":
+        b["variant"] = variant
     return b
 
 
 def divider() -> Dict[str, Any]:
     return {"type": "divider"}
+
+
+def is_internal_image_src(src: str) -> bool:
+    """Images in model-authored reports must never trigger an arbitrary network request."""
+    return (
+        (src.startswith("/") and not src.startswith("//"))
+        or src.startswith("mailagent://")
+        or src.startswith("app://")
+        or src.startswith("data:image/")
+    )
+
+
+def validate_report_blocks(blocks: Any) -> List[Dict[str, Any]]:
+    """Defensive server boundary for report_write.
+
+    The gateway performs full zod validation. Python independently pins the public type vocabulary,
+    object shape, batch size, and image egress floor before persisting model-authored JSON.
+    """
+    if not isinstance(blocks, list) or not blocks:
+        raise ValueError("blocks must be a non-empty array")
+    if len(blocks) > 100:
+        raise ValueError("blocks must contain at most 100 items")
+    out: List[Dict[str, Any]] = []
+    for index, raw in enumerate(blocks):
+        if not isinstance(raw, dict):
+            raise ValueError(f"blocks[{index}] must be an object")
+        block_type = raw.get("type")
+        if block_type not in REPORT_BLOCK_TYPE_SET:
+            raise ValueError(f"blocks[{index}].type is unsupported: {block_type!r}")
+        if block_type == "image":
+            src = raw.get("src")
+            if not isinstance(src, str) or not is_internal_image_src(src):
+                raise ValueError(
+                    f"blocks[{index}].src must be an internal app/attachment/data-image reference"
+                )
+        out.append(dict(raw))
+    return out
 
 
 @dataclass

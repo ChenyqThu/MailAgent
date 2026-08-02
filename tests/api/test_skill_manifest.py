@@ -36,6 +36,9 @@ EXPECTED_TOOLS = {
         # irreversible-write tool can't skip confirmation. side_effect stays external_call.
         "notion_agent_chat": ("external_call", "edit", ["notion_agent:invoke"], False),
     },
+    # Configuration/workflow-only builtin. The six CRUD tools live in the gateway and remain
+    # manual-chat-only capability changes rather than manifest invocation tools.
+    "custom_agent": {},
 }
 
 

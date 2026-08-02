@@ -549,10 +549,7 @@ export function AutomationPolicySection({
                   className="flex items-center"
                   style={{ gap: 8, fontSize: 12, color: 'rgb(var(--ink-fg-2))', cursor: 'pointer' }}
                 >
-                  <Checkbox
-                    checked={pinCwd}
-                    onCheckedChange={setPinCwd}
-                  />
+                  <Checkbox checked={pinCwd} onCheckedChange={setPinCwd} />
                   {t('agents.custom.policy.cwdPin')}
                 </label>
               </div>
@@ -658,7 +655,7 @@ export function AutomationPolicySection({
       )}
 
       {/* per-agent skill 挂载（S6 W3-3 §5.1）：多选 registry skill（builtin + installed）。未配置（NULL）
-          = 默认挂载集（email/search），显式列表（含零挂载）verbatim；挂载不能复活全局关掉的 skill。 */}
+          = 默认挂载集（email/search/report），显式列表（含零挂载）verbatim；挂载不能复活全局关掉的 skill。 */}
       <div style={{ marginTop: 10 }}>
         <div className="flex items-baseline" style={{ gap: 8, marginBottom: 4 }}>
           <label style={{ fontSize: 13, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>

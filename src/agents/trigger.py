@@ -36,11 +36,10 @@ from typing import Any, Optional, Tuple, Union
 MAX_PATTERN_LEN = 256
 MATCH_INPUT_CAP = 512  # matcher 匹配前 subject/sender 各取前 N 字符
 
-# budget 三门默认 + clamp（ADR D7）。max_steps 上限硬 clamp ≤ 16。
-DEFAULT_MAX_STEPS = 8
-MAX_STEPS_CEILING = 16
+# budget 两门默认 + clamp（07-28 W1）。tool loop 只保留 gateway 内部 10000 步终止哨兵，
+# 不再把步数作为用户预算；旧行里的 max_steps 由 parse_budget 宽容忽略。
 DEFAULT_MAX_RUNS_PER_DAY = 24
-DEFAULT_MAX_RUN_SECONDS = 300
+DEFAULT_MAX_RUN_SECONDS = 1800
 MAX_RUN_SECONDS_CEILING = 1800  # 30min 单 run 硬顶（与岛 stash TTL 同量级）
 
 
@@ -92,9 +91,8 @@ Trigger = Union[CronTrigger, ScheduleTrigger, EmailFilterTrigger]
 
 @dataclass(frozen=True)
 class Budget:
-    """per-agent 预算三门（ADR D7）。NULL/非法 → 全默认；各字段已 clamp。"""
+    """per-agent 预算两门。NULL/非法 → 全默认；各字段已 clamp。"""
 
-    max_steps: int = DEFAULT_MAX_STEPS
     max_runs_per_day: int = DEFAULT_MAX_RUNS_PER_DAY
     max_run_seconds: int = DEFAULT_MAX_RUN_SECONDS
 
@@ -270,17 +268,14 @@ def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
 def parse_budget(raw: Union[str, dict, None]) -> Budget:
     """budget_json → ``Budget``（防御性：NULL/坏 JSON/缺字段 → 默认；各字段 clamp）。
 
-    运行时读（enqueue 前 runs/day 门 + drain maxSteps/deadline），故**不抛**——任何异常
-    退回默认预算，绝不因坏配置卡住触发。
+    运行时读（enqueue 前 runs/day 门 + drain deadline），故**不抛**——任何异常退回默认预算，
+    绝不因坏配置卡住触发。旧配置中的 ``max_steps`` 有意忽略，便于无迁移升级。
     """
     data = _as_dict(raw) or {}
     _v = data.get("v", 1)
     if _v != 1:  # 版本不认 → 全默认（保守，不抛）
         return Budget()
     return Budget(
-        max_steps=_clamp_int(
-            data.get("max_steps", DEFAULT_MAX_STEPS), DEFAULT_MAX_STEPS, 1, MAX_STEPS_CEILING
-        ),
         max_runs_per_day=_clamp_int(
             data.get("max_runs_per_day", DEFAULT_MAX_RUNS_PER_DAY),
             DEFAULT_MAX_RUNS_PER_DAY, 0, 100000,

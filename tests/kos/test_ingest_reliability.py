@@ -112,8 +112,8 @@ _NET_ERR = KOSError("connect timeout", code="E_KOS_NETWORK")
 # ============================================================
 
 class TestSchemaMigration:
-    def test_db_version_bumped_to_41(self):
-        assert SyncStore.DB_VERSION == 41
+    def test_db_version_includes_avatar_migration(self):
+        assert SyncStore.DB_VERSION == 42
 
     def test_fresh_db_has_full_schema_and_index(self, tmp_path):
         store = _store(tmp_path)

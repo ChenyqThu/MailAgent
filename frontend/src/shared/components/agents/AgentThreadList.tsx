@@ -21,7 +21,10 @@ import {
   MoreHorizontal,
   PanelLeft,
   Pencil,
+  Pin,
+  PinOff,
   Plus,
+  Star,
   Trash2
 } from 'lucide-react'
 
@@ -43,6 +46,10 @@ export interface AgentThreadListProps {
   onArchive: (id: number) => void
   /** dogfood-3 — 恢复 → updateSessionArchived(id, false)（从归档组移回日期分组）。 */
   onRestore: (id: number) => void
+  /** custom-agent epic W3 — pin/unpin and refresh the dedicated top group. */
+  onPin: (id: number, pinned: boolean) => void
+  /** custom-agent epic W3 — independent leading star icon state. */
+  onStar: (id: number, starred: boolean) => void
   collapsed: boolean
   onToggleCollapse: () => void
   /** fluid = full-width single pane (narrow / mobile); ignores collapse. */
@@ -51,8 +58,8 @@ export interface AgentThreadListProps {
 
 // dogfood-3 — 'archived' is a synthetic group pinned to the BOTTOM (collapsed by default); active
 // sessions still group by updated_at into today / yesterday / earlier.
-type GroupKey = 'today' | 'yesterday' | 'earlier' | 'archived'
-const GROUP_ORDER: readonly GroupKey[] = ['today', 'yesterday', 'earlier', 'archived']
+type GroupKey = 'pinned' | 'today' | 'yesterday' | 'earlier' | 'archived'
+const GROUP_ORDER: readonly GroupKey[] = ['pinned', 'today', 'yesterday', 'earlier', 'archived']
 
 function groupOf(updatedAtMs: number, todayStartMs: number): GroupKey {
   if (updatedAtMs >= todayStartMs) return 'today'
@@ -81,6 +88,8 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
     onRename,
     onArchive,
     onRestore,
+    onPin,
+    onStar,
     collapsed,
     onToggleCollapse,
     fluid
@@ -109,16 +118,20 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
   todayStart.setHours(0, 0, 0, 0)
   const todayStartMs = todayStart.getTime()
   const grouped: Record<GroupKey, ChatSessionListItem[]> = {
+    pinned: [],
     today: [],
     yesterday: [],
     earlier: [],
     archived: []
   }
-  // Archived sessions go to the bottom group regardless of date; active ones group by updated_at.
+  // Archived takes precedence over pinned. Active pinned rows get their own top group; the rest use
+  // conversation recency. A fresh pin sorts above an older pin without touching updated_at.
   for (const s of items) {
     if (s.archived) grouped.archived.push(s)
+    else if (s.pinned_at != null) grouped.pinned.push(s)
     else grouped[groupOf(s.updated_at, todayStartMs)].push(s)
   }
+  grouped.pinned.sort((a, b) => (b.pinned_at ?? 0) - (a.pinned_at ?? 0))
 
   return (
     <aside
@@ -219,6 +232,8 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
                         title={titleOf(s, t)}
                         isEmail={s.anchor_type === 'email'}
                         isArchived={g === 'archived'}
+                        pinned={s.pinned_at != null}
+                        starred={Boolean(s.starred)}
                         unread={s.id !== activeSessionId && isSessionUnread(s)}
                         selected={s.id === activeSessionId}
                         onSelect={() => onSelect(s.id)}
@@ -231,6 +246,8 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
                         onCancelRename={() => setRenamingId(null)}
                         onArchive={() => onArchive(s.id)}
                         onRestore={() => onRestore(s.id)}
+                        onPin={(pinned) => onPin(s.id, pinned)}
+                        onStar={(starred) => onStar(s.id, starred)}
                         onDelete={() => onDelete(s.id)}
                         t={t}
                       />
@@ -250,6 +267,8 @@ function SessionRow({
   title,
   isEmail,
   isArchived,
+  pinned,
+  starred,
   unread,
   selected,
   renaming,
@@ -259,12 +278,16 @@ function SessionRow({
   onCancelRename,
   onArchive,
   onRestore,
+  onPin,
+  onStar,
   onDelete,
   t
 }: {
   title: string
   isEmail: boolean
   isArchived: boolean
+  pinned: boolean
+  starred: boolean
   /** B4 (07-15) — unread badge: content persisted after the last read (never on the selected row). */
   unread: boolean
   selected: boolean
@@ -275,6 +298,8 @@ function SessionRow({
   onCancelRename: () => void
   onArchive: () => void
   onRestore: () => void
+  onPin: (pinned: boolean) => void
+  onStar: (starred: boolean) => void
   onDelete: () => void
   t: TFunction
 }): React.ReactElement {
@@ -350,9 +375,23 @@ function SessionRow({
       )}
       <button
         type="button"
+        aria-label={starred ? t('agentView.unstar') : t('agentView.star')}
+        aria-pressed={starred}
+        onClick={() => onStar(!starred)}
+        className={cn(
+          'ml-1.5 grid size-6 shrink-0 place-items-center rounded transition-colors duration-fast',
+          starred
+            ? 'text-coral hover:bg-coral/10'
+            : 'text-ink-fg-3 hover:bg-ink-4 hover:text-ink-fg-1'
+        )}
+      >
+        <Star size={13} strokeWidth={1.9} fill={starred ? 'currentColor' : 'none'} />
+      </button>
+      <button
+        type="button"
         onClick={onSelect}
         // 主题 v3 C8/批 4: 会话行点击面圆角 rounded-lg(8) → token 化 --r-ctl
-        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--r-ctl)] pl-2.5 pr-10 text-left"
+        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--r-ctl)] pl-1 pr-10 text-left"
       >
         <Icon size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
         <span
@@ -375,6 +414,8 @@ function SessionRow({
       <SessionRowMenu
         onRename={onStartRename}
         isArchived={isArchived}
+        pinned={pinned}
+        onPin={() => onPin(!pinned)}
         onArchive={onArchive}
         onRestore={onRestore}
         onDelete={onDelete}
@@ -389,6 +430,8 @@ function SessionRow({
 function SessionRowMenu({
   onRename,
   isArchived,
+  pinned,
+  onPin,
   onArchive,
   onRestore,
   onDelete,
@@ -396,6 +439,8 @@ function SessionRowMenu({
 }: {
   onRename: () => void
   isArchived: boolean
+  pinned: boolean
+  onPin: () => void
   onArchive: () => void
   onRestore: () => void
   onDelete: () => void
@@ -444,17 +489,34 @@ function SessionRowMenu({
             {t('agentView.restore')}
           </button>
         ) : (
-          <button
-            type="button"
-            onClick={() => {
-              setOpen(false)
-              onArchive()
-            }}
-            className={cn(ITEM, 'text-ink-fg-1 hover:bg-ink-3')}
-          >
-            <Archive size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
-            {t('agentView.archive')}
-          </button>
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                onPin()
+              }}
+              className={cn(ITEM, 'text-ink-fg-1 hover:bg-ink-3')}
+            >
+              {pinned ? (
+                <PinOff size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
+              ) : (
+                <Pin size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
+              )}
+              {t(pinned ? 'agentView.unpin' : 'agentView.pin')}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                onArchive()
+              }}
+              className={cn(ITEM, 'text-ink-fg-1 hover:bg-ink-3')}
+            >
+              <Archive size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
+              {t('agentView.archive')}
+            </button>
+          </>
         )}
         <button
           type="button"

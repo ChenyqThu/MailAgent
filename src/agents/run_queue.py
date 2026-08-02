@@ -1,7 +1,7 @@
 """agent_run enqueue helper —— cron worker 与 email hook 共用入队路径（S4 W1, D4/D7）。
 
 单一入队入口，两处触发方（``AgentTriggerWorker`` cron / new_watcher 第 5 hook email）都经它：
-  - runs/day 门（D7-1）：enqueue 前查当日已入队数, 超 budget.max_runs_per_day → skip；
+  - runs/day 门（D7-1）：enqueue 前查当日实际运行数；超限仍写一条 outcome=skipped 的可见历史；
   - 幂等键（D4）：``agent_run:{agent_id}:{fire_key}``（cron=fire_window_utc, email=internal_id）
     → async_jobs partial unique 挡重复入队 (弱网重发 / 同 occurrence 双 tick 去重)；
   - target_kind='agent' / target_key=agent_id（runs/day count 与 spec 端点按 agent_id 检索）。
@@ -37,11 +37,12 @@ def enqueue_agent_run(
     budget: Budget,
     params: Optional[Dict[str, Any]] = None,
     now_fn: Callable[[], float] = time.time,
-) -> Optional[Tuple[int, bool]]:
+) -> Tuple[int, bool]:
     """runs/day 门 + 幂等 enqueue 一个 agent_run job。
 
     Returns:
-        (job_id, was_created) —— 正常入队或幂等命中既有；``None`` = runs/day 超限被拦（未入队）。
+        (job_id, was_created) —— 正常入队、预算跳过或幂等命中既有。预算跳过行会立即写成
+        ``succeeded + outcome=skipped``，因此不会被 worker claim，但会出现在运行历史里。
     """
     # 不变量（codex S4 终审唯一 finding，P3）：runs/day 门是 check-then-act（count → enqueue
     # 无事务），当前无竞态依赖「本函数同步无 await point + 两触发方（trigger_worker.tick_loop
@@ -54,12 +55,6 @@ def enqueue_agent_run(
     # 无数据/权限影响；同-occurrence 重复由幂等键 partial unique 另兜（不靠此门）。
     day_start = _local_day_start(now_fn())
     used = repo.count_agent_runs_since(agent_id, day_start)
-    if used >= budget.max_runs_per_day:
-        logger.info(
-            f"[agent-run] budget hit: agent={agent_id} runs_today={used} "
-            f">= max_runs_per_day={budget.max_runs_per_day} — skip enqueue"
-        )
-        return None
     payload: Dict[str, Any] = {
         "agent_id": agent_id,
         "trigger_kind": trigger_kind,
@@ -74,6 +69,24 @@ def enqueue_agent_run(
         params=payload,
         idempotency_key=f"agent_run:{agent_id}:{fire_key}",
     )
+    if used >= budget.max_runs_per_day:
+        if was_created:
+            repo.mark_terminal(
+                job_id,
+                status="succeeded",
+                result={
+                    "outcome": "skipped",
+                    "reason": "daily_run_limit",
+                    "runsToday": used,
+                    "maxRunsPerDay": budget.max_runs_per_day,
+                    "steps": 0,
+                },
+            )
+        logger.info(
+            f"[agent-run] budget hit: agent={agent_id} runs_today={used} "
+            f">= max_runs_per_day={budget.max_runs_per_day} — recorded skipped job_id={job_id}"
+        )
+        return job_id, was_created
     if was_created:
         logger.info(
             f"[agent-run] enqueued agent={agent_id} kind={trigger_kind} "

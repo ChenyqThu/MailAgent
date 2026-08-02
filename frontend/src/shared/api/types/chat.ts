@@ -80,7 +80,7 @@ export interface AgentRunSpec {
     grantExec?: true
     grantWeb?: 'gated' | 'open'
   }
-  budget: { maxSteps: number; maxRunSeconds: number }
+  budget: { maxRunSeconds: number }
   fallbackModels?: string[]
   sessionTitle: string
 }
@@ -155,6 +155,9 @@ export interface ChatMessage {
 // Mirror of model.ts AnchorType — kept inline so api/types stays the boundary
 // surface without importing chat internals.
 export type ChatAnchorType = 'email' | 'general'
+// API/IPC boundary mirror of shared/chat_model.ts. Keep inline so this file remains import-free;
+// tests/config/test_chat_type_mirror_parity.py locks the string-union values on both sides.
+export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'all'
 
 export interface ChatSession {
   id: number
@@ -187,6 +190,14 @@ export interface ChatSession {
   // updated_at > last_read_at (see shared/lib/chatUnread.ts). Optional so pre-v20 rows (and the
   // Python mirror running against a not-yet-migrated DB) stay valid.
   last_read_at?: number | null
+  // custom-agent epic W3 (ai_chat.db v21) — durable history organization metadata.
+  pinned_at?: number | null
+  starred?: boolean | number
+}
+
+export interface ListAllSessionsOptions {
+  includeArchived?: boolean
+  origin?: ChatSessionOriginFilter
 }
 
 // Row of the global "AI 会话历史" page (chat.listAllSessions). A ChatSession
@@ -437,13 +448,15 @@ export interface KosDoctorCheck {
 export interface ChatApi {
   listMessages(sessionId: number): Promise<ChatMessage[]>
   listSessions(emailId: number): Promise<ChatSession[]>
+  /** Fetch a single row directly, including an agent record excluded from interactive history. */
+  getSession(sessionId: number): Promise<ChatSession | null>
   /**
    * Global cross-email session history for the "AI 会话历史" page. Returns
    * newest-first rows enriched with a first-user-message preview, message
    * count, and the owning email's subject/sender (best-effort — null when
    * sync_store.db is unavailable). Read-only; never throws (degrades to []).
    */
-  listAllSessions(includeArchived?: boolean): Promise<ChatSessionListItem[]>
+  listAllSessions(options?: ListAllSessionsOptions): Promise<ChatSessionListItem[]>
   /** P2c/P2d — general (context-free, anchor_type='general') sessions, newest
    *  first. Separate from listSessions(emailId) so a general session never shows
    *  up in a specific email's sidebar. Read-only; degrades to [] on failure. */
@@ -477,6 +490,10 @@ export interface ChatApi {
    * updated_at (same discipline as updateSessionTitle). Awaited so the caller can refresh.
    */
   updateSessionArchived(sessionId: number, archived: boolean): Promise<void>
+  /** Pin/unpin without changing conversation recency. */
+  updateSessionPinned(sessionId: number, pinned: boolean): Promise<void>
+  /** Toggle the independent star marker without changing conversation recency. */
+  updateSessionStarred(sessionId: number, starred: boolean): Promise<void>
   /**
    * harness-chat lane A B4 (task 07-15) — mark a session read: PATCH /chat/sessions/{id}/read sets
    * last_read_at=now (ai_chat.db v20). Does NOT bump updated_at (a read never reorders history).

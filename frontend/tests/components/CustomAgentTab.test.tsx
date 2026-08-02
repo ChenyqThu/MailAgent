@@ -5,9 +5,9 @@
 //   • NewAgentTile flag 门控：customAgentsEnabled=true → 可点新建；false → 禁用占位
 //   • CustomAgentDrawer 新建：字段在场 + 两段式（createAgent type='custom' → setConfig 补 trigger）
 //   • 浅校验：email_filter 谓词全空 / cron 非 5 段 → 前端拒 + 不发请求
-//   • run 历史 8 状态穷举徽标 + paused_* 永不渲染为成功 + run-now 走 type:'custom'
+//   • run 历史 9 状态穷举徽标 + paused_*/skipped 永不渲染为成功 + run-now 走 type:'custom'
 //   • i18n zh/en agents.custom key 对齐
-import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
@@ -138,9 +138,9 @@ function makeCustomCfg(over: Partial<ReportAgentConfig> = {}): ReportAgentConfig
   } as ReportAgentConfig
 }
 
-afterEach(() => {
-  cleanup()
+beforeEach(() => {
   vi.clearAllMocks()
+  mockGetConfig.mockResolvedValue([])
   mockListRuns.mockResolvedValue({ items: [], total: 0 })
   mockToolOptions.mockResolvedValue({
     tools: [
@@ -153,12 +153,25 @@ afterEach(() => {
   mockListPolicyRules.mockResolvedValue([])
   mockListEntrypoints.mockResolvedValue([])
   mockListSkills.mockResolvedValue(SKILLS_FIXTURE)
+  global.fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      data: {
+        customAgentsEnabled: true,
+        webToolsEnabled: true,
+        execToolsEnabled: true
+      }
+    })
+  }) as unknown as typeof fetch
 })
 
-// S6 W3-3 — skill registry 投影夹具（默认挂载集 email/search 命中；dms-approval 为额外可挂载项）。
+afterEach(cleanup)
+
+// S6 W3-3 — skill registry 投影夹具（默认挂载集 email/search/report 命中；dms-approval 为额外可挂载项）。
 const SKILLS_FIXTURE = [
   { name: 'email', title: 'Email', description: '', enabled: true, sourceType: 'builtin' },
   { name: 'search', title: 'Search', description: '', enabled: true, sourceType: 'builtin' },
+  { name: 'report', title: 'Report', description: '', enabled: true, sourceType: 'builtin' },
   { name: 'dms-approval', title: 'DMS', description: '', enabled: true, sourceType: 'skill_pack' }
 ] as unknown as import('@shared/api/types').SkillSummary[]
 
@@ -183,11 +196,11 @@ describe('i18n — agents.custom key 对齐', () => {
     const enKeys = Object.keys(enCommon.agents.custom).sort()
     expect(zhKeys).toEqual(enKeys)
   })
-  test('zh / en runs.state 8 值域 key 一致', () => {
+  test('zh / en runs.state 9 值域 key 一致', () => {
     const zhKeys = Object.keys(zhCommon.agents.custom.runs.state).sort()
     const enKeys = Object.keys(enCommon.agents.custom.runs.state).sort()
     expect(zhKeys).toEqual(enKeys)
-    expect(zhKeys.length).toBe(8)
+    expect(zhKeys.length).toBe(9)
   })
   test('zh / en policy key 一致（含 W3-3 web / mounts / capability.web）', () => {
     const zhP = zhCommon.agents.custom.policy
@@ -209,7 +222,7 @@ describe('AgentsTab — Custom Agent 区 + flag 门控', () => {
     renderUi(<AgentsTab onOpenReports={() => {}} />)
     // section 标题 + 卡片名
     expect(await screen.findByText('完全自定义 Agent')).toBeTruthy()
-    expect(await screen.findByText('DMS 审批助手')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: 'DMS 审批助手' })).toBeTruthy()
     // trigger 摘要（email_filter → 邮件事件触发）
     expect(screen.getByText('邮件事件触发')).toBeTruthy()
     // flag on → 可点新建 tile（newTileTitle）
@@ -229,7 +242,7 @@ describe('AgentsTab — Custom Agent 区 + flag 门控', () => {
 })
 
 describe('CustomAgentDrawer — 新建（两段式）', () => {
-  test('字段在场：title / prompt / trigger seg / budget', async () => {
+  test('字段在场：title / prompt / trigger seg / time budget', async () => {
     renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
     expect(screen.getByPlaceholderText('如 DMS 审批助手')).toBeTruthy()
     expect(screen.getByPlaceholderText(/描述这个 Agent/)).toBeTruthy()
@@ -237,8 +250,9 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     expect(screen.getByText('无（草稿）')).toBeTruthy()
     expect(screen.getByText('定时')).toBeTruthy()
     expect(screen.getByText('邮件事件')).toBeTruthy()
-    // budget 标签
-    expect(screen.getByText(/最大步数/)).toBeTruthy()
+    // time remains the only hard runtime budget; the public step limit is removed.
+    expect(screen.getByText(/单次运行秒数/)).toBeTruthy()
+    expect(screen.queryByText(/最大步数/)).toBeNull()
   })
 
   // 07-24 排程统一：新建的定时触发从裸 cron 文本框换成共享 ScheduleBuilder，
@@ -269,9 +283,10 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     // 契约 §1：anchor（相位原点，本地日期）+ timezone（IANA，不允许为空）必须落库
     expect(patch.trigger.anchor).toMatch(/^\d{4}-\d{2}-\d{2}$/)
     expect(patch.trigger.timezone).toBeTruthy()
-    // tool_policy 恒发数组 + budget 三门
+    // tool_policy 恒发数组 + budget 两门（无用户面 step 限制）
     expect(Array.isArray(patch.tool_policy.allowed_tools)).toBe(true)
-    expect(patch.budget.max_steps).toBe(8)
+    expect(patch.budget.max_steps).toBeUndefined()
+    expect(patch.budget.max_run_seconds).toBe(1800)
     await vi.waitFor(() => expect(onClose).toHaveBeenCalled())
   })
 
@@ -712,10 +727,7 @@ describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    expect(await screen.findByText(/grant_exec/)).toBeTruthy()
-    // grant 开关 = 最后一个 switch（enabled 开关之后、无规则行）
-    const switches = screen.getAllByRole('switch')
-    fireEvent.click(switches[switches.length - 1])
+    fireEvent.click(await screen.findByRole('button', { name: '文件与命令: 开启' }))
     // 确认对话在场，未确认前开关不翻（保存也不带 tool_policy）
     expect(await screen.findByText(/确定开启/)).toBeTruthy()
     fireEvent.click(screen.getByText('确认开启'))
@@ -731,9 +743,7 @@ describe('CustomAgentDrawer — 自动化策略（S5 W5b）', () => {
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    await screen.findByText(/grant_exec/)
-    const switches = screen.getAllByRole('switch')
-    fireEvent.click(switches[switches.length - 1])
+    fireEvent.click(await screen.findByRole('button', { name: '文件与命令: 开启' }))
     await screen.findByText(/确定开启/)
     // 「取消」出现两处（grant 确认块 + 抽屉 footer）—— 确认块的在 DOM 前（body 先于 footer）。
     fireEvent.click(screen.getAllByText('取消')[0])
@@ -780,12 +790,12 @@ describe('CustomAgentDrawer — web grant 三档（S6 W3-3）', () => {
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
     // 联网块 + 三档在场
-    expect(await screen.findByText('联网（grant_web）')).toBeTruthy()
-    expect(screen.getByText('域名白名单')).toBeTruthy()
-    expect(screen.getByText('全开放')).toBeTruthy()
+    expect(await screen.findByText('Web')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Web: 域名门控' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Web: 全开放' })).toBeTruthy()
     // 默认 off → 无 web_search 外送警示
     expect(screen.queryByText(/web_search 免审批外送/)).toBeNull()
-    fireEvent.click(screen.getByText('域名白名单'))
+    fireEvent.click(screen.getByRole('button', { name: 'Web: 域名门控' }))
     // gated → 连带 web_search 外送警示在场（§6 残余面① UI 明示义务）
     expect(await screen.findByText(/web_search 免审批外送/)).toBeTruthy()
     fireEvent.click(screen.getByText('保存'))
@@ -799,7 +809,7 @@ describe('CustomAgentDrawer — web grant 三档（S6 W3-3）', () => {
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    fireEvent.click(await screen.findByText('全开放'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Web: 全开放' }))
     expect(await screen.findByText(/可免审批抓取任意 URL/)).toBeTruthy()
     expect(screen.getByText(/最大暴露面组合/)).toBeTruthy()
   })
@@ -815,7 +825,7 @@ describe('CustomAgentDrawer — web grant 三档（S6 W3-3）', () => {
         onClose={() => {}}
       />
     )
-    fireEvent.click(await screen.findByText('全开放'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Web: 全开放' }))
     expect(await screen.findByText(/可免审批抓取任意 URL/)).toBeTruthy()
     expect(screen.queryByText(/最大暴露面组合/)).toBeNull()
   })
@@ -837,7 +847,7 @@ describe('CustomAgentDrawer — web grant 三档（S6 W3-3）', () => {
       />
     )
     // 等 registry/工具就位后翻 web 档
-    fireEvent.click(await screen.findByText('域名白名单'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Web: 域名门控' }))
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     // 所有键保留：allowed_tools（显式）+ grant_exec + skills（显式）+ 新的 grant_web
@@ -898,6 +908,61 @@ describe('CustomAgentDrawer — 工具分组（R3）', () => {
   })
 })
 
+describe('CustomAgentDrawer — 六能力卡（W5）', () => {
+  test('默认视图显示六张卡、知识默认关闭，并保留高级原子工具入口', async () => {
+    renderUi(
+      <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
+    )
+    for (const title of ['邮件', '日历', '知识与会话', '报告', 'Web', '文件与命令']) {
+      expect(await screen.findByRole('heading', { name: title })).toBeTruthy()
+    }
+    expect(screen.getByRole('button', { name: '知识与会话: 关闭', pressed: true })).toBeTruthy()
+    expect(screen.getByText('高级：逐工具微调')).toBeTruthy()
+  })
+
+  test('起草/日历写/报告产出映射完整，日历写永久 HITL 提示在场', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
+    )
+    const emailDraft = await screen.findByRole('button', { name: '邮件: 起草' })
+    await vi.waitFor(() => expect(emailDraft.hasAttribute('disabled')).toBe(false))
+    fireEvent.click(emailDraft)
+    await vi.waitFor(() =>
+      expect(screen.getByRole('button', { name: '邮件: 起草' }).getAttribute('aria-pressed')).toBe(
+        'true'
+      )
+    )
+    fireEvent.click(screen.getByRole('button', { name: '日历: 写入' }))
+    await vi.waitFor(() =>
+      expect(screen.getByRole('button', { name: '日历: 写入' }).getAttribute('aria-pressed')).toBe(
+        'true'
+      )
+    )
+    fireEvent.click(screen.getByRole('button', { name: '报告: 产出' }))
+    await vi.waitFor(() =>
+      expect(screen.getByRole('button', { name: '报告: 产出' }).getAttribute('aria-pressed')).toBe(
+        'true'
+      )
+    )
+    expect(await screen.findByText(/日历写操作永久需要人工审批/)).toBeTruthy()
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    const tools = mockSetConfig.mock.calls[0][1].tool_policy.allowed_tools as string[]
+    expect(tools).toEqual(
+      expect.arrayContaining([
+        'email_draft_reply',
+        'email_draft_compose',
+        'email_draft_update',
+        'calendar_event_reschedule',
+        'calendar_event_rsvp',
+        'calendar_event_delete',
+        'report_write'
+      ])
+    )
+  })
+})
+
 describe('CustomAgentDrawer — 额外能力区 + openness flag 接线（R3）', () => {
   test('webToolsEnabled=false → 三档禁用 + 提示；execPolicyEnabled=false → exec 提示 + 开关失效', async () => {
     global.fetch = vi.fn().mockResolvedValue({
@@ -910,13 +975,11 @@ describe('CustomAgentDrawer — 额外能力区 + openness flag 接线（R3）',
     expect(await screen.findByText(/联网功能未开启/)).toBeTruthy()
     expect(screen.getByText(/命令执行功能未开启/)).toBeTruthy()
     // 三档按钮带 disabled；点击不生效（无 web_search 外送警示）
-    const gated = screen.getByText('域名白名单') as HTMLButtonElement
+    const gated = screen.getByRole('button', { name: 'Web: 域名门控' }) as HTMLButtonElement
     expect(gated.disabled).toBe(true)
     fireEvent.click(gated)
     expect(screen.queryByText(/web_search 免审批外送/)).toBeNull()
-    // exec 开关点击被 guard → 不弹确认对话
-    const switches = screen.getAllByRole('switch')
-    fireEvent.click(switches[switches.length - 1])
+    fireEvent.click(screen.getByRole('button', { name: '文件与命令: 开启' }))
     expect(screen.queryByText(/确定开启/)).toBeNull()
     // clearAllMocks 只清调用记录不清 mockResolvedValue 实现 —— 显式恢复空 fetch，
     // 防 flag-off 响应残留污染后续用例（useOpennessFlags 会读到 stale false → 误禁用）。
@@ -928,7 +991,7 @@ describe('CustomAgentDrawer — 额外能力区 + openness flag 接线（R3）',
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    fireEvent.click(await screen.findByText('域名白名单'))
+    fireEvent.click(await screen.findByRole('button', { name: 'Web: 域名门控' }))
     expect(await screen.findByText(/web_search 免审批外送/)).toBeTruthy()
   })
 
@@ -937,10 +1000,10 @@ describe('CustomAgentDrawer — 额外能力区 + openness flag 接线（R3）',
     mockSetConfig.mockResolvedValue(makeCustomCfg())
     const onClose = vi.fn()
     renderUi(<CustomAgentDrawer cfg={null} open create onClose={onClose} />)
-    expect(await screen.findByText('额外能力')).toBeTruthy()
+    expect(await screen.findByText('能力与权限')).toBeTruthy()
     fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), { target: { value: 'x' } })
     fireEvent.click(screen.getByText('定时'))
-    fireEvent.click(screen.getByText('域名白名单'))
+    fireEvent.click(screen.getByRole('button', { name: 'Web: 域名门控' }))
     fireEvent.click(screen.getByText('创建'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     const patch = mockSetConfig.mock.calls[0][1]
@@ -952,15 +1015,16 @@ describe('CustomAgentDrawer — 额外能力区 + openness flag 接线（R3）',
 })
 
 describe('CustomAgentDrawer — skill 挂载（S6 W3-3）', () => {
-  test('NULL skills 行 → 默认挂载集 email/search 预选（defaultTag 在场）；未触碰不写 skills 键', async () => {
+  test('NULL skills 行 → 默认挂载集 email/search/report 预选（defaultTag 在场）；未触碰不写 skills 键', async () => {
     mockSetConfig.mockResolvedValue(makeCustomCfg())
     renderUi(
       <CustomAgentDrawer cfg={makeCustomCfg({ tool_policy: null })} open onClose={() => {}} />
     )
-    // 默认挂载集标签 + email/search 预选、dms-approval 未选
+    // 默认挂载集标签 + email/search/report 预选、dms-approval 未选
     expect(await screen.findByText(/默认挂载集/)).toBeTruthy()
     expect(await screen.findByRole('button', { name: 'email', pressed: true })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'search', pressed: true })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'report', pressed: true })).toBeTruthy()
     expect(screen.getByRole('button', { name: 'dms-approval', pressed: false })).toBeTruthy()
     // 未触碰挂载区，仅改 prompt → patch 无 tool_policy（NULL 保持 NULL，默认挂载集不物化）
     fireEvent.change(screen.getByPlaceholderText(/描述这个 Agent/), { target: { value: 'x' } })
@@ -977,10 +1041,10 @@ describe('CustomAgentDrawer — skill 挂载（S6 W3-3）', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'dms-approval', pressed: false }))
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
-    // 触碰挂载 → 显式列表（defaults email/search + dms-approval）；allowed_tools 缺省（NULL 不物化）
+    // 触碰挂载 → 显式列表（defaults email/search/report + dms-approval）；allowed_tools 缺省（NULL 不物化）
     expect(mockSetConfig.mock.calls[0][1].tool_policy).toEqual({
       v: 1,
-      skills: ['email', 'search', 'dms-approval']
+      skills: ['email', 'search', 'report', 'dms-approval']
     })
   })
 
@@ -1060,7 +1124,7 @@ describe('CustomAgentDrawer — web 域名规则构造器（S6 W3-3）', () => {
   })
 })
 
-describe('RunStateBadge — 8 状态穷举渲染', () => {
+describe('RunStateBadge — 9 状态穷举渲染', () => {
   const cases: Array<[AgentRunState, string]> = [
     ['queued', '排队中'],
     ['running', '运行中'],

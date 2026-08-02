@@ -25,6 +25,8 @@ import type {
 import type {
   AgentRunHistoryItem,
   AgentRunSpec,
+  AgentRunToolOptions,
+  ReportBlock,
   ReportAgentConfig,
   ReportConfigPatch,
   ReportAgentCreateInput,
@@ -90,7 +92,7 @@ export interface DomainSearchOpts {
 
 /** Filters for report_list. */
 export interface DomainReportListOpts {
-  cadence?: 'daily' | 'weekly' | 'monthly'
+  cadence?: 'daily' | 'weekly' | 'monthly' | 'custom'
   agentId?: string
   limit?: number
 }
@@ -784,6 +786,18 @@ export class MailAgentDomainClient {
     }
   }
 
+  /** report_write — persist a local custom ReportDoc artifact. */
+  writeCustomReport(
+    agentId: string,
+    input: { title: string; blocks: ReportBlock[]; mode: 'new' | 'replace' },
+    signal?: AbortSignal
+  ): Promise<ReportDetail> {
+    return this._req<ReportDetail>('POST', '/reports/custom', {
+      body: { agentId, ...input },
+      signal
+    })
+  }
+
   // ── write primitives (Phase 03b — one per gateway write tool) ─────────────
   // Each mirrors the legacy HttpChatPlatform write method's exact wire call
   // (body shape + path) so the gateway write tool is byte-for-byte parity with
@@ -1412,6 +1426,12 @@ export class MailAgentDomainClient {
   /** custom_agent_list — all agent configs (the tool filters to type='custom'). GET /report-agents. */
   listReportAgents(signal?: AbortSignal): Promise<ReportAgentConfig[]> {
     return this._req<ReportAgentConfig[]>('GET', '/report-agents', { signal })
+  }
+
+  /** Resolve the backend-owned default allowed-tools set when a legacy/null tool policy is edited
+   *  through capability tiers. This prevents a partial tier patch from erasing untouched defaults. */
+  getAgentRunToolOptions(signal?: AbortSignal): Promise<AgentRunToolOptions> {
+    return this._req<AgentRunToolOptions>('GET', '/agent-runs/tool-options', { signal })
   }
 
   /** custom_agent_get — one agent config by id. GET /report-agents?agentId=. E_NOT_FOUND → null. */

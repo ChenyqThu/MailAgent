@@ -45,7 +45,7 @@ const CUSTOM_AGENT = {
   body_full_priorities: [],
   trigger: { v: 1, kind: 'email_filter', subject_pattern: 'DMS.*审批' },
   tool_policy: { v: 1, allowed_tools: ['email_search', 'email_get', 'email_body'] },
-  budget: { v: 1, max_steps: 6, max_runs_per_day: 12 },
+  budget: { v: 1, max_runs_per_day: 12 },
   updated_at: 1750000000000
 }
 
@@ -117,6 +117,12 @@ function recordingDomain(overrides?: {
         status,
         headers: { 'Content-Type': 'application/json' }
       })
+    if (url.includes('/agent-runs/tool-options')) {
+      return ok({
+        tools: [],
+        defaults: ['email_list_filter', 'email_get', 'calendar_events_list', 'report_write']
+      })
+    }
     // /agent-runs (run history)
     if (url.includes('/agent-runs')) return ok(overrides?.runs ?? RUN_ROWS)
     // /report-agents/{id}/run (run_now)
@@ -264,10 +270,14 @@ describe('custom_agent_list / custom_agent_get (silent reads)', () => {
     })) as {
       found: boolean
       allowed_tools: string[]
+      capabilities: { email: string }
+      capabilities_customized: string[]
       recent_runs: Array<{ state: string; outcome: string | null }>
     }
     expect(out.found).toBe(true)
     expect(out.allowed_tools).toEqual(['email_search', 'email_get', 'email_body'])
+    expect(out.capabilities.email).toBe('read')
+    expect(out.capabilities_customized).toContain('email')
     expect(out.recent_runs.map((r) => r.state)).toEqual(['completed', 'paused_pending'])
     // a paused run keeps its authoritative state — never renamed to a success
     expect(out.recent_runs[1].state).toBe('paused_pending')
@@ -315,7 +325,7 @@ describe('custom_agent_create / update (edit-tier capability_change writes)', ()
       enabled: true,
       trigger: { kind: 'email_filter', subject_pattern: 'DMS.*审批' },
       allowed_tools: ['email_search', 'email_get'],
-      budget: { max_steps: 6 }
+      budget: { max_runs_per_day: 6 }
     })) as { created: boolean; id: string }
     const post = calls.find((c) => c.method === 'POST' && /\/report-agents$/.test(c.url))!
     expect(post).toBeDefined()
@@ -328,10 +338,46 @@ describe('custom_agent_create / update (edit-tier capability_change writes)', ()
       // trigger + budget gain the v:1 bit; allowed_tools becomes tool_policy {v:1, allowed_tools}
       trigger: { kind: 'email_filter', subject_pattern: 'DMS.*审批', v: 1 },
       tool_policy: { v: 1, allowed_tools: ['email_search', 'email_get'] },
-      budget: { max_steps: 6, v: 1 }
+      budget: { max_runs_per_day: 6, v: 1 }
     })
     expect(out.created).toBe(true)
     expect(out.id).toBe('dms-approver')
+  })
+
+  test('capability profile maps all six cards to allowed_tools + grants', async () => {
+    const { domain, calls } = recordingDomain()
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await approveAndRun(tools.custom_agent_create, {
+      id: 'briefing-agent',
+      title: 'Briefing Agent',
+      capabilities: {
+        email: 'draft',
+        calendar: 'read',
+        knowledge: 'off',
+        reports: 'produce',
+        web: 'gated',
+        files: 'off'
+      }
+    })
+    const post = calls.find((c) => c.method === 'POST' && /\/report-agents$/.test(c.url))!
+    const policy = (post.body as { tool_policy: Record<string, unknown> }).tool_policy
+    expect(policy.allowed_tools).toEqual(
+      expect.arrayContaining([
+        'email_list_filter',
+        'email_draft_reply',
+        'email_draft_compose',
+        'email_draft_update',
+        'calendar_events_list',
+        'calendar_event_get',
+        'report_get',
+        'report_list',
+        'report_write'
+      ])
+    )
+    expect(policy.grant_web).toBe('gated')
+    expect(policy.grant_exec).toBe(false)
   })
 
   test('a cron trigger maps to a 5-field cron wire trigger', async () => {
@@ -463,6 +509,28 @@ describe('field ALLOWLIST — grants opened (rev3.1 §7), raw policy fields stil
     expect(customAgentCreateSchema.safeParse({ id: 'x', grant_web: 1 }).success).toBe(false)
     // skills must be a string list
     expect(customAgentCreateSchema.safeParse({ id: 'x', skills: 'email' }).success).toBe(false)
+    const capabilities = {
+      email: 'read',
+      calendar: 'off',
+      knowledge: 'off',
+      reports: 'produce',
+      web: 'off',
+      files: 'off'
+    }
+    expect(customAgentCreateSchema.safeParse({ id: 'x', capabilities }).success).toBe(true)
+    expect(
+      customAgentCreateSchema.safeParse({ id: 'x', capabilities: { email: 'read' } }).success
+    ).toBe(false)
+    expect(
+      customAgentUpdateSchema.safeParse({ agent_id: 'x', capabilities: { reports: 'produce' } })
+        .success
+    ).toBe(true)
+    expect(customAgentUpdateSchema.safeParse({ agent_id: 'x', capabilities: {} }).success).toBe(
+      false
+    )
+    expect(
+      customAgentCreateSchema.safeParse({ id: 'x', capabilities, grant_web: 'open' }).success
+    ).toBe(false)
     // the sanctioned fields still parse
     expect(
       customAgentCreateSchema.safeParse({ id: 'x', title: 't', allowed_tools: ['email_get'] })
@@ -538,6 +606,68 @@ describe('field ALLOWLIST — grants opened (rev3.1 §7), raw policy fields stil
 })
 
 describe('update merge — a partial grants patch must not wipe the untouched tool_policy sub-fields', () => {
+  test('a capability patch replaces only its managed tier and preserves unrelated policy fields', async () => {
+    const { domain, calls } = recordingDomain({
+      getAgent: {
+        ...CUSTOM_AGENT,
+        tool_policy: {
+          v: 1,
+          allowed_tools: ['email_get', 'future_tool_x'],
+          grant_exec: true,
+          grant_web: 'gated',
+          skills: ['email']
+        }
+      }
+    })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await approveAndRun(tools.custom_agent_update, {
+      agent_id: 'dms-approver',
+      capabilities: { reports: 'produce' }
+    })
+    const put = calls.find((c) => c.method === 'PUT')!
+    expect(put.body).toEqual({
+      tool_policy: {
+        v: 1,
+        allowed_tools: ['email_get', 'future_tool_x', 'report_get', 'report_list', 'report_write'],
+        grant_exec: true,
+        grant_web: 'gated',
+        skills: ['email']
+      }
+    })
+  })
+
+  test('a capability patch on a null policy resolves backend defaults before editing', async () => {
+    const { domain, calls } = recordingDomain({
+      getAgent: { ...CUSTOM_AGENT, tool_policy: null }
+    })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await approveAndRun(tools.custom_agent_update, {
+      agent_id: 'dms-approver',
+      capabilities: { knowledge: 'on' }
+    })
+    expect(calls.some((c) => c.url.includes('/agent-runs/tool-options'))).toBe(true)
+    const policy = (
+      calls.find((c) => c.method === 'PUT')!.body as {
+        tool_policy: { allowed_tools: string[] }
+      }
+    ).tool_policy
+    expect(policy.allowed_tools).toEqual(
+      expect.arrayContaining([
+        'email_list_filter',
+        'email_get',
+        'calendar_events_list',
+        'report_write',
+        'chat_session_list',
+        'agent_profile_read',
+        'kos_query'
+      ])
+    )
+  })
+
   test("patch {grant_web} merges the SERVER row's allowed_tools/grant_exec/skills into the PUT body", async () => {
     const { domain, calls } = recordingDomain({
       getAgent: {

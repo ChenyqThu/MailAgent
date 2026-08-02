@@ -389,7 +389,9 @@ _EMPHASIS = str.maketrans("", "", "*_")
 _DOCS_DIR = _REPO_ROOT / "src" / "skills" / "docs"
 
 
-def _skill_md_rows(skill_name: str, docs_path: str) -> dict[str, tuple[str, str | None]]:
+def _skill_md_rows(
+    skill_name: str, docs_path: str, *, allow_empty: bool = False
+) -> dict[str, tuple[str, str | None]]:
     """SKILL.md 工具表 → ``{tool: (scope, tier_token|None)}``。
 
     表格有两种列形态（4 列带 confirm / 3 列不带），故 tier 是可选的：**只在有第 4 列时**才比对，
@@ -408,16 +410,19 @@ def _skill_md_rows(skill_name: str, docs_path: str) -> dict[str, tuple[str, str 
         if len(cells) >= 3 and cells[1]:  # [effect, confirm, 行尾空串]
             tier = cells[1].translate(_EMPHASIS).split()[0].split("(")[0].strip().lower()
         rows[m.group("tool")] = (m.group("scope"), tier)
-    assert rows, (
-        f"{skill_name}: SKILL.md 的工具表一行都没抽到 —— 表格写法变了（列序 / 反引号 / 表头？），"
-        "回来更新本闸的抽取器，顺手核对文档与 ToolDef 仍一致"
-    )
+    if not allow_empty:
+        assert rows, (
+            f"{skill_name}: SKILL.md 的工具表一行都没抽到 —— 表格写法变了（列序 / 反引号 / 表头？），"
+            "回来更新本闸的抽取器，顺手核对文档与 ToolDef 仍一致"
+        )
     return rows
 
 
 def test_skill_md_documents_every_tool_with_matching_scope_and_tier():
     for skill in code_builtin_skills():
-        documented = _skill_md_rows(skill.name, skill.docs_path)
+        documented = _skill_md_rows(
+            skill.name, skill.docs_path, allow_empty=not skill.tools
+        )
         for bt in skill.tools:
             tdef = bt.definition
             assert tdef.name in documented, (
@@ -440,7 +445,9 @@ def test_skill_md_has_no_phantom_tools():
     """反向：文档里不得有代码中不存在的 tool（写了、外部照着调、然后 404）。"""
     for skill in code_builtin_skills():
         real = {bt.definition.name for bt in skill.tools}
-        phantom = set(_skill_md_rows(skill.name, skill.docs_path)) - real
+        phantom = set(
+            _skill_md_rows(skill.name, skill.docs_path, allow_empty=not skill.tools)
+        ) - real
         assert not phantom, f"{skill.name}: SKILL.md 记载了不存在的 tool {sorted(phantom)}"
 
 

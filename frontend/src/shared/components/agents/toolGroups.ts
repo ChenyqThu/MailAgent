@@ -49,7 +49,7 @@ export const TOOL_GROUPS: ReadonlyArray<{ id: string; tools: readonly string[] }
       'calendar_event_delete'
     ]
   },
-  { id: 'report', tools: ['report_get', 'report_list'] },
+  { id: 'report', tools: ['report_get', 'report_list', 'report_write'] },
   {
     id: 'session',
     tools: [

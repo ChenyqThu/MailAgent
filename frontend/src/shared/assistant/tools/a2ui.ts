@@ -351,6 +351,14 @@ export interface CustomAgentApprovalCardProps {
   enabled?: boolean
   /** Compact human trigger summary; null = trigger explicitly cleared (agent disabled). */
   triggerSummary?: string | null
+  capabilities?: {
+    email?: 'read' | 'organize' | 'draft'
+    calendar?: 'off' | 'read' | 'write'
+    knowledge?: 'off' | 'on'
+    reports?: 'read' | 'produce'
+    web?: 'off' | 'gated' | 'open'
+    files?: 'off' | 'on'
+  }
   allowedTools?: string[]
   grantExec?: boolean
   grantWeb?: 'off' | 'gated' | 'open'
@@ -729,6 +737,25 @@ export function buildToolA2UIPayload(
     if ('trigger' in args) {
       props.triggerSummary =
         args.trigger === null ? null : summarizeAgentTrigger(asObj(args.trigger))
+    }
+    const capabilities = asObj(args.capabilities)
+    if (capabilities) {
+      const parsed: NonNullable<CustomAgentApprovalCardProps['capabilities']> = {}
+      const email = asStr(capabilities.email)
+      if (email === 'read' || email === 'organize' || email === 'draft') parsed.email = email
+      const calendar = asStr(capabilities.calendar)
+      if (calendar === 'off' || calendar === 'read' || calendar === 'write') {
+        parsed.calendar = calendar
+      }
+      const knowledge = asStr(capabilities.knowledge)
+      if (knowledge === 'off' || knowledge === 'on') parsed.knowledge = knowledge
+      const reports = asStr(capabilities.reports)
+      if (reports === 'read' || reports === 'produce') parsed.reports = reports
+      const web = asStr(capabilities.web)
+      if (web === 'off' || web === 'gated' || web === 'open') parsed.web = web
+      const files = asStr(capabilities.files)
+      if (files === 'off' || files === 'on') parsed.files = files
+      if (Object.keys(parsed).length > 0) props.capabilities = parsed
     }
     if (Array.isArray(args.allowed_tools)) props.allowedTools = asStrArray(args.allowed_tools)
     if (typeof args.grant_exec === 'boolean') props.grantExec = args.grant_exec

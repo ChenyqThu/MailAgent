@@ -17,6 +17,7 @@ import type {
   BackendKind,
   ChatMessage,
   ChatSession,
+  ChatSessionOriginFilter,
   ChatSessionSummary,
   ChatToolCall,
   ConfirmationTier,
@@ -35,6 +36,7 @@ export type {
   BackendKind,
   ChatMessage,
   ChatSession,
+  ChatSessionOriginFilter,
   ChatSessionSummary,
   ChatToolCall,
   ConfirmationTier,
@@ -62,6 +64,8 @@ export {
   listGeneralSessions,
   listSessionsForEmail,
   updateSessionArchived,
+  updateSessionPinned,
+  updateSessionStarred,
   updateSessionTitle
 } from './chat_db/sessions'
 

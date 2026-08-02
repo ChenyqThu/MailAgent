@@ -1,0 +1,19 @@
+{
+  "id": "AGT-SKILL-009",
+  "category": "skill_enablement",
+  "title": "创建需求缺少触发和产出时先澄清，不提前调用写工具",
+  "surface": "general",
+  "user_prompt": "帮我做一个会处理重要邮件的自定义 Agent。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["custom_agent_list", "custom_agent_get", "custom_agent_create"],
+  "must_use_tools": [],
+  "forbidden_tools": ["custom_agent_update", "custom_agent_delete", "custom_agent_run_now", "run_command", "file_write", "email_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "uncertainty_honesty": 0.2, "ux_clarity": 0.3, "tool_efficiency": 0.1, "evidence_grounding": 0.05 },
+  "rubric_ref": "skill_enablement.md",
+  "notes": "W6 clarification-first contract. The request omits trigger timing/filter, capability tiers, and output form. Correct behavior is to ask concise questions covering those three gaps and make no custom_agent_create/update call yet."
+}

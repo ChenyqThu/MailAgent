@@ -55,6 +55,7 @@ export function normalizeContextMode(value: unknown): AgentContextMode {
  *  §3.1) — orthogonal to the approval tier. */
 export const GATEWAY_TOOL_CLASS_VALUES = [
   'read',
+  'artifact',
   'domain_write',
   'capability_change',
   'exec',
@@ -89,6 +90,9 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   kos_get_backlinks: 'read',
   report_list: 'read',
   report_get: 'read',
+  // artifact — local, deletable/replaceable output. It never leaves the machine and never needs
+  // an approval card; unlike domain_write it is available silently in every context mode.
+  report_write: 'artifact',
   chat_session_list: 'read',
   chat_session_search: 'read',
   chat_session_get: 'read',
@@ -241,7 +245,7 @@ export interface AgentRunContext {
 
 /** Registration-time matrix row (ADR-001 D3, exec row revised by ADR-004 D2, web row added by
  *  ADR-004 rev3.1 D2): may a tool of this class exist in the ToolSet of a run in this mode?
- *  read/domain_write → every mode; capability_change/outbound → manual_chat only (permanently —
+ *  read/domain_write/artifact → every mode; capability_change/outbound → manual_chat only (permanently —
  *  no grant key exists for them); exec → manual_chat, OR a non-manual run whose per-agent grants
  *  carry exec===true; web → manual_chat, OR a non-manual run whose grants carry web∈{gated,open}
  *  (the owner's explicit opt-in, spec-derived — any other value incl. junk is 'off'). `grants` is
@@ -253,7 +257,7 @@ export function isToolClassAllowedInMode(
   grants?: AgentModeGrants
 ): boolean {
   if (mode === 'manual_chat') return true
-  if (toolClass === 'read' || toolClass === 'domain_write') return true
+  if (toolClass === 'read' || toolClass === 'domain_write' || toolClass === 'artifact') return true
   if (toolClass === 'exec') return grants?.exec === true
   if (toolClass === 'web') return grants?.web === 'gated' || grants?.web === 'open'
   return false // capability_change + outbound: false under ANY grants (structurally un-grantable)
@@ -285,6 +289,7 @@ export function mayAutoApprove(toolClass: GatewayToolClass, mode: AgentContextMo
  *  web fetch/search, and file read/write. Everything else asks — see ACCEPT_EDITS_ASK_TOOLS for
  *  the explicit rationale per retained tool. */
 export const ACCEPT_EDITS_AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
+  'report_write',
   'email_flag',
   'email_archive',
   'email_pin',

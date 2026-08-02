@@ -6,6 +6,8 @@
 // 一个 <section> 容器（console+list → 收件箱式行组）。
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import { Streamdown } from 'streamdown'
+import 'streamdown/styles.css'
 
 import type {
   ReportBlock,
@@ -15,12 +17,20 @@ import type {
   ReportKeyPointsBlock,
   ReportKosContextBlock,
   ReportActionSuggestionBlock,
+  ReportChecklistBlock,
+  ReportImageBlock,
+  ReportMarkdownBlock,
+  ReportMetricDeltaBlock,
   ReportOverviewBlock,
+  ReportProgressBlock,
+  ReportQuoteBlock,
   ReportSectionBlock,
   ReportStatRowBlock,
+  ReportTimelineBlock,
   ReportTrendBlock,
   ReportTone
 } from '@shared/api/types'
+import { validateReportBlocks } from '@shared/api/reportBlocks'
 import {
   type RenderCtx,
   mdLite,
@@ -888,6 +898,328 @@ function ActionSuggestionBlock({
   )
 }
 
+// ─── general-purpose artifact blocks ───────────────────────────────────────
+function MarkdownBlock({ block }: { block: ReportMarkdownBlock }): React.ReactElement {
+  return (
+    <article
+      className="break-words"
+      style={{
+        padding: '14px 16px',
+        borderRadius: 12,
+        background: 'rgb(var(--ink-2))',
+        border: '1px solid rgb(var(--ink-border))',
+        fontSize: 14,
+        lineHeight: 1.65,
+        color: 'rgb(var(--ink-fg-1))'
+      }}
+    >
+      {block.title && (
+        <h3
+          style={{ fontSize: 14, fontWeight: 650, marginBottom: 10, color: 'rgb(var(--ink-fg))' }}
+        >
+          {block.title}
+        </h3>
+      )}
+      <Streamdown mode="static" parseIncompleteMarkdown>
+        {block.text}
+      </Streamdown>
+    </article>
+  )
+}
+
+function TimelineBlock({ block }: { block: ReportTimelineBlock }): React.ReactElement {
+  return (
+    <div
+      style={{
+        padding: '14px 16px',
+        borderRadius: 12,
+        background: 'rgb(var(--ink-2))',
+        border: '1px solid rgb(var(--ink-border))'
+      }}
+    >
+      {block.title && (
+        <h3
+          style={{ fontSize: 14, fontWeight: 650, color: 'rgb(var(--ink-fg))', marginBottom: 12 }}
+        >
+          {block.title}
+        </h3>
+      )}
+      <div style={{ display: 'flex', flexDirection: 'column' }}>
+        {block.events.map((event, index) => {
+          const tone = event.tone ?? 'neutral'
+          return (
+            <div
+              key={`${event.time}-${index}`}
+              style={{ display: 'grid', gridTemplateColumns: '76px 18px 1fr' }}
+            >
+              <time
+                style={{
+                  paddingTop: 1,
+                  fontFamily: 'ui-monospace, monospace',
+                  fontSize: 12,
+                  color: 'rgb(var(--ink-fg-3))',
+                  fontVariantNumeric: 'tabular-nums'
+                }}
+              >
+                {event.time}
+              </time>
+              <span style={{ position: 'relative', display: 'flex', justifyContent: 'center' }}>
+                {index < block.events.length - 1 && (
+                  <span
+                    style={{
+                      position: 'absolute',
+                      top: 10,
+                      bottom: -8,
+                      width: 1,
+                      background: 'rgb(var(--ink-border))'
+                    }}
+                  />
+                )}
+                <span
+                  style={{
+                    position: 'relative',
+                    zIndex: 1,
+                    width: 9,
+                    height: 9,
+                    marginTop: 4,
+                    borderRadius: '50%',
+                    background: tone === 'neutral' ? 'rgb(var(--ink-fg-3))' : toneColor(tone),
+                    boxShadow: `0 0 0 3px ${tone === 'neutral' ? 'rgb(var(--ink-2))' : toneAlpha(tone, 0.14)}`
+                  }}
+                />
+              </span>
+              <div style={{ paddingBottom: index < block.events.length - 1 ? 16 : 0 }}>
+                <div className="flex items-center" style={{ gap: 6 }}>
+                  {event.icon && <ReportIcon name={event.icon} size={14} />}
+                  <span style={{ fontSize: 14, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
+                    {event.title}
+                  </span>
+                </div>
+                {event.detail && (
+                  <p
+                    style={{
+                      fontSize: 14,
+                      lineHeight: 1.55,
+                      color: 'rgb(var(--ink-fg-2))',
+                      marginTop: 3
+                    }}
+                  >
+                    {event.detail}
+                  </p>
+                )}
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+function ChecklistBlock({ block }: { block: ReportChecklistBlock }): React.ReactElement {
+  const done = block.items.filter((item) => item.done).length
+  return (
+    <div
+      style={{
+        padding: '14px 16px',
+        borderRadius: 12,
+        background: 'rgb(var(--ink-2))',
+        border: '1px solid rgb(var(--ink-border))'
+      }}
+    >
+      <div className="flex items-center" style={{ gap: 8, marginBottom: 10 }}>
+        {block.title && (
+          <h3 style={{ fontSize: 14, fontWeight: 650, color: 'rgb(var(--ink-fg))' }}>
+            {block.title}
+          </h3>
+        )}
+        <span style={{ flex: 1 }} />
+        <span style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))' }}>
+          {done}/{block.items.length}
+        </span>
+      </div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+        {block.items.map((item, index) => (
+          <div key={index} className="flex items-start" style={{ gap: 9 }}>
+            <span
+              style={{
+                display: 'grid',
+                placeItems: 'center',
+                width: 18,
+                height: 18,
+                marginTop: 1,
+                borderRadius: 5,
+                color: item.done ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))',
+                background: item.done ? 'rgb(var(--c-ok) / 0.12)' : 'rgb(var(--ink-fg) / 0.04)',
+                border: `1px solid ${item.done ? 'rgb(var(--c-ok) / 0.35)' : 'rgb(var(--ink-border))'}`
+              }}
+            >
+              {item.done && <ReportIcon name="check" size={12} />}
+            </span>
+            <span
+              style={{
+                fontSize: 14,
+                lineHeight: 1.45,
+                color: item.done ? 'rgb(var(--ink-fg-2))' : 'rgb(var(--ink-fg-1))',
+                textDecoration: item.done ? 'line-through' : 'none'
+              }}
+            >
+              {item.text}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+function ProgressBlock({ block }: { block: ReportProgressBlock }): React.ReactElement {
+  const max = block.max ?? 100
+  const pct = Math.max(0, Math.min(100, (block.value / max) * 100))
+  const tone = block.tone ?? 'info'
+  return (
+    <div
+      style={{
+        padding: '14px 16px',
+        borderRadius: 12,
+        background: 'rgb(var(--ink-2))',
+        border: '1px solid rgb(var(--ink-border))'
+      }}
+    >
+      <div className="flex items-baseline" style={{ gap: 8, marginBottom: 9 }}>
+        <span style={{ fontSize: 14, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
+          {block.label}
+        </span>
+        <span style={{ flex: 1 }} />
+        <span
+          style={{
+            fontFamily: 'ui-monospace, monospace',
+            fontSize: 12,
+            color: toneColor(tone),
+            fontVariantNumeric: 'tabular-nums'
+          }}
+        >
+          {block.value}/{max}
+        </span>
+      </div>
+      <div
+        style={{
+          height: 7,
+          borderRadius: 8,
+          background: 'rgb(var(--ink-fg) / 0.07)',
+          overflow: 'hidden'
+        }}
+      >
+        <div
+          style={{
+            width: `${pct}%`,
+            height: '100%',
+            borderRadius: 8,
+            background: toneColor(tone),
+            transition: 'width 220ms cubic-bezier(0.23,1,0.32,1)'
+          }}
+        />
+      </div>
+      {block.caption && (
+        <p style={{ fontSize: 14, color: 'rgb(var(--ink-fg-2))', marginTop: 8, lineHeight: 1.45 }}>
+          {block.caption}
+        </p>
+      )}
+    </div>
+  )
+}
+
+function QuoteBlock({ block }: { block: ReportQuoteBlock }): React.ReactElement {
+  return (
+    <blockquote
+      style={{
+        margin: 0,
+        padding: '13px 16px 13px 18px',
+        borderRadius: 9,
+        borderLeft: '3px solid rgb(var(--c-accent))',
+        background: 'rgb(var(--ink-fg) / 0.035)'
+      }}
+    >
+      <p style={{ fontSize: 15, lineHeight: 1.65, color: 'rgb(var(--ink-fg-1))' }}>{block.text}</p>
+      {block.cite && (
+        <footer style={{ fontSize: 14, color: 'rgb(var(--ink-fg-3))', marginTop: 8 }}>
+          — {block.url ? <a href={block.url}>{block.cite}</a> : block.cite}
+        </footer>
+      )}
+    </blockquote>
+  )
+}
+
+function MetricDeltaBlock({ block }: { block: ReportMetricDeltaBlock }): React.ReactElement {
+  const positive = block.delta >= 0
+  const tone = block.tone ?? (positive ? 'success' : 'warn')
+  return (
+    <div
+      className="flex items-center"
+      style={{
+        gap: 14,
+        padding: '13px 16px',
+        borderRadius: 12,
+        background: 'rgb(var(--ink-2))',
+        border: '1px solid rgb(var(--ink-border))'
+      }}
+    >
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, color: 'rgb(var(--ink-fg-2))' }}>{block.label}</div>
+        <div style={{ fontSize: 24, fontWeight: 650, color: 'rgb(var(--ink-fg))', marginTop: 2 }}>
+          {block.value}
+        </div>
+      </div>
+      <span
+        className="flex items-center"
+        style={{ gap: 4, color: toneColor(tone), fontSize: 14, fontWeight: 600 }}
+      >
+        <ReportIcon name={positive ? 'chevronup' : 'chevrondown'} size={14} />
+        {Math.abs(block.delta)}%
+        {block.deltaLabel && (
+          <span style={{ fontWeight: 400, color: 'rgb(var(--ink-fg-3))' }}>{block.deltaLabel}</span>
+        )}
+      </span>
+    </div>
+  )
+}
+
+function ImageBlock({ block }: { block: ReportImageBlock }): React.ReactElement {
+  return (
+    <figure
+      style={{
+        margin: 0,
+        padding: 10,
+        borderRadius: 12,
+        background: 'rgb(var(--ink-2))',
+        border: '1px solid rgb(var(--ink-border))'
+      }}
+    >
+      <img
+        src={block.src}
+        alt={block.alt ?? ''}
+        loading="lazy"
+        style={{
+          display: 'block',
+          width: '100%',
+          maxWidth: block.width ?? '100%',
+          maxHeight: 560,
+          objectFit: 'contain',
+          margin: '0 auto',
+          borderRadius: 8
+        }}
+      />
+      {block.caption && (
+        <figcaption
+          style={{ fontSize: 14, color: 'rgb(var(--ink-fg-3))', marginTop: 8, textAlign: 'center' }}
+        >
+          {block.caption}
+        </figcaption>
+      )}
+    </figure>
+  )
+}
+
 // ─── trend — 纯 CSS 柱 ──────────────────────────────────────────────────────
 function TrendBlock({
   block,
@@ -898,6 +1230,16 @@ function TrendBlock({
 }): React.ReactElement {
   const max = Math.max(...block.points.map((p) => p.value), 1)
   const delta = block.compare?.delta
+  const variant = block.variant ?? 'bar'
+  const chartWidth = 600
+  const chartHeight = 112
+  const points = block.points.map((point, index) => ({
+    ...point,
+    x:
+      block.points.length === 1 ? chartWidth / 2 : (index / (block.points.length - 1)) * chartWidth,
+    y: chartHeight - (point.value / max) * (chartHeight - 12)
+  }))
+  const polyline = points.map((point) => `${point.x},${point.y}`).join(' ')
   return (
     <div
       style={{
@@ -932,49 +1274,97 @@ function TrendBlock({
           </span>
         )}
       </div>
-      <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 120 }}>
-        {block.points.map((p, i) => {
-          const h = Math.max(4, Math.round((p.value / max) * 100))
-          return (
-            <div
-              key={i}
-              style={{
-                flex: 1,
-                display: 'flex',
-                flexDirection: 'column',
-                alignItems: 'center',
-                gap: 6,
-                height: '100%',
-                justifyContent: 'flex-end'
-              }}
-            >
+      {variant !== 'bar' ? (
+        <div style={{ position: 'relative', height: 142 }}>
+          <svg
+            viewBox={`0 0 ${chartWidth} ${chartHeight}`}
+            preserveAspectRatio="none"
+            role="img"
+            aria-label={block.metric}
+            style={{ display: 'block', width: '100%', height: 112, overflow: 'visible' }}
+          >
+            {variant === 'area' && (
+              <polygon
+                points={`0,${chartHeight} ${polyline} ${chartWidth},${chartHeight}`}
+                fill="rgb(var(--c-accent) / 0.12)"
+              />
+            )}
+            <polyline
+              points={polyline}
+              fill="none"
+              stroke="rgb(var(--c-accent))"
+              strokeWidth="3"
+              vectorEffect="non-scaling-stroke"
+            />
+            {points.map((point, index) => (
+              <circle
+                key={index}
+                cx={point.x}
+                cy={point.y}
+                r="4"
+                fill="rgb(var(--ink-2))"
+                stroke="rgb(var(--c-accent))"
+                strokeWidth="2"
+                vectorEffect="non-scaling-stroke"
+              />
+            ))}
+          </svg>
+          <div className="flex" style={{ justifyContent: 'space-between', gap: 6, marginTop: 7 }}>
+            {points.map((point, index) => (
               <span
+                key={index}
+                style={{ fontSize: 11, color: 'rgb(var(--ink-fg-3))', textAlign: 'center' }}
+              >
+                {point.label}
+              </span>
+            ))}
+          </div>
+        </div>
+      ) : (
+        <div style={{ display: 'flex', alignItems: 'flex-end', gap: 10, height: 120 }}>
+          {block.points.map((p, i) => {
+            const h = Math.max(4, Math.round((p.value / max) * 100))
+            return (
+              <div
+                key={i}
                 style={{
-                  fontFamily: 'ui-monospace, monospace',
-                  fontSize: 11,
-                  color: 'rgb(var(--ink-fg-2))',
-                  fontVariantNumeric: 'tabular-nums'
+                  flex: 1,
+                  display: 'flex',
+                  flexDirection: 'column',
+                  alignItems: 'center',
+                  gap: 6,
+                  height: '100%',
+                  justifyContent: 'flex-end'
                 }}
               >
-                {p.value}
-              </span>
-              <div
-                style={{
-                  width: '100%',
-                  maxWidth: 38,
-                  height: `${h}%`,
-                  borderRadius: '5px 5px 0 0',
-                  // DESIGN 红线禁 gradient surface → 实色 coral（accent 是像素不是背景泛色）。
-                  background: 'rgb(var(--c-accent))'
-                }}
-              />
-              <span style={{ fontSize: 11, color: 'rgb(var(--ink-fg-3))', whiteSpace: 'nowrap' }}>
-                {p.label}
-              </span>
-            </div>
-          )
-        })}
-      </div>
+                <span
+                  style={{
+                    fontFamily: 'ui-monospace, monospace',
+                    fontSize: 11,
+                    color: 'rgb(var(--ink-fg-2))',
+                    fontVariantNumeric: 'tabular-nums'
+                  }}
+                >
+                  {p.value}
+                </span>
+                <div
+                  style={{
+                    width: '100%',
+                    maxWidth: 38,
+                    height: `${h}%`,
+                    borderRadius: '5px 5px 0 0',
+                    // DESIGN 红线禁 gradient surface → 实色 coral（accent 是像素不是背景泛色）。
+                    background: 'rgb(var(--c-accent))'
+                  }}
+                />
+                <span style={{ fontSize: 11, color: 'rgb(var(--ink-fg-3))', whiteSpace: 'nowrap' }}>
+                  {p.label}
+                </span>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }
@@ -1031,6 +1421,20 @@ function renderLeaf(block: ReportBlock, key: number, ctx: RenderCtx): React.Reac
       return <ActionSuggestionBlock key={key} block={block as ReportActionSuggestionBlock} />
     case 'trend':
       return <TrendBlock key={key} block={block as ReportTrendBlock} ctx={ctx} />
+    case 'markdown':
+      return <MarkdownBlock key={key} block={block as ReportMarkdownBlock} />
+    case 'timeline':
+      return <TimelineBlock key={key} block={block as ReportTimelineBlock} />
+    case 'checklist':
+      return <ChecklistBlock key={key} block={block as ReportChecklistBlock} />
+    case 'progress':
+      return <ProgressBlock key={key} block={block as ReportProgressBlock} />
+    case 'quote':
+      return <QuoteBlock key={key} block={block as ReportQuoteBlock} />
+    case 'metric_delta':
+      return <MetricDeltaBlock key={key} block={block as ReportMetricDeltaBlock} />
+    case 'image':
+      return <ImageBlock key={key} block={block as ReportImageBlock} />
     case 'divider':
       return <DividerBlock key={key} />
     default:
@@ -1038,7 +1442,20 @@ function renderLeaf(block: ReportBlock, key: number, ctx: RenderCtx): React.Reac
   }
 }
 
-const _SECTION_CHILDREN = new Set(['email_item', 'callout', 'kos_context', 'action_suggestion'])
+const _SECTION_CHILDREN = new Set([
+  'email_item',
+  'callout',
+  'kos_context',
+  'action_suggestion',
+  'trend',
+  'markdown',
+  'timeline',
+  'checklist',
+  'progress',
+  'quote',
+  'metric_delta',
+  'image'
+])
 
 // ─── section group — 折叠容器 ────────────────────────────────────────────────
 // 默认折叠：报告默认呈"摘要视图"（header + 汇总一句话 + 邮件数/重点数），长邮件
@@ -1218,7 +1635,8 @@ export function BlockRenderer({
   const [expanded, setExpanded] = useState<Set<number>>(() => new Set())
   const [pendingScrollId, setPendingScrollId] = useState<number | null>(null)
 
-  const { segments, emailToSection } = useMemo(() => planBlocks(blocks), [blocks])
+  const safeBlocks = useMemo(() => validateReportBlocks(blocks), [blocks])
+  const { segments, emailToSection } = useMemo(() => planBlocks(safeBlocks), [safeBlocks])
 
   const handleToggle = useCallback((key: number) => {
     setExpanded((s) => {

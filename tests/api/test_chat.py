@@ -44,6 +44,8 @@ CREATE TABLE ai_chat_sessions (
     agent_id TEXT,
     agent_job_id TEXT,
     last_read_at INTEGER,
+    pinned_at INTEGER,
+    starred INTEGER NOT NULL DEFAULT 0,
     CHECK (
         (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR
@@ -306,6 +308,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     # gateway fail-open 不门控；list[str] = 正常）。详见 advertised_skill_names。
     advertised = data.pop("advertisedSkills")
     assert advertised is None or all(isinstance(x, str) for x in advertised)
+    trusted_fragments = data.pop("trustedSkillFragments")
+    assert trusted_fragments is None or "six capability tiers" in trusted_fragments
     assert data == {
         "maxIter": 8,
         "maxCostUsd": 0.5,
@@ -455,7 +459,20 @@ def test_chat_config_advertised_skills_fail_soft(monkeypatch: pytest.MonkeyPatch
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         r = c.get("/api/chat/config")
     assert r.status_code == 200
-    assert r.json()["data"]["advertisedSkills"] is None
+    data = r.json()["data"]
+    assert data["advertisedSkills"] is None
+    assert data["trustedSkillFragments"] is None
+
+
+def test_chat_config_custom_agent_fragment_follows_skill_toggle(
+    monkeypatch: pytest.MonkeyPatch, fresh_agent_cfg
+) -> None:
+    """W6 workflow guidance is code-owned and follows the advertised-skill enablement snapshot."""
+    fresh_agent_cfg.set_enabled("custom_agent", False)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert "custom_agent" not in data["advertisedSkills"]
+    assert data["trustedSkillFragments"] == ""
 
 
 def test_chat_config_skill_overrides_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1015,6 +1032,52 @@ def test_list_all_sessions_include_archived_returns_archived(chat_client: TestCl
 def test_update_session_archived_invalid_body_400(chat_client: TestClient) -> None:
     """archived 不是 bool → E_INVALID_ARG（镜像 title 端点的类型校验）。"""
     r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/archived", json={"archived": "yes"})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_update_session_pinned_round_trip_without_reorder(chat_client: TestClient) -> None:
+    """Pin/unpin persists pinned_at while leaving the activity timestamp unchanged."""
+    before = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/pinned", json={"pinned": True})
+    assert r.status_code == 200
+    assert r.json()["data"] == {"updated": True}
+    pinned = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
+    assert isinstance(pinned["pinned_at"], int)
+    assert pinned["updated_at"] == before["updated_at"]
+
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/pinned", json={"pinned": False})
+    assert r.status_code == 200
+    unpinned = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
+    assert unpinned["pinned_at"] is None
+    assert unpinned["updated_at"] == before["updated_at"]
+
+
+def test_update_session_starred_round_trip_without_reorder(chat_client: TestClient) -> None:
+    """Star is independent metadata: it persists but does not bump updated_at or pin the row."""
+    before = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/starred", json={"starred": True})
+    assert r.status_code == 200
+    assert r.json()["data"] == {"updated": True}
+    starred = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
+    assert bool(starred["starred"]) is True
+    assert starred["pinned_at"] is None
+    assert starred["updated_at"] == before["updated_at"]
+
+    chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/starred", json={"starred": False})
+    unstarred = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
+    assert bool(unstarred["starred"]) is False
+    assert unstarred["updated_at"] == before["updated_at"]
+
+
+@pytest.mark.parametrize(
+    ("suffix", "payload"),
+    [("pinned", {"pinned": "yes"}), ("starred", {"starred": 1})],
+)
+def test_update_session_pin_star_invalid_body_400(
+    chat_client: TestClient, suffix: str, payload: dict
+) -> None:
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/{suffix}", json=payload)
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
 

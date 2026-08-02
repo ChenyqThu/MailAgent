@@ -7,7 +7,7 @@
 
 import { describe, expect, test } from 'vitest'
 
-import { buildGatewayTools, GATEWAY_READ_TOOL_NAMES } from '../../../src/ai-gateway/tools'
+import { buildGatewayTools, GATEWAY_DEFAULT_TOOL_NAMES } from '../../../src/ai-gateway/tools'
 import type { GatewayToolAuditEntry } from '../../../src/ai-gateway/tools/types'
 import { emailSearchSchema } from '../../../src/ai-gateway/tools/schemas'
 import { mockDomain, okEnvelope, runTool } from './_helpers'
@@ -18,7 +18,7 @@ describe('buildGatewayTools', () => {
       domain: mockDomain(() => okEnvelope([])),
       contextMode: 'manual_chat'
     })
-    expect(Object.keys(tools).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
+    expect(Object.keys(tools).sort()).toEqual([...GATEWAY_DEFAULT_TOOL_NAMES].sort())
     for (const name of Object.keys(tools)) {
       expect(typeof tools[name].execute).toBe('function')
       // read-only scope: no write tool, and no read tool carries needsApproval.
@@ -32,7 +32,7 @@ describe('buildGatewayTools', () => {
       writeToolsEnabled: true,
       contextMode: 'manual_chat'
     })
-    expect(Object.keys(tools).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
+    expect(Object.keys(tools).sort()).toEqual([...GATEWAY_DEFAULT_TOOL_NAMES].sort())
   })
 
   test('threads the audit collector to the built tools (the server.ts onFinish path)', async () => {

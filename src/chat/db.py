@@ -1,6 +1,8 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 20）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 21）。
+v21（custom-agent epic W3，task 07-28）= ``ai_chat_sessions.pinned_at`` + ``starred``：
+置顶分组顺序与独立星标状态；两类组织动作均不 bump updated_at。
 v20（harness-chat lane A B4，task 07-15）= ``ai_chat_sessions.last_read_at``：未读徽标的
 per-session 已读水位（NULL = 旧行/从未打开 → 不打点；未读判定 = updated_at > last_read_at）。
 写经本文件 ``update_session_last_read``（serve-api PATCH /chat/sessions/{id}/read，远程 parity），
@@ -238,6 +240,17 @@ class ChatDb:
         except sqlite3.Error:
             return None
 
+    def _has_column(self, table: str, column: str) -> bool:
+        """Best-effort schema probe for compatibility reads against a pre-migration frontend DB."""
+        if not os.path.exists(self.db_path):
+            return False
+        try:
+            with self._connection() as conn:
+                rows = conn.execute(f"PRAGMA table_info({table})")
+                return any(row["name"] == column for row in rows)
+        except sqlite3.Error:
+            return False
+
     # ── sessions ──────────────────────────────────────────────────────────
 
     def list_sessions_for_email(self, email_id: int) -> List[Dict[str, Any]]:
@@ -251,11 +264,22 @@ class ChatDb:
         """P2c — general（无邮件 context）sessions（按 updated_at 倒序）。镜像
         listGeneralSessions → ChatSession[]。与 list_sessions_for_email 分开，general session
         绝不漏进某封邮件的 sidebar。"""
+        origin_clause = (
+            " AND COALESCE(origin, 'interactive') <> 'agent'"
+            if self._has_column("ai_chat_sessions", "origin")
+            else ""
+        )
         return self._read_all(
-            "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' ORDER BY updated_at DESC",
+            "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general'"
+            f"{origin_clause} ORDER BY updated_at DESC",
         )
 
-    def list_all_sessions(self, limit: int = 300, include_archived: bool = False) -> List[Dict[str, Any]]:
+    def list_all_sessions(
+        self,
+        limit: int = 300,
+        include_archived: bool = False,
+        origin: str = "interactive",
+    ) -> List[Dict[str, Any]]:
         """跨邮件 session 历史（含 first_user_message 预览 + message_count，排除无消息 session）。
         镜像 listAllSessions → ChatSessionSummary[]。
         include_archived=False（默认）只返回活跃会话（archived=0）；
@@ -265,7 +289,20 @@ class ChatDb:
         旧库），显式引用 last_read_at 会在 pre-v20 库上 OperationalError → _read_all 吞成 []
         = 整个历史列表被清空。``s.*`` 两个世界都成立：列在 → 带回（未读徽标），列不在 →
         缺键（前端按 undefined = 无徽标处理）。"""
-        archived_clause = "" if include_archived else "s.archived = 0 AND "
+        if origin not in ("interactive", "agent", "all"):
+            raise ValueError(f"invalid session origin filter: {origin!r}")
+        clauses = []
+        if not include_archived:
+            clauses.append("s.archived = 0")
+        has_origin = self._has_column("ai_chat_sessions", "origin")
+        if origin == "interactive" and has_origin:
+            clauses.append("COALESCE(s.origin, 'interactive') <> 'agent'")
+        elif origin == "agent":
+            if not has_origin:
+                return []
+            clauses.append("s.origin = 'agent'")
+        clauses.append("EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)")
+        where_clause = " AND ".join(clauses)
         return self._read_all(
             f"""SELECT
                  s.*,
@@ -274,7 +311,7 @@ class ChatDb:
                     ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
                  (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count
                FROM ai_chat_sessions s
-               WHERE {archived_clause}EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
+               WHERE {where_clause}
                ORDER BY s.updated_at DESC
                LIMIT ?""",
             (limit,),
@@ -602,6 +639,25 @@ class ChatDb:
                 (1 if archived else 0, session_id),
             )
 
+    def update_session_pinned(
+        self, session_id: int, pinned: bool, at_ms: Optional[int] = None
+    ) -> None:
+        """置顶/取消置顶；置顶时间决定 pinned 分组顺序，不 bump updated_at。"""
+        pinned_at = (at_ms if at_ms is not None else _now_ms()) if pinned else None
+        with self._write_connection() as conn:
+            conn.execute(
+                "UPDATE ai_chat_sessions SET pinned_at = ? WHERE id = ?",
+                (pinned_at, session_id),
+            )
+
+    def update_session_starred(self, session_id: int, starred: bool) -> None:
+        """设置独立星标状态；不重排、不分组，也不 bump updated_at。"""
+        with self._write_connection() as conn:
+            conn.execute(
+                "UPDATE ai_chat_sessions SET starred = ? WHERE id = ?",
+                (1 if starred else 0, session_id),
+            )
+
     def update_session_last_read(self, session_id: int, at_ms: Optional[int] = None) -> None:
         """harness-chat lane A B4（task 07-15）— 置 session 已读水位 last_read_at=now（v20 列）。
 
@@ -822,4 +878,3 @@ class ChatDb:
             "SELECT * FROM chat_tool_call WHERE message_id = ? AND tool_use_id = ?",
             (message_id, tool_use_id),
         )
-

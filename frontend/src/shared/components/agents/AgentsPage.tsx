@@ -140,7 +140,7 @@ export function AgentsPage(): React.ReactElement {
       <div style={{ flex: 1, minHeight: 0, overflow: 'hidden' }}>
         {tab === 'agents' && <AgentsTab onOpenReports={() => go('reports')} />}
         {tab === 'reports' && <ReportsTab />}
-        {tab === 'chats' && <ChatsTab backend="custom-api" />}
+        {tab === 'chats' && <ChatsTab />}
       </div>
     </div>
   )

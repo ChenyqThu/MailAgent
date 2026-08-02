@@ -138,8 +138,14 @@ def test_bad_result_json_is_completed_not_crash():
 def test_all_outputs_in_enum():
     rows = [
         _row("queued"), _row("running"), _row("failed"), _row(),
+        _row(result={"outcome": "skipped"}),
         _paused("pending"), _paused("approved"), _paused("rejected"),
         _paused("pending", finished_at=None, updated_at=None),
     ]
     for row in rows:
         assert derive_agent_run_state(row, now_fn=lambda: _NOW) in AGENT_RUN_STATES
+
+
+def test_budget_skip_is_not_completed():
+    row = _row(result={"outcome": "skipped", "reason": "daily_run_limit"})
+    assert derive_agent_run_state(row, now_fn=lambda: _NOW) == "skipped"

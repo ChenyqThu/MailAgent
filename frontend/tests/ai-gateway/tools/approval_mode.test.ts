@@ -394,6 +394,7 @@ describe('07-16 — acceptEdits allow/ask partition (codex r1 P1-3: fail-closed 
         'email_resync',
         'file_read',
         'file_write',
+        'report_write',
         'set_skill_enabled',
         'update_system_md',
         'web_fetch',

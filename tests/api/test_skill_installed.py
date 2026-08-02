@@ -49,8 +49,8 @@ def _skill_of(manifest, name):
 # ---------------------------------------------------------------------------
 def test_no_installed_baseline(installed_store):
     names = {s.name for s in build_manifest(None).skills}
-    # 5 个 code builtin 都在（principal=None → 全可见）
-    assert {"email", "search", "report", "calendar", "notion_agent"} <= names
+    # 6 个 code builtin 都在（principal=None → 全可见）
+    assert {"email", "search", "report", "calendar", "notion_agent", "custom_agent"} <= names
 
 
 # ---------------------------------------------------------------------------

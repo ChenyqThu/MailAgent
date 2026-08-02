@@ -28,6 +28,7 @@ import { ConfigDrawer } from './drawers/ConfigDrawer'
 import { SearchConfigDrawer } from './drawers/SearchConfigDrawer'
 import { PreprocessConfigDrawer } from './drawers/PreprocessConfigDrawer'
 import { ProjectProgressConfigDrawer } from './drawers/ProjectProgressConfigDrawer'
+import { AgentAvatar } from './AgentAvatar'
 import { coerceRule, isScheduleValue } from './schedule'
 import { sentenceText } from './schedule/sentence'
 
@@ -91,21 +92,7 @@ function AgentCard({
     >
       {/* head */}
       <div className="flex items-center" style={{ gap: 13, padding: '18px 20px 16px' }}>
-        <span
-          style={{
-            width: 42,
-            height: 42,
-            borderRadius: 11,
-            display: 'grid',
-            placeItems: 'center',
-            flexShrink: 0,
-            background: 'rgb(var(--c-accent) / 0.14)',
-            border: '1px solid rgb(var(--c-accent) / 0.30)',
-            color: 'rgb(var(--c-accent))'
-          }}
-        >
-          <ReportIcon name="sparkles" size={20} />
-        </span>
+        <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="flex items-center" style={{ gap: 9 }}>
             <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
@@ -503,21 +490,7 @@ function CustomAgentCard({
         border: '1px solid rgb(var(--ink-border))'
       }}
     >
-      <span
-        style={{
-          width: 42,
-          height: 42,
-          borderRadius: 11,
-          display: 'grid',
-          placeItems: 'center',
-          flexShrink: 0,
-          background: 'rgb(var(--c-accent) / 0.14)',
-          border: '1px solid rgb(var(--c-accent) / 0.30)',
-          color: 'rgb(var(--c-accent))'
-        }}
-      >
-        <ReportIcon name="cog" size={20} />
-      </span>
+      <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="flex items-center" style={{ gap: 9 }}>
           <h3
@@ -590,21 +563,7 @@ function SearchAgentCard({
       onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)')}
       onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--ink-border))')}
     >
-      <span
-        style={{
-          width: 42,
-          height: 42,
-          borderRadius: 11,
-          display: 'grid',
-          placeItems: 'center',
-          flexShrink: 0,
-          background: 'rgb(var(--c-accent) / 0.14)',
-          border: '1px solid rgb(var(--c-accent) / 0.30)',
-          color: 'rgb(var(--c-accent))'
-        }}
-      >
-        <ReportIcon name="search" size={20} />
-      </span>
+      <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="flex items-center" style={{ gap: 9 }}>
           <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
@@ -705,21 +664,7 @@ function PreprocessAgentCard({
       onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)')}
       onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--ink-border))')}
     >
-      <span
-        style={{
-          width: 42,
-          height: 42,
-          borderRadius: 11,
-          display: 'grid',
-          placeItems: 'center',
-          flexShrink: 0,
-          background: 'rgb(var(--c-accent) / 0.14)',
-          border: '1px solid rgb(var(--c-accent) / 0.30)',
-          color: 'rgb(var(--c-accent))'
-        }}
-      >
-        <ReportIcon name="zap" size={20} />
-      </span>
+      <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="flex items-center" style={{ gap: 9 }}>
           <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
@@ -832,21 +777,7 @@ function ProjectProgressAgentCard({
       onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)')}
       onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--ink-border))')}
     >
-      <span
-        style={{
-          width: 42,
-          height: 42,
-          borderRadius: 11,
-          display: 'grid',
-          placeItems: 'center',
-          flexShrink: 0,
-          background: 'rgb(var(--c-accent) / 0.14)',
-          border: '1px solid rgb(var(--c-accent) / 0.30)',
-          color: 'rgb(var(--c-accent))'
-        }}
-      >
-        <ReportIcon name="barchart" size={20} />
-      </span>
+      <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="flex items-center" style={{ gap: 9 }}>
           <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>

@@ -23,7 +23,10 @@ vi.mock('@shared/assistant/approvalRecordClient', () => ({
 }))
 
 import i18n from '@shared/i18n'
-import { AgentRunRecordBanner, InRecordApprovalPanel } from '@shared/components/agents/AgentRecordView'
+import {
+  AgentRunRecordBanner,
+  InRecordApprovalPanel
+} from '@shared/components/agents/AgentRecordView'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -68,7 +71,7 @@ describe('AgentRunRecordBanner', () => {
     render(<AgentRunRecordBanner agentName="Agent A" runState={null} triggeredAt={null} />)
     expect(screen.getByText('Agent A')).toBeTruthy()
     expect(screen.getByText(/仅审批可交互/)).toBeTruthy()
-    // 无 state → 不渲染任何 8 值域状态标签
+    // 无 state → 不渲染任何 9 值域状态标签
     expect(screen.queryByText('等待审批')).toBeNull()
   })
 })
@@ -92,7 +95,9 @@ describe('InRecordApprovalPanel — pending hit (decide card)', () => {
 
     // 批准 → postApprovalDecide 收到 {approvalId, decision:'approve'}（无 resumeToken/toolCallId）
     fireEvent.click(screen.getByRole('button', { name: '批准' }))
-    await waitFor(() => expect(mockPostDecide).toHaveBeenCalledWith({ approvalId: 'ap_1', decision: 'approve' }))
+    await waitFor(() =>
+      expect(mockPostDecide).toHaveBeenCalledWith({ approvalId: 'ap_1', decision: 'approve' })
+    )
     await waitFor(() => expect(onDecided).toHaveBeenCalled())
   })
 })
@@ -114,7 +119,12 @@ describe('InRecordApprovalPanel — web PIN affordance (S6 W3-3, agent-run-only)
     mockPostDecide.mockResolvedValue({ ok: true, status: 'completed' })
     mockPostRememberWeb.mockResolvedValue(true)
     withQuery(
-      <InRecordApprovalPanel sessionId={9} runState="paused_pending" agentName="供应商监控" onDecided={vi.fn()} />
+      <InRecordApprovalPanel
+        sessionId={9}
+        runState="paused_pending"
+        agentName="供应商监控"
+        onDecided={vi.fn()}
+      />
     )
     const box = await screen.findByText(/总是允许该 Agent 访问此域名/)
     expect(box).toBeTruthy()
@@ -122,7 +132,9 @@ describe('InRecordApprovalPanel — web PIN affordance (S6 W3-3, agent-run-only)
     fireEvent.click(screen.getByRole('checkbox'))
     fireEvent.click(screen.getByRole('button', { name: '批准' }))
     await waitFor(() => expect(mockPostRememberWeb).toHaveBeenCalledWith('ap_web'))
-    await waitFor(() => expect(mockPostDecide).toHaveBeenCalledWith({ approvalId: 'ap_web', decision: 'approve' }))
+    await waitFor(() =>
+      expect(mockPostDecide).toHaveBeenCalledWith({ approvalId: 'ap_web', decision: 'approve' })
+    )
     // remember fired before decide (peek is read-only; decide consumes the stash)
     expect(mockPostRememberWeb.mock.invocationCallOrder[0]).toBeLessThan(
       mockPostDecide.mock.invocationCallOrder[0]
@@ -133,7 +145,12 @@ describe('InRecordApprovalPanel — web PIN affordance (S6 W3-3, agent-run-only)
     mockFetchPending.mockResolvedValue(HIT_WEB_AGENT)
     mockPostDecide.mockResolvedValue({ ok: true, status: 'completed' })
     withQuery(
-      <InRecordApprovalPanel sessionId={9} runState="paused_pending" agentName="供应商监控" onDecided={vi.fn()} />
+      <InRecordApprovalPanel
+        sessionId={9}
+        runState="paused_pending"
+        agentName="供应商监控"
+        onDecided={vi.fn()}
+      />
     )
     await screen.findByText(/总是允许该 Agent 访问此域名/)
     fireEvent.click(screen.getByRole('button', { name: '批准' }))
@@ -146,7 +163,12 @@ describe('InRecordApprovalPanel — web PIN affordance (S6 W3-3, agent-run-only)
     // rule built here would be a dead, misleading config — the affordance must be absent.
     mockFetchPending.mockResolvedValue(HIT_WEB_MANUAL)
     withQuery(
-      <InRecordApprovalPanel sessionId={9} runState="paused_pending" agentName="手动会话" onDecided={vi.fn()} />
+      <InRecordApprovalPanel
+        sessionId={9}
+        runState="paused_pending"
+        agentName="手动会话"
+        onDecided={vi.fn()}
+      />
     )
     // card renders, but no PIN affordance
     expect(await screen.findByText('web_fetch · https://api.vendor.com/v1')).toBeTruthy()
@@ -157,7 +179,12 @@ describe('InRecordApprovalPanel — web PIN affordance (S6 W3-3, agent-run-only)
   test('agent-run NON-web_fetch (email_draft_reply) → NO affordance (web_fetch only)', async () => {
     mockFetchPending.mockResolvedValue(HIT) // toolName email_draft_reply, agentId dms
     withQuery(
-      <InRecordApprovalPanel sessionId={9} runState="paused_pending" agentName="每日摘要" onDecided={vi.fn()} />
+      <InRecordApprovalPanel
+        sessionId={9}
+        runState="paused_pending"
+        agentName="每日摘要"
+        onDecided={vi.fn()}
+      />
     )
     await screen.findByText('email_draft_reply · 给张三回复')
     expect(screen.queryByText(/总是允许该 Agent 访问此域名/)).toBeNull()

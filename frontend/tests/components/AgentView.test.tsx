@@ -200,6 +200,8 @@ describe('Agent view — unified history list (Phase 9)', () => {
     onRename: vi.fn(),
     onArchive: vi.fn(),
     onRestore: vi.fn(),
+    onPin: vi.fn(),
+    onStar: vi.fn(),
     collapsed: false,
     onToggleCollapse: vi.fn()
   }

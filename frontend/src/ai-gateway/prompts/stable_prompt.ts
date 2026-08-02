@@ -159,7 +159,8 @@ export function buildStableSystemPrompt(
   }
   // P3 — active Skill prompt fragments, AFTER the memory block. Only ENABLED + AVAILABLE
   // skills contribute; a disabled skill injects neither its tools nor this fragment.
-  // "" / null → skip (the gateway always passes null).
+  // "" / null → skip. The gateway passes only backend-filtered, code-owned fragments; installed
+  // third-party prompt fragments are intentionally excluded from this trusted system section.
   if (cfg.skillFragments && cfg.skillFragments.length > 0) {
     text +=
       '\n\n# Active skills (capabilities currently enabled)\n' +

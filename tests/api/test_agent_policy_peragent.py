@@ -248,7 +248,7 @@ def test_peragent_exec_mount_gate_create_and_evaluate(client, fresh_agent_cfg, f
     main_py = _install_pack(client, tmp_path)
     matcher = {"v": 1, "argv0_realpath": os.path.realpath("/bin/echo"),
                "argv_template": [{"pin": main_py}]}
-    # 未挂载（tool_policy 缺省 → 默认挂载集 email/search，不含 installed skill）→ 400。
+    # 未挂载（tool_policy 缺省 → 默认挂载集 email/search/report，不含 installed skill）→ 400。
     code, _, msg = _err(_create(client, {"capability": "exec", "matcher": matcher,
                                          "agentId": "dms"}))
     assert code == 400 and "not mounted" in msg
@@ -418,7 +418,7 @@ def test_tool_options_contract_shape(client, monkeypatch):
     assert isinstance(d["tools"], list) and isinstance(d["defaults"], list)
     for t in d["tools"]:
         assert set(t.keys()) == {"name", "class"}
-        assert t["class"] in ("read", "domain_write")
+        assert t["class"] in ("read", "domain_write", "artifact")
     names = [t["name"] for t in d["tools"]]
     assert len(names) == len(set(names))
     # defaults ⊆ tools（Settings 勾选面自洽）。
@@ -428,7 +428,7 @@ def test_tool_options_contract_shape(client, monkeypatch):
 
 def test_tool_options_consistent_with_tool_catalog():
     """HEADLESS_TOOL_OPTIONS 与 tests/agent_eval/tool_catalog.json 的 tool_class 轴单源一致：
-    集合 = catalog 内全部 read+domain_write 工具；class 逐名相同（R4 catalog 闸的 Python 侧延伸，
+    集合 = catalog 内全部 read+domain_write+artifact 工具；class 逐名相同（R4 catalog 闸的 Python 侧延伸，
     新读/写工具漏 HEADLESS_TOOL_OPTIONS 必红）。"""
     from src.api.routers.agent_runs import (
         DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS,
@@ -442,7 +442,7 @@ def test_tool_options_consistent_with_tool_catalog():
     expected = {
         name: meta["tool_class"]
         for name, meta in catalog.items()
-        if meta["tool_class"] in ("read", "domain_write") and not meta.get("legacy_retired")
+        if meta["tool_class"] in ("read", "domain_write", "artifact") and not meta.get("legacy_retired")
     }
     assert dict(HEADLESS_TOOL_OPTIONS) == expected
     # 默认安全集成员必须都在 headless 地板内。

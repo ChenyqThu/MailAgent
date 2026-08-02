@@ -18,7 +18,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Mail, Settings, X } from 'lucide-react'
 
-import type { ChatBackendKind, ChatSessionListItem, SearchHit } from '@shared/api/types'
+import type { ChatBackendKind, ChatSession, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -85,7 +85,7 @@ export interface AgentConversationProps {
   chat: UseGeneralChatReturn
   /** The active session's unified-history item (anchor_type / email_id / backend_kind), or null for a
    *  brand-new chat. Drives runtime + context routing (email-anchored vs general). */
-  activeItem: ChatSessionListItem | null
+  activeItem: ChatSession | null
   /** assistant-modal P2 — welcome heading alignment forwarded to AgentThread. The floating modal passes
    *  'left' (截图 layout); the /sessions view omits it → 'center' (current hero, byte-identical). */
   welcomeAlign?: 'center' | 'left'
@@ -145,7 +145,7 @@ export function AgentConversation({
   const isLegacySession = activeKind !== 'ai-sdk'
   // S6 W2 (P4) — a headless custom-agent run's session (origin='agent', CHAT_DB v19). Opened for
   // execution-record review: RECORD MODE (read-mostly) from ANY entry point (the run row's "查看执行
-  // 记录" OR the general history list — agent sessions are visible there by design). The composer must
+  // 记录" OR the Agents Chats tab — agent sessions are excluded from general history). The composer must
   // stay locked so an untrusted trigger history never gets manual-whitelist续写 (the P4 red line's
   // mirror). Detected off the session metadata, not the run-row context, so the lock is universal.
   const isAgentRecord = activeItem?.origin === 'agent'

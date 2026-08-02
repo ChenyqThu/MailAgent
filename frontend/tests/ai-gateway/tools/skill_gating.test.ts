@@ -6,7 +6,7 @@
 
 import { describe, expect, test } from 'vitest'
 
-import { buildGatewayTools, GATEWAY_READ_TOOL_NAMES } from '../../../src/ai-gateway/tools'
+import { buildGatewayTools, GATEWAY_DEFAULT_TOOL_NAMES } from '../../../src/ai-gateway/tools'
 import {
   applySkillGating,
   GATEWAY_SKILL_TOOLS,
@@ -157,7 +157,7 @@ describe('buildGatewayTools skill-gating wiring', () => {
       contextMode: 'manual_chat'
     })
     expect(Object.keys(flagOff)).toEqual(Object.keys(base))
-    expect(Object.keys(base).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
+    expect(Object.keys(base).sort()).toEqual([...GATEWAY_DEFAULT_TOOL_NAMES].sort())
   })
 
   test('flag-on + advertisedSkills null → fail-open (not gated)', () => {
@@ -167,7 +167,7 @@ describe('buildGatewayTools skill-gating wiring', () => {
       advertisedSkills: null,
       contextMode: 'manual_chat'
     })
-    expect(Object.keys(tools).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
+    expect(Object.keys(tools).sort()).toEqual([...GATEWAY_DEFAULT_TOOL_NAMES].sort())
   })
 
   test('flag-on + advertisedSkills omitting search → drops search read tools only', () => {
@@ -276,7 +276,7 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
 
   test('no agentRunContext → mount gating never applies (manual assembly byte-identical)', () => {
     const base = buildGatewayTools({ domain: domain(), contextMode: 'manual_chat' })
-    expect(Object.keys(base).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
+    expect(Object.keys(base).sort()).toEqual([...GATEWAY_DEFAULT_TOOL_NAMES].sort())
   })
 
   test('applyContextModePolicy still filters LAST: dangerous classes stay absent under a fully-mounted headless run', () => {

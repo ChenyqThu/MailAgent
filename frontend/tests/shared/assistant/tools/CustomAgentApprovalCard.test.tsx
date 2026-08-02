@@ -66,6 +66,32 @@ afterEach(() => {
 })
 
 describe('CustomAgentApprovalCard — create (pending)', () => {
+  test('capability profile is human-readable and drives exec/web risk warnings', () => {
+    render(
+      <CustomAgentApprovalCard
+        {...mockProps({
+          args: {
+            id: 'tiered',
+            title: 'Tiered',
+            capabilities: {
+              email: 'draft',
+              calendar: 'write',
+              knowledge: 'off',
+              reports: 'produce',
+              web: 'open',
+              files: 'on'
+            }
+          }
+        })}
+      />
+    )
+    expect(screen.getByText(/邮件=起草/)).toBeTruthy()
+    expect(screen.getByText(/日历=写入/)).toBeTruthy()
+    expect(screen.getByText(/报告=产出/)).toBeTruthy()
+    expect(screen.getByText(/开启本机执行/)).toBeTruthy()
+    expect(screen.getByText(/全开放联网/)).toBeTruthy()
+  })
+
   test('permission summary renders exec/web-open red warnings + skill list; NO server fetch', () => {
     render(
       <CustomAgentApprovalCard
@@ -98,7 +124,7 @@ describe('CustomAgentApprovalCard — create (pending)', () => {
     render(<CustomAgentApprovalCard {...mockProps({ args: { id: 'plain', title: 'Plain' } })} />)
     expect(screen.queryByText(/开启本机执行/)).toBeNull()
     expect(screen.queryByText(/全开放联网/)).toBeNull()
-    expect(screen.getByText('默认（email、search）')).toBeTruthy()
+    expect(screen.getByText('默认（email、search、report）')).toBeTruthy()
   })
 
   test('approve / reject wire respondToApproval', () => {
@@ -169,6 +195,20 @@ describe('CustomAgentApprovalCard — update (server-fact before/after diff)', (
     await waitFor(() => expect(screen.getByText(/不应盲批/)).toBeTruthy())
     expect(screen.queryByText('批准修改')).toBeNull()
     expect(screen.getByText('拒绝')).toBeTruthy()
+  })
+
+  test('facts unreachable + capability patch → reject-only', async () => {
+    fetchMock.mockImplementation(async () => new Response('down', { status: 503 }))
+    render(
+      <CustomAgentApprovalCard
+        {...mockProps({
+          toolName: 'custom_agent_update',
+          args: { agent_id: 'dms-approver', capabilities: { reports: 'produce' } }
+        })}
+      />
+    )
+    await waitFor(() => expect(screen.getByText(/不应盲批/)).toBeTruthy())
+    expect(screen.queryByText('批准修改')).toBeNull()
   })
 
   test('facts unreachable + non-permission patch → degraded warning, approve still offered', async () => {

@@ -108,9 +108,12 @@ describe('ElectronApi.chat — S3 直 fetch ChatApi 形状', () => {
       'deleteSession',
       'updateSessionTitle',
       'updateSessionArchived',
+      'updateSessionPinned',
+      'updateSessionStarred',
       'openPopout',
       'listMessages',
       'listSessions',
+      'getSession',
       'listAllSessions',
       'listGeneralSessions',
       'listToolCalls',
@@ -128,7 +131,15 @@ describe('ElectronApi.chat — S3 直 fetch ChatApi 形状', () => {
       expect(typeof (api.chat as unknown as Record<string, unknown>)[m]).toBe('function')
     }
     // 引擎面已删（S3 D1/D5）：不再存在这些方法。
-    for (const gone of ['start', 'editMessage', 'abort', 'confirmTool', 'onStream', 'runSearchAgent', 'invalidateConfig']) {
+    for (const gone of [
+      'start',
+      'editMessage',
+      'abort',
+      'confirmTool',
+      'onStream',
+      'runSearchAgent',
+      'invalidateConfig'
+    ]) {
       expect((api.chat as unknown as Record<string, unknown>)[gone]).toBeUndefined()
     }
   })

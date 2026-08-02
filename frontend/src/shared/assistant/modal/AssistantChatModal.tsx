@@ -166,11 +166,11 @@ function AssistantChatModalInner(): React.JSX.Element {
     })
   }
 
-  // Unified history (email + general) — same query key as AgentViewLayout / ChatsTab → shared cache. The
+  // Interactive history only; headless agent records live in the Agents Chats tab. The
   // active session's item drives AgentConversation's runtime + context routing (email vs general).
   const sessionsQ = useQuery({
-    queryKey: qk.chat.allSessions(),
-    queryFn: () => mailApi.chat.listAllSessions(true),
+    queryKey: [...qk.chat.allSessions(), 'interactive'] as const,
+    queryFn: () => mailApi.chat.listAllSessions({ includeArchived: true, origin: 'interactive' }),
     staleTime: 10_000
   })
   const items = sessionsQ.data ?? []

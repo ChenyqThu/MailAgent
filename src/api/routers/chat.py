@@ -18,7 +18,7 @@ import logging
 import os
 import sqlite3
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
@@ -96,11 +96,17 @@ def _email_meta_for_sessions(
 
 
 @router.get("/sessions/all", dependencies=[Depends(verify_cf_access)])
-async def list_all_sessions(request: Request, include_archived: bool = Query(False)):
+async def list_all_sessions(
+    request: Request,
+    include_archived: bool = Query(False),
+    origin: Literal["interactive", "agent", "all"] = Query("interactive"),
+):
     """跨邮件 session 历史（含 first_user_message 预览 + message_count + join email
     subject/sender）。镜像 chat:listAllSessions → ChatSessionListItem[]。
     include_archived=true 时含归档会话（用于归档分组视图）。"""
-    summaries = get_chat_db().list_all_sessions(include_archived=include_archived)
+    summaries = get_chat_db().list_all_sessions(
+        include_archived=include_archived, origin=origin
+    )
     # codex review NIT — general sessions have email_id=None; exclude them so the
     # email metadata join doesn't query a NULL id (and skips get_settings() when no
     # real email ids remain).
@@ -447,16 +453,30 @@ async def chat_config(request: Request):
     # disabled" = gate everything; None means "unknown" → the gateway fails OPEN,
     # no gating). The gated set is read-only tools; write/send keep flag+approval.
     advertised_skills: Optional[List[str]] = None
+    trusted_skill_fragments: Optional[str] = None
     try:
         from src.agent_config.projections import advertised_skill_names
         from src.agent_config.store import get_agent_config_store
-        from src.skills.registry import build_manifest
+        from src.skills.registry import build_manifest, code_builtin_skills
 
         advertised_skills = advertised_skill_names(
             build_manifest(None).skills, get_agent_config_store()
         )
+        # W6: only the code-owned Custom Agent builder workflow is prompt-injected. Installed
+        # third-party fragments remain excluded from the post-cutover gateway prompt. Reusing the
+        # advertised-skill result makes the Settings toggle authoritative for both visibility and
+        # workflow guidance; an empty string means the trusted skill is deliberately disabled.
+        advertised_set = set(advertised_skills)
+        trusted_skill_fragments = "\n\n".join(
+            skill.prompt_fragment.strip()
+            for skill in code_builtin_skills()
+            if skill.name == "custom_agent"
+            and skill.name in advertised_set
+            and skill.prompt_fragment.strip()
+        )
     except Exception:  # noqa: BLE001 — advertised skills are best-effort; never fail /config
         advertised_skills = None
+        trusted_skill_fragments = None
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -478,6 +498,10 @@ async def chat_config(request: Request):
             # M4a — advertised skill names for the gateway's skill→tool gating; null on
             # a store/manifest hiccup → gateway fails open (see advertised_skills above).
             "advertisedSkills": advertised_skills,
+            # W6 — trusted, code-owned workflow guidance only. null means the enablement snapshot
+            # was unavailable; "" means custom_agent is intentionally disabled. Never includes
+            # user-installed prompt fragments.
+            "trustedSkillFragments": trusted_skill_fragments,
             # M3c — user.md 偏好编译按钮显隐 gate（运行时暴露，非 vite define；
             # flag-off → 前端 UserMdCompileSection return null，整个区块在 DOM 不存在）。
             # singleton 读 —— 翻 MAILAGENT_USER_MD_COMPILE 需重启 serve-api（M3 flag 无 live writer，by design）
@@ -664,6 +688,32 @@ async def update_session_archived(
     if not isinstance(archived, bool):
         raise APIError("E_INVALID_ARG", "archived requires archived:bool", source="sqlite")
     get_chat_db().update_session_archived(session_id, archived)
+    return success_envelope({"updated": True}, request=request, source="sqlite")
+
+
+@router.patch("/sessions/{session_id:int}/pinned", dependencies=[Depends(verify_cf_access)])
+async def update_session_pinned(
+    request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
+):
+    """设置置顶状态；置顶时间决定 pinned 分组顺序，不 bump updated_at。"""
+    opts = body or {}
+    pinned = opts.get("pinned")
+    if not isinstance(pinned, bool):
+        raise APIError("E_INVALID_ARG", "pinned requires pinned:bool", source="sqlite")
+    get_chat_db().update_session_pinned(session_id, pinned)
+    return success_envelope({"updated": True}, request=request, source="sqlite")
+
+
+@router.patch("/sessions/{session_id:int}/starred", dependencies=[Depends(verify_cf_access)])
+async def update_session_starred(
+    request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
+):
+    """设置独立星标 icon 状态；不改变分组或 updated_at。"""
+    opts = body or {}
+    starred = opts.get("starred")
+    if not isinstance(starred, bool):
+        raise APIError("E_INVALID_ARG", "starred requires starred:bool", source="sqlite")
+    get_chat_db().update_session_starred(session_id, starred)
     return success_envelope({"updated": True}, request=request, source="sqlite")
 
 

@@ -28,6 +28,7 @@ import type {
   ExecPolicyRule,
   GlobalApprovalMode,
   KosDoctorCheck,
+  ListAllSessionsOptions,
   SkillConfirmResult,
   SkillEntrypoints,
   SkillPackPreview,
@@ -106,6 +107,20 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       })
     },
 
+    async updateSessionPinned(sessionId: number, pinned: boolean): Promise<void> {
+      if (!Number.isInteger(sessionId) || sessionId < 0) return
+      await request(baseUrl, 'PATCH', `/chat/sessions/${sessionId}/pinned`, {
+        body: { pinned }
+      })
+    },
+
+    async updateSessionStarred(sessionId: number, starred: boolean): Promise<void> {
+      if (!Number.isInteger(sessionId) || sessionId < 0) return
+      await request(baseUrl, 'PATCH', `/chat/sessions/${sessionId}/starred`, {
+        body: { starred }
+      })
+    },
+
     async markSessionRead(sessionId: number): Promise<void> {
       // harness-chat lane A B4 — read watermark: PATCH /chat/sessions/{id}/read (serve-api →
       // src/chat/db.py update_session_last_read; no updated_at bump → no reorder). Best-effort:
@@ -143,16 +158,25 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       }
     },
 
-    async listAllSessions(includeArchived = false): Promise<ChatSessionListItem[]> {
+    async getSession(sessionId: number): Promise<ChatSession | null> {
+      if (!Number.isInteger(sessionId) || sessionId < 0) return null
       try {
-        // dogfood-3 — includeArchived=true also returns archived sessions (the agent view's "归档" group);
-        // default false is byte-identical (active only).
-        return await request<ChatSessionListItem[]>(
-          baseUrl,
-          'GET',
-          '/chat/sessions/all',
-          includeArchived ? { query: { include_archived: 'true' } } : undefined
-        )
+        return await request<ChatSession | null>(baseUrl, 'GET', `/chat/sessions/${sessionId}`)
+      } catch {
+        return null
+      }
+    },
+
+    async listAllSessions(options: ListAllSessionsOptions = {}): Promise<ChatSessionListItem[]> {
+      try {
+        const includeArchived = options.includeArchived ?? false
+        const origin = options.origin ?? 'interactive'
+        return await request<ChatSessionListItem[]>(baseUrl, 'GET', '/chat/sessions/all', {
+          query: {
+            ...(includeArchived ? { include_archived: 'true' } : {}),
+            ...(origin === 'interactive' ? {} : { origin })
+          }
+        })
       } catch {
         return []
       }

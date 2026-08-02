@@ -70,7 +70,7 @@ interface PermState {
 /** Presentational mirror of the backend DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS (agent_runs.py) —
  *  used ONLY to label the default mount set and to red-mark newly mounted skills; the
  *  enforcement authority stays Python-side. */
-const DEFAULT_MOUNTED_SKILLS = ['email', 'search'] as const
+const DEFAULT_MOUNTED_SKILLS = ['email', 'search', 'report'] as const
 
 const WEB_RANK: Record<WebGrant, number> = { off: 0, gated: 1, open: 2 }
 
@@ -102,7 +102,11 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
   const [factsError, setFactsError] = useState<string | null>(null)
 
   const touchesPerms =
-    data.grantExec !== undefined || data.grantWeb !== undefined || data.skills !== undefined
+    data.capabilities !== undefined ||
+    data.allowedTools !== undefined ||
+    data.grantExec !== undefined ||
+    data.grantWeb !== undefined ||
+    data.skills !== undefined
 
   useEffect(() => {
     if (phase !== 'pending' || !isUpdate || !data.agentId) return
@@ -140,8 +144,11 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
   // ── permission model: create diffs against the safe defaults; update against the SERVER row ──
   const before: PermState = isUpdate ? permsOfRow(facts) : { exec: false, web: 'off', skills: null }
   const after: PermState = {
-    exec: data.grantExec ?? before.exec,
-    web: data.grantWeb ?? before.web,
+    exec:
+      data.capabilities?.files !== undefined
+        ? data.capabilities.files === 'on'
+        : (data.grantExec ?? before.exec),
+    web: data.capabilities?.web ?? data.grantWeb ?? before.web,
     skills: data.skills !== undefined ? data.skills : before.skills
   }
   const execEscalated = !before.exec && after.exec
@@ -216,6 +223,22 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
               ) : (
                 <span className="font-mono text-meta">{data.triggerSummary}</span>
               )}
+            </div>
+          )}
+          {data.capabilities !== undefined && (
+            <div className="text-aux text-ink-fg-2">
+              <span className="text-ink-fg-3">{`${t('chat.customAgentCard.capabilities')}：`}</span>
+              <span>
+                {(['email', 'calendar', 'knowledge', 'reports', 'web', 'files'] as const)
+                  .filter((id) => data.capabilities?.[id] !== undefined)
+                  .map((id) => {
+                    const tier = data.capabilities?.[id]
+                    return `${t(`agents.custom.capabilityCards.${id}.title`)}=${t(
+                      `agents.custom.capabilityCards.${id}.tier.${tier}`
+                    )}`
+                  })
+                  .join(' · ')}
+              </span>
             </div>
           )}
           {data.allowedTools !== undefined && (

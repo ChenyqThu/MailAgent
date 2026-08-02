@@ -356,16 +356,17 @@ class AsyncJobRepository:
             conn.close()
 
     def count_agent_runs_since(self, agent_id: str, since_epoch: float) -> int:
-        """统计某 agent 自 ``since_epoch`` 起 enqueue 的 agent_run 数 (S4 D7-1 runs/day 门)。
+        """统计某 agent 自 ``since_epoch`` 起实际获准的 agent_run 数（runs/day 门）。
 
-        target_key = agent_id (触发方 enqueue 时约定), 计所有 created_at>=since 的行 (含终态,
-        含 idempotent 去重后的实际入队数——去重不新建行, 天然不重复计)。
+        ``outcome='skipped'`` 是预算门本身写下的审计行，不占用运行额度；否则每个实际入队行
+        计一次（幂等命中不新建，天然不重复计）。
         """
         conn = self._connect()
         try:
             row = conn.execute(
                 "SELECT COUNT(*) AS n FROM async_jobs "
-                "WHERE job_type='agent_run' AND target_key=? AND created_at>=?",
+                "WHERE job_type='agent_run' AND target_key=? AND created_at>=? "
+                "AND COALESCE(json_extract(result_json, '$.outcome'), '') != 'skipped'",
                 (agent_id, since_epoch),
             ).fetchone()
             return int(row["n"]) if row else 0
@@ -379,7 +380,8 @@ class AsyncJobRepository:
 
         agent_id 非空 → 只返回该 agent (target_key 过滤); None → 全部 agent_run。limit clamp
         进 [1, 100]；offset clamp >= 0（task 07-21 分页）。返回 ``AsyncJob`` 投影 —— 读态
-        (8 值域) 由调用方经 ``src.agents.run_state.derive_agent_run_state`` 派生, **不在此推导**
+        (9 值域，含 skipped) 由调用方经 ``src.agents.run_state.derive_agent_run_state`` 派生,
+        **不在此推导**
         (纯查询)。
         """
         lim = max(1, min(100, limit))

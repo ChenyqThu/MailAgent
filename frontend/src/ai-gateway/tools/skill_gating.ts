@@ -79,6 +79,9 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'email_draft_update',
   'email_resync',
   'email_prepare_send',
+  // report_write is a local artifact primitive, not a report-skill read. Keeping it core ensures a
+  // custom agent's default output path survives per-agent skill mounting.
+  'report_write',
   // M4b/M4c self-mount meta 工具（behind MAILAGENT_SKILL_SELF_MOUNT）—— 无 skill 归属，永不 skill-gated。
   // 列于此让完整性守护（每个 gateway 工具必被分类）通过。
   'update_system_md',

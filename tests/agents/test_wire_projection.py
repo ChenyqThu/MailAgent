@@ -18,7 +18,7 @@ def test_resolve_custom_agent_projects_three_fields():
     out = resolve_agent(agent)
     assert out["trigger"]["kind"] == "email_filter"
     assert out["tool_policy"]["allowed_tools"] == ["email_get"]
-    assert out["budget"]["max_steps"] == 4
+    assert out["budget"] == {"v": 1}
 
 
 def test_resolve_non_custom_projects_none():
@@ -45,10 +45,10 @@ def test_resolve_custom_null_columns():
 def test_patch_serializes_objects():
     patch = config_patch_to_db({
         "trigger": {"v": 1, "kind": "cron", "cron": "0 9 * * *"},
-        "budget": {"v": 1, "max_steps": 8},
+        "budget": {"v": 1, "max_steps": 8, "max_runs_per_day": 12},
     })
     assert json.loads(patch["trigger_json"])["kind"] == "cron"
-    assert json.loads(patch["budget_json"])["max_steps"] == 8
+    assert json.loads(patch["budget_json"]) == {"v": 1, "max_runs_per_day": 12}
 
 
 def test_patch_none_clears_column():

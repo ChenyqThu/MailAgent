@@ -154,7 +154,7 @@ describe('AgentsTab — Search Agents 区', () => {
     renderUi(<AgentsTab onOpenReports={() => {}} />)
     // 搜索区标题 + 搜索 agent 卡名
     expect(await screen.findByText('搜索 Agent')).toBeTruthy()
-    expect(await screen.findByText('邮件搜索助手')).toBeTruthy()
+    expect(await screen.findByRole('heading', { name: '邮件搜索助手' })).toBeTruthy()
     // report agent 卡仍渲染（报告区不破坏）—— 「日报」可能在卡标题/cadence 多处出现，断在场即可
     expect(screen.getAllByText('日报').length).toBeGreaterThan(0)
     // 新建入口按产品要求退回 coming-soon（搜索 Agent 只用内置一个，编辑既有即可），

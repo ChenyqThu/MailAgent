@@ -11,6 +11,7 @@
 //    (inconsistent) wire params; see python/domainClient.ts.
 
 import { z } from 'zod'
+import { REPORT_CADENCES, reportBlockInputSchema } from '../../shared/api/reportBlocks'
 
 /** email_list_filter — metadata filter (subject/sender/date/flags). All optional. */
 export const emailSearchSchema = z.object({
@@ -141,7 +142,7 @@ export type KosGetBacklinksInput = z.infer<typeof kosGetBacklinksSchema>
 
 /** report_list — generated reports (all filters optional). */
 export const reportListSchema = z.object({
-  cadence: z.enum(['daily', 'weekly', 'monthly']).optional(),
+  cadence: z.enum(REPORT_CADENCES).optional(),
   agent_id: z.string().optional(),
   limit: z.number().int().min(1).max(100).default(20)
 })
@@ -152,6 +153,15 @@ export const reportGetSchema = z.object({
   report_id: z.string().min(1)
 })
 export type ReportGetInput = z.infer<typeof reportGetSchema>
+
+/** report_write — local structured artifact. The shared block schema also enforces the
+ * internal-only image source policy. */
+export const reportWriteSchema = z.object({
+  title: z.string().min(1).max(200),
+  blocks: z.array(reportBlockInputSchema).min(1).max(100),
+  mode: z.enum(['new', 'replace']).default('new')
+})
+export type ReportWriteInput = z.infer<typeof reportWriteSchema>
 
 // ── write-tool schemas (Phase 03b) — mirror the legacy JSON-Schema field names /
 //    requireds from shared/chat/tools/builtin/write.ts byte-for-byte (parity). The
@@ -218,7 +228,7 @@ export type EmailDraftReplyInput = z.infer<typeof emailDraftReplySchema>
  *
  *  🔴 issue #70 — a `.superRefine` is invisible to the model: `toJSONSchema` drops it, so the
  *  mode↔internal_id coupling reached the model through NOTHING but prose buried mid-description,
- *  and a model that guessed `internal_id` on a 'new' draft burned all 8 steps of the run guessing
+ *  and a model that guessed `internal_id` on a 'new' draft repeatedly burned the run guessing
  *  values (0 → -1 → 1.9e15 → 0) for a field that must simply be absent. The rules now live on the
  *  fields themselves via `.describe()` (that IS the model-visible surface) — the superRefine stays
  *  as the pre-approval-card backstop, not as the way the model learns the rule. Every retry message
@@ -597,11 +607,11 @@ export const customAgentTriggerSchema = z.discriminatedUnion('kind', [
 ])
 export type CustomAgentTriggerInput = z.infer<typeof customAgentTriggerSchema>
 
-/** A custom-agent budget the model may propose (three run gates). Mirrors CustomAgentBudget; the
+/** A custom-agent budget the model may propose (frequency + wall-clock gates). Mirrors
+ *  CustomAgentBudget; the
  *  backend clamps each field defensively (parse_budget) — these bounds match the backend ceilings. */
 export const customAgentBudgetSchema = z
   .object({
-    max_steps: z.number().int().min(1).max(16).optional(),
     max_runs_per_day: z.number().int().min(0).max(100_000).optional(),
     max_run_seconds: z.number().int().min(1).max(1800).optional()
   })
@@ -626,6 +636,51 @@ export type CustomAgentGetInput = z.infer<typeof customAgentGetSchema>
  *  card-free. Proposing 'gated'/'open' is allowed — the approval card renders it red ('open'). */
 export const customAgentWebGrantSchema = z.enum(['off', 'gated', 'open'])
 
+const customAgentEmailCapabilitySchema = z.enum(['read', 'organize', 'draft'])
+const customAgentCalendarCapabilitySchema = z.enum(['off', 'read', 'write'])
+const customAgentToggleCapabilitySchema = z.enum(['off', 'on'])
+const customAgentReportCapabilitySchema = z.enum(['read', 'produce'])
+
+/** The six-card capability contract shown in Settings. Create uses a complete profile so the
+ *  approval card describes the entire capability surface; update accepts a non-empty patch. */
+export const customAgentCapabilityProfileSchema = z
+  .object({
+    email: customAgentEmailCapabilitySchema,
+    calendar: customAgentCalendarCapabilitySchema,
+    knowledge: customAgentToggleCapabilitySchema,
+    reports: customAgentReportCapabilitySchema,
+    web: customAgentWebGrantSchema,
+    files: customAgentToggleCapabilitySchema
+  })
+  .strict()
+export type CustomAgentCapabilityProfileInput = z.infer<typeof customAgentCapabilityProfileSchema>
+
+export const customAgentCapabilityPatchSchema = customAgentCapabilityProfileSchema
+  .partial()
+  .refine((patch) => Object.keys(patch).length > 0, 'capabilities must change at least one tier')
+export type CustomAgentCapabilityPatchInput = z.infer<typeof customAgentCapabilityPatchSchema>
+
+function rejectMixedCapabilityVocabulary(
+  input: {
+    capabilities?: unknown
+    allowed_tools?: unknown
+    grant_exec?: unknown
+    grant_web?: unknown
+  },
+  ctx: z.RefinementCtx
+): void {
+  if (input.capabilities === undefined) return
+  for (const field of ['allowed_tools', 'grant_exec', 'grant_web'] as const) {
+    if (input[field] !== undefined) {
+      ctx.addIssue({
+        code: 'custom',
+        path: [field],
+        message: `${field} cannot be combined with capabilities; use one vocabulary`
+      })
+    }
+  }
+}
+
 /** custom_agent_create — propose a new custom agent (edit-tier write). ALLOWLIST: title / prompt /
  *  model / enabled / trigger / allowed_tools / budget + (rev3.1 §7) grant_exec / grant_web / skills.
  *  `.strict()` rejects any other key — tool_policy / policy_rules stay structurally out: the model
@@ -638,6 +693,7 @@ export const customAgentCreateSchema = z
     model: z.string().max(128).optional(),
     enabled: z.boolean().optional(),
     trigger: customAgentTriggerSchema.nullable().optional(),
+    capabilities: customAgentCapabilityProfileSchema.optional(),
     allowed_tools: z.array(z.string().min(1).max(64)).max(64).optional(),
     budget: customAgentBudgetSchema.nullable().optional(),
     grant_exec: z.boolean().optional(),
@@ -645,6 +701,7 @@ export const customAgentCreateSchema = z
     skills: z.array(z.string().min(1).max(64)).max(32).optional()
   })
   .strict()
+  .superRefine(rejectMixedCapabilityVocabulary)
 export type CustomAgentCreateInput = z.infer<typeof customAgentCreateSchema>
 
 /** custom_agent_update — propose changes to an existing custom agent (edit-tier write). Same
@@ -659,6 +716,7 @@ export const customAgentUpdateSchema = z
     model: z.string().max(128).optional(),
     enabled: z.boolean().optional(),
     trigger: customAgentTriggerSchema.nullable().optional(),
+    capabilities: customAgentCapabilityPatchSchema.optional(),
     allowed_tools: z.array(z.string().min(1).max(64)).max(64).optional(),
     budget: customAgentBudgetSchema.nullable().optional(),
     grant_exec: z.boolean().optional(),
@@ -666,6 +724,7 @@ export const customAgentUpdateSchema = z
     skills: z.array(z.string().min(1).max(64)).max(32).optional()
   })
   .strict()
+  .superRefine(rejectMixedCapabilityVocabulary)
 export type CustomAgentUpdateInput = z.infer<typeof customAgentUpdateSchema>
 
 /** custom_agent_delete — delete a custom agent by id (edit-tier write). */

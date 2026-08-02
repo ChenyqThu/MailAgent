@@ -27,6 +27,7 @@
 key 就抛），外加 count canary。
 """
 
+import re
 from typing import Set, Tuple
 
 import pytest
@@ -206,3 +207,27 @@ def test_boundary_invariant_api_types_chat_has_no_imports():
         "的模块 docstring 重新评估：要么把 ChatMessage/ChatSession/ChatToolCall 改成从 "
         "shared/chat_model.ts re-export（镜像消灭, 本闸可退役），要么说明新 import 为何不算破例。"
     )
+
+
+def _parse_string_union(name: str, path) -> Set[str]:
+    """Parse a single-line exported TS string union and fail loudly on shape drift."""
+    src = path.read_text(encoding="utf-8")
+    match = re.search(rf"^export type {re.escape(name)}\s*=\s*(.+)$", src, re.MULTILINE)
+    assert match, f"{path}: 没找到 `export type {name} = ...`"
+    rhs = match.group(1).strip()
+    values = re.findall(r"'([^']+)'", rhs)
+    normalized = " | ".join(f"'{value}'" for value in values)
+    assert values and normalized == rhs, (
+        f"{path}: {name} 不再是纯字符串联合类型（当前: {rhs!r}）—— 解析器或边界契约需更新"
+    )
+    return set(values)
+
+
+def test_chat_session_origin_filter_mirror_parity():
+    """会话来源筛选跨 DB/API 边界手抄时，三值集合必须保持一致。"""
+    expected = {"interactive", "agent", "all"}
+    model = _parse_string_union("ChatSessionOriginFilter", CHAT_MODEL_TS)
+    api = _parse_string_union("ChatSessionOriginFilter", CHAT_TYPES_TS)
+    assert model == expected, f"chat_model.ts 的来源筛选契约漂移: {sorted(model)}"
+    assert api == expected, f"api/types/chat.ts 的来源筛选契约漂移: {sorted(api)}"
+    assert model == api

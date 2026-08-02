@@ -524,14 +524,8 @@
     "ai": {
       "understand": "AI 理解「{query}」",
       "understandHint": "让 AI 帮你检索并梳理相关邮件",
-      "searchingPhrases": [
-        "正在理解你的问题…",
-        "检索相关邮件…"
-      ],
-      "summarizingPhrases": [
-        "筛选最相关的…",
-        "整理结果…"
-      ],
+      "searchingPhrases": ["正在理解你的问题…", "检索相关邮件…"],
+      "summarizingPhrases": ["筛选最相关的…", "整理结果…"],
       "summary": "AI：{text}",
       "emptyTitle": "AI 没找到相关邮件",
       "emptyHint": "换个说法，或直接用搜索语法",
@@ -698,12 +692,17 @@
     "delete": "删除",
     "archive": "归档",
     "restore": "恢复",
+    "pin": "置顶",
+    "unpin": "取消置顶",
+    "star": "加星",
+    "unstar": "取消星标",
     "actionFail": "操作失败：{error}",
     "more": "更多",
     "collapseSidebar": "折叠 / 展开会话历史",
     "historyTitle": "会话",
     "emptyHistory": "还没有会话",
     "group": {
+      "pinned": "置顶",
       "today": "今天",
       "yesterday": "昨天",
       "earlier": "更早",
@@ -879,6 +878,7 @@
       "enabled": "启用",
       "trigger": "触发",
       "triggerCleared": "清除触发（停用）",
+      "capabilities": "能力档",
       "allowedTools": "可用工具",
       "permissions": "所需权限",
       "grantExec": "本机执行",
@@ -891,7 +891,7 @@
         "open": "全开放（任意 URL）"
       },
       "skills": "挂载 Skill",
-      "skillsDefault": "默认（email、search）",
+      "skillsDefault": "默认（email、search、report）",
       "skillsNone": "无",
       "newSkills": "新挂载：{skills}",
       "execWarn": "开启本机执行：该 agent 后台运行可注册本机执行工具（每次执行仍需白名单规则或人工批准）。",
@@ -3280,7 +3280,8 @@
       "all": "全部",
       "daily": "日报",
       "weekly": "周报",
-      "monthly": "月报"
+      "monthly": "月报",
+      "custom": "自定义"
     },
     "status": {
       "ready": "已就绪",
@@ -3412,6 +3413,9 @@
       "openInbox": "在收件箱打开"
     },
     "chats": {
+      "title": "Agent 执行会话",
+      "filterAgent": "按 Agent 筛选",
+      "allAgents": "全部 Agent",
       "continue": "在收件箱继续",
       "selectHint": "选择左侧一个会话查看",
       "emptyTranscript": "这个会话还没有消息"
@@ -3549,6 +3553,13 @@
       "enableHint": "启用后按下方触发条件自动运行（触发为「无」时不会自动跑）。",
       "titleLabel": "名称",
       "titlePlaceholder": "如 DMS 审批助手",
+      "avatar": {
+        "label": "头像身份",
+        "hint": "全部 Agent 都有按 id 稳定派生的默认头像；选择后会保存为显式身份",
+        "shuffle": "换一换",
+        "shape": "形状",
+        "palette": "配色"
+      },
       "promptLabel": "任务提示词",
       "promptHint": "触发时注入的任务指令（告诉 Agent 要做什么）",
       "promptPlaceholder": "描述这个 Agent 每次触发时要完成的任务",
@@ -3556,7 +3567,6 @@
       "errTitleRequired": "请填写名称。",
       "errCron5": "cron 必须是标准 5 段（分 时 日 月 周）。",
       "errEmailPredicate": "邮件触发至少填一项：发件人 / 主题 / 文件夹。",
-      "errMaxSteps": "最大步数需在 1–{max} 之间。",
       "errMaxRunSeconds": "单次运行秒数需在 1–{max} 之间。",
       "errMaxRunsPerDay": "每日运行上限不能为负。",
       "trigger": {
@@ -3601,10 +3611,70 @@
         "webDisabled": "联网功能未开启（由环境变量 MAILAGENT_OPENNESS_WEB_TOOLS 控制），此处授权保存后暂不会生效。",
         "execDisabled": "命令执行功能未开启（由环境变量 MAILAGENT_OPENNESS_EXEC_TOOLS 控制），此处授权保存后暂不会生效。"
       },
+      "capabilityCards": {
+        "label": "能力与权限",
+        "hint": "先选工作范围；需要精细控制时再展开高级工具",
+        "advanced": "高级：逐工具微调",
+        "advancedHint": "保留完整原子工具控制",
+        "writeRuleHint": "写操作默认逐次审批；保存后可在下方配置该 Agent 的免卡白名单。",
+        "email": {
+          "title": "邮件",
+          "description": "读取邮件、整理收件箱，或生成和更新草稿。",
+          "tier": {
+            "read": "读取",
+            "organize": "整理",
+            "draft": "起草"
+          }
+        },
+        "calendar": {
+          "title": "日历",
+          "description": "查看日程，或提议改期、回复和删除事件。",
+          "tier": {
+            "off": "关闭",
+            "read": "读取",
+            "write": "写入"
+          },
+          "hitl": "日历写操作永久需要人工审批，不能配置免卡规则。"
+        },
+        "knowledge": {
+          "title": "知识与会话",
+          "description": "访问历史会话、身份文档、Skills 与 KOS 知识。默认关闭。",
+          "tier": {
+            "off": "关闭",
+            "on": "开启"
+          }
+        },
+        "reports": {
+          "title": "报告",
+          "description": "读取已有报告，或把本次运行产出保存为结构化报告。",
+          "tier": {
+            "read": "读取",
+            "produce": "产出"
+          },
+          "produceHint": "产出只写本地报告产物，不向外发送。"
+        },
+        "web": {
+          "title": "Web",
+          "description": "搜索网页并抓取公开页面；联网内容始终按不可信数据处理。",
+          "tier": {
+            "off": "关闭",
+            "gated": "域名门控",
+            "open": "全开放"
+          }
+        },
+        "files": {
+          "title": "文件与命令",
+          "description": "读取/写入文件并运行已授权的本地命令或 Skill 入口。",
+          "tier": {
+            "off": "关闭",
+            "on": "开启"
+          },
+          "ruleHint": "授权只让执行工具进入运行面；免卡仍需白名单规则与首次运行确认。"
+        }
+      },
       "budget": {
         "label": "运行预算",
-        "hint": "限制单次运行的规模与频率",
-        "maxSteps": "最大步数（≤ {max}）",
+        "hint": "限制运行频率与单次最长耗时",
         "maxRunsPerDay": "每日运行上限",
         "maxRunSeconds": "单次运行秒数（≤ {max}）"
       },
@@ -3623,6 +3693,9 @@
         "loadMoreLoading": "加载中…",
         "pausedPendingHint": "运行已暂停、等待审批。打开执行记录即可批准，或在灵动岛批准；超时未处理将过期作废。",
         "pausedExpiredHint": "审批已过期，此次运行未执行。",
+        "skippedHint": "已达到每日运行上限，本次触发未执行。",
+        "steps": "{n} 步",
+        "tokens": "{n} tokens",
         "autoWhitelisted": "自动放行 ×{n}",
         "autoWhitelistedRule": "免卡：白名单规则 ×{n}",
         "autoWhitelistedWebOpen": "免卡：全开放联网 ×{n}",
@@ -3657,6 +3730,7 @@
           "queued": "排队中",
           "running": "运行中",
           "completed": "已完成",
+          "skipped": "已跳过",
           "pausedPending": "等待审批",
           "pausedExpired": "审批过期（未执行）",
           "pausedApproved": "审批通过（已执行）",
@@ -3741,7 +3815,7 @@
         "mounts": {
           "label": "Skill 挂载",
           "hint": "该 Agent 无人值守运行时可见的 Skill（收窄面）。未挂载的 Skill 其工具对该 Agent 不可用；挂载不能复活全局已关闭的 Skill。",
-          "defaultTag": "默认挂载集（email / search）",
+          "defaultTag": "默认挂载集（email / search / report）",
           "empty": "显式零挂载：该 Agent 无任何 Skill 工具。"
         }
       }

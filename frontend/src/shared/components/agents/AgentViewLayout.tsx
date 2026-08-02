@@ -23,7 +23,7 @@ import { AgentThreadList } from './AgentThreadList'
 import { AgentConversation } from './AgentConversation'
 import { useNarrow } from './hooks'
 
-const ALL_SESSIONS_KEY = qk.chat.allSessions()
+const ALL_SESSIONS_KEY = [...qk.chat.allSessions(), 'interactive'] as const
 
 export function AgentViewLayout(): React.ReactElement {
   const { t } = useTranslation()
@@ -44,7 +44,7 @@ export function AgentViewLayout(): React.ReactElement {
     queryKey: ALL_SESSIONS_KEY,
     // dogfood-3 — include archived sessions so the left list can render the bottom "归档" group
     // (active vs archived are split client-side in AgentThreadList).
-    queryFn: () => mailApi.chat.listAllSessions(true),
+    queryFn: () => mailApi.chat.listAllSessions({ includeArchived: true, origin: 'interactive' }),
     staleTime: 10_000
   })
   const items = sessionsQ.data ?? []
@@ -74,7 +74,16 @@ export function AgentViewLayout(): React.ReactElement {
 
   // The active session's unified item (anchor_type / email_id / backend_kind) drives the conversation's
   // runtime + context routing (email vs general). null for a brand-new chat → general default.
-  const activeItem = items.find((s) => s.id === chat.activeSessionId) ?? null
+  const listedActiveItem = items.find((s) => s.id === chat.activeSessionId) ?? null
+  const directSessionQ = useQuery({
+    queryKey: ['chat', 'session', chat.activeSessionId],
+    queryFn: () => mailApi.chat.getSession(chat.activeSessionId as number),
+    enabled: chat.activeSessionId != null && listedActiveItem == null,
+    staleTime: 10_000
+  })
+  // Agent-run records are intentionally absent from the interactive sidebar, but a run-history jump
+  // still needs the exact row metadata so AgentConversation enters locked record mode.
+  const activeItem = listedActiveItem ?? directSessionQ.data ?? null
 
   const list = (
     <AgentThreadList
@@ -110,6 +119,18 @@ export function AgentViewLayout(): React.ReactElement {
         // dogfood-3: 恢复 = 取消归档(archived=false)，从「归档」组移回日期分组。
         void mailApi.chat
           .updateSessionArchived(id, false)
+          .then(invalidateSessions)
+          .catch((err) => toastError(t('agentView.actionFail', { error: errorMessage(err) })))
+      }}
+      onPin={(id, pinned) => {
+        void mailApi.chat
+          .updateSessionPinned(id, pinned)
+          .then(invalidateSessions)
+          .catch((err) => toastError(t('agentView.actionFail', { error: errorMessage(err) })))
+      }}
+      onStar={(id, starred) => {
+        void mailApi.chat
+          .updateSessionStarred(id, starred)
           .then(invalidateSessions)
           .catch((err) => toastError(t('agentView.actionFail', { error: errorMessage(err) })))
       }}

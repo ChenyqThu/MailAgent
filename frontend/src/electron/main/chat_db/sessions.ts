@@ -3,6 +3,7 @@ import { getChatDb } from './connection'
 import type {
   AnchorType,
   ChatSession,
+  ChatSessionOriginFilter,
   ChatSessionSummary,
   OpenSessionInput
 } from '@shared/chat_model'
@@ -225,7 +226,7 @@ export function listSessionsForEmail(emailId: number): ChatSession[] {
 export function listGeneralSessions(): ChatSession[] {
   return getChatDb()
     .prepare(
-      "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' ORDER BY updated_at DESC"
+      "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'general' AND COALESCE(origin, 'interactive') <> 'agent' ORDER BY updated_at DESC"
     )
     .all() as ChatSession[]
 }
@@ -237,7 +238,22 @@ export function listGeneralSessions(): ChatSession[] {
 // IPC payload; the renderer truncates further for display. `limit` caps the
 // list so an account with thousands of conversations doesn't ship them all at
 // once (newest-first, so the cap drops the least-recently-touched).
-export function listAllSessions(limit = 300, includeArchived = false): ChatSessionSummary[] {
+export interface ListAllSessionsOptions {
+  limit?: number
+  includeArchived?: boolean
+  origin?: ChatSessionOriginFilter
+}
+
+export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessionSummary[] {
+  const limit = options.limit ?? 300
+  const includeArchived = options.includeArchived ?? false
+  const origin = options.origin ?? 'interactive'
+  const originClause =
+    origin === 'agent'
+      ? "s.origin = 'agent'"
+      : origin === 'all'
+        ? '1 = 1'
+        : "COALESCE(s.origin, 'interactive') <> 'agent'"
   // dogfood-3 — includeArchived (default false → only active sessions, byte-identical to before; the
   // agent view passes true to also pull archived rows for its bottom "归档" group). SELECT now carries
   // s.archived so the renderer can split active vs archived. The archived branch is a fixed boolean (no
@@ -247,13 +263,14 @@ export function listAllSessions(limit = 300, includeArchived = false): ChatSessi
       `SELECT
          s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
          s.backend_agent_page_id, s.title, s.archived, s.created_at, s.updated_at,
-         s.origin, s.agent_id, s.agent_job_id, s.last_read_at,
+         s.origin, s.agent_id, s.agent_job_id, s.last_read_at, s.pinned_at, s.starred,
          (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
             WHERE m.session_id = s.id AND m.role = 'user'
             ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,
          (SELECT COUNT(*) FROM ai_chat_messages m WHERE m.session_id = s.id) AS message_count
        FROM ai_chat_sessions s
        WHERE ${includeArchived ? '1 = 1' : 's.archived = 0'}
+         AND ${originClause}
          AND EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)
        ORDER BY s.updated_at DESC
        LIMIT ?`
@@ -311,6 +328,20 @@ export function updateSessionArchived(sessionId: number, archived: boolean): voi
   getChatDb()
     .prepare('UPDATE ai_chat_sessions SET archived = ? WHERE id = ?')
     .run(archived ? 1 : 0, sessionId)
+}
+
+/** custom-agent epic W3 — pin/unpin without touching updated_at. Re-pinning refreshes pin order. */
+export function updateSessionPinned(sessionId: number, pinned: boolean): void {
+  getChatDb()
+    .prepare('UPDATE ai_chat_sessions SET pinned_at = ? WHERE id = ?')
+    .run(pinned ? Date.now() : null, sessionId)
+}
+
+/** custom-agent epic W3 — star is a durable icon state only; it never reorders or regroups. */
+export function updateSessionStarred(sessionId: number, starred: boolean): void {
+  getChatDb()
+    .prepare('UPDATE ai_chat_sessions SET starred = ? WHERE id = ?')
+    .run(starred ? 1 : 0, sessionId)
 }
 
 /** Phase 10b — the first user message's text for a session (the auto-title generation input). Null

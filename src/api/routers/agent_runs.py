@@ -54,7 +54,7 @@ router = APIRouter(prefix="/api/agent-runs", tags=["agent-runs"])
 # 工具 kos_query/search/get_page/find_experts/list_pages/get_backlinks，整族同待遇：headless run
 # 的输入本就是 untrusted 邮件，KOS 返回的是他人可写的知识库全文且现状不套 UNTRUSTED 围栏）、chat_session_*
 # （历史会话=二阶注入面）、agent_profile_read/history（身份文档不进 untrusted 上下文）、
-# discover_skills / skill_read / report_*（headless 默认无需求）、calendar 三写
+# discover_skills / skill_read / report 读取（headless 默认无需求）、calendar 三写
 # （calendar_event_reschedule/rsvp/delete —— 恒卡不免审，但删除不可恢复 / rsvp 真发不可撤回
 # 的回执信，默认工具面不该自带不可逆提案权，读可默认写不默认）。
 DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS: tuple[str, ...] = (
@@ -65,14 +65,17 @@ DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS: tuple[str, ...] = (
     "calendar_events_list", "calendar_event_get",
     # domain_write 族（注册 ≠ 免卡：无 D1 规则时仍恒岛卡）
     "email_flag", "email_archive", "email_pin", "email_resync", "email_draft_reply",
+    # local artifact（silent + 可删/可覆盖）
+    "report_write",
 )
 
 # 🔴 默认挂载集（S6 W3, ADR-004 rev3.1 §5.1/D3）：tool_policy_json 缺 skills（NULL）时投影此集
-# —— 恰是默认安全集内 skill 门控工具的归属两族（email_get/body/list_thread ∈ email；
-# email_search_fulltext/attachments ∈ search），默认配置 agent 的工具面与挂载语义引入前逐字节
-# 不变。显式 [] = 零挂载（门控工具全缺席，含 email_list_filter —— PR-D 起归 email skill；CORE_UNGATED 仍在）。
+# —— 覆盖默认安全集的 email/search 两族，并预挂 report，使 W5 的报告 read/produce 能力卡
+# 在 owner 选择 report_get/report_list 后真实生效。report 挂载本身不扩大工具面：最终仍与
+# allowed_tools 相交；默认安全集只有 CORE_UNGATED 的 report_write，故现有默认行为不变。
+# 显式 [] = 零挂载（门控工具全缺席，含 email_list_filter —— PR-D 起归 email skill；CORE_UNGATED 仍在）。
 # 单源：spec 投影恒输出解析完的 skills 数组（默认已代入），gateway 不手抄第二份常量。
-DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS: tuple[str, ...] = ("email", "search")
+DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS: tuple[str, ...] = ("email", "search", "report")
 
 
 def resolve_mounted_skills(agent: Optional[dict[str, Any]]) -> frozenset[str]:
@@ -121,6 +124,7 @@ HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
     ("kos_search", "read"),
     ("report_get", "read"),
     ("report_list", "read"),
+    ("report_write", "artifact"),
     ("skill_read", "read"),
     # calendar 三写（日历 epic 4.2）：class=domain_write —— headless 保注册、edit-tier 恒卡
     # （工厂无 policyEvaluate ⇒ 连 D1 规则免卡通道都不存在，批准前只会 paused_handoff）。
@@ -326,7 +330,7 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         "prompt": prompt,
         "model": (agent.get("model") or "").strip() or None,
         "toolPolicy": tool_policy_out,
-        "budget": {"maxSteps": budget.max_steps, "maxRunSeconds": budget.max_run_seconds},
+        "budget": {"maxRunSeconds": budget.max_run_seconds},
         "sessionTitle": _session_title(agent, agent_id, fired_at),
     }
     fallback = _parse_fallback_models(agent.get("fallback_models_json"))
@@ -410,10 +414,10 @@ async def set_approval_state(request: Request, job_id: int, body: _ApprovalState
 def _run_history_item(job: AsyncJob) -> dict[str, Any]:
     """``AsyncJob`` → run 历史行投影（S5 W1，ADR D4/P6）。
 
-    🔴 ``state`` 唯一经 ``derive_agent_run_state`` 派生（8 值域单源）——TS 侧**永不**自行从
+    🔴 ``state`` 唯一经 ``derive_agent_run_state`` 派生（9 值域单源）——TS 侧**永不**自行从
     outcome/approval_state 推导状态（投影即契约），防 ``paused_handoff`` 渲染成「成功完成」的
-    第二处解读漂移。``outcome``/``approvalState``/``sessionId``/``tokens`` 从 result_json 透传
-    供展示（非状态判定输入）。
+    第二处解读漂移。``outcome``/``approvalState``/``sessionId``/``steps``/``tokens`` 从
+    result_json 透传；duration 由账本时间戳投影（均非状态判定输入）。
     """
     result = job.result if isinstance(job.result, dict) else {}
     state = derive_agent_run_state(
@@ -434,7 +438,12 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
         "createdAt": job.created_at,
         "finishedAt": job.finished_at,
         "error": job.last_error,
+        "steps": result.get("steps"),
         "tokens": result.get("usage"),
+        "durationSeconds": (
+            max(0.0, job.finished_at - (job.started_at or job.created_at))
+            if job.finished_at is not None else None
+        ),
     }
 
 
@@ -536,7 +545,7 @@ async def list_agent_runs(
     是 renderer 进程（非本机 gateway），**不用** ``verify_local_token``（那是 gateway 内部专用）。
     flag off → 404（S4 纪律，feature 不存在）。行读态经 ``derive_agent_run_state`` 单源投影。
 
-    ``state`` 可选过滤（S6 W1）：值域 = ``AGENT_RUN_STATES``（8 值域），服务端按
+    ``state`` 可选过滤（S6 W1）：值域 = ``AGENT_RUN_STATES``（9 值域，含 ``skipped``），服务端按
     ``_run_history_item`` 派生后**内存过滤**（对拉取的 limit 窗口过滤，量小）；非法值 → 400
     E_INVALID_ARG（防静默 typo）。过滤在 ``_annotate_auto_whitelist`` 前，只标注过滤后集。
 

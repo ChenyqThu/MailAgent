@@ -4,7 +4,7 @@
 // **改字段名必须同步改后端 models.py + handoff 文档**。
 
 export type ReportTone = 'neutral' | 'info' | 'success' | 'warn' | 'critical'
-export type ReportCadence = 'daily' | 'weekly' | 'monthly'
+export type ReportCadence = 'daily' | 'weekly' | 'monthly' | 'custom'
 export type ReportStatus = 'generating' | 'ready' | 'empty' | 'failed' | 'skipped'
 
 export interface ReportHeaderBlock {
@@ -90,9 +90,63 @@ export interface ReportTrendBlock {
   metric: string
   points: ReportTrendPoint[]
   compare?: { label: string; delta: number }
+  variant?: 'bar' | 'line' | 'area'
 }
 export interface ReportDividerBlock {
   type: 'divider'
+}
+export interface ReportMarkdownBlock {
+  type: 'markdown'
+  title?: string
+  text: string
+}
+export interface ReportTimelineBlock {
+  type: 'timeline'
+  title?: string
+  events: Array<{
+    time: string
+    title: string
+    detail?: string
+    tone?: ReportTone
+    icon?: string
+  }>
+}
+export interface ReportChecklistBlock {
+  type: 'checklist'
+  title?: string
+  items: Array<{ text: string; done: boolean; tone?: ReportTone }>
+}
+export interface ReportProgressBlock {
+  type: 'progress'
+  label: string
+  title?: string
+  value: number
+  max?: number
+  tone?: ReportTone
+  caption?: string
+}
+export interface ReportQuoteBlock {
+  type: 'quote'
+  text: string
+  cite?: string
+  url?: string
+}
+export interface ReportMetricDeltaBlock {
+  type: 'metric_delta'
+  label: string
+  title?: string
+  value: string
+  delta: number
+  deltaLabel?: string
+  tone?: ReportTone
+}
+export interface ReportImageBlock {
+  type: 'image'
+  src: string
+  title?: string
+  alt?: string
+  caption?: string
+  width?: number
 }
 /** 未知 block 优雅降级（BlockRenderer 渲染 UnknownBlock）。 */
 export interface ReportUnknownBlock {
@@ -111,6 +165,13 @@ export type ReportBlock =
   | ReportActionSuggestionBlock
   | ReportTrendBlock
   | ReportDividerBlock
+  | ReportMarkdownBlock
+  | ReportTimelineBlock
+  | ReportChecklistBlock
+  | ReportProgressBlock
+  | ReportQuoteBlock
+  | ReportMetricDeltaBlock
+  | ReportImageBlock
   | ReportUnknownBlock
 
 export interface ReportDoc {
@@ -235,10 +296,9 @@ export interface CustomAgentToolPolicy {
   skills?: string[]
 }
 
-/** v30 Custom Agent 预算三门（null/缺失 = 全默认）。 */
+/** Custom Agent 预算两门（null/缺失 = 全默认；旧 max_steps 由后端忽略）。 */
 export interface CustomAgentBudget {
   v: 1
-  max_steps?: number
   max_runs_per_day?: number
   max_run_seconds?: number
 }
@@ -282,7 +342,15 @@ export interface ReportAgentConfig {
   trigger?: CustomAgentTrigger | null
   tool_policy?: CustomAgentToolPolicy | null
   budget?: CustomAgentBudget | null
+  /** v42 visual identity. null/absent = derive a stable shape/palette from the agent id. */
+  avatar?: AgentAvatarConfig | null
   updated_at: number | null
+}
+
+export interface AgentAvatarConfig {
+  shape: 'bloom' | 'silk' | 'flare' | 'nova' | 'void' | 'jade'
+  palette: string
+  variant_id?: string
 }
 
 /** report:setConfig — friendly patch（后端 CLI 映射到 DB 列）。 */
@@ -315,6 +383,7 @@ export interface ReportConfigPatch {
   trigger?: CustomAgentTrigger | null
   tool_policy?: CustomAgentToolPolicy | null
   budget?: CustomAgentBudget | null
+  avatar?: AgentAvatarConfig | null
 }
 
 /** report:createAgent — 新建一行 agent（type 多态）。 */
@@ -333,13 +402,14 @@ export interface ReportAgentCreateInput {
   tools?: string[]
 }
 
-/** S5 custom agent run 读侧状态（后端 derive_agent_run_state 单源判读，8 值域穷举）。
+/** custom agent run 读侧状态（后端 derive_agent_run_state 单源判读，9 值域穷举）。
  *  🔴 前端**永不**自行从 outcome/approvalState 推导 state —— 投影即契约，防
  *  paused_handoff 渲染成「成功完成」的第二处解读漂移（ADR-003 D4 / ADR-004 P6）。 */
 export type AgentRunState =
   | 'queued'
   | 'running'
   | 'completed'
+  | 'skipped'
   | 'paused_pending'
   | 'paused_expired'
   | 'paused_approved'
@@ -362,8 +432,12 @@ export interface AgentRunHistoryItem {
   finishedAt?: number | null
   /** 失败错误码（E_GATEWAY_DOWN / E_ORPHANED / …）。 */
   error?: string | null
+  /** gateway 实际完成的 tool-loop step 数。 */
+  steps?: number | null
   /** LLM usage（token 计数 map），result_json 有则带。 */
-  tokens?: Record<string, number> | null
+  tokens?: Record<string, unknown> | null
+  /** 从 async_jobs started/finished 时间戳投影的 wall-clock 秒数。 */
+  durationSeconds?: number | null
   /** S5 ADR-004 D6 — 该 run 的免卡写次数（chat_tool_call approval_status='auto_whitelist'
    *  经 sessionId 归账）。null = 无 sessionId 或审计账本不可达（badge 不渲染，非「0 次」）。 */
   autoWhitelistedWrites?: number | null
@@ -383,7 +457,7 @@ export interface ReportRunResult {
 }
 
 /** v1.3.0 dogfood R5 — 项目周报同步的一次执行记录（GET /api/project-progress/runs）。
- *  自有 status 词表（processing | completed | failed | skipped，非 custom agent 的 8 值域）；
+ *  自有 status 词表（processing | completed | failed | skipped，非 custom agent 的 9 值域）；
  *  时间戳为 Unix 秒（前端 fmtTime 自适应秒/毫秒）。确定性 Python 同步脚本产物，不进 async_jobs。 */
 export interface ProjectProgressRunItem {
   internalId: number
@@ -411,7 +485,7 @@ export interface AgentRunPendingCount {
  *  class 决定默认勾选与危险度标注：read = 默认安全集；domain_write = 需显式勾选。 */
 export interface AgentRunToolOption {
   name: string
-  class: 'read' | 'domain_write'
+  class: 'read' | 'domain_write' | 'artifact'
 }
 
 /** S5 — custom agent 可选工具清单（GET /api/agent-runs/tool-options）。
@@ -472,7 +546,7 @@ export interface ReportApi {
   deleteAgent(agentId: string): Promise<{ deleted: string }>
   /** S5 — custom agent run 历史（读）。GET /api/agent-runs；flag off / 失败返
    *  { items: [], total: 0 }（守读优雅降级）。state 由后端 derive_agent_run_state 单源投影，
-   *  前端不自行推导。S6 W1：可选 state 过滤（8 值域，后端服务端派生后过滤）。offset 分页
+   *  前端不自行推导。S6 W1：可选 state 过滤（9 值域，后端服务端派生后过滤）。offset 分页
    *  （task 07-21）：不传 = 首页；total 不叠加 state 过滤（详见后端 count_agent_runs 口径）。 */
   listRuns(opts?: {
     agentId?: string

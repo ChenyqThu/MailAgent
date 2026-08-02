@@ -1,10 +1,10 @@
 // Sprint 20 — Chats tab（按设计稿 chat-tab.jsx 双栏实现）：左会话列表（搜索 +
-// backend 过滤 + 选中）+ 右 transcript 内联预览。S3 W2：transcript 从 legacy
+// custom-agent 过滤/分组 + 选中）+ 右 transcript 内联预览。S3 W2：transcript 从 legacy
 // MessageList 换成统一的 ReadOnlyTranscript（assistant-ui 只读 thread；有
 // ui_message_json 渲染完整 parts，legacy 行降级纯文本）。「在收件箱继续」仍可跳
 // 回实时 chat 面板。
 import type { TFunction } from 'i18next'
-import { useMemo, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
@@ -20,20 +20,20 @@ import {
   Sparkles
 } from 'lucide-react'
 
-import type { ChatBackendKind, ChatMessage, ChatSessionListItem } from '@shared/api/types'
+import type { AgentAvatarConfig, ChatMessage, ChatSessionListItem } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useActiveEmail } from '@shared/state/active-email'
 import { openAIChatSession } from '@shared/state/ai-chat-panel'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { ReadOnlyTranscript } from '@shared/assistant/ReadOnlyTranscript'
-import { SegmentedControl } from '@shared/components/ui/segmented'
-import { useNarrow } from './hooks'
+import { useNarrow, useReportConfig } from './hooks'
+import { AgentAvatar } from './AgentAvatar'
 
 // redesign Phase 5 — notion-agent retired as a NEW-session backend; its history surfacing (the filter
 // tab + label) is removed here. Old notion-agent session ROWS stay readable via the per-email panel.
-type BackendFilter = 'all' | 'custom-api'
-const SESSIONS_QUERY_KEY = qk.chat.allSessions()
+type AgentFilter = 'all' | string
+const SESSIONS_QUERY_KEY = [...qk.chat.allSessions(), 'agent'] as const
 
 function relTime(epochMs: number, t: TFunction): string {
   const diff = Date.now() - epochMs
@@ -43,25 +43,25 @@ function relTime(epochMs: number, t: TFunction): string {
   return t('chat.sidebar.daysAgo', { n: Math.floor(diff / 86_400_000) })
 }
 
-function backendLabel(item: ChatSessionListItem, t: TFunction): string {
-  return item.backend_model ?? t('chat.backend.customApi')
-}
-
 // ─── 会话行 ──────────────────────────────────────────────────────────────────
 function SessionRow({
   item,
+  agentName,
+  agentAvatar,
   selected,
   onSelect,
   t
 }: {
   item: ChatSessionListItem
+  agentName: string
+  agentAvatar?: AgentAvatarConfig | null
   selected: boolean
   onSelect: () => void
   t: TFunction
 }): React.ReactElement {
   const subject = item.email_subject?.trim() || null
   const firstMsg = item.first_user_message?.trim() || null
-  const title = subject ?? firstMsg ?? t('sessions.untitled')
+  const title = item.title?.trim() || subject || firstMsg || t('sessions.untitled')
   const preview = subject ? firstMsg : null
   return (
     <button
@@ -82,7 +82,7 @@ function SessionRow({
         />
       )}
       <div className="flex items-center gap-2 min-w-0">
-        <Mail size={13} strokeWidth={1.75} className="text-ink-fg-3 shrink-0" />
+        <AgentAvatar agentId={item.agent_id ?? 'unknown'} config={agentAvatar} size={22} />
         <span className="text-body font-medium text-ink-fg truncate min-w-0" title={title}>
           {title}
         </span>
@@ -95,7 +95,7 @@ function SessionRow({
       <div className="mt-1.5 flex items-center gap-2 text-micro font-mono text-ink-fg-3">
         <span className="inline-flex items-center gap-1">
           <Sparkles size={10} strokeWidth={2} className="text-coral" />
-          {backendLabel(item, t)}
+          {agentName}
         </span>
         <span aria-hidden>·</span>
         <span className="inline-flex items-center gap-1">
@@ -118,7 +118,9 @@ function SessionListPane({
   onQuery,
   filter,
   onFilter,
-  showFilter,
+  agentOptions,
+  agentNameOf,
+  agentAvatarOf,
   title,
   total,
   isLoading,
@@ -130,10 +132,11 @@ function SessionListPane({
   onSelect: (id: number) => void
   query: string
   onQuery: (v: string) => void
-  filter: BackendFilter
-  onFilter: (f: BackendFilter) => void
-  /** 锁定 backend 时隐藏筛选 chips（per-agent 视图无需筛选）。 */
-  showFilter: boolean
+  filter: AgentFilter
+  onFilter: (f: AgentFilter) => void
+  agentOptions: Array<{ id: string; name: string }>
+  agentNameOf: (id: string | null | undefined) => string
+  agentAvatarOf: (id: string | null | undefined) => AgentAvatarConfig | null | undefined
   title: string
   total: number
   isLoading: boolean
@@ -175,20 +178,19 @@ function SessionListPane({
             )}
           />
         </label>
-        {showFilter && (
-          /* v0.7.2 — 统一 SegmentedControl（等分：fluid，对应旧 flex-1）。 */
-          <SegmentedControl<BackendFilter>
-            value={filter}
-            onChange={onFilter}
-            ariaLabel={t('sessions.filterLabel')}
-            fluid
-            className="w-full"
-            options={[
-              { value: 'all', label: t('sessions.filterAll') },
-              { value: 'custom-api', label: t('chat.backend.customApi') }
-            ]}
-          />
-        )}
+        <select
+          value={filter}
+          onChange={(event) => onFilter(event.target.value)}
+          aria-label={t('agents.chats.filterAgent')}
+          className="input-surface h-8 w-full rounded-md border border-ink-border-soft px-2.5 text-body text-ink-fg outline-none focus:ring-1 focus:ring-c-accent/40"
+        >
+          <option value="all">{t('agents.chats.allAgents')}</option>
+          {agentOptions.map((agent) => (
+            <option key={agent.id} value={agent.id}>
+              {agent.name}
+            </option>
+          ))}
+        </select>
       </div>
       <div className="flex-1 overflow-y-auto scrollbar-thin p-2">
         {isLoading && items.length === 0 ? (
@@ -196,15 +198,36 @@ function SessionListPane({
         ) : items.length === 0 ? (
           <div className="px-2 py-6 text-meta text-ink-fg-3">{t('sessions.noMatchTitle')}</div>
         ) : (
-          <div className="flex flex-col gap-0.5">
-            {items.map((it) => (
-              <SessionRow
-                key={it.id}
-                item={it}
-                selected={it.id === selectedId}
-                onSelect={() => onSelect(it.id)}
-                t={t}
-              />
+          <div className="flex flex-col gap-2">
+            {Array.from(
+              items.reduce((groups, item) => {
+                const id = item.agent_id ?? 'unknown'
+                const rows = groups.get(id) ?? []
+                rows.push(item)
+                groups.set(id, rows)
+                return groups
+              }, new Map<string, ChatSessionListItem[]>())
+            ).map(([agentId, rows]) => (
+              <section key={agentId}>
+                <div className="flex items-center gap-2 px-2 pb-1 pt-1 text-micro font-medium uppercase tracking-wider text-ink-fg-3">
+                  <AgentAvatar agentId={agentId} config={agentAvatarOf(agentId)} size={18} />
+                  <span className="min-w-0 flex-1 truncate">{agentNameOf(agentId)}</span>
+                  <span className="tabular-nums opacity-60">{rows.length}</span>
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  {rows.map((it) => (
+                    <SessionRow
+                      key={it.id}
+                      item={it}
+                      agentName={agentNameOf(it.agent_id)}
+                      agentAvatar={agentAvatarOf(it.agent_id)}
+                      selected={it.id === selectedId}
+                      onSelect={() => onSelect(it.id)}
+                      t={t}
+                    />
+                  ))}
+                </div>
+              </section>
             ))}
           </div>
         )}
@@ -216,11 +239,13 @@ function SessionListPane({
 // ─── 右：transcript 预览（ReadOnlyTranscript，read-only）───────────────────────
 function TranscriptPane({
   session,
+  agentName,
   onBack,
   narrow,
   t
 }: {
   session: ChatSessionListItem
+  agentName: string
   onBack?: () => void
   narrow: boolean
   t: TFunction
@@ -235,7 +260,10 @@ function TranscriptPane({
   })
   const messages: ChatMessage[] = msgsQ.data ?? []
   const title =
-    session.email_subject?.trim() || session.first_user_message?.trim() || t('sessions.untitled')
+    session.title?.trim() ||
+    session.email_subject?.trim() ||
+    session.first_user_message?.trim() ||
+    t('sessions.untitled')
 
   const continueInInbox = (): void => {
     // P2c — general (email_id=null, anchor_type='general') sessions aren't anchored
@@ -268,20 +296,22 @@ function TranscriptPane({
         </h2>
         <span className="inline-flex items-center gap-1.5 text-meta font-mono text-coral shrink-0">
           <Sliders size={11} strokeWidth={2} />
-          {backendLabel(session, t)}
+          {agentName}
         </span>
-        <button
-          type="button"
-          onClick={continueInInbox}
-          className={cn(
-            'inline-flex items-center gap-1.5 px-2.5 h-7 rounded-md text-meta font-medium shrink-0',
-            'text-ink-fg-1 bg-transparent border border-ink-border',
-            'hover:bg-ink-4 hover:text-ink-fg transition-colors duration-fast'
-          )}
-        >
-          <ExternalLink size={12} strokeWidth={2} />
-          {t('agents.chats.continue')}
-        </button>
+        {session.email_id != null && (
+          <button
+            type="button"
+            onClick={continueInInbox}
+            className={cn(
+              'inline-flex items-center gap-1.5 px-2.5 h-7 rounded-md text-meta font-medium shrink-0',
+              'text-ink-fg-1 bg-transparent border border-ink-border',
+              'hover:bg-ink-4 hover:text-ink-fg transition-colors duration-fast'
+            )}
+          >
+            <ExternalLink size={12} strokeWidth={2} />
+            {t('agents.chats.continue')}
+          </button>
+        )}
       </div>
       {msgsQ.isLoading ? (
         <div className="flex-1 grid place-items-center text-meta text-ink-fg-3">
@@ -304,40 +334,57 @@ function TranscriptPane({
 // backend 传值 → 锁定该 backend（隐藏筛选 chips，标题用 backend 名）；不传 → 全部
 // 会话 + 筛选分类（AI 会话历史）。三处复用：Custom AI=custom-api、Notion Agent 页=
 // notion-agent、/sessions=不传（全部）。
-export function ChatsTab({ backend }: { backend?: ChatBackendKind } = {}): React.ReactElement {
+export function ChatsTab(): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const narrow = useNarrow()
-  const scoped = backend !== undefined
+  const { agents } = useReportConfig()
   const [query, setQuery] = useState('')
-  const [filter, setFilter] = useState<BackendFilter>('all')
+  const [filter, setFilter] = useState<AgentFilter>('all')
   const [picked, setPicked] = useState<number | null>(null)
   const [mobileDetail, setMobileDetail] = useState(false)
 
   const sessionsQ = useQuery({
     queryKey: SESSIONS_QUERY_KEY,
-    queryFn: () => mailApi.chat.listAllSessions(),
+    queryFn: () => mailApi.chat.listAllSessions({ origin: 'agent' }),
     staleTime: 10_000
   })
   const all = useMemo(() => sessionsQ.data ?? [], [sessionsQ.data])
-  // scoped 视图先按 backend 取全集（用于计数 + 空态）。
-  const scopedAll = useMemo(
-    () => (backend ? all.filter((s) => s.backend_kind === backend) : all),
-    [all, backend]
+  const agentNameOf = useCallback(
+    (id: string | null | undefined): string =>
+      agents.find((agent) => agent.id === id)?.title ?? id ?? t('agents.custom.runs.unknownAgent'),
+    [agents, t]
   )
-  const effFilter: BackendFilter = scoped ? (backend as BackendFilter) : filter
+  const agentAvatarOf = useCallback(
+    (id: string | null | undefined): AgentAvatarConfig | null | undefined =>
+      agents.find((agent) => agent.id === id)?.avatar,
+    [agents]
+  )
+  const agentOptions = useMemo(
+    () =>
+      Array.from(new Set(all.map((session) => session.agent_id).filter((id): id is string => !!id)))
+        .map((id) => ({ id, name: agentNameOf(id) }))
+        .sort((a, b) => a.name.localeCompare(b.name)),
+    [all, agentNameOf]
+  )
   const filtered = useMemo(() => {
     const q = query.trim().toLowerCase()
     return all.filter((s) => {
-      if (effFilter !== 'all' && s.backend_kind !== effFilter) return false
+      if (filter !== 'all' && s.agent_id !== filter) return false
       if (q === '') return true
-      return [s.email_subject, s.email_sender, s.first_user_message, s.backend_model]
+      return [
+        s.title,
+        s.email_subject,
+        s.email_sender,
+        s.first_user_message,
+        agentNameOf(s.agent_id)
+      ]
         .filter((v): v is string => typeof v === 'string')
         .join(' ')
         .toLowerCase()
         .includes(q)
     })
-  }, [all, query, effFilter])
+  }, [all, query, filter, agentNameOf])
 
   // 派生选中：picked 仍在过滤结果里 → 用它，否则回落第一条（避免 set-state-in-effect）。
   const selected = useMemo(() => {
@@ -353,7 +400,7 @@ export function ChatsTab({ backend }: { backend?: ChatBackendKind } = {}): React
     if (narrow) setMobileDetail(true)
   }
 
-  const title = scoped ? t('chat.backend.customApi') : t('sessions.title')
+  const title = t('agents.chats.title')
 
   const list = (
     <SessionListPane
@@ -364,16 +411,18 @@ export function ChatsTab({ backend }: { backend?: ChatBackendKind } = {}): React
       onQuery={setQuery}
       filter={filter}
       onFilter={setFilter}
-      showFilter={!scoped}
+      agentOptions={agentOptions}
+      agentNameOf={agentNameOf}
+      agentAvatarOf={agentAvatarOf}
       title={title}
-      total={scopedAll.length}
+      total={all.length}
       isLoading={sessionsQ.isLoading}
       fluid={narrow}
       t={t}
     />
   )
 
-  if (scopedAll.length === 0 && !sessionsQ.isLoading) {
+  if (all.length === 0 && !sessionsQ.isLoading) {
     return (
       <EmptyState
         fill
@@ -386,7 +435,13 @@ export function ChatsTab({ backend }: { backend?: ChatBackendKind } = {}): React
 
   if (narrow) {
     return mobileDetail && selected ? (
-      <TranscriptPane session={selected} narrow onBack={() => setMobileDetail(false)} t={t} />
+      <TranscriptPane
+        session={selected}
+        agentName={agentNameOf(selected.agent_id)}
+        narrow
+        onBack={() => setMobileDetail(false)}
+        t={t}
+      />
     ) : (
       <div className="h-full w-full">{list}</div>
     )
@@ -396,7 +451,12 @@ export function ChatsTab({ backend }: { backend?: ChatBackendKind } = {}): React
     <div className="flex h-full min-h-0">
       {list}
       {selected ? (
-        <TranscriptPane session={selected} narrow={false} t={t} />
+        <TranscriptPane
+          session={selected}
+          agentName={agentNameOf(selected.agent_id)}
+          narrow={false}
+          t={t}
+        />
       ) : (
         <div className="flex-1 grid place-items-center text-meta text-ink-fg-3">
           {t('agents.chats.selectHint')}

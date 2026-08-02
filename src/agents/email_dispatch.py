@@ -73,6 +73,16 @@ def dispatch_email_agents(
             logger.warning(f"[custom-agent] enqueue error agent={agent_id}: {e}")
             continue
         if res is not None:
+            job = repo.get(res[0])
+            skipped = bool(
+                job and isinstance(job.result, dict) and job.result.get("outcome") == "skipped"
+            )
+            if skipped:
+                logger.info(
+                    f"[custom-agent] email_filter matched agent={agent_id} "
+                    f"internal_id={internal_id} → daily limit, recorded skipped"
+                )
+                continue
             fired += 1
             logger.info(
                 f"[custom-agent] email_filter matched agent={agent_id} "

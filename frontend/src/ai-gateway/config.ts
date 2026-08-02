@@ -165,8 +165,9 @@ export interface AiGatewayConfig {
      *  resume); every manual entrypoint leaves it undefined → assembly byte-identical. */
     agentRunContext?: AgentRunContext
   ) => ToolSet
-  /** Max tool-loop steps (stopWhen: stepCountIs). Default 8 (legacy AGENT_MAX_ITER). */
-  maxSteps?: number
+  /** Test-harness-only override for deterministic single-step fixtures. Production never sets this;
+   *  normal manual/headless runs use chatRun's 10k internal sentinel. */
+  internalMaxSteps?: number
   /** 07-16 approval-mode switcher — hot-read the owner-global chat approval mode
    *  ('manual'|'acceptEdits'|'bypass', persisted in agent_config.db owner_settings). Called by
    *  prepareChatRun ONCE per run and ONLY for manual_chat runs (headless custom-agent runs never

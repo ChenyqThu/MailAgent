@@ -56,7 +56,7 @@ import { resumeApprovalRun } from './approvalResume'
 // （上游错误正文可能回显凭证）；flag off 保持原 message 形状（字节级纪律）。
 import { sanitizedUpstreamErrorMessage } from './upstreamError'
 import { runHeadlessSearchAgent } from './searchAgentRun'
-import { runHeadlessAgent } from './agentRun'
+import { resolveAgentRunSeconds, runHeadlessAgent } from './agentRun'
 import type { HeadlessAgentResult } from '../shared/api/types'
 
 const GATEWAY_VERSION = '0.2.0'
@@ -846,10 +846,7 @@ async function handleAgentRun(
   // maxRunSeconds. The worker's own http timeout has a +margin, so the timeout fires FIRST → a bounded
   // synchronous response. `clientClosed` distinguishes a worker disconnect (socket gone → skip the
   // write) from a budget timeout (socket open → write the E_BUDGET_TIME result so the worker records it).
-  const maxRunSeconds =
-    typeof spec.budget?.maxRunSeconds === 'number' && spec.budget.maxRunSeconds > 0
-      ? spec.budget.maxRunSeconds
-      : 300
+  const maxRunSeconds = resolveAgentRunSeconds(spec.budget?.maxRunSeconds)
   const clientAbort = new AbortController()
   let clientClosed = false
   req.on('close', () => {

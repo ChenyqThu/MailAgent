@@ -1,4 +1,4 @@
-// CustomAgentDrawer 拆分（Lane C2 纯机械搬迁）：run 历史区 + 状态徽标（8 状态穷举）。
+// CustomAgentDrawer 拆分（Lane C2 纯机械搬迁）：run 历史区 + 状态徽标（9 状态穷举）。
 // 原样自 CustomAgentDrawer.tsx 抽出，逻辑逐字节不变。RunStateBadge 由主文件 re-export
 // 供 AgentsTab / AgentRecordView 复用。
 import { useState } from 'react'
@@ -10,14 +10,46 @@ import { AnimatedBadge, type AnimatedBadgeStatus } from '@shared/components/ui/a
 import { PendingDot } from '../AgentPendingBadge'
 import type { AgentRunHistoryItem, AgentRunState } from '@shared/api/types'
 import { ReportIcon } from '../primitives'
-import { useAgentRuns, useRunNow } from '../hooks'
+import { useAgentRuns, useReportConfig, useRunNow } from '../hooks'
 import { errText } from './shared'
+import { AgentAvatar } from '../AgentAvatar'
 
 // epoch（秒或毫秒都容错）→ 本地时间串。
 function fmtTime(ts: number | null | undefined): string {
   if (ts == null) return ''
   const ms = ts < 1e12 ? ts * 1000 : ts
   return new Date(ms).toLocaleString()
+}
+
+function fmtDuration(seconds: number): string {
+  if (seconds < 60) return `${Math.max(0, Math.round(seconds))}s`
+  const minutes = Math.floor(seconds / 60)
+  const rest = Math.round(seconds % 60)
+  return rest > 0 ? `${minutes}m ${rest}s` : `${minutes}m`
+}
+
+function totalTokens(tokens: Record<string, unknown> | null | undefined): number | null {
+  if (!tokens) return null
+  if (typeof tokens.totalTokens === 'number') return tokens.totalTokens
+  const input = tokens.inputTokens
+  const output = tokens.outputTokens
+  const inputTotal =
+    typeof input === 'number'
+      ? input
+      : input &&
+          typeof input === 'object' &&
+          typeof (input as { total?: unknown }).total === 'number'
+        ? ((input as { total: number }).total ?? 0)
+        : 0
+  const outputTotal =
+    typeof output === 'number'
+      ? output
+      : output &&
+          typeof output === 'object' &&
+          typeof (output as { total?: unknown }).total === 'number'
+        ? ((output as { total: number }).total ?? 0)
+        : 0
+  return inputTotal + outputTotal > 0 ? inputTotal + outputTotal : null
 }
 
 // 免卡 badge 分源投影（S6 W3-2，ADR-004 rev3.1 §4.4 / F#3）：rule-source（白名单规则命中）与
@@ -54,7 +86,7 @@ interface RunVisual {
   pulse?: boolean
 }
 
-// 8 状态穷举视觉映射。**无 default**：switch 覆盖全部 AgentRunState 后由 assertNever
+// 9 状态穷举视觉映射。**无 default**：switch 覆盖全部 AgentRunState 后由 assertNever
 // 兜底——新增状态时 `state` 不再收窄为 never → tsc 编译红（防漏兜 + 防 paused_* 误渲成功）。
 function runStateVisual(state: AgentRunState): RunVisual {
   switch (state) {
@@ -73,6 +105,11 @@ function runStateVisual(state: AgentRunState): RunVisual {
       return {
         labelKey: 'agents.custom.runs.state.completed',
         status: 'success'
+      }
+    case 'skipped':
+      return {
+        labelKey: 'agents.custom.runs.state.skipped',
+        status: 'neutral'
       }
     case 'paused_pending':
       return {
@@ -123,9 +160,11 @@ export function RunHistorySection({ agentId }: { agentId: string }): React.React
   const { t } = useTranslation()
   const navigate = useNavigate()
   const { runs, isLoading, hasMore, isLoadingMore, loadMore } = useAgentRuns(agentId)
+  const { agents } = useReportConfig()
+  const agent = agents.find((item) => item.id === agentId)
   const { run, isRunning } = useRunNow()
-  // run-now 失败（预算耗尽 E_BUDGET / flag off / gateway 不可达）→ 展示后端 detail，
-  // 不静默吞（否则用户点「立即运行」无任何反馈）。
+  // run-now 传输/服务失败（flag off / gateway 不可达）→ 展示后端 detail，不静默吞。
+  // 每日额度耗尽已改为成功返回 + 可见 skipped 历史行，不再走这里。
   const [runErr, setRunErr] = useState<string | null>(null)
 
   const onRunNow = (): void => {
@@ -211,6 +250,7 @@ export function RunHistorySection({ agentId }: { agentId: string }): React.React
               }}
             >
               <div className="flex items-center" style={{ gap: 8 }}>
+                <AgentAvatar agentId={agentId} config={agent?.avatar} size={24} />
                 <RunStateBadge state={r.state} />
                 {/* 红点链 ①（P5）：paused_pending run 待审批脉冲红点，紧邻状态徽标。 */}
                 {r.state === 'paused_pending' && (
@@ -262,6 +302,34 @@ export function RunHistorySection({ agentId }: { agentId: string }): React.React
                   </button>
                 )}
               </div>
+              {(r.steps != null || r.durationSeconds != null || totalTokens(r.tokens) != null) && (
+                <div
+                  className="flex flex-wrap items-center"
+                  style={{ gap: 10, marginTop: 7, fontSize: 11.5, color: 'rgb(var(--ink-fg-3))' }}
+                >
+                  {r.steps != null && <span>{t('agents.custom.runs.steps', { n: r.steps })}</span>}
+                  {totalTokens(r.tokens) != null && (
+                    <span>
+                      {t('agents.custom.runs.tokens', {
+                        n: (totalTokens(r.tokens) as number).toLocaleString()
+                      })}
+                    </span>
+                  )}
+                  {r.durationSeconds != null && <span>{fmtDuration(r.durationSeconds)}</span>}
+                </div>
+              )}
+              {r.state === 'skipped' && (
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    color: 'rgb(var(--ink-fg-3))',
+                    marginTop: 6,
+                    lineHeight: 1.5
+                  }}
+                >
+                  {t('agents.custom.runs.skippedHint')}
+                </div>
+              )}
               {r.state === 'paused_pending' && (
                 <div
                   style={{

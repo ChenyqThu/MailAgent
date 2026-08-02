@@ -10,6 +10,7 @@ import {
   TOOL_GROUPS,
   groupToolOptions
 } from '../../src/shared/components/agents/toolGroups'
+import { CUSTOM_AGENT_MANAGED_ALLOWED_TOOLS } from '../../src/shared/lib/customAgentCapabilities'
 import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
 import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
 
@@ -40,6 +41,7 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
   { name: 'kos_search', class: 'read' },
   { name: 'report_get', class: 'read' },
   { name: 'report_list', class: 'read' },
+  { name: 'report_write', class: 'artifact' },
   { name: 'skill_read', class: 'read' },
   { name: 'calendar_event_delete', class: 'domain_write' },
   { name: 'calendar_event_reschedule', class: 'domain_write' },
@@ -65,6 +67,16 @@ describe('toolGroups — R3 工具分组常量', () => {
   test('分组常量无重复工具名（一个工具恰属一组）', () => {
     const all = TOOL_GROUPS.flatMap((g) => [...g.tools])
     expect(new Set(all).size).toBe(all.length)
+  })
+
+  test('六能力映射覆盖全部 headless 原子工具', () => {
+    const managed = new Set(CUSTOM_AGENT_MANAGED_ALLOWED_TOOLS)
+    expect(
+      HEADLESS_TOOL_OPTIONS.map((tool) => tool.name).filter((name) => !managed.has(name))
+    ).toEqual([])
+    expect(
+      TOOL_GROUPS.flatMap((group) => group.tools).filter((name) => !managed.has(name))
+    ).toEqual([])
   })
 
   test('未映射工具落「其他」fallback 组（不静默丢）', () => {

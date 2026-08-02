@@ -1,16 +1,18 @@
-// chat-panel P4 Phase 03a — report read tools (AI SDK Gateway).
+// Report tools (AI SDK Gateway): two reads plus one silent local-artifact write.
 //
 // Migrated from the legacy harness (shared/chat/tools/builtin/report.ts). report_list
 // + report_get are silent reads through the domain client's /reports endpoints. The
-// write-class report_run (edit tier, runs the LLM) is NOT migrated here — write tools
-// land in phase-03b.
+// report_write does not run another LLM and never sends data off-device; policy class `artifact`
+// keeps it silently available in every context mode.
 
 import type { Tool } from 'ai'
 import type { z } from 'zod'
 
 import type { MailAgentDomainClient } from '../python/domainClient'
 import { auditedReadTool, type GatewayToolAuditCollector } from './types'
-import { reportGetSchema, reportListSchema } from './schemas'
+import { reportGetSchema, reportListSchema, reportWriteSchema } from './schemas'
+
+export const GATEWAY_ARTIFACT_TOOL_NAMES = ['report_write'] as const
 
 /** Build the two report read tools bound to the injected domain client + audit collector. */
 export function createReportReadTools(
@@ -60,4 +62,42 @@ export function createReportReadTools(
   })
 
   return { report_list, report_get }
+}
+
+/** Build the complete report surface. ``agentId`` comes from the trusted headless run context;
+ * manual chat falls back to the built-in assistant identity. */
+export function createReportTools(
+  domain: MailAgentDomainClient,
+  collector: GatewayToolAuditCollector = [],
+  agentId = 'custom_ai'
+): Record<string, Tool> {
+  const report_write = auditedReadTool(
+    {
+      name: 'report_write',
+      description:
+        'Persist a structured local report artifact in the Reports tab. mode="new" creates a new ' +
+        'sequenced report (use this by default); mode="replace" updates this agent\'s stable ' +
+        'destination report. Use concise blocks that improve comprehension, not decoration. ' +
+        'Available blocks: header, overview, stat_row, section, email_item, key_points, callout, ' +
+        'kos_context, action_suggestion, trend, divider, markdown, timeline, checklist, progress, ' +
+        'quote, metric_delta, image. Use trend only for a real trend with at least 4 meaningful ' +
+        'points; use markdown for free-form lists/tables/code; use timeline only for an ordered ' +
+        'sequence. Images MUST use an internal /api, /assets, mailagent://, app://, or data:image ' +
+        'source — arbitrary HTTP(S) images are rejected. The artifact is local, reversible, and ' +
+        'written silently without an approval card.',
+      inputSchema: reportWriteSchema,
+      run: async (input, signal) => {
+        const detail = await domain.writeCustomReport(agentId, input, signal)
+        return {
+          report_id: detail.id,
+          title: input.title,
+          mode: input.mode,
+          status: detail.status,
+          cadence: detail.cadence
+        }
+      }
+    },
+    collector
+  )
+  return { ...createReportReadTools(domain, collector), report_write }
 }

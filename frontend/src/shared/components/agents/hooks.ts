@@ -216,7 +216,7 @@ export function useKosAvailable(): boolean {
   return q.data ?? false
 }
 
-/** S5 — /chat/config.customAgentsEnabled（MAILAGENT_CUSTOM_AGENTS_ENABLED，默认 OFF）。
+/** S5 — /chat/config.customAgentsEnabled（MAILAGENT_CUSTOM_AGENTS_ENABLED，默认 ON）。
  *  镜像 fetchSkillInstallEnabled 先例：未配 / 不可达 → false（隐藏 custom 入口，字节级同现状）。 */
 async function fetchCustomAgentsEnabled(): Promise<boolean> {
   try {
@@ -345,7 +345,7 @@ export function useAgentRuns(
 }
 
 /** R5 (task 07-05) — 项目周报同步执行历史（projectProgressRuns，读失败返 []）。
- *  自有 status 词表（processing/completed/failed/skipped，非 custom agent 的 8 值域）。
+ *  自有 status 词表（processing/completed/failed/skipped，非 custom agent 的 9 值域）。
  *  enabled=false（抽屉未开）→ 不发请求。抽屉每次打开时 refetchOnMount 取最新。 */
 export function useProjectProgressRuns(
   enabled: boolean,

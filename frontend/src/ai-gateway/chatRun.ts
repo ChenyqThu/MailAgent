@@ -39,14 +39,16 @@ import { type MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
 import { thinkingProviderOptions } from './thinking'
 // Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
-import { buildGatewaySystemPrompt } from './systemPrompt'
+import { appendHeadlessAgentExecutionDiscipline, buildGatewaySystemPrompt } from './systemPrompt'
 import {
   isValidContextSnapshot,
   type AgentContextSnapshot
 } from '@shared/assistant/context/contextSnapshot'
 
-/** Default tool-loop ceiling (matches the legacy harness AGENT_MAX_ITER default). */
-export const DEFAULT_MAX_STEPS = 8
+/** AI SDK requires a termination predicate. This sentinel is deliberately not a user budget: the
+ *  real run boundary is the 30-minute deadline, while 10k only protects against a pathological
+ *  infinite tool loop. Manual and headless runs share this exact value. */
+export const INTERNAL_TOOL_STEP_SENTINEL = 10_000
 
 /**
  * HIGH-1 (batch1 review) — the ONE credential pre-gate all four LLM entrypoints share
@@ -233,6 +235,12 @@ export async function prepareChatRun(
   // two layers in agreement instead of the explicit param blindly overriding a lower row cap.
   const maxOutputTokens = resolvedModel.maxOutputTokens ?? 64_000
 
+  // Normalize the SERVER-asserted mode once before assembling either the system prompt or tools.
+  // A custom-agent wrapper supplies agentRunContext; combining both signals keeps this discipline
+  // headless-only even if a hand-built manual cfg accidentally carries a stray context object.
+  const contextMode = normalizeContextMode(trustedContextMode)
+  const isHeadlessAgentRun = contextMode !== 'manual_chat' && cfg.agentRunContext != null
+
   // System prompt. With the injection provider set (always injected since S3) assemble
   // from standing-context + the typed snapshot, reusing the legacy stable prefix
   // (buildGatewaySystemPrompt). Without it (default) pass body.system through unchanged AND ignore the
@@ -265,9 +273,15 @@ export async function prepareChatRun(
     // rendered by buildStableSystemPrompt as an untrusted MEMORY fence). The M2 per-query recall path
     // (retrieveMemory callback → /chat/memory/search) is retired: memory.md is injected whenever
     // Python's /chat/config sends a non-empty memorySummary, so there is nothing to recall per turn.
-    system = buildGatewaySystemPrompt({ promptConfig, contextSnapshot })
+    system = buildGatewaySystemPrompt({
+      promptConfig,
+      contextSnapshot,
+      headlessAgentRun: isHeadlessAgentRun
+    })
   } else {
-    system = typeof body.system === 'string' && body.system.length > 0 ? body.system : undefined
+    const bodySystem =
+      typeof body.system === 'string' && body.system.length > 0 ? body.system : undefined
+    system = isHeadlessAgentRun ? appendHeadlessAgentExecutionDiscipline(bodySystem) : bodySystem
   }
 
   // 🔴 ai@6 convertToModelMessages is ASYNC (returns a Promise) — must await, else
@@ -305,7 +319,6 @@ export async function prepareChatRun(
   // 'always', so a malformed body never silently relaxes approval (byte-identical to pre-toggle).
   // S2 W0 — normalize the TRUSTED mode (never from body) once; it feeds buildTools (registration
   // filter + auto-approve predicate) and is frozen into the run for the island stash.
-  const contextMode = normalizeContextMode(trustedContextMode)
   let approvalMode: GatewayApprovalMode =
     body.approvalMode === 'auto-reversible' ? 'auto-reversible' : 'always'
   // 07-16 approval-mode switcher — overlay the owner-global mode (agent_config.db, hot-read via
@@ -342,7 +355,7 @@ export async function prepareChatRun(
     ...(hasTools
       ? {
           tools,
-          stopWhen: stepCountIs(cfg.maxSteps ?? DEFAULT_MAX_STEPS)
+          stopWhen: stepCountIs(cfg.internalMaxSteps ?? INTERNAL_TOOL_STEP_SENTINEL)
         }
       : {})
   }) as StreamTextResult<ToolSet, never, never>

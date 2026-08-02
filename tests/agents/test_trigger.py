@@ -5,7 +5,6 @@ import pytest
 
 from src.agents.trigger import (
     MAX_PATTERN_LEN,
-    MAX_STEPS_CEILING,
     Budget,
     CronTrigger,
     EmailFilterTrigger,
@@ -238,22 +237,22 @@ def test_parse_rejects_non_object_json():
 def test_parse_budget_defaults():
     b = parse_budget(None)
     assert b == Budget()
-    assert (b.max_steps, b.max_runs_per_day, b.max_run_seconds) == (8, 24, 300)
+    assert (b.max_runs_per_day, b.max_run_seconds) == (24, 1800)
 
 
 def test_parse_budget_custom():
     b = parse_budget({"v": 1, "max_steps": 4, "max_runs_per_day": 10, "max_run_seconds": 120})
-    assert (b.max_steps, b.max_runs_per_day, b.max_run_seconds) == (4, 10, 120)
+    assert (b.max_runs_per_day, b.max_run_seconds) == (10, 120)
 
 
-def test_parse_budget_clamps_max_steps():
-    assert parse_budget({"v": 1, "max_steps": 999}).max_steps == MAX_STEPS_CEILING
-    assert parse_budget({"v": 1, "max_steps": 0}).max_steps == 1  # 下限 1
+def test_parse_budget_ignores_legacy_max_steps():
+    assert parse_budget({"v": 1, "max_steps": 999}) == Budget()
+    assert parse_budget({"v": 1, "max_steps": 0}) == Budget()
 
 
 def test_parse_budget_bad_json_returns_default():
     assert parse_budget("not json") == Budget()
-    assert parse_budget({"v": 1, "max_steps": "abc"}).max_steps == 8  # 坏值回默认
+    assert parse_budget({"v": 1, "max_steps": "abc"}) == Budget()
 
 
 def test_parse_budget_unknown_version_returns_default():

@@ -12,7 +12,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQueryClient } from '@tanstack/react-query'
 
-import type { AgentRunState, ChatSessionListItem } from '@shared/api/types'
+import type { AgentRunState, ChatSession } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
@@ -104,7 +104,7 @@ export function AgentRecordConversation({
   reloadMessagesReady
 }: {
   chat: UseGeneralChatReturn
-  activeItem: ChatSessionListItem
+  activeItem: ChatSession
   gatewayBaseUrl: string | null
   reloadMessagesReady: boolean
 }): React.ReactElement {

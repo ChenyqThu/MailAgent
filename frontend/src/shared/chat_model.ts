@@ -31,6 +31,7 @@ export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'ab
 // The ai_chat_sessions v7 migration adds a table CHECK coupling anchor_type ↔ email_id/anchor_id
 // so a sentinel like email_id=0 is impossible by construction (architecture.md §1.4 / DR-5).
 export type AnchorType = 'email' | 'general'
+export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'all'
 
 // Sprint 19 — agent harness audit. Each LLM-proposed tool call gets one row
 // in `chat_tool_call`. See docs/reference/llm-agent/agent-harness-design.md §4.5.
@@ -76,6 +77,10 @@ export interface ChatSession {
   // harness-chat lane A B4 (task 07-15) — per-session read watermark (ai_chat.db v20 additive
   // column). NULL/undefined = never marked read (no badge); unread = updated_at > last_read_at.
   last_read_at?: number | null
+  // custom-agent epic W3 (ai_chat.db v21) — a nullable pin-order timestamp plus an independent star
+  // marker. SQLite crosses the untyped boundary as 0/1, hence the tolerant starred wire shape.
+  pinned_at?: number | null
+  starred?: boolean | number
 }
 
 // Global session-history row. Unlike `ChatSession` (per-email, used by the

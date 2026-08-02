@@ -30,6 +30,7 @@
     "email_attachment_text":   { "domain": "attachment", "tier": "silent",  "write": false, "gateway_only": true, "tool_class": "read" },
     "report_list":             { "domain": "report",     "tier": "silent",  "write": false, "gateway_only": true, "tool_class": "read" },
     "report_get":              { "domain": "report",     "tier": "silent",  "write": false, "gateway_only": true, "tool_class": "read" },
+    "report_write":            { "domain": "report",     "tier": "silent",  "write": true,  "gateway_only": true, "tool_class": "artifact" },
     "kos_query":               { "domain": "kos",        "tier": "silent",  "write": false, "gated": "kos", "gateway_only": true, "tool_class": "read" },
     "kos_search":              { "domain": "kos",        "tier": "silent",  "write": false, "gated": "kos", "gateway_only": true, "tool_class": "read" },
     "kos_get_page":            { "domain": "kos",        "tier": "silent",  "write": false, "gated": "kos", "gateway_only": true, "tool_class": "read" },

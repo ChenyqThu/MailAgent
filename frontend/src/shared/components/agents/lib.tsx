@@ -156,16 +156,16 @@ export function scrollToEmail(id: number): void {
 }
 
 // ─── 时间 / 标签 ────────────────────────────────────────────────────────────
-export function fmtClock(iso: string | undefined): string {
-  if (!iso) return ''
+export function fmtClock(value: string | number | undefined): string {
+  if (value === undefined || value === '') return ''
   try {
-    return new Date(iso).toLocaleTimeString('zh-CN', {
+    return new Date(value).toLocaleTimeString('zh-CN', {
       hour: '2-digit',
       minute: '2-digit',
       hour12: false
     })
   } catch {
-    return iso
+    return String(value)
   }
 }
 

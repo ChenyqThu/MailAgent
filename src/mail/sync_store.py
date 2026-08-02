@@ -483,7 +483,8 @@ class SyncStore:
     #                回滚 (回退 v29): 列可留 (旧代码无害) 或手动 DROP; 必要时降 db_version。
     # v30 (Custom Agent 内核 S4 W1, 2026-07, flag MAILAGENT_CUSTOM_AGENTS_ENABLED 默认关):
     #                report_agent 加 trigger_json (判别式 cron|email_filter) / tool_policy_json
-    #                (D6 allowed_tools 交集收窄) / budget_json (D7 max_steps/runs_per_day/run_seconds)
+    #                (D6 allowed_tools 交集收窄) / budget_json。当前只执行 runs/day + runtime；
+    #                存量 max_steps 字段为向后兼容保留但忽略。
     #                三列 (TEXT NULL, 无 seed —— type='custom' 行只由 owner 创建, W1 不播种)。
     #                async_jobs 加 claim_token / spec_claimed_at 两列 (D2 fresh-spawn CAS one-shot;
     #                W1 只建列, 端点在 W2)。全 additive TEXT NULL, 对既有行/调用零影响。
@@ -587,7 +588,10 @@ class SyncStore:
     #                同函数); 老库该表可能已被 bulk 惰性建成 6 列旧形状 → PRAGMA 判断后
     #                ALTER 补列。无数据回填 (forward-only, 历史空洞仍由手动 bulk_ingest 补)。
     #                回滚 (回退 v41): 表/列可留 (旧代码只写老 6 列, 无害); 必要时降 db_version。
-    DB_VERSION = 41  # v41: kos_ingest_log 升格正式表 + 重试列 (issue #59)
+    # v42 (custom-agent epic W4, 2026-07): report_agent +avatar_json (nullable TEXT)。空值由前端
+    #                按 agent_id 确定性派生 shape/palette/variant；显式 JSON 保存用户在 custom
+    #                agent 编辑器选择的身份。纯展示元数据，不改变内置 agent 行为。
+    DB_VERSION = 42  # v42: report_agent avatar identity
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1586,9 +1590,10 @@ class SyncStore:
                 fallback_models_json TEXT,     -- v29: preprocess 行级 fallback 链 JSON 数组（NULL=跟随全局 LLM_FALLBACK_MODELS）
                 trigger_json TEXT,             -- v30: custom agent 触发判别式（{"v":1,"kind":"cron"|"email_filter",...}；NULL=非事件型，既有三 type 不用）
                 tool_policy_json TEXT,         -- v30: custom agent 工具收窄（{"v":1,"allowed_tools":[...]}；NULL=不额外收窄）
-                budget_json TEXT,              -- v30: custom agent 预算（{"v":1,"max_steps","max_runs_per_day","max_run_seconds"}；NULL=全默认）
+                budget_json TEXT,              -- v30: custom agent 预算（runs/day + runtime；存量 max_steps 宽容忽略；NULL=全默认）
                 mark_read_after_processing INTEGER, -- v32: preprocess 处理后自动标已读（NULL=默认 true）
-                context_source TEXT            -- v38: preprocess 参考上下文源 'standing_docs'|'notion_context'（NULL=按 LLM_CONTEXT_PAGE_ID 继承派生）；末列对齐 ALTER 追加位置
+                context_source TEXT,           -- v38: preprocess 参考上下文源 'standing_docs'|'notion_context'（NULL=按 LLM_CONTEXT_PAGE_ID 继承派生）
+                avatar_json TEXT               -- v42: 可选头像 shape/palette/variant JSON；NULL=按 agent id 派生
             )
         """)
         # report: ReportDoc 块模型 SSoT（blocks_json）+ 列表展示冗余字段。
@@ -2343,6 +2348,20 @@ class SyncStore:
                 logger.info(
                     f"v41 migration: backfilled source='bulk' for {_src} "
                     f"pre-existing kos_ingest_log row(s)"
+                )
+
+        # === v42: report_agent avatar identity ===
+        # 新库 CREATE 已含列；旧库 additive ALTER。NULL 保持确定性默认，不回填 240 种组合。
+        if current_version < 42:
+            try:
+                cursor.execute("PRAGMA table_info(report_agent)")
+                _agent_cols = {row[1] for row in cursor.fetchall()}
+                if "avatar_json" not in _agent_cols:
+                    cursor.execute("ALTER TABLE report_agent ADD COLUMN avatar_json TEXT")
+                    logger.info("v42 migration: report_agent +avatar_json")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor, "report_agent", {"avatar_json"}, "v42 migration", e,
                 )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块

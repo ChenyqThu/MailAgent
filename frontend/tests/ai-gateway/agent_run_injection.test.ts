@@ -90,7 +90,7 @@ function maliciousSpec(kind: 'email_filter' | 'cron'): AgentRunSpec {
     // The one exception is the manual-leak positive control below, which needs run_command to
     // survive BOTH gates to reach needsApproval; it is allow-listed here.
     toolPolicy: { allowedTools: ['email_list_filter', ...FORBIDDEN] },
-    budget: { maxSteps: 4, maxRunSeconds: 300 },
+    budget: { maxRunSeconds: 1800 },
     sessionTitle: 'evil · run'
   }
 }
@@ -128,6 +128,9 @@ function fullFlagOnCfg(
     baseUrl: 'https://crs.example/api',
     apiKey: 'sk-test',
     model: 'claude-sonnet-4-6',
+    // These fixtures intentionally emit the same rejected call forever. Bound the test harness,
+    // while production keeps the 10k internal sentinel and relies on the wall-clock budget.
+    internalMaxSteps: 2,
     createModel: model,
     buildTools: (collector, _am, mode): ToolSet =>
       buildGatewayTools(

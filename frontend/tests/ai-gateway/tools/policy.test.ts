@@ -1,7 +1,7 @@
 // S2 W0 (task 07-02-s2-exec-skill-install, ADR-001) — context-mode × tool-class policy matrix.
 //
 // Proves: (1) fail-closed normalization (absent/unknown mode → 'untrusted_trigger'; unclassified
-// tool → 'exec'); (2) the full 3-mode × 5-class registration + auto-approve matrix; (3)
+// tool → 'exec'); (2) the full 3-mode × 7-class registration + auto-approve matrix; (3)
 // applyContextModePolicy is an identity in manual_chat (byte-level: current production behaviour
 // unchanged) and strips capability_change/exec/outbound outside it; (4) completeness drift guard —
 // every REAL gateway tool is classified in GATEWAY_TOOL_CLASSES and vice versa; (5) the eval
@@ -98,13 +98,14 @@ describe('classOfTool — single source + fail-closed', () => {
 })
 
 describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (card skip)', () => {
-  // The full 3×6 matrix, spelled out (ADR-001 D3, 'web' class added by ADR-004 rev3.1):
-  // registration allows read/domain_write everywhere and restricts
+  // The full 3×7 matrix, spelled out (artifact added by the custom-report epic):
+  // registration allows read/artifact/domain_write everywhere and restricts
   // capability_change/exec/web/outbound to manual_chat (no grants); auto-approve is
   // domain_write × manual_chat ONLY.
   const REGISTRATION_EXPECTED: Record<AgentContextMode, Record<GatewayToolClass, boolean>> = {
     manual_chat: {
       read: true,
+      artifact: true,
       domain_write: true,
       capability_change: true,
       exec: true,
@@ -113,6 +114,7 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
     },
     untrusted_trigger: {
       read: true,
+      artifact: true,
       domain_write: true,
       capability_change: false,
       exec: false,
@@ -121,6 +123,7 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
     },
     cron_headless: {
       read: true,
+      artifact: true,
       domain_write: true,
       capability_change: false,
       exec: false,
@@ -183,7 +186,7 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
         const expected =
           mode === 'manual_chat'
             ? true // grants never consulted in manual
-            : cls === 'read' || cls === 'domain_write'
+            : cls === 'read' || cls === 'artifact' || cls === 'domain_write'
               ? true
               : cls === 'exec'
                 ? execGranted
@@ -325,16 +328,16 @@ describe('applyContextModePolicy', () => {
   })
 
   test.each(['untrusted_trigger', 'cron_headless'] as const)(
-    '%s strips capability_change/exec/web/outbound, keeps read + domain_write (key order preserved)',
+    '%s strips capability_change/exec/web/outbound, keeps read + artifact + domain_write (key order preserved)',
     (mode) => {
       const tools = buildAllTools('manual_chat')
       const filtered = applyContextModePolicy(tools, mode)
       for (const name of Object.keys(filtered)) {
-        expect(['read', 'domain_write']).toContain(classOfTool(name))
+        expect(['read', 'artifact', 'domain_write']).toContain(classOfTool(name))
       }
       for (const name of Object.keys(tools)) {
         const cls = classOfTool(name)
-        if (cls === 'read' || cls === 'domain_write') {
+        if (cls === 'read' || cls === 'artifact' || cls === 'domain_write') {
           expect(filtered[name], `${name} (${cls}) must survive ${mode}`).toBeDefined()
         } else {
           expect(filtered[name], `${name} (${cls}) must be dropped in ${mode}`).toBeUndefined()
@@ -342,7 +345,9 @@ describe('applyContextModePolicy', () => {
       }
       // order of the surviving keys is preserved (Object.entries iteration)
       expect(Object.keys(filtered)).toEqual(
-        Object.keys(tools).filter((n) => ['read', 'domain_write'].includes(classOfTool(n)))
+        Object.keys(tools).filter((n) =>
+          ['read', 'artifact', 'domain_write'].includes(classOfTool(n))
+        )
       )
     }
   )

@@ -120,13 +120,14 @@ def test_spec_cron_full_shape(env, client):
     assert spec["prompt"]["taskPrompt"] == "Approve the DMS request"
     assert "emailEnvelope" not in spec["prompt"]  # cron 无 envelope
     assert spec["model"] == "claude-sonnet-5"
-    assert spec["budget"] == {"maxSteps": 6, "maxRunSeconds": 120}
+    assert spec["budget"] == {"maxRunSeconds": 120}
     # S5 ADR-004 §5.1（显式修订 ADR-003 D6）：未配 tool_policy → 投影**默认安全集**（非「不收窄」）
     # + S6 W3 rev3.1 §5.1：skills 恒输出（NULL → 默认挂载集已代入）。
     assert spec["toolPolicy"] == {
         "allowedTools": list(agent_runs.DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS),
         "skills": list(agent_runs.DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS),
     }
+    assert "report" in spec["toolPolicy"]["skills"]  # report capability tiers survive mount gating
     assert spec["sessionTitle"].startswith("DMS Approver · ")
 
 
@@ -271,17 +272,17 @@ def test_spec_skills_projection_four_states(env, client):
 
 
 def test_spec_budget_defaults_and_clamp(env, client):
-    # 无 budget → 全默认（maxSteps 8 / maxRunSeconds 300）
+    # 无 budget → 30 分钟默认；旧 max_steps 永不投影。
     _seed_custom(env.store, agent_id="a_default", trigger=_CRON)
     jid = _running_job(env.repo, agent_id="a_default", token="t2")
     d = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "t2"}).json()["data"]
-    assert d["budget"] == {"maxSteps": 8, "maxRunSeconds": 300}
-    # max_steps 越界 → clamp ≤16
+    assert d["budget"] == {"maxRunSeconds": 1800}
+    # 旧 max_steps 被忽略；wall-clock 仍 clamp 到 1800。
     _seed_custom(env.store, agent_id="a_clamp", trigger=_CRON,
                  budget={"v": 1, "max_steps": 999, "max_run_seconds": 999999})
     jid2 = _running_job(env.repo, agent_id="a_clamp", token="t3")
     d2 = client.get(f"/api/agent-runs/{jid2}/spec", headers={"X-Claim-Token": "t3"}).json()["data"]
-    assert d2["budget"]["maxSteps"] == 16
+    assert "maxSteps" not in d2["budget"]
     assert d2["budget"]["maxRunSeconds"] == 1800  # MAX_RUN_SECONDS_CEILING
 
 

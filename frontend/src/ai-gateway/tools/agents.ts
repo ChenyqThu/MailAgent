@@ -50,6 +50,12 @@ import type {
   ReportAgentCreateInput
 } from '@shared/api/types'
 import {
+  applyCustomAgentCapabilityPatch,
+  deriveCustomAgentCapabilities,
+  type CustomAgentCapabilityPatch,
+  type CustomAgentCapabilityProfile
+} from '@shared/lib/customAgentCapabilities'
+import {
   customAgentCreateSchema,
   customAgentDeleteSchema,
   customAgentGetSchema,
@@ -117,7 +123,18 @@ function triggerSummary(trigger: CustomAgentTrigger | null | undefined): string 
 /** Project one ReportAgentConfig into the model-facing spec summary (custom-agent fields only).
  *  Grants/skills are projected read-side too (rev3.1 §7) so an update proposal starts from the
  *  agent's REAL current permissions — the approval card's before-diff is still server-fetched. */
-function specSummary(agent: ReportAgentConfig): Record<string, unknown> {
+function specSummary(
+  agent: ReportAgentConfig,
+  resolvedAllowedTools?: readonly string[]
+): Record<string, unknown> {
+  const allowedTools = agent.tool_policy?.allowed_tools ?? resolvedAllowedTools ?? null
+  const derived = allowedTools
+    ? deriveCustomAgentCapabilities({
+        allowedTools: [...allowedTools],
+        grantWeb: agent.tool_policy?.grant_web ?? 'off',
+        grantExec: agent.tool_policy?.grant_exec === true
+      })
+    : null
   return {
     id: agent.id,
     type: agent.type,
@@ -128,7 +145,9 @@ function specSummary(agent: ReportAgentConfig): Record<string, unknown> {
     prompt_is_default: agent.prompt_is_default,
     trigger: agent.trigger ?? null,
     trigger_summary: triggerSummary(agent.trigger),
-    allowed_tools: agent.tool_policy?.allowed_tools ?? null,
+    capabilities: derived?.profile ?? null,
+    capabilities_customized: derived?.customized ?? [],
+    allowed_tools: allowedTools,
     grant_exec: agent.tool_policy?.grant_exec === true,
     grant_web: agent.tool_policy?.grant_web ?? 'off',
     skills: agent.tool_policy?.skills ?? null,
@@ -144,8 +163,9 @@ interface ConfigPatchInput {
   model?: string
   enabled?: boolean
   trigger?: CustomAgentTriggerInput | null
+  capabilities?: CustomAgentCapabilityProfile | CustomAgentCapabilityPatch
   allowed_tools?: string[]
-  budget?: { max_steps?: number; max_runs_per_day?: number; max_run_seconds?: number } | null
+  budget?: { max_runs_per_day?: number; max_run_seconds?: number } | null
   grant_exec?: boolean
   grant_web?: 'off' | 'gated' | 'open'
   skills?: string[]
@@ -156,6 +176,7 @@ interface ConfigPatchInput {
 function touchesToolPolicy(input: ConfigPatchInput): boolean {
   return (
     input.allowed_tools !== undefined ||
+    input.capabilities !== undefined ||
     input.grant_exec !== undefined ||
     input.grant_web !== undefined ||
     input.skills !== undefined
@@ -173,6 +194,16 @@ function toConfigPatch(
   input: ConfigPatchInput,
   currentToolPolicy?: CustomAgentToolPolicy | null
 ): ReportConfigPatch {
+  if (
+    input.capabilities !== undefined &&
+    (input.allowed_tools !== undefined ||
+      input.grant_exec !== undefined ||
+      input.grant_web !== undefined)
+  ) {
+    invalidArg(
+      'capabilities cannot be combined with allowed_tools, grant_exec, or grant_web; use one vocabulary'
+    )
+  }
   const patch: ReportConfigPatch = {}
   if (input.title !== undefined) patch.title = input.title
   if (input.prompt !== undefined) patch.prompt = input.prompt
@@ -188,6 +219,19 @@ function toConfigPatch(
     if (cur?.grant_exec !== undefined) tp.grant_exec = cur.grant_exec
     if (cur?.grant_web !== undefined) tp.grant_web = cur.grant_web
     if (cur?.skills !== undefined) tp.skills = cur.skills
+    if (input.capabilities !== undefined) {
+      const mapped = applyCustomAgentCapabilityPatch(
+        {
+          allowedTools: cur?.allowed_tools ?? [],
+          grantWeb: cur?.grant_web ?? 'off',
+          grantExec: cur?.grant_exec === true
+        },
+        input.capabilities
+      )
+      tp.allowed_tools = mapped.allowedTools
+      tp.grant_web = mapped.grantWeb
+      tp.grant_exec = mapped.grantExec
+    }
     if (input.allowed_tools !== undefined) tp.allowed_tools = input.allowed_tools
     if (input.grant_exec !== undefined) tp.grant_exec = input.grant_exec
     if (input.grant_web !== undefined) tp.grant_web = input.grant_web
@@ -284,11 +328,13 @@ export function createCustomAgentTools(
       name: 'custom_agent_get',
       description:
         'Fetch one custom agent in full by its id (from custom_agent_list): title, prompt, model, ' +
-        'enabled, its trigger (cron / email_filter), the tools it may use (allowed_tools), its ' +
+        'enabled, its trigger (cron / email_filter), its six capability tiers, its optional ' +
+        'Advanced atomic-tool selection, its ' +
         'budget, plus its most recent runs (each with an authoritative state — queued / running / ' +
-        'completed / paused_pending / paused_expired / paused_approved / paused_rejected / failed; ' +
-        'a paused run is NOT a completed run). Use after custom_agent_list when the user wants the ' +
-        'details of a specific agent. Returns found:false if no custom agent has that id. Read-only.',
+        'completed / skipped / paused_pending / paused_expired / paused_approved / paused_rejected / ' +
+        'failed; skipped means the daily limit prevented execution, and a paused run is NOT a ' +
+        'completed run). Use after custom_agent_list when the user wants the details of a specific ' +
+        'agent. Returns found:false if no custom agent has that id. Read-only.',
       inputSchema: customAgentGetSchema,
       run: async (input, signal) => {
         const agent = await domain.getReportAgent(input.agent_id, signal)
@@ -314,7 +360,15 @@ export function createCustomAgentTools(
             /* run history is advisory; the spec is the primary result */
           }
         }
-        return { found: true, ...specSummary(agent), recent_runs: runs }
+        let resolvedAllowedTools = agent.tool_policy?.allowed_tools
+        if (resolvedAllowedTools === undefined) {
+          try {
+            resolvedAllowedTools = (await domain.getAgentRunToolOptions(signal)).defaults
+          } catch {
+            /* capability summary remains null; the persisted spec is still useful */
+          }
+        }
+        return { found: true, ...specSummary(agent, resolvedAllowedTools), recent_runs: runs }
       }
     },
     collector
@@ -326,7 +380,8 @@ export function createCustomAgentTools(
   const custom_agent_create = makeWrite({
     name: 'custom_agent_create',
     description:
-      'Propose creating a NEW custom agent. Provide an id (unique, no spaces), a title, the prompt ' +
+      'After clarifying the request and showing a complete summary for confirmation, propose ' +
+      'creating a NEW custom agent. Provide an id (unique, no spaces), a title, the prompt ' +
       'that steers it, optionally a model, whether it is enabled, a trigger (one of: {kind:"cron", ' +
       'cron:"<5-field cron>", timezone?} for arbitrary or sub-daily expressions; {kind:"schedule", ' +
       'rule:{freq:"daily"|"weekly"|"monthly", interval, weekdays, monthMode:"date"|"nth", monthDay, ' +
@@ -335,10 +390,12 @@ export function createCustomAgentTools(
       'produces; ALL 10 rule keys are required (send defaults for the ones the freq ignores) and ' +
       'weekdays/weekday count 0=Sunday; OR {kind:"email_filter", subject_pattern?, ' +
       'sender_pattern?, folders?} to fire on matching mail — omit for a disabled draft), the list of ' +
-      'tools it may use (allowed_tools), a budget ({max_steps?, max_runs_per_day?, ' +
-      'max_run_seconds?}), and optionally the permissions it needs: grant_exec (local command ' +
-      'execution), grant_web ("off" | "gated" domain-whitelist | "open" any URL — high risk), and ' +
-      'skills (the skill sets mounted for it). The user reviews the full spec on a confirmation ' +
+      'six capability tiers: Email read/organize/draft; Calendar off/read/write; Knowledge and ' +
+      'sessions off/on; Reports read/produce; Web off/gated/open; Files and commands off/on. Use ' +
+      'the complete `capabilities` profile for normal requests. `allowed_tools` plus grant fields ' +
+      'remain only for an explicitly requested Advanced atomic configuration and must not be mixed ' +
+      'with `capabilities`. A budget may set max_runs_per_day/max_run_seconds; skills may mount ' +
+      'installed skill sets. The user reviews the full spec on a confirmation ' +
       'card whose permission summary highlights exec / open-web in red; nothing is created without ' +
       'approval. Grants only register tools — card-free whitelist RULES remain an owner-only ' +
       'Settings action you cannot perform. A bad cron / regex / schedule rule is rejected by a ' +
@@ -364,10 +421,13 @@ export function createCustomAgentTools(
   const custom_agent_update = makeWrite({
     name: 'custom_agent_update',
     description:
-      'Propose changes to an EXISTING custom agent (partial — only the fields you pass change). ' +
+      'After fetching the current spec, clarifying the requested difference, and showing a complete ' +
+      'before/after summary, propose changes to an EXISTING custom agent (partial — only the fields ' +
+      'you pass change). ' +
       'agent_id identifies it (from custom_agent_list). You may change title, prompt, model, ' +
-      'enabled, trigger, allowed_tools, budget, or its permissions (grant_exec / grant_web / ' +
-      'skills) — same shapes as custom_agent_create. Pass trigger:null to disable the agent ' +
+      'enabled, trigger, budget, skills, or a non-empty patch of the six capability tiers used by ' +
+      'custom_agent_create. Keep atomic allowed_tools/grant fields for explicitly requested ' +
+      'Advanced edits only, and never mix them with capabilities. Pass trigger:null to disable the agent ' +
       '(clear its trigger). A permission change is shown to the user as a before/after diff read ' +
       'from the server (escalations highlighted red); card-free whitelist RULES remain owner-only. ' +
       'The user reviews and approves the change; a bad cron / regex / schedule rule is rejected ' +
@@ -404,6 +464,20 @@ export function createCustomAgentTools(
           )
         }
         currentToolPolicy = current.tool_policy ?? null
+        if (input.capabilities !== undefined && currentToolPolicy?.allowed_tools === undefined) {
+          try {
+            const options = await domain.getAgentRunToolOptions(signal)
+            currentToolPolicy = {
+              ...(currentToolPolicy ?? { v: 1 }),
+              allowed_tools: options.defaults
+            }
+          } catch {
+            invalidArg(
+              `could not resolve agent ${input.agent_id}'s default tools before applying the ` +
+                'capability patch — nothing was changed; retry'
+            )
+          }
+        }
       }
       const patch = toConfigPatch(input, currentToolPolicy)
       if (Object.keys(patch).length === 0) invalidArg('at least one field to change is required')

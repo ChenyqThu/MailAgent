@@ -125,7 +125,16 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
     _projects_trigger = agent_type in ("custom", "project_progress")
     trigger = _parse_obj(agent.get("trigger_json")) if _projects_trigger else None
     tool_policy = _parse_obj(agent.get("tool_policy_json")) if _is_custom else None
-    budget = _parse_obj(agent.get("budget_json")) if _is_custom else None
+    raw_budget = _parse_obj(agent.get("budget_json")) if _is_custom else None
+    # 07-28 W1: max_steps 已退出用户契约。旧行可继续带该键，但 wire 永不再投影；保存路径同样
+    # 只接受/持久化频率与 wall-clock 两门，做到无需 DB 迁移即可收敛公开形状。
+    budget = None
+    if raw_budget is not None:
+        budget = {"v": 1}
+        for key in ("max_runs_per_day", "max_run_seconds"):
+            if key in raw_budget:
+                budget[key] = raw_budget[key]
+    avatar = _parse_obj(agent.get("avatar_json"))
     return {
         "id": agent.get("id"),
         "type": agent_type,
@@ -152,6 +161,7 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         "trigger": trigger,  # v30: custom agent 触发判别式（null=非事件型）
         "tool_policy": tool_policy,  # v30: custom agent 工具收窄（null=不额外收窄）
         "budget": budget,  # v30: custom agent 预算（null=全默认）
+        "avatar": avatar,  # v42: null=按 agent id 确定性派生
         "updated_at": agent.get("updated_at"),
     }
 
@@ -250,6 +260,28 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
             db_patch["context_source"] = cs
         else:
             raise ValueError("context_source must be 'standing_docs'|'notion_context'|null")
+    if "avatar" in raw:
+        avatar = raw["avatar"]
+        if avatar is None:
+            db_patch["avatar_json"] = None
+        elif isinstance(avatar, dict):
+            shape = avatar.get("shape")
+            palette = avatar.get("palette")
+            variant_id = avatar.get("variant_id")
+            if shape not in ("bloom", "silk", "flare", "nova", "void", "jade"):
+                raise ValueError("avatar.shape must be a supported shape")
+            if not isinstance(palette, str) or not palette.strip() or len(palette) > 80:
+                raise ValueError("avatar.palette must be a non-empty string (max 80 chars)")
+            if variant_id is not None and (
+                not isinstance(variant_id, str) or len(variant_id) > 160
+            ):
+                raise ValueError("avatar.variant_id must be a string (max 160 chars)")
+            normalized = {"shape": shape, "palette": palette.strip()}
+            if variant_id:
+                normalized["variant_id"] = variant_id
+            db_patch["avatar_json"] = json.dumps(normalized, ensure_ascii=False)
+        else:
+            raise ValueError("avatar must be object or null")
     # v30: custom agent 三列（trigger/tool_policy/budget）。dict → JSON 串；None → SQL NULL
     # （清空该配置）；非 dict → ValueError（结构闸）。深校验（trigger 判别式 / cron 合法性 /
     # ReDoS 长度）由 set_config(REST)/CLI config-set 的 validate_agent_config_patch → parse_trigger
@@ -257,7 +289,6 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
     for _friendly, _col in (
         ("trigger", "trigger_json"),
         ("tool_policy", "tool_policy_json"),
-        ("budget", "budget_json"),
     ):
         if _friendly in raw:
             _v = raw[_friendly]
@@ -267,4 +298,16 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
                 db_patch[_col] = json.dumps(_v, ensure_ascii=False)
             else:
                 raise ValueError(f"{_friendly} must be object or null")
+    if "budget" in raw:
+        value = raw["budget"]
+        if value is None:
+            db_patch["budget_json"] = None
+        elif isinstance(value, dict):
+            clean = {"v": 1}
+            for key in ("max_runs_per_day", "max_run_seconds"):
+                if key in value:
+                    clean[key] = value[key]
+            db_patch["budget_json"] = json.dumps(clean, ensure_ascii=False)
+        else:
+            raise ValueError("budget must be object or null")
     return db_patch

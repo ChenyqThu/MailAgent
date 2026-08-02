@@ -49,13 +49,26 @@ def test_different_fire_key_new_job(repo):
     assert repo.count_agent_runs_since("a1", 0) == 2
 
 
-def test_runs_per_day_gate_blocks_over_budget(repo):
+def test_runs_per_day_gate_records_visible_skipped_row(repo):
     budget = Budget(max_runs_per_day=2)
     assert enqueue_agent_run(repo, agent_id="a1", trigger_kind="cron", fire_key="k1", budget=budget) is not None
     assert enqueue_agent_run(repo, agent_id="a1", trigger_kind="cron", fire_key="k2", budget=budget) is not None
-    # 第三次超 max_runs_per_day=2 → 被拦（None），不入队。
-    assert enqueue_agent_run(repo, agent_id="a1", trigger_kind="cron", fire_key="k3", budget=budget) is None
+    # 第三次超 max_runs_per_day=2 → 写审计行但不进入 worker 队列。
+    third = enqueue_agent_run(
+        repo, agent_id="a1", trigger_kind="cron", fire_key="k3", budget=budget
+    )
+    skipped = repo.get(third[0])
+    assert skipped.status == "succeeded"
+    assert skipped.result == {
+        "outcome": "skipped",
+        "reason": "daily_run_limit",
+        "runsToday": 2,
+        "maxRunsPerDay": 2,
+        "steps": 0,
+    }
+    # skipped 审计行不占额度；账本总行数为 3。
     assert repo.count_agent_runs_since("a1", 0) == 2
+    assert len(repo.list_agent_runs(agent_id="a1")) == 3
 
 
 def test_budget_gate_per_agent_isolated(repo):

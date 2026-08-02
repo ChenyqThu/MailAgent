@@ -524,14 +524,8 @@
     "ai": {
       "understand": "AI understand “{query}”",
       "understandHint": "Let AI search and gather the relevant emails",
-      "searchingPhrases": [
-        "Understanding your question…",
-        "Searching relevant emails…"
-      ],
-      "summarizingPhrases": [
-        "Filtering the most relevant…",
-        "Organizing results…"
-      ],
+      "searchingPhrases": ["Understanding your question…", "Searching relevant emails…"],
+      "summarizingPhrases": ["Filtering the most relevant…", "Organizing results…"],
       "summary": "AI: {text}",
       "emptyTitle": "AI found no related emails",
       "emptyHint": "Try rephrasing, or use search syntax directly",
@@ -698,12 +692,17 @@
     "delete": "Delete",
     "archive": "Archive",
     "restore": "Restore",
+    "pin": "Pin",
+    "unpin": "Unpin",
+    "star": "Star",
+    "unstar": "Unstar",
     "actionFail": "Action failed: {error}",
     "more": "More",
     "collapseSidebar": "Collapse / expand history",
     "historyTitle": "Chats",
     "emptyHistory": "No conversations yet",
     "group": {
+      "pinned": "Pinned",
       "today": "Today",
       "yesterday": "Yesterday",
       "earlier": "Earlier",
@@ -879,6 +878,7 @@
       "enabled": "Enabled",
       "trigger": "Trigger",
       "triggerCleared": "Clear trigger (disable)",
+      "capabilities": "Capability tiers",
       "allowedTools": "Allowed tools",
       "permissions": "Requested permissions",
       "grantExec": "Local execution",
@@ -891,7 +891,7 @@
         "open": "Open (any URL)"
       },
       "skills": "Mounted skills",
-      "skillsDefault": "Default (email, search)",
+      "skillsDefault": "Default (email, search, report)",
       "skillsNone": "None",
       "newSkills": "Newly mounted: {skills}",
       "execWarn": "Local execution on: this agent's background runs can register local exec tools (each execution still needs a whitelist rule or your approval).",
@@ -3280,7 +3280,8 @@
       "all": "All",
       "daily": "Daily",
       "weekly": "Weekly",
-      "monthly": "Monthly"
+      "monthly": "Monthly",
+      "custom": "Custom"
     },
     "status": {
       "ready": "Ready",
@@ -3412,6 +3413,9 @@
       "openInbox": "Open in inbox"
     },
     "chats": {
+      "title": "Agent run conversations",
+      "filterAgent": "Filter by agent",
+      "allAgents": "All agents",
       "continue": "Continue in inbox",
       "selectHint": "Select a conversation on the left",
       "emptyTranscript": "No messages in this conversation yet"
@@ -3549,6 +3553,13 @@
       "enableHint": "When enabled, runs automatically on the trigger below (won't run when trigger is None).",
       "titleLabel": "Name",
       "titlePlaceholder": "e.g. DMS approval helper",
+      "avatar": {
+        "label": "Avatar identity",
+        "hint": "Every agent gets a stable id-derived default; choosing one saves an explicit identity",
+        "shuffle": "Shuffle",
+        "shape": "Shape",
+        "palette": "Palette"
+      },
       "promptLabel": "Task prompt",
       "promptHint": "Instructions injected on each trigger (what the agent should do)",
       "promptPlaceholder": "Describe the task the agent should complete on each trigger",
@@ -3556,7 +3567,6 @@
       "errTitleRequired": "Name is required.",
       "errCron5": "Cron must be a standard 5-field expression (min hour dom mon dow).",
       "errEmailPredicate": "Email trigger needs at least one of: sender / subject / folders.",
-      "errMaxSteps": "Max steps must be between 1 and {max}.",
       "errMaxRunSeconds": "Max run seconds must be between 1 and {max}.",
       "errMaxRunsPerDay": "Max runs per day cannot be negative.",
       "trigger": {
@@ -3601,10 +3611,70 @@
         "webDisabled": "Web access is not enabled (controlled by the MAILAGENT_OPENNESS_WEB_TOOLS environment variable); this grant will have no effect until it is turned on.",
         "execDisabled": "Command execution is not enabled (controlled by the MAILAGENT_OPENNESS_EXEC_TOOLS environment variable); this grant will have no effect until it is turned on."
       },
+      "capabilityCards": {
+        "label": "Capabilities & permissions",
+        "hint": "Choose the work scope first; expand Advanced only for precise tool control",
+        "advanced": "Advanced: individual tools",
+        "advancedHint": "Keeps the full atomic-tool controls",
+        "writeRuleHint": "Writes require approval by default. After saving, you can add card-free rules for this agent below.",
+        "email": {
+          "title": "Email",
+          "description": "Read mail, organize the inbox, or create and update drafts.",
+          "tier": {
+            "read": "Read",
+            "organize": "Organize",
+            "draft": "Draft"
+          }
+        },
+        "calendar": {
+          "title": "Calendar",
+          "description": "Read events, or propose rescheduling, RSVP, and deletion.",
+          "tier": {
+            "off": "Off",
+            "read": "Read",
+            "write": "Write"
+          },
+          "hitl": "Calendar writes always require human approval and cannot use card-free rules."
+        },
+        "knowledge": {
+          "title": "Knowledge & sessions",
+          "description": "Access past sessions, profile docs, Skills, and KOS knowledge. Off by default.",
+          "tier": {
+            "off": "Off",
+            "on": "On"
+          }
+        },
+        "reports": {
+          "title": "Reports",
+          "description": "Read existing reports or save this run's output as a structured report.",
+          "tier": {
+            "read": "Read",
+            "produce": "Produce"
+          },
+          "produceHint": "Produce writes a local report artifact; it does not send data externally."
+        },
+        "web": {
+          "title": "Web",
+          "description": "Search and fetch public pages; web content always remains untrusted data.",
+          "tier": {
+            "off": "Off",
+            "gated": "Domain-gated",
+            "open": "Open"
+          }
+        },
+        "files": {
+          "title": "Files & commands",
+          "description": "Read/write files and run authorized local commands or Skill entrypoints.",
+          "tier": {
+            "off": "Off",
+            "on": "On"
+          },
+          "ruleHint": "The grant only admits exec tools; card-free execution still needs a whitelist rule and first-run confirmation."
+        }
+      },
       "budget": {
         "label": "Run budget",
-        "hint": "Caps the size and frequency of each run",
-        "maxSteps": "Max steps (≤ {max})",
+        "hint": "Caps run frequency and wall-clock duration",
         "maxRunsPerDay": "Max runs per day",
         "maxRunSeconds": "Max run seconds (≤ {max})"
       },
@@ -3623,6 +3693,9 @@
         "loadMoreLoading": "Loading…",
         "pausedPendingHint": "Run paused, waiting for approval. Open the execution record to approve, or approve it in the Dynamic Island; it will expire if left unhandled.",
         "pausedExpiredHint": "Approval expired; this run was not executed.",
+        "skippedHint": "The daily run limit was reached, so this trigger was not executed.",
+        "steps": "{n} steps",
+        "tokens": "{n} tokens",
         "autoWhitelisted": "Auto-allowed ×{n}",
         "autoWhitelistedRule": "Card-free: whitelist rule ×{n}",
         "autoWhitelistedWebOpen": "Card-free: open web access ×{n}",
@@ -3657,6 +3730,7 @@
           "queued": "Queued",
           "running": "Running",
           "completed": "Completed",
+          "skipped": "Skipped",
           "pausedPending": "Awaiting approval",
           "pausedExpired": "Approval expired (not run)",
           "pausedApproved": "Approved (executed)",
@@ -3741,7 +3815,7 @@
         "mounts": {
           "label": "Mounted skills",
           "hint": "The skills visible to this agent's unattended runs (a narrowing surface). Tools of unmounted skills are unavailable to this agent; mounting cannot revive a globally disabled skill.",
-          "defaultTag": "default mount set (email / search)",
+          "defaultTag": "default mount set (email / search / report)",
           "empty": "Explicit zero mount: this agent has no skill tools."
         }
       }

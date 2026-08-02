@@ -11,7 +11,10 @@ import json
 import sqlite3
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
+
+from src.reports.models import REPORT_CADENCES
 
 # update_agent 允许 patch 的字段（白名单，防 SQL 注入 + 防误改主键）。
 _AGENT_PATCH_FIELDS = {
@@ -33,7 +36,8 @@ _AGENT_PATCH_FIELDS = {
     "context_source",  # v38: preprocess 参考上下文源（'standing_docs'|'notion_context'；NULL=继承派生）
     "trigger_json",  # v30: custom agent 触发判别式（cron|email_filter；NULL=非事件型）
     "tool_policy_json",  # v30: custom agent 工具收窄（allowed_tools 交集；NULL=不额外收窄）
-    "budget_json",  # v30: custom agent 预算（max_steps/runs_per_day/run_seconds；NULL=全默认）
+    "budget_json",  # v30: custom agent 预算（runs/day + runtime；legacy max_steps 宽容忽略）
+    "avatar_json",  # v42: agent visual identity（shape/palette/variant_id；NULL=按 id 派生）
 }
 
 # schedule_json 解析不出 cadence（空 / NULL / 非法 / 缺键 —— CLI 新建 report agent 的默认
@@ -48,7 +52,7 @@ DEFAULT_CADENCE = "daily"
 # 'daily_email_digest' < 'weekly_email_digest' 的**字母序巧合**成立：换个 agent id
 # （或用户新建自定义报告 agent）就静默失效 —— 周报稳定少综合一份且不会重算。
 # 前端 AgentsTab 用的是同一份 {daily:0, weekly:1, monthly:2} 口径。
-_CADENCE_ORDER = {"daily": 0, "weekly": 1, "monthly": 2}
+_CADENCE_ORDER = {cadence: rank for rank, cadence in enumerate(REPORT_CADENCES)}
 # 非报告型 agent（custom / search / preprocess / project_progress）不参与报告调度
 # （worker 里 type != 'report' 直接 continue）→ 统一排在报告 agent 之后，彼此仍按 id 序。
 _NON_REPORT_RANK = len(_CADENCE_ORDER)
@@ -245,6 +249,83 @@ class ReportStore:
                  output_tokens, cost_usd, error, time.time(), report_id),
             )
             conn.commit()
+
+    def write_custom_report(
+        self,
+        *,
+        agent_id: str,
+        title: str,
+        blocks: List[Dict[str, Any]],
+        mode: str,
+        model: str = "custom-agent",
+    ) -> Dict[str, Any]:
+        """Atomically persist a model-authored ReportDoc.
+
+        ``new`` allocates a monotonically increasing per-agent/day sequence id, so one run can emit
+        several reports. ``replace`` writes the agent's stable destination row.
+        """
+        if mode not in ("new", "replace"):
+            raise ValueError("mode must be new|replace")
+        now = time.time()
+        local_now = datetime.fromtimestamp(now).astimezone()
+        report_date = local_now.date().isoformat()
+        generated_at = datetime.fromtimestamp(now, tz=timezone.utc).isoformat()
+        from src.reports.models import ReportDoc
+
+        doc = ReportDoc(
+            agent_id=agent_id,
+            cadence="custom",
+            report_date=report_date,
+            window_start=generated_at,
+            window_end=generated_at,
+            generated_at=generated_at,
+            model=model,
+            blocks=blocks,
+        )
+        with self._connection() as conn:
+            conn.execute("BEGIN IMMEDIATE")
+            if mode == "replace":
+                report_id = f"{agent_id}:custom:destination"
+            else:
+                prefix = f"{agent_id}:custom:{report_date}:"
+                rows = conn.execute(
+                    "SELECT id FROM report WHERE agent_id=? AND cadence='custom' AND report_date=?",
+                    (agent_id, report_date),
+                ).fetchall()
+                seq = 0
+                for row in rows:
+                    report_id_value = str(row["id"])
+                    if not report_id_value.startswith(prefix):
+                        continue
+                    try:
+                        seq = max(seq, int(report_id_value.removeprefix(prefix)))
+                    except ValueError:
+                        continue
+                report_id = f"{prefix}{seq + 1:04d}"
+            conn.execute(
+                """
+                INSERT OR REPLACE INTO report
+                    (id, agent_id, cadence, report_date, window_start, window_end, status,
+                     blocks_json, counts_json, headline, model, input_tokens, output_tokens,
+                     cost_usd, error, created_at, generated_at)
+                VALUES (?, ?, 'custom', ?, ?, ?, 'ready', ?, ?, ?, ?, 0, 0, 0, NULL, ?, ?)
+                """,
+                (
+                    report_id,
+                    agent_id,
+                    report_date,
+                    generated_at,
+                    generated_at,
+                    doc.to_json(),
+                    json.dumps({"total": len(blocks)}, ensure_ascii=False),
+                    title,
+                    model,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        return self.get_report(report_id) or {}
 
     def reclaim_stale_generating(self, *, stale_sec: int = 900) -> int:
         """回收孤儿 generating 行 → failed（进程在生成中途被杀/崩溃的遗留）。

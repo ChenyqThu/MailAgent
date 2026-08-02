@@ -72,6 +72,82 @@ def report_client(report_db: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[
 # ---------------------------------------------------------------------------
 
 
+def test_write_custom_report_new_allocates_daily_sequence(
+    report_client: TestClient,
+) -> None:
+    body = {
+        "agentId": "custom-digest",
+        "title": "Approval digest",
+        "mode": "new",
+        "blocks": [{"type": "overview", "text": "Three approvals need attention."}],
+    }
+    first = report_client.post("/api/reports/custom", json=body)
+    second = report_client.post("/api/reports/custom", json=body)
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    first_data = first.json()["data"]
+    second_data = second.json()["data"]
+    assert first_data["id"].endswith(":0001")
+    assert second_data["id"].endswith(":0002")
+    assert first_data["cadence"] == "custom"
+    assert first_data["headline"] == "Approval digest"
+    assert first_data["doc"]["blocks"][0] == {
+        "type": "header",
+        "title": "Approval digest",
+    }
+    assert first_data["doc"]["blocks"][1]["type"] == "overview"
+
+
+def test_write_custom_report_replace_uses_stable_destination(
+    report_client: TestClient,
+) -> None:
+    first = report_client.post(
+        "/api/reports/custom",
+        json={
+            "agentId": "custom-digest",
+            "title": "First",
+            "mode": "replace",
+            "blocks": [{"type": "quote", "text": "v1"}],
+        },
+    )
+    second = report_client.post(
+        "/api/reports/custom",
+        json={
+            "agentId": "custom-digest",
+            "title": "Second",
+            "mode": "replace",
+            "blocks": [{"type": "quote", "text": "v2"}],
+        },
+    )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["data"]["id"] == "custom-digest:custom:destination"
+    assert second.json()["data"]["id"] == first.json()["data"]["id"]
+    assert second.json()["data"]["headline"] == "Second"
+    listed = report_client.get(
+        "/api/reports", params={"cadence": "custom", "agentId": "custom-digest"}
+    ).json()
+    assert listed["meta"]["total"] == 1
+
+
+def test_write_custom_report_rejects_remote_image(report_client: TestClient) -> None:
+    response = report_client.post(
+        "/api/reports/custom",
+        json={
+            "agentId": "custom-digest",
+            "title": "Unsafe image",
+            "mode": "new",
+            "blocks": [
+                {"type": "image", "src": "https://tracking.example/pixel.png", "alt": "pixel"}
+            ],
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def test_list_reports_shape(report_client: TestClient) -> None:
     """report:list parity：counts_json→counts 对象，不含 blocks_json/doc（重）。"""
     r = report_client.get("/api/reports")
@@ -496,13 +572,15 @@ def test_create_custom_agent_with_trigger_persists(report_client: TestClient, mo
         json={
             "id": "cust_cron", "type": "custom", "enabled": True,
             "trigger": {"v": 1, "kind": "cron", "cron": "0 9 * * 1-5", "timezone": "Asia/Shanghai"},
-            "budget": {"v": 1, "max_steps": 6},
+            # Legacy max_steps is accepted but intentionally ignored; time is the only hard limit.
+            "budget": {"v": 1, "max_steps": 6, "max_run_seconds": 900},
         },
     )
     assert r.status_code == 200
     data = r.json()["data"]
     assert data["trigger"]["kind"] == "cron" and data["trigger"]["cron"] == "0 9 * * 1-5"
-    assert data["budget"]["max_steps"] == 6
+    assert "max_steps" not in data["budget"]
+    assert data["budget"]["max_run_seconds"] == 900
 
 
 def test_create_custom_agent_bad_trigger_rejected(report_client: TestClient, monkeypatch) -> None:
@@ -703,6 +781,19 @@ def test_wire_resolve_agent_empty_schedule_defaults() -> None:
         "cadence": "daily",
         "hours": [9],
     }
+
+
+def test_wire_agent_avatar_round_trip_and_validation() -> None:
+    from src.reports import wire
+
+    avatar = {"shape": "nova", "palette": "aurora-pink", "variant_id": "agent:v2"}
+    patch = wire.config_patch_to_db({"avatar": avatar})
+    assert json.loads(patch["avatar_json"]) == avatar
+    assert wire.resolve_agent({"id": "x", "avatar_json": patch["avatar_json"]})["avatar"] == avatar
+    assert wire.config_patch_to_db({"avatar": None})["avatar_json"] is None
+
+    with pytest.raises(ValueError, match="avatar.shape"):
+        wire.config_patch_to_db({"avatar": {"shape": "triangle", "palette": "rose-milk"}})
 
 
 def test_malformed_body_returns_envelope(report_client: TestClient) -> None:

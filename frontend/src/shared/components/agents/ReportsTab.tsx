@@ -4,7 +4,8 @@ import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, Trash2, X } from 'lucide-react'
 
-import type { ReportCadence, ReportListItem } from '@shared/api/types'
+import type { AgentAvatarConfig, ReportCadence, ReportListItem } from '@shared/api/types'
+import { REPORT_CADENCES } from '@shared/api/reportBlocks'
 import { cn } from '@shared/lib/cn'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { ShimmerText } from '@shared/components/ShimmerText'
@@ -12,6 +13,7 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { BlockRenderer } from './BlockRenderer'
 import { EmailSourcePanel } from './EmailSourcePanel'
 import { CadencePill, ReportIcon, StatusBadge } from './primitives'
+import { AgentAvatar } from './AgentAvatar'
 import {
   FIXED_RENDER,
   fmtClock,
@@ -19,7 +21,14 @@ import {
   type RenderCtx,
   type ReportEmailItemForPanel
 } from './lib'
-import { useDeleteReport, useNarrow, useReport, useReportList, useRunNow } from './hooks'
+import {
+  useDeleteReport,
+  useNarrow,
+  useReport,
+  useReportConfig,
+  useReportList,
+  useRunNow
+} from './hooks'
 
 // 内联按钮缺 :active 伪类 → 用 pointer 事件落地 press scale（DESIGN §9.3 / make-interfaces #12）。
 // scale 0.97 ≥ 0.95 红线；调用方须在 style 里把 transform 列进 transition（含 transform，禁 transition:all）。
@@ -48,11 +57,15 @@ const WEEKDAY_KEYS = [
   'agents.reports.weekday.fri',
   'agents.reports.weekday.sat'
 ]
+const CADENCE_LABELS: Record<ReportCadence, string> = {
+  daily: '日报',
+  weekly: '周报',
+  monthly: '月报',
+  custom: '自定义'
+}
 const CADENCE_FILTERS: Array<[string, string]> = [
   ['all', '全部'],
-  ['daily', '日报'],
-  ['weekly', '周报'],
-  ['monthly', '月报']
+  ...REPORT_CADENCES.map((cadence) => [cadence, CADENCE_LABELS[cadence]] as [string, string])
 ]
 
 // ─── master 列表行 ───────────────────────────────────────────────────────────
@@ -60,12 +73,16 @@ function ReportListRow({
   item,
   selected,
   onClick,
-  onDelete
+  onDelete,
+  agentTitle,
+  agentAvatar
 }: {
   item: ReportListItem
   selected: boolean
   onClick: () => void
   onDelete: () => void
+  agentTitle?: string
+  agentAvatar?: AgentAvatarConfig | null
 }): React.ReactElement {
   const { t } = useTranslation()
   const [confirming, setConfirming] = useState(false)
@@ -113,6 +130,9 @@ function ReportListRow({
           />
         )}
         <div className="flex items-center" style={{ gap: 8, marginBottom: 6 }}>
+          {item.cadence === 'custom' && (
+            <AgentAvatar agentId={item.agent_id} config={agentAvatar} size={24} />
+          )}
           <span
             style={{
               fontSize: 13,
@@ -121,10 +141,14 @@ function ReportListRow({
               fontVariantNumeric: 'tabular-nums'
             }}
           >
-            {item.report_date.slice(5).replace('-', '/')}
+            {item.cadence === 'custom'
+              ? agentTitle || item.agent_id
+              : item.report_date.slice(5).replace('-', '/')}
           </span>
-          <span style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))' }}>{weekday}</span>
-          <CadencePill cadence={item.cadence} />
+          {item.cadence !== 'custom' && (
+            <span style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))' }}>{weekday}</span>
+          )}
+          {item.cadence !== 'custom' && <CadencePill cadence={item.cadence} />}
           <span style={{ flex: 1 }} />
           <StatusBadge status={item.status} />
         </div>
@@ -142,7 +166,19 @@ function ReportListRow({
         >
           {item.headline}
         </p>
-        {item.status === 'ready' && item.counts && (
+        {item.cadence === 'custom' && (
+          <div
+            style={{
+              marginTop: 7,
+              fontFamily: 'ui-monospace, monospace',
+              fontSize: 11,
+              color: 'rgb(var(--ink-fg-3))'
+            }}
+          >
+            {fmtClock(item.generated_at ?? item.created_at ?? undefined)}
+          </div>
+        )}
+        {item.cadence !== 'custom' && item.status === 'ready' && item.counts && (
           <div
             className="flex items-center"
             style={{
@@ -238,7 +274,9 @@ function ReportList({
   loading,
   hasMore,
   isFetchingMore,
-  onFetchMore
+  onFetchMore,
+  agentNames,
+  agentAvatars
 }: {
   items: ReportListItem[]
   /** 同 cadence filter 下的总数（task 07-21，后端 meta.total）；未知先显 items.length。 */
@@ -253,6 +291,8 @@ function ReportList({
   hasMore: boolean
   isFetchingMore: boolean
   onFetchMore: () => void
+  agentNames: Record<string, string>
+  agentAvatars: Record<string, AgentAvatarConfig | null | undefined>
 }): React.ReactElement {
   const { t } = useTranslation()
   const onScroll = (e: React.UIEvent<HTMLDivElement>): void => {
@@ -262,6 +302,17 @@ function ReportList({
       onFetchMore()
     }
   }
+  const customGroups = useMemo(() => {
+    const groups = new Map<string, ReportListItem[]>()
+    for (const item of items) {
+      if (item.cadence !== 'custom') continue
+      const group = groups.get(item.agent_id) ?? []
+      group.push(item)
+      groups.set(item.agent_id, group)
+    }
+    return [...groups.entries()]
+  }, [items])
+  const scheduled = items.filter((item) => item.cadence !== 'custom')
   return (
     <div
       style={{
@@ -321,7 +372,7 @@ function ReportList({
           </div>
         ) : (
           <div style={{ display: 'flex', flexDirection: 'column', gap: 2 }}>
-            {items.map((it) => (
+            {scheduled.map((it) => (
               <ReportListRow
                 key={it.id}
                 item={it}
@@ -329,6 +380,35 @@ function ReportList({
                 onClick={() => onSelect(it.id)}
                 onDelete={() => onDelete(it.id)}
               />
+            ))}
+            {customGroups.map(([agentId, group]) => (
+              <section key={agentId} style={{ marginTop: scheduled.length > 0 ? 12 : 2 }}>
+                <div
+                  className="flex items-center"
+                  style={{
+                    gap: 8,
+                    padding: '5px 10px 6px',
+                    fontSize: 12,
+                    color: 'rgb(var(--ink-fg-2))'
+                  }}
+                >
+                  <AgentAvatar agentId={agentId} config={agentAvatars[agentId]} size={20} />
+                  <span style={{ fontWeight: 600 }}>{agentNames[agentId] || agentId}</span>
+                  <span style={{ flex: 1 }} />
+                  <span style={{ fontFamily: 'ui-monospace, monospace' }}>{group.length}</span>
+                </div>
+                {group.map((it) => (
+                  <ReportListRow
+                    key={it.id}
+                    item={it}
+                    agentTitle={agentNames[agentId]}
+                    agentAvatar={agentAvatars[agentId]}
+                    selected={it.id === selectedId}
+                    onClick={() => onSelect(it.id)}
+                    onDelete={() => onDelete(it.id)}
+                  />
+                ))}
+              </section>
             ))}
             {isFetchingMore && (
               <div
@@ -666,6 +746,15 @@ export function ReportsTab(): React.ReactElement {
   const [filter, setFilter] = useState<string>('all')
   const cadence = filter === 'all' ? undefined : (filter as ReportCadence)
   const { items, total, isLoading, hasMore, isFetchingMore, fetchMore } = useReportList(cadence)
+  const { agents } = useReportConfig()
+  const agentNames = useMemo(
+    () => Object.fromEntries(agents.map((agent) => [agent.id, agent.title || agent.id])),
+    [agents]
+  )
+  const agentAvatars = useMemo(
+    () => Object.fromEntries(agents.map((agent) => [agent.id, agent.avatar])),
+    [agents]
+  )
   // 用户显式点选；派生有效选中（pick 仍在列表→用它，否则回落第一份），免 set-state-in-effect。
   const [picked, setPicked] = useState<string | null>(null)
   const [mobileDetail, setMobileDetail] = useState(false)
@@ -758,6 +847,8 @@ export function ReportsTab(): React.ReactElement {
             hasMore={hasMore}
             isFetchingMore={isFetchingMore}
             onFetchMore={fetchMore}
+            agentNames={agentNames}
+            agentAvatars={agentAvatars}
             fluid
           />
         )}
@@ -780,6 +871,8 @@ export function ReportsTab(): React.ReactElement {
         hasMore={hasMore}
         isFetchingMore={isFetchingMore}
         onFetchMore={fetchMore}
+        agentNames={agentNames}
+        agentAvatars={agentAvatars}
       />
       {detail}
       {panel}

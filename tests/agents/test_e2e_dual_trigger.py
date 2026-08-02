@@ -362,10 +362,20 @@ async def test_email_chain_full(env, client, monkeypatch):
     assert len(rows) == 1
     job_id = int(rows[0]["job_id"])
 
-    # ② runs/day 门：budget=1, 第二封（不同 internal_id）被拦, 不入队
+    # ② runs/day 门：budget=1，第二封被拦，但写一条可见的 skipped 审计记录。
     _insert_email(env.db, 778, subject="DMS 二次审批", sender="dms@corp.test", body="again")
     await _dispatch_email(env, w, 778, subject="DMS 二次审批")
-    assert len(_agent_job_rows(env.db)) == 1, "runs/day 门未生效"
+    gated_rows = _agent_job_rows(env.db)
+    assert len(gated_rows) == 2, "runs/day 门未留下 skipped 审计记录"
+    skipped = dict(gated_rows[1])
+    assert derive_agent_run_state(skipped) == "skipped"
+    assert json.loads(skipped["result_json"]) == {
+        "outcome": "skipped",
+        "reason": "daily_run_limit",
+        "runsToday": 1,
+        "maxRunsPerDay": 1,
+        "steps": 0,
+    }
 
     # ③ 执行：claim → poke → spec pull（envelope 在场且围栏完整）→ completed
     gw = _ScriptedGateway(client, script=lambda spec: {

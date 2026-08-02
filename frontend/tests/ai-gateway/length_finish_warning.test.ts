@@ -196,10 +196,10 @@ describe('finishReason=length — fail-loud warning + maxOutputTokens wiring', (
     const persisted: PersistTurnInput[] = []
     const h = await start({
       ...CHAT_CFG,
-      // maxSteps:1 — the AI SDK loop would otherwise take a second step to feed the model the
+      // Test-only step cap: the AI SDK loop would otherwise take a second step to feed the model the
       // synthesized tool-error result for the invalid call; capping steps at 1 keeps this test to
       // a single deterministic doStream call regardless of that continuation semantics.
-      maxSteps: 1,
+      internalMaxSteps: 1,
       createModel: () => mockLengthTruncatedToolCallModel('test_write', '{"content": "trunca'),
       buildTools: (): ToolSet => ({
         test_write: tool({

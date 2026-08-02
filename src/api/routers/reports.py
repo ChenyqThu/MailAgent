@@ -47,6 +47,44 @@ def _custom_agents_enabled() -> bool:
 # ============================================================
 # report 产物（读 + 删）
 # ============================================================
+@router.post("/reports/custom", dependencies=[Depends(verify_cf_access)])
+async def write_custom_report(request: Request, body: Optional[dict[str, Any]] = None):
+    """Persist a local ReportDoc artifact created by the gateway ``report_write`` tool."""
+    from src.reports.models import header, validate_report_blocks
+
+    raw = body or {}
+    agent_id = str(raw.get("agentId") or raw.get("agent_id") or "").strip()
+    title = str(raw.get("title") or "").strip()
+    mode = str(raw.get("mode") or "new")
+    model = str(raw.get("model") or "custom-agent").strip() or "custom-agent"
+    if not agent_id or len(agent_id) > 128:
+        raise APIError("E_INVALID_ARG", "agentId is required (max 128 chars)", source="sqlite")
+    if not title or len(title) > 200:
+        raise APIError("E_INVALID_ARG", "title is required (max 200 chars)", source="sqlite")
+    if mode not in ("new", "replace"):
+        raise APIError("E_INVALID_ARG", "mode must be new|replace", source="sqlite")
+    try:
+        blocks = validate_report_blocks(raw.get("blocks"))
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), source="sqlite") from exc
+    if not blocks or blocks[0].get("type") != "header":
+        blocks.insert(0, header(title))
+    # Preserve readable fallbacks for older frontends whose UnknownBlock only knows title/text.
+    for block in blocks:
+        if block.get("type") in ("progress", "metric_delta") and not block.get("title"):
+            block["title"] = block.get("label") or title
+        if block.get("type") == "image" and not block.get("title"):
+            block["title"] = block.get("caption") or block.get("alt") or title
+    row = get_report_store().write_custom_report(
+        agent_id=agent_id,
+        title=title,
+        blocks=blocks,
+        mode=mode,
+        model=model,
+    )
+    return success_envelope(wire.report_to_detail(row), request=request, source="sqlite")
+
+
 @router.get("/reports", dependencies=[Depends(verify_cf_access)])
 async def list_reports(
     request: Request,
@@ -229,7 +267,8 @@ async def run_now(request: Request, agent_id: str, body: Optional[dict[str, Any]
       report:runNow → ReportRunResult。body 可含 {cadence}。
     - ``custom`` → S4 enqueue（``run_queue.enqueue_agent_run`` → AgentRunWorker 认领 → gateway
       headless drain）。幂等键 ``agent_run:{id}:manual:{uuid}``，受 runs/day 门 + budget；返回
-      {jobId}。**绝不**沿路径 B（tests/agents 有 tripwire 守）。flag off → 拒收（S4 纪律）。
+      {jobId, skipped}。每日上限命中也写可见 skipped run。**绝不**沿路径 B（tests/agents 有
+      tripwire 守）。flag off → 拒收（S4 纪律）。
     - 其它（search/preprocess）→ 拒（manual run 仅 report/custom）。
     """
     opts = body or {}
@@ -255,22 +294,24 @@ async def run_now(request: Request, agent_id: str, body: Optional[dict[str, Any]
         # untrusted_trigger；无 email envelope）。幂等键随机 uuid → 每次手动都新起一 run（不与
         # cron/email 的 fire_key 撞）；仍过 runs/day 门（enqueue_agent_run 内）。
         budget = parse_budget(agent.get("budget_json"))
+        repo = get_job_repo()
         outcome = enqueue_agent_run(
-            get_job_repo(),
+            repo,
             agent_id=agent_id,
             trigger_kind="manual",
             fire_key=f"manual:{uuid.uuid4().hex}",
             budget=budget,
         )
-        if outcome is None:
-            raise APIError(
-                "E_BUDGET",
-                f"agent {agent_id!r} hit max_runs_per_day (budget), run not enqueued",
-                source="sqlite",
-            )
         job_id, was_created = outcome
+        job = repo.get(job_id)
+        skipped = bool(job and isinstance(job.result, dict) and job.result.get("outcome") == "skipped")
         return success_envelope(
-            {"jobId": job_id, "agentId": agent_id, "wasCreated": was_created},
+            {
+                "jobId": job_id,
+                "agentId": agent_id,
+                "wasCreated": was_created,
+                "skipped": skipped,
+            },
             request=request,
             source="sqlite",
         )

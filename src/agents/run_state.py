@@ -24,11 +24,12 @@ from typing import Any, Callable, Mapping, Optional
 # fail-closed 方向是「写没发生」→ 读侧视为已过期作废。两端改 TTL 必须同步。
 APPROVAL_PENDING_TTL_SEC = 30 * 60
 
-# derive_agent_run_state 的完整值域（有限枚举，S5 UI 按此穷举渲染）。
+# derive_agent_run_state 的完整值域（有限枚举，UI 按此穷举渲染）。
 AGENT_RUN_STATES = frozenset({
     "queued",           # 已入队未认领
     "running",          # AgentRunWorker 已认领, drain 进行中
     "completed",        # succeeded + outcome!='paused_handoff' —— 唯一的「成功完成」
+    "skipped",          # succeeded + outcome='skipped' —— 预算门拒绝，未执行 LLM
     "paused_pending",   # 等审批中（岛卡可批, age ≤ TTL）
     "paused_expired",   # 审批已过期作废（age > TTL, 或无时间戳可证明仍可批）
     "paused_approved",  # 岛上已批准（resume 终局回写）
@@ -82,6 +83,8 @@ def derive_agent_run_state(
         return "failed"
 
     result = _result_dict(row)
+    if result.get("outcome") == "skipped":
+        return "skipped"
     if result.get("outcome") != "paused_handoff":
         return "completed"
 

@@ -176,6 +176,31 @@ describe('buildGatewaySystemPrompt', () => {
     expect(gateway.startsWith(legacy)).toBe(true)
     expect(gateway).toBe(`${legacy}\n\n${buildCurrentDateBlock(null)}`)
   })
+
+  test('injects only the backend-selected trusted skill workflow', () => {
+    const out = buildGatewaySystemPrompt({
+      promptConfig: {
+        standingContext: 'X',
+        trustedSkillFragments: 'CUSTOM_AGENT_CODE_OWNED_WORKFLOW'
+      },
+      contextSnapshot: null
+    })
+    expect(out).toContain('# Active skills (capabilities currently enabled)')
+    expect(out).toContain('CUSTOM_AGENT_CODE_OWNED_WORKFLOW')
+  })
+
+  test('empty trusted skill guidance preserves the no-fragment prompt path', () => {
+    const without = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X' },
+      contextSnapshot: null
+    })
+    const disabled = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X', trustedSkillFragments: '' },
+      contextSnapshot: null
+    })
+    expect(disabled).toBe(without)
+    expect(disabled).not.toContain('# Active skills (capabilities currently enabled)')
+  })
 })
 
 describe('buildCurrentDateBlock — R1 current-date injection', () => {

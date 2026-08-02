@@ -9,7 +9,7 @@ import { describe, expect, test } from 'vitest'
 
 import type { Tool } from 'ai'
 
-import { buildGatewayTools, GATEWAY_READ_TOOL_NAMES } from '../../../src/ai-gateway/tools'
+import { buildGatewayTools, GATEWAY_DEFAULT_TOOL_NAMES } from '../../../src/ai-gateway/tools'
 import {
   createSelfMountTools,
   GATEWAY_SELF_MOUNT_TOOL_NAMES
@@ -39,7 +39,7 @@ describe('self-mount tools — flag gating (buildGatewayTools)', () => {
       contextMode: 'manual_chat'
     })
     for (const n of GATEWAY_SELF_MOUNT_TOOL_NAMES) expect(Object.keys(tools)).not.toContain(n)
-    expect(Object.keys(tools).sort()).toEqual([...GATEWAY_READ_TOOL_NAMES].sort())
+    expect(Object.keys(tools).sort()).toEqual([...GATEWAY_DEFAULT_TOOL_NAMES].sort())
   })
 
   test('skillGatingEnabled on but NO guard → no self-mount tools (writes need the guard)', () => {

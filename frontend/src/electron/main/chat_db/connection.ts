@@ -130,7 +130,10 @@ import { resolveDataRoot } from '../db'
 // paused-turn eager persist). Plain additive ALTER, hasColumn idempotency guard (same discipline as
 // v5..v19). ai_chat.db has its own version ladder; this bump does NOT touch
 // backend_lifecycle.EXPECTED_DB_VERSION. 🔴 bump 同步刷 src/chat/db.py 头注释。
-const CHAT_DB_VERSION = 20
+// v21 (custom-agent epic W3, task 07-28) — ai_chat_sessions.pinned_at + starred: pinned_at is the
+// nullable Unix-ms ordering key for the dedicated pinned group; starred is an independent icon state.
+// Both mutations leave updated_at untouched so organizing history never fakes conversation recency.
+const CHAT_DB_VERSION = 21
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1035,6 +1038,26 @@ function migrate(db: Database.Database): void {
       }
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '20')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v20 → v21 — pin ordering timestamp + independent star marker. Plain additive, idempotent ALTERs.
+  if (current < 21) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'pinned_at')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN pinned_at INTEGER')
+      }
+      if (!hasColumn(db, 'ai_chat_sessions', 'starred')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN starred INTEGER NOT NULL DEFAULT 0')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '21')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {
