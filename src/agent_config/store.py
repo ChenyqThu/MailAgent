@@ -136,6 +136,22 @@ class PolicyRuleRow:
 
 
 @dataclass(frozen=True)
+class ExternalCredentialMeta:
+    """``external_credential`` 的**非敏感**行投影 —— 只含明文列，**永不含 payload**。
+
+    peek / list 的返回类型：设置页据此展示「这个连接存了什么、什么时候过期、什么时候更新的」，
+    整条路径不触碰 Fernet（master key 不可用时依然可读）。
+    """
+
+    namespace: str
+    credential_key: str
+    expires_at: Optional[int]  # epoch 秒；None = 不过期 / 未知
+    metadata: dict[str, Any]  # 明文非敏感元数据（坏 JSON → {}）
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True)
 class ProfileDoc:
     doc_name: str
     content: str
@@ -212,6 +228,24 @@ CREATE TABLE IF NOT EXISTS skill_secrets (
     value_ciphertext BLOB NOT NULL,
     updated_at       TEXT NOT NULL,
     PRIMARY KEY (skill_name, secret_name)
+);
+
+-- 阶段 0a 外部服务授权凭证：**形状不可知**的通用密文 blob（OAuth token set / OAuth client_info /
+-- IM 自建应用 app 凭证都装得下 —— payload 是 Fernet(JSON)，本层不解析其结构）。
+-- 与 skill_secrets 的分工：那张表是**注入子进程 env** 的 per-skill 键值（故名字受 env-regex +
+-- reserved deny-list 约束）；本表**永不进 env**，是外部服务的授权材料，两者物理隔离、命名规则无关。
+-- 🔴 expires_at 是**明文列**（epoch 秒，NULL=不过期/未知）—— 设置页展示连接健康状态、阶段 1 懒刷新
+-- 判提前量都只读这一列，**不解密 payload**（master key 不可用时这些查询照样成立）。
+-- metadata_json 同为明文（账号 label / scope 列表这类非敏感展示位），**不放任何凭证值**。
+CREATE TABLE IF NOT EXISTS external_credential (
+    namespace          TEXT NOT NULL,   -- 'connector:notion' | 'im:feishu' —— <kind>:<provider>
+    credential_key     TEXT NOT NULL,   -- 'tokens' | 'client_info' | 'app_secret'
+    payload_ciphertext BLOB NOT NULL,   -- Fernet(JSON)，形状不可知
+    expires_at         INTEGER,         -- 明文 epoch 秒；NULL = 不过期 / 未知
+    metadata_json      TEXT,            -- 明文非敏感元数据（展示用）
+    created_at         INTEGER NOT NULL,
+    updated_at         INTEGER NOT NULL,
+    PRIMARY KEY (namespace, credential_key)
 );
 
 CREATE TABLE IF NOT EXISTS agent_skill_events (
@@ -813,6 +847,103 @@ class AgentConfigStore:
         return "\n".join(parts)
 
     # ======================================================================
+    # 外部服务授权凭证（external_credential，阶段 0a）
+    # ——（加解密在 src/agent_config/credentials.py，store 只存/取密文，镜像 skill_secrets 分工）
+    # ======================================================================
+
+    def upsert_external_credential(
+        self,
+        namespace: str,
+        credential_key: str,
+        payload_ciphertext: bytes,
+        *,
+        expires_at: Optional[int] = None,
+        metadata_json: Optional[str] = None,
+    ) -> None:
+        """写/替换一条外部凭证（``payload_ciphertext`` = Fernet ciphertext，本层不解密）。
+
+        **整行替换语义**：``expires_at`` / ``metadata_json`` 不传即写 NULL（一次 token 刷新是
+        payload 与到期时间**一起**换掉，留旧到期时间 = 谎报健康状态）。``created_at`` 是唯一例外
+        —— 冲突时保留首次落库时间（镜像 ``install_skill`` 保 ``installed_at``）。
+        键/形状合法性由调用方（``credentials.set_credential``）校验，本层只落盘。
+        """
+        now = _now()
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO external_credential "
+                "(namespace, credential_key, payload_ciphertext, expires_at, metadata_json, "
+                " created_at, updated_at) VALUES (?,?,?,?,?,?,?) "
+                "ON CONFLICT(namespace, credential_key) DO UPDATE SET "
+                " payload_ciphertext=excluded.payload_ciphertext, expires_at=excluded.expires_at, "
+                " metadata_json=excluded.metadata_json, updated_at=excluded.updated_at",
+                (
+                    namespace,
+                    credential_key,
+                    sqlite3.Binary(payload_ciphertext),
+                    expires_at,
+                    metadata_json,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+
+    def get_external_credential_ciphertext(
+        self, namespace: str, credential_key: str
+    ) -> Optional[bytes]:
+        """取一条外部凭证的密文（无 → None）。解密归 ``credentials.get_credential``。"""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT payload_ciphertext FROM external_credential "
+                "WHERE namespace = ? AND credential_key = ?",
+                (namespace, credential_key),
+            ).fetchone()
+        return bytes(row["payload_ciphertext"]) if row else None
+
+    def get_external_credential_meta(
+        self, namespace: str, credential_key: str
+    ) -> Optional[ExternalCredentialMeta]:
+        """取一条外部凭证的**明文元数据**（含 expires_at）—— 不读密文列、不解密。"""
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT namespace, credential_key, expires_at, metadata_json, created_at, "
+                " updated_at FROM external_credential WHERE namespace = ? AND credential_key = ?",
+                (namespace, credential_key),
+            ).fetchone()
+        return _row_to_external_credential_meta(row) if row else None
+
+    def list_external_credential_meta(
+        self, namespace: Optional[str] = None
+    ) -> list[ExternalCredentialMeta]:
+        """列外部凭证的明文元数据（``namespace`` 有值 = 严格等值过滤；None = 全部）。
+
+        不读密文列、不解密（设置页「已连接的服务」清单用）。PK 前缀即 namespace，故等值过滤走
+        主键索引，无需额外 index。
+        """
+        sql = (
+            "SELECT namespace, credential_key, expires_at, metadata_json, created_at, updated_at "
+            "FROM external_credential"
+        )
+        params: list[Any] = []
+        if namespace is not None:
+            sql += " WHERE namespace = ?"
+            params.append(namespace)
+        sql += " ORDER BY namespace, credential_key"
+        with self._connection() as conn:
+            rows = conn.execute(sql, params).fetchall()
+        return [_row_to_external_credential_meta(r) for r in rows]
+
+    def delete_external_credential(self, namespace: str, credential_key: str) -> bool:
+        """删一条外部凭证。幂等（无行 False）。"""
+        with self._connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM external_credential WHERE namespace = ? AND credential_key = ?",
+                (namespace, credential_key),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
+    # ======================================================================
     # exec 策略白名单（policy_rules，ADR-001 §6 D4）
     # ======================================================================
 
@@ -1106,6 +1237,26 @@ def _row_to_policy_rule(row: sqlite3.Row) -> PolicyRuleRow:
         created_at=row["created_at"],
         last_used_at=row["last_used_at"],
         use_count=row["use_count"],
+    )
+
+
+def _row_to_external_credential_meta(row: sqlite3.Row) -> ExternalCredentialMeta:
+    metadata: dict[str, Any] = {}
+    if row["metadata_json"]:
+        try:
+            parsed = json.loads(row["metadata_json"])
+            if isinstance(parsed, dict):
+                metadata = parsed
+        except (json.JSONDecodeError, TypeError):
+            # 坏 metadata 投影成 {} —— 元数据是展示位，绝不因它炸掉「连接是否存在/何时过期」的查询。
+            metadata = {}
+    return ExternalCredentialMeta(
+        namespace=row["namespace"],
+        credential_key=row["credential_key"],
+        expires_at=row["expires_at"],
+        metadata=metadata,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
     )
 
 
