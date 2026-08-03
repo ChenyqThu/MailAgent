@@ -25,7 +25,11 @@ import {
 } from '../../src/ai-gateway/agentRun'
 import { prepareChatRun } from '../../src/ai-gateway/chatRun'
 import type { AiGatewayConfig } from '../../src/ai-gateway/config'
-import { HEADLESS_AGENT_EXECUTION_DISCIPLINE } from '../../src/ai-gateway/systemPrompt'
+import {
+  HEADLESS_AGENT_EXECUTION_DISCIPLINE,
+  HEADLESS_UNATTENDED_CLAUSE,
+  TOOL_FAILURE_DISCIPLINE
+} from '../../src/ai-gateway/systemPrompt'
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import { buildGatewayTools } from '../../src/ai-gateway/tools'
@@ -228,7 +232,7 @@ describe('headless execution discipline system channel', () => {
     expect(captured.user).not.toContain(HEADLESS_AGENT_EXECUTION_DISCIPLINE)
   })
 
-  test('manual chat stays byte-identical and does not receive the headless discipline', async () => {
+  test('manual chat gets the failure discipline but NOT the unattended clause (F4)', async () => {
     const captured = { system: '', user: '' }
     const cfg: AiGatewayConfig = {
       port: 0,
@@ -252,6 +256,10 @@ describe('headless execution discipline system channel', () => {
     await prepared.run.result.text
 
     expect(captured.system).toContain('MANUAL_SYSTEM')
+    // 08-02 F4 — manual 也拿失败纪律（detached runs 让「有人在环」不再成立）…
+    expect(captured.system).toContain(TOOL_FAILURE_DISCIPLINE)
+    // …但拿不到「无人值守」那一句：manual turn 是可以停下来问用户的。
+    expect(captured.system).not.toContain(HEADLESS_UNATTENDED_CLAUSE)
     expect(captured.system).not.toContain(HEADLESS_AGENT_EXECUTION_DISCIPLINE)
     expect(captured.user).toContain('MANUAL_USER')
   })

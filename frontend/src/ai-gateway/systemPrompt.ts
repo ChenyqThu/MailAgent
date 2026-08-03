@@ -43,18 +43,47 @@ export interface GatewaySystemPromptConfig {
   trustedSkillFragments?: string | null
 }
 
-/** Code-owned runtime discipline for unattended custom-agent runs. This is intentionally not a
- *  configurable string: no request/spec/installed-skill content can enter this trusted section. */
-export const HEADLESS_AGENT_EXECUTION_DISCIPLINE = [
-  '# Headless execution discipline',
+/** Code-owned repeated-failure discipline, injected into EVERY run (manual and headless alike).
+ *
+ *  🔴 Why every run (08-02 review F4, owner 拍板): the epic shipped this headless-only on the premise
+ *  that "manual chat has a human in the loop". `MAILAGENT_CHAT_DETACHED_RUNS` (default ON) broke that
+ *  premise — closing the panel no longer aborts the run, so a manual turn can keep looping unattended.
+ *  And manual chat shares the same `stepCountIs(10000)` sentinel with no wall-clock budget of its own,
+ *  so a tool that keeps failing the same way is bounded by nothing but the model's own judgement.
+ *  That judgement is exactly what this section supplies.
+ *
+ *  Intentionally not a configurable string: no request / spec / installed-skill content can enter
+ *  this trusted section. */
+export const TOOL_FAILURE_DISCIPLINE = [
+  '# Tool failure discipline',
   'If the same tool operation fails in the same way 2-3 times, stop repeating it. Change approach,',
   'use a different available tool, or report the task as incomplete with the observed reason and',
   'evidence. Never claim success after repeated identical failures.'
 ].join('\n')
 
-/** Add the code-owned headless discipline to the legacy body.system path used by pure harnesses. */
-export function appendHeadlessAgentExecutionDiscipline(system?: string): string {
-  return [system ?? '', HEADLESS_AGENT_EXECUTION_DISCIPLINE]
+/** The extra clause a headless run needs: there is nobody to ask, so "stop and clarify" is not an
+ *  available move — it must decide or report. A manual turn CAN just ask, hence this stays split. */
+export const HEADLESS_UNATTENDED_CLAUSE =
+  'Nobody is watching this run, so asking a clarifying question is not an available move: pick the ' +
+  'best-supported interpretation and say which one you picked, or stop and report what blocked you.'
+
+/** The full trusted runtime discipline for a given run shape. */
+export function executionDisciplineFor(headlessAgentRun: boolean): string {
+  return headlessAgentRun
+    ? `${TOOL_FAILURE_DISCIPLINE}\n${HEADLESS_UNATTENDED_CLAUSE}`
+    : TOOL_FAILURE_DISCIPLINE
+}
+
+/** @deprecated Kept as the pre-F4 name so external references keep resolving; prefer
+ *  `executionDisciplineFor(true)`. */
+export const HEADLESS_AGENT_EXECUTION_DISCIPLINE = executionDisciplineFor(true)
+
+/** Add the code-owned discipline to the legacy body.system path used by pure harnesses. */
+export function appendExecutionDiscipline(
+  system: string | undefined,
+  headlessAgentRun: boolean
+): string {
+  return [system ?? '', executionDisciplineFor(headlessAgentRun)]
     .filter((segment) => segment.length > 0)
     .join('\n\n')
 }
@@ -96,11 +125,13 @@ export function buildGatewaySystemPrompt(args: {
   // byte-identical flag-off. This replaces the retired M2 per-query recall block.
   const stable = buildStableSystemPrompt(null, cfg, () => null)
   const contextBlock = args.contextSnapshot ? buildContextSystemBlock(args.contextSnapshot) : ''
-  const executionDiscipline = args.headlessAgentRun ? HEADLESS_AGENT_EXECUTION_DISCIPLINE : ''
-  // Order: stable (cacheable, incl. memory.md) → context (current view) → trusted headless runtime
-  // discipline (when applicable) → current-date (always). Each segment is joined only when
-  // non-empty; the date block is ALWAYS non-empty and remains LAST so the preceding prompt stays a
-  // stable cache prefix and the date changes at most once per day.
+  // 08-02 F4 — 恒注入（manual + headless），只有「无人值守」那一句按 run 形态分。它与上面的
+  // skillFragments 方向**相反**（那条 manual-only），所以两者不能再共用一个三元条件。
+  const executionDiscipline = executionDisciplineFor(args.headlessAgentRun === true)
+  // Order: stable (cacheable, incl. memory.md) → context (current view) → trusted runtime discipline
+  // (always) → current-date (always). Each segment is joined only when non-empty; the date block is
+  // ALWAYS non-empty and remains LAST so the preceding prompt stays a stable cache prefix and the
+  // date changes at most once per day.
   const dateBlock = buildCurrentDateBlock(args.contextSnapshot)
   return [stable, contextBlock, executionDiscipline, dateBlock]
     .filter((s) => s.length > 0)

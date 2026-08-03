@@ -12,6 +12,8 @@ import {
   buildGatewaySystemPrompt,
   buildCurrentDateBlock,
   HEADLESS_AGENT_EXECUTION_DISCIPLINE,
+  HEADLESS_UNATTENDED_CLAUSE,
+  TOOL_FAILURE_DISCIPLINE,
   type GatewaySystemPromptConfig
 } from '../../src/ai-gateway/systemPrompt'
 import {
@@ -71,7 +73,10 @@ describe('buildGatewaySystemPrompt', () => {
     // current-date segment is appended last (R1 — general agent must know "now").
     expect(out.startsWith(SOUL_MARKDOWN)).toBe(true)
     expect(out).toContain('当前日期：')
-    expect(out).toBe(`${SOUL_MARKDOWN}\n\n${buildCurrentDateBlock(null)}`)
+    // 08-02 F4 — 失败纪律恒注入（manual 也有），位置固定在 stable/context 之后、date 之前。
+    expect(out).toBe(
+      `${SOUL_MARKDOWN}\n\n${TOOL_FAILURE_DISCIPLINE}\n\n${buildCurrentDateBlock(null)}`
+    )
   })
 
   test('standing context is injected AND the safety floor is present + prepended (not weakened)', () => {
@@ -175,7 +180,11 @@ describe('buildGatewaySystemPrompt', () => {
     // the legacy stable prefix — but the stable prefix must stay a byte-identical PREFIX (no drift),
     // and the only thing after it is the date block.
     expect(gateway.startsWith(legacy)).toBe(true)
-    expect(gateway).toBe(`${legacy}\n\n${buildCurrentDateBlock(null)}`)
+    // 08-02 F4 — stable prefix 本身仍零漂移（上面的 startsWith 才是本测试的真正保护对象）；
+    // 其后依次是恒注入的失败纪律与 date block。
+    expect(gateway).toBe(
+      `${legacy}\n\n${TOOL_FAILURE_DISCIPLINE}\n\n${buildCurrentDateBlock(null)}`
+    )
   })
 
   test('injects only the backend-selected trusted skill workflow', () => {
@@ -188,6 +197,39 @@ describe('buildGatewaySystemPrompt', () => {
     })
     expect(out).toContain('# Active skills (capabilities currently enabled)')
     expect(out).toContain('CUSTOM_AGENT_CODE_OWNED_WORKFLOW')
+  })
+
+  test('F4 — the failure discipline reaches BOTH manual and headless runs', () => {
+    // 08-02 owner 拍板：epic originally shipped this headless-only on the premise that manual chat
+    // has a human in the loop. MAILAGENT_CHAT_DETACHED_RUNS (default ON) broke that premise —
+    // closing the panel no longer aborts the run — and manual shares the same stepCountIs(10000)
+    // sentinel with no wall-clock budget, so a repeatedly-failing tool is bounded by nothing but
+    // the model's judgement. That judgement is what this section supplies.
+    const manual = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X' },
+      contextSnapshot: null
+    })
+    const headless = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X' },
+      contextSnapshot: null,
+      headlessAgentRun: true
+    })
+    expect(manual).toContain(TOOL_FAILURE_DISCIPLINE)
+    expect(headless).toContain(TOOL_FAILURE_DISCIPLINE)
+    // …but only the unattended run is told it cannot ask for clarification (a manual turn CAN).
+    expect(manual).not.toContain(HEADLESS_UNATTENDED_CLAUSE)
+    expect(headless).toContain(HEADLESS_UNATTENDED_CLAUSE)
+    // the legacy alias still resolves to the full headless form.
+    expect(headless).toContain(HEADLESS_AGENT_EXECUTION_DISCIPLINE)
+  })
+
+  test('the discipline sits before the date block (cacheable prefix stays stable)', () => {
+    // date 是唯一每天变一次的段，必须留在最后；纪律段插在它之前才不会每天把可缓存前缀顶掉。
+    const out = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X' },
+      contextSnapshot: null
+    })
+    expect(out.indexOf(TOOL_FAILURE_DISCIPLINE)).toBeLessThan(out.indexOf('当前日期：'))
   })
 
   test('trusted skill workflow is manual-chat only — a headless run never sees it', () => {

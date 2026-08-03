@@ -39,7 +39,7 @@ import { type MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
 import { thinkingProviderOptions } from './thinking'
 // Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
-import { appendHeadlessAgentExecutionDiscipline, buildGatewaySystemPrompt } from './systemPrompt'
+import { appendExecutionDiscipline, buildGatewaySystemPrompt } from './systemPrompt'
 import {
   isValidContextSnapshot,
   type AgentContextSnapshot
@@ -281,7 +281,11 @@ export async function prepareChatRun(
   } else {
     const bodySystem =
       typeof body.system === 'string' && body.system.length > 0 ? body.system : undefined
-    system = isHeadlessAgentRun ? appendHeadlessAgentExecutionDiscipline(bodySystem) : bodySystem
+    // 🔴 legacy passthrough 路径（无 systemPromptProvider）：**只有 headless 追加纪律**，manual 保持
+    // body.system 逐字节透传（Phase 02 契约 —— 这条路径的全部意义就是「system 完全由调用方给」，
+    // 纯 harness / 老测试依赖它）。F4 让 manual 也拿到纪律，但生产 manual chat 自 S3 起恒有
+    // injection provider、走上面的 buildGatewaySystemPrompt 分支，所以目标达成不需要动这条契约。
+    system = isHeadlessAgentRun ? appendExecutionDiscipline(bodySystem, true) : bodySystem
   }
 
   // 🔴 ai@6 convertToModelMessages is ASYNC (returns a Promise) — must await, else
