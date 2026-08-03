@@ -48,12 +48,19 @@ describe('componentRegistry — resolution', () => {
     expect(componentRegistry.resolve('web_search')).toBe(webFetch)
     expect(componentRegistry.resolve('custom_agent_delete')).toBe(webFetch)
     expect(componentRegistry.resolve('custom_agent_run_now')).toBe(webFetch)
+    // 阶段 0.5-① G9 — the two profile writes join the same shell (same bug, missed in 07-07).
+    expect(componentRegistry.resolve('agent_profile_restore')).toBe(webFetch)
+    expect(componentRegistry.resolve('agent_memory_update')).toBe(webFetch)
     // and it is NOT the buttonless generic fallback.
     expect(webFetch).not.toBe(ToolTraceCard)
   })
 
   test('byName covers the write/self-mount/exec/skill-supply/custom-agent/simple-approval/calendar tools; components covers the card names', () => {
     expect(Object.keys(componentRegistry.byName).sort()).toEqual([
+      // 阶段 0.5-① G9 — the two edit-tier profile writes that used to fall through to the
+      // buttonless ToolTraceCard (approval-paused = permanent spinner, island-only approve).
+      'agent_memory_update',
+      'agent_profile_restore',
       'calendar_event_delete',
       'calendar_event_reschedule',
       'calendar_event_rsvp',

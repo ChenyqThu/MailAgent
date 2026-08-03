@@ -151,7 +151,15 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
       'custom_agent_delete',
       'custom_agent_run_now',
       // task 07-21 — notion_agent_chat: identity-only edit-tier approval previewing the prompt.
-      'notion_agent_chat'
+      'notion_agent_chat',
+      // 阶段 0.5-① G9 — the same 1.5.0 bug, two tools that were missed: agent_profile_restore /
+      // agent_memory_update are edit-tier writes (tools/profile.ts makeWrite risk:'edit') with NO
+      // registered card, so an approval-paused part fell through to the buttonless ToolTraceCard
+      // (permanent spinner, island-only approve = deadlock without the island). Both are
+      // identity-only (no editableFields on the gateway side either), so the pinned-value shell
+      // is exactly right.
+      'agent_profile_restore',
+      'agent_memory_update'
     ],
     render: SimpleApprovalCard
   },

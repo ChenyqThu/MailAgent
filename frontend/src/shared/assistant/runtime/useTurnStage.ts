@@ -16,6 +16,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useAuiState } from '@assistant-ui/react'
 
+import { deriveToolPhase, isToolPhaseSettled, partAwaitsApproval } from './toolPhase'
+
 export type TurnStage =
   | 'idle' // no in-flight turn (complete / aborted) → render nothing
   | 'connecting' // running, no meaningful part yet (pre-first-token)
@@ -55,19 +57,16 @@ export interface TurnStageResult {
   readonly stallLevel: StallLevel
 }
 
-/** A tool-call part paused at an (unresolved) approval gate. Awaiting = an approval object
- *  exists, no decision recorded (`approved` undefined) and no terminal resolution. */
-export function partAwaitsApproval(part: TurnStagePart): boolean {
-  const approval = part.approval
-  return !!approval && approval.approved === undefined && !approval.resolution
-}
+// 阶段 0.5-① — the approval gate + "跑没跑完" judgement moved to the single-source pure module
+// `toolPhase.ts` (this file used to hold its own copy, one of three that drifted independently).
+// Re-exported so every existing importer of `partAwaitsApproval` keeps its import path.
+export { partAwaitsApproval }
 
-/** A tool-call part that has reached a terminal result (output-available / -error / -denied). */
+/** A tool-call part that has reached a terminal result (output-available / -error / -denied).
+ *  Projection of the shared phase: `done | error`. An unresolved approval gate is NOT terminal —
+ *  same as before, and `deriveTurnStage` has already returned by the time this runs. */
 function toolPartResolved(part: TurnStagePart): boolean {
-  if (part.isError === true) return true
-  const statusType = part.status?.type
-  if (statusType === 'incomplete' || statusType === 'complete') return true
-  return part.result !== undefined && part.result !== null
+  return isToolPhaseSettled(deriveToolPhase(part))
 }
 
 /** Trailing placeholders carry no stage signal: step-start, empty text/reasoning, data-* parts

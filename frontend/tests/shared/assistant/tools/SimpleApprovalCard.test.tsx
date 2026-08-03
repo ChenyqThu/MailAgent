@@ -116,6 +116,43 @@ describe('SimpleApprovalCard — pending (approval-requested)', () => {
     expect(screen.getByText('续接会话 thr-abc')).toBeTruthy()
     expect(screen.getByText('允许')).toBeTruthy()
   })
+
+  // 阶段 0.5-① G9 — the same 1.5.0 deadlock, two tools that were missed at the time: both are
+  // edit-tier writes (tools/profile.ts makeWrite risk:'edit') with no registered card, so an
+  // approval-paused part rendered as a buttonless permanent spinner.
+  test('agent_profile_restore: shows the doc + the target version line + approve buttons', () => {
+    render(
+      <SimpleApprovalCard
+        {...mockProps({
+          toolName: 'agent_profile_restore',
+          args: { doc_name: 'rules', target_hash: 'ab12cd34' }
+        })}
+      />
+    )
+    expect(screen.getByText('回滚身份文档')).toBeTruthy()
+    expect(screen.getByText('rules')).toBeTruthy()
+    // BOTH halves of the pinned identity are reviewable — approving must not be a blind rollback.
+    expect(screen.getByText('回滚到版本 ab12cd34')).toBeTruthy()
+    expect(screen.getByText('允许')).toBeTruthy()
+    expect(screen.getByText('取消')).toBeTruthy()
+  })
+
+  test('agent_memory_update: shows the full proposed memory.md + approve buttons', () => {
+    const respond = vi.fn()
+    render(
+      <SimpleApprovalCard
+        {...mockProps({
+          toolName: 'agent_memory_update',
+          args: { content: '用户在洛杉矶（PT）。' },
+          respondToApproval: respond
+        })}
+      />
+    )
+    expect(screen.getByText('更新长期记忆')).toBeTruthy()
+    expect(screen.getByText('用户在洛杉矶（PT）。')).toBeTruthy()
+    fireEvent.click(screen.getByText('允许'))
+    expect(respond).toHaveBeenCalledWith({ approved: true })
+  })
 })
 
 describe('SimpleApprovalCard — approve / reject wire respondToApproval (通道 A)', () => {

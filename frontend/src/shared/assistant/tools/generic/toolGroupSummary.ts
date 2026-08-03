@@ -7,7 +7,8 @@
 //   ① a single tool renders bare (the caller special-cases count === 1);
 //   ② a group containing an approval-requested OR errored tool must NEVER fold that part away.
 
-import { partAwaitsApproval, type TurnStagePart } from '@shared/assistant/runtime/useTurnStage'
+import { deriveToolPhase } from '@shared/assistant/runtime/toolPhase'
+import type { TurnStagePart } from '@shared/assistant/runtime/useTurnStage'
 
 export type ToolGroupAggregate = 'running' | 'awaiting' | 'error' | 'done'
 
@@ -22,12 +23,14 @@ export interface ToolGroupSummary {
 
 type ToolPartState = 'awaiting' | 'error' | 'done' | 'running'
 
+/** Group-level projection of the shared `deriveToolPhase` (阶段 0.5-①): the card's two live
+ *  phases (`streaming-args` / `executing`) collapse back into the one bucket a GROUP header cares
+ *  about. 🔴 `awaiting` / `error` must stay byte-for-byte what they were — red line ② (never fold
+ *  an approval or an error away) is defined on them; `toolPhase.test.ts` pins the equivalence
+ *  against a verbatim copy of the pre-refactor judgement. */
 function toolPartState(part: TurnStagePart): ToolPartState {
-  if (partAwaitsApproval(part)) return 'awaiting'
-  if (part.isError === true || part.status?.type === 'incomplete') return 'error'
-  if (part.result !== undefined && part.result !== null) return 'done'
-  if (part.status?.type === 'complete') return 'done'
-  return 'running'
+  const phase = deriveToolPhase(part)
+  return phase === 'streaming-args' || phase === 'executing' ? 'running' : phase
 }
 
 export function summarizeToolGroup(parts: readonly TurnStagePart[]): ToolGroupSummary {

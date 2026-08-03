@@ -68,7 +68,9 @@ const PARTS = {
   Empty: TurnStatusLine,
   Text: ({ text }: { text: string }) => <span>{text}</span>,
   Reasoning: ({ text }: { text: string }) => <span>{text}</span>,
-  tools: { Fallback: ({ toolName }: { toolName: string }) => <span data-testid="tool">{toolName}</span> }
+  tools: {
+    Fallback: ({ toolName }: { toolName: string }) => <span data-testid="tool">{toolName}</span>
+  }
 } as unknown as React.ComponentProps<typeof MessagePrimitive.Parts>['components']
 
 function TestAssistant(): React.JSX.Element {
@@ -113,11 +115,16 @@ const USER = { id: 'u1', role: 'user', parts: [{ type: 'text', text: 'hi' }] }
 
 describe('TurnStatusLine — render gating (the 永动 fix)', () => {
   test('running + 0 parts → connecting shimmer shows', async () => {
-    render(<Harness status="streaming" messages={[USER, { id: 'a1', role: 'assistant', parts: [] }]} />)
+    render(
+      <Harness status="streaming" messages={[USER, { id: 'a1', role: 'assistant', parts: [] }]} />
+    )
     await waitFor(() => expect(screen.getByText('AI 思考中…')).toBeTruthy())
   })
 
-  test('running + tool executing → "正在调用 {tool}…" shimmer', async () => {
+  // 阶段 0.5-① G7 — a running tool used to be narrated TWICE (this line + the tool card's own
+  // spinner/elapsed). The card owns that row now, so the status line goes silent at calling-tool,
+  // exactly like it already did beside an approval card.
+  test('running + tool executing → NO status line (the tool card IS the status)', async () => {
     render(
       <Harness
         status="streaming"
@@ -126,12 +133,22 @@ describe('TurnStatusLine — render gating (the 永动 fix)', () => {
           {
             id: 'a1',
             role: 'assistant',
-            parts: [{ type: 'tool-email_search', toolCallId: 't1', state: 'input-available', input: { q: 'x' } }]
+            parts: [
+              {
+                type: 'tool-email_search',
+                toolCallId: 't1',
+                state: 'input-available',
+                input: { q: 'x' }
+              }
+            ]
           }
         ]}
       />
     )
-    await waitFor(() => expect(screen.getByText('正在调用 email_search…')).toBeTruthy())
+    await waitFor(() => expect(screen.getByTestId('tool')).toBeTruthy())
+    expect(screen.queryByText(/正在调用/)).toBeNull()
+    expect(screen.queryByText('AI 思考中…')).toBeNull()
+    expect(screen.queryByText(/仍在等待响应/)).toBeNull()
   })
 
   test('tool paused at approval → NO shimmer (the approval card IS the status)', async () => {
@@ -193,7 +210,13 @@ describe('TurnStatusLine — render gating (the 永动 fix)', () => {
 
 // --- stall watchdog (hook-level, fake timers) -----------------------------------------------
 
-function StallProbe({ resetKey, active }: { resetKey: unknown; active: boolean }): React.JSX.Element {
+function StallProbe({
+  resetKey,
+  active
+}: {
+  resetKey: unknown
+  active: boolean
+}): React.JSX.Element {
   const level = useStallLevel(resetKey, active)
   return <div data-testid="lvl">{level}</div>
 }

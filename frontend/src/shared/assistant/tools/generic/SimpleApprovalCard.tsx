@@ -2,9 +2,10 @@
 // by the tools whose approval needs NO field editor, just approve / reject over a pinned identity
 // value:
 //   web_fetch (URL) · web_search (query) · custom_agent_delete (agent id) · custom_agent_run_now
-//   · notion_agent_chat (prompt — task 07-21).
+//   · notion_agent_chat (prompt — task 07-21) · agent_profile_restore (doc + target version) ·
+//   agent_memory_update (the whole proposed memory.md — 阶段 0.5-① G9).
 //
-// 🔴 The bug it fixes: before this card these four edit-tier tools fell through to the buttonless
+// 🔴 The bug it fixes: before this card each of these edit-tier tools fell through to the buttonless
 //    generic ToolTraceCard, which rendered the requires-action (approval-paused) state as a
 //    PERMANENT spinner. Their only approve surface was the dynamic island — so with the island off
 //    (Ping Island not installed / not running) the chat was stuck "spinning" with no way to approve.
@@ -16,7 +17,7 @@
 // resolve side-channel and no editable field (identity is pinned, matching these tools' schema — the
 // value the user sees is exactly what will run).
 
-import { Globe, NotebookPen, Play, Search, Trash2 } from 'lucide-react'
+import { Brain, Globe, History, NotebookPen, Play, Search, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
@@ -30,10 +31,14 @@ import { deriveCardPhase } from '../_cardShell.lib'
 interface ToolSpec {
   key: string
   field: string
-  /** 07-21 (codex MEDIUM-1) — an optional continuation-id field (e.g. notion_agent_chat's
-   *  thread_id): when the model input carries it, the card shows a「续接会话 <id>」line so the user
-   *  reviews that this call continues a prior conversation, not a fresh one. Absent → not rendered. */
+  /** 07-21 (codex MEDIUM-1) — an optional SECOND field rendered as its own line under the pinned
+   *  identity (e.g. notion_agent_chat's thread_id): when the model input carries it, the card
+   *  shows a「续接会话 <id>」line so the user reviews that this call continues a prior
+   *  conversation, not a fresh one. Absent → not rendered. */
   continuationField?: string
+  /** i18n key suffix for that second line (under chat.simpleApprovalCard). Defaults to
+   *  `continuation`; agent_profile_restore uses it for「回滚到版本 <hash>」 instead. */
+  continuationKey?: string
 }
 
 const SPECS: Record<string, ToolSpec> = {
@@ -42,7 +47,16 @@ const SPECS: Record<string, ToolSpec> = {
   custom_agent_delete: { key: 'customAgentDelete', field: 'agent_id' },
   custom_agent_run_now: { key: 'customAgentRunNow', field: 'agent_id' },
   // task 07-21 — notion_agent_chat previews the pinned `prompt` + (if a follow-up) the thread_id.
-  notion_agent_chat: { key: 'notionAgentChat', field: 'prompt', continuationField: 'thread_id' }
+  notion_agent_chat: { key: 'notionAgentChat', field: 'prompt', continuationField: 'thread_id' },
+  // 阶段 0.5-① G9 — the profile writes. restore pins BOTH halves of its identity (which document
+  // + which version), memory_update pins the full proposed content (that IS what gets written).
+  agent_profile_restore: {
+    key: 'agentProfileRestore',
+    field: 'doc_name',
+    continuationField: 'target_hash',
+    continuationKey: 'restoreTarget'
+  },
+  agent_memory_update: { key: 'agentMemoryUpdate', field: 'content' }
 }
 
 function iconFor(toolName: string): React.ReactNode {
@@ -50,6 +64,8 @@ function iconFor(toolName: string): React.ReactNode {
   if (toolName === 'custom_agent_delete') return <Trash2 size={13} strokeWidth={2} />
   if (toolName === 'custom_agent_run_now') return <Play size={13} strokeWidth={2} />
   if (toolName === 'notion_agent_chat') return <NotebookPen size={13} strokeWidth={2} />
+  if (toolName === 'agent_profile_restore') return <History size={13} strokeWidth={2} />
+  if (toolName === 'agent_memory_update') return <Brain size={13} strokeWidth={2} />
   return <Globe size={13} strokeWidth={2} />
 }
 
@@ -120,10 +136,17 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
               ? t(`chat.simpleApprovalCard.${spec.key}.label`)
               : t('chat.simpleApprovalCard.fallbackLabel')}
           </div>
-          <div className="mt-1 break-all font-mono text-meta text-ink-fg">{value}</div>
+          {/* 阶段 0.5-① G9 — agent_memory_update pins the WHOLE proposed memory.md (a 5k-char
+              budget), so the review box is bounded + scrollable. A short value (url / query /
+              agent id) is unaffected: max-height never shrinks anything. */}
+          <div className="scrollbar-thin mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-meta text-ink-fg">
+            {value}
+          </div>
           {continuation ? (
             <div className="mt-1.5 text-aux text-ink-fg-3">
-              {t('chat.simpleApprovalCard.continuation', { id: continuation })}
+              {t(`chat.simpleApprovalCard.${spec?.continuationKey ?? 'continuation'}`, {
+                id: continuation
+              })}
             </div>
           ) : null}
           <ApprovalActions onApprove={onApprove} onReject={onReject} />

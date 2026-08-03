@@ -145,12 +145,13 @@ loading 不该成为视觉焦点。**loading 只用三个词汇**（2026-06-13 �
 
 ### 9.1 chat 流式状态条 + 工具组（harness-chat lane B，2026-07）
 
-owner dogfood 反馈「轮播 shimmer 在流卡住/结束时不停 + 文案与阶段无关」的落地。两个收编组件（均 ShimmerText，无 spring）：
+owner dogfood 反馈「轮播 shimmer 在流卡住/结束时不停 + 文案与阶段无关」的落地。三个收编组件（无 spring）：
 
 | 组件 | 位置 | 动效 | 停止条件（红线） |
 |---|---|---|---|
-| `assistant/components/TurnStatusLine.tsx` | assistant-ui `Empty` slot（agent 面 + 邮件面双挂） | `DotMatrix` + 单句 `ShimmerText`（真值文案，**不再随机轮播**） | 由 `runtime/useTurnStage.ts` 的纯函数 `deriveTurnStage` 决定渲染：idle/writing/awaiting-approval **返回 null**（流结束/正文自述/审批卡自身即状态 → shimmer 停）；**仅 connecting/thinking/calling-tool 出 shimmer**（真在推进）；stalled（≥15s 无增量）+ error 转**静态非-shimmer** 行（「仍在等待响应…」/ 错误文案，PRD「卡住/结束时 shimmer 必须停」）|
+| `assistant/components/TurnStatusLine.tsx` | assistant-ui `Empty` slot（agent 面 + 邮件面双挂） | `DotMatrix` + 单句 `ShimmerText`（真值文案，**不再随机轮播**） | 由 `runtime/useTurnStage.ts` 的纯函数 `deriveTurnStage` 决定渲染：idle/writing/awaiting-approval/**calling-tool**（阶段 0.5-① G7 新增）**返回 null**（流结束/正文自述/审批卡自身即状态/工具卡自身即状态 → shimmer 停）；**仅 connecting/thinking 出 shimmer**（真在推进）；stalled（≥15s 无增量）+ error 转**静态非-shimmer** 行（「仍在等待响应…」/ 错误文案，PRD「卡住/结束时 shimmer 必须停」）|
 | `assistant/tools/generic/ToolGroupCard.tsx` | assistant-ui `ToolGroup` slot（连续 tool-call 折叠） | 运行态组头 `ShimmerText`（同一行**禁** spinner）；折叠展开照抄 `ReasoningText` 的 GSAP `height auto↔0` + `DUR.base` + standard 曲线 | 运行中展开、全完成自动折叠；两条灾难红线：① 单工具（`endIndex===startIndex`）渲染裸 children 零回归；② 组内含审批/出错工具 **强制展开不可折叠**（审批卡绝不能被折进组里） |
+| `assistant/tools/generic/ToolTraceCard.tsx`（阶段 0.5-①，2026-08） | assistant-ui `tools.Fallback`（三处渲染面共用：邮件面 / agent 面 / 历史只读回放） | ① 参数未到时 `animate-pulse` **骨架**（标题行占位条 + 展开区两行，均带 `motion-reduce:animate-none`）；② 状态图标 `animate-spin`；③ 标题行**耗时数字**每 200ms tick（`useToolElapsed`，`tabular-nums`）。**本卡无 shimmer** —— 与 spinner 并存的是块级 skeleton（§9 三词汇里的第 2 员），不是第 3 员 | 骨架只在 `streaming-args` 相位出（参数真的还在流）；耗时**无起点不渲染**（历史回放的 part 从未开始计时 → 不显示，绝不显示假的 `0.0s`），终态**定格**；`prefers-reduced-motion` 下 tick interval 不装（数字仅随其它 re-render 刷新，不自驱动）。相位判据单源 `runtime/toolPhase.ts` |
 
 stall watchdog 纯前端（`useStallLevel`，15s/30s 两档），**不动 gateway**（不加 heartbeat）。轮播式 `ThinkingPhrases.tsx` 已随本轮删除（`PaletteThinkingPhrases` 仍在，服务 ⌘K 搜索，不受影响）。
 
