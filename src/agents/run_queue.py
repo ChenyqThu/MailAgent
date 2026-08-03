@@ -71,7 +71,10 @@ def enqueue_agent_run(
     )
     if used >= budget.max_runs_per_day:
         if was_created:
-            repo.mark_terminal(
+            # CAS on 'queued'：enqueue 与本次写之间 AgentRunWorker 可能已 claim 并真的开跑
+            # （同 event loop 内不可能 —— 本函数同步无 await point；跨进程则可能）。抢跑方赢：
+            # 与其把一个**正在执行**的 run 记成「未执行」，不如让它照常跑完写自己的终态。
+            recorded = repo.mark_terminal(
                 job_id,
                 status="succeeded",
                 result={
@@ -81,7 +84,15 @@ def enqueue_agent_run(
                     "maxRunsPerDay": budget.max_runs_per_day,
                     "steps": 0,
                 },
+                expect_status="queued",
             )
+            if not recorded:
+                logger.warning(
+                    f"[agent-run] budget hit but job_id={job_id} was already claimed "
+                    f"(agent={agent_id}) — letting the in-flight run finish instead of "
+                    f"marking it skipped"
+                )
+                return job_id, was_created
         logger.info(
             f"[agent-run] budget hit: agent={agent_id} runs_today={used} "
             f">= max_runs_per_day={budget.max_runs_per_day} — recorded skipped job_id={job_id}"

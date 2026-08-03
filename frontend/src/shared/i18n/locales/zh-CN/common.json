@@ -524,8 +524,14 @@
     "ai": {
       "understand": "AI 理解「{query}」",
       "understandHint": "让 AI 帮你检索并梳理相关邮件",
-      "searchingPhrases": ["正在理解你的问题…", "检索相关邮件…"],
-      "summarizingPhrases": ["筛选最相关的…", "整理结果…"],
+      "searchingPhrases": [
+        "正在理解你的问题…",
+        "检索相关邮件…"
+      ],
+      "summarizingPhrases": [
+        "筛选最相关的…",
+        "整理结果…"
+      ],
       "summary": "AI：{text}",
       "emptyTitle": "AI 没找到相关邮件",
       "emptyHint": "换个说法，或直接用搜索语法",
@@ -1075,9 +1081,15 @@
       "error": "操作失败，请重试或让助手重新发起。"
     },
     "calendarApprovalCard": {
-      "reschedule": { "title": "改期日程" },
-      "rsvp": { "title": "回复会议邀请（RSVP）" },
-      "delete": { "title": "删除日程" },
+      "reschedule": {
+        "title": "改期日程"
+      },
+      "rsvp": {
+        "title": "回复会议邀请（RSVP）"
+      },
+      "delete": {
+        "title": "删除日程"
+      },
       "event": "日程",
       "before": "原时间",
       "after": "新时间",
@@ -3320,7 +3332,8 @@
         "total": "{count} 封",
         "urgent": "{count} 紧急",
         "replied": "{count} 已回复"
-      }
+      },
+      "assistantAuthor": "通用助手"
     },
     "block": {
       "source": "溯源",
@@ -3670,7 +3683,9 @@
             "on": "开启"
           },
           "ruleHint": "授权只让执行工具进入运行面；免卡仍需白名单规则与首次运行确认。"
-        }
+        },
+        "subsetBadge": "部分",
+        "subsetHint": "当前启用的工具是「{{tier}}」档的一个子集——档位表示权限上限，不代表该档每个工具都开着。展开下方「高级」可看确切清单。"
       },
       "budget": {
         "label": "运行预算",

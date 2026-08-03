@@ -8,6 +8,7 @@
 import type { Tool } from 'ai'
 import type { z } from 'zod'
 
+import { MANUAL_CHAT_REPORT_AGENT_ID } from '../../shared/api/reportBlocks'
 import type { MailAgentDomainClient } from '../python/domainClient'
 import { auditedReadTool, type GatewayToolAuditCollector } from './types'
 import { reportGetSchema, reportListSchema, reportWriteSchema } from './schemas'
@@ -69,7 +70,7 @@ export function createReportReadTools(
 export function createReportTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
-  agentId = 'custom_ai'
+  agentId: string = MANUAL_CHAT_REPORT_AGENT_ID
 ): Record<string, Tool> {
   const report_write = auditedReadTool(
     {

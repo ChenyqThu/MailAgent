@@ -14,6 +14,14 @@ from typing import Any, Dict, List, Optional
 REPORT_DOC_VERSION = 1
 REPORT_CADENCES = ("daily", "weekly", "monthly", "custom")
 
+# Author id for a report written from manual chat, where no custom agent owns the run. Deliberately
+# not a `report_agent` row (the assistant is not a configurable agent) — `/reports/custom` accepts
+# it alongside real agent ids, and the Reports tab maps it to a display name instead of showing the
+# raw id. Any OTHER unknown id is rejected: without that check the endpoint would mint reports
+# belonging to agents that do not exist.
+# 🔴 Mirrored in frontend/src/shared/api/reportBlocks.ts (MANUAL_CHAT_REPORT_AGENT_ID).
+MANUAL_CHAT_REPORT_AGENT_ID = "custom_ai"
+
 # Public block vocabulary. Frontend runtime schemas mirror this tuple and
 # tests/reports/test_block_contract_consistency.py fails loudly on extraction/drift.
 REPORT_BLOCK_TYPES = (
@@ -201,6 +209,15 @@ def divider() -> Dict[str, Any]:
     return {"type": "divider"}
 
 
+# Upper bound for a single image block's `src`. Mirrors the markdown block's 50k text cap: the
+# only unbounded field a model could otherwise use to push megabytes of base64 into the report
+# table (and through every IPC/HTTP hop that later reads the row back). Path-style internal
+# references are tens of bytes; the cap only ever bites a runaway data: URI.
+# 🔴 Mirrored in frontend/src/shared/api/reportBlocks.ts — tests/reports/test_block_contract_consistency.py
+# fails loudly on drift.
+MAX_IMAGE_SRC_CHARS = 50_000
+
+
 def is_internal_image_src(src: str) -> bool:
     """Images in model-authored reports must never trigger an arbitrary network request."""
     return (
@@ -233,6 +250,10 @@ def validate_report_blocks(blocks: Any) -> List[Dict[str, Any]]:
             if not isinstance(src, str) or not is_internal_image_src(src):
                 raise ValueError(
                     f"blocks[{index}].src must be an internal app/attachment/data-image reference"
+                )
+            if len(src) > MAX_IMAGE_SRC_CHARS:
+                raise ValueError(
+                    f"blocks[{index}].src exceeds {MAX_IMAGE_SRC_CHARS} chars"
                 )
         out.append(dict(raw))
     return out

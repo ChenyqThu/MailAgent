@@ -76,6 +76,8 @@ function CapabilityCard({
   title,
   description,
   customized = false,
+  subsetLabel,
+  subsetHint,
   danger = false,
   children
 }: {
@@ -83,6 +85,11 @@ function CapabilityCard({
   title: string
   description: string
   customized?: boolean
+  /** Badge shown when the atomic selection is a strict subset of the displayed tier. The tier is
+   *  rounded UP (deriveToolTier), so it states the upper bound of granted power — never less than
+   *  what is actually enabled. Without this badge the card would read as "exactly this tier". */
+  subsetLabel?: string
+  subsetHint?: string
   danger?: boolean
   children: React.ReactNode
 }): React.ReactElement {
@@ -110,8 +117,11 @@ function CapabilityCard({
               {title}
             </h3>
             {customized && (
-              <span className="rounded-md border border-warn/25 bg-warn/8 px-1.5 py-0.5 text-micro font-medium text-warn">
-                ADV
+              <span
+                title={subsetHint}
+                className="rounded-md border border-warn/25 bg-warn/8 px-1.5 py-0.5 text-micro font-medium text-warn"
+              >
+                {subsetLabel ?? 'ADV'}
               </span>
             )}
           </div>
@@ -197,6 +207,18 @@ export function CapabilityCards({
     }
   }
 
+  /** The displayed tier is rounded UP, so a `customized` capability means "enabled ⊊ this tier".
+   *  Say that on the badge — an unlabelled "ADV" left the card reading as an exact tier match. */
+  const subsetProps = (
+    capability: 'email' | 'calendar' | 'knowledge' | 'reports'
+  ): { customized: boolean; subsetLabel: string; subsetHint: string } => ({
+    customized: derived.customized.includes(capability),
+    subsetLabel: t('agents.custom.capabilityCards.subsetBadge'),
+    subsetHint: t('agents.custom.capabilityCards.subsetHint', {
+      tier: t(`agents.custom.capabilityCards.${capability}.tier.${derived.profile[capability]}`)
+    })
+  })
+
   const hasEmailWrite = toolOptions.tools.some(
     (tool) =>
       tool.class === 'domain_write' &&
@@ -235,7 +257,7 @@ export function CapabilityCards({
           icon={<Mail size={16} />}
           title={t('agents.custom.capabilityCards.email.title')}
           description={t('agents.custom.capabilityCards.email.description')}
-          customized={derived.customized.includes('email')}
+          {...subsetProps('email')}
         >
           <TierButtons
             tiers={CUSTOM_AGENT_CAPABILITY_TIERS.email}
@@ -252,7 +274,7 @@ export function CapabilityCards({
           icon={<CalendarDays size={16} />}
           title={t('agents.custom.capabilityCards.calendar.title')}
           description={t('agents.custom.capabilityCards.calendar.description')}
-          customized={derived.customized.includes('calendar')}
+          {...subsetProps('calendar')}
         >
           <TierButtons
             tiers={CUSTOM_AGENT_CAPABILITY_TIERS.calendar}
@@ -271,7 +293,7 @@ export function CapabilityCards({
           icon={<Network size={16} />}
           title={t('agents.custom.capabilityCards.knowledge.title')}
           description={t('agents.custom.capabilityCards.knowledge.description')}
-          customized={derived.customized.includes('knowledge')}
+          {...subsetProps('knowledge')}
         >
           <TierButtons
             tiers={CUSTOM_AGENT_CAPABILITY_TIERS.knowledge}
@@ -287,7 +309,7 @@ export function CapabilityCards({
           icon={<FileText size={16} />}
           title={t('agents.custom.capabilityCards.reports.title')}
           description={t('agents.custom.capabilityCards.reports.description')}
-          customized={derived.customized.includes('reports')}
+          {...subsetProps('reports')}
         >
           <TierButtons
             tiers={CUSTOM_AGENT_CAPABILITY_TIERS.reports}

@@ -289,7 +289,9 @@ export function mayAutoApprove(toolClass: GatewayToolClass, mode: AgentContextMo
  *  web fetch/search, and file read/write. Everything else asks — see ACCEPT_EDITS_ASK_TOOLS for
  *  the explicit rationale per retained tool. */
 export const ACCEPT_EDITS_AUTO_APPROVE_TOOLS: ReadonlySet<string> = new Set([
-  'report_write',
+  // 🔴 report_write 有意**不在**此集合：它是 silent artifact（auditedReadTool 构建、无
+  // confirmation tier），从不进入审批链，所以「acceptEdits 模式下按名免卡」对它无任何运行时
+  // 效果。列在这里只会误导读者以为它在 manual 模式下要卡 —— 死条目，08-02 review F8 移除。
   'email_flag',
   'email_archive',
   'email_pin',

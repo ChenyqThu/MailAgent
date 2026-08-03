@@ -249,8 +249,20 @@ class AsyncJobRepository:
         status: str,
         result: Optional[Dict[str, Any]] = None,
         last_error: Optional[str] = None,
-    ) -> None:
-        """写终态 (succeeded/partial_failure/failed/aborted) + summary。"""
+        expect_status: Optional[str] = None,
+    ) -> bool:
+        """写终态 (succeeded/partial_failure/failed/aborted) + summary。返回是否真的写入。
+
+        ``expect_status`` = CAS 前置条件：只在该 job 当前正处于此状态时才写。默认 None =
+        无条件覆盖（既有调用方语义逐字节不变 —— worker 写终态时 job 已是 running，它本就该赢）。
+
+        🔴 谁需要 CAS：``run_queue.enqueue_agent_run`` 的预算跳过路径先 enqueue（status='queued'）
+        再把它标成 succeeded+skipped。这两步之间 ``claim_next`` 能把行抢走并真的开跑；无条件
+        UPDATE 会把**正在执行**的 run 记成「未执行」，随后 worker 的终态写又覆盖回来 —— 历史
+        与事实两次相反。同进程同 event loop 下 enqueue 全程同步无 await，窗口不成立；跨进程
+        （pm2 mail-sync + .app 并存，文档已禁止但不是物理不可能）则成立。传 'queued' 让抢跑方
+        赢：跳过标记写不进去 = 这个 run 真的在跑，调用方据 result 判定 skipped 时自然得到 False。
+        """
         if status not in self.TERMINAL_STATUSES:
             raise ValueError(
                 f"invalid terminal status={status!r}, must be one of "
@@ -261,20 +273,33 @@ class AsyncJobRepository:
             json.dumps(result, ensure_ascii=False, default=str)
             if result is not None else None
         )
+        sql = (
+            "UPDATE async_jobs SET status=?, result_json=?, last_error=?, "
+            "finished_at=?, updated_at=? WHERE job_id=?"
+        )
+        params: tuple[Any, ...] = (status, result_json, (last_error or None), now, now, job_id)
+        if expect_status is not None:
+            sql += " AND status=?"
+            params += (expect_status,)
         conn = self._connect()
         try:
-            conn.execute(
-                "UPDATE async_jobs SET status=?, result_json=?, last_error=?, "
-                "finished_at=?, updated_at=? WHERE job_id=?",
-                (status, result_json, (last_error or None), now, now, job_id),
-            )
+            cursor = conn.execute(sql, params)
+            written = cursor.rowcount > 0
             conn.commit()
         finally:
             conn.close()
+        if not written:
+            # 只可能发生在带 expect_status 的 CAS 上（无条件写必命中现存行）。
+            logger.info(
+                f"[async-jobs] job_id={job_id} → {status} SKIPPED "
+                f"(expect_status={expect_status!r} no longer holds — claimed elsewhere)"
+            )
+            return False
         logger.info(
             f"[async-jobs] job_id={job_id} → {status}"
             + (f" ({last_error})" if last_error else "")
         )
+        return True
 
     def recover_orphaned(self) -> int:
         """``JobWorker`` 启动时回收残留 running (上次崩溃留下)——**只碰维护族**，返回重置条数。

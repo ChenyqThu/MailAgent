@@ -21,10 +21,12 @@ from fastapi.testclient import TestClient
 
 from src.api.app import app
 from src.mail.sync_store import SyncStore
+from src.reports.models import MANUAL_CHAT_REPORT_AGENT_ID
 from src.reports.store import ReportStore
 
 _AGENT_ID = "test_daily"
 _REPORT_ID = "test_daily:daily:2026-06-01"
+_CUSTOM_AGENT_ID = "custom-digest"
 
 
 @pytest.fixture
@@ -41,6 +43,13 @@ def report_db(tmp_path: Path) -> Path:
             _AGENT_ID, "report", 1, "Daily Digest",
             json.dumps({"cadence": "daily", "hours": [9]}), None, None, 0, time.time(),
         ),
+    )
+    # type='custom' 行：/reports/custom 的归属校验要求 agentId 是真实 agent（或 manual chat 哨兵）。
+    conn.execute(
+        "INSERT OR REPLACE INTO report_agent "
+        "(id, type, enabled, title, schedule_json, prompt, model, kos_enrich, updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?)",
+        (_CUSTOM_AGENT_ID, "custom", 1, "Approval Digest", None, None, None, 0, time.time()),
     )
     conn.commit()
     conn.close()
@@ -808,3 +817,36 @@ def test_malformed_body_returns_envelope(report_client: TestClient) -> None:
     env = r.json()
     assert env["status"] == "error"
     assert env["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_write_custom_report_rejects_unknown_agent(report_client: TestClient) -> None:
+    """归属校验（08-02 review F6）：任意字符串不能造出归属于「不存在的 agent」的报告。
+
+    没有这条时 Reports tab 会按 agent 分组并显示裸 id，且该组永远点不进对应配置。
+    """
+    resp = report_client.post(
+        "/api/reports/custom",
+        json={
+            "agentId": "no-such-agent",
+            "title": "Ghost",
+            "mode": "new",
+            "blocks": [{"type": "overview", "text": "x"}],
+        },
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_write_custom_report_accepts_manual_chat_sentinel(report_client: TestClient) -> None:
+    """manual chat 没有 owning agent，用哨兵作者写报告必须放行（它不是 report_agent 行）。"""
+    resp = report_client.post(
+        "/api/reports/custom",
+        json={
+            "agentId": MANUAL_CHAT_REPORT_AGENT_ID,
+            "title": "From chat",
+            "mode": "new",
+            "blocks": [{"type": "overview", "text": "written from manual chat"}],
+        },
+    )
+    assert resp.status_code == 200
+    assert resp.json()["data"]["id"].startswith(f"{MANUAL_CHAT_REPORT_AGENT_ID}:custom:")

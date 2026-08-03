@@ -213,7 +213,11 @@ describe('headless execution discipline system channel', () => {
 
     expect(result.outcome).toBe('completed')
     expect(captured.system).toContain(HEADLESS_AGENT_EXECUTION_DISCIPLINE)
-    expect(captured.system).toContain('CODE_OWNED_CUSTOM_AGENT_WORKFLOW')
+    // 🔴 08-02 review F8 — trusted skill fragments 是 manual-chat-only。今天唯一一段是 Custom
+    // Agent builder 工作流，而它的六个 CRUD 工具是 capability_change，headless run 的 ToolSet 里
+    // 结构性不存在（isToolClassAllowedInMode）。注进来等于教一个无人值守的 agent 去做它做不到的
+    // 事，还每轮定时运行都占一段可缓存前缀。
+    expect(captured.system).not.toContain('CODE_OWNED_CUSTOM_AGENT_WORKFLOW')
     expect(captured.system).not.toContain('OWNER_TASK_PROMPT')
     expect(captured.system).not.toContain(thirdPartyMarker)
     expect(captured.system).not.toContain('UNTRUSTED_EMAIL_BODY_START')

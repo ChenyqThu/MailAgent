@@ -5,7 +5,7 @@ import { useTranslation } from 'react-i18next'
 import { Check, Trash2, X } from 'lucide-react'
 
 import type { AgentAvatarConfig, ReportCadence, ReportListItem } from '@shared/api/types'
-import { REPORT_CADENCES } from '@shared/api/reportBlocks'
+import { MANUAL_CHAT_REPORT_AGENT_ID, REPORT_CADENCES } from '@shared/api/reportBlocks'
 import { cn } from '@shared/lib/cn'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { ShimmerText } from '@shared/components/ShimmerText'
@@ -748,8 +748,13 @@ export function ReportsTab(): React.ReactElement {
   const { items, total, isLoading, hasMore, isFetchingMore, fetchMore } = useReportList(cadence)
   const { agents } = useReportConfig()
   const agentNames = useMemo(
-    () => Object.fromEntries(agents.map((agent) => [agent.id, agent.title || agent.id])),
-    [agents]
+    () => ({
+      // manual chat 写的报告归属于哨兵作者（它不是 report_agent 行，故不在 agents 里）。没有这一
+      // 条时分组标题会显示裸 id 'custom_ai'。真 agent 排在后面 → 同名 id 以真配置为准。
+      [MANUAL_CHAT_REPORT_AGENT_ID]: t('agents.reports.assistantAuthor'),
+      ...Object.fromEntries(agents.map((agent) => [agent.id, agent.title || agent.id]))
+    }),
+    [agents, t]
   )
   const agentAvatars = useMemo(
     () => Object.fromEntries(agents.map((agent) => [agent.id, agent.avatar])),

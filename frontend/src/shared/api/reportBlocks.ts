@@ -4,6 +4,13 @@ import type { ReportBlock, ReportUnknownBlock } from './types/report'
 
 export const REPORT_CADENCES = ['daily', 'weekly', 'monthly', 'custom'] as const
 
+/** Author id stamped on a report written from manual chat, where no custom agent owns the run.
+ *  It is deliberately NOT a row in `report_agent`: the assistant is not a configurable agent.
+ *  Reports listing maps it to a display name; the backend accepts it alongside real agent ids.
+ *  🔴 Mirrored in src/reports/models.py (MANUAL_CHAT_REPORT_AGENT_ID) — the block-contract
+ *  consistency gate fails loudly on drift. */
+export const MANUAL_CHAT_REPORT_AGENT_ID = 'custom_ai'
+
 export const REPORT_BLOCK_TYPES = [
   'header',
   'overview',
@@ -25,9 +32,16 @@ export const REPORT_BLOCK_TYPES = [
   'image'
 ] as const
 
+/** Upper bound for one image block's `src`, mirroring the markdown block's 50k text cap — the only
+ *  otherwise-unbounded field a model could use to push megabytes of base64 into the report table.
+ *  🔴 Mirrored in src/reports/models.py (MAX_IMAGE_SRC_CHARS); the block-contract consistency gate
+ *  fails loudly on drift. */
+export const MAX_IMAGE_SRC_CHARS = 50_000
+
 const toneSchema = z.enum(['neutral', 'info', 'success', 'warn', 'critical'])
 const internalImageSrcSchema = z
   .string()
+  .max(MAX_IMAGE_SRC_CHARS)
   .refine(
     (src) =>
       (src.startsWith('/') && !src.startsWith('//')) ||

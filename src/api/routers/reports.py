@@ -50,7 +50,11 @@ def _custom_agents_enabled() -> bool:
 @router.post("/reports/custom", dependencies=[Depends(verify_cf_access)])
 async def write_custom_report(request: Request, body: Optional[dict[str, Any]] = None):
     """Persist a local ReportDoc artifact created by the gateway ``report_write`` tool."""
-    from src.reports.models import header, validate_report_blocks
+    from src.reports.models import (
+        MANUAL_CHAT_REPORT_AGENT_ID,
+        header,
+        validate_report_blocks,
+    )
 
     raw = body or {}
     agent_id = str(raw.get("agentId") or raw.get("agent_id") or "").strip()
@@ -59,6 +63,15 @@ async def write_custom_report(request: Request, body: Optional[dict[str, Any]] =
     model = str(raw.get("model") or "custom-agent").strip() or "custom-agent"
     if not agent_id or len(agent_id) > 128:
         raise APIError("E_INVALID_ARG", "agentId is required (max 128 chars)", source="sqlite")
+    # 归属校验：真实 agent 行，或 manual chat 的哨兵作者。少了这条，任意字符串都能造出一份
+    # 归属于「不存在的 agent」的报告 —— Reports tab 会把它按 agent 分组并显示裸 id，且该组
+    # 永远没有对应的 agent 配置可点进去。
+    if agent_id != MANUAL_CHAT_REPORT_AGENT_ID and get_report_store().get_agent(agent_id) is None:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"agentId {agent_id!r} is not a known agent",
+            source="sqlite",
+        )
     if not title or len(title) > 200:
         raise APIError("E_INVALID_ARG", "title is required (max 200 chars)", source="sqlite")
     if mode not in ("new", "replace"):

@@ -11,6 +11,7 @@ import { describe, expect, test } from 'vitest'
 import {
   buildGatewaySystemPrompt,
   buildCurrentDateBlock,
+  HEADLESS_AGENT_EXECUTION_DISCIPLINE,
   type GatewaySystemPromptConfig
 } from '../../src/ai-gateway/systemPrompt'
 import {
@@ -187,6 +188,26 @@ describe('buildGatewaySystemPrompt', () => {
     })
     expect(out).toContain('# Active skills (capabilities currently enabled)')
     expect(out).toContain('CUSTOM_AGENT_CODE_OWNED_WORKFLOW')
+  })
+
+  test('trusted skill workflow is manual-chat only — a headless run never sees it', () => {
+    // 08-02 review F8：唯一一段 fragment 是 Custom Agent builder 流程，其六个 CRUD 工具是
+    // capability_change → headless ToolSet 里结构性不存在。注进去 = 教一个无人值守的 agent 去做
+    // 它做不到的事，并在每轮定时运行里白占可缓存前缀。
+    const manual = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X', trustedSkillFragments: 'WORKFLOW_MARKER' },
+      contextSnapshot: null
+    })
+    const headless = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X', trustedSkillFragments: 'WORKFLOW_MARKER' },
+      contextSnapshot: null,
+      headlessAgentRun: true
+    })
+    expect(manual).toContain('WORKFLOW_MARKER')
+    expect(headless).not.toContain('WORKFLOW_MARKER')
+    expect(headless).not.toContain('# Active skills (capabilities currently enabled)')
+    // headless 换来的是它真正需要的那段：重复失败纪律。
+    expect(headless).toContain(HEADLESS_AGENT_EXECUTION_DISCIPLINE)
   })
 
   test('empty trusted skill guidance preserves the no-fragment prompt path', () => {

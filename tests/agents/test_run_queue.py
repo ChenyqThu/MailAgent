@@ -108,3 +108,70 @@ def test_sync_atomicity_invariant():
         if isinstance(node, (ast.Await, ast.AsyncFunctionDef, ast.AsyncFor, ast.AsyncWith))
     ]
     assert offenders == [], "enqueue_agent_run 引入了 await point，同步原子性不变量已破"
+
+
+# =============================================================================
+# 预算跳过的 CAS（08-02 review F6）—— 抢跑的 run 不得被记成 skipped
+# =============================================================================
+
+
+def test_budget_skip_does_not_clobber_a_claimed_run(repo):
+    """enqueue 与「标 skipped」之间 worker 抢先 claim → 跳过标记必须写不进去。
+
+    没有 CAS 时这里会把一个**正在执行**的 run 记成「未执行」，随后 worker 的终态写再覆盖回来，
+    历史与事实两次相反。
+    """
+    budget = Budget(max_runs_per_day=1)
+    first = enqueue_agent_run(
+        repo, agent_id="a1", trigger_kind="cron", fire_key="k1", budget=budget
+    )
+    assert first is not None
+
+    # 第二次入队会超限。模拟「入队后、标 skipped 前」被 AgentRunWorker 抢走：
+    # 先手工把新行推进到 running，再让预算路径尝试覆盖。
+    real_mark_terminal = repo.mark_terminal
+    claimed: dict = {}
+
+    def _claim_then_mark(job_id, **kwargs):
+        if not claimed:
+            claimed["job_id"] = job_id
+            # 模拟并发 worker：把这一行 claim 成 running。
+            conn = repo._connect()
+            try:
+                conn.execute(
+                    "UPDATE async_jobs SET status='running' WHERE job_id=?", (job_id,)
+                )
+                conn.commit()
+            finally:
+                conn.close()
+        return real_mark_terminal(job_id, **kwargs)
+
+    repo.mark_terminal = _claim_then_mark  # type: ignore[method-assign]
+    second = enqueue_agent_run(
+        repo, agent_id="a1", trigger_kind="cron", fire_key="k2", budget=budget
+    )
+    repo.mark_terminal = real_mark_terminal  # type: ignore[method-assign]
+
+    job_id, _ = second
+    assert claimed["job_id"] == job_id
+    job = repo.get(job_id)
+    assert job is not None
+    # 抢跑方赢：行仍是 running，没有被伪造成 succeeded+skipped。
+    assert job.status == "running"
+    assert not (isinstance(job.result, dict) and job.result.get("outcome") == "skipped")
+
+
+def test_budget_skip_still_records_when_unclaimed(repo):
+    """常态（无人抢跑）下跳过标记照常写入 —— CAS 不能把正常路径也挡掉。"""
+    budget = Budget(max_runs_per_day=1)
+    enqueue_agent_run(repo, agent_id="a1", trigger_kind="cron", fire_key="k1", budget=budget)
+    job_id, _ = enqueue_agent_run(
+        repo, agent_id="a1", trigger_kind="cron", fire_key="k2", budget=budget
+    )
+    job = repo.get(job_id)
+    assert job is not None
+    assert job.status == "succeeded"
+    assert job.result["outcome"] == "skipped"
+    assert job.result["reason"] == "daily_run_limit"
+    # skipped 行不占额度（否则超限后每次触发都会把额度越推越远）。
+    assert repo.count_agent_runs_since("a1", 0) == 1

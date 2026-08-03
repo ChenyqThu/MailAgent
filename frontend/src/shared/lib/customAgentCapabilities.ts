@@ -199,13 +199,24 @@ function deriveToolTier<K extends ToolCapabilityId>(
     }
   }
 
-  // Pick the most capable canonical subset for display while retaining the exact atomic selection.
-  let closest: CustomAgentCapabilityTier<K> = tiers[0]
+  // 🔴 No canonical tier matches exactly → round UP: the smallest tier that CONTAINS the selection.
+  // The displayed tier must never be weaker than what is actually granted (PRODUCT.md「Make trust
+  // observable」). The previous version rounded DOWN — it returned the strongest tier fully
+  // contained BY the selection and, failing that, `tiers[0]`. On the backend default set
+  // (DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS, which carries email_flag/archive/pin/resync/draft_reply)
+  // no tier is fully contained, so every freshly created agent rendered as email='read' while
+  // holding five domain_write tools — the card claimed less power than the agent had.
+  // Tiers are ordered weakest→strongest AND each is a superset of the previous one (see
+  // EMAIL_READ/ORGANIZE/DRAFT_TOOLS), so the first container found IS the smallest one.
   for (const tier of tiers) {
     const tierTools = toolsForCapabilityTier(capability, tier)
-    if (tierTools.every((tool) => selected.includes(tool))) closest = tier
+    if (selected.every((tool) => tierTools.includes(tool))) {
+      return { tier, customized: true }
+    }
   }
-  return { tier: closest, customized: true }
+  // Nothing contains the selection (an Advanced edit mixed in tools no single tier covers). The
+  // strongest tier is the closest honest upper bound — still never understating the granted power.
+  return { tier: tiers[tiers.length - 1], customized: true }
 }
 
 /** Reverse-map the persisted policy for card rendering; arbitrary Advanced edits are flagged. */

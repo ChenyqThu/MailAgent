@@ -78,8 +78,12 @@ export function buildGatewaySystemPrompt(args: {
     kosL1HotBlockEnabled: false, // the gateway does no L1 sender-digest prefetch
     userContext: pc?.userContext && pc.userContext.length > 0 ? pc.userContext : null,
     memorySummary: pc?.memorySummary && pc.memorySummary.length > 0 ? pc.memorySummary : null,
+    // 🔴 manual chat only (08-02 review F8). The only fragment shipped today is the Custom Agent
+    // builder workflow, and its six CRUD tools are capability_change — structurally absent from a
+    // headless run's ToolSet (isToolClassAllowedInMode). Injecting it there taught an unattended
+    // agent a procedure it cannot perform, and burned cacheable prefix on every scheduled run.
     skillFragments:
-      pc?.trustedSkillFragments && pc.trustedSkillFragments.length > 0
+      !args.headlessAgentRun && pc?.trustedSkillFragments && pc.trustedSkillFragments.length > 0
         ? pc.trustedSkillFragments
         : null,
     standingContext:

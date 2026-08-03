@@ -9,7 +9,12 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-from src.reports.models import REPORT_BLOCK_TYPES, REPORT_CADENCES
+from src.reports.models import (
+    MANUAL_CHAT_REPORT_AGENT_ID,
+    MAX_IMAGE_SRC_CHARS,
+    REPORT_BLOCK_TYPES,
+    REPORT_CADENCES,
+)
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -46,3 +51,29 @@ def test_report_cadences_match_runtime_and_typescript_union() -> None:
 
     assert frontend_runtime == REPORT_CADENCES
     assert frontend_type == REPORT_CADENCES
+
+
+def test_image_src_cap_matches_frontend_runtime_schema() -> None:
+    """image src 上限跨语言同源（08-02 review F8）。
+
+    这是 report_write 里唯一没有长度约束过的模型自由字段（markdown 的 text 早有 50k 上限），
+    两侧任一边放宽而另一边不动，就会出现「gateway 收下、Python 拒绝」或反之的静默不一致。
+    """
+    source = TS_CONTRACT.read_text(encoding="utf-8")
+    match = re.search(r"export\s+const\s+MAX_IMAGE_SRC_CHARS\s*=\s*([\d_]+)", source)
+    assert match is not None, "没找到 MAX_IMAGE_SRC_CHARS —— 更新这道闸的解析器"
+    frontend_cap = int(match.group(1).replace("_", ""))
+    assert frontend_cap >= 1000, "上限 canary 失败 —— 解析器可能抓到了别的数字"
+    assert frontend_cap == MAX_IMAGE_SRC_CHARS
+
+
+def test_manual_chat_author_id_matches_frontend() -> None:
+    """manual chat 报告的哨兵作者 id 跨语言同源（08-02 review F6）。
+
+    两侧不一致的后果不对称：gateway 传的 id 若与 Python 认的哨兵不同，`/reports/custom` 会按
+    「未知 agent」拒绝，manual chat 的 report_write 直接不可用（且报错指向 agentId 而非配置）。
+    """
+    source = TS_CONTRACT.read_text(encoding="utf-8")
+    match = re.search(r"export\s+const\s+MANUAL_CHAT_REPORT_AGENT_ID\s*=\s*'([^']+)'", source)
+    assert match is not None, "没找到 MANUAL_CHAT_REPORT_AGENT_ID —— 更新这道闸的解析器"
+    assert match.group(1) == MANUAL_CHAT_REPORT_AGENT_ID

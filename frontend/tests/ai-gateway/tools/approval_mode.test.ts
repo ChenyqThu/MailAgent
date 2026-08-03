@@ -394,7 +394,9 @@ describe('07-16 — acceptEdits allow/ask partition (codex r1 P1-3: fail-closed 
         'email_resync',
         'file_read',
         'file_write',
-        'report_write',
+        // 08-02 review F8 — report_write 已移出：它是 tier:'silent' 的本地 artifact，从不进审批
+        // 链，「acceptEdits 免卡」对它没有任何运行时效果。留在这里只会让人误以为它在 manual
+        // 模式下要卡。移除不改变任何行为（它本来就 silent 直接执行）。
         'set_skill_enabled',
         'update_system_md',
         'web_fetch',
@@ -432,10 +434,18 @@ describe('07-16 — acceptEdits allow/ask partition (codex r1 P1-3: fail-closed 
       '../../../../tests/agent_eval/tool_catalog.json'
     )
     const catalog = JSON.parse(readFileSync(catalogPath, 'utf-8')) as {
-      tools: Record<string, { write?: boolean; legacy_retired?: boolean }>
+      tools: Record<string, { write?: boolean; legacy_retired?: boolean; tier?: string }>
     }
+    // 🔴 08-02 review F8 — 判定维度是「会不会进审批链」，不是「有没有副作用」。两者正交：
+    // report_write 是 write:true（有副作用）但 tier:'silent'（本地 artifact，从不出审批卡），
+    // acceptEdits 的 allow/ask 划分对它没有任何运行时含义，把它塞进任一集合都是死条目。
+    // 反过来，任何 tier 从 silent 改成 preview/edit 的工具会立刻掉进本闸 —— 那才是需要
+    // 显式 acceptEdits 决策的时刻。
     const writeTools = Object.entries(catalog.tools)
-      .filter(([, entry]) => entry.write === true && entry.legacy_retired !== true)
+      .filter(
+        ([, entry]) =>
+          entry.write === true && entry.legacy_retired !== true && entry.tier !== 'silent'
+      )
       .map(([name]) => name)
     expect(writeTools.length).toBeGreaterThanOrEqual(25) // sanity: the catalog read worked
     for (const name of writeTools) {

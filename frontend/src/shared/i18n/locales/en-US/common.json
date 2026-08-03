@@ -524,8 +524,14 @@
     "ai": {
       "understand": "AI understand “{query}”",
       "understandHint": "Let AI search and gather the relevant emails",
-      "searchingPhrases": ["Understanding your question…", "Searching relevant emails…"],
-      "summarizingPhrases": ["Filtering the most relevant…", "Organizing results…"],
+      "searchingPhrases": [
+        "Understanding your question…",
+        "Searching relevant emails…"
+      ],
+      "summarizingPhrases": [
+        "Filtering the most relevant…",
+        "Organizing results…"
+      ],
       "summary": "AI: {text}",
       "emptyTitle": "AI found no related emails",
       "emptyHint": "Try rephrasing, or use search syntax directly",
@@ -1075,9 +1081,15 @@
       "error": "The operation failed — retry or ask the assistant to start over."
     },
     "calendarApprovalCard": {
-      "reschedule": { "title": "Reschedule event" },
-      "rsvp": { "title": "Reply to meeting invite (RSVP)" },
-      "delete": { "title": "Delete event" },
+      "reschedule": {
+        "title": "Reschedule event"
+      },
+      "rsvp": {
+        "title": "Reply to meeting invite (RSVP)"
+      },
+      "delete": {
+        "title": "Delete event"
+      },
       "event": "Event",
       "before": "Current time",
       "after": "New time",
@@ -2627,7 +2639,7 @@
       "kos": {
         "title": "Knowledge Brain (KOS)",
         "helper": "KOS lets the AI search across your emails / product knowledge, recall past facts, and find experts in chat. It needs a self-hosted gbrain knowledge service — deploy from ",
-        "helperSuffix": " and request OAuth credentials, then fill them in below. Without credentials the chat AI cannot reach the brain \u2014 calls come back as a not-configured error.",
+        "helperSuffix": " and request OAuth credentials, then fill them in below. Without credentials the chat AI cannot reach the brain — calls come back as a not-configured error.",
         "enabled": {
           "label": "Enable KOS tools",
           "helper": "When on, the chat AI can call kos_query / kos_search / kos_get_page / kos_find_experts and other read-only knowledge-brain tools (requires credentials below)."
@@ -3320,7 +3332,8 @@
         "total": "{count, plural, one {# email} other {# emails}}",
         "urgent": "{count, plural, one {# urgent} other {# urgent}}",
         "replied": "{count, plural, one {# replied} other {# replied}}"
-      }
+      },
+      "assistantAuthor": "Assistant"
     },
     "block": {
       "source": "Source",
@@ -3670,7 +3683,9 @@
             "on": "On"
           },
           "ruleHint": "The grant only admits exec tools; card-free execution still needs a whitelist rule and first-run confirmation."
-        }
+        },
+        "subsetBadge": "SUBSET",
+        "subsetHint": "The enabled tools are a subset of the “{{tier}}” tier. A tier states the upper bound of granted power, not that every tool in it is on. Expand “Advanced” for the exact list."
       },
       "budget": {
         "label": "Run budget",

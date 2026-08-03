@@ -449,7 +449,7 @@ log4j.logger.davmail=INFO
 
 **详见**：[`docs/multi-folder-sync-prd.md`](../folder-sync/multi-folder-sync-prd.md) · [`docs/multi-folder-sync-design.md`](../folder-sync/multi-folder-sync-design.md) · [`docs/multi-folder-sync-handoff.md`](../../archive/2026-06/multi-folder-sync-handoff.md) · 看板 [`docs/multi-folder-sync-matrix.md`](../folder-sync/multi-folder-sync-matrix.md)。
 
-## 跨语言手抄常量的一致性闸（可复用模式，现存十二闸）
+## 跨语言手抄常量的一致性闸（可复用模式，现存十六闸）
 
 **问题形态**：一个常量 / 派生表 / 集合，在 Python 与 TypeScript（或多个 TS 文件）里各有一份**手抄**镜像。
 类型系统跨不过语言边界，import 也跨不过 —— 于是改一处、漏另一处，**测试全绿、编译干净、运行时静默错**。
@@ -483,7 +483,7 @@ log4j.logger.davmail=INFO
    闸失效等于没有闸，而且没人会发现。所以抽取器只认当前的单行习语，重构者被迫回来同步更新抽取器，
    顺手核对镜像仍一致。
 
-**现存十二闸**（前四条是原有的，后八条随 issue #68 补齐）：
+**现存十六闸**（前四条是原有的，中间八条随 issue #68 补齐，末四条随 08-02 custom-agent review 补齐）：
 
 | 镜像的东西 | 镜像在哪几处 | 闸 | 漏改的后果 |
 |---|---|---|---|
@@ -499,6 +499,10 @@ log4j.logger.davmail=INFO
 | `INTEGRITY_MARKER_FILENAME` | `src/mail/db_safety.py` · `frontend/src/electron/main/backend_lifecycle.ts::DB_INTEGRITY_MARKER_FILENAME` | 同上文件（此前只有 `backend_lifecycle.test.ts` 的**自指**断言：TS 常量 vs 测试里再抄一遍的字面量，Python 改名照样绿） | Python fail-fast 写的 marker 前端永远读不到 → 用户只看到「后端起不来」，quick_check 的损坏详情丢失 |
 | `REQUIRED_TABLES`（**子集**关系） | `src/services/admin_health.py`（全量 9 张，CLI/serve-api 共用） · `frontend/src/electron/main/backend_lifecycle.ts`（开窗门控的 4 张关键子集） | 同上文件（钉子集关系，不是相等 —— 子集是有意的） | TS 侧拼错表名 = `probeDbReady` 永远等不到就绪，开窗卡满 120s 超时降级（v0.2.2 同款事故） |
 | 日历 IPC(17) + onboarding(16) 类型族（**跨进程，结构性**） | `electron/main/handlers/calendar-{read,sync,write}.ts` ↔ `shared/api/types/calendar.ts`；`handlers/onboarding.ts` ↔ `renderer/onboarding/ipc.ts`（含 4 对**改名**镜像） | `frontend/tests/main/type_family_parity.test.ts`（带花括号深度的小解析器抽**顶层字段键集**；只比键集不逐字段钉值 —— 否则一份手抄变两份） | 生产者多的键 = 前端读不到（TS 说它不存在）；声明多的键 = 恒 `undefined` 且**编译期完全不报**（#67 一整批就是这个形态） |
+| 六能力卡工具词表 ↔ headless 可选工具集 | `src/api/routers/agent_runs.py::HEADLESS_TOOL_OPTIONS`（后端权威清单） · `frontend/src/shared/lib/customAgentCapabilities.ts::CUSTOM_AGENT_CAPABILITY_TOOL_SETS`（六档分组） | `tests/config/test_agent_capability_parity.py`（**精确相等**，不是包含；带 spread 闭包解析 + 未解析常量必抛） | 左缺 = 该工具不归任何档管，用户动一次能力卡它就成永久孤儿；右缺 = 写进 `allowed_tools` 后被 gateway 交集丢掉，**UI 显示该档已开而工具根本不存在**（本项目真发生过 `email_search`→`email_list_filter` 改名） |
+| `AGENT_RUN_STATES` 9 值读态 | `src/agents/run_state.py`（运行时 frozenset，端点 state 过滤用） · `frontend/src/shared/api/types/report.ts::AgentRunState`（编译期 union，`assertNever` 穷举用） | 同上文件 | 🔴 原注释称「assertNever 会强制 UI 侧同步」——**只在 TS 内部成立**：Python 单方面加值时 TS 毫无感知，多出来的 state 让 `STATE_VISUAL` 查表落空（渲染空白） |
+| `max_run_seconds` 默认/上限 | `src/agents/trigger.py::DEFAULT_MAX_RUN_SECONDS`/`MAX_RUN_SECONDS_CEILING` · `frontend/src/ai-gateway/agentRun.ts::DEFAULT_AGENT_RUN_SECONDS`/`MAX_AGENT_RUN_SECONDS`（gateway 边界防御性 re-clamp） | 同上文件 | Python 抬上限而 TS 不动 → run 在 gateway 侧**提前 abort**（用户看到「跑到一半没了」）；反向则畸形 spec 反而拿到更长运行时间 |
+| report artifact 两常量 | `src/reports/models.py::MAX_IMAGE_SRC_CHARS` / `MANUAL_CHAT_REPORT_AGENT_ID` · `frontend/src/shared/api/reportBlocks.ts` 同名导出 | `tests/reports/test_block_contract_consistency.py`（与块词表闸同文件） | src 上限不一致 = 「gateway 收下、Python 拒绝」的静默不一致；哨兵 id 不一致 = manual chat 的 `report_write` 被归属校验整个拒掉 |
 
 **什么时候必须建新闸**：你要在**第二处**手抄一个已有的常量 / 枚举 / 派生表，且两处无法共享同一个源
 （跨语言 / 跨部署 / 跨构件种类 / 跨进程 / 打包边界）。每闸的成本都在 100-200 行量级，

@@ -51,7 +51,10 @@ DEFAULT_CADENCE = "daily"
 # await，所以 daily 必须排在 weekly / monthly 前面。改前这条依赖只靠
 # 'daily_email_digest' < 'weekly_email_digest' 的**字母序巧合**成立：换个 agent id
 # （或用户新建自定义报告 agent）就静默失效 —— 周报稳定少综合一份且不会重算。
-# 前端 AgentsTab 用的是同一份 {daily:0, weekly:1, monthly:2} 口径。
+# 🔴 本表自 07-28 起从 REPORT_CADENCES 派生，含 'custom'（rank 3），已**不再**与前端 AgentsTab
+# 的 {daily:0, weekly:1, monthly:2} 逐字相同。这不影响排序结果：custom 是 type='custom' 的
+# agent，走下面的 _NON_REPORT_RANK 分支，永远不会用 cadence 排序（report worker 里
+# type != 'report' 直接 continue）。前端那份只排报告型 agent，故两边各自正确。
 _CADENCE_ORDER = {cadence: rank for rank, cadence in enumerate(REPORT_CADENCES)}
 # 非报告型 agent（custom / search / preprocess / project_progress）不参与报告调度
 # （worker 里 type != 'report' 直接 continue）→ 统一排在报告 agent 之后，彼此仍按 id 序。
