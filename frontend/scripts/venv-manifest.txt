@@ -1,5 +1,5 @@
 # venv-manifest.txt — 嵌入式 CPython 运行时体积审计快照 (每次 provision 覆写, 由 build-python-venv.sh 生成)
-generated_at: 2026-08-02T05:32:54Z
+generated_at: 2026-08-03T17:29:11Z
 arch: arm64
 pbs_tag: 20260510
 pyver: 3.11.15
