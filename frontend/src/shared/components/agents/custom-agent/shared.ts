@@ -17,11 +17,14 @@ export function errText(err: unknown): string {
 /** trigger.kind → headless context_mode（与后端 _derive_rule_context_mode / gateway
  *  deriveContextMode 同表，只读展示用）。
  *  `schedule`（07-24 结构化排程）与 `cron` 同族 —— 到点就跑、无攻击者可控输入。漏了这一行，
- *  排程型 agent 的自动化策略区会显示「无 headless 模式」并把所有免卡规则标成 dormant。 */
+ *  排程型 agent 的自动化策略区会显示「无 headless 模式」并把所有免卡规则标成 dormant。
+ *  `im`（阶段 0b 预置，harness-expansion epic grill Q10=A）→ 'im_chat'：阶段 2 飞书对话；
+ *  当前没有任何行能带这个 kind（parse_trigger 尚不认识），本分支 dormant。 */
 export function deriveHeadlessMode(
   kind: string | null
-): 'cron_headless' | 'untrusted_trigger' | null {
+): 'cron_headless' | 'untrusted_trigger' | 'im_chat' | null {
   if (kind === 'cron' || kind === 'schedule') return 'cron_headless'
   if (kind === 'email_filter') return 'untrusted_trigger'
+  if (kind === 'im') return 'im_chat'
   return null
 }

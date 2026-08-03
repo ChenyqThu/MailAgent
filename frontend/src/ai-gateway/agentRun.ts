@@ -72,11 +72,16 @@ export interface RunHeadlessAgentOpts {
  *  故同映射到 cron_headless。少了这一行会 fail-close 成 untrusted_trigger：安全方向没错，但
  *  白白套上「邮件正文不可信」那套收窄，且与 owner 在 cron_headless 下配的免卡规则对不上。
  *  **必须与 Python `src/api/routers/agent.py::_derive_rule_context_mode` 同表** —— 规则的
- *  context_mode 是它在创建时盖章的，两边不一致 = 规则永不命中。 */
+ *  context_mode 是它在创建时盖章的，两边不一致 = 规则永不命中。
+ *
+ *  `im`（阶段 0b 预置，harness-expansion epic grill Q10=A）→ 'im_chat'：阶段 2 飞书对话的第四
+ *  场合。当前没有任何 spec 会带这个 kind（Python `parse_trigger` 尚不认识 'im'，行存不进库），
+ *  本分支 dormant。 */
 export function deriveContextMode(spec: AgentRunSpec): AgentContextMode {
   const kind = spec.trigger?.kind
   if (kind === 'email_filter') return 'untrusted_trigger'
   if (kind === 'cron' || kind === 'schedule') return 'cron_headless'
+  if (kind === 'im') return 'im_chat'
   return normalizeContextMode(undefined)
 }
 

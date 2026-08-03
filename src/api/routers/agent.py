@@ -787,16 +787,24 @@ def _derive_rule_context_mode(agent: dict[str, Any]) -> str:
     """per-agent 规则的 context_mode **只**从 agent trigger.kind 派生（ADR-004 §3.3：表单/请求
     不可选 —— 用户没有机会配出跨上下文规则）：email_filter → untrusted_trigger /
     cron|schedule → cron_headless（schedule = schedule-builder 结构化定时，与 cron 同为
-    无攻击者可控输入的定时 headless）。坏 trigger → ValueError（400）。
+    无攻击者可控输入的定时 headless）/ im → im_chat（阶段 0b 预置，harness-expansion epic
+    grill Q10=A —— 阶段 2 飞书对话的第四场合）。坏 trigger → ValueError（400）。
 
     🔴 本表共 **三份镜像**，改任何一份必须同批改齐（漏改 = 盖章与求值失配 → 免卡规则
     永不命中 / 抽屉全 dormant）：① 本函数（建规盖章权威）② gateway
     ``frontend/src/ai-gateway/agentRun.ts::deriveContextMode``（运行时求值）③ 抽屉
-    ``frontend/src/shared/components/agents/custom-agent/shared.tsx::deriveHeadlessMode``
+    ``frontend/src/shared/components/agents/custom-agent/shared.ts::deriveHeadlessMode``
     （展示）。跨表一致性闸：``tests/api/test_context_mode_consistency.py``（canonical 表
     在闸里，TS 两份从源码抽取比对 —— 改这里先改闸）。"""
-    from src.agents.trigger import parse_trigger
+    from src.agents.trigger import _as_dict, parse_trigger
 
+    # 阶段 0b 预置映射行：kind='im' → 'im_chat'。parse_trigger 尚不认识 'im'（保存面在阶段 2
+    # 才放开，validate_agent_config_patch 仍拒 → 这种行当前存不进库，本分支 dormant），故在
+    # parse 前 peek 原始 kind；``_as_dict`` 是有意的私有 import（trigger_json 归一化单源，
+    # 镜像 test_trigger_kind_parity 对 ``_RULE_KEYS`` 的处理）。阶段 2 给 parse_trigger 加
+    # im 分支后应把此 peek 收回 post-parse。
+    if (_as_dict(agent.get("trigger_json")) or {}).get("kind") == "im":
+        return "im_chat"
     trig = parse_trigger(agent.get("trigger_json"))  # TriggerValidationError（ValueError）on 坏配置
     return "cron_headless" if trig.kind in ("cron", "schedule") else "untrusted_trigger"
 

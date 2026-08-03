@@ -46,6 +46,10 @@ CONTEXT_MODE_TABLE: Dict[str, str] = {
     "cron": "cron_headless",
     "schedule": "cron_headless",       # 07-24 schedule-builder：与 cron 同为定时 headless
     "email_filter": "untrusted_trigger",
+    # 阶段 0b 预置（harness-expansion epic grill Q10=A）：阶段 2 飞书对话的第四场合。
+    # parse_trigger 尚不认识 'im'（保存面在阶段 2 才放开），Python 侧靠 parse 前 peek 派生 ——
+    # 当前没有任何行能带这个 kind，映射行 dormant。
+    "im": "im_chat",
 }
 
 _TRIGGER_PAYLOADS = {
@@ -58,6 +62,7 @@ _TRIGGER_PAYLOADS = {
         "anchor": "2026-07-24", "timezone": "Asia/Shanghai",
     },
     "email_filter": {"v": 1, "kind": "email_filter", "subject_pattern": "DMS.*审批"},
+    "im": {"v": 1, "kind": "im"},
 }
 
 
@@ -76,7 +81,8 @@ def test_python_table_exhaustive():
 
 
 def test_python_unknown_kind_fails_closed_at_parse():
-    """未知 kind 在 parse_trigger 就拒（400），永远走不到盖章 —— 不存在第四个隐式档位。"""
+    """未知 kind 在 parse_trigger 就拒（400），永远走不到盖章 —— 不存在隐式档位。
+    （'im' 是唯一的显式例外：0b 预置的 parse 前 peek，见 CONTEXT_MODE_TABLE 注释。）"""
     from src.api.routers.agent import _derive_rule_context_mode
 
     with pytest.raises(TriggerValidationError):

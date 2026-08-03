@@ -69,12 +69,24 @@ const CLASSES_OF = (cls: GatewayToolClass): string[] =>
     .map(([n]) => n)
 
 describe('normalizeContextMode — fail-closed', () => {
-  test('the three known modes pass through', () => {
+  test('the four known modes pass through', () => {
     for (const m of AGENT_CONTEXT_MODES) expect(normalizeContextMode(m)).toBe(m)
   })
 
   test('absent / unknown / near-miss values → untrusted_trigger (strictest)', () => {
-    for (const v of [undefined, null, '', 'manual', 'MANUAL_CHAT', ' manual_chat', 42, {}, []]) {
+    // 'im' is the trigger KIND (stage 0b), never a mode name — it must fail-close like any junk.
+    for (const v of [
+      undefined,
+      null,
+      '',
+      'manual',
+      'MANUAL_CHAT',
+      ' manual_chat',
+      'im',
+      42,
+      {},
+      []
+    ]) {
       expect(normalizeContextMode(v)).toBe('untrusted_trigger')
     }
   })
@@ -98,9 +110,9 @@ describe('classOfTool — single source + fail-closed', () => {
 })
 
 describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (card skip)', () => {
-  // The full 3×7 matrix, spelled out (artifact added by the custom-report epic):
-  // registration allows read/artifact/domain_write everywhere and restricts
-  // capability_change/exec/web/outbound to manual_chat (no grants); auto-approve is
+  // The full 4×7 matrix, spelled out (artifact added by the custom-report epic; im_chat by
+  // stage 0b — grill Q10=A): registration allows read/artifact/domain_write everywhere and
+  // restricts capability_change/exec/web/outbound to manual_chat (no grants); auto-approve is
   // domain_write × manual_chat ONLY.
   const REGISTRATION_EXPECTED: Record<AgentContextMode, Record<GatewayToolClass, boolean>> = {
     manual_chat: {
@@ -129,6 +141,19 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       exec: false,
       web: false,
       outbound: false
+    },
+    // 0b (grill Q10=A) — im_chat: reads free, domain writes registered (恒 HITL via
+    // mayAutoApprove), everything else hard-denied (web waits for the stage-2 opt-in switch;
+    // exec/capability_change/outbound 直接不给 — and grants never lift them, see the 3-axis
+    // describe below).
+    im_chat: {
+      read: true,
+      artifact: true,
+      domain_write: true,
+      capability_change: false,
+      exec: false,
+      web: false,
+      outbound: false
     }
   }
 
@@ -140,7 +165,7 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
     }
   })
 
-  test('mayAutoApprove — true ONLY for domain_write × manual_chat (15 cells)', () => {
+  test('mayAutoApprove — true ONLY for domain_write × manual_chat (4 modes × 7 classes)', () => {
     for (const mode of AGENT_CONTEXT_MODES) {
       for (const cls of GATEWAY_TOOL_CLASS_VALUES) {
         const expected = cls === 'domain_write' && mode === 'manual_chat'
@@ -188,11 +213,13 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
             ? true // grants never consulted in manual
             : cls === 'read' || cls === 'artifact' || cls === 'domain_write'
               ? true
-              : cls === 'exec'
-                ? execGranted
-                : cls === 'web'
-                  ? webGranted
-                  : false // capability_change + outbound (send):恒 false under ANY grants
+              : mode === 'im_chat'
+                ? false // 0b (Q10=A) — im_chat hard floor: grants never consulted either
+                : cls === 'exec'
+                  ? execGranted
+                  : cls === 'web'
+                    ? webGranted
+                    : false // capability_change + outbound (send):恒 false under ANY grants
         expect(
           isToolClassAllowedInMode(cls, mode, grants),
           `${cls} × ${mode} × ${JSON.stringify(grants)}`
@@ -247,6 +274,26 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
   test('applyContextModePolicy in manual_chat ignores grants entirely (same identity pass-through object)', () => {
     const tools = buildAllTools('manual_chat')
     expect(applyContextModePolicy(tools, 'manual_chat', { exec: true })).toBe(tools)
+  })
+
+  test("0b (Q10=A) — im_chat ignores grants entirely: even {exec:true, web:'open'} lifts NOTHING", () => {
+    const tools = buildAllTools('manual_chat')
+    const filtered = applyContextModePolicy(tools, 'im_chat', { exec: true, web: 'open' })
+    for (const name of [
+      ...CLASSES_OF('exec'),
+      ...CLASSES_OF('web'),
+      ...CLASSES_OF('capability_change'),
+      ...CLASSES_OF('outbound')
+    ]) {
+      expect(filtered[name], `${name} must stay stripped in im_chat despite grants`).toBeUndefined()
+    }
+    for (const name of [
+      ...CLASSES_OF('read'),
+      ...CLASSES_OF('artifact'),
+      ...CLASSES_OF('domain_write')
+    ]) {
+      expect(filtered[name], `${name} must survive im_chat`).toBeDefined()
+    }
   })
 
   test('buildGatewayTools × agentRunContext: the exec/web grants reach the LAST assembly step', () => {
@@ -327,7 +374,7 @@ describe('applyContextModePolicy', () => {
     expect(applyContextModePolicy(tools, 'manual_chat')).toBe(tools)
   })
 
-  test.each(['untrusted_trigger', 'cron_headless'] as const)(
+  test.each(['untrusted_trigger', 'cron_headless', 'im_chat'] as const)(
     '%s strips capability_change/exec/web/outbound, keeps read + artifact + domain_write (key order preserved)',
     (mode) => {
       const tools = buildAllTools('manual_chat')
@@ -368,7 +415,7 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
     expect(keys).toEqual(Object.keys(GATEWAY_TOOL_CLASSES).sort())
   })
 
-  test.each(['untrusted_trigger', 'cron_headless'] as const)(
+  test.each(['untrusted_trigger', 'cron_headless', 'im_chat'] as const)(
     '%s → every capability_change/exec/web/outbound tool absent from the ToolSet; read + domain_write present',
     (mode) => {
       const tools = buildAllTools(mode)

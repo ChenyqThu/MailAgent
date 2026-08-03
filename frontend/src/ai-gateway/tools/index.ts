@@ -29,6 +29,7 @@ import { createCustomAgentTools } from './agents'
 import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
 import { createNotionAgentTools } from './notion_agent'
 import {
+  admitDynamicTools,
   applyContextModePolicy,
   normalizeContextMode,
   type AgentContextMode,
@@ -147,6 +148,15 @@ export interface BuildGatewayToolsOpts {
    *  modeDenied), (c) the LAST assembly step's matrix grants (applyContextModePolicy). Absent
    *  (every manual entrypoint) → assembly byte-identical to the pre-ADR-004 set. */
   agentRunContext?: AgentRunContext
+  /** Stage 0b (harness-expansion epic) — DYNAMIC tools: runtime-discovered names (stage-1 MCP
+   *  connector tools, `mcp__<connector>__<tool>`). Admitted AFTER both skill-gating passes (they
+   *  belong to no GATEWAY_SKILL_TOOLS family — their business gating is the stage-1 seventh
+   *  capability card) and BEFORE applyContextModePolicy (their runtime-registered class must be
+   *  mode-filtered like any static tool). 🔴 Fail-closed: a dynamic tool with no
+   *  registerRuntimeToolClass entry is NOT admitted (admitDynamicTools drops it), and a name
+   *  colliding with an assembled static tool never clobbers it. Absent (every current caller) →
+   *  assembly byte-identical. */
+  dynamicTools?: ToolSet
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -397,11 +407,17 @@ export function buildGatewayTools(
   const mounted = opts.agentRunContext
     ? applySkillGating(gated, opts.agentRunContext.skills ?? [])
     : gated
+  // Stage 0b — dynamic tools (none exist yet; stage 1 fills the input): admitted only with a
+  // runtime class registration (fail-closed — an unregistered dynamic tool never enters the
+  // ToolSet), after both skill-gating passes (no skill family) and BEFORE the context-mode
+  // policy below so an admitted tool is mode-filtered by its registered class like any static
+  // tool. Absent/empty input → identity pass-through (the same `mounted` object, byte-identical).
+  const withDynamic = admitDynamicTools(mounted, opts.dynamicTools)
   // S2 W0 — context-mode policy LAST, after every create* block AND both skill-gating passes
   // (ADR-001 D3 / codex P2-2: no assembly path may leave a tool unfiltered). manual_chat (every
   // current production run) is an identity pass-through → byte-identical; non-manual modes drop
   // every capability_change/exec/outbound tool so the model structurally cannot see them — except
   // exec under an explicit per-agent grant (ADR-004 D2; the same grants object the exec tools'
   // runtime modeDenied consumed above, from the one agentRunContext).
-  return applyContextModePolicy(mounted, contextMode, opts.agentRunContext?.modeGrants)
+  return applyContextModePolicy(withDynamic, contextMode, opts.agentRunContext?.modeGrants)
 }

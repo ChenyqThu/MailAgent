@@ -23,6 +23,10 @@
 //     REVERSIBLE DOMAIN writes in an owner-driven manual session ONLY: mayAutoApprove ⇔
 //     class==='domain_write' && mode==='manual_chat'. This closes the set_skill_enabled escape
 //     (preview tier alone no longer skips the card — a capability change always asks).
+//   - im_chat (stage 0b, harness-expansion epic grill Q10=A — the stage-2 飞书 IM venue): only
+//     read/artifact/domain_write register (domain writes 恒 HITL); capability_change / exec /
+//     web / outbound are hard-denied and per-agent grants are NOT consulted (the stage-2 IM web
+//     opt-in is a separate switch, not a grant). No entrypoint asserts this mode yet — inert.
 //
 // 🔴 GATEWAY_TOOL_CLASSES is the single source of truth for tool→class (types.ts resolves a
 //    tool's class from here via classOfTool). A tool MISSING from the map fail-closes to 'exec'
@@ -38,11 +42,24 @@ import type { ToolSet } from 'ai'
 
 /** Run-level provenance of a chat run (ADR-001 D1). Order of severity: manual_chat is the only
  *  human-in-front-of-screen mode; the other two exist for S4 (email-triggered / scheduled runs)
- *  and are already enforced here so S4 cannot forget them. */
-export const AGENT_CONTEXT_MODES = ['manual_chat', 'untrusted_trigger', 'cron_headless'] as const
+ *  and are already enforced here so S4 cannot forget them.
+ *
+ *  'im_chat' (stage 0b, harness-expansion epic — grill Q10=A): the FOURTH venue, the owner talking
+ *  through an IM bridge (阶段 2 飞书对话). 盗号 ≠ 盗机 — a stolen IM account must never reach this
+ *  machine's execution surface, so the row is STRICTER than manual_chat: reads free; domain writes
+ *  恒 HITL (mayAutoApprove still requires manual_chat, and the acceptEdits/bypass overlay is
+ *  manual-gated at consumption); web denied until the stage-2 opt-in switch (Q19=A — a Settings
+ *  switch, NOT a grant); exec / capability_change / outbound permanently denied, per-agent grants
+ *  never consulted. No entrypoint asserts this mode yet — adding the value is behavior-inert. */
+export const AGENT_CONTEXT_MODES = [
+  'manual_chat',
+  'untrusted_trigger',
+  'cron_headless',
+  'im_chat'
+] as const
 export type AgentContextMode = (typeof AGENT_CONTEXT_MODES)[number]
 
-/** Fail-closed normalization: only the three known modes pass through; absent / unknown / any
+/** Fail-closed normalization: only the four known modes pass through; absent / unknown / any
  *  client-supplied junk → 'untrusted_trigger' (the strictest). This is the ONLY way a mode enters
  *  the policy layer, so "forgot to pass the mode" always degrades toward safety. */
 export function normalizeContextMode(value: unknown): AgentContextMode {
@@ -183,11 +200,72 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   file_write: 'exec'
 }
 
-/** Resolve a tool's policy class. Missing/unknown name fail-closes to 'exec' (strictest class:
- *  manual-only registration + never auto-approved) — a new tool that forgot to classify itself
- *  degrades toward safety AND trips the completeness test. */
+// ---- Stage 0b (harness-expansion epic) — runtime tool-class registry for DYNAMIC tools --------
+//
+// Stage 1 introduces connector tools whose names are only known at runtime
+// (`mcp__<connector>__<tool>`): the static GATEWAY_TOOL_CLASSES record is structurally blind to
+// them (fail-close to 'exec' would strip them from every headless run) and the static catalog
+// gates have zero coverage. 0b lands the MECHANISM only (stage 1 fills the contents): a dynamic
+// source must REGISTER each tool's class here before assembly; admitDynamicTools() refuses any
+// dynamic tool without a registration (fail-closed), and classOfTool() resolves registered names
+// so the SAME matrix / runtime modeDenied / auto-approve predicates govern them. With zero
+// registrations (today) every path below is byte-identical to the static behaviour.
+
+const RUNTIME_TOOL_CLASSES = new Map<string, GatewayToolClass>()
+
+/** Register the policy class of a runtime-discovered (dynamic) tool. Fail-closed guards: a
+ *  static GATEWAY_TOOL_CLASSES name can never be shadowed (the compile-time map stays the single
+ *  source of truth for built-in tools), and only real GatewayToolClass literals are accepted
+ *  (junk from a connector manifest must not mint a policy class). */
+export function registerRuntimeToolClass(name: string, toolClass: GatewayToolClass): void {
+  if (!name) throw new Error('registerRuntimeToolClass: empty tool name')
+  if (GATEWAY_TOOL_CLASSES[name] !== undefined) {
+    throw new Error(`registerRuntimeToolClass: '${name}' is a static gateway tool (unshadowable)`)
+  }
+  if (!(GATEWAY_TOOL_CLASS_VALUES as readonly string[]).includes(toolClass)) {
+    throw new Error(`registerRuntimeToolClass: invalid tool class '${String(toolClass)}'`)
+  }
+  RUNTIME_TOOL_CLASSES.set(name, toolClass)
+}
+
+/** Is this name a runtime-registered dynamic tool? (assembly gate + tests) */
+export function hasRuntimeToolClass(name: string): boolean {
+  return RUNTIME_TOOL_CLASSES.has(name)
+}
+
+/** Test-only: clear the registry (module-level state would otherwise leak across tests). */
+export function resetRuntimeToolClasses(): void {
+  RUNTIME_TOOL_CLASSES.clear()
+}
+
+/** Stage-0b assembly gate: admit DYNAMIC tools into an assembled ToolSet. A dynamic tool with NO
+ *  runtime classification is NOT admitted — without a class the matrix could only fail-close it
+ *  to 'exec' (silently stripped headless, catalog gates blind), so the miss is made loud at the
+ *  one seam stage 1 owns. A name colliding with an already-assembled tool never clobbers it
+ *  (defense in depth on top of the registry's static-shadow rejection). `dynamic` absent/empty →
+ *  the SAME base object (identity — every current caller, byte-identical). buildGatewayTools runs
+ *  this BEFORE applyContextModePolicy so admitted tools are still mode-filtered by their
+ *  registered class. */
+export function admitDynamicTools(base: ToolSet, dynamic?: ToolSet): ToolSet {
+  if (!dynamic) return base
+  const entries = Object.entries(dynamic)
+  if (entries.length === 0) return base
+  const out: ToolSet = { ...base }
+  for (const [name, t] of entries) {
+    if (Object.prototype.hasOwnProperty.call(base, name)) continue
+    if (!RUNTIME_TOOL_CLASSES.has(name)) continue
+    out[name] = t
+  }
+  return out
+}
+
+/** Resolve a tool's policy class: runtime registry first (dynamic tools; can never shadow a
+ *  static name — registerRuntimeToolClass rejects those), then the static map. Missing/unknown
+ *  name fail-closes to 'exec' (strictest class: manual-only registration + never auto-approved)
+ *  — a new tool that forgot to classify itself degrades toward safety AND trips the completeness
+ *  test. */
 export function classOfTool(name: string): GatewayToolClass {
-  return GATEWAY_TOOL_CLASSES[name] ?? 'exec'
+  return RUNTIME_TOOL_CLASSES.get(name) ?? GATEWAY_TOOL_CLASSES[name] ?? 'exec'
 }
 
 /** Per-agent web grant tier (ADR-004 rev3.1 D1/D2): 'off' = not registered headless (default),
@@ -244,13 +322,18 @@ export interface AgentRunContext {
 }
 
 /** Registration-time matrix row (ADR-001 D3, exec row revised by ADR-004 D2, web row added by
- *  ADR-004 rev3.1 D2): may a tool of this class exist in the ToolSet of a run in this mode?
+ *  ADR-004 rev3.1 D2, im_chat row added by stage 0b — grill Q10=A): may a tool of this class
+ *  exist in the ToolSet of a run in this mode?
  *  read/domain_write/artifact → every mode; capability_change/outbound → manual_chat only (permanently —
  *  no grant key exists for them); exec → manual_chat, OR a non-manual run whose per-agent grants
  *  carry exec===true; web → manual_chat, OR a non-manual run whose grants carry web∈{gated,open}
  *  (the owner's explicit opt-in, spec-derived — any other value incl. junk is 'off'). `grants` is
  *  only ever passed by the headless agent-run path; manual callers omit it (undefined = the
- *  pre-ADR-004 matrix, so a forgotten param is always SAFER, never wider). */
+ *  pre-ADR-004 matrix, so a forgotten param is always SAFER, never wider).
+ *  im_chat is a hard floor BEYOND read/artifact/domain_write: grants are deliberately NOT
+ *  consulted (AgentModeGrants is the per-agent HEADLESS axis; the stage-2 IM web opt-in is a
+ *  separate Settings switch wired then — not a grant), so the row is strictly narrower than
+ *  untrusted_trigger and a mis-threaded run can only be safer here. */
 export function isToolClassAllowedInMode(
   toolClass: GatewayToolClass,
   mode: AgentContextMode,
@@ -258,6 +341,9 @@ export function isToolClassAllowedInMode(
 ): boolean {
   if (mode === 'manual_chat') return true
   if (toolClass === 'read' || toolClass === 'domain_write' || toolClass === 'artifact') return true
+  // 0b (grill Q10=A) — im_chat: exec / capability_change / outbound 直接不给; web denied until the
+  // stage-2 opt-in switch. No grant can lift any of them in this mode.
+  if (mode === 'im_chat') return false
   if (toolClass === 'exec') return grants?.exec === true
   if (toolClass === 'web') return grants?.web === 'gated' || grants?.web === 'open'
   return false // capability_change + outbound: false under ANY grants (structurally un-grantable)

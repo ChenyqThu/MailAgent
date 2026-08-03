@@ -19,7 +19,8 @@ export interface AgentRunSpec {
   jobId: number
   agentId: string
   trigger: {
-    /** 'cron' | 'schedule' → cron_headless, 'email_filter' → untrusted_trigger; anything else
+    /** 'cron' | 'schedule' → cron_headless, 'email_filter' → untrusted_trigger, 'im' → im_chat
+     *  (阶段 0b 预置 —— 阶段 2 飞书对话；当前无任何 spec 会带它); anything else
      *  fail-closes to untrusted_trigger (strictest) in the gateway.
      *  ('schedule' = 07-24 schedule-builder 结构化定时；与 cron 同族 —— 到点就跑、输入里没有
      *  攻击者可控内容。)
