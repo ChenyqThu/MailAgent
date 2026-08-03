@@ -102,7 +102,7 @@ export function DraftReplyCard(props: ToolCallMessagePartProps): React.JSX.Eleme
     <CardFrame icon={<PenLine size={13} strokeWidth={2} />} title="回复草稿" phase={phase}>
       {phase === 'pending' ? (
         <div className="space-y-2">
-          <div className="text-meta text-ink-fg-2">{`回复邮件 #${data.internalId} · ${modeLabel}（可编辑后再确认）`}</div>
+          <div className="text-aux text-ink-fg-2">{`回复邮件 #${data.internalId} · ${modeLabel}（可编辑后再确认）`}</div>
           <RecipientField
             label="收件人"
             value={toText}

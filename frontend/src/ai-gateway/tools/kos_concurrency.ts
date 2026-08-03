@@ -109,7 +109,7 @@ export function createKosSerializer(limit: number): KosSerializer {
           reject(reason)
         }
       }
-      const onAbort = () => {
+      const onAbort = (): void => {
         // Drop out of the queue rather than waking up later to a slot nobody wants —
         // leaving the entry in would hold the next caller behind a dead one.
         const at = waiting.indexOf(entry)

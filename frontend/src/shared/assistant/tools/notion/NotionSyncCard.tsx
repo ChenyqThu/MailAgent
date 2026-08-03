@@ -26,7 +26,7 @@ export function NotionSyncCard(props: ToolCallMessagePartProps): React.JSX.Eleme
       {phase === 'pending' ? (
         <>
           <div className="text-aux text-ink-fg">{`重新把邮件 #${data.internalId} 推送到 Notion`}</div>
-          <div className="mt-1 text-meta text-ink-fg-2">
+          <div className="mt-1 text-aux text-ink-fg-2">
             从本地 SQLite SSoT 重建该邮件的 Notion 页面（幂等，可安全重复）。
           </div>
           <ApprovalActions

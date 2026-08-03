@@ -19,6 +19,13 @@ export default defineConfig(
       '**/dist',
       '**/out',
       '**/*.gen.ts',
+      // 🔴 08-02 review F9 — 本地遗留的构建产物（`frontend/index.js` / `index-<hash>.js`，实测
+      // 6.9MB minified bundle）。.gitignore 已排它们，但 eslint flat config **不读 .gitignore**，
+      // 于是本地每次 `pnpm lint` 都去解析这坨 —— 它一个人就贡献 2121 个 error，也是
+      // `pnpm lint` 4GB/8GB 两次 OOM 的主因。CI 上没有这些文件（未跟踪），所以这条只影响本地，
+      // 但没有它「本地跑不完 lint」会一直是「没人看得见 lint」的根因。
+      'index.js',
+      'index-*.js',
       'archive/**',
       'mockup-*.html',
       // ESLint plugin source uses CommonJS by design (loaded by ESLint runtime,
@@ -67,6 +74,17 @@ export default defineConfig(
           destructuredArrayIgnorePattern: '^_'
         }
       ],
+      // 🔴 存量债的临时降级（08-02 review F9）。这三条规则本身是对的，降级**只是**为了让
+      // `eslint --quiet` 能作为 CI 闸立刻立起来防住新增 error —— 存量 21 处的修复各自需要真实
+      // 渲染验证，混进一批会让「验证」失焦：
+      //   * react-refresh/only-export-components（9 处）：组件与 helper 混放。正确修法是拆文件，
+      //     但 _cardShell / custom-agent shared 各有 16 个 import 点，diff 规模够独立成批。
+      //   * react-hooks/refs + set-state-in-effect（12 处）：要改 render/effect 时机，有行为风险。
+      // 降级为 warn 后它们仍在本地 lint 里可见，且新增的**其它** error 照常拦。
+      // 🔴 修完存量后把这三行删掉（改回 recommended 的 error），否则闸会永久缺一块。
+      'react-refresh/only-export-components': 'warn',
+      'react-hooks/refs': 'warn',
+      'react-hooks/set-state-in-effect': 'warn',
       // REVIEW-LOG H-08 / DESIGN.md §14 + §16.6 + §17 non-negotiables.
       'mailagent/no-raw-hex': 'error',
       'mailagent/no-banned-colors': 'error',

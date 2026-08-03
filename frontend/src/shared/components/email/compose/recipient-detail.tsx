@@ -94,7 +94,7 @@ export function RecipientDetailPopover({
             onClose()
           }}
           className={cn(
-            'flex items-center gap-1.5 px-2 py-1 rounded-[var(--r-ctl)] text-meta',
+            'flex items-center gap-1.5 px-2 py-1 rounded-[var(--r-ctl)] text-aux',
             'text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3'
           )}
         >
@@ -108,7 +108,7 @@ export function RecipientDetailPopover({
             onClose()
           }}
           className={cn(
-            'flex items-center gap-1.5 px-2 py-1 rounded-[var(--r-ctl)] text-meta',
+            'flex items-center gap-1.5 px-2 py-1 rounded-[var(--r-ctl)] text-aux',
             'text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3'
           )}
         >
@@ -121,7 +121,7 @@ export function RecipientDetailPopover({
             onRemove()
             onClose()
           }}
-          className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--r-ctl)] text-meta transition-colors duration-fast ml-auto"
+          className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--r-ctl)] text-aux transition-colors duration-fast ml-auto"
           style={{ color: 'rgb(var(--c-fail))' }}
         >
           <Trash2 size={13} />

@@ -52,7 +52,7 @@ export const Checkbox = forwardRef<HTMLInputElement, CheckboxProps>(function Che
           'peer-focus-visible:ring-2 peer-focus-visible:ring-coral/50 peer-focus-visible:ring-offset-1 peer-focus-visible:ring-offset-background',
           'peer-disabled:opacity-50',
           showMark
-            ? 'border-coral bg-coral text-accent-fg'
+            ? 'border-coral bg-coral/100 text-accent-fg'
             : 'border-ink-border bg-ink-2 text-transparent peer-hover:border-coral/70'
         )}
       >

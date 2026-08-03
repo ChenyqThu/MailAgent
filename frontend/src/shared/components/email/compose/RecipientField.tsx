@@ -676,8 +676,8 @@ export function RecipientField({
                     <Plus size={15} />
                   </span>
                   <span className="flex flex-col min-w-0">
-                    <span className="text-meta text-ink-fg truncate">添加 “{canonicalInput}”</span>
-                    <span className="text-micro font-mono text-ink-fg-3 truncate">
+                    <span className="text-aux text-ink-fg truncate">添加 “{canonicalInput}”</span>
+                    <span className="text-aux text-ink-fg-3 truncate">
                       使用这个邮箱地址
                     </span>
                   </span>
