@@ -504,6 +504,21 @@ class Config(BaseSettings):
             "不受影响，恒照常合并。MEM0_EXPLICIT_EDIT_COOLDOWN_S env 可覆盖；≤0 关闭冷却（每轮照常）。"
         ),
     )
+    # 🔴 字段名 memory_layers_enabled ≠ env MAILAGENT_MEMORY_LAYERS → 必须 validation_alias
+    #    （pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释）。
+    memory_layers_enabled: bool = Field(
+        default=False, validation_alias="MAILAGENT_MEMORY_LAYERS",
+        description=(
+            "阶段 0.5-③ 记忆分层（PR-1，harness 扩展 epic）。on = memory.md auto-capture 走分层"
+            "抽取：固定 5 个 h2 层（identity/preference/context/activity/experience）+ unsorted "
+            "兜底节，tool schema 五字段承载、Python 确定性拼装/解析固定 h2、按层预算确定性截断"
+            "（单层超预算只在本层内淘汰——修「activity/项目类稳定吃掉 identity/people 类」的生产"
+            "实证事故）；首轮对未分节旧文档走一次性迁移模式（heuristic 预分桶 + LLM 重排）。"
+            "off（默认）= 现有单预算全文重写路径字节级不变（应急回退零数据迁移——分节文档在旧"
+            "路径仍是合法 markdown）。仅 capture 写侧；层预算是代码常量不 env 化。由 config.py "
+            "pydantic 读：翻需重启 serve-api。"
+        ),
+    )
     user_md_compile_enabled: bool = Field(
         default=True, validation_alias="MAILAGENT_USER_MD_COMPILE",
         description=(
