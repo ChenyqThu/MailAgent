@@ -50,9 +50,9 @@ import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
 import {
-  ChatComposerControlsProvider,
-  type ChatComposerControls
+  ChatComposerControlsProvider
 } from './components/composerControls'
+import type { ChatComposerControls } from './components/composerControlsContext'
 import { ReadOnlyTranscript } from './ReadOnlyTranscript'
 import { useChatContextChips } from './context/useChatContextChips'
 import { useAgentContextSnapshot } from './context/useAgentContextSnapshot'

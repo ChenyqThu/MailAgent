@@ -42,10 +42,8 @@ import { useBackgroundChatRun } from '@shared/assistant/runtime/useBackgroundCha
 import { useApprovalDecideBusy } from '@shared/assistant/useApprovalDecideBusy'
 import { PendingApprovalPanel } from '@shared/assistant/PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
-import {
-  ChatComposerControlsProvider,
-  type ChatComposerControls
-} from '@shared/assistant/components/composerControls'
+import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
+import { type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import { useAgentContextSnapshot } from '@shared/assistant/context/useAgentContextSnapshot'
 import type { CapabilityContext, ContextScope } from '@shared/assistant/context/contextSnapshot'
 import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'

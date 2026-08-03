@@ -15,7 +15,7 @@ import { ArrowDown, CornerDownRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
-import { useChatComposerControls } from '@shared/assistant/components/composerControls'
+import { useChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 
 const AgentStrandsBackdrop = lazy(() =>
   import('@shared/components/effects/AgentStrandsBackdrop').then((m) => ({

@@ -12,7 +12,8 @@ import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type SkillUninstallCardProps } from '../a2ui'
-import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../_cardShell'
+import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase } from '../_cardShell.lib'
 
 // Mirrors SkillInstallConfirmCard.resolveApiBaseUrl (intentionally duplicated, same rationale).
 function resolveApiBaseUrl(): string {

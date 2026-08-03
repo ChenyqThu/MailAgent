@@ -33,6 +33,9 @@ export default defineConfig(
       // linted as renderer/main TS.
       'eslint-rules/**',
       'scripts/**',
+      // poc/ 是一次性视觉验证脚手架（cards 卡片形态 + 截图存档），产品代码零引用、不参与打包 ——
+      // 与 scripts/** 同类。08-02 建 CI lint 闸时它是 `eslint .` 下仅剩的 2 个 error 来源。
+      'poc/**',
       // RuleTester fixtures intentionally contain banned tailwind classes /
       // raw hex / `@media (prefers-color-scheme)` as *invalid* examples;
       // linting the test file would re-flag them.
@@ -77,14 +80,18 @@ export default defineConfig(
       // 🔴 存量债的临时降级（08-02 review F9）。这三条规则本身是对的，降级**只是**为了让
       // `eslint --quiet` 能作为 CI 闸立刻立起来防住新增 error —— 存量 21 处的修复各自需要真实
       // 渲染验证，混进一批会让「验证」失焦：
-      //   * react-refresh/only-export-components（9 处）：组件与 helper 混放。正确修法是拆文件，
-      //     但 _cardShell / custom-agent shared 各有 16 个 import 点，diff 规模够独立成批。
-      //   * react-hooks/refs + set-state-in-effect（12 处）：要改 render/effect 时机，有行为风险。
+      //   * react-hooks/refs + set-state-in-effect（12 处）：要改 render/effect 时机，有行为风险，
+      //     各自需要真实渲染验证。
       // 降级为 warn 后它们仍在本地 lint 里可见，且新增的**其它** error 照常拦。
-      // 🔴 修完存量后把这三行删掉（改回 recommended 的 error），否则闸会永久缺一块。
-      'react-refresh/only-export-components': 'warn',
+      // 🔴 修完存量后把这两行删掉（改回 recommended 的 error），否则闸会永久缺一块。
       'react-hooks/refs': 'warn',
       'react-hooks/set-state-in-effect': 'warn',
+      // 🔴 react-refresh 的 9 处存量已在本批全部拆干净（_cardShell → +_cardShell.lib.ts，
+      // custom-agent/shared.tsx → shared.ts + DangerBlock.tsx，另三处各拆一个 helper 文件），
+      // 故**不降级**、保持 vite 预设的 error。这里显式重申一遍带 options 的形态，是因为写成裸
+      // 的 'error'/'warn' 会**丢掉 allowConstantExport**（vite 预设是 ['error', {…}]），
+      // 常量导出会开始误报 —— 本批降级时就当场踩过这个坑。
+      'react-refresh/only-export-components': ['error', { allowConstantExport: true }],
       // REVIEW-LOG H-08 / DESIGN.md §14 + §16.6 + §17 non-negotiables.
       'mailagent/no-raw-hex': 'error',
       'mailagent/no-banned-colors': 'error',

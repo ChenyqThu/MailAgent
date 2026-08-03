@@ -19,10 +19,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import i18n from '@shared/i18n'
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
 import { AgentThread } from '@shared/components/agents/AgentThread'
-import {
-  ChatComposerControlsProvider,
-  type ChatComposerControls
-} from '@shared/assistant/components/composerControls'
+import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
+import { type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import { chatMessageToUIMessage, type MailAgentUIMessage } from '@shared/assistant/uiMessage'
 
 const PNG_BASE64 =

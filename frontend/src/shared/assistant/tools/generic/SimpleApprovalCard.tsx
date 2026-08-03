@@ -20,7 +20,8 @@ import { Globe, NotebookPen, Play, Search, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
-import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../_cardShell'
+import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase } from '../_cardShell.lib'
 
 /** Per-tool copy: the i18n key suffix (title + label live under chat.simpleApprovalCard.<key>) and
  *  which model-input field carries the pinned identity value the user reviews. (Icons live in

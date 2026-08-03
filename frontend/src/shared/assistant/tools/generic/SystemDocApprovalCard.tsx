@@ -13,13 +13,8 @@ import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type SystemDocApprovalCardProps } from '../a2ui'
-import {
-  ApprovalActions,
-  ApprovalIcon,
-  CardFrame,
-  TerminalBanner,
-  deriveCardPhase
-} from '../_cardShell'
+import { ApprovalActions, ApprovalIcon, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase } from '../_cardShell.lib'
 
 // doc name → i18n key suffix (labels live under chat.systemDocApprovalCard.doc.<key>).
 //

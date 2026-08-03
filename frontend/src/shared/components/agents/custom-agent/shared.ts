@@ -1,5 +1,6 @@
-// CustomAgentDrawer 拆分（Lane C2 纯机械搬迁）：跨 section 复用的常量 / 类型 / 纯 helper /
-// 小组件，原样自 CustomAgentDrawer.tsx 抽出，逻辑逐字节不变。
+// CustomAgentDrawer 拆分（Lane C2 纯机械搬迁）：跨 section 复用的常量 / 类型 / 纯 helper。
+// 08-02 review F9 — 唯一的组件 DangerBlock 已拆去 DangerBlock.tsx，本文件保持零 JSX（.ts），
+// 这样 react-refresh 的 Fast Refresh 边界干净；`from './shared'` 的既有导入路径不受影响。
 
 export type WebGrant = 'off' | 'gated' | 'open'
 export const WEB_GRANTS: WebGrant[] = ['off', 'gated', 'open']
@@ -23,24 +24,4 @@ export function deriveHeadlessMode(
   if (kind === 'cron' || kind === 'schedule') return 'cron_headless'
   if (kind === 'email_filter') return 'untrusted_trigger'
   return null
-}
-
-/** 红样式警示块（创建规则 / grant_exec 共用形态）。 */
-export function DangerBlock({ children }: { children: React.ReactNode }): React.ReactElement {
-  return (
-    <div
-      style={{
-        fontSize: 12,
-        lineHeight: 1.6,
-        color: 'rgb(var(--c-fail))',
-        padding: '10px 12px',
-        borderRadius: 9,
-        background: 'rgb(var(--c-fail) / 0.10)',
-        border: '1px solid rgb(var(--c-fail) / 0.35)',
-        wordBreak: 'break-word'
-      }}
-    >
-      {children}
-    </div>
-  )
 }

@@ -21,7 +21,8 @@ import {
 } from '@shared/lib/customAgentCapabilities'
 import { cn } from '@shared/lib/cn'
 import { groupToolOptions } from '../toolGroups'
-import { DangerBlock, deriveHeadlessMode, type WebGrant } from './shared'
+import { deriveHeadlessMode, type WebGrant } from './shared'
+import { DangerBlock } from './DangerBlock'
 
 const CALENDAR_READ_TOOL_SET = new Set<string>(CUSTOM_AGENT_CAPABILITY_TOOL_SETS.calendar.read)
 const CALENDAR_WRITE_TOOLS = CUSTOM_AGENT_CAPABILITY_TOOL_SETS.calendar.write.filter(

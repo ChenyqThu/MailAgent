@@ -25,14 +25,8 @@ import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type DraftComposeCardProps } from '../a2ui'
-import {
-  ApprovalActions,
-  CardFrame,
-  TerminalBanner,
-  deriveCardPhase,
-  postApprovalEdit,
-  toolErrorDetail
-} from '../_cardShell'
+import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase, postApprovalEdit, toolErrorDetail } from '../_cardShell.lib'
 
 // Resolve serve-api base URL for the "before" fetch (mirrors CalendarApprovalCard — intentionally
 // duplicated rather than coupling a shared tool card to the settings module).

@@ -25,10 +25,8 @@ import { useAui } from '@assistant-ui/react'
 import i18n from '@shared/i18n'
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
 import { AssistantThread } from '@shared/assistant/components/thread'
-import {
-  ChatComposerControlsProvider,
-  type ChatComposerControls
-} from '@shared/assistant/components/composerControls'
+import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
+import { type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 
 // 1x1 透明 PNG（真实字节）

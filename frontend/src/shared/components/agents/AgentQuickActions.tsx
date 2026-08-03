@@ -10,7 +10,7 @@ import { ThreadPrimitive } from '@assistant-ui/react'
 import { FileText, ListChecks, PenLine, Reply, Search, type LucideIcon } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-import { useChatComposerControls } from '@shared/assistant/components/composerControls'
+import { useChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 
 interface Category {
   key: string

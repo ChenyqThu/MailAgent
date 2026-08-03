@@ -11,7 +11,8 @@ import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type SkillInstallCardProps } from '../a2ui'
-import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../_cardShell'
+import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase } from '../_cardShell.lib'
 
 function propsOf(toolName: string, args: unknown, result: unknown): SkillInstallCardProps {
   const payload = buildToolA2UIPayload(toolName, { args, result })

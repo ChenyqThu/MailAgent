@@ -15,14 +15,8 @@ import { PenLine } from 'lucide-react'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type DraftReplyCardProps } from '../a2ui'
-import {
-  ApprovalActions,
-  CardFrame,
-  TerminalBanner,
-  deriveCardPhase,
-  postApprovalEdit,
-  toolErrorDetail
-} from '../_cardShell'
+import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase, postApprovalEdit, toolErrorDetail } from '../_cardShell.lib'
 
 function propsOf(args: unknown, result: unknown): DraftReplyCardProps {
   const payload = buildToolA2UIPayload('email_draft_reply', { args, result })

@@ -16,7 +16,8 @@ import {
   SelectTrigger,
   SelectValue
 } from '@shared/components/ui/select'
-import { deriveHeadlessMode, DangerBlock, errText } from './shared'
+import { deriveHeadlessMode, errText } from './shared'
+import { DangerBlock } from './DangerBlock'
 
 // ── 自动化策略（S5 W5b，ADR-004 D5/D6）──────────────────────────────────────
 // per-agent 免卡白名单的**唯一**创建通道（模型零建规则工具、岛卡无「总是允许(此 agent)」）。

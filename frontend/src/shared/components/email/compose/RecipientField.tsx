@@ -60,7 +60,7 @@ const SUGGEST_LIMIT = 8
 
 // Fixed org whitelist for internal/external classification (owner decision,
 // 2026-07-15). Overridable per-instance via the `internalDomains` prop.
-export const DEFAULT_INTERNAL_DOMAINS = ['tp-link.com', 'tp-link.com.hk', 'omadanetworks.com']
+const DEFAULT_INTERNAL_DOMAINS = ['tp-link.com', 'tp-link.com.hk', 'omadanetworks.com']
 
 // Address-looking token finder (paste / comma-typed multi). Parens / quotes /
 // square brackets are excluded from tokens so "Alice (alice@example.com)"

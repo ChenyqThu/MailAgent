@@ -9,7 +9,8 @@ import { RefreshCw } from 'lucide-react'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type NotionSyncCardProps } from '../a2ui'
-import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../_cardShell'
+import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase } from '../_cardShell.lib'
 
 function propsOf(args: unknown, result: unknown): NotionSyncCardProps {
   const payload = buildToolA2UIPayload('email_resync', { args, result })

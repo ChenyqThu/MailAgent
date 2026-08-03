@@ -10,13 +10,8 @@ import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type ApprovalActionCardProps } from '../a2ui'
-import {
-  ApprovalActions,
-  ApprovalIcon,
-  CardFrame,
-  TerminalBanner,
-  deriveCardPhase
-} from '../_cardShell'
+import { ApprovalActions, ApprovalIcon, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase } from '../_cardShell.lib'
 
 // tool name → title key suffix; the model-facing summary is a2ui data (out of i18n scope) so the
 // fallback below is an empty string localized at render time (data.summary || summaryFallback).

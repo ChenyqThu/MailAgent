@@ -19,7 +19,7 @@ function avatarSlot(seed: string): number {
 }
 
 /** Chinese → last 2 chars; Latin → first-letter of first two words; else first 2. */
-export function contactInitials(name: string, email: string): string {
+function contactInitials(name: string, email: string): string {
   const src = (name || email.split('@')[0] || '').trim()
   if (!src) return '?'
   if (/[一-鿿]/.test(src)) return src.slice(-2)

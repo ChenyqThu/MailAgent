@@ -21,7 +21,8 @@ import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type CalendarApprovalCardProps } from '../a2ui'
-import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../_cardShell'
+import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase } from '../_cardShell.lib'
 
 // Resolve serve-api base URL for direct fetch calls (mirrors CustomAgentApprovalCard —
 // intentionally duplicated to avoid coupling a shared tool card to the settings module).

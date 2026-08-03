@@ -32,10 +32,8 @@ vi.mock('@shared/components/email/TranslatedBody', () => ({
 
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
 import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
-import {
-  ChatComposerControlsProvider,
-  type ChatComposerControls
-} from '@shared/assistant/components/composerControls'
+import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
+import { type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import { ThreadComposer } from '@shared/assistant/components/composer'
 import { AgentComposer } from '@shared/components/agents/AgentComposer'
 import { AgentThread } from '@shared/components/agents/AgentThread'

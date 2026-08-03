@@ -27,10 +27,8 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
 import { ThreadComposer } from '@shared/assistant/components/composer'
-import {
-  ChatComposerControlsProvider,
-  type ChatComposerControls
-} from '@shared/assistant/components/composerControls'
+import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
+import { type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import { useBackgroundChatRun } from '@shared/assistant/runtime/useBackgroundChatRun'
 import { isOwnRun, _resetOwnRunsForTest } from '@shared/assistant/runtime/ownRuns'
 

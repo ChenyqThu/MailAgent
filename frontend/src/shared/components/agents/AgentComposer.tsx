@@ -43,10 +43,7 @@ import { BorderGlow } from '@shared/components/effects/BorderGlow'
 import type { SearchHit, SearchResult } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { ComposerAttachmentChips } from '@shared/assistant/components/composer'
-import {
-  useChatComposerControls,
-  type ChatComposerControls
-} from '@shared/assistant/components/composerControls'
+import { useChatComposerControls, type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import { ApprovalModePicker } from '@shared/assistant/components/ApprovalModePicker'
 
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'

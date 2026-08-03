@@ -15,13 +15,8 @@ import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type SendApprovalCardProps } from '../a2ui'
 import { detectExternalRecipients, detectSensitiveTerms } from '../security/hashOutboundPayload'
-import {
-  ApprovalActions,
-  CardFrame,
-  TerminalBanner,
-  deriveCardPhase,
-  postApprovalEdit
-} from '../_cardShell'
+import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase, postApprovalEdit } from '../_cardShell.lib'
 
 /** Mirrors the domain ApprovalGuard DEFAULT_APPROVAL_TTL_MS (5 min). The domain expiry is the
  *  authoritative gate; this client-side countdown (from when the card mounted ≈ when the

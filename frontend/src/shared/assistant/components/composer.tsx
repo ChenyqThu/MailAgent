@@ -28,7 +28,10 @@ import { MentionPopover } from '@shared/components/chat/MentionPopover'
 import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 import { formatAttachmentSize } from '@shared/lib/chat-attachments'
 
-import { useChatComposerControls, type ChatComposerControls } from './composerControls'
+import {
+  useChatComposerControls,
+  type ChatComposerControls
+} from './composerControlsContext'
 import { ApprovalModePicker } from './ApprovalModePicker'
 
 const ICON_BTN =

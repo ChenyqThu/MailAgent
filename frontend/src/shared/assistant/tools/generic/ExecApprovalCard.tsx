@@ -16,7 +16,8 @@ import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type ExecApprovalCardProps } from '../a2ui'
-import { ApprovalActions, CardFrame, TerminalBanner, deriveCardPhase } from '../_cardShell'
+import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { deriveCardPhase } from '../_cardShell.lib'
 import { resolveAiGatewayBaseUrl } from '../../runtime/flags'
 
 /** POST the "always allow" to the gateway (POST /api/ai/policy/remember). The gateway peeks the
