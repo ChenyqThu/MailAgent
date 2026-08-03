@@ -605,7 +605,7 @@ export function AiTab(): React.ReactElement {
                 ? t('settings.ai.approval.managedByMode', {
                     mode: t(`chat.approvalMode.${globalApprovalMode}.title`),
                     defaultValue:
-                      '当前授权模式为「{{mode}}」（对话框左下角可切换），已接管审批放行；切回「手动授权」后此开关生效。'
+                      '当前授权模式为「{mode}」（对话框左下角可切换），已接管审批放行；切回「手动授权」后此开关生效。'
                   })
                 : t('settings.ai.approval.autoReversibleHelper', {
                     defaultValue:

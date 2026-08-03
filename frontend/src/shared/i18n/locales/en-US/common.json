@@ -1233,7 +1233,7 @@
       "confirm": "Switch",
       "cancel": "Cancel",
       "switching": "Switching…",
-      "saved": "Switched to \"{{mode}}\"",
+      "saved": "Switched to \"{mode}\"",
       "savedDetail": "Takes effect on new actions within a few seconds",
       "saveFailed": "Failed to save the permission mode"
     },
@@ -2487,7 +2487,7 @@
         "helper": "Whether the agent needs per-action confirmation before write operations. Irreversible actions like sending mail always require confirmation.",
         "autoReversibleLabel": "Skip confirmation for reversible actions",
         "autoReversibleHelper": "When on, reversible actions — flag / archive / pin / resync to Notion / memory read-write — run directly without a confirmation card; drafting a reply still requires confirmation, and sending mail (irreversible) always requires confirmation.",
-        "managedByMode": "The permission mode is currently \"{{mode}}\" (switchable at the composer's bottom-left) and overrides this toggle; it takes effect again under \"Manual\".",
+        "managedByMode": "The permission mode is currently \"{mode}\" (switchable at the composer's bottom-left) and overrides this toggle; it takes effect again under \"Manual\".",
         "modeUnknown": "Can't read the current permission mode (backend unreachable; retries when the window is focused). This toggle applies once the mode is confirmed as \"Manual\"."
       },
       "cache": {
@@ -3685,7 +3685,7 @@
           "ruleHint": "The grant only admits exec tools; card-free execution still needs a whitelist rule and first-run confirmation."
         },
         "subsetBadge": "SUBSET",
-        "subsetHint": "The enabled tools are a subset of the “{{tier}}” tier. A tier states the upper bound of granted power, not that every tool in it is on. Expand “Advanced” for the exact list."
+        "subsetHint": "The enabled tools are a subset of the “{tier}” tier. A tier states the upper bound of granted power, not that every tool in it is on. Expand “Advanced” for the exact list."
       },
       "budget": {
         "label": "Run budget",
