@@ -76,9 +76,21 @@ def _memory_budget() -> int:
 
 
 def _memory_doc_dict(doc: Any) -> dict[str, Any]:
-    """memory.md doc dict = 可编辑 doc + ``budgetChars``（恒注入预算，前端显著显示长度/占比）。"""
+    """memory.md doc dict = 可编辑 doc + ``budgetChars``（恒注入预算，前端显著显示长度/占比）
+    + 已分层时的 ``layers``（阶段 0.5-③ PR-2：每层 chars/budget，Settings 分层预算条）。
+
+    ``layers`` 判据是**文档结构**（``memory_layer_stats`` → ``has_layer_structure``）而非 flag：
+    未分层（flag 从没开过 / 老文档）→ 该键缺席，前端退回单条总预算条（现状）。
+    🔴 PUT 仍只校**总**预算（``write_profile_doc``）—— 分层信息是展示，不是新的校验闸：逐节报错
+    会把手编用户堵死在一份自动维护的文档上。lazy import 守 chat.py 同款 lazy-config 纪律。"""
+    from src.memory.memory_md import memory_layer_stats
+
     d = _editable_doc_dict(doc)
-    d["budgetChars"] = _memory_budget()
+    budget = _memory_budget()
+    d["budgetChars"] = budget
+    layers = memory_layer_stats(doc.content, budget)
+    if layers is not None:
+        d["layers"] = layers
     return d
 
 

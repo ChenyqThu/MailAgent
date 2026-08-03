@@ -110,6 +110,29 @@ describe('buildGatewaySystemPrompt', () => {
     expect(out.indexOf(PRODUCT_SAFETY_FLOOR)).toBeLessThan(out.indexOf('UNTRUSTED_MEMORY_START'))
   })
 
+  test('a LAYERED memory.md keeps its sections, identity/preference first, inside the fence', () => {
+    // 阶段 0.5-③ (PR-2) — the read side does NOT re-section anything: Python assembles memory.md
+    // with fixed h2s in declaration order (assemble_memory_layers → identity, preference, context,
+    // activity, experience) and the fence injects that document verbatim (sanitizeUntrusted only
+    // breaks UNTRUSTED_* tokens, never headings). This pins the property that makes the TS side a
+    // zero-change: if the fence ever reorders / strips / reformats the doc, this goes red.
+    const layered =
+      '# MEMORY\n\n## IDENTITY\n- leads the Omada team\n\n## PREFERENCE\n- terse replies\n\n' +
+      '## CONTEXT\n\n## ACTIVITY\n- reviewing the Q3 deck\n\n## EXPERIENCE\n'
+    const out = buildGatewaySystemPrompt({
+      promptConfig: { memorySummary: layered },
+      contextSnapshot: null
+    })
+    expect(out).toContain(layered) // verbatim: no re-sectioning, no reordering
+    const start = out.indexOf('UNTRUSTED_MEMORY_START')
+    const end = out.indexOf('UNTRUSTED_MEMORY_END')
+    const fenced = out.slice(start, end)
+    // identity + preference lead the fence; the volatile layers come after them.
+    expect(fenced.indexOf('## IDENTITY')).toBeLessThan(fenced.indexOf('## PREFERENCE'))
+    expect(fenced.indexOf('## PREFERENCE')).toBeLessThan(fenced.indexOf('## ACTIVITY'))
+    expect(fenced).toContain('- leads the Omada team')
+  })
+
   test('empty / null memorySummary → no MEMORY fence (byte-level flag-off invariant)', () => {
     // Python gates the channel: MAILAGENT_MEM0_RETRIEVAL off / empty memory.md → memorySummary "".
     // "" (and null) must reproduce the no-memory prompt byte-for-byte (no fence, no stray blank block).

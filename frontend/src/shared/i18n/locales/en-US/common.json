@@ -1948,6 +1948,7 @@
       "autoBadge": "Auto memory",
       "memoryNote": "memory.md is auto-extracted and rewritten by the AI from your conversations, and you can also edit it manually. It is injected into every conversation as BACKGROUND memory (not an identity doc) and cannot weaken the safety floor.",
       "budgetUsage": "Memory usage",
+      "layerUsage": "Per-layer usage (saved content)",
       "overBudget": "over budget",
       "overBudgetHint": "Content exceeds the {budget}-character budget; trim it before saving.",
       "edit": "Edit",

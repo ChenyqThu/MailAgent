@@ -217,6 +217,65 @@ describe('StandingDocsSection — flag-on', () => {
     expect(screen.getByText('settings.standingDocs.overBudgetHint')).toBeTruthy()
   })
 
+  test('layered memory doc shows the per-layer usage rows; unlayered shows none', async () => {
+    // 阶段 0.5-③ (PR-2) — `layers` comes from the backend (memory_layer_stats) and is present
+    // ONLY when the stored memory.md is layered. Absent → the section renders exactly as before
+    // (single total bar). The frontend never parses the layer h2s itself.
+    mockChatConfig(true)
+    mockListProfileDocs.mockResolvedValue([
+      makeDoc({
+        docName: 'memory',
+        content: '# MEMORY\n\n## IDENTITY\n- leads the team',
+        editable: true,
+        budgetChars: 5000,
+        layers: [
+          { name: 'identity', chars: 16, budget: 600 },
+          { name: 'preference', chars: 0, budget: 1200 },
+          { name: 'unsorted', chars: 12, budget: null }
+        ]
+      })
+    ])
+
+    renderUi()
+    await waitFor(() =>
+      expect(screen.getByText('settings.standingDocs.docLabels.memory')).toBeTruthy()
+    )
+    fireEvent.click(screen.getByText('settings.standingDocs.docLabels.memory'))
+
+    await waitFor(() => expect(screen.getByText('settings.standingDocs.layerUsage')).toBeTruthy())
+    expect(screen.getByText('identity')).toBeTruthy()
+    expect(screen.getByText('16 / 600')).toBeTruthy()
+    // unsorted has no quota of its own → chars only, no "/ budget".
+    expect(screen.getByText('12')).toBeTruthy()
+
+    // Editing → the per-layer rows hide: they describe the SAVED doc, not the draft.
+    fireEvent.click(screen.getByText('settings.standingDocs.edit'))
+    await waitFor(() => expect(screen.queryByText('settings.standingDocs.layerUsage')).toBeNull())
+    // …while the total budget bar stays (save still validates the TOTAL budget only).
+    expect(screen.getByText('settings.standingDocs.budgetUsage')).toBeTruthy()
+  })
+
+  test('memory doc without layers → no per-layer block (unlayered / pre-PR-2 shape)', async () => {
+    mockChatConfig(true)
+    mockListProfileDocs.mockResolvedValue([
+      makeDoc({
+        docName: 'memory',
+        content: '# MEMORY\n- plain',
+        editable: true,
+        budgetChars: 5000
+      })
+    ])
+
+    renderUi()
+    await waitFor(() =>
+      expect(screen.getByText('settings.standingDocs.docLabels.memory')).toBeTruthy()
+    )
+    fireEvent.click(screen.getByText('settings.standingDocs.docLabels.memory'))
+
+    await waitFor(() => expect(screen.getByText('settings.standingDocs.budgetUsage')).toBeTruthy())
+    expect(screen.queryByText('settings.standingDocs.layerUsage')).toBeNull()
+  })
+
   test('high-risk badge appears for SOUL, AGENT, RULES but not USER', async () => {
     mockChatConfig(true)
     mockListProfileDocs.mockResolvedValue([

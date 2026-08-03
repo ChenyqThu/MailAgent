@@ -1948,6 +1948,7 @@
       "autoBadge": "自动记忆",
       "memoryNote": "memory.md 由 AI 从对话中自动抽取并改写持久事实，你也可手动编辑。它作为「背景记忆」注入每轮对话（非身份文档），无法弱化安全底线。",
       "budgetUsage": "记忆用量",
+      "layerUsage": "分层用量（已保存内容）",
       "overBudget": "超出预算",
       "overBudgetHint": "内容超过 {budget} 字符预算，请精简后再保存。",
       "edit": "编辑",

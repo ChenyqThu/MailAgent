@@ -71,6 +71,10 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
   // memory.md — Hermes 式有界记忆：恒注入每轮 prompt，有硬字符预算。编辑时按 draft 实时计数，
   // 否则按已存内容；超预算时后端拒存 → 前端也 disable 保存并红色提示（显著显示长度/占比）。
   const budget = doc.budgetChars ?? MEMORY_DEFAULT_BUDGET
+  // 阶段 0.5-③ (PR-2) — per-layer usage, computed BACKEND-side (memory_layer_stats) and present
+  // only when the stored memory.md is layered. The frontend deliberately does NOT parse the
+  // layer h2s itself: that would mirror Python's layer names into TS and need a cross-language gate.
+  const layers = isMemory ? (doc.layers ?? []) : []
   const memoryLen = isMemory ? (editing ? draft.length : doc.content.length) : 0
   const overBudget = isMemory && memoryLen > budget
   const budgetPct = budget > 0 ? Math.min(100, Math.round((memoryLen / budget) * 100)) : 0
@@ -238,6 +242,49 @@ function DocEntry({ doc, onRefetch }: DocEntryProps): React.ReactElement {
                   />
                 </div>
               </div>
+              {/* 阶段 0.5-③ (PR-2) — per-layer breakdown. The backend sends `layers` ONLY for a
+                  layered memory.md (structure-driven, not flag-driven) → absent = single total
+                  bar exactly as before. Hidden while editing because these numbers describe the
+                  STORED doc, and showing them beside an unsaved draft would lie (the header
+                  counter already tracks the draft). 🔴 Save still validates the TOTAL budget only
+                  — per-layer is information, not a per-section gate that would fight hand-edits. */}
+              {!editing && layers.length > 0 && (
+                <div className="space-y-1 pt-0.5">
+                  <span className="text-micro font-mono text-ink-fg-3">
+                    {t('settings.standingDocs.layerUsage')}
+                  </span>
+                  {layers.map((layer) => {
+                    const cap = layer.budget ?? 0
+                    const over = cap > 0 && layer.chars > cap
+                    const pct = cap > 0 ? Math.min(100, Math.round((layer.chars / cap) * 100)) : 0
+                    return (
+                      <div key={layer.name} className="flex items-center gap-2">
+                        <span className="w-20 shrink-0 truncate font-mono text-micro uppercase text-ink-fg-3">
+                          {layer.name}
+                        </span>
+                        <div className="h-1 flex-1 overflow-hidden rounded-full bg-ink-4">
+                          <div
+                            className={[
+                              'h-full rounded-full',
+                              over ? 'bg-fail' : 'bg-[rgb(var(--c-accent))]'
+                            ].join(' ')}
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span
+                          className={[
+                            'shrink-0 font-mono text-micro tabular-nums',
+                            over ? 'text-fail' : 'text-ink-fg-3'
+                          ].join(' ')}
+                        >
+                          {layer.chars}
+                          {layer.budget != null ? ` / ${layer.budget}` : ''}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
             </div>
           )}
 

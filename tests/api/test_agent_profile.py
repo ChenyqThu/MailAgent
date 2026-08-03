@@ -204,6 +204,32 @@ def test_write_memory_doc(client, fresh_agent_cfg):
     assert got["updatedBy"] == "user"
 
 
+def test_memory_doc_layer_stats(client, fresh_agent_cfg):
+    """阶段 0.5-③（PR-2）— memory doc 已分层 → 附 ``layers``（每层 chars/budget，identity 前置，
+    Settings 分层预算条的数据源）；未分层 → 该键**缺席**（前端退回单条总预算条 = 现状）。
+    判据是文档结构而非 flag，且 PUT 仍只校总预算（分层是展示，不是新的校验闸）。"""
+    from src.memory.memory_md import assemble_memory_layers
+
+    # 未分层（默认 seed 空 + 老形状手编）→ 无 layers 键。
+    assert "layers" not in client.get("/api/agent/profile/docs/memory").json()["data"]
+    client.post("/api/agent/profile/docs/memory", json={"content": "# MEMORY\n- plain old bullet"})
+    assert "layers" not in client.get("/api/agent/profile/docs/memory").json()["data"]
+
+    md = assemble_memory_layers({"identity": "- leads the team", "activity": "- Q3 deck"})
+    r = client.post("/api/agent/profile/docs/memory", json={"content": md})
+    assert r.status_code == 200
+    layers = r.json()["data"]["layers"]  # 写响应即带（前端保存后无需二次拉取）
+    assert [x["name"] for x in layers][:2] == ["identity", "preference"]
+    by_name = {x["name"]: x for x in layers}
+    assert by_name["identity"] == {"name": "identity", "chars": 16, "budget": 600}
+    assert by_name["activity"]["chars"] == len("- Q3 deck")
+    # 列表端点同源（Settings 走的就是它）。
+    docs = client.get("/api/agent/profile/docs").json()["data"]["docs"]
+    assert {x["name"] for x in next(d for d in docs if d["docName"] == "memory")["layers"]} == {
+        "identity", "preference", "context", "activity", "experience",
+    }
+
+
 def test_write_memory_exceeds_budget_400(client, fresh_agent_cfg):
     # memory.md 恒注入每轮 prompt → 拒超预算（默认 5000 字符）防撑爆。
     r = client.post("/api/agent/profile/docs/memory", json={"content": "x" * 5001})

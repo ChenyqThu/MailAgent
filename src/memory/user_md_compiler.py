@@ -28,7 +28,13 @@ from typing import Any, Dict, List, Optional
 from src.llm_agent.client import LLMClient, LLMResult
 # 复用 capture 侧的同一安全过滤 SSoT（memory_md 的纯正则函数，非 store 读取器——不破坏「引擎不读
 # memory.md」的分层）：compile 提升 untrusted→trusted 前确定性剔除安全/审批弱化行，避免规则漂移。
-from src.memory.memory_md import _strip_unsafe_lines
+# 分层解析（has_layer_structure/parse_memory_layers）同理复用，绝不在此自写一份 h2 解析。
+from src.memory.memory_md import (
+    MEMORY_LAYER_NAMES,
+    _strip_unsafe_lines,
+    has_layer_structure,
+    parse_memory_layers,
+)
 
 # USER 文档必须保留的标题锚（校验兜底：LLM 产出不含此 → 拒绝，防写坏恒注入身份文档）。
 USER_DOC_HEADING = "# USER"
@@ -39,6 +45,28 @@ _MEMORY_MAX_CHARS = 20000
 # 编译产出（= 恒注入每轮的 user.md）字符上限：偏好文档合理体积远小于此。产出超此 = LLM 失控 /
 # 未去重导致单调膨胀（read-merge-write 每轮重跑会放大 token 成本）→ 拒绝写，防 bloat 身份文档。
 _MAX_CONTENT_CHARS = 20000
+
+# 阶段 0.5-③（PR-2）—— 分层 memory.md 的编译源：**只吃 identity + preference 两层**。
+# user.md 是「用户是谁 + 助手今后该怎么表现」的可信恒注入文档；activity（时限工作状态）/
+# context（当期项目背景）/ experience（复盘教训）提升进来只会把易过时的噪声固化进可信层，
+# 且 memory.md 本身就恒注入，这些层无需再经 user.md 复述一遍。
+# 🔴 这两个名字是 MEMORY_LAYER_NAMES 的子集 —— 层改名时这里会**静默**变成空编译源（无声失效，
+# 不报错），故由 test_user_md_compiler 的子集断言钉住。
+_COMPILE_SOURCE_LAYERS = ("identity", "preference")
+assert set(_COMPILE_SOURCE_LAYERS) <= set(MEMORY_LAYER_NAMES)
+
+
+def _compile_source(memory_md: str) -> str:
+    """编译源投影：已分层 → 只保留 identity + preference 两层的内容（层内 h2 标题不带进去 ——
+    编译提示按裸 bullet 列表设计，且 ``item_count`` 才如实等于参与编译的记忆条数）；
+    **未分层 → 恒等返回**（老文档 / flag 从没开过 → 与 PR-2 前字节级一致）。
+
+    判据是文档结构（``has_layer_structure``）而非 flag：flag 事后关掉，已分层的存量文档照样
+    只喂这两层（关 flag 只停止**产生**分层，不该让编译突然又把 activity 灌进 user.md）。"""
+    if not has_layer_structure(memory_md):
+        return memory_md
+    layers = parse_memory_layers(memory_md)
+    return "\n".join(layers[name] for name in _COMPILE_SOURCE_LAYERS if layers.get(name))
 
 
 COMPILE_TOOL_SCHEMA: Dict[str, Any] = {
@@ -207,6 +235,10 @@ async def compile_user_md(
 
     # 空 memory.md（首次 seed / 用户清空）→ 短路，无可合并（省一次 LLM 调用 + 文档不动，不崩）。
     mem = memory_md.strip() if isinstance(memory_md, str) else ""
+    # 阶段 0.5-③（PR-2）：分层文档只把 identity+preference 喂进编译（见 ``_compile_source``；
+    # 未分层恒等）。投影放在空判定**之前** → 「已分层但这两层都空」与「memory.md 本就空」走同一条
+    # 短路（不烧 LLM、不动 user.md），而不是拿一段空白去调模型。
+    mem = _compile_source(mem).strip()
     if not mem:
         return CompileResult(content=base, changed=False, item_count=0)
     # memory.md 非空行数（端点可观测「多少条记忆参与编译」；memory.md 是有界文档非离散列表）。

@@ -13,12 +13,15 @@ from __future__ import annotations
 import pytest
 
 from src.llm_agent.client import LLMResult
+from src.memory.memory_md import MEMORY_LAYER_NAMES, assemble_memory_layers
 from src.memory.user_md_compiler import (
     COMPILE_TOOL_SCHEMA,
     USER_DOC_HEADING,
     UserMdCompileError,
+    _COMPILE_SOURCE_LAYERS,
     _MEMORY_MAX_CHARS,
     _build_user,
+    _compile_source,
     compile_user_md,
 )
 
@@ -275,3 +278,69 @@ async def test_preamble_before_heading_raises():
     )
     with pytest.raises(UserMdCompileError, match="must start with"):
         await compile_user_md(current_user_md=_CURRENT, memory_md=_MEMORY, client=fake)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 阶段 0.5-③（PR-2）—— 分层 memory.md 只把 identity + preference 喂进编译
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def test_compile_source_layers_are_a_subset_of_the_layer_names():
+    """🔴 一致性闸：`_COMPILE_SOURCE_LAYERS` 是 `MEMORY_LAYER_NAMES` 的子集。层改名时
+    `_compile_source` 会**静默**返回空编译源（编译永远 no-op、不报错）—— 这条断言让它红。"""
+    assert set(_COMPILE_SOURCE_LAYERS) <= set(MEMORY_LAYER_NAMES)
+
+
+def test_compile_source_unlayered_is_identity():
+    """未分层（老文档 / flag 从没开过）→ 恒等返回，编译输入与 PR-2 前逐字节一致。"""
+    assert _compile_source(_MEMORY) == _MEMORY
+    assert _compile_source("# MEMORY\n- x\n## People\n- y") == "# MEMORY\n- x\n## People\n- y"
+    assert _compile_source("") == ""
+
+
+def test_compile_source_layered_keeps_only_identity_and_preference():
+    md = assemble_memory_layers(
+        {
+            "identity": "- leads the Omada team",
+            "preference": "- prefers terse Chinese replies",
+            "context": "- Alice is the PM",
+            "activity": "- reviewing the Q3 rollout deck",
+            "experience": "- retro: shipping on Fridays hurts",
+        }
+    )
+    src = _compile_source(md)
+    assert "- leads the Omada team" in src
+    assert "- prefers terse Chinese replies" in src
+    for dropped in ("Alice", "rollout deck", "Fridays"):
+        assert dropped not in src
+    assert "##" not in src  # 层标题不带进编译（item_count 才是真·记忆条数）
+
+
+@pytest.mark.asyncio
+async def test_layered_memory_feeds_only_two_layers_to_the_llm():
+    """端到端：分层文档 → LLM 看到的 user_content 只含 identity/preference，activity 不在场。"""
+    fake = _FakeClient(result=_result({"content": "# USER\n- terse replies\n"}))
+    md = assemble_memory_layers(
+        {
+            "identity": "- leads the Omada team",
+            "preference": "- prefers terse Chinese replies",
+            "activity": "- reviewing the Q3 rollout deck",
+        }
+    )
+    r = await compile_user_md(current_user_md=_CURRENT, memory_md=md, client=fake)
+    sent = fake.last_kwargs["user_content"]
+    assert "- leads the Omada team" in sent and "- prefers terse Chinese replies" in sent
+    assert "rollout deck" not in sent  # activity 不进可信 user.md
+    assert r.item_count == 2  # 参与编译的两条（层标题不计）
+
+
+@pytest.mark.asyncio
+async def test_layered_memory_with_both_source_layers_empty_short_circuits():
+    """分层文档但 identity/preference 都空（记忆全在 activity）→ 与「memory.md 本就空」同一条
+    短路：不烧 LLM、不动 user.md（而不是拿一段空白去调模型）。"""
+    fake = _FakeClient()
+    md = assemble_memory_layers({"activity": "- reviewing the Q3 rollout deck"})
+    r = await compile_user_md(current_user_md=_CURRENT, memory_md=md, client=fake)
+    assert fake.classify_calls == 0
+    assert r.changed is False and r.item_count == 0
+    assert r.content == _CURRENT.strip()

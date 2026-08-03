@@ -401,7 +401,11 @@ def parse_memory_layers(md: str) -> Dict[str, str]:
     识别集 = 5 个层名 + unsorted（大小写不敏感）。首个识别 h2 之前的散落内容、以及**未识别
     h2 的整节（含标题行本身）**都归 unsorted——手编 / agent_memory_update 写入的自由分节绝不丢，
     随下轮 capture 喂给模型归位。顶部 ``# MEMORY`` 标题行是拼装样板，跳过不算内容。
-    （PR-2 读侧分节 fence 也从这里拿层内容——本函数是分层文档的唯一解析入口。）"""
+
+    **分层文档的唯一解析入口**：PR-2 的读侧消费者（``memory_layer_stats`` 的 per-layer 诊断、
+    ``user_md_compiler._compile_source`` 的 identity+preference 投影）一律走它，勿另写一份 h2
+    解析。注入 fence 本身**不**解析——它逐字注入整份文档，分节与顺序由 ``assemble_memory_layers``
+    的落盘序直接承载（详见该函数）。"""
     buckets: Dict[str, List[str]] = {n: [] for n in (*MEMORY_LAYER_NAMES, UNSORTED_LAYER)}
     cur = UNSORTED_LAYER
     for ln in (md or "").split("\n"):
@@ -420,8 +424,12 @@ def parse_memory_layers(md: str) -> Dict[str, str]:
     return {k: "\n".join(v).strip() for k, v in buckets.items()}
 
 
-def _has_layer_structure(md: str) -> bool:
-    """文档里是否已有任一固定层 h2（迁移判定：非空且无结构 → 迁移模式）。"""
+def has_layer_structure(md: str) -> bool:
+    """文档里是否已有任一固定层 h2。
+
+    两处判据共用（唯一入口，勿复制逻辑）：① capture 侧迁移判定（非空且无结构 → 迁移模式）；
+    ② PR-2 读侧「这份文档是否分层」——诊断/展示一律**结构驱动**而非看 flag：flag 关掉之后
+    老的分层文档照样如实按层显示，flag 开着但文档还没迁移过也不会硬造分层。"""
     for ln in (md or "").split("\n"):
         m = _H2_RE.match(ln)
         if m and m.group(1).strip().lower() in MEMORY_LAYER_BUDGETS:
@@ -440,6 +448,28 @@ def assemble_memory_layers(layers: Dict[str, str]) -> str:
     if unsorted:
         parts.append(f"## {UNSORTED_LAYER.upper()}\n{unsorted}")
     return "\n\n".join(parts)
+
+
+def memory_layer_stats(md: str, total_budget: int) -> Optional[List[Dict[str, Any]]]:
+    """读侧分层诊断（PR-2）：每层 ``{name, chars, budget}``，声明序（identity 前置，与落盘/
+    注入序一致）；``unsorted`` 仅非空时附在末尾且 ``budget=None``（它是过渡态、无预算配额）。
+
+    **未分层文档 → None**（诊断缺席，不硬造一排 0：「没有分层结构」与「各层都是空的」是两回事，
+    前者是老文档/flag 从没开过，后者是记忆真被清空）。判据 = ``has_layer_structure``（结构驱动，
+    非 flag）。``/chat/config`` 的 ``memorySummaryMeta.layers`` 与 ``/api/agent/profile/docs`` 的
+    memory doc ``layers`` 共用本函数——两个消费者，一个计算源。
+    """
+    if not has_layer_structure(md):
+        return None
+    layers = parse_memory_layers(md)
+    stats: List[Dict[str, Any]] = [
+        {"name": name, "chars": len(layers[name]), "budget": layer_budget(name, total_budget)}
+        for name in MEMORY_LAYER_NAMES
+    ]
+    unsorted = layers.get(UNSORTED_LAYER) or ""
+    if unsorted:
+        stats.append({"name": UNSORTED_LAYER, "chars": len(unsorted), "budget": None})
+    return stats
 
 
 # 迁移 heuristic 的标题关键词（按声明序先匹配先赢；全不中 → unsorted 保底）。生产文档同义节名
@@ -679,7 +709,7 @@ async def _merge_turn_layered(
     结构校验（坏 → fail-closed unchanged）→ 逐层安全剔除 → 逐层预算截断（只淘本层）→
     确定性拼装固定 h2 → 全局兜底截断（``_truncate_to_budget`` 保留）。
     """
-    migration = bool(base) and not _has_layer_structure(base)
+    migration = bool(base) and not has_layer_structure(base)
     current_layers = _heuristic_bucket(base) if migration else parse_memory_layers(base)
 
     own_client = client is None

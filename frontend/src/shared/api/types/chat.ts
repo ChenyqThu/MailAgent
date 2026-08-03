@@ -268,6 +268,17 @@ export interface ChatToolCall {
 // backend GET /api/agent/skills RESOLVED projection (manifest skills ⋈ agent_config.db
 // enable overrides + source_type). `defaultEnabled` is the manifest compile-time seed;
 // the user's per-skill override (agent_config.db) sits on top.
+/** 阶段 0.5-③ (PR-2) — one layer's usage in a LAYERED memory.md, as served alongside the
+ *  memory doc. Backend-computed (src/memory/memory_md.memory_layer_stats) so the frontend
+ *  never re-implements the h2 parser; `name`/order come straight from Python's declaration
+ *  order (identity first). `budget` is null for the transient `unsorted` bucket, which has
+ *  no quota of its own. */
+export interface MemoryLayerStat {
+  name: string
+  chars: number
+  budget: number | null
+}
+
 /** PR6 — a Standing Context document (SOUL/AGENT/RULES/USER editable, or MEMORY/SKILLS
  *  projection) as served by GET /api/agent/profile/docs. */
 export interface AgentProfileDoc {
@@ -281,6 +292,10 @@ export interface AgentProfileDoc {
    *  (config.memory_md_budget_chars) memory.md is always injected within. The
    *  Settings editor shows length / budget prominently. */
   budgetChars?: number
+  /** 阶段 0.5-③ (PR-2) — only present on the `memory` doc AND only when its stored content
+   *  is layered (structure-driven, not flag-driven): per-layer chars + budget, identity
+   *  first. Absent → not layered → the editor shows the single total-budget bar as before. */
+  layers?: MemoryLayerStat[]
 }
 
 /** PR6 — one entry of a profile doc's version history (GET /api/agent/profile/history). */

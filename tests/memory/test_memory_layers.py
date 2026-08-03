@@ -156,11 +156,41 @@ def test_parse_headings_case_insensitive():
 
 
 def test_has_layer_structure():
-    assert mm._has_layer_structure("## IDENTITY\n- x") is True
-    assert mm._has_layer_structure("## activity\n- x") is True
-    assert mm._has_layer_structure("# MEMORY\n- x\n## People\n- y") is False
-    assert mm._has_layer_structure("") is False
-    assert mm._has_layer_structure("## UNSORTED\n- x") is False  # 只有 5 层名算结构
+    assert mm.has_layer_structure("## IDENTITY\n- x") is True
+    assert mm.has_layer_structure("## activity\n- x") is True
+    assert mm.has_layer_structure("# MEMORY\n- x\n## People\n- y") is False
+    assert mm.has_layer_structure("") is False
+    assert mm.has_layer_structure("## UNSORTED\n- x") is False  # 只有 5 层名算结构
+
+
+# ── PR-2 读侧诊断：memory_layer_stats（/chat/config meta + profile doc 共用的单一计算源）──
+
+
+def test_memory_layer_stats_layered_doc():
+    """已分层 → 五层齐、声明序（identity 前置）、chars = 该层内容长度、budget = 按层预算。"""
+    md = mm.assemble_memory_layers(
+        {"identity": "- a", "preference": "- bb", "context": "", "activity": "- ccc",
+         "experience": ""}
+    )
+    stats = mm.memory_layer_stats(md, 5000)
+    assert [s["name"] for s in stats] == list(mm.MEMORY_LAYER_NAMES)  # unsorted 空 → 不出现
+    by_name = {s["name"]: s for s in stats}
+    assert by_name["identity"] == {"name": "identity", "chars": 3, "budget": 600}
+    assert by_name["activity"]["chars"] == 5 and by_name["activity"]["budget"] == 1500
+    assert by_name["context"]["chars"] == 0  # 空层照样出，值 0（结构在，只是没内容）
+    # 总预算偏离 5000 → budget 随 layer_budget 比例缩放（两处不各算一份）。
+    assert {s["name"]: s["budget"] for s in mm.memory_layer_stats(md, 2500)}["identity"] == 300
+
+
+def test_memory_layer_stats_unsorted_and_unlayered():
+    """unsorted 仅非空时附末尾且 budget=None（过渡态无配额）；未分层文档 → None（不硬造零值）。"""
+    md = mm.assemble_memory_layers({"identity": "- a", "unsorted": "## Misc\n- hand-written"})
+    stats = mm.memory_layer_stats(md, 5000)
+    assert stats[-1]["name"] == "unsorted"
+    assert stats[-1]["budget"] is None and stats[-1]["chars"] > 0
+    # 未分层（老文档 / flag 从没开过）→ None：「没有分层」≠「各层都是 0」。
+    assert mm.memory_layer_stats("# MEMORY\n- x\n## People\n- y", 5000) is None
+    assert mm.memory_layer_stats("", 5000) is None
 
 
 def test_heuristic_bucket_maps_titles_and_keeps_unknown():
@@ -447,7 +477,7 @@ async def test_migration_round_heuristic_prebucket_and_prompt(layers_on):
     # 产出 = 固定 h2 分层文档（迁移必 changed —— 结构本身就变了）
     assert r.changed is True
     assert "## Whatever notes" not in r.content
-    assert mm._has_layer_structure(r.content) is True
+    assert mm.has_layer_structure(r.content) is True
 
 
 @pytest.mark.asyncio

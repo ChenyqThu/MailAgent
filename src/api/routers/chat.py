@@ -362,7 +362,7 @@ async def chat_config(request: Request):
     if _hot_bool(env_vals, "MAILAGENT_MEM0_RETRIEVAL", True):
         try:
             from src.agent_config.store import MEMORY_DOC_NAME, get_agent_config_store
-            from src.memory.memory_md import _truncate_to_budget
+            from src.memory.memory_md import _truncate_to_budget, memory_layer_stats
 
             _mem_raw = get_agent_config_store().get_profile_doc(MEMORY_DOC_NAME).content.strip()
             # 读侧 budget clamp（belt-and-suspenders，codex 步3 LOW）：capture 写侧已把 memory.md
@@ -380,6 +380,12 @@ async def chat_config(request: Request):
                     "source": "memory.md",
                     "retired": False,
                 }
+                # 阶段 0.5-③（PR-2）读侧诊断：注入的这份文档已分层 → 每层 chars/budget
+                # （identity 前置，与 fence 里的落盘序一致）。未分层（flag 从没开过 / 老文档）
+                # → 不加这个键，别硬造一排 0。纯诊断，前端不读（同 meta 其余字段）。
+                _layers = memory_layer_stats(_mem_md, cfg.memory_md_budget_chars)
+                if _layers is not None:
+                    memory_summary_meta["layers"] = _layers
         except Exception:  # noqa: BLE001 — best-effort; keep "" + retired meta（byte-identical to flag-off）
             pass
     # Phase -1 / 0A — config snapshot hashes for Phase 0 eval trace (reproducible

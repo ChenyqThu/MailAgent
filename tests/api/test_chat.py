@@ -451,6 +451,37 @@ def test_chat_config_memory_md_injected_when_retrieval_on(
     assert meta["injected"] == 1
     assert meta["chars"] == len(mem.strip())
     assert meta["source"] == "memory.md"
+    # 阶段 0.5-③（PR-2）：这份文档未分层 → per-layer 诊断**缺席**（不硬造一排 0）。
+    assert "layers" not in meta
+
+
+def test_chat_config_memory_md_layer_diagnostics(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, fresh_agent_cfg
+) -> None:
+    """阶段 0.5-③（PR-2）— 注入的 memory.md 已分层 → meta.layers = 每层 chars/budget，
+    identity 前置（与落盘/注入序一致）。判据是**文档结构**，与 MAILAGENT_MEMORY_LAYERS 无关：
+    本测试不碰那个 flag（flag 管的是 capture 写侧，读侧诊断照实描述文档现状）。"""
+    from src.agent_config.store import MEMORY_DOC_NAME
+    from src.memory.memory_md import assemble_memory_layers
+
+    mem = assemble_memory_layers(
+        {"identity": "- leads the Omada team", "preference": "- terse replies",
+         "activity": "- reviewing the Q3 deck"}
+    )
+    fresh_agent_cfg.set_profile_doc(MEMORY_DOC_NAME, mem, updated_by="mem0")
+    env = tmp_path / ".env"
+    env.write_text("MAILAGENT_MEM0_RETRIEVAL=true\n")
+    with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    layers = data["memorySummaryMeta"]["layers"]
+    assert [x["name"] for x in layers] == [
+        "identity", "preference", "context", "activity", "experience",
+    ]
+    by_name = {x["name"]: x for x in layers}
+    assert by_name["identity"]["chars"] == len("- leads the Omada team")
+    assert by_name["identity"]["budget"] == 600
+    assert by_name["activity"]["chars"] == len("- reviewing the Q3 deck")
+    assert by_name["context"]["chars"] == 0
 
 
 def test_chat_config_memory_md_empty_when_retrieval_on_but_no_memory(
