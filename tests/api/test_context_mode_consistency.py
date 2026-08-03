@@ -6,7 +6,7 @@
 
 1. ``src/api/routers/agent.py::_derive_rule_context_mode`` —— 建规时盖章（写侧权威）
 2. ``frontend/src/ai-gateway/agentRun.ts::deriveContextMode`` —— headless run 求值侧
-3. ``frontend/src/shared/components/agents/custom-agent/shared.tsx::deriveHeadlessMode``
+3. ``frontend/src/shared/components/agents/custom-agent/shared.ts::deriveHeadlessMode``
    —— 抽屉展示侧（漏改 = 自动化策略区显示「未配置触发」+ 全部规则标 dormant）
 
 做法镜像本仓先例（``frontend/tests/main/db_version_consistency.test.ts`` 跨语言读源码
@@ -36,7 +36,7 @@ _TS_SITES = {
         "deriveContextMode",
     ),
     "drawer deriveHeadlessMode": (
-        _REPO_ROOT / "frontend/src/shared/components/agents/custom-agent/shared.tsx",
+        _REPO_ROOT / "frontend/src/shared/components/agents/custom-agent/shared.ts",
         "deriveHeadlessMode",
     ),
 }
@@ -110,5 +110,5 @@ def test_ts_mirrors_match_canonical_table(label):
         expected.setdefault(mode, set()).add(kind)
     assert ts_table == expected, (
         f"{label} 与 canonical 表漂移：ts={ts_table} expected={expected} —— "
-        "三处镜像（agent.py / agentRun.ts / shared.tsx）必须同批改"
+        "三处镜像（agent.py / agentRun.ts / shared.ts）必须同批改"
     )
