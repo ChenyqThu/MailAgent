@@ -88,6 +88,10 @@ def _hash(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
+#: 「参数未传」哨兵（``update_connector_state`` 区分「不动该列」与「显式写 NULL」）。
+_UNSET: Any = object()
+
+
 # ---------------------------------------------------------------------------
 # 行投影 dataclass
 # ---------------------------------------------------------------------------
@@ -149,6 +153,62 @@ class ExternalCredentialMeta:
     metadata: dict[str, Any]  # 明文非敏感元数据（坏 JSON → {}）
     created_at: int
     updated_at: int
+
+
+@dataclass(frozen=True)
+class ConnectorRow:
+    """``connector`` 行投影（MCP connector 连接元数据；凭证另在 external_credential）。"""
+
+    connector_id: str
+    server_url: str
+    transport: str
+    display_name: Optional[str]
+    status: str
+    enabled: bool
+    scopes: Optional[list[str]]  # scopes_json 解出（坏 JSON / NULL → None）
+    last_error: Optional[str]
+    last_synced_at: Optional[int]
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True)
+class ConnectorToolRow:
+    """``connector_tool`` 行投影（远端工具清单一行；schema 保持 JSON 字符串，读方自解）。"""
+
+    connector_id: str
+    tool_name: str
+    description: str
+    input_schema_json: Optional[str]
+    output_schema_json: Optional[str]
+    crud_type: str
+    enabled: Optional[bool]  # 用户覆盖；None = 未覆盖（跟随 crud 默认）
+    orphan: bool
+    first_seen_at: int
+    last_seen_at: int
+    updated_at: int
+
+
+#: connector.status 值域（写侧校验）。
+CONNECTOR_STATUSES = ("disconnected", "authorizing", "connected", "error")
+
+#: connector_tool.crud_type 值域单源（client.derive_crud_type 的产出、写侧校验、以及
+#: PR2 注册期过滤都以此为准）。'delete' 是保留位：可入库，不可置启用态（Q3=B / Q16=A）。
+CONNECTOR_CRUD_TYPES = ("read", "write", "update", "delete")
+
+
+def connector_tool_effective_enabled(crud_type: str, enabled_override: Optional[bool]) -> bool:
+    """工具的有效启用态（纯函数，镜像 ``resolve_enabled`` 风格）。
+
+    - ``delete`` 类恒 False —— 读侧防御纵深（写侧 ``set_connector_tool_enabled`` 已拒，
+      这里再兜手改 DB 的行：任何 override 都压不开）。
+    - 其余：用户覆盖优先；无覆盖时 **read 默认开、write/update 默认关**（PRD Q3 缓解项）。
+    """
+    if crud_type == "delete":
+        return False
+    if enabled_override is not None:
+        return enabled_override
+    return crud_type == "read"
 
 
 @dataclass(frozen=True)
@@ -315,6 +375,43 @@ CREATE TABLE IF NOT EXISTS agent_profile_history (
 );
 
 CREATE INDEX IF NOT EXISTS idx_profile_history_doc ON agent_profile_history(doc_name, created_at DESC);
+
+-- MCP connector 双表（08-01 阶段 1 PR1，LobeHub 双表模型）。凭证不在这——token/client_info 走
+-- external_credential（namespace='connector:<id>'）；本表只装连接元数据 + 工具清单。
+-- transport 留位：MVP 只实现 streamable_http，stdio 不做但 schema 不用改（PRD Assumptions）。
+CREATE TABLE IF NOT EXISTS connector (
+    connector_id   TEXT PRIMARY KEY,       -- 'notion' | 'atlassian'（registry.CONNECTORS 键）
+    server_url     TEXT NOT NULL,
+    transport      TEXT NOT NULL DEFAULT 'streamable_http',
+    display_name   TEXT,
+    status         TEXT NOT NULL DEFAULT 'disconnected',  -- disconnected|authorizing|connected|error
+    enabled        INTEGER NOT NULL DEFAULT 1,            -- connector 整体开关（PR2 门控整族注册）
+    scopes_json    TEXT,                   -- 授权拿到的 scope 列表（坑 1.5 透明展示，明文非敏感）
+    last_error     TEXT,
+    last_synced_at INTEGER,                -- 工具清单最后同步 epoch 秒
+    created_at     INTEGER NOT NULL,
+    updated_at     INTEGER NOT NULL
+);
+
+-- 工具清单行 = 白名单（未同步/伪造的工具名到不了远端，LobeHub 纪律 1）。
+-- 🔴 refresh 只覆盖 manifest 派生字段（description/schema×2/crud_type/last_seen_at/orphan），
+-- **永不**覆盖 enabled（用户配置，纪律 2）；远端消失 → orphan=1 保留行（纪律 4 + PRD）。
+-- 🔴 crud_type 含 'delete' 保留位：照常入库（清单完整，Q16=A），但写侧拒置启用态
+-- （set_connector_tool_enabled），未来放开只动开关不改 schema（Q3=B）。
+CREATE TABLE IF NOT EXISTS connector_tool (
+    connector_id       TEXT NOT NULL,
+    tool_name          TEXT NOT NULL,
+    description        TEXT,
+    input_schema_json  TEXT,
+    output_schema_json TEXT,
+    crud_type          TEXT NOT NULL DEFAULT 'read',  -- read|write|update|delete
+    enabled            INTEGER,        -- 用户覆盖：NULL=默认（read 开，write/update/delete 关）
+    orphan             INTEGER NOT NULL DEFAULT 0,
+    first_seen_at      INTEGER NOT NULL,
+    last_seen_at       INTEGER NOT NULL,
+    updated_at         INTEGER NOT NULL,
+    PRIMARY KEY (connector_id, tool_name)
+);
 """
 
 
@@ -944,6 +1041,219 @@ class AgentConfigStore:
         return cur.rowcount > 0
 
     # ======================================================================
+    # MCP connector 双表（08-01 阶段 1 PR1）
+    # —— 凭证在 external_credential（credentials.py），这里只管连接元数据 + 工具清单
+    # ======================================================================
+
+    def upsert_connector(
+        self,
+        connector_id: str,
+        *,
+        server_url: str,
+        display_name: Optional[str] = None,
+        transport: str = "streamable_http",
+    ) -> None:
+        """建/刷 connector 行的**静态定义**字段。冲突时只更新 server_url/display_name/
+        transport/updated_at —— status/enabled/scopes 等运行态一律不动（另走
+        ``update_connector_state``）。"""
+        if not connector_id or not isinstance(connector_id, str):
+            raise ValueError("connector_id must be a non-empty string")
+        now = _now()
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO connector (connector_id, server_url, transport, display_name,"
+                " created_at, updated_at) VALUES (?,?,?,?,?,?) "
+                "ON CONFLICT(connector_id) DO UPDATE SET server_url=excluded.server_url,"
+                " transport=excluded.transport, display_name=excluded.display_name,"
+                " updated_at=excluded.updated_at",
+                (connector_id, server_url, transport, display_name, now, now),
+            )
+            conn.commit()
+
+    def update_connector_state(
+        self,
+        connector_id: str,
+        *,
+        status: Optional[str] = None,
+        last_error: Any = _UNSET,
+        scopes: Any = _UNSET,
+        last_synced_at: Optional[int] = None,
+        enabled: Optional[bool] = None,
+    ) -> None:
+        """部分更新运行态列。``last_error`` / ``scopes`` 用哨兵区分「不动」与「显式清空 None」。
+        坏 status **入库时拒**（ValueError），不靠读侧宽容。"""
+        sets: list[str] = []
+        params: list[Any] = []
+        if status is not None:
+            if status not in CONNECTOR_STATUSES:
+                raise ValueError(
+                    f"connector status {status!r} not in {CONNECTOR_STATUSES}"
+                )
+            sets.append("status=?")
+            params.append(status)
+        if last_error is not _UNSET:
+            sets.append("last_error=?")
+            params.append(last_error)
+        if scopes is not _UNSET:
+            if scopes is not None and not (
+                isinstance(scopes, list) and all(isinstance(s, str) for s in scopes)
+            ):
+                raise ValueError("connector scopes must be a list[str] or None")
+            sets.append("scopes_json=?")
+            params.append(json.dumps(scopes, ensure_ascii=False) if scopes is not None else None)
+        if last_synced_at is not None:
+            sets.append("last_synced_at=?")
+            params.append(int(last_synced_at))
+        if enabled is not None:
+            sets.append("enabled=?")
+            params.append(1 if enabled else 0)
+        if not sets:
+            return
+        sets.append("updated_at=?")
+        params.append(_now())
+        params.append(connector_id)
+        with self._connection() as conn:
+            cur = conn.execute(
+                f"UPDATE connector SET {', '.join(sets)} WHERE connector_id=?", params
+            )
+            conn.commit()
+        if cur.rowcount == 0:
+            raise KeyError(f"connector not found: {connector_id}")
+
+    def get_connector(self, connector_id: str) -> Optional[ConnectorRow]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM connector WHERE connector_id=?", (connector_id,)
+            ).fetchone()
+        return _row_to_connector(row) if row else None
+
+    def list_connectors(self) -> list[ConnectorRow]:
+        with self._connection() as conn:
+            rows = conn.execute("SELECT * FROM connector ORDER BY connector_id").fetchall()
+        return [_row_to_connector(r) for r in rows]
+
+    def sync_connector_tools(
+        self, connector_id: str, tools: list[dict[str, Any]]
+    ) -> dict[str, int]:
+        """远端工具清单 → ``connector_tool`` 落库（refresh 纪律的唯一实现点）。
+
+        - 🔴 只覆盖 manifest 派生字段（description / input_schema_json / output_schema_json /
+          crud_type / last_seen_at / orphan=0），**永不**覆盖 ``enabled``（用户配置）与
+          ``first_seen_at``。
+        - 本轮清单里没有的既有行 → ``orphan=1``（保留用户配置，PR2 不注册 orphan）。
+        - 🔴 delete 类照常入库（Q16=A：清单完整）；坏 ``crud_type`` / 空 name **入库时拒**。
+        """
+        now = _now()
+        prepared: list[tuple] = []
+        seen: set[str] = set()
+        for t in tools:
+            name = t.get("name")
+            if not name or not isinstance(name, str):
+                raise ValueError(f"connector tool name must be a non-empty string: {t!r}")
+            crud = t.get("crud_type", "read")
+            if crud not in CONNECTOR_CRUD_TYPES:
+                raise ValueError(
+                    f"connector tool {name!r} crud_type {crud!r} not in {CONNECTOR_CRUD_TYPES}"
+                )
+            if name in seen:
+                raise ValueError(f"duplicate tool name in manifest: {name!r}")
+            seen.add(name)
+            input_schema = t.get("input_schema")
+            output_schema = t.get("output_schema")
+            prepared.append(
+                (
+                    connector_id,
+                    name,
+                    t.get("description") or "",
+                    json.dumps(input_schema, ensure_ascii=False) if input_schema is not None else None,
+                    json.dumps(output_schema, ensure_ascii=False) if output_schema is not None else None,
+                    crud,
+                    now,
+                    now,
+                    now,
+                )
+            )
+        with self._connection() as conn:
+            existing = {
+                r["tool_name"]
+                for r in conn.execute(
+                    "SELECT tool_name FROM connector_tool WHERE connector_id=?",
+                    (connector_id,),
+                ).fetchall()
+            }
+            for row in prepared:
+                conn.execute(
+                    "INSERT INTO connector_tool (connector_id, tool_name, description,"
+                    " input_schema_json, output_schema_json, crud_type, first_seen_at,"
+                    " last_seen_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(connector_id, tool_name) DO UPDATE SET"
+                    " description=excluded.description,"
+                    " input_schema_json=excluded.input_schema_json,"
+                    " output_schema_json=excluded.output_schema_json,"
+                    " crud_type=excluded.crud_type,"
+                    " orphan=0,"
+                    " last_seen_at=excluded.last_seen_at,"
+                    " updated_at=excluded.updated_at",
+                    row,
+                )
+            orphaned = 0
+            for name in existing - seen:
+                conn.execute(
+                    "UPDATE connector_tool SET orphan=1, updated_at=? "
+                    "WHERE connector_id=? AND tool_name=?",
+                    (now, connector_id, name),
+                )
+                orphaned += 1
+            conn.commit()
+        return {
+            "total": len(prepared),
+            "inserted": len(seen - existing),
+            "updated": len(seen & existing),
+            "orphaned": orphaned,
+        }
+
+    def list_connector_tools(self, connector_id: str) -> list[ConnectorToolRow]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM connector_tool WHERE connector_id=? ORDER BY tool_name",
+                (connector_id,),
+            ).fetchall()
+        return [_row_to_connector_tool(r) for r in rows]
+
+    def set_connector_tool_enabled(
+        self, connector_id: str, tool_name: str, enabled: Optional[bool]
+    ) -> None:
+        """用户 per-tool 启用覆盖（None = 清除覆盖回默认）。
+
+        🔴 ``crud_type='delete'`` 的行不可置启用态 —— **写侧拒**（ValueError），界面恒灰只是
+        表象、这里才是闸（Q16=A；不靠读侧宽容，读侧 ``connector_tool_effective_enabled``
+        只是防御纵深）。
+        """
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT crud_type FROM connector_tool WHERE connector_id=? AND tool_name=?",
+                (connector_id, tool_name),
+            ).fetchone()
+            if row is None:
+                raise KeyError(f"connector tool not found: {connector_id}/{tool_name}")
+            if enabled is True and row["crud_type"] == "delete":
+                raise ValueError(
+                    f"tool {tool_name!r} is delete-class and cannot be enabled "
+                    "(delete tools are recorded for completeness but stay disabled in MVP)"
+                )
+            conn.execute(
+                "UPDATE connector_tool SET enabled=?, updated_at=? "
+                "WHERE connector_id=? AND tool_name=?",
+                (
+                    None if enabled is None else (1 if enabled else 0),
+                    _now(),
+                    connector_id,
+                    tool_name,
+                ),
+            )
+            conn.commit()
+
+    # ======================================================================
     # exec 策略白名单（policy_rules，ADR-001 §6 D4）
     # ======================================================================
 
@@ -1237,6 +1547,48 @@ def _row_to_policy_rule(row: sqlite3.Row) -> PolicyRuleRow:
         created_at=row["created_at"],
         last_used_at=row["last_used_at"],
         use_count=row["use_count"],
+    )
+
+
+def _row_to_connector(row: sqlite3.Row) -> ConnectorRow:
+    scopes: Optional[list[str]] = None
+    raw = row["scopes_json"]
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list) and all(isinstance(s, str) for s in parsed):
+                scopes = parsed
+        except (ValueError, TypeError):
+            scopes = None  # 坏 JSON → None（展示位缺失不阻断行读取）
+    return ConnectorRow(
+        connector_id=row["connector_id"],
+        server_url=row["server_url"],
+        transport=row["transport"],
+        display_name=row["display_name"],
+        status=row["status"],
+        enabled=bool(row["enabled"]),
+        scopes=scopes,
+        last_error=row["last_error"],
+        last_synced_at=row["last_synced_at"],
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def _row_to_connector_tool(row: sqlite3.Row) -> ConnectorToolRow:
+    enabled = row["enabled"]
+    return ConnectorToolRow(
+        connector_id=row["connector_id"],
+        tool_name=row["tool_name"],
+        description=row["description"] or "",
+        input_schema_json=row["input_schema_json"],
+        output_schema_json=row["output_schema_json"],
+        crud_type=row["crud_type"],
+        enabled=None if enabled is None else bool(enabled),
+        orphan=bool(row["orphan"]),
+        first_seen_at=row["first_seen_at"],
+        last_seen_at=row["last_seen_at"],
+        updated_at=row["updated_at"],
     )
 
 

@@ -590,6 +590,32 @@ class Config(BaseSettings):
             "给上线灰度用。"
         ),
     )
+
+    # =========================================================================
+    # MCP Connector (08-01 阶段 1 PR1) — serve-api 持 MCP client 连外部服务
+    # (Notion / Atlassian)。凭证走 agent_config.db external_credential (Fernet)。
+    # 🔴 字段名 mcp_connectors_enabled ≠ env MAILAGENT_MCP_CONNECTORS → 必须
+    #    validation_alias (pydantic v2 忽略 Field(env=), 见本类顶 model_config 注释)。
+    # =========================================================================
+    mcp_connectors_enabled: bool = Field(
+        default=False, validation_alias="MAILAGENT_MCP_CONNECTORS",
+        description=(
+            "MCP connector 总闸 (灰度, 沿用 island ship-off→dogfood→cutover 模式): "
+            "off 时 /api/connector/* 除 oauth/callback 外全部 409, 工具注入 (PR2) "
+            "整体不激活。callback 永远只认 state 能力令牌 (off 时无活 rendezvous, "
+            "天然 404)。pydantic 载体 = 翻开关需重启 serve-api。"
+        ),
+    )
+    connector_timeout_seconds: float = Field(
+        default=30.0,
+        description=(
+            "ConnectorClient 单次 HTTP 请求超时 (秒), 罩 OAuth metadata/token 端点与 "
+            "MCP streamable http 全部请求 (issue #69 纪律: 超时报错带实际耗时)。"
+            "🔴 唯一落点 = httpx2.AsyncClient(timeout=) — SDK provider 层没有生效的"
+            "超时参数 (v1 的 timeout= 从未 bound 任何东西, v2 已删)。等浏览器 OAuth "
+            "回调**不**受此值管辖 (client.py OAUTH_CALLBACK_TIMEOUT_SECONDS=300s)。"
+        ),
+    )
     # issue #59 KOS 入库可靠性: 推送失败落台账 (kos_ingest_log, DB v41) 后由
     # new_watcher 低频重试补偿。字段名 kos_retry_* ≠ env MAILAGENT_KOS_RETRY_* →
     # 必须 validation_alias (pydantic v2 忽略 Field(env=), 见本类顶 model_config 注释)。

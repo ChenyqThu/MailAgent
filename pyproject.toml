@@ -29,6 +29,15 @@ api = [
     "uvicorn[standard]>=0.27,<0.35",
     "pyjwt[crypto]>=2.8,<3",  # PyJWKClient + RS256 verify (CF Access JWT, §6.3); crypto extra 拉 cryptography
     "httpx>=0.27",            # cli_runner / TestClient (email unsubscribe 已传递引入)
+    # 08-01 阶段 1 PR1 (MCP connector): serve-api 持 MCP client (src/connectors/)。
+    # v2 拍板依据见 .trellis/tasks/08-01-mcp-connector-notion-jira-harness/research/
+    # mcp-sdk-dependency-review-0803.md (v1.x 官方维护模式只收安全补丁)。带 httpx2 双 HTTP 栈
+    # (独立 import 名, 与 httpx 并存无冲突)。回退线 = mcp>=1.28,<2 (Client→ClientSession 改写)。
+    "mcp>=2.0.0,<3",
+    # 🔴 mcp 传递依赖 sse-starlette 的显式上界: 3.1+ 硬性要求 starlette>=0.49.1, 与
+    # fastapi<0.116 (starlette<0.47) 冲突; 3.0.3 无 starlette 硬约束。裸解析时 pip 能
+    # backtrack 到位, 但显式钉住让解析确定 + 把"为什么"留在案 (升 fastapi 后可放开)。
+    "sse-starlette>=3.0,<3.1",
 ]
 # M1/M2 mem0 记忆引擎（auto-capture 写 + query 召回读）。重依赖（onnxruntime/faiss/fastembed
 # ~150MB+），仅 MAILAGENT_MEM0_CAPTURE / MAILAGENT_MEM0_RETRIEVAL 开时运行期 import；嵌入式打包

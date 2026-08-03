@@ -385,6 +385,7 @@ from src.api.routers import (  # noqa: E402
     attachment,
     calendar,
     chat,
+    connector,
     email,
     email_views,
     exec as exec_router,  # 'exec' 是内建名，别名避免遮蔽
@@ -437,6 +438,11 @@ app.include_router(agent_runs.router)
 # ping-island 解耦 ack 通道 (契约 §6/§9-4): 按钮点击 fire-and-forget POST 回灌。
 # 自认 ack_token 能力令牌 (不挂 verify_cf_access)，见 routers/island.py。
 app.include_router(island.router)
+# 08-01 阶段 1 PR1 (MCP connector) — /api/connector/* 连接/OAuth/工具清单同步。灰度开关
+# MAILAGENT_MCP_CONNECTORS 默认 off (非 callback 端点 409)。oauth/callback 是本仓第三个
+# 无 CF 门路由: 浏览器 302 带不了 header，state 即能力令牌 (单次消费+TTL，404 不泄因)，
+# 见 routers/connector.py 模块 docstring 威胁模型。src.connectors / mcp SDK 全 lazy import。
+app.include_router(connector.router)
 # task A — 远程 web 切 AI SDK: 把 web 的 chat 请求 (/api/ai/{chat,title,followups,approval/resolve,
 # config}, /api/ai/agui/chat) + 裸 /health 代理到同机 loopback AI SDK Gateway。在 SPA catch-all
 # mount (/app, 文件末尾) 之前注册，确保 /api/ai/* 与 /health 不被静态 SPA 遮蔽。/api/ai/* 子路径
