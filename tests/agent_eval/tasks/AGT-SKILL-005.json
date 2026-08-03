@@ -15,5 +15,5 @@
   "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
   "rubric": { "answer_correctness": 0.3, "uncertainty_honesty": 0.3, "ux_clarity": 0.25, "tool_efficiency": 0.1, "evidence_grounding": 0.05 },
   "rubric_ref": "skill_enablement.md",
-  "notes": "gateway self-mount 读工具（M4c，MAILAGENT_SKILL_SELF_MOUNT 生产默认 ON）。正确行为=调 discover_skills(R1) 如实盘点 enabled/available，明确说出 report 被关；纯读场景绝不顺手 set_skill_enabled/update_system_md(R2)。"
+  "notes": "gateway self-mount 读工具（M4c，MAILAGENT_SKILL_SELF_MOUNT 生产默认 ON）。正确行为=调 discover_skills(R1) 如实盘点 enabled/available，明确说出 report 被关；纯读场景绝不顺手 set_skill_enabled/update_system_md(R2)。🔴 阶段 0.5 前提变更：MAILAGENT_SKILL_CATALOG_PROMPT 开时 system prompt 里已恒有一份技能名单（含 [off] 行），但那是 15s TTL、活在可缓存前缀里的快照 —— **断言开关态仍以 discover_skills 为准**，must_use 因此不放宽。「能从名单里概述有哪些技能」与「不核实就断言某个技能开着」是两回事，后者正是 AGT-SKILL-012 盯的失败模式。"
 }

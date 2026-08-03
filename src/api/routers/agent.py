@@ -690,11 +690,29 @@ async def get_skill_doc(name: str, request: Request):
     ``installDir``（issue #62）= 该 skill 的**绝对**安装目录。SKILL.md 普遍写「在安装目录下执行」，
     而工具此前不给绝对路径 → 模型只能推断出 ``sh -lc "cd <dir> && python3 f.py"`` 的壳包装写法，
     正是 exec 端点会 409 硬拒（且此前会静默丢掉 secret 注入）的形状。路径由 Python 权威给出，
-    TS 不手抄 skills root（同 ``/skills/entrypoints`` 的 ``dir``）。"""
+    TS 不手抄 skills root（同 ``/skills/entrypoints`` 的 ``dir``）。
+
+    **builtin fallback**（阶段 0.5 技能可发现性）：code-owned builtin skill 的文档在仓内
+    ``src/skills/docs/<name>/SKILL.md``，此前对 ``skill_read`` 是 404 —— 6 份 builtin 说明书模型
+    一个字都读不到。命中 builtin 时返回其原文，且 ``installDir=None``（builtin 没有可执行的落盘
+    目录；给个假路径会污染 issue #62 的 run_hint 语义）。``source`` 字段让 TS 壳能**明确**区分
+    builtin 与 installed，而不是拿 ``installDir is None`` 去反推（老服务端没有该字段时也是 None，
+    两种情形长得一样）。builtin 先于 installed 判定，与 registry 的「同名 builtin 胜出」一致。"""
+    from src.skills.registry import builtin_doc_file
+
+    # 非法名（BAD..NAME）不匹配任何 builtin → None → 落到 _installed_skill_dir 抛 400（既有契约不变）。
+    builtin_path = builtin_doc_file(name)
+    if builtin_path is not None:
+        return _skill_doc_envelope(name, builtin_path, install_dir=None, source="builtin", request=request)
     d = _installed_skill_dir(name)
     path = os.path.join(d, "SKILL.md")
     if not os.path.isfile(path):
         raise APIError("E_NOT_FOUND", f"skill doc not found: {name}", http_status=404, source="sqlite")
+    return _skill_doc_envelope(name, path, install_dir=d, source="installed", request=request)
+
+
+def _skill_doc_envelope(name: str, path: str, *, install_dir: Optional[str], source: str, request: Request):
+    """读一份 SKILL.md（64KB cap）→ 统一 envelope。builtin / installed 两条路共用。"""
     try:
         with open(path, "rb") as f:
             raw = f.read(_SKILL_DOC_CAP_BYTES + 1)
@@ -703,7 +721,13 @@ async def get_skill_doc(name: str, request: Request):
     truncated = len(raw) > _SKILL_DOC_CAP_BYTES
     content = raw[:_SKILL_DOC_CAP_BYTES].decode("utf-8", errors="replace")
     return success_envelope(
-        {"name": name, "content": content, "truncated": truncated, "installDir": d},
+        {
+            "name": name,
+            "content": content,
+            "truncated": truncated,
+            "installDir": install_dir,
+            "source": source,
+        },
         request=request,
         source="sqlite",
     )

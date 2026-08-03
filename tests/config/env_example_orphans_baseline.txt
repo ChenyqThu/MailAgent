@@ -10,6 +10,8 @@
 #       另一套 OAuth 凭据，src/kos/producer.py make_bulk_kos_client 裸 os.getenv 读，
 #       与 KOS_OAUTH_* consumer 凭据同类出身）
 #     - Node main env（gateway / updater 读，非 Python）：MAILAGENT_MEM0_CAPTURE /
+#       _SKILL_CATALOG_PROMPT（阶段 0.5 技能名单进 prompt，ai_gateway_lifecycle.ts envBool 读；
+#       Python 侧只恒发 /chat/config.skillCatalog 数据、不读这个 flag）/
 #       _SKILL_SELF_MOUNT / _CALENDAR_AGENT_TOOLS / _OPENNESS_{SESSION,CONFIG,WEB,EXEC,SKILL_INSTALL}_TOOLS /
 #       _AI_SDK_{WRITE_TOOLS,SEND_TOOL} / _AG_UI_MIRROR / _AI_GATEWAY_PORT / AUTO_UPDATE_ENABLED /
 #       _CHAT_DETACHED_RUNS（07-15 harness-chat lane A B1，ai_gateway_lifecycle.ts envBool 读，
@@ -64,5 +66,6 @@ MAILAGENT_OPENNESS_SESSION_TOOLS
 MAILAGENT_OPENNESS_SKILL_INSTALL
 MAILAGENT_OPENNESS_WEB_TOOLS
 MAILAGENT_PARENT_WATCHDOG
+MAILAGENT_SKILL_CATALOG_PROMPT
 MAILAGENT_SKILL_SELF_MOUNT
 MAILAGENT_STANDING_CONTEXT_ENABLED

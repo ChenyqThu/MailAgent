@@ -477,6 +477,34 @@ async def chat_config(request: Request):
     except Exception:  # noqa: BLE001 — advertised skills are best-effort; never fail /config
         advertised_skills = None
         trusted_skill_fragments = None
+    # 阶段 0.5「技能可发现性」—— 恒注入名单的数据源。渐进披露的第一级：模型先看见**有哪些技能**
+    # （名 + 一句话 + 开关/可用态），要用时再 skill_read 拿全文。复用 resolved_skills（Settings 列表
+    # / advertisedSkills 同一投影，不重写 enabled/available 判定），只出 prompt 需要的六个字段 ——
+    # installDir / scopes / toolCount 属工具面，不进 system prompt。
+    # 🔴 关掉的 skill **仍留在名单里**（enabled=false），不是消失：模型据此能回答「为什么做不了」，
+    # 并提议 set_skill_enabled；名单消失 = 能力事实凭空蒸发（对齐 LobeHub pinned 防呆）。
+    # 独立 try（不与 advertised 合并）：名单投影出岔不能顺带把 advertisedSkills 打成 None ——
+    # 那会让 gateway 的 skill→tool 门控 fail-open，副作用远大于少一段 prompt。null = 未知 → TS 侧
+    # 不渲染任何名单区块（prompt 字节级回退）。
+    skill_catalog: Optional[List[Dict[str, Any]]] = None
+    try:
+        from src.agent_config.projections import resolved_skills
+        from src.agent_config.store import get_agent_config_store
+        from src.skills.registry import build_manifest
+
+        skill_catalog = [
+            {
+                "name": s["name"],
+                "title": s["title"],
+                "description": s["description"],
+                "enabled": s["enabled"],
+                "available": s["available"],
+                "unavailableReason": s["unavailableReason"],
+            }
+            for s in resolved_skills(build_manifest(None).skills, get_agent_config_store())
+        ]
+    except Exception:  # noqa: BLE001 — skill catalog is best-effort; never fail /config
+        skill_catalog = None
     return success_envelope(
         {
             "maxIter": max_iter,
@@ -502,6 +530,10 @@ async def chat_config(request: Request):
             # was unavailable; "" means custom_agent is intentionally disabled. Never includes
             # user-installed prompt fragments.
             "trustedSkillFragments": trusted_skill_fragments,
+            # 阶段 0.5 — 技能名单（全部 skill，含关掉的）。字段恒发；null = 投影不可得 → gateway 不
+            # 渲染名单区块。是否真的进 system prompt 由 Node 侧 flag MAILAGENT_SKILL_CATALOG_PROMPT
+            # 决定（main-env-only，默认 off）—— 本端点只负责给数据，不读那个 flag。
+            "skillCatalog": skill_catalog,
             # M3c — user.md 偏好编译按钮显隐 gate（运行时暴露，非 vite define；
             # flag-off → 前端 UserMdCompileSection return null，整个区块在 DOM 不存在）。
             # singleton 读 —— 翻 MAILAGENT_USER_MD_COMPILE 需重启 serve-api（M3 flag 无 live writer，by design）

@@ -59,6 +59,7 @@ import { deriveExecRule, ExecRuleDeriveError } from './exec_policy_matcher'
 // /chat/config, projecting the system-prompt fields for the gateway.
 import { request } from '@shared/api/http_client'
 import type { GatewaySystemPromptConfig } from '../../ai-gateway/systemPrompt'
+import type { SkillCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 // 🔴 MEDIUM-6 (batch1 review) — type-only imports from the SDK-FREE providerRef. providers.ts
 // top-level imports six provider SDK packages, so it is loaded ONLY via the flag-on dynamic
 // import inside startEmbeddedAiGateway: MAILAGENT_LLM_PROVIDER_REGISTRY off keeps the module
@@ -80,6 +81,8 @@ interface ChatConfigResponse {
   kosConfigured?: boolean
   advertisedSkills?: string[] | null
   trustedSkillFragments?: string | null
+  /** 阶段 0.5 — every skill + state; typed off the prompt module so the row shape has ONE source. */
+  skillCatalog?: SkillCatalogEntry[] | null
 }
 
 let _handle: AiGatewayHandle | null = null
@@ -279,7 +282,16 @@ async function getSystemPromptConfig(
       advertisedSkills: cfg.advertisedSkills ?? null,
       // W6 — backend-filtered code-owned workflow guidance. Never carries installed third-party
       // prompt fragments; null/empty preserves the post-cutover no-fragment behaviour.
-      trustedSkillFragments: cfg.trustedSkillFragments ?? null
+      trustedSkillFragments: cfg.trustedSkillFragments ?? null,
+      // 阶段 0.5「技能可发现性」— MAILAGENT_SKILL_CATALOG_PROMPT gates the L0 catalog block. THIS is
+      // the only gate: flag off → the field never leaves this projection → buildGatewaySystemPrompt
+      // renders nothing → the system prompt is byte-identical to before (pinned by a vitest on the
+      // pure module, which is why the flag is read here and not inside it). Python sends the data
+      // unconditionally; the read cost is one already-cached /chat/config field. Default OFF (ship
+      // off → dogfood → cutover 另拍), main-env-only, NO vite define (mirrors the openness flags).
+      skillCatalog: envBool('MAILAGENT_SKILL_CATALOG_PROMPT', false)
+        ? (cfg.skillCatalog ?? null)
+        : null
     }
   } catch (err) {
     console.warn('[ai-gateway] /chat/config fetch failed — context-light system prompt', err)

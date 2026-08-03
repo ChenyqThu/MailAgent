@@ -57,5 +57,11 @@ where = ["."]
 include = ["src*"]
 exclude = ["tests*", "scripts*", "venv*", "data*", "logs*"]
 
+[tool.setuptools.package-data]
+# 🔴 builtin skill 的 SKILL.md 是**运行时**读的（/api/agent/skills/{name}/doc → skill_read），
+# 不是文档。setuptools 默认只装 .py，漏声明 → 打包 .app 的 site-packages 里没有这 6 份文件 →
+# 仓内运行正常、装机后 404（功能只在开发机上是真的）。加/改 builtin 文档路径同步改这里。
+"src.skills" = ["docs/*/SKILL.md"]
+
 [tool.ruff.lint.per-file-ignores]
 "docs/cli-schema/*.json" = ["F821"]

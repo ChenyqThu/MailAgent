@@ -36,8 +36,14 @@ CROSS_LANGUAGE_FLAGS = {
     # mem0 对：CAPTURE 只 Node 读、RETRIEVAL 只 Python 读（跨语言拆分，改名易漏另一侧）
     "MAILAGENT_MEM0_CAPTURE": [_LIFECYCLE],
     "MAILAGENT_MEM0_RETRIEVAL": [_CHAT],
+    # 记忆分层（阶段 0.5-③ PR-1）：Python pydantic only（capture 引擎 memory_md.py 经 cfg 读）；
+    # 登记防改名漏侧，PR-2 真变双载体（读侧/Node）时在此加 _CHAT/_LIFECYCLE
+    "MAILAGENT_MEMORY_LAYERS": [_CONFIG],
     # skill 自挂载 kill-switch：Node only
     "MAILAGENT_SKILL_SELF_MOUNT": [_LIFECYCLE],
+    # 阶段 0.5 技能名单进 prompt：Node only（Python 恒发 skillCatalog 数据、不读这个 flag ——
+    # 登记是防改名漏一侧，不是声明双载体；真变成双载体时在此加 _CHAT/_CONFIG）
+    "MAILAGENT_SKILL_CATALOG_PROMPT": [_LIFECYCLE],
     # kos 时间衰减：Node envBool + pydantic alias 双读
     "MAILAGENT_KOS_TIME_DECAY_ENABLED": [_LIFECYCLE, _CONFIG],
     # 写 / 外发 kill-switch：Node only

@@ -16,7 +16,11 @@
 //    is code-owned (prompts/safety_floor.ts), never sourced from standingContext — a parity test
 //    asserts the floor bytes are always present, even when standingContext is set.
 
-import { buildStableSystemPrompt, type ChatModelConfig } from './prompts/stable_prompt'
+import {
+  buildStableSystemPrompt,
+  type ChatModelConfig,
+  type SkillCatalogEntry
+} from './prompts/stable_prompt'
 import { buildContextSystemBlock } from '@shared/assistant/context/contextSerializer'
 import type { AgentContextSnapshot } from '@shared/assistant/context/contextSnapshot'
 
@@ -41,6 +45,11 @@ export interface GatewaySystemPromptConfig {
   /** Code-owned enabled skill guidance from /chat/config. This deliberately excludes installed
    *  third-party prompt fragments; W6 currently contributes only the Custom Agent builder flow. */
   trustedSkillFragments?: string | null
+  /** 阶段 0.5「技能可发现性」— every skill's name + one line + state (disabled ones INCLUDED), from
+   *  /chat/config.skillCatalog. The Electron wrapper only fills this when the main-env flag
+   *  MAILAGENT_SKILL_CATALOG_PROMPT is on, so the default (off) leaves it null and the prompt stays
+   *  byte-identical. Skill DESCRIPTIONS can be third-party text — stable_prompt sanitizes them. */
+  skillCatalog?: SkillCatalogEntry[] | null
 }
 
 /** Code-owned repeated-failure discipline, injected into EVERY run (manual and headless alike).
@@ -114,6 +123,15 @@ export function buildGatewaySystemPrompt(args: {
     skillFragments:
       !args.headlessAgentRun && pc?.trustedSkillFragments && pc.trustedSkillFragments.length > 0
         ? pc.trustedSkillFragments
+        : null,
+    // 阶段 0.5 — 🔴 manual chat only, deliberately following the SAME conservative line as the
+    // fragments above (0.5 编排裁决 R3): a headless custom-agent run gets a server-pinned tool set,
+    // cannot ask the user to enable anything, and cannot self-mount — a catalog of skills it may
+    // not have would be prompt weight it can act on in exactly zero ways. Whether headless should
+    // ever see it is a separate owner call; F8's judgement is untouched here.
+    skillCatalog:
+      !args.headlessAgentRun && pc?.skillCatalog && pc.skillCatalog.length > 0
+        ? pc.skillCatalog
         : null,
     standingContext:
       pc?.standingContext && pc.standingContext.length > 0 ? pc.standingContext : null

@@ -11,9 +11,59 @@
 //
 // Zero Electron/Node import (gateway-pure; sanitizeUntrusted is a pure helper).
 
-import { sanitizeUntrusted } from '../../shared/assistant/context/contextSerializer'
+import { sanitizeProse, sanitizeUntrusted } from '../../shared/assistant/context/contextSerializer'
 import { PRODUCT_SAFETY_FLOOR } from './safety_floor'
 import { SOUL_MARKDOWN } from './soul'
+
+/** One row of the always-injected skill catalog (阶段 0.5 技能可发现性), as projected by serve-api
+ *  /chat/config from `resolved_skills`. Progressive disclosure level 0: the model sees WHICH skills
+ *  exist (name + one line + state) and reads the full SKILL.md on demand via `skill_read`.
+ *
+ *  🔴 `description` (and `title` / `unavailableReason`) of an INSTALLED skill is third-party text the
+ *     user's skill package supplied — it is sanitizeProse'd before it enters this trusted section. */
+export interface SkillCatalogEntry {
+  name: string
+  title: string
+  description: string
+  /** enabled = override ?? manifest default. A disabled skill STAYS in the list (see block below). */
+  enabled: boolean
+  available: boolean
+  unavailableReason: string | null
+}
+
+/** Per-entry description budget in the catalog block. A skill package's description is attacker-
+ *  controllable in length as well as content: without a cap one installed skill could push the
+ *  cacheable prefix by kilobytes. One line each is all this level of disclosure needs. */
+const SKILL_CATALOG_DESC_CAP = 200
+
+/** Render the L0 catalog block: one line per skill, disabled/unavailable ones INCLUDED. Empty /
+ *  null list → '' (caller skips the section → byte-identical to no catalog). */
+function buildSkillCatalogBlock(entries: SkillCatalogEntry[]): string {
+  const lines = entries.map((e) => {
+    const name = sanitizeProse(e.name)
+    const title = sanitizeProse(e.title)
+    const raw = sanitizeProse(e.description)
+    const desc =
+      raw.length > SKILL_CATALOG_DESC_CAP ? `${raw.slice(0, SKILL_CATALOG_DESC_CAP)}…` : raw
+    const reason = sanitizeProse(e.unavailableReason ?? '')
+    const state = !e.available
+      ? `unavailable${reason ? `: ${reason}` : ''}`
+      : e.enabled
+        ? 'on'
+        : 'off'
+    return `- ${name} [${state}] — ${[title, desc].filter((s) => s.length > 0).join(': ')}`
+  })
+  return [
+    '# Skill catalog (every skill that exists, whether or not it is on)',
+    '# Read silently. [on] = enabled and usable now; [off] = the user turned it off (its tools are',
+    '# NOT registered — never call or simulate them; you may propose set_skill_enabled);',
+    '# [unavailable] = preconditions/credentials unmet. This list is names only: call skill_read(name)',
+    "# for a skill's full usage document when you actually need it, and discover_skills to confirm",
+    '# the live state before you assert what is on or off.',
+    '',
+    ...lines
+  ].join('\n')
+}
 
 /** The prompt-relevant config subset (was ChatModelConfig in the legacy platform.ts). */
 export interface ChatModelConfig {
@@ -38,6 +88,14 @@ export interface ChatModelConfig {
   /** P3 — concatenated prompt fragments of the ENABLED + AVAILABLE Skills. The gateway
    *  passes null (capabilities are expressed via the snapshot block instead). */
   skillFragments: string | null
+  /** 阶段 0.5 — the L0 skill catalog (names + one line + state, disabled ones INCLUDED), rendered
+   *  into the cacheable prefix right after the fragments. Absent / null / [] → no block, byte-
+   *  identical to before the catalog existed. The caller gates it: the gateway passes a list only
+   *  when MAILAGENT_SKILL_CATALOG_PROMPT is on AND the run is a manual chat.
+   *
+   *  OPTIONAL on purpose (the sibling fields are required): omitting it is exactly the safe default,
+   *  so no existing construction site — production or test — has to change to keep today's bytes. */
+  skillCatalog?: SkillCatalogEntry[] | null
   /** PR4 (task 06-22) — Standing Context (SOUL+AGENT+RULES+USER, assembled backend-side)
    *  from serve-api /chat/config. Non-null → layered `PRODUCT_SAFETY_FLOOR + standingContext`;
    *  null / "" → SOUL_MARKDOWN fallback (flag off or store unavailable), byte-identical. */
@@ -168,8 +226,15 @@ export function buildStableSystemPrompt(
       '# disabled by the user, not installed / out of scope, its service not configured, or\n' +
       '# callable only with confirmation. Its tools are NOT registered: never call or simulate a\n' +
       '# missing tool. If asked what you can do or why something is unavailable, explain from these\n' +
-      '# categories (skill_list_installed gives the per-skill enabled/available state) — do not guess.\n\n' +
+      '# categories (discover_skills gives the per-skill enabled/available state) — do not guess.\n\n' +
       cfg.skillFragments
+  }
+  // 阶段 0.5「技能可发现性」— the L0 catalog, AFTER the fragments and still INSIDE the cacheable
+  // prefix (it changes only when the user toggles a skill / installs one, at the 15s /chat/config
+  // TTL — same treatment as memorySummary; putting it after the date block would instead re-cache
+  // the whole prompt daily for nothing). Absent / empty → skip, byte-identical to no catalog.
+  if (cfg.skillCatalog && cfg.skillCatalog.length > 0) {
+    text += '\n\n' + buildSkillCatalogBlock(cfg.skillCatalog)
   }
   // KOS 可用（启用 AND 对接，= kosConfigured）时注入使用指南（静态、可缓存）。🔴 这个 gate
   // 只管**指南**：6 个 KOS 只读工具在 buildGatewayTools() 里恒注册、不受此 flag 影响（未对接

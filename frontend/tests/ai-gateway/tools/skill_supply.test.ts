@@ -46,7 +46,13 @@ const DOC_RESULT = { name: 'dms-approve', content: '# DMS usage\nrun main.py', t
 function supplyDomain(overrides?: {
   onCall?: (url: string, body?: string) => void
   confirmStatus?: { code: string; message: string; http: number }
-  doc?: { name: string; content: string; truncated: boolean; installDir?: string | null }
+  doc?: {
+    name: string
+    content: string
+    truncated: boolean
+    installDir?: string | null
+    source?: 'builtin' | 'installed'
+  }
 }) {
   return mockDomain((url, body) => {
     overrides?.onCall?.(url, body)
@@ -383,7 +389,10 @@ describe('skill_read (silent read — fenced third-party doc)', () => {
     expect(out.run_hint).toContain('secrets')
   })
 
-  test('install_dir null (builtin / older server without the field) still yields a usable hint', async () => {
+  test('install_dir null (older server without the field) still yields a usable hint', async () => {
+    // 阶段 0.5 — this is the OLDER-SERVER case, not the builtin one: an old server returned null
+    // installDir for installed skills too, and those still need the absolute-argv hint. Builtin-ness
+    // is now carried by an explicit `source` (see the next test), never inferred from this null.
     const tools = createSkillSupplyTools(supplyDomain(), [], new ApprovalGuard(), {
       contextMode: 'manual_chat'
     })
@@ -393,5 +402,63 @@ describe('skill_read (silent read — fenced third-party doc)', () => {
     }
     expect(out.install_dir).toBeNull()
     expect(out.run_hint).toContain('<install dir>')
+  })
+
+  // 阶段 0.5「技能可发现性」— the six code-owned builtin docs became readable (server-side fallback
+  // to src/skills/docs/<name>/SKILL.md). They are still fenced, but they are NOT third-party text
+  // and they have no scripts, so the run_hint must not appear at all.
+  test('a builtin doc: fenced, install_dir null, NO run_hint, first-party notice', async () => {
+    const tools = createSkillSupplyTools(
+      supplyDomain({
+        doc: {
+          name: 'email',
+          content: '# Email skill\nUse email_list_filter to…',
+          truncated: false,
+          installDir: null,
+          source: 'builtin'
+        }
+      }),
+      [],
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
+    )
+    const out = (await runTool(tools.skill_read, { name: 'email' })) as {
+      install_dir: string | null
+      run_hint?: string
+      notice: string
+      content: string
+    }
+    expect(out.content).toContain('UNTRUSTED_SKILL_DOC_START') // fence stays (uniform handling)
+    expect(out.content).toContain('Use email_list_filter to…')
+    expect(out.install_dir).toBeNull()
+    // 🔴 the misleading part is gone: no "<install dir>/main.py" argv example for a skill that
+    // ships no scripts.
+    expect(out.run_hint).toBeUndefined()
+    expect(out.notice).toContain('BUILT-IN')
+    expect(out.notice).not.toContain('THIRD-PARTY')
+  })
+
+  test("source='installed' keeps the third-party notice + run_hint (no behaviour change)", async () => {
+    const dir = '/data/skills/dms-approve'
+    const tools = createSkillSupplyTools(
+      supplyDomain({
+        doc: {
+          name: 'dms-approve',
+          content: '# DMS usage',
+          truncated: false,
+          installDir: dir,
+          source: 'installed'
+        }
+      }),
+      [],
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
+    )
+    const out = (await runTool(tools.skill_read, { name: 'dms-approve' })) as {
+      run_hint?: string
+      notice: string
+    }
+    expect(out.notice).toContain('THIRD-PARTY')
+    expect(out.run_hint).toContain(`${dir}/main.py`)
   })
 })

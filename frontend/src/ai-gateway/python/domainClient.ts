@@ -532,6 +532,10 @@ export interface DomainSkillDocResult {
   content: string
   truncated: boolean
   installDir?: string | null
+  /** 阶段 0.5 — 'builtin' = a code-owned skill doc (no install dir, no scripts to run); 'installed'
+   *  = a third-party package on disk. ABSENT on an older server — never infer builtin-ness from a
+   *  null installDir, which that older server also produced for installed skills. */
+  source?: 'builtin' | 'installed'
 }
 
 /** chat_session_search — one aggregated hit of GET /chat/sessions/search. */

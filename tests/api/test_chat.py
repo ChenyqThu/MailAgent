@@ -310,6 +310,9 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
     assert advertised is None or all(isinstance(x, str) for x in advertised)
     trusted_fragments = data.pop("trustedSkillFragments")
     assert trusted_fragments is None or "six capability tiers" in trusted_fragments
+    # 阶段 0.5 — 技能名单（skill-依赖，同 advertisedSkills 不 pin 具体内容，只 pop + 断言形状）。
+    catalog = data.pop("skillCatalog")
+    assert catalog is None or all(isinstance(row["name"], str) for row in catalog)
     assert data == {
         "maxIter": 8,
         "maxCostUsd": 0.5,
@@ -366,6 +369,47 @@ def test_chat_config_openness_flags_hot_read(
     assert data["webToolsEnabled"] is True
     # 既有字段回归：exec flag 同一热读通道
     assert data["execPolicyEnabled"] is True
+
+
+def test_chat_config_skill_catalog_lists_every_builtin(
+    monkeypatch: pytest.MonkeyPatch, fresh_agent_cfg
+) -> None:
+    """阶段 0.5 —— skillCatalog 列出全部 6 个 code-owned builtin，字段是 prompt 需要的六个。"""
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        catalog = c.get("/api/chat/config").json()["data"]["skillCatalog"]
+    assert {row["name"] for row in catalog} == {
+        "email",
+        "search",
+        "report",
+        "calendar",
+        "notion_agent",
+        "custom_agent",
+    }
+    assert set(catalog[0]) == {
+        "name",
+        "title",
+        "description",
+        "enabled",
+        "available",
+        "unavailableReason",
+    }
+
+
+def test_chat_config_skill_catalog_keeps_disabled_skills(
+    monkeypatch: pytest.MonkeyPatch, fresh_agent_cfg
+) -> None:
+    """🔴 关掉一个 skill → 它 enabled=false 但**仍在名单里**（关掉 ≠ 消失）。
+
+    名单是「有哪些能力存在」的事实；让被关掉的 skill 从名单蒸发，模型就既答不出「为什么做不了」
+    也提不出 set_skill_enabled。对比 advertisedSkills（门控用）—— 那个才是「现在能用的」子集。
+    """
+    fresh_agent_cfg.set_enabled("report", False)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    row = next(r for r in data["skillCatalog"] if r["name"] == "report")
+    assert row["enabled"] is False
+    # 同一快照里 advertisedSkills（门控投影）确实把它去掉了 —— 两者语义不同，别混用。
+    assert "report" not in (data["advertisedSkills"] or [])
 
 
 def test_chat_config_memory_dump_retired(monkeypatch: pytest.MonkeyPatch) -> None:

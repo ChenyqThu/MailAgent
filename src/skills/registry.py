@@ -7,9 +7,11 @@ manifest 序列化时只出 ``ToolDef``（不含 callable）。``build_manifest(
 from __future__ import annotations
 
 import importlib.metadata
+import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from functools import lru_cache
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, Awaitable, Callable, Optional, Union
 
 from src.skills.models import (
@@ -76,6 +78,37 @@ def code_builtin_skills() -> tuple[BoundSkill, ...]:
         notion_agent.build_skill(),
         custom_agent.build_skill(),
     )
+
+
+# code-owned builtin 的 SKILL.md 根 = 本包同级的 ``docs/``。用 ``__file__`` 解析，仓内运行与打包
+# 后的 site-packages 布局都成立 —— 🔴 前提是 wheel 真的带上了这些 .md：setuptools 默认只装 .py，
+# 故 pyproject 的 ``[tool.setuptools.package-data]`` 必须显式声明 ``docs/*/SKILL.md``（漏了 → 仓内
+# 能读、打包 app 里 404，功能只在开发机上是真的）。
+_BUILTIN_DOCS_ROOT = Path(__file__).resolve().parent / "docs"
+
+
+def builtin_doc_file(name: str) -> Optional[str]:
+    """code-owned builtin skill 的 SKILL.md 绝对路径；非 builtin / 文件缺失 → ``None``。
+
+    ``/api/agent/skills/{name}/doc``（``skill_read`` 的数据源）对 builtin 的 fallback 用。路径取自
+    该 skill 自己声明的 ``docs_path``（pack 内相对路径 ``skills/<x>/SKILL.md``，与
+    ``scripts/export_skill_pack.py`` 同一份声明），**不**拿调用方传进来的 ``name`` 去拼文件路径 ——
+    ``name`` 只用于在**代码注册表**里定位 skill，定位不到即 None，于是穿越面结构性不存在。
+    realpath 含界是 belt-and-suspenders（docs_path 本身是代码常量）。
+    """
+    for skill in code_builtin_skills():
+        if skill.name != name:
+            continue
+        parts = PurePosixPath((skill.docs_path or "").strip()).parts
+        # docs_path 首段是 pack 里的 "skills/"；仓内对应根就是本包的 docs/。
+        if len(parts) < 2 or parts[0] != "skills":
+            return None
+        root = os.path.realpath(_BUILTIN_DOCS_ROOT)
+        rp = os.path.realpath(_BUILTIN_DOCS_ROOT.joinpath(*parts[1:]))
+        if rp != root and not rp.startswith(root + os.sep):
+            return None
+        return rp if os.path.isfile(rp) else None
+    return None
 
 
 def _load_installed_skills(builtins: tuple[BoundSkill, ...]) -> list[BoundSkill]:
@@ -153,8 +186,12 @@ def build_manifest(principal: Any = None, *, generated_at: Optional[str] = None)
         # fragments / docs never leak through /api/skills + MCP. The owner paths are
         # unaffected: principal=None (internal build_manifest(None) — chat_config /
         # projections) and the local/CF human principal (is_agent=False, the desktop
-        # harness's own /api/skills fetch) both still see installed skills, so the
-        # Custom AI runtime keeps getting their skillFragments (PR3 behaviour intact).
+        # harness's own /api/skills fetch) both still see installed skills, so the owner
+        # surfaces keep working (Settings list, resolved_skills / advertisedSkills, the
+        # /chat/config skill catalog, skill_read). 🔴 NOT via prompt fragments: post-cutover
+        # the gateway prompt carries no installed prompt_fragment at all (chat.py keeps only
+        # the code-owned custom_agent one) — an installed skill reaches the model as its NAME
+        # in the catalog plus its SKILL.md on demand.
         if (
             principal is not None
             and getattr(principal, "is_agent", False)
@@ -168,9 +205,11 @@ def build_manifest(principal: Any = None, *, generated_at: Optional[str] = None)
         ]
         # PR3 — keep legitimately tool-less skills (document-only installed skills):
         # only hide a skill whose tools were ALL scope-filtered out (had tools, none
-        # visible to this principal). A zero-tool skill stays so its prompt_fragment /
-        # docs reach the manifest consumer (else build_manifest silently drops it,
-        # losing the document-only skill's fragment from the harness skillFragments).
+        # visible to this principal). A zero-tool skill stays so it still reaches the
+        # manifest consumers (else build_manifest silently drops it): the resolved-skill
+        # projections — Settings list, advertisedSkills, the /chat/config skill catalog —
+        # and its docs. Its prompt_fragment is NOT injected anywhere post-cutover; the
+        # document itself is what the model reads, on demand, via skill_read.
         if skill.tools and not visible:
             continue
         skills_out.append(
