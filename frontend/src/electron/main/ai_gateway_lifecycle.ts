@@ -28,6 +28,16 @@ import {
 } from '../../ai-gateway/config'
 import { MailAgentDomainClient } from '../../ai-gateway/python/domainClient'
 import { buildGatewayTools } from '../../ai-gateway/tools'
+// Stage 1 PR2 — MCP connector dynamic tools (MAILAGENT_MCP_CONNECTORS, default off): the manifest
+// is TTL-cached off the request path; buildTools assembles the ToolSet synchronously from the
+// cache, manual_chat runs only (shouldLoadConnectorTools — headless paths perform ZERO calls).
+import {
+  createConnectorTools,
+  fetchConnectorManifest,
+  shouldLoadConnectorTools,
+  type ConnectorToolManifestEntry
+} from '../../ai-gateway/tools/connector'
+import type { ToolSet } from 'ai'
 import type { GlobalApprovalMode } from '../../ai-gateway/tools/types'
 import { ApprovalGuard } from '../../ai-gateway/security/approval'
 import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approvalStash'
@@ -469,6 +479,44 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // emergency kill-switch. Default ON; an explicit env false → the tool is never registered,
   // byte-identical. main-env-only, NO vite define (mirrors the openness/calendar flags).
   const notionAgentToolsEnabled = envBool('MAILAGENT_NOTION_AGENT_TOOL', true)
+  // Stage 1 PR2 — MAILAGENT_MCP_CONNECTORS gates the dynamic MCP connector tools
+  // (`mcp__<connector>__<tool>`, read silent / write·update edit-tier 恒 HITL via the runtime
+  // 'connector_write' class). Default OFF (ship off → dogfood → cutover 另拍, island 模式);
+  // off → no manifest fetch, no registration, buildGatewayTools byte-identical. main-env-only,
+  // NO vite define (mirrors the other tool-family flags). Python serve-api reads the SAME env via
+  // pydantic (mcp_connectors_enabled) — off there turns every /api/connector/* endpoint 409.
+  const mcpConnectorsEnabled = envBool('MAILAGENT_MCP_CONNECTORS', false)
+  // TTL-cached connector tool manifest (loopback pulls stay OFF the request path — buildTools is
+  // synchronous). A fetch failure caches null = no connector tools (silent degradation, warned in
+  // fetchConnectorManifest); the background refresh below re-tries after the TTL.
+  const CONNECTOR_MANIFEST_TTL_MS = 30_000
+  let _connectorManifestCache: { at: number; value: ConnectorToolManifestEntry[] | null } | null =
+    null
+  let _connectorManifestInflight = false
+  const refreshConnectorManifest = (): void => {
+    if (!mcpConnectorsEnabled || _connectorManifestInflight) return
+    if (
+      _connectorManifestCache &&
+      Date.now() - _connectorManifestCache.at < CONNECTOR_MANIFEST_TTL_MS
+    ) {
+      return
+    }
+    _connectorManifestInflight = true
+    void fetchConnectorManifest(domain)
+      .then((value) => {
+        _connectorManifestCache = { at: Date.now(), value }
+      })
+      .catch(() => {
+        // fetchConnectorManifest is contracted never to throw — belt only.
+        _connectorManifestCache = { at: Date.now(), value: null }
+      })
+      .finally(() => {
+        _connectorManifestInflight = false
+      })
+  }
+  // Prewarm once (fire-and-forget — a slow serve-api must never block gateway startup; the first
+  // manual turn before the prewarm lands simply has no connector tools yet).
+  refreshConnectorManifest()
   // S4 W3 — MAILAGENT_CUSTOM_AGENTS_ENABLED gates the headless custom-agent fresh-spawn endpoint
   // (POST /api/ai/agent-run): its two cfg hooks (fetchAgentRunSpec + createAgentSession) are wired
   // only when on → an explicit env false → the endpoint 404s, byte-identical to S3. This wave adds
@@ -766,8 +814,25 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // cutover master it used to follow was GA'd away). `approvalMode` (PART 2) comes from the
     // request body (default 'always'); 'auto-reversible' lets reversible preview writes skip the
     // card. The blocking send always asks regardless (safety floor in auditedSendTool).
-    buildTools: (collector, approvalMode, contextMode, agentRunContext) =>
-      buildGatewayTools(
+    buildTools: (collector, approvalMode, contextMode, agentRunContext) => {
+      // Stage 1 PR2 — dynamic MCP connector tools, manual_chat-ONLY (shouldLoadConnectorTools:
+      // flag on + server-asserted manual mode + no agentRunContext — the headless path performs
+      // ZERO connector work, not "fetch then deny"). The ToolSet is built synchronously from the
+      // TTL cache; refresh happens in the background so the NEXT turn sees manifest changes.
+      let dynamicTools: ToolSet | undefined
+      if (shouldLoadConnectorTools(mcpConnectorsEnabled, contextMode, agentRunContext != null)) {
+        refreshConnectorManifest()
+        const manifest = _connectorManifestCache?.value
+        if (manifest && manifest.length > 0) {
+          dynamicTools = createConnectorTools(domain, collector, approvalGuard, manifest, {
+            a2uiEnabled,
+            approvalMode,
+            oneShot: serverResumeEnabled,
+            contextMode
+          })
+        }
+      }
+      return buildGatewayTools(
         {
           domain,
           kosTimeDecayEnabled: envBool('MAILAGENT_KOS_TIME_DECAY_ENABLED', true),
@@ -814,10 +879,15 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // S5 W4 (ADR-004) — the per-agent run context of a headless agent run, from
           // wrapCfgForAgentRun's buildTools wrapper (4th param). Manual runs pass undefined →
           // assembly byte-identical.
-          agentRunContext
+          agentRunContext,
+          // Stage 1 PR2 — connector tools ride the stage-0b admitDynamicTools seam (after both
+          // skill-gating passes, before the context-mode policy). undefined (flag off / headless /
+          // empty cache) → identity pass-through, byte-identical.
+          dynamicTools
         },
         collector
-      ),
+      )
+    },
     // Phase 10b — configurable LLM auto-title. getTitleContext reads ai_chat.db (current title + first
     // user message); a non-null title = already-named (manual rename / prior auto-title) so the endpoint
     // skips regeneration → manual titles never overwritten. saveSessionTitle persists via

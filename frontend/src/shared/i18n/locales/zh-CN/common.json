@@ -1156,6 +1156,15 @@
       "restoreTarget": "回滚到版本 {id}",
       "error": "操作失败，请重试或让助手重新发起。"
     },
+    "mcpApprovalCard": {
+      "title": "调用外部服务工具",
+      "connector": "服务",
+      "tool": "工具",
+      "label": "将调用外部 MCP 服务的以下工具 —— 改动落在外部服务侧，批准后可能无法从这里撤销（需你批准）：",
+      "destructiveWarning": "破坏性操作：服务方标记此工具可能覆盖既有数据。",
+      "noArgs": "(无参数)",
+      "error": "调用失败，请重试或让助手重新发起。"
+    },
     "calendarApprovalCard": {
       "reschedule": {
         "title": "改期日程"

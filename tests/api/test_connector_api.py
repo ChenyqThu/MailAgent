@@ -73,6 +73,7 @@ def test_flag_off_all_non_callback_endpoints_409(flag_off_client):
         ("GET", "/api/connector/notion/status"),
         ("POST", "/api/connector/notion/sync"),
         ("GET", "/api/connector/notion/tools"),
+        ("POST", "/api/connector/notion/tools/search/invoke"),
         ("POST", "/api/connector/notion/disconnect"),
     ]
     for method, url in cases:
@@ -147,6 +148,7 @@ class _StubConnectorClient:
             "input_schema": {"type": "object"},
             "output_schema": None,
             "crud_type": "write",
+            "destructive": True,
         },
         {
             "name": "delete_page",
@@ -186,6 +188,9 @@ def test_sync_persists_tools_and_status(flag_on_client, fresh_agent_cfg, monkeyp
     assert tools["create_page"]["effective_enabled"] is False
     assert tools["delete_page"]["effective_enabled"] is False
     assert tools["delete_page"]["crud_type"] == "delete"
+    # PR2 裁决① — destructive 位随清单返回（审批卡红警告的数据源）。
+    assert tools["create_page"]["destructive"] is True
+    assert tools["search"]["destructive"] is False
 
 
 def test_sync_not_connected_maps_409_and_error_state(flag_on_client, fresh_agent_cfg, monkeypatch):
@@ -205,6 +210,150 @@ def test_sync_not_connected_maps_409_and_error_state(flag_on_client, fresh_agent
     row = fresh_agent_cfg.get_connector("notion")
     assert row is not None and row.status == "error"
     assert "not authorized" in (row.last_error or "")
+
+
+# ── invoke：MCP 调用代理（PR2）—— 白名单四道闸 + 截断透传 ───────────────────────
+
+
+def _seed_tools(store):
+    """直接种清单（invoke 闸只看 store 行；不需要走 sync 端点）。"""
+    store.upsert_connector("notion", server_url="https://mcp.notion.com/mcp")
+    store.sync_connector_tools(
+        "notion",
+        [
+            {"name": "search", "description": "", "input_schema": None,
+             "output_schema": None, "crud_type": "read"},
+            {"name": "create_page", "description": "", "input_schema": None,
+             "output_schema": None, "crud_type": "write", "destructive": True},
+            {"name": "delete_page", "description": "", "input_schema": None,
+             "output_schema": None, "crud_type": "delete"},
+        ],
+    )
+
+
+class _InvokeStubClient:
+    """call_tool stub —— 记录入参，返回有界结果形状。"""
+
+    last_call = None
+
+    def __init__(self, connector_id, **_kwargs):
+        self.connector_id = connector_id
+
+    async def call_tool(self, tool_name, arguments=None, **_kwargs):
+        type(self).last_call = (self.connector_id, tool_name, arguments)
+        return {"content": "fenced later", "is_error": False, "truncated": True}
+
+
+def test_invoke_unknown_tool_404_never_forwarded(flag_on_client, fresh_agent_cfg, monkeypatch):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = flag_on_client.post("/api/connector/notion/tools/forged_tool/invoke")
+    assert r.status_code == 404
+    assert r.json()["error"]["code"] == "E_NOT_FOUND"
+    assert _InvokeStubClient.last_call is None  # 伪造名字到不了远端
+
+
+def test_invoke_delete_class_403(flag_on_client, fresh_agent_cfg, monkeypatch):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = flag_on_client.post("/api/connector/notion/tools/delete_page/invoke")
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_TOOL_FORBIDDEN"
+    assert _InvokeStubClient.last_call is None
+
+
+def test_invoke_disabled_tool_409_actionable(flag_on_client, fresh_agent_cfg, monkeypatch):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    # write 默认关（effective_enabled 折算 False）。
+    r = flag_on_client.post("/api/connector/notion/tools/create_page/invoke")
+    assert r.status_code == 409
+    err = r.json()["error"]
+    assert err["code"] == "E_CONNECTOR_TOOL_DISABLED"
+    assert "Settings" in err["message"]  # 可行动解释（AC：告诉用户去设置开）
+
+    # 用户显式打开后可调。
+    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
+    r2 = flag_on_client.post("/api/connector/notion/tools/create_page/invoke")
+    assert r2.status_code == 200
+
+
+def test_invoke_orphan_tool_409(flag_on_client, fresh_agent_cfg, monkeypatch):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    # 远端清单里 search 消失 → orphan=1（配置行保留）。
+    fresh_agent_cfg.sync_connector_tools(
+        "notion",
+        [{"name": "create_page", "description": "", "input_schema": None,
+          "output_schema": None, "crud_type": "write"}],
+    )
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = flag_on_client.post("/api/connector/notion/tools/search/invoke")
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_CONNECTOR_TOOL_ORPHAN"
+
+
+def test_invoke_success_passes_arguments_and_truncation(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = flag_on_client.post(
+        "/api/connector/notion/tools/search/invoke",
+        json={"arguments": {"query": "roadmap"}},
+    )
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["tool_name"] == "search" and data["connector_id"] == "notion"
+    # 截断位如实透传（client 层已按 CALL_RESULT_MAX_CHARS 截）+ 耗时可观测（#69 纪律）。
+    assert data["truncated"] is True and data["is_error"] is False
+    assert isinstance(data["elapsed_ms"], int)
+    assert _InvokeStubClient.last_call == ("notion", "search", {"query": "roadmap"})
+
+
+def test_invoke_bad_arguments_shape_400(flag_on_client, fresh_agent_cfg, monkeypatch):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = flag_on_client.post(
+        "/api/connector/notion/tools/search/invoke", json={"arguments": ["not", "a", "dict"]}
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_invoke_not_connected_maps_and_marks_error_state(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+
+    class _Unauthorized(_InvokeStubClient):
+        async def call_tool(self, tool_name, arguments=None, **_kwargs):
+            raise client_mod.ConnectorError(
+                "not authorized", code="E_CONNECTOR_NOT_CONNECTED"
+            )
+
+    monkeypatch.setattr(client_mod, "ConnectorClient", _Unauthorized)
+    r = flag_on_client.post("/api/connector/notion/tools/search/invoke")
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_CONNECTOR_NOT_CONNECTED"
+    row = fresh_agent_cfg.get_connector("notion")
+    assert row is not None and row.status == "error"  # 镜像 sync：授权失效如实转 error 态
 
 
 # ── oauth/start：后台流交接（fake flow-runner，不发网络）────────────────────────

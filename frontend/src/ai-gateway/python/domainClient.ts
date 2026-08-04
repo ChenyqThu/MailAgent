@@ -414,6 +414,49 @@ export interface DomainNotionAgentChatResult {
   thread_id?: string | null
 }
 
+// ── MCP connector shapes (stage 1 PR2) — the /api/connector/* rows the dynamic connector tools
+//    consume (tools/connector.ts). Python owns the MCP client + tool whitelist; these carry the
+//    envelope only. ──
+
+/** GET /api/connector data block (registry ∪ DB runtime state; the manifest seam only consumes
+ *  the fields below). */
+export interface DomainConnectorList {
+  connectors: Array<{
+    connector_id: string
+    display_name: string | null
+    status: string
+    enabled: boolean
+  }>
+}
+
+/** GET /api/connector/{id}/tools data block. `effective_enabled` is folded server-side
+ *  (read default-on / write·update default-off / delete恒false); delete + orphan rows are still
+ *  listed (Q16=A manifest completeness) — registration skips them. */
+export interface DomainConnectorTools {
+  connector_id: string
+  tools: Array<{
+    name: string
+    description: string
+    input_schema_json: string | null
+    crud_type: string
+    destructive: boolean
+    effective_enabled: boolean
+    orphan: boolean
+  }>
+}
+
+/** POST /api/connector/{id}/tools/{name}/invoke data block. `content` is already truncated
+ *  server-side (truncated tells the model); the fence (UNTRUSTED_MCP_TOOL) is applied by the
+ *  gateway tool, not here. */
+export interface DomainConnectorInvokeResult {
+  connector_id: string
+  tool_name: string
+  content: string
+  is_error: boolean
+  truncated: boolean
+  elapsed_ms: number
+}
+
 // ── exec shapes (S2 W1) — the /api/exec/* rows the run_command/file_read/file_write tools consume.
 //    Python (routers/exec.py) is the execution authority (fixed env allowlist, inode-level deny
 //    floor, no shell); the client just carries the envelope. `policy` is an AUDIT verdict only
@@ -1178,6 +1221,43 @@ export class MailAgentDomainClient {
       body: { skill: 'notion_agent', tool: 'notion_agent_chat', input, confirm: true },
       signal
     })
+  }
+
+  // ── MCP connector primitives (stage 1 PR2, MAILAGENT_MCP_CONNECTORS) — the connector tool
+  //    manifest + call proxy live in Python serve-api /connector/* (the MCP client, OAuth
+  //    credentials and the tool whitelist are all Python-side; the gateway only carries the
+  //    envelope — web.ts / notion_agent.ts discipline). All three are only ever called when the
+  //    flag is on AND the run is manual chat (tools/connector.ts + the lifecycle seam). ──
+
+  /** List connectors (registry ∪ DB runtime state). GET /connector. */
+  listConnectors(signal?: AbortSignal): Promise<DomainConnectorList> {
+    return this._req<DomainConnectorList>('GET', '/connector', { signal })
+  }
+
+  /** List one connector's synced tool manifest (effective_enabled already folded server-side;
+   *  delete/orphan rows still listed — the registration seam skips them). GET /connector/{id}/tools. */
+  listConnectorTools(connectorId: string, signal?: AbortSignal): Promise<DomainConnectorTools> {
+    return this._req<DomainConnectorTools>(
+      'GET',
+      `/connector/${encodeURIComponent(connectorId)}/tools`,
+      { signal }
+    )
+  }
+
+  /** Invoke one connector tool through the serve-api MCP call proxy (whitelist-gated server-side:
+   *  unsynced/orphan/delete/disabled names never reach the remote; the result is already truncated
+   *  to CALL_RESULT_MAX_CHARS). POST /connector/{id}/tools/{name}/invoke. */
+  invokeConnectorTool(
+    connectorId: string,
+    toolName: string,
+    args: Record<string, unknown> | undefined,
+    signal?: AbortSignal
+  ): Promise<DomainConnectorInvokeResult> {
+    return this._req<DomainConnectorInvokeResult>(
+      'POST',
+      `/connector/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}/invoke`,
+      { body: { arguments: args ?? {} }, signal }
+    )
   }
 
   // ── exec primitives (S2 W1) — local command / filesystem execution via serve-api /exec/* (never

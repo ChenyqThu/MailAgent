@@ -24,6 +24,7 @@ import { useAISDKRuntime } from '@assistant-ui/react-ai-sdk'
 import i18n from '@shared/i18n'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
 import { ToolTraceCard } from '@shared/assistant/tools/generic/ToolTraceCard'
+import { McpToolFallback } from '@shared/assistant/tools/generic/McpApprovalCard'
 import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
 
 await i18n.changeLanguage('zh-CN')
@@ -367,12 +368,17 @@ describe('ToolTraceCard — history replay surface (ReadOnlyTranscript data path
 })
 
 describe('ToolTraceCard — mounted identically on all three surfaces', () => {
-  test('the production part map used by message.tsx / AgentMessage.tsx / ReadOnlyTranscript is this card', () => {
+  test('the production part map used by message.tsx / AgentMessage.tsx / ReadOnlyTranscript routes here', () => {
     // message.tsx (email panel) and AgentMessage.tsx (agent panel / Cmd+O) both spread
     // getAssistantPartComponents(); ReadOnlyTranscript renders AssistantThread → AssistantMessage
     // (message.tsx). One object, one Fallback — the render assertions above therefore hold for all
     // three, and the tests above cover both INPUT shapes (live stream vs replayed row).
+    // Stage 1 PR2 — the Fallback slot is now the MCP-aware router (McpToolFallback): every
+    // NON-`mcp__*` tool (all of the above) still renders ToolTraceCard byte-identically — the
+    // render assertions in this file drive the REAL map, so that equivalence is exercised, not
+    // assumed. Routing itself is pinned in McpApprovalCard.test.tsx.
     const tools = getAssistantPartComponents().tools as { Fallback?: unknown }
-    expect(tools.Fallback).toBe(ToolTraceCard)
+    expect(tools.Fallback).toBe(McpToolFallback)
+    expect(tools.Fallback).not.toBe(ToolTraceCard)
   })
 })

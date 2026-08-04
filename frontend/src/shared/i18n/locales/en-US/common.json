@@ -1156,6 +1156,15 @@
       "restoreTarget": "Restoring to version {id}",
       "error": "The operation failed — retry or ask the assistant to start over."
     },
+    "mcpApprovalCard": {
+      "title": "Call external service tool",
+      "connector": "Service",
+      "tool": "Tool",
+      "label": "The following external MCP service tool will be called — changes land on the external service and may not be undoable from here (needs your approval):",
+      "destructiveWarning": "Destructive operation: the server marks this tool as possibly overwriting existing data.",
+      "noArgs": "(no arguments)",
+      "error": "The call failed — retry or ask the assistant to start over."
+    },
     "calendarApprovalCard": {
       "reschedule": {
         "title": "Reschedule event"

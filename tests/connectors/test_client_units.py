@@ -17,6 +17,7 @@ from src.connectors.client import (
     ConnectorClient,
     ConnectorError,
     derive_crud_type,
+    derive_destructive,
 )
 from src.connectors.registry import CONNECTORS, get_connector_def, namespace_for
 
@@ -47,7 +48,7 @@ def test_unknown_connector_raises_stable_code():
     assert ei.value.code == "E_CONNECTOR_UNKNOWN"
 
 
-# ── crud 派生（annotations 三态 hint → read/write/update/delete）────────────────
+# ── crud 派生（annotations 三态 hint → read/update/write；裁决①后不产出 delete）──
 
 
 def _tool(**ann) -> Tool:
@@ -60,13 +61,102 @@ def _tool(**ann) -> Tool:
 
 def test_derive_crud_type_mapping():
     assert derive_crud_type(_tool(readOnlyHint=True)) == "read"
-    assert derive_crud_type(_tool(destructiveHint=True)) == "delete"
+    # 🔴 裁决①（spike 0803）：destructiveHint 是「破坏性更新」超集、无 delete 语义位 ——
+    # 不再映射 delete（旧映射让 Notion 的 update-page 结构性不可用）。
+    assert derive_crud_type(_tool(destructiveHint=True)) == "write"
     assert derive_crud_type(_tool(idempotentHint=True)) == "update"
     assert derive_crud_type(_tool(readOnlyHint=False, destructiveHint=False)) == "write"
-    # 完全未注解 → write（不按 spec 缺省推成 delete —— 见 derive_crud_type docstring）。
+    # 完全未注解 → write（不按 spec 缺省收紧 —— 见 derive_crud_type docstring）。
     assert derive_crud_type(_tool()) == "write"
     # read 优先于其它 hint（readOnly 为真时 destructive 无意义）。
     assert derive_crud_type(_tool(readOnlyHint=True, destructiveHint=True)) == "read"
+    # idempotent 优先于 destructive（Notion move-pages 型）。
+    assert derive_crud_type(_tool(idempotentHint=True, destructiveHint=True)) == "update"
+
+
+def test_derive_crud_type_never_produces_delete():
+    """裁决①收口：当前推导对任意 hint 组合都不产出 delete（档位机制保留但不喂）。"""
+    combos = [
+        {},
+        {"readOnlyHint": True},
+        {"destructiveHint": True},
+        {"idempotentHint": True},
+        {"destructiveHint": True, "idempotentHint": True},
+        {"readOnlyHint": False, "destructiveHint": True},
+    ]
+    for ann in combos:
+        assert derive_crud_type(_tool(**ann)) != "delete", ann
+
+
+def test_derive_destructive_flag():
+    """destructive 位单独落列：只认显式 True（None / False 都算否）。"""
+    assert derive_destructive(_tool(destructiveHint=True)) is True
+    assert derive_destructive(_tool(destructiveHint=False)) is False
+    assert derive_destructive(_tool()) is False
+    assert derive_destructive(_tool(readOnlyHint=True)) is False
+    # readOnly 与 destructive 并存时 crud 归 read，但 destructive 位如实保留。
+    assert derive_destructive(_tool(readOnlyHint=True, destructiveHint=True)) is True
+
+
+# ── call_tool 归一：文本块拼接 / structured 兜底 / 截断有界（issue #66 纪律）───────
+
+
+class _FakeBlock:
+    def __init__(self, text):
+        self.text = text
+
+
+class _FakeCallResult:
+    def __init__(self, content=None, structured=None, is_error=False):
+        self.content = content or []
+        self.structured_content = structured
+        self.is_error = is_error
+
+
+def _client_with_fake_session(result):
+    from contextlib import asynccontextmanager
+
+    cc = ConnectorClient("notion", interactive=False, timeout_seconds=1.0)
+
+    class _FakeMcpClient:
+        async def call_tool(self, name, arguments):
+            self.called_with = (name, arguments)
+            return result
+
+    fake = _FakeMcpClient()
+
+    @asynccontextmanager
+    async def fake_session(*, http_transport=None):
+        yield fake
+
+    cc.session = fake_session  # type: ignore[method-assign]
+    return cc, fake
+
+
+def test_call_tool_joins_text_blocks_and_passes_args():
+    result = _FakeCallResult(content=[_FakeBlock("part1"), _FakeBlock("part2")])
+    cc, fake = _client_with_fake_session(result)
+    out = asyncio.run(cc.call_tool("search", {"q": "x"}))
+    assert out == {"content": "part1\npart2", "is_error": False, "truncated": False}
+    assert fake.called_with == ("search", {"q": "x"})
+
+
+def test_call_tool_structured_fallback_and_error_bit():
+    result = _FakeCallResult(structured={"rows": [1, 2]}, is_error=True)
+    cc, _ = _client_with_fake_session(result)
+    out = asyncio.run(cc.call_tool("query", None))
+    assert out["is_error"] is True
+    assert '"rows"' in out["content"] and "[1, 2]" in out["content"]
+
+
+def test_call_tool_truncates_at_cap():
+    from src.connectors.client import CALL_RESULT_MAX_CHARS
+
+    result = _FakeCallResult(content=[_FakeBlock("x" * (CALL_RESULT_MAX_CHARS + 100))])
+    cc, _ = _client_with_fake_session(result)
+    out = asyncio.run(cc.call_tool("big", {}))
+    assert out["truncated"] is True
+    assert len(out["content"]) == CALL_RESULT_MAX_CHARS
 
 
 # ── 非交互模式：无授权 → 立刻 E_CONNECTOR_NOT_CONNECTED，不挂浏览器 ─────────────

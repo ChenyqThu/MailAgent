@@ -122,7 +122,8 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       capability_change: true,
       exec: true,
       web: true,
-      outbound: true
+      outbound: true,
+      connector_write: true
     },
     untrusted_trigger: {
       read: true,
@@ -131,7 +132,10 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       capability_change: false,
       exec: false,
       web: false,
-      outbound: false
+      outbound: false,
+      // stage 1 PR2 — connector writes are manual-only until the PR3 per-connector grant key:
+      // fail-closed deny in EVERY non-manual mode (漏配即 deny, pinned here).
+      connector_write: false
     },
     cron_headless: {
       read: true,
@@ -140,7 +144,8 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       capability_change: false,
       exec: false,
       web: false,
-      outbound: false
+      outbound: false,
+      connector_write: false
     },
     // 0b (grill Q10=A) — im_chat: reads free, domain writes registered (恒 HITL via
     // mayAutoApprove), everything else hard-denied (web waits for the stage-2 opt-in switch;
@@ -153,7 +158,8 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       capability_change: false,
       exec: false,
       web: false,
-      outbound: false
+      outbound: false,
+      connector_write: false
     }
   }
 

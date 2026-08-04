@@ -16,6 +16,7 @@ import {
   getAssistantPartComponents
 } from '@shared/assistant/tools/registerToolUIs'
 import { ToolTraceCard } from '@shared/assistant/tools/generic/ToolTraceCard'
+import { McpToolFallback } from '@shared/assistant/tools/generic/McpApprovalCard'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -140,12 +141,19 @@ describe('createComponentRegistry — generic builder', () => {
 })
 
 describe('getAssistantPartComponents — S3 always-on rich cards', () => {
-  test('returns the registry cards as tools.by_name, keeps ToolTraceCard fallback', () => {
+  test('returns the registry cards as tools.by_name; the fallback is the MCP-aware router', () => {
     const parts = getAssistantPartComponents()
     expect(parts).toBe(assistantPartComponents)
     const tools = parts.tools as { by_name?: Record<string, unknown>; Fallback?: unknown }
-    expect(tools.Fallback).toBe(ToolTraceCard) // registry miss still renders the generic card
+    // Stage 1 PR2 — the Fallback slot is McpToolFallback: it routes an mcp__* connector part in
+    // an approval phase to McpApprovalCard and EVERYTHING else to ToolTraceCard (registry miss
+    // still never blocks — pinned in McpApprovalCard.test.tsx).
+    expect(tools.Fallback).toBe(McpToolFallback)
+    expect(tools.Fallback).not.toBe(ToolTraceCard)
     expect(tools.by_name).toBe(componentRegistry.byName)
     expect(Object.keys(tools.by_name ?? {})).toContain('email_draft_reply')
+    // dynamic connector names are structurally NOT in by_name (runtime-only) — the router is
+    // the only surface that can card them.
+    expect(Object.keys(tools.by_name ?? {}).some((n) => n.startsWith('mcp__'))).toBe(false)
   })
 })

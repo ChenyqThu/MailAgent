@@ -69,7 +69,16 @@ export function normalizeContextMode(value: unknown): AgentContextMode {
 }
 
 /** Policy class of a gateway tool (ADR-001 D2, 'web' split out of 'outbound' by ADR-004 rev3.1
- *  §3.1) — orthogonal to the approval tier. */
+ *  §3.1) — orthogonal to the approval tier.
+ *
+ *  'connector_write' (stage 1 PR2, harness-expansion epic — grill Q5=A): the write/update tools of
+ *  an MCP connector (`mcp__<connector>__<tool>`, runtime-registered — never in the static map
+ *  below). manual_chat: registered + 恒 HITL (edit tier, never auto-reversible; acceptEdits is a
+ *  by-name fail-closed allow-list so dynamic names always keep asking). Outside manual it falls to
+ *  the matrix's final fail-closed `return false`: headless denied in EVERY mode regardless of
+ *  grants (the per-connector grant key lands in PR3), im_chat denied. Connector READ tools map to
+ *  the existing 'read' (silent, every mode) — but the PR2 assembly only ever feeds connector tools
+ *  on the manual path, so headless never even fetches them. */
 export const GATEWAY_TOOL_CLASS_VALUES = [
   'read',
   'artifact',
@@ -77,7 +86,8 @@ export const GATEWAY_TOOL_CLASS_VALUES = [
   'capability_change',
   'exec',
   'web',
-  'outbound'
+  'outbound',
+  'connector_write'
 ] as const
 export type GatewayToolClass = (typeof GATEWAY_TOOL_CLASS_VALUES)[number]
 
@@ -346,7 +356,10 @@ export function isToolClassAllowedInMode(
   if (mode === 'im_chat') return false
   if (toolClass === 'exec') return grants?.exec === true
   if (toolClass === 'web') return grants?.web === 'gated' || grants?.web === 'open'
-  return false // capability_change + outbound: false under ANY grants (structurally un-grantable)
+  // capability_change + outbound: false under ANY grants (structurally un-grantable).
+  // connector_write (stage 1 PR2): ALSO false under any grants — headless connector access waits
+  // for the per-connector grant key (PR3); until then a leaked dynamic tool fail-closes here.
+  return false
 }
 
 /** May approvalMode 'auto-reversible' skip the approval card for this tool? Only a reversible

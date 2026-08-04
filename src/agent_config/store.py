@@ -182,6 +182,9 @@ class ConnectorToolRow:
     input_schema_json: Optional[str]
     output_schema_json: Optional[str]
     crud_type: str
+    #: 裁决①（PR2）：manifest ``destructive_hint`` 单独落列（破坏性**更新**语义位，不再当
+    #: delete 档位）——审批卡红警告消费；manifest 派生字段，refresh 覆盖。
+    destructive: bool
     enabled: Optional[bool]  # 用户覆盖；None = 未覆盖（跟随 crud 默认）
     orphan: bool
     first_seen_at: int
@@ -405,6 +408,7 @@ CREATE TABLE IF NOT EXISTS connector_tool (
     input_schema_json  TEXT,
     output_schema_json TEXT,
     crud_type          TEXT NOT NULL DEFAULT 'read',  -- read|write|update|delete
+    destructive        INTEGER NOT NULL DEFAULT 0,    -- 裁决①：destructive_hint 单独落列（红警告位）
     enabled            INTEGER,        -- 用户覆盖：NULL=默认（read 开，write/update/delete 关）
     orphan             INTEGER NOT NULL DEFAULT 0,
     first_seen_at      INTEGER NOT NULL,
@@ -456,6 +460,14 @@ class AgentConfigStore:
             conn.execute("ALTER TABLE agent_skills ADD COLUMN files_json TEXT")
         if "first_run_approved" not in cols:
             conn.execute("ALTER TABLE agent_skills ADD COLUMN first_run_approved TEXT")
+        # PR2 裁决① — 已存在的旧 connector_tool 表（建于 PR1）补 destructive 列。
+        ct_cols = {
+            r["name"] for r in conn.execute("PRAGMA table_info(connector_tool)").fetchall()
+        }
+        if ct_cols and "destructive" not in ct_cols:
+            conn.execute(
+                "ALTER TABLE connector_tool ADD COLUMN destructive INTEGER NOT NULL DEFAULT 0"
+            )
 
     # ======================================================================
     # Standing Context 文档（4 个可编辑：soul/agent/rules/user）
@@ -1138,8 +1150,9 @@ class AgentConfigStore:
         """远端工具清单 → ``connector_tool`` 落库（refresh 纪律的唯一实现点）。
 
         - 🔴 只覆盖 manifest 派生字段（description / input_schema_json / output_schema_json /
-          crud_type / last_seen_at / orphan=0），**永不**覆盖 ``enabled``（用户配置）与
-          ``first_seen_at``。
+          crud_type / destructive / last_seen_at / orphan=0），**永不**覆盖 ``enabled``
+          （用户配置）与 ``first_seen_at``。crud_type 属 manifest 派生 ⇒ 全量 upsert 重跑
+          derive 即自愈存量误判行（裁决①：owner 点一次 sync 就把旧 delete 误判刷成新推导）。
         - 本轮清单里没有的既有行 → ``orphan=1``（保留用户配置，PR2 不注册 orphan）。
         - 🔴 delete 类照常入库（Q16=A：清单完整）；坏 ``crud_type`` / 空 name **入库时拒**。
         """
@@ -1168,6 +1181,7 @@ class AgentConfigStore:
                     json.dumps(input_schema, ensure_ascii=False) if input_schema is not None else None,
                     json.dumps(output_schema, ensure_ascii=False) if output_schema is not None else None,
                     crud,
+                    1 if t.get("destructive") is True else 0,
                     now,
                     now,
                     now,
@@ -1184,13 +1198,14 @@ class AgentConfigStore:
             for row in prepared:
                 conn.execute(
                     "INSERT INTO connector_tool (connector_id, tool_name, description,"
-                    " input_schema_json, output_schema_json, crud_type, first_seen_at,"
-                    " last_seen_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?) "
+                    " input_schema_json, output_schema_json, crud_type, destructive,"
+                    " first_seen_at, last_seen_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
                     "ON CONFLICT(connector_id, tool_name) DO UPDATE SET"
                     " description=excluded.description,"
                     " input_schema_json=excluded.input_schema_json,"
                     " output_schema_json=excluded.output_schema_json,"
                     " crud_type=excluded.crud_type,"
+                    " destructive=excluded.destructive,"
                     " orphan=0,"
                     " last_seen_at=excluded.last_seen_at,"
                     " updated_at=excluded.updated_at",
@@ -1584,6 +1599,7 @@ def _row_to_connector_tool(row: sqlite3.Row) -> ConnectorToolRow:
         input_schema_json=row["input_schema_json"],
         output_schema_json=row["output_schema_json"],
         crud_type=row["crud_type"],
+        destructive=bool(row["destructive"]),
         enabled=None if enabled is None else bool(enabled),
         orphan=bool(row["orphan"]),
         first_seen_at=row["first_seen_at"],

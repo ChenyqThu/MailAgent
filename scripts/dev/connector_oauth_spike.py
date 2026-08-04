@@ -18,11 +18,11 @@
 
 用法（venv 内）：
     python scripts/dev/connector_oauth_spike.py --connector notion            # dry
-    python scripts/dev/connector_oauth_spike.py --connector notion --mode live \
-        --local-token "$MAILAGENT_LOCAL_API_TOKEN"
+    python scripts/dev/connector_oauth_spike.py --connector notion --mode live
 
-live 模式鉴权：--local-token（或 env MAILAGENT_LOCAL_API_TOKEN）走本地 token 腿；
-serve-api 若 MAILAGENT_API_AUTH_DISABLED=true 则无需 token。
+live 模式鉴权：--local-token 显式传入走本地 token 腿；缺省时自动从运行中的 serve-api
+进程 env 抓（darwin ``ps eww``——token 是 app 每会话随机生成、不落盘，shell 变量里没有）；
+抓不到给出人话说明；serve-api 若 MAILAGENT_API_AUTH_DISABLED=true 则无需 token。
 
 Atlassian 预期（排雷报告风险 2）：DCR 可能仅限批准 client —— live 模式若在 start /
 授权页被拒，把响应原文记进 issue（PR1 只承诺 Notion 实连，Atlassian 记录结论即可）。
@@ -190,9 +190,51 @@ async def run_dry(connector_id: str) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _auto_local_token() -> Optional[str]:
+    """从运行中的 serve-api 进程 env 抓 MAILAGENT_LOCAL_API_TOKEN（darwin only）。
+
+    该 token 是 Electron main 每会话 randomBytes 生成、只注入 serve-api 子进程 env、
+    **不落盘** —— shell 里 ``$MAILAGENT_LOCAL_API_TOKEN`` 是拿不到的（PR1 usage 文案的坑）。
+    ``ps eww <pid>`` 能吐出进程完整 env，从中解析出来。
+    """
+    import subprocess
+
+    if sys.platform != "darwin":
+        return None
+    try:
+        pids = subprocess.run(
+            ["pgrep", "-f", "serve-api"], capture_output=True, text=True, timeout=5
+        ).stdout.split()
+        for pid in pids:
+            out = subprocess.run(
+                ["ps", "eww", pid], capture_output=True, text=True, timeout=5
+            ).stdout
+            for word in out.split():
+                if word.startswith("MAILAGENT_LOCAL_API_TOKEN="):
+                    tok = word.split("=", 1)[1]
+                    if tok:
+                        return tok
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return None
+
+
 def _live_headers(local_token: Optional[str]) -> dict[str, str]:
     headers = {}
     tok = local_token or os.environ.get("MAILAGENT_LOCAL_API_TOKEN") or ""
+    if not tok:
+        tok = _auto_local_token() or ""
+        if tok:
+            print("[auth] local token 已自动从 serve-api 进程 env 抓取 (ps eww)")
+        else:
+            print(
+                "[auth] 拿不到 local token：它是 app 每会话随机生成、只注入 serve-api "
+                "进程 env、不落盘 —— shell 环境变量里没有。请用 --local-token 显式传入"
+                "（macOS 可手抓：TOK=$(ps eww $(pgrep -f serve-api | head -1) | tr ' ' '\\n'"
+                " | grep '^MAILAGENT_LOCAL_API_TOKEN=' | cut -d= -f2-)）。"
+                "若 serve-api 设了 MAILAGENT_API_AUTH_DISABLED=true 则无需 token，继续裸跑。",
+                file=sys.stderr,
+            )
     if tok:
         headers["X-MailAgent-Local-Token"] = tok
     return headers

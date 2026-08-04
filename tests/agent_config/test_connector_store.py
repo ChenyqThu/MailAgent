@@ -77,9 +77,78 @@ def test_sync_tools_inserts_and_delete_class_recorded(tmp_path):
     )
     assert stats == {"total": 3, "inserted": 3, "updated": 0, "orphaned": 0}
     rows = {r.tool_name: r for r in st.list_connector_tools(CID)}
-    # 🔴 Q16=A：delete 类照常入库（清单完整）。
+    # 🔴 Q16=A：delete 类照常入库（清单完整——机制保留位；PR2 起推导不再产出但值域不动）。
     assert rows["delete_page"].crud_type == "delete"
     assert rows["search"].crud_type == "read"
+    # destructive 缺省（manifest 不带键）→ 0。
+    assert rows["search"].destructive is False
+
+
+def test_sync_tools_persists_destructive_and_refresh_overwrites(tmp_path):
+    """裁决①：destructive 是 manifest 派生字段 —— 落列、refresh 覆盖（用户配置不动）。"""
+    st = _store(tmp_path)
+    manifest = _manifest(("update_page", "write"))
+    manifest[0]["destructive"] = True
+    st.sync_connector_tools(CID, manifest)
+    row = st.list_connector_tools(CID)[0]
+    assert row.destructive is True and row.crud_type == "write"
+
+    # refresh：服务器撤掉 destructive 标 → 列跟随（manifest 派生字段）。
+    manifest2 = _manifest(("update_page", "write"))
+    st.sync_connector_tools(CID, manifest2)
+    assert st.list_connector_tools(CID)[0].destructive is False
+
+
+def test_sync_overwrites_stale_delete_crud_self_heal(tmp_path):
+    """裁决①存量自愈：PR1 误判成 delete 的行，重跑 sync（新 derive 产出 write+destructive）
+    即被全量 upsert 刷新 —— crud_type 属 manifest 派生字段，owner 点一次 sync 就修。"""
+    st = _store(tmp_path)
+    # PR1 时代落库的误判行（destructive_hint → delete），用户显式关过它（配置要保留）。
+    st.sync_connector_tools(CID, _manifest(("update_page", "delete")))
+    st.set_connector_tool_enabled(CID, "update_page", False)
+
+    # PR2 之后的 sync：同一工具按新推导入库。
+    healed = _manifest(("update_page", "write"))
+    healed[0]["destructive"] = True
+    stats = st.sync_connector_tools(CID, healed)
+    assert stats["updated"] == 1
+    row = st.list_connector_tools(CID)[0]
+    assert row.crud_type == "write"
+    assert row.destructive is True
+    assert row.enabled is False  # 用户覆盖不被 refresh 动
+
+
+def test_destructive_column_added_to_pre_pr2_db(tmp_path):
+    """幂等加列迁移：PR1 老库（connector_tool 无 destructive 列）重开即补列，行读不炸。"""
+    import sqlite3
+
+    db = str(tmp_path / "agent_config.db")
+    st = _store(tmp_path)
+    st.sync_connector_tools(CID, _manifest(("search", "read")))
+    # 模拟 PR1 老库：重建一张无 destructive 列的 connector_tool（SQLite 无 DROP COLUMN 顾虑，
+    # 直接建旧形状表）。
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE connector_tool")
+    conn.execute(
+        "CREATE TABLE connector_tool ("
+        " connector_id TEXT NOT NULL, tool_name TEXT NOT NULL, description TEXT,"
+        " input_schema_json TEXT, output_schema_json TEXT,"
+        " crud_type TEXT NOT NULL DEFAULT 'read', enabled INTEGER,"
+        " orphan INTEGER NOT NULL DEFAULT 0, first_seen_at INTEGER NOT NULL,"
+        " last_seen_at INTEGER NOT NULL, updated_at INTEGER NOT NULL,"
+        " PRIMARY KEY (connector_id, tool_name))"
+    )
+    conn.execute(
+        "INSERT INTO connector_tool (connector_id, tool_name, description, crud_type,"
+        " first_seen_at, last_seen_at, updated_at) VALUES (?,?,?,?,1,1,1)",
+        (CID, "old_row", "", "write"),
+    )
+    conn.commit()
+    conn.close()
+
+    st2 = AgentConfigStore(db)  # 开库即迁移（_migrate_additive）
+    rows = {r.tool_name: r for r in st2.list_connector_tools(CID)}
+    assert rows["old_row"].destructive is False  # 老行回填默认 0，读取不炸
 
 
 def test_refresh_never_overwrites_user_config(tmp_path):

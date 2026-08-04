@@ -76,6 +76,10 @@ GATE_WAIT_TIMEOUT_SECONDS = 30.0
 #: 工具清单分页拉取的页数上限（防远端游标永动）。
 _LIST_TOOLS_MAX_PAGES = 20
 
+#: call_tool 归一结果的字符上限（镜像 routers/web.py ``_DEFAULT_MAX_CHARS`` 截断先例）——
+#: 一个 Notion 数据库可以是几万行，无界 payload 是 issue #66 那类病根；截断如实置 truncated。
+CALL_RESULT_MAX_CHARS = 50_000
+
 
 def _configured_timeout() -> float:
     """``CONNECTOR_TIMEOUT_SECONDS``（pydantic）→ 请求超时；不可用/非正 → 兜底 30s。
@@ -119,21 +123,37 @@ def derive_crud_type(tool: Any) -> str:
 
     映射（annotations 三个 hint 都是三态 ``bool | None``，None = 服务器未声明）：
       - ``read_only_hint`` 显式 True         → ``read``
-      - ``destructive_hint`` 显式 True       → ``delete``（照常入库；不可启用、不注册）
       - ``idempotent_hint`` 显式 True        → ``update``
-      - 其余（含完全未注解）                  → ``write``
-    未注解的写类工具**不**按 MCP spec 的 destructive 缺省值推成 delete —— 那会把整个清单
-    锁死成不可启用，违背「write MVP 即可用」的拍板；保守面靠 write 类默认关 + manual 恒审批。
+      - 其余（含 destructive、完全未注解）    → ``write``
+
+    🔴 裁决①（spike 2026-08-03 实测证伪原映射）：``destructive_hint=True`` **不再**映射
+    ``delete`` —— MCP annotations **没有 delete 语义位**，spec 里 destructiveHint 的语义是
+    「可能执行破坏性**更新**」（覆盖式写入的超集，不专指删除）。Notion 把最核心的
+    ``notion-update-page`` 标了 destructive，按旧映射推成 delete 会让它结构性不可用
+    （delete 恒不可启用、不注册），而 Notion 清单里根本没有真删除工具。destructive 语义位
+    单独落列（``derive_destructive``），供审批卡显示红色「破坏性操作」警告——位不丢，
+    只是不再当档位。``delete`` 档位机制保留（值域 / 恒 False 分支不动），当前推导不产出；
+    未来若有 manifest 以名字/描述明示真删除，再议启发式。
+    未注解的写类工具**不**按 MCP spec 的 destructive 缺省值收紧 —— 保守面靠 write 类默认关
+    + manual 恒审批。
     """
     ann = getattr(tool, "annotations", None)
     if ann is not None:
         if getattr(ann, "read_only_hint", None) is True:
             return "read"
-        if getattr(ann, "destructive_hint", None) is True:
-            return "delete"
         if getattr(ann, "idempotent_hint", None) is True:
             return "update"
     return "write"
+
+
+def derive_destructive(tool: Any) -> bool:
+    """``destructive_hint is True`` → 独立 destructive 标记（裁决①：语义位单独落列）。
+
+    只认显式 True（三态 hint 的 None/False 都算否）——审批卡红警告只对服务器明示的
+    破坏性更新亮起，不猜。
+    """
+    ann = getattr(tool, "annotations", None)
+    return ann is not None and getattr(ann, "destructive_hint", None) is True
 
 
 async def _no_interactive_redirect(_url: str) -> None:
@@ -302,12 +322,55 @@ class ConnectorClient:
                             "input_schema": t.input_schema,
                             "output_schema": t.output_schema,
                             "crud_type": derive_crud_type(t),
+                            "destructive": derive_destructive(t),
                         }
                     )
                 cursor = result.next_cursor
                 if not cursor:
                     break
         return tools
+
+    async def call_tool(
+        self,
+        tool_name: str,
+        arguments: Optional[dict[str, Any]] = None,
+        *,
+        http_transport: Any = None,
+    ) -> dict[str, Any]:
+        """调一个远端工具 → 归一成有界结果（PR2 invoke 端点的执行面）。
+
+        归一（payload 无界是 issue #66 那类病根，出 client 前就截）：
+          - ``content``：文本 content block 拼接；无文本块但有 ``structured_content`` 时
+            JSON 序列化它（模型仍能读到结构化结果）。
+          - 截断上限 ``CALL_RESULT_MAX_CHARS``（镜像 web_fetch ``_DEFAULT_MAX_CHARS`` 先例），
+            截断时 ``truncated=True`` 如实告知。
+          - ``is_error``：远端 tool-error 位原样透传（caller/模型自行读文案自纠）。
+        围栏（UNTRUSTED_MCP_TOOL）在 TS gateway 侧套 —— 本层只管界。
+        """
+        async with self.session(http_transport=http_transport) as client:
+            result = await client.call_tool(tool_name, arguments or {})
+        parts: list[str] = []
+        for block in getattr(result, "content", None) or []:
+            text = getattr(block, "text", None)
+            if isinstance(text, str) and text:
+                parts.append(text)
+        content = "\n".join(parts)
+        structured = getattr(result, "structured_content", None)
+        if not content and structured is not None:
+            try:
+                import json as _json
+
+                content = _json.dumps(structured, ensure_ascii=False, default=str)
+            except (TypeError, ValueError):
+                content = str(structured)
+        truncated = len(content) > CALL_RESULT_MAX_CHARS
+        if truncated:
+            content = content[:CALL_RESULT_MAX_CHARS]
+        return {
+            "content": content,
+            "is_error": bool(getattr(result, "is_error", False)),
+            "truncated": truncated,
+        }
 
 
 # ---------------------------------------------------------------------------

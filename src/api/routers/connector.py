@@ -27,7 +27,7 @@ import asyncio
 import time
 from typing import Any, NoReturn, Optional
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Body, Depends, Request
 from fastapi.responses import HTMLResponse
 from loguru import logger
 from starlette.concurrency import run_in_threadpool
@@ -286,6 +286,7 @@ async def list_tools(
                     "input_schema_json": r.input_schema_json,
                     "output_schema_json": r.output_schema_json,
                     "crud_type": r.crud_type,
+                    "destructive": r.destructive,
                     "enabled_override": r.enabled,
                     "effective_enabled": connector_tool_effective_enabled(
                         r.crud_type, r.enabled
@@ -296,6 +297,95 @@ async def list_tools(
                 }
                 for r in rows
             ],
+        },
+        request=request,
+    )
+
+
+@router.post(
+    "/{connector_id}/tools/{tool_name}/invoke", dependencies=[Depends(verify_cf_access)]
+)
+async def invoke_tool(
+    connector_id: str,
+    tool_name: str,
+    request: Request,
+    payload: Optional[dict[str, Any]] = Body(default=None),
+    settings=Depends(get_settings),
+) -> Any:
+    """MCP 工具调用代理（PR2 gateway 工具 execute 的执行权威面；「gateway 只带信封」纪律）。
+
+    四道闸（伪造 / 未同步 / orphan / delete / 未启用的名字**到不了远端**——白名单纪律）：
+      1. flag 门（``_require_enabled`` → 409）；
+      2. 工具必须在已同步清单里（缺席 → 404，不透传给远端）；
+      3. orphan（远端已消失）→ 409；``crud_type='delete'`` → 403（任何场合不可调，Q16=A）;
+      4. ``effective_enabled`` 折算为 False → 409（可行动解释：去设置里开）。
+    结果已在 ``ConnectorClient.call_tool`` 截断（``CALL_RESULT_MAX_CHARS``）；
+    UNTRUSTED_MCP_TOOL 围栏由 TS gateway 侧套。
+    """
+    _require_enabled(settings)
+    _connector_def(connector_id)
+    arguments = (payload or {}).get("arguments")
+    if arguments is not None and not isinstance(arguments, dict):
+        raise APIError("E_INVALID_ARG", "arguments must be an object", http_status=400)
+    from src.agent_config.store import connector_tool_effective_enabled
+    from src.connectors.client import ConnectorClient, ConnectorError
+    from src.connectors.gate import ConnectorBusy
+
+    store = _store()
+    rows = await run_in_threadpool(store.list_connector_tools, connector_id)
+    row = next((r for r in rows if r.tool_name == tool_name), None)
+    if row is None:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"tool {tool_name!r} is not in the synced manifest of connector "
+            f"{connector_id!r} (unsynced/forged tool names are never forwarded)",
+            http_status=404,
+        )
+    if row.crud_type == "delete":
+        raise APIError(
+            "E_CONNECTOR_TOOL_FORBIDDEN",
+            f"tool {tool_name!r} is delete-class and can never be invoked (MVP keeps "
+            "delete tools recorded but disabled)",
+            http_status=403,
+        )
+    if row.orphan:
+        raise APIError(
+            "E_CONNECTOR_TOOL_ORPHAN",
+            f"tool {tool_name!r} vanished from the remote manifest (orphan) — re-sync "
+            "the connector before calling it",
+            http_status=409,
+        )
+    if not connector_tool_effective_enabled(row.crud_type, row.enabled):
+        raise APIError(
+            "E_CONNECTOR_TOOL_DISABLED",
+            f"tool {tool_name!r} is disabled — enable it in Settings → Custom AI → "
+            "Connectors if you want the assistant to use it",
+            http_status=409,
+        )
+    client = ConnectorClient(connector_id, interactive=False)
+    started = time.monotonic()
+    try:
+        result = await client.call_tool(tool_name, arguments)
+    except ConnectorBusy as e:
+        raise APIError("E_CONNECTOR_BUSY", str(e), http_status=409) from e
+    except ConnectorError as e:
+        # 授权失效 → 连接转 error 态并如实告知（镜像 sync 端点的处置）。
+        if e.code in ("E_CONNECTOR_OAUTH", "E_CONNECTOR_NOT_CONNECTED"):
+            await run_in_threadpool(
+                store.update_connector_state,
+                connector_id,
+                status="error",
+                last_error=str(e)[:500],
+            )
+        _raise_from_connector_error(e)
+    return success_envelope(
+        {
+            "connector_id": connector_id,
+            "tool_name": tool_name,
+            "content": result["content"],
+            "is_error": result["is_error"],
+            "truncated": result["truncated"],
+            "elapsed_ms": int((time.monotonic() - started) * 1000),
         },
         request=request,
     )
