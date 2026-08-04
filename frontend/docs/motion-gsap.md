@@ -110,7 +110,7 @@ gsap.to(wrapper, { width: open ? 360 : 0, duration: open ? DUR.base : DUR.fast,
 - 微交互：BatchActionBar 出入场 / SettingsShell tab 淡入 / FolderRow 入场 fade / AgendaView stagger / flag·pin 颜色过渡（CSS）/ 选中 accent bar fade（CSS）。
 - Toast 通用退场：AnimatePresence-lite（ToastContainer diff store items + 延迟卸载），TTL/手动/demote 三路径统一 slide-out。
 - 滑动 indicator：view-chip + Inbox tab 激活态用绝对定位 indicator + GSAP x/width 滑动（getBoundingClientRect 测量）。
-- 展开：AdvancedDisclosure（受控 + CSS grid-rows，保 a11y）/ ToolCallAuditRow（CSS grid-rows）。
+- 展开：AdvancedDisclosure（受控 + CSS grid-rows，保 a11y）/ ToolCallAuditRow（CSS grid-rows）/ chat `ReasoningText` 思考块 + `ToolGroupCard` 组卡（2026-08 由 GSAP height auto↔0 改走 `CollapsibleRegion` 统一原语，见 §9.1）。
 - §8 曲线收口：移除全部旧第二曲线 `cubic-bezier(0.32,0.72,0,1)`（folder-modal / efm-modal / batch-bar / undo-toast / view-chip / inbox-tab），统一 standard。二轮收口（transitions.dev review 轮）：清掉漏网的 `.app-nav`(260ms 旧曲线→220 standard) / `.drawer`(0.26s 旧曲线→220 standard) / glass 切档(280→220) / nav label fade(140 linear→120 standard) / drawer-backdrop(0.2s→220 standard)。
 - 微交互原语（transitions.dev review 轮新增）：
   - `.icon-swap`/`.icon-swap-item`（index.css）：同 slot 双图标 cross-fade（opacity+scale 0.85，120ms standard，**无 blur** —— filter 永不过渡红线）。已接：copy→check（RemoteAccessTab）/ Eye↔EyeOff（EnvField+EnvSecretField）/ 主题三态（ThemePickerPopover trigger）。data-active 必须传字符串 `'true'/'false'`。
@@ -150,7 +150,7 @@ owner dogfood 反馈「轮播 shimmer 在流卡住/结束时不停 + 文案与�
 | 组件 | 位置 | 动效 | 停止条件（红线） |
 |---|---|---|---|
 | `assistant/components/TurnStatusLine.tsx` | assistant-ui `Empty` slot（agent 面 + 邮件面双挂） | `DotMatrix` + 单句 `ShimmerText`（真值文案，**不再随机轮播**） | 由 `runtime/useTurnStage.ts` 的纯函数 `deriveTurnStage` 决定渲染：idle/writing/awaiting-approval/**calling-tool**（阶段 0.5-① G7 新增）**返回 null**（流结束/正文自述/审批卡自身即状态/工具卡自身即状态 → shimmer 停）；**仅 connecting/thinking 出 shimmer**（真在推进）；stalled（≥15s 无增量）+ error 转**静态非-shimmer** 行（「仍在等待响应…」/ 错误文案，PRD「卡住/结束时 shimmer 必须停」）|
-| `assistant/tools/generic/ToolGroupCard.tsx` | assistant-ui `ToolGroup` slot（连续 tool-call 折叠） | 运行态组头 `ShimmerText`（同一行**禁** spinner）；折叠展开照抄 `ReasoningText` 的 GSAP `height auto↔0` + `DUR.base` + standard 曲线 | 运行中展开、全完成自动折叠；两条灾难红线：① 单工具（`endIndex===startIndex`）渲染裸 children 零回归；② 组内含审批/出错工具 **强制展开不可折叠**（审批卡绝不能被折进组里） |
+| `assistant/tools/generic/ToolGroupCard.tsx` | assistant-ui `ToolGroup` slot（连续 tool-call 折叠） | 运行态组头 `ShimmerText`（同一行**禁** spinner）；折叠展开与 `ReasoningText` 同源——两者均走 `@shared/components/ui/collapsible` 的 `CollapsibleRegion`（grid-rows `0fr↔1fr` 纯 CSS 高度过渡 + opacity，`duration-base` + standard 曲线，`motion-reduce:` 降级）。**2026-08 由 GSAP `height auto↔0` 迁来**：§4.1 「能 grid-rows 解决不上 GSAP」，顺带白得 `inert`（折叠态子树退出 tab 序）| 运行中展开、全完成自动折叠；两条灾难红线：① 单工具（`endIndex===startIndex`）渲染裸 children 零回归；② 组内含审批/出错工具 **强制展开不可折叠**（审批卡绝不能被折进组里） |
 | `assistant/tools/generic/ToolTraceCard.tsx`（阶段 0.5-①，2026-08） | assistant-ui `tools.Fallback`（三处渲染面共用：邮件面 / agent 面 / 历史只读回放） | ① 参数未到时 `animate-pulse` **骨架**（标题行占位条 + 展开区两行，均带 `motion-reduce:animate-none`）；② 状态图标 `animate-spin`；③ 标题行**耗时数字**每 200ms tick（`useToolElapsed`，`tabular-nums`）。**本卡无 shimmer** —— 与 spinner 并存的是块级 skeleton（§9 三词汇里的第 2 员），不是第 3 员 | 骨架只在 `streaming-args` 相位出（参数真的还在流）；耗时**无起点不渲染**（历史回放的 part 从未开始计时 → 不显示，绝不显示假的 `0.0s`），终态**定格**；`prefers-reduced-motion` 下 tick interval 不装（数字仅随其它 re-render 刷新，不自驱动）。相位判据单源 `runtime/toolPhase.ts` |
 
 stall watchdog 纯前端（`useStallLevel`，15s/30s 两档），**不动 gateway**（不加 heartbeat）。轮播式 `ThinkingPhrases.tsx` 已随本轮删除（`PaletteThinkingPhrases` 仍在，服务 ⌘K 搜索，不受影响）。
