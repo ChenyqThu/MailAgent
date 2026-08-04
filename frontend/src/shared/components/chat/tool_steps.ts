@@ -73,6 +73,10 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'report_list',
   'report_get',
   'report_write',
+  // chat UX (W6) — the in-turn follow-up suggestion no-op. Its tool CARD renders null
+  // (registerToolUIs → SuggestFollowupsHiddenPart), but the streaming status line ("正在调用
+  // {tool}") can still surface the name for a beat, so it keeps a human title.
+  'suggest_followups',
   // kos
   'kos_query',
   'kos_search',

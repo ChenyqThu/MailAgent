@@ -11,6 +11,7 @@
 import {
   convertToModelMessages,
   generateText,
+  hasToolCall,
   smoothStream,
   stepCountIs,
   streamText,
@@ -36,6 +37,8 @@ import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
 // manual_chat); absent/unknown fail-closes to 'untrusted_trigger'.
 import { normalizeContextMode, type AgentContextMode } from './tools/policy'
 import { type MailAgentUIMessage } from '@shared/assistant/uiMessage'
+// W6 — the in-turn follow-up tool name (shared leaf; the renderer chips read the same constant).
+import { SUGGEST_FOLLOWUPS_TOOL_NAME } from '@shared/assistant/followups'
 // chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
 import { thinkingProviderOptions } from './thinking'
 // Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
@@ -115,8 +118,8 @@ export function streamChunkingFor(mode: StreamChunkingMode): 'line' | RegExp | I
 }
 
 /**
- * HIGH-1 (batch1 review) — the ONE credential pre-gate all four LLM entrypoints share
- * (prepareChatRun + /api/ai/title + /api/ai/followups + /api/ai/search-agent).
+ * HIGH-1 (batch1 review) — the ONE credential pre-gate all three LLM entrypoints share
+ * (prepareChatRun + /api/ai/title + /api/ai/search-agent).
  *
  * Flag OFF (or no resolver): the legacy global-key gate, byte-identical — an empty cfg.apiKey is
  * 503 E_NO_LLM_KEY before anything runs. Registry path ON (flag + resolver): the gate is skipped —
@@ -336,6 +339,50 @@ export async function prepareChatRun(
   const contextMode = normalizeContextMode(trustedContextMode)
   const isHeadlessAgentRun = contextMode !== 'manual_chat' && cfg.agentRunContext != null
 
+  // Build the tools bound to a fresh per-request audit collector (closure). No tools → text-only
+  // (Phase 02 behaviour). The same buildTools feed BOTH endpoints, so the mirror's approval path is
+  // identical to /api/ai/chat (no bypass). W6 — built BEFORE the system prompt so the follow-up
+  // guidance block can key off the ACTUAL ToolSet (prompt and tool surface can never drift);
+  // tool assembly and prompt assembly are otherwise independent.
+  //
+  // 🔴 We deliberately do NOT pass streamText `experimental_toolApprovalSecret`: the native
+  // assistant-ui replay uses ai@6's addToolApprovalResponse, which DROPS the request signature, so a
+  // signed approval would fail with a missing-signature error on the second (resume) call. The
+  // MailAgent domain ApprovalGuard remains the authoritative write gate — it binds toolCallId + input
+  // hash + expiry across the two HTTP calls of an approval round-trip (security/approval.ts), and the
+  // high-risk send path keeps its own Python-side double guard. So removing the AI SDK secret weakens
+  // nothing that actually gates a write.
+  // Auto-approval mode (PART 2) — body.approvalMode threads into the write/memory tools'
+  // needsApproval. Only the two recognized values are honored; anything else (incl. absent) →
+  // 'always', so a malformed body never silently relaxes approval (byte-identical to pre-toggle).
+  // S2 W0 — normalize the TRUSTED mode (never from body) once; it feeds buildTools (registration
+  // filter + auto-approve predicate) and is frozen into the run for the island stash.
+  let approvalMode: GatewayApprovalMode =
+    body.approvalMode === 'auto-reversible' ? 'auto-reversible' : 'always'
+  // 07-16 approval-mode switcher — overlay the owner-global mode (agent_config.db, hot-read via
+  // the injected resolver; NEVER from the request body). 🔴 MANUAL_CHAT-GATED: headless custom-
+  // agent runs reach prepareChatRun too (agentRun.ts) and must never see the global mode — they
+  // are governed solely by their per-agent grants matrix, so the resolver is not even called for
+  // them. 'manual' (default) keeps the request-level value above byte-identical; a resume of a
+  // stashed MANUAL run re-resolves here, so the mode in effect at approval time is the owner's
+  // CURRENT one (consistent with "hot-read at decision time"). Resolver absent (harness/test
+  // cfgs) or failing → the request-level mode stands (fail-closed to manual semantics).
+  if (contextMode === 'manual_chat' && cfg.resolveGlobalApprovalMode) {
+    try {
+      const globalMode = await cfg.resolveGlobalApprovalMode()
+      if (globalMode === 'acceptEdits' || globalMode === 'bypass') approvalMode = globalMode
+    } catch {
+      /* fail-closed — keep the request-level ('manual') semantics */
+    }
+  }
+  const auditEntries: GatewayToolAuditEntry[] = []
+  const tools = cfg.buildTools?.(auditEntries, approvalMode, contextMode)
+  const hasTools = tools != null && Object.keys(tools).length > 0
+  // W6 — the run holds the suggest_followups tool (manual chat with a real gateway ToolSet). Drives
+  // (a) the follow-up guidance block in the system prompt below and (b) the hasToolCall stop
+  // condition at streamText — both keyed off the BUILT set, never off the mode alone.
+  const followupToolAvailable = hasTools && SUGGEST_FOLLOWUPS_TOOL_NAME in (tools as ToolSet)
+
   // System prompt. With the injection provider set (always injected since S3) assemble
   // from standing-context + the typed snapshot, reusing the legacy stable prefix
   // (buildGatewaySystemPrompt). Without it (default) pass body.system through unchanged AND ignore the
@@ -378,7 +425,9 @@ export async function prepareChatRun(
     system = buildGatewaySystemPrompt({
       promptConfig,
       contextSnapshot,
-      headlessAgentRun: isHeadlessAgentRun
+      headlessAgentRun: isHeadlessAgentRun,
+      // W6 — inject the follow-up guidance only when THIS run's ToolSet holds the tool.
+      followupToolAvailable
     })
   } else {
     const bodySystem =
@@ -409,44 +458,6 @@ export async function prepareChatRun(
     modelMessages = prependInjectedContext(modelMessages, injectedContext)
   }
 
-  // Build the tools bound to a fresh per-request audit collector (closure). No tools → text-only
-  // (Phase 02 behaviour). The same buildTools feed BOTH endpoints, so the mirror's approval path is
-  // identical to /api/ai/chat (no bypass).
-  //
-  // 🔴 We deliberately do NOT pass streamText `experimental_toolApprovalSecret`: the native
-  // assistant-ui replay uses ai@6's addToolApprovalResponse, which DROPS the request signature, so a
-  // signed approval would fail with a missing-signature error on the second (resume) call. The
-  // MailAgent domain ApprovalGuard remains the authoritative write gate — it binds toolCallId + input
-  // hash + expiry across the two HTTP calls of an approval round-trip (security/approval.ts), and the
-  // high-risk send path keeps its own Python-side double guard. So removing the AI SDK secret weakens
-  // nothing that actually gates a write.
-  // Auto-approval mode (PART 2) — body.approvalMode threads into the write/memory tools'
-  // needsApproval. Only the two recognized values are honored; anything else (incl. absent) →
-  // 'always', so a malformed body never silently relaxes approval (byte-identical to pre-toggle).
-  // S2 W0 — normalize the TRUSTED mode (never from body) once; it feeds buildTools (registration
-  // filter + auto-approve predicate) and is frozen into the run for the island stash.
-  let approvalMode: GatewayApprovalMode =
-    body.approvalMode === 'auto-reversible' ? 'auto-reversible' : 'always'
-  // 07-16 approval-mode switcher — overlay the owner-global mode (agent_config.db, hot-read via
-  // the injected resolver; NEVER from the request body). 🔴 MANUAL_CHAT-GATED: headless custom-
-  // agent runs reach prepareChatRun too (agentRun.ts) and must never see the global mode — they
-  // are governed solely by their per-agent grants matrix, so the resolver is not even called for
-  // them. 'manual' (default) keeps the request-level value above byte-identical; a resume of a
-  // stashed MANUAL run re-resolves here, so the mode in effect at approval time is the owner's
-  // CURRENT one (consistent with "hot-read at decision time"). Resolver absent (harness/test
-  // cfgs) or failing → the request-level mode stands (fail-closed to manual semantics).
-  if (contextMode === 'manual_chat' && cfg.resolveGlobalApprovalMode) {
-    try {
-      const globalMode = await cfg.resolveGlobalApprovalMode()
-      if (globalMode === 'acceptEdits' || globalMode === 'bypass') approvalMode = globalMode
-    } catch {
-      /* fail-closed — keep the request-level ('manual') semantics */
-    }
-  }
-  const auditEntries: GatewayToolAuditEntry[] = []
-  const tools = cfg.buildTools?.(auditEntries, approvalMode, contextMode)
-  const hasTools = tools != null && Object.keys(tools).length > 0
-
   const result = streamText({
     model: resolvedModel.model,
     system,
@@ -463,7 +474,16 @@ export async function prepareChatRun(
     ...(hasTools
       ? {
           tools,
-          stopWhen: stepCountIs(cfg.internalMaxSteps ?? INTERNAL_TOOL_STEP_SENTINEL)
+          // W6 — when the manual-chat suggest_followups tool is registered, its call is the turn's
+          // stop signal (调完即停 — the answer is complete, no trailing text after the chips).
+          // Runs without the tool (headless / im / harness) keep the bare sentinel byte-identical;
+          // hasToolCall can never fire for a tool the ToolSet does not hold.
+          stopWhen: followupToolAvailable
+            ? [
+                stepCountIs(cfg.internalMaxSteps ?? INTERNAL_TOOL_STEP_SENTINEL),
+                hasToolCall(SUGGEST_FOLLOWUPS_TOOL_NAME)
+              ]
+            : stepCountIs(cfg.internalMaxSteps ?? INTERNAL_TOOL_STEP_SENTINEL)
         }
       : {})
   }) as StreamTextResult<ToolSet, never, never>
@@ -943,86 +963,6 @@ export async function generateSessionTitle(
   return sanitizeSessionTitle(text)
 }
 
-/** dogfood-3 (follow-ups) — parse model output into at most 3 short suggestion strings. Accepts a JSON
- *  array, or a newline / numbered list (the model sometimes ignores "JSON only"). Each is trimmed,
- *  de-bulleted, quote-stripped, capped at 80 chars; empties + dups dropped; capped to 3. */
-export function parseFollowups(raw: string): string[] {
-  const out: string[] = []
-  const push = (s: string): void => {
-    let t = s
-      .trim()
-      .replace(/^[-*\d.)\s]+/, '')
-      .replace(/^["'「『]+/, '')
-      .replace(/["'」』]+$/, '')
-      .trim()
-    if (t.length > 80) t = t.slice(0, 80).trim()
-    if (t.length > 0 && !out.includes(t)) out.push(t)
-  }
-  // dogfood — strip a markdown code fence the model sometimes wraps the JSON in (```json … ``` or
-  // bare ``` … ```). Without this `trimmed` starts with "```json" (not "[") → the JSON branch is
-  // skipped → the fence lines become bogus "```json" / "```" chips + the whole array becomes one
-  // truncated chip (user-reported). Match the fenced body; fall back to the raw trim if no fence.
-  let trimmed = raw.trim()
-  const fence = trimmed.match(/^```[a-zA-Z]*[ \t]*\r?\n([\s\S]*?)\r?\n?```$/)
-  if (fence) trimmed = fence[1].trim()
-  if (trimmed.startsWith('[')) {
-    try {
-      const arr: unknown = JSON.parse(trimmed)
-      if (Array.isArray(arr)) {
-        for (const x of arr) if (typeof x === 'string') push(x)
-        return out.slice(0, 3)
-      }
-    } catch {
-      /* not JSON — fall through to line parsing */
-    }
-  }
-  // Line fallback: skip any stray fence line defensively so a partial / unmatched fence never leaks
-  // a "```" chip.
-  for (const line of trimmed.split('\n')) {
-    if (/^\s*```/.test(line)) continue
-    push(line)
-  }
-  return out.slice(0, 3)
-}
-
-/** The follow-ups prompt: 2-3 SHORT next questions the user is likely to ask after this reply, phrased
- *  as the USER (first person) in the user's own language. Both texts are clipped (a hint suffices). */
-export function buildFollowupsPrompt(userText: string, assistantText: string): string {
-  const clip = (s: string, n: number): string => (s.length > n ? s.slice(0, n) : s)
-  return [
-    'Based on the conversation turn below, suggest 2-3 SHORT follow-up questions the user is likely to',
-    'ask NEXT. Phrase each as the USER would ask it (first person), in the SAME language as the user.',
-    'Each at most 10 words. Reply with ONLY a JSON array of strings — nothing else.',
-    '',
-    'User asked:',
-    '<<<',
-    clip(userText, 800),
-    '>>>',
-    '',
-    'Assistant replied:',
-    '<<<',
-    clip(assistantText, 1500),
-    '>>>'
-  ].join('\n')
-}
-
-/** Generate follow-up suggestions for the last turn via the configured model factory. Non-streaming
- *  generateText; small output. Returns [] on empty / parse-empty. Throws on an upstream error (caller
- *  maps to 502); follow-ups are best-effort UX, never block the chat. */
-export async function generateFollowups(
-  cfg: AiGatewayConfig,
-  userText: string,
-  assistantText: string,
-  modelId: string,
-  abortSignal?: AbortSignal
-): Promise<string[]> {
-  const factory = resolveModelFactory(cfg)
-  const resolvedModel = await factory(modelId)
-  const { text } = await generateText({
-    model: resolvedModel.model,
-    prompt: buildFollowupsPrompt(userText, assistantText),
-    maxOutputTokens: 200,
-    abortSignal
-  })
-  return parseFollowups(text)
-}
+// (W6 — the dogfood-3 out-of-turn follow-up generation trio [parseFollowups / buildFollowupsPrompt /
+// generateFollowups] was removed with POST /api/ai/followups: follow-ups are now an IN-TURN
+// suggest_followups tool call — see tools/followups.ts + shared/assistant/followups.ts.)

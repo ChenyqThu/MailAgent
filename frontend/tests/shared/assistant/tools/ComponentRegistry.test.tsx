@@ -17,6 +17,8 @@ import {
 } from '@shared/assistant/tools/registerToolUIs'
 import { ToolTraceCard } from '@shared/assistant/tools/generic/ToolTraceCard'
 import { McpToolFallback } from '@shared/assistant/tools/generic/McpApprovalCard'
+import { SuggestFollowupsHiddenPart } from '@shared/assistant/components/FollowupSuggestions'
+import { SUGGEST_FOLLOWUPS_TOOL_NAME } from '@shared/assistant/followups'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -150,7 +152,15 @@ describe('getAssistantPartComponents — S3 always-on rich cards', () => {
     // still never blocks — pinned in McpApprovalCard.test.tsx).
     expect(tools.Fallback).toBe(McpToolFallback)
     expect(tools.Fallback).not.toBe(ToolTraceCard)
-    expect(tools.by_name).toBe(componentRegistry.byName)
+    // W6 — by_name 不再是 componentRegistry.byName 本体：registerToolUIs 在它之上 overlay 了一个
+    // 零渲染的 suggest_followups part UI（chip 行由 thread 层渲染，工具本身不出卡）。身份断言换成
+    // 结构断言，钉住真正要保的两件事：registry 每一条都原样在里面，且 overlay 只有这一条。
+    const byName = tools.by_name ?? {}
+    for (const [name, render] of Object.entries(componentRegistry.byName)) {
+      expect(byName[name]).toBe(render)
+    }
+    expect(byName[SUGGEST_FOLLOWUPS_TOOL_NAME]).toBe(SuggestFollowupsHiddenPart)
+    expect(Object.keys(byName)).toHaveLength(Object.keys(componentRegistry.byName).length + 1)
     expect(Object.keys(tools.by_name ?? {})).toContain('email_draft_reply')
     // dynamic connector names are structurally NOT in by_name (runtime-only) — the router is
     // the only surface that can card them.

@@ -37,6 +37,7 @@ import { type ChatComposerControls } from '@shared/assistant/components/composer
 import { ThreadComposer } from '@shared/assistant/components/composer'
 import { AgentComposer } from '@shared/components/agents/AgentComposer'
 import { AgentThread } from '@shared/components/agents/AgentThread'
+import { SUGGEST_FOLLOWUPS_TOOL_NAME } from '@shared/assistant/followups'
 
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN')
@@ -274,10 +275,34 @@ describe('codex r3 P2 — sendDisabled gates the agent composer paths (Lexical E
   test('follow-up chip — busy: chip disabled + click sends nothing; unblocked: click sends', async () => {
     const fetchMock = stubChatFetch()
     const followUp = '接下来需要我做什么？'
-    const seeded = [fakeMessage({ id: 2, role: 'assistant', content: '已经总结完了。' })]
+    // W6 — chips 不再由 `followUps` prop 喂：FollowupSuggestions 从最后一条 assistant 消息的
+    // suggest_followups tool part 里提取。按持久化 SSoT（ui_message_json）的形状 seed 一个完成态
+    // tool part，chip 行就会自己出现；sendDisabled 语义仍走 useChatComposerControls（本 harness 的
+    // ChatComposerControlsProvider），所以这条用例钉的那道闸原封不动。
+    const seeded = [
+      fakeMessage({
+        id: 2,
+        role: 'assistant',
+        content: '已经总结完了。',
+        ui_message_json: JSON.stringify({
+          id: 'a2',
+          role: 'assistant',
+          parts: [
+            { type: 'text', text: '已经总结完了。' },
+            {
+              type: `tool-${SUGGEST_FOLLOWUPS_TOOL_NAME}`,
+              toolCallId: 'tc1',
+              state: 'output-available',
+              input: { prompts: [followUp] },
+              output: { prompts: [followUp], count: 1 }
+            }
+          ]
+        })
+      })
+    ]
     const { rerender } = render(
       <AgentHarness sendDisabled={true} initialMessages={seeded}>
-        <AgentThread followUps={[followUp]} />
+        <AgentThread />
       </AgentHarness>
     )
     const chip = (await screen.findByText(followUp)).closest('button')!
@@ -289,7 +314,7 @@ describe('codex r3 P2 — sendDisabled gates the agent composer paths (Lexical E
     // control assertion: unblock → the SAME chip autoSends through the runtime
     rerender(
       <AgentHarness sendDisabled={false} initialMessages={seeded}>
-        <AgentThread followUps={[followUp]} />
+        <AgentThread />
       </AgentHarness>
     )
     const enabledChip = (await screen.findByText(followUp)).closest('button')!

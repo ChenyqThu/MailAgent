@@ -329,29 +329,6 @@ export function updateSessionTitle(sessionId: number, title: string): void {
   getChatDb().prepare('UPDATE ai_chat_sessions SET title = ? WHERE id = ?').run(title, sessionId)
 }
 
-/** dogfood-3 (follow-ups) — the last completed turn's text: the most-recent non-empty user message +
- *  the most-recent non-empty assistant message for a session. The gateway feeds these to a small model
- *  to generate next-question suggestions. Returns null when either side is missing (no turn yet). */
-export function getLastTurnTexts(
-  sessionId: number
-): { userText: string; assistantText: string } | null {
-  const db = getChatDb()
-  const pick = (role: 'user' | 'assistant'): string | undefined =>
-    (
-      db
-        .prepare(
-          `SELECT content FROM ai_chat_messages
-             WHERE session_id = ? AND role = ? AND content <> ''
-             ORDER BY created_at DESC LIMIT 1`
-        )
-        .get(sessionId, role) as { content: string } | undefined
-    )?.content
-  const userText = pick('user')
-  const assistantText = pick('assistant')
-  if (!userText || !assistantText) return null
-  return { userText, assistantText }
-}
-
 /** dogfood-2 — 归档 / 取消归档一个 session（软删：archived=1 从 listAllSessions 过滤，行保留）。
  *  不 bump updated_at（与 updateSessionTitle 同纪律，归档不该重排历史）。Safe on missing id。 */
 export function updateSessionArchived(sessionId: number, archived: boolean): void {

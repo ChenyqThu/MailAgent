@@ -250,11 +250,6 @@ export interface AiGatewayConfig {
   /** Phase 10b — persist a generated session title (Electron wrapper → chat_db.updateSessionTitle,
    *  which does NOT bump updated_at so the history order stays stable). Omitted → 501. */
   saveSessionTitle?: (sessionId: number, title: string) => void
-  /** dogfood-3 (follow-ups) — read the last completed turn's user + assistant text for a session, used
-   *  to generate next-question suggestions (POST /api/ai/followups). The Electron wrapper reads
-   *  ai_chat.db (most-recent user message + most-recent assistant message content). Returns null when a
-   *  turn isn't available yet. Omitted → POST /api/ai/followups returns 501 (follow-ups not wired). */
-  getFollowupContext?: (sessionId: number) => { userText: string; assistantText: string } | null
   /** #12 (dogfood session-history) — eager-persist hook called at the START of a chat turn, before
    *  streaming begins. The Electron wrapper writes the user message immediately so the session appears
    *  in the history list even when the first turn is HITL-paused and onFinish's persistTurn is

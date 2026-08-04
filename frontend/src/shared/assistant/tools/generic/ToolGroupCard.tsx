@@ -51,7 +51,11 @@ export function ToolGroupCard({
 
   // Red line ① — a lone tool renders bare (no group chrome). Hooks above run unconditionally so
   // this early return keeps the hook order stable across single↔multi transitions.
-  if (single) return <>{children}</>
+  // W6 — `count === 0` 同样裸渲染：suggest_followups 已不计入 summary，于是「一组里全是它」这个
+  // 此前不可能的状态现在可达，不拦就会冒出一个「使用了 0 个工具」的空组头。是我上面那条排除**开出**
+  // 的口子，就在这里堵上。裸渲染只会让子卡更外露（这组的子卡全是 null），不可能藏起审批/错误 →
+  // 红线 ② 不受影响。
+  if (single || summary.count === 0) return <>{children}</>
 
   const running = summary.aggregate === 'running'
   const headerText = running

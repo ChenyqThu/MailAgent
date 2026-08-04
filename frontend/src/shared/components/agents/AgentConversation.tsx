@@ -151,14 +151,6 @@ export function AgentConversation({
 
   // ── composer controls (model / thinking / @mention / attachments) ──────────
   const [model, setModel] = useState(() => readModelPref())
-  // dogfood-3 (follow-ups) — dynamic next-question chips for the latest completed turn (ai-sdk path).
-  const [followups, setFollowups] = useState<string[]>([])
-  // Follow-ups are PER-SESSION: clear them on a session switch / new chat so a previous session's
-  // suggestions never leak into another.
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    setFollowups([])
-  }, [chat.activeSessionId])
   const onModelChange = useCallback((m: string): void => {
     writeModelPref(m)
     setModel(m)
@@ -493,16 +485,8 @@ export function AgentConversation({
       void queryClient.invalidateQueries({ queryKey: qk.chat.allSessions() })
     }
     if (gatewayBaseUrl == null) return
-    // dogfood-3 (follow-ups) — generate next-question chips for the just-completed turn. Per-turn (NOT
-    // idempotent — fresh each turn), best-effort (failure → clear).
-    void fetch(`${gatewayBaseUrl}/api/ai/followups`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: sid, model })
-    })
-      .then((r) => (r.ok ? (r.json() as Promise<{ followups?: string[] }>) : null))
-      .then((data) => setFollowups(data && Array.isArray(data.followups) ? data.followups : []))
-      .catch(() => setFollowups([]))
+    // (W6 — follow-up chips no longer fetch here: they come from the turn's own suggest_followups
+    // tool part, extracted at the thread layer — see FollowupSuggestions.)
     const { mode, model: titleModel } = readAutoTitleSettings()
     if (mode !== 'llm') return
     if (autoTitlePostedRef.current.has(sid)) return
@@ -522,7 +506,7 @@ export function AgentConversation({
         // network / gateway hiccup — allow a retry on the next turn-complete edge.
         autoTitlePostedRef.current.delete(sid)
       })
-  }, [chat.activeSessionId, gatewayBaseUrl, queryClient, model])
+  }, [chat.activeSessionId, gatewayBaseUrl, queryClient])
 
   // Readiness = keychain llmApiKey present (the gateway reads the same slot in main).
   const secretsQ = useQuery({
@@ -673,7 +657,6 @@ export function AgentConversation({
               <AgentThread
                 quickActions={<AgentQuickActions />}
                 onTurnComplete={handleTurnComplete}
-                followUps={followups}
                 welcomeAlign={welcomeAlign}
                 contextChip={emailContextChip}
                 pendingSlot={pendingSlotContent}

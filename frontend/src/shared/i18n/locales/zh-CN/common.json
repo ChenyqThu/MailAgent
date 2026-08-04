@@ -938,7 +938,8 @@
       "calendar_event_rsvp": "回复会议邀请",
       "calendar_event_delete": "删除日程",
       "notion_agent_chat": "咨询 Notion Agent",
-      "plan_update": "更新计划"
+      "plan_update": "更新计划",
+      "suggest_followups": "准备追问建议"
     },
     "customAgentCard": {
       "titleCreate": "创建 Custom Agent",

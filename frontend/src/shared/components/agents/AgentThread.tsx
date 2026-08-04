@@ -11,11 +11,11 @@
 import { useEffect, useRef, lazy, Suspense } from 'react'
 
 import { AuiIf, ThreadPrimitive, useAuiState, type AssistantState } from '@assistant-ui/react'
-import { ArrowDown, CornerDownRight } from 'lucide-react'
+import { ArrowDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
-import { useChatComposerControls } from '@shared/assistant/components/composerControlsContext'
+import { FollowupSuggestions } from '@shared/assistant/components/FollowupSuggestions'
 
 const AgentStrandsBackdrop = lazy(() =>
   import('@shared/components/effects/AgentStrandsBackdrop').then((m) => ({
@@ -51,9 +51,6 @@ interface AgentThreadProps {
   /** Phase 10b — fires on the running→idle edge after an assistant reply (a turn just completed). The
    *  parent (ai-sdk path only) uses it to trigger configurable LLM auto-title. Omitted → no watcher. */
   onTurnComplete?: () => void
-  /** dogfood-3 — dynamic follow-up suggestions for the latest completed turn (ai-sdk path). Rendered as
-   *  autoSend chips above the composer in an active, idle thread. Empty / omitted → no chips. */
-  followUps?: string[]
   /** @deprecated dogfood：greetings 现一律居中（浮窗 / 侧栏 / agent 视图一致），此 prop 不再生效；
    *  保留以免改动上游 AgentConversation / AssistantChatModal 的传参链。 */
   welcomeAlign?: 'center' | 'left'
@@ -67,15 +64,9 @@ export function AgentThread({
   readOnly = false,
   pendingSlot,
   onTurnComplete,
-  followUps,
   contextChip
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
-  // codex r3 P2 — follow-up chips autoSend through the thread (bypassing the composer form), so
-  // they honour the same sendDisabled fence as Enter/Send/slash/quick-actions (an approval decide
-  // → server resume holds the session's run lease; a send would 409).
-  const controls = useChatComposerControls()
-  const sendDisabled = controls?.sendDisabled === true
   return (
     <ThreadPrimitive.Root
       className="relative isolate flex min-h-0 flex-1 flex-col glass-3 text-ink-fg"
@@ -121,31 +112,11 @@ export function AgentThread({
           )}
         >
           <AgentScrollToBottom />
-          {/* dogfood-3 (follow-ups) — dynamic next-question chips above the composer for the latest
-              completed turn (ai-sdk only). Active + idle thread only: AuiIf hides them while running so
-              stale chips never overlap a new reply, and the welcome screen owns quick-actions instead.
-              autoSend (assistant-ui Suggestion) → one tap sends the question through the runtime. */}
-          {!readOnly && followUps && followUps.length > 0 && (
-            <AuiIf condition={(s) => s.thread.messages.length > 0 && !s.thread.isRunning}>
-              <div className="flex flex-wrap gap-2">
-                {followUps.map((fu, i) => (
-                  <ThreadPrimitive.Suggestion
-                    key={`${i}-${fu}`}
-                    prompt={fu}
-                    autoSend
-                    disabled={sendDisabled}
-                    className={cn(
-                      'inline-flex items-center gap-1.5 rounded-full border border-ink-border-soft bg-ink-2 px-3 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3',
-                      sendDisabled && 'cursor-not-allowed opacity-50'
-                    )}
-                  >
-                    <CornerDownRight size={13} strokeWidth={1.75} className="shrink-0 text-coral" />
-                    {fu}
-                  </ThreadPrimitive.Suggestion>
-                ))}
-              </div>
-            </AuiIf>
-          )}
+          {/* W6 (follow-ups) — next-question chips above the composer, extracted from the LAST
+              assistant message's suggest_followups tool part (shared FollowupSuggestions — the same
+              row the email AiChatPanel thread renders). Hidden while running / when the model
+              didn't call the tool / when the prompts cleaned to empty. */}
+          {!readOnly && <FollowupSuggestions />}
           {/* assistant-modal P5 — removable email-context chip directly above the composer (modal only;
               /sessions omits contextChip → nothing here). */}
           {!readOnly && contextChip}

@@ -16,6 +16,11 @@ import { SourcePart } from '../components/sources'
 import { ToolGroupCard } from './generic/ToolGroupCard'
 import { McpToolFallback } from './generic/McpApprovalCard'
 import { componentRegistry } from './ComponentRegistry'
+// W6 — suggest_followups renders NO tool card (null part UI): its one visual manifestation is the
+// chip row above the composer (FollowupSuggestions reads the tool part from the thread state).
+// Overlaid here (not in componentRegistry) — it is not an A2UI card, just a hidden part.
+import { SuggestFollowupsHiddenPart } from '../components/FollowupSuggestions'
+import { SUGGEST_FOLLOWUPS_TOOL_NAME } from '../followups'
 
 /** The assistant message-part component map passed to MessagePrimitive.Parts `components`. */
 type AssistantPartComponentMap = {
@@ -39,7 +44,14 @@ export const assistantPartComponents: AssistantPartComponentMap = {
   // dogfood-3 — render AI SDK source-url / source-document parts (web-search-style tools) as link pills.
   // Additive: a turn with no source parts renders nothing here (no visual change for the email surface).
   Source: SourcePart,
-  tools: { by_name: componentRegistry.byName, Fallback: McpToolFallback },
+  tools: {
+    by_name: {
+      ...componentRegistry.byName,
+      // W6 — zero-render part UI for the in-turn follow-up tool (chips render at the thread layer).
+      [SUGGEST_FOLLOWUPS_TOOL_NAME]: SuggestFollowupsHiddenPart
+    },
+    Fallback: McpToolFallback
+  },
   ToolGroup: ToolGroupCard
 }
 

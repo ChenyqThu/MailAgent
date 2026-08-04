@@ -1,8 +1,9 @@
-// 发版终审 M3（codex）/ M-1（fable）— gateway 三入口（/api/ai/title、/api/ai/followups、
-// search-agent loop）的上游错误脱敏分叉：registry flag ON 时 hint / SSE result message 走
+// 发版终审 M3（codex）/ M-1（fable）— gateway 两入口（/api/ai/title、search-agent loop）的
+// 上游错误脱敏分叉：registry flag ON 时 hint / SSE result message 走
 // sanitizedUpstreamErrorMessage 固定形状（上游错误正文可能回显凭证）；flag OFF 保持既有
 // message 形状（字节级纪律 pin）。模型注入走 cfg.createModel 缝（工厂内同步 throw →
-// 不经 provider、不触发 AI SDK retry）。
+// 不经 provider、不触发 AI SDK retry）。（W6 起 /api/ai/followups 端点已删——追问建议改
+// 回合内 suggest_followups 工具；其 APICallError 形状覆盖搬到 title 入口，同一代码路径。）
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { APICallError } from 'ai'
@@ -42,13 +43,10 @@ afterEach(async () => {
   while (handles.length) await handles.pop()!.close()
 })
 
-/** title/followups 的持久化 hook 桩（端点 501 gate 需要它们在场）。 */
+/** title 的持久化 hook 桩（端点 501 gate 需要它们在场）。 */
 const titleHooks = {
   getTitleContext: () => ({ title: null, firstUserText: 'hello' }),
   saveSessionTitle: vi.fn()
-}
-const followupHooks = {
-  getFollowupContext: () => ({ userText: 'u', assistantText: 'a' })
 }
 
 const throwingModel = (err: unknown): Partial<AiGatewayConfig> => ({
@@ -93,13 +91,13 @@ describe('/api/ai/title upstream error hint', () => {
   })
 })
 
-describe('/api/ai/followups upstream error hint', () => {
-  test('flag ON → fixed-shape sanitized hint', async () => {
+describe('/api/ai/title upstream APICallError hint (前 followups 覆盖，同一代码路径)', () => {
+  test('flag ON → fixed-shape sanitized hint for an APICallError', async () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined)
     await withServer(
-      { providerRegistryEnabled: true, ...followupHooks, ...throwingModel(leakyApiCallError()) },
+      { providerRegistryEnabled: true, ...titleHooks, ...throwingModel(leakyApiCallError()) },
       async (base) => {
-        const res = await post(base, '/api/ai/followups')
+        const res = await post(base, '/api/ai/title')
         expect(res.status).toBe(502)
         const body = (await res.json()) as { hint: string }
         expect(body.hint).toBe('HTTP 401 AI_APICallError')

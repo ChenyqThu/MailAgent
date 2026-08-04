@@ -443,7 +443,7 @@ app.include_router(island.router)
 # 无 CF 门路由: 浏览器 302 带不了 header，state 即能力令牌 (单次消费+TTL，404 不泄因)，
 # 见 routers/connector.py 模块 docstring 威胁模型。src.connectors / mcp SDK 全 lazy import。
 app.include_router(connector.router)
-# task A — 远程 web 切 AI SDK: 把 web 的 chat 请求 (/api/ai/{chat,title,followups,approval/resolve,
+# task A — 远程 web 切 AI SDK: 把 web 的 chat 请求 (/api/ai/{chat,title,approval/resolve,
 # config}, /api/ai/agui/chat) + 裸 /health 代理到同机 loopback AI SDK Gateway。在 SPA catch-all
 # mount (/app, 文件末尾) 之前注册，确保 /api/ai/* 与 /health 不被静态 SPA 遮蔽。/api/ai/* 子路径
 # (chat/title/...) 与 ai.router 的 /api/ai/translation/* 不重叠，两者共存。本地 electron 不经此代理

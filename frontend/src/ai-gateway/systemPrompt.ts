@@ -95,6 +95,19 @@ export function executionDisciplineFor(headlessAgentRun: boolean): string {
  *  `executionDisciplineFor(true)`. */
 export const HEADLESS_AGENT_EXECUTION_DISCIPLINE = executionDisciplineFor(true)
 
+/** chat UI 优化 W6 — follow-up suggestion guidance, injected ONLY when the run's ToolSet actually
+ *  holds the suggest_followups tool (manual chat; prepareChatRun computes the predicate from the
+ *  BUILT tools, so prompt and tool surface can never drift). Code-owned constant — placed after
+ *  the execution discipline, BEFORE the date block, so the cacheable-prefix convention holds. */
+export const FOLLOWUP_SUGGESTIONS_GUIDANCE = [
+  '# Follow-up suggestions',
+  'When your answer is fully complete (never mid-task, never while a tool approval is pending),',
+  'call the suggest_followups tool exactly once with 2-3 short follow-up questions the user is',
+  'likely to ask next. Phrase each as the USER would ask it (first person), in the same language',
+  'the user is writing in. The suggestions render as tappable chips — do not repeat them in your',
+  'reply text, and do not write anything after the call.'
+].join('\n')
+
 /** Add the code-owned discipline to the legacy body.system path used by pure harnesses. */
 export function appendExecutionDiscipline(
   system: string | undefined,
@@ -115,6 +128,9 @@ export function buildGatewaySystemPrompt(args: {
   contextSnapshot: AgentContextSnapshot | null
   /** Trusted runtime provenance, set only by prepareChatRun for a server-derived headless agent. */
   headlessAgentRun?: boolean
+  /** W6 — true iff THIS run's built ToolSet holds suggest_followups (manual chat). Injects the
+   *  follow-up guidance block; absent/false → byte-identical prompt (headless / harness / tests). */
+  followupToolAvailable?: boolean
 }): string {
   const pc = args.promptConfig
   const cfg: ChatModelConfig = {
@@ -160,12 +176,15 @@ export function buildGatewaySystemPrompt(args: {
   // 08-02 F4 — 恒注入（manual + headless），只有「无人值守」那一句按 run 形态分。它与上面的
   // skillFragments 方向**相反**（那条 manual-only），所以两者不能再共用一个三元条件。
   const executionDiscipline = executionDisciplineFor(args.headlessAgentRun === true)
+  // W6 — follow-up guidance only when the run's ToolSet holds the tool (manual chat). A constant
+  // block per run shape, so the cacheable prefix stays stable across a manual session's turns.
+  const followupGuidance = args.followupToolAvailable === true ? FOLLOWUP_SUGGESTIONS_GUIDANCE : ''
   // Order: stable (cacheable, incl. memory.md) → context (current view) → trusted runtime discipline
-  // (always) → current-date (always). Each segment is joined only when non-empty; the date block is
-  // ALWAYS non-empty and remains LAST so the preceding prompt stays a stable cache prefix and the
-  // date changes at most once per day.
+  // (always) → follow-up guidance (manual, constant) → current-date (always). Each segment is joined
+  // only when non-empty; the date block is ALWAYS non-empty and remains LAST so the preceding prompt
+  // stays a stable cache prefix and the date changes at most once per day.
   const dateBlock = buildCurrentDateBlock(args.contextSnapshot)
-  return [stable, contextBlock, executionDiscipline, dateBlock]
+  return [stable, contextBlock, executionDiscipline, followupGuidance, dateBlock]
     .filter((s) => s.length > 0)
     .join('\n\n')
 }
