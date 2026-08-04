@@ -308,6 +308,38 @@ describe('buildToolA2UIPayload — custom-agent CRUD approval card (S6 W3-2, rev
     expect(props.before).toBeUndefined()
   })
 
+  // MCP connector epic stage 1 PR3 — grant_connectors joins the proposable grant vocabulary, so
+  // it MUST reach the approval card (an axis the card cannot see = the owner approves blind).
+  test('grant_connectors projects per-entry; junk / "delete" / empty keys drop but the KEY survives', () => {
+    const ok = buildToolA2UIPayload('custom_agent_create', {
+      args: { id: 'noted', title: 'Noted', grant_connectors: { notion: 'update', jira: 'read' } }
+    })
+    expect((ok!.props as unknown as CustomAgentApprovalCardProps).connectors).toEqual({
+      notion: 'update',
+      jira: 'read'
+    })
+    // 🔴 'delete' is not a legal ceiling anywhere — it must never render as an authorization.
+    const junk = buildToolA2UIPayload('custom_agent_update', {
+      args: {
+        agent_id: 'dms-approver',
+        grant_connectors: { notion: 'delete', jira: 'yes', '': 'write', ok: 'write' }
+      }
+    })
+    expect((junk!.props as unknown as CustomAgentApprovalCardProps).connectors).toEqual({
+      ok: 'write'
+    })
+    // explicit {} = "clear every grant" — itself a permission change, so the key stays present
+    const cleared = buildToolA2UIPayload('custom_agent_update', {
+      args: { agent_id: 'dms-approver', grant_connectors: {} }
+    })
+    expect((cleared!.props as unknown as CustomAgentApprovalCardProps).connectors).toEqual({})
+    // absent → absent (the card then shows the SERVER row, never a fabricated baseline)
+    const untouched = buildToolA2UIPayload('custom_agent_update', {
+      args: { agent_id: 'dms-approver', title: 'Renamed' }
+    })
+    expect((untouched!.props as unknown as CustomAgentApprovalCardProps).connectors).toBeUndefined()
+  })
+
   test('kind:schedule trigger → 审批卡呈现完整摘要（不能是空串——owner 不能批一个看不见的触发）', () => {
     // 07-24 结构化排程与 cron 并存且 backend parse_trigger 接受 —— 审批卡必须能渲染。
     const p = buildToolA2UIPayload('custom_agent_create', {

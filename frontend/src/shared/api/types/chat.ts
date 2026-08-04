@@ -68,6 +68,12 @@ export interface AgentRunSpec {
    *  means "no grant", never "unknown". They were on the wire since S5/S6 but missing from this
    *  type, which is why `agentRunContextFromSpec` reached them through an inline structural cast.
    *
+   *  `grantConnectors` (stage 1 PR3, harness-expansion epic) rides the grantExec/grantWeb shape:
+   *  Python projects it ONLY when non-empty ({connectorId: ceiling}, ceiling ∈ read|write|update —
+   *  'delete' is rejected at store time and unrepresentable here), so an ABSENT key means "no
+   *  connector grants". The gateway re-derives it via parseConnectorGrants (fail-closed
+   *  per-entry), never a raw passthrough.
+   *
    *  🔴 Typed here, still parsed defensively there: this arrives as JSON from Python, so the
    *  gateway re-derives every grant from discriminated literals instead of passing the object
    *  through (ADR-004 P1-4). The type states what the server promises; the parser assumes it may
@@ -80,6 +86,7 @@ export interface AgentRunSpec {
     skills?: string[]
     grantExec?: true
     grantWeb?: 'gated' | 'open'
+    grantConnectors?: Record<string, 'read' | 'write' | 'update'>
   }
   budget: { maxRunSeconds: number }
   fallbackModels?: string[]

@@ -363,6 +363,13 @@ export interface CustomAgentApprovalCardProps {
   grantExec?: boolean
   grantWeb?: 'off' | 'gated' | 'open'
   skills?: string[]
+  /** MCP connector epic stage 1 PR3 — the proposed per-connector crud ceilings
+   *  ({connectorId: 'read'|'write'|'update'}; `{}` = clear every connector grant). 🔴 This axis
+   *  MUST reach the card: `grant_connectors` is part of the model-proposable CRUD vocabulary
+   *  (customAgentCreate/UpdateSchema), and a connector grant hands a headless run 免卡 access to
+   *  an external workspace — an approval card that cannot show it is not a review surface.
+   *  'delete' is unrepresentable (rejected by the zod enum and by Python's parse_tool_policy). */
+  connectors?: Record<string, 'read' | 'write' | 'update'>
   /** Result echoes (land after execute). */
   applied?: boolean
 }
@@ -762,6 +769,20 @@ export function buildToolA2UIPayload(
     const gw = asStr(args.grant_web)
     if (gw === 'off' || gw === 'gated' || gw === 'open') props.grantWeb = gw
     if (Array.isArray(args.skills)) props.skills = asStrArray(args.skills)
+    // MCP connector PR3 — per-entry discrimination (mirror of parseConnectorGrants / the zod
+    // enum): only exact 'read'|'write'|'update' under a non-empty key survives, so a junk or
+    // 'delete' entry can neither reach the card nor be rendered as if it were granted. The KEY
+    // presence is preserved even when every entry drops (an explicit `{}` = "clear all" is itself
+    // a permission change the owner must see).
+    const gc = asObj(args.grant_connectors)
+    if (gc) {
+      const parsed: Record<string, 'read' | 'write' | 'update'> = {}
+      for (const [cid, ceiling] of Object.entries(gc)) {
+        if (!cid) continue
+        if (ceiling === 'read' || ceiling === 'write' || ceiling === 'update') parsed[cid] = ceiling
+      }
+      props.connectors = parsed
+    }
     if (result) props.applied = result.created === true || result.updated === true
     return {
       protocol: A2UI_PROTOCOL,

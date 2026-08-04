@@ -23,6 +23,7 @@ import {
   isToolClassAllowedInMode,
   mayAutoApprove,
   normalizeContextMode,
+  parseConnectorGrants,
   parseWebGrant,
   type AgentContextMode,
   type AgentModeGrants,
@@ -133,8 +134,8 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       exec: false,
       web: false,
       outbound: false,
-      // stage 1 PR2 — connector writes are manual-only until the PR3 per-connector grant key:
-      // fail-closed deny in EVERY non-manual mode (漏配即 deny, pinned here).
+      // stage 1 PR3 — connector writes without grants stay fail-closed in every non-manual mode
+      // (漏配即 deny, pinned here); the per-connector grant lift is pinned in the 3-axis describe.
       connector_write: false
     },
     cron_headless: {
@@ -181,11 +182,14 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
   })
 })
 
-// S5 W4 (ADR-004 D2/§9) + S6 W3 (rev3.1 web axis) — the matrix's THIRD axis: per-agent grants.
+// S5 W4 (ADR-004 D2/§9) + S6 W3 (rev3.1 web axis) + stage 1 PR3 (connector axis) — the matrix's
+// THIRD axis: per-agent grants.
 // Invariants pinned: capability_change/outbound (send) are false under ANY grants (structurally
-// un-grantable — the type has only exec + web keys, and junk keys/values must have no effect);
-// grants are consumed ONLY outside manual_chat (manual is true regardless); exec flips ONLY on
-// the discriminated `exec === true`; web flips ONLY on the exact 'gated'/'open' literals.
+// un-grantable — the type has only exec + web + connectors keys, and junk keys/values must have
+// no effect); grants are consumed ONLY outside manual_chat (manual is true regardless); exec
+// flips ONLY on the discriminated `exec === true`; web flips ONLY on the exact 'gated'/'open'
+// literals; connector_write flips ONLY on a connectors record with a valid write-capable ceiling
+// ('write'/'update' under a non-empty key — 'read'-only, 'delete', junk, empty keys all deny).
 describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
   // junk objects a buggy/hostile caller could smuggle in (runtime has no type erasure guard —
   // the function itself must only ever read the discriminated literals).
@@ -206,12 +210,50 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
     {
       label: '{outbound:true, capability_change:true} (junk keys)',
       grants: { outbound: true, capability_change: true } as unknown as AgentModeGrants
+    },
+    // stage 1 PR3 — the connector axis: real ceilings + every fail-closed junk shape.
+    { label: "{connectors:{notion:'read'}}", grants: { connectors: { notion: 'read' } } },
+    { label: "{connectors:{notion:'write'}}", grants: { connectors: { notion: 'write' } } },
+    { label: "{connectors:{notion:'update'}}", grants: { connectors: { notion: 'update' } } },
+    {
+      label: "{connectors:{a:'read', b:'write'}} (mixed ceilings)",
+      grants: { connectors: { a: 'read', b: 'write' } }
+    },
+    { label: '{connectors:{}} (empty)', grants: { connectors: {} } },
+    {
+      label: "{connectors:{notion:'delete'}} (excluded ceiling)",
+      grants: { connectors: { notion: 'delete' } } as unknown as AgentModeGrants
+    },
+    {
+      label: "{connectors:{notion:'yes'}} (junk value)",
+      grants: { connectors: { notion: 'yes' } } as unknown as AgentModeGrants
+    },
+    {
+      label: "{connectors:{'':'write'}} (empty key)",
+      grants: { connectors: { '': 'write' } }
+    },
+    {
+      label: "{connectors:'write'} (junk type)",
+      grants: { connectors: 'write' } as unknown as AgentModeGrants
+    },
+    {
+      label: "{exec:true, web:'open', connectors:{notion:'update'}} (all three)",
+      grants: { exec: true, web: 'open', connectors: { notion: 'update' } }
     }
   ]
+
+  /** Mirror of the connector_write row's semantics for computing expectations: ANY entry with a
+   *  non-empty key and an exact 'write'/'update' value lifts the class row. */
+  function connectorWriteGranted(grants?: AgentModeGrants): boolean {
+    const raw = (grants as { connectors?: unknown } | undefined)?.connectors
+    if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return false
+    return Object.entries(raw).some(([k, v]) => k.length > 0 && (v === 'write' || v === 'update'))
+  }
 
   test.each(GRANTS_AXIS)('registration under grants=$label', ({ grants }) => {
     const execGranted = grants?.exec === true
     const webGranted = grants?.web === 'gated' || grants?.web === 'open'
+    const connectorGranted = connectorWriteGranted(grants)
     for (const mode of AGENT_CONTEXT_MODES) {
       for (const cls of GATEWAY_TOOL_CLASS_VALUES) {
         const expected =
@@ -225,7 +267,9 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
                   ? execGranted
                   : cls === 'web'
                     ? webGranted
-                    : false // capability_change + outbound (send):恒 false under ANY grants
+                    : cls === 'connector_write'
+                      ? connectorGranted // PR3 — the connector axis lifts ONLY its own row
+                      : false // capability_change + outbound (send):恒 false under ANY grants
         expect(
           isToolClassAllowedInMode(cls, mode, grants),
           `${cls} × ${mode} × ${JSON.stringify(grants)}`
@@ -370,6 +414,44 @@ describe('parseWebGrant — fail-closed literal discrimination', () => {
       ['open']
     ]) {
       expect(parseWebGrant(v), JSON.stringify(v)).toBe('off')
+    }
+  })
+})
+
+// Stage 1 PR3 — the fail-closed connector-grant parse funnel (per-entry, then empty→undefined).
+describe('parseConnectorGrants — fail-closed per-entry discrimination', () => {
+  test('exact read/write/update literals under non-empty keys pass through', () => {
+    expect(parseConnectorGrants({ notion: 'read' })).toEqual({ notion: 'read' })
+    expect(parseConnectorGrants({ notion: 'write', atlassian: 'update' })).toEqual({
+      notion: 'write',
+      atlassian: 'update'
+    })
+  })
+
+  test("junk entries drop PER-ENTRY ('delete' included — the ceiling vocabulary has no delete)", () => {
+    expect(
+      parseConnectorGrants({ notion: 'delete', atlassian: 'update', jira: 'yes', '': 'write' })
+    ).toEqual({ atlassian: 'update' })
+  })
+
+  test('empty / non-object / all-junk shapes collapse to undefined (no connector grants)', () => {
+    for (const v of [
+      undefined,
+      null,
+      '',
+      'write',
+      42,
+      true,
+      [],
+      ['write'],
+      {},
+      { notion: 'delete' },
+      { notion: 'WRITE' },
+      { notion: true },
+      { notion: 1 },
+      { '': 'update' }
+    ]) {
+      expect(parseConnectorGrants(v), JSON.stringify(v)).toBeUndefined()
     }
   })
 })

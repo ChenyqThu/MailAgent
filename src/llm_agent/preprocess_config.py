@@ -28,6 +28,15 @@ from loguru import logger
 PREPROCESS_AGENT_ID = "email_preprocess_agent"
 
 
+#: 🔴 分类侧的 crud 天花板 —— **硬编码 read，不是配置项**（MCP connector PRD 坑 3）。
+#: 邮件预处理分类同时具备 lethal trifecta 三件套（任何人可发的 untrusted 正文 + connector
+#: 能读整个工作区 + write 类工具能把数据写到攻击者可见处），且全自动逐封跑、无人值守，比
+#: headless custom agent 更敞。故这条路径**结构上**只造 read 类工具：没有 owner 能配错的
+#: 值，改成 write 得改代码。授权面也独立（``connector.preprocess_enabled`` 列），不复用
+#: custom agent 的 ``grant_connectors`` —— 免得给某个 agent 配了 write、分类侧跟着继承。
+PREPROCESS_CONNECTOR_CEILING = "read"
+
+
 @dataclass
 class PreprocessConfig:
     """预处理 agent 的运行时叠加配置（模型 + 文档勾选）。"""
@@ -45,6 +54,28 @@ class PreprocessConfig:
     # context_source 列（v38）—— 参考上下文源 'standing_docs' | 'notion_context'。
     # None = 列 NULL/缺失/野值 → _resolve_context_source 按 LLM_CONTEXT_PAGE_ID 继承派生。
     context_source: Optional[str] = None
+
+
+def get_preprocess_connector_grants() -> List[tuple]:
+    """分类侧获授权的 connector → ``[(connector_id, 'read'), …]``（天花板恒 read）。
+
+    授权源 = ``agent_config.db`` 的 ``connector.preprocess_enabled=1``（owner 在设置里逐个
+    opt-in，默认全关）。只取 ``status='connected'`` 且 ``enabled`` 的行 —— 未连接 / 整体
+    关掉的 connector 不该给分类挂工具。库不可用 / 表不存在（旧库）→ ``[]``（graceful，
+    与本模块其余读一致：分类绝不因 connector 面出问题而失败）。
+    """
+    try:
+        from src.agent_config.store import get_agent_config_store
+
+        rows = get_agent_config_store().list_connectors()
+    except Exception as e:  # noqa: BLE001 — connector 面是增强，读不到就当没授权
+        logger.debug(f"[preprocess-config] connector grants skipped: {e}")
+        return []
+    return [
+        (r.connector_id, PREPROCESS_CONNECTOR_CEILING)
+        for r in rows
+        if r.preprocess_enabled and r.enabled and r.status == "connected"
+    ]
 
 
 def get_preprocess_config(db_path: str | os.PathLike[str]) -> PreprocessConfig:

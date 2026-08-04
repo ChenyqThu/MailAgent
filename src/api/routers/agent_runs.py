@@ -316,6 +316,13 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         # 镜像 grantExec：仅非默认值（off）才投影；gateway 侧 parseWebGrant 再判别一次，
         # 缺席/junk 恒塌 'off'（ADR-004 rev3.1 D1）。
         tool_policy_out["grantWeb"] = tool_policy.grant_web
+    if tool_policy.grant_connectors:
+        # MCP connector PR3：仅非空才投影（镜像 grantWeb 的「仅非默认值输出」）。值来自
+        # parse_tool_policy 判别过的 (connector_id, 天花板) 对 —— 天花板恒 ∈ read|write|update
+        # （delete 保存时即拒），gateway 从判别值**构造** grants，永不透传 raw object。
+        # connector 工具不进 HEADLESS_TOOL_OPTIONS（镜像 exec/web 的结构性缺席）：授权走这把
+        # per-connector 天花板，缺省 = 该 connector 整族不注册。
+        tool_policy_out["grantConnectors"] = dict(tool_policy.grant_connectors)
     # S6 W3（rev3.1 §5.1）：skills **恒输出**解析完的数组（NULL → 默认挂载集已代入；显式 []
     # → []）—— gateway 不手抄默认集第二份；gateway 侧对缺 skills 的 spec 按 [] fail-closed。
     tool_policy_out["skills"] = (

@@ -74,11 +74,12 @@ export function normalizeContextMode(value: unknown): AgentContextMode {
  *  'connector_write' (stage 1 PR2, harness-expansion epic — grill Q5=A): the write/update tools of
  *  an MCP connector (`mcp__<connector>__<tool>`, runtime-registered — never in the static map
  *  below). manual_chat: registered + 恒 HITL (edit tier, never auto-reversible; acceptEdits is a
- *  by-name fail-closed allow-list so dynamic names always keep asking). Outside manual it falls to
- *  the matrix's final fail-closed `return false`: headless denied in EVERY mode regardless of
- *  grants (the per-connector grant key lands in PR3), im_chat denied. Connector READ tools map to
- *  the existing 'read' (silent, every mode) — but the PR2 assembly only ever feeds connector tools
- *  on the manual path, so headless never even fetches them. */
+ *  by-name fail-closed allow-list so dynamic names always keep asking). Outside manual (PR3): the
+ *  per-connector grant key `connectors` lifts the row for untrusted_trigger/cron_headless when ANY
+ *  granted ceiling is write-capable ('write'/'update'); no grants → the fail-closed `return false`.
+ *  im_chat stays hard-denied (grants never consulted). Connector READ tools map to the existing
+ *  'read' (silent, every mode); the load seam (shouldLoadConnectorTools) still keeps headless runs
+ *  WITHOUT connector grants at zero fetches. */
 export const GATEWAY_TOOL_CLASS_VALUES = [
   'read',
   'artifact',
@@ -291,17 +292,65 @@ export function parseWebGrant(raw: unknown): WebGrant {
   return raw === 'gated' || raw === 'open' ? raw : 'off'
 }
 
-/** Per-agent mode grants (ADR-004 §4.1, web key added by ADR-004 rev3.1 D1 — the explicit
- *  revisions of the ADR-001 §5 matrix's exec/web rows). 🔴 The type has ONLY the `exec` and `web`
- *  keys: capability_change and outbound (send) have NO corresponding field — they are structurally
- *  un-grantable (not "don't pass true" but "nowhere to pass it"), fixing the red line at the type
- *  level. Constructed by the gateway from the strictly-parsed spec as discriminated typed values
- *  ({ exec: spec.toolPolicy?.grantExec === true, web: parseWebGrant(spec.toolPolicy?.grantWeb) },
- *  exec a boolean, web a three-state literal) — NEVER a passthrough of a raw spec object (a future
- *  spec field must not silently flow into the matrix). */
+/** Stage 1 PR3 (harness-expansion epic, grill Q2/Q3=B) — a per-connector crud CEILING of a
+ *  headless custom-agent run. 🔴 The vocabulary is read < write < update and deliberately has NO
+ *  'delete' member (grill Q3=B: the ceiling value-domain excludes delete; Python rejects it at
+ *  store time, this type makes it unrepresentable gateway-side). */
+export type ConnectorGrant = 'read' | 'write' | 'update'
+
+/** The ceiling ORDER (PR3 contract: read=1 < write=2 < update=3). A connector tool registers in a
+ *  headless run iff rank(crud_type) ≤ rank(ceiling); delete/unknown cruds never rank (they are
+ *  skipped before ranking — Q16=A). Shared by the registration filter (connector.ts) so the order
+ *  can never fork into two hand-copies. */
+export const CONNECTOR_CRUD_RANK: Record<ConnectorGrant, 1 | 2 | 3> = {
+  read: 1,
+  write: 2,
+  update: 3
+}
+
+/** Fail-closed parse of a spec's grantConnectors (`{connectorId: ceiling}`): only entries with a
+ *  non-empty string key AND an exact 'read'/'write'/'update' literal value survive; every other
+ *  entry (junk value, 'delete', empty key) is dropped PER-ENTRY, and an empty/absent/non-object
+ *  result collapses to undefined (= no connector grants at all — the connector mirror of
+ *  parseWebGrant, never a raw passthrough). */
+export function parseConnectorGrants(raw: unknown): Record<string, ConnectorGrant> | undefined {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return undefined
+  const out: Record<string, ConnectorGrant> = {}
+  for (const [key, value] of Object.entries(raw)) {
+    if (!key) continue
+    if (value === 'read' || value === 'write' || value === 'update') out[key] = value
+  }
+  return Object.keys(out).length > 0 ? out : undefined
+}
+
+/** PR3 — does this (possibly junk) connectors grant object carry ANY write-capable ceiling?
+ *  Re-parses fail-closed (a hand-built / stash-frozen grants object may carry junk), so a
+ *  'read'-only grant, 'delete'/junk values, empty keys and non-object shapes all yield false.
+ *  This is the connector_write CLASS row's coarse gate — see isToolClassAllowedInMode. */
+function hasConnectorWriteGrant(connectors: unknown): boolean {
+  const parsed = parseConnectorGrants(connectors)
+  if (!parsed) return false
+  return Object.values(parsed).some((v) => v === 'write' || v === 'update')
+}
+
+/** Per-agent mode grants (ADR-004 §4.1, web key added by ADR-004 rev3.1 D1, connectors key added
+ *  by stage 1 PR3 — the explicit revisions of the ADR-001 §5 matrix's exec/web/connector rows).
+ *  🔴 The type has ONLY the `exec`, `web` and `connectors` keys: capability_change and outbound
+ *  (send) have NO corresponding field — they are structurally un-grantable (not "don't pass true"
+ *  but "nowhere to pass it"), fixing the red line at the type level. Constructed by the gateway
+ *  from the strictly-parsed spec as discriminated typed values ({ exec: spec.toolPolicy?.grantExec
+ *  === true, web: parseWebGrant(spec.toolPolicy?.grantWeb) }, plus `connectors` ONLY when
+ *  parseConnectorGrants yields a non-empty record — an absent key means "no connector grants",
+ *  keeping every pre-PR3 grants object byte-identical) — NEVER a passthrough of a raw spec object
+ *  (a future spec field must not silently flow into the matrix). */
 export interface AgentModeGrants {
   exec?: boolean
   web?: WebGrant
+  /** PR3 — per-connector crud ceilings ({connectorId: 'read'|'write'|'update'}), spec-derived via
+   *  parseConnectorGrants (fail-closed per-entry; 'delete' unrepresentable). Consumed by (a) the
+   *  connector_write matrix row below (coarse class gate) and (b) createConnectorTools'
+   *  registration filter (the per-connector / per-tool precision). */
+  connectors?: Record<string, ConnectorGrant>
 }
 
 /** The per-agent run context threaded through a headless custom-agent run (ADR-004 §3.1/§4.4):
@@ -337,7 +386,10 @@ export interface AgentRunContext {
  *  read/domain_write/artifact → every mode; capability_change/outbound → manual_chat only (permanently —
  *  no grant key exists for them); exec → manual_chat, OR a non-manual run whose per-agent grants
  *  carry exec===true; web → manual_chat, OR a non-manual run whose grants carry web∈{gated,open}
- *  (the owner's explicit opt-in, spec-derived — any other value incl. junk is 'off'). `grants` is
+ *  (the owner's explicit opt-in, spec-derived — any other value incl. junk is 'off');
+ *  connector_write (PR3) → manual_chat, OR a non-manual run whose grants carry a connectors record
+ *  with ANY write-capable ceiling (coarse class gate — per-connector precision lives at
+ *  registration, see the row comment below). `grants` is
  *  only ever passed by the headless agent-run path; manual callers omit it (undefined = the
  *  pre-ADR-004 matrix, so a forgotten param is always SAFER, never wider).
  *  im_chat is a hard floor BEYOND read/artifact/domain_write: grants are deliberately NOT
@@ -356,9 +408,17 @@ export function isToolClassAllowedInMode(
   if (mode === 'im_chat') return false
   if (toolClass === 'exec') return grants?.exec === true
   if (toolClass === 'web') return grants?.web === 'gated' || grants?.web === 'open'
+  // connector_write (stage 1 PR3, grill Q2): lifted when the per-agent connector grants carry ANY
+  // write-capable ceiling ('write'/'update'; re-parsed fail-closed — junk/'read'-only/empty deny).
+  // 🔴 This row is deliberately a COARSE class-level gate: it cannot see WHICH connector a tool
+  // belongs to (class is per-tool-class, not per-tool). The per-connector / per-tool precision is
+  // guaranteed at REGISTRATION (createConnectorTools only ever builds tools whose connector is in
+  // the grants AND whose crud rank ≤ that connector's ceiling), so a ToolSet reaching this row can
+  // only contain grant-covered connector writes — the row exists so applyContextModePolicy doesn't
+  // strip them wholesale. A leaked/forged connector write outside that construction still hits the
+  // registration whitelist server-side (Python rejects unsynced/undisclosed names).
+  if (toolClass === 'connector_write') return hasConnectorWriteGrant(grants?.connectors)
   // capability_change + outbound: false under ANY grants (structurally un-grantable).
-  // connector_write (stage 1 PR2): ALSO false under any grants — headless connector access waits
-  // for the per-connector grant key (PR3); until then a leaked dynamic tool fail-closes here.
   return false
 }
 

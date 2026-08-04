@@ -749,3 +749,163 @@ describe('update merge — a partial grants patch must not wipe the untouched to
     expect(putCalls).toHaveLength(0)
   })
 })
+
+// MCP connector epic, harness-expansion stage 1 PR3, T4 — grant_connectors joins the CRUD
+// vocabulary. Field-level shape mirrors grant_web/skills; the important NEW behaviour is the
+// merge-base carry-forward (toConfigPatch previously omitted grant_connectors from the four
+// sub-fields it copies from the SERVER row, so an update touching an unrelated tool_policy
+// sub-field silently wiped a previously-configured connector grant).
+describe('grant_connectors (MCP connector epic PR3) — schema + merge fidelity', () => {
+  test('zod: a valid {connector: ceiling} map parses on create/update', () => {
+    expect(
+      customAgentCreateSchema.safeParse({
+        id: 'x',
+        title: 't',
+        grant_connectors: { notion: 'read', jira: 'write' }
+      }).success
+    ).toBe(true)
+    expect(
+      customAgentUpdateSchema.safeParse({
+        agent_id: 'x',
+        grant_connectors: { notion: 'update' }
+      }).success
+    ).toBe(true)
+    // {} is a legal value (explicit "clear all")
+    expect(customAgentUpdateSchema.safeParse({ agent_id: 'x', grant_connectors: {} }).success).toBe(
+      true
+    )
+  })
+
+  test('zod: "delete" is not a legal ceiling — rejected at the edge (Q3=B), not read-side leniency', () => {
+    expect(
+      customAgentCreateSchema.safeParse({
+        id: 'x',
+        grant_connectors: { notion: 'delete' }
+      }).success
+    ).toBe(false)
+  })
+
+  test('zod: a junk ceiling string / non-object value is rejected', () => {
+    expect(
+      customAgentCreateSchema.safeParse({
+        id: 'x',
+        grant_connectors: { notion: 'admin' }
+      }).success
+    ).toBe(false)
+    expect(customAgentCreateSchema.safeParse({ id: 'x', grant_connectors: 'notion' }).success).toBe(
+      false
+    )
+    expect(
+      customAgentCreateSchema.safeParse({ id: 'x', grant_connectors: ['notion'] }).success
+    ).toBe(false)
+  })
+
+  test('zod: capabilities cannot be combined with grant_connectors (rejectMixedCapabilityVocabulary)', () => {
+    const capabilities = {
+      email: 'read',
+      calendar: 'off',
+      knowledge: 'off',
+      reports: 'produce',
+      web: 'off',
+      files: 'off'
+    }
+    expect(
+      customAgentCreateSchema.safeParse({
+        id: 'x',
+        capabilities,
+        grant_connectors: { notion: 'read' }
+      }).success
+    ).toBe(false)
+    expect(
+      customAgentUpdateSchema.safeParse({
+        agent_id: 'x',
+        capabilities: { reports: 'produce' },
+        grant_connectors: { notion: 'read' }
+      }).success
+    ).toBe(false)
+  })
+
+  test('create maps grant_connectors into tool_policy on the wire', async () => {
+    const { domain, calls } = recordingDomain()
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await approveAndRun(tools.custom_agent_create, {
+      id: 'connected',
+      title: 'Connected',
+      grant_connectors: { notion: 'read', jira: 'write' }
+    })
+    const post = calls.find((c) => c.method === 'POST' && /\/report-agents$/.test(c.url))!
+    expect((post.body as Record<string, unknown>).tool_policy).toEqual({
+      v: 1,
+      grant_connectors: { notion: 'read', jira: 'write' }
+    })
+  })
+
+  test('an update touching ONLY grant_connectors reads the merge-base row (touchesToolPolicy)', async () => {
+    const { domain, calls } = recordingDomain()
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await approveAndRun(tools.custom_agent_update, {
+      agent_id: 'dms-approver',
+      grant_connectors: { notion: 'read' }
+    })
+    expect(calls.some((c) => c.method === 'GET' && c.url.includes('agentId='))).toBe(true)
+  })
+
+  test(
+    "BUG REGRESSION: updating an UNRELATED field preserves the server row's grant_connectors " +
+      '(toConfigPatch previously omitted it from the merge-base carry-forward and silently wiped it)',
+    async () => {
+      const { domain, calls } = recordingDomain({
+        getAgent: {
+          ...CUSTOM_AGENT,
+          tool_policy: {
+            v: 1,
+            allowed_tools: ['email_get'],
+            grant_connectors: { notion: 'write', jira: 'read' }
+          }
+        }
+      })
+      const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+        contextMode: 'manual_chat'
+      })
+      // grant_web is the trigger (any tool_policy sub-field touch merges the row) — grant_connectors
+      // is NOT mentioned by this input at all, so it must survive the merge untouched.
+      await approveAndRun(tools.custom_agent_update, {
+        agent_id: 'dms-approver',
+        grant_web: 'gated'
+      })
+      const put = calls.find((c) => c.method === 'PUT')!
+      expect(put.body).toEqual({
+        tool_policy: {
+          v: 1,
+          allowed_tools: ['email_get'],
+          grant_connectors: { notion: 'write', jira: 'read' },
+          grant_web: 'gated'
+        }
+      })
+    }
+  )
+
+  test('an EXPLICIT {} clears every connector grant (distinct from omitting the field)', async () => {
+    const { domain, calls } = recordingDomain({
+      getAgent: {
+        ...CUSTOM_AGENT,
+        tool_policy: { v: 1, allowed_tools: ['email_get'], grant_connectors: { notion: 'write' } }
+      }
+    })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await approveAndRun(tools.custom_agent_update, {
+      agent_id: 'dms-approver',
+      grant_connectors: {}
+    })
+    const put = calls.find((c) => c.method === 'PUT')!
+    expect(put.body).toEqual({
+      tool_policy: { v: 1, allowed_tools: ['email_get'], grant_connectors: {} }
+    })
+  })
+})

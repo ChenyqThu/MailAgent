@@ -49,7 +49,8 @@ class TriggerValidationError(ValueError):
 
 class ToolPolicyValidationError(ValueError):
     """tool_policy_json 校验失败（非 object / 未知键 / 版本不符 / grant_exec 非 bool /
-    grant_web 非 off|gated|open 字面量，ADR-004 P1-4 严格化）。"""
+    grant_web 非 off|gated|open 字面量 / grant_connectors 非 {connector: read|write|update}
+    对象，ADR-004 P1-4 严格化）。"""
 
 
 @dataclass(frozen=True)
@@ -98,12 +99,21 @@ class Budget:
 
 
 # tool_policy_json v1 允许键（additive：S4 = allowed_tools；S5 ADR-004 §4.1 += grant_exec；
-# S6 W3 ADR-004 rev3.1 D6 += grant_web + skills）。
-_TOOL_POLICY_KEYS = frozenset({"v", "allowed_tools", "grant_exec", "grant_web", "skills"})
+# S6 W3 ADR-004 rev3.1 D6 += grant_web + skills；MCP connector PR3 += grant_connectors）。
+_TOOL_POLICY_KEYS = frozenset(
+    {"v", "allowed_tools", "grant_exec", "grant_web", "skills", "grant_connectors"}
+)
 
 # grant_web 三态枚举（ADR-004 rev3.1 §3.1：off=headless 不注册 / gated=域名白名单免卡 /
 # open=全开放免卡）。非法态「web 关着却全开放」结构上不可表示。
 _WEB_GRANT_VALUES = ("off", "gated", "open")
+
+# grant_connectors 的 crud 天花板**有效**值域（MCP connector PRD 决策 5 + grill Q3=B）：
+# read < write < update 单调递增；🔴 **delete 不在值域内 —— 写入即拒**（不是读侧宽容），
+# 于是「AI 结构上拿不到删除工具」不依赖 owner 记得别配。
+# 表结构 / 远端 manifest 的 crudType 枚举**保留 delete 位**（删除类工具照常同步入库、界面恒灰），
+# 未来放开 = 把 "delete" 加进本元组 + 解灰界面开关，不改 schema、不做数据迁移。
+_CONNECTOR_GRANT_VALUES = ("read", "write", "update")
 
 
 @dataclass(frozen=True)
@@ -118,12 +128,17 @@ class ToolPolicy:
     ``None`` = 未配置 → 投影层落 ``DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS`` 默认挂载集；
     ``()`` = owner 显式零挂载（verbatim，门控工具全缺席）。挂载词汇 strict-effect：未知/未装
     skill 名存储宽容（parse 只验类型），效果为零。
+    ``grant_connectors``（MCP connector PR3 —— per-connector crud 天花板）：规范化成按
+    connector_id 排序的 ``((connector_id, ceiling), ...)``（确定性有序、不可变、可直接 dict()）；
+    ``()`` = 一个 connector 都没授权（缺省，headless 侧整族不注册）。connector_id 同样
+    strict-effect：未连接的 id 存储宽容，效果为零。
     """
 
     allowed_tools: Optional[Tuple[str, ...]] = None
     grant_exec: bool = False
     grant_web: str = "off"
     skills: Optional[Tuple[str, ...]] = None
+    grant_connectors: Tuple[Tuple[str, str], ...] = ()
 
 
 def _as_dict(raw: Union[str, dict, None]) -> Optional[dict]:
@@ -302,6 +317,10 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
       （``True`` / ``1`` / ``"yes"`` → 拒，镜像 grant_exec 严格化）
     - ``skills``：缺省/null → None（未配置 → 投影默认挂载集）；list[str]（滤空串）→ tuple
       （显式 ``[]`` → ``()`` 零挂载）；其它类型 → 拒（``"email"`` 裸串 → 拒，镜像 allowed_tools）
+    - ``grant_connectors``：缺省/null → ``()``；必须是 ``{connector_id: 天花板}`` object
+      （显式 ``{}`` → ``()`` 合法 = 无授权）；key 非空字符串、value ∈
+      ``('read','write','update')`` 字面量 —— 🔴 ``"delete"`` **在值域外，入库即拒**
+      （grill Q3=B：删除类工具照常入清单但 AI 永不可调，不靠读侧宽容兜）
 
     保存时权威（``validate_agent_config_patch`` 调用，坏形状 400）；读侧投影（spec 端点）自行
     try/except 落安全默认。Raises ``ToolPolicyValidationError``（``ValueError`` 子类）。
@@ -340,8 +359,35 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
         skills = tuple(s for s in skills_raw if s)
     else:
         raise ToolPolicyValidationError("skills must be a list of strings")
+    connectors_raw = data.get("grant_connectors")
+    if connectors_raw is None:
+        connectors: Tuple[Tuple[str, str], ...] = ()
+    elif isinstance(connectors_raw, dict):
+        pairs = []
+        for cid, ceiling in connectors_raw.items():
+            if not isinstance(cid, str) or not cid.strip():
+                raise ToolPolicyValidationError(
+                    "grant_connectors keys must be non-empty connector ids"
+                )
+            # 成员判定挡住 True/1/"DELETE"（大小写敏感，fail-closed）；"delete" 同样在此拒 ——
+            # 值域是唯一的开关，未来放开只放宽 _CONNECTOR_GRANT_VALUES。
+            if not isinstance(ceiling, str) or ceiling not in _CONNECTOR_GRANT_VALUES:
+                raise ToolPolicyValidationError(
+                    f"grant_connectors[{cid!r}] must be one of "
+                    f"{list(_CONNECTOR_GRANT_VALUES)}"
+                )
+            pairs.append((cid, ceiling))
+        connectors = tuple(sorted(pairs))  # connector_id 排序 → 投影确定性
+    else:
+        raise ToolPolicyValidationError(
+            "grant_connectors must be a JSON object of {connector: read|write|update}"
+        )
     return ToolPolicy(
-        allowed_tools=allowed, grant_exec=grant is True, grant_web=grant_web, skills=skills
+        allowed_tools=allowed,
+        grant_exec=grant is True,
+        grant_web=grant_web,
+        skills=skills,
+        grant_connectors=connectors,
     )
 
 

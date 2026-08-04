@@ -33,14 +33,24 @@ import {
 import { ApprovalGuard } from '../../src/ai-gateway/security/approval'
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
 import { buildGatewayTools } from '../../src/ai-gateway/tools'
+import {
+  createConnectorTools,
+  shouldLoadConnectorTools,
+  type ConnectorToolManifestEntry
+} from '../../src/ai-gateway/tools/connector'
 import type { MailAgentDomainClient } from '../../src/ai-gateway/python/domainClient'
 import type { AgentRunSpec } from '../../src/shared/api/types'
-import type { AgentContextMode } from '../../src/ai-gateway/tools/policy'
+import {
+  registerRuntimeToolClass,
+  resetRuntimeToolClasses,
+  type AgentContextMode
+} from '../../src/ai-gateway/tools/policy'
 import { tool, type ToolSet } from 'ai'
 import { z } from 'zod'
 
 const handles: AiGatewayHandle[] = []
 afterEach(async () => {
+  resetRuntimeToolClasses() // PR3 tests register connector tool classes — never leak across tests
   while (handles.length) await handles.pop()!.close()
 })
 
@@ -379,6 +389,56 @@ describe('agentRunContextFromSpec — discriminated grants, never a raw passthro
       })
     )
     expect(ctx.modeGrants?.web).toBe(expected)
+  })
+
+  // Stage 1 PR3 — grantConnectors rides the same discriminated funnel (parseConnectorGrants:
+  // per-entry fail-closed; empty/junk-only → the connectors KEY is absent, keeping the pre-PR3
+  // two-key modeGrants byte-identical — the stash-freeze assertion below depends on that).
+  test('grantConnectors valid entries → modeGrants.connectors carried verbatim', () => {
+    const ctx = agentRunContextFromSpec(
+      makeSpec({
+        toolPolicy: {
+          allowedTools: [],
+          grantConnectors: { notion: 'read', atlassian: 'write' }
+        } as AgentRunSpec['toolPolicy']
+      })
+    )
+    expect(ctx.modeGrants).toEqual({
+      exec: false,
+      web: 'off',
+      connectors: { notion: 'read', atlassian: 'write' }
+    })
+  })
+
+  test('grantConnectors junk entries drop per-entry; all-junk/absent → NO connectors key', () => {
+    const partial = agentRunContextFromSpec(
+      makeSpec({
+        toolPolicy: {
+          allowedTools: [],
+          grantConnectors: { notion: 'delete', atlassian: 'update', '': 'write' }
+        } as unknown as AgentRunSpec['toolPolicy']
+      })
+    )
+    expect(partial.modeGrants?.connectors).toEqual({ atlassian: 'update' })
+    for (const junk of [
+      undefined,
+      {},
+      { notion: 'delete' },
+      { notion: 'yes' },
+      { notion: 1 },
+      'write',
+      ['write']
+    ]) {
+      const ctx = agentRunContextFromSpec(
+        makeSpec({
+          toolPolicy: {
+            allowedTools: [],
+            grantConnectors: junk
+          } as unknown as AgentRunSpec['toolPolicy']
+        })
+      )
+      expect(Object.keys(ctx.modeGrants!), JSON.stringify(junk)).toEqual(['exec', 'web'])
+    }
   })
 
   test('junk keys on toolPolicy never reach the grants object (constructed, not spread)', () => {
@@ -848,6 +908,265 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     expect(wrapped.agentRunContext).toEqual({ agentId: 'dms', allowedTools: [], skills: [] })
     // and the wrapper's buildTools intersects against that [] → empty
     expect(Object.keys(wrapped.buildTools!([], undefined, 'cron_headless'))).toEqual([])
+  })
+})
+
+// ── Stage 1 PR3 — per-agent connector grants (grant 内免卡注册, grant 外根本不注册) ──────────────
+
+describe('runHeadlessAgent — grantConnectors (PR3)', () => {
+  const CONNECTOR_MANIFEST: ConnectorToolManifestEntry[] = [
+    {
+      connectorId: 'notion',
+      connectorName: 'Notion',
+      toolName: 'notion-fetch',
+      description: 'Fetch a page',
+      inputSchemaJson: null,
+      crudType: 'read',
+      destructive: false,
+      effectiveEnabled: true,
+      orphan: false
+    },
+    {
+      connectorId: 'notion',
+      connectorName: 'Notion',
+      toolName: 'notion-update-page',
+      description: 'Update a page',
+      inputSchemaJson: null,
+      crudType: 'write',
+      destructive: true,
+      effectiveEnabled: true,
+      orphan: false
+    }
+  ]
+
+  /** cfg whose buildTools mirrors the production lifecycle wiring exactly: the seam decides the
+   *  load, createConnectorTools applies the per-connector ceiling filter, buildGatewayTools
+   *  admits + matrix-filters, and wrapCfgForAgentRun's intersection runs on top. */
+  function connectorAwareCfg(seenTools: string[][]): AiGatewayConfig {
+    const guard = new ApprovalGuard()
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => captureToolsModel(seenTools),
+      buildTools: (collector, _am, mode, agentRunContext) => {
+        let dynamicTools: ToolSet | undefined
+        const connectorGrants = agentRunContext?.modeGrants?.connectors
+        if (shouldLoadConnectorTools(true, mode, agentRunContext != null, connectorGrants)) {
+          dynamicTools = createConnectorTools(
+            minimalDomain(),
+            collector,
+            guard,
+            CONNECTOR_MANIFEST,
+            {
+              contextMode: mode,
+              ...(agentRunContext != null
+                ? { connectorGrants, agentId: agentRunContext.agentId }
+                : {})
+            }
+          )
+        }
+        return buildGatewayTools(
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            contextMode: mode,
+            agentRunContext,
+            dynamicTools
+          },
+          collector
+        )
+      },
+      persistTurn: () => {}
+    }
+  }
+
+  test("grantConnectors {notion:'write'} + allowedTools WITHOUT mcp names → BOTH connector tools reach streamText (name-exempt from the intersection)", async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({
+      toolPolicy: {
+        allowedTools: ['email_flag'],
+        grantConnectors: { notion: 'write' }
+      } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      connectorAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools.length).toBeGreaterThan(0)
+    const names = seenTools[0]
+    // 🔴 the read tool too: it is class 'read' (the intersected face) — without the by-NAME
+    // exemption the static allowed_tools vocabulary would strip it and the grant would be dead
+    // config.
+    expect(names).toContain('mcp__notion__notion_fetch')
+    expect(names).toContain('mcp__notion__notion_update_page')
+    expect(names).toContain('email_flag')
+  })
+
+  test('no grantConnectors → the SAME spec yields zero connector tools (grant 外根本不注册)', async () => {
+    const seenTools: string[][] = []
+    const spec = makeSpec({
+      toolPolicy: { allowedTools: ['email_flag'] } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      connectorAwareCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].filter((n) => n.startsWith('mcp__'))).toEqual([])
+    expect(seenTools[0]).toContain('email_flag')
+  })
+
+  test("ceiling 'read' → the write tool stays above the ceiling; junk 'delete' grant → nothing", async () => {
+    const seenRead: string[][] = []
+    await runHeadlessAgent(
+      connectorAwareCfg(seenRead),
+      {
+        jobId: 7,
+        spec: makeSpec({
+          toolPolicy: {
+            allowedTools: [],
+            grantConnectors: { notion: 'read' }
+          } as AgentRunSpec['toolPolicy']
+        }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    // allowedTools=[] + the grant → the granted connector face ALONE survives (control planes
+    // are orthogonal, mirroring the exec/web boundary tests above).
+    expect(seenRead[0]).toEqual(['mcp__notion__notion_fetch'])
+
+    const seenJunk: string[][] = []
+    await runHeadlessAgent(
+      connectorAwareCfg(seenJunk),
+      {
+        jobId: 8,
+        spec: makeSpec({
+          toolPolicy: {
+            allowedTools: [],
+            grantConnectors: { notion: 'delete' }
+          } as unknown as AgentRunSpec['toolPolicy']
+        }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    expect(seenJunk[0]).toEqual([])
+  })
+
+  test('wrapCfgForAgentRun exempts connector tools from the intersection BY NAME (read class included)', () => {
+    const donor = tool({ description: 'd', inputSchema: z.object({}), execute: async () => ({}) })
+    const base: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      buildTools: () => ({
+        mcp__notion__notion_fetch: donor, // runtime class 'read' (registered below)
+        mcp__notion__notion_update_page: donor, // runtime class 'connector_write'
+        email_flag: donor,
+        email_pin: donor
+      })
+    }
+    // register the runtime classes the way createConnectorTools would
+    resetRuntimeToolClasses()
+    registerRuntimeToolClass('mcp__notion__notion_fetch', 'read')
+    registerRuntimeToolClass('mcp__notion__notion_update_page', 'connector_write')
+    const wrapped = wrapCfgForAgentRun(base, {
+      agentId: 'dms',
+      allowedTools: ['email_flag'],
+      modeGrants: { connectors: { notion: 'write' } }
+    })
+    const built = wrapped.buildTools!([], undefined, 'cron_headless')
+    expect(Object.keys(built).sort()).toEqual([
+      'email_flag', // in allowedTools
+      'mcp__notion__notion_fetch', // name-exempt despite class 'read'
+      'mcp__notion__notion_update_page' // name-exempt
+    ])
+    expect(built.email_pin).toBeUndefined() // non-exempt + not allowed → intersected away
+  })
+
+  // ── PR3 cold-manifest guard: a one-shot headless run must not read an empty cache ──────────
+
+  function ensureCfg(order: string[], ensure?: () => Promise<void>): AiGatewayConfig {
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => mockTextModel(['done']),
+      ...(ensure ? { ensureConnectorManifest: ensure } : {}),
+      buildTools: () => {
+        order.push('buildTools')
+        return {}
+      },
+      persistTurn: () => {}
+    }
+  }
+
+  test('grants present → ensureConnectorManifest is AWAITED before buildTools (bounded warm-up)', async () => {
+    const order: string[] = []
+    const result = await runHeadlessAgent(
+      ensureCfg(order, async () => {
+        // async gap: proves runHeadlessAgent awaits (a fire-and-forget would let buildTools win)
+        await new Promise((r) => setTimeout(r, 5))
+        order.push('ensure')
+      }),
+      {
+        jobId: 7,
+        spec: makeSpec({
+          toolPolicy: {
+            allowedTools: [],
+            grantConnectors: { notion: 'read' }
+          } as AgentRunSpec['toolPolicy']
+        }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    expect(result.outcome).toBe('completed')
+    expect(order.indexOf('ensure')).toBeGreaterThanOrEqual(0)
+    expect(order.indexOf('ensure')).toBeLessThan(order.indexOf('buildTools'))
+  })
+
+  test('no connector grants → the hook is NEVER called (zero work, byte-identical)', async () => {
+    const order: string[] = []
+    let ensureCalls = 0
+    const result = await runHeadlessAgent(
+      ensureCfg(order, async () => {
+        ensureCalls += 1
+      }),
+      { jobId: 7, spec: makeSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(result.outcome).toBe('completed')
+    expect(ensureCalls).toBe(0)
+  })
+
+  test('a rejecting ensure hook never freezes/fails the run (warn + continue without tools)', async () => {
+    const order: string[] = []
+    const result = await runHeadlessAgent(
+      ensureCfg(order, async () => {
+        throw new Error('serve-api down')
+      }),
+      {
+        jobId: 7,
+        spec: makeSpec({
+          toolPolicy: {
+            allowedTools: [],
+            grantConnectors: { notion: 'update' }
+          } as AgentRunSpec['toolPolicy']
+        }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    expect(result.outcome).toBe('completed') // degraded to "no connector tools", never an error
+    expect(order).toContain('buildTools')
   })
 })
 

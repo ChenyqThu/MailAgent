@@ -738,8 +738,10 @@ class LLMClient:
 
             if not tool_uses:
                 # 既没调工具也没调 final_tool（纯 end_turn）→ 提示收尾，再给一轮机会。
+                # 措辞与 final_tool 无关（MCP connector PR3 起本 loop 还被邮件预处理**分类**
+                # 复用，原来那句「产出最终报告」会把分类模型往报告形状上带）。
                 messages.append(
-                    {"role": "user", "content": f"请基于以上信息调用 {final_tool} 工具产出最终报告。"}
+                    {"role": "user", "content": f"请基于以上信息调用 {final_tool} 工具完成本次任务。"}
                 )
                 continue
 

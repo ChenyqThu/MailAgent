@@ -36,10 +36,15 @@ import {
 import {
   classOfTool,
   normalizeContextMode,
+  parseConnectorGrants,
   parseWebGrant,
   type AgentContextMode,
   type AgentRunContext
 } from './tools/policy'
+// RELATIVE import (pure TS, zero imports — safe for the tsx harness): the ONE naming source for
+// connector tools, used below to exempt them from the allowedTools intersection by NAME (their
+// classes are 'read'/'connector_write', so a class-based exemption cannot see them).
+import { isMcpToolName } from '../shared/assistant/tools/mcpToolName'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // Relative type-only import (erased) — same discipline as searchAgentRun.ts: the pure-Node harness
 // (tsx) must be able to load this module without resolving vite aliases.
@@ -122,6 +127,11 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // never re-derived here), so a spec missing/malforming it is a broken spec → [] (zero mounts),
   // NEVER null-passthrough into applySkillGating's fail-open manual semantic.
   const skillsRaw: unknown = toolPolicy?.skills
+  // PR3 — connector grants ride the same discriminated funnel (parseConnectorGrants: per-entry
+  // fail-closed; 'delete'/junk values and empty keys dropped; empty result → undefined).
+  // Conditional include: absent/empty grants keep the modeGrants object byte-identical to the
+  // pre-PR3 two-key shape (the stash-freeze assertions depend on that).
+  const connectors = parseConnectorGrants(toolPolicy?.grantConnectors)
   return {
     agentId: spec.agentId,
     allowedTools: Array.isArray(allowedRaw)
@@ -130,7 +140,11 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     skills: Array.isArray(skillsRaw)
       ? skillsRaw.filter((n): n is string => typeof n === 'string')
       : [],
-    modeGrants: { exec: toolPolicy?.grantExec === true, web: parseWebGrant(toolPolicy?.grantWeb) },
+    modeGrants: {
+      exec: toolPolicy?.grantExec === true,
+      web: parseWebGrant(toolPolicy?.grantWeb),
+      ...(connectors !== undefined ? { connectors } : {})
+    },
     // S6 W1 — carry the run's jobId so a paused approval freezes it into the stash for the
     // record-view pending projection. Conditional include: a caller that omits it (every existing
     // test + the shared type's cast callers) yields the pre-S6 object shape, byte-identical.
@@ -171,8 +185,9 @@ export function wrapCfgForAgentRun(
   return {
     ...cfg,
     agentRunContext: ctx,
-    // ADR-004 §4.1 (codex终审 P1; rev3.1 §3.2 extends exec → exec ∪ web) — the intersection
-    // domain is the NON-granted classes only. exec AND web tools are exempt: their presence is
+    // ADR-004 §4.1 (codex终审 P1; rev3.1 §3.2 extends exec → exec ∪ web; PR3 extends it again →
+    // exec ∪ web ∪ connector tools BY NAME) — the intersection domain is the NON-granted classes
+    // only. exec AND web tools are exempt: their presence is
     // decided SOLELY by the matrix (contextMode + grants) — allowed_tools is the defensive
     // narrowing for the read/domain_write face, while grant_exec/grant_web are the explicit
     // opt-ins for their classes; the control planes are orthogonal. Without the exemption a grant
@@ -185,12 +200,20 @@ export function wrapCfgForAgentRun(
     // would share the exemption — harmless in practice: policy.test's completeness gate forces
     // every real tool to be classified, and the matrix already floors unclassified names whenever
     // there is no grant.
+    //
+    // 🔴 PR3 — connector tools (`mcp__<connector>__<tool>`) are exempt BY NAME (isMcpToolName, the
+    // one naming source): their presence is decided solely by grant_connectors (the seam +
+    // createConnectorTools' per-connector/ceiling registration filter), and their names — dynamic,
+    // remote-derived — can never appear in the static allowed_tools vocabulary. A class-based
+    // exemption would miss them: connector READS are class 'read' (the intersected face), so
+    // without the name exemption the intersection would strip every granted read tool right after
+    // registration admitted it — the grant would be dead config.
     buildTools: (collector, approvalMode, mode) => {
       const built = cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}
       const out: ToolSet = {}
       for (const [name, t] of Object.entries(built)) {
         const cls = classOfTool(name)
-        if (cls === 'exec' || cls === 'web' || keep.has(name)) out[name] = t
+        if (cls === 'exec' || cls === 'web' || isMcpToolName(name) || keep.has(name)) out[name] = t
       }
       return out
     }
@@ -268,6 +291,24 @@ export async function runHeadlessAgent(
   // internal 10k termination sentinel; the worker's run-seconds abort remains the actual budget.
   const agentRunContext = agentRunContextFromSpec(spec, opts.jobId)
   const cfg2 = wrapCfgForAgentRun(cfg, agentRunContext)
+
+  // PR3 — cold-manifest guard: a headless run is ONE-SHOT, so the lifecycle's fire-and-forget
+  // TTL cache is not enough (an empty/stale cache would make a granted cron run silently miss its
+  // connector tools with no next turn to recover on). When the agent carries connector grants,
+  // await the lifecycle's BOUNDED ensure hook (it resolves fast on a warm cache; the fetch itself
+  // is 3s-bounded per request and contracted never to throw). Any failure → warn and continue
+  // WITHOUT connector tools (the run must never freeze on a slow serve-api). No grants / no hook
+  // (manual cfgs, tests, flag off) → zero work, byte-identical.
+  if (agentRunContext.modeGrants?.connectors && cfg.ensureConnectorManifest) {
+    try {
+      await cfg.ensureConnectorManifest()
+    } catch (err) {
+      console.warn(
+        '[ai-gateway] connector manifest ensure failed — agent run continues without connector tools',
+        err
+      )
+    }
+  }
 
   const prepared = await prepareChatRun(body, cfg2, abortSignal, contextMode)
   if (!prepared.ok) {

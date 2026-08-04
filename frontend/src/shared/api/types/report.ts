@@ -294,6 +294,10 @@ export interface CustomAgentToolPolicy {
   /** S6 W3 rev3.1 §3.2 — per-agent skill 挂载列表（收窄面）。缺失/null = 默认挂载集
    *  ("email","search")；[] = 显式零挂载。 */
   skills?: string[]
+  /** MCP connector 阶段 1 PR3 — per-connector crud 天花板（{connector_id: 'read'|'write'|'update'}）。
+   *  缺失/{} = 该 agent 未授权任何 connector（headless 侧整族不注册）。`'delete'` 不在值域内，
+   *  服务端 parse_tool_policy 校验拒绝（400）——不是读侧宽容。 */
+  grant_connectors?: Record<string, 'read' | 'write' | 'update'>
 }
 
 /** Custom Agent 预算两门（null/缺失 = 全默认；旧 max_steps 由后端忽略）。 */

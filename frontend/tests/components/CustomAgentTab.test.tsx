@@ -520,6 +520,49 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
     expect(patch.tool_policy).toEqual({ v: 1, allowed_tools: ['email_get'] })
   })
 
+  // MCP connector 阶段 1 PR3 —— grant_connectors 还没有抽屉 UI（随 PR4 落）。抽屉保存时
+  // tool_policy 是**整块 PUT** 重建的，所以任何没被本地 state 覆盖的子键都会被静默抹掉。
+  // 这与 gateway 侧 toConfigPatch 刚修的那条 merge-base 漏项是同一个 bug 类，两侧都要钉。
+  test('MCP connector：触碰工具区保存 → 原样带回行里的 grant_connectors（不静默抹掉）', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          tool_policy: {
+            v: 1,
+            allowed_tools: ['email_get'],
+            grant_connectors: { notion: 'write' }
+          }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    const chip = await screen.findByRole('button', { name: 'email_list_filter', pressed: false })
+    fireEvent.click(chip)
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    const tp = mockSetConfig.mock.calls[0][1].tool_policy
+    expect(tp.grant_connectors).toEqual({ notion: 'write' })
+    expect([...tp.allowed_tools].sort()).toEqual(['email_get', 'email_list_filter'])
+  })
+
+  test('MCP connector：行里没有 grant_connectors → 键不物化（PR3 前逐字节相同）', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({ tool_policy: { v: 1, allowed_tools: ['email_get'] } })}
+        open
+        onClose={() => {}}
+      />
+    )
+    const chip = await screen.findByRole('button', { name: 'email_list_filter', pressed: false })
+    fireEvent.click(chip)
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect('grant_connectors' in mockSetConfig.mock.calls[0][1].tool_policy).toBe(false)
+  })
+
   test('toolOptions 失败 → 工具区显示无法加载 + 编辑保存 patch 无 tool_policy', async () => {
     mockToolOptions.mockResolvedValue({ tools: [], defaults: [] })
     mockSetConfig.mockResolvedValue(makeCustomCfg())

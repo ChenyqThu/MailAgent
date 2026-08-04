@@ -139,6 +139,8 @@ async def list_connectors(request: Request, settings=Depends(get_settings)) -> A
                 "transport": definition.transport,
                 "status": row.status if row else "disconnected",
                 "enabled": row.enabled if row else True,
+                # PR3：分类侧独立授权位（默认关；行不存在 = 从未连接 → 同样是关）。
+                "preprocess_enabled": row.preprocess_enabled if row else False,
                 "scopes": row.scopes if row else None,
                 "last_error": row.last_error if row else None,
                 "last_synced_at": row.last_synced_at if row else None,
@@ -208,6 +210,7 @@ async def connector_status(
             "display_name": definition.display_name,
             "status": row.status if row else "disconnected",
             "enabled": row.enabled if row else True,
+            "preprocess_enabled": row.preprocess_enabled if row else False,
             "scopes": row.scopes if row else None,
             "last_error": row.last_error if row else None,
             "last_synced_at": row.last_synced_at if row else None,
@@ -302,6 +305,44 @@ async def list_tools(
     )
 
 
+@router.post("/{connector_id}/preprocess", dependencies=[Depends(verify_cf_access)])
+async def set_preprocess_enabled(
+    connector_id: str,
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+    settings=Depends(get_settings),
+) -> Any:
+    """分类侧独立授权开关（PR3 坑 3）：``{"enabled": bool}``。
+
+    🔴 **只有开关，没有天花板** —— 邮件预处理分类的 crud 天花板硬编码为 ``read``
+    （``llm_tools`` 工厂只造 read 类工具），owner 不存在「给分类侧配 write」的入口。
+    这是 lethal trifecta（untrusted 邮件正文 + 私有数据 + 外部写）的结构性收紧：
+    分类是全自动逐封跑的，比 headless custom agent 更敞，所以它**不复用** custom agent 的
+    ``grant_connectors``（免得给 agent 配了 write、分类侧跟着继承）。
+    """
+    _require_enabled(settings)
+    _connector_def(connector_id)
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        raise APIError(
+            "E_INVALID_ARG", "enabled must be a JSON boolean", http_status=400
+        )
+    store = _store()
+    try:
+        await run_in_threadpool(
+            store.set_connector_preprocess_enabled, connector_id, enabled
+        )
+    except KeyError as e:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"connector {connector_id!r} has no row yet — connect it first",
+            http_status=404,
+        ) from e
+    return success_envelope(
+        {"connector_id": connector_id, "preprocess_enabled": enabled}, request=request
+    )
+
+
 @router.post(
     "/{connector_id}/tools/{tool_name}/invoke", dependencies=[Depends(verify_cf_access)]
 )
@@ -314,79 +355,42 @@ async def invoke_tool(
 ) -> Any:
     """MCP 工具调用代理（PR2 gateway 工具 execute 的执行权威面；「gateway 只带信封」纪律）。
 
-    四道闸（伪造 / 未同步 / orphan / delete / 未启用的名字**到不了远端**——白名单纪律）：
-      1. flag 门（``_require_enabled`` → 409）；
-      2. 工具必须在已同步清单里（缺席 → 404，不透传给远端）；
-      3. orphan（远端已消失）→ 409；``crud_type='delete'`` → 403（任何场合不可调，Q16=A）;
-      4. ``effective_enabled`` 折算为 False → 409（可行动解释：去设置里开）。
+    flag 门在这里；**闸序与执行在 ``src/connectors/service.py``**（PR3 起 Python 侧 LLM
+    工厂是第二个调用面，两面共用同一份闸——绝不手抄两份）。
+
+    ``caller``（PR3 新增，可选）：``{"context_mode": str, "agent_id": str|null}``。
+    headless（untrusted_trigger / cron_headless）时按该 agent 的 ``grant_connectors``
+    重新判天花板 = **授权判定与执行同侧**的第二道闸（gateway 注册期过滤是第一道）；
+    ``im_chat`` 恒拒；缺席 / ``manual_chat`` → 与 PR2 逐字节相同（owner 面）。
     结果已在 ``ConnectorClient.call_tool`` 截断（``CALL_RESULT_MAX_CHARS``）；
-    UNTRUSTED_MCP_TOOL 围栏由 TS gateway 侧套。
+    UNTRUSTED_MCP_TOOL 围栏由调用面各自套（TS gateway / Python llm_tools）。
     """
     _require_enabled(settings)
     _connector_def(connector_id)
-    arguments = (payload or {}).get("arguments")
-    if arguments is not None and not isinstance(arguments, dict):
-        raise APIError("E_INVALID_ARG", "arguments must be an object", http_status=400)
-    from src.agent_config.store import connector_tool_effective_enabled
-    from src.connectors.client import ConnectorClient, ConnectorError
+    body = payload or {}
+    from src.connectors.client import ConnectorError
     from src.connectors.gate import ConnectorBusy
+    from src.connectors.service import (
+        ConnectorInvokeDenied,
+        invoke_connector_tool,
+        resolve_caller_ceiling,
+    )
 
-    store = _store()
-    rows = await run_in_threadpool(store.list_connector_tools, connector_id)
-    row = next((r for r in rows if r.tool_name == tool_name), None)
-    if row is None:
-        raise APIError(
-            "E_NOT_FOUND",
-            f"tool {tool_name!r} is not in the synced manifest of connector "
-            f"{connector_id!r} (unsynced/forged tool names are never forwarded)",
-            http_status=404,
-        )
-    if row.crud_type == "delete":
-        raise APIError(
-            "E_CONNECTOR_TOOL_FORBIDDEN",
-            f"tool {tool_name!r} is delete-class and can never be invoked (MVP keeps "
-            "delete tools recorded but disabled)",
-            http_status=403,
-        )
-    if row.orphan:
-        raise APIError(
-            "E_CONNECTOR_TOOL_ORPHAN",
-            f"tool {tool_name!r} vanished from the remote manifest (orphan) — re-sync "
-            "the connector before calling it",
-            http_status=409,
-        )
-    if not connector_tool_effective_enabled(row.crud_type, row.enabled):
-        raise APIError(
-            "E_CONNECTOR_TOOL_DISABLED",
-            f"tool {tool_name!r} is disabled — enable it in Settings → Custom AI → "
-            "Connectors if you want the assistant to use it",
-            http_status=409,
-        )
-    client = ConnectorClient(connector_id, interactive=False)
-    started = time.monotonic()
     try:
-        result = await client.call_tool(tool_name, arguments)
+        ceiling = await run_in_threadpool(
+            resolve_caller_ceiling, body.get("caller"), connector_id
+        )
+        result = await invoke_connector_tool(
+            connector_id, tool_name, body.get("arguments"), ceiling=ceiling
+        )
+    except ConnectorInvokeDenied as e:
+        raise APIError(e.code, str(e), http_status=e.http_status) from None
     except ConnectorBusy as e:
         raise APIError("E_CONNECTOR_BUSY", str(e), http_status=409) from e
     except ConnectorError as e:
-        # 授权失效 → 连接转 error 态并如实告知（镜像 sync 端点的处置）。
-        if e.code in ("E_CONNECTOR_OAUTH", "E_CONNECTOR_NOT_CONNECTED"):
-            await run_in_threadpool(
-                store.update_connector_state,
-                connector_id,
-                status="error",
-                last_error=str(e)[:500],
-            )
         _raise_from_connector_error(e)
     return success_envelope(
-        {
-            "connector_id": connector_id,
-            "tool_name": tool_name,
-            "content": result["content"],
-            "is_error": result["is_error"],
-            "truncated": result["truncated"],
-            "elapsed_ms": int((time.monotonic() - started) * 1000),
-        },
+        {"connector_id": connector_id, "tool_name": tool_name, **result},
         request=request,
     )
 

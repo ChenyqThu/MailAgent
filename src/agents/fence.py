@@ -21,7 +21,7 @@ untrusted）**物理分隔**，模型只能把围栏内当 DATA 读、绝不当�
 from __future__ import annotations
 
 import re
-from typing import Optional
+from typing import Any, Mapping, Optional
 
 _ZWSP = "\u200b"  # U+200B ZERO WIDTH SPACE（打断内嵌边界标记）
 _UNTRUSTED_TOKEN_RE = re.compile(r"UNTRUSTED_", re.IGNORECASE)
@@ -45,6 +45,29 @@ def sanitize_untrusted(text: str) -> str:
          提前闭合」）。"""
     text = _UNTRUSTED_TOKEN_RE.sub(f"UNTRUSTED{_ZWSP}_", text)
     return _CONTEXT_JSON_RE.sub(lambda m: f"<{_ZWSP}{m.group(0)[1:]}", text)
+
+
+def fence_untrusted(
+    kind: str, content: str, attrs: Optional[Mapping[str, Any]] = None
+) -> str:
+    """通用 untrusted 围栏（逐字镜像 TS ``fenceUntrusted`` + ``untrustedBlock``）。
+
+    ``UNTRUSTED_<KIND>_START [k=v …]\\n<content>\\nUNTRUSTED_<KIND>_END``；**attrs 与
+    content 都过** ``sanitize_untrusted`` —— 属性值可能同样来自外部（connector id 是本地
+    常量，但 tool 名来自远端 manifest），任一侧内嵌 ``UNTRUSTED_*_END`` 都能提前闭合围栏。
+    attrs 为空 dict / None → START 行不带属性（与 TS 的 ``attrs ? … : ''`` 同分支）。
+
+    用处：MCP connector 工具结果进 **Python 侧** LLM loop（报告 Agent / 邮件预处理分类）时
+    的围栏——TS gateway 走 ``contextSerializer.fenceUntrusted``，两侧同格式由
+    ``tests/config/test_untrusted_fence_parity.py`` 抽取对账（抽取失败必红）。
+    """
+    attr_str = " ".join(f"{k}={v}" for k, v in (attrs or {}).items())
+    head = (
+        f"UNTRUSTED_{kind}_START {sanitize_untrusted(attr_str)}"
+        if attr_str
+        else f"UNTRUSTED_{kind}_START"
+    )
+    return f"{head}\n{sanitize_untrusted(content)}\nUNTRUSTED_{kind}_END"
 
 
 def fence_email_envelope(

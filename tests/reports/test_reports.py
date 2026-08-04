@@ -1203,3 +1203,111 @@ class TestAggregateRun:
         ov = next((b["text"] for b in json.loads(rep["blocks_json"])["blocks"]
                    if b["type"] == "overview"), "")
         assert "缺失" in ov                             # 29 天缺 → 标注
+
+
+# ============================================================
+# MCP connector PR3：报告 Agent 是第三个调用方
+# ============================================================
+
+
+class TestConnectorGrants:
+    def test_connector_grants_of_parses_report_and_custom_rows(self):
+        from src.reports.wire import connector_grants_of
+
+        row = {"tool_policy_json": json.dumps(
+            {"v": 1, "grant_connectors": {"notion": "read", "atlassian": "update"}}
+        )}
+        assert connector_grants_of(row) == (("atlassian", "update"), ("notion", "read"))
+
+    def test_connector_grants_of_is_lenient_and_fail_closed(self):
+        """坏 / 缺失 tool_policy_json → () = 无授权（不抛、不放宽）。"""
+        from src.reports.wire import connector_grants_of
+
+        for raw in (None, "", "{not json", '{"v":1}', '["notion"]',
+                    '{"v":1,"grant_connectors":{"notion":"delete"}}'):
+            assert connector_grants_of({"tool_policy_json": raw}) == (), raw
+
+    def test_report_row_projects_grant_connectors_for_roundtrip(self):
+        """report 行的 tool_policy 只投影 grant_connectors（其余键维持 custom-only）。"""
+        from src.reports.wire import resolve_agent
+
+        base = {"id": "d", "type": "report", "enabled": 1, "title": "D",
+                "schedule_json": '{"cadence":"daily","hours":[9]}'}
+        out = resolve_agent({**base, "tool_policy_json": json.dumps(
+            {"v": 1, "allowed_tools": ["email_get"], "grant_connectors": {"notion": "read"}}
+        )})
+        assert out["tool_policy"] == {"v": 1, "grant_connectors": {"notion": "read"}}
+        # 未配 → None（前端显示"没配"，与本 task 前一致）。
+        assert resolve_agent({**base, "tool_policy_json": None})["tool_policy"] is None
+        assert resolve_agent(
+            {**base, "tool_policy_json": json.dumps({"v": 1, "grant_exec": True})}
+        )["tool_policy"] is None
+
+    def test_worker_passes_row_grants_to_agentic(self, db: Path):
+        """worker 把行的 grant_connectors 透传给 summarize_report_agentic。"""
+        _insert(db, 1, labels=_labels())
+        store = ReportStore(str(db))
+        seen: dict = {}
+
+        async def spy(**kw):
+            seen["grants"] = kw.get("connector_grants", "MISSING")
+            return ReportDraft(headline="h", overview="ov", model="mk")
+
+        agent = store.get_agent("daily_email_digest")
+        asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
+                                    now=_NOW, agentic_fn=spy))
+        assert seen["grants"] == ()  # 未配 → 不挂任何 connector 工具
+
+        store.update_agent("daily_email_digest", {"tool_policy_json": json.dumps(
+            {"v": 1, "grant_connectors": {"notion": "write"}}
+        )})
+        agent = store.get_agent("daily_email_digest")
+        asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
+                                    now=_NOW, agentic_fn=spy))
+        assert seen["grants"] == (("notion", "write"),)
+
+    def test_agentic_mounts_connector_tools_only_with_grants(self, db: Path, monkeypatch):
+        """summarizer：grants 非空 → connector 工具进 tools；空 / flag off → 字节级现状。"""
+        from src.reports.summarizer import summarize_report_agentic
+
+        captured: dict = {}
+
+        class _FakeClient:
+            async def run_tool_loop(self, **kwargs):
+                captured["tools"] = [t["name"] for t in kwargs["tools"]]
+                captured["handlers"] = sorted(kwargs["tool_handlers"])
+                from src.llm_agent.client import ToolLoopResult
+
+                return ToolLoopResult(
+                    final_input={"headline": "h", "overview": "o", "sections": []},
+                    iterations=1, input_tokens=1, output_tokens=1,
+                    cache_read_input_tokens=0, model="m", latency_ms=1,
+                )
+
+            async def close(self):
+                pass
+
+        def _fake_factory(grants, **kw):
+            if not grants:
+                return [], {}
+            return (
+                [{"name": "mcp__notion__search", "description": "d",
+                  "input_schema": {"type": "object", "properties": {}}}],
+                {"mcp__notion__search": lambda inp: "ok"},
+            )
+
+        monkeypatch.setattr(
+            "src.reports.summarizer.build_connector_llm_tools", _fake_factory
+        )
+        common = dict(briefs=[], counts={}, db_path=str(db), client=_FakeClient())
+
+        asyncio.run(summarize_report_agentic(**common))  # 默认无 grants
+        assert "mcp__notion__search" not in captured["tools"]
+        assert captured["tools"][-1] == "build_report"  # 终止工具仍在末尾
+
+        asyncio.run(summarize_report_agentic(
+            **common, connector_grants=(("notion", "read"),)
+        ))
+        assert "mcp__notion__search" in captured["tools"]
+        assert "mcp__notion__search" in captured["handlers"]
+        assert captured["tools"][-1] == "build_report"

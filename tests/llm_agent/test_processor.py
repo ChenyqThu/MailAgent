@@ -791,3 +791,155 @@ def test_build_system_row_wins_over_env_context_source(monkeypatch):
     )
     assert _NOTION_SENTINEL in text
     assert _IDENTITY_SENTINEL not in text
+
+
+# ---- MCP connector PR3（坑 3）：分类侧只读工具，默认关 ------------------------
+
+_CLASSIFY_INPUT = {
+    "ai_summary": "s", "category": "💼 产品管理", "language": "中文",
+    "sender_priority": "核心团队", "action_required": True,
+    "action_type": "需要回复", "priority": "🟢 一般",
+}
+
+
+class _RecordingClient:
+    """记录走了哪条腿（单发 classify vs 多轮 run_tool_loop）。"""
+
+    def __init__(self, loop_result=None):
+        self.classify_calls = []
+        self.loop_calls = []
+        self._loop_result = loop_result
+
+    async def classify(self, **kwargs):
+        self.classify_calls.append(kwargs)
+        return LLMResult(
+            tool_input=dict(_CLASSIFY_INPUT), input_tokens=1, output_tokens=1,
+            cache_creation_input_tokens=0, cache_read_input_tokens=0,
+            model="m", latency_ms=1,
+        )
+
+    async def run_tool_loop(self, **kwargs):
+        self.loop_calls.append(kwargs)
+        if self._loop_result is not None:
+            return self._loop_result
+        from src.llm_agent.client import ToolLoopResult
+
+        return ToolLoopResult(
+            final_input=dict(_CLASSIFY_INPUT), iterations=2, input_tokens=7,
+            output_tokens=3, cache_read_input_tokens=2, model="m2", latency_ms=9,
+        )
+
+
+def _connector_processor(monkeypatch, client):
+    """裸 processor + 短路掉与本组无关的注入（身份文档 / notion context）。"""
+    from src.llm_agent.preprocess_config import PreprocessConfig
+    import src.llm_agent.processor as proc_mod
+
+    p = _bare_processor()
+    p._client = client
+    p._prompts = type("_P", (), {"get_for_mailbox": lambda self, m: ""})()
+    p._context = type("_C", (), {"get_markdown": staticmethod(lambda: _noop())})()
+    monkeypatch.setattr(
+        proc_mod, "get_preprocess_config", lambda _p: PreprocessConfig(model="", context_docs=[])
+    )
+    monkeypatch.setattr(
+        "src.agent_config.task_context.build_task_identity_context", lambda **kw: ""
+    )
+    return p
+
+
+async def _noop():
+    return ""
+
+
+def test_classification_default_off_takes_single_shot_path(monkeypatch):
+    """🔴 默认（flag off）：连 grants 都不查，逐字节走单发 classify —— inert。"""
+    import src.llm_agent.processor as proc_mod
+
+    monkeypatch.setattr(proc_mod.cfg, "mcp_connectors_enabled", False)
+    monkeypatch.setattr(
+        "src.llm_agent.preprocess_config.get_preprocess_connector_grants",
+        lambda: (_ for _ in ()).throw(AssertionError("must not be consulted when flag is off")),
+    )
+    client = _RecordingClient()
+    p = _connector_processor(monkeypatch, client)
+    labels = asyncio.run(p.process_email(_fake_email()))
+
+    assert labels.category == "💼 产品管理"
+    assert len(client.classify_calls) == 1 and not client.loop_calls
+    # header 保持原句（"Never call any other tool"）。
+    header = client.classify_calls[0]["system_blocks"][0]["text"]
+    assert "Never call any other tool" in header
+
+
+def test_classification_flag_on_without_grants_stays_single_shot(monkeypatch):
+    """flag 开但没有 opt-in 的 connector → 仍走单发路径（授权默认全关）。"""
+    import src.llm_agent.processor as proc_mod
+
+    monkeypatch.setattr(proc_mod.cfg, "mcp_connectors_enabled", True)
+    monkeypatch.setattr(
+        "src.llm_agent.preprocess_config.get_preprocess_connector_grants", lambda: []
+    )
+    client = _RecordingClient()
+    p = _connector_processor(monkeypatch, client)
+    asyncio.run(p.process_email(_fake_email()))
+    assert len(client.classify_calls) == 1 and not client.loop_calls
+
+
+def test_classification_opt_in_uses_tool_loop_with_read_ceiling(monkeypatch):
+    """opt-in：走 run_tool_loop（classify_email 仍是终止工具）+ 天花板恒 read + header 换掉。"""
+    import src.llm_agent.processor as proc_mod
+
+    monkeypatch.setattr(proc_mod.cfg, "mcp_connectors_enabled", True)
+    monkeypatch.setattr(
+        "src.llm_agent.preprocess_config.get_preprocess_connector_grants",
+        lambda: [("notion", "read")],
+    )
+    seen = {}
+
+    def _fake_factory(grants, **kw):
+        seen["grants"] = list(grants)
+        return (
+            [{"name": "mcp__notion__search", "description": "d",
+              "input_schema": {"type": "object", "properties": {}}}],
+            {"mcp__notion__search": lambda inp: "ok"},
+        )
+
+    monkeypatch.setattr(
+        "src.connectors.llm_tools.build_connector_llm_tools", _fake_factory
+    )
+    client = _RecordingClient()
+    p = _connector_processor(monkeypatch, client)
+    labels = asyncio.run(p.process_email(_fake_email()))
+
+    assert seen["grants"] == [("notion", "read")]  # 🔴 天花板恒 read
+    assert not client.classify_calls and len(client.loop_calls) == 1
+    call = client.loop_calls[0]
+    assert call["final_tool"] == "classify_email"
+    assert [t["name"] for t in call["tools"]] == ["mcp__notion__search", "classify_email"]
+    assert call["max_iter"] == proc_mod._PREPROCESS_TOOL_MAX_ITER
+    header = call["system_blocks"][0]["text"]
+    assert "Never call any other tool" not in header  # 与「可以先查」矛盾的那句必须换掉
+    assert "UNTRUSTED_MCP_TOOL" in header
+    # loop 的 token/model 如实落进 AILabels（_parse 契约不变）。
+    assert labels.input_tokens == 7 and labels.model == "m2"
+
+
+def test_classification_factory_failure_falls_back_to_single_shot(monkeypatch):
+    """工厂炸了（库不可用等）→ 吞成空工具集，分类照常完成，不阻断。"""
+    import src.llm_agent.processor as proc_mod
+
+    monkeypatch.setattr(proc_mod.cfg, "mcp_connectors_enabled", True)
+    monkeypatch.setattr(
+        "src.llm_agent.preprocess_config.get_preprocess_connector_grants",
+        lambda: [("notion", "read")],
+    )
+    monkeypatch.setattr(
+        "src.connectors.llm_tools.build_connector_llm_tools",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("db gone")),
+    )
+    client = _RecordingClient()
+    p = _connector_processor(monkeypatch, client)
+    labels = asyncio.run(p.process_email(_fake_email()))
+    assert labels.category == "💼 产品管理"
+    assert len(client.classify_calls) == 1 and not client.loop_calls

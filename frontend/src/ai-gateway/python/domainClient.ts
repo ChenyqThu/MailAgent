@@ -1246,17 +1246,32 @@ export class MailAgentDomainClient {
 
   /** Invoke one connector tool through the serve-api MCP call proxy (whitelist-gated server-side:
    *  unsynced/orphan/delete/disabled names never reach the remote; the result is already truncated
-   *  to CALL_RESULT_MAX_CHARS). POST /connector/{id}/tools/{name}/invoke. */
+   *  to CALL_RESULT_MAX_CHARS). POST /connector/{id}/tools/{name}/invoke.
+   *  `caller` (PR3) — the invocation provenance the gateway ALWAYS sends (manual →
+   *  {context_mode:'manual_chat'}; headless → the actual mode + agent_id). 🔴 This is NOT a mere
+   *  audit annotation: Python's `resolve_caller_ceiling` gates on it (manual → no ceiling, byte
+   *  identical to PR2; headless → re-reads that agent's grant_connectors and denies 403 without a
+   *  grant or above the ceiling; any other venue → hard deny; bad shape → 400). Sending a wrong /
+   *  missing mode therefore CHANGES authorization — the gateway matrix + registration filter are
+   *  the FIRST belt, this wire field is what lets the second one exist server-side. */
   invokeConnectorTool(
     connectorId: string,
     toolName: string,
     args: Record<string, unknown> | undefined,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    caller?: { contextMode: string; agentId?: string }
   ): Promise<DomainConnectorInvokeResult> {
+    const body: Record<string, unknown> = { arguments: args ?? {} }
+    if (caller) {
+      body.caller = {
+        context_mode: caller.contextMode,
+        ...(caller.agentId !== undefined ? { agent_id: caller.agentId } : {})
+      }
+    }
     return this._req<DomainConnectorInvokeResult>(
       'POST',
       `/connector/${encodeURIComponent(connectorId)}/tools/${encodeURIComponent(toolName)}/invoke`,
-      { body: { arguments: args ?? {} }, signal }
+      { body, signal }
     )
   }
 

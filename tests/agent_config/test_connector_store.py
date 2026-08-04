@@ -228,3 +228,58 @@ def test_effective_enabled_resolution():
     # 🔴 delete 恒 False —— 任何 override 压不开（读侧防御纵深；写侧已拒）。
     assert connector_tool_effective_enabled("delete", None) is False
     assert connector_tool_effective_enabled("delete", True) is False
+
+
+# ── 分类侧独立授权位（PR3 坑 3）──────────────────────────────────────────────────
+
+
+def test_preprocess_enabled_defaults_off_and_roundtrips(tmp_path):
+    """默认 0（分类侧默认拿不到任何 connector）；置位可读回、可关回。"""
+    st = _store(tmp_path)
+    st.upsert_connector(CID, server_url="https://x")
+    assert st.get_connector(CID).preprocess_enabled is False  # 默认关 = inert
+
+    st.set_connector_preprocess_enabled(CID, True)
+    assert st.get_connector(CID).preprocess_enabled is True
+    assert st.list_connectors()[0].preprocess_enabled is True
+
+    st.set_connector_preprocess_enabled(CID, False)
+    assert st.get_connector(CID).preprocess_enabled is False
+
+
+def test_preprocess_enabled_unknown_connector_raises(tmp_path):
+    st = _store(tmp_path)
+    with pytest.raises(KeyError):
+        st.set_connector_preprocess_enabled("ghost", True)
+
+
+def test_preprocess_enabled_column_added_to_pre_pr3_db(tmp_path):
+    """幂等加列迁移：PR1/PR2 老库（connector 无 preprocess_enabled 列）重开即补列，默认关。"""
+    import sqlite3
+
+    db = str(tmp_path / "agent_config.db")
+    _store(tmp_path)  # 先建新库拿到其余表
+    conn = sqlite3.connect(db)
+    conn.execute("DROP TABLE connector")
+    conn.execute(
+        "CREATE TABLE connector ("
+        " connector_id TEXT PRIMARY KEY, server_url TEXT NOT NULL,"
+        " transport TEXT NOT NULL DEFAULT 'streamable_http', display_name TEXT,"
+        " status TEXT NOT NULL DEFAULT 'disconnected', enabled INTEGER NOT NULL DEFAULT 1,"
+        " scopes_json TEXT, last_error TEXT, last_synced_at INTEGER,"
+        " created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL)"
+    )
+    conn.execute(
+        "INSERT INTO connector (connector_id, server_url, created_at, updated_at)"
+        " VALUES (?,?,1,1)",
+        (CID, "https://x"),
+    )
+    conn.commit()
+    conn.close()
+
+    st2 = AgentConfigStore(db)  # 开库即迁移（_migrate_additive）
+    assert st2.get_connector(CID).preprocess_enabled is False  # 老行回填默认 0
+    st2.set_connector_preprocess_enabled(CID, True)
+    assert st2.get_connector(CID).preprocess_enabled is True
+    # 重开幂等（不重复 ALTER）。
+    assert AgentConfigStore(db).get_connector(CID).preprocess_enabled is True

@@ -967,6 +967,14 @@
       "skillsDefault": "默认（email、search、report）",
       "skillsNone": "无",
       "newSkills": "新挂载：{skills}",
+      "connectors": "外部服务",
+      "connectorsNone": "无",
+      "connectorCeiling": {
+        "read": "只读",
+        "write": "读 + 新建",
+        "update": "读 + 新建 + 修改"
+      },
+      "connectorsWarn": "新增外部服务授权（{grants}）：该 agent 后台运行可免审批调用该服务。只读授权覆盖**整个**工作区；新建/修改会真的改动服务端数据。",
       "execWarn": "开启本机执行：该 agent 后台运行可注册本机执行工具（每次执行仍需白名单规则或人工批准）。",
       "webOpenWarn": "全开放联网：该 agent 后台可免审批访问任意 URL（含把邮件内容编码进 URL 外发的风险），web_search 也将免审批。",
       "webGatedNote": "域名白名单联网：web_fetch 仅命中你建立的域名规则才免审批；web_search 将免审批放行。",

@@ -424,10 +424,24 @@ _SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 # 冻结清单（S4 现状, ADR-003 §12「路径 B 冻结兑现」）：
 #   - 定义: src/llm_agent/client.py（LLMClient.run_tool_loop 本体）
 #   - 调用方: src/reports/summarizer.py（report agent 唯一既有消费面, D1「冻结不扩权」）
+#     + src/llm_agent/processor.py（邮件预处理分类, MCP connector PR3 —— 见下）
 # custom agent 的执行只允许走 gateway 路径 C（prepareChatRun, 有审批/围栏/矩阵）。要给
 # run_tool_loop 加新调用方 = 绕过审批门的架构决定, 必须先改 ADR 再改这份清单。
+#
+# 🔴 processor.py 这一项是**有决策来源的扩项**, 不是顺手加的（08-01 MCP connector task
+# PRD 决策 8 + grill Q4=A: 邮件预处理分类是 connector 的第四个调用方; PRD「坑 3」逐条写了
+# lethal trifecta 与收紧手段）。它**不**构成「第二套 custom agent 运行时」——冻结要防的正是
+# 那个 —— 因为四条性质都被结构钉死, 缺一即该重新审这条:
+#   1. 单一固定用途（分类一封邮件, final_tool 恒 classify_email）, 不接受任意 taskPrompt;
+#   2. 工具集**只可能是 read 类** connector 工具（llm_tools 工厂 + PREPROCESS_CONNECTOR_CEILING
+#      硬编码 'read'）, 没有写工具 ⇒ 没有该被审批却没审批的动作;
+#   3. 授权面独立且默认关（connector.preprocess_enabled, owner 逐个 opt-in）,
+#      灰度开关 MAILAGENT_MCP_CONNECTORS 默认 off ⇒ 默认态与本 task 前逐字节相同;
+#   4. 服务端二道闸（connectors/service.invoke_connector_tool）与 gateway 面同一份, 且
+#      返回内容套 UNTRUSTED_MCP_TOOL 围栏。
+# 再要加调用方, 同样标准: 先有决策来源, 且逐条说明它为什么不是「绕开审批门的 agent 运行时」。
 _FROZEN_DEFINITIONS = {"src/llm_agent/client.py"}
-_FROZEN_CALLERS = {"src/reports/summarizer.py"}
+_FROZEN_CALLERS = {"src/reports/summarizer.py", "src/llm_agent/processor.py"}
 
 _CALL_RE = re.compile(r"\.\s*run_tool_loop\s*\(")
 _DEF_RE = re.compile(r"def\s+run_tool_loop\s*\(")

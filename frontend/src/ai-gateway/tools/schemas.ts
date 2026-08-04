@@ -636,6 +636,23 @@ export type CustomAgentGetInput = z.infer<typeof customAgentGetSchema>
  *  card-free. Proposing 'gated'/'open' is allowed — the approval card renders it red ('open'). */
 export const customAgentWebGrantSchema = z.enum(['off', 'gated', 'open'])
 
+/** The per-connector crud ceiling (MCP connector epic, harness-expansion stage 1 PR3 / grill
+ *  Q3=B): read < write < update. 'delete' is NOT a legal ceiling — the value domain itself is the
+ *  guard, not owner discipline: a connector's delete-crud tools are structurally unreachable by
+ *  the AI regardless of what is granted (Q16=A). Mirrors ConnectorGrant in tools/policy.ts. */
+export const customAgentConnectorGrantSchema = z.enum(['read', 'write', 'update'])
+
+/** grant_connectors — per-connector crud ceiling map (MCP connector epic PR3). Keys are connector
+ *  ids; a connector ABSENT from this map is not authorized for this agent (its tools never
+ *  register, headless or otherwise). Passing `{}` clears every connector grant. Server-side is
+ *  the validation authority (parse_tool_policy) — a bad value (incl. "delete") is rejected 400,
+ *  never silently dropped. */
+export const customAgentConnectorGrantsSchema = z.record(
+  z.string().min(1),
+  customAgentConnectorGrantSchema
+)
+export type CustomAgentConnectorGrantsInput = z.infer<typeof customAgentConnectorGrantsSchema>
+
 const customAgentEmailCapabilitySchema = z.enum(['read', 'organize', 'draft'])
 const customAgentCalendarCapabilitySchema = z.enum(['off', 'read', 'write'])
 const customAgentToggleCapabilitySchema = z.enum(['off', 'on'])
@@ -666,11 +683,12 @@ function rejectMixedCapabilityVocabulary(
     allowed_tools?: unknown
     grant_exec?: unknown
     grant_web?: unknown
+    grant_connectors?: unknown
   },
   ctx: z.RefinementCtx
 ): void {
   if (input.capabilities === undefined) return
-  for (const field of ['allowed_tools', 'grant_exec', 'grant_web'] as const) {
+  for (const field of ['allowed_tools', 'grant_exec', 'grant_web', 'grant_connectors'] as const) {
     if (input[field] !== undefined) {
       ctx.addIssue({
         code: 'custom',
@@ -682,9 +700,10 @@ function rejectMixedCapabilityVocabulary(
 }
 
 /** custom_agent_create — propose a new custom agent (edit-tier write). ALLOWLIST: title / prompt /
- *  model / enabled / trigger / allowed_tools / budget + (rev3.1 §7) grant_exec / grant_web / skills.
- *  `.strict()` rejects any other key — tool_policy / policy_rules stay structurally out: the model
- *  may propose grants (surfaced red on the mandatory approval card) but has NO rule-creation path. */
+ *  model / enabled / trigger / allowed_tools / budget + (rev3.1 §7) grant_exec / grant_web / skills
+ *  + (MCP connector epic PR3) grant_connectors. `.strict()` rejects any other key — tool_policy /
+ *  policy_rules stay structurally out: the model may propose grants (surfaced red on the
+ *  mandatory approval card) but has NO rule-creation path. */
 export const customAgentCreateSchema = z
   .object({
     id: z.string().min(1).max(128),
@@ -698,7 +717,8 @@ export const customAgentCreateSchema = z
     budget: customAgentBudgetSchema.nullable().optional(),
     grant_exec: z.boolean().optional(),
     grant_web: customAgentWebGrantSchema.optional(),
-    skills: z.array(z.string().min(1).max(64)).max(32).optional()
+    skills: z.array(z.string().min(1).max(64)).max(32).optional(),
+    grant_connectors: customAgentConnectorGrantsSchema.optional()
   })
   .strict()
   .superRefine(rejectMixedCapabilityVocabulary)
@@ -721,7 +741,8 @@ export const customAgentUpdateSchema = z
     budget: customAgentBudgetSchema.nullable().optional(),
     grant_exec: z.boolean().optional(),
     grant_web: customAgentWebGrantSchema.optional(),
-    skills: z.array(z.string().min(1).max(64)).max(32).optional()
+    skills: z.array(z.string().min(1).max(64)).max(32).optional(),
+    grant_connectors: customAgentConnectorGrantsSchema.optional()
   })
   .strict()
   .superRefine(rejectMixedCapabilityVocabulary)

@@ -489,20 +489,23 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // TTL-cached connector tool manifest (loopback pulls stay OFF the request path — buildTools is
   // synchronous). A fetch failure caches null = no connector tools (silent degradation, warned in
   // fetchConnectorManifest); the background refresh below re-tries after the TTL.
+  // PR3 — the refresh now RETURNS its in-flight promise (single-flight): manual turns keep
+  // fire-and-forgetting it (void), while cfg.ensureConnectorManifest below AWAITS it so a
+  // one-shot headless run with connector grants never builds tools off an empty cold cache.
   const CONNECTOR_MANIFEST_TTL_MS = 30_000
   let _connectorManifestCache: { at: number; value: ConnectorToolManifestEntry[] | null } | null =
     null
-  let _connectorManifestInflight = false
-  const refreshConnectorManifest = (): void => {
-    if (!mcpConnectorsEnabled || _connectorManifestInflight) return
+  let _connectorManifestPromise: Promise<void> | null = null
+  const refreshConnectorManifest = (): Promise<void> => {
+    if (!mcpConnectorsEnabled) return Promise.resolve()
+    if (_connectorManifestPromise) return _connectorManifestPromise
     if (
       _connectorManifestCache &&
       Date.now() - _connectorManifestCache.at < CONNECTOR_MANIFEST_TTL_MS
     ) {
-      return
+      return Promise.resolve()
     }
-    _connectorManifestInflight = true
-    void fetchConnectorManifest(domain)
+    _connectorManifestPromise = fetchConnectorManifest(domain)
       .then((value) => {
         _connectorManifestCache = { at: Date.now(), value }
       })
@@ -511,12 +514,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         _connectorManifestCache = { at: Date.now(), value: null }
       })
       .finally(() => {
-        _connectorManifestInflight = false
+        _connectorManifestPromise = null
       })
+    return _connectorManifestPromise
   }
   // Prewarm once (fire-and-forget — a slow serve-api must never block gateway startup; the first
   // manual turn before the prewarm lands simply has no connector tools yet).
-  refreshConnectorManifest()
+  void refreshConnectorManifest()
   // S4 W3 — MAILAGENT_CUSTOM_AGENTS_ENABLED gates the headless custom-agent fresh-spawn endpoint
   // (POST /api/ai/agent-run): its two cfg hooks (fetchAgentRunSpec + createAgentSession) are wired
   // only when on → an explicit env false → the endpoint 404s, byte-identical to S3. This wave adds
@@ -815,20 +819,36 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // request body (default 'always'); 'auto-reversible' lets reversible preview writes skip the
     // card. The blocking send always asks regardless (safety floor in auditedSendTool).
     buildTools: (collector, approvalMode, contextMode, agentRunContext) => {
-      // Stage 1 PR2 — dynamic MCP connector tools, manual_chat-ONLY (shouldLoadConnectorTools:
-      // flag on + server-asserted manual mode + no agentRunContext — the headless path performs
-      // ZERO connector work, not "fetch then deny"). The ToolSet is built synchronously from the
-      // TTL cache; refresh happens in the background so the NEXT turn sees manifest changes.
+      // Stage 1 PR2/PR3 — dynamic MCP connector tools. Two admitted shapes (shouldLoadConnectorTools):
+      // manual_chat without an agentRunContext (PR2, unchanged), and a headless agent run whose
+      // per-agent connector grants parse non-empty (PR3 — grant 外的 headless run performs ZERO
+      // connector work, not "fetch then deny"). The ToolSet is built synchronously from the TTL
+      // cache; manual turns refresh in the background (the NEXT turn sees manifest changes), and
+      // the one-shot headless path pre-warms the cache via cfg.ensureConnectorManifest below
+      // BEFORE buildTools runs, so the cold-cache read here is populated.
       let dynamicTools: ToolSet | undefined
-      if (shouldLoadConnectorTools(mcpConnectorsEnabled, contextMode, agentRunContext != null)) {
-        refreshConnectorManifest()
+      const connectorGrants = agentRunContext?.modeGrants?.connectors
+      if (
+        shouldLoadConnectorTools(
+          mcpConnectorsEnabled,
+          contextMode,
+          agentRunContext != null,
+          connectorGrants
+        )
+      ) {
+        void refreshConnectorManifest()
         const manifest = _connectorManifestCache?.value
         if (manifest && manifest.length > 0) {
           dynamicTools = createConnectorTools(domain, collector, approvalGuard, manifest, {
             a2uiEnabled,
             approvalMode,
             oneShot: serverResumeEnabled,
-            contextMode
+            contextMode,
+            // PR3 — headless only: the per-connector ceilings + the caller agent id (manual runs
+            // carry no context → both absent → PR2 byte-identical).
+            ...(agentRunContext != null
+              ? { connectorGrants, agentId: agentRunContext.agentId }
+              : {})
           })
         }
       }
@@ -977,7 +997,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
             return null
           }
         }
-      : undefined
+      : undefined,
+    // Stage 1 PR3 — BOUNDED connector-manifest warm-up for a headless run with connector grants
+    // (runHeadlessAgent awaits it before building tools; the fire-and-forget TTL cache alone would
+    // let a one-shot cron run read an empty cold cache and silently miss its granted tools).
+    // Single-flight + fresh-cache short-circuit inside refreshConnectorManifest; the fetch is
+    // 3s-bounded per request and never throws. Flag off → unwired → zero work, byte-identical.
+    ensureConnectorManifest: mcpConnectorsEnabled ? () => refreshConnectorManifest() : undefined
   })
   _handle = handle
   gatewayPort = handle.port // Part B — now the announce closure can stamp our port on /decide callbacks

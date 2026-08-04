@@ -1,18 +1,22 @@
-// Stage 1 PR2 (harness-expansion epic) — MCP connector dynamic tools: naming, manifest fetch
-// degradation, registration rules, runtime class fail-closed matrix, headless zero-call seam.
+// Stage 1 PR2+PR3 (harness-expansion epic) — MCP connector dynamic tools: naming, manifest fetch
+// degradation, registration rules, runtime class matrix, headless grant path.
 //
-// Pins (task 08-01 PR2 contract):
+// Pins (task 08-01 PR2 contract + PR3 grant key):
 //   1. name mapping (mcpToolName.ts — the ONE source both gateway + renderer card consume);
 //   2. fetchConnectorManifest NEVER throws: list failure → null (silent degradation), a single
 //      connector's tools failure skips just that connector;
 //   3. createConnectorTools registration rules: enabled+non-orphan+non-delete only, read→'read',
 //      write/update→'connector_write', unknown crud skipped, static-name collision skipped;
-//   4. connector_write is fail-closed in the matrix: manual only, DENIED in every non-manual mode
-//      under ANY grants (the PR3 grant key does not exist yet — 漏配即 deny);
-//   5. shouldLoadConnectorTools — the manual-chat-only seam (headless = zero calls, not
-//      fetch-then-deny);
+//   4. connector_write matrix row (PR3): manual always; headless lifted ONLY by a real
+//      `connectors` grant with a write-capable ceiling — every junk/forged shape still denies;
+//      im_chat denies under any grants;
+//   5. shouldLoadConnectorTools — the ONE load seam: manual chat (no agentRunContext), or a
+//      headless run whose connector grants parse non-empty; everything else = zero calls;
 //   6. read results are UNTRUSTED_MCP_TOOL-fenced + truncation surfaced; write tools register the
-//      approval record (edit tier) and never执行 without the guard.
+//      approval record (edit tier) and never执行 without the guard;
+//   7. PR3 headless semantics: grant 内免卡直接执行 (audit auto_whitelist + rule_id null),
+//      grant 外根本不注册 (connector absent / above-ceiling tools are never built), and the
+//      invoke wire carries the caller annotation (mode + agent_id).
 
 import { afterEach, describe, expect, test } from 'vitest'
 
@@ -199,9 +203,12 @@ describe('createConnectorTools — registration rules', () => {
   })
 })
 
-// ── 4. matrix fail-closed for connector_write ──────────────────────────────────
+// ── 4. matrix — connector_write row is grants-aware (PR3), fail-closed for every junk shape ─────
 
-describe('connector_write — fail-closed in every non-manual mode (PR3 grant does not exist)', () => {
+describe('connector_write matrix row — PR3 grant key, fail-closed against junk', () => {
+  /** Junk / forged / insufficient grant shapes that must ALL deny connector_write headless: the
+   *  pre-PR3 shapes, wrong keys, the retired forged keys, 'read'-only ceilings (write not
+   *  covered), 'delete'/'yes' junk values, empty keys, and non-object connectors. */
   const JUNK_GRANTS: Array<AgentModeGrants | undefined> = [
     undefined,
     {},
@@ -209,10 +216,18 @@ describe('connector_write — fail-closed in every non-manual mode (PR3 grant do
     { web: 'open' },
     { exec: true, web: 'open' },
     { connector: 'write' } as unknown as AgentModeGrants,
-    { connector_write: true } as unknown as AgentModeGrants
+    { connector_write: true } as unknown as AgentModeGrants,
+    { connectors: {} },
+    { connectors: { notion: 'read' } },
+    { connectors: { notion: 'delete' } } as unknown as AgentModeGrants,
+    { connectors: { notion: 'yes' } } as unknown as AgentModeGrants,
+    { connectors: { notion: true } } as unknown as AgentModeGrants,
+    { connectors: { '': 'write' } },
+    { connectors: 'write' } as unknown as AgentModeGrants,
+    { connectors: ['write'] } as unknown as AgentModeGrants
   ]
 
-  test('manual allowed; untrusted_trigger / cron_headless / im_chat denied under ANY grants', () => {
+  test('manual allowed; headless/im_chat denied under every junk/insufficient grant shape', () => {
     expect(isToolClassAllowedInMode('connector_write', 'manual_chat')).toBe(true)
     for (const mode of ['untrusted_trigger', 'cron_headless', 'im_chat'] as const) {
       for (const grants of JUNK_GRANTS) {
@@ -224,23 +239,42 @@ describe('connector_write — fail-closed in every non-manual mode (PR3 grant do
     }
   })
 
-  test('assembled connector write tool is stripped from a headless ToolSet even via dynamicTools', () => {
+  test('a write-capable ceiling lifts the headless rows; im_chat stays hard-denied', () => {
+    for (const grants of [
+      { connectors: { notion: 'write' } },
+      { connectors: { notion: 'update' } },
+      { connectors: { a: 'read', b: 'write' } } // ANY write-capable ceiling lifts the class row
+    ] as AgentModeGrants[]) {
+      for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
+        expect(
+          isToolClassAllowedInMode('connector_write', mode, grants),
+          `${mode} × ${JSON.stringify(grants)}`
+        ).toBe(true)
+      }
+      expect(isToolClassAllowedInMode('connector_write', 'im_chat', grants)).toBe(false)
+    }
+  })
+
+  test('no-grants headless ToolSet strips a (manually-built) connector write even via dynamicTools', () => {
     const manifest = [
       entry({ toolName: 'notion-update-page', crudType: 'write', destructive: true })
     ]
     const collector: GatewayToolAuditCollector = []
     const domain = mockDomain(() => okEnvelope({}))
     const name = 'mcp__notion__notion_update_page'
+    // Build under MANUAL (so the tool exists + its runtime class is registered), then force-feed
+    // it into non-manual assemblies WITHOUT connector grants: the matrix must strip it even when
+    // exec/web grants are present (they lift ONLY their own rows).
+    const manualDynamic = createConnectorTools(domain, collector, new ApprovalGuard(), manifest, {
+      contextMode: 'manual_chat'
+    })
     for (const mode of ['untrusted_trigger', 'cron_headless', 'im_chat'] as const) {
-      const dynamicTools = createConnectorTools(domain, collector, new ApprovalGuard(), manifest, {
-        contextMode: mode
-      })
       const built = buildGatewayTools({
         domain,
         writeToolsEnabled: true,
         approvalGuard: new ApprovalGuard(),
         contextMode: mode,
-        dynamicTools,
+        dynamicTools: manualDynamic,
         ...(mode !== 'im_chat'
           ? {
               agentRunContext: {
@@ -254,9 +288,6 @@ describe('connector_write — fail-closed in every non-manual mode (PR3 grant do
       expect(built[name], `${name} must be stripped in ${mode}`).toBeUndefined()
     }
     // manual: registered.
-    const manualDynamic = createConnectorTools(domain, collector, new ApprovalGuard(), manifest, {
-      contextMode: 'manual_chat'
-    })
     const manual = buildGatewayTools({
       domain,
       writeToolsEnabled: true,
@@ -267,11 +298,42 @@ describe('connector_write — fail-closed in every non-manual mode (PR3 grant do
     expect(manual[name]).toBeDefined()
   })
 
-  test('a registered connector READ tool rides the read row (registers even headless when fed)', () => {
+  test('granted headless ToolSet admits BOTH the read and the write connector tool end-to-end', () => {
+    const manifest = [
+      entry(), // read
+      entry({ toolName: 'notion-update-page', crudType: 'write' })
+    ]
+    const domain = mockDomain(() => okEnvelope({}))
+    for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
+      resetRuntimeToolClasses()
+      const dynamicTools = createConnectorTools(domain, [], new ApprovalGuard(), manifest, {
+        contextMode: mode,
+        connectorGrants: { notion: 'write' },
+        agentId: 'dms'
+      })
+      const built = buildGatewayTools({
+        domain,
+        writeToolsEnabled: true,
+        approvalGuard: new ApprovalGuard(),
+        contextMode: mode,
+        dynamicTools,
+        agentRunContext: {
+          agentId: 'dms',
+          allowedTools: [],
+          modeGrants: { exec: false, web: 'off', connectors: { notion: 'write' } }
+        }
+      })
+      expect(built.mcp__notion__notion_fetch, `read tool in ${mode}`).toBeDefined()
+      expect(built.mcp__notion__notion_update_page, `write tool in ${mode}`).toBeDefined()
+    }
+  })
+
+  test('a registered connector READ tool rides the read row (matrix pin — the seam + grant filter are the real guards)', () => {
     const manifest = [entry()]
     const domain = mockDomain(() => okEnvelope({}))
+    // Built under manual → registered; force-fed into a headless assembly the READ row admits it.
     const dynamicTools = createConnectorTools(domain, [], new ApprovalGuard(), manifest, {
-      contextMode: 'cron_headless'
+      contextMode: 'manual_chat'
     })
     const built = buildGatewayTools({
       domain,
@@ -279,26 +341,115 @@ describe('connector_write — fail-closed in every non-manual mode (PR3 grant do
       contextMode: 'cron_headless',
       dynamicTools
     })
-    // The CLASS row would admit it — the PR2 guarantee that headless never sees connector tools
-    // lives in the shouldLoadConnectorTools seam (zero fetch), pinned below.
     expect(built.mcp__notion__notion_fetch).toBeDefined()
   })
 })
 
-// ── 5. the manual-chat-only load seam (headless = zero calls) ──────────────────
+// ── 4b. PR3 — headless registration filter (grant 外根本不注册) ─────────────────
+
+describe('createConnectorTools — headless per-connector grant filter', () => {
+  const MANIFEST = [
+    entry(), // read
+    entry({ toolName: 'notion-create-pages', crudType: 'write' }),
+    entry({ toolName: 'notion-move-pages', crudType: 'update' }),
+    entry({ toolName: 'notion-delete-page', crudType: 'delete' }), // never, any ceiling
+    entry({ toolName: 'notion-purge', crudType: 'purge' }), // unknown crud — never
+    entry({ connectorId: 'atlassian', connectorName: 'Jira', toolName: 'jira-get-issue' })
+  ]
+
+  function headlessBuild(grants: Record<string, 'read' | 'write' | 'update'> | undefined) {
+    const domain = mockDomain(() => okEnvelope({}))
+    return createConnectorTools(domain, [], new ApprovalGuard(), MANIFEST, {
+      contextMode: 'cron_headless',
+      connectorGrants: grants,
+      agentId: 'dms'
+    })
+  }
+
+  test('ceiling read → only the read tool of the granted connector registers', () => {
+    expect(Object.keys(headlessBuild({ notion: 'read' })).sort()).toEqual([
+      'mcp__notion__notion_fetch'
+    ])
+  })
+
+  test('ceiling write → read + write register; update stays above the ceiling', () => {
+    expect(Object.keys(headlessBuild({ notion: 'write' })).sort()).toEqual([
+      'mcp__notion__notion_create_pages',
+      'mcp__notion__notion_fetch'
+    ])
+  })
+
+  test('ceiling update → read + write + update register; delete/unknown cruds STILL never', () => {
+    expect(Object.keys(headlessBuild({ notion: 'update' })).sort()).toEqual([
+      'mcp__notion__notion_create_pages',
+      'mcp__notion__notion_fetch',
+      'mcp__notion__notion_move_pages'
+    ])
+  })
+
+  test('a connector absent from the grants registers NOTHING (whole family skipped)', () => {
+    expect(Object.keys(headlessBuild({ atlassian: 'update' })).sort()).toEqual([
+      'mcp__atlassian__jira_get_issue'
+    ])
+    expect(Object.keys(headlessBuild(undefined))).toEqual([])
+  })
+
+  test('junk grant entries are dropped per-entry (fail-closed re-parse inside the factory)', () => {
+    expect(
+      Object.keys(
+        headlessBuild({ notion: 'delete', atlassian: 'read' } as unknown as Record<
+          string,
+          'read' | 'write' | 'update'
+        >)
+      ).sort()
+    ).toEqual(['mcp__atlassian__jira_get_issue'])
+  })
+
+  test('manual (connectorGrants undefined) keeps the PR2 registration byte-identical', () => {
+    const domain = mockDomain(() => okEnvelope({}))
+    const tools = createConnectorTools(domain, [], new ApprovalGuard(), MANIFEST, {
+      contextMode: 'manual_chat'
+    })
+    expect(Object.keys(tools).sort()).toEqual([
+      'mcp__atlassian__jira_get_issue',
+      'mcp__notion__notion_create_pages',
+      'mcp__notion__notion_fetch',
+      'mcp__notion__notion_move_pages'
+    ])
+  })
+})
+
+// ── 5. the load seam (manual chat, or a granted headless run) ──────────────────
 
 describe('shouldLoadConnectorTools — the ONE seam', () => {
-  test('true ONLY for flag on + manual_chat + no agentRunContext', () => {
+  test('manual shape: flag on + manual_chat + no agentRunContext (PR2, unchanged)', () => {
     expect(shouldLoadConnectorTools(true, 'manual_chat', false)).toBe(true)
     // flag off → never
     expect(shouldLoadConnectorTools(false, 'manual_chat', false)).toBe(false)
-    // headless / im / unknown modes → never
-    expect(shouldLoadConnectorTools(true, 'untrusted_trigger', false)).toBe(false)
-    expect(shouldLoadConnectorTools(true, 'cron_headless', false)).toBe(false)
+    // im / unknown modes → never
     expect(shouldLoadConnectorTools(true, 'im_chat', false)).toBe(false)
     expect(shouldLoadConnectorTools(true, undefined, false)).toBe(false)
     // a manual-looking run that carries an agentRunContext → never
     expect(shouldLoadConnectorTools(true, 'manual_chat', true)).toBe(false)
+  })
+
+  test('headless shape (PR3): flag on + headless mode + agentRunContext + NON-EMPTY parsed grants', () => {
+    for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
+      expect(shouldLoadConnectorTools(true, mode, true, { notion: 'read' })).toBe(true)
+      expect(shouldLoadConnectorTools(true, mode, true, { notion: 'write' })).toBe(true)
+      // no grants / empty / junk-only grants → zero calls (the PR2 headless behaviour)
+      expect(shouldLoadConnectorTools(true, mode, true, undefined)).toBe(false)
+      expect(shouldLoadConnectorTools(true, mode, true, {})).toBe(false)
+      expect(shouldLoadConnectorTools(true, mode, true, { notion: 'delete' })).toBe(false)
+      expect(shouldLoadConnectorTools(true, mode, true, { notion: 'yes' })).toBe(false)
+      expect(shouldLoadConnectorTools(true, mode, true, { '': 'write' })).toBe(false)
+      // grants without an agentRunContext are incoherent → never
+      expect(shouldLoadConnectorTools(true, mode, false, { notion: 'read' })).toBe(false)
+      // flag off beats everything
+      expect(shouldLoadConnectorTools(false, mode, true, { notion: 'update' })).toBe(false)
+    }
+    // im_chat: grants are never a lift (the stage-2 IM opt-in is a switch, not a grant)
+    expect(shouldLoadConnectorTools(true, 'im_chat', true, { notion: 'update' })).toBe(false)
   })
 })
 
@@ -363,5 +514,106 @@ describe('connector tool execution', () => {
     expect(desc).toContain('UNTRUSTED_MCP_TOOL')
     expect(desc).toContain('DESTRUCTIVE')
     expect(desc).toContain('always asks')
+  })
+
+  test('manual invoke carries the caller annotation (context_mode only, no agent_id)', async () => {
+    let invokeBody: Record<string, unknown> | null = null
+    const domain = mockDomain((url, body) => {
+      if (/\/invoke$/.test(url)) {
+        invokeBody = body ? (JSON.parse(body) as Record<string, unknown>) : null
+        return okEnvelope({ content: 'ok', is_error: false, truncated: false })
+      }
+      return okEnvelope({})
+    })
+    const tools = createConnectorTools(domain, [], new ApprovalGuard(), [entry()], {
+      contextMode: 'manual_chat'
+    })
+    await runTool(tools.mcp__notion__notion_fetch, { id: 'p1' })
+    expect(invokeBody).toMatchObject({
+      arguments: { id: 'p1' },
+      caller: { context_mode: 'manual_chat' }
+    })
+    expect((invokeBody!.caller as Record<string, unknown>).agent_id).toBeUndefined()
+  })
+
+  // ── PR3 — headless 免卡 semantics (mirror of grant_web 'open': grant-level auto_allow) ──────
+
+  test('headless granted write tool: needsApproval resolves FALSE (no card) + audit auto_whitelist + rule_id NULL + caller carries mode/agent_id', async () => {
+    let invokeBody: Record<string, unknown> | null = null
+    const collector: GatewayToolAuditCollector = []
+    const guard = new ApprovalGuard()
+    const domain = mockDomain((url, body) => {
+      if (/\/invoke$/.test(url)) {
+        invokeBody = body ? (JSON.parse(body) as Record<string, unknown>) : null
+        return okEnvelope({ content: 'UPDATED', is_error: false, truncated: false })
+      }
+      return okEnvelope({})
+    })
+    const tools = createConnectorTools(
+      domain,
+      collector,
+      guard,
+      [entry({ toolName: 'notion-update-page', crudType: 'write' })],
+      { contextMode: 'cron_headless', connectorGrants: { notion: 'write' }, agentId: 'dms' }
+    )
+    const tool = tools.mcp__notion__notion_update_page
+    expect(tool).toBeDefined()
+    const needs = tool.needsApproval as (i: unknown, o: unknown) => boolean | Promise<boolean>
+    // grant 内免卡: the grant-level verdict resolves auto_allow → no card…
+    await expect(
+      Promise.resolve(needs({ page: 'x' }, { toolCallId: 'tc-h1', messages: [] }))
+    ).resolves.toBe(false)
+    // …but the approval record IS registered (execute's guard.verify still runs).
+    expect(guard.peek('tc-h1')?.risk).toBe('edit')
+    await (tool.execute as (i: unknown, o: unknown) => Promise<unknown>)(
+      { page: 'x' },
+      { toolCallId: 'tc-h1', messages: [] }
+    )
+    expect(collector).toHaveLength(1)
+    expect(collector[0].status).toBe('ok')
+    expect(collector[0].approvalStatus).toBe('auto_whitelist')
+    expect(collector[0].whitelistRuleId).toBeNull() // grant-source, distinct from a rule id
+    // the invoke wire carries the headless caller annotation
+    expect(invokeBody).toMatchObject({
+      caller: { context_mode: 'cron_headless', agent_id: 'dms' }
+    })
+    // and the description no longer promises a card that will never come (Q9=A product surface)
+    expect(String(tool.description)).not.toContain('always asks')
+    expect(String(tool.description)).toContain('pre-granted')
+  })
+
+  test('headless granted read tool executes silently and the manual write stays 恒 HITL (byte-parity)', async () => {
+    const collector: GatewayToolAuditCollector = []
+    const domain = mockDomain((url) =>
+      /\/invoke$/.test(url)
+        ? okEnvelope({ content: 'PAGE', is_error: false, truncated: false })
+        : okEnvelope({})
+    )
+    const headless = createConnectorTools(domain, collector, new ApprovalGuard(), [entry()], {
+      contextMode: 'untrusted_trigger',
+      connectorGrants: { notion: 'read' },
+      agentId: 'dms'
+    })
+    const out = (await runTool(headless.mcp__notion__notion_fetch, { id: 'p' })) as {
+      content: string
+    }
+    expect(out.content).toContain('UNTRUSTED_MCP_TOOL_START')
+    // manual write built in the SAME process still asks (PR2 parity — the grant path never
+    // leaks into manual assemblies).
+    resetRuntimeToolClasses()
+    const manual = createConnectorTools(
+      domain,
+      [],
+      new ApprovalGuard(),
+      [entry({ toolName: 'notion-update-page', crudType: 'write' })],
+      { contextMode: 'manual_chat' }
+    )
+    const needs = manual.mcp__notion__notion_update_page.needsApproval as (
+      i: unknown,
+      o: unknown
+    ) => boolean | Promise<boolean>
+    await expect(
+      Promise.resolve(needs({ p: 1 }, { toolCallId: 'tc-m1', messages: [] }))
+    ).resolves.toBe(true)
   })
 })

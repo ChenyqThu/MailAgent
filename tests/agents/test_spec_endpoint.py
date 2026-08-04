@@ -235,6 +235,48 @@ def test_spec_grant_web_projection(env, client):
     assert "grantWeb" not in d4["toolPolicy"] and "grantExec" not in d4["toolPolicy"]
 
 
+def test_spec_grant_connectors_projection(env, client):
+    """MCP connector PR3（PRD 决策 5 + grill Q3=B）：grantConnectors 镜像 grantWeb 的
+    「仅非默认值输出」—— 非空才投影为普通 object；缺省 / 显式 {} / 坏值（读侧宽容 →
+    未配置语义）键不出现。天花板恒 ∈ read|write|update（delete 保存时即拒）。"""
+    # 单 connector → 投影。
+    _seed_custom(env.store, agent_id="c_read", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"],
+                              "grant_connectors": {"notion": "read"}})
+    jid = _running_job(env.repo, agent_id="c_read", token="cr")
+    d = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "cr"}).json()["data"]
+    assert d["toolPolicy"] == {"allowedTools": ["email_get"],
+                               "grantConnectors": {"notion": "read"},
+                               "skills": _DEFAULT_SKILLS}
+
+    # 多 connector + 与 grantExec/grantWeb 并存。
+    _seed_custom(env.store, agent_id="c_multi", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": [], "grant_web": "open",
+                              "grant_connectors": {"notion": "write", "atlassian": "update"}})
+    jid2 = _running_job(env.repo, agent_id="c_multi", token="cm")
+    d2 = client.get(f"/api/agent-runs/{jid2}/spec", headers={"X-Claim-Token": "cm"}).json()["data"]
+    assert d2["toolPolicy"] == {"allowedTools": [], "grantWeb": "open",
+                                "grantConnectors": {"atlassian": "update", "notion": "write"},
+                                "skills": _DEFAULT_SKILLS}
+
+    # 显式 {} → 键不投影（与缺省同形状 = 无授权）。
+    _seed_custom(env.store, agent_id="c_empty", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"], "grant_connectors": {}})
+    jid3 = _running_job(env.repo, agent_id="c_empty", token="ce")
+    d3 = client.get(f"/api/agent-runs/{jid3}/spec", headers={"X-Claim-Token": "ce"}).json()["data"]
+    assert d3["toolPolicy"] == {"allowedTools": ["email_get"], "skills": _DEFAULT_SKILLS}
+
+    # 🔴 delete 天花板（保存闸之外手工入库）→ 读侧宽容整策略落未配置语义：默认安全集 + 零
+    # grant 投影。delete 绝不投影成授权（grill Q3=B 的读侧负例）。
+    _seed_custom(env.store, agent_id="c_del", trigger=_CRON,
+                 tool_policy={"v": 1, "allowed_tools": ["email_get"],
+                              "grant_connectors": {"notion": "delete"}})
+    jid4 = _running_job(env.repo, agent_id="c_del", token="cd")
+    d4 = client.get(f"/api/agent-runs/{jid4}/spec", headers={"X-Claim-Token": "cd"}).json()["data"]
+    assert "grantConnectors" not in d4["toolPolicy"]
+    assert d4["toolPolicy"]["allowedTools"] == list(agent_runs.DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS)
+
+
 def test_spec_skills_projection_four_states(env, client):
     """S6 W3（ADR-004 rev3.1 §5.1）：skills **恒输出**解析完的数组 —— 单源在 Python 投影，
     gateway 不手抄默认集。四态：NULL → 默认挂载集；显式 [] → []（零挂载 verbatim）；

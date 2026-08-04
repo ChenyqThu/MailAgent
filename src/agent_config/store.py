@@ -170,6 +170,9 @@ class ConnectorRow:
     last_synced_at: Optional[int]
     created_at: int
     updated_at: int
+    #: PR3：邮件预处理分类是否获授权用这个 connector（独立于 custom agent 的 grant_connectors；
+    #: 天花板恒 read，见 DDL 注释）。默认 False。
+    preprocess_enabled: bool = False
 
 
 @dataclass(frozen=True)
@@ -389,6 +392,10 @@ CREATE TABLE IF NOT EXISTS connector (
     display_name   TEXT,
     status         TEXT NOT NULL DEFAULT 'disconnected',  -- disconnected|authorizing|connected|error
     enabled        INTEGER NOT NULL DEFAULT 1,            -- connector 整体开关（PR2 门控整族注册）
+    -- PR3 坑 3：邮件预处理分类侧的**独立**授权位（不复用 custom agent 的 grant_connectors ——
+    -- 给 agent 配了 write 绝不能让分类侧跟着继承）。天花板不入库：分类侧恒 read，是「工厂只造
+    -- read 工具」的结构性保证（src/connectors/llm_tools.py），没有可配 write 的入口。默认 0=关。
+    preprocess_enabled INTEGER NOT NULL DEFAULT 0,
     scopes_json    TEXT,                   -- 授权拿到的 scope 列表（坑 1.5 透明展示，明文非敏感）
     last_error     TEXT,
     last_synced_at INTEGER,                -- 工具清单最后同步 epoch 秒
@@ -467,6 +474,13 @@ class AgentConfigStore:
         if ct_cols and "destructive" not in ct_cols:
             conn.execute(
                 "ALTER TABLE connector_tool ADD COLUMN destructive INTEGER NOT NULL DEFAULT 0"
+            )
+        # PR3 T3 — 已存在的旧 connector 表（建于 PR1/PR2）补分类侧授权位（默认 0 = 关，
+        # 升级后行为与升级前逐字节相同）。
+        c_cols = {r["name"] for r in conn.execute("PRAGMA table_info(connector)").fetchall()}
+        if c_cols and "preprocess_enabled" not in c_cols:
+            conn.execute(
+                "ALTER TABLE connector ADD COLUMN preprocess_enabled INTEGER NOT NULL DEFAULT 0"
             )
 
     # ======================================================================
@@ -1227,6 +1241,21 @@ class AgentConfigStore:
             "orphaned": orphaned,
         }
 
+    def set_connector_preprocess_enabled(self, connector_id: str, enabled: bool) -> None:
+        """分类侧独立授权开关（PR3 坑 3）。行不存在 → ``KeyError``（先连接再授权）。
+
+        🔴 这里**只有布尔**，没有天花板参数 —— 分类侧的 read 天花板是结构性的（工厂只造
+        read 类工具），不是一个可以配错的值。要给分类侧写权限得改代码，不是改配置。
+        """
+        with self._connection() as conn:
+            cur = conn.execute(
+                "UPDATE connector SET preprocess_enabled=?, updated_at=? WHERE connector_id=?",
+                (1 if enabled else 0, _now(), connector_id),
+            )
+            conn.commit()
+        if cur.rowcount == 0:
+            raise KeyError(f"connector not found: {connector_id}")
+
     def list_connector_tools(self, connector_id: str) -> list[ConnectorToolRow]:
         with self._connection() as conn:
             rows = conn.execute(
@@ -1587,6 +1616,7 @@ def _row_to_connector(row: sqlite3.Row) -> ConnectorRow:
         last_synced_at=row["last_synced_at"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        preprocess_enabled=bool(row["preprocess_enabled"]),
     )
 
 

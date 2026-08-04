@@ -967,6 +967,14 @@
       "skillsDefault": "Default (email, search, report)",
       "skillsNone": "None",
       "newSkills": "Newly mounted: {skills}",
+      "connectors": "External services",
+      "connectorsNone": "None",
+      "connectorCeiling": {
+        "read": "read",
+        "write": "read + create",
+        "update": "read + create + modify"
+      },
+      "connectorsWarn": "New external-service access ({grants}): this agent's background runs can call the connected service without an approval card. Read access covers the WHOLE workspace; write/modify changes data on the service side.",
       "execWarn": "Local execution on: this agent's background runs can register local exec tools (each execution still needs a whitelist rule or your approval).",
       "webOpenWarn": "Open web access: this agent's background runs can fetch ANY URL without approval (including the risk of exfiltrating email content encoded into URLs); web_search is also approval-free.",
       "webGatedNote": "Domain-whitelist web access: web_fetch skips approval only on domains you whitelisted; web_search runs approval-free.",

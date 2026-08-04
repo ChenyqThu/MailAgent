@@ -11,18 +11,22 @@
 //   - only `effective_enabled && !orphan && crud_type !== 'delete'` tools are registered (the
 //     endpoint already folds effective_enabled; this is the registration-side self-defense);
 //   - crud 'read'   → class 'read'   (silent tier — grill Q5=A: reads never ask);
-//   - crud 'write'/'update' → class 'connector_write' (edit tier, 恒 HITL in manual; the class
-//     fail-closes to DENY in every non-manual mode until the PR3 grant key — policy.ts);
+//   - crud 'write'/'update' → class 'connector_write' (edit tier, 恒 HITL in manual; headless it
+//     registers ONLY under the PR3 per-connector grant, and then executes 免卡 — policy.ts);
 //   - any other crud value (incl. 'delete') → skipped, never registered (Q16=A / Q3=B);
 //   - a name colliding with a static gateway tool or another dynamic tool → skipped + warning
 //     (registerRuntimeToolClass rejects static shadows; admitDynamicTools re-checks at assembly);
 //   - every registered tool gets a registerRuntimeToolClass entry BEFORE assembly — the stage-0b
 //     runtime classification gate refuses unclassified dynamic tools (坑 2).
 //
-// 🔴 Headless/custom-agent runs structurally never see connector tools in PR2: the lifecycle seam
-//    (shouldLoadConnectorTools) only fetches + builds them for a manual_chat run WITHOUT an
-//    agentRunContext — zero calls on the headless path, not "fetched then denied". The class
-//    matrix deny is the second belt behind that.
+// 🔴 Headless/custom-agent runs (stage 1 PR3, grill Q2): a run in untrusted_trigger/cron_headless
+//    reaches connector tools ONLY through its per-agent `grant_connectors` ({connector: ceiling},
+//    ceiling ∈ read<write<update — 'delete' unrepresentable). The semantics are grant 内免卡直接执行
+//    (grant-level auto_allow verdict, audit 'auto_whitelist' + rule_id null — mirror of grant_web
+//    'open'), grant 外根本不注册 (a connector absent from the grants, or a tool above the ceiling,
+//    is never built — NOT "register then ask": headless has no human to ask, a card would strand
+//    every run in paused_handoff). Runs without connector grants stay at ZERO connector fetches
+//    (the seam below); im_chat never loads them. The class matrix row is the belt behind this.
 //
 // 🔴 Untrusted fencing (安全红线): connector results are externally-authored (a Notion page any
 //    workspace collaborator can edit = a first-class injection surface). Every content string is
@@ -31,7 +35,7 @@
 
 import { jsonSchema, type Tool, type ToolSet } from 'ai'
 
-import type { MailAgentDomainClient } from '../python/domainClient'
+import type { DomainPolicyVerdict, MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
 import {
   auditedReadTool,
@@ -39,7 +43,15 @@ import {
   type GatewayApprovalMode,
   type GatewayToolAuditCollector
 } from './types'
-import { hasRuntimeToolClass, registerRuntimeToolClass, type AgentContextMode } from './policy'
+import {
+  CONNECTOR_CRUD_RANK,
+  hasRuntimeToolClass,
+  normalizeContextMode,
+  parseConnectorGrants,
+  registerRuntimeToolClass,
+  type AgentContextMode,
+  type ConnectorGrant
+} from './policy'
 // RELATIVE imports (not @shared) so the pure-Node poc harness can load the gateway tools — same
 // rationale as web.ts / notion_agent.ts. Both modules are pure TS (no react/electron).
 import { fenceUntrusted, sanitizeProse } from '../../shared/assistant/context/contextSerializer'
@@ -74,17 +86,26 @@ function short(s: string, n = 120): string {
 
 /**
  * The ONE seam deciding whether a run loads connector tools at all (consumed by the Electron
- * lifecycle's buildTools). 🔴 manual-chat-only by construction: the flag must be on, the
- * SERVER-asserted mode must be exactly 'manual_chat' (absent/unknown/im_chat → false), and the
- * run must not be a headless agent run (agentRunContext present → false). Everything else —
- * including every headless path — performs ZERO connector fetches/builds.
+ * lifecycle's buildTools). Two admitted shapes, everything else performs ZERO connector
+ * fetches/builds:
+ *   - manual chat: flag on + SERVER-asserted mode exactly 'manual_chat' + NOT a headless agent
+ *     run (agentRunContext present → false) — the PR2 shape, byte-identical.
+ *   - headless agent run (PR3): flag on + mode 'untrusted_trigger'/'cron_headless' + an
+ *     agentRunContext whose connector grants parse NON-EMPTY (fail-closed re-parse — junk/empty
+ *     grants keep the run at zero fetches, exactly the PR2 behaviour).
+ * absent/unknown mode and im_chat are always false (im_chat's stage-2 opt-in is a separate
+ * switch, never a grant — grill Q10=A).
  */
 export function shouldLoadConnectorTools(
   flagEnabled: boolean,
   contextMode: AgentContextMode | undefined,
-  hasAgentRunContext: boolean
+  hasAgentRunContext: boolean,
+  connectorGrants?: unknown
 ): boolean {
-  return flagEnabled === true && contextMode === 'manual_chat' && !hasAgentRunContext
+  if (flagEnabled !== true) return false
+  if (contextMode === 'manual_chat') return !hasAgentRunContext
+  if (contextMode !== 'untrusted_trigger' && contextMode !== 'cron_headless') return false
+  return hasAgentRunContext && parseConnectorGrants(connectorGrants) !== undefined
 }
 
 /**
@@ -161,7 +182,11 @@ function toolInputSchema(
  *  code-owned contract suffix. 🔴 The description IS the product surface (grill Q9=A) AND a
  *  prompt-injection surface (remote-authored) — sanitizeProse breaks fence tokens / forged
  *  sections before it enters the tool definition. */
-function toolDescription(entry: ConnectorToolManifestEntry, write: boolean): string {
+function toolDescription(
+  entry: ConnectorToolManifestEntry,
+  write: boolean,
+  preGranted: boolean
+): string {
   const remote = short(sanitizeProse(entry.description), DESCRIPTION_MAX_CHARS)
   const base =
     `${remote ? `${remote} ` : ''}[External '${sanitizeProse(entry.connectorName)}' service tool ` +
@@ -174,10 +199,16 @@ function toolDescription(entry: ConnectorToolManifestEntry, write: boolean): str
   const destructiveNote = entry.destructive
     ? ' The server marks it DESTRUCTIVE (may overwrite existing data).'
     : ''
+  // PR3 / grill Q9=A — the description IS the headless product surface: a granted headless run
+  // executes 免卡, so the manual "always asks" sentence would mislead the agent into waiting for
+  // an approval that never comes.
+  const approvalNote = preGranted
+    ? ' The owner pre-granted this agent write access to this connector; calls execute without ' +
+      'an approval card — double-check inputs before calling.'
+    : ' The user must approve every call (always asks).'
   return (
     `${base} This WRITES to the external service (${entry.crudType}); changes land on the ` +
-    `service side and may not be undoable from here.${destructiveNote} The user must approve ` +
-    `every call (always asks).${fenceNote}]`
+    `service side and may not be undoable from here.${destructiveNote}${approvalNote}${fenceNote}]`
   )
 }
 
@@ -196,8 +227,44 @@ export function createConnectorTools(
     approvalMode?: GatewayApprovalMode
     oneShot?: boolean
     contextMode?: AgentContextMode
+    /** PR3 — the headless run's per-connector crud ceilings ({connectorId: ceiling}), threaded
+     *  from agentRunContext.modeGrants.connectors by the lifecycle. Re-parsed fail-closed here
+     *  (web.ts先例: a hand-built caller may pass junk). Only consulted under a headless mode;
+     *  manual callers pass undefined → PR2 behaviour byte-identical. */
+    connectorGrants?: Record<string, ConnectorGrant>
+    /** PR3 — the headless run's agent id, forwarded (with the context mode) as the invoke
+     *  `caller` so Python's SECOND gate can re-read that agent's grant_connectors. Not a gate on
+     *  THIS side (registration above already filtered), but omitting it makes every headless
+     *  invoke 403 server-side — it is load-bearing wire, not decoration. */
+    agentId?: string
   } = {}
 ): ToolSet {
+  const contextMode = normalizeContextMode(opts.contextMode)
+  const headlessAgent = contextMode === 'untrusted_trigger' || contextMode === 'cron_headless'
+  // PR3 — defensive re-parse of the grants (junk collapses per-entry; empty → undefined). Under a
+  // headless mode with NO usable grants every entry below is skipped (grant 外根本不注册) — the
+  // seam should never feed that shape, this is the belt behind it.
+  const headlessGrants = headlessAgent ? parseConnectorGrants(opts.connectorGrants) : undefined
+  // PR3 — grant-level local verdict for the headless 免卡 path (mirror of web.ts grantVerdict /
+  // grant_web 'open'): there is no owner rule to match, the grant itself is the owner's opt-in.
+  // Riding needsApproval's whitelist branch keeps the audit pipeline single-path:
+  // approvalStatus 'auto_whitelist' + whitelistRuleId null (= grant-source, distinct from a
+  // rule-source non-null id).
+  const grantVerdict = async (): Promise<DomainPolicyVerdict> => ({
+    decision: 'auto_allow',
+    rule_id: null
+  })
+  // Caller provenance on every invoke (manual → {context_mode:'manual_chat'}; headless → the
+  // actual mode + agentId). 🔴 Python's resolve_caller_ceiling GATES on this (manual → no ceiling
+  // = PR2 byte-identical; headless → re-reads that agent's grant_connectors, 403 without a grant
+  // or above the ceiling; any other venue → hard deny). So the second belt is real, and a wrong /
+  // missing mode here changes authorization rather than just the audit trail.
+  const caller: { contextMode: string; agentId?: string } = {
+    contextMode,
+    ...(headlessAgent && typeof opts.agentId === 'string' && opts.agentId.length > 0
+      ? { agentId: opts.agentId }
+      : {})
+  }
   const out: ToolSet = {}
   for (const entry of manifest) {
     // Registration-side self-defense (the endpoint already folds these; never trust one belt).
@@ -205,6 +272,19 @@ export function createConnectorTools(
     if (entry.crudType === 'delete') continue // Q16=A/Q3=B: delete never registers, anywhere
     const write = entry.crudType === 'write' || entry.crudType === 'update'
     if (!write && entry.crudType !== 'read') continue // unknown crud → fail-closed skip
+    // PR3 (grill Q2) — headless per-agent grant filter: a connector ABSENT from the grants never
+    // registers any tool (the whole family is skipped), and a tool ABOVE the connector's ceiling
+    // (read=1 < write=2 < update=3) is skipped. This registration-time filter IS the
+    // per-connector / per-tool precision the coarse connector_write matrix row depends on
+    // (policy.ts) — the ToolSet a headless run assembles can only ever contain grant-covered
+    // connector tools.
+    if (headlessAgent) {
+      const ceiling = headlessGrants?.[entry.connectorId]
+      if (ceiling === undefined) continue
+      if (CONNECTOR_CRUD_RANK[entry.crudType as ConnectorGrant] > CONNECTOR_CRUD_RANK[ceiling]) {
+        continue
+      }
+    }
 
     const name = mcpGatewayToolName(entry.connectorId, entry.toolName)
     if (!name) {
@@ -227,14 +307,20 @@ export function createConnectorTools(
     }
     if (!hasRuntimeToolClass(name)) continue // defense in depth: no class → never assemble
 
-    const description = toolDescription(entry, write)
+    const description = toolDescription(entry, write, write && headlessAgent)
     const inputSchema = toolInputSchema(entry.inputSchemaJson)
     const run = async (
       input: Record<string, unknown>,
       signal: AbortSignal | undefined,
       userEdited?: boolean
     ): Promise<unknown> => {
-      const r = await domain.invokeConnectorTool(entry.connectorId, entry.toolName, input, signal)
+      const r = await domain.invokeConnectorTool(
+        entry.connectorId,
+        entry.toolName,
+        input,
+        signal,
+        caller
+      )
       return {
         connector: entry.connectorId,
         tool: sanitizeProse(entry.toolName),
@@ -256,12 +342,21 @@ export function createConnectorTools(
             description,
             inputSchema,
             // Edit tier, 恒 HITL in manual: no editableFields (identity pinned — approve/reject
-            // only) and no policyEvaluate (no whitelist/免卡 channel exists in PR2).
+            // only) and no policyEvaluate on the manual path (no whitelist/免卡 channel).
             risk: 'edit',
             a2uiEnabled: opts.a2uiEnabled,
             approvalMode: opts.approvalMode,
             oneShot: opts.oneShot,
             contextMode: opts.contextMode,
+            // PR3 — headless 免卡: reaching here under a headless mode implies the grant ceiling
+            // covers this write tool (registration filter above), so needsApproval resolves the
+            // grant-level auto_allow verdict (no card; audit auto_whitelist + rule_id null).
+            // Manual: absent → 恒 HITL card, byte-identical to PR2.
+            ...(headlessAgent ? { policyEvaluate: grantVerdict } : {}),
+            // PR3 — the runtime modeDenied double-insurance consumes the SAME parsed grants that
+            // gated registration (isToolClassAllowedInMode('connector_write', mode,
+            // {connectors})); absent on manual → pre-PR3 matrix, byte-identical.
+            ...(headlessGrants ? { modeGrants: { connectors: headlessGrants } } : {}),
             run: (input, ctx) => run(input, ctx.signal, ctx.userEdited)
           },
           collector,

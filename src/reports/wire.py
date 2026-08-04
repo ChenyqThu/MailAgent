@@ -14,7 +14,7 @@ CLI (``src/cli/commands/report.py``) 与 serve-api (``src/api/routers/reports.py
 from __future__ import annotations
 
 import json
-from typing import Any, Dict
+from typing import Any, Dict, Tuple
 
 
 def parse_counts(raw: Any) -> Dict[str, Any]:
@@ -26,6 +26,25 @@ def parse_counts(raw: Any) -> Dict[str, Any]:
         return data if isinstance(data, dict) else {}
     except (json.JSONDecodeError, TypeError):
         return {}
+
+
+def connector_grants_of(agent: Dict[str, Any]) -> Tuple[Tuple[str, str], ...]:
+    """report_agent 行 → ``((connector_id, crud 天花板), …)``（MCP connector PR3）。
+
+    读侧**宽容**（镜像 ``agent_runs._tool_policy_lenient``）：坏 / 缺失 ``tool_policy_json``
+    → ``()`` = 无授权 = 不挂任何 connector 工具（fail-closed 方向）。保存面
+    （``validate_agent_config_patch`` → ``parse_tool_policy``）已严格拒坏形状与 ``delete``
+    天花板，故这里退回空集只发生在旧行 / 手改库上。
+
+    函数内 import ``src.agents.trigger``：wire 模块的 transport-neutral 承诺是「不 import
+    cli / api / fastapi」，且顶层 import 会把 agents 链拖进每个 wire 使用者的启动路径。
+    """
+    from src.agents.trigger import parse_tool_policy
+
+    try:
+        return parse_tool_policy(agent.get("tool_policy_json")).grant_connectors
+    except ValueError:
+        return ()
 
 
 def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
@@ -124,7 +143,17 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
     # tool_policy/budget 仍 custom-only（project_progress 执行不进 gateway，无工具/预算语义）。
     _projects_trigger = agent_type in ("custom", "project_progress")
     trigger = _parse_obj(agent.get("trigger_json")) if _projects_trigger else None
-    tool_policy = _parse_obj(agent.get("tool_policy_json")) if _is_custom else None
+    if _is_custom:
+        tool_policy = _parse_obj(agent.get("tool_policy_json"))
+    else:
+        # MCP connector PR3：**报告 Agent 也是 connector 的调用方**（PRD 决策 8），故 report 行
+        # 的 tool_policy 需要能 round-trip 回来 —— 否则 owner PUT 了 grant_connectors、GET 读不到，
+        # 界面永远显示"没配"。只投影 grant_connectors 这一个键：allowed_tools / grant_exec /
+        # grant_web / skills 对 report 行无语义（报告执行是 Python 直调 tool loop，不进 gateway
+        # 矩阵），维持 custom-only 现状不动。
+        _raw_tp = _parse_obj(agent.get("tool_policy_json")) if agent_type == "report" else None
+        _gc = _raw_tp.get("grant_connectors") if isinstance(_raw_tp, dict) else None
+        tool_policy = {"v": 1, "grant_connectors": _gc} if isinstance(_gc, dict) and _gc else None
     raw_budget = _parse_obj(agent.get("budget_json")) if _is_custom else None
     # 07-28 W1: max_steps 已退出用户契约。旧行可继续带该键，但 wire 永不再投影；保存路径同样
     # 只接受/持久化频率与 wall-clock 两门，做到无需 DB 迁移即可收敛公开形状。

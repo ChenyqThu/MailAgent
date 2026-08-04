@@ -21,6 +21,7 @@ from src.reports import data as rdata
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.agent_tools import kos_is_available
 from src.reports.store import ReportStore, cadence_of, schedule_of
+from src.reports.wire import connector_grants_of
 from src.reports.summarizer import (
     ReportDraft,
     summarize_aggregate,
@@ -228,6 +229,9 @@ async def run_report_once(
                 kos_enabled=kos_is_available(), cadence=cadence, now=n,
                 persona_prompt=agent.get("prompt"), model=agent.get("model"),
                 context_docs=_parse_context_docs(agent.get("context_docs_json")),
+                # MCP connector PR3：报告 Agent 的 per-connector 天花板（行的
+                # tool_policy.grant_connectors；未配 → () → 不挂任何 connector 工具）。
+                connector_grants=connector_grants_of(agent),
                 client=client,
             )
             doc = assemble_report_doc(

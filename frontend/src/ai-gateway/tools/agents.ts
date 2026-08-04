@@ -21,9 +21,11 @@
 //
 // 🔴 Field ALLOWLIST (ADR-004 rev3.1 §7, owner Q4 — revises rev1 D5/Q7): the create/update schemas
 //    are `.strict()` over title/prompt/model/enabled/trigger/allowed_tools/budget PLUS the grant
-//    vocabulary grant_exec / grant_web / skills. The model may PROPOSE grants — the defense moved
-//    from field-level deny to the always-human approval card, whose permission summary renders
-//    exec / web-open red (update additionally diffs before/after against the SERVER's current row).
+//    vocabulary grant_exec / grant_web / skills / grant_connectors (MCP connector epic PR3 —
+//    per-connector crud ceiling, read<write<update, 'delete' unrepresentable). The model may
+//    PROPOSE grants — the defense moved from field-level deny to the always-human approval card,
+//    whose permission summary renders exec / web-open red (update additionally diffs before/after
+//    against the SERVER's current row).
 //    tool_policy / policy_rules still structurally cannot enter (wire body is assembled
 //    field-by-field), and rule creation (the actual card-free whitelist) stays owner-only: a grant
 //    only buys tool REGISTRATION — gated web / exec still need owner-built rules to skip cards.
@@ -62,6 +64,7 @@ import {
   customAgentListSchema,
   customAgentRunNowSchema,
   customAgentUpdateSchema,
+  type CustomAgentConnectorGrantsInput,
   type CustomAgentCreateInput,
   type CustomAgentTriggerInput,
   type CustomAgentUpdateInput
@@ -151,6 +154,7 @@ function specSummary(
     grant_exec: agent.tool_policy?.grant_exec === true,
     grant_web: agent.tool_policy?.grant_web ?? 'off',
     skills: agent.tool_policy?.skills ?? null,
+    grant_connectors: agent.tool_policy?.grant_connectors ?? null,
     budget: agent.budget ?? null,
     updated_at: isoOrNull(agent.updated_at)
   }
@@ -169,6 +173,7 @@ interface ConfigPatchInput {
   grant_exec?: boolean
   grant_web?: 'off' | 'gated' | 'open'
   skills?: string[]
+  grant_connectors?: CustomAgentConnectorGrantsInput
 }
 
 /** True when the input touches any tool_policy sub-field (they live in ONE server-side JSON blob,
@@ -179,17 +184,22 @@ function touchesToolPolicy(input: ConfigPatchInput): boolean {
     input.capabilities !== undefined ||
     input.grant_exec !== undefined ||
     input.grant_web !== undefined ||
-    input.skills !== undefined
+    input.skills !== undefined ||
+    input.grant_connectors !== undefined
   )
 }
 
 /** Assemble the friendly REST patch body from the ALLOWLISTED tool input (create/update share this).
- *  allowed_tools/grant_exec/grant_web/skills → tool_policy {v:1, ...}; trigger/budget gain the `v:1`
- *  version bit the backend schemas carry (the model omits it). Raw tool_policy / policy fields
- *  CANNOT appear — the source object has no such field (structural allowlist, `.strict()` schema).
- *  `currentToolPolicy` (update only) is the SERVER row's policy: tool_policy_json is one blob, so a
- *  partial grants patch carries the untouched sub-fields forward instead of wiping them. Only the
- *  four known sub-fields are carried (never a verbatim blob passthrough). */
+ *  allowed_tools/grant_exec/grant_web/skills/grant_connectors → tool_policy {v:1, ...}; trigger/
+ *  budget gain the `v:1` version bit the backend schemas carry (the model omits it). Raw
+ *  tool_policy / policy fields CANNOT appear — the source object has no such field (structural
+ *  allowlist, `.strict()` schema). `currentToolPolicy` (update only) is the SERVER row's policy:
+ *  tool_policy_json is one blob, so a partial grants patch carries the untouched sub-fields
+ *  forward instead of wiping them (🔴 this is the ONLY place grant_connectors round-trips — an
+ *  update that never mentions grant_connectors must NOT drop the server's current value). Only
+ *  the five known sub-fields are carried (never a verbatim blob passthrough). An input that
+ *  explicitly sends `grant_connectors: {}` clears every connector grant (distinct from omitting
+ *  the field, which preserves whatever the server already has). */
 function toConfigPatch(
   input: ConfigPatchInput,
   currentToolPolicy?: CustomAgentToolPolicy | null
@@ -198,10 +208,12 @@ function toConfigPatch(
     input.capabilities !== undefined &&
     (input.allowed_tools !== undefined ||
       input.grant_exec !== undefined ||
-      input.grant_web !== undefined)
+      input.grant_web !== undefined ||
+      input.grant_connectors !== undefined)
   ) {
     invalidArg(
-      'capabilities cannot be combined with allowed_tools, grant_exec, or grant_web; use one vocabulary'
+      'capabilities cannot be combined with allowed_tools, grant_exec, grant_web, or ' +
+        'grant_connectors; use one vocabulary'
     )
   }
   const patch: ReportConfigPatch = {}
@@ -219,6 +231,7 @@ function toConfigPatch(
     if (cur?.grant_exec !== undefined) tp.grant_exec = cur.grant_exec
     if (cur?.grant_web !== undefined) tp.grant_web = cur.grant_web
     if (cur?.skills !== undefined) tp.skills = cur.skills
+    if (cur?.grant_connectors !== undefined) tp.grant_connectors = cur.grant_connectors
     if (input.capabilities !== undefined) {
       const mapped = applyCustomAgentCapabilityPatch(
         {
@@ -236,6 +249,7 @@ function toConfigPatch(
     if (input.grant_exec !== undefined) tp.grant_exec = input.grant_exec
     if (input.grant_web !== undefined) tp.grant_web = input.grant_web
     if (input.skills !== undefined) tp.skills = input.skills
+    if (input.grant_connectors !== undefined) tp.grant_connectors = input.grant_connectors
     patch.tool_policy = tp
   }
   if (input.budget !== undefined) {
@@ -395,7 +409,10 @@ export function createCustomAgentTools(
       'the complete `capabilities` profile for normal requests. `allowed_tools` plus grant fields ' +
       'remain only for an explicitly requested Advanced atomic configuration and must not be mixed ' +
       'with `capabilities`. A budget may set max_runs_per_day/max_run_seconds; skills may mount ' +
-      'installed skill sets. The user reviews the full spec on a confirmation ' +
+      'installed skill sets. `grant_connectors` sets a per-connector crud ceiling ' +
+      '({connector_id: "read"|"write"|"update"}) for this agent\'s connected external services ' +
+      '(e.g. Notion, Jira) — omit a connector to leave it unauthorized; "delete" is never a legal ' +
+      'ceiling. The user reviews the full spec on a confirmation ' +
       'card whose permission summary highlights exec / open-web in red; nothing is created without ' +
       'approval. Grants only register tools — card-free whitelist RULES remain an owner-only ' +
       'Settings action you cannot perform. A bad cron / regex / schedule rule is rejected by a ' +
@@ -425,9 +442,11 @@ export function createCustomAgentTools(
       'before/after summary, propose changes to an EXISTING custom agent (partial — only the fields ' +
       'you pass change). ' +
       'agent_id identifies it (from custom_agent_list). You may change title, prompt, model, ' +
-      'enabled, trigger, budget, skills, or a non-empty patch of the six capability tiers used by ' +
-      'custom_agent_create. Keep atomic allowed_tools/grant fields for explicitly requested ' +
-      'Advanced edits only, and never mix them with capabilities. Pass trigger:null to disable the agent ' +
+      'enabled, trigger, budget, skills, grant_connectors, or a non-empty patch of the six ' +
+      'capability tiers used by custom_agent_create. Keep atomic allowed_tools/grant fields for ' +
+      'explicitly requested Advanced edits only, and never mix them with capabilities. Omitting ' +
+      "grant_connectors leaves the agent's current connector grants unchanged; pass {} to clear " +
+      'all of them. Pass trigger:null to disable the agent ' +
       '(clear its trigger). A permission change is shown to the user as a before/after diff read ' +
       'from the server (escalations highlighted red); card-free whitelist RULES remain owner-only. ' +
       'The user reviews and approves the change; a bad cron / regex / schedule rule is rejected ' +

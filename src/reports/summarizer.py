@@ -10,10 +10,11 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from loguru import logger
 
+from src.connectors.llm_tools import build_connector_llm_tools
 from src.llm_agent.client import LLMClient, LLMResult
 from src.llm_agent.processor import _build_cache_control
 from src.reports.agent_tools import build_report_tools
@@ -474,6 +475,7 @@ async def summarize_report_agentic(
     model: Optional[str] = None,
     context_docs: Optional[List[str]] = None,
     kos_enabled: bool = False,
+    connector_grants: Sequence[Tuple[str, str]] = (),
     client: Optional[LLMClient] = None,
     max_iter: int = 8,
 ) -> ReportDraft:
@@ -482,6 +484,10 @@ async def summarize_report_agentic(
 
     与 summarize_report（单次 classify）的区别：走 LLMClient.run_tool_loop，模型可下钻查
     任意邮件细节，从而控制上下文体积（不全量塞正文）。build_report 作为 final_tool。
+
+    ``connector_grants``（MCP connector PR3）= 该报告 Agent 行的 ``grant_connectors`` 对；
+    非空且灰度开关开时额外挂 ``mcp__<connector>__<tool>`` 工具（周报可带 Jira 进展）。
+    空 / flag off → 工具集与本 task 前逐字节相同。
     """
     now = now or datetime.now(_BEIJING)
     persona = persona_prompt if (persona_prompt and persona_prompt.strip()) else get_default_prompt(cadence)
@@ -489,6 +495,11 @@ async def summarize_report_agentic(
     # 线程聚合投影（含全历史状态）——payload 按事件串联，LLM 才能看到「你已表态」。
     thread_groups = build_thread_groups(db_path, briefs)
     aux_tools, handlers = build_report_tools(db_path, kos_enabled=kos_enabled)
+    conn_tools, conn_handlers = build_connector_llm_tools(
+        connector_grants, caller="report_agent"
+    )
+    aux_tools = [*aux_tools, *conn_tools]
+    handlers = {**handlers, **conn_handlers}
     tools = [*aux_tools, REPORT_TOOL_SCHEMA]  # build_report = final_tool（命中即收尾）
 
     own_client = client is None

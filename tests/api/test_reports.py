@@ -696,6 +696,70 @@ def test_set_config_rejects_bad_grant_web_and_skills(
         assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
+def test_set_config_grant_connectors_roundtrip(
+    report_client: TestClient, report_db: Path
+) -> None:
+    """MCP connector PR3：PUT grant_connectors（read/write/update）→ 200 + 读回一致。"""
+    ReportStore(str(report_db)).create_agent("cust_c1", type="custom", enabled=True, title="C1")
+    r = report_client.put(
+        "/api/report-agents/cust_c1",
+        json={"tool_policy": {"v": 1, "grant_connectors": {"notion": "read",
+                                                           "atlassian": "update"}}},
+    )
+    assert r.status_code == 200
+    tp = r.json()["data"]["tool_policy"]
+    assert tp["grant_connectors"] == {"notion": "read", "atlassian": "update"}
+
+
+def test_report_row_grant_connectors_roundtrip(
+    report_client: TestClient, report_db: Path
+) -> None:
+    """MCP connector PR3：**报告 Agent**（type='report'）也能配 grant_connectors 并读回。
+
+    报告 Agent 是 connector 的第三个调用方（PRD 决策 8）；PUT 了读不回来 = 界面永远显示
+    "没配"。只 round-trip grant_connectors —— 其余 tool_policy 键对 report 行无语义。
+    """
+    r = report_client.put(
+        f"/api/report-agents/{_AGENT_ID}",
+        json={"tool_policy": {"v": 1, "grant_connectors": {"notion": "read"}}},
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["tool_policy"] == {"v": 1, "grant_connectors": {"notion": "read"}}
+    got = report_client.get(f"/api/report-agents?agentId={_AGENT_ID}").json()["data"]
+    assert got["tool_policy"] == {"v": 1, "grant_connectors": {"notion": "read"}}
+
+
+def test_report_row_rejects_delete_ceiling(report_client: TestClient, report_db: Path) -> None:
+    """🔴 值域闸对 report 行同样成立：``delete`` 天花板入库即拒（不是读侧宽容）。"""
+    r = report_client.put(
+        f"/api/report-agents/{_AGENT_ID}",
+        json={"tool_policy": {"v": 1, "grant_connectors": {"notion": "delete"}}},
+    )
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_set_config_rejects_delete_and_bad_grant_connectors(
+    report_client: TestClient, report_db: Path
+) -> None:
+    """🔴 grill Q3=B：``delete`` 天花板 **入库即拒**（400，非读侧宽容）；坏形状同拒。"""
+    ReportStore(str(report_db)).create_agent("cust_c2", type="custom", enabled=True, title="C2")
+    for bad_tp in (
+        {"v": 1, "grant_connectors": {"notion": "delete"}},  # 值域外（MVP 不开删除）
+        {"v": 1, "grant_connectors": {"notion": "admin"}},
+        {"v": 1, "grant_connectors": {"notion": True}},
+        {"v": 1, "grant_connectors": {"": "read"}},
+        {"v": 1, "grant_connectors": ["notion"]},
+        {"v": 1, "grant_connectors": "notion"},
+    ):
+        r = report_client.put("/api/report-agents/cust_c2", json={"tool_policy": bad_tp})
+        assert r.status_code == 400, bad_tp
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    # 拒收后行上仍无 grant（坏形状没有半落库）。
+    tp = report_client.get("/api/report-agents?agentId=cust_c2").json()["data"]["tool_policy"]
+    assert tp is None or "grant_connectors" not in tp
+
+
 def test_create_custom_agent_flag_off_rejected(report_client: TestClient, monkeypatch) -> None:
     """flag off：create type='custom' → 维持今日 E_INVALID_ARG 拒收（白名单不含 custom，字节级不变）。"""
     monkeypatch.setattr("src.api.routers.reports._custom_agents_enabled", lambda: False)

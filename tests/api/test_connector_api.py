@@ -431,3 +431,203 @@ def test_disconnect_deletes_credentials_keeps_tool_config(
     # 工具行 + 用户 per-tool 配置保留（重连后偏好还在）。
     rows = fresh_agent_cfg.list_connector_tools("notion")
     assert len(rows) == 1 and rows[0].enabled is False
+
+
+# ── PR3：caller 二道闸（授权判定与执行同侧）─────────────────────────────────────
+
+
+def _grant_agent(monkeypatch, grants, *, agent_id="cust_a"):
+    """把 report_agent 行的读接缝换成内存行（不碰 sync_store.db）。"""
+    import json as _json
+
+    import src.connectors.service as svc
+
+    row = {"id": agent_id, "type": "custom", "enabled": 1}
+    if grants is not None:
+        row["tool_policy_json"] = _json.dumps({"v": 1, "grant_connectors": grants})
+    monkeypatch.setattr(svc, "_load_agent_row", lambda aid: row if aid == agent_id else None)
+
+
+def _invoke(client, tool, *, caller=None, args=None):
+    body = {"arguments": args or {}}
+    if caller is not None:
+        body["caller"] = caller
+    return client.post(f"/api/connector/notion/tools/{tool}/invoke", json=body)
+
+
+_HEADLESS = {"context_mode": "cron_headless", "agent_id": "cust_a"}
+
+
+def test_invoke_headless_with_grant_allowed(flag_on_client, fresh_agent_cfg, monkeypatch):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    _grant_agent(monkeypatch, {"notion": "read"})
+    r = _invoke(flag_on_client, "search", caller=_HEADLESS)
+    assert r.status_code == 200
+    assert _InvokeStubClient.last_call is not None
+
+
+def test_invoke_headless_without_grant_403(flag_on_client, fresh_agent_cfg, monkeypatch):
+    """去掉 grant → 调不动（服务端二道闸；gateway 注册期过滤是第一道）。"""
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    _grant_agent(monkeypatch, {})  # 有行、无 grant
+    r = _invoke(flag_on_client, "search", caller=_HEADLESS)
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_GRANT_DENIED"
+    assert _InvokeStubClient.last_call is None  # 到不了远端
+
+
+def test_invoke_headless_unknown_agent_403(flag_on_client, fresh_agent_cfg, monkeypatch):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    _grant_agent(monkeypatch, {"notion": "update"})
+    r = _invoke(flag_on_client, "search", caller={"context_mode": "cron_headless", "agent_id": "ghost"})
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_GRANT_DENIED"
+
+
+def test_invoke_headless_missing_agent_id_403(flag_on_client, fresh_agent_cfg, monkeypatch):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = _invoke(flag_on_client, "search", caller={"context_mode": "untrusted_trigger"})
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_GRANT_DENIED"
+
+
+def test_invoke_ceiling_blocks_write_tool(flag_on_client, fresh_agent_cfg, monkeypatch):
+    """🔴 天花板生效：给 read 的 agent 调不动 write 类工具（且与 per-tool 启用是两道独立闸）。"""
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)  # 工具本身是开的
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    _grant_agent(monkeypatch, {"notion": "read"})
+    r = _invoke(flag_on_client, "create_page", caller=_HEADLESS)
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_GRANT_DENIED"
+    assert _InvokeStubClient.last_call is None
+    # 天花板抬到 write → 同一封调用放行（证明拒的是天花板、不是别的闸）。
+    _grant_agent(monkeypatch, {"notion": "write"})
+    assert _invoke(flag_on_client, "create_page", caller=_HEADLESS).status_code == 200
+
+
+def test_invoke_delete_class_forbidden_even_with_max_grant(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """AC：删除类在任何 grant 下都不可调（headless 面也一样）。"""
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    _grant_agent(monkeypatch, {"notion": "update"})
+    r = _invoke(flag_on_client, "delete_page", caller=_HEADLESS)
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_TOOL_FORBIDDEN"
+    assert _InvokeStubClient.last_call is None
+
+
+def test_invoke_im_chat_always_denied(flag_on_client, fresh_agent_cfg, monkeypatch):
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = _invoke(flag_on_client, "search", caller={"context_mode": "im_chat", "agent_id": None})
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_GRANT_DENIED"
+    assert _InvokeStubClient.last_call is None
+
+
+def test_invoke_manual_chat_caller_behaves_like_no_caller(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """owner 面：manual_chat（以及 caller 缺席）不加天花板 —— PR2 行为逐字节保留。"""
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
+    assert _invoke(
+        flag_on_client, "create_page", caller={"context_mode": "manual_chat", "agent_id": None}
+    ).status_code == 200
+    assert _invoke(flag_on_client, "create_page").status_code == 200
+
+
+def test_invoke_bad_caller_shape_400(flag_on_client, fresh_agent_cfg, monkeypatch):
+    """未知 context_mode / 非 object → 400（调用方 bug 早暴露，不静默降级成「无约束」）。"""
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    for bad in ({"context_mode": "root_mode"}, {"agent_id": "x"}, "manual_chat", 1):
+        r = _invoke(flag_on_client, "search", caller=bad)
+        assert r.status_code == 400, bad
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert _InvokeStubClient.last_call is None
+
+
+def test_invoke_headless_bad_tool_policy_is_fail_closed(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """坏 tool_policy_json → 读侧宽容退回「未配置」= 无授权（fail-closed 方向）。"""
+    import src.connectors.client as client_mod
+    import src.connectors.service as svc
+
+    _seed_tools(fresh_agent_cfg)
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    monkeypatch.setattr(
+        svc, "_load_agent_row", lambda _aid: {"id": "cust_a", "tool_policy_json": "{not json"}
+    )
+    r = _invoke(flag_on_client, "search", caller=_HEADLESS)
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_GRANT_DENIED"
+
+
+# ── PR3：分类侧独立授权开关 ────────────────────────────────────────────────────
+
+
+def test_preprocess_toggle_roundtrip_and_projection(flag_on_client, fresh_agent_cfg):
+    fresh_agent_cfg.upsert_connector("notion", server_url="https://mcp.notion.com/mcp")
+    # 默认关（list / status 都如实投影）。
+    listed = {c["connector_id"]: c for c in flag_on_client.get("/api/connector").json()["data"]["connectors"]}
+    assert listed["notion"]["preprocess_enabled"] is False
+    assert flag_on_client.get("/api/connector/notion/status").json()["data"]["preprocess_enabled"] is False
+
+    r = flag_on_client.post("/api/connector/notion/preprocess", json={"enabled": True})
+    assert r.status_code == 200 and r.json()["data"]["preprocess_enabled"] is True
+    assert fresh_agent_cfg.get_connector("notion").preprocess_enabled is True
+    assert flag_on_client.get("/api/connector/notion/status").json()["data"]["preprocess_enabled"] is True
+
+    assert flag_on_client.post("/api/connector/notion/preprocess", json={"enabled": False}).status_code == 200
+    assert fresh_agent_cfg.get_connector("notion").preprocess_enabled is False
+
+
+def test_preprocess_toggle_validates(flag_on_client, fresh_agent_cfg):
+    fresh_agent_cfg.upsert_connector("notion", server_url="https://x")
+    for bad in ({"enabled": "yes"}, {"enabled": 1}, {}):
+        r = flag_on_client.post("/api/connector/notion/preprocess", json=bad)
+        assert r.status_code == 400, bad
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    # 未知 connector → 404（registry 闸）；已知但没行 → 404（先连接再授权）。
+    assert flag_on_client.post("/api/connector/ghost/preprocess", json={"enabled": True}).status_code == 404
+    assert flag_on_client.post("/api/connector/atlassian/preprocess", json={"enabled": True}).status_code == 404
+
+
+def test_preprocess_toggle_flag_off_409(flag_off_client):
+    r = flag_off_client.post("/api/connector/notion/preprocess", json={"enabled": True})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_CONNECTOR_DISABLED"

@@ -312,6 +312,7 @@ def test_parse_tool_policy_unconfigured():
     tp = parse_tool_policy(None)
     assert tp.allowed_tools is None and tp.grant_exec is False and tp.grant_web == "off"
     assert tp.skills is None  # 未配置 → None（投影层代默认挂载集，rev3.1 §5.1）
+    assert tp.grant_connectors == ()  # 未配置 → 零 connector 授权（PR3，缺省不注册）
     assert parse_tool_policy("") == ToolPolicy()
 
 
@@ -348,6 +349,45 @@ def test_parse_tool_policy_skills_shapes():
     assert tp3.skills == ("search",)
 
 
+def test_parse_tool_policy_grant_connectors_shapes():
+    """MCP connector PR3（PRD 决策 5）：``{connector: read|write|update}`` object → 按
+    connector_id 排序的不可变 pairs；缺省 / 显式 ``{}`` → ``()``（无授权）。"""
+    assert parse_tool_policy({"v": 1}).grant_connectors == ()
+    assert parse_tool_policy({"v": 1, "grant_connectors": {}}).grant_connectors == ()
+    tp = parse_tool_policy({"v": 1, "grant_connectors": {"notion": "read"}})
+    assert tp.grant_connectors == (("notion", "read"),)
+    # 多 connector → 按 id 排序（投影确定性，与书写顺序无关）。
+    tp2 = parse_tool_policy(
+        {"v": 1, "grant_connectors": {"notion": "write", "atlassian": "update"}}
+    )
+    assert tp2.grant_connectors == (("atlassian", "update"), ("notion", "write"))
+    # JSON 串输入同形；与其它 grant 键并存互不干扰。
+    tp3 = parse_tool_policy('{"v": 1, "grant_web": "gated", "grant_connectors": {"jira": "read"}}')
+    assert tp3.grant_connectors == (("jira", "read"),) and tp3.grant_web == "gated"
+
+
+@pytest.mark.parametrize("ceiling", ["read", "write", "update"])
+def test_parse_tool_policy_grant_connectors_ceilings(ceiling):
+    # 有效值域三档逐个可解析（read < write < update）。
+    tp = parse_tool_policy({"v": 1, "grant_connectors": {"notion": ceiling}})
+    assert tp.grant_connectors == (("notion", ceiling),)
+
+
+def test_parse_tool_policy_rejects_delete_ceiling():
+    """🔴 grill Q3=B：``delete`` **在值域外，入库即拒**（不是读侧宽容）—— MVP 结构上不存在
+    可被 AI 调用的删除工具。错误信息列出允许值域，便于 owner 自查。"""
+    with pytest.raises(ToolPolicyValidationError) as exc:
+        parse_tool_policy({"v": 1, "grant_connectors": {"notion": "delete"}})
+    msg = str(exc.value)
+    assert "read" in msg and "write" in msg and "update" in msg
+    assert "delete" not in msg.split("must be one of")[-1]  # 允许值域里没有 delete
+    # 保存面同样硬拒（Settings/CRUD 共用 validate_agent_config_patch）。
+    with pytest.raises(ValueError):
+        validate_agent_config_patch(
+            {"tool_policy": {"v": 1, "grant_connectors": {"notion": "delete"}}}
+        )
+
+
 @pytest.mark.parametrize(
     "bad",
     [
@@ -364,6 +404,16 @@ def test_parse_tool_policy_skills_shapes():
         {"skills": "email"},                         # skills 非 list（裸串）→ 拒（rev3.1）
         {"skills": ["email", 3]},                    # skills 非 str 项 → 拒
         {"skills": {"email": True}},                 # skills object → 拒
+        {"grant_connectors": {"notion": "delete"}},   # 🔴 delete 在值域外 → 拒（grill Q3=B）
+        {"grant_connectors": {"notion": "DELETE"}},   # 大小写敏感 → 拒
+        {"grant_connectors": {"notion": "admin"}},    # 面外字符串 → 拒
+        {"grant_connectors": {"notion": True}},       # bool → 拒（镜像 grant_web 严格化）
+        {"grant_connectors": {"notion": 1}},          # int → 拒
+        {"grant_connectors": {"": "read"}},           # 空串 key → 拒
+        {"grant_connectors": ["notion"]},             # 非 object（list）→ 拒
+        {"grant_connectors": "notion"},               # 非 object（裸串）→ 拒
+        {"grant_connectors": 1},                      # 非 object（int）→ 拒
+        {"v": 1, "grant_connectorz": {}},            # 近似拼写仍是未知键（extra forbid）
         {"v": 1, "sneaky": True},                    # 未知键（extra forbid）
         "[]",                                         # 非 object JSON
         "not-json",                                   # 坏 JSON

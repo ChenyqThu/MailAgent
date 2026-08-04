@@ -226,6 +226,110 @@ describe('CustomAgentApprovalCard — update (server-fact before/after diff)', (
   })
 })
 
+// MCP connector epic stage 1 PR3 — grant_connectors is model-proposable (customAgentCreate/
+// UpdateSchema), and a connector grant hands a HEADLESS run 免卡 access to an external workspace.
+// 🔴 So it must be a first-class axis of this card: invisible here = the owner approves blind,
+// which is exactly the defense ADR-004 rev3.1 §7 moved onto this surface.
+describe('CustomAgentApprovalCard — grant_connectors axis (PR3)', () => {
+  test('create with a connector grant renders the ceiling + the red new-access warning', () => {
+    render(
+      <CustomAgentApprovalCard
+        {...mockProps({
+          args: {
+            id: 'noted',
+            title: 'Noted',
+            grant_connectors: { notion: 'update', jira: 'read' }
+          }
+        })}
+      />
+    )
+    expect(screen.getByText('外部服务')).toBeTruthy()
+    expect(screen.getByText('jira=只读 · notion=读 + 新建 + 修改')).toBeTruthy()
+    expect(screen.getByText(/新增外部服务授权/)).toBeTruthy()
+  })
+
+  test('create without connector grants → 无, no warning', () => {
+    render(<CustomAgentApprovalCard {...mockProps({ args: { id: 'plain', title: 'Plain' } })} />)
+    expect(screen.getByText('无')).toBeTruthy()
+    expect(screen.queryByText(/新增外部服务授权/)).toBeNull()
+  })
+
+  test('update: server-fact before → after, ceiling RAISE is an escalation', async () => {
+    fetchMock.mockImplementation(async () =>
+      agentEnvelope({ v: 1, grant_connectors: { notion: 'read' } })
+    )
+    render(
+      <CustomAgentApprovalCard
+        {...mockProps({
+          toolName: 'custom_agent_update',
+          args: { agent_id: 'dms-approver', grant_connectors: { notion: 'write' } }
+        })}
+      />
+    )
+    await waitFor(() => expect(screen.getByText('notion=读 + 新建')).toBeTruthy())
+    expect(screen.getByText('notion=只读')).toBeTruthy() // server truth, struck through
+    expect(screen.getByText(/notion=write/)).toBeTruthy() // escalation warning names it
+  })
+
+  test('update: LOWERING a ceiling changes the row but is NOT an escalation', async () => {
+    fetchMock.mockImplementation(async () =>
+      agentEnvelope({ v: 1, grant_connectors: { notion: 'update' } })
+    )
+    render(
+      <CustomAgentApprovalCard
+        {...mockProps({
+          toolName: 'custom_agent_update',
+          args: { agent_id: 'dms-approver', grant_connectors: { notion: 'read' } }
+        })}
+      />
+    )
+    await waitFor(() => expect(screen.getByText('notion=只读')).toBeTruthy())
+    expect(screen.queryByText(/新增外部服务授权/)).toBeNull()
+  })
+
+  test('update: a patch NOT mentioning grant_connectors shows the SERVER row (model-lie negative)', async () => {
+    fetchMock.mockImplementation(async () =>
+      agentEnvelope({ v: 1, grant_connectors: { notion: 'update' } })
+    )
+    render(
+      <CustomAgentApprovalCard
+        {...mockProps({
+          toolName: 'custom_agent_update',
+          args: { agent_id: 'dms-approver', title: 'Renamed' }
+        })}
+      />
+    )
+    await waitFor(() => expect(screen.getByText('notion=读 + 新建 + 修改')).toBeTruthy())
+    expect(screen.queryByText(/新增外部服务授权/)).toBeNull()
+  })
+
+  test("🔴 a forged 'delete' ceiling is never rendered as granted (per-entry fail-closed)", () => {
+    render(
+      <CustomAgentApprovalCard
+        {...mockProps({
+          args: { id: 'evil', title: 'Evil', grant_connectors: { notion: 'delete', '': 'write' } }
+        })}
+      />
+    )
+    expect(screen.getByText('无')).toBeTruthy()
+    expect(screen.queryByText(/notion/)).toBeNull()
+  })
+
+  test('a connector-only patch counts as a permission patch → facts miss is reject-only', async () => {
+    fetchMock.mockImplementation(async () => new Response('down', { status: 503 }))
+    render(
+      <CustomAgentApprovalCard
+        {...mockProps({
+          toolName: 'custom_agent_update',
+          args: { agent_id: 'dms-approver', grant_connectors: { notion: 'write' } }
+        })}
+      />
+    )
+    await waitFor(() => expect(screen.getByText(/不应盲批/)).toBeTruthy())
+    expect(screen.queryByText('批准修改')).toBeNull()
+  })
+})
+
 describe('CustomAgentApprovalCard — terminal phases', () => {
   test('done renders the created/updated echo', () => {
     render(

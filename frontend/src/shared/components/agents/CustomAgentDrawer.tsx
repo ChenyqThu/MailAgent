@@ -449,6 +449,16 @@ export function CustomAgentDrawer({
       if (grantExec) tp.grant_exec = true
       if (grantWeb !== 'off') tp.grant_web = grantWeb
       if (skillsDirty || skillsMode === 'explicit') tp.skills = mountedSkills
+      // 🔴 MCP connector PR3 — grant_connectors 目前**没有抽屉 UI**（随 PR4 落），故它不在
+      // 「从当前 state 整体重建」的不变量覆盖范围内：不原样带回去，owner 只要在这里翻一下
+      // 工具/grant/skill 开关保存，之前经对话式 CRUD（或 REST）配好的 connector 授权就会被
+      // 整块 PUT 静默抹掉 —— 与 toConfigPatch 刚修的那条 merge-base 漏项同一个 bug 类。
+      // 载体是服务端行（cfg 来自 GET），不是本地 state，所以照抄即可；PR4 加 UI 时把它接进
+      // state 并删掉这段。
+      const currentConnectors = cfg.tool_policy?.grant_connectors
+      if (currentConnectors && Object.keys(currentConnectors).length > 0) {
+        tp.grant_connectors = currentConnectors
+      }
       editPatch.tool_policy = tp
     }
     void save(cfg.id, editPatch)

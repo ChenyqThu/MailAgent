@@ -60,12 +60,18 @@ async function fetchAgentRow(agentId: string): Promise<ReportAgentConfig> {
 }
 
 type WebGrant = 'off' | 'gated' | 'open'
+/** MCP connector epic stage 1 PR3 — per-connector crud ceiling. 'delete' is unrepresentable
+ *  (the ceiling vocabulary excludes it; Python rejects it at store time). */
+type ConnectorGrant = 'read' | 'write' | 'update'
+type ConnectorGrants = Record<string, ConnectorGrant>
 
-/** One permission axis snapshot. skills null = not configured (server default mount set). */
+/** One permission axis snapshot. skills null = not configured (server default mount set);
+ *  connectors {} = no connector authorized (the safe default on both create and a NULL policy). */
 interface PermState {
   exec: boolean
   web: WebGrant
   skills: string[] | null
+  connectors: ConnectorGrants
 }
 
 /** Presentational mirror of the backend DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS (agent_runs.py) —
@@ -74,6 +80,21 @@ interface PermState {
 const DEFAULT_MOUNTED_SKILLS = ['email', 'search', 'report'] as const
 
 const WEB_RANK: Record<WebGrant, number> = { off: 0, gated: 1, open: 2 }
+/** PR3 ceiling order (read < write < update); 0 = the connector is not granted at all. */
+const CONNECTOR_RANK: Record<ConnectorGrant, number> = { read: 1, write: 2, update: 3 }
+
+/** Fail-closed per-entry read of a grant map (server row OR model proposal): only exact
+ *  'read'/'write'/'update' under a non-empty key survives, so junk / 'delete' can never be
+ *  rendered as an authorization the owner is approving. */
+function readConnectorGrants(raw: unknown): ConnectorGrants {
+  if (raw == null || typeof raw !== 'object' || Array.isArray(raw)) return {}
+  const out: ConnectorGrants = {}
+  for (const [cid, ceiling] of Object.entries(raw as Record<string, unknown>)) {
+    if (!cid) continue
+    if (ceiling === 'read' || ceiling === 'write' || ceiling === 'update') out[cid] = ceiling
+  }
+  return out
+}
 
 function permsOfRow(row: ReportAgentConfig | null): PermState {
   const tp = row?.tool_policy
@@ -81,7 +102,8 @@ function permsOfRow(row: ReportAgentConfig | null): PermState {
   return {
     exec: tp?.grant_exec === true,
     web: web === 'gated' || web === 'open' ? web : 'off',
-    skills: Array.isArray(tp?.skills) ? tp.skills : null
+    skills: Array.isArray(tp?.skills) ? tp.skills : null,
+    connectors: readConnectorGrants(tp?.grant_connectors)
   }
 }
 
@@ -107,7 +129,10 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
     data.allowedTools !== undefined ||
     data.grantExec !== undefined ||
     data.grantWeb !== undefined ||
-    data.skills !== undefined
+    data.skills !== undefined ||
+    // PR3 — a connector grant IS a permission axis: without this the "no server baseline →
+    // reject-only" floor would not apply to a patch that only moves connector ceilings.
+    data.connectors !== undefined
 
   useEffect(() => {
     if (phase !== 'pending' || !isUpdate || !data.agentId) return
@@ -138,25 +163,52 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
   const effectiveSkills = (skills: string[] | null): readonly string[] =>
     skills === null ? DEFAULT_MOUNTED_SKILLS : skills
 
+  /** PR3 — "notion=write · jira=read"; empty map = no external service authorized. */
+  const connectorsLabel = (grants: ConnectorGrants): string => {
+    const entries = Object.entries(grants)
+    return entries.length === 0
+      ? t('chat.customAgentCard.connectorsNone')
+      : entries
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(
+            ([cid, ceiling]) => `${cid}=${t(`chat.customAgentCard.connectorCeiling.${ceiling}`)}`
+          )
+          .join(' · ')
+  }
+
   const title = t(
     isUpdate ? 'chat.customAgentCard.titleUpdate' : 'chat.customAgentCard.titleCreate'
   )
 
   // ── permission model: create diffs against the safe defaults; update against the SERVER row ──
-  const before: PermState = isUpdate ? permsOfRow(facts) : { exec: false, web: 'off', skills: null }
+  const before: PermState = isUpdate
+    ? permsOfRow(facts)
+    : { exec: false, web: 'off', skills: null, connectors: {} }
   const after: PermState = {
     exec:
       data.capabilities?.files !== undefined
         ? data.capabilities.files === 'on'
         : (data.grantExec ?? before.exec),
     web: data.capabilities?.web ?? data.grantWeb ?? before.web,
-    skills: data.skills !== undefined ? data.skills : before.skills
+    skills: data.skills !== undefined ? data.skills : before.skills,
+    // PR3 — grant_connectors is a WHOLE-MAP replace on the wire (toConfigPatch assigns it
+    // verbatim), so an explicit `{}` really does clear every grant; an absent key keeps the row.
+    connectors:
+      data.connectors !== undefined ? readConnectorGrants(data.connectors) : before.connectors
   }
   const execEscalated = !before.exec && after.exec
   const webEscalated = WEB_RANK[after.web] > WEB_RANK[before.web]
   const newSkills = effectiveSkills(after.skills).filter(
     (s) => !effectiveSkills(before.skills).includes(s)
   )
+  // PR3 — escalated = any connector newly granted OR raised to a higher ceiling (a connector that
+  // only loses/keeps its ceiling is a change, not an escalation).
+  const escalatedConnectors = Object.entries(after.connectors)
+    .filter(([cid, ceiling]) => {
+      const prev = before.connectors[cid]
+      return CONNECTOR_RANK[ceiling] > (prev ? CONNECTOR_RANK[prev] : 0)
+    })
+    .map(([cid, ceiling]) => `${cid}=${ceiling}`)
 
   const permRow = (
     label: string,
@@ -301,9 +353,23 @@ export function CustomAgentApprovalCard(props: ToolCallMessagePartProps): React.
                 skillsLabel(before.skills) !== skillsLabel(after.skills),
                 false
               )}
+              {permRow(
+                t('chat.customAgentCard.connectors'),
+                connectorsLabel(before.connectors),
+                connectorsLabel(after.connectors),
+                connectorsLabel(before.connectors) !== connectorsLabel(after.connectors),
+                escalatedConnectors.length > 0
+              )}
               {isUpdate && newSkills.length > 0 && (
                 <div className="text-aux text-fail">
                   {t('chat.customAgentCard.newSkills', { skills: newSkills.join('、') })}
+                </div>
+              )}
+              {escalatedConnectors.length > 0 && (
+                <div className="text-aux text-fail">
+                  {t('chat.customAgentCard.connectorsWarn', {
+                    grants: escalatedConnectors.join('、')
+                  })}
                 </div>
               )}
               {after.exec && (execEscalated || !isUpdate) && (
