@@ -165,7 +165,10 @@ beforeEach(() => {
       data: {
         customAgentsEnabled: true,
         webToolsEnabled: true,
-        execToolsEnabled: true
+        execToolsEnabled: true,
+        // MCP connector PR5 — 第七卡的 connector 行现在与 flag 绑定（flag off 时那些端点全
+        // 409），故抽屉用例的默认态必须显式开，否则 connector.list 根本不会被调用。
+        connectorToolsEnabled: true
       }
     })
   }) as unknown as typeof fetch
@@ -589,7 +592,10 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
       />
     )
     // 第七卡 notion 行（label 来自 connector.list 的 display_name）：只读 → 关
-    fireEvent.click(await screen.findByRole('button', { name: 'Notion: 关' }))
+    // 🔴 PR5 起这一行要等**两跳** query（/chat/config 的 flag → 才启用 GET /api/connector），
+    // 在满负载并行跑（254 文件）里 1s 默认超时会真的到点 → 显式给足余量，别让一个 CPU 饥饿
+    // 变成假红。
+    fireEvent.click(await screen.findByRole('button', { name: 'Notion: 关' }, { timeout: 5000 }))
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     const tp = mockSetConfig.mock.calls[0][1].tool_policy
@@ -606,12 +612,39 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
         onClose={() => {}}
       />
     )
-    fireEvent.click(await screen.findByRole('button', { name: 'Notion: 可写' }))
+    // 同上：flag → connector.list 两跳，默认 1s 在并行满负载下不够。
+    fireEvent.click(await screen.findByRole('button', { name: 'Notion: 可写' }, { timeout: 5000 }))
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     expect(mockSetConfig.mock.calls[0][1].tool_policy.grant_connectors).toEqual({
       notion: 'update'
     })
+  })
+
+  // MCP connector PR5 —— flag 破口回归。PR4 的 useConnectorOptions 只看抽屉开合，于是 flag off
+  // 时打开抽屉照样打 GET /api/connector 拿 409；更糟的是它与设置页 ConnectorsSection 共用
+  // `qk.connectors()` 缓存键 —— 一个 error 结果会被写进那份共享缓存。
+  test('flag off → 打开抽屉零 /api/connector 请求（不写脏共享缓存）', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: { customAgentsEnabled: true, connectorToolsEnabled: false }
+      })
+    }) as unknown as typeof fetch
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    // 抽屉真的渲染出来了（不是"因为没渲染所以没请求"的假阴性）。
+    await screen.findByRole('button', { name: 'email_list_filter' })
+    expect(mockConnectorList).not.toHaveBeenCalled()
+  })
+
+  test('flag 字段缺席（旧后端 / config 不可达）→ 同样零请求（按 off 处理，fail-closed）', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { customAgentsEnabled: true } })
+    }) as unknown as typeof fetch
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    await screen.findByRole('button', { name: 'email_list_filter' })
+    expect(mockConnectorList).not.toHaveBeenCalled()
   })
 
   test('toolOptions 失败 → 工具区显示无法加载 + 编辑保存 patch 无 tool_policy', async () => {

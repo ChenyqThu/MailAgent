@@ -87,6 +87,13 @@ function openExternal(url: string): void {
   else window.open(url, '_blank', 'noopener')
 }
 
+/** sync 统计的收窄读取。`ConnectorSyncResult` 的统计键**有意**是 `unknown`（服务端可以加
+ *  计数而契约不钉死），所以取用处显式收窄一次：拿不到数就当 0，绝不把 `undefined` 插进文案。 */
+function countOf(result: Record<string, unknown>, key: string): number {
+  const raw = result[key]
+  return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0
+}
+
 /** epoch 秒 → 本地可读时间；非法值返回 null（调用方退化成"未知"文案，不显示 Invalid Date）。 */
 function formatEpoch(sec: number | null | undefined): string | null {
   if (sec == null || !Number.isFinite(sec)) return null
@@ -103,6 +110,9 @@ const PILL_BASE =
 const STATUS_PILL_CLASS: Record<ConnectorStatusValue, string> = {
   connected: 'bg-ok/15 text-ok',
   authorizing: 'bg-warn/15 text-warn',
+  // needs_reauth 与 error 同吃危险色档：对用户是同一级别的「现在用不了」，区别在**主操作**
+  // （重新连接 vs 重试），那由下面的按钮文案承担，不靠药丸颜色暗示。
+  needs_reauth: 'bg-fail/15 text-fail',
   error: 'bg-fail/15 text-fail',
   disconnected: 'bg-ink-4 text-ink-fg-2'
 }
@@ -110,6 +120,7 @@ const STATUS_PILL_CLASS: Record<ConnectorStatusValue, string> = {
 const STATUS_LABEL_KEYS: Record<ConnectorStatusValue, string> = {
   connected: 'settings.connectors.status.connected',
   authorizing: 'settings.connectors.status.authorizing',
+  needs_reauth: 'settings.connectors.status.needsReauth',
   error: 'settings.connectors.status.error',
   disconnected: 'settings.connectors.status.disconnected'
 }
@@ -269,6 +280,7 @@ function ConnectorRow({
     timeoutSeconds: number
   } | null>(null)
   const [syncing, setSyncing] = React.useState(false)
+  const [purging, setPurging] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
   const [disconnecting, setDisconnecting] = React.useState(false)
 
@@ -366,14 +378,37 @@ function ConnectorRow({
   async function handleSync(): Promise<void> {
     setSyncing(true)
     try {
-      await api.connector.sync(id)
+      const result = await api.connector.sync(id)
       await invalidateList()
       await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
-      toastSuccess(t('settings.connectors.syncDone'))
+      const orphaned = countOf(result, 'orphaned')
+      toastSuccess(
+        t('settings.connectors.syncDone', {
+          inserted: countOf(result, 'inserted'),
+          updated: countOf(result, 'updated'),
+          orphaned
+        })
+      )
+      // 「有工具失效了」是这次同步唯一需要用户看一眼的结果 —— 折叠区里躺着的失效行才是
+      // 证据，所以直接展开给他，而不是让 toast 说完就消失、把找证据的活儿留给用户。
+      if (orphaned > 0) setExpanded(true)
     } catch (err) {
       toastError(t('settings.connectors.title'), errorMessage(err))
     } finally {
       setSyncing(false)
+    }
+  }
+
+  async function handlePurgeOrphans(): Promise<void> {
+    setPurging(true)
+    try {
+      const result = await api.connector.purgeOrphans(id)
+      await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      toastSuccess(t('settings.connectors.tools.purgeDone', { count: result.purged }))
+    } catch (err) {
+      toastError(t('settings.connectors.saveFailed'), errorMessage(err))
+    } finally {
+      setPurging(false)
     }
   }
 
@@ -447,6 +482,8 @@ function ConnectorRow({
         </>
       )
     }
+    // needs_reauth 走**同一个** handleConnect —— 「重新连接」就是重走一次 OAuth，没有第二套
+    // 逻辑；变的只是文案（对着一个曾经连上、现在授权失效的行说「连接」会让人以为没连过）。
     return (
       <Button
         size="sm"
@@ -455,7 +492,9 @@ function ConnectorRow({
         onClick={() => void handleConnect()}
       >
         {starting ? <Loader2 className="size-3.5 animate-spin" /> : null}
-        {t('settings.connectors.connect')}
+        {connector.status === 'needs_reauth'
+          ? t('settings.connectors.reconnect')
+          : t('settings.connectors.connect')}
       </Button>
     )
   })()
@@ -482,6 +521,7 @@ function ConnectorRow({
         <div className="py-1.5 text-aux text-ink-fg-3">{t('settings.connectors.tools.empty')}</div>
       )
     }
+    const orphanCount = toolsQuery.data.filter((x) => x.orphan).length
     return (
       <>
         <div className="pb-1 text-micro text-ink-fg-3">
@@ -494,6 +534,21 @@ function ConnectorRow({
             onChange={(x, next) => void handleToolState(x, next)}
           />
         ))}
+        {/* 清理只删已失效行 —— 它们恒不注册、恒不可调用，删掉不改变任何 AI 能做的事，
+            故不配确认对话框（给低风险动作加确认会稀释真正需要确认的那些）。 */}
+        {orphanCount > 0 ? (
+          <div className="flex justify-end pt-1.5">
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={purging}
+              onClick={() => void handlePurgeOrphans()}
+            >
+              {purging ? <Loader2 className="size-3.5 animate-spin" /> : null}
+              {t('settings.connectors.tools.purgeOrphans', { count: orphanCount })}
+            </Button>
+          </div>
+        ) : null}
       </>
     )
   })()
@@ -534,10 +589,14 @@ function ConnectorRow({
                     </span>
                   ) : null}
                   <span className={expired ? 'text-warn' : undefined}>
+                    {/* 🔴 `expires_at == null` 的真实语义是「**由自动刷新维护**」，不是「未知」：
+                        有 refresh_token 时后端有意在明文列写 NULL（Notion 就是这样），所以这一
+                        支恒成立于一个健康的连接。旧文案「令牌有效期未知」把一个正常状态说成了
+                        可疑状态，用户会去点重连修一个没坏的东西。 */}
                     {connector.credential == null
                       ? t('settings.connectors.tokenNone')
                       : expiresAt == null
-                        ? t('settings.connectors.tokenUnknown')
+                        ? t('settings.connectors.tokenAutoRefresh')
                         : expired
                           ? t('settings.connectors.tokenExpired', { time: expiresAt })
                           : t('settings.connectors.tokenExpires', { time: expiresAt })}

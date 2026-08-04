@@ -175,6 +175,7 @@ export type {
   ConnectorSetToolEnabledResult,
   ConnectorSetPreprocessResult,
   ConnectorDisconnectResult,
+  ConnectorPurgeOrphansResult,
   ConnectorApi
 } from './types/connector'
 export type { SearchAgentPhase, SearchAgentInput, SearchAgentResult } from './types/search-agent'

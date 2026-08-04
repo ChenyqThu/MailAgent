@@ -69,8 +69,12 @@ def _store():
     return get_agent_config_store()
 
 
-def _raise_from_connector_error(e: Exception) -> NoReturn:
-    """ConnectorError（stable code）→ APIError（HTTP 语义）。"""
+def _raise_from_connector_error(e: Exception, *, message: Optional[str] = None) -> NoReturn:
+    """ConnectorError（stable code）→ APIError（HTTP 语义）。
+
+    ``message`` = 覆盖对外文案（授权失效落态点用可行动文案换掉 client 层的技术原文；
+    原异常仍挂在 ``__cause__`` 上，日志/调试拿得到）。
+    """
     code = getattr(e, "code", "")
     http = {
         "E_CONNECTOR_UNKNOWN": 404,
@@ -81,7 +85,7 @@ def _raise_from_connector_error(e: Exception) -> NoReturn:
         "E_CONNECTOR_NETWORK": 502,
         "E_CONNECTOR_PROTOCOL": 502,
     }.get(code, 500)
-    raise APIError(code or "E_INTERNAL", str(e), http_status=http) from e
+    raise APIError(code or "E_INTERNAL", message or str(e), http_status=http) from e
 
 
 def _flow_view(flow: Any) -> Optional[dict[str, Any]]:
@@ -230,6 +234,10 @@ async def sync_tools(
     definition = _connector_def(connector_id)
     from src.connectors.client import ConnectorClient, ConnectorError
     from src.connectors.gate import ConnectorBusy
+    from src.connectors.service import (
+        CONNECTOR_REAUTH_ERROR_CODES,
+        CONNECTOR_REAUTH_MESSAGE,
+    )
 
     store = _store()
     await run_in_threadpool(
@@ -245,14 +253,17 @@ async def sync_tools(
     except ConnectorBusy as e:
         raise APIError("E_CONNECTOR_BUSY", str(e), http_status=409) from e
     except ConnectorError as e:
-        # 刷新失败 / 授权失效 → 连接转 error 态并如实告知（PRD「不静默重试到死」）。
-        if e.code in ("E_CONNECTOR_OAUTH", "E_CONNECTOR_NOT_CONNECTED"):
+        # 刷新失败 / 授权失效 → 连接落 needs_reauth + **可行动**文案（PRD「不静默重试到死」）。
+        # 码表与文案与 invoke 侧同一份（service.py）—— 两个落态点绝不各抄一遍。
+        if e.code in CONNECTOR_REAUTH_ERROR_CODES:
             await run_in_threadpool(
                 store.update_connector_state,
                 connector_id,
-                status="error",
-                last_error=str(e)[:500],
+                status="needs_reauth",
+                last_error=CONNECTOR_REAUTH_MESSAGE,
             )
+            logger.warning("[connector] {} needs reauth (sync): {}", connector_id, e)
+            _raise_from_connector_error(e, message=CONNECTOR_REAUTH_MESSAGE)
         _raise_from_connector_error(e)
     stats = await run_in_threadpool(store.sync_connector_tools, connector_id, tools)
     await run_in_threadpool(
@@ -418,6 +429,31 @@ async def set_tool_enabled(
             ),
         },
         request=request,
+    )
+
+
+@router.post(
+    "/{connector_id}/tools/purge_orphans", dependencies=[Depends(verify_cf_access)]
+)
+async def purge_orphan_tools(
+    connector_id: str, request: Request, settings=Depends(get_settings)
+) -> Any:
+    """清掉该 connector 的 orphan 工具行（PR5 设置面「清理已失效工具」）。
+
+    orphan = 远端清单里已消失、但按 refresh 纪律 4 保留下来的历史行（防服务器抖一下就把
+    用户配置抹掉）。攒久了在设置面就是噪音，这里是 owner **显式**清理的出口 —— 自动回收
+    永远不做。只删 ``orphan=1``，在册工具与其 enabled 覆盖一行不碰。
+
+    未知 connector id → 404（与 ``GET /{id}/tools`` 同判法：registry 里没有就是没有）。
+    已知但从未连接 / 没有 orphan 行 → 200 ``{"purged": 0}``（删空不是错，前端不必先探）。
+    """
+    _require_enabled(settings)
+    _connector_def(connector_id)
+    purged = await run_in_threadpool(
+        _store().purge_orphan_connector_tools, connector_id
+    )
+    return success_envelope(
+        {"connector_id": connector_id, "purged": purged}, request=request
     )
 
 

@@ -113,6 +113,22 @@ class ConnectorError(Exception):
         self.code = code
 
 
+def _sole_leaf(eg: BaseException) -> Optional[BaseException]:
+    """（可嵌套的）ExceptionGroup 只裹着**一个**异常时拆到叶子；多子异常 → None。
+
+    只拆「一个」是有意的：并发多错时挑哪个当代表都是猜，原样抛出让上层看到全貌。
+
+    （``BaseExceptionGroup`` 是 3.11 内建；ruff 按 pyproject 的 ``requires-python=">=3.9"``
+    判它未定义 —— 本模块硬依赖 mcp SDK[≥3.10] + 只跑在本机 3.11，故 noqa 而不是改全局。）
+    """
+    cur: BaseException = eg
+    while isinstance(cur, BaseExceptionGroup):  # noqa: F821 — 3.11 内建，见 docstring
+        if len(cur.exceptions) != 1:
+            return None
+        cur = cur.exceptions[0]
+    return cur
+
+
 def _timeout_note(elapsed: float, limit_desc: str) -> str:
     """超时分支的可诊断文案（issue #69）：实际耗时 + 生效上限是多少、来自哪。"""
     return f"timed out after {elapsed:.1f}s ({limit_desc})"
@@ -256,20 +272,34 @@ class ConnectorClient:
         gate_timeout = None if self.interactive else GATE_WAIT_TIMEOUT_SECONDS
         started = time.monotonic()
         try:
-            async with connector_gate.hold(self.namespace, timeout=gate_timeout):
-                provider = self._build_provider()
-                await self._prime(provider)
-                async with httpx2.AsyncClient(
-                    auth=provider,
-                    follow_redirects=True,
-                    timeout=httpx2.Timeout(self.timeout),
-                    transport=http_transport,
-                ) as http:
-                    transport = streamable_http_client(
-                        self.definition.server_url, http_client=http
-                    )
-                    async with Client(transport) as client:
-                        yield client
+            try:
+                async with connector_gate.hold(self.namespace, timeout=gate_timeout):
+                    provider = self._build_provider()
+                    await self._prime(provider)
+                    async with httpx2.AsyncClient(
+                        auth=provider,
+                        follow_redirects=True,
+                        timeout=httpx2.Timeout(self.timeout),
+                        transport=http_transport,
+                    ) as http:
+                        transport = streamable_http_client(
+                            self.definition.server_url, http_client=http
+                        )
+                        async with Client(transport) as client:
+                            yield client
+            except BaseExceptionGroup as eg:  # noqa: F821 — 3.11 内建，见 _sole_leaf
+                # 🔴 会话内部是 anyio TaskGroup（streamable_http），它把**单个**异常也裹成
+                # ExceptionGroup —— 下面那串 `except ConnectorError / httpx / MCPError` 一条
+                # 都匹配不上，异常会以 ExceptionGroup 形态原样逃出去。后果不是「日志难看」：
+                # invoke/sync 侧靠 `except ConnectorError` + code 判定落 needs_reauth，裹一层
+                # 就永不触发 —— 刷新失败（授权被撤销）这条**最主要**的失效路径正好在
+                # TaskGroup 里（provider 的 redirect_handler 抛 E_CONNECTOR_NOT_CONNECTED）。
+                # 故先拆包：只裹一个异常时拆到叶子重抛，让下面同一套映射照常认领；真·多子
+                # 异常（并发多错）拆不动，原样抛出不猜。
+                leaf = _sole_leaf(eg)
+                if leaf is None:
+                    raise
+                raise leaf from eg
         except (ConnectorError, ConnectorBusy):
             raise
         except httpx2.TimeoutException as e:

@@ -17,6 +17,7 @@ import type {
   ConnectorOAuthStartResult,
   ConnectorSetEnabledResult,
   ConnectorSetPreprocessResult,
+  ConnectorPurgeOrphansResult,
   ConnectorSetToolEnabledResult,
   ConnectorStatusView,
   ConnectorSummary,
@@ -106,6 +107,16 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
         baseUrl,
         'POST',
         `/connector/${seg(connectorId)}/disconnect`
+      )
+    },
+
+    purgeOrphans(connectorId: string): Promise<ConnectorPurgeOrphansResult> {
+      // 🔴 固定路径段 `purge_orphans` 排在 `/tools/{name}/enabled` 之后 —— 它不是工具名位，
+      // 故不走 seg()（一个真叫 "purge_orphans" 的远端工具也不会撞：那条路径多一段）。
+      return request<ConnectorPurgeOrphansResult>(
+        baseUrl,
+        'POST',
+        `/connector/${seg(connectorId)}/tools/purge_orphans`
       )
     }
   }

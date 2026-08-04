@@ -206,14 +206,41 @@ def test_allowed_call_reaches_remote_and_reports_elapsed(store, monkeypatch):
     assert isinstance(out["elapsed_ms"], int)
 
 
-def test_oauth_failure_marks_connector_error(store, monkeypatch):
+def test_oauth_failure_marks_connector_needs_reauth(store, monkeypatch):
+    """PR5：授权失效落 ``needs_reauth``（可行动），并把技术原文换成可行动文案。"""
     import src.connectors.client as client_mod
+    from src.connectors.service import CONNECTOR_REAUTH_MESSAGE
 
     class _Unauthorized(_OkClient):
         async def call_tool(self, tool_name, arguments=None, **_k):
-            raise client_mod.ConnectorError("nope", code="E_CONNECTOR_OAUTH")
+            raise client_mod.ConnectorError(
+                "nope — run POST /api/connector/{id}/oauth/start", code="E_CONNECTOR_OAUTH"
+            )
 
     monkeypatch.setattr(client_mod, "ConnectorClient", _Unauthorized)
-    with pytest.raises(client_mod.ConnectorError):
+    with pytest.raises(client_mod.ConnectorError) as ei:
         _invoke(connector_id=CID, tool_name="search")
-    assert store.get_connector(CID).status == "error"  # 如实转 error，不静默重试到死
+    # code 不变（HTTP 映射 / 调用方判别照旧），message 换成可行动文案。
+    assert ei.value.code == "E_CONNECTOR_OAUTH"
+    assert str(ei.value) == CONNECTOR_REAUTH_MESSAGE
+    assert "oauth/start" not in str(ei.value)
+    row = store.get_connector(CID)
+    assert row.status == "needs_reauth"  # 如实落态，不静默重试到死
+    assert "reconnect" in (row.last_error or "")
+
+
+def test_transient_failure_does_not_touch_connector_status(store, monkeypatch):
+    """超时/网络类失败**不落态** —— 远端抖一下不该被说成「授权没了」。"""
+    import src.connectors.client as client_mod
+
+    store.update_connector_state(CID, status="connected")
+
+    class _Flaky(_OkClient):
+        async def call_tool(self, tool_name, arguments=None, **_k):
+            raise client_mod.ConnectorError("slow", code="E_CONNECTOR_TIMEOUT")
+
+    monkeypatch.setattr(client_mod, "ConnectorClient", _Flaky)
+    with pytest.raises(client_mod.ConnectorError) as ei:
+        _invoke(connector_id=CID, tool_name="search")
+    assert str(ei.value) == "slow"  # 原文不动（只有授权失效那两码才包装）
+    assert store.get_connector(CID).status == "connected"

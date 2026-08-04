@@ -9,8 +9,18 @@
 // PR3 那组「授权天花板词表」不同（后者是安全判定、已由
 // tests/config/test_connector_contract_parity.py 建闸）。
 
-/** connector 连接态值域（Python `CONNECTOR_STATUSES`，写侧校验的同一组值）。 */
-export type ConnectorStatusValue = 'disconnected' | 'authorizing' | 'connected' | 'error'
+/** connector 连接态值域（Python `CONNECTOR_STATUSES`，写侧校验的同一组值）。
+ *
+ *  🔴 `'needs_reauth'`（PR5）与 `'error'` **不是**同一件事，故是独立的值而不是复用 error：
+ *  error = 这次操作失败了（网络/远端 5xx/协议），重试可能就好；needs_reauth = 授权本身
+ *  已失效或被撤销，**重试永远不会好**，只有重走一次 OAuth 才行。UI 因此给不同的主操作
+ *  （「重新连接」而不是「连接」/「同步」），把用户直接送到唯一有用的那一步。 */
+export type ConnectorStatusValue =
+  | 'disconnected'
+  | 'authorizing'
+  | 'connected'
+  | 'needs_reauth'
+  | 'error'
 
 /** 工具的 crud 归类（Python `CONNECTOR_CRUD_TYPES`）。`'delete'` 是保留位：照常在清单里，
  *  但恒不可启用、恒不可调用（MVP 安全地板）。 */
@@ -112,6 +122,9 @@ export interface ConnectorApi {
   setPreprocessEnabled(connectorId: string, enabled: boolean): Promise<ConnectorSetPreprocessResult>
   /** 断开：逐条删凭证 + 状态回 disconnected；**工具清单与 per-tool 配置保留**。 */
   disconnect(connectorId: string): Promise<ConnectorDisconnectResult>
+  /** PR5 — 删掉 orphan 工具行（远端已不再提供的那些）。只删已失效行，非破坏性：
+   *  它们本来就恒不注册、恒不可调用，删的是一份过期台账。 */
+  purgeOrphans(connectorId: string): Promise<ConnectorPurgeOrphansResult>
 }
 
 export interface ConnectorOAuthStartResult {
@@ -147,4 +160,10 @@ export interface ConnectorSetPreprocessResult {
 export interface ConnectorDisconnectResult {
   connector_id: string
   deleted_credentials: number
+}
+
+/** PR5 — `POST /{id}/tools/purge_orphans` 的响应（`purged` = 实际删掉的行数）。 */
+export interface ConnectorPurgeOrphansResult {
+  connector_id: string
+  purged: number
 }

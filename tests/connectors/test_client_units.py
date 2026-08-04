@@ -236,3 +236,118 @@ def test_prime_noop_without_tokens_or_plain_storage():
     provider2 = cc2._build_provider()
     asyncio.run(cc2._prime(provider2))
     assert provider2.context.token_expiry_time is None
+
+
+# ── 刷新失败链（PR5）：refresh token 被撤销 → E_CONNECTOR_NOT_CONNECTED ──────────
+#
+# 🔴 这是 needs_reauth 落态的**真实**触发路径，也是 ExceptionGroup 拆包闸的理由：授权
+# 失效发生在 streamable_http 的 anyio TaskGroup 内部（provider 回落完整授权流 → 非交互
+# redirect handler 抛错），不拆包的话 session() 抛出去的是 ExceptionGroup，invoke/sync 侧
+# `except ConnectorError` 认不出来 → 落态永不触发、HTTP 也退化成 500。
+# 只 mock httpx 传输层（不发网络），SDK 的 auth flow / Client / transport 全是真的。
+
+
+_AS = "https://mcp.notion.com"
+
+
+class _RevokedRefreshStorage(_StubStorage):
+    """已过期的 access token + 被撤销的 refresh token + 已注册 client_info。"""
+
+    def __init__(self):
+        from mcp.shared.auth import OAuthClientInformationFull, OAuthToken
+
+        super().__init__(
+            OAuthToken(
+                access_token="dead",
+                token_type="Bearer",
+                refresh_token="revoked",
+                expires_in=0,
+            ),
+            0,
+        )
+        self._client_info = OAuthClientInformationFull(
+            client_id="cid-test",
+            redirect_uris=["http://127.0.0.1:8765/api/connector/oauth/callback"],
+        )
+
+    async def get_client_info(self):
+        return self._client_info
+
+
+def _oauth_mock_transport(seen: list[str]):
+    """按 URL 分派的假上游：refresh 一律 400（被撤销），MCP 请求一律 401。"""
+    import httpx2
+
+    def _handler(request: "httpx2.Request") -> "httpx2.Response":
+        seen.append(f"{request.method} {request.url.path}")
+        path = request.url.path
+        if request.method == "POST" and path.endswith("/token"):
+            return httpx2.Response(400, json={"error": "invalid_grant"})
+        if "oauth-protected-resource" in path:
+            return httpx2.Response(
+                200, json={"resource": f"{_AS}/mcp", "authorization_servers": [_AS]}
+            )
+        if "oauth-authorization-server" in path or "openid-configuration" in path:
+            return httpx2.Response(
+                200,
+                json={
+                    "issuer": _AS,
+                    "authorization_endpoint": f"{_AS}/authorize",
+                    "token_endpoint": f"{_AS}/token",
+                    "registration_endpoint": f"{_AS}/register",
+                    "response_types_supported": ["code"],
+                    "grant_types_supported": ["authorization_code", "refresh_token"],
+                    "code_challenge_methods_supported": ["S256"],
+                },
+            )
+        return httpx2.Response(
+            401,
+            headers={
+                "WWW-Authenticate": (
+                    "Bearer resource_metadata="
+                    f'"{_AS}/.well-known/oauth-protected-resource/mcp"'
+                )
+            },
+            json={"error": "unauthorized"},
+        )
+
+    return httpx2.MockTransport(_handler)
+
+
+def test_revoked_refresh_token_surfaces_not_connected():
+    import httpx2
+
+    seen: list[str] = []
+    cc = ConnectorClient(
+        "notion",
+        interactive=False,
+        timeout_seconds=5.0,
+        storage=_RevokedRefreshStorage(),
+    )
+
+    async def _run():
+        async with cc.session(http_transport=_oauth_mock_transport(seen)):
+            pass  # pragma: no cover —— 进不到这里（授权失效必抛）
+
+    with pytest.raises(ConnectorError) as ei:
+        asyncio.run(_run())
+    # 🔴 抛出来的必须是 ConnectorError 本体（不是裹着它的 ExceptionGroup）：sync/invoke 侧
+    # 就是靠这个类型 + code 落 needs_reauth 的。
+    assert ei.value.code == "E_CONNECTOR_NOT_CONNECTED"
+    assert not isinstance(ei.value, httpx2.HTTPError)
+    # 链路走到位：刷新真发出去过、被拒后回落到完整授权流（发现 → 授权 URL → 非交互拒绝）。
+    assert any(s.endswith("/token") for s in seen), seen
+    assert any("oauth-protected-resource" in s for s in seen), seen
+
+
+def test_sole_leaf_unwraps_only_single_child_groups():
+    """拆包只认「只裹一个」：多子异常拆不动 → None（并发多错时挑代表都是猜）。"""
+    from src.connectors.client import _sole_leaf
+
+    group = ExceptionGroup  # noqa: F821 — 3.11 内建（ruff 按 requires-python=3.9 判未定义）
+    boom = ValueError("boom")
+    assert _sole_leaf(boom) is boom
+    assert _sole_leaf(group("g", [boom])) is boom
+    # 嵌套单子 → 一路拆到叶子（anyio 嵌套 TaskGroup 的形态）。
+    assert _sole_leaf(group("outer", [group("inner", [boom])])) is boom
+    assert _sole_leaf(group("g", [boom, KeyError("k")])) is None

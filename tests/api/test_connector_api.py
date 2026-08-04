@@ -66,6 +66,17 @@ def flag_on_client(client, fresh_agent_cfg):
 # ── flag off（默认）：除 callback 外全部 409 ─────────────────────────────────────
 
 
+def test_connector_flag_defaults_off():
+    """灰度纪律 pin：pydantic 默认必须 False（ship off → dogfood → cutover，island 模式）。
+
+    这条红了 = 有人把 cutover 顺手做了 —— 翻默认是产品决定（且要连 Node envBool 一起翻，
+    见 tests/config/test_flag_cross_language.py），不是实现细节。
+    """
+    from src.config import Config
+
+    assert Config.model_fields["mcp_connectors_enabled"].default is False
+
+
 def test_flag_off_all_non_callback_endpoints_409(flag_off_client):
     # 第三列 = 请求体（None → 不发 body）。带必填 Body(...) 的端点必须发合法体，否则
     # 校验会在 handler 之前 400，测出来的就不是 flag 门了。
@@ -80,6 +91,8 @@ def test_flag_off_all_non_callback_endpoints_409(flag_off_client):
         # PR4 —— 两个配置端点同样挂 flag 门。
         ("POST", "/api/connector/notion/enabled", {"enabled": False}),
         ("POST", "/api/connector/notion/tools/search/enabled", {"enabled": True}),
+        # PR5 —— orphan 清理端点同样挂 flag 门。
+        ("POST", "/api/connector/notion/tools/purge_orphans", None),
     ]
     for method, url, body in cases:
         r = flag_off_client.request(method, url, json=body)
@@ -198,23 +211,73 @@ def test_sync_persists_tools_and_status(flag_on_client, fresh_agent_cfg, monkeyp
     assert tools["search"]["destructive"] is False
 
 
-def test_sync_not_connected_maps_409_and_error_state(flag_on_client, fresh_agent_cfg, monkeypatch):
+def test_sync_not_connected_maps_409_and_needs_reauth_state(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """PR5：授权失效 → ``needs_reauth``（不是笼统 error）+ 可行动文案（不是 curl 指令）。"""
     import src.connectors.client as client_mod
 
     class _Unauthorized(_StubConnectorClient):
         async def list_tools_manifest(self, **_kwargs):
             raise client_mod.ConnectorError(
-                "not authorized", code="E_CONNECTOR_NOT_CONNECTED"
+                "connector is not authorized — run POST /api/connector/{id}/oauth/start",
+                code="E_CONNECTOR_NOT_CONNECTED",
             )
 
     monkeypatch.setattr(client_mod, "ConnectorClient", _Unauthorized)
     r = flag_on_client.post("/api/connector/notion/sync")
     assert r.status_code == 409
-    assert r.json()["error"]["code"] == "E_CONNECTOR_NOT_CONNECTED"
-    # 连接转 error 态并如实告知（PRD：不静默）。
+    err = r.json()["error"]
+    assert err["code"] == "E_CONNECTOR_NOT_CONNECTED"
+    # 对外 message = 可行动文案；client 层「run POST …」的技术原文不外泄给 UI/模型。
+    assert "reconnect" in err["message"]
+    assert "oauth/start" not in err["message"]
+    # 连接落 needs_reauth 并如实告知（PRD：不静默）。
     row = fresh_agent_cfg.get_connector("notion")
-    assert row is not None and row.status == "error"
-    assert "not authorized" in (row.last_error or "")
+    assert row is not None and row.status == "needs_reauth"
+    assert "reconnect" in (row.last_error or "")
+    assert "oauth/start" not in (row.last_error or "")
+
+    # 状态透出到两个读面（设置卡片读 /status、列表读 GET /api/connector）。
+    st = flag_on_client.get("/api/connector/notion/status")
+    assert st.status_code == 200
+    assert st.json()["data"]["status"] == "needs_reauth"
+    assert "reconnect" in st.json()["data"]["last_error"]
+    lst = flag_on_client.get("/api/connector")
+    assert lst.status_code == 200
+    entry = {c["connector_id"]: c for c in lst.json()["data"]["connectors"]}["notion"]
+    assert entry["status"] == "needs_reauth"
+
+
+def test_sync_timeout_does_not_touch_status(flag_on_client, fresh_agent_cfg, monkeypatch):
+    """瞬时故障（超时 / 网络）**不落态** —— 把远端抖一下说成「授权没了」会骗人去重连。"""
+    import src.connectors.client as client_mod
+
+    fresh_agent_cfg.upsert_connector("notion", server_url="https://mcp.notion.com/mcp")
+    fresh_agent_cfg.update_connector_state("notion", status="connected")
+
+    class _Slow(_StubConnectorClient):
+        async def list_tools_manifest(self, **_kwargs):
+            raise client_mod.ConnectorError("timed out", code="E_CONNECTOR_TIMEOUT")
+
+    monkeypatch.setattr(client_mod, "ConnectorClient", _Slow)
+    r = flag_on_client.post("/api/connector/notion/sync")
+    assert r.status_code == 504
+    assert fresh_agent_cfg.get_connector("notion").status == "connected"
+
+
+def test_sync_success_clears_needs_reauth(flag_on_client, fresh_agent_cfg, monkeypatch):
+    """重连/重同步成功 → 从 needs_reauth 起点照常回 connected 且清 last_error。"""
+    import src.connectors.client as client_mod
+
+    fresh_agent_cfg.upsert_connector("notion", server_url="https://mcp.notion.com/mcp")
+    fresh_agent_cfg.update_connector_state(
+        "notion", status="needs_reauth", last_error="stale"
+    )
+    monkeypatch.setattr(client_mod, "ConnectorClient", _StubConnectorClient)
+    assert flag_on_client.post("/api/connector/notion/sync").status_code == 200
+    row = fresh_agent_cfg.get_connector("notion")
+    assert row.status == "connected" and row.last_error is None
 
 
 # ── invoke：MCP 调用代理（PR2）—— 白名单四道闸 + 截断透传 ───────────────────────
@@ -340,9 +403,10 @@ def test_invoke_bad_arguments_shape_400(flag_on_client, fresh_agent_cfg, monkeyp
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
-def test_invoke_not_connected_maps_and_marks_error_state(
+def test_invoke_not_connected_maps_and_marks_needs_reauth(
     flag_on_client, fresh_agent_cfg, monkeypatch
 ):
+    """PR5：invoke 侧与 sync 侧同一份码表 + 同一份可行动文案（落库与对外都换掉技术原文）。"""
     import src.connectors.client as client_mod
 
     _seed_tools(fresh_agent_cfg)
@@ -350,15 +414,42 @@ def test_invoke_not_connected_maps_and_marks_error_state(
     class _Unauthorized(_InvokeStubClient):
         async def call_tool(self, tool_name, arguments=None, **_kwargs):
             raise client_mod.ConnectorError(
-                "not authorized", code="E_CONNECTOR_NOT_CONNECTED"
+                "connector is not authorized — run POST /api/connector/{id}/oauth/start",
+                code="E_CONNECTOR_NOT_CONNECTED",
             )
 
     monkeypatch.setattr(client_mod, "ConnectorClient", _Unauthorized)
     r = flag_on_client.post("/api/connector/notion/tools/search/invoke")
     assert r.status_code == 409
-    assert r.json()["error"]["code"] == "E_CONNECTOR_NOT_CONNECTED"
+    err = r.json()["error"]
+    assert err["code"] == "E_CONNECTOR_NOT_CONNECTED"
+    assert "reconnect" in err["message"] and "oauth/start" not in err["message"]
     row = fresh_agent_cfg.get_connector("notion")
-    assert row is not None and row.status == "error"  # 镜像 sync：授权失效如实转 error 态
+    # 镜像 sync：授权失效落 needs_reauth（可行动），不是笼统 error。
+    assert row is not None and row.status == "needs_reauth"
+    assert "reconnect" in (row.last_error or "")
+
+    st = flag_on_client.get("/api/connector/notion/status")
+    assert st.json()["data"]["status"] == "needs_reauth"
+
+
+def test_invoke_transient_failure_does_not_touch_status(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """网络/超时类失败不落态（与 sync 侧同判别）—— 连接态只表达可行动的那一类。"""
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    fresh_agent_cfg.update_connector_state("notion", status="connected")
+
+    class _Flaky(_InvokeStubClient):
+        async def call_tool(self, tool_name, arguments=None, **_kwargs):
+            raise client_mod.ConnectorError("connreset", code="E_CONNECTOR_NETWORK")
+
+    monkeypatch.setattr(client_mod, "ConnectorClient", _Flaky)
+    r = flag_on_client.post("/api/connector/notion/tools/search/invoke")
+    assert r.status_code == 502
+    assert fresh_agent_cfg.get_connector("notion").status == "connected"
 
 
 # ── oauth/start：后台流交接（fake flow-runner，不发网络）────────────────────────
@@ -745,4 +836,51 @@ def test_tool_enabled_validates_and_404(flag_on_client, fresh_agent_cfg):
     r = _set_tool(flag_on_client, "forged_tool", {"enabled": False})
     assert r.status_code == 404 and r.json()["error"]["code"] == "E_NOT_FOUND"
     r = _set_tool(flag_on_client, "search", {"enabled": False}, connector="ghost")
+    assert r.status_code == 404 and r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ── PR5：orphan 清理端点 ────────────────────────────────────────────────────────
+
+
+def _purge(client, connector="notion"):
+    return client.post(f"/api/connector/{connector}/tools/purge_orphans")
+
+
+def test_purge_orphans_removes_only_orphan_rows(flag_on_client, fresh_agent_cfg):
+    """只删 orphan=1；在册工具与其 enabled 覆盖一行不碰，返回删除计数。"""
+    _seed_tools(fresh_agent_cfg)
+    # 用户对一个在册 read 工具做过覆盖（清理绝不能把它带走）。
+    fresh_agent_cfg.set_connector_tool_enabled("notion", "search", False)
+    # 远端清单只剩 search → create_page / delete_page 变 orphan（行保留，纪律 4）。
+    fresh_agent_cfg.sync_connector_tools(
+        "notion",
+        [{"name": "search", "description": "", "input_schema": None,
+          "output_schema": None, "crud_type": "read"}],
+    )
+    before = {r.tool_name: r for r in fresh_agent_cfg.list_connector_tools("notion")}
+    assert before["create_page"].orphan is True and before["delete_page"].orphan is True
+
+    r = _purge(flag_on_client)
+    assert r.status_code == 200
+    assert r.json()["data"] == {"connector_id": "notion", "purged": 2}
+
+    rows = {x.tool_name: x for x in fresh_agent_cfg.list_connector_tools("notion")}
+    assert set(rows) == {"search"}
+    assert rows["search"].enabled is False  # 用户覆盖原样存活
+
+    # 幂等：再清一次没得清 → 0（不是错）。
+    assert _purge(flag_on_client).json()["data"]["purged"] == 0
+
+
+def test_purge_orphans_zero_when_nothing_orphaned(flag_on_client, fresh_agent_cfg):
+    """全在册 → purged=0 且一行不少；从未连接过的 connector 同样 200/0（删空不是错）。"""
+    _seed_tools(fresh_agent_cfg)
+    assert _purge(flag_on_client).json()["data"]["purged"] == 0
+    assert len(fresh_agent_cfg.list_connector_tools("notion")) == 3
+    r = _purge(flag_on_client, connector="atlassian")
+    assert r.status_code == 200 and r.json()["data"]["purged"] == 0
+
+
+def test_purge_orphans_unknown_connector_404(flag_on_client, fresh_agent_cfg):
+    r = _purge(flag_on_client, connector="ghost")
     assert r.status_code == 404 and r.json()["error"]["code"] == "E_NOT_FOUND"

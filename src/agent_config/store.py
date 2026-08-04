@@ -196,7 +196,14 @@ class ConnectorToolRow:
 
 
 #: connector.status 值域（写侧校验）。
-CONNECTOR_STATUSES = ("disconnected", "authorizing", "connected", "error")
+#:
+#: 🔴 ``needs_reauth`` 与 ``error`` 的二分（PR5）：**授权**失效（过期 / 被撤销 / 从未授权，
+#: 即 ``E_CONNECTOR_OAUTH`` / ``E_CONNECTOR_NOT_CONNECTED`` 两码）落 ``needs_reauth`` ——
+#: 这是**可行动**的一类：owner 去设置里重连就好。其余故障（超时 / 网络 / 协议）**不落态**
+#: （见 connectors/service.py 的落态点）—— 把远端抖一下说成「授权没了」会骗 owner 去做一次
+#: 无用的重新授权。``error`` 保留：授权流本身炸掉时（client.run_connect_flow 的兜底）仍写
+#: 它，且存量行照常读得出来。
+CONNECTOR_STATUSES = ("disconnected", "authorizing", "connected", "needs_reauth", "error")
 
 #: connector_tool.crud_type 值域单源（client.derive_crud_type 的产出、写侧校验、以及
 #: PR2 注册期过滤都以此为准）。'delete' 是保留位：可入库，不可置启用态（Q3=B / Q16=A）。
@@ -390,7 +397,9 @@ CREATE TABLE IF NOT EXISTS connector (
     server_url     TEXT NOT NULL,
     transport      TEXT NOT NULL DEFAULT 'streamable_http',
     display_name   TEXT,
-    status         TEXT NOT NULL DEFAULT 'disconnected',  -- disconnected|authorizing|connected|error
+    -- 值域单源 = CONNECTOR_STATUSES（写侧校验，无 SQL CHECK —— 加值不需要迁移）：
+    -- disconnected|authorizing|connected|needs_reauth|error（needs_reauth = 授权失效，可行动）
+    status         TEXT NOT NULL DEFAULT 'disconnected',
     enabled        INTEGER NOT NULL DEFAULT 1,            -- connector 整体开关（PR2 门控整族注册）
     -- PR3 坑 3：邮件预处理分类侧的**独立**授权位（不复用 custom agent 的 grant_connectors ——
     -- 给 agent 配了 write 绝不能让分类侧跟着继承）。天花板不入库：分类侧恒 read，是「工厂只造
@@ -1296,6 +1305,25 @@ class AgentConfigStore:
                 ),
             )
             conn.commit()
+
+    def purge_orphan_connector_tools(self, connector_id: str) -> int:
+        """删掉该 connector 的 orphan 工具行（PR5 清理出口），返回删除行数。
+
+        orphan 行是 refresh 纪律 4 的**有意**保留物（远端清单里消失 → 标记不删，防服务器
+        抖一下就把用户的 enabled 覆盖抹掉）。代价是攒久了会在设置面堆成噪音，故这里给
+        owner 一个**显式**清理出口 —— 自动回收永远不做（那就把纪律 4 白写了）。
+
+        🔴 ``WHERE orphan=1`` 是本方法的全部安全性：在册工具行（含用户 enabled 覆盖）一行
+        不碰。删完若远端又有了，下次 sync 照常 INSERT（sync 是 upsert，不依赖旧行存在）。
+        未连接 / 没有 orphan 行 → 返回 0（删空不是错）。
+        """
+        with self._connection() as conn:
+            cur = conn.execute(
+                "DELETE FROM connector_tool WHERE connector_id=? AND orphan=1",
+                (connector_id,),
+            )
+            conn.commit()
+        return cur.rowcount
 
     # ======================================================================
     # exec 策略白名单（policy_rules，ADR-001 §6 D4）

@@ -132,7 +132,12 @@ export function CustomAgentDrawer({
   // R3 — openness flag 分面（webToolsEnabled/execToolsEnabled），驱动「额外能力」区禁用提示。
   const opennessFlags = useOpennessFlags(open)
   // PR4 T3 — 第七「外部服务」卡的 connector 行集合（失败降级空数组，不触碰 grant state）。
-  const connectorSummaries = useConnectorOptions(open)
+  // 🔴 PR5 — 必须**同时**看 flag：flag off 时 `/api/connector` 全 409，且这个 query 与设置页
+  // 的 ConnectorsSection 共用 `qk.connectors()` 缓存键 —— 只看抽屉开合会把一个 error 结果写进
+  // 共享缓存。flags 还在加载（undefined）时按 off 处理，加载完 enabled 自然翻真。
+  const connectorSummaries = useConnectorOptions(
+    open && opennessFlags.connectorToolsEnabled === true
+  )
 
   const [enabled, setEnabled] = useState(false)
   const [title, setTitle] = useState('')

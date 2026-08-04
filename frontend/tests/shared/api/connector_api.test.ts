@@ -138,6 +138,23 @@ test('setPreprocessEnabled → POST /{id}/preprocess', async () => {
   expect(out.preprocess_enabled).toBe(true)
 })
 
+test('purgeOrphans → POST /{id}/tools/purge_orphans（固定段，不是工具名位）', async () => {
+  fetchMock.mockResolvedValue(envelopeResponse({ connector_id: 'notion', purged: 3 }))
+  const out = await api.purgeOrphans('notion')
+  expect(calledUrl()).toBe('/api/connector/notion/tools/purge_orphans')
+  expect(String(calledInit().method)).toBe('POST')
+  // 无 body —— 端点不收参数（删的是「全部 orphan 行」，没有第二种语义）。
+  expect(calledBody()).toBeUndefined()
+  expect(out).toEqual({ connector_id: 'notion', purged: 3 })
+})
+
+test('purgeOrphans 的错误同样抛出（flag 关 409 / 未知 connector 404 要能分开渲染）', async () => {
+  fetchMock.mockResolvedValue(errorResponse('E_CONNECTOR_DISABLED', 'off', 409))
+  await expect(api.purgeOrphans('notion')).rejects.toMatchObject({
+    code: 'E_CONNECTOR_DISABLED'
+  })
+})
+
 test('错误信封 → throw Error & {code}（不吞、不降级成空）', async () => {
   fetchMock.mockResolvedValue(
     errorResponse('E_CONNECTOR_DISABLED', 'MCP connectors are disabled', 409)

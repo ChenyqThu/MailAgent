@@ -12,6 +12,13 @@
 //   5. delete 类工具的控件恒 disabled（后端置 true 会 403），但行**照常渲染**——清单完整性。
 //   6. 断开必须先过确认对话框：只点「断开」不该发出 disconnect。
 //   7. 远程 web 面「连接」按钮 disabled（OAuth 回调走 loopback，远程点了只会静默超时）。
+//   8. (PR5) needs_reauth 不是 error 的同义词：主操作变「重新连接」——「重试」对一个被撤销的
+//      授权永远无效，把用户送到唯一有用的那一步。
+//   9. (PR5) `expires_at == null` 说「由自动刷新维护」而不是「未知」：有 refresh_token 的连接
+//      （Notion）恒走这一支，旧文案把健康态说成可疑态。
+//  10. (PR5) sync 结果带计数，且 orphaned>0 自动展开工具区 —— 说了「有 N 个失效」就得让证据
+//      当场可见，不能让用户自己去翻。
+//  11. (PR5) orphan 行数 > 0 才出「清理」入口，点了走 purgeOrphans + 刷新清单。
 //
 // 纯 UI 测试：useMailApi / flag fetcher / toast / i18n 全模块级 mock，不碰 IPC 与 better-sqlite3。
 
@@ -22,11 +29,17 @@ import { createElement } from 'react'
 
 import type { ConnectorSummary, ConnectorToolSummary } from '../../src/shared/api/types'
 
+// t 恒返 key（断言按 key 走），但**记账**：插值参数是 syncDone 计数这类契约的唯一证据，
+// 拼进返回值会把既有的 getByText(key) 断言全打散，所以查 mock.calls 而不是查 DOM 文本。
+const { tMock } = vi.hoisted(() => ({
+  tMock: vi.fn((key: string, _opts?: Record<string, unknown>) => key)
+}))
 vi.mock('react-i18next', () => ({
-  useTranslation: () => ({ t: (key: string) => key })
+  useTranslation: () => ({ t: tMock })
 }))
 
-vi.mock('@shared/state/toast', () => ({ toastError: vi.fn(), toastSuccess: vi.fn() }))
+const { toastSuccess } = vi.hoisted(() => ({ toastSuccess: vi.fn() }))
+vi.mock('@shared/state/toast', () => ({ toastError: vi.fn(), toastSuccess }))
 
 // flag fetcher —— 部分 mock，保留 resolveApiBaseUrl 等真实实现（SkillsSection.test 同款手法）。
 const { flagFetch } = vi.hoisted(() => ({ flagFetch: vi.fn<() => Promise<boolean>>() }))
@@ -45,7 +58,8 @@ const { connectorApi } = vi.hoisted(() => ({
     setEnabled: vi.fn(),
     setToolEnabled: vi.fn(),
     setPreprocessEnabled: vi.fn(),
-    disconnect: vi.fn()
+    disconnect: vi.fn(),
+    purgeOrphans: vi.fn()
   }
 }))
 vi.mock('@shared/hooks/useMailApi', () => ({
@@ -165,6 +179,14 @@ beforeEach(() => {
   flagFetch.mockResolvedValue(true)
   connectorApi.list.mockResolvedValue([NOTION])
   connectorApi.tools.mockResolvedValue(TOOLS)
+  connectorApi.sync.mockResolvedValue({
+    connector_id: 'notion',
+    total: 4,
+    inserted: 0,
+    updated: 4,
+    orphaned: 0
+  })
+  connectorApi.purgeOrphans.mockResolvedValue({ connector_id: 'notion', purged: 1 })
   connectorApi.setEnabled.mockResolvedValue({ connector_id: 'notion', enabled: false })
   connectorApi.setToolEnabled.mockResolvedValue({
     connector_id: 'notion',
@@ -209,6 +231,18 @@ describe('ConnectorsSection — 信任可见性', () => {
     expect(screen.getByText('settings.connectors.status.connected')).toBeTruthy()
     // server_url 是 registry 静态字段，只有列表端点带 —— 行上必须看得见连的是哪台。
     expect(container.textContent).toContain('https://mcp.notion.test/mcp')
+  })
+
+  test('expires_at=null（有 refresh token）→ 说「由自动刷新维护」而不是「未知」', async () => {
+    connectorApi.list.mockResolvedValue([
+      { ...NOTION, credential: { ...NOTION.credential!, expires_at: null } }
+    ])
+    renderUi()
+    await waitFor(() =>
+      expect(screen.getByText('settings.connectors.tokenAutoRefresh')).toBeTruthy()
+    )
+    // 过期警告分支未被波及（这是**另一支**：无 refresh token 时才走）。
+    expect(screen.queryByText('settings.connectors.tokenExpired')).toBeNull()
   })
 
   test('令牌已过期 → 走 tokenExpired 文案', async () => {
@@ -303,6 +337,158 @@ describe('ConnectorsSection — per-tool 三态', () => {
     }
     fireEvent.click(within(deleteGroup).getByRole('button', { name: STATE.on }))
     expect(connectorApi.setToolEnabled).not.toHaveBeenCalled()
+  })
+})
+
+describe('ConnectorsSection — needs_reauth（PR5）', () => {
+  const STALE = connector({
+    connector_id: 'notion',
+    display_name: 'Notion',
+    status: 'needs_reauth',
+    last_error: 'refresh token revoked'
+  })
+
+  test('药丸走 needsReauth，主操作文案是「重新连接」而不是「连接」', async () => {
+    connectorApi.list.mockResolvedValue([STALE])
+    renderUi()
+    await waitFor(() =>
+      expect(screen.getByText('settings.connectors.status.needsReauth')).toBeTruthy()
+    )
+    expect(screen.getByRole('button', { name: 'settings.connectors.reconnect' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'settings.connectors.connect' })).toBeNull()
+    // needs_reauth ≠ connected：不该冒出同步 / 断开这些「连着才有意义」的操作。
+    expect(screen.queryByRole('button', { name: 'settings.connectors.sync' })).toBeNull()
+  })
+
+  test('点「重新连接」走同一条 OAuth 连接流（没有第二套逻辑）', async () => {
+    // happy-dom 的 window.open 会真去解析域名 —— 桩掉，否则测试输出里躺着一串 ENOTFOUND。
+    vi.spyOn(window, 'open').mockReturnValue(null)
+    connectorApi.list.mockResolvedValue([STALE])
+    connectorApi.oauthStart.mockResolvedValue({
+      connector_id: 'notion',
+      authorize_url: 'https://notion.test/authorize',
+      status: 'authorizing',
+      callback_timeout_seconds: 300
+    })
+    renderUi()
+    const btn = await screen.findByRole('button', { name: 'settings.connectors.reconnect' })
+    fireEvent.click(btn)
+    await waitFor(() => expect(connectorApi.oauthStart).toHaveBeenCalledWith('notion'))
+  })
+
+  test('error 行为不变：仍是「连接」按钮 + error 药丸', async () => {
+    connectorApi.list.mockResolvedValue([{ ...STALE, status: 'error' as const }])
+    renderUi()
+    await waitFor(() => expect(screen.getByText('settings.connectors.status.error')).toBeTruthy())
+    expect(screen.getByRole('button', { name: 'settings.connectors.connect' })).toBeTruthy()
+  })
+})
+
+describe('ConnectorsSection — sync 结果可见性（PR5）', () => {
+  async function clickSync(): Promise<void> {
+    renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'settings.connectors.sync' }))
+    await waitFor(() => expect(connectorApi.sync).toHaveBeenCalledWith('notion'))
+  }
+
+  test('toast 带 inserted/updated/orphaned 三个计数（不是固定文案）', async () => {
+    connectorApi.sync.mockResolvedValue({
+      connector_id: 'notion',
+      total: 9,
+      inserted: 2,
+      updated: 4,
+      orphaned: 3
+    })
+    await clickSync()
+    await waitFor(() =>
+      expect(tMock).toHaveBeenCalledWith('settings.connectors.syncDone', {
+        inserted: 2,
+        updated: 4,
+        orphaned: 3
+      })
+    )
+    expect(toastSuccess).toHaveBeenCalledWith('settings.connectors.syncDone')
+  })
+
+  test('统计键缺席（服务端老版本 / 形状变了）→ 计数收窄成 0，绝不把 undefined 插进文案', async () => {
+    connectorApi.sync.mockResolvedValue({ connector_id: 'notion' })
+    await clickSync()
+    await waitFor(() =>
+      expect(tMock).toHaveBeenCalledWith('settings.connectors.syncDone', {
+        inserted: 0,
+        updated: 0,
+        orphaned: 0
+      })
+    )
+  })
+
+  test('orphaned > 0 → 自动展开工具区（失效行当场可见）', async () => {
+    connectorApi.sync.mockResolvedValue({
+      connector_id: 'notion',
+      total: 4,
+      inserted: 0,
+      updated: 3,
+      orphaned: 1
+    })
+    await clickSync()
+    // 展开 = 懒加载的工具 query 被启用 → 清单真的被拉了一次。
+    await waitFor(() => expect(connectorApi.tools).toHaveBeenCalledWith('notion'))
+  })
+
+  test('orphaned = 0 → 不自动展开（没有需要看的东西就别把面板顶开）', async () => {
+    await clickSync()
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled())
+    expect(connectorApi.tools).not.toHaveBeenCalled()
+  })
+})
+
+describe('ConnectorsSection — orphan 清理（PR5）', () => {
+  const WITH_ORPHANS: ConnectorToolSummary[] = [
+    ...TOOLS,
+    tool({ name: 'notion_legacy_a', crud_type: 'read', orphan: true }),
+    tool({ name: 'notion_legacy_b', crud_type: 'write', orphan: true })
+  ]
+
+  test('orphan 行数 = 0 → 不显示清理入口', async () => {
+    const { container } = renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    await expandTools(container, 'notion')
+    await waitFor(() => expect(screen.getByText('notion_search')).toBeTruthy())
+    expect(
+      screen.queryByRole('button', { name: 'settings.connectors.tools.purgeOrphans' })
+    ).toBeNull()
+  })
+
+  test('orphan 行数 > 0 → 显示清理入口，文案带行数', async () => {
+    connectorApi.tools.mockResolvedValue(WITH_ORPHANS)
+    const { container } = renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    await expandTools(container, 'notion')
+    await waitFor(() =>
+      expect(
+        screen.getByRole('button', { name: 'settings.connectors.tools.purgeOrphans' })
+      ).toBeTruthy()
+    )
+    expect(tMock).toHaveBeenCalledWith('settings.connectors.tools.purgeOrphans', { count: 2 })
+  })
+
+  test('点清理 → 调 purgeOrphans 并重拉工具清单（无确认对话框：只删已失效行）', async () => {
+    connectorApi.tools.mockResolvedValue(WITH_ORPHANS)
+    const { container } = renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    await expandTools(container, 'notion')
+    const btn = await screen.findByRole('button', {
+      name: 'settings.connectors.tools.purgeOrphans'
+    })
+    fireEvent.click(btn)
+    await waitFor(() => expect(connectorApi.purgeOrphans).toHaveBeenCalledWith('notion'))
+    // 没有 Dialog 挡在中间 —— 低风险动作不配确认卡。
+    expect(screen.queryByRole('dialog')).toBeNull()
+    // invalidate 生效 = 工具清单被重新拉了一次。
+    await waitFor(() => expect(connectorApi.tools).toHaveBeenCalledTimes(2))
+    expect(toastSuccess).toHaveBeenCalledWith('settings.connectors.tools.purgeDone')
+    expect(tMock).toHaveBeenCalledWith('settings.connectors.tools.purgeDone', { count: 1 })
   })
 })
 

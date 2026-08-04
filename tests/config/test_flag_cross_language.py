@@ -51,6 +51,11 @@ CROSS_LANGUAGE_FLAGS = {
     "MAILAGENT_AI_SDK_SEND_TOOL": [_LIFECYCLE],
     # standing context：Python env-only 热读
     "MAILAGENT_STANDING_CONTEXT_ENABLED": [_CHAT],
+    # MCP connector 总闸（08-01 阶段 1）：Node envBool（gateway 动态工具注入 + manifest 拉取）
+    # ＋ pydantic（serve-api /api/connector/* 的 409 门）—— 与 island 同形态的双载体。
+    # 🔴 双侧默认必须同为 false（灰度未 cutover）；翻默认时两边一起翻，不然会出现
+    # 「gateway 注册了连接器工具但每次调用都 409」或反过来「端点开着却没工具」。
+    "MAILAGENT_MCP_CONNECTORS": [_LIFECYCLE, _CONFIG],
 }
 
 # cutover 5 openness flag：Node envBool 默认 vs Python _hot_bool 字面量，须逐字相等。

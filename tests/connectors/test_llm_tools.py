@@ -105,6 +105,10 @@ def test_orphan_tool_not_registered(store):
 def test_disconnected_or_disabled_connector_gives_nothing(store):
     store.update_connector_state(CID, status="error")
     assert _names([(CID, "update")]) == []
+    # PR5：needs_reauth 与其它非 connected 状态同等对待 —— 授权没了就别再把工具喂给模型
+    # （工厂判据是 ``status == 'connected'``，新值天然落在外面，这条把它钉住）。
+    store.update_connector_state(CID, status="needs_reauth")
+    assert _names([(CID, "update")]) == []
     store.update_connector_state(CID, status="connected", enabled=False)
     assert _names([(CID, "update")]) == []
 

@@ -617,3 +617,87 @@ describe('connector tool execution', () => {
     ).resolves.toBe(true)
   })
 })
+
+// ── 7. (PR5) invoke 失败的模型可读化 ────────────────────────────────────────────
+
+describe('connector invoke errors — readable code + actionable follow-up (PR5)', () => {
+  /** One connector read tool whose /invoke leg fails with the given envelope code. */
+  function failing(code: string, message = 'boom', status = 409) {
+    const domain = mockDomain((url) =>
+      /\/invoke$/.test(url) ? errEnvelope(code, message, status) : okEnvelope({})
+    )
+    return createConnectorTools(domain, [], new ApprovalGuard(), [entry()], {
+      contextMode: 'manual_chat'
+    }).mcp__notion__notion_fetch
+  }
+
+  async function messageOf(code: string, message?: string): Promise<string> {
+    try {
+      await runTool(failing(code, message))
+      throw new Error('expected the tool to reject')
+    } catch (e) {
+      return (e as Error).message
+    }
+  }
+
+  // 🔴 The three codes an owner (not the model) must fix. Without the follow-up the model
+  //    re-calls the same tool until the step budget runs out.
+  test('E_CONNECTOR_NOT_CONNECTED → code in the message + "connect it in Settings" follow-up', async () => {
+    const m = await messageOf('E_CONNECTOR_NOT_CONNECTED', 'no credentials')
+    expect(m).toContain('E_CONNECTOR_NOT_CONNECTED')
+    expect(m).toContain('no credentials')
+    expect(m).toContain('Settings')
+    expect(m).toContain('Retrying will not help')
+  })
+
+  test('E_CONNECTOR_OAUTH → code in the message + "needs re-authorization" follow-up', async () => {
+    const m = await messageOf('E_CONNECTOR_OAUTH', 'refresh token revoked')
+    expect(m).toContain('E_CONNECTOR_OAUTH')
+    expect(m).toContain('refresh token revoked')
+    expect(m).toContain('re-authorization')
+    expect(m).toContain('Settings')
+  })
+
+  test('E_CONNECTOR_DISABLED → code in the message + "turned off on this machine" follow-up', async () => {
+    const m = await messageOf('E_CONNECTOR_DISABLED', 'flag off')
+    expect(m).toContain('E_CONNECTOR_DISABLED')
+    expect(m).toContain('turned off')
+    // 🔴 这一条**故意不说 Settings** —— MCP connector 总闸是 env flag，设置页里没有这个开关。
+    // 指一个不存在的按钮比不指更糟（模型会照着编一句用户照做不了的话）。
+    expect(m).toContain('enable them')
+    expect(m).not.toContain('Settings')
+  })
+
+  test('every failure names the connector; an unlisted code still carries its code (no invented advice)', async () => {
+    const m = await messageOf('E_UPSTREAM', 'remote 502')
+    expect(m).toContain('E_UPSTREAM')
+    expect(m).toContain('remote 502')
+    expect(m).toContain('Notion')
+    // No hint is fabricated for a code we have no owner action for.
+    expect(m).not.toContain('Settings')
+  })
+
+  test('the audit entry keeps the structured code (the wrapper still normalizes it)', async () => {
+    const collector: GatewayToolAuditCollector = []
+    const domain = mockDomain((url) =>
+      /\/invoke$/.test(url) ? errEnvelope('E_CONNECTOR_OAUTH', 'revoked', 401) : okEnvelope({})
+    )
+    const tools = createConnectorTools(domain, collector, new ApprovalGuard(), [entry()], {
+      contextMode: 'manual_chat'
+    })
+    await expect(runTool(tools.mcp__notion__notion_fetch)).rejects.toThrow()
+    expect(collector).toHaveLength(1)
+    expect(collector[0].status).toBe('error')
+    expect(collector[0].outputJson).toContain('E_CONNECTOR_OAUTH')
+  })
+
+  test('the success path is untouched (fence + truncated still surfaced)', async () => {
+    const tools = build([entry()])
+    const out = (await runTool(tools.mcp__notion__notion_fetch, { id: 'p1' })) as {
+      content: string
+      truncated: boolean
+    }
+    expect(out.content).toContain('UNTRUSTED_MCP_TOOL_START')
+    expect(out.truncated).toBe(true)
+  })
+})

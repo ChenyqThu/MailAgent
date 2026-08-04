@@ -58,6 +58,9 @@ def test_update_connector_state_validates(tmp_path):
         st.update_connector_state(CID, scopes="not-a-list")
     with pytest.raises(KeyError):
         st.update_connector_state("ghost", status="error")
+    # PR5：needs_reauth 是合法值域成员（授权失效落态点写它）；error 保留（存量 + 授权流兜底）。
+    st.update_connector_state(CID, status="needs_reauth")
+    assert st.get_connector(CID).status == "needs_reauth"
     # last_error / scopes 哨兵：显式 None = 清空，不传 = 不动。
     st.update_connector_state(CID, status="error", last_error="boom")
     assert st.get_connector(CID).last_error == "boom"
@@ -186,6 +189,32 @@ def test_vanished_tool_marked_orphan_and_revives(tmp_path):
     rows2 = {r.tool_name: r for r in st.list_connector_tools(CID)}
     assert rows2["old_tool"].orphan is False
     assert rows2["old_tool"].enabled is True
+
+
+def test_purge_orphans_deletes_only_orphan_rows(tmp_path):
+    """PR5 清理出口：只删 orphan=1，在册行（含用户覆盖）一行不碰，返回删除计数。"""
+    st = _store(tmp_path)
+    st.sync_connector_tools(
+        CID, _manifest(("search", "read"), ("old_a", "write"), ("old_b", "write"))
+    )
+    st.set_connector_tool_enabled(CID, "search", False)  # 在册工具的用户覆盖
+    st.set_connector_tool_enabled(CID, "old_a", True)
+    st.sync_connector_tools(CID, _manifest(("search", "read")))  # old_a/old_b 变 orphan
+
+    assert st.purge_orphan_connector_tools(CID) == 2
+    rows = {r.tool_name: r for r in st.list_connector_tools(CID)}
+    assert set(rows) == {"search"}
+    assert rows["search"].enabled is False  # 覆盖存活
+
+    # 幂等 + 空集：没得删 → 0（不抛）。未知 connector 同样 0（删空不是错）。
+    assert st.purge_orphan_connector_tools(CID) == 0
+    assert st.purge_orphan_connector_tools("ghost") == 0
+
+    # 清理不是「拉黑」：远端再有同名工具 → 下次 sync 照常 INSERT 回来（默认态）。
+    st.sync_connector_tools(CID, _manifest(("search", "read"), ("old_a", "write")))
+    revived = {r.tool_name: r for r in st.list_connector_tools(CID)}
+    assert revived["old_a"].orphan is False
+    assert revived["old_a"].enabled is None  # 行被删过 → 用户覆盖不复存在
 
 
 def test_sync_tools_rejects_bad_manifest(tmp_path):

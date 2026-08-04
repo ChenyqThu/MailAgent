@@ -37,6 +37,25 @@ from loguru import logger
 #: 且 delete 类工具在闸 3 就被挡掉，永远走不到这里。未来放开 = 两处一起放宽。
 CONNECTOR_CRUD_RANK: dict[str, int] = {"read": 1, "write": 2, "update": 3}
 
+#: 授权失效的错误码（PR5）：命中即把连接落 ``needs_reauth``（可行动状态）。**两个调用面
+#: （本模块的 invoke / routers/connector.py 的 sync）共用这一份**，别在第二处手抄码表。
+#: 🔴 timeout / network / protocol 有意**不**在内：那些是瞬时故障，落态会把「远端抖了一下」
+#: 说成「授权没了」，把 owner 支去做一次无用的重新授权。
+CONNECTOR_REAUTH_ERROR_CODES: tuple[str, ...] = (
+    "E_CONNECTOR_OAUTH",
+    "E_CONNECTOR_NOT_CONNECTED",
+)
+
+#: needs_reauth 的对外文案（落库 ``last_error`` + 抛给调用方/模型的 message 同一份）。
+#: 🔴 面向**人与模型**，不是面向 curl —— client 层的原始 message 里有「run POST
+#: /api/connector/{id}/oauth/start」这类只有开发者能执行的指令，原样摆进设置页的 lastError
+#: 与模型看到的工具错误里 = 看得懂但做不了。原始技术细节留在异常链（``from e``）与日志里，
+#: client.py 那份原文不动（它对开发者仍是对的）。
+CONNECTOR_REAUTH_MESSAGE = (
+    "Connector authorization expired or revoked. The owner must reconnect it in "
+    "Settings → Custom AI → Connectors."
+)
+
 #: caller.context_mode 的合法值域（镜像 TS ``AGENT_CONTEXT_MODES``：manual + 两个 headless
 #: + 阶段 0b 预置的 im_chat）。Python ``policy.CONTEXT_MODES`` 只有前三个（policy_rules 的
 #: 轴），故这里独立成表 —— 本闸判的是「谁在调」，不是「哪条白名单规则命中」。
@@ -245,14 +264,20 @@ async def invoke_connector_tool(
     try:
         result = await client.call_tool(tool_name, arguments)
     except ConnectorError as e:
-        # 授权失效 → 连接转 error 态并如实告知（PRD「不静默重试到死」；镜像 sync 端点）。
-        if getattr(e, "code", "") in ("E_CONNECTOR_OAUTH", "E_CONNECTOR_NOT_CONNECTED"):
+        # 授权失效 → 连接落 needs_reauth + **可行动**文案（PRD「不静默重试到死」；镜像 sync
+        # 端点）。原始技术 message 换成 CONNECTOR_REAUTH_MESSAGE：这条会一路走到设置页的
+        # lastError 和模型看到的工具错误串，那两处都执行不了「run POST /api/connector/...」。
+        if getattr(e, "code", "") in CONNECTOR_REAUTH_ERROR_CODES:
             await asyncio.to_thread(
                 store.update_connector_state,
                 connector_id,
-                status="error",
-                last_error=str(e)[:500],
+                status="needs_reauth",
+                last_error=CONNECTOR_REAUTH_MESSAGE,
             )
+            logger.warning(
+                "[connector] {} needs reauth (tool={}): {}", connector_id, tool_name, e
+            )
+            raise ConnectorError(CONNECTOR_REAUTH_MESSAGE, code=e.code) from e
         raise
     return {
         "content": result["content"],
