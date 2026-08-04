@@ -287,7 +287,10 @@ describe('B1 — flag OFF baseline (research §3.1 step-0 fixation): close → a
     const persisted: PersistTurnInput[] = []
     const h = await start(
       baseCfg({
-        model: slowTextModel(['一', '二', '三', '四', '五'], 30),
+        // deltas carry their own chunk boundaries (。+ \n) so every smoothStream
+        // chunking mode (sentence/line/cjk-word) emits per-delta — the abort must
+        // land mid-stream, not after a single end-of-stream flush.
+        model: slowTextModel(['一。\n', '二。\n', '三。\n', '四。\n', '五。\n'], 30),
         persisted,
         detached: false
       })
@@ -325,7 +328,8 @@ describe('detached-OFF with the registry wired (production rollback shape)', () 
     const registry = new ActiveRunRegistry()
     const h = await start(
       baseCfg({
-        model: slowTextModel(['一', '二', '三', '四', '五'], 30),
+        // chunk-boundary-carrying deltas — same rationale as the B1 baseline above.
+        model: slowTextModel(['一。\n', '二。\n', '三。\n', '四。\n', '五。\n'], 30),
         persisted,
         detached: false,
         registry
