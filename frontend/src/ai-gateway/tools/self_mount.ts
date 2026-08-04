@@ -31,6 +31,10 @@ import {
 } from './types'
 import type { AgentContextMode } from './policy'
 import { discoverSkillsSchema, setSkillEnabledSchema, updateSystemMdSchema } from './schemas'
+// D1 (connector dogfood batch) — the run-scoped connector catalog (same projection the prompt
+// block consumes), so discover_skills is no longer connector-blind: soul.md routes capability
+// self-description here, and before this the tool "authoritatively" denied the mcp__* tools.
+import type { ConnectorCatalogEntry } from '../prompts/stable_prompt'
 
 /** Names of the self-mount tools the gateway exposes when MAILAGENT_SKILL_SELF_MOUNT is on. */
 export const GATEWAY_SELF_MOUNT_TOOL_NAMES = [
@@ -58,6 +62,9 @@ export function createSelfMountTools(
     approvalMode?: GatewayApprovalMode
     oneShot?: boolean
     contextMode?: AgentContextMode
+    /** D1 — the run-scoped MCP connector catalog (lifecycle: connectorCatalogForRun over the
+     *  manifest cache). Absent / null / [] → discover_skills output byte-identical to before. */
+    connectorCatalog?: ConnectorCatalogEntry[] | null
   } = {}
 ): Record<string, Tool> {
   const makeWrite = <I>(toolOpts: {
@@ -182,10 +189,17 @@ export function createSelfMountTools(
         'skills, null for built-ins). Use this to discover a capability the current task needs that ' +
         'is turned off, then propose enabling it with set_skill_enabled. When running a script ' +
         'skill, build run_command from install_dir as an ABSOLUTE path argv — never `cd` into it ' +
-        'via a shell, which the exec endpoint rejects. Read-only — no approval.',
+        'via a shell, which the exec endpoint rejects. Skills and external MCP connector tools ' +
+        '(names starting mcp__) are two SEPARATE systems: connectors appear under ' +
+        'external_connectors in this result, are already registered when listed, and are not ' +
+        'toggled by set_skill_enabled. Read-only — no approval.',
       inputSchema: discoverSkillsSchema,
       run: async (_input, signal) => {
         const skills = await domain.listResolvedSkills(signal)
+        // D1 — External connectors summary rides along ONLY when the run actually holds connector
+        // tools (opts.connectorCatalog is the run-scoped projection). Absent / empty → the key is
+        // not added at all, keeping the pre-D1 output byte-identical.
+        const connectors = opts.connectorCatalog
         return {
           count: skills.length,
           skills: skills.map((s) => ({
@@ -199,7 +213,27 @@ export function createSelfMountTools(
             // issue #62 — absolute install path so the model never has to infer a `cd <dir> && …`
             // shell wrapper (that shape silently loses integrity checking + secret injection).
             install_dir: s.installDir ?? null
-          }))
+          })),
+          ...(connectors && connectors.length > 0
+            ? {
+                external_connectors: {
+                  note:
+                    'Direct MCP connector tools, named mcp__<connector>__<tool> — a separate ' +
+                    'system from the skills above. They are registered and callable right now; ' +
+                    'read tools run without approval, write tools follow the approval rule in ' +
+                    'their own descriptions. Not toggleable via set_skill_enabled (owner manages ' +
+                    'them in Settings → Custom AI → External connections).',
+                  connectors: connectors.map((c) => ({
+                    connector_id: c.connectorId,
+                    display_name: c.displayName,
+                    tool_prefix: `mcp__${c.connectorId}__`,
+                    read_tool_count: c.readToolCount,
+                    write_tool_count: c.writeToolCount + c.updateToolCount,
+                    tool_count: c.readToolCount + c.writeToolCount + c.updateToolCount
+                  }))
+                }
+              }
+            : {})
         }
       }
     },

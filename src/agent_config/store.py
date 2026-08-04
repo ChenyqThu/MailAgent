@@ -185,8 +185,9 @@ class ConnectorToolRow:
     input_schema_json: Optional[str]
     output_schema_json: Optional[str]
     crud_type: str
-    #: 裁决①（PR2）：manifest ``destructive_hint`` 单独落列（破坏性**更新**语义位，不再当
-    #: delete 档位）——审批卡红警告消费；manifest 派生字段，refresh 覆盖。
+    #: 裁决①（PR2）：manifest ``destructive_hint`` 单独落列（破坏性**更新**语义位，不是
+    #: crud 档位）——审批卡红警告消费；manifest 派生字段，refresh 覆盖。08-03 delete 档位
+    #: 退役后，**这一列是危险性的唯一表示**。
     destructive: bool
     enabled: Optional[bool]  # 用户覆盖；None = 未覆盖（跟随 crud 默认）
     orphan: bool
@@ -206,19 +207,21 @@ class ConnectorToolRow:
 CONNECTOR_STATUSES = ("disconnected", "authorizing", "connected", "needs_reauth", "error")
 
 #: connector_tool.crud_type 值域单源（client.derive_crud_type 的产出、写侧校验、以及
-#: PR2 注册期过滤都以此为准）。'delete' 是保留位：可入库，不可置启用态（Q3=B / Q16=A）。
-CONNECTOR_CRUD_TYPES = ("read", "write", "update", "delete")
+#: PR2 注册期过滤都以此为准）。
+#:
+#: 🔴 **``delete`` 已整体退役**（08-03 owner dogfood 改判，推翻 grill Q3=B / Q16=A）：
+#: MCP annotations **没有 delete 语义位**（裁决① 实证），``derive_crud_type`` 结构上不可能
+#: 产出它 —— 保留一个不可达的档位只会让「连接工具应该都全部可配置」变成「有一档永远恒灰」。
+#: 危险性提示改由**独立的 ``destructive`` 列**承担（审批卡红警告），写类工具恒 HITL 的安全
+#: 地板不变。存量 ``crud_type='delete'`` 行由 ``_migrate_additive`` 离线重推导成 write+destructive。
+CONNECTOR_CRUD_TYPES = ("read", "write", "update")
 
 
 def connector_tool_effective_enabled(crud_type: str, enabled_override: Optional[bool]) -> bool:
     """工具的有效启用态（纯函数，镜像 ``resolve_enabled`` 风格）。
 
-    - ``delete`` 类恒 False —— 读侧防御纵深（写侧 ``set_connector_tool_enabled`` 已拒，
-      这里再兜手改 DB 的行：任何 override 都压不开）。
-    - 其余：用户覆盖优先；无覆盖时 **read 默认开、write/update 默认关**（PRD Q3 缓解项）。
+    用户覆盖优先；无覆盖时 **read 默认开、write/update 默认关**（PRD Q3 缓解项）。
     """
-    if crud_type == "delete":
-        return False
     if enabled_override is not None:
         return enabled_override
     return crud_type == "read"
@@ -415,17 +418,18 @@ CREATE TABLE IF NOT EXISTS connector (
 -- 工具清单行 = 白名单（未同步/伪造的工具名到不了远端，LobeHub 纪律 1）。
 -- 🔴 refresh 只覆盖 manifest 派生字段（description/schema×2/crud_type/last_seen_at/orphan），
 -- **永不**覆盖 enabled（用户配置，纪律 2）；远端消失 → orphan=1 保留行（纪律 4 + PRD）。
--- 🔴 crud_type 含 'delete' 保留位：照常入库（清单完整，Q16=A），但写侧拒置启用态
--- （set_connector_tool_enabled），未来放开只动开关不改 schema（Q3=B）。
+-- 🔴 crud_type 值域 = CONNECTOR_CRUD_TYPES（写侧校验，无 SQL CHECK —— 改值域不需要迁移）。
+-- 'delete' 档位 08-03 已退役（annotations 无 delete 语义位 ⇒ 不可达）；危险性由 destructive
+-- 独立列承担，存量 delete 行由 _migrate_additive 离线重推导成 write+destructive=1。
 CREATE TABLE IF NOT EXISTS connector_tool (
     connector_id       TEXT NOT NULL,
     tool_name          TEXT NOT NULL,
     description        TEXT,
     input_schema_json  TEXT,
     output_schema_json TEXT,
-    crud_type          TEXT NOT NULL DEFAULT 'read',  -- read|write|update|delete
+    crud_type          TEXT NOT NULL DEFAULT 'read',  -- read|write|update
     destructive        INTEGER NOT NULL DEFAULT 0,    -- 裁决①：destructive_hint 单独落列（红警告位）
-    enabled            INTEGER,        -- 用户覆盖：NULL=默认（read 开，write/update/delete 关）
+    enabled            INTEGER,        -- 用户覆盖：NULL=默认（read 开，write/update 关）
     orphan             INTEGER NOT NULL DEFAULT 0,
     first_seen_at      INTEGER NOT NULL,
     last_seen_at       INTEGER NOT NULL,
@@ -466,7 +470,7 @@ class AgentConfigStore:
 
     @staticmethod
     def _migrate_additive(conn: sqlite3.Connection) -> None:
-        """幂等追加列（backend-owned db 不进 DB_VERSION —— 开库即对齐，无版本号）。
+        """幂等追加列 + 幂等数据回填（backend-owned db 不进 DB_VERSION —— 开库即对齐，无版本号）。
 
         ``_DDL`` 的 CREATE TABLE 已含新列（新库直接带）；这里只为**已存在的旧 agent_skills 表**
         补列（生产 db 建于 S2 之前）。``PRAGMA table_info`` 判存在，缺则 ALTER，重复开库无副作用。
@@ -490,6 +494,17 @@ class AgentConfigStore:
         if c_cols and "preprocess_enabled" not in c_cols:
             conn.execute(
                 "ALTER TABLE connector ADD COLUMN preprocess_enabled INTEGER NOT NULL DEFAULT 0"
+            )
+        # 08-03 delete 档位退役 —— 存量陈旧行**离线重推导**（不需要网络 re-sync）。
+        # 🔴 可证明等价：旧映射里产出 delete 的**唯一**路径是 `destructive_hint is True`，而
+        # 当前 `derive_crud_type` 对同一输入产出 write，`derive_destructive` 产出 True ⇒ 这条
+        # UPDATE 就是把那次误判按新规则重算一遍，与 owner 点一次 sync 的结果逐字段相同。
+        # 幂等（WHERE 后不再有 delete 行）；`enabled` 用户覆盖一列不碰（refresh 纪律 2）。
+        if ct_cols:
+            conn.execute(
+                "UPDATE connector_tool SET crud_type='write', destructive=1, updated_at=? "
+                "WHERE crud_type='delete'",
+                (_now(),),
             )
 
     # ======================================================================
@@ -1175,9 +1190,9 @@ class AgentConfigStore:
         - 🔴 只覆盖 manifest 派生字段（description / input_schema_json / output_schema_json /
           crud_type / destructive / last_seen_at / orphan=0），**永不**覆盖 ``enabled``
           （用户配置）与 ``first_seen_at``。crud_type 属 manifest 派生 ⇒ 全量 upsert 重跑
-          derive 即自愈存量误判行（裁决①：owner 点一次 sync 就把旧 delete 误判刷成新推导）。
+          derive 即自愈存量误判行（裁决①：owner 点一次 sync 就把旧误判刷成新推导）。
         - 本轮清单里没有的既有行 → ``orphan=1``（保留用户配置，PR2 不注册 orphan）。
-        - 🔴 delete 类照常入库（Q16=A：清单完整）；坏 ``crud_type`` / 空 name **入库时拒**。
+        - 坏 ``crud_type``（含已退役的 ``'delete'``）/ 空 name **入库时拒**。
         """
         now = _now()
         prepared: list[tuple] = []
@@ -1278,9 +1293,9 @@ class AgentConfigStore:
     ) -> None:
         """用户 per-tool 启用覆盖（None = 清除覆盖回默认）。
 
-        🔴 ``crud_type='delete'`` 的行不可置启用态 —— **写侧拒**（ValueError），界面恒灰只是
-        表象、这里才是闸（Q16=A；不靠读侧宽容，读侧 ``connector_tool_effective_enabled``
-        只是防御纵深）。
+        🔴 08-03 起**任何在册工具都可配置**（owner 改判：「连接工具应该都全部可配置」）——
+        没有恒灰的档位了。危险性由 ``destructive`` 列在审批卡上红警告，写类工具恒 HITL 的
+        安全地板不变。行不存在 → ``KeyError``（先 sync 再配）。
         """
         with self._connection() as conn:
             row = conn.execute(
@@ -1289,11 +1304,6 @@ class AgentConfigStore:
             ).fetchone()
             if row is None:
                 raise KeyError(f"connector tool not found: {connector_id}/{tool_name}")
-            if enabled is True and row["crud_type"] == "delete":
-                raise ValueError(
-                    f"tool {tool_name!r} is delete-class and cannot be enabled "
-                    "(delete tools are recorded for completeness but stay disabled in MVP)"
-                )
             conn.execute(
                 "UPDATE connector_tool SET enabled=?, updated_at=? "
                 "WHERE connector_id=? AND tool_name=?",

@@ -1330,6 +1330,14 @@
       "savedDetail": "Takes effect on new actions within a few seconds",
       "saveFailed": "Failed to save the permission mode"
     },
+    "connectors": {
+      "label": "Connectors",
+      "manage": "Manage",
+      "toolCount": "{enabled}/{total} tools",
+      "saved": "Updated \"{name}\"",
+      "savedDetail": "Takes effect for the AI within ~30s",
+      "approvalHint": "Read tools run directly; write tools ask for your approval every time."
+    },
     "draftReply": {
       "header": "Draft reply",
       "send": "Send",
@@ -1862,7 +1870,7 @@
     },
     "connectors": {
       "title": "External connections (MCP)",
-      "desc": "Connect external services such as Notion or Jira over the MCP protocol. Once connected you decide tool by tool what the AI may call; delete-class tools cannot be enabled.",
+      "desc": "Connect external services such as Notion or Jira over the MCP protocol. Once connected you decide tool by tool what the AI may call.",
       "loading": "Loading connections…",
       "loadError": "Could not load the connection list: {message}",
       "empty": "No connectable services.",
@@ -1909,20 +1917,18 @@
         "loading": "Loading tool list…",
         "loadError": "Could not load the tool list: {message}",
         "empty": "No tools synced yet — use “Sync tools” above to fetch the list.",
-        "defaultHint": "“Default” = read tools on, write/update tools off; delete-class tools can never be enabled.",
+        "defaultHint": "“Default” = read tools on, write/update tools off.",
         "destructive": "Destructive",
         "orphan": "Gone",
         "orphanTip": "The remote server no longer offers this tool; the setting is kept but the tool is not given to the AI.",
         "purgeOrphans": "Clear {count} gone tools",
         "purgeDone": "Cleared {count} gone tools",
-        "deleteTip": "Delete-class tools cannot be enabled.",
         "effectiveOn": "Currently callable by the AI",
         "effectiveOff": "Currently not callable by the AI",
         "crud": {
           "read": "Read",
           "write": "Write",
-          "update": "Update",
-          "delete": "Delete"
+          "update": "Update"
         },
         "state": {
           "label": "Call permission",

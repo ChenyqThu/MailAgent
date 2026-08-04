@@ -39,7 +39,14 @@ import { type MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
 import { thinkingProviderOptions } from './thinking'
 // Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
-import { appendExecutionDiscipline, buildGatewaySystemPrompt } from './systemPrompt'
+import {
+  appendExecutionDiscipline,
+  buildGatewaySystemPrompt,
+  type GatewaySystemPromptConfig
+} from './systemPrompt'
+// D1 (connector dogfood batch) — per-run scoping of the connector catalog reuses the connector
+// module's ONE load seam + ceiling order (never a second filter implementation here).
+import { connectorCatalogForRun } from './tools/connector'
 import {
   isValidContextSnapshot,
   type AgentContextSnapshot
@@ -90,6 +97,36 @@ export function resolveModelFactory(
     model: anthropic(modelId),
     protocol: 'anthropic'
   })
+}
+
+/**
+ * D1 (connector dogfood batch) — scope the provider-supplied connector catalog to what THIS run
+ * actually registers before the prompt is assembled. The provider is zero-arg (shared TTL cache),
+ * so it always carries the FULL manual-shape catalog; here — where the run's trusted mode +
+ * agentRunContext meet it — connectorCatalogForRun (connector.ts: the ONE seam + ceiling order)
+ * narrows it: manual keeps everything, a granted headless run keeps only its granted connectors
+ * (writes zeroed above the ceiling), and every seam-refused shape (manual+context stray, im_chat,
+ * junk grants) drops the catalog entirely — the prompt must never advertise tools the ToolSet
+ * does not hold. No catalog on the config → returned as-is (byte-identical passthrough).
+ */
+export function scopeConnectorCatalogForRun(
+  promptConfig: GatewaySystemPromptConfig | null,
+  contextMode: AgentContextMode | undefined,
+  hasAgentRunContext: boolean,
+  connectorGrants: unknown
+): GatewaySystemPromptConfig | null {
+  if (!promptConfig?.connectorCatalog || promptConfig.connectorCatalog.length === 0) {
+    return promptConfig
+  }
+  return {
+    ...promptConfig,
+    connectorCatalog: connectorCatalogForRun(
+      promptConfig.connectorCatalog,
+      contextMode,
+      hasAgentRunContext,
+      connectorGrants
+    )
+  }
 }
 
 /** Pick the last user UIMessage of an incoming turn (the fresh message we persist alongside the
@@ -268,7 +305,14 @@ export async function prepareChatRun(
       }
     }
     // The provider is contracted to return null (not throw) on a /chat/config blip → context-light.
-    const promptConfig = (await cfg.systemPromptProvider()) ?? null
+    // D1 — the connector catalog it carries is manual-shape (zero-arg shared cache); scope it to
+    // THIS run before assembly (headless: granted connectors only; seam-refused shapes: none).
+    const promptConfig = scopeConnectorCatalogForRun(
+      (await cfg.systemPromptProvider()) ?? null,
+      contextMode,
+      cfg.agentRunContext != null,
+      cfg.agentRunContext?.modeGrants?.connectors
+    )
     // 07-01 — the bounded memory.md rides IN promptConfig.memorySummary (the cacheable stable prefix,
     // rendered by buildStableSystemPrompt as an untrusted MEMORY fence). The M2 per-query recall path
     // (retrieveMemory callback → /chat/memory/search) is retired: memory.md is injected whenever

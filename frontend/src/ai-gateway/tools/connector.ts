@@ -5,15 +5,19 @@
 // Execution follows the "gateway only carries the envelope" discipline: every call goes through
 // serve-api POST /api/connector/{id}/tools/{name}/invoke (Python owns the MCP client, OAuth
 // credentials, the per-namespace serial gate + timeout, the tool WHITELIST — unsynced / orphan /
-// delete / disabled names never reach the remote — and the result truncation).
+// disabled names never reach the remote — and the result truncation).
 //
 // Registration rules (this module + the stage-0b seams enforce them together):
-//   - only `effective_enabled && !orphan && crud_type !== 'delete'` tools are registered (the
-//     endpoint already folds effective_enabled; this is the registration-side self-defense);
+//   - only `effective_enabled && !orphan` tools with a KNOWN crud are registered (the endpoint
+//     already folds effective_enabled; this is the registration-side self-defense);
 //   - crud 'read'   → class 'read'   (silent tier — grill Q5=A: reads never ask);
 //   - crud 'write'/'update' → class 'connector_write' (edit tier, 恒 HITL in manual; headless it
 //     registers ONLY under the PR3 per-connector grant, and then executes 免卡 — policy.ts);
-//   - any other crud value (incl. 'delete') → skipped, never registered (Q16=A / Q3=B);
+//   - the server crud value-domain is read|write|update (dogfood batch: the 'delete' class is
+//     RETIRED — legacy delete rows were migrated to write+destructive=1, and destructive tools
+//     register like any write: manual 恒 HITL + the red DESTRUCTIVE warning on the card). Any
+//     other crud value — including a stale 'delete' from an old server row — is unknown and
+//     skipped fail-closed, never registered;
 //   - a name colliding with a static gateway tool or another dynamic tool → skipped + warning
 //     (registerRuntimeToolClass rejects static shadows; admitDynamicTools re-checks at assembly);
 //   - every registered tool gets a registerRuntimeToolClass entry BEFORE assembly — the stage-0b
@@ -60,6 +64,9 @@ import {
 // rationale as web.ts / notion_agent.ts. Both modules are pure TS (no react/electron).
 import { fenceUntrusted, sanitizeProse } from '../../shared/assistant/context/contextSerializer'
 import { mcpGatewayToolName } from '../../shared/assistant/tools/mcpToolName'
+// D1 — the catalog row shape lives with the prompt renderer (stable_prompt.ts, the skillCatalog
+// precedent); this module produces it from the SAME admission rules that register the tools.
+import type { ConnectorCatalogEntry } from '../prompts/stable_prompt'
 
 /** One synced connector tool, as the lifecycle manifest cache stores it (projected from
  *  GET /api/connector + GET /api/connector/{id}/tools). */
@@ -80,12 +87,23 @@ export interface ConnectorToolManifestEntry {
 const MANIFEST_FETCH_TIMEOUT_MS = 3_000
 
 /** Cap on the remote-authored half of a tool description (a connector may ship huge docs;
- *  the description is a per-turn token cost across the whole ToolSet). */
-const DESCRIPTION_MAX_CHARS = 700
+ *  the description is a per-turn token cost across the whole ToolSet). D1 dogfood: 700 → 1000 —
+ *  700 cut real Notion tool docs mid-word ("Make separ"), losing the usage half the model needs. */
+const DESCRIPTION_MAX_CHARS = 1_000
 
 /** Args-preview clamp inside audit warnings (never model-visible). */
 function short(s: string, n = 120): string {
   return s.length > n ? `${s.slice(0, n)}…` : s
+}
+
+/** D1 — truncate a remote tool description at a SENTENCE boundary ('.' / '。' / newline): keep
+ *  everything up to the last boundary inside the cap; no boundary at all → hard cut + ellipsis
+ *  (the old behaviour). The code-owned contract suffix is appended AFTER this, always intact. */
+export function truncateAtSentence(s: string, max: number): string {
+  if (s.length <= max) return s
+  const cut = s.slice(0, max)
+  const boundary = Math.max(cut.lastIndexOf('.'), cut.lastIndexOf('。'), cut.lastIndexOf('\n'))
+  return boundary > 0 ? cut.slice(0, boundary + 1).trimEnd() : `${cut}…`
 }
 
 /**
@@ -120,9 +138,16 @@ export function shouldLoadConnectorTools(
  */
 export async function fetchConnectorManifest(
   domain: MailAgentDomainClient,
-  opts: { timeoutMs?: number } = {}
+  opts: {
+    timeoutMs?: number
+    /** D1 observability — degradation sink. Defaults to console.warn (byte-identical); the
+     *  Electron lifecycle passes a hook that ALSO lands the message in its on-disk gateway log
+     *  (packaged apps have no stdout, so a pure console.warn is invisible in the field). */
+    onWarn?: (message: string, err?: unknown) => void
+  } = {}
 ): Promise<ConnectorToolManifestEntry[] | null> {
   const timeoutMs = opts.timeoutMs ?? MANIFEST_FETCH_TIMEOUT_MS
+  const warn = opts.onWarn ?? ((message: string, err?: unknown) => console.warn(message, err))
   try {
     const list = await domain.listConnectors(AbortSignal.timeout(timeoutMs))
     const entries: ConnectorToolManifestEntry[] = []
@@ -147,17 +172,107 @@ export async function fetchConnectorManifest(
           })
         }
       } catch (err) {
-        console.warn(
-          `[ai-gateway] connector '${c.connector_id}' tools fetch failed — skipping it`,
-          err
-        )
+        warn(`[ai-gateway] connector '${c.connector_id}' tools fetch failed — skipping it`, err)
       }
     }
     return entries
   } catch (err) {
-    console.warn('[ai-gateway] connector manifest fetch failed — no connector tools this run', err)
+    warn('[ai-gateway] connector manifest fetch failed — no connector tools this run', err)
     return null
   }
+}
+
+/** D1 — the ONE admission predicate deciding whether a manifest entry can register at all (the
+ *  pure half — name representability / duplicates / runtime-class state are checked at the use
+ *  sites). Shared by createConnectorTools AND projectConnectorCatalog so the prompt catalog can
+ *  never advertise a tool the registration side skips. Returns the entry's crud, or null =
+ *  fail-closed skip: disabled / orphan rows, and any crud outside the server value-domain
+ *  read|write|update (the 'delete' class is retired — a stale 'delete' string from an old server
+ *  row is just an unknown value now; destructive tools ride crud 'write' + the destructive flag). */
+export function admissibleConnectorCrud(entry: ConnectorToolManifestEntry): ConnectorGrant | null {
+  if (!entry.effectiveEnabled || entry.orphan) return null
+  const crud = entry.crudType
+  return crud === 'read' || crud === 'write' || crud === 'update' ? crud : null
+}
+
+/**
+ * D1 — project the manifest into the per-connector prompt catalog (ConnectorCatalogEntry[]):
+ * admitted tools only (admissibleConnectorCrud + a representable, non-duplicate gateway name —
+ * the same pure checks createConnectorTools applies), grouped per connector with per-crud counts.
+ * Quiet by design (no warnings — createConnectorTools is the warning surface for skipped rows).
+ * The static-name-collision case (registerRuntimeToolClass throwing) is not replicated: static
+ * gateway tools never carry the `mcp__` prefix, so a composed connector name cannot hit one.
+ * Returns null when nothing is admitted (caller omits the catalog → byte-identical prompt).
+ */
+export function projectConnectorCatalog(
+  manifest: readonly ConnectorToolManifestEntry[] | null | undefined
+): ConnectorCatalogEntry[] | null {
+  if (!manifest || manifest.length === 0) return null
+  const seen = new Set<string>()
+  const byConnector = new Map<string, ConnectorCatalogEntry>()
+  for (const entry of manifest) {
+    const crud = admissibleConnectorCrud(entry)
+    if (crud === null) continue
+    const name = mcpGatewayToolName(entry.connectorId, entry.toolName)
+    if (!name || seen.has(name)) continue
+    seen.add(name)
+    let row = byConnector.get(entry.connectorId)
+    if (!row) {
+      row = {
+        connectorId: entry.connectorId,
+        displayName: entry.connectorName,
+        readToolCount: 0,
+        writeToolCount: 0,
+        updateToolCount: 0
+      }
+      byConnector.set(entry.connectorId, row)
+    }
+    if (crud === 'read') row.readToolCount += 1
+    else if (crud === 'write') row.writeToolCount += 1
+    else row.updateToolCount += 1
+  }
+  const out = [...byConnector.values()]
+  return out.length > 0 ? out : null
+}
+
+/**
+ * D1 — narrow the full catalog to what THIS run actually registers, reusing the ONE load seam
+ * (shouldLoadConnectorTools) + the ONE ceiling order (CONNECTOR_CRUD_RANK) so the prompt can never
+ * "advertise wider than the ToolSet":
+ *   - manual chat (no agentRunContext): the full catalog (a manual run registers every admitted
+ *     tool) — 🔴 deliberately NOT the skillCatalog manual-only gate;
+ *   - headless run: only granted connectors, with write/update counts zeroed above the ceiling
+ *     (the arithmetic mirror of createConnectorTools' per-tool rank skip);
+ *   - every other shape the seam refuses (manual+context stray, im_chat, no/junk grants) → null.
+ * `flagEnabled` is passed as true because a catalog only EXISTS when MAILAGENT_MCP_CONNECTORS is
+ * on (the lifecycle never projects one otherwise) — the seam re-check covers the run-shape half.
+ */
+export function connectorCatalogForRun(
+  catalog: readonly ConnectorCatalogEntry[] | null | undefined,
+  contextMode: AgentContextMode | undefined,
+  hasAgentRunContext: boolean,
+  connectorGrants?: unknown
+): ConnectorCatalogEntry[] | null {
+  if (!catalog || catalog.length === 0) return null
+  if (!shouldLoadConnectorTools(true, contextMode, hasAgentRunContext, connectorGrants)) return null
+  if (contextMode === 'manual_chat') return [...catalog]
+  const grants = parseConnectorGrants(connectorGrants)
+  if (grants === undefined) return null // unreachable after the seam — belt only
+  const out: ConnectorCatalogEntry[] = []
+  for (const row of catalog) {
+    const ceiling = grants[row.connectorId]
+    if (ceiling === undefined) continue // connector absent from the grants → whole family absent
+    const rank = CONNECTOR_CRUD_RANK[ceiling]
+    const narrowed: ConnectorCatalogEntry = {
+      ...row,
+      writeToolCount: rank >= CONNECTOR_CRUD_RANK.write ? row.writeToolCount : 0,
+      updateToolCount: rank >= CONNECTOR_CRUD_RANK.update ? row.updateToolCount : 0
+    }
+    if (narrowed.readToolCount + narrowed.writeToolCount + narrowed.updateToolCount > 0) {
+      out.push(narrowed)
+    }
+  }
+  return out.length > 0 ? out : null
 }
 
 /** Parse a stored input-schema JSON into a tool schema; junk/absent → a permissive object schema
@@ -191,7 +306,7 @@ function toolDescription(
   write: boolean,
   preGranted: boolean
 ): string {
-  const remote = short(sanitizeProse(entry.description), DESCRIPTION_MAX_CHARS)
+  const remote = truncateAtSentence(sanitizeProse(entry.description), DESCRIPTION_MAX_CHARS)
   const base =
     `${remote ? `${remote} ` : ''}[External '${sanitizeProse(entry.connectorName)}' service tool ` +
     `via MCP connector '${entry.connectorId}' (remote name: ${sanitizeProse(entry.toolName)}).`
@@ -302,10 +417,12 @@ export function createConnectorTools(
   const out: ToolSet = {}
   for (const entry of manifest) {
     // Registration-side self-defense (the endpoint already folds these; never trust one belt).
-    if (!entry.effectiveEnabled || entry.orphan) continue
-    if (entry.crudType === 'delete') continue // Q16=A/Q3=B: delete never registers, anywhere
-    const write = entry.crudType === 'write' || entry.crudType === 'update'
-    if (!write && entry.crudType !== 'read') continue // unknown crud → fail-closed skip
+    // admissibleConnectorCrud is the shared admission predicate (also feeds the prompt catalog):
+    // disabled / orphan / unknown-crud rows — incl. a stale legacy 'delete' string, the retired
+    // class whose rows the server migrated to write+destructive — are skipped fail-closed.
+    const crud = admissibleConnectorCrud(entry)
+    if (crud === null) continue
+    const write = crud !== 'read'
     // PR3 (grill Q2) — headless per-agent grant filter: a connector ABSENT from the grants never
     // registers any tool (the whole family is skipped), and a tool ABOVE the connector's ceiling
     // (read=1 < write=2 < update=3) is skipped. This registration-time filter IS the
@@ -315,7 +432,7 @@ export function createConnectorTools(
     if (headlessAgent) {
       const ceiling = headlessGrants?.[entry.connectorId]
       if (ceiling === undefined) continue
-      if (CONNECTOR_CRUD_RANK[entry.crudType as ConnectorGrant] > CONNECTOR_CRUD_RANK[ceiling]) {
+      if (CONNECTOR_CRUD_RANK[crud] > CONNECTOR_CRUD_RANK[ceiling]) {
         continue
       }
     }

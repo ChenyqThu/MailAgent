@@ -5,8 +5,11 @@
 //   1. name mapping (mcpToolName.ts — the ONE source both gateway + renderer card consume);
 //   2. fetchConnectorManifest NEVER throws: list failure → null (silent degradation), a single
 //      connector's tools failure skips just that connector;
-//   3. createConnectorTools registration rules: enabled+non-orphan+non-delete only, read→'read',
-//      write/update→'connector_write', unknown crud skipped, static-name collision skipped;
+//   3. createConnectorTools registration rules: enabled+non-orphan with a KNOWN crud only
+//      (read→'read', write/update→'connector_write'); unknown crud skipped fail-closed — incl. a
+//      stale legacy 'delete' string (D1: the delete class is RETIRED server-side, destructive
+//      tools ride crud 'write' + the destructive flag and register like any write); static-name
+//      collision skipped;
 //   4. connector_write matrix row (PR3): manual always; headless lifted ONLY by a real
 //      `connectors` grant with a write-capable ceiling — every junk/forged shape still denies;
 //      im_chat denies under any grants;
@@ -29,11 +32,15 @@ import {
   type AgentModeGrants
 } from '../../../src/ai-gateway/tools/policy'
 import {
+  connectorCatalogForRun,
   createConnectorTools,
   fetchConnectorManifest,
+  projectConnectorCatalog,
   shouldLoadConnectorTools,
+  truncateAtSentence,
   type ConnectorToolManifestEntry
 } from '../../../src/ai-gateway/tools/connector'
+import type { ConnectorCatalogEntry } from '../../../src/ai-gateway/prompts/stable_prompt'
 import {
   isMcpToolName,
   mcpGatewayToolName,
@@ -169,18 +176,34 @@ describe('createConnectorTools — registration rules', () => {
     expect(classOfTool('mcp__notion__notion_move_pages')).toBe('connector_write')
   })
 
-  test('disabled / orphan / delete-class / unknown-crud tools are never registered', () => {
+  test('disabled / orphan / unknown-crud tools are never registered (incl. legacy delete strings)', () => {
+    // D1 — the dedicated `crudType === 'delete'` skip branch is REMOVED: 'delete' is no longer a
+    // crud class (the server migrated those rows to write+destructive=1 and its value-domain is
+    // read|write|update). A stale 'delete' from an old server row now falls into the generic
+    // unknown-crud fail-closed skip — same outcome, no special case.
     const tools = build([
       entry({ toolName: 'disabled-tool', effectiveEnabled: false }),
       entry({ toolName: 'orphan-tool', orphan: true }),
-      entry({ toolName: 'delete-tool', crudType: 'delete' }),
-      // even a lying manifest row (delete + effectiveEnabled=true) never registers
-      entry({ toolName: 'lying-delete', crudType: 'delete', effectiveEnabled: true }),
+      entry({ toolName: 'stale-delete', crudType: 'delete' }),
       entry({ toolName: 'junk-crud', crudType: 'purge' })
     ])
     expect(Object.keys(tools)).toEqual([])
-    expect(hasRuntimeToolClass('mcp__notion__delete_tool')).toBe(false)
-    expect(hasRuntimeToolClass('mcp__notion__lying_delete')).toBe(false)
+    expect(hasRuntimeToolClass('mcp__notion__stale_delete')).toBe(false)
+    expect(hasRuntimeToolClass('mcp__notion__junk_crud')).toBe(false)
+  })
+
+  test('D1 — a DESTRUCTIVE write registers like any write (the retired delete class rides here)', () => {
+    // The migrated shape of every former delete row: crud 'write' + destructive=1. It must
+    // register normally (manual 恒 HITL edit tier is untouched; the description carries the
+    // DESTRUCTIVE warning the approval card mirrors in red).
+    const tools = build([
+      entry({ toolName: 'notion-delete-page', crudType: 'write', destructive: true })
+    ])
+    expect(Object.keys(tools)).toEqual(['mcp__notion__notion_delete_page'])
+    expect(classOfTool('mcp__notion__notion_delete_page')).toBe('connector_write')
+    const desc = String(tools.mcp__notion__notion_delete_page.description)
+    expect(desc).toContain('DESTRUCTIVE')
+    expect(desc).toContain('always asks')
   })
 
   test('a name colliding with a static gateway tool or a duplicate slug is skipped', () => {
@@ -352,7 +375,7 @@ describe('createConnectorTools — headless per-connector grant filter', () => {
     entry(), // read
     entry({ toolName: 'notion-create-pages', crudType: 'write' }),
     entry({ toolName: 'notion-move-pages', crudType: 'update' }),
-    entry({ toolName: 'notion-delete-page', crudType: 'delete' }), // never, any ceiling
+    entry({ toolName: 'notion-stale-delete', crudType: 'delete' }), // legacy value = unknown crud — never
     entry({ toolName: 'notion-purge', crudType: 'purge' }), // unknown crud — never
     entry({ connectorId: 'atlassian', connectorName: 'Jira', toolName: 'jira-get-issue' })
   ]
@@ -379,7 +402,7 @@ describe('createConnectorTools — headless per-connector grant filter', () => {
     ])
   })
 
-  test('ceiling update → read + write + update register; delete/unknown cruds STILL never', () => {
+  test('ceiling update → read + write + update register; unknown/legacy cruds STILL never', () => {
     expect(Object.keys(headlessBuild({ notion: 'update' })).sort()).toEqual([
       'mcp__notion__notion_create_pages',
       'mcp__notion__notion_fetch',
@@ -699,5 +722,225 @@ describe('connector invoke errors — readable code + actionable follow-up (PR5)
     }
     expect(out.content).toContain('UNTRUSTED_MCP_TOOL_START')
     expect(out.truncated).toBe(true)
+  })
+})
+
+// ── 8. (D1) description truncation — sentence boundary, cap 700 → 1000 ─────────
+
+describe('description truncation (D1) — sentence boundary + raised cap', () => {
+  test('truncateAtSentence: under the cap → untouched', () => {
+    expect(truncateAtSentence('short. text', 1000)).toBe('short. text')
+  })
+
+  test('over the cap → cut at the LAST sentence boundary inside the cap (no half-words)', () => {
+    const first = 'First sentence about pages.'
+    const second = ' Make separate calls when you need more than one page and never batch them all.'
+    const s = first + second.repeat(40) // way past 1000
+    const out = truncateAtSentence(s, 1000)
+    expect(out.length).toBeLessThanOrEqual(1000)
+    expect(out.endsWith('.')).toBe(true) // ends ON a boundary, not mid-word
+    expect(out.startsWith(first)).toBe(true)
+  })
+
+  test('CJK 「。」 and newline count as boundaries too', () => {
+    const cjk = '第一句。'.repeat(300) // multi-byte-safe: pure 。-terminated sentences
+    const outCjk = truncateAtSentence(cjk, 1000)
+    expect(outCjk.endsWith('。')).toBe(true)
+    expect(outCjk.length).toBeLessThanOrEqual(1000)
+    const nl = 'line of doc text\n'.repeat(200)
+    const outNl = truncateAtSentence(nl, 1000)
+    expect(outNl.endsWith('line of doc text')).toBe(true) // trailing \n boundary then trimEnd
+  })
+
+  test('no boundary at all → hard cut + ellipsis (the old behaviour)', () => {
+    const out = truncateAtSentence('z'.repeat(1500), 1000)
+    expect(out).toBe('z'.repeat(1000) + '…')
+  })
+
+  test('cap raised 700 → 1000: a 900-char remote description now survives whole', () => {
+    // Under the old 700 cap this was cut mid-word ("Make separ" dogfood症状); at 1000 it fits.
+    const desc = 'x'.repeat(900)
+    const tools = build([entry({ description: desc })])
+    expect(String(tools.mcp__notion__notion_fetch.description)).toContain(desc)
+  })
+
+  test('the code-owned identification suffix stays COMPLETE after a truncated remote half', () => {
+    const desc = 'A sentence that ends. ' + 'w'.repeat(2000)
+    const tools = build([entry({ description: desc })])
+    const d = String(tools.mcp__notion__notion_fetch.description)
+    // truncated remote half ends at the boundary…
+    expect(d).toContain('A sentence that ends.')
+    expect(d).not.toContain('w'.repeat(1100))
+    // …and the full suffix + fence contract are appended intact afterwards.
+    expect(d).toContain("[External 'Notion' service tool via MCP connector 'notion'")
+    expect(d).toContain('UNTRUSTED_MCP_TOOL')
+  })
+})
+
+// ── 9. (D1) connector catalog — projection + per-run narrowing ─────────────────
+
+describe('projectConnectorCatalog — same admission rules as registration', () => {
+  test('groups admitted tools per connector with per-crud counts; skips exactly what registration skips', () => {
+    const catalog = projectConnectorCatalog([
+      entry(), // read
+      entry({ toolName: 'notion-create-pages', crudType: 'write' }),
+      entry({ toolName: 'notion-move-pages', crudType: 'update' }),
+      entry({ toolName: 'notion-stale-delete', crudType: 'delete' }), // legacy → skipped
+      entry({ toolName: 'notion-purge', crudType: 'purge' }), // unknown → skipped
+      entry({ toolName: 'disabled', effectiveEnabled: false }), // skipped
+      entry({ toolName: 'orphan', orphan: true }), // skipped
+      entry({ toolName: '★★★' }), // unrepresentable name → skipped
+      entry({ toolName: 'notion_fetch' }), // duplicate slug of entry() → skipped
+      entry({ connectorId: 'atlassian', connectorName: 'Jira', toolName: 'jira-get-issue' })
+    ])
+    expect(catalog).toEqual([
+      {
+        connectorId: 'notion',
+        displayName: 'Notion',
+        readToolCount: 1,
+        writeToolCount: 1,
+        updateToolCount: 1
+      },
+      {
+        connectorId: 'atlassian',
+        displayName: 'Jira',
+        readToolCount: 1,
+        writeToolCount: 0,
+        updateToolCount: 0
+      }
+    ])
+  })
+
+  test('null / empty / nothing-admitted manifests → null (caller omits the block)', () => {
+    expect(projectConnectorCatalog(null)).toBeNull()
+    expect(projectConnectorCatalog([])).toBeNull()
+    expect(projectConnectorCatalog([entry({ effectiveEnabled: false })])).toBeNull()
+  })
+})
+
+describe('connectorCatalogForRun — the prompt can never advertise wider than the ToolSet', () => {
+  const CATALOG: ConnectorCatalogEntry[] = [
+    {
+      connectorId: 'notion',
+      displayName: 'Notion',
+      readToolCount: 2,
+      writeToolCount: 1,
+      updateToolCount: 1
+    },
+    {
+      connectorId: 'atlassian',
+      displayName: 'Jira',
+      readToolCount: 0,
+      writeToolCount: 1,
+      updateToolCount: 0
+    }
+  ]
+
+  test('manual chat (no agentRunContext) → the full catalog', () => {
+    expect(connectorCatalogForRun(CATALOG, 'manual_chat', false)).toEqual(CATALOG)
+  })
+
+  test('seam-refused shapes → null (manual+context stray / im_chat / no grants / junk grants)', () => {
+    expect(connectorCatalogForRun(CATALOG, 'manual_chat', true)).toBeNull()
+    expect(connectorCatalogForRun(CATALOG, 'im_chat', true, { notion: 'update' })).toBeNull()
+    expect(connectorCatalogForRun(CATALOG, 'cron_headless', true)).toBeNull()
+    expect(connectorCatalogForRun(CATALOG, 'cron_headless', true, { notion: 'yes' })).toBeNull()
+    expect(connectorCatalogForRun(CATALOG, undefined, false)).toBeNull()
+    expect(connectorCatalogForRun(null, 'manual_chat', false)).toBeNull()
+  })
+
+  test('headless: only granted connectors survive, writes zeroed above the ceiling', () => {
+    expect(connectorCatalogForRun(CATALOG, 'cron_headless', true, { notion: 'read' })).toEqual([
+      {
+        connectorId: 'notion',
+        displayName: 'Notion',
+        readToolCount: 2,
+        writeToolCount: 0,
+        updateToolCount: 0
+      }
+    ])
+    expect(connectorCatalogForRun(CATALOG, 'untrusted_trigger', true, { notion: 'write' })).toEqual(
+      [
+        {
+          connectorId: 'notion',
+          displayName: 'Notion',
+          readToolCount: 2,
+          writeToolCount: 1,
+          updateToolCount: 0
+        }
+      ]
+    )
+    expect(connectorCatalogForRun(CATALOG, 'cron_headless', true, { notion: 'update' })).toEqual([
+      {
+        connectorId: 'notion',
+        displayName: 'Notion',
+        readToolCount: 2,
+        writeToolCount: 1,
+        updateToolCount: 1
+      }
+    ])
+  })
+
+  test('a granted connector narrowed to ZERO tools drops off the catalog entirely', () => {
+    // atlassian has no read tools; a read ceiling zeroes its writes → 0 tools → no row (the
+    // block must not advertise "0 tools" — that IS the ToolSet truth but useless prompt weight).
+    expect(connectorCatalogForRun(CATALOG, 'cron_headless', true, { atlassian: 'read' })).toBeNull()
+  })
+
+  test('PARITY: catalog counts equal the ACTUAL registered ToolSet, per run shape', () => {
+    const MANIFEST = [
+      entry(), // notion read
+      entry({ toolName: 'notion-search' }), // notion read
+      entry({ toolName: 'notion-create-pages', crudType: 'write' }),
+      entry({ toolName: 'notion-move-pages', crudType: 'update' }),
+      entry({ toolName: 'notion-stale-delete', crudType: 'delete' }),
+      entry({
+        connectorId: 'atlassian',
+        connectorName: 'Jira',
+        toolName: 'jira-update-issue',
+        crudType: 'write'
+      })
+    ]
+    const domain = mockDomain(() => okEnvelope({}))
+    const shapes: Array<{
+      contextMode: 'manual_chat' | 'cron_headless' | 'untrusted_trigger'
+      grants?: Record<string, 'read' | 'write' | 'update'>
+    }> = [
+      { contextMode: 'manual_chat' },
+      { contextMode: 'cron_headless', grants: { notion: 'read' } },
+      { contextMode: 'cron_headless', grants: { notion: 'write' } },
+      { contextMode: 'untrusted_trigger', grants: { notion: 'update' } },
+      { contextMode: 'cron_headless', grants: { atlassian: 'update' } },
+      { contextMode: 'cron_headless', grants: { notion: 'update', atlassian: 'write' } }
+    ]
+    for (const shape of shapes) {
+      resetRuntimeToolClasses()
+      const headless = shape.contextMode !== 'manual_chat'
+      const tools = createConnectorTools(domain, [], new ApprovalGuard(), MANIFEST, {
+        contextMode: shape.contextMode,
+        ...(headless ? { connectorGrants: shape.grants, agentId: 'a' } : {})
+      })
+      const catalog =
+        connectorCatalogForRun(
+          projectConnectorCatalog(MANIFEST),
+          shape.contextMode,
+          headless,
+          shape.grants
+        ) ?? []
+      const advertised = catalog.reduce(
+        (n, c) => n + c.readToolCount + c.writeToolCount + c.updateToolCount,
+        0
+      )
+      expect(advertised, JSON.stringify(shape)).toBe(Object.keys(tools).length)
+      // per-connector prefix parity: every advertised connector has ≥1 registered tool and
+      // no registered tool belongs to an unadvertised connector.
+      const prefixes = new Set(catalog.map((c) => `mcp__${c.connectorId}__`))
+      for (const name of Object.keys(tools)) {
+        expect(
+          [...prefixes].some((p) => name.startsWith(p)),
+          `${name} advertised? (${JSON.stringify(shape)})`
+        ).toBe(true)
+      }
+    }
   })
 })

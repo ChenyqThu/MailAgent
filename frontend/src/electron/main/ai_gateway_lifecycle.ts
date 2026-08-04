@@ -19,6 +19,8 @@
 // dynamic-imports this module so the heavy `ai` deps stay in a lazy chunk.
 
 import { app, BrowserWindow } from 'electron'
+import { appendFileSync, existsSync, mkdirSync } from 'fs'
+import { join } from 'path'
 
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
 import {
@@ -32,11 +34,14 @@ import { buildGatewayTools } from '../../ai-gateway/tools'
 // is TTL-cached off the request path; buildTools assembles the ToolSet synchronously from the
 // cache, manual_chat runs only (shouldLoadConnectorTools — headless paths perform ZERO calls).
 import {
+  connectorCatalogForRun,
   createConnectorTools,
   fetchConnectorManifest,
+  projectConnectorCatalog,
   shouldLoadConnectorTools,
   type ConnectorToolManifestEntry
 } from '../../ai-gateway/tools/connector'
+import type { ConnectorCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 import type { ToolSet } from 'ai'
 import type { GlobalApprovalMode } from '../../ai-gateway/tools/types'
 import { ApprovalGuard } from '../../ai-gateway/security/approval'
@@ -96,6 +101,34 @@ interface ChatConfigResponse {
 }
 
 let _handle: AiGatewayHandle | null = null
+
+// ---------------------------------------------------------------------------
+// D1 (connector dogfood batch) — on-disk gateway log (handlers/translate.ts 同款: app logs dir +
+// JSON line via appendFileSync; logging never throws). Rationale: the gateway runs in the Electron
+// MAIN process whose console goes nowhere in a packaged app, so connector manifest failures
+// (fetchConnectorManifest's warnings) were invisible in the field. Scope is deliberately tiny —
+// connector observability lines only, not a general logging system.
+let _gwLogPathCache: string | null = null
+function gatewayLogPath(): string | null {
+  if (_gwLogPathCache !== null) return _gwLogPathCache
+  try {
+    const dir = app.getPath('logs')
+    if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
+    _gwLogPathCache = join(dir, 'ai-gateway.log')
+    return _gwLogPathCache
+  } catch {
+    return null
+  }
+}
+function gatewayLogLine(rec: Record<string, unknown>): void {
+  const p = gatewayLogPath()
+  if (p === null) return
+  try {
+    appendFileSync(p, JSON.stringify({ ts: new Date().toISOString(), ...rec }) + '\n', 'utf8')
+  } catch {
+    /* logging never throws */
+  }
+}
 
 // #12 — keys（`${sessionId}:${userMessageId}`）of user messages already written eagerly at turn
 // start (onTurnStart). persistTurn checks this to avoid double-writing the SAME user message
@@ -505,13 +538,28 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     ) {
       return Promise.resolve()
     }
-    _connectorManifestPromise = fetchConnectorManifest(domain)
+    _connectorManifestPromise = fetchConnectorManifest(domain, {
+      // D1 observability — the degradation warnings used to go console-only (invisible in a
+      // packaged app); mirror them into the on-disk gateway log.
+      onWarn: (message, err) => {
+        console.warn(message, err)
+        gatewayLogLine({ event: 'connector_manifest_warn', message, error: String(err) })
+      }
+    })
       .then((value) => {
         _connectorManifestCache = { at: Date.now(), value }
+        // D1 observability — one line per real refresh (TTL-bounded, ≥30s apart): entry count on
+        // success, ok:false on the silent-degradation null (no connector tools this window).
+        gatewayLogLine({
+          event: 'connector_manifest_refresh',
+          ok: value !== null,
+          entries: value?.length ?? null
+        })
       })
       .catch(() => {
         // fetchConnectorManifest is contracted never to throw — belt only.
         _connectorManifestCache = { at: Date.now(), value: null }
+        gatewayLogLine({ event: 'connector_manifest_refresh', ok: false, entries: null })
       })
       .finally(() => {
         _connectorManifestPromise = null
@@ -789,7 +837,23 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // S3 — the standing-context provider is always injected (CONTEXT_INJECTION GA'd away).
     // The provider never throws (returns null → context-light) so a /chat/config blip can't
     // break a turn.
-    systemPromptProvider: () => getSystemPromptConfig(apiBase, getLocalApiToken()),
+    // D1 (connector dogfood batch) — merge the MCP connector catalog into the projection so the
+    // system prompt can announce the mcp__* tools (root cause ①: zero prompt-level告知 → the
+    // model "honestly" denied having them). Data source = the SAME _connectorManifestCache the
+    // ToolSet builds from (zero new loopback requests, zero new TTLs — buildTools' per-turn
+    // refresh keeps it warm). Cold cache / flag off / nothing admitted → field omitted → prompt
+    // byte-identical to today. The catalog here is manual-shape; prepareChatRun scopes it per run
+    // (headless: granted connectors only) via connectorCatalogForRun.
+    systemPromptProvider: async () => {
+      const value = await getSystemPromptConfig(apiBase, getLocalApiToken())
+      if (!mcpConnectorsEnabled) return value
+      const catalog = projectConnectorCatalog(_connectorManifestCache?.value)
+      if (!catalog) return value
+      // /chat/config blip (value null) + a warm manifest → still surface the catalog: the
+      // connector tools ARE registered on such a turn, so the context-light prompt should not
+      // go connector-blind on top of losing standing context.
+      return { ...(value ?? {}), connectorCatalog: catalog }
+    },
     resolveApprovalRequest: aguiMirrorEnabled
       ? (info) => {
           const rec = approvalGuard.peek(info.toolCallId)
@@ -827,6 +891,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       // the one-shot headless path pre-warms the cache via cfg.ensureConnectorManifest below
       // BEFORE buildTools runs, so the cold-cache read here is populated.
       let dynamicTools: ToolSet | undefined
+      // D1 — the run-scoped catalog matching dynamicTools, threaded to discover_skills so the
+      // self-description tool stops being connector-blind (dogfood root cause ②).
+      let connectorCatalog: ConnectorCatalogEntry[] | null = null
       const connectorGrants = agentRunContext?.modeGrants?.connectors
       if (
         shouldLoadConnectorTools(
@@ -849,6 +916,20 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
             ...(agentRunContext != null
               ? { connectorGrants, agentId: agentRunContext.agentId }
               : {})
+          })
+          // Same single filter source as the prompt path: projection + per-run narrowing.
+          connectorCatalog = connectorCatalogForRun(
+            projectConnectorCatalog(manifest),
+            contextMode,
+            agentRunContext != null,
+            connectorGrants
+          )
+          // D1 observability — registered-count line per connector-bearing run (on-disk log).
+          gatewayLogLine({
+            event: 'connector_tools_registered',
+            mode: contextMode ?? null,
+            tools: Object.keys(dynamicTools).length,
+            connectors: connectorCatalog?.length ?? 0
           })
         }
       }
@@ -903,7 +984,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // Stage 1 PR2 — connector tools ride the stage-0b admitDynamicTools seam (after both
           // skill-gating passes, before the context-mode policy). undefined (flag off / headless /
           // empty cache) → identity pass-through, byte-identical.
-          dynamicTools
+          dynamicTools,
+          // D1 — the matching run-scoped catalog (discover_skills External-connectors summary).
+          connectorCatalog
         },
         collector
       )

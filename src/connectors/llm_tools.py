@@ -10,7 +10,7 @@ Anthropic 风格的 tool schema + handler 对（形状照 ``src/reports/agent_to
 三条纪律：
 
 1. **执行走同一条闸** —— handler 调 ``service.invoke_connector_tool``，与 HTTP invoke 端点
-   是同一个函数（未同步 / delete / orphan / 未启用 / 越天花板一律到不了远端）。工厂侧的
+   是同一个函数（未同步 / orphan / 未启用 / 越天花板一律到不了远端）。工厂侧的
    过滤是第一道（不注册），service 那道是第二道（判定与执行同侧）。
 2. **天花板由调用方给** —— 报告 Agent 传 ``report_agent.tool_policy_json`` 的
    ``grant_connectors``；🔴 分类侧恒传 ``"read"``（坑 3：lethal trifecta 的结构性收紧，
@@ -148,7 +148,7 @@ def build_connector_llm_tools(
 
     过滤（每一条都在 ``service.invoke_connector_tool`` 侧有第二道）：connector 行必须
     ``status='connected'`` 且 ``enabled``；工具行必须 ``effective_enabled``、非 orphan、
-    非 delete、且 ``rank(crud) <= rank(天花板)``。名字冲突 / 不可表示 → 跳过 + warning。
+    且 ``rank(crud) <= rank(天花板)``。名字冲突 / 不可表示 → 跳过 + warning。
 
     flag off / grants 为空 → ``([], {})``（调用方零改变）。任何读库异常 → 同样返回空
     （connector 是增强面，绝不因它让报告或分类崩）。
@@ -178,7 +178,7 @@ def build_connector_llm_tools(
             logger.warning(f"[connector-llm] {connector_id} manifest read failed: {exc}")
             continue
         for t in tool_rows:
-            if t.orphan or t.crud_type == "delete":
+            if t.orphan:
                 continue
             if not connector_tool_effective_enabled(t.crud_type, t.enabled):
                 continue

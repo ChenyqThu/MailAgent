@@ -1330,6 +1330,14 @@
       "savedDetail": "数秒内对新操作生效",
       "saveFailed": "授权模式保存失败"
     },
+    "connectors": {
+      "label": "外部连接",
+      "manage": "管理",
+      "toolCount": "工具 {enabled}/{total}",
+      "saved": "已更新「{name}」",
+      "savedDetail": "约 30 秒内对 AI 生效",
+      "approvalHint": "只读工具直接调用；写入类工具每次都会弹卡请你确认。"
+    },
     "draftReply": {
       "header": "草稿回复",
       "send": "发送",
@@ -1862,7 +1870,7 @@
     },
     "connectors": {
       "title": "外部连接（MCP）",
-      "desc": "把 Notion、Jira 等外部服务经 MCP 协议接进来。连接后可以逐个工具决定是否允许 AI 调用；删除类工具暂不支持启用。",
+      "desc": "把 Notion、Jira 等外部服务经 MCP 协议接进来。连接后可以逐个工具决定是否允许 AI 调用。",
       "loading": "正在加载连接…",
       "loadError": "连接列表加载失败：{message}",
       "empty": "暂无可连接的服务。",
@@ -1909,20 +1917,18 @@
         "loading": "正在加载工具清单…",
         "loadError": "工具清单加载失败：{message}",
         "empty": "尚未同步到工具；点上方「同步工具」拉取清单。",
-        "defaultHint": "「默认」= 只读工具开、写入/更新工具关；删除类恒不可启用。",
+        "defaultHint": "「默认」= 只读工具开、写入/更新工具关。",
         "destructive": "破坏性",
         "orphan": "已失效",
         "orphanTip": "远端已不再提供这个工具；配置保留，但不会注入 AI。",
         "purgeOrphans": "清理 {count} 个已失效工具",
         "purgeDone": "已清理 {count} 个已失效工具",
-        "deleteTip": "删除类工具暂不支持启用。",
         "effectiveOn": "当前：AI 可调用",
         "effectiveOff": "当前：AI 不可调用",
         "crud": {
           "read": "只读",
           "write": "写入",
-          "update": "更新",
-          "delete": "删除"
+          "update": "更新"
         },
         "state": {
           "label": "调用权限",

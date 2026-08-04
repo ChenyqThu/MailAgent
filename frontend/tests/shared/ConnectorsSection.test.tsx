@@ -9,7 +9,8 @@
 //   3. 整体开关走 setEnabled 并刷新列表。
 //   4. per-tool **三态**：'关'→false · '开'→true · '默认'→**null（清除覆盖）**。第三态最容易
 //      被实现成 false，单独钉住。
-//   5. delete 类工具的控件恒 disabled（后端置 true 会 403），但行**照常渲染**——清单完整性。
+//   5. (08-03 delete 特例退役) 破坏性写工具**照常可配** —— 「会不会毁数据」由 destructive
+//      徽标承担，不再有一个恒 disabled 的第四 crud 档；只有 orphan 行仍锁定。
 //   6. 断开必须先过确认对话框：只点「断开」不该发出 disconnect。
 //   7. 远程 web 面「连接」按钮 disabled（OAuth 回调走 loopback，远程点了只会静默超时）。
 //   8. (PR5) needs_reauth 不是 error 的同义词：主操作变「重新连接」——「重试」对一个被撤销的
@@ -146,7 +147,14 @@ const TOOLS: ConnectorToolSummary[] = [
     effective_enabled: true,
     destructive: true
   }),
-  tool({ name: 'notion_delete_page', crud_type: 'delete', enabled_override: null })
+  // 08-03：曾经的 delete 行迁成「destructive 的 write」—— 服务端值域收敛后前端不再有恒
+  // disabled 的第四档，这一行因此必须是**可配的**（下面有反转后的断言钉住）。
+  tool({
+    name: 'notion_delete_page',
+    crud_type: 'write',
+    destructive: true,
+    enabled_override: null
+  })
 ]
 
 const STATE = {
@@ -285,7 +293,7 @@ describe('ConnectorsSection — 开关', () => {
 })
 
 describe('ConnectorsSection — per-tool 三态', () => {
-  test('展开后懒加载工具清单，四行全渲染（含 delete）', async () => {
+  test('展开后懒加载工具清单，四行全渲染', async () => {
     const { container } = renderUi()
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
     expect(connectorApi.tools).not.toHaveBeenCalled()
@@ -295,8 +303,8 @@ describe('ConnectorsSection — per-tool 三态', () => {
     expect(screen.getByText('notion_create_page')).toBeTruthy()
     expect(screen.getByText('notion_update_page')).toBeTruthy()
     expect(screen.getByText('notion_delete_page')).toBeTruthy()
-    // destructive 徽标只挂在 notion_update_page 一行。
-    expect(screen.getAllByText('settings.connectors.tools.destructive')).toHaveLength(1)
+    // destructive 徽标挂在两行（update + 迁移后的 delete→write）。
+    expect(screen.getAllByText('settings.connectors.tools.destructive')).toHaveLength(2)
   })
 
   test("'关' → false · '开' → true · '默认' → null（清除覆盖）", async () => {
@@ -322,20 +330,42 @@ describe('ConnectorsSection — per-tool 三态', () => {
     )
   })
 
-  test('delete 类行照常渲染，但三个档位全 disabled', async () => {
+  test('destructive 的写工具照常可配 —— delete 特例退役后没有第四个恒禁用档', async () => {
     const { container } = renderUi()
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
     await expandTools(container, 'notion')
     await waitFor(() => expect(stateGroups()).toHaveLength(4))
 
-    const deleteGroup = stateGroups()[3]
+    const destructiveGroup = stateGroups()[3]
     for (const name of [STATE.default, STATE.on, STATE.off]) {
       // 本仓没装 jest-dom 匹配器 → 直接读原生 disabled 属性。
       expect(
-        (within(deleteGroup).getByRole('button', { name }) as HTMLButtonElement).disabled
+        (within(destructiveGroup).getByRole('button', { name }) as HTMLButtonElement).disabled
+      ).toBe(false)
+    }
+    fireEvent.click(within(destructiveGroup).getByRole('button', { name: STATE.on }))
+    await waitFor(() =>
+      expect(connectorApi.setToolEnabled).toHaveBeenCalledWith('notion', 'notion_delete_page', true)
+    )
+  })
+
+  test('orphan 行仍恒锁定（远端已经没有这个工具，配了也不会注册）', async () => {
+    connectorApi.tools.mockResolvedValue([
+      ...TOOLS,
+      tool({ name: 'notion_legacy_a', crud_type: 'read', orphan: true })
+    ])
+    const { container } = renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    await expandTools(container, 'notion')
+    await waitFor(() => expect(stateGroups()).toHaveLength(5))
+
+    const orphanGroup = stateGroups()[4]
+    for (const name of [STATE.default, STATE.on, STATE.off]) {
+      expect(
+        (within(orphanGroup).getByRole('button', { name }) as HTMLButtonElement).disabled
       ).toBe(true)
     }
-    fireEvent.click(within(deleteGroup).getByRole('button', { name: STATE.on }))
+    fireEvent.click(within(orphanGroup).getByRole('button', { name: STATE.on }))
     expect(connectorApi.setToolEnabled).not.toHaveBeenCalled()
   })
 })

@@ -43,8 +43,12 @@ import { BorderGlow } from '@shared/components/effects/BorderGlow'
 import type { SearchHit, SearchResult } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { ComposerAttachmentChips } from '@shared/assistant/components/composer'
-import { useChatComposerControls, type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
+import {
+  useChatComposerControls,
+  type ChatComposerControls
+} from '@shared/assistant/components/composerControlsContext'
 import { ApprovalModePicker } from '@shared/assistant/components/ApprovalModePicker'
+import { ConnectorQuickPanel } from '@shared/assistant/components/ConnectorQuickPanel'
 
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
 
@@ -528,6 +532,8 @@ export function AgentComposer(): React.JSX.Element {
                 {controls && <AgentModelPicker controls={controls} />}
                 {/* 07-16 — owner-global 授权模式切换 chip（Manual/Accept Edits/Bypass）。 */}
                 {controls && <ApprovalModePicker variant="chip" />}
+                {/* 08-03 — MCP 外部连接快捷面板（灰度 flag off / 零行时整个入口不渲染）。 */}
+                {controls && <ConnectorQuickPanel variant="chip" />}
               </div>
               <div className="flex items-center">
                 <ThreadPrimitive.If running={false}>

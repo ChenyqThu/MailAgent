@@ -109,10 +109,10 @@ _TOOL_POLICY_KEYS = frozenset(
 _WEB_GRANT_VALUES = ("off", "gated", "open")
 
 # grant_connectors 的 crud 天花板**有效**值域（MCP connector PRD 决策 5 + grill Q3=B）：
-# read < write < update 单调递增；🔴 **delete 不在值域内 —— 写入即拒**（不是读侧宽容），
-# 于是「AI 结构上拿不到删除工具」不依赖 owner 记得别配。
-# 表结构 / 远端 manifest 的 crudType 枚举**保留 delete 位**（删除类工具照常同步入库、界面恒灰），
-# 未来放开 = 把 "delete" 加进本元组 + 解灰界面开关，不改 schema、不做数据迁移。
+# read < write < update 单调递增，**这就是 crud 的全部值域**（08-03 起 delete 档位整体退役：
+# MCP annotations 没有 delete 语义位，derive_crud_type 结构上不产出它 —— 见
+# store.CONNECTOR_CRUD_TYPES / connectors/client.derive_crud_type）。
+# 🔴 值域外的字面量（含遗留的 ``"delete"``）**写入即拒**（不是读侧宽容），fail-closed。
 _CONNECTOR_GRANT_VALUES = ("read", "write", "update")
 
 
@@ -319,8 +319,8 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
       （显式 ``[]`` → ``()`` 零挂载）；其它类型 → 拒（``"email"`` 裸串 → 拒，镜像 allowed_tools）
     - ``grant_connectors``：缺省/null → ``()``；必须是 ``{connector_id: 天花板}`` object
       （显式 ``{}`` → ``()`` 合法 = 无授权）；key 非空字符串、value ∈
-      ``('read','write','update')`` 字面量 —— 🔴 ``"delete"`` **在值域外，入库即拒**
-      （grill Q3=B：删除类工具照常入清单但 AI 永不可调，不靠读侧宽容兜）
+      ``('read','write','update')`` 字面量 —— 🔴 值域外（含已退役的 ``"delete"``）
+      **入库即拒**，不靠读侧宽容兜
 
     保存时权威（``validate_agent_config_patch`` 调用，坏形状 400）；读侧投影（spec 端点）自行
     try/except 落安全默认。Raises ``ToolPolicyValidationError``（``ValueError`` 子类）。
@@ -369,8 +369,8 @@ def parse_tool_policy(raw: Union[str, dict, None]) -> ToolPolicy:
                 raise ToolPolicyValidationError(
                     "grant_connectors keys must be non-empty connector ids"
                 )
-            # 成员判定挡住 True/1/"DELETE"（大小写敏感，fail-closed）；"delete" 同样在此拒 ——
-            # 值域是唯一的开关，未来放开只放宽 _CONNECTOR_GRANT_VALUES。
+            # 成员判定挡住 True/1/"DELETE"（大小写敏感，fail-closed）；已退役的 "delete"
+            # 同样在此拒 —— 值域是唯一的开关，加档位只放宽 _CONNECTOR_GRANT_VALUES。
             if not isinstance(ceiling, str) or ceiling not in _CONNECTOR_GRANT_VALUES:
                 raise ToolPolicyValidationError(
                     f"grant_connectors[{cid!r}] must be one of "

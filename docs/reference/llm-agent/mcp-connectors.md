@@ -192,29 +192,49 @@ MCP spec 里 `destructiveHint` 的语义是「可能执行破坏性**更新**」
 annotations 根本**没有 delete 语义位**。Notion 把最核心的 `notion-update-page` 标了 destructive，
 按旧映射会被推成 delete → 结构性不可用，而 Notion 清单里根本没有真删除工具。
 destructive 语义位改**单独落列**（`derive_destructive` → `connector_tool.destructive`），
-供审批卡显示红色「破坏性操作」警告 —— 位不丢，只是不再当档位。`delete` 档位机制全部保留
-（值域 / 恒 False 分支不动），当前推导不产出。
+供审批卡显示红色「破坏性操作」警告 —— 位不丢，只是不当档位。
 
-### 5.3 delete 类：入库、恒灰、任何场合不注册
+### 5.3 delete 分类已退役（2026-08-03 owner dogfood 改判）
 
-grill Q3=B + Q16=A：**清单完整**（照常同步入库、`crud_type='delete'` 如实记录）+
-**界面恒灰不可开启** + **AI 永远拿不到**（不注册，不是「注册但审批」）。
-这不依赖 owner 记得配对——七道结构性保证各自独立成立：
+原设计（grill Q3=B + Q16=A）是「delete 类照常入库 + 界面恒灰 + AI 永远拿不到」，由七道结构性
+保证撑着。**08-03 owner 拍板推翻**：「不要区分删除，连接工具应该都全部可配置」。
 
-1. `src/agents/trigger.py::_CONNECTOR_GRANT_VALUES = ("read","write","update")` —— grant 天花板
-   值域不含 delete，坏值**入库时拒**（不是读侧宽容）；
-2. `store.set_connector_tool_enabled` —— delete 类置 True 抛 `ValueError` → 端点 403
-   `E_CONNECTOR_TOOL_FORBIDDEN`（置 False / null 照常允许：清配置不是放权）；
-3. `store.connector_tool_effective_enabled` —— delete 恒 `False`（读侧纵深，兜手改 DB 的行）；
-4. TS `createConnectorTools` —— `crudType === 'delete'` → `continue`，任何 context mode 都不注册；
-5. Python `llm_tools.build_connector_llm_tools` —— 同上，工厂不造；
-6. `service.invoke_connector_tool` 闸 3 —— 403，两个调用面共用这一份闸；
-7. `service.ceiling_allows` —— `delete` 不在 `CONNECTOR_CRUD_RANK` 表内 → fail-closed False。
+改判的两条实证依据：
 
-设置界面照常渲染 delete 行（标「暂不支持」）——「看得见但用不了」远比「干脆不显示」诚实：
-用户能确认这个服务确实有个删除工具、且我们确实没给 AI。
+1. **结构上不可达** —— MCP annotations 没有 delete 语义位（§5.2 裁决①），裁决①之后
+   `derive_crud_type` 只产 `read` / `update` / `write`，**任何 manifest 都推不出 delete**。
+   保留一个永不产生的档位，换来的只是「有一档永远恒灰」这个假象。
+2. **仅有的 delete 行是 bug 遗留** —— dogfood 现场 live DB 里只有 2 条 `crud_type='delete'`，
+   全是 PR1 旧构建按**旧映射**落的陈旧分类（指纹：`destructive=0`），手动 re-sync 一次即被
+   治愈成 `write` + `destructive=1`。它们从来不是「真的删除工具」。
 
-未来放开 = **放宽 grant 值域 + 解灰界面开关**，不改 schema、不做数据迁移。
+⇒ delete **整体退役**（不是「放开」，是删掉一个不可达的死特例）：`CONNECTOR_CRUD_TYPES`
+值域收敛为 `('read','write','update')`，`store` 的恒 False 分支 / 写侧 ValueError、
+`service` 的闸 3（403 `E_CONNECTOR_TOOL_FORBIDDEN`）、两侧注册期的 `crud === 'delete'`
+skip 全部移除；`E_CONNECTOR_TOOL_FORBIDDEN` 错误码随之退役（Python 侧已无生产者）。
+
+**危险性提示由 `connector_tool.destructive` 独立列承担**（审批卡红色「破坏性操作」警告），
+**安全地板不变**：write/update 默认关、owner 显式开才注册、manual 恒弹卡 / headless 靠
+per-connector grant 天花板、grant 值域仍是 `read < write < update`（值域外含遗留的
+`"delete"` 字面量一律**入库即拒**、`ceiling_allows` 双向 fail-closed）。
+
+**存量陈旧行的装机自愈** → §5.3.1。
+
+#### 5.3.1 存量 `crud_type='delete'` 行的离线重推导（幂等数据迁移）
+
+`AgentConfigStore._migrate_additive`（backend-owned db，开库即对齐，不进 `DB_VERSION`）多一条：
+
+```sql
+UPDATE connector_tool SET crud_type='write', destructive=1, updated_at=? WHERE crud_type='delete'
+```
+
+🔴 **可证明等价，不需要网络 re-sync**：旧映射产出 delete 的**唯一**路径是
+`destructive_hint is True`，而当前 `derive_crud_type` 对同一输入产出 `write`、
+`derive_destructive` 产出 `True` ⇒ 这条 UPDATE 就是把那次误判按新规则重算一遍，与 owner
+点一次 sync 的结果逐字段相同。幂等（跑完 `WHERE` 后不再有 delete 行）；用户的 `enabled`
+覆盖**一列不碰**（refresh 纪律 2）。owner 本机已手动 sync 治愈，这条保护的是任何旧库 /
+回退再升级的路径。测试：`tests/agent_config/test_connector_store.py::
+test_stale_delete_rows_migrated_to_write_destructive`（含幂等 + 迁移后可配置可注册的正例）。
 
 ### 5.4 orphan（远端工具消失）
 
@@ -233,7 +253,8 @@ grill Q3=B + Q16=A：**清单完整**（照常同步入库、`crud_type='delete'
 ### 5.5 per-tool 三态
 
 `enabled` 是 `true` / `false` / **`null`（清除覆盖回默认）** 三态。默认折算规则
-（`connector_tool_effective_enabled`）：**read 默认开、write/update 默认关、delete 恒关**。
+（`connector_tool_effective_enabled`）：**read 默认开、write/update 默认关**——08-03 起
+**在册工具一律可配置**，没有恒灰的一档（§5.3）。
 
 🔴 折算规则**不在前端重算**——`GET /{id}/tools` 与 `POST .../enabled` 都直接返回
 `effective_enabled`，前端照显示。否则那套规则就成了第二处手抄。
@@ -337,16 +358,19 @@ gateway 注册期过滤是第一道，但那道在 TS 侧、由调用方自证�
 
 ### 6.5 闸序（单源 `src/connectors/service.py::invoke_connector_tool`）
 
-伪造 / 未同步 / delete / orphan / 未启用 / 越天花板的名字**到不了远端**：
+伪造 / 未同步 / orphan / 未启用 / 越天花板的名字**到不了远端**：
 
 | # | 判据 | 结果 |
 |---|---|---|
 | 1 | 未知 connector id（不在 registry） | 404 `E_NOT_FOUND` |
 | 2 | 工具不在已同步清单里（伪造 / 未同步） | 404 `E_NOT_FOUND` |
-| 3 | `crud_type='delete'` | 403 `E_CONNECTOR_TOOL_FORBIDDEN` |
-| 4 | `orphan` | 409 `E_CONNECTOR_TOOL_ORPHAN` |
-| 5 | 越 crud 天花板 | 403 `E_CONNECTOR_GRANT_DENIED` |
-| 6 | `effective_enabled` 折算为 False | 409 `E_CONNECTOR_TOOL_DISABLED` |
+| 3 | `orphan` | 409 `E_CONNECTOR_TOOL_ORPHAN` |
+| 4 | 越 crud 天花板 | 403 `E_CONNECTOR_GRANT_DENIED` |
+| 5 | `effective_enabled` 折算为 False | 409 `E_CONNECTOR_TOOL_DISABLED` |
+
+🔴 原闸 3（`crud_type='delete'` → 403 `E_CONNECTOR_TOOL_FORBIDDEN`）**08-03 整闸退役**
+（§5.3：档位不可达 ⇒ 闸是死代码），其后各闸依次前移，`E_CONNECTOR_TOOL_FORBIDDEN`
+错误码 Python 侧已无生产者。
 
 🔴 **HTTP invoke 端点与 Python LLM 工厂共用这一个函数**（PR3 起有第二个调用面），
 闸逻辑绝不手抄两份。flag 门**不在这里**——那是 router `_require_enabled`（HTTP 面）与工厂
@@ -462,7 +486,9 @@ per-tool 三态 / per-agent grant）。
 6. **`llm_tools._make_handler` 的泛化 except 回灌的是 repr 不是结构化码**：
    `f"error: connector call failed: {e!r}"`，与闸拒分支的 `f"error: {e.code}: {e}"` 不同形。
    模型读得懂，但没法按码分支。
-7. **delete 类的实际开放**（Out of Scope）：放开 = 放宽 grant 值域 + 解灰 UI 开关，schema 已留位。
+7. ~~**delete 类的实际开放**（Out of Scope）~~ —— **08-03 已按「整体退役」实现**（§5.3）：
+   不是把保留位解冻，而是删掉一个不可达的死特例。将来若真出现明示删除语义的 manifest，
+   那是一次**新增**档位的独立决策（值域 + 天花板 + 审批语义一起议）。
 8. **其余明确不做**：stdio transport 的实现（只留表结构）· Composio 等第三方云代管聚合
    （数据出机，与本地优先定位冲突）· 远程 web 面发起 OAuth 连接（loopback callback 在远程浏览器
    打不开——远程只能**使用**已连接的 connector，设置页的「连接」按钮在 web 构建下 disabled 并
@@ -480,7 +506,7 @@ per-tool 三态 / per-agent grant）。
 | `POST /{id}/oauth/start` | 起授权流 → 返回 `authorize_url`（重复调 = 替换在途流） |
 | `GET /{id}/status` | 单个 connector 的状态 + 凭证视图 + 在途流视图 |
 | `POST /{id}/sync` | 用已存授权拉工具清单落库（非交互，无授权 → 409 引导走 oauth/start） |
-| `GET /{id}/tools` | 已同步清单（含 delete 行、orphan 行；`effective_enabled` 已折算） |
+| `GET /{id}/tools` | 已同步清单（含 orphan 行；`effective_enabled` 已折算、`destructive` 原样透出） |
 | `POST /{id}/enabled` | connector 整体启停（`{"enabled": bool}`；**保留**凭证与 per-tool 配置） |
 | `POST /{id}/tools/{tool}/enabled` | per-tool 三态（`{"enabled": bool\|null}`，键必须在场） |
 | `POST /{id}/tools/purge_orphans` | 清 orphan 行（只删 `orphan=1`） |
@@ -508,7 +534,8 @@ DB=~/Library/Application\ Support/mailagent-frontend/data/agent_config.db
 sqlite3 "$DB" "SELECT connector_id, status, enabled, preprocess_enabled, last_synced_at,
   substr(coalesce(last_error,''),1,60) FROM connector;"
 
-# 工具清单分布（含 delete / orphan）
+# 工具清单分布（crud × destructive × orphan；🔴 crud_type='delete' 应恒为 0 行 —— 出现
+# 说明库没跑过 08-03 的退役迁移，见 §5.3.1）
 sqlite3 "$DB" "SELECT connector_id, crud_type, destructive, orphan, COUNT(*)
   FROM connector_tool GROUP BY 1,2,3,4;"
 

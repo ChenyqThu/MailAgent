@@ -145,11 +145,15 @@ def derive_crud_type(tool: Any) -> str:
     🔴 裁决①（spike 2026-08-03 实测证伪原映射）：``destructive_hint=True`` **不再**映射
     ``delete`` —— MCP annotations **没有 delete 语义位**，spec 里 destructiveHint 的语义是
     「可能执行破坏性**更新**」（覆盖式写入的超集，不专指删除）。Notion 把最核心的
-    ``notion-update-page`` 标了 destructive，按旧映射推成 delete 会让它结构性不可用
-    （delete 恒不可启用、不注册），而 Notion 清单里根本没有真删除工具。destructive 语义位
-    单独落列（``derive_destructive``），供审批卡显示红色「破坏性操作」警告——位不丢，
-    只是不再当档位。``delete`` 档位机制保留（值域 / 恒 False 分支不动），当前推导不产出；
-    未来若有 manifest 以名字/描述明示真删除，再议启发式。
+    ``notion-update-page`` 标了 destructive，按旧映射推成 delete 会让它结构性不可用，
+    而 Notion 清单里根本没有真删除工具。destructive 语义位单独落列
+    （``derive_destructive``），供审批卡显示红色「破坏性操作」警告——位不丢，只是不当档位。
+
+    🔴 08-03 owner dogfood 改判：既然本函数**结构上不可能**产出 ``delete``，那个档位就是
+    不可达的死特例（还让「连接工具应该都全部可配置」破了个恒灰的口）⇒ ``delete``
+    整体退役，不再在 ``CONNECTOR_CRUD_TYPES`` 值域内。未来若有 manifest 以名字/描述明示
+    真删除，那是一次**新增**档位的独立决策（连同值域 / 天花板 / 审批语义一起议），不是
+    把这个保留位解冻。
     未注解的写类工具**不**按 MCP spec 的 destructive 缺省值收紧 —— 保守面靠 write 类默认关
     + manual 恒审批。
     """
@@ -337,7 +341,7 @@ class ConnectorClient:
     async def list_tools_manifest(self, *, http_transport: Any = None) -> list[dict[str, Any]]:
         """拉全量工具清单 → 归一成入库形状（name/description/schema×2/crud_type）。
 
-        🔴 delete 类**照常入库**（Q16=A：清单完整，界面恒灰、AI 不注册）——本函数不过滤。
+        🔴 **不过滤**：远端有什么就入什么（清单完整），启用与否交给 owner 的 per-tool 开关。
         """
         tools: list[dict[str, Any]] = []
         async with self.session(http_transport=http_transport) as client:

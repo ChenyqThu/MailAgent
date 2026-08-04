@@ -36,6 +36,8 @@ import {
   type AgentRunContext
 } from './policy'
 import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
+// D1 (connector dogfood batch) — catalog row shape (prompt-land canonical, skillCatalog 先例).
+import type { ConnectorCatalogEntry } from '../prompts/stable_prompt'
 
 export interface BuildGatewayToolsOpts {
   domain: MailAgentDomainClient
@@ -157,6 +159,11 @@ export interface BuildGatewayToolsOpts {
    *  colliding with an assembled static tool never clobbers it. Absent (every current caller) →
    *  assembly byte-identical. */
   dynamicTools?: ToolSet
+  /** D1 (connector dogfood batch) — the run-scoped MCP connector catalog matching `dynamicTools`
+   *  (lifecycle: connectorCatalogForRun over the manifest cache). Consumed ONLY by
+   *  discover_skills' "External connectors" summary so the self-description tool stops being
+   *  connector-blind. Absent / null → discover_skills output byte-identical. */
+  connectorCatalog?: ConnectorCatalogEntry[] | null
 }
 
 /** Names of the read tools exposed by the gateway (for tests / observability). */
@@ -256,7 +263,9 @@ export function buildGatewayTools(
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         oneShot: opts.oneShotWrites,
-        contextMode
+        contextMode,
+        // D1 — run-scoped connector catalog for discover_skills' External connectors summary.
+        connectorCatalog: opts.connectorCatalog
       })
     )
   }

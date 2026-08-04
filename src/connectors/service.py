@@ -5,14 +5,18 @@ PR2 把闸序写在 ``routers/connector.py`` 的 invoke handler 里；PR3 起有
 直调，不过 HTTP）。两个面必须走**同一份**闸，故整块搬到这里：router 与工厂各调一次
 ``invoke_connector_tool``，闸逻辑绝不手抄两份（手抄两份 = 改一处漏一处、静默放宽）。
 
-闸序（伪造 / 未同步 / delete / orphan / 未启用 / 越天花板的名字**到不了远端**）：
+闸序（伪造 / 未同步 / orphan / 未启用 / 越天花板的名字**到不了远端**）：
 
   1. 未知 connector id（不在 registry）              → 404 ``E_NOT_FOUND``
   2. 工具不在已同步清单里（伪造 / 未同步）           → 404 ``E_NOT_FOUND``
-  3. ``crud_type='delete'``                          → 403 ``E_CONNECTOR_TOOL_FORBIDDEN``（Q16=A）
-  4. orphan（远端清单里已消失）                      → 409 ``E_CONNECTOR_TOOL_ORPHAN``
-  5. **crud 天花板**（PR3 新增，见下）                → 403 ``E_CONNECTOR_GRANT_DENIED``
-  6. ``effective_enabled`` 折算为 False              → 409 ``E_CONNECTOR_TOOL_DISABLED``
+  3. orphan（远端清单里已消失）                      → 409 ``E_CONNECTOR_TOOL_ORPHAN``
+  4. **crud 天花板**（PR3 新增，见下）                → 403 ``E_CONNECTOR_GRANT_DENIED``
+  5. ``effective_enabled`` 折算为 False              → 409 ``E_CONNECTOR_TOOL_DISABLED``
+
+🔴 原闸 3（``crud_type='delete'`` → 403 ``E_CONNECTOR_TOOL_FORBIDDEN``）**08-03 整闸退役**：
+delete 档位本身已退役（MCP annotations 没有 delete 语义位 ⇒ ``derive_crud_type`` 结构上不
+产出它），闸就成了不可达代码。破坏性由 ``connector_tool.destructive`` 列在审批卡上红警告
+表达，写类恒 HITL 的安全地板不变。
 
 flag 门（``MAILAGENT_MCP_CONNECTORS``）**不在这里** —— 它是 router 的 ``_require_enabled``
 （HTTP 面）与工厂的「flag off 返回空工具集」（LLM 面）各自的入口纪律，本模块只管闸与执行。
@@ -33,8 +37,8 @@ from loguru import logger
 
 #: crud 天花板的**序**（PRD 决策 5 / grill Q3=B）：read < write < update。
 #: 工具可用 iff ``rank(crud_type) <= rank(ceiling)``。
-#: 🔴 ``delete`` 不在表内 —— 天花板值域不含它（``trigger._CONNECTOR_GRANT_VALUES`` 保存时即拒），
-#: 且 delete 类工具在闸 3 就被挡掉，永远走不到这里。未来放开 = 两处一起放宽。
+#: 🔴 表内三档就是 crud 的**全部**值域（``store.CONNECTOR_CRUD_TYPES`` 同步；delete 档位
+#: 08-03 已退役）。值域外的 crud / 天花板一律 fail-closed（``ceiling_allows`` 返回 False）。
 CONNECTOR_CRUD_RANK: dict[str, int] = {"read": 1, "write": 2, "update": 3}
 
 #: 授权失效的错误码（PR5）：命中即把连接落 ``needs_reauth``（可行动状态）。**两个调用面
@@ -82,7 +86,8 @@ class ConnectorInvokeDenied(Exception):
 def ceiling_allows(crud_type: str, ceiling: Optional[str]) -> bool:
     """该 crud 类工具是否在天花板之内（``ceiling=None`` = 无天花板，恒 True）。
 
-    未知 crud / 未知天花板（含 ``'delete'``）→ **False**（fail-closed：值域外一律不放行）。
+    未知 crud / 未知天花板（含已退役的 ``'delete'``）→ **False**（fail-closed：值域外一律
+    不放行 —— 手改 DB / 老配置里残留的档位名不会被当成"什么都放行"）。
     """
     if ceiling is None:
         return True
@@ -111,7 +116,7 @@ def _load_agent_row(agent_id: str) -> Optional[dict[str, Any]]:
 def connector_grants_for_agent(agent_id: str) -> dict[str, str]:
     """agent 行 → ``{connector_id: 天花板}``（读侧宽容：坏 ``tool_policy_json`` → 空 dict）。
 
-    宽容解析对齐 ``agent_runs._tool_policy_lenient``：保存面已严格拒（``delete`` 入库即拒），
+    宽容解析对齐 ``agent_runs._tool_policy_lenient``：保存面已严格拒（值域外的天花板入库即拒），
     运行时坏形状退回「未配置」= 无授权，方向 fail-closed。
     """
     from src.agents.trigger import parse_tool_policy
@@ -225,13 +230,6 @@ async def invoke_connector_tool(
             f"tool {tool_name!r} is not in the synced manifest of connector "
             f"{connector_id!r} (unsynced/forged tool names are never forwarded)",
             http_status=404,
-        )
-    if row.crud_type == "delete":
-        raise ConnectorInvokeDenied(
-            "E_CONNECTOR_TOOL_FORBIDDEN",
-            f"tool {tool_name!r} is delete-class and can never be invoked (MVP keeps "
-            "delete tools recorded but disabled)",
-            http_status=403,
         )
     if row.orphan:
         raise ConnectorInvokeDenied(

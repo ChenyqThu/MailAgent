@@ -169,11 +169,11 @@ class _StubConnectorClient:
             "destructive": True,
         },
         {
-            "name": "delete_page",
-            "description": "Delete a page",
+            "name": "update_page",
+            "description": "Update a page",
             "input_schema": {"type": "object"},
             "output_schema": None,
-            "crud_type": "delete",
+            "crud_type": "update",
         },
     ]
 
@@ -200,12 +200,12 @@ def test_sync_persists_tools_and_status(flag_on_client, fresh_agent_cfg, monkeyp
     t = flag_on_client.get("/api/connector/notion/tools")
     assert t.status_code == 200
     tools = {x["name"]: x for x in t.json()["data"]["tools"]}
-    assert set(tools) == {"search", "create_page", "delete_page"}
-    # 折算：read 默认开 / write 默认关 / 🔴 delete 恒关（且照常在清单里 —— Q16=A）。
+    assert set(tools) == {"search", "create_page", "update_page"}
+    # 折算：read 默认开 / write·update 默认关（08-03 起没有恒灰的第四档）。
     assert tools["search"]["effective_enabled"] is True
     assert tools["create_page"]["effective_enabled"] is False
-    assert tools["delete_page"]["effective_enabled"] is False
-    assert tools["delete_page"]["crud_type"] == "delete"
+    assert tools["update_page"]["effective_enabled"] is False
+    assert tools["update_page"]["crud_type"] == "update"
     # PR2 裁决① — destructive 位随清单返回（审批卡红警告的数据源）。
     assert tools["create_page"]["destructive"] is True
     assert tools["search"]["destructive"] is False
@@ -293,8 +293,8 @@ def _seed_tools(store):
              "output_schema": None, "crud_type": "read"},
             {"name": "create_page", "description": "", "input_schema": None,
              "output_schema": None, "crud_type": "write", "destructive": True},
-            {"name": "delete_page", "description": "", "input_schema": None,
-             "output_schema": None, "crud_type": "delete"},
+            {"name": "update_page", "description": "", "input_schema": None,
+             "output_schema": None, "crud_type": "update"},
         ],
     )
 
@@ -324,16 +324,25 @@ def test_invoke_unknown_tool_404_never_forwarded(flag_on_client, fresh_agent_cfg
     assert _InvokeStubClient.last_call is None  # 伪造名字到不了远端
 
 
-def test_invoke_delete_class_403(flag_on_client, fresh_agent_cfg, monkeypatch):
+def test_invoke_destructive_write_tool_allowed_once_enabled(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """🔴 08-03 delete 闸退役的 HTTP 正例：``destructive=1`` 的写工具开了就能调。
+
+    以前 destructive_hint 会被推成 delete → 403 恒拒（清单里看得见、永远用不了）。现在
+    危险性只是审批卡上的红警告位，执行侧的安全地板是 write 默认关 + 恒 HITL。
+    """
     import src.connectors.client as client_mod
 
     _seed_tools(fresh_agent_cfg)
     _InvokeStubClient.last_call = None
     monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
-    r = flag_on_client.post("/api/connector/notion/tools/delete_page/invoke")
-    assert r.status_code == 403
-    assert r.json()["error"]["code"] == "E_CONNECTOR_TOOL_FORBIDDEN"
-    assert _InvokeStubClient.last_call is None
+    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
+    r = flag_on_client.post("/api/connector/notion/tools/create_page/invoke")
+    assert r.status_code == 200
+    assert _InvokeStubClient.last_call[:2] == ("notion", "create_page")
+    row = {t.tool_name: t for t in fresh_agent_cfg.list_connector_tools("notion")}["create_page"]
+    assert row.destructive is True  # 红警告位仍在（只是不再是禁令）
 
 
 def test_invoke_disabled_tool_409_actionable(flag_on_client, fresh_agent_cfg, monkeypatch):
@@ -619,20 +628,23 @@ def test_invoke_ceiling_blocks_write_tool(flag_on_client, fresh_agent_cfg, monke
     assert _invoke(flag_on_client, "create_page", caller=_HEADLESS).status_code == 200
 
 
-def test_invoke_delete_class_forbidden_even_with_max_grant(
+def test_invoke_destructive_write_allowed_headless_within_grant(
     flag_on_client, fresh_agent_cfg, monkeypatch
 ):
-    """AC：删除类在任何 grant 下都不可调（headless 面也一样）。"""
+    """🔴 delete 闸退役后的 headless 正例：destructive 写工具在 grant 之内照常可调。
+
+    安全地板没变 —— 它仍要 owner 显式开这个工具 **且** 该 agent 拿到 ≥write 的 grant
+    （下一条 assert 把 grant 收回 read 就拒），destructive 只影响审批卡的红警告。
+    """
     import src.connectors.client as client_mod
 
     _seed_tools(fresh_agent_cfg)
+    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
     _InvokeStubClient.last_call = None
     monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
     _grant_agent(monkeypatch, {"notion": "update"})
-    r = _invoke(flag_on_client, "delete_page", caller=_HEADLESS)
-    assert r.status_code == 403
-    assert r.json()["error"]["code"] == "E_CONNECTOR_TOOL_FORBIDDEN"
-    assert _InvokeStubClient.last_call is None
+    assert _invoke(flag_on_client, "create_page", caller=_HEADLESS).status_code == 200
+    assert _InvokeStubClient.last_call[:2] == ("notion", "create_page")
 
 
 def test_invoke_im_chat_always_denied(flag_on_client, fresh_agent_cfg, monkeypatch):
@@ -809,20 +821,20 @@ def test_tool_enabled_three_state_roundtrip(flag_on_client, fresh_agent_cfg):
     assert tools["search"]["effective_enabled"] is True
 
 
-def test_tool_enabled_delete_class_403_but_still_clearable(flag_on_client, fresh_agent_cfg):
-    """🔴 delete 类置 True → 403（与 invoke 端点同码）；置 False / null 照常允许。"""
-    _seed_tools(fresh_agent_cfg)
-    r = _set_tool(flag_on_client, "delete_page", {"enabled": True})
-    assert r.status_code == 403
-    assert r.json()["error"]["code"] == "E_CONNECTOR_TOOL_FORBIDDEN"
-    rows = {r.tool_name: r for r in fresh_agent_cfg.list_connector_tools("notion")}
-    assert rows["delete_page"].enabled is None  # 拒了就是没落写
+def test_tool_enabled_every_listed_tool_is_configurable(flag_on_client, fresh_agent_cfg):
+    """🔴 08-03 owner 改判：「连接工具应该都全部可配置」—— 清单里没有恒灰的一档。
 
-    for body in ({"enabled": False}, {"enabled": None}):
-        r = _set_tool(flag_on_client, "delete_page", body)
-        assert r.status_code == 200, body
-        # 折算恒 False —— 无论覆盖是什么（读侧防御纵深）。
-        assert r.json()["data"]["effective_enabled"] is False
+    destructive 的写工具（原本会被推成 delete、403 恒拒）现在照常可开、折算为开。
+    """
+    _seed_tools(fresh_agent_cfg)
+    rows = {r.tool_name: r for r in fresh_agent_cfg.list_connector_tools("notion")}
+    assert rows["create_page"].destructive is True  # 红警告位仍在
+
+    for name in ("search", "create_page", "update_page"):
+        r = _set_tool(flag_on_client, name, {"enabled": True})
+        assert r.status_code == 200, name
+        d = r.json()["data"]
+        assert d["enabled_override"] is True and d["effective_enabled"] is True, name
 
 
 def test_tool_enabled_validates_and_404(flag_on_client, fresh_agent_cfg):
@@ -851,14 +863,14 @@ def test_purge_orphans_removes_only_orphan_rows(flag_on_client, fresh_agent_cfg)
     _seed_tools(fresh_agent_cfg)
     # 用户对一个在册 read 工具做过覆盖（清理绝不能把它带走）。
     fresh_agent_cfg.set_connector_tool_enabled("notion", "search", False)
-    # 远端清单只剩 search → create_page / delete_page 变 orphan（行保留，纪律 4）。
+    # 远端清单只剩 search → create_page / update_page 变 orphan（行保留，纪律 4）。
     fresh_agent_cfg.sync_connector_tools(
         "notion",
         [{"name": "search", "description": "", "input_schema": None,
           "output_schema": None, "crud_type": "read"}],
     )
     before = {r.tool_name: r for r in fresh_agent_cfg.list_connector_tools("notion")}
-    assert before["create_page"].orphan is True and before["delete_page"].orphan is True
+    assert before["create_page"].orphan is True and before["update_page"].orphan is True
 
     r = _purge(flag_on_client)
     assert r.status_code == 200

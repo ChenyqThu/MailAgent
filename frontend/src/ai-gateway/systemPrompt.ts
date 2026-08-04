@@ -19,6 +19,7 @@
 import {
   buildStableSystemPrompt,
   type ChatModelConfig,
+  type ConnectorCatalogEntry,
   type SkillCatalogEntry
 } from './prompts/stable_prompt'
 import { buildContextSystemBlock } from '@shared/assistant/context/contextSerializer'
@@ -50,6 +51,13 @@ export interface GatewaySystemPromptConfig {
    *  MAILAGENT_SKILL_CATALOG_PROMPT is on, so the default (off) leaves it null and the prompt stays
    *  byte-identical. Skill DESCRIPTIONS can be third-party text — stable_prompt sanitizes them. */
   skillCatalog?: SkillCatalogEntry[] | null
+  /** D1 (connector dogfood batch) — the MCP connector catalog (one summary row per connector),
+   *  projected by the Electron wrapper from its connector-manifest TTL cache ONLY when
+   *  MAILAGENT_MCP_CONNECTORS is on AND the cache holds admitted tools (cold cache / flag off →
+   *  field absent → prompt byte-identical). prepareChatRun scopes it per run
+   *  (connectorCatalogForRun) BEFORE it reaches buildGatewaySystemPrompt: manual keeps the full
+   *  list, a headless run keeps only its granted connectors, every other shape drops it. */
+  connectorCatalog?: ConnectorCatalogEntry[] | null
 }
 
 /** Code-owned repeated-failure discipline, injected into EVERY run (manual and headless alike).
@@ -133,6 +141,12 @@ export function buildGatewaySystemPrompt(args: {
       !args.headlessAgentRun && pc?.skillCatalog && pc.skillCatalog.length > 0
         ? pc.skillCatalog
         : null,
+    // D1 — 🔴 deliberately NOT the skillCatalog manual-only gate: a granted headless run really
+    // holds connector tools (grant_connectors), so hiding the catalog there would recreate the
+    // dogfood blind spot for scheduled agents. The run-scoping already happened in prepareChatRun
+    // (scopeConnectorCatalogForRun → connectorCatalogForRun): what arrives here IS the run's set.
+    connectorCatalog:
+      pc?.connectorCatalog && pc.connectorCatalog.length > 0 ? pc.connectorCatalog : null,
     standingContext:
       pc?.standingContext && pc.standingContext.length > 0 ? pc.standingContext : null
   }

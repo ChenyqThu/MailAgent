@@ -22,9 +22,14 @@ export type ConnectorStatusValue =
   | 'needs_reauth'
   | 'error'
 
-/** 工具的 crud 归类（Python `CONNECTOR_CRUD_TYPES`）。`'delete'` 是保留位：照常在清单里，
- *  但恒不可启用、恒不可调用（MVP 安全地板）。 */
-export type ConnectorCrudType = 'read' | 'write' | 'update' | 'delete'
+/** 工具的 crud 归类（Python `CONNECTOR_CRUD_TYPES`）。
+ *
+ *  🔴 `'delete'` 已退役（08-03 dogfood 批）：它曾是第四档「恒不可启用」的保留位，但那是一条
+ *  **分错了的轴** —— 「会不会毁数据」是 `destructive`（manifest 的 destructive_hint）在管的，
+ *  crud 轴管的是「读还是写」。一个删除工具就是一个 destructive 的 write，多出来的第四档只
+ *  制造了一批用户看得见、却永远配不了的死行。服务端值域已收敛为三档，存量 delete 行迁成
+ *  `write` + `destructive=1`；前端因此不再需要 delete 特例分支。 */
+export type ConnectorCrudType = 'read' | 'write' | 'update'
 
 /** 凭证健康视图（只走明文列 peek —— master key 不可用时照样成立，故它不是「解密成功」的证据）。 */
 export interface ConnectorCredentialView {
@@ -85,11 +90,12 @@ export interface ConnectorToolSummary {
   input_schema_json: string | null
   output_schema_json: string | null
   crud_type: ConnectorCrudType
-  /** manifest 的 destructive_hint（破坏性**更新**语义位，不是 delete 档位）——审批卡红警告。 */
+  /** manifest 的 destructive_hint（会不会毁数据）——审批卡红警告。delete 档退役后它是
+   *  「破坏性」的**唯一**判据（删除类工具 = destructive 的 write）。 */
   destructive: boolean
   /** 用户覆盖；null = 未覆盖（跟随 crud 默认）。三态的第三态。 */
   enabled_override: boolean | null
-  /** 折算后的有效启用态（read 默认开 / write·update 默认关 / delete 恒 False）。
+  /** 折算后的有效启用态（read 默认开 / write·update 默认关）。
    *  🔴 前端**读这个**，不要自己再折算一遍默认规则（那会成第二处手抄）。 */
   effective_enabled: boolean
   /** 远端清单里已消失（配置行保留，但不注册也不可调用）。 */
@@ -111,8 +117,7 @@ export interface ConnectorApi {
   tools(connectorId: string): Promise<ConnectorToolSummary[]>
   /** connector 整体启停（凭证保留）。行不存在 → 404（先连接）。 */
   setEnabled(connectorId: string, enabled: boolean): Promise<ConnectorSetEnabledResult>
-  /** per-tool 三态：true / false / **null = 清除覆盖回默认**。
-   *  delete 类置 true → 403 E_CONNECTOR_TOOL_FORBIDDEN。 */
+  /** per-tool 三态：true / false / **null = 清除覆盖回默认**。 */
   setToolEnabled(
     connectorId: string,
     toolName: string,

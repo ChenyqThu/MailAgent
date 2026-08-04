@@ -9,15 +9,14 @@
 //      「已连接」——scopes（这次授权到底给了什么）、令牌有效期（还能用多久 / 是不是
 //      已经过期）、上次同步时间、最近一次错误，全部摆在行上，不藏进展开区。
 //
-//   2. **清单完整性**。工具清单渲染远端 manifest 的**全部**行，包括 `delete` 类和
-//      已失效（orphan）的行 —— 它们恒不可启用（后端置 true 直接 403
-//      `E_CONNECTOR_TOOL_FORBIDDEN`），但"看得见但用不了"远比"干脆不显示"诚实：
-//      用户能确认这个服务确实有个删除工具、且我们确实没给 AI。
+//   2. **清单完整性**。工具清单渲染远端 manifest 的**全部**行，包括已失效（orphan）的
+//      行 —— 它们恒不可启用（远端已经没有这个工具了），但"看得见但用不了"远比"干脆不
+//      显示"诚实：用户能确认这个服务确实有这么个工具、且我们确实没给 AI。
 //
 //   3. **per-tool 三态**。`enabled_override` 是 true / false / **null（清除覆盖回默认）**
 //      三态，UI 就得给三个档，不能用一个 Switch 冒充。默认档的折算规则（read 开 /
-//      write·update 关 / delete 恒关）**不在前端重算** —— 直接显示后端给的
-//      `effective_enabled`，否则那套规则就成了第二处手抄。
+//      write·update 关）**不在前端重算** —— 直接显示后端给的 `effective_enabled`，
+//      否则那套规则就成了第二处手抄。
 //
 // 🔴 远程 web 面不能发起连接：OAuth 回调走本机 loopback，远程浏览器打不开那个地址，
 // 点了只会静默超时。故 web 构建下「连接」按钮 disabled + 明示去桌面 App 操作；其余
@@ -125,19 +124,19 @@ const STATUS_LABEL_KEYS: Record<ConnectorStatusValue, string> = {
   disconnected: 'settings.connectors.status.disconnected'
 }
 
-/** crud 四色：read 中性（只读不该染色成"好/坏"）· write 警示 · update 强调 · delete 失败色。 */
+/** crud 三色：read 中性（只读不该染色成"好/坏"）· write 警示 · update 强调。
+ *  🔴 08-03 起没有第四档 —— 「会不会毁数据」由 `destructive` 徽标单独承担（删除类工具
+ *  就是 destructive 的 write），不再用一个恒不可用的 crud 档位表达。 */
 const CRUD_PILL_CLASS: Record<ConnectorCrudType, string> = {
   read: 'bg-ink-4 text-ink-fg-2',
   write: 'bg-warn/15 text-warn',
-  update: 'bg-coral/15 text-coral',
-  delete: 'bg-fail/15 text-fail'
+  update: 'bg-coral/15 text-coral'
 }
 
 const CRUD_LABEL_KEYS: Record<ConnectorCrudType, string> = {
   read: 'settings.connectors.tools.crud.read',
   write: 'settings.connectors.tools.crud.write',
-  update: 'settings.connectors.tools.crud.update',
-  delete: 'settings.connectors.tools.crud.delete'
+  update: 'settings.connectors.tools.crud.update'
 }
 
 // ── per-tool 三态控件 ───────────────────────────────────────────────────────
@@ -158,8 +157,8 @@ function toolStateOf(override: boolean | null): ToolState {
 }
 
 /** 三段控件走 authored `.seg` + `.on`（AgentsTab 排程/窗口选择的存量原生用法，index.css
- *  §.seg）。不用 `ui/segmented` 是因为它没有 disabled 形态，而 delete / orphan 行**必须**
- *  渲染成禁用而不是消失。 */
+ *  §.seg）。不用 `ui/segmented` 是因为它没有 disabled 形态，而 orphan 行**必须**渲染成
+ *  禁用而不是消失。 */
 function ToolStateControl({
   value,
   disabled,
@@ -205,8 +204,9 @@ function ToolRow({
   onChange(tool: ConnectorToolSummary, next: ToolState): void
 }): React.ReactElement {
   const { t } = useTranslation()
-  // delete 类恒不可启用（后端 403），orphan 行远端已没有这个工具 —— 两者都只展示不可改。
-  const locked = tool.crud_type === 'delete' || tool.orphan
+  // orphan 行远端已没有这个工具 —— 只展示不可改。（delete 档退役后这是唯一的锁定成因：
+  // 破坏性工具照常可配，只是带 destructive 徽标 + 调用时恒弹卡。）
+  const locked = tool.orphan
   return (
     <div className="flex items-start gap-3 py-1.5">
       <div className="flex-1 min-w-0">
@@ -234,11 +234,9 @@ function ToolRow({
           <div className="mt-0.5 text-meta text-ink-fg-2 line-clamp-2">{tool.description}</div>
         ) : null}
         <div className="mt-0.5 text-micro text-ink-fg-3">
-          {tool.crud_type === 'delete'
-            ? t('settings.connectors.tools.deleteTip')
-            : tool.effective_enabled
-              ? t('settings.connectors.tools.effectiveOn')
-              : t('settings.connectors.tools.effectiveOff')}
+          {tool.effective_enabled
+            ? t('settings.connectors.tools.effectiveOn')
+            : t('settings.connectors.tools.effectiveOff')}
         </div>
       </div>
       <ToolStateControl

@@ -65,6 +65,54 @@ function buildSkillCatalogBlock(entries: SkillCatalogEntry[]): string {
   ].join('\n')
 }
 
+/** D1 (connector dogfood batch) — one row of the always-injected MCP connector catalog: a
+ *  per-connector SUMMARY of the dynamic `mcp__<connector>__*` tools registered for this run.
+ *  Projected from the lifecycle's connector-manifest cache (tools/connector.ts
+ *  projectConnectorCatalog — the SAME admission rules that register the tools, so the catalog can
+ *  never advertise a tool the model does not actually have). Counts are split by crud so the
+ *  headless narrowing (connectorCatalogForRun) can zero out above-ceiling writes.
+ *
+ *  🔴 `displayName` (and `connectorId`) originate from connector config rows — treated as
+ *     third-party text and sanitizeProse'd before entering this trusted section (skill-catalog
+ *     discipline). */
+export interface ConnectorCatalogEntry {
+  connectorId: string
+  displayName: string
+  /** Admitted tools with crud 'read' (silent tier). */
+  readToolCount: number
+  /** Admitted tools with crud 'write' (edit tier). */
+  writeToolCount: number
+  /** Admitted tools with crud 'update' (edit tier). */
+  updateToolCount: number
+}
+
+/** Render the connector catalog block: a one-line summary per connector — NOT one per tool (each
+ *  tool's full description already rides in the ToolSet; repeating it here would be pure token
+ *  cost). Empty / null → '' (caller skips the section → byte-identical to no catalog). */
+function buildConnectorCatalogBlock(entries: ConnectorCatalogEntry[]): string {
+  const lines = entries.map((e) => {
+    const id = sanitizeProse(e.connectorId)
+    const name = sanitizeProse(e.displayName)
+    const writes = e.writeToolCount + e.updateToolCount
+    const total = e.readToolCount + writes
+    const parts: string[] = []
+    if (e.readToolCount > 0) parts.push(`${e.readToolCount} read`)
+    if (writes > 0) parts.push(`${writes} write`)
+    return `- ${name} — ${total} tool${total === 1 ? '' : 's'} as mcp__${id}__* (${parts.join(', ')})`
+  })
+  return [
+    '# External connectors (MCP) — direct tools registered right now',
+    '# Read silently. Each connector below contributes tools named mcp__<connector>__<tool> that are',
+    '# registered and callable THIS run — use them directly like any other tool. Read tools run',
+    "# without approval; write tools follow the approval rule stated in each tool's own description.",
+    '# 🔴 These DIRECT MCP connector tools are a different system from the `notion_agent` skill',
+    '# (which delegates to an external CLI): for Notion workspace operations prefer the direct',
+    '# mcp__* tools when a Notion connector is listed below.',
+    '',
+    ...lines
+  ].join('\n')
+}
+
 /** The prompt-relevant config subset (was ChatModelConfig in the legacy platform.ts). */
 export interface ChatModelConfig {
   /** req.model 为 null 时的默认（electron: getLlmModel()=LLM_MODEL/claude-sonnet-4-6）。 */
@@ -96,6 +144,12 @@ export interface ChatModelConfig {
    *  OPTIONAL on purpose (the sibling fields are required): omitting it is exactly the safe default,
    *  so no existing construction site — production or test — has to change to keep today's bytes. */
   skillCatalog?: SkillCatalogEntry[] | null
+  /** D1 (connector dogfood batch) — the MCP connector catalog (one summary line per connector).
+   *  Absent / null / [] → no block, byte-identical to before the catalog existed (mirrors the
+   *  skillCatalog optionality discipline: no existing construction site has to change). 🔴 Unlike
+   *  skillCatalog this is NOT manual-only — a granted headless run DOES hold connector tools; the
+   *  caller (chatRun scoping) supplies the run-scoped list, this module renders what it is given. */
+  connectorCatalog?: ConnectorCatalogEntry[] | null
   /** PR4 (task 06-22) — Standing Context (SOUL+AGENT+RULES+USER, assembled backend-side)
    *  from serve-api /chat/config. Non-null → layered `PRODUCT_SAFETY_FLOOR + standingContext`;
    *  null / "" → SOUL_MARKDOWN fallback (flag off or store unavailable), byte-identical. */
@@ -235,6 +289,14 @@ export function buildStableSystemPrompt(
   // the whole prompt daily for nothing). Absent / empty → skip, byte-identical to no catalog.
   if (cfg.skillCatalog && cfg.skillCatalog.length > 0) {
     text += '\n\n' + buildSkillCatalogBlock(cfg.skillCatalog)
+  }
+  // D1 (connector dogfood batch) — the MCP connector catalog, RIGHT AFTER the skill catalog and
+  // still inside the cacheable prefix (it changes only when a connector connects/disconnects or a
+  // tool sync lands — the lifecycle's 30s manifest TTL, same treatment as the skill catalog).
+  // Without this block the model has NO prompt-level knowledge that the mcp__* tools exist and
+  // "honestly" denies having them (dogfood root cause ①). Absent / empty → skip, byte-identical.
+  if (cfg.connectorCatalog && cfg.connectorCatalog.length > 0) {
+    text += '\n\n' + buildConnectorCatalogBlock(cfg.connectorCatalog)
   }
   // KOS 可用（启用 AND 对接，= kosConfigured）时注入使用指南（静态、可缓存）。🔴 这个 gate
   // 只管**指南**：6 个 KOS 只读工具在 buildGatewayTools() 里恒注册、不受此 flag 影响（未对接

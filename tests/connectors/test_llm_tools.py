@@ -38,7 +38,6 @@ def store(tmp_path, monkeypatch):
             ("search", "read"),
             ("create_page", "write"),
             ("update_page", "update"),
-            ("delete_page", "delete"),
         ),
     )
     # write / update 默认关 → 显式打开，好让「天花板」成为唯一变量。
@@ -74,16 +73,27 @@ def test_ceiling_update_exposes_read_write_update(store):
     ]
 
 
-def test_delete_never_registered_at_any_ceiling(store):
-    """🔴 Q3=B / Q16=A：delete 类在**任何**天花板下都不出现（清单里有行，工具集里没有）。"""
-    for ceiling in ("read", "write", "update"):
-        assert "mcp__notion__delete_page" not in _names([(CID, ceiling)])
-    # 清单完整性：行仍在（Q16=A 的另一半）。
-    assert "delete_page" in {r.tool_name for r in store.list_connector_tools(CID)}
+def test_destructive_write_tool_is_registered(store):
+    """🔴 08-03 delete 退役后的正例：破坏性写工具**照常注册**（危险性只是红警告，不是禁令）。
+
+    以前 destructive_hint 会推成 delete → 结构性不可用；现在它是普通 write 类，owner
+    开了就能被模型看见，审批链（manual 弹卡 / headless 靠 grant）才是安全地板。
+    """
+    manifest = _manifest(("destructive_update", "write"))
+    manifest[0]["destructive"] = True
+    store.sync_connector_tools(
+        CID,
+        _manifest(("search", "read"), ("create_page", "write"), ("update_page", "update"))
+        + manifest,
+    )
+    store.set_connector_tool_enabled(CID, "destructive_update", True)
+    assert "mcp__notion__destructive_update" in _names([(CID, "write")])
+    row = {r.tool_name: r for r in store.list_connector_tools(CID)}["destructive_update"]
+    assert row.destructive is True and row.crud_type == "write"
 
 
 def test_bogus_ceiling_yields_nothing(store):
-    """值域外的天花板（含 'delete'）→ fail-closed 一个工具都不给。"""
+    """值域外的天花板（含已退役的 'delete'）→ fail-closed 一个工具都不给。"""
     assert _names([(CID, "delete")]) == []
     assert _names([(CID, "admin")]) == []
 

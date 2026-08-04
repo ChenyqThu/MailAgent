@@ -1,5 +1,6 @@
 """connector / connector_tool 双表（08-01 PR1）：upsert 分工、refresh 纪律、orphan、
-delete 写侧拒、effective enabled 折算。纯单测（tmp_path 直建 store，无加密面）。"""
+effective enabled 折算、delete 档位退役后的存量行迁移。纯单测（tmp_path 直建 store，
+无加密面）。"""
 
 from __future__ import annotations
 
@@ -73,18 +74,26 @@ def test_update_connector_state_validates(tmp_path):
 # ── 工具清单 sync：refresh 纪律 + orphan ────────────────────────────────────────
 
 
-def test_sync_tools_inserts_and_delete_class_recorded(tmp_path):
+def test_sync_tools_inserts_whole_manifest(tmp_path):
     st = _store(tmp_path)
     stats = st.sync_connector_tools(
-        CID, _manifest(("search", "read"), ("create_page", "write"), ("delete_page", "delete"))
+        CID, _manifest(("search", "read"), ("create_page", "write"), ("update_page", "update"))
     )
     assert stats == {"total": 3, "inserted": 3, "updated": 0, "orphaned": 0}
     rows = {r.tool_name: r for r in st.list_connector_tools(CID)}
-    # 🔴 Q16=A：delete 类照常入库（清单完整——机制保留位；PR2 起推导不再产出但值域不动）。
-    assert rows["delete_page"].crud_type == "delete"
     assert rows["search"].crud_type == "read"
+    assert rows["create_page"].crud_type == "write"
+    assert rows["update_page"].crud_type == "update"
     # destructive 缺省（manifest 不带键）→ 0。
     assert rows["search"].destructive is False
+
+
+def test_sync_tools_rejects_retired_delete_crud(tmp_path):
+    """🔴 08-03 delete 档位退役：值域外 ⇒ 入库即拒（不再是「入库但恒灰」的保留位）。"""
+    st = _store(tmp_path)
+    with pytest.raises(ValueError):
+        st.sync_connector_tools(CID, _manifest(("delete_page", "delete")))
+    assert st.list_connector_tools(CID) == []
 
 
 def test_sync_tools_persists_destructive_and_refresh_overwrites(tmp_path):
@@ -102,23 +111,80 @@ def test_sync_tools_persists_destructive_and_refresh_overwrites(tmp_path):
     assert st.list_connector_tools(CID)[0].destructive is False
 
 
-def test_sync_overwrites_stale_delete_crud_self_heal(tmp_path):
-    """裁决①存量自愈：PR1 误判成 delete 的行，重跑 sync（新 derive 产出 write+destructive）
-    即被全量 upsert 刷新 —— crud_type 属 manifest 派生字段，owner 点一次 sync 就修。"""
-    st = _store(tmp_path)
-    # PR1 时代落库的误判行（destructive_hint → delete），用户显式关过它（配置要保留）。
-    st.sync_connector_tools(CID, _manifest(("update_page", "delete")))
-    st.set_connector_tool_enabled(CID, "update_page", False)
+def _force_stale_delete_row(db: str, tool_name: str) -> None:
+    """把一行强改成 PR1 时代的陈旧形状（crud_type='delete' + destructive=0）。
 
-    # PR2 之后的 sync：同一工具按新推导入库。
-    healed = _manifest(("update_page", "write"))
-    healed[0]["destructive"] = True
-    stats = st.sync_connector_tools(CID, healed)
-    assert stats["updated"] == 1
-    row = st.list_connector_tools(CID)[0]
-    assert row.crud_type == "write"
-    assert row.destructive is True
-    assert row.enabled is False  # 用户覆盖不被 refresh 动
+    🔴 只能裸 SQL 造 —— 退役后 ``sync_connector_tools`` 的值域校验根本不收 'delete'，
+    这正是「陈旧行只可能来自旧构建」的证据。
+    """
+    import sqlite3
+
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "UPDATE connector_tool SET crud_type='delete', destructive=0 WHERE tool_name=?",
+        (tool_name,),
+    )
+    conn.commit()
+    conn.close()
+
+
+def test_stale_delete_rows_migrated_to_write_destructive(tmp_path):
+    """🔴 08-03 delete 退役的**装机自愈**：旧构建落的 delete 行开库即离线重推导。
+
+    可证明等价：旧映射产出 delete 的唯一路径是 ``destructive_hint is True``，而当前
+    ``derive_crud_type`` 对同一输入产出 write、``derive_destructive`` 产出 True ⇒ 这条
+    迁移就是把那次误判按新规则重算一遍，不需要网络 re-sync。用户 ``enabled`` 覆盖不碰。
+    """
+    db = str(tmp_path / "agent_config.db")
+    st = _store(tmp_path)
+    st.sync_connector_tools(CID, _manifest(("update_page", "write"), ("search", "read")))
+    st.set_connector_tool_enabled(CID, "update_page", False)  # 用户显式关过（配置要保留）
+    _force_stale_delete_row(db, "update_page")
+
+    st2 = AgentConfigStore(db)  # 开库即迁移（_migrate_additive）
+    rows = {r.tool_name: r for r in st2.list_connector_tools(CID)}
+    assert rows["update_page"].crud_type == "write"
+    assert rows["update_page"].destructive is True
+    assert rows["update_page"].enabled is False  # 用户覆盖一列不碰
+    # 无关行不受影响（WHERE crud_type='delete' 之外一行不动）。
+    assert rows["search"].crud_type == "read" and rows["search"].destructive is False
+
+    # 幂等：再开一次库，值不再变（WHERE 后已无 delete 行）。
+    snapshot = {(r.tool_name, r.crud_type, r.destructive, r.enabled) for r in rows.values()}
+    st3 = AgentConfigStore(db)
+    again = {
+        (r.tool_name, r.crud_type, r.destructive, r.enabled)
+        for r in st3.list_connector_tools(CID)
+    }
+    assert again == snapshot
+
+
+def test_migrated_stale_delete_row_is_configurable_and_registrable(tmp_path):
+    """迁移后的行**不再恒灰**：可启用（写侧不拒）、折算为开、能被 LLM 工厂注册。"""
+    from src.connectors.llm_tools import build_connector_llm_tools
+
+    db = str(tmp_path / "agent_config.db")
+    st = _store(tmp_path)
+    st.upsert_connector(CID, server_url="https://x")
+    st.update_connector_state(CID, status="connected", enabled=True)
+    st.sync_connector_tools(CID, _manifest(("update_page", "write")))
+    _force_stale_delete_row(db, "update_page")
+
+    st2 = AgentConfigStore(db)
+    st2.set_connector_tool_enabled(CID, "update_page", True)  # 曾经 ValueError，现在照常写
+    row = st2.list_connector_tools(CID)[0]
+    assert row.destructive is True  # 危险性提示还在（红警告的数据源）
+    assert connector_tool_effective_enabled(row.crud_type, row.enabled) is True
+
+    monkey = pytest.MonkeyPatch()
+    try:
+        monkey.setattr("src.connectors.llm_tools._connectors_enabled", lambda: True)
+        monkey.setattr("src.agent_config.store.get_agent_config_store", lambda: st2)
+        schemas, handlers = build_connector_llm_tools([(CID, "write")])
+    finally:
+        monkey.undo()
+    assert [s["name"] for s in schemas] == ["mcp__notion__update_page"]
+    assert set(handlers) == {"mcp__notion__update_page"}
 
 
 def test_destructive_column_added_to_pre_pr2_db(tmp_path):
@@ -231,17 +297,23 @@ def test_sync_tools_rejects_bad_manifest(tmp_path):
     assert st.list_connector_tools(CID) == []
 
 
-# ── delete 类：写侧拒启用 + 读侧防御纵深 ─────────────────────────────────────────
+# ── per-tool 启用覆盖：在册行一律可配置 ──────────────────────────────────────────
 
 
-def test_delete_class_cannot_be_enabled_write_side(tmp_path):
+def test_every_listed_tool_is_configurable_write_side(tmp_path):
+    """🔴 08-03 改判：任何在册工具（含 destructive）都能被 owner 开 —— 没有恒灰的一档。"""
     st = _store(tmp_path)
-    st.sync_connector_tools(CID, _manifest(("delete_page", "delete")))
-    with pytest.raises(ValueError):
-        st.set_connector_tool_enabled(CID, "delete_page", True)
-    # 显式关 / 清覆盖照常可写。
-    st.set_connector_tool_enabled(CID, "delete_page", False)
-    st.set_connector_tool_enabled(CID, "delete_page", None)
+    manifest = _manifest(("update_page", "update"))
+    manifest[0]["destructive"] = True
+    st.sync_connector_tools(CID, _manifest(("search", "read")) + manifest)
+    for name in ("search", "update_page"):
+        for value in (True, False, None):
+            st.set_connector_tool_enabled(CID, name, value)
+    rows = {r.tool_name: r for r in st.list_connector_tools(CID)}
+    assert rows["update_page"].destructive is True  # 危险性只是红警告位，不是禁令
+    st.set_connector_tool_enabled(CID, "update_page", True)
+    assert st.list_connector_tools(CID)[1].enabled is True
+    # 不在册的名字仍拒（白名单纪律没松）。
     with pytest.raises(KeyError):
         st.set_connector_tool_enabled(CID, "ghost", True)
 
@@ -251,12 +323,10 @@ def test_effective_enabled_resolution():
     assert connector_tool_effective_enabled("read", None) is True
     assert connector_tool_effective_enabled("write", None) is False
     assert connector_tool_effective_enabled("update", None) is False
-    # 用户覆盖优先。
+    # 用户覆盖优先 —— 三档都压得动（08-03 起没有恒 False 的档位）。
     assert connector_tool_effective_enabled("read", False) is False
     assert connector_tool_effective_enabled("write", True) is True
-    # 🔴 delete 恒 False —— 任何 override 压不开（读侧防御纵深；写侧已拒）。
-    assert connector_tool_effective_enabled("delete", None) is False
-    assert connector_tool_effective_enabled("delete", True) is False
+    assert connector_tool_effective_enabled("update", True) is True
 
 
 # ── 分类侧独立授权位（PR3 坑 3）──────────────────────────────────────────────────

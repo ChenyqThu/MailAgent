@@ -162,8 +162,8 @@ test('错误信封 → throw Error & {code}（不吞、不降级成空）', asyn
   await expect(api.list()).rejects.toMatchObject({ code: 'E_CONNECTOR_DISABLED' })
 
   fetchMock.mockClear()
-  fetchMock.mockResolvedValue(errorResponse('E_CONNECTOR_TOOL_FORBIDDEN', 'delete-class tool', 403))
-  await expect(api.setToolEnabled('notion', 'delete_page', true)).rejects.toMatchObject({
-    code: 'E_CONNECTOR_TOOL_FORBIDDEN'
+  fetchMock.mockResolvedValue(errorResponse('E_CONNECTOR_GRANT_DENIED', 'above crud ceiling', 403))
+  await expect(api.setToolEnabled('notion', 'update_page', true)).rejects.toMatchObject({
+    code: 'E_CONNECTOR_GRANT_DENIED'
   })
 })

@@ -282,8 +282,8 @@ async def list_tools(
 ) -> Any:
     """已同步工具清单（PR2 的 ``createConnectorTools()`` 读这里）。
 
-    ``effective_enabled`` 已折算（read 默认开 / write·update 默认关 / delete 恒 False）；
-    delete 行照常在列（Q16=A 清单完整），orphan 行照常在列（PR2 不注册它们）。
+    ``effective_enabled`` 已折算（read 默认开 / write·update 默认关）；orphan 行照常在列
+    （PR2 不注册它们）。``destructive`` 原样透出 —— 设置面 / 审批卡的红警告读它。
     """
     _require_enabled(settings)
     _connector_def(connector_id)
@@ -381,8 +381,8 @@ async def set_tool_enabled(
     （``enabled_override`` 原样 + ``effective_enabled`` 折算），免得前端自己再折算一遍
     默认规则（第二处手抄）。
 
-    🔴 delete 类置 True → 403 ``E_CONNECTOR_TOOL_FORBIDDEN``（与 invoke 端点同码）：
-    写侧闸在 store，这里只做 HTTP 映射；置 False / null 照常允许（清配置不是放权）。
+    🔴 08-03 起**在册工具一律可配置**（owner 改判：delete 档位退役、不再有恒灰的一档）。
+    危险性提示走 ``destructive`` 列的红警告，写类恒 HITL 的安全地板不变。
     """
     _require_enabled(settings)
     _connector_def(connector_id)
@@ -411,13 +411,6 @@ async def set_tool_enabled(
             f"tool {tool_name!r} is not in the synced manifest of connector "
             f"{connector_id!r} — sync the connector first",
             http_status=404,
-        ) from e
-    except ValueError as e:
-        raise APIError(
-            "E_CONNECTOR_TOOL_FORBIDDEN",
-            f"tool {tool_name!r} is delete-class and cannot be enabled "
-            "（删除类工具暂不支持启用：清单里保留，但 MVP 恒关）",
-            http_status=403,
         ) from e
     return success_envelope(
         {

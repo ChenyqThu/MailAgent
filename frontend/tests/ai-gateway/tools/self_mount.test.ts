@@ -332,4 +332,82 @@ describe('discover_skills (M4c) — silent read', () => {
       '/Users/o/Library/Application Support/x/data/skills/dms-approve'
     )
   })
+
+  // ── D1 (connector dogfood batch) — External connectors summary ────────────────────────────
+  //
+  // Root cause ②: soul.md routes capability self-description to discover_skills, which only knew
+  // the skill registry — so the model had an "authoritative" source telling it the mcp__* tools
+  // do not exist. The run-scoped connector catalog now rides along; skills and connectors stay
+  // two explicitly-separate systems in the output.
+
+  const SKILL_ROW = {
+    name: 'report',
+    title: 'Report',
+    description: 'reports',
+    defaultEnabled: false,
+    enabled: false,
+    overridden: false,
+    available: true,
+    unavailableReason: null,
+    toolCount: 2,
+    scopes: [],
+    sourceType: 'builtin'
+  }
+
+  test('with a run-scoped connector catalog → external_connectors summary (id/prefix/counts + 消歧 note)', async () => {
+    const domain = mockDomain(() => okEnvelope({ skills: [SKILL_ROW] }))
+    const tools = createSelfMountTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat',
+      connectorCatalog: [
+        {
+          connectorId: 'notion',
+          displayName: 'Notion',
+          readToolCount: 11,
+          writeToolCount: 1,
+          updateToolCount: 1
+        }
+      ]
+    })
+    const out = (await runTool(tools.discover_skills, {})) as {
+      external_connectors?: {
+        note: string
+        connectors: Array<Record<string, unknown>>
+      }
+    }
+    expect(out.external_connectors).toBeDefined()
+    expect(out.external_connectors!.connectors).toEqual([
+      {
+        connector_id: 'notion',
+        display_name: 'Notion',
+        tool_prefix: 'mcp__notion__',
+        read_tool_count: 11,
+        write_tool_count: 2, // write + update fold into one model-facing "write" number
+        tool_count: 13
+      }
+    ])
+    // the note carries the two-systems disambiguation (connectors ≠ skills / set_skill_enabled).
+    expect(out.external_connectors!.note).toContain('separate')
+    expect(out.external_connectors!.note).toContain('set_skill_enabled')
+    // and the tool description itself teaches the split (so the model checks the right list).
+    expect(String(tools.discover_skills.description)).toContain('external_connectors')
+    expect(String(tools.discover_skills.description)).toContain('mcp__')
+  })
+
+  test('no connector catalog (absent / null / []) → output BYTE-IDENTICAL to before D1', async () => {
+    const domain = mockDomain(() => okEnvelope({ skills: [SKILL_ROW] }))
+    const base = await runTool(
+      createSelfMountTools(domain, [], new ApprovalGuard(), { contextMode: 'manual_chat' })
+        .discover_skills,
+      {}
+    )
+    for (const connectorCatalog of [null, undefined, []] as const) {
+      const tools = createSelfMountTools(domain, [], new ApprovalGuard(), {
+        contextMode: 'manual_chat',
+        connectorCatalog: connectorCatalog as never
+      })
+      const out = await runTool(tools.discover_skills, {})
+      expect(JSON.stringify(out)).toBe(JSON.stringify(base))
+      expect((out as Record<string, unknown>).external_connectors).toBeUndefined()
+    }
+  })
 })

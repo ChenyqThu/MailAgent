@@ -31,7 +31,7 @@ def store(tmp_path, monkeypatch):
     st.update_connector_state(CID, status="connected")
     st.sync_connector_tools(
         CID,
-        _manifest(("search", "read"), ("create_page", "write"), ("delete_page", "delete")),
+        _manifest(("search", "read"), ("create_page", "write"), ("update_page", "update")),
     )
     monkeypatch.setattr("src.agent_config.store.get_agent_config_store", lambda: st)
     return st
@@ -68,7 +68,8 @@ def test_ceiling_rank_is_monotonic():
 
 def test_ceiling_none_means_no_gate_and_bad_values_fail_closed():
     assert svc.ceiling_allows("update", None) is True  # owner 面：无天花板
-    # 🔴 delete 既不是合法 crud 天花板、也不是可放行的 crud —— 双向 fail-closed。
+    # 🔴 值域外的字面量（含已退役的 'delete'）双向 fail-closed —— 手改 DB / 老配置里残留的
+    # 档位名既不会被当成可放行的 crud，也不会被当成"什么都放行"的天花板。
     assert svc.ceiling_allows("delete", "update") is False
     assert svc.ceiling_allows("read", "delete") is False
     assert svc.ceiling_allows("read", "admin") is False
@@ -157,7 +158,6 @@ def _invoke(**kw):
     [
         ({"connector_id": "ghost", "tool_name": "search"}, "E_NOT_FOUND"),
         ({"connector_id": CID, "tool_name": "forged"}, "E_NOT_FOUND"),
-        ({"connector_id": CID, "tool_name": "delete_page"}, "E_CONNECTOR_TOOL_FORBIDDEN"),
         ({"connector_id": CID, "tool_name": "create_page"}, "E_CONNECTOR_TOOL_DISABLED"),
         (
             {"connector_id": CID, "tool_name": "search", "ceiling": "bogus"},
@@ -204,6 +204,28 @@ def test_allowed_call_reaches_remote_and_reports_elapsed(store, monkeypatch):
     assert _OkClient.calls == [(CID, "search", {"q": "x"})]
     assert out["content"] == "c" and out["is_error"] is False and out["truncated"] is False
     assert isinstance(out["elapsed_ms"], int)
+
+
+def test_destructive_write_tool_passes_all_gates(store, monkeypatch):
+    """🔴 08-03 delete 闸退役的正例：``destructive=1`` 的 write 工具**照常过闸到远端**。
+
+    以前 destructive_hint 会被推成 delete 并在原闸 3 撞 403 —— Notion 的 update-page 就是
+    这样结构性不可用的。现在 destructive 只是审批卡上的红警告位，不再是一道执行禁令。
+    """
+    import src.connectors.client as client_mod
+
+    manifest = _manifest(("update_page", "write"))
+    manifest[0]["destructive"] = True
+    store.sync_connector_tools(CID, _manifest(("search", "read")) + manifest)
+    store.set_connector_tool_enabled(CID, "update_page", True)
+    rows = {r.tool_name: r for r in store.list_connector_tools(CID)}
+    assert rows["update_page"].destructive is True  # 红警告位仍在
+
+    _OkClient.calls = []
+    monkeypatch.setattr(client_mod, "ConnectorClient", _OkClient)
+    out = _invoke(connector_id=CID, tool_name="update_page", ceiling="write")
+    assert _OkClient.calls == [(CID, "update_page", None)]
+    assert out["is_error"] is False
 
 
 def test_oauth_failure_marks_connector_needs_reauth(store, monkeypatch):

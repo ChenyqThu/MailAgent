@@ -28,11 +28,9 @@ import { MentionPopover } from '@shared/components/chat/MentionPopover'
 import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 import { formatAttachmentSize } from '@shared/lib/chat-attachments'
 
-import {
-  useChatComposerControls,
-  type ChatComposerControls
-} from './composerControlsContext'
+import { useChatComposerControls, type ChatComposerControls } from './composerControlsContext'
 import { ApprovalModePicker } from './ApprovalModePicker'
+import { ConnectorQuickPanel } from './ConnectorQuickPanel'
 
 const ICON_BTN =
   'grid h-7 w-7 place-items-center rounded-md transition-[color,background-color,transform] duration-fast'
@@ -455,6 +453,8 @@ export function ThreadComposer(): React.JSX.Element {
               {/* 07-16 — owner-global 授权模式切换（Manual/Accept Edits/Bypass；backend 持久化，
                 双 composer + 远程 web 同组件）。 */}
               <ApprovalModePicker variant="icon" />
+              {/* 08-03 — MCP 外部连接快捷面板（灰度 flag off / 零行时整个入口不渲染）。 */}
+              <ConnectorQuickPanel variant="icon" />
             </>
           )}
           <div className="ml-auto flex items-center">
