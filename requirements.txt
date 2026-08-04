@@ -58,6 +58,14 @@ python-pptx>=1.0.0      # PR-2b: pptx 文本提取
 # requirements.lock.txt 才进嵌入式 venv。macOS-only（Vision 是系统框架）。
 pyobjc-framework-Vision==12.2.1
 
+# 飞书对话 bot 长连接（08-01 阶段 2 PR-2，flag MAILAGENT_IM_FEISHU 默认关）：
+# 飞书官方 Python SDK，含 WebSocket 长连接客户端（免公网回调）+ im/v1 消息 API。
+# 🔴 它要求 websockets<16,>=11 —— requirements.lock.txt 的 websockets 因此从 16.0
+# 降到 15.0.1（同时满足 uvicorn[standard]>=10.4 与 openai[realtime]<16,>=13，且仓库
+# 无任何代码直接 import websockets）。运行期仅 flag 开时在 src/im/ 内 import；
+# 打包须重新生成 requirements.lock.txt 才进嵌入式 venv。
+lark-oapi>=1.7.1,<2
+
 # LLM Agent (本地 LLM 接管 Notion Email Agent 的 AI 字段填充，默认关闭)
 anthropic>=0.40.0
 

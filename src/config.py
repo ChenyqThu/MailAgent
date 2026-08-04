@@ -237,6 +237,37 @@ class Config(BaseSettings):
     feishu_webhook_secret: str = Field(default="", env="FEISHU_WEBHOOK_SECRET", description="飞书 webhook 签名密钥（可选）")
     feishu_notify_enabled: bool = Field(default=False, env="FEISHU_NOTIFY_ENABLED", description="是否启用飞书通知")
 
+    # =========================================================================
+    # IM 对话 — 飞书（08-01 阶段 2 PR-2）。🔴 与上面的**通知** bot 完全隔离
+    # （grill Q21=B）：独立自建应用 / 独立凭证 / 独立长连接，通知链一个字节不动。
+    # 🔴 字段名 im_feishu_enabled ≠ env MAILAGENT_IM_FEISHU → 必须 validation_alias
+    #    （pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释）。
+    # =========================================================================
+    im_feishu_enabled: bool = Field(
+        default=False, validation_alias="MAILAGENT_IM_FEISHU",
+        description=(
+            "飞书对话 bot 总闸（灰度，沿用 island/connector 的 ship-off→dogfood→cutover）："
+            "off 时 serve 进程不 spawn im_feishu worker、不建立任何长连接，gateway 侧工具面"
+            "字节级回退。**双载体** —— 本 pydantic 字段（serve，翻开关需重启 serve）+ Node "
+            "envBool（gateway，翻开关需重启 app），两侧默认必须同为 false。"
+        ),
+    )
+    feishu_im_app_id: str = Field(
+        default="", validation_alias="FEISHU_IM_APP_ID",
+        description=(
+            "飞书**对话** bot 的自建应用 App ID。🔴 仅作 external_credential"
+            "（namespace='im:feishu'）的**首次 seed 默认** —— 行落地后行权威，改这里不再影响运行时"
+            "（镜像 llm provider registry 先例）。🔴 勿复用通知 bot 的 FEISHU_APP_ID。"
+        ),
+    )
+    feishu_im_app_secret: str = Field(
+        default="", validation_alias="FEISHU_IM_APP_SECRET",
+        description=(
+            "飞书**对话** bot 的自建应用 App Secret。同 FEISHU_IM_APP_ID：仅首次 seed，"
+            "之后密文存 agent_config.db 的 external_credential（Fernet + Keychain master key）。"
+        ),
+    )
+
     # Redis 事件消费配置（P3: Notion→Mail 方向）
     redis_url: str = Field(default="", env="REDIS_URL", description="Redis 连接 URL（如 redis://localhost:6379）")
     redis_db: int = Field(default=2, env="REDIS_DB", description="Redis DB 号（默认 2，MailAgent 专用）")

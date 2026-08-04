@@ -45,6 +45,7 @@ from src.cli.commands import debug as _debug_module  # noqa: E402
 from src.cli.commands import notion as _notion_module  # noqa: E402
 from src.cli.commands import project_progress as _project_progress_module  # noqa: E402
 from src.cli.commands import folder as _folder_module  # noqa: E402
+from src.cli.commands import im as _im_module  # noqa: E402
 from src.cli.commands import report as _report_module  # noqa: E402
 
 app.add_typer(_email_module.app, name="email", help="邮件 CRUD / 搜索 / 重传")
@@ -96,6 +97,10 @@ app.add_typer(
 app.add_typer(
     _api_key_module.app, name="api-key",
     help="scoped Bearer agent key: create / list / revoke / rotate (headless agent 接入)",
+)
+app.add_typer(
+    _im_module.app, name="im",
+    help="IM 对话 (飞书): pair 出一次性绑定码 / status 看连接与绑定状态",
 )
 
 

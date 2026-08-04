@@ -33,6 +33,15 @@
 #   jsonschema 系×4（jsonschema / -specifications / referencing / rpds-py）/ python-multipart /
 #   truststore。最小增量法：干净 3.11 venv `pip install -c requirements.lock.txt "mcp>=2,<3"`
 #   （constraints 钉住既有 16 个共享依赖全部原位命中，零版本变更），freeze diff 恰 12 行。
+# 增量注记（2026-08-04，08-01 阶段 2 PR-2 飞书对话底座）：+lark-oapi==1.7.1（飞书官方 SDK 的
+#   WebSocket 长连接客户端）及其新增传递依赖 2 件：pycryptodome==3.23.0 / requests-toolbelt==1.0.0。
+#   🔴 同时 websockets 16.0 → 15.0.1：lark-oapi 硬要 `websockets<16,>=11`。降级已核实安全 ——
+#   全闭包里声明依赖 websockets 的只有三处：lark-oapi(<16,>=11) / uvicorn[standard](>=10.4，
+#   serve-api 用的就是它) / openai[realtime](<16,>=13，该 extra 未安装)，15.0.1 同时满足全部三条；
+#   且仓库无任何代码直接 `import websockets`（只有 lark 与 uvicorn 间接用）。
+#   最小增量法：干净 3.11 venv 以「本文件去掉 websockets 那一行」作 constraints 装
+#   lark-oapi==1.7.1，其余 10 个共享依赖（anyio/certifi/charset-normalizer/h11/httpcore/httpx/
+#   idna/requests/typing_extensions/urllib3）全部原位命中既有 pin，零版本变更；freeze diff 恰 4 行。
 aiofiles==25.1.0
 aiohappyeyeballs==2.7.1
 aiohttp==3.14.1
@@ -83,6 +92,7 @@ jh2==5.0.13
 jiter==0.16.0
 jsonschema==4.26.0
 jsonschema-specifications==2025.9.1
+lark-oapi==1.7.1
 loguru==0.7.3
 lxml==6.1.1
 markdown-it-py==4.2.0
@@ -109,6 +119,7 @@ propcache==0.5.2
 protobuf==6.33.6
 py_rust_stemmers==0.1.8
 pycparser==3.0
+pycryptodome==3.23.0
 pydantic==2.13.4
 pydantic-settings==2.14.2
 pydantic_core==2.46.4
@@ -134,6 +145,7 @@ recurring-ical-events==3.8.2
 redis==8.0.1
 referencing==0.37.0
 requests==2.34.2
+requests-toolbelt==1.0.0
 rich==14.3.4
 rpds-py==2026.6.3
 shellingham==1.5.4
@@ -157,7 +169,7 @@ uvloop==0.22.1
 vobject==0.9.9
 wassima==2.1.1
 watchfiles==1.2.0
-websockets==16.0
+websockets==15.0.1
 x-wr-timezone==2.0.1
 xlsxwriter==3.2.9
 yarl==1.24.2

@@ -9,7 +9,7 @@
 pip install -e ".[cli,dev]"     # cli: typer/rich/pyyaml; dev: pytest + jsonschema>=4.18 + referencing
 which mailagent                  # 应是 venv/bin/mailagent
 mailagent --version              # 3.0.0
-mailagent --help                 # 列 14 个 group (email/admin/attachment/llm/kos/notion/calendar/debug + backfill/project-progress/init + folder/report/api-key) + global flags
+mailagent --help                 # 列 15 个 group (email/admin/attachment/llm/kos/notion/calendar/debug + backfill/project-progress/init + folder/report/api-key/im) + global flags
 ```
 
 ## 读命令（只读, 无 auth）
@@ -38,6 +38,7 @@ mailagent --help                 # 列 14 个 group (email/admin/attachment/llm/
 | `debug inline-images <internal_id>` | 分析 cid: 引用 vs attachment 行 |
 | `debug applescript-fetch <internal_id> [--mailbox X]` | 仅跑 AppleScriptArm.fetch（绕 SQLite SSoT） |
 | `debug notion-page <page_id>` | Notion API 拉 page properties summary |
+| `im status` | 飞书对话 bot 的连接 / 绑定状态（`sync_state` 的 `im.feishu.*`，键常量单源 `src/im/state.py`）：`enabled`（`MAILAGENT_IM_FEISHU`）+ `connection_status`（disabled/connecting/connected/disconnected/**conflict**/error/stopped）+ `connected_at` / `last_event_at` + `bound_open_id`（绑的是谁）+ `bot_app_name` / `bot_open_id`（**破同名陷阱** —— 对话 bot 与通知 bot 在飞书后台可能同名）+ `conflict_reason` / `last_error` + `pair_code_pending`（🔴 只报「有没有码在等」，**不回显码本身**） |
 
 ## 写命令（需 auth；`--dry-run` 跳过；PR-4 起所有 batch 写命令默认走 PM2 检测，可 `--allow-concurrent` 绕过）
 
@@ -65,6 +66,7 @@ mailagent --help                 # 列 14 个 group (email/admin/attachment/llm/
 | `admin cleanup-syncstore [--no-dry-run --yes]` | dry-run → show_stats; --no-dry-run --yes → reset_sync_status (PR-5 inline) |
 | `admin cleanup-duplicates [--no-dry-run --yes]` | 扫 message_id 重复的 Notion page → archive 重复 (PR-5 inline) |
 | `admin repair-parents [--thread-id ID --no-dry-run --yes]` | 修复 Notion Parent Item 断链 (PR-5 inline NotionDBCleaner.run parent_only=true) |
+| `im pair [--rebind]` | 生成飞书对话 bot 的**一次性绑定码**（6 位数字，TTL 10min，落 `sync_state` 故跨重启存活）。用法：跑本命令 → 在飞书**私聊**里把这 6 位数字单独发给 bot → bot 校验后把发送者 `open_id` 落库，此后只有它进指令通道。已绑定时**拒绝出码**（码对已绑定的 bot 无效；否则拿到码的人能顶掉 owner），换人/换设备用 `--rebind`（先解绑再出新码）。🔴 **本组写命令刻意不做 PM2 冲突检测** —— 那道闸防的是 batch 写命令与长驻服务并发写 SyncStore，而飞书 bot **只在长驻服务跑着时才收得到消息**，要求 `pm2 stop mail-sync` 等于要求「先把要配对的东西关掉」 |
 
 ## PR-4 长任务退出码体系（RFC §5.2 / `email resync` batch / `backfill` / `init`）
 

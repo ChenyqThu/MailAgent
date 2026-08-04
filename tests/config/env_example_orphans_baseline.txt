@@ -9,7 +9,10 @@
 #       MAILAGENT_BULK_CLIENT_{ID,SECRET}（issue #59 补文档化：producer/bulk 写入 KOS 的
 #       另一套 OAuth 凭据，src/kos/producer.py make_bulk_kos_client 裸 os.getenv 读，
 #       与 KOS_OAUTH_* consumer 凭据同类出身）
-#     - Node main env（gateway / updater 读，非 Python）：MAILAGENT_MEM0_CAPTURE /
+#     - Node main env（gateway / updater 读，非 Python）：MAILAGENT_IM_WEB_ENABLED
+#       （08-01 阶段 2 grill Q19=A「飞书会话能不能上网」，gateway 侧 web class 门控；刻意**不**做成
+#       AgentModeGrants.web —— policy.ts:395-398 的注释与测试锁死「web 的 opt-in 是独立开关不是 grant」；
+#       Python 侧不读它）/ MAILAGENT_MEM0_CAPTURE /
 #       _SKILL_CATALOG_PROMPT（阶段 0.5 技能名单进 prompt，ai_gateway_lifecycle.ts envBool 读；
 #       Python 侧只恒发 /chat/config.skillCatalog 数据、不读这个 flag）/
 #       _SKILL_SELF_MOUNT / _CALENDAR_AGENT_TOOLS / _OPENNESS_{SESSION,CONFIG,WEB,EXEC,SKILL_INSTALL}_TOOLS /
@@ -55,6 +58,7 @@ MAILAGENT_API_PORT
 MAILAGENT_CALENDAR_AGENT_TOOLS
 MAILAGENT_CHAT_DETACHED_RUNS
 MAILAGENT_CLI_ALLOW_UNAUTH_WRITES
+MAILAGENT_IM_WEB_ENABLED
 MAILAGENT_MEM0_CAPTURE
 MAILAGENT_MEM0_RETRIEVAL
 MAILAGENT_MEM_DIAG

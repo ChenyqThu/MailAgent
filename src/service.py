@@ -813,6 +813,38 @@ class EmailNotionSyncApp:
                     "(MAILAGENT_CUSTOM_AGENTS_ENABLED)"
                 )
 
+            # 飞书对话 bot 长连接（08-01 阶段 2，flag MAILAGENT_IM_FEISHU 默认关）。
+            # 挂 serve 而非 serve-api：serve 是打包态唯一恒 spawn 的 service，且
+            # supervise / sync_store / alerter / AlertEpisodeTracker 全在手（dossier Q1）。
+            # 🔴 gate 含**凭证在**——supervise 把「shutdown 未置位时的正常返回」当作
+            # worker 死亡并进退避重启，所以「没配凭证」必须在 spawn 前拦，不能靠 worker
+            # 自己 return。off / 未配 → 零启动、零连接。
+            im_feishu_task = None
+            self.im_feishu_worker = None
+            try:
+                from src.im import FeishuImWorker, feishu_im_ready
+
+                im_ready, im_reason = feishu_im_ready(config)
+                if im_ready:
+                    self.im_feishu_worker = FeishuImWorker(
+                        cfg=config,
+                        sync_store=self.watcher.sync_store,
+                        alerter=self.alerter,
+                        episodes=AlertEpisodeTracker(
+                            self.watcher.sync_store,
+                            enabled=config.alert_episode_enabled,
+                        ),
+                    )
+                    im_feishu_task = self._spawn_supervised(
+                        self.im_feishu_worker.run, "im_feishu"
+                    )
+                    logger.info(f"[im-feishu] worker started ({im_reason})")
+                else:
+                    logger.info(f"[im-feishu] disabled ({im_reason})")
+            except Exception as e:
+                logger.error(f"[im-feishu] failed to start (main loop continues): {e}")
+                self.im_feishu_worker = None
+
             # 等待关闭信号
             await self._shutdown_event.wait()
 
@@ -865,6 +897,11 @@ class EmailNotionSyncApp:
                 tasks.append(agent_trigger_task)
             if agent_run_task:
                 tasks.append(agent_run_task)
+            if im_feishu_task:
+                # 先 stop() 让它优雅断开 WS（cancel 路径下 await 不可靠），再 cancel
+                if self.im_feishu_worker:
+                    self.im_feishu_worker.stop()
+                tasks.append(im_feishu_task)
             if fanout_task:
                 tasks.append(fanout_task)
             if job_worker_task:
