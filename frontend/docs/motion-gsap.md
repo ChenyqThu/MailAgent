@@ -113,8 +113,10 @@ gsap.to(wrapper, { width: open ? 360 : 0, duration: open ? DUR.base : DUR.fast,
 - 展开：AdvancedDisclosure（受控 + CSS grid-rows，保 a11y）/ ToolCallAuditRow（CSS grid-rows）/ chat `ReasoningText` 思考块 + `ToolGroupCard` 组卡（2026-08 由 GSAP height auto↔0 改走 `CollapsibleRegion` 统一原语，见 §9.1）。
 - §8 曲线收口：移除全部旧第二曲线 `cubic-bezier(0.32,0.72,0,1)`（folder-modal / efm-modal / batch-bar / undo-toast / view-chip / inbox-tab），统一 standard。二轮收口（transitions.dev review 轮）：清掉漏网的 `.app-nav`(260ms 旧曲线→220 standard) / `.drawer`(0.26s 旧曲线→220 standard) / glass 切档(280→220) / nav label fade(140 linear→120 standard) / drawer-backdrop(0.2s→220 standard)。
 - 微交互原语（transitions.dev review 轮新增）：
-  - `.icon-swap`/`.icon-swap-item`（index.css）：同 slot 双图标 cross-fade（opacity+scale 0.85，120ms standard，**无 blur** —— filter 永不过渡红线）。已接：copy→check（RemoteAccessTab）/ Eye↔EyeOff（EnvField+EnvSecretField）/ 主题三态（ThemePickerPopover trigger）。data-active 必须传字符串 `'true'/'false'`。
+  - `.icon-swap`/`.icon-swap-item`（index.css）：同 slot 双图标 cross-fade（opacity+scale 0.85，120ms standard，**无 blur** —— filter 永不过渡红线）。已接：copy→check（RemoteAccessTab）/ Eye↔EyeOff（EnvField+EnvSecretField）/ 主题三态（ThemePickerPopover trigger）/ **ToolTraceCard kind 图标 ↔ chevron（W2，2026-08）**。data-active 必须传字符串 `'true'/'false'`；🔴 且必须由 **JS state 驱动**，不要混用 `group-hover:` 变体——`.icon-swap-item[data-active]` 与 `.group:hover .group-hover\:*` 同特异度(0,2,0)，胜负只看 CSS 生成顺序，是碰运气不是设计。
   - 树状展开 chevron：单 `<ChevronRight>` + `transition-transform duration-fast` + 条件 `rotate-90`（SidebarFolderTree），**不用双图标 swap**——旋转比 cross-fade 自然。
+  - 一次性完成收束（W5，2026-08）：assistant action bar 最新一条在回合落地时做一次 **slow(380ms)** opacity 淡入（`useCompletionReveal`，仅 isLast；非最新的 hover-reveal 路径不套）。配套原则：mount 即最终态不会触发 transition——一次性进场必须「先 opacity-0 提交、rAF 后翻 1」；reduced-motion 用 `motion-reduce:transition-none` 收，不写 JS 分支。
+  - 秒表/耗时读数统一纪律（`useToolElapsed` 三处消费：工具卡 / ReasoningText 折叠头 / TurnStatusLine 回合秒表）：没起点不显示数字（绝不编造 0.0s）、终值由 effect cleanup 落、reduced-motion 不 tick（整个读数不出现，而不是冻在 0.0s）。
 - 出入场补缺（同轮）：EventFormModal 周期 scope 确认 / FolderPicker 删除确认 / AccountSwitcherPopover 接入 useExitAnimation。
 
 **有意延后**（透明记录，非遗漏）：

@@ -208,6 +208,72 @@ describe('TurnStatusLine — render gating (the 永动 fix)', () => {
   })
 })
 
+// --- W3-② 回合级秒表 --------------------------------------------------------------------------
+//
+// 同一口渲染器时钟（useToolElapsed），所以同样的三条契约在这条线上也要成立：没起点不编数、
+// reduced-motion 不 tick（于是整条秒表不出现，而不是冻在一个骗人的 0.0s）、终态不挂读数。
+
+describe('TurnStatusLine — W3-② 回合级秒表', () => {
+  const running = [USER, { id: 'a1', role: 'assistant', parts: [] }]
+
+  test('reduced-motion（套件默认）→ 不 tick，也就没有秒表（冻住的 0.0s 是谎话）', async () => {
+    render(<Harness status="streaming" messages={running} />)
+    await waitFor(() => expect(screen.getByText('AI 思考中…')).toBeTruthy())
+    await new Promise((resolve) => setTimeout(resolve, 400))
+    expect(screen.queryByTitle('耗时')).toBeNull()
+  })
+
+  test('motion allowed → connecting/thinking 阶段秒表在走', async () => {
+    // 退出套件默认的 reduced-motion（先例：ToolTraceCard.test.tsx / useExitAnimation.test.tsx）。
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          addListener: () => {},
+          removeListener: () => {},
+          dispatchEvent: () => false,
+          onchange: null
+        }) as unknown as MediaQueryList
+    )
+    try {
+      render(<Harness status="streaming" messages={running} />)
+      await waitFor(() => expect(screen.getByTitle('耗时')).toBeTruthy())
+      const first = screen.getByTitle('耗时').textContent ?? ''
+      expect(first).toMatch(/^\d+(\.\d)?[sm]/)
+      // 自己在长 —— 这是「秒表」，不是挂载那一刻冻住的数。
+      await waitFor(() => expect(screen.getByTitle('耗时').textContent).not.toBe(first), {
+        timeout: 2000
+      })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('工具执行中 → 这条线整个不渲染，秒表自然也不重复（G7 由工具卡自己报时）', async () => {
+    render(
+      <Harness
+        status="streaming"
+        messages={[
+          USER,
+          {
+            id: 'a1',
+            role: 'assistant',
+            parts: [
+              { type: 'tool-email_search', toolCallId: 't1', state: 'input-available', input: {} }
+            ]
+          }
+        ]}
+      />
+    )
+    await waitFor(() => expect(screen.getByTestId('tool')).toBeTruthy())
+    expect(screen.queryByTitle('耗时')).toBeNull()
+  })
+})
+
 // --- stall watchdog (hook-level, fake timers) -----------------------------------------------
 
 function StallProbe({
