@@ -1107,6 +1107,11 @@ function handleApprovalPending(res: ServerResponse, cfg: AiGatewayConfig, url: s
     inputPreview: info ? approvalInputPreview(entry.toolName, info.input) : entry.toolName,
     agentId: entry.agentRunContext?.agentId ?? null,
     jobId: entry.agentRunContext?.jobId ?? null,
+    // Stage 2 PR-4 (task 08-01 messenger) — the frozen DESTRUCTIVE bit, so an out-of-app approval
+    // surface (Feishu card) renders the same red warning the desktop McpApprovalCard does. Always
+    // a boolean (never undefined) so a consumer can't mistake "absent" for "unknown"; pre-PR-4
+    // stash rows / non-connector tools → false = no warning, the previous behaviour verbatim.
+    destructive: entry.destructive === true,
     ageMs: Date.now() - entry.createdAt
   })
 }

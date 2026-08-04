@@ -461,7 +461,9 @@ export function createConnectorTools(
     }
     try {
       // Idempotent per name; throws on a static-gateway-name collision (unshadowable) — skip.
-      registerRuntimeToolClass(name, write ? 'connector_write' : 'read')
+      // Stage 2 PR-4: the manifest's `destructive` rides along (presentation-only, read back by
+      // the approval stash so an out-of-app card can show the same red warning as the desktop).
+      registerRuntimeToolClass(name, write ? 'connector_write' : 'read', entry.destructive === true)
     } catch (err) {
       console.warn(`[ai-gateway] connector tool '${name}' not registrable — skipped`, err)
       continue

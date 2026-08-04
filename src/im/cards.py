@@ -36,6 +36,13 @@ _TEMPLATE_ERROR = "orange"
 
 _HEADER_TITLE = "AI 请求执行操作"
 
+# PR-4：destructive 红警告。措辞对齐桌面 ``McpApprovalCard`` 的
+# ``chat.mcpApprovalCard.destructiveWarning``（zh-CN：「破坏性操作：服务方标记此工具
+# 可能覆盖既有数据。」）—— 同一件事在两个界面必须是同一句话，否则用户会以为是两回事。
+# 判据来自 MCP 服务方 manifest 的 ``destructive_hint``，经 gateway stash → ``/pending``
+# 透出；**绝不从模型参数推断**（模型不能把自己的警告说没）。
+DESTRUCTIVE_WARNING = "破坏性操作：服务方标记此工具可能覆盖既有数据。"
+
 
 def _base_card(
     *,
@@ -107,8 +114,14 @@ def build_approval_card(
     approval_id: str,
     session_id: Optional[int],
     chat_id: str,
+    destructive: bool = False,
 ) -> Dict[str, Any]:
-    """待决审批卡：摘要 + [批准][拒绝]。"""
+    """待决审批卡：摘要（+ destructive 红警告）+ [批准][拒绝]。
+
+    ``destructive`` 只影响多一个红色警告块 —— 它是**提示**不是**闸**：写类工具在
+    ``im_chat`` 下本来就恒 HITL，安全地板不因这一行文案变宽或变窄（header 仍是
+    pending 的蓝，红色留给「已拒绝」终态，两者不抢同一个颜色语义）。
+    """
 
     def _value(decision: str) -> Dict[str, Any]:
         return build_action_value(
@@ -120,12 +133,18 @@ def build_approval_card(
             input_preview=input_preview,
         )
 
+    elements: List[Dict[str, Any]] = [_summary_markdown(tool_name, input_preview)]
+    if destructive:
+        elements.append(
+            {"tag": "markdown", "content": f"<font color='red'>⚠️ {DESTRUCTIVE_WARNING}</font>"}
+        )
+
     return _base_card(
         title=_HEADER_TITLE,
         subtitle=f"{tool_name} · 批准后立即执行，拒绝则不执行",
         template=_TEMPLATE_PENDING,
         elements=[
-            _summary_markdown(tool_name, input_preview),
+            *elements,
             {
                 "tag": "column_set",
                 "flex_mode": "none",

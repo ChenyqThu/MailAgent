@@ -13,6 +13,7 @@ import * as React from 'react'
 import { AI_TAB_ANCHOR_IDS, AI_TAB_ANCHOR_SCROLL_MT } from './aiTabAnchors'
 import { SkillsSection } from './custom-ai/SkillsSection'
 import { ConnectorsSection } from './custom-ai/ConnectorsSection'
+import { ImFeishuSection } from './custom-ai/ImFeishuSection'
 import { MemorySection } from './custom-ai/MemorySection'
 import { UserMdCompileSection } from './custom-ai/UserMdCompileSection'
 import { MemoryCaptureModelSection } from './custom-ai/MemoryCaptureModelSection'
@@ -41,6 +42,12 @@ export function CustomAiSection(): React.ReactElement {
       {/* MCP 外部连接 —— owner 拍板与 Skills 并列（都是「AI 能用什么」的授权面）。 */}
       <div id={AI_TAB_ANCHOR_IDS.connectors} className={mt}>
         <ConnectorsSection />
+      </div>
+      {/* 飞书对话（08-01 阶段 2）—— 紧跟 MCP：两者都是「AI 在别的场地能做什么」的授权面。
+          🔴 与 Connectors 不同，本区 flag off 时**不隐身**而是显示「未启用」，理由见
+          ImFeishuSection 文件头取舍 1。 */}
+      <div id={AI_TAB_ANCHOR_IDS.imFeishu} className={mt}>
+        <ImFeishuSection />
       </div>
       <div id={AI_TAB_ANCHOR_IDS.systemCapabilities} className={mt}>
         <SystemCapabilitiesSection />

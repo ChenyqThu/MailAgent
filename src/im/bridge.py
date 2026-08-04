@@ -113,6 +113,12 @@ DECIDE_UNKNOWN_REPLY = (
 REPAUSED_NEXT_MISSING_REPLY = (
     "已批准。后续还有待审批的操作，但详情拉取失败 —— 请到桌面 App 继续处理。"
 )
+# PR-4（复核留档项 2）：repaused 是非终态，走不到下面「取最终回复投递」那一段，于是
+# 模型在这一跳里说的话此前**整段被丢掉** —— 用户只看到「已批准 → 又来一张卡」，中间
+# 发生了什么全无。这里把 ``/decide`` 响应里的 ``summary``（gateway ``clipSummary`` 截到
+# 180 字符）当**中间进展**投递，并**显式标明是摘要** —— 不标就是把一段截断文本冒充成
+# 模型的完整回复（这一跳的完整文本要等整轮跑完才在 CHAT_DB 里落定，此刻取不到）。
+REPAUSED_PROGRESS_PREFIX = "（中间进展 · 摘要，完整内容见桌面 App）\n"
 REJECTED_FALLBACK_TEXT = "❌ 已拒绝，未执行。"
 APPROVED_FALLBACK_TEXT = "✅ 已批准，已执行。"
 REPAUSED_FALLBACK_TEXT = "✅ 已批准；还有后续操作待确认。"
@@ -333,6 +339,9 @@ class ImAgentBridge:
             approval_id=pending.approval_id,
             session_id=session_id,
             chat_id=chat_id,
+            # PR-4：destructive 红警告随卡（MCP 服务方 destructive_hint，经 gateway
+            # stash → /pending 透出）。老 gateway 不返回该字段 → False = 不加警告。
+            destructive=pending.destructive,
         )
         message_id = self._card_sender.create_message(open_id, "interactive", card)
         if message_id:
@@ -488,6 +497,13 @@ class ImAgentBridge:
                 operator,
                 fallback_text=REPAUSED_FALLBACK_TEXT,
             )
+            # 🔴 中间跳的叙述不能丢：把 summary 当「中间进展」投递（**标明是摘要**），
+            # 再发下一张卡 —— 顺序有意如此，用户先读到「刚才发生了什么」，再面对
+            # 「下一个要不要批」。summary 为空（gateway 没给）→ 什么都不发，不造空消息。
+            if res.summary.strip():
+                self._delivery.send_text(
+                    operator, f"{REPAUSED_PROGRESS_PREFIX}{res.summary.strip()}"
+                )
             next_pending = (
                 self._probe_pending(session_id) if session_id is not None else None
             )

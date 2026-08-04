@@ -87,6 +87,10 @@ class PendingApproval:
     tool_name: str
     input_preview: str
     age_ms: int = 0
+    # PR-4：MCP 服务方自报的 destructive_hint（gateway 在暂停时冻进 stash → ``/pending``
+    # 透出）。缺字段 / 老 gateway → False = 不加红警告（**不编**：宁可少一句提示，也不
+    # 能凭模型参数猜一个出来 —— 与桌面 McpApprovalCard 同一条纪律）。
+    destructive: bool = False
 
 
 @dataclass
@@ -276,6 +280,7 @@ class GatewayClient:
             tool_name=str(data.get("toolName") or ""),
             input_preview=str(data.get("inputPreview") or ""),
             age_ms=int(data.get("ageMs") or 0),
+            destructive=data.get("destructive") is True,
         )
 
     def decide(self, approval_id: str, decision: str) -> DecideOutcome:

@@ -707,6 +707,7 @@
     "collapseSidebar": "Collapse / expand history",
     "historyTitle": "Chats",
     "emptyHistory": "No conversations yet",
+    "fromFeishu": "From Feishu",
     "group": {
       "pinned": "Pinned",
       "today": "Today",
@@ -1936,6 +1937,75 @@
           "on": "On",
           "off": "Off"
         }
+      }
+    },
+    "imFeishu": {
+      "title": "Feishu chat",
+      "desc": "Talk to this machine's AI assistant from a Feishu direct message (same memory, same persona). This is where you can see whether it is connected, who it is bound to, which tools it may use there, and what has been approved.",
+      "loading": "Loading Feishu connection status…",
+      "loadError": "Could not read status: {message}",
+      "connection": "Connection",
+      "disabledHint": "Not enabled: set MAILAGENT_IM_FEISHU=true in .env, then restart the backend and the app.",
+      "connectedAt": "Connected at {time}",
+      "lastEventAt": "Last message received {time}",
+      "noCredential": "No app credentials for the chat bot yet (FEISHU_IM_APP_ID / FEISHU_IM_APP_SECRET, seeded once).",
+      "conflict": "Another MailAgent instance was detected ({reason}). Feishu does not broadcast to multiple long-lived connections, so instances would steal each other's messages — this one deliberately did not connect. Keep only one running (stop the pm2 mail-sync process when using the desktop app).",
+      "conflictUnknown": "reason unknown",
+      "lastError": "Last error: {message}",
+      "status": {
+        "connected": "Connected",
+        "unknown": "Status unknown",
+        "connecting": "Connecting",
+        "disconnected": "Disconnected",
+        "conflict": "Instance conflict",
+        "error": "Connection error",
+        "stopped": "Stopped",
+        "disabled": "Not enabled"
+      },
+      "bind": {
+        "title": "Bound Feishu account",
+        "boundTo": "Bound open_id: {openId}",
+        "boundAt": "Bound at {time}",
+        "bot": "Chat bot: {name} (app_id {appId})",
+        "unknownBot": "not connected yet, name unknown",
+        "sameNameTrap": "Two Feishu apps can share a display name — identify by app_id / open_id, never by name.",
+        "unbound": "Not bound yet. Only the bound Feishu account reaches the command channel; everyone else is refused.",
+        "codePending": "A pairing code is already waiting (valid until {time}). Generate a new one if you lost it.",
+        "issue": "Generate pairing code",
+        "rebind": "Re-bind",
+        "webDisabled": "Pairing cannot be started from the remote web app — it wires a Feishu account into this machine's execution channel. Do it in the desktop app.",
+        "flagOffDisabled": "Feishu chat is not enabled, so no bot could receive a code right now.",
+        "failed": "Could not generate a pairing code"
+      },
+      "pair": {
+        "countdown": "Expires in {time}",
+        "expired": "Expired — generate a new one.",
+        "howto": "Open a direct message with the bot in Feishu and send it those 6 digits on their own."
+      },
+      "tools": {
+        "title": "Tools the AI may use in Feishu",
+        "desc": "Feishu is a deliberately narrowed venue (a stolen Feishu account is not a stolen computer). These are fixed rules, not settings.",
+        "read": "Reads (mail / calendar / search / reports / conversation lookup): run without approval.",
+        "write": "Writes (send, save draft, flag, reschedule…): every call needs a tap on the Feishu approval card; no auto-approve list applies.",
+        "connector": "External service (MCP) tools: all available; reads run freely, writes always need approval (destructive tools carry a red warning on the card).",
+        "web": "Web access (search / fetch): controlled by the switch below, off by default; even when on, every call needs approval.",
+        "denied": "Local commands, file read/write, config and skill changes, and calls out to third-party AI are not registered in Feishu at all — the model cannot see them. Use the desktop app or the remote web app for those."
+      },
+      "web": {
+        "title": "Allow web access in Feishu chats",
+        "desc": "Lets the AI search and fetch web pages from Feishu. Off by default: web content is untrusted, and a stolen Feishu account is not a stolen computer. Each call still needs approval.",
+        "restartHint": "Takes effect after restarting the app (the AI engine reads this once at startup).",
+        "webDisabled": "This switch cannot be changed from the remote web app — use the desktop app."
+      },
+      "approvals": {
+        "title": "Approvals in Feishu conversations",
+        "desc": "The last 10 approve / reject decisions a human actually made. The criterion is \"this conversation came from Feishu\" — if such a conversation was approved from the desktop app instead, it is still listed here (the record cannot tell which side was tapped). Calls that skipped the card are not counted.",
+        "loading": "Loading approval history…",
+        "loadError": "Could not read approval history: {message}",
+        "unavailable": "Approval history is unreadable right now (the chat database is not accessible) — this does not mean nothing was ever approved.",
+        "empty": "Nothing has been approved or rejected in a Feishu conversation yet.",
+        "approved": "Approved",
+        "rejected": "Rejected"
       }
     },
     "systemCapabilities": {

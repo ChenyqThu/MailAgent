@@ -144,6 +144,10 @@ _MANAGED_ENV_KEYS: List[str] = [
     # Settings 系统能力区「联网」卡改真开关后纳入受管键。默认 ON（E3 cutover），显式 false 回退。
     # 非 secret；restart-required（gateway 启动读一次）。镜像 env-keys.ts MANAGED_ENV_KEYS。
     "MAILAGENT_OPENNESS_WEB_TOOLS",
+    # — 飞书会话上网开关（08-01 阶段 2 PR4, grill Q19=A）。Node 单载体 main-env-only flag
+    # （gateway envBool 读一次）→ 设置-AI「飞书对话」区的真开关。默认 OFF；restart-required。
+    # 🔴 总闸 MAILAGENT_IM_FEISHU 有意不受管（灰度期 env 手动管理）。镜像 env-keys.ts。
+    "MAILAGENT_IM_WEB_ENABLED",
     # — Notifications
     "FEISHU_NOTIFY_ENABLED",
     "FEISHU_APP_ID",

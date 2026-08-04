@@ -471,6 +471,56 @@ class ChatDb:
             (message_id,),
         )
 
+    def list_im_approvals(self, limit: int = 20) -> Optional[List[Dict[str, Any]]]:
+        """飞书（``ai_chat_sessions.origin='im'``）会话里的**人工审批决定**，最近 N 条倒序。
+
+        08-01 阶段 2 PR-4「信任可见」：设置-AI「飞书对话」区的「批过哪些操作」用。
+
+        🔴 **只取真人决定的三个值** ``approved`` / ``edited`` / ``rejected``。另外四个
+        ``auto_*``（auto_whitelist / auto_accept_edits / auto_bypass / auto_reversible）
+        是**免卡执行**的审计位（值域纪律见 ``frontend/src/ai-gateway/tools/types.ts``
+        的分值域注释），把它们混进「批过哪些操作」= 谎报有人批过。read 类工具该列为
+        NULL，自然不入选。
+
+        🔴 **判据是「会话 origin='im'」，不是「点击发生在飞书」** —— gateway 对桌面
+        审批卡与飞书审批卡写的是同一个 ``approval_status``，DB 层分不出点击来自哪一
+        侧。故本投影的诚实语义是「飞书会话里的审批决定」，调用侧文案必须照此写。
+
+        时间取 ``COALESCE(confirmed_at, updated_at)``：``chat_tool_call`` 没有
+        ``decided_at`` 列，``confirmed_at`` 是审批落定戳、``updated_at`` 兜住它为空的行
+        （实测生产行 ``confirmed_at`` 恒 NULL —— 写侧 ``updateToolCall`` 至今没有调用方传它）。
+
+        🔴 ``decided_at`` 的单位是 **epoch 毫秒**（两列都由 ``chat_db/tool_calls.ts`` 的
+        ``Date.now()`` 写入），**不是秒** —— 与 sync_state 里 Python ``time.time()`` 写的那些
+        时间戳单位相反，且都是整数、在 JSON 里肉眼分不出来。本方法原样透出不做换算，
+        **渲染侧必须按毫秒解释**（按秒解释不会报错，只会把 2026 年画成五万七千年）。
+
+        库不存在 / 表未初始化 / 锁 → **None**（调用方降级成「读不到」）——有意不走
+        ``_read_all`` 的 graceful ``[]``：把不可达渲染成「零条审批」就是谎报，镜像
+        ``count_auto_whitelist_writes`` 的 None-vs-空 纪律。
+        """
+        n = max(1, int(limit))
+        if not os.path.exists(self.db_path):
+            return None
+        try:
+            with self._connection() as conn:
+                rows = conn.execute(
+                    "SELECT tc.tool_name AS tool_name, "
+                    "tc.approval_status AS approval_status, "
+                    "COALESCE(tc.confirmed_at, tc.updated_at) AS decided_at, "
+                    "m.session_id AS session_id, s.title AS session_title "
+                    "FROM chat_tool_call tc "
+                    "JOIN ai_chat_messages m ON m.id = tc.message_id "
+                    "JOIN ai_chat_sessions s ON s.id = m.session_id "
+                    "WHERE s.origin = 'im' "
+                    "AND tc.approval_status IN ('approved', 'edited', 'rejected') "
+                    "ORDER BY decided_at DESC, tc.id DESC LIMIT ?",
+                    (n,),
+                ).fetchall()
+                return [dict(r) for r in rows]
+        except sqlite3.Error:
+            return None
+
     def count_auto_whitelist_writes(
         self, session_ids: List[int]
     ) -> Optional[Dict[int, Dict[str, Any]]]:

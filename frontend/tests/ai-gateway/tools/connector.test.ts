@@ -29,6 +29,7 @@ import { buildGatewayTools } from '../../../src/ai-gateway/tools'
 import {
   classOfTool,
   hasRuntimeToolClass,
+  isRuntimeToolDestructive,
   isToolClassAllowedInMode,
   resetRuntimeToolClasses,
   type AgentModeGrants
@@ -559,6 +560,22 @@ describe('connector tool execution', () => {
     expect(desc).toContain('UNTRUSTED_MCP_TOOL')
     expect(desc).toContain('DESTRUCTIVE')
     expect(desc).toContain('always asks')
+  })
+
+  // Stage 2 PR-4 (task 08-01 messenger) — the manifest's `destructive` must also reach the RUNTIME
+  // registry, not just the prose description. That registry is the ONLY place the approval stash
+  // can read it from (the manifest lives in the Electron lifecycle's TTL cache, unreachable from
+  // AiGatewayConfig), and the stash is how an out-of-app card (Feishu) learns to draw the red
+  // warning. Asserting the description alone would leave that link untested.
+  test('destructive reaches the runtime registry (the approval stash reads it from there)', () => {
+    build([
+      entry({ toolName: 'notion-update-page', crudType: 'write', destructive: true }),
+      entry({ toolName: 'notion-fetch', crudType: 'read', destructive: false })
+    ])
+    expect(isRuntimeToolDestructive('mcp__notion__notion_update_page')).toBe(true)
+    expect(isRuntimeToolDestructive('mcp__notion__notion_fetch')).toBe(false)
+    // unknown name → false (fail-quiet: never fabricate a warning for a tool we know nothing about)
+    expect(isRuntimeToolDestructive('email_draft_reply')).toBe(false)
   })
 
   test('manual invoke carries the caller annotation (context_mode only, no agent_id)', async () => {

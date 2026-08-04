@@ -21,6 +21,7 @@ from src.im.bridge import (
     NEW_SESSION_REPLY,
     NO_LLM_KEY_REPLY,
     REPAUSED_NEXT_MISSING_REPLY,
+    REPAUSED_PROGRESS_PREFIX,
     RUN_ACTIVE_REPLY,
     RUN_TIMEOUT_REPLY,
     STALE_PENDING_NOTICE,
@@ -33,7 +34,7 @@ from src.im.bridge import (
     TOAST_RECEIVED_REJECT,
     TOAST_UNKNOWN,
 )
-from src.im.cards import CARD_VALUE_KIND, build_action_value
+from src.im.cards import CARD_VALUE_KIND, DESTRUCTIVE_WARNING, build_action_value
 from src.im.delivery import FeishuDelivery
 from src.im.gateway_client import (
     DecideOutcome,
@@ -328,6 +329,40 @@ class TestApprovalCard:
             assert v["session_id"] == 77
             assert v["tool_name"] == "email_send"
 
+    def test_destructive_pending_adds_red_warning_block(self):
+        """PR-4：MCP 服务方标了 destructive → 卡片上多一条**红色**警告块。
+
+        判据来自 gateway ``/pending`` 的 ``destructive`` 位（stash 在暂停时冻住的
+        manifest 事实），**不是**模型参数 —— 模型不能把自己的警告说没。措辞与桌面
+        ``McpApprovalCard`` 的 ``chat.mcpApprovalCard.destructiveWarning`` 同一句。
+        """
+        bridge, _state, sender, gw, _db, delivery = make_bridge()
+        gw.chat_outcomes = [_ok_outcome(text="", saw_approval_request=True, approval_id="ap_d")]
+        gw.pending_results = [
+            PendingApproval(
+                approval_id="ap_d",
+                tool_name="mcp__notion__notion_update_page",
+                input_preview="page=x",
+                destructive=True,
+            )
+        ]
+        bridge.handle_owner_message("改一下那个页面", _ctx(delivery))
+        card = str(sender.sent_cards[0]["content"])
+        assert DESTRUCTIVE_WARNING in card
+        assert "color='red'" in card
+
+    def test_non_destructive_pending_has_no_warning(self):
+        """反向闸：没标 destructive（含老 gateway 不返回该字段）→ 一个字都不加。
+
+        少一句提示可以接受；凭空造一句「这可能毁数据」会让红警告贬值，真正危险的
+        那次就没人当回事了。
+        """
+        bridge, _state, sender, gw, _db, delivery = make_bridge()
+        gw.chat_outcomes = [_ok_outcome(text="", saw_approval_request=True, approval_id="ap_1")]
+        gw.pending_results = [_pending()]  # destructive 默认 False
+        bridge.handle_owner_message("发个邮件", _ctx(delivery))
+        assert DESTRUCTIVE_WARNING not in str(sender.sent_cards[0]["content"])
+
     def test_pause_without_live_pending_is_honest(self):
         bridge, _state, sender, gw, _db, delivery = make_bridge()
         gw.chat_outcomes = [_ok_outcome(text="", saw_approval_request=True)]
@@ -536,6 +571,45 @@ class TestCardDecision:
         assert len(cards) == 1  # 下一张审批卡
         next_values = str(cards[0]["content"])
         assert "ap_2" in next_values and "email_archive" in next_values
+
+    def test_repaused_delivers_intermediate_summary_before_next_card(self):
+        """PR-4（复核留档项 2）：中间跳的叙述不能丢。
+
+        repaused 是**非终态**，走不到「取最终回复投递」那一段 —— 修复前模型在这一跳里
+        说的话整段被丢掉，用户只看到「已批准 → 又来一张卡」。现在把 ``/decide`` 的
+        ``summary`` 当中间进展投递，且**显式标明是摘要**（gateway ``clipSummary`` 截到
+        180 字符，不标就是把截断文本冒充成完整回复）。顺序：先叙述、后下一张卡。
+        """
+        bridge, _state, sender, gw, _db, delivery, submit = self._bridge()
+        gw.decide_results = [
+            DecideOutcome(ok=True, http_status=200, status="repaused", summary="第一步做完了")
+        ]
+        gw.pending_results = [_pending(approval_id="ap_2", tool="email_archive")]
+        bridge.on_card_action(_click_event())
+        submit.run_all()
+
+        progress = f"{REPAUSED_PROGRESS_PREFIX}第一步做完了"
+        assert progress in sender.sent_texts
+        # 🔴 顺序：中间进展文本必须排在下一张审批卡**之前**（先读懂发生了什么，再面对
+        # 「下一个要不要批」）。calls 是同一条时间线，比对下标即可。
+        text_idx = next(
+            i for i, c in enumerate(sender.calls) if c["content"].get("text") == progress
+        )
+        card_idx = next(i for i, c in enumerate(sender.calls) if c["msg_type"] == "interactive")
+        assert text_idx < card_idx
+
+    def test_repaused_without_summary_sends_no_empty_progress(self):
+        """summary 为空（gateway 没给）→ 不发空消息，只补下一张卡。"""
+        bridge, _state, sender, gw, _db, delivery, submit = self._bridge()
+        gw.decide_results = [
+            DecideOutcome(ok=True, http_status=200, status="repaused", summary="  ")
+        ]
+        gw.pending_results = [_pending(approval_id="ap_2", tool="email_archive")]
+        bridge.on_card_action(_click_event())
+        submit.run_all()
+        # 只发了下一张卡，一条 text 消息都没有（`sent_texts` 会把卡片记成 ''，故按
+        # msg_type 判而不是按文本内容判 —— 否则空串会和「没发」混成一件事）。
+        assert [c["msg_type"] for c in sender.calls] == ["interactive"]
 
     def test_repaused_without_next_pending_is_honest(self):
         bridge, _state, sender, gw, _db, delivery, submit = self._bridge()

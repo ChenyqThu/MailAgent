@@ -34,7 +34,11 @@ import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
 // S2 W0 (ADR-001 D1) — the run's context mode is a TRUSTED prepareChatRun parameter asserted by
 // each entrypoint in its own code. It is NEVER read from the request body (a client cannot claim
 // manual_chat); absent/unknown fail-closes to 'untrusted_trigger'.
-import { normalizeContextMode, type AgentContextMode } from './tools/policy'
+import {
+  isRuntimeToolDestructive,
+  normalizeContextMode,
+  type AgentContextMode
+} from './tools/policy'
 import { type MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
 import { thinkingProviderOptions } from './thinking'
@@ -588,7 +592,13 @@ function maybeStashAndAnnounceApproval(
       // byte-identical stash). The resume rebuilds through the same wrapper, so the narrowed
       // ToolSet + grants survive the island round-trip; a re-pause re-enters here with the SAME
       // cfg → the chain re-freezes the same context every hop.
-      agentRunContext: cfg.agentRunContext
+      agentRunContext: cfg.agentRunContext,
+      // Stage 2 PR-4 (task 08-01 messenger) — freeze the connector tool's DESTRUCTIVE bit so an
+      // out-of-app approval surface (the Feishu card) can render the same red warning the desktop
+      // McpApprovalCard does. Read from the runtime registry that createConnectorTools populated
+      // at build time, NEVER from info.input (a model must not be able to spoof it away).
+      // Non-connector tools are absent from the registry → false → no warning, as before.
+      destructive: isRuntimeToolDestructive(info.toolName)
     })
     // ANNOUNCE step (island-only, P8): only the island needs the pushed card + the resumeToken; the
     // in-app record view claims from the stash directly via /decide (no token leaves the gateway).

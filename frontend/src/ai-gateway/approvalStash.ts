@@ -66,6 +66,15 @@ export interface StashInput {
    *  (resume used the base cfg). Manual runs stash undefined here → byte-identical to the
    *  pre-ADR-004 stash. */
   agentRunContext?: AgentRunContext
+  /** Stage 2 PR-4 (task 08-01 messenger) — is the paused tool DESTRUCTIVE (the MCP server's own
+   *  `destructive_hint`)? Frozen here so an OUT-OF-APP approval surface (the Feishu card today,
+   *  any future messenger) can render the same red warning the desktop McpApprovalCard does.
+   *  🔴 Sourced from the runtime connector registry (`isRuntimeToolDestructive`), NEVER from the
+   *  model-proposed args — a model must not be able to spoof the warning away (the
+   *  McpApprovalCard / CalendarApprovalCard precedent). Undefined for every non-connector tool
+   *  and for connector tools registered before this field existed → `/pending` reports false,
+   *  i.e. "no warning", which is the pre-PR-4 behaviour byte for byte. */
+  destructive?: boolean
 }
 
 export interface StashedApprovalRun extends StashInput {

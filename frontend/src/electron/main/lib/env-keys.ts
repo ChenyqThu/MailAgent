@@ -166,6 +166,14 @@ export const MANAGED_ENV_KEYS = [
   // 非 secret（普通 boolean flag）。
   'MAILAGENT_OPENNESS_WEB_TOOLS',
 
+  // — 飞书会话上网开关 (08-01 阶段 2 PR4, grill Q19=A)。**Node 单载体** main-env-only flag
+  // (ai_gateway_lifecycle.ts `imWebEnabled` = envBool('MAILAGENT_IM_WEB_ENABLED', false)) →
+  // 设置-AI「飞书对话」区 ImFeishuSection 的真开关，故必须在册。默认 OFF (网页内容不可信,
+  // 且飞书账号被盗 ≠ 电脑被盗) → EnvField/Switch 未设时如实显示为关。restart-required
+  // (gateway 启动读一次)。非 secret。🔴 总闸 MAILAGENT_IM_FEISHU **有意不在册** ——
+  // 灰度期由 env 手动管理 (双载体, 翻它要同时重启 serve 与 app), UI 只显示状态不给开关。
+  'MAILAGENT_IM_WEB_ENABLED',
+
   // — Notifications (PR D NotificationsTab)
   'FEISHU_NOTIFY_ENABLED',
   'FEISHU_APP_ID',

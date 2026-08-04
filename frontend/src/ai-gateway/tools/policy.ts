@@ -229,11 +229,30 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
 
 const RUNTIME_TOOL_CLASSES = new Map<string, GatewayToolClass>()
 
+/** Stage 2 PR-4 (task 08-01 messenger) — the DESTRUCTIVE bit of a runtime-registered tool, kept
+ *  in a SIBLING map on purpose: it is a *presentation* fact (render a red warning), NOT a policy
+ *  input. Nothing in the matrix / auto-approve predicates reads it, so widening the class map's
+ *  value type (and every consumer of it) would have been the larger change.
+ *
+ *  Why it must live here at all: at approval-stash time (`chatRun.maybeStashAndAnnounceApproval`)
+ *  the only tool fact in scope is the composed name — the connector manifest lives in the
+ *  Electron lifecycle's TTL cache and is not reachable through `AiGatewayConfig`. The desktop
+ *  McpApprovalCard sidesteps this by re-fetching `/api/connector/{id}/tools` from the renderer;
+ *  an out-of-app surface (Feishu) has no such renderer, so the bit has to ride the stash. */
+const RUNTIME_TOOL_DESTRUCTIVE = new Map<string, boolean>()
+
 /** Register the policy class of a runtime-discovered (dynamic) tool. Fail-closed guards: a
  *  static GATEWAY_TOOL_CLASSES name can never be shadowed (the compile-time map stays the single
  *  source of truth for built-in tools), and only real GatewayToolClass literals are accepted
- *  (junk from a connector manifest must not mint a policy class). */
-export function registerRuntimeToolClass(name: string, toolClass: GatewayToolClass): void {
+ *  (junk from a connector manifest must not mint a policy class).
+ *
+ *  `destructive` (optional, stage 2 PR-4) is presentation-only — see RUNTIME_TOOL_DESTRUCTIVE.
+ *  Omitting it registers `false`, which is byte-identical to the pre-PR-4 behaviour. */
+export function registerRuntimeToolClass(
+  name: string,
+  toolClass: GatewayToolClass,
+  destructive?: boolean
+): void {
   if (!name) throw new Error('registerRuntimeToolClass: empty tool name')
   if (GATEWAY_TOOL_CLASSES[name] !== undefined) {
     throw new Error(`registerRuntimeToolClass: '${name}' is a static gateway tool (unshadowable)`)
@@ -242,6 +261,13 @@ export function registerRuntimeToolClass(name: string, toolClass: GatewayToolCla
     throw new Error(`registerRuntimeToolClass: invalid tool class '${String(toolClass)}'`)
   }
   RUNTIME_TOOL_CLASSES.set(name, toolClass)
+  RUNTIME_TOOL_DESTRUCTIVE.set(name, destructive === true)
+}
+
+/** Is this runtime-registered tool marked destructive by its MCP server? Unknown name → false
+ *  (fail-quiet: an absent registration means "no warning", never a fabricated one). */
+export function isRuntimeToolDestructive(name: string): boolean {
+  return RUNTIME_TOOL_DESTRUCTIVE.get(name) === true
 }
 
 /** Is this name a runtime-registered dynamic tool? (assembly gate + tests) */
@@ -252,6 +278,7 @@ export function hasRuntimeToolClass(name: string): boolean {
 /** Test-only: clear the registry (module-level state would otherwise leak across tests). */
 export function resetRuntimeToolClasses(): void {
   RUNTIME_TOOL_CLASSES.clear()
+  RUNTIME_TOOL_DESTRUCTIVE.clear()
 }
 
 /** Stage-0b assembly gate: admit DYNAMIC tools into an assembled ToolSet. A dynamic tool with NO

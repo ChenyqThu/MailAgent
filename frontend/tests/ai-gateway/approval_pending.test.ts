@@ -56,7 +56,11 @@ function pausedResponse(input: unknown): MailAgentUIMessage {
 function seedStash(
   stash: ApprovalRunStash,
   sessionId: number,
-  opts: { input?: unknown; agentRunContext?: AgentRunContext } = {}
+  opts: {
+    input?: unknown
+    agentRunContext?: AgentRunContext
+    destructive?: boolean
+  } = {}
 ): string {
   return stash.stash({
     toolCallId: 'tc_pending',
@@ -65,7 +69,8 @@ function seedStash(
     sessionId,
     body: { messages: [], model: 'claude-sonnet-4-6', sessionId },
     responseMessage: pausedResponse(opts.input ?? { body_markdown: 'draft body' }),
-    ...(opts.agentRunContext ? { agentRunContext: opts.agentRunContext } : {})
+    ...(opts.agentRunContext ? { agentRunContext: opts.agentRunContext } : {}),
+    ...(opts.destructive === undefined ? {} : { destructive: opts.destructive })
   })
 }
 
@@ -112,6 +117,32 @@ describe('GET /api/ai/approval/pending — hit (enriched decide-card body)', () 
     const body = (await res.json()) as Record<string, unknown>
     expect(body.agentId).toBe('dms')
     expect(body.jobId).toBe(99)
+  })
+
+  // Stage 2 PR-4 (task 08-01 messenger) — the DESTRUCTIVE bit rides the stash so an OUT-OF-APP
+  // approval surface (the Feishu card) can render the same red warning the desktop
+  // McpApprovalCard fetches for itself. Two halves matter equally:
+  //   · destructive:true must survive the stash → /pending round-trip;
+  //   · an UNSET field must report `false`, not undefined — a consumer must never have to
+  //     distinguish "absent" from "unknown", and pre-PR-4 rows / non-connector tools must keep
+  //     rendering no warning at all.
+  test('destructive bit round-trips; unset → false (never undefined)', async () => {
+    const stash = new ApprovalRunStash()
+    const h = await start(baseCfg({ islandAgentEnabled: true, approvalStash: stash }))
+
+    seedStash(stash, 21, { destructive: true })
+    const hit = (await (await pending(h.port, '?sessionId=21')).json()) as Record<string, unknown>
+    expect(hit.destructive).toBe(true)
+
+    const stash2 = new ApprovalRunStash()
+    const h2 = await start(baseCfg({ islandAgentEnabled: true, approvalStash: stash2 }))
+    seedStash(stash2, 22) // no destructive key at all
+    const plain = (await (await pending(h2.port, '?sessionId=22')).json()) as Record<
+      string,
+      unknown
+    >
+    expect(plain.destructive).toBe(false)
+    expect('destructive' in plain).toBe(true)
   })
 })
 

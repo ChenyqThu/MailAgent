@@ -707,6 +707,7 @@
     "collapseSidebar": "折叠 / 展开会话历史",
     "historyTitle": "会话",
     "emptyHistory": "还没有会话",
+    "fromFeishu": "来自飞书",
     "group": {
       "pinned": "置顶",
       "today": "今天",
@@ -1936,6 +1937,75 @@
           "on": "开",
           "off": "关"
         }
+      }
+    },
+    "imFeishu": {
+      "title": "飞书对话",
+      "desc": "在飞书私聊里与这台电脑上的 AI 助手对话（同一份记忆与人设）。这里看得到：连不连得上、绑定了谁、飞书里能用哪些工具、批过哪些操作。",
+      "loading": "正在读取飞书连接状态…",
+      "loadError": "状态读取失败：{message}",
+      "connection": "连接状态",
+      "disabledHint": "未启用：在 .env 里设 MAILAGENT_IM_FEISHU=true，重启后端与 App 后生效。",
+      "connectedAt": "建立连接：{time}",
+      "lastEventAt": "最近一次收到消息：{time}",
+      "noCredential": "尚未配置对话 bot 的应用凭证（FEISHU_IM_APP_ID / FEISHU_IM_APP_SECRET，只在首次写入）。",
+      "conflict": "检测到另一个 MailAgent 实例（{reason}）—— 飞书长连接不广播消息，多个实例会互相抢消息，故本实例有意不建立连接。请只保留一个（用桌面 App 时停掉 pm2 的 mail-sync）。",
+      "conflictUnknown": "原因未知",
+      "lastError": "最近一次错误：{message}",
+      "status": {
+        "connected": "已连接",
+        "unknown": "状态未知",
+        "connecting": "连接中",
+        "disconnected": "已断开",
+        "conflict": "实例冲突",
+        "error": "连接异常",
+        "stopped": "已停止",
+        "disabled": "未启用"
+      },
+      "bind": {
+        "title": "绑定的飞书账号",
+        "boundTo": "已绑定 open_id：{openId}",
+        "boundAt": "绑定时间：{time}",
+        "bot": "对话 bot：{name}（app_id {appId}）",
+        "unknownBot": "尚未连上，名称未知",
+        "sameNameTrap": "两个应用在飞书后台可以同名 —— 认 app_id / open_id，别认名字。",
+        "unbound": "尚未绑定。只有绑定的那个飞书账号能进入指令通道，其他人一律拒绝。",
+        "codePending": "已有一个绑定码在等待（有效期至 {time}）。忘了码就重新生成一个。",
+        "issue": "生成绑定码",
+        "rebind": "重新绑定",
+        "webDisabled": "远程网页版不能发起绑定（这是把飞书账号接进本机执行通道的动作），请在桌面 App 内操作。",
+        "flagOffDisabled": "飞书对话未启用，现在出的码没有 bot 能接收。",
+        "failed": "生成绑定码失败"
+      },
+      "pair": {
+        "countdown": "{time} 后失效",
+        "expired": "已失效，请重新生成。",
+        "howto": "在飞书里私聊这个 bot，把上面 6 位数字单独发给它即可完成绑定。"
+      },
+      "tools": {
+        "title": "飞书里 AI 能用的工具",
+        "desc": "飞书是权限收紧的一档场合（飞书账号被盗 ≠ 你的电脑被盗）。下面是固定规则，不是可改的设置。",
+        "read": "读类（邮件 / 日历 / 搜索 / 报告 / 会话检索）：免审批直接执行。",
+        "write": "写类（发信 / 存草稿 / 标记 / 改日程等）：每次都要在飞书卡片上点批准，不进任何免批白名单。",
+        "connector": "外部服务（MCP）工具：全部开放；读类免批，写类同样每次都要批（破坏性工具的卡片上带红色警告）。",
+        "web": "联网（网页搜索 / 网页读取）：由下面的开关控制，默认关；开了也每次都要批。",
+        "denied": "本地命令执行 / 文件读写 / 配置与技能变更 / 外呼第三方 AI：在飞书里根本不注册，模型看不见。要用请到桌面 App 或远程网页版。"
+      },
+      "web": {
+        "title": "允许飞书会话联网",
+        "desc": "开启后 AI 在飞书里可以搜网页 / 读网页。默认关：网页内容不可信，且飞书账号被盗不等于你的电脑被盗。开启后每次调用仍要在卡片上批准。",
+        "restartHint": "改动后需重启 App 才生效（AI 引擎启动时读取一次）。",
+        "webDisabled": "远程网页版不能改这个开关，请在桌面 App 内操作。"
+      },
+      "approvals": {
+        "title": "飞书会话里的审批记录",
+        "desc": "最近 10 条真人做出的批准 / 拒绝决定。判据是「这条对话来自飞书」—— 若同一条飞书会话是在桌面 App 上批的，也会记在这里（记录里分不出点击发生在哪一侧）。免批执行的调用不计入。",
+        "loading": "正在读取审批记录…",
+        "loadError": "审批记录读取失败：{message}",
+        "unavailable": "读不到审批记录（对话数据库暂时不可访问）—— 这不代表没有批过任何操作。",
+        "empty": "还没有在飞书会话里批准或拒绝过任何操作。",
+        "approved": "已批准",
+        "rejected": "已拒绝"
       }
     },
     "systemCapabilities": {
