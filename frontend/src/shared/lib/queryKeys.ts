@@ -192,6 +192,11 @@ export const qk = {
 
   projectProgressRuns: (limit: number) => ['project-progress-runs', limit] as const,
 
+  // 08-01 PR4 — MCP connector 设置面。`connectorTools` 挂在 `connectors` 前缀下：连接/断开/
+  // sync 之后 invalidate `['connectors']` 一处，工具清单跟着刷（TanStack 前缀匹配）。
+  connectors: () => ['connectors'] as const,
+  connectorTools: (id: string) => ['connectors', id, 'tools'] as const,
+
   palette: {
     search: (normalised: string) => ['palette', 'search', normalised] as const
   },

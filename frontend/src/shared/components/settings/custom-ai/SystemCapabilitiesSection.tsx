@@ -54,12 +54,12 @@ import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { EnvField } from '../parts/EnvField'
 import { fetchSkillInstallEnabled, useEnvFlagIntent } from './shared'
+import { SYSTEM_CAP_SCROLL_TARGETS } from './scrollTargets'
 
 // 同页交叉引用滚动锚点（CustomAiSection 里 SkillPacksSection / ExecPolicySection 各裹一个 id div）。
-export const SYSTEM_CAP_SCROLL_TARGETS = {
-  exec: 'settings-exec-policy',
-  skillPacks: 'settings-skill-packs'
-} as const
+// 值本身自 08-01 PR4 起下沉到零依赖叶子 ./scrollTargets（锚点导航是第二个消费方，不该为两个
+// 字符串把本文件的依赖树拉进一个常量模块）；此处保留同名 re-export，既有 import 站点不动。
+export { SYSTEM_CAP_SCROLL_TARGETS } from './scrollTargets'
 
 function scrollToSection(id: string): void {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })

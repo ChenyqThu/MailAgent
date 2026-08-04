@@ -305,6 +305,122 @@ async def list_tools(
     )
 
 
+@router.post("/{connector_id}/enabled", dependencies=[Depends(verify_cf_access)])
+async def set_connector_enabled(
+    connector_id: str,
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+    settings=Depends(get_settings),
+) -> Any:
+    """connector 整体启停（PR4 设置面）：``{"enabled": bool}``。
+
+    关掉 = 整族工具不再注册给模型（PR2 注册期读 ``connector.enabled``），但**凭证与
+    per-tool 配置都保留** —— 这是与 disconnect 的分工：那条是删凭证、这条只是收起来。
+    行不存在 → 404（镜像 preprocess 的「先连接」语义：没连过就没有可启停的东西）。
+    """
+    _require_enabled(settings)
+    _connector_def(connector_id)
+    enabled = payload.get("enabled")
+    if not isinstance(enabled, bool):
+        raise APIError(
+            "E_INVALID_ARG", "enabled must be a JSON boolean", http_status=400
+        )
+    try:
+        await run_in_threadpool(
+            _store().update_connector_state, connector_id, enabled=enabled
+        )
+    except KeyError as e:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"connector {connector_id!r} has no row yet — connect it first",
+            http_status=404,
+        ) from e
+    return success_envelope(
+        {"connector_id": connector_id, "enabled": enabled}, request=request
+    )
+
+
+def _set_tool_enabled_and_read(
+    connector_id: str, tool_name: str, enabled: Optional[bool]
+) -> Any:
+    """写 per-tool 覆盖 + 回读该行（一次线程跳；行不存在由写侧 KeyError 抛）。"""
+    store = _store()
+    store.set_connector_tool_enabled(connector_id, tool_name, enabled)
+    for row in store.list_connector_tools(connector_id):
+        if row.tool_name == tool_name:
+            return row
+    raise KeyError(f"connector tool not found: {connector_id}/{tool_name}")
+
+
+@router.post(
+    "/{connector_id}/tools/{tool_name}/enabled",
+    dependencies=[Depends(verify_cf_access)],
+)
+async def set_tool_enabled(
+    connector_id: str,
+    tool_name: str,
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+    settings=Depends(get_settings),
+) -> Any:
+    """per-tool 启用覆盖（PR4 设置面）：``{"enabled": bool | null}``，**三态**。
+
+    ``null`` = 清除覆盖回默认（read 开 / write·update 关）—— 与「显式关」不是一回事，
+    故键必须在场（缺键 → 400，不把「没说」当成 null 猜）。响应带**更新后的事实**
+    （``enabled_override`` 原样 + ``effective_enabled`` 折算），免得前端自己再折算一遍
+    默认规则（第二处手抄）。
+
+    🔴 delete 类置 True → 403 ``E_CONNECTOR_TOOL_FORBIDDEN``（与 invoke 端点同码）：
+    写侧闸在 store，这里只做 HTTP 映射；置 False / null 照常允许（清配置不是放权）。
+    """
+    _require_enabled(settings)
+    _connector_def(connector_id)
+    from src.agent_config.store import connector_tool_effective_enabled
+
+    if "enabled" not in payload:
+        raise APIError(
+            "E_INVALID_ARG",
+            'body must carry an "enabled" key (JSON boolean, or null to clear the override)',
+            http_status=400,
+        )
+    enabled = payload["enabled"]
+    if enabled is not None and not isinstance(enabled, bool):
+        raise APIError(
+            "E_INVALID_ARG",
+            "enabled must be a JSON boolean or null",
+            http_status=400,
+        )
+    try:
+        row = await run_in_threadpool(
+            _set_tool_enabled_and_read, connector_id, tool_name, enabled
+        )
+    except KeyError as e:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"tool {tool_name!r} is not in the synced manifest of connector "
+            f"{connector_id!r} — sync the connector first",
+            http_status=404,
+        ) from e
+    except ValueError as e:
+        raise APIError(
+            "E_CONNECTOR_TOOL_FORBIDDEN",
+            f"tool {tool_name!r} is delete-class and cannot be enabled "
+            "（删除类工具暂不支持启用：清单里保留，但 MVP 恒关）",
+            http_status=403,
+        ) from e
+    return success_envelope(
+        {
+            "connector_id": connector_id,
+            "tool_name": tool_name,
+            "enabled_override": row.enabled,
+            "effective_enabled": connector_tool_effective_enabled(
+                row.crud_type, row.enabled
+            ),
+        },
+        request=request,
+    )
+
+
 @router.post("/{connector_id}/preprocess", dependencies=[Depends(verify_cf_access)])
 async def set_preprocess_enabled(
     connector_id: str,

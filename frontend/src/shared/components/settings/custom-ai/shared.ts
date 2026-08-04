@@ -78,6 +78,20 @@ export async function fetchExecPolicyEnabled(): Promise<boolean> {
   }
 }
 
+/** Fetch connectorToolsEnabled from serve-api /chat/config (MCP connector 灰度 flag，08-01 PR4).
+ *  Returns false (hide) when not configured or unreachable — flag off 时 `/api/connector/*` 全部
+ *  409，渲染一个只会报错的区块比不渲染更糟，故与 execPolicy 同姿态：不确定就当没开。 */
+export async function fetchConnectorToolsEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return false
+    const body = (await resp.json()) as { data?: { connectorToolsEnabled?: unknown } }
+    return body?.data?.connectorToolsEnabled === true
+  } catch {
+    return false
+  }
+}
+
 /** Fetch skillInstallEnabled from serve-api /chat/config. Returns false (hide) when not
  *  configured or unreachable — default-OFF flag (same posture as fetchExecPolicyEnabled). */
 export async function fetchSkillInstallEnabled(): Promise<boolean> {

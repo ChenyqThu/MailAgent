@@ -582,6 +582,12 @@ async def chat_config(request: Request):
             "providerRegistryEnabled": bool(
                 getattr(cfg, "llm_provider_registry_enabled", False)
             ),
+            # 08-01 阶段 1 PR4 — Settings「MCP 连接」区显隐 gate。MAILAGENT_MCP_CONNECTORS
+            # 是 **pydantic** flag（不是 main-env-only）：/api/connector/* 的 _require_enabled
+            # 读的就是这个单例，故这里同源 getattr 读（不走 _hot_bool —— 热读会与端点的
+            # 冻结单例劈叉：UI 以为开着、端点照样 409）。翻开关需重启 serve-api。
+            # flag off → 前端连接区不渲染；字段恒发。
+            "connectorToolsEnabled": bool(getattr(cfg, "mcp_connectors_enabled", False)),
         },
         request=request,
         source="config",

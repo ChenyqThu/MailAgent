@@ -46,6 +46,7 @@ import { Drawer } from '@shared/components/ui/drawer'
 import { StatefulButton } from '@shared/components/ui/stateful-button'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import {
+  useConnectorOptions,
   useCreateAgent,
   useDeleteAgent,
   useOpennessFlags,
@@ -53,7 +54,7 @@ import {
   useToolOptions
 } from './hooks'
 import { ModelSelectItems } from './drawers/ModelSelectItems'
-import { errText, type WebGrant } from './custom-agent/shared'
+import { errText, type ConnectorGrantMap, type WebGrant } from './custom-agent/shared'
 import { RunHistorySection } from './custom-agent/RunHistorySection'
 import { AutomationPolicySection } from './custom-agent/AutomationPolicySection'
 import { CapabilityCards } from './custom-agent/CapabilityCards'
@@ -130,6 +131,8 @@ export function CustomAgentDrawer({
   const { options: toolOptions } = useToolOptions(open)
   // R3 — openness flag 分面（webToolsEnabled/execToolsEnabled），驱动「额外能力」区禁用提示。
   const opennessFlags = useOpennessFlags(open)
+  // PR4 T3 — 第七「外部服务」卡的 connector 行集合（失败降级空数组，不触碰 grant state）。
+  const connectorSummaries = useConnectorOptions(open)
 
   const [enabled, setEnabled] = useState(false)
   const [title, setTitle] = useState('')
@@ -168,6 +171,11 @@ export function CustomAgentDrawer({
   // （含 []）」两态（镜像 toolsMode）—— 未触碰的 NULL 行保存后仍是 NULL，投影层默认集继续生效。
   const [grantWeb, setGrantWeb] = useState<WebGrant>('off')
   const [webDirty, setWebDirty] = useState(false)
+  // grant_connectors（MCP connector PR4 T3）：第七「外部服务」卡的 state。🔴 永远存服务端
+  // **原始值**（含 UI 没有对应档的 'write'）——展示折叠在 CapabilityCards，这里必须无损往返；
+  // 服务端语义 = whole-map replace（显式 {} = 清空），物化规则见 onSave。
+  const [grantConnectors, setGrantConnectors] = useState<ConnectorGrantMap>({})
+  const [connectorsDirty, setConnectorsDirty] = useState(false)
   const [mountedSkills, setMountedSkills] = useState<string[]>([])
   const [skillsMode, setSkillsMode] = useState<'defaults' | 'explicit'>('defaults')
   const [skillsDirty, setSkillsDirty] = useState(false)
@@ -215,6 +223,8 @@ export function CustomAgentDrawer({
       setGrantDirty(false)
       setGrantWeb('off')
       setWebDirty(false)
+      setGrantConnectors({})
+      setConnectorsDirty(false)
       setMountedSkills(DEFAULT_MOUNTED_SKILLS)
       setSkillsMode('defaults')
       setSkillsDirty(false)
@@ -284,6 +294,9 @@ export function CustomAgentDrawer({
     setGrantDirty(false)
     setGrantWeb(cfg.tool_policy?.grant_web ?? 'off')
     setWebDirty(false)
+    // 服务端原始 grant 原样进 state（含 'write'）；浅拷贝防 setConnectorTier 的展开写触碰 cfg。
+    setGrantConnectors({ ...(cfg.tool_policy?.grant_connectors ?? {}) })
+    setConnectorsDirty(false)
     // skills=NULL（未配置）→ 展示默认挂载集（defaults 模式，保存时未触碰不写 skills 键）；
     // 显式列表（含 []）→ 展示行内集合（explicit）。镜像 allowed_tools 的 defaults/explicit 两态。
     const mounts = cfg.tool_policy?.skills
@@ -388,6 +401,9 @@ export function CustomAgentDrawer({
     // grant 键；按需物化（false/'off' 缺省 = parse_tool_policy 默认），镜像编辑路径纪律。
     if (grantExec) toolPolicy.grant_exec = true
     if (grantWeb !== 'off') toolPolicy.grant_web = grantWeb
+    // grant_connectors 仅非空携带（镜像 grant_web 仅非 off 携带）——新建行缺省 = 未授权任何
+    // connector（parse_tool_policy 默认），键不物化。
+    if (Object.keys(grantConnectors).length > 0) toolPolicy.grant_connectors = grantConnectors
     if (create) {
       const id = createdId ?? slugifyTitle(title)
       // 两段式：先建草稿行（type='custom'，无 trigger），再 setConfig 补 trigger/tool_policy/budget。
@@ -443,21 +459,23 @@ export function CustomAgentDrawer({
     // 都不会抹掉其它键（W3-2 教训）。各键的「按需物化」纪律：allowed_tools / skills 仅在「被触碰
     // 或行本就显式」时携带 —— 只翻 grant 的 NULL 行保持二者缺省（投影层默认集/默认挂载集不被物化）；
     // grant_exec 仅 true 携带、grant_web 仅非 'off' 携带（缺省语义 = parse_tool_policy 的 false/'off'）。
-    if (toolsDirty || grantDirty || webDirty || skillsDirty) {
+    if (toolsDirty || grantDirty || webDirty || skillsDirty || connectorsDirty) {
       const tp: CustomAgentToolPolicy = { v: 1 }
       if (toolsDirty || toolsMode === 'explicit') tp.allowed_tools = selectedTools
       if (grantExec) tp.grant_exec = true
       if (grantWeb !== 'off') tp.grant_web = grantWeb
       if (skillsDirty || skillsMode === 'explicit') tp.skills = mountedSkills
-      // 🔴 MCP connector PR3 — grant_connectors 目前**没有抽屉 UI**（随 PR4 落），故它不在
-      // 「从当前 state 整体重建」的不变量覆盖范围内：不原样带回去，owner 只要在这里翻一下
-      // 工具/grant/skill 开关保存，之前经对话式 CRUD（或 REST）配好的 connector 授权就会被
-      // 整块 PUT 静默抹掉 —— 与 toConfigPatch 刚修的那条 merge-base 漏项同一个 bug 类。
-      // 载体是服务端行（cfg 来自 GET），不是本地 state，所以照抄即可；PR4 加 UI 时把它接进
-      // state 并删掉这段。
-      const currentConnectors = cfg.tool_policy?.grant_connectors
-      if (currentConnectors && Object.keys(currentConnectors).length > 0) {
-        tp.grant_connectors = currentConnectors
+      // grant_connectors 从**当前 state**物化（PR4 起它进了「整体重建」不变量的覆盖范围，
+      // PR3 的「照抄服务端行」临时块已删）：state 打开时从 cfg 预填、未触碰即原始值无损往返
+      // （含 UI 折叠掉的 'write'）。state 空但行原本非空 → 显式 {}（服务端 whole-map replace
+      // 语义下的「清空」）；两边都空 → 键不物化（与 PR3 前逐字节相同）。
+      if (Object.keys(grantConnectors).length > 0) {
+        tp.grant_connectors = grantConnectors
+      } else if (
+        cfg.tool_policy?.grant_connectors &&
+        Object.keys(cfg.tool_policy.grant_connectors).length > 0
+      ) {
+        tp.grant_connectors = {}
       }
       editPatch.tool_policy = tp
     }
@@ -744,6 +762,16 @@ export function CustomAgentDrawer({
             }}
             flags={opennessFlags}
             toolOptions={toolOptions}
+            connectorOptions={connectorSummaries.map((c) => ({
+              id: c.connector_id,
+              label: c.display_name,
+              status: c.status
+            }))}
+            grantConnectors={grantConnectors}
+            onGrantConnectorsChange={(next) => {
+              setGrantConnectors(next)
+              setConnectorsDirty(true)
+            }}
           />
 
           {/* budget 两门 */}

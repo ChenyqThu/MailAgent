@@ -46,6 +46,7 @@ import type {
   CalendarEventOccurrence,
   CalendarSyncStateItem,
   ChatApi,
+  ConnectorApi,
   EmailCalendarLink,
   EventCreateOpts,
   EventDeleteOpts,
@@ -116,6 +117,7 @@ import {
   type RequestOptions
 } from './http_client'
 import { createChatRuntime } from './chat_api'
+import { createConnectorApi } from './connector_api'
 
 function notImplemented(method: string): Promise<never> {
   // V2-Sprint 3 stub. MUST reject, never throw synchronously: every stubbed
@@ -523,6 +525,17 @@ export class HttpApi implements MailApi {
       this._chat = createChatRuntime({ baseUrl: this.baseUrl })
     }
     return this._chat
+  }
+
+  // 08-01 PR4 — MCP connector 设置面（serve-api `/api/connector/*` 薄 fetch 面）。
+  // lazy getter 同 chat：构造期 `this.baseUrl` 还没赋值（参数属性在字段初始化之后才写），
+  // 且远程 web 不开设置页时零开销。
+  private _connector?: ConnectorApi
+  get connector(): ConnectorApi {
+    if (!this._connector) {
+      this._connector = createConnectorApi(this.baseUrl)
+    }
+    return this._connector
   }
 
   llm = {

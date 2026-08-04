@@ -161,6 +161,22 @@ export type {
   KosDoctorCheck,
   ChatApi
 } from './types/chat'
+export type {
+  ConnectorStatusValue,
+  ConnectorCrudType,
+  ConnectorCredentialView,
+  ConnectorFlowView,
+  ConnectorStatusView,
+  ConnectorSummary,
+  ConnectorToolSummary,
+  ConnectorOAuthStartResult,
+  ConnectorSyncResult,
+  ConnectorSetEnabledResult,
+  ConnectorSetToolEnabledResult,
+  ConnectorSetPreprocessResult,
+  ConnectorDisconnectResult,
+  ConnectorApi
+} from './types/connector'
 export type { SearchAgentPhase, SearchAgentInput, SearchAgentResult } from './types/search-agent'
 export type {
   IslandConnectionState,

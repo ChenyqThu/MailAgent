@@ -33,6 +33,7 @@ import type {
   EventsListOpts,
   SyncNowOpts,
   ChatApi,
+  ConnectorApi,
   NotionAgentApi,
   NotionAgentConfig,
   NotionAgentDoctorCheck,
@@ -134,6 +135,7 @@ import type {
   UpdaterStatus
 } from './types'
 import { createChatRuntime } from './chat_api'
+import { createConnectorApi } from './connector_api'
 import { HttpApi } from './HttpApi'
 import { request } from './http_client'
 
@@ -944,6 +946,9 @@ export class ElectronApi implements MailApi {
   attachment: AttachmentApi = new ElectronAttachmentApi()
   ai: AiApi = new ElectronAiApi()
   chat: ChatApi = createElectronChatRuntime()
+  // 08-01 PR4 — connector 面无 IPC 通道，直接经 loopback serve-api fetch（与 chat 同 baseUrl；
+  // token + CORS 由 main `chat_local_bridge` 的 webRequest 透明注入）。
+  connector: ConnectorApi = createConnectorApi(loopbackChatBaseUrl())
   llm: LlmApi = new ElectronLlmApi()
   kos: KosApi = new ElectronKosApi()
   notion: NotionWriteApi = new ElectronNotionWriteApi()

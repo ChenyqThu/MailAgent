@@ -511,6 +511,9 @@ export interface ChatOpennessFlags {
   webToolsEnabled?: boolean
   /** /chat/config.execPolicyEnabled（MAILAGENT_OPENNESS_EXEC_TOOLS）的投影。 */
   execToolsEnabled?: boolean
+  /** MCP connector PR4 — /chat/config.connectorToolsEnabled（MAILAGENT_MCP_CONNECTORS）。
+   *  false → 第七「外部服务」能力卡禁用 + 提示（同 web/exec 的三值语义）。 */
+  connectorToolsEnabled?: boolean
 }
 
 /** task 07-21 — 分页读结果（items + 同 filter 条件下的 total）。列表页滚动预取/「加载

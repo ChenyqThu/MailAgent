@@ -67,17 +67,22 @@ def flag_on_client(client, fresh_agent_cfg):
 
 
 def test_flag_off_all_non_callback_endpoints_409(flag_off_client):
+    # 第三列 = 请求体（None → 不发 body）。带必填 Body(...) 的端点必须发合法体，否则
+    # 校验会在 handler 之前 400，测出来的就不是 flag 门了。
     cases = [
-        ("GET", "/api/connector"),
-        ("POST", "/api/connector/notion/oauth/start"),
-        ("GET", "/api/connector/notion/status"),
-        ("POST", "/api/connector/notion/sync"),
-        ("GET", "/api/connector/notion/tools"),
-        ("POST", "/api/connector/notion/tools/search/invoke"),
-        ("POST", "/api/connector/notion/disconnect"),
+        ("GET", "/api/connector", None),
+        ("POST", "/api/connector/notion/oauth/start", None),
+        ("GET", "/api/connector/notion/status", None),
+        ("POST", "/api/connector/notion/sync", None),
+        ("GET", "/api/connector/notion/tools", None),
+        ("POST", "/api/connector/notion/tools/search/invoke", None),
+        ("POST", "/api/connector/notion/disconnect", None),
+        # PR4 —— 两个配置端点同样挂 flag 门。
+        ("POST", "/api/connector/notion/enabled", {"enabled": False}),
+        ("POST", "/api/connector/notion/tools/search/enabled", {"enabled": True}),
     ]
-    for method, url in cases:
-        r = flag_off_client.request(method, url)
+    for method, url, body in cases:
+        r = flag_off_client.request(method, url, json=body)
         assert r.status_code == 409, f"{method} {url} -> {r.status_code}"
         assert r.json()["error"]["code"] == "E_CONNECTOR_DISABLED"
 
@@ -631,3 +636,113 @@ def test_preprocess_toggle_flag_off_409(flag_off_client):
     r = flag_off_client.post("/api/connector/notion/preprocess", json={"enabled": True})
     assert r.status_code == 409
     assert r.json()["error"]["code"] == "E_CONNECTOR_DISABLED"
+
+
+# ── PR4：connector 整体启停 + per-tool 三态开关（设置面的两个配置端点）───────────
+
+
+def _connectors(client):
+    return {
+        c["connector_id"]: c
+        for c in client.get("/api/connector").json()["data"]["connectors"]
+    }
+
+
+def _set_tool(client, tool, body, connector="notion"):
+    return client.post(f"/api/connector/{connector}/tools/{tool}/enabled", json=body)
+
+
+def test_connector_enabled_toggle_roundtrip(flag_on_client, fresh_agent_cfg):
+    fresh_agent_cfg.upsert_connector("notion", server_url="https://mcp.notion.com/mcp")
+    assert _connectors(flag_on_client)["notion"]["enabled"] is True  # DDL 默认开
+
+    r = flag_on_client.post("/api/connector/notion/enabled", json={"enabled": False})
+    assert r.status_code == 200
+    assert r.json()["data"]["enabled"] is False
+    assert r.json()["data"]["connector_id"] == "notion"
+    # 三处事实一致：列表 / status / 库行。
+    assert _connectors(flag_on_client)["notion"]["enabled"] is False
+    assert flag_on_client.get("/api/connector/notion/status").json()["data"]["enabled"] is False
+    assert fresh_agent_cfg.get_connector("notion").enabled is False
+
+    assert (
+        flag_on_client.post("/api/connector/notion/enabled", json={"enabled": True}).status_code
+        == 200
+    )
+    assert _connectors(flag_on_client)["notion"]["enabled"] is True
+
+
+def test_connector_enabled_toggle_validates(flag_on_client, fresh_agent_cfg):
+    fresh_agent_cfg.upsert_connector("notion", server_url="https://x")
+    # 整体开关是二态（不是 per-tool 的三态）→ null 也拒。
+    for bad in ({"enabled": "yes"}, {"enabled": 1}, {"enabled": None}, {}):
+        r = flag_on_client.post("/api/connector/notion/enabled", json=bad)
+        assert r.status_code == 400, bad
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    # 未知 connector → 404（registry 闸）；已知但没行 → 404（先连接再启停）。
+    assert (
+        flag_on_client.post("/api/connector/ghost/enabled", json={"enabled": True}).status_code
+        == 404
+    )
+    assert (
+        flag_on_client.post("/api/connector/atlassian/enabled", json={"enabled": True}).status_code
+        == 404
+    )
+
+
+def test_tool_enabled_three_state_roundtrip(flag_on_client, fresh_agent_cfg):
+    """true / false / null 三态往返 —— null 是「清覆盖回默认」，与「显式关」不同。"""
+    _seed_tools(fresh_agent_cfg)
+
+    # write 类默认关 → 显式开。
+    d = _set_tool(flag_on_client, "create_page", {"enabled": True}).json()["data"]
+    assert d["tool_name"] == "create_page" and d["connector_id"] == "notion"
+    assert d["enabled_override"] is True and d["effective_enabled"] is True
+
+    # null 清覆盖 → 回 write 默认（关）。
+    d = _set_tool(flag_on_client, "create_page", {"enabled": None}).json()["data"]
+    assert d["enabled_override"] is None and d["effective_enabled"] is False
+
+    # read 类默认开 → 显式关 → 再清覆盖回默认（开）。
+    d = _set_tool(flag_on_client, "search", {"enabled": False}).json()["data"]
+    assert d["enabled_override"] is False and d["effective_enabled"] is False
+    d = _set_tool(flag_on_client, "search", {"enabled": None}).json()["data"]
+    assert d["enabled_override"] is None and d["effective_enabled"] is True
+
+    # 响应即库中事实：tools 端点（同一折算函数）读到一样的三态。
+    tools = {
+        t["name"]: t
+        for t in flag_on_client.get("/api/connector/notion/tools").json()["data"]["tools"]
+    }
+    assert tools["search"]["enabled_override"] is None
+    assert tools["search"]["effective_enabled"] is True
+
+
+def test_tool_enabled_delete_class_403_but_still_clearable(flag_on_client, fresh_agent_cfg):
+    """🔴 delete 类置 True → 403（与 invoke 端点同码）；置 False / null 照常允许。"""
+    _seed_tools(fresh_agent_cfg)
+    r = _set_tool(flag_on_client, "delete_page", {"enabled": True})
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_TOOL_FORBIDDEN"
+    rows = {r.tool_name: r for r in fresh_agent_cfg.list_connector_tools("notion")}
+    assert rows["delete_page"].enabled is None  # 拒了就是没落写
+
+    for body in ({"enabled": False}, {"enabled": None}):
+        r = _set_tool(flag_on_client, "delete_page", body)
+        assert r.status_code == 200, body
+        # 折算恒 False —— 无论覆盖是什么（读侧防御纵深）。
+        assert r.json()["data"]["effective_enabled"] is False
+
+
+def test_tool_enabled_validates_and_404(flag_on_client, fresh_agent_cfg):
+    _seed_tools(fresh_agent_cfg)
+    # 缺键 = 「没说」，不当 null 猜；非 bool 非 null 一律拒。
+    for bad in ({}, {"enabled": "yes"}, {"enabled": 1}):
+        r = _set_tool(flag_on_client, "search", bad)
+        assert r.status_code == 400, bad
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    # 未同步 / 伪造的工具名 → 404；未知 connector → 404（registry 闸）。
+    r = _set_tool(flag_on_client, "forged_tool", {"enabled": False})
+    assert r.status_code == 404 and r.json()["error"]["code"] == "E_NOT_FOUND"
+    r = _set_tool(flag_on_client, "search", {"enabled": False}, connector="ghost")
+    assert r.status_code == 404 and r.json()["error"]["code"] == "E_NOT_FOUND"

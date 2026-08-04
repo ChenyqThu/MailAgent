@@ -7,6 +7,7 @@ import {
   Globe2,
   Mail,
   Network,
+  Plug,
   SlidersHorizontal,
   TerminalSquare
 } from 'lucide-react'
@@ -21,13 +22,47 @@ import {
 } from '@shared/lib/customAgentCapabilities'
 import { cn } from '@shared/lib/cn'
 import { groupToolOptions } from '../toolGroups'
-import { deriveHeadlessMode, type WebGrant } from './shared'
+import {
+  deriveHeadlessMode,
+  type ConnectorGrantMap,
+  type ConnectorGrantValue,
+  type WebGrant
+} from './shared'
 import { DangerBlock } from './DangerBlock'
 
 const CALENDAR_READ_TOOL_SET = new Set<string>(CUSTOM_AGENT_CAPABILITY_TOOL_SETS.calendar.read)
 const CALENDAR_WRITE_TOOLS = CUSTOM_AGENT_CAPABILITY_TOOL_SETS.calendar.write.filter(
   (tool) => !CALENDAR_READ_TOOL_SET.has(tool)
 )
+
+// ---------------------------------------------------------------------------
+// MCP connector PR4 T3 — 第七「外部服务」卡的档位模型。
+//
+// UI 三档（off/read/write）是**展示折叠**，不是存储值域：服务端 grant 值域为
+// read|write|update（rank read<write<update，见 tests/config/test_connector_contract_parity）。
+// display 向上取整（'write' 与 'update' 都显示「可写」，未知防御值也归「可写」——绝不低报
+// 权限，同 deriveToolTier 的教训）；写入 canonical（点「可写」恒写 'update' 天花板）。
+// 🔴 no-op 闸在 setConnectorTier：目标档 == 当前显示档不写 state —— 否则存量 'write' 会被
+// 点一下就无声升成 'update'（PR3 抓过的同类静默改写）。
+// ---------------------------------------------------------------------------
+
+type ConnectorDisplayTier = 'off' | 'read' | 'write'
+const CONNECTOR_DISPLAY_TIERS: readonly ConnectorDisplayTier[] = ['off', 'read', 'write']
+
+function displayConnectorTier(value: ConnectorGrantValue | undefined): ConnectorDisplayTier {
+  if (value === undefined) return 'off'
+  if (value === 'read') return 'read'
+  // 'write' | 'update' |（防御）未知值 → 可写：向上取整，绝不把已授的写权限显示成更低档。
+  return 'write'
+}
+
+/** 卡内行 = 已连接的 connector ∪ 已配 grant 的 connector（后者哪怕已断开/registry 已消失也
+ *  必须可见可改 —— 静默丢 grant 正是本卡要防的 bug 类）。 */
+export interface ConnectorCardOption {
+  id: string
+  label: string
+  status: string
+}
 
 function TierButtons<T extends string>({
   tiers,
@@ -158,7 +193,10 @@ export function CapabilityCards({
   agentTitle,
   triggerKind,
   flags,
-  toolOptions
+  toolOptions,
+  connectorOptions,
+  grantConnectors,
+  onGrantConnectorsChange
 }: {
   selectedTools: string[]
   onSelectedToolsChange: React.Dispatch<React.SetStateAction<string[]>>
@@ -170,12 +208,17 @@ export function CapabilityCards({
   triggerKind: string | null
   flags: ChatOpennessFlags
   toolOptions: AgentRunToolOptions
+  connectorOptions: ConnectorCardOption[]
+  /** 🔴 服务端原始值（含 'write'）——展示层折叠成三档，但这份 map 必须无损往返。 */
+  grantConnectors: ConnectorGrantMap
+  onGrantConnectorsChange: (next: ConnectorGrantMap) => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const [execConfirming, setExecConfirming] = useState(false)
   const toolsDisabled = toolOptions.tools.length === 0
   const webDisabled = flags.webToolsEnabled === false
   const execDisabled = flags.execToolsEnabled === false
+  const connectorsDisabled = flags.connectorToolsEnabled === false
   const untrustedTrigger = deriveHeadlessMode(triggerKind) === 'untrusted_trigger'
   const derived = useMemo(
     () =>
@@ -206,6 +249,36 @@ export function CapabilityCards({
     if (patch.files !== undefined && (patch.files === 'on') !== grantExec) {
       onGrantExecChange(patch.files === 'on')
     }
+  }
+
+  // 第七卡行集合：已连接的 connector（按 options 序）∪ 已配 grant 但不在前者的 id（断开/
+  // registry 已消失的行标「未连接」仍可见可改）。
+  const connectorRows: Array<{ id: string; label: string; connected: boolean }> = []
+  {
+    const seen = new Set<string>()
+    for (const opt of connectorOptions) {
+      const connected = opt.status === 'connected'
+      if (!connected && grantConnectors[opt.id] === undefined) continue
+      seen.add(opt.id)
+      connectorRows.push({ id: opt.id, label: opt.label, connected })
+    }
+    for (const id of Object.keys(grantConnectors)) {
+      if (!seen.has(id)) connectorRows.push({ id, label: id, connected: false })
+    }
+  }
+  // danger 判据用**展示档**（'write'/'update'/未知都算可写）——与显示口径一致，不低报。
+  const connectorWriteActive = Object.values(grantConnectors).some(
+    (value) => displayConnectorTier(value) === 'write'
+  )
+
+  const setConnectorTier = (id: string, tier: ConnectorDisplayTier): void => {
+    // 🔴 no-op 闸：目标档 == 当前显示档不写 state。少了它，存量 'write'（显示「可写」）被
+    // 再点一下「可写」就会走 canonical 写入变成 'update' —— 静默升权。
+    if (tier === displayConnectorTier(grantConnectors[id])) return
+    const next: ConnectorGrantMap = { ...grantConnectors }
+    if (tier === 'off') delete next[id]
+    else next[id] = tier === 'read' ? 'read' : 'update'
+    onGrantConnectorsChange(next)
   }
 
   /** The displayed tier is rounded UP, so a `customized` capability means "enabled ⊊ this tier".
@@ -403,6 +476,53 @@ export function CapabilityCards({
           )}
           {grantExec && (
             <Guidance danger>{t('agents.custom.capabilityCards.files.ruleHint')}</Guidance>
+          )}
+        </CapabilityCard>
+
+        {/* MCP connector PR4 T3 — 第七卡：connector 级 grant（关/只读/可写）。可写档不做 files
+            式二次确认：connector 写有 per-connector 粒度 + 对话路径有审批卡反查，摩擦对齐 web
+            'open' 档（danger 变体 + warn 文案）而非 exec —— 终报注明供 owner 复核。 */}
+        <CapabilityCard
+          icon={<Plug size={16} />}
+          title={t('agents.custom.capabilityCards.connectors.title')}
+          description={t('agents.custom.capabilityCards.connectors.description')}
+          danger={connectorWriteActive}
+        >
+          {connectorRows.length === 0 ? (
+            <p className="rounded-lg border border-ink-border-soft bg-ink-1/50 px-3 py-2.5 text-meta text-ink-fg-3">
+              {t('agents.custom.capabilityCards.connectors.empty')}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {connectorRows.map((row) => (
+                <div key={row.id} className="flex items-center gap-2.5">
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-meta font-medium text-ink-fg-1">{row.label}</div>
+                    {!row.connected && (
+                      <div className="text-micro text-warn">
+                        {t('agents.custom.capabilityCards.connectors.notConnected')}
+                      </div>
+                    )}
+                  </div>
+                  <div className="w-44 shrink-0">
+                    <TierButtons
+                      tiers={CONNECTOR_DISPLAY_TIERS}
+                      value={displayConnectorTier(grantConnectors[row.id])}
+                      disabled={connectorsDisabled}
+                      groupLabel={row.label}
+                      label={(tier) => t(`agents.custom.capabilityCards.connectors.tier.${tier}`)}
+                      onChange={(tier) => setConnectorTier(row.id, tier)}
+                    />
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+          {connectorsDisabled && (
+            <Guidance>{t('agents.custom.capabilityCards.connectors.disabledHint')}</Guidance>
+          )}
+          {connectorWriteActive && (
+            <Guidance danger>{t('agents.custom.capabilityCards.connectors.warn')}</Guidance>
           )}
         </CapabilityCard>
       </div>

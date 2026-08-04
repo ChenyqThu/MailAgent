@@ -1,6 +1,7 @@
 import type { AdminApi } from './admin'
 import type { CalendarApi } from './calendar'
 import type { ChatApi } from './chat'
+import type { ConnectorApi } from './connector'
 import type { EmailApi } from './email'
 import type { EventsApi } from './events'
 import type { FolderApi } from './folder'
@@ -30,6 +31,8 @@ export interface MailApi {
   attachment: AttachmentApi
   ai: AiApi
   chat: ChatApi
+  /** 08-01 阶段 1 PR4 — MCP connector 设置面 (连接 / 授权 / 工具清单与开关)。 */
+  connector: ConnectorApi
   llm: LlmApi
   /** issue #59 — KOS 入库台账统计 (LLM Dashboard「知识库入库」区)。 */
   kos: KosApi

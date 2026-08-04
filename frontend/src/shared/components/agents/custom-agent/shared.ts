@@ -2,8 +2,15 @@
 // 08-02 review F9 — 唯一的组件 DangerBlock 已拆去 DangerBlock.tsx，本文件保持零 JSX（.ts），
 // 这样 react-refresh 的 Fast Refresh 边界干净；`from './shared'` 的既有导入路径不受影响。
 
+import type { CustomAgentToolPolicy } from '@shared/api/types'
+
 export type WebGrant = 'off' | 'gated' | 'open'
 export const WEB_GRANTS: WebGrant[] = ['off', 'gated', 'open']
+
+// MCP connector PR4 T3 — grant_connectors 的值域**派生自** CustomAgentToolPolicy（wire 契约
+// 单源），不在这里手抄 'read'|'write'|'update' 字面量：服务端值域变了这里跟着编译期红。
+export type ConnectorGrantMap = NonNullable<CustomAgentToolPolicy['grant_connectors']>
+export type ConnectorGrantValue = ConnectorGrantMap[string]
 
 // 结构化 ApiError / Electron err → 用户可读一行（code + message）。保存失败时把后端
 // validate_agent_config_patch 的 detail（TriggerValidationError message）渲染出来。

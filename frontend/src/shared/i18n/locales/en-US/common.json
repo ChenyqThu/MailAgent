@@ -1857,6 +1857,77 @@
       "calendarChatNote": "This toggle only governs the outward Skill interface and capability declaration; the calendar tools in chat are controlled by the Calendar item under System capabilities.",
       "notionAgentMasterOff": "Master switch MAILAGENT_NOTION_AGENT_TOOL is off: even when enabled here, the notion_agent tool won't be registered in chat."
     },
+    "anchorNav": {
+      "ariaLabel": "Sections on this page"
+    },
+    "connectors": {
+      "title": "External connections (MCP)",
+      "desc": "Connect external services such as Notion or Jira over the MCP protocol. Once connected you decide tool by tool what the AI may call; delete-class tools cannot be enabled.",
+      "loading": "Loading connections…",
+      "loadError": "Could not load the connection list: {message}",
+      "empty": "No connectable services.",
+      "status": {
+        "connected": "Connected",
+        "disconnected": "Not connected",
+        "authorizing": "Authorizing",
+        "error": "Connection error"
+      },
+      "connect": "Connect",
+      "connectWeb": "The remote web app cannot start a connection (the authorization callback goes to a local address) — use the desktop app.",
+      "awaiting": "Waiting for browser authorization…",
+      "cancel": "Stop waiting",
+      "authTimeout": "Authorization timed out: no browser callback within {seconds} seconds. Please try again.",
+      "authFailed": "Authorization failed",
+      "connectedToast": "Connected to {name}",
+      "sync": "Sync tools",
+      "syncing": "Syncing…",
+      "syncDone": "Tool list synced",
+      "disconnect": "Disconnect",
+      "enabled": "Enable this connection",
+      "enabledHelper": "When off, none of this service's tools are given to the AI; credentials and per-tool settings are kept.",
+      "preprocess": "Allow email pre-processing to call it",
+      "preprocessHelper": "Lets the email pre-processing classifier call this service (read-only ceiling — write tools are never exposed to it).",
+      "scopes": "Scopes",
+      "tokenExpires": "Token valid until {time}",
+      "tokenExpired": "Token expired at {time} — please reconnect.",
+      "tokenNone": "No credentials stored",
+      "tokenUnknown": "Token expiry unknown",
+      "lastSynced": "Tool list last synced: {time}",
+      "neverSynced": "Tool list never synced",
+      "lastError": "Last error: {message}",
+      "saveFailed": "Save failed",
+      "disconnectDialog": {
+        "title": "Disconnect {name}?",
+        "desc": "This deletes the credentials stored on this machine, and the service's tools stop being available to the AI immediately. The tool list and per-tool permissions are kept and apply again after reconnecting.",
+        "cancel": "Cancel",
+        "confirm": "Disconnect",
+        "confirming": "Disconnecting…"
+      },
+      "tools": {
+        "loading": "Loading tool list…",
+        "loadError": "Could not load the tool list: {message}",
+        "empty": "No tools synced yet — use “Sync tools” above to fetch the list.",
+        "defaultHint": "“Default” = read tools on, write/update tools off; delete-class tools can never be enabled.",
+        "destructive": "Destructive",
+        "orphan": "Gone",
+        "orphanTip": "The remote server no longer offers this tool; the setting is kept but the tool is not given to the AI.",
+        "deleteTip": "Delete-class tools cannot be enabled.",
+        "effectiveOn": "Currently callable by the AI",
+        "effectiveOff": "Currently not callable by the AI",
+        "crud": {
+          "read": "Read",
+          "write": "Write",
+          "update": "Update",
+          "delete": "Delete"
+        },
+        "state": {
+          "label": "Call permission",
+          "default": "Default",
+          "on": "On",
+          "off": "Off"
+        }
+      }
+    },
     "systemCapabilities": {
       "title": "System capabilities",
       "desc": "Every capability family the assistant can call in chat. Toggleable ones use a real switch (web access); the rest are env-controlled and read-only here: enabled shows a locked state, and disabled ones are still shown (disabled state).",
@@ -3776,6 +3847,19 @@
             "on": "On"
           },
           "ruleHint": "The grant only admits exec tools; card-free execution still needs a whitelist rule and first-run confirmation."
+        },
+        "connectors": {
+          "title": "External services",
+          "description": "Grant per-service access to connected external services (MCP); fetched content always remains untrusted data.",
+          "tier": {
+            "off": "Off",
+            "read": "Read-only",
+            "write": "Writable"
+          },
+          "disabledHint": "Connector support is off (controlled by MAILAGENT_MCP_CONNECTORS); grants saved here will not take effect yet.",
+          "warn": "Writable grants the \"read + create + update\" ceiling: this agent's background runs may create and modify data in the service (delete is never available).",
+          "empty": "No external service is connected yet. Connect one in Settings → AI first, then grant it to this agent here.",
+          "notConnected": "Not connected"
         },
         "subsetBadge": "SUBSET",
         "subsetHint": "The enabled tools are a subset of the “{tier}” tier. A tier states the upper bound of granted power, not that every tool in it is on. Expand “Advanced” for the exact list."

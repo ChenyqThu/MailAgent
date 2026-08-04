@@ -1857,6 +1857,77 @@
       "calendarChatNote": "此开关只管对外 Skill 接口与能力声明；聊天中的日历工具由「系统能力」区的日历项控制。",
       "notionAgentMasterOff": "主开关 MAILAGENT_NOTION_AGENT_TOOL 已关闭：即使在此启用，聊天中也不会注册 notion_agent 工具。"
     },
+    "anchorNav": {
+      "ariaLabel": "本页区块导航"
+    },
+    "connectors": {
+      "title": "外部连接（MCP）",
+      "desc": "把 Notion、Jira 等外部服务经 MCP 协议接进来。连接后可以逐个工具决定是否允许 AI 调用；删除类工具暂不支持启用。",
+      "loading": "正在加载连接…",
+      "loadError": "连接列表加载失败：{message}",
+      "empty": "暂无可连接的服务。",
+      "status": {
+        "connected": "已连接",
+        "disconnected": "未连接",
+        "authorizing": "授权中",
+        "error": "连接异常"
+      },
+      "connect": "连接",
+      "connectWeb": "远程网页版无法发起连接（授权回调走本机地址），请在桌面 App 内操作。",
+      "awaiting": "等待浏览器授权…",
+      "cancel": "取消等待",
+      "authTimeout": "授权超时：{seconds} 秒内没有等到浏览器回调，请重试。",
+      "authFailed": "授权失败",
+      "connectedToast": "已连接 {name}",
+      "sync": "同步工具",
+      "syncing": "同步中…",
+      "syncDone": "工具清单已同步",
+      "disconnect": "断开",
+      "enabled": "启用此连接",
+      "enabledHelper": "关闭后该服务的全部工具都不再注入 AI；授权凭证与逐工具设置保留。",
+      "preprocess": "允许邮件预处理调用",
+      "preprocessHelper": "允许邮件预处理分类调用（恒只读天花板，写入类工具不会开放给它）。",
+      "scopes": "授权范围",
+      "tokenExpires": "令牌有效期至 {time}",
+      "tokenExpired": "令牌已于 {time} 过期，请重新连接。",
+      "tokenNone": "尚无授权凭证",
+      "tokenUnknown": "令牌有效期未知",
+      "lastSynced": "上次同步工具清单：{time}",
+      "neverSynced": "尚未同步过工具清单",
+      "lastError": "最近一次错误：{message}",
+      "saveFailed": "保存失败",
+      "disconnectDialog": {
+        "title": "断开 {name}？",
+        "desc": "会删除本机保存的授权凭证，该服务的工具立即停止对 AI 可用。工具清单与逐工具权限设置会保留，重新连接后继续生效。",
+        "cancel": "取消",
+        "confirm": "断开连接",
+        "confirming": "断开中…"
+      },
+      "tools": {
+        "loading": "正在加载工具清单…",
+        "loadError": "工具清单加载失败：{message}",
+        "empty": "尚未同步到工具；点上方「同步工具」拉取清单。",
+        "defaultHint": "「默认」= 只读工具开、写入/更新工具关；删除类恒不可启用。",
+        "destructive": "破坏性",
+        "orphan": "已失效",
+        "orphanTip": "远端已不再提供这个工具；配置保留，但不会注入 AI。",
+        "deleteTip": "删除类工具暂不支持启用。",
+        "effectiveOn": "当前：AI 可调用",
+        "effectiveOff": "当前：AI 不可调用",
+        "crud": {
+          "read": "只读",
+          "write": "写入",
+          "update": "更新",
+          "delete": "删除"
+        },
+        "state": {
+          "label": "调用权限",
+          "default": "默认",
+          "on": "开",
+          "off": "关"
+        }
+      }
+    },
     "systemCapabilities": {
       "title": "系统能力",
       "desc": "聊天中助手可调用的全部能力族。能开关的用真开关（联网），其余由环境变量控制、此处只读展示：已启用显示锁定态，未启用也在此显示（禁用态）。",
@@ -3776,6 +3847,19 @@
             "on": "开启"
           },
           "ruleHint": "授权只让执行工具进入运行面；免卡仍需白名单规则与首次运行确认。"
+        },
+        "connectors": {
+          "title": "外部服务",
+          "description": "按服务授权访问已连接的外部服务（MCP）；读取内容始终按不可信数据处理。",
+          "tier": {
+            "off": "关",
+            "read": "只读",
+            "write": "可写"
+          },
+          "disabledHint": "外部服务连接未开启（由环境变量 MAILAGENT_MCP_CONNECTORS 控制），此处授权保存后暂不会生效。",
+          "warn": "可写 = 授予「读 + 新建 + 修改」权限上限：该 Agent 后台运行可在该服务里新建和修改数据（删除永不可用）。",
+          "empty": "尚未连接任何外部服务。先到 设置 → AI 完成连接，再回这里为该 Agent 授权。",
+          "notConnected": "未连接"
         },
         "subsetBadge": "部分",
         "subsetHint": "当前启用的工具是「{tier}」档的一个子集——档位表示权限上限，不代表该档每个工具都开着。展开下方「高级」可看确切清单。"

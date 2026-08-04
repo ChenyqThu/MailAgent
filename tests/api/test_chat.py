@@ -347,6 +347,9 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # stub 无该字段 → False（fail-safe 走 legacy 投影，真实 config 恒有字段）。
         # pydantic 默认值本身由 test_provider_routing.test_flag_default_on_after_cutover pin。
         "providerRegistryEnabled": False,
+        # 08-01 PR4 — MCP 连接区门控（MAILAGENT_MCP_CONNECTORS，pydantic 默认 off 灰度中）；
+        # 同 providerRegistryEnabled 走 getattr 兜底：stub 无该字段 → False。
+        "connectorToolsEnabled": False,
     }
 
 
@@ -369,6 +372,24 @@ def test_chat_config_openness_flags_hot_read(
     assert data["webToolsEnabled"] is True
     # 既有字段回归：exec flag 同一热读通道
     assert data["execPolicyEnabled"] is True
+
+
+def test_chat_config_connector_flag_projection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """08-01 PR4 — connectorToolsEnabled 跟随 **pydantic** mcp_connectors_enabled。
+
+    刻意不走 _hot_bool：/api/connector/* 的 _require_enabled 读的是冻结单例，热读 .env
+    会让 UI 门与端点门劈叉（设置页渲染出连接区、点下去端点 409）。"""
+
+    class _On(_ChatConfigStub):
+        mcp_connectors_enabled = True
+
+    class _Off(_ChatConfigStub):
+        mcp_connectors_enabled = False
+
+    with _config_client(monkeypatch, _On()) as c:
+        assert c.get("/api/chat/config").json()["data"]["connectorToolsEnabled"] is True
+    with _config_client(monkeypatch, _Off()) as c:
+        assert c.get("/api/chat/config").json()["data"]["connectorToolsEnabled"] is False
 
 
 def test_chat_config_skill_catalog_lists_every_builtin(

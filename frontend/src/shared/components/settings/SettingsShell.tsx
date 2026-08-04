@@ -29,6 +29,7 @@ import { SETTINGS_TABS, type SettingsTab } from '@shared/router-instance'
 
 import { RestartBanner } from './RestartBanner'
 import { SettingsRail } from './SettingsRail'
+import { SettingsScrollContext } from './settingsScrollContext'
 import { AccountsTab } from './tabs/AccountsTab'
 import { AiTab } from './tabs/AiTab'
 import { GeneralTab } from './tabs/GeneralTab'
@@ -70,6 +71,9 @@ export function SettingsShell(): React.ReactElement {
   // 这里给 panel 容器做 autoAlpha 0→1 + y:4→0 (DUR.base). reduced-motion 短路.
   const panelScopeRef = React.useRef<HTMLDivElement>(null)
   const reduceMotion = useReducedMotion()
+  // 08-01 PR4 — 内容区 `<section>` 是本页**唯一**滚动容器；AiTab 的右侧锚点导航要拿它
+  // 做 active 追踪的 root，经 context 递下去（Radix TabsContent 挡着，prop 传不下去）。
+  const contentRef = React.useRef<HTMLElement>(null)
   useGSAP(
     () => {
       if (reduceMotion) return
@@ -108,6 +112,7 @@ export function SettingsShell(): React.ReactElement {
           RestartBanner 作 sticky top-0 z-10 直接子, 滚动正文时 banner 保
           冻结. content 容器只负责 max-w + padding, 不创建二级 scroll. */}
       <section
+        ref={contentRef}
         aria-label="settings content"
         className="glass-3 flex-1 min-w-0 min-h-0 overflow-y-auto scrollbar-thin"
       >
@@ -123,38 +128,40 @@ export function SettingsShell(): React.ReactElement {
             </div>
           </div>
         ) : null}
-        <div
-          ref={panelScopeRef}
-          className="mx-auto w-full max-w-full md:max-w-[760px] px-4 sm:px-6 md:px-10 pt-6 md:pt-8 pb-24"
-        >
-          <TabsContent value="general">
-            <GeneralTab />
-          </TabsContent>
-          <TabsContent value="accounts">
-            <AccountsTab />
-          </TabsContent>
-          <TabsContent value="sync">
-            <SyncTab />
-          </TabsContent>
-          <TabsContent value="ai">
-            <AiTab />
-          </TabsContent>
-          <TabsContent value="notifications">
-            <NotificationsTab />
-          </TabsContent>
-          <TabsContent value="integrations">
-            <IntegrationsTab />
-          </TabsContent>
-          <TabsContent value="realtime">
-            <RealtimeStorageTab />
-          </TabsContent>
-          <TabsContent value="remote">
-            <RemoteAccessTab />
-          </TabsContent>
-          <TabsContent value="island">
-            <IslandUpdatesTab />
-          </TabsContent>
-        </div>
+        <SettingsScrollContext.Provider value={contentRef}>
+          <div
+            ref={panelScopeRef}
+            className="mx-auto w-full max-w-full md:max-w-[760px] px-4 sm:px-6 md:px-10 pt-6 md:pt-8 pb-24"
+          >
+            <TabsContent value="general">
+              <GeneralTab />
+            </TabsContent>
+            <TabsContent value="accounts">
+              <AccountsTab />
+            </TabsContent>
+            <TabsContent value="sync">
+              <SyncTab />
+            </TabsContent>
+            <TabsContent value="ai">
+              <AiTab />
+            </TabsContent>
+            <TabsContent value="notifications">
+              <NotificationsTab />
+            </TabsContent>
+            <TabsContent value="integrations">
+              <IntegrationsTab />
+            </TabsContent>
+            <TabsContent value="realtime">
+              <RealtimeStorageTab />
+            </TabsContent>
+            <TabsContent value="remote">
+              <RemoteAccessTab />
+            </TabsContent>
+            <TabsContent value="island">
+              <IslandUpdatesTab />
+            </TabsContent>
+          </div>
+        </SettingsScrollContext.Provider>
       </section>
     </Tabs>
   )

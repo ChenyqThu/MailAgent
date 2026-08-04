@@ -10,6 +10,7 @@ import type {
   AgentRunPendingCount,
   AgentRunToolOptions,
   ChatOpennessFlags,
+  ConnectorSummary,
   ProjectProgressRunItem,
   ReportAgentConfig,
   ReportAgentCreateInput,
@@ -243,7 +244,8 @@ async function fetchOpennessFlags(): Promise<ChatOpennessFlags> {
       sessionToolsEnabled: pick('sessionToolsEnabled'),
       configToolsEnabled: pick('configToolsEnabled'),
       webToolsEnabled: pick('webToolsEnabled'),
-      execToolsEnabled: pick('execPolicyEnabled')
+      execToolsEnabled: pick('execPolicyEnabled'),
+      connectorToolsEnabled: pick('connectorToolsEnabled')
     }
   } catch {
     return {}
@@ -379,6 +381,24 @@ export function useToolOptions(enabled: boolean): {
     staleTime: 60_000
   })
   return { options: q.data ?? EMPTY_TOOL_OPTIONS, isLoading: q.isLoading }
+}
+
+// PR4 T3 — connector 行集合的稳定空单例（镜像 EMPTY_TOOL_OPTIONS 的引用稳定纪律）。
+const EMPTY_CONNECTORS: ConnectorSummary[] = []
+
+/** MCP connector PR4 T3 — 第七「外部服务」能力卡的行数据源（GET /api/connector 全集）。
+ *  enabled=false（抽屉未开）→ 不发请求；失败降级空数组（卡内只剩存量 grant 行 / 空态），
+ *  🔴 但**不触碰 grant state** —— 行不可见时已配授权仍以抽屉 state 为准物化，绝不静默丢。 */
+export function useConnectorOptions(enabled: boolean): ConnectorSummary[] {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: qk.connectors(),
+    queryFn: () => api.connector.list(),
+    enabled,
+    staleTime: 30_000,
+    retry: false
+  })
+  return q.data ?? EMPTY_CONNECTORS
 }
 
 /** 窄屏（< 780px）→ 报告/会话用单栏 + 返回栈（移植自设计稿 useNarrow）。 */

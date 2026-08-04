@@ -60,6 +60,8 @@ const mockDeleteRule = vi.fn()
 const mockListEntrypoints = vi.fn()
 // S6 W3-3 — skill 挂载多选数据源（统一 registry 投影）。
 const mockListSkills = vi.fn()
+// MCP connector PR4 T3 — 第七「外部服务」卡的行数据源（GET /api/connector）。
+const mockConnectorList = vi.fn()
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     report: {
@@ -82,6 +84,9 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       deletePolicyRule: mockDeleteRule,
       listSkillEntrypoints: mockListEntrypoints,
       listSkills: mockListSkills
+    },
+    connector: {
+      list: mockConnectorList
     }
   })
 }))
@@ -153,6 +158,7 @@ beforeEach(() => {
   mockListPolicyRules.mockResolvedValue([])
   mockListEntrypoints.mockResolvedValue([])
   mockListSkills.mockResolvedValue(SKILLS_FIXTURE)
+  mockConnectorList.mockResolvedValue(CONNECTORS_FIXTURE)
   global.fetch = vi.fn().mockResolvedValue({
     ok: true,
     json: async () => ({
@@ -175,12 +181,19 @@ const SKILLS_FIXTURE = [
   { name: 'dms-approval', title: 'DMS', description: '', enabled: true, sourceType: 'skill_pack' }
 ] as unknown as import('@shared/api/types').SkillSummary[]
 
+// MCP connector PR4 T3 — connector.list 夹具（第七「外部服务」卡行集合；抽屉只消费
+// connector_id / display_name / status 三字段）。
+const CONNECTORS_FIXTURE = [
+  { connector_id: 'notion', display_name: 'Notion', status: 'connected' }
+] as unknown as import('@shared/api/types').ConnectorSummary[]
+
 // afterEach 在首个用例前不会跑 —— 模块加载时也要有默认值（否则第一个渲染的 drawer 用例
 // 会因 listPolicyRules 返回 undefined 而 query 报错）。
 mockListRuns.mockResolvedValue([])
 mockListPolicyRules.mockResolvedValue([])
 mockListEntrypoints.mockResolvedValue([])
 mockListSkills.mockResolvedValue(SKILLS_FIXTURE)
+mockConnectorList.mockResolvedValue(CONNECTORS_FIXTURE)
 mockToolOptions.mockResolvedValue({
   tools: [
     { name: 'email_list_filter', class: 'read' },
@@ -520,10 +533,10 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
     expect(patch.tool_policy).toEqual({ v: 1, allowed_tools: ['email_get'] })
   })
 
-  // MCP connector 阶段 1 PR3 —— grant_connectors 还没有抽屉 UI（随 PR4 落）。抽屉保存时
-  // tool_policy 是**整块 PUT** 重建的，所以任何没被本地 state 覆盖的子键都会被静默抹掉。
-  // 这与 gateway 侧 toConfigPatch 刚修的那条 merge-base 漏项是同一个 bug 类，两侧都要钉。
-  test('MCP connector：触碰工具区保存 → 原样带回行里的 grant_connectors（不静默抹掉）', async () => {
+  // MCP connector PR4 T3 —— grant_connectors 进抽屉 state（第七「外部服务」卡）：打开预填、
+  // 保存从 state 物化，PR3 的「照抄服务端行」carry-forward 临时块已删。这组测试钉「state
+  // 往返」语义 —— 尤其 UI 三档折叠掉的存量 'write' 必须无损往返，绝不被无声升成 'update'。
+  test('MCP connector：行里的 grant（含 write）只改别的能力保存 → 逐字节无损往返', async () => {
     mockSetConfig.mockResolvedValue(makeCustomCfg())
     renderUi(
       <CustomAgentDrawer
@@ -543,11 +556,12 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     const tp = mockSetConfig.mock.calls[0][1].tool_policy
+    // 🔴 'write'（UI 显示「可写」档）未触碰 → 原始值原样发出，不折叠成 'update'
     expect(tp.grant_connectors).toEqual({ notion: 'write' })
     expect([...tp.allowed_tools].sort()).toEqual(['email_get', 'email_list_filter'])
   })
 
-  test('MCP connector：行里没有 grant_connectors → 键不物化（PR3 前逐字节相同）', async () => {
+  test('MCP connector：行里没有 grant 且未触碰第七卡 → 键不物化（PR3 前逐字节相同）', async () => {
     mockSetConfig.mockResolvedValue(makeCustomCfg())
     renderUi(
       <CustomAgentDrawer
@@ -561,6 +575,43 @@ describe('CustomAgentDrawer — P2 tool_policy 按需发送（NULL 行不被静�
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     expect('grant_connectors' in mockSetConfig.mock.calls[0][1].tool_policy).toBe(false)
+  })
+
+  test('MCP connector：把仅有的 grant 关掉 → 发显式 {}（whole-map replace 清空）', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          tool_policy: { v: 1, allowed_tools: ['email_get'], grant_connectors: { notion: 'read' } }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    // 第七卡 notion 行（label 来自 connector.list 的 display_name）：只读 → 关
+    fireEvent.click(await screen.findByRole('button', { name: 'Notion: 关' }))
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    const tp = mockSetConfig.mock.calls[0][1].tool_policy
+    expect('grant_connectors' in tp).toBe(true)
+    expect(tp.grant_connectors).toEqual({})
+  })
+
+  test('MCP connector：点「可写」→ canonical 写入 update（天花板档）', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({ tool_policy: { v: 1, allowed_tools: ['email_get'] } })}
+        open
+        onClose={() => {}}
+      />
+    )
+    fireEvent.click(await screen.findByRole('button', { name: 'Notion: 可写' }))
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].tool_policy.grant_connectors).toEqual({
+      notion: 'update'
+    })
   })
 
   test('toolOptions 失败 → 工具区显示无法加载 + 编辑保存 patch 无 tool_policy', async () => {
