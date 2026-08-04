@@ -15,11 +15,16 @@ service（serve-api 由 ``MAILAGENT_REMOTE_ACCESS_ENABLED`` 门控），且它�
         ① pm2 多实例检测   —— 命中 → 不建连 + 落 conflict 状态 + 进告警观测, 5min 后重判
         ② 取凭证           —— 缺失 → 落 error 状态, 1min 后重判（spawn gate 已查过，
                               走到这里说明行被删/损坏）
-        ③ 建连 + 监控      —— 直到连接线程死亡或停机
+        ③ 建连 + 监控      —— 直到连接线程死亡或停机；ready 超时**只等不弃置**
+                              （packaged 冷 import 可达分钟级, 见 _wait_thread_ready）
         ④ 退避 1min 重来
 
-普通断线不走 ④ —— SDK 自带 ``auto_reconnect``；走到 ④ 说明线程 fatal 退出
-（凭证错 / 非自建应用 / lark loop 被别人抢了）。
+普通断线与 ready 超时都不走 ④ —— 前者 SDK 自带 ``auto_reconnect``，后者线程还
+**活着**（2026-08-04 真机事故：弃置的活线程醒来抢下 lark 的全局 loop，之后每条
+新线程都撞 fail-closed 检查，永久踢皮球）。走到 ④ 说明线程 fatal 退出
+（凭证错 / 非自建应用 / lark loop 被别人抢了）。🔴 **单飞行铁律**：任何时刻至多
+一条 ``im-feishu-ws`` 线程存活 —— 旧线程死透之前绝不构造新的 ``FeishuConnection``
+（``_await_prior_thread_exit``）。
 
 ## 3 秒 ACK 的分工
 
@@ -63,6 +68,8 @@ CONFLICT_RECHECK_SEC = 300.0
 CREDENTIAL_RECHECK_SEC = 60.0
 # 连接线程 fatal 退出后的退避（秒）。
 RECONNECT_RETRY_SEC = 60.0
+# 慢启动守望的留痕节拍（秒）——「还在等冷 import / 等旧线程退出」要留痕但不刷屏。
+SLOW_START_LOG_SEC = 30.0
 
 # 连续不可用多久算「该告警了」（秒）。5min：短暂重连（SDK 自愈）不该惊动人。
 UNAVAILABLE_ALERT_SEC = 300.0
@@ -74,12 +81,19 @@ REASON_DISCONNECTED = "disconnected"
 REASON_CONFLICT = "conflict"
 REASON_NO_CREDENTIALS = "no_credentials"
 REASON_FATAL = "fatal"
+REASON_SLOW_START = "slow_start"
+REASON_AWAITING_PRIOR = "awaiting_prior_thread"
 
 _REASON_TEXT = {
     REASON_DISCONNECTED: "长连接断开且未能重连",
     REASON_CONFLICT: "检测到另一个实例（pm2 mail-sync）在跑，本进程有意不建连",
     REASON_NO_CREDENTIALS: "飞书应用凭证缺失或不可解密",
     REASON_FATAL: "长连接线程异常退出",
+    REASON_SLOW_START: "连接线程初始化未完成（大概率是首启冷 import 或磁盘 I/O 繁忙）",
+    REASON_AWAITING_PRIOR: (
+        "上一条连接线程还没退出（大概率仍卡在冷 import），"
+        "为避免抢占 lark 的进程级全局 loop 暂不重建"
+    ),
 }
 
 
@@ -153,6 +167,10 @@ class FeishuImWorker:
 
         self._stopping = False
         self._conn: Optional[FeishuConnection] = None
+        # 🔴 单飞行铁律：stop() 的 join 超时后仍活着的旧连接线程（大概率卡在冷
+        # import）。它死透之前绝不构造新连接 —— lark 的全局 event loop 同进程
+        # 只容一条活线程（2026-08-04 事故的结构性防线）。
+        self._zombie: Optional[FeishuConnection] = None
         self._executor: Optional[DaemonExecutor] = None
         self._unavailable_since: Optional[float] = None
         self._unavailable_reason: str = REASON_DISCONNECTED
@@ -221,6 +239,9 @@ class FeishuImWorker:
 
     # ── ③ 建连 + 监控 ─────────────────────────────────────────────────────
     async def _serve_connection(self, creds: FeishuAppCredentials) -> None:
+        # 🔴 单飞行铁律：上一条 ws 线程死透之前不得构造新连接（2026-08-04 事故）
+        if not await self._await_prior_thread_exit():
+            return
         sender_proxy = _LazySender()
         delivery = FeishuDelivery(sender_proxy)
         # PR-3：executor 关停弃单时尽力告知 owner（消息静默消失是最难排查的形态）。
@@ -256,13 +277,18 @@ class FeishuImWorker:
 
         self.state.set_status(im_state.STATUS_CONNECTING)
         if not await asyncio.to_thread(conn.start):
-            detail = conn.fatal_error or "连接线程未能就绪"
-            self.state.set_status(im_state.STATUS_ERROR)
-            self.state.set_last_error(detail)
-            self._mark_unavailable(REASON_FATAL)
-            await self._alert_tick()
-            self._teardown()
-            return
+            # 🔴 start() 返回 False ≠ 线程已死：真 fatal（线程死亡）走退避重建；
+            # 只是慢（packaged 冷 import 分钟级）则唯一安全的动作是继续等 ——
+            # 弃置活线程会抢 lark 全局 loop 把后续新线程全部钉死（2026-08-04 事故）。
+            if not await self._wait_thread_ready(conn):
+                if not self._stopping:
+                    detail = conn.fatal_error or "连接线程未能就绪即已退出"
+                    self.state.set_status(im_state.STATUS_ERROR)
+                    self.state.set_last_error(detail)
+                    self._mark_unavailable(REASON_FATAL)
+                    await self._alert_tick()
+                self._teardown()
+                return
 
         was_connected = False
         identity_scheduled = False
@@ -302,6 +328,93 @@ class FeishuImWorker:
                 self.state.set_last_error(conn.fatal_error)
                 self._mark_unavailable(REASON_FATAL)
             self._teardown()
+
+    async def _wait_thread_ready(self, conn: FeishuConnection) -> bool:
+        """``conn.start()`` ready 超时后的守望：线程活着且没 fatal ⇒ 继续等。
+
+        🔴 2026-08-04 真机事故：packaged 首启冷 import 2min17s，30s ready 超时被
+        当成失败 → teardown 弃置重建。但弃置线程杀不死（卡在 import，join 必
+        超时），醒来后抢下 lark 的模块级全局 loop —— 之后每一条新线程都撞
+        fail-closed 检查，永久踢皮球。「慢」和「死」是两种病：**只有线程死亡
+        （fatal / 意外退出）才走重建路径**；慢就等 —— 状态保持 connecting，
+        周期性留痕不刷屏。
+
+        返回 True = 已就绪，可进监控循环；False = 线程已死 / fatal / 停机请求。
+        """
+        if conn.fatal_error or not conn.is_alive():
+            return False  # 真 fatal / 意外退出：立即走退避重建（现状行为）
+        if conn.is_ready():
+            return True  # start() 超时与就绪擦肩而过 —— 直接进监控
+        logger.warning(
+            "[im-feishu] 连接线程未在 ready 窗口内就绪 —— 大概率是 packaged 首启"
+            "冷 import（可达分钟级，期间可能与数据库备份抢磁盘 I/O）。"
+            "继续等待，不弃置重建"
+        )
+        self._mark_unavailable(REASON_SLOW_START)
+        started = time.monotonic()
+        last_log = started
+        while not self._stopping:
+            if conn.fatal_error or not conn.is_alive():
+                return False
+            if conn.is_ready():
+                logger.info(
+                    "[im-feishu] 连接线程已就绪"
+                    f"（额外等待 {time.monotonic() - started:.0f}s）"
+                )
+                return True
+            now = time.monotonic()
+            if now - last_log >= SLOW_START_LOG_SEC:
+                last_log = now
+                logger.info(
+                    f"[im-feishu] 仍在等待连接线程初始化（已额外等待 {now - started:.0f}s）…"
+                )
+            await self._alert_tick()
+            await asyncio.sleep(MONITOR_POLL_SEC)
+        return False
+
+    async def _await_prior_thread_exit(self) -> bool:
+        """单飞行铁律：上一条 ws 线程死透之前，绝不构造新的 ``FeishuConnection``。
+
+        ``_teardown`` 里 stop() 的 join 超时会把还活着的旧线程记到 ``self._zombie``
+        （卡在冷 import 的线程杀不死）。lark 的全局 event loop 同进程只容一条活
+        线程 —— 弃置线程醒来抢跑 ``ws.start()`` 会把新线程全部钉死（2026-08-04
+        事故）。这里等它死透（自杀线保证它醒来即退出）再放行重建。
+
+        返回 False = 等待期间收到停机请求（调用方直接返回）。
+        """
+        zombie = self._zombie
+        if zombie is None:
+            return True
+        if not zombie.is_alive():
+            self._zombie = None
+            return True
+        logger.warning(
+            "[im-feishu] 上一条连接线程尚未退出（大概率仍卡在冷 import）——"
+            "等它退出后再重建：lark 全局 loop 同进程只允许一条 ws 线程"
+        )
+        # 🔴 这段等待也是「飞书里指挥不动」的一部分，必须计入同一个失联 episode：
+        # 不 mark 的话，_unavailable_since 若是 None（上一轮以停机/无 fatal 收场后
+        # supervise 重启的形态）就永远起不了表 —— 等多久都不会告警，静默失联。
+        self._mark_unavailable(REASON_AWAITING_PRIOR)
+        started = time.monotonic()
+        last_log = started
+        while not self._stopping:
+            if not zombie.is_alive():
+                self._zombie = None
+                logger.info(
+                    "[im-feishu] 旧连接线程已退出"
+                    f"（等待 {time.monotonic() - started:.0f}s），继续重建"
+                )
+                return True
+            now = time.monotonic()
+            if now - last_log >= SLOW_START_LOG_SEC:
+                last_log = now
+                logger.info(
+                    f"[im-feishu] 仍在等待旧连接线程退出（已等 {now - started:.0f}s）…"
+                )
+            await self._alert_tick()
+            await asyncio.sleep(MONITOR_POLL_SEC)
+        return False
 
     def _make_discard_notifier(self, delivery: FeishuDelivery):
         """executor 关停弃单的尽力告知（PR-3）。
@@ -462,5 +575,10 @@ class FeishuImWorker:
                 conn.stop()
             except Exception as e:  # noqa: BLE001
                 logger.warning(f"[im-feishu] 断开连接时出错: {describe_error(e)}")
+            if conn.is_alive():
+                # 🔴 单飞行铁律：join 超时了、线程还活着（大概率卡在冷 import，
+                # 杀不死）。记下来 —— 它死透之前 _serve_connection 不得构造新连接
+                # （弃置线程醒来会抢 lark 全局 loop，2026-08-04 事故）。
+                self._zombie = conn
         if executor is not None:
             executor.shutdown()

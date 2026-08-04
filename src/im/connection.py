@@ -93,7 +93,15 @@ class FeishuConnection:
 
     # ── 生命周期 ──────────────────────────────────────────────────────────
     def start(self, *, ready_timeout_sec: float = 30.0) -> bool:
-        """起线程并等它把 client 装好。返回是否成功装好（不代表已握手）。"""
+        """起线程并等它把 client 装好。返回是否成功装好（不代表已握手）。
+
+        🔴 **返回 False ≠ 线程已死**（2026-08-04 真机事故）：packaged 首启的 lark
+        冷 import 可达**分钟级**（新进包依赖首次编译 .pyc + 可能与大库备份抢磁盘
+        I/O），ready 窗口内没就绪只说明**慢**。调用方必须用 ``fatal_error`` /
+        ``is_alive()`` 区分死活；活着 ⇒ 只能用 ``is_ready()`` 继续等 —— 弃置一个
+        活线程再新建，弃置线程醒来会抢下 lark 的模块级全局 loop，把之后所有新
+        线程钉死在 fail-closed 检查上。
+        """
         if self._thread is not None:
             raise RuntimeError("FeishuConnection 已经启动过（一个实例只用一次）")
         self._thread = threading.Thread(
@@ -101,10 +109,17 @@ class FeishuConnection:
         )
         self._thread.start()
         self._ready.wait(timeout=ready_timeout_sec)
-        return self._fatal is None and self._ws is not None
+        return self.is_ready()
 
     def is_alive(self) -> bool:
         return self._thread is not None and self._thread.is_alive()
+
+    def is_ready(self) -> bool:
+        """线程是否已把 client 装好（不代表已握手）。
+
+        ``start()`` ready 超时后 worker 用它继续守望（慢启动路径）。
+        """
+        return self._fatal is None and self._ws is not None
 
     def is_connected(self) -> bool:
         """WS 是否在线。SDK 无 public 探针 → 读 ``_conn``（同 C6 spike）。"""
@@ -167,57 +182,31 @@ class FeishuConnection:
     # ── 线程主体 ──────────────────────────────────────────────────────────
     def _run(self) -> None:
         try:
-            # 🔴 顺序不能反：先给本线程一个自己的 loop，再 import lark（见模块 docstring）
-            asyncio.set_event_loop(asyncio.new_event_loop())
+            if self._stopping:
+                logger.info("[im-feishu] 连接线程还没开工停机请求就到了，直接退出")
+                return
+            ws = self._prepare()
+            if ws is None:
+                return  # 停机中止，_prepare 已打日志
 
-            import lark_oapi as lark
-            from lark_oapi.ws import client as lark_ws_client
-
-            loop = lark_ws_client.loop
-            if loop.is_running() or loop.is_closed():
-                raise RuntimeError(
-                    "lark_oapi.ws.client 的全局 event loop 不可用"
-                    f"(running={loop.is_running()} closed={loop.is_closed()}) —— "
-                    "说明 lark 被别的线程先 import 过（很可能是在服务主循环上）。"
-                    "任何 lark import 都必须发生在本连接线程内。"
+            # 🔴 弃置线程自杀线（2026-08-04 真机事故）：等 ready 的那一方可能已经
+            # 放弃本线程（stop() 置位了 _stopping）。此后**绝不能**再碰 lark 的
+            # 模块级全局 loop —— 弃置线程抢跑 ws.start() 会把 loop 永久占死，
+            # 之后每一条新连接线程都撞 fail-closed 检查，永久踢皮球。
+            #
+            # 🔴 顺序不可调换：自杀线必须在**发布 self._ws 之前**。``stop()`` 的优雅
+            # 断开以「``_ws`` 非 None + 线程活着」为判据，把 ``ws._disconnect()``
+            # 调度到**本线程的 loop** 上再 ``fut.result(3s)`` 等它 —— 而那个 loop
+            # 只有 ``ws.start()`` 才会转。先发布再自杀 = 留下「``_ws`` 已公布但 loop
+            # 永不转」的窗口，撞上就是 3 秒同步冻结在 serve 的 event loop 线程上
+            # （``test_connection_stop.py`` 盯的正是这个形态）。发布放在自杀线之后
+            # ⇒ **``_ws`` 非 None ⟹ 本线程必然进 ``ws.start()``**，窗口结构上不存在。
+            if self._stopping:
+                logger.info(
+                    "[im-feishu] 停机请求已到，连接线程不启动 ws（不碰全局 loop）直接退出"
                 )
-            self._loop = loop
-
-            log_level = lark.LogLevel.DEBUG if self._debug else lark.LogLevel.INFO
-            self._api = build_api_client(
-                self._app_id, self._app_secret, debug=self._debug
-            )
-            self._sender = LarkMessageSender(self._api)
-
-            # 长连接下 encrypt_key / verification_token 传空串（C6 实证）
-            builder = lark.EventDispatcherHandler.builder("", "")
-            builder = builder.register_p2_im_message_receive_v1(self._message_handler)
-            if self._card_action_handler is not None:
-                # PR-3：审批卡按钮回调。后台要在**回调订阅** tab 单独配 card.action.trigger
-                builder = builder.register_p2_card_action_trigger(
-                    self._card_action_handler
-                )
-            handler = builder.build()
-
-            ws = lark.ws.Client(
-                self._app_id,
-                self._app_secret,
-                event_handler=handler,
-                log_level=log_level,
-                auto_reconnect=True,
-            )
-            ws.on_reconnecting = lambda: logger.warning(
-                "[im-feishu] 长连接断开，SDK 开始重连…"
-            )
-            ws.on_reconnected = lambda: logger.info("[im-feishu] 长连接**已重连**")
+                return
             self._ws = ws
-
-            # ws.Client 与 Client.builder 都会 setLevel 同一个全局 "Lark" logger，
-            # 这里最后再钉一次，免得构造顺序把 DEBUG 覆盖回 INFO。
-            from lark_oapi.core.log import logger as lark_logger
-
-            lark_logger.setLevel(int(log_level.value))
-
             self._ready.set()
             logger.info("[im-feishu] 正在建立飞书长连接…")
             ws.start()  # 阻塞：内部自带重连；stop() 会让它抛出退出
@@ -236,3 +225,73 @@ class FeishuConnection:
                 )
         finally:
             self._ready.set()  # 失败路径也要放行 start() 的等待
+
+    def _prepare(self) -> Any:
+        """import lark + 装配 ws client。返回装好的 ws；停机请求已到 → ``None``。
+
+        🔴 packaged 首启的 lark 冷 import 可达**分钟级**（2026-08-04 真机实测
+        2min17s：新进包依赖首次编译 .pyc + db_safety 备份大库抢磁盘 I/O）——
+        期间 ``stop()`` 可能早已被调过。各步骤之间尽早响应 ``_stopping``，
+        绝不把一个注定被弃的 client 推进 ``ws.start()``。
+        单独成方法同时是离线测试的打桩 seam（tests/im 不许 import lark）。
+
+        🔴 **不在这里写 ``self._ws``** —— 发布权归 ``_run``，且必须在自杀线**之后**
+        （见那里的注释：``stop()`` 拿 ``_ws`` 当「这条 loop 会转」的判据）。
+        """
+        # 🔴 顺序不能反：先给本线程一个自己的 loop，再 import lark（见模块 docstring）
+        asyncio.set_event_loop(asyncio.new_event_loop())
+
+        import lark_oapi as lark
+        from lark_oapi.ws import client as lark_ws_client
+
+        # fail-closed：防真正的 import 顺序 bug（lark 被别的线程先 import 过）。
+        # 🔴 保留勿删 —— 它也是「弃置活线程 + 新线程」并存时的最后一道闸。
+        loop = lark_ws_client.loop
+        if loop.is_running() or loop.is_closed():
+            raise RuntimeError(
+                "lark_oapi.ws.client 的全局 event loop 不可用"
+                f"(running={loop.is_running()} closed={loop.is_closed()}) —— "
+                "说明 lark 被别的线程先 import 过（很可能是在服务主循环上）。"
+                "任何 lark import 都必须发生在本连接线程内。"
+            )
+        self._loop = loop
+
+        if self._stopping:
+            logger.info("[im-feishu] import 完成时停机请求已到，连接线程直接退出")
+            return None
+
+        log_level = lark.LogLevel.DEBUG if self._debug else lark.LogLevel.INFO
+        self._api = build_api_client(self._app_id, self._app_secret, debug=self._debug)
+        self._sender = LarkMessageSender(self._api)
+
+        # 长连接下 encrypt_key / verification_token 传空串（C6 实证）
+        builder = lark.EventDispatcherHandler.builder("", "")
+        builder = builder.register_p2_im_message_receive_v1(self._message_handler)
+        if self._card_action_handler is not None:
+            # PR-3：审批卡按钮回调。后台要在**回调订阅** tab 单独配 card.action.trigger
+            builder = builder.register_p2_card_action_trigger(self._card_action_handler)
+        handler = builder.build()
+
+        ws = lark.ws.Client(
+            self._app_id,
+            self._app_secret,
+            event_handler=handler,
+            log_level=log_level,
+            auto_reconnect=True,
+        )
+        ws.on_reconnecting = lambda: logger.warning(
+            "[im-feishu] 长连接断开，SDK 开始重连…"
+        )
+        ws.on_reconnected = lambda: logger.info("[im-feishu] 长连接**已重连**")
+
+        # ws.Client 与 Client.builder 都会 setLevel 同一个全局 "Lark" logger，
+        # 这里最后再钉一次，免得构造顺序把 DEBUG 覆盖回 INFO。
+        from lark_oapi.core.log import logger as lark_logger
+
+        lark_logger.setLevel(int(log_level.value))
+
+        if self._stopping:
+            logger.info("[im-feishu] client 构造完成时停机请求已到，连接线程直接退出")
+            return None
+
+        return ws

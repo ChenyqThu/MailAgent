@@ -200,6 +200,179 @@ async def test_no_alerter_is_not_a_crash():
     await w._alert_tick(force=True)  # 不抛
 
 
+# ── ready 超时守望 + 单飞行铁律（2026-08-04 真机事故回归）────────────────────
+#
+# 事故时间线：packaged 冷 import 2min17s → conn.start() 30s ready 超时 → worker
+# teardown 弃置重建 → 弃置线程醒来抢 lark 全局 loop → 后续新线程永久 fail-closed。
+# 修复分界：「慢」（线程活着没 fatal）= 原地守望；「死」（fatal / 意外退出）= 退避重建。
+
+
+class _ScriptedConn:
+    """``FeishuConnection`` 替身：``start()`` 恒 ready 超时返回 False；
+    alive / fatal / ready 由测试拨动（模拟卡在冷 import 的线程各阶段）。"""
+
+    def __init__(self, app_id, app_secret, **_kwargs):
+        self.alive = True
+        self.fatal = None
+        self.ready = False
+        self.stop_calls = 0
+        self.sender = None
+        self.api_client = None
+
+    def start(self, **_k):
+        return False  # ready 窗口超时（线程还卡在冷 import）
+
+    def is_alive(self):
+        return self.alive
+
+    def is_ready(self):
+        return self.ready
+
+    def is_connected(self):
+        return self.ready  # 就绪即视作已握手（简化）
+
+    @property
+    def fatal_error(self):
+        return self.fatal
+
+    def stop(self):
+        self.stop_calls += 1
+
+
+def _patch_slow_start(monkeypatch, conns):
+    monkeypatch.setattr(im_worker, "MONITOR_POLL_SEC", 0.01)
+    monkeypatch.setattr(im_worker, "RECONNECT_RETRY_SEC", 0.01)
+    monkeypatch.setattr(im_worker, "detect_pm2_conflict", lambda **_k: None)
+    monkeypatch.setattr(
+        im_worker,
+        "ensure_credentials",
+        lambda *a, **k: SimpleNamespace(app_id="cli_x", app_secret="s"),
+    )
+    # 连上后 worker 会调它读 bot 身份（HTTP + agent_config 写）—— 测试里必须打桩
+    monkeypatch.setattr(im_worker, "fetch_bot_identity", lambda *_a, **_k: None)
+
+    def _make(app_id, app_secret, **kwargs):
+        conn = _ScriptedConn(app_id, app_secret, **kwargs)
+        conns.append(conn)
+        return conn
+
+    monkeypatch.setattr(im_worker, "FeishuConnection", _make)
+
+
+@pytest.mark.asyncio
+async def test_ready_timeout_waits_instead_of_rebuilding(monkeypatch):
+    """🔴 事故回归：ready 超时 + 线程活着 → 只等，不 teardown 不重建；
+    状态保持 connecting；线程就绪后正常进监控循环（→ connected）。"""
+    conns: list = []
+    _patch_slow_start(monkeypatch, conns)
+    store = FakeStateStore()
+    w = FeishuImWorker(cfg=_cfg(), sync_store=store)
+    task = asyncio.create_task(w.run())
+
+    await asyncio.sleep(0.15)
+    assert len(conns) == 1, "ready 超时期间弃置重建了（正是事故形态）"
+    assert conns[0].stop_calls == 0, "ready 超时被 teardown —— 弃置线程会抢全局 loop"
+    assert store.data[im_state.STATE_CONNECTION_STATUS] == im_state.STATUS_CONNECTING
+    # 🔴 「只等」不等于「静默」：等待期间失联表必须在走，否则真卡死了也永远不告警
+    assert w._unavailable_since is not None, "慢启动期间没起失联表 —— 卡死了也不会告警"
+    assert w._unavailable_reason == im_worker.REASON_SLOW_START  # 告警措辞如实
+
+    conns[0].ready = True  # 「冷 import」结束，线程就绪
+    await asyncio.sleep(0.1)
+    assert store.data[im_state.STATE_CONNECTION_STATUS] == im_state.STATUS_CONNECTED
+    assert w._unavailable_since is None, "连上了还挂着失联表 —— 会误告警"
+
+    w.stop()
+    await asyncio.wait_for(task, timeout=2)
+    assert len(conns) == 1  # 全程只构造过一条连接
+
+
+@pytest.mark.asyncio
+async def test_thread_death_during_wait_rebuilds_after_backoff(monkeypatch):
+    """真 fatal（线程死亡）→ 落 error + 退避后重建（现状行为不回退）。"""
+    conns: list = []
+    _patch_slow_start(monkeypatch, conns)
+    store = FakeStateStore()
+    w = FeishuImWorker(cfg=_cfg(), sync_store=store)
+    task = asyncio.create_task(w.run())
+
+    await asyncio.sleep(0.1)
+    assert len(conns) == 1
+    conns[0].fatal = "name=RuntimeError message=boom"
+    conns[0].alive = False  # 线程死透
+    await asyncio.sleep(0.2)
+    assert len(conns) >= 2, "线程死亡后没有走退避重建"
+    assert conns[0].stop_calls >= 1
+    assert store.data[im_state.STATE_LAST_ERROR]  # error 如实落盘
+    assert store.data[im_state.STATE_CONNECTION_STATUS] == im_state.STATUS_CONNECTING
+
+    w.stop()
+    await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_live_thread_after_stop_blocks_rebuild_until_death(monkeypatch):
+    """🔴 单飞行铁律：stop() 后线程未死（join 超时形态）→ 死透之前绝不构造
+    第二条连接；死透后恢复重建。"""
+    conns: list = []
+    _patch_slow_start(monkeypatch, conns)
+    store = FakeStateStore()
+    w = FeishuImWorker(cfg=_cfg(), sync_store=store)
+    task = asyncio.create_task(w.run())
+
+    await asyncio.sleep(0.1)
+    assert len(conns) == 1
+    # fatal 置位但线程还活着 = stop() 的 join 超时、杀不死的形态
+    conns[0].fatal = "name=RuntimeError message=boom"
+    await asyncio.sleep(0.25)
+    assert conns[0].stop_calls >= 1  # teardown 试过停它
+    assert len(conns) == 1, "旧线程还活着就构造了新连接 —— 同进程只允许一条 ws 线程"
+
+    conns[0].alive = False  # 旧线程终于死透（自杀线保证它醒来即退出）
+    await asyncio.sleep(0.15)
+    assert len(conns) == 2, "旧线程死透后应恢复重建"
+
+    w.stop()
+    await asyncio.wait_for(task, timeout=2)
+
+
+@pytest.mark.asyncio
+async def test_single_flight_gate_survives_worker_restart(monkeypatch):
+    """🔴 铁律必须**跨 supervise 重启**成立：``run()`` 重跑不会把 zombie 忘掉。
+
+    真实形态 = 停机（或 worker 崩溃）时线程还卡在冷 import，join 超时留下弃置线程；
+    ``supervise`` 拿**同一个 worker 实例**重跑 ``run()``（``coro_factory`` 就是
+    ``worker.run``）。忘掉 zombie = 新线程与弃置线程并存 = 事故重演。
+    """
+    conns: list = []
+    _patch_slow_start(monkeypatch, conns)
+    store = FakeStateStore()
+    w = FeishuImWorker(cfg=_cfg(), sync_store=store)
+    task = asyncio.create_task(w.run())
+
+    await asyncio.sleep(0.1)
+    assert len(conns) == 1
+    w.stop()  # 停机：_ScriptedConn 恒 alive → 正是 join 超时杀不死的形态
+    await asyncio.wait_for(task, timeout=2)
+    assert w._zombie is conns[0], "join 超时的活线程没记成 zombie"
+
+    # 「上一轮以停机收场、失联表已清零」的重启形态 —— 等待期必须自己起表
+    w._unavailable_since = None
+    task2 = asyncio.create_task(w.run())
+    await asyncio.sleep(0.15)
+    assert len(conns) == 1, "旧线程还活着就重建了 —— 铁律没跨重启成立"
+    assert w._unavailable_since is not None, "等旧线程期间没起失联表 —— 等多久都不告警"
+    assert w._unavailable_reason == im_worker.REASON_AWAITING_PRIOR
+
+    conns[0].alive = False
+    await asyncio.sleep(0.15)
+    assert len(conns) == 2, "旧线程死透后应恢复重建"
+    assert w._zombie is None
+
+    w.stop()
+    await asyncio.wait_for(task2, timeout=2)
+
+
 # ── 杂项 ────────────────────────────────────────────────────────────────────
 
 
