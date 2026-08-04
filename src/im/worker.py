@@ -31,12 +31,14 @@ lark handler（``ImEventRouter.on_message``）跑在 SDK 的 WS 线程上，只�
 from __future__ import annotations
 
 import asyncio
+import threading
 import time
 from typing import Any, Dict, Optional, Tuple
 
 from loguru import logger
 
 from src.im import state as im_state
+from src.im.bridge import ImAgentBridge
 from src.im.connection import FeishuConnection
 from src.im.credentials import (
     FeishuAppCredentials,
@@ -46,7 +48,7 @@ from src.im.credentials import (
 from src.im.delivery import FeishuDelivery
 from src.im.executor import DaemonExecutor
 from src.im.handler import ImEventRouter
-from src.im.lark_api import fetch_bot_identity
+from src.im.lark_api import fetch_bot_identity, wrap_card_action_handler
 from src.im.logfmt import describe_error
 from src.im.preflight import detect_pm2_conflict
 from src.im.state import ImFeishuState
@@ -102,6 +104,14 @@ class _LazySender:
             logger.error("[im-feishu] 投递失败：连接尚未就绪（sender 还没装好）")
             return None
         return sender.create_message(receive_id, msg_type, content)
+
+    def patch_message(self, message_id: str, content: Dict[str, Any]) -> bool:
+        """PR-3：审批卡终态更新的晚绑定代理（``bridge.CardSender`` 的另一半）。"""
+        sender = getattr(self._conn, "sender", None) if self._conn else None
+        if sender is None:
+            logger.error("[im-feishu] 卡片更新失败：连接尚未就绪（sender 还没装好）")
+            return False
+        return bool(sender.patch_message(message_id, content))
 
 
 def feishu_im_ready(cfg: Any, *, store: Any = None) -> Tuple[bool, str]:
@@ -211,17 +221,33 @@ class FeishuImWorker:
 
     # ── ③ 建连 + 监控 ─────────────────────────────────────────────────────
     async def _serve_connection(self, creds: FeishuAppCredentials) -> None:
-        executor = DaemonExecutor().start()
         sender_proxy = _LazySender()
         delivery = FeishuDelivery(sender_proxy)
+        # PR-3：executor 关停弃单时尽力告知 owner（消息静默消失是最难排查的形态）。
+        executor = DaemonExecutor(
+            on_discard=self._make_discard_notifier(delivery)
+        ).start()
+        # PR-3：agent 桥 —— handle_owner_message 接 gateway im-chat，
+        # on_card_action 接审批卡按钮回调（经 wrap_card_action_handler 包 lark 壳）。
+        bridge = ImAgentBridge(
+            state=self.state,
+            delivery=delivery,
+            card_sender=sender_proxy,
+            submit=executor.submit,
+        )
         router = ImEventRouter(
-            state=self.state, delivery=delivery, submit=executor.submit
+            state=self.state,
+            delivery=delivery,
+            submit=executor.submit,
+            owner_handler=bridge.handle_owner_message,
         )
         conn = FeishuConnection(
             creds.app_id,
             creds.app_secret,
             message_handler=router.on_message,
-            # card_action_handler 留给 PR-3（审批卡按钮回调）
+            # 🔴 真机提醒：飞书后台「事件订阅」与「回调订阅」是两个并列 tab，
+            # card.action.trigger 要在**回调订阅** tab 单独选长连接并添加。
+            card_action_handler=wrap_card_action_handler(bridge.on_card_action),
             debug=self._debug,
         )
         sender_proxy.bind(conn)
@@ -276,6 +302,34 @@ class FeishuImWorker:
                 self.state.set_last_error(conn.fatal_error)
                 self._mark_unavailable(REASON_FATAL)
             self._teardown()
+
+    def _make_discard_notifier(self, delivery: FeishuDelivery):
+        """executor 关停弃单的尽力告知（PR-3）。
+
+        回调可能在 event loop 线程上被触发（teardown 路径）——sqlite 读 + 网络发
+        都不许在那儿做，甩给一次性 daemon 线程；连接可能正在死，失败只记日志。
+        """
+
+        def _notify(count: int) -> None:
+            def _run() -> None:
+                try:
+                    open_id = self.state.get_bound_open_id()
+                    if open_id:
+                        delivery.send_text(
+                            open_id,
+                            f"连接刚重启，有 {count} 条消息没来得及处理 —— 请重发一遍。",
+                        )
+                except Exception as e:  # noqa: BLE001 — 告知是尽力而为
+                    logger.debug(f"[im-feishu] 弃单告知失败: {describe_error(e)}")
+
+            try:
+                threading.Thread(
+                    target=_run, daemon=True, name="im-feishu-discard-notify"
+                ).start()
+            except Exception as e:  # noqa: BLE001
+                logger.debug(f"[im-feishu] 弃单告知线程启动失败: {describe_error(e)}")
+
+        return _notify
 
     def _record_identity(self, conn: FeishuConnection, app_id: str) -> None:
         """首次连上后读 bot 身份 → 落 sync_state + 凭证行的明文 metadata。

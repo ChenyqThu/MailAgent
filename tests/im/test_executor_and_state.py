@@ -69,6 +69,40 @@ class TestDaemonExecutor:
         with pytest.raises(ValueError):
             DaemonExecutor(workers=0)
 
+    def test_shutdown_discards_pending_tasks_and_notifies(self):
+        """PR-3：关停弃单不许静默 —— on_discard 拿到被丢弃任务数（尽力告知用）。"""
+        discarded: list = []
+        block = threading.Event()
+        ex = DaemonExecutor(
+            workers=1, queue_size=8, on_discard=discarded.append
+        ).start()
+        ex.submit(block.wait)  # 占住唯一 worker
+        time.sleep(0.05)
+        ex.submit(lambda: None)
+        ex.submit(lambda: None)
+        ex.shutdown()
+        block.set()
+        assert discarded == [2]
+
+    def test_shutdown_with_empty_queue_does_not_notify(self):
+        discarded: list = []
+        ex = DaemonExecutor(workers=1, on_discard=discarded.append).start()
+        ex.shutdown()
+        assert discarded == []
+
+    def test_on_discard_exception_is_swallowed(self):
+        block = threading.Event()
+
+        def boom(_n):
+            raise RuntimeError("notify failed")
+
+        ex = DaemonExecutor(workers=1, queue_size=8, on_discard=boom).start()
+        ex.submit(block.wait)
+        time.sleep(0.05)
+        ex.submit(lambda: None)
+        ex.shutdown()  # 不抛
+        block.set()
+
 
 class TestState:
     def test_mark_connected_clears_last_error(self):
@@ -116,3 +150,44 @@ class TestState:
         snap = ImFeishuState(store).snapshot()
         assert "123456" not in str(snap)
         assert snap["bound_open_id"] == "ou_owner"
+
+
+class TestActiveSessionMapping:
+    """PR-3：飞书私聊 ↔ CHAT_DB session 映射（sync_state KV，跨重启存活）。"""
+
+    def test_roundtrip_per_chat(self):
+        state = ImFeishuState(FakeStateStore())
+        assert state.get_active_session("oc_1") is None
+        state.set_active_session("oc_1", 77)
+        state.set_active_session("oc_2", 88)
+        assert state.get_active_session("oc_1") == 77
+        assert state.get_active_session("oc_2") == 88
+        state.clear_active_session("oc_1")
+        assert state.get_active_session("oc_1") is None
+        assert state.get_active_session("oc_2") == 88
+
+    def test_survives_restart_via_store(self):
+        store = FakeStateStore()
+        ImFeishuState(store).set_active_session("oc_1", 42)
+        # 新进程 = 新门面同一 store
+        assert ImFeishuState(store).get_active_session("oc_1") == 42
+
+    def test_garbage_values_read_as_none(self):
+        store = FakeStateStore(
+            {
+                "im.feishu.active_session.oc_bad": "not-a-number",
+                "im.feishu.active_session.oc_zero": "0",
+                "im.feishu.active_session.oc_neg": "-3",
+            }
+        )
+        state = ImFeishuState(store)
+        assert state.get_active_session("oc_bad") is None
+        assert state.get_active_session("oc_zero") is None
+        assert state.get_active_session("oc_neg") is None
+
+    def test_empty_chat_id_uses_default_bucket(self):
+        from src.im.state import active_session_key
+
+        assert active_session_key("") == "im.feishu.active_session._default"
+        assert active_session_key("  ") == "im.feishu.active_session._default"
+        assert active_session_key("oc_1") == "im.feishu.active_session.oc_1"

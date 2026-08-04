@@ -38,7 +38,14 @@ class DaemonExecutor:
         workers: int = DEFAULT_WORKERS,
         queue_size: int = DEFAULT_QUEUE_SIZE,
         name: str = "im-feishu-work",
+        on_discard: Optional[Callable[[int], None]] = None,
     ) -> None:
+        """
+        Args:
+            on_discard: PR-3 —— ``shutdown()`` 时队列里还压着 N 个没跑的任务时回调一次
+                （参数 = 被丢弃的任务数）。echo 时代弃单无所谓；接上 agent run 后弃单
+                = owner 发的消息**静默消失**，至少要尽力告知一声。回调自身异常被吞。
+        """
         if workers <= 0:
             raise ValueError("DaemonExecutor workers must be positive")
         self._queue: "queue.Queue[Any]" = queue.Queue(maxsize=queue_size)
@@ -48,6 +55,7 @@ class DaemonExecutor:
         ]
         self._started = False
         self._closed = False
+        self._on_discard = on_discard
 
     def start(self) -> "DaemonExecutor":
         if not self._started:
@@ -72,10 +80,33 @@ class DaemonExecutor:
             return False
 
     def shutdown(self) -> None:
-        """通知 worker 退出。**不 join** —— 线程是 daemon，停机不等它们。"""
+        """通知 worker 退出。**不 join** —— 线程是 daemon，停机不等它们。
+
+        PR-3：先把队列里**还没被领走**的任务清点出来（它们永远不会执行了 ——
+        对应「owner 发的消息不会有任何回复」），ERROR 明说 + 触发 ``on_discard``
+        尽力告知；已在 worker 手里跑着的任务不受影响（daemon 线程自生自灭）。
+        """
         if self._closed:
             return
         self._closed = True
+        discarded = 0
+        while True:
+            try:
+                item = self._queue.get_nowait()
+            except queue.Empty:
+                break
+            if item is not _SHUTDOWN:
+                discarded += 1
+        if discarded:
+            logger.error(
+                f"[im-feishu] 🔴 执行池关闭时丢弃了 {discarded} 个未处理任务 —— "
+                "这些消息不会得到回复（连接重启路径）"
+            )
+            if self._on_discard is not None:
+                try:
+                    self._on_discard(discarded)
+                except Exception as e:  # noqa: BLE001 — 告知是尽力而为
+                    logger.warning(f"[im-feishu] on_discard 回调异常: {describe_error(e)}")
         for _ in self._threads:
             try:
                 self._queue.put_nowait(_SHUTDOWN)
@@ -96,6 +127,9 @@ class DaemonExecutor:
             if item is _SHUTDOWN:
                 return
             if self._closed:
+                # 关停竞态：shutdown 清点时这个任务恰好被本线程领走 —— 同样是弃单，
+                # 至少在日志里明说（不静默消失）。
+                logger.error("[im-feishu] 执行池已关闭，丢弃一个刚领到的任务（不会有回复）")
                 return
             fn, args = item
             try:

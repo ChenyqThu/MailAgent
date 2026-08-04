@@ -5,6 +5,7 @@ from __future__ import annotations
 from src.im.delivery import FeishuDelivery
 from src.im.handler import (
     BIND_OK_REPLY,
+    BUSY_REPLY,
     ECHO_PREFIX,
     INTERNAL_ERROR_REPLY,
     ImEventRouter,
@@ -180,3 +181,29 @@ class TestOwnerSeam:
         router, _ = _router(store, sender, owner_handler=boom)
         router.on_message(FakeMessageEvent(open_id="ou_owner", text="hi"))
         assert sender.sent_texts == [INTERNAL_ERROR_REPLY]
+
+
+class TestSubmitFull:
+    def test_queue_full_gets_honest_busy_reply(self):
+        """PR-3：submit 返回 False（队满弃单）→ 尽力告知，不静默消失。"""
+        import time as _t
+
+        store, sender = FakeStateStore({STATE_BOUND_OPEN_ID: "ou_owner"}), FakeSender()
+        state = ImFeishuState(store)
+        delivery = FeishuDelivery(sender, sleep=lambda _s: None)
+        router = ImEventRouter(
+            state=state, delivery=delivery, submit=lambda *_a: False
+        )
+        router.on_message(FakeMessageEvent(open_id="ou_owner", text="hi"))
+        # 告知走一次性 daemon 线程（handler 线程不做网络 IO）——轮询等它落地
+        deadline = _t.monotonic() + 2.0
+        while _t.monotonic() < deadline and not sender.calls:
+            _t.sleep(0.02)
+        assert sender.sent_texts == [BUSY_REPLY]
+
+    def test_none_return_is_treated_as_accepted(self):
+        """旧 submit 替身返回 None（不知道）→ 不触发 busy 告知（只认 **is False**）。"""
+        store, sender = FakeStateStore({STATE_BOUND_OPEN_ID: "ou_owner"}), FakeSender()
+        router, _ = _router(store, sender)  # InlineSubmit 返回 None 且立即执行
+        router.on_message(FakeMessageEvent(open_id="ou_owner", text="你好"))
+        assert sender.sent_texts == [ECHO_PREFIX + "你好"]  # 无 BUSY_REPLY 混入

@@ -67,9 +67,12 @@ class FeishuConnection:
         """
         Args:
             message_handler: ``im.message.receive_v1`` 处理器（3 秒内必须返回）。
-            card_action_handler: ``card.action.trigger`` 处理器 —— 🔴 **PR-3 的接缝**，
-                本 PR 恒 None（不注册）。注意飞书后台里「事件订阅」与「回调订阅」是两个
-                并列 tab、各配各的（C6 两次卡壳的同一根因），PR-3 接上代码时别忘了后台。
+            card_action_handler: ``card.action.trigger`` 处理器（审批卡按钮回调）。
+                PR-3 起生产路径由 ``worker._serve_connection`` 传
+                ``wrap_card_action_handler(bridge.on_card_action)``；None = 不注册
+                （离线测试 / PR-2 形态）。🔴 飞书后台里「事件订阅」与「回调订阅」是两个
+                并列 tab、各配各的（C6 两次卡壳的同一根因）—— 代码接上了后台漏配，
+                点按钮会直接提示「该应用尚未配置卡片回调」，请求根本不到本地。
             debug: 打开 SDK DEBUG —— ⚠️ 会把**每一帧原始 payload（含消息正文全文）**
                 写进日志，只用于诊断。
         """

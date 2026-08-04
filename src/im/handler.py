@@ -10,11 +10,13 @@
 🔴 **绝不在 handler 里读写 sqlite / 发网络请求** —— 绑定查询、拒收回复、echo 投递
 全在 executor 线程里做。
 
-## 给 PR-3 的接缝
+## PR-3 接缝（已接线）
 
-``handle_owner_message(text, ctx) -> None`` 是**唯一**的替换点：PR-3 把它换成
-「起 gateway ``im_chat`` run → drain → 主动投递回复 / 弹审批卡」。签名与 ``ctx``
-的字段在本 PR 就定死，PR-3 不该再动路由、去重、绑定、拒收这些东西。
+``handle_owner_message(text, ctx) -> None`` 是**唯一**的替换点。PR-3 起，生产路径由
+``src/im/worker.py::_serve_connection`` 注入 ``ImAgentBridge.handle_owner_message``
+（``src/im/bridge.py``：起 gateway ``im_chat`` run → drain → 主动投递回复 / 弹审批卡）；
+本模块的 echo 实现只作**默认参数**留给离线测试与「桥没接上」的兜底。路由、去重、
+绑定、拒收仍归本模块，桥不碰。
 """
 
 from __future__ import annotations
@@ -49,6 +51,9 @@ STRANGER_REPLY = "这个机器人已绑定其他使用者，不接受你的指�
 BIND_OK_REPLY = "✅ 绑定成功，之后可以直接和我说话了。"
 UNSUPPORTED_REPLY = "目前只支持文字消息（语音 / 图片 / 文件暂不支持）。"
 INTERNAL_ERROR_REPLY = "处理你的消息时出错了。请到 MailAgent 日志里看 `[im-feishu]` 开头的记录。"
+# PR-3：执行队列满 → 这条消息不会被处理。echo 时代丢了无所谓；接上 agent run 后
+# 静默丢弃 = owner 以为 AI 在想，实际什么都不会发生 —— 必须如实告知。
+BUSY_REPLY = "系统正忙，这条消息没有被处理 —— 请稍后重发一遍。"
 
 # PR-2 的占位实现前缀 —— 明说 AI 还没接上，免得 dogfood 时误判成「模型答非所问」。
 ECHO_PREFIX = "[echo] IM 的 AI 桥接随 PR-3 上线，先把你说的原样回给你：\n"
@@ -143,7 +148,13 @@ class ImEventRouter:
                 f"open_id={parsed['open_id']} type={parsed['message_type']} "
                 f"text={clip(parsed['text'])!r}"
             )
-            self._submit(self._dispatch, parsed, t0)
+            accepted = self._submit(self._dispatch, parsed, t0)
+            # PR-3：队满弃单必须告知（只判 **is False** —— 测试替身 / 旧 submit 返回
+            # None 时视为「不知道，按成功算」，与 PR-2 行为一致）。回复走一次性 daemon
+            # 线程：handler 线程 3 秒预算内不做网络 IO（本模块红字纪律），而 executor
+            # 队列此刻恰恰是满的 —— 只能自己起线程，best-effort。
+            if accepted is False:
+                self._notify_busy(parsed["open_id"])
         except Exception as e:  # noqa: BLE001 — handler 抛异常 = 飞书判失败并重推
             logger.error(f"[im-feishu] on_message 处理异常（已兜住，不外抛）: {describe_error(e)}")
         finally:
@@ -208,6 +219,21 @@ class ImEventRouter:
             return
         logger.warning(f"[im-feishu] 拒收：尚未绑定 owner（来自 open_id={open_id}）")
         self._delivery.send_text(open_id, UNBOUND_REPLY)
+
+    def _notify_busy(self, open_id: str) -> None:
+        """队满弃单的尽力告知（PR-3）。一次性 daemon 线程 —— 不占 executor（它满了），
+        不在 handler 线程做网络 IO（3 秒预算）。失败只记日志。"""
+        import threading
+
+        def _run() -> None:
+            self._try_reply(open_id, BUSY_REPLY)
+
+        try:
+            threading.Thread(
+                target=_run, daemon=True, name="im-feishu-busy-reply"
+            ).start()
+        except Exception as e:  # noqa: BLE001 — 告知是尽力而为
+            logger.error(f"[im-feishu] 队满告知线程启动失败: {describe_error(e)}")
 
     def _try_reply(self, open_id: str, text: str) -> None:
         try:

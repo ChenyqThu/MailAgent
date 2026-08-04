@@ -225,3 +225,67 @@ def test_stop_is_idempotent():
     w = FeishuImWorker(cfg=_cfg(), sync_store=FakeStateStore())
     w.stop()
     w.stop()  # 不抛
+
+
+class TestLazySenderPatch:
+    def test_unbound_patch_fails_loudly(self):
+        assert _LazySender().patch_message("om_x", {"schema": "2.0"}) is False
+
+    def test_patch_proxies_to_connection_sender(self):
+        patched = []
+
+        class _S:
+            def patch_message(self, message_id, content):
+                patched.append((message_id, content))
+                return True
+
+        proxy = _LazySender()
+        proxy.bind(SimpleNamespace(sender=_S()))
+        assert proxy.patch_message("om_1", {"schema": "2.0"}) is True
+        assert patched == [("om_1", {"schema": "2.0"})]
+
+
+@pytest.mark.asyncio
+async def test_serve_connection_wires_bridge_and_card_handler(monkeypatch):
+    """PR-3 接线闸：_serve_connection 必须把 bridge 的 owner_handler 与
+    card_action_handler（非 None）接进连接 —— 漏接 = 审批按钮点了没人理。"""
+    captured = {}
+
+    class _FakeConn:
+        def __init__(self, app_id, app_secret, **kwargs):
+            captured.update(kwargs)
+            self.fatal_error = None
+            self.sender = None
+            self.api_client = None
+
+        def start(self, **_k):
+            return True
+
+        def is_alive(self):
+            return False  # 立刻退出监控循环
+
+        def is_connected(self):
+            return False
+
+        def stop(self):
+            pass
+
+    monkeypatch.setattr(im_worker, "FeishuConnection", _FakeConn)
+    monkeypatch.setattr(im_worker, "detect_pm2_conflict", lambda **_k: None)
+    monkeypatch.setattr(
+        im_worker,
+        "ensure_credentials",
+        lambda *a, **k: SimpleNamespace(app_id="cli_x", app_secret="s"),
+    )
+    monkeypatch.setattr(im_worker, "RECONNECT_RETRY_SEC", 0.01)
+    monkeypatch.setattr(im_worker, "MONITOR_POLL_SEC", 0.01)
+
+    w = FeishuImWorker(cfg=_cfg(), sync_store=FakeStateStore())
+    task = asyncio.create_task(w.run())
+    await asyncio.sleep(0.1)
+    w.stop()
+    await asyncio.wait_for(task, timeout=2)
+
+    assert callable(captured.get("message_handler"))
+    # 🔴 卡片回调必须接上（wrap_card_action_handler 包过的 callable）
+    assert callable(captured.get("card_action_handler"))

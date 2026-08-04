@@ -72,6 +72,40 @@ class LarkMessageSender:
             return None
         return getattr(resp.data, "message_id", None)
 
+    def patch_message(self, message_id: str, content: Dict[str, Any]) -> bool:
+        """``PATCH /open-apis/im/v1/messages/{message_id}``（更新审批卡）。**契约：绝不抛**。
+
+        与 ``src/notify/feishu.py`` 回写 open_message_id 用的是同一个 API；卡片必须带
+        ``config.update_multi: true`` 才能被 PATCH 对所有接收者生效（C6 spike 实证）。
+        ⚠️ 卡片回调 token 有效期 30 分钟 —— 但我们走的是 tenant_access_token 的
+        message PATCH，不受该 token 限制（同 C6 spike 路径）。
+        """
+        from lark_oapi.api.im.v1 import PatchMessageRequest, PatchMessageRequestBody
+
+        req = (
+            PatchMessageRequest.builder()
+            .message_id(message_id)
+            .request_body(
+                PatchMessageRequestBody.builder()
+                .content(json.dumps(content, ensure_ascii=False))
+                .build()
+            )
+            .build()
+        )
+        try:
+            resp = self._api.im.v1.message.patch(req)
+        except Exception as e:  # noqa: BLE001 — 同 create_message：错误对象只摘要
+            logger.error(
+                f"[im-feishu] PATCH 更新卡片异常 message_id={message_id}: {describe_error(e)}"
+            )
+            return False
+        if not resp.success():
+            logger.error(
+                f"[im-feishu] PATCH 更新卡片失败 message_id={message_id}: {describe_resp(resp)}"
+            )
+            return False
+        return True
+
 
 def fetch_bot_identity(api_client: Any) -> Optional[Dict[str, Any]]:
     """``GET /open-apis/bot/v3/info`` —— 拿本连接背后 bot 的 ``app_name`` / ``open_id``。
@@ -151,3 +185,63 @@ def parse_text_message(event_data: Any) -> Optional[Dict[str, Any]]:
     except Exception as e:  # noqa: BLE001
         logger.error(f"[im-feishu] 解析消息事件失败: {describe_error(e)} raw={clip(str(event_data))!r}")
         return None
+
+
+def parse_card_action(event_data: Any) -> Optional[Dict[str, Any]]:
+    """从 ``card.action.trigger`` 事件（``P2CardActionTrigger``）里抽字段（PR-3）。
+
+    与 ``parse_text_message`` 同纪律：全程 ``getattr`` 防御、不 import lark、抽不出
+    结构 → None。字段路径以 C6 spike 实收事件为准（``event.action.value`` /
+    ``event.operator.open_id`` / ``event.context.open_message_id``）。
+
+    返回 ``{event_id, value(dict), operator_open_id, open_message_id}``。
+    """
+    try:
+        header = getattr(event_data, "header", None)
+        event = getattr(event_data, "event", None)
+        action = getattr(event, "action", None)
+        context = getattr(event, "context", None)
+        operator = getattr(event, "operator", None)
+
+        value = getattr(action, "value", None)
+        if not isinstance(value, dict):
+            value = {}
+
+        return {
+            "event_id": getattr(header, "event_id", None) or "",
+            "value": value,
+            "operator_open_id": getattr(operator, "open_id", None) or "",
+            "open_message_id": getattr(context, "open_message_id", None) or "",
+        }
+    except Exception as e:  # noqa: BLE001
+        logger.error(
+            f"[im-feishu] 解析卡片回调失败: {describe_error(e)} raw={clip(str(event_data))!r}"
+        )
+        return None
+
+
+def wrap_card_action_handler(fn: Any) -> Any:
+    """把「返回 toast dict」的纯 Python 处理器包成 lark 期望的 handler（PR-3）。
+
+    ``fn(data) -> dict``（形如 ``{"toast": {"type": "info", "content": "…"}}``，
+    **绝不抛** —— 桥接侧 ``ImAgentBridge.on_card_action`` 的契约）→ 包装成返回
+    ``P2CardActionTriggerResponse`` 的 handler。lark import 在**返回的闭包里**
+    （只会在连接线程上被调 —— 那里 lark 已按 connection.py 纪律 import 过），
+    所以本函数可以在任何线程安全调用、测试可以直接测 ``fn`` 本体不碰 lark。
+    """
+
+    def _handler(data: Any) -> Any:
+        payload = None
+        try:
+            payload = fn(data)
+        except Exception as e:  # noqa: BLE001 — handler 抛异常 = 飞书判失败并重推
+            logger.error(f"[im-feishu] 卡片回调处理器异常（已兜住）: {describe_error(e)}")
+        if not isinstance(payload, dict):
+            payload = {"toast": {"type": "info", "content": "已收到"}}
+        from lark_oapi.event.callback.model.p2_card_action_trigger import (
+            P2CardActionTriggerResponse,
+        )
+
+        return P2CardActionTriggerResponse(payload)
+
+    return _handler

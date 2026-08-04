@@ -333,6 +333,20 @@ class ChatDb:
             (session_id,),
         )
 
+    def get_latest_assistant_message(self, session_id: int) -> Optional[Dict[str, Any]]:
+        """某 session 最新一条 assistant 消息 or None（**只读**，graceful 同 _read_one）。
+
+        飞书 IM 桥（``src/im/bridge.py``，08-01 阶段 2 PR-3）在审批 decide 终态后
+        取「本回合的完整最终回复」用 —— ``/decide`` 响应里的 ``summary`` 是 gateway
+        180 字符截断的一行摘要，完整文本只在这儿。调用侧自带 created_at 时间闸 +
+        有界重试，本函数不做等待。
+        """
+        return self._read_one(
+            "SELECT * FROM ai_chat_messages WHERE session_id = ? AND role = 'assistant' "
+            "ORDER BY created_at DESC, id DESC LIMIT 1",
+            (session_id,),
+        )
+
     # ── session search（S1 R1，只 SELECT — 0 CREATE TABLE 不变式）───────────
 
     def search_sessions(

@@ -37,6 +37,15 @@ STATE_CONFLICT_REASON = "im.feishu.conflict_reason"
 STATE_LAST_ERROR = "im.feishu.last_error"
 STATE_PAIR_CODE = "im.feishu.pair_code"
 STATE_PAIR_CODE_EXPIRES_AT = "im.feishu.pair_code_expires_at"
+# PR-3：每个飞书私聊（chat_id）的「当前活跃 chat session id」（CHAT_DB 的
+# ai_chat_sessions.id）。动态键 = 前缀 + chat_id（经 ``active_session_key``），
+# 跨重启存活 → 多轮对话连续；``/new`` 清掉它 = 下一条消息开新会话。
+STATE_ACTIVE_SESSION_PREFIX = "im.feishu.active_session."
+
+
+def active_session_key(chat_id: str) -> str:
+    """``chat_id`` → sync_state 键。空 chat_id（解析兜底）归并到 ``_default``。"""
+    return STATE_ACTIVE_SESSION_PREFIX + ((chat_id or "").strip() or "_default")
 
 # ── connection_status 值域 ────────────────────────────────────────────────────
 STATUS_DISABLED = "disabled"          # flag off / 凭证缺失 —— worker 根本没起
@@ -129,6 +138,24 @@ class ImFeishuState:
     def set_bot_identity(self, *, app_name: str, open_id: str) -> None:
         self.set(STATE_BOT_APP_NAME, app_name or "")
         self.set(STATE_BOT_OPEN_ID, open_id or "")
+
+    # ── 会话映射（PR-3：飞书私聊 ↔ CHAT_DB session）───────────────────────
+    def get_active_session(self, chat_id: str) -> Optional[int]:
+        """当前活跃 session id；无 / 非法 / 非正数 → None（= 下一轮让 gateway 建新会话）。"""
+        raw = (self.get(active_session_key(chat_id)) or "").strip()
+        if not raw:
+            return None
+        try:
+            n = int(raw)
+        except (TypeError, ValueError):
+            return None
+        return n if n > 0 else None
+
+    def set_active_session(self, chat_id: str, session_id: int) -> None:
+        self.set(active_session_key(chat_id), str(int(session_id)))
+
+    def clear_active_session(self, chat_id: str) -> None:
+        self.set(active_session_key(chat_id), "")
 
     # ── owner 绑定 ────────────────────────────────────────────────────────
     def get_bound_open_id(self) -> str:
