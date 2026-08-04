@@ -103,6 +103,13 @@ export interface BuildGatewayToolsOpts {
    *  never auto-approved; returned content is WEB_CONTENT-fenced). Off (default) → not added →
    *  ToolSet byte-identical to the v1.2.0 set. */
   webToolsEnabled?: boolean
+  /** Stage 2 PR-1 (grill Q19=A) — the im_chat web venue switch (MAILAGENT_IM_WEB_ENABLED, default
+   *  off; 🔴 NOT a grant — it is a per-venue owner switch, deliberately outside AgentModeGrants).
+   *  Consulted ONLY by the im_chat branch of the matrix: false → web tools are stripped from an
+   *  im run's ToolSet (and their runtime modeDenied hard-rejects); true → they register in im_chat
+   *  and stay 恒 HITL (mayAutoApprove is manual-only). Every other mode ignores it entirely, so a
+   *  non-im assembly is byte-identical whatever this carries. */
+  imWebEnabled?: boolean
   /** S2 W1 (MAILAGENT_OPENNESS_EXEC_TOOLS) — when true AND approvalGuard is supplied, the three exec
    *  tools are added: run_command / file_read / file_write (all edit-tier writes — local execution
    *  always asks unless a structured PolicyRule whitelist matches; never auto-approved). They are
@@ -300,7 +307,9 @@ export function buildGatewayTools(
         // S6 W3 (ADR-004 rev3.1 D2) — headless agent run only: the factory wires the grant-tier
         // 免卡 paths (gated origin-whitelist evaluate / open+search grant verdict) + the runtime
         // modeDenied grants. Manual runs never carry a context → undefined → byte-identical.
-        agentRunContext: opts.agentRunContext
+        agentRunContext: opts.agentRunContext,
+        // Stage 2 PR-1 — the im web venue switch (Q19=A); only the im_chat matrix branch reads it.
+        imWebEnabled: opts.imWebEnabled
       })
     )
   }
@@ -427,6 +436,12 @@ export function buildGatewayTools(
   // current production run) is an identity pass-through → byte-identical; non-manual modes drop
   // every capability_change/exec/outbound tool so the model structurally cannot see them — except
   // exec under an explicit per-agent grant (ADR-004 D2; the same grants object the exec tools'
-  // runtime modeDenied consumed above, from the one agentRunContext).
-  return applyContextModePolicy(withDynamic, contextMode, opts.agentRunContext?.modeGrants)
+  // runtime modeDenied consumed above, from the one agentRunContext), and web in im_chat under the
+  // stage-2 PR-1 venue switch (the same imWebEnabled the web tools' runtime modeDenied consumed).
+  return applyContextModePolicy(
+    withDynamic,
+    contextMode,
+    opts.agentRunContext?.modeGrants,
+    opts.imWebEnabled === true ? { imWebEnabled: true } : undefined
+  )
 }

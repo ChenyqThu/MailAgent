@@ -148,10 +148,11 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       outbound: false,
       connector_write: false
     },
-    // 0b (grill Q10=A) — im_chat: reads free, domain writes registered (恒 HITL via
-    // mayAutoApprove), everything else hard-denied (web waits for the stage-2 opt-in switch;
-    // exec/capability_change/outbound 直接不给 — and grants never lift them, see the 3-axis
-    // describe below).
+    // 0b (grill Q10=A) → stage 2 PR-1 (08-04 拍板) — im_chat: reads free, domain writes
+    // registered (恒 HITL via mayAutoApprove), connector_write registered (「全开放」— writes
+    // stay 恒 HITL for the same reason), web false WITHOUT the venue switch (Q19=A default off —
+    // the venue axis is pinned in its own describe below), exec/capability_change/outbound
+    // hard-denied — and grants never lift anything, see the 3-axis describe below.
     im_chat: {
       read: true,
       artifact: true,
@@ -160,7 +161,7 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       exec: false,
       web: false,
       outbound: false,
-      connector_write: false
+      connector_write: true
     }
   }
 
@@ -262,7 +263,10 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
             : cls === 'read' || cls === 'artifact' || cls === 'domain_write'
               ? true
               : mode === 'im_chat'
-                ? false // 0b (Q10=A) — im_chat hard floor: grants never consulted either
+                ? // stage 2 PR-1 (08-04 拍板) — connector 全开放 in im_chat; every OTHER class
+                  // keeps the hard floor and grants are STILL never consulted (web is the venue
+                  // switch, pinned in its own describe — not part of the grants axis).
+                  cls === 'connector_write'
                 : cls === 'exec'
                   ? execGranted
                   : cls === 'web'
@@ -385,6 +389,76 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
     expect(granted.skill_install).toBeUndefined()
     expect(granted.email_prepare_send).toBeUndefined()
     expect(build({ exec: true, web: 'open' } as AgentModeGrants).email_prepare_send).toBeUndefined()
+  })
+})
+
+// Stage 2 PR-1 (grill Q19=A) — the im web VENUE switch (MAILAGENT_IM_WEB_ENABLED): a per-venue
+// owner switch, 🔴 deliberately NOT a grant (the grants axis above never lifts web in im_chat).
+describe('im_chat web venue switch (Q19=A — an independent switch, never a grant)', () => {
+  test('the venue switch lifts ONLY web × im_chat — full 4×8 sweep against the no-venue base', () => {
+    for (const mode of AGENT_CONTEXT_MODES) {
+      for (const cls of GATEWAY_TOOL_CLASS_VALUES) {
+        const base = isToolClassAllowedInMode(cls, mode)
+        const withVenue = isToolClassAllowedInMode(cls, mode, undefined, { imWebEnabled: true })
+        const expected = mode === 'im_chat' && cls === 'web' ? true : base
+        expect(withVenue, `${cls} × ${mode} × venue(imWebEnabled:true)`).toBe(expected)
+      }
+    }
+  })
+
+  test('fail-closed: only the exact literal true opens the im web row', () => {
+    for (const v of [undefined, null, false, 'true', 'yes', 1, {}]) {
+      expect(
+        isToolClassAllowedInMode('web', 'im_chat', undefined, {
+          imWebEnabled: v as unknown as boolean
+        }),
+        JSON.stringify(v)
+      ).toBe(false)
+    }
+    expect(isToolClassAllowedInMode('web', 'im_chat')).toBe(false)
+  })
+
+  test('applyContextModePolicy: an im run keeps web tools ONLY under the venue switch; the hard floor stays', () => {
+    const tools = buildAllTools('manual_chat')
+    const off = applyContextModePolicy(tools, 'im_chat')
+    for (const name of CLASSES_OF('web')) {
+      expect(off[name], `${name} must be stripped with the switch off`).toBeUndefined()
+    }
+    const on = applyContextModePolicy(tools, 'im_chat', undefined, { imWebEnabled: true })
+    for (const name of CLASSES_OF('web')) {
+      expect(on[name], `${name} must survive im_chat under the switch`).toBeDefined()
+    }
+    for (const name of [
+      ...CLASSES_OF('exec'),
+      ...CLASSES_OF('capability_change'),
+      ...CLASSES_OF('outbound')
+    ]) {
+      expect(on[name], `${name} must stay stripped despite the switch`).toBeUndefined()
+    }
+  })
+
+  test('buildGatewayTools × imWebEnabled: web registers in im_chat only — never a headless lift', () => {
+    const build = (mode: AgentContextMode, imWebEnabled: boolean) =>
+      buildGatewayTools({
+        domain: mockDomain(() => okEnvelope([])),
+        writeToolsEnabled: true,
+        approvalGuard: new ApprovalGuard(),
+        webToolsEnabled: true,
+        contextMode: mode,
+        imWebEnabled
+      })
+    expect(build('im_chat', false).web_fetch).toBeUndefined()
+    const imOn = build('im_chat', true)
+    expect(imOn.web_fetch).toBeDefined()
+    expect(imOn.web_search).toBeDefined()
+    // NOT a grant: the switch never lifts web (or anything else) in a headless mode.
+    for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
+      const headless = build(mode, true)
+      expect(headless.web_fetch, `web_fetch must stay stripped in ${mode}`).toBeUndefined()
+      expect(headless.web_search, `web_search must stay stripped in ${mode}`).toBeUndefined()
+    }
+    // manual is an identity pass-through either way.
+    expect(build('manual_chat', false).web_fetch).toBeDefined()
   })
 })
 

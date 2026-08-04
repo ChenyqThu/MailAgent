@@ -54,6 +54,7 @@ export { closeChatDb, getChatDb, resolveChatDbPath } from './chat_db/connection'
 
 export {
   createAgentSession,
+  createImSession,
   createNewSession,
   deleteSession,
   getFirstUserText,

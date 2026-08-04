@@ -100,11 +100,21 @@ async function handleEchoStream(req: IncomingMessage, res: ServerResponse): Prom
  * `useChatRuntime` runtime consumes it natively. abortSignal cancels the upstream LLM call when the
  * client disconnects. On finish (non-aborted) makePersistOnFinish hands the turn to cfg.persistTurn
  * for the ai_chat.db dual-write. No key → 503 E_NO_LLM_KEY; empty messages → 400 E_INVALID_ARG.
+ *
+ * Stage 2 PR-1 — `entry` is the TRUSTED per-entrypoint shape: /api/ai/chat uses the default
+ * (manual_chat, no session creation — byte-identical); /api/ai/im-chat (handleImChat) passes
+ * { trustedMode: 'im_chat', createSession: cfg.createImSession }. The mode is NEVER read from the
+ * body (S2 W0 discipline); the only structural additions for im are (a) first-turn session
+ * pre-creation and (b) the x-mailagent-session-id response header.
  */
 async function handleChat(
   req: IncomingMessage,
   res: ServerResponse,
-  cfg: AiGatewayConfig
+  cfg: AiGatewayConfig,
+  entry: {
+    trustedMode: 'manual_chat' | 'im_chat'
+    createSession?: () => number | null
+  } = { trustedMode: 'manual_chat' }
 ): Promise<void> {
   const controller = new AbortController()
   // B1 (harness-chat lane A, MAILAGENT_CHAT_DETACHED_RUNS) — detach-tolerant runs: with the flag on
@@ -143,6 +153,22 @@ async function handleChat(
     })
     return
   }
+  // Stage 2 PR-1 — first turn of an IM conversation (no sessionId in the body): pre-create the
+  // origin='im' session BEFORE the concurrency pre-check / prepare so the whole pipeline (409
+  // fence, eager persist, persistTurn, broadcast) sees the real session id. A create failure
+  // degrades to an unsaved run (mirrors createAgentSession's degradation — the reply still
+  // streams, only history + the session header are lost). /api/ai/chat never wires createSession.
+  if (
+    entry.createSession &&
+    !(typeof body.sessionId === 'number' && Number.isInteger(body.sessionId))
+  ) {
+    try {
+      const created = entry.createSession()
+      if (created != null) body.sessionId = created
+    } catch (err) {
+      console.error('[ai-gateway] createImSession failed (run continues unsaved)', err)
+    }
+  }
   if (!detached) {
     // abort: client disconnect (or the renderer AbortController) cancels the upstream call — the
     // legacy close→abort drain behaviour (flag off governs ONLY this drain shape; the registry
@@ -166,10 +192,11 @@ async function handleChat(
     return
   }
 
-  // S2 W0 (ADR-001 D1) — /api/ai/chat is an owner-driven surface (local renderer direct on
-  // loopback, or remote web through serve-api's owner-authenticated proxy): assert 'manual_chat'
-  // here, in trusted code. The body is never consulted for the mode.
-  const prepared = await prepareChatRun(body, cfg, controller.signal, 'manual_chat')
+  // S2 W0 (ADR-001 D1) — both entrypoints are owner-driven surfaces (local renderer / serve-api
+  // owner-authenticated proxy, or the PR-3 IM bridge on loopback): the mode is asserted by each
+  // entrypoint in trusted code (`entry.trustedMode` — /api/ai/chat pins 'manual_chat',
+  // /api/ai/im-chat pins 'im_chat'). The body is never consulted for the mode.
+  const prepared = await prepareChatRun(body, cfg, controller.signal, entry.trustedMode)
   if (!prepared.ok) {
     writeJson(res, prepared.status, prepared.body)
     return
@@ -280,12 +307,23 @@ async function handleChat(
   // codex r2 [C] — the response advertises the run's lease id so the renderer transport can record
   // its OWN runs (own-run attribution for the settle door). Exposed for CORS readers (the local
   // renderer origin + dev server are cross-origin to the loopback gateway).
-  const runIdHeaders: Record<string, string> = runToken
-    ? {
-        'x-mailagent-run-id': runToken.runId,
-        'access-control-expose-headers': 'x-mailagent-run-id'
-      }
-    : {}
+  // Stage 2 PR-1 — an im run ALSO advertises the session id (same header mechanism): the first
+  // turn's pre-created origin='im' session must reach the IM bridge (PR-3) so later turns carry
+  // sessionId and the conversation stays one thread. Manual runs never add it → the header set
+  // stays byte-identical to the pre-PR-1 shape.
+  const exposeHeaders: string[] = []
+  const runIdHeaders: Record<string, string> = {}
+  if (runToken) {
+    runIdHeaders['x-mailagent-run-id'] = runToken.runId
+    exposeHeaders.push('x-mailagent-run-id')
+  }
+  if (entry.trustedMode === 'im_chat' && run.sessionId != null) {
+    runIdHeaders['x-mailagent-session-id'] = String(run.sessionId)
+    exposeHeaders.push('x-mailagent-session-id')
+  }
+  if (exposeHeaders.length > 0) {
+    runIdHeaders['access-control-expose-headers'] = exposeHeaders.join(', ')
+  }
 
   if (!detached) {
     // codex r2 [A] — off-branch slot lifecycle: attached mode couples the run to the response
@@ -397,6 +435,32 @@ async function handleChat(
       /* already destroyed */
     }
   }
+}
+
+/**
+ * `POST /api/ai/im-chat` — stage 2 PR-1 (task 08-01 messenger, MAILAGENT_IM_FEISHU): the owner-
+ * via-IM chat surface (the PR-3 飞书 bridge is its only production caller, on loopback like every
+ * other gateway client). The ONE semantic difference from /api/ai/chat is the trusted context
+ * mode: 'im_chat' is asserted HERE, in trusted code (S2 W0 — never from the body), which drives
+ * the whole tool-face: reads/domain writes/connectors register (writes 恒 HITL — mayAutoApprove
+ * is manual-only), web only under MAILAGENT_IM_WEB_ENABLED, exec/capability_change/outbound are
+ * structurally absent. Everything else reuses handleChat's structure verbatim: 413 cap, detached
+ * drain, per-session 409 (E_RUN_ACTIVE), chat:turn-persisted broadcast, approval stash. Body shape
+ * = /api/ai/chat ({messages[], model?, sessionId?, system?, thinking?, contextSnapshot?});
+ * sessionId absent/null = first turn → cfg.createImSession pre-creates the origin='im' session
+ * and the response carries it back in the `x-mailagent-session-id` header (the same header
+ * mechanism /api/ai/chat uses for x-mailagent-run-id). Registered ONLY when cfg.imFeishuEnabled —
+ * flag off → 404, gateway byte-identical.
+ */
+async function handleImChat(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  return handleChat(req, res, cfg, {
+    trustedMode: 'im_chat',
+    createSession: cfg.createImSession
+  })
 }
 
 /**
@@ -1105,6 +1169,14 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
 
     if (method === 'POST' && path === '/api/ai/chat') {
       void handleChat(req, res, cfg)
+      return
+    }
+
+    // Stage 2 PR-1 — the im_chat entrypoint. Registered ONLY when MAILAGENT_IM_FEISHU is on
+    // (cfg.imFeishuEnabled); flag-off the path falls through to 404 and the gateway stays
+    // byte-identical (mirrors the AG-UI mirror's flag-gated registration).
+    if (cfg.imFeishuEnabled === true && method === 'POST' && path === '/api/ai/im-chat') {
+      void handleImChat(req, res, cfg)
       return
     }
 

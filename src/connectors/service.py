@@ -61,7 +61,7 @@ CONNECTOR_REAUTH_MESSAGE = (
 )
 
 #: caller.context_mode 的合法值域（镜像 TS ``AGENT_CONTEXT_MODES``：manual + 两个 headless
-#: + 阶段 0b 预置的 im_chat）。Python ``policy.CONTEXT_MODES`` 只有前三个（policy_rules 的
+#: + im_chat）。Python ``policy.CONTEXT_MODES`` 只有前三个（policy_rules 的
 #: 轴），故这里独立成表 —— 本闸判的是「谁在调」，不是「哪条白名单规则命中」。
 CALLER_CONTEXT_MODES: tuple[str, ...] = (
     "manual_chat",
@@ -69,6 +69,13 @@ CALLER_CONTEXT_MODES: tuple[str, ...] = (
     "cron_headless",
     "im_chat",
 )
+
+#: owner 在环、不加服务端天花板的模式（阶段 2 PR-1，08-04 拍板「connector 对 im_chat 全开放」）：
+#: manual_chat（桌面/远程 web chat）+ im_chat（飞书 IM——owner 本人隔着 IM 说话）。两者的审批链
+#: 都在 gateway 侧（读免批、写弹卡；im 的写卡经 PR-3 飞书按钮投递），服务端不再叠加天花板。
+#: 🔴 与 HEADLESS_CONTEXT_MODES 互斥且两者并起来 == CALLER_CONTEXT_MODES（parity 闸锁着）——
+#: 将来第五种 mode 落进哪一侧是一次独立决策，谁都不许"继承"。
+OWNER_PRESENT_CONTEXT_MODES: tuple[str, ...] = ("manual_chat", "im_chat")
 
 #: 需要 per-connector grant 才能调的模式（headless run：无人在环，靠 owner 预先配的天花板）。
 HEADLESS_CONTEXT_MODES: tuple[str, ...] = ("untrusted_trigger", "cron_headless")
@@ -137,13 +144,17 @@ def resolve_caller_ceiling(
     """``caller`` 信封 → 该 connector 的 crud 天花板（``None`` = 不加天花板闸）。
 
     - ``caller`` 缺席 → ``None``：PR2 行为逐字节保留（owner 直调 / 尚未升级的 gateway）。
-    - ``context_mode='manual_chat'`` → ``None``：owner 本人在环，审批链在 gateway 侧
-      （grill Q5=A：读免批、写弹卡），服务端不再叠加天花板。
-    - 非 headless 白名单的 mode（当前只有 ``im_chat``，阶段 0b 预置的第四场地）→ **恒拒**；
-      镜像 TS ``isToolClassAllowedInMode`` 对 im_chat 的硬地板 —— grants 根本不查。
+    - ``context_mode`` ∈ ``OWNER_PRESENT_CONTEXT_MODES``（``manual_chat`` / ``im_chat``）→
+      ``None``：owner 本人在环，审批链在 gateway 侧（grill Q5=A：读免批、写弹卡；im_chat 自
+      阶段 2 PR-1 起与 manual 同档 —— 08-04 拍板「全开放」，写类的恒 HITL 由 gateway 的
+      mayAutoApprove manual-only 保证，卡经 PR-3 飞书按钮投递），服务端不再叠加天花板。
     - headless（``untrusted_trigger`` / ``cron_headless``）→ 按 ``agent_id`` 读该 agent 的
       ``grant_connectors``；无 agent_id / 无行 / 该 connector 不在 grants 里 → **拒**
       （grant 外根本不该注册，走到这里说明第一道漏了或被绕过）。
+    - 两张白名单之外的已知 mode（当前值域下不存在，belt-only）以及**将来任何新增的 mode**：
+      默认不放行。🔴 写成显式白名单而非「排除 owner-present 后就当 headless」—— 后者会让某天
+      跟着 TS ``AGENT_CONTEXT_MODES`` 新增的第五种 mode 悄悄落进 headless 分支（拿到 grant
+      语义），而新场地该不该有 connector 是一次独立决策，不是继承来的。
     - 形状不对 / 未知 context_mode → 400（调用方 bug 早暴露，不静默降级成「无约束」——
       镜像 ``routers/web.py`` 对非法 context_mode 的处置）。
     """
@@ -160,18 +171,17 @@ def resolve_caller_ceiling(
             f"caller.context_mode must be one of {list(CALLER_CONTEXT_MODES)}",
             http_status=400,
         )
-    if mode == "manual_chat":
+    if mode in OWNER_PRESENT_CONTEXT_MODES:
         return None
     if mode not in HEADLESS_CONTEXT_MODES:
-        # im_chat（阶段 0b 预置的第四场地）以及**将来任何新增的 mode**：默认不放行。
-        # 🔴 写成显式白名单而非「排除 manual/im 后就当 headless」—— 后者会让某天跟着 TS
-        # ``AGENT_CONTEXT_MODES`` 新增的第五种 mode 悄悄落进 headless 分支（拿到 grant 语义），
-        # 而新场地该不该有 connector 是一次独立决策，不是继承来的。
+        # 当前值域下不可达（四个 mode 已被上面两张白名单划尽），保留作将来第五种 mode 的
+        # fail-closed 兜底 —— 新场地必须被显式划进 owner-present 或 headless 之一才放行。
         raise ConnectorInvokeDenied(
             "E_CONNECTOR_GRANT_DENIED",
-            f"connector tools are not available in {mode} (only manual_chat and the headless "
-            f"agent modes {list(HEADLESS_CONTEXT_MODES)} may call them; a new venue's opt-in "
-            "is a separate switch, never a grant)",
+            f"connector tools are not available in {mode} (only the owner-present modes "
+            f"{list(OWNER_PRESENT_CONTEXT_MODES)} and the headless agent modes "
+            f"{list(HEADLESS_CONTEXT_MODES)} may call them; a new venue's opt-in is a "
+            "separate decision, never inherited)",
         )
     agent_id = caller.get("agent_id")
     if not agent_id or not isinstance(agent_id, str):

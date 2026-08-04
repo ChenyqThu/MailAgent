@@ -133,7 +133,14 @@ import { resolveDataRoot } from '../db'
 // v21 (custom-agent epic W3, task 07-28) — ai_chat_sessions.pinned_at + starred: pinned_at is the
 // nullable Unix-ms ordering key for the dedicated pinned group; starred is an independent icon state.
 // Both mutations leave updated_at untouched so organizing history never fakes conversation recency.
-const CHAT_DB_VERSION = 21
+// v22 (stage 2 PR-1, task 08-01 messenger) — origin value-domain registration, NO schema change:
+// ai_chat_sessions.origin (v19, free-text no CHECK) gains the third value 'im' (飞书 IM
+// conversations, written by createImSession; value domain now 'agent' | 'im' | NULL=interactive).
+// A no-op ladder step — no ALTER — bumped so the ladder documents when 'im' rows may start
+// appearing. The default history filter (COALESCE(origin,'interactive') <> 'agent') deliberately
+// admits them (Q18=A — IM sessions are desktop-visible). ai_chat.db has its own version ladder;
+// this bump does NOT touch backend_lifecycle.EXPECTED_DB_VERSION. 🔴 bump 同步刷 src/chat/db.py 头注释。
+const CHAT_DB_VERSION = 22
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1058,6 +1065,24 @@ function migrate(db: Database.Database): void {
       }
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '21')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v21 → v22 — stage 2 PR-1 (task 08-01 messenger): NO-OP value-domain registration. The origin
+  // column (v19, free text without a CHECK) gains the third value 'im' (飞书 IM conversations,
+  // createImSession; domain now 'agent' | 'im' | NULL=interactive) — no ALTER is needed, the bump
+  // only records in the ladder when 'im' rows may start appearing. Same idempotent transaction
+  // discipline as every step (v21 样板) so a crash mid-step never leaves a torn version.
+  if (current < 22) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '22')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

@@ -66,6 +66,11 @@ export function createWebTools(
      *  its presence (with a non-empty agentId) UNDER a headless mode turns on the grant-tier免卡
      *  paths below; manual runs never carry one → byte-identical (mirrors write.ts D1). */
     agentRunContext?: AgentRunContext
+    /** Stage 2 PR-1 (grill Q19=A) — the im_chat web venue switch (MAILAGENT_IM_WEB_ENABLED, NOT a
+     *  grant). Threaded into auditedWriteTool so the runtime modeDenied matches the registration
+     *  filter for an im run; every other mode ignores it (behavior-inert). im runs stay 恒 HITL —
+     *  no policyEvaluate is wired for im (the headlessAgent branches below never match im_chat). */
+    imWebEnabled?: boolean
   } = {}
 ): Record<string, Tool> {
   // S6 W3 (ADR-004 rev3.1 §4) — headless-ONLY免卡 wiring, decided here in the factory (write.ts
@@ -118,7 +123,10 @@ export function createWebTools(
         contextMode: opts.contextMode,
         // Runtime modeDenied double-insurance consumes the SAME grants object registration used
         // (mirrors exec.ts) — absent on every manual caller, byte-identical.
-        modeGrants: opts.agentRunContext?.modeGrants
+        modeGrants: opts.agentRunContext?.modeGrants,
+        // Stage 2 PR-1 — the im web venue switch reaches the runtime modeDenied too (same
+        // predicate + same inputs as the registration filter; only im_chat consults it).
+        imWebEnabled: opts.imWebEnabled
       },
       collector,
       guard

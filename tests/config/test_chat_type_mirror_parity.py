@@ -36,6 +36,9 @@ from . import _parsers as p
 
 CHAT_MODEL_TS = p.REPO_ROOT / "frontend" / "src" / "shared" / "chat_model.ts"
 CHAT_TYPES_TS = p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / "chat.ts"
+# 来源筛选词表的 Python 侧两处手抄（远程 web 走的就是它们，见 origin filter 用例的红字）。
+CHAT_ROUTER_PY = p.REPO_ROOT / "src" / "api" / "routers" / "chat.py"
+CHAT_DB_PY = p.REPO_ROOT / "src" / "chat" / "db.py"
 
 # 两份镜像里同名同义的行类型 → 该类型的字段数下限（canary，防解析器失效后平凡绿）。
 MIRRORED_ROW_TYPES = {
@@ -223,11 +226,48 @@ def _parse_string_union(name: str, path) -> Set[str]:
     return set(values)
 
 
+def _parse_quoted_group(path, pattern: str, what: str) -> Set[str]:
+    """按 ``pattern`` 抓一组带引号的字面量 → 值集合。
+
+    🔴 抽取失败必须红：匹配不到、或匹配到但抓不出任何字面量，一律 assert 失败而非返回空集
+    （空集会让下面的相等断言变成「两边都空 → 平凡通过」，正是 CLAUDE.md 记的闸失效形态）。
+    """
+    text = path.read_text(encoding="utf-8")
+    m = re.search(pattern, text)
+    assert m is not None, f"{what} 抽取失败（正则没命中，{path.name} 改了形状？）—— 解析器需更新"
+    values = set(re.findall(r"""['"]([a-z_]+)['"]""", m.group(1)))
+    assert values, f"{what} 抽到了但一个字面量都没解析出来: {m.group(1)!r}"
+    return values
+
+
 def test_chat_session_origin_filter_mirror_parity():
-    """会话来源筛选跨 DB/API 边界手抄时，三值集合必须保持一致。"""
+    """会话来源筛选跨 DB/API 边界手抄时，值集合必须保持一致。
+
+    🔴 **四处**手抄，不是两处（08-01 阶段 2 PR-1 复核补齐后两处）：TS 的两份联合类型
+    ``ChatSessionOriginFilter`` 之外，Python 侧还有 serve-api 查询参数的 ``Literal[...]``
+    与 ``ChatDb.list_all_sessions`` 的校验元组。**同一个筛选值在 Electron 与远程 web 走的是
+    两条完全不同的实现**（前者 TS ``listAllSessions`` 的 originClause，后者 HTTP →
+    Python），所以只锁 TS↔TS 会让「在 TS 里合法、到 Python 就 422 / 或在 TS 里静默落进
+    interactive 子句」这种**类型检查全绿的运行时错**溜过去 —— 阶段 2 PR-1 一度给联合类型加
+    了个没有任何实现的 ``'im'``，正是这个形状。
+
+    ⚠️ 与 ``origin`` **列**的值域（自由文本 ``'agent' | 'im' | NULL``，CHAT_DB v22 登记
+    ``'im'``）是两回事：'im' 行有意走默认 interactive 子句（Q18=A 桌面可见），**不需要**
+    也没有对应的筛选值。将来真要做「只看飞书会话」必须四处一起加。
+    """
     expected = {"interactive", "agent", "all"}
     model = _parse_string_union("ChatSessionOriginFilter", CHAT_MODEL_TS)
     api = _parse_string_union("ChatSessionOriginFilter", CHAT_TYPES_TS)
     assert model == expected, f"chat_model.ts 的来源筛选契约漂移: {sorted(model)}"
     assert api == expected, f"api/types/chat.ts 的来源筛选契约漂移: {sorted(api)}"
     assert model == api
+
+    # Python 侧两处（抽取失败必须红 —— 抽不到就是解析器坏了，不能平凡通过）
+    api_literal = _parse_quoted_group(
+        CHAT_ROUTER_PY, r'origin:\s*Literal\[([^\]]+)\]', "chat.py 的 origin Literal"
+    )
+    db_tuple = _parse_quoted_group(
+        CHAT_DB_PY, r'origin\s+not\s+in\s+\(([^)]+)\)', "chat/db.py 的 origin 校验元组"
+    )
+    assert api_literal == expected, f"src/api/routers/chat.py 的 origin Literal 漂移: {sorted(api_literal)}"
+    assert db_tuple == expected, f"src/chat/db.py 的 origin 校验元组漂移: {sorted(db_tuple)}"

@@ -357,6 +357,22 @@ export interface AiGatewayConfig {
    *  create failed (the run then streams but persists nothing — degraded, not fatal). Injected ONLY
    *  when MAILAGENT_CUSTOM_AGENTS_ENABLED is on; omitted (default) → POST /api/ai/agent-run 404s. */
   createAgentSession?: (input: { agentId: string; jobId: number; title: string }) => number | null
+  // ── Stage 2 PR-1 (task 08-01 messenger, MAILAGENT_IM_FEISHU) — im_chat entrypoint ──────────────
+  /** MAILAGENT_IM_FEISHU (default OFF — 灰度: ship off → dogfood → cutover 另拍). When true the
+   *  gateway registers POST /api/ai/im-chat — the ONLY entrypoint asserting 'im_chat' in trusted
+   *  code. Off/absent → the route is NOT registered (404) and the gateway is byte-identical
+   *  (imWebEnabled + createImSession are inert without an im run). Double-carrier with the Python
+   *  pydantic `im_feishu_enabled` (PR-2, serve-api connection base) — both defaults MUST stay
+   *  false together (tests/config/test_flag_cross_language.py). */
+  imFeishuEnabled?: boolean
+  /** Stage 2 PR-1 — pre-create the ai_chat.db session an IM conversation persists into
+   *  (origin='im', general anchor; chat_db.createImSession). Called by /api/ai/im-chat on the
+   *  FIRST turn only (body.sessionId absent/null); the new id is threaded into the run (persist +
+   *  eager write) and returned to the caller via the `x-mailagent-session-id` response header so
+   *  the IM bridge (PR-3) can carry the conversation on. Returns null on a create failure — the
+   *  run then streams unsaved (mirrors createAgentSession's degradation, never fatal). Wired only
+   *  when MAILAGENT_IM_FEISHU is on. */
+  createImSession?: () => number | null
   /** S5 W4 (ADR-004 §4.4) — the per-agent run context of THIS cfg, set only by wrapCfgForAgentRun
    *  (agentRun.ts) on the headless cfg2 wrapper. It is the AUTHORITATIVE pause-time source the
    *  approval stash freezes (maybeStashAndAnnounceApproval reads it from the cfg, never from a

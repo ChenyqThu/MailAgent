@@ -104,10 +104,11 @@ export function resolveModelFactory(
  * actually registers before the prompt is assembled. The provider is zero-arg (shared TTL cache),
  * so it always carries the FULL manual-shape catalog; here — where the run's trusted mode +
  * agentRunContext meet it — connectorCatalogForRun (connector.ts: the ONE seam + ceiling order)
- * narrows it: manual keeps everything, a granted headless run keeps only its granted connectors
- * (writes zeroed above the ceiling), and every seam-refused shape (manual+context stray, im_chat,
- * junk grants) drops the catalog entirely — the prompt must never advertise tools the ToolSet
- * does not hold. No catalog on the config → returned as-is (byte-identical passthrough).
+ * narrows it: manual and im_chat (stage 2 PR-1, both owner-present) keep everything, a granted
+ * headless run keeps only its granted connectors (writes zeroed above the ceiling), and every
+ * seam-refused shape (owner-present venue + context stray, junk grants) drops the catalog
+ * entirely — the prompt must never advertise tools the ToolSet does not hold. No catalog on the
+ * config → returned as-is (byte-identical passthrough).
  */
 export function scopeConnectorCatalogForRun(
   promptConfig: GatewaySystemPromptConfig | null,

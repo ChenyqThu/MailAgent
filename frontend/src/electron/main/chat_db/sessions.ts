@@ -213,6 +213,31 @@ export function createAgentSession(input: {
   return Number(result.lastInsertRowid)
 }
 
+/**
+ * Stage 2 PR-1 (task 08-01 messenger, MAILAGENT_IM_FEISHU) — create the ai_chat.db session an IM
+ * (飞书) conversation persists into. Modeled on createAgentSession above: an unconditional
+ * general-anchor 'ai-sdk' INSERT, stamped origin='im' (v22 value-domain registration; agent_id /
+ * agent_job_id stay NULL — an IM session is owner-driven, not a headless job). title starts NULL —
+ * the first-user-message preview / auto-title flow name it like any interactive session. Because
+ * the default history filter only excludes origin='agent', the row is AUTOMATICALLY visible in the
+ * desktop session list (Q18=A「来自飞书」— AgentThreadList badges it off `origin`). Called by the
+ * gateway via cfg.createImSession on the FIRST turn of a conversation (no sessionId in the body),
+ * wired only when MAILAGENT_IM_FEISHU is on.
+ */
+export function createImSession(): number {
+  const db = getChatDb()
+  const now = Date.now()
+  const result = db
+    .prepare(
+      `INSERT INTO ai_chat_sessions
+        (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+         backend_agent_page_id, title, created_at, updated_at, origin)
+       VALUES (NULL, 'general', NULL, 'ai-sdk', NULL, NULL, NULL, ?, ?, 'im')`
+    )
+    .run(now, now)
+  return Number(result.lastInsertRowid)
+}
+
 export function listSessionsForEmail(emailId: number): ChatSession[] {
   return getChatDb()
     .prepare('SELECT * FROM ai_chat_sessions WHERE email_id = ? ORDER BY updated_at DESC')
@@ -248,6 +273,11 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
   const limit = options.limit ?? 300
   const includeArchived = options.includeArchived ?? false
   const origin = options.origin ?? 'interactive'
+  // Stage 2 PR-1 — origin='im' rows (飞书 conversations, v22 value domain) deliberately RIDE the
+  // default 'interactive' clause: it only excludes 'agent', so IM sessions appear in the desktop
+  // history automatically (Q18=A). The filter SQL is untouched on purpose (both sides — the
+  // Python mirror src/chat/db.py list_all_sessions keeps the identical clause); the 'im' filter
+  // literal exists in ChatSessionOriginFilter as value-domain vocabulary, no caller passes it yet.
   const originClause =
     origin === 'agent'
       ? "s.origin = 'agent'"

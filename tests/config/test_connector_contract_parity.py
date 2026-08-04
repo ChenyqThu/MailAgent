@@ -241,15 +241,33 @@ def test_caller_context_modes_match_gateway_agent_context_modes():
     )
 
 
-def test_headless_modes_are_a_proper_subset_that_excludes_manual_and_im():
-    """headless 白名单 ⊂ 全集，且**不含** manual_chat / im_chat（两者各有专属分支）。"""
+def test_owner_present_and_headless_partition_the_caller_modes():
+    """两张白名单（owner-present / headless）**不交叠且并起来划尽**全值域。
+
+    阶段 2 PR-1（08-04 拍板「connector 对 im_chat 全开放」）：im_chat 归 owner-present 分支
+    （与 manual 同档 —— 无服务端天花板，写恒 HITL 在 gateway 侧），**不是** headless ——
+    混进 headless = 飞书场地凭 grant 免卡调写类 connector（安全地板破口）；manual 混进
+    headless = owner 面被强加天花板。将来第五种 mode 必须被显式划进两侧之一（划进哪侧是
+    独立决策），漏划 → 本闸红（不划尽）。
+    """
     all_modes = set(py_str_tuple(SERVICE_PY, "CALLER_CONTEXT_MODES"))
+    owner_present = set(py_str_tuple(SERVICE_PY, "OWNER_PRESENT_CONTEXT_MODES"))
     headless = set(py_str_tuple(SERVICE_PY, "HEADLESS_CONTEXT_MODES"))
-    assert headless < all_modes, f"HEADLESS_CONTEXT_MODES 不是真子集：{headless!r} ⊄ {all_modes!r}"
+    assert owner_present == {"manual_chat", "im_chat"}, (
+        f"owner-present 白名单漂移：{owner_present!r} —— manual/im 之外的场地进这里是一次"
+        "独立产品决策，不能顺手加"
+    )
+    assert owner_present & headless == set(), (
+        f"两张白名单交叠：{owner_present & headless!r} —— 同一 mode 不能既免天花板又走 grant"
+    )
+    assert owner_present | headless == all_modes, (
+        f"两张白名单没划尽值域：缺 {all_modes - (owner_present | headless)!r} —— "
+        "新 mode 必须被显式划进 owner-present 或 headless 之一"
+    )
     assert "manual_chat" not in headless, "manual_chat 混进 headless 白名单 = owner 面被强加天花板"
     assert "im_chat" not in headless, (
-        "im_chat 混进 headless 白名单 = 阶段 0b 场地凭 grant 就能调 connector"
-        "（它的开放应该是一个独立开关，不是 grant —— grill Q10=A）"
+        "im_chat 混进 headless 白名单 = 飞书场地凭 grant 就能免卡调 connector 写类"
+        "（它与 manual 同档：无天花板 + 写恒 HITL 在 gateway 审批卡 —— 08-04 拍板）"
     )
 
 

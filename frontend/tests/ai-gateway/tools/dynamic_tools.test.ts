@@ -153,12 +153,36 @@ describe('buildGatewayTools × dynamicTools — matrix integration', () => {
         agentRunContext: { agentId: 'a', allowedTools: [], modeGrants: { exec: true } }
       }).mcp__jira__delete_everything
     ).toBeDefined()
-    // im_chat — hard floor, grants ignored (0b Q10=A)
+    // im_chat — hard floor, grants ignored (0b Q10=A; stage 2 PR-1 opens ONLY connector_write/web)
     const imFiltered = applyContextModePolicy(
       admitDynamicTools(buildBase('manual_chat'), dynamicTools),
       'im_chat',
       { exec: true, web: 'open' }
     )
     expect(imFiltered.mcp__jira__delete_everything).toBeUndefined()
+  })
+
+  test('a registered connector_write-class dynamic tool: manual + im_chat yes (owner-present), headless only under a write-capable grant', () => {
+    // stage 2 PR-1 (08-04 拍板「connector 对 im_chat 全开放」) — the connector_write row is
+    // venue-driven for im_chat: registered without grants (the write stays 恒 HITL at approval
+    // time), while the headless legs keep the PR3 grant discipline byte-identical.
+    registerRuntimeToolClass('mcp__notion__notion_update_page', 'connector_write')
+    const donor = buildBase('manual_chat')
+    const dynamicTools = { mcp__notion__notion_update_page: donor.email_get }
+    expect(buildBase('manual_chat', { dynamicTools }).mcp__notion__notion_update_page).toBeDefined()
+    expect(buildBase('im_chat', { dynamicTools }).mcp__notion__notion_update_page).toBeDefined()
+    expect(
+      buildBase('cron_headless', { dynamicTools }).mcp__notion__notion_update_page
+    ).toBeUndefined()
+    expect(
+      buildBase('cron_headless', {
+        dynamicTools,
+        agentRunContext: {
+          agentId: 'a',
+          allowedTools: [],
+          modeGrants: { connectors: { notion: 'write' } }
+        }
+      }).mcp__notion__notion_update_page
+    ).toBeDefined()
   })
 })

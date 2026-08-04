@@ -54,6 +54,7 @@ import {
   appendMessage,
   appendToolCall,
   createAgentSession,
+  createImSession,
   findAssistantMessageRowIdByUiId,
   findUserMessageRowIdByUiId,
   getFirstUserText,
@@ -519,6 +520,22 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // NO vite define (mirrors the other tool-family flags). Python serve-api reads the SAME env via
   // pydantic (mcp_connectors_enabled) — off there turns every /api/connector/* endpoint 409.
   const mcpConnectorsEnabled = envBool('MAILAGENT_MCP_CONNECTORS', false)
+  // Stage 2 PR-1 (task 08-01 messenger) — MAILAGENT_IM_FEISHU gates the im_chat entrypoint
+  // (POST /api/ai/im-chat, the ONLY code asserting 'im_chat') + the createImSession hook.
+  // Default OFF (灰度: ship off → dogfood → cutover 另拍, island 模式); off → the route is not
+  // registered (404) and the gateway is byte-identical. main-env-only, NO vite define (mirrors
+  // MAILAGENT_MCP_CONNECTORS). 🔴 Double-carrier: the Python serve-api reads the SAME env via
+  // pydantic (im_feishu_enabled, PR-2 — 飞书连接底座); both defaults MUST stay false together
+  // (tests/config/test_flag_cross_language.py), else the bridge would POST an endpoint that 404s
+  // (or the endpoint would sit live with no bridge) — same failure shape as the MCP flag's.
+  const imFeishuEnabled = envBool('MAILAGENT_IM_FEISHU', false)
+  // Stage 2 PR-1 (grill Q19=A) — MAILAGENT_IM_WEB_ENABLED: the INDEPENDENT im-web venue switch
+  // (🔴 deliberately NOT a grant — policy.ts pins that direction). Default OFF: web_fetch /
+  // web_search are stripped from every im run's ToolSet (and their runtime modeDenied
+  // hard-rejects). ON: they register in im_chat and stay 恒 HITL (mayAutoApprove is manual-only).
+  // Only the im_chat matrix branch reads it, so non-im runs are byte-identical either way.
+  // main-env-only, NO vite define.
+  const imWebEnabled = envBool('MAILAGENT_IM_WEB_ENABLED', false)
   // TTL-cached connector tool manifest (loopback pulls stay OFF the request path — buildTools is
   // synchronous). A fetch failure caches null = no connector tools (silent degradation, warned in
   // fetchConnectorManifest); the background refresh below re-tries after the TTL.
@@ -966,6 +983,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           configToolsEnabled,
           // S1 R3 — web tools (MAILAGENT_OPENNESS_WEB_TOOLS, default off).
           webToolsEnabled,
+          // Stage 2 PR-1 — the im web venue switch (MAILAGENT_IM_WEB_ENABLED, Q19=A; NOT a
+          // grant). Only the im_chat matrix branch consults it — non-im runs byte-identical.
+          imWebEnabled,
           // S2 W1 — exec tools (MAILAGENT_OPENNESS_EXEC_TOOLS, default off).
           execToolsEnabled,
           // S2 W4 — skill-supply tools (MAILAGENT_OPENNESS_SKILL_INSTALL, default off).
@@ -1077,6 +1097,22 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
             return createAgentSession(input)
           } catch (err) {
             console.error('[ai-gateway] createAgentSession failed (run will be unsaved)', err)
+            return null
+          }
+        }
+      : undefined,
+    // Stage 2 PR-1 (task 08-01 messenger) — the im_chat entrypoint gate + its session hook.
+    // imFeishuEnabled gates POST /api/ai/im-chat registration (off → 404, byte-identical);
+    // createImSession pre-creates the origin='im' ai_chat.db session on a conversation's first
+    // turn. A create failure returns null (the run streams unsaved — mirrors createAgentSession's
+    // degradation) rather than throwing.
+    imFeishuEnabled,
+    createImSession: imFeishuEnabled
+      ? () => {
+          try {
+            return createImSession()
+          } catch (err) {
+            console.error('[ai-gateway] createImSession failed (run will be unsaved)', err)
             return null
           }
         }

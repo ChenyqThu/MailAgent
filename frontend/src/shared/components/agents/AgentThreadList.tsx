@@ -231,6 +231,7 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
                         key={s.id}
                         title={titleOf(s, t)}
                         isEmail={s.anchor_type === 'email'}
+                        fromIm={s.origin === 'im'}
                         isArchived={g === 'archived'}
                         pinned={s.pinned_at != null}
                         starred={Boolean(s.starred)}
@@ -266,6 +267,7 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
 function SessionRow({
   title,
   isEmail,
+  fromIm,
   isArchived,
   pinned,
   starred,
@@ -285,6 +287,9 @@ function SessionRow({
 }: {
   title: string
   isEmail: boolean
+  /** Stage 2 PR-1 (Q18=A 信任可见) — origin='im' session (飞书会话): rows carry a「来自飞书」badge
+   *  so provenance is explicit in the desktop list, not only in the DB column. */
+  fromIm: boolean
   isArchived: boolean
   pinned: boolean
   starred: boolean
@@ -403,6 +408,14 @@ function SessionRow({
         >
           {title}
         </span>
+        {fromIm && (
+          // Stage 2 PR-1 (Q18=A) — provenance badge for 飞书-originated sessions. Styling follows
+          // the list's existing micro/pill idioms (group-header text-micro + soft ink border);
+          // the i18n key ships with a defaultValue（locale files归 PR-4 信任可见收尾）.
+          <span className="shrink-0 rounded-full border border-ink-border-soft bg-ink-3 px-1.5 py-px text-micro text-ink-fg-3">
+            {t('agentView.fromFeishu', { defaultValue: '来自飞书' })}
+          </span>
+        )}
         {unread && (
           <span
             data-session-unread-dot

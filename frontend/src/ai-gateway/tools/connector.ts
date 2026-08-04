@@ -30,7 +30,13 @@
 //    'open'), grant 外根本不注册 (a connector absent from the grants, or a tool above the ceiling,
 //    is never built — NOT "register then ask": headless has no human to ask, a card would strand
 //    every run in paused_handoff). Runs without connector grants stay at ZERO connector fetches
-//    (the seam below); im_chat never loads them. The class matrix row is the belt behind this.
+//    (the seam below). The class matrix row is the belt behind this.
+//
+// 🔴 im_chat (stage 2 PR-1, 08-04 拍板「connector 对 im_chat 全开放」): the owner-present IM venue
+//    loads connectors like manual chat — no grants, reads silent, writes 恒 HITL (the approval
+//    card is delivered over the IM bridge in PR-3; destructive tools carry the same red warning).
+//    The caller annotation carries context_mode 'im_chat'; Python's resolve_caller_ceiling treats
+//    it manual-equivalent (no ceiling).
 //
 // 🔴 Untrusted fencing (安全红线): connector results are externally-authored (a Notion page any
 //    workspace collaborator can edit = a first-class injection surface). Every content string is
@@ -108,15 +114,17 @@ export function truncateAtSentence(s: string, max: number): string {
 
 /**
  * The ONE seam deciding whether a run loads connector tools at all (consumed by the Electron
- * lifecycle's buildTools). Two admitted shapes, everything else performs ZERO connector
+ * lifecycle's buildTools). Three admitted shapes, everything else performs ZERO connector
  * fetches/builds:
  *   - manual chat: flag on + SERVER-asserted mode exactly 'manual_chat' + NOT a headless agent
  *     run (agentRunContext present → false) — the PR2 shape, byte-identical.
+ *   - im chat (stage 2 PR-1, 08-04 拍板「全开放」): flag on + mode 'im_chat' + no agentRunContext
+ *     — owner-present like manual, grants never consulted (writes stay 恒 HITL via the matrix +
+ *     mayAutoApprove; a stray agentRunContext on an im run is refused like the manual stray).
  *   - headless agent run (PR3): flag on + mode 'untrusted_trigger'/'cron_headless' + an
  *     agentRunContext whose connector grants parse NON-EMPTY (fail-closed re-parse — junk/empty
  *     grants keep the run at zero fetches, exactly the PR2 behaviour).
- * absent/unknown mode and im_chat are always false (im_chat's stage-2 opt-in is a separate
- * switch, never a grant — grill Q10=A).
+ * absent/unknown modes are always false.
  */
 export function shouldLoadConnectorTools(
   flagEnabled: boolean,
@@ -125,7 +133,7 @@ export function shouldLoadConnectorTools(
   connectorGrants?: unknown
 ): boolean {
   if (flagEnabled !== true) return false
-  if (contextMode === 'manual_chat') return !hasAgentRunContext
+  if (contextMode === 'manual_chat' || contextMode === 'im_chat') return !hasAgentRunContext
   if (contextMode !== 'untrusted_trigger' && contextMode !== 'cron_headless') return false
   return hasAgentRunContext && parseConnectorGrants(connectorGrants) !== undefined
 }
@@ -239,11 +247,13 @@ export function projectConnectorCatalog(
  * D1 — narrow the full catalog to what THIS run actually registers, reusing the ONE load seam
  * (shouldLoadConnectorTools) + the ONE ceiling order (CONNECTOR_CRUD_RANK) so the prompt can never
  * "advertise wider than the ToolSet":
- *   - manual chat (no agentRunContext): the full catalog (a manual run registers every admitted
- *     tool) — 🔴 deliberately NOT the skillCatalog manual-only gate;
+ *   - manual chat / im chat (no agentRunContext): the full catalog (both owner-present venues
+ *     register every admitted tool — stage 2 PR-1) — 🔴 deliberately NOT the skillCatalog
+ *     manual-only gate;
  *   - headless run: only granted connectors, with write/update counts zeroed above the ceiling
  *     (the arithmetic mirror of createConnectorTools' per-tool rank skip);
- *   - every other shape the seam refuses (manual+context stray, im_chat, no/junk grants) → null.
+ *   - every other shape the seam refuses (owner-present venue + context stray, no/junk grants)
+ *     → null.
  * `flagEnabled` is passed as true because a catalog only EXISTS when MAILAGENT_MCP_CONNECTORS is
  * on (the lifecycle never projects one otherwise) — the seam re-check covers the run-shape half.
  */
@@ -255,7 +265,7 @@ export function connectorCatalogForRun(
 ): ConnectorCatalogEntry[] | null {
   if (!catalog || catalog.length === 0) return null
   if (!shouldLoadConnectorTools(true, contextMode, hasAgentRunContext, connectorGrants)) return null
-  if (contextMode === 'manual_chat') return [...catalog]
+  if (contextMode === 'manual_chat' || contextMode === 'im_chat') return [...catalog]
   const grants = parseConnectorGrants(connectorGrants)
   if (grants === undefined) return null // unreachable after the seam — belt only
   const out: ConnectorCatalogEntry[] = []

@@ -23,10 +23,12 @@
 //     REVERSIBLE DOMAIN writes in an owner-driven manual session ONLY: mayAutoApprove ⇔
 //     class==='domain_write' && mode==='manual_chat'. This closes the set_skill_enabled escape
 //     (preview tier alone no longer skips the card — a capability change always asks).
-//   - im_chat (stage 0b, harness-expansion epic grill Q10=A — the stage-2 飞书 IM venue): only
-//     read/artifact/domain_write register (domain writes 恒 HITL); capability_change / exec /
-//     web / outbound are hard-denied and per-agent grants are NOT consulted (the stage-2 IM web
-//     opt-in is a separate switch, not a grant). No entrypoint asserts this mode yet — inert.
+//   - im_chat (stage 0b matrix row; asserted by POST /api/ai/im-chat since stage 2 PR-1 — the
+//     飞书 IM venue, grill Q10=A + the 08-04 拍板): read/artifact/domain_write register (domain
+//     writes 恒 HITL), connector reads/writes register like manual (owner 拍板「全开放」— writes
+//     stay 恒 HITL because mayAutoApprove is manual-only), web registers ONLY under the
+//     MAILAGENT_IM_WEB_ENABLED venue switch (Q19=A — a Settings/env switch, NEVER a grant);
+//     capability_change / exec / outbound are hard-denied and per-agent grants are NOT consulted.
 //
 // 🔴 GATEWAY_TOOL_CLASSES is the single source of truth for tool→class (types.ts resolves a
 //    tool's class from here via classOfTool). A tool MISSING from the map fail-closes to 'exec'
@@ -48,9 +50,11 @@ import type { ToolSet } from 'ai'
  *  through an IM bridge (阶段 2 飞书对话). 盗号 ≠ 盗机 — a stolen IM account must never reach this
  *  machine's execution surface, so the row is STRICTER than manual_chat: reads free; domain writes
  *  恒 HITL (mayAutoApprove still requires manual_chat, and the acceptEdits/bypass overlay is
- *  manual-gated at consumption); web denied until the stage-2 opt-in switch (Q19=A — a Settings
- *  switch, NOT a grant); exec / capability_change / outbound permanently denied, per-agent grants
- *  never consulted. No entrypoint asserts this mode yet — adding the value is behavior-inert. */
+ *  manual-gated at consumption); connector tools open like manual (08-04 拍板「全开放」: reads
+ *  silent, connector_write 恒 HITL); web gated by the MAILAGENT_IM_WEB_ENABLED venue switch
+ *  (Q19=A — a Settings switch, NOT a grant; default off); exec / capability_change / outbound
+ *  permanently denied, per-agent grants never consulted. Asserted in trusted code by
+ *  POST /api/ai/im-chat (stage 2 PR-1, MAILAGENT_IM_FEISHU-gated). */
 export const AGENT_CONTEXT_MODES = [
   'manual_chat',
   'untrusted_trigger',
@@ -77,9 +81,10 @@ export function normalizeContextMode(value: unknown): AgentContextMode {
  *  by-name fail-closed allow-list so dynamic names always keep asking). Outside manual (PR3): the
  *  per-connector grant key `connectors` lifts the row for untrusted_trigger/cron_headless when ANY
  *  granted ceiling is write-capable ('write'/'update'); no grants → the fail-closed `return false`.
- *  im_chat stays hard-denied (grants never consulted). Connector READ tools map to the existing
- *  'read' (silent, every mode); the load seam (shouldLoadConnectorTools) still keeps headless runs
- *  WITHOUT connector grants at zero fetches. */
+ *  im_chat (stage 2 PR-1, 08-04 拍板「connector 对 im_chat 全开放」): registered + 恒 HITL like
+ *  manual — grants are still never consulted (the venue is owner-present, not a granted headless
+ *  run). Connector READ tools map to the existing 'read' (silent, every mode); the load seam
+ *  (shouldLoadConnectorTools) still keeps headless runs WITHOUT connector grants at zero fetches. */
 export const GATEWAY_TOOL_CLASS_VALUES = [
   'read',
   'artifact',
@@ -380,32 +385,50 @@ export interface AgentRunContext {
   jobId?: number
 }
 
+/** Stage 2 PR-1 (grill Q19=A) — VENUE-level switches of the im_chat row. 🔴 NOT grants: the
+ *  AgentModeGrants axis is the owner's per-AGENT headless authorization; these are per-VENUE
+ *  owner switches (env/Settings), threaded from the lifecycle as trusted data. Only the im_chat
+ *  branch ever reads them — every other mode ignores the object entirely, so passing it to a
+ *  non-im run is behavior-inert. `imWebEnabled` mirrors MAILAGENT_IM_WEB_ENABLED (default off):
+ *  false → web tools are not even registered in an im run; true → registered AND 恒 HITL
+ *  (mayAutoApprove stays manual-only — the switch never relaxes approval). */
+export interface ImVenueSwitches {
+  imWebEnabled?: boolean
+}
+
 /** Registration-time matrix row (ADR-001 D3, exec row revised by ADR-004 D2, web row added by
- *  ADR-004 rev3.1 D2, im_chat row added by stage 0b — grill Q10=A): may a tool of this class
- *  exist in the ToolSet of a run in this mode?
+ *  ADR-004 rev3.1 D2, im_chat row added by stage 0b — grill Q10=A — and opened by stage 2 PR-1
+ *  — the 08-04 拍板): may a tool of this class exist in the ToolSet of a run in this mode?
  *  read/domain_write/artifact → every mode; capability_change/outbound → manual_chat only (permanently —
  *  no grant key exists for them); exec → manual_chat, OR a non-manual run whose per-agent grants
  *  carry exec===true; web → manual_chat, OR a non-manual run whose grants carry web∈{gated,open}
- *  (the owner's explicit opt-in, spec-derived — any other value incl. junk is 'off');
+ *  (the owner's explicit opt-in, spec-derived — any other value incl. junk is 'off'), OR an
+ *  im_chat run under the MAILAGENT_IM_WEB_ENABLED venue switch (Q19=A — `venue`, never a grant);
  *  connector_write (PR3) → manual_chat, OR a non-manual run whose grants carry a connectors record
  *  with ANY write-capable ceiling (coarse class gate — per-connector precision lives at
- *  registration, see the row comment below). `grants` is
+ *  registration, see the row comment below), OR im_chat (stage 2 PR-1: connector 全开放 —
+ *  registered + 恒 HITL, grants not consulted). `grants` is
  *  only ever passed by the headless agent-run path; manual callers omit it (undefined = the
  *  pre-ADR-004 matrix, so a forgotten param is always SAFER, never wider).
- *  im_chat is a hard floor BEYOND read/artifact/domain_write: grants are deliberately NOT
- *  consulted (AgentModeGrants is the per-agent HEADLESS axis; the stage-2 IM web opt-in is a
- *  separate Settings switch wired then — not a grant), so the row is strictly narrower than
- *  untrusted_trigger and a mis-threaded run can only be safer here. */
+ *  im_chat stays a hard floor for exec/capability_change/outbound: grants are deliberately NOT
+ *  consulted in this mode (AgentModeGrants is the per-agent HEADLESS axis; the IM web opt-in is
+ *  the separate `venue` switch), so a mis-threaded grants object can never widen an im run. */
 export function isToolClassAllowedInMode(
   toolClass: GatewayToolClass,
   mode: AgentContextMode,
-  grants?: AgentModeGrants
+  grants?: AgentModeGrants,
+  venue?: ImVenueSwitches
 ): boolean {
   if (mode === 'manual_chat') return true
   if (toolClass === 'read' || toolClass === 'domain_write' || toolClass === 'artifact') return true
-  // 0b (grill Q10=A) — im_chat: exec / capability_change / outbound 直接不给; web denied until the
-  // stage-2 opt-in switch. No grant can lift any of them in this mode.
-  if (mode === 'im_chat') return false
+  // Stage 2 PR-1 (08-04 拍板) — im_chat: connector tools fully open (writes stay 恒 HITL via the
+  // manual-only mayAutoApprove); web only under the venue switch (Q19=A — exact `=== true`, never
+  // a grant); exec / capability_change / outbound 直接不给. Grants can lift NOTHING in this mode.
+  if (mode === 'im_chat') {
+    if (toolClass === 'connector_write') return true
+    if (toolClass === 'web') return venue?.imWebEnabled === true
+    return false
+  }
   if (toolClass === 'exec') return grants?.exec === true
   if (toolClass === 'web') return grants?.web === 'gated' || grants?.web === 'open'
   // connector_write (stage 1 PR3, grill Q2): lifted when the per-agent connector grants carry ANY
@@ -536,12 +559,15 @@ export const BYPASS_STILL_ASK: ReadonlySet<string> = new Set(['notion_agent_chat
 export function applyContextModePolicy(
   tools: ToolSet,
   mode: AgentContextMode,
-  grants?: AgentModeGrants
+  grants?: AgentModeGrants,
+  /** Stage 2 PR-1 — the im_chat venue switches (Q19 web opt-in). Only consulted by the im_chat
+   *  branch; omitted everywhere else → byte-identical to the pre-PR-1 filter. */
+  venue?: ImVenueSwitches
 ): ToolSet {
   if (mode === 'manual_chat') return tools
   const out: ToolSet = {}
   for (const [name, t] of Object.entries(tools)) {
-    if (isToolClassAllowedInMode(classOfTool(name), mode, grants)) out[name] = t
+    if (isToolClassAllowedInMode(classOfTool(name), mode, grants, venue)) out[name] = t
   }
   return out
 }

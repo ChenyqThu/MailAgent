@@ -31,6 +31,9 @@ export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'ab
 // The ai_chat_sessions v7 migration adds a table CHECK coupling anchor_type ↔ email_id/anchor_id
 // so a sentinel like email_id=0 is impossible by construction (architecture.md §1.4 / DR-5).
 export type AnchorType = 'email' | 'general'
+// FILTER vocabulary (≠ the origin column's free-text value domain, which gained 'im' in CHAT_DB
+// v22): stage 2 PR-1 adds no IM filter — im rows ride the default 'interactive' clause (Q18=A).
+// Mirror: api/types/chat.ts (parity gate) + the two Python mirrors, see that file's red note.
 export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'all'
 
 // Sprint 19 — agent harness audit. Each LLM-proposed tool call gets one row

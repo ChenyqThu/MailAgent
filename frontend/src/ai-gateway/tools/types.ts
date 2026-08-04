@@ -291,6 +291,12 @@ export function auditedWriteTool<I>(
      *  decision point. Absent (every manual caller + every non-exec factory) → the pre-ADR-004
      *  matrix, byte-identical. */
     modeGrants?: AgentModeGrants
+    /** Stage 2 PR-1 (grill Q19=A) — the im_chat web venue switch (MAILAGENT_IM_WEB_ENABLED),
+     *  threaded ONLY by the web factory so the runtime modeDenied double-insurance below evaluates
+     *  the SAME isToolClassAllowedInMode(class, mode, grants, venue) the registration filter used.
+     *  Absent (every non-web factory + every manual caller) → byte-identical. NOT a grant: it is a
+     *  per-venue owner switch, and only the im_chat matrix branch ever reads it. */
+    imWebEnabled?: boolean
     /** Part B (harness 上岛) — one-shot execution claim. When true, execute calls guard.consume()
      *  right after verify so an approval executes AT MOST ONCE across BOTH resume paths (island
      *  /api/ai/approval/decide and renderer /api/ai/chat): whichever lands first consumes, the second
@@ -329,7 +335,13 @@ export function auditedWriteTool<I>(
   // runtime double-insurance for an entrypoint that missed the mode.
   const toolClass = opts.testOnlyToolClass ?? classOfTool(opts.name)
   const contextMode = normalizeContextMode(opts.contextMode)
-  const modeDenied = !isToolClassAllowedInMode(toolClass, contextMode, opts.modeGrants)
+  const modeDenied = !isToolClassAllowedInMode(
+    toolClass,
+    contextMode,
+    opts.modeGrants,
+    // Stage 2 PR-1 — the im web venue switch (only the im_chat branch reads it; inert elsewhere).
+    opts.imWebEnabled === true ? { imWebEnabled: true } : undefined
+  )
 
   // S2 W1 — when a structured whitelist rule auto-allows an exec run (needsApproval returns false),
   // stash the matched rule id keyed by toolCallId so execute (same call, right after) can record

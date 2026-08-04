@@ -10,11 +10,13 @@
 //      stale legacy 'delete' string (D1: the delete class is RETIRED server-side, destructive
 //      tools ride crud 'write' + the destructive flag and register like any write); static-name
 //      collision skipped;
-//   4. connector_write matrix row (PR3): manual always; headless lifted ONLY by a real
-//      `connectors` grant with a write-capable ceiling — every junk/forged shape still denies;
-//      im_chat denies under any grants;
-//   5. shouldLoadConnectorTools — the ONE load seam: manual chat (no agentRunContext), or a
-//      headless run whose connector grants parse non-empty; everything else = zero calls;
+//   4. connector_write matrix row (PR3 + stage 2 PR-1): manual + im_chat always (owner-present —
+//      im writes stay 恒 HITL via the manual-only mayAutoApprove); headless lifted ONLY by a real
+//      `connectors` grant with a write-capable ceiling — every junk/forged shape still denies,
+//      and grants are never consulted in im_chat (neither needed nor able to widen);
+//   5. shouldLoadConnectorTools — the ONE load seam: an owner-present venue (manual/im chat, no
+//      agentRunContext), or a headless run whose connector grants parse non-empty; everything
+//      else = zero calls;
 //   6. read results are UNTRUSTED_MCP_TOOL-fenced + truncation surfaced; write tools register the
 //      approval record (edit tier) and never执行 without the guard;
 //   7. PR3 headless semantics: grant 内免卡直接执行 (audit auto_whitelist + rule_id null),
@@ -250,10 +252,17 @@ describe('connector_write matrix row — PR3 grant key, fail-closed against junk
     { connectors: ['write'] } as unknown as AgentModeGrants
   ]
 
-  test('manual allowed; headless/im_chat denied under every junk/insufficient grant shape', () => {
+  test('manual + im_chat allowed (owner-present); headless denied under every junk/insufficient grant shape', () => {
     expect(isToolClassAllowedInMode('connector_write', 'manual_chat')).toBe(true)
-    for (const mode of ['untrusted_trigger', 'cron_headless', 'im_chat'] as const) {
-      for (const grants of JUNK_GRANTS) {
+    for (const grants of JUNK_GRANTS) {
+      // stage 2 PR-1 (08-04 拍板「connector 对 im_chat 全开放」) — im_chat is owner-present:
+      // connector_write registers REGARDLESS of grants (they are never consulted; the write stays
+      // 恒 HITL because mayAutoApprove is manual-only). Junk grants change nothing either way.
+      expect(
+        isToolClassAllowedInMode('connector_write', 'im_chat', grants),
+        `im_chat × ${JSON.stringify(grants)}`
+      ).toBe(true)
+      for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
         expect(
           isToolClassAllowedInMode('connector_write', mode, grants),
           `${mode} × ${JSON.stringify(grants)}`
@@ -262,7 +271,7 @@ describe('connector_write matrix row — PR3 grant key, fail-closed against junk
     }
   })
 
-  test('a write-capable ceiling lifts the headless rows; im_chat stays hard-denied', () => {
+  test('a write-capable ceiling lifts the headless rows; im_chat is allowed regardless (never grant-driven)', () => {
     for (const grants of [
       { connectors: { notion: 'write' } },
       { connectors: { notion: 'update' } },
@@ -274,11 +283,14 @@ describe('connector_write matrix row — PR3 grant key, fail-closed against junk
           `${mode} × ${JSON.stringify(grants)}`
         ).toBe(true)
       }
-      expect(isToolClassAllowedInMode('connector_write', 'im_chat', grants)).toBe(false)
+      // im_chat true with AND without grants — the row is venue-driven (owner-present), so a
+      // grant neither opens nor widens it (stage 2 PR-1).
+      expect(isToolClassAllowedInMode('connector_write', 'im_chat', grants)).toBe(true)
+      expect(isToolClassAllowedInMode('connector_write', 'im_chat')).toBe(true)
     }
   })
 
-  test('no-grants headless ToolSet strips a (manually-built) connector write even via dynamicTools', () => {
+  test('no-grants headless ToolSet strips a (manually-built) connector write even via dynamicTools; im_chat keeps it', () => {
     const manifest = [
       entry({ toolName: 'notion-update-page', crudType: 'write', destructive: true })
     ]
@@ -286,30 +298,36 @@ describe('connector_write matrix row — PR3 grant key, fail-closed against junk
     const domain = mockDomain(() => okEnvelope({}))
     const name = 'mcp__notion__notion_update_page'
     // Build under MANUAL (so the tool exists + its runtime class is registered), then force-feed
-    // it into non-manual assemblies WITHOUT connector grants: the matrix must strip it even when
-    // exec/web grants are present (they lift ONLY their own rows).
+    // it into non-manual assemblies WITHOUT connector grants: the headless matrix must strip it
+    // even when exec/web grants are present (they lift ONLY their own rows).
     const manualDynamic = createConnectorTools(domain, collector, new ApprovalGuard(), manifest, {
       contextMode: 'manual_chat'
     })
-    for (const mode of ['untrusted_trigger', 'cron_headless', 'im_chat'] as const) {
+    for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
       const built = buildGatewayTools({
         domain,
         writeToolsEnabled: true,
         approvalGuard: new ApprovalGuard(),
         contextMode: mode,
         dynamicTools: manualDynamic,
-        ...(mode !== 'im_chat'
-          ? {
-              agentRunContext: {
-                agentId: 'a',
-                allowedTools: [],
-                modeGrants: { exec: true, web: 'open' }
-              }
-            }
-          : {})
+        agentRunContext: {
+          agentId: 'a',
+          allowedTools: [],
+          modeGrants: { exec: true, web: 'open' }
+        }
       })
       expect(built[name], `${name} must be stripped in ${mode}`).toBeUndefined()
     }
+    // im_chat (stage 2 PR-1): owner-present venue — the connector write SURVIVES assembly
+    // (matrix row open; the write still 恒 HITL at approval time). No grants involved.
+    const im = buildGatewayTools({
+      domain,
+      writeToolsEnabled: true,
+      approvalGuard: new ApprovalGuard(),
+      contextMode: 'im_chat',
+      dynamicTools: manualDynamic
+    })
+    expect(im[name], `${name} must survive im_chat`).toBeDefined()
     // manual: registered.
     const manual = buildGatewayTools({
       domain,
@@ -445,15 +463,18 @@ describe('createConnectorTools — headless per-connector grant filter', () => {
 // ── 5. the load seam (manual chat, or a granted headless run) ──────────────────
 
 describe('shouldLoadConnectorTools — the ONE seam', () => {
-  test('manual shape: flag on + manual_chat + no agentRunContext (PR2, unchanged)', () => {
+  test('owner-present shapes: flag on + manual_chat/im_chat + no agentRunContext', () => {
     expect(shouldLoadConnectorTools(true, 'manual_chat', false)).toBe(true)
+    // stage 2 PR-1 (08-04 拍板「全开放」) — im_chat loads connectors like manual.
+    expect(shouldLoadConnectorTools(true, 'im_chat', false)).toBe(true)
     // flag off → never
     expect(shouldLoadConnectorTools(false, 'manual_chat', false)).toBe(false)
-    // im / unknown modes → never
-    expect(shouldLoadConnectorTools(true, 'im_chat', false)).toBe(false)
+    expect(shouldLoadConnectorTools(false, 'im_chat', false)).toBe(false)
+    // unknown modes → never
     expect(shouldLoadConnectorTools(true, undefined, false)).toBe(false)
-    // a manual-looking run that carries an agentRunContext → never
+    // an owner-present-looking run that carries an agentRunContext → never (stray context)
     expect(shouldLoadConnectorTools(true, 'manual_chat', true)).toBe(false)
+    expect(shouldLoadConnectorTools(true, 'im_chat', true)).toBe(false)
   })
 
   test('headless shape (PR3): flag on + headless mode + agentRunContext + NON-EMPTY parsed grants', () => {
@@ -471,7 +492,8 @@ describe('shouldLoadConnectorTools — the ONE seam', () => {
       // flag off beats everything
       expect(shouldLoadConnectorTools(false, mode, true, { notion: 'update' })).toBe(false)
     }
-    // im_chat: grants are never a lift (the stage-2 IM opt-in is a switch, not a grant)
+    // im_chat + a stray agentRunContext: still refused — the im shape is owner-present (no
+    // context), and grants can never turn a strayed shape into a load (stage 2 PR-1 keeps this).
     expect(shouldLoadConnectorTools(true, 'im_chat', true, { notion: 'update' })).toBe(false)
   })
 })
@@ -556,6 +578,46 @@ describe('connector tool execution', () => {
       arguments: { id: 'p1' },
       caller: { context_mode: 'manual_chat' }
     })
+    expect((invokeBody!.caller as Record<string, unknown>).agent_id).toBeUndefined()
+  })
+
+  // ── Stage 2 PR-1 — im_chat semantics (owner-present: reads silent, writes 恒 HITL) ──────────
+
+  test('im_chat write tool: needsApproval TRUE (恒 HITL — never the headless 免卡 path) + caller carries im_chat', async () => {
+    let invokeBody: Record<string, unknown> | null = null
+    const guard = new ApprovalGuard()
+    const domain = mockDomain((url, body) => {
+      if (/\/invoke$/.test(url)) {
+        invokeBody = body ? (JSON.parse(body) as Record<string, unknown>) : null
+        return okEnvelope({ content: 'ok', is_error: false, truncated: false })
+      }
+      return okEnvelope({})
+    })
+    const tools = createConnectorTools(
+      domain,
+      [],
+      guard,
+      [entry(), entry({ toolName: 'notion-update-page', crudType: 'write', destructive: true })],
+      { contextMode: 'im_chat' }
+    )
+    // Write: registered + 恒 HITL (the description keeps the manual "always asks" contract — the
+    // headless pre-granted wording must NEVER appear on an im tool).
+    const write = tools.mcp__notion__notion_update_page
+    expect(write).toBeDefined()
+    const needs = write.needsApproval as (i: unknown, o: unknown) => boolean | Promise<boolean>
+    await expect(
+      Promise.resolve(needs({ page: 'x' }, { toolCallId: 'tc-im1', messages: [] }))
+    ).resolves.toBe(true)
+    expect(guard.peek('tc-im1')?.risk).toBe('edit')
+    expect(String(write.description)).toContain('always asks')
+    expect(String(write.description)).not.toContain('pre-granted')
+    expect(String(write.description)).toContain('DESTRUCTIVE') // red-warning fact survives im
+    // Read: silent execute; the invoke wire carries the im caller annotation (no agent_id).
+    const out = (await runTool(tools.mcp__notion__notion_fetch, { id: 'p1' })) as {
+      content: string
+    }
+    expect(out.content).toContain('UNTRUSTED_MCP_TOOL_START')
+    expect(invokeBody).toMatchObject({ caller: { context_mode: 'im_chat' } })
     expect((invokeBody!.caller as Record<string, unknown>).agent_id).toBeUndefined()
   })
 
@@ -836,11 +898,14 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
     }
   ]
 
-  test('manual chat (no agentRunContext) → the full catalog', () => {
+  test('owner-present venues (no agentRunContext) → the full catalog (manual + im_chat)', () => {
     expect(connectorCatalogForRun(CATALOG, 'manual_chat', false)).toEqual(CATALOG)
+    // stage 2 PR-1 — im_chat registers every admitted tool like manual, so the prompt catalog is
+    // the full one too (the "never advertise wider than the ToolSet" parity holds, pinned below).
+    expect(connectorCatalogForRun(CATALOG, 'im_chat', false)).toEqual(CATALOG)
   })
 
-  test('seam-refused shapes → null (manual+context stray / im_chat / no grants / junk grants)', () => {
+  test('seam-refused shapes → null (owner-present+context stray / no grants / junk grants)', () => {
     expect(connectorCatalogForRun(CATALOG, 'manual_chat', true)).toBeNull()
     expect(connectorCatalogForRun(CATALOG, 'im_chat', true, { notion: 'update' })).toBeNull()
     expect(connectorCatalogForRun(CATALOG, 'cron_headless', true)).toBeNull()
@@ -903,10 +968,12 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
     ]
     const domain = mockDomain(() => okEnvelope({}))
     const shapes: Array<{
-      contextMode: 'manual_chat' | 'cron_headless' | 'untrusted_trigger'
+      contextMode: 'manual_chat' | 'im_chat' | 'cron_headless' | 'untrusted_trigger'
       grants?: Record<string, 'read' | 'write' | 'update'>
     }> = [
       { contextMode: 'manual_chat' },
+      // stage 2 PR-1 — im_chat is owner-present: full registration, full catalog (no grants).
+      { contextMode: 'im_chat' },
       { contextMode: 'cron_headless', grants: { notion: 'read' } },
       { contextMode: 'cron_headless', grants: { notion: 'write' } },
       { contextMode: 'untrusted_trigger', grants: { notion: 'update' } },
@@ -915,7 +982,7 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
     ]
     for (const shape of shapes) {
       resetRuntimeToolClasses()
-      const headless = shape.contextMode !== 'manual_chat'
+      const headless = shape.contextMode !== 'manual_chat' && shape.contextMode !== 'im_chat'
       const tools = createConnectorTools(domain, [], new ApprovalGuard(), MANIFEST, {
         contextMode: shape.contextMode,
         ...(headless ? { connectorGrants: shape.grants, agentId: 'a' } : {})

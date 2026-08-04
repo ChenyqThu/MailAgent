@@ -647,16 +647,23 @@ def test_invoke_destructive_write_allowed_headless_within_grant(
     assert _InvokeStubClient.last_call[:2] == ("notion", "create_page")
 
 
-def test_invoke_im_chat_always_denied(flag_on_client, fresh_agent_cfg, monkeypatch):
+def test_invoke_im_chat_behaves_like_manual(flag_on_client, fresh_agent_cfg, monkeypatch):
+    """阶段 2 PR-1（08-04 拍板「全开放」）：im_chat caller 与 manual 同档 —— 读免天花板放行，
+    写类工具（owner 已启用的）同样放行（写的恒 HITL 在 gateway 审批卡侧，不在本端点）。
+    grants 不参与判定（不读 agent 行），与 manual caller 的行为完全一致。"""
     import src.connectors.client as client_mod
 
     _seed_tools(fresh_agent_cfg)
     _InvokeStubClient.last_call = None
     monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
     r = _invoke(flag_on_client, "search", caller={"context_mode": "im_chat", "agent_id": None})
-    assert r.status_code == 403
-    assert r.json()["error"]["code"] == "E_CONNECTOR_GRANT_DENIED"
-    assert _InvokeStubClient.last_call is None
+    assert r.status_code == 200
+    assert _InvokeStubClient.last_call[:2] == ("notion", "search")
+    # 写类工具：与 manual caller 同档（工具启用 + 无天花板 → 放行到远端）。
+    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
+    assert _invoke(
+        flag_on_client, "create_page", caller={"context_mode": "im_chat", "agent_id": None}
+    ).status_code == 200
 
 
 def test_invoke_manual_chat_caller_behaves_like_no_caller(

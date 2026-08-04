@@ -165,6 +165,14 @@ export interface ChatMessage {
 export type ChatAnchorType = 'email' | 'general'
 // API/IPC boundary mirror of shared/chat_model.ts. Keep inline so this file remains import-free;
 // tests/config/test_chat_type_mirror_parity.py locks the string-union values on both sides.
+// 🔴 This is the FILTER vocabulary, NOT the origin COLUMN's value domain (that one is free text —
+// 'agent' | 'im' | NULL=interactive, see ChatSession.origin below). Stage 2 PR-1 (task 08-01)
+// deliberately adds NO 'im' filter: im rows ride the default 'interactive' clause (it only excludes
+// 'agent' — Q18=A desktop visibility) and nothing filters by IM. Adding the literal here without
+// implementing it would type-check on both call paths yet behave differently on each (Electron
+// listAllSessions falls through to the interactive clause; serve-api's Literal[3] query param 422s).
+// A future IM-only filter must land in ALL FOUR mirrors at once: both TS unions, the two listing
+// clauses, src/api/routers/chat.py's Literal and src/chat/db.py's validator tuple.
 export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'all'
 
 export interface ChatSession {
@@ -190,6 +198,8 @@ export interface ChatSession {
   // async_jobs.job_id as TEXT) link back to report_agent + async_jobs. S6 W2 surfaces these to the
   // renderer so the record view can (a) composer-lock an agent session from ANY entry point (the record
   // is read-mostly, P4) and (b) build the agent-run banner. All three additive/nullable.
+  // v22 (stage 2 PR-1, task 08-01) — origin gains the third value 'im' (飞书 conversation, created by
+  // the gateway's createImSession; agent_id/agent_job_id stay NULL). AgentThreadList badges it 来自飞书.
   origin?: string | null
   agent_id?: string | null
   agent_job_id?: string | null

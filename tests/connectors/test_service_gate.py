@@ -83,10 +83,14 @@ def test_resolve_caller_absent_or_manual_has_no_ceiling():
     assert svc.resolve_caller_ceiling({"context_mode": "manual_chat"}, CID) is None
 
 
-def test_resolve_caller_im_chat_always_denied():
-    with pytest.raises(svc.ConnectorInvokeDenied) as e:
-        svc.resolve_caller_ceiling({"context_mode": "im_chat", "agent_id": "a"}, CID)
-    assert e.value.code == "E_CONNECTOR_GRANT_DENIED" and e.value.http_status == 403
+def test_resolve_caller_im_chat_is_owner_present_no_ceiling():
+    """阶段 2 PR-1（08-04 拍板「connector 对 im_chat 全开放」）：im_chat 与 manual 同档 ——
+    无天花板（None）。写类的恒 HITL 在 gateway 侧（mayAutoApprove manual-only + PR-3 飞书
+    审批卡），服务端不叠加。带 agent_id 也不查 grants（owner-present 分支根本不读 agent 行）。"""
+    assert svc.resolve_caller_ceiling({"context_mode": "im_chat"}, CID) is None
+    # grants 永不参与：即使 caller 顺手带了 agent_id，也不落 headless 分支（不读 report_agent）。
+    assert svc.resolve_caller_ceiling({"context_mode": "im_chat", "agent_id": "a"}, CID) is None
+    assert svc.OWNER_PRESENT_CONTEXT_MODES == ("manual_chat", "im_chat")
 
 
 def test_resolve_caller_bad_shape_is_400():

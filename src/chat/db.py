@@ -1,6 +1,13 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 21）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 22）。
+v22（飞书 messenger 阶段 2 PR-1，task 08-01）= ``ai_chat_sessions.origin`` 值域登记 ``'im'``
+（**无 schema 变更**的 no-op ladder 步：origin 是 v19 加的无 CHECK 自由文本列，值域现为
+'agent' | 'im' | NULL=交互）。'im' 行由 gateway 主进程 ``createImSession`` 写（origin='im'，
+general anchor，飞书会话），默认交互列表过滤 ``COALESCE(origin,'interactive') <> 'agent'``
+**有意**不动 —— 'im' 行自动进桌面会话列表（Q18=A「来自飞书」）。本文件读侧 ``SELECT *`` /
+``s.*`` 自动带回，``list_all_sessions`` 的 origin 过滤参数值域暂不加 'im'（TS 侧
+ChatSessionOriginFilter 已补词表、无调用方传它；两侧过滤 SQL 逐字镜像不变）。
 v21（custom-agent epic W3，task 07-28）= ``ai_chat_sessions.pinned_at`` + ``starred``：
 置顶分组顺序与独立星标状态；两类组织动作均不 bump updated_at。
 v20（harness-chat lane A B4，task 07-15）= ``ai_chat_sessions.last_read_at``：未读徽标的

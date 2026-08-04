@@ -506,7 +506,8 @@ async def invoke_tool(
     ``caller``（PR3 新增，可选）：``{"context_mode": str, "agent_id": str|null}``。
     headless（untrusted_trigger / cron_headless）时按该 agent 的 ``grant_connectors``
     重新判天花板 = **授权判定与执行同侧**的第二道闸（gateway 注册期过滤是第一道）；
-    ``im_chat`` 恒拒；缺席 / ``manual_chat`` → 与 PR2 逐字节相同（owner 面）。
+    缺席 / owner-present（``manual_chat`` / ``im_chat`` —— 后者自阶段 2 PR-1 起与 manual
+    同档，08-04 拍板「全开放」，写恒 HITL 在 gateway 侧）→ 与 PR2 逐字节相同（owner 面）。
     结果已在 ``ConnectorClient.call_tool`` 截断（``CALL_RESULT_MAX_CHARS``）；
     UNTRUSTED_MCP_TOOL 围栏由调用面各自套（TS gateway / Python llm_tools）。
     """
