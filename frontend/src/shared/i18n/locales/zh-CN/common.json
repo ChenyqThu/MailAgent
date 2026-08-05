@@ -4145,6 +4145,7 @@
     }
   },
   "common": {
-    "cancel": "取消"
+    "cancel": "取消",
+    "imageLoadFailed": "图片加载失败"
   }
 }

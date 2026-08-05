@@ -31,6 +31,7 @@ import type {
   ReportTone
 } from '@shared/api/types'
 import { validateReportBlocks } from '@shared/api/reportBlocks'
+import { ProgressiveImage } from '@shared/components/media/ProgressiveImage'
 import {
   type RenderCtx,
   mdLite,
@@ -1195,19 +1196,24 @@ function ImageBlock({ block }: { block: ReportImageBlock }): React.ReactElement 
         border: '1px solid rgb(var(--ink-border))'
       }}
     >
-      <img
+      {/* Real load delay here: `src` is a report-authored /api, mailagent://, app:// or data:
+          reference (src/reports/models.py is_internal_image_src) — non-data-URL forms round-trip
+          through a local server/protocol handler, and there's no size/aspect-ratio known ahead of
+          time, so a broken or slow image used to render as either nothing (still loading) or the
+          browser's native broken-image glyph (failed) forever. */}
+      <ProgressiveImage
         src={block.src}
         alt={block.alt ?? ''}
-        loading="lazy"
-        style={{
+        containerStyle={{ width: '100%', maxWidth: block.width ?? '100%', minHeight: 160 }}
+        containerClassName="mx-auto rounded-lg"
+        imgStyle={{
           display: 'block',
           width: '100%',
-          maxWidth: block.width ?? '100%',
           maxHeight: 560,
           objectFit: 'contain',
-          margin: '0 auto',
-          borderRadius: 8
+          margin: '0 auto'
         }}
+        className="rounded-lg"
       />
       {block.caption && (
         <figcaption

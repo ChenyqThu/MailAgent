@@ -4145,6 +4145,7 @@
     }
   },
   "common": {
-    "cancel": "Cancel"
+    "cancel": "Cancel",
+    "imageLoadFailed": "Image failed to load"
   }
 }
