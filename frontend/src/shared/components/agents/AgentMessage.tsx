@@ -21,6 +21,7 @@ import { TurnStatusLine } from '@shared/assistant/components/TurnStatusLine'
 import { UserMessageAttachments } from '@shared/assistant/components/message'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
 import { AssistantActionBar, UserActionBar } from '@shared/assistant/components/action-bar'
+import { FollowupSuggestions } from '@shared/assistant/components/FollowupSuggestions'
 
 // SystemMessage reuses the shared renderer; EditComposer is demo-fidelity in-place (defined below).
 export { SystemMessage } from '@shared/assistant/components/message'
@@ -69,9 +70,16 @@ export function AgentAssistantMessage(): React.JSX.Element {
       </div>
       {/* dogfood round-7 — footer：copy/reload + 「答复时间」badge 现在同在 ONE ActionBarPrimitive.Root 内
           （MessageTiming 作为 trailing 传入）→ 与按钮共享 items-center 对齐（不再偏上几 px）+ 共享 opacity
-          gating（最新常显、非最新 hover 才显，hover 行为一致）。-mb-7 + min-h-7 预留固定高度 → 不跳动。 */}
-      <div className="-mb-7 ml-1 flex min-h-7 items-center pr-1">
-        <AssistantActionBar inlineOnHover trailing={<MessageTiming />} />
+          gating（最新常显、非最新 hover 才显，hover 行为一致）。-mb-7 现移到这层外壳 —— 当
+          FollowupSuggestions 为 null（绝大多数消息：非最新 / 无 followups）时壳高度＝action row 的
+          min-h-7，-mb-7 照旧把这份高度从列表间距里抵消掉（逐字节维持 round-7 前的行为）；仅当最新一条
+          助手消息带 followups 时壳会长出 chips 的高度，-mb-7 只吃掉其中 7 个单位，多出的部分才在
+          gap-y-5 列表里占实际空间——即 0804 dogfood 1d 要的“chips 跟在 action bar 之后”新增高度。 */}
+      <div className="-mb-7">
+        <div className="ml-1 flex min-h-7 items-center pr-1">
+          <AssistantActionBar inlineOnHover trailing={<MessageTiming />} />
+        </div>
+        <FollowupSuggestions className="ml-1 mt-1.5" />
       </div>
     </MessagePrimitive.Root>
   )

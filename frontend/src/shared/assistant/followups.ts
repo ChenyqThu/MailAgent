@@ -3,8 +3,10 @@
 // The old flow was a SECOND generation after the turn (POST /api/ai/followups → renderer state);
 // W6 replaces it with an in-turn `suggest_followups` tool call: the model proposes 2-3 short
 // next questions as tool args, the gateway tool cleans them (no side effects), and BOTH chat
-// surfaces (email AiChatPanel thread + agent view AgentThread) extract them from the LAST
-// assistant message's tool part and render tappable chips above the composer.
+// surfaces (email AiChatPanel thread + agent view AgentThread) extract them from the assistant
+// message's own tool part and render tappable chips at the end of that message, right after its
+// action bar (0804 dogfood 1d moved the row there from above the composer — only the LAST message
+// ever renders it, see components/FollowupSuggestions.tsx).
 //
 // 🔴 Zero-dependency leaf (no react / electron / ai / zod): imported by BOTH the Electron-main
 //    gateway tool (relative import, pure-Node harness loadable) and the renderer chip component.

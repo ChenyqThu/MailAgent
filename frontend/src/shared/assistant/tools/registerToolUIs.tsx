@@ -17,7 +17,8 @@ import { ToolGroupCard } from './generic/ToolGroupCard'
 import { McpToolFallback } from './generic/McpApprovalCard'
 import { componentRegistry } from './ComponentRegistry'
 // W6 — suggest_followups renders NO tool card (null part UI): its one visual manifestation is the
-// chip row above the composer (FollowupSuggestions reads the tool part from the thread state).
+// chip row at the end of the assistant message, after its action bar (0804 dogfood 1d —
+// FollowupSuggestions reads the tool part off the message it is mounted in).
 // Overlaid here (not in componentRegistry) — it is not an A2UI card, just a hidden part.
 import { SuggestFollowupsHiddenPart } from '../components/FollowupSuggestions'
 import { SUGGEST_FOLLOWUPS_TOOL_NAME } from '../followups'

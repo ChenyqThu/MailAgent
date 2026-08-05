@@ -4,6 +4,12 @@
 // tool part, on BOTH chat surfaces (AgentThread footer + the email AssistantThread), and degrade
 // to nothing when the model didn't call the tool / the prompts cleaned to empty.
 //
+// 0804 dogfood 1d — the chip row moved from a THREAD-level row (above the composer) into a
+// PER-MESSAGE component mounted inside AssistantMessage / AgentAssistantMessage. The extra cases
+// below pin the isLast-driven consequence of that move: an assistant message that ISN'T the last
+// one anymore (a later message — historical, or a fresh user turn — pushed it down) never shows
+// chips, even carrying a completed suggest_followups tool part.
+//
 // (The pure extraction/cleaning logic is pinned in tests/ai-gateway/followup_tool.test.ts; this
 // file is the DOM half: parts → visible chips through the real AI SDK runtime conversion.)
 
@@ -147,5 +153,50 @@ describe('W6 follow-up chips — parts → chips on both surfaces', () => {
     mount(seeded(['接下来做什么？']), <AgentThread readOnly />)
     await waitFor(() => expect(screen.getByText('总结完了。')).toBeTruthy())
     expect(screen.queryByText('接下来做什么？')).toBeNull()
+  })
+
+  test('readOnly suppresses chips on the email surface too (same ThreadReadOnlyContext wiring)', async () => {
+    mount(seeded(['查看相关附件']), <AssistantThread readOnly />)
+    await waitFor(() => expect(screen.getByText('总结完了。')).toBeTruthy())
+    expect(screen.queryByText('查看相关附件')).toBeNull()
+  })
+
+  // 0804 dogfood 1d — the chips now share AssistantActionBar's W5 reveal gate (useCompletionReveal:
+  // mount at opacity-0 + pointer-events-none, flip to opacity-100 on the next rAF). Mirror of
+  // action_bar_reveal.test.tsx's second case: what this pins is NOT the 380ms curve (happy-dom runs
+  // no CSS transition) but the scary failure mode — rAF never lands → chips permanently invisible
+  // AND unclickable while every getByText assertion above still passes.
+  test('chips flip out of the reveal gate (never stuck at opacity-0 / pointer-events-none)', async () => {
+    mount(seeded(['接下来做什么？']), <AgentThread />)
+    const row = await waitFor(() => screen.getByTestId('followup-suggestions'))
+    expect(row.className).toContain('duration-slow')
+    await waitFor(() => expect(row.className).toContain('opacity-100'))
+    expect(row.className).not.toContain('pointer-events-none')
+  })
+
+  test('a historical assistant message (no longer last) never shows chips, even with a completed tool part', async () => {
+    mount(
+      [
+        fakeMessage({ id: 1, role: 'user', content: '帮我总结' }),
+        assistantWithFollowups(['该消失的追问']),
+        fakeMessage({ id: 3, role: 'user', content: '继续' })
+      ],
+      <AgentThread />
+    )
+    await waitFor(() => expect(screen.getByText('继续')).toBeTruthy())
+    expect(screen.queryByText('该消失的追问')).toBeNull()
+  })
+
+  test('the SAME regression on the email surface: pushing a new user turn clears the prior chips', async () => {
+    mount(
+      [
+        fakeMessage({ id: 1, role: 'user', content: '帮我总结' }),
+        assistantWithFollowups(['该消失的追问']),
+        fakeMessage({ id: 3, role: 'user', content: '继续' })
+      ],
+      <AssistantThread />
+    )
+    await waitFor(() => expect(screen.getByText('继续')).toBeTruthy())
+    expect(screen.queryByText('该消失的追问')).toBeNull()
   })
 })

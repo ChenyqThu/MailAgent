@@ -15,7 +15,7 @@ import { ArrowDown } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
-import { FollowupSuggestions } from '@shared/assistant/components/FollowupSuggestions'
+import { ThreadReadOnlyContext } from '@shared/assistant/components/threadReadOnlyContext'
 
 const AgentStrandsBackdrop = lazy(() =>
   import('@shared/components/effects/AgentStrandsBackdrop').then((m) => ({
@@ -68,67 +68,68 @@ export function AgentThread({
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
-    <ThreadPrimitive.Root
-      className="relative isolate flex min-h-0 flex-1 flex-col glass-3 text-ink-fg"
-      style={{ ['--thread-max-width' as string]: '44rem' }}
-    >
-      {onTurnComplete && <TurnCompleteWatcher onComplete={onTurnComplete} />}
-      {/* dogfood round-7 — turnAnchor="top"：发送后用户消息钉到视口顶部、回复向下铺开，不再每个 chunk 瞬跳追底
+    // 0804 dogfood 1d — ThreadReadOnlyContext carries `readOnly` down to the per-message
+    // FollowupSuggestions mounted inside AgentAssistantMessage (AgentMessage.tsx); the
+    // thread-level chip row + its own `!readOnly &&` gate that used to live here are gone.
+    <ThreadReadOnlyContext.Provider value={readOnly}>
+      <ThreadPrimitive.Root
+        className="relative isolate flex min-h-0 flex-1 flex-col glass-3 text-ink-fg"
+        style={{ ['--thread-max-width' as string]: '44rem' }}
+      >
+        {onTurnComplete && <TurnCompleteWatcher onComplete={onTurnComplete} />}
+        {/* dogfood round-7 — turnAnchor="top"：发送后用户消息钉到视口顶部、回复向下铺开，不再每个 chunk 瞬跳追底
           （旧 bottom-anchor 的 resize-follow 硬编码 scrollToBottom("instant") → "滚动生硬/跳变"）。这也实现了
           用户之前 deferred 的"首条消息上移 + 聚焦阅读"。scroll-smooth 给余下的 auto 滚动（ScrollToBottom 按钮）补平滑。 */}
-      <ThreadPrimitive.Viewport
-        turnAnchor="top"
-        className={cn(
-          // overflow-x-hidden 显式钉死横轴：overflow-y-auto 会把未声明的 overflow-x 隐式当 auto，
-          // 窄浮窗/抽屉里 composer 的 edge-light 外扩（inset:-glow）+ strands banner 任何溢出都会触发
-          // 横向滚动条（dogfood 反馈）。显式 hidden 根治，且裁掉的只是远端很淡的外发光。
-          'scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth px-4 pt-4',
-          // 空态：welcome + composer 整组垂直居中（"new chat"）。Strands 现是 AgentWelcome 文案上方的
-          // 独立装饰块（跟随 greetings，无需适配各容器尺寸），composer 在原居中位置不下移。
-          isEmpty && 'justify-center'
-        )}
-      >
-        <AuiIf condition={isNewChatView}>
-          <AgentWelcome />
-        </AuiIf>
-
-        {/* 空态显式 hidden（不靠 :empty —— assistant-ui 可能渲染空节点使 :empty 失效，残留 mb-10
-            占位把 welcome 和 composer 撑开、破坏整组居中观感）。有消息时正常显示。 */}
-        <div className={cn('mb-10 flex flex-col gap-y-5', isEmpty && 'hidden')}>
-          <ThreadPrimitive.Messages components={THREAD_MESSAGE_COMPONENTS} />
-        </div>
-        {pendingSlot}
-
-        <ThreadPrimitive.ViewportFooter
+        <ThreadPrimitive.Viewport
+          turnAnchor="top"
           className={cn(
-            'relative mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col gap-3 pb-3',
-            // 空态：footer 不铺底色，让 Strands 氛围背景在 composer 周围连续透出。
-            // 有消息：sticky docked 到底部。dogfood 反馈：进对话/出 suggestions 后叠一层
-            // bg-ink-1 会与 composer 自带的 bg-ink-2 圆角卡形成双层「底色框」→ 去掉不铺底色，
-            // 让 composer 卡像空态一样悬浮。composer 卡本身不透明（BorderGlow --rb-card-bg
-            // = ink-2）已遮挡其正后方滚动的消息；composer 在 footer 最底、pb-3 之上，其下无消息
-            // 渲染，故无穿透。suggestion chips 自带 bg-ink-2 pill，仅 chip 间隙露极窄消息，可接受。
-            !isEmpty && 'sticky bottom-0 mt-auto'
+            // overflow-x-hidden 显式钉死横轴：overflow-y-auto 会把未声明的 overflow-x 隐式当 auto，
+            // 窄浮窗/抽屉里 composer 的 edge-light 外扩（inset:-glow）+ strands banner 任何溢出都会触发
+            // 横向滚动条（dogfood 反馈）。显式 hidden 根治，且裁掉的只是远端很淡的外发光。
+            'scrollbar-thin relative flex min-h-0 flex-1 flex-col overflow-x-hidden overflow-y-auto scroll-smooth px-4 pt-4',
+            // 空态：welcome + composer 整组垂直居中（"new chat"）。Strands 现是 AgentWelcome 文案上方的
+            // 独立装饰块（跟随 greetings，无需适配各容器尺寸），composer 在原居中位置不下移。
+            isEmpty && 'justify-center'
           )}
         >
-          <AgentScrollToBottom />
-          {/* W6 (follow-ups) — next-question chips above the composer, extracted from the LAST
-              assistant message's suggest_followups tool part (shared FollowupSuggestions — the same
-              row the email AiChatPanel thread renders). Hidden while running / when the model
-              didn't call the tool / when the prompts cleaned to empty. */}
-          {!readOnly && <FollowupSuggestions />}
-          {/* assistant-modal P5 — removable email-context chip directly above the composer (modal only;
-              /sessions omits contextChip → nothing here). */}
-          {!readOnly && contextChip}
-          {!readOnly && <AgentComposer />}
           <AuiIf condition={isNewChatView}>
-            <AuiIf condition={(s) => s.composer.isEmpty}>
-              <div className="min-h-[4.5rem]">{quickActions}</div>
-            </AuiIf>
+            <AgentWelcome />
           </AuiIf>
-        </ThreadPrimitive.ViewportFooter>
-      </ThreadPrimitive.Viewport>
-    </ThreadPrimitive.Root>
+
+          {/* 空态显式 hidden（不靠 :empty —— assistant-ui 可能渲染空节点使 :empty 失效，残留 mb-10
+            占位把 welcome 和 composer 撑开、破坏整组居中观感）。有消息时正常显示。 */}
+          <div className={cn('mb-10 flex flex-col gap-y-5', isEmpty && 'hidden')}>
+            <ThreadPrimitive.Messages components={THREAD_MESSAGE_COMPONENTS} />
+          </div>
+          {pendingSlot}
+
+          <ThreadPrimitive.ViewportFooter
+            className={cn(
+              'relative mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col gap-3 pb-3',
+              // 空态：footer 不铺底色，让 Strands 氛围背景在 composer 周围连续透出。
+              // 有消息：sticky docked 到底部。dogfood 反馈：进对话/出 suggestions 后叠一层
+              // bg-ink-1 会与 composer 自带的 bg-ink-2 圆角卡形成双层「底色框」→ 去掉不铺底色，
+              // 让 composer 卡像空态一样悬浮。composer 卡本身不透明（BorderGlow --rb-card-bg
+              // = ink-2）已遮挡其正后方滚动的消息；composer 在 footer 最底、pb-3 之上，其下无消息
+              // 渲染，故无穿透。（0804 dogfood 1d 起 footer 里已无 suggestion chips —— 追问 chips
+              // 搬进了最后一条助手消息的尾部，随消息流一起滚动。）
+              !isEmpty && 'sticky bottom-0 mt-auto'
+            )}
+          >
+            <AgentScrollToBottom />
+            {/* assistant-modal P5 — removable email-context chip directly above the composer (modal only;
+              /sessions omits contextChip → nothing here). */}
+            {!readOnly && contextChip}
+            {!readOnly && <AgentComposer />}
+            <AuiIf condition={isNewChatView}>
+              <AuiIf condition={(s) => s.composer.isEmpty}>
+                <div className="min-h-[4.5rem]">{quickActions}</div>
+              </AuiIf>
+            </AuiIf>
+          </ThreadPrimitive.ViewportFooter>
+        </ThreadPrimitive.Viewport>
+      </ThreadPrimitive.Root>
+    </ThreadReadOnlyContext.Provider>
   )
 }
 

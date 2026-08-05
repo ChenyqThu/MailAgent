@@ -24,6 +24,7 @@ import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 import { getAssistantPartComponents } from '../tools/registerToolUIs'
 import { TurnStatusLine } from './TurnStatusLine'
 import { AssistantActionBar, UserActionBar } from './action-bar'
+import { FollowupSuggestions } from './FollowupSuggestions'
 
 /** Displayable image bytes of a sent attachment, or null for a non-image one. The AI SDK converter
  *  turns a user `file` part with an image/* mediaType into `{type:'image', image:<data URL>}` inside
@@ -160,7 +161,7 @@ export function AssistantMessage(): React.JSX.Element {
     []
   )
   return (
-    <MessagePrimitive.Root className="group mb-4 flex w-full justify-start">
+    <MessagePrimitive.Root className="group mb-4 flex w-full flex-col items-start">
       <div className="min-w-0 max-w-[85%] space-y-1.5 rounded-2xl rounded-bl-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
         <MessagePrimitive.Parts components={partComponents} />
         <MessagePrimitive.Error>
@@ -168,6 +169,11 @@ export function AssistantMessage(): React.JSX.Element {
         </MessagePrimitive.Error>
         <AssistantActionBar />
       </div>
+      {/* 0804 dogfood 1d — follow-up chips moved out of the thread-level row (above the composer)
+          into THIS message, right after the action bar and outside the bubble (left-aligned with
+          it via the Root's items-start). Only the LAST assistant message ever renders anything
+          here (FollowupSuggestions' own isLast/isRunning/readOnly gates). */}
+      <FollowupSuggestions className="mt-2" />
     </MessagePrimitive.Root>
   )
 }
