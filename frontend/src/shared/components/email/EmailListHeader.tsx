@@ -277,7 +277,7 @@ export function EmailListHeader({
         <div
           ref={filterPopoverRef}
           id="filter-pop"
-          className="filter-pop"
+          className="filter-pop glass-pop"
           role="dialog"
           aria-label={t('list.filter.button')}
         >

@@ -1731,9 +1731,16 @@ opaque", not a coincidence). Consequences worth knowing:
 - The §18.1 header claim "OS vibrancy as the sole blur layer" is now literally
   true for **every `.glass-pop` consumer**. It is *not* true app-wide, and the
   remaining blur inventory is worth stating in full rather than half (checked
-  2026-08-05, `grep backdrop-filter|backdrop-blur`):
-  - authored in `index.css`, **not** `.glass-pop` consumers: `.filter-pop`
-    (20px) and `#batch-bar.floating` (18px);
+  2026-08-05, `grep backdrop-filter|backdrop-blur`). `.filter-pop` (the
+  email-list filter popover) was originally on this list too — it had
+  hand-copied the *pre-C10* `.glass-pop` recipe (86% + `blur(20px)`) verbatim
+  instead of consuming the class, which is exactly the kind of drift C10 is
+  meant to close. Found in re-review the same day and fixed: it now carries
+  `glass-pop` alongside its own geometry class, so its material tracks
+  `.glass-pop` automatically instead of needing a second edit next time.
+  - authored in `index.css`, **not** a `.glass-pop` consumer: only
+    `#batch-bar.floating` (18px) remains — a panel, not a floating layer, so
+    out of C10's scope;
   - Tailwind-utility blurs on components: `EmailDetail` sticky strip
     (`backdrop-blur-2xl`), `RestartBanner` + `UpdateReadyBanner`
     (`backdrop-blur-2xl`), `EmailBodyFrame` zoom bar (`backdrop-blur-md`);

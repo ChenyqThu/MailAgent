@@ -925,8 +925,9 @@ mark {
  * → ③ 面板 .glass-* — 一律【无 backdrop-filter】只叠 --tier-* overlay
  * (整窗深浅均匀) → ④ 内容。(主题 v3: .grain 噪点层已退役, C1。)
  * 🔴 2026-08-05: 真浮层 .glass-pop 曾是「唯一保留自带 blur 的类」(20px), 现已
- * 改**不透明实色** (owner 拍板, 见下方 .glass-pop 与 DESIGN.md §18.1 C10)。
- * 仍自带 blur 的只剩 .filter-pop 与 #batch-bar.floating 两处独立配方。 */
+ * 改**不透明实色** (owner 拍板, 见下方 .glass-pop 与 DESIGN.md §18.1 C10)。同日
+ * 复核发现 .filter-pop 曾手抄同一份配方漏在外面, 已改为消费 .glass-pop 收敛；
+ * 仍自带独立 blur 配方的只剩 #batch-bar.floating 一处（面板/横幅，非真浮层）。 */
 html,
 body {
   background: transparent;
@@ -975,8 +976,9 @@ body::before {
  * 的 MentionPopover / ModelDetailCard (裸 bg-ink-2) 收敛成一种形态, 也与下方
  * solid 档 / reduced-transparency 两处覆盖同值 (那两条因此成为同值护栏, 有意
  * 保留: 它们编码的是「这两档必须不透明」这条要求, 而非巧合)。
- * 副作用: 同屏 CSS blur 预算释放 (红线「≤2 且仅真浮层」现只剩 .filter-pop /
- * #batch-bar.floating 两处自带 blur 的独立配方)。 */
+ * 副作用: 同屏 CSS blur 预算释放 (红线「≤2 且仅真浮层」现只剩
+ * #batch-bar.floating 一处自带 blur 的独立配方——.filter-pop 曾是同类漏网,
+ * 已改消费本类, 见下方「Filter popover」)。 */
 .glass-pop {
   background-color: rgb(var(--ink-2));
   border: 1px solid var(--hairline);
@@ -2238,20 +2240,20 @@ body:not([data-batch-mode='true']) .email-row .cb {
 }
 
 /* ─── Filter popover ─────────────────────────────────────────────────── */
+/* 🔴 2026-08-05: 本类曾手抄一份与 .glass-pop 相同配方 (86% 半透 + blur(20px)) —
+ * 讽刺的是上面那句旧注释自己都写着"真浮层走 .glass-pop 配方", 结果这个真浮层
+ * 自己没走, 是全 app 唯一漏网的手抄浮层 (DESIGN.md §18.1 C10 复核发现)。
+ * 改为直接消费 .glass-pop (组件 className 同时挂 "filter-pop glass-pop",
+ * 见 EmailListHeader.tsx) —— 材质 (background/border/box-shadow, 不透明
+ * rgb(--ink-2)) 全部来自 .glass-pop, 这里只留它独有的几何 (锚定/宽度/层级)。 */
 .filter-pop {
   position: absolute;
   top: calc(100% + 4px);
   right: 8px;
   width: 248px;
   z-index: 30;
-  /* 主题 v2 — 真浮层走 .glass-pop 配方 (20px 上限) */
-  background: color-mix(in srgb, var(--glass-base) 86%, transparent);
-  border: 1px solid var(--hairline);
   /* 主题 v3 C8/批 4: 内容浮层档 10px → --r-pop(14) */
   border-radius: var(--r-pop);
-  box-shadow: var(--pop-shadow);
-  -webkit-backdrop-filter: blur(20px) saturate(var(--glass-sat));
-  backdrop-filter: blur(20px) saturate(var(--glass-sat));
   overflow: hidden;
 }
 .filter-section {
