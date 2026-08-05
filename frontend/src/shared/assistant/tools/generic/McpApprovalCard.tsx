@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { Plug } from 'lucide-react'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
-import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { ApprovalActions, CardDetails, CardFrame, CardParams, TerminalBanner } from '../_cardShell'
 import { deriveCardPhase } from '../_cardShell.lib'
 import { ToolTraceCard } from './ToolTraceCard'
 import { isMcpToolName, mcpGatewayToolName, parseMcpToolName } from '../mcpToolName'
@@ -137,43 +137,43 @@ export function McpApprovalCard(props: ToolCallMessagePartProps): React.JSX.Elem
       title={t('chat.mcpApprovalCard.title')}
       phase={phase}
     >
-      <div className="flex items-baseline gap-2 text-aux">
-        <span className="shrink-0 text-ink-fg-2">{t('chat.mcpApprovalCard.connector')}</span>
-        <span className="min-w-0 break-all font-medium text-ink-fg">{connectorId || '?'}</span>
-      </div>
-      <div className="flex items-baseline gap-2 text-aux">
-        <span className="shrink-0 text-ink-fg-2">{t('chat.mcpApprovalCard.tool')}</span>
-        <span className="min-w-0 break-all font-mono text-ink-fg">{toolLabel}</span>
-      </div>
+      {/* A2 — connector + tool identity as the shared label/value table. */}
+      <CardParams
+        items={[
+          {
+            id: 'connector',
+            label: t('chat.mcpApprovalCard.connector'),
+            value: connectorId || '?',
+            accent: true
+          },
+          { id: 'tool', label: t('chat.mcpApprovalCard.tool'), value: toolLabel, mono: true }
+        ]}
+      />
+      {/* 🔴 The destructive warning stays OUTSIDE CardDetails — a red flag the user must not have
+          to expand a disclosure to see. */}
+      {phase === 'pending' && facts?.destructive === true ? (
+        <div className="mt-1.5 text-aux font-medium text-fail">
+          {t('chat.mcpApprovalCard.destructiveWarning')}
+        </div>
+      ) : null}
       {phase === 'pending' ? (
-        <>
-          {facts?.destructive === true ? (
-            <div className="mt-1.5 text-aux font-medium text-fail">
-              {t('chat.mcpApprovalCard.destructiveWarning')}
-            </div>
-          ) : null}
-          <div className="mt-1.5 text-aux text-ink-fg-2">{t('chat.mcpApprovalCard.label')}</div>
+        <div className="mt-1.5 text-aux text-ink-fg-2">{t('chat.mcpApprovalCard.label')}</div>
+      ) : null}
+      {phase === 'error' ? (
+        <div className="text-aux text-fail">{t('chat.mcpApprovalCard.error')}</div>
+      ) : (
+        // A4 — rendered outside the phase branches so it survives the decision and can fold the
+        // args payload away once the card is settled. Open while pending (review surface).
+        <CardDetails>
           <div className="scrollbar-thin mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-meta text-ink-fg">
             {preview}
           </div>
-          <ApprovalActions onApprove={onApprove} onReject={onReject} />
-        </>
-      ) : phase === 'rejected' || phase === 'expired' ? (
-        <>
-          <div className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-meta text-ink-fg-2">
-            {preview}
-          </div>
-          <TerminalBanner phase={phase} />
-        </>
-      ) : phase === 'error' ? (
-        <div className="text-aux text-fail">{t('chat.mcpApprovalCard.error')}</div>
-      ) : (
-        // authorized / done — unreachable via McpToolFallback (those phases route to
-        // ToolTraceCard); defensive echo for a direct mount.
-        <div className="mt-1 max-h-32 overflow-auto whitespace-pre-wrap break-all font-mono text-meta text-ink-fg">
-          {preview}
-        </div>
+        </CardDetails>
       )}
+      {/* A5 — likewise outside the branches: the row hides itself when the phase leaves pending,
+          so the buttons fade out instead of blinking away. */}
+      <ApprovalActions onApprove={onApprove} onReject={onReject} />
+      {phase === 'rejected' || phase === 'expired' ? <TerminalBanner phase={phase} /> : null}
     </CardFrame>
   )
 }

@@ -21,7 +21,13 @@ import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
 import { buildToolA2UIPayload, type CalendarApprovalCardProps } from '../a2ui'
-import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import {
+  ApprovalActions,
+  CardFrame,
+  CardParams,
+  type CardParam,
+  TerminalBanner
+} from '../_cardShell'
 import { deriveCardPhase } from '../_cardShell.lib'
 
 // Resolve serve-api base URL for direct fetch calls (mirrors CustomAgentApprovalCard —
@@ -105,29 +111,6 @@ function iconFor(kind: CalendarApprovalCardProps['kind']): React.ReactNode {
   return <CalendarClock size={13} strokeWidth={2} />
 }
 
-function Row({
-  label,
-  value,
-  accent
-}: {
-  label: string
-  value: string
-  accent?: boolean
-}): React.JSX.Element {
-  return (
-    <div className="flex items-baseline gap-2 text-aux">
-      <span className="shrink-0 text-ink-fg-2">{label}</span>
-      <span
-        className={
-          accent ? 'min-w-0 break-all font-medium text-ink-fg' : 'min-w-0 break-all text-ink-fg'
-        }
-      >
-        {value}
-      </span>
-    </div>
-  )
-}
-
 export function CalendarApprovalCard(props: ToolCallMessagePartProps): React.JSX.Element {
   const { toolName, args, result, respondToApproval } = props
   const { t } = useTranslation()
@@ -167,38 +150,50 @@ export function CalendarApprovalCard(props: ToolCallMessagePartProps): React.JSX
   const onApprove = (): void => respondToApproval({ approved: true })
   const onReject = (): void => respondToApproval({ approved: false })
 
-  const body = (
-    <div className="space-y-1">
-      <Row label={t('chat.calendarApprovalCard.event')} value={eventLabel} accent />
-      {data.kind === 'reschedule' && (
-        <>
-          {beforeTime && <Row label={t('chat.calendarApprovalCard.before')} value={beforeTime} />}
-          {afterTime && (
-            <Row label={t('chat.calendarApprovalCard.after')} value={afterTime} accent />
-          )}
-          <Row
-            label={t('chat.calendarApprovalCard.scope')}
-            value={t(`chat.calendarApprovalCard.scopes.${data.scope ?? 'series'}`)}
-          />
-        </>
-      )}
-      {data.kind === 'rsvp' && (
-        <>
-          {facts?.organizer && (
-            <Row label={t('chat.calendarApprovalCard.organizer')} value={facts.organizer} />
-          )}
-          <Row
-            label={t('chat.calendarApprovalCard.response')}
-            value={t(`chat.calendarApprovalCard.responses.${data.response ?? 'accept'}`)}
-            accent
-          />
-        </>
-      )}
-      {data.kind === 'delete' && beforeTime && (
-        <Row label={t('chat.calendarApprovalCard.time')} value={beforeTime} />
-      )}
-    </div>
-  )
+  // A2 — the before/after review rows as the shared label/value table (was a local `Row`).
+  // 🔴 Order is load-bearing for reschedule: 原时间 immediately above 新时间, so the two-column
+  // grid lines the timestamps up for a literal before→after diff.
+  const params: CardParam[] = [
+    { id: 'event', label: t('chat.calendarApprovalCard.event'), value: eventLabel, accent: true }
+  ]
+  if (data.kind === 'reschedule') {
+    if (beforeTime)
+      params.push({
+        id: 'before',
+        label: t('chat.calendarApprovalCard.before'),
+        value: beforeTime
+      })
+    if (afterTime)
+      params.push({
+        id: 'after',
+        label: t('chat.calendarApprovalCard.after'),
+        value: afterTime,
+        accent: true
+      })
+    params.push({
+      id: 'scope',
+      label: t('chat.calendarApprovalCard.scope'),
+      value: t(`chat.calendarApprovalCard.scopes.${data.scope ?? 'series'}`)
+    })
+  }
+  if (data.kind === 'rsvp') {
+    if (facts?.organizer)
+      params.push({
+        id: 'organizer',
+        label: t('chat.calendarApprovalCard.organizer'),
+        value: facts.organizer
+      })
+    params.push({
+      id: 'response',
+      label: t('chat.calendarApprovalCard.response'),
+      value: t(`chat.calendarApprovalCard.responses.${data.response ?? 'accept'}`),
+      accent: true
+    })
+  }
+  if (data.kind === 'delete' && beforeTime) {
+    params.push({ id: 'time', label: t('chat.calendarApprovalCard.time'), value: beforeTime })
+  }
+  const body = <CardParams items={params} />
 
   const warningKey =
     data.kind === 'rsvp'

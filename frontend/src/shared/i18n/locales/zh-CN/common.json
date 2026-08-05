@@ -994,16 +994,18 @@
     "approvalShell": {
       "phase": {
         "pending": "待确认",
+        "approving": "审批中",
         "authorized": "执行中",
         "done": "已完成",
-        "rejected": "已取消",
+        "rejected": "已拒绝",
         "expired": "已过期",
         "error": "失败"
       },
       "approve": "允许",
-      "cancel": "取消",
+      "cancel": "拒绝",
+      "details": "查看详情",
       "actionFailed": "操作失败：{error}",
-      "rejectedBanner": "已取消，未执行该操作。",
+      "rejectedBanner": "已拒绝，未执行该操作。",
       "expiredBanner": "审批已过期，请让助手重新发起。"
     },
     "sendApprovalCard": {

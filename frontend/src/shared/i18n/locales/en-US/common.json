@@ -994,16 +994,18 @@
     "approvalShell": {
       "phase": {
         "pending": "Pending",
+        "approving": "Approving",
         "authorized": "Running",
         "done": "Done",
-        "rejected": "Cancelled",
+        "rejected": "Denied",
         "expired": "Expired",
         "error": "Failed"
       },
       "approve": "Allow",
-      "cancel": "Cancel",
+      "cancel": "Deny",
+      "details": "View details",
       "actionFailed": "Action failed: {error}",
-      "rejectedBanner": "Cancelled — the operation was not performed.",
+      "rejectedBanner": "Denied — the operation was not performed.",
       "expiredBanner": "The approval expired — ask the assistant to start over."
     },
     "sendApprovalCard": {

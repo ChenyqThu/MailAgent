@@ -61,7 +61,7 @@ afterEach(() => {
 })
 
 describe('SendApprovalCard — pending (approval-requested)', () => {
-  test('renders editable To/Subject/Body + 允许发送/取消 + expiry countdown', () => {
+  test('renders editable To/Subject/Body + 允许发送/拒绝 + expiry countdown', () => {
     render(<SendApprovalCard {...mockProps({})} />)
     expect((screen.getByLabelText('收件人') as HTMLInputElement).value).toBe(
       'colleague@example-corp.test'
@@ -69,7 +69,7 @@ describe('SendApprovalCard — pending (approval-requested)', () => {
     expect((screen.getByLabelText('主题') as HTMLInputElement).value).toBe('报价确认结论')
     expect((screen.getByLabelText('正文') as HTMLTextAreaElement).value).toContain('单价 1280')
     expect(screen.getByText('允许发送')).toBeTruthy()
-    expect(screen.getByText('取消')).toBeTruthy()
+    expect(screen.getByText('拒绝')).toBeTruthy()
     expect(screen.getByText(/审批有效期/)).toBeTruthy()
   })
 
@@ -141,7 +141,7 @@ describe('SendApprovalCard — pending (approval-requested)', () => {
   test('reject → respondToApproval(false)', async () => {
     const respondToApproval = vi.fn()
     render(<SendApprovalCard {...mockProps({ respondToApproval })} />)
-    fireEvent.click(screen.getByText('取消'))
+    fireEvent.click(screen.getByText('拒绝'))
     await waitFor(() => expect(respondToApproval).toHaveBeenCalledWith({ approved: false }))
   })
 })

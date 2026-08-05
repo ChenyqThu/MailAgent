@@ -4,7 +4,12 @@
 
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
+import { EASE_OUT } from '@shared/lib/motion-tokens'
 import { resolveAiGatewayBaseUrl } from '../runtime/flags'
+// 🔴 「没人决定」的 resolution 值域是**上游**定义的（`@assistant-ui/core` 的
+// `resolution?: "cancelled" | "expired"`），此前这里和 runtime/toolPhase.ts 各手抄一份两个字面量。
+// 单源在那个零依赖叶子里（反向 import 会把 motion-tokens / runtime flags 拉进叶子）。
+import { isResolutionWithoutDecision } from '../runtime/toolPhase'
 
 export type CardPhase =
   | 'pending' // approval-requested: the card asks the user to approve / edit / reject
@@ -24,7 +29,7 @@ export function deriveCardPhase(
   if (isError === true || (status?.type === 'incomplete' && status.reason === 'error')) {
     return 'error'
   }
-  if (approval?.resolution === 'cancelled' || approval?.resolution === 'expired') return 'expired'
+  if (isResolutionWithoutDecision(approval?.resolution)) return 'expired'
   if (approval && approval.approved === false) return 'rejected'
   if (result !== undefined && result !== null) return 'done'
   // approval gate still open (approved === undefined, no resolution) → ask the user.
@@ -32,6 +37,22 @@ export function deriveCardPhase(
   // approved but no result yet (executing), or a reloaded part with neither — treat as
   // authorized/running so the card shows a calm "running" state rather than empty.
   return approval?.approved === true ? 'authorized' : 'done'
+}
+
+/** A5 (beUI tool-approval) — the approval action row's motion contract, returned as DATA so the
+ *  reduced-motion branch is unit-testable: `whileTap` / `exit` are motion props, invisible in the
+ *  rendered DOM, so a "reduce → no animation" assertion has nothing to query otherwise.
+ *  reduce ⇒ no press scale AND a zero-duration exit (the row disappears at once, no fade). */
+export function approvalActionsMotion(reduce: boolean): {
+  whileTap: { scale: number } | undefined
+  exit: { opacity: number }
+  transition: { duration: number; ease: typeof EASE_OUT }
+} {
+  return {
+    whileTap: reduce ? undefined : { scale: 0.97 },
+    exit: { opacity: 0 },
+    transition: { duration: reduce ? 0 : 0.22, ease: EASE_OUT }
+  }
 }
 
 /** Longest error detail a card will render — a schema-validation errorText embeds the whole
@@ -114,4 +135,3 @@ export async function postApprovalEdit(
     throw new Error(code)
   }
 }
-

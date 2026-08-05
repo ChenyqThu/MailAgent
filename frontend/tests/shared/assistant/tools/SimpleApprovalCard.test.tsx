@@ -49,7 +49,7 @@ describe('SimpleApprovalCard — pending (approval-requested)', () => {
     expect(screen.getByText('https://example.test/report')).toBeTruthy()
     // real approve + reject buttons (the whole point — the buttonless fallback has neither).
     expect(screen.getByText('允许')).toBeTruthy()
-    expect(screen.getByText('取消')).toBeTruthy()
+    expect(screen.getByText('拒绝')).toBeTruthy()
   })
 
   test('web_search: shows the query as the pinned review value', () => {
@@ -134,7 +134,7 @@ describe('SimpleApprovalCard — pending (approval-requested)', () => {
     // BOTH halves of the pinned identity are reviewable — approving must not be a blind rollback.
     expect(screen.getByText('回滚到版本 ab12cd34')).toBeTruthy()
     expect(screen.getByText('允许')).toBeTruthy()
-    expect(screen.getByText('取消')).toBeTruthy()
+    expect(screen.getByText('拒绝')).toBeTruthy()
   })
 
   test('agent_memory_update: shows the full proposed memory.md + approve buttons', () => {
@@ -182,13 +182,13 @@ describe('SimpleApprovalCard — approve / reject wire respondToApproval (通道
         })}
       />
     )
-    fireEvent.click(screen.getByText('取消'))
+    fireEvent.click(screen.getByText('拒绝'))
     expect(respond).toHaveBeenCalledWith({ approved: false })
   })
 })
 
 describe('SimpleApprovalCard — terminal phases', () => {
-  test('rejected → shows the "已取消" banner, no approve button', () => {
+  test('rejected → shows the "已拒绝" banner, no approve button', () => {
     render(
       <SimpleApprovalCard
         {...mockProps({
@@ -199,7 +199,7 @@ describe('SimpleApprovalCard — terminal phases', () => {
         })}
       />
     )
-    expect(screen.getByText('已取消，未执行该操作。')).toBeTruthy()
+    expect(screen.getByText('已拒绝，未执行该操作。')).toBeTruthy()
     expect(screen.queryByText('允许')).toBeNull()
   })
 
@@ -217,6 +217,6 @@ describe('SimpleApprovalCard — terminal phases', () => {
     )
     expect(screen.getByText('weekly-report')).toBeTruthy()
     expect(screen.queryByText('允许')).toBeNull()
-    expect(screen.queryByText('取消')).toBeNull()
+    expect(screen.queryByText('拒绝')).toBeNull()
   })
 })

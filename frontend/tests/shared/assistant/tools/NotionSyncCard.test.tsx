@@ -38,7 +38,7 @@ describe('NotionSyncCard — pending', () => {
     render(<NotionSyncCard {...mockProps({})} />)
     expect(screen.getByText(/重新把邮件 #42 推送到 Notion/)).toBeTruthy()
     expect(screen.getByText('重新同步')).toBeTruthy()
-    expect(screen.getByText('取消')).toBeTruthy()
+    expect(screen.getByText('拒绝')).toBeTruthy()
     expect(screen.queryByRole('textbox')).toBeNull()
   })
 
@@ -51,7 +51,7 @@ describe('NotionSyncCard — pending', () => {
     cleanup()
     const reject = vi.fn()
     render(<NotionSyncCard {...mockProps({ respondToApproval: reject })} />)
-    fireEvent.click(screen.getByText('取消'))
+    fireEvent.click(screen.getByText('拒绝'))
     await waitFor(() => expect(reject).toHaveBeenCalledWith({ approved: false }))
   })
 })

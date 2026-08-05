@@ -113,7 +113,7 @@ describe('PendingApprovalPanel — manual session (agentName null)', () => {
     mockPostDecide.mockResolvedValue({ ok: false, status: 'error', error: 'gateway unreachable' })
     const onDecided = vi.fn()
     withQuery(<PendingApprovalPanel sessionId={9} onDecided={onDecided} />)
-    fireEvent.click(await screen.findByRole('button', { name: '取消' }))
+    fireEvent.click(await screen.findByRole('button', { name: '拒绝' }))
     await waitFor(() =>
       expect(mockPostDecide).toHaveBeenCalledWith({ approvalId: 'ap_m1', decision: 'reject' })
     )

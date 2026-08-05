@@ -82,7 +82,7 @@ describe('SystemDocApprovalCard — pending (approval-requested)', () => {
   test('offers real approve + reject buttons (not the buttonless trace-card spinner)', () => {
     render(<SystemDocApprovalCard {...mockProps({})} />)
     expect(screen.getByText('允许')).toBeTruthy()
-    expect(screen.getByText('取消')).toBeTruthy()
+    expect(screen.getByText('拒绝')).toBeTruthy()
   })
 
   test('soul/agent/rules get the high-risk title + safety-floor note; user does not', () => {
@@ -136,7 +136,7 @@ describe('SystemDocApprovalCard — approve / reject wire respondToApproval', ()
   test('reject → respondToApproval({ approved: false })', () => {
     const respond = vi.fn()
     render(<SystemDocApprovalCard {...mockProps({ respondToApproval: respond })} />)
-    fireEvent.click(screen.getByText('取消'))
+    fireEvent.click(screen.getByText('拒绝'))
     expect(respond).toHaveBeenCalledWith({ approved: false })
   })
 })

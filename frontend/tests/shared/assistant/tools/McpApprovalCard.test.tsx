@@ -75,7 +75,7 @@ describe('McpApprovalCard — pending', () => {
     stubToolsFetch([])
     const respond = vi.fn()
     render(<McpApprovalCard {...mockProps({ respondToApproval: respond })} />)
-    fireEvent.click(screen.getByText('取消').closest('button')!)
+    fireEvent.click(screen.getByText('拒绝').closest('button')!)
     expect(respond).toHaveBeenCalledWith({ approved: false })
   })
 

@@ -128,7 +128,7 @@ describe('DraftComposeCard — compose (pending)', () => {
   test('reject → respondToApproval(false)', async () => {
     const respondToApproval = vi.fn()
     render(<DraftComposeCard {...mockProps({ respondToApproval })} />)
-    fireEvent.click(screen.getByText('取消'))
+    fireEvent.click(screen.getByText('拒绝'))
     await waitFor(() => expect(respondToApproval).toHaveBeenCalledWith({ approved: false }))
   })
 })

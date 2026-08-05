@@ -21,7 +21,7 @@ import { Brain, Globe, History, NotebookPen, Play, Search, Trash2 } from 'lucide
 import { useTranslation } from 'react-i18next'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 
-import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
+import { ApprovalActions, CardDetails, CardFrame, TerminalBanner } from '../_cardShell'
 import { deriveCardPhase } from '../_cardShell.lib'
 
 /** Per-tool copy: the i18n key suffix (title + label live under chat.simpleApprovalCard.<key>) and
@@ -130,18 +130,29 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
   return (
     <CardFrame icon={iconFor(toolName)} title={title} phase={phase}>
       {phase === 'pending' ? (
+        <div className="text-aux text-ink-fg-2">
+          {spec
+            ? t(`chat.simpleApprovalCard.${spec.key}.label`)
+            : t('chat.simpleApprovalCard.fallbackLabel')}
+        </div>
+      ) : null}
+      {phase === 'error' ? (
+        <div className="text-aux text-fail">{t('chat.simpleApprovalCard.error')}</div>
+      ) : (
+        // A4 — the pinned value + continuation live OUTSIDE the phase branches so the disclosure
+        // survives the decision and folds itself away once the card settles (open while pending —
+        // the review surface is never a click away). In the authorized / done phases this echoes
+        // the pinned value; these tools' result bodies are model-facing content (fenced web text /
+        // job id), not surfaced in the approval card.
         <>
-          <div className="text-aux text-ink-fg-2">
-            {spec
-              ? t(`chat.simpleApprovalCard.${spec.key}.label`)
-              : t('chat.simpleApprovalCard.fallbackLabel')}
-          </div>
-          {/* 阶段 0.5-① G9 — agent_memory_update pins the WHOLE proposed memory.md (a 5k-char
-              budget), so the review box is bounded + scrollable. A short value (url / query /
-              agent id) is unaffected: max-height never shrinks anything. */}
-          <div className="scrollbar-thin mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-meta text-ink-fg">
-            {value}
-          </div>
+          <CardDetails>
+            {/* 阶段 0.5-① G9 — agent_memory_update pins the WHOLE proposed memory.md (a 5k-char
+                budget), so the review box is bounded + scrollable. A short value (url / query /
+                agent id) is unaffected: max-height never shrinks anything. */}
+            <div className="scrollbar-thin mt-1 max-h-56 overflow-auto whitespace-pre-wrap break-all font-mono text-meta text-ink-fg">
+              {value}
+            </div>
+          </CardDetails>
           {continuation ? (
             <div className="mt-1.5 text-aux text-ink-fg-3">
               {t(`chat.simpleApprovalCard.${spec?.continuationKey ?? 'continuation'}`, {
@@ -149,20 +160,11 @@ export function SimpleApprovalCard(props: ToolCallMessagePartProps): React.JSX.E
               })}
             </div>
           ) : null}
-          <ApprovalActions onApprove={onApprove} onReject={onReject} />
         </>
-      ) : phase === 'rejected' || phase === 'expired' ? (
-        <>
-          <div className="break-all font-mono text-meta text-ink-fg-2">{value}</div>
-          <TerminalBanner phase={phase} />
-        </>
-      ) : phase === 'error' ? (
-        <div className="text-aux text-fail">{t('chat.simpleApprovalCard.error')}</div>
-      ) : (
-        // authorized (executing) / done — echo the pinned value; these tools' result bodies are
-        // model-facing content (fenced web text / job id), not surfaced in the approval card.
-        <div className="break-all font-mono text-meta text-ink-fg">{value}</div>
       )}
+      {/* A5 — outside the branches too: the row hides itself once the phase leaves pending. */}
+      <ApprovalActions onApprove={onApprove} onReject={onReject} />
+      {phase === 'rejected' || phase === 'expired' ? <TerminalBanner phase={phase} /> : null}
     </CardFrame>
   )
 }

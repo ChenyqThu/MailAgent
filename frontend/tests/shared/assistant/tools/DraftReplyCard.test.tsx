@@ -62,7 +62,7 @@ describe('DraftReplyCard — pending (approval-requested)', () => {
     const textarea = screen.getByLabelText('reply draft body') as HTMLTextAreaElement
     expect(textarea.value).toBe('proposed body')
     expect(screen.getByText('创建草稿')).toBeTruthy()
-    expect(screen.getByText('取消')).toBeTruthy()
+    expect(screen.getByText('拒绝')).toBeTruthy()
   })
 
   test('approve WITHOUT editing → respondToApproval(true), NO resolve POST', async () => {
@@ -111,7 +111,7 @@ describe('DraftReplyCard — pending (approval-requested)', () => {
   test('reject → respondToApproval(false)', async () => {
     const respondToApproval = vi.fn()
     render(<DraftReplyCard {...mockProps({ respondToApproval })} />)
-    fireEvent.click(screen.getByText('取消'))
+    fireEvent.click(screen.getByText('拒绝'))
     await waitFor(() => expect(respondToApproval).toHaveBeenCalledWith({ approved: false }))
   })
 })
