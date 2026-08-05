@@ -199,10 +199,18 @@ export const CONNECTOR_MANIFEST_TTL_MS = 30_000
  *  short-circuited on a cached null. A failure is a transient statement about serve-api, not about
  *  the manifest, so it expires an order of magnitude faster. */
 export const CONNECTOR_MANIFEST_FAILURE_TTL_MS = 3_000
-/** 0804 dogfood — backoff of the startup prewarm's retries (bounded: 2 extra attempts). serve-api
- *  measured only ~1.2s behind the gateway, so 1s/3s covers the real race without turning a genuinely
- *  down backend into a retry storm. */
-export const CONNECTOR_MANIFEST_PREWARM_RETRIES_MS: readonly number[] = [1_000, 3_000]
+/** 0805 dogfood — backoff of the startup prewarm's retries (bounded: 5 extra attempts). The 0804
+ *  fix only measured a ~1.2s race and covered it with 1s/3s (~4s total); two field logs the SAME
+ *  night showed serve-api's real cold-start range is 4-34s (one session took the full 34s), so a
+ *  4s window still lost every slow boot to the give-up path. Lengthened to a cumulative ~40s window
+ *  (1+3+6+10+20=40s) whose LAST attempt lands after the entire observed range — see
+ *  connector_cold_start.test.ts's "covers the observed serve-api cold-start range" pin. This only
+ *  affects the BACKGROUND prewarm's own retry loop (fire-and-forget, never blocks gateway startup
+ *  or any request path); the real safety net for a still-cold cache is prepareChatRun's per-run
+ *  `ensureConnectorManifest` await (unchanged by this constant). */
+export const CONNECTOR_MANIFEST_PREWARM_RETRIES_MS: readonly number[] = [
+  1_000, 3_000, 6_000, 10_000, 20_000
+]
 
 /** The lifecycle's TTL-cached connector manifest (extracted from ai_gateway_lifecycle so the
  *  cache/TTL/prewarm semantics are unit-testable — the lifecycle module itself cannot load in
@@ -210,8 +218,19 @@ export const CONNECTOR_MANIFEST_PREWARM_RETRIES_MS: readonly number[] = [1_000, 
 export interface ConnectorManifestCache {
   /** Refresh unless the cached entry is still inside its TTL. Single-flight (concurrent callers
    *  share one in-flight fetch) and CONTRACTED never to throw. `force` skips only the freshness
-   *  short-circuit (used by the prewarm retries, whose whole point is to re-try a cached null). */
-  refresh: (opts?: { force?: boolean }) => Promise<void>
+   *  short-circuit (used by the prewarm retries, whose whole point is to re-try a cached null).
+   *  `quiet` suppresses this call's on-disk `connector_manifest_warn` line (used by the prewarm's
+   *  middle retries — see prewarm below — so a lengthened backoff schedule doesn't multiply the
+   *  same "serve-api still cold" line on disk; the fetch itself is unaffected).
+   *  ⚠️ `quiet` is a property of the FETCH, not of the caller, so single-flight leaks it: a loud
+   *  caller (the run path's ensureConnectorManifest, which never passes quiet) that JOINS an
+   *  in-flight quiet prewarm retry gets no warn detail either. Accepted, not a signal loss — in
+   *  that window the identical error was already logged loud by prewarm attempt #0, and both
+   *  `connector_manifest_refresh {ok:false}` (unconditional, in settle) and the lifecycle's
+   *  `connector_tools_skipped` still land. Do NOT "fix" it by mutating the opts object after the
+   *  fact: that only works while the lifecycle's onWarn reads `opts.quiet` lazily, which no test
+   *  can pin (ai_gateway_lifecycle cannot load in vitest). */
+  refresh: (opts?: { force?: boolean; quiet?: boolean }) => Promise<void>
   /** The cached manifest (null = never fetched / last pull failed). Synchronous — buildTools is. */
   peek: () => ConnectorToolManifestEntry[] | null
   /** Fire-and-forget startup warm-up with bounded retries (see CONNECTOR_MANIFEST_PREWARM_RETRIES_MS):
@@ -225,10 +244,13 @@ export interface ConnectorManifestCache {
  *
  * `fetchManifest` is contracted never to throw (fetchConnectorManifest returns null on any
  * failure); the catch below is belt only. `log` receives structured records for the on-disk
- * gateway log (omitted in tests → no logging).
+ * gateway log (omitted in tests → no logging). `fetchManifest` takes an optional `quiet` flag it
+ * MAY use to suppress its own failure-warn logging for a single call (the lifecycle's factory
+ * threads this into `fetchConnectorManifest`'s onWarn hook) — the cache itself never inspects the
+ * flag beyond passing it through.
  */
 export function createConnectorManifestCache(
-  fetchManifest: () => Promise<ConnectorToolManifestEntry[] | null>,
+  fetchManifest: (opts?: { quiet?: boolean }) => Promise<ConnectorToolManifestEntry[] | null>,
   log: (rec: Record<string, unknown>) => void = () => {}
 ): ConnectorManifestCache {
   let cache: { at: number; value: ConnectorToolManifestEntry[] | null; ttlMs: number } | null = null
@@ -245,10 +267,10 @@ export function createConnectorManifestCache(
     log({ event: 'connector_manifest_refresh', ok: value !== null, entries: value?.length ?? null })
   }
 
-  const refresh = (opts: { force?: boolean } = {}): Promise<void> => {
+  const refresh = (opts: { force?: boolean; quiet?: boolean } = {}): Promise<void> => {
     if (inFlight) return inFlight
     if (!opts.force && cache && Date.now() - cache.at < cache.ttlMs) return Promise.resolve()
-    inFlight = fetchManifest()
+    inFlight = fetchManifest({ quiet: opts.quiet })
       .then(settle)
       .catch(() => settle(null))
       .finally(() => {
@@ -257,9 +279,14 @@ export function createConnectorManifestCache(
     return inFlight
   }
 
+  // 0805 dogfood — the lengthened retry schedule (5 attempts, up from 2) would otherwise multiply
+  // the same "serve-api still cold" connector_manifest_warn line on disk. Only the FIRST attempt
+  // (i===0) logs it; the middle retries pass quiet:true (fetchManifest still runs identically —
+  // only the on-disk warn line is suppressed). The give-up event below is unaffected and remains
+  // the "final" log marker for a fully exhausted prewarm.
   const prewarm = (): void => {
     const attempt = (i: number): void => {
-      void refresh({ force: i > 0 }).then(() => {
+      void refresh({ force: i > 0, quiet: i > 0 }).then(() => {
         if (cache?.value != null) return
         if (i >= CONNECTOR_MANIFEST_PREWARM_RETRIES_MS.length) {
           log({ event: 'connector_manifest_prewarm_gave_up', attempts: i + 1 })

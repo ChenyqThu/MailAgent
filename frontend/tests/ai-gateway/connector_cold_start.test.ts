@@ -297,6 +297,49 @@ describe('createConnectorManifestCache — TTLs, single-flight, prewarm retries'
     await expect(cache.refresh()).resolves.toBeUndefined()
     expect(cache.peek()).toBeNull()
   })
+
+  test('0805 dogfood: the give-up backoff window covers the observed serve-api cold-start range (4-34s)', async () => {
+    vi.useFakeTimers()
+    const start = Date.now()
+    let giveUpAtMs: number | null = null
+    const cache = createConnectorManifestCache(
+      async () => null,
+      (rec) => {
+        if (rec.event === 'connector_manifest_prewarm_gave_up') giveUpAtMs = Date.now() - start
+      }
+    )
+
+    cache.prewarm()
+    await vi.advanceTimersByTimeAsync(0)
+    for (const delay of CONNECTOR_MANIFEST_PREWARM_RETRIES_MS) {
+      await vi.advanceTimersByTimeAsync(delay)
+    }
+
+    // The field's worst observed cold start was 34s — the schedule's cumulative backoff must clear
+    // it with margin (35s), not merely the ~4s the pre-0805 [1s, 3s] schedule covered.
+    expect(giveUpAtMs).not.toBeNull()
+    expect(giveUpAtMs as number).toBeGreaterThanOrEqual(35_000)
+  })
+
+  test('0805 dogfood: prewarm quiets every retry after the first (a longer schedule must not multiply warn noise)', async () => {
+    vi.useFakeTimers()
+    const quietFlags: Array<boolean | undefined> = []
+    const cache = createConnectorManifestCache(async (opts) => {
+      quietFlags.push(opts?.quiet)
+      return null
+    })
+
+    cache.prewarm()
+    await vi.advanceTimersByTimeAsync(0)
+    for (const delay of CONNECTOR_MANIFEST_PREWARM_RETRIES_MS) {
+      await vi.advanceTimersByTimeAsync(delay)
+    }
+
+    // First attempt (i=0) is loud (quiet:false); every retry after it is quiet:true. The caller
+    // (ai_gateway_lifecycle.ts) threads this into fetchConnectorManifest's onWarn to suppress the
+    // on-disk connector_manifest_warn line for the middle retries only.
+    expect(quietFlags).toEqual([false, true, true, true, true, true])
+  })
 })
 
 describe('connectorManifestSkipReason — why an admitted run registered nothing', () => {

@@ -544,13 +544,17 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // AWAITS it so neither a one-shot headless run with connector grants nor an owner-present turn
   // (manual/im — 0804 主修, prepareChatRun awaits before buildTools) builds tools off a cold cache.
   const connectorManifest = createConnectorManifestCache(
-    () =>
+    (opts) =>
       fetchConnectorManifest(domain, {
         // D1 observability — the degradation warnings used to go console-only (invisible in a
-        // packaged app); mirror them into the on-disk gateway log.
+        // packaged app); mirror them into the on-disk gateway log. 0805 dogfood — `quiet` (set by
+        // the prewarm's middle retries, connector.ts) suppresses only the ON-DISK line; console.warn
+        // still fires unconditionally (cheap, dev-only visibility) since it never accumulates on disk.
         onWarn: (message, err) => {
           console.warn(message, err)
-          gatewayLogLine({ event: 'connector_manifest_warn', message, error: String(err) })
+          if (!opts?.quiet) {
+            gatewayLogLine({ event: 'connector_manifest_warn', message, error: String(err) })
+          }
         }
       }),
     gatewayLogLine
@@ -558,8 +562,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   const refreshConnectorManifest = (): Promise<void> =>
     mcpConnectorsEnabled ? connectorManifest.refresh() : Promise.resolve()
   // Prewarm (fire-and-forget — a slow serve-api must never block gateway startup) WITH bounded
-  // retries: the gateway comes up ~1.2s before serve-api accepts requests, so attempt #1 reliably
-  // fails in the field.
+  // retries: 0805 dogfood raised these from 2 to 5 attempts (~40s cumulative, see
+  // CONNECTOR_MANIFEST_PREWARM_RETRIES_MS) after field logs showed serve-api's cold start ranging
+  // 4-34s, not the ~1.2s the original 1s/3s schedule assumed.
   if (mcpConnectorsEnabled) connectorManifest.prewarm()
   // S4 W3 — MAILAGENT_CUSTOM_AGENTS_ENABLED gates the headless custom-agent fresh-spawn endpoint
   // (POST /api/ai/agent-run): its two cfg hooks (fetchAgentRunSpec + createAgentSession) are wired

@@ -269,7 +269,7 @@ test_stale_delete_rows_migrated_to_write_destructive`（含幂等 + 迁移后可
 
 | 环节 | 语义 |
 |---|---|
-| 启动预热 | gateway 起来时 fire-and-forget 拉一次，**失败按 1s / 3s 退避重试 2 次**（有界，不是重试风暴）。gateway 比 serve-api 早约 1.2s 就绪，第一发在现场是**必失败**的 |
+| 启动预热 | gateway 起来时 fire-and-forget 拉一次，**失败按 1s/3s/6s/10s/20s 退避重试 5 次**（累计 ~40s，有界，不是重试风暴；`CONNECTOR_MANIFEST_PREWARM_RETRIES_MS`）。0805 dogfood：serve-api 冷启实测 4-34s（不是当初以为的 ~1.2s），故把窗口拉到覆盖整段观测范围；重试次数变多但**日志噪音没有跟着变多**——只有首次尝试与最终放弃各打一条，中间重试的 `connector_manifest_warn` 用 `quiet` 静默（fetch 本身照常跑，只是不落盘） |
 | 缓存新鲜期 | 成功 **30s**；失败（`value=null`）只 **3s**（`CONNECTOR_MANIFEST_FAILURE_TTL_MS`）—— 失败是关于 serve-api 的瞬时判断，不是关于 manifest 的 |
 | run 前预热 | `prepareChatRun` 在 `buildTools` **之前** `await cfg.ensureConnectorManifest()`（owner-present venue：`shouldLoadConnectorTools` 接纳的 `manual_chat` / `im_chat`）；一次性 headless run 由 `agentRun.ts` 按 grant 预热（§6.2）。缓存热时立即返回，单飞 + 契约不抛；⚠️ **3s 是每个 HTTP 请求的上限不是总预算**（list 1 次 + 每个已连接 connector 的 tools 各 1 次，串行），serve-api「接了连接但不回」时该轮首字延迟按 connector 数叠加——现场 2 家 ⇒ 最坏 ~9s。真出现再加总预算 race（不改这里的语义，只封顶等待） |
 
@@ -281,8 +281,12 @@ test_stale_delete_rows_migrated_to_write_destructive`（含幂等 + 迁移后可
 「prompt 宣告了 connector、ToolSet 里却没有」。
 
 **可观测**（`~/Library/Logs/MailAgent/ai-gateway.log`，`gatewayLogLine`）：
-`connector_manifest_refresh`（每次真拉，`ok` + 条目数）· `connector_manifest_warn`（降级警告）·
-`connector_manifest_prewarm_gave_up`（预热重试用尽）· `connector_tools_registered`（注册成功）·
+`connector_manifest_refresh`（每次真拉，`ok` + 条目数 —— **不受 `quiet` 影响，恒落盘**，所以「拉了且失败」
+永远有痕）· `connector_manifest_warn`（降级警告的**详情**（message/error）；0805 起预热的**中间重试**用
+`quiet` 不落这条，只有第一发与最终放弃留痕 —— 拉长退避后防同一句话刷屏。⚠️ 单飞副作用：run 前 await 若
+正好并到一发 quiet 的在途预热上，该轮也不落这条详情；此时同一根因的详情已由第一发（loud）记过，且
+`connector_manifest_refresh ok:false` 与 `connector_tools_skipped` 照常留痕）·
+`connector_manifest_prewarm_gave_up`（预热重试用尽，新排程下 `attempts:6`）· `connector_tools_registered`（注册成功）·
 `connector_tools_skipped`（🔴 被接纳却什么都没注册，`reason` 分
 `manifest_unavailable`（缓存为 null）/ `manifest_empty`（拉到了但零条），此前是完全静默的失败）。
 
@@ -482,7 +486,7 @@ TS 三份里两份是编译期类型（压根没有值可 import）。
 | `routers/connector.py::_require_enabled` | 端点正常 | 除 `oauth/callback` 外**全 409** `E_CONNECTOR_DISABLED` |
 | `GET /api/connector/oauth/callback` | — | **刻意不挂 flag 门**：off 时不存在活 rendezvous → 天然 404；端点自身零副作用 |
 | `/api/chat/config.connectorToolsEnabled` | `true` | `false`（字段恒发） |
-| `ai_gateway_lifecycle.ts` manifest 拉取 + `ensureConnectorManifest` | 启动预热（1s/3s 退避重试 2 次）+ TTL 缓存（成功 30s / 失败 3s）+ 单飞，run 前 await（§5.6） | 不预热、不拉、不接线，零工作 |
+| `ai_gateway_lifecycle.ts` manifest 拉取 + `ensureConnectorManifest` | 启动预热（1s/3s/6s/10s/20s 退避重试 5 次，累计 ~40s）+ TTL 缓存（成功 30s / 失败 3s）+ 单飞，run 前 await（§5.6） | 不预热、不拉、不接线，零工作 |
 | `createConnectorTools` / `shouldLoadConnectorTools` | 注册动态工具 | `buildGatewayTools` 字节级回退 |
 | `llm_tools.build_connector_llm_tools` | 造 schema + handler | 返回 `([], {})`，报告/分类逐字节回退 |
 | Settings `ConnectorsSection` | 渲染 | `return null`（整区不在 DOM，且**零** `/api/connector/*` 请求） |
