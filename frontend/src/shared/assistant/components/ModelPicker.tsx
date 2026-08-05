@@ -17,8 +17,16 @@
 //      本文件只管展示；查不到 → 静默降级成裸 id 一行，与引入目录之前逐字一样。
 //   ② 药丸语义**改成上下文长度**（原来印的是 maxOutput「最大输出」，和参考产品不是一回事）。
 //      maxOutput 搬进 hover 卡。
-//   ③ 选中态从 `bg-coral/10 text-coral` 改**中性灰**：彩色 logo + 彩色能力块之后，再来一层
-//      coral 整行会打架；参考产品的克制感很大一部分来自这里。
+//   ③ 选中态曾从 `bg-coral/10 text-coral` 改**中性灰**（理由：彩色 logo + 彩色能力块之后，
+//      再来一层 coral 整行会打架）—— **08-05 owner 看过实际效果后拍板沿用 coral，已改回**。
+//      三处一起回（触发器 open 态 ×2 + 菜单行选中 ×1）：它们本就是一次决策改灰的，且同一条
+//      工具条上的 ApprovalModePicker / ComposerPlusMenu 都是 open→coral，独留这一个灰的
+//      正是本文件开头警告的那种「双份漂移」。
+//
+// 🔴 08-05 dogfood-4：厂商 logo 的**厂商归属改由模型目录定**（`catalogMeta.catalogProviderId`
+//    → ProviderBrandIcon 的第①级）。owner 的中转把 gpt-5.x 挂在 protocol=anthropic 的
+//    provider 下，只看 providerId/protocol 会给 GPT 打 Anthropic 彩标。**组标题除外**：它渲染
+//    的是 provider 本身，见下面 groupCatalogProviderId 的注释。
 //
 // 布局红线（PRD）：邮件面板 360px、左组已 6 控件 —— **升级现有控件、不新增第七个**；
 // 弹层 left-0 锚在第 3 个控件（x≈76px）上，宽 264px → 右缘 ≈340 < 348，不越界。
@@ -49,6 +57,7 @@ import {
 import {
   composeComposerModelOption,
   groupComposerModels,
+  type ComposerModelGroup,
   type ComposerModelOption
 } from '@shared/hooks/useComposerModels'
 
@@ -133,6 +142,17 @@ function withCurrentModel(
     rowMaxOutput: null
   })
   return { options: [...options, orphan], orphanRef: current }
+}
+
+/** 组标题的厂商 logo 来源。组标题渲染的是 **provider 本身**（一家中转可以什么模型都挂），
+ *  所以只在组内**每一行**都指向同一家目录厂商时才采纳它 —— 一致是**事实**，不是猜。混装组
+ *  （owner 的「Anthropic-crs」同时挂 claude 与 gpt）没有共识 → null → 落回 providerId/protocol，
+ *  与改动前逐字一样。收的是「OpenAI-crs 组标题是灰 Cpu、底下三行却都是 OpenAI 标」这种自相
+ *  矛盾。有意不 export（本文件只出组件），行为由 model_picker.test.tsx 经渲染断言覆盖。 */
+function groupCatalogProviderId(group: ComposerModelGroup): string | null {
+  const first = group.options[0]?.catalogMeta?.catalogProviderId ?? null
+  if (!first) return null
+  return group.options.every((o) => o.catalogMeta?.catalogProviderId === first) ? first : null
 }
 
 export function ModelPicker({
@@ -255,11 +275,12 @@ export function ModelPicker({
           disabled
             ? 'cursor-not-allowed text-ink-fg-3 opacity-50'
             : open
-              ? 'bg-ink-5 text-ink-fg active:scale-[0.96]'
+              ? 'bg-coral/10 text-coral active:scale-[0.96]'
               : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg active:scale-[0.96]'
         )}
       >
         <ProviderBrandIcon
+          catalogProviderId={activeOption?.catalogMeta?.catalogProviderId}
           providerId={activeOption?.providerId ?? (current ? refProviderId(current) : null)}
           protocol={activeOption?.protocol}
           className="size-[14px]"
@@ -278,11 +299,12 @@ export function ModelPicker({
           disabled
             ? 'cursor-not-allowed text-ink-fg-3 opacity-50'
             : open
-              ? 'bg-ink-5 text-ink-fg'
+              ? 'bg-coral/10 text-coral'
               : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg'
         )}
       >
         <ProviderBrandIcon
+          catalogProviderId={activeOption?.catalogMeta?.catalogProviderId}
           providerId={activeOption?.providerId ?? (current ? refProviderId(current) : null)}
           protocol={activeOption?.protocol}
         />
@@ -325,6 +347,7 @@ export function ModelPicker({
                     className="flex items-center gap-1.5 px-3 pb-0.5 pt-1.5 text-micro font-medium text-ink-fg-3"
                   >
                     <ProviderBrandIcon
+                      catalogProviderId={groupCatalogProviderId(group)}
                       providerId={group.providerId}
                       protocol={group.options[0]?.protocol}
                       className="size-3"
@@ -368,14 +391,15 @@ export function ModelPicker({
                       className={cn(
                         'flex w-full items-center gap-2 px-3 py-1.5 text-left text-meta',
                         'transition-colors duration-fast',
-                        // 中性灰选中（08-05 dogfood-3）：hover 用 ink-4，选中再高一档 ink-5，
-                        // 两态因此仍分得清。
+                        // coral 选中（08-05 dogfood-4 owner 拍板，见文件头 ③）：与
+                        // ApprovalModePicker 的选中行同一套写法；hover 仍是中性 ink-4，两态分得清。
                         active
-                          ? 'bg-ink-5 font-medium text-ink-fg'
+                          ? 'bg-coral/10 font-medium text-coral'
                           : 'text-ink-fg-1 hover:bg-ink-4 hover:text-ink-fg'
                       )}
                     >
                       <ProviderBrandIcon
+                        catalogProviderId={option.catalogMeta?.catalogProviderId}
                         providerId={option.providerId}
                         protocol={option.protocol}
                         className="size-[14px]"

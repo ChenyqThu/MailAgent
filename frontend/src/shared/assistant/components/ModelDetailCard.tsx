@@ -151,7 +151,10 @@ export function ModelDetailCard({
       <div className="scrollbar-thin flex min-h-0 flex-col gap-2.5 overflow-y-auto px-3 py-2.5">
         {/* 头：厂商 logo + 全名（+ 已弃用） */}
         <div className="flex items-center gap-2">
+          {/* 🔴 厂商归属以目录命中的那家为准（08-05 dogfood-4）——卡的页脚就印着
+              「来源：<catalogProviderName>」，头上却打另一家的 logo 是当场自相矛盾。 */}
           <ProviderBrandIcon
+            catalogProviderId={meta.catalogProviderId}
             providerId={providerId}
             protocol={protocol}
             className="size-[18px] shrink-0"

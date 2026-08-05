@@ -25,6 +25,8 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import i18n from '@shared/i18n'
+import { AnthropicColorIcon, OpenAiIcon } from '@shared/components/icons/providers/brandIcons'
+import type { ProviderIconRender } from '@shared/components/icons/providers/providerIconMap'
 import { ModelPicker } from '@shared/assistant/components/ModelPicker'
 import { ThreadComposer } from '@shared/assistant/components/composer'
 import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
@@ -349,6 +351,109 @@ describe('ModelPicker — 孤儿当前值', () => {
     openMenu('chip')
     // 孤儿归到 anthropic 组（同 providerId），不新开一个组。
     expect(screen.getAllByText('Anthropic')).toHaveLength(1)
+  })
+})
+
+/** 图标资产的比对基准：直接渲染那个 render 函数，比 `<svg>` 的 innerHTML（路径数据）。
+ *  🔴 有意不硬编码 path d —— 换一版资产时基准跟着变，测试不会假红。 */
+function iconMarkup(icon: ProviderIconRender): string {
+  const { container, unmount } = render(icon({}))
+  const html = container.querySelector('svg')?.innerHTML ?? ''
+  unmount()
+  return html
+}
+
+function svgOf(el: Element | null | undefined): string {
+  return el?.querySelector('svg')?.innerHTML ?? ''
+}
+
+describe('ModelPicker — 🔴 厂商 logo 按「模型属于哪一家」，不按 provider 怎么配', () => {
+  // owner 的中转：`default`（protocol=anthropic，「Anthropic-crs」）下同时挂 claude 与 gpt-5.x；
+  // `gpt`（protocol=openai-compatible）指向同一个中转。改动前 GPT 行打的是 Anthropic 彩标、
+  // OpenAI-crs 整组是灰 Cpu —— 错的信息比没有更糟。
+  const RELAY: ComposerModelOption[] = [
+    option({
+      ref: 'default:claude-opus-5',
+      providerLabel: 'Anthropic-crs',
+      protocol: 'anthropic',
+      displayName: 'Claude Opus 5',
+      catalogMeta: meta({ catalogProviderId: 'anthropic', catalogProviderName: 'Anthropic' })
+    }),
+    option({
+      ref: 'default:gpt-5.5',
+      providerLabel: 'Anthropic-crs',
+      protocol: 'anthropic',
+      displayName: 'GPT-5.5',
+      catalogMeta: meta({ catalogProviderId: 'openai', catalogProviderName: 'OpenAI' })
+    }),
+    option({
+      ref: 'gpt:gpt-5',
+      providerLabel: 'OpenAI-crs',
+      protocol: 'openai-compatible',
+      displayName: 'GPT-5',
+      catalogMeta: meta({ catalogProviderId: 'openai', catalogProviderName: 'OpenAI' })
+    })
+  ]
+
+  const rowNamed = (name: string): Element | undefined =>
+    screen.getAllByRole('menuitemradio').find((r) => r.textContent?.includes(name))
+
+  test('protocol=anthropic 的中转下，GPT 行打 OpenAI、claude 行仍打 Anthropic', () => {
+    render(<ModelPicker controls={controlsFor(RELAY, 'default:claude-opus-5')} variant="icon" />)
+    openMenu('icon')
+    expect(svgOf(rowNamed('GPT-5.5'))).toBe(iconMarkup(OpenAiIcon))
+    expect(svgOf(rowNamed('GPT-5.5'))).not.toBe(iconMarkup(AnthropicColorIcon))
+    expect(svgOf(rowNamed('Claude Opus 5'))).toBe(iconMarkup(AnthropicColorIcon))
+  })
+
+  // 🔴 **两个 variant 都验**：两个触发器是各写一遍的 JSX（本文件契约 1 —— 它们漂移过一次），
+  // 只验 chip 时把 icon 那份的 catalogProviderId 删掉能一路全绿（实测）。而 icon 恰是邮件面用的。
+  test.each(['icon', 'chip'] as const)(
+    '%s 触发器上的 logo 跟着当前模型走（不是跟着它挂在哪个 provider 下）',
+    (variant) => {
+      render(<ModelPicker controls={controlsFor(RELAY, 'default:gpt-5.5')} variant={variant} />)
+      const trigger = screen.getByLabelText(i18n.t('chat.composer.model'))
+      expect(svgOf(trigger)).toBe(iconMarkup(OpenAiIcon))
+      expect(svgOf(trigger)).not.toBe(iconMarkup(AnthropicColorIcon))
+    }
+  )
+
+  test('组标题：全组同一家才采纳目录厂商；混装组落回 provider 自己的 protocol', () => {
+    render(<ModelPicker controls={controlsFor(RELAY, 'default:claude-opus-5')} variant="icon" />)
+    openMenu('icon')
+    // 「OpenAI-crs」组只有 OpenAI 模型 → 组标题也出 OpenAI（改动前是灰 Cpu，与底下的行自相矛盾）。
+    const openaiHeader = screen.getByText('OpenAI-crs').closest('div')
+    expect(svgOf(openaiHeader)).toBe(iconMarkup(OpenAiIcon))
+    // 「Anthropic-crs」组 claude + gpt 混装 → 没有共识，落回 protocol=anthropic（provider 本身）。
+    const relayHeader = screen.getByText('Anthropic-crs').closest('div')
+    expect(svgOf(relayHeader)).toBe(iconMarkup(AnthropicColorIcon))
+  })
+
+  test('🔴 混装组的共识看**全组**，与组内行序无关', () => {
+    // 上一条单独跑不住这个规则：RELAY 里混装组的第一行恰好是 claude，「取第一行」与「全组
+    // 一致才采纳」给出的答案**一样**（实测把 every(...) 改成取第一行，上面那条仍全绿）。
+    // 故两种行序各渲一遍 —— 无论 claude 在前还是 gpt 在前，混装组标题都必须是 protocol 兜底。
+    for (const opts of [RELAY, [RELAY[1], RELAY[0], RELAY[2]]]) {
+      render(<ModelPicker controls={controlsFor(opts, 'default:claude-opus-5')} variant="icon" />)
+      openMenu('icon')
+      const relayHeader = screen.getByText('Anthropic-crs').closest('div')
+      expect(svgOf(relayHeader)).toBe(iconMarkup(AnthropicColorIcon))
+      expect(svgOf(relayHeader)).not.toBe(iconMarkup(OpenAiIcon))
+      cleanup()
+    }
+  })
+
+  test('🔴 hover 能力卡的头也按目录厂商（第 5 个消费点，别漏传）', () => {
+    // `catalogProviderId` 是**可选** prop：哪个消费点漏传都只是静默退回旧的错图标，
+    // TS 不报错。这条专盯 ModelDetailCard —— 实测把那一行删掉，其余用例全绿。
+    // 卡的页脚就印着「来源：OpenAI」，头上打 Anthropic 标是当场自相矛盾。
+    render(<ModelPicker controls={controlsFor(RELAY, 'default:claude-opus-5')} variant="chip" />)
+    openMenu('chip')
+    fireEvent.mouseEnter(rowNamed('GPT-5.5')!)
+    const card = screen.getByTestId('model-detail-card')
+    expect(card.textContent).toContain('OpenAI')
+    expect(svgOf(card)).toBe(iconMarkup(OpenAiIcon))
+    expect(svgOf(card)).not.toBe(iconMarkup(AnthropicColorIcon))
   })
 })
 
