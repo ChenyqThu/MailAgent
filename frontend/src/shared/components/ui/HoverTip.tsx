@@ -101,8 +101,9 @@ const CHIP_CLASS = cn(
   // text-micro CJK floor (DESIGN.md §14 #2). Deliberately NOT `font-mono` so
   // CJK glyphs stay legible at this size for glanceable hover labels.
   'text-micro leading-none text-ink-fg-2 px-1.5 py-1 rounded',
-  'glass-pop pointer-events-none select-none',
-  'shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
+  // 投影走 `.glass-pop` 自带的 --pop-shadow：authored 的 `.glass-pop` 排在
+  // `@tailwind utilities` 之后，同特异度源码序胜 —— 并挂 `shadow-[…]` 是死类（08-05 删）。
+  'glass-pop pointer-events-none select-none'
 )
 
 export function HoverTip({

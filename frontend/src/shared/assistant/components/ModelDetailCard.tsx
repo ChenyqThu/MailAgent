@@ -11,8 +11,11 @@
 // `AssistantChatModal` 外层还有一层 `overflow-hidden` —— 非 portal 的横向浮层**必被裁**。
 // 定位随之要响应式（右展开 → 翻左 → 夹进视口三档），算式在 ./modelDetailCard.lib。
 //
-// 🔴 材质走**不透明**（`bg-ink-2` + 实线描边，抄 MentionPopover 的先例），不用 `.glass-pop`：
-// owner 08-05 明确要弹层不透明；且这张卡叠在 ModelPicker 弹层旁边，两层半透明会糊成一片。
+// 🔴 材质**自成一套不透明形**（`bg-ink-2` + `border-ink-border` 实线描边 + `shadow-md`，抄
+// MentionPopover 的先例），不套 `.glass-pop`。08-05 owner 拍板后 `.glass-pop` 本身也已是不透明
+// 的 `rgb(--ink-2)`（见 index.css / DESIGN.md §18.1 C10），两者**表面同色**；这里仍不套那个类，
+// 因为它连带的是浮层档的 hairline 描边 + 很重的 `--pop-shadow`（0 24px 60px/.55），而这张卡是
+// portal 出去、贴在 ModelPicker 弹层**旁边**的纯展示卡，要的是更实的描边 + 轻一档投影。
 //
 // 🔴 `pointer-events-none`：卡不接受交互。除了「内容纯展示」之外还有一条硬理由 —— 卡在
 // document.body 上，不在 ModelPicker 的 `ref.current.contains()` 里，能点就会被那条
@@ -137,7 +140,8 @@ export function ModelDetailCard({
         zIndex: 100
       }}
       className={cn(
-        // 不透明表面（owner 08-05）：ink-2 + 实线描边，不吃 .glass-pop 的半透明 + blur。
+        // 不透明表面（owner 08-05）：ink-2 + 实线描边 + 轻投影，有意自成一套而不套 .glass-pop
+        // （后者 08-05 起同为不透明 ink-2，但带 hairline 描边 + 重得多的 --pop-shadow）。
         'pointer-events-none flex select-none flex-col overflow-hidden',
         'rounded-[var(--r-card)] border border-ink-border bg-ink-2 shadow-md'
       )}

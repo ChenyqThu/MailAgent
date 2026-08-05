@@ -32,7 +32,9 @@ import { useRouter } from '@tanstack/react-router'
 import { Brain, ChevronDown, Eye, Settings2, Wrench } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { ProviderBrandIcon } from '@shared/components/icons/providers'
 import {
   AI_TAB_ANCHOR_IDS,
@@ -148,8 +150,16 @@ export function ModelPicker({
   const router = useRouter({ warn: false })
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
-  const menuRef = useRef<HTMLDivElement>(null)
   const activeRowRef = useRef<HTMLButtonElement>(null)
+  // 出入场（WP-03）：配方与同一条工具条上的 MentionPopover 逐字同款（bottom-full 向上展开 →
+  // transformOrigin 'bottom left'）。scopeRef 兼作原 menuRef —— hover 卡量的就是这个弹层的 rect。
+  // W8 重写这个组件时把旧 ComposerModelPicker 的出入场丢了（motion-gsap.md §8 却一直登记着
+  // 「已落地」），这里是把台账补回事实。
+  const { shouldRender, scopeRef: menuRef } = useExitAnimation<HTMLDivElement>(open, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: 4, scale: 0.98, transformOrigin: 'bottom left' },
+    enterDuration: DUR.fast
+  })
   // hover 能力卡：{ ref, anchor } —— anchor 在 mouseenter 那一刻从弹层 rect 量一次。
   const [hovered, setHovered] = useState<{ ref: string; anchor: ModelDetailAnchor } | null>(null)
 
@@ -289,15 +299,17 @@ export function ModelPicker({
       >
         {trigger}
       </HoverTip>
-      {open && (
+      {shouldRender && (
         <div
           ref={menuRef}
           role="menu"
           aria-label={label}
           // 主题 v3 C8/批 4: 紧凑菜单档走 --r-ctl；宽度见文件头「布局红线」。
+          // 阴影走 `.glass-pop` 自带的 --pop-shadow（authored 规则排在 utilities 之后，
+          // 同特异度源码序胜 —— 再挂 `shadow-[…]` 是死类）。
           className={cn(
             'absolute bottom-full left-0 z-50 mb-1.5 w-[264px] rounded-[var(--r-ctl)] py-1',
-            'glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
+            'glass-pop'
           )}
           onMouseLeave={() => setHovered(null)}
         >

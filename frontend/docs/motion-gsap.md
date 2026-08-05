@@ -102,7 +102,11 @@ gsap.to(wrapper, { width: open ? 360 : 0, duration: open ? DUR.base : DUR.fast,
 
 **已落地**：
 - Phase 0 基础设施：gsap.ts / useExitAnimation / useReducedMotion / 测试 reduced-motion setup。
-- Overlay 出入场：CommandPalette / KeyboardHelpModal / EventFormModal / folder ConfirmDialog / ResyncConfirmDialog / Theme·Accent·Surface PickerPopover / ComposePanel / Filter popover / Composer model-picker / MentionPopover；ConfirmToolDialog 仅进场（退场为父队列硬卸载，用户主动触发）。
+- Overlay 出入场：CommandPalette / KeyboardHelpModal / EventFormModal / folder ConfirmDialog / ResyncConfirmDialog / Theme·Accent·Surface PickerPopover / ComposePanel / Filter popover / MentionPopover；ConfirmToolDialog 仅进场（退场为父队列硬卸载，用户主动触发）。
+- **Composer 三件套出入场（2026-08-05 WP-03 补回）**：`ComposerPlusMenu`（「+」菜单，一级/二级共用一个壳）/ `ModelPicker` / `ApprovalModePicker`，配方与同一条工具条上的 `MentionPopover` 同款（`useExitAnimation`，`backdrop:false`、`from {autoAlpha:0, y:4, scale:0.98}`、`enterDuration: DUR.fast`）。唯一偏离是 `transformOrigin`：前两个 `'bottom left'`（left-0 锚定），`ApprovalModePicker` 是**居中**锚定（`left-1/2 -translate-x-1/2`）故取 `'bottom center'` —— origin 的职责是「从触发器那点长出来」，跟锚定方式走。
+  🔴 **接了退场就要重查「关闭时顺手复位的内部子状态」**：`{open && …}` 时代那些写在 close 里的复位（`ComposerPlusMenu` 的二级 view、`ApprovalModePicker` 的 bypass 确认步骤）随同步卸载一起消失、看不见；接了 120ms 退场之后，它们变成**淡出途中当场换内容**（宽度/高度抽一下）。两处都已把复位挪到「开」的那一侧——单一打开入口（触发器）守同一条契约，且守得更严。闸分别在 `ConnectorQuickPanel.test.tsx`（二级 view）与 `composer_plus_menu.test.tsx`（bypass 确认）。
+  🔴 **这条曾是本文件的一处谎报**：此前这一行把「Composer model-picker」记在「已落地」里，但 W8 重写 ModelPicker 时把旧实现丢了，「+」菜单与授权模式 picker 则从未有过——三者都是 `{open && …}` 硬切，而**没有任何测试**会因此变红，于是长期无人发现。补回时一并加了回归闸 `tests/shared/assistant/composer_plus_menu.test.tsx` 的「composer 三个弹层 — 出入场（退场播完才卸载）」：判据取「退场期间仍在 DOM」，硬切实现必红。**新登记动效时先想清楚谁来兜底，否则台账迟早再次与实现脱节。**
+  ✅ **顺带证伪一条听起来很像真的假设**：「Tailwind 的 `-translate-x-1/2` 写的是 `transform`，会被 GSAP 的 `y/scale` 补间覆盖，所以居中锚定的弹层接动效前得先改成负 margin」——**不成立**。GSAP 补间前会解析元素已有的 transform 并保留不参与补间的分量。实测（`ApprovalModePicker` 的 `left-1/2 -translate-x-1/2 w-[248px]` vs 等价的 `ml-[-124px]`，进场/退场逐帧取 `getBoundingClientRect().left`）两者每一帧完全一致。check 侧独立复验过（真 Chromium + 完整 Tailwind `--tw-*` 变量链，而非 happy-dom）：浏览器把该类的 computed transform 解析成 `matrix(1, 0, 0, 1, -124, 0)`，GSAP 把 -124 收进自己的 transform cache，进/退场每一帧的 translate 分量恒为 -124，`clearProps:'transform'` 后交还 CSS 类。**别为了接动效去改写既有的居中方式。**
 - 内容区：EmailDetail 切邮件淡入 / EmailList 手风琴滚动锚定 / Calendar 视图切换(fade+x:±16)。
 - 挤压：AIChatPanel / ChatSidebar width tween。
 - Chat：新消息气泡入场（排除历史/streaming）/ DraftPreviewCard 序列。

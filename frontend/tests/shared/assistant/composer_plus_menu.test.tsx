@@ -22,7 +22,7 @@
 // `/chat/config`，flag 判定 fail-closed 成 false，于是这里天然覆盖「connector 不可用时菜单
 // 只剩附件项、但菜单本身仍在」这个形态。
 
-import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { useAui } from '@assistant-ui/react'
@@ -266,6 +266,85 @@ describe('ComposerPlusMenu — 邮件面 360px 布局红线', () => {
     // （改前 left-0 → 右缘 140 + 248 = 388，越界 40px —— check-WP2 实测的预存缺陷。）
     expect(154 - 248 / 2).toBeGreaterThanOrEqual(0)
     expect(154 + 248 / 2).toBeLessThanOrEqual(360 - 12)
+  })
+})
+
+// 🔴 出入场回归闸（08-05 WP-03）。这一条存在的理由是**台账说过谎**：`docs/motion-gsap.md` §8
+// 从很早起就登记着「Composer model-picker 出入场已落地」，而 W8 重写 ModelPicker 时把它丢了，
+// 「+」菜单与授权模式 picker 更是从来就没有过 —— 三个弹层全是 `{open && …}` 硬切，且**没有任何
+// 测试**会因此变红，于是没人发现。判据取「退场期间仍在 DOM」这个可观测签名：硬切实现下，关闭的
+// 同一拍元素就没了，这条必红。
+// 全局 setup 强制 reduced-motion（那时 useExitAnimation 直切、与硬切不可分辨），所以这里必须自己
+// 把 matchMedia 换成「不 reduce」——写法抄 tests/shared/useExitAnimation.test.tsx。
+describe('composer 三个弹层 — 出入场（退场播完才卸载）', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          addListener: () => {},
+          removeListener: () => {},
+          dispatchEvent: () => false,
+          onchange: null
+        }) as unknown as MediaQueryList
+    )
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  // 触发器与弹层挂的是同一个 aria-label，故必须带 role 限定才选得到弹层本体。
+  const popoverOf = (label: string): Element | null =>
+    document.querySelector(`[role="menu"][aria-label="${label}"]`)
+
+  test.each([
+    ['「+」菜单', 'chat.composer.plus'],
+    ['模型选择器', 'chat.composer.model'],
+    ['授权模式', 'chat.approvalMode.label']
+  ])('%s：Escape 后先留在 DOM 播退场，再卸载', async (_name, labelKey) => {
+    render(
+      <Harness>
+        <ThreadComposer />
+      </Harness>
+    )
+    const label = i18n.t(labelKey)
+    fireEvent.click(await screen.findByLabelText(label))
+    expect(popoverOf(label)).not.toBeNull()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    // 硬切实现在这一行就已经是 null（本闸的失败模式）。
+    expect(popoverOf(label)).not.toBeNull()
+    // DUR.fast=120ms 的退场播完后才真正卸载。
+    await waitFor(() => expect(popoverOf(label)).toBeNull(), { timeout: 2000 })
+  })
+
+  // 🔴 check 补：接了退场之后，「关闭时顺手复位内部步骤」这种以前无害的写法会变成**淡出途中
+  // 当场换内容**。ApprovalModePicker 的 bypass 确认步骤是这一类里唯一还剩的（另一处是
+  // ComposerPlusMenu 的 view，闸在 ConnectorQuickPanel.test.tsx）。复位改到「开」的那一侧，
+  // 契约仍由触发器这唯一入口守住 —— 两条断言分别钉住「退场期间不换内容」与「重开必回列表」。
+  test('授权模式：从 bypass 确认步骤 Escape，退场期间仍是确认面板；重开回模式列表', async () => {
+    render(
+      <Harness>
+        <ThreadComposer />
+      </Harness>
+    )
+    const label = i18n.t('chat.approvalMode.label')
+    const trigger = await screen.findByLabelText(label)
+    fireEvent.click(trigger)
+    fireEvent.click(await screen.findByRole('menuitemradio', { name: /完全授权/ }))
+    const confirmTitle = i18n.t('chat.approvalMode.bypassConfirmTitle')
+    expect(screen.queryByText(confirmTitle)).not.toBeNull()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    // 复位若留在关的那一侧，这一拍确认面板已被换成三行模式列表（列表更高 → 边淡出边长高）。
+    expect(screen.queryByText(confirmTitle)).not.toBeNull()
+    await waitFor(() => expect(popoverOf(label)).toBeNull(), { timeout: 2000 })
+
+    fireEvent.click(trigger)
+    await waitFor(() => expect(popoverOf(label)).not.toBeNull(), { timeout: 2000 })
+    expect(screen.queryByText(confirmTitle)).toBeNull()
   })
 })
 

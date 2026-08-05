@@ -48,8 +48,8 @@ export const DialogContent = React.forwardRef<
       ref={ref}
       className={cn(
         'fixed left-1/2 top-1/2 z-50 grid w-full max-w-lg -translate-x-1/2 -translate-y-1/2 gap-4',
+        // 投影走 `.glass-pop` 自带的 --pop-shadow（同 popover.tsx）：再挂 `shadow-[…]` 是死类。
         'glass-pop border border-ink-border-soft rounded-[var(--r-pop)] p-6',
-        'shadow-[0_8px_24px_rgba(0,0,0,0.35)]',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',
         'data-[state=closed]:zoom-out-95 data-[state=open]:zoom-in-95',

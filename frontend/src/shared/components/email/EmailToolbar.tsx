@@ -409,9 +409,11 @@ function ComposeSplitButton({
           role="menu"
           className={cn(
             'absolute left-0 top-full mt-1 z-50 min-w-[160px]',
-            // 实心 bg-ink-2 (对齐 ResyncConfirmDialog 弹层底色): glass-pop 的
-            // ink-2/0.82 半透明会透出底下标题/正文, 下拉菜单观感发脏 — 菜单是
-            // 功能性弹层不是装饰玻璃, 用实心底保证可读.
+            // 实心 bg-ink-2 (对齐 ResyncConfirmDialog 弹层底色): 当年 glass-pop 是
+            // 半透明 + blur, 会透出底下标题/正文, 下拉菜单观感发脏 — 菜单是功能性
+            // 弹层不是装饰玻璃, 用实心底保证可读.
+            // (2026-08-05: glass-pop 本身已改成不透明 rgb(--ink-2), 两者底色现已同值;
+            //  这里维持自成一套 = 保住比浮层档更轻的 shadow, 这条 shadow-[…] 是活的.)
             // 主题 v3 C8/批 4: 紧凑菜单档 rounded-md(6) → --r-ctl(8)
             'rounded-[var(--r-ctl)] bg-ink-2 border border-ink-border-soft py-1',
             'shadow-[0_8px_24px_rgba(0,0,0,0.35)]'

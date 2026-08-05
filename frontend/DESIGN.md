@@ -1701,6 +1701,7 @@ this section is the design-intent index.
 | C7 | CTA button | Gradient + inset highlight kept; **outer glow removed**. (Solid-surface CTA keeps a byte-for-byte special-case — no drop shadow + softened inset; since glow is now globally gone, that special-case only differs on shadow/inset.) |
 | C8 | Radius | Unified four tiers — §4.2 / §18.3 |
 | C9 | Hardcoded hex | AI-strip priority colors + flag-done green + avatar gradients folded into tokens (§18.3) |
+| C10 | Floating-layer material (`.glass-pop`) | **Opaque** (2026-08-05, owner call). v2/early-v3 recipe was `color-mix(--glass-base 86%, transparent)` + its own `backdrop-filter: blur(20px)` — the one class that still carried a blur of its own, and the reason popover text sat on top of half-readable body text underneath. Now `rgb(--ink-2)` solid; border/shadow untouched. See the note below |
 
 **Retained (owner red lines):** the selected-item 3px left accent bar
 (nav surfaces — sidebar / settings rail / chat session row — and email rows);
@@ -1717,6 +1718,57 @@ hover only) · AI-fields card keeps a single hairline between sections (reply
 inset ring + attributes `border-t` removed) · list hover delete button retired
 across all mailboxes (delete/archive lives in the detail toolbar; drafts keep
 theirs in ComposePanel).
+
+**C10 note — the floating layer went opaque (2026-08-05).** This is a
+*convergence*, not a new shape: the system already had opaque popovers
+(`MentionPopover`, `ModelDetailCard` — both plain `bg-ink-2`) sitting next to
+frosted ones on the very same composer toolbar, and both the
+`prefers-reduced-transparency` and `data-surface='solid'` paths had *always*
+overridden `.glass-pop` to `rgb(--ink-2)` + no blur. C10 makes that override
+the base recipe, so all three paths are now one value; the two overrides are
+kept verbatim as guards (they encode the requirement "these two modes must be
+opaque", not a coincidence). Consequences worth knowing:
+- The §18.1 header claim "OS vibrancy as the sole blur layer" is now literally
+  true for **every `.glass-pop` consumer**. It is *not* true app-wide, and the
+  remaining blur inventory is worth stating in full rather than half (checked
+  2026-08-05, `grep backdrop-filter|backdrop-blur`):
+  - authored in `index.css`, **not** `.glass-pop` consumers: `.filter-pop`
+    (20px) and `#batch-bar.floating` (18px);
+  - Tailwind-utility blurs on components: `EmailDetail` sticky strip
+    (`backdrop-blur-2xl`), `RestartBanner` + `UpdateReadyBanner`
+    (`backdrop-blur-2xl`), `EmailBodyFrame` zoom bar (`backdrop-blur-md`);
+  - scrims (deliberately see-through, see the third bullet): dialog overlay and
+    `EmailBodyFrame`'s image lightbox, both `backdrop-blur-sm`.
+  So C10 frees popover blur specifically; whether the "≤2 same-screen CSS
+  blurs, real float layers only" red line holds is still a per-screen question
+  for the list/detail surfaces above — do not read C10 as "the budget is now
+  empty".
+- The accent tint is gone from float surfaces (`--glass-base` derives from
+  `ink-0` + 16% accent; `ink-2` does not). Intentional — it is what the solid
+  surface tier has always looked like.
+- Anything that *needs* see-through must not reach for `.glass-pop`; the
+  scrim/veil under palettes and modals (`.palette-veil`, dialog overlay) is
+  what dims the background, and it is untouched.
+- 🔴 Non-obvious geometry consequence (found in check, 2026-08-05): an element
+  with a non-`none` `backdrop-filter` is a **containing block for
+  `position: fixed` descendants**. Dropping the filter therefore un-clips the
+  two in-modal outside-click scrims of the floating chat window
+  (`AssistantChatModal`'s `ModeMenu` and `ChatModalHistoryDropdown`, both
+  `fixed inset-0`): they used to cover only the 28rem×40rem window, now they
+  span the viewport. That is the conventional dropdown-scrim behaviour and it
+  makes floating mode agree with sidebar mode (`.glass-panel`, never had a
+  blur, so its scrims were always viewport-sized). Stacking is unchanged — the
+  wrapper is still `position: fixed` + `z-40`, i.e. still its own stacking
+  context. Worth re-checking if a future `.glass-pop` consumer nests a
+  `fixed` child that is *not* portalled.
+- Dead `shadow-[…]` / `shadow-md` utilities were removed from seven
+  `.glass-pop` consumers (composer trio · `AssistantChatModal` ·
+  `ui/popover` · `ui/select` · `ui/dialog` · `ui/tooltip` · `HoverTip` ·
+  `AgentTriggerPopover`). They never rendered: authored `.glass-pop` sits
+  after `@tailwind utilities` in `index.css`, so at equal specificity its
+  `box-shadow: var(--pop-shadow)` always won. Popovers that deliberately want
+  a *lighter* shadow (e.g. `ModelDetailCard`, `EmailToolbar`'s mode menu) keep
+  their own surface instead of taking the class — those `shadow-*` are live.
 
 ### 18.2 Motion red lines (migration invariant — no batch may drop these)
 

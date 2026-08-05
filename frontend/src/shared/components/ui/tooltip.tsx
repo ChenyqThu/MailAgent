@@ -26,8 +26,8 @@ export const TooltipContent = React.forwardRef<
       sideOffset={sideOffset}
       className={cn(
         'z-50 overflow-hidden rounded-md px-2 py-1',
+        // 投影走 `.glass-pop` 自带的 --pop-shadow（同 popover.tsx）：再挂 `shadow-[…]` 是死类。
         'glass-pop border border-ink-border-soft',
-        'shadow-[0_4px_12px_rgba(0,0,0,0.35)]',
         'text-aux text-ink-fg-1',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',

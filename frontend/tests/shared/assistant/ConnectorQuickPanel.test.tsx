@@ -223,6 +223,53 @@ describe('ConnectorQuickPanel — 显隐三态', () => {
   })
 })
 
+// 🔴 08-05 WP-03 时序闸（check 补）。上面那条「view 不残留」测的是**结果**（下次开必须是一级），
+// 它在「复位写 close()」和「复位写 open 侧」两种实现下**都绿** —— 全局 setup 强制 reduced-motion，
+// 关闭即同步卸载，中间那 120ms 根本不存在。接了退场动画之后，这两种写法不再等价：复位留在
+// close() 会让二级面板在淡出途中当场变回一级菜单（宽度 268→196 抽一下）。故这里自己把
+// matchMedia 换成「不 reduce」，把**退场期间的形态**钉住；两条断言各杀一种回退。
+describe('ComposerPlusMenu — 二级面板退场期间不闪变（08-05 WP-03）', () => {
+  beforeEach(() => {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          addListener: () => {},
+          removeListener: () => {},
+          dispatchEvent: () => false,
+          onchange: null
+        }) as unknown as MediaQueryList
+    )
+  })
+  afterEach(() => vi.unstubAllGlobals())
+
+  // 触发器与一级弹层同 aria-label，故一律带 role 限定选。
+  const popoverOf = (role: string, label: string): Element | null =>
+    document.querySelector(`[role="${role}"][aria-label="${label}"]`)
+
+  test('Escape 关二级：退场那一拍仍是二级内容，播完才卸载，再开回一级', async () => {
+    renderUi()
+    await openPanel()
+
+    fireEvent.keyDown(document, { key: 'Escape' })
+    // ① 硬切实现（`{open && …}`）在这一行就已经是 null。
+    expect(popoverOf('dialog', LABEL)).not.toBeNull()
+    // ② 复位若留在 close()，这一拍已经变成一级菜单（本闸的第二种失败模式）。
+    expect(popoverOf('menu', PLUS)).toBeNull()
+
+    await waitFor(() => expect(popoverOf('dialog', LABEL)).toBeNull(), { timeout: 2000 })
+
+    // ③ 复位挪到 open 侧后，「下次点「+」必须是一级」这条契约不能丢。
+    fireEvent.click(screen.getByRole('button', { name: PLUS }))
+    await waitFor(() => expect(popoverOf('menu', PLUS)).not.toBeNull(), { timeout: 2000 })
+    expect(popoverOf('dialog', LABEL)).toBeNull()
+  })
+})
+
 describe('ConnectorQuickPanel — 开关写穿', () => {
   test('Switch 调 setEnabled 并 invalidate 列表（与设置区同一缓存键）', async () => {
     renderUi()

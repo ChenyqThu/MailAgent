@@ -1,8 +1,9 @@
 // Sprint 18 — shadcn Select primitive (Radix Select).
 //
 // Trigger styling mirrors `<Input>` so radio/select/text rows align visually
-// at h-8. Content rides `glass-pop` (DESIGN.md §2.8) — same blur + border as
-// command palette + popovers. `position=popper` is the default to keep the
+// at h-8. Content rides `glass-pop` — same surface + border as the command
+// palette + popovers (opaque since 2026-08-05, DESIGN.md §18.1 C10; the recipe
+// used to carry its own 20px blur). `position=popper` is the default to keep the
 // dropdown anchored under the trigger; the trigger-width var below makes the
 // dropdown match the trigger's measured width.
 
@@ -93,7 +94,8 @@ export const SelectContent = React.forwardRef<
       className={cn(
         // 主题 v3 C8/批 4: select 下拉 = 紧凑菜单档 rounded-md(6) → --r-ctl(8)
         'relative z-50 max-h-96 min-w-[8rem] overflow-hidden rounded-[var(--r-ctl)]',
-        'glass-pop text-ink-fg shadow-[0_8px_24px_rgba(0,0,0,0.35)]',
+        // 投影走 `.glass-pop` 自带的 --pop-shadow（同 popover.tsx）：再挂 `shadow-[…]` 是死类。
+        'glass-pop text-ink-fg',
         'border border-ink-border-soft',
         'data-[state=open]:animate-in data-[state=closed]:animate-out',
         'data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0',

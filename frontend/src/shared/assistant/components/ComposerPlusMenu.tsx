@@ -28,7 +28,9 @@ import { Blocks, ChevronLeft, Paperclip, Plus } from 'lucide-react'
 import { useAui } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useConnectorQuickRows } from '@shared/hooks/useConnectorQuickRows'
 
 import { ConnectorQuickContent } from './ConnectorQuickPanel'
@@ -39,8 +41,11 @@ const ICON_BTN =
 const MENU_ITEM =
   'flex w-full items-center gap-2 px-3 py-1.5 text-left text-meta text-ink-fg-1 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg'
 
+// 阴影由 `.glass-pop` 自带的 `--pop-shadow` 提供 —— 这里**不能**再挂 `shadow-[…]`：
+// authored 的 `.glass-pop` 排在 `@tailwind utilities` **之后**，同特异度下源码序后者胜，
+// 挂了也是死类（editor-suggest.tsx:30 早把这条层叠规则写在案）。
 const POPOVER_SHELL =
-  'absolute bottom-full left-0 z-50 mb-1.5 rounded-[var(--r-ctl)] py-1 glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
+  'absolute bottom-full left-0 z-50 mb-1.5 rounded-[var(--r-ctl)] py-1 glass-pop'
 
 export function ComposerPlusMenu({ variant }: { variant: 'icon' | 'chip' }): React.JSX.Element {
   const { t } = useTranslation()
@@ -53,16 +58,30 @@ export function ComposerPlusMenu({ variant }: { variant: 'icon' | 'chip' }): Rea
   const inputRef = React.useRef<HTMLInputElement>(null)
   const connectors = useConnectorQuickRows()
 
+  // 出入场（WP-03）：弹层锚在 composer 上方（bottom-full 向上展开），配方与同一条工具条上的
+  // MentionPopover 逐字同款 —— transformOrigin 'bottom left'（一级/二级都 left-0 锚定）。
+  // scopeRef 挂在**弹层本体**上；外层 `ref` 仍是 outside-click 的容器（它含触发器，不能合并）。
+  const { shouldRender, scopeRef: popRef } = useExitAnimation<HTMLDivElement>(open, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: 4, scale: 0.98, transformOrigin: 'bottom left' },
+    enterDuration: DUR.fast
+  })
+
+  // 🔴 view 复位放在**开**的那一侧，不在 close()：接了退场动画之后，关闭时把 view 拨回 'root'
+  // 会让二级面板在淡出的 120ms 里当场变回一级菜单（宽度 268→196 同时抽一下）。复位在 open 这
+  // 一侧同样守住了「下次点「+」必须是一级菜单」这条契约（ConnectorQuickPanel.test.tsx 的
+  // 「view 不残留」用例正是钉它）。
   const close = React.useCallback((): void => {
     setOpen(false)
-    setView('root')
   }, [])
 
-  // 🔴 关闭**一律**走 close()，包括再点一次触发器 —— 裸 `setOpen(v => !v)` 会把 view 留在
-  // 'connectors'，下次点「+」直接弹出二级面板（用户看到的是「这颗钮有时候不是菜单」）。
   const toggle = React.useCallback((): void => {
-    if (open) close()
-    else setOpen(true)
+    if (open) {
+      close()
+    } else {
+      setView('root')
+      setOpen(true)
+    }
   }, [open, close])
 
   React.useEffect(() => {
@@ -157,57 +176,70 @@ export function ComposerPlusMenu({ variant }: { variant: 'icon' | 'chip' }): Rea
       <HoverTip text={tipText} side="top">
         {trigger}
       </HoverTip>
-      {open && view === 'root' && (
-        <div role="menu" aria-label={label} className={cn(POPOVER_SHELL, 'w-[196px]')}>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => {
-              // 先收菜单再拉文件选择器：input 挂在 wrapper 上（不在菜单里），关掉不影响它。
-              close()
-              inputRef.current?.click()
-            }}
-            className={MENU_ITEM}
-          >
-            <Paperclip size={13} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-            <span className="truncate">{t('chat.attachment.add')}</span>
-          </button>
-          {connectors.available && (
-            <button
-              type="button"
-              role="menuitem"
-              aria-haspopup="dialog"
-              onClick={() => setView('connectors')}
-              className={MENU_ITEM}
-            >
-              <Blocks size={13} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-              <span className="truncate">{connectorsLabel}</span>
-              {connectors.anyActive && (
-                <span
-                  aria-hidden="true"
-                  className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-coral/100"
-                />
+      {/* 一级/二级共用**一个**弹层壳（同锚点换内容 —— 视图切换本来就是硬切，两个条件挂载的
+          兄弟节点只会让 GSAP scope 在切换时换宿主）。壳负责几何 + 材质 + 出入场，role /
+          aria-label / 宽度跟着 view 走。后续 WP-13 若改 flyout，只需换壳内布局。 */}
+      {shouldRender && (
+        <div
+          ref={popRef}
+          role={view === 'root' ? 'menu' : 'dialog'}
+          aria-label={view === 'root' ? label : connectorsLabel}
+          className={cn(POPOVER_SHELL, view === 'root' ? 'w-[196px]' : 'w-[268px]')}
+        >
+          {view === 'root' ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => {
+                  // 先收菜单再拉文件选择器：input 挂在 wrapper 上（不在菜单里），关掉不影响它。
+                  close()
+                  inputRef.current?.click()
+                }}
+                className={MENU_ITEM}
+              >
+                <Paperclip size={13} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+                <span className="truncate">{t('chat.attachment.add')}</span>
+              </button>
+              {connectors.available && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  aria-haspopup="dialog"
+                  onClick={() => setView('connectors')}
+                  className={MENU_ITEM}
+                >
+                  <Blocks size={13} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+                  <span className="truncate">{connectorsLabel}</span>
+                  {connectors.anyActive && (
+                    <span
+                      aria-hidden="true"
+                      className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-coral/100"
+                    />
+                  )}
+                </button>
               )}
-            </button>
+            </>
+          ) : (
+            <>
+              {/* 二级标题条：返回 + 标题。下边框与底部审批提示的 border-t 同一档，
+                  让「头 / 行 / 提示」三段读起来是同一套分节。 */}
+              <div className="mb-1 flex items-center gap-1 border-b border-ink-border-soft px-1.5 pb-1">
+                <button
+                  type="button"
+                  onClick={() => setView('root')}
+                  aria-label={t('chat.composer.back')}
+                  className="grid size-5 shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-3 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
+                >
+                  <ChevronLeft size={13} strokeWidth={2} />
+                </button>
+                <span className="truncate text-meta font-medium text-ink-fg-1">
+                  {connectorsLabel}
+                </span>
+              </div>
+              <ConnectorQuickContent rows={connectors.rows} onClose={close} />
+            </>
           )}
-        </div>
-      )}
-      {open && view === 'connectors' && (
-        <div role="dialog" aria-label={connectorsLabel} className={cn(POPOVER_SHELL, 'w-[268px]')}>
-          {/* 二级标题条：返回 + 标题。下边框与底部审批提示的 border-t 同一档，
-              让「头 / 行 / 提示」三段读起来是同一套分节。 */}
-          <div className="mb-1 flex items-center gap-1 border-b border-ink-border-soft px-1.5 pb-1">
-            <button
-              type="button"
-              onClick={() => setView('root')}
-              aria-label={t('chat.composer.back')}
-              className="grid size-5 shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-3 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
-            >
-              <ChevronLeft size={13} strokeWidth={2} />
-            </button>
-            <span className="truncate text-meta font-medium text-ink-fg-1">{connectorsLabel}</span>
-          </div>
-          <ConnectorQuickContent rows={connectors.rows} onClose={close} />
         </div>
       )}
       <input

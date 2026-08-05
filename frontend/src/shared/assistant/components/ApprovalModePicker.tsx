@@ -22,14 +22,17 @@
 // (--c-fail) so 完全授权 is never ambient.
 //
 // 主题 v3 token 纪律: 弹层 glass-pop + rounded-[var(--r-ctl)]，active 态 coral，危险态 --c-fail,
-// 未知态 --c-warn; 动效只有 duration-fast transition + active:scale（无 spring 需求，不触动效红线）。
+// 未知态 --c-warn; 动效 = 触发器 duration-fast transition + active:scale，弹层 useExitAnimation
+// 出入场（08-05 WP-03，与 MentionPopover 同配方；reduced-motion 下直切，无 spring/bounce）。
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, Shield, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { useGlobalApprovalMode, type GlobalApprovalMode } from '@shared/lib/globalApprovalMode'
 
@@ -61,12 +64,23 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
   // The item a pessimistic PUT is confirming right now (renders 「切换中…」 on that row).
   const [pendingMode, setPendingMode] = useState<GlobalApprovalMode | null>(null)
   const ref = useRef<HTMLDivElement>(null)
+  // 出入场（WP-03）：配方抄同一条工具条上的 MentionPopover（bottom-full 向上展开、无 backdrop、
+  // 进场 DUR.fast）。🔴 唯一偏离：transformOrigin 用 'bottom center' 而非 'bottom left' ——
+  // 本弹层是**居中锚定**的（见下方 role="menu" 处的算式），origin 的职责是「从触发器那点长出来」，
+  // 照抄 left 会让它从触发器左侧 124px 处展开。
+  const { shouldRender, scopeRef: menuRef } = useExitAnimation<HTMLDivElement>(open, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: 4, scale: 0.98, transformOrigin: 'bottom center' },
+    enterDuration: DUR.fast
+  })
 
-  // Close + reset the confirm step together (every close path goes through here, so a reopened
-  // menu never starts on a stale confirm panel; no setState inside the effect body).
+  // 🔴 confirm 步骤的复位放在**开**的那一侧（`toggleMenu`），不在关的那一侧 —— 与
+  // ComposerPlusMenu 的 view 复位同一条理由（WP-03 check 补）：接了退场动画之后，关闭时把
+  // confirmingBypass 拨回 false，会让确认面板在淡出的 120ms 里当场变回三行模式列表，而列表
+  // **更高**，弹层于是边淡出边长高。契约「重开不得停在陈旧的确认步骤」由开的一侧守住，且守得
+  // 更严：本组件唯一的打开入口就是触发器，必经 toggleMenu。
   const closeMenu = (): void => {
     setOpen(false)
-    setConfirmingBypass(false)
   }
   const toggleMenu = (): void => {
     setConfirmingBypass(false)
@@ -76,16 +90,10 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
   useEffect(() => {
     if (!open) return undefined
     const onDoc = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) {
-        setOpen(false)
-        setConfirmingBypass(false)
-      }
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') {
-        setOpen(false)
-        setConfirmingBypass(false)
-      }
+      if (e.key === 'Escape') setOpen(false)
     }
     document.addEventListener('mousedown', onDoc)
     document.addEventListener('keydown', onKey)
@@ -183,8 +191,9 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
       <HoverTip text={`${label} · ${activeTitle}`} side="top">
         {trigger}
       </HoverTip>
-      {open && (
+      {shouldRender && (
         <div
+          ref={menuRef}
           role="menu"
           aria-label={label}
           // 🔴 08-04 WP6 修越界：本入口在邮件面是左组的**最后**一个控件（@ / + / 模型 / 思考 /
@@ -192,10 +201,16 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
           // = 388，而 360px 面板的可视右缘只有 348 —— 越界 40px（预存缺陷，check-WP2 实测）。
           // 改成以触发器为中心：中心 x = 140 + 14 = 154，两侧各 124 → [30, 278]，两端都在内。
           // （ConnectorQuickPanel 旧版同样的理由用过居中锚定；锚定方式跟触发器在行里的位置走。）
+          //
+          // `-translate-x-1/2`（Tailwind v3 = 写 `transform`）与本组件的 GSAP 出入场**可以共存**：
+          // GSAP 补间前会解析元素已有的 transform 并保留不参与补间的分量，只叠自己的 y/scale
+          // （实测逐帧对比过负 margin 版本，左缘每一帧都一致）。别为此把居中改写成负 margin。
+          // 阴影走 `.glass-pop` 自带的 --pop-shadow（authored 规则排在 utilities 之后，同特异度
+          // 源码序胜 —— 再挂 `shadow-[…]` 是死类）。
           className={cn(
             'absolute bottom-full left-1/2 z-50 mb-1.5 w-[248px] -translate-x-1/2',
             'rounded-[var(--r-ctl)] py-1',
-            'glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
+            'glass-pop'
           )}
         >
           {confirmingBypass ? (

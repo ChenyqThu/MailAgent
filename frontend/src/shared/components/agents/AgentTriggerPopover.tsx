@@ -155,7 +155,9 @@ const AgentTriggerPopoverImpl: FC<AgentTriggerPopoverProps> = ({
     <ComposerPrimitive.Unstable_TriggerPopover
       className={cn(
         // 主题 v3 C8/批 4: directive/mention 触发菜单 = 紧凑菜单档 rounded-lg(8) → token 化 --r-ctl
-        'glass-pop absolute bottom-full start-0 z-50 mb-2 w-72 overflow-hidden rounded-[var(--r-ctl)] border border-ink-border shadow-md',
+        // 投影走 `.glass-pop` 自带的 --pop-shadow（authored 规则排在 utilities 之后，同特异度
+        // 源码序胜）—— 原先并挂的 `shadow-md` 是死类，删。
+        'glass-pop absolute bottom-full start-0 z-50 mb-2 w-72 overflow-hidden rounded-[var(--r-ctl)] border border-ink-border',
         className
       )}
       {...props}
