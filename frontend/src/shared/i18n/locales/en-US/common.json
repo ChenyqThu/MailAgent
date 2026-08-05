@@ -1972,7 +1972,7 @@
       "disabledHint": "Not enabled: set MAILAGENT_IM_FEISHU=true in .env, then restart the backend and the app.",
       "connectedAt": "Connected at {time}",
       "lastEventAt": "Last message received {time}",
-      "noCredential": "No app credentials for the chat bot yet (FEISHU_IM_APP_ID / FEISHU_IM_APP_SECRET, seeded once).",
+      "noCredential": "No app credentials for the chat bot yet — fill in the App ID and App Secret under \"App credentials\" below and save.",
       "conflict": "Another MailAgent instance was detected ({reason}). Feishu does not broadcast to multiple long-lived connections, so instances would steal each other's messages — this one deliberately did not connect. Keep only one running (stop the pm2 mail-sync process when using the desktop app).",
       "conflictUnknown": "reason unknown",
       "lastError": "Last error: {message}",
@@ -1985,6 +1985,23 @@
         "error": "Connection error",
         "stopped": "Stopped",
         "disabled": "Not enabled"
+      },
+      "credential": {
+        "title": "App credentials",
+        "present": "Configured: App ID {appId} · last updated {time}. The App Secret is never shown again — paste a new one to rotate it.",
+        "absent": "Not configured yet. Create a separate custom app in the Feishu open platform (do not reuse the notification bot), then enter its App ID and App Secret below.",
+        "appIdLabel": "App ID",
+        "appIdPlaceholder": "App ID (starts with cli_)",
+        "secretLabel": "App Secret",
+        "secretPlaceholder": "App Secret (never shown again)",
+        "save": "Save credentials",
+        "saved": "Credentials saved",
+        "failed": "Could not save credentials",
+        "restartHint": "Restart the backend (\"Restart now\" in the banner above) before the new credentials are used: if none were configured before, the worker has not started at all, and a live connection is never hot-swapped.",
+        "platformHint": "You still need to finish the app setup in the Feishu open platform: enable the bot capability, request the direct-message permission, and pick long-lived connection in BOTH the \"Event subscription\" and \"Callback subscription\" tabs. See docs/reference/llm-agent/im-feishu-chat.md.",
+        "envSeedHint": "You can also put FEISHU_IM_APP_ID / FEISHU_IM_APP_SECRET in {path} to seed them at first start — but those keys are only a default for \"nothing stored yet\"; once credentials exist, changing them has no effect.",
+        "unbound": "A different Feishu app was detected, so the previously bound account was released (open_id is issued per app, so the old one is meaningless under the new app). Generate a new pairing code after restarting the backend.",
+        "webDisabled": "Credentials cannot be written from the remote web app (this swaps the identity of this machine's execution channel) — use the desktop app."
       },
       "bind": {
         "title": "Bound Feishu account",

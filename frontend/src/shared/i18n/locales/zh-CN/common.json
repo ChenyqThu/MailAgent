@@ -1972,7 +1972,7 @@
       "disabledHint": "未启用：在 .env 里设 MAILAGENT_IM_FEISHU=true，重启后端与 App 后生效。",
       "connectedAt": "建立连接：{time}",
       "lastEventAt": "最近一次收到消息：{time}",
-      "noCredential": "尚未配置对话 bot 的应用凭证（FEISHU_IM_APP_ID / FEISHU_IM_APP_SECRET，只在首次写入）。",
+      "noCredential": "尚未配置对话 bot 的应用凭证 —— 在下面的「应用凭证」里填 App ID 与 App Secret 保存即可。",
       "conflict": "检测到另一个 MailAgent 实例（{reason}）—— 飞书长连接不广播消息，多个实例会互相抢消息，故本实例有意不建立连接。请只保留一个（用桌面 App 时停掉 pm2 的 mail-sync）。",
       "conflictUnknown": "原因未知",
       "lastError": "最近一次错误：{message}",
@@ -1985,6 +1985,23 @@
         "error": "连接异常",
         "stopped": "已停止",
         "disabled": "未启用"
+      },
+      "credential": {
+        "title": "应用凭证",
+        "present": "已配置：App ID {appId} · 上次更新 {time}。App Secret 保存后不再显示，轮换时重新粘贴一次即可。",
+        "absent": "尚未配置。在飞书开放平台新建一个独立的企业自建应用（别复用发通知的那个），把它的 App ID 与 App Secret 填在下面。",
+        "appIdLabel": "App ID",
+        "appIdPlaceholder": "App ID（cli_ 开头）",
+        "secretLabel": "App Secret",
+        "secretPlaceholder": "App Secret（保存后不再显示）",
+        "save": "保存凭证",
+        "saved": "凭证已保存",
+        "failed": "保存凭证失败",
+        "restartHint": "保存后需重启后端（用上方横幅的「立即重启」）才会用新凭证连接：之前没配过凭证时 worker 根本还没启动，已经在跑的连接也不会热切换。",
+        "platformHint": "还需在飞书开放平台完成应用配置：开启机器人能力、申请收私聊消息权限、并在「事件订阅」与「回调订阅」两个 tab 各自选长连接。详见文档 docs/reference/llm-agent/im-feishu-chat.md。",
+        "envSeedHint": "也可以在 {path} 里写 FEISHU_IM_APP_ID / FEISHU_IM_APP_SECRET，由首次启动写入 —— 但那两个键只是「还没配过时」的默认值，配过之后改它们不再有任何效果。",
+        "unbound": "检测到换了另一个飞书应用，原来绑定的账号已解绑（open_id 是按应用签发的，旧的在新应用下无效）—— 重启后端后请重新生成绑定码。",
+        "webDisabled": "远程网页版不能写入凭证（这会换掉本机执行通道的身份），请在桌面 App 内操作。"
       },
       "bind": {
         "title": "绑定的飞书账号",

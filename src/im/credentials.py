@@ -9,10 +9,19 @@ Fernet 密文落 ``agent_config.db``，master key 在 Keychain。
   - 表里**有**行 → **行权威**，env 之后怎么改都不影响运行时；
   - 表里没有、env 也没有 → 没有可用凭证，worker 不起（不是错误，是「没配」）。
 
+**写入路径只有两条**，且都落这同一对行：进程启动时的 env seed（``seed_from_env``）与
+设置页表单（``save_credentials`` ← ``POST /api/im/credential``）。🔴 ``FEISHU_IM_APP_ID`` /
+``FEISHU_IM_APP_SECRET`` **有意不进 MANAGED_ENV_KEYS** —— 把 env 键做成 UI 可写只会造出
+第二个事实来源；env 永远只是「表里没行时」的首次默认值。
+
 ``metadata_json`` 是**明文**展示位（``set_credential`` 的红字：任何凭证值都归
-payload）。这里只放 bot 身份：``app_name`` + bot ``open_id`` —— 用来破 C6 实证的
+payload）。这里放三样：``app_id`` + ``app_name`` + bot ``open_id`` —— 用来破 C6 实证的
 **同名陷阱**（owner 环境里对话 app 与通知 app 都叫「MailAgent」，光看名字分不出在跟
-哪个 bot 说话）。PR-4 的设置页直接展示这两个字段。
+哪个 bot 说话）。PR-4 的设置页直接展示它们。
+🔴 ``app_id`` **不是 secret**（``/status`` 本来就把它摆出来，破同名陷阱的整个前提就是
+认 id 不认名字），所以三条写入路径（env seed / 表单 / 连上后回填）都把它写进明文
+metadata —— 少了它，bot 首次连上之前设置页只能显示「App ID —」，而 ``save_credentials``
+判「换没换应用」也会在 master key 丢失时失去唯一可用的判据。
 """
 
 from __future__ import annotations
@@ -74,7 +83,17 @@ def seed_from_env(cfg: Any, *, store: Any = None) -> str:
     if not env_app_id or not env_secret:
         return SEED_NO_ENV
 
-    set_credential(NAMESPACE, KEY_APP_ID, {KEY_APP_ID: env_app_id}, store=store)
+    # 🔴 metadata 里带上**明文** app_id（app_id 不是 secret —— 状态面本来就把它摆出来）：
+    #   ① 设置页在 bot 首次连上之前也能如实显示「配的是哪个 app」，而不是「App ID —」；
+    #   ② ``save_credentials`` 判「换没换应用」的明文腿要靠它 —— master key 丢了的时候
+    #      密文腿读不出来，而那正是用户跑来改凭证的时刻（见那边 docstring 的红字）。
+    set_credential(
+        NAMESPACE,
+        KEY_APP_ID,
+        {KEY_APP_ID: env_app_id},
+        metadata={"app_id": env_app_id},
+        store=store,
+    )
     set_credential(NAMESPACE, KEY_APP_SECRET, {KEY_APP_SECRET: env_secret}, store=store)
     logger.info(
         "[im-feishu] 凭证已从 env 首次 seed 进 external_credential "
@@ -82,6 +101,63 @@ def seed_from_env(cfg: Any, *, store: Any = None) -> str:
         "改 FEISHU_IM_APP_ID/SECRET 不再影响运行时"
     )
     return SEED_WROTE
+
+
+def save_credentials(app_id: str, app_secret: str, *, store: Any = None) -> bool:
+    """写/轮换凭证（设置页的「应用凭证」表单 → ``POST /api/im/credential`` 落到这里）。
+
+    与 env seed 写的是**同一对行**，所以写完即行权威 —— env 那两个键此后依旧只是
+    「表里没行时的首次 seed」，不会被这条路径反向同步（凭证只有一个事实来源）。
+
+    返回 **app 是否换了人**：旧行能读出 app_id 且与新值不同 → True。调用方据此清掉
+    只在旧应用下成立的派生状态 —— 🔴 飞书的 ``open_id`` 是**按应用**签发的，换了自建
+    应用之后旧的 ``bound_open_id`` 永远匹配不上，留着只会让设置页的「已绑定」骗人。
+
+    🔴 **旧 app_id 有两条腿，缺一不可**：密文腿（``get_credential``）+ 明文 metadata 腿
+    （``peek_credential``，不解密）。只用密文腿时，master key 换了/丢了会让
+    ``get_credential`` 返回 None —— 而那**正是**用户来这个表单的时刻（worker 报「凭证
+    不可解密」）。此时若判成「不知道换没换」而不解绑，换了应用的人就会拿到「设置页显示
+    已绑定、bot 永远不理人」这种查不出的状态。两种误判里它明显更糟：错误地解绑只是让
+    owner 重走一遍绑定码（可恢复且当场可见，响应里有 ``unbound_from``）。
+    两条腿都读不出（真·首次配置，表里根本没行）→ False：那种情况下通常也没有旧绑定。
+
+    ``metadata`` 是明文展示位：``app_id`` 恒写（用户刚亲手填的，可信），``app_name`` /
+    ``bot_open_id`` 只在 app 没换时保留 —— 换了应用它们就是别的 bot 的身份，摆出来
+    正是 C6 同名陷阱要防的那种误导；下次连上由 ``record_bot_identity`` 重新回填。
+    """
+    from src.agent_config.credentials import get_credential, peek_credential, set_credential
+
+    app_id = (app_id or "").strip()
+    app_secret = (app_secret or "").strip()
+    if not app_id or not app_secret:
+        raise ValueError("app_id / app_secret 都不能为空")
+
+    prev_meta = getattr(peek_credential(NAMESPACE, KEY_APP_ID, store=store), "metadata", None) or {}
+    # 密文腿优先（权威），解不开时回落明文 metadata 腿 —— 见 docstring 的红字。
+    prev_app_id = _extract(
+        get_credential(NAMESPACE, KEY_APP_ID, store=store), KEY_APP_ID
+    ) or str(prev_meta.get("app_id") or "").strip()
+    app_changed = bool(prev_app_id) and prev_app_id != app_id
+
+    keep_identity = not app_changed and str(prev_meta.get("app_id") or "") == app_id
+    set_credential(
+        NAMESPACE,
+        KEY_APP_ID,
+        {KEY_APP_ID: app_id},
+        metadata={
+            "app_id": app_id,
+            "app_name": str(prev_meta.get("app_name") or "") if keep_identity else "",
+            "bot_open_id": str(prev_meta.get("bot_open_id") or "") if keep_identity else "",
+        },
+        store=store,
+    )
+    set_credential(NAMESPACE, KEY_APP_SECRET, {KEY_APP_SECRET: app_secret}, store=store)
+    logger.info(
+        "[im-feishu] 凭证已写入 external_credential "
+        f"(namespace={NAMESPACE}, app_id={app_id[:8]}…, app_changed={app_changed}) —— "
+        "需重启后端才确定生效（worker 没起时 spawn 前的 gate 不会重跑；在跑的连接不热切换）"
+    )
+    return app_changed
 
 
 def ensure_credentials(cfg: Any, *, store: Any = None) -> Optional[FeishuAppCredentials]:

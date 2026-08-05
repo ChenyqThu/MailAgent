@@ -195,9 +195,30 @@ docstring 里点名的示例正是 `im:feishu`。
 - **seed 语义**（镜像 LLM provider registry）：表里没有该行且 env `FEISHU_IM_APP_ID` /
   `FEISHU_IM_APP_SECRET` 两键都在 → 写进去（一次性）；表里有行 → **行权威**，env 之后怎么改都不
   影响运行时；两者都没有 → 没有可用凭证，worker 不起（不是错误，是「没配」）。
+- **写入路径只有两条，都落这同一对行**：进程启动时的 env seed（`seed_from_env`）与设置页表单
+  （`save_credentials` ← `POST /api/im/credential`，WP-07）。🔴 `FEISHU_IM_APP_ID` /
+  `FEISHU_IM_APP_SECRET` **有意不进两侧 `MANAGED_ENV_KEYS`** —— 凭证的权威是
+  `external_credential` 行，把 env 键做成 UI 可写只会造出第二个事实来源；env 只剩「表里没行时
+  的首次默认值」这一个语义。
+- 🔴 **表单写完必须重启后端**，两种情形都成立（别把理由说成「worker 只读一次凭证」——
+  `run()` 每轮循环其实会重读）：
+  - **worker 没起**（此前没配 / 凭证读不出）：`feishu_im_ready` 是 **spawn 前**的一次性 gate，
+    拦下之后 `service.py` 再也不重跑它 —— 写进去多少凭证都没有进程会读，重启是唯一出路。
+    这正是这个表单最主要的使用场景。
+  - **worker 在跑**：新凭证只在当前长连接断掉之后（+`RECONNECT_RETRY_SEC`=60s）的下一轮才被
+    读到，**不热切换**，生效时刻取决于连接什么时候断、不可预期。
+  故响应恒 `restart_required=true`（「唯一确定生效的做法是重启」），设置页据此拉起重启横幅；
+  横幅的 key 写凭证行的 namespace `im:feishu` 而**不是** env 键 —— 写 env 键会把人引去 .env 里
+  改一个不再有任何效果的东西。
+- 🔴 **换成另一个自建应用时顺手解绑**（`app_changed=true` → 清 `bound_open_id` + 清 live bot
+  展示位）：飞书的 `open_id` 是**按应用**签发的，旧绑定在新应用下永远匹配不上，留着只会让设置页
+  的「已绑定」骗人。同 app 只轮换 secret 则绑定与 bot 身份原样不动。
 - `metadata_json` 是**明文**展示位，只放 bot 身份：`app_id` + `app_name` + bot `open_id`。
+  表单写入时 `app_id` 恒写（用户刚亲手填的），`app_name` / `bot_open_id` 只在 app 没换时保留
+  ——换了应用它们就是**别的 bot** 的身份，摆出来正是下面那个同名陷阱要防的误导。
 - 设置页读 `peek_credential`（**不解密不读密文列**）——master key 不可用时依然能如实回答
-  「存了没、什么时候更新的」。
+  「存了没、什么时候更新的」。🔴 **响应绝不回显 secret 的任何片段**（连末四位都不给）：设置页
+  需要知道的只有「存了没、什么时候更新的、存的是哪个 app_id」。
 
 🔴 **同名陷阱**（C6 实证）：owner 环境里对话 app 与通知 app 在飞书后台**都叫「MailAgent」**，
 光看名字分不出在跟哪个 bot 说话。所以设置页永远把 `app_id` / `open_id` 摆出来，文案也明说
@@ -238,10 +259,10 @@ IM 入口引入了两样此前不存在的东西——新的 **provenance**（�
 
 | 面 | 位置 |
 |---|---|
-| 设置-AI「飞书对话」区（连接状态 / 绑定了谁 / 工具集陈述 / 上网开关 / 审批记录） | `frontend/src/shared/components/settings/custom-ai/ImFeishuSection.tsx`，挂 `CustomAiSection`，锚点 id 在 `aiTabAnchors.ts`（🔴 **三处一处不能漏**：ids / items / wrapper —— 漏了不报错，只安静少一行导航） |
+| 设置-AI「飞书对话」区（连接状态 / **应用凭证表单** / 绑定了谁 / 工具集陈述 / 上网开关 / 审批记录） | `frontend/src/shared/components/settings/custom-ai/ImFeishuSection.tsx`，挂 `CustomAiSection`，锚点 id 在 `aiTabAnchors.ts`（🔴 **三处一处不能漏**：ids / items / wrapper —— 漏了不报错，只安静少一行导航） |
 | 桌面会话列表的「来自飞书」角标 | `AgentThreadList.tsx`（数据来自 `ChatSessionListItem.origin`） |
 | CLI | `mailagent im status`（读，无 auth）/ `mailagent im pair`（写，需 token） |
-| HTTP | `GET /api/im/status` · `GET /api/im/approvals` · `POST /api/im/pair`（`src/api/routers/im.py`） |
+| HTTP | `GET /api/im/status` · `GET /api/im/approvals` · `POST /api/im/pair` · `POST /api/im/credential`（`src/api/routers/im.py`） |
 
 三条与别的设置区不同的取舍：
 
@@ -249,7 +270,9 @@ IM 入口引入了两样此前不存在的东西——新的 **provenance**（�
    `return null`；这里不。理由：`MAILAGENT_IM_FEISHU` 是**没有 UI 开关**的 env 总闸（双载体、
    翻它要同时重启 serve 与 app），整区隐身 = 用户既不知道有这个功能、也不知道它为什么不工作。
    对应地 `/status` 与 `/approvals` **有意不挂 flag 门**（整区 409 只会让设置页显示「加载失败」）；
-   `/pair` 挂门 409（没有 bot 在收消息时出码 = 出一个永远兑不掉的码）。
+   `/pair` 挂门 409（没有 bot 在收消息时出码 = 出一个永远兑不掉的码），`/credential` 同档挂门
+   （flag off 时写进去也没有任何进程会去用它）。写类两个端点都挂 `verify_local_token`——绑定与
+   换凭证都是「动本机执行通道」的动作，远程 web 恒 403、UI 那侧同样禁用并说明原因。
 2. 🔴 **flag off 时 `connection_status` 是「上次记录」**（serve 被 `kill -9` 时它可能还停在
    `connected`）。CLI 与设置页都把它显示成「未启用」档，直接当当前状态显示就是撒谎。
 3. 🔴 **审批记录的语义是「`origin='im'` 会话里的审批决定」，不是「点击发生在飞书」**——gateway
@@ -271,8 +294,9 @@ IM 入口引入了两样此前不存在的东西——新的 **provenance**（�
    - 回调订阅 → `card.action.trigger`（新版卡片回调；官方只声明「消息卡片回传交互（**旧**）」
      不支持长连接）
 4. 🔴 **保存订阅配置时本地程序必须正在运行且已连接**（飞书会当场探活）。
-5. 把 app id / secret 填进 `.env` 的 `FEISHU_IM_APP_ID` / `FEISHU_IM_APP_SECRET`（仅首次 seed），
-   或直接写 `external_credential`。
+5. 把 app id / secret 填进 **设置 → AI →「飞书对话」→「应用凭证」**（首选，写的就是
+   `external_credential` 行，保存后重启后端生效）；或写进 `.env` 的 `FEISHU_IM_APP_ID` /
+   `FEISHU_IM_APP_SECRET` 由首次启动 seed（🔴 表里已有行时 env 不再有任何效果）。
 
 ### 排查顺序
 

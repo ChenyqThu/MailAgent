@@ -10,6 +10,8 @@
   不掉的码是骗人。
 - ``POST /pair`` 的 rebind 语义与 CLI 逐字一致（已绑定且未显式 rebind → 拒）。
 - ``GET /approvals`` 的 ``available=false`` ≠ 「零条」（账本不可达渲染成 0 = 谎报）。
+- ``POST /credential`` **绝不回显 secret**、flag 门与 ``/pair`` 同档、换应用即解绑
+  （open_id 按应用签发，旧绑定在新应用下永远匹配不上）。
 """
 
 from __future__ import annotations
@@ -21,6 +23,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from src.api.app import app
+from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_chat_db, get_settings
 from src.api.routers.im import get_im_state
 from src.im.pairing import issue_pair_code
@@ -173,6 +176,247 @@ def test_pair_rebind_unbinds_then_issues(tmp_path, teardown_overrides):
     assert resp.status_code == 200
     assert resp.json()["data"]["unbound_from"] == "ou_owner"
     assert state.get_bound_open_id() == ""
+
+
+# ── POST /credential ────────────────────────────────────────────────────────
+# 🔴 凭证的**落库**语义在 tests/im/test_credentials.py（真 store + tmp 库）；这里只测
+# 端点这一层：门、归一、不回显、以及「换应用连坐解绑」的接线。故把 save_credentials
+# 换成探针 —— 让本文件永远不去碰真的 agent_config.db / 钥匙串。
+
+#: 🔴 刻意用一串**不含任何英文词**的随机形 token：下面要断言「secret 的片段也不许出现在
+#: 响应里」，而 ``...-secret`` 这种人话尾巴会跟 JSON 里正常的键名撞出假红。
+SECRET_SENTINEL = "SENTINEL-Zq7Fk2Wv9Xr4Tn8Lb6Yd"
+
+#: ``POST /credential`` 响应的**全部**字段（键集锁死）。
+#: 🔴 只断言「完整 secret 不在响应文本里」**挡不住脱敏回显** —— 变异实测：给响应加一个
+#: ``app_secret_tail = app_secret[-4:]``，那条断言一个用例都不红。而 docstring 承诺的是
+#: 「不回显 secret 的**任何片段**」，所以判据必须是「响应里只能有这几个字段」，新增任何
+#: 一个字段都得有人重新想一遍它是不是敏感的。
+CREDENTIAL_RESPONSE_KEYS = {
+    "credential_present",
+    "credential_updated_at",
+    "bot_app_id",
+    "metadata_app_name",
+    "metadata_bot_open_id",
+    "app_changed",
+    "unbound_from",
+    "restart_required",
+}
+
+
+@pytest.fixture()
+def save_spy(monkeypatch):
+    """``src.im.credentials.save_credentials`` 的探针（handler 内 lazy import，故打模块属性）。
+
+    ``app_changed`` 可写，用来驱动「换了另一个应用」那条分支。
+    """
+    from src.im import credentials as im_credentials
+
+    calls: list = []
+
+    class _Spy:
+        app_changed = False
+
+        def __call__(self, app_id, app_secret, **_kw):
+            calls.append((app_id, app_secret))
+            return self.app_changed
+
+    spy = _Spy()
+    spy.calls = calls  # type: ignore[attr-defined]
+    monkeypatch.setattr(im_credentials, "save_credentials", spy)
+    return spy
+
+
+def _route_dependency_calls(path: str, method: str) -> set:
+    for route in app.routes:
+        if getattr(route, "path", None) == path and method in getattr(route, "methods", ()):
+            return {d.call for d in route.dependant.dependencies}
+    raise AssertionError(f"route not found: {method} {path}")
+
+
+def test_credential_route_requires_local_token_not_cf_jwt():
+    """🔴 远程 web 不许写凭证 —— 鉴权腿与 ``/pair`` 同款（本地 token，不接受 CF JWT）。
+
+    断言的是**接线本身**：本文件的功能用例在没配本地 token 的测试环境里两种依赖都会放行，
+    所以把它换成 ``verify_cf_access`` 一个用例都不会红 —— 而那意味着远程浏览器能换掉本机
+    执行通道的身份。
+    """
+    creds = _route_dependency_calls("/api/im/credential", "POST")
+    assert verify_local_token in creds
+    assert verify_cf_access not in creds
+    # 与 /pair 同档（本仓「写类只认本地」的既有先例）
+    assert creds == _route_dependency_calls("/api/im/pair", "POST")
+
+
+def test_credential_write_never_echoes_the_secret(tmp_path, teardown_overrides, save_spy):
+    """🔴 响应里只能有元数据。回显（哪怕片段）= 任何能打开设置页的人都能读回 secret。"""
+    client, _state, _db = _client(tmp_path)
+    with client:
+        resp = client.post(
+            "/api/im/credential",
+            json={"app_id": "cli_new", "app_secret": SECRET_SENTINEL},
+        )
+    assert resp.status_code == 200
+    assert SECRET_SENTINEL not in resp.text
+    data = resp.json()["data"]
+    # 🔴 键集锁死 —— 见 CREDENTIAL_RESPONSE_KEYS 的红字（只查完整串挡不住脱敏尾巴）。
+    assert set(data) == CREDENTIAL_RESPONSE_KEYS
+    # 掩码回显的两种常见形状（尾 N 位 / 头 N 位）也一并钉住，失败信息更直白。
+    for frag in (SECRET_SENTINEL[-4:], SECRET_SENTINEL[-8:], SECRET_SENTINEL[:8]):
+        assert frag not in resp.text
+    # 🔴 恒真：没配凭证时 worker 在 spawn 前就被 gate 拦下，serve-api 起不了它。
+    assert data["restart_required"] is True
+    assert save_spy.calls == [("cli_new", SECRET_SENTINEL)]
+
+
+def test_credential_write_strips_surrounding_whitespace(tmp_path, teardown_overrides, save_spy):
+    """首尾空白是复制噪音，剔掉（内部空白反而要拒，见下条）。"""
+    client, _state, _db = _client(tmp_path)
+    with client:
+        resp = client.post(
+            "/api/im/credential",
+            json={"app_id": "  cli_new\n", "app_secret": f" {SECRET_SENTINEL} "},
+        )
+    assert resp.status_code == 200
+    assert save_spy.calls == [("cli_new", SECRET_SENTINEL)]
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        {"app_id": "", "app_secret": SECRET_SENTINEL},
+        {"app_id": "cli_new", "app_secret": "   "},
+        {"app_id": "cli new", "app_secret": SECRET_SENTINEL},  # 内部空格
+        {"app_id": "cli_new", "app_secret": "abc def"},
+        {"app_id": "cli_new", "app_secret": "x" * 300},
+        {"app_id": "cli　new", "app_secret": SECRET_SENTINEL},  # 全角空格
+        {"app_id": "cli new", "app_secret": SECRET_SENTINEL},  # NBSP
+        {"app_id": "cli_new", "app_secret": "abc\tdef"},
+    ],
+)
+def test_credential_write_rejects_malformed_values(tmp_path, teardown_overrides, save_spy, body):
+    """🔴 内部空白不静默剔除：存进去只会变成几周后一条查不出的 401，当场拒才是能修的。"""
+    client, _state, _db = _client(tmp_path)
+    with client:
+        resp = client.post("/api/im/credential", json=body)
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_INVALID_ARG"
+    assert save_spy.calls == []  # 一个字节都没写
+
+
+@pytest.mark.parametrize(
+    "invisible",
+    [
+        "​",  # 零宽空格（网页控制台复制的头号搭车客）
+        "﻿",  # BOM
+        "‍",  # ZWJ
+        "⁠",  # word joiner
+        "­",  # soft hyphen
+        "\x1b",  # ESC（控制字符）
+    ],
+    ids=["zwsp", "bom", "zwj", "word-joiner", "soft-hyphen", "esc"],
+)
+def test_credential_write_rejects_invisible_characters(
+    tmp_path, teardown_overrides, save_spy, invisible
+):
+    """🔴 这一档**兜不住在 isspace 里** —— 上面那些字符 ``isspace()`` 全是 False，
+    ``str.strip()`` 也不动它们。只做「拒内部空白」就会把看不见的原样存进去，做出的恰好
+    是那条红字要防的「几周后查不出的 401」。首尾/中间两种位置都得拒（用户都看不见）。
+    """
+    client, _state, _db = _client(tmp_path)
+    with client:
+        for app_id in (f"cli{invisible}new", f"{invisible}cli_new", f"cli_new{invisible}"):
+            resp = client.post(
+                "/api/im/credential",
+                json={"app_id": app_id, "app_secret": SECRET_SENTINEL},
+            )
+            assert resp.status_code == 400, app_id.encode("unicode_escape")
+            assert resp.json()["error"]["code"] == "E_INVALID_ARG"
+    assert save_spy.calls == []  # 一个字节都没写
+
+
+def test_credential_write_does_not_forward_downstream_error_text(
+    tmp_path, teardown_overrides, save_spy, monkeypatch
+):
+    """🔴 下游异常消息**不原样转发**给客户端。
+
+    今天 ``set_credential`` 的每条 ValueError 都是固定串，所以直接 ``str(exc)`` 恰好安全
+    —— 但那是把「消息里永远不带值」押在别人代码上的隐含前提，没有任何机制保证。这个端点
+    的整条纪律是「secret 的任何片段都不出去」，所以这条边界得钉住而不是靠运气。
+    """
+    from src.im import credentials as im_credentials
+
+    def _boom(*_a, **_k):
+        raise ValueError(f"cannot store payload {{'app_secret': {SECRET_SENTINEL!r}}}")
+
+    monkeypatch.setattr(im_credentials, "save_credentials", _boom)
+    client, _state, _db = _client(tmp_path)
+    with client:
+        resp = client.post(
+            "/api/im/credential",
+            json={"app_id": "cli_new", "app_secret": SECRET_SENTINEL},
+        )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_INVALID_ARG"
+    assert SECRET_SENTINEL not in resp.text
+    for frag in (SECRET_SENTINEL[-4:], SECRET_SENTINEL[-8:], SECRET_SENTINEL[:8]):
+        assert frag not in resp.text
+
+
+def test_credential_write_refuses_when_flag_off(tmp_path, teardown_overrides, save_spy):
+    """flag 门与 ``/pair`` 同档：写进去也没有任何进程会去用它。"""
+    client, _state, _db = _client(tmp_path, enabled=False)
+    with client:
+        resp = client.post(
+            "/api/im/credential",
+            json={"app_id": "cli_new", "app_secret": SECRET_SENTINEL},
+        )
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "E_IM_DISABLED"
+    assert save_spy.calls == []
+
+
+def test_credential_write_unbinds_when_app_changed(tmp_path, teardown_overrides, save_spy):
+    """🔴 open_id 按**应用**签发：换了自建应用，旧 bound_open_id 在新应用下永远匹配
+    不上。留着 = 设置页显示「已绑定」但 bot 永远不理人。顺带清掉 live bot 展示位
+    （它同样只在旧应用下成立，且在 status 里优先于凭证行 metadata）。"""
+    save_spy.app_changed = True
+    client, state, _db = _client(
+        tmp_path,
+        state_initial={
+            STATE_BOUND_OPEN_ID: "ou_owner",
+            "im.feishu.bot_app_name": "旧 bot",
+        },
+    )
+    with client:
+        data = client.post(
+            "/api/im/credential",
+            json={"app_id": "cli_other_app", "app_secret": SECRET_SENTINEL},
+        ).json()["data"]
+    assert data["app_changed"] is True
+    assert data["unbound_from"] == "ou_owner"
+    assert state.get_bound_open_id() == ""
+    assert state.snapshot()["bot_app_name"] == ""
+
+
+def test_credential_write_keeps_binding_on_secret_rotation(tmp_path, teardown_overrides, save_spy):
+    """同一个 app 只换 secret（``app_changed=False``）→ 绑定与 bot 身份原样不动。"""
+    save_spy.app_changed = False
+    client, state, _db = _client(
+        tmp_path,
+        state_initial={
+            STATE_BOUND_OPEN_ID: "ou_owner",
+            "im.feishu.bot_app_name": "MailAgent",
+        },
+    )
+    with client:
+        data = client.post(
+            "/api/im/credential",
+            json={"app_id": "cli_same", "app_secret": SECRET_SENTINEL},
+        ).json()["data"]
+    assert data["unbound_from"] == ""
+    assert state.get_bound_open_id() == "ou_owner"
+    assert state.snapshot()["bot_app_name"] == "MailAgent"
 
 
 # ── GET /approvals ──────────────────────────────────────────────────────────

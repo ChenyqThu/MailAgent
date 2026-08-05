@@ -21,9 +21,15 @@
 //      决定」，**不是**「点击发生在飞书」—— gateway 对桌面卡与飞书卡写的是同一个
 //      `approval_status`，分不出来。文案照此写，宁可弱一点也不能暗示一个查不出的事实。
 //
-// 🔴 远程 web 构建：`POST /api/im/pair` 挂 `verify_local_token`（远程 CF 用户恒 403 ——
-// 把飞书账号接进本机执行通道的动作不该从远程发起），上网开关走 `env:set`（web 上
-// notImplemented）。故两者在 web 下禁用 + 明示去桌面 App 操作；只读展示照常。
+// 🔴 远程 web 构建：`POST /api/im/pair` 与 `POST /api/im/credential` 都挂
+// `verify_local_token`（远程 CF 用户恒 403 —— 把飞书账号接进本机执行通道、以及换掉那条
+// 通道的身份，都不该从远程发起），上网开关走 `env:set`（web 上 notImplemented）。故三者在
+// web 下禁用 + 明示去桌面 App 操作；只读展示照常。
+//
+// 🔴 凭证表单（WP-07）：`FEISHU_IM_APP_ID` / `FEISHU_IM_APP_SECRET` **有意不进
+// MANAGED_ENV_KEYS** —— 凭证的权威是 `external_credential` 行，把 env 键做成 UI 可写只会
+// 造出第二个事实来源。故这里不走 `applyEnvPatch`，而是 POST 到 serve-api 直接写那对行；
+// env 那两个键此后只剩「表里没行时的首次 seed」这一个语义。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -36,6 +42,7 @@ import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { Button } from '@shared/components/ui/button'
+import { Input } from '@shared/components/ui/input'
 import { Switch } from '@shared/components/ui/switch'
 
 import { Section } from '../parts/Section'
@@ -120,6 +127,37 @@ async function apiGet<T>(path: string): Promise<T> {
     throw new Error(body?.error?.message || `HTTP ${resp.status}`)
   }
   if (!body || body.data == null) throw new Error('empty response')
+  return body.data
+}
+
+/** `POST /api/im/credential` 的响应。🔴 **没有** secret 字段，也不该有 —— 设置页需要知道
+ *  的只是「存了没、什么时候更新的、存的是哪个 app_id」。 */
+interface ImCredentialResult {
+  credential_present: boolean
+  credential_updated_at: number | null
+  bot_app_id: string
+  /** 换成了**另一个**自建应用（open_id 按应用签发 → 旧绑定必然作废）。 */
+  app_changed: boolean
+  /** 因换应用而被解绑的 open_id（空 = 没动过绑定）。 */
+  unbound_from: string
+  /** 写进去了但还没生效：worker 没起时凭证 gate 在 spawn **之前**、拦下就不再重跑；已在跑
+   *  的长连接也不热切换（只在断线重连的下一轮才读到）。后端恒 true —— 由它驱动重启横幅，
+   *  而不是前端自己假设。 */
+  restart_required: boolean
+}
+
+async function postCredential(appId: string, appSecret: string): Promise<ImCredentialResult> {
+  const resp = await fetch(`${resolveApiBaseUrl()}/im/credential`, {
+    method: 'POST',
+    credentials: 'include',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ app_id: appId, app_secret: appSecret })
+  })
+  const body = (await resp.json().catch(() => null)) as {
+    data?: ImCredentialResult
+    error?: { message?: string }
+  } | null
+  if (!resp.ok || !body?.data) throw new Error(body?.error?.message || `HTTP ${resp.status}`)
   return body.data
 }
 
@@ -243,6 +281,12 @@ export function ImFeishuSection(): React.ReactElement {
   const [pairing, setPairing] = React.useState(false)
   const [issued, setIssued] = React.useState<{ code: string; expiresAt: number } | null>(null)
   const [webSubmitting, setWebSubmitting] = React.useState(false)
+  const [appIdDraft, setAppIdDraft] = React.useState('')
+  // 已把哪个「已落库 app_id」同步进上面的草稿（见下方渲染期同步块）。
+  const [appIdSyncedFrom, setAppIdSyncedFrom] = React.useState('')
+  // 🔴 secret 明文只活到提交为止（提交成功即清空），且永远不从服务端读回来。
+  const [secretDraft, setSecretDraft] = React.useState('')
+  const [savingCredential, setSavingCredential] = React.useState(false)
 
   const status = useQuery<ImStatus>({
     queryKey: QK_IM_STATUS,
@@ -284,6 +328,33 @@ export function ImFeishuSection(): React.ReactElement {
     }
   }
 
+  async function handleSaveCredential(): Promise<void> {
+    const appId = appIdDraft.trim()
+    const appSecret = secretDraft.trim()
+    if (!appId || !appSecret) return
+    setSavingCredential(true)
+    try {
+      const data = await postCredential(appId, appSecret)
+      setSecretDraft('')
+      await qc.invalidateQueries({ queryKey: QK_IM_STATUS })
+      // 凭证 gate（`feishu_im_ready`）在 spawn **之前**，worker 没起时它不会重跑；已在跑
+      // 的长连接也不热切换 → 不拉横幅的话用户会以为存完就该连上了。键名写凭证行的
+      // namespace，不写 env 键：env 键不是权威，写它只会让人去 .env 里找一个改了也没用
+      // 的东西（横幅本身给的动作是「立即重启」，指向正确）。
+      if (data.restart_required) markRestartRequired(['im:feishu'])
+      toastSuccess(
+        t('settings.imFeishu.credential.saved'),
+        data.unbound_from
+          ? t('settings.imFeishu.credential.unbound')
+          : t('settings.imFeishu.credential.restartHint')
+      )
+    } catch (err) {
+      toastError(t('settings.imFeishu.credential.failed'), errorMessage(err))
+    } finally {
+      setSavingCredential(false)
+    }
+  }
+
   async function handlePair(rebind: boolean): Promise<void> {
     setPairing(true)
     try {
@@ -306,6 +377,17 @@ export function ImFeishuSection(): React.ReactElement {
   const effectiveStatus = s == null ? 'unknown' : s.enabled ? s.connection_status : 'disabled'
   const pillClass = STATUS_PILL_CLASS[effectiveStatus] ?? 'bg-ink-4 text-ink-fg-2'
   const statusLabelKey = STATUS_LABEL_KEYS[effectiveStatus]
+
+  // App ID 不是 secret（状态面本来就展示它）→ 已存值预填进输入框。不只是省事：手打一遍
+  // 还会踩到「打错一个字符 = 被当成换了另一个应用 → 连坐解绑」。
+  // 用 React 官方的「渲染期调整 state」写法而不是 effect（effect 版多一次提交，且被
+  // react-hooks/set-state-in-effect 判为反模式）。判据是**已落库的 app_id 变没变**，所以
+  // 每 10s 一次的状态轮询不会把用户正在输入的内容冲掉；真变了（比如刚保存成功）才同步。
+  const storedAppId = s?.bot_app_id ?? ''
+  if (storedAppId !== appIdSyncedFrom) {
+    setAppIdSyncedFrom(storedAppId)
+    setAppIdDraft(storedAppId)
+  }
 
   const connectionBody: React.ReactNode = (() => {
     if (status.isError) {
@@ -462,7 +544,70 @@ export function ImFeishuSection(): React.ReactElement {
         </span>
       </Row>
 
-      {/* ② 绑定 */}
+      {/* ② 应用凭证 —— 写 `external_credential` 行（不是 env！见文件头最后一条）。 */}
+      <div className="px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
+        <div className="text-aux font-medium text-ink-fg">
+          {t('settings.imFeishu.credential.title')}
+        </div>
+        <div className="mt-0.5 text-meta text-ink-fg-2">
+          {s?.credential_present
+            ? t('settings.imFeishu.credential.present', {
+                appId: s.bot_app_id || '—',
+                time: formatEpoch(s.credential_updated_at) ?? '—'
+              })
+            : t('settings.imFeishu.credential.absent')}
+        </div>
+        <div className="mt-2 flex flex-wrap items-center gap-1.5">
+          <Input
+            value={appIdDraft}
+            disabled={isWeb || savingCredential || !s?.enabled}
+            placeholder={t('settings.imFeishu.credential.appIdPlaceholder')}
+            onChange={(e) => setAppIdDraft(e.target.value)}
+            className="h-7 w-[220px] font-mono text-[12px]"
+            aria-label={t('settings.imFeishu.credential.appIdLabel')}
+          />
+          <Input
+            type="password"
+            value={secretDraft}
+            disabled={isWeb || savingCredential || !s?.enabled}
+            placeholder={t('settings.imFeishu.credential.secretPlaceholder')}
+            onChange={(e) => setSecretDraft(e.target.value)}
+            className="h-7 w-[220px]"
+            aria-label={t('settings.imFeishu.credential.secretLabel')}
+          />
+          <Button
+            size="sm"
+            disabled={
+              isWeb || savingCredential || !s?.enabled || !appIdDraft.trim() || !secretDraft.trim()
+            }
+            title={
+              isWeb
+                ? t('settings.imFeishu.credential.webDisabled')
+                : s && !s.enabled
+                  ? t('settings.imFeishu.bind.flagOffDisabled')
+                  : undefined
+            }
+            onClick={() => void handleSaveCredential()}
+          >
+            {savingCredential ? <Loader2 className="size-3.5 animate-spin" /> : null}
+            {t('settings.imFeishu.credential.save')}
+          </Button>
+        </div>
+        <div className="mt-1.5 flex flex-col gap-0.5 text-meta text-ink-fg-3">
+          <span>{t('settings.imFeishu.credential.restartHint')}</span>
+          <span>{t('settings.imFeishu.credential.platformHint')}</span>
+          {/* 🔴 路径取自 env 快照（`EnvSnapshot.path`），不写死 —— 打包态与源码运行态读的
+              是**两份不同**的 .env，猜一个就等于把一半用户送错地方。 */}
+          {envReady ? (
+            <span className="break-all">
+              {t('settings.imFeishu.credential.envSeedHint', { path: envState.snapshot.path })}
+            </span>
+          ) : null}
+          {isWeb ? <span>{t('settings.imFeishu.credential.webDisabled')}</span> : null}
+        </div>
+      </div>
+
+      {/* ③ 绑定 */}
       <Row label={t('settings.imFeishu.bind.title')} helper={bindingBody}>
         {s ? (
           <Button
@@ -491,7 +636,7 @@ export function ImFeishuSection(): React.ReactElement {
         </div>
       ) : null}
 
-      {/* ③ IM 工具集 —— 陈述，不是配置（见文件头取舍 2）。 */}
+      {/* ④ IM 工具集 —— 陈述，不是配置（见文件头取舍 2）。 */}
       <div className="px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
         <div className="text-aux font-medium text-ink-fg">{t('settings.imFeishu.tools.title')}</div>
         <div className="mt-0.5 text-meta text-ink-fg-2">{t('settings.imFeishu.tools.desc')}</div>
@@ -504,7 +649,7 @@ export function ImFeishuSection(): React.ReactElement {
         </ul>
       </div>
 
-      {/* ④ 上网开关（grill Q19=A —— 唯一真开关） */}
+      {/* ⑤ 上网开关（grill Q19=A —— 唯一真开关） */}
       <Row
         label={t('settings.imFeishu.web.title')}
         helper={
@@ -525,7 +670,7 @@ export function ImFeishuSection(): React.ReactElement {
         />
       </Row>
 
-      {/* ⑤ 审批历史 */}
+      {/* ⑥ 审批历史 */}
       <div className="px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
         <div className="text-aux font-medium text-ink-fg">
           {t('settings.imFeishu.approvals.title')}
