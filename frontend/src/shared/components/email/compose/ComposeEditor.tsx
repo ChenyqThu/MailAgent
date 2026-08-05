@@ -15,13 +15,20 @@ import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { EditorContent, useEditorState, type Editor } from '@tiptap/react'
 import {
+  ALargeSmall,
+  AlignVerticalSpaceAround,
   AtSign,
   Ban,
   Baseline,
+  BetweenHorizontalEnd,
+  BetweenHorizontalStart,
+  BetweenVerticalEnd,
+  BetweenVerticalStart,
   Bold,
   Check,
   ChevronDown,
   Code,
+  Columns3,
   Highlighter,
   ImagePlus,
   ImageUp,
@@ -29,18 +36,19 @@ import {
   Link2,
   List,
   ListOrdered,
-  Merge,
   Minus,
   PanelTop,
+  Pilcrow,
   Redo2,
   Rows3,
-  Columns3,
-  Split,
   SquareCode,
   Strikethrough,
   Table2,
+  TableCellsMerge,
+  TableCellsSplit,
   TextQuote,
   Trash2,
+  Type,
   Underline as UnderlineIcon,
   Undo2,
   Unlink
@@ -48,6 +56,8 @@ import {
 
 import { cn } from '@shared/lib/cn'
 import { toastError } from '@shared/state/toast'
+import { useAppearance } from '@shared/state/appearance'
+import { HoverTip } from '@shared/components/ui/HoverTip'
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/components/ui/popover'
 
 // 内联图片(data URL 直嵌正文)的单张上限 — data URL 会把字节膨胀 ~1.37×,
@@ -68,24 +78,29 @@ function FmtBtn({
   onClick: () => void
 }): React.ReactElement {
   return (
-    <button
-      type="button"
-      title={label}
-      aria-label={label}
-      aria-pressed={active}
-      disabled={disabled}
-      // onMouseDown preventDefault keeps the editor selection from being
-      // stolen by the toolbar button focus.
-      onMouseDown={(e) => e.preventDefault()}
-      onClick={onClick}
-      className={cn(
-        'folder-editor-btn',
-        active && 'is-on',
-        disabled && 'opacity-40 pointer-events-none'
-      )}
-    >
-      {icon}
-    </button>
+    // 提示走 HoverTip 而不是原生 title= —— Electron `hiddenInset` 下 OS tooltip
+    // 有的面根本不触发、有的延迟到没用（HoverTip.tsx 头注释），这正是 dogfood
+    // 「hover 也没说明」的根因。portal 模式让提示不被 ComposePanel 根节点的
+    // overflow-hidden 裁掉（工具栏最右侧的撤销/重做尤其明显）。
+    <HoverTip text={label} portal>
+      <button
+        type="button"
+        aria-label={label}
+        aria-pressed={active}
+        disabled={disabled}
+        // onMouseDown preventDefault keeps the editor selection from being
+        // stolen by the toolbar button focus.
+        onMouseDown={(e) => e.preventDefault()}
+        onClick={onClick}
+        className={cn(
+          'folder-editor-btn',
+          active && 'is-on',
+          disabled && 'opacity-40 pointer-events-none'
+        )}
+      >
+        {icon}
+      </button>
+    </HoverTip>
   )
 }
 
@@ -204,17 +219,18 @@ function SwatchPopoverButton({
   return (
     <>
       <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <button
-            type="button"
-            title={title}
-            aria-label={title}
-            onMouseDown={(e) => e.preventDefault()}
-            className={cn('folder-editor-btn', current && 'is-on')}
-          >
-            {icon}
-          </button>
-        </PopoverTrigger>
+        <HoverTip text={title} portal>
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label={title}
+              onMouseDown={(e) => e.preventDefault()}
+              className={cn('folder-editor-btn', current && 'is-on')}
+            >
+              {icon}
+            </button>
+          </PopoverTrigger>
+        </HoverTip>
         <PopoverContent
           align="start"
           sideOffset={6}
@@ -261,35 +277,49 @@ function SwatchPopoverButton({
 }
 
 /** 下拉选项按钮: radix Popover 选项列表 (取代原生 <select> — 它的系统下拉在 Electron modal
- *  里关闭时会误关 backdrop, dogfood 反馈)。当前值显示在按钮上。 */
+ *  里关闭时会误关 backdrop, dogfood 反馈)。
+ *
+ *  按钮上恒显示「控件图标 + 当前生效值」—— dogfood 反馈「字体/字号/行距三个下拉全写
+ *  『默认』，用户分不出哪个是哪个」：图标负责「这是什么控件」，文案负责「当前值是多少」
+ *  (字号/行距在未显式设置时显示的是**实际生效的数值**而不是「默认」二字)。值来自默认
+ *  设置时以 dim 前景色 + hover 提示补一行说明来表达「跟随默认」的继承语义。 */
 function OptionPopoverButton({
   title,
+  icon,
   currentLabel,
+  inherited = false,
   options,
   value,
   onSelect
 }: {
   title: string
+  /** 控件标识图标 —— 四个下拉互不相同, 不点开也能分辨。 */
+  icon: React.ReactNode
   currentLabel: string
+  /** 当前值来自默认设置而非本封显式选择 (显示上 dim + hover 说明)。 */
+  inherited?: boolean
   options: ReadonlyArray<{ value: string; label: string }>
   value: string
   onSelect: (value: string) => void
 }): React.ReactElement {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          title={title}
-          aria-label={title}
-          onMouseDown={(e) => e.preventDefault()}
-          className="flex h-7 max-w-[92px] items-center gap-1 rounded-md border border-ink-border/60 bg-ink-2/50 px-1.5 text-[11px] text-ink-fg-2 transition-colors duration-fast hover:bg-ink-2"
-        >
-          <span className="truncate">{currentLabel}</span>
-          <ChevronDown size={12} strokeWidth={2} className="shrink-0 opacity-60" />
-        </button>
-      </PopoverTrigger>
+      <HoverTip text={inherited ? `${title}\n${t('compose.editor.defaultHint')}` : title} portal>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={title}
+            onMouseDown={(e) => e.preventDefault()}
+            className="flex h-7 max-w-[104px] items-center gap-1 rounded-md border border-ink-border/60 bg-ink-2/50 px-1.5 text-[11px] text-ink-fg-2 transition-colors duration-fast hover:bg-ink-2"
+          >
+            <span className="shrink-0 opacity-70">{icon}</span>
+            <span className={cn('truncate', inherited && 'text-ink-fg-3')}>{currentLabel}</span>
+            <ChevronDown size={12} strokeWidth={2} className="shrink-0 opacity-60" />
+          </button>
+        </PopoverTrigger>
+      </HoverTip>
       <PopoverContent
         align="start"
         sideOffset={6}
@@ -363,16 +393,7 @@ function InlineInputBox({
         }}
         className="h-7 w-60 rounded-md bg-ink-2/60 border border-ink-border/60 px-2 text-xs text-ink-fg-1 focus:outline-none focus:border-accent/60"
       />
-      <button
-        type="button"
-        title={applyLabel}
-        aria-label={applyLabel}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={onApply}
-        className="folder-editor-btn"
-      >
-        <Check size={13} strokeWidth={2.5} />
-      </button>
+      <FmtBtn icon={<Check size={13} strokeWidth={2.5} />} label={applyLabel} onClick={onApply} />
       {extra}
     </div>
   )
@@ -387,17 +408,18 @@ function TableInsertPopover({ editor }: { editor: Editor }): React.ReactElement 
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          title={t('compose.editor.table')}
-          aria-label={t('compose.editor.table')}
-          onMouseDown={(event) => event.preventDefault()}
-          className="folder-editor-btn"
-        >
-          <Table2 size={13} strokeWidth={2} />
-        </button>
-      </PopoverTrigger>
+      <HoverTip text={t('compose.editor.tableInsert')} portal>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={t('compose.editor.table')}
+            onMouseDown={(event) => event.preventDefault()}
+            className="folder-editor-btn"
+          >
+            <Table2 size={13} strokeWidth={2} />
+          </button>
+        </PopoverTrigger>
+      </HoverTip>
       <PopoverContent
         align="start"
         sideOffset={6}
@@ -445,11 +467,175 @@ function TableInsertPopover({ editor }: { editor: Editor }): React.ReactElement 
   )
 }
 
+/** 光标落在表格里时的表格操作菜单。
+ *
+ *  dogfood 反馈「增加行/删除行根本分不出来，hover 也没说明」：原先是 10 个并排的
+ *  纯图标按钮，其中 Rows3 复用了 3 次（上方插入/下方插入/删除行）、Columns3 复用了
+ *  3 次，光看图标不可能分辨；再加上前面 20 个按钮，整条工具栏折行成一片灰疙瘩。
+ *  改成单个「表格」下拉分组：每项**带文字标签**，"这个按钮干什么" 由文字直说，
+ *  不再依赖 hover 才能猜；插入/单元格/删除三组分区，删除组走 fail 色。 */
+function TableOpsPopover({
+  editor,
+  canMergeCells,
+  canSplitCell
+}: {
+  editor: Editor
+  canMergeCells: boolean
+  canSplitCell: boolean
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const iconProps = { size: 13, strokeWidth: 2 } as const
+  const groups: Array<{
+    label: string
+    danger?: boolean
+    items: Array<{ label: string; icon: React.ReactNode; run: () => void; disabled?: boolean }>
+  }> = [
+    {
+      label: t('compose.editor.tableGroupInsert'),
+      items: [
+        {
+          label: t('compose.editor.tableRowBefore'),
+          icon: <BetweenHorizontalStart {...iconProps} />,
+          run: () => editor.chain().focus().addRowBefore().run()
+        },
+        {
+          label: t('compose.editor.tableRowAfter'),
+          icon: <BetweenHorizontalEnd {...iconProps} />,
+          run: () => editor.chain().focus().addRowAfter().run()
+        },
+        {
+          label: t('compose.editor.tableColumnBefore'),
+          icon: <BetweenVerticalStart {...iconProps} />,
+          run: () => editor.chain().focus().addColumnBefore().run()
+        },
+        {
+          label: t('compose.editor.tableColumnAfter'),
+          icon: <BetweenVerticalEnd {...iconProps} />,
+          run: () => editor.chain().focus().addColumnAfter().run()
+        }
+      ]
+    },
+    {
+      label: t('compose.editor.tableGroupCell'),
+      items: [
+        {
+          label: t('compose.editor.tableHeaderRow'),
+          icon: <PanelTop {...iconProps} />,
+          run: () => editor.chain().focus().toggleHeaderRow().run()
+        },
+        {
+          label: t('compose.editor.tableMergeCells'),
+          icon: <TableCellsMerge {...iconProps} />,
+          disabled: !canMergeCells,
+          run: () => editor.chain().focus().mergeCells().run()
+        },
+        {
+          label: t('compose.editor.tableSplitCell'),
+          icon: <TableCellsSplit {...iconProps} />,
+          disabled: !canSplitCell,
+          run: () => editor.chain().focus().splitCell().run()
+        }
+      ]
+    },
+    {
+      label: t('compose.editor.tableGroupDelete'),
+      danger: true,
+      items: [
+        {
+          label: t('compose.editor.tableDeleteRow'),
+          icon: <Rows3 {...iconProps} />,
+          run: () => editor.chain().focus().deleteRow().run()
+        },
+        {
+          label: t('compose.editor.tableDeleteColumn'),
+          icon: <Columns3 {...iconProps} />,
+          run: () => editor.chain().focus().deleteColumn().run()
+        },
+        {
+          label: t('compose.editor.tableDelete'),
+          icon: <Trash2 {...iconProps} />,
+          run: () => editor.chain().focus().deleteTable().run()
+        }
+      ]
+    }
+  ]
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <HoverTip text={t('compose.editor.tableTools')} portal>
+        <PopoverTrigger asChild>
+          <button
+            type="button"
+            aria-label={t('compose.editor.tableTools')}
+            onMouseDown={(event) => event.preventDefault()}
+            className="flex h-7 items-center gap-1 rounded-md border border-ink-border/60 bg-ink-2/50 px-1.5 text-[11px] text-ink-fg-2 transition-colors duration-fast hover:bg-ink-2"
+          >
+            <Table2 size={13} strokeWidth={2} className="shrink-0 opacity-70" />
+            <span className="truncate">{t('compose.editor.table')}</span>
+            <ChevronDown size={12} strokeWidth={2} className="shrink-0 opacity-60" />
+          </button>
+        </PopoverTrigger>
+      </HoverTip>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        onMouseDown={(event) => event.preventDefault()}
+        className="w-44 p-1"
+      >
+        {groups.map((group, index) => (
+          <div
+            key={group.label}
+            className={index > 0 ? 'mt-1 border-t border-ink-border-soft pt-1' : undefined}
+          >
+            <div className="px-2 py-1 text-meta font-mono uppercase tracking-wider text-ink-fg-3">
+              {group.label}
+            </div>
+            {group.items.map((item) => (
+              <button
+                key={item.label}
+                type="button"
+                aria-label={item.label}
+                disabled={item.disabled}
+                onClick={() => {
+                  item.run()
+                  setOpen(false)
+                }}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded px-2 py-1.5 text-left text-aux transition-colors duration-fast',
+                  item.disabled
+                    ? 'pointer-events-none text-ink-fg-3 opacity-40'
+                    : group.danger
+                      ? 'text-fail hover:bg-fail/10'
+                      : 'text-ink-fg-1 hover:bg-ink-3'
+                )}
+              >
+                <span className="shrink-0 opacity-80">{item.icon}</span>
+                <span className="truncate">{item.label}</span>
+              </button>
+            ))}
+          </div>
+        ))}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 const HEADING_LEVELS = [1, 2, 3] as const
 
 /** 行距档位 ('' = 跟随设置里的撰写行距默认, 语义同字号控件的「默认」)。整封级生效
  *  —— 不做段落级/选区级 (出站是整段 wrapper 一个 line-height, 段落级表达不了)。 */
 const LINE_HEIGHTS = ['', '1.15', '1.3', '1.5', '1.75', '2.0'] as const
+
+/** 撰写区默认字号 (px) —— `index.css` 的 `.folder-draft-editor .ProseMirror { font-size }`
+ *  在 TS 侧的镜像：字号下拉未显式设置时要显示这个**实际生效**的数字，而不是「默认」二字。
+ *  🔴 跨构件手抄 (CSS ↔ TS)，一致性闸见 tests/components/ComposeEditor.test.tsx
+ *  「默认字号镜像 index.css」——改 CSS 忘了改这里会红。 */
+export const COMPOSE_FONT_SIZE_DEFAULT_PX = 14
+
+/** 行距数值 → 显示文案（去掉浮点尾巴：1.5 → "1.5"、1.15 → "1.15"）。 */
+function formatLineHeight(value: number): string {
+  return String(Math.round(value * 100) / 100)
+}
 
 export function ComposeFormatToolbar({
   editor,
@@ -467,9 +653,11 @@ export function ComposeFormatToolbar({
   const [linkValue, setLinkValue] = useState('')
   const [imageOpen, setImageOpen] = useState(false)
   const [imageValue, setImageValue] = useState('')
+  // 行距的「跟随默认」档要显示实际生效值 → 读设置里的撰写行距 (ComposePanel 同源)。
+  const composeLineHeightDefault = useAppearance((s) => s.composeLineHeight)
   // 字体/字号选项 (value = CSS; '' = 清除回默认)。label 走 i18n。
   const fontFamilies: Array<{ key: string; value: string }> = [
-    { key: 'fontDefault', value: '' },
+    { key: 'fontFamilyDefault', value: '' },
     { key: 'fontSystem', value: 'system-ui, -apple-system, sans-serif' },
     { key: 'fontSerif', value: "Georgia, 'Times New Roman', serif" },
     { key: 'fontMono', value: "ui-monospace, 'SF Mono', monospace" }
@@ -617,6 +805,7 @@ export function ComposeFormatToolbar({
       {/* ── 组 1: 正文/标题 + 字体 + 字号 ─────────────────────────── */}
       <OptionPopoverButton
         title={t('compose.editor.headingStyle')}
+        icon={<Pilcrow size={12} strokeWidth={2} />}
         value={fmt.heading === 0 ? '' : String(fmt.heading)}
         currentLabel={
           fmt.heading === 0
@@ -642,9 +831,11 @@ export function ComposeFormatToolbar({
       />
       <OptionPopoverButton
         title={t('compose.editor.fontFamily')}
+        icon={<Type size={12} strokeWidth={2} />}
         value={fmt.fontFamily}
+        inherited={!fmt.fontFamily}
         currentLabel={t(
-          `compose.editor.${fontFamilies.find((f) => f.value === fmt.fontFamily)?.key ?? 'fontDefault'}`
+          `compose.editor.${fontFamilies.find((f) => f.value === fmt.fontFamily)?.key ?? 'fontFamilyDefault'}`
         )}
         options={fontFamilies.map((f) => ({
           value: f.value,
@@ -657,13 +848,17 @@ export function ComposeFormatToolbar({
       />
       <OptionPopoverButton
         title={t('compose.editor.fontSize')}
+        icon={<ALargeSmall size={13} strokeWidth={2} />}
         value={fmt.fontSize}
+        inherited={!fmt.fontSize}
         currentLabel={
-          fmt.fontSize ? fmt.fontSize.replace('px', '') : t('compose.editor.fontDefault')
+          fmt.fontSize ? fmt.fontSize.replace('px', '') : String(COMPOSE_FONT_SIZE_DEFAULT_PX)
         }
         options={fontSizes.map((s) => ({
           value: s,
-          label: s ? s.replace('px', '') : t('compose.editor.fontDefault')
+          label: s
+            ? s.replace('px', '')
+            : t('compose.editor.fontSizeDefaultOption', { size: COMPOSE_FONT_SIZE_DEFAULT_PX })
         }))}
         onSelect={(v) => {
           if (v) editor.chain().focus().setFontSize(v).run()
@@ -672,11 +867,17 @@ export function ComposeFormatToolbar({
       />
       <OptionPopoverButton
         title={t('compose.editor.lineHeight')}
+        icon={<AlignVerticalSpaceAround size={12} strokeWidth={2} />}
         value={lineHeight}
-        currentLabel={lineHeight || t('compose.editor.lineHeightDefault')}
+        inherited={!lineHeight}
+        currentLabel={lineHeight || formatLineHeight(composeLineHeightDefault)}
         options={LINE_HEIGHTS.map((v) => ({
           value: v,
-          label: v || t('compose.editor.lineHeightDefault')
+          label:
+            v ||
+            t('compose.editor.lineHeightDefaultOption', {
+              value: formatLineHeight(composeLineHeightDefault)
+            })
         }))}
         onSelect={(v) => onLineHeightChange?.(v)}
       />
@@ -792,61 +993,11 @@ export function ComposeFormatToolbar({
       />
       {hasTable && !fmt.table && <TableInsertPopover editor={editor} />}
       {hasTable && fmt.table && (
-        <>
-          <FmtSep />
-          <FmtBtn
-            icon={<Rows3 size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableRowBefore')}
-            onClick={() => editor.chain().focus().addRowBefore().run()}
-          />
-          <FmtBtn
-            icon={<Rows3 size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableRowAfter')}
-            onClick={() => editor.chain().focus().addRowAfter().run()}
-          />
-          <FmtBtn
-            icon={<Columns3 size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableColumnBefore')}
-            onClick={() => editor.chain().focus().addColumnBefore().run()}
-          />
-          <FmtBtn
-            icon={<Columns3 size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableColumnAfter')}
-            onClick={() => editor.chain().focus().addColumnAfter().run()}
-          />
-          <FmtBtn
-            icon={<Rows3 size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableDeleteRow')}
-            onClick={() => editor.chain().focus().deleteRow().run()}
-          />
-          <FmtBtn
-            icon={<Columns3 size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableDeleteColumn')}
-            onClick={() => editor.chain().focus().deleteColumn().run()}
-          />
-          <FmtBtn
-            icon={<PanelTop size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableHeaderRow')}
-            onClick={() => editor.chain().focus().toggleHeaderRow().run()}
-          />
-          <FmtBtn
-            icon={<Merge size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableMergeCells')}
-            disabled={!fmt.canMergeCells}
-            onClick={() => editor.chain().focus().mergeCells().run()}
-          />
-          <FmtBtn
-            icon={<Split size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableSplitCell')}
-            disabled={!fmt.canSplitCell}
-            onClick={() => editor.chain().focus().splitCell().run()}
-          />
-          <FmtBtn
-            icon={<Trash2 size={13} strokeWidth={2} />}
-            label={t('compose.editor.tableDelete')}
-            onClick={() => editor.chain().focus().deleteTable().run()}
-          />
-        </>
+        <TableOpsPopover
+          editor={editor}
+          canMergeCells={fmt.canMergeCells}
+          canSplitCell={fmt.canSplitCell}
+        />
       )}
       <div className="flex-1" aria-hidden />
       {/* ── 组 5: 撤销/重做 ──────────────────────────────────────── */}
@@ -874,16 +1025,11 @@ export function ComposeFormatToolbar({
           onClose={() => setLinkOpen(false)}
           extra={
             fmt.link ? (
-              <button
-                type="button"
-                title={t('compose.editor.linkRemove')}
-                aria-label={t('compose.editor.linkRemove')}
-                onMouseDown={(e) => e.preventDefault()}
+              <FmtBtn
+                icon={<Unlink size={13} strokeWidth={2} />}
+                label={t('compose.editor.linkRemove')}
                 onClick={removeLink}
-                className="folder-editor-btn"
-              >
-                <Unlink size={13} strokeWidth={2} />
-              </button>
+              />
             ) : undefined
           }
         />
@@ -899,16 +1045,11 @@ export function ComposeFormatToolbar({
           onApply={applyImage}
           onClose={() => setImageOpen(false)}
           extra={
-            <button
-              type="button"
-              title={t('compose.editor.imageFromFile')}
-              aria-label={t('compose.editor.imageFromFile')}
-              onMouseDown={(e) => e.preventDefault()}
+            <FmtBtn
+              icon={<ImageUp size={13} strokeWidth={2} />}
+              label={t('compose.editor.imageFromFile')}
               onClick={() => imageFileRef.current?.click()}
-              className="folder-editor-btn"
-            >
-              <ImageUp size={13} strokeWidth={2} />
-            </button>
+            />
           }
         />
       )}
