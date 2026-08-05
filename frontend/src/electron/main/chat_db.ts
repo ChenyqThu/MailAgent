@@ -58,7 +58,6 @@ export {
   createNewSession,
   deleteSession,
   getFirstUserText,
-  getLastTurnTexts,
   getOrCreateSession,
   getSession,
   listAllSessions,

@@ -4,7 +4,8 @@
 // this component with { startIndex, endIndex, children }; children are the already-rendered per-tool
 // cards (A2UI by_name rich cards / ToolTraceCard fallback), untouched. We add a group header
 // («N 个工具 · 运行中/完成/出错» + tool-name summary) and fold the детали away when settled — the
-// same GSAP height auto↔0 paradigm as ReasoningText (markdown-text.tsx), DUR.base + standard ease.
+// same collapse paradigm as ReasoningText (markdown-text.tsx): the shared `CollapsibleRegion`
+// primitive (grid-rows 0fr↔1fr pure-CSS height transition), duration-base + standard ease.
 //
 // Two 灾难级 red lines (each has a regression test):
 //   ① endIndex === startIndex → render children BARE (a lone tool is a "group of one" in the
@@ -12,14 +13,13 @@
 //   ② a group containing an approval-requested OR errored tool is FORCE-EXPANDED and cannot be
 //      collapsed — an approval card must never be hidden (no approve button = island-less deadlock).
 
-import { useRef, useState, type PropsWithChildren } from 'react'
+import { useState, type PropsWithChildren } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight } from 'lucide-react'
 import { useAuiState } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
-import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
-import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+import { CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import type { TurnStagePart } from '@shared/assistant/runtime/useTurnStage'
 import { summarizeToolGroup } from './toolGroupSummary'
@@ -30,7 +30,6 @@ export function ToolGroupCard({
   children
 }: PropsWithChildren<{ startIndex: number; endIndex: number }>): React.JSX.Element {
   const { t } = useTranslation()
-  const reduce = useReducedMotion()
   const parts = useAuiState((s) => s.message.parts) as readonly TurnStagePart[]
 
   const single = endIndex === startIndex
@@ -50,34 +49,13 @@ export function ToolGroupCard({
   const shown = forceExpand || open
   const canToggle = !forceExpand
 
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const didInit = useRef(false)
-  useGSAP(
-    () => {
-      const el = bodyRef.current
-      if (!el) return
-      if (!didInit.current) {
-        didInit.current = true
-        gsap.set(el, { height: shown ? 'auto' : 0, opacity: shown ? 1 : 0 })
-        return
-      }
-      if (reduce) {
-        gsap.set(el, { height: shown ? 'auto' : 0, opacity: shown ? 1 : 0 })
-        return
-      }
-      gsap.to(el, {
-        height: shown ? 'auto' : 0,
-        opacity: shown ? 1 : 0,
-        duration: DUR.base,
-        overwrite: 'auto'
-      })
-    },
-    { dependencies: [shown, reduce] }
-  )
-
   // Red line ① — a lone tool renders bare (no group chrome). Hooks above run unconditionally so
   // this early return keeps the hook order stable across single↔multi transitions.
-  if (single) return <>{children}</>
+  // W6 — `count === 0` 同样裸渲染：suggest_followups 已不计入 summary，于是「一组里全是它」这个
+  // 此前不可能的状态现在可达，不拦就会冒出一个「使用了 0 个工具」的空组头。是我上面那条排除**开出**
+  // 的口子，就在这里堵上。裸渲染只会让子卡更外露（这组的子卡全是 null），不可能藏起审批/错误 →
+  // 红线 ② 不受影响。
+  if (single || summary.count === 0) return <>{children}</>
 
   const running = summary.aggregate === 'running'
   const headerText = running
@@ -122,11 +100,12 @@ export function ToolGroupCard({
           </span>
         )}
       </button>
-      <div ref={bodyRef} className="overflow-hidden" aria-hidden={!shown}>
-        <div className="space-y-1.5 border-t border-[var(--hairline)] px-2.5 py-1.5">
-          {children}
-        </div>
-      </div>
+      <CollapsibleRegion
+        expanded={shown}
+        bodyClassName="space-y-1.5 border-t border-[var(--hairline)] px-2.5 py-1.5"
+      >
+        {children}
+      </CollapsibleRegion>
     </div>
   )
 }

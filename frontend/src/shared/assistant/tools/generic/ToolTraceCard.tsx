@@ -13,6 +13,8 @@
 //   ② 加载占位  an `animate-pulse` skeleton stands in for arguments that have not arrived;
 //   ③ 标题行    kind icon + human-readable localized title + arg preview + LIVE elapsed + status;
 //   ④ 最终结果  the request / result JSON, plus a row-level ok / error / denied distinction.
+// W2（B 波）三处视觉收束：arg 预览升成 code chip；右端独立 chevron 退役 —— 展开性提示改由 kind 图标
+// chip 原地 cross-fade 成 chevron（`.icon-swap` 原语）；展开区两张圆角卡改成一条 border-l 串起的详情行。
 // State comes from ONE judge (`runtime/toolPhase.ts`), elapsed from the renderer clock
 // (`useToolElapsed` — the runtime's `part.timing` is never populated by our gateway).
 // MailAgent tokens only (ink-* surfaces, --c-accent accent), so it reskins across the theme
@@ -148,6 +150,11 @@ export function ToolTraceCard({
 }: ToolCallMessagePartProps): React.JSX.Element {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
+  // W2-② 图标位变形 —— 展开性提示不再占右端一个独立槽位，而是在 kind 图标 chip 原地 cross-fade 成
+  // chevron。hover 用 React state（不是 group-hover 类）是因为 `.icon-swap-item[data-active]` 的
+  // 属性选择器与 `.group:hover .group-hover\:*` 同特异度，谁赢只取决于生成顺序 —— 用 state 驱动
+  // data-active 才是确定的。
+  const [hovered, setHovered] = useState(false)
 
   const part = { argsText, result, isError, approval, status }
   const phase = deriveToolPhase(part)
@@ -169,12 +176,17 @@ export function ToolTraceCard({
   const argsObject = asPlainObject(args)
   const hasArgs = argsObject !== null && Object.keys(argsObject).length > 0
   const hasResult = result !== undefined && result !== null
+  // 静息 = kind 图标；hover 或已展开 = chevron（展开再转 90°）。原右端独立 chevron 的显隐条件
+  // （hover 才现 / 展开恒显）逐条搬到这里，可展开性本身不变（无参数照样能开）。
+  const showChevron = hovered || open
 
   return (
     <div className="my-1.5 min-w-0">
       <button
         type="button"
         onClick={() => setOpen((o) => !o)}
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
         className="group flex w-full items-center gap-2.5 py-1 text-left"
         aria-expanded={open}
       >
@@ -185,7 +197,21 @@ export function ToolTraceCard({
             tone === 'live' || tone === 'ok' ? TOOL_KIND_COLOR[kind] : undefined
           )}
         >
-          {toolKindIconEl(kind)}
+          {/* 同 slot 双图标 cross-fade 走 index.css 的 `.icon-swap` 原语（120ms fast + standard 曲线、
+              零 filter，与 copy→check / Eye↔EyeOff 同一份）。🔴 TONE_CHIP 的底色留在外层 chip 上 ——
+              变形只换 glyph，live/ok/error/denied 四态语义不受影响。 */}
+          <span className="icon-swap">
+            <span className="icon-swap-item" data-active={showChevron ? 'false' : 'true'}>
+              {toolKindIconEl(kind)}
+            </span>
+            <span className="icon-swap-item" data-active={showChevron ? 'true' : 'false'}>
+              <ChevronRight
+                size={13}
+                strokeWidth={2}
+                className={cn('transition-transform duration-fast', open && 'rotate-90')}
+              />
+            </span>
+          </span>
         </span>
         <span
           className={cn(
@@ -195,7 +221,12 @@ export function ToolTraceCard({
         >
           {title}
           {preview ? (
-            <span className="ml-1.5 font-mono text-meta text-ink-fg-2" title={preview}>
+            // W2-① arg code chip —— 参数预览从裸 mono 文本升成有底的 code chip（hover 随行加深），
+            // 与骨架分支互斥（骨架恒是「参数还没到」的占位，不是 chip）。
+            <span
+              className="ml-1.5 rounded bg-ink-3 px-1 py-0.5 font-mono text-meta text-ink-fg-2 transition-colors duration-fast group-hover:bg-ink-4 group-hover:text-ink-fg-1"
+              title={preview}
+            >
               {preview}
             </span>
           ) : phase === 'streaming-args' ? (
@@ -222,51 +253,45 @@ export function ToolTraceCard({
         >
           {statusIconEl(tone)}
         </span>
-        <ChevronRight
-          size={13}
-          className={cn(
-            'shrink-0 text-ink-fg-3 opacity-0 transition-transform duration-fast group-hover:opacity-100',
-            open && 'rotate-90 opacity-100'
-          )}
-        />
       </button>
 
       {/* ①/④ Progressive disclosure — request args + result JSON. Open WHILE running too, so the
-          arguments can be watched as they stream in. display toggle. */}
-      <div className={cn('ml-[29px]', open ? 'block' : 'hidden')} aria-hidden={!open}>
-        <div className="mb-1.5 rounded-lg border border-ink-border-soft bg-ink-1 px-2.5 py-2">
-          <div className="mb-1 text-meta font-medium text-ink-fg-1">
-            {t('chat.toolStep.request')}
+          arguments can be watched as they stream in. display toggle.
+          W2-③ 结构：两张独立圆角卡 → 一条自图标 chip 中心（ml-2.5 = 20px chip 的半宽）垂下的
+          border-l 串起的详情行。小标题保留 i18n（视觉降为行级小节，不再是卡片抬头）。 */}
+      <div
+        className={cn('ml-2.5 border-l border-ink-border-soft pl-3.5', open ? 'block' : 'hidden')}
+        aria-hidden={!open}
+      >
+        <div className="mb-1 text-meta font-medium text-ink-fg-1">{t('chat.toolStep.request')}</div>
+        {hasArgs ? (
+          // R6 — `args` is the partial-JSON PARSE of the stream, so it is always well-formed;
+          // `argsText` is a truncated prefix mid-stream and only serves as a fallback.
+          <pre className="scrollbar-thin overflow-x-auto whitespace-pre-wrap break-words text-micro font-mono leading-relaxed text-ink-fg-1">
+            {prettyJson(argsObject)}
+          </pre>
+        ) : phase === 'streaming-args' ? (
+          <div
+            className="animate-pulse space-y-1.5 motion-reduce:animate-none"
+            aria-label={t('chat.toolStep.argsStreaming')}
+          >
+            <div className="h-2.5 w-2/3 rounded bg-ink-3" />
+            <div className="h-2.5 w-1/3 rounded bg-ink-3" />
           </div>
-          {hasArgs ? (
-            // R6 — `args` is the partial-JSON PARSE of the stream, so it is always well-formed;
-            // `argsText` is a truncated prefix mid-stream and only serves as a fallback.
-            <pre className="scrollbar-thin overflow-x-auto whitespace-pre-wrap break-words text-micro font-mono leading-relaxed text-ink-fg-1">
-              {prettyJson(argsObject)}
-            </pre>
-          ) : phase === 'streaming-args' ? (
-            <div
-              className="animate-pulse space-y-1.5 motion-reduce:animate-none"
-              aria-label={t('chat.toolStep.argsStreaming')}
-            >
-              <div className="h-2.5 w-2/3 rounded bg-ink-3" />
-              <div className="h-2.5 w-1/3 rounded bg-ink-3" />
-            </div>
-          ) : (
-            <pre className="scrollbar-thin overflow-x-auto whitespace-pre-wrap break-words text-micro font-mono leading-relaxed text-ink-fg-1">
-              {text.trim() ? prettyJson(text) : prettyJson(args)}
-            </pre>
-          )}
-        </div>
+        ) : (
+          <pre className="scrollbar-thin overflow-x-auto whitespace-pre-wrap break-words text-micro font-mono leading-relaxed text-ink-fg-1">
+            {text.trim() ? prettyJson(text) : prettyJson(args)}
+          </pre>
+        )}
         {hasResult && (
-          <div className="rounded-lg border border-ink-border-soft bg-ink-1 px-2.5 py-2">
-            <div className="mb-1 text-meta font-medium text-ink-fg-1">
+          <>
+            <div className="mb-1 mt-2 text-meta font-medium text-ink-fg-1">
               {t('chat.toolStep.result')}
             </div>
             <pre className="scrollbar-thin max-h-48 overflow-auto whitespace-pre-wrap break-words text-micro font-mono leading-relaxed text-ink-fg-1">
               {prettyJson(result)}
             </pre>
-          </div>
+          </>
         )}
       </div>
     </div>

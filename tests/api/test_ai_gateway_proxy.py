@@ -50,8 +50,9 @@ class _FakeGatewayHandler(BaseHTTPRequestHandler):
       - GET  /api/ai/config        200 {"service":"fake-gateway", echo...}
       - POST /api/ai/chat          200 text/event-stream，逐块 flush（验流式透传）
       - POST /api/ai/agui/chat     404（模拟 mirror-off：gateway 未注册该路由）
-      - POST /api/ai/title         200 {"title":"echo"} + 回读请求体（验 body 转发）
-      - POST /api/ai/followups     503 {"error":"E_NO_LLM_KEY"}（验非 2xx 透传）
+      - POST /api/ai/title         200 {"title":"echo"} + 回读请求体（验 body 转发）；
+                                   请求体带 {"fail": true} → 503 {"error":"E_NO_LLM_KEY"}
+                                   （验缓冲代理的非 2xx 透传；W6 起 followups 端点已删）
       - 其他                        404
     """
 
@@ -119,15 +120,15 @@ class _FakeGatewayHandler(BaseHTTPRequestHandler):
             # mirror-off：gateway 返 404，代理须透传。
             self._json(404, {"error": "not_found", "path": self.path})
         elif self.path == "/api/ai/title":
-            # 回读请求体证明 body 被转发。
+            # 回读请求体证明 body 被转发；{"fail": true} → 503（非 2xx 透传验证）。
             try:
                 sent = json.loads(raw.decode()) if raw else {}
             except ValueError:
                 sent = {}
-            self._json(200, {"title": "echo", "received": sent})
-        elif self.path == "/api/ai/followups":
-            # 非 2xx 透传验证（503 + 错误体）。
-            self._json(503, {"error": "E_NO_LLM_KEY"})
+            if sent.get("fail") is True:
+                self._json(503, {"error": "E_NO_LLM_KEY"})
+            else:
+                self._json(200, {"title": "echo", "received": sent})
         elif self.path == "/api/ai/approval/decide":
             # S6 W1 — 回显请求体，证明 decide body（toolCallId/decision/resumeToken）被转发。
             try:
@@ -234,9 +235,12 @@ def test_proxy_config_json(proxy_client: TestClient):
     assert r.json()["service"] == "fake-gateway"
 
 
-def test_proxy_followups_passes_through_non_2xx(proxy_client: TestClient):
-    """gateway 503（无 key）→ 代理透传 503 + 错误体（前端按 status/code 处理）。"""
-    r = proxy_client.post("/api/ai/followups", json={"sessionId": 1})
+def test_proxy_buffered_passes_through_non_2xx(proxy_client: TestClient):
+    """gateway 503（无 key）→ 缓冲代理透传 503 + 错误体（前端按 status/code 处理）。
+
+    W6 起 followups 端点已删（追问建议改回合内 suggest_followups 工具），非 2xx 透传
+    覆盖搬到同为缓冲代理的 /api/ai/title（fake gateway 以 {"fail": true} 触发 503）。"""
+    r = proxy_client.post("/api/ai/title", json={"fail": True})
     assert r.status_code == 503
     assert r.json()["error"] == "E_NO_LLM_KEY"
 

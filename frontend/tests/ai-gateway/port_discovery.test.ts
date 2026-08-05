@@ -56,7 +56,7 @@ describe('flags — resolveAiGatewayBaseUrl (web same-origin proxy)', () => {
     vi.stubGlobal('window', { location: { search: '' } })
     const base = resolveAiGatewayBaseUrl()
     expect(base).toBe('')
-    // The exact strings the renderer composes (transport / health / followups / approval).
+    // The exact strings the renderer composes (transport / health / title / approval).
     expect(`${base}/api/ai/chat`).toBe('/api/ai/chat')
     expect(`${base}/health`).toBe('/health')
     expect(`${base}/api/ai/title`).toBe('/api/ai/title')

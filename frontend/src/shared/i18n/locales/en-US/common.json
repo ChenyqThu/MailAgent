@@ -939,7 +939,8 @@
       "calendar_event_rsvp": "RSVP to invite",
       "calendar_event_delete": "Delete event",
       "notion_agent_chat": "Ask the Notion agent",
-      "plan_update": "Update plan"
+      "plan_update": "Update plan",
+      "suggest_followups": "Suggesting follow-ups"
     },
     "customAgentCard": {
       "titleCreate": "Create custom agent",
@@ -1370,6 +1371,7 @@
     },
     "thinking": {
       "label": "Thinking",
+      "duration": "Thought for {duration}",
       "streaming": "Thinking…",
       "toggleOn": "Turn on thinking mode (stream the model's reasoning)",
       "toggleOff": "Turn off thinking mode",

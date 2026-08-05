@@ -939,7 +939,8 @@
       "calendar_event_rsvp": "回复会议邀请",
       "calendar_event_delete": "删除日程",
       "notion_agent_chat": "咨询 Notion Agent",
-      "plan_update": "更新计划"
+      "plan_update": "更新计划",
+      "suggest_followups": "准备追问建议"
     },
     "customAgentCard": {
       "titleCreate": "创建 Custom Agent",
@@ -1370,6 +1371,7 @@
     },
     "thinking": {
       "label": "思考过程",
+      "duration": "思考了 {duration}",
       "streaming": "思考中…",
       "toggleOn": "开启思考模式（展示模型推理过程）",
       "toggleOff": "关闭思考模式",

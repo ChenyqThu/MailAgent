@@ -450,7 +450,7 @@ app.include_router(connector.router)
 # 远程浏览器不该发起)。status/approvals **有意不挂** MAILAGENT_IM_FEISHU 门:「未启用」
 # 本身就是要如实呈现的状态, 整区 409 只会让设置页显示「加载失败」。src.im.* lazy import。
 app.include_router(im.router)
-# task A — 远程 web 切 AI SDK: 把 web 的 chat 请求 (/api/ai/{chat,title,followups,approval/resolve,
+# task A — 远程 web 切 AI SDK: 把 web 的 chat 请求 (/api/ai/{chat,title,approval/resolve,
 # config}, /api/ai/agui/chat) + 裸 /health 代理到同机 loopback AI SDK Gateway。在 SPA catch-all
 # mount (/app, 文件末尾) 之前注册，确保 /api/ai/* 与 /health 不被静态 SPA 遮蔽。/api/ai/* 子路径
 # (chat/title/...) 与 ai.router 的 /api/ai/translation/* 不重叠，两者共存。本地 electron 不经此代理

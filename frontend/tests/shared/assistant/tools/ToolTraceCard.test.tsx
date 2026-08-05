@@ -302,6 +302,46 @@ describe('ToolTraceCard — ④ 终态: ok / error / denied are distinguishable 
   })
 })
 
+describe('ToolTraceCard — W2-② 图标位变形（右端独立 chevron 已退役）', () => {
+  test('静息 = kind 图标；hover / 展开 = chevron（展开再转 90°），行尾不再挂第二枚 chevron', async () => {
+    const { container } = render(
+      <Harness
+        status="ready"
+        messages={turn('email_get', {
+          state: 'output-available',
+          input: { internal_id: 53675 },
+          output: { subject: 'hi' }
+        })}
+      />
+    )
+    await waitFor(() => expect(screen.getByText('读取邮件')).toBeTruthy())
+
+    // 两枚图标常驻同一个 grid 格（.icon-swap 原语），data-active 决定谁可见。
+    const items = container.querySelectorAll('.icon-swap-item')
+    expect(items.length).toBe(2)
+    const kindIcon = items[0] as HTMLElement
+    const chevron = items[1] as HTMLElement
+    expect(kindIcon.getAttribute('data-active')).toBe('true')
+    expect(chevron.getAttribute('data-active')).toBe('false')
+
+    // 行尾最后一个槽位是状态图标，不再是那枚独立 chevron。
+    const button = screen.getByRole('button')
+    expect(button.lastElementChild?.getAttribute('role')).toBe('img')
+
+    fireEvent.mouseEnter(button)
+    expect(kindIcon.getAttribute('data-active')).toBe('false')
+    expect(chevron.getAttribute('data-active')).toBe('true')
+    expect(chevron.querySelector('svg')?.getAttribute('class') ?? '').not.toContain('rotate-90')
+
+    fireEvent.click(button)
+    expect(button.getAttribute('aria-expanded')).toBe('true')
+    // 展开后指针离开，chevron 仍在（继承原 chevron 的 `open 恒显`），并保持 90°。
+    fireEvent.mouseLeave(button)
+    expect(chevron.getAttribute('data-active')).toBe('true')
+    expect(chevron.querySelector('svg')?.getAttribute('class') ?? '').toContain('rotate-90')
+  })
+})
+
 describe('ToolTraceCard — history replay surface (ReadOnlyTranscript data path)', () => {
   /** A persisted chat_db row whose ui_message_json holds a settled tool part — exactly what
    *  ReadOnlyTranscript feeds the runtime via chatMessageToUIMessage. */

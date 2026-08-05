@@ -9,16 +9,16 @@
 // alias) so eslint react/prop-types reads the prop shape; they stay assignable
 // to the MessagePrimitive.Parts `components` slots structurally.
 
-import { useRef, useState } from 'react'
+import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight } from 'lucide-react'
 import type { ReasoningMessagePartProps, TextMessagePartProps } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
-import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
-import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+import { CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
+import { formatToolDuration, useToolElapsed } from '@shared/assistant/tools/generic/useToolElapsed'
 
 export function MarkdownText({ text, status }: TextMessagePartProps): React.JSX.Element {
   return <TranslatedBody text={text} streaming={status?.type === 'running'} />
@@ -26,8 +26,11 @@ export function MarkdownText({ text, status }: TextMessagePartProps): React.JSX.
 
 export function ReasoningText({ text, status }: ReasoningMessagePartProps): React.JSX.Element {
   const { t } = useTranslation()
-  const reduce = useReducedMotion()
   const active = status?.type === 'running'
+  // W3-① 折叠头耗时 —— 复用工具卡那口渲染器时钟（useToolElapsed）的三条契约，其中第一条最要紧：
+  // 🔴 历史回放的 reasoning part 第一眼就是 settled，start 从未落过 → 返回 null → 折叠头保持静态
+  // 「思考过程」，绝不显示编造的「思考了 0.0 秒」。运行中仍是 shimmer 的「思考中…」。
+  const elapsed = useToolElapsed(active)
   const [open, setOpen] = useState(active)
   const [prevActive, setPrevActive] = useState(active)
   // Adjust-on-prop-change (react.dev): active → expand; thinking done → collapse.
@@ -36,33 +39,11 @@ export function ReasoningText({ text, status }: ReasoningMessagePartProps): Reac
     setOpen(active)
   }
   const shown = open || active
-  // GSAP 平滑折叠（用户反馈：思考/工具折叠张开/收起要动效，取代瞬时 hidden/block）。height auto↔0 +
-  // opacity，§8 standard ease + base 时长；首挂载不播（gsap.set 直达终态），reduce 立即切。展开时设回
-  // auto 让流式思考文本继续自然增高。
-  const bodyRef = useRef<HTMLDivElement>(null)
-  const didInitRef = useRef(false)
-  useGSAP(
-    () => {
-      const el = bodyRef.current
-      if (!el) return
-      if (!didInitRef.current) {
-        didInitRef.current = true
-        gsap.set(el, { height: shown ? 'auto' : 0, opacity: shown ? 1 : 0 })
-        return
-      }
-      if (reduce) {
-        gsap.set(el, { height: shown ? 'auto' : 0, opacity: shown ? 1 : 0 })
-        return
-      }
-      gsap.to(el, {
-        height: shown ? 'auto' : 0,
-        opacity: shown ? 1 : 0,
-        duration: DUR.base,
-        overwrite: 'auto'
-      })
-    },
-    { dependencies: [shown, reduce] }
-  )
+  // 平滑折叠（用户反馈：思考/工具折叠张开/收起要动效，取代瞬时 hidden/block）走全仓统一原语
+  // CollapsibleRegion —— grid-rows 0fr↔1fr 纯 CSS 高度过渡 + opacity，§8 standard 曲线 + base
+  // 时长，reduced-motion 由它自带的 motion-reduce: 立即切。DESIGN §4.1「能 grid-rows 解决不上
+  // GSAP」：无需测量高度/首挂载抑制，1fr 让流式思考文本继续自然增高，另白得 inert（折叠态子树
+  // 退出 tab 序）。
   // dogfood round-4 — render reasoning as a VISUALLY DISTINCT collapsible block (rounded card + hairline
   // border + tinted header), not a bare chevron+pre that reads as inline prose. The user saw the thinking
   // text but "没有进单独的折叠 reasoning 块" — the collapse logic was right, the block affordance was missing.
@@ -86,15 +67,19 @@ export function ReasoningText({ text, status }: ReasoningMessagePartProps): Reac
         {active ? (
           <ShimmerText text={t('chat.thinking.streaming')} className="text-aux" />
         ) : (
-          <span className="text-aux text-ink-fg-2">{t('chat.thinking.label')}</span>
+          <span className="text-aux text-ink-fg-2">
+            {elapsed === null
+              ? t('chat.thinking.label')
+              : t('chat.thinking.duration', { duration: formatToolDuration(elapsed) })}
+          </span>
         )}
       </button>
-      <div ref={bodyRef} className="overflow-hidden" aria-hidden={!shown}>
+      <CollapsibleRegion expanded={shown}>
         <pre className="scrollbar-thin whitespace-pre-wrap break-words border-t border-[var(--hairline)] px-2.5 py-2 font-sans text-aux leading-relaxed text-ink-fg-1">
           {text}
           {active && <span className="think-caret" aria-hidden="true" />}
         </pre>
-      </div>
+      </CollapsibleRegion>
     </div>
   )
 }

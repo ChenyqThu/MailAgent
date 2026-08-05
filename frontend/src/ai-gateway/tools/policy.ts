@@ -123,6 +123,12 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   kos_get_backlinks: 'read',
   report_list: 'read',
   report_get: 'read',
+  // W6 — suggest_followups: a silent no-op the model calls at the end of a manual answer with
+  // 2-3 next-question suggestions (renderer chips). Class 'read' (no side effects, never
+  // approval-gated); registration is ADDITIONALLY venue-gated to manual_chat in
+  // buildGatewayTools (interactive UI supply — the class matrix's "reads register everywhere"
+  // does not apply to it; see the registration comment + policy.test.ts carve-out).
+  suggest_followups: 'read',
   // artifact — local, deletable/replaceable output. It never leaves the machine and never needs
   // an approval card; unlike domain_write it is available silently in every context mode.
   report_write: 'artifact',

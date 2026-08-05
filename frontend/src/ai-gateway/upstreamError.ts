@@ -6,7 +6,7 @@
 // 裸 fetch / legacy 路径的既有错误形状不走它（字节级纪律，nl_search.ts 同款分叉手法）。
 //
 // 🔴 不能住 providerRef.ts —— 那里被 provider_lazy_import.test.ts 钉死 type-only import；
-// 本模块 value-import `ai`（gateway core 本就依赖），消费方 = server.ts（title/followups）+
+// 本模块 value-import `ai`（gateway core 本就依赖），消费方 = server.ts（title）+
 // searchAgentRun.ts + electron main 的 llm_provider_resolver.ts（re-export 保兼容，
 // translate/nl_search 经它取用）。
 

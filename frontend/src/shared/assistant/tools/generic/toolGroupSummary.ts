@@ -9,6 +9,7 @@
 
 import { deriveToolPhase } from '@shared/assistant/runtime/toolPhase'
 import type { TurnStagePart } from '@shared/assistant/runtime/useTurnStage'
+import { isSuggestFollowupsPart } from '@shared/assistant/followups'
 
 export type ToolGroupAggregate = 'running' | 'awaiting' | 'error' | 'done'
 
@@ -34,7 +35,14 @@ function toolPartState(part: TurnStagePart): ToolPartState {
 }
 
 export function summarizeToolGroup(parts: readonly TurnStagePart[]): ToolGroupSummary {
-  const toolParts = parts.filter((part) => part.type === 'tool-call')
+  // W6 — `suggest_followups` 是「给 UI 供料」不是「用了个工具」：它零渲染（by_name →
+  // SuggestFollowupsHiddenPart），组头却会把它算进「使用了 N 个工具 · …」并念出名字，说了一件
+  // 用户在展开区里根本找不到的事。判据用 followups.ts 的单源 `isSuggestFollowupsPart`，不在这儿
+  // 手抄一遍工具名（跨边界手抄常量的老规矩）。正常回合它与其它工具之间必隔着正文 → 本就不同组，
+  // 这条只在模型抢跑（未按 prompt 等回答结束就调）时才起作用。
+  const toolParts = parts.filter(
+    (part) => part.type === 'tool-call' && !isSuggestFollowupsPart(part)
+  )
   const states = toolParts.map(toolPartState)
   const hasAwaiting = states.includes('awaiting')
   const hasError = states.includes('error')

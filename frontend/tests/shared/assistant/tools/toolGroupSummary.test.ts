@@ -45,6 +45,21 @@ describe('summarizeToolGroup — aggregate + count + names', () => {
     const s = summarizeToolGroup([{ type: 'text', text: 'x' }, running(), done()])
     expect(s.count).toBe(2)
   })
+
+  // W6 — suggest_followups 零渲染（chip 行才是它的 UI），所以它不能进组头的计数与工具名列表，
+  // 否则组头会念一件用户在展开区里找不到的事。
+  test('suggest_followups 不计入 count / toolNames（零渲染的 part 不算「用了个工具」）', () => {
+    const s = summarizeToolGroup([running('email_search'), done('suggest_followups')])
+    expect(s.count).toBe(1)
+    expect(s.toolNames).toEqual(['email_search'])
+    expect(s.aggregate).toBe('running')
+  })
+  test('整组都是 suggest_followups → count 0（调用方据此退化成裸渲染，不出空组头）', () => {
+    const s = summarizeToolGroup([done('suggest_followups'), done('suggest_followups')])
+    expect(s.count).toBe(0)
+    expect(s.toolNames).toEqual([])
+    expect(s.forceExpand).toBe(false)
+  })
 })
 
 describe('summarizeToolGroup — RED LINE ②: force-expand on approval / error', () => {
@@ -59,7 +74,9 @@ describe('summarizeToolGroup — RED LINE ②: force-expand on approval / error'
     expect(s.aggregate).toBe('error')
   })
   test('incomplete part status also counts as error', () => {
-    const s = summarizeToolGroup([{ type: 'tool-call', toolName: 't', status: { type: 'incomplete' } }])
+    const s = summarizeToolGroup([
+      { type: 'tool-call', toolName: 't', status: { type: 'incomplete' } }
+    ])
     expect(s.forceExpand).toBe(true)
     expect(s.aggregate).toBe('error')
   })

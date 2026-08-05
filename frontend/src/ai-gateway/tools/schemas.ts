@@ -812,3 +812,19 @@ export const calendarEventDeleteSchema = z.object({
   calendar_name: z.string().min(1).max(200).optional()
 })
 export type CalendarEventDeleteInput = z.infer<typeof calendarEventDeleteSchema>
+
+/** suggest_followups (W6) — 2-3 short next-question suggestions the model proposes AFTER its
+ *  answer is complete. Length/dedup/cap-3 cleaning happens in execute (sanitizeFollowupPrompts);
+ *  the schema only pins the structural contract so an off-count call errors and the model
+ *  self-corrects instead of silently over-suggesting. */
+export const suggestFollowupsSchema = z.object({
+  prompts: z
+    .array(z.string())
+    .min(2)
+    .max(3)
+    .describe(
+      '2-3 short follow-up questions the user is likely to ask next, phrased as the user ' +
+        'would ask them (first person), in the same language the user is writing in.'
+    )
+})
+export type SuggestFollowupsInput = z.infer<typeof suggestFollowupsSchema>

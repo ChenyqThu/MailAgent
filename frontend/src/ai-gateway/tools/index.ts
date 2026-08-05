@@ -14,6 +14,7 @@ import type { ToolSet } from 'ai'
 import type { MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
 import { createEmailReadTools } from './email'
+import { createFollowupTools } from './followups'
 import { createKosReadTools } from './kos'
 import { createReportTools } from './report'
 import { createWriteTools } from './write'
@@ -197,8 +198,15 @@ export const GATEWAY_READ_TOOL_NAMES = [
 ] as const
 
 /** Tools present in the minimum gateway assembly. `report_write` is a local, silent artifact
- * primitive, so it is available without enabling the approval-gated domain write families. */
-export const GATEWAY_DEFAULT_TOOL_NAMES = [...GATEWAY_READ_TOOL_NAMES, 'report_write'] as const
+ * primitive, so it is available without enabling the approval-gated domain write families.
+ * `suggest_followups` (W6) is the flag-free interactive follow-up supply — part of every MANUAL
+ * assembly (the one venue-gated member: it does not register outside manual_chat, and every
+ * consumer of this const asserts a manual assembly). */
+export const GATEWAY_DEFAULT_TOOL_NAMES = [
+  ...GATEWAY_READ_TOOL_NAMES,
+  'report_write',
+  'suggest_followups'
+] as const
 
 /** Compose the gateway tool set. 03a → read tools only. The optional `collector` is
  *  the per-request audit sink each tool's execute pushes into (closure-bound); the
@@ -215,6 +223,15 @@ export function buildGatewayTools(
     ...createEmailReadTools(opts.domain, collector),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
     ...createReportTools(opts.domain, collector, opts.agentRunContext?.agentId)
+  }
+  // W6 — suggest_followups is interactive UI supply: registered ONLY in an owner-facing manual
+  // chat (no flag — it is part of the manual default set). NOT registered headless/im/search:
+  // follow-up chips have no meaning without a composer, and its hasToolCall stop condition
+  // (prepareChatRun) must never be able to end an unattended run early. This is a VENUE gate on
+  // top of its 'read' class — the one read tool with a registration-time mode condition (the
+  // class matrix alone would register reads everywhere; policy.test.ts documents the carve-out).
+  if (contextMode === 'manual_chat') {
+    Object.assign(tools, createFollowupTools(collector))
   }
   // S1 R1 — chat-session read tools behind MAILAGENT_OPENNESS_SESSION_TOOLS (default off →
   // not added, byte-identical to the v1.2.0 set). Silent reads with CHAT_HISTORY-fenced output;

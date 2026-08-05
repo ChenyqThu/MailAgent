@@ -18,7 +18,6 @@ gateway 的 chatRun.ts/streamText（经代理透传），不在 Python 重写引
   - POST /api/ai/agui/chat         流式（AG-UI mirror；gateway 仅 MAILAGENT_AG_UI_MIRROR 开时
                                    注册，否则 404 —— 代理透传其 404）
   - POST /api/ai/title             非流式 JSON
-  - POST /api/ai/followups         非流式 JSON
   - POST /api/ai/approval/resolve  非流式 JSON
   - GET  /api/ai/approval/pending  非流式 JSON（S6 W1：记录内审批的 pending 真值查询；远程
                                    web 打开 agent 执行记录时 live 查 stash → 命中富化 / miss 404）
@@ -35,7 +34,7 @@ gateway 的 chatRun.ts/streamText（经代理透传），不在 Python 重写引
 
 ⚠️ 与 ``src/api/routers/ai.py`` 的关系：ai.py 是 serve-api **自有**的 /api/ai/translation
 （email_translation 读/删，本地 SQLite）。本文件是 /api/ai/{chat,title,...} **代理**到 gateway。
-两者 path 前缀同为 /api/ai 但子路径不重叠（translation/* vs chat/title/followups/...），各自挂载。
+两者 path 前缀同为 /api/ai 但子路径不重叠（translation/* vs chat/title/...），各自挂载。
 
 abort 传播
 ----------
@@ -184,7 +183,7 @@ async def _proxy_streaming(request: Request, target_path: str) -> Response:
 
 
 async def _proxy_buffered(request: Request, target_path: str) -> Response:
-    """非流式代理（/api/ai/{title,followups,approval/resolve,config}）：转发 → 整体回传 JSON。
+    """非流式代理（/api/ai/{title,approval/resolve,config}）：转发 → 整体回传 JSON。
 
     一次性读完上游 body 回传（非流式端点 body 小）。status + content-type 透传；非 2xx（gateway 的
     501/503/400/404/410/502）原样回传，前端按 status + error code 处理。"""
@@ -234,14 +233,6 @@ async def proxy_agui_chat(
 async def proxy_title(request: Request, _: None = Depends(verify_cf_access)) -> Response:
     """代理 POST /api/ai/title → gateway（非流式 JSON，幂等 LLM 自动标题）。"""
     return await _proxy_buffered(request, "/api/ai/title")
-
-
-@router.post("/api/ai/followups")
-async def proxy_followups(
-    request: Request, _: None = Depends(verify_cf_access)
-) -> Response:
-    """代理 POST /api/ai/followups → gateway（非流式 JSON，per-turn 追问建议）。"""
-    return await _proxy_buffered(request, "/api/ai/followups")
 
 
 @router.post("/api/ai/approval/resolve")

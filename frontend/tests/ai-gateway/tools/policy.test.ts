@@ -577,6 +577,12 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
     expect(keys).toEqual(Object.keys(GATEWAY_TOOL_CLASSES).sort())
   })
 
+  // W6 — the ONE read-class tool with a registration-time VENUE gate: suggest_followups is
+  // interactive UI supply (composer-top chips + the hasToolCall stop condition), registered only
+  // in manual_chat. The class matrix's "reads register everywhere" deliberately does not apply to
+  // it — see the registration comment in tools/index.ts.
+  const MANUAL_ONLY_READ_TOOLS = new Set(['suggest_followups'])
+
   test.each(['untrusted_trigger', 'cron_headless', 'im_chat'] as const)(
     '%s → every capability_change/exec/web/outbound tool absent from the ToolSet; read + domain_write present',
     (mode) => {
@@ -590,6 +596,13 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
         expect(tools[name], `${name} must not register in ${mode}`).toBeUndefined()
       }
       for (const name of [...CLASSES_OF('read'), ...CLASSES_OF('domain_write')]) {
+        if (MANUAL_ONLY_READ_TOOLS.has(name)) {
+          expect(
+            tools[name],
+            `${name} is manual-only UI supply — must NOT register in ${mode}`
+          ).toBeUndefined()
+          continue
+        }
         expect(tools[name], `${name} must register in ${mode}`).toBeDefined()
       }
     }

@@ -10,6 +10,7 @@
 import { ThreadPrimitive } from '@assistant-ui/react'
 
 import { ThreadComposer } from './composer'
+import { FollowupSuggestions } from './FollowupSuggestions'
 import { AssistantMessage, EditComposer, SystemMessage, UserMessage } from './message'
 
 interface AssistantThreadProps {
@@ -46,6 +47,10 @@ export function AssistantThread({
           <div className="min-h-2 shrink-0" />
         </ThreadPrimitive.If>
       </ThreadPrimitive.Viewport>
+      {/* W6 (follow-ups) — next-question chips just above the composer, extracted from the LAST
+          assistant message's suggest_followups tool part (the SAME shared row AgentThread renders —
+          two surfaces, one component). Renders nothing while running / without prompts. */}
+      {!readOnly && <FollowupSuggestions className="px-4 pb-2" />}
       {!readOnly && <ThreadComposer />}
     </ThreadPrimitive.Root>
   )

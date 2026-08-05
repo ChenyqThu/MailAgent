@@ -58,7 +58,6 @@ import {
   findAssistantMessageRowIdByUiId,
   findUserMessageRowIdByUiId,
   getFirstUserText,
-  getLastTurnTexts,
   getSession,
   updateMessage,
   updateSessionTitle,
@@ -1022,10 +1021,6 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       return { title: session.title ?? null, firstUserText: getFirstUserText(sessionId) }
     },
     saveSessionTitle: (sessionId, title) => updateSessionTitle(sessionId, title),
-    // dogfood-3 (follow-ups) — read the last completed turn (last user + last assistant message) for
-    // dynamic next-question suggestions. Always wired; the route is per-turn best-effort (the renderer
-    // POSTs after each completed turn, ai-sdk path only).
-    getFollowupContext: (sessionId) => getLastTurnTexts(sessionId),
     // Part B (harness 上岛) + 07-15 owner拍板 — the island flag now ONLY gates the announce leg
     // (island card push); the stash + cross-surface single-resolver hooks are ALWAYS wired so the
     // in-panel approval card works with the island (and custom agents) explicitly off.
