@@ -59,7 +59,7 @@ CROSS_LANGUAGE_FLAGS = {
     # 飞书 IM 总闸（08-01 阶段 2 PR-1/PR-2）：Node envBool（gateway /api/ai/im-chat 端点注册 +
     # createImSession 接线，PR-1）＋ pydantic（serve-api 侧飞书连接底座 im_feishu_enabled，
     # PR-2 并行 lane）—— 与 MCP_CONNECTORS 同形态的双载体。
-    # 🔴 双侧默认必须同为 false（灰度未 cutover）；翻默认时两边一起翻，不然会出现
+    # 🔴 双侧默认必须同为 true（cutover 2026-08-04）；翻默认时两边一起翻，不然会出现
     # 「飞书桥在跑但 gateway 端点 404」或反过来「端点开着却没有桥来调」。
     "MAILAGENT_IM_FEISHU": [_LIFECYCLE, _CONFIG],
     # IM 上网独立开关（grill Q19=A，🔴 不做成 grant）：Node only（gateway ToolSet 的 im_chat
@@ -148,29 +148,31 @@ def test_cutover_flag_defaults_consistent():
     )
 
 
-# Node envBool ↔ pydantic Field 双载体、且**尚未 cutover** 的灰度 flag：两侧默认必须同为
-# false。上面那个用例只覆盖已 cutover 的 6 个（Python 侧载体是 _hot_bool），本用例覆盖
-# 「Node + pydantic」这一形态 —— 少了它，config.ts / ai_gateway_lifecycle.ts 里那句
-# "both defaults MUST stay false together (tests/config/test_flag_cross_language.py)" 是句空话
-# （原表只断言 env 键**出现**，不看默认值）。
-GRAYSCALE_NODE_PYDANTIC_FLAGS = {
-    # env 键 → pydantic 字段名
-    "MAILAGENT_MCP_CONNECTORS": "mcp_connectors_enabled",
-    # 飞书 IM 总闸（08-01 阶段 2）：翻默认漏一侧 = 「桥在跑但 gateway /api/ai/im-chat 404」
-    # 或反过来「端点开着却没有桥来调」。
-    "MAILAGENT_IM_FEISHU": "im_feishu_enabled",
+# Node envBool ↔ pydantic Field 双载体 flag：两侧默认必须逐字相等，且等于这里登记的期望值。
+# 上面那个用例只覆盖 Python 侧载体是 _hot_bool 的 6 个，本用例覆盖「Node + pydantic」这一形态
+# —— 少了它，config.ts / ai_gateway_lifecycle.ts 里那句 "both defaults MUST stay true together
+# (tests/config/test_flag_cross_language.py)" 是句空话（映射表只断言 env 键**出现**，不看默认值）。
+# 🔴 期望值显式登记而不是「两侧相等即可」：cutover 是要人拍板的动作，写死期望值能让「谁把默认
+# 悄悄翻了」也变成红，而不只是拦住「只翻一侧」。
+NODE_PYDANTIC_DUAL_CARRIER_FLAGS = {
+    # env 键 → (pydantic 字段名, 两侧期望默认)
+    # MCP connector 总闸：灰度未 cutover（ship-off → dogfood → cutover 另拍）。
+    "MAILAGENT_MCP_CONNECTORS": ("mcp_connectors_enabled", False),
+    # 飞书 IM 总闸（08-01 阶段 2）：**cutover 2026-08-04**（owner dogfood 通过）。翻默认漏一侧
+    # = 「桥在跑但 gateway /api/ai/im-chat 404」或反过来「端点开着却没有桥来调」。
+    "MAILAGENT_IM_FEISHU": ("im_feishu_enabled", True),
 }
 
 
-def test_grayscale_dual_carrier_defaults_are_both_false():
-    """未 cutover 的双载体灰度 flag：Node envBool 默认 == pydantic 默认 == false。"""
+def test_dual_carrier_node_pydantic_defaults_match_expected():
+    """双载体（Node envBool + pydantic）flag：两侧默认相等且等于登记的期望值。"""
     _skip_if_lifecycle_absent()
     env_bool = p.parse_env_bool_defaults()
     config_fields = p.parse_config_fields()
     assert env_bool, "ai_gateway_lifecycle.ts envBool 抽取为空 —— _ENV_BOOL_RE 坏了"
 
     drift = []
-    for env_key, field_name in GRAYSCALE_NODE_PYDANTIC_FLAGS.items():
+    for env_key, (field_name, expected) in NODE_PYDANTIC_DUAL_CARRIER_FLAGS.items():
         node_default = env_bool.get(env_key)
         py_default = p.config_bool_default(field_name, config_fields)
         # canary：任一侧抽不到就是漂移/解析器失效，绝不静默跳过
@@ -179,15 +181,15 @@ def test_grayscale_dual_carrier_defaults_are_both_false():
             f"canary miss: config.py {field_name} 默认不是 bool 常量（改名了？漏 "
             f"validation_alias={env_key}？）"
         )
-        if node_default is not False or py_default is not False:
+        if node_default is not expected or py_default is not expected:
             drift.append(
                 f"{env_key}: Node envBool 默认={node_default} / config.py {field_name} "
-                f"默认={py_default} —— 灰度期两侧都必须是 false"
+                f"默认={py_default} —— 两侧都应是 {expected}"
             )
 
     assert not drift, (
-        "灰度双载体 flag 的默认值不再同为 false：\n"
+        "双载体 flag 的两侧默认值不一致（或与登记的期望值不符）：\n"
         + "\n".join(f"  {d}" for d in drift)
-        + "\n→ 真要 cutover（翻 true）就两侧一起翻，并把该 flag 从 "
-        "GRAYSCALE_NODE_PYDANTIC_FLAGS 移走；只翻一侧会让 gateway 与 serve-api 割裂。"
+        + "\n→ cutover（翻 true）就两侧一起翻，并同步改 NODE_PYDANTIC_DUAL_CARRIER_FLAGS 的"
+        "期望值；只翻一侧会让 gateway 与 serve-api 割裂。"
     )

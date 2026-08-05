@@ -521,13 +521,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   const mcpConnectorsEnabled = envBool('MAILAGENT_MCP_CONNECTORS', false)
   // Stage 2 PR-1 (task 08-01 messenger) — MAILAGENT_IM_FEISHU gates the im_chat entrypoint
   // (POST /api/ai/im-chat, the ONLY code asserting 'im_chat') + the createImSession hook.
-  // Default OFF (灰度: ship off → dogfood → cutover 另拍, island 模式); off → the route is not
-  // registered (404) and the gateway is byte-identical. main-env-only, NO vite define (mirrors
-  // MAILAGENT_MCP_CONNECTORS). 🔴 Double-carrier: the Python serve-api reads the SAME env via
-  // pydantic (im_feishu_enabled, PR-2 — 飞书连接底座); both defaults MUST stay false together
-  // (tests/config/test_flag_cross_language.py), else the bridge would POST an endpoint that 404s
-  // (or the endpoint would sit live with no bridge) — same failure shape as the MCP flag's.
-  const imFeishuEnabled = envBool('MAILAGENT_IM_FEISHU', false)
+  // Default ON (cutover 2026-08-04, owner dogfood 通过); an explicit env false → the route is
+  // not registered (404) and the gateway is byte-identical. main-env-only, NO vite define
+  // (mirrors MAILAGENT_MCP_CONNECTORS). 🔴 Double-carrier: the Python serve-api reads the SAME
+  // env via pydantic (im_feishu_enabled, PR-2 — 飞书连接底座); both defaults MUST stay true
+  // together (tests/config/test_flag_cross_language.py), else the bridge would POST an endpoint
+  // that 404s (or the endpoint would sit live with no bridge) — same failure shape as the MCP flag's.
+  const imFeishuEnabled = envBool('MAILAGENT_IM_FEISHU', true)
   // Stage 2 PR-1 (grill Q19=A) — MAILAGENT_IM_WEB_ENABLED: the INDEPENDENT im-web venue switch
   // (🔴 deliberately NOT a grant — policy.ts pins that direction). Default OFF: web_fetch /
   // web_search are stripped from every im run's ToolSet (and their runtime modeDenied

@@ -244,12 +244,12 @@ class Config(BaseSettings):
     #    （pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释）。
     # =========================================================================
     im_feishu_enabled: bool = Field(
-        default=False, validation_alias="MAILAGENT_IM_FEISHU",
+        default=True, validation_alias="MAILAGENT_IM_FEISHU",
         description=(
-            "飞书对话 bot 总闸（灰度，沿用 island/connector 的 ship-off→dogfood→cutover）："
-            "off 时 serve 进程不 spawn im_feishu worker、不建立任何长连接，gateway 侧工具面"
-            "字节级回退。**双载体** —— 本 pydantic 字段（serve，翻开关需重启 serve）+ Node "
-            "envBool（gateway，翻开关需重启 app），两侧默认必须同为 false。"
+            "飞书对话 bot 总闸。默认开（cutover 2026-08-04，owner dogfood 通过）；env 显式 "
+            "false = 应急回退 → serve 进程不 spawn im_feishu worker、不建立任何长连接，"
+            "gateway 侧工具面字节级回退。**双载体** —— 本 pydantic 字段（serve，翻开关需重启 "
+            "serve）+ Node envBool（gateway，翻开关需重启 app），两侧默认必须同为 true。"
         ),
     )
     feishu_im_app_id: str = Field(

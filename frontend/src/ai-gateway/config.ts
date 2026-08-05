@@ -353,12 +353,13 @@ export interface AiGatewayConfig {
    *  when MAILAGENT_CUSTOM_AGENTS_ENABLED is on; omitted (default) → POST /api/ai/agent-run 404s. */
   createAgentSession?: (input: { agentId: string; jobId: number; title: string }) => number | null
   // ── Stage 2 PR-1 (task 08-01 messenger, MAILAGENT_IM_FEISHU) — im_chat entrypoint ──────────────
-  /** MAILAGENT_IM_FEISHU (default OFF — 灰度: ship off → dogfood → cutover 另拍). When true the
-   *  gateway registers POST /api/ai/im-chat — the ONLY entrypoint asserting 'im_chat' in trusted
-   *  code. Off/absent → the route is NOT registered (404) and the gateway is byte-identical
-   *  (imWebEnabled + createImSession are inert without an im run). Double-carrier with the Python
-   *  pydantic `im_feishu_enabled` (PR-2, serve-api connection base) — both defaults MUST stay
-   *  false together (tests/config/test_flag_cross_language.py). */
+  /** MAILAGENT_IM_FEISHU (env default ON — cutover 2026-08-04). When true the gateway registers
+   *  POST /api/ai/im-chat — the ONLY entrypoint asserting 'im_chat' in trusted code. Off/absent →
+   *  the route is NOT registered (404) and the gateway is byte-identical (imWebEnabled +
+   *  createImSession are inert without an im run). 🔴 This cfg field stays OPTIONAL and gates on
+   *  the exact `true` — the env default lives in ai_gateway_lifecycle.ts, never here. Double-carrier
+   *  with the Python pydantic `im_feishu_enabled` (serve-api connection base) — both env defaults
+   *  MUST stay true together (tests/config/test_flag_cross_language.py). */
   imFeishuEnabled?: boolean
   /** Stage 2 PR-1 — pre-create the ai_chat.db session an IM conversation persists into
    *  (origin='im', general anchor; chat_db.createImSession). Called by /api/ai/im-chat on the

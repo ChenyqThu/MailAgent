@@ -315,13 +315,17 @@ sqlite3 ~/Library/Application\ Support/mailagent-frontend/data/ai_chat.db \
 
 | 开关 | 载体 | 默认 | off 的语义 |
 |---|---|---|---|
-| `MAILAGENT_IM_FEISHU` | **双载体**：pydantic `im_feishu_enabled`（serve，翻需重启后端）+ Node `envBool`（`ai_gateway_lifecycle.ts`，main-env-only **不加 vite define**，翻需重启 app） | `false` | 不建立任何连接；gateway 不注册 `/api/ai/im-chat` 与 `createImSession`，工具集字节级回退。`/api/im/pair` 409；`/status` 与 `/approvals` **仍 200**（见 §5 取舍 1） |
+| `MAILAGENT_IM_FEISHU` | **双载体**：pydantic `im_feishu_enabled`（serve，翻需重启后端）+ Node `envBool`（`ai_gateway_lifecycle.ts`，main-env-only **不加 vite define**，翻需重启 app） | `true`（cutover 2026-08-04） | 不建立任何连接；gateway 不注册 `/api/ai/im-chat` 与 `createImSession`，工具集字节级回退。`/api/im/pair` 409；`/status` 与 `/approvals` **仍 200**（见 §5 取舍 1） |
 | `MAILAGENT_IM_WEB_ENABLED` | **Node 单载体**（同上，main-env-only） | `false` | `web` 类工具在飞书会话里不注册。已入两侧 `MANAGED_ENV_KEYS`（设置页可改；漏加 = 开关渲染正常但一点就 `E_INVALID_KEY`） |
 
-🔴 **双载体两侧默认必须同为 false、cutover 一起翻**，否则会出现「gateway 注册了工具但 Python
-侧没有 worker」或反过来。闸 = `tests/config/test_flag_cross_language.py`（已登记）。
+🔴 **双载体两侧默认必须同为 true、应急回退也一起翻**，否则会出现「gateway 注册了工具但 Python
+侧没有 worker」或反过来。闸 = `tests/config/test_flag_cross_language.py`（已登记期望默认值）。
 
-灰度节奏沿用 island 的 **ship-off → dogfood → cutover**，cutover 另行拍板。
+灰度节奏沿用 island 的 **ship-off → dogfood → cutover**；**cutover 已于 2026-08-04 完成**
+（owner dogfood 通过），两侧默认翻 true，env 显式 false 为应急回退。
+🔴 默认 on ≠ 一定会连：没配 `FEISHU_IM_APP_ID/SECRET`（且 `agent_config.db` 里也没有
+`im:feishu` 凭证行）时 `feishu_im_ready` 在 spawn 前就拦下，零 worker 零连接 —— 这是升级
+用户的默认状态。
 
 ---
 

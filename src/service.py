@@ -813,7 +813,8 @@ class EmailNotionSyncApp:
                     "(MAILAGENT_CUSTOM_AGENTS_ENABLED)"
                 )
 
-            # 飞书对话 bot 长连接（08-01 阶段 2，flag MAILAGENT_IM_FEISHU 默认关）。
+            # 飞书对话 bot 长连接（08-01 阶段 2，flag MAILAGENT_IM_FEISHU，
+            # cutover 2026-08-04 起默认开；没配凭证仍是零启动，见下面的 gate）。
             # 挂 serve 而非 serve-api：serve 是打包态唯一恒 spawn 的 service，且
             # supervise / sync_store / alerter / AlertEpisodeTracker 全在手（dossier Q1）。
             # 🔴 gate 含**凭证在**——supervise 把「shutdown 未置位时的正常返回」当作
