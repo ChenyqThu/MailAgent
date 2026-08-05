@@ -118,6 +118,10 @@ interface Harnessed {
   /** 该行当前的位移值（未位移 = ''）。走 getPropertyValue：`translate` 的驼峰
    *  别名在 happy-dom 里只是个普通 JS 属性，读它会绕过真正的 CSS 声明块。 */
   shiftOf: (r: ListRow) => string
+  /** 滚动容器（fake ListImperativeAPI 的 element）。 */
+  scroller: () => HTMLElement
+  /** 幽灵节点（aria-hidden 的旁挂克隆；harness 里没有别的 aria-hidden 节点）。 */
+  ghosts: () => HTMLElement[]
 }
 
 function mount(rows: ListRow[], heights: number[], reduceMotion = false): Harnessed {
@@ -132,7 +136,12 @@ function mount(rows: ListRow[], heights: number[], reduceMotion = false): Harnes
     rerender: (next, nextH) =>
       utils.rerender(<Harness rows={next} heights={nextH} reduceMotion={reduceMotion} api={api} />),
     rowEl,
-    shiftOf: (r) => rowEl(r).style.getPropertyValue('translate')
+    shiftOf: (r) => rowEl(r).style.getPropertyValue('translate'),
+    scroller: () => utils.container.querySelector<HTMLElement>('[data-testid="scroller"]')!,
+    ghosts: () =>
+      Array.from(
+        utils.container.querySelectorAll<HTMLElement>('[data-testid="scroller"] > [aria-hidden]')
+      )
   }
 }
 
@@ -228,5 +237,106 @@ describe('useThreadCollapseShift — 收起位移的接线', () => {
     const el = rowEl(TAIL)
     cleanup()
     expect(el.style.getPropertyValue('translate')).toBe('')
+  })
+})
+
+describe('useThreadCollapseShift — 被摘除子行的幽灵退场', () => {
+  test('收起后：每个被摘除的子行各有一个幽灵克隆挂在容器末尾', () => {
+    const { api, rerender, ghosts } = mount(EXPANDED, EXPANDED_H)
+    api.captureCollapse()
+    rerender(COLLAPSED, COLLAPSED_H)
+    expect(ghosts()).toHaveLength(2) // CHILD_A + CHILD_B
+  })
+
+  test('🔴 幽灵整备：摘 data-row-key / data-thread-reveal，aria-hidden + pointer-events:none', () => {
+    const { api, rerender, rowEl, ghosts } = mount(EXPANDED, EXPANDED_H)
+    // 入场标记还在 500ms reveal 窗口内的场景：克隆若不摘掉它，CSS 入场动画会把
+    // 幽灵重新 fade in —— 与退场对着干。
+    rowEl(CHILD_A).setAttribute('data-thread-reveal', 'true')
+    api.captureCollapse()
+    rerender(COLLAPSED, COLLAPSED_H)
+    for (const g of ghosts()) {
+      expect(g.hasAttribute('data-row-key')).toBe(false)
+      expect(g.hasAttribute('data-thread-reveal')).toBe(false)
+      expect(g.getAttribute('aria-hidden')).toBe('true')
+      expect(g.style.pointerEvents).toBe('none')
+    }
+  })
+
+  test('幽灵保留 react-window 的内容坐标定位（inline transform 原样克隆）', () => {
+    const { api, rerender, ghosts } = mount(EXPANDED, EXPANDED_H)
+    api.captureCollapse()
+    rerender(COLLAPSED, COLLAPSED_H)
+    // CHILD_A top = 28+60 = 88, CHILD_B top = 148（克隆顺序与 DOM 顺序一致）。
+    expect(ghosts().map((g) => g.style.transform)).toEqual([
+      'translateY(88px)',
+      'translateY(148px)'
+    ])
+  })
+
+  test('🔴 靠底收起 clamp：幽灵带 ride 位移，第一帧与收起点上方存活行同步', () => {
+    const { api, rerender, scroller, ghosts, shiftOf } = mount(EXPANDED, EXPANDED_H)
+    scroller().scrollTop = 100
+    api.captureCollapse()
+    scroller().scrollTop = 60 // 模拟浏览器 clamp（happy-dom 无布局，手动写）
+    rerender(COLLAPSED, COLLAPSED_H)
+    // 上方存活行（HEADER）下移 40 → 幽灵同值：'0 -40px' 起步一起滑回。
+    expect(shiftOf(HEADER)).toBe('0 -40px')
+    for (const g of ghosts()) {
+      expect(g.style.getPropertyValue('translate')).toBe('0 -40px')
+    }
+  })
+
+  test('无 clamp 时幽灵不带初始位移（原地淡出 + 上浮由 tween 驱动）', () => {
+    const { api, rerender, ghosts } = mount(EXPANDED, EXPANDED_H)
+    api.captureCollapse()
+    rerender(COLLAPSED, COLLAPSED_H)
+    for (const g of ghosts()) {
+      expect(g.style.getPropertyValue('translate')).toBe('')
+    }
+  })
+
+  test('幽灵-only：收起点下方没有行（shift 集为空）也要播退场', () => {
+    const { api, rerender, ghosts } = mount([HEADER, HEAD_OPEN, CHILD_A, CHILD_B], [28, 60, 60, 60])
+    api.captureCollapse()
+    rerender([HEADER, HEAD_SHUT], [28, 60])
+    expect(ghosts()).toHaveLength(2)
+  })
+
+  test('tween 跑完后幽灵被摘除（不留旁挂节点撑 scrollHeight）', async () => {
+    const { api, rerender, ghosts } = mount(EXPANDED, EXPANDED_H)
+    api.captureCollapse()
+    rerender(COLLAPSED, COLLAPSED_H)
+    expect(ghosts()).toHaveLength(2)
+    await waitFor(() => expect(ghosts()).toHaveLength(0), { timeout: 2000 })
+  })
+
+  test('🔴 在途退场被下一次行重排立即收掉（收起 A 立刻展开 B 不留幽灵）', () => {
+    const { api, rerender, ghosts } = mount(EXPANDED, EXPANDED_H)
+    api.captureCollapse()
+    rerender(COLLAPSED, COLLAPSED_H)
+    expect(ghosts()).toHaveLength(2)
+    rerender(EXPANDED, EXPANDED_H)
+    expect(ghosts()).toHaveLength(0)
+  })
+
+  test('没 capture 的重排（手风琴隐式收起 / 数据刷新）不产生幽灵', () => {
+    const { rerender, ghosts } = mount(EXPANDED, EXPANDED_H)
+    rerender(COLLAPSED, COLLAPSED_H)
+    expect(ghosts()).toHaveLength(0)
+  })
+
+  test('capture 后几何没变 → 克隆直接丢弃，不挂进容器', () => {
+    const { api, rerender, ghosts } = mount(EXPANDED, EXPANDED_H)
+    api.captureCollapse()
+    rerender([...EXPANDED], [...EXPANDED_H])
+    expect(ghosts()).toHaveLength(0)
+  })
+
+  test('reduced-motion → 不克隆不挂幽灵，行为与基线（瞬时收起）一致', () => {
+    const { api, rerender, ghosts } = mount(EXPANDED, EXPANDED_H, true)
+    api.captureCollapse()
+    rerender(COLLAPSED, COLLAPSED_H)
+    expect(ghosts()).toHaveLength(0)
   })
 })

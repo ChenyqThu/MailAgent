@@ -21,6 +21,7 @@ import {
   applyMultiFilter,
   applyTab,
   categoryOf,
+  collectRemovedChildKeys,
   computeCollapseShifts,
   computeRowHeight,
   flattenGroups,
@@ -1144,5 +1145,23 @@ describe('computeCollapseShifts', () => {
       { rows: [TAIL], heights: [60], scrollTop: 0.3 }
     )
     expect(shifts.size).toBe(0)
+  })
+
+  describe('collectRemovedChildKeys（幽灵退场的候选集）', () => {
+    test('收起摘掉的子行进集合 —— 含与虚拟头同 internal_id 的首个子行（role 位区分）', () => {
+      const removed = collectRemovedChildKeys(BEFORE_ROWS, AFTER_ROWS)
+      expect(removed).toEqual(new Set([rowIdentityKey(CHILD_A), rowIdentityKey(CHILD_B)]))
+    })
+
+    test('存活的子行不进集合（capture 后这次重排根本没动线程）', () => {
+      expect(collectRemovedChildKeys(BEFORE_ROWS, BEFORE_ROWS).size).toBe(0)
+    })
+
+    test('🔴 只认子行：单封 / 线程头 / header 被移除（数据刷新）不播退场', () => {
+      // TAIL（单封）、HEAD（线程头）、HEADER 全部消失 —— 这是列表数据变了，
+      // 不是收起；给它们播退场会把「移出列表」演成「收进线程」。
+      const removed = collectRemovedChildKeys(BEFORE_ROWS, [CHILD_A, CHILD_B])
+      expect(removed.size).toBe(0)
+    })
   })
 })

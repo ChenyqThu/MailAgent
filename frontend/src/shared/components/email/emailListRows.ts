@@ -154,6 +154,28 @@ export interface RowGeometrySnapshot {
 }
 
 /**
+ * 收起过渡的退场集：before 里存在、after 里消失的**线程子行**（role C）身份键。
+ * useThreadCollapseShift 据此决定哪些 capture 时克隆的节点要作为「幽灵」播退场
+ * （fade + 上浮，thread-child-in 入场的镜像）。
+ *
+ * 🔴 只认子行：线程头 / 单封 / header 行的增删来自数据刷新（SSE / 分页 / 过滤），
+ * 不是收起语义，给它们播退场会把「一封邮件被移出列表」演成「它被收进了某条线程」。
+ */
+export function collectRemovedChildKeys(
+  before: ReadonlyArray<ListRow>,
+  after: ReadonlyArray<ListRow>
+): Set<string> {
+  const afterKeys = new Set(after.map(rowIdentityKey))
+  const out = new Set<string>()
+  for (const r of before) {
+    if (r.type !== 'email' || r.thread === undefined || r.thread.isHead) continue
+    const key = rowIdentityKey(r)
+    if (!afterKeys.has(key)) out.add(key)
+  }
+  return out
+}
+
+/**
  * 线程收起的 FLIP 差分：对收起后**仍在 rows 里**的每一行算「旧视觉位置 − 新视觉
  * 位置」（px）。正值 = 该行往上跳了，动画从 +dy 滑回 0。
  *
