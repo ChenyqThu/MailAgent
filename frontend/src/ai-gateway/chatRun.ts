@@ -52,8 +52,9 @@ import {
   type GatewaySystemPromptConfig
 } from './systemPrompt'
 // D1 (connector dogfood batch) — per-run scoping of the connector catalog reuses the connector
-// module's ONE load seam + ceiling order (never a second filter implementation here).
-import { connectorCatalogForRun } from './tools/connector'
+// module's ONE load seam + ceiling order (never a second filter implementation here); 0804 dogfood
+// reuses the SAME seam to decide whether this run must warm the manifest before buildTools.
+import { connectorCatalogForRun, shouldLoadConnectorTools } from './tools/connector'
 import {
   isValidContextSnapshot,
   type AgentContextSnapshot
@@ -377,6 +378,33 @@ export async function prepareChatRun(
       if (globalMode === 'acceptEdits' || globalMode === 'bypass') approvalMode = globalMode
     } catch {
       /* fail-closed — keep the request-level ('manual') semantics */
+    }
+  }
+  // 0804 dogfood 主修 —「重启后第一轮 connector 不可用」. The lifecycle's startup prewarm of the
+  // connector manifest fires ~1.2s BEFORE serve-api accepts requests, so the very first
+  // owner-present turn used to read an empty (failed) cache and register zero mcp__* tools — the
+  // model then honestly answered「不可用」and only the SECOND turn worked. Await the bounded ensure
+  // hook here, before buildTools: it short-circuits on a warm cache (cost ≈ 0 on every later
+  // turn), is single-flight + fetch-bounded, and is contracted never to throw. Awaiting BEFORE
+  // buildTools also removes the drift between the ToolSet and the system prompt's connector
+  // catalog (systemPromptProvider is awaited later and read the cache at a different instant).
+  // The seam decides WHO warms: owner-present venues (manual_chat / im_chat, no agentRunContext)
+  // only — a headless run is warmed by runHeadlessAgent with its grants (agentRun.ts), and a
+  // grant-less headless run must keep doing ZERO connector work. Hook absent (flag off / test
+  // cfgs) → skipped entirely, byte-identical — the hook's PRESENCE is the MAILAGENT_MCP_CONNECTORS
+  // gate here (the lifecycle wires it only when the flag is on), hence the literal `true`.
+  const ensureConnectorManifest = cfg.ensureConnectorManifest
+  if (
+    ensureConnectorManifest &&
+    shouldLoadConnectorTools(true, contextMode, cfg.agentRunContext != null)
+  ) {
+    try {
+      await ensureConnectorManifest()
+    } catch (err) {
+      console.warn(
+        '[ai-gateway] connector manifest ensure failed — run continues without connector tools',
+        err
+      )
     }
   }
   const auditEntries: GatewayToolAuditEntry[] = []

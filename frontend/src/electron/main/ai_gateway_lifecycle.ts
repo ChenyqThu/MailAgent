@@ -35,11 +35,12 @@ import { buildGatewayTools } from '../../ai-gateway/tools'
 // cache, manual_chat runs only (shouldLoadConnectorTools — headless paths perform ZERO calls).
 import {
   connectorCatalogForRun,
+  connectorManifestSkipReason,
+  createConnectorManifestCache,
   createConnectorTools,
   fetchConnectorManifest,
   projectConnectorCatalog,
-  shouldLoadConnectorTools,
-  type ConnectorToolManifestEntry
+  shouldLoadConnectorTools
 } from '../../ai-gateway/tools/connector'
 import type { ConnectorCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 import type { ToolSet } from 'ai'
@@ -537,54 +538,29 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   const imWebEnabled = envBool('MAILAGENT_IM_WEB_ENABLED', false)
   // TTL-cached connector tool manifest (loopback pulls stay OFF the request path — buildTools is
   // synchronous). A fetch failure caches null = no connector tools (silent degradation, warned in
-  // fetchConnectorManifest); the background refresh below re-tries after the TTL.
-  // PR3 — the refresh now RETURNS its in-flight promise (single-flight): manual turns keep
-  // fire-and-forgetting it (void), while cfg.ensureConnectorManifest below AWAITS it so a
-  // one-shot headless run with connector grants never builds tools off an empty cold cache.
-  const CONNECTOR_MANIFEST_TTL_MS = 30_000
-  let _connectorManifestCache: { at: number; value: ConnectorToolManifestEntry[] | null } | null =
-    null
-  let _connectorManifestPromise: Promise<void> | null = null
-  const refreshConnectorManifest = (): Promise<void> => {
-    if (!mcpConnectorsEnabled) return Promise.resolve()
-    if (_connectorManifestPromise) return _connectorManifestPromise
-    if (
-      _connectorManifestCache &&
-      Date.now() - _connectorManifestCache.at < CONNECTOR_MANIFEST_TTL_MS
-    ) {
-      return Promise.resolve()
-    }
-    _connectorManifestPromise = fetchConnectorManifest(domain, {
-      // D1 observability — the degradation warnings used to go console-only (invisible in a
-      // packaged app); mirror them into the on-disk gateway log.
-      onWarn: (message, err) => {
-        console.warn(message, err)
-        gatewayLogLine({ event: 'connector_manifest_warn', message, error: String(err) })
-      }
-    })
-      .then((value) => {
-        _connectorManifestCache = { at: Date.now(), value }
-        // D1 observability — one line per real refresh (TTL-bounded, ≥30s apart): entry count on
-        // success, ok:false on the silent-degradation null (no connector tools this window).
-        gatewayLogLine({
-          event: 'connector_manifest_refresh',
-          ok: value !== null,
-          entries: value?.length ?? null
-        })
-      })
-      .catch(() => {
-        // fetchConnectorManifest is contracted never to throw — belt only.
-        _connectorManifestCache = { at: Date.now(), value: null }
-        gatewayLogLine({ event: 'connector_manifest_refresh', ok: false, entries: null })
-      })
-      .finally(() => {
-        _connectorManifestPromise = null
-      })
-    return _connectorManifestPromise
-  }
-  // Prewarm once (fire-and-forget — a slow serve-api must never block gateway startup; the first
-  // manual turn before the prewarm lands simply has no connector tools yet).
-  void refreshConnectorManifest()
+  // fetchConnectorManifest) but only for the SHORT failure TTL (0804 dogfood — a 30s negative
+  // window is what made the first turn after a restart connector-blind).
+  // PR3 — refresh RETURNS its in-flight promise (single-flight): cfg.ensureConnectorManifest below
+  // AWAITS it so neither a one-shot headless run with connector grants nor an owner-present turn
+  // (manual/im — 0804 主修, prepareChatRun awaits before buildTools) builds tools off a cold cache.
+  const connectorManifest = createConnectorManifestCache(
+    () =>
+      fetchConnectorManifest(domain, {
+        // D1 observability — the degradation warnings used to go console-only (invisible in a
+        // packaged app); mirror them into the on-disk gateway log.
+        onWarn: (message, err) => {
+          console.warn(message, err)
+          gatewayLogLine({ event: 'connector_manifest_warn', message, error: String(err) })
+        }
+      }),
+    gatewayLogLine
+  )
+  const refreshConnectorManifest = (): Promise<void> =>
+    mcpConnectorsEnabled ? connectorManifest.refresh() : Promise.resolve()
+  // Prewarm (fire-and-forget — a slow serve-api must never block gateway startup) WITH bounded
+  // retries: the gateway comes up ~1.2s before serve-api accepts requests, so attempt #1 reliably
+  // fails in the field.
+  if (mcpConnectorsEnabled) connectorManifest.prewarm()
   // S4 W3 — MAILAGENT_CUSTOM_AGENTS_ENABLED gates the headless custom-agent fresh-spawn endpoint
   // (POST /api/ai/agent-run): its two cfg hooks (fetchAgentRunSpec + createAgentSession) are wired
   // only when on → an explicit env false → the endpoint 404s, byte-identical to S3. This wave adds
@@ -855,15 +831,17 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // break a turn.
     // D1 (connector dogfood batch) — merge the MCP connector catalog into the projection so the
     // system prompt can announce the mcp__* tools (root cause ①: zero prompt-level告知 → the
-    // model "honestly" denied having them). Data source = the SAME _connectorManifestCache the
+    // model "honestly" denied having them). Data source = the SAME connectorManifest cache the
     // ToolSet builds from (zero new loopback requests, zero new TTLs — buildTools' per-turn
-    // refresh keeps it warm). Cold cache / flag off / nothing admitted → field omitted → prompt
+    // refresh keeps it warm; since the 0804 fix prepareChatRun awaits the warm-up before BOTH
+    // reads, prompt and ToolSet can no longer disagree about the catalog).
+    // Cold cache / flag off / nothing admitted → field omitted → prompt
     // byte-identical to today. The catalog here is manual-shape; prepareChatRun scopes it per run
     // (headless: granted connectors only) via connectorCatalogForRun.
     systemPromptProvider: async () => {
       const value = await getSystemPromptConfig(apiBase, getLocalApiToken())
       if (!mcpConnectorsEnabled) return value
-      const catalog = projectConnectorCatalog(_connectorManifestCache?.value)
+      const catalog = projectConnectorCatalog(connectorManifest.peek())
       if (!catalog) return value
       // /chat/config blip (value null) + a warm manifest → still surface the catalog: the
       // connector tools ARE registered on such a turn, so the context-light prompt should not
@@ -903,9 +881,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       // manual_chat without an agentRunContext (PR2, unchanged), and a headless agent run whose
       // per-agent connector grants parse non-empty (PR3 — grant 外的 headless run performs ZERO
       // connector work, not "fetch then deny"). The ToolSet is built synchronously from the TTL
-      // cache; manual turns refresh in the background (the NEXT turn sees manifest changes), and
-      // the one-shot headless path pre-warms the cache via cfg.ensureConnectorManifest below
-      // BEFORE buildTools runs, so the cold-cache read here is populated.
+      // cache; a warm cache refreshes in the background (the NEXT turn sees manifest changes), and
+      // EVERY admitted shape pre-warms it via cfg.ensureConnectorManifest before buildTools runs
+      // (headless: agentRun.ts; owner-present manual/im: prepareChatRun — 0804 dogfood 主修), so
+      // the read here is populated even on the first turn after a restart.
       let dynamicTools: ToolSet | undefined
       // D1 — the run-scoped catalog matching dynamicTools, threaded to discover_skills so the
       // self-description tool stops being connector-blind (dogfood root cause ②).
@@ -920,8 +899,18 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         )
       ) {
         void refreshConnectorManifest()
-        const manifest = _connectorManifestCache?.value
-        if (manifest && manifest.length > 0) {
+        const manifest = connectorManifest.peek()
+        const skipReason = connectorManifestSkipReason(manifest)
+        if (skipReason !== null) {
+          // 0804 dogfood — an admitted run that registers NOTHING used to fail silently (the log
+          // only ever carried the success line), which is why「connector 不可用」took a whole
+          // session to explain. One line per skipped run, with which of the two shapes it was.
+          gatewayLogLine({
+            event: 'connector_tools_skipped',
+            mode: contextMode ?? null,
+            reason: skipReason
+          })
+        } else if (manifest) {
           dynamicTools = createConnectorTools(domain, collector, approvalGuard, manifest, {
             a2uiEnabled,
             approvalMode,

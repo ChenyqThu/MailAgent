@@ -1,7 +1,7 @@
 # MCP Connectors（外部服务工具面 · harness 扩展 epic 阶段 1）
 
 > 系统「现在如何」把**外部 MCP 服务**（首批 Notion / Atlassian）的工具接进 MailAgent 的 AI
-> harness：连接与凭证、工具清单、四个调用方的授权、围栏与有界性、灰度开关。
+> harness：连接与凭证、工具清单、五个调用方的授权、围栏与有界性、灰度开关。
 > 来源 = task `08-01-mcp-connector-notion-jira-harness`（PR1-PR5）；决策真源见该 task 的
 > `prd.md` 与 epic 的 `grill.md`。
 >
@@ -9,7 +9,8 @@
 > 自己的能力交付给外部 agent —— 我们是 MCP **server**）；本文是我们当 MCP **client**。
 > gateway 工具注册的总体架构见 [`ai-sdk-gateway-architecture.md`](./ai-sdk-gateway-architecture.md)。
 
-`status: living` · `last-verified: 2026-08-03`（PR5 收尾，flag 仍默认 off）
+`status: living` · `last-verified: 2026-08-04`（0804 dogfood WP1：注入链 §5.6 + `im_chat` 授权
+措辞对齐实现；flag 仍默认 off）
 
 ---
 
@@ -260,9 +261,34 @@ test_stale_delete_rows_migrated_to_write_destructive`（含幂等 + 迁移后可
 `effective_enabled`，前端照显示。否则那套规则就成了第二处手抄。
 写 API 里 `enabled` 键**必须在场**（缺键 → 400），不把「没说」当成 null 猜。
 
+### 5.6 gateway 注入链与 manifest 缓存（0804 dogfood 修复）
+
+`buildTools` 是**同步**的，所以 gateway 侧的工具面永远建自一份 TTL 缓存
+（`createConnectorManifestCache`，单源 `frontend/src/ai-gateway/tools/connector.ts`；
+`ai_gateway_lifecycle.ts` 只负责注入 `fetchConnectorManifest` 与落日志）。三条纪律：
+
+| 环节 | 语义 |
+|---|---|
+| 启动预热 | gateway 起来时 fire-and-forget 拉一次，**失败按 1s / 3s 退避重试 2 次**（有界，不是重试风暴）。gateway 比 serve-api 早约 1.2s 就绪，第一发在现场是**必失败**的 |
+| 缓存新鲜期 | 成功 **30s**；失败（`value=null`）只 **3s**（`CONNECTOR_MANIFEST_FAILURE_TTL_MS`）—— 失败是关于 serve-api 的瞬时判断，不是关于 manifest 的 |
+| run 前预热 | `prepareChatRun` 在 `buildTools` **之前** `await cfg.ensureConnectorManifest()`（owner-present venue：`shouldLoadConnectorTools` 接纳的 `manual_chat` / `im_chat`）；一次性 headless run 由 `agentRun.ts` 按 grant 预热（§6.2）。缓存热时立即返回，单飞 + 契约不抛；⚠️ **3s 是每个 HTTP 请求的上限不是总预算**（list 1 次 + 每个已连接 connector 的 tools 各 1 次，串行），serve-api「接了连接但不回」时该轮首字延迟按 connector 数叠加——现场 2 家 ⇒ 最坏 ~9s。真出现再加总预算 race（不改这里的语义，只封顶等待） |
+
+🔴 **为什么 run 前必须 await**（0804 owner 反馈「connector 不可用」的真根因）：预热失败把 `null`
+写进缓存并**占满 30s**，而 manual/im 的注册点只 `void refresh()` 后**同步**读缓存 —— 重启后第一轮
+对话于是零 `mcp__*` 工具、prompt 里零 connector 告知、`discover_skills` 也看不到
+`external_connectors`，模型如实回答「不可用」，第二轮才正常。await 一次同时消掉另一个漂移：
+`buildTools`（同步）与 `systemPromptProvider`（稍后 await）读缓存的时刻不同，可能出现
+「prompt 宣告了 connector、ToolSet 里却没有」。
+
+**可观测**（`~/Library/Logs/MailAgent/ai-gateway.log`，`gatewayLogLine`）：
+`connector_manifest_refresh`（每次真拉，`ok` + 条目数）· `connector_manifest_warn`（降级警告）·
+`connector_manifest_prewarm_gave_up`（预热重试用尽）· `connector_tools_registered`（注册成功）·
+`connector_tools_skipped`（🔴 被接纳却什么都没注册，`reason` 分
+`manifest_unavailable`（缓存为 null）/ `manifest_empty`（拉到了但零条），此前是完全静默的失败）。
+
 ---
 
-## 6. 授权矩阵（四个调用方）
+## 6. 授权矩阵（五个调用方）
 
 | 调用方 | context_mode | 授权来源 | 审批 |
 |---|---|---|---|
@@ -270,9 +296,10 @@ test_stale_delete_rows_migrated_to_write_destructive`（含幂等 + 迁移后可
 | custom agent（headless） | `untrusted_trigger` / `cron_headless` | `report_agent.tool_policy_json` 的 `grant_connectors` | grant 内**免卡**执行，grant 外**根本不注册** |
 | 报告 Agent | 同上（该 agent 行的 grant） | 同上（`summarizer.generate_report_agentic(connector_grants=…)`） | 同上 |
 | 邮件预处理分类 | 不走 gateway（Python LLM loop） | **独立** `connector.preprocess_enabled` 列 | 天花板**硬编码 `read`**，无审批链 |
-| im_chat 及任何未来新场地 | `im_chat` | — | **恒拒**（fail-closed） |
+| im chat（飞书） | `im_chat` | 无天花板（owner 本人隔着 IM 在环） | **read 免批 / write·update 恒 HITL**，卡经飞书按钮投递 |
+| 任何未来新场地 | 新 mode | — | **恒拒**（fail-closed，见 §6.4 的双白名单） |
 
-### 6.1 manual chat（grill Q5=A）
+### 6.1 manual chat / im chat（grill Q5=A + 08-04 拍板）
 
 - read 类 → 现有 `read` class（silent tier，读永不弹卡——每次弹会烦死）；
 - write / update 类 → **新 tool class `connector_write`**（照 `artifact` 样板抄全套：
@@ -288,6 +315,11 @@ test_stale_delete_rows_migrated_to_write_destructive`（含幂等 + 迁移后可
   🔴 destructive 红警告**从 serve-api 实时拉**（`GET /{id}/tools` + 共享的 `mcpToolName` 映射），
   **不从模型 args 投影**（CalendarApprovalCard 先例：模型不能把警告哄没）。拉失败 → 降级成不显示
   警告行，批准面本身不阻塞在这次查询上。
+- 🔴 **`im_chat` 与 manual 同档**（阶段 2 PR-1，08-04 owner 拍板「connector 对 im_chat 全开放」，
+  推翻阶段 0 的保守恒拒）：读免批、write/update 仍是 `connector_write` 的**恒 HITL**，只是审批卡
+  改由**飞书按钮**投递（[`im-feishu-chat.md`](./im-feishu-chat.md) §2.5 闭环 + §3 矩阵）。
+  `mayAutoApprove` 仍要求 `manual_chat` ⇒ im 的写类**结构上**进不了任何免批白名单；服务端也不叠
+  天花板（`OWNER_PRESENT_CONTEXT_MODES`，§6.4）。工具面判定同源 `shouldLoadConnectorTools`。
 
 ### 6.2 headless custom agent（grill Q2）
 
@@ -347,13 +379,15 @@ gateway 注册期过滤是第一道，但那道在 TS 侧、由调用方自证�
 `service.resolve_caller_ceiling` 重新判一次：
 
 - `caller` 缺席 → `None`（无天花板；owner 直调 curl / 尚未升级的 gateway，PR2 行为逐字节保留）；
-- `manual_chat` → `None`（审批链在 gateway 侧）；
-- headless 两模式 → 按 `agent_id` 读该 agent 的 `grant_connectors`；无 agent_id / 无行 /
-  该 connector 不在 grants 里 → **拒**；
-- 🔴 **显式白名单**：不在 `HEADLESS_CONTEXT_MODES` 里的 mode（当前 `im_chat`，以及**将来任何
-  新增的**）一律拒——写成「排除 manual/im 后就当 headless」会让某天跟着 TS `AGENT_CONTEXT_MODES`
-  新增的第五种 mode 悄悄落进 headless 分支拿到 grant 语义，而新场地该不该有 connector 是一次
-  独立决策，不是继承来的；
+- **owner-present 两模式**（`OWNER_PRESENT_CONTEXT_MODES` = `manual_chat` / `im_chat`）→ `None`：
+  owner 本人在环，审批链在 gateway 侧（`im_chat` 自阶段 2 PR-1 / 08-04 拍板起与 manual 同档，
+  写类的恒 HITL 由 gateway 的 `mayAutoApprove` manual-only 保证，卡经飞书按钮投递）；
+- headless 两模式（`HEADLESS_CONTEXT_MODES`）→ 按 `agent_id` 读该 agent 的 `grant_connectors`；
+  无 agent_id / 无行 / 该 connector 不在 grants 里 → **拒**；
+- 🔴 **两张显式白名单**：两者互斥、并起来 == `CALLER_CONTEXT_MODES`（parity 闸锁着），落在两张
+  白名单之外的 mode（当前值域下不可达，**将来任何新增的**场地都会落这里）一律拒——写成「排除
+  owner-present 后就当 headless」会让某天跟着 TS `AGENT_CONTEXT_MODES` 新增的第五种 mode 悄悄
+  落进 headless 分支拿到 grant 语义，而新场地该不该有 connector 是一次独立决策，不是继承来的；
 - 形状不对 / 未知 context_mode → 400（调用方 bug 早暴露，不静默降级成「无约束」）。
 
 ### 6.5 闸序（单源 `src/connectors/service.py::invoke_connector_tool`）
@@ -448,7 +482,7 @@ TS 三份里两份是编译期类型（压根没有值可 import）。
 | `routers/connector.py::_require_enabled` | 端点正常 | 除 `oauth/callback` 外**全 409** `E_CONNECTOR_DISABLED` |
 | `GET /api/connector/oauth/callback` | — | **刻意不挂 flag 门**：off 时不存在活 rendezvous → 天然 404；端点自身零副作用 |
 | `/api/chat/config.connectorToolsEnabled` | `true` | `false`（字段恒发） |
-| `ai_gateway_lifecycle.ts` manifest 拉取 + `ensureConnectorManifest` | TTL 30s 缓存 + 单飞 | 不拉、不接线，零工作 |
+| `ai_gateway_lifecycle.ts` manifest 拉取 + `ensureConnectorManifest` | 启动预热（1s/3s 退避重试 2 次）+ TTL 缓存（成功 30s / 失败 3s）+ 单飞，run 前 await（§5.6） | 不预热、不拉、不接线，零工作 |
 | `createConnectorTools` / `shouldLoadConnectorTools` | 注册动态工具 | `buildGatewayTools` 字节级回退 |
 | `llm_tools.build_connector_llm_tools` | 造 schema + handler | 返回 `([], {})`，报告/分类逐字节回退 |
 | Settings `ConnectorsSection` | 渲染 | `return null`（整区不在 DOM，且**零** `/api/connector/*` 请求） |

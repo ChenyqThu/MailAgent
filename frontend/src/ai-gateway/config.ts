@@ -169,12 +169,15 @@ export interface AiGatewayConfig {
    *  normal manual/headless runs use chatRun's 10k internal sentinel. */
   internalMaxSteps?: number
   /** Stage 1 PR3 (harness-expansion epic) — BOUNDED warm-up of the connector tool-manifest cache
-   *  before a HEADLESS agent run with connector grants builds its tools (runHeadlessAgent awaits
-   *  it; manual runs never call it — their next turn simply picks up the background refresh). The
-   *  Electron lifecycle implements it as the shared TTL-cache refresh (fresh cache → resolves
-   *  immediately; otherwise one 3s-bounded fetch, CONTRACTED never to throw — a failure caches
-   *  null = no connector tools, the run continues). Omitted (tests / MAILAGENT_MCP_CONNECTORS
-   *  off) → zero work, byte-identical. */
+   *  before a run builds its tools. Awaited by BOTH admitted shapes: a HEADLESS agent run with
+   *  connector grants (runHeadlessAgent, agentRun.ts) and — since the 0804 dogfood fix — every
+   *  owner-present turn (manual_chat / im_chat) in prepareChatRun, whose first turn after a
+   *  restart used to read the cold cache and register zero connector tools. The Electron
+   *  lifecycle implements it as the shared TTL-cache refresh (fresh cache → resolves immediately;
+   *  otherwise one fetch, each request 3s-bounded, CONTRACTED never to throw — a failure caches
+   *  null = no connector tools for the SHORT failure TTL and the run continues). Omitted (tests /
+   *  MAILAGENT_MCP_CONNECTORS off) → zero work, byte-identical: the hook's PRESENCE is the flag
+   *  gate for every caller. */
   ensureConnectorManifest?: () => Promise<void>
   /** 07-16 approval-mode switcher — hot-read the owner-global chat approval mode
    *  ('manual'|'acceptEdits'|'bypass', persisted in agent_config.db owner_settings). Called by

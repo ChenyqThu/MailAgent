@@ -190,6 +190,100 @@ export async function fetchConnectorManifest(
   }
 }
 
+/** Fresh-window of a SUCCESSFUL manifest pull (the steady-state TTL — a Settings connector toggle
+ *  lands on the next turn ≥30s later). */
+export const CONNECTOR_MANIFEST_TTL_MS = 30_000
+/** 0804 dogfood — fresh-window of a FAILED pull (value null). The failure used to occupy the full
+ *  30s success TTL, which is exactly what turned the gateway's startup prewarm (fired ~1.2s before
+ *  serve-api is listening) into a 30-second "connectors unavailable" window: every read in it
+ *  short-circuited on a cached null. A failure is a transient statement about serve-api, not about
+ *  the manifest, so it expires an order of magnitude faster. */
+export const CONNECTOR_MANIFEST_FAILURE_TTL_MS = 3_000
+/** 0804 dogfood — backoff of the startup prewarm's retries (bounded: 2 extra attempts). serve-api
+ *  measured only ~1.2s behind the gateway, so 1s/3s covers the real race without turning a genuinely
+ *  down backend into a retry storm. */
+export const CONNECTOR_MANIFEST_PREWARM_RETRIES_MS: readonly number[] = [1_000, 3_000]
+
+/** The lifecycle's TTL-cached connector manifest (extracted from ai_gateway_lifecycle so the
+ *  cache/TTL/prewarm semantics are unit-testable — the lifecycle module itself cannot load in
+ *  vitest). */
+export interface ConnectorManifestCache {
+  /** Refresh unless the cached entry is still inside its TTL. Single-flight (concurrent callers
+   *  share one in-flight fetch) and CONTRACTED never to throw. `force` skips only the freshness
+   *  short-circuit (used by the prewarm retries, whose whole point is to re-try a cached null). */
+  refresh: (opts?: { force?: boolean }) => Promise<void>
+  /** The cached manifest (null = never fetched / last pull failed). Synchronous — buildTools is. */
+  peek: () => ConnectorToolManifestEntry[] | null
+  /** Fire-and-forget startup warm-up with bounded retries (see CONNECTOR_MANIFEST_PREWARM_RETRIES_MS):
+   *  the gateway starts before serve-api, so the first pull often fails. Never awaited. */
+  prewarm: () => void
+}
+
+/**
+ * 0804 dogfood (root cause of「connector 不可用」on the first turn after a restart) — the manifest
+ * cache with a SHORT negative TTL + a retrying startup prewarm.
+ *
+ * `fetchManifest` is contracted never to throw (fetchConnectorManifest returns null on any
+ * failure); the catch below is belt only. `log` receives structured records for the on-disk
+ * gateway log (omitted in tests → no logging).
+ */
+export function createConnectorManifestCache(
+  fetchManifest: () => Promise<ConnectorToolManifestEntry[] | null>,
+  log: (rec: Record<string, unknown>) => void = () => {}
+): ConnectorManifestCache {
+  let cache: { at: number; value: ConnectorToolManifestEntry[] | null; ttlMs: number } | null = null
+  let inFlight: Promise<void> | null = null
+
+  const settle = (value: ConnectorToolManifestEntry[] | null): void => {
+    cache = {
+      at: Date.now(),
+      value,
+      ttlMs: value === null ? CONNECTOR_MANIFEST_FAILURE_TTL_MS : CONNECTOR_MANIFEST_TTL_MS
+    }
+    // D1 observability — one line per real refresh: entry count on success, ok:false on the
+    // silent-degradation null (no connector tools this window).
+    log({ event: 'connector_manifest_refresh', ok: value !== null, entries: value?.length ?? null })
+  }
+
+  const refresh = (opts: { force?: boolean } = {}): Promise<void> => {
+    if (inFlight) return inFlight
+    if (!opts.force && cache && Date.now() - cache.at < cache.ttlMs) return Promise.resolve()
+    inFlight = fetchManifest()
+      .then(settle)
+      .catch(() => settle(null))
+      .finally(() => {
+        inFlight = null
+      })
+    return inFlight
+  }
+
+  const prewarm = (): void => {
+    const attempt = (i: number): void => {
+      void refresh({ force: i > 0 }).then(() => {
+        if (cache?.value != null) return
+        if (i >= CONNECTOR_MANIFEST_PREWARM_RETRIES_MS.length) {
+          log({ event: 'connector_manifest_prewarm_gave_up', attempts: i + 1 })
+          return
+        }
+        setTimeout(() => attempt(i + 1), CONNECTOR_MANIFEST_PREWARM_RETRIES_MS[i])
+      })
+    }
+    attempt(0)
+  }
+
+  return { refresh, peek: () => cache?.value ?? null, prewarm }
+}
+
+/** 0804 dogfood — why a run that WAS admitted by shouldLoadConnectorTools still registers no
+ *  connector tools. Returns null when the manifest is usable (caller registers), else the reason
+ *  the lifecycle logs (`connector_tools_skipped`) — the failure used to be entirely silent. */
+export function connectorManifestSkipReason(
+  manifest: readonly ConnectorToolManifestEntry[] | null | undefined
+): 'manifest_unavailable' | 'manifest_empty' | null {
+  if (manifest == null) return 'manifest_unavailable'
+  return manifest.length === 0 ? 'manifest_empty' : null
+}
+
 /** D1 — the ONE admission predicate deciding whether a manifest entry can register at all (the
  *  pure half — name representability / duplicates / runtime-class state are checked at the use
  *  sites). Shared by createConnectorTools AND projectConnectorCatalog so the prompt catalog can
