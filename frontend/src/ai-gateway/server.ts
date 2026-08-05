@@ -1054,6 +1054,56 @@ function handleApprovalPending(res: ServerResponse, cfg: AiGatewayConfig, url: s
 }
 
 /**
+ * 🔴 The dispatcher's ONE crash belt (08-04 im-chat hang).
+ *
+ * Every route below is an async handler launched fire-and-forget from the SYNC createServer
+ * callback. The old `void handleX(...)` swallowed the rejection, so any throw a handler does not
+ * catch itself left the response NEVER WRITTEN — no status, no body, socket held open — and the
+ * client hung until its OWN timeout. Not theoretical: prepareChatRun re-throws every non-credential
+ * resolver failure (providers.ts throws a bare `Error('No enabled LLM provider: X')` for an unknown
+ * provider ref), nothing caught it, and /api/ai/chat + /api/ai/im-chat answered nothing at all —
+ * the 飞书 bridge's CHAT_READ_TIMEOUT_SEC is 1800s, i.e. a 30-minute silent hang for a typo in a
+ * model ref, and the desktop panel waits on its own timeout too.
+ *
+ * This is a STRUCTURAL floor, not an error re-classifier: handlers that map their own failures
+ * (title → 502 E_UPSTREAM, agent-run → 500 E_AGENT_RUN_CRASH, decide/resolve/remember → 500
+ * E_INTERNAL) answer first and never reach here, and prepareChatRun's 503-vs-throw split is
+ * unchanged. Pre-headers → 500 E_INTERNAL through writeJson, so the entry's single-point CORS
+ * reflection still applies. Mid-stream → best-effort `{type:'error'}` SSE frame + end (every
+ * streaming route here is text/event-stream, and that is the AI SDK UI message stream's own error
+ * shape) so a streaming client sees a failure instead of a truncated stream; if even that write
+ * throws, destroy.
+ *
+ * The log is a SUMMARY (name + message), never the error object: SDK errors routinely carry the
+ * request body — i.e. the user's message text — so `console.error(err)` writes chat content into
+ * the log (PRD Technical Notes ①, LobeHub's describePlatformError lesson).
+ */
+function dispatch(route: string, res: ServerResponse, work: Promise<void>): void {
+  void work.catch((err: unknown) => {
+    const name = err instanceof Error ? err.name : typeof err
+    const message = err instanceof Error ? err.message : String(err)
+    console.error(`[ai-gateway] ${route} handler crashed`, { name, message })
+    if (res.destroyed || res.writableEnded) return
+    try {
+      if (!res.headersSent) {
+        writeJson(res, 500, { error: 'E_INTERNAL', hint: message })
+        return
+      }
+      if (String(res.getHeader('content-type') ?? '').includes('text/event-stream')) {
+        writeSse(res, { type: 'error', errorText: message })
+      }
+      res.end()
+    } catch {
+      try {
+        res.destroy()
+      } catch {
+        /* already gone */
+      }
+    }
+  })
+}
+
+/**
  * Create (but do not listen) the gateway HTTP server. Pure factory — all external
  * deps arrive via cfg, so the Electron main can embed it and the Node harness can
  * drive it directly.
@@ -1129,12 +1179,12 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     }
 
     if (method === 'POST' && path === '/api/ai/echo-stream') {
-      void handleEchoStream(req, res)
+      dispatch('/api/ai/echo-stream', res, handleEchoStream(req, res))
       return
     }
 
     if (method === 'POST' && path === '/api/ai/chat') {
-      void handleChat(req, res, cfg)
+      dispatch('/api/ai/chat', res, handleChat(req, res, cfg))
       return
     }
 
@@ -1142,40 +1192,40 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     // (cfg.imFeishuEnabled); flag-off the path falls through to 404 and the gateway stays
     // byte-identical (mirrors the AG-UI mirror's flag-gated registration).
     if (cfg.imFeishuEnabled === true && method === 'POST' && path === '/api/ai/im-chat') {
-      void handleImChat(req, res, cfg)
+      dispatch('/api/ai/im-chat', res, handleImChat(req, res, cfg))
       return
     }
 
     // Phase 04a — edit-tier approval side-channel (DraftReplyCard edits before approve).
     if (method === 'POST' && path === '/api/ai/approval/resolve') {
-      void handleApprovalResolve(req, res, cfg)
+      dispatch('/api/ai/approval/resolve', res, handleApprovalResolve(req, res, cfg))
       return
     }
 
     // Part B (island) + S6 W2 (in-record) — approval decision → server-side resume. Registered
     // unconditionally; cfg.approvalStash gates it (404 when server-side resume is off).
     if (method === 'POST' && path === '/api/ai/approval/decide') {
-      void handleApprovalDecide(req, res, cfg)
+      dispatch('/api/ai/approval/decide', res, handleApprovalDecide(req, res, cfg))
       return
     }
 
     // S2 W1 — exec whitelist "always allow" side-channel. Registered unconditionally;
     // cfg.rememberExecApproval gates it (501 when exec tools aren't wired).
     if (method === 'POST' && path === '/api/ai/policy/remember') {
-      void handlePolicyRemember(req, res, cfg)
+      dispatch('/api/ai/policy/remember', res, handlePolicyRemember(req, res, cfg))
       return
     }
 
     // S3 W1 — headless agentic search (⌘K palette). Registered unconditionally; no key → 503.
     if (method === 'POST' && path === '/api/ai/search-agent') {
-      void handleSearchAgent(req, res, cfg)
+      dispatch('/api/ai/search-agent', res, handleSearchAgent(req, res, cfg))
       return
     }
 
     // S4 W3 — headless custom-agent fresh-spawn (AgentRunWorker poke). Registered unconditionally;
     // cfg.fetchAgentRunSpec + cfg.createAgentSession gate it (404 when custom agents are off).
     if (method === 'POST' && path === '/api/ai/agent-run') {
-      void handleAgentRun(req, res, cfg)
+      dispatch('/api/ai/agent-run', res, handleAgentRun(req, res, cfg))
       return
     }
 
@@ -1194,21 +1244,21 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
       return
     }
     if (method === 'POST' && path === '/api/ai/run/stop') {
-      void handleRunStop(req, res, cfg)
+      dispatch('/api/ai/run/stop', res, handleRunStop(req, res, cfg))
       return
     }
 
     // Phase 10b — configurable LLM auto-title (renderer POSTs after the first turn when enabled).
     // Registered unconditionally; cfg.getTitleContext/saveSessionTitle gate it (501 when not wired).
     if (method === 'POST' && path === '/api/ai/title') {
-      void handleTitle(req, res, cfg)
+      dispatch('/api/ai/title', res, handleTitle(req, res, cfg))
       return
     }
 
     // Phase 05 — AG-UI interop mirror. Registered ONLY when MAILAGENT_AG_UI_MIRROR is on
     // (cfg.aguiMirrorEnabled); flag-off the path falls through to 404 (byte-identical to 04b).
     if (cfg.aguiMirrorEnabled && method === 'POST' && path === '/api/ai/agui/chat') {
-      void handleAguiChat(req, res, cfg)
+      dispatch('/api/ai/agui/chat', res, handleAguiChat(req, res, cfg))
       return
     }
 
