@@ -78,6 +78,23 @@ class TestStreamImChat:
         out = _client_for(handler).stream_im_chat([{"id": "u", "role": "user", "parts": []}], 41)
         assert out.ok and out.session_id == 41
 
+    def test_model_only_enters_body_when_set(self):
+        """``/model`` 偏好 → body.model；无偏好时 body **不带** model 键（gateway 用 cfg.model）。"""
+        seen: List[dict] = []
+
+        def handler(request: httpx.Request) -> httpx.Response:
+            seen.append(json.loads(request.content))
+            return httpx.Response(200, content=_sse(TEXT_FRAMES))
+
+        client = _client_for(handler)
+        msgs = [{"id": "u", "role": "user", "parts": []}]
+        client.stream_im_chat(msgs, 1)
+        client.stream_im_chat(msgs, 1, model="")
+        client.stream_im_chat(msgs, 1, model="dash:qwen-max")
+        assert "model" not in seen[0]
+        assert "model" not in seen[1]
+        assert seen[2]["model"] == "dash:qwen-max"
+
     def test_multiple_text_blocks_join_with_blank_line(self):
         frames = [
             {"type": "text-start", "id": "1"},

@@ -3,8 +3,9 @@
 ``ImAgentBridge`` 接进 PR-2 留好的两条接缝：
 
   - ``handle_owner_message(text, ctx)`` → ``ImEventRouter(owner_handler=…)``：
-    命令（``/new`` ``/stop``）→ 否则重建历史 → POST gateway ``/api/ai/im-chat``
-    （loopback，SSE drain）→ 投递最终回复；drain 后发现停在审批门 → 发通用审批卡。
+    命令（``/new`` ``/stop`` ``/model``）→ 否则重建历史 → POST gateway
+    ``/api/ai/im-chat``（loopback，SSE drain）→ 投递最终回复；drain 后发现停在审批门
+    → 发通用审批卡。
   - ``on_card_action(data)`` → ``FeishuConnection(card_action_handler=…)``（经
     ``lark_api.wrap_card_action_handler`` 包装）：3s 内回 toast → executor 线程
     POST ``/decide`` → 照 island ``repaused`` 非终态语义补下一张卡
@@ -41,6 +42,11 @@ from typing import Any, Callable, Dict, Optional, Protocol
 
 from loguru import logger
 
+from src.agent_config.enabled_models import (
+    EnabledModel,
+    EnabledModelCatalog,
+    load_enabled_model_catalog,
+)
 from src.im.cards import (
     CARD_VALUE_KIND,
     build_approval_card,
@@ -61,6 +67,11 @@ from src.im.state import ImFeishuState
 # ── 文本命令 ──────────────────────────────────────────────────────────────────
 CMD_NEW = "/new"
 CMD_STOP = "/stop"
+# 🔴 带参命令：分发按**首个空白**切开再拿第一段全等比 CMD_MODEL，**不是**
+# ``startswith(CMD_MODEL)`` —— 否则 ``/modelx 你好`` 会被吞成命令而不是提问。
+CMD_MODEL = "/model"
+#: ``/model reset`` 的子命令字面量（大小写不敏感匹配）。
+MODEL_ARG_RESET = "reset"
 
 # ── 固定文案（全部导出，测试逐字断言）────────────────────────────────────────
 NEW_SESSION_REPLY = "✅ 好，下一条消息将开始全新对话。"
@@ -68,6 +79,41 @@ STOP_NO_SESSION_REPLY = "当前没有进行中的会话，无需停止。"
 STOP_DONE_REPLY = "⏹️ 已停止正在运行的任务。"
 STOP_IDLE_REPLY = "当前没有正在运行的任务。"
 STOP_UNAVAILABLE_REPLY = "AI 引擎未启用后台运行控制，无法远程停止（任务若在跑会自行结束）。"
+
+# ── /model 文案 ───────────────────────────────────────────────────────────────
+# IM 侧没有 /help —— ``/model``（无参）的输出是用户**唯一**的命令发现入口，所以列表
+# 末尾恒附这段用法（包含 /new / /stop）。
+MODEL_LIST_TITLE = "🧠 当前模型：{current}"
+MODEL_LIST_SECTION_HEADER = "可用模型："
+MODEL_MARK_CURRENT = "当前"
+MODEL_MARK_DEFAULT = "默认"
+MODEL_USAGE_HINT = (
+    "用法：\n"
+    "· /model <模型> —— 切换本会话后续消息用的模型（/new 不会重置它）\n"
+    "· /model reset —— 恢复默认模型\n"
+    "· /new 开新对话 · /stop 停止正在跑的任务"
+)
+MODEL_EMPTY_REPLY = (
+    "取不到可用模型清单 —— 请在桌面 App 的设置里检查模型配置（至少启用一个模型）。"
+)
+MODEL_SWITCHED_REPLY = "✅ 已切换到 {model}。本飞书会话后续消息都用它（/model reset 恢复默认）。"
+MODEL_RESET_REPLY = "✅ 已恢复默认模型：{model}。"
+# 🔴 配置整个读不出来时（``_catalog()`` 兜底分支，default_model 为空）用这条：偏好确实清了
+# 是事实，但「默认模型叫什么」此刻没有任何依据 —— 报一个代码级兜底常量就是编。
+MODEL_RESET_REPLY_UNKNOWN = "✅ 已清掉模型偏好，本会话恢复用默认模型（当前取不到配置，报不出它的名字）。"
+MODEL_UNKNOWN_REPLY = "没有「{ref}」这个模型 —— 发 /model 看当前可用的清单。"
+# 已存偏好在本轮开跑前**再校验一次**（owner 可能事后禁用了那个模型）：本轮回退默认
+# 模型并如实说明，**不自动清键** —— 由用户自己 /model 重选或 /model reset。
+MODEL_PREF_STALE_NOTICE = (
+    "（提示：之前选的模型「{ref}」现在不在可用清单里，本轮已改用默认模型 {default}。"
+    "发 /model 重新选，或 /model reset 清掉这个偏好。）"
+)
+# 🔴 与上面那条严格分开，且**有意不报默认模型的名字**：走到这里说明清单整体读不出来，
+# 此时连「默认模型叫什么」都没有可靠依据，报一个名字就是编。
+MODEL_PREF_UNVERIFIABLE_NOTICE = (
+    "（提示：这轮取不到可用模型清单，无法确认之前选的模型「{ref}」还在不在，"
+    "已保守改用默认模型。）"
+)
 
 GATEWAY_DOWN_REPLY = (
     "连不上 AI 引擎 —— 桌面 App（MailAgent）可能没有在运行。请启动 App 后再试。"
@@ -141,6 +187,32 @@ FINAL_REPLY_DELAY_SEC = 0.3
 FINAL_REPLY_CLOCK_SKEW_MS = 5000
 
 
+def _resolve_model_input(
+    catalog: EnabledModelCatalog, raw: str
+) -> Optional[EnabledModel]:
+    """把用户在飞书里打的模型写法解析成在册模型；解析不出 → None。
+
+    两步（顺序有意如此）：
+      1. **原样**查 —— 覆盖 ``provider:model`` 与裸 ``model``，也覆盖 model id 自身
+         含 ``/`` 的情形（openrouter 风格 ``anthropic/claude-x`` 挂在 default provider 下）；
+      2. 仍不中，把**第一个** ``/`` 归一成 ``:`` 再查 —— 覆盖 ``provider/model`` 写法。
+         只归一第一个：``openrouter/anthropic/claude-x`` 要变成
+         ``openrouter:anthropic/claude-x``，后面的 ``/`` 是 model id 的一部分。
+
+    先原样后归一，是为了不让第 2 步把「default provider 下的斜杠 model id」误判成
+    「provider/model」而找不到。
+    """
+    ref = (raw or "").strip()
+    if not ref:
+        return None
+    hit = catalog.find(ref)
+    if hit is not None:
+        return hit
+    if "/" in ref:
+        return catalog.find(ref.replace("/", ":", 1))
+    return None
+
+
 class CardSender(Protocol):
     """审批卡出站面（``worker._LazySender`` 实现；文本走 ``FeishuDelivery``）。"""
 
@@ -164,6 +236,7 @@ class ImAgentBridge:
         gateway: Optional[GatewayClient] = None,
         chat_db: Any = None,
         sleep: Callable[[float], None] = time.sleep,
+        model_catalog: Optional[Callable[[], EnabledModelCatalog]] = None,
     ) -> None:
         """
         Args:
@@ -174,6 +247,9 @@ class ImAgentBridge:
             gateway: 测试注入；缺省 = 真 loopback 客户端。
             chat_db: 测试注入；缺省 = 懒构造 ``src.chat.db.ChatDb``。
             sleep: 测试注入（重试等待）。
+            model_catalog: 测试注入；缺省 = ``load_enabled_model_catalog``
+                （与 ``/chat/config.enabledModels`` 同一份聚合，见
+                ``src/agent_config/enabled_models.py``）。
         """
         self._state = state
         self._delivery = delivery
@@ -182,6 +258,7 @@ class ImAgentBridge:
         self._gateway = gateway or GatewayClient()
         self._chat_db = chat_db
         self._sleep = sleep
+        self._model_catalog = model_catalog
         # 卡片回调有自己的 event_id 空间，与消息事件分开去重。
         self._card_deduper = EventDeduper()
 
@@ -193,6 +270,13 @@ class ImAgentBridge:
             return
         if stripped == CMD_STOP:
             self._cmd_stop(ctx)
+            return
+        # 带参命令：按**首个空白**切（``split(None, 1)`` 认全角空格 U+3000 —— 中文输入法
+        # 下打出的 ``/model　claude-x`` 用 ``startswith("/model ")`` 判不出来，整条会掉进
+        # agent run 当提问）。判据仍是**第一段全等**，所以 ``/modelx 是什么`` 照旧是提问。
+        parts = stripped.split(None, 1)
+        if parts and parts[0] == CMD_MODEL:
+            self._cmd_model(parts[1].strip() if len(parts) > 1 else "", ctx)
             return
         self._run_turn(text, ctx)
 
@@ -218,6 +302,98 @@ class ImAgentBridge:
             ctx.open_id, STOP_DONE_REPLY if out.stopped else STOP_IDLE_REPLY
         )
 
+    # ── /model（列表 / 切换 / reset）───────────────────────────────────────
+    def _cmd_model(self, arg: str, ctx: ImMessageContext) -> None:
+        catalog = self._catalog()
+        if not arg:
+            ctx.delivery.send_text(
+                ctx.open_id, self._render_model_list(catalog, ctx.chat_id)
+            )
+            return
+        if arg.lower() == MODEL_ARG_RESET:
+            self._state.clear_model_pref(ctx.chat_id)
+            logger.info(f"[im-feishu] /model reset chat_id={ctx.chat_id}")
+            ctx.delivery.send_text(
+                ctx.open_id,
+                MODEL_RESET_REPLY.format(model=catalog.default_model)
+                if catalog.default_model
+                else MODEL_RESET_REPLY_UNKNOWN,
+            )
+            return
+        match = _resolve_model_input(catalog, arg)
+        if match is None:
+            # 🔴 校验不过 = **不落库、不透传**。没在册的 ref 传到 gateway 会让
+            # createProviderRegistry 抛裸 Error 且无人 catch → 响应永不写出 → 读超时 30min。
+            logger.info(
+                f"[im-feishu] /model 拒绝不在册的 ref={arg!r} chat_id={ctx.chat_id} "
+                f"(source={catalog.source} n={len(catalog.refs)})"
+            )
+            ctx.delivery.send_text(ctx.open_id, MODEL_UNKNOWN_REPLY.format(ref=arg))
+            return
+        self._state.set_model_pref(ctx.chat_id, match.ref)
+        logger.info(f"[im-feishu] /model 切换到 {match.ref} chat_id={ctx.chat_id}")
+        ctx.delivery.send_text(
+            ctx.open_id, MODEL_SWITCHED_REPLY.format(model=match.label)
+        )
+
+    def _render_model_list(self, catalog: EnabledModelCatalog, chat_id: str) -> str:
+        """``/model`` 无参输出：当前模型 + 按 provider 分组的清单 + 用法（唯一发现入口）。"""
+        if not catalog.groups:
+            return f"{MODEL_EMPTY_REPLY}\n\n{MODEL_USAGE_HINT}"
+        pref = self._state.get_model_pref(chat_id)
+        # 🔴 默认模型也走 ``find`` 归一：``LLM_MODEL`` 写成 ``default:x`` 时清单里的 ref 是裸
+        # ``x``，裸字符串比会让「当前」标记整个消失（标题显示一种写法、列表里一个都不标）。
+        default_hit = catalog.find(catalog.default_model)
+        current = (catalog.find(pref) if pref else None) or default_hit
+        current_ref = current.ref if current is not None else catalog.default_model
+        lines = [
+            MODEL_LIST_TITLE.format(
+                current=current.label if current is not None else catalog.default_model
+            ),
+            "",
+            MODEL_LIST_SECTION_HEADER,
+        ]
+        for group in catalog.groups:
+            if group.provider_name:
+                lines.append(f"【{group.provider_name}】")
+            for model in group.models:
+                marks = []
+                if model.ref == current_ref:
+                    marks.append(MODEL_MARK_CURRENT)
+                if default_hit is not None and model.ref == default_hit.ref:
+                    marks.append(MODEL_MARK_DEFAULT)
+                suffix = f" —— {' · '.join(marks)}" if marks else ""
+                lines.append(f"· {model.label}{suffix}")
+        lines.append("")
+        lines.append(MODEL_USAGE_HINT)
+        return "\n".join(lines)
+
+    def _resolve_turn_model(self, chat_id: str) -> tuple[str, str]:
+        """本轮要用的模型 ref + 需要附给用户的提示（``("", "")`` = 用默认、无提示）。
+
+        🔴 存过的偏好**每轮都再校验一次** —— owner 可能事后在设置里禁用了那个模型，
+        而透传一个已下架的 ref 会把整轮卡成 30 分钟读超时。校验不过就回退默认 + 如实
+        告知（不自动清键：清掉等于替用户做决定，且下次他就再也看不到这条提示了）。
+        """
+        pref = self._state.get_model_pref(chat_id)
+        if not pref:
+            return "", ""
+        catalog = self._catalog()
+        if not catalog.refs:
+            # 清单整体取不到（store 异常 / 表空 + env 也空）→ 无法判定在不在册。
+            # 保守回退默认，但**不能**说「这个模型没了」（那是没有根据的断言）。
+            return "", MODEL_PREF_UNVERIFIABLE_NOTICE.format(ref=pref)
+        match = catalog.find(pref)
+        if match is None:
+            logger.warning(
+                f"[im-feishu] 已存模型偏好 {pref!r} 不在当前可用清单里 —— "
+                f"本轮回退默认模型 chat_id={chat_id}"
+            )
+            return "", MODEL_PREF_STALE_NOTICE.format(
+                ref=pref, default=catalog.default_model
+            )
+        return match.ref, ""
+
     def _run_turn(self, text: str, ctx: ImMessageContext) -> None:
         session_id = self._state.get_active_session(ctx.chat_id)
         rows = []
@@ -231,13 +407,15 @@ class ImAgentBridge:
                 )
                 rows = []
         messages = build_history(rows, text, f"im-{ctx.event_id}")
+        model_ref, model_notice = self._resolve_turn_model(ctx.chat_id)
 
         t0 = time.monotonic()
         logger.info(
             f"[im-feishu] agent run 开始 event_id={ctx.event_id} "
-            f"session_id={session_id} history_msgs={len(messages) - 1}"
+            f"session_id={session_id} history_msgs={len(messages) - 1} "
+            f"model={model_ref or '(default)'}"
         )
-        out = self._gateway.stream_im_chat(messages, session_id)
+        out = self._gateway.stream_im_chat(messages, session_id, model=model_ref or None)
         elapsed = time.monotonic() - t0
 
         # 首轮：gateway 预建的 origin='im' 会话经响应头回传 → 收编落盘（跨重启存活）。
@@ -267,6 +445,11 @@ class ImAgentBridge:
         if out.stream_error:
             suffix = f"⚠️ 生成中途出错：{out.stream_error}"
             reply_text = f"{reply_text}\n\n{suffix}" if reply_text.strip() else suffix
+        if model_notice:
+            # 偏好失效的提示挂在**本轮回复末尾**（两条路径都要：暂停轮也是这轮的回复）。
+            reply_text = (
+                f"{reply_text}\n\n{model_notice}" if reply_text.strip() else model_notice
+            )
 
         if out.saw_approval_request:
             # 暂停回合：先投模型已产出的文本（"我准备发邮件…"），再补审批卡。
@@ -632,6 +815,23 @@ class ImAgentBridge:
         return False
 
     # ── 内部 ──────────────────────────────────────────────────────────────
+    def _catalog(self) -> EnabledModelCatalog:
+        """当前可选模型全集（每次现取：owner 在设置里改完模型不必重启 IM）。
+
+        聚合本体永不抛（内部逐层 best-effort 回退），这里只兜「配置整个读不出来」的
+        极端情形 —— 返回空 catalog，由调用侧翻成人话，绝不把飞书这条链带崩。
+        """
+        loader = self._model_catalog or load_enabled_model_catalog
+        try:
+            return loader()
+        except Exception as e:  # noqa: BLE001 — 取不到清单只该降级，不该断链
+            logger.warning(f"[im-feishu] 取可用模型清单失败: {describe_error(e)}")
+            # 空清单 **且 default_model 留空**：``load_enabled_model_catalog`` 自己的各条
+            # 回退都保证 default_model 非空，落到这里 = 连配置都读不出来。此时报任何模型名
+            # （哪怕代码级兜底常量）都是没依据的断言 —— 空串就是「不知道」的信号，
+            # 调用侧据此挑不带模型名的文案。
+            return EnabledModelCatalog()
+
     def _db(self) -> Any:
         if self._chat_db is None:
             from src.chat.db import ChatDb

@@ -191,3 +191,38 @@ class TestActiveSessionMapping:
         assert active_session_key("") == "im.feishu.active_session._default"
         assert active_session_key("  ") == "im.feishu.active_session._default"
         assert active_session_key("oc_1") == "im.feishu.active_session.oc_1"
+
+
+class TestModelPreference:
+    """08-04 ``/model``：每个私聊的模型偏好（sync_state KV，跨重启存活）。"""
+
+    def test_roundtrip_per_chat(self):
+        state = ImFeishuState(FakeStateStore())
+        assert state.get_model_pref("oc_1") == ""
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        state.set_model_pref("oc_2", "claude-opus-4-8")
+        assert state.get_model_pref("oc_1") == "dash:qwen-max"
+        assert state.get_model_pref("oc_2") == "claude-opus-4-8"
+        state.clear_model_pref("oc_1")
+        assert state.get_model_pref("oc_1") == ""
+        assert state.get_model_pref("oc_2") == "claude-opus-4-8"
+
+    def test_survives_restart_via_store(self):
+        store = FakeStateStore()
+        ImFeishuState(store).set_model_pref("oc_1", "dash:qwen-max")
+        assert ImFeishuState(store).get_model_pref("oc_1") == "dash:qwen-max"
+
+    def test_key_shape_and_default_bucket(self):
+        from src.im.state import model_key
+
+        assert model_key("oc_1") == "im.feishu.model.oc_1"
+        assert model_key("") == "im.feishu.model._default"
+        assert model_key("  ") == "im.feishu.model._default"
+
+    def test_is_independent_from_active_session(self):
+        """🔴 ``/new`` 清会话不该连坐清模型 —— 两个键互不影响。"""
+        state = ImFeishuState(FakeStateStore())
+        state.set_active_session("oc_1", 7)
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        state.clear_active_session("oc_1")
+        assert state.get_model_pref("oc_1") == "dash:qwen-max"

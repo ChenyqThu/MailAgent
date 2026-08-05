@@ -24,6 +24,10 @@ from fastapi import APIRouter, Depends, Query, Request
 from fastapi.concurrency import run_in_threadpool
 from dotenv import dotenv_values
 
+from src.agent_config.enabled_models import (
+    FALLBACK_DEFAULT_MODEL,
+    build_enabled_model_catalog,
+)
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_chat_db, get_env_file_path, get_settings
@@ -273,7 +277,7 @@ async def chat_config(request: Request):
     # （codex 3c-1 review MEDIUM/nit 已记此微差）。
     max_iter = max(1, int(cfg.agent_max_iter))
     max_cost = cfg.agent_max_cost_usd if cfg.agent_max_cost_usd > 0 else 0.5
-    default_model = cfg.llm_model or "claude-sonnet-4-6"
+    default_model = cfg.llm_model or FALLBACK_DEFAULT_MODEL
     # task 07-21 —— Notion context page 不再注入 chat system prompt（见文件头注释：
     # 与 Standing Context 双注入冗余，已移除）。ContextLoader 保留给 llm_agent 预处理用。
     # enabledModels + KOS 开关: hot-read from .env (dotenv_values, not pydantic Config
@@ -300,27 +304,14 @@ async def chat_config(request: Request):
     # flag off（显式 false 应急回退——默认 on 自 2026-07-13 cutover；pydantic 冻结单例读，
     # 翻 flag 需重启 serve-api）→ 上面的 .env 热读路径字节级不变；聚合失败 → 回退 env 值
     # （never fail /config）。getattr 防御老 stub cfg（fallback 取 False = fail-safe 走 legacy）。
-    if getattr(cfg, "llm_provider_registry_enabled", False):
-        try:
-            from src.agent_config.llm_providers import DEFAULT_PROVIDER_ID
-            from src.api.routers.llm_providers import ensure_seeded_store
-
-            _pstore = ensure_seeded_store()
-            _default_models: list = []
-            _other_models: list = []
-            for _prov in _pstore.list_providers():
-                if not _prov.enabled:
-                    continue
-                for _m in _pstore.list_models(_prov.id):
-                    if not _m.enabled:
-                        continue
-                    if _prov.id == DEFAULT_PROVIDER_ID:
-                        _default_models.append(_m.model_id)
-                    else:
-                        _other_models.append(f"{_prov.id}:{_m.model_id}")
-            enabled_models = _default_models + _other_models
-        except Exception:  # noqa: BLE001 — best-effort; fall back to the env-read list
-            pass
+    # 🔴 聚合本体已抽成 src/agent_config/enabled_models.py（08-04）：飞书 ``/model`` 指令要用
+    # **同一份**清单校验用户输入（透传不在册的 ref 会让 gateway 抛裸 Error、响应永不写出），
+    # 照抄一份必漂移。本处行为逐字节不变（顺序、flag off 回退、聚合失败回退全同）。
+    enabled_models = build_enabled_model_catalog(
+        registry_enabled=bool(getattr(cfg, "llm_provider_registry_enabled", False)),
+        env_models=enabled_models,
+        default_model=default_model,
+    ).refs
     kos_consumer = _hot_bool(env_vals, "MAILAGENT_KOS_CONSUMER_ENABLED", cfg.kos_consumer_enabled)
     kos_l1_hot = _hot_bool(env_vals, "MAILAGENT_KOS_L1_HOT_BLOCK_ENABLED", cfg.kos_l1_hot_block_enabled)
     kos_time_decay = _hot_bool(env_vals, "MAILAGENT_KOS_TIME_DECAY_ENABLED", cfg.kos_time_decay_enabled)

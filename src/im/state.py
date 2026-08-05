@@ -41,11 +41,21 @@ STATE_PAIR_CODE_EXPIRES_AT = "im.feishu.pair_code_expires_at"
 # ai_chat_sessions.id）。动态键 = 前缀 + chat_id（经 ``active_session_key``），
 # 跨重启存活 → 多轮对话连续；``/new`` 清掉它 = 下一条消息开新会话。
 STATE_ACTIVE_SESSION_PREFIX = "im.feishu.active_session."
+# 08-04 ``/model``：每个飞书私聊（chat_id）选定的模型 ref（``providerId:modelId`` 或
+# default provider 的裸 model id）。同为动态键 = 前缀 + chat_id（经 ``model_key``）。
+# 🔴 与 active_session **有意分开**：``/new`` 只清会话、**不动**模型偏好（换话题不等于
+# 换模型），所以两者不能共用一个键、也不能在 ``clear_active_session`` 里连坐。
+STATE_MODEL_PREFIX = "im.feishu.model."
 
 
 def active_session_key(chat_id: str) -> str:
     """``chat_id`` → sync_state 键。空 chat_id（解析兜底）归并到 ``_default``。"""
     return STATE_ACTIVE_SESSION_PREFIX + ((chat_id or "").strip() or "_default")
+
+
+def model_key(chat_id: str) -> str:
+    """``chat_id`` → 模型偏好键（空 chat_id 归并规则同 ``active_session_key``）。"""
+    return STATE_MODEL_PREFIX + ((chat_id or "").strip() or "_default")
 
 # ── connection_status 值域 ────────────────────────────────────────────────────
 STATUS_DISABLED = "disabled"          # flag off / 凭证缺失 —— worker 根本没起
@@ -156,6 +166,19 @@ class ImFeishuState:
 
     def clear_active_session(self, chat_id: str) -> None:
         self.set(active_session_key(chat_id), "")
+
+    # ── 模型偏好（08-04 ``/model``：跨重启存活、``/new`` 不重置）──────────────
+    def get_model_pref(self, chat_id: str) -> str:
+        """该私聊选定的模型 ref；未选 → ``""``（= 用默认模型）。"""
+        return (self.get(model_key(chat_id)) or "").strip()
+
+    def set_model_pref(self, chat_id: str, model_ref: str) -> None:
+        """🔴 只写**已对在册清单校验过**的 canonical ref —— 没在册的 ref 传到 gateway
+        会让 ``createProviderRegistry`` 抛裸 Error、响应永不写出（调用侧读超时 30min）。"""
+        self.set(model_key(chat_id), (model_ref or "").strip())
+
+    def clear_model_pref(self, chat_id: str) -> None:
+        self.set(model_key(chat_id), "")
 
     # ── owner 绑定 ────────────────────────────────────────────────────────
     def get_bound_open_id(self) -> str:

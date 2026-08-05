@@ -86,6 +86,34 @@
 - **飞书私聊 ↔ 当前活跃 session** 的映射落 `sync_state`（`im.feishu.active_session.<chat_id>`），
   跨重启存活 → 多轮连续。`/new` 清掉它 = 下一条消息开新会话。
 
+### 2.4b 文本命令（分发单源 = `src/im/bridge.py::handle_owner_message`）
+
+| 命令 | 语义 |
+|---|---|
+| `/new` | 清活跃 session ⇒ 下一条消息开新会话。**不动**模型偏好 |
+| `/stop` | `POST /api/ai/run/stop`，中断在跑的 run |
+| `/model` | 列出可用模型（按 provider 分组，标注「当前」「默认」）+ 用法提示。🔴 IM 侧没有 `/help`，这段输出就是用户**唯一**的命令发现入口 |
+| `/model <ref>` | 切换本飞书会话后续消息用的模型。三种写法都认：`provider:model` / `provider/model`（只归一**第一个** `/`，model id 自身的 `/` 保留）/ 裸 `model`（= default provider）。落库存 canonical 形态（default provider → 裸 id） |
+| `/model reset` | 清偏好，回默认模型（默认值 = `LLM_MODEL`，与 gateway `cfg.model` 同源） |
+
+- `/new` `/stop` 走**全等**比较；`/model` 走 `split(None, 1)` 后**第一段全等** ——
+  不能用裸 `startswith`，否则 `/modelx 是什么` 会被吞成命令而不是提问；也不能用
+  `startswith("/model ")`，那样中文输入法打出的全角空格 `/model　claude-x`（U+3000）
+  会整条掉进 agent run 当提问（两条都有测试钉）。
+- 模型偏好落 `sync_state` 的 `im.feishu.model.<chat_id>`（与 active_session 同形态的动态键、
+  同样**不 bump `DB_VERSION`**），跨重启存活；**与会话有意分开** —— 换话题 ≠ 换模型。
+- 🔴 **绝不把未校验的 model ref 传给 gateway**：provider 不存在时 `createProviderRegistry`
+  抛裸 Error，而 `server.ts` 是 `void handleImChat(...)`（无 `.catch`）⇒ HTTP 响应**永不写出**
+  ⇒ Python 侧干等到 `CHAT_READ_TIMEOUT_SEC`（30 分钟）。所以：切换时先校验、不过就报错**不落库**；
+  每轮开跑前把已存偏好**再校验一次**（owner 可能事后禁用了那个模型），失效则本轮回退默认 +
+  在回复末尾如实说明，**不自动清键**（清掉等于替用户做决定，且他下次就再也看不到这条提示）。
+- 「在册模型全集」的判据单源 = `src/agent_config/enabled_models.py`（`build_enabled_model_catalog`
+  / `EnabledModelCatalog.find`），与 `/chat/config.enabledModels` **同一份聚合**（该文件是从
+  `chat.py` 抽出来的，chat 侧改为调用它，行为逐字节不变）。成员测试按 `parse_provider_ref`
+  归一到 `(provider_id, model_id)` ⇒ `default:claude-x` 与裸 `claude-x` 等价。
+  🔴 该模块**不许 import FastAPI** —— 飞书 worker 跑在 `src/service.py` 的同步进程里，而
+  `src/api/app.py` 顶层挂载全部 router，从那里 import router 模块会把整个 API 面拖进来。
+
 ### 2.5 审批闭环（Q13=B，通用按钮卡）
 
 ```

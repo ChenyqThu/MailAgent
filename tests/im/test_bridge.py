@@ -8,6 +8,11 @@ from __future__ import annotations
 import time
 from typing import Any, Dict, List, Optional
 
+from src.agent_config.enabled_models import (
+    EnabledModel,
+    EnabledModelCatalog,
+    EnabledModelGroup,
+)
 from src.im import bridge as bridge_mod
 from src.im.bridge import (
     APPROVAL_DETAILS_MISSING_REPLY,
@@ -18,6 +23,16 @@ from src.im.bridge import (
     FLAG_OFF_REPLY,
     GATEWAY_DOWN_REPLY,
     ImAgentBridge,
+    MODEL_EMPTY_REPLY,
+    MODEL_MARK_CURRENT,
+    MODEL_MARK_DEFAULT,
+    MODEL_PREF_STALE_NOTICE,
+    MODEL_PREF_UNVERIFIABLE_NOTICE,
+    MODEL_RESET_REPLY,
+    MODEL_RESET_REPLY_UNKNOWN,
+    MODEL_SWITCHED_REPLY,
+    MODEL_UNKNOWN_REPLY,
+    MODEL_USAGE_HINT,
     NEW_SESSION_REPLY,
     NO_LLM_KEY_REPLY,
     REPAUSED_NEXT_MISSING_REPLY,
@@ -64,8 +79,10 @@ class FakeGateway:
         self.stop_results: List[StopOutcome] = []
         self.stop_calls: List[int] = []
 
-    def stream_im_chat(self, messages, session_id):
-        self.chat_calls.append({"messages": messages, "session_id": session_id})
+    def stream_im_chat(self, messages, session_id, model=None):
+        self.chat_calls.append(
+            {"messages": messages, "session_id": session_id, "model": model}
+        )
         return self.chat_outcomes.pop(0)
 
     def approval_pending(self, session_id):
@@ -121,7 +138,37 @@ class CountingStore(FakeStateStore):
         return super().get_state(key)
 
 
-def make_bridge(*, store=None, submit=None):
+def _catalog(*groups, default_model="claude-sonnet-4-6", source="registry"):
+    return EnabledModelCatalog(
+        groups=tuple(groups), default_model=default_model, source=source
+    )
+
+
+def _group(provider_id, provider_name, *models):
+    return EnabledModelGroup(
+        provider_id=provider_id, provider_name=provider_name, models=tuple(models)
+    )
+
+
+def _model(ref, provider_id, model_id, display_name=""):
+    return EnabledModel(
+        ref=ref, provider_id=provider_id, model_id=model_id, display_name=display_name
+    )
+
+
+#: 默认替身清单：default provider 两个模型 + 一个第三方 provider。
+DEFAULT_CATALOG = _catalog(
+    _group(
+        "default",
+        "CRS 中转",
+        _model("claude-sonnet-4-6", "default", "claude-sonnet-4-6"),
+        _model("claude-opus-4-8", "default", "claude-opus-4-8", "Opus 4.8"),
+    ),
+    _group("dash", "阿里百炼", _model("dash:qwen-max", "dash", "qwen-max")),
+)
+
+
+def make_bridge(*, store=None, submit=None, catalog=DEFAULT_CATALOG):
     store = store if store is not None else FakeStateStore(
         {STATE_BOUND_OPEN_ID: "ou_owner"}
     )
@@ -138,6 +185,7 @@ def make_bridge(*, store=None, submit=None):
         gateway=gw,
         chat_db=db,
         sleep=lambda _s: None,
+        model_catalog=lambda: catalog,
     )
     return bridge, state, sender, gw, db, delivery
 
@@ -240,6 +288,224 @@ class TestStopCommand:
         gw.stop_results = [StopOutcome(transport_error="E_CONNECT")]
         bridge.handle_owner_message("/stop", _ctx(delivery))
         assert sender.sent_texts == [GATEWAY_DOWN_REPLY]
+
+
+# ── /model（列表 / 切换 / reset）──────────────────────────────────────────────
+MODEL_KEY = "im.feishu.model.oc_1"
+
+
+class TestModelCommand:
+    def test_list_marks_current_and_default_and_ends_with_usage(self):
+        """无参 ``/model``：当前/默认标注 + provider 分组 + 用法（IM 侧唯一发现入口）。"""
+        bridge, _state, sender, _gw, _db, delivery = make_bridge()
+        bridge.handle_owner_message("/model", _ctx(delivery))
+        assert len(sender.sent_texts) == 1
+        body = sender.sent_texts[0]
+        assert body.startswith("🧠 当前模型：claude-sonnet-4-6")
+        assert f"· claude-sonnet-4-6 —— {MODEL_MARK_CURRENT} · {MODEL_MARK_DEFAULT}" in body
+        assert "【CRS 中转】" in body and "【阿里百炼】" in body
+        # 有别名的模型展示「别名（ref）」；没别名的只展示 ref
+        assert "· Opus 4.8（claude-opus-4-8）" in body
+        assert "· dash:qwen-max" in body
+        assert body.endswith(MODEL_USAGE_HINT)
+
+    def test_list_reflects_stored_preference_as_current(self):
+        bridge, state, sender, _gw, _db, delivery = make_bridge()
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        bridge.handle_owner_message("/model", _ctx(delivery))
+        body = sender.sent_texts[0]
+        assert body.startswith("🧠 当前模型：dash:qwen-max")
+        assert f"· dash:qwen-max —— {MODEL_MARK_CURRENT}" in body
+        # 默认模型仍标「默认」（但不再是「当前」）
+        assert f"· claude-sonnet-4-6 —— {MODEL_MARK_DEFAULT}" in body
+
+    def test_list_when_catalog_empty_says_so_and_still_shows_usage(self):
+        bridge, _state, sender, _gw, _db, delivery = make_bridge(
+            catalog=EnabledModelCatalog(default_model="claude-sonnet-4-6")
+        )
+        bridge.handle_owner_message("/model", _ctx(delivery))
+        assert sender.sent_texts == [f"{MODEL_EMPTY_REPLY}\n\n{MODEL_USAGE_HINT}"]
+
+    def test_switch_accepts_three_writings_and_stores_canonical(self):
+        """``provider:model`` / ``provider/model`` / 裸 ``model`` 三种写法都认，落库 canonical。"""
+        for written, canonical in (
+            ("dash:qwen-max", "dash:qwen-max"),
+            ("dash/qwen-max", "dash:qwen-max"),
+            ("claude-opus-4-8", "claude-opus-4-8"),
+            # default provider 的显式写法归一成裸 id（与 enabledModels 输出一致）
+            ("default:claude-opus-4-8", "claude-opus-4-8"),
+        ):
+            store = FakeStateStore({STATE_BOUND_OPEN_ID: "ou_owner"})
+            bridge, state, sender, _gw, _db, delivery = make_bridge(store=store)
+            bridge.handle_owner_message(f"/model {written}", _ctx(delivery))
+            assert state.get_model_pref("oc_1") == canonical, written
+            assert store.data[MODEL_KEY] == canonical, written
+            assert len(sender.sent_texts) == 1
+
+    def test_switch_reply_uses_display_label(self):
+        bridge, _state, sender, _gw, _db, delivery = make_bridge()
+        bridge.handle_owner_message("/model claude-opus-4-8", _ctx(delivery))
+        assert sender.sent_texts == [
+            MODEL_SWITCHED_REPLY.format(model="Opus 4.8（claude-opus-4-8）")
+        ]
+
+    def test_unknown_ref_is_rejected_and_not_persisted(self):
+        """🔴 校验不过 = 不落库（透传到 gateway 会让整轮卡成 30 分钟读超时）。"""
+        store = FakeStateStore({STATE_BOUND_OPEN_ID: "ou_owner"})
+        bridge, state, sender, gw, _db, delivery = make_bridge(store=store)
+        bridge.handle_owner_message("/model nope:whatever", _ctx(delivery))
+        assert sender.sent_texts == [MODEL_UNKNOWN_REPLY.format(ref="nope:whatever")]
+        assert state.get_model_pref("oc_1") == ""
+        assert MODEL_KEY not in store.data
+        assert gw.chat_calls == []  # 不当成提问跑一轮
+
+    def test_reset_clears_preference(self):
+        bridge, state, sender, _gw, _db, delivery = make_bridge()
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        bridge.handle_owner_message("/model  RESET ", _ctx(delivery))
+        assert state.get_model_pref("oc_1") == ""
+        assert sender.sent_texts == [
+            MODEL_RESET_REPLY.format(model="claude-sonnet-4-6")
+        ]
+
+    def test_new_command_does_not_reset_model_preference(self):
+        """``/new`` 只换会话，不动模型偏好（换话题 ≠ 换模型）。"""
+        bridge, state, sender, _gw, _db, delivery = make_bridge()
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        bridge.handle_owner_message("/new", _ctx(delivery))
+        assert state.get_model_pref("oc_1") == "dash:qwen-max"
+
+    def test_modelx_is_not_a_command(self):
+        """🔴 前缀匹配必须带空格：``/modelx …`` 是提问，不是命令。"""
+        bridge, _state, sender, gw, _db, delivery = make_bridge()
+        gw.chat_outcomes = [_ok_outcome(text="answer")]
+        bridge.handle_owner_message("/modelx 是什么", _ctx(delivery))
+        assert len(gw.chat_calls) == 1
+        assert sender.sent_texts == ["answer"]
+
+    def test_full_width_space_still_parses_as_the_command(self):
+        """🔴 中文输入法的全角空格（U+3000）：``/model　x`` 也得是命令，不是提问。"""
+        store = FakeStateStore({STATE_BOUND_OPEN_ID: "ou_owner"})
+        bridge, state, _sender, gw, _db, delivery = make_bridge(store=store)
+        bridge.handle_owner_message("/model　dash:qwen-max", _ctx(delivery))
+        assert state.get_model_pref("oc_1") == "dash:qwen-max"
+        assert gw.chat_calls == []  # 没有被当成提问跑一轮
+
+    def test_reset_without_a_readable_catalog_does_not_name_a_model(self):
+        """🔴 配置整个读不出来时，「默认模型叫什么」没有依据 —— 不许报名字。"""
+
+        def boom():
+            raise RuntimeError("agent_config.db locked")
+
+        bridge, state, sender, _gw, _db, delivery = make_bridge()
+        bridge._model_catalog = boom
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        bridge.handle_owner_message("/model reset", _ctx(delivery))
+        assert state.get_model_pref("oc_1") == ""  # 清偏好是事实，照做
+        assert sender.sent_texts == [MODEL_RESET_REPLY_UNKNOWN]
+        assert "claude" not in MODEL_RESET_REPLY_UNKNOWN
+
+    def test_default_model_written_with_explicit_prefix_still_marks_current(self):
+        """``LLM_MODEL=default:x`` 时清单里的 ref 是裸 ``x`` —— 标记必须归一后再比。"""
+        bridge, _state, sender, _gw, _db, delivery = make_bridge(
+            catalog=_catalog(
+                _group(
+                    "default",
+                    "CRS 中转",
+                    _model("claude-opus-4-8", "default", "claude-opus-4-8"),
+                ),
+                default_model="default:claude-opus-4-8",
+            )
+        )
+        bridge.handle_owner_message("/model", _ctx(delivery))
+        body = sender.sent_texts[0]
+        assert body.startswith("🧠 当前模型：claude-opus-4-8")
+        assert f"· claude-opus-4-8 —— {MODEL_MARK_CURRENT} · {MODEL_MARK_DEFAULT}" in body
+
+    def test_ref_resolution_is_deterministic_when_slash_form_is_ambiguous(self):
+        """歧义：default 下有 ``a/b`` 且 provider ``a`` 下有 ``b`` —— 第一步（原样）恒赢。"""
+        bridge, state, _sender, _gw, _db, delivery = make_bridge(
+            catalog=_catalog(
+                _group("default", "CRS 中转", _model("a/b", "default", "a/b")),
+                _group("a", "A 家", _model("a:b", "a", "b")),
+            )
+        )
+        bridge.handle_owner_message("/model a/b", _ctx(delivery))
+        assert state.get_model_pref("oc_1") == "a/b"
+        bridge.handle_owner_message("/model a:b", _ctx(delivery))  # 显式冒号仍走 provider
+        assert state.get_model_pref("oc_1") == "a:b"
+
+    def test_default_provider_model_id_containing_slash_resolves(self):
+        """openrouter 风格 ``anthropic/claude-x`` 挂在 default 下 —— 别被第 2 步误判成 provider。"""
+        bridge, state, _sender, _gw, _db, delivery = make_bridge(
+            catalog=_catalog(
+                _group(
+                    "default",
+                    "CRS 中转",
+                    _model("anthropic/claude-x", "default", "anthropic/claude-x"),
+                )
+            )
+        )
+        bridge.handle_owner_message("/model anthropic/claude-x", _ctx(delivery))
+        assert state.get_model_pref("oc_1") == "anthropic/claude-x"
+
+
+# ── /model 偏好 → agent run ──────────────────────────────────────────────────
+class TestTurnModelSelection:
+    def test_no_preference_omits_model(self):
+        bridge, _state, _sender, gw, _db, delivery = make_bridge()
+        gw.chat_outcomes = [_ok_outcome()]
+        bridge.handle_owner_message("hi", _ctx(delivery))
+        assert gw.chat_calls[0]["model"] is None
+
+    def test_preference_is_passed_through(self):
+        bridge, state, _sender, gw, _db, delivery = make_bridge()
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        gw.chat_outcomes = [_ok_outcome()]
+        bridge.handle_owner_message("hi", _ctx(delivery))
+        assert gw.chat_calls[0]["model"] == "dash:qwen-max"
+
+    def test_stale_preference_falls_back_to_default_and_says_so(self):
+        """存好的模型事后被禁用 → 本轮回退默认 + 如实附提示；键**不**自动清。"""
+        bridge, state, sender, gw, _db, delivery = make_bridge()
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        # 该 provider 下架后的清单
+        bridge._model_catalog = lambda: _catalog(
+            _group("default", "CRS 中转", _model("claude-sonnet-4-6", "default", "claude-sonnet-4-6"))
+        )
+        gw.chat_outcomes = [_ok_outcome(text="回复")]
+        bridge.handle_owner_message("hi", _ctx(delivery))
+        assert gw.chat_calls[0]["model"] is None
+        notice = MODEL_PREF_STALE_NOTICE.format(
+            ref="dash:qwen-max", default="claude-sonnet-4-6"
+        )
+        assert sender.sent_texts == [f"回复\n\n{notice}"]
+        assert state.get_model_pref("oc_1") == "dash:qwen-max"
+
+    def test_unverifiable_catalog_does_not_claim_the_model_is_gone(self):
+        """清单整体取不到 → 保守走默认，但不能断言「这个模型没了」。"""
+        bridge, state, sender, gw, _db, delivery = make_bridge(
+            catalog=EnabledModelCatalog(default_model="claude-sonnet-4-6")
+        )
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        gw.chat_outcomes = [_ok_outcome(text="回复")]
+        bridge.handle_owner_message("hi", _ctx(delivery))
+        assert gw.chat_calls[0]["model"] is None
+        notice = MODEL_PREF_UNVERIFIABLE_NOTICE.format(ref="dash:qwen-max")
+        # 🔴 清单读不出来时**不报**默认模型的名字（没依据的名字就是编）
+        assert "claude-sonnet-4-6" not in notice
+        assert sender.sent_texts == [f"回复\n\n{notice}"]
+
+    def test_catalog_loader_exception_degrades_instead_of_breaking_the_turn(self):
+        def boom():
+            raise RuntimeError("agent_config.db locked")
+
+        bridge, state, _sender, gw, _db, delivery = make_bridge()
+        bridge._model_catalog = boom
+        state.set_model_pref("oc_1", "dash:qwen-max")
+        gw.chat_outcomes = [_ok_outcome(text="回复")]
+        bridge.handle_owner_message("hi", _ctx(delivery))
+        assert gw.chat_calls[0]["model"] is None  # 整轮照跑，只是不带 model
 
 
 # ── 错误路径文案（绝不静默）─────────────────────────────────────────────────

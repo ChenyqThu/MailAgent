@@ -39,6 +39,7 @@ import httpx
 import pytest
 from fastapi.testclient import TestClient
 
+import src.agent_config.enabled_models as enabled_models_mod
 import src.api.auth as auth_mod
 import src.api.routers.llm_providers as lp_router
 from src.agent_config import secrets
@@ -70,8 +71,10 @@ def _fresh_provider_store(monkeypatch, tmp_path):
     _force_keyfile(monkeypatch)
     secrets.reset_master_key_cache()
     reset_llm_provider_store_cache()
+    # seed 本体 08-04 起住在 src/agent_config/enabled_models.py（飞书 IM 桥要用同一份
+    # seed，而它 import 不起 router 模块）——stub 目标随之搬家。
     monkeypatch.setattr(
-        lp_router,
+        enabled_models_mod,
         "_resolve_seed_inputs",
         lambda: {
             "api_base": "https://crs.example.com/api",
@@ -979,7 +982,7 @@ def test_chat_config_flag_on_store_failure_falls_back_to_env(monkeypatch):
     def _boom():
         raise RuntimeError("store down")
 
-    monkeypatch.setattr(lp_router, "ensure_seeded_store", _boom)
+    monkeypatch.setattr(enabled_models_mod, "ensure_seeded_store", _boom)
     with TestClient(app, raise_server_exceptions=False) as c:
         r = c.get("/api/chat/config")
     assert r.status_code == 200

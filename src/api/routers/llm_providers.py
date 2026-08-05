@@ -18,6 +18,10 @@
 Seed（prd §4.1）：读端点惰性触发 ``ensure_seeded_store()`` —— 表空时把现有 env 配置
 （LLM_API_BASE/KEY/MODEL + 热读 .env 的 LLM_ENABLED_MODELS）落成 ``default`` provider 行；
 行落地后行权威，env 键降级为首次默认。幂等：有任何 provider 行即跳过。
+🔴 seed 本体（``ensure_seeded_store`` / ``_resolve_seed_inputs``）已搬去
+``src/agent_config/enabled_models.py``（08-04）：飞书 IM 桥跑在同步进程里，需要同一份
+seed + 同一份「在册模型全集」，而它 import 不起本模块（本模块拖 FastAPI）。这里只 import
+复用，语义不变。
 
 统一响应走 app.success_envelope / app.APIError（与 llm.py 等 router 一致）。
 """
@@ -28,21 +32,18 @@ import time
 from typing import Any, Dict, List, Optional, Tuple
 
 import httpx
-from dotenv import dotenv_values
 from fastapi import APIRouter, Depends, Query, Request
-from loguru import logger
 
+from src.agent_config.enabled_models import ensure_seeded_store
 from src.agent_config.llm_providers import (
     DEFAULT_PROVIDER_ID,
     PROVIDER_PROTOCOLS,
     LlmModelRow,
     LlmProviderRow,
     LlmProviderStore,
-    get_llm_provider_store,
 )
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
-from src.api.deps import get_env_file_path, get_settings
 
 # URL 归一 + 脱敏单源 = provider_routing（review HIGH-2/HIGH-3：探测面与 runtime 面
 # 必须推导出同一 wire URL，禁止 router 里复制实现）。
@@ -65,46 +66,6 @@ _DEFAULT_BASES: Dict[str, str] = {
     "openrouter": "https://openrouter.ai/api/v1",
     "google": "https://generativelanguage.googleapis.com/v1beta/openai",
 }
-
-# ---------------------------------------------------------------------------
-# seed（惰性，chat.py flag-on 投影复用）
-# ---------------------------------------------------------------------------
-
-
-def _resolve_seed_inputs() -> Dict[str, Any]:
-    """seed 输入（prd §4.1）：pydantic 单例的 base/key/model + 热读 .env 的
-    LLM_ENABLED_MODELS（该键无 pydantic 字段，读法镜像 chat.py /config）。"""
-    cfg = get_settings()
-    enabled: List[str] = []
-    try:
-        env_path = get_env_file_path()
-        if env_path:
-            raw = (dotenv_values(env_path) or {}).get("LLM_ENABLED_MODELS") or ""
-            enabled = [m.strip() for m in raw.split(",") if m.strip()]
-    except Exception:  # noqa: BLE001 — enabled models 是 best-effort 热读
-        enabled = []
-    return {
-        "api_base": (getattr(cfg, "llm_api_base", "") or "").strip(),
-        "api_key": (getattr(cfg, "llm_api_key", "") or "").strip(),
-        "model": (getattr(cfg, "llm_model", "") or "").strip(),
-        "enabled_models": enabled,
-    }
-
-
-def ensure_seeded_store() -> LlmProviderStore:
-    """取 store 单例并保证 seed 已执行（幂等：有任何 provider 行即跳过）。
-
-    chat.py /config 的 flag-on enabledModels 投影也走这里（单一 seed 入口）。seed 失败
-    （裸 worktree 缺 .env 等）不阻断读端点——空表照常返回。
-    """
-    store = get_llm_provider_store()
-    if not store.has_providers():
-        try:
-            store.seed_default_from_env(**_resolve_seed_inputs())
-        except Exception:  # noqa: BLE001 — seed 是 best-effort；空表可用
-            logger.warning("llm provider seed skipped (settings unavailable)")
-    return store
-
 
 # ---------------------------------------------------------------------------
 # 投影 helper（掩码纪律：CRUD 面永不回明文 key，header 值 write-only）

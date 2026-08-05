@@ -177,12 +177,24 @@ class GatewayClient:
 
     # ── im-chat ───────────────────────────────────────────────────────────
     def stream_im_chat(
-        self, messages: List[Dict[str, Any]], session_id: Optional[int]
+        self,
+        messages: List[Dict[str, Any]],
+        session_id: Optional[int],
+        model: Optional[str] = None,
     ) -> ImChatOutcome:
+        """``model`` = providerRef（空/None → 不进 body，gateway 用 ``cfg.model``）。
+
+        🔴 **只许传已对「在册模型全集」校验过的 ref**（``EnabledModelCatalog.find``）。
+        provider 不存在时 gateway 的 ``createProviderRegistry`` 抛裸 Error，而
+        ``server.ts`` 是 ``void handleImChat(...)``（无 ``.catch``）—— HTTP 响应
+        **永不写出**，这边就干等到 ``CHAT_READ_TIMEOUT_SEC``（30 分钟）。
+        """
         out = ImChatOutcome()
         body: Dict[str, Any] = {"messages": messages}
         if session_id is not None:
             body["sessionId"] = int(session_id)
+        if model:
+            body["model"] = model
         timeout = httpx.Timeout(
             connect=CHAT_CONNECT_TIMEOUT_SEC,
             read=CHAT_READ_TIMEOUT_SEC,
