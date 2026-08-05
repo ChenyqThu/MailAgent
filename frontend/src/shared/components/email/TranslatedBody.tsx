@@ -20,19 +20,14 @@
 // theme / 离线 lang pack 用的增强项. 想加后续 `import code from
 // '@streamdown/code'` 再传 plugins 即可.
 
-import { useState } from 'react'
 import { Streamdown, type StreamdownTranslations } from 'streamdown'
 // Streamdown 的 caret + 控件样式需要它的 keyframes/样式。一次性全局引入 (Vite 去重)。
 import 'streamdown/styles.css'
 
-import { createStreamRevealBlock } from './streamWipe'
-import { createStreamRevealController } from './streamWipePlugin'
-
 interface Props {
   text: string
-  /** True = 消息仍在流式输出。驱动 Streamdown 的 `isAnimating` + 单推进头 reveal
-   *  （createStreamRevealBlock）; 流式期走 streaming 模式, 定稿后切 static 让历史
-   *  消息走稳定的整段渲染。省略 / false = 静态完整渲染。 */
+  /** True = 消息仍在流式输出。驱动 Streamdown 的 `isAnimating` + streaming 模式,
+   *  定稿后切 static 让历史消息走稳定的整段渲染。省略 / false = 静态完整渲染。 */
   streaming?: boolean
 }
 
@@ -73,47 +68,26 @@ const STREAMDOWN_ZH_TRANSLATIONS: Partial<StreamdownTranslations> = {
   tableFormatTsv: 'TSV'
 }
 
-// ── 质感层 —— 单推进头 reveal（0804 dogfood 1c 方案 C 质感 · 0805 换驱动为单调游标）──
-//
-// 分工不变: **节奏**由网关 smoothStream 的句级分块给（ai-gateway/chatRun.ts「W1 节奏层」，
-// SENTENCE_CHUNKING_REGEX 常量），**质感**由 streamWipe.tsx + streamWipePlugin.ts 给。
-// 0805 重写: 不再「每个新 chunk 起一个 380ms 动画」（380ms 与 chunk 到达间隔无耦合，
-// 40-80 tok/s 下必然 2 个动画并发 —— owner 报的「2 句话同时渲染淡出」），改为消息级
-// controller 维护**一个**单调前进的揭示游标: 已定稿部分永远静止，任意时刻只有一个
-// 推进头在做 mask 左→右扫过。机制/常量/边界全在 streamWipePlugin.ts 头注释；台账见
-// motion-gsap.md §9.2；不变量测试 tests/shared/streamRevealInvariant.test.tsx。
-
 export function TranslatedBody({ text, streaming = false }: Props): React.ReactElement {
   // 流式体验: parseIncompleteMarkdown 让未闭合标记 (**/```/#) 中途自动补全 (闭合
-  // 即定稿, 无字面量闪烁); streaming 期由绑定本消息 controller 的 BlockComponent
-  // 做单推进头 reveal, 定稿后切 static 让历史消息走稳定整段渲染。
+  // 即定稿, 无字面量闪烁); 定稿后切 static 让历史消息走稳定整段渲染。
   //
-  // 🔴 static 分支不受 BlockComponent 影响: Streamdown mode='static' 走单次全文渲染,
-  // 根本不挂 Block 组件（dist: static 分支直接 jsx(Ct,…)），历史消息零 span 零 mask
-  // 零动画残留 —— 行为与旧版 static 分支逐字节一致。`caret` prop 本组件一直没传,
-  // 本轮不动。controller 每实例一个、创建零成本（静态消息不挂 Block → 恒 inert）。
+  // 🔴 这一层**没有**任何流式动效, 正文就是 Streamdown 的默认渲染 —— 对齐 beUI
+  // streaming-response（其正文是一行裸的 `{children}`）。0805 整体退役了 0804 引入的
+  // 单推进头 mask reveal: 补偿层在 Streamdown 每轮重解析时会把已显示的文本重新裹回
+  // visibility:hidden 再扫一遍, 正是 owner 报的「重复刷文字」。观感责任全部落在网关
+  // 的到达节奏上（ai-gateway/chatRun.ts 的 smoothStream）。红线见 motion-gsap.md
+  // §9.2: 不要再往这一层加逐字/逐块动画。
   //
   // 注: 此前"流式整段重复/交错"并非渲染层问题 —— 根因是 ElectronApi.subscribe()
   // 反订阅失效致 `chat:stream` listener 泄漏 → 每 chunk 投递两次 → 渲染层
-  // `content += delta` 追加两次 (详见 ElectronApi.ts 注释)。订阅修好后内容单份,
-  // 这里的动效是纯视觉增强, 不影响正确性。
-  // controller / BlockComponent / 容器 ref 三者一次性建好（useState initializer）：
-  // BlockComponent 身份必须稳定（不稳定会让 React 每轮 remount 全部 block），
-  // setContainer 是稳定的普通函数（controller 方法不依赖 this）。
-  const [{ BlockComponent, setContainer }] = useState(() => {
-    const controller = createStreamRevealController()
-    return {
-      BlockComponent: createStreamRevealBlock(controller),
-      setContainer: controller.setContainer
-    }
-  })
+  // `content += delta` 追加两次 (详见 ElectronApi.ts 注释)。
   return (
-    <div className="mail-body break-words" ref={setContainer}>
+    <div className="mail-body break-words">
       <Streamdown
         mode={streaming ? 'streaming' : 'static'}
         parseIncompleteMarkdown
         isAnimating={streaming}
-        BlockComponent={BlockComponent}
         translations={STREAMDOWN_ZH_TRANSLATIONS}
       >
         {text}

@@ -287,8 +287,8 @@ describe('B1 — flag OFF baseline (research §3.1 step-0 fixation): close → a
     const persisted: PersistTurnInput[] = []
     const h = await start(
       baseCfg({
-        // deltas carry their own chunk boundaries (。+ \n) so every smoothStream
-        // chunking mode (sentence/line/cjk-word) emits per-delta — the abort must
+        // deltas carry CJK chars + \n, so the gateway's smoothStream chunking
+        // (CJK per-char / latin per-word) emits within each delta — the abort must
         // land mid-stream, not after a single end-of-stream flush.
         model: slowTextModel(['一。\n', '二。\n', '三。\n', '四。\n', '五。\n'], 30),
         persisted,

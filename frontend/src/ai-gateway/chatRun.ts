@@ -65,38 +65,55 @@ import {
  *  infinite tool loop. Manual and headless runs share this exact value. */
 export const INTERNAL_TOOL_STEP_SENTINEL = 10_000
 
-// ── W1 节奏层 —— 流式分块粒度（chat UI 优化 epic，2026-08）─────────────────────────────
+// ── 流式节奏层 —— smoothStream 分块粒度（0805 回退，对齐 beUI streaming-response）──────
 //
-// 病根：此前 `chunking: /[一-鿿]|\S+\s+/` 让中文**逐字**出流，是配合前端 Streamdown 的
-// per-token fadeIn 设计的；但前端那半从未生效 —— 我们用的是 animate 插件**默认档**
-// `sep:'word'`（按「当前字符是否空白」布尔翻转切段，中文无空格 → 整段 1 token → 零动效）。
-// 0805 调研更正：上游另有 `sep:'char'` 档按 code point 迭代、处理中文完全正常，坑是
-// **默认值不是能力**；仍不用上游 animate 的真实理由 = 每字一个带 inline style 的 span
-// 会让长回复 DOM 上千且每轮 rehype run 全量重建 + stagger 索引每轮从 0 重置、连续渲染的
-// 级联仍会叠加。owner 拍板「要一段一段地呈现，逐字太跳跃」，故节奏层上移到句粒度，
-// 质感层由前端自研（现为单推进头 reveal，见 shared/components/email/streamWipePlugin.ts）。
+// 前端流式动效已**整层删除**（三代补偿层全被 owner 实机否掉，台账见 docs/motion-gsap.md
+// §9.2），观感责任**全部**落在这一层的到达节奏上。上游对照 beUI 的正文渲染是一行裸的
+// `{children}`，好看是因为 demo 按 ≈110 字符/秒喂 children，不是因为有动效。
 //
-// 曾以 env `MAILAGENT_STREAM_CHUNKING` 三档（line/sentence/cjk-word）供 owner 实机比对；
-// 0804 dogfood 定档 sentence，WP8 收敛为常量并删掉 env 分支（line/cjk-word 两档未采纳）。
+// smoothStream 的 RegExp 语义 = 「chunk = buffer.slice(0, match.index) + match[0]」
+// （ai@7 dist detectChunk），所以两个分支各自的实际切分（下方 fixture 实测钉住）：
+//
+//   [一-鿿]    U+4E00–U+9FFF，**只有汉字本身，不含中文标点**（。，！？：；「」在 U+3000
+//              段与全角段）。故标点不单独成块，而是**跟着下一个汉字一起出**：`…很好。我`
+//              切成 `很`/`好`/`。我`。句末标点落在段尾时由 flushBuffer 吐出，不会卡住。
+//   \S+\s+     英文按整词出，**需要尾随空白**。最后一个无空格的词滞留 buffer，直到
+//              text-end/finish 触发 flushBuffer —— 不会出现「最后一个词卡住」。
+//              副作用（好的那种）：`1.5` / `![alt](url)` / `[a](url)` 这类无内部空白的
+//              token 天然整块出，旧句级正则里为躲开它们而写的 lookahead 不再需要。
+//
+// 改这个正则 = 改每段文本被切成几块，于是**连带**改了打字速度（显示耗时 = chunk 数 ×
+// 单拍，见下方 STREAM_CHUNKING_DELAY_MS）。观感本身没有任何断言接得住，所以
+// tests/ai-gateway/stream_chunking.test.ts 用实测 fixture 钉住**切分形状**（不钉实测时长
+// —— 那受机器负载影响必 flake；拍子常量另有一条绊线）。
+export const STREAM_CHUNKING_REGEX = /[一-鿿]|\S+\s+/
 
 /**
- * 句级切分。smoothStream 的 RegExp 语义是「chunk = buffer 中 match 之前的全部
- * + match 本身」（ai/dist detectChunk: `buffer.slice(0, match.index) + match[0]`），所以
- * 这里只需匹配**句终符簇**，不必匹配整句：
+ * 每 chunk 之间的节流拍子（ms）。**7 不是拍脑袋的**，它由一个参照点定出来：
+ * 对齐 beUI streaming-response demo 的 **≈110 字符/秒**（前端已无任何动效，这个到达
+ * 速率就是观感本身，见本文件 STREAM_CHUNKING_REGEX 头注释与 docs/motion-gsap.md §9.2）。
  *
- *   [。！？…]+                  CJK 句终符 —— 无空格语言，出现即边界
- *   [.!?]+(?=[\s"'”’)\]）】])    ASCII 句终符 —— 必须后随空白/闭引号/闭括号才算句终。否则
- *                              `1.5` 会被切成 `1.` + `5`，`![alt](url)` 会被切成 `!` +
- *                              `[alt](url)`（markdown 图片语法当场闪一下字面量）
- *   [”’"'）)\]】》」』]*         句终符后的闭引号/闭括号收进同一 chunk（`他说：“好。”` 不断开）
- *   \s*                        连带吃掉句间空白/换行，下一 chunk 不以空白开头
- *   | \n+                      没有句终符的行（标题/列表/代码行）按行成块，长段不至于憋住
+ * 🔴 **别按 `1000/delayInMs` 心算**：setTimeout 粒度让单拍实测比标称大 ~2ms。0805 用真实
+ * smoothStream 量的（5 次取中位，400 字中文）：
  *
- * 末尾无句终符的残句**不必自兜**：smoothStream 遇到非 text chunk（text-end / finish）时会
- * flushBuffer 把 buffer 剩余整个吐出。
+ *   delayInMs=7   单拍 9.20ms   ≈109 字/秒  ← 当前档，正对 beUI 的 110
+ *   delayInMs=10  单拍 11.79ms  ≈ 85 字/秒     （曾用值，比参照点慢约 20%）
+ *
+ * 🔴 **选值时唯一要权衡的是「显示耗时有硬下界」**：smoothStream 每 chunk 固定 await 一次
+ * delayInMs 且**没有任何追赶逻辑**，模型再快也追不回来 —— 显示耗时下界 = chunk 数 ×
+ * 单拍。两个方向都有代价：
+ *   · 调**大** → 模型早就生成完了，界面还在慢慢打字（1000 字中文 @delay=10 要流 ~11.8s，
+ *     模型 6s 出完就拖一条 ~6s 的尾巴，停止按钮还亮着）。⚠️ 这是本次改动**新引入**的风险：
+ *     此前的句级切分等于不限速（一拍一整句，上限 ~2000 字/秒，显示始终贴着模型走），
+ *     所以以后谁要调大这个数，必须知道自己是在买这条尾巴，而不是"只是慢一点"。
+ *   · 调**小** → 逐字质感消失，退化成整块弹出（那正是这一层存在的理由）。
+ *
+ * 🔴 **第二个隐藏消费面：`reasoning-delta` 与 `text-delta` 共用这同一套节流**（smoothStream
+ * 对两类 delta 一视同仁，实证：30 字推理 = 30 拍）。所以开思考时，长中文 reasoning 块会
+ * 按同一速率**爬完才轮到正文** —— 改这个数不只影响正文速度，也影响"多久才看见回答开始"。
+ * 英文侧上限 ≈109 词/秒，远高于任何模型，实际不构成约束。
  */
-const SENTENCE_CHUNKING_REGEX =
-  /(?:[。！？…]+|[.!?]+(?=[\s"'”’)\]）】]))[”’"'）)\]】》」』]*\s*|\n+/
+export const STREAM_CHUNKING_DELAY_MS = 7
 
 /**
  * HIGH-1 (batch1 review) — the ONE credential pre-gate all three LLM entrypoints share
@@ -466,17 +483,20 @@ export async function prepareChatRun(
     modelMessages = prependInjectedContext(modelMessages, injectedContext)
   }
 
+  // 流式节奏层：中文逐字 / 英文逐词。粒度、吞吐上限、reasoning 也被节流这三件事见文件头部
+  // STREAM_CHUNKING_REGEX 的注释。前端已无任何流式动效，观感全靠这里的到达节奏。
+  // 代价（已接受）：逐字进 Streamdown 时未闭合的 markdown 记号会短暂以字面量出现（`**` 等，
+  // 实测只在「标签含空格」的链接/行内 code 上出现 2-3 拍），Streamdown 设计上会补全未终止
+  // token。两个端点（/api/ai/chat + AG-UI 镜像）共用此 streamText，一致生效。
   const result = streamText({
     model: resolvedModel.model,
     system,
     messages: modelMessages,
     abortSignal,
     maxOutputTokens,
-    // 平滑流式输出：smoothStream 把模型的突发 chunk 重整成稳定节奏。分块粒度见文件头部
-    // 「W1 节奏层」—— 句级（中英通吃）。两个端点（/api/ai/chat + AG-UI 镜像）共用此
-    // streamText，一致生效。
     experimental_transform: smoothStream({
-      chunking: SENTENCE_CHUNKING_REGEX
+      chunking: STREAM_CHUNKING_REGEX,
+      delayInMs: STREAM_CHUNKING_DELAY_MS
     }),
     ...(thinkingProviderOpts ? { providerOptions: thinkingProviderOpts } : {}),
     ...(hasTools

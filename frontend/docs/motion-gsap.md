@@ -161,23 +161,36 @@ owner dogfood 反馈「轮播 shimmer 在流卡住/结束时不停 + 文案与�
 
 stall watchdog 纯前端（`useStallLevel`，15s/30s 两档），**不动 gateway**（不加 heartbeat）。轮播式 `ThinkingPhrases.tsx` 已随本轮删除（`PaletteThinkingPhrases` 仍在，服务 ⌘K 搜索，不受影响）。
 
-### 9.2 流式正文单推进头 reveal（0804 dogfood 1c 方案 C 质感 · 0805 换驱动为单调游标[方案 B]；取代 per-chunk keyframe wipe 与更早的 W1 尾部渐变 mask）
+### 9.2 流式正文：**前端零动效**（0805 整体退役质感层，节奏交回网关）
 
-**技术手段登记：`mask-image` + rAF 驱动的 `mask-position`（CSS 变量 `--sw-p`，每帧只写推进头一个元素）。** §1 的「零 filter」红线（合成层内 filter 每帧重绘）**不覆盖 mask**。质感（chunk 内左→右 mask reveal）仍是 owner 从 5 候选 demo 里选定的方案 C；驱动机制 0805 重写。
+🔴 **红线：不要再在前端这一层加逐字 / 逐块 / 逐句的流式动画。** 这不是"暂时没做"，是试过三代都被 owner 实机否掉之后的定论。
 
-**为什么退役 per-chunk keyframe（0805 验尸，定量）**：旧驱动给每个新 chunk 起一个独立的 380ms 动画，但 380ms 与 chunk 到达间隔零耦合 —— 间隔由模型出字速度决定（实测 40-80 tok/s 下句间隔 162-259ms、smoothStream 排空循环突发 11ms），并发动画数 ≈ `ceil(380/间隔)` 恒 ≥ 2，正是 owner 报的「2 句话同时渲染淡出」；临界速率 ~29 tok/s，调时长/间隔只是挪临界点。新驱动把并发数**结构性钉死 ≤ 1**。更早的 W1 尾部渐变（整块正文底部 1.5em 恒挂渐隐）同样已退役（owner 反馈「永远像没渲染完」）。
+**当前实现（一句话）**：`TranslatedBody.tsx` 就是一个几乎默认配置的 `<Streamdown>`（只传 `mode` / `parseIncompleteMarkdown` / `isAnimating` / `translations`），没有 `BlockComponent`、没有 rehype 包裹、没有 mask、没有 keyframes、没有 rAF；观感**全部**由网关 `ai-gateway/chatRun.ts` 的 `smoothStream({ chunking: STREAM_CHUNKING_REGEX, delayInMs: STREAM_CHUNKING_DELAY_MS })` 的**到达节奏**承担（中文逐字、英文逐词，7ms 一拍）。CSS 侧无对应规则；Streamdown 自身也不带正文动画（dist 里只有 mermaid 的 `animate-spin`），故 reduced-motion 无需兜底。
 
-| 项 | 内容 |
-|---|---|
-| 位置 | 引擎 `shared/components/email/streamWipePlugin.ts`（rehype 插件 + 消息级 controller + rAF 游标，纯逻辑零 React）；组件层 `streamWipe.tsx`（`createStreamRevealBlock`，经 Streamdown `BlockComponent` prop 挂载，只在 `mode='streaming'` 生效）；样式 `index.css` 的 `.stream-reveal(-head/-done)`；接线 `TranslatedBody.tsx` |
-| 机制 | 网关按句吐 chunk（`chatRun.ts` `SENTENCE_CHUNKING_REGEX`，节奏层不变）→ rehype 插件把「unwrap 边界之后」的文本包进 `.stream-reveal` span（默认 `visibility:hidden`，携带插件 id + 字符区间 data 属性；按文本节点切，永不跨 markdown 结构）→ controller 每次 commit 后 pre-paint 扫容器按 DOM 顺序排 pending 队列并对账三态（pending/head/done，同时治愈 React 复用元素残留的运行时 class）→ rAF 推**一个**单调前进的字符游标：队首段是唯一推进头，mask 位置 = 游标在段内进度的纯函数（`--sw-p`）；扫完固化 done、头移交下一段。游标速率 `max(80cps, backlog/0.4s)` —— 比模型快时贴 live edge（观感≈逐句扫，80cps ≈ owner 选的 demo 1.5x 档），比模型慢时按积压线性提速，滞后有上界、大段突发亚秒清空。上游坑修正：per-Block 插件实例 + 处理器缓存按插件名（唯一命名）沿用；**a/b 双动画名交替与 beginRender/commit 冻结协议已随 keyframe 驱动退役**（单调游标天然重放安全；元素复用残留由每 commit 对账治愈）。细节见 streamWipePlugin.ts 头注释 |
-| 核心不变量（红线） | 🔴 **任意时刻正在动的元素 ≤ 1**。判别式测试 `tests/shared/streamRevealInvariant.test.tsx` 对新旧两代实现都能跑（旧实现红：突发下 2-3 个并发 wipe span；本实现绿），回归到「每 chunk 一个动画」会当场红 |
-| 质感参数 | 羽化条带沿用方案 C demo：mask-size 220%，黑区 45.5% → 透明 51.4%（羽化带 ≈ 元素宽 13%）；`--sw-p` 0→1 映射 mask-position 100%→0%。速度改由**字符速率**表达（80cps 基速 ≈ 22 字句 275ms ≈ demo 1.5x 档的每句时长），段内线性 —— 连续游标没有「段尾」可 ease，easing 属于离散 one-shot 动画的词汇 |
-| 折行/块级边界 | inline span 的 mask 走 `box-decoration-break:slice` 语义（假想未折行长条）→ 折行**天然按阅读顺序**跨行推进，零 JS 几何。`code/pre/svg/math/annotation` 子树整棵跳过（不包不计数，镜像上游 skip 集；块级代码由 CodeBlock 从子树抽原文，塞 span 会弄脏抽取）→ 代码内容不参与动画、直接出现。切点永不落在 surrogate pair 中间（emoji 不会被拆成两个替换符） |
-| 残留边界（红线） | **已完成消息零残留**：`mode='static'` 不挂 Block 组件 → 零 span 零 mask 零动画。流式期 mask **只存在于推进头一个元素上**。旧 span 去向分两种（streamWipe.test.tsx 钉住）：生长中的段落在段完成（doneFloor 推进）后下一轮 render 解包成纯文本；表格单元格/已完成列表项因 Streamdown 子组件按「className+position」memo（比较器不看 children）跳过重渲，其 span **惰性留存**（done 态：可见、无 mask、无动画、textContent/复制不受影响），settle 切 static 整树清空 —— 有界且仅存在于流式期。组件 remount（切走再切回仍在流式的会话）游标归零 → 已有正文从头重扫一次，与旧版同款，接受。streaming 结束切 static 时未扫完的尾巴直接定稿（≈0.4s 扫量的积压上界），与旧版「settle 杀掉进行中动画」同类 |
-| 性能边界 | 有 rAF，但每帧只写**一个**元素的**一个** CSS 变量：零测量、零布局读，mask 是 paint-only，无 layout thrash；扫描只在 commit 后跑一次（transformer dirty 标志合并，act/flushSync 多 commit 同任务也安全）。pending 段数有界（≈积压上界 + memo 惰性 done 段）。**不要**把这套 rehype 包裹复制到列表行/非流式渲染面 —— 它只服务「单条正在生长的流式正文」 |
-| reduced-motion | 双层：JS 侧 rehype 直接不包 span、游标一帧内清空（运行时切换也收敛）；CSS 侧 `index.css` 末尾 reduce 汇总块 `.stream-reveal { visibility: visible !important; mask none }` 兜底强制直出（不是「冻在隐藏态」）。不经 GSAP |
-| 上游更正（0805） | 旧注释「Streamdown 上游 animate 对中文失效」是**过度概括**：失效只发生在默认档 `sep:'word'`；`sep:'char'` 处理中文完全正常（26 码点 → 26 token，实测）。仍不用上游 animate 的真实理由 = 每字一个带 inline style 的 span（长回复 DOM 上千、每轮 rehype run 全量重建）+ stagger 索引每轮从 0 重置（连续渲染级联仍叠加）。`streamWipePlugin.ts` 与 `chatRun.ts` 头注释已同步更正 |
+**拍子 `delayInMs: 7` 是怎么定的**：由**一个参照点**倒推 —— 对齐 beUI demo 的 ≈110 字符/秒。别按 `1000/delayInMs` 心算，setTimeout 粒度让单拍比标称大 ~2ms；0805 用真实 `smoothStream` 实测（5 次取中位，400 字中文）：
+
+| delayInMs | 单拍实测 | 中文速率 | |
+|---|---|---|---|
+| **7** | 9.20ms | **≈109 字/秒** | ← 当前档，正对 beUI 的 110 |
+| 10 | 11.79ms | ≈85 字/秒 | 0805 首版用值，比参照点慢约 20%，已改 |
+
+🔴 **选值时唯一要权衡的是「显示耗时有硬下界」**：smoothStream 每 chunk 固定 await 一次 `delayInMs` 且**没有任何追赶逻辑**，模型再快也追不回来 —— 显示耗时下界 = chunk 数 × 单拍。调**大** → 模型早生成完了界面还在打字（1000 字中文 @delay=10 要流 ~11.8s，模型 6s 出完就拖 ~6s 尾巴、停止按钮还亮着）；⚠️ 这是本次改动**新引入**的风险，此前的句级切分等于不限速（上限 ~2000 字/秒，显示始终贴着模型走），谁要调大必须知道自己在买这条尾巴。调**小** → 逐字质感消失、退化成整块弹出。
+
+🔴 **第二个隐藏消费面**：`reasoning-delta` 与 `text-delta` **共用同一套节流**（实测 30 字推理 = 30 拍）。开思考时长中文 reasoning 块会按同速率爬完才轮到正文 —— 这个数不只影响正文速度，也影响「多久才看见回答开始」。英文侧上限 ≈109 词/秒，远高于任何模型，不构成约束。
+
+切分形状由 `tests/ai-gateway/stream_chunking.test.ts` 的实测 fixture 钉住；速度只钉常量值本身（改档会红一条，强制改的人读到上面这两条权衡）。
+
+**退役的三代（时间倒序，全部已从代码删除）**：
+
+| 代 | 做法 | 判死原因 |
+|---|---|---|
+| 3（0805 删） | 单推进头 reveal：rehype 插件包 `.stream-reveal` span（`visibility:hidden`）+ 消息级 controller 用 rAF 推单调字符游标 + `--sw-p` 驱动 `mask-position` 左→右扫 | owner 实机：「非常垃圾，会有重复刷文字的效果……甚至不如初版」。病根是**补偿层本身**而非驱动方式：Streamdown 每轮重解析会把**已显示**的文本重新裹回 `visibility:hidden` 再扫一遍，回复越长越明显 —— 这是「把定稿文本交给一个按渲染轮重建的揭示层」的结构性后果，换任何驱动（keyframe / 游标 / 补间）都在 |
+| 2（0805 删） | per-chunk keyframe wipe：每个新 chunk 起一个独立 380ms 动画 | 380ms 与 chunk 到达间隔零耦合（实测 40-80 tok/s 下句间隔 162-259ms、排空突发 11ms），并发动画数 ≈ `ceil(380/间隔)` 恒 ≥ 2 → owner 报的「2 句话同时渲染淡出」。调时长只是挪临界点（~29 tok/s） |
+| 1（W1，0805 删） | 整块正文底部 1.5em 恒挂渐隐 mask | owner：「永远像没渲染完」 |
+
+**上游依据（beUI `streaming-response`，已逐行读过 `https://beui.dev/r/streaming-response.json`）**：其正文渲染是**一行裸的 `{children}`**，外层只有排版类名；全文 `blur` / `keyframes` / `stagger` 零出现，`AnimatePresence` 只包**完成后**的操作按钮行（复制/重试/点赞/sources）。它好看是因为 demo 按 ≈110 字符/秒喂 children —— 观感来自**到达节奏**，不是动效。同仓 `components/motion/text-reveal.tsx` 确实做逐字 stagger + blur，但它是 `useInView` 驱动的**静态文案入场**组件，与流式无关，**不要**拿它当流式方案。
+
+**留作背景的两条事实**（下次有人重新提议时省一轮调研）：① Streamdown 上游自带的 `animate` 插件对中文并非"失效"——失效只在默认档 `sep:'word'`，`sep:'char'` 处理中文正常；不用它的真实理由是每字一个带 inline style 的 span（长回复 DOM 上千、每轮 rehype run 全量重建）+ stagger 索引每轮从 0 重置。② 逐字进 Streamdown 时未闭合的 markdown 记号会短暂以字面量出现，Streamdown 设计上会补全未终止 token，已接受为代价。0805 实测把范围缩小了：因为 `\S+\s+` 按**整词**切，`**重点**` / `` `code` `` / `[文档](url)` / `![alt](url)` / `1.5` 这些**不含内部空格**的 token 都是整块出现、根本不产生悬挂记号；只有**标签里含空格**的链接/行内 code（`[点击 这里](url)`、`` `npm run test` ``）会悬挂 2-3 拍（≈25ms）。表格是另一种形态：GFM 表格要等分隔行才成表，在此之前整行以字面量 `| a | b |` 出现 —— 这不是本次引入的（旧句级正则同样按 `\n` 吐行），只是现在按词逐格拼出来。
 
 ## 10. motion 与 GSAP 职责分工（2026-06 引入 `motion`）
 
