@@ -267,6 +267,92 @@ describe('SearchConfigDrawer — 新建', () => {
   })
 })
 
+// 0804 dogfood 3d/3e —— 名称与头像并排；头像编辑器默认折叠。createAgent 的入参没有
+// avatar 列，故新建路径挑了头像才补一次 setConfig（没挑则一次请求都不多发）。
+describe('SearchConfigDrawer — 头像身份（0804 dogfood 3d）', () => {
+  test('编辑：未触碰头像 → patch 不含 avatar；触碰后 → patch 携带 avatar', async () => {
+    mockSetConfig.mockResolvedValue(makeSearchCfg())
+    renderUi(<SearchConfigDrawer cfg={makeSearchCfg()} open onClose={() => {}} />)
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1]).not.toHaveProperty('avatar')
+
+    fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Silk'))
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(2))
+    expect(mockSetConfig.mock.calls[1][1].avatar).toMatchObject({ shape: 'silk' })
+  })
+
+  test('新建：未挑头像 → 只有 createAgent（不多发 setConfig）', async () => {
+    mockCreateAgent.mockResolvedValue(makeSearchCfg())
+    renderUi(<SearchConfigDrawer cfg={null} open create onClose={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText('如 邮件搜索助手'), { target: { value: 'bot' } })
+    fireEvent.click(screen.getByText('创建'))
+    await vi.waitFor(() => expect(mockCreateAgent).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig).not.toHaveBeenCalled()
+  })
+
+  test('新建：挑了头像 → createAgent 后补一次 setConfig(avatar)（否则选择被静默丢弃）', async () => {
+    mockCreateAgent.mockResolvedValue(makeSearchCfg())
+    mockSetConfig.mockResolvedValue(makeSearchCfg())
+    const onClose = vi.fn()
+    renderUi(<SearchConfigDrawer cfg={null} open create onClose={onClose} />)
+    fireEvent.change(screen.getByPlaceholderText('如 邮件搜索助手'), { target: { value: 'bot' } })
+    fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Flare'))
+    fireEvent.click(screen.getByText('创建'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockCreateAgent).toHaveBeenCalledTimes(1)
+    expect(mockSetConfig.mock.calls[0][0]).toBe('bot')
+    expect(mockSetConfig.mock.calls[0][1].avatar).toMatchObject({ shape: 'flare' })
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  test('第二段失败 → 报错留在抽屉（不静默丢头像）；重试不重复 createAgent 且带上改名', async () => {
+    // 镜像 CustomAgentTab 的两段式重试用例：createAgent 成功 + 头像 patch 失败时，
+    // ① 用户必须看得见失败（否则「行建好了、头像没写上」被静默吞掉）
+    // ② 原地重试跳过 createAgent（同 id 会撞 409），且第二段带全字段 —— 重试间隙改的
+    //    名称要一起落库，只发 { avatar } 会把它丢掉。
+    mockCreateAgent.mockResolvedValue(makeSearchCfg())
+    mockSetConfig.mockRejectedValueOnce(new Error('boom')).mockResolvedValueOnce(makeSearchCfg())
+    const onClose = vi.fn()
+    renderUi(<SearchConfigDrawer cfg={null} open create onClose={onClose} />)
+    fireEvent.change(screen.getByPlaceholderText('如 邮件搜索助手'), { target: { value: 'bot' } })
+    fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Flare'))
+    fireEvent.click(screen.getByText('创建'))
+    expect(await screen.findByText(zhCommon.agents.search.errGeneric)).toBeTruthy()
+    expect(onClose).not.toHaveBeenCalled()
+
+    fireEvent.change(screen.getByPlaceholderText('如 邮件搜索助手'), { target: { value: 'bot2' } })
+    fireEvent.click(screen.getByText('创建'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(2))
+    expect(mockCreateAgent).toHaveBeenCalledTimes(1)
+    // 重试仍打首次落库的 id（不因改名重新 slugify）
+    expect(mockSetConfig.mock.calls[1][0]).toBe('bot')
+    expect(mockSetConfig.mock.calls[1][1].title).toBe('bot2')
+    expect(mockSetConfig.mock.calls[1][1].avatar).toMatchObject({ shape: 'flare' })
+    await vi.waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  test('第二段的 E_INVALID_ARG 不复用「id 已存在」文案（行已建好，叫人改名是误导）', async () => {
+    // 「该 id 已存在」只可能来自第一段建行。第二段是 PATCH 既有行，同一个错误码代表别的
+    // 校验失败（WP7 上传头像落地后就会真实发生：超尺寸/非法 data URI）。
+    mockCreateAgent.mockResolvedValue(makeSearchCfg())
+    const err = new Error('avatar too large')
+    ;(err as { code?: string }).code = 'E_INVALID_ARG'
+    mockSetConfig.mockRejectedValueOnce(err)
+    renderUi(<SearchConfigDrawer cfg={null} open create onClose={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText('如 邮件搜索助手'), { target: { value: 'bot' } })
+    fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Flare'))
+    fireEvent.click(screen.getByText('创建'))
+    expect(await screen.findByText(zhCommon.agents.search.errGeneric)).toBeTruthy()
+    expect(screen.queryByText(zhCommon.agents.search.errConflict)).toBeNull()
+  })
+})
+
 describe('SearchConfigDrawer — 删除（两步确认）', () => {
   test('点删除 → 确认 → deleteAgent(id)', async () => {
     mockDeleteAgent.mockResolvedValue({ deleted: 'email_search_agent' })

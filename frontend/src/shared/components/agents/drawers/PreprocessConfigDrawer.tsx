@@ -3,8 +3,9 @@ import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 
-import type { ReportAgentConfig } from '@shared/api/types'
+import type { AgentAvatarConfig, ReportAgentConfig } from '@shared/api/types'
 import { ReportIcon, Switch } from '../primitives'
+import { AgentIdentityHeader } from '../AgentAvatar'
 import { useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
 import { StatefulButton } from '@shared/components/ui/stateful-button'
@@ -103,6 +104,9 @@ export function PreprocessConfigDrawer({
   const [fallbackModel, setFallbackModel] = useState<string>(FALLBACK_FOLLOW_GLOBAL)
   const [fallbackModelDirty, setFallbackModelDirty] = useState(false)
   const [markReadAfterProcessing, setMarkReadAfterProcessing] = useState(true)
+  // 头像身份（0804 dogfood 3d）：行级 avatar_json，dirty 才写 patch（保存即生效，无需重启）。
+  const [avatar, setAvatar] = useState<AgentAvatarConfig | null>(null)
+  const [avatarDirty, setAvatarDirty] = useState(false)
   const [contextDocs, setContextDocs] = useState<string[]>([])
   // task 07-22 —— 参考上下文源（row.context_source，保存即生效无需重启，dirty-gate 写 row PATCH）。
   // notion context page ID 仍 env-backed（写 .env + 重启横幅，低频），与「启用」同源、web 只读。
@@ -153,6 +157,8 @@ export function PreprocessConfigDrawer({
     )
     setContextDocs(cfg.context_docs ?? [])
     setMarkReadAfterProcessing(cfg.mark_read_after_processing ?? true)
+    setAvatar(cfg.avatar ?? null)
+    setAvatarDirty(false)
     setEnabledDirty(false)
     setModelDirty(false)
     setFallbackModelDirty(false)
@@ -290,6 +296,8 @@ export function PreprocessConfigDrawer({
             }
           : {}),
         ...(contextSourceDirty ? { context_source: contextSource } : {}),
+        // 头像：未触碰不发（PATCH 缺席 = 不动列）。
+        ...(avatarDirty ? { avatar } : {}),
         context_docs: contextDocs,
         mark_read_after_processing: markReadAfterProcessing
       })
@@ -407,6 +415,20 @@ export function PreprocessConfigDrawer({
               />
             </span>
           </div>
+
+          {/* 头像 + 名称（0804 dogfood 3d/3e）—— 预处理是 v27 播种的单例行，名称不可编辑，
+              故只并排展示，保存 patch 只带 avatar（行级列，保存即生效无需重启）。 */}
+          <Field label={t('agents.avatar.label')} hint={t('agents.avatar.hint')}>
+            <AgentIdentityHeader
+              agentId={PREPROCESS_AGENT_ID}
+              value={avatar}
+              onChange={(next) => {
+                setAvatar(next)
+                setAvatarDirty(true)
+              }}
+              name={cfg?.title ?? ''}
+            />
+          </Field>
 
           <div
             className="flex items-center"

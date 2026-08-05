@@ -3,9 +3,10 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { ReportAgentConfig, ReportConfigPatch } from '@shared/api/types'
+import type { AgentAvatarConfig, ReportAgentConfig, ReportConfigPatch } from '@shared/api/types'
 import { DEFAULT_SEARCH_AGENT_PROMPT } from '@shared/assistant/searchAgentClient'
 import { ReportIcon, Switch } from '../primitives'
+import { AgentIdentityHeader } from '../AgentAvatar'
 import { useCreateAgent, useDeleteAgent, useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
 import { StatefulButton } from '@shared/components/ui/stateful-button'
@@ -53,6 +54,13 @@ export function SearchConfigDrawer({
 
   const [enabled, setEnabled] = useState(true)
   const [title, setTitle] = useState('')
+  // 头像身份（0804 dogfood 3d）：avatarDirty 才写 patch（未触碰的 NULL 行保持 NULL → 继续
+  // 按 id 派生）。createAgent 不收 avatar 列，故新建路径在建行成功后补一次 setConfig。
+  const [avatar, setAvatar] = useState<AgentAvatarConfig | null>(null)
+  const [avatarDirty, setAvatarDirty] = useState(false)
+  // 新建两段式的第一段成果：建行成功即记 id —— 第二段（头像 patch）失败后原地重试直接走
+  // setConfig，不再重复 createAgent（同 id 撞 409）。镜像 CustomAgentDrawer.createdId。
+  const [createdId, setCreatedId] = useState<string | null>(null)
   const [prompt, setPrompt] = useState('')
   const [promptDirty, setPromptDirty] = useState(false)
   const { models: enabledModels } = useEnabledModels()
@@ -72,9 +80,12 @@ export function SearchConfigDrawer({
     setErrKey(null)
     setSaveFailed(false)
     setConfirming(false)
+    setAvatarDirty(false)
+    setCreatedId(null)
     if (create || !cfg) {
       setEnabled(true)
       setTitle('')
+      setAvatar(null)
       // 回显内置默认搜索 prompt 供查看/覆写；promptDirty 仍 false → 未改时 onSave 存
       // null 走默认，不把默认快照写死进库（将来内置默认改了，此 agent 仍跟随）。
       setPrompt(DEFAULT_SEARCH_AGENT_PROMPT)
@@ -85,6 +96,7 @@ export function SearchConfigDrawer({
     }
     setEnabled(cfg.enabled)
     setTitle(cfg.title)
+    setAvatar(cfg.avatar ?? null)
     // prompt_is_default 的行后端返回空串 → 回显内置默认供查看/覆写；已自定义则回显自定义。
     setPrompt(cfg.prompt_is_default ? DEFAULT_SEARCH_AGENT_PROMPT : cfg.prompt)
     setPromptDirty(false)
@@ -114,22 +126,53 @@ export function SearchConfigDrawer({
     setErrKey(null)
     setSaveFailed(false)
     if (create) {
-      const id = slugifyTitle(title)
-      void createAgent({
-        id,
-        type: 'search',
-        title: title.trim() || id,
-        enabled,
-        model: model || null,
-        // prompt 已回显内置默认；未改（promptDirty=false）→ null 走默认不写死快照，改过 → 存文本。
-        prompt: promptDirty ? prompt : null,
-        tools
-      })
+      const id = createdId ?? slugifyTitle(title)
+      // 两段式的第一段失败与否 —— 只有它能产生「id 已存在」；第二段是 PATCH 既有行，
+      // 同一个 E_INVALID_ARG 是别的校验失败（如头像值域），不能复用冲突文案叫人改名。
+      let createFailed = false
+      // createAgent 的入参没有 avatar 列 —— 用户在新建时挑了头像就补一次 setConfig
+      // （未挑则一次请求都不多发，路径与改动前逐字节相同）。
+      const ensureCreated: Promise<unknown> =
+        createdId !== null
+          ? Promise.resolve()
+          : createAgent({
+              id,
+              type: 'search',
+              title: title.trim() || id,
+              enabled,
+              model: model || null,
+              // prompt 已回显内置默认；未改（promptDirty=false）→ null 走默认不写死快照，改过 → 存文本。
+              prompt: promptDirty ? prompt : null,
+              tools
+            }).then(
+              () => setCreatedId(id),
+              (e: unknown) => {
+                createFailed = true
+                throw e
+              }
+            )
+      void ensureCreated
+        .then(() =>
+          avatarDirty
+            ? // 第二段带**全字段**（镜像 CustomAgentDrawer 的两段式）：首次成功路径是同值幂等
+              // 覆写；重试路径（第一段成功、第二段失败后原地重试）则把重试间隙用户改过的
+              // 名称/模型/prompt/工具一并落库 —— 只发 { avatar } 会把这些改动静默丢掉，
+              // 因为 createAgent 不会再跑第二次。id 仍用首次落库的（不因改名重新 slugify）。
+              save(id, {
+                enabled,
+                title: title.trim() || id,
+                prompt: promptDirty ? prompt : null,
+                model,
+                tools,
+                avatar
+              })
+            : undefined
+        )
         .then(onClose)
         .catch((e: unknown) => {
           // 真实 Electron 路径错误码挂在 err.code（message 是人话不含码串）。
           const code = (e as { code?: string })?.code
-          setErrKey(code === 'E_INVALID_ARG' ? 'errConflict' : 'errGeneric')
+          setErrKey(createFailed && code === 'E_INVALID_ARG' ? 'errConflict' : 'errGeneric')
           setSaveFailed(true)
         })
       return
@@ -143,6 +186,8 @@ export function SearchConfigDrawer({
       model,
       tools
     }
+    // 头像：未触碰不发（PATCH 缺席 = 不动列）。
+    if (avatarDirty) patch.avatar = avatar
     void save(cfg.id, patch)
       .then(onClose)
       .catch((e: unknown) => {
@@ -224,14 +269,19 @@ export function SearchConfigDrawer({
             <Switch on={enabled} onChange={setEnabled} />
           </div>
 
-          {/* title */}
-          <Field label={t('agents.search.titleLabel')}>
-            <input
-              type="text"
-              value={title}
-              placeholder={t('agents.search.titlePlaceholder')}
-              onChange={(e) => setTitle(e.target.value)}
-              style={inputStyle}
+          {/* 名称 + 头像并排（0804 dogfood 3d/3e）；头像编辑器默认折叠在「更换」后面。 */}
+          <Field label={t('agents.avatar.identityLabel')} hint={t('agents.avatar.hint')}>
+            <AgentIdentityHeader
+              agentId={cfg?.id ?? slugifyTitle(title)}
+              value={avatar}
+              onChange={(next) => {
+                setAvatar(next)
+                setAvatarDirty(true)
+              }}
+              name={title}
+              onNameChange={setTitle}
+              namePlaceholder={t('agents.search.titlePlaceholder')}
+              inputStyle={inputStyle}
             />
           </Field>
 

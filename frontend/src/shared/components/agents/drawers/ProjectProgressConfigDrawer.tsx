@@ -3,8 +3,14 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { CustomAgentTrigger, ReportAgentConfig, ReportConfigPatch } from '@shared/api/types'
+import type {
+  AgentAvatarConfig,
+  CustomAgentTrigger,
+  ReportAgentConfig,
+  ReportConfigPatch
+} from '@shared/api/types'
 import { ReportIcon, Switch } from '../primitives'
+import { AgentIdentityHeader } from '../AgentAvatar'
 import { useProjectProgressRuns, useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
 import { StatefulButton } from '@shared/components/ui/stateful-button'
@@ -173,6 +179,9 @@ export function ProjectProgressConfigDrawer({
   const [sender, setSender] = useState('')
   const [subject, setSubject] = useState('')
   const [triggerDirty, setTriggerDirty] = useState(false)
+  // 头像身份（0804 dogfood 3d）：行级 avatar_json，dirty 才写 patch。
+  const [avatar, setAvatar] = useState<AgentAvatarConfig | null>(null)
+  const [avatarDirty, setAvatarDirty] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [saveFailed, setSaveFailed] = useState(false)
   // env 三字段本地镜像（dirty 追踪；保存时只写显式改过且值变化的键）。
@@ -211,6 +220,8 @@ export function ProjectProgressConfigDrawer({
     setSender(trig?.kind === 'email_filter' ? (trig.sender_pattern ?? '') : '')
     setSubject(trig?.kind === 'email_filter' ? (trig.subject_pattern ?? '') : '')
     setTriggerDirty(false)
+    setAvatar(cfg.avatar ?? null)
+    setAvatarDirty(false)
     setMasterDirty(false)
     setDbIdDirty(false)
     setFilterBuDirty(false)
@@ -262,6 +273,8 @@ export function ProjectProgressConfigDrawer({
       if (subject.trim()) trig.subject_pattern = subject.trim()
       patch.trigger = trig
     }
+    // 头像：未触碰不发（PATCH 缺席 = 不动列）。
+    if (avatarDirty) patch.avatar = avatar
     setErr(null)
     // 1) env 写（总闸 / 项目库 ID / BU 过滤）：仅在 env 已就绪、非 web、且用户显式改过
     //    该字段（dirty）时写 —— 镜像 PreprocessConfigDrawer（codex HIGH：未触碰的字段
@@ -310,286 +323,296 @@ export function ProjectProgressConfigDrawer({
 
   return (
     <Drawer open={open} onOpenChange={(nextOpen) => !nextOpen && onClose()}>
-        <header
-          className="flex items-center"
+      <header
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '15px 18px',
+          borderBottom: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0
+        }}
+      >
+        <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
+          <ReportIcon name="barchart" size={16} />
+        </span>
+        <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
+          {t('agents.projectProgress.configTitle', { title: cfg?.title ?? '' })}
+        </h2>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label={t('agents.source.close')}
           style={{
-            gap: 10,
-            padding: '15px 18px',
-            borderBottom: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0
+            display: 'grid',
+            placeItems: 'center',
+            width: 28,
+            height: 28,
+            borderRadius: 7,
+            background: 'transparent',
+            border: 0,
+            cursor: 'pointer',
+            color: 'rgb(var(--ink-fg-2))'
           }}
         >
-          <span style={{ color: 'rgb(var(--c-accent))', display: 'flex' }}>
-            <ReportIcon name="barchart" size={16} />
-          </span>
-          <h2 style={{ fontSize: 15, fontWeight: 600, color: 'rgb(var(--ink-fg))', flex: 1 }}>
-            {t('agents.projectProgress.configTitle', { title: cfg?.title ?? '' })}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            aria-label={t('agents.source.close')}
-            style={{
-              display: 'grid',
-              placeItems: 'center',
-              width: 28,
-              height: 28,
-              borderRadius: 7,
-              background: 'transparent',
-              border: 0,
-              cursor: 'pointer',
-              color: 'rgb(var(--ink-fg-2))'
-            }}
-          >
-            <ReportIcon name="x" size={16} />
-          </button>
-        </header>
+          <ReportIcon name="x" size={16} />
+        </button>
+      </header>
 
-        <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-            {/* 远程 web 只读提示（env 写不可用；启用开关与触发规则仍可改） */}
-            {IS_WEB && (
-              <div
-                style={{
-                  fontSize: 12.5,
-                  color: 'rgb(var(--ink-fg-2))',
-                  padding: '10px 12px',
-                  borderRadius: 9,
-                  background: 'rgb(var(--ink-1) / 0.5)',
-                  border: '1px solid rgb(var(--ink-border-soft))'
-                }}
-              >
-                {t('agents.projectProgress.webReadOnly')}
-              </div>
-            )}
-
-            {/* 总闸状态说明。总闸未开时高亮提示。 */}
+      <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* 远程 web 只读提示（env 写不可用；启用开关与触发规则仍可改） */}
+          {IS_WEB && (
             <div
               style={{
                 fontSize: 12.5,
-                color: masterEnabled
-                  ? 'rgb(var(--ink-fg-2))'
-                  : 'rgb(var(--c-warn, var(--ink-fg-1)))',
+                color: 'rgb(var(--ink-fg-2))',
                 padding: '10px 12px',
                 borderRadius: 9,
                 background: 'rgb(var(--ink-1) / 0.5)',
-                border: '1px solid rgb(var(--ink-border-soft))',
-                lineHeight: 1.55
+                border: '1px solid rgb(var(--ink-border-soft))'
               }}
             >
-              {masterEnabled
-                ? t('agents.projectProgress.masterOnNote')
-                : t('agents.projectProgress.masterOffNote')}
+              {t('agents.projectProgress.webReadOnly')}
             </div>
+          )}
 
-            {/* 总开关（env PROJECT_PROGRESS_SYNC_ENABLED，v1.3.0 收编自 Settings→集成）
-                —— 需重启生效。env 未就绪 / web 时禁用。 */}
-            <div
-              className="flex items-center"
-              style={{
-                gap: 12,
-                padding: '13px 14px',
-                borderRadius: 10,
-                background: 'rgb(var(--ink-2) / 0.55)',
-                border: '1px solid rgb(var(--ink-border))'
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                  {t('agents.projectProgress.master')}
-                </div>
-                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-                  {t('agents.projectProgress.masterHint')}
-                </div>
-              </div>
-              <span
-                style={!envReady || IS_WEB ? { opacity: 0.5, pointerEvents: 'none' } : undefined}
-              >
-                <Switch
-                  on={master}
-                  onChange={(v) => {
-                    setMaster(v)
-                    setMasterDirty(true)
-                  }}
-                />
-              </span>
-            </div>
-
-            {/* 启用（row.enabled，保存即生效） */}
-            <div
-              className="flex items-center"
-              style={{
-                gap: 12,
-                padding: '13px 14px',
-                borderRadius: 10,
-                background: 'rgb(var(--ink-2) / 0.55)',
-                border: '1px solid rgb(var(--ink-border))'
-              }}
-            >
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
-                  {t('agents.projectProgress.enable')}
-                </div>
-                <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
-                  {t('agents.projectProgress.enableHint')}
-                </div>
-              </div>
-              <Switch on={enabled} onChange={setEnabled} />
-            </div>
-
-            {/* 触发：标题正则（必填）+ 发件人子串（可选，留空 = 任意发件人） */}
-            <Field
-              label={t('agents.projectProgress.subjectPattern')}
-              hint={t('agents.projectProgress.subjectPatternHint')}
-            >
-              <input
-                type="text"
-                value={subject}
-                placeholder={t('agents.projectProgress.subjectPlaceholder')}
-                onChange={(e) => {
-                  setSubject(e.target.value)
-                  setTriggerDirty(true)
-                }}
-                style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
-              />
-            </Field>
-            <Field
-              label={t('agents.projectProgress.senderPattern')}
-              hint={t('agents.projectProgress.senderPatternHint')}
-            >
-              <input
-                type="text"
-                value={sender}
-                placeholder={t('agents.projectProgress.senderPlaceholder')}
-                onChange={(e) => {
-                  setSender(e.target.value)
-                  setTriggerDirty(true)
-                }}
-                style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
-              />
-            </Field>
-
-            {/* 项目进度库 ID（env PROJECT_PROGRESS_DATABASE_ID，v1.3.0 只读 → 可编辑）
-                —— 需重启生效。env 未就绪 / web 时禁用。 */}
-            <Field
-              label={t('agents.projectProgress.database')}
-              hint={t('agents.projectProgress.databaseHint')}
-            >
-              <input
-                type="text"
-                value={dbId}
-                disabled={!envReady || IS_WEB}
-                placeholder={t('agents.projectProgress.databaseUnset')}
-                onChange={(e) => {
-                  setDbId(e.target.value)
-                  setDbIdDirty(true)
-                }}
-                style={{
-                  ...inputStyle,
-                  fontFamily: 'var(--font-mono, monospace)',
-                  ...(!envReady || IS_WEB ? { opacity: 0.5 } : {})
-                }}
-              />
-            </Field>
-
-            {/* BU 过滤（env PROJECT_PROGRESS_FILTER_BU，v1.3.0 收编自 Settings→集成）
-                —— 需重启生效。env 未就绪 / web 时禁用。 */}
-            <Field
-              label={t('agents.projectProgress.filterBu')}
-              hint={t('agents.projectProgress.filterBuHint')}
-            >
-              <input
-                type="text"
-                value={filterBu}
-                disabled={!envReady || IS_WEB}
-                placeholder={t('agents.projectProgress.filterBuPlaceholder')}
-                onChange={(e) => {
-                  setFilterBu(e.target.value)
-                  setFilterBuDirty(true)
-                }}
-                style={{
-                  ...inputStyle,
-                  fontFamily: 'var(--font-mono, monospace)',
-                  ...(!envReady || IS_WEB ? { opacity: 0.5 } : {})
-                }}
-              />
-            </Field>
-
-            {/* 内置能力（R2(c)）：同步脚本 = 确定性 Python 直调、恒启用 —— 锁定态徽标，
-                不可交互（不是 skill 体系，不能挂载/卸载）；唯一开关 = 上方启用开关。 */}
-            <Field
-              label={t('agents.projectProgress.capability')}
-              hint={t('agents.projectProgress.capabilityHint')}
-            >
-              <span
-                aria-disabled="true"
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  gap: 6,
-                  padding: '6px 12px',
-                  borderRadius: 8,
-                  fontSize: 13,
-                  cursor: 'default',
-                  opacity: 0.7,
-                  color: 'rgb(var(--c-accent))',
-                  background: 'rgb(var(--c-accent) / 0.14)',
-                  border: '1px solid rgb(var(--c-accent) / 0.5)'
-                }}
-              >
-                <ReportIcon name="check" size={13} />
-                {t('agents.projectProgress.capabilityChip')}
-              </span>
-              <div
-                style={{
-                  fontSize: 11.5,
-                  color: 'rgb(var(--ink-fg-3))',
-                  marginTop: 7,
-                  lineHeight: 1.5
-                }}
-              >
-                {t('agents.projectProgress.capabilityNote')}
-              </div>
-            </Field>
-
-            {/* 执行历史（R5）：只读近期同步记录（状态/时间/错误/项目计数）。 */}
-            <ProjectProgressRunHistory open={open} />
-
-            {err && (
-              <div style={{ fontSize: 12.5, color: 'rgb(var(--c-danger, var(--ink-fg-1)))' }}>
-                {err}
-              </div>
-            )}
+          {/* 总闸状态说明。总闸未开时高亮提示。 */}
+          <div
+            style={{
+              fontSize: 12.5,
+              color: masterEnabled ? 'rgb(var(--ink-fg-2))' : 'rgb(var(--c-warn, var(--ink-fg-1)))',
+              padding: '10px 12px',
+              borderRadius: 9,
+              background: 'rgb(var(--ink-1) / 0.5)',
+              border: '1px solid rgb(var(--ink-border-soft))',
+              lineHeight: 1.55
+            }}
+          >
+            {masterEnabled
+              ? t('agents.projectProgress.masterOnNote')
+              : t('agents.projectProgress.masterOffNote')}
           </div>
-        </div>
 
-        <footer
-          className="flex items-center"
-          style={{
-            gap: 10,
-            padding: '13px 18px',
-            borderTop: '1px solid rgb(var(--ink-border-soft))',
-            flexShrink: 0,
-            justifyContent: 'flex-end'
-          }}
+          {/* 总开关（env PROJECT_PROGRESS_SYNC_ENABLED，v1.3.0 收编自 Settings→集成）
+                —— 需重启生效。env 未就绪 / web 时禁用。 */}
+          <div
+            className="flex items-center"
+            style={{
+              gap: 12,
+              padding: '13px 14px',
+              borderRadius: 10,
+              background: 'rgb(var(--ink-2) / 0.55)',
+              border: '1px solid rgb(var(--ink-border))'
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                {t('agents.projectProgress.master')}
+              </div>
+              <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                {t('agents.projectProgress.masterHint')}
+              </div>
+            </div>
+            <span style={!envReady || IS_WEB ? { opacity: 0.5, pointerEvents: 'none' } : undefined}>
+              <Switch
+                on={master}
+                onChange={(v) => {
+                  setMaster(v)
+                  setMasterDirty(true)
+                }}
+              />
+            </span>
+          </div>
+
+          {/* 启用（row.enabled，保存即生效） */}
+          <div
+            className="flex items-center"
+            style={{
+              gap: 12,
+              padding: '13px 14px',
+              borderRadius: 10,
+              background: 'rgb(var(--ink-2) / 0.55)',
+              border: '1px solid rgb(var(--ink-border))'
+            }}
+          >
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 13.5, fontWeight: 500, color: 'rgb(var(--ink-fg))' }}>
+                {t('agents.projectProgress.enable')}
+              </div>
+              <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
+                {t('agents.projectProgress.enableHint')}
+              </div>
+            </div>
+            <Switch on={enabled} onChange={setEnabled} />
+          </div>
+
+          {/* 头像 + 名称（0804 dogfood 3d/3e）—— 项目周报是 DB v31 播种的专型单例行，
+              名称不可编辑，故只并排展示，保存 patch 只带 avatar。 */}
+          <Field label={t('agents.avatar.label')} hint={t('agents.avatar.hint')}>
+            <AgentIdentityHeader
+              agentId={PROJECT_PROGRESS_AGENT_ID}
+              value={avatar}
+              onChange={(next) => {
+                setAvatar(next)
+                setAvatarDirty(true)
+              }}
+              name={cfg?.title ?? ''}
+            />
+          </Field>
+
+          {/* 触发：标题正则（必填）+ 发件人子串（可选，留空 = 任意发件人） */}
+          <Field
+            label={t('agents.projectProgress.subjectPattern')}
+            hint={t('agents.projectProgress.subjectPatternHint')}
+          >
+            <input
+              type="text"
+              value={subject}
+              placeholder={t('agents.projectProgress.subjectPlaceholder')}
+              onChange={(e) => {
+                setSubject(e.target.value)
+                setTriggerDirty(true)
+              }}
+              style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+            />
+          </Field>
+          <Field
+            label={t('agents.projectProgress.senderPattern')}
+            hint={t('agents.projectProgress.senderPatternHint')}
+          >
+            <input
+              type="text"
+              value={sender}
+              placeholder={t('agents.projectProgress.senderPlaceholder')}
+              onChange={(e) => {
+                setSender(e.target.value)
+                setTriggerDirty(true)
+              }}
+              style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+            />
+          </Field>
+
+          {/* 项目进度库 ID（env PROJECT_PROGRESS_DATABASE_ID，v1.3.0 只读 → 可编辑）
+                —— 需重启生效。env 未就绪 / web 时禁用。 */}
+          <Field
+            label={t('agents.projectProgress.database')}
+            hint={t('agents.projectProgress.databaseHint')}
+          >
+            <input
+              type="text"
+              value={dbId}
+              disabled={!envReady || IS_WEB}
+              placeholder={t('agents.projectProgress.databaseUnset')}
+              onChange={(e) => {
+                setDbId(e.target.value)
+                setDbIdDirty(true)
+              }}
+              style={{
+                ...inputStyle,
+                fontFamily: 'var(--font-mono, monospace)',
+                ...(!envReady || IS_WEB ? { opacity: 0.5 } : {})
+              }}
+            />
+          </Field>
+
+          {/* BU 过滤（env PROJECT_PROGRESS_FILTER_BU，v1.3.0 收编自 Settings→集成）
+                —— 需重启生效。env 未就绪 / web 时禁用。 */}
+          <Field
+            label={t('agents.projectProgress.filterBu')}
+            hint={t('agents.projectProgress.filterBuHint')}
+          >
+            <input
+              type="text"
+              value={filterBu}
+              disabled={!envReady || IS_WEB}
+              placeholder={t('agents.projectProgress.filterBuPlaceholder')}
+              onChange={(e) => {
+                setFilterBu(e.target.value)
+                setFilterBuDirty(true)
+              }}
+              style={{
+                ...inputStyle,
+                fontFamily: 'var(--font-mono, monospace)',
+                ...(!envReady || IS_WEB ? { opacity: 0.5 } : {})
+              }}
+            />
+          </Field>
+
+          {/* 内置能力（R2(c)）：同步脚本 = 确定性 Python 直调、恒启用 —— 锁定态徽标，
+                不可交互（不是 skill 体系，不能挂载/卸载）；唯一开关 = 上方启用开关。 */}
+          <Field
+            label={t('agents.projectProgress.capability')}
+            hint={t('agents.projectProgress.capabilityHint')}
+          >
+            <span
+              aria-disabled="true"
+              style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: 6,
+                padding: '6px 12px',
+                borderRadius: 8,
+                fontSize: 13,
+                cursor: 'default',
+                opacity: 0.7,
+                color: 'rgb(var(--c-accent))',
+                background: 'rgb(var(--c-accent) / 0.14)',
+                border: '1px solid rgb(var(--c-accent) / 0.5)'
+              }}
+            >
+              <ReportIcon name="check" size={13} />
+              {t('agents.projectProgress.capabilityChip')}
+            </span>
+            <div
+              style={{
+                fontSize: 11.5,
+                color: 'rgb(var(--ink-fg-3))',
+                marginTop: 7,
+                lineHeight: 1.5
+              }}
+            >
+              {t('agents.projectProgress.capabilityNote')}
+            </div>
+          </Field>
+
+          {/* 执行历史（R5）：只读近期同步记录（状态/时间/错误/项目计数）。 */}
+          <ProjectProgressRunHistory open={open} />
+
+          {err && (
+            <div style={{ fontSize: 12.5, color: 'rgb(var(--c-danger, var(--ink-fg-1)))' }}>
+              {err}
+            </div>
+          )}
+        </div>
+      </div>
+
+      <footer
+        className="flex items-center"
+        style={{
+          gap: 10,
+          padding: '13px 18px',
+          borderTop: '1px solid rgb(var(--ink-border-soft))',
+          flexShrink: 0,
+          justifyContent: 'flex-end'
+        }}
+      >
+        <button
+          type="button"
+          onClick={onClose}
+          className="btn-ghost"
+          style={{ fontFamily: 'inherit' }}
         >
-          <button
-            type="button"
-            onClick={onClose}
-            className="btn-ghost"
-            style={{ fontFamily: 'inherit' }}
-          >
-            {t('agents.config.cancel')}
-          </button>
-          <StatefulButton
-            type="button"
-            onClick={() => void onSave()}
-            disabled={busy}
-            state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
-          >
-            {t('agents.config.save')}
-          </StatefulButton>
-        </footer>
+          {t('agents.config.cancel')}
+        </button>
+        <StatefulButton
+          type="button"
+          onClick={() => void onSave()}
+          disabled={busy}
+          state={busy ? 'loading' : saveFailed ? 'error' : 'idle'}
+        >
+          {t('agents.config.save')}
+        </StatefulButton>
+      </footer>
     </Drawer>
   )
 }

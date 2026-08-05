@@ -230,12 +230,15 @@ describe('ConfigDrawer schedule controls (Bug2 · ScheduleBuilder)', () => {
     expect(preview.querySelectorAll('li')).toHaveLength(5)
   })
 
-  test('退场期 cfg=null 不崩（regression：header title 改用 state，不读 cfg.title）', () => {
-    // shouldRender 被 mock 成恒 true，模拟退场动画播放中、父组件已把 cfg 置 null。
-    // 修复前 header 读 cfg.title → null.title 空指针崩；修复后读 title state（中性默认）→ 安全。
-    expect(() =>
-      renderDrawer(<ConfigDrawer cfg={null} open={false} onClose={() => {}} />)
-    ).not.toThrow()
+  test('cfg=null 时 render body 不读 cfg（regression：header title / 头像身份都走 state）', () => {
+    // 🔴 这条曾写成 `open={false}`，但 Drawer 现在是 AnimatePresence —— open=false 直接
+    // 渲染空 DOM，body 一行都不跑，断言恒绿（焊死的闸）。真正要钉的不变量是「render 期
+    // 一次都不 deref cfg」：退场动画播放中父组件已把 cfg 置 null，而 ConfigDrawer 常驻挂载、
+    // 仍会被重渲染。故这里直接用 open + cfg=null 强制整个 body 求值。
+    // 修复前 header 读 cfg.title → 空指针崩；现在 title / agentId / avatar 全在 state 里。
+    expect(() => renderDrawer(<ConfigDrawer cfg={null} open onClose={() => {}} />)).not.toThrow()
+    // 头像头部照常在场（按空 id 派生的中性默认脸），不是「整块没渲染所以没崩」。
+    expect(screen.getByRole('button', { name: '更换' })).toBeTruthy()
   })
 })
 
@@ -277,6 +280,38 @@ describe('ConfigDrawer identity docs (增量 2 — report 行级 context_docs)',
       'daily',
       expect.objectContaining({ context_docs: ['user'] })
     )
+  })
+})
+
+// 0804 dogfood 3d —— 预设 agent（报告）也能改头像：后端 avatar_json 读写本就全类型通用，
+// 缺的只是前端入口。头像编辑器默认折叠（3b），未触碰不进 patch（PATCH 缺席 = 不动列）。
+describe('ConfigDrawer avatar identity (0804 dogfood 3d)', () => {
+  afterEach(() => {
+    mockSave.mockClear()
+  })
+
+  test('默认折叠：只见「更换」，形状/配色网格不渲染', () => {
+    renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
+    expect(screen.getByRole('button', { name: '更换' })).toBeTruthy()
+    expect(screen.queryByTestId('avatar-shape-grid')).toBeNull()
+    expect(screen.queryByTestId('avatar-palette-grid')).toBeNull()
+  })
+
+  test('未触碰头像 → 保存 patch 不带 avatar 键（NULL 行保持 NULL）', () => {
+    renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(mockSave).toHaveBeenCalledTimes(1)
+    expect(mockSave.mock.calls[0][1]).not.toHaveProperty('avatar')
+  })
+
+  test('展开 → 选形状 → 保存 patch 携带 avatar', () => {
+    renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
+    fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    // 形状网格按 shape.name 挂 aria-label；nova 是六形状之一。
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Nova'))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    expect(mockSave).toHaveBeenCalledTimes(1)
+    expect(mockSave.mock.calls[0][1].avatar).toMatchObject({ shape: 'nova' })
   })
 })
 

@@ -3689,7 +3689,6 @@
       "noAgent": "暂无搜索 Agent，点上方新建。",
       "configTitle": "搜索 Agent · {title}",
       "newTitle": "新建搜索 Agent",
-      "titleLabel": "名称",
       "titlePlaceholder": "如 邮件搜索助手",
       "promptLabel": "搜索 Prompt",
       "promptHint": "下方为内置默认搜索 prompt，可直接覆写；占位符会在运行时自动替换",
@@ -3802,6 +3801,16 @@
         "statusProcessing": "处理中"
       }
     },
+    "avatar": {
+      "label": "头像",
+      "identityLabel": "名称与头像",
+      "hint": "未设置时按 Agent id 稳定派生；选择后保存为显式身份",
+      "change": "更换",
+      "collapse": "收起",
+      "shuffle": "换一换",
+      "shape": "形状",
+      "palette": "配色"
+    },
     "custom": {
       "section": "完全自定义 Agent",
       "sectionHint": "自定义触发（定时 / 邮件事件）、任务提示词、可用工具与预算，让 Agent 自动跑起来。",
@@ -3810,15 +3819,7 @@
       "newTileTitle": "新建自定义 Agent",
       "newTileHint": "定时或邮件事件触发的自主 Agent",
       "enableHint": "启用后按下方触发条件自动运行（触发为「无」时不会自动跑）。",
-      "titleLabel": "名称",
       "titlePlaceholder": "如 DMS 审批助手",
-      "avatar": {
-        "label": "头像身份",
-        "hint": "全部 Agent 都有按 id 稳定派生的默认头像；选择后会保存为显式身份",
-        "shuffle": "换一换",
-        "shape": "形状",
-        "palette": "配色"
-      },
       "promptLabel": "任务提示词",
       "promptHint": "触发时注入的任务指令（告诉 Agent 要做什么）",
       "promptPlaceholder": "描述这个 Agent 每次触发时要完成的任务",

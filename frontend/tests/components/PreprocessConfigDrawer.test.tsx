@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
 
@@ -145,5 +145,29 @@ describe('PreprocessConfigDrawer 参考上下文源（task 07-22 行存储）', 
   test('中英文文案 key 齐全（源提示注明保存即生效）', () => {
     expect(zhCommon.agents.preprocess.contextSourceHint).toContain('保存即生效')
     expect(enCommon.agents.preprocess.contextSourceHint).toContain('no restart')
+  })
+})
+
+// 0804 dogfood 3d —— 预设单例行也有头像入口（名称仍不可编辑，patch 只带 avatar）。
+describe('PreprocessConfigDrawer 头像身份（0804 dogfood 3d）', () => {
+  test('默认折叠；展开选形状后保存 → patch 携带 avatar', async () => {
+    renderDrawer()
+    expect(screen.queryByTestId('avatar-shape-grid')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Void'))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => {
+      expect(mockSave).toHaveBeenCalledWith(
+        'email_preprocess_agent',
+        expect.objectContaining({ avatar: expect.objectContaining({ shape: 'void' }) })
+      )
+    })
+  })
+
+  test('未触碰头像 → 保存 patch 不含 avatar（dirty-gate，NULL 行保持 NULL）', async () => {
+    renderDrawer()
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(mockSave).toHaveBeenCalled())
+    expect(mockSave.mock.calls[0][1] as Record<string, unknown>).not.toHaveProperty('avatar')
   })
 })

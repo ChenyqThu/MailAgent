@@ -2,8 +2,14 @@
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import type { ReportAgentConfig, ReportCadence, ReportConfigPatch } from '@shared/api/types'
+import type {
+  AgentAvatarConfig,
+  ReportAgentConfig,
+  ReportCadence,
+  ReportConfigPatch
+} from '@shared/api/types'
 import { CadencePill, ReportIcon, Switch } from '../primitives'
+import { AgentIdentityHeader } from '../AgentAvatar'
 import { useKosAvailable, useSetConfig } from '../hooks'
 import { Drawer } from '@shared/components/ui/drawer'
 import { StatefulButton } from '@shared/components/ui/stateful-button'
@@ -55,6 +61,11 @@ export function ConfigDrawer({
   // 本身交给 ScheduleBuilder，但构建器的 freq 段被锁死（lockFreq），不让用户在这里改报告种类。
   const [cadence, setCadence] = useState<ReportCadence>('daily')
   const [title, setTitle] = useState('')
+  // 头像身份（0804 dogfood 3d）：与 title 同纪律进 state —— 退场期 cfg→null 时头像不能
+  // 跳回「按空 id 派生」的另一张脸（agentId 也一并 state 化）。avatarDirty 才写 patch。
+  const [agentId, setAgentId] = useState('')
+  const [avatar, setAvatar] = useState<AgentAvatarConfig | null>(null)
+  const [avatarDirty, setAvatarDirty] = useState(false)
 
   // useState 初始化为中性默认；真正预填由下方 useEffect 在 open 时按 cfg 灌入。这样
   // 退场期间(open=false, cfg→null)不会重置，重开能正确反映目标 agent。
@@ -86,6 +97,9 @@ export function ConfigDrawer({
     // eslint-disable-next-line react-hooks/set-state-in-effect -- 模态打开按 cfg 预填表单（多字段响应 open&&cfg 变化）。React Compiler 迁移债：真重构需父组件 key 重置 remount + 预填逻辑搬 useState initializer，等价性风险（occurrence vs create defaults 各转换）高于收益。effect 合理保留。
     setCadence(cfg.schedule.cadence)
     setTitle(cfg.title)
+    setAgentId(cfg.id)
+    setAvatar(cfg.avatar ?? null)
+    setAvatarDirty(false)
     setEnabled(cfg.enabled)
     setPrompt(cfg.prompt)
     setPromptDirty(false)
@@ -128,6 +142,8 @@ export function ConfigDrawer({
       // cadence 恒 = rule.freq，而 freq 段被 lockFreq 锁死 → 报告种类不会被排程编辑改掉。
       schedule: { ...cfg.schedule, ...writeReportSchedule(schedule) }
     }
+    // 头像：未触碰不发（PATCH 缺席 = 不动列），避免把 NULL 行写成显式派生值。
+    if (avatarDirty) patch.avatar = avatar
     // 触发模式 / 时区 / 带正文优先级仅 daily 有意义；周月报走层级聚合，不带这些。
     if (isDaily) {
       patch.trigger_mode = triggerMode
@@ -227,6 +243,20 @@ export function ConfigDrawer({
             </div>
             <Switch on={enabled} onChange={setEnabled} />
           </div>
+
+          {/* 头像 + 名称（0804 dogfood 3d/3e）—— 报告 Agent 的名称在抽屉里一直是只读
+              （种类由 cadence 决定），故只并排展示，保存 patch 只带 avatar。 */}
+          <Field label={t('agents.avatar.label')} hint={t('agents.avatar.hint')}>
+            <AgentIdentityHeader
+              agentId={agentId}
+              value={avatar}
+              onChange={(next) => {
+                setAvatar(next)
+                setAvatarDirty(true)
+              }}
+              name={title}
+            />
+          </Field>
 
           {/* prompt */}
           <Field label={t('agents.config.prompt')} hint={t('agents.config.promptHint')}>

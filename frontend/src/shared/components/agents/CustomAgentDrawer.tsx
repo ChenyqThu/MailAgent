@@ -58,7 +58,7 @@ import { errText, type ConnectorGrantMap, type WebGrant } from './custom-agent/s
 import { RunHistorySection } from './custom-agent/RunHistorySection'
 import { AutomationPolicySection } from './custom-agent/AutomationPolicySection'
 import { CapabilityCards } from './custom-agent/CapabilityCards'
-import { AgentAvatarEditor } from './AgentAvatar'
+import { AgentIdentityHeader } from './AgentAvatar'
 
 export { RunStateBadge } from './custom-agent/RunHistorySection'
 
@@ -564,28 +564,20 @@ export function CustomAgentDrawer({
             <Switch on={enabled} onChange={setEnabled} />
           </div>
 
-          {/* title */}
-          <Field label={t('agents.custom.titleLabel')}>
-            <input
-              type="text"
-              value={title}
-              placeholder={t('agents.custom.titlePlaceholder')}
-              onChange={(e) => setTitle(e.target.value)}
-              style={inputStyle}
-            />
-          </Field>
-
-          <Field label={t('agents.custom.avatar.label')} hint={t('agents.custom.avatar.hint')}>
-            <AgentAvatarEditor
+          {/* 名称 + 头像并排（0804 dogfood 3b/3e）：头像编辑器默认折叠在「更换」后面，
+              抽屉首屏不再被形状/配色两张网格吃掉。 */}
+          <Field label={t('agents.avatar.identityLabel')} hint={t('agents.avatar.hint')}>
+            <AgentIdentityHeader
               agentId={cfg?.id ?? slugifyTitle(title)}
               value={avatar}
               onChange={(next) => {
                 setAvatar(next)
                 setAvatarDirty(true)
               }}
-              shuffleLabel={t('agents.custom.avatar.shuffle')}
-              shapeLabel={t('agents.custom.avatar.shape')}
-              paletteLabel={t('agents.custom.avatar.palette')}
+              name={title}
+              onNameChange={setTitle}
+              namePlaceholder={t('agents.custom.titlePlaceholder')}
+              inputStyle={inputStyle}
             />
           </Field>
 

@@ -3689,7 +3689,6 @@
       "noAgent": "No search agent yet — click New above.",
       "configTitle": "Search Agent · {title}",
       "newTitle": "New Search Agent",
-      "titleLabel": "Name",
       "titlePlaceholder": "e.g. Mail search assistant",
       "promptLabel": "Search Prompt",
       "promptHint": "Built-in default search prompt below — edit to override; placeholders auto-filled at runtime",
@@ -3802,6 +3801,16 @@
         "statusProcessing": "Processing"
       }
     },
+    "avatar": {
+      "label": "Avatar",
+      "identityLabel": "Name & avatar",
+      "hint": "Derived from the agent id until you pick one; your choice is saved as an explicit identity",
+      "change": "Change",
+      "collapse": "Collapse",
+      "shuffle": "Shuffle",
+      "shape": "Shape",
+      "palette": "Palette"
+    },
     "custom": {
       "section": "Custom Agents",
       "sectionHint": "Define triggers (schedule / email events), a task prompt, allowed tools and budgets to let an agent run on its own.",
@@ -3810,15 +3819,7 @@
       "newTileTitle": "New Custom Agent",
       "newTileHint": "An autonomous agent triggered on a schedule or email events",
       "enableHint": "When enabled, runs automatically on the trigger below (won't run when trigger is None).",
-      "titleLabel": "Name",
       "titlePlaceholder": "e.g. DMS approval helper",
-      "avatar": {
-        "label": "Avatar identity",
-        "hint": "Every agent gets a stable id-derived default; choosing one saves an explicit identity",
-        "shuffle": "Shuffle",
-        "shape": "Shape",
-        "palette": "Palette"
-      },
       "promptLabel": "Task prompt",
       "promptHint": "Instructions injected on each trigger (what the agent should do)",
       "promptPlaceholder": "Describe the task the agent should complete on each trigger",
