@@ -878,7 +878,8 @@
       "statusRunning": "运行中",
       "statusOk": "已完成",
       "statusError": "已失败",
-      "statusDenied": "已拒绝"
+      "statusDenied": "已拒绝",
+      "statusExpired": "已过期"
     },
     "toolTitle": {
       "email_list_filter": "筛选邮件",

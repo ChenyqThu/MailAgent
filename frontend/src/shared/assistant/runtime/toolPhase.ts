@@ -5,9 +5,12 @@
 // `running` boolean). They agreed by accident, not by construction. This is the one judge; the
 // three callers now project from it (`isToolPhaseSettled` / `deriveToolPhase`).
 //
-// 🔴 Zero-dependency leaf ON PURPOSE: both `runtime/useTurnStage.ts` and `tools/generic/*` import
-// it, so it must not pull React, i18n or either of them back (a cycle here would break the
-// ToolGroup red lines in a way no unit test would show).
+// 🔴 Zero-RUNTIME-dependency leaf ON PURPOSE: `runtime/useTurnStage.ts`, `tools/generic/*` AND
+// `tools/_cardShell.lib.ts` import it, so it must not pull React, i18n or either of them back (a
+// cycle here would break the ToolGroup red lines in a way no unit test would show). The single
+// `import type` below is exempt by construction — a type-only import is erased before bundling, so
+// it can neither enter the module graph nor cycle. A VALUE import from `@assistant-ui/react` would
+// not be exempt; do not "simplify" it into one.
 //
 // Wire → props background (react-ai-sdk convertMessage): the ai@7 part `state`
 // (input-streaming / input-available / output-available / -error / -denied) is NOT forwarded to
@@ -17,6 +20,8 @@
 // The one signal that can: convertMessage runs `argsText.replace(/[}\]"]+$/, '')` ONLY while the
 // part is `input-streaming`, so a live part's argsText is a TRUNCATED (unparseable) JSON prefix
 // while it streams, and a complete `JSON.stringify(args)` from input-available onward.
+
+import type { ToolCallMessagePart } from '@assistant-ui/react'
 
 /** The five display phases of a tool call. `streaming-args` = the model is still emitting the
  *  arguments; `executing` = arguments final, the tool is running; `awaiting` = paused at an
@@ -84,4 +89,47 @@ export function isToolDenied(part: ToolPhaseInput): boolean {
   const approval = part.approval
   if (!approval) return false
   return approval.approved === false || approval.resolution != null
+}
+
+/** The value domain upstream (`@assistant-ui/core`) declares for `approval.resolution`. */
+type ApprovalResolution = NonNullable<NonNullable<ToolCallMessagePart['approval']>['resolution']>
+
+/** The terminal `approval.resolution` values that mean "the gate went away WITHOUT a decision".
+ *
+ *  🔴 SINGLE definition point. `tools/_cardShell.lib.ts::deriveCardPhase` used to hand-copy the
+ *  same two literals for its `'expired'` phase; it now reads `isResolutionWithoutDecision` from
+ *  here. The constant lives in THIS leaf and not in `_cardShell.lib.ts` because the dependency
+ *  only survives in this direction: `_cardShell.lib.ts` pulls `motion-tokens` + `runtime/flags`,
+ *  so importing it from here would end the zero-runtime-dependency property the header rests on.
+ *
+ *  🔴 A Record, not an array, and typed `satisfies Record<ApprovalResolution, true>`: a TS union
+ *  has no runtime form, so the list must be hand-written — but a Record makes BOTH directions a
+ *  compile error. Extra/misspelt member → excess-property error; upstream adds a THIRD resolution
+ *  value and we don't follow → missing-property error. An array literal only catches the first
+ *  half, and the half it misses (silently under-covering a widened upstream domain) is exactly the
+ *  failure this mirror is at risk of. */
+export const RESOLUTION_WITHOUT_DECISION = {
+  cancelled: true,
+  expired: true
+} satisfies Record<ApprovalResolution, true>
+
+/** Does this `resolution` fall in the "nobody decided" domain? The one judge both consumers read:
+ *  `isToolCancelled` below (trace card) and `deriveCardPhase` (approval cards). */
+export function isResolutionWithoutDecision(resolution: string | null | undefined): boolean {
+  return resolution != null && Object.hasOwn(RESOLUTION_WITHOUT_DECISION, resolution)
+}
+
+/** Cancelled ≠ denied, and the difference is not cosmetic: `approved === false` is an ACTIVE
+ *  refusal by the user, while a `resolution` of cancelled/expired means nobody ever decided (the
+ *  turn was aborted / the gate timed out). `isToolDenied` deliberately keeps returning true for
+ *  both — it is the "did NOT run because of the gate" judge and its callers depend on that — so
+ *  this is a narrowing predicate to be checked FIRST when the two need different presentation.
+ *
+ *  ⚠️ Reachability, stated so nobody mistakes this for a live feature: the current
+ *  `@assistant-ui/react-ai-sdk` convertMessage forwards only `{id, approved, reason, isAutomatic}`
+ *  and DROPS `resolution`, so no part arriving through `useAISDKRuntime` can be cancelled today.
+ *  This is a correctness/forward-compat split (assistant-ui's own ExternalThread already reads
+ *  `approval.resolution`), not a state the user can currently produce. */
+export function isToolCancelled(part: ToolPhaseInput): boolean {
+  return isResolutionWithoutDecision(part.approval?.resolution)
 }

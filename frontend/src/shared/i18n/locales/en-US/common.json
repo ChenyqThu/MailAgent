@@ -878,7 +878,8 @@
       "statusRunning": "Running",
       "statusOk": "Done",
       "statusError": "Failed",
-      "statusDenied": "Denied"
+      "statusDenied": "Denied",
+      "statusExpired": "Expired"
     },
     "toolTitle": {
       "email_list_filter": "Filter mailbox",

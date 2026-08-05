@@ -12,11 +12,15 @@ import { describe, expect, test } from 'vitest'
 
 import {
   deriveToolPhase,
+  isResolutionWithoutDecision,
+  isToolCancelled,
   isToolDenied,
   isToolPhaseSettled,
   partAwaitsApproval,
+  RESOLUTION_WITHOUT_DECISION,
   type ToolPhaseInput
 } from '@shared/assistant/runtime/toolPhase'
+import { deriveCardPhase } from '@shared/assistant/tools/_cardShell.lib'
 import { formatToolDuration } from '@shared/assistant/tools/generic/useToolElapsed'
 
 // ── verbatim pre-refactor implementations (do NOT "improve" these — they are the reference) ──
@@ -175,6 +179,86 @@ describe('isToolDenied — refused, not failed', () => {
   })
   test('no approval object at all → not denied', () => {
     expect(isToolDenied({ isError: true, result: { error: 'boom' } })).toBe(false)
+  })
+})
+
+describe('isToolCancelled — nobody decided ≠ somebody refused (R5)', () => {
+  test('a cancelled / expired gate is cancelled', () => {
+    expect(isToolCancelled({ approval: { resolution: 'cancelled' } })).toBe(true)
+    expect(isToolCancelled({ approval: { resolution: 'expired' } })).toBe(true)
+  })
+  test('🔴 an ACTIVE refusal is NOT cancelled — that is the whole point of the split', () => {
+    expect(isToolCancelled({ approval: { approved: false }, isError: true })).toBe(false)
+  })
+  test('an unknown resolution value is not silently promoted to cancelled', () => {
+    expect(isToolCancelled({ approval: { resolution: 'something-new' } })).toBe(false)
+  })
+  test('no approval / an open gate / an approved call → not cancelled', () => {
+    expect(isToolCancelled({ isError: true, result: { error: 'boom' } })).toBe(false)
+    expect(isToolCancelled({ approval: {} })).toBe(false)
+    expect(isToolCancelled({ approval: { approved: true } })).toBe(false)
+  })
+  test('🔴 isToolDenied is UNCHANGED — it still covers both halves', () => {
+    // 它是「因为闸而没跑成」的判据，调用方依赖这个语义；cancelled 是叠在上面的收窄。
+    expect(isToolDenied({ approval: { resolution: 'cancelled' } })).toBe(true)
+    expect(isToolDenied({ approval: { approved: false } })).toBe(true)
+  })
+})
+
+describe('🔴 RESOLUTION_WITHOUT_DECISION 是单一定义点（消灭了 _cardShell.lib 的手抄）', () => {
+  // 0805 收尾① —— 这两个字面量此前在 runtime/toolPhase.ts 与 tools/_cardShell.lib.ts 各写一遍。
+  // 本组是**变异检验**的形态：期望全部由单源 `RESOLUTION_WITHOUT_DECISION` 生成，测试里一个
+  // 字面量都不再抄第三遍。往单源里加一个值，下面的循环自动覆盖它；只更新一侧消费方即红。
+  // （值域本身与上游 `@assistant-ui/core` 的 `resolution?: "cancelled" | "expired"` union 之间
+  // 另有编译期闸 —— `satisfies Record<ApprovalResolution, true>` 让漏写/多写都过不了 typecheck，
+  // 那一半不可能写成运行时断言，故不在这里。）
+  const values = Object.keys(RESOLUTION_WITHOUT_DECISION)
+
+  /** deriveCardPhase 的入参是上游 props 的窄类型；这里要喂值域外的字符串，故按 wire 形状转型。 */
+  function cardPhaseFor(resolution: string): ReturnType<typeof deriveCardPhase> {
+    return deriveCardPhase({ approval: { id: 'ap1', resolution } } as unknown as Parameters<
+      typeof deriveCardPhase
+    >[0])
+  }
+
+  test('canary: 单源非空 —— 清单被清空时下面的循环会退化成零断言', () => {
+    expect(values.length).toBeGreaterThanOrEqual(2)
+  })
+
+  test('单源里的每个值，两处消费方都判成「没人决定」', () => {
+    for (const resolution of values) {
+      expect(isResolutionWithoutDecision(resolution), resolution).toBe(true)
+      // 消费方 ①：trace 卡的 cancelled tone。
+      expect(isToolCancelled({ approval: { resolution } }), resolution).toBe(true)
+      // 消费方 ②：审批卡的 expired 相位（此前在 _cardShell.lib.ts 手抄同样的字面量）。
+      expect(cardPhaseFor(resolution), resolution).toBe('expired')
+    }
+  })
+
+  test('值域外的 resolution 两处都不放行（不是 truthy 判定，也不吃原型链上的键）', () => {
+    // 'toString' 是 Object.hasOwn 而非 `in` 的判据差 —— 用 `in` 写这个判定就会把它误放行。
+    for (const resolution of ['something-new', 'CANCELLED', 'toString', '']) {
+      expect(isResolutionWithoutDecision(resolution), resolution).toBe(false)
+      expect(isToolCancelled({ approval: { resolution } }), resolution).toBe(false)
+      expect(cardPhaseFor(resolution), resolution).not.toBe('expired')
+    }
+  })
+
+  test('deriveCardPhase 的其余分支一个字节没动（判定链只换了 resolution 的来源）', () => {
+    // 优先级 error > expired > rejected > done > pending > authorized，逐条复述。
+    expect(deriveCardPhase({ isError: true } as never)).toBe('error')
+    expect(deriveCardPhase({ status: { type: 'incomplete', reason: 'error' } } as never)).toBe(
+      'error'
+    )
+    expect(deriveCardPhase({ approval: { id: 'a', approved: false } } as never)).toBe('rejected')
+    expect(deriveCardPhase({ result: { ok: true } } as never)).toBe('done')
+    expect(deriveCardPhase({ approval: { id: 'a' } } as never)).toBe('pending')
+    expect(deriveCardPhase({ approval: { id: 'a', approved: true } } as never)).toBe('authorized')
+    expect(deriveCardPhase({} as never)).toBe('done')
+    // 🔴 error 仍压过 expired（终态优先级不因单源化而变）。
+    expect(
+      deriveCardPhase({ isError: true, approval: { id: 'a', resolution: 'expired' } } as never)
+    ).toBe('error')
   })
 })
 
