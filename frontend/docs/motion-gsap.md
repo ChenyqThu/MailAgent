@@ -165,7 +165,7 @@ stall watchdog 纯前端（`useStallLevel`，15s/30s 两档），**不动 gatewa
 |---|---|
 | 位置 | `shared/components/email/TranslatedBody.tsx` 的模块常量 `STREAMING_TAIL_MASK`（React inline style，不进 `index.css`：它只服务这一个组件的一个状态，没有第二调用点） |
 | 配方 | `mask-image: linear-gradient(to bottom, black calc(100% - 1.5em), transparent)` + 同值 `-webkit-mask-image`（Electron Chromium 前缀双写）。用关键字 `black` 而非 `#000`：mask 里只有 **alpha** 有意义，它不是主题色、不该走 token，同时让 `mailagent/no-raw-hex` 保持干净（无需 `eslint-disable`，同 `chatAttachmentAdapter` 的 canvas matte 先例） |
-| 用途 | 正文最后 1.5em 渐隐，新句子从这条渐变带里「擦」出来——**取代** Streamdown 的 per-token `animated` fadeIn（后者在中文下恒不生效：其 `sep:'word'` 切分器靠「是否空白」布尔翻转切段，中文无空格 → 纯中文整段只切出 1 个 token；`sep:'char'` 逐字则爆 DOM 且被 owner 否掉「太跳跃」）。节奏由网关 `smoothStream` 句级分块给（`ai-gateway/chatRun.ts`，env `MAILAGENT_STREAM_CHUNKING` 三档），本层只给质感 |
+| 用途 | 正文最后 1.5em 渐隐，新句子从这条渐变带里「擦」出来——**取代** Streamdown 的 per-token `animated` fadeIn（后者在中文下恒不生效：其 `sep:'word'` 切分器靠「是否空白」布尔翻转切段，中文无空格 → 纯中文整段只切出 1 个 token；`sep:'char'` 逐字则爆 DOM 且被 owner 否掉「太跳跃」）。节奏由网关 `smoothStream` 句级分块给（`ai-gateway/chatRun.ts` 的 `SENTENCE_CHUNKING_REGEX` 常量；0804 定档，已删 env 三档分支），本层只给质感 |
 | 挂载边界（红线） | **只在 `streaming` 时挂**（`style={streaming ? … : undefined}`）；`mode='static'` 的历史消息 style 恒 `undefined`，与本改动前逐字节一致。流结束即摘除 |
 | 性能边界 | 静态 mask，**不随时间动 / 无 keyframes / 无 rAF**；mask 不影响布局 → 挂载与摘除都不触发重排（只是一次合成属性变更，无闪烁）。它会给元素建合成层，故**不要**往长列表行、虚拟列表项上复制这套写法；仅用于「单条正在生长的流式正文」这类同时至多一个的元素 |
 | reduced-motion | 不需要降级 —— 它是静态视觉处理而非动画，reduce 下语义不变（用户没在「看动」） |

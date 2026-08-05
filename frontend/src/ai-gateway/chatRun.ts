@@ -65,21 +65,19 @@ import {
  *  infinite tool loop. Manual and headless runs share this exact value. */
 export const INTERNAL_TOOL_STEP_SENTINEL = 10_000
 
-// ── W1 节奏层 —— 流式分块的三档（chat UI 优化 epic，2026-08）────────────────────────────
+// ── W1 节奏层 —— 流式分块粒度（chat UI 优化 epic，2026-08）─────────────────────────────
 //
 // 病根：此前 `chunking: /[一-鿿]|\S+\s+/` 让中文**逐字**出流，是配合前端 Streamdown 的
 // per-token fadeIn 设计的；但前端那半从未生效（Streamdown 的 word 切分器按「当前字符是否
 // 空白」布尔翻转来切段，中文无空格 → 恒不翻转 → 纯中文整段只切出 1 个 token → 零动效）。
-// owner 拍板「要一段一段地呈现，逐字太跳跃」，故节奏层上移到句/行粒度，逐 token 的质感层
+// owner 拍板「要一段一段地呈现，逐字太跳跃」，故节奏层上移到句粒度，逐 token 的质感层
 // 换成前端正文尾部的渐变 mask（见 shared/components/email/TranslatedBody.tsx）。
 //
-// 三档 env 可切是为 owner 实机比对用；定档后应收敛成常量并删掉 env 分支。
-
-/** 流式分块档位。`sentence` = 默认（缺省 / 非法值都落这里）。 */
-export type StreamChunkingMode = 'line' | 'sentence' | 'cjk-word'
+// 曾以 env `MAILAGENT_STREAM_CHUNKING` 三档（line/sentence/cjk-word）供 owner 实机比对；
+// 0804 dogfood 定档 sentence，WP8 收敛为常量并删掉 env 分支（line/cjk-word 两档未采纳）。
 
 /**
- * 句级切分（默认档）。smoothStream 的 RegExp 语义是「chunk = buffer 中 match 之前的全部
+ * 句级切分。smoothStream 的 RegExp 语义是「chunk = buffer 中 match 之前的全部
  * + match 本身」（ai/dist detectChunk: `buffer.slice(0, match.index) + match[0]`），所以
  * 这里只需匹配**句终符簇**，不必匹配整句：
  *
@@ -96,31 +94,6 @@ export type StreamChunkingMode = 'line' | 'sentence' | 'cjk-word'
  */
 const SENTENCE_CHUNKING_REGEX =
   /(?:[。！？…]+|[.!?]+(?=[\s"'”’)\]）】]))[”’"'）)\]】》」』]*\s*|\n+/
-
-/** CJK 词级档。ai@7 的 smoothStream 原生接受 Intl.Segmenter（`chunking?: 'word' | 'line' |
- *  RegExp | ChunkDetector | Intl.Segmenter`，node_modules/ai/dist/index.d.ts:6945），内部取
- *  buffer 的第一个 segment 当 chunk。构造 Segmenter 不便宜 → 模块级懒建单例。 */
-let cjkWordSegmenter: Intl.Segmenter | undefined
-
-const STREAM_CHUNKING_MODES: readonly string[] = ['line', 'sentence', 'cjk-word']
-
-/** env `MAILAGENT_STREAM_CHUNKING` → 档位。缺省 / 空 / 非法值一律 'sentence'（纯函数，可单测）。 */
-export function resolveStreamChunkingMode(
-  raw: string | undefined = process.env.MAILAGENT_STREAM_CHUNKING
-): StreamChunkingMode {
-  const v = typeof raw === 'string' ? raw.trim().toLowerCase() : ''
-  return STREAM_CHUNKING_MODES.includes(v) ? (v as StreamChunkingMode) : 'sentence'
-}
-
-/** 档位 → smoothStream 的 `chunking` 实参。 */
-export function streamChunkingFor(mode: StreamChunkingMode): 'line' | RegExp | Intl.Segmenter {
-  if (mode === 'line') return 'line'
-  if (mode === 'cjk-word') {
-    cjkWordSegmenter ??= new Intl.Segmenter('zh', { granularity: 'word' })
-    return cjkWordSegmenter
-  }
-  return SENTENCE_CHUNKING_REGEX
-}
 
 /**
  * HIGH-1 (batch1 review) — the ONE credential pre-gate all three LLM entrypoints share
@@ -497,10 +470,10 @@ export async function prepareChatRun(
     abortSignal,
     maxOutputTokens,
     // 平滑流式输出：smoothStream 把模型的突发 chunk 重整成稳定节奏。分块粒度见文件头部
-    // 「W1 节奏层」—— 默认句级（中英通吃），env MAILAGENT_STREAM_CHUNKING 可切 line / cjk-word
-    // 供实机比对。两个端点（/api/ai/chat + AG-UI 镜像）共用此 streamText，一致生效。
+    // 「W1 节奏层」—— 句级（中英通吃）。两个端点（/api/ai/chat + AG-UI 镜像）共用此
+    // streamText，一致生效。
     experimental_transform: smoothStream({
-      chunking: streamChunkingFor(resolveStreamChunkingMode())
+      chunking: SENTENCE_CHUNKING_REGEX
     }),
     ...(thinkingProviderOpts ? { providerOptions: thinkingProviderOpts } : {}),
     ...(hasTools
