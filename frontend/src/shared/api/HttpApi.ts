@@ -70,6 +70,7 @@ import type {
   EmailBody,
   EmailDetail,
   EmailFlagOpts,
+  EmailPinOpts,
   EmailMeta,
   EnrichedEmailMeta,
   EnvSnapshot,
@@ -326,14 +327,23 @@ export class HttpApi implements MailApi {
         body: { mode: opts.mode }
       }),
 
-    pin: async (internalId: number, pinned: boolean): Promise<boolean | null> => {
+    pin: async (
+      internalId: number,
+      pinned: boolean,
+      opts?: EmailPinOpts
+    ): Promise<boolean | null> => {
+      // Body parity with write_ops.runPin — only send the optional keys when
+      // set so the single-row wire stays byte-identical to before.
+      const body: Record<string, unknown> = { pinned }
+      if (opts?.ids && opts.ids.length > 0) body.ids = opts.ids
+      if (opts?.cascadeThread) body.cascadeThread = true
       try {
         const data = await this.req<{
           internal_id: number
           is_pinned: boolean
           changed: boolean
           dry_run: boolean
-        }>('POST', `/email/${internalId}/pin`, { body: { pinned } })
+        }>('POST', `/email/${internalId}/pin`, { body })
         // Surface only is_pinned (boolean), mirroring ElectronApi.
         return data?.is_pinned ?? null
       } catch (e) {
@@ -359,6 +369,9 @@ export class HttpApi implements MailApi {
       if (opts.isRead !== undefined) body.isRead = opts.isRead
       if (opts.isFlagged !== undefined) body.isFlagged = opts.isFlagged
       if (opts.processingStatus !== undefined) body.processingStatus = opts.processingStatus
+      // Thread cascade (虚拟头「标完成」) — only sent when set, keeping the
+      // historical single-row wire byte-identical.
+      if (opts.cascadeThread) body.cascadeThread = true
 
       if (opts.ids && opts.ids.length > 0) {
         // Batch mode. The path still needs an int segment even though the

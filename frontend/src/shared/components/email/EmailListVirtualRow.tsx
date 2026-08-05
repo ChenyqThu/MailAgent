@@ -87,6 +87,9 @@ export function VirtualRow({
   const t = item.thread
   const isHead = t?.isHead === true
   const isChild = t !== undefined && !t.isHead
+  // 线程虚拟头的聚合 (旗标/置顶按成员算 + 点击走级联). 只有虚拟头带 agg —— 展开后
+  // 的子行 (含最新一封自己那行) 与发件箱 sent-anchor 头恒是单封语义.
+  const threadHead = t?.isHead ? t.agg : undefined
   const threadChevron = t
     ? {
         isHead,
@@ -146,6 +149,7 @@ export function VirtualRow({
         isNew={newIds.has(item.email.internal_id)}
         noAvatar={isChild}
         threadChevron={threadChevron}
+        threadHead={threadHead}
         onSelect={handleSelect}
       />
     </div>

@@ -53,24 +53,49 @@ export function usePinnedSync(): void {
 interface PinVars {
   id: number
   targetPinned: boolean
+  /** 乐观翻转的目标集合 —— 单封 = [id]; 线程级联 = 前端已知的成员集
+   *  (服务端展开的权威集合经 SSE 回来校正)。 */
+  optimisticIds: number[]
+  /** 线程级联取消置顶: 服务端按 thread_id 展开线程内其余仍置顶的成员一并取消。 */
+  cascadeThread?: boolean
 }
 
-export function useTogglePin(): (internalId: number) => Promise<void> {
+/** 线程虚拟头传给 `togglePin` 的级联参数 (省略 = 历史单封 toggle)。 */
+export interface TogglePinOpts {
+  /** 前端已知的线程成员 id (乐观翻转集)。 */
+  memberIds?: number[]
+  /** true = 级联取消置顶整条线程。**只能取消** —— 服务端对 pinned=true + cascade 返 400,
+   *  故本 hook 在 cascade 时把方向钉死成 false, 不走「读缓存取反」(虚拟头的聚合态
+   *  是「任一成员置顶」, 母邮件自己可能根本没置顶, 取反会反向置顶整条线程)。 */
+  cascadeThread?: boolean
+}
+
+export function useTogglePin(): (internalId: number, opts?: TogglePinOpts) => Promise<void> {
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
-  const togglePinOptimistic = usePinned((s) => s.togglePinOptimistic)
+  const setPinnedOptimistic = usePinned((s) => s.setPinnedOptimistic)
 
   const mutation = useMutation<boolean | null, Error, PinVars, { rollback: () => void }>({
-    mutationFn: ({ id, targetPinned }: PinVars) => mailApi.email.pin(id, targetPinned),
-    onMutate: async ({ id, targetPinned }) => {
+    mutationFn: ({ id, targetPinned, cascadeThread }: PinVars) =>
+      mailApi.email.pin(id, targetPinned, cascadeThread ? { cascadeThread: true } : undefined),
+    onMutate: async ({ targetPinned, optimisticIds }) => {
       await queryClient.cancelQueries({ queryKey: PINNED_KEY })
       const prev = queryClient.getQueryData<number[]>(PINNED_KEY) ?? []
-      togglePinOptimistic(id)
-      const next = targetPinned ? [...prev, id] : prev.filter((v) => v !== id)
+      // 逐 id 记下翻转前的真实归属 (读 store 而非 prev —— 别的行可能有在途的
+      // 乐观翻转), 回滚时精确还原这些 id, 不整表 setPinned 覆盖别人的在途写。
+      const before = new Set(usePinned.getState().pinned)
+      const wasPinned = optimisticIds.filter((id) => before.has(id))
+      const wasUnpinned = optimisticIds.filter((id) => !before.has(id))
+      setPinnedOptimistic(optimisticIds, targetPinned)
+      const targets = new Set(optimisticIds)
+      const next = targetPinned
+        ? [...prev.filter((v) => !targets.has(v)), ...optimisticIds]
+        : prev.filter((v) => !targets.has(v))
       queryClient.setQueryData<number[]>(PINNED_KEY, next)
       return {
         rollback: () => {
-          togglePinOptimistic(id)
+          setPinnedOptimistic(wasPinned, true)
+          setPinnedOptimistic(wasUnpinned, false)
           queryClient.setQueryData<number[]>(PINNED_KEY, prev)
         }
       }
@@ -84,11 +109,14 @@ export function useTogglePin(): (internalId: number) => Promise<void> {
     }
   })
 
-  return async (id: number) => {
+  return async (id: number, opts?: TogglePinOpts) => {
     // Decide direction BEFORE mutate(); this read happens before any
     // optimistic write so it sees the real current state.
     const cached = queryClient.getQueryData<number[]>(PINNED_KEY) ?? []
-    const targetPinned = !cached.includes(id)
-    await mutation.mutateAsync({ id, targetPinned })
+    const cascadeThread = opts?.cascadeThread === true
+    const targetPinned = cascadeThread ? false : !cached.includes(id)
+    const optimisticIds =
+      cascadeThread && opts?.memberIds && opts.memberIds.length > 0 ? opts.memberIds : [id]
+    await mutation.mutateAsync({ id, targetPinned, optimisticIds, cascadeThread })
   }
 }

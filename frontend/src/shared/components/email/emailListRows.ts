@@ -26,9 +26,30 @@ import type { AIPriority, EnrichedEmailMeta } from '@shared/api/types'
 // Rows without a `thread` block are solitary messages, rendered exactly
 // like before round 9.
 export type ThreadRowInfo =
-  | { isHead: true; threadId: string; childCount: number; expanded: boolean }
+  | {
+      isHead: true
+      threadId: string
+      childCount: number
+      expanded: boolean
+      /** 「虚拟线程头」的成员聚合 —— 有它 = 这一行代表**整条线程** (聚合显示旗标/
+       *  置顶 + 点击走级联写)。
+       *
+       *  发件箱 sent-anchor 头 (见 ThreadGroup.sentAnchor) 恒 undefined = 纯单封
+       *  语义。做成可选字段而不是「退化的聚合值」: 后者要靠每个消费点自己把
+       *  memberIds=[自己] 再算回单封结果, 漏一处就把级联写喷到上下文邮件上。 */
+      agg?: ThreadHeadAgg
+    }
   /** childIndex = 在本线程子邮件里的序号, 仅用于展开入场动画的 stagger 延迟。 */
   | { isHead: false; threadId: string; childIndex: number }
+
+export interface ThreadHeadAgg {
+  /** 线程全部成员 internal_id (含最新一封, DESC 序) —— 聚合显示 + 级联写的乐观
+   *  翻转集。展开时同一 id 会出现两行 (虚拟头 + 首个子行), 所以这里是**成员集**
+   *  而不是「子行集」。 */
+  memberIds: number[]
+  /** 任一成员 is_flagged —— 虚拟头的旗标聚合显示 (折叠时代表整条线程)。 */
+  aggFlagged: boolean
+}
 
 export type ListRow =
   | { type: 'header'; key: GroupKey; label: string; count: number; collapsed: boolean }
@@ -175,6 +196,14 @@ export interface ThreadGroup {
    *  里最新邮件的 date_received。发件箱视图 (groupBySentAnchor) 直接用 head.date_received。
    *  避免 supplement 里的已发回复（今日时间戳）把旧线程推入「今天」分组。 */
   anchorDate: string | null
+  /** 发件箱锚点分组 (groupBySentAnchor 产出)：head 是**我发出的那封**，children 是它
+   *  之前的上下文（严格早于 head，head 不在其中）。
+   *
+   *  🔴 线程「虚拟头」语义**不适用**于它：那套语义的前提是「head ∈ 线程成员且是最新
+   *  一封」，所以折叠行能代表整条线程（聚合旗标/置顶 + 级联写）。发件箱的语义是
+   *  「我发了什么 + 当时的上下文」，head 是锚点不是聚合体 —— 套上去会让展开时发件重复
+   *  出现，且点旗标会级联改掉一堆我没在看的上下文邮件。见 flattenGroups。 */
+  sentAnchor?: boolean
 }
 
 export function groupByThread(
@@ -289,7 +318,9 @@ export function groupBySentAnchor(
             threadId: sent.thread_id ?? null,
             head: sent,
             children,
-            anchorDate: sent.date_received ?? null
+            anchorDate: sent.date_received ?? null,
+            // 标记来源 —— flattenGroups 据此**不**给它虚拟头语义 (见 ThreadGroup.sentAnchor)。
+            sentAnchor: true
           }
     )
   }
@@ -385,14 +416,26 @@ export function flattenGroups(
     for (const g of groupArr) {
       const isThreadHead = g.threadId !== null && g.children.length > 0
       const expanded = isThreadHead ? isThreadExpanded(g.threadId!) : false
+      // 线程虚拟头 (Outlook 语义, 2026-08 owner 拍板): 折叠行不再「就是最新那封」,
+      // 而是代表整条线程 —— 它显示最新一封的内容, 但旗标/置顶按**成员聚合**显示,
+      // 点击走级联语义 (EmailRow.threadHead)。展开时最新一封也作为子行出现 (见下),
+      // 所以同一 internal_id 会出现两行: 虚拟头 + 首个子行。
+      // 🔴 发件箱的 sent-anchor 分组不吃这套 (见 ThreadGroup.sentAnchor): 它的 head
+      // 是「我发的那封」锚点、不在 children 里, 仍是纯单封语义的可折叠行。
+      const virtualHead = isThreadHead && g.sentAnchor !== true
+      const members = virtualHead ? [g.head, ...g.children] : g.children
       // bundleSelected — 主题 v3 tweak (2026-07-12 owner 实机 review): 只高亮
       // activeId 命中的那一行, 不再整个 bundle 连坐。唯一例外: 线程**折叠**且
-      // activeId 是折叠里的 child 时, head 行代表整个 bundle 高亮 (否则选中态
-      // 在列表里不可见)。展开态下 head/child 各自严格按 internal_id 匹配。
-      const bundleSelected =
-        activeId !== null &&
-        (g.head.internal_id === activeId ||
-          (!expanded && g.children.some((c) => c.internal_id === activeId)))
+      // activeId 是折叠里的成员时, head 行代表整个 bundle 高亮 (否则选中态
+      // 在列表里不可见)。展开态下虚拟头**不**高亮 (由那封自己的子行承担, 否则
+      // 同一封会亮两行); sent-anchor / 单封则仍按 internal_id 严格匹配。
+      const bundleSelected = virtualHead
+        ? !expanded &&
+          activeId !== null &&
+          (g.head.internal_id === activeId || g.children.some((c) => c.internal_id === activeId))
+        : activeId !== null &&
+          (g.head.internal_id === activeId ||
+            (!expanded && g.children.some((c) => c.internal_id === activeId)))
       out.push({
         type: 'email',
         email: g.head,
@@ -403,12 +446,26 @@ export function flattenGroups(
               isHead: true,
               threadId: g.threadId!,
               childCount: g.children.length,
-              expanded
+              expanded,
+              // agg 只给虚拟头 —— sent-anchor 头留 undefined, 消费侧 (EmailRow)
+              // 据此走纯单封语义, 结构上不可能把级联写喷到上下文邮件上。
+              ...(virtualHead
+                ? {
+                    agg: {
+                      memberIds: members.map((m) => m.internal_id),
+                      aggFlagged: members.some((m) => m.is_flagged === true)
+                    }
+                  }
+                : {})
             }
           : undefined
       })
       if (isThreadHead && expanded) {
-        g.children.forEach((child, childIndex) => {
+        // 🔴 虚拟头展开的子行 = 线程**全部**成员 (含最新一封, DESC 序最新在最上) ——
+        // 虚拟头是「这条线程」而不是「这封邮件」, 所以最新一封必须能作为一封
+        // 独立邮件被点开/操作, 否则展开后它只以聚合形态存在, 单封语义没有落点。
+        // sent-anchor 仍只展开上下文 (head 是锚点, 本来就单独占一行)。
+        members.forEach((child, childIndex) => {
           out.push({
             type: 'email',
             email: child,

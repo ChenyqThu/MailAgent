@@ -675,6 +675,7 @@ async def _run_flag_service(
     is_read: Optional[bool],
     is_flagged: Optional[bool],
     processing_status: Optional[str],
+    cascade_thread: bool = False,
     dry_run: bool,
 ):
     """in-process ``MailWriteService.set_flags`` / ``plan_flags`` + envelope。
@@ -682,6 +683,10 @@ async def _run_flag_service(
     **恒 allow_concurrent=True** (gotcha #9)。dry-run 跳过 auth (plan_flags 纯预览, 无写);
     执行路径用已鉴权 Actor (请求已过 verify_cf_access)。data 形状 = email-flag.schema.json
     (executed flag_result | dry-run plan)。
+
+    ``cascade_thread`` (线程虚拟头「标完成」) 只对执行路径有意义 —— dry-run 的
+    ``plan_flags`` 是纯 payload 预览, 不查线程成员, 故不透传 (预览不声称级联范围)。
+    级联到的成员 id 不进 data (见 FlagResult.cascade_ids docstring), 前端经 SSE 拿。
     """
     svc = MailWriteService(get_service_ctx())
 
@@ -706,6 +711,7 @@ async def _run_flag_service(
             is_read=is_read,
             is_flagged=is_flagged,
             processing_status=processing_status,
+            cascade_thread=cascade_thread,
             actor=Actor(kind="http", authenticated=True, label="cf-access"),
             allow_concurrent=True,
         )
@@ -732,7 +738,7 @@ async def _run_flag_service(
 
 
 def _coerce_flag_ids(ids: Any) -> list[int]:
-    """校验 batch ``ids`` 为非空 non-negative int 列表; 否则 raise E_INVALID_ARG。
+    """校验 batch ``ids`` 为非空 non-negative int 列表; 否则 raise E_INVALID_ARG (flag / pin 共用)。
 
     bool 是 int 子类, 显式排除 (True/False 不是合法 id)。空列表 / 非列表 → 400
     (C8: 批量端点拒绝空 ids, 不静默 fallback)。
@@ -762,10 +768,12 @@ async def flag_email(
     """写 flag / processing_status intent 到 SQLite + outbox 双 target (CLI `email flag`)。
 
     Sprint 15 SSoT inversion 主写路径 (区别 legacy notion.updateFlag 直写 Notion)。
-    body (EmailFlagOpts): {isRead?, isFlagged?, processingStatus?, ids?, dryRun?}。
+    body (EmailFlagOpts): {isRead?, isFlagged?, processingStatus?, ids?, cascadeThread?, dryRun?}。
     - 单封: path ``internal_id`` (body 不传 ids)。
     - 批量: body ``ids: [1,2,3]`` (与 path id 互斥, 此时忽略 path)。
       (无 path id 的纯批量入口见 ``POST /api/email/flag``。)
+    - ``cascadeThread``: 线程虚拟头「标完成」—— 给定 id 应用完整 mutation 后, 按其
+      thread_id 把线程内其他仍带旗的成员一并摘旗 (仅 ``isFlagged=false`` 时合法)。
     至少给一个 isRead / isFlagged / processingStatus, 否则 400。
     A2: in-process service, 恒 allow_concurrent (#9)。dry-run 跳过 auth。
     data = email-flag.schema.json (executed flag_result | dry-run plan)。
@@ -787,6 +795,7 @@ async def flag_email(
         is_read=is_read,
         is_flagged=is_flagged,
         processing_status=processing_status,
+        cascade_thread=bool(opts.get("cascadeThread")),
         dry_run=dry_run,
     )
 
@@ -799,7 +808,7 @@ async def flag_emails_batch(
     """批量写 flag / processing_status intent (CLI `email flag --ids`) — 无 path id。
 
     C8 契约: 对齐 types.ts ``flag(null, {ids: [...], isRead: ...})``。body
-    (EmailFlagOpts): {ids: [1,2,3], isRead?, isFlagged?, processingStatus?, dryRun?}。
+    (EmailFlagOpts): {ids: [1,2,3], isRead?, isFlagged?, processingStatus?, cascadeThread?, dryRun?}。
     ``ids`` **必填且非空** (空/缺 → 400, 不像单封端点那样静默 fallback 到 path id)。
     至少给一个 isRead / isFlagged / processingStatus, 否则 400。
     A2: in-process service, 恒 allow_concurrent (#9)。dry-run 跳过 auth。
@@ -818,6 +827,7 @@ async def flag_emails_batch(
         is_read=is_read,
         is_flagged=is_flagged,
         processing_status=processing_status,
+        cascade_thread=bool(opts.get("cascadeThread")),
         dry_run=dry_run,
     )
 
@@ -1362,12 +1372,17 @@ async def pin_email(
     internal_id: int,
     body: Optional[dict[str, Any]] = None,
 ):
-    """置顶 / 取消置顶邮件 (A3: in-process MailWriteService.set_pin / plan_pin)。
+    """置顶 / 取消置顶邮件 (A3: in-process MailWriteService.set_pin / set_pins / plan_pin)。
 
-    body (PinOpts): {pinned: bool, dryRun?}。``pinned=true`` → pin, ``false`` → unpin
-    (镜像 write_ops.ts pinArgs: ``email pin|unpin <id>``)。写 SQLite is_pinned;
-    mail-sync 不读不写该字段 → **不做** pm2 检测。dry-run 跳过 auth。
-    data = {internal_id, is_pinned, changed, dry_run}。
+    body (PinOpts): {pinned: bool, ids?, cascadeThread?, dryRun?}。``pinned=true`` → pin,
+    ``false`` → unpin (镜像 write_ops.ts pinArgs: ``email pin|unpin <id>``)。写 SQLite
+    is_pinned; mail-sync 不读不写该字段 → **不做** pm2 检测。dry-run 跳过 auth。
+    - 单封 (无 ids / 无 cascadeThread): data = {internal_id, is_pinned, changed, dry_run}
+      (历史形状, ElectronApi/HttpApi 只读 is_pinned)。
+    - 批量 ``ids: [1,2,3]`` (与 path id 互斥, 镜像 flag) 或 ``cascadeThread`` (线程虚拟头
+      级联取消置顶, 仅 ``pinned=false`` 合法): data **额外**带 {internal_ids, changed_ids,
+      not_found?}, ``internal_id`` 仍是主 id (path / ids 首项) 以兼容既有读法。
+    dry-run 只支持单封 (plan_pin 是纯预览, 不查线程成员)。
     """
     opts = body or {}
     pinned = opts.get("pinned")
@@ -1378,15 +1393,40 @@ async def pin_email(
             source="cli",
         )
     dry_run = bool(opts.get("dryRun"))
+    cascade_thread = bool(opts.get("cascadeThread"))
+    ids = opts.get("ids")
+    has_ids = isinstance(ids, list) and len(ids) > 0
+    internal_ids = _coerce_flag_ids(ids) if has_ids else [internal_id]
+    # 显式意图决定响应形状: 传了 ids / cascadeThread 就给批量块 (哪怕只有一个 id),
+    # 什么都没传才走历史单封形状。
+    batch_mode = cascade_thread or has_ids
 
     svc = MailWriteService(get_service_ctx())
     try:
         if dry_run:
-            data = await asyncio.to_thread(svc.plan_pin, internal_id, pinned=pinned)
+            data = await asyncio.to_thread(svc.plan_pin, internal_ids[0], pinned=pinned)
+        elif batch_mode:
+            batch = await asyncio.to_thread(
+                svc.set_pins,
+                internal_ids,
+                pinned=pinned,
+                cascade_thread=cascade_thread,
+                actor=Actor(kind="http", authenticated=True, label="cf-access"),
+            )
+            data = {
+                "internal_id": internal_ids[0],
+                "is_pinned": batch.is_pinned,
+                "changed": bool(batch.changed_ids),
+                "internal_ids": batch.updated_ids,
+                "changed_ids": batch.changed_ids,
+                "dry_run": False,
+            }
+            if batch.not_found:
+                data["not_found"] = batch.not_found
         else:
             result = await asyncio.to_thread(
                 svc.set_pin,
-                internal_id,
+                internal_ids[0],
                 pinned=pinned,
                 actor=Actor(kind="http", authenticated=True, label="cf-access"),
             )

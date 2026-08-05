@@ -71,6 +71,20 @@ describe('write_ops — flagBody (mirror HttpApi.email.flag wire)', () => {
   test('empty processingStatus dropped', () => {
     expect(__testing.flagBody({ processingStatus: '' })).toEqual({})
   })
+
+  test('cascadeThread=true included (线程虚拟头「标完成」的级联摘旗)', () => {
+    expect(__testing.flagBody({ isFlagged: false, cascadeThread: true })).toEqual({
+      isFlagged: false,
+      cascadeThread: true
+    })
+  })
+
+  test('cascadeThread=false/undefined dropped —— 单封 wire 与改动前逐字节一致', () => {
+    expect(__testing.flagBody({ isFlagged: false, cascadeThread: false })).toEqual({
+      isFlagged: false
+    })
+    expect(__testing.flagBody({ isFlagged: false })).toEqual({ isFlagged: false })
+  })
 })
 
 describe('write_ops — daemon forwarders (mock daemonRequest)', () => {
@@ -99,6 +113,30 @@ describe('write_ops — daemon forwarders (mock daemonRequest)', () => {
     await runPin(53675, false)
     expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/pin', {
       body: { pinned: false }
+    })
+  })
+
+  test('pin 级联 → body 带 cascadeThread; 空 opts 时 wire 与改动前逐字节一致', async () => {
+    await runPin(53675, false, { cascadeThread: true })
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/pin', {
+      body: { pinned: false, cascadeThread: true }
+    })
+    mockDaemonRequest.mockClear()
+    await runPin(53675, false, {})
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/pin', {
+      body: { pinned: false }
+    })
+  })
+
+  test('pin 批量 → body 带 ids (空数组不带, 镜像 flagBody)', async () => {
+    await runPin(53675, false, { ids: [1, 2, 3] })
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/pin', {
+      body: { pinned: false, ids: [1, 2, 3] }
+    })
+    mockDaemonRequest.mockClear()
+    await runPin(53675, true, { ids: [] })
+    expect(mockDaemonRequest).toHaveBeenCalledWith('POST', '/email/53675/pin', {
+      body: { pinned: true }
     })
   })
 

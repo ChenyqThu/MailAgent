@@ -500,7 +500,7 @@ describe('flattenGroups', () => {
     expect(rows[0]).toMatchObject({ type: 'header', collapsed: true })
   })
 
-  test('a folded thread head carries thread info (isHead, childCount, expanded:false) and hides children', () => {
+  test('a folded thread head carries thread info (isHead, childCount, expanded:false, 成员聚合) and hides children', () => {
     const buckets = emptyBuckets()
     buckets.today = [
       {
@@ -511,12 +511,43 @@ describe('flattenGroups', () => {
       }
     ]
     const rows = flattenGroups(buckets, LABELS, notCollapsed, notExpanded, null, false)
-    expect(rows).toHaveLength(2) // header + head only
+    expect(rows).toHaveLength(2) // header + 虚拟头 only
     const head = rows[1] as Extract<ListRow, { type: 'email' }>
-    expect(head.thread).toEqual({ isHead: true, threadId: 't1', childCount: 2, expanded: false })
+    expect(head.thread).toEqual({
+      isHead: true,
+      threadId: 't1',
+      childCount: 2,
+      expanded: false,
+      // 成员集含最新一封自己 (虚拟头代表整条线程, 不是「除自己以外的兄弟」)。
+      agg: { memberIds: [1, 2, 3], aggFlagged: false }
+    })
   })
 
-  test('an expanded thread emits child rows tagged isHead:false', () => {
+  test('虚拟头 aggFlagged = 任一成员 is_flagged（哪怕最新一封自己没标）', () => {
+    const buckets = emptyBuckets()
+    buckets.today = [
+      {
+        threadId: 't1',
+        head: em({ internal_id: 1, is_flagged: false }),
+        children: [em({ internal_id: 2, is_flagged: true }), em({ internal_id: 3 })],
+        anchorDate: null
+      },
+      // 对照组: 全员无旗 → false。
+      {
+        threadId: 't2',
+        head: em({ internal_id: 11 }),
+        children: [em({ internal_id: 12 })],
+        anchorDate: null
+      }
+    ]
+    const rows = flattenGroups(buckets, LABELS, notCollapsed, notExpanded, null, false)
+    const heads = rows
+      .filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
+      .map((r) => (r.thread?.isHead ? r.thread.agg?.aggFlagged : null))
+    expect(heads).toEqual([true, false])
+  })
+
+  test('线程虚拟头 — 展开的子行含最新一封自己 (DESC, 最新在最上)', () => {
     const buckets = emptyBuckets()
     buckets.today = [
       {
@@ -527,10 +558,13 @@ describe('flattenGroups', () => {
       }
     ]
     const rows = flattenGroups(buckets, LABELS, notCollapsed, (tid) => tid === 't1', null, false)
-    expect(rows).toHaveLength(3)
-    const child = rows[2] as Extract<ListRow, { type: 'email' }>
-    expect(child.email.internal_id).toBe(2)
-    expect(child.thread).toEqual({ isHead: false, threadId: 't1', childIndex: 0 })
+    // header + 虚拟头 + 2 子行 (最新一封 1 也在子行里)。
+    expect(rows).toHaveLength(4)
+    const emails = rows.filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
+    expect(emails.map((r) => r.email.internal_id)).toEqual([1, 1, 2])
+    expect(emails[0]!.thread?.isHead).toBe(true)
+    expect(emails[1]!.thread).toEqual({ isHead: false, threadId: 't1', childIndex: 0 })
+    expect(emails[2]!.thread).toEqual({ isHead: false, threadId: 't1', childIndex: 1 })
   })
 
   test('child rows carry a 0-based childIndex (线程展开入场动画的 stagger 依据)', () => {
@@ -544,14 +578,14 @@ describe('flattenGroups', () => {
       }
     ]
     const rows = flattenGroups(buckets, LABELS, notCollapsed, (tid) => tid === 't1', null, false)
-    // header + head + 3 children
-    expect(rows).toHaveLength(5)
+    // header + 虚拟头 + 4 子行 (含最新一封)
+    expect(rows).toHaveLength(6)
     const indices = rows
       .slice(2)
       .map((r) => (r as Extract<ListRow, { type: 'email' }>).thread)
       .map((t) => (t && !t.isHead ? t.childIndex : null))
     // 连续且从 0 起 —— CSS animation-delay 直接乘这个值, 跳号会让入场节奏破相。
-    expect(indices).toEqual([0, 1, 2])
+    expect(indices).toEqual([0, 1, 2, 3])
   })
 
   test('主题 v3 — expanded thread: only the row activeId hits is selected, not the whole bundle', () => {
@@ -571,9 +605,29 @@ describe('flattenGroups', () => {
     const rows = flattenGroups(buckets, LABELS, notCollapsed, (tid) => tid === 't1', 2, false)
     const emails = rows.filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
     expect(emails.map((r) => [r.email.internal_id, r.bundleSelected])).toEqual([
-      [1, false],
+      [1, false], // 虚拟头
+      [1, false], // 最新一封的子行
       [2, true],
       [5, false]
+    ])
+  })
+
+  test('🔴 展开时 activeId 命中最新一封 → 只亮子行, 虚拟头不亮 (同一封不许亮两行)', () => {
+    const buckets = emptyBuckets()
+    buckets.today = [
+      {
+        threadId: 't1',
+        head: em({ internal_id: 1 }),
+        children: [em({ internal_id: 2 })],
+        anchorDate: null
+      }
+    ]
+    const rows = flattenGroups(buckets, LABELS, notCollapsed, (tid) => tid === 't1', 1, false)
+    const emails = rows.filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
+    expect(emails.map((r) => [r.email.internal_id, r.bundleSelected])).toEqual([
+      [1, false], // 虚拟头 —— 展开态下不套 active 样式
+      [1, true], // 它自己的子行才是选中那行
+      [2, false]
     ])
   })
 
@@ -592,6 +646,71 @@ describe('flattenGroups', () => {
     const rows = flattenGroups(buckets, LABELS, notCollapsed, notExpanded, 2, false)
     const emails = rows.filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
     expect(emails.map((r) => [r.email.internal_id, r.bundleSelected])).toEqual([[1, true]])
+  })
+
+  test('solitary 行不带 thread 块 → 保持单封语义 (零聚合零级联)', () => {
+    const buckets = emptyBuckets()
+    // groupBySentAnchor 的无上下文发件 + groupByThread 的单封线程都退化成这个形状。
+    buckets.today = [soloGroup(em({ internal_id: 5, is_flagged: true }))]
+    const rows = flattenGroups(buckets, LABELS, notCollapsed, notExpanded, null, false)
+    const row = rows[1] as Extract<ListRow, { type: 'email' }>
+    expect(row.thread).toBeUndefined()
+  })
+
+  test('🔴 发件箱 sent-anchor 分组不吃虚拟头语义 (无 agg + 展开不重复 head)', () => {
+    // 发件箱的 head 是「我发的那封」锚点、**不在** children 里 (children 是它之前的
+    // 上下文)。给它套虚拟头会让展开时发件重复出现, 且点旗标会级联改掉一堆我根本没在
+    // 看的上下文邮件 —— 所以 groupBySentAnchor 打 sentAnchor 标, flatten 据此退回单封。
+    const buckets = emptyBuckets()
+    buckets.today = [
+      {
+        threadId: 't1',
+        head: em({ internal_id: 1, is_flagged: true }),
+        children: [em({ internal_id: 2, is_flagged: true })],
+        anchorDate: null,
+        sentAnchor: true
+      }
+    ]
+    const rows = flattenGroups(buckets, LABELS, notCollapsed, (tid) => tid === 't1', null, false)
+    const emails = rows.filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
+    // header + 锚点 + 1 条上下文 (锚点不重复出现)
+    expect(emails.map((r) => r.email.internal_id)).toEqual([1, 2])
+    const head = emails[0]!
+    expect(head.thread?.isHead).toBe(true)
+    // 无 agg → EmailRow 走纯单封语义 (无聚合显示、无级联写)
+    expect(head.thread?.isHead === true && head.thread.agg).toBeUndefined()
+  })
+
+  test('sent-anchor 折叠时仍由锚点行代表隐藏的选中上下文 (选中态可见性不回退)', () => {
+    const buckets = emptyBuckets()
+    buckets.today = [
+      {
+        threadId: 't1',
+        head: em({ internal_id: 1 }),
+        children: [em({ internal_id: 2 })],
+        anchorDate: null,
+        sentAnchor: true
+      }
+    ]
+    const rows = flattenGroups(buckets, LABELS, notCollapsed, notExpanded, 2, false)
+    const emails = rows.filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
+    expect(emails.map((r) => [r.email.internal_id, r.bundleSelected])).toEqual([[1, true]])
+  })
+
+  test('groupBySentAnchor 给带上下文的分组打 sentAnchor 标 (孤立发件不打)', () => {
+    const s1 = em({ internal_id: 1, thread_id: 't1', date_received: '2026-07-08T10:00:00' })
+    const ctx = em({ internal_id: 3, thread_id: 't1', date_received: '2026-07-07T10:00:00' })
+    const lone = em({ internal_id: 9, thread_id: 't2', date_received: '2026-07-06T10:00:00' })
+    const groups = groupBySentAnchor(
+      [s1, lone],
+      new Map([
+        ['t1', [s1, ctx]],
+        ['t2', [lone]]
+      ])
+    )
+    expect(groups.find((g) => g.head.internal_id === 1)?.sentAnchor).toBe(true)
+    // 无上下文 → 退化成 solitary, 本来就没 thread 块, 不需要标。
+    expect(groups.find((g) => g.head.internal_id === 9)?.sentAnchor).toBeUndefined()
   })
 
   test('a solitary row is bundleSelected when activeId matches its head', () => {
@@ -674,5 +793,29 @@ describe('rowTopOfId', () => {
 
   test('unknown id → null', () => {
     expect(rowTopOfId(rows, heights, 999)).toBeNull()
+  })
+
+  test('🔴 线程展开后同一 id 有两行 (虚拟头 + 子行) → 命中**第一**行 = 虚拟头', () => {
+    // 手风琴滚动锚定 (captureScrollAnchor(headInternalId)) 靠这个偏移把母行钉在
+    // 原位。若哪天改成命中子行, 展开瞬间列表会整体跳一行高度。
+    const dupRows: ListRow[] = [
+      { type: 'header', key: 'today', label: 'TODAY', count: 1, collapsed: false },
+      emailRow(em({ internal_id: 1 }), {
+        thread: {
+          isHead: true,
+          threadId: 't1',
+          childCount: 1,
+          expanded: true,
+          agg: { memberIds: [1, 2], aggFlagged: false }
+        }
+      }),
+      emailRow(em({ internal_id: 1 }), {
+        thread: { isHead: false, threadId: 't1', childIndex: 0 }
+      }),
+      emailRow(em({ internal_id: 2 }), {
+        thread: { isHead: false, threadId: 't1', childIndex: 1 }
+      })
+    ]
+    expect(rowTopOfId(dupRows, [28, 60, 60, 60], 1)).toBe(28)
   })
 })

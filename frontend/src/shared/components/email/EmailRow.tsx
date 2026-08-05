@@ -38,6 +38,8 @@ import { usePinned } from '@shared/state/pinned'
 import { toastError } from '@shared/state/toast'
 import type { EnrichedEmailMeta, AIPriority } from '@shared/api/types'
 
+import type { ThreadHeadAgg } from './emailListRows'
+
 interface Props {
   email: EnrichedEmailMeta
   selected: boolean
@@ -58,6 +60,9 @@ interface Props {
    *  undefined → 单封, 第一格空; isHead → 显示可点 chevron; isChild → 渲染
    *  竖向 tether 线表示属于父线程 bundle. */
   threadChevron?: ThreadChevronProps
+  /** 线程「虚拟头」聚合 (见 ThreadHeadProps). 只有折叠/展开的母行有; 子行 /
+   *  单封 / 发件箱 sent-anchor 行为 undefined = 逐字节的单封语义. */
+  threadHead?: ThreadHeadProps
   onSelect(): void
 }
 
@@ -72,6 +77,17 @@ export interface ThreadChevronProps {
   expanded?: boolean
   onToggle?: () => void
 }
+
+/**
+ * 线程「虚拟头」(2026-08 owner 拍板的 Outlook 语义) —— 母行代表**整条线程**而不是
+ * 最新那一封: 内容仍是最新一封的, 但旗标/置顶按成员聚合显示, 点击走级联写。
+ * 展开后子行 (含最新一封自己那行)、发件箱 sent-anchor 头恒是单封语义, 拿不到它。
+ *
+ * 形状不在这里第二次声明 —— 生产者是 flattenGroups, 直接复用它的类型 (type-only
+ * import, 运行时不引入 emailListRows)。`aggFlagged` 由 flatten 算好; 置顶聚合则在
+ * 下面读 zustand 现算 —— 它有乐观翻转, 读 store 才能在同一帧反映刚点的那下。
+ */
+export type ThreadHeadProps = ThreadHeadAgg
 
 const PRIORITY_SLUG: Record<AIPriority, 'crit' | 'urg' | 'impt' | 'norm' | 'low'> = {
   critical: 'crit',
@@ -166,6 +182,7 @@ function EmailRowInner({
   noAvatar,
   compact,
   threadChevron,
+  threadHead,
   onSelect
 }: Props): React.ReactElement {
   const { t } = useTranslation()
@@ -174,7 +191,14 @@ function EmailRowInner({
   const batchMode = useBatch((s) => s.mode)
   const batchToggle = useBatch((s) => s.toggle)
   const batchIsSelected = useBatch((s) => s.selectedIds.includes(email.internal_id))
-  const pinned = usePinned((s) => s.pinned.includes(email.internal_id))
+  // 虚拟头: 任一成员置顶 → 亮 (「固定也是整个线程固定」的显示面对称). 单封 / 子行
+  // 仍只看自己. 读 store 而非 flatten 时算死: store 有乐观翻转, 级联 unpin 的
+  // 那一帧就能翻过来.
+  const pinned = usePinned((s) =>
+    threadHead
+      ? threadHead.memberIds.some((id) => s.pinned.includes(id))
+      : s.pinned.includes(email.internal_id)
+  )
   const togglePin = useTogglePin()
 
   const unread = !email.is_read
@@ -203,7 +227,20 @@ function EmailRowInner({
 
   // Flag state for the .ricon-flag[data-flag-state=...] CSS hook.
   // 0 = none, 1 = flagged (coral), 2 = done (green check).
-  const flagState: '0' | '1' | '2' = isDone ? '2' : isFlagged ? '1' : '0'
+  //
+  // 虚拟头按线程聚合: 任一成员带旗 → 红旗 (优先, 它是「这条线程还有待办」的信号);
+  // 否则退到最新一封自己的 done 态; 都没有 → 无标记.
+  const flagState: '0' | '1' | '2' = threadHead
+    ? threadHead.aggFlagged
+      ? '1'
+      : isDone
+        ? '2'
+        : '0'
+    : isDone
+      ? '2'
+      : isFlagged
+        ? '1'
+        : '0'
   const flagSvgEl = flagState === '2' ? doneSvg : flagSvg
 
   // Row-level click — batch toggle in batch mode, otherwise standard select.
@@ -244,35 +281,49 @@ function EmailRowInner({
   // 因为 EmailList 的 useQuery key 可能是 ['emails', mailbox, view]. setQueriesData
   // 的 type predicate 让我们一次性命中所有.
   const optimisticPatch = useCallback(
-    (patch: Partial<EnrichedEmailMeta>) => {
+    (patch: Partial<EnrichedEmailMeta>, ids: ReadonlyArray<number>) => {
+      // ids 是集合而非单个 —— 线程级联要在同一帧翻掉所有成员 (owner 红线「秒反应」),
+      // 而不是等后端 SSE 回来才动 (那是几百毫秒后的校正, 不是反馈).
+      const targets = new Set(ids)
       queryClient.setQueriesData<EnrichedEmailMeta[]>({ queryKey: qk.emails.all() }, (old) => {
         if (!Array.isArray(old)) return old
-        return old.map((e) => (e.internal_id === email.internal_id ? { ...e, ...patch } : e))
+        return old.map((e) => (targets.has(e.internal_id) ? { ...e, ...patch } : e))
       })
     },
-    [email.internal_id, queryClient]
+    [queryClient]
   )
 
   const handleFlagClick = useCallback(async () => {
-    // 计算目标状态 + CLI opts.  三态 cycle:
+    // 计算目标状态 + CLI opts.  三态 cycle (单封):
     //   none(0)    → flagged(1)  : isFlagged=true,  processing_status 不动
     //   flagged(1) → done(2)     : isFlagged=false, processing_status='已完成'
     //   done(2)    → none(0)     : isFlagged=false, processing_status='已同步'
     //                              (写非 '已完成' 才能脱离 isDone, 不能省略 status)
+    //
+    // 虚拟头 (threadHead) 的 flagged(1) 分支 = 「这条线程办完了」: 最新一封转已完成,
+    // **同时**级联清掉线程内其他成员的旗标 (一次调用, 服务端按 thread_id 展开权威
+    // 成员集; 前端只对已知可见成员做乐观翻转). 另两个分支仍是纯单封语义 ——
+    // 「加旗」加在最新一封上, 「清 done」清最新一封的.
     let patch: Partial<EnrichedEmailMeta>
-    let opts: { isFlagged?: boolean; processingStatus?: string }
+    let opts: { isFlagged?: boolean; processingStatus?: string; cascadeThread?: boolean }
     if (flagState === '0') {
       patch = { is_flagged: true }
       opts = { isFlagged: true }
     } else if (flagState === '1') {
       patch = { is_flagged: false, processing_status: '已完成' }
       opts = { isFlagged: false, processingStatus: '已完成' }
+      if (threadHead) opts.cascadeThread = true
     } else {
       patch = { is_flagged: false, processing_status: '已同步' }
       opts = { isFlagged: false, processingStatus: '已同步' }
     }
     // Optimistic — UI 瞬时翻
-    optimisticPatch(patch)
+    optimisticPatch(patch, [email.internal_id])
+    if (opts.cascadeThread && threadHead) {
+      // 其他成员只摘旗, 不动 processing_status (与服务端级联语义逐字对齐).
+      const others = threadHead.memberIds.filter((id) => id !== email.internal_id)
+      if (others.length > 0) optimisticPatch({ is_flagged: false }, others)
+    }
     try {
       await mailApi.email.flag(email.internal_id, opts)
       // 成功: CLI 已写 SQLite, 下一次 refetch 会拿到一致数据. 不主动 invalidate
@@ -284,7 +335,7 @@ function EmailRowInner({
       const msg = errorMessage(err)
       toastError('Flag toggle failed', msg)
     }
-  }, [email.internal_id, flagState, invalidate, mailApi, optimisticPatch])
+  }, [email.internal_id, flagState, invalidate, mailApi, optimisticPatch, threadHead])
 
   const cbClass = useMemo(() => cn('cb', batchIsSelected && 'cb-on'), [batchIsSelected])
 
@@ -385,7 +436,15 @@ function EmailRowInner({
               aria-pressed={pinned}
               aria-label={t('emailRow.togglePin')}
               onClick={stopAnd(() => {
-                void togglePin(email.internal_id)
+                // 虚拟头: 已有成员置顶 → 级联取消整条线程 (服务端按 thread_id 展开
+                // 权威成员集, 前端同帧翻掉已知成员); 一个都没置顶 → 只置顶最新一封.
+                // 子行 / 单封 / 发件箱 sent-anchor 行走原来的单封 toggle.
+                void togglePin(
+                  email.internal_id,
+                  threadHead && pinned
+                    ? { memberIds: threadHead.memberIds, cascadeThread: true }
+                    : undefined
+                )
               })}
             >
               {pinSvg}
@@ -487,12 +546,26 @@ function threadChevronEqual(
   return a.isHead === b.isHead && a.isChild === b.isChild && a.expanded === b.expanded
 }
 
+/** 虚拟头聚合的 memo 判据. flattenGroups 每次都重建这个对象 (memberIds 是新数组),
+ *  所以必须逐字段比 —— 否则 memo 被引用变化打穿, 长列表每次 poll 全列重渲. */
+function threadHeadEqual(a: ThreadHeadProps | undefined, b: ThreadHeadProps | undefined): boolean {
+  if (a === b) return true
+  if (!a || !b) return false
+  if (a.aggFlagged !== b.aggFlagged) return false
+  if (a.memberIds.length !== b.memberIds.length) return false
+  for (let i = 0; i < a.memberIds.length; i++) {
+    if (a.memberIds[i] !== b.memberIds[i]) return false
+  }
+  return true
+}
+
 function emailRowPropsEqual(prev: Props, next: Props): boolean {
   if (prev.selected !== next.selected) return false
   if (prev.isNew !== next.isNew) return false
   if (prev.noAvatar !== next.noAvatar) return false
   if (prev.compact !== next.compact) return false
   if (!threadChevronEqual(prev.threadChevron, next.threadChevron)) return false
+  if (!threadHeadEqual(prev.threadHead, next.threadHead)) return false
   const a = prev.email
   const b = next.email
   if (a === b) return true

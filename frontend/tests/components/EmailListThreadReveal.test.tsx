@@ -36,7 +36,13 @@ function email(internal_id: number, thread: ListRow extends never ? never : unkn
   } as unknown as ListRow
 }
 
-const HEAD = email(1, { isHead: true, threadId: 't1', childCount: 2, expanded: true })
+const HEAD = email(1, {
+  isHead: true,
+  threadId: 't1',
+  childCount: 2,
+  expanded: true,
+  agg: { memberIds: [1, 2, 3], aggFlagged: false }
+})
 const CHILD0 = email(2, { isHead: false, threadId: 't1', childIndex: 0 })
 const CHILD1 = email(3, { isHead: false, threadId: 't1', childIndex: 1 })
 const CHILD_BIG = email(4, { isHead: false, threadId: 't1', childIndex: 42 })
