@@ -117,6 +117,23 @@ export type PopmenuItem =
    *  不进键盘导航序列（内部自己管焦点）。 */
   | { kind: 'custom'; id: string; content: ReactNode }
 
+/** 下钻路径的一步。**只存 submenu 的 id + 点击当时实测的几何**。
+ *
+ *  🔴 绝不存 submenu 对象本身（0805 owner dogfood 的真 bug 就是这个）：那等于把
+ *  它那份 `items`——连同每一行的 `checked`/`count`——冻进 state，调用方之后
+ *  re-render 传进来的新树就再也进不了已经打开的子面板，用户看到「点了没反应，
+ *  关掉重开才对」。上游 moumen 的 demo 内容是静态的，所以原版不会暴露这条路径。
+ *
+ *  几何（anchor/morph）**必须**是快照：它描述的是「点下去的那一瞬间那一行在哪」，
+ *  是 morph 的起点，本来就不该跟随后续 re-render。两者性质不同，别一起改。 */
+interface Step {
+  id: string
+  fromIndex: number
+  anchor: { top: number; left: number }
+  morph: { labelX: number; labelCY: number } | null
+}
+
+/** 渲染用的一层面板 —— 每次 render 由 `stack` 沿**当前** items 现取，不进 state。 */
 interface Frame {
   /** 根面板为 null。 */
   node: (RowCommon & { kind: 'submenu'; items: readonly PopmenuItem[] }) | null
@@ -186,14 +203,47 @@ export function Popmenu({
   id,
   className
 }: PopmenuProps): React.ReactElement {
-  const [frames, setFrames] = useState<Frame[]>([
-    { node: null, key: 'root', fromIndex: null, anchor: { top: 0, left: 0 } }
-  ])
+  const [stack, setStack] = useState<Step[]>([])
   const [activeIndex, setActiveIndex] = useState(() => firstFocusable(items))
+
+  // 每次 render 都从**当前** items 沿路径现取子树 —— 这是「子面板跟随最新
+  // items」的全部机制（见 Step 的注释）。派生值，不进 state。
+  const frames: Frame[] = [
+    { node: null, key: 'root', fromIndex: null, anchor: { top: 0, left: 0 }, morph: null }
+  ]
+  {
+    let cur: readonly PopmenuItem[] = items
+    for (let i = 0; i < stack.length; i += 1) {
+      const step = stack[i]!
+      const hit = cur.find((it) => it.kind === 'submenu' && it.id === step.id)
+      if (!hit || hit.kind !== 'submenu') break
+      frames.push({
+        node: hit,
+        key: `${i + 1}:${hit.id}`,
+        fromIndex: step.fromIndex,
+        anchor: step.anchor,
+        morph: step.morph
+      })
+      cur = hit.items
+    }
+  }
+  // 路径断了（某一层的 submenu 整项被调用方移除）→ 把 state 收敛到还活着的深度，
+  // 否则那一项要是又回来，面板会自己重新弹开。React 官方「render 期修正 state」，
+  // 条件在更新后即为假，不会循环。
+  if (frames.length - 1 < stack.length) setStack((s) => s.slice(0, frames.length - 1))
 
   const top = frames[frames.length - 1]!
   const topItems: readonly PopmenuItem[] = top.node ? top.node.items : items
   const depth = frames.length - 1
+  /** 当初点进当前这层的那一行 —— 弹回上一层时焦点还给它。 */
+  const topFromIndex = top.fromIndex
+
+  // items 是调用方现算的，行数会变（「清除筛选」这类行出现/消失）—— activeIndex
+  // 可能落到越界或不可聚焦的位置，那样整块菜单会一个 tab stop 都不剩、方向键也
+  // 从错的地方起步。渲染与键盘一律用夹取后的值。
+  const activeItem = topItems[activeIndex]
+  const safeActive =
+    activeItem !== undefined && isFocusable(activeItem) ? activeIndex : firstFocusable(topItems)
 
   const stackRef = useRef<HTMLDivElement>(null)
   const itemRefs = useRef<(HTMLButtonElement | null)[]>([])
@@ -217,7 +267,7 @@ export function Popmenu({
   if (lastOpen !== open) {
     setLastOpen(open)
     if (!open) {
-      setFrames([{ node: null, key: 'root', fromIndex: null, anchor: { top: 0, left: 0 } }])
+      setStack([])
       setActiveIndex(firstFocusable(items))
     }
   }
@@ -253,10 +303,7 @@ export function Popmenu({
           labelCY: lr.top + lr.height / 2 - (o.top + anchor.top)
         }
       }
-      setFrames((f) => [
-        ...f,
-        { node: item, key: `${f.length}:${item.id}`, fromIndex: index, anchor, morph }
-      ])
+      setStack((s) => [...s, { id: item.id, fromIndex: index, anchor, morph }])
       const next = firstFocusable(item.items)
       setActiveIndex(next)
       pendingFocus.current = next
@@ -268,14 +315,16 @@ export function Popmenu({
   // 这里不需要维护任何「退场快照」。
   const popTo = useCallback(
     (target: number) => {
-      if (target < 0 || target >= frames.length - 1) return
-      const removed = frames[frames.length - 1]!
-      setFrames((f) => f.slice(0, target + 1))
-      const restore = target === frames.length - 2 ? (removed.fromIndex ?? 0) : 0
+      if (target < 0 || target >= depth) return
+      setStack((s) => s.slice(0, target))
+      const restore = target === depth - 1 ? (topFromIndex ?? 0) : 0
       setActiveIndex(restore)
       pendingFocus.current = restore
     },
-    [frames]
+    // 只依赖两个标量，不依赖 `frames` —— frames 现在是每次 render 现算的新数组，
+    // 挂它会让 popTo 每次 render 都换身份，进而让下面那个 Esc 监听每渲染一轮就
+    // 退订重订一次。
+    [depth, topFromIndex]
   )
 
   const select = useCallback(
@@ -383,15 +432,15 @@ export function Popmenu({
   }, [open, frames.length])
 
   function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>): void {
-    const item = topItems[activeIndex]
+    const item = topItems[safeActive]
     switch (e.key) {
       case 'ArrowDown':
         e.preventDefault()
-        focusIndex(nextEnabled(activeIndex, 1))
+        focusIndex(nextEnabled(safeActive, 1))
         break
       case 'ArrowUp':
         e.preventDefault()
-        focusIndex(nextEnabled(activeIndex, -1))
+        focusIndex(nextEnabled(safeActive, -1))
         break
       case 'Home':
         e.preventDefault()
@@ -404,15 +453,15 @@ export function Popmenu({
       case 'ArrowRight':
         if (item?.kind === 'submenu') {
           e.preventDefault()
-          drill(item, activeIndex, itemRefs.current[activeIndex])
+          drill(item, safeActive, itemRefs.current[safeActive])
         }
         break
       case 'Enter':
       case ' ':
         if (!item) break
         e.preventDefault()
-        if (item.kind === 'submenu') drill(item, activeIndex, itemRefs.current[activeIndex])
-        else activate(item, activeIndex, itemRefs.current[activeIndex])
+        if (item.kind === 'submenu') drill(item, safeActive, itemRefs.current[safeActive])
+        else activate(item, safeActive, itemRefs.current[safeActive])
         break
       case 'ArrowLeft':
       case 'Backspace':
@@ -491,7 +540,7 @@ export function Popmenu({
                     dim={dim}
                     width={width}
                     maxHeight={maxHeight}
-                    activeIndex={isTop ? activeIndex : -1}
+                    activeIndex={isTop ? safeActive : -1}
                     registerRow={isTop ? registerRow : undefined}
                     onItemEnter={
                       isTop

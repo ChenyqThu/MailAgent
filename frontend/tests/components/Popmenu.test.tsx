@@ -13,6 +13,7 @@
 // 不能用 queryByTestId 判 —— 判据是**可及性树**（退场中的面板 aria-hidden + 无
 // role），这也正是用户/读屏器感知到的那条线。
 
+import { useState } from 'react'
 import { describe, expect, test, beforeEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
 
@@ -246,6 +247,126 @@ describe('Popmenu — 关闭语义', () => {
     rerender(<Popmenu open onClose={() => {}} items={items()} ariaLabel="Filter mail" />)
     expect(screen.getByRole('menu', { name: 'Filter mail' })).toBeTruthy()
     expect(screen.queryByTestId('popmenu-panel-behind')).toBeNull()
+  })
+})
+
+// 0805 owner dogfood 真 bug：进「优先级」/「标记」子面板后点勾选项，勾选态不立刻
+// 变，关掉重开才对。根因＝面板栈把 submenu **对象**（连同它那份 items）快照进了
+// state，之后调用方 re-render 传新 items 树，子面板还在渲染旧快照。
+// 🔴 上游 moumen demo 的内容是静态的，所以这条路径在原版永远不会暴露。
+//
+// 这一组钉的是「子面板恒读当前 items」，不是某一次点击的结果 —— 消费方
+// (EmailListHeader) 每次 render 都从 store 现算整棵 items 树。
+describe('Popmenu — 子面板必须跟随最新 items（不许快照）', () => {
+  /** 模拟 EmailListHeader：每次 render 都从 state 现算整棵 items 树。 */
+  function LiveHarness(): React.ReactElement {
+    const [low, setLow] = useState(false)
+    const [hits, setHits] = useState(0)
+    const items: PopmenuItem[] = [
+      {
+        kind: 'submenu',
+        id: 'pri',
+        // 🔴 label 也来自现算的树 —— 它同时是子面板标题 + morph 的终点文案。
+        label: low ? 'Priority · 1' : 'Priority',
+        hint: low ? '1/5' : undefined,
+        items: [
+          {
+            kind: 'checkbox',
+            id: 'low',
+            label: 'Low',
+            checked: low,
+            count: hits,
+            onToggle: () => {
+              setLow((v) => !v)
+              setHits((n) => n + 1)
+            }
+          }
+        ]
+      },
+      // 「清除筛选」这类动态出现/消失的行：子面板开着的时候父层也在变。
+      ...(low
+        ? ([{ kind: 'action', id: 'reset', label: 'Clear filters', onSelect: () => {} }] as const)
+        : [])
+    ]
+    return (
+      <>
+        <button type="button" onClick={() => setLow((v) => !v)}>
+          external toggle
+        </button>
+        <Popmenu open onClose={() => {}} items={items} ariaLabel="Filter" />
+      </>
+    )
+  }
+
+  test('🔴 子面板里点勾选 → 当前渲染立刻反映新的 checked / count', () => {
+    render(<LiveHarness />)
+    fireEvent.click(screen.getByRole('menuitem', { name: /Priority/ }))
+    const row = screen.getByRole('menuitemcheckbox', { name: /Low/ })
+    expect(row.getAttribute('aria-checked')).toBe('false')
+
+    fireEvent.click(row)
+
+    const after = screen.getByRole('menuitemcheckbox', { name: /Low/ })
+    expect(after.getAttribute('aria-checked')).toBe('true')
+    expect(after.textContent).toContain('1') // count 也得是新的
+  })
+
+  test('🔴 子面板开着时的外部状态变化，也要立刻反映', () => {
+    render(<LiveHarness />)
+    fireEvent.click(screen.getByRole('menuitem', { name: /Priority/ }))
+    expect(screen.getByRole('menuitemcheckbox', { name: /Low/ }).getAttribute('aria-checked')).toBe(
+      'false'
+    )
+
+    // 不经菜单，从外面改 store
+    fireEvent.click(screen.getByRole('button', { name: 'external toggle' }))
+
+    expect(screen.getByRole('menuitemcheckbox', { name: /Low/ }).getAttribute('aria-checked')).toBe(
+      'true'
+    )
+  })
+
+  test('🔴 子面板的标题（= morph 终点文案）跟随最新 label', () => {
+    render(<LiveHarness />)
+    fireEvent.click(screen.getByRole('menuitem', { name: /Priority/ }))
+    expect(screen.getByRole('menu', { name: 'Priority' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'external toggle' }))
+
+    expect(screen.getByRole('menu', { name: 'Priority · 1' })).toBeTruthy()
+  })
+
+  test('submenu 整项被移除 → 优雅退回上一层，不留空面板', () => {
+    function Vanishing(): React.ReactElement {
+      const [has, setHas] = useState(true)
+      const items: PopmenuItem[] = has
+        ? [
+            {
+              kind: 'submenu',
+              id: 'pri',
+              label: 'Priority',
+              items: [{ kind: 'action', id: 'a', label: 'Only', onSelect: () => {} }]
+            }
+          ]
+        : [{ kind: 'action', id: 'b', label: 'Root only', onSelect: () => {} }]
+      return (
+        <>
+          <button type="button" onClick={() => setHas(false)}>
+            drop
+          </button>
+          <Popmenu open onClose={() => {}} items={items} ariaLabel="Filter" />
+        </>
+      )
+    }
+    render(<Vanishing />)
+    fireEvent.click(screen.getByRole('menuitem', { name: /Priority/ }))
+    expect(screen.getByRole('menu', { name: 'Priority' })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'drop' }))
+
+    expect(screen.getByRole('menu', { name: 'Filter' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'Root only' })).toBeTruthy()
+    expect(screen.queryByRole('menu', { name: 'Priority' })).toBeNull()
   })
 })
 
