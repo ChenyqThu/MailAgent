@@ -1584,9 +1584,14 @@ body::before {
  * 随滚动卸载重挂, 按静态状态驱动的话子行每次滚回视口都重播一遍入场。标记由
  * useEmailListRows 在 REVEAL_WINDOW_MS 后清掉。
  *
- * 收起不做退场: 行是被直接从数组里摘掉的, 要做退场就得让它们多留一会儿, 而行高
- * 前缀和正是滚动锚定的几何依据 (rowTopOfId), 留幽灵行会把锚定算歪。收起时的连续
- * 感由既有的 GSAP scrollTo 锚定 tween 提供。 */
+ * 收起的退场不进 rows: 行高前缀和是滚动锚定 (rowTopOfId) 与 ⌘K 跳转定位的几何
+ * 依据, 留「幽灵行」会把这两条链一起算歪。收起过渡 = 方案 A + 幽灵退场
+ * (2026-08 dogfood 二轮, useThreadCollapseShift): 收起前克隆挂载中的子行 DOM
+ * 节点作旁挂幽灵层 (aria-hidden, 不进 rows/rowHeights 真源), autoAlpha 120ms
+ * 淡出 + 向 -6px 上浮 (上面入场 from 帧的镜像); 同时对存活行做一次性手工 FLIP,
+ * 把「下方行瞬移 Σ子行高度」补成 220ms 滑动 —— 同样只写独立 translate。
+ * 🔴 那条既有的 GSAP scrollTo 锚定 tween **不覆盖直接收起**: 它由 captureScrollAnchor
+ * 驱动, 而收起路径 (handleToggleThread) 从不设 anchor, 判空即 return。 */
 @keyframes thread-child-in {
   from {
     opacity: 0;
@@ -2239,115 +2244,38 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background: rgb(255 255 255 / 0.9);
 }
 
-/* ─── Filter popover ─────────────────────────────────────────────────── */
-/* 🔴 2026-08-05: 本类曾手抄一份与 .glass-pop 相同配方 (86% 半透 + blur(20px)) —
- * 讽刺的是上面那句旧注释自己都写着"真浮层走 .glass-pop 配方", 结果这个真浮层
- * 自己没走, 是全 app 唯一漏网的手抄浮层 (DESIGN.md §18.1 C10 复核发现)。
- * 改为直接消费 .glass-pop (组件 className 同时挂 "filter-pop glass-pop",
- * 见 EmailListHeader.tsx) —— 材质 (background/border/box-shadow, 不透明
- * rgb(--ink-2)) 全部来自 .glass-pop, 这里只留它独有的几何 (锚定/宽度/层级)。 */
-.filter-pop {
-  position: absolute;
-  top: calc(100% + 4px);
-  right: 8px;
-  width: 248px;
-  z-index: 30;
-  /* 主题 v3 C8/批 4: 内容浮层档 10px → --r-pop(14) */
-  border-radius: var(--r-pop);
-  overflow: hidden;
+/* ─── Popmenu — 通用弹层基座 (ui/Popmenu.tsx) ──────────────────────────
+ * 移植自 lab.moumen.dev 的 unlimited-nested-menu (registry item 原源码)。
+ * 原组件「fully Tailwind, no CSS files」, 这里只落三样它从 lab-theme 拿的
+ * 主题变量 —— 其余类名在组件里原样保留 (本仓 tailwind.config 的 shadcn 别名
+ * 已把 bg-popover / text-foreground / bg-accent / ring 映到 ink/coral token,
+ * 故颜色自动双主题, 不必改类名)。
+ * 旧 .drill-* / .filter-pop 一族随本次重做删除 —— 只有 EmailListHeader 一个
+ * 消费者, 留着就是死 CSS。 */
+:root {
+  /* = lab-theme 的 --ease-smooth-out, 与组件里的 EASE 常量同一条曲线。 */
+  --popmenu-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* 🔴 面板必须**不透明** (bg-popover): 叠起来的层靠遮罩压暗, 给面板本身
+   * 上玻璃/透明度会让每一层都透出来, 读成「叠了好几份菜单」。
+   * 阴影几何逐字取自原实现 (亮色档见下方 [data-theme='light']); 暗色沿用同
+   * 一组 offset/blur/spread 只抬 alpha —— 原值是给亮底调的, 暗底上等于没有。 */
+  --popmenu-shadow-elev:
+    0 0 0 1px rgb(0 0 0 / 0.5), 0 14px 34px -10px rgb(0 0 0 / 0.55),
+    0 5px 14px -6px rgb(0 0 0 / 0.4);
+  --popmenu-shadow-behind: 0 0 0 1px rgb(0 0 0 / 0.45), 0 1px 2px -1px rgb(0 0 0 / 0.4);
 }
-.filter-section {
-  padding: 8px 10px;
-  border-bottom: 1px solid rgb(var(--ink-border-soft));
+:root[data-theme='light'] {
+  --popmenu-shadow-elev:
+    0 0 0 1px rgb(0 0 0 / 0.07), 0 14px 34px -10px rgb(0 0 0 / 0.26),
+    0 5px 14px -6px rgb(0 0 0 / 0.12);
+  --popmenu-shadow-behind: 0 0 0 1px rgb(0 0 0 / 0.05), 0 1px 2px -1px rgb(0 0 0 / 0.08);
 }
-.filter-section:last-of-type {
-  border-bottom: 0;
+/* 前面板独占整栈的层次感; 它后面的层塌成一条细边, 阴影不随深度叠加变糊。 */
+.popmenu-panel-elev {
+  box-shadow: var(--popmenu-shadow-elev);
 }
-.filter-section-head {
-  display: flex;
-  align-items: center;
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgb(var(--ink-fg-2));
-  padding: 4px 4px 6px;
-}
-.filter-section-head .links {
-  margin-left: auto;
-  display: inline-flex;
-  gap: 6px;
-}
-.filter-section-head .links button {
-  background: none;
-  border: 0;
-  cursor: pointer;
-  font-size: 10px;
-  color: rgb(var(--ink-fg-2));
-  padding: 2px 4px;
-  border-radius: 3px;
-  transition:
-    color 0.12s,
-    background 0.12s;
-}
-.filter-section-head .links button:hover {
-  color: rgb(var(--c-accent));
-  background: rgb(var(--ink-3) / 0.6);
-}
-.filter-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 6px;
-  font-size: 12.5px;
-  color: rgb(var(--ink-fg));
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.1s;
-}
-.filter-option:hover {
-  background: rgb(var(--ink-3) / 0.55);
-}
-.filter-option .cb-mini {
-  width: 13px;
-  height: 13px;
-  border-radius: 3px;
-  border: 1.5px solid rgb(var(--ink-fg-3));
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition:
-    background 0.1s,
-    border-color 0.1s;
-}
-.filter-option[data-checked='true'] .cb-mini {
-  background: rgb(var(--c-accent));
-  border-color: rgb(var(--c-accent));
-}
-.filter-option[data-checked='true'] .cb-mini::after {
-  content: '';
-  width: 6px;
-  height: 3px;
-  border-left: 1.5px solid white;
-  border-bottom: 1.5px solid white;
-  transform: rotate(-45deg) translate(1px, -1px);
-}
-.filter-option .label {
-  flex: 1;
-  min-width: 0;
-}
-.filter-option .count {
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 11px;
-  color: rgb(var(--ink-fg-2));
-  flex-shrink: 0;
-}
-.filter-option .pri-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
+.popmenu-panel-behind {
+  box-shadow: var(--popmenu-shadow-behind);
 }
 
 /* Filter button — quiet by default, loud when a filter narrows the view.
@@ -4703,7 +4631,10 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   overflow-x: auto;
   color: rgb(var(--ink-fg-1));
   font-size: 14px;
-  line-height: 1.7;
+  /* 撰写行距 —— ComposeEditor 在容器上 inline 注入 --ma-compose-lh (本封覆写 ??
+     设置默认), 出站 HTML 把同一个值内联到正文 wrapper 上, 所见即所得。fallback
+     与 COMPOSE_LINE_HEIGHT_DEFAULT (shared/state/appearance.ts) 一致。 */
+  line-height: var(--ma-compose-lh, 1.5);
 }
 .folder-draft-editor .ProseMirror p { margin: 0 0 12px; }
 .folder-draft-editor .ProseMirror strong { color: rgb(var(--ink-fg)); font-weight: 600; }
@@ -5309,43 +5240,6 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   animation: chat-think-blink 1s steps(2) infinite;
 }
 
-/* ── Chat 流式正文单推进头 reveal（0804 dogfood 1c 方案 C 质感 · 0805 换驱动为
-   单调游标，方案 B）─────────────────────────────────────────────────────────
-   配对 shared/components/email/streamWipe(.tsx / Plugin.ts)：流式期，unwrap 边界
-   之后的文本被包进 .stream-reveal span（默认 visibility:hidden —— 与旧版「到达即
-   占位、mask 未扫到处不可见」同一布局时序）；controller 用 rAF 推一个单调前进的
-   字符游标，任意时刻只有一个 span 是推进头（.stream-reveal-head），其 mask 由
-   --sw-p（0..1，JS 每帧写）驱动做左→右扫过；扫过的段固化为 .stream-reveal-done
-   （纯可见，无 mask 无动画）。
-   要点（详见 motion-gsap.md §9.2）：
-   - 没有 keyframes：进度 = 游标位置的纯函数，动画数结构性 ≤ 1 ——
-     tests/shared/streamRevealInvariant.test.tsx 钉住（旧版 per-chunk keyframe 在
-     40-80 tok/s 下必然 2 个并发，正是「2 句话同时渲染淡出」的病根）。
-   - mask 只存在于推进头一个元素上：done/pending 均无 mask、无常驻合成层。
-   - 条带几何沿用方案 C 选型 demo：mask-size 220% → 黑区 45.5%(=1.001×元素宽，
-     p=1 全亮)，羽化到 51.4%（羽化带 ≈ 元素宽 13%）；p=0 时元素整体落在透明区
-     （51.4%×2.2=1.13 倍宽之后）→ 全隐。inline 元素的 mask 走
-     box-decoration-break:slice 语义（假想未折行长条），折行天然按阅读顺序推进。
-   - 用关键字 black：mask 只有 alpha 有意义，非主题色，不走 token
-     （同 chatAttachmentAdapter canvas matte / 已退役 W1 尾部渐变的先例）。 */
-.stream-reveal {
-  visibility: hidden;
-}
-.stream-reveal.stream-reveal-done {
-  visibility: visible;
-}
-.stream-reveal.stream-reveal-head {
-  visibility: visible;
-  -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-  mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-  -webkit-mask-size: 220% 100%;
-  mask-size: 220% 100%;
-  -webkit-mask-repeat: no-repeat;
-  mask-repeat: no-repeat;
-  -webkit-mask-position: calc(100% - var(--sw-p, 0) * 100%) 0;
-  mask-position: calc(100% - var(--sw-p, 0) * 100%) 0;
-}
-
 /* ── Chat tool group (Cowork mode) — timeline hairline behind step icons ──
    task 06-08-chat PR B. The step list draws a single vertical hairline behind
    the column of type icons; each icon paints a box-shadow ring in the panel's
@@ -5736,9 +5630,6 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
 @media (prefers-reduced-motion: reduce) {
   .ef-input.invalid.ef-invalid-shake { animation: none; }
   .spin > *, .shimmer, .email-flash, .think-caret { animation: none !important; }
-  /* 流式单推进头 reveal：JS 层已按 reduce 短路（rehype 不包 span、游标不推）；这里
-     CSS 再兜底 —— 运行时切换到 reduce 时残留的 span 也强制直出（不是「冻在隐藏态」）。 */
-  .stream-reveal { visibility: visible !important; -webkit-mask-image: none !important; mask-image: none !important; }
   /* 字形流光 + phrase 轮播停帧：ShimmerText 在 reduce 下已渲染 shimmer-text-static
      （无 win/hi 层），此处再兜底关掉动画 + phrase enter（防 reduce 运行时切换残留）。 */
   .shimmer-text-win, .shimmer-text-hi, .thinking-phrases-item { animation: none !important; }

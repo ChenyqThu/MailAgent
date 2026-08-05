@@ -33,7 +33,13 @@ import type { ListImperativeAPI } from 'react-window'
 import { INBOX_LABEL, SENT_LABEL, mailboxForView } from '@shared/lib/mailboxSemantics'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useMailbox } from '@shared/state/mailbox'
-import { useEmailFilter, type EmailCategory, type EmailView } from '@shared/state/email-filter'
+import {
+  axesOf,
+  useEmailFilter,
+  type EmailCategory,
+  type EmailView
+} from '@shared/state/email-filter'
+import type { EmailSortDir, EmailSortKey } from '@shared/lib/emailSort'
 import { useGroupCollapse, type GroupKey } from '@shared/state/group-collapse'
 import { useThreadExpand } from '@shared/state/thread-expand'
 import { useBatch } from '@shared/state/batch'
@@ -42,11 +48,13 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
 import { usePinnedSync } from '@shared/hooks/usePinnedSync'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+import { useThreadCollapseShift } from '@shared/hooks/useThreadCollapseShift'
 import { gsap, DUR } from '@shared/lib/gsap'
 import type { AIPriority, EmailMeta, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
 import { qk } from '@shared/lib/queryKeys'
 import {
-  applyChipFilter,
+  applyAxisFilters,
   applyMultiFilter,
   applyTab,
   categoryOf,
@@ -54,20 +62,32 @@ import {
   flattenGroups,
   groupBySentAnchor,
   groupByThread,
+  isDone,
+  isFlaggedOnly,
   partitionByDate,
+  partitionFlat,
+  recipientIsMe,
   rowTopOfId,
+  sortThreadGroups,
   type ListRow
 } from '@shared/components/email/emailListRows'
 
 // ─── List query opts per Sidebar view ────────────────────────────────
 // customMailbox 非空 (多文件夹同步 P3 — 选中某自定义文件夹) 时优先, 列表只拉该
 // mailbox (= display_name), 跳过内建 view 语义。
-function listOptsForView(view: EmailView, limit: number, customMailbox: string | null): ListOpts {
-  if (customMailbox) return { mailbox: customMailbox, limit }
+function listOptsForView(
+  view: EmailView,
+  limit: number,
+  customMailbox: string | null,
+  sort: { orderBy: EmailSortKey; sortDir: EmailSortDir }
+): ListOpts {
+  // 🔴 排序下沉 SQL 而非前端切片：LIMIT 决定的是「取哪 N 封」。前端排只会把
+  // 「按发件人排序的前 800 封」变成「按日期取的 800 封里再排一遍」。
+  if (customMailbox) return { mailbox: customMailbox, limit, ...sort }
   const mailbox = mailboxForView(view)
-  if (mailbox) return { mailbox, limit }
-  if (view === 'flagged') return { isFlagged: true, limit }
-  return { limit }
+  if (mailbox) return { mailbox, limit, ...sort }
+  if (view === 'flagged') return { isFlagged: true, limit, ...sort }
+  return { limit, ...sort }
 }
 
 // 标旗视图传给 groupByThread 的空线程补充集 (模块级稳定引用, 不破 useMemo)。
@@ -96,7 +116,17 @@ export interface UseEmailListRowsReturn {
   orderedIds: number[]
   activeId: number | null
   newIds: ReadonlySet<number>
-  counts: { all: number; unread: number; flagged: number; failed: number }
+  counts: {
+    all: number
+    unread: number
+    flagged: number
+    done: number
+    toMe: number
+    hasAttach: number
+    failed: number
+  }
+  /** USER_EMAIL（settings）—— null 时 header 把「收件人是我」那行置灰。 */
+  userEmail: string | null
   categoryCounts: Record<EmailCategory, number>
   priorityCounts: Record<AIPriority, number>
   selectedAllFlagged: boolean
@@ -120,13 +150,30 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   const navTargetId = useActiveEmail((s) => s.navTargetId)
   const clearNavTarget = useActiveEmail((s) => s.clearNavTarget)
   const publishOrderedIds = useActiveEmail((s) => s.setOrderedIds)
-  const filter = useEmailFilter((s) => s.filter)
   const view = useEmailFilter((s) => s.view)
   // 多文件夹同步 (P3) — 当前自定义文件夹 (mailbox=display_name); 非空时列表只拉它。
   const customMailbox = useEmailFilter((s) => s.customMailbox)
   const tab = useEmailFilter((s) => s.tab)
   const selectedPriorities = useEmailFilter((s) => s.selectedPriorities)
   const selectedCategories = useEmailFilter((s) => s.selectedCategories)
+  // 五条二值筛选轴 —— 逐条订阅 (整对象 selector 每次 render 造新引用, 会让
+  // useMemo 依赖恒变)。axesOf 只是把它们打包成传给纯函数的值快照。
+  const fUnread = useEmailFilter((s) => s.unread)
+  const fFlagMark = useEmailFilter((s) => s.flagMark)
+  const fToMe = useEmailFilter((s) => s.toMe)
+  const fHasAttach = useEmailFilter((s) => s.hasAttach)
+  const fFailed = useEmailFilter((s) => s.failed)
+  const sortKey = useEmailFilter((s) => s.sortKey)
+  const sortDir = useEmailFilter((s) => s.sortDir)
+
+  // 「收件人是我」判据 —— 与 Sidebar / EventDetailDrawer 同 query key, 走同一份
+  // react-query 缓存 (settings 不会因为列表重渲反复重拉)。
+  const settingsQ = useQuery({
+    queryKey: qk.settings.all(),
+    queryFn: () => mailApi.settings.get(),
+    staleTime: 5 * 60_000
+  })
+  const userEmail = settingsQ.data?.userEmail ?? null
 
   // Subscribe to the `collapsed` map itself (not the `isCollapsed` accessor
   // function — the function reference is stable across `toggle()` calls so
@@ -182,8 +229,11 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   // 70% 阈值预加载, 用户感知不到分页边界. (react-best-practices · Client
   // Data Fetching)
   const { data, isLoading, isError, error } = useQuery({
-    queryKey: qk.emails.list(view, customMailbox, activeMailbox, fetchLimit),
-    queryFn: () => mailApi.email.listEnriched(listOptsForView(view, fetchLimit, customMailbox)),
+    queryKey: qk.emails.list(view, customMailbox, activeMailbox, fetchLimit, sortKey, sortDir),
+    queryFn: () =>
+      mailApi.email.listEnriched(
+        listOptsForView(view, fetchLimit, customMailbox, { orderBy: sortKey, sortDir })
+      ),
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false,
     // 切到 设置/日历 再切回邮箱不重拉: 路由是独立顶级 route, EmailList 切走即
@@ -265,10 +315,24 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     () => (view === 'inbox' && !customMailbox ? applyTab(tab, all) : all),
     [view, tab, all, customMailbox]
   )
-  const chipFiltered = useMemo(() => applyChipFilter(filter, tabFiltered), [filter, tabFiltered])
+  const axes = useMemo(
+    () =>
+      axesOf({
+        unread: fUnread,
+        flagMark: fFlagMark,
+        toMe: fToMe,
+        hasAttach: fHasAttach,
+        failed: fFailed
+      }),
+    [fUnread, fFlagMark, fToMe, fHasAttach, fFailed]
+  )
+  const axisFiltered = useMemo(
+    () => applyAxisFilters(axes, tabFiltered, userEmail),
+    [axes, tabFiltered, userEmail]
+  )
   const filteredBase = useMemo(
-    () => applyMultiFilter(chipFiltered, selectedPriorities, selectedCategories),
-    [chipFiltered, selectedPriorities, selectedCategories]
+    () => applyMultiFilter(axisFiltered, selectedPriorities, selectedCategories),
+    [axisFiltered, selectedPriorities, selectedCategories]
   )
   // Union pinned 邮件进 filtered. dedupe by internal_id, pinned 永远进结果集
   // 但仍走 partitionByDate → pinned 桶路由, 所以 UI 体验不变, 只是不会被丢掉.
@@ -292,7 +356,9 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   // Bug A): switching inbox → outbox / drafts or accounts re-baselines instead
   // of diffing the previous view's ids against the new first page and flashing
   // the whole screen NEW. `viewKey` already folds view + custom folder.
-  const newlyAddedKey = `${viewKey}:${activeMailbox ?? ''}`
+  // 排序键/方向也进 baseline key: 换排序 = 第一页换成完全不同的一批 id
+  // (「按发件人升序的前 100 封」), 不重新基线会整屏闪 NEW。
+  const newlyAddedKey = `${viewKey}:${activeMailbox ?? ''}:${sortKey}:${sortDir}`
   const newIds = useNewlyAddedIds(firstPageIds, newlyAddedKey)
 
   // `orderedIds` (a.k.a. selectable ids in the list) is computed AFTER
@@ -306,17 +372,25 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   // 显示 "5 封未读" 但点 unread filter 过滤出空——5 封 unread 都是 ai_priority
   // ='low' 落在 Other tab, 在 Focused tab 被 applyTab 提前过滤掉了. 现在数字
   // 严格跟 filter 看到的视图一致.
+  // 口径与筛选菜单的每一行一一对应 (菜单行右侧显示这些数)：每个数都是「只开
+  // 这一条轴时会剩下多少」，所以它们互相独立、不叠加。
   const counts = useMemo(() => {
     let unread = 0
     let flagged = 0
+    let done = 0
+    let toMe = 0
+    let hasAttach = 0
     let failed = 0
     for (const r of tabFiltered) {
       if (!r.is_read) unread++
-      if (r.is_flagged) flagged++
+      if (isFlaggedOnly(r)) flagged++
+      if (isDone(r)) done++
+      if (userEmail !== null && recipientIsMe(r.to_addr, userEmail)) toMe++
+      if ((r.attach_count ?? 0) > 0) hasAttach++
       if (r.sync_status === 'failed' || r.sync_status === 'dead_letter') failed++
     }
-    return { all: tabFiltered.length, unread, flagged, failed }
-  }, [tabFiltered])
+    return { all: tabFiltered.length, unread, flagged, done, toMe, hasAttach, failed }
+  }, [tabFiltered, userEmail])
 
   // Per-category live count (for the filter popover hint).
   const categoryCounts = useMemo(() => {
@@ -350,6 +424,8 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   const groupLabels: Record<GroupKey, string> = useMemo(
     () => ({
       pinned: t('emailList.group.pinned'),
+      // 'flat' 桶不出标题 (flattenGroups 跳过 header)，这里只是把 Record 补齐。
+      flat: '',
       today: t('emailList.group.today'),
       yesterday: t('emailList.group.yesterday'),
       thisWeek: t('emailList.group.thisWeek'),
@@ -542,18 +618,25 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     [view, filtered, threadSupplement]
   )
 
+  // 非日期排序: 组序改按线程头的排序键 (两个 groupBy* 都固定按 anchorDate DESC
+  // 排，那是日期语义)。'date' 原样透传，保住「supplement 不 bump 线程」的取舍。
+  const orderedGroups = useMemo(
+    () => (sortKey === 'date' ? threadGroups : sortThreadGroups(threadGroups, sortKey, sortDir)),
+    [threadGroups, sortKey, sortDir]
+  )
+
   // Selectable ids = every email rendered in the list (heads + visible
   // children).  Used by keyboard nav and the active-reset effect so a
   // cross-mailbox supplement head can become active without being
   // immediately yanked back.
   const orderedIds = useMemo(() => {
     const ids: number[] = []
-    for (const g of threadGroups) {
+    for (const g of orderedGroups) {
       ids.push(g.head.internal_id)
       for (const c of g.children) ids.push(c.internal_id)
     }
     return ids
-  }, [threadGroups])
+  }, [orderedGroups])
 
   // #2/codex review MEDIUM: navTargetId 的「解除豁免」移到下方滚动 effect (仅定位成功后
   // 才清), 避免折叠日期组/线程里的目标(在 orderedIds 里但未渲染成 row)被提前清掉 → 滚不到。
@@ -575,7 +658,15 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     publishOrderedIds(orderedIds)
   }, [orderedIds, publishOrderedIds])
 
-  const buckets = useMemo(() => partitionByDate(threadGroups, pinnedSet), [threadGroups, pinnedSet])
+  // 日期排序 → 日期分桶 (今天/昨天/…); 其余排序 → 只留「已固定」+ 一个无标题的
+  // 平铺桶 (按发件人排完再按日期切段 = 把排序结果切碎)。
+  const buckets = useMemo(
+    () =>
+      sortKey === 'date'
+        ? partitionByDate(orderedGroups, pinnedSet)
+        : partitionFlat(orderedGroups, pinnedSet),
+    [sortKey, orderedGroups, pinnedSet]
+  )
 
   // Show the loader sentinel when we still have headroom (no end-of-data
   // signal from this query shape — we stop the loader if a fetch returned
@@ -601,6 +692,17 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   }, [rows, newIds])
   const getRowHeight = useCallback((index: number): number => rowHeights[index] ?? 28, [rowHeights])
 
+  // 收起线程时下方行的位移过渡 (方案 A, 2026-08)。收起前 captureCollapse() 记下
+  // First 帧几何, 收起提交后由该 hook 的 layout effect 做一次性 FLIP。展开路径**不**
+  // 调它 —— 那条已有下面的滚动锚定 tween, 叠加会双动。
+  const reduceMotion = useReducedMotion()
+  const { captureCollapse, isShiftingRef } = useThreadCollapseShift({
+    rows,
+    rowHeights,
+    listRef,
+    reduceMotion
+  })
+
   // 滚动锚定: 展开 B 时手风琴折叠上方长线程 A → B 及下方行整体上移, 但 react-window
   // 的 scrollTop 不变 → B 被挤出视口, 需手动往上滚才能看到. captureScrollAnchor 在
   // 展开前记下 B 母邮件行在视口的相对偏移, 下面 layout effect 在重排后用几何法
@@ -617,8 +719,14 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     [rows, rowHeights]
   )
   const handleToggleThread = useCallback(
-    (threadId: string): void => toggleThread(keyFor(threadId)),
-    [keyFor, toggleThread]
+    (threadId: string): void => {
+      const key = keyFor(threadId)
+      // 只有**用户显式收起**这一个方向做位移过渡。手风琴的隐式收起 (展开 B 顶掉 A)
+      // 走 handleExpandThread, 那条已有滚动锚定 tween; 两者叠加会双动。
+      if (expandedKey === key) captureCollapse()
+      toggleThread(key)
+    },
+    [keyFor, expandedKey, captureCollapse, toggleThread]
   )
   const handleExpandThread = useCallback(
     (threadId: string, headInternalId: number): void => {
@@ -723,13 +831,15 @@ export function useEmailListRows(): UseEmailListRowsReturn {
       // 不会看到 spinner / 列表抖动 / 回顶部.
       if (!showLoader) return
       // B3 — 平滑滚动锚定 tween 期间逐帧派发 scroll 事件, 不让经过靠底行误触发分页。
-      if (isAnchoringRef.current) return
+      // 收起位移 tween 同款屏蔽 (独立 ref: 两条 tween 各自管自己的闸, 合用一个会在
+      // 「收起中途又展开」时被对方的 onComplete 提前放开)。
+      if (isAnchoringRef.current || isShiftingRef.current) return
       const triggerAt = Math.min(Math.floor(rows.length * 0.7), rows.length - 8)
       if (range.stopIndex >= triggerAt) {
         setPageCount((c) => Math.min(c + 1, MAX_PAGES))
       }
     },
-    [rows.length, showLoader]
+    [rows.length, showLoader, isShiftingRef]
   )
 
   return {
@@ -739,6 +849,7 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     activeId,
     newIds,
     counts,
+    userEmail,
     categoryCounts,
     priorityCounts,
     selectedAllFlagged,

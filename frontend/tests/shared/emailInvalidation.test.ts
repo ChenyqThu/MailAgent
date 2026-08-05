@@ -175,6 +175,38 @@ describe('planInvalidation', () => {
     ])
   })
 
+  test('pin_changed batch wire (线程级联 unpin) gates supplements on data.internal_ids', () => {
+    // mail_write.set_pins 恒发批量形状 (internal_id=null + data.internal_ids),
+    // 单封写也一样 —— 消费侧只认一种 wire。
+    expect(
+      planInvalidation('email.pin_changed', null, {
+        is_pinned: false,
+        internal_ids: [11, 22]
+      })
+    ).toEqual([
+      { kind: 'main-list' },
+      { kind: 'key', key: ['pinnedIds'] },
+      { kind: 'supplements' },
+      { kind: 'thread-members' }
+    ])
+  })
+
+  test('pin_changed 不发 [email, id] —— 置顶态不在邮件记录上, 由 pinnedIds 镜像承载', () => {
+    // 🔴 与 flag 的差异是有意的: flag 状态显示在详情 toolbar (读 ['email', id] 缓存),
+    // pin 只活在 ['pinnedIds'] (usePinned zustand 镜像) 里。所以 pin 既不逐 id 失效
+    // 详情, 超长批次也不需要退化成 ['email'] 前缀 (那会把所有正文/翻译缓存冲掉)。
+    const tooMany = Array.from({ length: 201 }, (_, i) => i + 1)
+    for (const ids of [[11, 22], tooMany]) {
+      const directives = planInvalidation('email.pin_changed', null, {
+        is_pinned: false,
+        internal_ids: ids
+      })
+      expect(directives.filter((d) => d.kind === 'key')).toEqual([
+        { kind: 'key', key: ['pinnedIds'] }
+      ])
+    }
+  })
+
   test('outbox.done: main-list + supplements', () => {
     expect(planInvalidation('outbox.done', 7)).toEqual([
       { kind: 'main-list' },
@@ -297,7 +329,8 @@ describe('planInvalidation — batch internal_ids (issue #58 inbound read reconc
       ['email.dead_letter', 7],
       ['email.flag_changed', 7],
       ['email.pin_changed', 7],
-      ['email.pin_changed', null],
+      // ['email.pin_changed', null] 有意不在此列 —— pin 现在也走批量 wire
+      // (data.internal_ids)，见下方专门的 pin 批量用例。
       ['outbox.done', 7],
       ['outbox.done', null],
       ['llm.success', 7],

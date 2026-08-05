@@ -449,7 +449,7 @@ log4j.logger.davmail=INFO
 
 **详见**：[`docs/multi-folder-sync-prd.md`](../folder-sync/multi-folder-sync-prd.md) · [`docs/multi-folder-sync-design.md`](../folder-sync/multi-folder-sync-design.md) · [`docs/multi-folder-sync-handoff.md`](../../archive/2026-06/multi-folder-sync-handoff.md) · 看板 [`docs/multi-folder-sync-matrix.md`](../folder-sync/multi-folder-sync-matrix.md)。
 
-## 跨语言手抄常量的一致性闸（可复用模式，现存十八闸）
+## 跨语言手抄常量的一致性闸（可复用模式，现存十九闸）
 
 **问题形态**：一个常量 / 派生表 / 集合，在 Python 与 TypeScript（或多个 TS 文件）里各有一份**手抄**镜像。
 类型系统跨不过语言边界，import 也跨不过 —— 于是改一处、漏另一处，**测试全绿、编译干净、运行时静默错**。
@@ -483,8 +483,8 @@ log4j.logger.davmail=INFO
    闸失效等于没有闸，而且没人会发现。所以抽取器只认当前的单行习语，重构者被迫回来同步更新抽取器，
    顺手核对镜像仍一致。
 
-**现存十八闸**（前四条是原有的，中间八条随 issue #68 补齐，再四条随 08-02 custom-agent review 补齐，
-末两条随 08-01 MCP connector PR3 补齐）：
+**现存十九闸**（前四条是原有的，中间八条随 issue #68 补齐，再四条随 08-02 custom-agent review 补齐，
+再两条随 08-01 MCP connector PR3 补齐，末条随 08-05 列表筛选/排序菜单重做补齐）：
 
 | 镜像的东西 | 镜像在哪几处 | 闸 | 漏改的后果 |
 |---|---|---|---|
@@ -506,6 +506,7 @@ log4j.logger.davmail=INFO
 | report artifact 两常量 | `src/reports/models.py::MAX_IMAGE_SRC_CHARS` / `MANUAL_CHAT_REPORT_AGENT_ID` · `frontend/src/shared/api/reportBlocks.ts` 同名导出 | `tests/reports/test_block_contract_consistency.py`（与块词表闸同文件） | src 上限不一致 = 「gateway 收下、Python 拒绝」的静默不一致；哨兵 id 不一致 = manual chat 的 `report_write` 被归属校验整个拒掉 |
 | `UNTRUSTED_*` 围栏格式 | `src/agents/fence.py`（spec envelope + Python 侧 tool loop 结果） · `frontend/src/shared/assistant/context/contextSerializer.ts::fenceUntrusted`（gateway 工具结果） | `tests/config/test_untrusted_fence_parity.py`（Python 从 TS 源码抽三个模板 + ZWSP 打断字面量重建后逐字节对账） | 围栏是注入面的**结构**硬防御：格式一漂，system prompt 那句「fenced 块是 user-supplied」只对一半内容成立，另一半 untrusted 内容看上去像可信文本 —— **测试全绿、运行时静默失守** |
 | MCP connector crud 天花板词表 + 序（🔴 不含 `delete`）+ caller `context_mode` 值域 | `src/agents/trigger.py::_CONNECTOR_GRANT_VALUES`（保存闸权威）· `src/connectors/service.py::CONNECTOR_CRUD_RANK`/`CALLER_CONTEXT_MODES` · `frontend/src/ai-gateway/tools/policy.ts::ConnectorGrant`/`CONNECTOR_CRUD_RANK`/`AGENT_CONTEXT_MODES` · `tools/schemas.ts::customAgentConnectorGrantSchema` · `shared/api/types/chat.ts` + `report.ts` 的 wire 声明（共七处天花板副本） | `tests/config/test_connector_contract_parity.py`（有序相等 + **`delete` 不在任何一侧**的独立负例 + rank 1..N 稠密闸 + 合成源码 canary） | 任一侧多 `delete` = grill Q3=B 安全地板破口（TS 侧多 → 审批卡把删除权限渲染成正常授权；Python 侧多 → headless 真能调删除工具）；序漂 = gateway 注册期过滤与服务端天花板闸各判各的，症状只有「工具时有时无 / 莫名 403」，没有任何报错指向真因 |
+| 列表排序 ORDER BY 白名单（词表 + 逐条 SQL 模板） | `frontend/src/shared/lib/emailSort.ts::EMAIL_SORT_KEYS`/`EMAIL_SORT_DIRS`/`ENRICHED_ORDER_BY`（TS 单源叶子，主进程 DAO + renderer store + `ListOpts` 三处都 import 它）· `src/api/routers/email_views.py` 同名常量（serve-api 手抄镜像，跨进程跨语言消灭不掉） | `tests/config/test_email_sort_parity.py`（两侧各自求值模板串/f-string 后空白归一逐条比对 + 「每条必带 `m.internal_id` 尾键与 `{dir}` 占位」+ importance null-guard 恒 ASC 的独立断言 + 四个抽取器失效的 canary） | 同一封邮件在桌面与远程网页排在不同位置，两边各自看都自洽、零报错。最毒的是 importance 的 null-guard 只在一侧存在 —— 那一侧的「由低到高」会把一整片没跑过 AI 的邮件顶到最前 |
 
 **什么时候必须建新闸**：你要在**第二处**手抄一个已有的常量 / 枚举 / 派生表，且两处无法共享同一个源
 （跨语言 / 跨部署 / 跨构件种类 / 跨进程 / 打包边界）。每闸的成本都在 100-200 行量级，

@@ -47,3 +47,10 @@ def test_inline_bold_and_code_still_work():
     html = md_to_html("**粗体** 和 `code`")
     assert "<b>粗体</b>" in html
     assert "<code" in html and ">code</code>" in html
+
+
+def test_wrapper_line_height_matches_compose_default():
+    # 外层 wrapper 的 line-height 对齐前端撰写行距默认 (COMPOSE_LINE_HEIGHT_DEFAULT
+    # = 1.5, frontend/src/shared/state/appearance.ts): AI 建议落草稿/发送后, 行距要
+    # 与用户在 composer 里手写的一致。
+    assert "line-height:1.5" in md_to_html("正文")

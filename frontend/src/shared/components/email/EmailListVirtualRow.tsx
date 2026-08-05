@@ -9,7 +9,7 @@ import type { RowComponentProps } from 'react-window'
 import type { GroupKey } from '@shared/state/group-collapse'
 
 import { EmailRow } from './EmailRow'
-import type { ListRow } from './emailListRows'
+import { rowKeyAttrs, type ListRow } from './emailListRows'
 
 export interface RowProps {
   rows: ReadonlyArray<ListRow>
@@ -42,16 +42,23 @@ export function VirtualRow({
   const { t: tRow } = useTranslation()
   const item = rows[index]
   if (!item) return <div style={style} />
+  // data-row-key —— 线程收起的位移过渡 (useThreadCollapseShift) 靠它在 DOM 里
+  // 找回「收起前后是同一行」。属性名单源 emailListRows.ROW_KEY_ATTR。
+  const rowKey = rowKeyAttrs(item)
   if (item.type === 'loader') {
     return (
-      <div style={style} className="px-4 py-3 text-center text-meta font-mono text-ink-fg-3">
+      <div
+        style={style}
+        {...rowKey}
+        className="px-4 py-3 text-center text-meta font-mono text-ink-fg-3"
+      >
         {tRow('emailList.loadingMore')}
       </div>
     )
   }
   if (item.type === 'header') {
     return (
-      <div style={style}>
+      <div style={style} {...rowKey}>
         <header
           className="group-header"
           role="button"
@@ -87,6 +94,9 @@ export function VirtualRow({
   const t = item.thread
   const isHead = t?.isHead === true
   const isChild = t !== undefined && !t.isHead
+  // 线程虚拟头的聚合 (旗标/置顶按成员算 + 点击走级联). 只有虚拟头带 agg —— 展开后
+  // 的子行 (含最新一封自己那行) 与发件箱 sent-anchor 头恒是单封语义.
+  const threadHead = t?.isHead ? t.agg : undefined
   const threadChevron = t
     ? {
         isHead,
@@ -138,6 +148,7 @@ export function VirtualRow({
             } as React.CSSProperties)
           : style
       }
+      {...rowKey}
       data-thread-reveal={revealing ? 'true' : undefined}
     >
       <EmailRow
@@ -146,6 +157,7 @@ export function VirtualRow({
         isNew={newIds.has(item.email.internal_id)}
         noAvatar={isChild}
         threadChevron={threadChevron}
+        threadHead={threadHead}
         onSelect={handleSelect}
       />
     </div>

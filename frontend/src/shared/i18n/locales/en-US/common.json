@@ -40,18 +40,46 @@
     },
     "filter": {
       "button": "Filter mail",
-      "status": "Status",
       "priority": "Priority",
       "category": "Category",
-      "all": "All",
-      "reset": "Reset",
+      "reset": "Clear filters",
       "selectAll": "All",
-      "clearLink": "Clear"
+      "clearLink": "Clear",
+      "title": "Filter by",
+      "flagMark": "Marked",
+      "done": "Done",
+      "toMe": "Addressed to me",
+      "hasAttach": "Has attachments"
     },
     "folderCrumb": {
       "aria": "Folder path"
     },
-    "resizeHandle": "Resize list width"
+    "resizeHandle": "Resize list width",
+    "priority": {
+      "critical": "Critical",
+      "urgent": "Urgent",
+      "important": "Important",
+      "normal": "Normal",
+      "low": "Low"
+    },
+    "sort": {
+      "title": "Sort by",
+      "dirTitle": "Direction",
+      "key": {
+        "date": "Date",
+        "sender": "Sender",
+        "subject": "Subject",
+        "importance": "Importance"
+      },
+      "dir": {
+        "newest": "Newest first",
+        "oldest": "Oldest first",
+        "az": "A → Z",
+        "za": "Z → A",
+        "highest": "Highest first",
+        "lowest": "Lowest first"
+      }
+    }
   },
   "emailDetail": {
     "loading": "Loading…",
@@ -199,10 +227,14 @@
       "textColor": "Text color",
       "bgColor": "Highlight",
       "moreColor": "More colors",
-      "fontDefault": "Default",
+      "fontFamilyDefault": "Default font",
+      "fontSizeDefaultOption": "Default ({size})",
       "fontSystem": "System",
       "fontSerif": "Serif",
       "fontMono": "Mono",
+      "lineHeight": "Line height",
+      "lineHeightDefaultOption": "Default ({value})",
+      "defaultHint": "Not set — following the default",
       "linkUrl": "Link URL",
       "linkApply": "Apply",
       "linkRemove": "Remove link",
@@ -224,6 +256,10 @@
       "imageTooLarge": "Image {name} exceeds {max}MB — send it as an attachment instead",
       "mention": "Mention someone @",
       "table": "Table",
+      "tableTools": "Table tools",
+      "tableGroupInsert": "Insert",
+      "tableGroupCell": "Cells",
+      "tableGroupDelete": "Delete",
       "tableInsert": "Insert table",
       "tableSize": "{rows} rows × {cols} columns",
       "tableRowBefore": "Insert row above",
@@ -457,7 +493,10 @@
       "calPrevEvent": "Select previous event",
       "calOpenSelected": "Open selected event",
       "calClose": "Close drawer / modal",
-      "calHelp": "Open / close shortcut help"
+      "calHelp": "Open / close shortcut help",
+      "filterUnread": "Filter: unread",
+      "filterFlagged": "Filter: flagged",
+      "filterHasAttach": "Filter: has attachments"
     }
   },
   "palette": {
@@ -2408,7 +2447,7 @@
       "bodyText": {
         "title": "Body text",
         "meta": "Email body only",
-        "note": "Applies to the email reading area only — list rows, AI fields and other UI text are unaffected. Line height defaults to 1.15.",
+        "note": "Font, size and line height apply to the email reading area; compose line height applies to the composer and is sent with the email, so recipients see the same spacing you typed. Defaults: 1.15 reading, 1.5 compose. List rows, AI fields and other UI text are unaffected.",
         "font": {
           "system": "System default",
           "systemMeta": "Sans-serif system font",
@@ -2424,6 +2463,10 @@
         "lineHeight": {
           "label": "Line height",
           "meta": "Vertical spacing between lines"
+        },
+        "composeLineHeight": {
+          "label": "Compose line height",
+          "meta": "Spacing in the composer and in sent mail"
         }
       },
       "glass": {

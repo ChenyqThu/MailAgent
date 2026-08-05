@@ -21,6 +21,7 @@ import Image from '@tiptap/extension-image'
 import i18n from '@shared/i18n'
 import type { ContactSuggestion } from '@shared/api/types'
 import {
+  COMPOSE_FONT_SIZE_DEFAULT_PX,
   ComposeEditor,
   ComposeFormatToolbar
 } from '../../src/shared/components/email/compose/ComposeEditor'
@@ -266,21 +267,47 @@ describe('ComposeFormatToolbar — 命令接线（新装配）', () => {
     expect(editor.getHTML()).toContain('<hr')
   })
 
-  test('表格网格插入 + 上下文行/标题/删除命令', async () => {
+  test('表格网格插入 → 光标进表后工具栏换成「表格工具」下拉', async () => {
     const editor = renderEditor({ content: '<p></p>' })
     fireEvent.click(screen.getByLabelText('表格'))
     fireEvent.click(await screen.findByRole('button', { name: '2 行 × 2 列' }))
     expect(editor.getHTML().match(/<tr/g)).toHaveLength(2)
     expect(editor.getHTML().match(/<td/g)).toHaveLength(4)
+    // 插入网格按钮让位给带文字标签的表格操作菜单（原先是 10 个同图标的裸按钮）。
+    expect(screen.queryByLabelText('表格')).toBeNull()
+    expect(screen.getByLabelText('表格工具')).toBeTruthy()
+  })
 
+  // radix Popover 在 happy-dom 下同一测试内二次打开会立刻卸载内容（见 heading 处注释）
+  // → 表格菜单的每个命令拆独立测试，前置表格由 content 直接铺设。
+  const TABLE_HTML =
+    '<table><tbody><tr><td>A</td><td>B</td></tr><tr><td>C</td><td>D</td></tr></tbody></table>'
+
+  test('表格菜单：下方插入行', async () => {
+    const editor = renderEditor({ content: TABLE_HTML })
+    fireEvent.click(screen.getByLabelText('表格工具'))
     fireEvent.click(await screen.findByLabelText('下方插入行'))
     expect(editor.getHTML().match(/<tr/g)).toHaveLength(3)
+  })
 
-    fireEvent.click(screen.getByLabelText('切换标题行'))
+  test('表格菜单：切换标题行', async () => {
+    const editor = renderEditor({ content: TABLE_HTML })
+    fireEvent.click(screen.getByLabelText('表格工具'))
+    fireEvent.click(await screen.findByLabelText('切换标题行'))
     expect(editor.getHTML()).toContain('<th')
+  })
 
-    fireEvent.click(screen.getByLabelText('删除表格'))
+  test('表格菜单：删除表格', async () => {
+    const editor = renderEditor({ content: TABLE_HTML })
+    fireEvent.click(screen.getByLabelText('表格工具'))
+    fireEvent.click(await screen.findByLabelText('删除表格'))
     expect(editor.getHTML()).not.toContain('<table')
+  })
+
+  test('表格菜单：合并单元格在单格选区下禁用（不可点）', async () => {
+    renderEditor({ content: TABLE_HTML })
+    fireEvent.click(screen.getByLabelText('表格工具'))
+    expect(await screen.findByLabelText('合并单元格')).toHaveProperty('disabled', true)
   })
 
   test('TableKit 保留标准 table 的 colspan/rowspan', () => {
@@ -313,6 +340,44 @@ describe('ComposeFormatToolbar — 命令接线（新装配）', () => {
     expect(screen.getByLabelText('撤销')).toHaveProperty('disabled', false)
     fireEvent.click(screen.getByLabelText('撤销'))
     expect(editor.isActive('bold')).toBe(false)
+  })
+})
+
+describe('工具栏下拉：当前值可辨识', () => {
+  test('字体/字号/行距不再同显「默认」，各自显示控件语义值', () => {
+    renderEditor()
+    // dogfood 反馈的病根：三个下拉的按钮文案全是「默认」。
+    expect(screen.getByLabelText('字体').textContent).toBe('默认字体')
+    expect(screen.getByLabelText('字号').textContent).toBe(String(COMPOSE_FONT_SIZE_DEFAULT_PX))
+    // 行距默认档显示的是实际生效数值（撰写行距设置默认 1.5），不是「默认」二字。
+    expect(screen.getByLabelText('行距').textContent).toBe('1.5')
+    expect(screen.getByLabelText('标题格式').textContent).toBe('正文')
+  })
+
+  test('选中字号后按钮跟随显示该值', async () => {
+    const editor = renderEditor()
+    act(() => {
+      editor.commands.selectAll()
+    })
+    fireEvent.click(screen.getByLabelText('字号'))
+    fireEvent.click(await screen.findByRole('option', { name: '24' }))
+    expect(screen.getByLabelText('字号').textContent).toBe('24')
+  })
+
+  test('默认字号镜像 index.css（跨构件手抄一致性闸）', async () => {
+    const { readFileSync } = await import('node:fs')
+    const { resolve } = await import('node:path')
+    // happy-dom 环境下 import.meta.url 不是 file: URL（fileURLToPath 会抛），
+    // 故从 vitest root（= frontend/，vitest.config.ts 未改 root）取路径；
+    // 路径错 → readFileSync 抛 → 红，不会静默放行。
+    const css = readFileSync(resolve(process.cwd(), 'src/electron/renderer/index.css'), 'utf8')
+    // 只匹配 `.folder-draft-editor .ProseMirror {`（后跟其它选择器的规则不算），
+    // 且必须唯一 —— 抽取失败/抽到多份都要红，而不是静默放行。
+    const blocks = css.match(/\.folder-draft-editor \.ProseMirror \{[^}]*\}/g)
+    expect(blocks).toHaveLength(1)
+    const px = blocks![0].match(/font-size:\s*(\d+(?:\.\d+)?)px/)
+    expect(px).not.toBeNull()
+    expect(Number(px![1])).toBe(COMPOSE_FONT_SIZE_DEFAULT_PX)
   })
 })
 

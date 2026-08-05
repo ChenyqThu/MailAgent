@@ -20,7 +20,13 @@
 
 import { ipcMain } from 'electron'
 
-import type { EmailFlagOpts, LlmRunOpts, ResyncOpts, UpdateFlagOpts } from '@shared/api/types'
+import type {
+  EmailFlagOpts,
+  EmailPinOpts,
+  LlmRunOpts,
+  ResyncOpts,
+  UpdateFlagOpts
+} from '@shared/api/types'
 
 import { daemonRequest } from '../daemon_api'
 import { ensureInternalId, envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
@@ -33,7 +39,8 @@ export type { WriteEnvelope } from '../lib/envelope'
 
 /** Serve-api flag body — only non-undefined fields, matching HttpApi.email.flag.
  *  The server reads isRead / isFlagged / processingStatus (camelCase aliases) +
- *  optional ids[] for batch. allowConcurrent is NEVER sent: the server forces
+ *  optional ids[] for batch + optional cascadeThread (线程虚拟头「标完成」的级联摘旗).
+ *  allowConcurrent is NEVER sent: the server forces
  *  --allow-concurrent (mail-sync is always online), so there's no pm2 conflict
  *  to bypass from the client. Exported for parity unit tests. */
 function flagBody(opts: {
@@ -41,6 +48,7 @@ function flagBody(opts: {
   isFlagged?: boolean
   processingStatus?: string
   ids?: number[]
+  cascadeThread?: boolean
 }): Record<string, unknown> {
   const body: Record<string, unknown> = {}
   if (opts.isRead !== undefined) body.isRead = opts.isRead
@@ -49,6 +57,7 @@ function flagBody(opts: {
     body.processingStatus = opts.processingStatus
   }
   if (Array.isArray(opts.ids) && opts.ids.length > 0) body.ids = opts.ids
+  if (opts.cascadeThread) body.cascadeThread = true
   return body
 }
 
@@ -65,11 +74,20 @@ export async function runResync(internalId: number, opts: ResyncOpts = {}): Prom
   })
 }
 
-export async function runPin(internalId: number, pinned: boolean): Promise<unknown> {
+export async function runPin(
+  internalId: number,
+  pinned: boolean,
+  opts: EmailPinOpts = {}
+): Promise<unknown> {
   // mirror HttpApi.email.pin — POST /email/{id}/pin {pinned}. Returns the full
   // {internal_id,is_pinned,changed,dry_run} data block (NOT unwrapped to a bool
   // like HttpApi does) so ElectronApi.pin's `data?.is_pinned` keeps working.
-  return daemonRequest('POST', `/email/${internalId}/pin`, { body: { pinned } })
+  // opts.ids / opts.cascadeThread widen it to the batch / thread-cascade write;
+  // only sent when set so the single-row wire is byte-identical to before.
+  const body: Record<string, unknown> = { pinned }
+  if (Array.isArray(opts.ids) && opts.ids.length > 0) body.ids = opts.ids
+  if (opts.cascadeThread) body.cascadeThread = true
+  return daemonRequest('POST', `/email/${internalId}/pin`, { body })
 }
 
 export async function runArchive(internalId: number): Promise<unknown> {
@@ -148,7 +166,7 @@ export function registerWriteOpsHandlers(): void {
       _evt,
       internalId: unknown,
       pinned: unknown,
-      _opts: unknown = {}
+      opts: EmailPinOpts = {}
     ): Promise<WriteEnvelope<unknown>> => {
       const idOrErr = ensureInternalId(internalId, 'email:pin')
       if (typeof idOrErr !== 'number') return idOrErr
@@ -159,7 +177,21 @@ export function registerWriteOpsHandlers(): void {
           message: `email:pin expected boolean pinned, got ${typeof pinned}`
         }
       }
-      return envelopeFromCli(runPin(idOrErr, pinned))
+      const o = opts ?? {}
+      // Same pre-validation as email:flag's batch path — catch obviously bad
+      // ids here instead of paying a daemon round-trip for a 400.
+      if (Array.isArray(o.ids)) {
+        for (const id of o.ids) {
+          if (!Number.isInteger(id) || (id as number) < 0) {
+            return {
+              ok: false,
+              code: 'E_INVALID_ARG',
+              message: `email:pin: opts.ids contains non-integer id ${String(id)}`
+            }
+          }
+        }
+      }
+      return envelopeFromCli(runPin(idOrErr, pinned, o))
     }
   )
 
@@ -273,7 +305,8 @@ export function registerWriteOpsHandlers(): void {
         runEmailFlag(idOrErr, {
           isRead: o.isRead,
           isFlagged: o.isFlagged,
-          processingStatus: o.processingStatus
+          processingStatus: o.processingStatus,
+          cascadeThread: o.cascadeThread
         })
       )
     }

@@ -14,6 +14,7 @@ import { render, cleanup } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import i18n from '@shared/i18n'
+import { usePinned } from '@shared/state/pinned'
 import { EmailRow } from '../../src/shared/components/email/EmailRow'
 import type { EnrichedEmailMeta } from '../../src/shared/api/types'
 
@@ -56,6 +57,7 @@ function renderRow(props: {
   email: EnrichedEmailMeta
   selected: boolean
   isNew?: boolean
+  threadHead?: { memberIds: number[]; aggFlagged: boolean }
 }): ReturnType<typeof render> {
   const qc = new QueryClient({
     defaultOptions: { queries: { retry: false, gcTime: 0 } }
@@ -150,6 +152,47 @@ describe('EmailRow — semantic behaviour', () => {
     cleanup()
     const withAttach = renderRow({ email: makeEmail({ attach_count: 2 }), selected: false })
     expect(withAttach.container.querySelector('.ricon-attach')).not.toBeNull()
+  })
+
+  test('线程虚拟头: aggFlagged 让母行显示红旗, 哪怕最新一封自己没标', () => {
+    // 虚拟头代表整条线程 —— 「线程里还有待办」必须在折叠态可见, 否则用户要展开
+    // 才知道。aggFlagged 优先于最新一封自己的 done 态 (owner 拍板的显示顺序)。
+    const { container } = renderRow({
+      email: makeEmail({ is_flagged: false, processing_status: '已完成' }),
+      selected: false,
+      threadHead: { memberIds: [101, 102], aggFlagged: true }
+    })
+    const article = container.querySelector('article.email-row')
+    expect(article?.getAttribute('data-flag')).toBe('flagged')
+    expect(container.querySelector('.ricon-flag')?.getAttribute('data-flag-state')).toBe('1')
+  })
+
+  test('线程虚拟头: 无成员带旗 → 退到最新一封自己的 done 态', () => {
+    const { container } = renderRow({
+      email: makeEmail({ is_flagged: false, processing_status: '已完成' }),
+      selected: false,
+      threadHead: { memberIds: [101, 102], aggFlagged: false }
+    })
+    expect(container.querySelector('article.email-row')?.getAttribute('data-flag')).toBe('done')
+  })
+
+  test('线程虚拟头: 任一成员置顶 → 母行 pin 亮 (聚合), 无 threadHead 时只看自己', () => {
+    // pin 态活在 usePinned zustand 镜像里, 不在 email 记录上。
+    usePinned.getState().setPinned([102])
+    const agg = renderRow({
+      email: makeEmail({ internal_id: 101 }),
+      selected: false,
+      threadHead: { memberIds: [101, 102], aggFlagged: false }
+    })
+    expect(agg.container.querySelector('article.email-row')?.getAttribute('data-pinned')).toBe(
+      'true'
+    )
+    cleanup()
+    const solo = renderRow({ email: makeEmail({ internal_id: 101 }), selected: false })
+    expect(solo.container.querySelector('article.email-row')?.getAttribute('data-pinned')).toBe(
+      'false'
+    )
+    usePinned.getState().setPinned([])
   })
 
   test('data-* attributes drive CSS state (read / flag / priority)', () => {

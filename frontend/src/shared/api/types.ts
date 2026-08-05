@@ -40,6 +40,7 @@ export type {
   DraftPlanOpts,
   DraftPlanResult,
   EmailFlagOpts,
+  EmailPinOpts,
   EmailApi,
   NlToDslResult
 } from './types/email'

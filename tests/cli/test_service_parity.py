@@ -785,7 +785,11 @@ def test_set_pin_matches_golden(cli_env, seeded_db):
 def test_set_pin_emits_pin_changed_sse(cli_env, seeded_db, monkeypatch):
     """PART 1 (pin 实时刷新): set_pin 真正改变置顶态后立即发 email.pin_changed SSE →
     useEventBridge invalidate ['pinnedIds']/['emails'] → agent/CLI/远程改的 pin 也秒刷新
-    (镜像 set_flags 的 flag_changed; pin 不进 outbox, 这是唯一实时通知点)。"""
+    (镜像 set_flags 的 flag_changed; pin 不进 outbox, 这是唯一实时通知点)。
+
+    🔴 线程级联批 (2026-08) 起恒走**批量 wire**: internal_id=None + data.internal_ids
+    (镜像 flag 的批量形状) —— 单封写也一样, 消费侧 (emailInvalidation.planInvalidation)
+    只认一种形状。"""
     import src.events.publisher as publisher
     from src.services.mail_write import MailWriteService
 
@@ -801,9 +805,10 @@ def test_set_pin_emits_pin_changed_sse(cli_env, seeded_db, monkeypatch):
     pin_events = [e for e in events if e[0] == "email.pin_changed"]
     assert len(pin_events) == 1, f"应发恰好 1 个 email.pin_changed, 实得 {events!r}"
     _type, kw = pin_events[0]
-    assert kw["internal_id"] == 12345
+    assert kw["internal_id"] is None
     assert kw["data"]["is_pinned"] is True
-    assert kw["source"] == "mail_write.set_pin"
+    assert kw["data"]["internal_ids"] == [12345]
+    assert kw["source"] == "mail_write.set_pins"
 
 
 def test_set_pin_unchanged_no_sse(cli_env, seeded_db, monkeypatch):

@@ -17,7 +17,7 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Sequence
 
 from loguru import logger
 
@@ -4414,6 +4414,108 @@ class EmailRepository:
         except Exception:
             conn.rollback()
             raise
+        finally:
+            conn.close()
+
+    def set_pin_many(
+        self, internal_ids: Sequence[int], pinned: bool
+    ) -> tuple[list[int], list[int]]:
+        """批量置顶 / 取消置顶（线程级级联的写原语）。
+
+        单条 ``UPDATE ... WHERE internal_id IN (...)`` —— 级联 unpin 整条线程时不许
+        退化成 N 次往返（前端点一下要秒反应，见 ARCHITECTURE §7.1「批量优于扇出」）。
+
+        Returns:
+            (existing_ids, changed_ids) —— existing 是库里真有的行（差集即 not_found），
+            changed 是本次 ``is_pinned`` 真变了的（调用方据此决定发不发 SSE）。
+        """
+        ids = [int(i) for i in internal_ids]
+        if not ids:
+            return [], []
+        want = bool(pinned)   # 归一化一次, 下面的相等比较与 UPDATE 值同源
+        conn = self._connect()
+        try:
+            placeholders = ", ".join("?" for _ in ids)
+            rows = conn.execute(
+                f"SELECT internal_id, is_pinned FROM email_metadata "
+                f"WHERE internal_id IN ({placeholders})",
+                ids,
+            ).fetchall()
+            existing = [r["internal_id"] for r in rows]
+            changed = [r["internal_id"] for r in rows if bool(r["is_pinned"]) != want]
+            if existing:
+                target = 1 if want else 0
+                now = time.time()
+                exist_ph = ", ".join("?" for _ in existing)
+                conn.execute(
+                    f"""UPDATE email_metadata
+                          SET is_pinned = ?,
+                              pinned_at = ?,
+                              updated_at = ?
+                        WHERE internal_id IN ({exist_ph})""",
+                    [target, now if want else None, now, *existing],
+                )
+            conn.commit()
+            return existing, changed
+        except Exception:
+            conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    def list_flagged_thread_member_ids(
+        self,
+        thread_ids: Sequence[str],
+        *,
+        exclude_internal_ids: Sequence[int] = (),
+    ) -> list[int]:
+        """给定线程里**仍带旗标**的成员 internal_id（排除草稿箱 + 给定 id）。
+
+        线程级「标完成」的级联摘旗用: 只碰真的还挂着旗的成员, 不去动别人的
+        processing_status。草稿排除走 mailbox 语义单源 (禁字面量比较)。
+        """
+        return self._list_thread_member_ids(
+            thread_ids, "is_flagged = 1", exclude_internal_ids
+        )
+
+    def list_pinned_thread_member_ids(
+        self,
+        thread_ids: Sequence[str],
+        *,
+        exclude_internal_ids: Sequence[int] = (),
+    ) -> list[int]:
+        """给定线程里**仍置顶**的成员 internal_id（排除草稿箱 + 给定 id）。"""
+        return self._list_thread_member_ids(
+            thread_ids, "is_pinned = 1", exclude_internal_ids
+        )
+
+    def _list_thread_member_ids(
+        self,
+        thread_ids: Sequence[str],
+        predicate_sql: str,
+        exclude_internal_ids: Sequence[int],
+    ) -> list[int]:
+        """两个级联展开的共享体。``predicate_sql`` 恒为本模块内的字面量常量（无注入面）。"""
+        # 去重: 批量 primary 常常同线程, 重复 thread_id 只会白撑 IN 占位符。
+        tids = list(dict.fromkeys(t for t in thread_ids if t))
+        if not tids:
+            return []
+        conn = self._connect()
+        try:
+            tid_ph = ", ".join("?" for _ in tids)
+            sql = (
+                f"SELECT internal_id FROM email_metadata "
+                f"WHERE thread_id IN ({tid_ph}) AND {predicate_sql} "
+                f"AND {sql_not_in_or_null('mailbox', DRAFT_LABEL_VARIANTS)}"
+            )
+            params: list = list(tids)
+            excl = [int(i) for i in exclude_internal_ids]
+            if excl:
+                excl_ph = ", ".join("?" for _ in excl)
+                sql += f" AND internal_id NOT IN ({excl_ph})"
+                params.extend(excl)
+            sql += " ORDER BY internal_id"
+            return [r["internal_id"] for r in conn.execute(sql, params).fetchall()]
         finally:
             conn.close()
 

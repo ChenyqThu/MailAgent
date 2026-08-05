@@ -50,6 +50,7 @@ export function EmailList(): React.ReactElement {
     activeId,
     newIds,
     counts,
+    userEmail,
     categoryCounts,
     priorityCounts,
     selectedAllFlagged,
@@ -80,6 +81,7 @@ export function EmailList(): React.ReactElement {
         counts={counts}
         categoryCounts={categoryCounts}
         priorityCounts={priorityCounts}
+        userEmail={userEmail}
       />
 
       {/* Sprint 12.6 — removed the "N 封新邮件 · 点击查看" CTA pill. The

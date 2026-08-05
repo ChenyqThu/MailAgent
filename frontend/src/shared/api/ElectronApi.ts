@@ -71,6 +71,7 @@ import type {
   EmailBody,
   EmailDetail,
   EmailFlagOpts,
+  EmailPinOpts,
   EmailMeta,
   EnrichedEmailMeta,
   FolderApi,
@@ -323,10 +324,13 @@ class ElectronEmailApi implements EmailApi {
     const env = (await invoker()('email:draftPlan', opts)) as WriteEnvelope<DraftPlanResult>
     return unwrap(env)
   }
-  async pin(internalId: number, pinned: boolean): Promise<boolean | null> {
+  async pin(internalId: number, pinned: boolean, opts?: EmailPinOpts): Promise<boolean | null> {
     // Write IPC → envelope. CLI returns {internal_id, is_pinned, changed,
     // dry_run}; we only surface `is_pinned` (boolean) to the renderer.
-    const env = (await invoker()('email:pin', internalId, pinned)) as WriteEnvelope<{
+    // `opts` (batch ids / thread cascade) rides the 3rd IPC arg the handler
+    // already accepts; the batch data block adds internal_ids/changed_ids
+    // which the renderer does not read (SSE reconciles the full set).
+    const env = (await invoker()('email:pin', internalId, pinned, opts ?? {})) as WriteEnvelope<{
       internal_id: number
       is_pinned: boolean
       changed: boolean

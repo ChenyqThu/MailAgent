@@ -68,7 +68,7 @@
 | `errors.py` | `ServiceError` 体系（平移 `CliError` 去掉 `exit_code`：ServiceAuth/NotFound/InvalidArg/LLMFailed…）。`cli/exceptions.py::CliError(ServiceError)` + `CODE_TO_EXIT` 回填 exit_code | A1 |
 | `guards.py` | `Actor`（鉴权主体 kind/authenticated/label）+ `require_write_auth(actor)` + `check_pm2_conflict(allow_concurrent)`（搬 `cli/pm2_check.py`）| A1 |
 | `context.py` | `ServiceContext`（依赖容器：lazy `sync_store`/`notion_sync`/`email_repo`/`backend`/`config`）+ `ServiceDeps` Protocol。outbox 从 `ctx.sync_store.db_path` 现取（未加 outbox 属性）| A1 |
-| `mail_write.py` | `MailWriteService`：`set_flags`/`resync`/`archive`/`set_pin`/`compose_draft`/`send`/`compose_plan` + 各 `plan_*`（dry-run 共享 CLI+serve-api）+ Result dataclass（字段逐字段对齐旧 emit data）| A2-A4 |
+| `mail_write.py` | `MailWriteService`：`set_flags`/`resync`/`archive`/`set_pin`・`set_pins`/`compose_draft`/`send`/`compose_plan` + 各 `plan_*`（dry-run 共享 CLI+serve-api）+ Result dataclass（字段逐字段对齐旧 emit data）| A2-A4 |
 | `llm_service.py` | `LlmService.run`（搬 `llm_run` + LLMRunner 编排 + finally close）+ `_maybe_davmail_backend` | A3 |
 | `wire.py` | 读形状投影**单一真源**：`meta_to_dict(include_important)`/`body_summary`/`attachment_to_dict(include_internal_id)`/`meta_record_to_list_item`。两参数化保各端字节序差异 | D2a |
 
@@ -77,6 +77,7 @@
 - **serve-api `get_service_ctx()` 每请求新建**（非单例）—— NotionClient httpx 连接池绑首个 event loop，resync 走 `asyncio.run` 每次新 loop，复用会撞。代价 = 每请求重 `load_cli_config` + lazy deps（基线里 perreq 的 ~3.7ms 主要在此）。
 - **config 访问**：service 经 `ctx.config`（CliContext 的 `cli_config` 别名）拿配置，**不读全局 `src.config.config`** —— 否则 `test_service_parity` 注入的 cli-scoped cfg 失效。
 - **outbox `source` 硬编码 `'cli'`** 维持 parity（echo prevention 只特判 `notion_webhook`）。
+- **`cascade_thread`（线程虚拟头级联，2026-08）**：`set_flags` / `set_pins` 的可选参数，服务端按 primary 的 `thread_id` 展开线程内成员一并收敛，**一次往返**（前端禁 N 次 IPC 扇出）。`set_flags`：只扩到**仍带旗**的成员且只写 `{is_flagged: False}`（不动它们的 `processing_status`）；`set_pins`：只扩到**仍置顶**的成员。两者都排除草稿箱（判定走 `mailbox_semantics`）、`thread_id` 为空不展开、且**只在收敛方向合法**（`is_flagged=False` / `pinned=False`，否则 `E_INVALID_ARG` 而非静默忽略）。级联到的 id 落 `FlagResult.cascade_ids` / `PinBatchResult.cascade_ids`，**不进** `updated_ids`／CLI emit data（`email-flag.schema.json` 是 `additionalProperties:false`），前端经 SSE 批量事件（`internal_id=None` + `data.internal_ids`）拿到全集。`email.pin_changed` 自此**恒走批量 wire**（单封写也一样，消费侧只认一种形状）。
 
 ## 9 阶段重构总览
 

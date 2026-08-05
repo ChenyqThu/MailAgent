@@ -31,6 +31,7 @@ from src.services.mail_write import (
     ComposeDraftResult,
     ComposeSendResult,
     FlagResult,
+    PinBatchResult,
     PinResult,
     ReplySuggestionResult,
     ResyncResult,
@@ -66,11 +67,13 @@ class _SvcSpy:
                 "payload": {}, "would_enqueue": []}
 
     def set_flags(self, internal_ids, *, is_read=None, is_flagged=None,
-                  processing_status=None, actor, allow_concurrent=False):
+                  processing_status=None, cascade_thread=False, actor,
+                  allow_concurrent=False):
         self.calls.append((
             "set_flags", list(internal_ids),
             {"is_read": is_read, "is_flagged": is_flagged,
              "processing_status": processing_status,
+             "cascade_thread": cascade_thread,
              "actor": actor, "allow_concurrent": allow_concurrent},
         ))
         if _SvcSpy._raise is not None:
@@ -138,6 +141,20 @@ class _SvcSpy:
         if _SvcSpy._raise is not None:
             raise _SvcSpy._raise
         return PinResult(internal_id=internal_id, is_pinned=pinned, changed=True)
+
+    def set_pins(self, internal_ids, *, pinned, cascade_thread=False, actor):
+        self.calls.append((
+            "set_pins", list(internal_ids),
+            {"pinned": pinned, "cascade_thread": cascade_thread, "actor": actor},
+        ))
+        if _SvcSpy._raise is not None:
+            raise _SvcSpy._raise
+        # 级联展开是服务端的事 —— spy 只回请求的 id + 一个假想的线程成员, 用来断言
+        # router 把 updated/changed 原样投影进 data。
+        expanded = [*internal_ids, 999] if cascade_thread else list(internal_ids)
+        return PinBatchResult(updated_ids=expanded, is_pinned=pinned,
+                              changed_ids=expanded, not_found=[],
+                              cascade_ids=[999] if cascade_thread else [])
 
     # --- reply_suggestion ---
     def set_reply_suggestion(self, internal_id, reply_md, *, actor):
@@ -239,6 +256,37 @@ def test_flag_false_values_passthrough(client, svc_spy):
     _, _, kw = _last(svc_spy)
     assert kw["is_read"] is False
     assert kw["is_flagged"] is False
+
+
+def test_flag_cascade_thread_passthrough(client, svc_spy):
+    """线程虚拟头「标完成」: cascadeThread 透传给 service (它才判合法性)。"""
+    r = client.post(
+        f"/api/email/{EMAIL_ID}/flag",
+        json={"isFlagged": False, "processingStatus": "已完成", "cascadeThread": True},
+    )
+    assert r.status_code == 200
+    _, _, kw = _last(svc_spy)
+    assert kw["cascade_thread"] is True
+
+
+def test_flag_cascade_thread_defaults_false(client, svc_spy):
+    """不传 = False —— 老调用方 (CLI / chat 工具 / 批量条) 语义逐字节不变。"""
+    r = client.post(f"/api/email/{EMAIL_ID}/flag", json={"isFlagged": True})
+    assert r.status_code == 200
+    _, _, kw = _last(svc_spy)
+    assert kw["cascade_thread"] is False
+
+
+def test_flag_dry_run_ignores_cascade_thread(client, svc_spy):
+    """dry-run 走 plan_flags (纯 payload 预览, 不查线程成员) → 不声称级联范围。"""
+    r = client.post(
+        f"/api/email/{EMAIL_ID}/flag",
+        json={"isFlagged": False, "cascadeThread": True, "dryRun": True},
+    )
+    assert r.status_code == 200
+    method, _, kw = _last(svc_spy)
+    assert method == "plan_flags"
+    assert "cascade_thread" not in kw
 
 
 def test_flag_processing_status_passthrough(client, svc_spy):
@@ -490,6 +538,54 @@ def test_unpin_passes_pinned_false(client, svc_spy):
     method, _, kw = _last(svc_spy)
     assert method == "set_pin"
     assert kw["pinned"] is False
+
+
+def test_pin_cascade_thread_uses_set_pins(client, svc_spy):
+    """线程虚拟头级联取消置顶 → 走批量 set_pins, data 额外带 internal_ids/changed_ids。"""
+    r = client.post(
+        f"/api/email/{EMAIL_ID}/pin", json={"pinned": False, "cascadeThread": True}
+    )
+    assert r.status_code == 200
+    method, ids, kw = _last(svc_spy)
+    assert method == "set_pins"
+    assert ids == [EMAIL_ID]
+    assert kw["cascade_thread"] is True
+    assert kw["pinned"] is False
+    data = r.json()["data"]
+    # 历史键仍在 (ElectronApi/HttpApi 只读 is_pinned)。
+    assert data["internal_id"] == EMAIL_ID
+    assert data["is_pinned"] is False
+    assert data["changed"] is True
+    # 批量键: 服务端展开的成员一并回投影。
+    assert data["internal_ids"] == [EMAIL_ID, 999]
+    assert data["changed_ids"] == [EMAIL_ID, 999]
+
+
+def test_pin_batch_ids_use_set_pins(client, svc_spy):
+    """body.ids 走批量 (与 path id 互斥, 镜像 flag)。"""
+    r = client.post(
+        f"/api/email/{EMAIL_ID}/pin", json={"pinned": False, "ids": [3, 4, 5]}
+    )
+    assert r.status_code == 200
+    method, ids, kw = _last(svc_spy)
+    assert method == "set_pins"
+    assert ids == [3, 4, 5]
+    assert kw["cascade_thread"] is False
+
+
+def test_pin_single_still_uses_set_pin(client, svc_spy):
+    """无 ids / 无 cascadeThread → 老单封路径 + 老 data 形状 (零新键)。"""
+    r = client.post(f"/api/email/{EMAIL_ID}/pin", json={"pinned": True})
+    assert r.status_code == 200
+    method, _, _ = _last(svc_spy)
+    assert method == "set_pin"
+    assert set(r.json()["data"]) == {"internal_id", "is_pinned", "changed", "dry_run"}
+
+
+def test_pin_batch_ids_invalid_400(client, svc_spy):
+    r = client.post(f"/api/email/{EMAIL_ID}/pin", json={"pinned": False, "ids": ["x"]})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
 def test_pin_dry_run_uses_plan_and_skips_actor(client, svc_spy):

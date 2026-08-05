@@ -40,18 +40,46 @@
     },
     "filter": {
       "button": "过滤邮件",
-      "status": "状态",
       "priority": "优先级",
       "category": "类别",
-      "all": "全部",
-      "reset": "清除过滤",
+      "reset": "清除筛选",
       "selectAll": "全选",
-      "clearLink": "清除"
+      "clearLink": "清除",
+      "title": "筛选依据",
+      "flagMark": "标记",
+      "done": "已完成",
+      "toMe": "收件人是我",
+      "hasAttach": "具有附件"
     },
     "folderCrumb": {
       "aria": "文件夹路径"
     },
-    "resizeHandle": "调整列表宽度"
+    "resizeHandle": "调整列表宽度",
+    "priority": {
+      "critical": "紧急",
+      "urgent": "紧迫",
+      "important": "重要",
+      "normal": "一般",
+      "low": "低"
+    },
+    "sort": {
+      "title": "排序依据",
+      "dirTitle": "方向",
+      "key": {
+        "date": "日期",
+        "sender": "发件人",
+        "subject": "主题",
+        "importance": "重要性"
+      },
+      "dir": {
+        "newest": "由新到旧",
+        "oldest": "由旧到新",
+        "az": "A → Z",
+        "za": "Z → A",
+        "highest": "由高到低",
+        "lowest": "由低到高"
+      }
+    }
   },
   "emailDetail": {
     "loading": "加载中…",
@@ -199,10 +227,14 @@
       "textColor": "字体颜色",
       "bgColor": "字体底色",
       "moreColor": "更多颜色",
-      "fontDefault": "默认",
+      "fontFamilyDefault": "默认字体",
+      "fontSizeDefaultOption": "默认（{size}）",
       "fontSystem": "系统",
       "fontSerif": "衬线",
       "fontMono": "等宽",
+      "lineHeight": "行距",
+      "lineHeightDefaultOption": "默认（{value}）",
+      "defaultHint": "未单独设置 · 跟随默认",
       "linkUrl": "链接地址",
       "linkApply": "应用",
       "linkRemove": "移除链接",
@@ -224,6 +256,10 @@
       "imageTooLarge": "图片 {name} 超过 {max}MB，请改用附件发送",
       "mention": "提及某人 @",
       "table": "表格",
+      "tableTools": "表格工具",
+      "tableGroupInsert": "插入",
+      "tableGroupCell": "单元格",
+      "tableGroupDelete": "删除",
       "tableInsert": "插入表格",
       "tableSize": "{rows} 行 × {cols} 列",
       "tableRowBefore": "上方插入行",
@@ -457,7 +493,10 @@
       "calPrevEvent": "选中上一个事件",
       "calOpenSelected": "打开选中事件",
       "calClose": "关闭抽屉 / 弹层",
-      "calHelp": "打开 / 关闭快捷键帮助"
+      "calHelp": "打开 / 关闭快捷键帮助",
+      "filterUnread": "筛选：未读",
+      "filterFlagged": "筛选：已标记",
+      "filterHasAttach": "筛选：具有附件"
     }
   },
   "palette": {
@@ -2408,7 +2447,7 @@
       "bodyText": {
         "title": "正文外观",
         "meta": "仅邮件正文",
-        "note": "仅作用于邮件正文阅读区，不改变列表、AI 字段与界面其它文字。行间距默认 1.15。",
+        "note": "字体、字号与行间距作用于邮件正文阅读区；撰写行距作用于撰写框，并随邮件一起发出（收件人看到的行距与你写时一致）。默认：阅读 1.15、撰写 1.5。列表、AI 字段与界面其它文字不受影响。",
         "font": {
           "system": "系统默认",
           "systemMeta": "无衬线系统字体",
@@ -2424,6 +2463,10 @@
         "lineHeight": {
           "label": "行间距",
           "meta": "行与行的垂直间距"
+        },
+        "composeLineHeight": {
+          "label": "撰写行距",
+          "meta": "撰写框与发出邮件的行距"
         }
       },
       "glass": {

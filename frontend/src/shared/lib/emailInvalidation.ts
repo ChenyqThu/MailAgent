@@ -238,12 +238,20 @@ export function planInvalidation(
     // refetches on its own. Main list carries the pinned-bucket routing. The
     // supplements directive reconciles an already-cached (e.g. just-unpinned)
     // row directly instead of leaning solely on that reactive chain.
+    //
+    // Batch wire (internal_id null + data.internal_ids) — mail_write.set_pins
+    // emits ONE event per write, including the single-row case and the thread
+    // cascade (unpin a whole thread). The id set only gates supplements /
+    // thread-members containment; unlike flag there is NO ['email', id] leg,
+    // because pin state does not live on the email record the detail pane reads
+    // (it comes from the ['pinnedIds'] mirror, invalidated unconditionally
+    // above) — so a truncated batch needs no prefix degradation either.
     case 'email.pin_changed': {
       const out: InvalidationDirective[] = [
         { kind: 'main-list' },
         { kind: 'key', key: ['pinnedIds'] }
       ]
-      if (internalId != null) {
+      if (eventInternalIds(internalId, data).length > 0) {
         out.push({ kind: 'supplements' })
         out.push({ kind: 'thread-members' })
       }

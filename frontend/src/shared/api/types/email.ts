@@ -7,6 +7,7 @@ import type {
   SearchResult
 } from './core'
 import type { JobEnqueueResult } from './jobs'
+import type { EmailSortDir, EmailSortKey } from '@shared/lib/emailSort'
 
 // ---- Sprint 2 frontend-only enriched views ---------------------------------
 //
@@ -97,6 +98,11 @@ export interface ListOpts {
   internalIds?: number[]
   limit?: number
   offset?: number
+  /** 排序键 / 方向 —— 词表单源 @shared/lib/emailSort。**只有 `listEnriched`
+   *  消费**（两端: Electron DAO + serve-api /email/list-enriched）；`list` 等
+   *  其它读面维持各自的固定序。省略 = date DESC（历史行为）。 */
+  orderBy?: EmailSortKey
+  sortDir?: EmailSortDir
 }
 
 export interface BodyOpts {
@@ -296,9 +302,22 @@ export interface EmailFlagOpts {
   processingStatus?: string
   /** Batch mode: ids ↔ internalId are mutually exclusive at the CLI level. */
   ids?: number[]
+  /** 线程虚拟头「标完成」—— 目标 id 应用完整 mutation 后, 服务端按其 thread_id 把
+   *  线程内**其他仍带旗**的成员一并摘旗 (只清 is_flagged, 不动 processing_status)。
+   *  仅 `isFlagged: false` 时合法, 否则服务端 400。级联到的成员经 SSE 批量事件回来。 */
+  cascadeThread?: boolean
   /** Default true. Mail-sync is always online in production, so the CLI's
    *  pm2 conflict check must be bypassed. */
   allowConcurrent?: boolean
+}
+
+/** v8 pin 写的可选参数 (线程虚拟头级联取消置顶)。省略 = 历史单封语义。 */
+export interface EmailPinOpts {
+  /** 批量目标 (与 internalId 互斥, 镜像 EmailFlagOpts.ids)。 */
+  ids?: number[]
+  /** 线程虚拟头级联: 按目标 id 的 thread_id 展开线程内其他仍置顶的成员一并取消。
+   *  仅 `pinned = false` 时合法, 否则服务端 400。 */
+  cascadeThread?: boolean
 }
 
 export interface EmailApi {
@@ -373,8 +392,10 @@ export interface EmailApi {
   /** v8 — set pinned (true) / unpinned (false) via the `mailagent email
    *  pin/unpin` CLI. Returns the new state, or null on E_NOT_FOUND. The
    *  renderer's optimistic store reconciles against the next
-   *  listPinnedIds refetch. */
-  pin(internalId: number, pinned: boolean): Promise<boolean | null>
+   *  listPinnedIds refetch. `opts` widens the write to a batch / thread
+   *  cascade (see EmailPinOpts); the returned boolean is the target state
+   *  either way. */
+  pin(internalId: number, pinned: boolean, opts?: EmailPinOpts): Promise<boolean | null>
   /** v8 — current set of pinned internal_ids (pinned_at DESC). Drives
    *  the `pinned` zustand store and the "📌 已固定" group in EmailList. */
   listPinnedIds(): Promise<number[]>

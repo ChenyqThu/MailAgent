@@ -235,6 +235,9 @@ def _shape_list_item(row: sqlite3.Row) -> dict[str, Any]:
         "subject": row["subject"] or "",
         "sender": row["sender"] or "",
         "sender_name": row["sender_name"],
+        # to_addr 早就在 _LIST_ITEM_META_COLS 里 SELECT 了，只是从没投影出来 ——
+        # 列表面的「收件人是我」筛选轴要它 (handlers/email.ts::shapeListItem 同步镜像)。
+        "to_addr": row["to_addr"],
         "date_received": row["date_received"],
         "mailbox": row["mailbox"],
         "is_read": _as_bool(row["is_read"]),
@@ -306,6 +309,72 @@ def _build_enriched_where(opts: dict[str, Any]) -> tuple[list[str], list[Any]]:
 
 
 # ===========================================================================
+# ORDER BY 白名单 — handlers/email.ts::ENRICHED_ORDER_BY 的手抄镜像。
+#
+# 🔴 跨语言一致性闸 = tests/config/test_email_sort_parity.py（词表 + 逐条 SQL 模板）。
+# 消灭不掉这份镜像：桌面走 better-sqlite3 主进程 DAO、远程走 serve-api，两条 wire
+# 各自建 SQL，没有可共享的运行时载体。漂了的后果是「同一封邮件在桌面和远程网页排在
+# 不同位置」，两边各自看都自洽，没有任何报错。
+#
+# 用户输入不拼进 SQL：order_by / sort_dir 先经 _normalize_* 落到词表内，再查这张
+# **常量**表取整段模板，`{dir}` 只会被 'ASC' / 'DESC' 两个字面量替换。
+# ===========================================================================
+
+# 名次值与 frontend/src/shared/lib/emailSort.ts::PRIORITY_RANK 一致；中文子串匹配
+# 顺序与 _map_priority / ai_mapping.ts::mapPriority 一致（'重要' 在 '一般' 之前）。
+_PRIORITY_RANK_UNKNOWN = 0
+
+# `priority_raw` 是 SELECT 的输出别名（SQLite 允许 ORDER BY 表达式里引用它），所以
+# 这段 CASE 自动继承上面 COALESCE(主表列, labels_json) 的取数语义与 schema 降级。
+_PRIORITY_RANK_SQL = """CASE
+      WHEN priority_raw LIKE '%紧急%' OR priority_raw LIKE '%Critical%' THEN 5
+      WHEN priority_raw LIKE '%紧迫%' OR priority_raw LIKE '%严重%' OR priority_raw LIKE '%Urgent%' THEN 4
+      WHEN priority_raw LIKE '%重要%' OR priority_raw LIKE '%Important%' THEN 3
+      WHEN priority_raw LIKE '%一般%' OR priority_raw LIKE '%普通%' OR priority_raw LIKE '%Normal%' THEN 2
+      WHEN priority_raw LIKE '%低%' OR priority_raw LIKE '%Low%' THEN 1
+      ELSE 0
+    END"""
+
+# 未分类（LLM 没跑过 / 值无法识别 → 名次 0）恒沉到最末：升序时若只按名次排，
+# 「由低到高」会把一整片没跑过 AI 的邮件顶到最前面。故首列是与方向无关的 null-guard。
+ENRICHED_ORDER_BY: dict[str, str] = {
+    "date": "m.date_received {dir} NULLS LAST, m.internal_id {dir}",
+    # 显示名优先、空串回落地址 —— 列表行显示的就是这个值，按「看到的字」排。
+    "sender": (
+        "COALESCE(NULLIF(m.sender_name, ''), m.sender) COLLATE NOCASE {dir}, "
+        "m.internal_id {dir}"
+    ),
+    "subject": "m.subject COLLATE NOCASE {dir}, m.internal_id {dir}",
+    "importance": (
+        f"(CASE WHEN ({_PRIORITY_RANK_SQL}) = {_PRIORITY_RANK_UNKNOWN} "
+        f"THEN 1 ELSE 0 END) ASC, ({_PRIORITY_RANK_SQL}) {{dir}}, "
+        "m.internal_id {dir}"
+    ),
+}
+
+EMAIL_SORT_KEYS = ["date", "sender", "subject", "importance"]
+EMAIL_SORT_DIRS = ["desc", "asc"]
+DEFAULT_SORT_KEY = "date"
+DEFAULT_SORT_DIR = "desc"
+
+_SQL_DIR = {"asc": "ASC", "desc": "DESC"}
+
+
+def _build_enriched_order_by(
+    order_by: Optional[str], sort_dir: Optional[str]
+) -> str:
+    """(order_by, sort_dir) → ORDER BY 子句。
+
+    非法/缺省值静默回落到 date DESC（镜像 emailSort.ts::normalizeSortKey/Dir 的
+    宽容语义：唯一的调用方是我们自己带类型的前端，为一个拼错的 query 参数把整页
+    列表 400 掉不划算）。
+    """
+    key = order_by if order_by in EMAIL_SORT_KEYS else DEFAULT_SORT_KEY
+    direction = sort_dir if sort_dir in EMAIL_SORT_DIRS else DEFAULT_SORT_DIR
+    return ENRICHED_ORDER_BY[key].replace("{dir}", _SQL_DIR[direction])
+
+
+# ===========================================================================
 # GET /api/email/list-enriched — listEnriched (收件箱主列表，本 sprint 必须)
 # ===========================================================================
 
@@ -332,6 +401,16 @@ async def list_enriched(
         alias="internalIds",
         description="逗号分隔 internal_id 白名单 (pinned-supplement / 已知 id 批量取)",
     ),
+    order_by: Optional[str] = Query(
+        None,
+        alias="orderBy",
+        description="排序键 date|sender|subject|importance (缺省/非法 → date)",
+    ),
+    sort_dir: Optional[str] = Query(
+        None,
+        alias="sortDir",
+        description="排序方向 desc|asc (缺省/非法 → desc)",
+    ),
     limit: int = Query(100, ge=1, le=ENRICHED_LIMIT_MAX),
     offset: int = Query(0, ge=0),
 ):
@@ -345,6 +424,10 @@ async def list_enriched(
 
     AI 字段经 ``llm_processing.labels_json`` LEFT JOIN + 主表 ai_priority/ai_action
     COALESCE 提升 (v14)。schema 缺这些列/表时 (旧/裸/测试库) 降级 NULL，列表仍出数据。
+
+    ``orderBy`` / ``sortDir`` = 列表排序（白名单见 ENRICHED_ORDER_BY，与桌面 DAO
+    逐条对账）。排序下沉到 SQL 而非前端切片：``LIMIT`` 决定的是「取哪 N 封」，
+    在前端排只会把「按发件人排序的前 800 封」变成「按日期取的 800 封里再排一遍」。
     """
     parsed_ids: Optional[list[int]] = None
     if internal_ids:
@@ -463,7 +546,7 @@ async def list_enriched(
              GROUP BY internal_id
           ) a ON a.internal_id = m.internal_id
           {where_sql}
-         ORDER BY m.date_received DESC NULLS LAST, m.internal_id DESC
+         ORDER BY {_build_enriched_order_by(order_by, sort_dir)}
          LIMIT ? OFFSET ?
     """
 

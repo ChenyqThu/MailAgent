@@ -78,6 +78,11 @@ export const BODY_LINE_HEIGHT_MIN = 1.1
 export const BODY_LINE_HEIGHT_MAX = 2.2
 export const BODY_FONT_SIZE_DEFAULT = 14
 export const BODY_LINE_HEIGHT_DEFAULT = 1.15
+/** 撰写行距默认值 —— composer 编辑区 CSS 变量 (`--ma-compose-lh`) 与出站 HTML 的
+ *  `line-height` 内联样式同源, 所见即所得。取值范围沿用 BODY_LINE_HEIGHT_MIN/MAX。
+ *  🔴 与阅读行距 (BODY_LINE_HEIGHT_DEFAULT=1.15) 是两个独立维度: 阅读行距只作用于
+ *  EmailBodyFrame 的 iframe, 撰写行距会随邮件发出去 (收件端看到的就是这个值)。 */
+export const COMPOSE_LINE_HEIGHT_DEFAULT = 1.5
 
 interface AppearanceStore {
   themeMode: ThemeMode
@@ -89,6 +94,7 @@ interface AppearanceStore {
   bodyFont: BodyFont
   bodyFontSize: number
   bodyLineHeight: number
+  composeLineHeight: number
   setThemeMode(next: ThemeMode): void
   setAccent(next: AccentId): void
   setSurface(next: SurfaceStyle): void
@@ -98,6 +104,7 @@ interface AppearanceStore {
   setBodyFont(next: BodyFont): void
   setBodyFontSize(next: number): void
   setBodyLineHeight(next: number): void
+  setComposeLineHeight(next: number): void
 }
 
 const THEME_KEY = 'mailagent.themeMode'
@@ -108,6 +115,7 @@ const GLASS_KNOBS_KEY = 'mailagent.glassKnobs'
 const BODY_FONT_KEY = 'mailagent.bodyFont'
 const BODY_FONT_SIZE_KEY = 'mailagent.bodyFontSize'
 const BODY_LINE_HEIGHT_KEY = 'mailagent.bodyLineHeight'
+const COMPOSE_LINE_HEIGHT_KEY = 'mailagent.composeLineHeight'
 
 function clampNum(n: number, lo: number, hi: number): number {
   return Math.min(hi, Math.max(lo, n))
@@ -219,6 +227,18 @@ function readBodyLineHeight(): number {
   return BODY_LINE_HEIGHT_DEFAULT
 }
 
+function readComposeLineHeight(): number {
+  try {
+    const v = Number(localStorage.getItem(COMPOSE_LINE_HEIGHT_KEY))
+    if (Number.isFinite(v) && v > 0) {
+      return clampNum(v, BODY_LINE_HEIGHT_MIN, BODY_LINE_HEIGHT_MAX)
+    }
+  } catch {
+    /* ignore */
+  }
+  return COMPOSE_LINE_HEIGHT_DEFAULT
+}
+
 function readResolved(themeMode: ThemeMode): 'dark' | 'light' {
   if (themeMode !== 'system') return themeMode
   if (typeof window === 'undefined') return 'dark'
@@ -237,6 +257,7 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
   bodyFont: readBodyFont(),
   bodyFontSize: readBodyFontSize(),
   bodyLineHeight: readBodyLineHeight(),
+  composeLineHeight: readComposeLineHeight(),
   setThemeMode(next) {
     try {
       localStorage.setItem(THEME_KEY, next)
@@ -321,6 +342,15 @@ export const useAppearance = create<AppearanceStore>((set, get) => ({
       /* ignore */
     }
     set({ bodyLineHeight: v })
+  },
+  setComposeLineHeight(next) {
+    const v = clampNum(next, BODY_LINE_HEIGHT_MIN, BODY_LINE_HEIGHT_MAX)
+    try {
+      localStorage.setItem(COMPOSE_LINE_HEIGHT_KEY, String(v))
+    } catch {
+      /* ignore */
+    }
+    set({ composeLineHeight: v })
   }
 }))
 

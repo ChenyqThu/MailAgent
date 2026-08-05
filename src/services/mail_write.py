@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger
@@ -69,12 +69,19 @@ class FlagResult:
 
     ``not_found`` 恒为 list; CLI 适配器仅在非空时把它放进 emit 的 data
     (保持「空时不出现 not_found 键」的历史形状)。
+
+    ``cascade_thread=True`` 时被级联摘旗的**其他**线程成员落 ``cascade_ids`` ——
+    **有意不进** ``updated_ids`` / ``outbox_entries``: 那两个键的形状由
+    docs/cli-schema/email-flag.schema.json (additionalProperties:false) 钉死, 且
+    「请求的 id ↔ 完整 mutation」的对应关系不该被级联稀释。前端不读它 (级联结果经
+    SSE 批量事件回来), 它是服务层/测试侧的可观测出口。
     """
 
     updated_ids: list[int]
     payload: dict[str, Any]
     outbox_entries: list[dict[str, Any]]
     not_found: list[int]
+    cascade_ids: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -135,6 +142,22 @@ class PinResult:
     internal_id: int
     is_pinned: bool
     changed: bool
+
+
+@dataclass
+class PinBatchResult:
+    """``set_pins`` 执行结果 (批量 / 线程级级联)。
+
+    ``updated_ids`` = 库里真存在并已写入的行; ``changed_ids`` ⊆ updated_ids 是
+    ``is_pinned`` 真变了的 (SSE 只按它发); ``cascade_ids`` ⊆ updated_ids 是级联展开
+    带进来的线程成员 (非调用方显式请求的 id)。
+    """
+
+    updated_ids: list[int]
+    is_pinned: bool
+    changed_ids: list[int]
+    not_found: list[int]
+    cascade_ids: list[int] = field(default_factory=list)
 
 
 @dataclass
@@ -684,6 +707,7 @@ class MailWriteService:
         is_read: Optional[bool] = None,
         is_flagged: Optional[bool] = None,
         processing_status: Optional[str] = None,
+        cascade_thread: bool = False,
         actor: Actor,
         allow_concurrent: bool = False,
     ) -> FlagResult:
@@ -692,9 +716,22 @@ class MailWriteService:
         搬自 ``src/cli/commands/email.py::email_flag`` 行 1331-1393 (行为保持)。逐封:
         get_metadata → 缺失记 not_found; 否则 ``update_local_flags`` (立即镜像) +
         outbox enqueue (mailapp 仅当有 mailapp_payload + notion)。
+
+        ``cascade_thread=True`` (线程虚拟头「标完成」): primary ids 照常应用完整
+        mutation, 之后按它们的 thread_id 展开线程内**其他仍带旗**的成员, 对这些成员
+        只应用 ``{is_flagged: False}`` (**不动** processing_status —— 用户点的是母行的
+        「完成」, 不是把整条线程都判完成)。thread_id 为空的 primary 不展开; 草稿箱成员
+        不参与 (mailbox 语义单源)。**仅在清旗时接受** (``is_flagged is False``), 否则
+        ``E_INVALID_ARG`` —— 「级联加旗」没有产品语义, 静默忽略会让调用方以为生效了。
         """
         require_write_auth(actor)
         check_pm2_conflict(allow_concurrent=allow_concurrent)
+
+        if cascade_thread and is_flagged is not False:
+            raise ServiceInvalidArgError(
+                "cascade_thread requires is_flagged=false (线程级联只用于摘旗)",
+                context={"is_flagged": is_flagged},
+            )
 
         payload, mailapp_payload = self._flag_payloads(
             is_read, is_flagged, processing_status
@@ -716,11 +753,15 @@ class MailWriteService:
         updated: list[int] = []
         outbox_entries: list[dict[str, Any]] = []
         not_found: list[int] = []
+        # 级联展开的锚点: 只收 primary 里真存在的行的 thread_id (None/空不展开)。
+        cascade_thread_ids: list[str] = []
         for iid in internal_ids:
             meta = repo.get_metadata(iid)
             if meta is None:
                 not_found.append(iid)
                 continue
+            if cascade_thread and meta.thread_id:
+                cascade_thread_ids.append(meta.thread_id)
 
             # mirror_and_enqueue_flag_sync = update_local_flags (echo prevention;
             # None 字段沿用当前 meta 值) + dual-target 入队 (E2-D 共享层, 与
@@ -772,11 +813,55 @@ class MailWriteService:
                 }
             )
 
+        cascade_ids: list[int] = []
+        if cascade_thread_ids:
+            cascade_ids = repo.list_flagged_thread_member_ids(
+                cascade_thread_ids, exclude_internal_ids=internal_ids
+            )
+            for cid in cascade_ids:
+                cmeta = repo.get_metadata(cid)
+                if cmeta is None:  # 展开与读之间被删 —— 跳过, 不记 not_found
+                    continue        # (not_found 的语义是「调用方请求的 id」)
+                mirror_and_enqueue_flag_sync(
+                    sync_store,
+                    outbox,
+                    cid,
+                    local_read=bool(cmeta.is_read),
+                    local_flagged=False,
+                    # processing_status 留 None = 沿用当前值 (只摘旗, 不判完成)。
+                    local_processing_status=None,
+                    mailapp_payload={"is_flagged": False},
+                    notion_payload={"is_flagged": False},
+                    source=_OUTBOX_SOURCE,
+                )
+            if cascade_ids:
+                # 级联成员发**一条**批量 SSE (复用 issue #58 的批量 wire:
+                # internal_id=None + data.internal_ids), 不按封刷屏。不自设 id 上限 ——
+                # 前端 planner 对超过 MAX_BATCH_IDS 的批次已自带降级 (isBatchTruncated
+                # 的 idCount 分支), 且线程成员数在现实里远低于它。primary 的逐封事件
+                # 保持原样 (批量 flag 的既有行为不动)。
+                try:
+                    from src.events.publisher import safe_publish
+
+                    safe_publish(
+                        "email.flag_changed",
+                        internal_id=None,
+                        data={
+                            "is_flagged": False,
+                            "reason": "thread_cascade",
+                            "internal_ids": cascade_ids,
+                        },
+                        source="mail_write.set_flags",
+                    )
+                except Exception:
+                    pass
+
         return FlagResult(
             updated_ids=updated,
             payload=payload,
             outbox_entries=outbox_entries,
             not_found=not_found,
+            cascade_ids=cascade_ids,
         )
 
     # ------------------------------------------------------------
@@ -1285,53 +1370,106 @@ class MailWriteService:
             "dry_run": True,
         }
 
-    def set_pin(self, internal_id: int, *, pinned: bool, actor: Actor) -> PinResult:
-        """写 email_metadata.is_pinned (pin=True / unpin=False)。
+    def set_pins(
+        self,
+        internal_ids: list[int],
+        *,
+        pinned: bool,
+        cascade_thread: bool = False,
+        actor: Actor,
+    ) -> PinBatchResult:
+        """批量写 email_metadata.is_pinned (线程虚拟头级联取消置顶的写面)。
 
-        搬自 ``email_pin`` 行 964-1002 + ``email_unpin`` 行 1015-1046 (行为保持)。pin
-        **不做** pm2 检测 (Mail.app 无 pin 概念, mail-sync 不读写该字段 → 无并发损坏风险
-        → 无 ``allow_concurrent`` 参数)。set_pin 返回 None = race (写命令间被删) → NotFound。
+        pin **不做** pm2 检测 (Mail.app 无 pin 概念, mail-sync 不读写该字段 → 无并发
+        损坏风险 → 无 ``allow_concurrent`` 参数), 也不进 outbox (无 fanout)。
+
+        ``cascade_thread=True``: 按给定 id 的 thread_id 展开线程内**其他仍置顶**的成员
+        一并取消 (草稿箱成员不参与, mailbox 语义单源)。**仅在取消置顶时接受**
+        (``pinned=False``), 否则 ``E_INVALID_ARG`` —— 「级联置顶整条线程」没有产品语义。
+
+        写走单条 ``UPDATE ... WHERE internal_id IN (...)`` (repo.set_pin_many), 不按封扇出。
         """
         _ = self._ctx.sync_store  # ensure v8 schema (is_pinned + pinned_at ALTER)
         repo = self._ctx.email_repo
-        meta = repo.get_metadata(internal_id)
-        if meta is None:
-            raise ServiceNotFoundError(
-                f"Email with internal_id={internal_id} not found",
-                hint="Use 'mailagent email list' to find available IDs",
+
+        if cascade_thread and pinned:
+            raise ServiceInvalidArgError(
+                "cascade_thread requires pinned=false (线程级联只用于取消置顶)",
+                context={"pinned": pinned},
             )
-        already = bool(meta.is_pinned)
 
         require_write_auth(actor)
 
-        result = repo.set_pin(internal_id, pinned)
-        if result is None:
-            raise ServiceNotFoundError(
-                f"Email with internal_id={internal_id} disappeared mid-write"
-            )
-        changed = self._pin_changed(already, pinned)
+        ids = list(dict.fromkeys(int(i) for i in internal_ids))
+        cascade_ids: list[int] = []
+        if cascade_thread:
+            thread_ids = [
+                meta.thread_id
+                for meta in (repo.get_metadata(i) for i in ids)
+                if meta is not None and meta.thread_id
+            ]
+            if thread_ids:
+                cascade_ids = repo.list_pinned_thread_member_ids(
+                    thread_ids, exclude_internal_ids=ids
+                )
+
+        existing, changed = repo.set_pin_many([*ids, *cascade_ids], pinned)
+        existing_set = set(existing)
+        not_found = [i for i in ids if i not in existing_set]
+
         # 乐观回显 (镜像 set_flags 的 email.flag_changed): 立即发 SSE → useEventBridge
         # invalidate ['pinnedIds']/['emails'] → 所有视图(含 agent / CLI / 远程发起的写)
         # 秒刷新置顶态。pin 不进 outbox (Mail.app 无 pin 概念, 无 fanout), 故这是唯一的
         # 实时通知点 —— 缺它则 SSE 连着时既无事件又不轮询, UI 永不刷新 (dogfood 根因)。
-        # 仅在真正改变时发 (changed): 重复写不喷无意义事件。在 service 层发, 只覆盖经
+        # 仅对真正改变的行发 (changed): 重复写不喷无意义事件。在 service 层发, 只覆盖经
         # 服务层的写 (用户/agent/CLI), 不对内部回填喷事件。
+        # 🔴 恒走**批量 wire** (internal_id=None + data.internal_ids, 镜像 flag 的批量形状):
+        # 级联取消一条线程 = 一条事件, 不按封刷屏; 单封写也走同一形状, 避免消费侧要认两种。
         if changed:
             try:
                 from src.events.publisher import safe_publish
 
                 safe_publish(
                     "email.pin_changed",
-                    internal_id=internal_id,
-                    data={"is_pinned": pinned},
-                    source="mail_write.set_pin",
+                    internal_id=None,
+                    data={"is_pinned": pinned, "internal_ids": changed},
+                    source="mail_write.set_pins",
                 )
             except Exception:
                 pass
+        return PinBatchResult(
+            updated_ids=existing,
+            is_pinned=pinned,
+            changed_ids=changed,
+            not_found=not_found,
+            cascade_ids=cascade_ids,
+        )
+
+    def set_pin(self, internal_id: int, *, pinned: bool, actor: Actor) -> PinResult:
+        """写 email_metadata.is_pinned (pin=True / unpin=False) —— 单封退化体。
+
+        搬自 ``email_pin`` 行 964-1002 + ``email_unpin`` 行 1015-1046 (行为保持)。写面
+        委托 ``set_pins`` (单一实现); 本方法只保留单封的错误语义: meta 不存在 →
+        ``ServiceNotFoundError`` (且**在** require_write_auth 之前), 写窗口内行被删
+        (not_found) → NotFound。
+        """
+        _ = self._ctx.sync_store  # ensure v8 schema (is_pinned + pinned_at ALTER)
+        meta = self._ctx.email_repo.get_metadata(internal_id)
+        if meta is None:
+            raise ServiceNotFoundError(
+                f"Email with internal_id={internal_id} not found",
+                hint="Use 'mailagent email list' to find available IDs",
+            )
+
+        result = self.set_pins([internal_id], pinned=pinned, actor=actor)
+        if internal_id in result.not_found:
+            raise ServiceNotFoundError(
+                f"Email with internal_id={internal_id} disappeared mid-write"
+            )
         return PinResult(
             internal_id=internal_id,
             is_pinned=pinned,
-            changed=changed,
+            changed=internal_id in result.changed_ids,
         )
 
     # ------------------------------------------------------------

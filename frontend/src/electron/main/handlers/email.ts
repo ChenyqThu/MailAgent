@@ -21,6 +21,7 @@ import {
 } from '@shared/lib/ai_mapping'
 import type { AIFields, EmailMeta, EnrichedEmailMeta, MailboxSummary } from '@shared/api/types'
 import { DRAFTS_EXCLUDE_SQL, mailboxFilterLabels } from '@shared/lib/mailboxSemantics'
+import { buildEnrichedOrderBy, type EmailSortDir, type EmailSortKey } from '@shared/lib/emailSort'
 import type { EmailGet_EmailRecord, MailagentEmailBody } from '@shared/types/cli.gen'
 import {
   EMAIL_BODY_HTML_SOURCE_CHARS,
@@ -50,6 +51,12 @@ export interface ListOpts {
   internalIds?: number[]
   limit?: number
   offset?: number
+  /** 列表排序键 (白名单, 见 ENRICHED_ORDER_BY)。省略 = 'date' (历史行为)。
+   *  🔴 仅 `listEmailsEnriched` 消费 —— 收件箱列表面是唯一有排序 UI 的调用方;
+   *  `listEmails` / `listEmailsByThread(s)` 的固定序是它们各自的契约 (见函数注释)。 */
+  orderBy?: EmailSortKey
+  /** 排序方向。省略 = 'desc' (date=由新到旧 / importance=由高到低 / 文本=Z→A)。 */
+  sortDir?: EmailSortDir
 }
 
 export interface BodyOpts {
@@ -155,6 +162,9 @@ function shapeListItem(row: EmailMetadataRow): EmailMeta {
     subject: row.subject ?? '',
     sender: row.sender ?? '',
     sender_name: row.sender_name,
+    // to_addr 早就在 LIST_COLS 里 SELECT 了，只是从没投影出来 —— 列表面的
+    // 「收件人是我」筛选轴要它 (email_views.py::_shape_list_item 同步镜像)。
+    to_addr: row.to_addr,
     date_received: row.date_received,
     mailbox: row.mailbox,
     is_read: asBool(row.is_read),
@@ -573,7 +583,7 @@ export function listEmailsEnriched(opts: ListOpts): EnrichedEmailMeta[] {
                  GROUP BY internal_id
                ) a ON a.internal_id = m.internal_id
                ${skippedGuard}
-               ORDER BY m.date_received DESC NULLS LAST, m.internal_id DESC
+               ORDER BY ${buildEnrichedOrderBy(opts.orderBy, opts.sortDir)}
                LIMIT ? OFFSET ?`
   const rows = prep(db, sql).all(...where.params, limit, offset) as EnrichedRow[]
   return rows.map(shapeEnrichedItem)
