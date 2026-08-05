@@ -8,7 +8,8 @@
 //
 // 2026-08 筛选/排序菜单重做（Outlook 结构 + 下钻面板交互）：
 //   • 旧的手搓 `.filter-pop`（三段平铺 + 自管 outside-click/Esc/退场动画）换成
-//     可复用的 `ui/DrillMenu` 原语；本文件只负责**把 store 翻译成菜单项**。
+//     全 app 的弹层基座 `ui/Popmenu`（移植自 lab.moumen.dev 的 unlimited-nested-
+//     menu）；本文件只负责**把 store 翻译成菜单项**。
 //   • 状态单选 chip（全部/未读/已标旗/同步失败）退役 → 六条独立筛选项 + 两个
 //     下钻子面板（优先级 / 分类），AND 组合。
 //   • 新增「排序依据」「方向」两组单选 —— 排序下沉到 SQL（见 @shared/lib/emailSort）。
@@ -32,7 +33,7 @@ import { useShortcut } from '@shared/hooks/useShortcut'
 import { cn } from '@shared/lib/cn'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
 import { EMAIL_SORT_KEYS, type EmailSortKey } from '@shared/lib/emailSort'
-import { DrillMenu, type DrillMenuItem } from '@shared/components/ui/DrillMenu'
+import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import type { AIPriority } from '@shared/api/types'
 
 interface EmailListHeaderProps {
@@ -178,7 +179,7 @@ export function EmailListHeader({
   const catCount = selectedCategories.size
   const filterActive = hasActiveFilter()
 
-  const items: DrillMenuItem[] = [
+  const items: PopmenuItem[] = [
     { kind: 'label', id: 'filter-head', label: t('list.filter.title') },
     {
       kind: 'checkbox',
@@ -250,12 +251,14 @@ export function EmailListHeader({
             priCount === ALL_PRIORITIES.length
               ? t('list.filter.clearLink')
               : t('list.filter.selectAll'),
+          // 全选/清空是「在这一层继续操作」的行，不该像普通动作那样关掉菜单。
+          keepOpen: true,
           onSelect: () =>
             setPriorities(priCount === ALL_PRIORITIES.length ? new Set() : new Set(ALL_PRIORITIES))
         },
         { kind: 'separator', id: 'pri-sep' },
         ...ALL_PRIORITIES.map(
-          (p): DrillMenuItem => ({
+          (p): PopmenuItem => ({
             kind: 'checkbox',
             id: `pri-${p}`,
             label: t(`list.priority.${p}`),
@@ -280,6 +283,7 @@ export function EmailListHeader({
             catCount === ALL_CATEGORIES.length
               ? t('list.filter.clearLink')
               : t('list.filter.selectAll'),
+          keepOpen: true,
           onSelect: () =>
             setCategories(catCount === ALL_CATEGORIES.length ? new Set() : new Set(ALL_CATEGORIES))
         },
@@ -287,7 +291,7 @@ export function EmailListHeader({
         // LLM CATEGORY_ENUM is emoji-prefixed Chinese; we render the verbatim
         // string so the menu matches what the backend stores.
         ...ALL_CATEGORIES.map(
-          (c): DrillMenuItem => ({
+          (c): PopmenuItem => ({
             kind: 'checkbox',
             id: `cat-${c}`,
             label: c,
@@ -309,7 +313,7 @@ export function EmailListHeader({
     { kind: 'separator', id: 'sep-sort' },
     { kind: 'label', id: 'sort-head', label: t('list.sort.title') },
     ...EMAIL_SORT_KEYS.map(
-      (k): DrillMenuItem => ({
+      (k): PopmenuItem => ({
         kind: 'radio',
         id: `sort-${k}`,
         label: t(`list.sort.key.${k}`),
@@ -344,7 +348,7 @@ export function EmailListHeader({
             tone: 'accent',
             onSelect: () => resetAll()
           }
-        ] as DrillMenuItem[])
+        ] as PopmenuItem[])
       : [])
   ]
 
@@ -475,13 +479,18 @@ export function EmailListHeader({
         )}
       </div>
 
-      <DrillMenu
+      <Popmenu
         id="filter-pop"
         open={filterOpen}
         onClose={() => setFilterOpen(false)}
         items={items}
         ariaLabel={t('list.filter.button')}
         triggerRef={filterTriggerRef}
+        anchorClassName="right-2 top-[calc(100%+0.375rem)]"
+        // 筛选 7 行 + 排序 4 行 + 方向 2 行 ≈ 580px，比基座默认的 288 高一截。
+        // 抬上限让常规窗口下一屏看全（Popmenu 仍按视口可用空间二次夹取，窗口矮
+        // 时退化成面板内滚动，不会把行推到看不见的地方）。
+        maxHeight={640}
       />
     </div>
   )

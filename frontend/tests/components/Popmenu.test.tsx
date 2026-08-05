@@ -1,23 +1,28 @@
 // @vitest-environment happy-dom
 //
-// DrillMenu（ui/DrillMenu.tsx）—— 下钻堆叠菜单原语。这里钉的是**行为契约**，
-// 不是像素：面板栈的推/弹、a11y role/aria-checked、键盘导航、以及「关掉菜单必须
-// 清栈」那条（不清的话下次点触发器直接弹出二级面板，用户看到的是「这颗钮有时候
-// 不是菜单」）。
+// Popmenu（ui/Popmenu.tsx）—— 全 app 弹层基座（移植自 lab.moumen.dev 的
+// unlimited-nested-menu）。这里钉的是**行为契约**，不是像素：面板栈的推/弹、
+// a11y role/aria-checked、键盘导航、内容形态（menu / radio / 下钻 / 逃生舱）、
+// 以及「关掉菜单必须清栈」那条（不清的话下次点触发器直接弹出二级面板，用户看到
+// 的是「这颗钮有时候不是菜单」）。
 //
-// tests/setup.ts 全局强制 prefers-reduced-motion:reduce → GSAP 走瞬切分支，
-// 面板在 happy-dom 里直接可见（否则 timeline 不推进 rAF，元素停在隐藏态）。
+// tests/setup.ts 全局强制 prefers-reduced-motion:reduce → 组件里 motion 的
+// useReducedMotion 为真，imperative 的 morph 整段短路，断言看到的是最终 DOM。
+//
+// 🔴 退场语义：AnimatePresence 会把被弹掉的面板多留一会儿做淡出，所以「面板没了」
+// 不能用 queryByTestId 判 —— 判据是**可及性树**（退场中的面板 aria-hidden + 无
+// role），这也正是用户/读屏器感知到的那条线。
 
 import { describe, expect, test, beforeEach, vi } from 'vitest'
 import { render, cleanup, screen, fireEvent } from '@testing-library/react'
 
-import { DrillMenu, type DrillMenuItem } from '../../src/shared/components/ui/DrillMenu'
+import { Popmenu, type PopmenuItem } from '../../src/shared/components/ui/Popmenu'
 
 beforeEach(() => {
   cleanup()
 })
 
-function items(overrides: { onToggle?: () => void; onSelect?: () => void } = {}): DrillMenuItem[] {
+function items(overrides: { onToggle?: () => void; onSelect?: () => void } = {}): PopmenuItem[] {
   return [
     { kind: 'label', id: 'head', label: 'FILTER BY' },
     {
@@ -56,17 +61,21 @@ function items(overrides: { onToggle?: () => void; onSelect?: () => void } = {})
   ]
 }
 
-function renderMenu(props: Partial<React.ComponentProps<typeof DrillMenu>> = {}) {
+function renderMenu(props: Partial<React.ComponentProps<typeof Popmenu>> = {}) {
   const onClose = vi.fn()
   const utils = render(
-    <DrillMenu open onClose={onClose} items={items()} ariaLabel="Filter mail" {...props} />
+    <Popmenu open onClose={onClose} items={items()} ariaLabel="Filter mail" {...props} />
   )
   return { onClose, ...utils }
 }
 
-describe('DrillMenu — 根面板', () => {
-  test('open=false 时一个节点都不渲染', () => {
-    render(<DrillMenu open={false} onClose={() => {}} items={items()} ariaLabel="Filter mail" />)
+function rows(): HTMLElement[] {
+  return Array.from(document.querySelectorAll<HTMLElement>('[data-popmenu-row]'))
+}
+
+describe('Popmenu — 根面板', () => {
+  test('open=false 时不渲染任何菜单', () => {
+    render(<Popmenu open={false} onClose={() => {}} items={items()} ariaLabel="Filter mail" />)
     expect(screen.queryByRole('menu')).toBeNull()
   })
 
@@ -79,60 +88,62 @@ describe('DrillMenu — 根面板', () => {
     expect(sub.getAttribute('aria-haspopup')).toBe('menu')
   })
 
-  test('checkbox 点击回调触发；disabled 行既不可点也不进 tab 序', () => {
+  test('checkbox 点击回调触发；disabled 行不可点、也不进方向键序列', () => {
     const onToggle = vi.fn()
-    render(
-      <DrillMenu open onClose={() => {}} items={items({ onToggle })} ariaLabel="Filter mail" />
-    )
+    render(<Popmenu open onClose={() => {}} items={items({ onToggle })} ariaLabel="Filter mail" />)
     fireEvent.click(screen.getByRole('menuitemcheckbox', { name: /Unread/ }))
     expect(onToggle).toHaveBeenCalledTimes(1)
 
+    // disabled 行按 ARIA APG 仍留在菜单里（读屏器能念到），只是不可激活、不可
+    // tab、方向键跳过它 —— 见下方 ↑↓ 用例。
     const disabled = screen.getByRole('menuitemcheckbox', { name: /Addressed to me/ })
     expect(disabled.getAttribute('aria-disabled')).toBe('true')
-    expect(disabled.hasAttribute('data-drill-row')).toBe(false)
+    expect(disabled.getAttribute('tabindex')).toBe('-1')
   })
 
-  test('计数与快捷键渲染在行尾', () => {
+  test('计数、快捷键与 hint 渲染在行尾', () => {
     renderMenu()
     expect(screen.getByText('7')).toBeTruthy()
     expect(screen.getByText('⇧⌘O')).toBeTruthy()
     expect(screen.getByText('2/5')).toBeTruthy()
   })
 
-  test('roving tabindex —— 整块菜单只有一个 tab stop', () => {
+  test('roving tabindex —— 整块菜单只有一个 tab stop，且落在首个可聚焦行', () => {
     renderMenu()
-    const rows = Array.from(document.querySelectorAll('[data-drill-row]'))
-    expect(rows.filter((r) => r.getAttribute('tabindex') === '0')).toHaveLength(1)
+    const tabbable = rows().filter((r) => r.getAttribute('tabindex') === '0')
+    expect(tabbable).toHaveLength(1)
+    expect(tabbable[0]!.textContent).toContain('Unread')
   })
 })
 
-describe('DrillMenu — 下钻 / 返回', () => {
-  test('点 submenu 行 → 子面板成为 role=menu，父面板降为 aria-hidden 背景', () => {
+describe('Popmenu — 下钻 / 返回', () => {
+  test('点 submenu 行 → 子面板成为 role=menu，父面板降为不可及的背景层', () => {
     renderMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: /Priority/ }))
     expect(screen.getByRole('menu', { name: 'Priority' })).toBeTruthy()
-    expect(screen.getByTestId('drill-panel-back')).toBeTruthy()
-    // 子面板里是 radio 组，根面板的 checkbox 行已不在可及性树里（父层 aria-hidden）。
+    expect(screen.getByTestId('popmenu-panel-behind')).toBeTruthy()
+    // 子面板里是 radio 组；父面板的行已降级成无 role 的纯展示 div。
     expect(screen.getAllByRole('menuitemradio')).toHaveLength(2)
     expect(screen.queryByRole('menuitemcheckbox')).toBeNull()
   })
 
-  test('子面板的 radio 回调触发', () => {
+  test('子面板的 radio 回调触发，且默认不关菜单（多选/连点场景）', () => {
     const onSelect = vi.fn()
-    render(
-      <DrillMenu open onClose={() => {}} items={items({ onSelect })} ariaLabel="Filter mail" />
-    )
+    const onClose = vi.fn()
+    render(<Popmenu open onClose={onClose} items={items({ onSelect })} ariaLabel="Filter mail" />)
     fireEvent.click(screen.getByRole('menuitem', { name: /Priority/ }))
     fireEvent.click(screen.getByRole('menuitemradio', { name: /Critical/ }))
     expect(onSelect).toHaveBeenCalledTimes(1)
+    expect(onClose).not.toHaveBeenCalled()
   })
 
   test('点后方父面板 = 返回上一层', () => {
     renderMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: /Priority/ }))
-    fireEvent.click(screen.getByTestId('drill-panel-back'))
+    fireEvent.click(screen.getByTestId('popmenu-panel-behind'))
     expect(screen.getByRole('menu', { name: 'Filter mail' })).toBeTruthy()
-    expect(screen.queryByTestId('drill-panel-back')).toBeNull()
+    // 退场中的 Priority 面板已从可及性树摘掉 → 只剩根面板一个 menu。
+    expect(screen.getAllByRole('menu')).toHaveLength(1)
   })
 
   test('← 返回上一层；根面板的 ← 什么也不做', () => {
@@ -146,26 +157,28 @@ describe('DrillMenu — 下钻 / 返回', () => {
 
   test('→ / Enter 也能进子面板（键盘可达）', () => {
     renderMenu()
-    fireEvent.keyDown(screen.getByRole('menuitem', { name: /Priority/ }), { key: 'ArrowRight' })
+    const menu = screen.getByRole('menu', { name: 'Filter mail' })
+    fireEvent.keyDown(menu, { key: 'ArrowDown' }) // Unread → Priority（跳过 disabled）
+    fireEvent.keyDown(menu, { key: 'ArrowRight' })
     expect(screen.getByRole('menu', { name: 'Priority' })).toBeTruthy()
   })
 
-  test('↑↓ 在当前面板内循环移动焦点', () => {
+  test('↑↓ 在当前面板内循环移动焦点，并跳过 disabled 行', () => {
     renderMenu()
     const menu = screen.getByRole('menu', { name: 'Filter mail' })
-    const rows = Array.from(document.querySelectorAll<HTMLElement>('[data-drill-row]'))
-    rows[0]!.focus()
+    const [unread, toMe, priority] = rows()
     fireEvent.keyDown(menu, { key: 'ArrowDown' })
-    expect(document.activeElement).toBe(rows[1])
+    expect(document.activeElement).toBe(priority) // 跳过 disabled 的 toMe
+    expect(document.activeElement).not.toBe(toMe)
     fireEvent.keyDown(menu, { key: 'ArrowUp' })
-    expect(document.activeElement).toBe(rows[0])
-    // 到顶再往上 → 绕回最后一项
+    expect(document.activeElement).toBe(unread)
+    // 到顶再往上 → 绕回最后一个可聚焦行
     fireEvent.keyDown(menu, { key: 'ArrowUp' })
-    expect(document.activeElement).toBe(rows[rows.length - 1])
+    expect(document.activeElement).toBe(priority)
   })
 })
 
-describe('DrillMenu — 关闭语义', () => {
+describe('Popmenu — 关闭语义', () => {
   test('Esc 在子面板 = 返回；在根面板 = onClose', () => {
     const { onClose } = renderMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: /Priority/ }))
@@ -182,7 +195,7 @@ describe('DrillMenu — 关闭语义', () => {
     const triggerRef = { current: trigger }
     const onClose = vi.fn()
     render(
-      <DrillMenu
+      <Popmenu
         open
         onClose={onClose}
         items={items()}
@@ -197,13 +210,96 @@ describe('DrillMenu — 关闭语义', () => {
     trigger.remove()
   })
 
+  test('action 行默认点完就关；keepOpen 的留在原地', () => {
+    const onClose = vi.fn()
+    const run = vi.fn()
+    const { rerender } = render(
+      <Popmenu
+        open
+        onClose={onClose}
+        ariaLabel="Actions"
+        items={[{ kind: 'action', id: 'a', label: 'Do it', onSelect: run }]}
+      />
+    )
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Do it' }))
+    expect(run).toHaveBeenCalledTimes(1)
+    expect(onClose).toHaveBeenCalledTimes(1)
+
+    rerender(
+      <Popmenu
+        open
+        onClose={onClose}
+        ariaLabel="Actions"
+        items={[{ kind: 'action', id: 'a', label: 'Select all', keepOpen: true, onSelect: run }]}
+      />
+    )
+    fireEvent.click(screen.getByRole('menuitem', { name: 'Select all' }))
+    expect(run).toHaveBeenCalledTimes(2)
+    expect(onClose).toHaveBeenCalledTimes(1) // 没有再关一次
+  })
+
   test('🔴 关掉再打开必须回到根面板（不清栈 = 下次点触发器直接弹二级面板）', () => {
     const { rerender } = renderMenu()
     fireEvent.click(screen.getByRole('menuitem', { name: /Priority/ }))
     expect(screen.getByRole('menu', { name: 'Priority' })).toBeTruthy()
-    rerender(<DrillMenu open={false} onClose={() => {}} items={items()} ariaLabel="Filter mail" />)
-    rerender(<DrillMenu open onClose={() => {}} items={items()} ariaLabel="Filter mail" />)
+    rerender(<Popmenu open={false} onClose={() => {}} items={items()} ariaLabel="Filter mail" />)
+    rerender(<Popmenu open onClose={() => {}} items={items()} ariaLabel="Filter mail" />)
     expect(screen.getByRole('menu', { name: 'Filter mail' })).toBeTruthy()
-    expect(screen.queryByTestId('drill-panel-back')).toBeNull()
+    expect(screen.queryByTestId('popmenu-panel-behind')).toBeNull()
+  })
+})
+
+describe('Popmenu — 通用弹层形态（下游 showcase 的四种内容）', () => {
+  test('title 给了就渲染根面板标题栏，不给就没有 header', () => {
+    const { rerender } = render(
+      <Popmenu open onClose={() => {}} ariaLabel="A" title="Text style" items={[]} />
+    )
+    expect(screen.getByRole('menu', { name: 'Text style' })).toBeTruthy()
+    rerender(<Popmenu open onClose={() => {}} ariaLabel="A" items={[]} />)
+    expect(screen.getByRole('menu', { name: 'A' })).toBeTruthy()
+  })
+
+  test('separator / label 是纯装饰，不进 menuitem 序列', () => {
+    render(
+      <Popmenu
+        open
+        onClose={() => {}}
+        ariaLabel="A"
+        items={[
+          { kind: 'label', id: 'l', label: 'SIZE' },
+          { kind: 'separator', id: 's' },
+          { kind: 'action', id: 'a', label: 'Only one', onSelect: () => {} }
+        ]}
+      />
+    )
+    expect(screen.getAllByRole('menuitem')).toHaveLength(1)
+    expect(screen.getByRole('separator')).toBeTruthy()
+  })
+
+  test('custom 行把任意 React 内容嵌进列表（逃生舱）', () => {
+    render(
+      <Popmenu
+        open
+        onClose={() => {}}
+        ariaLabel="A"
+        items={[
+          { kind: 'custom', id: 'slider', content: <input type="range" aria-label="Size" /> }
+        ]}
+      />
+    )
+    expect(screen.getByRole('slider', { name: 'Size' })).toBeTruthy()
+    expect(screen.queryByRole('menuitem')).toBeNull()
+  })
+
+  test('children 接管整个根面板（非菜单形态 → 不是 role=menu）', () => {
+    render(
+      <Popmenu open onClose={() => {}} ariaLabel="Compose settings">
+        <label htmlFor="lh">Line height</label>
+        <input id="lh" defaultValue="1.5" />
+      </Popmenu>
+    )
+    expect(screen.getByRole('group', { name: 'Compose settings' })).toBeTruthy()
+    expect(screen.getByLabelText('Line height')).toBeTruthy()
+    expect(screen.queryByRole('menu')).toBeNull()
   })
 })

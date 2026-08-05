@@ -2232,36 +2232,38 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background: rgb(255 255 255 / 0.9);
 }
 
-/* ─── DrillMenu — 下钻堆叠菜单壳体 (ui/DrillMenu.tsx) ─────────────────── */
-/* 旧 .filter-pop / .filter-section / .filter-option 一族随筛选菜单重做删除 ——
- * 它们只有 EmailListHeader 一个消费者, 留着就是死 CSS。 */
-.drill-shell {
-  position: absolute;
-  z-index: 30;
-  overflow: hidden;
-  /* 主题 v3 C8: 内容浮层档 --r-pop(14); 玻璃配方与 .glass-pop 同源。 */
-  border-radius: var(--r-pop);
-  background: color-mix(in srgb, var(--glass-base) 86%, transparent);
-  border: 1px solid var(--hairline);
-  box-shadow: var(--pop-shadow);
-  -webkit-backdrop-filter: blur(20px) saturate(var(--glass-sat));
-  backdrop-filter: blur(20px) saturate(var(--glass-sat));
+/* ─── Popmenu — 通用弹层基座 (ui/Popmenu.tsx) ──────────────────────────
+ * 移植自 lab.moumen.dev 的 unlimited-nested-menu (registry item 原源码)。
+ * 原组件「fully Tailwind, no CSS files」, 这里只落三样它从 lab-theme 拿的
+ * 主题变量 —— 其余类名在组件里原样保留 (本仓 tailwind.config 的 shadcn 别名
+ * 已把 bg-popover / text-foreground / bg-accent / ring 映到 ink/coral token,
+ * 故颜色自动双主题, 不必改类名)。
+ * 旧 .drill-* / .filter-pop 一族随本次重做删除 —— 只有 EmailListHeader 一个
+ * 消费者, 留着就是死 CSS。 */
+:root {
+  /* = lab-theme 的 --ease-smooth-out, 与组件里的 EASE 常量同一条曲线。 */
+  --popmenu-ease: cubic-bezier(0.22, 1, 0.36, 1);
+  /* 🔴 面板必须**不透明** (bg-popover): 叠起来的层靠遮罩压暗, 给面板本身
+   * 上玻璃/透明度会让每一层都透出来, 读成「叠了好几份菜单」。
+   * 阴影几何逐字取自原实现 (亮色档见下方 [data-theme='light']); 暗色沿用同
+   * 一组 offset/blur/spread 只抬 alpha —— 原值是给亮底调的, 暗底上等于没有。 */
+  --popmenu-shadow-elev:
+    0 0 0 1px rgb(0 0 0 / 0.5), 0 14px 34px -10px rgb(0 0 0 / 0.55),
+    0 5px 14px -6px rgb(0 0 0 / 0.4);
+  --popmenu-shadow-behind: 0 0 0 1px rgb(0 0 0 / 0.45), 0 1px 2px -1px rgb(0 0 0 / 0.4);
 }
-/* 前面板必须**不透明**地盖住后面板 —— 壳体的玻璃已经在下面, 这里只补一层实底 +
- * 投影, 否则下钻时能透过新面板看见父面板的行, 读起来是「叠了两份菜单」。 */
-.drill-panel-front {
-  position: relative;
-  padding: 6px;
-  background: color-mix(in srgb, var(--glass-base) 97%, transparent);
-  box-shadow: 0 -6px 16px rgb(0 0 0 / 0.28);
+:root[data-theme='light'] {
+  --popmenu-shadow-elev:
+    0 0 0 1px rgb(0 0 0 / 0.07), 0 14px 34px -10px rgb(0 0 0 / 0.26),
+    0 5px 14px -6px rgb(0 0 0 / 0.12);
+  --popmenu-shadow-behind: 0 0 0 1px rgb(0 0 0 / 0.05), 0 1px 2px -1px rgb(0 0 0 / 0.08);
 }
-.drill-panel-back {
-  position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  padding: 6px;
-  cursor: pointer;
+/* 前面板独占整栈的层次感; 它后面的层塌成一条细边, 阴影不随深度叠加变糊。 */
+.popmenu-panel-elev {
+  box-shadow: var(--popmenu-shadow-elev);
+}
+.popmenu-panel-behind {
+  box-shadow: var(--popmenu-shadow-behind);
 }
 
 /* Filter button — quiet by default, loud when a filter narrows the view.

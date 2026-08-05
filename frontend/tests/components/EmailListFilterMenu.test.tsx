@@ -2,7 +2,7 @@
 //
 // EmailListHeader 的筛选/排序菜单接线 —— 2026-08 Outlook 结构重做。
 //
-// 这里验的是「store ↔ 菜单项」这一层（DrillMenu 自身的行为在 DrillMenu.test.tsx）：
+// 这里验的是「store ↔ 菜单项」这一层（Popmenu 自身的行为在 Popmenu.test.tsx）：
 // 六条筛选项 + 两个下钻子面板 + 排序/方向两组单选都在、勾选态跟 store 走、点了真写
 // store、方向文案随排序键切换、以及「清除筛选」只在真有筛选时出现。
 
