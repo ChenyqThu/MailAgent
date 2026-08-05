@@ -20,7 +20,7 @@
 // `/admin` itself routes to `/admin/kanban` by default so a direct visit
 // lands somewhere useful instead of an empty parent.
 
-import { useEffect } from 'react'
+import { Suspense, lazy, useEffect } from 'react'
 import {
   createMemoryHistory,
   createRootRoute,
@@ -143,6 +143,12 @@ function useGeneralAgentMenu(): void {
   }, [navigate])
 }
 
+// Popmenu showcase（dev-only 审批物, ⌃⇧P 开）。生产构建时 Vite 把 import.meta.env.DEV
+// 换成 false → 三元折成 null, 这个动态 import 不可达, 不进 chunk 图也不渲染。
+const PopmenuShowcaseMount = import.meta.env.DEV
+  ? lazy(() => import('./components/dev/PopmenuShowcaseMount'))
+  : null
+
 function RootLayout(): React.ReactElement {
   useDeeplinkRouter()
   useGeneralAgentMenu()
@@ -154,6 +160,11 @@ function RootLayout(): React.ReactElement {
       <CommandPalette />
       {/* 写新邮件居中模态 — 全局单实例, 由侧边栏「写邮件」按钮 / ⌘N 打开。 */}
       <ComposeNewModal />
+      {PopmenuShowcaseMount !== null && (
+        <Suspense fallback={null}>
+          <PopmenuShowcaseMount />
+        </Suspense>
+      )}
     </>
   )
 }
