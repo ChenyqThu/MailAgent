@@ -80,7 +80,12 @@ export function useTogglePin(): (internalId: number, opts?: TogglePinOpts) => Pr
       mailApi.email.pin(id, targetPinned, cascadeThread ? { cascadeThread: true } : undefined),
     onMutate: async ({ targetPinned, optimisticIds }) => {
       await queryClient.cancelQueries({ queryKey: PINNED_KEY })
-      const prev = queryClient.getQueryData<number[]>(PINNED_KEY) ?? []
+      // 缓存缺席时回落到 store 快照, 而不是当成「一个都没置顶」—— 后者写回去的
+      // `next` 会把**别的行**的置顶态一起抹掉 (setQueryData → usePinnedSync 的
+      // effect → setPinned 整表覆盖), 直到下一次 refetch 才长回来。
+      const prev = queryClient.getQueryData<number[]>(PINNED_KEY) ?? [
+        ...usePinned.getState().pinned
+      ]
       // 逐 id 记下翻转前的真实归属 (读 store 而非 prev —— 别的行可能有在途的
       // 乐观翻转), 回滚时精确还原这些 id, 不整表 setPinned 覆盖别人的在途写。
       const before = new Set(usePinned.getState().pinned)
@@ -112,9 +117,16 @@ export function useTogglePin(): (internalId: number, opts?: TogglePinOpts) => Pr
   return async (id: number, opts?: TogglePinOpts) => {
     // Decide direction BEFORE mutate(); this read happens before any
     // optimistic write so it sees the real current state.
-    const cached = queryClient.getQueryData<number[]>(PINNED_KEY) ?? []
+    //
+    // 🔴 判据必须与**用户看到的亮/暗**同源 —— 那是 `usePinned` store
+    // (EmailRow / EmailDetail 的 pin 图标都读它)。曾经读 ['pinnedIds'] 查询缓存:
+    // 那份缓存离开邮件视图超过 gcTime 就被回收、重新进来到首个 fetch 落地之间也是空,
+    // 而 store 是模块级的、活得比它久 —— 于是「图标亮着 + 缓存空」时
+    // `!cached.includes(id)` 恒真, 点「取消置顶」发出去的却是 pin=true:
+    // 服务端把已置顶的行原地重写一遍, 图标照亮、行照留在已固定桶 = dogfood 报的
+    // 「点了没反应」。cascade 方向仍钉死 false (虚拟头聚合态不是母邮件自己的态)。
     const cascadeThread = opts?.cascadeThread === true
-    const targetPinned = cascadeThread ? false : !cached.includes(id)
+    const targetPinned = cascadeThread ? false : !usePinned.getState().pinned.includes(id)
     const optimisticIds =
       cascadeThread && opts?.memberIds && opts.memberIds.length > 0 ? opts.memberIds : [id]
     await mutation.mutateAsync({ id, targetPinned, optimisticIds, cascadeThread })
