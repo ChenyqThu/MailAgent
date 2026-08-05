@@ -13,8 +13,52 @@ CLI (``src/cli/commands/report.py``) 与 serve-api (``src/api/routers/reports.py
 
 from __future__ import annotations
 
+import base64
 import json
+import re
 from typing import Any, Dict, Tuple
+
+# ─── 上传态头像（0804 dogfood WP7）───────────────────────────────────────────
+# owner 拍板 base64 内嵌：图片随 report_agent.avatar_json 一起走既有 PATCH。前端已把图裁成
+# ≤256×256 的 webp，这里是**服务端复核**（前端可被绕过：CLI / serve-api / agent 工具都能直发
+# patch）。上限与前端 `avatarImage.ts` 的 AVATAR_IMAGE_MAX_BYTES 各自成文、数值必须一致。
+AVATAR_IMAGE_MAX_BYTES = 150 * 1024
+# 先按**字符数**拒超长，再 b64decode —— 反过来就是拿无界字符串去解码（一个 100MB 的 data URI
+# 能把 serve-api 的内存打上去）。4/3 膨胀 + data URI 前缀，留 64 字符余量。
+AVATAR_IMAGE_MAX_DATA_URI_CHARS = (AVATAR_IMAGE_MAX_BYTES + 2) // 3 * 4 + 64
+# 🔴 尾锚必须是 ``\Z`` 不是 ``$``：Python 的 ``$`` 还匹配「结尾换行**之前**」，而前端渲染判别
+# （agentAvatarIdentity.isAgentAvatarImage）用的 JS ``$``（无 m 标志）只匹配真结尾。用 ``$`` 时
+# ``…base64,QUJD\n`` 会被后端收下并原样落库，前端却认不出 → 头像在界面上静默变回生成头像
+# （正是下面两道跨语言闸想防的失败形态，但闸只比 mime 集合、比不到锚点语义）。
+_AVATAR_IMAGE_DATA_URI_RE = re.compile(
+    r"^data:image/(?:webp|png|jpeg);base64,([A-Za-z0-9+/]+={0,2})\Z"
+)
+
+
+def _normalize_avatar_image(avatar: Dict[str, Any]) -> Dict[str, Any]:
+    """``{"type":"image","data":"data:image/webp;base64,…"}`` → 规范化 dict（坏值 ValueError）。
+
+    只认 base64 data URI（webp/png/jpeg 三 mime），不认 http(s) URL —— 外链头像会让本地
+    渲染发出网络请求（追踪像素/离线空图两个问题），与「桌面 app 本地优先」相悖。
+    """
+    data = avatar.get("data")
+    if not isinstance(data, str) or not data:
+        raise ValueError("avatar.data must be a non-empty data URI string")
+    if len(data) > AVATAR_IMAGE_MAX_DATA_URI_CHARS:
+        raise ValueError(f"avatar.data exceeds {AVATAR_IMAGE_MAX_BYTES} bytes")
+    match = _AVATAR_IMAGE_DATA_URI_RE.match(data)
+    if not match:
+        raise ValueError("avatar.data must be a base64 data URI of image/webp|png|jpeg")
+    try:
+        # binascii.Error 是 ValueError 子类；validate=True 顺带拒掉换行/空格等非规范形态。
+        decoded = base64.b64decode(match.group(1), validate=True)
+    except ValueError as exc:
+        raise ValueError("avatar.data is not valid base64") from exc
+    if not decoded:
+        raise ValueError("avatar.data decodes to empty bytes")
+    if len(decoded) > AVATAR_IMAGE_MAX_BYTES:
+        raise ValueError(f"avatar.data exceeds {AVATAR_IMAGE_MAX_BYTES} bytes")
+    return {"type": "image", "data": data}
 
 
 def parse_counts(raw: Any) -> Dict[str, Any]:
@@ -293,6 +337,12 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
         avatar = raw["avatar"]
         if avatar is None:
             db_patch["avatar_json"] = None
+        elif isinstance(avatar, dict) and avatar.get("type") == "image":
+            # WP7 上传态。判别式只在 image 一侧 —— 存量生成式行没有 type 键，缺省即生成式
+            # （零迁移），下面那支逐字不动。
+            db_patch["avatar_json"] = json.dumps(
+                _normalize_avatar_image(avatar), ensure_ascii=False
+            )
         elif isinstance(avatar, dict):
             shape = avatar.get("shape")
             palette = avatar.get("palette")

@@ -869,6 +869,102 @@ def test_wire_agent_avatar_round_trip_and_validation() -> None:
         wire.config_patch_to_db({"avatar": {"shape": "triangle", "palette": "rose-milk"}})
 
 
+def _avatar_image_data_uri(nbytes: int, mime: str = "image/webp") -> str:
+    """长度精确可控的合法 data URI（内容不必是真图片 —— wire 层只管 mime/base64/字节数）。"""
+    import base64 as _b64
+
+    return f"data:{mime};base64," + _b64.b64encode(b"\x00" * nbytes).decode("ascii")
+
+
+def test_wire_agent_avatar_image_round_trip() -> None:
+    """WP7 上传态：合法 data URI 原样落库 + 读回；生成式（无 type 键）逐字不受影响。"""
+    from src.reports import wire
+
+    data = _avatar_image_data_uri(1024)
+    patch = wire.config_patch_to_db({"avatar": {"type": "image", "data": data}})
+    assert json.loads(patch["avatar_json"]) == {"type": "image", "data": data}
+    assert wire.resolve_agent({"id": "x", "avatar_json": patch["avatar_json"]})["avatar"] == {
+        "type": "image",
+        "data": data,
+    }
+    # 三个 mime 都收（客户端只发 webp，png/jpeg 是给 CLI / 手工 patch 留的口子）。
+    for mime in ("image/png", "image/jpeg"):
+        assert wire.config_patch_to_db(
+            {"avatar": {"type": "image", "data": _avatar_image_data_uri(64, mime)}}
+        )["avatar_json"]
+    # 混入生成式字段（或任何多余键）只落 type/data 两键 —— 落库形状恒是判别 union 的一支，
+    # 不会出现「既像图片又像生成式」的两栖行。
+    mixed = wire.config_patch_to_db(
+        {
+            "avatar": {
+                "type": "image",
+                "data": data,
+                "shape": "nova",
+                "palette": "aurora-pink",
+                "variant_id": "x",
+            }
+        }
+    )
+    assert json.loads(mixed["avatar_json"]) == {"type": "image", "data": data}
+    # type=image 但缺 data → 拒（不静默降级成生成式）。
+    with pytest.raises(ValueError, match="must be a non-empty data URI string"):
+        wire.config_patch_to_db({"avatar": {"type": "image"}})
+
+
+def test_wire_agent_avatar_image_rejects_bad_payloads() -> None:
+    """坏形态逐条拒（超限 / 坏 mime / 坏 base64 / 超长串 / 锚点绕过 / 非字符串）。
+
+    这里的每一条都对应一种「后端收下、前端渲染判别不认」或「拿无界串去解码」的失败，
+    故一律要求拒绝而不是宽容规范化 —— 上传头像的唯一生产者是前端，规范形态只有一种。
+    """
+    from src.reports import wire
+
+    def _reject(data: object, match: str) -> None:
+        with pytest.raises(ValueError, match=match):
+            wire.config_patch_to_db({"avatar": {"type": "image", "data": data}})
+
+    # 解码后超 150KB 硬顶（长度仍在 data URI 字符上限内 → 走的是 decode 后那道闸）。
+    _reject(_avatar_image_data_uri(wire.AVATAR_IMAGE_MAX_BYTES + 1), "exceeds")
+    # 正好 150KB 放行（边界不是 off-by-one）。
+    assert wire.config_patch_to_db(
+        {"avatar": {"type": "image", "data": _avatar_image_data_uri(wire.AVATAR_IMAGE_MAX_BYTES)}}
+    )["avatar_json"]
+    # 坏 mime（svg 可带脚本；gif 不在白名单）。
+    _reject(_avatar_image_data_uri(64, "image/svg+xml"), "must be a base64 data URI")
+    _reject(_avatar_image_data_uri(64, "image/gif"), "must be a base64 data URI")
+    # mime 大小写敏感（前端判别式同样区分大小写 —— 收下就等于存一张前端认不出的头像）。
+    _reject(_avatar_image_data_uri(64, "IMAGE/WEBP"), "must be a base64 data URI")
+    # 带参数的 data URI（`;charset=`）不在契约里。
+    _reject(
+        "data:image/webp;charset=utf-8;base64," + _avatar_image_data_uri(64).split(",", 1)[1],
+        "must be a base64 data URI",
+    )
+    # 🔴 尾部换行：Python 的 `$` 会匹配「结尾换行之前」，JS 的 `$` 不会 —— 收下就等于落一条
+    # 前端 isAgentAvatarImage 认不出的行（头像静默变回生成式）。锚点必须是 `\Z`。
+    _reject(_avatar_image_data_uri(64) + "\n", "must be a base64 data URI")
+    _reject("\n" + _avatar_image_data_uri(64), "must be a base64 data URI")
+    # base64 内嵌空白/换行（b64decode 默认会宽容吃掉，validate=True + 字符集正则一起拒）。
+    _reject("data:image/webp;base64,QU JD", "must be a base64 data URI")
+    _reject("data:image/webp;base64,QU\nJD", "must be a base64 data URI")
+    # base64url 字母表（`-_`）与三个 `=` 填充都不是标准 base64。
+    _reject("data:image/webp;base64,QUJD-_==", "must be a base64 data URI")
+    _reject("data:image/webp;base64,QUJDA===", "must be a base64 data URI")
+    # 嵌套 data URI / 脚本 URI。
+    _reject("data:image/webp;base64,data:image/webp;base64,QUJD", "must be a base64 data URI")
+    _reject("javascript:alert(1)", "must be a base64 data URI")
+    # 外链 URL 不是 data URI。
+    _reject("https://example.test/a.png", "must be a base64 data URI")
+    # 坏 base64：长度 %4==1，字符集合法但解不出。
+    _reject("data:image/webp;base64,QUJDR", "not valid base64")
+    # 空 payload → 正则就不过（`+` 至少一个字符）。
+    _reject("data:image/webp;base64,", "must be a base64 data URI")
+    # 超长字符串在 b64decode **之前**被拒（防拿无界串去解码）。
+    _reject("data:image/webp;base64," + "A" * wire.AVATAR_IMAGE_MAX_DATA_URI_CHARS, "exceeds")
+    # 非字符串。
+    _reject(None, "must be a non-empty data URI string")
+    _reject(123, "must be a non-empty data URI string")
+
+
 def test_malformed_body_returns_envelope(report_client: TestClient) -> None:
     """malformed/非 object body → 422 但走 MailAgent envelope（E_INVALID_ARG），非 FastAPI 默认
     {detail:[...]}（codex finding 2：全局 RequestValidationError handler）。"""

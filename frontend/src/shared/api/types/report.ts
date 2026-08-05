@@ -351,11 +351,24 @@ export interface ReportAgentConfig {
   updated_at: number | null
 }
 
-export interface AgentAvatarConfig {
+/** v42 生成式身份（Oreo shape/palette/variant）。存量行**没有** `type` 键 —— 缺省即生成式，
+ *  故判别式在 image 一侧（零迁移）。 */
+export interface AgentAvatarGenerated {
+  type?: 'generated'
   shape: 'bloom' | 'silk' | 'flare' | 'nova' | 'void' | 'jade'
   palette: string
   variant_id?: string
 }
+
+/** 0804 WP7 用户上传身份：客户端已居中方形裁切 + 降采样（≤256×256）+ 编码 webp，
+ *  `data` 是 `data:image/webp;base64,…`、**解码后 ≤150KB**（后端 `wire.config_patch_to_db`
+ *  复核同一上限，两侧常量各自成文）。 */
+export interface AgentAvatarImage {
+  type: 'image'
+  data: string
+}
+
+export type AgentAvatarConfig = AgentAvatarGenerated | AgentAvatarImage
 
 /** report:setConfig — friendly patch（后端 CLI 映射到 DB 列）。 */
 export interface ReportConfigPatch {

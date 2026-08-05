@@ -3810,7 +3810,16 @@
       "collapse": "Collapse",
       "shuffle": "Shuffle",
       "shape": "Shape",
-      "palette": "Palette"
+      "palette": "Palette",
+      "upload": "Upload image",
+      "uploading": "Processing…",
+      "uploaded": "Uploaded image (pick any shape or palette below to go back to generated)",
+      "uploadErr": {
+        "not_image": "Pick an image file (PNG / JPG / WebP…).",
+        "source_too_large": "The original is over 10MB — compress it or pick another.",
+        "decode_failed": "That image could not be read — try another one.",
+        "too_large": "Still over 150KB at the lowest quality — try a simpler image."
+      }
     },
     "custom": {
       "section": "Custom Agents",

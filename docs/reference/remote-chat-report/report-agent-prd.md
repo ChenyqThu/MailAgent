@@ -315,7 +315,9 @@ CREATE TABLE report_agent (
   updated_at REAL,
   context_docs_json TEXT,          -- v27: preprocess 身份文档勾选（JSON 数组 of profile-doc 名；NULL=默认 soul+user，[]=不注入）
   fallback_models_json TEXT,       -- v29: preprocess 行级 fallback 链（JSON 数组；NULL=跟随全局 LLM_FALLBACK_MODELS，[]=显式不设，数组=专用链；非 preprocess 行恒 NULL）
-  avatar_json TEXT                 -- v42: Oreo shape/palette/variant；NULL=按 agent id 确定性派生
+  avatar_json TEXT                 -- v42: 头像身份 JSON，两形态判别（NULL=按 agent id 确定性派生）：
+                                   --   生成式 {shape,palette,variant_id}（**无 type 键**，存量形态）
+                                   --   上传态 {"type":"image","data":"data:image/webp;base64,…"}（0804 WP7）
 );
 -- 报告产物表
 CREATE TABLE report (

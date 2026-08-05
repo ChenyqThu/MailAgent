@@ -235,6 +235,8 @@ export type {
   CustomAgentBudget,
   ReportAgentConfig,
   AgentAvatarConfig,
+  AgentAvatarGenerated,
+  AgentAvatarImage,
   ReportConfigPatch,
   ReportAgentCreateInput,
   AgentRunState,

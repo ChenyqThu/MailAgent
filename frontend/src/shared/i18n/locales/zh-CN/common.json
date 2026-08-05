@@ -3810,7 +3810,16 @@
       "collapse": "收起",
       "shuffle": "换一换",
       "shape": "形状",
-      "palette": "配色"
+      "palette": "配色",
+      "upload": "上传图片",
+      "uploading": "处理中…",
+      "uploaded": "已上传图片（点下方任意形状或配色换回生成头像）",
+      "uploadErr": {
+        "not_image": "请选择图片文件（PNG / JPG / WebP 等）。",
+        "source_too_large": "原图超过 10MB，请先压缩或换一张。",
+        "decode_failed": "这张图片读不出来，换一张试试。",
+        "too_large": "压到最低画质仍超过 150KB，请换一张更简单的图片。"
+      }
     },
     "custom": {
       "section": "完全自定义 Agent",

@@ -10,13 +10,22 @@
 //   • 3b 默认折叠：只渲染「头像 + 名称」一行，点「更换」才展开编辑器。
 //   • 3e 两种名称语义：可编辑（custom/search）与只读（三个预设单例行）。
 //   • i18n zh/en agents.avatar key 对齐。
+//   • WP7 上传：图片形态渲染成图片元素、失败出人话文案、点候选隐式切回生成式。
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
 import { AgentIdentityHeader } from '../../src/shared/components/agents/AgentAvatar'
+import { fileToAvatarImage } from '../../src/shared/components/agents/avatarImage'
 import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
 import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
+
+// canvas / createImageBitmap 在 happy-dom 下不存在 —— 处理逻辑本身在
+// tests/components/avatarImage.test.ts 里用注入 deps 测，这里只测组件接线。
+vi.mock('../../src/shared/components/agents/avatarImage', () => ({
+  fileToAvatarImage: vi.fn()
+}))
+const mockedProcess = vi.mocked(fileToAvatarImage)
 
 await i18n.changeLanguage('zh-CN')
 
@@ -107,10 +116,111 @@ describe('AgentAvatarEditor 网格四角白边（3a）', () => {
   })
 })
 
+describe('头像上传（WP7）', () => {
+  const DATA_URI = `data:image/webp;base64,${'A'.repeat(40)}`
+
+  function expand(): HTMLInputElement {
+    fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    return screen.getByTestId('avatar-upload-input') as HTMLInputElement
+  }
+
+  function pick(input: HTMLInputElement, file = new File(['x'], 'a.png', { type: 'image/png' })) {
+    fireEvent.change(input, { target: { files: [file] } })
+  }
+
+  test('选中文件 → onChange 收到 image 形态；预览换成图片元素（不再是生成 SVG）', async () => {
+    mockedProcess.mockResolvedValue({
+      ok: true,
+      avatar: { type: 'image', data: DATA_URI },
+      bytes: 2048
+    })
+    const onChange = vi.fn()
+    const { rerender, container } = render(
+      <AgentIdentityHeader agentId="daily" value={null} onChange={onChange} name="日报" />
+    )
+    pick(expand())
+    await waitFor(() => expect(onChange).toHaveBeenCalledWith({ type: 'image', data: DATA_URI }))
+
+    // 父层回填后：头部预览是 <img src=dataURI>，生成式 SVG 不再渲染。
+    rerender(
+      <AgentIdentityHeader
+        agentId="daily"
+        value={{ type: 'image', data: DATA_URI }}
+        onChange={onChange}
+        name="日报"
+      />
+    )
+    const img = container.querySelector('img')
+    expect(img?.getAttribute('src')).toBe(DATA_URI)
+    // 展开面板里的候选网格仍在（它们是「切回生成式」的入口），但头部预览不再有 SVG。
+    const header = img?.closest('span')
+    expect(header?.querySelector('svg')).toBeNull()
+  })
+
+  test('处理失败 → 展示对应人话文案，且不落任何值', async () => {
+    const onChange = vi.fn()
+    for (const [reason, text] of [
+      ['too_large', zhCommon.agents.avatar.uploadErr.too_large],
+      ['source_too_large', zhCommon.agents.avatar.uploadErr.source_too_large],
+      ['not_image', zhCommon.agents.avatar.uploadErr.not_image],
+      ['decode_failed', zhCommon.agents.avatar.uploadErr.decode_failed]
+    ] as const) {
+      mockedProcess.mockResolvedValue({ ok: false, reason })
+      const { unmount } = render(
+        <AgentIdentityHeader agentId="daily" value={null} onChange={onChange} name="日报" />
+      )
+      pick(expand())
+      expect((await screen.findByRole('alert')).textContent).toBe(text)
+      unmount()
+    }
+    expect(onChange).not.toHaveBeenCalled()
+  })
+
+  test('上传态下点任一形状 → 隐式切回生成式（携带 id 派生的 palette/variant，不留 image 残留）', () => {
+    const onChange = vi.fn()
+    render(
+      <AgentIdentityHeader
+        agentId="daily"
+        value={{ type: 'image', data: DATA_URI }}
+        onChange={onChange}
+        name="日报"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    // 上传态下 shape/palette 都不生效 → 网格不该高亮任何一项（高亮一个看不见的配色是谎）。
+    const grid = screen.getByTestId('avatar-palette-grid')
+    expect(grid.querySelectorAll('[aria-pressed="true"]').length).toBe(0)
+
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Jade'))
+    const next = onChange.mock.calls[0][0]
+    expect(next).toMatchObject({ shape: 'jade' })
+    expect(next.type).toBeUndefined()
+    expect(next.data).toBeUndefined()
+    expect(typeof next.palette).toBe('string')
+  })
+
+  test('上传失败后再点候选 → 头像换掉的同时报错行消失（不留下"这次也失败了"的假象）', async () => {
+    mockedProcess.mockResolvedValue({ ok: false, reason: 'too_large' })
+    const onChange = vi.fn()
+    render(<AgentIdentityHeader agentId="daily" value={null} onChange={onChange} name="日报" />)
+    pick(expand())
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      zhCommon.agents.avatar.uploadErr.too_large
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '换一换' }))
+    expect(onChange).toHaveBeenCalledTimes(1)
+    expect(screen.queryByRole('alert')).toBeNull()
+  })
+})
+
 describe('i18n — agents.avatar key 对齐', () => {
-  test('zh / en key 一致', () => {
+  test('zh / en key 一致（含 uploadErr 子节 —— 少一条 reason 就会显示 raw key）', () => {
     expect(Object.keys(zhCommon.agents.avatar).sort()).toEqual(
       Object.keys(enCommon.agents.avatar).sort()
+    )
+    expect(Object.keys(zhCommon.agents.avatar.uploadErr).sort()).toEqual(
+      Object.keys(enCommon.agents.avatar.uploadErr).sort()
     )
   })
 })
