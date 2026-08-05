@@ -194,6 +194,75 @@ describe('buildGatewaySystemPrompt × followupToolAvailable', () => {
   })
 })
 
+// ── 0805 wording: "once" is scoped to ONE REPLY, on BOTH prompt surfaces ─────────────────────────
+//
+// The regression this pins: with only "call this exactly once" the model read the obligation as
+// once per CONVERSATION (its own previous suggest_followups tool part is in the history) and gave
+// chips on turn 1 only — reproduced 2/2 in the live ai_chat.db, both second turns started by the
+// user tapping a chip. The model reads the tool description AND the system-prompt guidance
+// together, so a fix in one surface alone is a contradiction, not a fix.
+//
+// 🔴 These assert PROPERTIES, not sentences — reword freely, just keep (a) the per-reply scope and
+// (b) the carve-out for a turn the user started from an earlier suggestion.
+
+describe('follow-up wording — per-reply scope stated on both surfaces', () => {
+  const toolDescription = (): string => {
+    const tool = createFollowupTools()[SUGGEST_FOLLOWUPS_TOOL_NAME] as { description?: string }
+    return tool.description ?? ''
+  }
+  const surfaces = (): [string, string][] => [
+    ['tool description', toolDescription()],
+    ['system prompt guidance', FOLLOWUP_SUGGESTIONS_GUIDANCE]
+  ]
+
+  /** Every "once" must carry its scope ("once per reply"); a bare one is the regressed phrasing. */
+  const unscopedOnce = (text: string): string[] =>
+    [...text.matchAll(/\bonce\b(?!\s+per\s+reply)/gi)].map((m) => {
+      const at = m.index ?? 0
+      return text.slice(at, at + 36)
+    })
+
+  /** The carve-out for a turn the user started FROM a suggestion. Deliberately NOT matched by the
+   *  pre-existing "render as tappable chips" clause — that sentence is about rendering, and a gate
+   *  it can satisfy would be vacuous (both surfaces have carried it since W6). */
+  const CHIP_TURN_CARVE_OUT = /(earlier|previous|prior|your own) suggestion|adopted suggestion/i
+  /** "I already called it upstream in this conversation" is likewise not an excuse. */
+  const EARLIER_TURN_CARVE_OUT = /(earlier|previous|prior) turn|already called/i
+
+  // The pre-fix wording, verbatim — proves each guard below actually rejects something.
+  const LEGACY =
+    'Offer the user 2-3 short follow-up questions they are likely to ask next. Call this exactly ' +
+    'once, only AFTER your answer is fully complete (never mid-task, never before a pending ' +
+    'approval is resolved). The suggestions render as tappable chips in the UI — do not repeat ' +
+    'them in your reply text. This tool has no side effects and returns no data.'
+
+  test('the guards reject the pre-fix wording (non-vacuous)', () => {
+    expect(unscopedOnce(LEGACY)).not.toEqual([])
+    expect(LEGACY).not.toMatch(/per reply/i)
+    expect(LEGACY).not.toMatch(CHIP_TURN_CARVE_OUT)
+    expect(LEGACY).not.toMatch(EARLIER_TURN_CARVE_OUT)
+  })
+
+  test('both surfaces scope the obligation to a reply, with no bare "once" left', () => {
+    for (const [label, text] of surfaces()) {
+      expect(text.length, label).toBeGreaterThan(0)
+      expect(text, label).toMatch(/per reply/i)
+      expect(unscopedOnce(text), `${label} says "once" without scoping it to a reply`).toEqual([])
+    }
+  })
+
+  test('both surfaces state the two carve-outs (earlier call / chip-initiated turn)', () => {
+    for (const [label, text] of surfaces()) {
+      expect(text, `${label} must say an earlier call does not excuse this reply`).toMatch(
+        EARLIER_TURN_CARVE_OUT
+      )
+      expect(text, `${label} must say an adopted suggestion is not a closed loop`).toMatch(
+        CHIP_TURN_CARVE_OUT
+      )
+    }
+  })
+})
+
 // ── stopWhen: the tool call ends the manual turn; other tools do not ──────────────────────────────
 
 const handles: AiGatewayHandle[] = []

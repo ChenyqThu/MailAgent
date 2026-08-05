@@ -1,0 +1,20 @@
+{
+  "id": "AGT-FOLLOWUP-002",
+  "category": "search_read",
+  "title": "点 chip 发起的第二轮：仍须调 suggest_followups（采纳建议不是闭环）",
+  "surface": "general",
+  "user_prompt": "张工之前是什么意见，和最终结论冲突吗",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-001", "fx-email-002"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_list_thread", "email_body", "suggest_followups"],
+  "allowed_support_tools": ["email_get", "email_search_fulltext", "email_list_filter"],
+  "must_use_tools": ["email_body", "suggest_followups"],
+  "forbidden_tools": ["email_prepare_send", "email_draft_reply", "email_send"],
+  "expected_evidence": [{ "type": "email", "id": 51202 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "evidence_grounding": 0.3, "ux_clarity": 0.2, "tool_efficiency": 0.1, "uncertainty_honesty": 0.05 },
+  "rubric_ref": "search_read.md",
+  "notes": "0805 owner 反馈的回归本体：chips 只有第一轮有。结构性原因全部排除过（注册无条件、非 skill-gated、非审批门、prompt 每轮都注入、step 上限没撞、前端 isLast 判据反而对第二轮有利）——第二轮的数据里根本没有 tool part，是模型自己决定不调。活库 2/2 复现，且两次的第二轮**都是用户点 chip 发起的**（user_prompt 与上一轮建议逐字相同，见本条 user_prompt = AGT-FOLLOWUP-001 trace 的建议之一）。本条把该形态钉成硬闸：这一轮的模型上下文里既有恒注入的引导语，也有上一轮自己调 suggest_followups 的 tool_use/tool_result；「已经给过一次」和「用户采纳了建议、闭环了」都不是豁免理由，答毕仍须调（R1）。措辞侧两处口径由 frontend/tests/ai-gateway/followup_tool.test.ts 盯（per-reply 作用域 + chip 续轮 carve-out）；本条盯的是行为。"
+}

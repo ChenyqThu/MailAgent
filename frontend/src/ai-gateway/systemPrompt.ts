@@ -98,14 +98,26 @@ export const HEADLESS_AGENT_EXECUTION_DISCIPLINE = executionDisciplineFor(true)
 /** chat UI 优化 W6 — follow-up suggestion guidance, injected ONLY when the run's ToolSet actually
  *  holds the suggest_followups tool (manual chat; prepareChatRun computes the predicate from the
  *  BUILT tools, so prompt and tool surface can never drift). Code-owned constant — placed after
- *  the execution discipline, BEFORE the date block, so the cacheable-prefix convention holds. */
+ *  the execution discipline, BEFORE the date block, so the cacheable-prefix convention holds.
+ *
+ *  🔴 0805 — the "once" here is scoped to ONE REPLY and must stay that way. Unscoped ("call it
+ *  exactly once") the model read it as once per CONVERSATION — the previous turn's own
+ *  suggest_followups tool part is in its history — and stopped suggesting after turn 1 (owner
+ *  dogfood, reproduced 2/2). The tool's own description (tools/followups.ts) carries the SAME
+ *  rule; the two surfaces are read together by the model, so they must never state different
+ *  scopes. followup_tool.test.ts pins the property (per-reply scope + chip-turn carve-out) on
+ *  both surfaces without pinning the sentences. */
 export const FOLLOWUP_SUGGESTIONS_GUIDANCE = [
   '# Follow-up suggestions',
-  'When your answer is fully complete (never mid-task, never while a tool approval is pending),',
-  'call the suggest_followups tool exactly once with 2-3 short follow-up questions the user is',
-  'likely to ask next. Phrase each as the USER would ask it (first person), in the same language',
-  'the user is writing in. The suggestions render as tappable chips — do not repeat them in your',
-  'reply text, and do not write anything after the call.'
+  'Call the suggest_followups tool once per reply — the obligation is per reply, never per',
+  'conversation. When your answer is fully complete (never mid-task, never while a tool approval',
+  'is pending), call it with 2-3 short follow-up questions the user is likely to ask next.',
+  'Having already called it on an earlier turn does NOT excuse this reply, and neither does the',
+  'user having started this turn by tapping one of your earlier suggestions — an adopted',
+  'suggestion is a new question, not a closed loop.',
+  'Phrase each as the USER would ask it (first person), in the same language the user is writing',
+  'in. The suggestions render as tappable chips — do not repeat them in your reply text, and do',
+  'not write anything after the call.'
 ].join('\n')
 
 /** Add the code-owned discipline to the legacy body.system path used by pure harnesses. */

@@ -42,11 +42,22 @@ export function createFollowupTools(
       // Quoted literal (not the constant) — validate_catalog's tier extraction pairs the nearest
       // preceding audited*Tool( factory with a line-anchored quoted `name:` literal.
       name: 'suggest_followups',
+      // 🔴 0805 — the scope of "once" is PER REPLY, and it must say so. The earlier wording said
+      // only "call this exactly once": with the previous turn's own suggest_followups tool part
+      // sitting in the model's history, that reads just as well as "once per conversation" (or as
+      // "the user already took one of my suggestions, so that loop is closed") — and the model
+      // then skipped every turn after the first (owner dogfood; reproduced 2/2 in ai_chat.db, both
+      // second turns started by tapping a chip). systemPrompt.ts FOLLOWUP_SUGGESTIONS_GUIDANCE
+      // states the SAME scope; the two must never drift into contradicting rules.
       description:
         'Offer the user 2-3 short follow-up questions they are likely to ask next. Call this ' +
-        'exactly once, only AFTER your answer is fully complete (never mid-task, never before a ' +
-        'pending approval is resolved). The suggestions render as tappable chips in the UI — do ' +
-        'not repeat them in your reply text. This tool has no side effects and returns no data.',
+        'once per reply: every reply you finish ends with one call. Having called it on an ' +
+        'earlier turn of this conversation does not excuse this reply, and neither does the user ' +
+        'having started this turn by tapping one of your earlier suggestions — an adopted ' +
+        'suggestion is a new question, not a closed loop. Call it only AFTER your answer is ' +
+        'fully complete (never mid-task, never before a pending approval is resolved). The ' +
+        'suggestions render as tappable chips in the UI — do not repeat them in your reply ' +
+        'text. This tool has no side effects and returns no data.',
       inputSchema: suggestFollowupsSchema,
       run: async (input) => {
         // No side effects — clean once server-side so the persisted tool part already carries the

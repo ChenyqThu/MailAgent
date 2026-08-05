@@ -1,0 +1,20 @@
+{
+  "id": "AGT-FOLLOWUP-001",
+  "category": "search_read",
+  "title": "手打的第一轮：答毕必须调 suggest_followups 供 chips",
+  "surface": "general",
+  "user_prompt": "RRM 那个项目最后是延期还是按原计划？给我依据。",
+  "email_context": null,
+  "fixtures": { "emails": ["fx-email-001", "fx-email-002"], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["email_search_fulltext", "email_body", "suggest_followups"],
+  "allowed_support_tools": ["email_get", "email_list_thread", "email_list_filter"],
+  "must_use_tools": ["email_body", "suggest_followups"],
+  "forbidden_tools": ["email_prepare_send", "email_draft_reply", "email_send"],
+  "expected_evidence": [{ "type": "email", "id": 51201 }],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.35, "evidence_grounding": 0.3, "ux_clarity": 0.2, "tool_efficiency": 0.1, "uncertainty_honesty": 0.05 },
+  "rubric_ref": "search_read.md",
+  "notes": "AGT-FOLLOWUP-001/002 是一对，测的是同一件事的两半：follow-up chips 的供给义务是**每次回复一次**，不是整段会话一次。这条是第一半（手打的第一轮）——正常精读后回答，且答毕必须调 suggest_followups（R1）。第一轮本来就没回归过；它在这里的作用是给 002 提供「上一轮建议」的出处：002 的 user_prompt 必须逐字等于本条 trace 里 suggest_followups 输出的某一条（test_followups_coverage 断言这层耦合），否则 002 就不再是「点 chip 发起的续轮」。"
+}
