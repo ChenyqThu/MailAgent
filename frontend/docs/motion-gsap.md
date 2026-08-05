@@ -16,7 +16,7 @@ GSAP 在本项目的角色 = **在 §8 克制约束内把该有的动画做对**
 | 曲线 | 只用 `standard`（CustomEase `0.4,0,0.2,1`）。`gsap.defaults` 已设默认，组件不传 ease 即合规。禁散落 `power*` / 裸 cubic-bezier。进度条倒计时用 `ease:'none'`（线性，非 UI 曲线）。 |
 | spring 白名单 | 禁止业务代码内联 spring 参数；仅可从 `@shared/lib/motion-tokens` import 五个预设：`SPRING_PRESS`（按钮/可点击表面按压）、`SPRING_SWAP`（控件内部标签/图标切换）、`SPRING_PANEL`（显式召出的模态/抽屉）、`SPRING_LAYOUT`（pill/indicator/panel shared-layout 位移）、`SPRING_MOUSE`（magnetic/tilt/dock 装饰性鼠标跟随）。白名单外仍禁 spring / bounce / elastic / overshoot（ease 不含 `back/elastic/bounce`）、parallax、scroll-jacking、confetti、particle。 |
 | 淡入淡出 | 一律 `autoAlpha`（隐藏时自动 `visibility:hidden`，不挡点击），不用裸 `opacity`。 |
-| 虚拟列表 | `EmailList`（react-window v2）行内动画**只 transform/autoAlpha，绝不动 height**；tween 必随 unmount kill（用 `useGSAP({scope})`）。 |
+| 虚拟列表 | `EmailList`（react-window v2）行内动画**只 transform/autoAlpha，绝不动 height**；tween 必随 unmount kill（用 `useGSAP({scope})`，或像 `useThreadCollapseShift` 那样自持 tween 句柄在 cleanup effect 里显式 kill —— 命令式接管的行不由 React 渲染出来，套不上 scope）。🔴 **位移一律写独立 `translate` 属性，不写 `transform`**：react-window v2 把行定位写成 inline `transform: translateY(<scrollOffset>px)`，动 transform 会连定位一起冲掉；`translate` 是个别变换属性，先于 `transform` 应用、天然复合。两处消费：`thread-child-in` 展开入场（CSS）、`useThreadCollapseShift` 收起位移（JS，走 `setProperty('translate', …)` 而非驼峰赋值——驼峰别名在 happy-dom 里只挂成普通 JS 属性，样式根本没写进去）。 |
 | Radix 托管 | `ui/dialog` / `ui/select` / `ui/tooltip` 已用 `tailwindcss-animate`，**不叠加 GSAP**。`ui/tabs`/`switch`/`radio`/`slider` 无内置动画，可安全集成。 |
 | reduced-motion | macOS「减弱动态效果」下所有新动画归零/禁用（见 §3）。 |
 

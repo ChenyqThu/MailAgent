@@ -48,6 +48,8 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { useNewlyAddedIds } from '@shared/hooks/useNewlyAddedIds'
 import { usePinnedSync } from '@shared/hooks/usePinnedSync'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+import { useThreadCollapseShift } from '@shared/hooks/useThreadCollapseShift'
 import { gsap, DUR } from '@shared/lib/gsap'
 import type { AIPriority, EmailMeta, EnrichedEmailMeta, ListOpts } from '@shared/api/types'
 import { qk } from '@shared/lib/queryKeys'
@@ -690,6 +692,17 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   }, [rows, newIds])
   const getRowHeight = useCallback((index: number): number => rowHeights[index] ?? 28, [rowHeights])
 
+  // 收起线程时下方行的位移过渡 (方案 A, 2026-08)。收起前 captureCollapse() 记下
+  // First 帧几何, 收起提交后由该 hook 的 layout effect 做一次性 FLIP。展开路径**不**
+  // 调它 —— 那条已有下面的滚动锚定 tween, 叠加会双动。
+  const reduceMotion = useReducedMotion()
+  const { captureCollapse, isShiftingRef } = useThreadCollapseShift({
+    rows,
+    rowHeights,
+    listRef,
+    reduceMotion
+  })
+
   // 滚动锚定: 展开 B 时手风琴折叠上方长线程 A → B 及下方行整体上移, 但 react-window
   // 的 scrollTop 不变 → B 被挤出视口, 需手动往上滚才能看到. captureScrollAnchor 在
   // 展开前记下 B 母邮件行在视口的相对偏移, 下面 layout effect 在重排后用几何法
@@ -706,8 +719,14 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     [rows, rowHeights]
   )
   const handleToggleThread = useCallback(
-    (threadId: string): void => toggleThread(keyFor(threadId)),
-    [keyFor, toggleThread]
+    (threadId: string): void => {
+      const key = keyFor(threadId)
+      // 只有**用户显式收起**这一个方向做位移过渡。手风琴的隐式收起 (展开 B 顶掉 A)
+      // 走 handleExpandThread, 那条已有滚动锚定 tween; 两者叠加会双动。
+      if (expandedKey === key) captureCollapse()
+      toggleThread(key)
+    },
+    [keyFor, expandedKey, captureCollapse, toggleThread]
   )
   const handleExpandThread = useCallback(
     (threadId: string, headInternalId: number): void => {
@@ -812,13 +831,15 @@ export function useEmailListRows(): UseEmailListRowsReturn {
       // 不会看到 spinner / 列表抖动 / 回顶部.
       if (!showLoader) return
       // B3 — 平滑滚动锚定 tween 期间逐帧派发 scroll 事件, 不让经过靠底行误触发分页。
-      if (isAnchoringRef.current) return
+      // 收起位移 tween 同款屏蔽 (独立 ref: 两条 tween 各自管自己的闸, 合用一个会在
+      // 「收起中途又展开」时被对方的 onComplete 提前放开)。
+      if (isAnchoringRef.current || isShiftingRef.current) return
       const triggerAt = Math.min(Math.floor(rows.length * 0.7), rows.length - 8)
       if (range.stopIndex >= triggerAt) {
         setPageCount((c) => Math.min(c + 1, MAX_PAGES))
       }
     },
-    [rows.length, showLoader]
+    [rows.length, showLoader, isShiftingRef]
   )
 
   return {

@@ -1574,8 +1574,12 @@ body::before {
  * useEmailListRows 在 REVEAL_WINDOW_MS 后清掉。
  *
  * 收起不做退场: 行是被直接从数组里摘掉的, 要做退场就得让它们多留一会儿, 而行高
- * 前缀和正是滚动锚定的几何依据 (rowTopOfId), 留幽灵行会把锚定算歪。收起时的连续
- * 感由既有的 GSAP scrollTo 锚定 tween 提供。 */
+ * 前缀和正是滚动锚定 (rowTopOfId) 与 ⌘K 跳转定位的几何依据, 留幽灵行会把这两条链
+ * 一起算歪。收起时的连续感改由**下方行的位移过渡**提供 (方案 A, 2026-08):
+ * useThreadCollapseShift 在收起提交后做一次性手工 FLIP, 把「下方行瞬移 Σ子行高度」
+ * 补成 220ms 滑动 —— 同样只写独立 translate, 同样不碰 rows/rowHeights 真源。
+ * 🔴 那条既有的 GSAP scrollTo 锚定 tween **不覆盖直接收起**: 它由 captureScrollAnchor
+ * 驱动, 而收起路径 (handleToggleThread) 从不设 anchor, 判空即 return。 */
 @keyframes thread-child-in {
   from {
     opacity: 0;

@@ -21,6 +21,7 @@ import {
   applyMultiFilter,
   applyTab,
   categoryOf,
+  computeCollapseShifts,
   computeRowHeight,
   flattenGroups,
   groupBySentAnchor,
@@ -28,6 +29,7 @@ import {
   partitionByDate,
   partitionFlat,
   recipientIsMe,
+  rowIdentityKey,
   rowTopOfId,
   sortThreadGroups,
   startOfDay,
@@ -988,5 +990,159 @@ describe('rowTopOfId', () => {
       })
     ]
     expect(rowTopOfId(dupRows, [28, 60, 60, 60], 1)).toBe(28)
+  })
+})
+
+// ─── rowIdentityKey / computeCollapseShifts（收起位移过渡 · 方案 A 2026-08） ──
+
+describe('rowIdentityKey', () => {
+  test('header / loader 各有独立键（分组头也参与位移）', () => {
+    expect(
+      rowIdentityKey({ type: 'header', key: 'today', label: 'T', count: 1, collapsed: false })
+    ).toBe('h:today')
+    expect(rowIdentityKey({ type: 'loader' })).toBe('loader')
+  })
+
+  test('🔴 虚拟头与它的首个子行是同一个 internal_id —— 键必须带角色位区分', () => {
+    // flattenGroups 展开虚拟头时 members = [head, ...children]，所以最新那封会同时
+    // 以「虚拟头」和「首个子行」出现两行。键若只用 internal_id，收起差分会把这两行
+    // 混成一条，算出来的位移张冠李戴。
+    const head = emailRow(em({ internal_id: 1 }), {
+      thread: {
+        isHead: true,
+        threadId: 't1',
+        childCount: 1,
+        expanded: true,
+        agg: { memberIds: [1, 2], aggFlagged: false }
+      }
+    })
+    const child = emailRow(em({ internal_id: 1 }), {
+      thread: { isHead: false, threadId: 't1', childIndex: 0 }
+    })
+    expect(rowIdentityKey(head)).not.toBe(rowIdentityKey(child))
+  })
+
+  test('单封（无 thread）与线程头不同键；同一行两次调用稳定', () => {
+    const solo = emailRow(em({ internal_id: 7 }))
+    expect(rowIdentityKey(solo)).toBe(rowIdentityKey(emailRow(em({ internal_id: 7 }))))
+    expect(rowIdentityKey(solo)).not.toBe(
+      rowIdentityKey(
+        emailRow(em({ internal_id: 7 }), {
+          thread: { isHead: true, threadId: 't', childCount: 1, expanded: false }
+        })
+      )
+    )
+  })
+
+  test('同一封邮件落在不同分组桶 → 不同键（置顶区与日期区各自独立成行）', () => {
+    expect(rowIdentityKey(emailRow(em({ internal_id: 3 }), { groupKey: 'pinned' }))).not.toBe(
+      rowIdentityKey(emailRow(em({ internal_id: 3 }), { groupKey: 'today' }))
+    )
+  })
+})
+
+describe('computeCollapseShifts', () => {
+  // 展开态：header(28) / 虚拟头(60) / 子行 ×2(60) / 尾随单封(60)。
+  const HEAD = emailRow(em({ internal_id: 1 }), {
+    thread: {
+      isHead: true,
+      threadId: 't1',
+      childCount: 2,
+      expanded: true,
+      agg: { memberIds: [1, 2, 3], aggFlagged: false }
+    }
+  })
+  const HEAD_COLLAPSED = emailRow(em({ internal_id: 1 }), {
+    thread: {
+      isHead: true,
+      threadId: 't1',
+      childCount: 2,
+      expanded: false,
+      agg: { memberIds: [1, 2, 3], aggFlagged: false }
+    }
+  })
+  const CHILD_A = emailRow(em({ internal_id: 1 }), {
+    thread: { isHead: false, threadId: 't1', childIndex: 0 }
+  })
+  const CHILD_B = emailRow(em({ internal_id: 2 }), {
+    thread: { isHead: false, threadId: 't1', childIndex: 1 }
+  })
+  const TAIL = emailRow(em({ internal_id: 9 }))
+  const HEADER: ListRow = {
+    type: 'header',
+    key: 'today',
+    label: 'TODAY',
+    count: 1,
+    collapsed: false
+  }
+  const BEFORE_ROWS: ListRow[] = [HEADER, HEAD, CHILD_A, CHILD_B, TAIL]
+  const BEFORE_H = [28, 60, 60, 60, 60]
+  const AFTER_ROWS: ListRow[] = [HEADER, HEAD_COLLAPSED, TAIL]
+  const AFTER_H = [28, 60, 60]
+
+  test('收起点下方的行按被摘掉的总高度上移；上方与收起行本身不动', () => {
+    const shifts = computeCollapseShifts(
+      { rows: BEFORE_ROWS, heights: BEFORE_H, scrollTop: 0 },
+      { rows: AFTER_ROWS, heights: AFTER_H, scrollTop: 0 }
+    )
+    // 只有尾随行进 map —— header 与线程头前后 top 相同（dy=0 被 minDelta 滤掉）。
+    expect([...shifts.keys()]).toEqual([rowIdentityKey(TAIL)])
+    expect(shifts.get(rowIdentityKey(TAIL))).toBe(120) // 两个子行各 60
+  })
+
+  test('🔴 展开态的 chevron 状态变化不影响匹配（expanded 不进键）', () => {
+    // HEAD(expanded:true) → HEAD_COLLAPSED(expanded:false) 必须仍认作同一行，
+    // 否则线程头会被当成「新出现的行」而漏掉（或算出错误位移）。
+    const shifts = computeCollapseShifts(
+      { rows: BEFORE_ROWS, heights: BEFORE_H, scrollTop: 0 },
+      { rows: [HEADER, HEAD_COLLAPSED], heights: [28, 60], scrollTop: 0 }
+    )
+    expect(shifts.has(rowIdentityKey(HEAD_COLLAPSED))).toBe(false) // dy=0，不是「没匹配上」
+  })
+
+  test('被摘掉的子行不出现在结果里（不做退场，不留幽灵行）', () => {
+    const shifts = computeCollapseShifts(
+      { rows: BEFORE_ROWS, heights: BEFORE_H, scrollTop: 0 },
+      { rows: AFTER_ROWS, heights: AFTER_H, scrollTop: 0 }
+    )
+    expect(shifts.has(rowIdentityKey(CHILD_B))).toBe(false)
+  })
+
+  test('🔴 靠底部收起：scrollTop 被 clamp 时，位移按「视觉差」算', () => {
+    // 总高从 268 掉到 148，浏览器把 scrollTop 从 100 clamp 到 60（clamp 量 40）。
+    // 尾随行的内容差 120，但视觉上只跳了 120-40=80；上方的 header 反而**下移** 40。
+    const shifts = computeCollapseShifts(
+      { rows: BEFORE_ROWS, heights: BEFORE_H, scrollTop: 100 },
+      { rows: AFTER_ROWS, heights: AFTER_H, scrollTop: 60 }
+    )
+    expect(shifts.get(rowIdentityKey(TAIL))).toBe(80)
+    expect(shifts.get(rowIdentityKey(HEADER))).toBe(-40)
+  })
+
+  test('几何没变 → 空 map（调用方据此完全不起 tween）', () => {
+    expect(
+      computeCollapseShifts(
+        { rows: AFTER_ROWS, heights: AFTER_H, scrollTop: 0 },
+        { rows: AFTER_ROWS, heights: AFTER_H, scrollTop: 0 }
+      ).size
+    ).toBe(0)
+  })
+
+  test('after 里全新出现的行不参与（before 无对应项）', () => {
+    const fresh = emailRow(em({ internal_id: 77 }))
+    const shifts = computeCollapseShifts(
+      { rows: [HEADER, TAIL], heights: [28, 60], scrollTop: 0 },
+      { rows: [HEADER, fresh, TAIL], heights: [28, 60, 60], scrollTop: 0 }
+    )
+    expect(shifts.has(rowIdentityKey(fresh))).toBe(false)
+    expect(shifts.get(rowIdentityKey(TAIL))).toBe(-60) // 插了一行 → 下移
+  })
+
+  test('minDelta 亚像素抖动被滤掉（不为 0.3px 起一次 tween）', () => {
+    const shifts = computeCollapseShifts(
+      { rows: [TAIL], heights: [60], scrollTop: 0 },
+      { rows: [TAIL], heights: [60], scrollTop: 0.3 }
+    )
+    expect(shifts.size).toBe(0)
   })
 })

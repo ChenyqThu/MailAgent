@@ -112,6 +112,84 @@ export function rowTopOfId(
   return null
 }
 
+// ─── 收起位移过渡的几何差分（方案 A，2026-08） ─────────────────────────
+//
+// 线程收起 = 直接从 rows 数组里摘掉子行，react-window 立刻把下方每一行的
+// `transform: translateY(...)` 改小，视觉上整块瞬移。这里算出「每一行跳了多少」，
+// 由 useThreadCollapseShift 用一次性 tween 把这段位移补回去。
+//
+// 🔴 刻意**不**引入幽灵行：行高前缀和同时是手风琴锚定 (rowTopOfId) 与 ⌘K 跳转
+// 定位的几何依据，多留一行会把这两条链一起算歪。位移只写在已挂载行的
+// **独立 translate 属性**上，rows / rowHeights 真源一个字节不动。
+
+/** VirtualRow 外层 div 的行身份标记 —— 位移 tween 靠它在 DOM 里找回对应的行。
+ *  两侧（渲染 / 查询）都从这里取，别在任一侧手写字面量。 */
+export const ROW_KEY_ATTR = 'data-row-key'
+export const ROW_KEY_SELECTOR = `[${ROW_KEY_ATTR}]`
+
+/**
+ * 行的稳定身份键 —— 在收起前后两份 rows 数组之间匹配「同一行」。
+ *
+ * 🔴 必须带角色位：线程虚拟头展开时同一 internal_id 会出现**两行**（虚拟头 +
+ * 首个子行，见 flattenGroups 尾部），只用 internal_id 会把它俩混成一条，差分算出
+ * 来的位移就会张冠李戴。
+ */
+export function rowIdentityKey(r: ListRow): string {
+  if (r.type === 'header') return `h:${r.key}`
+  if (r.type === 'loader') return 'loader'
+  const role = r.thread === undefined ? 's' : r.thread.isHead ? 'H' : 'C'
+  return `e:${r.groupKey}:${r.email.internal_id}:${role}`
+}
+
+/** VirtualRow 外层 div 的身份属性（JSX 侧展开用，属性名单源）。 */
+export function rowKeyAttrs(r: ListRow): Record<string, string> {
+  return { [ROW_KEY_ATTR]: rowIdentityKey(r) }
+}
+
+/** 收起位移差分的一侧快照：rows / heights 同序，scrollTop 是该时刻滚动容器的值。 */
+export interface RowGeometrySnapshot {
+  rows: ReadonlyArray<ListRow>
+  heights: ReadonlyArray<number>
+  scrollTop: number
+}
+
+/**
+ * 线程收起的 FLIP 差分：对收起后**仍在 rows 里**的每一行算「旧视觉位置 − 新视觉
+ * 位置」（px）。正值 = 该行往上跳了，动画从 +dy 滑回 0。
+ *
+ * 视觉位置 = 内容坐标（rowHeights 前缀和，与 react-window 的 scrollOffset 同源）
+ * − scrollTop。🔴 减 scrollTop 不是多此一举：列表接近底部收起时总高度变矮，浏览器
+ * 会把 scrollTop clamp 回新的最大值，那一下 clamp 让**全部**行（含收起点上方的）
+ * 视觉上整体下移。用视觉差而非纯内容差，这一跳会被同一个 tween 顺带吸收；同时也
+ * 让「收起点上方的行不动」在无 clamp 时自然成立（前后 top 相等 → dy=0 → 被滤掉）。
+ *
+ * 收起时被摘掉的子行不出现在 after 里，自然不参与（不做退场，见 index.css 注释）。
+ */
+export function computeCollapseShifts(
+  before: RowGeometrySnapshot,
+  after: RowGeometrySnapshot,
+  minDelta = 0.5
+): Map<string, number> {
+  const beforeTops = new Map<string, number>()
+  let top = 0
+  for (let i = 0; i < before.rows.length; i++) {
+    beforeTops.set(rowIdentityKey(before.rows[i]!), top)
+    top += before.heights[i] ?? 0
+  }
+  const out = new Map<string, number>()
+  top = 0
+  for (let i = 0; i < after.rows.length; i++) {
+    const key = rowIdentityKey(after.rows[i]!)
+    const oldTop = beforeTops.get(key)
+    if (oldTop !== undefined) {
+      const dy = oldTop - before.scrollTop - (top - after.scrollTop)
+      if (Math.abs(dy) >= minDelta) out.set(key, dy)
+    }
+    top += after.heights[i] ?? 0
+  }
+  return out
+}
+
 /** 旗标三态判定 —— 与 EmailRow / useInboxActionShortcuts 同款推导（'已完成' 优先，
  *  一封「已完成」邮件的 is_flagged 已被写回 false，但历史行可能两者都为真）。 */
 export function isDone(e: EnrichedEmailMeta): boolean {
