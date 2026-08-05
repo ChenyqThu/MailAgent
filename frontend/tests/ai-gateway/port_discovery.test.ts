@@ -78,3 +78,47 @@ describe('flags — resolveAiGatewayBaseUrl (web same-origin proxy)', () => {
     expect(resolveAiGatewayBaseUrl()).toBeNull()
   })
 })
+
+describe('flags — sessionStorage stash (dev reload resilience)', () => {
+  // A vite forced full-reload racing a TanStack Router search rewrite can drop the
+  // boot-injected ?aiGatewayPort= mid-session (dev only). The stash written on the
+  // first successful read keeps the gateway reachable across that reload.
+  function makeStorage(): Pick<Storage, 'getItem' | 'setItem'> {
+    const m = new Map<string, string>()
+    return {
+      getItem: (k: string) => m.get(k) ?? null,
+      setItem: (k: string, v: string) => void m.set(k, v)
+    }
+  }
+
+  test('param read stashes the port; later param-less read falls back to the stash', () => {
+    const sessionStorage = makeStorage()
+    vi.stubGlobal('window', {
+      location: { search: '?apiPort=8200&aiGatewayPort=8300' },
+      sessionStorage
+    })
+    expect(resolveAiGatewayBaseUrl()).toBe('http://127.0.0.1:8300')
+    // Simulate the reload that lost the query params (same WebContents → same storage).
+    vi.stubGlobal('window', { location: { search: '?view=inbox' }, sessionStorage })
+    expect(resolveAiGatewayBaseUrl()).toBe('http://127.0.0.1:8300')
+  })
+
+  test('no param + empty stash (Electron) → still null (error face unchanged)', () => {
+    vi.stubGlobal('window', {
+      location: { search: '?view=inbox' },
+      sessionStorage: makeStorage()
+    })
+    expect(resolveAiGatewayBaseUrl()).toBeNull()
+  })
+
+  test('invalid param does not poison the stash', () => {
+    const sessionStorage = makeStorage()
+    vi.stubGlobal('window', {
+      location: { search: '?aiGatewayPort=abc' },
+      sessionStorage
+    })
+    expect(resolveAiGatewayBaseUrl()).toBeNull()
+    vi.stubGlobal('window', { location: { search: '' }, sessionStorage })
+    expect(resolveAiGatewayBaseUrl()).toBeNull()
+  })
+})

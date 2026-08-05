@@ -50,11 +50,33 @@ function isWebBuild(): boolean {
  *
  *  ⚠️ Consumers MUST null-check with `=== null` / `!= null`, NOT truthiness — `''` is a valid
  *  base (same-origin) but falsy. (`gatewayBaseUrl ?` / `!base` would wrongly reject web.) */
+
+/** sessionStorage stash of the boot-injected port. The query param is the source of truth,
+ *  but it can be lost mid-session in DEV: a vite forced full-reload (dep re-optimize) racing
+ *  a TanStack Router search rewrite reloads the page at a URL without `?aiGatewayPort=` →
+ *  without a stash the panel falls to the D7 unavailable face although the gateway is up.
+ *  sessionStorage is per-WebContents and survives same-origin reloads; the packaged app
+ *  never reloads so this is inert there. Popouts get the param re-injected by main and
+ *  refresh their own stash on first read. */
+const AI_GATEWAY_PORT_STASH_KEY = 'mailagent:aiGatewayPort'
+
 export function resolveAiGatewayBaseUrl(): string | null {
   try {
     const raw = new URLSearchParams(window.location.search).get('aiGatewayPort')
     const n = raw != null ? Number.parseInt(raw, 10) : NaN
-    if (Number.isFinite(n) && n > 0) return `http://127.0.0.1:${n}`
+    if (Number.isFinite(n) && n > 0) {
+      try {
+        window.sessionStorage.setItem(AI_GATEWAY_PORT_STASH_KEY, String(n))
+      } catch {
+        /* storage unavailable (rare) — param path still works this load */
+      }
+      return `http://127.0.0.1:${n}`
+    }
+    const stashed = Number.parseInt(
+      window.sessionStorage.getItem(AI_GATEWAY_PORT_STASH_KEY) ?? '',
+      10
+    )
+    if (Number.isFinite(stashed) && stashed > 0) return `http://127.0.0.1:${stashed}`
   } catch {
     /* non-renderer (no window) → fall through (no port param) */
   }
