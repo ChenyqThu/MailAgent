@@ -2,7 +2,8 @@
 // (Manual / Accept Edits / Bypass Permissions, Claude Code permission-mode 参照).
 //
 // One shared component, two visual variants (双 composer 落点):
-//   - 'icon' — 7×7 icon button, ThreadComposer's toolbar row (ComposerModelPicker 同款尺寸/弹层)
+//   - 'icon' — 7×7 icon button, ThreadComposer's toolbar row (ComposerModelPicker 同款尺寸；弹层
+//     锚定**不同** —— 本入口排在左组最后，left-0 会越界，改居中，见下方 role="menu" 处的算式)
 //   - 'chip' — rounded-full icon+label chip, AgentComposer's action row (AgentModelPicker 同款)
 // The remote web renders the same component (shared tree, zero fork).
 //
@@ -186,8 +187,14 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
         <div
           role="menu"
           aria-label={label}
+          // 🔴 08-04 WP6 修越界：本入口在邮件面是左组的**最后**一个控件（@ / + / 模型 / 思考 /
+          // 授权模式），触发器 x = 12(px-3) + 4×28 + 4×4 = 140；left-0 锚定时 248px 的弹层右缘
+          // = 388，而 360px 面板的可视右缘只有 348 —— 越界 40px（预存缺陷，check-WP2 实测）。
+          // 改成以触发器为中心：中心 x = 140 + 14 = 154，两侧各 124 → [30, 278]，两端都在内。
+          // （ConnectorQuickPanel 旧版同样的理由用过居中锚定；锚定方式跟触发器在行里的位置走。）
           className={cn(
-            'absolute bottom-full left-0 z-50 mb-1.5 w-[248px] rounded-[var(--r-ctl)] py-1',
+            'absolute bottom-full left-1/2 z-50 mb-1.5 w-[248px] -translate-x-1/2',
+            'rounded-[var(--r-ctl)] py-1',
             'glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
           )}
         >

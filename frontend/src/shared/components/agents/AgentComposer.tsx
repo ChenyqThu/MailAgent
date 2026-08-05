@@ -2,7 +2,10 @@
 //
 // Demo composer: a rounded shell on bg-ink-2 with a LexicalComposerInput on top (in-field @ mentions +
 // / commands via ComposerTriggerPopover, inline directive chips) and an inline action row below (left:
-// attach "+" → the SHARED ModelPicker chip; right: send / cancel as round buttons). 08-04 W8: the
+// the "+" menu → the SHARED ModelPicker chip; right: send / cancel as round buttons). 08-04 WP6: the
+// in-file AgentAttachmentButton (a "+" that opened the file picker directly) and the standalone
+// connector chip both moved into the shared ComposerPlusMenu — "+" is now a real menu (attachment /
+// connectors), identical on both composers. 08-04 W8: the
 // former in-file AgentModelPicker + ModelVendorIcon + vendorOf were folded into
 // @shared/assistant/components/ModelPicker — one component, both composers. No extended-
 // thinking toggle — the agent view follows the model automatically (AgentConversation sets thinkingActive
@@ -14,7 +17,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, FileText, ListTodo, Mail, PenLine, Plus, Search, Square } from 'lucide-react'
+import { ArrowUp, FileText, ListTodo, Mail, PenLine, Search, Square } from 'lucide-react'
 import {
   ComposerPrimitive,
   ThreadPrimitive,
@@ -28,7 +31,6 @@ import {
 } from '@assistant-ui/react'
 import { LexicalComposerInput } from '@assistant-ui/react-lexical'
 
-import { HoverTip } from '@shared/components/ui/HoverTip'
 import { BorderGlow } from '@shared/components/effects/BorderGlow'
 import type { SearchHit, SearchResult } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -38,7 +40,7 @@ import {
   type ChatComposerControls
 } from '@shared/assistant/components/composerControlsContext'
 import { ApprovalModePicker } from '@shared/assistant/components/ApprovalModePicker'
-import { ConnectorQuickPanel } from '@shared/assistant/components/ConnectorQuickPanel'
+import { ComposerPlusMenu } from '@shared/assistant/components/ComposerPlusMenu'
 import { ModelPicker } from '@shared/assistant/components/ModelPicker'
 
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
@@ -190,51 +192,6 @@ const SLASH_ICONS: Record<string, Unstable_IconComponent> = {
   todo: (props) => <ListTodo {...props} />
 }
 
-// ── attachment ("+") ─────────────────────────────────────────────────────────────
-// issue #61 Lane 3 (A2): picked files route through composer.addAttachment → the MailAgent
-// AttachmentAdapter (images → bounded file parts; text/binary → panel injectedContext path), the
-// same pipeline the paste/drop wiring below uses. The adapter owns failure toasts.
-function AgentAttachmentButton(): React.JSX.Element {
-  const { t } = useTranslation()
-  const aui = useAui()
-  const inputRef = useRef<HTMLInputElement>(null)
-  const onPick = async (files: FileList | null): Promise<void> => {
-    if (!files || files.length === 0) return
-    for (const file of Array.from(files)) {
-      await aui
-        .composer()
-        .addAttachment(file)
-        .catch(() => {
-          /* adapter add() already toasted */
-        })
-    }
-  }
-  return (
-    <>
-      <HoverTip text={t('chat.composer.attach')} side="top">
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          aria-label={t('chat.composer.attach')}
-          className="grid size-7 shrink-0 place-items-center rounded-full text-ink-fg-2 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
-        >
-          <Plus size={17} strokeWidth={2} />
-        </button>
-      </HoverTip>
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        hidden
-        onChange={(e) => {
-          void onPick(e.target.files)
-          e.target.value = ''
-        }}
-      />
-    </>
-  )
-}
-
 // ── attachment chip stack (mentions now live in-field as directive chips) ────────────────────────
 // issue #61 Lane 3 (A2): chips render from the assistant-ui COMPOSER state (the adapter's pending
 // attachments), so "+", paste and drop all get the same visible feedback. The chip itself is the
@@ -373,13 +330,13 @@ export function AgentComposer(): React.JSX.Element {
             />
             <div className="flex items-center justify-between gap-1 px-0.5">
               <div className="flex items-center gap-0.5">
-                {controls && <AgentAttachmentButton />}
+                {/* 08-04 WP6 — 「+」不再是「直开文件选择器」的伪装钮，而是真菜单：
+                    附件 + 外部连接（两面同一组件，见 ComposerPlusMenu 文件头）。 */}
+                {controls && <ComposerPlusMenu variant="chip" />}
                 {/* 08-04 W8 — 两个 composer 共用的模型选择器（chip variant）。 */}
                 {controls && <ModelPicker controls={controls} variant="chip" />}
                 {/* 07-16 — owner-global 授权模式切换 chip（Manual/Accept Edits/Bypass）。 */}
                 {controls && <ApprovalModePicker variant="chip" />}
-                {/* 08-03 — MCP 外部连接快捷面板（灰度 flag off / 零行时整个入口不渲染）。 */}
-                {controls && <ConnectorQuickPanel variant="chip" />}
               </div>
               <div className="flex items-center">
                 <ThreadPrimitive.If running={false}>

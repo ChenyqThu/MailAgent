@@ -9,15 +9,18 @@
 // panel-owned state via useChatComposerControls(). When no provider is mounted (controls === null —
 // the read-only notion-agent thread, or a bare test render) the toolbar shows only send/cancel,
 // byte-identical in behaviour to the Phase 01 text-only composer.
+//
+// 08-04 WP6: the toolbar's own Paperclip button + the standalone connector button are gone — both
+// live inside the shared ComposerPlusMenu ("+", 2nd control) now, so the left group is 5 controls:
+// @ / + / model / thinking / approval-mode.
 
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ArrowUp, AtSign, Brain, Paperclip, X } from 'lucide-react'
 import {
   AttachmentPrimitive,
   ComposerPrimitive,
   ThreadPrimitive,
-  useAui,
   useAuiState,
   type Attachment
 } from '@assistant-ui/react'
@@ -30,7 +33,7 @@ import { formatAttachmentSize } from '@shared/lib/chat-attachments'
 
 import { useChatComposerControls, type ChatComposerControls } from './composerControlsContext'
 import { ApprovalModePicker } from './ApprovalModePicker'
-import { ConnectorQuickPanel } from './ConnectorQuickPanel'
+import { ComposerPlusMenu } from './ComposerPlusMenu'
 import { ModelPicker } from './ModelPicker'
 
 const ICON_BTN =
@@ -115,54 +118,6 @@ function ComposerMentionButton({
         }}
       />
     </div>
-  )
-}
-
-/** C2-② attachment — Paperclip button + hidden file input. issue #61 Lane 3 (A2): each picked file
- *  now routes through composer.addAttachment → the MailAgent AttachmentAdapter (images → bounded
- *  file parts; text/binary → panel injectedContext path), the same pipeline paste + drop use. The
- *  adapter owns failure toasts — swallow the rethrow so one bad file doesn't stop the rest. */
-function ComposerAttachmentButton(): React.JSX.Element {
-  const { t } = useTranslation()
-  const aui = useAui()
-  const inputRef = useRef<HTMLInputElement>(null)
-  const onPick = async (files: FileList | null): Promise<void> => {
-    if (!files || files.length === 0) return
-    for (const file of Array.from(files)) {
-      await aui
-        .composer()
-        .addAttachment(file)
-        .catch(() => {
-          /* adapter add() already toasted */
-        })
-    }
-  }
-  return (
-    <>
-      <HoverTip text={t('chat.attachment.add', { defaultValue: 'Attach a file' })} side="top">
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          aria-label={t('chat.attachment.add', { defaultValue: 'Attach a file' })}
-          className={cn(
-            ICON_BTN,
-            'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg active:scale-[0.96]'
-          )}
-        >
-          <Paperclip size={13} strokeWidth={2} />
-        </button>
-      </HoverTip>
-      <input
-        ref={inputRef}
-        type="file"
-        multiple
-        hidden
-        onChange={(e) => {
-          void onPick(e.target.files)
-          e.target.value = ''
-        }}
-      />
-    </>
   )
 }
 
@@ -318,9 +273,10 @@ export function ThreadComposer(): React.JSX.Element {
       className="border-t border-[var(--hairline)] bg-ink-2"
     >
       {/* issue #61 Lane 3 (A2) — drag&drop lands files on the same adapter pipeline as paste /
-          paperclip. The primitive owns the drag handlers + a data-dragging attribute for the
-          highlight wash; the document-level fileDropGuard only blocks the file:// navigation
-          default and doesn't consume the drop. Layout classes moved off Root so the wash paints. */}
+          the "+" menu's attachment item. The primitive owns the drag handlers + a data-dragging
+          attribute for the highlight wash; the document-level fileDropGuard only blocks the
+          file:// navigation default and doesn't consume the drop. Layout classes moved off Root
+          so the wash paints. */}
       <ComposerPrimitive.AttachmentDropzone
         disabled={sendDisabled}
         className="flex flex-col gap-2 px-3 py-2.5 transition-colors duration-fast data-[dragging=true]:bg-coral/5"
@@ -343,15 +299,15 @@ export function ThreadComposer(): React.JSX.Element {
           {controls && (
             <>
               <ComposerMentionButton controls={controls} />
-              <ComposerAttachmentButton />
+              {/* 08-04 WP6 — 「+」菜单收编附件 + 外部连接（两面同一颗，见 ComposerPlusMenu
+                  文件头；工具条因此从 6 个平铺控件收敛到 5 个）。 */}
+              <ComposerPlusMenu variant="icon" />
               {/* 08-04 W8 — 两个 composer 共用的模型选择器（icon variant）。 */}
               <ModelPicker controls={controls} variant="icon" />
               <ComposerThinkingToggle controls={controls} />
               {/* 07-16 — owner-global 授权模式切换（Manual/Accept Edits/Bypass；backend 持久化，
                 双 composer + 远程 web 同组件）。 */}
               <ApprovalModePicker variant="icon" />
-              {/* 08-03 — MCP 外部连接快捷面板（灰度 flag off / 零行时整个入口不渲染）。 */}
-              <ConnectorQuickPanel variant="icon" />
             </>
           )}
           <div className="ml-auto flex items-center">

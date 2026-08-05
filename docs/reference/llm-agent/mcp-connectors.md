@@ -558,6 +558,13 @@ per-tool 三态 / per-agent grant）。
 per-agent 授权在 Custom Agent 抽屉的第七张「外部服务」能力卡。
 AI 页因此变长，配套加了右侧锚点导航（通用组件 `ui/section-anchor-nav.tsx` + `aiTabAnchors.ts`）。
 
+对话里的快捷入口（08-03 起）= 两个 composer 的「+」菜单 → 「外部连接」（08-04 WP6 把原来平铺
+在工具条上的独立 Blocks 圆钮收进「+」，两面同一个 `ComposerPlusMenu`；面板内容
+`ConnectorQuickContent` 逐字未变）。**只有开关 + 「管理」深链**，发起 OAuth 连接恒在设置页
+（回调走本机 loopback，远程点了只会静默超时）。Switch 直接写穿全局 `connector.setEnabled` ——
+它是全局位的镜像，不是第二套 per-conversation 状态；显隐判据（flag 未知按 off、零请求；零行不
+出该项）单源 `useConnectorQuickRows`。至少一个 connected+enabled 时「+」挂一颗 coral 角标点。
+
 ### SQL
 
 🔴 活库是 **userData** 那份，不是仓库 `data/`：

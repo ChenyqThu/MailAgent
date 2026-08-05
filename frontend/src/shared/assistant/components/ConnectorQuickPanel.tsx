@@ -1,9 +1,10 @@
 // 08-03 dogfood — composer 里的「外部连接」快捷面板（owner: 参考 lobechat，把外部工具放到
 // 对话框底部随时开关）。
 //
-// 一个共享组件，两个视觉变体（双 composer 落点，与 ApprovalModePicker 同款分工）：
-//   - 'icon' — 7×7 方角 icon 按钮，ThreadComposer 工具条（ComposerModelPicker 同尺寸/同弹层）
-//   - 'chip' — 7×7 圆形 icon 按钮，AgentComposer 动作行（AgentAttachmentButton 同款圆钮）
+// 🔴 08-04 WP6 起本文件只剩**面板内容**（行 + 审批提示），不再自带触发器：入口统一收编进两个
+// composer 的「+」菜单（`ComposerPlusMenu`），由它拿 `useConnectorQuickRows()` 的判据决定菜单
+// 里出不出「外部连接」项，点进去才挂载这里的内容。原来的 icon/chip 双触发器变体随之删除 ——
+// 一个功能两个入口（独立圆钮 + 「+」菜单）只会让人猜哪个是真的。
 // 远程 web 渲染同一棵树：开关走 serve-api，远程可用；**发起 OAuth 连接**不在这里（回调走本机
 // loopback，远程点了只会静默超时），故本面板只有「开/关 + 去管理」，连接入口恒在设置页。
 //
@@ -13,38 +14,32 @@
 // 覆盖：那需要一份会话级状态 + 一条把它送进 gateway 的通路，而 owner 要的是「随时开启调用」，
 // 全局位已经满足；先不造第二个事实来源。
 //
-// 🔴 显隐三态（PR5 刚修过「不看 flag 就打 409」的破口，这里不许重犯）：
-//   flag 未知/加载中 → **按 off 处理**（`flagEnabled !== true`），list 查询 `enabled:false`，
-//   一个 `/api/connector/*` 请求都不发；flag on 但零行 → 按钮不渲染（面板里什么都没有的入口
-//   是纯噪音）。只有 flag on **且**至少一行时才出按钮。
+// 🔴 显隐三态（flag 未知 → 按 off、零请求；flag on 但零行 → 无入口）搬去了
+// `@shared/hooks/useConnectorQuickRows`，判据与语义逐字未变，只是换了住处（菜单要在渲染项
+// 之前就知道结果）。
 //
-// 🔴 `useNavigate` 只在**展开后**的菜单里调用：两个 composer 在单测里常常没有 RouterProvider，
+// 🔴 `useNavigate` 只在**展开后**的内容里调用：两个 composer 在单测里常常没有 RouterProvider，
 // 而 TanStack 的 useNavigate 在无 router 时只是 console.warn + 返回一个调用即炸的回调。把它
-// 关在「用户点开了面板」之后，既不给既有测试添噪音，也不改变真实路径（真实树里恒有 router）。
+// 关在「用户点开了面板」之后（本组件挂载即代表展开），既不给既有测试添噪音，也不改变真实路径
+// （真实树里恒有 router）。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Blocks } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
-import { HoverTip } from '@shared/components/ui/HoverTip'
 import { Switch } from '@shared/components/ui/switch'
-import { fetchConnectorToolsEnabled } from '@shared/components/settings/custom-ai/shared'
 import { AI_TAB_ANCHOR_IDS } from '@shared/components/settings/aiTabAnchors'
 import type {
   ConnectorStatusValue,
   ConnectorSummary,
   ConnectorToolSummary
 } from '@shared/api/types'
-
-const ICON_BTN =
-  'grid h-7 w-7 place-items-center rounded-md transition-[color,background-color,transform] duration-fast'
 
 /** 状态点三档。文案侧复用设置页的 `settings.connectors.status.*` —— 值域完全相同，
  *  在 chat 下另起一套翻译就是第二处手抄（五个标签，改一处漏一处）。 */
@@ -167,16 +162,16 @@ function ConnectorQuickRow({
   )
 }
 
-/** 展开后的面板本体。单独一层的唯一理由：把 `useNavigate` 关在展开之后（见文件头）。 */
-function ConnectorQuickMenu({
+/** 面板内容：connector 行 + 审批提示。定位/材质由宿主（`ComposerPlusMenu` 的二级弹层）提供，
+ *  本组件只画内容 —— 挂载即代表「用户点开了」，`useNavigate` 就关在这一层（见文件头）。
+ *  `onClose` = 收起整个弹层（点「管理」跳走时用）。 */
+export function ConnectorQuickContent({
   rows,
-  label,
   onClose
 }: {
   rows: ConnectorSummary[]
-  label: string
   onClose(): void
-}): React.ReactElement {
+}): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
 
@@ -187,18 +182,7 @@ function ConnectorQuickMenu({
   }
 
   return (
-    <div
-      role="dialog"
-      aria-label={label}
-      // 🔴 居中锚定（而不是兄弟 picker 的 left-0）：本入口是左组的**最后**一个按钮，在 360px
-      // 宽的邮件 chat 面板里 left-0 会把 268px 的弹层顶出右边界；以触发器为中心两侧各 134px
-      // 则在两个 composer 里都落在可视区内。
-      className={cn(
-        'absolute bottom-full left-1/2 z-50 mb-1.5 w-[268px] -translate-x-1/2',
-        'rounded-[var(--r-ctl)] py-1',
-        'glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
-      )}
-    >
+    <>
       <div className="max-h-[280px] overflow-y-auto scrollbar-thin">
         {rows.map((c) => (
           <ConnectorQuickRow key={c.connector_id} connector={c} onManage={handleManage} />
@@ -208,100 +192,6 @@ function ConnectorQuickMenu({
       <p className="mt-1 border-t border-ink-border-soft px-3 pb-0.5 pt-1.5 text-micro leading-snug text-ink-fg-3">
         {t('chat.connectors.approvalHint')}
       </p>
-    </div>
-  )
-}
-
-export function ConnectorQuickPanel({
-  variant
-}: {
-  variant: 'icon' | 'chip'
-}): React.JSX.Element | null {
-  const { t } = useTranslation()
-  const api = useMailApi()
-  const [open, setOpen] = React.useState(false)
-  const ref = React.useRef<HTMLDivElement>(null)
-
-  const { data: flagEnabled } = useQuery<boolean>({
-    queryKey: qk.chat.config('connectorToolsEnabled'),
-    queryFn: fetchConnectorToolsEnabled,
-    staleTime: 30_000,
-    retry: false
-  })
-
-  const list = useQuery<ConnectorSummary[]>({
-    queryKey: qk.connectors(),
-    queryFn: () => api.connector.list(),
-    enabled: flagEnabled === true,
-    staleTime: 10_000,
-    retry: false
-  })
-
-  React.useEffect(() => {
-    if (!open) return undefined
-    const onDoc = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return (): void => {
-      document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-
-  const rows = list.data ?? []
-  // flag 未知/加载中/off，或一行都没有 → 入口不存在。
-  if (flagEnabled !== true || rows.length === 0) return null
-
-  const label = t('chat.connectors.label')
-  // 「现在有东西接着」的常驻信号：至少一个已连接且启用的 connector 就把入口染上强调色，
-  // 免得用户每次都要点开才知道 AI 手上有没有外部工具。
-  const anyActive = rows.some((c) => c.enabled && c.status === 'connected')
-  const highlighted = open || anyActive
-
-  const trigger =
-    variant === 'icon' ? (
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-label={label}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className={cn(
-          ICON_BTN,
-          highlighted
-            ? 'bg-coral/10 text-coral active:scale-[0.96]'
-            : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg active:scale-[0.96]'
-        )}
-      >
-        <Blocks size={13} strokeWidth={2} />
-      </button>
-    ) : (
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        aria-label={label}
-        aria-expanded={open}
-        aria-haspopup="dialog"
-        className={cn(
-          'grid size-7 shrink-0 place-items-center rounded-full transition-colors duration-fast',
-          highlighted ? 'bg-coral/10 text-coral' : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg'
-        )}
-      >
-        <Blocks size={16} strokeWidth={2} />
-      </button>
-    )
-
-  return (
-    <div className="relative" ref={ref}>
-      <HoverTip text={label} side="top">
-        {trigger}
-      </HoverTip>
-      {open && <ConnectorQuickMenu rows={rows} label={label} onClose={() => setOpen(false)} />}
-    </div>
+    </>
   )
 }

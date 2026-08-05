@@ -1297,7 +1297,8 @@
       "sending": "Sending",
       "cancel": "Cancel",
       "regenerate": "Regenerate",
-      "attach": "Attach file · ⌘O · text inlined, binary as metadata only",
+      "plus": "Add",
+      "back": "Back",
       "attachBlocked": "Attach context · pick an active email first",
       "attachReadFail": "Attachment read failed",
       "mention": "@-mention email context · ⌘⇧M",
@@ -1339,7 +1340,8 @@
       "toolCount": "{enabled}/{total} tools",
       "saved": "Updated \"{name}\"",
       "savedDetail": "Takes effect for the AI within ~30s",
-      "approvalHint": "Read tools run directly; write tools ask for your approval every time."
+      "approvalHint": "Read tools run directly; write tools ask for your approval every time.",
+      "activeHint": "Connectors active"
     },
     "draftReply": {
       "header": "Draft reply",

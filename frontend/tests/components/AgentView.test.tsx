@@ -160,7 +160,7 @@ describe('Agent view — demo-fidelity thread', () => {
     expect(screen.queryByLabelText(i18n.t('chat.composer.send'))).toBeNull()
   })
 
-  test('composer toolbar (with controls) shows the model picker + attachment', async () => {
+  test('composer toolbar (with controls) shows the model picker + "+" menu', async () => {
     // With controls, AgentComposer mounts AgentMentionButton → MentionPopover, which runs a useQuery
     // unconditionally → a QueryClientProvider is required (the search itself stays disabled while empty).
     const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
@@ -174,9 +174,10 @@ describe('Agent view — demo-fidelity thread', () => {
       </QueryClientProvider>
     )
     // model picker trigger shows the active model id (vendor icon is aria-hidden); @ is now in-field
-    // (lexical trigger popover), so there is no separate @ button — only attach + model picker remain.
+    // (lexical trigger popover), so there is no separate @ button — only the "+" menu (08-04 WP6:
+    // attachment + connectors live behind it) + model picker remain.
     await waitFor(() => expect(screen.getByText('claude-sonnet-4-6')).toBeTruthy())
-    expect(screen.getByLabelText(i18n.t('chat.composer.attach'))).toBeTruthy()
+    expect(screen.getByLabelText(i18n.t('chat.composer.plus'))).toBeTruthy()
   })
 })
 
