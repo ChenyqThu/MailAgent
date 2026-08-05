@@ -9,7 +9,8 @@
 > [`ai-sdk-gateway-architecture.md`](./ai-sdk-gateway-architecture.md)；connector 工具面见
 > [`mcp-connectors.md`](./mcp-connectors.md)（飞书里它们**全部开放**，见 §3）。
 
-`status: living` · `last-verified: 2026-08-04`（PR4 收尾，flag 仍默认 off，待 dogfood）
+`status: living` · `last-verified: 2026-08-04`（PR1-PR4 + `/model` 指令；owner dogfood 通过后
+flag 已 cutover 默认 `true`，见 §7）
 
 ---
 
@@ -245,7 +246,7 @@ IM 入口引入了两样此前不存在的东西——新的 **provenance**（�
 三条与别的设置区不同的取舍：
 
 1. 🔴 **flag off 时不隐身，如实显示「未启用」**。`ConnectorsSection` 在 flag off 时整区
-   `return null`；这里不。理由：`MAILAGENT_IM_FEISHU` 是**没有 UI 开关**的 env 灰度闸（双载体、
+   `return null`；这里不。理由：`MAILAGENT_IM_FEISHU` 是**没有 UI 开关**的 env 总闸（双载体、
    翻它要同时重启 serve 与 app），整区隐身 = 用户既不知道有这个功能、也不知道它为什么不工作。
    对应地 `/status` 与 `/approvals` **有意不挂 flag 门**（整区 409 只会让设置页显示「加载失败」）；
    `/pair` 挂门 409（没有 bot 在收消息时出码 = 出一个永远兑不掉的码）。
