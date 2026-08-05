@@ -1064,6 +1064,30 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     const method = req.method ?? 'GET'
     const path = url.split('?')[0]
 
+    // Loopback-only CORS on EVERY response, from one spot. Phase 06a attached
+    // corsHeadersFor to the SSE/chat writeHead sites but left the writeJson GET routes
+    // (/health, /api/ai/config, /api/ai/run/active, …) without ACAO — the packaged
+    // renderer tolerated that, but the DEV renderer (http://localhost:<vite>) is
+    // cross-origin to this loopback server and the browser blocks the read → the
+    // panel's health probe fails → spurious "engine unavailable" read-only face while
+    // the gateway is healthy. corsHeadersFor stays restrictive (a remote origin gets
+    // no ACAO), so reflecting here widens nothing; routes that already merge it just
+    // re-set identical values. Array-form headers (unused here) pass through untouched.
+    const cors = corsHeadersFor(req.headers.origin)
+    if (Object.keys(cors).length > 0) {
+      const origWriteHead = res.writeHead.bind(res)
+      res.writeHead = ((status: number, arg2?: unknown, arg3?: unknown) => {
+        if (typeof arg2 === 'string') {
+          return Array.isArray(arg3)
+            ? origWriteHead(status, arg2, arg3)
+            : origWriteHead(status, arg2, { ...cors, ...(arg3 as object | undefined) })
+        }
+        return Array.isArray(arg2)
+          ? origWriteHead(status, arg2)
+          : origWriteHead(status, { ...cors, ...(arg2 as object | undefined) })
+      }) as typeof res.writeHead
+    }
+
     if (method === 'OPTIONS') {
       res.writeHead(204, {
         ...corsHeadersFor(req.headers.origin),

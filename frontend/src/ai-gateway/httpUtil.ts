@@ -7,12 +7,14 @@
 
 import type { IncomingMessage, ServerResponse } from 'node:http'
 
-// Phase 06a (cutover) — the static ACAO '*' was dropped here; the SSE response headers now merge
-// corsHeadersFor(req.headers.origin) at writeHead time so a REMOTE cross-origin page can't read the
-// stream (architecture §13.8.5/§13.11.6/§13.12.7/§13.13.5). writeJson responses (/health, /config)
-// never carried an ACAO and stay that way — the Electron renderer (file:// → 'null' origin / dev →
-// loopback) reaches the loopback gateway without needing one. The same-machine loopback-token (the
-// CSRF defense vs a malicious local page) is the remote-web-surface phase's job; this is the Origin leg.
+// Phase 06a (cutover) — the static ACAO '*' was dropped here; corsHeadersFor(req.headers.origin)
+// reflects loopback/file/null origins only, so a REMOTE cross-origin page can't read a response
+// (architecture §13.8.5/§13.11.6/§13.12.7/§13.13.5). Since the chat-ui batch (2026-08) the SERVER
+// ENTRY (createAiGatewayServer) merges these headers into EVERY response — Phase 06a's original
+// "writeJson routes need no ACAO" assumption was wrong for the DEV renderer (http://localhost:<vite>
+// IS cross-origin to the loopback gateway; without ACAO the health probe fails and the panel shows a
+// spurious engine-unavailable face). The same-machine loopback-token (the CSRF defense vs a malicious
+// local page) is the remote-web-surface phase's job; this is the Origin leg.
 export const SSE_HEADERS = {
   'Content-Type': 'text/event-stream; charset=utf-8',
   'Cache-Control': 'no-cache, no-transform',
