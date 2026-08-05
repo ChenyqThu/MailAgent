@@ -10,6 +10,7 @@
   "scripts": {
     "format": "prettier --write .",
     "icon:fetch": "node scripts/fetch-animated-icon.mjs",
+    "catalog:models": "node scripts/sync-model-catalog.mjs",
     "lint": "eslint --cache .",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",

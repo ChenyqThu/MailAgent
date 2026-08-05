@@ -25,6 +25,7 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { Button } from '@shared/components/ui/button'
 import { Input } from '@shared/components/ui/input'
 import { Switch } from '@shared/components/ui/switch'
+import { AI_TAB_ANCHOR_SCROLL_MT, llmProviderAnchorId } from '../aiTabAnchors'
 
 import { ProviderModelsPanel } from './ProviderModelsPanel'
 
@@ -263,7 +264,9 @@ export function ProviderCard({
     : t('settings.providers.apiKey.unset')
 
   return (
-    <div className="px-4 py-3">
+    // 锚点 id：composer 模型选择器的组标题齿轮按 provider id 深链到这张卡（id 生成器是
+    // 单源 `llmProviderAnchorId`，两处别各拼各的）。scroll-mt 兜 sticky RestartBanner。
+    <div id={llmProviderAnchorId(provider.id)} className={cn('px-4 py-3', AI_TAB_ANCHOR_SCROLL_MT)}>
       {/* 折叠头 */}
       <div className="flex items-center gap-2.5">
         <button

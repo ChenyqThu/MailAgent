@@ -34,7 +34,10 @@ import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { Switch } from '@shared/components/ui/switch'
-import { AI_TAB_ANCHOR_IDS } from '@shared/components/settings/aiTabAnchors'
+import {
+  AI_TAB_ANCHOR_IDS,
+  scrollToAnchorWhenReady
+} from '@shared/components/settings/aiTabAnchors'
 import type {
   ConnectorStatusValue,
   ConnectorSummary,
@@ -57,23 +60,6 @@ const STATUS_LABEL_KEYS: Record<ConnectorStatusValue, string> = {
   needs_reauth: 'settings.connectors.status.needsReauth',
   error: 'settings.connectors.status.error',
   disconnected: 'settings.connectors.status.disconnected'
-}
-
-/** 设置页在**另一条路由**上，AiTab 要等这次导航之后才挂载 —— 所以不是「navigate 完就
- *  scrollIntoView」（那一刻目标元素还不存在，滚了个寂寞），而是有界地等它出现。找不到就安静
- *  放弃：用户此时已经在 AI tab 上，最坏是自己往下滚一屏，而不是留一个永不结束的轮询。 */
-function scrollToAnchorWhenReady(id: string, budgetMs = 2000): void {
-  if (typeof document === 'undefined' || typeof window === 'undefined') return
-  const deadline = Date.now() + budgetMs
-  const tick = (): void => {
-    const el = document.getElementById(id)
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
-      return
-    }
-    if (Date.now() < deadline) window.requestAnimationFrame(tick)
-  }
-  window.requestAnimationFrame(tick)
 }
 
 /** 一行 connector：状态点 + 名称 + 工具数 + 主开关 + 管理链接。

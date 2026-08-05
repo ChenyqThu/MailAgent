@@ -47,6 +47,40 @@ export const AI_TAB_ANCHOR_IDS = {
  *  64px 给了一档余量。 */
 export const AI_TAB_ANCHOR_SCROLL_MT = 'scroll-mt-16'
 
+/** 单个 provider 卡的锚点 id（比「模型服务」整区更精确的落点）。
+ *  🔴 两处消费：`ProviderCard` 的根元素挂它，composer 模型选择器的组标题齿轮跳它 —— 故
+ *  必须是函数不是字面量，否则第二处就是手抄（provider id 由用户自定义，值域无限）。
+ *  provider id 允许出现 CSS/id 里合法但选择器不友好的字符，这里只做 id 属性用（走
+ *  `getElementById`，不进 querySelector），无需转义。 */
+export function llmProviderAnchorId(providerId: string): string {
+  return `settings-ai-llm-provider-${providerId}`
+}
+
+/** 设置页在**另一条路由**上，AiTab 要等这次导航之后才挂载 —— 所以不是「navigate 完就
+ *  scrollIntoView」（那一刻目标元素还不存在，滚了个寂寞），而是有界地等它出现。
+ *
+ *  `fallbackId` 用于「精确落点可能不存在」的深链（如按 provider id 跳某张卡，而那个 provider
+ *  刚被删掉）：主目标等满预算仍没出现就退到它。都找不到就安静放弃 —— 用户此时已经在 AI tab
+ *  上，最坏是自己往下滚一屏，而不是留一个永不结束的轮询。 */
+export function scrollToAnchorWhenReady(id: string, fallbackId?: string, budgetMs = 2000): void {
+  if (typeof document === 'undefined' || typeof window === 'undefined') return
+  const deadline = Date.now() + budgetMs
+  const tick = (): void => {
+    const el = document.getElementById(id)
+    if (el) {
+      el.scrollIntoView({ behavior: 'smooth', block: 'start' })
+      return
+    }
+    if (Date.now() < deadline) {
+      window.requestAnimationFrame(tick)
+      return
+    }
+    const fallback = fallbackId ? document.getElementById(fallbackId) : null
+    fallback?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  }
+  window.requestAnimationFrame(tick)
+}
+
 /** 锚点条目（label 复用各区块自己的标题 key —— 导航文案与区块标题永远一致，不另起一套）。 */
 export function useAiTabAnchorItems(): SectionAnchorItem[] {
   const { t } = useTranslation()

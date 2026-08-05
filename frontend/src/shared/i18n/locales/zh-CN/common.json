@@ -1305,7 +1305,26 @@
       "mentionBlocked": "@提及 · 选中一封邮件后再使用",
       "model": "切换模型",
       "modelHint": "在 Backend selector 中切换模型 (Alt 行 chip)",
-      "modelMaxOutput": "最大输出 {tokens} tokens"
+      "modelContext": "上下文 {tokens} tokens",
+      "modelProviderSettings": "配置 {name}",
+      "modelCard": {
+        "limits": "长度限制",
+        "context": "上下文长度",
+        "maxOutput": "最大输出",
+        "abilities": "能力",
+        "capFiles": "附件",
+        "pricing": "定价",
+        "priceInput": "输入",
+        "priceOutput": "输出",
+        "priceCacheRead": "缓存读取",
+        "priceCacheWrite": "缓存写入",
+        "priceUnit": "单位：美元 / 百万 token",
+        "released": "发布",
+        "knowledge": "知识截止",
+        "deprecated": "已弃用",
+        "source": "元数据来自 models.dev · {provider}",
+        "inferred": "按 {id} 推断"
+      }
     },
     "approvalMode": {
       "label": "授权模式",

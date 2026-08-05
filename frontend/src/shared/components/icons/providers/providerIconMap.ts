@@ -17,21 +17,33 @@
 import type { LlmProviderProtocol } from '@shared/hooks/useLlmProviders'
 
 import {
+  AnthropicColorIcon,
   AnthropicIcon,
+  DeepSeekColorIcon,
   DeepSeekIcon,
+  DoubaoColorIcon,
   DoubaoIcon,
+  GeminiColorIcon,
   GeminiIcon,
   KimiIcon,
+  MiniMaxColorIcon,
   MiniMaxIcon,
   OpenAiIcon,
   OpenRouterIcon,
+  QwenColorIcon,
   QwenIcon,
+  SiliconCloudColorIcon,
   SiliconCloudIcon,
+  ZhipuColorIcon,
   ZhipuIcon,
   type ProviderIconProps
 } from './brandIcons'
 
 export type ProviderIconRender = (props: ProviderIconProps) => React.JSX.Element
+
+/** mono / color 两套资产。color 是默认（owner dogfood-3 明确要过彩色）；缺 color 变体的
+ *  三家（openai / openrouter / kimi，理由见 brandIcons.tsx 文件头）自动落回 mono。 */
+export type ProviderIconVariant = 'mono' | 'color'
 
 /** providerId（小写）→ logo。key 覆盖 settings/onboarding 两张模板表的全部内置 key，
  *  外加各家最常见的别名（用户改过 id 时还能中）。 */
@@ -56,6 +68,25 @@ export const PROVIDER_ICONS: Record<string, ProviderIconRender> = {
   siliconcloud: SiliconCloudIcon
 }
 
+/** 上表的 color 对应物。**只列真的有可用 color 资产的家** —— 查不到就自动落回 mono 表，
+ *  故这里缺席不是 bug（openai / openrouter / kimi 三家有意缺席，理由见 brandIcons.tsx）。 */
+export const PROVIDER_COLOR_ICONS: Record<string, ProviderIconRender> = {
+  anthropic: AnthropicColorIcon,
+  claude: AnthropicColorIcon,
+  'custom-anthropic': AnthropicColorIcon,
+  google: GeminiColorIcon,
+  gemini: GeminiColorIcon,
+  deepseek: DeepSeekColorIcon,
+  dashscope: QwenColorIcon,
+  qwen: QwenColorIcon,
+  zhipu: ZhipuColorIcon,
+  glm: ZhipuColorIcon,
+  minimax: MiniMaxColorIcon,
+  doubao: DoubaoColorIcon,
+  siliconflow: SiliconCloudColorIcon,
+  siliconcloud: SiliconCloudColorIcon
+}
+
 /** protocol → logo。`openai-compatible` 有意留空：它是「随便什么中转」的意思，
  *  贴 OpenAI 的 logo 会撒谎（背后可能是 Qwen/GLM/自建）→ 走 Cpu 兜底。 */
 export const PROTOCOL_ICONS: Partial<Record<LlmProviderProtocol, ProviderIconRender>> = {
@@ -66,15 +97,32 @@ export const PROTOCOL_ICONS: Partial<Record<LlmProviderProtocol, ProviderIconRen
   openrouter: OpenRouterIcon
 }
 
-/** 解析（纯函数，组件外可测）。命不中返回 null → 调用方渲染中性兜底。 */
+export const PROTOCOL_COLOR_ICONS: Partial<Record<LlmProviderProtocol, ProviderIconRender>> = {
+  anthropic: AnthropicColorIcon,
+  google: GeminiColorIcon,
+  deepseek: DeepSeekColorIcon
+}
+
+/** 解析（纯函数，组件外可测）。命不中返回 null → 调用方渲染中性兜底。
+ *
+ *  🔴 变体回退是**逐级**的：color 命中 → 用 color；color 缺席但 mono 命中 → 用 mono
+ *  （不是「整条链退回 mono」）。这样 openai 在彩色语境下仍出 OpenAI 单色标，而不是掉成 Cpu。 */
 export function resolveProviderIcon(
   providerId: string | null | undefined,
-  protocol?: LlmProviderProtocol | null
+  protocol?: LlmProviderProtocol | null,
+  variant: ProviderIconVariant = 'mono'
 ): ProviderIconRender | null {
   const id = (providerId ?? '').trim().toLowerCase()
-  const byId = id ? PROVIDER_ICONS[id] : undefined
-  if (byId) return byId
-  const byProtocol = protocol ? PROTOCOL_ICONS[protocol] : undefined
+  if (id) {
+    const byId =
+      variant === 'color' ? (PROVIDER_COLOR_ICONS[id] ?? PROVIDER_ICONS[id]) : PROVIDER_ICONS[id]
+    if (byId) return byId
+  }
+  if (!protocol) return null
+  const byProtocol =
+    variant === 'color'
+      ? (PROTOCOL_COLOR_ICONS[protocol] ?? PROTOCOL_ICONS[protocol])
+      : PROTOCOL_ICONS[protocol]
   return byProtocol ?? null
 }
 

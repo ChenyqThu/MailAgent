@@ -1305,7 +1305,26 @@
       "mentionBlocked": "@-mention · pick an active email first",
       "model": "Switch model",
       "modelHint": "Switch model in the Backend selector (Alt row chips)",
-      "modelMaxOutput": "Max output {tokens} tokens"
+      "modelContext": "Context {tokens} tokens",
+      "modelProviderSettings": "Configure {name}",
+      "modelCard": {
+        "limits": "Limits",
+        "context": "Context window",
+        "maxOutput": "Max output",
+        "abilities": "Capabilities",
+        "capFiles": "files",
+        "pricing": "Pricing",
+        "priceInput": "Input",
+        "priceOutput": "Output",
+        "priceCacheRead": "Cache read",
+        "priceCacheWrite": "Cache write",
+        "priceUnit": "USD per 1M tokens",
+        "released": "Released",
+        "knowledge": "Knowledge cutoff",
+        "deprecated": "Deprecated",
+        "source": "Metadata from models.dev · {provider}",
+        "inferred": "inferred from {id}"
+      }
     },
     "approvalMode": {
       "label": "Permission mode",

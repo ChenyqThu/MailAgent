@@ -10,7 +10,8 @@
 //   3. **分组只在多 provider 时出现**：单 provider（含 flag-off 的裸 id 场景）不摆组标题。
 //   4. **capabilities === null ≠ 全 false**：未标注不渲染任何 badge；显式 false 也不渲染；
 //      只有 true 才出。把「未知」画成「不支持」是撒谎。
-//   5. **maxOutput 药丸**：有值 → 64K；null → 整个药丸不存在。
+//   5. **上下文长度药丸**（08-05 起 —— 首版印的是 maxOutput「最大输出」，语义与参考产品不是
+//      一回事）：有值 → 200K/1M；null → 整个药丸不存在（不写 '?'、不写 0）。
 //   6. **孤儿当前值**：选中的模型已被 Settings 取消勾选时，仍作为一行出现并标「（未启用）」——
 //      否则菜单里一个 checked 都没有，用户看不出自己在用什么。
 //   7. **360px 不越界**（PRD 布局红线）。happy-dom 不排版（getBoundingClientRect 恒 0），所以
@@ -28,8 +29,21 @@ import { ModelPicker } from '@shared/assistant/components/ModelPicker'
 import { ThreadComposer } from '@shared/assistant/components/composer'
 import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
 import { AiSdkRuntimeProvider } from '@shared/assistant/runtime/AiSdkRuntimeProvider'
+import { AI_TAB_ANCHOR_IDS, llmProviderAnchorId } from '@shared/components/settings/aiTabAnchors'
 import type { ComposerModelOption } from '@shared/hooks/useComposerModels'
+import type { CatalogModelMeta } from '@shared/modelCatalog/lookup'
 import type { ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
+
+// 齿轮深链的两端各打一个桩：这些测试不挂 RouterProvider（挂了要连带把整棵路由树搬进来），
+// 而 scrollToAnchorWhenReady 是 rAF 轮询，在 happy-dom 里等它不划算 —— 断言「用什么参数调的」
+// 就够，函数本身的行为归它自己的实现。
+const navigateSpy = vi.fn()
+const scrollSpy = vi.fn()
+vi.mock('@tanstack/react-router', () => ({ useRouter: () => ({ navigate: navigateSpy }) }))
+vi.mock('@shared/components/settings/aiTabAnchors', async (orig) => ({
+  ...(await orig<typeof import('@shared/components/settings/aiTabAnchors')>()),
+  scrollToAnchorWhenReady: (...args: unknown[]) => scrollSpy(...args)
+}))
 
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN')
@@ -42,7 +56,10 @@ beforeAll(async () => {
     }
   }
 })
-afterEach(() => cleanup())
+afterEach(() => {
+  cleanup()
+  vi.clearAllMocks()
+})
 
 function option(over: Partial<ComposerModelOption> & { ref: string }): ComposerModelOption {
   const providerId = over.ref.includes(':') ? over.ref.split(':')[0] : 'default'
@@ -55,6 +72,28 @@ function option(over: Partial<ComposerModelOption> & { ref: string }): ComposerM
     displayName: modelId,
     capabilities: null,
     maxOutput: null,
+    contextWindow: null,
+    catalogMeta: null,
+    ...over
+  }
+}
+
+/** 目录命中的最小形状（hover 能力卡的输入）。 */
+function meta(over: Partial<CatalogModelMeta> = {}): CatalogModelMeta {
+  return {
+    displayName: 'Claude Sonnet 4.6',
+    description: '一句话描述',
+    contextWindow: 1_000_000,
+    maxOutput: 128_000,
+    capabilities: { tools: true, vision: true },
+    cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: null },
+    releasedAt: '2026-02-17',
+    knowledgeCutoff: '2025-08-31',
+    deprecated: false,
+    catalogProviderId: 'anthropic',
+    catalogProviderName: 'Anthropic',
+    match: 'exact',
+    matchedModelId: 'claude-sonnet-4-6',
     ...over
   }
 }
@@ -88,7 +127,9 @@ const TWO_PROVIDERS: ComposerModelOption[] = [
     protocol: 'anthropic',
     displayName: 'Claude Sonnet 4.6',
     capabilities: { tools: true, vision: true, reasoning: false },
-    maxOutput: 64000
+    maxOutput: 64000,
+    contextWindow: 1_000_000,
+    catalogMeta: meta()
   }),
   option({
     ref: 'openai:gpt-5.5',
@@ -96,7 +137,8 @@ const TWO_PROVIDERS: ComposerModelOption[] = [
     protocol: 'openai',
     displayName: 'GPT-5.5',
     capabilities: { tools: true },
-    maxOutput: 128000
+    maxOutput: 128000,
+    contextWindow: 400_000
   })
 ]
 
@@ -229,13 +271,19 @@ describe('ModelPicker — 能力 badge 与 maxOutput 药丸', () => {
     expect(screen.queryByLabelText(i18n.t('settings.providers.models.cap.reasoning'))).toBeNull()
   })
 
-  test('maxOutput 有值 → 药丸（64000 → 64K）；null → 无药丸', () => {
+  test('contextWindow 有值 → 药丸（200000 → 200K）；null → 无药丸（静默降级，不写 ? 不写 0）', () => {
     render(
       <ModelPicker
         controls={controlsFor(
           [
-            option({ ref: 'a:with', displayName: 'with', maxOutput: 64000 }),
-            option({ ref: 'a:without', displayName: 'without', maxOutput: null })
+            option({ ref: 'a:with', displayName: 'with', contextWindow: 200_000 }),
+            // 🔴 maxOutput 有值也不该冒出药丸 —— 药丸语义已改成上下文长度，两者不是一回事。
+            option({
+              ref: 'a:without',
+              displayName: 'without',
+              contextWindow: null,
+              maxOutput: 64000
+            })
           ],
           'a:with'
         )}
@@ -243,11 +291,29 @@ describe('ModelPicker — 能力 badge 与 maxOutput 药丸', () => {
       />
     )
     openMenu('icon')
-    expect(screen.getByText('64K')).toBeTruthy()
+    expect(screen.getByText('200K')).toBeTruthy()
     const withoutRow = screen
       .getAllByRole('menuitemradio')
       .find((r) => r.textContent?.includes('without'))
-    expect(withoutRow?.textContent).not.toMatch(/\d+K/)
+    expect(withoutRow?.textContent).not.toMatch(/\d+[KM]/)
+  })
+
+  test('1M 档不写成 1000K（owner 的 1_050_000 中转档保一位小数）', () => {
+    render(
+      <ModelPicker
+        controls={controlsFor(
+          [
+            option({ ref: 'a:m', displayName: 'm', contextWindow: 1_000_000 }),
+            option({ ref: 'a:relay', displayName: 'relay', contextWindow: 1_050_000 })
+          ],
+          'a:m'
+        )}
+        variant="icon"
+      />
+    )
+    openMenu('icon')
+    expect(screen.getByText('1M')).toBeTruthy()
+    expect(screen.getByText('1.1M')).toBeTruthy()
   })
 })
 
@@ -262,10 +328,15 @@ describe('ModelPicker — 孤儿当前值', () => {
     openMenu('chip')
     const rows = screen.getAllByRole('menuitemradio')
     expect(rows).toHaveLength(3)
-    const orphan = rows.find((r) => r.textContent?.includes('claude-opus-4-8'))
+    const notEnabled = i18n.t('settings.ai.enabledModels.notEnabled')
+    const orphan = rows.find((r) => r.textContent?.includes(notEnabled))
     expect(orphan).toBeTruthy()
     expect(orphan?.getAttribute('aria-checked')).toBe('true')
-    expect(orphan?.textContent).toContain(i18n.t('settings.ai.enabledModels.notEnabled'))
+    // 行内的完整 ref 仍在 title 上（displayName 可能已被目录换成人话全名 —— 孤儿走的是同一个
+    // 合成器，目录元数据照拿；否则「被取消勾选的当前模型」会莫名比别的行少一半信息）。
+    expect(orphan?.querySelector('[title]')?.getAttribute('title')).toBe(
+      'anthropic:claude-opus-4-8'
+    )
   })
 
   test('孤儿不影响启用列表本身（不会被当成第 3 个可选项算进分组标题）', () => {
@@ -278,6 +349,134 @@ describe('ModelPicker — 孤儿当前值', () => {
     openMenu('chip')
     // 孤儿归到 anthropic 组（同 providerId），不新开一个组。
     expect(screen.getAllByText('Anthropic')).toHaveLength(1)
+  })
+})
+
+describe('ModelPicker — hover 能力卡', () => {
+  test('hover 一行 → 出卡；卡里有全名/上下文/最大输出/能力/定价/来源', () => {
+    render(
+      <ModelPicker
+        controls={controlsFor(TWO_PROVIDERS, 'anthropic:claude-sonnet-4-6')}
+        variant="chip"
+      />
+    )
+    openMenu('chip')
+    expect(screen.queryByTestId('model-detail-card')).toBeNull()
+    const row = screen
+      .getAllByRole('menuitemradio')
+      .find((r) => r.textContent?.includes('Claude Sonnet 4.6'))!
+    fireEvent.mouseEnter(row)
+    const card = screen.getByTestId('model-detail-card')
+    expect(card.textContent).toContain('一句话描述')
+    expect(card.textContent).toContain(i18n.t('chat.composer.modelCard.context'))
+    expect(card.textContent).toContain('1M')
+    expect(card.textContent).toContain('128K')
+    expect(card.textContent).toContain(i18n.t('chat.composer.modelCard.pricing'))
+    expect(card.textContent).toContain('$3.00')
+    expect(card.textContent).toContain('$0.300')
+    expect(card.textContent).toContain('models.dev')
+    // 🔴 exact 命中**不许**带「按 X 推断」那句 —— 逐字命中是事实，加这句是给准确数据泼脏水
+    //（也是「注明来源」与「注明推断」两件事被写成一件时最容易出的错）。
+    expect(card.textContent).not.toContain(
+      i18n.t('chat.composer.modelCard.inferred', { id: 'claude-sonnet-4-6' })
+    )
+    // 🔴 卡不接受交互 —— 它 portal 在 body 上，能点就会被 picker 的 document.mousedown
+    // 当成「点了外面」，把整个选择器关掉。
+    expect(card.className).toContain('pointer-events-none')
+  })
+
+  test('🔴 目录未命中的行（catalogMeta=null）hover 不出卡（静默降级，不摆空卡）', () => {
+    render(
+      <ModelPicker
+        controls={controlsFor(TWO_PROVIDERS, 'anthropic:claude-sonnet-4-6')}
+        variant="chip"
+      />
+    )
+    openMenu('chip')
+    const row = screen
+      .getAllByRole('menuitemradio')
+      .find((r) => r.textContent?.includes('GPT-5.5'))!
+    fireEvent.mouseEnter(row)
+    expect(screen.queryByTestId('model-detail-card')).toBeNull()
+  })
+
+  test('🔴 normalized 命中要如实标「按 X 推断」（中转把档位写进 id 时数字是推断值）', () => {
+    render(
+      <ModelPicker
+        controls={controlsFor(
+          [
+            option({
+              ref: 'relay:claude-opus-5[1m]',
+              displayName: 'Claude Opus 5',
+              catalogMeta: meta({ match: 'normalized', matchedModelId: 'claude-opus-5' })
+            })
+          ],
+          'relay:claude-opus-5[1m]'
+        )}
+        variant="chip"
+      />
+    )
+    openMenu('chip')
+    fireEvent.mouseEnter(screen.getAllByRole('menuitemradio')[0])
+    expect(screen.getByTestId('model-detail-card').textContent).toContain(
+      i18n.t('chat.composer.modelCard.inferred', { id: 'claude-opus-5' })
+    )
+  })
+
+  test('弹层关闭时卡跟着消失（卡在 body 上，弹层没了它不会自己走）', () => {
+    render(
+      <ModelPicker
+        controls={controlsFor(TWO_PROVIDERS, 'anthropic:claude-sonnet-4-6')}
+        variant="chip"
+      />
+    )
+    openMenu('chip')
+    fireEvent.mouseEnter(
+      screen.getAllByRole('menuitemradio').find((r) => r.textContent?.includes('Sonnet'))!
+    )
+    expect(screen.getByTestId('model-detail-card')).toBeTruthy()
+    fireEvent.keyDown(document, { key: 'Escape' })
+    expect(screen.queryByTestId('model-detail-card')).toBeNull()
+  })
+})
+
+describe('ModelPicker — 组标题齿轮深链', () => {
+  test('点齿轮 → 跳设置-AI，并优先滚到这一家 provider 的卡（找不到才退到整区）', () => {
+    render(
+      <ModelPicker
+        controls={controlsFor(TWO_PROVIDERS, 'anthropic:claude-sonnet-4-6')}
+        variant="chip"
+      />
+    )
+    openMenu('chip')
+    fireEvent.click(
+      screen.getByLabelText(i18n.t('chat.composer.modelProviderSettings', { name: 'OpenAI' }))
+    )
+    expect(navigateSpy).toHaveBeenCalledWith({ to: '/settings', search: { tab: 'ai' } })
+    expect(scrollSpy).toHaveBeenCalledWith(
+      llmProviderAnchorId('openai'),
+      AI_TAB_ANCHOR_IDS.modelServices
+    )
+    // 跳走前先收起弹层（否则回到 chat 时它还开着）。
+    expect(screen.queryByRole('menu')).toBeNull()
+  })
+})
+
+describe('ModelPicker — 打开时滚到选中项', () => {
+  test('打开弹层 → 当前选中行 scrollIntoView（恒从顶部 = 用户每次自己找）', () => {
+    const seen: unknown[] = []
+    const orig = HTMLElement.prototype.scrollIntoView
+    HTMLElement.prototype.scrollIntoView = function (arg?: unknown) {
+      seen.push([(this as HTMLElement).textContent, arg])
+    } as typeof orig
+    try {
+      render(<ModelPicker controls={controlsFor(TWO_PROVIDERS, 'openai:gpt-5.5')} variant="chip" />)
+      openMenu('chip')
+      expect(seen).toHaveLength(1)
+      expect(String((seen[0] as [string])[0])).toContain('GPT-5.5')
+    } finally {
+      HTMLElement.prototype.scrollIntoView = orig
+    }
   })
 })
 

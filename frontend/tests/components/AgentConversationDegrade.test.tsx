@@ -22,8 +22,11 @@ vi.mock('@shared/components/email/TranslatedBody', () => ({
 
 // AgentConversation calls useNavigate at the top level — stub the router hook so the
 // test doesn't need a RouterProvider (same pattern as CommandPalette.test).
+// `useRouter` 是 ModelPicker（composer 里的模型选择器）用的：组标题齿轮要深链到设置-AI 的
+// 该 provider 卡。返回 null = 「这棵树没有 router」→ 齿轮整个不渲染（本测试不关心它）。
 vi.mock('@tanstack/react-router', () => ({
-  useNavigate: () => vi.fn()
+  useNavigate: () => vi.fn(),
+  useRouter: () => null
 }))
 
 const { stableMailApi } = vi.hoisted(() => {
