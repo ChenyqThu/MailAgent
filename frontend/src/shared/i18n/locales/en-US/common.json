@@ -1303,7 +1303,8 @@
       "mention": "@-mention email context · ⌘⇧M",
       "mentionBlocked": "@-mention · pick an active email first",
       "model": "Switch model",
-      "modelHint": "Switch model in the Backend selector (Alt row chips)"
+      "modelHint": "Switch model in the Backend selector (Alt row chips)",
+      "modelMaxOutput": "Max output {tokens} tokens"
     },
     "approvalMode": {
       "label": "Permission mode",

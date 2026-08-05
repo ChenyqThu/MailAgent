@@ -251,13 +251,21 @@ export function stripProviderPrefix(ref: string): string {
   return i > 0 ? ref.slice(i + 1) : ref
 }
 
+/** providerRef → providerId（`stripProviderPrefix` 的对偶）：第一个 ':' 之前的段；
+ *  裸 id / ':' 开头的畸形值 → default。**切分规则的单源** —— composer 的
+ *  `useComposerModels` 要在 query 之前先算「拉哪几个 provider」，也走这里，别再抄一份
+ *  （抄一份 = Settings 与 composer 的分组口径会各自漂移）。 */
+export function refProviderId(ref: string): string {
+  const i = ref.indexOf(':')
+  return i > 0 ? ref.slice(0, i) : DEFAULT_PROVIDER_ID
+}
+
 /** 按第一个 ':' 切分分组；裸 id → default 组。default 组恒排最前，其余按首现顺序。 */
 export function groupModelRefs(refs: string[]): ModelRefGroup[] {
   const order: string[] = []
   const byProvider = new Map<string, string[]>()
   for (const ref of refs) {
-    const i = ref.indexOf(':')
-    const pid = i > 0 ? ref.slice(0, i) : DEFAULT_PROVIDER_ID
+    const pid = refProviderId(ref)
     let bucket = byProvider.get(pid)
     if (!bucket) {
       bucket = []

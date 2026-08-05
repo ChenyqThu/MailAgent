@@ -6,7 +6,7 @@ import { createContext, useContext } from 'react'
 
 import type { SearchHit } from '@shared/api/types'
 import type { ChatAttachment } from '@shared/lib/chat-attachments'
-
+import type { ComposerModelOption } from '@shared/hooks/useComposerModels'
 
 export interface ChatComposerControls {
   // C1-① extended thinking. `supported` gates visibility (Claude-only); `enabled` is
@@ -14,10 +14,16 @@ export interface ChatComposerControls {
   thinkingSupported: boolean
   thinkingEnabled: boolean
   onToggleThinking: () => void
-  // C1-② model picker. `model` is the active id (null → backend default); availableModels
-  // is the enabled list (from /chat/config); onModelChange re-scopes the panel backend.
+  // C1-② model picker. `model` is the active providerRef (`providerId:modelId`; a bare legacy
+  // id means the 'default' provider — null → backend default); onModelChange re-scopes the panel
+  // backend with the SAME ref vocabulary (unchanged since C1-②).
+  //
+  // W8 (task 08-04) — availableModels 从 `string[]` 升为富对象数组：ref 之外还带 provider 归属
+  // 与 displayName / capabilities / maxOutput，供 ModelPicker 分组 + 徽标。构造单源 =
+  // `useComposerModels()`（enabledModels × /llm/providers 元数据），两个 panel 各调一次；
+  // 🔴 有意不留 `string[]` 兼容重载 —— 双轨正是两个 composer 当初漂移成两份的起点。
   model: string | null
-  availableModels: string[]
+  availableModels: ComposerModelOption[]
   onModelChange: (model: string) => void
   /** Disable the picker (e.g. a turn is streaming) — mirror of legacy modelPickerDisabled. */
   modelPickerDisabled: boolean
@@ -43,7 +49,6 @@ export interface ChatComposerControls {
 
 /** Provider 组件在 composerControls.tsx，故 context 对象需导出（仅这两个文件用）。 */
 export const ChatComposerControlsContext = createContext<ChatComposerControls | null>(null)
-
 
 /** Read the panel-supplied composer controls. null when no provider is mounted (the
  *  bare text-only composer path) — callers must handle null by hiding the extra chrome. */

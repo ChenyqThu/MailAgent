@@ -701,6 +701,23 @@ class ChatDb:
                 "UPDATE ai_chat_sessions SET title = ? WHERE id = ?", (title, session_id)
             )
 
+    def update_session_model(self, session_id: int, model: Optional[str]) -> None:
+        """W8 per-session 模型偏好（task 08-04 WP2）：把 composer 里刚选的模型写回该会话行。
+
+        ``ai_chat_sessions.backend_model`` 列与 chat_db.ts ``getOrCreateSession`` 的
+        refresh-on-touch 分支早就写好了，但**调用链触达不到**——renderer 只在建会话时传一次
+        backendModel，之后换模型只落 localStorage（全局一份，切会话不区分）。本方法是缺的那
+        一环：切模型 → 落该会话行 → 重开时回填（零 ALTER、零 CHAT_DB_VERSION bump）。
+
+        刻意**不** bump updated_at（同 title/archived/pinned/starred 纪律：换模型不该把会话
+        顶到历史列表最前）。改不存在的 id 是 no-op。``model=None`` = 清空（回落全局默认）。
+        """
+        with self._write_connection() as conn:
+            conn.execute(
+                "UPDATE ai_chat_sessions SET backend_model = ? WHERE id = ?",
+                (model, session_id),
+            )
+
     def update_session_archived(self, session_id: int, archived: bool) -> None:
         """设置 session 归档状态（软删）。镜像 chat_db.ts updateSessionArchived：刻意不 bump
         updated_at → 归档不重排历史列表。改不存在的 id 是 no-op（UPDATE 匹配 0 行）。"""

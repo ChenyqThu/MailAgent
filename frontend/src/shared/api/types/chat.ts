@@ -523,6 +523,16 @@ export interface ChatApi {
    * updated_at (same discipline as updateSessionTitle). Awaited so the caller can refresh.
    */
   updateSessionArchived(sessionId: number, archived: boolean): Promise<void>
+  /**
+   * W8 (task 08-04 WP2) — persist the composer's model pick onto THIS session
+   * (`ai_chat_sessions.backend_model`), so re-opening it later restores that model instead of the
+   * one global localStorage pref. PATCH /chat/sessions/{id}/model; value is the full providerRef
+   * (`providerId:modelId`; a bare legacy id = the 'default' provider), null clears it. Does NOT
+   * bump updated_at (same discipline as updateSessionTitle — switching models never reorders
+   * history). Best-effort UX face: NEVER throws (the local state switch already took effect; a
+   * failed persist only means the next re-open falls back to the global default).
+   */
+  updateSessionModel(sessionId: number, model: string | null): Promise<void>
   /** Pin/unpin without changing conversation recency. */
   updateSessionPinned(sessionId: number, pinned: boolean): Promise<void>
   /** Toggle the independent star marker without changing conversation recency. */

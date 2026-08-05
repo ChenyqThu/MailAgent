@@ -6,7 +6,7 @@
 // AI SDK runtime seeded with initialMessages (the same mount AgentConversation uses
 // for reload + the D6 read-only path) — the legacy ExternalStore runtime is deleted.
 // Asserts the demo layout renders: assistant prose + user message, the empty-state
-// welcome + centered composer + quick-action chips, the vendor-icon model picker /
+// welcome + centered composer + quick-action chips, the shared ModelPicker (chip variant) /
 // attachment toolbar (with controls), and readOnly composer suppression. The shared
 // MarkdownText is mocked to a plain div (its internals are covered by its own tests).
 
@@ -103,7 +103,18 @@ function stubControls(over: Partial<ChatComposerControls> = {}): ChatComposerCon
     thinkingEnabled: true,
     onToggleThinking: vi.fn(),
     model: 'claude-sonnet-4-6',
-    availableModels: ['claude-sonnet-4-6', 'gpt-4o', 'gemini-2.0-flash'],
+    // W8 (08-04) — availableModels 升成富对象数组；这里给「零元数据」形态（provider 表不可达时
+    // useComposerModels 就是这么退化的），确保 picker 在最贫瘠的输入下也照常渲染。
+    availableModels: ['claude-sonnet-4-6', 'gpt-4o', 'gemini-2.0-flash'].map((ref) => ({
+      ref,
+      providerId: 'default',
+      providerLabel: null,
+      protocol: null,
+      modelId: ref,
+      displayName: ref,
+      capabilities: null,
+      maxOutput: null
+    })),
     onModelChange: vi.fn(),
     modelPickerDisabled: false,
     mentions: [],

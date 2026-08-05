@@ -1178,6 +1178,51 @@ def test_update_session_pin_star_invalid_body_400(
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
+# ── W8 per-session 模型偏好（task 08-04 WP2）──────────────────────────────────────
+# composer 换模型 → PATCH /sessions/{id}/model → 重开该会话时回填。这是「切会话各自记得
+# 上次所选模型」的后端一半；前端一半在 frontend/tests/shared/useSessionModelPreference。
+
+
+def test_update_session_model_round_trip_without_reorder(chat_client: TestClient) -> None:
+    """写得进、读得出、**不 bump updated_at**（换模型不该把会话顶到历史最前）。"""
+    before = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
+    r = chat_client.patch(
+        f"/api/chat/sessions/{SESSION_ID}/model", json={"model": "openai:gpt-5.5"}
+    )
+    assert r.status_code == 200
+    assert r.json()["data"] == {"updated": True}
+    after = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
+    assert after["backend_model"] == "openai:gpt-5.5"
+    assert after["updated_at"] == before["updated_at"]
+    assert after["pinned_at"] == before["pinned_at"]
+
+
+def test_update_session_model_null_clears(chat_client: TestClient) -> None:
+    """model=null / '' → 清空该会话的偏好（回落全局默认），不是写字面 'null'。"""
+    chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/model", json={"model": "openai:gpt-5.5"})
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/model", json={"model": None})
+    assert r.status_code == 200
+    assert chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]["backend_model"] is None
+
+    chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/model", json={"model": "openai:gpt-5.5"})
+    chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/model", json={"model": ""})
+    assert chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]["backend_model"] is None
+
+
+def test_update_session_model_nonexistent_id_is_noop(chat_client: TestClient) -> None:
+    """改不存在的 id 是 no-op（对齐 title/archived 的 fire-and-forget 语义），仍 200。"""
+    r = chat_client.patch("/api/chat/sessions/99999/model", json={"model": "openai:gpt-5.5"})
+    assert r.status_code == 200
+    assert r.json()["data"] == {"updated": True}
+
+
+def test_update_session_model_invalid_body_400(chat_client: TestClient) -> None:
+    """model 既不是 str 也不是 null → E_INVALID_ARG（对齐 title 端点的类型校验）。"""
+    r = chat_client.patch(f"/api/chat/sessions/{SESSION_ID}/model", json={"model": 7})
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 # ── mark-read（harness-chat lane A B4，task 07-15，ai_chat.db v20）─────────────
 
 

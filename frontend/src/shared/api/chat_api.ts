@@ -97,6 +97,19 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       await request(baseUrl, 'PATCH', `/chat/sessions/${sessionId}/title`, { body: { title } })
     },
 
+    async updateSessionModel(sessionId: number, model: string | null): Promise<void> {
+      // W8 (task 08-04) per-session 模型偏好 → PATCH /chat/sessions/{id}/model
+      // (serve-api → src/chat/db.py update_session_model；不 bump updated_at → 不重排历史)。
+      // Best-effort: NEVER throws —— 换模型这一下的**主效果**是本地 state 立刻生效，落库只是
+      // 让下次重开这个会话还记得；serve-api 抖一下不该弹错误打断对话。
+      if (!Number.isInteger(sessionId) || sessionId < 0) return
+      try {
+        await request(baseUrl, 'PATCH', `/chat/sessions/${sessionId}/model`, { body: { model } })
+      } catch {
+        /* best-effort */
+      }
+    },
+
     async updateSessionArchived(sessionId: number, archived: boolean): Promise<void> {
       // dogfood-2 — soft-delete: PATCH /chat/sessions/{id}/archived (serve-api → src/chat/db.py;
       // no updated_at bump → no reorder). Awaited so the caller can refresh the history list.

@@ -712,6 +712,24 @@ async def update_session_read(request: Request, session_id: int):
     return success_envelope({"updated": True}, request=request, source="sqlite")
 
 
+@router.patch("/sessions/{session_id:int}/model", dependencies=[Depends(verify_cf_access)])
+async def update_session_model(
+    request: Request, session_id: int, body: Optional[Dict[str, Any]] = None
+):
+    """W8 per-session 模型偏好（task 08-04 WP2）：composer 换模型 → 落该会话的 backend_model。
+
+    body = {model: str | null}（null/'' = 清空，回落全局默认）。值是完整 providerRef
+    （``providerId:modelId``，裸 id = legacy default provider），与 /sessions/new 的
+    backendModel 同一词汇。刻意不 bump updated_at（换模型不重排历史，同 title/archived
+    纪律）。改不存在的 id 也返 {updated: True}。"""
+    opts = body or {}
+    model = opts.get("model")
+    if model is not None and not isinstance(model, str):
+        raise APIError("E_INVALID_ARG", "model requires model:str|null", source="sqlite")
+    get_chat_db().update_session_model(session_id, model or None)
+    return success_envelope({"updated": True}, request=request, source="sqlite")
+
+
 @router.patch("/sessions/{session_id:int}/archived", dependencies=[Depends(verify_cf_access)])
 async def update_session_archived(
     request: Request, session_id: int, body: Optional[Dict[str, Any]] = None

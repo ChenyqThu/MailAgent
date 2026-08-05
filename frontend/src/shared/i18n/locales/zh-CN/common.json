@@ -1303,7 +1303,8 @@
       "mention": "@提及邮件上下文 · ⌘⇧M",
       "mentionBlocked": "@提及 · 选中一封邮件后再使用",
       "model": "切换模型",
-      "modelHint": "在 Backend selector 中切换模型 (Alt 行 chip)"
+      "modelHint": "在 Backend selector 中切换模型 (Alt 行 chip)",
+      "modelMaxOutput": "最大输出 {tokens} tokens"
     },
     "approvalMode": {
       "label": "授权模式",

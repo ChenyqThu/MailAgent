@@ -25,7 +25,8 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
 import { type BackendChoice } from '@shared/components/chat/BackendSelector'
 import { backendSupportsThinking } from '@shared/components/chat/backend_thinking'
-import { useEnabledModels } from '@shared/hooks/useLlmModels'
+import { useComposerModels } from '@shared/hooks/useComposerModels'
+import { useSessionModelPreference } from '@shared/hooks/useSessionModelPreference'
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
 import {
   buildMentionContext,
@@ -52,26 +53,12 @@ import { AgentThread } from './AgentThread'
 import { AgentQuickActions } from './AgentQuickActions'
 import { AgentRecordConversation } from './AgentRecordView'
 
-// Shared model prefs (same localStorage keys as the email panel → one user preference across
-// both surfaces). Best-effort; a blocked localStorage falls back to the default.
-const CUSTOM_MODEL_PREF = 'mailagent.chat.customModel'
-const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
+// W8 (task 08-04 WP2) — the model pref moved into useSessionModelPreference (shared with the email
+// panel): PER-SESSION truth (ai_chat_sessions.backend_model) with the localStorage key demoted to
+// "default for a NEW conversation". The former local readModelPref/writeModelPref twins are gone.
+
 /** No-op for the removed thinking toggle — the agent view follows the model (see thinkingActive). */
 const NOOP = (): void => {}
-function readModelPref(): string {
-  try {
-    return localStorage.getItem(CUSTOM_MODEL_PREF) || DEFAULT_CUSTOM_MODEL
-  } catch {
-    return DEFAULT_CUSTOM_MODEL
-  }
-}
-function writeModelPref(model: string): void {
-  try {
-    localStorage.setItem(CUSTOM_MODEL_PREF, model)
-  } catch {
-    /* best-effort */
-  }
-}
 
 /** Momentary placeholder during a context-injection session switch (messages catching up to the
  *  active session) — neutral, since it renders OUTSIDE the runtime provider. */
@@ -150,11 +137,29 @@ export function AgentConversation({
   const useAiSdkRuntime = !isLegacySession && gatewayLive && !metadataPending
 
   // ── composer controls (model / thinking / @mention / attachments) ──────────
-  const [model, setModel] = useState(() => readModelPref())
-  const onModelChange = useCallback((m: string): void => {
-    writeModelPref(m)
-    setModel(m)
-  }, [])
+  // W8 — per-session model. `sessionModel` is THREE-valued on purpose: undefined while the row is
+  // still loading (never backfill from an unloaded row), null when the row predates the feature,
+  // string = this session's own pick. The unified-history `activeItem` is the freshest source for
+  // the session the parent just opened; chat.sessions covers the general-history rows.
+  const chatSessionRows = chat.sessions
+  const chatActiveSessionId = chat.activeSessionId
+  const sessionModel = useMemo<string | null | undefined>(() => {
+    if (chatActiveSessionId === null) return null
+    if (activeItem && activeItem.id === chatActiveSessionId) return activeItem.backend_model
+    const row = chatSessionRows.find((s) => s.id === chatActiveSessionId)
+    return row ? row.backend_model : undefined
+  }, [chatActiveSessionId, activeItem, chatSessionRows])
+  const persistSessionModel = useCallback(
+    (sid: number, m: string): void => {
+      void mailApi.chat.updateSessionModel(sid, m)
+    },
+    [mailApi]
+  )
+  const { model, selectModel: onModelChange } = useSessionModelPreference({
+    sessionId: chatActiveSessionId,
+    sessionModel,
+    persist: persistSessionModel
+  })
   const backendChoice = useMemo<BackendChoice>(
     () => ({ kind: 'ai-sdk', model, agentPageId: null }),
     [model]
@@ -163,7 +168,7 @@ export function AgentConversation({
   // automatically whenever the active model supports it (Claude); there is no UI toggle.
   const thinkingSupported = backendSupportsThinking(backendChoice)
   const thinkingActive = thinkingSupported
-  const { models: availableModels } = useEnabledModels()
+  const availableModels = useComposerModels()
 
   const [mentions, setMentions] = useState<SearchHit[]>([])
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
@@ -343,7 +348,6 @@ export function AgentConversation({
   const aiSdkRunningRef = useRef(false)
   const [aiSdkRunning, setAiSdkRunning] = useState(false)
   const chatReloadActiveSession = chat.reloadActiveSession
-  const chatActiveSessionId = chat.activeSessionId
   const chatRefreshGeneralSessions = chat.refreshSessions
   // Island/server-resume settles ('chat:session-updated') — this MANUAL surface never subscribed
   // before (research gap): an island-approved HITL turn resumed server-side left the open modal
@@ -486,7 +490,7 @@ export function AgentConversation({
     }
     if (gatewayBaseUrl == null) return
     // (W6 — follow-up chips no longer fetch here: they come from the turn's own suggest_followups
-    // tool part, extracted at the thread layer — see FollowupSuggestions.)
+    // tool part, extracted inside the assistant message that carries it — see FollowupSuggestions.)
     const { mode, model: titleModel } = readAutoTitleSettings()
     if (mode !== 'llm') return
     if (autoTitlePostedRef.current.has(sid)) return

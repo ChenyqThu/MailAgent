@@ -23,7 +23,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { History, Maximize2, Plus, Settings, Sparkles, X } from 'lucide-react'
 
-import type { SearchHit } from '@shared/api/types'
+import type { ChatBackendKind, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
@@ -36,7 +36,8 @@ import { BackendSelector, type BackendChoice } from '@shared/components/chat/Bac
 import { ChatHistoryPopover } from '@shared/components/chat/ChatHistoryPopover'
 import { ContextChips } from '@shared/components/chat/ContextChips'
 import { backendSupportsThinking } from '@shared/components/chat/backend_thinking'
-import { useEnabledModels } from '@shared/hooks/useLlmModels'
+import { useComposerModels } from '@shared/hooks/useComposerModels'
+import { useSessionModelPreference } from '@shared/hooks/useSessionModelPreference'
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
 import { buildMentionContext } from '@shared/lib/mention-context'
 import { useApprovalMode } from '@shared/lib/approvalMode'
@@ -49,9 +50,7 @@ import { useApprovalDecideBusy } from './useApprovalDecideBusy'
 import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
-import {
-  ChatComposerControlsProvider
-} from './components/composerControls'
+import { ChatComposerControlsProvider } from './components/composerControls'
 import type { ChatComposerControls } from './components/composerControlsContext'
 import { ReadOnlyTranscript } from './ReadOnlyTranscript'
 import { useChatContextChips } from './context/useChatContextChips'
@@ -59,24 +58,10 @@ import { useAgentContextSnapshot } from './context/useAgentContextSnapshot'
 import type { CapabilityContext, ContextScope } from './context/contextSnapshot'
 import { chatMessageToUIMessage } from './uiMessage'
 
-// Model pref (shared localStorage key with the agent view → one user preference
-// across surfaces). New conversations default to the user's last explicit pick.
-const CUSTOM_MODEL_PREF = 'mailagent.chat.customModel'
-const DEFAULT_CUSTOM_MODEL = 'claude-sonnet-4-6'
-function readModelPref(): string {
-  try {
-    return localStorage.getItem(CUSTOM_MODEL_PREF) || DEFAULT_CUSTOM_MODEL
-  } catch {
-    return DEFAULT_CUSTOM_MODEL
-  }
-}
-function writeModelPref(model: string): void {
-  try {
-    localStorage.setItem(CUSTOM_MODEL_PREF, model)
-  } catch {
-    /* ignore — pref persistence is best-effort */
-  }
-}
+// W8 (task 08-04 WP2) — the model pref moved into useSessionModelPreference: PER-SESSION truth
+// (ai_chat_sessions.backend_model) with the shared localStorage key demoted to "default for a NEW
+// conversation". The former local readModelPref/writeModelPref pair (byte-identical twins of the
+// agent view's) live there now, one copy for both surfaces.
 
 // composer-parity C1-① — extended-thinking toggle pref (localStorage contract:
 // '1'/'0'). Panel owns it; the composer toggle reads/writes via controls.
@@ -112,8 +97,6 @@ export function AIChatPanel({
   const mailApi = useMailApi()
   const activeInternalId = useActiveEmail((s) => s.activeInternalId)
 
-  const [model] = useState(() => readModelPref())
-
   // The embedded AI SDK Gateway path is live when its base URL was discovered
   // (?aiGatewayPort= loopback / same-origin web proxy). resolveAiGatewayBaseUrl
   // reads window.location.search once. S3 — the flag gates are gone: reachable
@@ -121,16 +104,13 @@ export function AIChatPanel({
   const gatewayBaseUrl = useMemo(() => resolveAiGatewayBaseUrl(), [])
   const aiSdkEnabled = gatewayBaseUrl !== null
 
-  // S3 W2 — new conversations are ALWAYS 'ai-sdk' (the only engine). The backend
+  // S3 W2 — new conversations are ALWAYS 'ai-sdk' (the only engine). The KIND
   // stays stateful only for the D6 read-only re-scope: opening an OLD legacy
   // session from history (pendingOpen carries its backend_kind) re-scopes the
   // panel onto that kind so its transcript renders read-only; "+New" returns here.
-  const [backend, setBackend] = useState<BackendChoice>(() => ({
-    kind: 'ai-sdk',
-    model,
-    agentPageId: null
-  }))
-  const selectBackend = useCallback((next: BackendChoice): void => setBackend(next), [])
+  // W8 — only the KIND is state now; the model half moved to useSessionModelPreference
+  // (per-session truth), and agentPageId was already a constant null on every write path.
+  const [backendKind, setBackendKind] = useState<ChatBackendKind>('ai-sdk')
 
   const sidebarOpen = useAIChatPanel((s) => s.sidebarOpen)
   const toggleSidebar = useAIChatPanel((s) => s.toggleSidebar)
@@ -141,11 +121,11 @@ export function AIChatPanel({
   const pendingOpen = useAIChatPanel((s) => s.pendingOpen)
   const consumePendingOpen = useAIChatPanel((s) => s.consumePendingOpen)
 
-  const chat = useEmailChat(activeInternalId, backend.kind)
+  const chat = useEmailChat(activeInternalId, backendKind)
   const ctx = useChatContextChips(activeInternalId)
 
   // D6 — a re-scoped legacy session renders read-only; live turns require 'ai-sdk'.
-  const isLegacySession = backend.kind !== 'ai-sdk'
+  const isLegacySession = backendKind !== 'ai-sdk'
 
   // composer-parity C1-①② — panel-owned extended-thinking + model state, surfaced to the assistant-ui
   // ThreadComposer (rendered inside the runtime provider) via ChatComposerControlsProvider below.
@@ -157,8 +137,6 @@ export function AIChatPanel({
       return next
     })
   }, [])
-  const thinkingSupported = backendSupportsThinking(backend)
-  const thinkingActive = thinkingSupported && thinkingEnabled
   // P1-2 (07-15 codex r1) — an in-panel approval decide runs the server-side resume synchronously
   // and holds that session's run lease; disable the composer for its duration (a send would 409).
   // codex r2 [E] — SESSION-scoped: only the deciding session's composer is fenced; switching to
@@ -168,14 +146,41 @@ export function AIChatPanel({
   )
   // PART 2 — auto-approval mode (Settings → AI), threaded into the ai-sdk runtime body.
   const approvalMode = useApprovalMode()
-  const { models: availableModels } = useEnabledModels()
-  const onModelChange = useCallback(
-    (m: string): void => {
-      writeModelPref(m)
-      selectBackend({ kind: backend.kind, model: m, agentPageId: backend.agentPageId })
+
+  // W8 — model state + persistence. `sessionModel` is deliberately THREE-valued: undefined while
+  // this email's session rows are still loading (never backfill from an unloaded row), null when
+  // the row exists but predates the feature, string = the session's own persisted pick.
+  const availableModels = useComposerModels()
+  const chatSessions = chat.sessions
+  const chatActiveSessionId = chat.activeSessionId
+  const sessionModel = useMemo<string | null | undefined>(() => {
+    if (chatActiveSessionId === null) return null
+    const row = chatSessions.find((s) => s.id === chatActiveSessionId)
+    return row ? row.backend_model : undefined
+  }, [chatActiveSessionId, chatSessions])
+  const persistSessionModel = useCallback(
+    (sid: number, m: string): void => {
+      void mailApi.chat.updateSessionModel(sid, m)
     },
-    [selectBackend, backend.kind, backend.agentPageId]
+    [mailApi]
   )
+  const { model, selectModel: onModelChange } = useSessionModelPreference({
+    sessionId: chatActiveSessionId,
+    sessionModel,
+    persist: persistSessionModel
+  })
+  // The BackendChoice shape the meta row / thinking probe / runtime still read. A legacy re-scope
+  // carries model:null (as before); agentPageId was already null on every write path.
+  const backend = useMemo<BackendChoice>(
+    () => ({
+      kind: backendKind,
+      model: backendKind === 'ai-sdk' ? model : null,
+      agentPageId: null
+    }),
+    [backendKind, model]
+  )
+  const thinkingSupported = backendSupportsThinking(backend)
+  const thinkingActive = thinkingSupported && thinkingEnabled
 
   // composer-parity C2 — @mention + attachment chips (panel-owned, surfaced via composerControls). The
   // mention body excerpts are resolved at SEND time; buildInjectedContext assembles the full prefix,
@@ -306,7 +311,6 @@ export function AIChatPanel({
   // background run).
   const [aiSdkRunning, setAiSdkRunning] = useState(false)
   const chatReloadActiveSession = chat.reloadActiveSession
-  const chatActiveSessionId = chat.activeSessionId
   useEffect(() => {
     // Single runtime (S3) — subscribe whenever the live ai-sdk path is the active surface (a D6
     // read-only legacy re-scope has no runtime to refresh). contextInjectionOn = !legacy && gateway.
@@ -371,9 +375,9 @@ export function AIChatPanel({
   }, [chatActiveSessionId, chat.messagesSessionId, mailApi, queryClientForRead])
 
   // ── old-session re-scope ────────────────────────────────────────────────────
-  // Alias the two chat members the pendingOpen effect reads so exhaustive-deps tracks each as a
-  // distinct identifier (multi-member access on the un-memoized `chat` collapses to "the whole chat").
-  const chatSessions = chat.sessions
+  // Alias the chat member the pendingOpen effect reads so exhaustive-deps tracks it as a distinct
+  // identifier (multi-member access on the un-memoized `chat` collapses to "the whole chat").
+  // `chatSessions` / `chatActiveSessionId` are hoisted next to the W8 model block above.
   const chatSelectSession = chat.selectSession
   // Global session-history row click → after the active email re-keyed + this email's sessions
   // loaded, select the exact target. If it's a different kind, switch first (re-scope) and bail; the
@@ -382,13 +386,9 @@ export function AIChatPanel({
   useEffect(() => {
     if (pendingOpen === null) return
     if (activeInternalId !== pendingOpen.emailId) return
-    if (backend.kind !== pendingOpen.backendKind) {
+    if (backendKind !== pendingOpen.backendKind) {
       // eslint-disable-next-line react-hooks/set-state-in-effect -- one-shot signal action, not derived
-      selectBackend({
-        kind: pendingOpen.backendKind,
-        model: pendingOpen.backendKind === 'ai-sdk' ? (backend.model ?? readModelPref()) : null,
-        agentPageId: null
-      })
+      setBackendKind(pendingOpen.backendKind)
       return
     }
     const loadedForThisEmail = chatSessions.some((s) => s.email_id === pendingOpen.emailId)
@@ -400,9 +400,7 @@ export function AIChatPanel({
   }, [
     pendingOpen,
     activeInternalId,
-    backend.kind,
-    backend.model,
-    selectBackend,
+    backendKind,
     chatSessions,
     chatSelectSession,
     consumePendingOpen
@@ -542,11 +540,9 @@ export function AIChatPanel({
   // "+New" — a fresh conversation is always ai-sdk; a legacy read-only re-scope
   // returns to the default kind here (D6).
   const handleNewSession = useCallback(() => {
-    if (backend.kind !== 'ai-sdk') {
-      selectBackend({ kind: 'ai-sdk', model: readModelPref(), agentPageId: null })
-    }
+    if (backendKind !== 'ai-sdk') setBackendKind('ai-sdk')
     chat.newSession()
-  }, [backend.kind, selectBackend, chat])
+  }, [backendKind, chat])
 
   const emptyMessages = (
     <div className="flex flex-1 items-center justify-center px-6 text-center text-aux text-ink-fg-2">

@@ -12,7 +12,7 @@
 
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, AtSign, Brain, Cpu, Paperclip, X } from 'lucide-react'
+import { ArrowUp, AtSign, Brain, Paperclip, X } from 'lucide-react'
 import {
   AttachmentPrimitive,
   ComposerPrimitive,
@@ -31,114 +31,10 @@ import { formatAttachmentSize } from '@shared/lib/chat-attachments'
 import { useChatComposerControls, type ChatComposerControls } from './composerControlsContext'
 import { ApprovalModePicker } from './ApprovalModePicker'
 import { ConnectorQuickPanel } from './ConnectorQuickPanel'
+import { ModelPicker } from './ModelPicker'
 
 const ICON_BTN =
   'grid h-7 w-7 place-items-center rounded-md transition-[color,background-color,transform] duration-fast'
-
-/** C1-② model picker — Cpu button + a glass popover of the enabled models (anchored above).
- *  Hidden when there are no models to pick or no onChange wired. Mirrors the legacy Composer Cpu
- *  picker (idiom + popover recipe); selection routes through controls.onModelChange (re-scopes the
- *  panel backend). Closes on outside-click / Escape / select. */
-function ComposerModelPicker({
-  controls
-}: {
-  controls: ChatComposerControls
-}): React.JSX.Element | null {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  const ref = useRef<HTMLDivElement>(null)
-  useEffect(() => {
-    if (!open) return undefined
-    const onDoc = (e: MouseEvent): void => {
-      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
-    }
-    const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setOpen(false)
-    }
-    document.addEventListener('mousedown', onDoc)
-    document.addEventListener('keydown', onKey)
-    return (): void => {
-      document.removeEventListener('mousedown', onDoc)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [open])
-  if (controls.availableModels.length === 0) return null
-  const disabled = controls.modelPickerDisabled
-  return (
-    <div className="relative" ref={ref}>
-      <HoverTip
-        text={
-          disabled
-            ? t('chat.composer.modelHint')
-            : `${t('chat.composer.model')} · ${controls.model ?? '—'}`
-        }
-        side="top"
-      >
-        <button
-          type="button"
-          disabled={disabled}
-          onClick={() => !disabled && setOpen((v) => !v)}
-          aria-label={t('chat.composer.model')}
-          aria-expanded={open}
-          aria-haspopup="menu"
-          tabIndex={disabled ? -1 : 0}
-          className={cn(
-            ICON_BTN,
-            disabled
-              ? 'cursor-not-allowed text-ink-fg-3 opacity-50'
-              : open
-                ? 'bg-coral/10 text-coral active:scale-[0.96]'
-                : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg active:scale-[0.96]'
-          )}
-        >
-          <Cpu size={13} strokeWidth={2} />
-        </button>
-      </HoverTip>
-      {open && (
-        <div
-          role="menu"
-          aria-label={t('chat.composer.model')}
-          className={cn(
-            // 主题 v3 C8/批 4: 紧凑菜单档 rounded-md(6) → --r-ctl(8)
-            'absolute bottom-full left-0 z-50 mb-1.5 min-w-[160px] rounded-[var(--r-ctl)] py-1',
-            'glass-pop shadow-[0_4px_12px_rgba(0,0,0,0.35)]'
-          )}
-        >
-          {controls.availableModels.map((m) => {
-            const active = m === controls.model
-            return (
-              <button
-                key={m}
-                type="button"
-                role="menuitemradio"
-                aria-checked={active}
-                onClick={() => {
-                  controls.onModelChange(m)
-                  setOpen(false)
-                }}
-                className={cn(
-                  'flex w-full items-center gap-2 whitespace-nowrap px-3 py-1.5 text-left text-meta font-mono',
-                  'transition-colors duration-fast',
-                  active
-                    ? 'bg-coral/10 text-coral'
-                    : 'text-ink-fg-1 hover:bg-ink-4 hover:text-ink-fg'
-                )}
-              >
-                <span
-                  className={cn(
-                    'h-1.5 w-1.5 shrink-0 rounded-full',
-                    active ? 'bg-coral/100' : 'bg-ink-fg-3'
-                  )}
-                />
-                {m}
-              </button>
-            )
-          })}
-        </div>
-      )}
-    </div>
-  )
-}
 
 /** C1-① extended-thinking toggle — Brain button (coral fill when on). Disabled (greyed, like legacy)
  *  when the active model can't do extended thinking (gpt / notion-agent) so a stale-ON never sends
@@ -448,7 +344,8 @@ export function ThreadComposer(): React.JSX.Element {
             <>
               <ComposerMentionButton controls={controls} />
               <ComposerAttachmentButton />
-              <ComposerModelPicker controls={controls} />
+              {/* 08-04 W8 — 两个 composer 共用的模型选择器（icon variant）。 */}
+              <ModelPicker controls={controls} variant="icon" />
               <ComposerThinkingToggle controls={controls} />
               {/* 07-16 — owner-global 授权模式切换（Manual/Accept Edits/Bypass；backend 持久化，
                 双 composer + 远程 web 同组件）。 */}
