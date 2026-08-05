@@ -5309,72 +5309,41 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   animation: chat-think-blink 1s steps(2) infinite;
 }
 
-/* ── Chat 流式正文 chunk 左→右 wipe（0804 dogfood 1c · 方案 C）──────────────
-   配对 shared/components/email/streamWipe.tsx：流式期新到句子被包进
-   .stream-wipe span，这里给它一次 mask-position 100%→0% 的左→右扫过。
+/* ── Chat 流式正文单推进头 reveal（0804 dogfood 1c 方案 C 质感 · 0805 换驱动为
+   单调游标，方案 B）─────────────────────────────────────────────────────────
+   配对 shared/components/email/streamWipe(.tsx / Plugin.ts)：流式期，unwrap 边界
+   之后的文本被包进 .stream-reveal span（默认 visibility:hidden —— 与旧版「到达即
+   占位、mask 未扫到处不可见」同一布局时序）；controller 用 rAF 推一个单调前进的
+   字符游标，任意时刻只有一个 span 是推进头（.stream-reveal-head），其 mask 由
+   --sw-p（0..1，JS 每帧写）驱动做左→右扫过；扫过的段固化为 .stream-reveal-done
+   （纯可见，无 mask 无动画）。
    要点（详见 motion-gsap.md §9.2）：
-   - mask 只写在 keyframes 里（fill 默认 none）→ 动画一结束 mask 整个消失，
-     不留常驻 mask/合成层；reduce 下 animation:none → mask 根本不存在，文本直出。
-   - 条带几何：mask-size 220% → 黑区 45.5%(=1.001×元素宽，保证 p=0 全亮)，
-     羽化到 51.4%（羽化带 ≈ 元素宽 13%，同选型 demo）；p=100% 时元素落在
-     透明区（51.4%×2.2=1.13 倍宽之后）→ 全隐。inline 元素的 mask 走
+   - 没有 keyframes：进度 = 游标位置的纯函数，动画数结构性 ≤ 1 ——
+     tests/shared/streamRevealInvariant.test.tsx 钉住（旧版 per-chunk keyframe 在
+     40-80 tok/s 下必然 2 个并发，正是「2 句话同时渲染淡出」的病根）。
+   - mask 只存在于推进头一个元素上：done/pending 均无 mask、无常驻合成层。
+   - 条带几何沿用方案 C 选型 demo：mask-size 220% → 黑区 45.5%(=1.001×元素宽，
+     p=1 全亮)，羽化到 51.4%（羽化带 ≈ 元素宽 13%）；p=0 时元素整体落在透明区
+     （51.4%×2.2=1.13 倍宽之后）→ 全隐。inline 元素的 mask 走
      box-decoration-break:slice 语义（假想未折行长条），折行天然按阅读顺序推进。
-   - a/b 双名交替由 rehype 插件按「新旧边界变化」翻转：React 会复用相邻两轮
-     同位置的 span（key 同为 span-N），动画名不变则不重启 —— 交替名强制重启。
-   - 时长/曲线贴 §1 三档：slow 380ms + standard（选型 demo 原参数 ~420ms/easeOutQuad，
-     取最近合规档，偏差 <10% 不可辨；authored keyframes 曲线先例 = phrase-in）。
    - 用关键字 black：mask 只有 alpha 有意义，非主题色，不走 token
      （同 chatAttachmentAdapter canvas matte / 已退役 W1 尾部渐变的先例）。 */
-.stream-wipe-a {
-  animation: stream-wipe-a 380ms cubic-bezier(0.4, 0, 0.2, 1);
+.stream-reveal {
+  visibility: hidden;
 }
-.stream-wipe-b {
-  animation: stream-wipe-b 380ms cubic-bezier(0.4, 0, 0.2, 1);
+.stream-reveal.stream-reveal-done {
+  visibility: visible;
 }
-@keyframes stream-wipe-a {
-  from {
-    -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-    mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-    -webkit-mask-size: 220% 100%;
-    mask-size: 220% 100%;
-    -webkit-mask-repeat: no-repeat;
-    mask-repeat: no-repeat;
-    -webkit-mask-position: 100% 0;
-    mask-position: 100% 0;
-  }
-  to {
-    -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-    mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-    -webkit-mask-size: 220% 100%;
-    mask-size: 220% 100%;
-    -webkit-mask-repeat: no-repeat;
-    mask-repeat: no-repeat;
-    -webkit-mask-position: 0% 0;
-    mask-position: 0% 0;
-  }
-}
-/* 与 -a 逐字节相同：存在的唯一理由是交替 animation-name 重启动画 */
-@keyframes stream-wipe-b {
-  from {
-    -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-    mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-    -webkit-mask-size: 220% 100%;
-    mask-size: 220% 100%;
-    -webkit-mask-repeat: no-repeat;
-    mask-repeat: no-repeat;
-    -webkit-mask-position: 100% 0;
-    mask-position: 100% 0;
-  }
-  to {
-    -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-    mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
-    -webkit-mask-size: 220% 100%;
-    mask-size: 220% 100%;
-    -webkit-mask-repeat: no-repeat;
-    mask-repeat: no-repeat;
-    -webkit-mask-position: 0% 0;
-    mask-position: 0% 0;
-  }
+.stream-reveal.stream-reveal-head {
+  visibility: visible;
+  -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+  mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+  -webkit-mask-size: 220% 100%;
+  mask-size: 220% 100%;
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
+  -webkit-mask-position: calc(100% - var(--sw-p, 0) * 100%) 0;
+  mask-position: calc(100% - var(--sw-p, 0) * 100%) 0;
 }
 
 /* ── Chat tool group (Cowork mode) — timeline hairline behind step icons ──
@@ -5767,8 +5736,9 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
 @media (prefers-reduced-motion: reduce) {
   .ef-input.invalid.ef-invalid-shake { animation: none; }
   .spin > *, .shimmer, .email-flash, .think-caret { animation: none !important; }
-  /* 流式 chunk wipe：mask 只存在于 keyframes 内，关掉动画 = mask 根本不建，文本直出。 */
-  .stream-wipe { animation: none !important; }
+  /* 流式单推进头 reveal：JS 层已按 reduce 短路（rehype 不包 span、游标不推）；这里
+     CSS 再兜底 —— 运行时切换到 reduce 时残留的 span 也强制直出（不是「冻在隐藏态」）。 */
+  .stream-reveal { visibility: visible !important; -webkit-mask-image: none !important; mask-image: none !important; }
   /* 字形流光 + phrase 轮播停帧：ShimmerText 在 reduce 下已渲染 shimmer-text-static
      （无 win/hi 层），此处再兜底关掉动画 + phrase enter（防 reduce 运行时切换残留）。 */
   .shimmer-text-win, .shimmer-text-hi, .thinking-phrases-item { animation: none !important; }

@@ -161,19 +161,23 @@ owner dogfood 反馈「轮播 shimmer 在流卡住/结束时不停 + 文案与�
 
 stall watchdog 纯前端（`useStallLevel`，15s/30s 两档），**不动 gateway**（不加 heartbeat）。轮播式 `ThinkingPhrases.tsx` 已随本轮删除（`PaletteThinkingPhrases` 仍在，服务 ⌘K 搜索，不受影响）。
 
-### 9.2 流式正文 chunk 左→右 wipe（0804 dogfood 1c · 方案 C，2026-08；取代 W1 尾部渐变 mask）
+### 9.2 流式正文单推进头 reveal（0804 dogfood 1c 方案 C 质感 · 0805 换驱动为单调游标[方案 B]；取代 per-chunk keyframe wipe 与更早的 W1 尾部渐变 mask）
 
-**技术手段登记：`mask-image` + keyframed `mask-position`。** §1 的「零 filter」红线（合成层内 filter 每帧重绘）**不覆盖 mask**。W1 的静态尾部渐变（整块正文底部 1.5em 恒挂渐隐）已退役 —— owner 反馈句间停顿时那条渐变「看起来永远像没渲染完」，且擦除方向与阅读顺序无关；本方案 = owner 从 5 候选 demo 里选定的 C（chunk 内左→右 reveal）。
+**技术手段登记：`mask-image` + rAF 驱动的 `mask-position`（CSS 变量 `--sw-p`，每帧只写推进头一个元素）。** §1 的「零 filter」红线（合成层内 filter 每帧重绘）**不覆盖 mask**。质感（chunk 内左→右 mask reveal）仍是 owner 从 5 候选 demo 里选定的方案 C；驱动机制 0805 重写。
+
+**为什么退役 per-chunk keyframe（0805 验尸，定量）**：旧驱动给每个新 chunk 起一个独立的 380ms 动画，但 380ms 与 chunk 到达间隔零耦合 —— 间隔由模型出字速度决定（实测 40-80 tok/s 下句间隔 162-259ms、smoothStream 排空循环突发 11ms），并发动画数 ≈ `ceil(380/间隔)` 恒 ≥ 2，正是 owner 报的「2 句话同时渲染淡出」；临界速率 ~29 tok/s，调时长/间隔只是挪临界点。新驱动把并发数**结构性钉死 ≤ 1**。更早的 W1 尾部渐变（整块正文底部 1.5em 恒挂渐隐）同样已退役（owner 反馈「永远像没渲染完」）。
 
 | 项 | 内容 |
 |---|---|
-| 位置 | 包裹层 `shared/components/email/streamWipe.tsx`（rehype 插件 + `StreamWipeBlock`，经 Streamdown `BlockComponent` prop 挂载，只在 `mode='streaming'` 生效）；动画 `index.css` 的 `.stream-wipe-a/-b` + 双 keyframes；接线 `TranslatedBody.tsx` |
-| 机制 | 网关按句吐 chunk（`chatRun.ts` `SENTENCE_CHUNKING_REGEX`）→ 每轮 render，rehype 插件用「已 commit 字符数」定位新旧边界，把**新流入的文本尾巴**包进 `.stream-wipe` span（按文本节点切，永不跨 markdown 结构；一句横跨加粗/链接时产出多个 span 并行扫）→ CSS 对该 span 做一次 `mask-position 100%→0%` 左→右扫过。边界协议复用 Streamdown 自家 animate 插件的 prev-length 协议，但换成按边界切分（上游 `sep:'word'` 在中文下整段 1 token、续写恒被判旧 → 零动效，W1 已验尸），并修了上游三坑：per-Block 插件实例 / 非破坏性计数读（useTransition 重放安全）/ a/b 双动画名交替强制重启（hast-util-to-jsx-runtime 的 `span-N` key 会让 React 复用相邻两轮的 span 元素，动画名不变则不重启）。细节见 streamWipe.tsx 头注释 |
-| 时长/曲线 | **slow 380ms + standard `cubic-bezier(0.4,0,0.2,1)`**（authored keyframes 曲线先例 = `phrase-in`）。选型 demo 的原参数是 ~420ms + easeOutQuad —— 落地取 §1 允许的最近档，不发明第四档；偏差 <10% 观感不可辨。羽化带 = 元素宽 13%（同 demo：mask-size 220%，黑区 45.5% → 透明 51.4%） |
-| 折行/块级边界 | inline span 的 mask 走 `box-decoration-break:slice` 语义（假想未折行长条）→ 折行**天然按阅读顺序**跨行推进，零 JS 几何。`code/pre/svg/math/annotation` 子树整棵跳过（不包不计数，镜像上游 skip 集；块级代码由 CodeBlock 从子树抽原文，塞 span 会弄脏抽取）→ 代码内容不 wipe、直接出现 |
-| 残留边界（红线） | **已完成消息零残留**：`mode='static'` 不挂 Block 组件 → 零 span 零 mask 零动画，与旧静态渲染逐字节一致。流式期 mask **只存在于 keyframes 内**（fill 默认 none）→ 动画一结束 mask 整个消失，**带 mask 的 span 任何时刻至多是最新 chunk 的 1-3 个**。旧 span 去向分两种（复核实测，streamWipe.test.tsx 钉住）：生长中的段落下一轮即解包成纯文本；表格单元格/已完成列表项因 Streamdown 子组件按「className+position」memo（比较器不看 children）跳过重渲，其 span **惰性留存**（动画已放完、无 mask、类名不变不重放、textContent/复制不受影响），每个已完成节点至多 1 个，settle 切 static 整树清空 —— 有界且仅存在于流式期。组件 remount（切走再切回仍在流式的会话）prev 归零 → 已有正文整体 wipe 一次，与上游 animate 的 remount 行为同款，接受 |
-| 性能边界 | 无 rAF / 无 JS 逐帧 / 无测量（进度纯 CSS 动画驱动）；每 chunk 新增 1-3 个 inline span（段落里旧的下一轮即解包；memo 保留的惰性 span 见上行，settle 全清）。**不要**把这套 rehype 包裹复制到列表行/非流式渲染面 —— 它只服务「单条正在生长的流式正文」 |
-| reduced-motion | `index.css` 末尾 reduce 汇总块 `.stream-wipe { animation: none !important; }` —— mask 只在 keyframes 里，关掉动画 = mask 根本不建，文本直出（不是「冻在半遮罩」）。纯 CSS 动画不经 GSAP，CSS @media 足够 |
+| 位置 | 引擎 `shared/components/email/streamWipePlugin.ts`（rehype 插件 + 消息级 controller + rAF 游标，纯逻辑零 React）；组件层 `streamWipe.tsx`（`createStreamRevealBlock`，经 Streamdown `BlockComponent` prop 挂载，只在 `mode='streaming'` 生效）；样式 `index.css` 的 `.stream-reveal(-head/-done)`；接线 `TranslatedBody.tsx` |
+| 机制 | 网关按句吐 chunk（`chatRun.ts` `SENTENCE_CHUNKING_REGEX`，节奏层不变）→ rehype 插件把「unwrap 边界之后」的文本包进 `.stream-reveal` span（默认 `visibility:hidden`，携带插件 id + 字符区间 data 属性；按文本节点切，永不跨 markdown 结构）→ controller 每次 commit 后 pre-paint 扫容器按 DOM 顺序排 pending 队列并对账三态（pending/head/done，同时治愈 React 复用元素残留的运行时 class）→ rAF 推**一个**单调前进的字符游标：队首段是唯一推进头，mask 位置 = 游标在段内进度的纯函数（`--sw-p`）；扫完固化 done、头移交下一段。游标速率 `max(80cps, backlog/0.4s)` —— 比模型快时贴 live edge（观感≈逐句扫，80cps ≈ owner 选的 demo 1.5x 档），比模型慢时按积压线性提速，滞后有上界、大段突发亚秒清空。上游坑修正：per-Block 插件实例 + 处理器缓存按插件名（唯一命名）沿用；**a/b 双动画名交替与 beginRender/commit 冻结协议已随 keyframe 驱动退役**（单调游标天然重放安全；元素复用残留由每 commit 对账治愈）。细节见 streamWipePlugin.ts 头注释 |
+| 核心不变量（红线） | 🔴 **任意时刻正在动的元素 ≤ 1**。判别式测试 `tests/shared/streamRevealInvariant.test.tsx` 对新旧两代实现都能跑（旧实现红：突发下 2-3 个并发 wipe span；本实现绿），回归到「每 chunk 一个动画」会当场红 |
+| 质感参数 | 羽化条带沿用方案 C demo：mask-size 220%，黑区 45.5% → 透明 51.4%（羽化带 ≈ 元素宽 13%）；`--sw-p` 0→1 映射 mask-position 100%→0%。速度改由**字符速率**表达（80cps 基速 ≈ 22 字句 275ms ≈ demo 1.5x 档的每句时长），段内线性 —— 连续游标没有「段尾」可 ease，easing 属于离散 one-shot 动画的词汇 |
+| 折行/块级边界 | inline span 的 mask 走 `box-decoration-break:slice` 语义（假想未折行长条）→ 折行**天然按阅读顺序**跨行推进，零 JS 几何。`code/pre/svg/math/annotation` 子树整棵跳过（不包不计数，镜像上游 skip 集；块级代码由 CodeBlock 从子树抽原文，塞 span 会弄脏抽取）→ 代码内容不参与动画、直接出现。切点永不落在 surrogate pair 中间（emoji 不会被拆成两个替换符） |
+| 残留边界（红线） | **已完成消息零残留**：`mode='static'` 不挂 Block 组件 → 零 span 零 mask 零动画。流式期 mask **只存在于推进头一个元素上**。旧 span 去向分两种（streamWipe.test.tsx 钉住）：生长中的段落在段完成（doneFloor 推进）后下一轮 render 解包成纯文本；表格单元格/已完成列表项因 Streamdown 子组件按「className+position」memo（比较器不看 children）跳过重渲，其 span **惰性留存**（done 态：可见、无 mask、无动画、textContent/复制不受影响），settle 切 static 整树清空 —— 有界且仅存在于流式期。组件 remount（切走再切回仍在流式的会话）游标归零 → 已有正文从头重扫一次，与旧版同款，接受。streaming 结束切 static 时未扫完的尾巴直接定稿（≈0.4s 扫量的积压上界），与旧版「settle 杀掉进行中动画」同类 |
+| 性能边界 | 有 rAF，但每帧只写**一个**元素的**一个** CSS 变量：零测量、零布局读，mask 是 paint-only，无 layout thrash；扫描只在 commit 后跑一次（transformer dirty 标志合并，act/flushSync 多 commit 同任务也安全）。pending 段数有界（≈积压上界 + memo 惰性 done 段）。**不要**把这套 rehype 包裹复制到列表行/非流式渲染面 —— 它只服务「单条正在生长的流式正文」 |
+| reduced-motion | 双层：JS 侧 rehype 直接不包 span、游标一帧内清空（运行时切换也收敛）；CSS 侧 `index.css` 末尾 reduce 汇总块 `.stream-reveal { visibility: visible !important; mask none }` 兜底强制直出（不是「冻在隐藏态」）。不经 GSAP |
+| 上游更正（0805） | 旧注释「Streamdown 上游 animate 对中文失效」是**过度概括**：失效只发生在默认档 `sep:'word'`；`sep:'char'` 处理中文完全正常（26 码点 → 26 token，实测）。仍不用上游 animate 的真实理由 = 每字一个带 inline style 的 span（长回复 DOM 上千、每轮 rehype run 全量重建）+ stagger 索引每轮从 0 重置（连续渲染级联仍叠加）。`streamWipePlugin.ts` 与 `chatRun.ts` 头注释已同步更正 |
 
 ## 10. motion 与 GSAP 职责分工（2026-06 引入 `motion`）
 

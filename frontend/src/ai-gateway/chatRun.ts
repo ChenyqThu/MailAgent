@@ -68,10 +68,13 @@ export const INTERNAL_TOOL_STEP_SENTINEL = 10_000
 // ── W1 节奏层 —— 流式分块粒度（chat UI 优化 epic，2026-08）─────────────────────────────
 //
 // 病根：此前 `chunking: /[一-鿿]|\S+\s+/` 让中文**逐字**出流，是配合前端 Streamdown 的
-// per-token fadeIn 设计的；但前端那半从未生效（Streamdown 的 word 切分器按「当前字符是否
-// 空白」布尔翻转来切段，中文无空格 → 恒不翻转 → 纯中文整段只切出 1 个 token → 零动效）。
-// owner 拍板「要一段一段地呈现，逐字太跳跃」，故节奏层上移到句粒度，逐 token 的质感层
-// 换成前端正文尾部的渐变 mask（见 shared/components/email/TranslatedBody.tsx）。
+// per-token fadeIn 设计的；但前端那半从未生效 —— 我们用的是 animate 插件**默认档**
+// `sep:'word'`（按「当前字符是否空白」布尔翻转切段，中文无空格 → 整段 1 token → 零动效）。
+// 0805 调研更正：上游另有 `sep:'char'` 档按 code point 迭代、处理中文完全正常，坑是
+// **默认值不是能力**；仍不用上游 animate 的真实理由 = 每字一个带 inline style 的 span
+// 会让长回复 DOM 上千且每轮 rehype run 全量重建 + stagger 索引每轮从 0 重置、连续渲染的
+// 级联仍会叠加。owner 拍板「要一段一段地呈现，逐字太跳跃」，故节奏层上移到句粒度，
+// 质感层由前端自研（现为单推进头 reveal，见 shared/components/email/streamWipePlugin.ts）。
 //
 // 曾以 env `MAILAGENT_STREAM_CHUNKING` 三档（line/sentence/cjk-word）供 owner 实机比对；
 // 0804 dogfood 定档 sentence，WP8 收敛为常量并删掉 env 分支（line/cjk-word 两档未采纳）。
