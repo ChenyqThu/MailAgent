@@ -60,6 +60,18 @@ function isWebBuild(): boolean {
  *  refresh their own stash on first read. */
 const AI_GATEWAY_PORT_STASH_KEY = 'mailagent:aiGatewayPort'
 
+/** Eager boot capture — call from the renderer ENTRY (main.tsx, alongside
+ *  bootPopoutModeFromQuery), BEFORE the router can rewrite the URL. The chat surfaces mount
+ *  lazily, so a lazy-only stash has a hole: navigate to a route that clears the boot query
+ *  params (/sessions) before ANY surface ever read the port → stash never written → the
+ *  panel shows the unavailable read-only face although the gateway is up (2026-08-04 dev
+ *  acceptance, reproduced in-browser). Reuses resolveAiGatewayBaseUrl's param→stash write;
+ *  no-op when the param is absent (web build / already-stripped reload, where the existing
+ *  stash — if any — must be preserved, not cleared). */
+export function captureAiGatewayPortAtBoot(): void {
+  void resolveAiGatewayBaseUrl()
+}
+
 export function resolveAiGatewayBaseUrl(): string | null {
   try {
     const raw = new URLSearchParams(window.location.search).get('aiGatewayPort')

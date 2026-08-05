@@ -9,6 +9,7 @@ import { createRoot } from 'react-dom/client'
 // reads `?popout=1&email=N` from window.location.search and sets the
 // store synchronously; App.tsx subscribes via useSyncExternalStore in
 // the next tick.
+import { captureAiGatewayPortAtBoot } from '@shared/assistant/runtime/flags'
 import { bootPopoutModeFromQuery } from '@shared/state/popout-mode'
 
 import App from './App'
@@ -16,6 +17,9 @@ import { OnboardingErrorBoundary } from './onboarding/ErrorBoundary'
 import OnboardingRoot from './onboarding/OnboardingRoot'
 
 bootPopoutModeFromQuery()
+// 启动即把 ?aiGatewayPort= 存进 sessionStorage —— chat 面板懒挂载，路由改写/硬加载
+// (/sessions) 会把启动 query 冲掉，懒写 stash 存在「从没人读过就丢了」的洞（详见 flags.ts）。
+captureAiGatewayPortAtBoot()
 
 // 打包 onboarding: 主进程对 new/config-incomplete 用户以 ?onboarding=1 开窗 → 渲染配置
 // 向导而非主 App。向导完成后主进程 reload 窗口去掉该 query → 落回 App。隔离, 不碰主路径。

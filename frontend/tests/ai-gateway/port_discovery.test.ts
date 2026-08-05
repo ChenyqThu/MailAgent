@@ -11,7 +11,10 @@
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 
-import { resolveAiGatewayBaseUrl } from '../../src/shared/assistant/runtime/flags'
+import {
+  captureAiGatewayPortAtBoot,
+  resolveAiGatewayBaseUrl
+} from '../../src/shared/assistant/runtime/flags'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -109,6 +112,30 @@ describe('flags — sessionStorage stash (dev reload resilience)', () => {
       sessionStorage: makeStorage()
     })
     expect(resolveAiGatewayBaseUrl()).toBeNull()
+  })
+
+  test('EAGER boot capture: entry-time stash survives a nav that cleared the params before any surface read them', () => {
+    // The 2026-08-04 acceptance hole: chat surfaces mount lazily, so with a LAZY-only stash,
+    // navigating to /sessions (params cleared) before any surface ever resolved the port left
+    // the stash empty → unavailable face. The entry calls captureAiGatewayPortAtBoot() while
+    // the boot URL still carries the param.
+    const sessionStorage = makeStorage()
+    vi.stubGlobal('window', {
+      location: { search: '?apiPort=8200&aiGatewayPort=8300' },
+      sessionStorage
+    })
+    captureAiGatewayPortAtBoot()
+    // Router clears the search; only NOW does the first chat surface resolve.
+    vi.stubGlobal('window', { location: { search: '' }, sessionStorage })
+    expect(resolveAiGatewayBaseUrl()).toBe('http://127.0.0.1:8300')
+  })
+
+  test('boot capture without the param is a no-op that preserves an existing stash', () => {
+    const sessionStorage = makeStorage()
+    sessionStorage.setItem('mailagent:aiGatewayPort', '8300')
+    vi.stubGlobal('window', { location: { search: '?view=inbox' }, sessionStorage })
+    captureAiGatewayPortAtBoot()
+    expect(resolveAiGatewayBaseUrl()).toBe('http://127.0.0.1:8300')
   })
 
   test('invalid param does not poison the stash', () => {
