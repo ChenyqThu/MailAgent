@@ -180,6 +180,33 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     labelKey: 'shortcutHelp.binding.translate',
     wired: true
   },
+  // 2026-08 筛选菜单重做 — 三条最常用筛选轴的直达键 (EmailListHeader 注册)。
+  // 菜单关着也生效; 都是 ⌘-modified 故在输入框里也不被 short-circuit 掉,
+  // 与 ⌘K 同一档 macOS 惯例。⌘O 已被 generalAgent 占用, 不同 chord 不冲突。
+  {
+    id: 'filterUnread',
+    spec: 'shift+cmd+o',
+    display: '⇧⌘O',
+    scope: 'inbox',
+    labelKey: 'shortcutHelp.binding.filterUnread',
+    wired: true
+  },
+  {
+    id: 'filterFlagged',
+    spec: 'alt+cmd+o',
+    display: '⌥⌘O',
+    scope: 'inbox',
+    labelKey: 'shortcutHelp.binding.filterFlagged',
+    wired: true
+  },
+  {
+    id: 'filterHasAttach',
+    spec: 'shift+cmd+a',
+    display: '⇧⌘A',
+    scope: 'inbox',
+    labelKey: 'shortcutHelp.binding.filterHasAttach',
+    wired: true
+  },
   // ── Row ───────────────────────────────────────────────────────────────
   {
     id: 'toggleBatchSelect',

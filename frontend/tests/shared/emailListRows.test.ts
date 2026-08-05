@@ -17,7 +17,7 @@
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
 import {
-  applyChipFilter,
+  applyAxisFilters,
   applyMultiFilter,
   applyTab,
   categoryOf,
@@ -26,12 +26,20 @@ import {
   groupBySentAnchor,
   groupByThread,
   partitionByDate,
+  partitionFlat,
+  recipientIsMe,
   rowTopOfId,
+  sortThreadGroups,
   startOfDay,
   type ListRow,
   type ThreadGroup
 } from '@shared/components/email/emailListRows'
-import { ALL_CATEGORIES, ALL_PRIORITIES } from '@shared/state/email-filter'
+import {
+  ALL_CATEGORIES,
+  ALL_PRIORITIES,
+  NO_FILTER_AXES,
+  type FilterAxes
+} from '@shared/state/email-filter'
 import type { GroupKey } from '@shared/state/group-collapse'
 import type { EnrichedEmailMeta } from '@shared/api/types'
 
@@ -72,6 +80,8 @@ const NO_NEW: ReadonlySet<number> = new Set()
 
 const LABELS: Record<GroupKey, string> = {
   pinned: 'PINNED',
+  // 'flat' 桶不出标题（flattenGroups 跳过 header）—— 值只为补齐 Record。
+  flat: '',
   today: 'TODAY',
   yesterday: 'YESTERDAY',
   thisWeek: 'THIS_WEEK',
@@ -80,40 +90,92 @@ const LABELS: Record<GroupKey, string> = {
 }
 
 function emptyBuckets(): Record<GroupKey, ThreadGroup[]> {
-  return { pinned: [], today: [], yesterday: [], thisWeek: [], lastWeek: [], older: [] }
+  return { pinned: [], flat: [], today: [], yesterday: [], thisWeek: [], lastWeek: [], older: [] }
 }
 
 function soloGroup(email: EnrichedEmailMeta): ThreadGroup {
   return { threadId: null, head: email, children: [], anchorDate: email.date_received ?? null }
 }
 
-// ─── applyChipFilter ──────────────────────────────────────────────────
+// ─── applyAxisFilters（2026-08 起取代单选 chip applyChipFilter） ────────
 
-describe('applyChipFilter', () => {
+describe('applyAxisFilters', () => {
   const rows = [
     em({ internal_id: 1, is_read: false }),
     em({ internal_id: 2, is_flagged: true }),
     em({ internal_id: 3, sync_status: 'failed' }),
     em({ internal_id: 4, sync_status: 'dead_letter' }),
-    em({ internal_id: 5 })
+    em({ internal_id: 5, attach_count: 2 }),
+    em({ internal_id: 6, processing_status: '已完成' }),
+    em({ internal_id: 7, to_addr: '"Doe, John" <ME@Example.test>, x@y.test' })
   ]
+  const axes = (over: Partial<FilterAxes> = {}): FilterAxes => ({ ...NO_FILTER_AXES, ...over })
+  const ids = (out: ReadonlyArray<{ internal_id: number }>): number[] =>
+    out.map((r) => r.internal_id)
 
-  test("'all' returns a copy of every row", () => {
-    const out = applyChipFilter('all', rows)
-    expect(out.map((r) => r.internal_id)).toEqual([1, 2, 3, 4, 5])
-    expect(out).not.toBe(rows) // rows.slice() — defensive copy
+  test('全 false → 原样拷贝（防御性 copy，不是同一引用）', () => {
+    const out = applyAxisFilters(axes(), rows, 'me@example.test')
+    expect(ids(out)).toEqual([1, 2, 3, 4, 5, 6, 7])
+    expect(out).not.toBe(rows)
   })
 
-  test("'unread' keeps only is_read=false", () => {
-    expect(applyChipFilter('unread', rows).map((r) => r.internal_id)).toEqual([1])
+  test('unread 只留 is_read=false', () => {
+    expect(ids(applyAxisFilters(axes({ unread: true }), rows, null))).toEqual([1])
   })
 
-  test("'flagged' keeps only is_flagged=true", () => {
-    expect(applyChipFilter('flagged', rows).map((r) => r.internal_id)).toEqual([2])
+  test("flagMark='flagged' 排除「已完成」（三态里 done 不算 flagged）", () => {
+    const withDoneFlag = [
+      ...rows,
+      em({ internal_id: 8, is_flagged: true, processing_status: '已完成' })
+    ]
+    expect(ids(applyAxisFilters(axes({ flagMark: 'flagged' }), withDoneFlag, null))).toEqual([2])
   })
 
-  test("'failed' keeps failed AND dead_letter", () => {
-    expect(applyChipFilter('failed', rows).map((r) => r.internal_id)).toEqual([3, 4])
+  test("flagMark='done' 只看 processing_status", () => {
+    expect(ids(applyAxisFilters(axes({ flagMark: 'done' }), rows, null))).toEqual([6])
+  })
+
+  test('hasAttach 需要 attach_count > 0', () => {
+    expect(ids(applyAxisFilters(axes({ hasAttach: true }), rows, null))).toEqual([5])
+  })
+
+  test('failed 同时收 failed 与 dead_letter（沿用旧 chip 口径）', () => {
+    expect(ids(applyAxisFilters(axes({ failed: true }), rows, null))).toEqual([3, 4])
+  })
+
+  test('toMe 忽略大小写、认带显示名的收件人头', () => {
+    expect(ids(applyAxisFilters(axes({ toMe: true }), rows, 'me@example.test'))).toEqual([7])
+  })
+
+  test('🔴 toMe 在 userEmail 未知时惰性 —— 不过滤，而不是清空列表', () => {
+    expect(ids(applyAxisFilters(axes({ toMe: true }), rows, null))).toEqual([1, 2, 3, 4, 5, 6, 7])
+  })
+
+  test('多条轴按 AND 组合', () => {
+    const both = [
+      em({ internal_id: 10, is_read: false, attach_count: 1 }),
+      em({ internal_id: 11, is_read: false }),
+      em({ internal_id: 12, attach_count: 3 })
+    ]
+    expect(ids(applyAxisFilters(axes({ unread: true, hasAttach: true }), both, null))).toEqual([10])
+  })
+})
+
+describe('recipientIsMe', () => {
+  test('剥 mailto: + 大小写无关', () => {
+    expect(recipientIsMe('mailto:ME@Example.test', 'me@example.test')).toBe(true)
+    expect(recipientIsMe('Me@Example.test', 'MAILTO:me@example.test')).toBe(true)
+  })
+  test('多收件人里命中任意一个', () => {
+    expect(recipientIsMe('a@x.test, me@example.test, b@y.test', 'me@example.test')).toBe(true)
+  })
+  test('空 to_addr / 空 userEmail → false（判据缺失不算命中）', () => {
+    expect(recipientIsMe(null, 'me@example.test')).toBe(false)
+    expect(recipientIsMe('me@example.test', null)).toBe(false)
+    expect(recipientIsMe('me@example.test', '   ')).toBe(false)
+  })
+  test('不匹配的收件人 → false', () => {
+    expect(recipientIsMe('someone@else.test', 'me@example.test')).toBe(false)
   })
 })
 
@@ -469,6 +531,94 @@ describe('partitionByDate', () => {
   })
 })
 
+// ─── sortThreadGroups / partitionFlat（非日期排序） ────────────────────
+
+describe('sortThreadGroups', () => {
+  const g = (id: number, over: Partial<EnrichedEmailMeta> = {}): ThreadGroup =>
+    soloGroup(em({ internal_id: id, ...over }))
+
+  test('sender desc = Z→A，显示名优先、空显示名回落地址（与 SQL 的 COALESCE(NULLIF(...)) 同义）', () => {
+    const groups = [
+      g(1, { sender_name: 'Bob', sender: 'zzz@x.test' }),
+      g(2, { sender_name: null, sender: 'alice@x.test' }),
+      g(3, { sender_name: '', sender: 'carol@x.test' })
+    ]
+    expect(sortThreadGroups(groups, 'sender', 'asc').map((x) => x.head.internal_id)).toEqual([
+      2, 1, 3
+    ])
+    expect(sortThreadGroups(groups, 'sender', 'desc').map((x) => x.head.internal_id)).toEqual([
+      3, 1, 2
+    ])
+  })
+
+  test('subject 大小写无关', () => {
+    const groups = [g(1, { subject: 'beta' }), g(2, { subject: 'Alpha' })]
+    expect(sortThreadGroups(groups, 'subject', 'asc').map((x) => x.head.internal_id)).toEqual([
+      2, 1
+    ])
+  })
+
+  test('importance desc = critical 在最前', () => {
+    const groups = [
+      g(1, { ai_priority: 'low' }),
+      g(2, { ai_priority: 'critical' }),
+      g(3, { ai_priority: 'normal' })
+    ]
+    expect(sortThreadGroups(groups, 'importance', 'desc').map((x) => x.head.internal_id)).toEqual([
+      2, 3, 1
+    ])
+  })
+
+  test('🔴 未分类优先级恒沉底 —— 升序也不许被顶到最前', () => {
+    const groups = [
+      g(1, { ai_priority: null }),
+      g(2, { ai_priority: 'critical' }),
+      g(3, { ai_priority: 'low' })
+    ]
+    expect(sortThreadGroups(groups, 'importance', 'desc').map((x) => x.head.internal_id)).toEqual([
+      2, 3, 1
+    ])
+    expect(sortThreadGroups(groups, 'importance', 'asc').map((x) => x.head.internal_id)).toEqual([
+      3, 2, 1
+    ])
+  })
+
+  test('同值时 internal_id 作稳定第二键；不改原数组', () => {
+    const groups = [g(3, { subject: 'same' }), g(1, { subject: 'same' }), g(2, { subject: 'same' })]
+    expect(sortThreadGroups(groups, 'subject', 'asc').map((x) => x.head.internal_id)).toEqual([
+      1, 2, 3
+    ])
+    expect(groups.map((x) => x.head.internal_id)).toEqual([3, 1, 2])
+  })
+})
+
+describe('partitionFlat', () => {
+  test('只产出 pinned + flat；flat 保持传入顺序（不再按日期切段）', () => {
+    const groups = [
+      soloGroup(em({ internal_id: 1, date_received: '2020-01-01T00:00:00' })),
+      soloGroup(em({ internal_id: 2, date_received: '2099-01-01T00:00:00' })),
+      soloGroup(em({ internal_id: 3 }))
+    ]
+    const buckets = partitionFlat(groups, new Set([3]))
+    expect(buckets.pinned.map((g) => g.head.internal_id)).toEqual([3])
+    expect(buckets.flat.map((g) => g.head.internal_id)).toEqual([1, 2])
+    for (const k of ['today', 'yesterday', 'thisWeek', 'lastWeek', 'older'] as const) {
+      expect(buckets[k]).toEqual([])
+    }
+  })
+
+  test('线程里任一成员被固定 → 整条线程进 pinned（与 partitionByDate 同语义）', () => {
+    const g: ThreadGroup = {
+      threadId: 't1',
+      head: em({ internal_id: 1 }),
+      children: [em({ internal_id: 2 })],
+      anchorDate: null
+    }
+    expect(partitionFlat([g], new Set([2])).pinned).toHaveLength(1)
+    expect(partitionFlat([g], new Set([2])).flat).toHaveLength(0)
+  })
+})
+
 // ─── flattenGroups ────────────────────────────────────────────────────
 
 describe('flattenGroups', () => {
@@ -718,6 +868,27 @@ describe('flattenGroups', () => {
     buckets.today = [soloGroup(em({ internal_id: 5 }))]
     const rows = flattenGroups(buckets, LABELS, notCollapsed, notExpanded, 5, false)
     expect((rows[1] as Extract<ListRow, { type: 'email' }>).bundleSelected).toBe(true)
+  })
+
+  test("🔴 'flat' 桶不出分组标题（非日期排序 = 平铺），但 pinned 桶的标题照出且恒在最上", () => {
+    const buckets = emptyBuckets()
+    buckets.pinned = [soloGroup(em({ internal_id: 9 }))]
+    buckets.flat = [soloGroup(em({ internal_id: 1 })), soloGroup(em({ internal_id: 2 }))]
+    const rows = flattenGroups(buckets, LABELS, notCollapsed, notExpanded, null, false)
+    expect(rows.map((r) => r.type)).toEqual(['header', 'email', 'email', 'email'])
+    expect(rows[0]).toMatchObject({ type: 'header', key: 'pinned' })
+    expect(
+      rows
+        .filter((r): r is Extract<ListRow, { type: 'email' }> => r.type === 'email')
+        .map((r) => r.email.internal_id)
+    ).toEqual([9, 1, 2])
+  })
+
+  test("'flat' 桶不吃折叠状态（collapsedOf 说 true 也照渲染 —— 它没有可点的标题）", () => {
+    const buckets = emptyBuckets()
+    buckets.flat = [soloGroup(em({ internal_id: 1 }))]
+    const rows = flattenGroups(buckets, LABELS, () => true, notExpanded, null, false)
+    expect(rows.map((r) => r.type)).toEqual(['email'])
   })
 
   test('appendLoader adds the trailing loader sentinel row', () => {

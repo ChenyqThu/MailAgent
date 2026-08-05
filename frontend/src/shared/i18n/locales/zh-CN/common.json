@@ -40,18 +40,46 @@
     },
     "filter": {
       "button": "过滤邮件",
-      "status": "状态",
       "priority": "优先级",
       "category": "类别",
-      "all": "全部",
-      "reset": "清除过滤",
+      "reset": "清除筛选",
       "selectAll": "全选",
-      "clearLink": "清除"
+      "clearLink": "清除",
+      "title": "筛选依据",
+      "flagMark": "标记",
+      "done": "已完成",
+      "toMe": "收件人是我",
+      "hasAttach": "具有附件"
     },
     "folderCrumb": {
       "aria": "文件夹路径"
     },
-    "resizeHandle": "调整列表宽度"
+    "resizeHandle": "调整列表宽度",
+    "priority": {
+      "critical": "紧急",
+      "urgent": "紧迫",
+      "important": "重要",
+      "normal": "一般",
+      "low": "低"
+    },
+    "sort": {
+      "title": "排序依据",
+      "dirTitle": "方向",
+      "key": {
+        "date": "日期",
+        "sender": "发件人",
+        "subject": "主题",
+        "importance": "重要性"
+      },
+      "dir": {
+        "newest": "由新到旧",
+        "oldest": "由旧到新",
+        "az": "A → Z",
+        "za": "Z → A",
+        "highest": "由高到低",
+        "lowest": "由低到高"
+      }
+    }
   },
   "emailDetail": {
     "loading": "加载中…",
@@ -459,7 +487,10 @@
       "calPrevEvent": "选中上一个事件",
       "calOpenSelected": "打开选中事件",
       "calClose": "关闭抽屉 / 弹层",
-      "calHelp": "打开 / 关闭快捷键帮助"
+      "calHelp": "打开 / 关闭快捷键帮助",
+      "filterUnread": "筛选：未读",
+      "filterFlagged": "筛选：已标记",
+      "filterHasAttach": "筛选：具有附件"
     }
   },
   "palette": {

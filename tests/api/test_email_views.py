@@ -178,6 +178,121 @@ def test_list_enriched_limit_out_of_range_422(client):
     assert r.status_code == 422
 
 
+# ---------------------------------------------------------------------------
+# orderBy / sortDir — 2026-08 列表排序下沉 SQL（与桌面 DAO 逐条对账，闸见
+# tests/config/test_email_sort_parity.py）。fixture 里两封：
+#   1001 Alice / "Quarterly redis timeout review" / 2026-05-01 / 无 AI 列（降级）
+#   1002 Carol / "Standalone no-body email"       / 2026-04-15 / 同上
+# ---------------------------------------------------------------------------
+
+
+def _ids(client, *, keep: "set[int] | None" = None, **params) -> list[int]:
+    """list-enriched 的 id 序。
+
+    ⚠️ 这个 DB fixture 是 **session 作用域**且被同目录别的测试插过行（跑单文件与跑
+    全套的结果不同）。故一律用 ``keep`` 把结果收窄到本用例自己关心的 id 上，只断言
+    它们**相对**的先后 —— 绝不写「整份列表恰好等于这两个」。
+    """
+    r = client.get("/api/email/list-enriched", params=params)
+    assert r.status_code == 200, r.text
+    ids = [row["internal_id"] for row in r.json()["data"]]
+    return [i for i in ids if i in keep] if keep is not None else ids
+
+
+PAIR = {EMAIL_ID, EMAIL_NO_BODY_ID}
+
+
+def test_list_enriched_default_order_unchanged(client):
+    """不传排序参数 = 历史行为（date DESC），远程端不因本次改动漂移。"""
+    assert _ids(client, keep=PAIR) == [EMAIL_ID, EMAIL_NO_BODY_ID]
+
+
+def test_list_enriched_order_by_date_both_directions(client):
+    assert _ids(client, keep=PAIR, orderBy="date", sortDir="desc") == [
+        EMAIL_ID,
+        EMAIL_NO_BODY_ID,
+    ]
+    assert _ids(client, keep=PAIR, orderBy="date", sortDir="asc") == [
+        EMAIL_NO_BODY_ID,
+        EMAIL_ID,
+    ]
+
+
+def test_list_enriched_order_by_sender_uses_display_name(client):
+    """sender 排序按显示名（Alice < Carol）；关键是两个方向对称且稳定。"""
+    assert _ids(client, keep=PAIR, orderBy="sender", sortDir="asc") == [
+        EMAIL_ID,
+        EMAIL_NO_BODY_ID,
+    ]
+    assert _ids(client, keep=PAIR, orderBy="sender", sortDir="desc") == [
+        EMAIL_NO_BODY_ID,
+        EMAIL_ID,
+    ]
+
+
+def test_list_enriched_order_by_subject_case_insensitive(client, temp_db):
+    """COLLATE NOCASE：小写 'aaa' 必须排在大写 'Quarterly' 之前（不加 NOCASE 时
+    SQLite 的 BINARY 序会把所有大写字母排在小写之前 → 用户看到的是「乱序」）。"""
+    import sqlite3
+
+    row_id = 990010
+    conn = sqlite3.connect(str(temp_db))
+    try:
+        conn.execute(
+            """INSERT INTO email_metadata
+               (internal_id, message_id, subject, sender, date_received, mailbox,
+                is_read, is_flagged, sync_status, retry_count)
+               VALUES (?,?,?,?,?,?,?,?,?,?)""",
+            (
+                row_id, "<sort-case@example.com>", "aaa lowercase subject",
+                "zed@example.com", "2026-01-01 09:00:00", "收件箱",
+                1, 0, "synced", 0,
+            ),
+        )
+        conn.commit()
+        # 只与 fixture 的 'Quarterly…' 比 —— 别的测试插的行不参与断言。
+        order = _ids(client, keep={row_id, EMAIL_ID}, orderBy="subject", sortDir="asc")
+        assert order == [row_id, EMAIL_ID]
+    finally:
+        conn.execute("DELETE FROM email_metadata WHERE internal_id = ?", (row_id,))
+        conn.commit()
+        conn.close()
+
+
+def test_list_enriched_order_by_importance_unclassified_last_both_ways(client, temp_db):
+    """🔴 未分类恒沉底 —— 升序也不许被顶到最前（null-guard 首列与方向无关）。
+
+    fixture DDL 没有 ai_priority 列（降级路径），故 priority_raw 恒 NULL，两封
+    都算未分类；这里另插一封带 labels_json 的行不可行（fixture 也没有
+    llm_processing 表）。所以本用例验的是「全未分类时两个方向都不炸、且序稳定」，
+    真正的名次断言在 frontend/tests/shared/emailSort.test.ts（SQL 模板）+
+    emailListRows.test.ts（前端组排序）里。
+    """
+    desc = _ids(client, keep=PAIR, orderBy="importance", sortDir="desc")
+    asc = _ids(client, keep=PAIR, orderBy="importance", sortDir="asc")
+    assert set(desc) == set(asc) == PAIR
+    # 全同名次 → 落到 internal_id 尾键，两个方向互为逆序。
+    assert desc == list(reversed(asc))
+
+
+def test_list_enriched_unknown_sort_params_fall_back_to_default(client):
+    """非法值静默回落 date DESC（镜像 emailSort.ts::normalizeSortKey/Dir 的宽容
+    语义），且**绝不**把输入拼进 SQL —— 注入串同样只是回落，不是 500。"""
+    expected = [EMAIL_ID, EMAIL_NO_BODY_ID]
+    assert _ids(client, keep=PAIR, orderBy="size", sortDir="sideways") == expected
+    assert (
+        _ids(
+            client,
+            keep=PAIR,
+            orderBy="m.date_received; DROP TABLE email_metadata",
+            sortDir="desc",
+        )
+        == expected
+    )
+    # 表还在（注入没落地）。
+    assert _ids(client, keep=PAIR) == expected
+
+
 def test_snippets_endpoint_removed(client):
     r = client.post("/api/email/snippets", json={"internalIds": [EMAIL_ID]})
     assert r.status_code == 404
@@ -217,8 +332,9 @@ def test_list_by_thread(client):
     _ok_envelope(body)
     data = body["data"]
     assert [row["internal_id"] for row in data] == [EMAIL_ID]
-    # list-item shape (no to_addr).
-    assert "to_addr" not in data[0]
+    # list-item shape。2026-08 起含 to_addr —— 列表面的「收件人是我」筛选轴需要它，
+    # 桌面 handlers/email.ts::shapeListItem 同步投影（两份 shaper 互为镜像）。
+    assert data[0]["to_addr"] == "bob@example.com"
     assert "notion_url" in data[0]
     assert data[0]["snippet"].startswith("Hello **redis**")
 

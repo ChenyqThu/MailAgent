@@ -4,10 +4,19 @@
 // priority / category multi-select) and the meta count line.
 // Contract: `useEmailFilter` / `useBatch` stores are read & written directly
 // in here (no parent relay); only the pipeline-derived counts arrive as props.
-// CSS classes (.inbox-tabs / .filter-pop / .filter-option) live in index.css
-// Sprint 12 block.
+// CSS classes (.inbox-tabs / .filter-btn) live in index.css Sprint 12 block.
+//
+// 2026-08 筛选/排序菜单重做（Outlook 结构 + 下钻面板交互）：
+//   • 旧的手搓 `.filter-pop`（三段平铺 + 自管 outside-click/Esc/退场动画）换成
+//     可复用的 `ui/DrillMenu` 原语；本文件只负责**把 store 翻译成菜单项**。
+//   • 状态单选 chip（全部/未读/已标旗/同步失败）退役 → 六条独立筛选项 + 两个
+//     下钻子面板（优先级 / 分类），AND 组合。
+//   • 新增「排序依据」「方向」两组单选 —— 排序下沉到 SQL（见 @shared/lib/emailSort）。
+//   • 方向文案随排序键切换（Outlook 同款）：日期=由新到旧、重要性=由高到低、
+//     文本=A→Z。owner 拟稿里只写了日期口径的两个词，照抄会让「按发件人 · 由新到旧」
+//     这种自相矛盾的组合出现在菜单里。
 
-import { Fragment, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { ChevronRight, Filter, Folder, ListChecks } from 'lucide-react'
 
@@ -18,29 +27,59 @@ import {
   type EmailCategory
 } from '@shared/state/email-filter'
 import { useBatch } from '@shared/state/batch'
-import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
+import { useShortcut } from '@shared/hooks/useShortcut'
 import { cn } from '@shared/lib/cn'
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
+import { EMAIL_SORT_KEYS, type EmailSortKey } from '@shared/lib/emailSort'
+import { DrillMenu, type DrillMenuItem } from '@shared/components/ui/DrillMenu'
 import type { AIPriority } from '@shared/api/types'
 
 interface EmailListHeaderProps {
   /** Pipeline-derived live counts (tab-scoped) from EmailList — meta line +
-   *  status filter section. */
-  counts: { all: number; unread: number; flagged: number; failed: number }
+   *  每条筛选轴各自的「只开这一条会剩多少」。 */
+  counts: {
+    all: number
+    unread: number
+    flagged: number
+    done: number
+    toMe: number
+    hasAttach: number
+    failed: number
+  }
   /** Per-category live count (for the filter popover hint). */
   categoryCounts: Record<EmailCategory, number>
   priorityCounts: Record<AIPriority, number>
+  /** USER_EMAIL —— null 时「收件人是我」置灰（判据取不到，不给假开关）。 */
+  userEmail: string | null
+}
+
+// 优先级色点走与 EmailRow .pdot 同一套 Tailwind token（DESIGN.md §14 #1：不写裸
+// hex，全部经 `--c-{crit,urg,impt,norm,low}`）。旧的平铺 popover 有这枚点，重做时
+// 不能丢 —— 只剩五个中文词的话，列表行上的颜色编码在筛选面就断了。
+const PRIORITY_DOT_CLASS: Record<AIPriority, string> = {
+  critical: 'bg-crit',
+  urgent: 'bg-urg',
+  important: 'bg-impt',
+  normal: 'bg-norm',
+  low: 'bg-low'
+}
+
+/** 方向两档的文案 key 随排序键变 —— 「按发件人 · 由新到旧」是无意义组合。 */
+const DIR_LABEL_KEY: Record<EmailSortKey, { desc: string; asc: string }> = {
+  date: { desc: 'list.sort.dir.newest', asc: 'list.sort.dir.oldest' },
+  sender: { desc: 'list.sort.dir.za', asc: 'list.sort.dir.az' },
+  subject: { desc: 'list.sort.dir.za', asc: 'list.sort.dir.az' },
+  importance: { desc: 'list.sort.dir.highest', asc: 'list.sort.dir.lowest' }
 }
 
 export function EmailListHeader({
   counts,
   categoryCounts,
-  priorityCounts
+  priorityCounts,
+  userEmail
 }: EmailListHeaderProps): React.ReactElement {
   const { t, i18n } = useTranslation()
-  const filter = useEmailFilter((s) => s.filter)
-  const setFilter = useEmailFilter((s) => s.setFilter)
   const view = useEmailFilter((s) => s.view)
   // 多文件夹同步 (P3) — 当前自定义文件夹 (mailbox=display_name); 非空时列表只拉它。
   const customMailbox = useEmailFilter((s) => s.customMailbox)
@@ -87,14 +126,25 @@ export function EmailListHeader({
     // 不重测会让胶囊保持旧语言的宽度 → 英文文本溢出胶囊。
     { dependencies: [tab, view, reduceMotion, i18n.language], scope: tabListRef }
   )
+
+  const unread = useEmailFilter((s) => s.unread)
+  const flagMark = useEmailFilter((s) => s.flagMark)
+  const toMe = useEmailFilter((s) => s.toMe)
+  const hasAttach = useEmailFilter((s) => s.hasAttach)
+  const failed = useEmailFilter((s) => s.failed)
+  const toggleBool = useEmailFilter((s) => s.toggleBool)
+  const toggleFlagMark = useEmailFilter((s) => s.toggleFlagMark)
   const selectedPriorities = useEmailFilter((s) => s.selectedPriorities)
   const selectedCategories = useEmailFilter((s) => s.selectedCategories)
   const togglePriority = useEmailFilter((s) => s.togglePriority)
   const toggleCategory = useEmailFilter((s) => s.toggleCategory)
   const setPriorities = useEmailFilter((s) => s.setPriorities)
   const setCategories = useEmailFilter((s) => s.setCategories)
-  const allPrioritiesSelected = useEmailFilter((s) => s.allPrioritiesSelected)
-  const allCategoriesSelected = useEmailFilter((s) => s.allCategoriesSelected)
+  const sortKey = useEmailFilter((s) => s.sortKey)
+  const sortDir = useEmailFilter((s) => s.sortDir)
+  const setSort = useEmailFilter((s) => s.setSort)
+  const setSortDir = useEmailFilter((s) => s.setSortDir)
+  const hasActiveFilter = useEmailFilter((s) => s.hasActiveFilter)
   const resetAll = useEmailFilter((s) => s.resetAll)
 
   const batchMode = useBatch((s) => s.mode)
@@ -102,46 +152,201 @@ export function EmailListHeader({
   const exitBatch = useBatch((s) => s.exit)
 
   const [filterOpen, setFilterOpen] = useState(false)
-  // Sprint 12.6 user-feedback — outside-click previously checked the whole
-  // header container, which meant clicking on the inbox tabs / batch button
-  // inside the header kept the popover open. We now scope the "inside"
-  // check to just the popover + its trigger button, so clicking anywhere
-  // else (header whitespace, list rows, status bar, …) closes it.
   const filterTriggerRef = useRef<HTMLButtonElement>(null)
-  // Filter popover 出入场：无 backdrop，从右上微展开（CSS `.filter-pop` 锚定
-  // top:100%+4px / right:8px，即从触发按钮下方右上角展开），退场反向后延迟卸载。
-  // scopeRef 挂在 `.filter-pop` 上，兼作 outside-click 命中判定的容器 ref。
-  const { shouldRender: filterShouldRender, scopeRef: filterPopoverRef } =
-    useExitAnimation<HTMLDivElement>(filterOpen, {
-      backdrop: false,
-      from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
-      enterDuration: DUR.fast
-    })
 
-  // Outside-click + Esc → close filter popover
-  useEffect(() => {
-    if (!filterOpen) return
-    function onClickAway(ev: MouseEvent): void {
-      const target = ev.target as Node | null
-      if (!target) return
-      if (filterPopoverRef.current?.contains(target)) return
-      if (filterTriggerRef.current?.contains(target)) return
-      setFilterOpen(false)
-    }
-    function onKey(ev: KeyboardEvent): void {
-      if (ev.key === 'Escape') setFilterOpen(false)
-    }
-    document.addEventListener('mousedown', onClickAway)
-    document.addEventListener('keydown', onKey)
-    return () => {
-      document.removeEventListener('mousedown', onClickAway)
-      document.removeEventListener('keydown', onKey)
-    }
-  }, [filterOpen, filterPopoverRef])
+  // 三条最常用筛选轴的直达键（keymap.ts 已登记 scope=inbox）。菜单**关着**也生效
+  // —— 这些键的价值就在于不必先打开菜单。
+  // useCallback 不是装饰：useShortcut 的 effect 依赖 handler 引用，内联箭头函数会让
+  // 它每次 render 都退订重订（列表面每 5s 轮询就重渲一轮）。zustand action 引用稳定。
+  const kbUnread = useCallback(() => {
+    toggleBool('unread')
+    return true
+  }, [toggleBool])
+  const kbFlagged = useCallback(() => {
+    toggleFlagMark('flagged')
+    return true
+  }, [toggleFlagMark])
+  const kbAttach = useCallback(() => {
+    toggleBool('hasAttach')
+    return true
+  }, [toggleBool])
+  useShortcut('shift+cmd+o', kbUnread)
+  useShortcut('alt+cmd+o', kbFlagged)
+  useShortcut('shift+cmd+a', kbAttach)
 
-  const priActive = !allPrioritiesSelected()
-  const catActive = !allCategoriesSelected()
-  const filterActive = filter !== 'all' || priActive || catActive
+  const priCount = selectedPriorities.size
+  const catCount = selectedCategories.size
+  const filterActive = hasActiveFilter()
+
+  const items: DrillMenuItem[] = [
+    { kind: 'label', id: 'filter-head', label: t('list.filter.title') },
+    {
+      kind: 'checkbox',
+      id: 'unread',
+      label: t('emailList.filter.unread'),
+      checked: unread,
+      count: counts.unread,
+      shortcut: '⇧⌘O',
+      onToggle: () => toggleBool('unread')
+    },
+    {
+      kind: 'submenu',
+      id: 'flagMark',
+      label: t('list.filter.flagMark'),
+      hint:
+        flagMark === null
+          ? undefined
+          : flagMark === 'flagged'
+            ? t('emailList.filter.flagged')
+            : t('list.filter.done'),
+      items: [
+        {
+          kind: 'radio',
+          id: 'flagged',
+          label: t('emailList.filter.flagged'),
+          checked: flagMark === 'flagged',
+          count: counts.flagged,
+          shortcut: '⌥⌘O',
+          onSelect: () => toggleFlagMark('flagged')
+        },
+        {
+          kind: 'radio',
+          id: 'done',
+          label: t('list.filter.done'),
+          checked: flagMark === 'done',
+          count: counts.done,
+          onSelect: () => toggleFlagMark('done')
+        }
+      ]
+    },
+    {
+      kind: 'checkbox',
+      id: 'toMe',
+      label: t('list.filter.toMe'),
+      checked: toMe,
+      count: userEmail === null ? undefined : counts.toMe,
+      disabled: userEmail === null,
+      onToggle: () => toggleBool('toMe')
+    },
+    {
+      kind: 'checkbox',
+      id: 'hasAttach',
+      label: t('list.filter.hasAttach'),
+      checked: hasAttach,
+      count: counts.hasAttach,
+      shortcut: '⇧⌘A',
+      onToggle: () => toggleBool('hasAttach')
+    },
+    {
+      kind: 'submenu',
+      id: 'priority',
+      label: t('list.filter.priority'),
+      hint: priCount === ALL_PRIORITIES.length ? undefined : `${priCount}/${ALL_PRIORITIES.length}`,
+      items: [
+        {
+          kind: 'action',
+          id: 'pri-all',
+          label:
+            priCount === ALL_PRIORITIES.length
+              ? t('list.filter.clearLink')
+              : t('list.filter.selectAll'),
+          onSelect: () =>
+            setPriorities(priCount === ALL_PRIORITIES.length ? new Set() : new Set(ALL_PRIORITIES))
+        },
+        { kind: 'separator', id: 'pri-sep' },
+        ...ALL_PRIORITIES.map(
+          (p): DrillMenuItem => ({
+            kind: 'checkbox',
+            id: `pri-${p}`,
+            label: t(`list.priority.${p}`),
+            checked: selectedPriorities.has(p),
+            count: priorityCounts[p],
+            dotClassName: PRIORITY_DOT_CLASS[p],
+            onToggle: () => togglePriority(p)
+          })
+        )
+      ]
+    },
+    {
+      kind: 'submenu',
+      id: 'category',
+      label: t('list.filter.category'),
+      hint: catCount === ALL_CATEGORIES.length ? undefined : `${catCount}/${ALL_CATEGORIES.length}`,
+      items: [
+        {
+          kind: 'action',
+          id: 'cat-all',
+          label:
+            catCount === ALL_CATEGORIES.length
+              ? t('list.filter.clearLink')
+              : t('list.filter.selectAll'),
+          onSelect: () =>
+            setCategories(catCount === ALL_CATEGORIES.length ? new Set() : new Set(ALL_CATEGORIES))
+        },
+        { kind: 'separator', id: 'cat-sep' },
+        // LLM CATEGORY_ENUM is emoji-prefixed Chinese; we render the verbatim
+        // string so the menu matches what the backend stores.
+        ...ALL_CATEGORIES.map(
+          (c): DrillMenuItem => ({
+            kind: 'checkbox',
+            id: `cat-${c}`,
+            label: c,
+            checked: selectedCategories.has(c),
+            count: categoryCounts[c],
+            onToggle: () => toggleCategory(c)
+          })
+        )
+      ]
+    },
+    {
+      kind: 'checkbox',
+      id: 'failed',
+      label: t('emailList.filter.failed'),
+      checked: failed,
+      count: counts.failed,
+      onToggle: () => toggleBool('failed')
+    },
+    { kind: 'separator', id: 'sep-sort' },
+    { kind: 'label', id: 'sort-head', label: t('list.sort.title') },
+    ...EMAIL_SORT_KEYS.map(
+      (k): DrillMenuItem => ({
+        kind: 'radio',
+        id: `sort-${k}`,
+        label: t(`list.sort.key.${k}`),
+        checked: sortKey === k,
+        onSelect: () => setSort(k)
+      })
+    ),
+    { kind: 'separator', id: 'sep-dir' },
+    { kind: 'label', id: 'dir-head', label: t('list.sort.dirTitle') },
+    {
+      kind: 'radio',
+      id: 'dir-desc',
+      label: t(DIR_LABEL_KEY[sortKey].desc),
+      checked: sortDir === 'desc',
+      onSelect: () => setSortDir('desc')
+    },
+    {
+      kind: 'radio',
+      id: 'dir-asc',
+      label: t(DIR_LABEL_KEY[sortKey].asc),
+      checked: sortDir === 'asc',
+      onSelect: () => setSortDir('asc')
+    },
+    // 「清除筛选」只在真有筛选时出现 —— 恒亮的清除钮既没用又占一行。
+    ...(filterActive
+      ? ([
+          { kind: 'separator', id: 'sep-reset' },
+          {
+            kind: 'action',
+            id: 'reset',
+            label: t('list.filter.reset'),
+            tone: 'accent',
+            onSelect: () => resetAll()
+          }
+        ] as DrillMenuItem[])
+      : [])
+  ]
 
   return (
     /* Header — Focused/Other tabs · batch + filter cluster · meta line */
@@ -237,7 +442,7 @@ export function EmailListHeader({
             className="filter-btn w-7 h-7 rounded-[var(--r-ctl)] text-ink-fg-2 hover:text-ink-fg hover:bg-ink-3 flex items-center justify-center transition-colors duration-fast"
             title={t('list.filter.button')}
             aria-label={t('list.filter.button')}
-            aria-haspopup="true"
+            aria-haspopup="menu"
             aria-expanded={filterOpen}
             aria-controls="filter-pop"
             data-active={filterActive ? 'true' : 'false'}
@@ -262,10 +467,7 @@ export function EmailListHeader({
             <button
               type="button"
               className="text-coral hover:text-coral-hover transition-colors duration-fast"
-              onClick={() => {
-                resetAll()
-                setFilter('all')
-              }}
+              onClick={() => resetAll()}
             >
               {t('list.filter.reset')}
             </button>
@@ -273,134 +475,14 @@ export function EmailListHeader({
         )}
       </div>
 
-      {filterShouldRender && (
-        <div
-          ref={filterPopoverRef}
-          id="filter-pop"
-          className="filter-pop"
-          role="dialog"
-          aria-label={t('list.filter.button')}
-        >
-          <FilterSection
-            title={t('list.filter.status')}
-            onSelectAll={() => setFilter('all')}
-            onClear={() => setFilter('all')}
-          >
-            {(['all', 'unread', 'flagged', 'failed'] as const).map((opt) => (
-              <button
-                key={opt}
-                type="button"
-                className="filter-option"
-                data-checked={filter === opt ? 'true' : 'false'}
-                onClick={() => setFilter(opt)}
-              >
-                <span className="cb-mini" aria-hidden />
-                <span className="label">
-                  {opt === 'all' ? t('list.filter.all') : t(`emailList.filter.${opt}`)}
-                </span>
-                <span className="count tabular-nums">
-                  {opt === 'all' ? counts.all : counts[opt]}
-                </span>
-              </button>
-            ))}
-          </FilterSection>
-
-          <FilterSection
-            title={t('list.filter.priority')}
-            onSelectAll={() => setPriorities(new Set(ALL_PRIORITIES))}
-            onClear={() => setPriorities(new Set())}
-          >
-            {ALL_PRIORITIES.map((p) => (
-              <button
-                key={p}
-                type="button"
-                className="filter-option"
-                data-checked={selectedPriorities.has(p) ? 'true' : 'false'}
-                onClick={() => togglePriority(p)}
-              >
-                <span className="cb-mini" aria-hidden />
-                <span className={`pri-dot ${priDotClass(p)}`} aria-hidden />
-                <span className="label">{capitalize(p)}</span>
-                <span className="count tabular-nums">{priorityCounts[p]}</span>
-              </button>
-            ))}
-          </FilterSection>
-
-          <FilterSection
-            title={t('list.filter.category')}
-            onSelectAll={() => setCategories(new Set(ALL_CATEGORIES))}
-            onClear={() => setCategories(new Set())}
-          >
-            {ALL_CATEGORIES.map((c) => (
-              <button
-                key={c}
-                type="button"
-                className="filter-option"
-                data-checked={selectedCategories.has(c) ? 'true' : 'false'}
-                onClick={() => toggleCategory(c)}
-              >
-                <span className="cb-mini" aria-hidden />
-                {/* LLM CATEGORY_ENUM is emoji-prefixed Chinese; we render
-                    the verbatim string so the popover matches what the
-                    backend stores. Future EN locale would translate the
-                    tail of the string, not the leading emoji. */}
-                <span className="label">{c}</span>
-                <span className="count tabular-nums">{categoryCounts[c]}</span>
-              </button>
-            ))}
-          </FilterSection>
-        </div>
-      )}
-    </div>
-  )
-}
-
-// ─── Header-only helpers (moved with the header JSX) ─────────────────
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1)
-}
-
-// Priority dot uses the same Tailwind tokens as the EmailRow .pdot states.
-// No raw hex — DESIGN.md §14 #1 routes every chip colour through the
-// `--c-{crit,urg,impt,norm,low}` variables exposed in index.css.
-const PRIORITY_DOT_CLASS: Record<AIPriority, string> = {
-  critical: 'bg-crit',
-  urgent: 'bg-urg',
-  important: 'bg-impt',
-  normal: 'bg-norm',
-  low: 'bg-low'
-}
-function priDotClass(p: AIPriority): string {
-  return PRIORITY_DOT_CLASS[p]
-}
-
-function FilterSection({
-  title,
-  onSelectAll,
-  onClear,
-  children
-}: {
-  title: string
-  onSelectAll: () => void
-  onClear: () => void
-  children: React.ReactNode
-}): React.ReactElement {
-  const { t } = useTranslation()
-  return (
-    <div className="filter-section">
-      <div className="filter-section-head">
-        <span>{title}</span>
-        <span className="links">
-          <button type="button" onClick={onSelectAll}>
-            {t('list.filter.selectAll')}
-          </button>
-          <button type="button" onClick={onClear}>
-            {t('list.filter.clearLink')}
-          </button>
-        </span>
-      </div>
-      {children}
+      <DrillMenu
+        id="filter-pop"
+        open={filterOpen}
+        onClose={() => setFilterOpen(false)}
+        items={items}
+        ariaLabel={t('list.filter.button')}
+        triggerRef={filterTriggerRef}
+      />
     </div>
   )
 }

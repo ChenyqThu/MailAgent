@@ -181,13 +181,20 @@ export class HttpApi implements MailApi {
     }
   }
 
+  /** listEnriched 专属：在共用 filter 之上多带排序键/方向。有意**不**塞进
+   *  `listQuery` —— `/email/list` 没有这两个参数，往它的 query 里挂只会造出
+   *  「传了但不生效」的假象。 */
+  private listEnrichedQuery(opts: ListOpts): Record<string, QueryValue> {
+    return { ...this.listQuery(opts), orderBy: opts.orderBy, sortDir: opts.sortDir }
+  }
+
   email = {
     list: (opts: ListOpts): Promise<EmailMeta[]> =>
       this.req<EmailMeta[]>('GET', '/email/list', { query: this.listQuery(opts) }),
 
     listEnriched: (opts: ListOpts): Promise<EnrichedEmailMeta[]> =>
       this.req<EnrichedEmailMeta[]>('GET', '/email/list-enriched', {
-        query: this.listQuery(opts)
+        query: this.listEnrichedQuery(opts)
       }),
 
     listMailboxes: (): Promise<MailboxSummary[]> =>

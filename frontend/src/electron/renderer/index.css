@@ -2228,115 +2228,36 @@ body:not([data-batch-mode='true']) .email-row .cb {
   background: rgb(255 255 255 / 0.9);
 }
 
-/* ─── Filter popover ─────────────────────────────────────────────────── */
-.filter-pop {
+/* ─── DrillMenu — 下钻堆叠菜单壳体 (ui/DrillMenu.tsx) ─────────────────── */
+/* 旧 .filter-pop / .filter-section / .filter-option 一族随筛选菜单重做删除 ——
+ * 它们只有 EmailListHeader 一个消费者, 留着就是死 CSS。 */
+.drill-shell {
   position: absolute;
-  top: calc(100% + 4px);
-  right: 8px;
-  width: 248px;
   z-index: 30;
-  /* 主题 v2 — 真浮层走 .glass-pop 配方 (20px 上限) */
+  overflow: hidden;
+  /* 主题 v3 C8: 内容浮层档 --r-pop(14); 玻璃配方与 .glass-pop 同源。 */
+  border-radius: var(--r-pop);
   background: color-mix(in srgb, var(--glass-base) 86%, transparent);
   border: 1px solid var(--hairline);
-  /* 主题 v3 C8/批 4: 内容浮层档 10px → --r-pop(14) */
-  border-radius: var(--r-pop);
   box-shadow: var(--pop-shadow);
   -webkit-backdrop-filter: blur(20px) saturate(var(--glass-sat));
   backdrop-filter: blur(20px) saturate(var(--glass-sat));
-  overflow: hidden;
 }
-.filter-section {
-  padding: 8px 10px;
-  border-bottom: 1px solid rgb(var(--ink-border-soft));
+/* 前面板必须**不透明**地盖住后面板 —— 壳体的玻璃已经在下面, 这里只补一层实底 +
+ * 投影, 否则下钻时能透过新面板看见父面板的行, 读起来是「叠了两份菜单」。 */
+.drill-panel-front {
+  position: relative;
+  padding: 6px;
+  background: color-mix(in srgb, var(--glass-base) 97%, transparent);
+  box-shadow: 0 -6px 16px rgb(0 0 0 / 0.28);
 }
-.filter-section:last-of-type {
-  border-bottom: 0;
-}
-.filter-section-head {
-  display: flex;
-  align-items: center;
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: rgb(var(--ink-fg-2));
-  padding: 4px 4px 6px;
-}
-.filter-section-head .links {
-  margin-left: auto;
-  display: inline-flex;
-  gap: 6px;
-}
-.filter-section-head .links button {
-  background: none;
-  border: 0;
+.drill-panel-back {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  padding: 6px;
   cursor: pointer;
-  font-size: 10px;
-  color: rgb(var(--ink-fg-2));
-  padding: 2px 4px;
-  border-radius: 3px;
-  transition:
-    color 0.12s,
-    background 0.12s;
-}
-.filter-section-head .links button:hover {
-  color: rgb(var(--c-accent));
-  background: rgb(var(--ink-3) / 0.6);
-}
-.filter-option {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 5px 6px;
-  font-size: 12.5px;
-  color: rgb(var(--ink-fg));
-  cursor: pointer;
-  border-radius: 4px;
-  transition: background 0.1s;
-}
-.filter-option:hover {
-  background: rgb(var(--ink-3) / 0.55);
-}
-.filter-option .cb-mini {
-  width: 13px;
-  height: 13px;
-  border-radius: 3px;
-  border: 1.5px solid rgb(var(--ink-fg-3));
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  flex-shrink: 0;
-  transition:
-    background 0.1s,
-    border-color 0.1s;
-}
-.filter-option[data-checked='true'] .cb-mini {
-  background: rgb(var(--c-accent));
-  border-color: rgb(var(--c-accent));
-}
-.filter-option[data-checked='true'] .cb-mini::after {
-  content: '';
-  width: 6px;
-  height: 3px;
-  border-left: 1.5px solid white;
-  border-bottom: 1.5px solid white;
-  transform: rotate(-45deg) translate(1px, -1px);
-}
-.filter-option .label {
-  flex: 1;
-  min-width: 0;
-}
-.filter-option .count {
-  font-family: ui-monospace, 'SF Mono', monospace;
-  font-size: 11px;
-  color: rgb(var(--ink-fg-2));
-  flex-shrink: 0;
-}
-.filter-option .pri-dot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  flex-shrink: 0;
 }
 
 /* Filter button — quiet by default, loud when a filter narrows the view.

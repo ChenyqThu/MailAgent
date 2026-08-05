@@ -25,8 +25,17 @@ export const qk = {
   // from EMAIL_SUPPLEMENT_TAG so the classifier and the builders can never drift.
   emails: {
     all: () => [EMAIL_QUERY_ROOT] as const,
-    list: (view: string, customMailbox: string | null, activeMailbox: string, fetchLimit: number) =>
-      [EMAIL_QUERY_ROOT, view, customMailbox, activeMailbox, fetchLimit] as const,
+    // sortKey/sortDir 在 key 里: 排序已下沉 SQL, 换排序 = 换一份结果集,
+    // 不进 key 会让切排序命中旧缓存 (看上去「点了没反应」)。
+    list: (
+      view: string,
+      customMailbox: string | null,
+      activeMailbox: string,
+      fetchLimit: number,
+      sortKey: string,
+      sortDir: string
+    ) =>
+      [EMAIL_QUERY_ROOT, view, customMailbox, activeMailbox, fetchLimit, sortKey, sortDir] as const,
     cross: (crossMailbox: string | null, fetchLimit: number) =>
       [EMAIL_QUERY_ROOT, EMAIL_SUPPLEMENT_TAG.cross, crossMailbox, fetchLimit] as const,
     pinnedSupplement: (pinnedList: readonly number[]) =>

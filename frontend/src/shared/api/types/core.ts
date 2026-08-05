@@ -22,6 +22,13 @@ import type {
 
 export type EmailMeta = EmailList_EmailListItem & {
   snippet: string | null
+  /**
+   * 收件人原始头 (逗号分隔，可能带显示名)。列表面的「收件人是我」筛选轴唯一判据。
+   * SQL 早就 SELECT 了它，只是从没投影出来；schema 里是 optional (CLI `email list`
+   * 不发)，故这里也是 optional。与 `EmailDetail.is_important` 同款理由把它写进交集：
+   * `cli.gen.ts` 是 gitignored 的 postinstall 产物，本地陈旧副本会静默丢字段。
+   */
+  to_addr?: string | null
 }
 /**
  * EmailDetail = schema-typed EmailGet_EmailRecord (+ historically, fields the

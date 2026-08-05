@@ -17,13 +17,20 @@ import {
 describe('qk.emails — primary list + supplements', () => {
   test('root + list + four supplement families', () => {
     expect(qk.emails.all()).toEqual(['emails'])
-    expect(qk.emails.list('inbox', null, '收件箱', 100)).toEqual([
+    // sortKey/sortDir 是 2026-08 排序下沉 SQL 时追加的尾部元素 —— 排序换了就是
+    // 换一份结果集，不进 key 会命中旧缓存（「点了没反应」）。
+    expect(qk.emails.list('inbox', null, '收件箱', 100, 'date', 'desc')).toEqual([
       'emails',
       'inbox',
       null,
       '收件箱',
-      100
+      100,
+      'date',
+      'desc'
     ])
+    expect(qk.emails.list('inbox', null, '收件箱', 100, 'sender', 'asc')).not.toEqual(
+      qk.emails.list('inbox', null, '收件箱', 100, 'date', 'desc')
+    )
     expect(qk.emails.cross('发件箱', 100)).toEqual(['emails', 'cross', '发件箱', 100])
     expect(qk.emails.pinnedSupplement([9])).toEqual(['emails', 'pinned-supplement', [9]])
     expect(qk.emails.threadBatch(['t1'])).toEqual(['emails', 'thread-batch', ['t1']])

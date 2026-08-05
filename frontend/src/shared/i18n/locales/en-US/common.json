@@ -40,18 +40,46 @@
     },
     "filter": {
       "button": "Filter mail",
-      "status": "Status",
       "priority": "Priority",
       "category": "Category",
-      "all": "All",
-      "reset": "Reset",
+      "reset": "Clear filters",
       "selectAll": "All",
-      "clearLink": "Clear"
+      "clearLink": "Clear",
+      "title": "Filter by",
+      "flagMark": "Marked",
+      "done": "Done",
+      "toMe": "Addressed to me",
+      "hasAttach": "Has attachments"
     },
     "folderCrumb": {
       "aria": "Folder path"
     },
-    "resizeHandle": "Resize list width"
+    "resizeHandle": "Resize list width",
+    "priority": {
+      "critical": "Critical",
+      "urgent": "Urgent",
+      "important": "Important",
+      "normal": "Normal",
+      "low": "Low"
+    },
+    "sort": {
+      "title": "Sort by",
+      "dirTitle": "Direction",
+      "key": {
+        "date": "Date",
+        "sender": "Sender",
+        "subject": "Subject",
+        "importance": "Importance"
+      },
+      "dir": {
+        "newest": "Newest first",
+        "oldest": "Oldest first",
+        "az": "A → Z",
+        "za": "Z → A",
+        "highest": "Highest first",
+        "lowest": "Lowest first"
+      }
+    }
   },
   "emailDetail": {
     "loading": "Loading…",
@@ -459,7 +487,10 @@
       "calPrevEvent": "Select previous event",
       "calOpenSelected": "Open selected event",
       "calClose": "Close drawer / modal",
-      "calHelp": "Open / close shortcut help"
+      "calHelp": "Open / close shortcut help",
+      "filterUnread": "Filter: unread",
+      "filterFlagged": "Filter: flagged",
+      "filterHasAttach": "Filter: has attachments"
     }
   },
   "palette": {

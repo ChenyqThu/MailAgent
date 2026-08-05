@@ -7,6 +7,7 @@ import type {
   SearchResult
 } from './core'
 import type { JobEnqueueResult } from './jobs'
+import type { EmailSortDir, EmailSortKey } from '@shared/lib/emailSort'
 
 // ---- Sprint 2 frontend-only enriched views ---------------------------------
 //
@@ -97,6 +98,11 @@ export interface ListOpts {
   internalIds?: number[]
   limit?: number
   offset?: number
+  /** 排序键 / 方向 —— 词表单源 @shared/lib/emailSort。**只有 `listEnriched`
+   *  消费**（两端: Electron DAO + serve-api /email/list-enriched）；`list` 等
+   *  其它读面维持各自的固定序。省略 = date DESC（历史行为）。 */
+  orderBy?: EmailSortKey
+  sortDir?: EmailSortDir
 }
 
 export interface BodyOpts {

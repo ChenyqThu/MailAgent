@@ -9,10 +9,11 @@ import {
   ALL_CATEGORIES,
   ALL_PRIORITIES,
   type EmailCategory,
-  type EmailFilter
+  type FilterAxes
 } from '@shared/state/email-filter'
 import type { GroupKey } from '@shared/state/group-collapse'
 import { actionLabelChinese } from '@shared/lib/ai_labels'
+import { priorityRank, type EmailSortDir, type EmailSortKey } from '@shared/lib/emailSort'
 import type { AIPriority, EnrichedEmailMeta } from '@shared/api/types'
 
 // ─── Row union ────────────────────────────────────────────────────────
@@ -111,21 +112,62 @@ export function rowTopOfId(
   return null
 }
 
-export function applyChipFilter(
-  filter: EmailFilter,
-  rows: ReadonlyArray<EnrichedEmailMeta>
+/** 旗标三态判定 —— 与 EmailRow / useInboxActionShortcuts 同款推导（'已完成' 优先，
+ *  一封「已完成」邮件的 is_flagged 已被写回 false，但历史行可能两者都为真）。 */
+export function isDone(e: EnrichedEmailMeta): boolean {
+  return e.processing_status === '已完成'
+}
+export function isFlaggedOnly(e: EnrichedEmailMeta): boolean {
+  return e.is_flagged === true && !isDone(e)
+}
+
+/**
+ * 「收件人是我」判据 —— `to_addr` 是原始收件人头（逗号分隔、可能带显示名），
+ * 归一化 = 小写 + 剥 `mailto:` 后做子串包含（与 EventDetailDrawer 的 organizer
+ * 比对同款）。刻意**不**写地址解析器：显示名里恰好含有自己邮箱地址的情况不存在，
+ * 而一个半吊子的 `<...>` 解析器遇到 `"Doe, John" <me@x>` 这类带逗号的显示名会
+ * 切错，反而漏掉真正的命中。
+ *
+ * 🔴 只看 To，不看 Cc（owner 拍板）——「抄送给我」和「发给我」是两件事。
+ */
+export function recipientIsMe(
+  toAddr: string | null | undefined,
+  userEmail: string | null
+): boolean {
+  if (!toAddr || !userEmail) return false
+  const me = userEmail
+    .toLowerCase()
+    .replace(/^mailto:/, '')
+    .trim()
+  if (me === '') return false
+  return toAddr.toLowerCase().replaceAll('mailto:', '').includes(me)
+}
+
+/**
+ * 五条二值筛选轴的 AND 组合（取代 Sprint 10 的单选 chip）。全 false → 原样拷贝。
+ *
+ * `userEmail === null`（settings 还没到 / 没配 USER_EMAIL）时 `toMe` 轴**惰性**：
+ * 判据本身取不到，宁可不过滤也不要返回空列表 —— 后者看起来就是「筛选坏了」。
+ * 菜单里那一行也会 disabled，所以正常情况下走不到这个分支。
+ */
+export function applyAxisFilters(
+  axes: FilterAxes,
+  rows: ReadonlyArray<EnrichedEmailMeta>,
+  userEmail: string | null
 ): EnrichedEmailMeta[] {
-  switch (filter) {
-    case 'unread':
-      return rows.filter((r) => !r.is_read)
-    case 'flagged':
-      return rows.filter((r) => r.is_flagged)
-    case 'failed':
-      return rows.filter((r) => r.sync_status === 'failed' || r.sync_status === 'dead_letter')
-    case 'all':
-    default:
-      return rows.slice()
+  const toMeActive = axes.toMe && userEmail !== null
+  if (!axes.unread && axes.flagMark === null && !toMeActive && !axes.hasAttach && !axes.failed) {
+    return rows.slice()
   }
+  return rows.filter((r) => {
+    if (axes.unread && r.is_read) return false
+    if (axes.flagMark === 'flagged' && !isFlaggedOnly(r)) return false
+    if (axes.flagMark === 'done' && !isDone(r)) return false
+    if (toMeActive && !recipientIsMe(r.to_addr, userEmail)) return false
+    if (axes.hasAttach && (r.attach_count ?? 0) <= 0) return false
+    if (axes.failed && r.sync_status !== 'failed' && r.sync_status !== 'dead_letter') return false
+    return true
+  })
 }
 
 // Focused / Other split is purely priority-driven now — LLM CATEGORY_ENUM
@@ -329,6 +371,84 @@ export function groupBySentAnchor(
   return groups
 }
 
+// ─── 排序（非日期键） ────────────────────────────────────────────────
+//
+// SQL 已经按排序键取回了「正确的那 N 封」，但 groupByThread / groupBySentAnchor
+// 会把行重新捆成线程并按 anchorDate DESC 排 —— 那是日期排序的语义。非日期排序下
+// 必须按**线程头**的排序键重排组，否则用户选了「按发件人」看到的仍是日期序。
+
+function threadPinned(g: ThreadGroup, pinnedSet: ReadonlySet<number>): boolean {
+  if (pinnedSet.has(g.head.internal_id)) return true
+  for (const c of g.children) {
+    if (pinnedSet.has(c.internal_id)) return true
+  }
+  return false
+}
+
+/** 排序用的发件人显示值 —— 与 SQL 的 `COALESCE(NULLIF(sender_name,''), sender)` 同义。 */
+function senderSortValue(e: EnrichedEmailMeta): string {
+  const name = e.sender_name ?? ''
+  return (name !== '' ? name : (e.sender ?? '')).toLowerCase()
+}
+
+/**
+ * 按线程头的排序键给组排序（`'date'` 不走这里 —— 它的组序已由 groupByThread 的
+ * anchorDate DESC 定义，重排会把 supplement 不 bump 线程的语义弄丢）。
+ *
+ * 未分类优先级恒沉底（与两侧 SQL 的 null-guard 首列同语义）；末位比较键恒为
+ * internal_id，保证同值行有稳定序。
+ */
+export function sortThreadGroups(
+  groups: ReadonlyArray<ThreadGroup>,
+  sortKey: Exclude<EmailSortKey, 'date'>,
+  sortDir: EmailSortDir
+): ThreadGroup[] {
+  const sign = sortDir === 'asc' ? 1 : -1
+  const out = groups.slice()
+  out.sort((a, b) => {
+    if (sortKey === 'importance') {
+      const ra = priorityRank(a.head.ai_priority)
+      const rb = priorityRank(b.head.ai_priority)
+      // 未分类恒最末，与方向无关。
+      if ((ra === 0) !== (rb === 0)) return ra === 0 ? 1 : -1
+      if (ra !== rb) return (ra - rb) * sign
+    } else {
+      const va =
+        sortKey === 'sender' ? senderSortValue(a.head) : (a.head.subject ?? '').toLowerCase()
+      const vb =
+        sortKey === 'sender' ? senderSortValue(b.head) : (b.head.subject ?? '').toLowerCase()
+      const cmp = va.localeCompare(vb)
+      if (cmp !== 0) return cmp * sign
+    }
+    return (a.head.internal_id - b.head.internal_id) * sign
+  })
+  return out
+}
+
+/**
+ * 非日期排序下的分桶：只留「已固定」+ 一个平铺桶（无分组标题）。传入顺序即展示
+ * 顺序（调用方已用 sortThreadGroups 排好）。
+ */
+export function partitionFlat(
+  groups: ReadonlyArray<ThreadGroup>,
+  pinnedSet: ReadonlySet<number>
+): Record<GroupKey, ThreadGroup[]> {
+  const buckets: Record<GroupKey, ThreadGroup[]> = {
+    pinned: [],
+    flat: [],
+    today: [],
+    yesterday: [],
+    thisWeek: [],
+    lastWeek: [],
+    older: []
+  }
+  for (const g of groups) {
+    if (threadPinned(g, pinnedSet)) buckets.pinned.push(g)
+    else buckets.flat.push(g)
+  }
+  return buckets
+}
+
 export function partitionByDate(
   groups: ReadonlyArray<ThreadGroup>,
   pinnedSet: ReadonlySet<number>
@@ -345,6 +465,7 @@ export function partitionByDate(
 
   const buckets: Record<GroupKey, ThreadGroup[]> = {
     pinned: [],
+    flat: [],
     today: [],
     yesterday: [],
     thisWeek: [],
@@ -357,13 +478,7 @@ export function partitionByDate(
   // whole thread surfaces in the pinned bucket.  Date bucketing only
   // considers the head's date (the freshest message), per "时间分组
   // 不考虑折叠内的邮件,只考虑线程最新邮件".
-  const isThreadPinned = (g: ThreadGroup): boolean => {
-    if (pinnedSet.has(g.head.internal_id)) return true
-    for (const c of g.children) {
-      if (pinnedSet.has(c.internal_id)) return true
-    }
-    return false
-  }
+  const isThreadPinned = (g: ThreadGroup): boolean => threadPinned(g, pinnedSet)
 
   for (const g of groups) {
     if (isThreadPinned(g)) {
@@ -396,22 +511,34 @@ export function flattenGroups(
   activeId: number | null,
   appendLoader: boolean
 ): ListRow[] {
-  const order: GroupKey[] = ['pinned', 'today', 'yesterday', 'thisWeek', 'lastWeek', 'older']
+  const order: GroupKey[] = [
+    'pinned',
+    'flat',
+    'today',
+    'yesterday',
+    'thisWeek',
+    'lastWeek',
+    'older'
+  ]
   const out: ListRow[] = []
   for (const key of order) {
     const groupArr = buckets[key]
     if (groupArr.length === 0) continue
-    const collapsed = collapsedOf(key)
-    // Sprint 14 round 11 — count = visible thread heads (a.k.a. bundles
-    // shown in this group), NOT total messages.  User feedback: "时间
-    // 分组不考虑折叠内的邮件,只考虑线程最新邮件 (也就是折叠的母邮件)".
-    out.push({
-      type: 'header',
-      key,
-      label: labels[key],
-      count: groupArr.length,
-      collapsed
-    })
+    // 'flat'（非日期排序的平铺桶）不出标题也不可折叠 —— 它不是一个「分组」，
+    // 是「剩下的全部」。给它一个「全部 · N」标题只会白占一行且无处可点。
+    const collapsed = key === 'flat' ? false : collapsedOf(key)
+    if (key !== 'flat') {
+      // Sprint 14 round 11 — count = visible thread heads (a.k.a. bundles
+      // shown in this group), NOT total messages.  User feedback: "时间
+      // 分组不考虑折叠内的邮件,只考虑线程最新邮件 (也就是折叠的母邮件)".
+      out.push({
+        type: 'header',
+        key,
+        label: labels[key],
+        count: groupArr.length,
+        collapsed
+      })
+    }
     if (collapsed) continue
     for (const g of groupArr) {
       const isThreadHead = g.threadId !== null && g.children.length > 0
