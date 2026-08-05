@@ -5298,6 +5298,74 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   animation: chat-think-blink 1s steps(2) infinite;
 }
 
+/* ── Chat 流式正文 chunk 左→右 wipe（0804 dogfood 1c · 方案 C）──────────────
+   配对 shared/components/email/streamWipe.tsx：流式期新到句子被包进
+   .stream-wipe span，这里给它一次 mask-position 100%→0% 的左→右扫过。
+   要点（详见 motion-gsap.md §9.2）：
+   - mask 只写在 keyframes 里（fill 默认 none）→ 动画一结束 mask 整个消失，
+     不留常驻 mask/合成层；reduce 下 animation:none → mask 根本不存在，文本直出。
+   - 条带几何：mask-size 220% → 黑区 45.5%(=1.001×元素宽，保证 p=0 全亮)，
+     羽化到 51.4%（羽化带 ≈ 元素宽 13%，同选型 demo）；p=100% 时元素落在
+     透明区（51.4%×2.2=1.13 倍宽之后）→ 全隐。inline 元素的 mask 走
+     box-decoration-break:slice 语义（假想未折行长条），折行天然按阅读顺序推进。
+   - a/b 双名交替由 rehype 插件按「新旧边界变化」翻转：React 会复用相邻两轮
+     同位置的 span（key 同为 span-N），动画名不变则不重启 —— 交替名强制重启。
+   - 时长/曲线贴 §1 三档：slow 380ms + standard（选型 demo 原参数 ~420ms/easeOutQuad，
+     取最近合规档，偏差 <10% 不可辨；authored keyframes 曲线先例 = phrase-in）。
+   - 用关键字 black：mask 只有 alpha 有意义，非主题色，不走 token
+     （同 chatAttachmentAdapter canvas matte / 已退役 W1 尾部渐变的先例）。 */
+.stream-wipe-a {
+  animation: stream-wipe-a 380ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+.stream-wipe-b {
+  animation: stream-wipe-b 380ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+@keyframes stream-wipe-a {
+  from {
+    -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+    mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+    -webkit-mask-size: 220% 100%;
+    mask-size: 220% 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: 100% 0;
+    mask-position: 100% 0;
+  }
+  to {
+    -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+    mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+    -webkit-mask-size: 220% 100%;
+    mask-size: 220% 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: 0% 0;
+    mask-position: 0% 0;
+  }
+}
+/* 与 -a 逐字节相同：存在的唯一理由是交替 animation-name 重启动画 */
+@keyframes stream-wipe-b {
+  from {
+    -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+    mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+    -webkit-mask-size: 220% 100%;
+    mask-size: 220% 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: 100% 0;
+    mask-position: 100% 0;
+  }
+  to {
+    -webkit-mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+    mask-image: linear-gradient(to right, black 45.5%, transparent 51.4%);
+    -webkit-mask-size: 220% 100%;
+    mask-size: 220% 100%;
+    -webkit-mask-repeat: no-repeat;
+    mask-repeat: no-repeat;
+    -webkit-mask-position: 0% 0;
+    mask-position: 0% 0;
+  }
+}
+
 /* ── Chat tool group (Cowork mode) — timeline hairline behind step icons ──
    task 06-08-chat PR B. The step list draws a single vertical hairline behind
    the column of type icons; each icon paints a box-shadow ring in the panel's
@@ -5688,6 +5756,8 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
 @media (prefers-reduced-motion: reduce) {
   .ef-input.invalid.ef-invalid-shake { animation: none; }
   .spin > *, .shimmer, .email-flash, .think-caret { animation: none !important; }
+  /* 流式 chunk wipe：mask 只存在于 keyframes 内，关掉动画 = mask 根本不建，文本直出。 */
+  .stream-wipe { animation: none !important; }
   /* 字形流光 + phrase 轮播停帧：ShimmerText 在 reduce 下已渲染 shimmer-text-static
      （无 win/hi 层），此处再兜底关掉动画 + phrase enter（防 reduce 运行时切换残留）。 */
   .shimmer-text-win, .shimmer-text-hi, .thinking-phrases-item { animation: none !important; }

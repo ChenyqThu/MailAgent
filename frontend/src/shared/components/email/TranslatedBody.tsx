@@ -24,11 +24,13 @@ import { Streamdown, type StreamdownTranslations } from 'streamdown'
 // Streamdown 的 caret + 控件样式需要它的 keyframes/样式。一次性全局引入 (Vite 去重)。
 import 'streamdown/styles.css'
 
+import { StreamWipeBlock } from './streamWipe'
+
 interface Props {
   text: string
-  /** True = 消息仍在流式输出。驱动 Streamdown 的 `isAnimating` + 本组件的尾部渐变 mask;
-   *  流式期走 streaming 模式, 定稿后切 static 让历史消息走稳定的整段渲染。
-   *  省略 / false = 静态完整渲染。 */
+  /** True = 消息仍在流式输出。驱动 Streamdown 的 `isAnimating` + 新到 chunk 的左→右
+   *  wipe（StreamWipeBlock）; 流式期走 streaming 模式, 定稿后切 static 让历史消息走
+   *  稳定的整段渲染。省略 / false = 静态完整渲染。 */
   streaming?: boolean
 }
 
@@ -69,50 +71,37 @@ const STREAMDOWN_ZH_TRANSLATIONS: Partial<StreamdownTranslations> = {
   tableFormatTsv: 'TSV'
 }
 
-// ── W1 质感层 —— 流式尾部渐变 mask（chat UI 优化 epic，2026-08）─────────────────────
+// ── 质感层 —— chunk 内左→右 wipe（0804 dogfood 1c，方案 C；取代 W1 的尾部渐变 mask）──
 //
-// 取代 Streamdown 的 per-token `animated` fadeIn。删它的理由不是审美, 是它在中文下**根本
-// 没生效**: Streamdown 的 `sep:'word'` 切分器按「当前字符是否空白」布尔翻转来切段, 中文
-// 无空格 → 恒不翻转 → 纯中文整段只切出 1 个 token; 再叠加它的增量机制（已渲染部分 duration
-// 置 0）, 结果就是纯中文零动效。另一档 `sep:'char'` 中文逐字会爆 DOM（大量 span + 动画）,
-// 且 owner 明确否掉逐字（「逐字太跳跃」）—— 两个粒度都不合用, 故整个 per-token 层退役。
+// 分工不变: **节奏**由网关 smoothStream 的句级分块给（ai-gateway/chatRun.ts「W1 节奏层」，
+// SENTENCE_CHUNKING_REGEX 常量），**质感**由 `StreamWipeBlock`（./streamWipe.tsx）给 ——
+// 每个新到句子被包进一个 inline span，做一次 380ms 的 mask 左→右扫过，扫完 mask 消失。
+// 与 W1 尾部渐变 mask（整块正文底部 1.5em 静态渐隐）的差别: 渐变不再在句间停顿时恒挂着
+// （owner 反馈那看起来「永远像没渲染完」），且擦除方向与文本阅读顺序一致。
 //
-// 现在的分工: **节奏**由网关 smoothStream 的句级分块给（ai-gateway/chatRun.ts「W1 节奏层」），
-// **质感**由这里的尾部渐变 mask 给 —— 正文最后 1.5em 渐隐, 新句子从这条渐变带里「擦」出来。
-// 零 filter / 零 JS 逐帧（§8 红线）: 单条静态 CSS mask, 不随时间动, 只在 streaming 期挂载。
-// mask 不参与布局 → 挂载/摘除都不引起重排。
-//
-// 模块常量 —— 稳定引用, 否则内联对象每次 render 都是新引用（style 每帧新对象会让 React 每次
-// 都重写 DOM style）。
-//
-// 用 CSS 关键字 `black` 而非 `#000`: mask 里只有 **alpha** 有意义（不透明处保留、透明处擦除），
-// 这不是一个主题色, 不该走 token —— 同 chatAttachmentAdapter 的 canvas matte 先例, 也让
-// mailagent/no-raw-hex 保持干净（无需 eslint-disable）。
-const STREAMING_TAIL_MASK: React.CSSProperties = {
-  WebkitMaskImage: 'linear-gradient(to bottom, black calc(100% - 1.5em), transparent)',
-  maskImage: 'linear-gradient(to bottom, black calc(100% - 1.5em), transparent)'
-}
+// W1 那段「Streamdown per-token animated 在中文下失效」的病根分析仍然成立且是本方案的
+// 前提知识，已随实现细节一起搬进 streamWipe.tsx 头注释；台账见 motion-gsap.md §9.2。
 
 export function TranslatedBody({ text, streaming = false }: Props): React.ReactElement {
   // 流式体验: parseIncompleteMarkdown 让未闭合标记 (**/```/#) 中途自动补全 (闭合
-  // 即定稿, 无字面量闪烁); streaming 期挂尾部渐变 mask, 定稿后切 static 让历史消息走
-  // 稳定整段渲染。
+  // 即定稿, 无字面量闪烁); streaming 期用 StreamWipeBlock 给新到 chunk 做左→右 wipe,
+  // 定稿后切 static 让历史消息走稳定整段渲染。
   //
-  // 🔴 static 分支与 W1 之前**逐字节一致**: Streamdown 的 animate rehype plugin 只在
-  // `animated && isAnimating` 同时为真时才装（dist: `ge&&m&&(k=[...k,ge.rehypePlugin])`），
-  // 而历史消息的 isAnimating=false —— 即改动前它对 static 也从未生效, 删 animated 不改
-  // 历史渲染。`caret` prop 本组件一直没传（Streamdown caret 现状=不显示）, 本轮不动。
+  // 🔴 static 分支不受 BlockComponent 影响: Streamdown mode='static' 走单次全文渲染,
+  // 根本不挂 Block 组件（dist: static 分支直接 jsx(Ct,…)），历史消息零 span 零 mask
+  // 零动画残留 —— 与改动前逐字节一致。`caret` prop 本组件一直没传, 本轮不动。
   //
   // 注: 此前"流式整段重复/交错"并非渲染层问题 —— 根因是 ElectronApi.subscribe()
   // 反订阅失效致 `chat:stream` listener 泄漏 → 每 chunk 投递两次 → 渲染层
   // `content += delta` 追加两次 (详见 ElectronApi.ts 注释)。订阅修好后内容单份,
   // 这里的动效是纯视觉增强, 不影响正确性。
   return (
-    <div className="mail-body break-words" style={streaming ? STREAMING_TAIL_MASK : undefined}>
+    <div className="mail-body break-words">
       <Streamdown
         mode={streaming ? 'streaming' : 'static'}
         parseIncompleteMarkdown
         isAnimating={streaming}
+        BlockComponent={StreamWipeBlock}
         translations={STREAMDOWN_ZH_TRANSLATIONS}
       >
         {text}
