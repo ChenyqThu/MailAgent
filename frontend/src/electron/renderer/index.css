@@ -4692,7 +4692,10 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   overflow-x: auto;
   color: rgb(var(--ink-fg-1));
   font-size: 14px;
-  line-height: 1.7;
+  /* 撰写行距 —— ComposeEditor 在容器上 inline 注入 --ma-compose-lh (本封覆写 ??
+     设置默认), 出站 HTML 把同一个值内联到正文 wrapper 上, 所见即所得。fallback
+     与 COMPOSE_LINE_HEIGHT_DEFAULT (shared/state/appearance.ts) 一致。 */
+  line-height: var(--ma-compose-lh, 1.5);
 }
 .folder-draft-editor .ProseMirror p { margin: 0 0 12px; }
 .folder-draft-editor .ProseMirror strong { color: rgb(var(--ink-fg)); font-weight: 600; }

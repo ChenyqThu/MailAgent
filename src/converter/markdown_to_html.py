@@ -119,7 +119,10 @@ def md_to_html(text: str, font_size: int = 14) -> str:
     body = "\n".join(html_lines)
     body = re.sub(r'(<br>\s*){2,}(<pre\b)', r'<br>\n\2', body)
     body = re.sub(r'(</pre>)\s*(<br>\s*){2,}', r'\1\n<br>', body)
-    return f"<div style='font-family:system-ui,-apple-system;font-size:{font_size}px;line-height:1.6'>{body}</div>"
+    # line-height 与前端 composer 的撰写行距默认对齐 (COMPOSE_LINE_HEIGHT_DEFAULT,
+    # frontend/src/shared/state/appearance.ts) —— AI 建议直接落草稿/发送时行距与用户
+    # 手写的一致, 不会一封松一封紧。
+    return f"<div style='font-family:system-ui,-apple-system;font-size:{font_size}px;line-height:1.5'>{body}</div>"
 
 
 def _inline_format(text: str) -> str:

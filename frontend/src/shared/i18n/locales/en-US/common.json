@@ -203,6 +203,8 @@
       "fontSystem": "System",
       "fontSerif": "Serif",
       "fontMono": "Mono",
+      "lineHeight": "Line height",
+      "lineHeightDefault": "Default",
       "linkUrl": "Link URL",
       "linkApply": "Apply",
       "linkRemove": "Remove link",
@@ -2388,7 +2390,7 @@
       "bodyText": {
         "title": "Body text",
         "meta": "Email body only",
-        "note": "Applies to the email reading area only — list rows, AI fields and other UI text are unaffected. Line height defaults to 1.15.",
+        "note": "Font, size and line height apply to the email reading area; compose line height applies to the composer and is sent with the email, so recipients see the same spacing you typed. Defaults: 1.15 reading, 1.5 compose. List rows, AI fields and other UI text are unaffected.",
         "font": {
           "system": "System default",
           "systemMeta": "Sans-serif system font",
@@ -2404,6 +2406,10 @@
         "lineHeight": {
           "label": "Line height",
           "meta": "Vertical spacing between lines"
+        },
+        "composeLineHeight": {
+          "label": "Compose line height",
+          "meta": "Spacing in the composer and in sent mail"
         }
       },
       "glass": {

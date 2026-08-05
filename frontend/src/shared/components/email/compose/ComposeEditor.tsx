@@ -447,7 +447,20 @@ function TableInsertPopover({ editor }: { editor: Editor }): React.ReactElement 
 
 const HEADING_LEVELS = [1, 2, 3] as const
 
-export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.ReactElement {
+/** 行距档位 ('' = 跟随设置里的撰写行距默认, 语义同字号控件的「默认」)。整封级生效
+ *  —— 不做段落级/选区级 (出站是整段 wrapper 一个 line-height, 段落级表达不了)。 */
+const LINE_HEIGHTS = ['', '1.15', '1.3', '1.5', '1.75', '2.0'] as const
+
+export function ComposeFormatToolbar({
+  editor,
+  lineHeight = '',
+  onLineHeightChange
+}: {
+  editor: Editor
+  /** 本封的行距覆写 ('' = 跟随设置默认)。 */
+  lineHeight?: string
+  onLineHeightChange?: (value: string) => void
+}): React.ReactElement {
   const { t } = useTranslation()
   // 链接/图片受控内联弹框 (window.prompt 在 Electron renderer 被禁用)。
   const [linkOpen, setLinkOpen] = useState(false)
@@ -656,6 +669,16 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
           if (v) editor.chain().focus().setFontSize(v).run()
           else editor.chain().focus().unsetFontSize().run()
         }}
+      />
+      <OptionPopoverButton
+        title={t('compose.editor.lineHeight')}
+        value={lineHeight}
+        currentLabel={lineHeight || t('compose.editor.lineHeightDefault')}
+        options={LINE_HEIGHTS.map((v) => ({
+          value: v,
+          label: v || t('compose.editor.lineHeightDefault')
+        }))}
+        onSelect={(v) => onLineHeightChange?.(v)}
       />
       <FmtSep />
       {/* ── 组 2: B/I/U/S + 颜色 + 高亮 ──────────────────────────── */}
@@ -907,7 +930,15 @@ export function ComposeFormatToolbar({ editor }: { editor: Editor }): React.Reac
   )
 }
 
-export function ComposeEditor({ editor }: { editor: Editor | null }): React.ReactElement {
+export function ComposeEditor({
+  editor,
+  lineHeight
+}: {
+  editor: Editor | null
+  /** 生效行距 (本封覆写 ?? 设置默认)。注入 --ma-compose-lh, 由 index.css 的
+   *  `.folder-draft-editor .ProseMirror` 消费; 缺省时走 CSS fallback。 */
+  lineHeight?: number
+}): React.ReactElement {
   const { t } = useTranslation()
   // TipTap v3: editor.isEmpty 非响应式 (useEditor 默认不每 transaction 重渲染) →
   // 输入后 placeholder 不消失。useEditorState 订阅, isEmpty 变化时重渲染。
@@ -919,7 +950,15 @@ export function ComposeEditor({ editor }: { editor: Editor | null }): React.Reac
     // 空间决定、且显式 min-height 又顶掉了 flex 的 min-height:auto 内容下限, 于是长正文
     // 溢出盒外 (overflow 默认 visible) 直接画到下方引用块上 — 实测 40 行正文交叠 1239px。
     // grow 保留"正文短时撑满可视区"的手感, shrink-0 保证盒高永不低于内容。
-    <div data-testid="compose-editor-block" className="grow shrink-0 min-h-[240px]">
+    <div
+      data-testid="compose-editor-block"
+      className="grow shrink-0 min-h-[240px]"
+      style={
+        lineHeight != null
+          ? ({ '--ma-compose-lh': String(lineHeight) } as React.CSSProperties)
+          : undefined
+      }
+    >
       {/* 正文用满宽 + 24px 内边距 (旧 px-10=40px + max-w-760 居中导致大段留白, 观感
           像"缩进很多"); 去掉宽度上限让正文铺满 compose 列, 与 Outlook 撰写区一致。 */}
       <div className="relative px-6 pt-6 pb-10">

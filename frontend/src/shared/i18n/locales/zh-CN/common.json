@@ -203,6 +203,8 @@
       "fontSystem": "系统",
       "fontSerif": "衬线",
       "fontMono": "等宽",
+      "lineHeight": "行距",
+      "lineHeightDefault": "默认",
       "linkUrl": "链接地址",
       "linkApply": "应用",
       "linkRemove": "移除链接",
@@ -2388,7 +2390,7 @@
       "bodyText": {
         "title": "正文外观",
         "meta": "仅邮件正文",
-        "note": "仅作用于邮件正文阅读区，不改变列表、AI 字段与界面其它文字。行间距默认 1.15。",
+        "note": "字体、字号与行间距作用于邮件正文阅读区；撰写行距作用于撰写框，并随邮件一起发出（收件人看到的行距与你写时一致）。默认：阅读 1.15、撰写 1.5。列表、AI 字段与界面其它文字不受影响。",
         "font": {
           "system": "系统默认",
           "systemMeta": "无衬线系统字体",
@@ -2404,6 +2406,10 @@
         "lineHeight": {
           "label": "行间距",
           "meta": "行与行的垂直间距"
+        },
+        "composeLineHeight": {
+          "label": "撰写行距",
+          "meta": "撰写框与发出邮件的行距"
         }
       },
       "glass": {

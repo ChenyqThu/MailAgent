@@ -41,7 +41,11 @@ import { asWriteError } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { sanitizeEmailHtml } from '@shared/lib/emailSanitize'
 import { assessDraftHtml } from '@shared/lib/draftHtmlGate'
-import { serializeEmailComposerHtml } from '@shared/lib/emailComposerHtml'
+import {
+  serializeEmailComposerHtml,
+  stripComposeLineHeightWrapper
+} from '@shared/lib/emailComposerHtml'
+import { useAppearance } from '@shared/state/appearance'
 import { plaintextToHtml } from '@shared/lib/plaintext_html'
 import { splitQuoteHtml } from '@shared/lib/quoteSplit'
 import type {
@@ -230,6 +234,9 @@ export function ComposePanelInner({
   // D5 — draft-edit 不可编辑富文本 (布局表/CID/VML/Outlook 汤) 保真模式: 原文整块进上面的
   // quoteHtml iframe (不灌 TipTap 防剥离), 编辑器只写顶部新增, 发送时拼回。
   const [preserveOriginal, setPreserveOriginal] = useState(false)
+  // 本封行距覆写 ('' = 跟随设置里的撰写行距默认)。整封级: 编辑区经 --ma-compose-lh
+  // 生效, 发送/存草稿时同一个值由 serializeEmailComposerHtml 内联进出站 HTML。
+  const [lineHeightChoice, setLineHeightChoice] = useState('')
   // D2 Bug B — draft-edit 按 data-ma-quote marker 拆分成功: 回复段在编辑器里,
   // 引用段在下方折叠引用区 (quoteHtml), 发送时原样拼回 (marker 保留)。
   const [splitQuote, setSplitQuote] = useState(false)
@@ -294,6 +301,10 @@ export function ComposePanelInner({
     content: '',
     immediatelyRender: false
   })
+
+  // 撰写行距: 本封覆写 ?? 设置里的默认。编辑区 CSS 变量与出站 HTML 内联样式同源。
+  const composeLineHeightDefault = useAppearance((s) => s.composeLineHeight)
+  const effectiveLineHeight = lineHeightChoice ? Number(lineHeightChoice) : composeLineHeightDefault
 
   // Owner email (From, read-only) + 签名 — same query key as Sidebar / drawers.
   const settingsQ = useQuery({
@@ -368,10 +379,15 @@ export function ComposePanelInner({
       // D2 Bug B — 先按 data-ma-quote marker 拆分: 回复段进编辑器 (仍过富文本混合门),
       // 引用段进折叠引用区 (发送时 getSanitizedHtml 原样拼回, marker 保留)。无 marker
       // (存量草稿 / 外部客户端草稿) → 回退现状全量分流。
+      // 行距 wrapper 防嵌套: 上一轮出站注入的 <div data-ma-lh> 在进 draftHtmlGate /
+      // TipTap **之前**剥掉, 值恢复成本封的行距选择 —— 「发送→存草稿→再编辑→再发送」
+      // 恒只有一层 wrapper。preserve-only 段用原字节 (含 wrapper) 保真, 不剥。
       const { reply, quote } = splitQuoteHtml(d.html)
       if (quote !== null) {
         setSplitQuote(true)
-        const replyAssessment = assessDraftHtml(reply)
+        const unwrapped = stripComposeLineHeightWrapper(reply)
+        if (unwrapped.lineHeight !== null) setLineHeightChoice(String(unwrapped.lineHeight))
+        const replyAssessment = assessDraftHtml(unwrapped.html)
         if (replyAssessment.compatibility === 'preserve-only') {
           // 回复段编辑器表达不了 (布局表/CID/VML 等) → 与引用段一起整块保真,
           // 编辑器留空写新增 — 零丢字节优先于可行内编辑。
@@ -384,7 +400,9 @@ export function ComposePanelInner({
           }
         }
       } else {
-        const assessment = assessDraftHtml(d.html)
+        const unwrapped = stripComposeLineHeightWrapper(d.html)
+        if (unwrapped.lineHeight !== null) setLineHeightChoice(String(unwrapped.lineHeight))
+        const assessment = assessDraftHtml(unwrapped.html)
         if (
           assessment.compatibility === 'editable' ||
           assessment.compatibility === 'normalize-editable'
@@ -455,12 +473,15 @@ export function ComposePanelInner({
     }
   }, [editor, planApplied, markDirty])
 
-  // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。
+  // 发送/存草稿正文 = 编辑器内容 + 原文引用块 (拼回)。行距只包新输入段 —— 序列化
+  // 发生在拼引用之前, 引用段作为兄弟拼在 wrapper 之后, 出站样式契约不受影响。
   const getSanitizedHtml = useCallback((): string => {
-    const body = serializeEmailComposerHtml(editor?.getHTML() ?? '')
+    const body = serializeEmailComposerHtml(editor?.getHTML() ?? '', {
+      lineHeight: effectiveLineHeight
+    })
     const quote = quoteHtml ? sanitizeEmailHtml(quoteHtml) : ''
     return body + quote
-  }, [editor, quoteHtml])
+  }, [editor, quoteHtml, effectiveLineHeight])
 
   // 签名插入 — 在光标处插入 settings.signature (HTML 原样, 纯文本换行转 <br>)。
   const insertSignature = useCallback(() => {
@@ -1089,7 +1110,16 @@ export function ComposePanelInner({
       </div>
 
       {/* 格式工具栏 (主题与正文之间, Outlook 同位) */}
-      {editor && <ComposeFormatToolbar editor={editor} />}
+      {editor && (
+        <ComposeFormatToolbar
+          editor={editor}
+          lineHeight={lineHeightChoice}
+          onLineHeightChange={(v) => {
+            setLineHeightChoice(v)
+            markDirty()
+          }}
+        />
+      )}
 
       {/* 单一纵向滚动所有者：附件、正文与引用共同受 composer 视口约束。 */}
       <div
@@ -1131,7 +1161,7 @@ export function ComposePanelInner({
         )}
 
         {/* 正文 */}
-        <ComposeEditor editor={editor} />
+        <ComposeEditor editor={editor} lineHeight={effectiveLineHeight} />
 
         {/* 原文引用块 — reply/forward 的引用原文, 或 draft-edit 保真模式的原草稿富文本。 */}
         {quoteHtml && (!isDraftEdit || preserveOriginal || splitQuote) && (

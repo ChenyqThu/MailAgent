@@ -499,6 +499,8 @@ export function GeneralTab(): React.ReactElement {
   const setBodyFontSize = useAppearance((s) => s.setBodyFontSize)
   const bodyLineHeight = useAppearance((s) => s.bodyLineHeight)
   const setBodyLineHeight = useAppearance((s) => s.setBodyLineHeight)
+  const composeLineHeight = useAppearance((s) => s.composeLineHeight)
+  const setComposeLineHeight = useAppearance((s) => s.setComposeLineHeight)
 
   const currentLocale: Locale = (SUPPORTED_LOCALES as readonly string[]).includes(i18n.language)
     ? (i18n.language as Locale)
@@ -789,9 +791,10 @@ export function GeneralTab(): React.ReactElement {
         </p>
       </section>
 
-      {/* ── 5. Body text — 正文外观 (字体 / 字号 / 行高) ──────────────
-          仅作用于 EmailBodyFrame iframe 正文; 通过 appearance store 注入 BODY_CSS
-          的 --ma-body-* 变量。字号/行高用 Stepper 连续可调, 行高默认 1.15。 */}
+      {/* ── 5. Body text — 正文外观 (字体 / 字号 / 行高 / 撰写行距) ──────
+          字体/字号/行间距作用于 EmailBodyFrame iframe 正文, 通过 appearance store
+          注入 BODY_CSS 的 --ma-body-* 变量 (行高默认 1.15); 撰写行距作用于 composer
+          编辑区 (--ma-compose-lh) 并内联进出站 HTML 随邮件发出 (默认 1.5)。 */}
       <section className="mb-[var(--settings-block-gap,1.75rem)]">
         <BlockHeader
           title={t('settings.general.bodyText.title', { defaultValue: '正文外观' })}
@@ -835,11 +838,26 @@ export function GeneralTab(): React.ReactElement {
             canDec={bodyLineHeight > BODY_LINE_HEIGHT_MIN + 1e-6}
             canInc={bodyLineHeight < BODY_LINE_HEIGHT_MAX - 1e-6}
           />
+          {/* 撰写行距 —— 与上面的阅读行间距是两个独立维度: 这一档同时决定撰写框的
+              行距和发出去的邮件里内联的 line-height (收件人看到的就是它)。 */}
+          <Stepper
+            label={t('settings.general.bodyText.composeLineHeight.label', {
+              defaultValue: '撰写行距'
+            })}
+            meta={t('settings.general.bodyText.composeLineHeight.meta', {
+              defaultValue: '撰写框与发出邮件的行距'
+            })}
+            display={composeLineHeight.toFixed(2)}
+            onDec={() => setComposeLineHeight(Math.round((composeLineHeight - 0.05) * 100) / 100)}
+            onInc={() => setComposeLineHeight(Math.round((composeLineHeight + 0.05) * 100) / 100)}
+            canDec={composeLineHeight > BODY_LINE_HEIGHT_MIN + 1e-6}
+            canInc={composeLineHeight < BODY_LINE_HEIGHT_MAX - 1e-6}
+          />
         </div>
         <p className="text-meta text-ink-fg-2 mt-2.5 leading-relaxed">
           {t('settings.general.bodyText.note', {
             defaultValue:
-              '仅作用于邮件正文阅读区，不改变列表、AI 字段与界面其它文字。行间距默认 1.15。'
+              '字体、字号与行间距作用于邮件正文阅读区；撰写行距作用于撰写框，并随邮件一起发出（收件人看到的行距与你写时一致）。默认：阅读 1.15、撰写 1.5。列表、AI 字段与界面其它文字不受影响。'
           })}
         </p>
       </section>
