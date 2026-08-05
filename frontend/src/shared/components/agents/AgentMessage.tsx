@@ -37,7 +37,13 @@ export function AgentUserMessage(): React.JSX.Element {
   // 纯图发送没有 text part → content 为空，再画气泡就是一枚空药丸（与邮件面板同规）。
   const hasBubbleContent = useAuiState((s) => s.message.content.length > 0)
   return (
-    <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col items-end">
+    // 0804 dogfood WP5 — turnAnchor="top"（AgentThread.tsx）把这条 Root 的 offsetTop 当滚动目标，
+    // 短消息下算出的 scrollTop 精确等于 offsetTop（0px 贴边）。上游走命令式 viewport.scrollTo(...)
+    // 而非 scrollIntoView，所以 scroll-margin-top 不参与；给 Root 加 margin-top 也无效——offsetTop
+    // 本身含外边距，目标值会等量变大，净效果为零。padding 是唯一能在不改变 offsetTop 的前提下增加
+    // 可视顶部留白的手段：pt-2.5 撑出视觉间隙，-mt-2.5 把撑高抵消掉，让消息流里的纵向间距逐像素不变。
+    // 🔴 这两个 class 必须成对存在——删掉任意一个都会打破"留白但不改变行间距"的平衡，别当作冗余清理掉。
+    <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col items-end pt-2.5 -mt-2.5">
       <div className="relative max-w-[80%]">
         {hasBubbleContent && (
           <div className="rounded-2xl rounded-br-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">

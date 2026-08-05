@@ -206,4 +206,17 @@ describe('通用对话（AgentThread）— 图片历史', () => {
     expect(root.querySelector('.lucide-paperclip')).toBeTruthy()
     expect(root.textContent).toContain('bundle.zip')
   })
+
+  // 0804 dogfood WP5 — turnAnchor="top" 用这条 Root 的 offsetTop 当滚动目标，短消息下算出的
+  // scrollTop 精确等于 offsetTop（0px 贴边）。jsdom/happy-dom 不排版，测不到真实的 10px 视觉间隙，
+  // 这里只钉 class 层面的契约：pt-2.5 撑留白、-mt-2.5 抵消撑高，两者必须成对出现。
+  test('Root 带 pt-2.5 / -mt-2.5 抵消对，留白不改变消息间距', async () => {
+    const row = wireRow({ id: 103, role: 'user', content: '一条普通消息' })
+    const { container } = renderAgentThread([chatMessageToUIMessage(row)])
+    await waitFor(() => expect(screen.queryByText('一条普通消息')).toBeTruthy())
+
+    const root = messageRoot(container)
+    expect(root.className).toMatch(/\bpt-2\.5\b/)
+    expect(root.className).toMatch(/-mt-2\.5\b/)
+  })
 })
