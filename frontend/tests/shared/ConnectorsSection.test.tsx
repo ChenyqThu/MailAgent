@@ -29,7 +29,11 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-li
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
 
-import type { ConnectorSummary, ConnectorToolSummary } from '../../src/shared/api/types'
+import type {
+  ConnectorCatalogEntry,
+  ConnectorSummary,
+  ConnectorToolSummary
+} from '../../src/shared/api/types'
 
 // t 恒返 key（断言按 key 走），但**记账**：插值参数是 syncDone 计数这类契约的唯一证据，
 // 拼进返回值会把既有的 getByText(key) 断言全打散，所以查 mock.calls 而不是查 DOM 文本。
@@ -62,7 +66,11 @@ const { connectorApi } = vi.hoisted(() => ({
     bulkSetToolMode: vi.fn(),
     setPreprocessEnabled: vi.fn(),
     disconnect: vi.fn(),
-    purgeOrphans: vi.fn()
+    purgeOrphans: vi.fn(),
+    // 08-05 WP-12 —— 预置目录（Composio 单轨）+ BYOK key。
+    catalog: vi.fn(),
+    setComposioKey: vi.fn(),
+    clearComposioKey: vi.fn()
   }
 }))
 vi.mock('@shared/hooks/useMailApi', () => ({
@@ -105,9 +113,34 @@ function connector(
     last_error: partial.last_error ?? null,
     last_synced_at: partial.last_synced_at ?? null,
     credential: partial.credential ?? null,
-    flow: partial.flow ?? null
+    flow: partial.flow ?? null,
+    source: partial.source ?? 'custom_mcp',
+    superseded_by_catalog: partial.superseded_by_catalog ?? false
   }
 }
+
+/** 08-05 WP-12 —— 预置目录条目夹具。 */
+function catalogEntry(
+  partial: Partial<ConnectorCatalogEntry> & { connector_id: string }
+): ConnectorCatalogEntry {
+  return {
+    connector_id: partial.connector_id,
+    display_name: partial.display_name ?? partial.connector_id,
+    description_key: partial.description_key ?? `settings.connectors.catalog.desc.${partial.connector_id}`,
+    category: partial.category ?? 'work',
+    logo_text: partial.logo_text ?? 'X',
+    logo_color: partial.logo_color ?? '#111111',
+    toolkits: partial.toolkits ?? [partial.connector_id.toUpperCase()],
+    tool_count: partial.tool_count ?? 12,
+    configured: partial.configured ?? false,
+    superseded: partial.superseded ?? false
+  }
+}
+
+const CATALOG_ENTRIES: ConnectorCatalogEntry[] = [
+  catalogEntry({ connector_id: 'gmail', display_name: 'Gmail', tool_count: 15 }),
+  catalogEntry({ connector_id: 'notion', display_name: 'Notion', configured: true, superseded: true })
+]
 
 const NOTION = connector({
   connector_id: 'notion',
@@ -229,7 +262,19 @@ beforeEach(() => {
     crud_type: null,
     updated: 4
   })
-  connectorApi.disconnect.mockResolvedValue({ connector_id: 'notion', deleted_credentials: 2 })
+  connectorApi.disconnect.mockResolvedValue({
+    connector_id: 'notion',
+    deleted_credentials: 2,
+    purged: false
+  })
+  // 默认：目录**空**（Gmail 卡与上面的连接行会共用「连接」这个可访问名，让既有用例的
+  // getByRole 变歧义）。目录自己的用例显式塞 CATALOG_ENTRIES。
+  connectorApi.catalog.mockResolvedValue({
+    composio: { configured: false, updated_at: null },
+    entries: []
+  })
+  connectorApi.setComposioKey.mockResolvedValue({ configured: true, updated_at: 1 })
+  connectorApi.clearComposioKey.mockResolvedValue({ configured: false, updated_at: null })
   window.localStorage.setItem(NOTICE_KEY, '1')
 })
 
@@ -341,7 +386,7 @@ describe('ConnectorsSection — per-tool 三档（08-05 WP-10）', () => {
     ).toHaveLength(3)
   })
 
-  test("三档单选：off / ask 直接落 setToolMode；非破坏性 auto 也直接落", async () => {
+  test('三档单选：off / ask 直接落 setToolMode；非破坏性 auto 也直接落', async () => {
     const { container } = renderUi()
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
     await expandTools(container, 'notion')
@@ -374,9 +419,7 @@ describe('ConnectorsSection — per-tool 三档（08-05 WP-10）', () => {
     fireEvent.click(within(modeGroups()[3]).getByRole('button', { name: MODE.auto }))
     expect(connectorApi.setToolMode).not.toHaveBeenCalled()
     const dialog = await screen.findByRole('dialog')
-    expect(
-      within(dialog).getByText('settings.connectors.destructiveAutoDialog.title')
-    ).toBeTruthy()
+    expect(within(dialog).getByText('settings.connectors.destructiveAutoDialog.title')).toBeTruthy()
 
     // 取消 → 不落库。
     fireEvent.click(
@@ -457,9 +500,7 @@ describe('ConnectorsSection — per-tool 三档（08-05 WP-10）', () => {
     await expandTools(container, 'notion')
     const reset = await screen.findByRole('button', { name: 'settings.connectors.tools.reset' })
     fireEvent.click(reset)
-    await waitFor(() =>
-      expect(connectorApi.bulkSetToolMode).toHaveBeenCalledWith('notion', null)
-    )
+    await waitFor(() => expect(connectorApi.bulkSetToolMode).toHaveBeenCalledWith('notion', null))
   })
 
   test('orphan 行仍恒锁定（远端已经没有这个工具，配了也不会注册）', async () => {
@@ -692,7 +733,8 @@ describe('ConnectorsSection — 断开', () => {
     fireEvent.click(
       within(dialog).getByRole('button', { name: 'settings.connectors.disconnectDialog.confirm' })
     )
-    await waitFor(() => expect(connectorApi.disconnect).toHaveBeenCalledWith('notion'))
+    // 08-05 WP-12：purge 恒显式发（默认 false = 只删凭证、留配置，PR1 语义不变）。
+    await waitFor(() => expect(connectorApi.disconnect).toHaveBeenCalledWith('notion', false))
   })
 })
 
@@ -719,5 +761,133 @@ describe('ConnectorsSection — 远程 web', () => {
       name: 'settings.connectors.connect'
     }) as HTMLButtonElement
     expect(connect.disabled).toBe(false)
+  })
+})
+
+// ─── 08-05 WP-12：预置目录（Composio 单轨）+ BYOK gate ────────────────────────
+
+describe('ConnectorsSection — 预置目录 gate', () => {
+  test('没配 key：目录卡全 disabled + 引导块在场，点「连接」不会发起授权', async () => {
+    connectorApi.catalog.mockResolvedValue({
+      composio: { configured: false, updated_at: null },
+      entries: CATALOG_ENTRIES
+    })
+    connectorApi.list.mockResolvedValue([])
+    renderUi()
+    await waitFor(() => expect(screen.getByText('Gmail')).toBeTruthy())
+
+    // 引导块（注册 → 取 key → 粘贴）+ 跳到输入框的深链。
+    expect(screen.getByText('settings.connectors.catalog.gateTitle')).toBeTruthy()
+    expect(screen.getByText('settings.connectors.catalog.gateBody')).toBeTruthy()
+    expect(
+      screen.getByRole('button', { name: 'settings.connectors.catalog.gateCta' })
+    ).toBeTruthy()
+
+    // Gmail 卡的「连接」按钮 disabled —— 点了也不该有任何请求。
+    const buttons = screen.getAllByRole('button', { name: 'settings.connectors.connect' })
+    expect(buttons.length).toBeGreaterThan(0)
+    for (const b of buttons) expect((b as HTMLButtonElement).disabled).toBe(true)
+    fireEvent.click(buttons[0])
+    expect(connectorApi.oauthStart).not.toHaveBeenCalled()
+  })
+
+  test('配了 key：目录卡可点；首连先过一次性出站告知，确认后才 oauthStart', async () => {
+    connectorApi.catalog.mockResolvedValue({
+      composio: { configured: true, updated_at: 1_700_000_000 },
+      entries: CATALOG_ENTRIES
+    })
+    connectorApi.oauthStart.mockResolvedValue({
+      connector_id: 'gmail',
+      authorize_url: 'https://connect.composio.dev/link/abc',
+      status: 'authorizing',
+      callback_timeout_seconds: 300
+    })
+    connectorApi.list.mockResolvedValue([])
+    renderUi()
+    await waitFor(() => expect(screen.getByText('Gmail')).toBeTruthy())
+    expect(screen.queryByText('settings.connectors.catalog.gateTitle')).toBeNull()
+
+    const connectBtn = screen
+      .getAllByRole('button', { name: 'settings.connectors.connect' })
+      .find((b) => !(b as HTMLButtonElement).disabled)
+    expect(connectBtn).toBeTruthy()
+    fireEvent.click(connectBtn as HTMLElement)
+
+    // 🔴 出站告知②：数据过境 / token 托管 / 日志留存 —— 先确认，才连。
+    const dialog = await screen.findByRole('dialog')
+    expect(
+      within(dialog).getByText('settings.connectors.catalog.outboundDialog.title')
+    ).toBeTruthy()
+    expect(connectorApi.oauthStart).not.toHaveBeenCalled()
+
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: 'settings.connectors.catalog.outboundDialog.confirm'
+      })
+    )
+    await waitFor(() => expect(connectorApi.oauthStart).toHaveBeenCalledWith('gmail'))
+  })
+
+  test('已配置的目录条目不给第二个入口（按钮显示「已添加」且不可点）', async () => {
+    connectorApi.catalog.mockResolvedValue({
+      composio: { configured: true, updated_at: 1 },
+      entries: CATALOG_ENTRIES
+    })
+    connectorApi.list.mockResolvedValue([])
+    renderUi()
+    const added = await screen.findByRole('button', {
+      name: 'settings.connectors.catalog.alreadyAdded'
+    })
+    expect((added as HTMLButtonElement).disabled).toBe(true)
+    // 老直连行还占着同一个 id → 目录卡上如实说「先断开清除」。
+    expect(screen.getByText('settings.connectors.catalog.supersedes')).toBeTruthy()
+  })
+
+  test('保存 key 走 setComposioKey，且输入框保存后清空（明文不回显）', async () => {
+    renderUi()
+    await waitFor(() =>
+      expect(screen.getByText('settings.connectors.catalog.title')).toBeTruthy()
+    )
+    const input = screen.getByLabelText('settings.connectors.catalog.keyLabel')
+    fireEvent.change(input, { target: { value: 'ck_secret' } })
+    fireEvent.click(screen.getByRole('button', { name: 'settings.connectors.catalog.keySave' }))
+    await waitFor(() => expect(connectorApi.setComposioKey).toHaveBeenCalledWith('ck_secret'))
+    await waitFor(() => expect((input as HTMLInputElement).value).toBe(''))
+    // 🔴 输入框是 password 型：肩窥与截图都看不到。
+    expect((input as HTMLInputElement).type).toBe('password')
+  })
+})
+
+describe('ConnectorsSection — 出站告知与迁移提示', () => {
+  test('每行如实标注执行路线；被目录取代的老直连行给迁移提示', async () => {
+    connectorApi.list.mockResolvedValue([
+      connector({ ...NOTION, superseded_by_catalog: true } as never),
+      connector({
+        connector_id: 'gmail',
+        display_name: 'Gmail',
+        status: 'connected',
+        source: 'composio'
+      })
+    ])
+    renderUi()
+    await waitFor(() => expect(screen.getByText('settings.connectors.viaDirect')).toBeTruthy())
+    expect(screen.getByText('settings.connectors.viaComposio')).toBeTruthy()
+    expect(screen.getByText('settings.connectors.supersededHint')).toBeTruthy()
+  })
+
+  test('断开对话框带「同时清除工具配置」勾选；老直连行默认勾上并把 purge 传给服务端', async () => {
+    connectorApi.list.mockResolvedValue([
+      connector({ ...NOTION, superseded_by_catalog: true } as never)
+    ])
+    renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: 'settings.connectors.disconnect' }))
+    const dialog = await screen.findByRole('dialog')
+    const box = within(dialog).getByLabelText('settings.connectors.disconnectDialog.purge')
+    expect((box as HTMLInputElement).checked).toBe(true)
+    fireEvent.click(
+      within(dialog).getByRole('button', { name: 'settings.connectors.disconnectDialog.confirm' })
+    )
+    await waitFor(() => expect(connectorApi.disconnect).toHaveBeenCalledWith('notion', true))
   })
 })

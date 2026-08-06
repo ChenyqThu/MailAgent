@@ -173,6 +173,12 @@ class ConnectorRow:
     #: PR3：邮件预处理分类是否获授权用这个 connector（独立于 custom agent 的 grant_connectors；
     #: 天花板恒 read，见 DDL 注释）。默认 False。
     preprocess_enabled: bool = False
+    #: 08-05 WP-12（Composio 单轨）：这一行的**装配路线**。``'composio'`` = 预置目录条目
+    #: （托管 MCP 端点 + 静态 header）；``'custom_mcp'`` = 直连远端 MCP（OAuth 2.1/PKCE/DCR），
+    #: 也是**存量直连行**（Notion / Atlassian）升级后的归属。默认 custom_mcp——见 DDL 注释。
+    source: str = "custom_mcp"
+    #: composio 行的 tool-router session id（明文非敏感；服务端持久，复用而非每次重建）。
+    composio_session_id: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -221,6 +227,17 @@ CONNECTOR_STATUSES = ("disconnected", "authorizing", "connected", "needs_reauth"
 #: 危险性提示改由**独立的 ``destructive`` 列**承担（审批卡红警告），写类工具恒 HITL 的安全
 #: 地板不变。存量 ``crud_type='delete'`` 行由 ``_migrate_additive`` 离线重推导成 write+destructive。
 CONNECTOR_CRUD_TYPES = ("read", "write", "update")
+
+#: connector.source 值域（08-05 WP-12，写侧校验）——**canonical 源**：
+#: ``composio`` = 预置目录条目，经 Composio 托管 MCP 端点（静态 header 装配、token 托管在
+#: Composio、工具入参/返回过其云）；``custom_mcp`` = 直连远端 MCP server（现有 OAuth 2.1 /
+#: PKCE / DCR 全套 + loopback 回调），也是**存量直连行**（Notion / Atlassian）的归属。
+#:
+#: 🔴 默认 ``custom_mcp`` 而不是研究稿建议的 ``composio``：``_migrate_additive`` 补列时存量
+#: 行会吃默认值，而存量行**全是**直连的（08-05 之前不存在 composio 行）——默认写成 composio
+#: 会把两条老直连行当场标错源，之后所有按 source 分派的地方（client 装配、出站告知、
+#: 「已取代」提示）都跟着错。新建 composio 行一律显式传 source。
+CONNECTOR_SOURCES = ("composio", "custom_mcp")
 
 #: per-tool 三档值域（08-05 owner 拍板，master-plan WP-10）——**canonical 源**：
 #: ``auto`` = 注册且 owner-present 场地免卡执行（read 的 auto 就是既有 silent 行为）；
@@ -417,7 +434,7 @@ CREATE INDEX IF NOT EXISTS idx_profile_history_doc ON agent_profile_history(doc_
 -- external_credential（namespace='connector:<id>'）；本表只装连接元数据 + 工具清单。
 -- transport 留位：MVP 只实现 streamable_http，stdio 不做但 schema 不用改（PRD Assumptions）。
 CREATE TABLE IF NOT EXISTS connector (
-    connector_id   TEXT PRIMARY KEY,       -- 'notion' | 'atlassian'（registry.CONNECTORS 键）
+    connector_id   TEXT PRIMARY KEY,       -- 'gmail' | 'notion' | …（预置目录键，或用户自建 id）
     server_url     TEXT NOT NULL,
     transport      TEXT NOT NULL DEFAULT 'streamable_http',
     display_name   TEXT,
@@ -432,6 +449,12 @@ CREATE TABLE IF NOT EXISTS connector (
     scopes_json    TEXT,                   -- 授权拿到的 scope 列表（坑 1.5 透明展示，明文非敏感）
     last_error     TEXT,
     last_synced_at INTEGER,                -- 工具清单最后同步 epoch 秒
+    -- 08-05 WP-12：装配路线（CONNECTOR_SOURCES 写侧校验，无 SQL CHECK）。
+    -- 🔴 DEFAULT 'custom_mcp' 是**有意**的：_migrate_additive 补列时存量行（全是直连的
+    -- Notion / Atlassian）吃这个默认值才不会被错标成 composio。见 CONNECTOR_SOURCES 注释。
+    source         TEXT NOT NULL DEFAULT 'custom_mcp',
+    -- composio 行的 tool-router session id（明文非敏感）；custom_mcp 行恒 NULL。
+    composio_session_id TEXT,
     created_at     INTEGER NOT NULL,
     updated_at     INTEGER NOT NULL
 );
@@ -523,6 +546,16 @@ class AgentConfigStore:
             conn.execute(
                 "ALTER TABLE connector ADD COLUMN preprocess_enabled INTEGER NOT NULL DEFAULT 0"
             )
+        # 08-05 WP-12（Composio 单轨）——存量 connector 表补两列。
+        # 🔴 `source` 的 DEFAULT 'custom_mcp' 就是存量行的正确答案：本次改动之前**不存在**
+        # composio 行，两条老行（Notion / Atlassian）都是直连的。所以这里不需要任何数据回填
+        # （回填反而会猜错）。
+        if c_cols and "source" not in c_cols:
+            conn.execute(
+                "ALTER TABLE connector ADD COLUMN source TEXT NOT NULL DEFAULT 'custom_mcp'"
+            )
+        if c_cols and "composio_session_id" not in c_cols:
+            conn.execute("ALTER TABLE connector ADD COLUMN composio_session_id TEXT")
         # 08-03 delete 档位退役 —— 存量陈旧行**离线重推导**（不需要网络 re-sync）。
         # 🔴 可证明等价：旧映射里产出 delete 的**唯一**路径是 `destructive_hint is True`，而
         # 当前 `derive_crud_type` 对同一输入产出 write，`derive_destructive` 产出 True ⇒ 这条
@@ -1145,23 +1178,67 @@ class AgentConfigStore:
         server_url: str,
         display_name: Optional[str] = None,
         transport: str = "streamable_http",
+        source: Optional[str] = None,
+        composio_session_id: Any = _UNSET,
     ) -> None:
         """建/刷 connector 行的**静态定义**字段。冲突时只更新 server_url/display_name/
-        transport/updated_at —— status/enabled/scopes 等运行态一律不动（另走
-        ``update_connector_state``）。"""
+        transport/updated_at（+ 显式传了的 source / composio_session_id）—— status/enabled/
+        scopes 等运行态一律不动（另走 ``update_connector_state``）。
+
+        ``source``（08-05 WP-12）：``None`` = 不动（建行时吃 DDL 默认 ``custom_mcp``）。
+        ``composio_session_id`` 用哨兵区分「不动」与「显式清空 None」（重建 session 时要能
+        把旧 id 换掉，而 sync 这类不碰 session 的调用方绝不能顺手抹掉它）。
+        """
         if not connector_id or not isinstance(connector_id, str):
             raise ValueError("connector_id must be a non-empty string")
+        if source is not None and source not in CONNECTOR_SOURCES:
+            raise ValueError(f"connector source {source!r} not in {CONNECTOR_SOURCES}")
         now = _now()
         with self._connection() as conn:
             conn.execute(
                 "INSERT INTO connector (connector_id, server_url, transport, display_name,"
-                " created_at, updated_at) VALUES (?,?,?,?,?,?) "
+                " source, composio_session_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(connector_id) DO UPDATE SET server_url=excluded.server_url,"
                 " transport=excluded.transport, display_name=excluded.display_name,"
                 " updated_at=excluded.updated_at",
-                (connector_id, server_url, transport, display_name, now, now),
+                (
+                    connector_id,
+                    server_url,
+                    transport,
+                    display_name,
+                    source or "custom_mcp",
+                    None if composio_session_id is _UNSET else composio_session_id,
+                    now,
+                    now,
+                ),
             )
+            sets: list[str] = []
+            params: list[Any] = []
+            if source is not None:
+                sets.append("source=?")
+                params.append(source)
+            if composio_session_id is not _UNSET:
+                sets.append("composio_session_id=?")
+                params.append(composio_session_id)
+            if sets:
+                params.append(connector_id)
+                conn.execute(
+                    f"UPDATE connector SET {', '.join(sets)} WHERE connector_id=?", params
+                )
             conn.commit()
+
+    def delete_connector(self, connector_id: str) -> bool:
+        """整行移除（08-05 WP-12「断开并清除配置」）：connector 行 + 它的全部工具行。
+
+        🔴 与 ``disconnect``（只删凭证、保留配置）分工明确：这条是 owner **显式**要求的
+        「当它没存在过」——预置目录切换（旧直连行退场）与彻底卸载都走它。凭证不在本表，
+        由调用方（router）按 namespace 逐条删干净后再调本方法。幂等（无行 → False）。
+        """
+        with self._connection() as conn:
+            conn.execute("DELETE FROM connector_tool WHERE connector_id=?", (connector_id,))
+            cur = conn.execute("DELETE FROM connector WHERE connector_id=?", (connector_id,))
+            conn.commit()
+        return cur.rowcount > 0
 
     def update_connector_state(
         self,
@@ -1730,6 +1807,12 @@ def _row_to_connector(row: sqlite3.Row) -> ConnectorRow:
         created_at=row["created_at"],
         updated_at=row["updated_at"],
         preprocess_enabled=bool(row["preprocess_enabled"]),
+        # 读侧宽容：值域外的 source（手改 DB）当 custom_mcp —— 不认识的路线绝不当成
+        # 「Composio 托管、静态 header 直发」（那会拿一个 API key 去打一个未知端点）。
+        source=(
+            row["source"] if row["source"] in CONNECTOR_SOURCES else "custom_mcp"
+        ),
+        composio_session_id=row["composio_session_id"],
     )
 
 

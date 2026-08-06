@@ -58,6 +58,15 @@ def flag_on_client(client, fresh_agent_cfg):
     from src.api.app import app
     from src.api.deps import get_settings
 
+    # 08-05 WP-12：registry 硬编码常量退役后，「已知 connector」= 库里有行（或预置目录里
+    # 有条目）。本文件的绝大多数用例讲的是**一个已连接的直连 connector**（PR1-PR5 的语义），
+    # 所以在这里 seed 一行存量直连 `notion` —— 与升级后老库里那两行长得一模一样。
+    fresh_agent_cfg.upsert_connector(
+        "notion",
+        server_url="https://mcp.notion.com/mcp",
+        display_name="Notion",
+        source="custom_mcp",
+    )
     app.dependency_overrides[get_settings] = lambda: _Cfg(enabled=True)
     yield client
     app.dependency_overrides.pop(get_settings, None)
@@ -94,6 +103,10 @@ def test_flag_off_all_non_callback_endpoints_409(flag_off_client):
         ("POST", "/api/connector/notion/tools/bulk_mode", {"mode": "ask"}),
         # PR5 —— orphan 清理端点同样挂 flag 门。
         ("POST", "/api/connector/notion/tools/purge_orphans", None),
+        # 08-05 WP-12 —— 预置目录与 BYOK key 端点同样挂 flag 门。
+        ("GET", "/api/connector/catalog", None),
+        ("POST", "/api/connector/composio/key", {"api_key": "x"}),
+        ("DELETE", "/api/connector/composio/key", None),
     ]
     for method, url, body in cases:
         r = flag_off_client.request(method, url, json=body)
@@ -144,9 +157,18 @@ def test_callback_error_param_delivers_denied_page(client):
 
 
 def test_unknown_connector_404(flag_on_client):
-    r = flag_on_client.post("/api/connector/github/sync")
+    # 🔴 用一个既不在库里、也不在预置目录里的 id（08-05 WP-12 之后 `github` **在目录里**，
+    # 拿它当「未知」会把目录条目也测成 404）。
+    r = flag_on_client.post("/api/connector/definitely-not-a-service/sync")
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+def test_catalog_entry_without_row_cannot_sync(flag_on_client):
+    """目录里有、但没连过 → sync 409「先连接」（不能凭空 upsert 一行假的「已配置」）。"""
+    r = flag_on_client.post("/api/connector/gmail/sync")
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_CONNECTOR_NOT_CONNECTED"
 
 
 # ── sync：stub client → 双表落库 → tools 端点可读 ───────────────────────────────
@@ -961,3 +983,102 @@ def test_purge_orphans_zero_when_nothing_orphaned(flag_on_client, fresh_agent_cf
 def test_purge_orphans_unknown_connector_404(flag_on_client, fresh_agent_cfg):
     r = _purge(flag_on_client, connector="ghost")
     assert r.status_code == 404 and r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+# ── 08-05 WP-12：预置目录（Composio 单轨）+ BYOK ────────────────────────────────
+
+
+def test_catalog_lists_entries_and_key_state(flag_on_client, fresh_agent_cfg):
+    """目录条目 = 代码内 curated 数据（不需要 key 就能看）；`composio.configured` 是 gate。"""
+    r = flag_on_client.get("/api/connector/catalog")
+    assert r.status_code == 200
+    data = r.json()["data"]
+    assert data["composio"] == {"configured": False, "updated_at": None}
+    by_id = {e["connector_id"]: e for e in data["entries"]}
+    assert {"gmail", "slack", "github", "notion", "atlassian"} <= set(by_id)
+    gmail = by_id["gmail"]
+    assert gmail["display_name"] == "Gmail"
+    assert gmail["description_key"] == "settings.connectors.catalog.desc.gmail"
+    assert gmail["logo_text"] and gmail["logo_color"].startswith("#")
+    assert 0 < gmail["tool_count"] <= 20
+    assert gmail["configured"] is False and gmail["superseded"] is False
+    # 存量直连 notion 行（flag_on_client 种的）= 被目录取代，等 owner 手动断开清除。
+    assert by_id["notion"]["configured"] is True and by_id["notion"]["superseded"] is True
+
+
+def test_list_marks_legacy_direct_rows_as_superseded(flag_on_client, fresh_agent_cfg):
+    """列表行带 source + superseded_by_catalog —— 「经 Composio」/「直连」文案与迁移提示
+    的唯一判据（前端不自己推断）。"""
+    fresh_agent_cfg.upsert_connector(
+        "gmail", server_url="https://mcp.composio.test/x", source="composio"
+    )
+    rows = {c["connector_id"]: c for c in flag_on_client.get("/api/connector").json()["data"]["connectors"]}
+    assert rows["notion"]["source"] == "custom_mcp"
+    assert rows["notion"]["superseded_by_catalog"] is True
+    assert rows["gmail"]["source"] == "composio"
+    assert rows["gmail"]["superseded_by_catalog"] is False
+    # 🔴 列表 = 库里的行（registry 全集语义已退役）：没连过的目录条目不在这里。
+    assert "slack" not in rows
+
+
+def test_composio_key_write_is_masked_and_gates_connect(flag_on_client, fresh_agent_cfg):
+    """没 key → 连接 409（可行动错误码）；配了 key 之后端点不再拦。
+
+    🔴 响应里**没有任何 key 字符**（只有 configured + updated_at）。
+    """
+    r = flag_on_client.post("/api/connector/gmail/oauth/start")
+    assert r.status_code == 409 and r.json()["error"]["code"] == "E_COMPOSIO_NO_KEY"
+
+    secret = "ck_test_not_a_real_key"
+    w = flag_on_client.post("/api/connector/composio/key", json={"api_key": secret})
+    assert w.status_code == 200
+    assert w.json()["data"]["configured"] is True
+    assert secret not in w.text
+
+    s = flag_on_client.get("/api/connector/catalog")
+    assert s.json()["data"]["composio"]["configured"] is True
+    assert secret not in s.text
+
+    d = flag_on_client.request("DELETE", "/api/connector/composio/key")
+    assert d.status_code == 200 and d.json()["data"]["configured"] is False
+
+
+def test_composio_key_rejects_empty(flag_on_client, fresh_agent_cfg):
+    r = flag_on_client.post("/api/connector/composio/key", json={"api_key": "  "})
+    assert r.status_code == 400 and r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_tools_endpoint_exposes_source_for_the_approval_card(flag_on_client, fresh_agent_cfg):
+    """审批卡的「经 Composio 云执行」是 live fact（和 destructive 红警告同一条通道）。"""
+    _seed_tools(fresh_agent_cfg)
+    body = flag_on_client.get("/api/connector/notion/tools").json()["data"]
+    assert body["source"] == "custom_mcp"
+    fresh_agent_cfg.upsert_connector(
+        "gmail", server_url="https://mcp.composio.test/x", source="composio"
+    )
+    body2 = flag_on_client.get("/api/connector/gmail/tools").json()["data"]
+    assert body2["source"] == "composio"
+
+
+def test_disconnect_purge_removes_the_row_and_its_tools(flag_on_client, fresh_agent_cfg):
+    """`{"purge": true}` = 「当它没存在过」——把老直连行换成 Composio 版本的唯一出口。"""
+    _seed_tools(fresh_agent_cfg)
+    r = flag_on_client.post("/api/connector/notion/disconnect", json={"purge": True})
+    assert r.status_code == 200 and r.json()["data"]["purged"] is True
+    assert fresh_agent_cfg.get_connector("notion") is None
+    assert fresh_agent_cfg.list_connector_tools("notion") == []
+    # 行没了 → 目录条目回到「可连接」状态。
+    entries = {e["connector_id"]: e for e in flag_on_client.get("/api/connector/catalog").json()["data"]["entries"]}
+    assert entries["notion"]["configured"] is False and entries["notion"]["superseded"] is False
+
+
+def test_disconnect_without_purge_keeps_row_and_tool_config(flag_on_client, fresh_agent_cfg):
+    """默认不清行（PR1 行为逐字节保留）：状态回 disconnected，工具与 per-tool 覆盖都在。"""
+    _seed_tools(fresh_agent_cfg)
+    fresh_agent_cfg.set_connector_tool_mode("notion", "search", "off")
+    r = flag_on_client.post("/api/connector/notion/disconnect")
+    assert r.status_code == 200 and r.json()["data"]["purged"] is False
+    row = fresh_agent_cfg.get_connector("notion")
+    assert row is not None and row.status == "disconnected"
+    rows = {x.tool_name: x for x in fresh_agent_cfg.list_connector_tools("notion")}
+    assert rows["search"].mode == "off"

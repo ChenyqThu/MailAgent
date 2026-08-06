@@ -1215,7 +1215,8 @@
       "label": "将调用外部 MCP 服务的以下工具 —— 改动落在外部服务侧，批准后可能无法从这里撤销（需你批准）：",
       "destructiveWarning": "破坏性操作：服务方标记此工具可能覆盖既有数据。",
       "noArgs": "(无参数)",
-      "error": "调用失败，请重试或让助手重新发起。"
+      "error": "调用失败，请重试或让助手重新发起。",
+      "viaComposio": "经 Composio 云执行（工具参数与返回结果会经过其服务器）"
     },
     "calendarApprovalCard": {
       "reschedule": {
@@ -1992,7 +1993,9 @@
         "desc": "会删除本机保存的授权凭证，该服务的工具立即停止对 AI 可用。工具清单与逐工具权限设置会保留，重新连接后继续生效。",
         "cancel": "取消",
         "confirm": "断开连接",
-        "confirming": "断开中…"
+        "confirming": "断开中…",
+        "purge": "同时清除工具配置",
+        "purgeHelper": "连同这条连接的整行与工具清单一起删除（等于从没添加过）。不勾选则只删凭证，重连后逐工具档位还在。"
       },
       "tools": {
         "loading": "正在加载工具清单…",
@@ -2044,6 +2047,50 @@
         "bulkDesc": "该组包含 {count} 个被服务方标记为破坏性的工具。全部设为「自动」后，AI 调用它们将不再请求你的确认。",
         "cancel": "取消",
         "confirm": "设为自动"
+      },
+      "viaComposio": "经 Composio",
+      "viaDirect": "直连",
+      "supersededHint": "这一行是旧的直连配置，已被下方预置目录里的 Composio 版本取代。要切换请先「断开」并勾选「同时清除工具配置」。",
+      "catalog": {
+        "title": "预置目录",
+        "outboundNotice": "预置连接经 Composio 云执行：工具的输入与返回结果会经过它的服务器，授权令牌也托管在它那边。只想本机直连的服务请用「自定义 MCP」（后续版本提供）。",
+        "toolCount": "{count} 个工具",
+        "alreadyAdded": "已添加",
+        "supersedes": "同名的旧直连配置还在上面，先断开并清除配置才能装这一版。",
+        "keyLabel": "Composio API Key",
+        "keyPlaceholder": "粘贴你的 Composio API Key",
+        "keySave": "保存",
+        "keySaved": "已保存 Composio API Key",
+        "keyClear": "清除",
+        "keyConfigured": "已配置（{time}）",
+        "gateTitle": "先填 Composio API Key 才能使用预置目录",
+        "gateBody": "1. 去 app.composio.dev 注册一个账号（免费档每月 20K 次调用，个人用量足够）\n2. 在 Settings → API Keys 生成一个 key\n3. 粘贴到上面的输入框并保存\n填好之后目录里的服务就可以直接点「连接」。",
+        "gateCta": "去填写 Key",
+        "gateSignup": "打开 Composio 官网",
+        "outboundDialog": {
+          "title": "预置连接会把数据发给 Composio",
+          "desc": "预置目录里的服务由 Composio 代管：\n· 工具调用的入参与返回结果都经过它的服务器；\n· 授权令牌存在它那边，本机不持有；\n· 它默认会保存调用日志（含 payload）最长一年 —— 建议现在就去 Composio 后台 Settings → General 把 Log storage 切成「Don't store data」。\n继续即表示你了解并接受这条数据路径。",
+          "cancel": "取消",
+          "confirm": "我知道了，继续连接"
+        },
+        "desc": {
+          "asana": "Asana：搜任务与项目、建任务与评论、改任务。",
+          "atlassian": "Atlassian：Jira 议题（查/建/改/流转）+ Confluence 页面（搜/读/建/改）。",
+          "figma": "Figma：读文件结构与组件、取设计变量、渲染节点图、写评论。",
+          "github": "GitHub：读仓库代码与 README、看 issue/PR、提 issue 与评论。",
+          "gmail": "Gmail 邮箱：搜索/读取邮件与草稿、读取联系人；只给起草类写入，不给发信。",
+          "googlecalendar": "Google 日历：查日程与空闲时段、建/改/删事件。",
+          "googledrive": "Google 云端硬盘：找文件、读元数据与评论、建文件夹与文本文件。",
+          "intercom": "Intercom：读会话/联系人/工单、搜索客服记录与帮助文档。",
+          "linear": "Linear：查议题与项目、建议题与评论、改状态。",
+          "notion": "Notion：搜索与读取页面/数据库、建页面、追加内容、写评论。",
+          "outlook": "Outlook：日历与联系人（🔴 不含邮件收发——本机 Exchange 链路才是唯一写邮件通道）。",
+          "paypal": "PayPal：只读账单、付款、订单、订阅与争议。",
+          "sentry": "Sentry：读项目与错误 issue、事件详情、告警与统计。",
+          "slack": "Slack：读频道与会话历史、搜索消息、发消息与表情回应。",
+          "stripe": "Stripe：只读财务数据（客户、扣款、账单、订阅、争议）。",
+          "twitter": "X（Twitter）：搜推文、看时间线与数据、发帖与收藏。"
+        }
       }
     },
     "imFeishu": {

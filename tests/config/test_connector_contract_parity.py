@@ -16,6 +16,11 @@
    （canonical：写侧校验 + 折算函数）↔ TS 两处编译期类型联合
    （gateway `tools/connector.ts::ConnectorToolMode` / 设置面 wire
    `shared/api/types/connector.ts::ConnectorToolMode`）。TS 侧无运行时值可 import ⇒ 建闸。
+4. **connector.source 值域**（08-05 WP-12，Composio 单轨）——
+   `src/agent_config/store.py::CONNECTOR_SOURCES`（canonical：写侧校验 + 行读侧的
+   fail-closed 归一）↔ 设置面 wire `shared/api/types/connector.ts::ConnectorSource`。
+   漂了会怎样：TS 多一档 = 出站告知按一个 Python 永远不会发的值分支（「经 Composio」那行
+   字**该出现时不出现**）；Python 多一档 = 一条新装配路线在设置页显示成「直连」。
 
 **为什么不能消灭镜像**：跨语言 + 跨构件种类（Python 校验 / TS 类型 / zod runtime schema /
 wire 接口声明），没有可共享的运行时载体；TS 侧三份里有两份是**编译期类型**，压根没有值可以
@@ -325,6 +330,35 @@ def test_gateway_admission_recognizes_exactly_the_registering_modes():
     )
 
 
+# ── ③b connector.source 值域（08-05 WP-12：Composio 单轨的装配路线）──────────────
+
+_SOURCE_SITES = {
+    "py:store.CONNECTOR_SOURCES": lambda: py_str_tuple(STORE_PY, "CONNECTOR_SOURCES"),
+    "ts:shared api ConnectorSource": lambda: ts_string_union(
+        CONNECTOR_TYPES_TS, "export type ConnectorSource ="
+    ),
+}
+
+
+def test_connector_source_vocabulary_is_identical_across_both_sites():
+    """两处装配路线词表逐项且有序一致（canonical = Python store 写侧校验）。
+
+    这个值域是**出站告知**的判据（「经 Composio」/「直连」小字、审批卡那一行、老直连行的
+    迁移提示）——漂了不会报错，只会让一条数据出机的路径在 UI 上说成本地直连。
+    """
+    extracted = {name: fn() for name, fn in _SOURCE_SITES.items()}
+    canonical = extracted["py:store.CONNECTOR_SOURCES"]
+    assert canonical == ("composio", "custom_mcp"), (
+        f"connector.source 值域变成 {canonical!r} —— 改它必须同步 TS wire 类型 + 设置面告知"
+        f" + McpApprovalCard 的判据 + mcp-connectors.md 的 Composio 章节"
+    )
+    for name, values in extracted.items():
+        assert values == canonical, (
+            f"{name} = {values!r} 与 canonical {canonical!r} 不一致 —— 出站告知会按一个"
+            f"对方永远不发的值分支"
+        )
+
+
 # ── ④ canary：抽取器失效必须红，不许变成平凡绿 ─────────────────────────────────
 
 
@@ -336,6 +370,10 @@ def test_extraction_failure_is_red_not_silently_green():
         py_str_tuple(STORE_PY, "CONNECTOR_TOOL_MODES", src="X = 1\n")
     with pytest.raises(AssertionError, match="找不到"):
         ts_string_union(CONNECTOR_TS, "export type ConnectorToolMode =", src="const x = 1\n")
+    with pytest.raises(AssertionError, match="找不到顶层常量"):
+        py_str_tuple(STORE_PY, "CONNECTOR_SOURCES", src="X = 1\n")
+    with pytest.raises(AssertionError, match="找不到"):
+        ts_string_union(CONNECTOR_TYPES_TS, "export type ConnectorSource =", src="const x = 1\n")
     with pytest.raises(AssertionError, match="找不到顶层常量"):
         py_str_int_dict(SERVICE_PY, "CONNECTOR_CRUD_RANK", src="X = 1\n")
     with pytest.raises(AssertionError, match="找不到"):

@@ -19,9 +19,21 @@
 //      `effective_mode`，否则那套规则就成了第二处手抄。destructive 工具设 auto 的那一下
 //      弹一次性红色确认（§4.3）；升级/首连一次性「工具面变宽」概览提示（风险 1 处置）。
 //
-// 🔴 远程 web 面不能发起连接：OAuth 回调走本机 loopback，远程浏览器打不开那个地址，
-// 点了只会静默超时。故 web 构建下「连接」按钮 disabled + 明示去桌面 App 操作；其余
+// 🔴 远程 web 面不能发起**直连**：OAuth 回调走本机 loopback，远程浏览器打不开那个地址，
+// 点了只会静默超时。故 web 构建下直连行的「连接」按钮 disabled + 明示去桌面 App 操作；其余
 // 只读展示与开关照常（它们走 serve-api，远程可用）。
+// 🔴 **预置目录（Composio）不受这条限制**：它的授权页在 Composio 云上、回调也在它那边收，
+// 我们只负责打开一个 https URL + 轮询状态 —— 远程网页版照样连得上。
+//
+// 08-05 WP-12（Composio 单轨预置目录）在本文件里加了三件事：
+//   A. **BYOK key**：Composio API key 存 external_credential（Fernet+Keychain），设置页只
+//      能写、不回显（状态只有「配了没 + 什么时候配的」）。**没配 key → 整个目录区 disabled**
+//      + 引导（注册 → 取 key → 粘贴），点一下就跳到上面的输入框。
+//   B. **出站告知三处之二**：目录区标题下一句常驻声明 + 每行「经 Composio」/「直连」小字；
+//      首次连接任一预置服务时一次性 confirm（数据过境 / token 托管 / 去 dashboard 关日志
+//      留存）。第三处在审批卡（McpApprovalCard）。
+//   C. **多 toolkit 顺序授权**：Atlassian = Jira + Confluence 两个 toolkit，服务端连上第一个
+//      之后把第二条链接填进 flow 并把 `link_seq` +1 —— 轮询里发现序号涨了就再开一次浏览器。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -34,6 +46,8 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import type {
+  ConnectorCatalogEntry,
+  ConnectorCatalogView,
   ConnectorCrudType,
   ConnectorStatusValue,
   ConnectorSummary,
@@ -41,6 +55,7 @@ import type {
   ConnectorToolSummary
 } from '@shared/api/types'
 import { Button } from '@shared/components/ui/button'
+import { Input } from '@shared/components/ui/input'
 import { Switch } from '@shared/components/ui/switch'
 import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collapsible'
 import {
@@ -115,6 +130,30 @@ function writeToolfaceNoticeAck(connectorId: string): void {
     /* storage 不可用 → 下次还会提示，可接受 */
   }
 }
+
+/** 08-05 WP-12 — 首次连接任一**预置**服务前的一次性出站告知（数据过境 / token 托管 /
+ *  去 Composio dashboard 关日志留存）。全局一次，不是 per-connector：说的是这条路线的
+ *  性质，不是某一家的性质。 */
+const COMPOSIO_NOTICE_KEY = 'mailagent.connectors.composioOutboundNotice.v1'
+
+function readComposioNoticeAck(): boolean {
+  try {
+    return window.localStorage.getItem(COMPOSIO_NOTICE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeComposioNoticeAck(): void {
+  try {
+    window.localStorage.setItem(COMPOSIO_NOTICE_KEY, '1')
+  } catch {
+    /* storage 不可用 → 下次还会问一次，方向是多提醒不是漏提醒 */
+  }
+}
+
+/** 授权等待的默认上限（秒）：服务端 composio 轨等 Connect Link 的窗口与 loopback 回调同量级。 */
+const DEFAULT_AUTH_TIMEOUT_SECONDS = 300
 
 /** epoch 秒 → 本地可读时间；非法值返回 null（调用方退化成"未知"文案，不显示 Invalid Date）。 */
 function formatEpoch(sec: number | null | undefined): string | null {
@@ -358,14 +397,22 @@ function ConnectorRow({
   const [expanded, setExpanded] = React.useState(false)
   const [starting, setStarting] = React.useState(false)
   // 在途授权流（本地视角）：deadline 到点即放弃轮询。null = 没在等。
+  // `openedSeq` = 已经替用户打开过第几条授权链接（08-05 WP-12 多 toolkit 顺序授权）。
   const [awaiting, setAwaiting] = React.useState<{
     deadline: number
     timeoutSeconds: number
+    openedSeq: number
   } | null>(null)
+  // 用户点过「取消等待」的那条流（按 started_at 认身份）——防止下面的「跟随服务端在途流」
+  // 效应把它立刻重新拉起来（取消按钮会变得点不动）。
+  const dismissedFlowRef = React.useRef<number | null>(null)
   const [syncing, setSyncing] = React.useState(false)
   const [purging, setPurging] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
   const [disconnecting, setDisconnecting] = React.useState(false)
+  // 断开对话框里的「同时清除工具配置」勾选（08-05 WP-12 差距表 #10）。被预置目录取代的老
+  // 直连行**默认勾上** —— 那一行的存在意义就是等着被换掉，留着它 Composio 版本装不进来。
+  const [purgeOnDisconnect, setPurgeOnDisconnect] = React.useState(connector.superseded_by_catalog)
   // 08-05 WP-10 — destructive 工具设 auto 的一次性红色确认（单个 / 组级批量两形态）。
   const [confirmAuto, setConfirmAuto] = React.useState<
     | { kind: 'single'; tool: ConnectorToolSummary }
@@ -398,6 +445,21 @@ function ConnectorRow({
   // 时间**（服务端只等 callback_timeout_seconds），deadline 判定与轮询同处一个回调
   // 比"query 轮询 + 另一个 effect 看时钟"少一层状态同步。轮询期的瞬时失败不打断——
   // 授权流在服务端进程内跑，网络抖一下不代表失败，等下一拍或超时。
+  // 跟随服务端在途流：预置目录里点的「连接」发生在这一行**存在之前**（行由授权流建出来），
+  // 所以列表刷新后要由行自己接手轮询，否则那次连接永远没人看结果。
+  React.useEffect(() => {
+    const flow = connector.flow
+    if (flow == null || flow.status !== 'authorizing') return
+    if (awaiting != null || connector.status === 'connected') return
+    if (dismissedFlowRef.current === flow.started_at) return
+    setAwaiting({
+      deadline: Date.now() + DEFAULT_AUTH_TIMEOUT_SECONDS * 1000,
+      timeoutSeconds: DEFAULT_AUTH_TIMEOUT_SECONDS,
+      // 服务端已给出的链接由发起方（目录卡 / 本行按钮）负责打开，这里只从下一条起接手。
+      openedSeq: flow.link_seq
+    })
+  }, [connector.flow, connector.status, awaiting])
+
   React.useEffect(() => {
     if (awaiting == null) return undefined
     let disposed = false
@@ -416,6 +478,13 @@ function ConnectorRow({
         try {
           const s = await api.connector.status(id)
           if (disposed) return
+          // 多 toolkit 顺序授权：服务端把下一条链接填进 flow 并把序号 +1 → 再开一次浏览器。
+          const seq = s.flow?.link_seq ?? 0
+          if (s.flow?.authorize_url && seq > awaiting.openedSeq) {
+            openExternal(s.flow.authorize_url)
+            setAwaiting((prev) => (prev == null ? prev : { ...prev, openedSeq: seq }))
+            return
+          }
           if (s.status === 'connected') {
             setAwaiting(null)
             void invalidateList()
@@ -440,10 +509,13 @@ function ConnectorRow({
     setStarting(true)
     try {
       const started = await api.connector.oauthStart(id)
-      openExternal(started.authorize_url)
+      // 🔴 可能没有 URL（composio 轨：全部 toolkit 之前就授权过）——那就不开浏览器，只接手
+      // 轮询等它落 connected。open(null) 在 web 构建下会弹一个 about:blank 空标签页。
+      if (started.authorize_url) openExternal(started.authorize_url)
       setAwaiting({
         deadline: Date.now() + started.callback_timeout_seconds * 1000,
-        timeoutSeconds: started.callback_timeout_seconds
+        timeoutSeconds: started.callback_timeout_seconds,
+        openedSeq: started.authorize_url ? 1 : 0
       })
       await invalidateList()
     } catch (err) {
@@ -511,10 +583,11 @@ function ConnectorRow({
   async function handleDisconnect(): Promise<void> {
     setDisconnecting(true)
     try {
-      await api.connector.disconnect(id)
+      await api.connector.disconnect(id, purgeOnDisconnect)
       setAwaiting(null)
       await invalidateList()
       setConfirmOpen(false)
+      setPurgeOnDisconnect(false)
     } catch (err) {
       toastError(t('settings.connectors.title'), errorMessage(err))
     } finally {
@@ -595,7 +668,15 @@ function ConnectorRow({
             <Loader2 className="size-3.5 animate-spin" />
             {t('settings.connectors.awaiting')}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setAwaiting(null)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              // 记下这条流的身份，免得「跟随服务端在途流」效应立刻把等待重新拉起来。
+              dismissedFlowRef.current = connector.flow?.started_at ?? null
+              setAwaiting(null)
+            }}
+          >
             {t('settings.connectors.cancel')}
           </Button>
         </>
@@ -613,7 +694,16 @@ function ConnectorRow({
             {syncing ? <Loader2 className="size-3.5 animate-spin" /> : null}
             {syncing ? t('settings.connectors.syncing') : t('settings.connectors.sync')}
           </Button>
-          <Button size="sm" variant="ghost" onClick={() => setConfirmOpen(true)}>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              // 每次打开都按当前行状态重算勾选（useState 的初值只在挂载那一次生效：上一轮
+              // 取消/不勾选之后再开，勾选态就会与「这行是不是被目录取代」脱节）。
+              setPurgeOnDisconnect(connector.superseded_by_catalog)
+              setConfirmOpen(true)
+            }}
+          >
             {t('settings.connectors.disconnect')}
           </Button>
           <Switch
@@ -735,9 +825,19 @@ function ConnectorRow({
               <span className={cn(PILL_BASE, STATUS_PILL_CLASS[status])}>
                 {t(STATUS_LABEL_KEYS[status])}
               </span>
+              {/* 出站告知①之二：每行如实说这条连接的**执行路线**。判据是服务端字段，
+                  不靠 URL 长相猜。 */}
+              <span className={cn(PILL_BASE, 'bg-ink-4 text-ink-fg-3')}>
+                {connector.source === 'composio'
+                  ? t('settings.connectors.viaComposio')
+                  : t('settings.connectors.viaDirect')}
+              </span>
             </span>
             <span className="mt-0.5 flex flex-col gap-0.5 text-meta text-ink-fg-2">
               <span className="truncate font-mono">{connector.server_url}</span>
+              {connector.superseded_by_catalog ? (
+                <span className="text-warn">{t('settings.connectors.supersededHint')}</span>
+              ) : null}
               {connected ? (
                 <>
                   {connector.scopes && connector.scopes.length > 0 ? (
@@ -907,6 +1007,23 @@ function ConnectorRow({
             </DialogTitle>
             <DialogDescription>{t('settings.connectors.disconnectDialog.desc')}</DialogDescription>
           </DialogHeader>
+          {/* 08-05 WP-12 差距表 #10 —— 「同时清除工具配置」（= 把行也删掉）。被预置目录
+              取代的老直连行默认勾上：那一行不清掉，同 id 的 Composio 版本就装不进来。 */}
+          <label className="flex items-start gap-2 px-1 text-meta text-ink-fg-2">
+            <input
+              type="checkbox"
+              className="mt-0.5"
+              checked={purgeOnDisconnect}
+              onChange={(e) => setPurgeOnDisconnect(e.target.checked)}
+              aria-label={t('settings.connectors.disconnectDialog.purge')}
+            />
+            <span>
+              <span className="text-ink-fg">{t('settings.connectors.disconnectDialog.purge')}</span>
+              <span className="block text-ink-fg-3">
+                {t('settings.connectors.disconnectDialog.purgeHelper')}
+              </span>
+            </span>
+          </label>
           <DialogFooter>
             <Button
               size="sm"
@@ -975,7 +1092,7 @@ export function ConnectorsSection(): React.ReactElement | null {
       )
     }
     if (list.data.length === 0) {
-      // registry 全集恒在列表里 → 正常走不到；防御渲染，别让空数组变成一个空白卡片。
+      // 08-05 WP-12：列表 = 库里的行，一个都没有是**正常初始态**（去下面的预置目录连第一家）。
       return (
         <div className="px-4 py-3.5 text-aux text-ink-fg-3">{t('settings.connectors.empty')}</div>
       )
@@ -988,6 +1105,279 @@ export function ConnectorsSection(): React.ReactElement | null {
   return (
     <Section title={t('settings.connectors.title')} helper={t('settings.connectors.desc')}>
       {rows}
+      <CatalogArea />
     </Section>
+  )
+}
+
+// ── 预置目录（Composio 单轨）+ BYOK key ─────────────────────────────────────
+
+/** 品牌字母牌（代码内数据，零网络）——见 `composio_catalog.py` 的 logo 取舍注释。 */
+function CatalogLogo({ entry }: { entry: ConnectorCatalogEntry }): React.ReactElement {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex size-7 shrink-0 items-center justify-center rounded-[var(--r-ctl)] text-micro font-semibold text-white"
+      style={{ backgroundColor: entry.logo_color }}
+    >
+      {entry.logo_text}
+    </span>
+  )
+}
+
+function CatalogTile({
+  entry,
+  disabled,
+  connecting,
+  onConnect
+}: {
+  entry: ConnectorCatalogEntry
+  disabled: boolean
+  connecting: boolean
+  onConnect(entry: ConnectorCatalogEntry): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  // 已配置 / 被老直连行占位 → 卡片只做陈述，操作在上面那一行里（同一家不给两个入口）。
+  const occupied = entry.configured
+  return (
+    <div
+      className={cn(
+        'flex items-start gap-2.5 rounded-[var(--r-card)] border border-ink-border p-2.5',
+        disabled && 'opacity-50'
+      )}
+    >
+      <CatalogLogo entry={entry} />
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <span className="text-aux font-medium text-ink-fg">{entry.display_name}</span>
+          <span className={cn(PILL_BASE, 'bg-ink-4 text-ink-fg-3')}>
+            {t('settings.connectors.catalog.toolCount', { count: entry.tool_count })}
+          </span>
+        </div>
+        <div className="mt-0.5 text-meta text-ink-fg-2 line-clamp-2">
+          {t(entry.description_key)}
+        </div>
+        {entry.superseded ? (
+          <div className="mt-0.5 text-micro text-warn">
+            {t('settings.connectors.catalog.supersedes')}
+          </div>
+        ) : null}
+      </div>
+      <Button
+        size="sm"
+        variant={occupied ? 'ghost' : 'secondary'}
+        disabled={disabled || occupied || connecting}
+        onClick={() => onConnect(entry)}
+      >
+        {connecting ? <Loader2 className="size-3.5 animate-spin" /> : null}
+        {occupied
+          ? t('settings.connectors.catalog.alreadyAdded')
+          : t('settings.connectors.connect')}
+      </Button>
+    </div>
+  )
+}
+
+function CatalogArea(): React.ReactElement {
+  const { t } = useTranslation()
+  const api = useMailApi()
+  const qc = useQueryClient()
+  const keyInputRef = React.useRef<HTMLInputElement | null>(null)
+  const [keyDraft, setKeyDraft] = React.useState('')
+  const [savingKey, setSavingKey] = React.useState(false)
+  const [connectingId, setConnectingId] = React.useState<string | null>(null)
+  // 出站告知②：首次连接任一预置服务前的一次性 confirm（pending = 等确认的那一家）。
+  const [pendingNotice, setPendingNotice] = React.useState<ConnectorCatalogEntry | null>(null)
+
+  const catalog = useQuery<ConnectorCatalogView>({
+    queryKey: qk.connectorCatalog(),
+    queryFn: () => api.connector.catalog(),
+    staleTime: 10_000,
+    retry: false
+  })
+
+  const configured = catalog.data?.composio.configured === true
+
+  async function saveKey(): Promise<void> {
+    const value = keyDraft.trim()
+    if (!value) return
+    setSavingKey(true)
+    try {
+      await api.connector.setComposioKey(value)
+      // 🔴 明文只在这一刻存在于内存里，保存后立刻清空输入框（不做任何回显）。
+      setKeyDraft('')
+      await qc.invalidateQueries({ queryKey: qk.connectors() })
+      toastSuccess(t('settings.connectors.catalog.keySaved'))
+    } catch (err) {
+      toastError(t('settings.connectors.saveFailed'), errorMessage(err))
+    } finally {
+      setSavingKey(false)
+    }
+  }
+
+  async function clearKey(): Promise<void> {
+    try {
+      await api.connector.clearComposioKey()
+      await qc.invalidateQueries({ queryKey: qk.connectors() })
+    } catch (err) {
+      toastError(t('settings.connectors.saveFailed'), errorMessage(err))
+    }
+  }
+
+  async function startConnect(entry: ConnectorCatalogEntry): Promise<void> {
+    setConnectingId(entry.connector_id)
+    try {
+      const started = await api.connector.oauthStart(entry.connector_id)
+      // 🔴 没有 URL = 这家在 Composio 侧之前就授权过（清行重装 / 上次拉清单失败后重试）：
+      // 不开浏览器，行已建出来，下面刷新列表后由 ConnectorRow 跟随在途流轮询到 connected。
+      if (started.authorize_url) openExternal(started.authorize_url)
+      // 行由授权流建出来 → 刷新列表，之后由 ConnectorRow 接手轮询（它会跟随服务端在途流）。
+      await qc.invalidateQueries({ queryKey: qk.connectors() })
+    } catch (err) {
+      toastError(t('settings.connectors.authFailed'), errorMessage(err))
+    } finally {
+      setConnectingId(null)
+    }
+  }
+
+  function handleConnect(entry: ConnectorCatalogEntry): void {
+    if (!readComposioNoticeAck()) {
+      setPendingNotice(entry)
+      return
+    }
+    void startConnect(entry)
+  }
+
+  const gateBlock = configured ? null : (
+    <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-4/40 p-3">
+      <div className="text-aux font-medium text-ink-fg">
+        {t('settings.connectors.catalog.gateTitle')}
+      </div>
+      <div className="mt-0.5 whitespace-pre-line text-meta text-ink-fg-2">
+        {t('settings.connectors.catalog.gateBody')}
+      </div>
+      <div className="mt-2 flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="secondary"
+          onClick={() => {
+            keyInputRef.current?.focus()
+            keyInputRef.current?.scrollIntoView({ block: 'center' })
+          }}
+        >
+          {t('settings.connectors.catalog.gateCta')}
+        </Button>
+        <Button size="sm" variant="ghost" onClick={() => openExternal('https://app.composio.dev')}>
+          {t('settings.connectors.catalog.gateSignup')}
+        </Button>
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="flex flex-col gap-3 border-t border-ink-border-soft px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
+      <div>
+        <div className="text-aux font-medium text-ink-fg">
+          {t('settings.connectors.catalog.title')}
+        </div>
+        {/* 出站告知①：常驻声明，不折叠、不 hover 才出现。 */}
+        <div className="mt-0.5 text-meta text-ink-fg-2">
+          {t('settings.connectors.catalog.outboundNotice')}
+        </div>
+      </div>
+
+      {/* BYOK key —— 只写不回显；已配置时只显示「什么时候配的」。 */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Input
+          ref={keyInputRef}
+          type="password"
+          value={keyDraft}
+          autoComplete="off"
+          spellCheck={false}
+          placeholder={t('settings.connectors.catalog.keyPlaceholder')}
+          aria-label={t('settings.connectors.catalog.keyLabel')}
+          className="h-8 max-w-xs flex-1 text-aux"
+          onChange={(e) => setKeyDraft(e.target.value)}
+        />
+        <Button
+          size="sm"
+          disabled={savingKey || keyDraft.trim() === ''}
+          onClick={() => void saveKey()}
+        >
+          {savingKey ? <Loader2 className="size-3.5 animate-spin" /> : null}
+          {t('settings.connectors.catalog.keySave')}
+        </Button>
+        {configured ? (
+          <>
+            <span className="text-micro text-ink-fg-3">
+              {t('settings.connectors.catalog.keyConfigured', {
+                time: formatEpoch(catalog.data?.composio.updated_at) ?? '—'
+              })}
+            </span>
+            <Button size="sm" variant="ghost" onClick={() => void clearKey()}>
+              {t('settings.connectors.catalog.keyClear')}
+            </Button>
+          </>
+        ) : null}
+      </div>
+
+      {gateBlock}
+
+      {catalog.isError ? (
+        <div className="text-aux text-ink-fg-3">
+          {t('settings.connectors.loadError', { message: errorMessage(catalog.error) })}
+        </div>
+      ) : !catalog.data ? (
+        <div className="flex items-center gap-2 text-aux text-ink-fg-2">
+          <Loader2 className="size-3.5 shrink-0 animate-spin" />
+          {t('settings.connectors.loading')}
+        </div>
+      ) : (
+        <div className="grid gap-2 sm:grid-cols-2">
+          {catalog.data.entries.map((entry) => (
+            <CatalogTile
+              key={entry.connector_id}
+              entry={entry}
+              disabled={!configured}
+              connecting={connectingId === entry.connector_id}
+              onConnect={handleConnect}
+            />
+          ))}
+        </div>
+      )}
+
+      {/* 出站告知②：一次性 confirm —— 数据过境 / token 托管 / 去 dashboard 关日志留存。 */}
+      <Dialog
+        open={pendingNotice != null}
+        onOpenChange={(open) => {
+          if (!open) setPendingNotice(null)
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>{t('settings.connectors.catalog.outboundDialog.title')}</DialogTitle>
+            <DialogDescription className="whitespace-pre-line">
+              {t('settings.connectors.catalog.outboundDialog.desc')}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button size="sm" variant="ghost" onClick={() => setPendingNotice(null)}>
+              {t('settings.connectors.catalog.outboundDialog.cancel')}
+            </Button>
+            <Button
+              size="sm"
+              onClick={() => {
+                const entry = pendingNotice
+                setPendingNotice(null)
+                writeComposioNoticeAck()
+                if (entry) void startConnect(entry)
+              }}
+            >
+              {t('settings.connectors.catalog.outboundDialog.confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   )
 }

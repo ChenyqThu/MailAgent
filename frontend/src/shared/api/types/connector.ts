@@ -39,6 +39,15 @@ export type ConnectorCrudType = 'read' | 'write' | 'update'
  *  折算 auto**——含 write/update/destructive（跟随参考产品，升级说明已列工具面变宽）。 */
 export type ConnectorToolMode = 'auto' | 'ask' | 'off'
 
+/** 装配路线（Python `CONNECTOR_SOURCES`，08-05 WP-12）。
+ *
+ *  `composio` = 预置目录条目：授权与工具执行都经 Composio 云（token 托管在它那边，工具的
+ *  输入与结果会过它的服务器）——**这就是设置页「经 Composio」小字与审批卡那行告知的判据**。
+ *  `custom_mcp` = 直连远端 MCP server（我们自己的 OAuth 2.1/PKCE/DCR + loopback 回调），
+ *  也是**存量直连行**（Notion / Atlassian）升级后的归属。
+ *  🔴 前端**不推断**这个值（不能靠 URL 长相猜），恒读服务端字段。 */
+export type ConnectorSource = 'composio' | 'custom_mcp'
+
 /** 凭证健康视图（只走明文列 peek —— master key 不可用时照样成立，故它不是「解密成功」的证据）。 */
 export interface ConnectorCredentialView {
   has_tokens: boolean
@@ -60,6 +69,13 @@ export interface ConnectorFlowView {
   started_at: number
   error: string | null
   tool_count: number | null
+  /** 本流已产出过几条授权 URL（08-05 WP-12）。
+   *  🔴 多 toolkit 的 composio connector（Atlassian = Jira + Confluence）要**顺序**授权两次：
+   *  服务端连上第一个之后把第二条 URL 填进 `authorize_url` 并把这个序号 +1，前端轮询时发现
+   *  序号涨了就再开一次浏览器。不这样第二条链接根本没人会去打开。 */
+  link_seq: number
+  /** 当前在等哪个 toolkit（composio 轨的可观测位；直连轨恒 null）。 */
+  pending_toolkit: string | null
 }
 
 /** `GET /api/connector/{id}/status` 的响应形状。
@@ -79,15 +95,53 @@ export interface ConnectorStatusView {
   last_error: string | null
   /** 工具清单最后同步时间（epoch 秒）。 */
   last_synced_at: number | null
+  /** 装配路线（08-05 WP-12）——「经 Composio」/「直连」告知的判据。 */
+  source: ConnectorSource
   credential: ConnectorCredentialView | null
   flow: ConnectorFlowView | null
 }
 
-/** `GET /api/connector` 列表元素 = status 形状 + registry 静态定义两字段。
- *  registry 全集都在列表里（**没连过的也在**，供设置页起步）。 */
+/** `GET /api/connector` 列表元素 = status 形状 + 行上的两个定义字段。
+ *
+ *  🔴 08-05 WP-12 语义变更：列表 = **库里的行**（已配置过的），不再是 registry 全集。
+ *  「还没连过的服务」由 `catalog()` 的预置目录承担 —— 两处不重复渲染同一家。 */
 export interface ConnectorSummary extends ConnectorStatusView {
   server_url: string
   transport: string
+  /** 这一行是被预置目录取代的老直连行（同 id，Composio 版本要先断开并清除配置才能装）。 */
+  superseded_by_catalog: boolean
+}
+
+/** 预置目录一条（`GET /api/connector/catalog`）。全部字段是**代码内 curated 数据**，
+ *  不需要 API key 就能看到（gate 是 UI 语义，强制在连接端点）。 */
+export interface ConnectorCatalogEntry {
+  connector_id: string
+  display_name: string
+  /** 一句话描述的 i18n key（后端不发译文）。 */
+  description_key: string
+  category: string
+  /** 字母牌 + 品牌色。🔴 有意不用远程 logo：打包 app 离线会裂图，且未配 key 时就向
+   *  第三方 CDN 发请求与「数据出机要明示」的调性相反。 */
+  logo_text: string
+  logo_color: string
+  toolkits: string[]
+  /** curated 白名单里的工具数（≤20）——目录卡上如实告知「会开多少个工具」。 */
+  tool_count: number
+  /** 库里已有同 id 行（= 已在上面的列表里）。 */
+  configured: boolean
+  /** 那一行是**老的直连行** —— 要换成 Composio 版本得先断开并清除配置。 */
+  superseded: boolean
+}
+
+/** Composio BYOK key 的状态视图。🔴 **永远不含 key 的任何字符**（脱敏纪律）。 */
+export interface ComposioKeyStatus {
+  configured: boolean
+  updated_at: number | null
+}
+
+export interface ConnectorCatalogView {
+  composio: ComposioKeyStatus
+  entries: ConnectorCatalogEntry[]
 }
 
 /** `GET /api/connector/{id}/tools` 元素（已同步的工具清单行 = 白名单）。 */
@@ -116,8 +170,14 @@ export interface ConnectorToolSummary {
 /** connector 设置面的数据层。全部方法 **throw** `Error & {code}`（不吞错降级）——
  *  设置面必须能区分「没连接」「flag 关（E_CONNECTOR_DISABLED）」「网络炸了」。 */
 export interface ConnectorApi {
-  /** registry 全集 ∪ DB 运行态 ∪ 凭证健康。 */
+  /** 已配置的 connector 行 ∪ 凭证健康 ∪ 在途流。 */
   list(): Promise<ConnectorSummary[]>
+  /** 预置目录（Composio 单轨）+ BYOK key 状态。 */
+  catalog(): Promise<ConnectorCatalogView>
+  /** 写 Composio API key（BYOK）。响应只回状态，不回显任何字符。 */
+  setComposioKey(apiKey: string): Promise<ComposioKeyStatus>
+  /** 删掉 Composio API key（幂等）；connector 行与 session 不动。 */
+  clearComposioKey(): Promise<ComposioKeyStatus>
   status(connectorId: string): Promise<ConnectorStatusView>
   /** 发起授权：返回要在浏览器打开的 URL（后台流已起，等回调）。 */
   oauthStart(connectorId: string): Promise<ConnectorOAuthStartResult>
@@ -142,8 +202,10 @@ export interface ConnectorApi {
   /** 分类侧独立授权位（08-05 起：开了之后该场地可用 = per-tool mode 为 auto 的工具，
    *  含写类；ask 在该无人值守场地等同禁用）。 */
   setPreprocessEnabled(connectorId: string, enabled: boolean): Promise<ConnectorSetPreprocessResult>
-  /** 断开：逐条删凭证 + 状态回 disconnected；**工具清单与 per-tool 配置保留**。 */
-  disconnect(connectorId: string): Promise<ConnectorDisconnectResult>
+  /** 断开：逐条删凭证 + 状态回 disconnected；**工具清单与 per-tool 配置保留**。
+   *  `purge=true`（08-05 WP-12）= 连行一起清（工具行也删），等于「当它没存在过」——
+   *  把老直连行换成预置目录 Composio 版本的唯一出口。 */
+  disconnect(connectorId: string, purge?: boolean): Promise<ConnectorDisconnectResult>
   /** PR5 — 删掉 orphan 工具行（远端已不再提供的那些）。只删已失效行，非破坏性：
    *  它们本来就恒不注册、恒不可调用，删的是一份过期台账。 */
   purgeOrphans(connectorId: string): Promise<ConnectorPurgeOrphansResult>
@@ -151,7 +213,10 @@ export interface ConnectorApi {
 
 export interface ConnectorOAuthStartResult {
   connector_id: string
-  authorize_url: string
+  /** 要在浏览器打开的授权 URL。🔴 **可能是 null**（08-05 WP-12）：composio 轨遇到「全部
+   *  toolkit 在 Composio 侧之前就授权过」时一条链接都不起 —— 此时不该开浏览器，行已建出来，
+   *  交给轮询看到 connected 即可。 */
+  authorize_url: string | null
   status: string
   /** 服务端等浏览器回调的上限（秒）—— UI 的「等待授权」倒计时用。 */
   callback_timeout_seconds: number
@@ -190,6 +255,8 @@ export interface ConnectorSetPreprocessResult {
 export interface ConnectorDisconnectResult {
   connector_id: string
   deleted_credentials: number
+  /** 行是否一并删掉了（`purge=true` 时；默认 false = 只删凭证）。 */
+  purged: boolean
 }
 
 /** PR5 — `POST /{id}/tools/purge_orphans` 的响应（`purged` = 实际删掉的行数）。 */

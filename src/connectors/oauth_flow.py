@@ -130,8 +130,17 @@ class ConnectorFlowState:
     status: str = "pending"
     error: Optional[str] = None
     tool_count: Optional[int] = None
-    #: SDK 生成的 state（清理 rendezvous 用）。
+    #: SDK 生成的 state（清理 rendezvous 用）。`custom_mcp` 轨才有。
     state_param: Optional[str] = None
+    #: 08-05 WP-12（composio 轨）：本流已经产出过几条授权 URL。
+    #: 🔴 存在的理由 = **多 toolkit 的 connector**（Atlassian = JIRA + CONFLUENCE）要**顺序**
+    #: 授权两次：流把第 1 条 URL 交出去、等它连上，再把第 2 条填进 `auth_url` 并把这个序号
+    #: +1。前端轮询 status 时比对序号，涨了就再开一次浏览器 —— 不这样的话第二条链接谁也
+    #: 不会去打开（同时弹两个授权页则是更糟的 UX）。`custom_mcp` 轨**从不递增**（恒 0）：
+    #: 那条流只产一条 URL，且由 start 端点的响应直接交给前端。
+    link_seq: int = 0
+    #: 当前在等哪个 toolkit 授权（composio 轨的可观测位）。
+    pending_toolkit: Optional[str] = None
     #: 承载整个授权流的后台 task（🔴 anyio cancel scope 纪律：连接的整个生命周期都在这
     #: 一个 task 里；替换流 = cancel 整个 task，绝不跨 task 收尾）。
     task: Optional[asyncio.Task] = None

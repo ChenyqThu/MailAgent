@@ -50,6 +50,11 @@ interface ConnectorToolFacts {
   remoteName: string
   destructive: boolean
   crudType: string
+  /** 08-05 WP-12 — the connector's assembly route. `'composio'` means this call executes in
+   *  the Composio cloud (arguments + result travel through their servers), which is the third
+   *  outbound-disclosure surface. Same LIVE channel as `destructive`: read off the synced
+   *  manifest, never projected from model args, so the model cannot argue the line away. */
+  source: string
 }
 
 async function fetchToolFacts(
@@ -63,16 +68,18 @@ async function fetchToolFacts(
   if (!resp.ok) throw new Error(`E_HTTP_${resp.status}`)
   const body = (await resp.json()) as {
     status?: string
-    data?: { tools?: Array<Record<string, unknown>> }
+    data?: { tools?: Array<Record<string, unknown>>; source?: unknown }
   }
   if (body.status !== 'success' || !body.data?.tools) throw new Error('E_BAD_ENVELOPE')
+  const source = typeof body.data.source === 'string' ? body.data.source : ''
   for (const row of body.data.tools) {
     const remoteName = typeof row.name === 'string' ? row.name : ''
     if (remoteName && mcpGatewayToolName(connectorId, remoteName) === gatewayToolName) {
       return {
         remoteName,
         destructive: row.destructive === true,
-        crudType: typeof row.crud_type === 'string' ? row.crud_type : ''
+        crudType: typeof row.crud_type === 'string' ? row.crud_type : '',
+        source
       }
     }
   }
@@ -154,6 +161,14 @@ export function McpApprovalCard(props: ToolCallMessagePartProps): React.JSX.Elem
       {phase === 'pending' && facts?.destructive === true ? (
         <div className="mt-1.5 text-aux font-medium text-fail">
           {t('chat.mcpApprovalCard.destructiveWarning')}
+        </div>
+      ) : null}
+      {/* 08-05 WP-12 — outbound disclosure #3: this call runs in the Composio cloud. Neutral
+          tone (it's a fact about the route, not a danger), and OUTSIDE CardDetails for the same
+          reason as the destructive line: an approval fact must not hide behind a disclosure. */}
+      {phase === 'pending' && facts?.source === 'composio' ? (
+        <div className="mt-1.5 text-meta text-ink-fg-2">
+          {t('chat.mcpApprovalCard.viaComposio')}
         </div>
       ) : null}
       {phase === 'pending' ? (

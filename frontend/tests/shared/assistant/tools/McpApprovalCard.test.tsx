@@ -38,11 +38,16 @@ function mockProps(over: Partial<ToolCallMessagePartProps>): ToolCallMessagePart
   } as unknown as ToolCallMessagePartProps
 }
 
-/** Stub the card's live manifest fetch (GET /api/connector/{id}/tools). */
-function stubToolsFetch(tools: Array<Record<string, unknown>>): ReturnType<typeof vi.fn> {
+/** Stub the card's live manifest fetch (GET /api/connector/{id}/tools).
+ *  `source` (08-05 WP-12) rides the SAME envelope as the tool rows — that is what makes the
+ *  「经 Composio 云执行」line a live fact instead of something the model could talk away. */
+function stubToolsFetch(
+  tools: Array<Record<string, unknown>>,
+  source = 'custom_mcp'
+): ReturnType<typeof vi.fn> {
   const fetchMock = vi.fn(
     async () =>
-      new Response(JSON.stringify({ status: 'success', data: { tools } }), {
+      new Response(JSON.stringify({ status: 'success', data: { tools, source } }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' }
       })
@@ -108,6 +113,24 @@ describe('McpApprovalCard — pending', () => {
     render(<McpApprovalCard {...mockProps({ args: { destructive: true, page_id: 'p1' } })} />)
     expect(await screen.findByText('notion-update-page')).toBeTruthy()
     expect(screen.queryByText(/破坏性操作/)).toBeNull()
+  })
+
+  test('composio connectors disclose the cloud execution path (live fact, not model-supplied)', async () => {
+    stubToolsFetch(
+      [{ name: 'notion-update-page', crud_type: 'write', destructive: false, orphan: false }],
+      'composio'
+    )
+    render(<McpApprovalCard {...mockProps({})} />)
+    expect(await screen.findByText(/经 Composio 云执行/)).toBeTruthy()
+  })
+
+  test('direct (custom_mcp) connectors carry no Composio line', async () => {
+    stubToolsFetch([
+      { name: 'notion-update-page', crud_type: 'write', destructive: false, orphan: false }
+    ])
+    render(<McpApprovalCard {...mockProps({})} />)
+    expect(await screen.findByText('notion-update-page')).toBeTruthy()
+    expect(screen.queryByText(/经 Composio/)).toBeNull()
   })
 
   test('facts fetch failure degrades gracefully (card still approvable)', async () => {

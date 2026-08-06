@@ -9,9 +9,10 @@
 > 自己的能力交付给外部 agent —— 我们是 MCP **server**）；本文是我们当 MCP **client**。
 > gateway 工具注册的总体架构见 [`ai-sdk-gateway-architecture.md`](./ai-sdk-gateway-architecture.md)。
 
-`status: living` · `last-verified: 2026-08-05`（08-05 owner 拍板 per-tool 三档 auto/ask/off ——
-master-plan WP-10，task `08-05-p1-connector-tiers-composer-effort-runstate`：默认档 auto、
-write 可免卡、预处理 read 天花板拆除、im 写类跟随三档；flag 仍默认 off）
+`status: living` · `last-verified: 2026-08-05`（08-05 两笔 owner 拍板：① per-tool 三档
+auto/ask/off ——master-plan WP-10：默认档 auto、write 可免卡、预处理 read 天花板拆除、im 写类
+跟随三档；② **Composio 单轨预置目录 + BYOK** ——WP-12，见 §11。两笔同 task
+`08-05-p1-connector-tiers-composer-effort-runstate`；flag 仍默认 off）
 
 ---
 
@@ -558,10 +559,11 @@ per-tool 三态 / per-agent grant）。
    一条 connector 告警链都没有。连着的 connector 悄悄失效 → 下一次真用到它才知道。
 2. **无半开自动探测**。一次 `needs_reauth` 落态后不会自愈——没有后台 worker，状态只由
    人工重连或下一次成功的 sync/invoke 翻回来。
-3. **registry 移除一个 connector 会留僵尸行**。`list_connectors` 端点是按
-   `registry.CONNECTORS` 迭代的，`disconnect` 也要先过 `_connector_def`；把某家从 registry 删掉，
-   它的 `connector` / `connector_tool` 行与 **`external_credential` 里的 token 都还在**，
-   却再也无法从 API 面看到或删除。真要退役一家 = 走代码级迁移（先 disconnect 再删 registry 行）。
+3. ~~**registry 移除一个 connector 会留僵尸行**~~ —— **08-05 WP-12 已关闭**（§11.2）：
+   `registry.CONNECTORS` 常量整体退役，`GET /api/connector` 改为迭代**库里的行**，
+   `get_connector_def` 也是行优先解析 ⇒ 库里有的一定看得见；`POST /{id}/disconnect`
+   增加 `{"purge": true}` 把行与工具行一并删掉 ⇒ 一定删得掉。connector 行自此是一等实体，
+   代码里的目录只是 seed 源之一。
 4. **orphan × grant 的 headless run 是静默空工具集**。注册期的 orphan 跳过与 grant 过滤都是
    裸 `continue`，无 warning、无审计痕迹。一个 agent 的 grant 覆盖的工具全 orphan 了 → run
    照常跑、什么都调不动、日志里看不出为什么。
@@ -575,10 +577,14 @@ per-tool 三态 / per-agent grant）。
 7. ~~**delete 类的实际开放**（Out of Scope）~~ —— **08-03 已按「整体退役」实现**（§5.3）：
    不是把保留位解冻，而是删掉一个不可达的死特例。将来若真出现明示删除语义的 manifest，
    那是一次**新增**档位的独立决策（值域 + 天花板 + 审批语义一起议）。
-8. **其余明确不做**：stdio transport 的实现（只留表结构）· Composio 等第三方云代管聚合
-   （数据出机，与本地优先定位冲突）· 远程 web 面发起 OAuth 连接（loopback callback 在远程浏览器
-   打不开——远程只能**使用**已连接的 connector，设置页的「连接」按钮在 web 构建下 disabled 并
-   明示去桌面 App）· MCP `prompts` / `resources`。
+8. **其余明确不做**：stdio transport 的实现（只留表结构）· ~~Composio 等第三方云代管聚合~~
+   （**08-05 owner 知情拍板推翻**：预置目录全走 Composio 单轨，理由与代价见 §11；原「数据出机
+   与本地优先冲突」的判断本身没有被证伪 —— 是 owner 在知道代价后选择了它，故 §11 把三处出站
+   告知做成产品的一部分）· 远程 web 面发起**直连** OAuth 连接（loopback callback 在远程浏览器
+   打不开——远程只能**使用**已连接的直连 connector，设置页直连行的「连接」按钮在 web 构建下
+   disabled 并明示去桌面 App；🔴 **预置目录不受此限**：Connect Link 是 Composio 托管页、回调也
+   在它那边收，远程网页版照常连得上）· MCP `prompts` / `resources` · 自定义 MCP server URL 的
+   UI 入口（WP-24，`source='custom_mcp'` 的 schema 已就位，缺的只是表单）。
 
 ---
 
@@ -588,7 +594,10 @@ per-tool 三态 / per-agent grant）。
 
 | 方法 + 路径 | 用途 |
 |---|---|
-| `GET /api/connector` | registry 全集 ∪ DB 运行态 ∪ 凭证健康（没连过的也列，供设置页起步） |
+| `GET /api/connector` | **已配置的行** ∪ 凭证健康 ∪ 在途流（08-05 WP-12 起不再是 registry 全集；每行带 `source` + `superseded_by_catalog`） |
+| `GET /api/connector/catalog` | 预置目录（Composio 单轨）+ BYOK key 状态 `{composio:{configured,updated_at}, entries:[…]}` |
+| `POST /api/connector/composio/key` | 写 Composio API key（`{"api_key": "…"}`；落 external_credential，响应**不回显**任何字符） |
+| `DELETE /api/connector/composio/key` | 删 key（幂等；connector 行与 session id 不动） |
 | `POST /{id}/oauth/start` | 起授权流 → 返回 `authorize_url`（重复调 = 替换在途流） |
 | `GET /{id}/status` | 单个 connector 的状态 + 凭证视图 + 在途流视图 |
 | `POST /{id}/sync` | 用已存授权拉工具清单落库（非交互，无授权 → 409 引导走 oauth/start） |
@@ -599,7 +608,7 @@ per-tool 三态 / per-agent grant）。
 | `POST /{id}/tools/purge_orphans` | 清 orphan 行（只删 `orphan=1`） |
 | `POST /{id}/preprocess` | 分类侧独立授权（`{"enabled": bool}`；08-05 起开 = 该场地可用 per-tool `auto` 档工具**含写类**） |
 | `POST /{id}/tools/{tool}/invoke` | 工具调用（gateway 与 curl 共用；可带 `caller` 信封） |
-| `POST /{id}/disconnect` | **逐条删凭证**（tokens + client_info + 将来任何槽位）+ 状态回 `disconnected`；**工具清单行与用户配置保留** |
+| `POST /{id}/disconnect` | **逐条删凭证**（tokens + client_info + 将来任何槽位）+ 状态回 `disconnected`；**工具清单行与用户配置保留**。`{"purge": true}`（08-05 WP-12）= 连 connector 行与工具行一起删（差距表 #10 的 Uninstall 语义 + 老直连行换 Composio 版本的唯一出口） |
 | `GET /oauth/callback` | 浏览器回调落点（**无鉴权**，state 即能力令牌） |
 
 无 `mailagent` CLI group；开发期实连脚本 = `scripts/dev/connector_oauth_spike.py`
@@ -640,9 +649,13 @@ sqlite3 "$DB" "SELECT connector_id, crud_type, destructive, orphan, COUNT(*)
 sqlite3 "$DB" "SELECT tool_name, crud_type, mode, enabled, orphan FROM connector_tool
   WHERE connector_id='notion' ORDER BY crud_type, tool_name;"
 
-# 凭证健康（明文列，不解密）
+# 装配路线分布（08-05 WP-12：composio = 经 Composio 云执行 / custom_mcp = 直连）
+sqlite3 "$DB" "SELECT connector_id, source, substr(coalesce(composio_session_id,''),1,16),
+  status FROM connector;"
+
+# 凭证健康（明文列，不解密；🔴 Composio 的 BYOK key 落 namespace='composio:project'）
 sqlite3 "$DB" "SELECT namespace, credential_key, expires_at, metadata_json, updated_at
-  FROM external_credential WHERE namespace LIKE 'connector:%';"
+  FROM external_credential WHERE namespace LIKE 'connector:%' OR namespace='composio:project';"
 
 # per-agent grant
 sqlite3 ~/Library/Application\ Support/mailagent-frontend/data/sync_store.db \
@@ -654,3 +667,123 @@ sqlite3 ~/Library/Application\ Support/mailagent-frontend/data/sync_store.db \
 `MAILAGENT_MCP_CONNECTORS` 在 owner 的 userData `.env` 里已开（连同阶段 0.5 的
 `MAILAGENT_MEMORY_LAYERS` / `MAILAGENT_SKILL_CATALOG_PROMPT`）；仓库默认与 `.env.example`
 仍是 off，cutover 另拍。翻开关后**必须同时重启 serve-api 与 app**（双载体）。
+
+---
+
+## 11. Composio 单轨预置目录 + BYOK（08-05 WP-12）
+
+> owner 三轮拍板收敛的结果（决策链见 task `08-04-dogfood-feedback-0804-connector-chatui-avatar`
+> 的 `research/gap-connector-module-vs-reference.md` §7 与 `master-plan-0805.md` WP-12）：
+> **预置目录全走 Composio**（「免得搞两套，效果不一致」）+ 保留「自定义 MCP server URL」入口
+> 作为高级用法（WP-24，schema 已就位）+ 存量直连行不做迁移、owner 手动重配。
+> owner 在被明确告知「工具入参/返回经 Composio 服务器、OAuth token 托管在它那边、它是单点
+> 依赖」之后仍拍板使用。§11.5 的三处出站告知就是这条决策的产品化处置。
+
+### 11.1 装配：一个 connector = 一个 tool-router session
+
+- Composio 的 session 暴露一个**托管 MCP endpoint**（`mcp.url`）。我们不引 `composio` SDK
+  （只用四个控制面动作，引 SDK 要往 108 包 lock 里塞一整棵依赖树），走**裸 REST**：
+  `POST /api/v3/tool_router/session`（建）· `GET …/session/{id}`（复用）·
+  `POST …/session/{id}/link {toolkit}`（起 Connect Link）· `GET /api/v3/connected_accounts?user_ids=`
+  （轮询状态）。base = `https://backend.composio.dev/api/v3`，实现单源 `src/connectors/composio.py`。
+- MCP 侧是 `ConnectorClient` 的**第二种装配模式**：跳过 `OAuthClientProvider`，httpx2 client
+  挂静态 header `x-api-key`（spike 实测：纯 URL 不带 header → `401 code 906`）。transport /
+  list_tools 分页 / 50k 截断 / ExceptionGroup 拆包 / per-namespace 串行闸 **全部复用**。
+- ⇒ 对 gateway 而言 Composio connector 与任何 MCP connector 长得一模一样：manifest 同步、
+  per-tool 三档（§5.5）、审批链（§6）、`UNTRUSTED_MCP_TOOL` 围栏、orphan 纪律 **零改动**。
+
+🔴 **session 创建必带五件套**（`composio.session_create_body`，少任何一条都会静默出事）：
+
+| 字段 | 值 | 少了会怎样 |
+|---|---|---|
+| `toolkits.enable` | 该 connector 的 toolkit（小写） | 工具面为空 |
+| `tools.<toolkit>.enable` | curated 白名单 | 65～947 个工具全进来 |
+| `preload.tools` | 同白名单（≤20） | 只出 meta 工具，走 Composio 自己的「搜索→执行」语义 |
+| `manage_connections.enable` | `false` | 模型拿到「自己去连别的账号」的工具 |
+| `workbench.enable` | **`false`** | **白送一个云端代码执行沙箱**（默认是开的！） |
+
+🔴 **meta 工具删不掉**：即使配全五件套，`tools/list` 仍带 `COMPOSIO_SEARCH_TOOLS` /
+`COMPOSIO_MULTI_EXECUTE_TOOL` / `COMPOSIO_GET_TOOL_SCHEMAS`。它们的「搜索→执行」发生在
+Composio 的语义里，会**绕开**我们的 per-tool 档位、审批卡与围栏 ⇒
+`ConnectorClient.list_tools_manifest` 对 `source='composio'` 按前缀 `COMPOSIO_` 恒过滤、不入库
+（直连轨不过滤 —— 那边同名工具就是个普通工具）。
+
+### 11.2 数据模型增量
+
+`connector` 表加两列（`_migrate_additive` 幂等补，不进 `DB_VERSION`）：
+
+- `source TEXT NOT NULL DEFAULT 'custom_mcp'`（值域 `CONNECTOR_SOURCES`，写侧校验）。
+  🔴 默认 `custom_mcp` 是**有意**的：补列时存量行全是直连的（08-05 之前不存在 composio 行），
+  默认写成 composio 会把两条老行当场标错源。跨语言闸 = `tests/config/test_connector_contract_parity.py` ③b。
+- `composio_session_id TEXT`（明文非敏感；直连行恒 NULL）。
+
+`registry.CONNECTORS` 常量退役 → `get_connector_def` **行优先、目录兜底**：
+库里的行是权威（server_url / transport / display_name / source 全读行）→ 没有行才回退到预置
+目录（此时 `server_url=''` = 还没有 endpoint，任何要发请求的路径显式报 not-connected）。
+🔴 顺序不能反：目录里有 `notion`、库里也有一行老的直连 `notion`，**行优先**才不会让老连接
+一夜之间改用一把 Composio key 去打 Notion 的直连端点。
+
+### 11.3 目录数据（代码内 curated，加一家 = 一条数据）
+
+单源 `src/connectors/composio_catalog.py`：16 家（Gmail / Google Calendar / Google Drive /
+Slack / X / GitHub / Notion / Atlassian[JIRA+CONFLUENCE 双 toolkit 单 connector] / Linear /
+Outlook / Figma / Stripe / Asana / Intercom / Sentry / PayPal；Vercel + PostHog 是 `API_KEY`
+scheme，本批不做）。每条 = toolkit + **curated 白名单** + 描述 i18n key + 字母牌 logo。
+`validate_catalog()` 在 import 期跑：白名单非空、≤20、无重复、slug 属于自己的 toolkit、
+不含 meta 工具 —— 加错数据当场炸而不是等用户点连接。
+
+- **白名单是必选项不是优化**：实测量级 GitHub 947 / Outlook 314 / Slack 178 / Gmail·Notion 65。
+- 🔴 **Outlook 白名单剔除全部 send/draft/message 写类**（`validate_catalog` 有断言）：
+  Exchange 邮件读写是本机 davmail 主链路，不给模型第二条写邮件通道；只补日历 + 联系人。
+- Gmail 首发只给起草类写入（不给 `GMAIL_SEND_EMAIL`）；Stripe / PayPal 白名单全读。
+- **logo 取舍**：不用 `logos.composio.dev` 外链、也不内嵌品牌 SVG，用**代码内品牌色字母牌**。
+  理由 = 打包 `.app` 常在离线/受限网络下跑（外链会裂图），且未配 key 时就向第三方 CDN 发请求
+  与本节的出站告知调性相反；字母牌零请求、零商标复制、离线恒成立。
+
+### 11.4 BYOK + 连接流
+
+- **key 存 `external_credential`**（namespace `composio:project`，槽位 `api_key`，Fernet +
+  Keychain），**不进 .env**（明文落盘 + 第二事实来源 + 要重启，与「设置页填完即生效」矛盾）。
+  设置页只能写不能读回：状态视图只有 `{configured, updated_at}`（`peek` 不解密）。
+- **未配 key 的 gate**：目录区整体 disabled + 引导（注册 Composio → 取 key → 粘贴）+ 行内深链
+  跳到输入框。真正的强制在连接端点（`POST /{id}/oauth/start` 没 key → 409 `E_COMPOSIO_NO_KEY`）。
+- **user_id** = 首次生成的稳定 uuid 存 `owner_settings['composio.user_id']`（官方明说别用
+  `'default'`、别用 email）。
+- **连接流** `src/connectors/composio_flow.py`（`custom_mcp` 轨 `run_connect_flow` 的对位物，
+  共用 `ConnectorFlowState` 交接面，所以设置页的「等待授权 + deadline」整段复用）：
+  建/复用 session → 逐 toolkit 起 Connect Link → 轮询 connected account → 拉 manifest → 落双表
+  → `connected`。**端点仍叫 `oauth/start`**：对前端它就是「连接」这一个动作，分派在服务端。
+- 🔴 **多 toolkit 顺序授权**：Atlassian 要连 Jira + Confluence 两次。流把第 1 条 URL 交出去、
+  等它 ACTIVE，再把第 2 条填进 `flow.auth_url` 并把 `link_seq` +1；前端轮询发现序号涨了就再开
+  一次浏览器（同时弹两个授权页是更糟的 UX，而不弹第二个则第二条链接根本没人打开）。
+
+### 11.5 出站告知三处（这条路线的产品化处置，不是装饰）
+
+1. **设置页预置目录区标题下一句常驻声明** + 每行「经 Composio」/「直连」小字（判据 = 服务端
+   `source` 字段，前端不靠 URL 长相猜）。
+2. **首次连接任一预置服务的一次性 confirm**：数据过境 + token 托管 + 🔴 提醒去 Composio 后台
+   Settings → General 把 **Log storage 切「Don't store data」**（默认存 payload 最长一年，且
+   只对新调用生效）。localStorage 全局一次（说的是路线的性质，不是某一家的性质）。
+3. **写类审批卡加一行「经 Composio 云执行」**（`McpApprovalCard`）——走与 destructive 红警告
+   **同一条 live 通道**（`GET /{id}/tools` 的顶层 `source`），模型无法把这行字说没。
+
+### 11.6 存量直连行的处置
+
+不自动迁移、不做 slug 映射表（owner 已豁免）。老 `notion` / `atlassian` 行：
+
+- **保持可用**（行优先解析 ⇒ 装配路线不变）；
+- 列表行上标 `superseded_by_catalog` → 「已被预置目录的 Composio 版本取代」提示；
+- 目录卡上同 id 条目显示「已添加 / 先断开清除」——**同一家不给两个入口**（一个 id 一行是
+  connector 表的 PK 事实，不是 UI 选择）；
+- 换装 = 「断开」对话框勾选 **「同时清除工具配置」**（`purge=true`，老直连行默认勾上）→
+  行没了 → 目录卡回到可连接。
+
+### 11.7 风险与配额（如实列，owner 已知情）
+
+1. **单点依赖**：Composio 宕机 / 账号问题 / 额度用尽 = **全部预置 connector 一起停**。
+   §9.1「无告警接入」这个洞因此变大一号（仍未做，列入后续）。
+2. **数据出机范围扩大**：原本本地直连的 Notion / Jira 重配后也经 Composio。
+3. **留存默认开**：不切 Log storage 就是「入参/返回存它那 1 年」——接入 checklist 第一项。
+4. **配额**：免费档 20K calls/月（个人用量 $0）。🔴 **邮件预处理场地接入前必须按邮件量重算**
+   （逐封自动跑 × 每封若干次调用）。
+5. **延迟**：多一跳云中转（我们 → Composio → Google/Notion），可感知但非数量级。

@@ -1215,7 +1215,8 @@
       "label": "The following external MCP service tool will be called — changes land on the external service and may not be undoable from here (needs your approval):",
       "destructiveWarning": "Destructive operation: the server marks this tool as possibly overwriting existing data.",
       "noArgs": "(no arguments)",
-      "error": "The call failed — retry or ask the assistant to start over."
+      "error": "The call failed — retry or ask the assistant to start over.",
+      "viaComposio": "Executes in the Composio cloud (arguments and results pass through their servers)"
     },
     "calendarApprovalCard": {
       "reschedule": {
@@ -1992,7 +1993,9 @@
         "desc": "This deletes the credentials stored on this machine, and the service's tools stop being available to the AI immediately. The tool list and per-tool permissions are kept and apply again after reconnecting.",
         "cancel": "Cancel",
         "confirm": "Disconnect",
-        "confirming": "Disconnecting…"
+        "confirming": "Disconnecting…",
+        "purge": "Also clear tool configuration",
+        "purgeHelper": "Removes the connection row and its tool list as well (as if it had never been added). Unticked, only the credentials are deleted and the per-tool tiers survive a reconnect."
       },
       "tools": {
         "loading": "Loading tool list…",
@@ -2044,6 +2047,50 @@
         "bulkDesc": "This group contains {count} tools the service marks as destructive. On “Auto”, the AI will call them without asking you first.",
         "cancel": "Cancel",
         "confirm": "Set to Auto"
+      },
+      "viaComposio": "via Composio",
+      "viaDirect": "direct",
+      "supersededHint": "This row is the old direct connection. The preset catalog below now ships a Composio version of the same service — to switch, disconnect it and tick “also clear tool configuration”.",
+      "catalog": {
+        "title": "Preset catalog",
+        "outboundNotice": "Preset connections execute through the Composio cloud: tool inputs and results pass through their servers and the OAuth tokens are held on their side. For services you want to reach directly, use “custom MCP” (a later release).",
+        "toolCount": "{count} tools",
+        "alreadyAdded": "Added",
+        "supersedes": "The old direct configuration of the same service is still listed above — disconnect and clear it first.",
+        "keyLabel": "Composio API key",
+        "keyPlaceholder": "Paste your Composio API key",
+        "keySave": "Save",
+        "keySaved": "Composio API key saved",
+        "keyClear": "Clear",
+        "keyConfigured": "Configured ({time})",
+        "gateTitle": "Add a Composio API key to use the preset catalog",
+        "gateBody": "1. Create an account at app.composio.dev (the free tier includes 20K tool calls/month — plenty for personal use)\n2. Generate a key under Settings → API Keys\n3. Paste it into the field above and save\nOnce saved, every service in the catalog is one click away.",
+        "gateCta": "Enter the key",
+        "gateSignup": "Open composio.dev",
+        "outboundDialog": {
+          "title": "Preset connections send data to Composio",
+          "desc": "Services in the preset catalog are brokered by Composio:\n· tool arguments and results travel through their servers;\n· OAuth tokens are stored on their side, not on this machine;\n· they keep execution logs (including payloads) for up to a year by default — switch Log storage to “Don't store data” under Settings → General in the Composio dashboard now.\nContinuing means you accept this data path.",
+          "cancel": "Cancel",
+          "confirm": "Understood, connect"
+        },
+        "desc": {
+          "asana": "Asana: search tasks and projects, create tasks and comments, update tasks.",
+          "atlassian": "Atlassian: Jira issues (search/create/edit/transition) + Confluence pages (search/read/create/edit).",
+          "figma": "Figma: read file structure and components, pull design variables, render nodes, comment.",
+          "github": "GitHub: read repo content and READMEs, browse issues/PRs, open issues and comments.",
+          "gmail": "Gmail: search and read mail and drafts, read contacts; drafting only — no sending.",
+          "googlecalendar": "Google Calendar: read events and free slots, create/update/delete events.",
+          "googledrive": "Google Drive: find files, read metadata and comments, create folders and text files.",
+          "intercom": "Intercom: read conversations/contacts/tickets, search support records and articles.",
+          "linear": "Linear: browse issues and projects, create issues and comments, update state.",
+          "notion": "Notion: search and read pages/databases, create pages, append content, comment.",
+          "outlook": "Outlook: calendar and contacts (🔴 no mail send/draft — the local Exchange chain stays the only write path).",
+          "paypal": "PayPal: read-only invoices, payments, orders, subscriptions and disputes.",
+          "sentry": "Sentry: read projects and error issues, event details, alerts and stats.",
+          "slack": "Slack: read channels and history, search messages, post messages and reactions.",
+          "stripe": "Stripe: read-only finance data (customers, charges, invoices, subscriptions, disputes).",
+          "twitter": "X (Twitter): search posts, read timelines and analytics, post and bookmark."
+        }
       }
     },
     "imFeishu": {

@@ -54,13 +54,26 @@ def _require_enabled(settings: Any) -> None:
         )
 
 
-def _connector_def(connector_id: str):
+async def _connector_def(connector_id: str):
+    """解析 connector 定义（行优先 → 预置目录兜底）；未知 → 404。
+
+    🔴 `run_in_threadpool`：08-05 WP-12 起解析要读 `connector` 行 = 一次同步 sqlite，
+    别人持写锁时不能把 event loop 冻住（本文件其余 store 读写同款纪律）。
+    """
     from src.connectors.registry import get_connector_def
 
     try:
-        return get_connector_def(connector_id)
+        return await run_in_threadpool(get_connector_def, connector_id)
     except KeyError as e:
         raise APIError("E_NOT_FOUND", str(e)) from None
+
+
+def get_catalog_entry(connector_id: str):
+    """预置目录条目（无 → None）。模块级薄封装：handler 内 lazy import 纪律的例外只在这一处，
+    因为 `composio_catalog` 是**纯数据模块**（零第三方 import），裸 worktree 也 import 得动。"""
+    from src.connectors.composio_catalog import get_catalog_entry as _get
+
+    return _get(connector_id)
 
 
 def _store():
@@ -97,6 +110,10 @@ def _flow_view(flow: Any) -> Optional[dict[str, Any]]:
         "started_at": flow.started_at,
         "error": flow.error,
         "tool_count": flow.tool_count,
+        # 08-05 WP-12：composio 多 toolkit 的**顺序**授权（Atlassian = JIRA + CONFLUENCE）——
+        # 前端比对序号，涨了就再开一次浏览器。custom_mcp 轨从不递增（恒 0，只产一条 URL）。
+        "link_seq": getattr(flow, "link_seq", 0),
+        "pending_toolkit": getattr(flow, "pending_toolkit", None),
     }
 
 
@@ -124,35 +141,120 @@ def _credential_view(namespace: str) -> dict[str, Any]:
 
 @router.get("", dependencies=[Depends(verify_cf_access)])
 async def list_connectors(request: Request, settings=Depends(get_settings)) -> Any:
-    """registry 全集 ∪ DB 运行态 ∪ 凭证健康（未连接过的也列出来，供设置页起步）。"""
+    """**已配置的** connector 行 ∪ 凭证健康 ∪ 在途流。
+
+    🔴 08-05 WP-12 语义变更：以前这里列的是 registry 硬编码全集（连没连过的两家也在），
+    现在 registry 常量已退役 —— **列表 = `connector` 表里的行**（connector 行升为一等实体，
+    顺手关掉已知限界 §9.3 的僵尸行：库里有的就一定看得见、删得掉）。「还没连过的服务」由
+    `GET /catalog` 的预置目录承担，两处不重复渲染同一家。
+    """
     _require_enabled(settings)
     from src.connectors.oauth_flow import get_flow
-    from src.connectors.registry import CONNECTORS, namespace_for
+    from src.connectors.registry import namespace_for
 
     store = _store()
-    rows = {r.connector_id: r for r in await run_in_threadpool(store.list_connectors)}
+    rows = await run_in_threadpool(store.list_connectors)
     items = []
-    for cid, definition in sorted(CONNECTORS.items()):
-        row = rows.get(cid)
+    for row in rows:
+        cid = row.connector_id
         cred = await run_in_threadpool(_credential_view, namespace_for(cid))
         items.append(
             {
                 "connector_id": cid,
-                "display_name": definition.display_name,
-                "server_url": definition.server_url,
-                "transport": definition.transport,
-                "status": row.status if row else "disconnected",
-                "enabled": row.enabled if row else True,
-                # PR3：分类侧独立授权位（默认关；行不存在 = 从未连接 → 同样是关）。
-                "preprocess_enabled": row.preprocess_enabled if row else False,
-                "scopes": row.scopes if row else None,
-                "last_error": row.last_error if row else None,
-                "last_synced_at": row.last_synced_at if row else None,
+                "display_name": row.display_name or cid,
+                "server_url": row.server_url,
+                "transport": row.transport,
+                "status": row.status,
+                "enabled": row.enabled,
+                # PR3：分类侧独立授权位（默认关）。
+                "preprocess_enabled": row.preprocess_enabled,
+                "scopes": row.scopes,
+                "last_error": row.last_error,
+                "last_synced_at": row.last_synced_at,
+                # 08-05 WP-12：装配路线 —— 设置页据此显示「经 Composio」/「直连」（出站告知
+                # 三处之一），并对被预置目录取代的老直连行给迁移提示。
+                "source": row.source,
+                "superseded_by_catalog": bool(
+                    row.source == "custom_mcp" and get_catalog_entry(cid) is not None
+                ),
                 "credential": cred,
                 "flow": _flow_view(get_flow(cid)),
             }
         )
     return success_envelope({"connectors": items}, request=request)
+
+
+@router.get("/catalog", dependencies=[Depends(verify_cf_access)])
+async def connector_catalog(request: Request, settings=Depends(get_settings)) -> Any:
+    """预置目录（Composio 单轨）+ BYOK key 状态。
+
+    🔴 **BYOK gate**：`composio.configured=false` 时前端把整个目录区渲染成 disabled + 引导
+    （注册 Composio → 取 key → 粘贴）。这里照常返回条目内容（描述/logo/白名单大小都是
+    代码内数据，不需要 key），gate 是 UI 语义 —— 真正的强制在连接端点（没 key → 409
+    `E_COMPOSIO_NO_KEY`）。
+
+    每条带 `configured`（库里已有同 id 行 = 已在上面的列表里）与 `superseded`（那行是老的
+    直连行 —— owner 得先断开并清除配置，才能换成 Composio 版本，见 §9.3 一等实体化）。
+    """
+    _require_enabled(settings)
+    from src.connectors import composio
+    from src.connectors.composio_catalog import COMPOSIO_CATALOG
+
+    rows = {r.connector_id: r for r in await run_in_threadpool(_store().list_connectors)}
+    key_status = await run_in_threadpool(composio.api_key_status)
+    entries = []
+    for cid, entry in sorted(COMPOSIO_CATALOG.items()):
+        row = rows.get(cid)
+        entries.append(
+            {
+                "connector_id": cid,
+                "display_name": entry.display_name,
+                "description_key": entry.description_key,
+                "category": entry.category,
+                "logo_text": entry.logo_text,
+                "logo_color": entry.logo_color,
+                "toolkits": list(entry.toolkits),
+                "tool_count": len(entry.all_tools),
+                "configured": row is not None,
+                "superseded": row is not None and row.source == "custom_mcp",
+            }
+        )
+    return success_envelope(
+        {"composio": key_status, "entries": entries}, request=request
+    )
+
+
+@router.post("/composio/key", dependencies=[Depends(verify_cf_access)])
+async def set_composio_key(
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+    settings=Depends(get_settings),
+) -> Any:
+    """写 Composio API key（BYOK）：`{"api_key": "..."}`。
+
+    落 `external_credential`（Fernet + Keychain），**不进 .env**（明文落盘 + 第二事实来源 +
+    要重启，与「设置页填完即生效」矛盾）。响应**只回状态不回显任何字符**（脱敏纪律）。
+    """
+    _require_enabled(settings)
+    from src.connectors import composio
+
+    api_key = payload.get("api_key")
+    if not isinstance(api_key, str) or not api_key.strip():
+        raise APIError("E_INVALID_ARG", "api_key must be a non-empty string", http_status=400)
+    await run_in_threadpool(composio.set_api_key, api_key)
+    logger.info("[composio] api key updated (value never logged)")
+    return success_envelope(await run_in_threadpool(composio.api_key_status), request=request)
+
+
+@router.delete("/composio/key", dependencies=[Depends(verify_cf_access)])
+async def clear_composio_key(request: Request, settings=Depends(get_settings)) -> Any:
+    """删掉 Composio API key（幂等）。connector 行与 session id **不动** —— 重新填即可用。"""
+    _require_enabled(settings)
+    from src.connectors import composio
+
+    deleted = await run_in_threadpool(composio.clear_api_key)
+    status = await run_in_threadpool(composio.api_key_status)
+    return success_envelope({**status, "deleted": deleted}, request=request)
 
 
 @router.post("/{connector_id}/oauth/start", dependencies=[Depends(verify_cf_access)])
@@ -162,14 +264,43 @@ async def oauth_start(
     """发起授权：起后台授权流（单 task 全生命周期）→ 等授权 URL 就绪 → 返回给 owner 开浏览器。
 
     重复 start = 替换在途流（旧 task 取消 + 旧 state 作废）——owner 重点「连接」应当重来。
+
+    🔴 08-05 WP-12 **按 source 分派**（判据顺序 = `registry.get_connector_def`：行优先、
+    目录兜底）：`composio` → 托管 session + Connect Link 流；`custom_mcp`（含全部存量直连
+    行）→ 原 loopback OAuth 流，逐字节不变。端点名保留 `oauth/start` 是有意的：对前端而言
+    它就是「连接」这一个动作，分派是服务端的事（前端不该学会两套流程）。
     """
     _require_enabled(settings)
-    _connector_def(connector_id)
+    definition = await _connector_def(connector_id)
     from src.connectors.client import run_connect_flow
     from src.connectors.oauth_flow import begin_flow
 
-    flow = begin_flow(connector_id)
-    task = asyncio.create_task(run_connect_flow(flow))
+    if definition.source == "composio":
+        entry = get_catalog_entry(connector_id)
+        if entry is None:
+            # 行说自己是 composio、目录里却没有这一家（手改 DB / 目录删过条目）：不猜白名单。
+            raise APIError(
+                "E_NOT_FOUND",
+                f"connector {connector_id!r} is a Composio connector but is no longer in the "
+                "preset catalog — disconnect and remove it",
+                http_status=404,
+            )
+        from src.connectors import composio
+        from src.connectors.composio_flow import run_composio_connect_flow
+
+        if await run_in_threadpool(composio.get_api_key) is None:
+            raise APIError(
+                "E_COMPOSIO_NO_KEY",
+                "Composio API key is not configured — add it in Settings → AI → External "
+                "connections (the preset catalog is unavailable until then)",
+                http_status=409,
+            )
+        flow = begin_flow(connector_id)
+        coro = run_composio_connect_flow(flow, entry)
+    else:
+        flow = begin_flow(connector_id)
+        coro = run_connect_flow(flow)
+    task = asyncio.create_task(coro)
     flow.task = task
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
@@ -202,7 +333,7 @@ async def connector_status(
     connector_id: str, request: Request, settings=Depends(get_settings)
 ) -> Any:
     _require_enabled(settings)
-    definition = _connector_def(connector_id)
+    definition = await _connector_def(connector_id)
     from src.connectors.oauth_flow import get_flow
     from src.connectors.registry import namespace_for
 
@@ -218,6 +349,7 @@ async def connector_status(
             "scopes": row.scopes if row else None,
             "last_error": row.last_error if row else None,
             "last_synced_at": row.last_synced_at if row else None,
+            "source": row.source if row else definition.source,
             "credential": cred,
             "flow": _flow_view(get_flow(connector_id)),
         },
@@ -229,9 +361,15 @@ async def connector_status(
 async def sync_tools(
     connector_id: str, request: Request, settings=Depends(get_settings)
 ) -> Any:
-    """用已存授权拉工具清单落库（非交互：无授权 → 409 引导走 oauth/start，不挂浏览器）。"""
+    """用已存授权拉工具清单落库（非交互：无授权 → 409 引导走 oauth/start，不挂浏览器）。
+
+    🔴 08-05 WP-12：**要求行已存在** —— sync 的语义是「用已存的连接重拉清单」，而一个只在
+    预置目录里、还没连过的条目根本没有 endpoint（composio 的托管 URL 要 session 建出来才
+    有）。以前靠 registry 常量能凭空 upsert 出一行，现在那是撒谎：连都没连，行里写个
+    server_url 会让列表凭空多一行「未连接」的假象。
+    """
     _require_enabled(settings)
-    definition = _connector_def(connector_id)
+    definition = await _connector_def(connector_id)
     from src.connectors.client import ConnectorClient, ConnectorError
     from src.connectors.gate import ConnectorBusy
     from src.connectors.service import (
@@ -240,6 +378,12 @@ async def sync_tools(
     )
 
     store = _store()
+    if not definition.server_url:
+        raise APIError(
+            "E_CONNECTOR_NOT_CONNECTED",
+            f"connector {connector_id!r} has not been connected yet — connect it first",
+            http_status=409,
+        )
     await run_in_threadpool(
         store.upsert_connector,
         connector_id,
@@ -247,7 +391,8 @@ async def sync_tools(
         display_name=definition.display_name,
         transport=definition.transport,
     )
-    client = ConnectorClient(connector_id, interactive=False)
+    # definition 复用上面解析好的那一份（别在 event loop 上再读一次 `connector` 行）。
+    client = ConnectorClient(connector_id, interactive=False, definition=definition)
     try:
         tools = await client.list_tools_manifest()
     except ConnectorBusy as e:
@@ -286,15 +431,20 @@ async def list_tools(
     ``effective_mode`` = 服务端折算（NULL→auto；折算**不在前端重算**——那会成第二处
     手抄）。orphan 行照常在列（注册侧跳过它们）。``destructive`` 原样透出 —— 设置面 /
     审批卡的红警告读它。
+
+    🔴 顶层还带 ``source``（08-05 WP-12 出站告知第三处）：`McpApprovalCard` 就是从这条
+    **live** 通道拿事实的（镜像 destructive 红警告的做法 —— 模型无法把「经 Composio 云
+    执行」这行字从卡上说没），所以它必须和工具清单同一次请求返回。
     """
     _require_enabled(settings)
-    _connector_def(connector_id)
+    definition = await _connector_def(connector_id)
     from src.agent_config.store import connector_tool_effective_mode
 
     rows = await run_in_threadpool(_store().list_connector_tools, connector_id)
     return success_envelope(
         {
             "connector_id": connector_id,
+            "source": definition.source,
             "tools": [
                 {
                     "name": r.tool_name,
@@ -330,7 +480,7 @@ async def set_connector_enabled(
     行不存在 → 404（镜像 preprocess 的「先连接」语义：没连过就没有可启停的东西）。
     """
     _require_enabled(settings)
-    _connector_def(connector_id)
+    await _connector_def(connector_id)
     enabled = payload.get("enabled")
     if not isinstance(enabled, bool):
         raise APIError(
@@ -407,7 +557,7 @@ async def set_tool_mode(
     审批卡红警告链在 ``ask`` 档原样保留。
     """
     _require_enabled(settings)
-    _connector_def(connector_id)
+    await _connector_def(connector_id)
     from src.agent_config.store import connector_tool_effective_mode
 
     mode = _validate_mode_value(payload)
@@ -450,7 +600,7 @@ async def bulk_set_tool_mode(
     动作）。响应 ``updated`` = 实际改动行数（0 不是错——从未同步过的 connector 也 200）。
     """
     _require_enabled(settings)
-    _connector_def(connector_id)
+    await _connector_def(connector_id)
     from src.agent_config.store import CONNECTOR_CRUD_TYPES
 
     mode = _validate_mode_value(payload)
@@ -493,7 +643,7 @@ async def purge_orphan_tools(
     已知但从未连接 / 没有 orphan 行 → 200 ``{"purged": 0}``（删空不是错，前端不必先探）。
     """
     _require_enabled(settings)
-    _connector_def(connector_id)
+    await _connector_def(connector_id)
     purged = await run_in_threadpool(
         _store().purge_orphan_connector_tools, connector_id
     )
@@ -518,7 +668,7 @@ async def set_preprocess_enabled(
     的 ``grant_connectors``（免得给 agent 配了 write、分类侧跟着继承）。
     """
     _require_enabled(settings)
-    _connector_def(connector_id)
+    await _connector_def(connector_id)
     enabled = payload.get("enabled")
     if not isinstance(enabled, bool):
         raise APIError(
@@ -565,7 +715,7 @@ async def invoke_tool(
     UNTRUSTED_MCP_TOOL 围栏由调用面各自套（TS gateway / Python llm_tools）。
     """
     _require_enabled(settings)
-    _connector_def(connector_id)
+    await _connector_def(connector_id)
     body = payload or {}
     from src.connectors.client import ConnectorError
     from src.connectors.gate import ConnectorBusy
@@ -596,19 +746,28 @@ async def invoke_tool(
 
 @router.post("/{connector_id}/disconnect", dependencies=[Depends(verify_cf_access)])
 async def disconnect(
-    connector_id: str, request: Request, settings=Depends(get_settings)
+    connector_id: str,
+    request: Request,
+    payload: Optional[dict[str, Any]] = Body(default=None),
+    settings=Depends(get_settings),
 ) -> Any:
     """断开：**逐条删凭证**（tokens + client_info + 任何将来槽位）+ 状态回 disconnected。
 
     工具清单行**保留**（含用户 per-tool 配置 —— 重连后配置还在；refresh 纪律的另一面）。
     client_info 一并删（重连走全新 DCR，避免残留注册与新授权错配）。
+
+    ``{"purge": true}``（08-05 WP-12，差距表 #10「Uninstall 语义补全」）= 连行一起清：
+    connector 行 + 全部工具行都删掉，等于「当它没存在过」。这是把老直连行换成预置目录
+    Composio 版本的**唯一**出口（同 id 一行，不做并存），也是自定义 MCP 行的卸载出口。
+    默认 false —— 删用户配置永远要显式说。
     """
     _require_enabled(settings)
-    _connector_def(connector_id)
+    await _connector_def(connector_id)
     from src.agent_config.credentials import delete_credential, list_credentials
     from src.connectors.oauth_flow import get_flow
     from src.connectors.registry import namespace_for
 
+    purge = bool((payload or {}).get("purge") is True)
     namespace = namespace_for(connector_id)
     metas = await run_in_threadpool(list_credentials, namespace)
     deleted = 0
@@ -621,7 +780,10 @@ async def disconnect(
         flow.task.cancel()
     store = _store()
     row = await run_in_threadpool(store.get_connector, connector_id)
-    if row is not None:
+    purged = False
+    if row is not None and purge:
+        purged = await run_in_threadpool(store.delete_connector, connector_id)
+    elif row is not None:
         await run_in_threadpool(
             store.update_connector_state,
             connector_id,
@@ -629,9 +791,15 @@ async def disconnect(
             last_error=None,
             scopes=None,
         )
-    logger.info("[connector] {} disconnected ({} credential rows deleted)", connector_id, deleted)
+    logger.info(
+        "[connector] {} disconnected ({} credential rows deleted, purged={})",
+        connector_id,
+        deleted,
+        purged,
+    )
     return success_envelope(
-        {"connector_id": connector_id, "deleted_credentials": deleted}, request=request
+        {"connector_id": connector_id, "deleted_credentials": deleted, "purged": purged},
+        request=request,
     )
 
 

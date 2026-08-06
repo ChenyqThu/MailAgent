@@ -12,8 +12,10 @@
 
 import { request } from './http_client'
 import type {
+  ComposioKeyStatus,
   ConnectorApi,
   ConnectorBulkToolModeResult,
+  ConnectorCatalogView,
   ConnectorCrudType,
   ConnectorDisconnectResult,
   ConnectorOAuthStartResult,
@@ -42,6 +44,22 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
       return request<{ connectors: ConnectorSummary[] }>(baseUrl, 'GET', '/connector').then(
         (d) => d.connectors
       )
+    },
+
+    catalog(): Promise<ConnectorCatalogView> {
+      // 固定路径段 `catalog` 与 `/{connector_id}/…` 不同形（少一段），不会撞 connector id。
+      return request<ConnectorCatalogView>(baseUrl, 'GET', '/connector/catalog')
+    },
+
+    setComposioKey(apiKey: string): Promise<ComposioKeyStatus> {
+      // 🔴 key 只在这一次请求体里出现；响应恒是脱敏状态（configured + updated_at）。
+      return request<ComposioKeyStatus>(baseUrl, 'POST', '/connector/composio/key', {
+        body: { api_key: apiKey }
+      })
+    },
+
+    clearComposioKey(): Promise<ComposioKeyStatus> {
+      return request<ComposioKeyStatus>(baseUrl, 'DELETE', '/connector/composio/key')
     },
 
     status(connectorId: string): Promise<ConnectorStatusView> {
@@ -119,11 +137,14 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
       )
     },
 
-    disconnect(connectorId: string): Promise<ConnectorDisconnectResult> {
+    disconnect(connectorId: string, purge = false): Promise<ConnectorDisconnectResult> {
+      // 🔴 `purge` 恒显式发（缺省 false）：删配置这件事不能靠「没说 = 不删」的默认约定，
+      // 请求体里看得见才好排查。
       return request<ConnectorDisconnectResult>(
         baseUrl,
         'POST',
-        `/connector/${seg(connectorId)}/disconnect`
+        `/connector/${seg(connectorId)}/disconnect`,
+        { body: { purge } }
       )
     },
 

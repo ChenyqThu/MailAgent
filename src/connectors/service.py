@@ -232,7 +232,10 @@ async def invoke_connector_tool(
     from src.connectors.registry import get_connector_def
 
     try:
-        get_connector_def(connector_id)
+        # 🔴 to_thread：08-05 WP-12 起定义解析要读 `connector` 行（行优先、目录兜底），
+        # 那是一次同步 sqlite —— 别人持写锁时不能把 event loop 冻住（镜像本函数下面
+        # `list_connector_tools` 的同款纪律）。解出来的 def 往下传给 client，避免二次读。
+        definition = await asyncio.to_thread(get_connector_def, connector_id)
     except KeyError as e:
         raise ConnectorInvokeDenied("E_NOT_FOUND", str(e), http_status=404) from None
     if arguments is not None and not isinstance(arguments, dict):
@@ -285,7 +288,7 @@ async def invoke_connector_tool(
     # ``src.connectors.client.ConnectorClient`` 才生效 —— PR2 router 的既有手法）。
     from src.connectors.client import ConnectorClient, ConnectorError
 
-    client = ConnectorClient(connector_id, interactive=False)
+    client = ConnectorClient(connector_id, interactive=False, definition=definition)
     started = time.monotonic()
     try:
         result = await client.call_tool(tool_name, arguments)

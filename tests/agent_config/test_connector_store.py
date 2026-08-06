@@ -71,6 +71,68 @@ def test_update_connector_state_validates(tmp_path):
     assert st.get_connector(CID).last_error is None  # 显式清空
 
 
+def test_upsert_without_source_never_reclassifies_an_existing_row(tmp_path):
+    """🔴 08-05 WP-12：不传 `source` 的 upsert（`POST /{id}/sync`、直连轨 `run_connect_flow`
+    都是这么调的）**不许**把已有行的装配路线冲回默认值，也不许抹掉 session id。
+
+    冲掉会怎样：一次 sync 就把 composio 行改判成「直连」⇒ 下次调用改用 OAuth provider 打
+    Composio 的托管 endpoint（必 401），且设置页/审批卡的「经 Composio」告知当场消失。
+    """
+    st = _store(tmp_path)
+    st.upsert_connector(
+        "gmail", server_url="https://mcp.composio.test/a", source="composio",
+        composio_session_id="trs_1",
+    )
+    st.upsert_connector("gmail", server_url="https://mcp.composio.test/a", display_name="Gmail")
+    row = st.get_connector("gmail")
+    assert row.source == "composio" and row.composio_session_id == "trs_1"
+
+    # 反向同样成立：直连行不会被谁顺手标成 composio（默认值只在建行时生效）。
+    st.upsert_connector(CID, server_url="https://mcp.notion.com/mcp")
+    st.upsert_connector(CID, server_url="https://mcp.notion.com/mcp", display_name="Notion")
+    assert st.get_connector(CID).source == "custom_mcp"
+
+    # 值域外一律写侧拒（读侧的宽容归一不是写侧的借口）。
+    with pytest.raises(ValueError):
+        st.upsert_connector(CID, server_url="https://x", source="composio_v2")
+
+
+def test_wp12_columns_migrate_existing_rows_to_custom_mcp(tmp_path):
+    """🔴 升级路径：08-05 之前建的 `connector` 表（无 source / composio_session_id）开库即补列，
+    **存量行必须是 `custom_mcp`** —— 那两行（Notion / Atlassian）全是直连的。
+
+    标错成 composio 会怎样：装配走静态 header（拿一把 Composio key 去打 Notion 的直连端点），
+    出站告知也会对本地直连连接说「经 Composio 云执行」。
+    """
+    import sqlite3
+
+    db = str(tmp_path / "agent_config.db")
+    conn = sqlite3.connect(db)
+    conn.executescript(
+        """
+        CREATE TABLE connector (
+            connector_id TEXT PRIMARY KEY, server_url TEXT NOT NULL,
+            transport TEXT NOT NULL DEFAULT 'streamable_http', display_name TEXT,
+            status TEXT NOT NULL DEFAULT 'disconnected', enabled INTEGER NOT NULL DEFAULT 1,
+            preprocess_enabled INTEGER NOT NULL DEFAULT 0,
+            scopes_json TEXT, last_error TEXT, last_synced_at INTEGER,
+            created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL);
+        INSERT INTO connector VALUES('notion','https://mcp.notion.com/mcp','streamable_http',
+            'Notion','connected',1,0,NULL,NULL,NULL,1,1);
+        """
+    )
+    conn.commit()
+    conn.close()
+
+    row = AgentConfigStore(db).get_connector("notion")
+    assert row.source == "custom_mcp"
+    assert row.composio_session_id is None
+    assert row.status == "connected"  # 补列不碰任何既有列
+
+    # 幂等：再开一次库不重复 ALTER、值不变。
+    assert AgentConfigStore(db).get_connector("notion").source == "custom_mcp"
+
+
 # ── 工具清单 sync：refresh 纪律 + orphan ────────────────────────────────────────
 
 

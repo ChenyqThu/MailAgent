@@ -186,3 +186,40 @@ test('错误信封 → throw Error & {code}（不吞、不降级成空）', asyn
     code: 'E_CONNECTOR_GRANT_DENIED'
   })
 })
+
+// ── 08-05 WP-12：预置目录 + BYOK key + disconnect purge ──────────────────────
+
+test('catalog / composio key —— 路径与 method（key 只在请求体里出现一次）', async () => {
+  fetchMock.mockResolvedValue(envelopeResponse({ composio: { configured: false }, entries: [] }))
+  await api.catalog()
+  expect(calledUrl()).toBe('/api/connector/catalog')
+  expect(String(calledInit().method ?? 'GET')).toBe('GET')
+
+  fetchMock.mockClear()
+  fetchMock.mockResolvedValue(envelopeResponse({ configured: true, updated_at: 1 }))
+  await api.setComposioKey('ck_secret')
+  expect(calledUrl()).toBe('/api/connector/composio/key')
+  expect(String(calledInit().method)).toBe('POST')
+  expect(calledBody()).toEqual({ api_key: 'ck_secret' })
+
+  fetchMock.mockClear()
+  fetchMock.mockResolvedValue(envelopeResponse({ configured: false, updated_at: null }))
+  await api.clearComposioKey()
+  expect(calledUrl()).toBe('/api/connector/composio/key')
+  expect(String(calledInit().method)).toBe('DELETE')
+})
+
+test('disconnect 恒显式发 purge（默认 false = 只删凭证、留配置）', async () => {
+  fetchMock.mockResolvedValue(
+    envelopeResponse({ connector_id: 'notion', deleted_credentials: 2, purged: false })
+  )
+  await api.disconnect('notion')
+  expect(calledBody()).toEqual({ purge: false })
+
+  fetchMock.mockClear()
+  fetchMock.mockResolvedValue(
+    envelopeResponse({ connector_id: 'notion', deleted_credentials: 2, purged: true })
+  )
+  await api.disconnect('notion', true)
+  expect(calledBody()).toEqual({ purge: true })
+})

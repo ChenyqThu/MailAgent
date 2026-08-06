@@ -1,7 +1,18 @@
 """ConnectorClient —— MCP SDK v2 的三层装配 + 超时 + 串行闸 + 稳定 error code 表。
 
 结构照抄 ``src/kos/client.py``（issue #69 后的形状：配置读超时 / 报错带耗时 / 稳定 code 表），
-把手搓 JSON-RPC 换成 SDK ``Client``。装配（排雷报告 §二实签）：
+把手搓 JSON-RPC 换成 SDK ``Client``。
+
+**两种装配模式**（08-05 WP-12 加了第二种；transport / list_tools 分页 / 50k 截断 /
+ExceptionGroup 拆包 / per-namespace 串行闸 **全部共用**）：
+
+  - ``source='custom_mcp'``（直连远端 MCP，PR1 起的原路径）= 下面这三层；
+  - ``source='composio'``（预置目录，托管 MCP endpoint）= **跳过 OAuthClientProvider**，
+    改成 httpx2 client 挂**静态 header** ``x-api-key: <composio api key>``（spike 实测：
+    纯 URL 不带 header 直接 401 code 906；三种 header 形状任选，取 x-api-key）。
+    Composio 那边的 MCP server 是无状态 streamable HTTP，其余全同。
+
+装配（排雷报告 §二实签，custom_mcp 轨）：
 
     OAuthClientProvider（httpx2.Auth 子类；PKCE + DCR + 刷新全内建）
       → httpx2.AsyncClient(auth=provider, follow_redirects=True, timeout=…)
@@ -45,6 +56,7 @@ from mcp.client.streamable_http import streamable_http_client
 from mcp.shared.auth import AuthorizationCodeResult, OAuthClientMetadata
 from mcp.shared.exceptions import MCPError
 
+from src.connectors.composio_catalog import is_meta_tool
 from src.connectors.gate import ConnectorBusy, connector_gate
 from src.connectors.oauth_flow import (
     ConnectorFlowState,
@@ -208,9 +220,15 @@ class ConnectorClient:
         callback_handler: Optional[Callable[[], Awaitable[AuthorizationCodeResult]]] = None,
         timeout_seconds: Optional[float] = None,
         storage: Any = None,
+        definition: Optional[ConnectorDef] = None,
     ) -> None:
+        # ``definition`` = 已解析好的定义（08-05 WP-12：解析要读 `connector` 行，即一次同步
+        # sqlite —— 调用方在 async 上下文里已经用线程池解过一次的，直接传进来，既不在 event
+        # loop 上再读一次，也不重复一次 I/O）。None = 自己解析（同步调用方 / 单测）。
         try:
-            self.definition: ConnectorDef = get_connector_def(connector_id)
+            self.definition: ConnectorDef = (
+                definition if definition is not None else get_connector_def(connector_id)
+            )
         except KeyError as e:
             raise ConnectorError(str(e), code="E_CONNECTOR_UNKNOWN") from None
         self.connector_id = connector_id
@@ -267,6 +285,29 @@ class ConnectorClient:
 
     # ── 会话 ─────────────────────────────────────────────────────────────────
 
+    # ── composio 装配（第二种模式：静态 header，无 OAuth provider）─────────────
+
+    @property
+    def is_composio(self) -> bool:
+        return self.definition.source == "composio"
+
+    async def _composio_headers(self) -> dict[str, str]:
+        """托管 MCP endpoint 的静态鉴权头。🔴 key 只到这里为止 —— 不落日志/不进异常文案。
+
+        🔴 ``run_in_threadpool``：取 key = 一次同步 sqlite 读 + Fernet 解密（``external_credential``），
+        与直连轨读 token 的 ``token_storage.get_tokens_with_expiry`` 同款纪律 —— 别人持
+        ``agent_config.db`` 写锁时不能把 event loop 冻在每一次工具调用上。
+        """
+        from starlette.concurrency import run_in_threadpool
+
+        from src.connectors.composio import ComposioError, require_api_key
+
+        try:
+            return {"x-api-key": await run_in_threadpool(require_api_key)}
+        except ComposioError as e:
+            # 没配 key 与「没授权」对调用方是同一件事：都得 owner 去设置里做一步动作。
+            raise ConnectorError(str(e), code="E_CONNECTOR_NOT_CONNECTED") from e
+
     @asynccontextmanager
     async def session(self, *, http_transport: Any = None) -> AsyncIterator[Client]:
         """打开一个 MCP 会话（namespace 闸内；错误统一转 ConnectorError 且带耗时）。
@@ -278,13 +319,25 @@ class ConnectorClient:
         try:
             try:
                 async with connector_gate.hold(self.namespace, timeout=gate_timeout):
-                    provider = self._build_provider()
-                    await self._prime(provider)
+                    if not self.definition.server_url:
+                        # composio 目录条目还没建 session（或行被手改空）：拿空 URL 发请求是
+                        # 静默失败，显式拒并把 owner 指到「先连接」那一步。
+                        raise ConnectorError(
+                            f"connector {self.connector_id} has no endpoint yet — connect it "
+                            "first (Settings → AI → External connections)",
+                            code="E_CONNECTOR_NOT_CONNECTED",
+                        )
+                    if self.is_composio:
+                        client_kwargs: dict[str, Any] = {"headers": await self._composio_headers()}
+                    else:
+                        provider = self._build_provider()
+                        await self._prime(provider)
+                        client_kwargs = {"auth": provider}
                     async with httpx2.AsyncClient(
-                        auth=provider,
                         follow_redirects=True,
                         timeout=httpx2.Timeout(self.timeout),
                         transport=http_transport,
+                        **client_kwargs,
                     ) as http:
                         transport = streamable_http_client(
                             self.definition.server_url, http_client=http
@@ -341,7 +394,14 @@ class ConnectorClient:
     async def list_tools_manifest(self, *, http_transport: Any = None) -> list[dict[str, Any]]:
         """拉全量工具清单 → 归一成入库形状（name/description/schema×2/crud_type）。
 
-        🔴 **不过滤**：远端有什么就入什么（清单完整），启用与否交给 owner 的 per-tool 开关。
+        🔴 **原则上不过滤**：远端有什么就入什么（清单完整），启用与否交给 owner 的 per-tool
+        开关。**唯一例外**（08-05 WP-12）= composio 轨的 ``COMPOSIO_*`` meta 工具
+        （``COMPOSIO_SEARCH_TOOLS`` / ``COMPOSIO_MULTI_EXECUTE_TOOL`` /
+        ``COMPOSIO_GET_TOOL_SCHEMAS``）：spike 实测它们**删不掉**（配了 preload + 白名单 +
+        manage_connections=false 仍在 tools/list 里），而它们的「搜索 → 执行」发生在
+        Composio 的语义里，会**绕开** per-tool 档位、审批卡与围栏 —— 让它们入库就等于给了
+        模型一个不受本仓授权体系管的万能工具。故在同步入口就滤掉（`custom_mcp` 轨不滤：
+        那边一个恰好叫 COMPOSIO_ 开头的远端工具就是个普通工具）。
         """
         tools: list[dict[str, Any]] = []
         async with self.session(http_transport=http_transport) as client:
@@ -349,6 +409,13 @@ class ConnectorClient:
             for _ in range(_LIST_TOOLS_MAX_PAGES):
                 result = await client.list_tools(cursor=cursor)
                 for t in result.tools:
+                    if self.is_composio and is_meta_tool(t.name):
+                        logger.debug(
+                            "[connector] {} skipped composio meta tool {}",
+                            self.connector_id,
+                            t.name,
+                        )
+                        continue
                     tools.append(
                         {
                             "name": t.name,
@@ -459,12 +526,19 @@ async def run_connect_flow(flow: ConnectorFlowState, *, client: Optional[Connect
                 code="E_CONNECTOR_TIMEOUT",
             ) from None
 
-    cc = client or ConnectorClient(
-        connector_id,
-        interactive=True,
-        redirect_handler=redirect_handler,
-        callback_handler=callback_handler,
-    )
+    if client is not None:
+        cc = client
+    else:
+        # 🔴 to_thread：08-05 WP-12 起 `get_connector_def` 要读 `connector` 行 = 一次同步
+        # sqlite，别在 event loop 上做（本流是 loop 上的后台 task）。解出来的 def 直接传给
+        # client，顺带省掉一次重复读。
+        cc = ConnectorClient(
+            connector_id,
+            interactive=True,
+            redirect_handler=redirect_handler,
+            callback_handler=callback_handler,
+            definition=await run_in_threadpool(get_connector_def, connector_id),
+        )
 
     try:
         definition = cc.definition

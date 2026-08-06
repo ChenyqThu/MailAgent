@@ -19,32 +19,42 @@ from src.connectors.client import (
     derive_crud_type,
     derive_destructive,
 )
-from src.connectors.registry import CONNECTORS, get_connector_def, namespace_for
+from src.connectors.composio_catalog import COMPOSIO_CATALOG
+from src.connectors.registry import get_connector_def, namespace_for
 
 
-# ── registry ─────────────────────────────────────────────────────────────────────
+# ── 定义解析（08-05 WP-12：registry 常量退役 → 行优先、预置目录兜底）───────────────
 
 
-def test_registry_known_connectors():
-    assert set(CONNECTORS) == {"notion", "atlassian"}
-    assert get_connector_def("notion").server_url == "https://mcp.notion.com/mcp"
-    assert (
-        get_connector_def("atlassian").server_url
-        == "https://mcp.atlassian.com/v1/mcp/authv2"
+def test_catalog_entry_resolves_without_a_row(fresh_agent_cfg):
+    """库里没行时，目录条目照样解析得出（display_name 有、server_url **空**）。
+
+    空 server_url 是有意的：托管 MCP endpoint 要等 session 建出来才存在 —— 拿一个编出来的
+    URL 去发请求才是真事故。
+    """
+    d = get_connector_def("gmail")
+    assert d.source == "composio" and d.display_name == "Gmail" and d.server_url == ""
+
+
+def test_db_row_wins_over_catalog(fresh_agent_cfg):
+    """🔴 行优先：存量直连 `notion` 行（source=custom_mcp）不能被同 id 的目录条目改写装配
+    路线，否则升级当天就会拿一把 Composio key 去打 Notion 的直连端点。"""
+    fresh_agent_cfg.upsert_connector(
+        "notion", server_url="https://mcp.notion.com/mcp", display_name="Notion"
     )
-    with pytest.raises(KeyError):
-        get_connector_def("github")
+    d = get_connector_def("notion")
+    assert d.source == "custom_mcp" and d.server_url == "https://mcp.notion.com/mcp"
 
 
 def test_namespace_matches_credential_key_shape():
     """namespace 必须过 credentials 层的键形状闸 —— 不然凭证根本落不了库。"""
-    for cid in CONNECTORS:
+    for cid in COMPOSIO_CATALOG:
         assert _NAMESPACE_RE.match(namespace_for(cid)), namespace_for(cid)
 
 
-def test_unknown_connector_raises_stable_code():
+def test_unknown_connector_raises_stable_code(fresh_agent_cfg):
     with pytest.raises(ConnectorError) as ei:
-        ConnectorClient("github")
+        ConnectorClient("definitely-not-a-service")
     assert ei.value.code == "E_CONNECTOR_UNKNOWN"
 
 
@@ -314,9 +324,14 @@ def _oauth_mock_transport(seen: list[str]):
     return httpx2.MockTransport(_handler)
 
 
-def test_revoked_refresh_token_surfaces_not_connected():
+def test_revoked_refresh_token_surfaces_not_connected(fresh_agent_cfg):
     import httpx2
 
+    # 08-05 WP-12：直连轨的行为要在**直连行**上验（行优先解析）。没有这一行的话
+    # `notion` 会解析成预置目录的 composio 条目（无 endpoint）→ 根本走不到 OAuth 那段。
+    fresh_agent_cfg.upsert_connector(
+        "notion", server_url=f"{_AS}/mcp", display_name="Notion", source="custom_mcp"
+    )
     seen: list[str] = []
     cc = ConnectorClient(
         "notion",

@@ -205,6 +205,9 @@ export const qk = {
   // sync 之后 invalidate `['connectors']` 一处，工具清单跟着刷（TanStack 前缀匹配）。
   connectors: () => ['connectors'] as const,
   connectorTools: (id: string) => ['connectors', id, 'tools'] as const,
+  // 08-05 WP-12 — 预置目录 + BYOK key 状态。同挂 `connectors` 前缀：连接/断开/清除配置
+  // 之后 invalidate 一处，目录里的「已配置 / 已被取代」跟着刷。
+  connectorCatalog: () => ['connectors', 'catalog'] as const,
 
   palette: {
     search: (normalised: string) => ['palette', 'search', normalised] as const
