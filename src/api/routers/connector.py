@@ -68,9 +68,14 @@ async def _connector_def(connector_id: str):
         raise APIError("E_NOT_FOUND", str(e)) from None
 
 
-def get_catalog_entry(connector_id: str):
-    """预置目录条目（无 → None）。模块级薄封装：handler 内 lazy import 纪律的例外只在这一处，
-    因为 `composio_catalog` 是**纯数据模块**（零第三方 import），裸 worktree 也 import 得动。"""
+def get_composio_entry(connector_id: str):
+    """**Composio 轨**的目录条目（无 → None）。模块级薄封装：handler 内 lazy import 纪律的
+    例外只在这一处，因为 `composio_catalog` / `catalog` 都是**纯数据模块**（零第三方 import），
+    裸 worktree 也 import 得动。
+
+    🔴 08-06 双轨后它**不再**等于「目录里有没有这一家」——notion / atlassian 出厂是 direct
+    轨（`catalog.track_for`），但它俩在 COMPOSIO_CATALOG 里的条目仍然活着，供**存量 composio
+    行**（行优先解析出 source='composio'）重连/续期用。判「目录里有没有」一律走 `track_for`。"""
     from src.connectors.composio_catalog import get_catalog_entry as _get
 
     return _get(connector_id)
@@ -149,6 +154,7 @@ async def list_connectors(request: Request, settings=Depends(get_settings)) -> A
     `GET /catalog` 的预置目录承担，两处不重复渲染同一家。
     """
     _require_enabled(settings)
+    from src.connectors.catalog import row_is_off_track
     from src.connectors.oauth_flow import get_flow
     from src.connectors.registry import namespace_for
 
@@ -172,11 +178,12 @@ async def list_connectors(request: Request, settings=Depends(get_settings)) -> A
                 "last_error": row.last_error,
                 "last_synced_at": row.last_synced_at,
                 # 08-05 WP-12：装配路线 —— 设置页据此显示「经 Composio」/「直连」（出站告知
-                # 三处之一），并对被预置目录取代的老直连行给迁移提示。
+                # 三处之一），并对与目录出厂轨道不符的行给迁移提示。
+                # 🔴 08-06 双轨改判：判据从「custom_mcp 行 + 目录里有同 id」改成
+                # `row_is_off_track` —— 老判据会把**正确的直连行**（notion / atlassian 出厂
+                # 就是 direct 轨）误标成「已被目录取代」，把 owner 诱导去断开重连一遍。
                 "source": row.source,
-                "superseded_by_catalog": bool(
-                    row.source == "custom_mcp" and get_catalog_entry(cid) is not None
-                ),
+                "superseded_by_catalog": row_is_off_track(row.source, cid),
                 "credential": cred,
                 "flow": _flow_view(get_flow(cid)),
             }
@@ -186,37 +193,48 @@ async def list_connectors(request: Request, settings=Depends(get_settings)) -> A
 
 @router.get("/catalog", dependencies=[Depends(verify_cf_access)])
 async def connector_catalog(request: Request, settings=Depends(get_settings)) -> Any:
-    """预置目录（Composio 单轨）+ BYOK key 状态。
+    """预置目录（08-06 起**双轨**）+ BYOK key 状态。
 
-    🔴 **BYOK gate**：`composio.configured=false` 时前端把整个目录区渲染成 disabled + 引导
-    （注册 Composio → 取 key → 粘贴）。这里照常返回条目内容（描述/logo/白名单大小都是
-    代码内数据，不需要 key），gate 是 UI 语义 —— 真正的强制在连接端点（没 key → 409
-    `E_COMPOSIO_NO_KEY`）。
+    每条带 `track`（出厂轨道，跨 lane 契约）：
+      - `direct`   —— Notion / Atlassian：自建 MCP 直连（OAuth 2.1 + PKCE + DCR，打官方
+        端点），**必带 `server_url`**；`toolkits=[]` / `tool_count=null` —— 直连轨没有
+        curated 白名单这个概念，工具清单以实际 `tools/list` 为准（套 Composio 那份 slug
+        白名单会得到一份对不上的假清单）。
+      - `composio` —— 其余 14 家：托管 MCP，`server_url=null`（endpoint 要 session 建出来）。
 
-    每条带 `configured`（库里已有同 id 行 = 已在上面的列表里）与 `superseded`（那行是老的
-    直连行 —— owner 得先断开并清除配置，才能换成 Composio 版本，见 §9.3 一等实体化）。
+    🔴 **BYOK gate 只对 composio 轨成立**：`composio.configured=false` 时前端把**该轨**的
+    目录卡渲染成 disabled + 引导（注册 Composio → 取 key → 粘贴）；direct 轨条目不需要
+    任何 key。这里照常返回全部条目内容（描述/logo/白名单大小都是代码内数据），gate 是 UI
+    语义 —— 真正的强制在连接端点（composio 轨没 key → 409 `E_COMPOSIO_NO_KEY`）。
+
+    `configured` = 库里已有同 id 行（= 已在列表端点里）；`superseded` = 那一行的装配路线
+    与本条目的出厂轨道**不符**（老直连行遇上 composio 轨条目，或 08-06 之后 owner 活库那种
+    composio 行遇上 direct 轨条目）—— 要换轨得先断开并清除配置，见 §9.3 一等实体化。
     """
     _require_enabled(settings)
     from src.connectors import composio
-    from src.connectors.composio_catalog import COMPOSIO_CATALOG
+    from src.connectors.catalog import catalog_views, row_is_off_track
 
     rows = {r.connector_id: r for r in await run_in_threadpool(_store().list_connectors)}
     key_status = await run_in_threadpool(composio.api_key_status)
     entries = []
-    for cid, entry in sorted(COMPOSIO_CATALOG.items()):
-        row = rows.get(cid)
+    for view in catalog_views():
+        row = rows.get(view.connector_id)
         entries.append(
             {
-                "connector_id": cid,
-                "display_name": entry.display_name,
-                "description_key": entry.description_key,
-                "category": entry.category,
-                "logo_text": entry.logo_text,
-                "logo_color": entry.logo_color,
-                "toolkits": list(entry.toolkits),
-                "tool_count": len(entry.all_tools),
+                "connector_id": view.connector_id,
+                "display_name": view.display_name,
+                "track": view.track,
+                "server_url": view.server_url,
+                "description_key": view.description_key,
+                "category": view.category,
+                "logo_text": view.logo_text,
+                "logo_color": view.logo_color,
+                "toolkits": list(view.toolkits),
+                "tool_count": view.tool_count,
                 "configured": row is not None,
-                "superseded": row is not None and row.source == "custom_mcp",
+                "superseded": row is not None
+                and row_is_off_track(row.source, view.connector_id),
             }
         )
     return success_envelope(
@@ -269,6 +287,12 @@ async def oauth_start(
     目录兜底）：`composio` → 托管 session + Connect Link 流；`custom_mcp`（含全部存量直连
     行）→ 原 loopback OAuth 流，逐字节不变。端点名保留 `oauth/start` 是有意的：对前端而言
     它就是「连接」这一个动作，分派是服务端的事（前端不该学会两套流程）。
+
+    🔴 08-06 双轨后这条分派**同时**覆盖了「按 track 分流」：还没连过的 direct 轨条目
+    （Notion / Atlassian）解析出的 def 就是 `source='custom_mcp'` + 官方 server_url ⇒ 走
+    loopback OAuth；composio 轨条目解析出 `source='composio'` ⇒ 走托管流。已有行仍**行
+    优先**（`source` 是既成事实）—— owner 活库那行 composio 的 atlassian 点重连仍走托管流，
+    换轨的唯一出口是 `disconnect(purge=true)` 后重连（设置页据 `superseded_by_catalog` 提示）。
     """
     _require_enabled(settings)
     definition = await _connector_def(connector_id)
@@ -276,13 +300,16 @@ async def oauth_start(
     from src.connectors.oauth_flow import begin_flow
 
     if definition.source == "composio":
-        entry = get_catalog_entry(connector_id)
+        entry = get_composio_entry(connector_id)
         if entry is None:
-            # 行说自己是 composio、目录里却没有这一家（手改 DB / 目录删过条目）：不猜白名单。
+            # 行说自己是 composio、Composio 目录里却没有这一家（手改 DB / 目录删过条目）：
+            # 不猜白名单。08-06 起还有第二种成因 —— 某家从 Composio 轨整体挪到了 direct 轨
+            # 且它的 composio 条目被删掉；两种的处置相同（断开 + 清配置后重连换轨）。
             raise APIError(
                 "E_NOT_FOUND",
-                f"connector {connector_id!r} is a Composio connector but is no longer in the "
-                "preset catalog — disconnect and remove it",
+                f"connector {connector_id!r} has a Composio row but is no longer a Composio "
+                "catalog entry — disconnect it with purge to clear the row, then connect "
+                "again to use the current track",
                 http_status=404,
             )
         from src.connectors import composio
@@ -291,8 +318,9 @@ async def oauth_start(
         if await run_in_threadpool(composio.get_api_key) is None:
             raise APIError(
                 "E_COMPOSIO_NO_KEY",
-                "Composio API key is not configured — add it in Settings → AI → External "
-                "connections (the preset catalog is unavailable until then)",
+                "Composio API key is not configured — add it in the Connectors console "
+                "(sidebar → Connectors → Composio account); the preset catalog is "
+                "unavailable until then",
                 http_status=409,
             )
         flow = begin_flow(connector_id)
@@ -363,22 +391,26 @@ async def sync_tools(
 ) -> Any:
     """用已存授权拉工具清单落库（非交互：无授权 → 409 引导走 oauth/start，不挂浏览器）。
 
-    🔴 08-05 WP-12：**要求行已存在** —— sync 的语义是「用已存的连接重拉清单」，而一个只在
-    预置目录里、还没连过的条目根本没有 endpoint（composio 的托管 URL 要 session 建出来才
-    有）。以前靠 registry 常量能凭空 upsert 出一行，现在那是撒谎：连都没连，行里写个
-    server_url 会让列表凭空多一行「未连接」的假象。
+    🔴 08-05 WP-12：**要求行已存在** —— sync 的语义是「用已存的连接重拉清单」。以前靠
+    registry 常量能凭空 upsert 出一行，那是撒谎：连都没连，行里写个 server_url 会让列表
+    凭空多一行「未连接」的假象。
+
+    🔴 08-06：判据从「`definition.server_url` 空」改成**直接查行**。空 URL 以前只是「没连过」
+    的代理判据，且只对 composio 轨成立；双轨后 direct 轨的目录条目**自带**官方 endpoint，
+    照旧判会让一个从没连过的 Notion 走进下面的 upsert，把那个假象原样放回来。
     """
     _require_enabled(settings)
     definition = await _connector_def(connector_id)
     from src.connectors.client import ConnectorClient, ConnectorError
     from src.connectors.gate import ConnectorBusy
     from src.connectors.service import (
-        CONNECTOR_REAUTH_ERROR_CODES,
         CONNECTOR_REAUTH_MESSAGE,
+        should_mark_needs_reauth,
     )
 
     store = _store()
-    if not definition.server_url:
+    row = await run_in_threadpool(store.get_connector, connector_id)
+    if row is None or not definition.server_url:
         raise APIError(
             "E_CONNECTOR_NOT_CONNECTED",
             f"connector {connector_id!r} has not been connected yet — connect it first",
@@ -398,9 +430,12 @@ async def sync_tools(
     except ConnectorBusy as e:
         raise APIError("E_CONNECTOR_BUSY", str(e), http_status=409) from e
     except ConnectorError as e:
-        # 刷新失败 / 授权失效 → 连接落 needs_reauth + **可行动**文案（PRD「不静默重试到死」）。
-        # 码表与文案与 invoke 侧同一份（service.py）—— 两个落态点绝不各抄一遍。
-        if e.code in CONNECTOR_REAUTH_ERROR_CODES:
+        # 授权**真的**失效 → 连接落 needs_reauth + **可行动**文案（PRD「不静默重试到死」）。
+        # 判定与文案与 invoke 侧同一份（service.py）—— 两个落态点绝不各抄一遍。
+        # 🔴 08-06：判据从「码表命中」换成 should_mark_needs_reauth —— 码表命中不充分（本地
+        # 装配不出请求的那一形状同码，零出网），且两个面必须同判，否则同一次失败会在 sync 与
+        # invoke 上得到相反的状态。
+        if should_mark_needs_reauth(e):
             await run_in_threadpool(
                 store.update_connector_state,
                 connector_id,

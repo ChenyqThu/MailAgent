@@ -660,6 +660,7 @@
     "allMail": "所有邮件",
     "aiSessions": "AI 会话历史",
     "agentView": "MailAgent",
+    "connectors": "Connectors",
     "adminKanban": "看板 Admin",
     "calendar": "日历",
     "settings": "设置",
@@ -677,6 +678,33 @@
       "showMore": "展开更多（+{count}）",
       "showLess": "折叠",
       "disabledTip": "等待文件夹信息加载后可点击"
+    }
+  },
+  "connectorsConsole": {
+    "title": "Connectors",
+    "subtitle": "内置工具审批档与外部服务连接的统一配置台",
+    "sectionBuiltin": "内置工具",
+    "sectionExternal": "外部连接",
+    "composioAccount": "Composio 账户",
+    "directTrackNote": "直连官方 MCP 端点（OAuth 授权页由服务方提供），不经任何第三方中转，也不需要 API Key。",
+    "toolCountUnknown": "工具清单连接后获取",
+    "switchTrack": "切换轨道（断开并清除配置）",
+    "supersededByDirect": "这条连接走的是 Composio 托管，而该服务已改为直连官方端点（不需要第三方授权）。用「切换轨道」断开并清除配置，再从目录直连重连。",
+    "builtinGroupDesc": {
+      "email_write": "标记 / 归档 / 置顶 / 重传 Notion 等高频可逆的邮件操作。",
+      "draft": "起草与修改本机草稿；发送另有独立的确认卡兜底。",
+      "web": "联网检索与网页抓取（URL 与查询词是数据出境面）。",
+      "calendar": "日程改期 / 回复邀请 / 删除事件（删除为破坏性操作）。",
+      "capability": "技能开关与身份文档等能力面改动（均有历史与回滚补偿）。",
+      "supply": "Skill 安装与卸载（供应链面；安装恒两段确认）。",
+      "agents": "Custom Agent 的创建 / 修改 / 删除 / 立即运行。",
+      "exec": "本地文件读写与命令执行（命令免卡走自动化策略白名单）。",
+      "outbound": "发送邮件与外呼类工具（不可逆或数据出机，默认恒确认）。"
+    },
+    "settingsLink": {
+      "movedTitle": "已迁移到 Connectors 配置台",
+      "movedHelper": "为避免两处修改同一份配置，这里不再直接编辑；全部操作在独立的 Connectors 页完成。",
+      "open": "打开 Connectors"
     }
   },
   "sessions": {
@@ -1394,7 +1422,7 @@
       "label": "授权模式",
       "manual": {
         "title": "手动授权",
-        "desc": "按每个工具的审批档决定弹不弹卡（默认；档位在 设置 → AI 调整）"
+        "desc": "按每个工具的审批档决定弹不弹卡（默认；档位在 Connectors 配置台调整）"
       },
       "settingsLink": "按工具调整审批档…",
       "bypass": {
@@ -2084,7 +2112,7 @@
       },
       "viaComposio": "经 Composio",
       "viaDirect": "直连",
-      "supersededHint": "这一行是旧的直连配置，已被下方预置目录里的 Composio 版本取代。要切换请先「断开」并勾选「同时清除工具配置」。",
+      "supersededHint": "这条连接走的是自建直连，而该服务的出厂轨道已改为 Composio 托管。用「切换轨道」断开并清除配置，再从目录重新连接。",
       "catalog": {
         "title": "预置目录",
         "outboundNotice": "预置连接经 Composio 云执行：工具的输入与返回结果会经过它的服务器，授权令牌也托管在它那边。只想本机直连的服务请用「自定义 MCP」（后续版本提供）。",

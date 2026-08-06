@@ -13,7 +13,8 @@
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Loader2, RefreshCw, ChevronDown } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
+import { ArrowUpRight, Loader2, RefreshCw, ChevronDown } from 'lucide-react'
 import { useQueryClient } from '@tanstack/react-query'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -54,7 +55,6 @@ import { EnvSecretField } from '../parts/EnvSecretField'
 import { ModelServicesSection } from '../providers/ModelServicesSection'
 import { buildModelOptionGroups } from '../providers/modelOptionGroups'
 import { CustomAiSection } from '../CustomAiSection'
-import { ToolApprovalSection } from '../custom-ai/ToolApprovalSection'
 import { AI_TAB_ANCHOR_IDS, AI_TAB_ANCHOR_SCROLL_MT, useAiTabAnchorItems } from '../aiTabAnchors'
 import { useSettingsScrollRef } from '../settingsScrollContext'
 
@@ -62,6 +62,7 @@ export function AiTab(): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
   const qc = useQueryClient()
+  const navigate = useNavigate()
   const [testing, setTesting] = React.useState(false)
 
   // 08-01 PR4 — 右侧区块锚点导航。items 是静态候选（受 flag 门控的区块照常列，
@@ -668,13 +669,31 @@ export function AiTab(): React.ReactElement {
           </Row>
         </Section>
 
-        {/* 08-05 WP-11 — per-tool 审批档（acceptEdits 模式退役后的数据归宿）：每工具
-            ask/auto/deny + 组级批量 + 编辑放行预设 + Reset + send 收件人白名单。 */}
+        {/* 08-06 — per-tool 审批档（每工具 ask/auto/deny + 组级批量 + 编辑放行预设 +
+            send 收件人白名单）已整体迁到独立的 Connectors 配置台（owner 拍板：与外部连接
+            合并成一个页）。这里只留深链 —— 同一份数据不在两处都能改。 */}
         <Section
           title={t('settings.ai.toolPrefs.title', { defaultValue: '工具审批档' })}
           helper={t('settings.ai.toolPrefs.helper')}
         >
-          <ToolApprovalSection />
+          <div className="flex items-center justify-between gap-3 px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
+            <div className="min-w-0 flex-1">
+              <div className="text-aux font-medium text-ink-fg">
+                {t('connectorsConsole.settingsLink.movedTitle')}
+              </div>
+              <div className="mt-0.5 text-meta text-ink-fg-2">
+                {t('connectorsConsole.settingsLink.movedHelper')}
+              </div>
+            </div>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => void navigate({ to: '/connectors' })}
+            >
+              {t('connectorsConsole.settingsLink.open')}
+              <ArrowUpRight className="size-3.5" aria-hidden="true" />
+            </Button>
+          </div>
         </Section>
       </div>
 

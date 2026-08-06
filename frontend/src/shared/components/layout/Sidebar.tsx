@@ -28,6 +28,7 @@ import {
   ChartLineIcon,
   ChartPieIcon,
   CircleHelpIcon,
+  ConnectIcon,
   FeatherIcon,
   FolderInputIcon,
   FoldersIcon,
@@ -550,6 +551,15 @@ export function Sidebar(): React.ReactElement {
             title={collapsed ? t('chat.backend.customApi') : undefined}
             selected={onAgents}
             onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
+          />
+          {/* Connectors 独立配置台（08-06）— 内置工具审批档 + 外部连接（MCP）的统一入口。
+              挂在 AI AGENTS 段内（三段铁律：不新增 section header）。 */}
+          <NavRow
+            icon={<ConnectIcon size={15} strokeWidth={1.75} trigger="parent" />}
+            label={t('nav.connectors')}
+            title={collapsed ? t('nav.connectors') : undefined}
+            selected={pathname === '/connectors'}
+            onClick={() => navigate({ to: '/connectors' })}
           />
         </nav>
 

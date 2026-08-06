@@ -227,8 +227,12 @@ export function createSelfMountTools(
                     'Direct MCP connector tools, named mcp__<connector>__<tool> — a separate ' +
                     'system from the skills above. They are registered and callable right now; ' +
                     'read tools run without approval, write tools follow the approval rule in ' +
+                    // 🔴 08-06 — landing address follows the console move (same reason as
+                    // CONNECTOR_ERROR_HINTS in tools/connector.ts): the editable surface left
+                    // Settings for the standalone Connectors page, and Settings → AI is now a
+                    // signpost card with no controls.
                     'their own descriptions. Not toggleable via set_skill_enabled (owner manages ' +
-                    'them in Settings → Custom AI → External connections).',
+                    'them in the Connectors console → External connections).',
                   connectors: connectors.map((c) => ({
                     connector_id: c.connectorId,
                     display_name: c.displayName,

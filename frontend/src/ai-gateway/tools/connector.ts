@@ -505,15 +505,20 @@ function toolDescription(
 }
 
 /** PR5 — per-code follow-up the model can ACT on. A connector failure is one of the few tool
- *  errors a model cannot fix by retrying or reshaping its input: the fix is an owner action in
- *  Settings. Without this the model reads "not connected" and burns steps re-calling the tool. */
+ *  errors a model cannot fix by retrying or reshaping its input: the fix is an owner action.
+ *  Without this the model reads "not connected" and burns steps re-calling the tool.
+ *
+ *  🔴 08-06 — the landing address must stay true: the editable surface moved out of Settings
+ *  into the standalone **Connectors** console (sidebar → Connectors → External connections);
+ *  the Settings → AI section is now a signpost card that can change nothing. Sending the owner
+ *  to a read-only card and having them find no controls reads as "the feature is broken". */
 const CONNECTOR_ERROR_HINTS: Readonly<Record<string, string>> = {
   E_CONNECTOR_NOT_CONNECTED:
     'This connector is not authorized. Retrying will not help — tell the user to connect it in ' +
-    'Settings → Custom AI → External connections (MCP).',
+    'the Connectors console (sidebar → Connectors → External connections).',
   E_CONNECTOR_OAUTH:
-    'The connector needs re-authorization — the owner can reconnect it in Settings → Custom AI ' +
-    '→ External connections (MCP). Retrying will not help.',
+    'The connector needs re-authorization — the owner can reconnect it in the Connectors ' +
+    'console (sidebar → Connectors → External connections). Retrying will not help.',
   E_CONNECTOR_DISABLED:
     'MCP connectors are turned off on this machine. Retrying will not help — tell the user to ' +
     'enable them before asking for this again.'

@@ -170,6 +170,7 @@ export type {
   ConnectorCrudType,
   ConnectorToolMode,
   ConnectorSource,
+  ConnectorTrack,
   ConnectorCatalogEntry,
   ConnectorCatalogView,
   ComposioKeyStatus,

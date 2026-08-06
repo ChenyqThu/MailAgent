@@ -47,7 +47,7 @@ FAILED_STATUSES = ("FAILED", "EXPIRED", "REVOKED", "DELETED")
 class ComposioError(Exception):
     """Composio 面的统一错误（stable code —— router / 授权流按 code 决定处置）。
 
-        E_COMPOSIO_NO_KEY     - 没配 API key（BYOK gate：设置页去填）
+        E_COMPOSIO_NO_KEY     - 没配 API key（BYOK gate：Connectors 配置台去填）
         E_COMPOSIO_AUTH       - key 无效 / 被拒（401 / 403）
         E_COMPOSIO_HTTP       - 其它 HTTP 错误（4xx/5xx，message 带 status 与截断的响应体）
         E_COMPOSIO_NETWORK    - 连不上 / 超时
@@ -126,8 +126,8 @@ def require_api_key() -> str:
     key = get_api_key()
     if key is None:
         raise ComposioError(
-            "Composio API key is not configured — add it in Settings → AI → External "
-            "connections before connecting a preset service",
+            "Composio API key is not configured — add it in the Connectors console "
+            "(sidebar → Connectors → Composio account) before connecting a preset service",
             code="E_COMPOSIO_NO_KEY",
         )
     return key
@@ -181,8 +181,8 @@ async def _request(
         ) from e
     if resp.status_code in (401, 403):
         raise ComposioError(
-            "Composio rejected the API key (401/403) — check the key in Settings → AI → "
-            "External connections",
+            "Composio rejected the API key (401/403) — check the key in the Connectors "
+            "console (sidebar → Connectors → Composio account)",
             code="E_COMPOSIO_AUTH",
         )
     if resp.status_code >= 400:

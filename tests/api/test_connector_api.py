@@ -290,6 +290,55 @@ def test_sync_timeout_does_not_touch_status(flag_on_client, fresh_agent_cfg, mon
     assert fresh_agent_cfg.get_connector("notion").status == "connected"
 
 
+def test_sync_with_an_unresolvable_endpoint_does_not_mark_needs_reauth(
+    flag_on_client, fresh_agent_cfg
+):
+    """🔴 08-06 归类修复的 sync 侧：连接**健康**但端点解析不出来 ⇒ 409 引导「先连接」，
+    且**不落 needs_reauth**（一个字节都没发出去，远端从没拒过我们 —— 与超时/网络不落态
+    同一个理由）。
+
+    这条**双保险**：sync 端点自己的前置判据（`row is None or not definition.server_url`）在
+    建 client 之前就 409，落态那段走不到；即便前置判据哪天松了，落态点也已改判
+    （`should_mark_needs_reauth`，与 invoke 侧同一份）。
+    """
+    fresh_agent_cfg.upsert_connector("notion", server_url="")  # 端点未解析（行被清空）
+    fresh_agent_cfg.update_connector_state("notion", status="connected")
+
+    r = flag_on_client.post("/api/connector/notion/sync")
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_CONNECTOR_NOT_CONNECTED"
+    row = fresh_agent_cfg.get_connector("notion")
+    assert row.status == "connected" and row.last_error is None
+
+
+def test_sync_without_composio_key_does_not_mark_needs_reauth(
+    flag_on_client, fresh_agent_cfg
+):
+    """🔴 08-06 归类修复的 sync 侧第二形状：托管轨连接健康、只是 BYOK key 没配（owner 轮换
+    或清掉了 key）⇒ 409 + 「去填 key」的原文，**不落 needs_reauth**。
+
+    与上面那条不同，这里**没有**前置判据兜着：行在、`server_url` 在，client 真的被建出来，
+    失败发生在 `_composio_headers` 取 key 那一步（零出网）。旧行为会把托管轨每一条连接都
+    翻成「授权过期或被撤销，去重连」，而重新授权修不好它 —— 要填的是 key。
+
+    用**真** ConnectorClient（不 stub）：守的是 client 抛的类型 → 落态点归类这条完整链，
+    并与 invoke 侧同判（两个面给出相反状态比两边都错更难查）。
+    """
+    fresh_agent_cfg.upsert_connector(
+        "gmail", server_url="https://mcp.composio.test/trs_1", source="composio"
+    )
+    fresh_agent_cfg.update_connector_state("gmail", status="connected")
+
+    r = flag_on_client.post("/api/connector/gmail/sync")
+    assert r.status_code == 409
+    err = r.json()["error"]
+    assert err["code"] == "E_CONNECTOR_NOT_CONNECTED"
+    assert "API key is not configured" in err["message"]
+    assert "reconnect" not in err["message"]  # 不许把 owner 指去做一次修不好问题的重新授权
+    row = fresh_agent_cfg.get_connector("gmail")
+    assert row.status == "connected" and row.last_error is None
+
+
 def test_sync_success_clears_needs_reauth(flag_on_client, fresh_agent_cfg, monkeypatch):
     """重连/重同步成功 → 从 needs_reauth 起点照常回 connected 且清 last_error。"""
     import src.connectors.client as client_mod
@@ -380,7 +429,9 @@ def test_invoke_off_tier_tool_409_actionable(flag_on_client, fresh_agent_cfg, mo
     assert r.status_code == 409
     err = r.json()["error"]
     assert err["code"] == "E_CONNECTOR_TOOL_DISABLED"
-    assert "Settings" in err["message"]  # 可行动解释（AC：告诉用户去设置改档）
+    # 可行动解释（AC：告诉用户去哪改档）。08-06 起落点是独立的 Connectors 配置台 ——
+    # 指向设置页 = 把 owner 支到一张只读深链卡上。
+    assert "Connectors" in err["message"]
 
     # 清覆盖回默认（auto）后可调。
     fresh_agent_cfg.set_connector_tool_mode("notion", "create_page", None)
@@ -1002,23 +1053,79 @@ def test_catalog_lists_entries_and_key_state(flag_on_client, fresh_agent_cfg):
     assert gmail["logo_text"] and gmail["logo_color"].startswith("#")
     assert 0 < gmail["tool_count"] <= 20
     assert gmail["configured"] is False and gmail["superseded"] is False
-    # 存量直连 notion 行（flag_on_client 种的）= 被目录取代，等 owner 手动断开清除。
-    assert by_id["notion"]["configured"] is True and by_id["notion"]["superseded"] is True
+    # 🔴 08-06 双轨：存量直连 notion 行（flag_on_client 种的）与目录出厂轨道**一致**
+    # （notion 出厂就是 direct）⇒ 不再被标成「已被取代」。
+    assert by_id["notion"]["configured"] is True and by_id["notion"]["superseded"] is False
 
 
-def test_list_marks_legacy_direct_rows_as_superseded(flag_on_client, fresh_agent_cfg):
+def test_catalog_entries_carry_their_track(flag_on_client, fresh_agent_cfg):
+    """跨 lane 契约 §3：每条带 `track`；direct 条目**必须**带 server_url、composio 条目没有。
+
+    🔴 direct 条目的 `tool_count` 是 **null** 而不是 0：那一轨没有 curated 白名单，工具清单
+    要连上之后 `tools/list` 才知道 —— 编一个数字出来（哪怕 0）就是在目录卡上撒谎。
+    """
+    by_id = {
+        e["connector_id"]: e
+        for e in flag_on_client.get("/api/connector/catalog").json()["data"]["entries"]
+    }
+    for cid in ("notion", "atlassian"):
+        entry = by_id[cid]
+        assert entry["track"] == "direct", cid
+        assert entry["server_url"].startswith("https://"), cid
+        assert entry["tool_count"] is None and entry["toolkits"] == [], cid
+    for cid in ("gmail", "slack", "github"):
+        entry = by_id[cid]
+        assert entry["track"] == "composio", cid
+        assert entry["server_url"] is None, cid
+        assert entry["toolkits"] and entry["tool_count"] > 0, cid
+    # 同一家只渲染一次（notion / atlassian 在两张表里都有，direct 优先）。
+    ids = [e["connector_id"] for e in flag_on_client.get("/api/connector/catalog").json()["data"]["entries"]]
+    assert len(ids) == len(set(ids))
+
+
+def test_list_marks_off_track_rows_as_superseded(flag_on_client, fresh_agent_cfg):
     """列表行带 source + superseded_by_catalog —— 「经 Composio」/「直连」文案与迁移提示
-    的唯一判据（前端不自己推断）。"""
+    的唯一判据（前端不自己推断）。
+
+    🔴 08-06 双轨改判：判据是「行的 source vs 目录条目的出厂 track」。种在 flag_on_client
+    里的那行直连 notion 出厂就是 direct 轨 ⇒ **不再**被误标成「已被目录取代」（老判据
+    「custom_mcp + 目录里有同 id」会把它标红，把 owner 诱导去断开重连一遍）。
+    """
     fresh_agent_cfg.upsert_connector(
         "gmail", server_url="https://mcp.composio.test/x", source="composio"
     )
     rows = {c["connector_id"]: c for c in flag_on_client.get("/api/connector").json()["data"]["connectors"]}
     assert rows["notion"]["source"] == "custom_mcp"
-    assert rows["notion"]["superseded_by_catalog"] is True
+    assert rows["notion"]["superseded_by_catalog"] is False
     assert rows["gmail"]["source"] == "composio"
     assert rows["gmail"]["superseded_by_catalog"] is False
     # 🔴 列表 = 库里的行（registry 全集语义已退役）：没连过的目录条目不在这里。
     assert "slack" not in rows
+
+
+def test_list_marks_a_composio_row_on_a_direct_entry_as_superseded(
+    flag_on_client, fresh_agent_cfg
+):
+    """owner 活库那行 atlassian(source=composio, status=error)：目录已回到 direct 轨 ⇒
+    如实提示换轨（这是「断开清配置 → 重连走直连」那条路的入口信号）。"""
+    fresh_agent_cfg.upsert_connector(
+        "atlassian",
+        server_url="https://mcp.composio.test/trs_1",
+        source="composio",
+        composio_session_id="trs_1",
+    )
+    rows = {c["connector_id"]: c for c in flag_on_client.get("/api/connector").json()["data"]["connectors"]}
+    assert rows["atlassian"]["source"] == "composio"
+    assert rows["atlassian"]["superseded_by_catalog"] is True
+
+
+def test_a_row_outside_the_catalog_is_never_superseded(flag_on_client, fresh_agent_cfg):
+    """自定义 MCP 行（WP-24）不在任何目录里 —— 永远不该被提示「已被目录取代」。"""
+    fresh_agent_cfg.upsert_connector(
+        "my-own-mcp", server_url="https://example.test/mcp", source="custom_mcp"
+    )
+    rows = {c["connector_id"]: c for c in flag_on_client.get("/api/connector").json()["data"]["connectors"]}
+    assert rows["my-own-mcp"]["superseded_by_catalog"] is False
 
 
 def test_composio_key_write_is_masked_and_gates_connect(flag_on_client, fresh_agent_cfg):
@@ -1082,3 +1189,150 @@ def test_disconnect_without_purge_keeps_row_and_tool_config(flag_on_client, fres
     assert row is not None and row.status == "disconnected"
     rows = {x.tool_name: x for x in fresh_agent_cfg.list_connector_tools("notion")}
     assert rows["search"].mode == "off"
+
+
+# ── 08-06 双轨：连接端点按 track 分流 + 换轨（error 行 → 干净替换成直连）─────────
+
+
+class _FlowSpy:
+    """把两条连接流各换成一个只记名字的 stub（都正确交接 auth_url_ready，端点不会挂 30s）。"""
+
+    def __init__(self, monkeypatch):
+        import src.connectors.client as client_mod
+        import src.connectors.composio_flow as composio_flow_mod
+
+        self.called: list[str] = []
+
+        async def fake_direct(flow, **_kwargs):
+            self.called.append("direct")
+            flow.auth_url = "https://mcp.notion.com/authorize?state=abc"
+            flow.status = "authorizing"
+            flow.auth_url_ready.set()
+
+        async def fake_composio(flow, entry, **_kwargs):
+            self.called.append(f"composio:{entry.connector_id}")
+            flow.auth_url = "https://connect.composio.dev/link/abc"
+            flow.status = "authorizing"
+            flow.auth_url_ready.set()
+
+        monkeypatch.setattr(client_mod, "run_connect_flow", fake_direct)
+        monkeypatch.setattr(
+            composio_flow_mod, "run_composio_connect_flow", fake_composio
+        )
+
+
+def test_connect_dispatches_a_direct_catalog_entry_to_the_loopback_flow(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """🔴 契约 §4.3：还没连过的 `direct` 轨条目走 oauth_flow/client（**不经 Composio**）——
+    这正是 owner 要的那条路：官方端点 + DCR，不需要任何第三方 app 的 IT 审批。
+
+    连 Composio API key 都没配也照样能起流（BYOK gate 只约束托管轨）。
+    """
+    spy = _FlowSpy(monkeypatch)
+    r = flag_on_client.post("/api/connector/atlassian/oauth/start")
+    assert r.status_code == 200
+    assert spy.called == ["direct"]
+    assert r.json()["data"]["authorize_url"].startswith("https://mcp.notion.com/authorize")
+
+
+def test_connect_dispatches_a_composio_catalog_entry_to_the_managed_flow(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """对位物：托管轨条目走 composio_flow（配了 key 之后）。"""
+    spy = _FlowSpy(monkeypatch)
+    flag_on_client.post("/api/connector/composio/key", json={"api_key": "ck_test_not_real"})
+    r = flag_on_client.post("/api/connector/gmail/oauth/start")
+    assert r.status_code == 200
+    assert spy.called == ["composio:gmail"]
+
+
+def test_connect_still_follows_the_row_for_an_existing_composio_connection(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """🔴 行优先不变（契约 §3：track 是目录侧出厂轨道，source 是行侧既成事实）——
+    owner 活库那行 composio 的 atlassian 点重连仍走托管流，不会被目录换轨改写装配路线
+    （改写 = 拿一把 Composio key 去打官方直连端点）。"""
+    spy = _FlowSpy(monkeypatch)
+    fresh_agent_cfg.upsert_connector(
+        "atlassian",
+        server_url="https://mcp.composio.test/trs_1",
+        source="composio",
+        composio_session_id="trs_1",
+    )
+    flag_on_client.post("/api/connector/composio/key", json={"api_key": "ck_test_not_real"})
+    r = flag_on_client.post("/api/connector/atlassian/oauth/start")
+    assert r.status_code == 200
+    assert spy.called == ["composio:atlassian"]
+
+
+def test_direct_catalog_entry_without_a_row_cannot_sync(flag_on_client, fresh_agent_cfg):
+    """🔴 direct 条目自带 server_url ⇒ 「空 URL = 没连过」那个代理判据不再成立。
+
+    sync 必须直接查行，否则一个从没连过的 Atlassian 会被 upsert 出一行「未连接」的假象
+    （WP-12 专门修掉过的那个撒谎行为）。
+    """
+    r = flag_on_client.post("/api/connector/atlassian/sync")
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_CONNECTOR_NOT_CONNECTED"
+    assert fresh_agent_cfg.get_connector("atlassian") is None  # 没有凭空多出来的行
+
+
+def test_failed_composio_row_can_be_replaced_by_a_direct_connection(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """PRD §4.4 那条完整路径（owner 活库现状）：一行 error 的 atlassian(composio) →
+    断开 + 清配置 → 重连**走直连**，且不留僵尸凭证。"""
+    from src.agent_config import credentials
+
+    from src.connectors.registry import namespace_for
+
+    ns = namespace_for("atlassian")
+    fresh_agent_cfg.upsert_connector(
+        "atlassian",
+        server_url="https://mcp.composio.test/trs_1",
+        display_name="Atlassian (Jira / Confluence)",
+        source="composio",
+        composio_session_id="trs_1",
+    )
+    fresh_agent_cfg.update_connector_state(
+        "atlassian",
+        status="error",
+        last_error="Composio reported a failed connection for JIRA",
+    )
+    fresh_agent_cfg.sync_connector_tools(
+        "atlassian",
+        [{"name": "JIRA_GET_ISSUE", "description": "", "input_schema": None,
+          "output_schema": None, "crud_type": "read"}],
+    )
+    credentials.set_credential(
+        ns, "tokens", {"token": {"access_token": "x"}}, store=fresh_agent_cfg
+    )
+
+    # ① 设置页看到的信号：这一行与目录出厂轨道不符 ⇒ 该换轨。
+    rows = {c["connector_id"]: c for c in flag_on_client.get("/api/connector").json()["data"]["connectors"]}
+    assert rows["atlassian"]["status"] == "error"
+    assert rows["atlassian"]["superseded_by_catalog"] is True
+
+    # ② 断开 + 清配置（Uninstall 语义）：凭证、行、工具行、session id 一并消失。
+    d = flag_on_client.post("/api/connector/atlassian/disconnect", json={"purge": True})
+    assert d.status_code == 200 and d.json()["data"]["purged"] is True
+    assert d.json()["data"]["deleted_credentials"] == 1
+    assert credentials.list_credentials(ns, store=fresh_agent_cfg) == []  # 🔴 无僵尸凭证
+    assert fresh_agent_cfg.get_connector("atlassian") is None  # session id 随行一起没了
+    assert fresh_agent_cfg.list_connector_tools("atlassian") == []
+
+    # ③ 目录条目回到「可连接的 direct 轨」。
+    entries = {
+        e["connector_id"]: e
+        for e in flag_on_client.get("/api/connector/catalog").json()["data"]["entries"]
+    }
+    assert entries["atlassian"]["track"] == "direct"
+    assert entries["atlassian"]["configured"] is False
+    assert entries["atlassian"]["superseded"] is False
+
+    # ④ 重连 → 走**直连**流（不是托管流；此时也没有 Composio key 可用）。
+    spy = _FlowSpy(monkeypatch)
+    r = flag_on_client.post("/api/connector/atlassian/oauth/start")
+    assert r.status_code == 200
+    assert spy.called == ["direct"]

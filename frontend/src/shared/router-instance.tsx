@@ -237,6 +237,22 @@ const agentsRoute = createRoute({
   }
 })
 
+// /connectors — Connectors 独立配置台（08-06 owner 拍板：不再是设置页里的区块）。
+// `?item=` 深链到具体条目（builtin:<group> / connector:<id> / catalog:<id> / composio /
+// external）；值域宽松 —— 具体解析在页面里（parseItemParam），手敲 URL 落到默认选中而不崩页。
+const connectorsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/connectors',
+  component: lazyRouteComponent(
+    () => import('./components/layout/ConnectorsLayout'),
+    'ConnectorsLayout'
+  ),
+  validateSearch: (search: Record<string, unknown>): { item?: string } => {
+    const item = search.item
+    return typeof item === 'string' && item.length > 0 ? { item } : {}
+  }
+})
+
 // `/admin` is a parent route that only renders <Outlet/> — visit a child
 // directly (/admin/llm, /admin/kanban, /admin/calendar). The Sidebar +
 // CommandPalette always navigate to a specific child, never to `/admin`
@@ -355,6 +371,7 @@ export const router = createRouter({
     inboxRoute,
     sessionsRoute,
     agentsRoute,
+    connectorsRoute,
     adminRoute.addChildren([adminIndexRoute, adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute
   ]),

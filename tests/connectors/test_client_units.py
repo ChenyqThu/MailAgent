@@ -38,12 +38,17 @@ def test_catalog_entry_resolves_without_a_row(fresh_agent_cfg):
 
 def test_db_row_wins_over_catalog(fresh_agent_cfg):
     """🔴 行优先：存量直连 `notion` 行（source=custom_mcp）不能被同 id 的目录条目改写装配
-    路线，否则升级当天就会拿一把 Composio key 去打 Notion 的直连端点。"""
+    路线，否则升级当天就会拿一把 Composio key 去打 Notion 的直连端点。
+
+    🔴 行里的 endpoint 刻意**不等于**目录里那个：08-06 双轨后 `notion` 的目录条目自己就解析成
+    `custom_mcp` + 官方 URL，用同一个 URL 断言这条用例就退化成恒真（把 `get_connector_def`
+    的行查询整段删掉它照样绿）。用一个只可能来自行的值才真的钉住「行优先」。
+    """
     fresh_agent_cfg.upsert_connector(
-        "notion", server_url="https://mcp.notion.com/mcp", display_name="Notion"
+        "notion", server_url="https://mcp.notion.test/row-wins", display_name="Notion"
     )
     d = get_connector_def("notion")
-    assert d.source == "custom_mcp" and d.server_url == "https://mcp.notion.com/mcp"
+    assert d.source == "custom_mcp" and d.server_url == "https://mcp.notion.test/row-wins"
 
 
 def test_namespace_matches_credential_key_shape():

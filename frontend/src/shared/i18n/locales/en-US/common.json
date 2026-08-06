@@ -660,6 +660,7 @@
     "allMail": "All mail",
     "aiSessions": "AI sessions",
     "agentView": "MailAgent",
+    "connectors": "Connectors",
     "adminKanban": "Admin",
     "calendar": "Calendar",
     "settings": "Settings",
@@ -677,6 +678,33 @@
       "showMore": "Show more (+{count})",
       "showLess": "Collapse",
       "disabledTip": "Available once folder info finishes loading"
+    }
+  },
+  "connectorsConsole": {
+    "title": "Connectors",
+    "subtitle": "One console for built-in tool approval tiers and external service connections",
+    "sectionBuiltin": "Built-in tools",
+    "sectionExternal": "External connections",
+    "composioAccount": "Composio account",
+    "directTrackNote": "Connects directly to the official MCP endpoint (the OAuth page is the vendor's own) — no third-party relay, no API key required.",
+    "toolCountUnknown": "Tool list arrives after connecting",
+    "switchTrack": "Switch track (disconnect and clear config)",
+    "supersededByDirect": "This connection runs through Composio, but the service now ships as a direct connection to the official endpoint (no third-party approval needed). Use “Switch track” to disconnect and clear its config, then reconnect directly from the catalog.",
+    "builtinGroupDesc": {
+      "email_write": "High-frequency reversible email actions: flag / archive / pin / resync to Notion.",
+      "draft": "Create and edit local drafts; sending has its own confirmation card.",
+      "web": "Web search and page fetching (URLs and query strings leave the machine).",
+      "calendar": "Reschedule / RSVP / delete calendar events (delete is destructive).",
+      "capability": "Skill toggles and identity-document changes (all with history and rollback).",
+      "supply": "Skill install and uninstall (supply chain; install always double-confirms).",
+      "agents": "Create / update / delete / run-now for Custom Agents.",
+      "exec": "Local file read-write and command execution (command bypass rides the policy whitelist).",
+      "outbound": "Sending email and outbound-call tools (irreversible or data-egress; always confirm by default)."
+    },
+    "settingsLink": {
+      "movedTitle": "Moved to the Connectors console",
+      "movedHelper": "To keep a single source of truth this section is no longer editable here; everything lives on the dedicated Connectors page.",
+      "open": "Open Connectors"
     }
   },
   "sessions": {
@@ -1394,7 +1422,7 @@
       "label": "Permission mode",
       "manual": {
         "title": "Manual",
-        "desc": "Per-tool approval tiers decide what asks (default; adjust in Settings → AI)"
+        "desc": "Per-tool approval tiers decide what asks (default; adjust in the Connectors console)"
       },
       "settingsLink": "Adjust per-tool approval tiers…",
       "bypass": {
@@ -2084,7 +2112,7 @@
       },
       "viaComposio": "via Composio",
       "viaDirect": "direct",
-      "supersededHint": "This row is the old direct connection. The preset catalog below now ships a Composio version of the same service — to switch, disconnect it and tick “also clear tool configuration”.",
+      "supersededHint": "This connection is a self-hosted direct link, but the service now ships through Composio. Use “Switch track” to disconnect and clear its config, then reconnect from the catalog.",
       "catalog": {
         "title": "Preset catalog",
         "outboundNotice": "Preset connections execute through the Composio cloud: tool inputs and results pass through their servers and the OAuth tokens are held on their side. For services you want to reach directly, use “custom MCP” (a later release).",

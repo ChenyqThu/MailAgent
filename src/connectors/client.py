@@ -118,11 +118,38 @@ class ConnectorError(Exception):
         E_CONNECTOR_OAUTH          - OAuth 流失败（注册被拒 / 刷新失败 / 用户拒绝授权）
         E_CONNECTOR_NETWORK        - httpx2 传输层错误（connect / TLS / 断流）
         E_CONNECTOR_PROTOCOL       - MCP 协议层错误（JSON-RPC error / 形状不对）
+
+    🔴 ``E_CONNECTOR_NOT_CONNECTED`` 有**两种形状**：对调用方是同一件事（owner 得去做一步
+    配置动作，所以共用一个 wire code），但对**状态机**不是 —— 见 ``ConnectorUnconfigured``。
     """
 
     def __init__(self, message: str, code: str = "E_CONNECTOR_UNKNOWN_ERROR") -> None:
         super().__init__(message)
         self.code = code
+
+
+class ConnectorUnconfigured(ConnectorError):
+    """**本地就装配不出这次请求**，一个字节都没发出去（code 仍是 ``E_CONNECTOR_NOT_CONNECTED``）。
+
+    当前两个入口（两条轨各一个，都在 ``session()`` 打开传输之前）：
+
+      - **端点没解析出来**：目录条目还没建 session / ``agent_config.db`` 读行抖一下让 registry
+        兜底抹空了 direct 端点 / 行里 server_url 被手改空；
+      - **Composio BYOK key 缺失**：托管轨要拿 key 拼静态 header，取不到就没法发。
+
+    与另一种形状（远端拒了我们的 token / 刷不动了 —— ``_no_interactive_redirect`` 那条）的
+    区别是决定性的：那条**证明**授权没了，落 ``needs_reauth`` 是可行动的正确状态；这条什么
+    都没证明，把它落成 ``needs_reauth`` 就是把一条**健康的**连接显示成「需要重新授权」，把
+    owner 支去重新授权一个根本没坏的东西（key 缺失那一路更冤：重新授权也修不好，要填的是
+    key）。
+
+    🔴 判据做成**类型**而不是第二个 code：wire code / HTTP 映射 / 模型看到的 hint 全都不变
+    （那三处的语义「这个 connector 现在用不了，owner 得去设置里做一步动作」对两种形状都对），
+    要区分的只有落态那一处。判定单源 ``service.should_mark_needs_reauth``。
+    """
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message, code="E_CONNECTOR_NOT_CONNECTED")
 
 
 def _sole_leaf(eg: BaseException) -> Optional[BaseException]:
@@ -305,8 +332,12 @@ class ConnectorClient:
         try:
             return {"x-api-key": await run_in_threadpool(require_api_key)}
         except ComposioError as e:
-            # 没配 key 与「没授权」对调用方是同一件事：都得 owner 去设置里做一步动作。
-            raise ConnectorError(str(e), code="E_CONNECTOR_NOT_CONNECTED") from e
+            # 没配 key 与「没授权」对调用方是同一件事：都得 owner 去配置台做一步动作，故共用
+            # 一个 wire code。🔴 但对**状态机**不是同一件事（08-06）：key 缺失是**本地**配置
+            # 问题、请求一个字节都没发出去，落 needs_reauth = 把托管轨每一条健康连接都说成
+            # 「授权过期/被撤销」，而重新授权还修不好它（要填的是 key）。故抛
+            # ConnectorUnconfigured —— 落态点据类型放行（service.should_mark_needs_reauth）。
+            raise ConnectorUnconfigured(str(e)) from e
 
     @asynccontextmanager
     async def session(self, *, http_transport: Any = None) -> AsyncIterator[Client]:
@@ -320,12 +351,13 @@ class ConnectorClient:
             try:
                 async with connector_gate.hold(self.namespace, timeout=gate_timeout):
                     if not self.definition.server_url:
-                        # composio 目录条目还没建 session（或行被手改空）：拿空 URL 发请求是
-                        # 静默失败，显式拒并把 owner 指到「先连接」那一步。
-                        raise ConnectorError(
+                        # composio 目录条目还没建 session（或行被手改空、或 registry 兜底抹空了
+                        # direct 端点）：拿空 URL 发请求是静默失败，显式拒并把 owner 指到
+                        # 「先连接」那一步。🔴 类型是 ConnectorUnconfigured 不是裸
+                        # ConnectorError —— 这里没发出任何请求，落 needs_reauth 是误标。
+                        raise ConnectorUnconfigured(
                             f"connector {self.connector_id} has no endpoint yet — connect it "
-                            "first (Settings → AI → External connections)",
-                            code="E_CONNECTOR_NOT_CONNECTED",
+                            "first (Connectors console → External connections)"
                         )
                     if self.is_composio:
                         client_kwargs: dict[str, Any] = {"headers": await self._composio_headers()}

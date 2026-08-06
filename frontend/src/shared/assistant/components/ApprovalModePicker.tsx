@@ -34,10 +34,6 @@ import { useRouter } from '@tanstack/react-router'
 import { ChevronDown, Settings2, Shield, ShieldAlert, ShieldQuestion } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
-import {
-  AI_TAB_ANCHOR_IDS,
-  scrollToAnchorWhenReady
-} from '@shared/components/settings/aiTabAnchors'
 import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
@@ -325,16 +321,18 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
                   </button>
                 )
               })}
-              {/* WP-11 — Manual 档的弹不弹卡由 per-tool 审批档决定：菜单底部给一条设置深链
-                  （acceptEdits 三档退役后，「中间态」住进了设置里的档位数据）。 */}
+              {/* WP-11 — Manual 档的弹不弹卡由 per-tool 审批档决定：菜单底部给一条深链
+                  （acceptEdits 三档退役后，「中间态」住进了档位数据）。
+                  🔴 08-06 — 落点直达 Connectors 配置台的**内置工具**面：档位的唯一可写面已
+                  搬过去，设置页那个区只剩一张指路卡；走老路等于让用户多点一次才到得了真正
+                  能改的地方（与本批「同一份数据只有一个可写面」的立意自相矛盾）。 */}
               {router && (
                 <button
                   type="button"
                   role="menuitem"
                   onClick={() => {
                     closeMenu()
-                    void router.navigate({ to: '/settings', search: { tab: 'ai' } })
-                    scrollToAnchorWhenReady(AI_TAB_ANCHOR_IDS.approval)
+                    void router.navigate({ to: '/connectors' })
                   }}
                   className="mt-1 flex w-full items-center gap-2 border-t border-ink-border-soft px-3 py-1.5 text-left text-micro text-ink-fg-2 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
                 >

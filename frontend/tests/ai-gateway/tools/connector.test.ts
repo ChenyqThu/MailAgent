@@ -912,11 +912,16 @@ describe('connector invoke errors — readable code + actionable follow-up (PR5)
 
   // 🔴 The three codes an owner (not the model) must fix. Without the follow-up the model
   //    re-calls the same tool until the step budget runs out.
-  test('E_CONNECTOR_NOT_CONNECTED → code in the message + "connect it in Settings" follow-up', async () => {
+  // 🔴 08-06 — the follow-up must name the surface that can actually FIX it. The editable
+  //    surface moved to the standalone Connectors console; Settings → AI is now a signpost
+  //    card with no controls, so "go to Settings" would send the owner to a dead end and read
+  //    as "the feature is broken". These two assertions are the address, not decoration.
+  test('E_CONNECTOR_NOT_CONNECTED → code in the message + "connect it in Connectors" follow-up', async () => {
     const m = await messageOf('E_CONNECTOR_NOT_CONNECTED', 'no credentials')
     expect(m).toContain('E_CONNECTOR_NOT_CONNECTED')
     expect(m).toContain('no credentials')
-    expect(m).toContain('Settings')
+    expect(m).toContain('Connectors')
+    expect(m).not.toContain('Settings')
     expect(m).toContain('Retrying will not help')
   })
 
@@ -925,7 +930,8 @@ describe('connector invoke errors — readable code + actionable follow-up (PR5)
     expect(m).toContain('E_CONNECTOR_OAUTH')
     expect(m).toContain('refresh token revoked')
     expect(m).toContain('re-authorization')
-    expect(m).toContain('Settings')
+    expect(m).toContain('Connectors')
+    expect(m).not.toContain('Settings')
   })
 
   test('E_CONNECTOR_DISABLED → code in the message + "turned off on this machine" follow-up', async () => {

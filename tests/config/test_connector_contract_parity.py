@@ -21,6 +21,13 @@
    fail-closed 归一）↔ 设置面 wire `shared/api/types/connector.ts::ConnectorSource`。
    漂了会怎样：TS 多一档 = 出站告知按一个 Python 永远不会发的值分支（「经 Composio」那行
    字**该出现时不出现**）；Python 多一档 = 一条新装配路线在设置页显示成「直连」。
+5. **目录 track 值域**（08-06 双轨）—— `src/connectors/catalog.py::CONNECTOR_TRACKS`
+   （canonical：目录视图的出厂轨道 + `TRACK_TO_SOURCE` 的键）↔ 设置面 wire
+   `shared/api/types/connector.ts::ConnectorTrack`。另有一条 **Python 内**的映射闸：
+   `TRACK_TO_SOURCE` 的值必须恰好铺满 `CONNECTOR_SOURCES`（track ↔ source 是双射；漏一边
+   = `row_is_off_track` 把一整轨的行全判成「已被取代」，把 owner 诱导去断开重连）。
+   漂了会怎样：TS 少一档 = 新轨道的目录卡走进 default 分支（direct 卡被当成 composio 卡渲染
+   成 BYOK disabled，一家结构上连不上）；Python 少一档 = `catalog_views` 抛 KeyError。
 
 **为什么不能消灭镜像**：跨语言 + 跨构件种类（Python 校验 / TS 类型 / zod runtime schema /
 wire 接口声明），没有可共享的运行时载体；TS 侧三份里有两份是**编译期类型**，压根没有值可以
@@ -60,6 +67,7 @@ REPORT_TYPES_TS = p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" 
 TRIGGER_PY = p.REPO_ROOT / "src" / "agents" / "trigger.py"
 SERVICE_PY = p.REPO_ROOT / "src" / "connectors" / "service.py"
 STORE_PY = p.REPO_ROOT / "src" / "agent_config" / "store.py"
+CATALOG_PY = p.REPO_ROOT / "src" / "connectors" / "catalog.py"
 CONNECTOR_TS = p.REPO_ROOT / "frontend" / "src" / "ai-gateway" / "tools" / "connector.ts"
 CONNECTOR_TYPES_TS = (
     p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / "connector.ts"
@@ -113,6 +121,22 @@ def py_str_int_dict(path: Path, name: str, src: Optional[str] = None) -> Dict[st
             and isinstance(v, ast.Constant)
             and isinstance(v.value, int)
         ), f"{path.name}: `{name}` 含非 str→int 字面量项 —— 抽取器需更新"
+        out[k.value] = v.value
+    assert out, f"{path.name}: `{name}` 抽到空 dict —— 抽取器需更新"
+    return out
+
+
+def py_str_str_dict(path: Path, name: str, src: Optional[str] = None) -> Dict[str, str]:
+    node = _py_assign(path, name, src)
+    assert isinstance(node, ast.Dict), f"{path.name}: `{name}` 不是 dict 字面量"
+    out: Dict[str, str] = {}
+    for k, v in zip(node.keys, node.values):
+        assert (
+            isinstance(k, ast.Constant)
+            and isinstance(k.value, str)
+            and isinstance(v, ast.Constant)
+            and isinstance(v.value, str)
+        ), f"{path.name}: `{name}` 含非 str→str 字面量项 —— 抽取器需更新"
         out[k.value] = v.value
     assert out, f"{path.name}: `{name}` 抽到空 dict —— 抽取器需更新"
     return out
@@ -359,6 +383,58 @@ def test_connector_source_vocabulary_is_identical_across_both_sites():
         )
 
 
+# ── ③c 目录 track 值域（08-06 双轨：direct + composio）────────────────────────────
+
+_TRACK_SITES = {
+    "py:catalog.CONNECTOR_TRACKS": lambda: py_str_tuple(CATALOG_PY, "CONNECTOR_TRACKS"),
+    "ts:shared api ConnectorTrack": lambda: ts_string_union(
+        CONNECTOR_TYPES_TS, "export type ConnectorTrack ="
+    ),
+}
+
+
+def test_track_vocabulary_is_identical_across_both_sites():
+    """两处出厂轨道词表逐项且有序一致（canonical = Python `catalog.CONNECTOR_TRACKS`）。
+
+    漂了会怎样：TS 少一档 → 新轨道的目录卡走进 default 分支（direct 卡被当 composio 卡渲染成
+    「先填 Composio key」的 disabled 态 —— 而那一轨恰恰是**不需要 key** 的那条，一整家结构上
+    连不上）；Python 多一档而 TS 没有 → 同上，且没有任何报错指向真因。
+    """
+    extracted = {name: fn() for name, fn in _TRACK_SITES.items()}
+    canonical = extracted["py:catalog.CONNECTOR_TRACKS"]
+    assert canonical == ("direct", "composio"), (
+        f"目录 track 值域变成 {canonical!r} —— 加一条轨道要同时给出它的 source 归属"
+        f"（TRACK_TO_SOURCE）、连接端点的分派分支、TS 联合类型与目录卡的渲染分支"
+    )
+    for name, values in extracted.items():
+        assert values == canonical, (
+            f"{name} = {values!r} 与 canonical {canonical!r} 不一致 —— 目录卡会按一个"
+            f"服务端永远不发的轨道分支"
+        )
+
+
+def test_track_to_source_is_a_bijection_onto_the_source_vocabulary():
+    """🔴 track ↔ source 双射：每条轨道恰好一个 source，且两个 source 都被某条轨道认领。
+
+    这是 `row_is_off_track` 的全部内容（设置页那句「先断开再换轨」提示的唯一判据）。漏一边
+    的后果不是报错而是**误导**：某个 source 没有轨道认领 → 那一轨的**正确**行被整批判成
+    「已被目录取代」，把 owner 诱导去断开重连一遍（08-06 之前老判据犯的正是这个错）。
+    """
+    tracks = py_str_tuple(CATALOG_PY, "CONNECTOR_TRACKS")
+    mapping = py_str_str_dict(CATALOG_PY, "TRACK_TO_SOURCE")
+    sources = py_str_tuple(STORE_PY, "CONNECTOR_SOURCES")
+    assert tuple(mapping) == tracks, (
+        f"TRACK_TO_SOURCE 的键 {tuple(mapping)!r} 与 CONNECTOR_TRACKS {tracks!r} 不一致"
+    )
+    assert sorted(mapping.values()) == sorted(sources), (
+        f"TRACK_TO_SOURCE 的值 {sorted(mapping.values())!r} 没有恰好铺满 CONNECTOR_SOURCES "
+        f"{sorted(sources)!r} —— 见本用例 docstring 的「误导」后果"
+    )
+    assert len(set(mapping.values())) == len(mapping), (
+        f"两条轨道映射到同一个 source：{mapping!r} —— row_is_off_track 会认不出换轨"
+    )
+
+
 # ── ④ canary：抽取器失效必须红，不许变成平凡绿 ─────────────────────────────────
 
 
@@ -374,6 +450,17 @@ def test_extraction_failure_is_red_not_silently_green():
         py_str_tuple(STORE_PY, "CONNECTOR_SOURCES", src="X = 1\n")
     with pytest.raises(AssertionError, match="找不到"):
         ts_string_union(CONNECTOR_TYPES_TS, "export type ConnectorSource =", src="const x = 1\n")
+    with pytest.raises(AssertionError, match="找不到顶层常量"):
+        py_str_tuple(CATALOG_PY, "CONNECTOR_TRACKS", src="X = 1\n")
+    with pytest.raises(AssertionError, match="找不到顶层常量"):
+        py_str_str_dict(CATALOG_PY, "TRACK_TO_SOURCE", src="X = 1\n")
+    with pytest.raises(AssertionError, match="含非 str→str"):
+        # 值换成了非字面量（比如从 store 里 import 常量拼出来）→ 必须红，不许抽到半张表
+        py_str_str_dict(
+            CATALOG_PY, "TRACK_TO_SOURCE", src="TRACK_TO_SOURCE = {'direct': SOME_CONST}\n"
+        )
+    with pytest.raises(AssertionError, match="找不到"):
+        ts_string_union(CONNECTOR_TYPES_TS, "export type ConnectorTrack =", src="const x = 1\n")
     with pytest.raises(AssertionError, match="找不到顶层常量"):
         py_str_int_dict(SERVICE_PY, "CONNECTOR_CRUD_RANK", src="X = 1\n")
     with pytest.raises(AssertionError, match="找不到"):

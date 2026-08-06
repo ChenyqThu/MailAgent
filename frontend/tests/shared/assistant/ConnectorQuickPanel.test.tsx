@@ -141,7 +141,11 @@ const ENABLE_SWITCH = 'settings.connectors.enabled · Notion'
 function renderUi(variant: 'icon' | 'chip' = 'icon') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   return render(
-    createElement(QueryClientProvider, { client: qc }, createElement(ComposerToolsMenu, { variant }))
+    createElement(
+      QueryClientProvider,
+      { client: qc },
+      createElement(ComposerToolsMenu, { variant })
+    )
   )
 }
 
@@ -335,63 +339,52 @@ describe('ConnectorQuickPanel — 未连接 / 授权失效', () => {
 })
 
 describe('ConnectorQuickPanel — 管理深链', () => {
-  test('点「管理」跳设置 AI tab 并收起整个弹层（一级菜单也不留）', async () => {
+  test('点「管理」跳 Connectors 配置台并收起整个弹层（一级菜单也不留）', async () => {
+    // 08-06 — connector 唯一操作面迁到 /connectors（设置-AI 那个区只剩深链卡）。
     renderUi()
     await openPanel()
 
     fireEvent.click(screen.getByRole('button', { name: 'chat.connectors.manage' }))
-    expect(navigateMock).toHaveBeenCalledWith({ to: '/settings', search: { tab: 'ai' } })
+    expect(navigateMock).toHaveBeenCalledWith({ to: '/connectors', search: { item: 'external' } })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: LABEL })).toBeNull())
     expect(screen.queryByRole('menu', { name: TOOLS_LABEL })).toBeNull()
   })
 })
 
-// A2 语义迁移（08-04 WP6）：原「入口常驻强调色」= 整枚 connector 圆钮染 coral；入口并进菜单
-// 之后按钮还管别的事，整颗染色会谎报「那些也激活了」→ 降级成一颗角标小点。08-05 WP-13 入口
-// 从「+」搬到滑块，点跟着搬（点表达的是「外部连接接着东西」）。判据一个字没变：
-// **至少一个 connected 且 enabled 的 connector**。
+// ── 08-06 owner dogfood ③：**connector 常驻强调点整个退役** ─────────────────────────
 //
-// 🔴 08-05 WP-13 复核后的一处**语义收窄**（有意，代价已上报）：connector 查询挂到了 `open`
-// 门后（未展开不打请求），所以这颗点从「恒准的常驻信号」变成「**知道了才亮**」——数据要么
-// 由本菜单开过一次带回来，要么由设置页拉过（`qk.connectors()` 是共享缓存键，enabled:false
-// 仍读缓存）。亮 = 确实有已连接且启用的 connector（判据没松），只是「不亮」从「没有」变成
-// 「没有、或还不知道」。下面三条用例因此都先开一次菜单再断言。
-describe('ConnectorQuickPanel — 滑块上的强调点（知道了才亮）', () => {
-  test('🔴 从没开过菜单 → 不打请求也就不亮点（未展开不打请求的直接后果）', async () => {
-    renderUi()
-    await screen.findByRole('button', { name: TOOLS_LABEL })
-    expect(connectorApi.list).not.toHaveBeenCalled()
-    expect(screen.queryByTestId('tools-connector-dot')).toBeNull()
-  })
-
-  test('开过一次菜单 → 有已连接且已启用的 connector 就亮点（关掉菜单后仍亮：读缓存）', async () => {
-    renderUi()
-    await openToolsMenu()
-    await waitFor(() => expect(screen.queryByTestId('tools-connector-dot')).not.toBeNull())
-    fireEvent.keyDown(document, { key: 'Escape' })
-    await waitFor(() => expect(screen.queryByRole('menu', { name: TOOLS_LABEL })).toBeNull())
-    expect(screen.queryByTestId('tools-connector-dot')).not.toBeNull()
-  })
-
-  test('行在但被关掉 → 无点（判据是「真的接着东西」，不是「装过」）', async () => {
-    connectorApi.list.mockResolvedValue([
-      connector({ connector_id: 'notion', display_name: 'Notion', enabled: false })
-    ])
+// 历史（留着是为了不再被"补回来"）：08-04 WP6 把「入口常驻强调色」降级成一颗角标小点，
+// 08-05 WP-13 入口从「+」搬到滑块、点跟着搬，判据一直是「至少一个 connected 且 enabled 的
+// connector」。08-06 owner 实机否掉了整个东西：
+//   「快捷配置那里不要有 connector 就带固定右上角高亮点，会有误解，高亮点是用作提示的，
+//     很容易导致用户频繁点开。」
+// 病根是**语义借用** —— 本 app 的角标点一贯表示「有新东西值得看」（会话未读点、审批待办），
+// 这里却拿去表达「有 connector 处于启用态」这个**常态**：连上就永远亮，把一个没有新信息的
+// 入口训练成需要反复点开的东西。
+//
+// 下面两格守的是「删干净」+「信息没丢」：状态仍然可知，但都要**去看**才出现。
+describe('ConnectorQuickPanel — 常驻强调点已退役（08-06 ③）', () => {
+  test('🔴 有已连接且已启用的 connector（点最该亮的那一档）→ 滑块上没有任何常驻点', async () => {
     renderUi()
     await openToolsMenu()
     await waitFor(() => expect(connectorApi.list).toHaveBeenCalled())
-    // 该项仍在菜单里（可以点进去开它），只是滑块上不亮点。
+    // 该项照常在（功能没动，只是不再自带高亮）。
     expect(await screen.findByRole('menuitem', { name: LABEL })).toBeTruthy()
     expect(screen.queryByTestId('tools-connector-dot')).toBeNull()
+    // 🔴 连菜单行右边那颗同款点（判据同为 anyActive）也一起删 —— 整棵子树不许再有 coral 圆点，
+    // 否则「换个位置画同一颗点」照样过测试。
+    expect(document.querySelectorAll('[class*="bg-coral/100"]')).toHaveLength(0)
   })
 
-  test('开着但授权失效（needs_reauth）→ 无点（工具其实调不动）', async () => {
-    connectorApi.list.mockResolvedValue([
-      connector({ connector_id: 'notion', display_name: 'Notion', status: 'needs_reauth' })
-    ])
+  test('信息没丢：状态仍由「N/M」摘要 + hover 文案表达（要去看才出现，不抢注意力）', async () => {
     renderUi()
     await openToolsMenu()
     await waitFor(() => expect(connectorApi.list).toHaveBeenCalled())
-    expect(screen.queryByTestId('tools-connector-dot')).toBeNull()
+    await screen.findByRole('menuitem', { name: LABEL })
+    // `chat.tools.summary` 带 {enabled, total} 插值（t 恒返 key，参数查 mock.calls）。
+    const summary = tMock.mock.calls.find(([key]) => key === 'chat.tools.summary')
+    expect(summary?.[1]).toMatchObject({ enabled: 1, total: 1 })
+    // hover 文案仍会说「已启用外部连接」。
+    expect(tMock.mock.calls.some(([key]) => key === 'chat.connectors.activeHint')).toBe(true)
   })
 })

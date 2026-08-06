@@ -291,6 +291,131 @@ def test_oauth_failure_marks_connector_needs_reauth(store, monkeypatch):
     assert "reconnect" in (row.last_error or "")
 
 
+def test_rejected_token_still_marks_needs_reauth(store, monkeypatch):
+    """对照组（08-06）：**同一个 code** 的另一形状 —— 远端拒了我们的 token（非交互会话下
+    SDK 回落完整授权流 → ``_no_interactive_redirect`` 抛 ``E_CONNECTOR_NOT_CONNECTED``）
+    照常落 ``needs_reauth``。
+
+    没有这一条，下面那条「端点未知不落态」可以被「``NOT_CONNECTED`` 一律不落态」这种过度
+    收紧解法满足，而那会把授权真失效时**唯一**的可行动状态一起废掉。
+    """
+    import src.connectors.client as client_mod
+    from src.connectors.service import CONNECTOR_REAUTH_MESSAGE
+
+    class _Rejected(_OkClient):
+        async def call_tool(self, tool_name, arguments=None, **_k):
+            raise client_mod.ConnectorError(
+                "connector is not authorized (or the access token can no longer be "
+                "refreshed) — run POST /api/connector/{id}/oauth/start",
+                code="E_CONNECTOR_NOT_CONNECTED",
+            )
+
+    monkeypatch.setattr(client_mod, "ConnectorClient", _Rejected)
+    with pytest.raises(client_mod.ConnectorError) as ei:
+        _invoke(connector_id=CID, tool_name="search")
+    assert ei.value.code == "E_CONNECTOR_NOT_CONNECTED"
+    assert str(ei.value) == CONNECTOR_REAUTH_MESSAGE
+    assert store.get_connector(CID).status == "needs_reauth"
+
+
+def _flaky_row_lookup(monkeypatch):
+    """`connector` 行查询抖一下（锁竞争 / 库损坏的合成版）→ 返回的开关能把它恢复。
+
+    只打 ``AgentConfigStore.get_connector``（`registry.get_connector_def` 读的就是它），
+    `list_connector_tools` 等照常 —— 这正是**瞬时**锁竞争的形状：一条语句超时、下一条成功。
+    恢复开关是为了让用例事后还能把行读回来做断言。
+    """
+    from src.agent_config.store import AgentConfigStore
+
+    real = AgentConfigStore.get_connector
+    state = {"broken": True}
+
+    def _maybe_boom(self, connector_id):
+        if state["broken"]:
+            raise RuntimeError("agent_config.db is locked (synthetic)")
+        return real(self, connector_id)
+
+    monkeypatch.setattr(AgentConfigStore, "get_connector", _maybe_boom)
+    return state
+
+
+@pytest.mark.parametrize(
+    "cid,source",
+    [("notion", "custom_mcp"), ("gmail", "composio")],  # 双轨：直连 + Composio 托管
+)
+def test_unresolved_endpoint_never_marks_a_healthy_connector_needs_reauth(
+    store, monkeypatch, cid, source
+):
+    """🔴 预存缺陷（08-06 修）：「我们这边解析不出端点」≠「token 被对方拒了」。
+
+    真实触发形状：`connector` 行查询抖一下 → `registry` 兜底走目录（direct 条目的端点被
+    **抹空**、composio 条目本来就没端点）→ client 在打开传输**之前**显式拒。一个字节都没
+    发出去、远端从没拒过我们 ⇒ 这条**健康的**连接不得被落成 ``needs_reauth``（那会把 owner
+    支去重新授权一个根本没坏的东西）。两条轨同受此判 —— 故双轨各跑一遍。
+
+    用**真** ConnectorClient（不 stub）：要守的正是「raise 的类型 → service 的归类」这条链。
+    """
+    import src.connectors.client as client_mod
+
+    if cid != CID:
+        store.upsert_connector(
+            cid, server_url="https://mcp.composio.test/trs_1", source=source
+        )
+        store.update_connector_state(cid, status="connected")
+        store.sync_connector_tools(cid, _manifest(("search", "read")))
+    broken = _flaky_row_lookup(monkeypatch)
+
+    with pytest.raises(client_mod.ConnectorError) as ei:
+        _invoke(connector_id=cid, tool_name="search")
+    # wire code 不变（对调用方仍是「这个 connector 现在用不了」）；变的只是**类型**，
+    # 落态点靠它区分（service.should_mark_needs_reauth）。
+    assert ei.value.code == "E_CONNECTOR_NOT_CONNECTED"
+    assert isinstance(ei.value, client_mod.ConnectorUnconfigured)
+    # 没被包装成「授权过期/被撤销」的可行动文案 —— 那句话在这里是假的。
+    assert str(ei.value) != svc.CONNECTOR_REAUTH_MESSAGE
+    assert "has no endpoint" in str(ei.value)
+
+    broken["broken"] = False
+    row = store.get_connector(cid)
+    assert row.status == "connected"  # 🔴 健康连接不许被说成「需要重新授权」
+    assert row.last_error is None
+
+
+def test_missing_composio_key_never_marks_a_healthy_connector_needs_reauth(
+    store, monkeypatch
+):
+    """🔴 同类预存缺陷的托管轨入口（08-06 修）：BYOK key 缺失 ≠ token 被拒。
+
+    owner 轮换 / 清掉 Composio key 的那一刻，托管轨每一条连接的下一次工具调用都会在
+    `_composio_headers` 本地失败（零出网）。旧行为把它们**全部**翻成「授权过期或被撤销，
+    去重连」—— 而重新授权根本修不好：要填的是 key。
+
+    用**真** ConnectorClient（不 stub）：守的是「`require_api_key` 失败 → 抛的类型 →
+    service 的归类」整条链。
+    """
+    import src.connectors.client as client_mod
+    from src.connectors import composio
+
+    store.upsert_connector(
+        "gmail", server_url="https://mcp.composio.test/trs_1", source="composio"
+    )
+    store.update_connector_state("gmail", status="connected")
+    store.sync_connector_tools("gmail", _manifest(("search", "read")))
+    monkeypatch.setattr(composio, "get_api_key", lambda: None)
+
+    with pytest.raises(client_mod.ConnectorError) as ei:
+        _invoke(connector_id="gmail", tool_name="search")
+    assert ei.value.code == "E_CONNECTOR_NOT_CONNECTED"
+    assert isinstance(ei.value, client_mod.ConnectorUnconfigured)
+    # 原文（「去填 key」）不许被换成「去重连」——后者在这里是错误指路。
+    assert str(ei.value) != svc.CONNECTOR_REAUTH_MESSAGE
+    assert "API key is not configured" in str(ei.value)
+
+    row = store.get_connector("gmail")
+    assert row.status == "connected"
+    assert row.last_error is None
+
+
 def test_transient_failure_does_not_touch_connector_status(store, monkeypatch):
     """超时/网络类失败**不落态** —— 远端抖一下不该被说成「授权没了」。"""
     import src.connectors.client as client_mod

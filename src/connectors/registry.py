@@ -9,14 +9,22 @@
   1. **`connector` 表里的行**（权威）—— server_url / transport / display_name / source 全部
      以行为准。存量直连行（Notion / Atlassian）因此**原样可用**，不需要任何常量表兜着；
      `custom_mcp` 轨将来用户自填的 URL 也天然落这条路（WP-24）。
-  2. **Composio 预置目录**（`composio_catalog`）—— 还没连过的目录条目：有 display_name，
-     但**没有 server_url**（托管 MCP endpoint 要等 session 建出来才存在）。这类 def 只用于
-     「列目录 / 起连接」，任何要发请求的路径拿到它都会看到空 server_url 并被显式拒。
+  2. **预置目录**（`catalog`，08-06 起双轨）—— 还没连过的目录条目：
+     - `direct` 轨（Notion / Atlassian）：**带官方 server_url** + `source='custom_mcp'`，
+       所以「还没连过的直连家」也解析得出可用的 def，点连接直接走 loopback OAuth/DCR。
+     - `composio` 轨：有 display_name，但**没有 server_url**（托管 MCP endpoint 要等
+       session 建出来才存在）。这类 def 只用于「列目录 / 起连接」，任何要发请求的路径拿到
+       它都会看到空 server_url 并被显式拒。
   3. 都不是 → `KeyError`（router 转 404、client 转 `E_CONNECTOR_UNKNOWN`）。
 
 🔴 顺序不能反：目录里有 `notion`，库里也有一行老的直连 `notion`。**行优先**才能让老行继续走
 直连（它的 token 是直连拿的），否则一次升级就把老连接的装配路线换掉 → 每次调用都用一把
 Composio key 去打 Notion 的端点。
+
+🔴 **「没有行」与「读不出行」不是一回事**（08-06）：读 `connector` 行抛异常时兜底仍走目录，
+但 direct 条目的 `server_url` 会被抹空 —— 那一刻我们并不知道这一家是不是已经连成 composio 了，
+交出官方端点就会拿一把不存在的直连 token 去真的出网。抹空后两轨的兜底同性质：**失败在本地、
+零出网**，DB 恢复后下一次解析自动回正。判据落在 `_def_from_catalog` 的 `row_lookup_ok`。
 """
 
 from __future__ import annotations
@@ -27,7 +35,8 @@ from typing import Optional
 
 from loguru import logger
 
-from src.connectors.composio_catalog import COMPOSIO_CATALOG, get_catalog_entry
+from src.connectors.catalog import catalog_ids, get_direct_entry
+from src.connectors.composio_catalog import get_catalog_entry
 
 
 @dataclass(frozen=True)
@@ -56,7 +65,32 @@ def _def_from_row(row) -> ConnectorDef:
     )
 
 
-def _def_from_catalog(connector_id: str) -> Optional[ConnectorDef]:
+def _def_from_catalog(connector_id: str, *, row_lookup_ok: bool) -> Optional[ConnectorDef]:
+    """目录兜底。``row_lookup_ok`` = 「行查询**正常**返回了（结论可信：这家确实没有行）」。
+
+    🔴 这个参数存在的唯一理由是 direct 轨：读行**抛异常**时 caller 也只能给出 ``row=None``，
+    但那是「不知道」而不是「没有」——两者折成同一个值就会把一行**健康的** composio 连接
+    临时解析成直连 def，见下面 direct 分支的红标。
+    """
+    direct = get_direct_entry(connector_id)
+    if direct is not None:
+        # 🔴 direct 轨条目**带**官方端点：这就是「还没连过的直连家」也能点连接的原因
+        # （08-06 双轨；WP-12 之前那张常量表干的正是这件事）。
+        # 🔴 但端点只在 `row_lookup_ok` 时才交出去。读行失败时抹成空 —— 此时无从知道这一家
+        # 是不是已经连成 composio 了，交出官方端点 = 拿 `connector:<id>` 下并不存在的直连
+        # token 去打 mcp.notion.com / mcp.atlassian.com：**真的出网**发了 DCR/授权请求。
+        # 这是抹空的**主理由**，与下面 composio 分支同性质：失败在本地、零出网，DB 恢复后
+        # 下一次解析自动回正。
+        # （原先这里还列了第二条后果：失败码 E_CONNECTOR_NOT_CONNECTED ∈
+        # CONNECTOR_REAUTH_ERROR_CODES 会把那条健康连接落成 needs_reauth。那条后果 08-06 起
+        # 已由 `service.should_mark_needs_reauth` 独立兜住（空端点抛 `ConnectorUnconfigured`，
+        # 两个落态点都据类型放行），**但抹空仍然必须保留** —— 它守的是「零出网」。）
+        return ConnectorDef(
+            connector_id=direct.connector_id,
+            server_url=direct.server_url if row_lookup_ok else "",
+            display_name=direct.display_name,
+            source="custom_mcp",
+        )
     entry = get_catalog_entry(connector_id)
     if entry is None:
         return None
@@ -74,23 +108,28 @@ def get_connector_def(connector_id: str) -> ConnectorDef:
     """按 id 解析定义（行优先 → 目录兜底）；都没有 → ``KeyError``。"""
     if not connector_id or not isinstance(connector_id, str):
         raise KeyError(f"unknown connector: {connector_id!r}")
+    row_lookup_ok = True
     try:
         from src.agent_config.store import get_agent_config_store
 
         row = get_agent_config_store().get_connector(connector_id)
     except Exception as e:  # noqa: BLE001 — 库不可用不该让「目录里有没有这一家」也答不出来
-        # 🔴 不静默：读不到行时目录条目会顶上（server_url 空 ⇒ 后续路径显式报 not-connected，
-        # 不会拿错 endpoint 发请求），但「为什么突然说没连接」必须在日志里留痕。
+        # 🔴 不静默：读不到行时目录条目会顶上，「为什么突然说没连接」必须在日志里留痕。
+        # 🔴 `row_lookup_ok=False` 把「查过了、没有行」与「压根没查出来」分开（08-06）：
+        # 两者都得到 row=None，但只有前者能让 direct 条目交出官方端点。折成同一个值时，
+        # 一次读行失败就会让 notion / atlassian 的**存量 composio 行**临时被解析成直连并
+        # 真的出网 —— 兜底的安全论证（失败在本地、零出网）正是靠这个区分才继续成立。
+        row_lookup_ok = False
         logger.warning("[connector] row lookup failed for {}: {}", connector_id, e)
         row = None
     if row is not None:
         return _def_from_row(row)
-    catalog_def = _def_from_catalog(connector_id)
+    catalog_def = _def_from_catalog(connector_id, row_lookup_ok=row_lookup_ok)
     if catalog_def is not None:
         return catalog_def
     raise KeyError(
         f"unknown connector: {connector_id!r} (not a configured connector, and not in the "
-        f"preset catalog: {sorted(COMPOSIO_CATALOG)})"
+        f"preset catalog: {list(catalog_ids())})"
     )
 
 

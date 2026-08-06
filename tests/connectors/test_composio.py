@@ -307,9 +307,17 @@ def test_composio_row_assembles_with_static_header(fresh_agent_cfg, monkeypatch)
 
 
 def test_composio_row_without_key_reports_not_connected(fresh_agent_cfg, monkeypatch):
+    """🔴 08-06：类型必须是 ``ConnectorUnconfigured``（code 不变）—— BYOK key 缺失是**本地**
+    配置问题（请求一个字节都没发出去），抛裸 ``ConnectorError`` 会让托管轨每一条健康连接在
+    owner 轮换/清掉 key 时被落成 ``needs_reauth``，而重新授权还修不好它（要填的是 key）。
+    """
     import httpx2
 
-    from src.connectors.client import ConnectorClient, ConnectorError
+    from src.connectors.client import (
+        ConnectorClient,
+        ConnectorError,
+        ConnectorUnconfigured,
+    )
 
     fresh_agent_cfg.upsert_connector(
         "gmail", server_url="https://mcp.composio.test/x", source="composio"
@@ -324,13 +332,23 @@ def test_composio_row_without_key_reports_not_connected(fresh_agent_cfg, monkeyp
     with pytest.raises(ConnectorError) as ei:
         asyncio.run(_run())
     assert ei.value.code == "E_CONNECTOR_NOT_CONNECTED"
+    assert isinstance(ei.value, ConnectorUnconfigured)
 
 
 def test_catalog_entry_without_endpoint_refuses_to_open_a_session(fresh_agent_cfg):
-    """行还没建（只在目录里）→ server_url 空 → 显式 not-connected，不拿空 URL 发请求。"""
+    """行还没建（只在目录里）→ server_url 空 → 显式 not-connected，不拿空 URL 发请求。
+
+    🔴 08-06：类型必须是 ``ConnectorUnconfigured``（code 不变）—— 落态点靠它把「本地装配不出
+    请求」与「token 被对方拒了」分开，抛裸 ``ConnectorError`` 会让一条健康连接被误落
+    ``needs_reauth``（判定见 ``service.should_mark_needs_reauth``）。
+    """
     import httpx2
 
-    from src.connectors.client import ConnectorClient, ConnectorError
+    from src.connectors.client import (
+        ConnectorClient,
+        ConnectorError,
+        ConnectorUnconfigured,
+    )
 
     cc = ConnectorClient("slack", interactive=False, timeout_seconds=5.0)
 
@@ -341,6 +359,7 @@ def test_catalog_entry_without_endpoint_refuses_to_open_a_session(fresh_agent_cf
     with pytest.raises(ConnectorError) as ei:
         asyncio.run(_run())
     assert ei.value.code == "E_CONNECTOR_NOT_CONNECTED"
+    assert isinstance(ei.value, ConnectorUnconfigured)
 
 
 class _FakeTool:

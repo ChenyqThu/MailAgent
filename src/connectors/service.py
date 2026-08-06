@@ -43,10 +43,13 @@ from loguru import logger
 #: 08-03 已退役）。值域外的 crud / 天花板一律 fail-closed（``ceiling_allows`` 返回 False）。
 CONNECTOR_CRUD_RANK: dict[str, int] = {"read": 1, "write": 2, "update": 3}
 
-#: 授权失效的错误码（PR5）：命中即把连接落 ``needs_reauth``（可行动状态）。**两个调用面
+#: 授权失效的错误码（PR5）：命中是落 ``needs_reauth`` 的**必要**条件。**两个调用面
 #: （本模块的 invoke / routers/connector.py 的 sync）共用这一份**，别在第二处手抄码表。
 #: 🔴 timeout / network / protocol 有意**不**在内：那些是瞬时故障，落态会把「远端抖了一下」
 #: 说成「授权没了」，把 owner 支去做一次无用的重新授权。
+#: 🔴 **不充分**（08-06）：``E_CONNECTOR_NOT_CONNECTED`` 有两种形状，其中「本地就装配不出
+#: 请求」那一种（端点没解析出来 / Composio key 缺失）一个字节都没发出去 —— 判定一律走
+#: ``should_mark_needs_reauth``，两个落态点都别直接用 ``in`` 判。
 CONNECTOR_REAUTH_ERROR_CODES: tuple[str, ...] = (
     "E_CONNECTOR_OAUTH",
     "E_CONNECTOR_NOT_CONNECTED",
@@ -54,12 +57,14 @@ CONNECTOR_REAUTH_ERROR_CODES: tuple[str, ...] = (
 
 #: needs_reauth 的对外文案（落库 ``last_error`` + 抛给调用方/模型的 message 同一份）。
 #: 🔴 面向**人与模型**，不是面向 curl —— client 层的原始 message 里有「run POST
-#: /api/connector/{id}/oauth/start」这类只有开发者能执行的指令，原样摆进设置页的 lastError
-#: 与模型看到的工具错误里 = 看得懂但做不了。原始技术细节留在异常链（``from e``）与日志里，
-#: client.py 那份原文不动（它对开发者仍是对的）。
+#: /api/connector/{id}/oauth/start」这类只有开发者能执行的指令，原样摆进 Connectors 配置台的
+#: lastError 与模型看到的工具错误里 = 看得懂但做不了。原始技术细节留在异常链（``from e``）与
+#: 日志里，client.py 那份原文不动（它对开发者仍是对的）。
+#: 🔴 落点是**独立的 Connectors 配置台**（08-06 起设置页那两个区已降级成只读深链卡）——
+#: 指向设置页 = 把 owner 支到一张什么也改不了的卡上。
 CONNECTOR_REAUTH_MESSAGE = (
-    "Connector authorization expired or revoked. The owner must reconnect it in "
-    "Settings → Custom AI → Connectors."
+    "Connector authorization expired or revoked. The owner must reconnect it in the "
+    "Connectors console (sidebar → Connectors → External connections)."
 )
 
 #: caller.context_mode 的合法值域（镜像 TS ``AGENT_CONTEXT_MODES``：manual + 两个 headless
@@ -91,6 +96,30 @@ class ConnectorInvokeDenied(Exception):
         super().__init__(message)
         self.code = code
         self.http_status = http_status
+
+
+def should_mark_needs_reauth(error: Exception) -> bool:
+    """这次失败**证明**授权没了吗（⇒ 该把连接落 ``needs_reauth``）。落态点的判定单源。
+
+    码表命中只是必要条件：``E_CONNECTOR_NOT_CONNECTED`` 有两种形状 ——
+
+      - 远端拒了我们的 token（过期 / 被撤销 / 刷不动 / 压根没授权过）：**授权**问题，
+        落 ``needs_reauth`` 正确，owner 去重连就好；
+      - 本地就装配不出这次请求（``ConnectorUnconfigured``：端点没解析出来 / Composio BYOK
+        key 缺失）：**请求一个字节都没发出去**，远端从没拒过我们。落 ``needs_reauth`` 会把
+        一条健康连接显示成「需要重新授权」，把 owner 支去重新授权一个没坏的东西（key 缺失
+        那一路更冤：重新授权也修不好）—— 与 timeout / network 不落态是同一个理由（不拿
+        「我们这边的事」冒充「授权没了」）。
+
+    两条轨（直连 / Composio 托管）同受此判：抹空端点两轨都会发生，key 缺失是托管轨专有。
+    🔴 **两个落态点都必须走这里**（本模块的 invoke + ``routers/connector.py`` 的 sync）——
+    只有一个面改判会让同一次失败在两条路径上得到相反的状态，比两边都错更难查。
+    """
+    from src.connectors.client import ConnectorUnconfigured
+
+    if isinstance(error, ConnectorUnconfigured):
+        return False
+    return getattr(error, "code", "") in CONNECTOR_REAUTH_ERROR_CODES
 
 
 def ceiling_allows(crud_type: str, ceiling: Optional[str]) -> bool:
@@ -271,8 +300,8 @@ async def invoke_connector_tool(
     if effective_mode == "off":
         raise ConnectorInvokeDenied(
             "E_CONNECTOR_TOOL_DISABLED",
-            f"tool {tool_name!r} is set to 'off' — change its mode in Settings → "
-            "Custom AI → Connectors if you want the assistant to use it",
+            f"tool {tool_name!r} is set to 'off' — change its mode in the Connectors console "
+            "(sidebar → Connectors) if you want the assistant to use it",
             http_status=409,
         )
     if deny_ask_mode and effective_mode == "ask":
@@ -280,7 +309,7 @@ async def invoke_connector_tool(
             "E_CONNECTOR_TOOL_DISABLED",
             f"tool {tool_name!r} is set to 'ask' (needs approval) — this unattended "
             "caller has no approval surface, so 'ask' behaves as unavailable here; set "
-            "the tool to 'auto' in Settings → Custom AI → Connectors to allow it",
+            "the tool to 'auto' in the Connectors console (sidebar → Connectors) to allow it",
             http_status=409,
         )
 
@@ -293,10 +322,11 @@ async def invoke_connector_tool(
     try:
         result = await client.call_tool(tool_name, arguments)
     except ConnectorError as e:
-        # 授权失效 → 连接落 needs_reauth + **可行动**文案（PRD「不静默重试到死」；镜像 sync
-        # 端点）。原始技术 message 换成 CONNECTOR_REAUTH_MESSAGE：这条会一路走到设置页的
-        # lastError 和模型看到的工具错误串，那两处都执行不了「run POST /api/connector/...」。
-        if getattr(e, "code", "") in CONNECTOR_REAUTH_ERROR_CODES:
+        # 授权**真的**失效（判定单源 should_mark_needs_reauth —— 不是「码表命中就算」）→ 连接
+        # 落 needs_reauth + **可行动**文案（PRD「不静默重试到死」；镜像 sync 端点）。原始技术
+        # message 换成 CONNECTOR_REAUTH_MESSAGE：这条会一路走到 Connectors 配置台的 lastError
+        # 和模型看到的工具错误串，那两处都执行不了「run POST /api/connector/...」。
+        if should_mark_needs_reauth(e):
             await asyncio.to_thread(
                 store.update_connector_state,
                 connector_id,

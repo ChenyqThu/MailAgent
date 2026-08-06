@@ -48,6 +48,20 @@ export type ConnectorToolMode = 'auto' | 'ask' | 'off'
  *  🔴 前端**不推断**这个值（不能靠 URL 长相猜），恒读服务端字段。 */
 export type ConnectorSource = 'composio' | 'custom_mcp'
 
+/** 目录条目的**出厂轨道**（Python `src/connectors/catalog.py::CONNECTOR_TRACKS`，08-06 双轨）。
+ *
+ *  `direct` = 自建 MCP 直连（OAuth 2.1 + PKCE + DCR 打官方端点，**不需要任何第三方 app 审批**
+ *  —— Notion / Atlassian 走这条，因为 Composio 的 OAuth app 会去要公司租户的 IT 同意）；
+ *  条目**必带** `server_url`，但**没有** `toolkits` / `tool_count`（直连轨没有 curated 白名单，
+ *  工具清单以连上之后 `tools/list` 实际返回为准）。
+ *  `composio` = Composio 托管 MCP（其余 14 家）；`server_url` 为 null（endpoint 要 session 建出来）。
+ *
+ *  🔴 与 `ConnectorSource` **不是同一个东西**：`track` 是**目录侧**的出厂轨道（新连接走哪条），
+ *  `source` 是**行侧**的既成事实（这一行当初是怎么连上的）。用户可能先连了 Composio 版再换直连，
+ *  此时行是 `composio`、目录是 `direct` —— 那正是 `superseded` 为 true 的情形。
+ *  编译期类型联合无运行时值可 import ⇒ 由 `tests/config/test_connector_contract_parity.py` 建闸。 */
+export type ConnectorTrack = 'direct' | 'composio'
+
 /** 凭证健康视图（只走明文列 peek —— master key 不可用时照样成立，故它不是「解密成功」的证据）。 */
 export interface ConnectorCredentialView {
   has_tokens: boolean
@@ -108,7 +122,9 @@ export interface ConnectorStatusView {
 export interface ConnectorSummary extends ConnectorStatusView {
   server_url: string
   transport: string
-  /** 这一行是被预置目录取代的老直连行（同 id，Composio 版本要先断开并清除配置才能装）。 */
+  /** 这一行的装配路线与目录出厂轨道**不符**（同 id 的另一轨版本要先断开并清除配置才能装）。
+   *  🔴 08-06 双轨后判据是 `source` vs 目录 `track` 的比对，不再是「custom_mcp 且目录里有」
+   *  —— 后者会把正确的直连行（Notion / Atlassian）误标成「已被取代」。 */
   superseded_by_catalog: boolean
 }
 
@@ -117,6 +133,11 @@ export interface ConnectorSummary extends ConnectorStatusView {
 export interface ConnectorCatalogEntry {
   connector_id: string
   display_name: string
+  /** 出厂轨道（08-06 双轨）——决定这张卡怎么渲染：`composio` 轨受 BYOK gate 约束、显示
+   *  `tool_count`；`direct` 轨不需要任何 key，工具数要等连上才知道。 */
+  track: ConnectorTrack
+  /** 官方 MCP 端点。`direct` 轨恒有；`composio` 轨恒 null（托管 endpoint 要 session 建出来）。 */
+  server_url: string | null
   /** 一句话描述的 i18n key（后端不发译文）。 */
   description_key: string
   category: string
@@ -124,12 +145,17 @@ export interface ConnectorCatalogEntry {
    *  第三方 CDN 发请求与「数据出机要明示」的调性相反。 */
   logo_text: string
   logo_color: string
+  /** Composio toolkit（`composio` 轨才有）；`direct` 轨恒空数组。 */
   toolkits: string[]
-  /** curated 白名单里的工具数（≤20）——目录卡上如实告知「会开多少个工具」。 */
-  tool_count: number
+  /** curated 白名单里的工具数（≤20）——目录卡上如实告知「会开多少个工具」。
+   *  🔴 `direct` 轨恒 **null**：那一轨没有白名单，清单以连上之后 `tools/list` 实际返回为准，
+   *  编一个数字出来（哪怕 0）就是撒谎。 */
+  tool_count: number | null
   /** 库里已有同 id 行（= 已在上面的列表里）。 */
   configured: boolean
-  /** 那一行是**老的直连行** —— 要换成 Composio 版本得先断开并清除配置。 */
+  /** 那一行的装配路线与本条目的**出厂轨道不符** —— 要换轨得先断开并清除配置（purge）。
+   *  两种成因：老直连行遇上 composio 轨条目；composio 行遇上 direct 轨条目（08-06 之后
+   *  Notion / Atlassian 回到直连轨，活库里那些 Composio 版本的行就落这一种）。 */
   superseded: boolean
 }
 
@@ -172,7 +198,7 @@ export interface ConnectorToolSummary {
 export interface ConnectorApi {
   /** 已配置的 connector 行 ∪ 凭证健康 ∪ 在途流。 */
   list(): Promise<ConnectorSummary[]>
-  /** 预置目录（Composio 单轨）+ BYOK key 状态。 */
+  /** 预置目录（08-06 起双轨：`direct` + `composio`，每条带 `track`）+ BYOK key 状态。 */
   catalog(): Promise<ConnectorCatalogView>
   /** 写 Composio API key（BYOK）。响应只回状态，不回显任何字符。 */
   setComposioKey(apiKey: string): Promise<ComposioKeyStatus>

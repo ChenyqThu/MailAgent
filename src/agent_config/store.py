@@ -212,10 +212,14 @@ class ConnectorToolRow:
 #:
 #: 🔴 ``needs_reauth`` 与 ``error`` 的二分（PR5）：**授权**失效（过期 / 被撤销 / 从未授权，
 #: 即 ``E_CONNECTOR_OAUTH`` / ``E_CONNECTOR_NOT_CONNECTED`` 两码）落 ``needs_reauth`` ——
-#: 这是**可行动**的一类：owner 去设置里重连就好。其余故障（超时 / 网络 / 协议）**不落态**
-#: （见 connectors/service.py 的落态点）—— 把远端抖一下说成「授权没了」会骗 owner 去做一次
-#: 无用的重新授权。``error`` 保留：授权流本身炸掉时（client.run_connect_flow 的兜底）仍写
-#: 它，且存量行照常读得出来。
+#: 这是**可行动**的一类：owner 去 Connectors 配置台重连就好。其余故障（超时 / 网络 / 协议）
+#: **不落态**（见 connectors/service.py 的落态点）—— 把远端抖一下说成「授权没了」会骗 owner
+#: 去做一次无用的重新授权。``error`` 保留：授权流本身炸掉时（client.run_connect_flow 的兜底）
+#: 仍写它，且存量行照常读得出来。
+#: 🔴 两码命中只是**必要**条件（08-06）：``E_CONNECTOR_NOT_CONNECTED`` 还有「本地就装配不出
+#: 请求」那一形状（``client.ConnectorUnconfigured``：端点没解析出来 / Composio key 缺失，
+#: 请求一个字节都没发出去），它与超时/网络同性质、同样**不落态**。判定单源
+#: ``connectors/service.py::should_mark_needs_reauth``（invoke 与 sync 两个落态点共用）。
 CONNECTOR_STATUSES = ("disconnected", "authorizing", "connected", "needs_reauth", "error")
 
 #: connector_tool.crud_type 值域单源（client.derive_crud_type 的产出、写侧校验、以及
