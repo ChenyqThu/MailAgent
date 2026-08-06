@@ -11,8 +11,9 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     .prepare(
       `INSERT INTO ai_chat_messages
         (session_id, role, content, tokens_input, tokens_output, cost_usd,
-         model, status, error_message, metadata, ui_message_json, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+         model, status, error_message, metadata, ui_message_json, context_tokens,
+         created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       input.sessionId,
@@ -28,6 +29,8 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
       // v9 — AI SDK UIMessage canonical JSON (gateway runtime dual-writes it;
       // legacy runtime omits → NULL → reload synthesizes from `content`).
       input.uiMessageJson ?? null,
+      // v23 (WP-15) — 末 step 的 inputTokens = 上下文占用（≠ tokens_input 的多 step 求和）。
+      input.contextTokens ?? null,
       now,
       now
     )
@@ -47,6 +50,7 @@ export function appendMessage(input: AppendMessageInput): ChatMessage {
     error_message: input.errorMessage ?? null,
     metadata: input.metadata ?? null,
     ui_message_json: input.uiMessageJson ?? null,
+    context_tokens: input.contextTokens ?? null,
     // task 06-08-chat 需求 5 — appendMessage never seeds thinking (finalizeMessage
     // writes it on终态 via updateMessage); the inserted row column defaults to NULL.
     thinking: null,
@@ -143,6 +147,12 @@ export function updateMessage(messageId: number, patch: UpdateMessagePatch): voi
   if (patch.uiMessageJson !== undefined) {
     fields.push('ui_message_json = ?')
     params.push(patch.uiMessageJson)
+  }
+  // v23 (WP-15 context 环) — 上下文占用。审批暂停的行是先 append（无占用）、resume 时
+  // updateMessage 补写，故 update 面必须能写这一列。
+  if (patch.contextTokens !== undefined) {
+    fields.push('context_tokens = ?')
+    params.push(patch.contextTokens)
   }
   if (fields.length === 0) return
   fields.push('updated_at = ?')

@@ -37,7 +37,10 @@ const { stableMailApi } = vi.hoisted(() => {
     chat: {
       newSession: vi.fn(),
       markSessionRead: vi.fn(async () => {}),
-      onTurnPersisted: vi.fn(() => () => {})
+      onTurnPersisted: vi.fn(() => () => {}),
+      // WP-15 (08-05) — composer 的 ContextUsageRing 读它取最新一轮的 context_tokens；
+      // 空数组 = 没有可信占用 → 控件不渲染（这个 degrade 用例本来就不该出现它）。
+      listMessages: vi.fn(async () => [])
     },
     email: { get: vi.fn(), body: vi.fn() },
     llm: { upstreamModels: vi.fn(async () => []), enabledModels: vi.fn(async () => []) }

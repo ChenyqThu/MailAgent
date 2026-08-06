@@ -1368,6 +1368,12 @@
         "inferred": "按 {id} 推断"
       }
     },
+    "contextUsage": {
+      "label": "上下文占用 {used}",
+      "ringTip": "上下文占用 {used} / {total}（{percent}%）\n统计的是上一轮请求塞进模型的输入量，回合结束后更新",
+      "pillTip": "上一轮请求的输入占用 {used} tokens\n该模型的上下文上限未知，故只显示已用量、不画比例",
+      "overflowTip": "已超过元数据目录记录的上限（中转档位或目录过时）"
+    },
     "approvalMode": {
       "label": "授权模式",
       "manual": {

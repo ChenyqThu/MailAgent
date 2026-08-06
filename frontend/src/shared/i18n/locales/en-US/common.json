@@ -1368,6 +1368,12 @@
         "inferred": "inferred from {id}"
       }
     },
+    "contextUsage": {
+      "label": "Context usage {used}",
+      "ringTip": "Context {used} / {total} ({percent}%)\nMeasured on the last request's input; updates when a turn ends",
+      "pillTip": "Last request used {used} input tokens\nThis model's context limit is unknown, so only the absolute value is shown",
+      "overflowTip": "Above the limit recorded in the metadata catalog (proxy tier or a stale catalog)"
+    },
     "approvalMode": {
       "label": "Permission mode",
       "manual": {

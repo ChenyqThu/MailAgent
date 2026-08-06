@@ -154,6 +154,15 @@ export interface ChatMessage {
    *  wire 形状撒谎：谁要是据此认定「这列读不到」而去删读侧的兜底，图片历史当场全灭。
    *  NEVER store secrets here — the field crosses the IPC/HTTP boundary. */
   ui_message_json: string | null
+  /** v23 (WP-15 context 环, task 08-05) — 本回合最后一次 provider 调用的 prompt token 数
+   *  =「上下文占用」，composer 右下的环/药丸读它。🔴 与 `tokens_input` **语义不同**：那一列是
+   *  ai@7 的多 step **求和**（工具循环回合里同一段 prompt 被计好几遍），这一列是**末 step** 的
+   *  inputTokens。
+   *
+   *  **optional 是有意的**（不是漏抄）：这条 wire 由 serve-api `SELECT *`（无 response_model）
+   *  产出，行里没有这一列的库（Python 跑在尚未被前端迁到 v23 的 ai_chat.db 上）会整个字段缺席。
+   *  读侧一律 `?? null` 兜底 —— 缺席 = 未知 = 不渲染控件，不是 0。 */
+  context_tokens?: number | null
   created_at: number
   updated_at: number
 }

@@ -98,6 +98,12 @@ export interface PersistTurnInput {
   userMessage: MailAgentUIMessage | null
   responseMessage: MailAgentUIMessage
   usage?: { inputTokens?: number | null; outputTokens?: number | null }
+  /** WP-15 (context 环, task 08-05) — 本回合最后一次 provider 调用的 prompt token 数 = 「上下文
+   *  占用」。🔴 与 `usage.inputTokens` **语义不同**（那个是多 step 求和，工具循环里会把同一段
+   *  prompt 计好几遍），故落在自己的列 `ai_chat_messages.context_tokens`，不复用 tokens_input。
+   *  取法与两段式回合的归属见 chatRun.ts `lastStepContextTokens`。null/omitted = 拿不到（模型没
+   *  报 usage / 手搭 harness cfg）→ 前端不渲染控件。 */
+  contextTokens?: number | null
   /** Phase 03a/03b/04a — the tool calls executed this turn (collected by the gateway via a
    *  closure-bound per-request collector, NOT streamText experimental_context). The
    *  wrapper writes each to chat_tool_call keyed to the persisted assistant message;

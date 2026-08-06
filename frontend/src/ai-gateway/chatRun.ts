@@ -810,6 +810,30 @@ export function runHasSuccessfulMemoryWrite(run: PreparedChatRun): boolean {
   })
 }
 
+/** WP-15 (context 环, task 08-05) — 本回合的「上下文占用」= **末 step 的 `inputTokens`**。
+ *
+ *  🔴 **绝不能用 `result.usage`**：ai@7 的 usage 是**多 step 求和**（`node_modules/ai/dist/index.d.ts`
+ *  "When there are multiple steps, the usage is the sum of all step usages"）。工具循环回合里每个
+ *  step 都把整段 prompt 重新计一遍，求和值因此显著大于「这一刻塞进模型的上下文」——拿它画环会
+ *  凭空吓人（3 个 step 的回合能虚报 3 倍）。真正的上下文占用 = 最后一次 provider 调用的 prompt
+ *  token 数 = 末 step 的 `usage.inputTokens`（ai@7 的 `inputTokens` 是 prompt **总**数，
+ *  `inputTokenDetails.{noCacheTokens,cacheReadTokens}` 只是它的细分 —— 不要再叠加 cacheRead）。
+ *
+ *  **两段式回合（审批暂停 → resume）**：暂停那一段根本不落库（makePersistOnFinish 在
+ *  `responseMessageAwaitsApproval` 处早退），resume 是**另一次 streamText**，它的 `steps` 只含
+ *  resume 段；而 resume 的 prompt 已经带上原始历史 + 暂停的 tool call + 其执行结果，所以「当前
+ *  run 的末 step」在两段式下依然是那一刻的完整上下文 —— 不需要、也不能跨段求和（跨段求和 =
+ *  同一段历史被计两次）。
+ *
+ *  拿不到（模型未报 usage / steps 为空 / 非有限数）→ null：前端据此**不渲染**控件，绝不猜。 */
+export function lastStepContextTokens(
+  steps: ReadonlyArray<{ usage?: { inputTokens?: number | undefined } }> | undefined | null
+): number | null {
+  if (!Array.isArray(steps) || steps.length === 0) return null
+  const n = steps[steps.length - 1]?.usage?.inputTokens
+  return typeof n === 'number' && Number.isFinite(n) && n >= 0 ? n : null
+}
+
 /** harness-chat lane C (07-15, PRD §3) — the static warning text appended to a turn whose
  *  streamText generation ended with `finishReason === 'length'`: the model hit the maxOutputTokens
  *  ceiling mid-reply and the AI SDK closes the turn WITHOUT raising, so a truncated reply would
@@ -905,6 +929,9 @@ export function makePersistOnFinish(
     // kept as the legacy fallback gate.
     if ((cfg.serverResumeEnabled || cfg.islandAgentEnabled) && runHasApprovalUsedError(run)) return
     const usage = await Promise.resolve(run.result.usage).catch(() => undefined)
+    // WP-15 (context 环) — 上下文占用另取**末 step** 的 inputTokens（`usage` 是多 step 求和，
+    // 语义不同，见 lastStepContextTokens）。与 usage 同样 best-effort：拿不到 → null → 前端不渲染。
+    const steps = await Promise.resolve(run.result.steps).catch(() => undefined)
     // harness-chat lane C (07-15, PRD §3) — finishReason==='length' fail-loud: append a visible
     // warning to what gets PERSISTED (see appendLengthTruncationWarning's doc comment for why this
     // can't reach the already-streamed wire). No-op for every other finish reason.
@@ -920,6 +947,7 @@ export function makePersistOnFinish(
       usage: usage
         ? { inputTokens: usage.inputTokens ?? null, outputTokens: usage.outputTokens ?? null }
         : undefined,
+      contextTokens: lastStepContextTokens(steps),
       toolCalls: run.auditEntries,
       // codex r2 [C] — per-run settle dedup: the broadcast carries this runId to the renderer.
       runId: run.runId ?? null

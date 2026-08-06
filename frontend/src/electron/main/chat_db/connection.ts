@@ -140,7 +140,17 @@ import { resolveDataRoot } from '../db'
 // appearing. The default history filter (COALESCE(origin,'interactive') <> 'agent') deliberately
 // admits them (Q18=A — IM sessions are desktop-visible). ai_chat.db has its own version ladder;
 // this bump does NOT touch backend_lifecycle.EXPECTED_DB_VERSION. 🔴 bump 同步刷 src/chat/db.py 头注释。
-const CHAT_DB_VERSION = 22
+// v23 (WP-15 context 环, task 08-05) — ai_chat_messages.context_tokens: 本回合最后一次 provider
+// 调用的 prompt token 数 = composer 右下 context 环显示的「上下文占用」。🔴 **不复用 tokens_input**：
+// 那一列存的是 ai@7 的 `result.usage.inputTokens`，即**多 step 求和**（工具循环回合里同一段 prompt
+// 被计好几遍，拿它画环会虚报数倍）；本列存的是末 step 的 inputTokens（取法与两段式回合归属见
+// frontend/src/ai-gateway/chatRun.ts `lastStepContextTokens`）。两个语义不同的数值不能挤一列 ——
+// 覆写 tokens_input 会静默改掉既有 metadata.tokensInput 的含义。NULL for 每条 legacy / pre-v23 行
+// 与所有非 gateway 写入（additive ALTER default）→ 前端不渲染控件（= 引入本列之前的现状）。
+// Plain additive ALTER, hasColumn idempotency guard (same discipline as v5..v21)。ai_chat.db 自有
+// version ladder；this bump does NOT touch backend_lifecycle.EXPECTED_DB_VERSION。🔴 bump 同步刷
+// src/chat/db.py 头注释（Python 侧 SELECT * 读，不建表、不写这一列）。
+const CHAT_DB_VERSION = 23
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1083,6 +1093,25 @@ function migrate(db: Database.Database): void {
     try {
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '22')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  // v22 → v23 — WP-15 context 环 (task 08-05): ai_chat_messages.context_tokens (末 step 的
+  // inputTokens = 上下文占用；见头注释里为什么不复用 tokens_input)。Plain additive ALTER,
+  // hasColumn idempotency guard (v21 样板)。
+  if (current < 23) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_messages', 'context_tokens')) {
+        db.exec('ALTER TABLE ai_chat_messages ADD COLUMN context_tokens INTEGER')
+      }
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '23')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

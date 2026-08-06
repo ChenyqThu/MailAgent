@@ -290,7 +290,9 @@ export function AgentConversation({
       onRemoveMention,
       attachments,
       onAddAttachment,
-      onRemoveAttachment
+      onRemoveAttachment,
+      // WP-15 — context 环读这个会话最新一轮的 context_tokens。
+      sessionId: chatActiveSessionId
     }),
     [
       thinkingSupported,
@@ -304,7 +306,8 @@ export function AgentConversation({
       onRemoveMention,
       attachments,
       onAddAttachment,
-      onRemoveAttachment
+      onRemoveAttachment,
+      chatActiveSessionId
     ]
   )
 

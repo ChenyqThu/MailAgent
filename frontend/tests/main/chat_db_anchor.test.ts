@@ -120,7 +120,7 @@ describe('chat_db — v6 → v7 anchor migration', () => {
     // v19 — ai_chat_sessions.origin/agent_id/agent_job_id, S4 W3 headless agent sessions;
     // v20 — ai_chat_sessions.last_read_at; v21 — ai_chat_sessions.pinned_at/starred;
     // v22 — origin value-domain registers 'im' ('agent'|'im'|NULL, 08-01 messenger no-op step)).
-    expect(ver).toBe('22')
+    expect(ver).toBe('23')
 
     // Anchor columns added + backfilled for the pre-existing email row.
     const row = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 1').get() as {

@@ -41,6 +41,7 @@ import {
 } from '@shared/assistant/components/composerControlsContext'
 import { ApprovalModePicker } from '@shared/assistant/components/ApprovalModePicker'
 import { ComposerPlusMenu } from '@shared/assistant/components/ComposerPlusMenu'
+import { ContextUsageRing } from '@shared/assistant/components/ContextUsageRing'
 import { ModelPicker } from '@shared/assistant/components/ModelPicker'
 
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
@@ -339,6 +340,8 @@ export function AgentComposer(): React.JSX.Element {
                 {controls && <ApprovalModePicker variant="chip" />}
               </div>
               <div className="flex items-center">
+                {/* WP-15 — 上下文占用（环 / 中性药丸 / 不渲染，见 ContextUsageRing 文件头）。 */}
+                <ContextUsageRing />
                 <ThreadPrimitive.If running={false}>
                   <ComposerPrimitive.Send
                     aria-label={t('chat.composer.send')}

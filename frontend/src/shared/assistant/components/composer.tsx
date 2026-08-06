@@ -34,6 +34,7 @@ import { formatAttachmentSize } from '@shared/lib/chat-attachments'
 import { useChatComposerControls, type ChatComposerControls } from './composerControlsContext'
 import { ApprovalModePicker } from './ApprovalModePicker'
 import { ComposerPlusMenu } from './ComposerPlusMenu'
+import { ContextUsageRing } from './ContextUsageRing'
 import { ModelPicker } from './ModelPicker'
 
 const ICON_BTN =
@@ -311,6 +312,8 @@ export function ThreadComposer(): React.JSX.Element {
             </>
           )}
           <div className="ml-auto flex items-center">
+            {/* WP-15 — 上下文占用（环 / 中性药丸 / 不渲染，见 ContextUsageRing 文件头）。 */}
+            <ContextUsageRing />
             <ThreadPrimitive.If running={false}>
               <ComposerPrimitive.Send
                 aria-label={t('chat.composer.send', { defaultValue: 'Send' })}

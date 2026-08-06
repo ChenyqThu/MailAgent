@@ -208,6 +208,8 @@ function persistTurn(turn: PersistTurnInput): void {
       model: turn.model,
       tokensInput: turn.usage?.inputTokens ?? null,
       tokensOutput: turn.usage?.outputTokens ?? null,
+      // WP-15 (context 环) — 暂停那一段没有落过占用（早退不 persistTurn），resume 在这里补写。
+      contextTokens: turn.contextTokens ?? null,
       uiMessageJson: JSON.stringify(turn.responseMessage)
     })
     assistantId = pausedRowId
@@ -220,6 +222,8 @@ function persistTurn(turn: PersistTurnInput): void {
       model: turn.model,
       tokensInput: turn.usage?.inputTokens ?? null,
       tokensOutput: turn.usage?.outputTokens ?? null,
+      // WP-15 (context 环) — 末 step 的 inputTokens（≠ tokensInput 的多 step 求和）。
+      contextTokens: turn.contextTokens ?? null,
       uiMessageJson: JSON.stringify(turn.responseMessage)
     }).id
   }

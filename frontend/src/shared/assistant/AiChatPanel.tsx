@@ -230,7 +230,9 @@ export function AIChatPanel({
       onRemoveMention,
       attachments,
       onAddAttachment,
-      onRemoveAttachment
+      onRemoveAttachment,
+      // WP-15 — context 环读这个会话最新一轮的 context_tokens。
+      sessionId: chat.activeSessionId
     }),
     [
       thinkingSupported,
@@ -245,7 +247,8 @@ export function AIChatPanel({
       onRemoveMention,
       attachments,
       onAddAttachment,
-      onRemoveAttachment
+      onRemoveAttachment,
+      chat.activeSessionId
     ]
   )
 

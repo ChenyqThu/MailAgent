@@ -129,6 +129,11 @@ export interface ChatMessage {
   // v9 migration adds the column; serve-api db.py mirrors read (SELECT *) + write.
   // NEVER store secrets here — the field crosses the IPC boundary.
   ui_message_json: string | null
+  // v23 (WP-15 context 环, task 08-05) — 本回合最后一次 provider 调用的 prompt token 数 =
+  // 「上下文占用」。🔴 与 tokens_input 语义不同：那一列是 ai@7 的多 step **求和**，工具循环回合
+  // 里会把同一段 prompt 计好几遍；这一列是**末 step** 的 inputTokens（chatRun.ts
+  // lastStepContextTokens）。null = legacy / pre-v23 行 / 非 gateway 写入 → 前端不渲染 context 环。
+  context_tokens: number | null
   created_at: number
   updated_at: number
 }
@@ -163,6 +168,9 @@ export interface AppendMessageInput {
   // v9 (P4 Phase 02) — AI SDK UIMessage canonical JSON. Gateway runtime sets it;
   // legacy callers omit → persisted NULL (reload synthesizes from content).
   uiMessageJson?: string | null
+  // v23 (WP-15 context 环) — 末 step 的 inputTokens（≠ tokensInput 的多 step 求和）。
+  // 只有 gateway persistTurn 写；其余调用方省略 → NULL。
+  contextTokens?: number | null
 }
 
 export interface UpdateMessagePatch {
@@ -179,6 +187,9 @@ export interface UpdateMessagePatch {
   thinking?: string | null
   // v9 (P4 Phase 02) — AI SDK UIMessage canonical JSON, finalized on turn end.
   uiMessageJson?: string | null
+  // v23 (WP-15 context 环) — 审批暂停的行在 resume 落库时才拿到 context 占用（暂停那一段
+  // 早退不落库），故 update 面也要能写这一列。
+  contextTokens?: number | null
 }
 
 // Sprint 19 — chat_tool_call row + CRUD inputs.

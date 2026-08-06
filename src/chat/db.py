@@ -1,6 +1,11 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 22）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 23）。
+v23（WP-15 context 环，task 08-05）= ``ai_chat_messages.context_tokens``：本回合最后一次
+provider 调用的 prompt token 数（= composer 右下 context 环显示的「上下文占用」）。
+🔴 与 ``tokens_input`` **语义不同** —— 那一列是 ai@7 的多 step **求和**（工具循环回合里同一段
+prompt 被计好几遍），这一列是**末 step** 的 inputTokens。只有前端 gateway 的 persistTurn 写，
+本文件**不写**这一列；读侧 ``SELECT *`` 自动带回（远程 web 因此与桌面同源）。
 v22（飞书 messenger 阶段 2 PR-1，task 08-01）= ``ai_chat_sessions.origin`` 值域登记 ``'im'``
 （**无 schema 变更**的 no-op ladder 步：origin 是 v19 加的无 CHECK 自由文本列，值域现为
 'agent' | 'im' | NULL=交互）。'im' 行由 gateway 主进程 ``createImSession`` 写（origin='im'，
