@@ -180,17 +180,18 @@ describe('pessimistic mutation (codex r1 P1-2)', () => {
 
   test('the store converges on the SERVER-canonical response, not the requested value', async () => {
     mockGet.mockResolvedValueOnce('manual')
-    // a hypothetical server normalization: echoes 'acceptEdits' for the PUT.
-    mockSet.mockResolvedValueOnce('acceptEdits')
+    // a hypothetical server normalization: the PUT for 'bypass' echoes back 'manual'
+    // (08-05 WP-11 two-mode vocabulary — 'acceptEdits' no longer exists to echo).
+    mockSet.mockResolvedValueOnce('manual')
     const { result } = renderHook(() => useGlobalApprovalMode())
     await flush()
     let ok = false
     await act(async () => {
-      ok = await result.current.setMode('acceptEdits' as GlobalApprovalMode)
+      ok = await result.current.setMode('bypass' as GlobalApprovalMode)
     })
     expect(ok).toBe(true)
-    expect(result.current.mode).toBe('acceptEdits')
-    expect(mockSet).toHaveBeenCalledWith('acceptEdits')
+    expect(result.current.mode).toBe('manual')
+    expect(mockSet).toHaveBeenCalledWith('bypass')
   })
 
   test('concurrent mutations serialize: second setMode while saving → false, exactly ONE PUT', async () => {
@@ -207,7 +208,7 @@ describe('pessimistic mutation (codex r1 P1-2)', () => {
     await flush()
     let second = true
     await act(async () => {
-      second = await result.current.setMode('acceptEdits' as GlobalApprovalMode)
+      second = await result.current.setMode('manual' as GlobalApprovalMode)
     })
     expect(second).toBe(false) // rejected while saving — no interleaved state
     expect(mockSet).toHaveBeenCalledTimes(1)
@@ -300,7 +301,7 @@ describe('codex r2 P1-b — epoch-managed requests (no in-flight boolean gate)',
     // user explicitly picks a mode from the unknown state; the PUT fails.
     let ok = true
     await act(async () => {
-      ok = await result.current.setMode('acceptEdits' as GlobalApprovalMode)
+      ok = await result.current.setMode('bypass' as GlobalApprovalMode)
     })
     await flush()
     expect(ok).toBe(false)

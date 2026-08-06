@@ -8,6 +8,7 @@
 import { describe, expect, test } from 'vitest'
 
 import { buildGatewayTools, GATEWAY_DEFAULT_TOOL_NAMES } from '../../../src/ai-gateway/tools'
+import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
 import type { GatewayToolAuditEntry } from '../../../src/ai-gateway/tools/types'
 import { emailSearchSchema } from '../../../src/ai-gateway/tools/schemas'
 import { mockDomain, okEnvelope, runTool } from './_helpers'
@@ -45,5 +46,74 @@ describe('buildGatewayTools', () => {
     expect(collector).toHaveLength(1)
     expect(collector[0]).toMatchObject({ toolName: 'email_list_filter', status: 'ok' })
     expect(JSON.parse(collector[0].outputJson)).toEqual({ count: 1, items: [{ internal_id: 1 }] })
+  })
+})
+
+// ── 08-05 WP-11 — owner per-tool 'deny' strips the tool from the MANUAL assembly ───────────────
+
+describe("buildGatewayTools — per-tool 'deny' (WP-11)", () => {
+  const guardOpts = () => ({
+    domain: mockDomain(() => okEnvelope([])),
+    writeToolsEnabled: true,
+    approvalGuard: new ApprovalGuard()
+  })
+
+  test("an explicit owner 'deny' removes the tool from a manual ToolSet (model cannot see it)", () => {
+    const base = buildGatewayTools({ ...guardOpts(), contextMode: 'manual_chat' })
+    expect(base.email_flag).toBeDefined()
+    const tools = buildGatewayTools({
+      ...guardOpts(),
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: {
+        tools: { email_flag: { tier: 'deny', source: 'owner' } },
+        sendRecipientWhitelist: []
+      }
+    })
+    expect(tools.email_flag).toBeUndefined()
+    expect(tools.email_archive).toBeDefined() // siblings untouched
+  })
+
+  test('🔴 the deny strip is approvalMode-independent — bypass does not resurrect a denied tool', () => {
+    // check 2026-08-05 — D1=a makes bypass outrank a per-tool 'ask'; deny lives on the
+    // AVAILABILITY axis (mirror of connector 'off'), so bypass must never re-register it.
+    const tools = buildGatewayTools({
+      ...guardOpts(),
+      contextMode: 'manual_chat',
+      approvalMode: 'bypass',
+      toolApprovalPrefs: {
+        tools: { email_flag: { tier: 'deny', source: 'owner' } },
+        sendRecipientWhitelist: []
+      }
+    })
+    expect(tools.email_flag).toBeUndefined()
+    expect(tools.email_archive).toBeDefined()
+  })
+
+  test("a 'default'-sourced tier never strips (only explicit owner overrides deny)", () => {
+    const tools = buildGatewayTools({
+      ...guardOpts(),
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: {
+        tools: { email_flag: { tier: 'deny', source: 'default' } as never },
+        sendRecipientWhitelist: []
+      }
+    })
+    expect(tools.email_flag).toBeDefined()
+  })
+
+  test('🔴 验收⑤ — prefs are DROPPED for non-manual assemblies (headless matrix zero diff)', () => {
+    for (const mode of ['untrusted_trigger', 'cron_headless', 'im_chat'] as const) {
+      const withPrefs = buildGatewayTools({
+        ...guardOpts(),
+        contextMode: mode,
+        toolApprovalPrefs: {
+          tools: { email_flag: { tier: 'deny', source: 'owner' } },
+          sendRecipientWhitelist: []
+        }
+      })
+      const without = buildGatewayTools({ ...guardOpts(), contextMode: mode })
+      expect(Object.keys(withPrefs).sort(), mode).toEqual(Object.keys(without).sort())
+      expect(withPrefs.email_flag, mode).toBeDefined() // deny never reaches a non-manual matrix
+    }
   })
 })

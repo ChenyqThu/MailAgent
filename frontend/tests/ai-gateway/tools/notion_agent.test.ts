@@ -1,5 +1,5 @@
 // task 07-21 — notion_agent tool: flag gate (byte-identical off), SKILL-gating via advertisedSkills
-// (unlike the CORE_UNGATED families), edit-tier 恒 HITL (always asks — auto-reversible / acceptEdits
+// (unlike the CORE_UNGATED families), edit-tier default-ask (auto-reversible
 // never relax it), the /api/skills/invoke wire body, UNTRUSTED_NOTION_AGENT fencing of the answer,
 // and class 'outbound' → stripped from a headless run.
 
@@ -133,11 +133,13 @@ describe('notion_agent_chat — 恒 HITL + wire + fencing', () => {
     expect(await needsApproval({ prompt: 'hi' }, { toolCallId: 'tc-ar', messages: [] })).toBe(true)
   })
 
-  test('acceptEdits does NOT auto-approve it (not on the allow-list)', async () => {
+  test('default per-tool tier keeps it asking (factory default ask, D2=a)', async () => {
+    // 08-05 WP-11 — the old「恒 HITL」demoted to the tool's factory-default 'ask' tier: with the
+    // prefs threaded and no owner override, it still asks.
     const guard = new ApprovalGuard()
     const { notion_agent_chat } = createNotionAgentTools(notionDomain(), [], guard, {
       contextMode: 'manual_chat',
-      approvalMode: 'acceptEdits'
+      toolApprovalPrefs: { notion_agent_chat: { tier: 'ask', source: 'default' } }
     })
     const needsApproval = notion_agent_chat.needsApproval as (
       i: unknown,
@@ -146,10 +148,27 @@ describe('notion_agent_chat — 恒 HITL + wire + fencing', () => {
     expect(await needsApproval({ prompt: 'hi' }, { toolCallId: 'tc-ae', messages: [] })).toBe(true)
   })
 
-  test('bypass does NOT auto-approve it either (codex HIGH-1 — BYPASS_STILL_ASK carve-out)', async () => {
-    // bypass is otherwise 无例外 (send/exec/skill-install included), but notion_agent_chat is an
-    // external-AI call whose Notion-side writes can't be undone from this machine → it stays 恒 HITL
-    // even under bypass (the same 安全地板 the repo floors for exec/skill-install).
+  test("owner per-tool 'auto' DOES relax it (danger-confirmed owner override, D2=a)", async () => {
+    // 08-05 WP-11 — the owner can explicitly set it to 'auto' (Settings shows the red one-time
+    // confirm; dangerAuto). The gateway honors the explicit tier — no card.
+    const guard = new ApprovalGuard()
+    const { notion_agent_chat } = createNotionAgentTools(notionDomain(), [], guard, {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: { notion_agent_chat: { tier: 'auto', source: 'owner' } }
+    })
+    const needsApproval = notion_agent_chat.needsApproval as (
+      i: unknown,
+      o: { toolCallId: string; messages: unknown[] }
+    ) => boolean | Promise<boolean>
+    expect(await needsApproval({ prompt: 'hi' }, { toolCallId: 'tc-auto', messages: [] })).toBe(
+      false
+    )
+  })
+
+  test('bypass DOES auto-approve it now (08-05 D1=a — BYPASS_STILL_ASK retired)', async () => {
+    // 07-21 codex HIGH-1's carve-out is retired by the 08-05 owner 拍板: bypass = 字面「无例外」.
+    // The 外呼-不可撤回 rationale survives as the factory-default 'ask' tier + the danger
+    // confirm on setting 'auto' — a data-level default, no longer a code floor.
     const guard = new ApprovalGuard()
     const { notion_agent_chat } = createNotionAgentTools(notionDomain(), [], guard, {
       contextMode: 'manual_chat',
@@ -159,7 +178,23 @@ describe('notion_agent_chat — 恒 HITL + wire + fencing', () => {
       i: unknown,
       o: { toolCallId: string; messages: unknown[] }
     ) => boolean | Promise<boolean>
-    expect(await needsApproval({ prompt: 'hi' }, { toolCallId: 'tc-by', messages: [] })).toBe(true)
+    expect(await needsApproval({ prompt: 'hi' }, { toolCallId: 'tc-by', messages: [] })).toBe(false)
+  })
+
+  test("bypass outranks even an explicit per-tool 'ask' (D1=a: 无例外)", async () => {
+    const guard = new ApprovalGuard()
+    const { notion_agent_chat } = createNotionAgentTools(notionDomain(), [], guard, {
+      contextMode: 'manual_chat',
+      approvalMode: 'bypass',
+      toolApprovalPrefs: { notion_agent_chat: { tier: 'ask', source: 'owner' } }
+    })
+    const needsApproval = notion_agent_chat.needsApproval as (
+      i: unknown,
+      o: { toolCallId: string; messages: unknown[] }
+    ) => boolean | Promise<boolean>
+    expect(await needsApproval({ prompt: 'hi' }, { toolCallId: 'tc-by2', messages: [] })).toBe(
+      false
+    )
   })
 
   test('execute posts the /api/skills/invoke body and fences the answer', async () => {

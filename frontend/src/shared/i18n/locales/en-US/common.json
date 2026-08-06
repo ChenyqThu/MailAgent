@@ -1394,12 +1394,9 @@
       "label": "Permission mode",
       "manual": {
         "title": "Manual",
-        "desc": "Every write asks for approval first (default)"
+        "desc": "Per-tool approval tiers decide what asks (default; adjust in Settings → AI)"
       },
-      "acceptEdits": {
-        "title": "Accept edits",
-        "desc": "Edits & web run automatically; sends, local commands, calendar changes, skill installs and agent changes still ask"
-      },
+      "settingsLink": "Adjust per-tool approval tiers…",
       "bypass": {
         "title": "Bypass permissions",
         "desc": "Everything runs without asking"
@@ -2940,11 +2937,70 @@
       },
       "approval": {
         "title": "Agent action approval",
-        "helper": "Whether the agent needs per-action confirmation before write operations. Irreversible actions like sending mail always require confirmation.",
+        "helper": "Whether the agent needs per-action confirmation before write operations. Sending mail always asks (unless every recipient is on the whitelist).",
         "autoReversibleLabel": "Skip confirmation for reversible actions",
-        "autoReversibleHelper": "When on, reversible actions — flag / archive / pin / resync to Notion / memory read-write — run directly without a confirmation card; drafting a reply still requires confirmation, and sending mail (irreversible) always requires confirmation.",
+        "autoReversibleHelper": "When on, reversible (preview-tier) actions without an explicit per-tool tier run directly without a confirmation card; a per-tool \"ask\" set below outranks this toggle.",
         "managedByMode": "The permission mode is currently \"{mode}\" (switchable at the composer's bottom-left) and overrides this toggle; it takes effect again under \"Manual\".",
         "modeUnknown": "Can't read the current permission mode (backend unreachable; retries when the window is focused). This toggle applies once the mode is confirmed as \"Manual\"."
+      },
+      "toolPrefs": {
+        "title": "Per-tool approval tiers",
+        "helper": "Decide per tool whether an AI call runs directly, asks first, or is disabled. Factory defaults follow the recommended profile (high-frequency reversible actions run directly); tiers apply only to conversations with you present — scheduled agents and Feishu chats are unaffected.",
+        "loadError": "Can't read the per-tool approval tiers: {message}",
+        "retry": "Retry",
+        "tier": {
+          "label": "Approval tier",
+          "auto": "Run directly",
+          "ask": "Ask first",
+          "deny": "Disabled"
+        },
+        "effective": {
+          "auto": "Runs directly",
+          "ask": "Asks before every call",
+          "deny": "Disabled (invisible to the model)"
+        },
+        "followDefault": "Following default",
+        "clearOverride": "Back to default",
+        "fixedAsk": "Always asks",
+        "fixedAskTip": "This tool's approval shape is fixed: sends use the recipient whitelist, local commands use the automation-policy whitelist, skill installs and agent changes always show a card.",
+        "danger": "Danger",
+        "dangerConfirmTitle": "Set \"{tool}\" to run directly?",
+        "dangerConfirmBody": "This action is irreversible or hands data to an external service; once set to run directly the AI will no longer show a card for it. This confirmation appears only once.",
+        "confirm": "Confirm",
+        "cancel": "Cancel",
+        "group": {
+          "email_write": "Email actions",
+          "draft": "Drafts",
+          "web": "Web",
+          "calendar": "Calendar",
+          "capability": "Identity & skills",
+          "supply": "Skill supply chain",
+          "agents": "Custom agents",
+          "exec": "Local files & commands",
+          "outbound": "Outbound"
+        },
+        "bulk": {
+          "label": "Bulk",
+          "auto": "All run directly",
+          "ask": "All ask first",
+          "deny": "All disabled",
+          "clear": "All back to default"
+        },
+        "bulkDone": "Updated {count} tools",
+        "preset": "Accept-edits preset",
+        "presetTip": "One click sets the 15 reversible edit / draft / web / file tools to run directly (the retired \"Accept edits\" mode's new home).",
+        "presetDone": "Accept-edits preset applied ({count} tools)",
+        "reset": "Reset all",
+        "resetDone": "Cleared {count} overrides; every tool is back to its factory default",
+        "saveFailed": "Failed to save the per-tool approval tier",
+        "sendWhitelist": {
+          "label": "Send whitelist",
+          "helper": "The only card-free shape for email_prepare_send: when every recipient matches the whitelist (full emails or @domain entries, comma/newline separated) the send skips the card; empty = sends always ask.",
+          "placeholder": "a@corp.test, @corp.test",
+          "save": "Save",
+          "saved": "Send whitelist saved ({count} entries)",
+          "saveFailed": "Failed to save the send whitelist: {message}"
+        }
       },
       "cache": {
         "title": "Prompt cache",

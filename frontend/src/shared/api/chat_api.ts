@@ -34,7 +34,9 @@ import type {
   SkillPackPreview,
   SkillSecretMeta,
   SkillSummary,
-  SkillUninstallResult
+  SkillUninstallResult,
+  ToolApprovalPrefsPayload,
+  ToolApprovalTierValue
 } from './types'
 
 export interface ChatRuntimeDeps {
@@ -263,7 +265,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
         'GET',
         '/agent/approval-mode'
       )
-      return data.mode === 'acceptEdits' || data.mode === 'bypass' ? data.mode : 'manual'
+      // 08-05 WP-11 — 'acceptEdits' retired: only 'bypass' survives; legacy/dirty → 'manual'.
+      return data.mode === 'bypass' ? data.mode : 'manual'
     },
 
     async setApprovalMode(mode: GlobalApprovalMode): Promise<GlobalApprovalMode> {
@@ -277,10 +280,60 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
         '/agent/approval-mode',
         { body: { mode } }
       )
-      if (data.mode !== 'manual' && data.mode !== 'acceptEdits' && data.mode !== 'bypass') {
+      if (data.mode !== 'manual' && data.mode !== 'bypass') {
         throw new Error(`unexpected approval-mode response: ${String(data.mode)}`)
       }
       return data.mode
+    },
+
+    // ── 08-05 WP-11 — built-in 写工具的 per-tool 审批档（owner UI 专属写面）──────────────
+
+    async getToolPrefs(): Promise<ToolApprovalPrefsPayload> {
+      // Throws on transport failure（Settings section 渲染错误/重试态；不静默造默认值）。
+      return await request<ToolApprovalPrefsPayload>(baseUrl, 'GET', '/agent/tool-prefs')
+    },
+
+    async setToolPref(
+      toolName: string,
+      tier: ToolApprovalTierValue | null
+    ): Promise<ToolApprovalPrefsPayload> {
+      return await request<ToolApprovalPrefsPayload>(
+        baseUrl,
+        'PUT',
+        `/agent/tool-prefs/${encodeURIComponent(toolName)}`,
+        { body: { tier } }
+      )
+    },
+
+    async bulkSetToolPrefs(input: {
+      tier: ToolApprovalTierValue | null
+      group?: string
+    }): Promise<ToolApprovalPrefsPayload> {
+      return await request<ToolApprovalPrefsPayload>(baseUrl, 'POST', '/agent/tool-prefs/bulk', {
+        body: { tier: input.tier, ...(input.group ? { group: input.group } : {}) }
+      })
+    },
+
+    async applyToolPrefsPreset(): Promise<ToolApprovalPrefsPayload> {
+      return await request<ToolApprovalPrefsPayload>(baseUrl, 'POST', '/agent/tool-prefs/preset', {
+        body: { preset: 'acceptEdits' }
+      })
+    },
+
+    async resetToolPrefs(): Promise<ToolApprovalPrefsPayload> {
+      return await request<ToolApprovalPrefsPayload>(baseUrl, 'POST', '/agent/tool-prefs/reset', {
+        body: {}
+      })
+    },
+
+    async setSendWhitelist(recipients: string[]): Promise<string[]> {
+      const data = await request<{ sendWhitelist: string[] }>(
+        baseUrl,
+        'PUT',
+        '/agent/send-whitelist',
+        { body: { recipients } }
+      )
+      return data.sendWhitelist ?? []
     },
 
     async listPolicyRules(params?: { agentId?: string }): Promise<ExecPolicyRule[]> {

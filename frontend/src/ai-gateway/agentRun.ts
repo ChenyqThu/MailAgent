@@ -208,6 +208,10 @@ export function wrapCfgForAgentRun(
     // exemption would miss them: connector READS are class 'read' (the intersected face), so
     // without the name exemption the intersection would strip every granted read tool right after
     // registration admitted it — the grant would be dead config.
+    // 08-05 WP-11 — this 3-arg wrapper is ALSO the structural gate keeping per-tool approval
+    // prefs out of headless runs: prepareChatRun passes them in the 5th buildTools slot, which
+    // this signature drops on the floor (and the inner call below deliberately forwards only
+    // ctx). Do not widen the signature — headless approval semantics are grants-only.
     buildTools: (collector, approvalMode, mode) => {
       const built = cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}
       const out: ToolSet = {}

@@ -1394,12 +1394,9 @@
       "label": "授权模式",
       "manual": {
         "title": "手动授权",
-        "desc": "每个写操作都先弹卡确认（默认）"
+        "desc": "按每个工具的审批档决定弹不弹卡（默认；档位在 设置 → AI 调整）"
       },
-      "acceptEdits": {
-        "title": "编辑放行",
-        "desc": "编辑 / 联网自动执行；发信、本地命令、日历改动、Skill 安装、Agent 改动仍需确认"
-      },
+      "settingsLink": "按工具调整审批档…",
       "bypass": {
         "title": "完全授权",
         "desc": "所有操作直接执行，不再询问"
@@ -2940,11 +2937,70 @@
       },
       "approval": {
         "title": "Agent 操作审批",
-        "helper": "Agent 执行写操作前是否需要逐个确认。发送邮件等不可逆操作始终需要确认。",
+        "helper": "Agent 执行写操作前是否需要逐个确认。发送邮件始终需要确认（除非收件人全部在白名单内）。",
         "autoReversibleLabel": "可逆操作免确认",
-        "autoReversibleHelper": "开启后，标记 / 归档 / 置顶 / 重传 Notion / 记忆读写等可逆操作直接执行，无需确认卡片；起草回复仍需确认，发送邮件（不可逆）始终需要确认。",
+        "autoReversibleHelper": "开启后，未单独设档的可逆操作（preview 档）直接执行，无需确认卡片；下方按工具设的「必须确认」优先于本开关。",
         "managedByMode": "当前授权模式为「{mode}」（对话框左下角可切换），已接管审批放行；切回「手动授权」后此开关生效。",
         "modeUnknown": "无法读取当前授权模式（后端暂不可达，聚焦窗口时自动重试）；确认为「手动授权」后此开关生效。"
+      },
+      "toolPrefs": {
+        "title": "工具审批档",
+        "helper": "按工具决定 AI 调用时直接执行、先弹卡确认、还是完全禁用。默认档来自出厂推荐（高频可逆操作默认直接执行）；只作用于你亲自在场的对话，定时 Agent 与飞书对话不受影响。",
+        "loadError": "无法读取工具审批档：{message}",
+        "retry": "重试",
+        "tier": {
+          "label": "审批档",
+          "auto": "直接执行",
+          "ask": "先确认",
+          "deny": "禁用"
+        },
+        "effective": {
+          "auto": "直接执行",
+          "ask": "调用前弹卡确认",
+          "deny": "已禁用（模型不可见）"
+        },
+        "followDefault": "跟随默认",
+        "clearOverride": "回默认",
+        "fixedAsk": "恒需确认",
+        "fixedAskTip": "该工具的审批形状固定：发送走收件人白名单、本地命令走自动化策略白名单、Skill 安装与 Agent 改动恒弹卡。",
+        "danger": "危险",
+        "dangerConfirmTitle": "把「{tool}」设为直接执行？",
+        "dangerConfirmBody": "该操作不可逆或会把数据交给外部服务，设为直接执行后 AI 调用时不再弹卡。此确认只出现这一次。",
+        "confirm": "确认",
+        "cancel": "取消",
+        "group": {
+          "email_write": "邮件操作",
+          "draft": "草稿",
+          "web": "联网",
+          "calendar": "日历",
+          "capability": "身份与技能",
+          "supply": "Skill 供应链",
+          "agents": "Custom Agent",
+          "exec": "本地文件与命令",
+          "outbound": "外发与外呼"
+        },
+        "bulk": {
+          "label": "批量",
+          "auto": "全部直接执行",
+          "ask": "全部先确认",
+          "deny": "全部禁用",
+          "clear": "全部回默认"
+        },
+        "bulkDone": "已更新 {count} 个工具",
+        "preset": "编辑放行预设",
+        "presetTip": "一键把可逆编辑 / 草稿 / 联网 / 文件读写等 15 个工具设为直接执行（原「编辑放行」模式的降级归宿）。",
+        "presetDone": "已套用编辑放行预设（{count} 个工具）",
+        "reset": "全部重置",
+        "resetDone": "已清除 {count} 个覆盖，全部工具回出厂默认",
+        "saveFailed": "工具审批档保存失败",
+        "sendWhitelist": {
+          "label": "发送白名单",
+          "helper": "email_prepare_send 唯一的免卡形状：收件人全部命中白名单（完整邮箱或 @域名，逗号/换行分隔）时不弹卡；留空 = 发送恒需确认。",
+          "placeholder": "a@corp.test, @corp.test",
+          "save": "保存",
+          "saved": "发送白名单已保存（{count} 条）",
+          "saveFailed": "发送白名单保存失败：{message}"
+        }
       },
       "cache": {
         "title": "Prompt 缓存",

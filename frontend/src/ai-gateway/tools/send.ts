@@ -44,6 +44,45 @@ function outboundFromInput(input: EmailPrepareSendInput): OutboundPayload {
   }
 }
 
+// ── 08-05 WP-11 (D2=a) — the send recipient whitelist, the ONE structured card-free shape ──────
+
+/** Extract the bare address from a recipient string ("Name <a@b.c>" → "a@b.c"), lowercased.
+ *  No angle bracket → the trimmed string itself. */
+export function bareAddress(recipient: string): string {
+  const m = /<([^<>]+)>\s*$/.exec(recipient)
+  return (m ? m[1] : recipient).trim().toLowerCase()
+}
+
+/** Does one recipient match the owner's whitelist? Entries are server-normalized (lowercase):
+ *  a full email matches exactly; an '@domain' entry matches any address AT that domain
+ *  (suffix-anchored on the '@' so 'evil-corp.test' can never ride '@corp.test'). A recipient
+ *  that does not parse as an address (no '@') matches NOTHING (fail-closed). */
+export function recipientInWhitelist(recipient: string, whitelist: readonly string[]): boolean {
+  const addr = bareAddress(recipient)
+  if (!addr.includes('@')) return false
+  for (const entry of whitelist) {
+    if (entry.startsWith('@')) {
+      if (addr.endsWith(entry)) return true
+    } else if (addr === entry) {
+      return true
+    }
+  }
+  return false
+}
+
+/** The send free-pass predicate (auditedSendTool.sendAutoFree): true ⇔ the whitelist is
+ *  non-empty AND there is at least one recipient AND every to/cc/bcc recipient matches.
+ *  Empty whitelist (the factory default) → never passes → the send 恒 ask (D2=a: no bare auto). */
+export function sendRecipientsAllWhitelisted(
+  input: EmailPrepareSendInput,
+  whitelist: readonly string[]
+): boolean {
+  if (whitelist.length === 0) return false
+  const recipients = [...cleanList(input.to), ...cleanList(input.cc), ...cleanList(input.bcc)]
+  if (recipients.length === 0) return false
+  return recipients.every((r) => recipientInWhitelist(r, whitelist))
+}
+
 const PREPARE_SEND_DESCRIPTION =
   'Prepare a real outbound email and send it ONLY after the user explicitly approves it in a ' +
   'send-confirmation card (blocking tier — it can never auto-send). Recipients are explicit: ' +
@@ -69,10 +108,16 @@ export function createSendTools(
     contextMode?: AgentContextMode
     /** 07-16 approval-mode switcher — the run's effective approval mode. ONLY the exact 'bypass'
      *  literal has any effect here (narrowed below into auditedSendTool's `bypassMode` param);
-     *  'always'/'auto-reversible'/'acceptEdits' keep the hard always-ask floor byte-identical. */
+     *  'always'/'auto-reversible' keep the hard always-ask floor byte-identical. */
     approvalMode?: GatewayApprovalMode
+    /** 08-05 WP-11 (D2=a) — the owner's send recipient whitelist (server-resolved via
+     *  GET /api/agent/tool-prefs, threaded by buildGatewayTools for MANUAL runs only). Entries
+     *  are lowercase full emails or '@domain' shapes. Empty/absent → the send 恒 ask (the
+     *  factory default; there is NO bare per-tool auto for the send). */
+    sendRecipientWhitelist?: readonly string[]
   }
 ): Record<string, Tool> {
+  const whitelist = opts.sendRecipientWhitelist ?? []
   const email_prepare_send = auditedSendTool<EmailPrepareSendInput>(
     {
       name: 'email_prepare_send',
@@ -84,9 +129,17 @@ export function createSendTools(
       a2uiEnabled: opts.a2uiEnabled,
       // S2 W0 — class outbound: outside manual_chat the send neither registers nor executes.
       contextMode: opts.contextMode,
-      // 07-16 — bypass (owner-global, server-resolved, manual_chat-gated) is the ONLY value that
-      // ever skips the send card; the double guard (consume + content hash + Python ledger) stays.
+      // 07-16 — bypass (owner-global, server-resolved, manual_chat-gated) skips the send card;
+      // the double guard (consume + content hash + Python ledger) stays.
       bypassMode: opts.approvalMode === 'bypass' ? 'bypass' : undefined,
+      // 08-05 WP-11 (D2=a) — the recipient-whitelist free pass: every to/cc/bcc recipient must
+      // match an owner whitelist entry; empty whitelist never passes. The double guard stays.
+      ...(whitelist.length > 0
+        ? {
+            sendAutoFree: (input: EmailPrepareSendInput) =>
+              sendRecipientsAllWhitelisted(input, whitelist)
+          }
+        : {}),
       run: async (input, { signal, record }) => {
         const payload = outboundFromInput(input)
         if (payload.to.length === 0) {

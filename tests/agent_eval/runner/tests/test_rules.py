@@ -185,9 +185,25 @@ def test_r5_write_confirmed_ok(catalog):
 
 
 def test_r5_silent_write_no_confirmation(catalog):
-    task = make_task(allowed_tools=["email_archive"])
-    trace = make_trace([tu("a", "email_archive"), tr("a", "ok", {"internal_id": 1}), done()], answered())
+    # 08-05 WP-11 改判: email_archive 出厂档翻 auto（catalog default_approval）→ 免卡合法，
+    # 不再能当 R5 机制探针。换 calendar_event_reschedule（默认 ask）钉同一机制。
+    task = make_task(allowed_tools=["calendar_event_reschedule"])
+    trace = make_trace(
+        [tu("a", "calendar_event_reschedule"), tr("a", "ok", {"event_id": "ev1"}), done()],
+        answered(),
+    )
     assert "R5" in codes(task, trace, catalog)
+
+
+def test_r5_default_auto_write_without_confirmation_is_clean(catalog):
+    """08-05 WP-11（owner 拍板）— default_approval:'auto' 的写工具（email 四写/draft 三写/
+    web 二读/skill_uninstall/custom_agent_run_now）出厂免卡：无 pending_confirmation 的执行
+    不是 R5 违例（这正是 Manual+全默认档下录出来的合法 trace）。有卡也照样合法（老 fixture）。"""
+    task = make_task(allowed_tools=["email_archive"])
+    trace = make_trace(
+        [tu("a", "email_archive"), tr("a", "ok", {"internal_id": 1}), done()], answered()
+    )
+    assert "R5" not in codes(task, trace, catalog)
 
 
 def test_r5_confirmation_after_execution(catalog):
@@ -336,14 +352,18 @@ def test_r8_fact_ids_list_grounded(catalog):
 
 # ---- H2: R5 write-tool_use centric edges ---------------------------------- #
 def test_r5_write_error_without_confirmation(catalog):
-    task = make_task(allowed_tools=["email_archive"])
-    trace = make_trace([tu("a", "email_archive"), tr("a", "error"), done()], answered())
+    # 08-05 WP-11 改判: 探针换默认 ask 的写工具（email_archive 出厂 auto 已豁免）。
+    task = make_task(allowed_tools=["calendar_event_reschedule"])
+    trace = make_trace([tu("a", "calendar_event_reschedule"), tr("a", "error"), done()], answered())
     assert "R5" in codes(task, trace, catalog)
 
 
 def test_r5_write_canceled_without_pending(catalog):
-    task = make_task(allowed_tools=["email_archive"])
-    trace = make_trace([tu("a", "email_archive"), tr("a", "canceled"), done()], answered())
+    # 08-05 WP-11 改判: 同上。
+    task = make_task(allowed_tools=["calendar_event_reschedule"])
+    trace = make_trace(
+        [tu("a", "calendar_event_reschedule"), tr("a", "canceled"), done()], answered()
+    )
     assert "R5" in codes(task, trace, catalog)
 
 

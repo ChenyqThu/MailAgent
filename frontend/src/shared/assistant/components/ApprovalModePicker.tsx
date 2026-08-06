@@ -1,5 +1,8 @@
 // 07-16 approval-mode switcher — composer chip for the OWNER-GLOBAL chat approval mode
-// (Manual / Accept Edits / Bypass Permissions, Claude Code permission-mode 参照).
+// (Manual / Bypass Permissions, Claude Code permission-mode 参照).
+// 08-05 WP-11 — 'acceptEdits' 已退役：三档 → 二档，Manual 档下弹不弹卡由 per-tool 审批档决定
+// （设置 → AI → 工具审批档；原 acceptEdits 集合降级为那里的「编辑放行」一键预设）。菜单底部
+// 加了指向该设置区的入口行。
 //
 // One shared component, two visual variants (双 composer 落点):
 //   - 'icon' — 7×7 icon button, ThreadComposer's toolbar row (ComposerModelPicker 同款尺寸；弹层
@@ -27,9 +30,14 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, Shield, ShieldAlert, ShieldCheck, ShieldQuestion } from 'lucide-react'
+import { useRouter } from '@tanstack/react-router'
+import { ChevronDown, Settings2, Shield, ShieldAlert, ShieldQuestion } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
+import {
+  AI_TAB_ANCHOR_IDS,
+  scrollToAnchorWhenReady
+} from '@shared/components/settings/aiTabAnchors'
 import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
@@ -39,7 +47,7 @@ import { useGlobalApprovalMode, type GlobalApprovalMode } from '@shared/lib/glob
 const ICON_BTN =
   'grid h-7 w-7 place-items-center rounded-md transition-[color,background-color,transform] duration-fast'
 
-const MODES: readonly GlobalApprovalMode[] = ['manual', 'acceptEdits', 'bypass'] as const
+const MODES: readonly GlobalApprovalMode[] = ['manual', 'bypass'] as const
 
 function ModeIcon({
   mode,
@@ -50,14 +58,15 @@ function ModeIcon({
 }): React.JSX.Element {
   if (mode === null) return <ShieldQuestion size={size} strokeWidth={2} className="shrink-0" />
   if (mode === 'bypass') return <ShieldAlert size={size} strokeWidth={2} className="shrink-0" />
-  if (mode === 'acceptEdits')
-    return <ShieldCheck size={size} strokeWidth={2} className="shrink-0" />
   return <Shield size={size} strokeWidth={2} className="shrink-0" />
 }
 
 export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): React.JSX.Element {
   const { t } = useTranslation()
   const { mode, saving, setMode } = useGlobalApprovalMode()
+  // WP-11 — settings deep-link (per-tool 审批档). `useRouter({ warn: false })` 抄
+  // ComposerToolsMenu：无 router 场地（隔离测试/无路由宿主）不渲染该行，不炸。
+  const router = useRouter({ warn: false })
   const [open, setOpen] = useState(false)
   // Switching TO bypass swaps the menu content for a warning confirm step (never applies直接).
   const [confirmingBypass, setConfirmingBypass] = useState(false)
@@ -157,7 +166,7 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
             ? 'bg-[rgb(var(--c-fail)/0.12)] text-[rgb(var(--c-fail))] active:scale-[0.96]'
             : isUnknown
               ? 'bg-[rgb(var(--c-warn)/0.15)] text-[rgb(var(--c-warn))] active:scale-[0.96]'
-              : mode === 'acceptEdits' || open
+              : open
                 ? 'bg-coral/10 text-coral active:scale-[0.96]'
                 : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg active:scale-[0.96]',
           saving && 'opacity-70'
@@ -179,7 +188,7 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
             ? 'bg-[rgb(var(--c-fail)/0.12)] text-[rgb(var(--c-fail))]'
             : isUnknown
               ? 'bg-[rgb(var(--c-warn)/0.15)] text-[rgb(var(--c-warn))]'
-              : mode === 'acceptEdits' || open
+              : open
                 ? 'bg-coral/10 text-coral'
                 : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg',
           saving && 'opacity-70'
@@ -316,6 +325,23 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
                   </button>
                 )
               })}
+              {/* WP-11 — Manual 档的弹不弹卡由 per-tool 审批档决定：菜单底部给一条设置深链
+                  （acceptEdits 三档退役后，「中间态」住进了设置里的档位数据）。 */}
+              {router && (
+                <button
+                  type="button"
+                  role="menuitem"
+                  onClick={() => {
+                    closeMenu()
+                    void router.navigate({ to: '/settings', search: { tab: 'ai' } })
+                    scrollToAnchorWhenReady(AI_TAB_ANCHOR_IDS.approval)
+                  }}
+                  className="mt-1 flex w-full items-center gap-2 border-t border-ink-border-soft px-3 py-1.5 text-left text-micro text-ink-fg-2 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
+                >
+                  <Settings2 size={12} strokeWidth={2} className="shrink-0" />
+                  {t('chat.approvalMode.settingsLink')}
+                </button>
+              )}
             </>
           )}
         </div>

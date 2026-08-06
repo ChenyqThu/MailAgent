@@ -41,6 +41,7 @@ import {
   auditedReadTool,
   auditedWriteTool,
   type GatewayApprovalMode,
+  type GatewayToolApprovalPrefs,
   type GatewayToolAuditCollector
 } from './types'
 import type { AgentContextMode } from './policy'
@@ -261,9 +262,11 @@ function toConfigPatch(
 /**
  * Build the S5 W3 custom-agent CRUD tools bound to the injected domain client + audit collector +
  * approval guard. list/get are silent reads; create/update/delete/run_now are edit-tier writes
- * (class capability_change — a card under Manual/auto-reversible AND the owner-global acceptEdits
- * mode [none is an ACCEPT_EDITS_AUTO_APPROVE_TOOLS member]; only the owner-global bypass mode
- * skips it; never registered outside manual_chat). Validation is Python-authoritative.
+ * (class capability_change; never registered outside manual_chat). Approval since 08-05 WP-11:
+ * create/update/delete are configurable=false in the per-tool registry (tool_prefs.py) — they
+ * card in every mode except the owner-global bypass; run_now's factory tier is 'auto' (F 研究稿
+ * A 组放宽 — its tool face is already pinned by grants/matrix, the card only guarded budget).
+ * Validation is Python-authoritative.
  */
 export function createCustomAgentTools(
   domain: MailAgentDomainClient,
@@ -272,6 +275,9 @@ export function createCustomAgentTools(
   opts: {
     a2uiEnabled?: boolean
     approvalMode?: GatewayApprovalMode
+    /** 08-05 WP-11 — the per-tool tier map of a MANUAL run (see types.ts GatewayToolApprovalPrefs).
+     *  Absent (headless/im/tests) → pre-WP-11 ask semantics, byte-identical. */
+    toolApprovalPrefs?: GatewayToolApprovalPrefs['tools']
     oneShot?: boolean
     contextMode?: AgentContextMode
   } = {}
@@ -282,13 +288,13 @@ export function createCustomAgentTools(
     inputSchema: z.ZodType<I>
     // edit tier only — a per-tool literal (validate_catalog.py reads it as the source tier). class
     // capability_change (policy.ts) additionally means the approvalMode auto-reversible path can never
-    // apply. 07-16 — approvalMode is now threaded, but ONLY 'bypass' (owner 拍板: 无例外) ever skips
-    // the CRUD cards: none of the four writes is in the fail-closed ACCEPT_EDITS_AUTO_APPROVE_TOOLS
-    // allow-list (policy.ts; see ACCEPT_EDITS_ASK_TOOLS) because the rev3.1 §7 grant vocabulary above
-    // leans on the always-human card — auto-approving create/update under acceptEdits would let
-    // injected content mint a cron agent with grant_web:'open' (card-free headless exfil).
-    // 'always'/'auto-reversible' behaviour is byte-identical. No editableFields → the WHOLE spec is
-    // pinned (approve/reject only, cannot be retargeted on replay).
+    // apply. 08-05 WP-11 — create/update/delete are configurable=false in the per-tool registry
+    // (tool_prefs.py; the server never serves them a non-ask tier), so only 'bypass' (owner 拍板:
+    // 无例外) ever skips their cards: the rev3.1 §7 grant vocabulary above leans on the
+    // always-human card — auto-approving create/update would let injected content mint a cron
+    // agent with grant_web:'open' (card-free headless exfil). run_now alone carries a factory
+    // 'auto' tier (A 组放宽). 'always'/'auto-reversible' behaviour is byte-identical. No
+    // editableFields → the WHOLE spec is pinned (approve/reject only, cannot be retargeted).
     risk: 'edit'
     run: (
       input: I,
@@ -300,6 +306,8 @@ export function createCustomAgentTools(
         ...toolOpts,
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier ladder (manual only; consumed in types.ts).
+        toolApprovalPrefs: opts.toolApprovalPrefs,
         oneShot: opts.oneShot,
         contextMode: opts.contextMode
       },
@@ -416,7 +424,7 @@ export function createCustomAgentTools(
       'card whose permission summary highlights exec / open-web in red; nothing is created without ' +
       'approval. Grants only register tools — card-free whitelist RULES remain an owner-only ' +
       'Settings action you cannot perform. A bad cron / regex / schedule rule is rejected by a ' +
-      'server-side validator. Edit tier — always asks under the Manual/auto-reversible and acceptEdits ' +
+      'server-side validator. Edit tier — always asks under the Manual/auto-reversible ' +
       'modes; only the owner-set global bypass permission mode can auto-execute it.',
     inputSchema: customAgentCreateSchema,
     risk: 'edit',
@@ -451,7 +459,7 @@ export function createCustomAgentTools(
       'from the server (escalations highlighted red); card-free whitelist RULES remain owner-only. ' +
       'The user reviews and approves the change; a bad cron / regex / schedule rule is rejected ' +
       'server-side. ' +
-      'Edit tier — always asks under the Manual/auto-reversible and acceptEdits modes; only the ' +
+      'Edit tier — always asks under the Manual/auto-reversible modes; only the ' +
       'owner-set global bypass permission mode can auto-execute it.',
     inputSchema: customAgentUpdateSchema,
     risk: 'edit',
@@ -513,7 +521,7 @@ export function createCustomAgentTools(
       'Propose DELETING a custom agent by its id (from custom_agent_list). The user approves or ' +
       'rejects; nothing is deleted without approval. The agent_id is pinned on the card — an ' +
       'approved delete cannot be retargeted to a different agent. Edit tier — always asks under ' +
-      'the Manual/auto-reversible and acceptEdits modes; only the owner-set global bypass ' +
+      'the Manual/auto-reversible modes; only the owner-set global bypass ' +
       'permission mode can auto-execute it.',
     inputSchema: customAgentDeleteSchema,
     risk: 'edit',
@@ -531,11 +539,11 @@ export function createCustomAgentTools(
     name: 'custom_agent_run_now',
     description:
       'Propose running a custom agent ONCE right now (a manual trigger, in addition to its cron / ' +
-      'email schedule). agent_id identifies it. The user approves; on approval the run is enqueued ' +
-      'and executes headless in the background (returns a job id — check custom_agent_get for its ' +
-      "result). Subject to the agent's daily run budget. Edit tier — always asks under the " +
-      'Manual/auto-reversible and acceptEdits modes; only the owner-set global bypass ' +
-      'permission mode can auto-execute it.',
+      'email schedule). The run is enqueued and executes headless in the background (returns a ' +
+      "job id — check custom_agent_get for its result). Subject to the agent's daily run " +
+      'budget. Edit tier; its factory per-tool approval tier is auto (the run itself only holds ' +
+      'tools the owner already granted), so it may execute without a card unless the owner set ' +
+      'it back to ask in Settings.',
     inputSchema: customAgentRunNowSchema,
     risk: 'edit',
     run: async (input, { userEdited, signal }) => {

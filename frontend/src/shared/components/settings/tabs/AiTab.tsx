@@ -54,6 +54,7 @@ import { EnvSecretField } from '../parts/EnvSecretField'
 import { ModelServicesSection } from '../providers/ModelServicesSection'
 import { buildModelOptionGroups } from '../providers/modelOptionGroups'
 import { CustomAiSection } from '../CustomAiSection'
+import { ToolApprovalSection } from '../custom-ai/ToolApprovalSection'
 import { AI_TAB_ANCHOR_IDS, AI_TAB_ANCHOR_SCROLL_MT, useAiTabAnchorItems } from '../aiTabAnchors'
 import { useSettingsScrollRef } from '../settingsScrollContext'
 
@@ -665,6 +666,15 @@ export function AiTab(): React.ReactElement {
               }}
             />
           </Row>
+        </Section>
+
+        {/* 08-05 WP-11 — per-tool 审批档（acceptEdits 模式退役后的数据归宿）：每工具
+            ask/auto/deny + 组级批量 + 编辑放行预设 + Reset + send 收件人白名单。 */}
+        <Section
+          title={t('settings.ai.toolPrefs.title', { defaultValue: '工具审批档' })}
+          helper={t('settings.ai.toolPrefs.helper')}
+        >
+          <ToolApprovalSection />
         </Section>
       </div>
 

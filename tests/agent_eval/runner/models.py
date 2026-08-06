@@ -87,6 +87,18 @@ class ToolCatalog:
             return bool(entry["write"])
         return entry.get("tier", "silent") != "silent"
 
+    def default_auto(self, name: Optional[str]) -> bool:
+        """08-05 WP-11 — is this write tool's FACTORY per-tool approval tier 'auto'?
+
+        Mirrors src/agent_config/tool_prefs.py (parity gate:
+        tests/config/test_tool_prefs_catalog_parity.py). R5 exempts exactly these
+        tools from the mandatory pending_confirmation — a live recording under
+        Manual + all-default per-tool tiers legally executes them card-free
+        (recorder-contract.md). Unknown/absent → False (the write still must card).
+        """
+        entry = self.tools.get(name or "")
+        return bool(entry) and entry.get("default_approval") == "auto"
+
 
 # --------------------------------------------------------------------------- #
 # Task

@@ -469,9 +469,39 @@ export interface CompileUserMdResult {
 
 /** 07-16 approval-mode switcher — the owner-global chat approval mode (mirrors the gateway's
  *  tools/types.GlobalApprovalMode; no cross-boundary import — the api types stay gateway-free).
- *  'manual' = per-tool HITL (default, byte-identical现状); 'acceptEdits' = edits/web auto-approve
- *  (send/exec 非白名单/skill 安装/日历三写 keep HITL); 'bypass' = everything auto-approves. */
-export type GlobalApprovalMode = 'manual' | 'acceptEdits' | 'bypass'
+ *  08-05 WP-11 二档化：'manual' = per-tool 审批档决定（默认）; 'bypass' = everything
+ *  auto-approves (D1=a 无例外). 🔴 'acceptEdits' 已退役 —— 降级为 per-tool 档的「编辑放行」
+ *  一键预设（POST /agent/tool-prefs/preset）；服务端把存量/脏值折算成 'manual'。 */
+export type GlobalApprovalMode = 'manual' | 'bypass'
+
+/** 08-05 WP-11 — per-tool approval tier of a built-in write tool（值域镜像 Python
+ *  tool_prefs.TOOL_APPROVAL_TIERS；这里只是 wire 类型，注册表本体不手抄——行数据全部来自
+ *  GET /api/agent/tool-prefs）。'deny' 只作显式覆盖（出厂默认恒 ask|auto）。 */
+export type ToolApprovalTierValue = 'ask' | 'auto' | 'deny'
+
+/** GET /api/agent/tool-prefs 的一行：出厂默认 + 显式覆盖（null=跟随默认）+ 折算 effective。
+ *  configurable=false 的行（send / run_command / skill_install×2 / custom_agent CRUD×3）恒
+ *  ask、UI 只读展示；dangerAuto=true 的行（calendar_event_delete / notion_agent_chat）设
+ *  auto 需红警告 + 一次性确认（WP-10 destructive confirm 同款）。 */
+export interface ToolApprovalPrefRow {
+  toolName: string
+  group: string
+  defaultTier: 'ask' | 'auto'
+  tier: ToolApprovalTierValue | null
+  effectiveTier: ToolApprovalTierValue
+  configurable: boolean
+  dangerAuto: boolean
+}
+
+/** GET /api/agent/tool-prefs 全量负载（写端点也回同形状便于 UI 原地刷新）。
+ *  acceptEditsPreset = 「编辑放行」一键预设的成员名单（server canonical，前端不手抄）。 */
+export interface ToolApprovalPrefsPayload {
+  tools: ToolApprovalPrefRow[]
+  sendWhitelist: string[]
+  acceptEditsPreset: string[]
+  updated?: number
+  removed?: number
+}
 
 /** issue #54 — POST /chat/kos-doctor 的单步结果（形状对齐 NotionAgentDoctorCheck，
  *  设置页同款逐行 ok/fail 渲染）。check = 步骤标题（后端 emit），detail = 成功摘要或
@@ -656,6 +686,46 @@ export interface ChatApi {
    * throws Error&{code} on failure (the store re-GETs to converge).
    */
   setApprovalMode(mode: GlobalApprovalMode): Promise<GlobalApprovalMode>
+  /**
+   * 08-05 WP-11 — read the per-tool approval tiers of every built-in write tool + the send
+   * recipient whitelist + the acceptEdits preset membership (GET /api/agent/tool-prefs).
+   * Throws when unreachable (the Settings section renders an error/retry state).
+   */
+  getToolPrefs(): Promise<ToolApprovalPrefsPayload>
+  /**
+   * 08-05 WP-11 — set/clear ONE tool's explicit tier (PUT /api/agent/tool-prefs/{name};
+   * tier null = 回出厂默认). Owner UI ONLY（无 gateway 工具可达——policy_rules 纪律）。
+   * The gateway hot-reads tiers per manual run (short TTL) — a change applies within seconds.
+   */
+  setToolPref(
+    toolName: string,
+    tier: ToolApprovalTierValue | null
+  ): Promise<ToolApprovalPrefsPayload>
+  /**
+   * 08-05 WP-11 — group-level bulk tier set (POST /api/agent/tool-prefs/bulk).
+   * group omitted = every configurable tool; tier null = bulk reset那一组回默认.
+   */
+  bulkSetToolPrefs(input: {
+    tier: ToolApprovalTierValue | null
+    group?: string
+  }): Promise<ToolApprovalPrefsPayload>
+  /**
+   * 08-05 WP-11 — apply the「编辑放行」preset (POST /api/agent/tool-prefs/preset):
+   * batch-sets the retired acceptEdits member list to explicit 'auto' (membership canonical
+   * server-side).
+   */
+  applyToolPrefsPreset(): Promise<ToolApprovalPrefsPayload>
+  /**
+   * 08-05 WP-11 — Reset permissions (POST /api/agent/tool-prefs/reset): clear EVERY explicit
+   * override, all tools back to factory defaults.
+   */
+  resetToolPrefs(): Promise<ToolApprovalPrefsPayload>
+  /**
+   * 08-05 WP-11 (D2=a) — write the send recipient whitelist (PUT /api/agent/send-whitelist).
+   * Entries = full emails or '@domain'; empty list = the send always asks. Throws Error&{code}
+   * (E_INVALID_ARG carries which entry was rejected).
+   */
+  setSendWhitelist(recipients: string[]): Promise<string[]>
   /**
    * S2 W1 — list the exec automation-policy rules for the Settings 「自动化策略」 page
    * (GET /agent/policy/rules). Structured whitelist rules the owner created via the exec

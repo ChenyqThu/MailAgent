@@ -198,6 +198,14 @@ def _check_confirmation(events: List[dict], catalog: ToolCatalog, final_status) 
 
         # --- write tool path --- #
         if pend is None:
+            # 08-05 WP-11 (owner 拍板) — a write tool whose FACTORY per-tool approval tier is
+            # 'auto' (catalog `default_approval`, mirrored from tool_prefs.py by the parity gate)
+            # legally executes card-free under Manual + all-default tiers, which is exactly the
+            # recorder-contract recording profile. Only the MISSING-confirmation branch is
+            # exempted; when a card IS present the tier/name/order checks below still apply
+            # (a card is never wrong — some fixtures predate WP-11 and carry one).
+            if catalog.default_auto(name):
+                continue
             if result is not None and result[1].get("status") in ("ok", "error"):
                 v.append(RuleViolation("R5", "write dispatched without confirmation: %s" % name))
             elif result is not None and result[1].get("status") == "canceled":

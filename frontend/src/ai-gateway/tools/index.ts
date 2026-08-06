@@ -36,7 +36,11 @@ import {
   type AgentContextMode,
   type AgentRunContext
 } from './policy'
-import type { GatewayApprovalMode, GatewayToolAuditCollector } from './types'
+import type {
+  GatewayApprovalMode,
+  GatewayToolApprovalPrefs,
+  GatewayToolAuditCollector
+} from './types'
 // D1 (connector dogfood batch) — catalog row shape (prompt-land canonical, skillCatalog 先例).
 import type { ConnectorCatalogEntry } from '../prompts/stable_prompt'
 
@@ -66,10 +70,17 @@ export interface BuildGatewayToolsOpts {
   /** Auto-approval mode (body.approvalMode, default 'always'). 'auto-reversible' lets reversible
    *  preview-tier writes (flag/archive/pin/resync) execute without a card;
    *  edit-tier + the blocking send still ask. Threaded into the write tools' needsApproval.
-   *  Absent / 'always' → every write asks (current behaviour, byte-identical).
-   *  07-16 — may also carry the SERVER-injected owner-global 'acceptEdits'/'bypass' overlay
+   *  07-16 — may also carry the SERVER-injected owner-global 'bypass' overlay
    *  (prepareChatRun, manual_chat-gated); see types.ts GlobalApprovalMode. */
   approvalMode?: GatewayApprovalMode
+  /** 08-05 WP-11 — the server-folded per-tool approval tiers + send whitelist of a MANUAL run
+   *  (types.ts GatewayToolApprovalPrefs), resolved by prepareChatRun via
+   *  cfg.resolveToolApprovalPrefs and passed ONLY for manual_chat runs. The tier map threads
+   *  into every built-in write factory's needsApproval ladder; the send whitelist into
+   *  createSendTools; an explicit owner 'deny' additionally strips the tool from the MANUAL
+   *  ToolSet below (registration face — the model cannot see it). Absent (headless/im runs,
+   *  resolver failure, tests) → every write keeps its ask semantics, byte-identical. */
+  toolApprovalPrefs?: GatewayToolApprovalPrefs | null
   /** M4a (MAILAGENT_SKILL_SELF_MOUNT) — when true AND advertisedSkills is provided (non-null),
    *  drop the read tools of any email/search/report skill NOT in advertisedSkills (skill→tool
    *  gating, see skill_gating.ts). Off / advertisedSkills null → applySkillGating is NOT called →
@@ -219,6 +230,11 @@ export function buildGatewayTools(
   // into every write/send factory (auto-approve predicate + runtime double-insurance) and applied
   // as the LAST assembly step below (registration-time filter).
   const contextMode = normalizeContextMode(opts.contextMode)
+  // 08-05 WP-11 — per-tool approval tiers are a MANUAL-run concept: even if a caller threads the
+  // prefs into a non-manual assembly they are dropped HERE (structural gate on top of types.ts'
+  // consumption-side manual re-check) — headless stays grants-only, im stays matrix-only.
+  const toolPrefs = contextMode === 'manual_chat' ? (opts.toolApprovalPrefs ?? null) : null
+  const prefTiers = toolPrefs?.tools
   const tools: ToolSet = {
     ...createEmailReadTools(opts.domain, collector),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
@@ -249,6 +265,8 @@ export function buildGatewayTools(
       createWriteTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode,
         // S5 W4 (ADR-004 D1) — headless agent run only: the factory injects the per-agent
@@ -270,7 +288,11 @@ export function buildGatewayTools(
           // 07-16 approval-mode switcher — only the exact 'bypass' literal relaxes the send card
           // (the factory narrows it into auditedSendTool's bypassMode); every other mode keeps
           // the hard always-ask floor byte-identical.
-          approvalMode: opts.approvalMode
+          approvalMode: opts.approvalMode,
+          // 08-05 WP-11 (D2=a) — the send's ONE structured card-free shape: the owner's
+          // recipient whitelist (manual only; empty/absent = the send 恒 ask). The send tool
+          // deliberately gets NO per-tool tier map — a bare 'auto' is unrepresentable for it.
+          sendRecipientWhitelist: toolPrefs?.sendRecipientWhitelist
         })
       )
     }
@@ -286,6 +308,8 @@ export function buildGatewayTools(
       createSelfMountTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode,
         // D1 — run-scoped connector catalog for discover_skills' External connectors summary.
@@ -304,6 +328,8 @@ export function buildGatewayTools(
       createProfileTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode
       })
@@ -319,6 +345,8 @@ export function buildGatewayTools(
       createWebTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode,
         // S6 W3 (ADR-004 rev3.1 D2) — headless agent run only: the factory wires the grant-tier
@@ -340,6 +368,8 @@ export function buildGatewayTools(
       createExecTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode,
         // S5 W4 (ADR-004 D2) — per-agent grants + agentId for a headless run: the SAME grants
@@ -361,6 +391,8 @@ export function buildGatewayTools(
       createSkillSupplyTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode
       })
@@ -378,6 +410,8 @@ export function buildGatewayTools(
       createCustomAgentTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode
       })
@@ -398,6 +432,8 @@ export function buildGatewayTools(
       createCalendarWriteTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode
       })
@@ -415,6 +451,8 @@ export function buildGatewayTools(
       createNotionAgentTools(opts.domain, collector, opts.approvalGuard, {
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode
       })
@@ -455,10 +493,26 @@ export function buildGatewayTools(
   // exec under an explicit per-agent grant (ADR-004 D2; the same grants object the exec tools'
   // runtime modeDenied consumed above, from the one agentRunContext), and web in im_chat under the
   // stage-2 PR-1 venue switch (the same imWebEnabled the web tools' runtime modeDenied consumed).
-  return applyContextModePolicy(
+  const filtered = applyContextModePolicy(
     withDynamic,
     contextMode,
     opts.agentRunContext?.modeGrants,
     opts.imWebEnabled === true ? { imWebEnabled: true } : undefined
   )
+  // 08-05 WP-11 — owner per-tool 'deny' strips the tool from the MANUAL ToolSet (the model
+  // cannot see it — mirrors connector 'off'). Only EXPLICIT owner overrides can deny (factory
+  // defaults are ask|auto), only manual_chat (prefTiers is null otherwise — headless/im matrices
+  // untouched), and only built-in names (the prefs registry never contains mcp__* tools). The
+  // types.ts prefDenied hard-reject is the runtime belt behind this registration-face filter.
+  if (prefTiers) {
+    const denied = Object.entries(prefTiers)
+      .filter(([, p]) => p.source === 'owner' && p.tier === 'deny')
+      .map(([name]) => name)
+    if (denied.some((name) => name in filtered)) {
+      const out: ToolSet = { ...filtered }
+      for (const name of denied) delete out[name]
+      return out
+    }
+  }
+  return filtered
 }

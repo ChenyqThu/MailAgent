@@ -26,6 +26,8 @@
 
 **安全地板不受默认翻转影响**：EXEC（无白名单恒 HITL）、SKILL_INSTALL（capability_change 恒 HITL）、WEB（外发恒人审）的 HITL 地板由工具 tool_class + 审批链决定，与「工具是否注册」正交。翻默认只是让工具默认可见，不放松任何审批。
 
+> **注记（2026-08-05，task 08-05 WP-11，owner 拍板 D1=a/D2=a）**：上表「恒人审」措辞此后由 per-tool 审批档接管（canonical = `src/agent_config/tool_prefs.py`，见 ai-sdk-gateway-architecture.md §13.23.4）——`web_fetch`/`web_search` 出厂档翻 **auto**（活库两月 0 拒绝），`file_read`/`file_write` 默认 ask 可配 auto；`run_command` 无白名单恒 HITL 与 skill 安装两卡的地板**不变**（registry configurable=false）。本表保留为 E3 cutover 当时的决策记录，不改写。
+
 ---
 
 ## 2. 待定（验证进行中，本批不翻）

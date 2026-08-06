@@ -15,7 +15,6 @@ import {
   Search,
   Shield,
   ShieldAlert,
-  ShieldCheck,
   Trash2,
   Wrench,
   X
@@ -232,14 +231,13 @@ function PlusMenuScene(): React.ReactElement {
   )
 }
 
-// ── 24 审批模式（选 bypass → 同面板换成危险确认） ────────────────────────
+// ── 24 审批模式（选 bypass → 同面板换成危险确认；08-05 WP-11 acceptEdits 退役 → 二档） ──
 const APPROVAL_MODES = [
-  { id: 'manual', title: '手动授权', desc: '每个写操作都先弹卡确认（默认）', Icon: Shield },
   {
-    id: 'acceptEdits',
-    title: '编辑放行',
-    desc: '编辑 / 联网自动执行；发信、本地命令、日历改动、Skill 安装、Agent 改动仍需确认',
-    Icon: ShieldCheck
+    id: 'manual',
+    title: '手动授权',
+    desc: '按每个工具的审批档决定弹不弹卡（默认；档位在 设置 → AI 调整）',
+    Icon: Shield
   },
   { id: 'bypass', title: '完全授权', desc: '所有操作直接执行，不再询问', Icon: ShieldAlert }
 ] as const

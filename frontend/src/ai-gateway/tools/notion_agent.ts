@@ -32,7 +32,12 @@ import type { Tool } from 'ai'
 
 import type { MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
-import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
+import {
+  auditedWriteTool,
+  type GatewayApprovalMode,
+  type GatewayToolApprovalPrefs,
+  type GatewayToolAuditCollector
+} from './types'
 import type { AgentContextMode } from './policy'
 // RELATIVE import (not @shared) so the pure-Node poc harness can load the gateway tools — same
 // rationale as web.ts / calendar.ts. contextSerializer is pure TS (no react/electron).
@@ -59,6 +64,9 @@ export function createNotionAgentTools(
   opts: {
     a2uiEnabled?: boolean
     approvalMode?: GatewayApprovalMode
+    /** 08-05 WP-11 — the per-tool tier map of a MANUAL run (see types.ts GatewayToolApprovalPrefs).
+     *  Absent (headless/im/tests) → pre-WP-11 ask semantics, byte-identical. */
+    toolApprovalPrefs?: GatewayToolApprovalPrefs['tools']
     oneShot?: boolean
     contextMode?: AgentContextMode
   } = {}
@@ -67,6 +75,8 @@ export function createNotionAgentTools(
     {
       a2uiEnabled: opts.a2uiEnabled,
       approvalMode: opts.approvalMode,
+      // 08-05 WP-11 — the per-tool tier ladder (manual only; consumed in types.ts).
+      toolApprovalPrefs: opts.toolApprovalPrefs,
       oneShot: opts.oneShot,
       contextMode: opts.contextMode,
       name: 'notion_agent_chat',

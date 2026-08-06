@@ -36,7 +36,12 @@ import type { z } from 'zod'
 
 import type { MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
-import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
+import {
+  auditedWriteTool,
+  type GatewayApprovalMode,
+  type GatewayToolApprovalPrefs,
+  type GatewayToolAuditCollector
+} from './types'
 import { normalizeContextMode, type AgentContextMode, type AgentRunContext } from './policy'
 import { execRunCommandSchema, execFileReadSchema, execFileWriteSchema } from './schemas'
 // D4-① (ADR-004 §6, unflagged security fix) — exec output is the ONLY un-reviewed model input in a
@@ -68,6 +73,9 @@ export function createExecTools(
   opts: {
     a2uiEnabled?: boolean
     approvalMode?: GatewayApprovalMode
+    /** 08-05 WP-11 — the per-tool tier map of a MANUAL run (see types.ts GatewayToolApprovalPrefs).
+     *  Absent (headless/im/tests) → pre-WP-11 ask semantics, byte-identical. */
+    toolApprovalPrefs?: GatewayToolApprovalPrefs['tools']
     oneShot?: boolean
     contextMode?: AgentContextMode
     /** S5 W4 (ADR-004 D2) — the per-agent run context of a headless agent run: modeGrants feeds
@@ -110,13 +118,15 @@ export function createExecTools(
         risk: 'edit',
         editableFields: toolOpts.editableFields,
         a2uiEnabled: opts.a2uiEnabled,
-        // 07-16 approval-mode switcher — approvalMode is now threaded, but ONLY the owner-global
-        // modes can ever relax an exec tool ('auto-reversible' still can't: exec is edit-tier +
-        // class exec). 'bypass' skips the card for all three; 'acceptEdits' skips it for
-        // file_read/file_write (in the fail-closed ACCEPT_EDITS_AUTO_APPROVE_TOOLS allow-list,
-        // policy.ts) while run_command is deliberately NOT listed and keeps the whitelist-or-card
-        // path below (exec 非白名单恒 HITL, owner 拍板).
+        // 07-16/08-05 — approvalMode + per-tool tiers are threaded, but only owner-explicit
+        // paths can ever relax an exec tool ('auto-reversible' still can't: exec is edit-tier +
+        // class exec). 'bypass' skips the card for all three; file_read/file_write default 'ask'
+        // in the per-tool registry (tool_prefs.py) and the owner may set them 'auto'; run_command
+        // is configurable=false there — its ONLY card-free channel stays the structured
+        // policy_rules whitelist below (exec 非白名单恒 HITL, owner 拍板).
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier ladder (manual only; consumed in types.ts).
+        toolApprovalPrefs: opts.toolApprovalPrefs,
         oneShot: opts.oneShot,
         // S2 W0 — class exec (policy.ts): manual_chat-only unless per-agent granted (ADR-004 D2).
         contextMode: opts.contextMode,

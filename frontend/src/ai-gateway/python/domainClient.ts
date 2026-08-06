@@ -1340,12 +1340,34 @@ export class MailAgentDomainClient {
   // ── approval mode (07-16 approval-mode switcher) ─────────────────────────────────────────────
 
   /** GET /agent/approval-mode → the owner-global chat approval mode row
-   *  ({mode: 'manual'|'acceptEdits'|'bypass'}, serve-api fail-closes dirty rows to 'manual').
-   *  Consulted by the lifecycle's resolveGlobalApprovalMode (short-TTL cache + bounded timeout,
-   *  any failure → 'manual'). READ-ONLY from the gateway: mode switching is an owner UI action
-   *  (verify_cf_access endpoint) — no gateway tool can reach the PUT. */
+   *  ({mode: 'manual'|'bypass'} — 08-05 WP-11 retired 'acceptEdits'; serve-api fail-closes dirty
+   *  and legacy rows to 'manual'). Consulted by the lifecycle's resolveGlobalApprovalMode
+   *  (short-TTL cache + bounded timeout, any failure → 'manual'). READ-ONLY from the gateway:
+   *  mode switching is an owner UI action (verify_cf_access endpoint) — no gateway tool can
+   *  reach the PUT. */
   getApprovalMode(signal?: AbortSignal): Promise<{ mode: string }> {
     return this._req<{ mode: string }>('GET', '/agent/approval-mode', { signal })
+  }
+
+  /** 08-05 WP-11 — GET /agent/tool-prefs → the per-tool approval tiers of every built-in write
+   *  tool (factory default + explicit override + folded effective) + the send recipient
+   *  whitelist. Consulted by the lifecycle's resolveToolApprovalPrefs (short-TTL cache; any
+   *  failure → null = ask semantics). READ-ONLY from the gateway: tier writes are owner UI
+   *  actions (verify_cf_access endpoints) — no gateway tool can reach them (policy_rules 纪律). */
+  getToolApprovalPrefs(signal?: AbortSignal): Promise<{
+    tools: Array<{
+      toolName: string
+      group: string
+      defaultTier: string
+      tier: string | null
+      effectiveTier: string
+      configurable: boolean
+      dangerAuto: boolean
+    }>
+    sendWhitelist: string[]
+    acceptEditsPreset: string[]
+  }> {
+    return this._req('GET', '/agent/tool-prefs', { signal })
   }
 
   // ── policy primitives (S2 W1) — the structured whitelist. evaluate is consulted by the exec

@@ -34,12 +34,20 @@ The one recorder, `recorder/ai_sdk_adapter.ts`, maps `ai@6` `ToolUIPart` states 
 that file's header comment for the exact per-state mapping table; this doc still owns the
 target trace schema below that any recorder's output must land on.
 
-### 🔴 Recording MUST run under approval mode Manual (07-16)
+### 🔴 Recording MUST run under approval mode Manual AND all-default per-tool tiers (07-16 / 08-05)
 The owner-global chat approval mode (composer chip / `GET /api/agent/approval-mode`) must be
-`manual` while recording. Under `acceptEdits`/`bypass` the gateway executes writes WITHOUT a
-`pending_confirmation` event — R5 (`write dispatched without confirmation`) would flag every such
-write, red by construction, not a product regression. Baseline + fixtures are Manual-semantics
-frozen; a recorder should assert the mode (or set it) before capturing.
+`manual` while recording, **and every per-tool approval tier must be at its factory default**
+(`GET /api/agent/tool-prefs` — zero explicit overrides; `POST /api/agent/tool-prefs/reset`
+restores this) **with an empty send whitelist**. Under `bypass` (or with owner per-tool 'auto'
+overrides) the gateway executes writes WITHOUT a `pending_confirmation` event — R5
+(`write dispatched without confirmation`) would flag every such write, red by construction, not
+a product regression. 08-05 WP-11 note: the FACTORY defaults themselves make some writes
+card-free (catalog `default_approval:'auto'` — email 四写 / draft 三写 / web 二读 /
+skill_uninstall / custom_agent_run_now); R5 exempts exactly those, so an all-default recording
+is green either way — what it must never contain is a card-free execution of a default-ask
+tool. (The 07-16 `acceptEdits` mode is retired; a legacy store row folds to `manual`.)
+Baseline + fixtures are Manual-semantics frozen; a recorder should assert mode + default tiers
+(or set them) before capturing.
 
 ### Normalization the recorder MUST do (so hard rules apply cleanly)
 1. **config hashes are real**: fill `agent_profile_hash` / `installed_skills_hash` / `active_skills_hash`

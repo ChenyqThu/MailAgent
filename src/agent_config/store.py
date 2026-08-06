@@ -400,11 +400,25 @@ CREATE INDEX IF NOT EXISTS idx_policy_rules_agent
     ON policy_rules(capability, context_mode, agent_id, enabled);
 
 -- 07-16 approval-mode switcher：owner 级全局设置 kv（首个键 chat_approval_mode ——
--- chat 授权模式 manual/acceptEdits/bypass 的持久真源）。镜像 policy_rules 纪律：值**只**由
--- owner 显式 UI 动作写入（serve-api verify_cf_access 端点），模型无任何 gateway 工具通道。
+-- chat 授权模式的持久真源；08-05 WP-11 起值域收窄为 manual/bypass，acceptEdits 退役为
+-- per-tool 档预设，存量值由 _migrate_additive 一次性折算）。另一键
+-- send_recipient_whitelist（08-05 WP-11 D2）= send 收件人白名单 JSON 数组（空/缺行 =
+-- send 恒 ask）。镜像 policy_rules 纪律：值**只**由 owner 显式 UI 动作写入（serve-api
+-- verify_cf_access 端点），模型无任何 gateway 工具通道。
 CREATE TABLE IF NOT EXISTS owner_settings (
     key        TEXT PRIMARY KEY,
     value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+
+-- 08-05 WP-11 —— built-in 写工具的 per-tool 审批档**显式覆盖**行（出厂默认在代码：
+-- src/agent_config/tool_prefs.py canonical 注册表；无行 = 跟随默认）。tier 值域 =
+-- TOOL_APPROVAL_TIERS（ask|auto|deny，写侧校验，无 SQL CHECK）。镜像 policy_rules /
+-- owner_settings 纪律：**只**由 owner UI 写入（/api/agent/tool-prefs 端点），无任何
+-- gateway 工具可写；只作用于 manual_chat（gateway 只在 manual run 上拉取消费）。
+CREATE TABLE IF NOT EXISTS tool_approval_pref (
+    tool_name  TEXT PRIMARY KEY,
+    tier       TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
 
@@ -581,6 +595,29 @@ class AgentConfigStore:
             )
             conn.execute(
                 "UPDATE connector_tool SET mode='auto', updated_at=? WHERE enabled=1", (now,)
+            )
+        # 08-05 WP-11 —— acceptEdits 模式退役为 per-tool 档预设：存量
+        # chat_approval_mode='acceptEdits' 行**一次性**行为保持折算——它当年免卡的那
+        # 15 个工具（ACCEPT_EDITS_PRESET）落显式 'auto' 覆盖行，模式改回 'manual'。
+        # INSERT OR IGNORE：owner 若已有同名覆盖行（理论上不可能——本迁移先于端点上线，
+        # 防御性保留）不clobber。幂等判据 = 折算后 mode != 'acceptEdits'，不会重跑。
+        row = conn.execute(
+            "SELECT value FROM owner_settings WHERE key='chat_approval_mode'"
+        ).fetchone()
+        if row is not None and row["value"] == "acceptEdits":
+            from src.agent_config.tool_prefs import ACCEPT_EDITS_PRESET
+
+            now_iso = _now_iso()
+            for name in ACCEPT_EDITS_PRESET:
+                conn.execute(
+                    "INSERT OR IGNORE INTO tool_approval_pref "
+                    "(tool_name, tier, updated_at) VALUES (?, 'auto', ?)",
+                    (name, now_iso),
+                )
+            conn.execute(
+                "UPDATE owner_settings SET value='manual', updated_at=? "
+                "WHERE key='chat_approval_mode'",
+                (now_iso,),
             )
 
     # ======================================================================
@@ -1667,6 +1704,84 @@ class AgentConfigStore:
                 (key, value, _now_iso()),
             )
             conn.commit()
+
+    # ======================================================================
+    # built-in 写工具的 per-tool 审批档（tool_approval_pref，08-05 WP-11）
+    # ======================================================================
+
+    def get_tool_approval_prefs(self) -> dict[str, str]:
+        """全部显式覆盖行 ``{tool_name: tier}``（无行 = 跟随出厂默认，折算在
+        tool_prefs.effective_tool_tier）。值域外脏行原样返回——读侧折算 fail-closed
+        成 ask，这里不做静默清洗（取证友好）。"""
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT tool_name, tier FROM tool_approval_pref"
+            ).fetchall()
+        return {r["tool_name"]: r["tier"] for r in rows}
+
+    def set_tool_approval_pref(self, tool_name: str, tier: Optional[str]) -> None:
+        """写/清一个工具的显式档位覆盖。``tier=None`` = 删行回出厂默认。
+
+        值域校验（TOOL_APPROVAL_TIERS）在 store 层入库即拒；「工具在注册表 + 可配置」
+        的业务校验在 API 层（agent.py）——store 保持单表零业务依赖（api_keys 纪律）。
+        """
+        from src.agent_config.tool_prefs import TOOL_APPROVAL_TIERS
+
+        if tier is not None and tier not in TOOL_APPROVAL_TIERS:
+            raise ValueError(
+                f"tool approval tier {tier!r} not in {TOOL_APPROVAL_TIERS} (or None)"
+            )
+        if not isinstance(tool_name, str) or not tool_name.strip():
+            raise ValueError("tool_name must be a non-empty string")
+        with self._connection() as conn:
+            if tier is None:
+                conn.execute(
+                    "DELETE FROM tool_approval_pref WHERE tool_name=?", (tool_name,)
+                )
+            else:
+                conn.execute(
+                    "INSERT INTO tool_approval_pref (tool_name, tier, updated_at) "
+                    "VALUES (?,?,?) ON CONFLICT(tool_name) DO UPDATE SET "
+                    "tier=excluded.tier, updated_at=excluded.updated_at",
+                    (tool_name, tier, _now_iso()),
+                )
+            conn.commit()
+
+    def bulk_set_tool_approval_prefs(
+        self, tool_names: Iterable[str], tier: Optional[str]
+    ) -> int:
+        """批量设档 / 批量清覆盖（``tier=None`` = Reset 这些工具回默认）。返回处理行数。
+        名单合法性（注册表 + configurable）由 API 层预先裁定——store 只落盘。"""
+        from src.agent_config.tool_prefs import TOOL_APPROVAL_TIERS
+
+        if tier is not None and tier not in TOOL_APPROVAL_TIERS:
+            raise ValueError(
+                f"tool approval tier {tier!r} not in {TOOL_APPROVAL_TIERS} (or None)"
+            )
+        names = [n for n in tool_names if isinstance(n, str) and n.strip()]
+        now = _now_iso()
+        with self._connection() as conn:
+            for name in names:
+                if tier is None:
+                    conn.execute(
+                        "DELETE FROM tool_approval_pref WHERE tool_name=?", (name,)
+                    )
+                else:
+                    conn.execute(
+                        "INSERT INTO tool_approval_pref (tool_name, tier, updated_at) "
+                        "VALUES (?,?,?) ON CONFLICT(tool_name) DO UPDATE SET "
+                        "tier=excluded.tier, updated_at=excluded.updated_at",
+                        (name, tier, now),
+                    )
+            conn.commit()
+        return len(names)
+
+    def reset_tool_approval_prefs(self) -> int:
+        """清空全部显式覆盖（Reset permissions —— 全部工具回出厂默认）。返回删除行数。"""
+        with self._connection() as conn:
+            cur = conn.execute("DELETE FROM tool_approval_pref")
+            conn.commit()
+        return cur.rowcount
 
     # -- internal ----------------------------------------------------------
 

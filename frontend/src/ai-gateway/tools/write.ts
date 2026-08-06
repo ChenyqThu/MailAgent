@@ -25,7 +25,12 @@ import type { z } from 'zod'
 
 import { DomainError, type MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard, ApprovalRisk } from '../security/approval'
-import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
+import {
+  auditedWriteTool,
+  type GatewayApprovalMode,
+  type GatewayToolApprovalPrefs,
+  type GatewayToolAuditCollector
+} from './types'
 import { normalizeContextMode, type AgentContextMode, type AgentRunContext } from './policy'
 // RELATIVE import (not @shared) so the pure-Node poc harness can load the write tools — same
 // rationale as email.ts/sessions.ts. mailboxSemantics is the mirror of the Python single source
@@ -117,6 +122,9 @@ export function createWriteTools(
     approvalMode?: GatewayApprovalMode
     oneShot?: boolean
     contextMode?: AgentContextMode
+    /** 08-05 WP-11 — the per-tool tier map of a MANUAL run (types.ts GatewayToolApprovalPrefs.
+     *  tools). Absent (headless/im/tests) → pre-WP-11 ask semantics, byte-identical. */
+    toolApprovalPrefs?: GatewayToolApprovalPrefs['tools']
     /** S5 W4 (ADR-004 D1/§3.1) — the per-agent run context of a headless custom-agent run. Only
      *  its presence (with a non-empty agentId) UNDER a headless mode turns on the per-agent
      *  domain_write whitelist evaluate below; manual runs never carry one. */
@@ -155,6 +163,8 @@ export function createWriteTools(
         ...toolOpts,
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier ladder (manual only; consumed in types.ts).
+        toolApprovalPrefs: opts.toolApprovalPrefs,
         // Part B — one-shot claim across island + renderer resume (see auditedWriteTool.oneShot).
         oneShot: opts.oneShot,
         // S2 W0 — the run's context mode (auto-approve requires domain_write + manual_chat).

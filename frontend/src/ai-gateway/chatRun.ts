@@ -31,7 +31,11 @@ import {
   parseProviderRef,
   type ResolvedProviderModel
 } from './providerRef'
-import type { GatewayApprovalMode, GatewayToolAuditEntry } from './tools/types'
+import type {
+  GatewayApprovalMode,
+  GatewayToolApprovalPrefs,
+  GatewayToolAuditEntry
+} from './tools/types'
 // S2 W0 (ADR-001 D1) — the run's context mode is a TRUSTED prepareChatRun parameter asserted by
 // each entrypoint in its own code. It is NEVER read from the request body (a client cannot claim
 // manual_chat); absent/unknown fail-closes to 'untrusted_trigger'.
@@ -377,12 +381,28 @@ export async function prepareChatRun(
   // stashed MANUAL run re-resolves here, so the mode in effect at approval time is the owner's
   // CURRENT one (consistent with "hot-read at decision time"). Resolver absent (harness/test
   // cfgs) or failing → the request-level mode stands (fail-closed to manual semantics).
+  // 08-05 WP-11 — only 'bypass' overlays now: the 'acceptEdits' mode is retired (server-side it
+  // folds to 'manual' + per-tool prefs; a stale wire value is ignored here, fail-closed).
   if (contextMode === 'manual_chat' && cfg.resolveGlobalApprovalMode) {
     try {
       const globalMode = await cfg.resolveGlobalApprovalMode()
-      if (globalMode === 'acceptEdits' || globalMode === 'bypass') approvalMode = globalMode
+      if (globalMode === 'bypass') approvalMode = globalMode
     } catch {
       /* fail-closed — keep the request-level ('manual') semantics */
+    }
+  }
+  // 08-05 WP-11 — the per-tool approval tiers + send whitelist of a MANUAL run, hot-read per run
+  // (same "hot-read at decision time" semantics as the mode above: a stashed-approval resume
+  // re-resolves, so the tiers in effect are the owner's CURRENT ones). 🔴 MANUAL_CHAT-GATED at
+  // three layers: not resolved here for non-manual runs, dropped by buildGatewayTools for
+  // non-manual assemblies, and re-checked at needsApproval consumption (types.ts). Resolver
+  // absent/failing → null → every write asks (fail-closed — never fewer cards).
+  let toolApprovalPrefs: GatewayToolApprovalPrefs | null = null
+  if (contextMode === 'manual_chat' && cfg.resolveToolApprovalPrefs) {
+    try {
+      toolApprovalPrefs = (await cfg.resolveToolApprovalPrefs()) ?? null
+    } catch {
+      toolApprovalPrefs = null // fail-closed — ask semantics
     }
   }
   // 0804 dogfood 主修 —「重启后第一轮 connector 不可用」. The lifecycle's startup prewarm of the
@@ -413,7 +433,17 @@ export async function prepareChatRun(
     }
   }
   const auditEntries: GatewayToolAuditEntry[] = []
-  const tools = cfg.buildTools?.(auditEntries, approvalMode, contextMode)
+  // WP-11 — the 4th slot (agentRunContext) belongs to the HEADLESS wrapper's own signature
+  // (wrapCfgForAgentRun injects it); manual callers pass undefined there and the prefs ride the
+  // 5th slot. The headless wrapper's 3-arg signature structurally drops the 5th argument, so a
+  // headless run can never receive the prefs even if this call site changes.
+  const tools = cfg.buildTools?.(
+    auditEntries,
+    approvalMode,
+    contextMode,
+    undefined,
+    toolApprovalPrefs
+  )
   const hasTools = tools != null && Object.keys(tools).length > 0
   // W6 — the run holds the suggest_followups tool (manual chat with a real gateway ToolSet). Drives
   // (a) the follow-up guidance block in the system prompt below and (b) the hasToolCall stop

@@ -18,7 +18,12 @@ import { describe, expect, test } from 'vitest'
 import type { Tool } from 'ai'
 
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
-import { createSendTools } from '../../../src/ai-gateway/tools/send'
+import {
+  bareAddress,
+  createSendTools,
+  recipientInWhitelist,
+  sendRecipientsAllWhitelisted
+} from '../../../src/ai-gateway/tools/send'
 import { hashOutbound, signSendApprovalToken } from '../../../src/ai-gateway/security/sendToken'
 import type { GatewayToolAuditEntry } from '../../../src/ai-gateway/tools/types'
 import { mockDomain, okEnvelope } from './_helpers'
@@ -45,7 +50,11 @@ interface Harness {
   sentBodies: SentBody[]
 }
 
-function harness(opts?: { now?: () => number; ttlMs?: number }): Harness {
+function harness(opts?: {
+  now?: () => number
+  ttlMs?: number
+  sendRecipientWhitelist?: readonly string[]
+}): Harness {
   const collector: GatewayToolAuditEntry[] = []
   const guard = new ApprovalGuard({ now: opts?.now, ttlMs: opts?.ttlMs })
   const sentBodies: SentBody[] = []
@@ -64,7 +73,8 @@ function harness(opts?: { now?: () => number; ttlMs?: number }): Harness {
   })
   const tool = createSendTools(domain, collector, guard, {
     signingSecret: SECRET,
-    contextMode: 'manual_chat'
+    contextMode: 'manual_chat',
+    sendRecipientWhitelist: opts?.sendRecipientWhitelist
   }).email_prepare_send
   return { tool, collector, guard, sentBodies }
 }
@@ -197,5 +207,87 @@ describe('email_prepare_send — blocking approval + double-guard send', () => {
       /E_INVALID_ARG/
     )
     expect(h.sentBodies).toHaveLength(0)
+  })
+})
+
+// ── 08-05 WP-11 (D2=a) — the recipient whitelist, the send's ONE structured card-free shape ────
+
+describe('email_prepare_send — recipient whitelist (WP-11 D2=a)', () => {
+  test('验收③ — EMPTY whitelist → the send always asks (no bare auto exists for the send)', () => {
+    const h = harness({ sendRecipientWhitelist: [] })
+    expect(needsApprovalOf(h.tool)(INPUT, { toolCallId: 'tc-wl0', messages: [] })).toBe(true)
+    const h2 = harness() // absent (resolver failure / no prefs) — same floor
+    expect(needsApprovalOf(h2.tool)(INPUT, { toolCallId: 'tc-wl0b', messages: [] })).toBe(true)
+  })
+
+  test("every recipient whitelisted → card-free send, audited 'auto_tool_pref', double guard intact", async () => {
+    const h = harness({ sendRecipientWhitelist: ['@example-corp.test'] })
+    const input = {
+      ...INPUT,
+      cc: ['manager@example-corp.test']
+    }
+    expect(needsApprovalOf(h.tool)(input, { toolCallId: 'tc-wl1', messages: [] })).toBe(false)
+    const out = await executeOf(h.tool)(input, { toolCallId: 'tc-wl1', messages: [] })
+    expect(out).toMatchObject({ sent: true })
+    expect(h.sentBodies).toHaveLength(1)
+    // the double guard ran on the skip: content hash + one-shot idempotency + distinct audit.
+    expect(h.collector[0]).toMatchObject({
+      toolName: 'email_prepare_send',
+      status: 'ok',
+      confirmationTier: 'edit',
+      approvalStatus: 'auto_tool_pref'
+    })
+    expect(h.collector[0].contentHash).toBeTruthy()
+    expect(h.collector[0].idempotencyKey).toBeTruthy()
+    // replay → E_APPROVAL_USED (one-shot consume unchanged)
+    await expect(executeOf(h.tool)(input, { toolCallId: 'tc-wl1', messages: [] })).rejects.toThrow(
+      /E_APPROVAL_USED/
+    )
+  })
+
+  test('ONE non-whitelisted recipient (bcc included) → the card comes back', () => {
+    const h = harness({ sendRecipientWhitelist: ['@example-corp.test'] })
+    expect(
+      needsApprovalOf(h.tool)(
+        { ...INPUT, bcc: ['spy@evil.test'] },
+        { toolCallId: 'tc-wl2', messages: [] }
+      )
+    ).toBe(true)
+  })
+
+  test('the whitelist free pass is manual_chat-gated (consumption side)', () => {
+    const collector: GatewayToolAuditEntry[] = []
+    const tool = createSendTools(
+      mockDomain(() => okEnvelope({ sent: true })),
+      collector,
+      new ApprovalGuard(),
+      {
+        signingSecret: SECRET,
+        contextMode: 'cron_headless',
+        sendRecipientWhitelist: ['@example-corp.test']
+      }
+    ).email_prepare_send
+    expect(needsApprovalOf(tool)(INPUT, { toolCallId: 'tc-wl3', messages: [] })).toBe(true)
+  })
+
+  test('matcher semantics: exact email, @domain suffix anchored on the @, display names, junk', () => {
+    expect(bareAddress('Jane Doe <A@Corp.Test>')).toBe('a@corp.test')
+    expect(bareAddress(' a@corp.test ')).toBe('a@corp.test')
+    const wl = ['a@corp.test', '@corp.test']
+    expect(recipientInWhitelist('A@CORP.TEST', wl)).toBe(true)
+    expect(recipientInWhitelist('Jane <b@corp.test>', wl)).toBe(true) // domain entry
+    // 🔴 suffix is anchored on the '@' — a lookalike domain can never ride the entry.
+    expect(recipientInWhitelist('x@evil-corp.test', wl)).toBe(false)
+    expect(recipientInWhitelist('x@corp.test.evil.io', wl)).toBe(false)
+    expect(recipientInWhitelist('not-an-email', wl)).toBe(false)
+    // all-recipients predicate: empty whitelist / empty recipients never pass
+    expect(sendRecipientsAllWhitelisted({ to: ['a@corp.test'] } as never, [])).toBe(false)
+    expect(sendRecipientsAllWhitelisted({ to: [] } as never, wl)).toBe(false)
+    expect(
+      sendRecipientsAllWhitelisted({ to: ['a@corp.test'], cc: ['b@corp.test'] } as never, wl)
+    ).toBe(true)
+    expect(
+      sendRecipientsAllWhitelisted({ to: ['a@corp.test'], cc: ['c@other.test'] } as never, wl)
+    ).toBe(false)
   })
 })

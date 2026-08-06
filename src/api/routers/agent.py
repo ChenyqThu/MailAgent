@@ -241,20 +241,24 @@ async def rollback_profile_doc(name: str, request: Request, body: Optional[dict[
     return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
 
 
-# ── chat 授权模式（07-16 approval-mode switcher）─────────────────────────────────────
+# ── chat 授权模式（07-16 approval-mode switcher；08-05 WP-11 二档化）───────────────────
 #
-# owner 级全局设置：manual（默认，字节级现状）/ acceptEdits（编辑放行）/ bypass（完全授权）。
-# 持久真源 = agent_config.db owner_settings 行；gateway 判定时经 GET 热读（读失败 fail-closed
-# 回落 manual）。写入**只**来自 owner UI（verify_cf_access 双腿：本地 token + CF JWT，桌面与
-# 远程 web 同端点）——刻意不暴露任何 gateway 工具（防注入自我提权，policy_rules 同款纪律）。
+# owner 级全局设置：manual（默认——per-tool 审批档决定弹不弹卡）/ bypass（完全授权，
+# D1=a：压过 per-tool ask，无例外）。**acceptEdits 已退役**（08-05 WP-11）：它的按名
+# 集合降级为 per-tool 档的「编辑放行」一键预设（POST /tool-prefs/preset）；存量存储值
+# 由 store._migrate_additive 一次性行为保持折算（15 工具落显式 auto + 模式改 manual）。
+# 持久真源 = agent_config.db owner_settings 行；gateway 判定时经 GET 热读（读失败
+# fail-closed 回落 manual）。写入**只**来自 owner UI（verify_cf_access 双腿：本地 token
+# + CF JWT，桌面与远程 web 同端点）——刻意不暴露任何 gateway 工具（防注入自我提权，
+# policy_rules 同款纪律）。
 
-CHAT_APPROVAL_MODES: tuple[str, ...] = ("manual", "acceptEdits", "bypass")
+CHAT_APPROVAL_MODES: tuple[str, ...] = ("manual", "bypass")
 _APPROVAL_MODE_KEY = "chat_approval_mode"
 
 
 @router.get("/approval-mode", dependencies=[Depends(verify_cf_access)])
 async def get_approval_mode(request: Request):
-    """读全局 chat 授权模式。无行 / 脏值 → 'manual'（fail-closed 默认）。"""
+    """读全局 chat 授权模式。无行 / 脏值 / 退役的 'acceptEdits' → 'manual'（fail-closed）。"""
     raw = get_agent_config_store().get_owner_setting(_APPROVAL_MODE_KEY)
     mode = raw if raw in CHAT_APPROVAL_MODES else "manual"
     return success_envelope({"mode": mode}, request=request, source="sqlite")
@@ -262,7 +266,8 @@ async def get_approval_mode(request: Request):
 
 @router.put("/approval-mode", dependencies=[Depends(verify_cf_access)])
 async def set_approval_mode(request: Request, body: Optional[dict[str, Any]] = None):
-    """写全局 chat 授权模式。body = {mode: 'manual'|'acceptEdits'|'bypass'}；越域值 400。
+    """写全局 chat 授权模式。body = {mode: 'manual'|'bypass'}；越域值（含退役的
+    'acceptEdits'——08-05 WP-11，降级归宿是 POST /tool-prefs/preset）一律 400。
 
     切换（尤其 bypass）落一条 INFO 审计日志 —— 这是所有 HITL 弹卡语义的全局越权开关。"""
     mode = (body or {}).get("mode")
@@ -279,6 +284,216 @@ async def set_approval_mode(request: Request, body: Optional[dict[str, Any]] = N
 
     logger.info(f"chat approval mode switched: {previous} → {mode} (owner UI)")
     return success_envelope({"mode": mode}, request=request, source="sqlite")
+
+
+# ── built-in 写工具的 per-tool 审批档（08-05 WP-11）──────────────────────────────────
+#
+# canonical 注册表 = src/agent_config/tool_prefs.py（出厂默认档 + configurable +
+# danger_auto）；显式覆盖行 = tool_approval_pref 表。**只作用于 manual_chat**——gateway
+# 只在 manual run 上拉取（chatRun.resolveToolApprovalPrefs），headless/im 结构性拿不到。
+# owner-UI 专属写面（verify_cf_access；无任何 gateway 工具可写——policy_rules 同款纪律）。
+
+_SEND_WHITELIST_KEY = "send_recipient_whitelist"
+
+
+def _send_whitelist(store) -> list[str]:
+    """读 send 收件人白名单（owner_settings JSON 数组）；缺行/坏 JSON → []（= 恒 ask）。"""
+    raw = store.get_owner_setting(_SEND_WHITELIST_KEY)
+    if not raw:
+        return []
+    try:
+        data = json.loads(raw)
+    except (ValueError, TypeError):
+        return []
+    return [e for e in data if isinstance(e, str)] if isinstance(data, list) else []
+
+
+def _tool_prefs_payload(store) -> dict[str, Any]:
+    """GET /tool-prefs 的数据形状：全部注册表工具（分组有序）+ send 白名单 + 预设成员表。"""
+    from src.agent_config.tool_prefs import (
+        ACCEPT_EDITS_PRESET,
+        BUILTIN_TOOL_POLICIES,
+        effective_tool_tier,
+    )
+
+    overrides = store.get_tool_approval_prefs()
+    tools = [
+        {
+            "toolName": p.tool_name,
+            "group": p.group,
+            "defaultTier": p.default_tier,
+            "tier": overrides.get(p.tool_name),  # 显式覆盖（null = 跟随默认）
+            "effectiveTier": effective_tool_tier(p.tool_name, overrides.get(p.tool_name)),
+            "configurable": p.configurable,
+            "dangerAuto": p.danger_auto,
+        }
+        for p in BUILTIN_TOOL_POLICIES
+    ]
+    return {
+        "tools": tools,
+        "sendWhitelist": _send_whitelist(store),
+        "acceptEditsPreset": list(ACCEPT_EDITS_PRESET),
+    }
+
+
+def _require_configurable(tool_name: str):
+    """PUT/bulk 的业务校验：工具在注册表且 configurable。返回 policy 行；否则 APIError。"""
+    from src.agent_config.tool_prefs import BUILTIN_TOOL_POLICY_BY_NAME
+
+    policy = BUILTIN_TOOL_POLICY_BY_NAME.get(tool_name)
+    if policy is None:
+        raise APIError(
+            "E_NOT_FOUND",
+            f"unknown built-in write tool: {tool_name}",
+            http_status=404,
+            source="sqlite",
+        )
+    if not policy.configurable:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"{tool_name} is not tier-configurable (its approval shape is fixed; "
+            "send uses the recipient whitelist, run_command uses policy rules)",
+            http_status=400,
+            source="sqlite",
+        )
+    return policy
+
+
+@router.get("/tool-prefs", dependencies=[Depends(verify_cf_access)])
+async def get_tool_prefs(request: Request):
+    """全部 built-in 写工具的审批档（出厂默认 + 显式覆盖 + 折算 effective）+ send 白名单。"""
+    payload = _tool_prefs_payload(get_agent_config_store())
+    return success_envelope(payload, request=request, source="sqlite",
+                            meta_extra={"count": len(payload["tools"])})
+
+
+@router.put("/tool-prefs/{tool_name}", dependencies=[Depends(verify_cf_access)])
+async def set_tool_pref(tool_name: str, request: Request,
+                        body: Optional[dict[str, Any]] = None):
+    """写/清一个工具的显式档位。body = {tier: 'ask'|'auto'|'deny'|null}（null = 回默认）。
+
+    危险工具（dangerAuto）设 auto 的红警告 + 一次性确认在前端（WP-10 destructive
+    confirm 同款）——服务端不重复拦（owner UI 是唯一调用方）。"""
+    from src.agent_config.tool_prefs import TOOL_APPROVAL_TIERS
+
+    _require_configurable(tool_name)
+    tier = (body or {}).get("tier")
+    if tier is not None and tier not in TOOL_APPROVAL_TIERS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"body.tier must be one of {TOOL_APPROVAL_TIERS} or null",
+            http_status=400,
+            source="sqlite",
+        )
+    store = get_agent_config_store()
+    store.set_tool_approval_pref(tool_name, tier)
+    logger.info(f"tool approval pref: {tool_name} → {tier or 'default'} (owner UI)")
+    return success_envelope(_tool_prefs_payload(store), request=request, source="sqlite")
+
+
+@router.post("/tool-prefs/bulk", dependencies=[Depends(verify_cf_access)])
+async def bulk_set_tool_prefs(request: Request, body: Optional[dict[str, Any]] = None):
+    """组级批量设档。body = {tier: 'ask'|'auto'|'deny'|null, group?: str, tools?: [names]}。
+
+    ``group`` 与 ``tools`` 二选一（都缺 = 全部可配置工具）。目标集合里不可配置的工具
+    **跳过**（组级批量把 send/run_command 也改了会静默打穿它们的专属形状）；显式
+    ``tools`` 名单里出现不可配置/未知名则整批 400（显式点名必须精确）。"""
+    from src.agent_config.tool_prefs import (
+        BUILTIN_TOOL_POLICIES,
+        TOOL_APPROVAL_TIERS,
+        TOOL_PREF_GROUPS,
+    )
+
+    raw = body or {}
+    tier = raw.get("tier")
+    if tier is not None and tier not in TOOL_APPROVAL_TIERS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"body.tier must be one of {TOOL_APPROVAL_TIERS} or null",
+            http_status=400,
+            source="sqlite",
+        )
+    group = raw.get("group")
+    explicit = raw.get("tools")
+    if group is not None and explicit is not None:
+        raise APIError("E_INVALID_ARG", "pass either body.group or body.tools, not both",
+                       http_status=400, source="sqlite")
+    if group is not None:
+        if group not in TOOL_PREF_GROUPS:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"body.group must be one of {TOOL_PREF_GROUPS}",
+                http_status=400,
+                source="sqlite",
+            )
+        names = [p.tool_name for p in BUILTIN_TOOL_POLICIES
+                 if p.group == group and p.configurable]
+    elif explicit is not None:
+        if not isinstance(explicit, list) or not all(isinstance(n, str) for n in explicit):
+            raise APIError("E_INVALID_ARG", "body.tools must be a list of tool names",
+                           http_status=400, source="sqlite")
+        for name in explicit:
+            _require_configurable(name)  # 显式点名必须逐个合法（未知/不可配置 → 4xx）
+        names = list(dict.fromkeys(explicit))
+    else:
+        names = [p.tool_name for p in BUILTIN_TOOL_POLICIES if p.configurable]
+    store = get_agent_config_store()
+    updated = store.bulk_set_tool_approval_prefs(names, tier)
+    logger.info(
+        f"tool approval prefs bulk: {updated} tools → {tier or 'default'} "
+        f"(group={group or '-'}, owner UI)"
+    )
+    payload = _tool_prefs_payload(store)
+    payload["updated"] = updated
+    return success_envelope(payload, request=request, source="sqlite")
+
+
+@router.post("/tool-prefs/preset", dependencies=[Depends(verify_cf_access)])
+async def apply_tool_prefs_preset(request: Request, body: Optional[dict[str, Any]] = None):
+    """套用一键预设。body = {preset: 'acceptEdits'}——07-16 acceptEdits 集合的降级归宿：
+    把 15 个预设成员批量设**显式 auto**（成员表 canonical 在 tool_prefs.py，前端不手抄）。"""
+    from src.agent_config.tool_prefs import ACCEPT_EDITS_PRESET
+
+    preset = (body or {}).get("preset")
+    if preset != "acceptEdits":
+        raise APIError("E_INVALID_ARG", "body.preset must be 'acceptEdits'",
+                       http_status=400, source="sqlite")
+    store = get_agent_config_store()
+    updated = store.bulk_set_tool_approval_prefs(ACCEPT_EDITS_PRESET, "auto")
+    logger.info(f"tool approval prefs preset 'acceptEdits' applied ({updated} tools, owner UI)")
+    payload = _tool_prefs_payload(store)
+    payload["updated"] = updated
+    return success_envelope(payload, request=request, source="sqlite")
+
+
+@router.post("/tool-prefs/reset", dependencies=[Depends(verify_cf_access)])
+async def reset_tool_prefs(request: Request):
+    """Reset permissions —— 清空全部显式覆盖，所有工具回出厂默认档。"""
+    store = get_agent_config_store()
+    removed = store.reset_tool_approval_prefs()
+    logger.info(f"tool approval prefs reset ({removed} overrides cleared, owner UI)")
+    payload = _tool_prefs_payload(store)
+    payload["removed"] = removed
+    return success_envelope(payload, request=request, source="sqlite")
+
+
+@router.put("/send-whitelist", dependencies=[Depends(verify_cf_access)])
+async def set_send_whitelist(request: Request, body: Optional[dict[str, Any]] = None):
+    """写 send 收件人白名单（D2=a：send 唯一的免卡形状）。body = {recipients: [str]}。
+
+    条目 = 完整邮箱或 '@domain' 域名形状（tool_prefs.validate_send_whitelist 校验 +
+    小写归一去重）；空数组 = 清空 = send 恒 ask。非法条目整批 400。"""
+    from src.agent_config.tool_prefs import validate_send_whitelist
+
+    recipients = (body or {}).get("recipients")
+    try:
+        normalized = validate_send_whitelist(recipients)
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite") from exc
+    store = get_agent_config_store()
+    store.set_owner_setting(_SEND_WHITELIST_KEY, json.dumps(normalized, ensure_ascii=False))
+    logger.info(f"send recipient whitelist updated ({len(normalized)} entries, owner UI)")
+    return success_envelope({"sendWhitelist": normalized}, request=request, source="sqlite")
 
 
 # ── skill 管理（PR5 —— enablement 迁后端 + install/uninstall）────────────────────────

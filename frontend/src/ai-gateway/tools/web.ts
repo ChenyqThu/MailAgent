@@ -32,7 +32,12 @@ import type { z } from 'zod'
 
 import type { DomainPolicyVerdict, MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard, ApprovalRisk } from '../security/approval'
-import { auditedWriteTool, type GatewayApprovalMode, type GatewayToolAuditCollector } from './types'
+import {
+  auditedWriteTool,
+  type GatewayApprovalMode,
+  type GatewayToolApprovalPrefs,
+  type GatewayToolAuditCollector
+} from './types'
 import {
   normalizeContextMode,
   parseWebGrant,
@@ -60,6 +65,9 @@ export function createWebTools(
   opts: {
     a2uiEnabled?: boolean
     approvalMode?: GatewayApprovalMode
+    /** 08-05 WP-11 — the per-tool tier map of a MANUAL run (see types.ts GatewayToolApprovalPrefs).
+     *  Absent (headless/im/tests) → pre-WP-11 ask semantics, byte-identical. */
+    toolApprovalPrefs?: GatewayToolApprovalPrefs['tools']
     oneShot?: boolean
     contextMode?: AgentContextMode
     /** S6 W3 (ADR-004 rev3.1 D2) — the per-agent run context of a headless custom-agent run. Only
@@ -117,6 +125,8 @@ export function createWebTools(
         ...toolOpts,
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier ladder (manual only; consumed in types.ts).
+        toolApprovalPrefs: opts.toolApprovalPrefs,
         oneShot: opts.oneShot,
         // S2 W0 — both tools are class web (policy.ts; 'outbound' until ADR-004 rev3.1 split the
         // class): never auto-approved by approvalMode, headless registration only under the grant.

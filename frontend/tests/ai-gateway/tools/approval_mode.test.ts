@@ -1,20 +1,23 @@
-// PART 2 (auto-approval) — needsApproval gating by approvalMode.
+// PART 2 (auto-approval) + 08-05 WP-11 (per-tool tiers) — needsApproval gating.
 //
-// 'always' (default / absent) → every write tool asks (preview + edit), the blocking send asks.
-// 'auto-reversible'           → reversible preview-tier writes skip the card (needsApproval false);
-//                               edit-tier still asks; the irreversible send ALWAYS asks (safety floor).
-// The approval record is always registered (execute's guard.verify + the audit need it), so an
-// auto-approved preview write still executes through guard.verify and audits approval_status='approved'.
+// 'always' (default / absent) → without prefs every write tool asks (preview + edit), the
+//                               blocking send asks (pre-WP-11 byte-identical).
+// 'auto-reversible'           → reversible preview-tier writes skip the card (needsApproval
+//                               false); edit-tier still asks; the send ALWAYS asks.
+// per-tool tiers (WP-11)      → the manual ladder (F §4.3): bypass > explicit owner tier >
+//                               policy_rules > auto-reversible > factory-default tier. Audited
+//                               'auto_tool_pref' on a tier skip; 'deny' strips at assembly +
+//                               hard-rejects at execute (belt).
+// 'bypass' (07-16 / D1=a)     → everything auto-approves, send + exec + notion_agent included
+//                               (08-05: BYPASS_STILL_ASK retired — bypass outranks per-tool ask).
+//
+// The 07-16 'acceptEdits' mode is RETIRED (08-05 WP-11): its by-name sets moved to the Python
+// data layer (tool_prefs.py ACCEPT_EDITS_PRESET); the two-set partition completeness gate moved
+// with them → tests/config/test_tool_prefs_catalog_parity.py (registry ↔ tool_catalog.json).
 //
 // S2 W0 (ADR-001 D3) — auto-approve additionally requires class==='domain_write' AND
-// contextMode==='manual_chat': a preview-tier capability change (set_skill_enabled) now ALWAYS
-// asks (the auto-reversible escape is closed), and outside manual_chat nothing auto-approves.
-// Test factories pass contextMode:'manual_chat' explicitly (the run-mode a renderer session has);
-// the mode is a trusted server parameter, fail-closed 'untrusted_trigger' when absent.
-
-import { readFileSync } from 'node:fs'
-import { dirname, resolve } from 'node:path'
-import { fileURLToPath } from 'node:url'
+// contextMode==='manual_chat'; outside manual_chat nothing auto-approves and per-tool prefs are
+// never consulted (structural: buildGatewayTools drops them + types.ts re-checks).
 
 import { describe, expect, test } from 'vitest'
 
@@ -30,18 +33,15 @@ import { createExecTools } from '../../../src/ai-gateway/tools/exec'
 import { createSkillSupplyTools } from '../../../src/ai-gateway/tools/skill_supply'
 import { createCustomAgentTools } from '../../../src/ai-gateway/tools/agents'
 import { createCalendarWriteTools } from '../../../src/ai-gateway/tools/calendar'
-import {
-  ACCEPT_EDITS_ASK_TOOLS,
-  ACCEPT_EDITS_AUTO_APPROVE_TOOLS,
-  BYPASS_STILL_ASK,
-  GATEWAY_TOOL_CLASSES
-} from '../../../src/ai-gateway/tools/policy'
 import type { AgentContextMode } from '../../../src/ai-gateway/tools/policy'
 import type {
   GatewayApprovalMode,
+  GatewayToolApprovalPrefs,
   GatewayToolAuditEntry
 } from '../../../src/ai-gateway/tools/types'
 import { mockDomain, okEnvelope } from './_helpers'
+
+type PrefMap = GatewayToolApprovalPrefs['tools']
 
 const needsApprovalOf = (tool: Tool) =>
   tool.needsApproval as (
@@ -56,7 +56,8 @@ const executeOf = (tool: Tool) =>
 
 function writeTools(
   approvalMode?: GatewayApprovalMode,
-  contextMode: AgentContextMode | undefined = 'manual_chat'
+  contextMode: AgentContextMode | undefined = 'manual_chat',
+  toolApprovalPrefs?: PrefMap
 ): {
   tools: Record<string, Tool>
   guard: ApprovalGuard
@@ -70,7 +71,11 @@ function writeTools(
     domainCalls.push(url)
     return okEnvelope({ updated_ids: [9], outbox_entries: [], is_pinned: true, changed: true })
   })
-  const tools = createWriteTools(domain, collector, guard, { approvalMode, contextMode })
+  const tools = createWriteTools(domain, collector, guard, {
+    approvalMode,
+    contextMode,
+    toolApprovalPrefs
+  })
   return { tools, guard, collector, domainCalls }
 }
 
@@ -87,18 +92,20 @@ function sendTool(): { tool: Tool } {
 
 function selfMountTools(
   approvalMode?: GatewayApprovalMode,
-  contextMode: AgentContextMode | undefined = 'manual_chat'
+  contextMode: AgentContextMode | undefined = 'manual_chat',
+  toolApprovalPrefs?: PrefMap
 ): { tools: Record<string, Tool>; collector: GatewayToolAuditEntry[] } {
   const collector: GatewayToolAuditEntry[] = []
   const domain = mockDomain(() => okEnvelope({ name: 'email', enabled: true }))
   const tools = createSelfMountTools(domain, collector, new ApprovalGuard(), {
     approvalMode,
-    contextMode
+    contextMode,
+    toolApprovalPrefs
   })
   return { tools, collector }
 }
 
-describe("approvalMode 'always' (default) — every write asks", () => {
+describe("approvalMode 'always' (default) — without prefs every write asks (pre-WP-11 parity)", () => {
   test('preview-tier (email_flag / email_pin / email_archive / email_resync) → needsApproval true', async () => {
     const { tools } = writeTools('always')
     for (const name of ['email_flag', 'email_pin', 'email_archive', 'email_resync']) {
@@ -141,7 +148,7 @@ describe("approvalMode 'auto-reversible' — reversible preview writes skip the 
     }
   })
 
-  test('edit-tier (email_draft_reply) STILL asks → needsApproval true', async () => {
+  test('edit-tier (email_draft_reply) STILL asks without prefs → needsApproval true', async () => {
     const { tools } = writeTools('auto-reversible')
     const needs = await needsApprovalOf(tools.email_draft_reply)(
       { internal_id: 9, body_markdown: 'hi' },
@@ -167,37 +174,328 @@ describe("approvalMode 'auto-reversible' — reversible preview writes skip the 
       toolName: 'email_flag',
       status: 'ok',
       confirmationTier: 'preview',
-      // codex r1 P2-4 — a card-skip must be distinguishable from a human decision: the
-      // reversible skip now audits 'auto_reversible' ('approved' is reserved for real card
-      // approvals). approval_status is free-form TEXT in chat_tool_call — no migration.
       approvalStatus: 'auto_reversible'
     })
     expect(collector[0].approvalHash).toMatch(/^[0-9a-f]{64}$/)
   })
 })
 
-describe('blocking send (email_prepare_send) — ALWAYS asks regardless of mode (safety floor)', () => {
-  // The send tool takes no approvalMode param; its needsApproval hard-returns true. There is no
-  // mode threading that can relax it — assert it asks even though we built it with no mode (= the
-  // gateway never passes a mode to createSendTools).
-  test('needsApproval true (the tool has no path to auto-approve)', async () => {
-    const { tool } = sendTool()
-    const needs = await needsApprovalOf(tool)(
-      { to: ['x@corp.test'], subject: 's', body_markdown: 'b' },
-      { toolCallId: 'tc-send', messages: [] }
+// ── 08-05 WP-11 — the per-tool tier ladder ─────────────────────────────────────────────────────
+
+describe('WP-11 — factory-default tiers (source "default")', () => {
+  const DEFAULT_AUTO_PREFS: PrefMap = {
+    email_flag: { tier: 'auto', source: 'default' },
+    email_draft_reply: { tier: 'auto', source: 'default' },
+    email_draft_compose: { tier: 'auto', source: 'default' },
+    email_draft_update: { tier: 'auto', source: 'default' }
+  }
+
+  test('验收① — draft writes with the factory-default auto tier no longer card', async () => {
+    const { tools } = writeTools('always', 'manual_chat', DEFAULT_AUTO_PREFS)
+    for (const name of ['email_draft_reply', 'email_draft_compose', 'email_draft_update']) {
+      const needs = await needsApprovalOf(tools[name])(
+        {
+          internal_id: 9,
+          draft_internal_id: 9,
+          body_markdown: 'hi',
+          mode: 'new',
+          to: ['a@x.test']
+        },
+        { toolCallId: `tc-def-${name}`, messages: [] }
+      )
+      expect(needs, `${name} should be card-free on its default auto tier`).toBe(false)
+    }
+  })
+
+  test('验收① — web_search / web_fetch with the factory-default auto tier no longer card', async () => {
+    const collector: GatewayToolAuditEntry[] = []
+    const domain = mockDomain(() => okEnvelope({ ok: true }))
+    const tools = createWebTools(domain, collector, new ApprovalGuard(), {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: {
+        web_fetch: { tier: 'auto', source: 'default' },
+        web_search: { tier: 'auto', source: 'default' }
+      }
+    })
+    for (const [name, input] of [
+      ['web_fetch', { url: 'https://example.test/x' }],
+      ['web_search', { query: 'q' }]
+    ] as const) {
+      const needs = await needsApprovalOf(tools[name])(input, {
+        toolCallId: `tc-def-${name}`,
+        messages: []
+      })
+      expect(needs, `${name} should be card-free on its default auto tier`).toBe(false)
+    }
+  })
+
+  test("a default-auto skip executes + audits 'auto_tool_pref' (never 'approved')", async () => {
+    const { tools, domainCalls, collector } = writeTools(
+      'always',
+      'manual_chat',
+      DEFAULT_AUTO_PREFS
+    )
+    const input = { internal_id: 9, is_flagged: true }
+    expect(
+      await needsApprovalOf(tools.email_flag)(input, { toolCallId: 'tc-dfa', messages: [] })
+    ).toBe(false)
+    await executeOf(tools.email_flag)(input, { toolCallId: 'tc-dfa', messages: [] })
+    expect(domainCalls).toHaveLength(1)
+    expect(collector[0]).toMatchObject({
+      toolName: 'email_flag',
+      status: 'ok',
+      confirmationTier: 'preview',
+      approvalStatus: 'auto_tool_pref'
+    })
+    expect(collector[0].approvalHash).toMatch(/^[0-9a-f]{64}$/)
+  })
+
+  test('a default-ASK tier keeps the card (calendar three writes stay ask by default)', async () => {
+    const collector: GatewayToolAuditEntry[] = []
+    const domain = mockDomain(() => okEnvelope({ ok: true }))
+    const tools = createCalendarWriteTools(domain, collector, new ApprovalGuard(), {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: {
+        calendar_event_reschedule: { tier: 'ask', source: 'default' },
+        calendar_event_rsvp: { tier: 'ask', source: 'default' },
+        calendar_event_delete: { tier: 'ask', source: 'default' }
+      }
+    })
+    for (const name of [
+      'calendar_event_reschedule',
+      'calendar_event_rsvp',
+      'calendar_event_delete'
+    ]) {
+      const needs = await needsApprovalOf(tools[name])(
+        { event_id: 'ev1' },
+        { toolCallId: `tc-cal-${name}`, messages: [] }
+      )
+      expect(needs, `${name} must keep asking on its default ask tier`).toBe(true)
+    }
+  })
+
+  test('prefs absent (resolver failure / harness cfg) → every write asks (fail-closed)', async () => {
+    const { tools } = writeTools('always', 'manual_chat', undefined)
+    const needs = await needsApprovalOf(tools.email_draft_reply)(
+      { internal_id: 9, body_markdown: 'hi' },
+      { toolCallId: 'tc-nofail', messages: [] }
     )
     expect(needs).toBe(true)
   })
 })
 
-// ── S2 W0 (ADR-001 D3) — contextMode × toolClass matrix ────────────────────────────────────────
+describe('WP-11 — explicit owner tiers (source "owner", ladder ④)', () => {
+  test("owner 'auto' on a default-ask tool skips the card (audits 'auto_tool_pref')", async () => {
+    const collector: GatewayToolAuditEntry[] = []
+    const domain = mockDomain(() => okEnvelope({ ok: true }))
+    const tools = createCalendarWriteTools(domain, collector, new ApprovalGuard(), {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: { calendar_event_reschedule: { tier: 'auto', source: 'owner' } }
+    })
+    const input = {
+      event_id: 'ev1',
+      scope: 'series',
+      new_start: '2026-08-06T10:00:00',
+      new_end: '2026-08-06T11:00:00',
+      timezone: 'America/Los_Angeles'
+    }
+    expect(
+      await needsApprovalOf(tools.calendar_event_reschedule)(input, {
+        toolCallId: 'tc-own-auto',
+        messages: []
+      })
+    ).toBe(false)
+    await executeOf(tools.calendar_event_reschedule)(input, {
+      toolCallId: 'tc-own-auto',
+      messages: []
+    })
+    expect(collector[0]).toMatchObject({ approvalStatus: 'auto_tool_pref' })
+  })
 
-describe('S2 W0 — set_skill_enabled (preview + capability_change) NEVER auto-approves', () => {
-  // 🔴 The escape codex flagged: pre-W0, auto-reversible skipped the card for EVERY preview-tier
-  // write, including set_skill_enabled → a poisoned run could silently enable capabilities. The
-  // predicate now requires class==='domain_write', so the capability change always asks. This is
-  // a DELIBERATE behaviour change (unflagged security fix) — the old "preview ⇒ skip" assertion
-  // is inverted for this tool.
+  test("owner 'ask' on a default-auto tool forces the card back", async () => {
+    const { tools } = writeTools('always', 'manual_chat', {
+      email_draft_reply: { tier: 'ask', source: 'owner' }
+    })
+    const needs = await needsApprovalOf(tools.email_draft_reply)(
+      { internal_id: 9, body_markdown: 'hi' },
+      { toolCallId: 'tc-own-ask', messages: [] }
+    )
+    expect(needs).toBe(true)
+  })
+
+  test("owner 'ask' outranks auto-reversible (ladder ④ > ⑤)", async () => {
+    const { tools } = writeTools('auto-reversible', 'manual_chat', {
+      email_flag: { tier: 'ask', source: 'owner' }
+    })
+    const needs = await needsApprovalOf(tools.email_flag)(
+      { internal_id: 9, is_flagged: true },
+      { toolCallId: 'tc-own-ar', messages: [] }
+    )
+    expect(needs).toBe(true)
+  })
+
+  test("owner 'ask' outranks a policy_rules auto_allow (ladder ④ > ⑥ — no whitelist round-trip)", async () => {
+    const domainCalls: string[] = []
+    const domain = mockDomain((url) => {
+      domainCalls.push(url)
+      return okEnvelope({ decision: 'auto_allow', rule_id: 7 })
+    })
+    const tools = createExecTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: { file_write: { tier: 'ask', source: 'owner' } }
+    })
+    const needs = await needsApprovalOf(tools.file_write)(
+      { path: '/tmp/a.txt', content: 'x' },
+      { toolCallId: 'tc-own-rule', messages: [] }
+    )
+    expect(needs).toBe(true)
+    expect(domainCalls.filter((u) => u.includes('/agent/policy/evaluate'))).toHaveLength(0)
+  })
+
+  test("owner 'auto' on an exec file tool skips BEFORE the whitelist round-trip", async () => {
+    const domainCalls: string[] = []
+    const domain = mockDomain((url) => {
+      domainCalls.push(url)
+      return okEnvelope({ ok: true })
+    })
+    const tools = createExecTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: { file_read: { tier: 'auto', source: 'owner' } }
+    })
+    const needs = await needsApprovalOf(tools.file_read)(
+      { path: '/tmp/a.txt' },
+      { toolCallId: 'tc-own-fr', messages: [] }
+    )
+    expect(needs).toBe(false)
+    expect(domainCalls.filter((u) => u.includes('/agent/policy/evaluate'))).toHaveLength(0)
+  })
+
+  test('run_command has NO tier entry (registry excludes it) → whitelist-or-card path unchanged', async () => {
+    const domainCalls: string[] = []
+    const domain = mockDomain((url) => {
+      domainCalls.push(url)
+      return okEnvelope({ decision: 'ask', rule_id: null })
+    })
+    // even a (hypothetical, server-impossible) run_command entry is irrelevant: the server
+    // registry never emits one — here we thread NO entry, the honest wire shape.
+    const tools = createExecTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: { file_read: { tier: 'auto', source: 'owner' } }
+    })
+    const needs = await needsApprovalOf(tools.run_command)(
+      { argv: ['echo', 'hi'] },
+      { toolCallId: 'tc-rc', messages: [] }
+    )
+    expect(needs).toBe(true)
+    expect(domainCalls.filter((u) => u.includes('/agent/policy/evaluate'))).toHaveLength(1)
+  })
+
+  test('capability_change tools honor an owner auto tier (set_skill_enabled / update_system_md)', async () => {
+    const { tools } = selfMountTools('always', 'manual_chat', {
+      set_skill_enabled: { tier: 'auto', source: 'owner' },
+      update_system_md: { tier: 'auto', source: 'owner' }
+    })
+    for (const [name, input] of [
+      ['set_skill_enabled', { skill_name: 'email', enabled: true }],
+      ['update_system_md', { doc_name: 'agent', content: 'x' }]
+    ] as const) {
+      const needs = await needsApprovalOf(tools[name])(input, {
+        toolCallId: `tc-cap-${name}`,
+        messages: []
+      })
+      expect(needs, `${name} should honor the explicit owner auto tier`).toBe(false)
+    }
+    const profile = createProfileTools(
+      mockDomain(() => okEnvelope({ ok: true })),
+      [],
+      new ApprovalGuard(),
+      {
+        contextMode: 'manual_chat',
+        toolApprovalPrefs: { agent_memory_update: { tier: 'auto', source: 'owner' } }
+      }
+    )
+    expect(
+      await needsApprovalOf(profile.agent_memory_update)(
+        { content: 'x' },
+        { toolCallId: 'tc-cap-mem', messages: [] }
+      )
+    ).toBe(false)
+  })
+})
+
+describe('WP-11 — 验收⑥ per-tool tiers only ever apply in manual_chat', () => {
+  test.each(['untrusted_trigger', 'cron_headless', 'im_chat'] as const)(
+    'a threaded prefs map is INERT under %s (consumption-side belt)',
+    async (mode) => {
+      // Drive the factory directly with prefs a buggy caller might thread — the tier must not
+      // relax anything outside manual_chat (buildGatewayTools additionally drops them upstream).
+      const { tools } = writeTools('always', mode, {
+        email_flag: { tier: 'auto', source: 'owner' }
+      })
+      const needs = await needsApprovalOf(tools.email_flag)(
+        { internal_id: 9, is_flagged: true },
+        { toolCallId: `tc-inert-${mode}`, messages: [] }
+      )
+      expect(needs).toBe(true)
+    }
+  )
+})
+
+describe("WP-11 — owner 'deny' (registration strip + runtime belt)", () => {
+  test('needsApproval false (no misleading card) + execute hard-rejects E_TOOL_DENIED, domain untouched', async () => {
+    const { tools, domainCalls, collector } = writeTools('always', 'manual_chat', {
+      email_flag: { tier: 'deny', source: 'owner' }
+    })
+    const input = { internal_id: 9, is_flagged: true }
+    expect(
+      await needsApprovalOf(tools.email_flag)(input, { toolCallId: 'tc-deny', messages: [] })
+    ).toBe(false)
+    await expect(
+      executeOf(tools.email_flag)(input, { toolCallId: 'tc-deny', messages: [] })
+    ).rejects.toThrow(/E_TOOL_DENIED/)
+    expect(domainCalls).toHaveLength(0)
+    expect(collector[0]).toMatchObject({
+      toolName: 'email_flag',
+      status: 'error',
+      approvalStatus: 'rejected'
+    })
+  })
+
+  test("🔴 bypass does NOT resurrect an owner 'deny' (deny is the availability axis — no card, E_TOOL_DENIED at execute)", async () => {
+    // check 2026-08-05 — the most dangerous imaginable combination is「deny 在 bypass 下静默变
+    // auto」. Pinned here: prefDenied is consulted BEFORE the bypass branch, so even under the
+    // owner-global bypass the denied tool never executes (and never cards — a card would be
+    // misleading for a tool that cannot run). Registration-face stripping is additionally
+    // approvalMode-independent (build.test.ts pins that half).
+    const { tools, domainCalls } = writeTools('bypass', 'manual_chat', {
+      email_flag: { tier: 'deny', source: 'owner' }
+    })
+    const input = { internal_id: 9, is_flagged: true }
+    expect(
+      await needsApprovalOf(tools.email_flag)(input, { toolCallId: 'tc-by-deny', messages: [] })
+    ).toBe(false)
+    await expect(
+      executeOf(tools.email_flag)(input, { toolCallId: 'tc-by-deny', messages: [] })
+    ).rejects.toThrow(/E_TOOL_DENIED/)
+    expect(domainCalls).toHaveLength(0)
+  })
+
+  test("a 'default'-sourced deny is impossible wire data and does NOT deny (only owner overrides deny)", async () => {
+    const { tools, domainCalls } = writeTools('always', 'manual_chat', {
+      email_flag: { tier: 'deny', source: 'default' } as never
+    })
+    const input = { internal_id: 9, is_flagged: true }
+    // falls through the ladder: no owner deny, no auto → the card (fail-closed, never a hard block)
+    expect(
+      await needsApprovalOf(tools.email_flag)(input, { toolCallId: 'tc-dd', messages: [] })
+    ).toBe(true)
+    expect(domainCalls).toHaveLength(0)
+  })
+})
+
+// ── S2 W0 (ADR-001 D3) — contextMode × toolClass matrix (unchanged by WP-11) ───────────────────
+
+describe('S2 W0 — set_skill_enabled (preview + capability_change) NEVER auto-approves via auto-reversible', () => {
   test('auto-reversible + manual_chat → set_skill_enabled STILL pauses (needsApproval true)', async () => {
     const { tools } = selfMountTools('auto-reversible')
     const needs = await needsApprovalOf(tools.set_skill_enabled)(
@@ -248,10 +546,6 @@ describe('S2 W0 — auto-approve requires manual_chat (domain_write in a non-man
 })
 
 describe('S2 W0 — runtime double-insurance: a mode-denied tool hard-rejects at execute', () => {
-  // Registration-time filtering (applyContextModePolicy) normally keeps a capability_change/
-  // outbound tool OUT of a non-manual ToolSet — these assertions drive the factory directly to
-  // prove the second line of defense: no card (needsApproval false, no misleading pause) and a
-  // typed E_CONTEXT_MODE_DENIED tool-error, with the write never reaching the domain.
   test('set_skill_enabled under untrusted_trigger → no card + execute rejects, domain untouched', async () => {
     const collector: GatewayToolAuditEntry[] = []
     const domainCalls: string[] = []
@@ -293,8 +587,6 @@ describe('S2 W0 — runtime double-insurance: a mode-denied tool hard-rejects at
       contextMode: 'cron_headless'
     })
     const input = { to: ['x@corp.test'], subject: 's', body_markdown: 'b' }
-    // needsApproval keeps its hard true (safety floor unchanged) — but even a user-approved send
-    // cannot execute outside a manual session.
     const needs = await needsApprovalOf(tools.email_prepare_send)(input, {
       toolCallId: 'tc-send-deny',
       messages: []
@@ -320,32 +612,18 @@ describe('S2 W0 — runtime double-insurance: a mode-denied tool hard-rejects at
   })
 })
 
-// ── 07-16 approval-mode switcher — owner-global 'acceptEdits' / 'bypass' overlays ────────────────
-//
-// The values below are SERVER-injected by prepareChatRun (manual_chat-gated, never from a body);
-// these factory-driven assertions pin the consumption-side semantics per tool:
-//   acceptEdits → ONLY the by-name ALLOW-list (ACCEPT_EDITS_AUTO_APPROVE_TOOLS) auto-approves
-//                 (codex r1 P1-3: fail-closed — an unlisted/future write asks); the explicit
-//                 ask declarations live in ACCEPT_EDITS_ASK_TOOLS (calendar 三写 / run_command /
-//                 skill supply chain / custom_agent 四写 / send) and the completeness gate below
-//                 forces every catalog write tool into exactly one of the two;
-//   bypass      → everything auto-approves, send + exec included (owner 拍板: 无例外);
-//   both        → manual_chat ONLY (a non-manual contextMode keeps needsApproval true even if the
-//                 mode were mis-threaded — consumption-side double gate).
-// Audit (codex r1 P2-4): a card-skip executes with a DISTINCT approval_status
-// ('auto_accept_edits'/'auto_bypass'/'auto_reversible') — 'approved' is reserved for humans.
+// ── 07-16 'bypass' + 08-05 D1=a — everything auto-approves, 无例外 ─────────────────────────────
 
 function toolsOf(
   factory: 'profile' | 'web' | 'exec' | 'skillSupply' | 'customAgents' | 'calendarWrite',
   approvalMode?: GatewayApprovalMode,
   contextMode: AgentContextMode | undefined = 'manual_chat'
-): { tools: Record<string, Tool>; domainCalls: string[]; policyVerdict?: string } {
+): { tools: Record<string, Tool>; domainCalls: string[] } {
   const domainCalls: string[] = []
-  const state = { verdict: 'ask' as string, ruleId: null as number | null }
   const domain = mockDomain((url) => {
     domainCalls.push(url)
     if (url.includes('/agent/policy/evaluate')) {
-      return okEnvelope({ decision: state.verdict, rule_id: state.ruleId })
+      return okEnvelope({ decision: 'ask', rule_id: null })
     }
     return okEnvelope({ ok: true })
   })
@@ -366,295 +644,8 @@ function toolsOf(
   return { tools, domainCalls }
 }
 
-describe('07-16 — acceptEdits allow/ask partition (codex r1 P1-3: fail-closed allow-list + completeness gate)', () => {
-  test('every declared name is a real classified gateway tool (typo/rename guard, both sets)', () => {
-    for (const name of [...ACCEPT_EDITS_AUTO_APPROVE_TOOLS, ...ACCEPT_EDITS_ASK_TOOLS]) {
-      expect(
-        GATEWAY_TOOL_CLASSES[name],
-        `${name} must exist in GATEWAY_TOOL_CLASSES — a rename would orphan its acceptEdits decision`
-      ).toBeDefined()
-    }
-  })
-
-  test('the owner-拍板 sets, pinned verbatim (a set change is a deliberate policy change)', () => {
-    // ALLOW-list = the ONLY runtime-consulted set: reversible email domain writes + draft,
-    // identity/memory/skill-toggle edits, web, file read/write (owner 拍板「编辑/联网放行」).
-    expect([...ACCEPT_EDITS_AUTO_APPROVE_TOOLS].sort()).toEqual(
-      [
-        'agent_memory_update',
-        'agent_profile_restore',
-        'email_archive',
-        // prd 07-27 — the draft family rides with email_draft_reply: all three only write the
-        // Drafts folder, nothing leaves the machine (the send is what asks).
-        'email_draft_compose',
-        'email_draft_reply',
-        'email_draft_update',
-        'email_flag',
-        'email_pin',
-        'email_resync',
-        'file_read',
-        'file_write',
-        // 08-02 review F8 — report_write 已移出：它是 tier:'silent' 的本地 artifact，从不进审批
-        // 链，「acceptEdits 免卡」对它没有任何运行时效果。留在这里只会让人误以为它在 manual
-        // 模式下要卡。移除不改变任何行为（它本来就 silent 直接执行）。
-        'set_skill_enabled',
-        'update_system_md',
-        'web_fetch',
-        'web_search'
-      ].sort()
-    )
-    // ASK declarations (documentation/accounting — the runtime never consults this set).
-    // custom_agent 四写 per the 07-16 check 改判: the rev3.1 §7 grant vocabulary (model may
-    // propose grant_web 'open'/grant_exec/cron) leans on the always-human card — releasing
-    // create/update under acceptEdits = injected content can mint a persistent card-free
-    // headless exfil backdoor. email_prepare_send is accounting-only (its factory never
-    // consults either set — bypassMode literal is its only relaxation).
-    expect([...ACCEPT_EDITS_ASK_TOOLS].sort()).toEqual(
-      [
-        'calendar_event_delete',
-        'calendar_event_reschedule',
-        'calendar_event_rsvp',
-        'custom_agent_create',
-        'custom_agent_delete',
-        'custom_agent_run_now',
-        'custom_agent_update',
-        'email_prepare_send',
-        'notion_agent_chat',
-        'run_command',
-        'skill_install',
-        'skill_install_confirm',
-        'skill_uninstall'
-      ].sort()
-    )
-  })
-
-  test('COMPLETENESS: every write:true catalog tool sits in EXACTLY one of the two sets (a new write tool without an explicit acceptEdits decision turns red)', () => {
-    const catalogPath = resolve(
-      dirname(fileURLToPath(import.meta.url)),
-      '../../../../tests/agent_eval/tool_catalog.json'
-    )
-    const catalog = JSON.parse(readFileSync(catalogPath, 'utf-8')) as {
-      tools: Record<string, { write?: boolean; legacy_retired?: boolean; tier?: string }>
-    }
-    // 🔴 08-02 review F8 — 判定维度是「会不会进审批链」，不是「有没有副作用」。两者正交：
-    // report_write 是 write:true（有副作用）但 tier:'silent'（本地 artifact，从不出审批卡），
-    // acceptEdits 的 allow/ask 划分对它没有任何运行时含义，把它塞进任一集合都是死条目。
-    // 反过来，任何 tier 从 silent 改成 preview/edit 的工具会立刻掉进本闸 —— 那才是需要
-    // 显式 acceptEdits 决策的时刻。
-    const writeTools = Object.entries(catalog.tools)
-      .filter(
-        ([, entry]) =>
-          entry.write === true && entry.legacy_retired !== true && entry.tier !== 'silent'
-      )
-      .map(([name]) => name)
-    expect(writeTools.length).toBeGreaterThanOrEqual(25) // sanity: the catalog read worked
-    for (const name of writeTools) {
-      const allowed = ACCEPT_EDITS_AUTO_APPROVE_TOOLS.has(name)
-      const asks = ACCEPT_EDITS_ASK_TOOLS.has(name)
-      expect(
-        allowed || asks,
-        `${name} (write:true) has NO acceptEdits decision — add it to ACCEPT_EDITS_AUTO_APPROVE_TOOLS ` +
-          `or ACCEPT_EDITS_ASK_TOOLS (policy.ts). Unlisted tools already ASK at runtime (fail-closed ` +
-          `allow-list), but the decision must be explicit.`
-      ).toBe(true)
-      expect(allowed && asks, `${name} sits in BOTH sets — the partition must be disjoint`).toBe(
-        false
-      )
-    }
-    // no stale/mystery names: both sets contain only real catalog write tools.
-    const writeSet = new Set(writeTools)
-    for (const name of [...ACCEPT_EDITS_AUTO_APPROVE_TOOLS, ...ACCEPT_EDITS_ASK_TOOLS]) {
-      expect(
-        writeSet.has(name),
-        `${name} declared in an acceptEdits set but is not a write:true catalog tool`
-      ).toBe(true)
-    }
-  })
-})
-
-describe("07-16 'acceptEdits' — edits/web/config auto-approve; the by-name retain set still asks", () => {
-  test('released: preview + edit domain writes (flag/pin/archive/resync/the three draft writes) → false', async () => {
-    const { tools } = writeTools('acceptEdits')
-    for (const name of [
-      'email_flag',
-      'email_pin',
-      'email_archive',
-      'email_resync',
-      'email_draft_reply',
-      // prd 07-27 — the new draft writes ride with the family.
-      'email_draft_compose',
-      'email_draft_update'
-    ]) {
-      const needs = await needsApprovalOf(tools[name])(
-        {
-          internal_id: 9,
-          draft_internal_id: 9,
-          is_flagged: true,
-          pinned: true,
-          body_markdown: 'hi',
-          mode: 'new',
-          to: ['a@x.test']
-        },
-        { toolCallId: `tc-ae-${name}`, messages: [] }
-      )
-      expect(needs, `${name} should auto-approve under acceptEdits`).toBe(false)
-    }
-  })
-
-  test("audit (codex r1 P2-4): an acceptEdits skip executes + audits 'auto_accept_edits', never 'approved'", async () => {
-    const { tools, domainCalls, collector } = writeTools('acceptEdits')
-    const input = { internal_id: 9, is_flagged: true }
-    expect(
-      await needsApprovalOf(tools.email_flag)(input, { toolCallId: 'tc-ae-audit', messages: [] })
-    ).toBe(false)
-    const out = await executeOf(tools.email_flag)(input, {
-      toolCallId: 'tc-ae-audit',
-      messages: []
-    })
-    expect(out).toMatchObject({ internal_id: 9, user_edited: false })
-    expect(domainCalls).toHaveLength(1)
-    expect(collector[0]).toMatchObject({
-      toolName: 'email_flag',
-      status: 'ok',
-      confirmationTier: 'preview',
-      approvalStatus: 'auto_accept_edits'
-    })
-    expect(collector[0].approvalHash).toMatch(/^[0-9a-f]{64}$/)
-  })
-
-  test('released: capability_change identity/memory/skill-toggle (owner 拍板「编辑放行」) → false', async () => {
-    const { tools } = selfMountTools('acceptEdits')
-    for (const [name, input] of [
-      ['update_system_md', { doc_name: 'agent', content: 'x' }],
-      ['set_skill_enabled', { skill_name: 'email', enabled: true }]
-    ] as const) {
-      const needs = await needsApprovalOf(tools[name])(input, {
-        toolCallId: `tc-ae-${name}`,
-        messages: []
-      })
-      expect(needs, `${name} should auto-approve under acceptEdits`).toBe(false)
-    }
-    const profile = toolsOf('profile', 'acceptEdits')
-    for (const name of ['agent_memory_update', 'agent_profile_restore']) {
-      const needs = await needsApprovalOf(profile.tools[name])(
-        { content: 'x', doc_name: 'memory', target_hash: 'h' },
-        { toolCallId: `tc-ae-${name}`, messages: [] }
-      )
-      expect(needs, `${name} should auto-approve under acceptEdits`).toBe(false)
-    }
-  })
-
-  test('released: web_fetch / web_search (联网放行) → false', async () => {
-    const { tools } = toolsOf('web', 'acceptEdits')
-    for (const [name, input] of [
-      ['web_fetch', { url: 'https://example.test/x' }],
-      ['web_search', { query: 'q' }]
-    ] as const) {
-      const needs = await needsApprovalOf(tools[name])(input, {
-        toolCallId: `tc-ae-${name}`,
-        messages: []
-      })
-      expect(needs, `${name} should auto-approve under acceptEdits`).toBe(false)
-    }
-  })
-
-  test('retained: custom_agent 四写 (grant-minting CRUD — the rev3.1 §7 card IS the defense) → true', async () => {
-    const { tools } = toolsOf('customAgents', 'acceptEdits')
-    for (const [name, input] of [
-      ['custom_agent_create', { name: 'a', prompt: 'p' }],
-      ['custom_agent_update', { agent_id: 'a1', prompt: 'p2' }],
-      ['custom_agent_delete', { agent_id: 'a1' }],
-      ['custom_agent_run_now', { agent_id: 'a1' }]
-    ] as const) {
-      const needs = await needsApprovalOf(tools[name])(input, {
-        toolCallId: `tc-ae-${name}`,
-        messages: []
-      })
-      expect(needs, `${name} must stay HITL under acceptEdits`).toBe(true)
-    }
-  })
-
-  test('exec: file_read / file_write auto-approve WITHOUT a whitelist round-trip; run_command keeps the whitelist-or-card path', async () => {
-    const fw = toolsOf('exec', 'acceptEdits')
-    for (const [name, input] of [
-      ['file_read', { path: '/tmp/a.txt' }],
-      ['file_write', { path: '/tmp/a.txt', content: 'x' }]
-    ] as const) {
-      const needs = await needsApprovalOf(fw.tools[name])(input, {
-        toolCallId: `tc-ae-${name}`,
-        messages: []
-      })
-      expect(needs, `${name} should auto-approve under acceptEdits`).toBe(false)
-    }
-    // released BEFORE the policyEvaluate branch → zero /agent/policy/evaluate calls.
-    expect(fw.domainCalls.filter((u) => u.includes('/agent/policy/evaluate'))).toHaveLength(0)
-    // run_command (retain set) falls through to policyEvaluate: 'ask' verdict → the card.
-    const rc = toolsOf('exec', 'acceptEdits')
-    const needs = await needsApprovalOf(rc.tools.run_command)(
-      { argv: ['echo', 'hi'] },
-      { toolCallId: 'tc-ae-rc', messages: [] }
-    )
-    expect(needs).toBe(true)
-    expect(rc.domainCalls.filter((u) => u.includes('/agent/policy/evaluate'))).toHaveLength(1)
-  })
-
-  test('retained: calendar 三写 (same (edit,domain_write) signature as draft_reply — by-NAME set) → true', async () => {
-    const { tools } = toolsOf('calendarWrite', 'acceptEdits')
-    for (const name of [
-      'calendar_event_reschedule',
-      'calendar_event_rsvp',
-      'calendar_event_delete'
-    ]) {
-      const needs = await needsApprovalOf(tools[name])(
-        { event_id: 'ev1' },
-        { toolCallId: `tc-ae-${name}`, messages: [] }
-      )
-      expect(needs, `${name} must stay HITL under acceptEdits`).toBe(true)
-    }
-  })
-
-  test('retained: skill supply chain (install/confirm/uninstall) → true', async () => {
-    const { tools } = toolsOf('skillSupply', 'acceptEdits')
-    for (const name of ['skill_install', 'skill_install_confirm', 'skill_uninstall']) {
-      const needs = await needsApprovalOf(tools[name])(
-        { source_url: 'https://example.test/p.zip', name: 's', package_hash: 'h' },
-        { toolCallId: `tc-ae-${name}`, messages: [] }
-      )
-      expect(needs, `${name} must stay HITL under acceptEdits`).toBe(true)
-    }
-  })
-
-  test('retained: the send NEVER relaxes under acceptEdits (bypassMode narrows to the bypass literal only)', async () => {
-    const collector: GatewayToolAuditEntry[] = []
-    const tools = createSendTools(
-      mockDomain(() => okEnvelope({ sent: true })),
-      collector,
-      new ApprovalGuard(),
-      {
-        signingSecret: 's',
-        contextMode: 'manual_chat',
-        approvalMode: 'acceptEdits'
-      }
-    )
-    const needs = await needsApprovalOf(tools.email_prepare_send)(
-      { to: ['x@corp.test'], subject: 's', body_markdown: 'b' },
-      { toolCallId: 'tc-ae-send', messages: [] }
-    )
-    expect(needs).toBe(true)
-  })
-
-  test('manual_chat-gated: acceptEdits under a non-manual mode never auto-approves', async () => {
-    const { tools } = writeTools('acceptEdits', 'untrusted_trigger')
-    const needs = await needsApprovalOf(tools.email_flag)(
-      { internal_id: 9, is_flagged: true },
-      { toolCallId: 'tc-ae-ut', messages: [] }
-    )
-    expect(needs).toBe(true)
-  })
-})
-
-describe("07-16 'bypass' — everything auto-approves (owner 拍板: 无例外), manual_chat only", () => {
-  test('domain writes + calendar 三写 + skill supply + custom agents + exec → all false', async () => {
+describe("07-16 'bypass' — everything auto-approves (owner 拍板: 无例外; D1=a), manual_chat only", () => {
+  test('domain writes + calendar 三写 + skill supply + custom agents → all false', async () => {
     const { tools } = writeTools('bypass')
     for (const name of ['email_flag', 'email_draft_reply']) {
       expect(
@@ -723,6 +714,17 @@ describe("07-16 'bypass' — everything auto-approves (owner 拍板: 无例外),
     expect(rc.domainCalls.filter((u) => u.includes('/agent/policy/evaluate'))).toHaveLength(0)
   })
 
+  test("验收④ D1=a — bypass outranks an explicit per-tool 'ask' (字面「无例外」)", async () => {
+    const { tools } = writeTools('bypass', 'manual_chat', {
+      email_draft_reply: { tier: 'ask', source: 'owner' }
+    })
+    const needs = await needsApprovalOf(tools.email_draft_reply)(
+      { internal_id: 9, body_markdown: 'hi' },
+      { toolCallId: 'tc-by-vs-ask', messages: [] }
+    )
+    expect(needs).toBe(false)
+  })
+
   test('send → needsApproval false AND the full double-guard execute chain still runs (register/verify/consume/audit)', async () => {
     const collector: GatewayToolAuditEntry[] = []
     const domainCalls: string[] = []
@@ -747,9 +749,6 @@ describe("07-16 'bypass' — everything auto-approves (owner 拍板: 无例外),
     })
     expect(out).toMatchObject({ sent: true, subject: 's' }) // … but the send executed
     expect(domainCalls).toHaveLength(1)
-    // guard chain intact on the skip: verified + consumed + audited with a content hash.
-    // codex r1 P2-4 — the card-skipped send audits 'auto_bypass', NEVER the human 'approved'
-    // (a bypass-mode real send must be distinguishable in incident forensics).
     expect(collector[0]).toMatchObject({
       toolName: 'email_prepare_send',
       status: 'ok',
@@ -762,21 +761,6 @@ describe("07-16 'bypass' — everything auto-approves (owner 拍板: 无例外),
     await expect(
       executeOf(tools.email_prepare_send)(input, { toolCallId: 'tc-by-send', messages: [] })
     ).rejects.toThrow(/E_APPROVAL_USED/)
-  })
-
-  test('BYPASS_STILL_ASK carve-out (codex HIGH-1): the pinned set + every member is a real classified tool', () => {
-    // 'bypass' is 无例外 for THIS machine's own actions, but BYPASS_STILL_ASK keeps external-AI /
-    // irreversible-outside tools 恒 HITL even here. Pinned verbatim (a set change is a deliberate
-    // policy change); currently only notion_agent_chat.
-    expect([...BYPASS_STILL_ASK].sort()).toEqual(['notion_agent_chat'])
-    for (const name of BYPASS_STILL_ASK) {
-      expect(
-        GATEWAY_TOOL_CLASSES[name],
-        `${name} must exist in GATEWAY_TOOL_CLASSES — a rename would orphan its bypass carve-out`
-      ).toBeDefined()
-      // it must also be in the ASK set for acceptEdits (both modes keep it HITL).
-      expect(ACCEPT_EDITS_ASK_TOOLS.has(name)).toBe(true)
-    }
   })
 
   test.each(['untrusted_trigger', 'cron_headless'] as const)(

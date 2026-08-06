@@ -159,6 +159,9 @@ export type {
   SkillSecretMeta,
   CompileUserMdResult,
   GlobalApprovalMode,
+  ToolApprovalTierValue,
+  ToolApprovalPrefRow,
+  ToolApprovalPrefsPayload,
   KosDoctorCheck,
   ChatApi
 } from './types/chat'

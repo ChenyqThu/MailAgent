@@ -44,7 +44,7 @@ import {
 } from '../../ai-gateway/tools/connector'
 import type { ConnectorCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 import type { ToolSet } from 'ai'
-import type { GlobalApprovalMode } from '../../ai-gateway/tools/types'
+import type { GatewayToolApprovalPrefs, GlobalApprovalMode } from '../../ai-gateway/tools/types'
 import { ApprovalGuard } from '../../ai-gateway/security/approval'
 import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approvalStash'
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
@@ -602,11 +602,57 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     let value: GlobalApprovalMode = 'manual'
     try {
       const r = await domain.getApprovalMode(AbortSignal.timeout(2_000))
-      if (r.mode === 'acceptEdits' || r.mode === 'bypass') value = r.mode
+      // 08-05 WP-11 — 'acceptEdits' is retired (folded server-side); only 'bypass' survives the
+      // parse, everything else (incl. a stale legacy value) fail-closes to 'manual'.
+      if (r.mode === 'bypass') value = r.mode
     } catch {
       value = 'manual' // fail-closed
     }
     _approvalModeCache = { at: now, value }
+    return value
+  }
+
+  // 08-05 WP-11 — the per-tool approval tiers + send whitelist resolver prepareChatRun hot-reads
+  // per MANUAL run (headless/im never call it). Same shape as the mode resolver above: short TTL
+  // (a Settings tier change lands within seconds, no per-turn loopback storm) + bounded timeout;
+  // CONTRACTED to resolve null on ANY failure — null = "no prefs" = every write asks (fail-closed:
+  // the gateway holds NO copy of the Python factory defaults, so an unreachable serve-api can only
+  // ever mean MORE cards). Wire rows fold into the {tier, source} entries types.ts' ladder reads:
+  // an explicit override (tier non-null) → source 'owner'; else the factory default → 'default'.
+  // Junk tier strings are dropped per-row (fail-closed to ask via absence — a row the ladder
+  // cannot read must never relax approval).
+  const TOOL_PREFS_TTL_MS = 3_000
+  let _toolPrefsCache: { at: number; value: GatewayToolApprovalPrefs | null } | null = null
+  const resolveToolApprovalPrefs = async (): Promise<GatewayToolApprovalPrefs | null> => {
+    const now = Date.now()
+    if (_toolPrefsCache && now - _toolPrefsCache.at < TOOL_PREFS_TTL_MS) {
+      return _toolPrefsCache.value
+    }
+    let value: GatewayToolApprovalPrefs | null = null
+    try {
+      const r = await domain.getToolApprovalPrefs(AbortSignal.timeout(2_000))
+      const tools: Record<string, { tier: 'ask' | 'auto' | 'deny'; source: 'owner' | 'default' }> =
+        {}
+      for (const row of r.tools ?? []) {
+        const explicit = row.tier
+        const source = explicit != null ? 'owner' : 'default'
+        const tier = explicit ?? row.effectiveTier
+        if (tier === 'ask' || tier === 'auto' || tier === 'deny') {
+          tools[row.toolName] = { tier, source }
+        }
+      }
+      value = {
+        tools,
+        sendRecipientWhitelist: (r.sendWhitelist ?? []).filter((e) => typeof e === 'string')
+      }
+    } catch (err) {
+      // fail-closed — ask semantics. Logged (throttled by the TTL cache: at most one line per
+      // window) because this degradation also downgrades an owner 'deny' to ask-with-card for
+      // the run (the strip needs the prefs) — the trace matters for forensics (check 08-05).
+      console.warn('[ai-gateway] tool-prefs fetch failed — every write asks this run', err)
+      value = null
+    }
+    _toolPrefsCache = { at: now, value }
     return value
   }
 
@@ -750,6 +796,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // 07-16 approval-mode switcher — the owner-global mode resolver (short-TTL cached, fail-closed
     // 'manual'; see its construction above). prepareChatRun consults it per manual run only.
     resolveGlobalApprovalMode,
+    // 08-05 WP-11 — the per-tool approval tiers resolver (short-TTL cached, fail-closed null =
+    // ask semantics). prepareChatRun consults it per MANUAL run only.
+    resolveToolApprovalPrefs,
     // 07-01 — M2 per-query recall (retrieveMemory → /chat/memory/search) is retired. The bounded
     // memory.md is now injected into the cacheable stable prefix via /chat/config.memorySummary
     // (getSystemPromptConfig above already carries it, on a 15s TTL — NOT frozen per session), so
@@ -885,7 +934,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // cutover master it used to follow was GA'd away). `approvalMode` (PART 2) comes from the
     // request body (default 'always'); 'auto-reversible' lets reversible preview writes skip the
     // card. The blocking send always asks regardless (safety floor in auditedSendTool).
-    buildTools: (collector, approvalMode, contextMode, agentRunContext) => {
+    buildTools: (collector, approvalMode, contextMode, agentRunContext, toolApprovalPrefs) => {
       // Stage 1 PR2/PR3 — dynamic MCP connector tools. Two admitted shapes (shouldLoadConnectorTools):
       // manual_chat without an agentRunContext (PR2, unchanged), and a headless agent run whose
       // per-agent connector grants parse non-empty (PR3 — grant 外的 headless run performs ZERO
@@ -960,6 +1009,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           sendSigningSecret: getLocalApiToken(),
           // PART 2 — auto-approval mode from the request body (default 'always' when absent).
           approvalMode,
+          // 08-05 WP-11 — the per-tool approval tiers + send whitelist prepareChatRun resolved
+          // for THIS run (manual only; the headless wrapper's 3-arg signature never forwards
+          // the 5th slot, and buildGatewayTools additionally drops it for non-manual modes).
+          toolApprovalPrefs,
           // S2 W0 (ADR-001 D1) — the run's trusted context mode from prepareChatRun (never the
           // body). Absent → buildGatewayTools fail-closes to 'untrusted_trigger'.
           contextMode,

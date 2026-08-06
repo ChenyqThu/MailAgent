@@ -14,7 +14,12 @@ import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // tools/types (which DOES import `tool` from 'ai'). index.ts statically imports
 // config.ts for resolveAiGatewayPort; this must never pull the heavy `ai` chunk into
 // the main bundle when MAILAGENT_AI_SDK_GATEWAY is off (Phase 02 invariant).
-import type { GatewayApprovalMode, GatewayToolAuditEntry, GlobalApprovalMode } from './tools/types'
+import type {
+  GatewayApprovalMode,
+  GatewayToolApprovalPrefs,
+  GatewayToolAuditEntry,
+  GlobalApprovalMode
+} from './tools/types'
 // 🔴 type-only — same erasure discipline. The runtime policy functions live in tools/policy.ts
 // (pure, type-only `ai` import) and are consumed by chatRun/tools, never here.
 import type { AgentContextMode, AgentRunContext } from './tools/policy'
@@ -169,7 +174,13 @@ export interface AiGatewayConfig {
      *  the per-agent whitelist evaluate), allowedTools (owner narrowing) and modeGrants (the
      *  matrix's exec opt-in). Passed ONLY by wrapCfgForAgentRun's wrapper (fresh spawn + island
      *  resume); every manual entrypoint leaves it undefined → assembly byte-identical. */
-    agentRunContext?: AgentRunContext
+    agentRunContext?: AgentRunContext,
+    /** 08-05 WP-11 — the per-tool approval tiers + send whitelist of THIS run, resolved by
+     *  prepareChatRun (cfg.resolveToolApprovalPrefs) for MANUAL runs only. 🔴 The headless
+     *  wrapper (wrapCfgForAgentRun) structurally never forwards this parameter, so per-tool
+     *  convenience can never leak into an unattended run. null/absent → every write asks
+     *  (fail-closed), byte-identical to pre-WP-11. */
+    toolApprovalPrefs?: GatewayToolApprovalPrefs | null
   ) => ToolSet
   /** Test-harness-only override for deterministic single-step fixtures. Production never sets this;
    *  normal manual/headless runs use chatRun's 10k internal sentinel. */
@@ -186,14 +197,27 @@ export interface AiGatewayConfig {
    *  gate for every caller. */
   ensureConnectorManifest?: () => Promise<void>
   /** 07-16 approval-mode switcher — hot-read the owner-global chat approval mode
-   *  ('manual'|'acceptEdits'|'bypass', persisted in agent_config.db owner_settings). Called by
-   *  prepareChatRun ONCE per run and ONLY for manual_chat runs (headless custom-agent runs never
-   *  consult it — they are governed solely by their per-agent grants matrix). The Electron
-   *  wrapper implements it as a short-TTL-cached GET /api/agent/approval-mode with a bounded
-   *  timeout, CONTRACTED to resolve 'manual' on any failure (fail-closed); prepareChatRun guards
-   *  with its own try/catch anyway. Omitted (harness/test cfgs) → the request-level
-   *  'always'|'auto-reversible' semantics apply unchanged, byte-identical. */
+   *  ('manual'|'bypass' since 08-05 WP-11 — the 'acceptEdits' mode retired into a per-tool
+   *  preset; persisted in agent_config.db owner_settings). Called by prepareChatRun ONCE per run
+   *  and ONLY for manual_chat runs (headless custom-agent runs never consult it — they are
+   *  governed solely by their per-agent grants matrix). The Electron wrapper implements it as a
+   *  short-TTL-cached GET /api/agent/approval-mode with a bounded timeout, CONTRACTED to resolve
+   *  'manual' on any failure (fail-closed); prepareChatRun guards with its own try/catch anyway.
+   *  Omitted (harness/test cfgs) → the request-level 'always'|'auto-reversible' semantics apply
+   *  unchanged, byte-identical. */
   resolveGlobalApprovalMode?: () => Promise<GlobalApprovalMode> | GlobalApprovalMode
+  /** 08-05 WP-11 — hot-read the owner's per-tool approval tiers + send recipient whitelist
+   *  (agent_config.db tool_approval_pref / owner_settings via GET /api/agent/tool-prefs). Called
+   *  by prepareChatRun ONCE per run and ONLY for manual_chat runs (headless/im never consult it).
+   *  The Electron wrapper implements it as a short-TTL-cached fetch CONTRACTED to resolve null on
+   *  any failure — null means "no prefs available" and every write keeps its ask semantics
+   *  (fail-closed: the gateway holds NO copy of the factory defaults, so an unreachable serve-api
+   *  can only ever mean MORE cards, never fewer). Omitted (harness/test cfgs) → byte-identical
+   *  pre-WP-11 behaviour. */
+  resolveToolApprovalPrefs?: () =>
+    | Promise<GatewayToolApprovalPrefs | null>
+    | GatewayToolApprovalPrefs
+    | null
   /** Phase 04a — apply a UI edit to a pending edit-tier approval (POST /api/ai/approval/resolve).
    *  The Electron wrapper implements this as `approvalGuard.applyEdit(toolCallId, editedFields)`:
    *  it overlays the editable fields onto the original input (identity pinned) so the next

@@ -9,7 +9,7 @@
 //                             (soul/agent/rules/user/memory)
 //   - agent_profile_history — silent read: version history (newest first)
 //   - agent_profile_restore — EDIT-tier write (asks under Manual/auto-reversible; the owner-global
-//                             acceptEdits/bypass modes may auto-execute — 07-16, approve/reject
+//                             per-tool auto tier / bypass may auto-execute — 08-05 WP-11, approve/reject
 //                             only): roll a doc back to a history version. NOT the legacy name
 //                             `agent_profile_rollback` — legacy is preview-tier; this is
 //                             edit-tier (identity/rules change ⇒ auto-reversible never relaxes
@@ -47,6 +47,7 @@ import {
   auditedReadTool,
   auditedWriteTool,
   type GatewayApprovalMode,
+  type GatewayToolApprovalPrefs,
   type GatewayToolAuditCollector
 } from './types'
 import type { AgentContextMode } from './policy'
@@ -86,7 +87,7 @@ function isoOrNull(v: string | number | null | undefined): string | null {
  * Build the S1 R2 profile-config tools bound to the injected domain client + audit collector +
  * approval guard. agent_profile_read / agent_profile_history are silent reads;
  * agent_profile_restore / agent_memory_update are edit-tier writes (always ask under
- * Manual/auto-reversible; the owner-global acceptEdits/bypass modes may auto-execute them).
+ * Manual/auto-reversible; an owner per-tool 'auto' tier (WP-11) or bypass may auto-execute them).
  */
 export function createProfileTools(
   domain: MailAgentDomainClient,
@@ -95,6 +96,9 @@ export function createProfileTools(
   opts: {
     a2uiEnabled?: boolean
     approvalMode?: GatewayApprovalMode
+    /** 08-05 WP-11 — the per-tool tier map of a MANUAL run (see types.ts GatewayToolApprovalPrefs).
+     *  Absent (headless/im/tests) → pre-WP-11 ask semantics, byte-identical. */
+    toolApprovalPrefs?: GatewayToolApprovalPrefs['tools']
     oneShot?: boolean
     contextMode?: AgentContextMode
   } = {}
@@ -115,12 +119,14 @@ export function createProfileTools(
         ...toolOpts,
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
+        // 08-05 WP-11 — the per-tool tier ladder (manual only; consumed in types.ts).
+        toolApprovalPrefs: opts.toolApprovalPrefs,
         oneShot: opts.oneShot,
         // S2 W0 + 07-16 modes — both writes here are class capability_change (policy.ts):
         // manual_chat-only (never registered/executed headless). Approval: asks under
-        // Manual/auto-reversible; both are ACCEPT_EDITS_AUTO_APPROVE_TOOLS members (owner 拍板
-        // 「编辑放行」, ADR-001 §9 mode 注记), so the owner-global acceptEdits AND bypass modes
-        // auto-execute them.
+        // Manual/auto-reversible; 08-05 WP-11 — both default 'ask' in the per-tool registry
+        // (tool_prefs.py, the ex-acceptEdits「编辑放行」members now a data-level preset;
+        // ADR-001 §9 mode 注记), so an owner auto tier AND bypass may auto-execute them.
         contextMode: opts.contextMode
       },
       collector,
@@ -197,7 +203,7 @@ export function createProfileTools(
   )
 
   // EDIT-tier write — roll a doc back to a history version. Asks under Manual/auto-reversible
-  // (edit tier never auto-approves there; the owner-global acceptEdits/bypass modes may
+  // (edit tier never auto-approves there; an owner per-tool auto tier / bypass may
   // auto-execute — 07-16); no editableFields → the card is approve/reject only, so
   // doc_name AND target_hash are both pinned (an approved restore cannot be retargeted).
   const agent_profile_restore = makeWrite({
@@ -210,7 +216,7 @@ export function createProfileTools(
       'validator, so a version containing jailbreak / safety-override phrasing is rejected ' +
       'even if it once existed. The restore itself is recorded in history (it can be rolled ' +
       'back again). Edit tier — always asks under the Manual/auto-reversible modes; only the ' +
-      'owner-set global acceptEdits/bypass permission mode can auto-execute it.',
+      'owner-set per-tool auto tier or global bypass permission mode can auto-execute it.',
     inputSchema: agentProfileRestoreSchema,
     risk: 'edit',
     // No editableFields → approve/reject only; identity (doc_name + target_hash) pinned —
@@ -229,7 +235,7 @@ export function createProfileTools(
   })
 
   // EDIT-tier write — overwrite memory.md. Asks under Manual/auto-reversible (the owner-global
-  // acceptEdits/bypass modes may auto-execute — 07-16). Deliberately separate from
+  // per-tool auto tier / bypass may auto-execute — 08-05 WP-11). Deliberately separate from
   // update_system_md (whose doc_name enum stays soul/agent/rules/user): memory is bounded
   // auto-captured background, not an identity doc.
   const agent_memory_update = makeWrite({
@@ -243,7 +249,7 @@ export function createProfileTools(
       'do NOT use it for identity documents (soul/agent/rules/user — that is update_system_md). ' +
       'The user approves or rejects the change; it is versioned and can be rolled back. ' +
       'Edit tier — always asks under the Manual/auto-reversible modes; only the owner-set ' +
-      'global acceptEdits/bypass permission mode can auto-execute it.',
+      'per-tool auto tier or global bypass permission mode can auto-execute it.',
     inputSchema: agentMemoryUpdateSchema,
     risk: 'edit',
     // No editableFields → approve/reject only (S1 has no rich card; generic approval only).

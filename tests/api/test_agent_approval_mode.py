@@ -18,11 +18,7 @@ def test_get_default_manual(client, fresh_agent_cfg):
 
 
 def test_put_persists_and_get_reflects(client, fresh_agent_cfg):
-    r = client.put("/api/agent/approval-mode", json={"mode": "acceptEdits"})
-    assert r.status_code == 200
-    assert r.json()["data"]["mode"] == "acceptEdits"
-    assert client.get("/api/agent/approval-mode").json()["data"]["mode"] == "acceptEdits"
-    # bypass 同样合法
+    # 08-05 WP-11 — 二档化：bypass 合法且持久化；acceptEdits 见 test_put_invalid_mode_400。
     r2 = client.put("/api/agent/approval-mode", json={"mode": "bypass"})
     assert r2.status_code == 200
     assert client.get("/api/agent/approval-mode").json()["data"]["mode"] == "bypass"
@@ -35,11 +31,20 @@ def test_put_persists_and_get_reflects(client, fresh_agent_cfg):
 
 
 def test_put_invalid_mode_400(client, fresh_agent_cfg):
-    for bad in ("auto-reversible", "always", "BYPASS", "", 1, None):
+    # 08-05 WP-11（owner 拍板）：acceptEdits 模式退役 —— PUT 与其他越域值一样 400
+    #（它的降级归宿是 POST /api/agent/tool-prefs/preset）。
+    for bad in ("auto-reversible", "always", "BYPASS", "acceptEdits", "", 1, None):
         r = client.put("/api/agent/approval-mode", json={"mode": bad})
         assert r.status_code == 400, f"mode={bad!r} should be rejected"
         assert r.json()["error"]["code"] == "E_INVALID_ARG"
     # 越域值绝不落库 —— GET 仍 manual
+    assert client.get("/api/agent/approval-mode").json()["data"]["mode"] == "manual"
+
+
+def test_legacy_accept_edits_row_reads_as_manual(client, fresh_agent_cfg):
+    """08-05 WP-11 — 存量 'acceptEdits' 行（迁移前写入/手改 DB）→ GET fail-closed 回落
+    manual（真正的一次性行为保持折算在 store._migrate_additive，见 test_tool_prefs）。"""
+    fresh_agent_cfg.set_owner_setting("chat_approval_mode", "acceptEdits")
     assert client.get("/api/agent/approval-mode").json()["data"]["mode"] == "manual"
 
 
