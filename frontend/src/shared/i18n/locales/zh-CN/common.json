@@ -4273,6 +4273,7 @@
         "pausedExpiredHint": "审批已过期，此次运行未执行。",
         "skippedHint": "已达到每日运行上限，本次触发未执行。",
         "steps": "{n} 步",
+        "specInvalidHint": "Agent 配置无法启动本次运行：可能已被停用或删除，或触发条件配置非法。修正配置后再试。",
         "tokens": "{n} tokens",
         "autoWhitelisted": "自动放行 ×{n}",
         "autoWhitelistedRule": "免卡：白名单规则 ×{n}",

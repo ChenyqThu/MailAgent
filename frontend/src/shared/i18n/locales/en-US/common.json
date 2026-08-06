@@ -4273,6 +4273,7 @@
         "pausedExpiredHint": "Approval expired; this run was not executed.",
         "skippedHint": "The daily run limit was reached, so this trigger was not executed.",
         "steps": "{n} steps",
+        "specInvalidHint": "The agent's configuration could not start this run: it may have been disabled or deleted, or its trigger configuration is invalid. Fix the configuration and try again.",
         "tokens": "{n} tokens",
         "autoWhitelisted": "Auto-allowed ×{n}",
         "autoWhitelistedRule": "Card-free: whitelist rule ×{n}",

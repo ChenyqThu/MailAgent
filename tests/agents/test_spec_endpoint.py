@@ -435,6 +435,73 @@ def test_agent_bad_trigger_json_409(env, client):
     assert r.json()["error"]["code"] == "E_SPEC_AGENT_INVALID"
 
 
+# ---------------------------------------------------------------------------
+# 「未配置触发条件」（trigger_json 空）+ manual → 放行（08-06 修）
+# ---------------------------------------------------------------------------
+
+
+def _set_raw_trigger(db, raw, agent_id="dms"):
+    """绕 set_config 直写 trigger_json（模拟抽屉存的 NULL / 历史坏行）。"""
+    conn = sqlite3.connect(str(db))
+    conn.execute("UPDATE report_agent SET trigger_json=? WHERE id=?", (raw, agent_id))
+    conn.commit()
+    conn.close()
+
+
+@pytest.mark.parametrize("raw_trigger", [None, "", "   "])
+def test_empty_trigger_manual_run_200(env, client, raw_trigger):
+    """抽屉默认 triggerKind='none'（存 trigger_json 空）的 agent **手动**运行必须跑得起来。
+
+    UI 逐字承诺「未配置触发条件：Agent 保存为草稿、不会自动运行（仍可在下方手动运行一次）」，
+    但 spec 组装此前无条件 parse_trigger(NULL) → 409 E_SPEC_AGENT_INVALID → gateway 弃 run
+    → 手动运行必失败（活库两次 manual job 全 failed 即此）。
+    """
+    _seed_custom(env.store, trigger=None)
+    if raw_trigger is not None:
+        _set_raw_trigger(env.db, raw_trigger)
+    jid = _running_job(env.repo, trigger_kind="manual", fire_key="manual:abc")
+    r = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "tok-1"})
+    assert r.status_code == 200
+    spec = r.json()["data"]
+    # kind 取 job 的 trigger_kind（trig 在 manual 路径上本就用不到）→ gateway deriveContextMode
+    # 对未知 kind fail-close 到最严的 untrusted_trigger。
+    assert spec["trigger"]["kind"] == "manual"
+    assert "emailInternalId" not in spec["trigger"]
+    assert "matchedRule" not in spec["trigger"]
+    assert "emailEnvelope" not in spec["prompt"]  # 无 email 触发 → 无 envelope
+    assert spec["prompt"]["taskPrompt"] == "Approve the DMS request"
+
+
+def test_empty_trigger_non_manual_still_409(env, client):
+    """放宽只在 manual 上成立：空 trigger + 非 manual 触发的 job 仍 fail-closed 409。"""
+    _seed_custom(env.store, trigger=None)
+    jid = _running_job(env.repo)  # trigger_kind='cron'
+    r = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "tok-1"})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_SPEC_AGENT_INVALID"
+
+
+@pytest.mark.parametrize("raw_trigger", [
+    '{"v":1,"kind":"cron","cron":"not a cron"}',  # 合法 JSON、非法 cron
+    '{"v":1,"kind":"telepathy"}',                 # 未知 kind
+    "[]",                                          # 合法 JSON、非 object
+    "{",                                           # 坏 JSON
+    "null",                                        # JSON null
+])
+def test_bad_trigger_json_manual_still_409(env, client, raw_trigger):
+    """🔴 只放宽「空」，不放宽「坏」：非空但非法的 trigger_json 即便 manual 触发也必 409。
+
+    mutation 靶 —— 若把判空写成「捕获 TriggerValidationError 就放行」，坏配置会被一并放过，
+    本条即红（``_as_dict`` 对坏 JSON / 非 object 抛的是同一句 "empty or not an object"）。
+    """
+    _seed_custom(env.store, trigger=None)
+    _set_raw_trigger(env.db, raw_trigger)
+    jid = _running_job(env.repo, trigger_kind="manual", fire_key="manual:xyz")
+    r = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "tok-1"})
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_SPEC_AGENT_INVALID"
+
+
 def test_spec_claimed_at_written_as_float(env, client):
     _seed_custom(env.store, trigger=_CRON)
     jid = _running_job(env.repo)

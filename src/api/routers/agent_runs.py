@@ -31,6 +31,7 @@ from src.agents.run_state import AGENT_RUN_STATES, derive_agent_run_state
 from src.agents.trigger import (
     EmailFilterTrigger,
     ToolPolicy,
+    Trigger,
     TriggerValidationError,
     parse_budget,
     parse_tool_policy,
@@ -257,7 +258,8 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
     """job 行 + report_agent 行 → gateway 消费的权威 spec（ADR D2 形状）。
 
     坏配置 fail-closed：agent 不存在 / 非 custom / disabled / 坏 trigger_json → 409
-    E_SPEC_AGENT_INVALID（gateway 收到即放弃该 run，worker 标 failed）。
+    E_SPEC_AGENT_INVALID（gateway 收到即放弃该 run，worker 标 failed）。**例外**：
+    trigger_json 为空（未配置触发条件）且本 job 是 manual 触发 → 放行（见下方注释）。
     """
     params = job.params or {}
     agent_id = params.get("agent_id")
@@ -276,13 +278,31 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
             f"agent {agent_id!r} missing / non-custom / disabled",
             http_status=409, source="agent-runs",
         )
-    try:
-        trig = parse_trigger(agent.get("trigger_json"))
-    except TriggerValidationError as exc:
-        raise APIError(
-            "E_SPEC_AGENT_INVALID", f"bad trigger_json: {exc}",
-            http_status=409, source="agent-runs",
-        )
+    # 🔴 trigger 校验**按需**（08-06 修）：「未配置触发条件」是明确的产品状态 —— 抽屉默认
+    # triggerKind='none' 存 trigger_json=NULL，中文提示逐字承诺「保存为草稿、不会自动运行
+    # （仍可在下方手动运行一次）」。此前这里无条件 parse_trigger(NULL) → TriggerValidationError
+    # → 409 E_SPEC_AGENT_INVALID → gateway 弃 run → **任何未配触发条件的 agent 手动运行必失败**
+    # （活库实证：两次 manual job 全 failed）。
+    # 放宽面**只有「空」**（NULL / 空串 / 纯空白）**且**本 job 是 manual 触发；「非空但坏」的
+    # trigger_json 以及一切非 manual 的 run 维持今天的 fail-closed 硬拒（故意不靠捕获
+    # TriggerValidationError 判空 —— 那会把坏 JSON/非 object 一并放行）。
+    # 安全性：manual 路径上 trig 本就用不到（trigger_out 的 kind 取 trigger_kind；matchedRule /
+    # emailEnvelope 只在 EmailFilterTrigger 分支），且 gateway deriveContextMode 对 'manual'
+    # fail-close 到最严的 untrusted_trigger；cron/schedule/email_filter 的 run 在入队前已由
+    # trigger_worker / email_dispatch parse 过一遍，行为字节级不变。
+    raw_trigger = agent.get("trigger_json")
+    trigger_unconfigured = raw_trigger is None or (
+        isinstance(raw_trigger, str) and not raw_trigger.strip()
+    )
+    trig: Optional[Trigger] = None
+    if not (trigger_unconfigured and trigger_kind == "manual"):
+        try:
+            trig = parse_trigger(raw_trigger)
+        except TriggerValidationError as exc:
+            raise APIError(
+                "E_SPEC_AGENT_INVALID", f"bad trigger_json: {exc}",
+                http_status=409, source="agent-runs",
+            )
     budget = parse_budget(agent.get("budget_json"))
     tool_policy = _tool_policy_lenient(agent.get("tool_policy_json"))
     # S5 ADR-004 §5.1（显式修订 ADR-003 D6）：allowed_tools 未配置（NULL/缺 key）→ 投影

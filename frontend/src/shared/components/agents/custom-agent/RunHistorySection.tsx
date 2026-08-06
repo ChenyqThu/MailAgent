@@ -367,6 +367,20 @@ export function RunHistorySection({ agentId }: { agentId: string }): React.React
                   {r.error}
                 </div>
               )}
+              {/* last_error 是 gateway 原始错误码（`E_SPEC_AGENT_INVALID` 等），对用户不可读 ——
+                  给最常撞见的那个补一句人话（码本身保留，报障时仍可读）。 */}
+              {r.error?.includes('E_SPEC_AGENT_INVALID') && (
+                <div
+                  style={{
+                    fontSize: 11.5,
+                    color: 'rgb(var(--ink-fg-3))',
+                    marginTop: 4,
+                    lineHeight: 1.5
+                  }}
+                >
+                  {t('agents.custom.runs.specInvalidHint')}
+                </div>
+              )}
             </div>
           ))}
           {/* task 07-21 — 「加载更多」触底分页（从简：抽屉里用按钮，非滚动预取）。 */}
