@@ -50,6 +50,7 @@ import { useApprovalDecideBusy } from './useApprovalDecideBusy'
 import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
+import { ThreadRunStatusBar } from './components/ThreadRunStatusBar'
 import { ChatComposerControlsProvider } from './components/composerControls'
 import type { ChatComposerControls } from './components/composerControlsContext'
 import { ReadOnlyTranscript } from './ReadOnlyTranscript'
@@ -353,7 +354,7 @@ export function AIChatPanel({
   // 'chat:turn-persisted'. onSessionsTouched refreshes the popover's local session rows (badge
   // source for the email-scoped history list).
   const chatRefreshSessions = chat.refreshSessions
-  const { backgroundActive } = useBackgroundChatRun({
+  const { backgroundActive, backgroundStartedAt } = useBackgroundChatRun({
     gatewayBaseUrl,
     sessionId: chatActiveSessionId,
     enabled: contextInjectionOn,
@@ -480,24 +481,20 @@ export function AIChatPanel({
         onDecideBusyChange={onDecideBusyChange}
       />
     ) : undefined
-  // B1 — "AI 仍在后台输出" placeholder while a detached run streams for this session (truth =
-  // /api/ai/run/active); the settle transition reloads + re-seeds automatically.
-  const backgroundRunNotice = backgroundActive ? (
-    <div
-      data-background-run-notice
-      className="mt-2 flex shrink-0 items-center gap-2 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2"
-    >
-      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-coral/100" aria-hidden />
-      {t('chat.aiSdk.backgroundRunning')}
-    </div>
-  ) : undefined
-  const pendingSlotContent =
-    pendingApprovalCard || backgroundRunNotice ? (
-      <>
-        {backgroundRunNotice}
-        {pendingApprovalCard}
-      </>
-    ) : undefined
+  // B1 — "AI 仍在后台输出" while a detached run streams for this session (truth = /api/ai/run/active);
+  // the settle transition reloads + re-seeds automatically. WP-14 收编：这块提示原先是 pendingSlot 里
+  // 一张随消息流滚动的卡，现在长在 composer 上方的运行条里（ThreadRunStatusBar，下面挂载）——
+  // 旧位置不再渲染，不留双份。
+  const pendingSlotContent = pendingApprovalCard
+  // WP-14 — 回合级运行条：阶段/工具名/秒表自取 thread 作用域，detached run 的秒表用 ageMs 接续。
+  // mx-3 对齐 composer 的 px-3 内距（它住在 Viewport 之外、composer 之上）。
+  const runStatusSlot = (
+    <ThreadRunStatusBar
+      backgroundActive={backgroundActive}
+      backgroundStartedAt={backgroundStartedAt}
+      className="mx-3 mb-2"
+    />
+  )
 
   // Sidebar session preview cache (lazy on open).
   const [sessionPreviews, setSessionPreviews] = useState<Record<number, string | null>>({})
@@ -804,10 +801,12 @@ export function AIChatPanel({
                         runningRef={aiSdkRunningRef}
                         onRunningChange={setAiSdkRunning}
                       />
-                      {/* pendingSlot — B1 background-run placeholder + B3 in-panel approval card
-                          (undefined when neither applies → byte-identical thread). */}
+                      {/* pendingSlot — B3 in-panel approval card (undefined when it doesn't apply →
+                          byte-identical thread); runStatusSlot — WP-14 的 composer 上方运行条
+                          （不在跑时自己渲染 null）。 */}
                       <AssistantThread
                         pendingSlot={pendingSlotContent}
+                        runStatusSlot={runStatusSlot}
                         emptyState={emptyMessages}
                       />
                     </AiSdkRuntimeProvider>

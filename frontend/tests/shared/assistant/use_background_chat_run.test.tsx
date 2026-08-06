@@ -76,16 +76,21 @@ function broadcast(p: TurnPersistedPayload): void {
 }
 
 /** Stub fetch: /api/ai/run/active answers per the mutable `state` map (miss → 404 shape). */
-function stubRunActiveFetch(state: { active: boolean; runId?: string }): void {
+function stubRunActiveFetch(state: { active: boolean; runId?: string; ageMs?: unknown }): void {
   vi.stubGlobal(
     'fetch',
     vi.fn(async (input: RequestInfo | URL) => {
       const url = String(input)
       if (url.includes('/api/ai/run/active')) {
         return state.active
-          ? new Response(JSON.stringify({ active: true, runId: state.runId ?? 'r1', ageMs: 100 }), {
-              status: 200
-            })
+          ? new Response(
+              JSON.stringify({
+                active: true,
+                runId: state.runId ?? 'r1',
+                ageMs: state.ageMs === undefined ? 100 : state.ageMs
+              }),
+              { status: 200 }
+            )
           : new Response(JSON.stringify({ active: false }), { status: 404 })
       }
       return new Response('{}', { status: 200 })
@@ -382,6 +387,69 @@ describe('useBackgroundChatRun', () => {
     broadcast({ sessionId: 12, status: 'finished', runId: null })
     await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1))
   })
+
+  // WP-14 — 运行条的秒表接续依赖这条：探针的 `ageMs`（「已经跑了多久」）在拿到响应的那一刻折算
+  // 成本地 epoch 起点，切走再切回读数才不清零。ageMs 缺失/非法 → null（宁可不显示秒表，也不编数）。
+  test('backgroundStartedAt = 收到响应时刻 − ageMs；非活跃 / ageMs 非法 → null', async () => {
+    const state: { active: boolean; runId?: string; ageMs?: unknown } = {
+      active: true,
+      runId: 'r-age',
+      ageMs: 42_000
+    }
+    stubRunActiveFetch(state)
+    const before = Date.now()
+    const { result, rerender } = renderHook(
+      ({ localRunning }: { localRunning: boolean }) =>
+        useBackgroundChatRun({
+          gatewayBaseUrl: 'http://127.0.0.1:8300',
+          sessionId: 14,
+          enabled: true,
+          refreshNonce: 0,
+          localRunning,
+          onSettled: vi.fn()
+        }),
+      { wrapper, initialProps: { localRunning: false } }
+    )
+    await waitFor(() => expect(result.current.backgroundActive).toBe(true))
+    const startedAt = result.current.backgroundStartedAt
+    expect(startedAt).not.toBeNull()
+    // 起点落在「请求发出前 42s」到「现在 42s 前」之间 —— 换算用的是响应到达的墙钟。
+    expect(startedAt as number).toBeGreaterThanOrEqual(before - 42_000)
+    expect(startedAt as number).toBeLessThanOrEqual(Date.now() - 42_000)
+
+    // 自己的附着流把 background 遮掉时，起点也必须跟着消失（否则运行条会给附着回合挂一个
+    // 后台 run 的旧起点）。
+    rerender({ localRunning: true })
+    await waitFor(() => expect(result.current.backgroundActive).toBe(false))
+    expect(result.current.backgroundStartedAt).toBeNull()
+  })
+
+  // 三种「拿不到可信起点」的形状各走一遍（三条判据 typeof / Number.isFinite / >= 0 一一对应）：
+  // 无论哪种，运行条宁可不显示秒表，也不显示一个编出来的数；`active` 本身不受影响。
+  test.each([
+    ['缺失（JSON null）', null, 16],
+    ['非数字', 'soon', 17],
+    ['负数（时钟漂移 / 服务端算反）', -5_000, 18]
+  ] as const)(
+    'ageMs %s → backgroundStartedAt null（active 仍为真）',
+    async (_label, ageMs, sid) => {
+      stubRunActiveFetch({ active: true, runId: `r-noage-${sid}`, ageMs })
+      const { result } = renderHook(
+        () =>
+          useBackgroundChatRun({
+            gatewayBaseUrl: 'http://127.0.0.1:8300',
+            sessionId: sid,
+            enabled: true,
+            refreshNonce: 0,
+            localRunning: false,
+            onSettled: vi.fn()
+          }),
+        { wrapper }
+      )
+      await waitFor(() => expect(result.current.backgroundActive).toBe(true))
+      expect(result.current.backgroundStartedAt).toBeNull()
+    }
+  )
 
   test('disabled → no probe, no subscription', async () => {
     const state = { active: true }

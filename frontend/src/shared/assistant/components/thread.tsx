@@ -19,6 +19,11 @@ interface AssistantThreadProps {
   pendingSlot?: React.ReactNode
   /** Shown by ThreadPrimitive.Empty when the thread has no messages. */
   emptyState?: React.ReactNode
+  /** WP-14 — the composer-anchored run status bar (ThreadRunStatusBar). Rendered between the
+   *  viewport and the composer, i.e. OUTSIDE the scroll area, so it stays put while the user
+   *  scrolls the history. Self-gating (renders null when nothing is running) → omitting it is a
+   *  byte-identical thread. */
+  runStatusSlot?: React.ReactNode
   /** Phase 06a (cutover) — read-only mode for a retired-backend (notion-agent) session opened
    *  from history: render the prior messages but suppress the composer (no new turns on a
    *  retired agent). Default false keeps the live composer for the ai-sdk / custom-api paths. */
@@ -35,6 +40,7 @@ const THREAD_MESSAGE_COMPONENTS = {
 export function AssistantThread({
   pendingSlot,
   emptyState,
+  runStatusSlot,
   readOnly = false
 }: AssistantThreadProps): React.JSX.Element {
   return (
@@ -51,6 +57,7 @@ export function AssistantThread({
             <div className="min-h-2 shrink-0" />
           </ThreadPrimitive.If>
         </ThreadPrimitive.Viewport>
+        {runStatusSlot}
         {!readOnly && <ThreadComposer />}
       </ThreadPrimitive.Root>
     </ThreadReadOnlyContext.Provider>

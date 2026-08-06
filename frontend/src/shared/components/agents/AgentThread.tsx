@@ -57,6 +57,10 @@ interface AgentThreadProps {
   /** assistant-modal P5 — a removable context chip (the current email) rendered just above the composer.
    *  The modal passes the email chip; /sessions omits it → nothing rendered. */
   contextChip?: React.ReactNode
+  /** WP-14 — the composer-anchored run status bar (ThreadRunStatusBar), mounted inside the sticky
+   *  ViewportFooter so it rides with the composer instead of scrolling away with the stream.
+   *  Self-gating (renders null when nothing is running) → omitting it is a byte-identical thread. */
+  runStatusSlot?: React.ReactNode
 }
 
 export function AgentThread({
@@ -64,7 +68,8 @@ export function AgentThread({
   readOnly = false,
   pendingSlot,
   onTurnComplete,
-  contextChip
+  contextChip,
+  runStatusSlot
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
@@ -117,6 +122,8 @@ export function AgentThread({
             )}
           >
             <AgentScrollToBottom />
+            {/* WP-14 — 回合级运行条（进行中才渲染），在 context chip / composer 之上。 */}
+            {runStatusSlot}
             {/* assistant-modal P5 — removable email-context chip directly above the composer (modal only;
               /sessions omits contextChip → nothing here). */}
             {!readOnly && contextChip}

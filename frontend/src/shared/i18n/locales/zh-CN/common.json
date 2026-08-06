@@ -1439,6 +1439,15 @@
       "waiting": "仍在等待响应…",
       "waitingLong": "仍在等待响应（可点停止中断）…"
     },
+    "runStatus": {
+      "connecting": "正在连接…",
+      "callingTool": "正在{tool}…",
+      "writing": "正在回复…",
+      "background": "AI 正在后台继续回复",
+      "safeToLeave": "可以切走，不会中断",
+      "backgroundHint": "完成后自动刷新",
+      "elapsed": "本回合已运行"
+    },
     "thinking": {
       "label": "思考过程",
       "duration": "思考了 {duration}",
@@ -1471,7 +1480,6 @@
       "retryProbe": "重试连接",
       "readOnlyLegacy": "这是旧版引擎的历史会话，已转为只读。新建会话可继续与 AI 对话。",
       "approvalBodyManual": "AI 请求执行 {tool}，需要你批准。",
-      "backgroundRunning": "AI 仍在后台输出，完成后将自动刷新…",
       "turnError": "本轮回答中断",
       "visionHint": "本次对话包含图片附件——如果当前模型不支持图片输入，请换用支持视觉的模型后重试。"
     },

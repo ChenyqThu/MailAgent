@@ -1439,6 +1439,15 @@
       "waiting": "Still waiting for a response…",
       "waitingLong": "Still waiting — you can stop the turn…"
     },
+    "runStatus": {
+      "connecting": "Connecting…",
+      "callingTool": "{tool}…",
+      "writing": "Writing the reply…",
+      "background": "Still responding in the background",
+      "safeToLeave": "Safe to leave — this keeps running",
+      "backgroundHint": "Refreshes when it finishes",
+      "elapsed": "Elapsed this turn"
+    },
     "thinking": {
       "label": "Thinking",
       "duration": "Thought for {duration}",
@@ -1471,7 +1480,6 @@
       "retryProbe": "Retry connection",
       "readOnlyLegacy": "This conversation ran on the retired legacy engine and is read-only. Start a new chat to continue with the AI.",
       "approvalBodyManual": "The assistant wants to run {tool} — your approval is required.",
-      "backgroundRunning": "The assistant is still responding in the background — this view refreshes when it finishes…",
       "turnError": "This response was interrupted",
       "visionHint": "This conversation carries image attachments — if the current model does not support image input, switch to a vision-capable model and retry."
     },

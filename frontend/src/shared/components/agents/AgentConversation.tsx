@@ -44,6 +44,7 @@ import { useApprovalDecideBusy } from '@shared/assistant/useApprovalDecideBusy'
 import { PendingApprovalPanel } from '@shared/assistant/PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
 import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
+import { ThreadRunStatusBar } from '@shared/assistant/components/ThreadRunStatusBar'
 import { type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import { useAgentContextSnapshot } from '@shared/assistant/context/useAgentContextSnapshot'
 import type { CapabilityContext, ContextScope } from '@shared/assistant/context/contextSnapshot'
@@ -368,7 +369,7 @@ export function AgentConversation({
     return dispose
   }, [useAiSdkRuntime, mailApi, chatActiveSessionId, chatReloadActiveSession])
   // B1/B2/B4 — detached-run probe + placeholder + settle reload + unread-badge broadcast glue.
-  const { backgroundActive } = useBackgroundChatRun({
+  const { backgroundActive, backgroundStartedAt } = useBackgroundChatRun({
     gatewayBaseUrl,
     sessionId: chatActiveSessionId,
     enabled: useAiSdkRuntime,
@@ -427,8 +428,8 @@ export function AgentConversation({
   }, [runtimeKey])
 
   // B3 (07-15, 无灵动岛方案优先) — the actionable in-panel approval card for a reloaded MANUAL
-  // session whose paused approval is still live in the gateway stash; B1 — the background-run
-  // placeholder while a detached run streams. Both ride AgentThread's pendingSlot.
+  // session whose paused approval is still live in the gateway stash. Rides AgentThread's
+  // pendingSlot. (B1 的「AI 仍在后台输出」提示 WP-14 起收编进 composer 上方的运行条，见下。)
   const pendingApprovalCard =
     useAiSdkRuntime &&
     gatewayBaseUrl != null &&
@@ -444,22 +445,15 @@ export function AgentConversation({
         onDecideBusyChange={onDecideBusyChange}
       />
     ) : undefined
-  const backgroundRunNotice = backgroundActive ? (
-    <div
-      data-background-run-notice
-      className="mx-auto flex w-full max-w-[var(--thread-max-width)] items-center gap-2 rounded-md border border-ink-border bg-ink-3/70 px-3 py-2 text-aux text-ink-fg-2"
-    >
-      <span className="size-1.5 shrink-0 animate-pulse rounded-full bg-coral/100" aria-hidden />
-      {t('chat.aiSdk.backgroundRunning')}
-    </div>
-  ) : undefined
-  const pendingSlotContent =
-    pendingApprovalCard || backgroundRunNotice ? (
-      <>
-        {backgroundRunNotice}
-        {pendingApprovalCard}
-      </>
-    ) : undefined
+  const pendingSlotContent = pendingApprovalCard
+  // WP-14 — 回合级运行条（阶段短语 / 当前工具名 / 回合秒表 + detached run 的 ageMs 接续）。
+  // 住在 AgentThread 的 sticky ViewportFooter 里，跟着 composer 走、不随消息流滚走。
+  const runStatusSlot = (
+    <ThreadRunStatusBar
+      backgroundActive={backgroundActive}
+      backgroundStartedAt={backgroundStartedAt}
+    />
+  )
 
   // ai-sdk: create the backend_kind='ai-sdk' general session on the first send, adopt it (history /
   // reload), and hand the id to the gateway latch for the dual-write.
@@ -667,6 +661,7 @@ export function AgentConversation({
                 welcomeAlign={welcomeAlign}
                 contextChip={emailContextChip}
                 pendingSlot={pendingSlotContent}
+                runStatusSlot={runStatusSlot}
               />
             </AiSdkRuntimeProvider>
           )

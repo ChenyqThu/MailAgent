@@ -66,6 +66,9 @@ export interface UseBackgroundChatRunOptions {
 
 export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
   backgroundActive: boolean
+  /** WP-14 — 后台 run 的回合起点（epoch ms），供 composer 上方运行条的秒表**接续**（切走再切回
+   *  不清零）。`backgroundActive` 为假、或探针没给 `ageMs` 时为 null。 */
+  backgroundStartedAt: number | null
 } {
   const {
     gatewayBaseUrl,
@@ -82,17 +85,30 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
   const probeEnabled = enabled && gatewayBaseUrl != null && sessionId != null
   const runActiveQ = useQuery({
     queryKey: qk.aiGateway.runActive(gatewayBaseUrl, sessionId, refreshNonce),
-    queryFn: async (): Promise<{ active: boolean; runId: string | null }> => {
+    queryFn: async (): Promise<{
+      active: boolean
+      runId: string | null
+      startedAt: number | null
+    }> => {
       try {
         const res = await fetch(`${gatewayBaseUrl}/api/ai/run/active?sessionId=${sessionId}`)
-        if (!res.ok) return { active: false, runId: null } // 404 = fail-closed truth
-        const body = (await res.json()) as { active?: unknown; runId?: unknown }
+        if (!res.ok) return { active: false, runId: null, startedAt: null } // 404 = fail-closed truth
+        const body = (await res.json()) as { active?: unknown; runId?: unknown; ageMs?: unknown }
+        // WP-14 — 服务端只给「已经跑了多久」（handleRunActive: Date.now() - entry.startedAt），
+        // 在拿到响应的这一刻折算成本地 epoch 起点，之后由渲染器墙钟自己往上长。非有限/负数一律
+        // 当没有（宁可不显示秒表，也不显示一个编出来的数）。
+        const ageMs = body.ageMs
+        const startedAt =
+          typeof ageMs === 'number' && Number.isFinite(ageMs) && ageMs >= 0
+            ? Date.now() - ageMs
+            : null
         return {
           active: body.active === true,
-          runId: typeof body.runId === 'string' ? body.runId : null
+          runId: typeof body.runId === 'string' ? body.runId : null,
+          startedAt
         }
       } catch {
-        return { active: false, runId: null }
+        return { active: false, runId: null, startedAt: null }
       }
     },
     enabled: probeEnabled,
@@ -208,5 +224,9 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
     return dispose
   }, [enabled, mailApi, qc, gatewayBaseUrl, fireSettle])
 
-  return { backgroundActive: active && !localRunning && !activeIsOwnRun }
+  const backgroundActive = active && !localRunning && !activeIsOwnRun
+  return {
+    backgroundActive,
+    backgroundStartedAt: backgroundActive ? (runActiveQ.data?.startedAt ?? null) : null
+  }
 }
