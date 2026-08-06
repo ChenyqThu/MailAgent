@@ -21,9 +21,18 @@ import { useEffect, useRef, useState } from 'react'
 
 import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 
-/** Re-render cadence while a tool runs. 200ms keeps the tenths digit visibly moving without
- *  turning a long-running tool into a render storm. */
-const TICK_MS = 200
+/** Re-render cadence while a tool runs.
+ *
+ *  08-06 owner dogfood ⑤: 200ms → 100ms. At 200ms the tenths digit advanced in steps of two
+ *  (0.2 → 0.4 → 0.6), which is exactly the "跳不连贯" the owner reported; 100ms is the smallest
+ *  cadence that still maps 1:1 onto the displayed precision (one decimal = 100ms), so every tick
+ *  changes the reading by exactly one unit and no tick is wasted.
+ *
+ *  🔴 Doubling the cadence doubles how often every consumer re-renders, so the ticking hook is now
+ *  isolated in leaf components (`ToolTraceCard`'s `ToolElapsedLabel`): the card's no-dependency
+ *  scroll-follow layout effect must not be re-run by the clock. See ToolTraceCard's note on
+ *  `stickToBottomRef` for why that effect is dangerous when re-run. */
+const TICK_MS = 100
 
 /** Elapsed ms → a compact, monospace-friendly label. Sub-minute keeps one decimal (a tool call is
  *  usually 0.3–20s, where the tenths digit is the信息); past a minute the decimal is noise. */

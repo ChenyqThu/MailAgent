@@ -296,6 +296,90 @@ describe('EffortPicker — 档位随模型', () => {
   })
 })
 
+// ── 3b. 08-06 owner dogfood ②：四格信号图标 ───────────────────────────────────────
+//
+// owner 原话：「Effort 的按钮，最好都是固定浅灰色四格信号 icon，根据不同 effort 级别，高亮不同
+// 格数，而不是不显示，这样 effort 低的时候，icon 就很小，显得不整齐。」
+//
+// 覆盖的契约：
+//   1. **四格恒画**（不管哪一档、包括 disabled）—— 这是「显得不整齐」的修法本体：旧的 lucide
+//      Signal* 一族按档位少画格子，low 档时图标里只剩一根竖线。
+//   2. **点亮格数按 canonical 全集**（none=0 / low=1 / medium=2 / high=3 / xhigh=max=4）——
+//      刻意不按当前模型的可用子集：子集映射下同一个 medium 在 4 档模型上是 2 格、在 3 档模型上
+//      是 3 格，用户只换模型没改设置、信号强度却变了。
+//   3. **不适用（模型无 reasoning）→ 0 格亮**，但四个占位格照画（尺寸不跳）。
+const barsOf = (el: HTMLElement): number => Number(el.getAttribute('data-effort-bars'))
+/** 🔴 按 role 取触发器：菜单本身也带同一个 aria-label（`role="menu"`），
+ *  菜单开着时 `getByLabelText` 会命中两个。 */
+const triggerIcon = (): HTMLElement =>
+  screen
+    .getByRole('button', { name: i18n.t('chat.effort.label') })
+    .querySelector('[data-effort-bars]') as HTMLElement
+
+describe('EffortPicker — 四格信号图标（08-06 ②）', () => {
+  test('🔴 四格恒画：任何档位下 rect 都是 4 个，外框尺寸不随档位变', () => {
+    render(<PickerHarness model={SONNET.ref} models={[SONNET]} />)
+    fireEvent.click(screen.getByLabelText(i18n.t('chat.effort.label')))
+    for (const item of screen.getAllByRole('menuitemradio')) {
+      const svg = item.querySelector('[data-effort-bars]') as SVGElement
+      expect(svg.querySelectorAll('rect')).toHaveLength(4)
+      expect(svg.getAttribute('viewBox')).toBe('0 0 24 24')
+    }
+    // 触发器（当前档 = sonnet 默认 medium）同样四格。
+    expect(triggerIcon().querySelectorAll('rect')).toHaveLength(4)
+  })
+
+  test('🔴 档位 → 点亮格数（canonical 全集）；未达档位的格子是浅灰占位不是不画', () => {
+    render(<PickerHarness model={OPUS5.ref} models={[OPUS5]} />)
+    fireEvent.click(screen.getByLabelText(i18n.t('chat.effort.label')))
+    const byTier = new Map(
+      screen
+        .getAllByRole('menuitemradio')
+        .map((b) => [b.textContent ?? '', b.querySelector('[data-effort-bars]') as HTMLElement])
+    )
+    const barsFor = (tier: string): number =>
+      barsOf([...byTier.entries()].find(([label]) => label.includes(T(tier)))![1])
+    expect(barsFor('low')).toBe(1)
+    expect(barsFor('medium')).toBe(2)
+    expect(barsFor('high')).toBe(3)
+    expect(barsFor('xhigh')).toBe(4)
+    expect(barsFor('max')).toBe(4) // 6 档塞 4 格的唯一碰撞，放在最顶上那对
+    // 占位格 = 同一颗 svg 里 fill-opacity 低的那些（不是缺席的 rect）。
+    const lowIcon = [...byTier.entries()].find(([label]) => label.includes(T('low')))![1]
+    const faint = [...lowIcon.querySelectorAll('rect')].filter(
+      (r) => Number(r.getAttribute('fill-opacity')) < 1
+    )
+    expect(faint).toHaveLength(3)
+  })
+
+  test('「不思考」= 0 格亮（与 low 的唯一区别）；模型无 reasoning → 同样 0 格，但四格照画', () => {
+    render(<PickerHarness model={SONNET.ref} models={[SONNET]} />)
+    fireEvent.click(screen.getByLabelText(i18n.t('chat.effort.label')))
+    const none = screen.getByRole('menuitemradio', { name: new RegExp(T('none')) })
+    expect(barsOf(none.querySelector('[data-effort-bars]') as HTMLElement)).toBe(0)
+    cleanup()
+
+    const dumb = option({
+      ref: 'openai:gpt-4o',
+      providerId: 'openai',
+      protocol: 'openai',
+      capabilities: { reasoning: false }
+    })
+    render(<PickerHarness model={dumb.ref} models={[dumb]} />)
+    expect(barsOf(triggerIcon())).toBe(0)
+    expect(triggerIcon().querySelectorAll('rect')).toHaveLength(4)
+  })
+
+  test('🔴 切模型不改档位时图标不跳（canonical 映射的全部理由）', () => {
+    localStorage.setItem(EFFORT_PREF_KEY, 'medium')
+    const { rerender } = render(<PickerHarness model={SONNET.ref} models={[SONNET, OPUS5]} />)
+    const onSonnet = barsOf(triggerIcon()) // manual 族 4 档
+    rerender(<PickerHarness model={OPUS5.ref} models={[SONNET, OPUS5]} />)
+    expect(barsOf(triggerIcon())).toBe(onSonnet) // adaptive 族 5 档，同一个 medium 同一个格数
+    expect(onSonnet).toBe(2)
+  })
+})
+
 // ── 4. wire 闸：请求体到底带不带 effort ─────────────────────────────────────────
 
 function stubChatFetch(): ReturnType<typeof vi.fn> {

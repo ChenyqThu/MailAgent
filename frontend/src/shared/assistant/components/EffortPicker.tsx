@@ -21,26 +21,72 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { SignalHigh, SignalLow, SignalMedium, SignalZero } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import type { ComposerEffortControl } from '@shared/hooks/useComposerEffort'
-import type { EffortTier } from '@shared/modelCatalog/effortTiers'
+import { effortTierIndex, type EffortTier } from '@shared/modelCatalog/effortTiers'
 
 const ICON_BTN =
   'grid h-7 w-7 place-items-center rounded-md transition-[color,background-color,transform] duration-fast'
 
-/** 档位 → 信号格数。high/xhigh/max 共用满格（图标只有四档形状，硬造第五第六格反而读不出来；
- *  具体是哪一档由菜单里的选中行负责表达）。 */
+// ── 08-06 owner dogfood ②：四格信号图标 ──────────────────────────────────────────
+// owner 原话：「最好都是固定浅灰色四格信号 icon，根据不同 effort 级别，高亮不同格数，而不是
+// 不显示，这样 effort 低的时候，icon 就很小，显得不整齐。」
+// 换掉 lucide 的 SignalZero/Low/Medium/High —— 那一组**只画到档位为止**，low 档时图标里只有一根
+// 3px 的小竖线，一排控件因此看着参差。现在四格恒画，未达档位的格子留 22% 不透明度的占位。
+//
+// 🔴 **档位 → 格数按 canonical 全集（`none < low < medium < high < xhigh < max`）取，不按当前
+// 模型的可用子集取**。理由是「切模型时图标不该跳」：子集映射下同一个 medium 在 4 档模型上是 2 格、
+// 在 3 档模型上是 3 格，用户没改任何设置、只换了模型，信号强度却变了 —— 那才是真的误导。
+// 代价是一次碰撞：6 档塞进 4 格必然有两档同形，放在最顶上那对（xhigh / max，都是「顶格思考」）
+// 代价最小；具体是哪一档由菜单里的选中行 + hover 文案负责说清。
+// 另一个代价：4 档家族（manual Claude 的 none/low/medium/high）用不到第 4 格。这是**如实的** ——
+// high 在全局阶梯上确实不是顶格，那个家族就是上不去。
+const BARS = [
+  { x: 2.5, y: 16 },
+  { x: 8, y: 12 },
+  { x: 13.5, y: 8 },
+  { x: 19, y: 4 }
+] as const
+const BAR_BOTTOM = 21
+
+/** 档位 → 点亮的格数（0..4）。`none`（不思考）= 一格不亮，这是它与 low 的唯一视觉区别。 */
+function litBars(tier: EffortTier): number {
+  return Math.min(BARS.length, effortTierIndex(tier))
+}
+
+/** 固定四格信号。外框尺寸与格子位置**不随档位变化**（这是 owner 那条「显得不整齐」的修法）。 */
 function TierIcon({ tier, size = 13 }: { tier: EffortTier; size?: number }): React.JSX.Element {
-  const props = { size, strokeWidth: 2, className: 'shrink-0' }
-  if (tier === 'none') return <SignalZero {...props} />
-  if (tier === 'low') return <SignalLow {...props} />
-  if (tier === 'medium') return <SignalMedium {...props} />
-  return <SignalHigh {...props} />
+  const lit = litBars(tier)
+  return (
+    <svg
+      width={size}
+      height={size}
+      viewBox="0 0 24 24"
+      className="shrink-0"
+      aria-hidden="true"
+      data-effort-bars={lit}
+    >
+      {BARS.map((bar, i) => (
+        <rect
+          key={bar.x}
+          x={bar.x}
+          y={bar.y}
+          width={2.5}
+          height={BAR_BOTTOM - bar.y}
+          rx={1}
+          fill="currentColor"
+          // 占位格走 currentColor 的低不透明度而不是写死灰值：明暗主题、disabled 半透、
+          // 菜单里选中行的 coral 前景，四种上下文下都自动跟着走。0.22 对齐紧邻的 context 环
+          // 底圈（`strokeOpacity={0.2}`）—— 同一排上「没走满的刻度」应该是同一个视觉重量。
+          fillOpacity={i < lit ? 1 : 0.22}
+        />
+      ))}
+    </svg>
+  )
 }
 
 export function EffortPicker({

@@ -8,7 +8,7 @@
 //      不渲染（后两者的状态归消息流里的审批卡与错误 footer，运行条不抢话）。
 //   2. **detached run 的秒表接续**：`/api/ai/run/active` 只给 `ageMs`，换算成起点后秒表必须从
 //      「已经跑了 42 秒」接着走 —— 切走再切回读数**不清零**是这个包的核心验收项，所以这里直接
-//      断言它不是 0:00。
+//      断言它不是 0.0s。
 //   3. **reduced-motion 不 tick 就不显示秒表**（沿用 useToolElapsed 的契约：冻住的读数是谎话）。
 //
 // 渲染用的是真 ai-sdk runtime 管线（useAISDKRuntime → AISDKMessageConverter），harness 逐字沿用
@@ -249,7 +249,9 @@ describe('ThreadRunStatusBar — detached run（backgroundActive）', () => {
     expect(screen.getByText('完成后自动刷新')).toBeTruthy()
   })
 
-  // 🔴 本包的核心验收项：切走再切回，秒表接着 /run/active 的 ageMs 走，而不是从 0:00 重来。
+  // 🔴 本包的核心验收项：切走再切回，秒表接着 /run/active 的 ageMs 走，而不是从 0.0s 重来。
+  // （08-06 ⑤ 提频/提精度后这条尤其要守：参考实现的「计数器每 tick +1」形状一重挂载就归零，
+  //   正是被这一格拦下的东西。）
   test('秒表用 ageMs 换算的起点接续 —— 不清零', async () => {
     allowMotion()
     render(
@@ -264,9 +266,9 @@ describe('ThreadRunStatusBar — detached run（backgroundActive）', () => {
       />
     )
     const clock = await waitFor(() => screen.getByTitle('本回合已运行'), { timeout: 3000 })
-    expect(clock.textContent).not.toBe('0:00')
-    // 42s 起算，加上测试自身的调度余量 → 0:42~0:45。
-    expect(clock.textContent).toMatch(/^0:4[2-9]$/)
+    expect(clock.textContent).not.toBe('0.0s')
+    // 42s 起算，加上测试自身的调度余量 → 42.0s~49.9s。
+    expect(clock.textContent).toMatch(/^4[2-9]\.\ds$/)
   })
 
   // 🔴 回归：后台 run 的起点绝不能漏进紧接着的**附着**回合。用户在后台 run 还挂着时直接发下一条
@@ -286,9 +288,12 @@ describe('ThreadRunStatusBar — detached run（backgroundActive）', () => {
         backgroundStartedAt={Date.now() - 42_000}
       />
     )
-    await waitFor(() => expect(screen.getByTitle('本回合已运行').textContent).toMatch(/^0:4/), {
-      timeout: 3000
-    })
+    await waitFor(
+      () => expect(screen.getByTitle('本回合已运行').textContent).toMatch(/^4[2-9]\./),
+      {
+        timeout: 3000
+      }
+    )
     // 生产次序：store 先翻 running（backgroundActive 仍真、条子仍挂着），随后 ThreadRunningBridge
     // 才把 localRunning 报上去 → backgroundActive 翻假。中间没有「整条 null」的空档。
     rerender(
@@ -310,7 +315,7 @@ describe('ThreadRunStatusBar — detached run（backgroundActive）', () => {
     )
     await waitFor(() => expect(bar()?.getAttribute('data-run-status-bar')).toBe('connecting'))
     const clock = await waitFor(() => screen.getByTitle('本回合已运行'), { timeout: 3000 })
-    expect(clock.textContent).toMatch(/^0:0[0-3]$/)
+    expect(clock.textContent).toMatch(/^[0-3]\.\ds$/)
   })
 
   test('reduced-motion（套件默认）→ 不 tick，于是整条秒表不出现（冻住的读数是谎话）', async () => {
@@ -363,19 +368,34 @@ describe('两个 thread shell 都挂 runStatusSlot', () => {
 
 // --- ④ 秒表本体 -------------------------------------------------------------------------------
 
-describe('formatRunElapsed', () => {
+// 08-06 owner dogfood ⑤ —— 「计时器的跳不连贯」。两件事一起改：节拍 500ms→100ms（TICK_MS）
+// 与读数精度整秒→一位小数（本函数）。**只改节拍治不好**：整秒读数每秒才变一次，跳不跳只取决于
+// tick 网格与秒边界的相位。所以下面的表是真正的验收面 —— 断言的是**读数**，不是常量字面量。
+describe('formatRunElapsed（08-06 ⑤：一位小数）', () => {
   test.each([
-    [0, '0:00'],
-    [900, '0:00'],
-    [1_000, '0:01'],
-    [42_300, '0:42'],
-    [59_999, '0:59'],
-    [60_000, '1:00'],
-    [65_000, '1:05'],
-    [3_600_000, '1:00:00'],
-    [3_723_000, '1:02:03']
+    [0, '0.0s'],
+    [900, '0.9s'],
+    [1_000, '1.0s'],
+    // 🔴 owner 举的那个读数：1.5 秒时必须显示 1.5s（不是 1s，也不是 2s）。
+    [1_500, '1.5s'],
+    [1_599, '1.5s'], // 向下截断到十分位，不四舍五入
+    [42_300, '42.3s'],
+    // 🔴 边界：toFixed 自带的四舍五入会把这个变成不存在的 '60.0s'（且跳过 1m 00.0s）。
+    [59_990, '59.9s'],
+    [59_999, '59.9s'],
+    [60_000, '1m 00.0s'],
+    [65_200, '1m 05.2s'],
+    [3_599_900, '59m 59.9s'],
+    [3_600_000, '1h 00m 00.0s'],
+    [3_723_400, '1h 02m 03.4s']
   ])('%dms → %s', (ms, expected) => {
     expect(formatRunElapsed(ms)).toBe(expected)
+  })
+
+  test('🔴 相邻十分位一定读出不同的数（= 每个 tick 都看得见，这就是"连贯"的定义）', () => {
+    const seen = new Set<string>()
+    for (let ms = 0; ms < 3_000; ms += 100) seen.add(formatRunElapsed(ms))
+    expect(seen.size).toBe(30) // 3 秒里 30 个不同读数；整秒格式只会给出 3 个
   })
 
   test('非有限 / 负数 → 空串（不编数）', () => {
@@ -404,5 +424,31 @@ describe('useRunElapsed', () => {
     const { result } = renderHook(() => useRunElapsed(Date.now() - 42_000))
     await new Promise((r) => setTimeout(r, 700))
     expect(result.current).toBeNull()
+  })
+
+  // 🔴 08-06 ⑤ —— 节拍 500ms → 100ms。判据取**刷新次数**而不是 `TICK_MS === 100`：常量断言是假闸
+  // （把 interval 换成 rAF、或干脆不 setState 都照样绿）。700ms 里：100ms 档 ≈7 次刷新，旧的
+  // 500ms 档只有 1 次。阈值取 5，能咬住回退又给调度抖动留余量。
+  test('🔴 节拍 100ms：700ms 内至少刷新 5 次（500ms 档只做得到 1 次）', async () => {
+    allowMotion()
+    const { result } = renderHook(() => useRunElapsed(null))
+    const seen = new Set<number>()
+    await waitFor(
+      () => {
+        if (result.current !== null) seen.add(result.current)
+        expect(seen.size).toBeGreaterThanOrEqual(5)
+      },
+      { timeout: 700, interval: 20 }
+    )
+  })
+
+  // 🔴 参考实现的「计数器每 tick +1」形状会在这里当场翻车：起点必须来自 anchor 的墙钟差，
+  // 而不是本实例累加了多少个 tick。
+  test('🔴 起点是墙钟差不是 tick 计数：读数一上来就 ≥42s，不是从 0 累加上去的', async () => {
+    allowMotion()
+    const { result } = renderHook(() => useRunElapsed(Date.now() - 42_000))
+    await waitFor(() => expect(result.current).not.toBeNull(), { timeout: 3000 })
+    // 第一次拿到的读数就已经在 42s 附近（累加式实现这时只会是 0.1s 上下）。
+    expect(result.current).toBeGreaterThanOrEqual(42_000)
   })
 })

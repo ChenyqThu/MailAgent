@@ -183,6 +183,32 @@ function safeParseObject(text: string): Record<string, unknown> | null {
   }
 }
 
+/** 标题行右端的耗时读数。
+ *
+ *  🔴 **这颗时钟必须住在一个叶子组件里**（08-06 ⑤）：`useToolElapsed` 每 tick 就 setState 一次，
+ *  挂在 `ToolTraceCard` 上时**整张卡**跟着重渲，连带把下面那个**无依赖数组**的滚动跟随
+ *  layout effect 一起重跑（见该 effect 的注释：它是有意无依赖的，靠 `stickToBottomRef` 挡住
+ *  「把正在往上翻的用户拽回底部」）。节拍从 200ms 提到 100ms 后这条链的频率翻倍 —— 与其继续
+ *  依赖那道闸兜住每一次误触发，不如把**因果**掐掉：秒表的 setState 现在只重渲这一个 span。
+ *
+ *  语义与内联时逐字相同：`live` 翻 false 时 hook 的 cleanup 取终值并冻住（本组件恒挂载、
+ *  只是读数为 null 时渲染 null，不会因为 settle 而卸载 → 冻值照常留在屏幕上）。 */
+function ToolElapsedLabel({
+  live,
+  title
+}: {
+  live: boolean
+  title: string
+}): React.JSX.Element | null {
+  const elapsed = useToolElapsed(live)
+  if (elapsed === null) return null
+  return (
+    <span className="shrink-0 font-mono text-meta tabular-nums text-ink-fg-3" title={title}>
+      {formatToolDuration(elapsed)}
+    </span>
+  )
+}
+
 export function ToolTraceCard({
   toolName,
   args,
@@ -208,7 +234,6 @@ export function ToolTraceCard({
   const part = { argsText, result, isError, approval, status }
   const phase = deriveToolPhase(part)
   const settled = isToolPhaseSettled(phase)
-  const elapsed = useToolElapsed(!settled)
 
   // R1 —「完成即自动折叠」(beui `collapseOnComplete`). Adjust-on-prop-change (react.dev), the same
   // shape `ToolGroupCard` uses one level up: running → settled 收起, settled → running 再展开.
@@ -255,12 +280,14 @@ export function ToolTraceCard({
   // 代价可忽略。rAF 是为了让浏览器先完成本次 commit 的布局，再读 scrollHeight（同帧直接读会拿到
   // 旧高度，永远差一屏）。reduce 下 behavior 取 'auto'（瞬移）——「减弱动态效果」也包含平滑滚动。
   //
-  // 🔴 `stickToBottomRef` 不是可选的加分项，是这条「无依赖数组」的必要配套：running 期间
-  // `useToolElapsed` 每 200ms 就 setState 一次（reduce 下才不 tick），于是**每 200ms 重跑一次
-  // 本 effect**。没有这个闸时，用户手动往上滚看已流过的参数，会在 200ms 内被拽回底部 —— 实测
-  // 500ms 内被强制 scrollTo 两次，等于这个视口在 running 期间根本不能读。而这张卡 running 期
-  // 展开**只可能**来自用户手点（R1 从不自动展开挂载即 running 的卡），所以被拽回的恰恰是刚刚
-  // 明确表达了「我要看」的那个人。
+  // 🔴 `stickToBottomRef` 不是可选的加分项，是这条「无依赖数组」的必要配套：用户手动往上滚看
+  // 已流过的参数时，任何一次本组件重渲都会把他拽回底部 —— 而这张卡 running 期展开**只可能**
+  // 来自用户手点（R1 从不自动展开挂载即 running 的卡），被拽回的恰恰是刚刚明确表达了「我要看」
+  // 的那个人。
+  // 🔴 08-06 ⑤ 补：重渲的最大来源曾经是**秒表自己** —— `useToolElapsed` 原先挂在本组件上，每
+  // 200ms setState 一次 → 每 200ms 重跑一次本 effect（实测 500ms 内强制 scrollTo 两次）。节拍
+  // 提到 100ms 前先把这条因果掐掉：时钟已下沉到叶子组件 `ToolElapsedLabel`，本 effect 不再被
+  // 秒表唤醒。上面那道闸**照旧保留**（它防的是「任何原因导致的重渲」，不只是秒表）。
   useLayoutEffect(() => {
     const viewport = viewportRef.current
     if (!viewport || !open || settled || !stickToBottomRef.current) return
@@ -352,14 +379,7 @@ export function ToolTraceCard({
             />
           ) : null}
         </span>
-        {elapsed !== null && (
-          <span
-            className="shrink-0 font-mono text-meta tabular-nums text-ink-fg-3"
-            title={t('chat.toolStep.duration')}
-          >
-            {formatToolDuration(elapsed)}
-          </span>
-        )}
+        <ToolElapsedLabel live={!settled} title={t('chat.toolStep.duration')} />
         <span
           className="grid w-3.5 shrink-0 place-items-center"
           role="img"

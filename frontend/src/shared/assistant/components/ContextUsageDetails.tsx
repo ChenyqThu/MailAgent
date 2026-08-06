@@ -57,11 +57,15 @@ function TotalRow({
 
 export function ContextUsageDetails({
   breakdown,
-  loading
+  loading,
+  overflow
 }: {
   breakdown: ContextBreakdown
   /** 可测段还在拉（/chat/config）。总量先出，段位后到 —— 不为了对齐而让整个面空着。 */
   loading: boolean
+  /** 实报占用 > 目录记的上限（中转档位 / 目录过时）。08-06 ①：短提示删掉后，这条告警只剩
+   *  这个面能说 —— 不补进来就等于「悄悄把一个已知不准的上限当准的用」。 */
+  overflow: boolean
 }): React.JSX.Element {
   const { t } = useTranslation()
   const { segments, hasSegments, used, limit, remaining, estimateExceedsTotal } = breakdown
@@ -141,6 +145,22 @@ export function ContextUsageDetails({
           </>
         )}
       </div>
+
+      {/* 08-06 ①：随短提示一起被删掉的两句诚实话，搬到这里。上限未知时**说出原因**（否则
+          「怎么没有剩余」只能靠猜）；超限时如实说上限本身可能不对。 */}
+      {typeof limit !== 'number' && (
+        <p
+          data-testid="context-limit-unknown"
+          className="mt-2 text-micro leading-snug text-ink-fg-3"
+        >
+          {t('chat.contextUsage.limitUnknown')}
+        </p>
+      )}
+      {overflow && (
+        <p data-testid="context-overflow" className="mt-2 text-micro leading-snug text-warn">
+          {t('chat.contextUsage.overflowTip')}
+        </p>
+      )}
 
       {hasSegments && (
         <p className="mt-2 text-micro leading-snug text-ink-fg-3">

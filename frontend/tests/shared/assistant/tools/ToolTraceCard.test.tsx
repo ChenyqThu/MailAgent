@@ -197,7 +197,7 @@ describe('ToolTraceCard — ③ 标题行: status + live elapsed', () => {
 
   test('motion allowed → the clock TICKS while running and FREEZES on settle', async () => {
     // Opt out of the suite-wide reduced-motion stub (tests/setup.ts) — precedent:
-    // tests/shared/useExitAnimation.test.tsx. Real timers: the tick is 200ms.
+    // tests/shared/useExitAnimation.test.tsx. Real timers: the tick is 100ms (08-06 ⑤).
     vi.stubGlobal(
       'matchMedia',
       (query: string) =>
@@ -239,6 +239,48 @@ describe('ToolTraceCard — ③ 标题行: status + live elapsed', () => {
       expect(settledText).toMatch(DURATION_RE)
       await new Promise((resolve) => setTimeout(resolve, 500))
       expect(screen.getByTitle('耗时').textContent).toBe(settledText)
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  // 🔴 08-06 owner dogfood ⑤ —— 「计时器的跳不连贯，看起来是 200ms？是不是 100ms 流畅一些」。
+  // 判据取**读数序列**而不是 `TICK_MS === 100`：常量断言是假闸（改了显示精度、或把 interval 换成
+  // rAF，它照样绿）。这里数的是「700ms 内这行字变了几个不同的值」——
+  //   · 100ms 档：≈7 个；
+  //   · 旧的 200ms 档：≈3 个（且十分位每次跳 2，正是 owner 看到的那种不连贯）。
+  // 取 ≥5 作阈值：能咬住 200ms 回退，又给调度抖动留了 3 个 tick 的余量。
+  test('🔴 节拍 100ms：读数在 700ms 内至少换 5 个不同的值（200ms 档只做得到 3 个）', async () => {
+    vi.stubGlobal(
+      'matchMedia',
+      (query: string) =>
+        ({
+          matches: false,
+          media: query,
+          addEventListener: () => {},
+          removeEventListener: () => {},
+          addListener: () => {},
+          removeListener: () => {},
+          dispatchEvent: () => false,
+          onchange: null
+        }) as unknown as MediaQueryList
+    )
+    try {
+      render(
+        <Harness
+          status="streaming"
+          messages={turn('kos_query', { state: 'input-available', input: { q: 'okr' } })}
+        />
+      )
+      await waitFor(() => expect(screen.getByTitle('耗时')).toBeTruthy())
+      const seen = new Set<string>()
+      await waitFor(
+        () => {
+          seen.add(screen.getByTitle('耗时').textContent ?? '')
+          expect(seen.size).toBeGreaterThanOrEqual(5)
+        },
+        { timeout: 700, interval: 20 }
+      )
     } finally {
       vi.unstubAllGlobals()
     }

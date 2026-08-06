@@ -11,7 +11,7 @@
 // MarkdownText is mocked to a plain div (its internals are covered by its own tests).
 
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { ChatMessage, ChatSessionListItem } from '@shared/api/types'
@@ -233,5 +233,119 @@ describe('Agent view — unified history list (Phase 9)', () => {
   test('empty unified list shows the empty-history hint', () => {
     render(<AgentThreadList items={[]} {...handlers} />)
     expect(screen.getByText(i18n.t('agentView.emptyHistory'))).toBeTruthy()
+  })
+})
+
+// ── 08-06 owner dogfood ④：star 收进「…」菜单，行首图标表达星标态 ─────────────────────
+//
+// owner 原话：「会话列表，不要把 star 按钮直接铺出来，放在…菜单里，只是 star 后，会话前面的
+// icon（现在是线条 chat icon）换成实心黄色 star icon 来标识就好了。」
+//
+// 覆盖的契约：
+//   1. 行上**不再常驻** star 按钮（每行少一个恒在的动作面）；
+//   2. 星标态由**行首图标**表达：线条 chat/mail → 实心琥珀 star（用 `--c-impt`，不是 warn/fail
+//      —— 后两个在本 app 恒表示「出问题了」）；
+//   3. 星标动作搬进已有的「…」菜单，且与**置顶**是分开的两项（pin 排序、star 标识，两件事）。
+describe('Agent view — 会话行星标（08-06 ④）', () => {
+  const handlers = {
+    activeSessionId: null,
+    onSelect: vi.fn(),
+    onNew: vi.fn(),
+    onDelete: vi.fn(),
+    onRename: vi.fn(),
+    onArchive: vi.fn(),
+    onRestore: vi.fn(),
+    onPin: vi.fn(),
+    onStar: vi.fn(),
+    collapsed: false,
+    onToggleCollapse: vi.fn()
+  }
+  const starIcon = (root: HTMLElement): Element | null =>
+    root.querySelector('svg.lucide-star[fill="currentColor"]')
+
+  test('🔴 行上不再常驻 star 按钮（搬进「…」菜单之前它是每行第一个可点的东西）', () => {
+    render(
+      <AgentThreadList
+        items={[fakeListItem({ id: 1, first_user_message: 'hi', starred: 1 })]}
+        {...handlers}
+      />
+    )
+    // 菜单没打开时，整棵树里不该有星标动作的可点面。
+    expect(screen.queryByRole('button', { name: i18n.t('agentView.unstar') })).toBeNull()
+    expect(screen.queryByRole('button', { name: i18n.t('agentView.star') })).toBeNull()
+  })
+
+  test('🔴 星标态 = 行首实心琥珀星；未星标仍是线条 chat 图标', () => {
+    const { container, rerender } = render(
+      <AgentThreadList
+        items={[fakeListItem({ id: 1, first_user_message: 'hi', starred: 0 })]}
+        {...handlers}
+      />
+    )
+    expect(starIcon(container)).toBeNull()
+
+    rerender(
+      <AgentThreadList
+        items={[fakeListItem({ id: 1, first_user_message: 'hi', starred: 1 })]}
+        {...handlers}
+      />
+    )
+    const star = starIcon(container)
+    expect(star).toBeTruthy()
+    // 琥珀（--c-impt），不是 accent/warn/fail。
+    expect(star!.getAttribute('class')).toContain('text-impt')
+  })
+
+  // 🔴 本批引入的退化，必须补回：改动前星标是一颗带 `aria-pressed` 的按钮，读屏两态都能读出；
+  // 改成纯视觉图标后若不给可及名，状态就只能从「…」菜单的动作文案倒推。**两态都要有名**
+  // （不是只在星标时加一句）—— 那才是与 `aria-pressed` 等价的 parity。
+  test('🔴 星标态对读屏可见：行首图标两态各有可及名', () => {
+    const { rerender } = render(
+      <AgentThreadList
+        items={[fakeListItem({ id: 1, first_user_message: 'hi', starred: 1 })]}
+        {...handlers}
+      />
+    )
+    expect(screen.getByRole('img', { name: i18n.t('agentView.starred') })).toBeTruthy()
+    expect(screen.queryByRole('img', { name: i18n.t('agentView.notStarred') })).toBeNull()
+
+    rerender(
+      <AgentThreadList
+        items={[fakeListItem({ id: 1, first_user_message: 'hi', starred: 0 })]}
+        {...handlers}
+      />
+    )
+    expect(screen.getByRole('img', { name: i18n.t('agentView.notStarred') })).toBeTruthy()
+    expect(screen.queryByRole('img', { name: i18n.t('agentView.starred') })).toBeNull()
+  })
+
+  test('「…」菜单里能加星 / 取消星标，且与置顶分开两项', async () => {
+    handlers.onStar.mockClear()
+    handlers.onPin.mockClear()
+    const { rerender } = render(
+      <AgentThreadList
+        items={[fakeListItem({ id: 7, first_user_message: 'hi', starred: 0 })]}
+        {...handlers}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('agentView.more') }))
+    const starItem = await screen.findByRole('button', { name: i18n.t('agentView.star') })
+    // 置顶是**另一项**（两件事：pin 管排序、star 管标识），断言要在菜单还开着的时候做 ——
+    // 点了星标菜单就收了。
+    expect(screen.getByRole('button', { name: i18n.t('agentView.pin') })).toBeTruthy()
+    fireEvent.click(starItem)
+    expect(handlers.onStar).toHaveBeenCalledWith(7, true)
+    expect(handlers.onPin).not.toHaveBeenCalled()
+
+    // 已星标的行：同一项翻成「取消星标」。
+    rerender(
+      <AgentThreadList
+        items={[fakeListItem({ id: 7, first_user_message: 'hi', starred: 1 })]}
+        {...handlers}
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('agentView.more') }))
+    fireEvent.click(await screen.findByRole('button', { name: i18n.t('agentView.unstar') }))
+    expect(handlers.onStar).toHaveBeenLastCalledWith(7, false)
   })
 })

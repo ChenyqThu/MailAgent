@@ -340,8 +340,12 @@ describe('ContextUsageDetails — 点环出明细', () => {
     const pop = await openDetails()
     await waitFor(() => expect(screen.queryByTestId('context-segment-system')).not.toBeNull())
     expect(pop.textContent).toContain(T('totalUsed'))
-    expect(pop.textContent).not.toContain(T('remaining'))
-    expect(pop.textContent).not.toContain(T('totalAvailable'))
+    // 🔴 判据取**行**而不是文案子串：08-06 ① 补进来的「上限未知」说明本身含「上限」两字，
+    // 拿 `not.toContain(T('totalAvailable'))` 判会把一句解释误判成那一行。
+    expect(screen.queryByTestId('context-total-remaining')).toBeNull()
+    expect(screen.queryByTestId('context-total-limit')).toBeNull()
+    // 08-06 ①：短提示（pillTip）删掉后，「为什么没有剩余/上限」这句话只剩这个面能说。
+    expect(screen.getByTestId('context-limit-unknown').textContent).toBe(T('limitUnknown'))
     // memory 为 0（memory.md 空 / flag 关）→ 不占一行。
     expect(screen.queryByTestId('context-segment-memory')).toBeNull()
   })
@@ -456,6 +460,91 @@ describe('ContextUsageDetails — 点环出明细', () => {
     await waitFor(() => expect(screen.queryByTestId('context-usage-details')).toBeNull(), {
       timeout: 2000
     })
+  })
+
+  test('🔴 超限时弹层里如实说「已超过目录记的上限」（短提示删掉后这句只剩这里能说）', async () => {
+    // used 400K > 上限 200K：环钉满，但「上限本身可能不对」这件事必须写出来。
+    listMessages.mockResolvedValue([row({ id: 1, context_tokens: 400_000 })])
+    stubFetch({ standingContext: 'a'.repeat(40) })
+    render(
+      <Harness>
+        <ContextUsageRing />
+      </Harness>
+    )
+    await openDetails()
+    expect(screen.getByTestId('context-overflow').textContent).toBe(T('overflowTip'))
+    // 上限已知的那一档不该出现「上限未知」的说明。
+    expect(screen.queryByTestId('context-limit-unknown')).toBeNull()
+  })
+})
+
+// ── 3b. 08-06 owner dogfood ①：hover 出明细 + 短提示退役 ─────────────────────────
+//
+// owner 原话：「Context 环，不需要那个 hover tips，把点击的那个直接改为 hover 效果。」
+// 覆盖的契约：
+//   1. **hover 就出明细**（新主路径）；
+//   2. **短提示 `HoverTip` 整个没了** —— hover 时不再有 `role="tooltip"` 那颗小 chip
+//      （留着它 = 同一件事的两个详略版本叠在一起）；
+//   3. **点击路径与键盘可达性一字未丢**：点击仍开，且点开的是**钉住**态（移开鼠标不收），
+//      `aria-expanded` / `aria-haspopup` 照常。触屏 / 无指针环境因此仍然能用；
+//   4. 只 hover（没点）时移开鼠标要收 —— 否则弹层会赖在屏幕上盖住工具条。
+describe('08-06 ① hover 出明细', () => {
+  async function mount(): Promise<HTMLElement> {
+    listMessages.mockResolvedValue([row({ id: 1, context_tokens: 9_000 })])
+    stubFetch({ standingContext: 'a'.repeat(40) })
+    render(
+      <Harness>
+        <ContextUsageRing />
+      </Harness>
+    )
+    return await screen.findByTestId('context-usage')
+  }
+  /** 包裹层（hover 判据挂在它上面：弹层是它的 DOM 子节点，指针进面里不算离开）。 */
+  const wrapOf = (trigger: HTMLElement): HTMLElement => trigger.parentElement as HTMLElement
+
+  test('hover 环 → 直接出四段明细（不用点）', async () => {
+    const trigger = await mount()
+    fireEvent.mouseEnter(wrapOf(trigger))
+    const pop = await screen.findByTestId('context-usage-details')
+    expect(pop.textContent).toContain(T('detailsTitle'))
+    expect(trigger.getAttribute('aria-expanded')).toBe('true')
+  })
+
+  test('🔴 短提示已删：hover 不再冒出 role="tooltip" 的小 chip', async () => {
+    const trigger = await mount()
+    fireEvent.mouseEnter(wrapOf(trigger))
+    await screen.findByTestId('context-usage-details')
+    expect(screen.queryByRole('tooltip')).toBeNull()
+    // 触发器本身也不再被 HoverTip 的 span 包着（那层就是短提示的宿主）。
+    expect(wrapOf(trigger).getAttribute('data-testid')).toBeNull()
+    expect(wrapOf(trigger).tagName).toBe('DIV')
+  })
+
+  test('只 hover（没点）→ 移开鼠标收起', async () => {
+    const trigger = await mount()
+    fireEvent.mouseEnter(wrapOf(trigger))
+    await screen.findByTestId('context-usage-details')
+    fireEvent.mouseLeave(wrapOf(trigger))
+    await waitFor(() => expect(screen.queryByTestId('context-usage-details')).toBeNull())
+  })
+
+  test('🔴 点击 = 钉住：移开鼠标不收，再点一次才关（触屏 / 键盘 Enter 走的就是这条）', async () => {
+    const trigger = await mount()
+    fireEvent.click(trigger)
+    await screen.findByTestId('context-usage-details')
+    fireEvent.mouseLeave(wrapOf(trigger))
+    // 给 hover 收起的宽限期足够长的时间证明它确实没被排程。
+    await new Promise((r) => setTimeout(r, 300))
+    expect(screen.queryByTestId('context-usage-details')).not.toBeNull()
+    fireEvent.click(trigger)
+    await waitFor(() => expect(screen.queryByTestId('context-usage-details')).toBeNull())
+  })
+
+  test('可及性属性一字未丢（hover 是新增入口，不是替换）', async () => {
+    const trigger = await mount()
+    expect(trigger.getAttribute('aria-haspopup')).toBe('dialog')
+    expect(trigger.getAttribute('aria-expanded')).toBe('false')
+    expect((trigger as HTMLButtonElement).type).toBe('button')
   })
 })
 

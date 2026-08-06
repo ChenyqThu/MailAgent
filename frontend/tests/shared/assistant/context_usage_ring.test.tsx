@@ -308,6 +308,41 @@ describe('ContextUsageRing', () => {
     expect(listMessages.mock.calls.length).toBe(callsBefore)
   })
 
+  // ── 08-06 owner dogfood ①（第二件）：垂直对齐 bug 的回归闸 ────────────────────────
+  //
+  // owner 实机看到的是「环和旁边的 effort / 模型 / 发送不在同一水平线上」。实测（Chromium +
+  // 本仓编译后的真实 CSS）：**环心比 effort/发送心高 2.00px**。
+  //
+  // 根因（不是 margin，也不是 line-height 调错）：包裹层是**块级盒**，它唯一的孩子是 inline 级的
+  // （`inline-flex` 的按钮），于是包裹层要开一个行盒、孩子按**基线**对齐。inline-flex 的基线取自
+  // 它第一个 flex item —— 那颗 16px 的 svg，合成基线 = svg 下边缘，只比按钮下边缘高 2px(py-0.5)；
+  // 而包裹层的 strut（继承 16px 字号 + `line-height: normal`）要求基线以下留 ~4px 降部。多出来的
+  // ~4px 全落在按钮**下方** → 包裹层 24px / 按钮 20px，行 `items-center` 居中的是包裹层。
+  // 同排的 effort（28px 方盒里居中 13px 图标，合成基线离下边缘 7.5px > strut 降部）不中招。
+  //
+  // 修法 = 让包裹层自己成为 flex 容器（`flex items-center`）→ 孩子变 flex item，行盒与 strut
+  // 双双消失，包裹层高度 = 按钮高度。改后实测差值 0.00px。
+  //
+  // 🔴 判据只能取**类**：happy-dom 不排版（getBoundingClientRect 恒 0，且测试环境不加载
+  // Tailwind CSS），量不出 2px。几何证据由 Playwright + 编译后 CSS 的离线量测提供（见上面的
+  // 数字）；这一格守的是「那两个类还在不在」—— 把 `flex items-center` 删掉，bug 当场复发。
+  test('🔴 环的包裹层是 flex 容器（对齐 bug 的修法本体：块级盒会引入 strut 降部把按钮顶高 2px）', async () => {
+    listMessages.mockResolvedValue([row({ id: 1, context_tokens: 91_000 })])
+    render(
+      <Harness>
+        <ContextUsageRing />
+      </Harness>
+    )
+    const trigger = await screen.findByTestId('context-usage')
+    const wrap = trigger.parentElement as HTMLElement
+    expect(wrap.className).toContain('flex')
+    expect(wrap.className).toContain('items-center')
+    // 🔴 且触发器必须是包裹层的**直接**孩子：中间再插一层 inline 级包装（比如把 HoverTip 加
+    // 回来）会把行盒重新引进来，`flex items-center` 就管不到按钮了。
+    expect(trigger.parentElement).toBe(wrap)
+    expect(wrap.className).not.toContain('relative') // 弹层的包含块仍是工具条整行
+  })
+
   test('挂载点：真的长在 composer 里，且排在 Send 之前', async () => {
     listMessages.mockResolvedValue([row({ id: 1, context_tokens: 91_000 })])
     const { container } = render(

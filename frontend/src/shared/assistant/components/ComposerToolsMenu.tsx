@@ -6,7 +6,8 @@
 // 收编来源：
 //   · 「外部连接」二级面板从 `ComposerPlusMenu` 整块搬来（内容组件 `ConnectorQuickContent`
 //     逐字未动，连同「+」上那颗常驻 coral 点一起搬 —— 点表达的是「外部连接接着东西」，它跟着
-//     外部连接走，不跟着「+」走）；
+//     外部连接走，不跟着「+」走）。**该点 08-06 已整个退役**（owner dogfood ③，理由见
+//     `triggerBody` 上方那段）：它把「有 connector 启用」这个常态画成了「有新东西」。
 //   · 「技能」二级是新的（WP-13 G2）：复用 `api.chat.listSkills()` / `setSkillEnabled`，后端全
 //     现成，gateway 15s TTL 后对下一轮生效（toast 里说清，否则用户会反复开关一个「没反应」的东西）。
 //
@@ -270,19 +271,14 @@ export function ComposerToolsMenu({ variant }: { variant: 'icon' | 'chip' }): Re
         }
       : null
 
-  const triggerBody = (
-    <>
-      <SlidersHorizontal size={variant === 'icon' ? 13 : 15} strokeWidth={2} />
-      {/* 外部连接已启用的常驻信号（A2 语义，从「+」搬来 —— 入口搬到哪，信号跟到哪）。 */}
-      {connectors.anyActive && (
-        <span
-          aria-hidden="true"
-          data-testid="tools-connector-dot"
-          className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-coral/100"
-        />
-      )}
-    </>
-  )
+  // 08-06 owner dogfood ③ —— **触发器上那颗 coral 常驻点已删**（原 `data-testid="tools-connector-dot"`）。
+  // owner 原话：「快捷配置那里不要有 connector 就带固定右上角高亮点，会有误解，高亮点是用作提示的，
+  // 很容易导致用户频繁点开。」病根是**语义借用**：本 app 的角标点一贯表示「有新东西值得看」
+  // （会话未读点、审批待办），而这里表达的是「有 connector 处于启用态」这个**常态** —— 一旦连上
+  // 就永远亮着，把一个没有新信息的入口训练成需要反复点开的东西。
+  // 「接着什么」这件事仍然可知：hover 文案（activeHint）+ 菜单里那行 `N/M` 摘要，两处都是**要去看
+  // 才出现**的，不抢注意力。
+  const triggerBody = <SlidersHorizontal size={variant === 'icon' ? 13 : 15} strokeWidth={2} />
 
   const trigger = (
     <button
@@ -292,7 +288,6 @@ export function ComposerToolsMenu({ variant }: { variant: 'icon' | 'chip' }): Re
       aria-expanded={open}
       aria-haspopup="menu"
       className={cn(
-        'relative',
         variant === 'icon'
           ? ICON_BTN
           : 'grid size-7 shrink-0 place-items-center rounded-full transition-[color,background-color,transform] duration-fast',
@@ -305,13 +300,14 @@ export function ComposerToolsMenu({ variant }: { variant: 'icon' | 'chip' }): Re
     </button>
   )
 
-  /** 一级行：图标 + 名称 + `N/M` 摘要 + 展开箭头。 */
+  /** 一级行：图标 + 名称 + `N/M` 摘要 + 展开箭头。
+   *  08-06 ③：这行原来在摘要右边还挂一颗同款 coral 点（判据也是 `connectors.anyActive`）——
+   *  与触发器上那颗一起删。它与紧挨着的 `N/M` 说的是同一件事，而 `2/3` 既更准也不冒充「有新东西」。 */
   const row = (
     id: ToolsView,
     Icon: typeof Blocks,
     text: string,
-    summary: { enabled: number; total: number } | null,
-    dot: boolean
+    summary: { enabled: number; total: number } | null
   ): React.JSX.Element => (
     <button
       type="button"
@@ -337,9 +333,6 @@ export function ComposerToolsMenu({ variant }: { variant: 'icon' | 'chip' }): Re
         <span className="shrink-0 text-micro tabular-nums text-ink-fg-3">
           {t('chat.tools.summary', { enabled: summary.enabled, total: summary.total })}
         </span>
-      )}
-      {dot && (
-        <span aria-hidden="true" className="h-1.5 w-1.5 shrink-0 rounded-full bg-coral/100" />
       )}
       <ChevronRight size={12} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
     </button>
@@ -370,9 +363,8 @@ export function ComposerToolsMenu({ variant }: { variant: 'icon' | 'chip' }): Re
         >
           {flyout || view === 'root' ? (
             <>
-              {connectors.available &&
-                row('connectors', Blocks, connectorsLabel, connectorSummary, connectors.anyActive)}
-              {row('skills', Puzzle, skillsLabel, skillSummary, false)}
+              {connectors.available && row('connectors', Blocks, connectorsLabel, connectorSummary)}
+              {row('skills', Puzzle, skillsLabel, skillSummary)}
               {router && (
                 <div className="mt-1 border-t border-ink-border-soft pt-1">
                   <button

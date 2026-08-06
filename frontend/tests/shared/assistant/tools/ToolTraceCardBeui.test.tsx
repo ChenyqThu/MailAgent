@@ -222,14 +222,19 @@ describe('R2 — running 时输出区自动滚到底', () => {
     Object.defineProperty(el, 'clientHeight', { value: VIEWPORT_H, configurable: true })
   }
 
-  test('🔴 用户手动上滚后不再被拽回底部', async () => {
-    // 这条守的是自动滚底最经典的体验 bug。它不是理论风险：running 期间 `useToolElapsed` 每
-    // 200ms setState 一次 → 无依赖数组的 layout effect 每 200ms 重跑一次 → 没有意图闸时，
-    // 用户刚滚上去就会在下一个 tick 被拉回底部（修之前实测 500ms 内被强制 scrollTo 两次）。
-    // 而 running 期这个区**只可能**是用户手点开的（R1 从不自动展开挂载即 running 的卡），
-    // 被拽回的正是刚表达了「我要看」的那个人。
+  test('🔴 用户手动上滚后不再被拽回底部（参数仍在流式增长）', async () => {
+    // 这条守的是自动滚底最经典的体验 bug：running 期这个区**只可能**是用户手点开的（R1 从不
+    // 自动展开挂载即 running 的卡），被拽回的正是刚表达了「我要看」的那个人。
+    //
+    // 🔴 08-06 ⑤ 起触发源换了，判据必须跟着换：**秒表不再是重渲来源**（`useToolElapsed` 已下沉
+    // 到叶子组件 `ToolElapsedLabel`，见该组件注释 —— 提频到 100ms 前先掐掉的那条因果）。原来这
+    // 条只靠「等 500ms ≥2 个 tick」就能逼出重跑；现在必须显式喂一次**真正的内容增长**（流式
+    // 参数变长 = props 变 = 那个无依赖数组的 layout effect 重跑），否则删掉 `stickToBottomRef`
+    // 这道闸测试照样绿（实测：改判据前把闸删掉，本条不红）。
     allowMotion()
-    render(<Harness status="streaming" messages={turn('kos_query', RUNNING)} />)
+    const { rerender } = render(
+      <Harness status="streaming" messages={turn('kos_query', RUNNING)} />
+    )
     await waitFor(() => expect(screen.getByText('查询知识图谱')).toBeTruthy())
     fireEvent.click(toggle())
 
@@ -244,13 +249,25 @@ describe('R2 — running 时输出区自动滚到底', () => {
     fireEvent.scroll(viewport)
 
     const before = scrollCalls.filter((c) => c.el === viewport).length
-    await new Promise((resolve) => setTimeout(resolve, 500)) // ≥2 个 elapsed tick
+    // 内容继续长（模型还在吐参数）——「跟随」的本职触发源。
+    rerender(
+      <Harness
+        status="streaming"
+        messages={turn('kos_query', { state: 'input-available', input: { q: 'okr 又长了一截' } })}
+      />
+    )
+    await new Promise((resolve) => setTimeout(resolve, 400))
     expect(scrollCalls.filter((c) => c.el === viewport)).toHaveLength(before)
   })
 
-  test('用户自己滚回底部 → 跟随恢复', async () => {
+  // 08-06 ⑤ 注记：「恢复」的观察窗口也跟着换了。秒表下沉成叶子组件后，回到底部只是把意图闸拨
+  // 回 true —— **下一次真实内容增长**才会看到跟随重新发生。这不是退化：没有新内容时本来就没有
+  // 「跟」这回事（人已经在底部了），旧行为只是被每 200ms 一次的秒表重渲顺带触发的空滚动。
+  test('用户自己滚回底部 → 下一次内容增长时跟随恢复', async () => {
     allowMotion()
-    render(<Harness status="streaming" messages={turn('kos_query', RUNNING)} />)
+    const { rerender } = render(
+      <Harness status="streaming" messages={turn('kos_query', RUNNING)} />
+    )
     await waitFor(() => expect(screen.getByText('查询知识图谱')).toBeTruthy())
     fireEvent.click(toggle())
 
@@ -270,6 +287,12 @@ describe('R2 — running 时输出区自动滚到底', () => {
 
     viewport.scrollTop = 1000 - VIEWPORT_H // 回到底
     fireEvent.scroll(viewport)
+    rerender(
+      <Harness
+        status="streaming"
+        messages={turn('kos_query', { state: 'input-available', input: { q: 'okr 又长了一截' } })}
+      />
+    )
     await waitFor(() =>
       expect(scrollCalls.filter((c) => c.el === viewport).length).toBeGreaterThan(paused)
     )

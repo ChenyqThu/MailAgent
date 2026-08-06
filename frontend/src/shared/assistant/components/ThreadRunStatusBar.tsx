@@ -126,8 +126,6 @@ function RunStatusRow({
   className?: string
 }): React.JSX.Element {
   const { t } = useTranslation()
-  const elapsed = useRunElapsed(anchorMs)
-
   const label = useRunStatusLabel(variant, toolName)
   const hint =
     variant === 'background' ? t('chat.runStatus.backgroundHint') : t('chat.runStatus.safeToLeave')
@@ -146,21 +144,36 @@ function RunStatusRow({
       <span className="min-w-0 truncate">
         <ShimmerText shiny text={label} />
       </span>
-      {elapsed !== null && (
-        <>
-          <span aria-hidden className="shrink-0 text-ink-fg-3">
-            ·
-          </span>
-          <span
-            className="shrink-0 font-mono tabular-nums text-ink-fg-3"
-            title={t('chat.runStatus.elapsed')}
-          >
-            {formatRunElapsed(elapsed)}
-          </span>
-        </>
-      )}
+      <RunElapsed anchorMs={anchorMs} title={t('chat.runStatus.elapsed')} />
       <span className="ml-1 truncate text-meta text-ink-fg-3">{hint}</span>
     </div>
+  )
+}
+
+/** 秒表读数（含前面那颗分隔点）。
+ *
+ *  🔴 **单独一个叶子组件**（08-06 ⑤）：`useRunElapsed` 现在每 100ms setState 一次，挂在
+ *  `RunStatusRow` 上会让整行（DotMatrix + ShimmerText + 两段文案）每秒重渲 10 次。那两个动效
+ *  都是纯 CSS、重渲不会重启动画，所以这不是正确性问题 —— 但「秒表读数只该影响它自己那一小块」
+ *  是这次提频的前提条件，写死在结构里比靠记性可靠。 */
+function RunElapsed({
+  anchorMs,
+  title
+}: {
+  anchorMs: number | null
+  title: string
+}): React.JSX.Element | null {
+  const elapsed = useRunElapsed(anchorMs)
+  if (elapsed === null) return null
+  return (
+    <>
+      <span aria-hidden className="shrink-0 text-ink-fg-3">
+        ·
+      </span>
+      <span className="shrink-0 font-mono tabular-nums text-ink-fg-3" title={title}>
+        {formatRunElapsed(elapsed)}
+      </span>
+    </>
   )
 }
 

@@ -309,7 +309,22 @@ function SessionRow({
   t: TFunction
 }): React.ReactElement {
   // Anchor cue: an email-anchored session (opened from the inbox panel) vs a general agent chat.
-  const Icon = isEmail ? Mail : MessagesSquare
+  // 08-06 owner dogfood ④ — 星标会话把这颗图标整个换成**实心黄星**（owner：「只是 star 后，会话
+  // 前面的 icon 换成实心黄色 star icon 来标识就好了」）。星标动作本身搬进了 `…` 菜单，列表行上
+  // 不再常驻按钮。用 `--c-impt`（琥珀）而不是 warn/fail：后两个在本 app 恒表示「出问题了」。
+  const Icon = starred ? Star : isEmail ? Mail : MessagesSquare
+  const iconClass = starred ? 'text-impt' : 'text-ink-fg-3'
+  // 实心只加在星上（Mail / MessagesSquare 填充后会糊成一团）。
+  const iconFill = starred ? 'currentColor' : 'none'
+  // 🔴 读屏可及性：星标从一颗带 `aria-pressed` 的按钮变成纯视觉图标后，状态必须由图标自己说
+  // 出来，否则读屏用户只能从「…」菜单里的动作文案（加星 / 取消星标）倒推。**两态都给名**，
+  // 不是只在星标时加一句 —— 搬迁前那颗按钮的 `aria-pressed` 也是两态都播报的，这里守的是同一条
+  // parity（何况「这条会话没加星」本身就是信息）。
+  // 名给在图标上而不是另起 `sr-only` 文本：按钮的可及名按内容计算，`role="img"` + `aria-label`
+  // 会直接并进行标题里（读作「已加星，续约确认」），不必往 DOM 里塞一个只为读屏存在的文本节点。
+  // 已知留白（**改动前就如此，不是本批引入**）：Mail / MessagesSquare 表达的「邮件锚定 vs 通用
+  // 会话」仍是纯视觉的 —— 那颗图标从来没有可及名，本批不扩大这个缺口，也不顺手补。
+  const iconLabel = t(starred ? 'agentView.starred' : 'agentView.notStarred')
 
   // Inline rename — local draft, re-seeded from the title each time the row enters rename mode
   // (adjust-on-prop-change setState; conditional so it doesn't loop). Enter / Escape both blur the
@@ -332,7 +347,14 @@ function SessionRow({
     // 主题 v3 C8/批 4: 会话行圆角 rounded-lg(8) → token 化 --r-ctl
     return (
       <div className="relative flex items-center rounded-[var(--r-ctl)] bg-ink-3 pl-2.5">
-        <Icon size={13} strokeWidth={1.75} className="mr-2 shrink-0 text-ink-fg-3" />
+        <Icon
+          size={13}
+          strokeWidth={1.75}
+          fill={iconFill}
+          role="img"
+          aria-label={iconLabel}
+          className={cn('mr-2 shrink-0', iconClass)}
+        />
         <input
           autoFocus
           value={draft}
@@ -378,27 +400,23 @@ function SessionRow({
           style={{ background: 'rgb(var(--c-accent))' }}
         />
       )}
-      <button
-        type="button"
-        aria-label={starred ? t('agentView.unstar') : t('agentView.star')}
-        aria-pressed={starred}
-        onClick={() => onStar(!starred)}
-        className={cn(
-          'ml-1.5 grid size-6 shrink-0 place-items-center rounded transition-colors duration-fast',
-          starred
-            ? 'text-coral hover:bg-coral/10'
-            : 'text-ink-fg-3 hover:bg-ink-4 hover:text-ink-fg-1'
-        )}
-      >
-        <Star size={13} strokeWidth={1.9} fill={starred ? 'currentColor' : 'none'} />
-      </button>
+      {/* 08-06 ④：这里原来常驻一颗 star 按钮（`ml-1.5 size-6`），已搬进下面的 `…` 菜单 ——
+          行上只剩「点开会话」这一个动作面，星标态由行首图标本身表达。左内边距因此从 pl-1
+          （给那颗按钮让位的值）回到 pl-2.5，与重命名态同一条边。 */}
       <button
         type="button"
         onClick={onSelect}
         // 主题 v3 C8/批 4: 会话行点击面圆角 rounded-lg(8) → token 化 --r-ctl
-        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--r-ctl)] pl-1 pr-10 text-left"
+        className="flex h-9 min-w-0 flex-1 items-center gap-2 rounded-[var(--r-ctl)] pl-2.5 pr-10 text-left"
       >
-        <Icon size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
+        <Icon
+          size={13}
+          strokeWidth={1.75}
+          fill={iconFill}
+          role="img"
+          aria-label={iconLabel}
+          className={cn('shrink-0', iconClass)}
+        />
         <span
           className={cn(
             'min-w-0 flex-1 truncate text-body',
@@ -429,6 +447,8 @@ function SessionRow({
         isArchived={isArchived}
         pinned={pinned}
         onPin={() => onPin(!pinned)}
+        starred={starred}
+        onStar={() => onStar(!starred)}
         onArchive={onArchive}
         onRestore={onRestore}
         onDelete={onDelete}
@@ -439,12 +459,16 @@ function SessionRow({
 }
 
 /** dogfood-2 — session row hover「...」菜单（demo ThreadListItemMore 形态，取代旧的双 icon 铅笔+
- *  垃圾桶）：hover / 选中 / 菜单打开时显示单个 ... → radix Popover 菜单 改名 / 归档 / 删除。 */
+ *  垃圾桶）：hover / 选中 / 菜单打开时显示单个 ... → radix Popover 菜单 改名 / 星标 / 归档 / 删除。
+ *  08-06 ④：星标从行上的常驻按钮搬进这里；与置顶**分开两项**（置顶 = 排到最上面的分组，
+ *  星标 = 行首图标的标识，两件事）。归档行也能加星（与搬迁前逐字一致）。 */
 function SessionRowMenu({
   onRename,
   isArchived,
   pinned,
   onPin,
+  starred,
+  onStar,
   onArchive,
   onRestore,
   onDelete,
@@ -454,6 +478,8 @@ function SessionRowMenu({
   isArchived: boolean
   pinned: boolean
   onPin: () => void
+  starred: boolean
+  onStar: () => void
   onArchive: () => void
   onRestore: () => void
   onDelete: () => void
@@ -488,6 +514,22 @@ function SessionRowMenu({
         >
           <Pencil size={13} strokeWidth={1.75} className="shrink-0 text-ink-fg-3" />
           {t('agentView.rename')}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setOpen(false)
+            onStar()
+          }}
+          className={cn(ITEM, 'text-ink-fg-1 hover:bg-ink-3')}
+        >
+          <Star
+            size={13}
+            strokeWidth={1.75}
+            fill={starred ? 'currentColor' : 'none'}
+            className={cn('shrink-0', starred ? 'text-impt' : 'text-ink-fg-3')}
+          />
+          {t(starred ? 'agentView.unstar' : 'agentView.star')}
         </button>
         {isArchived ? (
           <button
