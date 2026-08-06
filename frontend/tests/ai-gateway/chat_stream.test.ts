@@ -136,6 +136,80 @@ describe('ai-gateway — /api/ai/chat streaming', () => {
   })
 })
 
+describe('ai-gateway — /api/ai/chat effort seam (WP-16a)', () => {
+  /** mockTextModel + a spy on the doStream call options（providerOptions 抵达 wire 前的最后一站）。 */
+  function mockCaptureModel(captured: Array<Record<string, unknown> | undefined>) {
+    return new MockLanguageModelV3({
+      doStream: async (options) => {
+        captured.push(options.providerOptions as Record<string, unknown> | undefined)
+        return {
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start', warnings: [] },
+              { type: 'text-start', id: '1' },
+              { type: 'text-delta' as const, id: '1', delta: 'ok' },
+              { type: 'text-end', id: '1' },
+              {
+                type: 'finish',
+                finishReason: 'stop',
+                usage: {
+                  inputTokens: { total: 5, noCache: 5, cacheRead: 0, cacheWrite: 0 },
+                  outputTokens: { total: 7, text: 7, reasoning: 0 }
+                }
+              }
+            ]
+          })
+        }
+      }
+    })
+  }
+
+  async function postChat(
+    port: number,
+    body: Record<string, unknown>
+  ): Promise<Array<Record<string, unknown>>> {
+    const res = await fetch(`http://127.0.0.1:${port}/api/ai/chat`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: 'claude-sonnet-4-6', messages: userTurn('hi'), ...body })
+    })
+    expect(res.status).toBe(200)
+    return readSse(res)
+  }
+
+  test('body.effort 合法 → effort 路径（manual 族 budgetTokens 档位映射抵达模型）', async () => {
+    const captured: Array<Record<string, unknown> | undefined> = []
+    const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
+    await postChat(h.port, { effort: 'high' })
+    expect(captured[0]).toEqual({
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 32_000 } }
+    })
+  })
+
+  test('effort 缺席 + thinking:true → 旧布尔路径字节级不变（16k budget）', async () => {
+    const captured: Array<Record<string, unknown> | undefined> = []
+    const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
+    await postChat(h.port, { thinking: true })
+    expect(captured[0]).toEqual({
+      anthropic: { thinking: { type: 'enabled', budgetTokens: 16_000 } }
+    })
+  })
+
+  test('effort 垃圾值 → 忽略（= 旧路径 thinking 缺席：无 providerOptions）', async () => {
+    const captured: Array<Record<string, unknown> | undefined> = []
+    const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
+    await postChat(h.port, { effort: 'EXTRA' })
+    expect(captured[0]).toBeUndefined()
+  })
+
+  test('effort 显式 none 压过 thinking:true（新路径优先，关断思考）', async () => {
+    const captured: Array<Record<string, unknown> | undefined> = []
+    const h = await start({ ...CHAT_CFG, createModel: () => mockCaptureModel(captured) })
+    await postChat(h.port, { effort: 'none', thinking: true })
+    expect(captured[0]).toBeUndefined()
+  })
+})
+
 describe('ai-gateway — /api/ai/chat typed errors', () => {
   test('missing key → 503 E_NO_LLM_KEY (typed, no stream)', async () => {
     const h = await start({ ...CHAT_CFG, apiKey: null })

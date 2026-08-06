@@ -44,7 +44,9 @@ import { type MailAgentUIMessage } from '@shared/assistant/uiMessage'
 // W6 — the in-turn follow-up tool name (shared leaf; the renderer chips read the same constant).
 import { SUGGEST_FOLLOWUPS_TOOL_NAME } from '@shared/assistant/followups'
 // chat-panel P4 composer-parity C1-① — per-turn extended-thinking → @ai-sdk/anthropic providerOptions.
-import { thinkingProviderOptions } from './thinking'
+// WP-16a — effort 档位与 Brain 布尔并存：body.effort 显式合法时走 effortCallOptions（跨协议
+// wire 映射），否则旧布尔路径字节级不变。
+import { effortCallOptions, effortTierFromBody, thinkingProviderOptions } from './thinking'
 // Phase 06 (context injection) — system prompt assembly + snapshot schema guard.
 import {
   appendExecutionDiscipline,
@@ -312,11 +314,21 @@ export async function prepareChatRun(
     }
     throw e
   }
-  const thinkingProviderOpts = thinkingProviderOptions(
-    resolvedModel.modelId,
-    body.thinking === true,
-    resolvedModel.protocol
-  )
+  // WP-16a — effort 显式传入（合法档位字符串）才走新路径；缺席/非法 → null → 旧 Brain 布尔
+  // 路径逐字节保留（含 island resume：stash 冻结的 originalBody 带什么就重放什么）。
+  const effortTier = effortTierFromBody(body.effort)
+  const effortCall =
+    effortTier != null
+      ? effortCallOptions(resolvedModel.modelId, effortTier, resolvedModel.protocol)
+      : undefined
+  const thinkingProviderOpts =
+    effortTier != null
+      ? effortCall?.providerOptions
+      : thinkingProviderOptions(
+          resolvedModel.modelId,
+          body.thinking === true,
+          resolvedModel.protocol
+        )
   // harness-chat lane C (07-15, feedback_llm_call_settings) — every LLM call gets an EXPLICIT 64k
   // output ceiling. resolvedModel.maxOutputTokens (set by the main-process wrapping resolver,
   // llm_provider_resolver.ts) already carries `min(64000, row.maxOutput)` when the provider row
@@ -499,6 +511,9 @@ export async function prepareChatRun(
       delayInMs: STREAM_CHUNKING_DELAY_MS
     }),
     ...(thinkingProviderOpts ? { providerOptions: thinkingProviderOpts } : {}),
+    // WP-16a — google 协议的 effort 走 ai@7 统一 reasoning 参数（SDK 按模型代分流 thinkingLevel/
+    // thinkingBudget）；其余协议恒 undefined → 展开为空，字节级不变。
+    ...(effortCall?.reasoning ? { reasoning: effortCall.reasoning } : {}),
     ...(hasTools
       ? {
           tools,
