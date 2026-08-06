@@ -162,18 +162,23 @@ gateway 暂停 → stash（进程内存，TTL 30min）
 |---|---|---|---|
 | `read` | ✅ | ✅ 免审批 | ✅ |
 | `domain_write` | ✅ 可 auto-approve | ✅ **恒 HITL** | 恒 HITL |
-| `connector_write` | ✅ 恒 HITL | ✅ **恒 HITL** | 恒 HITL |
+| `connector_write` | ✅ per-tool 三档（08-05：ask 弹卡 / auto 免卡 / off 不注册） | ✅ **per-tool 三档**：`ask` 走飞书审批卡、`auto` 免卡、`off` 不注册 | grant 内免卡 |
 | `web` | ✅ 恒 HITL | 🔒 `MAILAGENT_IM_WEB_ENABLED` 门控，**默认关**；开了也恒 HITL | ❌ 不注册 |
 | `exec` | ✅ 恒 HITL | ❌ **不注册** | ❌ 不注册 |
 | `capability_change` | ✅ 恒 HITL | ❌ **不注册** | ❌ 不注册 |
 | `outbound` | ✅ 恒 HITL | ❌ **不注册** | ❌ 不注册 |
 
 判定单源 = `frontend/src/ai-gateway/tools/policy.ts::isToolClassAllowedInMode`（`im_chat` 那行是
-fail-closed 的一行 return），`mayAutoApprove` 仍要求 `manual_chat` ⇒ im_chat 的写类**结构上**
-进不了任何免批白名单。
+fail-closed 的一行 return）。`domain_write` 的 `mayAutoApprove` 仍要求 `manual_chat` ⇒ im_chat
+的域写**结构上**进不了 auto-approve；connector 写的审批形态自 08-05 起由 owner 的 per-tool
+`mode` 决定（在 gateway 的 connector 工厂按 `OWNER_PRESENT` 两模式判，manual 与 im 同档）。
 
-**connector 对 im_chat 全开放**（08-04 owner 拍板，推翻阶段 0 的「六处恒拒」保守留白）：读类
-免批、写类恒 HITL 经飞书审批卡。安全地板不因 IM 放宽。
+**connector 对 im_chat 全开放**（08-04 owner 拍板，推翻阶段 0 的「六处恒拒」保守留白）；
+🔴 **08-05 改判留案**（master-plan-0805 WP-10 场地二 + §5 风险 4②）：写类从「恒 HITL 经飞书卡」
+改为**跟随 per-tool 三档**——`ask` 档仍走既有飞书按钮卡链（destructive 红警告随卡），`auto`
+档免卡执行（审计 `auto_tool_mode`、`context_mode='im_chat'` 事后可辨）。新增攻击面 = 被盗
+飞书账号（≠ 电脑被盗）可无卡驱动 auto 档外部写；残余护栏 = 绑定码配对 + per-tool 档位 +
+exec/capability_change/outbound 在 im 场地仍不注册（结构性地板不动）。owner 知情拍板。
 
 🔴 **`web` 的 opt-in 是「venue 开关」不是 grant** —— `policy.ts::ImVenueSwitches` 的注释与
 `policy.test.ts` 的 4×8 全矩阵双重锁死该方向：grant 是 per-agent 授权，而这是「飞书这个场地

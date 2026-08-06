@@ -1977,7 +1977,7 @@
       "enabled": "Enable this connection",
       "enabledHelper": "When off, none of this service's tools are given to the AI; credentials and per-tool settings are kept.",
       "preprocess": "Allow email pre-processing to call it",
-      "preprocessHelper": "Lets the email pre-processing classifier call this service (read-only ceiling — write tools are never exposed to it).",
+      "preprocessHelper": "Lets the email pre-processing classifier call this service. That venue runs unattended: only tools whose tier is “Auto” are available (“Needs approval” behaves as unavailable there); write tools set to “Auto” are exposed to it too.",
       "scopes": "Scopes",
       "tokenExpires": "Token valid until {time}",
       "tokenExpired": "Token expired at {time} — please reconnect.",
@@ -1998,25 +1998,52 @@
         "loading": "Loading tool list…",
         "loadError": "Could not load the tool list: {message}",
         "empty": "No tools synced yet — use “Sync tools” above to fetch the list.",
-        "defaultHint": "“Default” = read tools on, write/update tools off.",
+        "defaultHint": "Default tier = Auto (writes/updates included; runs without an approval card).",
         "destructive": "Destructive",
         "orphan": "Gone",
         "orphanTip": "The remote server no longer offers this tool; the setting is kept but the tool is not given to the AI.",
         "purgeOrphans": "Clear {count} gone tools",
         "purgeDone": "Cleared {count} gone tools",
-        "effectiveOn": "Currently callable by the AI",
-        "effectiveOff": "Currently not callable by the AI",
+        "followDefault": "Default",
+        "reset": "Reset permissions",
+        "resetDone": "Reset the tier on {count} tools",
+        "bulkDone": "Updated the tier on {count} tools",
+        "effective": {
+          "auto": "Currently: runs automatically (no approval card)",
+          "ask": "Currently: asks for approval on every call",
+          "off": "Currently: disabled (invisible to the AI)"
+        },
         "crud": {
           "read": "Read",
           "write": "Write",
           "update": "Update"
         },
-        "state": {
-          "label": "Call permission",
-          "default": "Default",
-          "on": "On",
-          "off": "Off"
+        "mode": {
+          "label": "Call tier",
+          "auto": "Auto",
+          "ask": "Needs approval",
+          "off": "Disabled"
+        },
+        "bulk": {
+          "label": "Bulk",
+          "auto": "Set all to Auto",
+          "ask": "Set all to Needs approval",
+          "off": "Disable all"
         }
+      },
+      "toolfaceNotice": {
+        "title": "Tool surface widened under the new default",
+        "body": "This connection offers {reads} read and {writes} write/update tools ({destructive} marked destructive). The default tier is “Auto” (runs without an approval card) — expand the list below to adjust tools one by one.",
+        "loading": "Counting the tool list…",
+        "review": "Review & adjust",
+        "dismiss": "Got it"
+      },
+      "destructiveAutoDialog": {
+        "title": "Set a destructive tool to “Auto”?",
+        "desc": "The service marks {name} as destructive (it may overwrite or delete existing data). On “Auto”, the AI will call it without asking you first.",
+        "bulkDesc": "This group contains {count} tools the service marks as destructive. On “Auto”, the AI will call them without asking you first.",
+        "cancel": "Cancel",
+        "confirm": "Set to Auto"
       }
     },
     "imFeishu": {

@@ -31,6 +31,14 @@ export type ConnectorStatusValue =
  *  `write` + `destructive=1`；前端因此不再需要 delete 特例分支。 */
 export type ConnectorCrudType = 'read' | 'write' | 'update'
 
+/** per-tool 三档（08-05 WP-10，owner 拍板）。镜像 Python canonical
+ *  `src/agent_config/store.py::CONNECTOR_TOOL_MODES`——编译期类型联合无运行时值可 import，
+ *  由 `tests/config/test_connector_contract_parity.py` 抽取对账（抽取失败必红）。
+ *  `auto` = 注册且免卡执行（read 的 auto 就是旧 silent 行为）；`ask` = 注册且每次调用弹
+ *  审批卡（manual 桌面卡 / im 飞书按钮卡）；`off` = 任何场地不注册。**默认（覆盖 null）
+ *  折算 auto**——含 write/update/destructive（跟随参考产品，升级说明已列工具面变宽）。 */
+export type ConnectorToolMode = 'auto' | 'ask' | 'off'
+
 /** 凭证健康视图（只走明文列 peek —— master key 不可用时照样成立，故它不是「解密成功」的证据）。 */
 export interface ConnectorCredentialView {
   has_tokens: boolean
@@ -90,14 +98,15 @@ export interface ConnectorToolSummary {
   input_schema_json: string | null
   output_schema_json: string | null
   crud_type: ConnectorCrudType
-  /** manifest 的 destructive_hint（会不会毁数据）——审批卡红警告。delete 档退役后它是
-   *  「破坏性」的**唯一**判据（删除类工具 = destructive 的 write）。 */
+  /** manifest 的 destructive_hint（会不会毁数据）——审批卡红警告 + 设置面「设 auto 前
+   *  一次性红色确认」的判据。delete 档退役后它是「破坏性」的**唯一**判据（删除类工具 =
+   *  destructive 的 write）。 */
   destructive: boolean
-  /** 用户覆盖；null = 未覆盖（跟随 crud 默认）。三态的第三态。 */
-  enabled_override: boolean | null
-  /** 折算后的有效启用态（read 默认开 / write·update 默认关）。
+  /** per-tool 三档用户覆盖；null = 未覆盖（跟随默认档 auto）。 */
+  mode_override: ConnectorToolMode | null
+  /** 折算后的有效档位（null → auto）。
    *  🔴 前端**读这个**，不要自己再折算一遍默认规则（那会成第二处手抄）。 */
-  effective_enabled: boolean
+  effective_mode: ConnectorToolMode
   /** 远端清单里已消失（配置行保留，但不注册也不可调用）。 */
   orphan: boolean
   first_seen_at: number
@@ -117,13 +126,21 @@ export interface ConnectorApi {
   tools(connectorId: string): Promise<ConnectorToolSummary[]>
   /** connector 整体启停（凭证保留）。行不存在 → 404（先连接）。 */
   setEnabled(connectorId: string, enabled: boolean): Promise<ConnectorSetEnabledResult>
-  /** per-tool 三态：true / false / **null = 清除覆盖回默认**。 */
-  setToolEnabled(
+  /** per-tool 三档（08-05）：'auto' / 'ask' / 'off' / **null = 清除覆盖回默认档（auto）**。 */
+  setToolMode(
     connectorId: string,
     toolName: string,
-    enabled: boolean | null
-  ): Promise<ConnectorSetToolEnabledResult>
-  /** 分类侧独立授权位（天花板恒 read，不可配 write）。 */
+    mode: ConnectorToolMode | null
+  ): Promise<ConnectorSetToolModeResult>
+  /** 组级批量设档 + Reset permissions（mode=null 批量清覆盖）。crudType 缺席 = 全部在册
+   *  工具；orphan 行恒跳过（服务端纪律）。 */
+  bulkSetToolMode(
+    connectorId: string,
+    mode: ConnectorToolMode | null,
+    crudType?: ConnectorCrudType
+  ): Promise<ConnectorBulkToolModeResult>
+  /** 分类侧独立授权位（08-05 起：开了之后该场地可用 = per-tool mode 为 auto 的工具，
+   *  含写类；ask 在该无人值守场地等同禁用）。 */
   setPreprocessEnabled(connectorId: string, enabled: boolean): Promise<ConnectorSetPreprocessResult>
   /** 断开：逐条删凭证 + 状态回 disconnected；**工具清单与 per-tool 配置保留**。 */
   disconnect(connectorId: string): Promise<ConnectorDisconnectResult>
@@ -150,11 +167,19 @@ export interface ConnectorSetEnabledResult {
   enabled: boolean
 }
 
-export interface ConnectorSetToolEnabledResult {
+export interface ConnectorSetToolModeResult {
   connector_id: string
   tool_name: string
-  enabled_override: boolean | null
-  effective_enabled: boolean
+  mode_override: ConnectorToolMode | null
+  effective_mode: ConnectorToolMode
+}
+
+/** `POST /{id}/tools/bulk_mode` 的响应（`updated` = 实际改动行数；0 不是错）。 */
+export interface ConnectorBulkToolModeResult {
+  connector_id: string
+  mode: ConnectorToolMode | null
+  crud_type: ConnectorCrudType | null
+  updated: number
 }
 
 export interface ConnectorSetPreprocessResult {

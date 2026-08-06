@@ -33,6 +33,8 @@ def store(tmp_path, monkeypatch):
         CID,
         _manifest(("search", "read"), ("create_page", "write"), ("update_page", "update")),
     )
+    # 08-05 三档：默认档 = auto（write 也免卡可调）。闸 5 测试需要一个显式 off 的行。
+    st.set_connector_tool_mode(CID, "create_page", "off")
     monkeypatch.setattr("src.agent_config.store.get_agent_config_store", lambda: st)
     return st
 
@@ -215,13 +217,15 @@ def test_destructive_write_tool_passes_all_gates(store, monkeypatch):
 
     以前 destructive_hint 会被推成 delete 并在原闸 3 撞 403 —— Notion 的 update-page 就是
     这样结构性不可用的。现在 destructive 只是审批卡上的红警告位，不再是一道执行禁令。
+    08-05 起连显式开都不用 —— 默认档就是 auto（跟随 owner 拍板；本例仍显式设一遍钉住
+    「显式 auto 也过闸」）。
     """
     import src.connectors.client as client_mod
 
     manifest = _manifest(("update_page", "write"))
     manifest[0]["destructive"] = True
     store.sync_connector_tools(CID, _manifest(("search", "read")) + manifest)
-    store.set_connector_tool_enabled(CID, "update_page", True)
+    store.set_connector_tool_mode(CID, "update_page", "auto")
     rows = {r.tool_name: r for r in store.list_connector_tools(CID)}
     assert rows["update_page"].destructive is True  # 红警告位仍在
 
@@ -230,6 +234,38 @@ def test_destructive_write_tool_passes_all_gates(store, monkeypatch):
     out = _invoke(connector_id=CID, tool_name="update_page", ceiling="write")
     assert _OkClient.calls == [(CID, "update_page", None)]
     assert out["is_error"] is False
+
+
+def test_default_tier_write_tool_passes_gate_5(store, monkeypatch):
+    """08-05 默认档翻 auto 的服务端正例：从未配置过（mode=NULL）的 write 工具过闸 5。
+
+    这正是发版说明里「工具面变宽」的服务端形态 —— 升级前它会撞 E_CONNECTOR_TOOL_DISABLED
+    （write 默认关）。
+    """
+    import src.connectors.client as client_mod
+
+    _OkClient.calls = []
+    monkeypatch.setattr(client_mod, "ConnectorClient", _OkClient)
+    out = _invoke(connector_id=CID, tool_name="update_page")  # update 类、无覆盖、无天花板
+    assert _OkClient.calls == [(CID, "update_page", None)]
+    assert out["is_error"] is False
+
+
+def test_deny_ask_mode_blocks_ask_tier_for_unattended_callers(store, monkeypatch):
+    """08-05 场地一（预处理）第二道：``deny_ask_mode=True`` 时 ask 档 ≙ 不可用；
+    owner-present / headless 调用面（默认 False）不受影响。"""
+    import src.connectors.client as client_mod
+
+    store.set_connector_tool_mode(CID, "search", "ask")
+    monkeypatch.setattr(client_mod, "ConnectorClient", _NeverCalledClient)
+    with pytest.raises(svc.ConnectorInvokeDenied) as e:
+        _invoke(connector_id=CID, tool_name="search", deny_ask_mode=True)
+    assert e.value.code == "E_CONNECTOR_TOOL_DISABLED"
+
+    _OkClient.calls = []
+    monkeypatch.setattr(client_mod, "ConnectorClient", _OkClient)
+    out = _invoke(connector_id=CID, tool_name="search")  # 默认 False：ask 照常执行
+    assert out["is_error"] is False and _OkClient.calls == [(CID, "search", None)]
 
 
 def test_oauth_failure_marks_connector_needs_reauth(store, monkeypatch):

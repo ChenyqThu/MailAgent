@@ -12,6 +12,10 @@
    - `frontend/src/shared/api/types/report.ts::CustomAgentToolPolicy.grant_connectors`（REST wire）
 2. **caller ``context_mode`` 值域** —— `src/connectors/service.py::CALLER_CONTEXT_MODES`
    ↔ `frontend/src/ai-gateway/tools/policy.ts::AGENT_CONTEXT_MODES`。
+3. **per-tool 三档词表**（08-05 WP-10）—— `src/agent_config/store.py::CONNECTOR_TOOL_MODES`
+   （canonical：写侧校验 + 折算函数）↔ TS 两处编译期类型联合
+   （gateway `tools/connector.ts::ConnectorToolMode` / 设置面 wire
+   `shared/api/types/connector.ts::ConnectorToolMode`）。TS 侧无运行时值可 import ⇒ 建闸。
 
 **为什么不能消灭镜像**：跨语言 + 跨构件种类（Python 校验 / TS 类型 / zod runtime schema /
 wire 接口声明），没有可共享的运行时载体；TS 侧三份里有两份是**编译期类型**，压根没有值可以
@@ -50,6 +54,11 @@ CHAT_TYPES_TS = p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / 
 REPORT_TYPES_TS = p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / "report.ts"
 TRIGGER_PY = p.REPO_ROOT / "src" / "agents" / "trigger.py"
 SERVICE_PY = p.REPO_ROOT / "src" / "connectors" / "service.py"
+STORE_PY = p.REPO_ROOT / "src" / "agent_config" / "store.py"
+CONNECTOR_TS = p.REPO_ROOT / "frontend" / "src" / "ai-gateway" / "tools" / "connector.ts"
+CONNECTOR_TYPES_TS = (
+    p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / "connector.ts"
+)
 
 
 # ── Python 侧抽取（AST，绕开 config.py 的模块级 pydantic 实例化）─────────────────
@@ -271,13 +280,62 @@ def test_owner_present_and_headless_partition_the_caller_modes():
     )
 
 
-# ── ③ canary：抽取器失效必须红，不许变成平凡绿 ─────────────────────────────────
+# ── ③ per-tool 三档词表（08-05 WP-10 拍板；auto/ask/off，**有序**）────────────────
+
+_TOOL_MODE_SITES = {
+    "py:store.CONNECTOR_TOOL_MODES": lambda: py_str_tuple(STORE_PY, "CONNECTOR_TOOL_MODES"),
+    "ts:gateway connector.ConnectorToolMode": lambda: ts_string_union(
+        CONNECTOR_TS, "export type ConnectorToolMode ="
+    ),
+    "ts:shared api ConnectorToolMode": lambda: ts_string_union(
+        CONNECTOR_TYPES_TS, "export type ConnectorToolMode ="
+    ),
+}
+
+
+def test_tool_mode_vocabulary_is_identical_across_all_three_sites():
+    """三处 per-tool 档位词表**逐项且有序**一致（canonical = Python store 写侧校验）。
+
+    漂了会怎样：TS 侧多一档 → 设置面能发一个服务端 400 的档（UI 全绿存不进）；Python 侧
+    多一档 → 一个 TS admission 判不认的档位从折算函数漏出去，gateway fail-closed 把工具
+    整个吞掉（功能坏但安全），且没有任何报错指向真因。
+    """
+    extracted = {name: fn() for name, fn in _TOOL_MODE_SITES.items()}
+    canonical = extracted["py:store.CONNECTOR_TOOL_MODES"]
+    assert canonical == ("auto", "ask", "off"), (
+        f"per-tool 档位值域变成 {canonical!r} —— 这是 08-05 三档语义本体的改动，"
+        f"改它必须同步 TS 两处 + admission 判据 + 设置面控件 + mcp-connectors.md §5.5"
+    )
+    for name, values in extracted.items():
+        assert values == canonical, (
+            f"{name} = {values!r} 与 canonical {canonical!r} 不一致 —— 折算/admission/设置面"
+            f"会各判各的，且没有任何报错指向真因"
+        )
+
+
+def test_gateway_admission_recognizes_exactly_the_registering_modes():
+    """gateway 的 admission 判据（``admissibleConnectorCrud``）认的字面量 = 词表里
+    「会注册」的两档（auto/ask）——off 及任何未知串 fail-closed。判据是行内字面量比较
+    （无运行时词表可断言），故这里抽源码钉住：谁把判据改成别的写法，本闸红出来提醒
+    同步这份 parity 契约。"""
+    text = CONNECTOR_TS.read_text(encoding="utf-8")
+    assert "entry.mode !== 'auto' && entry.mode !== 'ask'" in text, (
+        "admissibleConnectorCrud 的 mode 判据写法变了 —— 确认注册面仍 = {auto, ask} 且"
+        " fail-closed 后，同步更新本抽取锚点"
+    )
+
+
+# ── ④ canary：抽取器失效必须红，不许变成平凡绿 ─────────────────────────────────
 
 
 def test_extraction_failure_is_red_not_silently_green():
     """用**合成源码**证明每个抽取器在锚点消失 / 写法重构时会抛，而不是返回空集。"""
     with pytest.raises(AssertionError, match="找不到顶层常量"):
         py_str_tuple(TRIGGER_PY, "_CONNECTOR_GRANT_VALUES", src="X = 1\n")
+    with pytest.raises(AssertionError, match="找不到顶层常量"):
+        py_str_tuple(STORE_PY, "CONNECTOR_TOOL_MODES", src="X = 1\n")
+    with pytest.raises(AssertionError, match="找不到"):
+        ts_string_union(CONNECTOR_TS, "export type ConnectorToolMode =", src="const x = 1\n")
     with pytest.raises(AssertionError, match="找不到顶层常量"):
         py_str_int_dict(SERVICE_PY, "CONNECTOR_CRUD_RANK", src="X = 1\n")
     with pytest.raises(AssertionError, match="找不到"):

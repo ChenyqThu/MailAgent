@@ -102,21 +102,22 @@ const TOOLS: ConnectorToolSummary[] = [
     output_schema_json: null,
     crud_type: 'read',
     destructive: false,
-    enabled_override: null,
-    effective_enabled: true,
+    mode_override: null,
+    effective_mode: 'auto',
     orphan: false,
     first_seen_at: 0,
     last_seen_at: 0
   },
   {
+    // 08-05 三档：显式 off 档（默认已是 auto——「不算进已启用」的行要显式关）。
     name: 'notion_create_page',
     description: '',
     input_schema_json: null,
     output_schema_json: null,
     crud_type: 'write',
     destructive: false,
-    enabled_override: null,
-    effective_enabled: false,
+    mode_override: 'off',
+    effective_mode: 'off',
     orphan: false,
     first_seen_at: 0,
     last_seen_at: 0

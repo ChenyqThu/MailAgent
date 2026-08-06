@@ -77,12 +77,16 @@ export interface GatewayToolAuditEntry {
    *  'auto_accept_edits' / 'auto_bypass' = the owner-global mode skipped the card;
    *  'auto_reversible' = the pre-existing reversible-preview skip (approvalMode 'auto-reversible',
    *  previously indistinguishably audited 'approved'). chat_tool_call.approval_status is free-form
-   *  TEXT (v10, no CHECK) — the new values need no schema migration, mirroring 'auto_whitelist'. */
+   *  TEXT (v10, no CHECK) — the new values need no schema migration, mirroring 'auto_whitelist'.
+   *  08-05 (per-tool connector tiers, WP-10) adds 'auto_tool_mode' — a connector write executed
+   *  card-free in an OWNER-PRESENT venue because the owner set that tool's mode to 'auto'
+   *  (distinct from the headless grant-source 'auto_whitelist'; forensically identifiable). */
   approvalStatus?:
     | 'approved'
     | 'edited'
     | 'rejected'
     | 'auto_whitelist'
+    | 'auto_tool_mode'
     | 'auto_accept_edits'
     | 'auto_bypass'
     | 'auto_reversible'
@@ -313,6 +317,12 @@ export function auditedWriteTool<I>(
      *  the approvalMode auto-reversible path (exec tools are edit-tier + class exec, which that path
      *  never relaxes anyway). Absent (every non-exec tool) → the existing behaviour, byte-identical. */
     policyEvaluate?: (input: I) => Promise<DomainPolicyVerdict>
+    /** 08-05 (per-tool connector tiers) — the audit label execute records when policyEvaluate
+     *  auto-allowed the call. Defaults to 'auto_whitelist' (every pre-existing caller,
+     *  byte-identical); the connector factory passes 'auto_tool_mode' for the owner-present
+     *  per-tool 'auto' seam so incident forensics can tell a tier-skip from a grant/rule-skip.
+     *  Pure audit vocabulary — needsApproval/guard semantics untouched. */
+    policyAuditStatus?: 'auto_whitelist' | 'auto_tool_mode'
     run: (
       input: I,
       ctx: { userEdited: boolean; signal: AbortSignal | undefined }
@@ -488,7 +498,7 @@ export function auditedWriteTool<I>(
       const autoSkip = autoSkipByCall.get(toolCallId)
       autoSkipByCall.delete(toolCallId)
       const approvalStatus = wasWhitelisted
-        ? 'auto_whitelist'
+        ? (opts.policyAuditStatus ?? 'auto_whitelist')
         : (autoSkip ?? (userEdited ? 'edited' : 'approved'))
       // userEditedInputJson records the EXECUTED (effective) input when edited; input_json
       // stays the model-proposed (history) input — matching the legacy audit shape.

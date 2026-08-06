@@ -50,8 +50,9 @@ import type { ToolSet } from 'ai'
  *  through an IM bridge (阶段 2 飞书对话). 盗号 ≠ 盗机 — a stolen IM account must never reach this
  *  machine's execution surface, so the row is STRICTER than manual_chat: reads free; domain writes
  *  恒 HITL (mayAutoApprove still requires manual_chat, and the acceptEdits/bypass overlay is
- *  manual-gated at consumption); connector tools open like manual (08-04 拍板「全开放」: reads
- *  silent, connector_write 恒 HITL); web gated by the MAILAGENT_IM_WEB_ENABLED venue switch
+ *  manual-gated at consumption); connector tools open like manual (08-04 拍板「全开放」; 08-05
+ *  WP-10: write approval follows the per-tool tier — ask → Feishu card, auto → card-free, off →
+ *  not registered); web gated by the MAILAGENT_IM_WEB_ENABLED venue switch
  *  (Q19=A — a Settings switch, NOT a grant; default off); exec / capability_change / outbound
  *  permanently denied, per-agent grants never consulted. Asserted in trusted code by
  *  POST /api/ai/im-chat (stage 2 PR-1, MAILAGENT_IM_FEISHU-gated). */
@@ -75,15 +76,20 @@ export function normalizeContextMode(value: unknown): AgentContextMode {
 /** Policy class of a gateway tool (ADR-001 D2, 'web' split out of 'outbound' by ADR-004 rev3.1
  *  §3.1) — orthogonal to the approval tier.
  *
- *  'connector_write' (stage 1 PR2, harness-expansion epic — grill Q5=A): the write/update tools of
- *  an MCP connector (`mcp__<connector>__<tool>`, runtime-registered — never in the static map
- *  below). manual_chat: registered + 恒 HITL (edit tier, never auto-reversible; acceptEdits is a
- *  by-name fail-closed allow-list so dynamic names always keep asking). Outside manual (PR3): the
- *  per-connector grant key `connectors` lifts the row for untrusted_trigger/cron_headless when ANY
- *  granted ceiling is write-capable ('write'/'update'); no grants → the fail-closed `return false`.
- *  im_chat (stage 2 PR-1, 08-04 拍板「connector 对 im_chat 全开放」): registered + 恒 HITL like
- *  manual — grants are still never consulted (the venue is owner-present, not a granted headless
- *  run). Connector READ tools map to the existing 'read' (silent, every mode); the load seam
+ *  'connector_write' (stage 1 PR2, harness-expansion epic — grill Q5=A原案; 08-05 WP-10 改判): the
+ *  write/update tools of an MCP connector (`mcp__<connector>__<tool>`, runtime-registered — never
+ *  in the static map below). manual_chat: registered; the approval shape follows the OWNER'S
+ *  per-tool tier since 08-05 — 'ask' → the edit-tier card (the pre-08-05 恒 HITL behaviour),
+ *  'auto' → card-free via the policyEvaluate seam (audit 'auto_tool_mode'), 'off' → not
+ *  registered at all (acceptEdits remains a by-name fail-closed allow-list; dynamic names are
+ *  never in it — the tier, not acceptEdits, is how a connector write goes card-free). Outside
+ *  manual (PR3): the per-connector grant key `connectors` lifts the row for
+ *  untrusted_trigger/cron_headless when ANY granted ceiling is write-capable ('write'/'update');
+ *  no grants → the fail-closed `return false`. im_chat (stage 2 PR-1, 08-04 拍板「connector 对
+ *  im_chat 全开放」; 08-05 场地二: tiers apply like manual — ask 走飞书卡 / auto 免卡): grants
+ *  are still never consulted (the venue is owner-present, not a granted headless run). Connector
+ *  READ tools map to the existing 'read' (silent on the default 'auto' tier; an owner-demoted
+ *  'ask' read registers approval-gated in owner-present venues); the load seam
  *  (shouldLoadConnectorTools) still keeps headless runs WITHOUT connector grants at zero fetches. */
 export const GATEWAY_TOOL_CLASS_VALUES = [
   'read',
@@ -454,8 +460,9 @@ export function isToolClassAllowedInMode(
 ): boolean {
   if (mode === 'manual_chat') return true
   if (toolClass === 'read' || toolClass === 'domain_write' || toolClass === 'artifact') return true
-  // Stage 2 PR-1 (08-04 拍板) — im_chat: connector tools fully open (writes stay 恒 HITL via the
-  // manual-only mayAutoApprove); web only under the venue switch (Q19=A — exact `=== true`, never
+  // Stage 2 PR-1 (08-04 拍板) — im_chat: connector tools fully open (write approval follows the
+  // 08-05 per-tool tier: ask → Feishu card, auto → card-free — decided at the connector factory,
+  // not here); web only under the venue switch (Q19=A — exact `=== true`, never
   // a grant); exec / capability_change / outbound 直接不给. Grants can lift NOTHING in this mode.
   if (mode === 'im_chat') {
     if (toolClass === 'connector_write') return true

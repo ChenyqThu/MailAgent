@@ -886,19 +886,23 @@ def test_classification_flag_on_without_grants_stays_single_shot(monkeypatch):
     assert len(client.classify_calls) == 1 and not client.loop_calls
 
 
-def test_classification_opt_in_uses_tool_loop_with_read_ceiling(monkeypatch):
-    """opt-in：走 run_tool_loop（classify_email 仍是终止工具）+ 天花板恒 read + header 换掉。"""
+def test_classification_opt_in_uses_tool_loop_with_auto_only_tools(monkeypatch):
+    """opt-in：走 run_tool_loop（classify_email 仍是终止工具）+ only_auto_tools=True + header 换掉。
+
+    08-05 场地放开：read 硬天花板退役（grants 的 ceiling=None），改由 only_auto_tools 把
+    该无人值守场地的工具面钉在「仅 mode='auto'」（ask ≙ 不注册）。"""
     import src.llm_agent.processor as proc_mod
 
     monkeypatch.setattr(proc_mod.cfg, "mcp_connectors_enabled", True)
     monkeypatch.setattr(
         "src.llm_agent.preprocess_config.get_preprocess_connector_grants",
-        lambda: [("notion", "read")],
+        lambda: [("notion", None)],
     )
     seen = {}
 
     def _fake_factory(grants, **kw):
         seen["grants"] = list(grants)
+        seen["kwargs"] = dict(kw)
         return (
             [{"name": "mcp__notion__search", "description": "d",
               "input_schema": {"type": "object", "properties": {}}}],
@@ -912,7 +916,8 @@ def test_classification_opt_in_uses_tool_loop_with_read_ceiling(monkeypatch):
     p = _connector_processor(monkeypatch, client)
     labels = asyncio.run(p.process_email(_fake_email()))
 
-    assert seen["grants"] == [("notion", "read")]  # 🔴 天花板恒 read
+    assert seen["grants"] == [("notion", None)]  # 08-05：无 crud 天花板
+    assert seen["kwargs"].get("only_auto_tools") is True  # 🔴 ask 档在该场地 = 不注册
     assert not client.classify_calls and len(client.loop_calls) == 1
     call = client.loop_calls[0]
     assert call["final_tool"] == "classify_email"
@@ -932,7 +937,7 @@ def test_classification_factory_failure_falls_back_to_single_shot(monkeypatch):
     monkeypatch.setattr(proc_mod.cfg, "mcp_connectors_enabled", True)
     monkeypatch.setattr(
         "src.llm_agent.preprocess_config.get_preprocess_connector_grants",
-        lambda: [("notion", "read")],
+        lambda: [("notion", None)],
     )
     monkeypatch.setattr(
         "src.connectors.llm_tools.build_connector_llm_tools",

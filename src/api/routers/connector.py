@@ -282,12 +282,14 @@ async def list_tools(
 ) -> Any:
     """已同步工具清单（PR2 的 ``createConnectorTools()`` 读这里）。
 
-    ``effective_enabled`` 已折算（read 默认开 / write·update 默认关）；orphan 行照常在列
-    （PR2 不注册它们）。``destructive`` 原样透出 —— 设置面 / 审批卡的红警告读它。
+    08-05 per-tool 三档：``mode_override`` = 用户覆盖原样（null=跟随默认），
+    ``effective_mode`` = 服务端折算（NULL→auto；折算**不在前端重算**——那会成第二处
+    手抄）。orphan 行照常在列（注册侧跳过它们）。``destructive`` 原样透出 —— 设置面 /
+    审批卡的红警告读它。
     """
     _require_enabled(settings)
     _connector_def(connector_id)
-    from src.agent_config.store import connector_tool_effective_enabled
+    from src.agent_config.store import connector_tool_effective_mode
 
     rows = await run_in_threadpool(_store().list_connector_tools, connector_id)
     return success_envelope(
@@ -301,10 +303,8 @@ async def list_tools(
                     "output_schema_json": r.output_schema_json,
                     "crud_type": r.crud_type,
                     "destructive": r.destructive,
-                    "enabled_override": r.enabled,
-                    "effective_enabled": connector_tool_effective_enabled(
-                        r.crud_type, r.enabled
-                    ),
+                    "mode_override": r.mode,
+                    "effective_mode": connector_tool_effective_mode(r.mode),
                     "orphan": r.orphan,
                     "first_seen_at": r.first_seen_at,
                     "last_seen_at": r.last_seen_at,
@@ -351,59 +351,69 @@ async def set_connector_enabled(
     )
 
 
-def _set_tool_enabled_and_read(
-    connector_id: str, tool_name: str, enabled: Optional[bool]
+def _set_tool_mode_and_read(
+    connector_id: str, tool_name: str, mode: Optional[str]
 ) -> Any:
-    """写 per-tool 覆盖 + 回读该行（一次线程跳；行不存在由写侧 KeyError 抛）。"""
+    """写 per-tool 档位覆盖 + 回读该行（一次线程跳；行不存在由写侧 KeyError 抛）。"""
     store = _store()
-    store.set_connector_tool_enabled(connector_id, tool_name, enabled)
+    store.set_connector_tool_mode(connector_id, tool_name, mode)
     for row in store.list_connector_tools(connector_id):
         if row.tool_name == tool_name:
             return row
     raise KeyError(f"connector tool not found: {connector_id}/{tool_name}")
 
 
+def _validate_mode_value(payload: dict[str, Any]) -> Optional[str]:
+    """``{"mode": 'auto'|'ask'|'off'|null}`` 的键在场 + 值域校验（缺键/野值 → 400）。"""
+    from src.agent_config.store import CONNECTOR_TOOL_MODES
+
+    if "mode" not in payload:
+        raise APIError(
+            "E_INVALID_ARG",
+            'body must carry a "mode" key ("auto"|"ask"|"off", or null to clear the '
+            "override back to the default tier)",
+            http_status=400,
+        )
+    mode = payload["mode"]
+    if mode is not None and mode not in CONNECTOR_TOOL_MODES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"mode must be one of {list(CONNECTOR_TOOL_MODES)} or null",
+            http_status=400,
+        )
+    return mode
+
+
 @router.post(
-    "/{connector_id}/tools/{tool_name}/enabled",
+    "/{connector_id}/tools/{tool_name}/mode",
     dependencies=[Depends(verify_cf_access)],
 )
-async def set_tool_enabled(
+async def set_tool_mode(
     connector_id: str,
     tool_name: str,
     request: Request,
     payload: dict[str, Any] = Body(...),
     settings=Depends(get_settings),
 ) -> Any:
-    """per-tool 启用覆盖（PR4 设置面）：``{"enabled": bool | null}``，**三态**。
+    """per-tool 三档覆盖（08-05 改判，取代旧 ``…/enabled`` 端点）：
+    ``{"mode": "auto"|"ask"|"off"|null}``。
 
-    ``null`` = 清除覆盖回默认（read 开 / write·update 关）—— 与「显式关」不是一回事，
-    故键必须在场（缺键 → 400，不把「没说」当成 null 猜）。响应带**更新后的事实**
-    （``enabled_override`` 原样 + ``effective_enabled`` 折算），免得前端自己再折算一遍
-    默认规则（第二处手抄）。
+    ``null`` = 清除覆盖回默认档（**auto**）—— 与「显式 off」不是一回事，故键必须在场
+    （缺键 → 400，不把「没说」当成 null 猜）。响应带**更新后的事实**（``mode_override``
+    原样 + ``effective_mode`` 折算），免得前端自己再折算一遍默认规则（第二处手抄）。
 
-    🔴 08-03 起**在册工具一律可配置**（owner 改判：delete 档位退役、不再有恒灰的一档）。
-    危险性提示走 ``destructive`` 列的红警告，写类恒 HITL 的安全地板不变。
+    🔴 08-03 起**在册工具一律可配置**；08-05 起 write/update/destructive 也可设 ``auto``
+    免卡（owner 拍板，master-plan WP-10）——destructive 设 auto 的一次性红色确认在设置面，
+    审批卡红警告链在 ``ask`` 档原样保留。
     """
     _require_enabled(settings)
     _connector_def(connector_id)
-    from src.agent_config.store import connector_tool_effective_enabled
+    from src.agent_config.store import connector_tool_effective_mode
 
-    if "enabled" not in payload:
-        raise APIError(
-            "E_INVALID_ARG",
-            'body must carry an "enabled" key (JSON boolean, or null to clear the override)',
-            http_status=400,
-        )
-    enabled = payload["enabled"]
-    if enabled is not None and not isinstance(enabled, bool):
-        raise APIError(
-            "E_INVALID_ARG",
-            "enabled must be a JSON boolean or null",
-            http_status=400,
-        )
+    mode = _validate_mode_value(payload)
     try:
         row = await run_in_threadpool(
-            _set_tool_enabled_and_read, connector_id, tool_name, enabled
+            _set_tool_mode_and_read, connector_id, tool_name, mode
         )
     except KeyError as e:
         raise APIError(
@@ -416,10 +426,52 @@ async def set_tool_enabled(
         {
             "connector_id": connector_id,
             "tool_name": tool_name,
-            "enabled_override": row.enabled,
-            "effective_enabled": connector_tool_effective_enabled(
-                row.crud_type, row.enabled
-            ),
+            "mode_override": row.mode,
+            "effective_mode": connector_tool_effective_mode(row.mode),
+        },
+        request=request,
+    )
+
+
+@router.post(
+    "/{connector_id}/tools/bulk_mode", dependencies=[Depends(verify_cf_access)]
+)
+async def bulk_set_tool_mode(
+    connector_id: str,
+    request: Request,
+    payload: dict[str, Any] = Body(...),
+    settings=Depends(get_settings),
+) -> Any:
+    """组级批量设档（差距表 #6）+ Reset permissions（#8）：
+    ``{"mode": "auto"|"ask"|"off"|null, "crud_type"?: "read"|"write"|"update"}``。
+
+    ``mode=null`` = 批量清覆盖回默认（Reset permissions 的后端）；``crud_type`` 缺席 =
+    整个 connector 的全部在册工具。orphan 行跳过（store 侧纪律——恒不注册的行不吃批量
+    动作）。响应 ``updated`` = 实际改动行数（0 不是错——从未同步过的 connector 也 200）。
+    """
+    _require_enabled(settings)
+    _connector_def(connector_id)
+    from src.agent_config.store import CONNECTOR_CRUD_TYPES
+
+    mode = _validate_mode_value(payload)
+    crud_type = payload.get("crud_type")
+    if crud_type is not None and crud_type not in CONNECTOR_CRUD_TYPES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"crud_type must be one of {list(CONNECTOR_CRUD_TYPES)} or absent",
+            http_status=400,
+        )
+    updated = await run_in_threadpool(
+        lambda: _store().bulk_set_connector_tool_mode(
+            connector_id, mode, crud_type=crud_type
+        )
+    )
+    return success_envelope(
+        {
+            "connector_id": connector_id,
+            "mode": mode,
+            "crud_type": crud_type,
+            "updated": updated,
         },
         request=request,
     )
@@ -459,11 +511,11 @@ async def set_preprocess_enabled(
 ) -> Any:
     """分类侧独立授权开关（PR3 坑 3）：``{"enabled": bool}``。
 
-    🔴 **只有开关，没有天花板** —— 邮件预处理分类的 crud 天花板硬编码为 ``read``
-    （``llm_tools`` 工厂只造 read 类工具），owner 不存在「给分类侧配 write」的入口。
-    这是 lethal trifecta（untrusted 邮件正文 + 私有数据 + 外部写）的结构性收紧：
-    分类是全自动逐封跑的，比 headless custom agent 更敞，所以它**不复用** custom agent 的
-    ``grant_connectors``（免得给 agent 配了 write、分类侧跟着继承）。
+    🔴 08-05 场地放开（owner 知情拍板，master-plan WP-10）：原「天花板硬编码 read」已
+    退役——开了本开关后，分类侧工具面 = 该 connector 里 per-tool ``mode='auto'`` 的工具
+    （**含 write/update**；``ask`` 在该无人值守场地 ≙ 不注册，``off`` 恒不注册，见
+    ``llm_tools`` 的 ``only_auto_tools``）。本开关仍**独立、默认关**，不复用 custom agent
+    的 ``grant_connectors``（免得给 agent 配了 write、分类侧跟着继承）。
     """
     _require_enabled(settings)
     _connector_def(connector_id)
@@ -507,7 +559,8 @@ async def invoke_tool(
     headless（untrusted_trigger / cron_headless）时按该 agent 的 ``grant_connectors``
     重新判天花板 = **授权判定与执行同侧**的第二道闸（gateway 注册期过滤是第一道）；
     缺席 / owner-present（``manual_chat`` / ``im_chat`` —— 后者自阶段 2 PR-1 起与 manual
-    同档，08-04 拍板「全开放」，写恒 HITL 在 gateway 侧）→ 与 PR2 逐字节相同（owner 面）。
+    同档，08-04 拍板「全开放」；写类的审批档位在 gateway 侧按 per-tool 三档判——
+    ``ask`` 弹卡 / ``auto`` 免卡，08-05 改判）→ 与 PR2 逐字节相同（owner 面）。
     结果已在 ``ConnectorClient.call_tool`` 截断（``CALL_RESULT_MAX_CHARS``）；
     UNTRUSTED_MCP_TOOL 围栏由调用面各自套（TS gateway / Python llm_tools）。
     """

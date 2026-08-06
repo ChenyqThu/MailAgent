@@ -5,13 +5,15 @@ PR2 把闸序写在 ``routers/connector.py`` 的 invoke handler 里；PR3 起有
 直调，不过 HTTP）。两个面必须走**同一份**闸，故整块搬到这里：router 与工厂各调一次
 ``invoke_connector_tool``，闸逻辑绝不手抄两份（手抄两份 = 改一处漏一处、静默放宽）。
 
-闸序（伪造 / 未同步 / orphan / 未启用 / 越天花板的名字**到不了远端**）：
+闸序（伪造 / 未同步 / orphan / 关档 / 越天花板的名字**到不了远端**）：
 
   1. 未知 connector id（不在 registry）              → 404 ``E_NOT_FOUND``
   2. 工具不在已同步清单里（伪造 / 未同步）           → 404 ``E_NOT_FOUND``
   3. orphan（远端清单里已消失）                      → 409 ``E_CONNECTOR_TOOL_ORPHAN``
   4. **crud 天花板**（PR3 新增，见下）                → 403 ``E_CONNECTOR_GRANT_DENIED``
-  5. ``effective_enabled`` 折算为 False              → 409 ``E_CONNECTOR_TOOL_DISABLED``
+  5. per-tool 档位（08-05 三档改判）：``mode`` 折算为 ``off``
+     → 409 ``E_CONNECTOR_TOOL_DISABLED``；``deny_ask_mode=True``（无审批宿主的无人值守
+     调用面——邮件预处理）时 ``ask`` 档同拒（该场地 ask ≙ 不可用，见 llm_tools）
 
 🔴 原闸 3（``crud_type='delete'`` → 403 ``E_CONNECTOR_TOOL_FORBIDDEN``）**08-03 整闸退役**：
 delete 档位本身已退役（MCP annotations 没有 delete 语义位 ⇒ ``derive_crud_type`` 结构上不
@@ -72,7 +74,8 @@ CALLER_CONTEXT_MODES: tuple[str, ...] = (
 
 #: owner 在环、不加服务端天花板的模式（阶段 2 PR-1，08-04 拍板「connector 对 im_chat 全开放」）：
 #: manual_chat（桌面/远程 web chat）+ im_chat（飞书 IM——owner 本人隔着 IM 说话）。两者的审批链
-#: 都在 gateway 侧（读免批、写弹卡；im 的写卡经 PR-3 飞书按钮投递），服务端不再叠加天花板。
+#: 都在 gateway 侧（08-05 per-tool 三档：ask 弹卡 / auto 免卡；im 的 ask 卡经 PR-3 飞书按钮
+#: 投递），服务端不再叠加天花板。
 #: 🔴 与 HEADLESS_CONTEXT_MODES 互斥且两者并起来 == CALLER_CONTEXT_MODES（parity 闸锁着）——
 #: 将来第五种 mode 落进哪一侧是一次独立决策，谁都不许"继承"。
 OWNER_PRESENT_CONTEXT_MODES: tuple[str, ...] = ("manual_chat", "im_chat")
@@ -145,9 +148,9 @@ def resolve_caller_ceiling(
 
     - ``caller`` 缺席 → ``None``：PR2 行为逐字节保留（owner 直调 / 尚未升级的 gateway）。
     - ``context_mode`` ∈ ``OWNER_PRESENT_CONTEXT_MODES``（``manual_chat`` / ``im_chat``）→
-      ``None``：owner 本人在环，审批链在 gateway 侧（grill Q5=A：读免批、写弹卡；im_chat 自
-      阶段 2 PR-1 起与 manual 同档 —— 08-04 拍板「全开放」，写类的恒 HITL 由 gateway 的
-      mayAutoApprove manual-only 保证，卡经 PR-3 飞书按钮投递），服务端不再叠加天花板。
+      ``None``：owner 本人在环，审批链在 gateway 侧（08-05 per-tool 三档：``ask`` 档弹卡
+      ——manual 桌面卡 / im 经 PR-3 飞书按钮投递，``auto`` 档免卡执行；im_chat 自阶段 2
+      PR-1 起与 manual 同档，08-04 拍板「全开放」），服务端不再叠加天花板。
     - headless（``untrusted_trigger`` / ``cron_headless``）→ 按 ``agent_id`` 读该 agent 的
       ``grant_connectors``；无 agent_id / 无行 / 该 connector 不在 grants 里 → **拒**
       （grant 外根本不该注册，走到这里说明第一道漏了或被绕过）。
@@ -206,6 +209,7 @@ async def invoke_connector_tool(
     arguments: Optional[dict[str, Any]] = None,
     *,
     ceiling: Optional[str] = None,
+    deny_ask_mode: bool = False,
 ) -> dict[str, Any]:
     """闸序 + 远端调用（HTTP invoke 端点与 Python LLM 工厂的**共用**执行路径）。
 
@@ -215,9 +219,14 @@ async def invoke_connector_tool(
 
     闸拒 → ``ConnectorInvokeDenied``；远端 / 传输 / 授权失效 → ``ConnectorBusy`` /
     ``ConnectorError`` 原样上抛（各调用面自行映射 HTTP 语义 or 回灌给模型）。
+
+    ``deny_ask_mode``（08-05 场地一放开的配套）：无人值守且**没有审批链宿主**的调用面
+    （邮件预处理工厂）传 True——该场地 ``ask`` 档的忠实含义是「不可用」（无人可点头），
+    这里是工厂「不注册 ask 工具」之外**判定与执行同侧**的第二道。owner-present（manual /
+    im，审批在 gateway 侧）与 headless custom agent（grant 内免卡是既有语义）恒传 False。
     """
     from src.agent_config.store import (
-        connector_tool_effective_enabled,
+        connector_tool_effective_mode,
         get_agent_config_store,
     )
     from src.connectors.registry import get_connector_def
@@ -255,11 +264,20 @@ async def invoke_connector_tool(
             f"above the caller's granted ceiling {ceiling!r}",
             http_status=403,
         )
-    if not connector_tool_effective_enabled(row.crud_type, row.enabled):
+    effective_mode = connector_tool_effective_mode(row.mode)
+    if effective_mode == "off":
         raise ConnectorInvokeDenied(
             "E_CONNECTOR_TOOL_DISABLED",
-            f"tool {tool_name!r} is disabled — enable it in Settings → Custom AI → "
-            "Connectors if you want the assistant to use it",
+            f"tool {tool_name!r} is set to 'off' — change its mode in Settings → "
+            "Custom AI → Connectors if you want the assistant to use it",
+            http_status=409,
+        )
+    if deny_ask_mode and effective_mode == "ask":
+        raise ConnectorInvokeDenied(
+            "E_CONNECTOR_TOOL_DISABLED",
+            f"tool {tool_name!r} is set to 'ask' (needs approval) — this unattended "
+            "caller has no approval surface, so 'ask' behaves as unavailable here; set "
+            "the tool to 'auto' in Settings → Custom AI → Connectors to allow it",
             http_status=409,
         )
 

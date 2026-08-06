@@ -1977,7 +1977,7 @@
       "enabled": "启用此连接",
       "enabledHelper": "关闭后该服务的全部工具都不再注入 AI；授权凭证与逐工具设置保留。",
       "preprocess": "允许邮件预处理调用",
-      "preprocessHelper": "允许邮件预处理分类调用（恒只读天花板，写入类工具不会开放给它）。",
+      "preprocessHelper": "允许邮件预处理分类调用。该场地无人值守：只有档位为「自动」的工具可用（「需审批」在此等同禁用）；写入类工具设为「自动」后同样会开放给它。",
       "scopes": "授权范围",
       "tokenExpires": "令牌有效期至 {time}",
       "tokenExpired": "令牌已于 {time} 过期，请重新连接。",
@@ -1998,25 +1998,52 @@
         "loading": "正在加载工具清单…",
         "loadError": "工具清单加载失败：{message}",
         "empty": "尚未同步到工具；点上方「同步工具」拉取清单。",
-        "defaultHint": "「默认」= 只读工具开、写入/更新工具关。",
+        "defaultHint": "默认档 = 自动（含写入/更新；免审批执行）。",
         "destructive": "破坏性",
         "orphan": "已失效",
         "orphanTip": "远端已不再提供这个工具；配置保留，但不会注入 AI。",
         "purgeOrphans": "清理 {count} 个已失效工具",
         "purgeDone": "已清理 {count} 个已失效工具",
-        "effectiveOn": "当前：AI 可调用",
-        "effectiveOff": "当前：AI 不可调用",
+        "followDefault": "默认",
+        "reset": "重置全部档位",
+        "resetDone": "已重置 {count} 个工具的档位",
+        "bulkDone": "已更新 {count} 个工具的档位",
+        "effective": {
+          "auto": "当前：自动执行（不弹审批）",
+          "ask": "当前：每次调用需审批",
+          "off": "当前：已禁用（AI 不可见）"
+        },
         "crud": {
           "read": "只读",
           "write": "写入",
           "update": "更新"
         },
-        "state": {
-          "label": "调用权限",
-          "default": "默认",
-          "on": "开",
-          "off": "关"
+        "mode": {
+          "label": "调用档位",
+          "auto": "自动",
+          "ask": "需审批",
+          "off": "禁用"
+        },
+        "bulk": {
+          "label": "批量",
+          "auto": "全部设为自动",
+          "ask": "全部设为需审批",
+          "off": "全部禁用"
         }
+      },
+      "toolfaceNotice": {
+        "title": "工具面已按新默认放宽",
+        "body": "此连接提供 {reads} 个读取、{writes} 个写入/更新工具（其中 {destructive} 个标记为破坏性）。默认档位为「自动」（免审批执行）——可展开下方清单逐个调档。",
+        "loading": "正在统计工具清单…",
+        "review": "查看并调档",
+        "dismiss": "知道了"
+      },
+      "destructiveAutoDialog": {
+        "title": "把破坏性工具设为「自动」？",
+        "desc": "服务方将 {name} 标记为破坏性操作（可能覆盖或删除既有数据）。设为「自动」后，AI 调用它将不再请求你的确认。",
+        "bulkDesc": "该组包含 {count} 个被服务方标记为破坏性的工具。全部设为「自动」后，AI 调用它们将不再请求你的确认。",
+        "cancel": "取消",
+        "confirm": "设为自动"
       }
     },
     "imFeishu": {

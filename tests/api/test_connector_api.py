@@ -88,9 +88,10 @@ def test_flag_off_all_non_callback_endpoints_409(flag_off_client):
         ("GET", "/api/connector/notion/tools", None),
         ("POST", "/api/connector/notion/tools/search/invoke", None),
         ("POST", "/api/connector/notion/disconnect", None),
-        # PR4 —— 两个配置端点同样挂 flag 门。
+        # PR4 —— 配置端点同样挂 flag 门（08-05：per-tool 端点换 mode，另有组级 bulk_mode）。
         ("POST", "/api/connector/notion/enabled", {"enabled": False}),
-        ("POST", "/api/connector/notion/tools/search/enabled", {"enabled": True}),
+        ("POST", "/api/connector/notion/tools/search/mode", {"mode": "auto"}),
+        ("POST", "/api/connector/notion/tools/bulk_mode", {"mode": "ask"}),
         # PR5 —— orphan 清理端点同样挂 flag 门。
         ("POST", "/api/connector/notion/tools/purge_orphans", None),
     ]
@@ -201,10 +202,11 @@ def test_sync_persists_tools_and_status(flag_on_client, fresh_agent_cfg, monkeyp
     assert t.status_code == 200
     tools = {x["name"]: x for x in t.json()["data"]["tools"]}
     assert set(tools) == {"search", "create_page", "update_page"}
-    # 折算：read 默认开 / write·update 默认关（08-03 起没有恒灰的第四档）。
-    assert tools["search"]["effective_enabled"] is True
-    assert tools["create_page"]["effective_enabled"] is False
-    assert tools["update_page"]["effective_enabled"] is False
+    # 折算（08-05 三档）：默认档 = auto —— write/update 也不再默认关。
+    assert tools["search"]["effective_mode"] == "auto"
+    assert tools["create_page"]["effective_mode"] == "auto"
+    assert tools["update_page"]["effective_mode"] == "auto"
+    assert tools["search"]["mode_override"] is None
     assert tools["update_page"]["crud_type"] == "update"
     # PR2 裁决① — destructive 位随清单返回（审批卡红警告的数据源）。
     assert tools["create_page"]["destructive"] is True
@@ -324,20 +326,20 @@ def test_invoke_unknown_tool_404_never_forwarded(flag_on_client, fresh_agent_cfg
     assert _InvokeStubClient.last_call is None  # 伪造名字到不了远端
 
 
-def test_invoke_destructive_write_tool_allowed_once_enabled(
+def test_invoke_destructive_write_tool_allowed_by_default_tier(
     flag_on_client, fresh_agent_cfg, monkeypatch
 ):
-    """🔴 08-03 delete 闸退役的 HTTP 正例：``destructive=1`` 的写工具开了就能调。
+    """🔴 08-05 默认档翻 auto 的 HTTP 正例：``destructive=1`` 的写工具**默认就能调**
+    （从未配置过的行折算 auto）。
 
-    以前 destructive_hint 会被推成 delete → 403 恒拒（清单里看得见、永远用不了）。现在
-    危险性只是审批卡上的红警告位，执行侧的安全地板是 write 默认关 + 恒 HITL。
+    08-03 时它还要 owner 显式开；08-05 owner 拍板跟随参考产品默认全自动 —— 这正是发版
+    说明里「工具面变宽」的端点形态。危险性仍由红警告位 + 设置面一次性确认承担。
     """
     import src.connectors.client as client_mod
 
     _seed_tools(fresh_agent_cfg)
     _InvokeStubClient.last_call = None
     monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
-    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
     r = flag_on_client.post("/api/connector/notion/tools/create_page/invoke")
     assert r.status_code == 200
     assert _InvokeStubClient.last_call[:2] == ("notion", "create_page")
@@ -345,20 +347,21 @@ def test_invoke_destructive_write_tool_allowed_once_enabled(
     assert row.destructive is True  # 红警告位仍在（只是不再是禁令）
 
 
-def test_invoke_disabled_tool_409_actionable(flag_on_client, fresh_agent_cfg, monkeypatch):
+def test_invoke_off_tier_tool_409_actionable(flag_on_client, fresh_agent_cfg, monkeypatch):
     import src.connectors.client as client_mod
 
     _seed_tools(fresh_agent_cfg)
     monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
-    # write 默认关（effective_enabled 折算 False）。
+    # 08-05：默认档是 auto —— 「调不动」必须来自显式 off。
+    fresh_agent_cfg.set_connector_tool_mode("notion", "create_page", "off")
     r = flag_on_client.post("/api/connector/notion/tools/create_page/invoke")
     assert r.status_code == 409
     err = r.json()["error"]
     assert err["code"] == "E_CONNECTOR_TOOL_DISABLED"
-    assert "Settings" in err["message"]  # 可行动解释（AC：告诉用户去设置开）
+    assert "Settings" in err["message"]  # 可行动解释（AC：告诉用户去设置改档）
 
-    # 用户显式打开后可调。
-    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
+    # 清覆盖回默认（auto）后可调。
+    fresh_agent_cfg.set_connector_tool_mode("notion", "create_page", None)
     r2 = flag_on_client.post("/api/connector/notion/tools/create_page/invoke")
     assert r2.status_code == 200
 
@@ -512,7 +515,7 @@ def test_disconnect_deletes_credentials_keeps_tool_config(
         [{"name": "search", "description": "", "input_schema": None,
           "output_schema": None, "crud_type": "read"}],
     )
-    fresh_agent_cfg.set_connector_tool_enabled("notion", "search", False)
+    fresh_agent_cfg.set_connector_tool_mode("notion", "search", "off")
     fresh_agent_cfg.update_connector_state(
         "notion", status="connected", scopes=["default"]
     )
@@ -535,7 +538,7 @@ def test_disconnect_deletes_credentials_keeps_tool_config(
     assert row.scopes is None
     # 工具行 + 用户 per-tool 配置保留（重连后偏好还在）。
     rows = fresh_agent_cfg.list_connector_tools("notion")
-    assert len(rows) == 1 and rows[0].enabled is False
+    assert len(rows) == 1 and rows[0].mode == "off"
 
 
 # ── PR3：caller 二道闸（授权判定与执行同侧）─────────────────────────────────────
@@ -614,8 +617,7 @@ def test_invoke_ceiling_blocks_write_tool(flag_on_client, fresh_agent_cfg, monke
     """🔴 天花板生效：给 read 的 agent 调不动 write 类工具（且与 per-tool 启用是两道独立闸）。"""
     import src.connectors.client as client_mod
 
-    _seed_tools(fresh_agent_cfg)
-    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)  # 工具本身是开的
+    _seed_tools(fresh_agent_cfg)  # 默认档 auto —— 工具本身可用，被拒的只能是天花板
     _InvokeStubClient.last_call = None
     monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
     _grant_agent(monkeypatch, {"notion": "read"})
@@ -638,8 +640,7 @@ def test_invoke_destructive_write_allowed_headless_within_grant(
     """
     import src.connectors.client as client_mod
 
-    _seed_tools(fresh_agent_cfg)
-    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
+    _seed_tools(fresh_agent_cfg)  # 默认档 auto
     _InvokeStubClient.last_call = None
     monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
     _grant_agent(monkeypatch, {"notion": "update"})
@@ -659,8 +660,8 @@ def test_invoke_im_chat_behaves_like_manual(flag_on_client, fresh_agent_cfg, mon
     r = _invoke(flag_on_client, "search", caller={"context_mode": "im_chat", "agent_id": None})
     assert r.status_code == 200
     assert _InvokeStubClient.last_call[:2] == ("notion", "search")
-    # 写类工具：与 manual caller 同档（工具启用 + 无天花板 → 放行到远端）。
-    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
+    # 写类工具：与 manual caller 同档（默认档 auto + 无天花板 → 放行到远端；审批档位
+    # 在 gateway 侧按 per-tool 三档判，不在本端点）。
     assert _invoke(
         flag_on_client, "create_page", caller={"context_mode": "im_chat", "agent_id": None}
     ).status_code == 200
@@ -672,9 +673,8 @@ def test_invoke_manual_chat_caller_behaves_like_no_caller(
     """owner 面：manual_chat（以及 caller 缺席）不加天花板 —— PR2 行为逐字节保留。"""
     import src.connectors.client as client_mod
 
-    _seed_tools(fresh_agent_cfg)
+    _seed_tools(fresh_agent_cfg)  # 默认档 auto
     monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
-    fresh_agent_cfg.set_connector_tool_enabled("notion", "create_page", True)
     assert _invoke(
         flag_on_client, "create_page", caller={"context_mode": "manual_chat", "agent_id": None}
     ).status_code == 200
@@ -759,7 +759,7 @@ def _connectors(client):
 
 
 def _set_tool(client, tool, body, connector="notion"):
-    return client.post(f"/api/connector/{connector}/tools/{tool}/enabled", json=body)
+    return client.post(f"/api/connector/{connector}/tools/{tool}/mode", json=body)
 
 
 def test_connector_enabled_toggle_roundtrip(flag_on_client, fresh_agent_cfg):
@@ -784,7 +784,7 @@ def test_connector_enabled_toggle_roundtrip(flag_on_client, fresh_agent_cfg):
 
 def test_connector_enabled_toggle_validates(flag_on_client, fresh_agent_cfg):
     fresh_agent_cfg.upsert_connector("notion", server_url="https://x")
-    # 整体开关是二态（不是 per-tool 的三态）→ null 也拒。
+    # 整体开关是二态（不是 per-tool 的三档）→ null 也拒。
     for bad in ({"enabled": "yes"}, {"enabled": 1}, {"enabled": None}, {}):
         r = flag_on_client.post("/api/connector/notion/enabled", json=bad)
         assert r.status_code == 400, bad
@@ -800,62 +800,120 @@ def test_connector_enabled_toggle_validates(flag_on_client, fresh_agent_cfg):
     )
 
 
-def test_tool_enabled_three_state_roundtrip(flag_on_client, fresh_agent_cfg):
-    """true / false / null 三态往返 —— null 是「清覆盖回默认」，与「显式关」不同。"""
+def test_tool_mode_roundtrip(flag_on_client, fresh_agent_cfg):
+    """08-05 三档往返：auto/ask/off + null（清覆盖回默认档 auto——与显式 off 不同）。"""
     _seed_tools(fresh_agent_cfg)
 
-    # write 类默认关 → 显式开。
-    d = _set_tool(flag_on_client, "create_page", {"enabled": True}).json()["data"]
+    d = _set_tool(flag_on_client, "create_page", {"mode": "ask"}).json()["data"]
     assert d["tool_name"] == "create_page" and d["connector_id"] == "notion"
-    assert d["enabled_override"] is True and d["effective_enabled"] is True
+    assert d["mode_override"] == "ask" and d["effective_mode"] == "ask"
 
-    # null 清覆盖 → 回 write 默认（关）。
-    d = _set_tool(flag_on_client, "create_page", {"enabled": None}).json()["data"]
-    assert d["enabled_override"] is None and d["effective_enabled"] is False
+    d = _set_tool(flag_on_client, "create_page", {"mode": "off"}).json()["data"]
+    assert d["mode_override"] == "off" and d["effective_mode"] == "off"
 
-    # read 类默认开 → 显式关 → 再清覆盖回默认（开）。
-    d = _set_tool(flag_on_client, "search", {"enabled": False}).json()["data"]
-    assert d["enabled_override"] is False and d["effective_enabled"] is False
-    d = _set_tool(flag_on_client, "search", {"enabled": None}).json()["data"]
-    assert d["enabled_override"] is None and d["effective_enabled"] is True
+    # null 清覆盖 → 回默认档 auto。
+    d = _set_tool(flag_on_client, "create_page", {"mode": None}).json()["data"]
+    assert d["mode_override"] is None and d["effective_mode"] == "auto"
 
-    # 响应即库中事实：tools 端点（同一折算函数）读到一样的三态。
+    # 响应即库中事实：tools 端点（同一折算函数）读到一样的档位。
+    d = _set_tool(flag_on_client, "search", {"mode": "auto"}).json()["data"]
+    assert d["mode_override"] == "auto" and d["effective_mode"] == "auto"
     tools = {
         t["name"]: t
         for t in flag_on_client.get("/api/connector/notion/tools").json()["data"]["tools"]
     }
-    assert tools["search"]["enabled_override"] is None
-    assert tools["search"]["effective_enabled"] is True
+    assert tools["search"]["mode_override"] == "auto"
+    assert tools["create_page"]["mode_override"] is None
+    assert tools["create_page"]["effective_mode"] == "auto"
 
 
-def test_tool_enabled_every_listed_tool_is_configurable(flag_on_client, fresh_agent_cfg):
-    """🔴 08-03 owner 改判：「连接工具应该都全部可配置」—— 清单里没有恒灰的一档。
-
-    destructive 的写工具（原本会被推成 delete、403 恒拒）现在照常可开、折算为开。
-    """
+def test_tool_mode_every_listed_tool_is_configurable(flag_on_client, fresh_agent_cfg):
+    """🔴 08-03 owner 改判：「连接工具应该都全部可配置」—— 清单里没有恒灰的一档；
+    08-05 起 destructive 的写工具也能设 auto（一次性红色确认在设置面，不在端点）。"""
     _seed_tools(fresh_agent_cfg)
     rows = {r.tool_name: r for r in fresh_agent_cfg.list_connector_tools("notion")}
     assert rows["create_page"].destructive is True  # 红警告位仍在
 
     for name in ("search", "create_page", "update_page"):
-        r = _set_tool(flag_on_client, name, {"enabled": True})
+        r = _set_tool(flag_on_client, name, {"mode": "auto"})
         assert r.status_code == 200, name
         d = r.json()["data"]
-        assert d["enabled_override"] is True and d["effective_enabled"] is True, name
+        assert d["mode_override"] == "auto" and d["effective_mode"] == "auto", name
 
 
-def test_tool_enabled_validates_and_404(flag_on_client, fresh_agent_cfg):
+def test_tool_mode_validates_and_404(flag_on_client, fresh_agent_cfg):
     _seed_tools(fresh_agent_cfg)
-    # 缺键 = 「没说」，不当 null 猜；非 bool 非 null 一律拒。
-    for bad in ({}, {"enabled": "yes"}, {"enabled": 1}):
+    # 缺键 = 「没说」，不当 null 猜；值域外一律拒（含旧布尔形状）。
+    for bad in ({}, {"mode": "enabled"}, {"mode": True}, {"mode": 1}, {"enabled": True}):
         r = _set_tool(flag_on_client, "search", bad)
         assert r.status_code == 400, bad
         assert r.json()["error"]["code"] == "E_INVALID_ARG"
     # 未同步 / 伪造的工具名 → 404；未知 connector → 404（registry 闸）。
-    r = _set_tool(flag_on_client, "forged_tool", {"enabled": False})
+    r = _set_tool(flag_on_client, "forged_tool", {"mode": "off"})
     assert r.status_code == 404 and r.json()["error"]["code"] == "E_NOT_FOUND"
-    r = _set_tool(flag_on_client, "search", {"enabled": False}, connector="ghost")
+    r = _set_tool(flag_on_client, "search", {"mode": "off"}, connector="ghost")
     assert r.status_code == 404 and r.json()["error"]["code"] == "E_NOT_FOUND"
+
+
+def test_old_tool_enabled_endpoint_is_gone(flag_on_client, fresh_agent_cfg):
+    """旧 ``…/tools/{name}/enabled`` 端点已删（同仓唯一消费者前端已随本批切 mode）——
+    打过去是 404 路由缺席，不是静默兼容。"""
+    _seed_tools(fresh_agent_cfg)
+    r = flag_on_client.post(
+        "/api/connector/notion/tools/search/enabled", json={"enabled": True}
+    )
+    assert r.status_code in (404, 405)
+
+
+# ── 08-05：组级批量设档 + Reset permissions ─────────────────────────────────────
+
+
+def _bulk(client, body, connector="notion"):
+    return client.post(f"/api/connector/{connector}/tools/bulk_mode", json=body)
+
+
+def test_bulk_mode_by_crud_and_reset(flag_on_client, fresh_agent_cfg):
+    _seed_tools(fresh_agent_cfg)
+
+    r = _bulk(flag_on_client, {"mode": "ask", "crud_type": "write"})
+    assert r.status_code == 200
+    assert r.json()["data"] == {
+        "connector_id": "notion", "mode": "ask", "crud_type": "write", "updated": 1,
+    }
+    rows = {x.tool_name: x.mode for x in fresh_agent_cfg.list_connector_tools("notion")}
+    assert rows == {"search": None, "create_page": "ask", "update_page": None}
+
+    # 无 crud = 全部在册工具；Reset permissions = mode null 批量清覆盖。
+    assert _bulk(flag_on_client, {"mode": "off"}).json()["data"]["updated"] == 3
+    r = _bulk(flag_on_client, {"mode": None})
+    assert r.status_code == 200 and r.json()["data"]["updated"] == 3
+    assert {x.mode for x in fresh_agent_cfg.list_connector_tools("notion")} == {None}
+
+
+def test_bulk_mode_skips_orphans_and_validates(flag_on_client, fresh_agent_cfg):
+    _seed_tools(fresh_agent_cfg)
+    # search 变 orphan → 批量不吃它。
+    fresh_agent_cfg.sync_connector_tools(
+        "notion",
+        [{"name": "create_page", "description": "", "input_schema": None,
+          "output_schema": None, "crud_type": "write"},
+         {"name": "update_page", "description": "", "input_schema": None,
+          "output_schema": None, "crud_type": "update"}],
+    )
+    assert _bulk(flag_on_client, {"mode": "off"}).json()["data"]["updated"] == 2
+    rows = {x.tool_name: x.mode for x in fresh_agent_cfg.list_connector_tools("notion")}
+    assert rows == {"search": None, "create_page": "off", "update_page": "off"}
+
+    # 校验：缺 mode 键 / 值域外 mode / 值域外 crud → 400；未知 connector → 404。
+    for bad in ({}, {"mode": "enabled"}, {"mode": "auto", "crud_type": "delete"}):
+        r = _bulk(flag_on_client, bad)
+        assert r.status_code == 400, bad
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+    assert _bulk(flag_on_client, {"mode": "off"}, connector="ghost").status_code == 404
+    # 从未同步过的已知 connector → 200 / updated 0（改空不是错，前端不必先探）。
+    assert _bulk(flag_on_client, {"mode": "off"}, connector="atlassian").json()["data"][
+        "updated"
+    ] == 0
 
 
 # ── PR5：orphan 清理端点 ────────────────────────────────────────────────────────
@@ -869,7 +927,7 @@ def test_purge_orphans_removes_only_orphan_rows(flag_on_client, fresh_agent_cfg)
     """只删 orphan=1；在册工具与其 enabled 覆盖一行不碰，返回删除计数。"""
     _seed_tools(fresh_agent_cfg)
     # 用户对一个在册 read 工具做过覆盖（清理绝不能把它带走）。
-    fresh_agent_cfg.set_connector_tool_enabled("notion", "search", False)
+    fresh_agent_cfg.set_connector_tool_mode("notion", "search", "off")
     # 远端清单只剩 search → create_page / update_page 变 orphan（行保留，纪律 4）。
     fresh_agent_cfg.sync_connector_tools(
         "notion",
@@ -885,7 +943,7 @@ def test_purge_orphans_removes_only_orphan_rows(flag_on_client, fresh_agent_cfg)
 
     rows = {x.tool_name: x for x in fresh_agent_cfg.list_connector_tools("notion")}
     assert set(rows) == {"search"}
-    assert rows["search"].enabled is False  # 用户覆盖原样存活
+    assert rows["search"].mode == "off"  # 用户覆盖原样存活
 
     # 幂等：再清一次没得清 → 0（不是错）。
     assert _purge(flag_on_client).json()["data"]["purged"] == 0

@@ -165,6 +165,7 @@ export type {
 export type {
   ConnectorStatusValue,
   ConnectorCrudType,
+  ConnectorToolMode,
   ConnectorCredentialView,
   ConnectorFlowView,
   ConnectorStatusView,
@@ -173,7 +174,8 @@ export type {
   ConnectorOAuthStartResult,
   ConnectorSyncResult,
   ConnectorSetEnabledResult,
-  ConnectorSetToolEnabledResult,
+  ConnectorSetToolModeResult,
+  ConnectorBulkToolModeResult,
   ConnectorSetPreprocessResult,
   ConnectorDisconnectResult,
   ConnectorPurgeOrphansResult,

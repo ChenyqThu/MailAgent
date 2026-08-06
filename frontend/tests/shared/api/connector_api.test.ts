@@ -3,7 +3,7 @@
 // 08-01 阶段 1 PR4 — connector 数据层 mock-fetch 单测（`createConnectorApi`）。
 //
 // 这一层没有业务逻辑，只有三件容易静默错的事，所以只测这三件：
-//   ① 路径 / method / body 的 wire 形状（含 `enabled: null` 三态与工具名 encode）；
+//   ① 路径 / method / body 的 wire 形状（含 `mode: null` 清覆盖与工具名 encode）；
 //   ② 信封解包（list/tools 外面还套一层 {connectors} / {tools}）；
 //   ③ 错误**抛出**且 code 透传 —— 设置面靠 code 区分「flag 关」「未连接」「网络炸」，
 //      任何一处吞错降级成空数组都会把「关着」显示成「没有连接器」。
@@ -65,7 +65,7 @@ test('list → GET /api/connector，解 {connectors} 信封', async () => {
 })
 
 test('tools → GET /api/connector/{id}/tools，解 {tools} 信封', async () => {
-  const tool = { name: 'search', crud_type: 'read', effective_enabled: true }
+  const tool = { name: 'search', crud_type: 'read', effective_mode: 'auto' }
   fetchMock.mockResolvedValue(envelopeResponse({ connector_id: 'notion', tools: [tool] }))
   const out = await api.tools('notion')
   expect(calledUrl()).toBe('/api/connector/notion/tools')
@@ -97,35 +97,54 @@ test('setEnabled → POST /{id}/enabled，body 恒带 bool', async () => {
   expect(out).toEqual({ connector_id: 'notion', enabled: false })
 })
 
-test('setToolEnabled(null) → 三态：键在场且值为 null（清覆盖，不是「关」）', async () => {
+test('setToolMode(null) → 清覆盖回默认档：键在场且值为 null（不是「off」）', async () => {
   fetchMock.mockResolvedValue(
     envelopeResponse({
       connector_id: 'notion',
       tool_name: 'create_page',
-      enabled_override: null,
-      effective_enabled: false
+      mode_override: null,
+      effective_mode: 'auto'
     })
   )
-  const out = await api.setToolEnabled('notion', 'create_page', null)
-  expect(calledUrl()).toBe('/api/connector/notion/tools/create_page/enabled')
+  const out = await api.setToolMode('notion', 'create_page', null)
+  expect(calledUrl()).toBe('/api/connector/notion/tools/create_page/mode')
   // 🔴 `{}`（键缺席）会被服务端 400；null 必须真的序列化进 body。
-  expect(calledBody()).toEqual({ enabled: null })
-  expect(out.enabled_override).toBeNull()
-  expect(out.effective_enabled).toBe(false)
+  expect(calledBody()).toEqual({ mode: null })
+  expect(out.mode_override).toBeNull()
+  expect(out.effective_mode).toBe('auto')
 })
 
-test('setToolEnabled → 工具名 encode（远端 manifest 的名字可能带斜杠/空格）', async () => {
+test('setToolMode → 工具名 encode（远端 manifest 的名字可能带斜杠/空格）', async () => {
   fetchMock.mockResolvedValue(
     envelopeResponse({
       connector_id: 'notion',
       tool_name: 'a/b c',
-      enabled_override: true,
-      effective_enabled: true
+      mode_override: 'ask',
+      effective_mode: 'ask'
     })
   )
-  await api.setToolEnabled('notion', 'a/b c', true)
-  expect(calledUrl()).toBe('/api/connector/notion/tools/a%2Fb%20c/enabled')
-  expect(calledBody()).toEqual({ enabled: true })
+  await api.setToolMode('notion', 'a/b c', 'ask')
+  expect(calledUrl()).toBe('/api/connector/notion/tools/a%2Fb%20c/mode')
+  expect(calledBody()).toEqual({ mode: 'ask' })
+})
+
+test('bulkSetToolMode → POST /{id}/tools/bulk_mode（crud 收窄可选；reset = mode null 无 crud）', async () => {
+  fetchMock.mockResolvedValue(
+    envelopeResponse({ connector_id: 'notion', mode: 'ask', crud_type: 'write', updated: 3 })
+  )
+  const out = await api.bulkSetToolMode('notion', 'ask', 'write')
+  expect(calledUrl()).toBe('/api/connector/notion/tools/bulk_mode')
+  expect(String(calledInit().method)).toBe('POST')
+  expect(calledBody()).toEqual({ mode: 'ask', crud_type: 'write' })
+  expect(out.updated).toBe(3)
+
+  fetchMock.mockClear()
+  fetchMock.mockResolvedValue(
+    envelopeResponse({ connector_id: 'notion', mode: null, crud_type: null, updated: 5 })
+  )
+  await api.bulkSetToolMode('notion', null)
+  // Reset permissions：mode=null 键在场、crud_type 缺席（= 全部在册工具）。
+  expect(calledBody()).toEqual({ mode: null })
 })
 
 test('setPreprocessEnabled → POST /{id}/preprocess', async () => {
@@ -163,7 +182,7 @@ test('错误信封 → throw Error & {code}（不吞、不降级成空）', asyn
 
   fetchMock.mockClear()
   fetchMock.mockResolvedValue(errorResponse('E_CONNECTOR_GRANT_DENIED', 'above crud ceiling', 403))
-  await expect(api.setToolEnabled('notion', 'update_page', true)).rejects.toMatchObject({
+  await expect(api.setToolMode('notion', 'update_page', 'auto')).rejects.toMatchObject({
     code: 'E_CONNECTOR_GRANT_DENIED'
   })
 })

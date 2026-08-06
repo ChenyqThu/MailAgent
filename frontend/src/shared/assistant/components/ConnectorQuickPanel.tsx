@@ -110,7 +110,8 @@ function ConnectorQuickRow({
     if (!connected) return t(STATUS_LABEL_KEYS[connector.status])
     if (!tools.data) return null
     // orphan 行远端已经没有了，恒不注册 —— 不该混进「已启用」这个数字里。
-    const enabled = tools.data.filter((x) => x.effective_enabled && !x.orphan).length
+    // 08-05 三档后「已启用」= 折算档非 off（auto / ask 都会注册给模型）。
+    const enabled = tools.data.filter((x) => x.effective_mode !== 'off' && !x.orphan).length
     return t('chat.connectors.toolCount', { enabled, total: tools.data.length })
   })()
 

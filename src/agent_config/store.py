@@ -189,11 +189,17 @@ class ConnectorToolRow:
     #: crud 档位）——审批卡红警告消费；manifest 派生字段，refresh 覆盖。08-03 delete 档位
     #: 退役后，**这一列是危险性的唯一表示**。
     destructive: bool
-    enabled: Optional[bool]  # 用户覆盖；None = 未覆盖（跟随 crud 默认）
+    #: 🔴 旧 per-tool 启用覆盖（08-05 per-tool 三档改判后**退役为死列**）：写侧只写 ``mode``，
+    #: 本字段仅供迁移取证/回滚参考，任何折算/闸判都不许再读它。
+    enabled: Optional[bool]
     orphan: bool
     first_seen_at: int
     last_seen_at: int
     updated_at: int
+    #: 08-05 per-tool 三档（owner 拍板，master-plan WP-10）：``'auto' | 'ask' | 'off'``；
+    #: None = 跟随默认（``connector_tool_effective_mode`` 折算为 **auto**）。用户配置——
+    #: refresh 纪律 2「永不覆盖」原样适用。
+    mode: Optional[str] = None
 
 
 #: connector.status 值域（写侧校验）。
@@ -216,15 +222,30 @@ CONNECTOR_STATUSES = ("disconnected", "authorizing", "connected", "needs_reauth"
 #: 地板不变。存量 ``crud_type='delete'`` 行由 ``_migrate_additive`` 离线重推导成 write+destructive。
 CONNECTOR_CRUD_TYPES = ("read", "write", "update")
 
+#: per-tool 三档值域（08-05 owner 拍板，master-plan WP-10）——**canonical 源**：
+#: ``auto`` = 注册且 owner-present 场地免卡执行（read 的 auto 就是既有 silent 行为）；
+#: ``ask`` = 注册且 owner-present 场地调用弹卡（无审批宿主的预处理场地 = 不注册，见
+#: llm_tools 的 only_auto_tools）；``off`` = 任何场地不注册（吸收旧 ``enabled=0``）。
+#: TS 侧两处镜像（gateway ``tools/connector.ts::ConnectorToolMode`` / 设置面
+#: ``shared/api/types/connector.ts::ConnectorToolMode``）由
+#: ``tests/config/test_connector_contract_parity.py`` 抽取对账（抽取失败必红）。
+CONNECTOR_TOOL_MODES = ("auto", "ask", "off")
 
-def connector_tool_effective_enabled(crud_type: str, enabled_override: Optional[bool]) -> bool:
-    """工具的有效启用态（纯函数，镜像 ``resolve_enabled`` 风格）。
 
-    用户覆盖优先；无覆盖时 **read 默认开、write/update 默认关**（PRD Q3 缓解项）。
+def connector_tool_effective_mode(mode_override: Optional[str]) -> str:
+    """工具的有效档位（纯函数）：用户覆盖优先；无覆盖/野值 → **默认 ``auto``**。
+
+    🔴 08-05 owner 拍板（跟随参考产品）：默认档 = auto——**含 write/update/destructive**。
+    旧「read 默认开 / write·update 默认关」折算已随 ``connector_tool_effective_enabled``
+    整体退役；升级时旧 ``enabled`` 列一次性折入 ``mode``（见 ``_migrate_additive``）。
+    值域外野值（只可能来自手改 DB——写侧入库即拒）**fail-closed 折算成 ``off``**：一个
+    看不懂的档位名绝不能被当成「免卡执行」（镜像 ``ceiling_allows`` 的值域外拒纪律）。
     """
-    if enabled_override is not None:
-        return enabled_override
-    return crud_type == "read"
+    if mode_override is None:
+        return "auto"
+    if mode_override in CONNECTOR_TOOL_MODES:
+        return mode_override
+    return "off"
 
 
 @dataclass(frozen=True)
@@ -417,7 +438,8 @@ CREATE TABLE IF NOT EXISTS connector (
 
 -- 工具清单行 = 白名单（未同步/伪造的工具名到不了远端，LobeHub 纪律 1）。
 -- 🔴 refresh 只覆盖 manifest 派生字段（description/schema×2/crud_type/last_seen_at/orphan），
--- **永不**覆盖 enabled（用户配置，纪律 2）；远端消失 → orphan=1 保留行（纪律 4 + PRD）。
+-- **永不**覆盖 mode（用户配置，纪律 2；旧 enabled 死列同理不碰）；远端消失 → orphan=1
+-- 保留行（纪律 4 + PRD）。
 -- 🔴 crud_type 值域 = CONNECTOR_CRUD_TYPES（写侧校验，无 SQL CHECK —— 改值域不需要迁移）。
 -- 'delete' 档位 08-03 已退役（annotations 无 delete 语义位 ⇒ 不可达）；危险性由 destructive
 -- 独立列承担，存量 delete 行由 _migrate_additive 离线重推导成 write+destructive=1。
@@ -429,7 +451,13 @@ CREATE TABLE IF NOT EXISTS connector_tool (
     output_schema_json TEXT,
     crud_type          TEXT NOT NULL DEFAULT 'read',  -- read|write|update
     destructive        INTEGER NOT NULL DEFAULT 0,    -- 裁决①：destructive_hint 单独落列（红警告位）
-    enabled            INTEGER,        -- 用户覆盖：NULL=默认（read 开，write/update 关）
+    -- 🔴 enabled 是 08-05 三档改判前的旧覆盖列，已退役为**死列**（agent_config 无 DROP 先例，
+    -- 留列零成本）：升级时由 _migrate_additive 一次性折入 mode（0→off、1→auto、NULL 保持），
+    -- 此后写侧只写 mode，读侧折算只看 mode。
+    enabled            INTEGER,
+    -- 08-05 per-tool 三档（CONNECTOR_TOOL_MODES 写侧校验，无 SQL CHECK）：auto|ask|off；
+    -- NULL=跟随默认（折算 auto）。用户配置——refresh 永不覆盖（纪律 2）。
+    mode               TEXT,
     orphan             INTEGER NOT NULL DEFAULT 0,
     first_seen_at      INTEGER NOT NULL,
     last_seen_at       INTEGER NOT NULL,
@@ -505,6 +533,21 @@ class AgentConfigStore:
                 "UPDATE connector_tool SET crud_type='write', destructive=1, updated_at=? "
                 "WHERE crud_type='delete'",
                 (_now(),),
+            )
+        # 08-05 per-tool 三档（owner 拍板，master-plan WP-10）—— 旧 `enabled` 覆盖**一次性**
+        # 折入新 `mode` 列：0→'off'（owner 显式关）、1→'auto'（owner 显式开——write 从「开但
+        # 每次弹卡」变「auto 免卡」，正是本次拍板意图）、NULL 保持 NULL（跟随默认，折算 auto）。
+        # 🔴 折算只在 `mode` 列**刚补上**的那次开库跑（用列缺席作一次性判据）：折算条件若写成
+        # 「WHERE mode IS NULL AND enabled=…」并每次开库重跑，用户后来把 mode 清回 NULL（跟随
+        # 默认）会被死列里的旧 enabled 值重新折走。此后 enabled 是死列，写侧只写 mode。
+        if ct_cols and "mode" not in ct_cols:
+            conn.execute("ALTER TABLE connector_tool ADD COLUMN mode TEXT")
+            now = _now()
+            conn.execute(
+                "UPDATE connector_tool SET mode='off', updated_at=? WHERE enabled=0", (now,)
+            )
+            conn.execute(
+                "UPDATE connector_tool SET mode='auto', updated_at=? WHERE enabled=1", (now,)
             )
 
     # ======================================================================
@@ -1188,8 +1231,8 @@ class AgentConfigStore:
         """远端工具清单 → ``connector_tool`` 落库（refresh 纪律的唯一实现点）。
 
         - 🔴 只覆盖 manifest 派生字段（description / input_schema_json / output_schema_json /
-          crud_type / destructive / last_seen_at / orphan=0），**永不**覆盖 ``enabled``
-          （用户配置）与 ``first_seen_at``。crud_type 属 manifest 派生 ⇒ 全量 upsert 重跑
+          crud_type / destructive / last_seen_at / orphan=0），**永不**覆盖 ``mode``
+          （用户配置；旧 ``enabled`` 死列同理）与 ``first_seen_at``。crud_type 属 manifest 派生 ⇒ 全量 upsert 重跑
           derive 即自愈存量误判行（裁决①：owner 点一次 sync 就把旧误判刷成新推导）。
         - 本轮清单里没有的既有行 → ``orphan=1``（保留用户配置，PR2 不注册 orphan）。
         - 坏 ``crud_type``（含已退役的 ``'delete'``）/ 空 name **入库时拒**。
@@ -1288,15 +1331,21 @@ class AgentConfigStore:
             ).fetchall()
         return [_row_to_connector_tool(r) for r in rows]
 
-    def set_connector_tool_enabled(
-        self, connector_id: str, tool_name: str, enabled: Optional[bool]
+    def set_connector_tool_mode(
+        self, connector_id: str, tool_name: str, mode: Optional[str]
     ) -> None:
-        """用户 per-tool 启用覆盖（None = 清除覆盖回默认）。
+        """用户 per-tool 档位覆盖（08-05 三档）：``'auto'|'ask'|'off'``；``None`` = 清除覆盖
+        回默认档（auto）。
 
         🔴 08-03 起**任何在册工具都可配置**（owner 改判：「连接工具应该都全部可配置」）——
-        没有恒灰的档位了。危险性由 ``destructive`` 列在审批卡上红警告，写类工具恒 HITL 的
-        安全地板不变。行不存在 → ``KeyError``（先 sync 再配）。
+        没有恒灰的档位。危险性由 ``destructive`` 列承担（设置面把 destructive 设 auto 时
+        弹一次性红色确认，审批卡红警告链在 ask 档原样保留）。值域外入库即拒（ValueError）；
+        行不存在 → ``KeyError``（先 sync 再配）。
         """
+        if mode is not None and mode not in CONNECTOR_TOOL_MODES:
+            raise ValueError(
+                f"connector tool mode {mode!r} not in {CONNECTOR_TOOL_MODES} (or None)"
+            )
         with self._connection() as conn:
             row = conn.execute(
                 "SELECT crud_type FROM connector_tool WHERE connector_id=? AND tool_name=?",
@@ -1305,16 +1354,42 @@ class AgentConfigStore:
             if row is None:
                 raise KeyError(f"connector tool not found: {connector_id}/{tool_name}")
             conn.execute(
-                "UPDATE connector_tool SET enabled=?, updated_at=? "
+                "UPDATE connector_tool SET mode=?, updated_at=? "
                 "WHERE connector_id=? AND tool_name=?",
-                (
-                    None if enabled is None else (1 if enabled else 0),
-                    _now(),
-                    connector_id,
-                    tool_name,
-                ),
+                (mode, _now(), connector_id, tool_name),
             )
             conn.commit()
+
+    def bulk_set_connector_tool_mode(
+        self, connector_id: str, mode: Optional[str], *, crud_type: Optional[str] = None
+    ) -> int:
+        """组级批量设档（差距表 #6 / Reset permissions #8 的后端）：把该 connector 的工具
+        （可按 ``crud_type`` 收窄）统一置 ``mode``；``mode=None`` = 批量清覆盖回默认
+        （= Reset permissions）。返回受影响行数。
+
+        orphan 行**跳过**——它们恒不注册，批量动作把已失效行也改了只会在 re-sync 复活时
+        带回一份用户从没看过的档位；orphan 行的覆盖仍可经 per-tool 端点显式改。
+        """
+        if mode is not None and mode not in CONNECTOR_TOOL_MODES:
+            raise ValueError(
+                f"connector tool mode {mode!r} not in {CONNECTOR_TOOL_MODES} (or None)"
+            )
+        if crud_type is not None and crud_type not in CONNECTOR_CRUD_TYPES:
+            raise ValueError(
+                f"connector tool crud_type {crud_type!r} not in {CONNECTOR_CRUD_TYPES}"
+            )
+        sql = (
+            "UPDATE connector_tool SET mode=?, updated_at=? "
+            "WHERE connector_id=? AND orphan=0"
+        )
+        params: list[Any] = [mode, _now(), connector_id]
+        if crud_type is not None:
+            sql += " AND crud_type=?"
+            params.append(crud_type)
+        with self._connection() as conn:
+            cur = conn.execute(sql, params)
+            conn.commit()
+        return cur.rowcount
 
     def purge_orphan_connector_tools(self, connector_id: str) -> int:
         """删掉该 connector 的 orphan 工具行（PR5 清理出口），返回删除行数。
@@ -1673,6 +1748,7 @@ def _row_to_connector_tool(row: sqlite3.Row) -> ConnectorToolRow:
         first_seen_at=row["first_seen_at"],
         last_seen_at=row["last_seen_at"],
         updated_at=row["updated_at"],
+        mode=row["mode"],
     )
 
 

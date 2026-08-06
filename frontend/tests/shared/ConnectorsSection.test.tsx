@@ -7,8 +7,9 @@
 //      都不发**（flag off 时那些端点全 409，渲染一个只会报错的区块比不渲染更糟）。
 //   2. 信任可见性：connected 行摆出 scopes 与令牌健康 —— 这是产品纲领，不是装饰。
 //   3. 整体开关走 setEnabled 并刷新列表。
-//   4. per-tool **三态**：'关'→false · '开'→true · '默认'→**null（清除覆盖）**。第三态最容易
-//      被实现成 false，单独钉住。
+//   4. per-tool **三档**（08-05 WP-10）：auto / ask / off 图标单选；destructive 工具设 auto
+//      的那一下必须过一次性红色确认；组级批量下拉一次搞定一组；Reset permissions 批量清
+//      覆盖回默认（null）；升级/首连的「工具面变宽」一次性概览提示。
 //   5. (08-03 delete 特例退役) 破坏性写工具**照常可配** —— 「会不会毁数据」由 destructive
 //      徽标承担，不再有一个恒 disabled 的第四 crud 档；只有 orphan 行仍锁定。
 //   6. 断开必须先过确认对话框：只点「断开」不该发出 disconnect。
@@ -57,7 +58,8 @@ const { connectorApi } = vi.hoisted(() => ({
     sync: vi.fn(),
     tools: vi.fn(),
     setEnabled: vi.fn(),
-    setToolEnabled: vi.fn(),
+    setToolMode: vi.fn(),
+    bulkSetToolMode: vi.fn(),
     setPreprocessEnabled: vi.fn(),
     disconnect: vi.fn(),
     purgeOrphans: vi.fn()
@@ -68,6 +70,21 @@ vi.mock('@shared/hooks/useMailApi', () => ({
 }))
 
 import { ConnectorsSection } from '../../src/shared/components/settings/custom-ai/ConnectorsSection'
+
+// 本仓 happy-dom 版本不带 window.localStorage —— 组件侧对 storage 访问已 try/catch
+// （拿不到就当「未确认」多提醒），测试侧补一个内存实现好把「一次性」契约钉出来。
+if (typeof window !== 'undefined' && window.localStorage == null) {
+  const store = new Map<string, string>()
+  Object.defineProperty(window, 'localStorage', {
+    configurable: true,
+    value: {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, String(v)),
+      removeItem: (k: string) => void store.delete(k),
+      clear: () => store.clear()
+    }
+  })
+}
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
@@ -123,8 +140,8 @@ function tool(partial: Partial<ConnectorToolSummary> & { name: string }): Connec
     output_schema_json: partial.output_schema_json ?? null,
     crud_type: partial.crud_type ?? 'read',
     destructive: partial.destructive ?? false,
-    enabled_override: partial.enabled_override ?? null,
-    effective_enabled: partial.effective_enabled ?? false,
+    mode_override: partial.mode_override ?? null,
+    effective_mode: partial.effective_mode ?? 'auto',
     orphan: partial.orphan ?? false,
     first_seen_at: partial.first_seen_at ?? 0,
     last_seen_at: partial.last_seen_at ?? 0
@@ -136,15 +153,15 @@ const TOOLS: ConnectorToolSummary[] = [
   tool({
     name: 'notion_search',
     crud_type: 'read',
-    enabled_override: null,
-    effective_enabled: true
+    mode_override: null,
+    effective_mode: 'auto'
   }),
-  tool({ name: 'notion_create_page', crud_type: 'write', enabled_override: null }),
+  tool({ name: 'notion_create_page', crud_type: 'write', mode_override: null }),
   tool({
     name: 'notion_update_page',
     crud_type: 'update',
-    enabled_override: true,
-    effective_enabled: true,
+    mode_override: 'ask',
+    effective_mode: 'ask',
     destructive: true
   }),
   // 08-03：曾经的 delete 行迁成「destructive 的 write」—— 服务端值域收敛后前端不再有恒
@@ -153,15 +170,19 @@ const TOOLS: ConnectorToolSummary[] = [
     name: 'notion_delete_page',
     crud_type: 'write',
     destructive: true,
-    enabled_override: null
+    mode_override: null
   })
 ]
 
-const STATE = {
-  default: 'settings.connectors.tools.state.default',
-  on: 'settings.connectors.tools.state.on',
-  off: 'settings.connectors.tools.state.off'
+const MODE = {
+  auto: 'settings.connectors.tools.mode.auto',
+  ask: 'settings.connectors.tools.mode.ask',
+  off: 'settings.connectors.tools.mode.off'
 } as const
+
+/** 08-05 概览提示的一次性标记 —— 大多数用例先把它置成「已确认」，免得 notice 分支把
+ *  「懒加载：没展开不打 tools 请求」这些既有契约搅浑；notice 自己的用例再显式清掉。 */
+const NOTICE_KEY = 'mailagent.connectors.toolfaceNotice.v1.notion'
 
 function renderUi() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
@@ -179,8 +200,8 @@ async function expandTools(container: HTMLElement, id: string): Promise<void> {
   await waitFor(() => expect(connectorApi.tools).toHaveBeenCalledWith(id))
 }
 
-function stateGroups(): HTMLElement[] {
-  return screen.getAllByRole('group', { name: 'settings.connectors.tools.state.label' })
+function modeGroups(): HTMLElement[] {
+  return screen.getAllByRole('group', { name: 'settings.connectors.tools.mode.label' })
 }
 
 beforeEach(() => {
@@ -196,19 +217,27 @@ beforeEach(() => {
   })
   connectorApi.purgeOrphans.mockResolvedValue({ connector_id: 'notion', purged: 1 })
   connectorApi.setEnabled.mockResolvedValue({ connector_id: 'notion', enabled: false })
-  connectorApi.setToolEnabled.mockResolvedValue({
+  connectorApi.setToolMode.mockResolvedValue({
     connector_id: 'notion',
     tool_name: 'x',
-    enabled_override: null,
-    effective_enabled: false
+    mode_override: 'off',
+    effective_mode: 'off'
+  })
+  connectorApi.bulkSetToolMode.mockResolvedValue({
+    connector_id: 'notion',
+    mode: null,
+    crud_type: null,
+    updated: 4
   })
   connectorApi.disconnect.mockResolvedValue({ connector_id: 'notion', deleted_credentials: 2 })
+  window.localStorage.setItem(NOTICE_KEY, '1')
 })
 
 afterEach(() => {
   cleanup()
   vi.unstubAllEnvs()
   vi.clearAllMocks()
+  window.localStorage.clear()
 })
 
 describe('ConnectorsSection — 门控', () => {
@@ -292,8 +321,8 @@ describe('ConnectorsSection — 开关', () => {
   })
 })
 
-describe('ConnectorsSection — per-tool 三态', () => {
-  test('展开后懒加载工具清单，四行全渲染', async () => {
+describe('ConnectorsSection — per-tool 三档（08-05 WP-10）', () => {
+  test('展开后懒加载工具清单，按 crud 分组渲染 + 组计数', async () => {
     const { container } = renderUi()
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
     expect(connectorApi.tools).not.toHaveBeenCalled()
@@ -305,47 +334,131 @@ describe('ConnectorsSection — per-tool 三态', () => {
     expect(screen.getByText('notion_delete_page')).toBeTruthy()
     // destructive 徽标挂在两行（update + 迁移后的 delete→write）。
     expect(screen.getAllByText('settings.connectors.tools.destructive')).toHaveLength(2)
+    // 分组（差距表 #5）：read/write/update 三个组头都在（行内 crud 药丸 + 组头药丸并存，
+    // 数量断言只钉「每组一个批量入口」这一可数事实）。
+    expect(
+      screen.getAllByRole('button', { name: /settings\.connectors\.tools\.bulk\.label/ })
+    ).toHaveLength(3)
   })
 
-  test("'关' → false · '开' → true · '默认' → null（清除覆盖）", async () => {
+  test("三档单选：off / ask 直接落 setToolMode；非破坏性 auto 也直接落", async () => {
     const { container } = renderUi()
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
     await expandTools(container, 'notion')
-    await waitFor(() => expect(stateGroups()).toHaveLength(4))
+    await waitFor(() => expect(modeGroups()).toHaveLength(4))
 
-    fireEvent.click(within(stateGroups()[0]).getByRole('button', { name: STATE.off }))
+    // 组序 read → write(create/delete) → update；行序按服务端返回顺序。
+    fireEvent.click(within(modeGroups()[0]).getByRole('button', { name: MODE.off }))
     await waitFor(() =>
-      expect(connectorApi.setToolEnabled).toHaveBeenCalledWith('notion', 'notion_search', false)
+      expect(connectorApi.setToolMode).toHaveBeenCalledWith('notion', 'notion_search', 'off')
     )
 
-    fireEvent.click(within(stateGroups()[1]).getByRole('button', { name: STATE.on }))
+    fireEvent.click(within(modeGroups()[1]).getByRole('button', { name: MODE.ask }))
     await waitFor(() =>
-      expect(connectorApi.setToolEnabled).toHaveBeenCalledWith('notion', 'notion_create_page', true)
+      expect(connectorApi.setToolMode).toHaveBeenCalledWith('notion', 'notion_create_page', 'ask')
     )
 
-    // 第三态：清除覆盖回默认档 —— 必须是 null，不是 false。
-    fireEvent.click(within(stateGroups()[2]).getByRole('button', { name: STATE.default }))
-    await waitFor(() =>
-      expect(connectorApi.setToolEnabled).toHaveBeenCalledWith('notion', 'notion_update_page', null)
-    )
+    // update 组的 ask 行设回 auto：destructive → 先过确认（见下一条）；非破坏性直接落 ——
+    // 这里点非破坏性 create_page 的 auto（当前 effective 已是 auto → 点选中档 no-op）。
+    fireEvent.click(within(modeGroups()[1]).getByRole('button', { name: MODE.auto }))
+    expect(connectorApi.setToolMode).toHaveBeenCalledTimes(2) // 选中档 no-op 不重复发
   })
 
-  test('destructive 的写工具照常可配 —— delete 特例退役后没有第四个恒禁用档', async () => {
+  test('destructive 工具设 auto → 一次性红色确认；确认后才落库、取消不落', async () => {
     const { container } = renderUi()
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
     await expandTools(container, 'notion')
-    await waitFor(() => expect(stateGroups()).toHaveLength(4))
+    await waitFor(() => expect(modeGroups()).toHaveLength(4))
 
-    const destructiveGroup = stateGroups()[3]
-    for (const name of [STATE.default, STATE.on, STATE.off]) {
-      // 本仓没装 jest-dom 匹配器 → 直接读原生 disabled 属性。
+    // notion_update_page（update 组，destructive，当前 ask）→ 点 auto。
+    fireEvent.click(within(modeGroups()[3]).getByRole('button', { name: MODE.auto }))
+    expect(connectorApi.setToolMode).not.toHaveBeenCalled()
+    const dialog = await screen.findByRole('dialog')
+    expect(
+      within(dialog).getByText('settings.connectors.destructiveAutoDialog.title')
+    ).toBeTruthy()
+
+    // 取消 → 不落库。
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: 'settings.connectors.destructiveAutoDialog.cancel'
+      })
+    )
+    expect(connectorApi.setToolMode).not.toHaveBeenCalled()
+
+    // 再来一次并确认 → 落库 auto。
+    fireEvent.click(within(modeGroups()[3]).getByRole('button', { name: MODE.auto }))
+    const dialog2 = await screen.findByRole('dialog')
+    fireEvent.click(
+      within(dialog2).getByRole('button', {
+        name: 'settings.connectors.destructiveAutoDialog.confirm'
+      })
+    )
+    await waitFor(() =>
+      expect(connectorApi.setToolMode).toHaveBeenCalledWith('notion', 'notion_update_page', 'auto')
+    )
+  })
+
+  test('组级批量下拉：一组三档一次搞定（write 组 → 全部需审批）', async () => {
+    const { container } = renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    await expandTools(container, 'notion')
+    await waitFor(() =>
       expect(
-        (within(destructiveGroup).getByRole('button', { name }) as HTMLButtonElement).disabled
-      ).toBe(false)
-    }
-    fireEvent.click(within(destructiveGroup).getByRole('button', { name: STATE.on }))
+        screen.getAllByRole('button', { name: /settings\.connectors\.tools\.bulk\.label/ })
+      ).toHaveLength(3)
+    )
+
+    // 第二个组头 = write 组。
+    fireEvent.click(
+      screen.getAllByRole('button', { name: /settings\.connectors\.tools\.bulk\.label/ })[1]
+    )
+    const askAll = await screen.findByRole('button', {
+      name: 'settings.connectors.tools.bulk.ask'
+    })
+    fireEvent.click(askAll)
     await waitFor(() =>
-      expect(connectorApi.setToolEnabled).toHaveBeenCalledWith('notion', 'notion_delete_page', true)
+      expect(connectorApi.bulkSetToolMode).toHaveBeenCalledWith('notion', 'ask', 'write')
+    )
+  })
+
+  test('组级批量设 auto 且组里有 destructive → 同样过红色确认', async () => {
+    const { container } = renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    await expandTools(container, 'notion')
+    await waitFor(() =>
+      expect(
+        screen.getAllByRole('button', { name: /settings\.connectors\.tools\.bulk\.label/ })
+      ).toHaveLength(3)
+    )
+
+    // write 组含 destructive 的 notion_delete_page。
+    fireEvent.click(
+      screen.getAllByRole('button', { name: /settings\.connectors\.tools\.bulk\.label/ })[1]
+    )
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'settings.connectors.tools.bulk.auto' })
+    )
+    expect(connectorApi.bulkSetToolMode).not.toHaveBeenCalled()
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(
+      within(dialog).getByRole('button', {
+        name: 'settings.connectors.destructiveAutoDialog.confirm'
+      })
+    )
+    await waitFor(() =>
+      expect(connectorApi.bulkSetToolMode).toHaveBeenCalledWith('notion', 'auto', 'write')
+    )
+  })
+
+  test('Reset permissions → bulkSetToolMode(null, 无 crud)（批量清覆盖回默认档）', async () => {
+    const { container } = renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    await expandTools(container, 'notion')
+    const reset = await screen.findByRole('button', { name: 'settings.connectors.tools.reset' })
+    fireEvent.click(reset)
+    await waitFor(() =>
+      expect(connectorApi.bulkSetToolMode).toHaveBeenCalledWith('notion', null)
     )
   })
 
@@ -357,16 +470,59 @@ describe('ConnectorsSection — per-tool 三态', () => {
     const { container } = renderUi()
     await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
     await expandTools(container, 'notion')
-    await waitFor(() => expect(stateGroups()).toHaveLength(5))
+    await waitFor(() => expect(modeGroups()).toHaveLength(5))
 
-    const orphanGroup = stateGroups()[4]
-    for (const name of [STATE.default, STATE.on, STATE.off]) {
+    // orphan 是 read 组的第二行 → modeGroups()[1]。
+    const orphanGroup = modeGroups()[1]
+    for (const name of [MODE.auto, MODE.ask, MODE.off]) {
       expect(
         (within(orphanGroup).getByRole('button', { name }) as HTMLButtonElement).disabled
       ).toBe(true)
     }
-    fireEvent.click(within(orphanGroup).getByRole('button', { name: STATE.on }))
-    expect(connectorApi.setToolEnabled).not.toHaveBeenCalled()
+    fireEvent.click(within(orphanGroup).getByRole('button', { name: MODE.off }))
+    expect(connectorApi.setToolMode).not.toHaveBeenCalled()
+  })
+})
+
+describe('ConnectorsSection — 工具面变宽一次性概览（08-05）', () => {
+  test('未确认过 → connected 行渲染概览（N 读 M 写 K 破坏性），tools 提前拉取', async () => {
+    window.localStorage.removeItem(NOTICE_KEY)
+    renderUi()
+    await waitFor(() =>
+      expect(screen.getByText('settings.connectors.toolfaceNotice.title')).toBeTruthy()
+    )
+    // 概览计数来自工具清单（未展开也拉）：1 读 · 3 写/更 · 2 破坏性。
+    await waitFor(() =>
+      expect(tMock).toHaveBeenCalledWith('settings.connectors.toolfaceNotice.body', {
+        reads: 1,
+        writes: 3,
+        destructive: 2
+      })
+    )
+    expect(connectorApi.tools).toHaveBeenCalledWith('notion')
+  })
+
+  test('点「知道了」→ 落 localStorage 标记，概览消失且下次不再出现', async () => {
+    window.localStorage.removeItem(NOTICE_KEY)
+    const first = renderUi()
+    const dismiss = await screen.findByRole('button', {
+      name: 'settings.connectors.toolfaceNotice.dismiss'
+    })
+    fireEvent.click(dismiss)
+    expect(window.localStorage.getItem(NOTICE_KEY)).toBe('1')
+    expect(screen.queryByText('settings.connectors.toolfaceNotice.title')).toBeNull()
+    first.unmount()
+
+    renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    expect(screen.queryByText('settings.connectors.toolfaceNotice.title')).toBeNull()
+  })
+
+  test('已确认（默认种子）→ 概览不渲染、tools 不提前拉', async () => {
+    renderUi()
+    await waitFor(() => expect(screen.getByText('Notion')).toBeTruthy())
+    expect(screen.queryByText('settings.connectors.toolfaceNotice.title')).toBeNull()
+    expect(connectorApi.tools).not.toHaveBeenCalled()
   })
 })
 

@@ -28,15 +28,6 @@ from loguru import logger
 PREPROCESS_AGENT_ID = "email_preprocess_agent"
 
 
-#: 🔴 分类侧的 crud 天花板 —— **硬编码 read，不是配置项**（MCP connector PRD 坑 3）。
-#: 邮件预处理分类同时具备 lethal trifecta 三件套（任何人可发的 untrusted 正文 + connector
-#: 能读整个工作区 + write 类工具能把数据写到攻击者可见处），且全自动逐封跑、无人值守，比
-#: headless custom agent 更敞。故这条路径**结构上**只造 read 类工具：没有 owner 能配错的
-#: 值，改成 write 得改代码。授权面也独立（``connector.preprocess_enabled`` 列），不复用
-#: custom agent 的 ``grant_connectors`` —— 免得给某个 agent 配了 write、分类侧跟着继承。
-PREPROCESS_CONNECTOR_CEILING = "read"
-
-
 @dataclass
 class PreprocessConfig:
     """预处理 agent 的运行时叠加配置（模型 + 文档勾选）。"""
@@ -57,7 +48,17 @@ class PreprocessConfig:
 
 
 def get_preprocess_connector_grants() -> List[tuple]:
-    """分类侧获授权的 connector → ``[(connector_id, 'read'), …]``（天花板恒 read）。
+    """分类侧获授权的 connector → ``[(connector_id, None), …]``（无 crud 天花板）。
+
+    🔴 08-05 场地放开（owner 知情拍板，master-plan WP-10 §5 风险 4）：原「硬编码 read
+    天花板」常量 ``PREPROCESS_CONNECTOR_CEILING = "read"``（08-01 PRD 坑 3 的 lethal
+    trifecta 结构性收紧）**退役**——拆的只是「开了之后只能 read」，per-connector
+    ``preprocess_enabled`` 开关仍独立、默认关不变。放开后该场地的 per-tool 控制面 =
+    三档 ``mode``，且因无人值守、无审批链宿主而坍缩为两态：**仅 ``mode='auto'`` 的工具
+    可用**（``ask`` ≙ 不注册——由工厂 ``only_auto_tools=True`` 落实 + service
+    ``deny_ask_mode`` 第二道，见 ``connectors/llm_tools.py``）。残余护栏 =
+    ``preprocess_enabled`` 默认关 + per-tool ``off``/``ask`` + destructive 标注 +
+    ``_PREPROCESS_TOOL_MAX_ITER`` 小值。
 
     授权源 = ``agent_config.db`` 的 ``connector.preprocess_enabled=1``（owner 在设置里逐个
     opt-in，默认全关）。只取 ``status='connected'`` 且 ``enabled`` 的行 —— 未连接 / 整体
@@ -72,7 +73,7 @@ def get_preprocess_connector_grants() -> List[tuple]:
         logger.debug(f"[preprocess-config] connector grants skipped: {e}")
         return []
     return [
-        (r.connector_id, PREPROCESS_CONNECTOR_CEILING)
+        (r.connector_id, None)
         for r in rows
         if r.preprocess_enabled and r.enabled and r.status == "connected"
     ]

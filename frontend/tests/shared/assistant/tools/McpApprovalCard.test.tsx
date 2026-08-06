@@ -85,7 +85,7 @@ describe('McpApprovalCard — pending', () => {
         name: 'notion-update-page', // matches via the shared mcpGatewayToolName mapping
         crud_type: 'write',
         destructive: true,
-        effective_enabled: true,
+        effective_mode: 'auto',
         orphan: false
       }
     ])
@@ -101,7 +101,7 @@ describe('McpApprovalCard — pending', () => {
         name: 'notion-update-page',
         crud_type: 'write',
         destructive: false,
-        effective_enabled: true,
+        effective_mode: 'auto',
         orphan: false
       }
     ])

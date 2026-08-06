@@ -163,7 +163,7 @@ function entry(toolName: string): ConnectorToolManifestEntry {
     inputSchemaJson: null,
     crudType: 'read',
     destructive: false,
-    effectiveEnabled: true,
+    mode: 'auto',
     orphan: false
   }
 }

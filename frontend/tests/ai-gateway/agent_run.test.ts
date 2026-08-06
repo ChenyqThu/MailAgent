@@ -923,7 +923,7 @@ describe('runHeadlessAgent — grantConnectors (PR3)', () => {
       inputSchemaJson: null,
       crudType: 'read',
       destructive: false,
-      effectiveEnabled: true,
+      mode: 'auto',
       orphan: false
     },
     {
@@ -934,7 +934,7 @@ describe('runHeadlessAgent — grantConnectors (PR3)', () => {
       inputSchemaJson: null,
       crudType: 'write',
       destructive: true,
-      effectiveEnabled: true,
+      mode: 'auto',
       orphan: false
     }
   ]

@@ -429,9 +429,10 @@ export interface DomainConnectorList {
   }>
 }
 
-/** GET /api/connector/{id}/tools data block. `effective_enabled` is folded server-side
- *  (read default-on / write·update default-off / delete恒false); delete + orphan rows are still
- *  listed (Q16=A manifest completeness) — registration skips them. */
+/** GET /api/connector/{id}/tools data block. `effective_mode` is the SERVER-folded per-tool
+ *  tier (08-05 WP-10: 'auto' | 'ask' | 'off'; NULL override → 'auto' — the fold is never
+ *  re-computed client-side); orphan rows are still listed (Q16=A manifest completeness) —
+ *  registration skips them. */
 export interface DomainConnectorTools {
   connector_id: string
   tools: Array<{
@@ -440,7 +441,7 @@ export interface DomainConnectorTools {
     input_schema_json: string | null
     crud_type: string
     destructive: boolean
-    effective_enabled: boolean
+    effective_mode: string
     orphan: boolean
   }>
 }
@@ -1234,8 +1235,9 @@ export class MailAgentDomainClient {
     return this._req<DomainConnectorList>('GET', '/connector', { signal })
   }
 
-  /** List one connector's synced tool manifest (effective_enabled already folded server-side;
-   *  delete/orphan rows still listed — the registration seam skips them). GET /connector/{id}/tools. */
+  /** List one connector's synced tool manifest (effective_mode already folded server-side —
+   *  08-05 per-tool tiers; orphan rows still listed — the registration seam skips them).
+   *  GET /connector/{id}/tools. */
   listConnectorTools(connectorId: string, signal?: AbortSignal): Promise<DomainConnectorTools> {
     return this._req<DomainConnectorTools>(
       'GET',

@@ -214,9 +214,11 @@ class LLMProcessor:
 
     @staticmethod
     def _connector_tools() -> tuple:
-        """分类可用的 connector 只读工具 ``(schemas, handlers)``；未授权 / flag off → ``([], {})``。
+        """分类可用的 connector 工具 ``(schemas, handlers)``；未授权 / flag off → ``([], {})``。
 
-        任何异常都吞成空 —— connector 是增强面，绝不让它把分类主链路打挂。
+        08-05 场地放开后不再限只读 —— 工具面 = ``preprocess_enabled`` 的 connector 里
+        per-tool ``mode='auto'`` 的工具（含 write/update）。任何异常都吞成空 ——
+        connector 是增强面，绝不让它把分类主链路打挂。
         """
         if not getattr(cfg, "mcp_connectors_enabled", False):
             return [], {}
@@ -227,7 +229,11 @@ class LLMProcessor:
             grants = get_preprocess_connector_grants()
             if not grants:
                 return [], {}
-            return build_connector_llm_tools(grants, caller="email_preprocess")
+            # 08-05 场地放开：read 硬天花板退役（grants 的 ceiling=None）；本场地无人值守、
+            # 无审批链宿主 ⇒ 三档坍缩为两态 —— 仅 mode='auto' 的工具注册（ask ≙ 不注册）。
+            return build_connector_llm_tools(
+                grants, caller="email_preprocess", only_auto_tools=True
+            )
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[llm] connector tools unavailable for classification: {e}")
             return [], {}

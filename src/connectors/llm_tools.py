@@ -10,11 +10,15 @@ Anthropic 风格的 tool schema + handler 对（形状照 ``src/reports/agent_to
 三条纪律：
 
 1. **执行走同一条闸** —— handler 调 ``service.invoke_connector_tool``，与 HTTP invoke 端点
-   是同一个函数（未同步 / orphan / 未启用 / 越天花板一律到不了远端）。工厂侧的
+   是同一个函数（未同步 / orphan / 关档 / 越天花板一律到不了远端）。工厂侧的
    过滤是第一道（不注册），service 那道是第二道（判定与执行同侧）。
 2. **天花板由调用方给** —— 报告 Agent 传 ``report_agent.tool_policy_json`` 的
-   ``grant_connectors``；🔴 分类侧恒传 ``"read"``（坑 3：lethal trifecta 的结构性收紧，
-   工厂只造 read 类工具 ⇒ 没有「配错成 write」的入口）。
+   ``grant_connectors``；分类侧（邮件预处理）自 08-05 场地放开后传 ``None``（read 硬
+   天花板拆除，owner 拍板见 master-plan WP-10），改用 ``only_auto_tools=True``：该场地
+   无人值守、无审批链宿主 ⇒ per-tool 三档坍缩为两态——**仅 ``mode='auto'`` 的工具注册**，
+   ``ask`` 档 = 不注册（「需审批」在无人可点头的场地唯一不撒谎的实现；不是「注册但拒执行」
+   ——那会让模型反复调一个恒失败的工具烧迭代，也不是降级成 auto——那会把「要问我」静默
+   升成「不问」）；``off`` 恒不注册。
 3. **返回内容套 ``UNTRUSTED_MCP_TOOL`` 围栏** —— 一个 Notion 页面任何协作者都能写，是一等
    注入面。围栏格式与 TS ``contextSerializer.fenceUntrusted('MCP_TOOL', …)`` 逐字节一致，
    由 ``tests/config/test_untrusted_fence_parity.py`` 抽取对账（抽取失败必红）。
@@ -140,15 +144,23 @@ def _format_result(connector_id: str, tool_name: str, result: Dict[str, Any]) ->
 
 
 def build_connector_llm_tools(
-    grants: Sequence[Tuple[str, str]],
+    grants: Sequence[Tuple[str, Optional[str]]],
     *,
     caller: str = "llm",
+    only_auto_tools: bool = False,
 ) -> Tuple[List[Dict[str, Any]], Dict[str, ToolHandler]]:
     """``[(connector_id, 天花板)]`` → ``(tool schemas, handlers)``（不含终止工具）。
 
     过滤（每一条都在 ``service.invoke_connector_tool`` 侧有第二道）：connector 行必须
-    ``status='connected'`` 且 ``enabled``；工具行必须 ``effective_enabled``、非 orphan、
-    且 ``rank(crud) <= rank(天花板)``。名字冲突 / 不可表示 → 跳过 + warning。
+    ``status='connected'`` 且 ``enabled``；工具行必须非 orphan、per-tool 档位非 ``off``、
+    且 ``rank(crud) <= rank(天花板)``（``ceiling=None`` = 无天花板）。名字冲突 / 不可表示
+    → 跳过 + warning。
+
+    ``only_auto_tools``（08-05 场地一放开）：无人值守、无审批链宿主的调用面（邮件预处理）
+    传 True——**仅 ``mode`` 折算为 ``auto`` 的工具注册**（``ask`` 在该场地 ≙ 不可用，见
+    模块 docstring 纪律 2）；handler 同时以 ``deny_ask_mode=True`` 走 service 第二道。
+    headless 报告/自定义 agent（grant 是 owner 的显式授权、免卡执行是既有语义）保持默认
+    False——ask/auto 对它们无差别，off 仍恒不注册。
 
     flag off / grants 为空 → ``([], {})``（调用方零改变）。任何读库异常 → 同样返回空
     （connector 是增强面，绝不因它让报告或分类崩）。
@@ -157,7 +169,7 @@ def build_connector_llm_tools(
         return [], {}
     try:
         from src.agent_config.store import (
-            connector_tool_effective_enabled,
+            connector_tool_effective_mode,
             get_agent_config_store,
         )
 
@@ -180,7 +192,10 @@ def build_connector_llm_tools(
         for t in tool_rows:
             if t.orphan:
                 continue
-            if not connector_tool_effective_enabled(t.crud_type, t.enabled):
+            effective_mode = connector_tool_effective_mode(t.mode)
+            if effective_mode == "off":
+                continue
+            if only_auto_tools and effective_mode != "auto":
                 continue
             if not ceiling_allows(t.crud_type, ceiling):
                 continue
@@ -203,7 +218,9 @@ def build_connector_llm_tools(
                     "input_schema": _input_schema(t.input_schema_json),
                 }
             )
-            handlers[name] = _make_handler(connector_id, t.tool_name, ceiling)
+            handlers[name] = _make_handler(
+                connector_id, t.tool_name, ceiling, deny_ask_mode=only_auto_tools
+            )
     if schemas:
         logger.info(
             f"[connector-llm] {caller}: {len(schemas)} connector tool(s) mounted "
@@ -212,11 +229,13 @@ def build_connector_llm_tools(
     return schemas, handlers
 
 
-def _dedup_grants(grants: Iterable[Tuple[str, str]]) -> List[Tuple[str, str]]:
+def _dedup_grants(
+    grants: Iterable[Tuple[str, Optional[str]]]
+) -> List[Tuple[str, Optional[str]]]:
     """同 connector 重复 grant → 保留**首个**（parse_tool_policy 产出的对本就唯一有序；
     这里只防调用方手拼时的重复，不做「取最宽」——那会静默放宽天花板）。"""
     seen: set = set()
-    out: List[Tuple[str, str]] = []
+    out: List[Tuple[str, Optional[str]]] = []
     for cid, ceiling in grants:
         if not cid or cid in seen:
             continue
@@ -225,14 +244,21 @@ def _dedup_grants(grants: Iterable[Tuple[str, str]]) -> List[Tuple[str, str]]:
     return out
 
 
-def _make_handler(connector_id: str, tool_name: str, ceiling: str) -> ToolHandler:
-    """一个远端工具的 handler（闭包钉死 connector / tool / 天花板 —— 模型只能传参数）。"""
+def _make_handler(
+    connector_id: str,
+    tool_name: str,
+    ceiling: Optional[str],
+    *,
+    deny_ask_mode: bool = False,
+) -> ToolHandler:
+    """一个远端工具的 handler（闭包钉死 connector / tool / 天花板 / ask 拒否 —— 模型只能
+    传参数）。"""
 
     async def _call(inp: Dict[str, Any]) -> str:
         args = inp if isinstance(inp, dict) else {}
         try:
             result = await invoke_connector_tool(
-                connector_id, tool_name, args, ceiling=ceiling
+                connector_id, tool_name, args, ceiling=ceiling, deny_ask_mode=deny_ask_mode
             )
         except ConnectorInvokeDenied as e:
             # 闸拒是**可行动**信息（模型可改用别的工具 / 告诉用户去设置里开）。

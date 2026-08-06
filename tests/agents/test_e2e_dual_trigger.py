@@ -433,8 +433,9 @@ _SRC_ROOT = Path(__file__).resolve().parents[2] / "src"
 # lethal trifecta 与收紧手段）。它**不**构成「第二套 custom agent 运行时」——冻结要防的正是
 # 那个 —— 因为四条性质都被结构钉死, 缺一即该重新审这条:
 #   1. 单一固定用途（分类一封邮件, final_tool 恒 classify_email）, 不接受任意 taskPrompt;
-#   2. 工具集**只可能是 read 类** connector 工具（llm_tools 工厂 + PREPROCESS_CONNECTOR_CEILING
-#      硬编码 'read'）, 没有写工具 ⇒ 没有该被审批却没审批的动作;
+#   2. 工具集受 owner 的 per-tool 档位钉死（08-05 拍板放开 read 硬天花板后: llm_tools 工厂
+#      only_auto_tools=True, 仅 mode='auto' 的工具注册 —— ask 在该无人值守场地 ≙ 不注册;
+#      放开是 owner 知情决策, 见 master-plan WP-10 §5 风险 4 留痕）;
 #   3. 授权面独立且默认关（connector.preprocess_enabled, owner 逐个 opt-in）,
 #      灰度开关 MAILAGENT_MCP_CONNECTORS 默认 off ⇒ 默认态与本 task 前逐字节相同;
 #   4. 服务端二道闸（connectors/service.invoke_connector_tool）与 gateway 面同一份, 且

@@ -13,15 +13,18 @@
 import { request } from './http_client'
 import type {
   ConnectorApi,
+  ConnectorBulkToolModeResult,
+  ConnectorCrudType,
   ConnectorDisconnectResult,
   ConnectorOAuthStartResult,
   ConnectorSetEnabledResult,
   ConnectorSetPreprocessResult,
   ConnectorPurgeOrphansResult,
-  ConnectorSetToolEnabledResult,
+  ConnectorSetToolModeResult,
   ConnectorStatusView,
   ConnectorSummary,
   ConnectorSyncResult,
+  ConnectorToolMode,
   ConnectorToolSummary
 } from './types/connector'
 
@@ -75,18 +78,32 @@ export function createConnectorApi(baseUrl: string): ConnectorApi {
       )
     },
 
-    setToolEnabled(
+    setToolMode(
       connectorId: string,
       toolName: string,
-      enabled: boolean | null
-    ): Promise<ConnectorSetToolEnabledResult> {
-      // 🔴 `enabled: null` 是**清除覆盖回默认**，不是「关」——键必须在场（服务端缺键 400，
-      // 不把「没说」当 null 猜），故这里恒显式带上它。
-      return request<ConnectorSetToolEnabledResult>(
+      mode: ConnectorToolMode | null
+    ): Promise<ConnectorSetToolModeResult> {
+      // 🔴 `mode: null` 是**清除覆盖回默认档（auto）**，不是「off」——键必须在场（服务端
+      // 缺键 400，不把「没说」当 null 猜），故这里恒显式带上它。
+      return request<ConnectorSetToolModeResult>(
         baseUrl,
         'POST',
-        `/connector/${seg(connectorId)}/tools/${seg(toolName)}/enabled`,
-        { body: { enabled } }
+        `/connector/${seg(connectorId)}/tools/${seg(toolName)}/mode`,
+        { body: { mode } }
+      )
+    },
+
+    bulkSetToolMode(
+      connectorId: string,
+      mode: ConnectorToolMode | null,
+      crudType?: ConnectorCrudType
+    ): Promise<ConnectorBulkToolModeResult> {
+      // 固定路径段 `bulk_mode` 与 `/tools/{name}/mode` 不同形（少一段），不会撞工具名位。
+      return request<ConnectorBulkToolModeResult>(
+        baseUrl,
+        'POST',
+        `/connector/${seg(connectorId)}/tools/bulk_mode`,
+        { body: { mode, ...(crudType !== undefined ? { crud_type: crudType } : {}) } }
       )
     },
 

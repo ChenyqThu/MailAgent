@@ -1,4 +1,5 @@
-"""Python 侧 connector 工具工厂（08-01 PR3 T3）——天花板过滤 / 排除规则 / 名字约束 /
+"""Python 侧 connector 工具工厂（08-01 PR3 T3；08-05 WP-10 per-tool 三档）——天花板过滤 /
+mode 档位过滤（off 恒不注册；only_auto_tools 时 ask ≙ 不注册，预处理场地语义）/ 名字约束 /
 flag off inert / 围栏 / error 字符串纪律。零网络（invoke 路径整体 stub）。"""
 
 from __future__ import annotations
@@ -40,9 +41,7 @@ def store(tmp_path, monkeypatch):
             ("update_page", "update"),
         ),
     )
-    # write / update 默认关 → 显式打开，好让「天花板」成为唯一变量。
-    st.set_connector_tool_enabled(CID, "create_page", True)
-    st.set_connector_tool_enabled(CID, "update_page", True)
+    # 08-05 默认档 = auto（write/update 不再需要显式打开），「天花板」是唯一变量。
     monkeypatch.setattr("src.agent_config.store.get_agent_config_store", lambda: st)
     monkeypatch.setattr(lt, "_connectors_enabled", lambda: True)
     return st
@@ -76,8 +75,8 @@ def test_ceiling_update_exposes_read_write_update(store):
 def test_destructive_write_tool_is_registered(store):
     """🔴 08-03 delete 退役后的正例：破坏性写工具**照常注册**（危险性只是红警告，不是禁令）。
 
-    以前 destructive_hint 会推成 delete → 结构性不可用；现在它是普通 write 类，owner
-    开了就能被模型看见，审批链（manual 弹卡 / headless 靠 grant）才是安全地板。
+    以前 destructive_hint 会推成 delete → 结构性不可用；08-05 起默认档就是 auto ——
+    连显式打开都不用，审批档位（owner-present ask 弹卡 / headless 靠 grant）才是安全地板。
     """
     manifest = _manifest(("destructive_update", "write"))
     manifest[0]["destructive"] = True
@@ -86,7 +85,6 @@ def test_destructive_write_tool_is_registered(store):
         _manifest(("search", "read"), ("create_page", "write"), ("update_page", "update"))
         + manifest,
     )
-    store.set_connector_tool_enabled(CID, "destructive_update", True)
     assert "mcp__notion__destructive_update" in _names([(CID, "write")])
     row = {r.tool_name: r for r in store.list_connector_tools(CID)}["destructive_update"]
     assert row.destructive is True and row.crud_type == "write"
@@ -101,9 +99,39 @@ def test_bogus_ceiling_yields_nothing(store):
 # ── 排除规则 ───────────────────────────────────────────────────────────────────
 
 
-def test_disabled_tool_not_registered(store):
-    store.set_connector_tool_enabled(CID, "create_page", False)
+def test_off_tier_tool_not_registered(store):
+    store.set_connector_tool_mode(CID, "create_page", "off")
     assert "mcp__notion__create_page" not in _names([(CID, "update")])
+
+
+def test_ask_tier_registers_for_headless_but_not_for_only_auto_callers(store):
+    """08-05 三档语义：headless 报告/agent 面（grant 是授权本体）ask/auto 无差别都注册；
+    预处理场地（only_auto_tools=True）ask ≙ 不注册 —— 无人可点头，唯一不撒谎的实现。"""
+    store.set_connector_tool_mode(CID, "create_page", "ask")
+    # 默认（报告/headless）：ask 照常注册。
+    assert "mcp__notion__create_page" in _names([(CID, "update")])
+    # 预处理场地：仅 auto 档注册（search 是 NULL→auto，create_page 的 ask 被排除）。
+    schemas, handlers = lt.build_connector_llm_tools([(CID, None)], only_auto_tools=True)
+    assert sorted(handlers) == ["mcp__notion__search", "mcp__notion__update_page"]
+    # off 在两个场地都不注册。
+    store.set_connector_tool_mode(CID, "update_page", "off")
+    schemas, handlers = lt.build_connector_llm_tools([(CID, None)], only_auto_tools=True)
+    assert sorted(handlers) == ["mcp__notion__search"]
+
+
+def test_only_auto_handler_passes_deny_ask_mode_to_service(store, monkeypatch):
+    """预处理场地的 handler 闭包带 ``deny_ask_mode=True`` 走 service 第二道（工厂过滤是
+    第一道；工具集 stale 时靠它兜底）。"""
+    seen = {}
+
+    async def _fake_invoke(cid, tool, args, *, ceiling=None, deny_ask_mode=False):
+        seen.update(ceiling=ceiling, deny_ask_mode=deny_ask_mode)
+        return {"content": "x", "is_error": False, "truncated": False, "elapsed_ms": 1}
+
+    monkeypatch.setattr(lt, "invoke_connector_tool", _fake_invoke)
+    _, handlers = lt.build_connector_llm_tools([(CID, None)], only_auto_tools=True)
+    _run(handlers["mcp__notion__search"])
+    assert seen == {"ceiling": None, "deny_ask_mode": True}
 
 
 def test_orphan_tool_not_registered(store):
@@ -175,8 +203,9 @@ def _run(handler, inp=None):
 def test_handler_fences_result_and_passes_ceiling(store, monkeypatch):
     seen = {}
 
-    async def _fake_invoke(cid, tool, args, *, ceiling=None):
+    async def _fake_invoke(cid, tool, args, *, ceiling=None, deny_ask_mode=False):
         seen.update(connector=cid, tool=tool, args=args, ceiling=ceiling)
+        assert deny_ask_mode is False  # 默认调用面（报告/headless）不拒 ask
         return {"content": "page text", "is_error": False, "truncated": False, "elapsed_ms": 3}
 
     monkeypatch.setattr(lt, "invoke_connector_tool", _fake_invoke)
@@ -288,7 +317,7 @@ def test_factory_handler_goes_through_the_real_service_gate(store, monkeypatch):
     assert "remote said hi" in out and out.endswith("\nUNTRUSTED_MCP_TOOL_END")
 
     # 工具在工厂之后被 owner 关掉 → service 那道闸接住（工具集是上一轮建的，已 stale）。
-    store.set_connector_tool_enabled(CID, "search", False)
+    store.set_connector_tool_mode(CID, "search", "off")
     _StubConnectorClient.calls = []
     stale = _run(handlers["mcp__notion__search"], {"q": "x"})
     assert stale.startswith("error: E_CONNECTOR_TOOL_DISABLED:")

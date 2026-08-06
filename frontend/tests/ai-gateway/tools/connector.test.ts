@@ -1,24 +1,27 @@
 // Stage 1 PR2+PR3 (harness-expansion epic) — MCP connector dynamic tools: naming, manifest fetch
 // degradation, registration rules, runtime class matrix, headless grant path.
 //
-// Pins (task 08-01 PR2 contract + PR3 grant key):
+// Pins (task 08-01 PR2 contract + PR3 grant key; per-tool tiers re-pinned per the 08-05 owner
+// 拍板 — master-plan WP-10, task 08-05-p1-connector-tiers-composer-effort-runstate):
 //   1. name mapping (mcpToolName.ts — the ONE source both gateway + renderer card consume);
 //   2. fetchConnectorManifest NEVER throws: list failure → null (silent degradation), a single
 //      connector's tools failure skips just that connector;
-//   3. createConnectorTools registration rules: enabled+non-orphan with a KNOWN crud only
-//      (read→'read', write/update→'connector_write'); unknown crud skipped fail-closed — incl. a
-//      stale legacy 'delete' string (D1: the delete class is RETIRED server-side, destructive
-//      tools ride crud 'write' + the destructive flag and register like any write); static-name
-//      collision skipped;
+//   3. createConnectorTools registration rules: non-orphan rows whose SERVER-folded per-tool
+//      mode is 'auto'/'ask' with a KNOWN crud only (read→'read', write/update→'connector_write');
+//      mode 'off' or any unknown mode string never registers (08-05 tiers), unknown crud skipped
+//      fail-closed — incl. a stale legacy 'delete' string (D1: the delete class is RETIRED
+//      server-side, destructive tools ride crud 'write' + the destructive flag and register like
+//      any write); static-name collision skipped;
 //   4. connector_write matrix row (PR3 + stage 2 PR-1): manual + im_chat always (owner-present —
-//      im writes stay 恒 HITL via the manual-only mayAutoApprove); headless lifted ONLY by a real
-//      `connectors` grant with a write-capable ceiling — every junk/forged shape still denies,
-//      and grants are never consulted in im_chat (neither needed nor able to widen);
+//      the write's approval shape is the per-tool tier since 08-05: ask → card, auto → card-free);
+//      headless lifted ONLY by a real `connectors` grant with a write-capable ceiling — every
+//      junk/forged shape still denies, and grants are never consulted in im_chat;
 //   5. shouldLoadConnectorTools — the ONE load seam: an owner-present venue (manual/im chat, no
 //      agentRunContext), or a headless run whose connector grants parse non-empty; everything
 //      else = zero calls;
-//   6. read results are UNTRUSTED_MCP_TOOL-fenced + truncation surfaced; write tools register the
-//      approval record (edit tier) and never执行 without the guard;
+//   6. read results are UNTRUSTED_MCP_TOOL-fenced + truncation surfaced; 'ask'-tier write tools
+//      register the approval record (edit tier) and never执行 without the guard; 'auto'-tier
+//      writes in an owner-present venue execute card-free and audit 'auto_tool_mode' (08-05);
 //   7. PR3 headless semantics: grant 内免卡直接执行 (audit auto_whitelist + rule_id null),
 //      grant 外根本不注册 (connector absent / above-ceiling tools are never built), and the
 //      invoke wire carries the caller annotation (mode + agent_id).
@@ -65,7 +68,8 @@ function entry(over: Partial<ConnectorToolManifestEntry> = {}): ConnectorToolMan
     inputSchemaJson: '{"type":"object","properties":{"id":{"type":"string"}}}',
     crudType: 'read',
     destructive: false,
-    effectiveEnabled: true,
+    // 08-05 per-tool tier (server-folded effective_mode); 'auto' is the default tier.
+    mode: 'auto',
     orphan: false,
     ...over
   }
@@ -146,7 +150,7 @@ describe('fetchConnectorManifest — never throws', () => {
               input_schema_json: null,
               crud_type: 'read',
               destructive: false,
-              effective_enabled: true,
+              effective_mode: 'auto',
               orphan: false
             }
           ]
@@ -179,28 +183,33 @@ describe('createConnectorTools — registration rules', () => {
     expect(classOfTool('mcp__notion__notion_move_pages')).toBe('connector_write')
   })
 
-  test('disabled / orphan / unknown-crud tools are never registered (incl. legacy delete strings)', () => {
+  test('off-tier / junk-mode / orphan / unknown-crud tools are never registered (incl. legacy delete strings)', () => {
+    // 08-05 tiers — mode 'off' is the only "not registered anywhere" tier, and ANY unknown mode
+    // string fails closed (a junk tier must never widen into auto).
     // D1 — the dedicated `crudType === 'delete'` skip branch is REMOVED: 'delete' is no longer a
     // crud class (the server migrated those rows to write+destructive=1 and its value-domain is
     // read|write|update). A stale 'delete' from an old server row now falls into the generic
     // unknown-crud fail-closed skip — same outcome, no special case.
     const tools = build([
-      entry({ toolName: 'disabled-tool', effectiveEnabled: false }),
+      entry({ toolName: 'off-tool', mode: 'off' }),
+      entry({ toolName: 'junk-mode', mode: 'enabled' }),
+      entry({ toolName: 'empty-mode', mode: '' }),
       entry({ toolName: 'orphan-tool', orphan: true }),
       entry({ toolName: 'stale-delete', crudType: 'delete' }),
       entry({ toolName: 'junk-crud', crudType: 'purge' })
     ])
     expect(Object.keys(tools)).toEqual([])
+    expect(hasRuntimeToolClass('mcp__notion__off_tool')).toBe(false)
     expect(hasRuntimeToolClass('mcp__notion__stale_delete')).toBe(false)
     expect(hasRuntimeToolClass('mcp__notion__junk_crud')).toBe(false)
   })
 
   test('D1 — a DESTRUCTIVE write registers like any write (the retired delete class rides here)', () => {
     // The migrated shape of every former delete row: crud 'write' + destructive=1. It must
-    // register normally (manual 恒 HITL edit tier is untouched; the description carries the
-    // DESTRUCTIVE warning the approval card mirrors in red).
+    // register normally; on the 'ask' tier the description carries both the DESTRUCTIVE warning
+    // (mirrored red on the approval card) and the always-asks contract.
     const tools = build([
-      entry({ toolName: 'notion-delete-page', crudType: 'write', destructive: true })
+      entry({ toolName: 'notion-delete-page', crudType: 'write', destructive: true, mode: 'ask' })
     ])
     expect(Object.keys(tools)).toEqual(['mcp__notion__notion_delete_page'])
     expect(classOfTool('mcp__notion__notion_delete_page')).toBe('connector_write')
@@ -522,7 +531,9 @@ describe('connector tool execution', () => {
     expect(collector[0].confirmationTier).toBeUndefined()
   })
 
-  test('write tool: needsApproval registers the guard record (edit tier); execute without approval rejects', async () => {
+  // 08-05 拍板改判 (master-plan WP-10, task 08-05-p1) — the old「manual write 恒 HITL」pin is
+  // now the per-tool 'ask' tier; the 'auto' tier is the owner's per-tool 免卡 opt-in.
+  test('ask-tier write tool: needsApproval registers the guard record (edit tier); execute without approval rejects', async () => {
     const collector: GatewayToolAuditCollector = []
     const guard = new ApprovalGuard()
     const domain = mockDomain(() => okEnvelope({}))
@@ -530,13 +541,15 @@ describe('connector tool execution', () => {
       domain,
       collector,
       guard,
-      [entry({ toolName: 'notion-update-page', crudType: 'write', destructive: true })],
+      [
+        entry({ toolName: 'notion-update-page', crudType: 'write', destructive: true, mode: 'ask' })
+      ],
       { contextMode: 'manual_chat' }
     )
     const tool = tools.mcp__notion__notion_update_page
     expect(tool).toBeDefined()
     const needs = tool.needsApproval as (i: unknown, o: unknown) => boolean | Promise<boolean>
-    // 恒 HITL in manual under the default approval mode.
+    // 'ask' tier asks in manual under the default approval mode (the pre-08-05 behaviour).
     await expect(
       Promise.resolve(needs({ page: 'x' }, { toolCallId: 'tc-w1', messages: [] }))
     ).resolves.toBe(true)
@@ -552,14 +565,96 @@ describe('connector tool execution', () => {
     expect(err?.approvalStatus).toBe('rejected')
   })
 
-  test('write tool description carries the contract surface (Q9=A): approval + fence + destructive', () => {
+  test("auto-tier write tool (08-05 acceptance ①): manual chat executes WITHOUT a card + audits 'auto_tool_mode'", async () => {
+    let invokeBody: Record<string, unknown> | null = null
+    const collector: GatewayToolAuditCollector = []
+    const guard = new ApprovalGuard()
+    const domain = mockDomain((url, body) => {
+      if (/\/invoke$/.test(url)) {
+        invokeBody = body ? (JSON.parse(body) as Record<string, unknown>) : null
+        return okEnvelope({ content: 'UPDATED', is_error: false, truncated: false })
+      }
+      return okEnvelope({})
+    })
+    const tools = createConnectorTools(
+      domain,
+      collector,
+      guard,
+      [entry({ toolName: 'notion-update-page', crudType: 'write', mode: 'auto' })],
+      { contextMode: 'manual_chat' }
+    )
+    const tool = tools.mcp__notion__notion_update_page
+    expect(tool).toBeDefined()
+    const needs = tool.needsApproval as (i: unknown, o: unknown) => boolean | Promise<boolean>
+    // policyEvaluate auto_allow → no card…
+    await expect(
+      Promise.resolve(needs({ page: 'x' }, { toolCallId: 'tc-a1', messages: [] }))
+    ).resolves.toBe(false)
+    // …but the approval record IS registered (execute's guard.verify chain intact).
+    expect(guard.peek('tc-a1')?.risk).toBe('edit')
+    await (tool.execute as (i: unknown, o: unknown) => Promise<unknown>)(
+      { page: 'x' },
+      { toolCallId: 'tc-a1', messages: [] }
+    )
+    expect(collector).toHaveLength(1)
+    expect(collector[0].status).toBe('ok')
+    // distinct audit vocabulary: tier-source, NOT the headless grant 'auto_whitelist'.
+    expect(collector[0].approvalStatus).toBe('auto_tool_mode')
+    expect(collector[0].whitelistRuleId).toBeNull()
+    expect(invokeBody).toMatchObject({ caller: { context_mode: 'manual_chat' } })
+    // the description says so (a model told "always asks" would wait for a card that never comes)
+    const desc = String(tool.description)
+    expect(desc).not.toContain('always asks')
+    expect(desc).toContain('without an approval card')
+  })
+
+  test('write tool description carries the contract surface (Q9=A): per-tier approval + fence + destructive', () => {
     const tools = build([
-      entry({ toolName: 'notion-update-page', crudType: 'write', destructive: true })
+      entry({ toolName: 'notion-update-page', crudType: 'write', destructive: true, mode: 'ask' }),
+      entry({ toolName: 'notion-create-pages', crudType: 'write', mode: 'auto' })
     ])
-    const desc = String(tools.mcp__notion__notion_update_page.description)
-    expect(desc).toContain('UNTRUSTED_MCP_TOOL')
-    expect(desc).toContain('DESTRUCTIVE')
-    expect(desc).toContain('always asks')
+    const ask = String(tools.mcp__notion__notion_update_page.description)
+    expect(ask).toContain('UNTRUSTED_MCP_TOOL')
+    expect(ask).toContain('DESTRUCTIVE')
+    expect(ask).toContain('always asks')
+    const auto = String(tools.mcp__notion__notion_create_pages.description)
+    expect(auto).toContain('UNTRUSTED_MCP_TOOL')
+    expect(auto).not.toContain('always asks')
+    expect(auto).toContain("The owner set this tool to 'auto'")
+  })
+
+  test('ask-tier READ tool (owner-present): registers approval-gated — the owner demoted a read to「要问我」', async () => {
+    const guard = new ApprovalGuard()
+    const domain = mockDomain(() => okEnvelope({}))
+    const tools = createConnectorTools(domain, [], guard, [entry({ mode: 'ask' })], {
+      contextMode: 'manual_chat'
+    })
+    const tool = tools.mcp__notion__notion_fetch
+    expect(tool).toBeDefined()
+    // its policy class stays 'read' (matrix row untouched)…
+    expect(classOfTool('mcp__notion__notion_fetch')).toBe('read')
+    // …but the call now pauses on the card (needsApproval true + guard record).
+    const needs = tool.needsApproval as (i: unknown, o: unknown) => boolean | Promise<boolean>
+    await expect(
+      Promise.resolve(needs({ id: 'p' }, { toolCallId: 'tc-r1', messages: [] }))
+    ).resolves.toBe(true)
+    expect(guard.peek('tc-r1')?.risk).toBe('edit')
+    expect(String(tool.description)).toContain('always asks')
+    // headless: the SAME ask-tier read stays a silent read (tiers are meaningless headless).
+    resetRuntimeToolClasses()
+    const headless = createConnectorTools(
+      domain,
+      [],
+      new ApprovalGuard(),
+      [entry({ mode: 'ask' })],
+      {
+        contextMode: 'cron_headless',
+        connectorGrants: { notion: 'read' },
+        agentId: 'dms'
+      }
+    )
+    expect(headless.mcp__notion__notion_fetch).toBeDefined()
+    expect(headless.mcp__notion__notion_fetch.needsApproval).toBeUndefined()
   })
 
   // Stage 2 PR-4 (task 08-01 messenger) — the manifest's `destructive` must also reach the RUNTIME
@@ -598,9 +693,10 @@ describe('connector tool execution', () => {
     expect((invokeBody!.caller as Record<string, unknown>).agent_id).toBeUndefined()
   })
 
-  // ── Stage 2 PR-1 — im_chat semantics (owner-present: reads silent, writes 恒 HITL) ──────────
+  // ── Stage 2 PR-1 — im_chat semantics (owner-present; 08-05 场地二: writes follow the per-tool
+  //    tier — ask 走飞书卡链, auto 免卡) ──────────
 
-  test('im_chat write tool: needsApproval TRUE (恒 HITL — never the headless 免卡 path) + caller carries im_chat', async () => {
+  test('im_chat ASK-tier write tool: needsApproval TRUE (the Feishu card chain) + caller carries im_chat', async () => {
     let invokeBody: Record<string, unknown> | null = null
     const guard = new ApprovalGuard()
     const domain = mockDomain((url, body) => {
@@ -614,11 +710,20 @@ describe('connector tool execution', () => {
       domain,
       [],
       guard,
-      [entry(), entry({ toolName: 'notion-update-page', crudType: 'write', destructive: true })],
+      [
+        entry(),
+        entry({
+          toolName: 'notion-update-page',
+          crudType: 'write',
+          destructive: true,
+          mode: 'ask'
+        })
+      ],
       { contextMode: 'im_chat' }
     )
-    // Write: registered + 恒 HITL (the description keeps the manual "always asks" contract — the
-    // headless pre-granted wording must NEVER appear on an im tool).
+    // Write on 'ask': registered + the approval card (delivered over the PR-3 Feishu button
+    // chain — needsApproval true is what routes into it). The headless pre-granted wording must
+    // NEVER appear on an im tool.
     const write = tools.mcp__notion__notion_update_page
     expect(write).toBeDefined()
     const needs = write.needsApproval as (i: unknown, o: unknown) => boolean | Promise<boolean>
@@ -636,6 +741,38 @@ describe('connector tool execution', () => {
     expect(out.content).toContain('UNTRUSTED_MCP_TOOL_START')
     expect(invokeBody).toMatchObject({ caller: { context_mode: 'im_chat' } })
     expect((invokeBody!.caller as Record<string, unknown>).agent_id).toBeUndefined()
+  })
+
+  test("im_chat AUTO-tier write tool (08-05 场地二): executes card-free + audits 'auto_tool_mode'", async () => {
+    let invokeBody: Record<string, unknown> | null = null
+    const collector: GatewayToolAuditCollector = []
+    const guard = new ApprovalGuard()
+    const domain = mockDomain((url, body) => {
+      if (/\/invoke$/.test(url)) {
+        invokeBody = body ? (JSON.parse(body) as Record<string, unknown>) : null
+        return okEnvelope({ content: 'ok', is_error: false, truncated: false })
+      }
+      return okEnvelope({})
+    })
+    const tools = createConnectorTools(
+      domain,
+      collector,
+      guard,
+      [entry({ toolName: 'notion-update-page', crudType: 'write', mode: 'auto' })],
+      { contextMode: 'im_chat' }
+    )
+    const tool = tools.mcp__notion__notion_update_page
+    expect(tool).toBeDefined()
+    const needs = tool.needsApproval as (i: unknown, o: unknown) => boolean | Promise<boolean>
+    await expect(
+      Promise.resolve(needs({ page: 'x' }, { toolCallId: 'tc-im2', messages: [] }))
+    ).resolves.toBe(false)
+    await (tool.execute as (i: unknown, o: unknown) => Promise<unknown>)(
+      { page: 'x' },
+      { toolCallId: 'tc-im2', messages: [] }
+    )
+    expect(collector[0].approvalStatus).toBe('auto_tool_mode')
+    expect(invokeBody).toMatchObject({ caller: { context_mode: 'im_chat' } })
   })
 
   // ── PR3 — headless 免卡 semantics (mirror of grant_web 'open': grant-level auto_allow) ──────
@@ -684,7 +821,38 @@ describe('connector tool execution', () => {
     expect(String(tool.description)).toContain('pre-granted')
   })
 
-  test('headless granted read tool executes silently and the manual write stays 恒 HITL (byte-parity)', async () => {
+  test('headless: per-tool ask/auto are MEANINGLESS — an ask-tier write within the grant still executes 免卡', async () => {
+    // 08-05 语义钉住: tiers only shape owner-present approval. Headless authorization is the
+    // per-agent grant (owner's explicit opt-in), and a headless run has no card host on this
+    // path — 'ask' must neither strand the run nor be silently stripped.
+    const collector: GatewayToolAuditCollector = []
+    const guard = new ApprovalGuard()
+    const domain = mockDomain((url) =>
+      /\/invoke$/.test(url)
+        ? okEnvelope({ content: 'ok', is_error: false, truncated: false })
+        : okEnvelope({})
+    )
+    const tools = createConnectorTools(
+      domain,
+      collector,
+      guard,
+      [entry({ toolName: 'notion-update-page', crudType: 'write', mode: 'ask' })],
+      { contextMode: 'cron_headless', connectorGrants: { notion: 'write' }, agentId: 'dms' }
+    )
+    const tool = tools.mcp__notion__notion_update_page
+    expect(tool).toBeDefined()
+    const needs = tool.needsApproval as (i: unknown, o: unknown) => boolean | Promise<boolean>
+    await expect(
+      Promise.resolve(needs({ page: 'x' }, { toolCallId: 'tc-h2', messages: [] }))
+    ).resolves.toBe(false)
+    await (tool.execute as (i: unknown, o: unknown) => Promise<unknown>)(
+      { page: 'x' },
+      { toolCallId: 'tc-h2', messages: [] }
+    )
+    expect(collector[0].approvalStatus).toBe('auto_whitelist') // grant-source, not tier-source
+  })
+
+  test('headless granted read tool executes silently and the manual ASK-tier write still asks (parity)', async () => {
     const collector: GatewayToolAuditCollector = []
     const domain = mockDomain((url) =>
       /\/invoke$/.test(url)
@@ -700,14 +868,14 @@ describe('connector tool execution', () => {
       content: string
     }
     expect(out.content).toContain('UNTRUSTED_MCP_TOOL_START')
-    // manual write built in the SAME process still asks (PR2 parity — the grant path never
+    // ask-tier manual write built in the SAME process still asks (the grant path never
     // leaks into manual assemblies).
     resetRuntimeToolClasses()
     const manual = createConnectorTools(
       domain,
       [],
       new ApprovalGuard(),
-      [entry({ toolName: 'notion-update-page', crudType: 'write' })],
+      [entry({ toolName: 'notion-update-page', crudType: 'write', mode: 'ask' })],
       { contextMode: 'manual_chat' }
     )
     const needs = manual.mcp__notion__notion_update_page.needsApproval as (
@@ -866,7 +1034,8 @@ describe('projectConnectorCatalog — same admission rules as registration', () 
       entry({ toolName: 'notion-move-pages', crudType: 'update' }),
       entry({ toolName: 'notion-stale-delete', crudType: 'delete' }), // legacy → skipped
       entry({ toolName: 'notion-purge', crudType: 'purge' }), // unknown → skipped
-      entry({ toolName: 'disabled', effectiveEnabled: false }), // skipped
+      entry({ toolName: 'off-tier', mode: 'off' }), // skipped (08-05 tier)
+      entry({ toolName: 'junk-mode', mode: 'enabled' }), // skipped (unknown tier, fail-closed)
       entry({ toolName: 'orphan', orphan: true }), // skipped
       entry({ toolName: '★★★' }), // unrepresentable name → skipped
       entry({ toolName: 'notion_fetch' }), // duplicate slug of entry() → skipped
@@ -893,7 +1062,7 @@ describe('projectConnectorCatalog — same admission rules as registration', () 
   test('null / empty / nothing-admitted manifests → null (caller omits the block)', () => {
     expect(projectConnectorCatalog(null)).toBeNull()
     expect(projectConnectorCatalog([])).toBeNull()
-    expect(projectConnectorCatalog([entry({ effectiveEnabled: false })])).toBeNull()
+    expect(projectConnectorCatalog([entry({ mode: 'off' })])).toBeNull()
   })
 })
 

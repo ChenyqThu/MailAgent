@@ -13,10 +13,11 @@
 //      行 —— 它们恒不可启用（远端已经没有这个工具了），但"看得见但用不了"远比"干脆不
 //      显示"诚实：用户能确认这个服务确实有这么个工具、且我们确实没给 AI。
 //
-//   3. **per-tool 三态**。`enabled_override` 是 true / false / **null（清除覆盖回默认）**
-//      三态，UI 就得给三个档，不能用一个 Switch 冒充。默认档的折算规则（read 开 /
-//      write·update 关）**不在前端重算** —— 直接显示后端给的 `effective_enabled`，
-//      否则那套规则就成了第二处手抄。
+//   3. **per-tool 三档**（08-05 WP-10）。`mode_override` 是 'auto' / 'ask' / 'off' /
+//      **null（跟随默认档 auto）**，UI 给三档图标单选 + 「默认」小字；批量清覆盖走
+//      Reset permissions。折算规则（null→auto）**不在前端重算** —— 直接显示后端给的
+//      `effective_mode`，否则那套规则就成了第二处手抄。destructive 工具设 auto 的那一下
+//      弹一次性红色确认（§4.3）；升级/首连一次性「工具面变宽」概览提示（风险 1 处置）。
 //
 // 🔴 远程 web 面不能发起连接：OAuth 回调走本机 loopback，远程浏览器打不开那个地址，
 // 点了只会静默超时。故 web 构建下「连接」按钮 disabled + 明示去桌面 App 操作；其余
@@ -25,7 +26,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { AlertTriangle, Loader2 } from 'lucide-react'
+import { AlertTriangle, Ban, Check, ChevronDown, Hand, Loader2 } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
@@ -36,6 +37,7 @@ import type {
   ConnectorCrudType,
   ConnectorStatusValue,
   ConnectorSummary,
+  ConnectorToolMode,
   ConnectorToolSummary
 } from '@shared/api/types'
 import { Button } from '@shared/components/ui/button'
@@ -49,6 +51,7 @@ import {
   DialogHeader,
   DialogTitle
 } from '@shared/components/ui/dialog'
+import { Popover, PopoverContent, PopoverTrigger } from '@shared/components/ui/popover'
 
 import { Section } from '../parts/Section'
 import { fetchConnectorToolsEnabled } from './shared'
@@ -91,6 +94,26 @@ function openExternal(url: string): void {
 function countOf(result: Record<string, unknown>, key: string): number {
   const raw = result[key]
   return typeof raw === 'number' && Number.isFinite(raw) ? raw : 0
+}
+
+/** 08-05 WP-10 — 「工具面变宽」一次性概览提示的确认标记（per-connector，localStorage）。
+ *  读写都 try/catch：web 面 storage 被禁时提示每次都出，方向是多提醒不是漏提醒。 */
+const TOOLFACE_NOTICE_KEY_PREFIX = 'mailagent.connectors.toolfaceNotice.v1.'
+
+function readToolfaceNoticeAck(connectorId: string): boolean {
+  try {
+    return window.localStorage.getItem(`${TOOLFACE_NOTICE_KEY_PREFIX}${connectorId}`) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeToolfaceNoticeAck(connectorId: string): void {
+  try {
+    window.localStorage.setItem(`${TOOLFACE_NOTICE_KEY_PREFIX}${connectorId}`, '1')
+  } catch {
+    /* storage 不可用 → 下次还会提示，可接受 */
+  }
 }
 
 /** epoch 秒 → 本地可读时间；非法值返回 null（调用方退化成"未知"文案，不显示 Invalid Date）。 */
@@ -139,57 +162,72 @@ const CRUD_LABEL_KEYS: Record<ConnectorCrudType, string> = {
   update: 'settings.connectors.tools.crud.update'
 }
 
-// ── per-tool 三态控件 ───────────────────────────────────────────────────────
+// ── per-tool 三档控件（08-05 WP-10：auto ✓ / ask ✋ / off 🚫）─────────────────
 
-type ToolState = 'default' | 'on' | 'off'
+const TOOL_MODES: readonly ConnectorToolMode[] = ['auto', 'ask', 'off']
 
-const TOOL_STATES: readonly ToolState[] = ['default', 'on', 'off']
-
-const TOOL_STATE_LABEL_KEYS: Record<ToolState, string> = {
-  default: 'settings.connectors.tools.state.default',
-  on: 'settings.connectors.tools.state.on',
-  off: 'settings.connectors.tools.state.off'
+const TOOL_MODE_LABEL_KEYS: Record<ConnectorToolMode, string> = {
+  auto: 'settings.connectors.tools.mode.auto',
+  ask: 'settings.connectors.tools.mode.ask',
+  off: 'settings.connectors.tools.mode.off'
 }
 
-function toolStateOf(override: boolean | null): ToolState {
-  if (override == null) return 'default'
-  return override ? 'on' : 'off'
+const TOOL_MODE_ICONS: Record<
+  ConnectorToolMode,
+  React.ComponentType<{ className?: string; 'aria-hidden'?: boolean | 'true' | 'false' }>
+> = {
+  auto: Check,
+  ask: Hand,
+  off: Ban
 }
 
-/** 三段控件走 authored `.seg` + `.on`（AgentsTab 排程/窗口选择的存量原生用法，index.css
- *  §.seg）。不用 `ui/segmented` 是因为它没有 disabled 形态，而 orphan 行**必须**渲染成
- *  禁用而不是消失。 */
-function ToolStateControl({
+const EFFECTIVE_MODE_LABEL_KEYS: Record<ConnectorToolMode, string> = {
+  auto: 'settings.connectors.tools.effective.auto',
+  ask: 'settings.connectors.tools.effective.ask',
+  off: 'settings.connectors.tools.effective.off'
+}
+
+/** 三档图标单选走 authored `.seg` + `.on`（AgentsTab 排程/窗口选择的存量原生用法，
+ *  index.css §.seg）。不用 `ui/segmented` 是因为它没有 disabled 形态，而 orphan 行
+ *  **必须**渲染成禁用而不是消失。选中态显示的是**折算后的有效档**；覆盖为 null（跟随
+ *  默认）时行上另有「默认」小字 —— NULL 能力保留（Reset permissions 批量清覆盖），
+ *  控件本身只发显式三档。 */
+function ToolModeControl({
   value,
   disabled,
   ariaLabel,
   onChange
 }: {
-  value: ToolState
+  value: ConnectorToolMode
   disabled: boolean
   ariaLabel: string
-  onChange(next: ToolState): void
+  onChange(next: ConnectorToolMode): void
 }): React.ReactElement {
   const { t } = useTranslation()
   return (
     <div className="seg shrink-0" role="group" aria-label={ariaLabel}>
-      {TOOL_STATES.map((state) => (
-        <button
-          key={state}
-          type="button"
-          disabled={disabled}
-          aria-pressed={value === state}
-          onClick={() => {
-            if (state !== value) onChange(state)
-          }}
-          className={cn(
-            value === state && 'on',
-            disabled && 'cursor-not-allowed opacity-50 hover:text-ink-fg-2'
-          )}
-        >
-          {t(TOOL_STATE_LABEL_KEYS[state])}
-        </button>
-      ))}
+      {TOOL_MODES.map((mode) => {
+        const Icon = TOOL_MODE_ICONS[mode]
+        return (
+          <button
+            key={mode}
+            type="button"
+            disabled={disabled}
+            aria-pressed={value === mode}
+            aria-label={t(TOOL_MODE_LABEL_KEYS[mode])}
+            title={t(TOOL_MODE_LABEL_KEYS[mode])}
+            onClick={() => {
+              if (mode !== value) onChange(mode)
+            }}
+            className={cn(
+              value === mode && 'on',
+              disabled && 'cursor-not-allowed opacity-50 hover:text-ink-fg-2'
+            )}
+          >
+            <Icon className="size-3.5" aria-hidden="true" />
+          </button>
+        )
+      })}
     </div>
   )
 }
@@ -201,11 +239,11 @@ function ToolRow({
   onChange
 }: {
   tool: ConnectorToolSummary
-  onChange(tool: ConnectorToolSummary, next: ToolState): void
+  onChange(tool: ConnectorToolSummary, next: ConnectorToolMode): void
 }): React.ReactElement {
   const { t } = useTranslation()
   // orphan 行远端已没有这个工具 —— 只展示不可改。（delete 档退役后这是唯一的锁定成因：
-  // 破坏性工具照常可配，只是带 destructive 徽标 + 调用时恒弹卡。）
+  // 破坏性工具照常可配，红药丸常显 + 设 auto 时一次性红色确认。）
   const locked = tool.orphan
   return (
     <div className="flex items-start gap-3 py-1.5">
@@ -234,18 +272,65 @@ function ToolRow({
           <div className="mt-0.5 text-meta text-ink-fg-2 line-clamp-2">{tool.description}</div>
         ) : null}
         <div className="mt-0.5 text-micro text-ink-fg-3">
-          {tool.effective_enabled
-            ? t('settings.connectors.tools.effectiveOn')
-            : t('settings.connectors.tools.effectiveOff')}
+          {t(EFFECTIVE_MODE_LABEL_KEYS[tool.effective_mode])}
+          {tool.mode_override == null ? ` · ${t('settings.connectors.tools.followDefault')}` : ''}
         </div>
       </div>
-      <ToolStateControl
-        value={toolStateOf(tool.enabled_override)}
+      <ToolModeControl
+        value={tool.effective_mode}
         disabled={locked}
-        ariaLabel={t('settings.connectors.tools.state.label')}
+        ariaLabel={t('settings.connectors.tools.mode.label')}
         onChange={(next) => onChange(tool, next)}
       />
     </div>
+  )
+}
+
+// ── crud 分组头（计数 + 组级批量下拉，差距表 #5/#6）──────────────────────────
+
+const CRUD_ORDER: readonly ConnectorCrudType[] = ['read', 'write', 'update']
+
+function GroupBulkMenu({
+  crud,
+  onApply
+}: {
+  crud: ConnectorCrudType
+  onApply(mode: ConnectorToolMode): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [open, setOpen] = React.useState(false)
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-1.5 py-0.5 text-micro text-ink-fg-3 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
+          aria-label={`${t('settings.connectors.tools.bulk.label')} · ${t(CRUD_LABEL_KEYS[crud])}`}
+        >
+          {t('settings.connectors.tools.bulk.label')}
+          <ChevronDown className="size-3" aria-hidden="true" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent className="w-44 p-1" align="end">
+        {TOOL_MODES.map((mode) => {
+          const Icon = TOOL_MODE_ICONS[mode]
+          return (
+            <button
+              key={mode}
+              type="button"
+              className="flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2 py-1.5 text-left text-aux text-ink-fg transition-colors duration-fast hover:bg-ink-4"
+              onClick={() => {
+                setOpen(false)
+                onApply(mode)
+              }}
+            >
+              <Icon className="size-3.5 text-ink-fg-2" aria-hidden="true" />
+              {t(`settings.connectors.tools.bulk.${mode}`)}
+            </button>
+          )
+        })}
+      </PopoverContent>
+    </Popover>
   )
 }
 
@@ -281,17 +366,30 @@ function ConnectorRow({
   const [purging, setPurging] = React.useState(false)
   const [confirmOpen, setConfirmOpen] = React.useState(false)
   const [disconnecting, setDisconnecting] = React.useState(false)
+  // 08-05 WP-10 — destructive 工具设 auto 的一次性红色确认（单个 / 组级批量两形态）。
+  const [confirmAuto, setConfirmAuto] = React.useState<
+    | { kind: 'single'; tool: ConnectorToolSummary }
+    | { kind: 'bulk'; crud: ConnectorCrudType; destructiveCount: number }
+    | null
+  >(null)
+  // 08-05 WP-10 — 升级/首连一次性「工具面变宽」概览提示（风险 1 的处置）：per-connector
+  // 的确认标记落 localStorage —— 升级前就连着的行没有标记 ⇒ 首次打开设置页即弹一次。
+  const [noticeAck, setNoticeAck] = React.useState<boolean>(() => readToolfaceNoticeAck(id))
 
   const invalidateList = React.useCallback(
     () => qc.invalidateQueries({ queryKey: qk.connectors() }),
     [qc]
   )
 
+  const connected = connector.status === 'connected'
+  const noticePending = connected && !noticeAck
+
   const toolsQuery = useQuery<ConnectorToolSummary[]>({
     queryKey: qk.connectorTools(id),
     queryFn: () => api.connector.tools(id),
     // 懒加载：没展开就不打这个请求（registry 全集恒在列表里，展开的是少数）。
-    enabled: expanded,
+    // 例外：概览提示未确认时提前拉一次 —— N 读 M 写 K 破坏性的计数就来自这份清单。
+    enabled: expanded || noticePending,
     staleTime: 10_000,
     retry: false
   })
@@ -424,11 +522,59 @@ function ConnectorRow({
     }
   }
 
-  async function handleToolState(tool: ConnectorToolSummary, next: ToolState): Promise<void> {
+  async function applyToolMode(toolName: string, next: ConnectorToolMode): Promise<void> {
     try {
-      // 'default' → null = 清除覆盖回默认档（三态的第三态，不是 false）。
-      await api.connector.setToolEnabled(id, tool.name, next === 'default' ? null : next === 'on')
+      await api.connector.setToolMode(id, toolName, next)
       await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+    } catch (err) {
+      toastError(t('settings.connectors.saveFailed'), errorMessage(err))
+    }
+  }
+
+  function handleToolMode(tool: ConnectorToolSummary, next: ConnectorToolMode): void {
+    // destructive → auto 的那一下弹一次性红色确认（§4.3：不阻止、只加摩擦与可见性）。
+    if (next === 'auto' && tool.destructive) {
+      setConfirmAuto({ kind: 'single', tool })
+      return
+    }
+    void applyToolMode(tool.name, next)
+  }
+
+  async function applyBulkMode(crud: ConnectorCrudType, mode: ConnectorToolMode): Promise<void> {
+    try {
+      const result = await api.connector.bulkSetToolMode(id, mode, crud)
+      await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      toastSuccess(t('settings.connectors.tools.bulkDone', { count: result.updated }))
+    } catch (err) {
+      toastError(t('settings.connectors.saveFailed'), errorMessage(err))
+    }
+  }
+
+  function handleBulkMode(crud: ConnectorCrudType, mode: ConnectorToolMode): void {
+    const destructiveCount = (toolsQuery.data ?? []).filter(
+      (x) => x.crud_type === crud && x.destructive && !x.orphan
+    ).length
+    if (mode === 'auto' && destructiveCount > 0) {
+      setConfirmAuto({ kind: 'bulk', crud, destructiveCount })
+      return
+    }
+    void applyBulkMode(crud, mode)
+  }
+
+  async function handleConfirmAuto(): Promise<void> {
+    const pending = confirmAuto
+    setConfirmAuto(null)
+    if (pending == null) return
+    if (pending.kind === 'single') await applyToolMode(pending.tool.name, 'auto')
+    else await applyBulkMode(pending.crud, 'auto')
+  }
+
+  async function handleResetPermissions(): Promise<void> {
+    try {
+      // mode=null 全量清 per-tool 覆盖（Reset permissions，差距表 #8）——回到默认档 auto。
+      const result = await api.connector.bulkSetToolMode(id, null)
+      await qc.invalidateQueries({ queryKey: qk.connectorTools(id) })
+      toastSuccess(t('settings.connectors.tools.resetDone', { count: result.updated }))
     } catch (err) {
       toastError(t('settings.connectors.saveFailed'), errorMessage(err))
     }
@@ -436,7 +582,6 @@ function ConnectorRow({
 
   // 本地在途流优先于服务端快照（oauthStart 刚返回、列表还没刷新时也要显示"授权中"）。
   const status: ConnectorStatusValue = awaiting != null ? 'authorizing' : connector.status
-  const connected = connector.status === 'connected'
   const expiresAt = formatEpoch(connector.credential?.expires_at)
   const expired =
     connector.credential?.expires_at != null && connector.credential.expires_at * 1000 < nowMs
@@ -520,17 +665,39 @@ function ConnectorRow({
       )
     }
     const orphanCount = toolsQuery.data.filter((x) => x.orphan).length
+    // 按操作类型分组 + 计数（差距表 #5）；组头带批量下拉（#6）。
+    const groups = CRUD_ORDER.map((crud) => ({
+      crud,
+      tools: toolsQuery.data!.filter((x) => x.crud_type === crud)
+    })).filter((g) => g.tools.length > 0)
     return (
       <>
-        <div className="pb-1 text-micro text-ink-fg-3">
-          {t('settings.connectors.tools.defaultHint')}
+        <div className="flex items-center justify-between gap-3 pb-1">
+          <div className="text-micro text-ink-fg-3">
+            {t('settings.connectors.tools.defaultHint')}
+          </div>
+          <Button size="sm" variant="ghost" onClick={() => void handleResetPermissions()}>
+            {t('settings.connectors.tools.reset')}
+          </Button>
         </div>
-        {toolsQuery.data.map((tool) => (
-          <ToolRow
-            key={tool.name}
-            tool={tool}
-            onChange={(x, next) => void handleToolState(x, next)}
-          />
+        {groups.map((group) => (
+          <div key={group.crud} className="pt-1">
+            <div className="flex items-center justify-between gap-3 border-b border-ink-border-soft pb-1">
+              <div className="flex items-center gap-1.5">
+                <span className={cn(PILL_BASE, CRUD_PILL_CLASS[group.crud])}>
+                  {t(CRUD_LABEL_KEYS[group.crud])}
+                </span>
+                <span className="text-micro text-ink-fg-3">{group.tools.length}</span>
+              </div>
+              <GroupBulkMenu
+                crud={group.crud}
+                onApply={(mode) => handleBulkMode(group.crud, mode)}
+              />
+            </div>
+            {group.tools.map((tool) => (
+              <ToolRow key={tool.name} tool={tool} onChange={handleToolMode} />
+            ))}
+          </div>
         ))}
         {/* 清理只删已失效行 —— 它们恒不注册、恒不可调用，删掉不改变任何 AI 能做的事，
             故不配确认对话框（给低风险动作加确认会稀释真正需要确认的那些）。 */}
@@ -620,8 +787,58 @@ function ConnectorRow({
         <div className="flex shrink-0 items-center gap-2">{controls}</div>
       </div>
 
-      {/* 邮件预处理是**独立**授权位（不复用 custom agent 的 grant_connectors），天花板恒
-          只读 —— 摆成一行常驻子行而不是藏进折叠区。 */}
+      {/* 08-05 WP-10 — 升级/首连一次性「工具面变宽」概览：N 读 M 写 K 破坏性、默认全自动、
+          可去下方调档。计数来自工具清单（noticePending 时 query 已提前启用）；清单还没到
+          就先渲染骨架文案，不空转。 */}
+      {noticePending ? (
+        <div className="flex items-start gap-3 border-t border-ink-border-soft bg-warn/[0.06] px-[var(--settings-tile-px,1rem)] py-3">
+          <AlertTriangle className="mt-0.5 size-3.5 shrink-0 text-warn" aria-hidden="true" />
+          <div className="min-w-0 flex-1">
+            <div className="text-aux font-medium text-ink-fg">
+              {t('settings.connectors.toolfaceNotice.title')}
+            </div>
+            <div className="mt-0.5 text-meta text-ink-fg-2">
+              {toolsQuery.data
+                ? t('settings.connectors.toolfaceNotice.body', {
+                    reads: toolsQuery.data.filter((x) => !x.orphan && x.crud_type === 'read')
+                      .length,
+                    writes: toolsQuery.data.filter(
+                      (x) => !x.orphan && (x.crud_type === 'write' || x.crud_type === 'update')
+                    ).length,
+                    destructive: toolsQuery.data.filter((x) => !x.orphan && x.destructive).length
+                  })
+                : t('settings.connectors.toolfaceNotice.loading')}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => {
+                setExpanded(true)
+                writeToolfaceNoticeAck(id)
+                setNoticeAck(true)
+              }}
+            >
+              {t('settings.connectors.toolfaceNotice.review')}
+            </Button>
+            <Button
+              size="sm"
+              variant="secondary"
+              onClick={() => {
+                writeToolfaceNoticeAck(id)
+                setNoticeAck(true)
+              }}
+            >
+              {t('settings.connectors.toolfaceNotice.dismiss')}
+            </Button>
+          </div>
+        </div>
+      ) : null}
+
+      {/* 邮件预处理是**独立**授权位（不复用 custom agent 的 grant_connectors）——08-05 场地
+          放开后不再限只读：开了之后该场地可用的是 per-tool「自动」档的工具（含写类；
+          「需审批」在无人值守场地等同禁用）。摆成一行常驻子行而不是藏进折叠区。 */}
       {connected ? (
         <div className="flex items-center gap-3 border-t border-ink-border-soft px-[var(--settings-tile-px,1rem)] py-3">
           <div className="min-w-0 flex-1">
@@ -647,6 +864,40 @@ function ConnectorRow({
       >
         {toolsBody}
       </CollapsibleRegion>
+
+      {/* 08-05 WP-10 §4.3 — destructive 工具设 auto 的一次性红色确认：不阻止、只加摩擦。
+          确认后该工具自动执行不再弹审批卡（红药丸仍常显；ask 档的审批卡红警告链不受影响）。 */}
+      <Dialog
+        open={confirmAuto != null}
+        onOpenChange={(open) => {
+          if (!open) setConfirmAuto(null)
+        }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-fail">
+              {t('settings.connectors.destructiveAutoDialog.title')}
+            </DialogTitle>
+            <DialogDescription>
+              {confirmAuto?.kind === 'bulk'
+                ? t('settings.connectors.destructiveAutoDialog.bulkDesc', {
+                    count: confirmAuto.destructiveCount
+                  })
+                : t('settings.connectors.destructiveAutoDialog.desc', {
+                    name: confirmAuto?.kind === 'single' ? confirmAuto.tool.name : ''
+                  })}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button size="sm" variant="ghost" onClick={() => setConfirmAuto(null)}>
+              {t('settings.connectors.destructiveAutoDialog.cancel')}
+            </Button>
+            <Button size="sm" variant="destructive" onClick={() => void handleConfirmAuto()}>
+              {t('settings.connectors.destructiveAutoDialog.confirm')}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
         <DialogContent className="max-w-md">
