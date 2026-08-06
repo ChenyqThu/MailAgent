@@ -124,12 +124,23 @@ jobs:
         run: |
           # 🔴 提高文件描述符上限 — 少了它 electron-builder 在签名后遍历 app 内容时必 EMFILE。
           # 起因: 飞书 SDK lark-oapi 往嵌入式 venv 带进 11k+ 个小 .py 文件 (它把每个业务线
-          # 的每个 API model 拆成独立文件), site-packages 文件数从 ~1.2 万抬到 ~2.3 万; macOS
-          # runner 的默认 soft limit 是 256, 撑不住这个并发度。本地 build 不复现 —— 开发机
-          # ulimit 高一两个数量级, 所以这条只会在 CI 上炸 (v2.1.0 首次 tag 实测)。
-          # 递降尝试: hard limit 拿不到 65536 时退到 10240, 再不行也不让 `bash -e` 当场中止。
+          # 的每个 API model 拆成独立文件), site-packages 文件数从 ~1.2 万抬到 ~2.3 万。
+          # 裁包不是出路: `import lark_oapi` 是 eager 的, 一次加载全部 10059 个子模块 / 56 条
+          # 业务线, 少哪条都当场 ImportError (本地实测), 所以只能把上限抬够。
+          # 本地 build 从不复现 —— 开发机上限高一两个数量级, 这条只在 CI 炸 (v2.1.0 实测两次)。
+          #
+          # 两层都要抬, 缺一不可:
+          #   ulimit -n            = 进程 soft limit, macOS runner 默认 256
+          #   kern.maxfilesperproc = 内核硬顶, 压在 ulimit 之上; 只抬 ulimit 到 65536 仍 EMFILE
+          #                          (第二次构建实测: 日志确认 ulimit=65536, 照炸)
+          # sysctl 需要 sudo (runner 上是 passwordless); 失败不中止, 让 electron-builder 自己
+          # 去撞 —— 它的报错比 sysctl 的更有诊断价值。三个数字都打进日志, 下次再 EMFILE 能一眼
+          # 看出是哪层没抬上去。
+          sudo sysctl -w kern.maxfiles=524288 2>/dev/null || echo "warn: kern.maxfiles 未能提高"
+          sudo sysctl -w kern.maxfilesperproc=262144 2>/dev/null || echo "warn: kern.maxfilesperproc 未能提高"
           ulimit -n 65536 2>/dev/null || ulimit -n 10240 2>/dev/null || true
-          echo "ulimit -n = $(ulimit -n)"
+          echo "fd limits: ulimit -n = $(ulimit -n)"
+          sysctl kern.maxfiles kern.maxfilesperproc 2>/dev/null || true
           PUBLISH=never
           if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then PUBLISH=always; fi
           echo "publish mode: ${PUBLISH}"
