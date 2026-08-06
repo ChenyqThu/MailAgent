@@ -106,9 +106,6 @@ function controlsFor(
   onModelChange = vi.fn()
 ): ChatComposerControls {
   return {
-    thinkingSupported: true,
-    thinkingEnabled: false,
-    onToggleThinking: vi.fn(),
     model,
     availableModels,
     onModelChange,
@@ -585,8 +582,10 @@ describe('ModelPicker — 打开时滚到选中项', () => {
   })
 })
 
-describe('ModelPicker — 邮件面 360px 布局红线', () => {
-  test('弹层保持 left-0 锚定 + 固定 264px（越界闸）', () => {
+// 🔴 08-05 WP-13+16b：本控件搬到工具条**右组**（环 / effort / 模型 / 发送），锚定随之
+// left-0 → right-0。红线因此换了一条算式：右缘对齐触发器右缘、向左展开。
+describe('ModelPicker — 右组布局红线', () => {
+  test('弹层改 right-0 锚定 + 固定 264px（越界闸）', () => {
     render(
       <ModelPicker
         controls={controlsFor(TWO_PROVIDERS, 'anthropic:claude-sonnet-4-6')}
@@ -595,13 +594,18 @@ describe('ModelPicker — 邮件面 360px 布局红线', () => {
     )
     openMenu('icon')
     const menu = screen.getByRole('menu')
-    expect(menu.className).toContain('left-0')
+    expect(menu.className).toContain('right-0')
+    expect(menu.className).not.toContain('left-0')
     expect(menu.className).toContain('w-[264px]')
-    // 触发器 x = 12(px-3) + 3×28(h-7 w-7) + 2×4(gap-1) = 76 → 76 + 264 = 340 ≤ 348（360 - px-3）。
-    expect(76 + 264).toBeLessThanOrEqual(360 - 12)
+    // 邮件面 360px：右组自右向左 = 发送(36) / 模型(28) / effort(28) / 环。模型钮右缘
+    // ≈ 348 - 36 = 312 → 弹层 [312-264, 312] = [48, 312]，两端都在 [12, 348] 内。
+    expect(312 - 264).toBeGreaterThanOrEqual(12)
+    expect(312).toBeLessThanOrEqual(360 - 12)
+    // 🔴 反向：留在 left-0 时右缘 = 284 + 264 = 548，越界 200px（本闸存在的理由）。
+    expect(284 + 264).toBeGreaterThan(360 - 12)
   })
 
-  test('🔴 位置前提：在真的 ThreadComposer 里，模型钮仍是左组第 3 个控件', async () => {
+  test('🔴 位置前提：在真的 ThreadComposer 里，模型钮在右组、发送钮之前', async () => {
     const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
     render(
       <QueryClientProvider client={qc}>
@@ -615,12 +619,12 @@ describe('ModelPicker — 邮件面 360px 布局红线', () => {
       </QueryClientProvider>
     )
     const trigger = await screen.findByLabelText(i18n.t('chat.composer.model'))
-    // 左组 = 工具条那一行；数模型钮前面有几个可点控件（上面那道算式唯一会悄悄失效的前提就是
-    // 有人往前面插一个钮 → 触发器右移 → 264px 弹层顶出右边界）。
-    const row = trigger.closest('div.flex.items-center.gap-1')
-    expect(row).toBeTruthy()
-    const buttons = Array.from(row!.querySelectorAll('button'))
-    expect(buttons.indexOf(trigger as HTMLButtonElement)).toBe(2)
+    // 上面那道算式的前提 = 模型钮**贴着发送钮**（右组倒数第二）。有人往它后面插一个钮，
+    // 触发器就左移、right-0 弹层的左缘跟着走 —— 这条断言是那个前提的绊线。
+    const group = trigger.closest('div.ml-auto')
+    expect(group).toBeTruthy()
+    const buttons = Array.from(group!.querySelectorAll('button'))
+    expect(buttons.indexOf(trigger as HTMLButtonElement)).toBe(buttons.length - 2)
   })
 })
 

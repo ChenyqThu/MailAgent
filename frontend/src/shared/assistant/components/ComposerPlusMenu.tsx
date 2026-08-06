@@ -4,36 +4,38 @@
 //   - agent 面 `AgentComposer.AgentAttachmentButton` —— 「+」图标但点了**直接**弹文件选择器，
 //     图标承诺的是「加点什么」，行为却只有一种，用户按图标去找外部连接必然扑空；
 //   - 邮件面 `composer.ComposerAttachmentButton`（Paperclip）+ 平铺的 `ConnectorQuickPanel`
-//     圆钮/方钮 —— 两面对同一件事给了两种入口形态。
-// 现在两面都是同一颗「+」：一级菜单「附件 / 外部连接」，外部连接点进去是二级弹层（复用
-// `ConnectorQuickContent`，内容逐字未动）。菜单**恒在**（哪怕只剩附件一项）—— 它是「加东西」
-// 的固定落点，未来新增的入口往里加，不再往工具条上挤第 N 个钮。
+//     圆钮/方钮 —— 两面对同一件事给了两种入口形态；
+//   - 08-05 WP-13/16b 起还收编了邮件面工具条上那颗独立的 `@`（AtSign）钮。
+// 菜单**恒在**（哪怕只剩附件一项）—— 它是「加东西进这轮对话」的固定落点。
+//
+// 🔴 08-05 WP-13：**外部连接搬走了**，去了新的滑块菜单 `ComposerToolsMenu`。分工从此是
+// 「`+` = 往这轮对话里加内容（附件 / 引用邮件）」 vs 「滑块 = 配置这轮对话能用哪些外部能力
+// （connector / skill）」。连同那颗 coral 常驻点一起搬（点表达的是「外部连接接着东西」）。
 //
 // 双 variant 分工抄 ModelPicker / ApprovalModePicker 的先例：
 //   'icon' = 邮件面 7×7 方角图标钮 · 'chip' = agent 面 7×7 圆钮。
 //
-// 布局红线（PRD，邮件面板 360px）：「+」是左组第 2 个控件，x = 12(px-3) + 28 + 4(gap-1) = 44。
-//   一级菜单 left-0 + w-[196px] → 右缘 240 ≤ 348 ✓
-//   二级弹层 left-0 + w-[268px] → 右缘 312 ≤ 348 ✓
-// （这里**不能**抄 ConnectorQuickPanel 旧版的居中锚定：居中会让 268px 弹层的左缘落到
-//  44 + 14 - 134 = -76，改成顶出左边界。锚定方式跟着触发器在行里的位置走，没有普适答案。）
+// 布局红线：WP-13 之后「+」是左组**第 1 个**控件（左组 = + / 滑块 / 授权模式），
+//   x = 12(px-3)；一级菜单 left-0 + w-[196px] → 右缘 208，320px 窄面（可视右缘 308）也不越界。
+//   引用邮件弹层（MentionPopover，left-2 + 280px）→ 右缘 300 ≤ 308 ✓。
 //
-// A2 语义迁移（原「入口常驻强调色」）：外部连接的常驻信号从「整枚圆钮染 coral」降级成「+」
-// 右上角一颗 coral 小点 —— 「+」现在还管附件，把整颗按钮染成强调色会谎报「附件也是激活态」。
-// 判据一个字没变：至少一个 connected 且 enabled 的 connector（`useConnectorQuickRows`）。
+// 🔴 `mention` 是**可选**能力，只有邮件面给：agent 面的 @ 是 Lexical 的**行内** directive chip，
+// 且它有一条「chip 被删就把对应 mention 从 controls 里摘掉」的对账 effect（AgentComposer 的
+// 隐私护栏）。从菜单里走 MentionPopover 加进去的 mention 在正文里没有 chip，会被那条对账当场
+// 删掉 —— 于是「点了没反应」。所以这一项不能无条件出现，两面语义本来就不同。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
-import { Blocks, ChevronLeft, Paperclip, Plus } from 'lucide-react'
+import { AtSign, Paperclip, Plus } from 'lucide-react'
 import { useAui } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
+import { MentionPopover } from '@shared/components/chat/MentionPopover'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
-import { useConnectorQuickRows } from '@shared/hooks/useConnectorQuickRows'
 
-import { ConnectorQuickContent } from './ConnectorQuickPanel'
+import { useChatComposerControls } from './composerControlsContext'
 
 const ICON_BTN =
   'grid h-7 w-7 place-items-center rounded-md transition-[color,background-color,transform] duration-fast'
@@ -44,22 +46,27 @@ const MENU_ITEM =
 // 阴影由 `.glass-pop` 自带的 `--pop-shadow` 提供 —— 这里**不能**再挂 `shadow-[…]`：
 // authored 的 `.glass-pop` 排在 `@tailwind utilities` **之后**，同特异度下源码序后者胜，
 // 挂了也是死类（editor-suggest.tsx:30 早把这条层叠规则写在案）。
-const POPOVER_SHELL =
-  'absolute bottom-full left-0 z-50 mb-1.5 rounded-[var(--r-ctl)] py-1 glass-pop'
+const POPOVER_SHELL = 'absolute bottom-full z-50 mb-1.5 rounded-[var(--r-ctl)] py-1 glass-pop'
 
-export function ComposerPlusMenu({ variant }: { variant: 'icon' | 'chip' }): React.JSX.Element {
+export function ComposerPlusMenu({
+  variant,
+  mention = false
+}: {
+  variant: 'icon' | 'chip'
+  /** 出不出「引用邮件」项（→ MentionPopover）。默认 false，见文件头最后一段。 */
+  mention?: boolean
+}): React.JSX.Element {
   const { t } = useTranslation()
   const aui = useAui()
+  const controls = useChatComposerControls()
   const [open, setOpen] = React.useState(false)
-  // 二级视图：'root' = 菜单本体，'connectors' = 外部连接面板（同一锚点上换内容，360px 面板里
-  // 放不下并排的两层弹层，且并排会让「点外关闭」的边界含糊）。
-  const [view, setView] = React.useState<'root' | 'connectors'>('root')
+  // 「引用邮件」弹层的开关。与菜单互斥：点菜单项 = 收菜单 + 开弹层（两层同锚点叠着只会互相遮）。
+  const [mentionOpen, setMentionOpen] = React.useState(false)
   const ref = React.useRef<HTMLDivElement>(null)
   const inputRef = React.useRef<HTMLInputElement>(null)
-  const connectors = useConnectorQuickRows()
 
   // 出入场（WP-03）：弹层锚在 composer 上方（bottom-full 向上展开），配方与同一条工具条上的
-  // MentionPopover 逐字同款 —— transformOrigin 'bottom left'（一级/二级都 left-0 锚定）。
+  // MentionPopover 逐字同款 —— transformOrigin 'bottom left'（left-0 锚定）。
   // scopeRef 挂在**弹层本体**上；外层 `ref` 仍是 outside-click 的容器（它含触发器，不能合并）。
   const { shouldRender, scopeRef: popRef } = useExitAnimation<HTMLDivElement>(open, {
     backdrop: false,
@@ -67,10 +74,6 @@ export function ComposerPlusMenu({ variant }: { variant: 'icon' | 'chip' }): Rea
     enterDuration: DUR.fast
   })
 
-  // 🔴 view 复位放在**开**的那一侧，不在 close()：接了退场动画之后，关闭时把 view 拨回 'root'
-  // 会让二级面板在淡出的 120ms 里当场变回一级菜单（宽度 268→196 同时抽一下）。复位在 open 这
-  // 一侧同样守住了「下次点「+」必须是一级菜单」这条契约（ConnectorQuickPanel.test.tsx 的
-  // 「view 不残留」用例正是钉它）。
   const close = React.useCallback((): void => {
     setOpen(false)
   }, [])
@@ -79,7 +82,7 @@ export function ComposerPlusMenu({ variant }: { variant: 'icon' | 'chip' }): Rea
     if (open) {
       close()
     } else {
-      setView('root')
+      setMentionOpen(false)
       setOpen(true)
     }
   }, [open, close])
@@ -89,8 +92,6 @@ export function ComposerPlusMenu({ variant }: { variant: 'icon' | 'chip' }): Rea
     const onDoc = (e: MouseEvent): void => {
       if (ref.current && !ref.current.contains(e.target as Node)) close()
     }
-    // Escape 收整个弹层（两级都收）；回上一级走面板里的「返回」钮 —— 兄弟 picker 全是
-    // 「Escape = 关」，在这里独创「Escape = 回上一级」只会让肌肉记忆落空。
     const onKey = (e: KeyboardEvent): void => {
       if (e.key === 'Escape') close()
     }
@@ -118,22 +119,13 @@ export function ComposerPlusMenu({ variant }: { variant: 'icon' | 'chip' }): Rea
   }
 
   const label = t('chat.composer.plus')
-  const connectorsLabel = t('chat.connectors.label')
-  const tipText = connectors.anyActive ? `${label} · ${t('chat.connectors.activeHint')}` : label
+  const mentionLabel = t('chat.mention.title')
 
   const triggerBody = (
     <>
-      {/* 尺寸跟各自工具条的既有档：邮件面 13（与 @ / Brain / 厂商图标同档）、agent 面 17
-          （与被它取代的旧「+」圆钮同档，视觉不跳）。 */}
+      {/* 尺寸跟各自工具条的既有档：邮件面 13（与厂商图标同档）、agent 面 17（与被它取代的
+          旧「+」圆钮同档，视觉不跳）。 */}
       <Plus size={variant === 'icon' ? 13 : 17} strokeWidth={2} />
-      {/* A2：外部连接已启用的常驻信号 —— 克制到一颗点，不抢「+」本身的语义。 */}
-      {connectors.anyActive && (
-        <span
-          aria-hidden="true"
-          data-testid="plus-connector-dot"
-          className="absolute right-0.5 top-0.5 h-1.5 w-1.5 rounded-full bg-coral/100"
-        />
-      )}
     </>
   )
 
@@ -173,74 +165,58 @@ export function ComposerPlusMenu({ variant }: { variant: 'icon' | 'chip' }): Rea
 
   return (
     <div className="relative" ref={ref}>
-      <HoverTip text={tipText} side="top">
+      <HoverTip text={label} side="top">
         {trigger}
       </HoverTip>
-      {/* 一级/二级共用**一个**弹层壳（同锚点换内容 —— 视图切换本来就是硬切，两个条件挂载的
-          兄弟节点只会让 GSAP scope 在切换时换宿主）。壳负责几何 + 材质 + 出入场，role /
-          aria-label / 宽度跟着 view 走。后续 WP-13 若改 flyout，只需换壳内布局。 */}
       {shouldRender && (
         <div
           ref={popRef}
-          role={view === 'root' ? 'menu' : 'dialog'}
-          aria-label={view === 'root' ? label : connectorsLabel}
-          className={cn(POPOVER_SHELL, view === 'root' ? 'w-[196px]' : 'w-[268px]')}
+          role="menu"
+          aria-label={label}
+          className={cn(POPOVER_SHELL, 'left-0 w-[196px]')}
         >
-          {view === 'root' ? (
-            <>
-              <button
-                type="button"
-                role="menuitem"
-                onClick={() => {
-                  // 先收菜单再拉文件选择器：input 挂在 wrapper 上（不在菜单里），关掉不影响它。
-                  close()
-                  inputRef.current?.click()
-                }}
-                className={MENU_ITEM}
-              >
-                <Paperclip size={13} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-                <span className="truncate">{t('chat.attachment.add')}</span>
-              </button>
-              {connectors.available && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  aria-haspopup="dialog"
-                  onClick={() => setView('connectors')}
-                  className={MENU_ITEM}
-                >
-                  <Blocks size={13} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
-                  <span className="truncate">{connectorsLabel}</span>
-                  {connectors.anyActive && (
-                    <span
-                      aria-hidden="true"
-                      className="ml-auto h-1.5 w-1.5 shrink-0 rounded-full bg-coral/100"
-                    />
-                  )}
-                </button>
-              )}
-            </>
-          ) : (
-            <>
-              {/* 二级标题条：返回 + 标题。下边框与底部审批提示的 border-t 同一档，
-                  让「头 / 行 / 提示」三段读起来是同一套分节。 */}
-              <div className="mb-1 flex items-center gap-1 border-b border-ink-border-soft px-1.5 pb-1">
-                <button
-                  type="button"
-                  onClick={() => setView('root')}
-                  aria-label={t('chat.composer.back')}
-                  className="grid size-5 shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-3 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
-                >
-                  <ChevronLeft size={13} strokeWidth={2} />
-                </button>
-                <span className="truncate text-meta font-medium text-ink-fg-1">
-                  {connectorsLabel}
-                </span>
-              </div>
-              <ConnectorQuickContent rows={connectors.rows} onClose={close} />
-            </>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              // 先收菜单再拉文件选择器：input 挂在 wrapper 上（不在菜单里），关掉不影响它。
+              close()
+              inputRef.current?.click()
+            }}
+            className={MENU_ITEM}
+          >
+            <Paperclip size={13} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+            <span className="truncate">{t('chat.attachment.add')}</span>
+          </button>
+          {mention && controls && (
+            <button
+              type="button"
+              role="menuitem"
+              aria-haspopup="dialog"
+              onClick={() => {
+                close()
+                setMentionOpen(true)
+              }}
+              className={MENU_ITEM}
+            >
+              <AtSign size={13} strokeWidth={2} className="shrink-0 text-ink-fg-3" />
+              <span className="truncate">{mentionLabel}</span>
+            </button>
           )}
         </div>
+      )}
+      {/* 引用邮件（原工具条上那颗独立 @ 钮的去处）：同一颗「+」上换出来的第二个弹层。
+          它自带 outside-click / Escape / 搜索，锚定 left-2 —— 「+」现在是左组第一个控件
+          （x=12），所以 280px 弹层右缘 300，320px 窄面也不越界。 */}
+      {mention && controls && (
+        <MentionPopover
+          open={mentionOpen}
+          onClose={() => setMentionOpen(false)}
+          onSelect={(hit) => {
+            controls.onAddMention(hit)
+            setMentionOpen(false)
+          }}
+        />
       )}
       <input
         ref={inputRef}

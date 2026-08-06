@@ -28,8 +28,13 @@
 //    provider 下，只看 providerId/protocol 会给 GPT 打 Anthropic 彩标。**组标题除外**：它渲染
 //    的是 provider 本身，见下面 groupCatalogProviderId 的注释。
 //
-// 布局红线（PRD）：邮件面板 360px、左组已 6 控件 —— **升级现有控件、不新增第七个**；
-// 弹层 left-0 锚在第 3 个控件（x≈76px）上，宽 264px → 右缘 ≈340 < 348，不越界。
+// 🔴 08-05 WP-13+16b：本控件**搬到工具条右组**（环 / effort / 模型 / 发送，owner 拍板的
+//    Notion 式布局），锚定随之从 `left-0` 改 **`right-0`**（origin 同步 'bottom right'）。
+//    理由是算式：右组控件的 left 锚会把 264px 弹层推出右边界（邮件面 360px 里模型钮 x≈284，
+//    left-0 → 右缘 548，越界 200）；改成与触发器右缘对齐后 → [284+28-264, 312] = [48, 312]，
+//    两端都在 [12, 348] 内。窄 chip 面（320px 侧栏）同理：右缘对齐恒不越右边界，左缘最坏情况
+//    也只是贴到卡片左边。**锚定方式跟着控件在行里的位置走，没有普适答案**（ApprovalModePicker
+//    的注释里有同一条教训）。
 // 能力卡不受这条约束：它 portal 到 body，按视口做响应式定位（见 ModelDetailCard）。
 // 不做搜索框（YAGNI 已拍板：lobe 的搜索是几百模型的规模方案，本仓十来个，且 owner 复核
 // 时明确说「搜索框确实不关键」）。
@@ -171,13 +176,15 @@ export function ModelPicker({
   const [open, setOpen] = useState(false)
   const ref = useRef<HTMLDivElement>(null)
   const activeRowRef = useRef<HTMLButtonElement>(null)
-  // 出入场（WP-03）：配方与同一条工具条上的 MentionPopover 逐字同款（bottom-full 向上展开 →
-  // transformOrigin 'bottom left'）。scopeRef 兼作原 menuRef —— hover 卡量的就是这个弹层的 rect。
+  // 出入场（WP-03）：配方与同一条工具条上的 MentionPopover 逐字同款（bottom-full 向上展开）。
+  // 🔴 唯一偏离：transformOrigin 'bottom **right**' —— WP-16b 起本弹层是右缘锚定（见文件头），
+  // 照抄 'bottom left' 会让它从触发器左侧 264px 处长出来。scopeRef 兼作原 menuRef —— hover 卡
+  // 量的就是这个弹层的 rect。
   // W8 重写这个组件时把旧 ComposerModelPicker 的出入场丢了（motion-gsap.md §8 却一直登记着
   // 「已落地」），这里是把台账补回事实。
   const { shouldRender, scopeRef: menuRef } = useExitAnimation<HTMLDivElement>(open, {
     backdrop: false,
-    from: { autoAlpha: 0, y: 4, scale: 0.98, transformOrigin: 'bottom left' },
+    from: { autoAlpha: 0, y: 4, scale: 0.98, transformOrigin: 'bottom right' },
     enterDuration: DUR.fast
   })
   // hover 能力卡：{ ref, anchor } —— anchor 在 mouseenter 那一刻从弹层 rect 量一次。
@@ -330,7 +337,7 @@ export function ModelPicker({
           // 阴影走 `.glass-pop` 自带的 --pop-shadow（authored 规则排在 utilities 之后，
           // 同特异度源码序胜 —— 再挂 `shadow-[…]` 是死类）。
           className={cn(
-            'absolute bottom-full left-0 z-50 mb-1.5 w-[264px] rounded-[var(--r-ctl)] py-1',
+            'absolute bottom-full right-0 z-50 mb-1.5 w-[264px] rounded-[var(--r-ctl)] py-1',
             'glass-pop'
           )}
           onMouseLeave={() => setHovered(null)}

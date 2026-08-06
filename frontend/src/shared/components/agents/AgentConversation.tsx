@@ -23,8 +23,7 @@ import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
-import { type BackendChoice } from '@shared/components/chat/BackendSelector'
-import { backendSupportsThinking } from '@shared/components/chat/backend_thinking'
+import { useComposerEffort } from '@shared/hooks/useComposerEffort'
 import { useComposerModels } from '@shared/hooks/useComposerModels'
 import { useSessionModelPreference } from '@shared/hooks/useSessionModelPreference'
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
@@ -57,9 +56,6 @@ import { AgentRecordConversation } from './AgentRecordView'
 // W8 (task 08-04 WP2) — the model pref moved into useSessionModelPreference (shared with the email
 // panel): PER-SESSION truth (ai_chat_sessions.backend_model) with the localStorage key demoted to
 // "default for a NEW conversation". The former local readModelPref/writeModelPref twins are gone.
-
-/** No-op for the removed thinking toggle — the agent view follows the model (see thinkingActive). */
-const NOOP = (): void => {}
 
 /** Momentary placeholder during a context-injection session switch (messages catching up to the
  *  active session) — neutral, since it renders OUTSIDE the runtime provider. */
@@ -161,15 +157,13 @@ export function AgentConversation({
     sessionModel,
     persist: persistSessionModel
   })
-  const backendChoice = useMemo<BackendChoice>(
-    () => ({ kind: 'ai-sdk', model, agentPageId: null }),
-    [model]
-  )
-  // 去思考开关 (user feedback): the agent view follows the model — extended thinking is on
-  // automatically whenever the active model supports it (Claude); there is no UI toggle.
-  const thinkingSupported = backendSupportsThinking(backendChoice)
-  const thinkingActive = thinkingSupported
   const availableModels = useComposerModels()
+  // 08-05 WP-16b — 思考不再是「跟着模型自动开」（去思考开关那一版的做法），而是与邮件面同一套
+  // effort 档位菜单：`bodyTier` 进请求体（applicable=false → undefined = 请求体不带 effort 键，
+  // 16a 硬契约），`control` 交给 composer 的 EffortPicker。
+  const effort = useComposerEffort({ model, availableModels })
+  // 「这轮到底会不会思考」的诚实投影（喂 contextSnapshot.capabilities）。
+  const thinkingActive = effort.bodyTier !== undefined && effort.bodyTier !== 'none'
 
   const [mentions, setMentions] = useState<SearchHit[]>([])
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
@@ -276,11 +270,7 @@ export function AgentConversation({
   )
   const composerControls = useMemo<ChatComposerControls>(
     () => ({
-      // No thinking toggle in the agent view (去思考开关) — thinkingActive follows the model;
-      // these fields satisfy the shared ChatComposerControls type, AgentComposer ignores them.
-      thinkingSupported,
-      thinkingEnabled: thinkingActive,
-      onToggleThinking: NOOP,
+      effort: effort.control,
       model,
       availableModels,
       onModelChange,
@@ -296,8 +286,7 @@ export function AgentConversation({
       sessionId: chatActiveSessionId
     }),
     [
-      thinkingSupported,
-      thinkingActive,
+      effort.control,
       model,
       availableModels,
       onModelChange,
@@ -643,7 +632,9 @@ export function AgentConversation({
               gatewayBaseUrl={gatewayBaseUrl}
               sessionId={chat.activeSessionId}
               model={model}
-              thinking={thinkingActive}
+              // WP-16b — effort 档位进请求体；undefined = 不带这个键（16a 硬契约）。
+              // 旧的 `thinking={…}` 布尔已删（两个 composer 都换成了档位菜单）。
+              effort={effort.bodyTier}
               approvalMode={approvalMode}
               buildInjectedContext={buildInjectedContext}
               onConsumeInjected={onConsumeInjected}

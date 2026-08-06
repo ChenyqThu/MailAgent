@@ -25,6 +25,7 @@ import { AssistantChatTransport, useChatRuntime } from '@assistant-ui/react-ai-s
 
 import type { AgentContextSnapshot } from '@shared/assistant/context/contextSnapshot'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
+import type { EffortTier } from '@shared/modelCatalog/effortTiers'
 
 import {
   createMailAgentAttachmentAdapter,
@@ -98,8 +99,19 @@ export interface UseMailAgentAiSdkRuntimeOptions {
   onEnsureSession?: () => Promise<number>
   /** chat-panel P4 composer-parity C1-① — per-turn extended-thinking toggle. true → the request body
    *  carries thinking:true and the gateway injects providerOptions (model-family matrix). Off/undefined
-   *  → omitted, byte-identical to the no-thinking path. Changing it rebuilds the transport (in deps). */
+   *  → omitted, byte-identical to the no-thinking path. Changing it rebuilds the transport (in deps).
+   *
+   *  🔴 08-05 WP-16b: **no UI sends this any more** — the Brain toggle was replaced by `effort`
+   *  below. The option (and the gateway's legacy boolean branch) stays for the island-resume replay
+   *  path, which re-runs a FROZEN originalBody that may still carry `thinking:true`. */
   thinking?: boolean
+  /** WP-16b (task 08-05) — effort 档位（canonical `none..max`，词表 @shared/modelCatalog/
+   *  effortTiers）。gateway 只在请求体显式携带**合法**档位时走新路径（`effortCallOptions`，跨协议
+   *  wire 映射），未携带时旧 Brain 布尔路径逐字节保留。
+   *  🔴 面板必须遵守 16a 硬契约：模型没有 reasoning 能力（`EffortModelOptions.applicable === false`）
+   *  时传 undefined —— **不带这个键**，而不是发 `'none'`（见 effort.ts 字段注释：那会让 deepseek 多
+   *  发 `thinking:{type:'disabled'}`、让 openai chat 分支无条件下发 `reasoning_effort`）。 */
+  effort?: EffortTier
   /** composer-parity C2 — resolve the per-send mention/attachment prefix (async: mention excerpts are
    *  fetched). Called once per send; a non-empty result is sent as body.injectedContext (the gateway
    *  prepends it to the model's last user message) and then onConsumeInjected clears the chips. Omitted
@@ -165,6 +177,7 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     initialMessages,
     onEnsureSession,
     thinking,
+    effort,
     buildInjectedContext,
     onConsumeInjected,
     approvalMode,
@@ -274,6 +287,10 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
           ...(model ? { model } : {}),
           ...(system ? { system } : {}),
           ...(thinking ? { thinking: true } : {}),
+          // WP-16b — 档位存在才带这个键（undefined = 模型没有 reasoning 能力 / 只读线程 →
+          // 走 gateway 的旧路径）。与 `thinking` 一样是 transport useMemo 的依赖：换档要重建
+          // transport，而用户是在两轮之间换档，不是流中途。
+          ...(effort ? { effort } : {}),
           // PART 2 — only send approvalMode when relaxing (auto-reversible); 'always'/absent omits it
           // so the gateway default ('always') applies, byte-identical to the pre-toggle body.
           // approvalMode is a transport useMemo dep (like `thinking`) — a settings change rebuilds the
@@ -294,6 +311,7 @@ export function useMailAgentAiSdkRuntime(opts: UseMailAgentAiSdkRuntimeOptions):
     model,
     system,
     thinking,
+    effort,
     approvalMode,
     contextSnapshot,
     onEnsureSession,

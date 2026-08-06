@@ -6,14 +6,16 @@ import { createContext, useContext } from 'react'
 
 import type { SearchHit } from '@shared/api/types'
 import type { ChatAttachment } from '@shared/lib/chat-attachments'
+import type { ComposerEffortControl } from '@shared/hooks/useComposerEffort'
 import type { ComposerModelOption } from '@shared/hooks/useComposerModels'
 
 export interface ChatComposerControls {
-  // C1-① extended thinking. `supported` gates visibility (Claude-only); `enabled` is
-  // the current toggle; onToggle flips + persists (panel owns the localStorage pref).
-  thinkingSupported: boolean
-  thinkingEnabled: boolean
-  onToggleThinking: () => void
+  /** WP-16b (task 08-05) — effort 档位控件的数据 + 选档回调（`useComposerEffort` 的产物）。
+   *  取代了 C1-① 的 `thinkingSupported / thinkingEnabled / onToggleThinking` 三件套（Brain
+   *  布尔开关随之从两个 composer 删除）。
+   *  Optional —— 不供给（只读 notion-agent 线程 / 裸测试渲染）时 effort 菜单整个不渲染，
+   *  与引入前逐字一致。 */
+  effort?: ComposerEffortControl
   // C1-② model picker. `model` is the active providerRef (`providerId:modelId`; a bare legacy
   // id means the 'default' provider — null → backend default); onModelChange re-scopes the panel
   // backend with the SAME ref vocabulary (unchanged since C1-②).

@@ -4,12 +4,14 @@
 // / commands via ComposerTriggerPopover, inline directive chips) and an inline action row below (left:
 // the "+" menu → the SHARED ModelPicker chip; right: send / cancel as round buttons). 08-04 WP6: the
 // in-file AgentAttachmentButton (a "+" that opened the file picker directly) and the standalone
-// connector chip both moved into the shared ComposerPlusMenu — "+" is now a real menu (attachment /
-// connectors), identical on both composers. 08-04 W8: the
+// connector chip both moved into the shared ComposerPlusMenu — "+" is now a real menu, identical on
+// both composers. 08-04 W8: the
 // former in-file AgentModelPicker + ModelVendorIcon + vendorOf were folded into
-// @shared/assistant/components/ModelPicker — one component, both composers. No extended-
-// thinking toggle — the agent view follows the model automatically (AgentConversation sets thinkingActive
-// = thinkingSupported). @ runs an async email FTS search (custom sync-adapter + debounced fetch + isLoading
+// @shared/assistant/components/ModelPicker — one component, both composers. 08-05 WP-13+16b: the
+// external-capability entries (connector / skill) moved on again into ComposerToolsMenu (the slider),
+// the model picker moved to the RIGHT group, and an effort tier menu joined it — the agent view no
+// longer just "follows the model" for thinking, it has the same explicit tier ladder as the mail
+// composer. @ runs an async email FTS search (custom sync-adapter + debounced fetch + isLoading
 // bridge) and inserts a chip; on insert the email is added to controls.mentions so the existing send-time
 // buildMentionContext resolves its body. / fires a slash command (sends a quick-action prompt). Reads
 // model / attachment state from useChatComposerControls(); when no provider is mounted only send / cancel
@@ -41,7 +43,9 @@ import {
 } from '@shared/assistant/components/composerControlsContext'
 import { ApprovalModePicker } from '@shared/assistant/components/ApprovalModePicker'
 import { ComposerPlusMenu } from '@shared/assistant/components/ComposerPlusMenu'
+import { ComposerToolsMenu } from '@shared/assistant/components/ComposerToolsMenu'
 import { ContextUsageRing } from '@shared/assistant/components/ContextUsageRing'
+import { EffortPicker } from '@shared/assistant/components/EffortPicker'
 import { ModelPicker } from '@shared/assistant/components/ModelPicker'
 
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
@@ -329,19 +333,27 @@ export function AgentComposer(): React.JSX.Element {
               autoFocus
               className="scrollbar-thin relative max-h-32 min-h-[2.5rem] w-full resize-none bg-transparent px-2.5 py-1 text-body leading-snug text-ink-fg outline-none [&_.aui-lexical-input]:min-h-lh [&_.aui-lexical-input]:outline-none [&_.aui-lexical-placeholder]:pointer-events-none [&_.aui-lexical-placeholder]:absolute [&_.aui-lexical-placeholder]:left-0 [&_.aui-lexical-placeholder]:right-0 [&_.aui-lexical-placeholder]:top-0 [&_.aui-lexical-placeholder]:truncate [&_.aui-lexical-placeholder]:px-2.5 [&_.aui-lexical-placeholder]:py-1 [&_.aui-lexical-placeholder]:text-ink-fg-3"
             />
+            {/* 08-05 WP-13+16b — 工具条重组：左 [+][滑块][授权]、右 [环][effort][模型][发送]
+                （两面同一套顺序，见 composer.tsx 文件头）。两个组都 min-w-0：320px 侧栏里
+                chip 的文字要能被 truncate 压掉，否则整行会被撑出去。 */}
             <div className="flex items-center justify-between gap-1 px-0.5">
-              <div className="flex items-center gap-0.5">
-                {/* 08-04 WP6 — 「+」不再是「直开文件选择器」的伪装钮，而是真菜单：
-                    附件 + 外部连接（两面同一组件，见 ComposerPlusMenu 文件头）。 */}
+              <div className="flex min-w-0 items-center gap-0.5">
+                {/* 「+」= 往这轮对话里加内容。agent 面的 @ 在正文里（Lexical directive chip），
+                    所以这里**不**给 mention 项 —— 见 ComposerPlusMenu 文件头最后一段。 */}
                 {controls && <ComposerPlusMenu variant="chip" />}
-                {/* 08-04 W8 — 两个 composer 共用的模型选择器（chip variant）。 */}
-                {controls && <ModelPicker controls={controls} variant="chip" />}
+                {/* 滑块 = 配置这轮能用哪些外部能力（外部连接 / 技能 / 去 AI 设置）。 */}
+                {controls && <ComposerToolsMenu variant="chip" />}
                 {/* 07-16 — owner-global 授权模式切换 chip（Manual/Accept Edits/Bypass）。 */}
                 {controls && <ApprovalModePicker variant="chip" />}
               </div>
-              <div className="flex items-center">
+              <div className="flex min-w-0 items-center gap-0.5">
                 {/* WP-15 — 上下文占用（环 / 中性药丸 / 不渲染，见 ContextUsageRing 文件头）。 */}
                 <ContextUsageRing />
+                {/* 08-05 WP-16b — effort 档位（agent 面此前没有任何思考开关，跟着模型走；
+                    现在与邮件面同一套档位菜单）。 */}
+                {controls?.effort && <EffortPicker control={controls.effort} variant="chip" />}
+                {/* 08-04 W8 — 两个 composer 共用的模型选择器（chip variant）。 */}
+                {controls && <ModelPicker controls={controls} variant="chip" />}
                 <ThreadPrimitive.If running={false}>
                   <ComposerPrimitive.Send
                     aria-label={t('chat.composer.send')}

@@ -1452,10 +1452,32 @@
     "thinking": {
       "label": "思考过程",
       "duration": "思考了 {duration}",
-      "streaming": "思考中…",
-      "toggleOn": "开启思考模式（展示模型推理过程）",
-      "toggleOff": "关闭思考模式",
-      "unsupported": "思考模式仅支持 Custom API（Claude）"
+      "streaming": "思考中…"
+    },
+    "effort": {
+      "label": "思考强度",
+      "unsupported": "当前模型不支持调节思考强度",
+      "default": "默认",
+      "hedge": "该模型经中转调用，档位可能不生效",
+      "tier": {
+        "none": "不思考",
+        "low": "低",
+        "medium": "中",
+        "high": "高",
+        "xhigh": "极高",
+        "max": "最高"
+      }
+    },
+    "tools": {
+      "label": "快捷配置",
+      "skills": "技能",
+      "summary": "{enabled}/{total}",
+      "settingsLink": "AI 设置…",
+      "skillsLoading": "加载中…",
+      "skillsEmpty": "暂无可用技能",
+      "skillSaved": "已更新「{name}」",
+      "skillSavedDetail": "约 15 秒内对 AI 生效",
+      "skillSaveFailed": "技能开关保存失败"
     },
     "empty": {
       "noEmail": "选中一封邮件开始对话",

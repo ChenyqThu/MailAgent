@@ -35,7 +35,7 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 import { BackendSelector, type BackendChoice } from '@shared/components/chat/BackendSelector'
 import { ChatHistoryPopover } from '@shared/components/chat/ChatHistoryPopover'
 import { ContextChips } from '@shared/components/chat/ContextChips'
-import { backendSupportsThinking } from '@shared/components/chat/backend_thinking'
+import { useComposerEffort } from '@shared/hooks/useComposerEffort'
 import { useComposerModels } from '@shared/hooks/useComposerModels'
 import { useSessionModelPreference } from '@shared/hooks/useSessionModelPreference'
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
@@ -64,23 +64,10 @@ import { chatMessageToUIMessage } from './uiMessage'
 // conversation". The former local readModelPref/writeModelPref pair (byte-identical twins of the
 // agent view's) live there now, one copy for both surfaces.
 
-// composer-parity C1-① — extended-thinking toggle pref (localStorage contract:
-// '1'/'0'). Panel owns it; the composer toggle reads/writes via controls.
-const THINKING_PREF = 'mailagent.chat.thinkingEnabled'
-function readThinkingPref(): boolean {
-  try {
-    return localStorage.getItem(THINKING_PREF) === '1'
-  } catch {
-    return false
-  }
-}
-function writeThinkingPref(on: boolean): void {
-  try {
-    localStorage.setItem(THINKING_PREF, on ? '1' : '0')
-  } catch {
-    /* ignore — pref persistence is best-effort */
-  }
-}
+// 08-05 WP-16b — composer-parity C1-① 的 Brain 布尔开关（`mailagent.chat.thinkingEnabled`
+// pref + 工具条上那颗 Brain 钮）已删除，取而代之的是 effort 档位（`useComposerEffort` →
+// 全局 pref `mailagent.chat.effort` → 请求体 `effort`）。gateway 的 legacy `body.thinking`
+// 分支保留但不再有任何 UI 会发它（island resume 回放冻结的 originalBody 仍可能带）。
 
 interface AIChatPanelProps {
   /** Full-window popout mode: drop the 360px fixed width, close = window.close(). */
@@ -128,16 +115,6 @@ export function AIChatPanel({
   // D6 — a re-scoped legacy session renders read-only; live turns require 'ai-sdk'.
   const isLegacySession = backendKind !== 'ai-sdk'
 
-  // composer-parity C1-①② — panel-owned extended-thinking + model state, surfaced to the assistant-ui
-  // ThreadComposer (rendered inside the runtime provider) via ChatComposerControlsProvider below.
-  const [thinkingEnabled, setThinkingEnabled] = useState(() => readThinkingPref())
-  const onToggleThinking = useCallback((): void => {
-    setThinkingEnabled((v) => {
-      const next = !v
-      writeThinkingPref(next)
-      return next
-    })
-  }, [])
   // P1-2 (07-15 codex r1) — an in-panel approval decide runs the server-side resume synchronously
   // and holds that session's run lease; disable the composer for its duration (a send would 409).
   // codex r2 [E] — SESSION-scoped: only the deciding session's composer is fenced; switching to
@@ -180,8 +157,12 @@ export function AIChatPanel({
     }),
     [backendKind, model]
   )
-  const thinkingSupported = backendSupportsThinking(backend)
-  const thinkingActive = thinkingSupported && thinkingEnabled
+  // WP-16b — effort 档位（取代 Brain 布尔）。`bodyTier` 直接进请求体（applicable=false →
+  // undefined → 请求体不带 effort 键，16a 硬契约）；`control` 交给 composer 的 EffortPicker。
+  const effort = useComposerEffort({ model: backend.model, availableModels })
+  // 「这轮到底会不会思考」的诚实投影（喂 contextSnapshot.capabilities）：改前是 Brain 布尔，
+  // 现在是「档位适用且不是不思考」。
+  const thinkingActive = effort.bodyTier !== undefined && effort.bodyTier !== 'none'
 
   // composer-parity C2 — @mention + attachment chips (panel-owned, surfaced via composerControls). The
   // mention body excerpts are resolved at SEND time; buildInjectedContext assembles the full prefix,
@@ -218,9 +199,7 @@ export function AIChatPanel({
 
   const composerControls = useMemo<ChatComposerControls>(
     () => ({
-      thinkingSupported,
-      thinkingEnabled,
-      onToggleThinking,
+      effort: effort.control,
       model: backend.model,
       availableModels,
       onModelChange,
@@ -236,9 +215,7 @@ export function AIChatPanel({
       sessionId: chat.activeSessionId
     }),
     [
-      thinkingSupported,
-      thinkingEnabled,
-      onToggleThinking,
+      effort.control,
       backend.model,
       availableModels,
       onModelChange,
@@ -786,7 +763,9 @@ export function AIChatPanel({
                       gatewayBaseUrl={gatewayBaseUrl as string}
                       sessionId={chat.activeSessionId}
                       model={backend.model}
-                      thinking={thinkingActive}
+                      // WP-16b — effort 档位进请求体；undefined = 不带这个键（16a 硬契约）。
+                      // 旧的 `thinking={…}` 布尔已删（Brain 开关随之下线）。
+                      effort={effort.bodyTier}
                       approvalMode={approvalMode}
                       buildInjectedContext={buildInjectedContext}
                       onConsumeInjected={onConsumeInjected}

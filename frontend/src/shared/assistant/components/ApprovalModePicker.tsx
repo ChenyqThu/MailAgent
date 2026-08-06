@@ -3,7 +3,7 @@
 //
 // One shared component, two visual variants (双 composer 落点):
 //   - 'icon' — 7×7 icon button, ThreadComposer's toolbar row (ComposerModelPicker 同款尺寸；弹层
-//     锚定**不同** —— 本入口排在左组最后，left-0 会越界，改居中，见下方 role="menu" 处的算式)
+//     锚定跟着控件位置走 —— 见下方 role="menu" 处的算式，08-05 WP-13 重排后 icon 面改回 left-0)
 //   - 'chip' — rounded-full icon+label chip, AgentComposer's action row (AgentModelPicker 同款)
 // The remote web renders the same component (shared tree, zero fork).
 //
@@ -65,12 +65,17 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
   const [pendingMode, setPendingMode] = useState<GlobalApprovalMode | null>(null)
   const ref = useRef<HTMLDivElement>(null)
   // 出入场（WP-03）：配方抄同一条工具条上的 MentionPopover（bottom-full 向上展开、无 backdrop、
-  // 进场 DUR.fast）。🔴 唯一偏离：transformOrigin 用 'bottom center' 而非 'bottom left' ——
-  // 本弹层是**居中锚定**的（见下方 role="menu" 处的算式），origin 的职责是「从触发器那点长出来」，
-  // 照抄 left 会让它从触发器左侧 124px 处展开。
+  // 进场 DUR.fast）。🔴 唯一偏离：transformOrigin 跟着**锚定方式**走（origin 的职责是「从触发器
+  // 那点长出来」，照抄会让弹层从别处展开）——icon 面 left-0 → 'bottom left'；chip 面居中 →
+  // 'bottom center'。两种锚定的算式见下方 role="menu" 处。
   const { shouldRender, scopeRef: menuRef } = useExitAnimation<HTMLDivElement>(open, {
     backdrop: false,
-    from: { autoAlpha: 0, y: 4, scale: 0.98, transformOrigin: 'bottom center' },
+    from: {
+      autoAlpha: 0,
+      y: 4,
+      scale: 0.98,
+      transformOrigin: variant === 'icon' ? 'bottom left' : 'bottom center'
+    },
     enterDuration: DUR.fast
   })
 
@@ -196,11 +201,15 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
           ref={menuRef}
           role="menu"
           aria-label={label}
-          // 🔴 08-04 WP6 修越界：本入口在邮件面是左组的**最后**一个控件（@ / + / 模型 / 思考 /
-          // 授权模式），触发器 x = 12(px-3) + 4×28 + 4×4 = 140；left-0 锚定时 248px 的弹层右缘
-          // = 388，而 360px 面板的可视右缘只有 348 —— 越界 40px（预存缺陷，check-WP2 实测）。
-          // 改成以触发器为中心：中心 x = 140 + 14 = 154，两侧各 124 → [30, 278]，两端都在内。
-          // （ConnectorQuickPanel 旧版同样的理由用过居中锚定；锚定方式跟触发器在行里的位置走。）
+          // 🔴 锚定按 variant 分两套，因为**两面的触发器位置与可用宽度都不一样**（这不是
+          // 「按 variant 分叉行为」，是同一条几何约束在两组坐标下的解）：
+          //
+          // · icon（邮件面）：08-05 WP-13 重排后本入口是左组第 3 个（+ / 滑块 / 授权模式），
+          //   触发器 x = 12(px-3) + 2×28 + 2×4 = 76 → left-0 时 248px 弹层右缘 = 324 ≤ 348
+          //   （360 - px-3）✓。而 WP6 那版的居中锚定在这个新位置会把左缘推到 76+14-124 = -34，
+          //   顶出左边界 —— 所以这次是**从居中改回 left-0**，理由与当初改居中时同源。
+          // · chip（agent 面）：触发器是变宽的胶囊、且窄侧栏只有 ~288px 可用，left-0 会越右
+          //   边界 → 维持居中（中心两侧各 124，最坏情况仅贴边）。
           //
           // `-translate-x-1/2`（Tailwind v3 = 写 `transform`）与本组件的 GSAP 出入场**可以共存**：
           // GSAP 补间前会解析元素已有的 transform 并保留不参与补间的分量，只叠自己的 y/scale
@@ -208,7 +217,8 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
           // 阴影走 `.glass-pop` 自带的 --pop-shadow（authored 规则排在 utilities 之后，同特异度
           // 源码序胜 —— 再挂 `shadow-[…]` 是死类）。
           className={cn(
-            'absolute bottom-full left-1/2 z-50 mb-1.5 w-[248px] -translate-x-1/2',
+            'absolute bottom-full z-50 mb-1.5 w-[248px]',
+            variant === 'icon' ? 'left-0' : 'left-1/2 -translate-x-1/2',
             'rounded-[var(--r-ctl)] py-1',
             'glass-pop'
           )}

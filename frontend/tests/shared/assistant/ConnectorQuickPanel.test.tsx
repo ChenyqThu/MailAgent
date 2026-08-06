@@ -1,14 +1,15 @@
 // @vitest-environment happy-dom
 //
 // ConnectorQuickPanel — composer 里的「外部连接」快捷面板（08-03 dogfood 批 · D2 lane）。
-// 🔴 08-04 WP6 起入口收编进「+」菜单（`ComposerPlusMenu`），所以这里连**入口本身**一起测：
-// 「有没有那一项」现在就是原来的「渲不渲染那颗钮」，判据（`useConnectorQuickRows`）逐字未变。
+// 🔴 08-04 WP6 起入口收编进菜单，08-05 WP-13 又从「+」搬进**滑块菜单**（`ComposerToolsMenu`），
+// 所以这里连**入口本身**一起测：「有没有那一项」就是原来的「渲不渲染那颗钮」，判据
+// （`useConnectorQuickRows`）逐字未变。
 //
 // 覆盖的契约（每条都是"改错了用户会中招"的那种）：
 //   1. 显隐三态。flag off / flag 未知（加载中、端点不可达）→ 菜单里**没有**「外部连接」项，
 //      且**一个 `/api/connector/*` 请求都不发**（flag off 时那些端点全 409 —— PR5 刚修过一个
 //      「不看 flag 就打 409」的破口，这里钉住不许重犯）。flag on 但零行 → 也不出该项。
-//      🔴 附带钉住「菜单本身恒在」：connector 不可用不等于「+」消失（附件项永远在）。
+//      🔴 附带钉住「菜单本身恒在」：connector 不可用不等于滑块菜单消失（技能项永远在）。
 //   2. 开关写穿全局 `setEnabled` 并 invalidate `qk.connectors()` —— 与设置区**同一个**缓存
 //      键，所以两处即时同步；这正是"面板只是全局位的镜像、不是第二套状态"的判据。
 //   3. 副作用提示：成功后的 toast 必须说清「约 30s 内对 AI 生效」（gateway manifest TTL），
@@ -41,8 +42,13 @@ const { toastSuccess, toastError } = vi.hoisted(() => ({
 }))
 vi.mock('@shared/state/toast', () => ({ toastError, toastSuccess }))
 
+// 两处路由 API：ConnectorQuickContent 用 useNavigate（只在二级挂载时调），滑块菜单本体用
+// useRouter({warn:false})（触发器一挂载就在树上，见 ComposerToolsMenu 文件头）。
 const { navigateMock } = vi.hoisted(() => ({ navigateMock: vi.fn() }))
-vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigateMock }))
+vi.mock('@tanstack/react-router', () => ({
+  useNavigate: () => navigateMock,
+  useRouter: () => ({ navigate: navigateMock })
+}))
 
 // flag fetcher —— 部分 mock，保留 resolveApiBaseUrl 等真实实现（ConnectorsSection.test 同款）。
 const { flagFetch } = vi.hoisted(() => ({ flagFetch: vi.fn<() => Promise<boolean>>() }))
@@ -51,7 +57,11 @@ vi.mock('@shared/components/settings/custom-ai/shared', async (importOriginal) =
   fetchConnectorToolsEnabled: flagFetch
 }))
 
-const { connectorApi } = vi.hoisted(() => ({
+const { connectorApi, chatApi } = vi.hoisted(() => ({
+  chatApi: {
+    listSkills: vi.fn(async () => []),
+    setSkillEnabled: vi.fn(async () => {})
+  },
   connectorApi: {
     list: vi.fn(),
     status: vi.fn(),
@@ -66,10 +76,10 @@ const { connectorApi } = vi.hoisted(() => ({
   }
 }))
 vi.mock('@shared/hooks/useMailApi', () => ({
-  useMailApi: () => ({ connector: connectorApi })
+  useMailApi: () => ({ connector: connectorApi, chat: chatApi })
 }))
 
-import { ComposerPlusMenu } from '../../../src/shared/assistant/components/ComposerPlusMenu'
+import { ComposerToolsMenu } from '../../../src/shared/assistant/components/ComposerToolsMenu'
 
 // ─── fixtures ───────────────────────────────────────────────────────────────
 
@@ -125,23 +135,23 @@ const TOOLS: ConnectorToolSummary[] = [
 ]
 
 const LABEL = 'chat.connectors.label'
-const PLUS = 'chat.composer.plus'
+const TOOLS_LABEL = 'chat.tools.label'
 const ENABLE_SWITCH = 'settings.connectors.enabled · Notion'
 
 function renderUi(variant: 'icon' | 'chip' = 'icon') {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
   return render(
-    createElement(QueryClientProvider, { client: qc }, createElement(ComposerPlusMenu, { variant }))
+    createElement(QueryClientProvider, { client: qc }, createElement(ComposerToolsMenu, { variant }))
   )
 }
 
-/** 打开「+」菜单（一级）。菜单恒在，所以这一步永远成立。 */
+/** 打开滑块菜单（一级）。菜单恒在，所以这一步永远成立。 */
 async function openPlusMenu(): Promise<void> {
-  fireEvent.click(await screen.findByRole('button', { name: PLUS }))
-  await screen.findByRole('menu', { name: PLUS })
+  fireEvent.click(await screen.findByRole('button', { name: TOOLS_LABEL }))
+  await screen.findByRole('menu', { name: TOOLS_LABEL })
 }
 
-/** 「+」→「外部连接」→ 二级面板。 */
+/** 滑块 →「外部连接」→ 二级面板。 */
 async function openPanel(): Promise<void> {
   await openPlusMenu()
   fireEvent.click(await screen.findByRole('menuitem', { name: LABEL }))
@@ -168,7 +178,7 @@ describe('ConnectorQuickPanel — 显隐三态', () => {
     await openPlusMenu()
     expect(screen.queryByRole('menuitem', { name: LABEL })).toBeNull()
     // 菜单本身恒在：附件项永远是它的第一项（connector 不可用 ≠ 「+」消失）。
-    expect(screen.getByRole('menuitem', { name: 'chat.attachment.add' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'chat.tools.skills' })).toBeTruthy()
     expect(connectorApi.list).not.toHaveBeenCalled()
   })
 
@@ -196,7 +206,7 @@ describe('ConnectorQuickPanel — 显隐三态', () => {
     expect(screen.getByText('chat.connectors.approvalHint')).toBeTruthy()
     // 二级面板顶上是返回钮：回一级仍在同一颗「+」上（不是关掉重开）。
     fireEvent.click(screen.getByRole('button', { name: 'chat.composer.back' }))
-    expect(screen.getByRole('menu', { name: PLUS })).toBeTruthy()
+    expect(screen.getByRole('menu', { name: TOOLS_LABEL })).toBeTruthy()
     expect(screen.queryByRole('dialog', { name: LABEL })).toBeNull()
   })
 
@@ -213,14 +223,14 @@ describe('ConnectorQuickPanel — 显隐三态', () => {
     renderUi()
     await openPanel()
 
-    const trigger = screen.getByRole('button', { name: PLUS })
+    const trigger = screen.getByRole('button', { name: TOOLS_LABEL })
     fireEvent.click(trigger)
     expect(screen.queryByRole('dialog', { name: LABEL })).toBeNull()
 
     fireEvent.click(trigger)
-    expect(await screen.findByRole('menu', { name: PLUS })).toBeTruthy()
+    expect(await screen.findByRole('menu', { name: TOOLS_LABEL })).toBeTruthy()
     expect(screen.queryByRole('dialog', { name: LABEL })).toBeNull()
-    expect(screen.getByRole('menuitem', { name: 'chat.attachment.add' })).toBeTruthy()
+    expect(screen.getByRole('menuitem', { name: 'chat.tools.skills' })).toBeTruthy()
   })
 })
 
@@ -229,7 +239,7 @@ describe('ConnectorQuickPanel — 显隐三态', () => {
 // 关闭即同步卸载，中间那 120ms 根本不存在。接了退场动画之后，这两种写法不再等价：复位留在
 // close() 会让二级面板在淡出途中当场变回一级菜单（宽度 268→196 抽一下）。故这里自己把
 // matchMedia 换成「不 reduce」，把**退场期间的形态**钉住；两条断言各杀一种回退。
-describe('ComposerPlusMenu — 二级面板退场期间不闪变（08-05 WP-03）', () => {
+describe('ComposerToolsMenu — 二级面板退场期间不闪变（08-05 WP-03）', () => {
   beforeEach(() => {
     vi.stubGlobal(
       'matchMedia',
@@ -260,13 +270,13 @@ describe('ComposerPlusMenu — 二级面板退场期间不闪变（08-05 WP-03�
     // ① 硬切实现（`{open && …}`）在这一行就已经是 null。
     expect(popoverOf('dialog', LABEL)).not.toBeNull()
     // ② 复位若留在 close()，这一拍已经变成一级菜单（本闸的第二种失败模式）。
-    expect(popoverOf('menu', PLUS)).toBeNull()
+    expect(popoverOf('menu', TOOLS_LABEL)).toBeNull()
 
     await waitFor(() => expect(popoverOf('dialog', LABEL)).toBeNull(), { timeout: 2000 })
 
     // ③ 复位挪到 open 侧后，「下次点「+」必须是一级」这条契约不能丢。
-    fireEvent.click(screen.getByRole('button', { name: PLUS }))
-    await waitFor(() => expect(popoverOf('menu', PLUS)).not.toBeNull(), { timeout: 2000 })
+    fireEvent.click(screen.getByRole('button', { name: TOOLS_LABEL }))
+    await waitFor(() => expect(popoverOf('menu', TOOLS_LABEL)).not.toBeNull(), { timeout: 2000 })
     expect(popoverOf('dialog', LABEL)).toBeNull()
   })
 })
@@ -330,18 +340,19 @@ describe('ConnectorQuickPanel — 管理深链', () => {
     fireEvent.click(screen.getByRole('button', { name: 'chat.connectors.manage' }))
     expect(navigateMock).toHaveBeenCalledWith({ to: '/settings', search: { tab: 'ai' } })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: LABEL })).toBeNull())
-    expect(screen.queryByRole('menu', { name: PLUS })).toBeNull()
+    expect(screen.queryByRole('menu', { name: TOOLS_LABEL })).toBeNull()
   })
 })
 
-// A2 语义迁移（08-04 WP6）：原「入口常驻强调色」= 整枚 connector 圆钮染 coral；入口并进「+」
-// 之后按钮还管附件，整颗染色会谎报「附件也激活了」→ 降级成一颗角标小点。判据一个字没变：
+// A2 语义迁移（08-04 WP6）：原「入口常驻强调色」= 整枚 connector 圆钮染 coral；入口并进菜单
+// 之后按钮还管别的事，整颗染色会谎报「那些也激活了」→ 降级成一颗角标小点。08-05 WP-13 入口
+// 从「+」搬到滑块，点跟着搬（点表达的是「外部连接接着东西」）。判据一个字没变：
 // **至少一个 connected 且 enabled 的 connector**。
-describe('ConnectorQuickPanel — 「+」上的常驻强调点', () => {
-  test('有已连接且已启用的 connector → 「+」挂强调点', async () => {
+describe('ConnectorQuickPanel — 滑块上的常驻强调点', () => {
+  test('有已连接且已启用的 connector → 滑块挂强调点', async () => {
     renderUi()
     await waitFor(() => expect(connectorApi.list).toHaveBeenCalled())
-    await waitFor(() => expect(screen.queryByTestId('plus-connector-dot')).not.toBeNull())
+    await waitFor(() => expect(screen.queryByTestId('tools-connector-dot')).not.toBeNull())
   })
 
   test('行在但被关掉 → 无点（判据是「真的接着东西」，不是「装过」）', async () => {
@@ -350,10 +361,10 @@ describe('ConnectorQuickPanel — 「+」上的常驻强调点', () => {
     ])
     renderUi()
     await waitFor(() => expect(connectorApi.list).toHaveBeenCalled())
-    // 该项仍在菜单里（可以点进去开它），只是「+」上不亮点。
+    // 该项仍在菜单里（可以点进去开它），只是滑块上不亮点。
     await openPlusMenu()
     expect(screen.getByRole('menuitem', { name: LABEL })).toBeTruthy()
-    expect(screen.queryByTestId('plus-connector-dot')).toBeNull()
+    expect(screen.queryByTestId('tools-connector-dot')).toBeNull()
   })
 
   test('开着但授权失效（needs_reauth）→ 无点（工具其实调不动）', async () => {
@@ -363,6 +374,6 @@ describe('ConnectorQuickPanel — 「+」上的常驻强调点', () => {
     renderUi()
     await waitFor(() => expect(connectorApi.list).toHaveBeenCalled())
     await openPlusMenu()
-    expect(screen.queryByTestId('plus-connector-dot')).toBeNull()
+    expect(screen.queryByTestId('tools-connector-dot')).toBeNull()
   })
 })

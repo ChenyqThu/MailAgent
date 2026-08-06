@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 //
-// ComposerPlusMenu — 两个 composer 共用的「+」菜单（task 08-04 WP6）。
+// ComposerPlusMenu — 两个 composer 共用的「+」菜单（task 08-04 WP6 · 08-05 WP-13 重排）。
 //
 // 覆盖的契约（每条都是「改错了用户会中招」的那种）：
 //   1. **「+」是菜单，不是伪装成菜单的按钮**。WP6 之前 agent 面的「+」点下去**直接**弹文件
@@ -10,17 +10,18 @@
 //      （issue #61 Lane 3 的 adapter 管线，与 paste/drop 同一条）。这里在**真 runtime** 上验
 //      到 composer state 收下附件为止，而不是只断言 input.click() 被调过。
 //   3. **两面同一个组件**：icon（邮件面）与 chip（agent 面）开出同一份菜单。
-//   4. **关闭语义**：Escape / 点外都关；两级都关（不留一个吊在半空的一级菜单）。
-//   5. **邮件面 360px 布局红线**（PRD）：happy-dom 不排版（getBoundingClientRect 恒 0），所以
-//      抄 model_picker.test.tsx 的分两半机械化验法 —— (a) 弹层锚定类 + 固定宽度；(b) 在**真的**
-//      ThreadComposer 里断言控件次序（算式唯一会悄悄失效的前提就是有人往前面插钮）。
-//      🔴 顺带钉住 ApprovalModePicker 的越界修复：它现在是左组最后一个控件（x=140），248px
-//      弹层再用 left-0 会伸到 388 > 348，故改居中锚定。
+//   4. **关闭语义**：Escape / 点外都关。
+//   5. **08-05 WP-13 的两处重排**：① 独立的 `@` 钮并进「+」（邮件面 `mention` prop；agent 面
+//      **不给** —— 那边的 @ 是 Lexical 行内 chip，走 MentionPopover 加进去的 mention 会被
+//      AgentComposer 的对账 effect 当场删掉）；② 工具条顺序 = 左 [+][滑块][授权] / 右
+//      [环][effort][模型][发送]。
+//   6. **布局红线**：happy-dom 不排版（getBoundingClientRect 恒 0），所以抄 model_picker.test.tsx
+//      的分两半机械化验法 —— (a) 弹层锚定类 + 固定宽度；(b) 在**真的** composer 里断言控件次序
+//      （算式唯一会悄悄失效的前提就是有人往前面插钮）。🔴 红线场地改钉 **320px + chip**
+//      （侧栏最窄档 SIDEBAR_WIDTH_MIN；旧的 360px 邮件面板分支已无消费者）。
 //
-// connector 侧（那一项出不出、常驻强调点、二级面板全功能）在 ConnectorQuickPanel.test.tsx 里
-// 用全 mock 的 api 测；这里**有意**不 mock `useMailApi` —— 真 api 在 happy-dom 里拿不到
-// `/chat/config`，flag 判定 fail-closed 成 false，于是这里天然覆盖「connector 不可用时菜单
-// 只剩附件项、但菜单本身仍在」这个形态。
+// connector / skill 侧（那一项出不出、常驻强调点、二级面板全功能）在 ConnectorQuickPanel.test.tsx
+// 与 composer_tools_menu.test.tsx 里用全 mock 的 api 测。
 
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
@@ -72,9 +73,6 @@ const MODELS: ComposerModelOption[] = [
 
 function stubControls(over: Partial<ChatComposerControls> = {}): ChatComposerControls {
   return {
-    thinkingSupported: true,
-    thinkingEnabled: false,
-    onToggleThinking: vi.fn(),
     model: 'anthropic:claude-sonnet-4-6',
     availableModels: MODELS,
     onModelChange: vi.fn(),
@@ -117,6 +115,7 @@ function Harness({
 
 const PLUS = (): string => i18n.t('chat.composer.plus')
 const ATTACH_ITEM = (): string => i18n.t('chat.attachment.add')
+const MENTION_ITEM = (): string => i18n.t('chat.mention.title')
 
 function openMenu(): HTMLElement {
   fireEvent.click(screen.getByLabelText(PLUS()))
@@ -142,9 +141,27 @@ describe('ComposerPlusMenu — 「+」是菜单不是直通钮', () => {
     const menu = openMenu()
     expect(trigger.getAttribute('aria-expanded')).toBe('true')
     expect(screen.getByRole('menuitem', { name: ATTACH_ITEM() })).toBeTruthy()
-    // connector 不可用（真 api 在测试环境拿不到 flag → fail-closed）→ 只剩附件一项，
-    // 但菜单**本身**仍在：它是「加东西」的固定落点。
+    // 不给 `mention` prop（agent 面的形态）→ 只剩附件一项，但菜单**本身**仍在：
+    // 它是「加东西进这轮对话」的固定落点。
     expect(menu.querySelectorAll('[role="menuitem"]')).toHaveLength(1)
+  })
+
+  // 08-05 WP-13：邮件面工具条上那颗独立的 `@` 钮并进了「+」。
+  test('mention prop 打开「引用邮件」项：点它收菜单、开 MentionPopover', async () => {
+    render(
+      <Harness>
+        <ComposerPlusMenu variant="icon" mention />
+      </Harness>
+    )
+    const menu = openMenu()
+    expect(menu.querySelectorAll('[role="menuitem"]')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('menuitem', { name: MENTION_ITEM() }))
+    // 菜单收起、弹层接管（两层同锚点叠着只会互相遮）。
+    expect(screen.queryByRole('menu', { name: PLUS() })).toBeNull()
+    const popover = await screen.findByRole('dialog', { name: MENTION_ITEM() })
+    expect(popover).toBeTruthy()
+    // 搜索框在，且是 MentionPopover 那一份（复用旧组件，不是新写一个）。
+    expect(screen.getByLabelText(i18n.t('chat.mention.searchAria'))).toBeTruthy()
   })
 
   test.each(['icon', 'chip'] as const)('%s variant 开出同一份菜单', (variant) => {
@@ -213,26 +230,27 @@ describe('ComposerPlusMenu — 关闭语义', () => {
   })
 })
 
-describe('ComposerPlusMenu — 邮件面 360px 布局红线', () => {
-  test('一级菜单 left-0 + 196px、二级弹层 left-0 + 268px（都不越界）', () => {
+// 🔴 08-05 WP-13：红线场地从「邮件面 360px」改钉 **320px + chip**。理由：AiChatPanel 的
+// `w-[360px]` 分支已无消费者，真实最窄的是浮窗/侧栏的 chip 面（SIDEBAR_WIDTH_MIN=320，
+// AssistantChatModal）。算式里的可用宽按 composer 卡内边距折算 ≈ 288。
+describe('composer 工具条 — 320px 窄面布局红线', () => {
+  test('「+」一级菜单 left-0 + 196px：320px 侧栏也不越界', () => {
     render(
       <Harness>
-        <ComposerPlusMenu variant="icon" />
+        <ComposerPlusMenu variant="chip" />
       </Harness>
     )
     const menu = openMenu()
     expect(menu.className).toContain('left-0')
     expect(menu.className).toContain('w-[196px]')
-    // 触发器 x = 12(px-3) + 1×28(h-7 w-7) + 1×4(gap-1) = 44（左组第 2 个控件）。
-    expect(44 + 196).toBeLessThanOrEqual(360 - 12)
-    // 二级弹层同锚点、268px（内容与 08-03 的面板逐字一致）。
-    expect(44 + 268).toBeLessThanOrEqual(360 - 12)
-    // 🔴 反向：这里**不能**抄 ConnectorQuickPanel 旧版的居中锚定 —— 居中会把 268px 弹层的
-    // 左缘推到 44 + 14 - 134 = -76，改成顶出左边界。
-    expect(44 + 14 - 268 / 2).toBeLessThan(0)
+    // chip 面「+」是左组第 1 个控件，x ≈ 10（p-2 + px-0.5）→ 右缘 206 ≤ ~288。
+    expect(10 + 196).toBeLessThanOrEqual(288)
+    // 「引用邮件」弹层（MentionPopover，left-2 + 280px）在邮件面的账：「+」x=12（px-3，
+    // 左组第 1 个）→ [20, 300]，320px 面的可视右缘 308 之内。
+    expect(12 + 8 + 280).toBeLessThanOrEqual(320 - 12)
   })
 
-  test('🔴 位置前提：真 ThreadComposer 里左组是 @ / + / 模型 / 思考 / 授权模式 五控件', async () => {
+  test('🔴 位置前提：真 ThreadComposer 里 = 左 [+][滑块][授权] / 右 [模型][发送]', async () => {
     render(
       <Harness>
         <ThreadComposer />
@@ -242,16 +260,19 @@ describe('ComposerPlusMenu — 邮件面 360px 布局红线', () => {
     const row = plus.closest('div.flex.items-center.gap-1')
     expect(row).toBeTruthy()
     const buttons = Array.from(row!.querySelectorAll('button'))
-    // 左组 5 个 + 右侧 send/cancel（ThreadPrimitive.If 同一时刻只渲染一个）= 6。
-    expect(buttons).toHaveLength(6)
-    expect(buttons.indexOf(plus as HTMLButtonElement)).toBe(1)
-    // W8 的算式前提未变：模型钮仍是第 3 个（model_picker.test.tsx 的 340 ≤ 348 靠它）。
-    expect(buttons.indexOf(screen.getByLabelText(i18n.t('chat.composer.model')))).toBe(2)
-    // 授权模式是最后一个（第 5 个）—— 下面那条越界修复的算式前提。
-    expect(buttons.indexOf(screen.getByLabelText(i18n.t('chat.approvalMode.label')))).toBe(4)
+    // 左组 3 个 + 右组（effort 只在 controls.effort 供给时才渲染，本 stub 没给）模型 1 个 +
+    // send/cancel（ThreadPrimitive.If 同一时刻只渲染一个）= 5。
+    expect(buttons).toHaveLength(5)
+    expect(buttons.indexOf(plus as HTMLButtonElement)).toBe(0)
+    expect(buttons.indexOf(screen.getByLabelText(i18n.t('chat.tools.label')))).toBe(1)
+    // 授权模式是左组最后一个（第 3 个）—— 下面那条锚定算式的前提。
+    expect(buttons.indexOf(screen.getByLabelText(i18n.t('chat.approvalMode.label')))).toBe(2)
+    // 🔴 模型选择器搬到了**右组**（倒数第二，发送钮之前）—— model_picker.test.tsx 的
+    // right-0 锚定算式靠它。
+    expect(buttons.indexOf(screen.getByLabelText(i18n.t('chat.composer.model')))).toBe(3)
   })
 
-  test('🔴 ApprovalModePicker 越界修复：左组最后一个控件的 248px 弹层改居中锚定', async () => {
+  test('🔴 ApprovalModePicker 重排后改回 left-0：左组第 3 个控件的 248px 弹层不越界', async () => {
     render(
       <Harness>
         <ThreadComposer />
@@ -259,13 +280,13 @@ describe('ComposerPlusMenu — 邮件面 360px 布局红线', () => {
     )
     fireEvent.click(await screen.findByLabelText(i18n.t('chat.approvalMode.label')))
     const menu = screen.getByRole('menu', { name: i18n.t('chat.approvalMode.label') })
-    expect(menu.className).toContain('left-1/2')
-    expect(menu.className).toContain('-translate-x-1/2')
+    expect(menu.className).toContain('left-0')
+    expect(menu.className).not.toContain('-translate-x-1/2')
     expect(menu.className).toContain('w-[248px]')
-    // 触发器 x = 12(px-3) + 4×28 + 4×4 = 140，中心 154；居中后 [30, 278] 都在 [0, 348] 内。
-    // （改前 left-0 → 右缘 140 + 248 = 388，越界 40px —— check-WP2 实测的预存缺陷。）
-    expect(154 - 248 / 2).toBeGreaterThanOrEqual(0)
-    expect(154 + 248 / 2).toBeLessThanOrEqual(360 - 12)
+    // 触发器 x = 12(px-3) + 2×28 + 2×4 = 76 → 右缘 324 ≤ 348（360 - px-3）。
+    expect(76 + 248).toBeLessThanOrEqual(360 - 12)
+    // 🔴 反向：WP6 那版的居中锚定在这个新位置会把左缘推到 76 + 14 - 124 = -34（顶出左边界）。
+    expect(76 + 14 - 248 / 2).toBeLessThan(0)
   })
 })
 
@@ -276,7 +297,7 @@ describe('ComposerPlusMenu — 邮件面 360px 布局红线', () => {
 // 同一拍元素就没了，这条必红。
 // 全局 setup 强制 reduced-motion（那时 useExitAnimation 直切、与硬切不可分辨），所以这里必须自己
 // 把 matchMedia 换成「不 reduce」——写法抄 tests/shared/useExitAnimation.test.tsx。
-describe('composer 三个弹层 — 出入场（退场播完才卸载）', () => {
+describe('composer 四个弹层 — 出入场（退场播完才卸载）', () => {
   beforeEach(() => {
     vi.stubGlobal(
       'matchMedia',
@@ -301,6 +322,7 @@ describe('composer 三个弹层 — 出入场（退场播完才卸载）', () =>
 
   test.each([
     ['「+」菜单', 'chat.composer.plus'],
+    ['滑块菜单', 'chat.tools.label'],
     ['模型选择器', 'chat.composer.model'],
     ['授权模式', 'chat.approvalMode.label']
   ])('%s：Escape 后先留在 DOM 播退场，再卸载', async (_name, labelKey) => {
@@ -349,7 +371,7 @@ describe('composer 三个弹层 — 出入场（退场播完才卸载）', () =>
 })
 
 describe('ComposerPlusMenu — agent 面落点', () => {
-  test('AgentComposer 动作行里「+」在最前，且不再有独立的 connector 圆钮', async () => {
+  test('AgentComposer 左组 = [+][滑块][授权]，「+」在最前且没有独立的 connector 圆钮', async () => {
     render(
       <Harness>
         <AgentComposer />
@@ -360,7 +382,23 @@ describe('ComposerPlusMenu — agent 面落点', () => {
     expect(row).toBeTruthy()
     const buttons = Array.from(row!.querySelectorAll('button'))
     expect(buttons.indexOf(plus as HTMLButtonElement)).toBe(0)
-    // 独立的「外部连接」钮已经不在动作行里（入口只剩「+」这一处）。
+    expect(buttons.indexOf(screen.getByLabelText(i18n.t('chat.tools.label')))).toBe(1)
+    expect(buttons.indexOf(screen.getByLabelText(i18n.t('chat.approvalMode.label')))).toBe(2)
+    // 独立的「外部连接」钮已经不在动作行里（入口只剩滑块菜单这一处）。
     expect(screen.queryByLabelText(i18n.t('chat.connectors.label'))).toBeNull()
+  })
+
+  // 🔴 agent 面**不给** mention 项：那边的 @ 是 Lexical 行内 directive chip，且 AgentComposer
+  // 有一条「chip 没了就把对应 mention 摘掉」的隐私对账 effect —— 从菜单走 MentionPopover 加进去
+  // 的 mention 正文里没有 chip，会被那条 effect 当场删掉（用户看到的是「点了没反应」）。
+  test('agent 面的「+」里没有「引用邮件」项（in-field @ 才是那面的路径）', async () => {
+    render(
+      <Harness>
+        <AgentComposer />
+      </Harness>
+    )
+    fireEvent.click(await screen.findByLabelText(PLUS()))
+    expect(screen.getByRole('menuitem', { name: ATTACH_ITEM() })).toBeTruthy()
+    expect(screen.queryByRole('menuitem', { name: MENTION_ITEM() })).toBeNull()
   })
 })

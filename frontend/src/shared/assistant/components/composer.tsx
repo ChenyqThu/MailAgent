@@ -1,22 +1,25 @@
 // chat-panel P4 Phase 01 + composer-parity — thread composer (assistant-ui ComposerPrimitive).
 //
 // MailAgent-token composer: a vertical strip — the text input on top, a toolbar row
-// below (model picker + extended-thinking toggle on the left, send / cancel on the
-// right). While the thread is running the Send swaps to a Cancel (stop generating)
-// via ThreadPrimitive.If. ComposerPrimitive.Send is auto-disabled on empty input.
+// below (entry menus on the left, model / effort / send on the right). While the thread is
+// running the Send swaps to a Cancel (stop generating) via ThreadPrimitive.If.
+// ComposerPrimitive.Send is auto-disabled on empty input.
 //
-// composer-parity: the model picker + thinking toggle + @mention + attachment chips all read
-// panel-owned state via useChatComposerControls(). When no provider is mounted (controls === null —
-// the read-only notion-agent thread, or a bare test render) the toolbar shows only send/cancel,
-// byte-identical in behaviour to the Phase 01 text-only composer.
+// composer-parity: the model picker + @mention + attachment chips all read panel-owned state via
+// useChatComposerControls(). When no provider is mounted (controls === null — the read-only
+// notion-agent thread, or a bare test render) the toolbar shows only send/cancel, byte-identical in
+// behaviour to the Phase 01 text-only composer.
 //
-// 08-04 WP6: the toolbar's own Paperclip button + the standalone connector button are gone — both
-// live inside the shared ComposerPlusMenu ("+", 2nd control) now, so the left group is 5 controls:
-// @ / + / model / thinking / approval-mode.
+// 08-05 WP-13+16b — 工具条重组（owner 参照 Notion composer，prd「composer 工具条布局」）：
+//   左组 `[+（附件 / 引用邮件）] [滑块（connector / skill 快捷配置）] [授权模式]`
+//   右组 `[context 环] [effort] [模型] [发送]`
+// 两处删除：独立的 `@` 钮（并进「+」）、Brain 布尔开关（被 effort 档位菜单取代 —— 见
+// EffortPicker 文件头；`body.thinking` 自此不再由任何 UI 发出，gateway 的 legacy 分支仍在，
+// island resume 回放冻结的 originalBody 需要它）。
 
 import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, AtSign, Brain, Paperclip, X } from 'lucide-react'
+import { ArrowUp, AtSign, Paperclip, X } from 'lucide-react'
 import {
   AttachmentPrimitive,
   ComposerPrimitive,
@@ -26,101 +29,16 @@ import {
 } from '@assistant-ui/react'
 
 import { cn } from '@shared/lib/cn'
-import { HoverTip } from '@shared/components/ui/HoverTip'
-import { MentionPopover } from '@shared/components/chat/MentionPopover'
 import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 import { formatAttachmentSize } from '@shared/lib/chat-attachments'
 
 import { useChatComposerControls, type ChatComposerControls } from './composerControlsContext'
 import { ApprovalModePicker } from './ApprovalModePicker'
 import { ComposerPlusMenu } from './ComposerPlusMenu'
+import { ComposerToolsMenu } from './ComposerToolsMenu'
 import { ContextUsageRing } from './ContextUsageRing'
+import { EffortPicker } from './EffortPicker'
 import { ModelPicker } from './ModelPicker'
-
-const ICON_BTN =
-  'grid h-7 w-7 place-items-center rounded-md transition-[color,background-color,transform] duration-fast'
-
-/** C1-① extended-thinking toggle — Brain button (coral fill when on). Disabled (greyed, like legacy)
- *  when the active model can't do extended thinking (gpt / notion-agent) so a stale-ON never sends
- *  thinking to a backend that ignores it. The next send streams reasoning into a collapsible block. */
-function ComposerThinkingToggle({
-  controls
-}: {
-  controls: ChatComposerControls
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  const disabled = !controls.thinkingSupported
-  return (
-    <HoverTip
-      text={
-        disabled
-          ? t('chat.thinking.unsupported')
-          : controls.thinkingEnabled
-            ? t('chat.thinking.toggleOff')
-            : t('chat.thinking.toggleOn')
-      }
-      side="top"
-    >
-      <button
-        type="button"
-        disabled={disabled}
-        aria-label={t('chat.thinking.label')}
-        aria-pressed={controls.thinkingEnabled}
-        onClick={() => !disabled && controls.onToggleThinking()}
-        tabIndex={disabled ? -1 : 0}
-        className={cn(
-          ICON_BTN,
-          disabled
-            ? 'cursor-not-allowed text-ink-fg-3 opacity-50'
-            : controls.thinkingEnabled
-              ? 'bg-coral/10 text-coral active:scale-[0.96]'
-              : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg active:scale-[0.96]'
-        )}
-      >
-        <Brain size={13} strokeWidth={2} />
-      </button>
-    </HoverTip>
-  )
-}
-
-/** C2-① @mention — AtSign button + MentionPopover (FTS email search). A selected hit becomes a chip
- *  (controls.onAddMention); the panel resolves its body excerpt + prepends an untrusted block at send. */
-function ComposerMentionButton({
-  controls
-}: {
-  controls: ChatComposerControls
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  const [open, setOpen] = useState(false)
-  return (
-    <div className="relative">
-      <HoverTip text={t('chat.mention.title', { defaultValue: 'Reference an email' })} side="top">
-        <button
-          type="button"
-          onClick={() => setOpen((v) => !v)}
-          aria-label={t('chat.mention.title', { defaultValue: 'Reference an email' })}
-          aria-expanded={open}
-          className={cn(
-            ICON_BTN,
-            open
-              ? 'bg-coral/10 text-coral active:scale-[0.96]'
-              : 'text-ink-fg-2 hover:bg-ink-4 hover:text-ink-fg active:scale-[0.96]'
-          )}
-        >
-          <AtSign size={13} strokeWidth={2} />
-        </button>
-      </HoverTip>
-      <MentionPopover
-        open={open}
-        onClose={() => setOpen(false)}
-        onSelect={(hit) => {
-          controls.onAddMention(hit)
-          setOpen(false)
-        }}
-      />
-    </div>
-  )
-}
 
 /** One pending-attachment chip. An image chip swaps the paperclip for a thumbnail of the file
  *  itself (objectURL over attachment.file — the adapter's prepared data URL isn't exposed here),
@@ -299,21 +217,23 @@ export function ThreadComposer(): React.JSX.Element {
         <div className="flex items-center gap-1">
           {controls && (
             <>
-              <ComposerMentionButton controls={controls} />
-              {/* 08-04 WP6 — 「+」菜单收编附件 + 外部连接（两面同一颗，见 ComposerPlusMenu
-                  文件头；工具条因此从 6 个平铺控件收敛到 5 个）。 */}
-              <ComposerPlusMenu variant="icon" />
-              {/* 08-04 W8 — 两个 composer 共用的模型选择器（icon variant）。 */}
-              <ModelPicker controls={controls} variant="icon" />
-              <ComposerThinkingToggle controls={controls} />
+              {/* 08-05 WP-13 — 「+」= 往这轮对话里加内容：附件 + 引用邮件（原独立 @ 钮）。 */}
+              <ComposerPlusMenu variant="icon" mention />
+              {/* 08-05 WP-13 — 滑块 = 配置这轮能用哪些外部能力（外部连接 / 技能 / 去 AI 设置）。 */}
+              <ComposerToolsMenu variant="icon" />
               {/* 07-16 — owner-global 授权模式切换（Manual/Accept Edits/Bypass；backend 持久化，
-                双 composer + 远程 web 同组件）。 */}
+                双 composer + 远程 web 同组件）。08-05 owner 拍板：保留为独立控件，不并进滑块。 */}
               <ApprovalModePicker variant="icon" />
             </>
           )}
-          <div className="ml-auto flex items-center">
+          <div className="ml-auto flex min-w-0 items-center gap-1">
             {/* WP-15 — 上下文占用（环 / 中性药丸 / 不渲染，见 ContextUsageRing 文件头）。 */}
             <ContextUsageRing />
+            {/* 08-05 WP-16b — effort 档位（取代 Brain 布尔）。controls.effort 缺席（旧测试 /
+                只读线程）→ 整个不渲染，与引入前逐字一致。 */}
+            {controls?.effort && <EffortPicker control={controls.effort} variant="icon" />}
+            {/* 08-04 W8 — 两个 composer 共用的模型选择器（icon variant）。 */}
+            {controls && <ModelPicker controls={controls} variant="icon" />}
             <ThreadPrimitive.If running={false}>
               <ComposerPrimitive.Send
                 aria-label={t('chat.composer.send', { defaultValue: 'Send' })}
