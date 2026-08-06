@@ -21,7 +21,7 @@
 // ConnectorQuickPanel.test.tsx 里测，那份文件的入口已随本包从「+」改成滑块。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createElement } from 'react'
 
@@ -184,19 +184,48 @@ describe('toolsFlyoutFits — 门槛算式', () => {
   })
 })
 
-describe('ComposerToolsMenu — 未展开不打请求', () => {
-  test('菜单没开 → 一次 listSkills 都不发；开了才发，并渲染 N/M 摘要', async () => {
+// 🔴 计数闸（08-05 WP-13 复核补）。滑块的触发器**一挂载就在工具条上**，所以这个组件里的每一条
+// query 都必须在 `open` 门后面 —— 漏一条 = 每渲染一次 composer 就多打一发 loopback 请求。
+// 首版漏了 connector 那两发（`useConnectorQuickRows()` 无参调用 = 无条件拉取），实测
+// `composer_plus_menu.test.tsx` 一轮往 serve-api 发 7 次 `/api/chat/config`，而同一个菜单里的
+// skill 摘要（`enabled: open`）只发 1 次 —— 自相矛盾正是被抓住的地方。本组三条断言覆盖全部
+// 三条查询；把 `useConnectorQuickRows(open)` 改回无参即必红（mutation 已自验）。
+describe('ComposerToolsMenu — 未展开不打请求（三条查询全在门后）', () => {
+  test('🔴 菜单没开 → flag / connector list / listSkills 一发都不打', async () => {
     renderMenu()
-    // 「+」旁边这颗钮是常驻的：它一挂载就打请求 = 每个 chat 面首帧多一发。
-    await waitFor(() => expect(flagFetch).toHaveBeenCalled())
+    await screen.findByRole('button', { name: TOOLS_LABEL })
+    // 放行几轮宏/微任务：漏门的 query 是在挂载 effect 里起跑的，这里要给它足够机会跑出来，
+    // 否则「没打请求」可能只是断言太早。
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 0))
+    })
+    expect(flagFetch).not.toHaveBeenCalled()
+    expect(connectorApi.list).not.toHaveBeenCalled()
     expect(chatApi.listSkills).not.toHaveBeenCalled()
+  })
 
+  test('打开 → 三条各拉一次，N/M 摘要就位', async () => {
+    renderMenu()
     await openMenu()
     await waitFor(() => expect(chatApi.listSkills).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(flagFetch).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(connectorApi.list).toHaveBeenCalledTimes(1))
     // 摘要 = 已启用且可用 / 总数（SKILLS 里 email 开着可用、kos 关着且不可用）。
     await waitFor(() =>
       expect(tMock).toHaveBeenCalledWith('chat.tools.summary', { enabled: 1, total: 2 })
     )
+  })
+
+  test('关掉再打开 → staleTime 内走缓存，不重复拉', async () => {
+    renderMenu()
+    await openMenu()
+    await waitFor(() => expect(connectorApi.list).toHaveBeenCalledTimes(1))
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu', { name: TOOLS_LABEL })).toBeNull())
+    await openMenu()
+    await waitFor(() => expect(chatApi.listSkills).toHaveBeenCalledTimes(1))
+    expect(flagFetch).toHaveBeenCalledTimes(1)
+    expect(connectorApi.list).toHaveBeenCalledTimes(1)
   })
 })
 

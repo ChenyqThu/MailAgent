@@ -8,6 +8,17 @@
 //   flag 未知 / 加载中 → **按 off 处理**（`flagEnabled !== true`），list 查询 disabled，
 //   一个 `/api/connector/*` 请求都不发；flag on 但零行 → `available=false`（打开只有一片
 //   空白的菜单项是纯噪音）。只有 flag on **且**至少一行时 `available` 才为 true。
+//
+// 🔴 08-05 WP-13 复核补：`enabled` 参数（默认 true，既有调用点语义逐字不变）。滑块菜单的
+// 触发器**一挂载就在工具条上**，而这个 hook 无条件跑 = 每次渲染 composer 就往 serve-api 打
+// 两发（`/api/chat/config` flag + `/api/connector/list`），哪怕用户从没点开过菜单 —— 实测
+// `composer_plus_menu.test.tsx` 一轮 7 发 flag 请求。这与同一个菜单里 skill 摘要那条
+// 「未展开不打请求」纪律自相矛盾，故把门给出来，由调用方传 `open`。
+//   · `enabled=false` 时**只是不发请求，仍照常读共享缓存**（react-query 的 `enabled:false`
+//     不影响 `data` 命中）—— 所以设置页拉过 `qk.connectors()` 之后，菜单不用打开也有数据。
+//   · 代价（有意接受，已随复核报给上游）：`anyActive` 驱动的**常驻强调点**从「恒准」降级为
+//     「知道了才亮」——首次会话里用户没开过菜单、也没进过设置页时不亮。语义仍不撒谎（亮 =
+//     确实有已连接且启用的 connector），只是「不亮」从「没有」变成「没有或还不知道」。
 
 import { useQuery } from '@tanstack/react-query'
 
@@ -24,12 +35,13 @@ export type ConnectorQuickRows = {
   anyActive: boolean
 }
 
-export function useConnectorQuickRows(): ConnectorQuickRows {
+export function useConnectorQuickRows(enabled = true): ConnectorQuickRows {
   const api = useMailApi()
 
   const { data: flagEnabled } = useQuery<boolean>({
     queryKey: qk.chat.config('connectorToolsEnabled'),
     queryFn: fetchConnectorToolsEnabled,
+    enabled,
     staleTime: 30_000,
     retry: false
   })
@@ -37,7 +49,9 @@ export function useConnectorQuickRows(): ConnectorQuickRows {
   const list = useQuery<ConnectorSummary[]>({
     queryKey: qk.connectors(),
     queryFn: () => api.connector.list(),
-    enabled: flagEnabled === true,
+    // 两道门是**与**关系：调用方的 enabled 在前（没展开就一发都不打），flag 判定在后
+    // （PR5 那条「不看 flag 就打 409」的纪律一个字不动）。
+    enabled: enabled && flagEnabled === true,
     staleTime: 10_000,
     retry: false
   })

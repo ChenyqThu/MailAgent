@@ -172,7 +172,11 @@ export function ComposerToolsMenu({ variant }: { variant: 'icon' | 'chip' }): Re
   // 一律走替换式，即收编前的行为。
   const [flyout, setFlyout] = React.useState(false)
   const ref = React.useRef<HTMLDivElement>(null)
-  const connectors = useConnectorQuickRows()
+  // 🔴 与 skill 摘要同一条纪律：**未展开不打请求**。触发器一挂载就在工具条上，这个 hook 若
+  // 无条件跑，每渲染一次 composer 就是两发 loopback（flag + list）—— 复核实测
+  // `composer_plus_menu.test.tsx` 一轮打 7 发。`enabled=false` 仍读共享缓存（设置页拉过就有
+  // 数据），代价是常驻强调点降级成「知道了才亮」，见 useConnectorQuickRows 文件头。
+  const connectors = useConnectorQuickRows(open)
   const skillSummary = useSkillSummary(open)
 
   const subOpen = open && view !== 'root'

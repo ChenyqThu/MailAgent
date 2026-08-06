@@ -146,14 +146,14 @@ function renderUi(variant: 'icon' | 'chip' = 'icon') {
 }
 
 /** 打开滑块菜单（一级）。菜单恒在，所以这一步永远成立。 */
-async function openPlusMenu(): Promise<void> {
+async function openToolsMenu(): Promise<void> {
   fireEvent.click(await screen.findByRole('button', { name: TOOLS_LABEL }))
   await screen.findByRole('menu', { name: TOOLS_LABEL })
 }
 
 /** 滑块 →「外部连接」→ 二级面板。 */
 async function openPanel(): Promise<void> {
-  await openPlusMenu()
+  await openToolsMenu()
   fireEvent.click(await screen.findByRole('menuitem', { name: LABEL }))
   await screen.findByRole('dialog', { name: LABEL })
 }
@@ -174,8 +174,10 @@ describe('ConnectorQuickPanel — 显隐三态', () => {
   test('flag off → 菜单里无「外部连接」项，且不打 /api/connector 请求', async () => {
     flagFetch.mockResolvedValue(false)
     renderUi()
+    // 🔴 flag 查询本身也在 open 门后（composer_tools_menu.test.tsx 的计数闸钉这条），
+    // 所以先开菜单再等它 —— 顺序反了会等一个永远不会发生的调用。
+    await openToolsMenu()
     await waitFor(() => expect(flagFetch).toHaveBeenCalled())
-    await openPlusMenu()
     expect(screen.queryByRole('menuitem', { name: LABEL })).toBeNull()
     // 菜单本身恒在：附件项永远是它的第一项（connector 不可用 ≠ 「+」消失）。
     expect(screen.getByRole('menuitem', { name: 'chat.tools.skills' })).toBeTruthy()
@@ -185,8 +187,8 @@ describe('ConnectorQuickPanel — 显隐三态', () => {
   test('flag 未知（fetch 永不 settle）→ 按 off 处理，同样零请求', async () => {
     flagFetch.mockImplementation(() => new Promise<boolean>(() => {}))
     renderUi()
+    await openToolsMenu()
     await waitFor(() => expect(flagFetch).toHaveBeenCalled())
-    await openPlusMenu()
     expect(screen.queryByRole('menuitem', { name: LABEL })).toBeNull()
     expect(connectorApi.list).not.toHaveBeenCalled()
   })
@@ -194,8 +196,8 @@ describe('ConnectorQuickPanel — 显隐三态', () => {
   test('flag on 但零行 → 无该项（空面板的入口是纯噪音）', async () => {
     connectorApi.list.mockResolvedValue([])
     renderUi()
+    await openToolsMenu()
     await waitFor(() => expect(connectorApi.list).toHaveBeenCalled())
-    await openPlusMenu()
     expect(screen.queryByRole('menuitem', { name: LABEL })).toBeNull()
   })
 
@@ -348,11 +350,27 @@ describe('ConnectorQuickPanel — 管理深链', () => {
 // 之后按钮还管别的事，整颗染色会谎报「那些也激活了」→ 降级成一颗角标小点。08-05 WP-13 入口
 // 从「+」搬到滑块，点跟着搬（点表达的是「外部连接接着东西」）。判据一个字没变：
 // **至少一个 connected 且 enabled 的 connector**。
-describe('ConnectorQuickPanel — 滑块上的常驻强调点', () => {
-  test('有已连接且已启用的 connector → 滑块挂强调点', async () => {
+//
+// 🔴 08-05 WP-13 复核后的一处**语义收窄**（有意，代价已上报）：connector 查询挂到了 `open`
+// 门后（未展开不打请求），所以这颗点从「恒准的常驻信号」变成「**知道了才亮**」——数据要么
+// 由本菜单开过一次带回来，要么由设置页拉过（`qk.connectors()` 是共享缓存键，enabled:false
+// 仍读缓存）。亮 = 确实有已连接且启用的 connector（判据没松），只是「不亮」从「没有」变成
+// 「没有、或还不知道」。下面三条用例因此都先开一次菜单再断言。
+describe('ConnectorQuickPanel — 滑块上的强调点（知道了才亮）', () => {
+  test('🔴 从没开过菜单 → 不打请求也就不亮点（未展开不打请求的直接后果）', async () => {
     renderUi()
-    await waitFor(() => expect(connectorApi.list).toHaveBeenCalled())
+    await screen.findByRole('button', { name: TOOLS_LABEL })
+    expect(connectorApi.list).not.toHaveBeenCalled()
+    expect(screen.queryByTestId('tools-connector-dot')).toBeNull()
+  })
+
+  test('开过一次菜单 → 有已连接且已启用的 connector 就亮点（关掉菜单后仍亮：读缓存）', async () => {
+    renderUi()
+    await openToolsMenu()
     await waitFor(() => expect(screen.queryByTestId('tools-connector-dot')).not.toBeNull())
+    fireEvent.keyDown(document, { key: 'Escape' })
+    await waitFor(() => expect(screen.queryByRole('menu', { name: TOOLS_LABEL })).toBeNull())
+    expect(screen.queryByTestId('tools-connector-dot')).not.toBeNull()
   })
 
   test('行在但被关掉 → 无点（判据是「真的接着东西」，不是「装过」）', async () => {
@@ -360,10 +378,10 @@ describe('ConnectorQuickPanel — 滑块上的常驻强调点', () => {
       connector({ connector_id: 'notion', display_name: 'Notion', enabled: false })
     ])
     renderUi()
+    await openToolsMenu()
     await waitFor(() => expect(connectorApi.list).toHaveBeenCalled())
     // 该项仍在菜单里（可以点进去开它），只是滑块上不亮点。
-    await openPlusMenu()
-    expect(screen.getByRole('menuitem', { name: LABEL })).toBeTruthy()
+    expect(await screen.findByRole('menuitem', { name: LABEL })).toBeTruthy()
     expect(screen.queryByTestId('tools-connector-dot')).toBeNull()
   })
 
@@ -372,8 +390,8 @@ describe('ConnectorQuickPanel — 滑块上的常驻强调点', () => {
       connector({ connector_id: 'notion', display_name: 'Notion', status: 'needs_reauth' })
     ])
     renderUi()
+    await openToolsMenu()
     await waitFor(() => expect(connectorApi.list).toHaveBeenCalled())
-    await openPlusMenu()
     expect(screen.queryByTestId('tools-connector-dot')).toBeNull()
   })
 })
