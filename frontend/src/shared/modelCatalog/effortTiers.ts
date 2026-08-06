@@ -48,6 +48,36 @@ export const PROTOCOL_EFFORT_TIERS: Record<LlmProviderProtocol, readonly EffortT
   openrouter: NO_MAX_TIERS
 }
 
+/** Claude 分族判据（S2 拍板 08-05 第二轮）：这个 Claude 模型走 manual thinking
+ *  （`{type:'enabled', budgetTokens}`）还是服务端自适应（adaptive + effort）？
+ *
+ *  🔴 **单源下沉**（CLAUDE.md 跨边界手抄纪律）：gateway 的 wire 分支（thinking.ts
+ *  `effortCallOptions`/`thinkingProviderOptions`）与 renderer 的阶梯选择（effort.ts
+ *  `effortOptionsForModel` —— adaptive 族无 none、manual 族 none/low/medium/high）都要这条
+ *  判据，故从 thinking.ts 下沉到本词表叶子，两侧 import 同一函数，不许在任何一处再手抄
+ *  模型 id 清单。
+ *
+ *  adaptive 族 = opus-4-7 / opus-4-8 / **opus-5** / fable：
+ *    - opus-4-7 / opus-4-8 / fable：manual budget 会被 API 以 400 拒绝（legacy custom_api
+ *      时代的生产实证，原注释随矩阵迁到这里）。
+ *    - opus-5：S2 拍板归入 adaptive 族（「服务端自适应」）。crs 实测（2026-08-05）：manual
+ *      budget **不 400**（两种形状都 200），但**不带任何 thinking 参数也会自发思考**——服务端
+ *      自适应的行为签名，与拍板一致；注意这会让旧 Brain 布尔路径对 opus-5 从 manual 16k 翻成
+ *      adaptive+high（有意的行为变更，见 S2 终报）。
+ *  其余（sonnet / haiku / 老 Claude 4）→ manual。 */
+export function modelSupportsManualThinking(model: string): boolean {
+  const lower = model.toLowerCase()
+  if (
+    lower.includes('opus-4-7') ||
+    lower.includes('opus-4-8') ||
+    lower.includes('opus-5') ||
+    lower.includes('fable')
+  ) {
+    return false
+  }
+  return true
+}
+
 /** 把一个档位收进协议可表达子集：可表达 → 原样；不可表达（google/openrouter 的 `max`）→
  *  向下取最近的可表达档（`max`→`xhigh`）。确定性、无静默丢弃（绝不把「要思考」降成不思考）。 */
 export function clampEffortToProtocol(

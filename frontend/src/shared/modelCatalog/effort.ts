@@ -7,17 +7,29 @@
 //   - **wire 形状按 protocol**（thinking.ts 的 effortCallOptions），且展示子集 = 家族阶梯 ∩
 //     协议可表达集（PROTOCOL_EFFORT_TIERS）。
 //
-// 家族阶梯（owner 2026-08-05 拍板，prd.md「effort 阶梯」行）：
-//   OpenAI GPT   none/low/medium/high/xhigh/max   默认 medium
-//   Claude       low/medium/high/xhigh/max        默认 medium（owner 口中的 extra = xhigh）
-//   Gemini       low/medium/high                  默认 low
-//   Deepseek     none/low/high/max                默认 low
-//   其他家默认    none/low/medium/high/max         默认 medium
+// 家族阶梯（owner 2026-08-05 拍板 + S2 第二轮分族，prd.md「effort 阶梯」+「S2 已拍板」）：
+//   OpenAI GPT        none/low/medium/high/xhigh/max   默认 medium
+//   Claude adaptive 族 low/medium/high/xhigh/max        默认 medium（opus-4-7/4-8/opus-5/fable，
+//                      服务端自适应，**无 none**；owner 口中的 extra = xhigh）
+//   Claude manual 族   none/low/medium/high             默认 medium（sonnet/haiku 等 thinking
+//                      enable 配置的型号，无 xhigh/max —— S2 拍板口径）
+//   Gemini            low/medium/high                  默认 low
+//   Deepseek          none/low/high/max                默认 low
+//   其他家默认         none/low/medium/high/max         默认 medium
+//
+// Claude 分族判据 = effortTiers.ts 的 `modelSupportsManualThinking`（单源下沉，gateway wire
+// 分支与这里共用同一函数，禁止两处手抄模型清单）。
 
 import type { LlmProviderProtocol } from '@shared/hooks/useLlmProviders'
 
 import { lookupModelMeta } from './lookup'
-import { EFFORT_TIERS, isEffortTier, PROTOCOL_EFFORT_TIERS, type EffortTier } from './effortTiers'
+import {
+  EFFORT_TIERS,
+  isEffortTier,
+  modelSupportsManualThinking,
+  PROTOCOL_EFFORT_TIERS,
+  type EffortTier
+} from './effortTiers'
 
 export type EffortVendorFamily = 'openai' | 'anthropic' | 'google' | 'deepseek' | 'other'
 
@@ -26,12 +38,28 @@ interface FamilyLadder {
   defaultTier: EffortTier
 }
 
-const FAMILY_LADDERS: Record<EffortVendorFamily, FamilyLadder> = {
+// anthropic 家族按 manual/adaptive 分两个阶梯（S2 拍板），选择在 effortOptionsForModel 里按
+// 模型 id 判；其余家族一族一梯。
+const FAMILY_LADDERS: Record<Exclude<EffortVendorFamily, 'anthropic'>, FamilyLadder> = {
   openai: { tiers: ['none', 'low', 'medium', 'high', 'xhigh', 'max'], defaultTier: 'medium' },
-  anthropic: { tiers: ['low', 'medium', 'high', 'xhigh', 'max'], defaultTier: 'medium' },
   google: { tiers: ['low', 'medium', 'high'], defaultTier: 'low' },
   deepseek: { tiers: ['none', 'low', 'high', 'max'], defaultTier: 'low' },
   other: { tiers: ['none', 'low', 'medium', 'high', 'max'], defaultTier: 'medium' }
+}
+
+/** adaptive 族（opus-4-7/4-8/opus-5/fable）：服务端自适应，**无「不思考」档**（S2 拍板 ——
+ *  这类模型不带 thinking 参数也会自发思考，给 none 是对用户撒谎）。 */
+const ANTHROPIC_ADAPTIVE_LADDER: FamilyLadder = {
+  tiers: ['low', 'medium', 'high', 'xhigh', 'max'],
+  defaultTier: 'medium'
+}
+
+/** manual 族（sonnet/haiku 等 thinking enable 配置的型号）：**有** none，无 xhigh/max
+ *  （owner 原话口径）。budgetTokens 数值映射在 thinking.ts（wire 层表项对 xhigh/max 仍全函数
+ *  兜底，但 UI 子集到 high 为止）。 */
+const ANTHROPIC_MANUAL_LADDER: FamilyLadder = {
+  tiers: ['none', 'low', 'medium', 'high'],
+  defaultTier: 'medium'
 }
 
 /** catalog providerId → 家族。目录里的其他厂牌（alibaba / xai / mistral / …）→ 'other'。 */
@@ -152,7 +180,14 @@ export function effortOptionsForModel(
     }
   }
 
-  const ladder = FAMILY_LADDERS[family]
+  // Claude 分族（S2）：manual/adaptive 两梯，判据单源 effortTiers.modelSupportsManualThinking
+  // （includes 匹配，`claude-opus-5[1m]` 这类带档位后缀/前缀的中转 id 原样可判）。
+  const ladder =
+    family === 'anthropic'
+      ? modelSupportsManualThinking(modelId)
+        ? ANTHROPIC_MANUAL_LADDER
+        : ANTHROPIC_ADAPTIVE_LADDER
+      : FAMILY_LADDERS[family]
   const protocolTiers =
     protocol != null ? PROTOCOL_EFFORT_TIERS[protocol] : (EFFORT_TIERS as readonly EffortTier[])
   const options = ladder.tiers.filter((tier) => protocolTiers.includes(tier))
@@ -176,7 +211,11 @@ export function effortOptionsForModel(
 //
 // 参照物 = AiChatPanel.tsx 的 THINKING_PREF（'mailagent.chat.thinkingEnabled'，'1'/'0'，
 // panel-owned state + best-effort try/catch）。effort 同机制同纪律：全局一个键，值 = canonical
-// 档位字符串；缺失/非法 → null（= 16b 未启用 effort 菜单前的 legacy Brain 布尔路径）。
+// 档位字符串；缺失/非法 → null = **「用户还没显式选过」**。
+// 🔴 S2 拍板（08-05 第二轮）：pref 为 null 时 16b **主动下发 defaultTier**（applicable 时），
+// 不是「不发 effort 走旧布尔路径」——owner 接受这次行为反转（Claude 从「默认不思考」变
+// 「默认 medium thinking」）。旧布尔路径只剩两种到达方式：applicable=false 的模型（16b 契约
+// 不带 effort 键）与尚未换 16b UI 的场景。
 // 🔴 只给 renderer 调（gateway 进程没有 localStorage，也永远不该读它——effort 走请求体）。
 
 export const EFFORT_PREF_KEY = 'mailagent.chat.effort'

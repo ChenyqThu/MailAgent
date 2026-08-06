@@ -68,16 +68,25 @@ describe('每协议可表达子集（验收项：逐协议钉死）', () => {
 })
 
 describe('effortOptionsForModel — 家族阶梯 ∩ 协议子集', () => {
-  test('Claude（catalog reasoning ✓）@ anthropic → low..max，默认 medium，无 none', () => {
+  test('Claude manual 族（sonnet-4-6）@ anthropic → none/low/medium/high，默认 medium（S2 拍板：无 xhigh/max）', () => {
     const r = effortOptionsForModel('claude-sonnet-4-6', 'anthropic')
     expect(r).toEqual({
-      options: ['low', 'medium', 'high', 'xhigh', 'max'],
+      options: ['none', 'low', 'medium', 'high'],
       applicable: true,
       defaultTier: 'medium',
       family: 'anthropic',
       reasoningCapable: true,
       passthroughUnknown: false // ③ 厂商已知（anthropic）且方言即协议原生：同族直通
     })
+  })
+
+  test('Claude adaptive 族（opus-4-7/4-8/opus-5/fable）@ anthropic → low..max，默认 medium，无 none（服务端自适应）', () => {
+    for (const id of ['claude-opus-4-7', 'claude-opus-4-8', 'claude-opus-5', 'claude-fable-5']) {
+      const r = effortOptionsForModel(id, 'anthropic')
+      expect(r.options, id).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+      expect(r.defaultTier, id).toBe('medium')
+      expect(r.family, id).toBe('anthropic')
+    }
   })
 
   test('OpenAI GPT @ openai-compatible（owner 的 gpt-crs 腿）→ 全 6 档，默认 medium，同方言不告警', () => {
@@ -174,10 +183,10 @@ describe('effortOptionsForModel — 家族阶梯 ∩ 协议子集', () => {
     ).toBe(false)
   })
 
-  test('catalog 有模型但无 caps 标注 → reasoningCapable null（unknown ≠ false），阶梯照给', () => {
+  test('catalog 有模型但无 caps 标注 → reasoningCapable null（unknown ≠ false），阶梯照给（haiku = manual 族）', () => {
     const r = effortOptionsForModel('claude-3-haiku-20240307', 'anthropic')
     expect(r.reasoningCapable).toBeNull()
-    expect(r.options).toEqual(['low', 'medium', 'high', 'xhigh', 'max'])
+    expect(r.options).toEqual(['none', 'low', 'medium', 'high'])
   })
 
   test('覆写位（DB 行权威）：布尔覆写赢 catalog；null/缺席落回 catalog', () => {
@@ -201,8 +210,12 @@ describe('effortOptionsForModel — 家族阶梯 ∩ 协议子集', () => {
   })
 
   test('不变式：暴露给用户的档恒 ∈ 协议可表达子集（clamp 只该发生在 wire 层，UI 里不该出现会被降档的档）', () => {
+    // 🔴 S2 后 anthropic 是**双梯**，两族都要在这张表里（否则不变式只覆盖一半）：
+    // sonnet-4-6 = manual 梯（none/low/medium/high）；opus-4-8 与 opus-5[1m] = adaptive 梯
+    // （low..max，后者还顺带覆盖带档位后缀的中转 id）。
     const models = [
       'claude-sonnet-4-6',
+      'claude-opus-4-8',
       'claude-opus-5[1m]',
       'gpt-5.6-sol',
       'gpt-4o',

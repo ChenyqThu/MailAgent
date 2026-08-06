@@ -1,12 +1,15 @@
 // chat-panel P4 composer-parity C1-① — extended-thinking provider options for the gateway.
 //
 // The model-family matrix (originally mirrored from the legacy custom_api.ts thinking branch):
-// opus-4-7 / opus-4-8 / fable REJECT manual budget_tokens with HTTP 400 → they require
-// adaptive thinking + top-level effort; sonnet-4-6 (default) + older Claude 4 accept a manual
-// budget.
+// opus-4-7 / opus-4-8 / opus-5 / fable are the ADAPTIVE family (manual budget_tokens is either
+// rejected with HTTP 400 [4-7/4-8/fable] or the model is server-adaptive by design [opus-5,
+// S2 拍板 + crs 实测]) → adaptive thinking + top-level effort; sonnet / haiku / older Claude 4
+// accept a manual budget.
 //
-// 🔴 S3 — the legacy engine was deleted; THIS FILE is now the SSoT for the matrix + budget
-//    rationale. Update the model families / budget here when a new family changes behaviour.
+// 🔴 S3 — the legacy engine was deleted. S2（08-05 第二轮）起**分族判据单源下沉**到
+//    @shared/modelCatalog/effortTiers 的 `modelSupportsManualThinking`（renderer 的阶梯选择也
+//    要它，不许两处手抄模型清单 —— CLAUDE.md 跨边界手抄纪律）；本文件仍是 budget 数值
+//    rationale 的 SSoT。改家族清单去 effortTiers.ts，改 budget 在这里。
 //
 // WP-16a (0805 P1) — effort 档位层：`effortCallOptions` 把 canonical 档位（none..max，词表在
 // @shared/modelCatalog/effortTiers）映射成各协议 wire 形状，与旧 Brain 布尔路径
@@ -30,6 +33,7 @@ import type { JSONValue } from 'ai'
 import {
   clampEffortToProtocol,
   isEffortTier,
+  modelSupportsManualThinking,
   type EffortTier
 } from '@shared/modelCatalog/effortTiers'
 
@@ -39,20 +43,12 @@ import type { ProviderProtocol } from './providerRef'
 const THINKING_BUDGET_TOKENS = 16_000
 const THINKING_EFFORT = 'high' as const
 
-/** Does this Claude model accept manual extended thinking (`{type:'enabled', budgetTokens}`)?
- *  opus-4-7 / opus-4-8 / fable reject it (400) and require adaptive; everything else → manual. */
-function modelSupportsManualThinking(model: string): boolean {
-  const lower = model.toLowerCase()
-  if (lower.includes('opus-4-7') || lower.includes('opus-4-8') || lower.includes('fable')) {
-    return false
-  }
-  return true
-}
-
 /** Build the @ai-sdk/anthropic `providerOptions` for extended thinking on `model`, or undefined
  *  when thinking is off (→ caller omits providerOptions entirely, byte-identical to no-thinking).
- *  Manual `{type:'enabled', budgetTokens}` for sonnet/older; `{type:'adaptive'}` + `effort` for
- *  opus-4-7/4-8/fable. The shape matches AnthropicProviderOptions (thinking union + effort enum). */
+ *  Manual `{type:'enabled', budgetTokens}` for sonnet/haiku/older; `{type:'adaptive'}` + `effort`
+ *  for opus-4-7/4-8/opus-5/fable（分族判据单源在 effortTiers.ts，S2 起 opus-5 归 adaptive ——
+ *  这条 legacy 布尔路径对 opus-5 因此从 manual 16k 翻成 adaptive+high，S2 拍板的有意变更）。
+ *  The shape matches AnthropicProviderOptions (thinking union + effort enum). */
 export function thinkingProviderOptions(
   model: string,
   enabled: boolean,
@@ -67,11 +63,16 @@ export function thinkingProviderOptions(
 
 // ── WP-16a effort 档位 → wire ──────────────────────────────────────────────────────────
 
-/** anthropic manual-budget 族（sonnet-4-6 / 老 Claude 4）的档位 → budgetTokens 数值表。
+/** anthropic manual-budget 族（sonnet / haiku / 老 Claude 4）的档位 → budgetTokens 数值表。
  *  `medium = 16_000` **有意等于**旧 Brain 布尔路径的 THINKING_BUDGET_TOKENS —— manual 族上
  *  「effort medium」≈「旧 Brain 开」，观感连续。上限 60k 给 64k 输出天花板（chatRun 恒传
  *  maxOutputTokens）留余量 —— Anthropic 要求 budget_tokens < max_tokens；下限 4k 远高于
- *  API 最低 1024。crs 实测 budget_tokens 透传且随档缩放（research/crs-effort-passthrough.md §B）。 */
+ *  API 最低 1024。crs 实测 budget_tokens 透传且随档缩放（research/crs-effort-passthrough.md §B）。
+ *
+ *  ⚠️ S2 拍板后 manual 族的 **UI 子集只有 none/low/medium/high**（effort.ts 的
+ *  ANTHROPIC_MANUAL_LADDER，无 xhigh/max）——xhigh/max 两个表项**有意保留**：本函数对档位是
+ *  全函数（显式 body.effort 不经 UI 也能到达，如外部调用方/回放的 originalBody），映射到
+ *  48k/60k 比静默丢档或另写 clamp 逻辑更诚实。 */
 export const MANUAL_THINKING_BUDGET_TOKENS: Record<Exclude<EffortTier, 'none'>, number> = {
   low: 4_000,
   medium: 16_000,
@@ -111,8 +112,9 @@ export function effortCallOptions(
   const tier = clampEffortToProtocol(effort, protocol)
   switch (protocol) {
     case 'anthropic': {
-      // none = 完全不发 thinking（与 Brain 关字节一致）。档位沿现有二分：manual 族走
-      // budgetTokens 数值映射；opus-4-7/4-8/fable 走 adaptive + effort（枚举 low..max 逐字合法）。
+      // none = 完全不发 thinking（与 Brain 关字节一致）。档位沿现有二分（判据单源
+      // effortTiers.ts）：manual 族（sonnet/haiku）走 budgetTokens 数值映射；adaptive 族
+      // （opus-4-7/4-8/opus-5/fable）走 adaptive + effort（枚举 low..max 逐字合法）。
       if (tier === 'none') return undefined
       const anthropic: Record<string, JSONValue> = modelSupportsManualThinking(model)
         ? { thinking: { type: 'enabled', budgetTokens: MANUAL_THINKING_BUDGET_TOKENS[tier] } }
