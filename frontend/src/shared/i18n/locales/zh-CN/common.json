@@ -1373,7 +1373,22 @@
       "label": "上下文占用 {used}",
       "ringTip": "上下文占用 {used} / {total}（{percent}%）\n统计的是上一轮请求塞进模型的输入量，回合结束后更新",
       "pillTip": "上一轮请求的输入占用 {used} tokens\n该模型的上下文上限未知，故只显示已用量、不画比例",
-      "overflowTip": "已超过元数据目录记录的上限（中转档位或目录过时）"
+      "overflowTip": "已超过元数据目录记录的上限（中转档位或目录过时）",
+      "detailsTitle": "上下文明细",
+      "detailsSubtitle": "上一轮请求",
+      "segment": {
+        "system": "系统提示（身份文档）",
+        "tools": "工具定义与其他",
+        "memory": "记忆（memory.md）",
+        "messages": "聊天消息"
+      },
+      "totalUsed": "已用",
+      "remaining": "剩余",
+      "totalAvailable": "上限",
+      "estimateNote": "各段按字符数估算（≈）；「工具定义与其他」由实报总量减去其余段推得，含工具 schema、技能与连接器目录等。",
+      "estimateExceeds": "估算之和已超过实报总量，分段仅供参考。",
+      "segmentsLoading": "正在计算分段…",
+      "segmentsUnavailable": "分段明细暂不可用（读不到系统提示配置）"
     },
     "approvalMode": {
       "label": "授权模式",

@@ -214,7 +214,10 @@ export function ThreadComposer(): React.JSX.Element {
           rows={1}
           autoFocus
         />
-        <div className="flex items-center gap-1">
+        {/* 🔴 `relative` 是 WP-22 的 context 明细弹层的包含块（那颗环在右组第一位，按它自己的
+            右缘锚会在 320px 窄面里被 overflow-hidden 裁掉 —— 算式见 ContextUsageRing 的注释）。
+            其余弹层（+/滑块/授权/effort/模型）各自有 `div.relative` 包裹，不受这层影响。 */}
+        <div className="relative flex items-center gap-1">
           {controls && (
             <>
               {/* 08-05 WP-13 — 「+」= 往这轮对话里加内容：附件 + 引用邮件（原独立 @ 钮）。 */}

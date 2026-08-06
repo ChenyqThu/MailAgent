@@ -1373,7 +1373,22 @@
       "label": "Context usage {used}",
       "ringTip": "Context {used} / {total} ({percent}%)\nMeasured on the last request's input; updates when a turn ends",
       "pillTip": "Last request used {used} input tokens\nThis model's context limit is unknown, so only the absolute value is shown",
-      "overflowTip": "Above the limit recorded in the metadata catalog (proxy tier or a stale catalog)"
+      "overflowTip": "Above the limit recorded in the metadata catalog (proxy tier or a stale catalog)",
+      "detailsTitle": "Context details",
+      "detailsSubtitle": "Last request",
+      "segment": {
+        "system": "System prompt (identity docs)",
+        "tools": "Tools & other",
+        "memory": "Memory (memory.md)",
+        "messages": "Chat messages"
+      },
+      "totalUsed": "Total used",
+      "remaining": "Remaining",
+      "totalAvailable": "Total available",
+      "estimateNote": "Segments are estimated from character counts (≈); \"Tools & other\" is the reported total minus the rest — tool schemas, skill and connector catalogs, etc.",
+      "estimateExceeds": "The estimates already exceed the reported total, so the split is indicative only.",
+      "segmentsLoading": "Computing segments…",
+      "segmentsUnavailable": "Segment details unavailable (can't read the system prompt config)"
     },
     "approvalMode": {
       "label": "Permission mode",

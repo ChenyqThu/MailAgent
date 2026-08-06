@@ -336,7 +336,10 @@ export function AgentComposer(): React.JSX.Element {
             {/* 08-05 WP-13+16b — 工具条重组：左 [+][滑块][授权]、右 [环][effort][模型][发送]
                 （两面同一套顺序，见 composer.tsx 文件头）。两个组都 min-w-0：320px 侧栏里
                 chip 的文字要能被 truncate 压掉，否则整行会被撑出去。 */}
-            <div className="flex items-center justify-between gap-1 px-0.5">
+            {/* 🔴 `relative` = WP-22 context 明细弹层的包含块（环在右组第一位，按它自己的右缘
+                锚会在 320px 窄侧栏被 overflow-hidden 裁掉；算式见 ContextUsageRing 的注释）。
+                其余弹层各自有 `div.relative` 包裹，不受这层影响。 */}
+            <div className="relative flex items-center justify-between gap-1 px-0.5">
               <div className="flex min-w-0 items-center gap-0.5">
                 {/* 「+」= 往这轮对话里加内容。agent 面的 @ 在正文里（Lexical directive chip），
                     所以这里**不**给 mention 项 —— 见 ComposerPlusMenu 文件头最后一段。 */}
