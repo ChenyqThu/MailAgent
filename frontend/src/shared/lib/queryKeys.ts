@@ -65,6 +65,7 @@ export const qk = {
   // 'chat' — session list + per-session messages + /chat/config flag probes.
   chat: {
     allSessions: () => ['chat', 'allSessions'] as const,
+    agentUnread: () => ['chat', 'agentUnread'] as const,
     messages: (sessionId: string | number) => ['chat', 'messages', sessionId] as const,
     kosAvailable: () => ['chat', 'kosAvailable'] as const,
     config: (flag: string) => ['chat', 'config', flag] as const

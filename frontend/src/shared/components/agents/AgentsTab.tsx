@@ -12,8 +12,10 @@ import { CustomAgentDrawer, RunStateBadge } from './CustomAgentDrawer'
 import { AgentPendingCountBadge, PendingDot } from './AgentPendingBadge'
 import {
   useAgentPendingCount,
+  useAgentUnreadCount,
   useAgentRuns,
   useCustomAgentsEnabled,
+  useSessionProvenanceEnabled,
   useLatestReport,
   useReportConfig,
   useRunNow,
@@ -446,6 +448,8 @@ function CustomAgentCard({
   // 不轮询 → 恒 0 → 不渲染）。
   const customAgentsEnabled = useCustomAgentsEnabled()
   const pendingCount = useAgentPendingCount(customAgentsEnabled).byAgent[cfg.id] ?? 0
+  const provenanceEnabled = useSessionProvenanceEnabled()
+  const unreadCount = useAgentUnreadCount(provenanceEnabled).byAgent[cfg.id] ?? 0
   const toggle = (v: boolean): void => {
     void save(cfg.id, { enabled: v })
   }
@@ -507,6 +511,11 @@ function CustomAgentCard({
           </h3>
           {lastRun && <RunStateBadge state={lastRun.state} />}
           <AgentPendingCountBadge count={pendingCount} />
+          {unreadCount > 0 && (
+            <span className="rounded-full bg-[rgb(var(--c-accent))] px-1.5 text-[10px] font-semibold text-white">
+              {unreadCount}
+            </span>
+          )}
         </div>
         <div style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-3))', marginTop: 3 }}>
           {triggerSummary}

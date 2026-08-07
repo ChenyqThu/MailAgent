@@ -5,6 +5,7 @@ import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tansta
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
 import { qk } from '@shared/lib/queryKeys'
+import { isSessionUnread } from '@shared/lib/chatUnread'
 import type {
   AgentRunHistoryItem,
   AgentRunPendingCount,
@@ -22,6 +23,7 @@ import type {
 } from '@shared/api/types'
 
 const EMPTY_PENDING_COUNT: AgentRunPendingCount = { total: 0, byAgent: {} }
+const EMPTY_UNREAD_COUNT = { total: 0, byAgent: {} as Record<string, number> }
 
 const LIST_KEY = qk.report.list()
 const CONFIG_KEY = qk.report.config()
@@ -273,6 +275,28 @@ export function useCustomAgentsEnabled(): boolean {
   return q.data ?? false
 }
 
+/** P1 — /chat/config.sessionProvenanceEnabled（MAILAGENT_SESSION_PROVENANCE，默认 ON）。
+ *  该 flag 仍由 Electron main 决定 gateway 行为；renderer 只消费 serve-api 对同一 .env 的
+ *  main-env-only 热读投影，避免绕过 env:get 白名单直接读取 snapshot。缺字段/不可达时隐藏未读 UI。 */
+export function useSessionProvenanceEnabled(): boolean {
+  const q = useQuery({
+    queryKey: qk.chat.config('sessionProvenanceEnabled'),
+    queryFn: async () => {
+      try {
+        const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+        if (!resp.ok) return false
+        const body = (await resp.json()) as { data?: { sessionProvenanceEnabled?: unknown } }
+        return body?.data?.sessionProvenanceEnabled === true
+      } catch {
+        return false
+      }
+    },
+    staleTime: 30_000,
+    retry: false
+  })
+  return q.data ?? false
+}
+
 /** S6 W2（P5 红点链）— 全局 + per-agent 待审批（paused_pending）计数，5s 轮询（SystemAlertBadge 先例）。
  *  enabled=false（flag off / customAgentsEnabled=false）→ 不发请求、不轮询、恒返 {total:0,byAgent:{}}
  *  → 所有红点面字节级不渲染。读失败（flag off / 不可达）→ 服务端已守读优雅降级返 EMPTY。 */
@@ -286,6 +310,28 @@ export function useAgentPendingCount(enabled: boolean): AgentRunPendingCount {
     refetchInterval: enabled ? 5_000 : false
   })
   return q.data ?? EMPTY_PENDING_COUNT
+}
+
+export function useAgentUnreadCount(enabled: boolean): { total: number; byAgent: Record<string, number> } {
+  const api = useMailApi()
+  const q = useQuery({
+    queryKey: qk.chat.agentUnread(),
+    queryFn: async () => {
+      const sessions = await api.chat.listAllSessions({ includeArchived: false, origin: 'agent' })
+      const byAgent: Record<string, number> = {}
+      let total = 0
+      for (const session of sessions) {
+        if (!isSessionUnread(session) || !session.agent_id) continue
+        total += 1
+        byAgent[session.agent_id] = (byAgent[session.agent_id] ?? 0) + 1
+      }
+      return { total, byAgent }
+    },
+    enabled,
+    staleTime: 4_000,
+    refetchInterval: enabled ? 5_000 : false
+  })
+  return q.data ?? EMPTY_UNREAD_COUNT
 }
 
 /** S6 W2（P5 红点链 ④）— 全局待审批（paused_pending）run 列表，供 TitleBar 徽标 popover 直达记录。

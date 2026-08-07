@@ -384,7 +384,14 @@ export interface AiGatewayConfig {
    *  Electron wrapper calls chat_db.createAgentSession. Returns the new session id, or null if the
    *  create failed (the run then streams but persists nothing — degraded, not fatal). Injected ONLY
    *  when MAILAGENT_CUSTOM_AGENTS_ENABLED is on; omitted (default) → POST /api/ai/agent-run 404s. */
-  createAgentSession?: (input: { agentId: string; jobId: number; title: string }) => number | null
+  createAgentSession?: (input: {
+    agentId: string
+    jobId: number
+    title: string
+    triggerId?: string | null
+    triggerKind?: string | null
+    triggerFiredAt?: number | null
+  }) => number | null
   // ── Stage 2 PR-1 (task 08-01 messenger, MAILAGENT_IM_FEISHU) — im_chat entrypoint ──────────────
   /** MAILAGENT_IM_FEISHU (env default ON — cutover 2026-08-04). When true the gateway registers
    *  POST /api/ai/im-chat — the ONLY entrypoint asserting 'im_chat' in trusted code. Off/absent →
@@ -408,4 +415,13 @@ export interface AiGatewayConfig {
    *  body), so an island resume rebuilds the exact same narrowed tool face. Manual entrypoints
    *  never set it → the stash field stays undefined, byte-identical to the pre-ADR-004 stash. */
   agentRunContext?: AgentRunContext
+  /** P1 trusted identity, constructed only from the pulled spec + created session. */
+  headlessAgentIdentity?: {
+    agentId: string
+    agentTitle: string
+    jobId: number
+    sessionId: number
+  }
+  /** MAILAGENT_SESSION_PROVENANCE main-env-only emergency rollback switch. */
+  sessionProvenanceEnabled?: boolean
 }

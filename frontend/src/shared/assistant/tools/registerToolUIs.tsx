@@ -22,6 +22,8 @@ import { componentRegistry } from './ComponentRegistry'
 // Overlaid here (not in componentRegistry) — it is not an A2UI card, just a hidden part.
 import { SuggestFollowupsHiddenPart } from '../components/FollowupSuggestions'
 import { SUGGEST_FOLLOWUPS_TOOL_NAME } from '../followups'
+import { PLAN_UPDATE_TOOL_NAME } from '../plan'
+import { PlanCard } from './generic/PlanCard'
 
 /** The assistant message-part component map passed to MessagePrimitive.Parts `components`. */
 type AssistantPartComponentMap = {
@@ -48,6 +50,7 @@ export const assistantPartComponents: AssistantPartComponentMap = {
   tools: {
     by_name: {
       ...componentRegistry.byName,
+      [PLAN_UPDATE_TOOL_NAME]: PlanCard,
       // W6 — zero-render part UI for the in-turn follow-up tool (chips render at the thread layer).
       [SUGGEST_FOLLOWUPS_TOOL_NAME]: SuggestFollowupsHiddenPart
     },

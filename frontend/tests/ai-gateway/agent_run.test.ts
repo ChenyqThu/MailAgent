@@ -621,7 +621,7 @@ describe('runHeadlessAgent — allowedTools intersection reaches streamText', ()
     })
     await runHeadlessAgent(cfg, { jobId: 7, spec, sessionId: null }, new AbortController().signal)
     expect(seenTools.length).toBeGreaterThan(0)
-    expect(seenTools[0].sort()).toEqual(['email_flag', 'email_list_filter'])
+    expect(seenTools[0].sort()).toEqual(['email_flag', 'email_list_filter', 'plan_update'])
   })
 })
 
@@ -723,7 +723,7 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     expect(seenTools[0]).toContain('email_flag')
   })
 
-  test('allowedTools=[] (owner selected ZERO tools) + grantExec true → exec tools alone survive (the two control planes are orthogonal)', async () => {
+  test('allowedTools=[] + grantExec true → exec tools and the permission-orthogonal plan tool survive', async () => {
     const seenTools: string[][] = []
     const spec = makeSpec({
       toolPolicy: { allowedTools: [], grantExec: true } as AgentRunSpec['toolPolicy']
@@ -733,7 +733,7 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       { jobId: 7, spec, sessionId: null },
       new AbortController().signal
     )
-    expect(seenTools[0].sort()).toEqual(['file_read', 'file_write', 'run_command'])
+    expect(seenTools[0].sort()).toEqual(['file_read', 'file_write', 'plan_update', 'run_command'])
   })
 
   // S6 W3 (rev3.1 §3.2) — the intersection exemption extends exec → exec ∪ web: web tool names are
@@ -761,7 +761,7 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
     expect(names).not.toContain('email_prepare_send')
   })
 
-  test("allowedTools=[] + grantWeb 'open' → web tools alone survive; junk grantWeb never registers", async () => {
+  test("allowedTools=[] + grantWeb 'open' → web + plan survive; junk grant leaves only plan", async () => {
     const seenTools: string[][] = []
     const spec = makeSpec({
       toolPolicy: { allowedTools: [], grantWeb: 'open' } as unknown as AgentRunSpec['toolPolicy']
@@ -771,7 +771,7 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       { jobId: 7, spec, sessionId: null },
       new AbortController().signal
     )
-    expect(seenTools[0].sort()).toEqual(['web_fetch', 'web_search'])
+    expect(seenTools[0].sort()).toEqual(['plan_update', 'web_fetch', 'web_search'])
 
     const seenJunk: string[][] = []
     const junkSpec = makeSpec({
@@ -782,10 +782,10 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       { jobId: 8, spec: junkSpec, sessionId: null },
       new AbortController().signal
     )
-    expect(seenJunk[0]).toEqual([])
+    expect(seenJunk[0]).toEqual(['plan_update'])
   })
 
-  test('allowedTools MISSING (malformed spec, no grant) → the model sees ZERO tools (fail-closed to [], §5.1)', async () => {
+  test('allowedTools MISSING fail-closes capability tools while the P0 core plan tool remains', async () => {
     const seenTools: string[][] = []
     const spec = makeSpec({ toolPolicy: {} })
     await runHeadlessAgent(
@@ -794,7 +794,7 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       new AbortController().signal
     )
     expect(seenTools.length).toBeGreaterThan(0)
-    expect(seenTools[0]).toEqual([])
+    expect(seenTools[0]).toEqual(['plan_update'])
   })
 
   // S6 W3-1b + experience epic W2 (rev3.1 §5.1): Python projects NULL skills to the current
@@ -833,7 +833,7 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       },
       new AbortController().signal
     )
-    expect(seenDefault[0].sort()).toEqual([...defaultAllowed].sort())
+    expect(seenDefault[0].sort()).toEqual([...defaultAllowed, 'plan_update'].sort())
   })
 
   test('default report mount keeps owner-selected report reads reachable; legacy mounts drop them', async () => {
@@ -853,7 +853,7 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       },
       new AbortController().signal
     )
-    expect(seenDefault[0].sort()).toEqual([...allowed].sort())
+    expect(seenDefault[0].sort()).toEqual([...allowed, 'plan_update'].sort())
 
     const seenLegacy: string[][] = []
     await runHeadlessAgent(
@@ -870,7 +870,7 @@ describe('runHeadlessAgent — per-agent exec grant + fail-closed allowedTools (
       },
       new AbortController().signal
     )
-    expect(seenLegacy[0]).toEqual(['email_body'])
+    expect(seenLegacy[0]).toEqual(['email_body', 'plan_update'])
   })
 
   test('unmounted-family reads absent DESPITE being allowed (mount is a pure reduction stacked on the intersection)', async () => {
@@ -1036,9 +1036,9 @@ describe('runHeadlessAgent — grantConnectors (PR3)', () => {
       },
       new AbortController().signal
     )
-    // allowedTools=[] + the grant → the granted connector face ALONE survives (control planes
-    // are orthogonal, mirroring the exec/web boundary tests above).
-    expect(seenRead[0]).toEqual(['mcp__notion__notion_fetch'])
+    // allowedTools=[] + the grant → the granted connector face plus the permission-orthogonal
+    // P0 plan tool survive, mirroring the exec/web boundary tests above.
+    expect(seenRead[0]).toEqual(['plan_update', 'mcp__notion__notion_fetch'])
 
     const seenJunk: string[][] = []
     await runHeadlessAgent(
@@ -1055,7 +1055,7 @@ describe('runHeadlessAgent — grantConnectors (PR3)', () => {
       },
       new AbortController().signal
     )
-    expect(seenJunk[0]).toEqual([])
+    expect(seenJunk[0]).toEqual(['plan_update'])
   })
 
   test('wrapCfgForAgentRun exempts connector tools from the intersection BY NAME (read class included)', () => {
@@ -1420,7 +1420,14 @@ describe('POST /api/ai/agent-run', () => {
   })
 
   test('happy path: pulls spec, creates the agent session, returns the completed result', async () => {
-    const createCalls: Array<{ agentId: string; jobId: number; title: string }> = []
+    const createCalls: Array<{
+      agentId: string
+      jobId: number
+      title: string
+      triggerId?: string | null
+      triggerKind?: string | null
+      triggerFiredAt?: number | null
+    }> = []
     const base = await startWith({
       fetchAgentRunSpec: async (jobId, claimToken) => {
         expect(jobId).toBe(7)
@@ -1438,7 +1445,16 @@ describe('POST /api/ai/agent-run', () => {
     expect(body.ok).toBe(true)
     expect(body.outcome).toBe('completed')
     expect(body.sessionId).toBe(55)
-    expect(createCalls).toEqual([{ agentId: 'dms', jobId: 7, title: 'DMS · 2026-07-03 09:00' }])
+    expect(createCalls).toEqual([
+      {
+        agentId: 'dms',
+        jobId: 7,
+        title: 'DMS · 2026-07-03 09:00',
+        triggerId: null,
+        triggerKind: 'cron',
+        triggerFiredAt: Date.parse('2026-07-03T09:00:00Z')
+      }
+    ])
   })
 
   test('createAgentSession failure → run continues unsaved (sessionId null), still 200', async () => {

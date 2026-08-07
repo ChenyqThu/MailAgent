@@ -17,7 +17,11 @@ from src.agent_config.store import (
     resolve_agent_config_db_path,
     resolve_enabled,
 )
-from src.agent_config.templates import SEED_TEMPLATES
+from src.agent_config.templates import (
+    AGENT_TEMPLATE,
+    LEGACY_AGENT_TEMPLATE_P0,
+    SEED_TEMPLATES,
+)
 
 
 def _store(tmp_path, name="agent_config.db") -> AgentConfigStore:
@@ -71,6 +75,25 @@ def test_profile_doc_seed_is_idempotent(tmp_path):
     d2 = st.get_profile_doc("user")  # 二次读不应再 seed / 不应多记 history
     assert d1.content_hash == d2.content_hash
     assert len(st.list_profile_history("user")) == 1
+
+
+def test_agent_default_template_migrates_only_when_untouched(tmp_path):
+    db_path = str(tmp_path / "agent_config.db")
+    st = AgentConfigStore(db_path)
+    st.get_profile_doc("agent")
+    st.set_profile_doc("agent", LEGACY_AGENT_TEMPLATE_P0)
+
+    migrated = AgentConfigStore(db_path).get_profile_doc("agent")
+    assert migrated.content == AGENT_TEMPLATE
+    assert migrated.updated_by == "migration:p0-plan-tool"
+    history = AgentConfigStore(db_path).list_profile_history("agent")
+    assert history[0].changed_by == "migration:p0-plan-tool"
+
+    custom = "# AGENT\n\nMy custom workflow."
+    AgentConfigStore(db_path).set_profile_doc("agent", custom)
+    reopened = AgentConfigStore(db_path).get_profile_doc("agent")
+    assert reopened.content == custom
+    assert reopened.updated_by == "user"
 
 
 def test_profile_doc_set_records_history(tmp_path):

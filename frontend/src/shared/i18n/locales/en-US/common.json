@@ -990,6 +990,8 @@
       "skill_uninstall": "Uninstall skill",
       "skill_list_installed": "List installed skills",
       "chat_session_list": "List past chats",
+      "agent_catalog_list": "List agent catalog",
+      "agent_catalog_get": "Get agent catalog entry",
       "chat_session_search": "Search past chats",
       "chat_session_get": "Read past chat",
       "custom_agent_list": "List custom agents",
@@ -1011,6 +1013,17 @@
       "notion_agent_chat": "Ask the Notion agent",
       "plan_update": "Update plan",
       "suggest_followups": "Suggesting follow-ups"
+    },
+    "planCard": {
+      "title": "Plan",
+      "invalid": "This saved plan could not be displayed.",
+      "status": {
+        "pending": "Pending",
+        "in_progress": "In progress",
+        "done": "Done",
+        "blocked": "Blocked",
+        "unavailable": "Unavailable"
+      }
     },
     "customAgentCard": {
       "titleCreate": "Create custom agent",
@@ -3730,6 +3743,7 @@
     "solid": "Solid"
   },
   "agents": {
+    "unread": "Unread agent runs",
     "title": "Report Agents",
     "subtitle": "Auto-generated, traceable email reports. Daily by default; weekly / monthly share the engine.",
     "reportsMaster": {

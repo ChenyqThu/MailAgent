@@ -43,6 +43,9 @@ CREATE TABLE ai_chat_sessions (
     origin TEXT,
     agent_id TEXT,
     agent_job_id TEXT,
+    trigger_id TEXT,
+    trigger_kind TEXT,
+    trigger_fired_at INTEGER,
     last_read_at INTEGER,
     pinned_at INTEGER,
     starred INTEGER NOT NULL DEFAULT 0,
@@ -342,6 +345,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "sessionToolsEnabled": True,
         "configToolsEnabled": True,
         "webToolsEnabled": True,
+        # P1 — main-env-only session provenance flag 的未读 UI 只读投影（默认 ON）。
+        "sessionProvenanceEnabled": True,
         # task 07-12 P3/P5 — Settings「模型服务」区门控（MAILAGENT_LLM_PROVIDER_REGISTRY，
         # pydantic 默认已 cutover 翻 on 2026-07-13；此处 pin 的是 getattr 的 stub 兜底：
         # stub 无该字段 → False（fail-safe 走 legacy 投影，真实 config 恒有字段）。
@@ -364,12 +369,14 @@ def test_chat_config_openness_flags_hot_read(
         "MAILAGENT_OPENNESS_CONFIG_TOOLS=1\n"
         "MAILAGENT_OPENNESS_WEB_TOOLS=true\n"
         "MAILAGENT_OPENNESS_EXEC_TOOLS=true\n"
+        "MAILAGENT_SESSION_PROVENANCE=false\n"
     )
     with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
         data = c.get("/api/chat/config").json()["data"]
     assert data["sessionToolsEnabled"] is True
     assert data["configToolsEnabled"] is True
     assert data["webToolsEnabled"] is True
+    assert data["sessionProvenanceEnabled"] is False
     # 既有字段回归：exec flag 同一热读通道
     assert data["execPolicyEnabled"] is True
 
@@ -1865,3 +1872,27 @@ def test_sessions_search_endpoint_validation(chat_client: TestClient) -> None:
         ).status_code
         == 422
     )
+
+
+def test_session_query_headless_scope_cannot_be_overridden(chat_client: TestClient, ai_chat_db: Path) -> None:
+    now = int(time.time() * 1000)
+    conn = sqlite3.connect(str(ai_chat_db))
+    for sid, agent in ((20, "self-agent"), (21, "other-agent")):
+        conn.execute(
+            "INSERT INTO ai_chat_sessions (id,email_id,anchor_type,anchor_id,backend_kind,title,created_at,updated_at,origin,agent_id,agent_job_id,trigger_kind) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            (sid, None, "general", None, "ai-sdk", agent, now, now, "agent", agent, str(sid), "cron"),
+        )
+        conn.execute(
+            "INSERT INTO ai_chat_messages (session_id,role,content,status,created_at,updated_at) VALUES (?,?,?,?,?,?)",
+            (sid, "user", f"history {agent}", "complete", now, now),
+        )
+    conn.commit()
+    conn.close()
+
+    response = chat_client.get(
+        "/api/chat/sessions/all?origin=all&agentId=other-agent",
+        headers={"X-MailAgent-Agent-Id": "self-agent", "X-MailAgent-Allow-All-History": "0"},
+    )
+    assert response.status_code == 200
+    rows = response.json()["data"]
+    assert [row["agent_id"] for row in rows] == ["self-agent"]

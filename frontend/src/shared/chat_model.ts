@@ -34,7 +34,14 @@ export type AnchorType = 'email' | 'general'
 // FILTER vocabulary (≠ the origin column's free-text value domain, which gained 'im' in CHAT_DB
 // v22): stage 2 PR-1 adds no IM filter — im rows ride the default 'interactive' clause (Q18=A).
 // Mirror: api/types/chat.ts (parity gate) + the two Python mirrors, see that file's red note.
-export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'all'
+export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'all'
+export type ChatSessionTriggerKind =
+  | 'manual'
+  | 'cron'
+  | 'schedule'
+  | 'email_filter'
+  | 'calendar_event_change'
+  | 'calendar_before_start'
 
 // Sprint 19 — agent harness audit. Each LLM-proposed tool call gets one row
 // in `chat_tool_call`. See docs/reference/llm-agent/agent-harness-design.md §4.5.
@@ -77,6 +84,9 @@ export interface ChatSession {
   origin?: string | null
   agent_id?: string | null
   agent_job_id?: string | null
+  trigger_id?: string | null
+  trigger_kind?: ChatSessionTriggerKind | string | null
+  trigger_fired_at?: number | null
   // harness-chat lane A B4 (task 07-15) — per-session read watermark (ai_chat.db v20 additive
   // column). NULL/undefined = never marked read (no badge); unread = updated_at > last_read_at.
   last_read_at?: number | null

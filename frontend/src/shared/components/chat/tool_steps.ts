@@ -102,6 +102,9 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'chat_session_list',
   'chat_session_search',
   'chat_session_get',
+  // headless custom-agent catalog (knowledge_and_sessions grant only)
+  'agent_catalog_list',
+  'agent_catalog_get',
   // custom agents
   'custom_agent_list',
   'custom_agent_get',

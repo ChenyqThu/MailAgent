@@ -255,7 +255,7 @@ def test_chat_session_origin_filter_mirror_parity():
     ``'im'``）是两回事：'im' 行有意走默认 interactive 子句（Q18=A 桌面可见），**不需要**
     也没有对应的筛选值。将来真要做「只看飞书会话」必须四处一起加。
     """
-    expected = {"interactive", "agent", "all"}
+    expected = {"interactive", "agent", "im", "all"}
     model = _parse_string_union("ChatSessionOriginFilter", CHAT_MODEL_TS)
     api = _parse_string_union("ChatSessionOriginFilter", CHAT_TYPES_TS)
     assert model == expected, f"chat_model.ts 的来源筛选契约漂移: {sorted(model)}"

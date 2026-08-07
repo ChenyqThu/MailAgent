@@ -64,6 +64,21 @@ function buildAllTools(contextMode?: AgentContextMode) {
   })
 }
 
+const CONDITIONAL_HEADLESS_READ_TOOLS = new Set(['agent_catalog_list', 'agent_catalog_get'])
+
+function buildGrantedHeadlessCatalogTools() {
+  return buildGatewayTools({
+    domain: mockDomain(() => okEnvelope([])),
+    sessionProvenanceEnabled: true,
+    contextMode: 'cron_headless',
+    agentRunContext: {
+      agentId: 'dms',
+      allowedTools: ['chat_session_list'],
+      skills: []
+    }
+  })
+}
+
 const CLASSES_OF = (cls: GatewayToolClass): string[] =>
   Object.entries(GATEWAY_TOOL_CLASSES)
     .filter(([, c]) => c === cls)
@@ -346,6 +361,10 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
       ...CLASSES_OF('artifact'),
       ...CLASSES_OF('domain_write')
     ]) {
+      if (CONDITIONAL_HEADLESS_READ_TOOLS.has(name)) {
+        expect(filtered[name], `${name} is headless+grant only, never an im_chat tool`).toBeUndefined()
+        continue
+      }
       expect(filtered[name], `${name} must survive im_chat`).toBeDefined()
     }
   })
@@ -572,16 +591,20 @@ describe('applyContextModePolicy', () => {
 describe('buildGatewayTools × contextMode (registration-time filter wiring)', () => {
   test('manual_chat → the FULL flag-on set (byte-identical keys to the pre-W0 assembly — W0 adds/removes no tool)', () => {
     const keys = Object.keys(buildAllTools('manual_chat')).sort()
-    // The 30 gateway tools of the current full flag-on set = exactly the classified universe
-    // (27 pre-W1 + the 3 S2 W1 exec tools).
-    expect(keys).toEqual(Object.keys(GATEWAY_TOOL_CLASSES).sort())
+    const expected = Object.keys(GATEWAY_TOOL_CLASSES)
+      .filter((name) => !CONDITIONAL_HEADLESS_READ_TOOLS.has(name))
+      .sort()
+    expect(keys).toEqual(expected)
   })
 
   // W6 — the ONE read-class tool with a registration-time VENUE gate: suggest_followups is
   // interactive UI supply (composer-top chips + the hasToolCall stop condition), registered only
   // in manual_chat. The class matrix's "reads register everywhere" deliberately does not apply to
   // it — see the registration comment in tools/index.ts.
-  const MANUAL_ONLY_READ_TOOLS = new Set(['suggest_followups'])
+  const VENUE_GATED_READ_TOOLS = new Set([
+    'suggest_followups',
+    ...CONDITIONAL_HEADLESS_READ_TOOLS
+  ])
 
   test.each(['untrusted_trigger', 'cron_headless', 'im_chat'] as const)(
     '%s → every capability_change/exec/web/outbound tool absent from the ToolSet; read + domain_write present',
@@ -596,10 +619,10 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
         expect(tools[name], `${name} must not register in ${mode}`).toBeUndefined()
       }
       for (const name of [...CLASSES_OF('read'), ...CLASSES_OF('domain_write')]) {
-        if (MANUAL_ONLY_READ_TOOLS.has(name)) {
+        if (VENUE_GATED_READ_TOOLS.has(name)) {
           expect(
             tools[name],
-            `${name} is manual-only UI supply — must NOT register in ${mode}`
+            `${name} is venue/grant-gated — must NOT register in this ${mode} build`
           ).toBeUndefined()
           continue
         }
@@ -617,6 +640,25 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
     expect(absent).not.toContain('email_prepare_send')
     expect(absent).not.toContain('run_command')
   })
+
+  test('agent catalog registers only for headless provenance + knowledge/session grant', () => {
+    expect(buildAllTools('manual_chat').agent_catalog_list).toBeUndefined()
+    expect(buildAllTools('im_chat').agent_catalog_get).toBeUndefined()
+    expect(buildAllTools('cron_headless').agent_catalog_list).toBeUndefined()
+
+    const granted = buildGrantedHeadlessCatalogTools()
+    expect(granted.agent_catalog_list).toBeDefined()
+    expect(granted.agent_catalog_get).toBeDefined()
+
+    const flagOff = buildGatewayTools({
+      domain: mockDomain(() => okEnvelope([])),
+      sessionProvenanceEnabled: false,
+      contextMode: 'cron_headless',
+      agentRunContext: { agentId: 'dms', allowedTools: ['chat_session_list'], skills: [] }
+    })
+    expect(flagOff.agent_catalog_list).toBeUndefined()
+    expect(flagOff.agent_catalog_get).toBeUndefined()
+  })
 })
 
 describe('drift guards — classification completeness + eval catalog mirror', () => {
@@ -628,7 +670,10 @@ describe('drift guards — classification completeness + eval catalog mirror', (
   })
 
   test('REVERSE: every classified name exists as a real gateway tool (catches rename/delete)', () => {
-    const real = new Set(Object.keys(buildAllTools('manual_chat')))
+    const real = new Set([
+      ...Object.keys(buildAllTools('manual_chat')),
+      ...Object.keys(buildGrantedHeadlessCatalogTools())
+    ])
     for (const name of Object.keys(GATEWAY_TOOL_CLASSES)) {
       expect(real.has(name), `${name} classified but not a real gateway tool`).toBe(true)
     }

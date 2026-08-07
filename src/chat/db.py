@@ -1,6 +1,9 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 23）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 24）。
+v24（harness optimization P1，task 08-07）= ``ai_chat_sessions.trigger_id`` / ``trigger_kind`` /
+``trigger_fired_at`` 与 agent/trigger 两个查询索引。三列均 nullable；Python 只读且通过
+``_has_column`` 兼容尚未迁移的 v23 库。
 v23（WP-15 context 环，task 08-05）= ``ai_chat_messages.context_tokens``：本回合最后一次
 provider 调用的 prompt token 数（= composer 右下 context 环显示的「上下文占用」）。
 🔴 与 ``tokens_input`` **语义不同** —— 那一列是 ai@7 的多 step **求和**（工具循环回合里同一段
@@ -291,6 +294,15 @@ class ChatDb:
         limit: int = 300,
         include_archived: bool = False,
         origin: str = "interactive",
+        *,
+        agent_id: Optional[str] = None,
+        agent_job_id: Optional[str] = None,
+        trigger_id: Optional[str] = None,
+        trigger_kind: Optional[str] = None,
+        created_after: Optional[int] = None,
+        created_before: Optional[int] = None,
+        archived: Optional[bool] = None,
+        starred: Optional[bool] = None,
     ) -> List[Dict[str, Any]]:
         """跨邮件 session 历史（含 first_user_message 预览 + message_count，排除无消息 session）。
         镜像 listAllSessions → ChatSessionSummary[]。
@@ -301,10 +313,14 @@ class ChatDb:
         旧库），显式引用 last_read_at 会在 pre-v20 库上 OperationalError → _read_all 吞成 []
         = 整个历史列表被清空。``s.*`` 两个世界都成立：列在 → 带回（未读徽标），列不在 →
         缺键（前端按 undefined = 无徽标处理）。"""
-        if origin not in ("interactive", "agent", "all"):
+        if origin not in ("interactive", "agent", "im", "all"):
             raise ValueError(f"invalid session origin filter: {origin!r}")
         clauses = []
-        if not include_archived:
+        params: list[Any] = []
+        if archived is not None:
+            clauses.append("s.archived = ?")
+            params.append(1 if archived else 0)
+        elif not include_archived:
             clauses.append("s.archived = 0")
         has_origin = self._has_column("ai_chat_sessions", "origin")
         if origin == "interactive" and has_origin:
@@ -313,6 +329,31 @@ class ChatDb:
             if not has_origin:
                 return []
             clauses.append("s.origin = 'agent'")
+        elif origin == "im":
+            if not has_origin:
+                return []
+            clauses.append("s.origin = 'im'")
+        for column, value in (
+            ("agent_id", agent_id), ("agent_job_id", agent_job_id),
+            ("trigger_id", trigger_id), ("trigger_kind", trigger_kind),
+        ):
+            if value is None:
+                continue
+            if not self._has_column("ai_chat_sessions", column):
+                return []
+            clauses.append(f"s.{column} = ?")
+            params.append(value)
+        if created_after is not None:
+            clauses.append("s.created_at >= ?")
+            params.append(created_after)
+        if created_before is not None:
+            clauses.append("s.created_at <= ?")
+            params.append(created_before)
+        if starred is not None:
+            if not self._has_column("ai_chat_sessions", "starred"):
+                return []
+            clauses.append("s.starred = ?")
+            params.append(1 if starred else 0)
         clauses.append("EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)")
         where_clause = " AND ".join(clauses)
         return self._read_all(
@@ -326,7 +367,7 @@ class ChatDb:
                WHERE {where_clause}
                ORDER BY s.updated_at DESC
                LIMIT ?""",
-            (limit,),
+            (*params, max(1, min(int(limit), 300))),
         )
 
     # ── messages ──────────────────────────────────────────────────────────
@@ -361,6 +402,15 @@ class ChatDb:
         session_limit: int = 20,
         snippets_per_session: int = 3,
         snippet_chars: int = 200,
+        origin: str = "all",
+        agent_id: Optional[str] = None,
+        agent_job_id: Optional[str] = None,
+        trigger_id: Optional[str] = None,
+        trigger_kind: Optional[str] = None,
+        created_after: Optional[int] = None,
+        created_before: Optional[int] = None,
+        archived: Optional[bool] = None,
+        starred: Optional[bool] = None,
     ) -> List[Dict[str, Any]]:
         """按消息内容检索历史会话，按 session 聚合返回 {session 元数据 + 命中 snippet}。
 
@@ -441,11 +491,22 @@ class ChatDb:
                         order,
                     ).fetchall()
                 }
+                allowed = {
+                    row["id"]: row
+                    for row in self.list_all_sessions(
+                        limit=300, include_archived=True, origin=origin,
+                        agent_id=agent_id, agent_job_id=agent_job_id,
+                        trigger_id=trigger_id, trigger_kind=trigger_kind,
+                        created_after=created_after, created_before=created_before,
+                        archived=archived, starred=starred,
+                    )
+                }
                 out: List[Dict[str, Any]] = []
                 for sid in order:
                     sess = session_rows.get(sid)
-                    if sess is None:
+                    if sess is None or sid not in allowed:
                         continue  # 孤儿消息（session 行已删）— 防御，正常被 FK CASCADE 挡住
+                    sess = allowed[sid]
                     out.append(
                         {
                             "session": sess,

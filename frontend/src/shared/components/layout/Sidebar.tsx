@@ -49,6 +49,10 @@ import { useNavCollapsed } from '@shared/state/nav-shell'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { openNewCompose } from '@shared/state/compose-new'
 import { deriveAccount } from '@shared/lib/account'
+import {
+  useAgentUnreadCount,
+  useSessionProvenanceEnabled
+} from '@shared/components/agents/hooks'
 
 import { AccountSwitcherPopover } from './AccountSwitcherPopover'
 import { SidebarFolderTree } from './SidebarFolderTree'
@@ -243,6 +247,8 @@ export function Sidebar(): React.ReactElement {
   const navigate = useNavigate()
   const collapsed = useNavCollapsed((s) => s.collapsed)
   const toggleCollapsed = useNavCollapsed((s) => s.toggle)
+  const sessionProvenanceEnabled = useSessionProvenanceEnabled()
+  const agentUnreadTotal = useAgentUnreadCount(sessionProvenanceEnabled).total
   const view = useEmailFilter((s) => s.view)
   const setView = useEmailFilter((s) => s.setView)
   // 多文件夹同步 (P3) — 自定义文件夹激活时内建 MAILBOXES 行全不高亮 (互斥)。
@@ -550,6 +556,12 @@ export function Sidebar(): React.ReactElement {
             label={t('chat.backend.customApi')}
             title={collapsed ? t('chat.backend.customApi') : undefined}
             selected={onAgents}
+            right={
+              agentUnreadTotal > 0 ? (
+                <span className="h-2 w-2 rounded-full bg-[rgb(var(--c-accent))]" aria-label={t('agents.unread')} />
+              ) : undefined
+            }
+            collapsedBadge={agentUnreadTotal}
             onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
           />
           {/* Connectors 独立配置台（08-06）— 内置工具审批档 + 外部连接（MCP）的统一入口。

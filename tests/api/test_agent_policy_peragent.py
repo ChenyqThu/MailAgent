@@ -450,10 +450,11 @@ def test_tool_options_consistent_with_tool_catalog():
     expected = {
         name: meta["tool_class"]
         for name, meta in catalog.items()
-        if meta["tool_class"] in ("read", "domain_write", "artifact")
-        and not meta.get("legacy_retired")
-        and not meta.get("manual_only")
-    }
+            if meta["tool_class"] in ("read", "domain_write", "artifact")
+            and not meta.get("legacy_retired")
+            and not meta.get("manual_only")
+            and name != "plan_update"  # core-unmanaged: every headless run gets the local no-op plan tool
+        }
     assert dict(HEADLESS_TOOL_OPTIONS) == expected
     # 默认安全集成员必须都在 headless 地板内。
     assert set(DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS) <= set(expected)

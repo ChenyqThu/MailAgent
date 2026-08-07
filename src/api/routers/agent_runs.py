@@ -98,6 +98,8 @@ def resolve_mounted_skills(agent: Optional[dict[str, Any]]) -> frozenset[str]:
 # capability_change 结构性缺席（ADR-004 D2/D3：exec 走 grant_exec 矩阵例外，非此列表）；
 # web（web_fetch/web_search，S6 起 class=web）同样结构性缺席 —— 走 grant_web 三档授权。
 HEADLESS_TOOL_OPTIONS: tuple[tuple[str, str], ...] = (
+    ("agent_catalog_get", "read"),
+    ("agent_catalog_list", "read"),
     ("agent_profile_history", "read"),
     ("agent_profile_read", "read"),
     ("calendar_event_get", "read"),
@@ -353,6 +355,7 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
     spec: dict[str, Any] = {
         "jobId": job.job_id,
         "agentId": agent_id,
+        "agentTitle": (agent.get("title") or "").strip() or agent_id,
         "trigger": trigger_out,
         "prompt": prompt,
         "model": (agent.get("model") or "").strip() or None,

@@ -990,6 +990,8 @@
       "skill_uninstall": "卸载技能",
       "skill_list_installed": "列出已装技能",
       "chat_session_list": "列出历史会话",
+      "agent_catalog_list": "列出 Agent 目录",
+      "agent_catalog_get": "读取 Agent 目录项",
       "chat_session_search": "搜索历史会话",
       "chat_session_get": "读取历史会话",
       "custom_agent_list": "列出 Custom Agent",
@@ -1011,6 +1013,17 @@
       "notion_agent_chat": "咨询 Notion Agent",
       "plan_update": "更新计划",
       "suggest_followups": "准备追问建议"
+    },
+    "planCard": {
+      "title": "计划",
+      "invalid": "无法显示这条已保存的计划。",
+      "status": {
+        "pending": "待处理",
+        "in_progress": "进行中",
+        "done": "已完成",
+        "blocked": "受阻",
+        "unavailable": "不可用"
+      }
     },
     "customAgentCard": {
       "titleCreate": "创建 Custom Agent",
@@ -3730,6 +3743,7 @@
     "solid": "实色"
   },
   "agents": {
+    "unread": "未读 Agent 运行",
     "title": "报告 Agents",
     "subtitle": "自动生成、可溯源的邮件报告。日报为主，周报 / 月报同引擎。",
     "reportsMaster": {

@@ -85,6 +85,8 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   // W6 — suggest_followups 是交互 UI 供给（助手消息尾部追问 chips 的回合内产出），无 skill 归属，
   // 永不 skill-gated；它的唯一门 = manual_chat 场地门（tools/index.ts 注册时判 contextMode）。
   'suggest_followups',
+  // P0 — local plan artifact. It has no skill owner and is visible in every context mode.
+  'plan_update',
   // M4b/M4c self-mount meta 工具（behind MAILAGENT_SKILL_SELF_MOUNT）—— 无 skill 归属，永不 skill-gated。
   // 列于此让完整性守护（每个 gateway 工具必被分类）通过。
   'update_system_md',
@@ -95,6 +97,8 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'chat_session_list',
   'chat_session_search',
   'chat_session_get',
+  'agent_catalog_list',
+  'agent_catalog_get',
   // S1 R2 profile-config 工具（behind MAILAGENT_OPENNESS_CONFIG_TOOLS）—— agent 自配置面，
   // 无 skill 归属，开关权在独立 flag，永不 skill-gated。
   'agent_profile_read',

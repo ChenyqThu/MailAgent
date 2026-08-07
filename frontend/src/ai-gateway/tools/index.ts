@@ -15,6 +15,7 @@ import type { MailAgentDomainClient } from '../python/domainClient'
 import type { ApprovalGuard } from '../security/approval'
 import { createEmailReadTools } from './email'
 import { createFollowupTools } from './followups'
+import { createPlanTools } from './plan'
 import { createKosReadTools } from './kos'
 import { createReportTools } from './report'
 import { createWriteTools } from './write'
@@ -27,6 +28,7 @@ import { createWebTools } from './web'
 import { createExecTools } from './exec'
 import { createSkillSupplyTools } from './skill_supply'
 import { createCustomAgentTools } from './agents'
+import { createAgentCatalogTools } from './agent_catalog'
 import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
 import { createNotionAgentTools } from './notion_agent'
 import {
@@ -48,6 +50,10 @@ export interface BuildGatewayToolsOpts {
   domain: MailAgentDomainClient
   /** kosConfig().timeDecayEnabled — gates kos_query recency rerank. */
   kosTimeDecayEnabled?: boolean
+  /** MAILAGENT_PLAN_TOOL, read in Electron main only. Default ON because P0 fixes the bug where
+   *  the prompt requires a tool that does not exist; default-off would preserve that bug. The
+   *  flag is only an emergency rollback switch. Explicit false restores the pre-P0 ToolSet. */
+  planToolsEnabled?: boolean
   /** MAILAGENT_AI_SDK_WRITE_TOOLS (phase-03b). When false (default) the registry is
    *  read-only. When true, the seven approval-gated write tools are added — but only
    *  if `approvalGuard` is also supplied (a write tool cannot exist without its guard). */
@@ -104,6 +110,7 @@ export interface BuildGatewayToolsOpts {
    *  message content is CHAT_HISTORY-fenced (past sessions embed email bodies = second-order
    *  injection surface). Off (default) → not added → ToolSet byte-identical to the v1.2.0 set. */
   sessionToolsEnabled?: boolean
+  sessionProvenanceEnabled?: boolean
   /** S1 R2 (MAILAGENT_OPENNESS_CONFIG_TOOLS) — when true AND approvalGuard is supplied, the four
    *  profile-config tools are added: agent_profile_read / agent_profile_history (silent reads;
    *  memory content comes back MEMORY-fenced) + agent_profile_restore / agent_memory_update
@@ -208,12 +215,20 @@ export const GATEWAY_READ_TOOL_NAMES = [
   'report_get'
 ] as const
 
-/** Tools present in the minimum gateway assembly. `report_write` is a local, silent artifact
- * primitive, so it is available without enabling the approval-gated domain write families.
+/** Tools present in the default manual gateway assembly. `report_write` and `plan_update` are
+ * local, silent artifacts, so they are available without the approval-gated domain write families.
  * `suggest_followups` (W6) is the flag-free interactive follow-up supply — part of every MANUAL
  * assembly (the one venue-gated member: it does not register outside manual_chat, and every
  * consumer of this const asserts a manual assembly). */
 export const GATEWAY_DEFAULT_TOOL_NAMES = [
+  ...GATEWAY_READ_TOOL_NAMES,
+  'report_write',
+  'plan_update',
+  'suggest_followups'
+] as const
+
+/** Exact pre-P0 manual default surface, used to pin the emergency flag-off rollback shape. */
+export const GATEWAY_PLAN_TOOL_OFF_NAMES = [
   ...GATEWAY_READ_TOOL_NAMES,
   'report_write',
   'suggest_followups'
@@ -240,6 +255,9 @@ export function buildGatewayTools(
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
     ...createReportTools(opts.domain, collector, opts.agentRunContext?.agentId)
   }
+  if (opts.planToolsEnabled !== false) {
+    Object.assign(tools, createPlanTools(collector))
+  }
   // W6 — suggest_followups is interactive UI supply: registered ONLY in an owner-facing manual
   // chat (no flag — it is part of the manual default set). NOT registered headless/im/search:
   // follow-up chips have no meaning without a composer, and its hasToolCall stop condition
@@ -254,7 +272,21 @@ export function buildGatewayTools(
   // CORE_UNGATED (no skill ownership — the flag is the on/off authority) so applySkillGating
   // below never drops them.
   if (opts.sessionToolsEnabled) {
-    Object.assign(tools, createSessionTools(opts.domain, collector))
+    Object.assign(
+      tools,
+      createSessionTools(opts.domain, collector, {
+        provenanceEnabled: opts.sessionProvenanceEnabled,
+        currentAgentId: opts.agentRunContext?.agentId,
+        allowAllHistory: opts.agentRunContext?.allowedTools?.includes('chat_session_list') === true
+      })
+    )
+  }
+  if (
+    opts.sessionProvenanceEnabled &&
+    opts.agentRunContext &&
+    opts.agentRunContext.allowedTools?.includes('chat_session_list')
+  ) {
+    Object.assign(tools, createAgentCatalogTools(opts.domain, collector))
   }
   // phase-03b — write tools only when the flag is on AND a guard is supplied. Off (or no
   // guard) → read-only, byte-identical to 03a. Approval is enforced two ways: ai@6's

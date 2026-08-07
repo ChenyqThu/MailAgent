@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import os
+import json
 import sqlite3
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Literal, Optional
@@ -32,11 +33,53 @@ from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
 from src.api.deps import get_chat_db, get_env_file_path, get_settings
 from src.chat.kos_save import SaveConversationError, save_conversation_to_kos
+from src.agents.run_state import derive_agent_run_state
 from src.kos.client import KOSClient, KOSError
 
 router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 logger = logging.getLogger(__name__)
+
+
+def _session_scope(request: Request, requested_agent_id: Optional[str]) -> Optional[str]:
+    current = (request.headers.get("X-MailAgent-Agent-Id") or "").strip()
+    if not current:
+        return requested_agent_id
+    allow_all = request.headers.get("X-MailAgent-Allow-All-History") == "1"
+    return requested_agent_id if allow_all else current
+
+
+def _project_session_runs(items: List[Dict[str, Any]], sync_db_path: str) -> None:
+    job_ids = [int(s["agent_job_id"]) for s in items if s.get("origin") == "agent" and str(s.get("agent_job_id") or "").isdigit()]
+    if not job_ids or not os.path.exists(sync_db_path):
+        return
+    try:
+        conn = sqlite3.connect(sync_db_path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            placeholders = ",".join("?" * len(job_ids))
+            rows = conn.execute(f"SELECT * FROM async_jobs WHERE job_id IN ({placeholders})", job_ids).fetchall()
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return
+    by_id = {int(r["job_id"]): dict(r) for r in rows}
+    for item in items:
+        raw_id = str(item.get("agent_job_id") or "")
+        row = by_id.get(int(raw_id)) if raw_id.isdigit() else None
+        if not row:
+            continue
+        try:
+            result = json.loads(row.get("result_json") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            result = {}
+        item["run"] = {
+            "state": derive_agent_run_state(row),
+            "outcome": result.get("outcome"),
+            "approvalState": result.get("approval_state"),
+            "finishedAt": row.get("finished_at"),
+            "error": row.get("last_error"),
+        }
 
 # task 07-21 —— chat system prompt 不再注入 Notion context page（``LLM_CONTEXT_PAGE_ID``）。
 # 用户身份/画像已由 Standing Context（backend agent_config.db 的 SOUL/AGENT/RULES/USER，恒
@@ -103,14 +146,28 @@ def _email_meta_for_sessions(
 async def list_all_sessions(
     request: Request,
     include_archived: bool = Query(False),
-    origin: Literal["interactive", "agent", "all"] = Query("interactive"),
+    origin: Literal["interactive", "agent", "im", "all"] = Query("interactive"),
+    agent_id: Optional[str] = Query(None, alias="agentId"),
+    agent_job_id: Optional[str] = Query(None, alias="agentJobId"),
+    trigger_id: Optional[str] = Query(None, alias="triggerId"),
+    trigger_kind: Optional[str] = Query(None, alias="triggerKind"),
+    created_after: Optional[int] = Query(None, alias="createdAfter"),
+    created_before: Optional[int] = Query(None, alias="createdBefore"),
+    archived: Optional[bool] = Query(None),
+    starred: Optional[bool] = Query(None),
+    limit: int = Query(300, ge=1, le=300),
 ):
     """跨邮件 session 历史（含 first_user_message 预览 + message_count + join email
     subject/sender）。镜像 chat:listAllSessions → ChatSessionListItem[]。
     include_archived=true 时含归档会话（用于归档分组视图）。"""
     summaries = get_chat_db().list_all_sessions(
-        include_archived=include_archived, origin=origin
+        limit=limit, include_archived=include_archived, origin=origin,
+        agent_id=_session_scope(request, agent_id), agent_job_id=agent_job_id,
+        trigger_id=trigger_id, trigger_kind=trigger_kind,
+        created_after=created_after, created_before=created_before,
+        archived=archived, starred=starred,
     )
+    _project_session_runs(summaries, get_settings().sync_store_db_path)
     # codex review NIT — general sessions have email_id=None; exclude them so the
     # email metadata join doesn't query a NULL id (and skips get_settings() when no
     # real email ids remain).
@@ -160,12 +217,33 @@ async def search_sessions(
     request: Request,
     q: str = Query(..., min_length=1, max_length=200),
     limit: int = Query(20, ge=1, le=20),
+    origin: Literal["interactive", "agent", "im", "all"] = Query("all"),
+    agent_id: Optional[str] = Query(None, alias="agentId"),
+    agent_job_id: Optional[str] = Query(None, alias="agentJobId"),
+    trigger_id: Optional[str] = Query(None, alias="triggerId"),
+    trigger_kind: Optional[str] = Query(None, alias="triggerKind"),
+    created_after: Optional[int] = Query(None, alias="createdAfter"),
+    created_before: Optional[int] = Query(None, alias="createdBefore"),
+    archived: Optional[bool] = Query(None),
+    starred: Optional[bool] = Query(None),
 ):
     """S1 R1 — 按消息内容检索历史会话（FTS5 trigram，短 query/未迁移库 LIKE 降级）。按 session
     聚合返回 {session 元数据 + 命中 snippet 列表}（条数/字节 cap 在 ChatDb.search_sessions）。
     消费方 = gateway chat_session_search 工具（domainClient）；鉴权与本 router 其余 session
     端点一致（verify_cf_access：本地 token 腿 / CF JWT 腿）。"""
-    results = get_chat_db().search_sessions(q, session_limit=limit)
+    results = get_chat_db().search_sessions(
+        q, session_limit=limit, origin=origin,
+        agent_id=_session_scope(request, agent_id), agent_job_id=agent_job_id,
+        trigger_id=trigger_id, trigger_kind=trigger_kind,
+        created_after=created_after, created_before=created_before,
+        archived=archived, starred=starred,
+    )
+    for hit in results:
+        session = hit.get("session")
+        if isinstance(session, dict):
+            _project_session_runs([session], get_settings().sync_store_db_path)
+            if "run" in session:
+                hit["run"] = session.pop("run")
     return success_envelope(
         results, request=request, source="sqlite", meta_extra={"count": len(results)}
     )
@@ -565,6 +643,12 @@ async def chat_config(request: Request):
             "sessionToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_SESSION_TOOLS", True),
             "configToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_CONFIG_TOOLS", True),
             "webToolsEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_WEB_TOOLS", True),
+            # P1 — 未读 UI 对 main-env-only MAILAGENT_SESSION_PROVENANCE 的只读投影。
+            # Electron main 仍是 gateway 注册/身份注入的唯一决策点；这里仅镜像同一 .env，
+            # 避免 renderer 通过 env snapshot 绕过 MANAGED_ENV_KEYS 白名单。
+            "sessionProvenanceEnabled": _hot_bool(
+                env_vals, "MAILAGENT_SESSION_PROVENANCE", True
+            ),
             # task 07-12 P3 — Settings「模型服务」区（provider 管理 UI）+ 功能位选择器分组
             # 显隐 gate。与上面 enabledModels 的聚合投影**同源同语义**（pydantic 冻结单例读，
             # 翻 MAILAGENT_LLM_PROVIDER_REGISTRY 需重启 serve-api）——UI 门控与投影行为

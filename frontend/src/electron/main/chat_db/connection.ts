@@ -150,7 +150,9 @@ import { resolveDataRoot } from '../db'
 // Plain additive ALTER, hasColumn idempotency guard (same discipline as v5..v21)。ai_chat.db 自有
 // version ladder；this bump does NOT touch backend_lifecycle.EXPECTED_DB_VERSION。🔴 bump 同步刷
 // src/chat/db.py 头注释（Python 侧 SELECT * 读，不建表、不写这一列）。
-const CHAT_DB_VERSION = 23
+// v24 (harness optimization P1, task 08-07) — headless session provenance. Three nullable
+// source columns plus two read indexes; parent/invocation columns intentionally remain P2.
+const CHAT_DB_VERSION = 24
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1112,6 +1114,32 @@ function migrate(db: Database.Database): void {
       }
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '23')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  if (current < 24) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'trigger_id')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN trigger_id TEXT')
+      }
+      if (!hasColumn(db, 'ai_chat_sessions', 'trigger_kind')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN trigger_kind TEXT')
+      }
+      if (!hasColumn(db, 'ai_chat_sessions', 'trigger_fired_at')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN trigger_fired_at INTEGER')
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_agent_updated
+        ON ai_chat_sessions(agent_id, updated_at DESC)`)
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_trigger_fired
+        ON ai_chat_sessions(trigger_id, trigger_fired_at DESC)`)
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '24')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

@@ -169,7 +169,8 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
  */
 export function wrapCfgForAgentRun(
   cfg: AiGatewayConfig,
-  agentRunContext: AgentRunContext
+  agentRunContext: AgentRunContext,
+  identity?: AiGatewayConfig['headlessAgentIdentity']
 ): AiGatewayConfig {
   // Fail-closed normalization at the ONE funnel both paths share: an agent run never treats a
   // missing list as "no narrowing" (that semantic stays with non-agent callers of
@@ -185,6 +186,7 @@ export function wrapCfgForAgentRun(
   return {
     ...cfg,
     agentRunContext: ctx,
+    headlessAgentIdentity: cfg.sessionProvenanceEnabled === false ? undefined : identity,
     // ADR-004 §4.1 (codex终审 P1; rev3.1 §3.2 extends exec → exec ∪ web; PR3 extends it again →
     // exec ∪ web ∪ connector tools BY NAME) — the intersection domain is the NON-granted classes
     // only. exec AND web tools are exempt: their presence is
@@ -217,7 +219,13 @@ export function wrapCfgForAgentRun(
       const out: ToolSet = {}
       for (const [name, t] of Object.entries(built)) {
         const cls = classOfTool(name)
-        if (cls === 'exec' || cls === 'web' || isMcpToolName(name) || keep.has(name)) out[name] = t
+        if (
+          name === 'plan_update' ||
+          cls === 'exec' ||
+          cls === 'web' ||
+          isMcpToolName(name) ||
+          keep.has(name)
+        ) out[name] = t
       }
       return out
     }
@@ -294,7 +302,18 @@ export async function runHeadlessAgent(
   // pause→resume chain keeps the exact same tool face. Both fresh and resumed drains use chatRun's
   // internal 10k termination sentinel; the worker's run-seconds abort remains the actual budget.
   const agentRunContext = agentRunContextFromSpec(spec, opts.jobId)
-  const cfg2 = wrapCfgForAgentRun(cfg, agentRunContext)
+  const cfg2 = wrapCfgForAgentRun(
+    cfg,
+    agentRunContext,
+    sessionId == null
+      ? undefined
+      : {
+          agentId: spec.agentId,
+          agentTitle: spec.agentTitle || spec.agentId,
+          jobId: opts.jobId,
+          sessionId
+        }
+  )
 
   // PR3 — cold-manifest guard: a headless run is ONE-SHOT, so the lifecycle's fire-and-forget
   // TTL cache is not enough (an empty/stale cache would make a granted cron run silently miss its

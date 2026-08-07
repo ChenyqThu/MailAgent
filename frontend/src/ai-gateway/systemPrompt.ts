@@ -140,6 +140,12 @@ export function buildGatewaySystemPrompt(args: {
   contextSnapshot: AgentContextSnapshot | null
   /** Trusted runtime provenance, set only by prepareChatRun for a server-derived headless agent. */
   headlessAgentRun?: boolean
+  headlessAgentIdentity?: {
+    agentId: string
+    agentTitle: string
+    jobId: number
+    sessionId: number
+  }
   /** W6 — true iff THIS run's built ToolSet holds suggest_followups (manual chat). Injects the
    *  follow-up guidance block; absent/false → byte-identical prompt (headless / harness / tests). */
   followupToolAvailable?: boolean
@@ -188,6 +194,10 @@ export function buildGatewaySystemPrompt(args: {
   // 08-02 F4 — 恒注入（manual + headless），只有「无人值守」那一句按 run 形态分。它与上面的
   // skillFragments 方向**相反**（那条 manual-only），所以两者不能再共用一个三元条件。
   const executionDiscipline = executionDisciplineFor(args.headlessAgentRun === true)
+  const identity =
+    args.headlessAgentRun === true && args.headlessAgentIdentity
+      ? `<current_custom_agent>\n  <id>${escapeXml(args.headlessAgentIdentity.agentId)}</id>\n  <title>${escapeXml(args.headlessAgentIdentity.agentTitle)}</title>\n  <job_id>${args.headlessAgentIdentity.jobId}</job_id>\n  <session_id>${args.headlessAgentIdentity.sessionId}</session_id>\n</current_custom_agent>`
+      : ''
   // W6 — follow-up guidance only when the run's ToolSet holds the tool (manual chat). A constant
   // block per run shape, so the cacheable prefix stays stable across a manual session's turns.
   const followupGuidance = args.followupToolAvailable === true ? FOLLOWUP_SUGGESTIONS_GUIDANCE : ''
@@ -196,9 +206,18 @@ export function buildGatewaySystemPrompt(args: {
   // only when non-empty; the date block is ALWAYS non-empty and remains LAST so the preceding prompt
   // stays a stable cache prefix and the date changes at most once per day.
   const dateBlock = buildCurrentDateBlock(args.contextSnapshot)
-  return [stable, contextBlock, executionDiscipline, followupGuidance, dateBlock]
+  return [stable, contextBlock, identity, executionDiscipline, followupGuidance, dateBlock]
     .filter((s) => s.length > 0)
     .join('\n\n')
+}
+
+function escapeXml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
 }
 
 /** Build the always-present "current date" segment appended last to the gateway system prompt.

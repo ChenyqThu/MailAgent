@@ -135,12 +135,15 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // buildGatewayTools (interactive UI supply — the class matrix's "reads register everywhere"
   // does not apply to it; see the registration comment + policy.test.ts carve-out).
   suggest_followups: 'read',
+  plan_update: 'read',
   // artifact — local, deletable/replaceable output. It never leaves the machine and never needs
   // an approval card; unlike domain_write it is available silently in every context mode.
   report_write: 'artifact',
   chat_session_list: 'read',
   chat_session_search: 'read',
   chat_session_get: 'read',
+  agent_catalog_list: 'read',
+  agent_catalog_get: 'read',
   agent_profile_read: 'read',
   agent_profile_history: 'read',
   discover_skills: 'read',

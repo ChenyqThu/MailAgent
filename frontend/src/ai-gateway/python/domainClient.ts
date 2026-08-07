@@ -369,6 +369,14 @@ export interface DomainChatSessionSummary {
   updated_at: number
   first_user_message: string | null
   message_count: number
+  origin?: string | null
+  agent_id?: string | null
+  agent_job_id?: string | null
+  trigger_id?: string | null
+  trigger_kind?: string | null
+  trigger_fired_at?: number | null
+  starred?: number | boolean
+  run?: DomainSessionRun
   email_subject?: string | null
   email_sender?: string | null
 }
@@ -600,6 +608,28 @@ export interface DomainSessionSearchHit {
     snippet: string
     created_at: number
   }>
+  run?: DomainSessionRun
+}
+
+export interface DomainSessionRun {
+  state: string
+  outcome?: string | null
+  approvalState?: string | null
+  finishedAt?: number | null
+  error?: string | null
+}
+
+export interface DomainSessionQuery {
+  origin?: 'interactive' | 'agent' | 'im' | 'all'
+  agentId?: string
+  agentJobId?: string
+  triggerId?: string
+  triggerKind?: string
+  createdAfter?: number
+  createdBefore?: number
+  archived?: boolean
+  starred?: boolean
+  limit?: number
 }
 
 export class MailAgentDomainClient {
@@ -1029,19 +1059,52 @@ export class MailAgentDomainClient {
 
   /** chat_session_list — recent sessions incl. preview + message_count. GET /chat/sessions/all
    *  (fixed server-side cap 300; the tool slices to its own limit). */
-  listSessions(signal?: AbortSignal): Promise<DomainChatSessionSummary[]> {
-    return this._req<DomainChatSessionSummary[]>('GET', '/chat/sessions/all', { signal })
+  listSessions(
+    query?: DomainSessionQuery,
+    signal?: AbortSignal,
+    scope?: { currentAgentId: string; allowAllHistory: boolean }
+  ): Promise<DomainChatSessionSummary[]> {
+    return this._req<DomainChatSessionSummary[]>('GET', '/chat/sessions/all', {
+      query: query
+        ? {
+            origin: query.origin,
+            agentId: query.agentId,
+            agentJobId: query.agentJobId,
+            triggerId: query.triggerId,
+            triggerKind: query.triggerKind,
+            createdAfter: query.createdAfter,
+            createdBefore: query.createdBefore,
+            archived: query.archived,
+            starred: query.starred,
+            limit: query.limit
+          }
+        : undefined,
+      headers: scope
+        ? {
+            'X-MailAgent-Agent-Id': scope.currentAgentId,
+            'X-MailAgent-Allow-All-History': scope.allowAllHistory ? '1' : '0'
+          }
+        : undefined,
+      signal
+    })
   }
 
   /** chat_session_search — FTS (trigram) message search aggregated by session. GET
    *  /chat/sessions/search (param is `q`; <3-char queries LIKE-fallback server-side). */
   searchSessions(
     query: string,
-    limit?: number,
-    signal?: AbortSignal
+    filters?: DomainSessionQuery,
+    signal?: AbortSignal,
+    scope?: { currentAgentId: string; allowAllHistory: boolean }
   ): Promise<DomainSessionSearchHit[]> {
     return this._req<DomainSessionSearchHit[]>('GET', '/chat/sessions/search', {
-      query: { q: query, limit },
+      query: { q: query, ...filters },
+      headers: scope
+        ? {
+            'X-MailAgent-Agent-Id': scope.currentAgentId,
+            'X-MailAgent-Allow-All-History': scope.allowAllHistory ? '1' : '0'
+          }
+        : undefined,
       signal
     })
   }

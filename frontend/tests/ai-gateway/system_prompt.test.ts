@@ -70,6 +70,26 @@ function emailSnapshot(body: string) {
 }
 
 describe('buildGatewaySystemPrompt', () => {
+  test('headless identity is trusted-only, escaped, and absent from manual prompts', () => {
+    const identity = { agentId: 'a<&', agentTitle: 'Ops <Lead>', jobId: 9, sessionId: 12 }
+    const headless = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X' },
+      contextSnapshot: null,
+      headlessAgentRun: true,
+      headlessAgentIdentity: identity
+    })
+    expect(headless).toContain('<current_custom_agent>')
+    expect(headless).toContain('<id>a&lt;&amp;</id>')
+    expect(headless).toContain('<title>Ops &lt;Lead&gt;</title>')
+    expect(headless).toContain('<job_id>9</job_id>')
+    expect(headless).toContain('<session_id>12</session_id>')
+    const manual = buildGatewaySystemPrompt({
+      promptConfig: { standingContext: 'X' },
+      contextSnapshot: null,
+      headlessAgentIdentity: identity
+    })
+    expect(manual).not.toContain('<current_custom_agent>')
+  })
   test('unconfigured (no provider config) → context-light SOUL fallback (+ trailing date block)', () => {
     const out = buildGatewaySystemPrompt({ promptConfig: null, contextSnapshot: null })
     // The stable prefix is still the SOUL fallback and it LEADS the prompt; the always-present

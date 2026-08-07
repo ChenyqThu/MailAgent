@@ -834,7 +834,15 @@ async function handleAgentRun(
   // rather than aborting (the tool loop + approval still work; only the history row is missing).
   let sessionId: number | null = null
   try {
-    sessionId = cfg.createAgentSession({ agentId: spec.agentId, jobId, title: spec.sessionTitle })
+    const firedAt = Date.parse(spec.trigger.firedAt)
+    sessionId = cfg.createAgentSession({
+      agentId: spec.agentId,
+      jobId,
+      title: spec.sessionTitle,
+      triggerId: null,
+      triggerKind: spec.trigger.kind,
+      triggerFiredAt: Number.isFinite(firedAt) ? firedAt : null
+    })
   } catch (err) {
     console.error(
       '[ai-gateway] /api/ai/agent-run createAgentSession failed (run continues unsaved)',

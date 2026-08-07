@@ -15,6 +15,8 @@ import {
   assistantPartComponents,
   getAssistantPartComponents
 } from '@shared/assistant/tools/registerToolUIs'
+import { PLAN_UPDATE_TOOL_NAME } from '@shared/assistant/plan'
+import { PlanCard } from '@shared/assistant/tools/generic/PlanCard'
 import { ToolTraceCard } from '@shared/assistant/tools/generic/ToolTraceCard'
 import { McpToolFallback } from '@shared/assistant/tools/generic/McpApprovalCard'
 import { SuggestFollowupsHiddenPart } from '@shared/assistant/components/FollowupSuggestions'
@@ -160,7 +162,8 @@ describe('getAssistantPartComponents — S3 always-on rich cards', () => {
       expect(byName[name]).toBe(render)
     }
     expect(byName[SUGGEST_FOLLOWUPS_TOOL_NAME]).toBe(SuggestFollowupsHiddenPart)
-    expect(Object.keys(byName)).toHaveLength(Object.keys(componentRegistry.byName).length + 1)
+    expect(byName[PLAN_UPDATE_TOOL_NAME]).toBe(PlanCard)
+    expect(Object.keys(byName)).toHaveLength(Object.keys(componentRegistry.byName).length + 2)
     expect(Object.keys(tools.by_name ?? {})).toContain('email_draft_reply')
     // dynamic connector names are structurally NOT in by_name (runtime-only) — the router is
     // the only surface that can card them.

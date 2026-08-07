@@ -18,6 +18,7 @@ export interface AgentRunMatchedRule {
 export interface AgentRunSpec {
   jobId: number
   agentId: string
+  agentTitle: string
   trigger: {
     /** 'cron' | 'schedule' → cron_headless, 'email_filter' → untrusted_trigger, 'im' → im_chat
      *  (阶段 0b 预置 —— 阶段 2 飞书对话；当前无任何 spec 会带它); anything else
@@ -182,7 +183,14 @@ export type ChatAnchorType = 'email' | 'general'
 // listAllSessions falls through to the interactive clause; serve-api's Literal[3] query param 422s).
 // A future IM-only filter must land in ALL FOUR mirrors at once: both TS unions, the two listing
 // clauses, src/api/routers/chat.py's Literal and src/chat/db.py's validator tuple.
-export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'all'
+export type ChatSessionOriginFilter = 'interactive' | 'agent' | 'im' | 'all'
+export type ChatSessionTriggerKind =
+  | 'manual'
+  | 'cron'
+  | 'schedule'
+  | 'email_filter'
+  | 'calendar_event_change'
+  | 'calendar_before_start'
 
 export interface ChatSession {
   id: number
@@ -212,6 +220,9 @@ export interface ChatSession {
   origin?: string | null
   agent_id?: string | null
   agent_job_id?: string | null
+  trigger_id?: string | null
+  trigger_kind?: ChatSessionTriggerKind | string | null
+  trigger_fired_at?: number | null
   // harness-chat lane A B4 (task 07-15) — per-session read watermark (ai_chat.db v20 additive
   // column). NULL/undefined = never marked read → no unread badge; unread derives as
   // updated_at > last_read_at (see shared/lib/chatUnread.ts). Optional so pre-v20 rows (and the

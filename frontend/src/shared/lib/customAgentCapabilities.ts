@@ -51,6 +51,8 @@ const KNOWLEDGE_AND_SESSION_TOOLS = [
   'chat_session_list',
   'chat_session_search',
   'chat_session_get',
+  'agent_catalog_list',
+  'agent_catalog_get',
   'agent_profile_read',
   'agent_profile_history',
   'discover_skills',

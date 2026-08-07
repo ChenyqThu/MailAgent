@@ -10,11 +10,39 @@ import { describe, expect, test } from 'vitest'
 import { buildGatewayTools, GATEWAY_DEFAULT_TOOL_NAMES } from '../../../src/ai-gateway/tools'
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
 import type { GatewayToolAuditEntry } from '../../../src/ai-gateway/tools/types'
-import { emailSearchSchema } from '../../../src/ai-gateway/tools/schemas'
+import {
+  chatSessionListProvenanceSchema,
+  chatSessionListSchema,
+  emailSearchSchema
+} from '../../../src/ai-gateway/tools/schemas'
 import { mockDomain, okEnvelope, runTool } from './_helpers'
 
 describe('buildGatewayTools', () => {
-  test('exposes exactly the 11 read tools — read-only (no write tools, none need approval)', () => {
+  test('session provenance off keeps catalog tools absent; enabled granted headless registers them', () => {
+    const base = { domain: mockDomain(() => okEnvelope([])), sessionToolsEnabled: true } as const
+    const off = buildGatewayTools({
+      ...base,
+      sessionProvenanceEnabled: false,
+      contextMode: 'cron_headless',
+      agentRunContext: { agentId: 'a', allowedTools: ['chat_session_list'], skills: [] }
+    })
+    expect(off.agent_catalog_list).toBeUndefined()
+    expect(off.agent_catalog_get).toBeUndefined()
+    const on = buildGatewayTools({
+      ...base,
+      sessionProvenanceEnabled: true,
+      contextMode: 'cron_headless',
+      agentRunContext: { agentId: 'a', allowedTools: ['chat_session_list'], skills: [] }
+    })
+    expect(on.agent_catalog_list).toBeDefined()
+    expect(on.agent_catalog_get).toBeDefined()
+    expect(chatSessionListSchema.parse({ agentId: 'ignored' })).toEqual({ limit: 20 })
+    expect(chatSessionListProvenanceSchema.parse({ agentId: 'kept' })).toMatchObject({
+      agentId: 'kept',
+      limit: 20
+    })
+  })
+  test('exposes exactly the default silent tools — no approval requirements', () => {
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope([])),
       contextMode: 'manual_chat'

@@ -199,6 +199,9 @@ export function createAgentSession(input: {
   agentId: string
   jobId: number
   title: string
+  triggerId?: string | null
+  triggerKind?: string | null
+  triggerFiredAt?: number | null
 }): number {
   const db = getChatDb()
   const now = Date.now()
@@ -206,10 +209,20 @@ export function createAgentSession(input: {
     .prepare(
       `INSERT INTO ai_chat_sessions
         (email_id, anchor_type, anchor_id, backend_kind, backend_model,
-         backend_agent_page_id, title, created_at, updated_at, origin, agent_id, agent_job_id)
-       VALUES (NULL, 'general', NULL, 'ai-sdk', NULL, NULL, ?, ?, ?, 'agent', ?, ?)`
+         backend_agent_page_id, title, created_at, updated_at, origin, agent_id, agent_job_id,
+         trigger_id, trigger_kind, trigger_fired_at)
+       VALUES (NULL, 'general', NULL, 'ai-sdk', NULL, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`
     )
-    .run(input.title, now, now, input.agentId, String(input.jobId))
+    .run(
+      input.title,
+      now,
+      now,
+      input.agentId,
+      String(input.jobId),
+      input.triggerId ?? null,
+      input.triggerKind ?? null,
+      input.triggerFiredAt ?? null
+    )
   return Number(result.lastInsertRowid)
 }
 
@@ -281,6 +294,8 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
   const originClause =
     origin === 'agent'
       ? "s.origin = 'agent'"
+      : origin === 'im'
+        ? "s.origin = 'im'"
       : origin === 'all'
         ? '1 = 1'
         : "COALESCE(s.origin, 'interactive') <> 'agent'"
@@ -293,7 +308,8 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
       `SELECT
          s.id, s.email_id, s.anchor_type, s.anchor_id, s.backend_kind, s.backend_model,
          s.backend_agent_page_id, s.title, s.archived, s.created_at, s.updated_at,
-         s.origin, s.agent_id, s.agent_job_id, s.last_read_at, s.pinned_at, s.starred,
+         s.origin, s.agent_id, s.agent_job_id, s.trigger_id, s.trigger_kind, s.trigger_fired_at,
+         s.last_read_at, s.pinned_at, s.starred,
          (SELECT substr(m.content, 1, 500) FROM ai_chat_messages m
             WHERE m.session_id = s.id AND m.role = 'user'
             ORDER BY m.created_at ASC LIMIT 1) AS first_user_message,

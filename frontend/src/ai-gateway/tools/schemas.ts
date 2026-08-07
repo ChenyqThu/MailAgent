@@ -13,6 +13,44 @@
 import { z } from 'zod'
 import { REPORT_CADENCES, reportBlockInputSchema } from '../../shared/api/reportBlocks'
 
+export const PLAN_STEP_STATUSES = [
+  'pending',
+  'in_progress',
+  'done',
+  'blocked',
+  'unavailable'
+] as const
+
+/** plan_update — local, side-effect-free plan artifact. */
+export const planUpdateSchema = z
+  .object({
+    goal: z.string().trim().min(1),
+    steps: z
+      .array(
+        z.object({
+          id: z.string().trim().min(1),
+          title: z.string().trim().min(1),
+          status: z.enum(PLAN_STEP_STATUSES),
+          note: z.string().trim().optional()
+        })
+      )
+      .max(12)
+  })
+  .superRefine((value, ctx) => {
+    const seen = new Set<string>()
+    value.steps.forEach((step, index) => {
+      if (seen.has(step.id)) {
+        ctx.addIssue({
+          code: 'custom',
+          message: 'step id must be unique within a plan',
+          path: ['steps', index, 'id']
+        })
+      }
+      seen.add(step.id)
+    })
+  })
+export type PlanUpdateInput = z.infer<typeof planUpdateSchema>
+
 /** email_list_filter — metadata filter (subject/sender/date/flags). All optional. */
 export const emailSearchSchema = z.object({
   subject_contains: z.string().optional(),
@@ -417,6 +455,18 @@ export type AgentMemoryUpdateInput = z.infer<typeof agentMemoryUpdateSchema>
 export const chatSessionListSchema = z.object({
   limit: z.number().int().min(1).max(50).default(20)
 })
+const sessionQueryFields = {
+  origin: z.enum(['interactive', 'agent', 'im', 'all']).optional(),
+  agentId: z.string().min(1).optional(),
+  agentJobId: z.string().min(1).optional(),
+  triggerId: z.string().min(1).optional(),
+  triggerKind: z.string().min(1).optional(),
+  createdAfter: z.number().int().optional(),
+  createdBefore: z.number().int().optional(),
+  archived: z.boolean().optional(),
+  starred: z.boolean().optional()
+}
+export const chatSessionListProvenanceSchema = chatSessionListSchema.extend(sessionQueryFields)
 export type ChatSessionListInput = z.infer<typeof chatSessionListSchema>
 
 /** chat_session_search — full-text search over past chat messages (query required). */
@@ -424,6 +474,7 @@ export const chatSessionSearchSchema = z.object({
   query: z.string().min(1).max(200),
   limit: z.number().int().min(1).max(20).default(10)
 })
+export const chatSessionSearchProvenanceSchema = chatSessionSearchSchema.extend(sessionQueryFields)
 export type ChatSessionSearchInput = z.infer<typeof chatSessionSearchSchema>
 
 /** chat_session_get — read one past session's messages (recent window, capped). */

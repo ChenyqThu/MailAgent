@@ -119,8 +119,9 @@ describe('chat_db — v6 → v7 anchor migration', () => {
     // v18 — chat_tool_call.whitelist_rule_id, S2 W1 exec whitelist audit;
     // v19 — ai_chat_sessions.origin/agent_id/agent_job_id, S4 W3 headless agent sessions;
     // v20 — ai_chat_sessions.last_read_at; v21 — ai_chat_sessions.pinned_at/starred;
-    // v22 — origin value-domain registers 'im' ('agent'|'im'|NULL, 08-01 messenger no-op step)).
-    expect(ver).toBe('23')
+    // v22 — origin value-domain registers 'im'; v23 — context tokens;
+    // v24 — trigger provenance columns + agent/trigger query indexes.
+    expect(ver).toBe('24')
 
     // Anchor columns added + backfilled for the pre-existing email row.
     const row = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 1').get() as {
@@ -150,6 +151,24 @@ describe('chat_db — v6 → v7 anchor migration', () => {
     ).sql
     expect(tableSql).toMatch(/anchor_type/)
     expect(tableSql).toMatch(/CHECK/)
+
+    const sessionColumns = db
+      .prepare('PRAGMA table_info(ai_chat_sessions)')
+      .all()
+      .map((column) => (column as { name: string }).name)
+    expect(sessionColumns).toEqual(
+      expect.arrayContaining(['trigger_id', 'trigger_kind', 'trigger_fired_at'])
+    )
+    const sessionIndexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type='index' AND tbl_name='ai_chat_sessions'")
+      .all()
+      .map((index) => (index as { name: string }).name)
+    expect(sessionIndexes).toEqual(
+      expect.arrayContaining([
+        'idx_chat_sessions_agent_updated',
+        'idx_chat_sessions_trigger_fired'
+      ])
+    )
 
     // Backup snapshot written.
     expect(existsSync(dbPath + '.pre-v7.bak')).toBe(true)

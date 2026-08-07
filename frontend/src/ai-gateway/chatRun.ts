@@ -493,6 +493,7 @@ export async function prepareChatRun(
       promptConfig,
       contextSnapshot,
       headlessAgentRun: isHeadlessAgentRun,
+      headlessAgentIdentity: cfg.headlessAgentIdentity,
       // W6 — inject the follow-up guidance only when THIS run's ToolSet holds the tool.
       followupToolAvailable
     })

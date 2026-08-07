@@ -20,8 +20,10 @@ import { mockDomain, okEnvelope } from './_helpers'
  *  truth for "every real gateway tool".
  *  🔴 维护：加新 tool-gating flag 时必须在此把它开齐，否则下方 FORWARD 完整性守护（every gateway
  *  tool ∈ 已分类）看不到该 flag 门控的工具 → 漏归类不会变红（review L2）。 */
+const CONDITIONAL_HEADLESS_CORE_TOOLS = new Set(['agent_catalog_list', 'agent_catalog_get'])
+
 function buildAllTools() {
-  return buildGatewayTools({
+  const manual = buildGatewayTools({
     domain: mockDomain(() => okEnvelope([])),
     writeToolsEnabled: true,
     approvalGuard: new ApprovalGuard(),
@@ -55,6 +57,17 @@ function buildAllTools() {
     // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
     contextMode: 'manual_chat'
   })
+  const grantedHeadless = buildGatewayTools({
+    domain: mockDomain(() => okEnvelope([])),
+    sessionProvenanceEnabled: true,
+    contextMode: 'cron_headless',
+    agentRunContext: {
+      agentId: 'dms',
+      allowedTools: ['chat_session_list'],
+      skills: []
+    }
+  })
+  return { ...manual, ...grantedHeadless }
 }
 
 describe('applySkillGating (pure semantics)', () => {
@@ -238,7 +251,13 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       for (const n of names) expect(tools[n]).toBeUndefined()
     }
     // the mount list is NOT a second switch for the core floor (ADR §5.1)
-    for (const n of CORE_UNGATED_GATEWAY_TOOLS) expect(tools[n]).toBeDefined()
+    for (const n of CORE_UNGATED_GATEWAY_TOOLS) {
+      if (CONDITIONAL_HEADLESS_CORE_TOOLS.has(n)) {
+        expect(tools[n]).toBeUndefined()
+      } else {
+        expect(tools[n]).toBeDefined()
+      }
+    }
   })
 
   test('mounted ∩ advertised: mounting can never revive a globally-disabled skill (and vice versa)', () => {

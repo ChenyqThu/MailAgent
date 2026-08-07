@@ -473,6 +473,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // — mirrors MAILAGENT_ISLAND_AGENT_ENABLED). Explicit false → buildGatewayTools output
   // byte-identical to pre-cutover (v1.2.0).
   const sessionToolsEnabled = envBool('MAILAGENT_OPENNESS_SESSION_TOOLS', true)
+  // P1 fixes prompt/query provenance gaps; default-off would preserve the bug. Emergency rollback only.
+  const sessionProvenanceEnabled = envBool('MAILAGENT_SESSION_PROVENANCE', true)
   // S1 R2 — MAILAGENT_OPENNESS_CONFIG_TOOLS gates the four profile-config tools
   // (agent_profile_read/history/restore + agent_memory_update). Default ON since E3 cutover
   // (2026-07-06); an explicit env false is the emergency rollback (kill-switch). main-env-only,
@@ -906,6 +908,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       // go connector-blind on top of losing standing context.
       return { ...(value ?? {}), connectorCatalog: catalog }
     },
+    sessionProvenanceEnabled,
     resolveApprovalRequest: aguiMirrorEnabled
       ? (info) => {
           const rec = approvalGuard.peek(info.toolCallId)
@@ -1000,6 +1003,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
         {
           domain,
           kosTimeDecayEnabled: envBool('MAILAGENT_KOS_TIME_DECAY_ENABLED', true),
+          // P0 — default ON fixes the prompt/tool mismatch; this main-process-only flag is an
+          // emergency rollback switch and is intentionally not exposed through a Vite define.
+          planToolsEnabled: envBool('MAILAGENT_PLAN_TOOL', true),
+          sessionProvenanceEnabled,
           writeToolsEnabled: envBool('MAILAGENT_AI_SDK_WRITE_TOOLS', true),
           approvalGuard,
           a2uiEnabled,
@@ -1138,7 +1145,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // into. Wired only when custom agents are on. A create failure returns null (the run streams but
     // persists nothing) rather than throwing → the endpoint degrades gracefully.
     createAgentSession: customAgentsEnabled
-      ? (input: { agentId: string; jobId: number; title: string }) => {
+      ? (input: {
+          agentId: string
+          jobId: number
+          title: string
+          triggerId?: string | null
+          triggerKind?: string | null
+          triggerFiredAt?: number | null
+        }) => {
           try {
             return createAgentSession(input)
           } catch (err) {
