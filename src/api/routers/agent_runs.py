@@ -26,10 +26,12 @@ from fastapi import APIRouter, Depends, Query, Request
 from loguru import logger
 from pydantic import BaseModel
 
-from src.agents.fence import fence_email_envelope
+from src.agents.fence import fence_calendar_envelope, fence_email_envelope
 from src.agents.run_queue import enqueue_agent_run
 from src.agents.run_state import AGENT_RUN_STATES, derive_agent_run_state
 from src.agents.trigger import (
+    CalendarBeforeStartTrigger,
+    CalendarEventChangeTrigger,
     EmailFilterTrigger,
     ToolPolicy,
     Trigger,
@@ -282,6 +284,7 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
     trigger_id = params.get("trigger_id") if isinstance(params.get("trigger_id"), str) else None
     fire_key = params.get("fire_key")
     email_internal_id = params.get("email_internal_id")
+    calendar_event_uid = params.get("calendar_event_uid")
     if not agent_id:
         raise APIError(
             "E_SPEC_AGENT_INVALID", "job params missing agent_id",
@@ -360,6 +363,51 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         envelope = _build_envelope(int(email_internal_id))
         if envelope:
             prompt["emailEnvelope"] = envelope
+    if (
+        isinstance(trig, (CalendarEventChangeTrigger, CalendarBeforeStartTrigger))
+        and isinstance(calendar_event_uid, str)
+    ):
+        recurrence_id = params.get("recurrence_id")
+        occurrence_start_iso = params.get("occurrence_start_iso")
+        change_kind = params.get("change_kind")
+        trigger_out["calendarEventUid"] = calendar_event_uid
+        if recurrence_id is not None:
+            trigger_out["recurrenceId"] = recurrence_id
+        if occurrence_start_iso is not None:
+            trigger_out["occurrenceStartIso"] = occurrence_start_iso
+        if change_kind is not None:
+            trigger_out["changeKind"] = change_kind
+        try:
+            from src.calendar_sync.repository import CalendarEventRepository
+            from src.config import config
+
+            row = CalendarEventRepository(config.sync_store_db_path).get_by_ical_uid(
+                calendar_event_uid,
+                source="caldav",
+                recurrence_id=recurrence_id,
+                include_deleted=True,
+            )
+            if row is not None:
+                prompt["calendarEnvelope"] = fence_calendar_envelope(
+                    ical_uid=row.ical_uid,
+                    recurrence_id=row.recurrence_id,
+                    calendar_name=row.calendar_name,
+                    status=row.status,
+                    dtstart_iso=row.dtstart_utc.isoformat(),
+                    occurrence_start_iso=occurrence_start_iso,
+                    change_kind=change_kind,
+                    changed_fields=params.get("changed_fields"),
+                    lead_seconds=params.get("lead_seconds"),
+                    summary=row.summary,
+                    location=row.location,
+                    organizer=row.organizer,
+                    attendees=row.attendees,
+                    description=row.description,
+                )
+        except Exception as exc:  # noqa: BLE001 — payload enhancement, run still proceeds
+            logger.warning(
+                f"[agent-run-spec] calendar envelope build failed uid={calendar_event_uid}: {exc}"
+            )
 
     tool_policy_out: dict[str, Any] = {"allowedTools": allowed_tools}
     if tool_policy.grant_exec is True:

@@ -33,6 +33,7 @@ import { ProjectProgressConfigDrawer } from './drawers/ProjectProgressConfigDraw
 import { AgentAvatar } from './AgentAvatar'
 import { coerceRule, isScheduleValue } from './schedule'
 import { sentenceText } from './schedule/sentence'
+import { formatCalendarLead } from './custom-agent/shared'
 
 function scheduleText(
   cfg: ReportAgentConfig,
@@ -470,6 +471,14 @@ function CustomAgentCard({
       })}${suffix}`
     }
     if (trig?.kind === 'email_filter') return `${t('agents.custom.card.triggerEmail')}${suffix}`
+    if (trig?.kind === 'calendar_event_change') {
+      return `${t('agents.custom.card.triggerCalendarChange')}${suffix}`
+    }
+    if (trig?.kind === 'calendar_before_start') {
+      return `${t('agents.custom.card.triggerCalendarBefore', {
+        lead: formatCalendarLead(t, trig.lead_seconds)
+      })}${suffix}`
+    }
     return t('agents.custom.card.triggerNone')
   })()
 

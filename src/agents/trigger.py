@@ -39,6 +39,9 @@ MATCH_INPUT_CAP = 512  # matcher 匹配前 subject/sender 各取前 N 字符
 MAX_THREAD_IDS = 50
 MAX_THREAD_ID_LEN = 256
 TRIGGER_V2_ENV = "MAILAGENT_TRIGGER_V2"
+CALENDAR_TRIGGER_ENV = "MAILAGENT_CALENDAR_TRIGGER"
+MIN_CALENDAR_LEAD_SECONDS = 60
+MAX_CALENDAR_LEAD_SECONDS = 2_592_000
 
 # budget 两门默认 + clamp（07-28 W1）。tool loop 只保留 gateway 内部 10000 步终止哨兵，
 # 不再把步数作为用户预算；旧行里的 max_steps 由 parse_budget 宽容忽略。
@@ -92,7 +95,32 @@ class EmailFilterTrigger:
     kind: str = "email_filter"
 
 
-Trigger = Union[CronTrigger, ScheduleTrigger, EmailFilterTrigger]
+@dataclass(frozen=True)
+class CalendarEventChangeTrigger:
+    title_pattern: Optional[str] = None
+    organizer_pattern: Optional[str] = None
+    attendee_pattern: Optional[str] = None
+    calendar_ids: Tuple[str, ...] = ()
+    kind: str = "calendar_event_change"
+
+
+@dataclass(frozen=True)
+class CalendarBeforeStartTrigger:
+    lead_seconds: int
+    title_pattern: Optional[str] = None
+    organizer_pattern: Optional[str] = None
+    attendee_pattern: Optional[str] = None
+    calendar_ids: Tuple[str, ...] = ()
+    kind: str = "calendar_before_start"
+
+
+Trigger = Union[
+    CronTrigger,
+    ScheduleTrigger,
+    EmailFilterTrigger,
+    CalendarEventChangeTrigger,
+    CalendarBeforeStartTrigger,
+]
 
 
 @dataclass(frozen=True)
@@ -201,6 +229,14 @@ def _validate_folders(value: Any) -> Tuple[str, ...]:
     return tuple(v for v in value if v)
 
 
+def _validate_calendar_ids(value: Any) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise TriggerValidationError("calendar_ids must be a list of strings")
+    return tuple(v for v in value if v)
+
+
 def _validate_thread_ids(value: Any) -> Tuple[str, ...]:
     if value is None:
         return ()
@@ -291,8 +327,40 @@ def parse_trigger(raw: Union[str, dict, None]) -> Trigger:
         return EmailFilterTrigger(
             subject_pattern=subject, sender_pattern=sender, folders=folders
         )
+    if kind == "calendar_event_change":
+        return CalendarEventChangeTrigger(
+            title_pattern=_validate_pattern("title_pattern", data.get("title_pattern")),
+            organizer_pattern=_validate_pattern(
+                "organizer_pattern", data.get("organizer_pattern")
+            ),
+            attendee_pattern=_validate_pattern(
+                "attendee_pattern", data.get("attendee_pattern")
+            ),
+            calendar_ids=_validate_calendar_ids(data.get("calendar_ids")),
+        )
+    if kind == "calendar_before_start":
+        lead_seconds = data.get("lead_seconds")
+        if type(lead_seconds) is not int:
+            raise TriggerValidationError("lead_seconds must be an integer")
+        if not MIN_CALENDAR_LEAD_SECONDS <= lead_seconds <= MAX_CALENDAR_LEAD_SECONDS:
+            raise TriggerValidationError(
+                f"lead_seconds must be between {MIN_CALENDAR_LEAD_SECONDS} and "
+                f"{MAX_CALENDAR_LEAD_SECONDS}"
+            )
+        return CalendarBeforeStartTrigger(
+            lead_seconds=lead_seconds,
+            title_pattern=_validate_pattern("title_pattern", data.get("title_pattern")),
+            organizer_pattern=_validate_pattern(
+                "organizer_pattern", data.get("organizer_pattern")
+            ),
+            attendee_pattern=_validate_pattern(
+                "attendee_pattern", data.get("attendee_pattern")
+            ),
+            calendar_ids=_validate_calendar_ids(data.get("calendar_ids")),
+        )
     raise TriggerValidationError(
-        f"unknown trigger kind={kind!r} (expect cron|schedule|email_filter)"
+        f"unknown trigger kind={kind!r} "
+        "(expect cron|schedule|email_filter|calendar_event_change|calendar_before_start)"
     )
 
 
@@ -304,6 +372,26 @@ def trigger_v2_enabled() -> bool:
         from src.api.deps import get_env_file_path
 
         raw = (dotenv_values(get_env_file_path()) or {}).get(TRIGGER_V2_ENV)
+    except Exception:  # noqa: BLE001 — .env 不可读时保持默认 on
+        raw = None
+    if raw is None or raw == "":
+        return True
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def calendar_trigger_enabled() -> bool:
+    """热读 .env 的 Calendar Trigger 门；缺失/空/坏值均回默认 true。"""
+    try:
+        from dotenv import dotenv_values
+
+        from src.api.deps import get_env_file_path
+
+        raw = (dotenv_values(get_env_file_path()) or {}).get(CALENDAR_TRIGGER_ENV)
     except Exception:  # noqa: BLE001 — .env 不可读时保持默认 on
         raw = None
     if raw is None or raw == "":
@@ -354,6 +442,23 @@ def parse_trigger_set(raw: Union[str, dict, None]) -> tuple[TriggerEntry, ...]:
         enabled = raw_entry.get("enabled")
         if type(enabled) is not bool:
             raise TriggerValidationError("trigger enabled must be a boolean")
+        calendar_keys = {
+            "lead_seconds",
+            "calendar_ids",
+            "title_pattern",
+            "organizer_pattern",
+            "attendee_pattern",
+        }
+        kind = raw_entry.get("kind")
+        if kind not in {"calendar_event_change", "calendar_before_start"}:
+            bad_calendar_keys = calendar_keys.intersection(raw_entry)
+            if bad_calendar_keys:
+                key = sorted(bad_calendar_keys)[0]
+                raise TriggerValidationError(f"{key} is only valid for calendar triggers")
+        if kind == "calendar_event_change" and "lead_seconds" in raw_entry:
+            raise TriggerValidationError(
+                "lead_seconds is only valid for calendar_before_start triggers"
+            )
         trigger_data = {k: v for k, v in raw_entry.items() if k not in {"id", "enabled", "thread_ids"}}
         thread_ids = _validate_thread_ids(raw_entry.get("thread_ids"))
         if raw_entry.get("kind") == "email_filter" and thread_ids:
@@ -403,7 +508,7 @@ def _entry_to_wire(entry: TriggerEntry) -> dict[str, Any]:
             "anchor": trigger.anchor,
             "timezone": trigger.timezone,
         })
-    else:
+    elif isinstance(trigger, EmailFilterTrigger):
         if trigger.subject_pattern is not None:
             wire["subject_pattern"] = trigger.subject_pattern
         if trigger.sender_pattern is not None:
@@ -412,6 +517,27 @@ def _entry_to_wire(entry: TriggerEntry) -> dict[str, Any]:
             wire["folders"] = list(trigger.folders)
         if trigger.thread_ids:
             wire["thread_ids"] = list(trigger.thread_ids)
+    elif isinstance(trigger, CalendarEventChangeTrigger):
+        if trigger.title_pattern is not None:
+            wire["title_pattern"] = trigger.title_pattern
+        if trigger.organizer_pattern is not None:
+            wire["organizer_pattern"] = trigger.organizer_pattern
+        if trigger.attendee_pattern is not None:
+            wire["attendee_pattern"] = trigger.attendee_pattern
+        if trigger.calendar_ids:
+            wire["calendar_ids"] = list(trigger.calendar_ids)
+    elif isinstance(trigger, CalendarBeforeStartTrigger):
+        wire["lead_seconds"] = trigger.lead_seconds
+        if trigger.title_pattern is not None:
+            wire["title_pattern"] = trigger.title_pattern
+        if trigger.organizer_pattern is not None:
+            wire["organizer_pattern"] = trigger.organizer_pattern
+        if trigger.attendee_pattern is not None:
+            wire["attendee_pattern"] = trigger.attendee_pattern
+        if trigger.calendar_ids:
+            wire["calendar_ids"] = list(trigger.calendar_ids)
+    else:
+        raise TypeError(f"unsupported trigger type: {type(trigger).__name__}")
     return wire
 
 
@@ -605,6 +731,18 @@ def normalize_agent_config_patch(
 ) -> dict:
     """三写路共用的保存 normalization；仅 custom + flag on 把 trigger 物化为 v2。"""
     validate_agent_config_patch(patch)
+    if "trigger" in patch and patch.get("trigger") is not None:
+        entries = parse_trigger_set(patch["trigger"])
+        if not calendar_trigger_enabled() and any(
+            isinstance(
+                entry.trigger,
+                (CalendarEventChangeTrigger, CalendarBeforeStartTrigger),
+            )
+            for entry in entries
+        ):
+            raise TriggerValidationError(
+                "calendar triggers are disabled by MAILAGENT_CALENDAR_TRIGGER"
+            )
     normalized = dict(patch)
     if (
         trigger_v2_enabled()

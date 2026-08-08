@@ -184,7 +184,13 @@ class AgentRunWorker:
         """岛卡 title/summary：title=「{agent 名} · {触发源}」；summary=结果摘要 / 错误码。"""
         name = self._agent_title(agent_id) or agent_id or "Agent"
         trigger_kind = str((job.params or {}).get("trigger_kind") or "")
-        trigger_label = {"cron": "定时", "email_filter": "邮件", "manual": "手动"}.get(
+        trigger_label = {
+            "cron": "定时",
+            "email_filter": "邮件",
+            "calendar_event_change": "日历变化",
+            "calendar_before_start": "会前",
+            "manual": "手动",
+        }.get(
             trigger_kind, trigger_kind or "触发"
         )
         title = f"{name} · {trigger_label}"

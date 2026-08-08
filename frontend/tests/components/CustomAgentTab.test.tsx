@@ -255,6 +255,25 @@ describe('AgentsTab — Custom Agent 区 + flag 门控', () => {
     expect(screen.queryByText('完全自定义 Agent')).toBeNull()
     expect(screen.queryByText('新建自定义 Agent')).toBeNull()
   })
+
+  test('calendar_before_start 卡片摘要按天/小数分钟展示 lead', async () => {
+    mockFlag(true)
+    mockGetConfig.mockResolvedValue([
+      makeCustomCfg({
+        id: 'calendar-day',
+        trigger: { v: 1, kind: 'calendar_before_start', lead_seconds: 86400 }
+      }),
+      makeCustomCfg({
+        id: 'calendar-fraction',
+        title: '短提前量',
+        trigger: { v: 1, kind: 'calendar_before_start', lead_seconds: 90 }
+      })
+    ])
+    renderUi(<AgentsTab onOpenReports={() => {}} />)
+
+    expect(await screen.findByText('会前触发（提前 1 天）')).toBeTruthy()
+    expect(await screen.findByText('会前触发（提前 1.5 分钟）')).toBeTruthy()
+  })
 })
 
 describe('CustomAgentDrawer — 新建（两段式）', () => {
@@ -489,6 +508,181 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
 
     expect(await screen.findByText('排程')).toBeTruthy()
     expect(screen.queryByText('agents.custom.trigger.kind.schedule')).toBeNull()
+  })
+
+  test('Trigger v2：创建 calendar_event_change entry 使用 snake_case 且空谓词不落 wire', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          triggerV2Enabled: true,
+          calendarTriggerEnabled: true,
+          connectorToolsEnabled: true
+        }
+      })
+    }) as unknown as typeof fetch
+    mockCreateAgent.mockResolvedValue(makeCustomCfg())
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
+
+    fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), {
+      target: { value: 'calendar agent' }
+    })
+    fireEvent.click(await screen.findByRole('button', { name: '日历变化' }))
+    fireEvent.change(screen.getByPlaceholderText('标题正则（可留空）'), {
+      target: { value: 'Planning.*' }
+    })
+    const organizer = screen.getByPlaceholderText('组织者正则（可留空）')
+    fireEvent.change(organizer, { target: { value: 'boss@example.com' } })
+    fireEvent.change(organizer, { target: { value: '' } })
+    fireEvent.change(screen.getByPlaceholderText('参与人邮箱正则（可留空）'), {
+      target: { value: '@example\\.com$' }
+    })
+    fireEvent.change(screen.getByPlaceholderText('日历显示名（可留空，逗号分隔）'), {
+      target: { value: 'Work, Leadership' }
+    })
+    fireEvent.click(screen.getByText('创建'))
+
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger).toEqual({
+      v: 2,
+      triggers: [
+        {
+          enabled: false,
+          kind: 'calendar_event_change',
+          title_pattern: 'Planning.*',
+          attendee_pattern: '@example\\.com$',
+          calendar_ids: ['Work', 'Leadership']
+        }
+      ]
+    })
+  })
+
+  test('Trigger v2：calendar_before_start 的 1 天 lead 保存与存量预填往返', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          triggerV2Enabled: true,
+          calendarTriggerEnabled: true,
+          connectorToolsEnabled: true
+        }
+      })
+    }) as unknown as typeof fetch
+    mockCreateAgent.mockResolvedValue(makeCustomCfg())
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    const created = renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), {
+      target: { value: 'before agent' }
+    })
+    fireEvent.click(await screen.findByRole('button', { name: '会前' }))
+    expect((screen.getByLabelText('提前时间') as HTMLInputElement).value).toBe('1')
+    expect(screen.getByText('天')).toBeTruthy()
+    fireEvent.click(screen.getByText('创建'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger).toEqual({
+      v: 2,
+      triggers: [{ enabled: false, kind: 'calendar_before_start', lead_seconds: 86400 }]
+    })
+
+    created.unmount()
+    cleanup()
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({
+          trigger: {
+            v: 2,
+            triggers: [
+              {
+                id: 'trg_before',
+                enabled: true,
+                kind: 'calendar_before_start',
+                lead_seconds: 86400
+              }
+            ]
+          }
+        })}
+        open
+        onClose={() => {}}
+      />
+    )
+    expect((await screen.findByLabelText('提前时间') as HTMLInputElement).value).toBe('1')
+    expect(screen.getByText('天')).toBeTruthy()
+  })
+
+  test('calendarTriggerEnabled=false 时不渲染 calendar trigger 档', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          triggerV2Enabled: true,
+          calendarTriggerEnabled: false,
+          connectorToolsEnabled: true
+        }
+      })
+    }) as unknown as typeof fetch
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+
+    await screen.findByRole('button', { name: '邮件事件' })
+    expect(screen.queryByRole('button', { name: '日历变化' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '会前' })).toBeNull()
+  })
+
+  test('Trigger v2：calendar_before_start 切到 legacy cron 后不残留 calendar 键', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({
+        data: {
+          triggerV2Enabled: true,
+          calendarTriggerEnabled: true,
+          connectorToolsEnabled: true
+        }
+      })
+    }) as unknown as typeof fetch
+    const cfg = makeCustomCfg({
+      trigger: {
+        v: 2,
+        triggers: [
+          {
+            id: 'trg_before',
+            enabled: true,
+            kind: 'calendar_before_start',
+            lead_seconds: 86400,
+            title_pattern: 'Planning',
+            organizer_pattern: 'boss@example.com',
+            attendee_pattern: '@example\\.com$',
+            calendar_ids: ['Work']
+          },
+          {
+            id: 'trg_cron_seed',
+            enabled: false,
+            kind: 'cron',
+            cron: '0 9 * * *',
+            timezone: 'UTC'
+          }
+        ]
+      }
+    })
+    mockSetConfig.mockResolvedValue(cfg)
+    renderUi(<CustomAgentDrawer cfg={cfg} open onClose={() => {}} />)
+
+    const editButtons = await screen.findAllByRole('button', { name: '编辑' })
+    fireEvent.click(editButtons[1])
+    fireEvent.click(editButtons[0])
+    fireEvent.click(screen.getByRole('button', { name: '定时' }))
+    fireEvent.change(screen.getByPlaceholderText('0 9 * * 1-5'), {
+      target: { value: '15 10 * * 1-5' }
+    })
+    fireEvent.click(screen.getByText('保存'))
+
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger.triggers[0]).toEqual({
+      id: 'trg_before',
+      enabled: true,
+      kind: 'cron',
+      cron: '15 10 * * 1-5',
+      timezone: 'UTC'
+    })
   })
 
   test('邮件线程快捷入口 initial：标题与 thread_ids 注入编辑器', async () => {

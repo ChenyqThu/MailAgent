@@ -113,3 +113,28 @@ describe('customAgentTriggerSchema — kind:"schedule" (issue #65)', () => {
     ).toBe(false)
   })
 })
+
+describe('customAgentTriggerSchema — calendar triggers', () => {
+  test('accepts calendar event change and before-start payloads', () => {
+    expect(
+      customAgentTriggerSchema.safeParse({
+        kind: 'calendar_event_change',
+        title_pattern: 'Planning',
+        calendar_ids: ['Work']
+      }).success
+    ).toBe(true)
+    expect(
+      customAgentTriggerSchema.safeParse({
+        kind: 'calendar_before_start',
+        lead_seconds: 86400,
+        attendee_pattern: '@example\\.com'
+      }).success
+    ).toBe(true)
+  })
+
+  test.each([59, 2592001, 60.5])('rejects invalid lead_seconds=%s', (lead_seconds) => {
+    expect(
+      customAgentTriggerSchema.safeParse({ kind: 'calendar_before_start', lead_seconds }).success
+    ).toBe(false)
+  })
+})

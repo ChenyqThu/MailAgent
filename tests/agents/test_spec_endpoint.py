@@ -813,3 +813,60 @@ def test_list_runs_auto_whitelist_null_when_chat_db_missing(env, client, tmp_pat
     assert len(items) == 1
     assert items[0]["state"] == "completed"
     assert items[0]["autoWhitelistedWrites"] is None
+
+
+def test_spec_calendar_envelope_and_missing_row_fail_soft(env, client, monkeypatch):
+    from datetime import datetime, timezone
+
+    from src.calendar_sync.caldav_reader import CalendarEvent
+    from src.calendar_sync.repository import CalendarEventRepository
+    from src.config import config
+
+    trigger = {"v": 1, "kind": "calendar_event_change", "title_pattern": "Plan"}
+    _seed_custom(env.store, agent_id="calendar-agent", trigger=trigger)
+    monkeypatch.setattr(config, "sync_store_db_path", str(env.db))
+    CalendarEventRepository(str(env.db)).upsert_from_caldav_event(
+        CalendarEvent(
+            summary="Planning",
+            start=datetime(2026, 8, 9, 16, tzinfo=timezone.utc),
+            end=datetime(2026, 8, 9, 17, tzinfo=timezone.utc),
+            ical_uid="uid-calendar",
+            calendar_name="Work",
+            organizer="boss@example.com",
+            description="Agenda from an external organizer",
+        ),
+        source="caldav",
+    )
+    job_id = _running_job(
+        env.repo,
+        agent_id="calendar-agent",
+        trigger_kind="calendar_event_change",
+        fire_key="uid-calendar||hash",
+        extra_params={
+            "calendar_event_uid": "uid-calendar",
+            "change_kind": "updated",
+            "changed_fields": ["summary"],
+        },
+    )
+    response = client.get(
+        f"/api/agent-runs/{job_id}/spec", headers={"X-Claim-Token": "tok-1"}
+    )
+    assert response.status_code == 200
+    spec = response.json()["data"]
+    assert spec["trigger"]["calendarEventUid"] == "uid-calendar"
+    assert spec["trigger"]["changeKind"] == "updated"
+    assert "UNTRUSTED_CALENDAR_EVENT_START" in spec["prompt"]["calendarEnvelope"]
+
+    missing_job = _running_job(
+        env.repo,
+        agent_id="calendar-agent",
+        trigger_kind="calendar_event_change",
+        fire_key="missing||hash",
+        token="tok-2",
+        extra_params={"calendar_event_uid": "missing", "change_kind": "deleted"},
+    )
+    missing = client.get(
+        f"/api/agent-runs/{missing_job}/spec", headers={"X-Claim-Token": "tok-2"}
+    )
+    assert missing.status_code == 200
+    assert "calendarEnvelope" not in missing.json()["data"]["prompt"]

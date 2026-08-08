@@ -281,6 +281,23 @@ export type CustomAgentTrigger =
       folders?: string[]
       thread_ids?: string[]
     }
+  | {
+      v: 1
+      kind: 'calendar_event_change'
+      title_pattern?: string
+      organizer_pattern?: string
+      attendee_pattern?: string
+      calendar_ids?: string[]
+    }
+  | {
+      v: 1
+      kind: 'calendar_before_start'
+      lead_seconds: number
+      title_pattern?: string
+      organizer_pattern?: string
+      attendee_pattern?: string
+      calendar_ids?: string[]
+    }
 
 export type CustomAgentTriggerV2Entry = CustomAgentTrigger extends infer Trigger
   ? Trigger extends { v: 1 }

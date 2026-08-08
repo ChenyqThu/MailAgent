@@ -629,11 +629,24 @@ class EmailNotionSyncApp:
             calendar_sync_task = None
             if config.calendar_caldav_sync_enabled:
                 try:
+                    from src.agents.trigger import calendar_trigger_enabled
                     from src.calendar_sync.caldav_reader import CalDAVReader
                     from src.calendar_sync import (
                         CalendarEventRepository,
                         CalendarSyncWorker,
                     )
+                    from src.calendar_sync.worker import AgentDispatchContext
+
+                    calendar_agent_dispatch_context = None
+                    if config.custom_agents_enabled and calendar_trigger_enabled():
+                        from src.reports.store import ReportStore
+                        from src.sync.async_jobs import AsyncJobRepository
+
+                        calendar_db_path = str(self.watcher.sync_store.db_path)
+                        calendar_agent_dispatch_context = AgentDispatchContext(
+                            store=ReportStore(db_path=calendar_db_path),
+                            repo=AsyncJobRepository(calendar_db_path),
+                        )
 
                     self.calendar_sync_worker = CalendarSyncWorker(
                         cfg=config,
@@ -644,6 +657,7 @@ class EmailNotionSyncApp:
                         ),
                         full_sync_past_days=config.calendar_caldav_sync_window_past_days,
                         full_sync_window_days=config.calendar_caldav_sync_window_future_days,
+                        agent_dispatch_context=calendar_agent_dispatch_context,
                     )
                     calendar_sync_task = self._spawn_supervised(
                         self.calendar_sync_worker.run, "calendar_sync"

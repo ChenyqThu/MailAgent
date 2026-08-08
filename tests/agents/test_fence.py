@@ -1,7 +1,12 @@
 """envelope 围栏单测（S4 W2, ADR D2 红线④）—— ZWSP 打断 / 2KB 截断 / 闭合 / 省略正文。"""
 from __future__ import annotations
 
-from src.agents.fence import BODY_SUMMARY_CAP, fence_email_envelope, sanitize_untrusted
+from src.agents.fence import (
+    BODY_SUMMARY_CAP,
+    fence_calendar_envelope,
+    fence_email_envelope,
+    sanitize_untrusted,
+)
 
 _ZWSP = "\u200b"
 
@@ -121,3 +126,22 @@ def test_envelope_body_cannot_smuggle_context_json_close():
         internal_id=3, subject="s", sender="f", date="d", body_markdown=body,
     )
     assert "</mailagent_context_json>" not in blk  # 打断，无法闭合外层可信 context 块
+
+
+def test_calendar_envelope_separates_trusted_metadata_and_authored_fields():
+    block = fence_calendar_envelope(
+        ical_uid="uid-1",
+        recurrence_id=None,
+        calendar_name="Work",
+        status="CONFIRMED",
+        occurrence_start_iso="2026-08-09T16:00:00+00:00",
+        lead_seconds=3600,
+        summary="Planning",
+        organizer="boss@example.com",
+        attendees=[{"email": "a@example.com"}],
+    )
+    assert "ical_uid: uid-1" in block
+    assert "lead_seconds: 3600" in block
+    assert "UNTRUSTED_CALENDAR_EVENT_START uid=uid-1 part=summary" in block
+    assert "UNTRUSTED_CALENDAR_EVENT_START uid=uid-1 part=organizer" in block
+    assert "part=description" not in block

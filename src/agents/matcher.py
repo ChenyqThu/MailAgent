@@ -14,7 +14,12 @@ from __future__ import annotations
 import re
 from typing import Optional, Pattern
 
-from src.agents.trigger import MATCH_INPUT_CAP, EmailFilterTrigger
+from src.agents.trigger import (
+    MATCH_INPUT_CAP,
+    CalendarBeforeStartTrigger,
+    CalendarEventChangeTrigger,
+    EmailFilterTrigger,
+)
 
 # folders 缺省白名单 = 收件箱（与主同步链 mailbox 显示名一致）。
 _DEFAULT_FOLDER = "收件箱"
@@ -57,5 +62,55 @@ class AgentEmailMatcher:
         # sender gate（同上）。
         if self._sender_re is not None:
             if not self._sender_re.search((sender or "")[:MATCH_INPUT_CAP]):
+                return False
+        return True
+
+
+class AgentCalendarMatcher:
+    """Calendar trigger matcher; unlike email folders, empty calendar_ids means all."""
+
+    def __init__(
+        self,
+        trigger: CalendarEventChangeTrigger | CalendarBeforeStartTrigger,
+    ):
+        self._calendar_ids = frozenset(trigger.calendar_ids)
+        self._title_re = (
+            re.compile(trigger.title_pattern, re.UNICODE)
+            if trigger.title_pattern else None
+        )
+        self._organizer_re = (
+            re.compile(trigger.organizer_pattern, re.UNICODE | re.IGNORECASE)
+            if trigger.organizer_pattern else None
+        )
+        self._attendee_re = (
+            re.compile(trigger.attendee_pattern, re.UNICODE | re.IGNORECASE)
+            if trigger.attendee_pattern else None
+        )
+
+    def is_match(
+        self,
+        *,
+        title: Optional[str],
+        organizer: Optional[str],
+        attendees: list[dict] | list[str],
+        calendar_name: Optional[str],
+    ) -> bool:
+        if self._calendar_ids and (calendar_name or "") not in self._calendar_ids:
+            return False
+        if self._title_re and not self._title_re.search((title or "")[:MATCH_INPUT_CAP]):
+            return False
+        if self._organizer_re and not self._organizer_re.search(
+            (organizer or "")[:MATCH_INPUT_CAP]
+        ):
+            return False
+        if self._attendee_re:
+            emails = [
+                attendee.get("email", "") if isinstance(attendee, dict) else attendee
+                for attendee in attendees
+            ]
+            if not any(
+                self._attendee_re.search(str(email)[:MATCH_INPUT_CAP])
+                for email in emails
+            ):
                 return False
         return True

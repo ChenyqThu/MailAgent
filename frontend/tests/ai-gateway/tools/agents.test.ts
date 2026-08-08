@@ -258,6 +258,53 @@ describe('custom_agent_list / custom_agent_get (silent reads)', () => {
     expect(out.items[0].trigger_summary).toContain('email_filter')
   })
 
+  test('list renders both calendar trigger summaries with lead and calendars', async () => {
+    const { domain } = recordingDomain({
+      listAgents: [
+        {
+          ...CUSTOM_AGENT,
+          id: 'calendar-change',
+          trigger: {
+            v: 1,
+            kind: 'calendar_event_change',
+            calendar_ids: ['Work', 'Leadership']
+          }
+        },
+        {
+          ...CUSTOM_AGENT,
+          id: 'calendar-before',
+          trigger: {
+            v: 1,
+            kind: 'calendar_before_start',
+            lead_seconds: 86400,
+            calendar_ids: ['Work']
+          }
+        }
+      ]
+    })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    const out = (await runRead(tools.custom_agent_list, {})) as {
+      items: Array<{ id: string; trigger_summary: string }>
+    }
+
+    expect(out.items).toEqual([
+      {
+        id: 'calendar-change',
+        title: 'DMS Approver',
+        enabled: true,
+        trigger_summary: 'calendar_event_change calendars=[Work,Leadership]'
+      },
+      {
+        id: 'calendar-before',
+        title: 'DMS Approver',
+        enabled: true,
+        trigger_summary: 'calendar_before_start lead=86400s calendars=[Work]'
+      }
+    ])
+  })
+
   test('get returns the full spec + recent runs (state passed through verbatim, not re-derived)', async () => {
     const { domain } = recordingDomain()
     const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {

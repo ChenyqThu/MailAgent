@@ -85,6 +85,8 @@ export interface RunHeadlessAgentOpts {
 export function deriveContextMode(spec: AgentRunSpec): AgentContextMode {
   const kind = spec.trigger?.kind
   if (kind === 'email_filter') return 'untrusted_trigger'
+  if (kind === 'calendar_event_change') return 'untrusted_trigger'
+  if (kind === 'calendar_before_start') return 'untrusted_trigger'
   if (kind === 'cron' || kind === 'schedule') return 'cron_headless'
   if (kind === 'im') return 'im_chat'
   return normalizeContextMode(undefined)
@@ -293,6 +295,7 @@ export async function runHeadlessAgent(
   // id (derived from jobId) lets persistTurn's eager-write dedup behave.
   const taskPrompt = spec.prompt?.taskPrompt ?? ''
   const envelope = spec.prompt?.emailEnvelope ?? ''
+  const calendarEnvelope = spec.prompt?.calendarEnvelope ?? ''
   const invocation = spec.invocation
   const delegation = invocation
     ? [
@@ -309,7 +312,7 @@ export async function runHeadlessAgent(
         .filter(Boolean)
         .join('\n')
     : ''
-  const userText = [taskPrompt, delegation, envelope].filter(Boolean).join('\n\n')
+  const userText = [taskPrompt, delegation, envelope, calendarEnvelope].filter(Boolean).join('\n\n')
   const body: Record<string, unknown> = {
     messages: [
       { id: `agent-user-${opts.jobId}`, role: 'user', parts: [{ type: 'text', text: userText }] }

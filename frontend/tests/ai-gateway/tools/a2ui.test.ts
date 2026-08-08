@@ -407,6 +407,31 @@ describe('buildToolA2UIPayload — custom-agent CRUD approval card (S6 W3-2, rev
     ).toBe('schedule monthly day=31 (clamped) at 09:00 (UTC)')
   })
 
+  test('calendar triggers → 审批卡显式呈现 lead 与 calendars', () => {
+    const summary = (trigger: Record<string, unknown>): string => {
+      const payload = buildToolA2UIPayload('custom_agent_update', {
+        args: { agent_id: 'calendar-agent', trigger }
+      })
+      return (payload!.props as unknown as CustomAgentApprovalCardProps).triggerSummary as string
+    }
+
+    expect(
+      summary({
+        v: 1,
+        kind: 'calendar_event_change',
+        calendar_ids: ['Work', 'Leadership']
+      })
+    ).toBe('calendar_event_change calendars=[Work,Leadership]')
+    expect(
+      summary({
+        v: 1,
+        kind: 'calendar_before_start',
+        lead_seconds: 86400,
+        calendar_ids: ['Work']
+      })
+    ).toBe('calendar_before_start lead=86400s calendars=[Work]')
+  })
+
   test('junk grant_web / trigger:null project fail-closed (enum-checked / cleared)', () => {
     const p = buildToolA2UIPayload('custom_agent_update', {
       args: { agent_id: 'a', grant_web: 'yes', trigger: null }

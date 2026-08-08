@@ -654,6 +654,25 @@ export const customAgentTriggerSchema = z.discriminatedUnion('kind', [
       sender_pattern: z.string().max(256).optional(),
       folders: z.array(z.string().min(1).max(200)).max(32).optional()
     })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('calendar_event_change'),
+      title_pattern: z.string().max(256).optional(),
+      organizer_pattern: z.string().max(256).optional(),
+      attendee_pattern: z.string().max(256).optional(),
+      calendar_ids: z.array(z.string().min(1).max(200)).max(32).optional()
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('calendar_before_start'),
+      lead_seconds: z.number().int().min(60).max(2592000),
+      title_pattern: z.string().max(256).optional(),
+      organizer_pattern: z.string().max(256).optional(),
+      attendee_pattern: z.string().max(256).optional(),
+      calendar_ids: z.array(z.string().min(1).max(200)).max(32).optional()
+    })
     .strict()
 ])
 export type CustomAgentTriggerInput = z.infer<typeof customAgentTriggerSchema>

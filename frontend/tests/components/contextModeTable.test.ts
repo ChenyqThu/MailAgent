@@ -32,7 +32,14 @@ function specOf(kind: string): AgentRunSpec {
 }
 
 /** 表的全部输入面：四个已知 kind + 未知/缺失。 */
-const KNOWN_KINDS = ['cron', 'schedule', 'email_filter', 'im'] as const
+const KNOWN_KINDS = [
+  'cron',
+  'schedule',
+  'email_filter',
+  'calendar_event_change',
+  'calendar_before_start',
+  'im'
+] as const
 
 describe('context_mode 镜像表 — 期望值', () => {
   test('cron | schedule → cron_headless（定时族，输入无攻击者可控内容）', () => {
@@ -42,6 +49,11 @@ describe('context_mode 镜像表 — 期望值', () => {
 
   test('email_filter → untrusted_trigger（邮件正文是攻击者可控的）', () => {
     expect(deriveContextMode(specOf('email_filter'))).toBe('untrusted_trigger')
+  })
+
+  test('calendar triggers → untrusted_trigger（日历正文是外部内容）', () => {
+    expect(deriveContextMode(specOf('calendar_event_change'))).toBe('untrusted_trigger')
+    expect(deriveContextMode(specOf('calendar_before_start'))).toBe('untrusted_trigger')
   })
 
   test('im → im_chat（阶段 0b 预置：阶段 2 飞书对话；当前无任何 spec 会带它）', () => {

@@ -53,11 +53,19 @@ import {
   useDeleteAgent,
   useOpennessFlags,
   useSetConfig,
+  useCalendarTriggerEnabled,
   useTriggerV2Enabled,
   useToolOptions
 } from './hooks'
 import { ModelSelectItems } from './drawers/ModelSelectItems'
-import { errText, type ConnectorGrantMap, type WebGrant } from './custom-agent/shared'
+import {
+  errText,
+  formatCalendarLead,
+  leadParts,
+  type CalendarLeadUnit,
+  type ConnectorGrantMap,
+  type WebGrant
+} from './custom-agent/shared'
 import { RunHistorySection } from './custom-agent/RunHistorySection'
 import { AutomationPolicySection } from './custom-agent/AutomationPolicySection'
 import { CapabilityCards } from './custom-agent/CapabilityCards'
@@ -74,8 +82,20 @@ const MAX_RUN_SECONDS_CEILING = 1800
 // DEFAULT_CUSTOM_AGENT_MOUNTED_SKILLS 同源，NULL 挂载 → 默认集，工具面与现存 agent 逐字节一致）。
 const DEFAULT_MOUNTED_SKILLS = ['email', 'search', 'report']
 
-type TriggerKind = 'none' | 'cron' | 'email_filter'
-const TRIGGER_KINDS: TriggerKind[] = ['none', 'cron', 'email_filter']
+type TriggerKind =
+  | 'none'
+  | 'cron'
+  | 'email_filter'
+  | 'calendar_event_change'
+  | 'calendar_before_start'
+const TRIGGER_KINDS: TriggerKind[] = [
+  'none',
+  'cron',
+  'email_filter',
+  'calendar_event_change',
+  'calendar_before_start'
+]
+type LeadUnit = CalendarLeadUnit
 
 // title → 稳定 slug（新建 agent id）。保留 CJK + 字母 + 数字，latin 转小写，其余折 `_`；
 // 真正为空才时间戳兜底。镜像 SearchConfigDrawer.slugifyTitle（小助手，允许复制）。
@@ -133,6 +153,7 @@ export function CustomAgentDrawer({
   const { remove, isDeleting } = useDeleteAgent()
   const { models: enabledModels } = useEnabledModels()
   const triggerV2Enabled = useTriggerV2Enabled()
+  const calendarTriggerEnabled = useCalendarTriggerEnabled()
   // 工具清单只在抽屉打开时拉（后端权威 defaults；端点未就绪 → 空 → 提示）。
   const { options: toolOptions } = useToolOptions(open)
   // R3 — openness flag 分面（webToolsEnabled/execToolsEnabled），驱动「额外能力」区禁用提示。
@@ -169,6 +190,12 @@ export function CustomAgentDrawer({
   const [subjectPattern, setSubjectPattern] = useState('')
   const [folders, setFolders] = useState('') // 逗号分隔
   const [threadIds, setThreadIds] = useState('')
+  const [calendarTitlePattern, setCalendarTitlePattern] = useState('')
+  const [calendarOrganizerPattern, setCalendarOrganizerPattern] = useState('')
+  const [calendarAttendeePattern, setCalendarAttendeePattern] = useState('')
+  const [calendarIds, setCalendarIds] = useState('')
+  const [leadAmount, setLeadAmount] = useState(1)
+  const [leadUnit, setLeadUnit] = useState<LeadUnit>('days')
   const [triggerEntries, setTriggerEntries] = useState<CustomAgentTriggerV2Entry[]>([])
   const [editingTriggerIndex, setEditingTriggerIndex] = useState<number | null>(null)
   const [triggerEnabled, setTriggerEnabled] = useState(false)
@@ -222,7 +249,11 @@ export function CustomAgentDrawer({
       setPrompt('')
       setPromptDirty(false)
       setModel('')
-      setTriggerKind(initial?.trigger?.kind === 'email_filter' ? 'email_filter' : 'none')
+      setTriggerKind(
+        initial?.trigger?.kind === 'schedule' || initial?.trigger?.kind === 'cron'
+          ? 'cron'
+          : (initial?.trigger?.kind ?? 'none')
+      )
       setCronMode('schedule')
       setCron('0 9 * * 1-5')
       setTriggerTz('UTC')
@@ -237,6 +268,32 @@ export function CustomAgentDrawer({
           ? (initial.trigger.thread_ids ?? []).join(', ')
           : ''
       )
+      setCalendarTitlePattern(
+        initial?.trigger?.kind.startsWith('calendar_')
+          ? (initial.trigger.title_pattern ?? '')
+          : ''
+      )
+      setCalendarOrganizerPattern(
+        initial?.trigger?.kind.startsWith('calendar_')
+          ? (initial.trigger.organizer_pattern ?? '')
+          : ''
+      )
+      setCalendarAttendeePattern(
+        initial?.trigger?.kind.startsWith('calendar_')
+          ? (initial.trigger.attendee_pattern ?? '')
+          : ''
+      )
+      setCalendarIds(
+        initial?.trigger?.kind.startsWith('calendar_')
+          ? (initial.trigger.calendar_ids ?? []).join(', ')
+          : ''
+      )
+      const initialLead =
+        initial?.trigger?.kind === 'calendar_before_start'
+          ? leadParts(initial.trigger.lead_seconds)
+          : { amount: 1, unit: 'days' as const }
+      setLeadAmount(initialLead.amount)
+      setLeadUnit(initialLead.unit)
       setTriggerEntries(initial?.trigger ? [initial.trigger] : [])
       setEditingTriggerIndex(initial?.trigger ? 0 : null)
       setTriggerEnabled(initial?.trigger?.enabled ?? false)
@@ -306,6 +363,18 @@ export function CustomAgentDrawer({
       setCron('0 9 * * 1-5')
       setTriggerTz('UTC')
       setSchedule(defaultSchedule)
+    } else if (
+      trig?.kind === 'calendar_event_change' ||
+      trig?.kind === 'calendar_before_start'
+    ) {
+      setTriggerKind(trig.kind)
+      setCalendarTitlePattern(trig.title_pattern ?? '')
+      setCalendarOrganizerPattern(trig.organizer_pattern ?? '')
+      setCalendarAttendeePattern(trig.attendee_pattern ?? '')
+      setCalendarIds((trig.calendar_ids ?? []).join(', '))
+      const lead = leadParts(trig.kind === 'calendar_before_start' ? trig.lead_seconds : 86400)
+      setLeadAmount(lead.amount)
+      setLeadUnit(lead.unit)
     } else {
       setTriggerKind('none')
       setCronMode('schedule')
@@ -385,12 +454,21 @@ export function CustomAgentDrawer({
       setCronMode('legacy')
       setCron(entry.cron)
       setTriggerTz(entry.timezone || 'UTC')
-    } else {
+    } else if (entry.kind === 'email_filter') {
       setTriggerKind('email_filter')
       setSenderPattern(entry.sender_pattern ?? '')
       setSubjectPattern(entry.subject_pattern ?? '')
       setFolders((entry.folders ?? []).join(', '))
       setThreadIds((entry.thread_ids ?? []).join(', '))
+    } else {
+      setTriggerKind(entry.kind)
+      setCalendarTitlePattern(entry.title_pattern ?? '')
+      setCalendarOrganizerPattern(entry.organizer_pattern ?? '')
+      setCalendarAttendeePattern(entry.attendee_pattern ?? '')
+      setCalendarIds((entry.calendar_ids ?? []).join(', '))
+      const lead = leadParts(entry.kind === 'calendar_before_start' ? entry.lead_seconds : 86400)
+      setLeadAmount(lead.amount)
+      setLeadUnit(lead.unit)
     }
   }
 
@@ -402,11 +480,25 @@ export function CustomAgentDrawer({
     setSubjectPattern('')
     setFolders('')
     setThreadIds('')
+    setCalendarTitlePattern('')
+    setCalendarOrganizerPattern('')
+    setCalendarAttendeePattern('')
+    setCalendarIds('')
+    setLeadAmount(1)
+    setLeadUnit('days')
   }
 
   const triggerEntrySummary = (entry: CustomAgentTriggerV2Entry): string => {
     if (entry.kind === 'cron') return `${entry.cron} · ${entry.timezone || 'UTC'}`
     if (entry.kind === 'schedule') return `${entry.rule.freq} · ${entry.timezone}`
+    if (entry.kind === 'calendar_event_change') {
+      return t('agents.custom.trigger.triggerCalendarChange')
+    }
+    if (entry.kind === 'calendar_before_start') {
+      return t('agents.custom.trigger.triggerCalendarBefore', {
+        lead: formatCalendarLead(t, entry.lead_seconds)
+      })
+    }
     const predicates = [
       entry.sender_pattern,
       entry.subject_pattern,
@@ -448,6 +540,23 @@ export function CustomAgentDrawer({
       if (tids.length) trig.thread_ids = tids
       return trig
     }
+    if (triggerKind === 'calendar_event_change' || triggerKind === 'calendar_before_start') {
+      const trig: CustomAgentTrigger =
+        triggerKind === 'calendar_before_start'
+          ? {
+              v: 1,
+              kind: 'calendar_before_start',
+              lead_seconds:
+                leadAmount * (leadUnit === 'days' ? 86400 : leadUnit === 'hours' ? 3600 : 60)
+            }
+          : { v: 1, kind: 'calendar_event_change' }
+      if (calendarTitlePattern.trim()) trig.title_pattern = calendarTitlePattern.trim()
+      if (calendarOrganizerPattern.trim()) trig.organizer_pattern = calendarOrganizerPattern.trim()
+      if (calendarAttendeePattern.trim()) trig.attendee_pattern = calendarAttendeePattern.trim()
+      const ids = calendarIds.split(',').map((value) => value.trim()).filter(Boolean)
+      if (ids.length) trig.calendar_ids = ids
+      return trig
+    }
     return null
   }
 
@@ -466,6 +575,12 @@ export function CustomAgentDrawer({
       !threadIds.trim()
     ) {
       return t('agents.custom.errEmailPredicate')
+    }
+    if (triggerKind === 'calendar_before_start') {
+      const seconds = leadAmount * (leadUnit === 'days' ? 86400 : leadUnit === 'hours' ? 3600 : 60)
+      if (!Number.isInteger(seconds) || seconds < 60 || seconds > 2592000) {
+        return t('agents.custom.errCalendarLead')
+      }
     }
     if (maxRunSeconds < 1 || maxRunSeconds > MAX_RUN_SECONDS_CEILING) {
       return t('agents.custom.errMaxRunSeconds', { max: MAX_RUN_SECONDS_CEILING })
@@ -795,7 +910,9 @@ export function CustomAgentDrawer({
               </div>
             )}
             <div className="seg" style={{ width: '100%' }}>
-              {TRIGGER_KINDS.map((k) => (
+              {TRIGGER_KINDS.filter(
+                (kind) => calendarTriggerEnabled || !kind.startsWith('calendar_')
+              ).map((k) => (
                 <button
                   key={k}
                   type="button"
@@ -927,6 +1044,65 @@ export function CustomAgentDrawer({
                 )}
                 <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
                   {t('agents.custom.trigger.emailHint')}
+                </div>
+              </div>
+            )}
+
+            {(triggerKind === 'calendar_event_change' ||
+              triggerKind === 'calendar_before_start') && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10, marginTop: 10 }}>
+                <input
+                  type="text"
+                  value={calendarTitlePattern}
+                  placeholder={t('agents.custom.trigger.titlePatternPlaceholder')}
+                  onChange={(e) => setCalendarTitlePattern(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+                />
+                <input
+                  type="text"
+                  value={calendarOrganizerPattern}
+                  placeholder={t('agents.custom.trigger.organizerPatternPlaceholder')}
+                  onChange={(e) => setCalendarOrganizerPattern(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+                />
+                <input
+                  type="text"
+                  value={calendarAttendeePattern}
+                  placeholder={t('agents.custom.trigger.attendeePatternPlaceholder')}
+                  onChange={(e) => setCalendarAttendeePattern(e.target.value)}
+                  style={{ ...inputStyle, fontFamily: 'var(--font-mono, monospace)' }}
+                />
+                <input
+                  type="text"
+                  value={calendarIds}
+                  placeholder={t('agents.custom.trigger.calendarIdsPlaceholder')}
+                  onChange={(e) => setCalendarIds(e.target.value)}
+                  style={inputStyle}
+                />
+                {triggerKind === 'calendar_before_start' && (
+                  <div style={{ display: 'grid', gridTemplateColumns: '1fr 150px', gap: 10 }}>
+                    <input
+                      type="number"
+                      min={1}
+                      value={leadAmount}
+                      aria-label={t('agents.custom.trigger.leadLabel')}
+                      onChange={(e) => setLeadAmount(Number(e.target.value))}
+                      style={inputStyle}
+                    />
+                    <Select value={leadUnit} onValueChange={(value) => setLeadUnit(value as LeadUnit)}>
+                      <SelectTrigger>
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent className="z-[70]">
+                        <SelectItem value="minutes">{t('agents.custom.trigger.leadUnitMinutes')}</SelectItem>
+                        <SelectItem value="hours">{t('agents.custom.trigger.leadUnitHours')}</SelectItem>
+                        <SelectItem value="days">{t('agents.custom.trigger.leadUnitDays')}</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                )}
+                <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
+                  {t('agents.custom.trigger.calendarHint')}
                 </div>
               </div>
             )}

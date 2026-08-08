@@ -20,6 +20,7 @@ untrusted）**物理分隔**，模型只能把围栏内当 DATA 读、绝不当�
 
 from __future__ import annotations
 
+import json
 import re
 from typing import Any, Mapping, Optional
 
@@ -101,3 +102,52 @@ def fence_email_envelope(
             lines.append("…[truncated — fetch the full body via the email_body tool]")
     content = "\n".join(lines)
     return f"UNTRUSTED_EMAIL_BODY_START id={iid}\n{content}\nUNTRUSTED_EMAIL_BODY_END"
+
+
+def fence_calendar_envelope(
+    *,
+    ical_uid: str,
+    recurrence_id: Optional[str],
+    calendar_name: Optional[str],
+    status: Optional[str],
+    dtstart_iso: Optional[str] = None,
+    occurrence_start_iso: Optional[str] = None,
+    change_kind: Optional[str] = None,
+    changed_fields: Optional[list[str]] = None,
+    lead_seconds: Optional[int] = None,
+    summary: Optional[str] = None,
+    location: Optional[str] = None,
+    organizer: Optional[str] = None,
+    attendees: Optional[list[Any]] = None,
+    description: Optional[str] = None,
+) -> str:
+    """Calendar envelope with trusted scheduling metadata and fenced authored text."""
+    lines = [f"ical_uid: {ical_uid}"]
+    trusted = {
+        "recurrence_id": recurrence_id,
+        "calendar_name": calendar_name,
+        "status": status,
+        "dtstart_iso": dtstart_iso,
+        "occurrence_start_iso": occurrence_start_iso,
+        "change_kind": change_kind,
+        "changed_fields": ",".join(changed_fields or []) or None,
+        "lead_seconds": lead_seconds,
+    }
+    lines.extend(f"{key}: {value}" for key, value in trusted.items() if value is not None)
+    authored = {
+        "summary": summary,
+        "location": location,
+        "organizer": organizer,
+        "attendees": json.dumps(attendees, ensure_ascii=False) if attendees else None,
+        "description": description,
+    }
+    for part, value in authored.items():
+        if value:
+            lines.append(
+                fence_untrusted(
+                    "CALENDAR_EVENT",
+                    str(value)[:BODY_SUMMARY_CAP],
+                    {"uid": ical_uid, "part": part},
+                )
+            )
+    return "\n".join(lines)

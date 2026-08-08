@@ -39,6 +39,10 @@ export interface AgentRunSpec {
     firedAt: string
     emailInternalId?: number
     matchedRule?: AgentRunMatchedRule
+    calendarEventUid?: string
+    recurrenceId?: string | null
+    occurrenceStartIso?: string
+    changeKind?: string
   }
   prompt: {
     /** Owner-configured agent prompt (TRUSTED). */
@@ -46,6 +50,7 @@ export interface AgentRunSpec {
     /** Server-fenced UNTRUSTED_EMAIL_BODY block (email_filter runs only). Already fenced by W2 —
      *  the gateway concatenates it VERBATIM into the user message, never re-wrapping it. */
     emailEnvelope?: string
+    calendarEnvelope?: string
   }
   /** Agent model override; null/absent → the gateway default model. */
   model?: string | null

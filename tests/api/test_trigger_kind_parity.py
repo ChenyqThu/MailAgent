@@ -68,6 +68,12 @@ _LEGAL_PAYLOADS = {
         "timezone": "America/Los_Angeles",
     },
     "email_filter": {"v": 1, "kind": "email_filter", "subject_pattern": "DMS.*审批"},
+    "calendar_event_change": {
+        "v": 1, "kind": "calendar_event_change", "title_pattern": "Planning",
+    },
+    "calendar_before_start": {
+        "v": 1, "kind": "calendar_before_start", "lead_seconds": 86400,
+    },
 }
 
 

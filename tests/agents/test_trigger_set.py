@@ -3,6 +3,8 @@ import json
 import pytest
 
 from src.agents.trigger import (
+    CalendarBeforeStartTrigger,
+    CalendarEventChangeTrigger,
     EmailFilterTrigger,
     TriggerValidationError,
     normalize_agent_config_patch,
@@ -110,3 +112,35 @@ def test_flag_off_rejects_v2_write(monkeypatch):
     monkeypatch.setattr("src.agents.trigger.trigger_v2_enabled", lambda: False)
     with pytest.raises(TriggerValidationError, match="unsupported trigger version"):
         normalize_agent_config_patch({"trigger": _set()}, agent_type="custom")
+
+
+@pytest.mark.parametrize("version", [1, 2])
+def test_calendar_kinds_parse(version):
+    change = {"v": 1, "kind": "calendar_event_change", "title_pattern": "Plan"}
+    before = {"v": 1, "kind": "calendar_before_start", "lead_seconds": 86400}
+    raw_change = change if version == 1 else _set({"id": "trg_cal", "enabled": True, **change, "v": 1})
+    raw_before = before if version == 1 else _set({"id": "trg_before", "enabled": True, **before, "v": 1})
+    assert isinstance(parse_trigger_set(raw_change)[0].trigger, CalendarEventChangeTrigger)
+    assert isinstance(parse_trigger_set(raw_before)[0].trigger, CalendarBeforeStartTrigger)
+
+
+@pytest.mark.parametrize("lead", [None, 59, 2_592_001, 60.0, True])
+def test_calendar_before_start_rejects_bad_lead(lead):
+    payload = {"v": 1, "kind": "calendar_before_start"}
+    if lead is not None:
+        payload["lead_seconds"] = lead
+    with pytest.raises(TriggerValidationError, match="lead_seconds"):
+        parse_trigger_set(payload)
+
+
+def test_calendar_keys_are_rejected_on_non_calendar_v2_entry():
+    with pytest.raises(TriggerValidationError, match="only valid for calendar"):
+        parse_trigger_set(_set({**_email(), "calendar_ids": ["Work"]}))
+
+
+def test_calendar_flag_off_rejects_writes_but_parse_still_accepts(monkeypatch):
+    raw = {"v": 1, "kind": "calendar_event_change"}
+    assert isinstance(parse_trigger_set(raw)[0].trigger, CalendarEventChangeTrigger)
+    monkeypatch.setattr("src.agents.trigger.calendar_trigger_enabled", lambda: False)
+    with pytest.raises(TriggerValidationError, match="calendar triggers are disabled"):
+        normalize_agent_config_patch({"trigger": raw}, agent_type="custom")

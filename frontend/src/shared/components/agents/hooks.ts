@@ -315,6 +315,24 @@ export function useTriggerV2Enabled(): boolean {
   return q.data === true
 }
 
+export function useCalendarTriggerEnabled(): boolean {
+  const q = useQuery({
+    queryKey: qk.chat.config('calendarTriggerEnabled'),
+    queryFn: async () => {
+      try {
+        const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+        if (!resp.ok) return false
+        const body = (await resp.json()) as { data?: { calendarTriggerEnabled?: unknown } }
+        return body?.data?.calendarTriggerEnabled === true
+      } catch {
+        return false
+      }
+    },
+    staleTime: 15_000
+  })
+  return q.data === true
+}
+
 /** S6 W2（P5 红点链）— 全局 + per-agent 待审批（paused_pending）计数，5s 轮询（SystemAlertBadge 先例）。
  *  enabled=false（flag off / customAgentsEnabled=false）→ 不发请求、不轮询、恒返 {total:0,byAgent:{}}
  *  → 所有红点面字节级不渲染。读失败（flag off / 不可达）→ 服务端已守读优雅降级返 EMPTY。 */

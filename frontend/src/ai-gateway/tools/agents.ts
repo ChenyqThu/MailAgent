@@ -122,6 +122,13 @@ function triggerSummary(trigger: CustomAgentTrigger | TriggerSetV2 | null | unde
     parts.push(`at ${at} (${trigger.timezone})`)
     return parts.join(' ')
   }
+  if (trigger.kind === 'calendar_event_change') {
+    return `calendar_event_change${trigger.calendar_ids?.length ? ` calendars=[${trigger.calendar_ids.join(',')}]` : ''}`
+  }
+  if (trigger.kind === 'calendar_before_start') {
+    return `calendar_before_start lead=${trigger.lead_seconds}s${trigger.calendar_ids?.length ? ` calendars=[${trigger.calendar_ids.join(',')}]` : ''}`
+  }
+  if (trigger.kind !== 'email_filter') return 'unknown trigger'
   const preds: string[] = []
   if (trigger.subject_pattern) preds.push(`subject~/${trigger.subject_pattern}/`)
   if (trigger.sender_pattern) preds.push(`sender~/${trigger.sender_pattern}/`)

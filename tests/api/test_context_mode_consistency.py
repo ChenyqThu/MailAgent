@@ -46,6 +46,8 @@ CONTEXT_MODE_TABLE: Dict[str, str] = {
     "cron": "cron_headless",
     "schedule": "cron_headless",       # 07-24 schedule-builder：与 cron 同为定时 headless
     "email_filter": "untrusted_trigger",
+    "calendar_event_change": "untrusted_trigger",
+    "calendar_before_start": "untrusted_trigger",
     # 阶段 0b 预置（harness-expansion epic grill Q10=A）：阶段 2 飞书对话的第四场合。
     # parse_trigger 尚不认识 'im'（保存面在阶段 2 才放开），Python 侧靠 parse 前 peek 派生 ——
     # 当前没有任何行能带这个 kind，映射行 dormant。
@@ -62,6 +64,10 @@ _TRIGGER_PAYLOADS = {
         "anchor": "2026-07-24", "timezone": "Asia/Shanghai",
     },
     "email_filter": {"v": 1, "kind": "email_filter", "subject_pattern": "DMS.*审批"},
+    "calendar_event_change": {"v": 1, "kind": "calendar_event_change"},
+    "calendar_before_start": {
+        "v": 1, "kind": "calendar_before_start", "lead_seconds": 86400,
+    },
     "im": {"v": 1, "kind": "im"},
 }
 

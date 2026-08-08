@@ -4219,6 +4219,7 @@
       "errTitleRequired": "Name is required.",
       "errCron5": "Cron must be a standard 5-field expression (min hour dom mon dow).",
       "errEmailPredicate": "Email trigger needs at least one of: sender / subject / folders / thread IDs.",
+      "errCalendarLead": "Lead time must be between 1 minute and 30 days.",
       "errMaxRunSeconds": "Max run seconds must be between 1 and {max}.",
       "errMaxRunsPerDay": "Max runs per day cannot be negative.",
       "trigger": {
@@ -4228,7 +4229,9 @@
           "none": "None (draft)",
           "cron": "Schedule",
           "schedule": "Schedule",
-          "email_filter": "Email event"
+          "email_filter": "Email event",
+          "calendar_event_change": "Calendar change",
+          "calendar_before_start": "Before start"
         },
         "noneHint": "No trigger configured: the agent is saved as a draft and won't run automatically (you can still run it once manually below).",
         "cronHint": "Standard 5-field cron (min hour dom mon dow), e.g. 0 9 * * 1-5 = weekdays at 9am.",
@@ -4240,6 +4243,20 @@
         "foldersPlaceholder": "Folders (optional, comma-separated), e.g. Inbox, Approvals",
         "threadIdsPlaceholder": "Thread IDs (optional, comma-separated)",
         "emailHint": "Sender / subject are regex; folders and thread IDs are exact allowlists. Fill at least one.",
+        "titlePatternPlaceholder": "Title regex (optional)",
+        "organizerPatternPlaceholder": "Organizer regex (optional)",
+        "attendeePatternPlaceholder": "Attendee email regex (optional)",
+        "calendarIdsPlaceholder": "Calendar display names (optional, comma-separated)",
+        "leadLabel": "Lead time",
+        "leadUnitMinutes": "Minutes",
+        "leadUnitHours": "Hours",
+        "leadUnitDays": "Days",
+        "leadMinutes": "{count} minutes before",
+        "leadHours": "{count} hours before",
+        "leadDays": "{count} days before",
+        "calendarHint": "Business-field changes can trigger runs. Before-start runs fire at event start minus the lead time. Empty calendar names match all calendars.",
+        "triggerCalendarChange": "Calendar business-field change",
+        "triggerCalendarBefore": "Before start ({lead})",
         "add": "Add Trigger",
         "edit": "Edit",
         "delete": "Delete",
@@ -4355,6 +4372,8 @@
         "triggerCron": "Schedule: {cron} ({tz})",
         "triggerSchedule": "Schedule: {text} ({tz})",
         "triggerEmail": "Email event trigger",
+        "triggerCalendarChange": "Calendar change trigger",
+        "triggerCalendarBefore": "Before start ({lead})",
         "triggerNone": "No trigger configured (draft)"
       },
       "runs": {

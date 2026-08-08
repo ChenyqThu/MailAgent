@@ -32,10 +32,13 @@ from loguru import logger
 
 from src.agents.run_queue import enqueue_agent_run
 from src.agents.trigger import (
+    CalendarBeforeStartTrigger,
+    CalendarEventChangeTrigger,
     CronTrigger,
     EmailFilterTrigger,
     ScheduleTrigger,
     TriggerValidationError,
+    calendar_trigger_enabled,
     parse_budget,
     parse_trigger,
     parse_trigger_set,
@@ -143,6 +146,73 @@ def _due_fire(
     return prev_utc
 
 
+def _fire_calendar_before_start(
+    *,
+    sync_store: Any,
+    repo: Any,
+    agent: dict[str, Any],
+    trigger: CalendarBeforeStartTrigger,
+    trigger_id: Optional[str],
+    now: datetime,
+) -> None:
+    """Scan current occurrences and enqueue due runs.
+
+    No marker is stored: occurrence start and lead seconds are part of the
+    idempotency key. A moved event produces a new key, while cancelled, deleted,
+    or removed occurrences disappear from the scan; changing lead recomputes keys.
+    """
+    from src.config import config
+
+    if not calendar_trigger_enabled() or not config.calendar_caldav_sync_enabled:
+        return
+    from src.agents.matcher import AgentCalendarMatcher
+    from src.calendar_sync.repository import CalendarEventRepository
+
+    calendar_repo = CalendarEventRepository(str(sync_store.db_path))
+    occurrences = calendar_repo.list_event_occurrences(
+        now,
+        now + timedelta(seconds=trigger.lead_seconds, microseconds=1),
+        source="caldav",
+    )
+    matcher = AgentCalendarMatcher(trigger)
+    budget = parse_budget(agent.get("budget_json"))
+    for occurrence in occurrences:
+        row = occurrence.row
+        if (row.status or "").upper() == "CANCELLED":
+            continue
+        if not matcher.is_match(
+            title=row.summary,
+            organizer=row.organizer,
+            attendees=row.attendees,
+            calendar_name=row.calendar_name,
+        ):
+            continue
+        fire_at = occurrence.occurrence_start_utc - timedelta(
+            seconds=trigger.lead_seconds
+        )
+        lag_seconds = (now - fire_at).total_seconds()
+        if fire_at > now or lag_seconds > FIRE_WINDOW_MIN * 60:
+            continue
+        occurrence_iso = occurrence.occurrence_start_utc.isoformat()
+        enqueue_agent_run(
+            repo,
+            agent_id=agent["id"],
+            trigger_kind="calendar_before_start",
+            fire_key=(
+                f"{row.ical_uid}|{row.recurrence_id or ''}|"
+                f"{occurrence_iso}|{trigger.lead_seconds}"
+            ),
+            budget=budget,
+            params={
+                "calendar_event_uid": row.ical_uid,
+                "recurrence_id": row.recurrence_id,
+                "occurrence_start_iso": occurrence_iso,
+                "lead_seconds": trigger.lead_seconds,
+            },
+            trigger_id=trigger_id,
+        )
+
+
 async def tick_loop(
     *,
     sync_store: Any,
@@ -174,9 +244,29 @@ async def tick_loop(
                     trigger_id = getattr(entry, "id", entry[0] if isinstance(entry, tuple) else None)
                     enabled = getattr(entry, "enabled", entry[1] if isinstance(entry, tuple) else True)
                     trig = getattr(entry, "trigger", entry[2] if isinstance(entry, tuple) else None)
-                    if not enabled or isinstance(trig, EmailFilterTrigger):
+                    if not enabled:
                         continue
                     now = now_fn()
+                    if isinstance(trig, CalendarBeforeStartTrigger):
+                        try:
+                            _fire_calendar_before_start(
+                                sync_store=sync_store,
+                                repo=repo,
+                                agent=agent,
+                                trigger=trig,
+                                trigger_id=trigger_id,
+                                now=now,
+                            )
+                        except Exception as e:  # noqa: BLE001 — calendar 故障不饿死后续 agent
+                            logger.warning(
+                                f"[agent-trigger] calendar before-start scan failed "
+                                f"agent={agent['id']} trigger_id={trigger_id}: {e}"
+                            )
+                        continue
+                    if isinstance(trig, (EmailFilterTrigger, CalendarEventChangeTrigger)):
+                        continue
+                    if not isinstance(trig, (CronTrigger, ScheduleTrigger)):
+                        continue
                     key = _marker_key(agent["id"], trigger_id)
                     last_marker = sync_store.get_state(key)
                     fire_at = _due_fire(trig, now, last_marker)

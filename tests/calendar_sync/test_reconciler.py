@@ -169,3 +169,71 @@ class TestIncremental:
         )
         assert stats.upserted == 1
         assert stats.soft_deleted == 1
+
+
+class TestBusinessChangeProjection:
+    @pytest.mark.parametrize(
+        ("field", "value", "expected"),
+        [
+            ("summary", "New title", "summary"),
+            ("organizer", "new@example.com", "organizer"),
+            ("attendees", ["new@example.com"], "attendees"),
+            ("location", "Room 2", "location"),
+            ("description", "New agenda", "description"),
+            ("status", "CANCELLED", "status"),
+        ],
+    )
+    def test_business_field_changes_are_reported(self, repo, make_event, field, value, expected):
+        repo.upsert_sync_state("Personal", ctag="seed")
+        repo.upsert_from_caldav_event(make_event(uid="tracked"), source="caldav")
+        kwargs = {field: value}
+        stats = CalendarReconciler(repo).reconcile_incremental(
+            [make_event(uid="tracked", **kwargs)], [], calendar_name="Personal", track_changes=True
+        )
+        assert len(stats.changed) == 1
+        assert expected in stats.changed[0].changed_fields
+
+    def test_url_change_is_reported(self, repo, make_event):
+        repo.upsert_sync_state("Personal", ctag="seed")
+        repo.upsert_from_caldav_event(make_event(uid="tracked", url="https://old"), source="caldav")
+        stats = CalendarReconciler(repo).reconcile_incremental(
+            [make_event(uid="tracked", url="https://new")], [], calendar_name="Personal", track_changes=True
+        )
+        assert stats.changed[0].changed_fields == ["url"]
+
+    def test_time_only_and_identical_upsert_are_not_reported(self, repo, make_event):
+        repo.upsert_sync_state("Personal", ctag="seed")
+        original = make_event(uid="tracked")
+        repo.upsert_from_caldav_event(original, source="caldav")
+        moved = make_event(uid="tracked", start=original.start + timedelta(hours=2))
+        recon = CalendarReconciler(repo)
+        assert recon.reconcile_incremental(
+            [moved], [], calendar_name="Personal", track_changes=True
+        ).changed == []
+        assert recon.reconcile_incremental(
+            [moved], [], calendar_name="Personal", track_changes=True
+        ).changed == []
+
+    def test_created_deleted_and_first_sync_guard(self, repo, make_event):
+        recon = CalendarReconciler(repo)
+        first = recon.reconcile_full_window(
+            [make_event(uid="first")], calendar_name="Personal",
+            window_start=WINDOW_START, window_end=WINDOW_END, track_changes=True,
+        )
+        assert first.changed == []
+        repo.upsert_sync_state("Personal", ctag="seed")
+        created = recon.reconcile_incremental(
+            [make_event(uid="created")], [], calendar_name="Personal", track_changes=True
+        )
+        assert created.changed[0].change_kind == "created"
+        deleted = recon.reconcile_incremental(
+            [], ["created"], calendar_name="Personal", track_changes=True
+        )
+        assert deleted.changed[0].change_kind == "deleted"
+
+    def test_track_changes_false_is_additive_noop(self, repo, make_event):
+        stats = CalendarReconciler(repo).reconcile_incremental(
+            [make_event(uid="plain")], [], calendar_name="Personal", track_changes=False
+        )
+        assert stats.upserted == 1
+        assert stats.changed == []

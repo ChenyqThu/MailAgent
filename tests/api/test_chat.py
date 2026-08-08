@@ -354,6 +354,7 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # P1 — main-env-only session provenance flag 的未读 UI 只读投影（默认 ON）。
         "sessionProvenanceEnabled": True,
         "triggerV2Enabled": True,
+        "calendarTriggerEnabled": True,
         # task 07-12 P3/P5 — Settings「模型服务」区门控（MAILAGENT_LLM_PROVIDER_REGISTRY，
         # pydantic 默认已 cutover 翻 on 2026-07-13；此处 pin 的是 getattr 的 stub 兜底：
         # stub 无该字段 → False（fail-safe 走 legacy 投影，真实 config 恒有字段）。

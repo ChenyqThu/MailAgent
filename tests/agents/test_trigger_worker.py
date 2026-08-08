@@ -7,7 +7,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -361,3 +362,343 @@ async def test_tick_loop_fires_schedule_agent(tmp_path):
     marker = json.loads(ss.get_state("agent_trigger_last_fire:sch1"))
     assert marker["fired_at_utc"].startswith("2026-07-03T09:00:00")
     assert marker["cron_hash"] == tw._trigger_hash(parse_trigger(agent["trigger_json"]))
+
+
+def _calendar_event(uid: str, start: datetime, *, status: str = "CONFIRMED", rrule: str = "", tzid=None):
+    from src.calendar_sync.caldav_reader import CalendarEvent
+
+    return CalendarEvent(
+        summary="Planning",
+        start=start,
+        end=start + timedelta(hours=1),
+        ical_uid=uid,
+        calendar_name="Work",
+        status=status,
+        rrule=rrule,
+        tzid=tzid,
+    )
+
+
+def test_before_start_due_and_cancelled_and_flag_gates(tmp_path, monkeypatch):
+    from src.agents.trigger import CalendarBeforeStartTrigger
+    from src.calendar_sync.repository import CalendarEventRepository
+    from src.config import config
+
+    db = tmp_path / "calendar.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    calendar_repo = CalendarEventRepository(str(db))
+    now = datetime(2026, 8, 9, 15, 0, 30, tzinfo=_UTC)
+    calendar_repo.upsert_from_caldav_event(
+        _calendar_event("due", datetime(2026, 8, 9, 16, tzinfo=_UTC)), source="caldav"
+    )
+    calendar_repo.upsert_from_caldav_event(
+        _calendar_event("cancelled", datetime(2026, 8, 9, 16, tzinfo=_UTC), status="CANCELLED"),
+        source="caldav",
+    )
+    monkeypatch.setattr(tw, "calendar_trigger_enabled", lambda: True)
+    monkeypatch.setattr(config, "calendar_caldav_sync_enabled", True)
+    agent = {"id": "cal", "budget_json": None}
+    tw._fire_calendar_before_start(
+        sync_store=ss, repo=repo, agent=agent,
+        trigger=CalendarBeforeStartTrigger(lead_seconds=3600), trigger_id="trg_before", now=now,
+    )
+    jobs = repo.list_agent_runs(agent_id="cal")
+    assert len(jobs) == 1
+    assert jobs[0].params["fire_key"] == "due||2026-08-09T16:00:00+00:00|3600"
+    monkeypatch.setattr(tw, "calendar_trigger_enabled", lambda: False)
+    tw._fire_calendar_before_start(
+        sync_store=ss, repo=repo, agent=agent,
+        trigger=CalendarBeforeStartTrigger(lead_seconds=7200), trigger_id="trg_off", now=now,
+    )
+    assert len(repo.list_agent_runs(agent_id="cal")) == 1
+
+
+@pytest.mark.asyncio
+async def test_calendar_entry_does_not_stop_cron_entry(tmp_path, monkeypatch):
+    monkeypatch.setattr(tw, "trigger_v2_enabled", lambda: True)
+    monkeypatch.setattr(tw, "calendar_trigger_enabled", lambda: False)
+    db = tmp_path / "s.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    agent = {
+        "id": "mixed", "type": "custom", "enabled": 1,
+        "trigger_json": json.dumps({
+            "v": 2,
+            "triggers": [
+                {"id": "trg_cal", "enabled": True, "kind": "calendar_before_start", "lead_seconds": 3600},
+                {"id": "trg_cron", "enabled": True, "kind": "cron", "cron": "0 9 * * *", "timezone": "UTC"},
+            ],
+        }),
+        "budget_json": None,
+    }
+    event = asyncio.Event()
+    task = asyncio.create_task(tw.tick_loop(
+        sync_store=ss, store=_FakeStore([agent]), repo=repo, shutdown_event=event,
+        interval_sec=0.01, now_fn=lambda: datetime(2026, 8, 8, 9, 0, 30, tzinfo=_UTC),
+    ))
+    await asyncio.sleep(0.04)
+    event.set()
+    await asyncio.wait_for(task, timeout=2)
+    jobs = repo.list_agent_runs(agent_id="mixed")
+    assert len(jobs) == 1
+    assert jobs[0].params["trigger_id"] == "trg_cron"
+
+
+def test_before_start_not_due_is_not_enqueued(tmp_path, monkeypatch):
+    from src.agents.trigger import CalendarBeforeStartTrigger
+    from src.calendar_sync.repository import CalendarEventOccurrence, CalendarEventRepository
+    from src.config import config
+
+    db = tmp_path / "calendar.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    calendar_repo = CalendarEventRepository(str(db))
+    now = datetime(2026, 8, 9, 15, tzinfo=_UTC)
+    calendar_repo.upsert_from_caldav_event(
+        _calendar_event("future", datetime(2026, 8, 9, 16, 0, 1, tzinfo=_UTC)),
+        source="caldav",
+    )
+    row = calendar_repo.get_by_ical_uid("future")
+    assert row is not None
+    occurrence = CalendarEventOccurrence(
+        row=row,
+        occurrence_start_utc=row.dtstart_utc,
+        occurrence_end_utc=row.dtend_utc,
+        is_recurrence_instance=False,
+    )
+    monkeypatch.setattr(tw, "calendar_trigger_enabled", lambda: True)
+    monkeypatch.setattr(config, "calendar_caldav_sync_enabled", True)
+    monkeypatch.setattr(
+        CalendarEventRepository,
+        "list_event_occurrences",
+        lambda self, *args, **kwargs: [occurrence],
+    )
+
+    tw._fire_calendar_before_start(
+        sync_store=ss,
+        repo=repo,
+        agent={"id": "not-due", "budget_json": None},
+        trigger=CalendarBeforeStartTrigger(lead_seconds=3600),
+        trigger_id="trg_before",
+        now=now,
+    )
+    assert repo.list_agent_runs(agent_id="not-due") == []
+
+
+def test_before_start_skips_beyond_catch_up_window(tmp_path, monkeypatch):
+    from src.agents.trigger import CalendarBeforeStartTrigger
+    from src.calendar_sync.repository import CalendarEventRepository
+    from src.config import config
+
+    db = tmp_path / "calendar.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    calendar_repo = CalendarEventRepository(str(db))
+    calendar_repo.upsert_from_caldav_event(
+        _calendar_event("late", datetime(2026, 8, 9, 16, tzinfo=_UTC)), source="caldav"
+    )
+    monkeypatch.setattr(tw, "calendar_trigger_enabled", lambda: True)
+    monkeypatch.setattr(config, "calendar_caldav_sync_enabled", True)
+
+    tw._fire_calendar_before_start(
+        sync_store=ss,
+        repo=repo,
+        agent={"id": "late", "budget_json": None},
+        trigger=CalendarBeforeStartTrigger(lead_seconds=3600),
+        trigger_id="trg_before",
+        now=datetime(2026, 8, 9, 15, 31, tzinfo=_UTC),
+    )
+    assert repo.list_agent_runs(agent_id="late") == []
+
+
+def test_before_start_skips_soft_deleted_event(tmp_path, monkeypatch):
+    from src.agents.trigger import CalendarBeforeStartTrigger
+    from src.calendar_sync.repository import CalendarEventRepository
+    from src.config import config
+
+    db = tmp_path / "calendar.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    calendar_repo = CalendarEventRepository(str(db))
+    calendar_repo.upsert_from_caldav_event(
+        _calendar_event("deleted", datetime(2026, 8, 9, 16, tzinfo=_UTC)), source="caldav"
+    )
+    calendar_repo.soft_delete(ical_uid="deleted", source="caldav")
+    monkeypatch.setattr(tw, "calendar_trigger_enabled", lambda: True)
+    monkeypatch.setattr(config, "calendar_caldav_sync_enabled", True)
+
+    tw._fire_calendar_before_start(
+        sync_store=ss,
+        repo=repo,
+        agent={"id": "deleted", "budget_json": None},
+        trigger=CalendarBeforeStartTrigger(lead_seconds=3600),
+        trigger_id="trg_before",
+        now=datetime(2026, 8, 9, 15, 0, 30, tzinfo=_UTC),
+    )
+    assert repo.list_agent_runs(agent_id="deleted") == []
+
+
+def test_before_start_time_move_creates_new_fire_key(tmp_path, monkeypatch):
+    from src.agents.trigger import CalendarBeforeStartTrigger
+    from src.calendar_sync.repository import CalendarEventRepository
+    from src.config import config
+
+    db = tmp_path / "calendar.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    calendar_repo = CalendarEventRepository(str(db))
+    monkeypatch.setattr(tw, "calendar_trigger_enabled", lambda: True)
+    monkeypatch.setattr(config, "calendar_caldav_sync_enabled", True)
+    trigger = CalendarBeforeStartTrigger(lead_seconds=3600)
+    agent = {"id": "moved", "budget_json": None}
+
+    calendar_repo.upsert_from_caldav_event(
+        _calendar_event("moved", datetime(2026, 8, 9, 16, tzinfo=_UTC)), source="caldav"
+    )
+    tw._fire_calendar_before_start(
+        sync_store=ss,
+        repo=repo,
+        agent=agent,
+        trigger=trigger,
+        trigger_id="trg_before",
+        now=datetime(2026, 8, 9, 15, 0, 30, tzinfo=_UTC),
+    )
+
+    calendar_repo.upsert_from_caldav_event(
+        _calendar_event("moved", datetime(2026, 8, 9, 18, tzinfo=_UTC)), source="caldav"
+    )
+    tw._fire_calendar_before_start(
+        sync_store=ss,
+        repo=repo,
+        agent=agent,
+        trigger=trigger,
+        trigger_id="trg_before",
+        now=datetime(2026, 8, 9, 17, 0, 30, tzinfo=_UTC),
+    )
+
+    keys = {job.params["fire_key"] for job in repo.list_agent_runs(agent_id="moved")}
+    assert keys == {
+        "moved||2026-08-09T16:00:00+00:00|3600",
+        "moved||2026-08-09T18:00:00+00:00|3600",
+    }
+
+
+def test_before_start_daily_recurrence_preserves_wall_clock_across_dst(tmp_path, monkeypatch):
+    from src.agents.trigger import CalendarBeforeStartTrigger
+    from src.calendar_sync.repository import CalendarEventRepository
+    from src.config import config
+
+    db = tmp_path / "calendar.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    calendar_repo = CalendarEventRepository(str(db))
+    calendar_repo.upsert_from_caldav_event(
+        _calendar_event(
+            "dst",
+            datetime(2026, 3, 7, 9, tzinfo=ZoneInfo("America/Los_Angeles")),
+            rrule="FREQ=DAILY",
+            tzid="America/Los_Angeles",
+        ),
+        source="caldav",
+    )
+    monkeypatch.setattr(tw, "calendar_trigger_enabled", lambda: True)
+    monkeypatch.setattr(config, "calendar_caldav_sync_enabled", True)
+    trigger = CalendarBeforeStartTrigger(lead_seconds=3600)
+    agent = {"id": "dst", "budget_json": None}
+
+    for fire_at in (
+        datetime(2026, 3, 7, 16, tzinfo=_UTC),
+        datetime(2026, 3, 9, 15, tzinfo=_UTC),
+    ):
+        tw._fire_calendar_before_start(
+            sync_store=ss,
+            repo=repo,
+            agent=agent,
+            trigger=trigger,
+            trigger_id="trg_before",
+            now=fire_at,
+        )
+
+    keys = {job.params["fire_key"] for job in repo.list_agent_runs(agent_id="dst")}
+    assert "dst||2026-03-07T17:00:00+00:00|3600" in keys
+    assert "dst||2026-03-09T16:00:00+00:00|3600" in keys
+    assert len(keys) == 2
+
+
+@pytest.mark.asyncio
+async def test_calendar_query_failure_does_not_starve_later_cron_agent(tmp_path, monkeypatch):
+    from src.calendar_sync.repository import CalendarEventRepository
+    from src.config import config
+
+    monkeypatch.setattr(tw, "trigger_v2_enabled", lambda: True)
+    monkeypatch.setattr(tw, "calendar_trigger_enabled", lambda: True)
+    monkeypatch.setattr(config, "calendar_caldav_sync_enabled", True)
+    monkeypatch.setattr(
+        CalendarEventRepository,
+        "list_event_occurrences",
+        lambda self, *args, **kwargs: (_ for _ in ()).throw(RuntimeError("calendar locked")),
+    )
+    db = tmp_path / "s.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    agents = [
+        {
+            "id": "calendar-broken",
+            "type": "custom",
+            "enabled": 1,
+            "trigger_json": json.dumps(
+                {
+                    "v": 2,
+                    "triggers": [
+                        {
+                            "id": "trg_cal",
+                            "enabled": True,
+                            "kind": "calendar_before_start",
+                            "lead_seconds": 3600,
+                        }
+                    ],
+                }
+            ),
+            "budget_json": None,
+        },
+        {
+            "id": "cron-after-calendar",
+            "type": "custom",
+            "enabled": 1,
+            "trigger_json": json.dumps(
+                {
+                    "v": 2,
+                    "triggers": [
+                        {
+                            "id": "trg_cron",
+                            "enabled": True,
+                            "kind": "cron",
+                            "cron": "0 9 * * *",
+                            "timezone": "UTC",
+                        }
+                    ],
+                }
+            ),
+            "budget_json": None,
+        },
+    ]
+    event = asyncio.Event()
+    task = asyncio.create_task(
+        tw.tick_loop(
+            sync_store=ss,
+            store=_FakeStore(agents),
+            repo=repo,
+            shutdown_event=event,
+            interval_sec=0.01,
+            now_fn=lambda: datetime(2026, 8, 8, 9, 0, 30, tzinfo=_UTC),
+        )
+    )
+    await asyncio.sleep(0.04)
+    event.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    assert repo.list_agent_runs(agent_id="calendar-broken") == []
+    jobs = repo.list_agent_runs(agent_id="cron-after-calendar")
+    assert len(jobs) == 1
+    assert jobs[0].params["trigger_id"] == "trg_cron"

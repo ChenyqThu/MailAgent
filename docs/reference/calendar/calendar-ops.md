@@ -85,6 +85,10 @@ CREATE TABLE email_meeting (
   - HTTP: `GET /api/calendar/email-link/{internal_id}` / `GET /api/calendar/events/{event_id}/source-email` (404→前端 null)
   - Service: `CalendarService.get_email_calendar_link` / `get_event_source_email` (+ `CalendarEventRepository.get_master_by_uid`)
 
+## Custom Agent Calendar Trigger 挂点 (harness 优化 epic P7, 2026-08-08)
+
+Reconciler 支持可选 change tracking（`reconcile_full_window/reconcile_incremental` 的 `track_changes` 参）：开启时 upsert 前 pre-read 前像、按 `src/calendar_sync/business_hash.py` 业务字段 hash 比对（summary/organizer/attendees/location/url/description/status；**显式排除**纯起止时间与 last_synced/updated_at/sequence 等技术字段——`updated_at` 每次 upsert 无条件刷新、不能当变化判据），产出 `ReconcileStats.changed: list[CalendarChange]` 供 `src/agents/calendar_dispatch.py` 派发 `calendar_event_change` custom agent run。默认 `track_changes=False` = 字节级旧行为。**首同步双守卫**：worker `_initial_full_sync` 不 track + reconcile 内部判 `get_sync_state(calendar) is not None`（首次见到的日历不产生历史「created」洪泛）。`calendar_before_start` 触发不挂本模块——在 `src/agents/trigger_worker.py` 每 60s 无状态扫描 `list_event_occurrences` 现算。总闸 `MAILAGENT_CALENDAR_TRIGGER`（默认 on）；详见 [`ai-sdk-gateway-architecture.md`](../llm-agent/ai-sdk-gateway-architecture.md) §13.24.8。
+
 ## 模块结构
 
 ```

@@ -12,6 +12,28 @@ export const WEB_GRANTS: WebGrant[] = ['off', 'gated', 'open']
 export type ConnectorGrantMap = NonNullable<CustomAgentToolPolicy['grant_connectors']>
 export type ConnectorGrantValue = ConnectorGrantMap[string]
 
+export type CalendarLeadUnit = 'minutes' | 'hours' | 'days'
+
+export function leadParts(seconds: number): { amount: number; unit: CalendarLeadUnit } {
+  if (seconds % 86400 === 0) return { amount: seconds / 86400, unit: 'days' }
+  if (seconds % 3600 === 0) return { amount: seconds / 3600, unit: 'hours' }
+  return { amount: seconds / 60, unit: 'minutes' }
+}
+
+export function formatCalendarLead(
+  t: (key: string, options?: Record<string, unknown>) => string,
+  seconds: number
+): string {
+  const { amount, unit } = leadParts(seconds)
+  const key =
+    unit === 'days'
+      ? 'agents.custom.trigger.leadDays'
+      : unit === 'hours'
+        ? 'agents.custom.trigger.leadHours'
+        : 'agents.custom.trigger.leadMinutes'
+  return t(key, { count: amount })
+}
+
 // 结构化 ApiError / Electron err → 用户可读一行（code + message）。保存失败时把后端
 // validate_agent_config_patch 的 detail（TriggerValidationError message）渲染出来。
 export function errText(err: unknown): string {
@@ -32,6 +54,8 @@ export function deriveHeadlessMode(
 ): 'cron_headless' | 'untrusted_trigger' | 'im_chat' | null {
   if (kind === 'cron' || kind === 'schedule') return 'cron_headless'
   if (kind === 'email_filter') return 'untrusted_trigger'
+  if (kind === 'calendar_event_change') return 'untrusted_trigger'
+  if (kind === 'calendar_before_start') return 'untrusted_trigger'
   if (kind === 'im') return 'im_chat'
   return null
 }

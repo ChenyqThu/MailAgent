@@ -18,7 +18,9 @@ Phase 1 (plan §1.3): asyncio 长循环, 跟 FanoutWorker 同生命周期. 启�
 from __future__ import annotations
 
 import asyncio
+import time
 import traceback
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING
 
@@ -32,6 +34,12 @@ if TYPE_CHECKING:
     from src.calendar_sync.reconciler import ReconcileStats
     from src.calendar_sync.repository import CalendarEventRepository
     from src.config import Config
+
+
+@dataclass(frozen=True)
+class AgentDispatchContext:
+    store: object
+    repo: object
 
 
 class CalendarSyncWorker:
@@ -56,6 +64,7 @@ class CalendarSyncWorker:
         full_sync_window_days: int = 180,
         full_sync_past_days: int = 30,
         refresh_calendars_every_n_ticks: int = 60,
+        agent_dispatch_context: AgentDispatchContext | None = None,
     ):
         """
         Args:
@@ -98,6 +107,10 @@ class CalendarSyncWorker:
         # 成功后 reset. max 24h (1440 ticks) cap.
         self._refresh_failure_count = 0
         self._refresh_skip_until_tick = 0
+        self.agent_dispatch_context = agent_dispatch_context
+        from src.agents.calendar_dispatch import CalendarChangeCoalescer
+
+        self._calendar_change_coalescer = CalendarChangeCoalescer()
 
     def stop(self) -> None:
         """通知 worker 优雅停止. 当前 tick 跑完后退出."""
@@ -258,6 +271,8 @@ class CalendarSyncWorker:
                 )
                 self.repo.upsert_sync_state(cal_name, last_error=str(e)[:500])
 
+        self._dispatch_calendar_changes([])
+
         # 阶段2·2.5 — 会前岛提醒顺路检查 (SQLite 只读 ~ms 级, 不 to_thread).
         # 自身 fail-open, 这里再兜一层防 reminder bug 连坐 sync loop.
         try:
@@ -409,12 +424,16 @@ class CalendarSyncWorker:
         if new_token is not None and (changed or deleted):
             # 增量路径成功
             stats = self.reconciler.reconcile_incremental(
-                changed, deleted, calendar_name=cal_name
+                changed,
+                deleted,
+                calendar_name=cal_name,
+                track_changes=self._should_track_calendar_changes(),
             )
             self.repo.upsert_sync_state(
                 cal_name, ctag=new_ctag, sync_token=new_token, last_error=None
             )
             self._emit_calendar_changed(cal_name, stats)
+            self._dispatch_calendar_changes(stats.changed)
             return
 
         # 3. 增量不可用 / 空结果 — 降级到全窗口 re-read
@@ -434,9 +453,57 @@ class CalendarSyncWorker:
             calendar_name=cal_name,
             window_start=window_start,
             window_end=window_end,
+            track_changes=(state is not None and self._should_track_calendar_changes()),
         )
         self.repo.upsert_sync_state(cal_name, ctag=new_ctag, last_error=None)
         self._emit_calendar_changed(cal_name, stats)
+        self._dispatch_calendar_changes(stats.changed)
+
+    def _should_track_calendar_changes(self) -> bool:
+        if self.agent_dispatch_context is None:
+            return False
+        from src.agents.trigger import (
+            CalendarEventChangeTrigger,
+            TriggerValidationError,
+            calendar_trigger_enabled,
+            parse_trigger_set,
+        )
+
+        if not calendar_trigger_enabled():
+            return False
+        try:
+            agents = self.agent_dispatch_context.store.list_agents()
+        except Exception:
+            return False
+        for agent in agents:
+            if not agent.get("enabled") or agent.get("type") != "custom":
+                continue
+            try:
+                entries = parse_trigger_set(agent.get("trigger_json"))
+            except TriggerValidationError:
+                continue
+            if any(
+                entry.enabled and isinstance(entry.trigger, CalendarEventChangeTrigger)
+                for entry in entries
+            ):
+                return True
+        return False
+
+    def _dispatch_calendar_changes(self, changes: list) -> None:
+        if self.agent_dispatch_context is None:
+            return
+        from src.agents.calendar_dispatch import dispatch_calendar_change_agents
+
+        ready = self._calendar_change_coalescer.offer(
+            changes, now_monotonic=time.monotonic()
+        )
+        if ready:
+            dispatch_calendar_change_agents(
+                store=self.agent_dispatch_context.store,
+                repo=self.agent_dispatch_context.repo,
+                calendar_repo=self.repo,
+                changes=ready,
+            )
 
     def _emit_calendar_changed(self, cal_name: str, stats: "ReconcileStats") -> None:
         """落库有实际变化时推 `calendar.synced` SSE 事件; 无变化不发 (防空 invalidate).

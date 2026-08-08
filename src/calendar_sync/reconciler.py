@@ -16,7 +16,7 @@ calendar_event 表当前 'caldav' source 的快照对比, 应用增量到本地�
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Optional
 
@@ -35,6 +35,17 @@ class ReconcileStats:
     soft_deleted: int = 0
     skipped_no_uid: int = 0
     errors: int = 0
+    changed: list["CalendarChange"] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class CalendarChange:
+    ical_uid: str
+    recurrence_id: Optional[str]
+    calendar_name: str
+    change_kind: str
+    changed_fields: list[str]
+    business_hash: str
 
 
 class CalendarReconciler:
@@ -54,6 +65,7 @@ class CalendarReconciler:
         calendar_name: str,
         window_start: datetime,
         window_end: datetime,
+        track_changes: bool = False,
     ) -> ReconcileStats:
         """全窗口 reconcile.
 
@@ -65,6 +77,7 @@ class CalendarReconciler:
         默认跟随主事件; 真要单独处理 single-occurrence 删除等 reconcile_incremental.
         """
         stats = ReconcileStats()
+        track_changes = track_changes and self.repo.get_sync_state(calendar_name) is not None
 
         # 1. Upsert 所有 events
         seen_uids: set[str] = set()
@@ -73,9 +86,38 @@ class CalendarReconciler:
                 stats.skipped_no_uid += 1
                 continue
             try:
+                previous = (
+                    self.repo.get_by_ical_uid(
+                        ev.ical_uid,
+                        source="caldav",
+                        recurrence_id=ev.recurrence_id,
+                        include_deleted=True,
+                    )
+                    if track_changes
+                    else None
+                )
                 self.repo.upsert_from_caldav_event(ev, source="caldav")
                 stats.upserted += 1
                 seen_uids.add(ev.ical_uid)
+                if track_changes:
+                    from src.calendar_sync.business_hash import (
+                        business_content_hash,
+                        changed_business_fields,
+                    )
+
+                    digest = business_content_hash(ev)
+                    if previous is None:
+                        stats.changed.append(CalendarChange(
+                            ev.ical_uid, ev.recurrence_id, calendar_name,
+                            "created", list(changed_business_fields(ev, ev)), digest,
+                        ))
+                    else:
+                        fields = changed_business_fields(previous, ev)
+                        if fields or previous.deleted_at is not None:
+                            stats.changed.append(CalendarChange(
+                                ev.ical_uid, ev.recurrence_id, calendar_name,
+                                "updated", fields, digest,
+                            ))
             except Exception as e:
                 logger.warning(
                     f"[reconciler] upsert failed for uid={ev.ical_uid!r}: {e}"
@@ -120,6 +162,13 @@ class CalendarReconciler:
                     recurrence_id=r.recurrence_id,
                 )
                 stats.soft_deleted += affected
+                if track_changes and affected:
+                    from src.calendar_sync.business_hash import deleted_business_content_hash
+
+                    stats.changed.append(CalendarChange(
+                        r.ical_uid, r.recurrence_id, r.calendar_name,
+                        "deleted", [], deleted_business_content_hash(r),
+                    ))
             except Exception as e:
                 logger.warning(
                     f"[reconciler] soft_delete failed for uid={r.ical_uid!r}: {e}"
@@ -143,17 +192,48 @@ class CalendarReconciler:
         deleted_uids: list[str],
         *,
         calendar_name: str,
+        track_changes: bool = False,
     ) -> ReconcileStats:
         """增量 reconcile — sync-collection 报告了哪些变了 / 哪些删了, 直接应用."""
         stats = ReconcileStats()
+        track_changes = track_changes and self.repo.get_sync_state(calendar_name) is not None
 
         for ev in changed_events:
             if not ev.ical_uid:
                 stats.skipped_no_uid += 1
                 continue
             try:
+                previous = (
+                    self.repo.get_by_ical_uid(
+                        ev.ical_uid,
+                        source="caldav",
+                        recurrence_id=ev.recurrence_id,
+                        include_deleted=True,
+                    )
+                    if track_changes
+                    else None
+                )
                 self.repo.upsert_from_caldav_event(ev, source="caldav")
                 stats.upserted += 1
+                if track_changes:
+                    from src.calendar_sync.business_hash import (
+                        business_content_hash,
+                        changed_business_fields,
+                    )
+
+                    digest = business_content_hash(ev)
+                    if previous is None:
+                        stats.changed.append(CalendarChange(
+                            ev.ical_uid, ev.recurrence_id, calendar_name,
+                            "created", [], digest,
+                        ))
+                    else:
+                        fields = changed_business_fields(previous, ev)
+                        if fields or previous.deleted_at is not None:
+                            stats.changed.append(CalendarChange(
+                                ev.ical_uid, ev.recurrence_id, calendar_name,
+                                "updated", fields, digest,
+                            ))
             except Exception as e:
                 logger.warning(
                     f"[reconciler-inc] upsert failed for uid={ev.ical_uid!r}: {e}"
@@ -164,10 +244,25 @@ class CalendarReconciler:
             if not uid:
                 continue
             try:
+                previous = (
+                    self.repo.get_by_ical_uid(
+                        uid, source="caldav", recurrence_id=None, include_deleted=True
+                    )
+                    if track_changes
+                    else None
+                )
                 affected = self.repo.soft_delete(
                     ical_uid=uid, source="caldav", recurrence_id=None
                 )
                 stats.soft_deleted += affected
+                if track_changes and affected and previous is not None:
+                    from src.calendar_sync.business_hash import deleted_business_content_hash
+
+                    stats.changed.append(CalendarChange(
+                        previous.ical_uid, previous.recurrence_id,
+                        previous.calendar_name, "deleted", [],
+                        deleted_business_content_hash(previous),
+                    ))
             except Exception as e:
                 logger.warning(
                     f"[reconciler-inc] soft_delete failed for uid={uid!r}: {e}"

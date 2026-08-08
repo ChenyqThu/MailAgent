@@ -457,6 +457,14 @@ function summarizeAgentTrigger(trigger: Record<string, unknown> | null): string 
     if (folders.length > 0) preds.push(`folders=[${folders.join(',')}]`)
     return `email_filter ${preds.join(' ') || '(no predicates)'}`
   }
+  if (trigger.kind === 'calendar_event_change') {
+    const calendars = asStrArray(trigger.calendar_ids)
+    return `calendar_event_change${calendars.length ? ` calendars=[${calendars.join(',')}]` : ''}`
+  }
+  if (trigger.kind === 'calendar_before_start') {
+    const calendars = asStrArray(trigger.calendar_ids)
+    return `calendar_before_start lead=${asNum(trigger.lead_seconds, 0)}s${calendars.length ? ` calendars=[${calendars.join(',')}]` : ''}`
+  }
   return ''
 }
 

@@ -57,6 +57,7 @@ CROSS_LANGUAGE_FLAGS = {
     "MAILAGENT_CHAT_QUEUED_INPUT": [_LIFECYCLE, _CHAT],
     # P6 Trigger v2 单 Python 载体：trigger.py 热读决定保存/worker，chat.py 同 key 投影 renderer。
     "MAILAGENT_TRIGGER_V2": [_TRIGGER, _CHAT],
+    "MAILAGENT_CALENDAR_TRIGGER": [_TRIGGER, _CHAT],
     # standing context：Python env-only 热读
     "MAILAGENT_STANDING_CONTEXT_ENABLED": [_CHAT],
     # MCP connector 总闸（08-01 阶段 1）：Node envBool（gateway 动态工具注入 + manifest 拉取）
