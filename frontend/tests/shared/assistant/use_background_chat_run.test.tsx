@@ -25,20 +25,28 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 type TurnPersistedPayload = {
   sessionId: number
-  status: 'finished' | 'paused'
+  status: 'finished' | 'paused' | 'compacted'
   runId: string | null
 }
 
 const { stableMailApi, mockMarkRead, turnPersistedHandlers } = vi.hoisted(() => {
   const mockMarkRead = vi.fn(async () => {})
   const turnPersistedHandlers: Array<
-    (p: { sessionId: number; status: 'finished' | 'paused'; runId: string | null }) => void
+    (p: {
+      sessionId: number
+      status: 'finished' | 'paused' | 'compacted'
+      runId: string | null
+    }) => void
   > = []
   const stableMailApi = {
     chat: {
       markSessionRead: mockMarkRead,
       onTurnPersisted: (
-        h: (p: { sessionId: number; status: 'finished' | 'paused'; runId: string | null }) => void
+        h: (p: {
+          sessionId: number
+          status: 'finished' | 'paused' | 'compacted'
+          runId: string | null
+        }) => void
       ) => {
         turnPersistedHandlers.push(h)
         return () => {
@@ -104,6 +112,29 @@ function wrapper({ children }: { children: React.ReactNode }): React.ReactElemen
 }
 
 describe('useBackgroundChatRun', () => {
+  test('overflow compact received mid-stream queues one refresh until the own stream settles', async () => {
+    stubRunActiveFetch({ active: false })
+    const onSettled = vi.fn()
+    const { rerender } = renderHook(
+      ({ localRunning }) =>
+        useBackgroundChatRun({
+          gatewayBaseUrl: 'http://127.0.0.1:8300',
+          sessionId: 5,
+          enabled: true,
+          refreshNonce: 0,
+          localRunning,
+          onSettled
+        }),
+      { wrapper, initialProps: { localRunning: true } }
+    )
+
+    broadcast({ sessionId: 5, status: 'compacted', runId: null })
+    expect(onSettled).not.toHaveBeenCalled()
+
+    rerender({ localRunning: false })
+    await waitFor(() => expect(onSettled).toHaveBeenCalledTimes(1))
+  })
+
   test('probe hit (no own stream) → backgroundActive; broadcast-driven re-probe settles → onSettled once + markRead', async () => {
     const state = { active: true, runId: 'r-bg' }
     stubRunActiveFetch(state)

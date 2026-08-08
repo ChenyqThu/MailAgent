@@ -7,7 +7,8 @@
     协议腿（Node registry create 函数 / Python anthropic·openai 双腿）。``base_url`` 存
     **原样值**（协议归一化如 anthropic 补 /v1 由消费端做，prd §4.3b）。
   - ``llm_model``：provider 下的模型行（``source`` = 'fetched' 上游拉取 / 'manual' 手动），
-    ``enabled`` 驱动各功能位选择器的可选集；``max_output`` = per-model clamp 依据（NULL 不 clamp）。
+    ``enabled`` 驱动各功能位选择器的可选集；``max_output`` = per-model clamp 依据；
+    ``context_window`` = 可选上下文窗口元数据（两者 NULL 都表示未知）。
   - ``llm_provider_meta``：``snapshot_version`` 单行计数 —— 任何 provider/model CRUD 写后 +1，
     gateway 按 version 缓存 registry 实例（prd §4.3b）。
 
@@ -114,6 +115,7 @@ class LlmModelRow:
     enabled: bool
     capabilities: Optional[dict[str, Any]]
     max_output: Optional[int]
+    context_window: Optional[int]
     source: str
     fetched_at: Optional[int]
 
@@ -144,6 +146,7 @@ CREATE TABLE IF NOT EXISTS llm_model (
     enabled           INTEGER NOT NULL DEFAULT 0,
     capabilities_json TEXT,
     max_output        INTEGER,
+    context_window    INTEGER,
     source            TEXT NOT NULL DEFAULT 'manual',
     fetched_at        INTEGER,
     PRIMARY KEY (provider_id, model_id)
@@ -185,6 +188,11 @@ class LlmProviderStore:
     def _ensure_schema(self) -> None:
         with self._connection() as conn:
             conn.executescript(_DDL)
+            columns = {
+                row["name"] for row in conn.execute("PRAGMA table_info(llm_model)").fetchall()
+            }
+            if "context_window" not in columns:
+                conn.execute("ALTER TABLE llm_model ADD COLUMN context_window INTEGER")
             conn.commit()
 
     # ======================================================================
@@ -390,6 +398,7 @@ class LlmProviderStore:
         enabled: bool = False,
         capabilities: Optional[dict[str, Any]] = None,
         max_output: Optional[int] = None,
+        context_window: Optional[int] = None,
         source: str = "manual",
     ) -> LlmModelRow:
         """写/覆盖一个模型行（手动添加 / seed 用；upsert = 全字段覆盖）。"""
@@ -407,11 +416,12 @@ class LlmProviderStore:
             conn.execute(
                 "INSERT INTO llm_model "
                 "(provider_id, model_id, display_name, group_name, enabled, capabilities_json, "
-                " max_output, source, fetched_at) VALUES (?,?,?,?,?,?,?,?,?) "
+                " max_output, context_window, source, fetched_at) VALUES (?,?,?,?,?,?,?,?,?,?) "
                 "ON CONFLICT(provider_id, model_id) DO UPDATE SET "
                 " display_name=excluded.display_name, group_name=excluded.group_name, "
                 " enabled=excluded.enabled, capabilities_json=excluded.capabilities_json, "
-                " max_output=excluded.max_output, source=excluded.source",
+                " max_output=excluded.max_output, context_window=excluded.context_window, "
+                " source=excluded.source",
                 (
                     provider_id,
                     model_id,
@@ -420,6 +430,7 @@ class LlmProviderStore:
                     1 if enabled else 0,
                     caps_json,
                     max_output,
+                    context_window,
                     source,
                     None,
                 ),
@@ -576,6 +587,7 @@ class LlmProviderStore:
                     "enabled": m.enabled,
                     "capabilities": m.capabilities,
                     "maxOutput": m.max_output,
+                    "contextWindow": m.context_window,
                     "source": m.source,
                 }
                 for m in self.list_models(p.id)
@@ -668,6 +680,9 @@ def _row_to_model(row: sqlite3.Row) -> LlmModelRow:
         enabled=bool(row["enabled"]),
         capabilities=capabilities,
         max_output=int(row["max_output"]) if row["max_output"] is not None else None,
+        context_window=(
+            int(row["context_window"]) if row["context_window"] is not None else None
+        ),
         source=row["source"],
         fetched_at=int(row["fetched_at"]) if row["fetched_at"] is not None else None,
     )

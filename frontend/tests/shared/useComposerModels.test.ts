@@ -166,7 +166,8 @@ describe('composeComposerModelOption — 🔴 DB 行权威、目录兜底', () =
     modelId: 'x',
     rowDisplayName: null,
     rowCapabilities: null,
-    rowMaxOutput: null
+    rowMaxOutput: null,
+    rowContextWindow: null
   }
 
   test('行留白 → 目录填上（这正是 owner 机器上 90 行全 NULL 的那个场景）', () => {
@@ -193,9 +194,13 @@ describe('composeComposerModelOption — 🔴 DB 行权威、目录兜底', () =
     expect(o.capabilities).toEqual({ vision: true })
   })
 
-  test('contextWindow 只可能来自目录（llm_model 根本没有这一列）', () => {
+  test('contextWindow 由 DB 行优先，目录只作兜底', () => {
     expect(composeComposerModelOption(base, NO_CATALOG).contextWindow).toBeNull()
     expect(composeComposerModelOption(base, () => catalogMeta()).contextWindow).toBe(200_000)
+    expect(
+      composeComposerModelOption({ ...base, rowContextWindow: 131_072 }, () => catalogMeta())
+        .contextWindow
+    ).toBe(131_072)
   })
 
   test('目录未命中 → catalogMeta=null（hover 卡据此整个不挂）', () => {

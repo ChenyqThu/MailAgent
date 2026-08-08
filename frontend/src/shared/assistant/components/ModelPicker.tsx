@@ -144,7 +144,8 @@ function withCurrentModel(
     modelId: stripProviderPrefix(current),
     rowDisplayName: null,
     rowCapabilities: null,
-    rowMaxOutput: null
+    rowMaxOutput: null,
+    rowContextWindow: null
   })
   return { options: [...options, orphan], orphanRef: current }
 }

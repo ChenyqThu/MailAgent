@@ -1467,7 +1467,8 @@
       "estimateNote": "各段按字符数估算（≈）；「工具定义与其他」由实报总量减去其余段推得，含工具 schema、技能与连接器目录等。",
       "estimateExceeds": "估算之和已超过实报总量，分段仅供参考。",
       "segmentsLoading": "正在计算分段…",
-      "segmentsUnavailable": "分段明细暂不可用（读不到系统提示配置）"
+      "segmentsUnavailable": "分段明细暂不可用（读不到系统提示配置）",
+      "nearLimit": "已接近模型上下文上限；达到 90% 时会在当前回复结束后自动压缩。"
     },
     "compact": {
       "action": "压缩上下文",
@@ -2516,6 +2517,8 @@
         "manualAdd": "添加",
         "maxOutputPlaceholder": "maxOutput",
         "maxOutputAria": "{model} 的 max output tokens",
+        "contextWindowPlaceholder": "context",
+        "contextWindowAria": "{model} 的上下文窗口 tokens",
         "deleteAria": "删除模型 {model}",
         "cap": {
           "tools": "工具",
@@ -3026,6 +3029,12 @@
         "enabledHelper": "开启后首轮对话结束，用所选模型生成标题并写入；手动改名始终优先保留。",
         "modelLabel": "标题模型",
         "modelHelper": "生成标题用的模型，建议用快速便宜的小模型（如 haiku）。"
+      },
+      "autoCompact": {
+        "title": "自动压缩上下文",
+        "helper": "控制互动对话的自动 Compact；手动 /compact 始终保留。",
+        "enabledLabel": "接近上限时自动压缩",
+        "enabledHelper": "80% 提醒，90% 在当前回复结束后自动压缩；模型窗口未知时绝不自动触发。"
       },
       "approval": {
         "title": "Agent 操作审批",

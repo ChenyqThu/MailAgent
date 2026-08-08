@@ -166,6 +166,7 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
   // simply makes the later poll-fire a per-run dedup no-op (codex r2 [C]: never clear the witness
   // before an actual settle).
   const witnessedRunRef = useRef<string | null | undefined>(undefined)
+  const pendingCompactRefreshRef = useRef(false)
   useEffect(() => {
     if (active && !localRunningRef.current && !activeIsOwnRun) {
       witnessedRunRef.current = probedRunId
@@ -180,7 +181,13 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
   // session's first probe). The settled-run set survives — runIds are globally unique.
   useEffect(() => {
     witnessedRunRef.current = undefined
+    pendingCompactRefreshRef.current = false
   }, [sessionId])
+  useEffect(() => {
+    if (localRunning || !pendingCompactRefreshRef.current) return
+    pendingCompactRefreshRef.current = false
+    fireSettle(null)
+  }, [fireSettle, localRunning])
 
   // B2 broadcast glue. Subscribed whenever the surface is live (not just while active — the panel
   // must also learn about OTHER sessions' persists for the unread badges).
@@ -204,6 +211,18 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
         queryKey: qk.aiGateway.runActive(gatewayBaseUrl, payload.sessionId, 0).slice(0, 4)
       })
       void qc.invalidateQueries({ queryKey: qk.agentApprovalPending(payload.sessionId) })
+      // P4 overflow recovery can append the Compact marker while this panel's original response is
+      // still streaming. Remounting at that moment would tear down the retry stream, so remember the
+      // DB-owned refresh and fire it immediately after localRunning falls. Threshold/manual Compact
+      // broadcasts arrive while idle and settle immediately.
+      if (payload.status === 'compacted') {
+        if (localRunningRef.current) {
+          pendingCompactRefreshRef.current = true
+          return
+        }
+        fireSettle(null)
+        return
+      }
       // P1-4 (codex r1) — the same-session 'finished'/'paused' broadcast IS the persisted truth:
       // settle directly off it instead of requiring a prior witnessed active probe. codex r2 [C] —
       // own-run masking is runId-precise now: a broadcast whose runId a still-mounted runtime

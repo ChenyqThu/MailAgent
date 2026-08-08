@@ -41,8 +41,9 @@ import type { ActiveRunRegistry } from './activeRuns'
 import type { AgentRunSpec } from '@shared/api/types'
 // MEDIUM-6 — type-only + from the SDK-free providerRef: providers.ts (six provider SDK imports)
 // must only ever load via the lifecycle's flag-on dynamic import.
-import type { ProviderModelResolver } from './providerRef'
+import type { ProviderModelResolver, ProviderProtocol } from './providerRef'
 import type { CompactPersistence } from './compact'
+import type { CompactCoordinator } from './compact'
 import type { SelectedModelContext } from './compactSelect'
 
 /** Part B — what makePersistOnFinish tells the lifecycle when a turn pauses at an island-eligible
@@ -102,6 +103,7 @@ export function anthropicBaseUrl(baseUrl: string): string {
 export interface PersistTurnInput {
   sessionId: number | null
   model: string
+  protocol?: ProviderProtocol
   userMessage: MailAgentUIMessage | null
   responseMessage: MailAgentUIMessage
   usage?: { inputTokens?: number | null; outputTokens?: number | null }
@@ -148,6 +150,10 @@ export interface AiGatewayConfig {
    *  reply. Injected by the lifecycle ONLY when MAILAGENT_MEM0_CAPTURE is on; omitted (default) →
    *  no capture, byte-identical. */
   captureTurnMemory?: (turn: PersistTurnInput) => void
+  /** P4 automatic compact trigger. Fire-and-forget only; onFinish never awaits it. */
+  maybeAutoCompact?: (turn: PersistTurnInput) => void
+  /** P4 owner setting resolver. Any failure must resolve false at the injection boundary. */
+  resolveAutoCompactEnabled?: () => Promise<boolean> | boolean
   /** Build the LanguageModel for a model id. Injected by tests (mock model); the
    *  default wires @ai-sdk/anthropic + the normalized baseURL + apiKey. */
   createModel?: (modelId: string) => LanguageModel
@@ -330,6 +336,10 @@ export interface AiGatewayConfig {
   activeRuns?: ActiveRunRegistry
   /** P3 manual compact. Dependency presence is the feature flag gate. */
   compactPersistence?: CompactPersistence
+  /** Shared P3/P4 coordinator. Injected when automatic/overflow compact is enabled. */
+  compactCoordinator?: CompactCoordinator
+  /** P4 Electron-main broadcast hook after threshold/overflow compact persists. */
+  onCompactCompleted?: (sessionId: number) => void
   /** P3 context selector. Omitted keeps prepareChatRun's pre-compact assembly path unchanged. */
   selectMessagesForModelContext?: (messages: MailAgentUIMessage[]) => SelectedModelContext
 

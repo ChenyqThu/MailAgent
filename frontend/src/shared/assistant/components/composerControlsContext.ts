@@ -53,6 +53,7 @@ export interface ChatComposerControls {
    *  Optional —— 不供给（旧测试 / 只读 notion-agent 线程）时环整个不渲染，与引入前逐字一致。 */
   sessionId?: number | null
   compactEnabled?: boolean
+  autoCompactEnabled?: boolean
   compactActive?: boolean
   onCompact?: () => void
   onCompactStop?: () => void

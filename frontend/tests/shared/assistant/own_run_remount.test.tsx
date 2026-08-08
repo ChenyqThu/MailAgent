@@ -37,7 +37,7 @@ const SESSION_ID = 42
 
 type TurnPersistedPayload = {
   sessionId: number
-  status: 'finished' | 'paused'
+  status: 'finished' | 'paused' | 'compacted'
   runId: string | null
 }
 

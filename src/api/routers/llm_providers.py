@@ -101,6 +101,7 @@ def _model_dict(m: LlmModelRow) -> Dict[str, Any]:
         "enabled": m.enabled,
         "capabilities": m.capabilities,
         "maxOutput": m.max_output,
+        "contextWindow": m.context_window,
         "source": m.source,
         "fetchedAt": m.fetched_at,
     }
@@ -581,7 +582,9 @@ async def refresh_provider_models(
 # ---------------------------------------------------------------------------
 
 # model upsert 的入参约束（review 批2 MEDIUM-6：拒未知字段与隐式类型转换）。
-_MODEL_UPSERT_KEYS = frozenset({"id", "displayName", "enabled", "capabilities", "maxOutput"})
+_MODEL_UPSERT_KEYS = frozenset(
+    {"id", "displayName", "enabled", "capabilities", "maxOutput", "contextWindow"}
+)
 _CAPABILITY_KEYS = frozenset({"tools", "vision", "reasoning"})
 _MAX_OUTPUT_CEILING = 2_000_000
 
@@ -593,15 +596,15 @@ async def upsert_provider_model(
     body: Optional[Dict[str, Any]] = None,
     _: None = Depends(verify_local_token),
 ):
-    """model 行 upsert。body: {id, displayName?, enabled?, capabilities?, maxOutput?}。
+    """model 行 upsert。body: {id, displayName?, enabled?, capabilities?, maxOutput?, contextWindow?}。
 
     merge 语义：body 里出现的键才动，未出现的键保留现行值（store.upsert_model 是全字段
     覆盖 → 端点先读现行行回填，避免「勾启用」把 maxOutput/capabilities 清掉）。新行 =
     手动添加（source='manual'，enabled 缺省 True——owner 手动加模型就是为了用）。
 
     严格校验（MEDIUM-6）：未知顶层字段 400；``enabled`` 必须 bool（不收 "false"/1）；
-    ``capabilities`` 只允许 tools/vision/reasoning 三键且值为 bool；``maxOutput`` =
-    null 或 1..2_000_000 正整数。
+    ``capabilities`` 只允许 tools/vision/reasoning 三键且值为 bool；``maxOutput`` 与
+    ``contextWindow`` = null 或 1..2_000_000 正整数。
     """
     body = body or {}
     unknown = set(body) - _MODEL_UPSERT_KEYS
@@ -654,6 +657,17 @@ async def upsert_provider_model(
             f"'maxOutput' must be null or an integer in 1..{_MAX_OUTPUT_CEILING}",
             source="sqlite",
         )
+    context_window = _pick("contextWindow", existing.context_window if existing else None)
+    if context_window is not None and (
+        isinstance(context_window, bool)
+        or not isinstance(context_window, int)
+        or not 1 <= context_window <= _MAX_OUTPUT_CEILING
+    ):
+        raise APIError(
+            "E_INVALID_ARG",
+            f"'contextWindow' must be null or an integer in 1..{_MAX_OUTPUT_CEILING}",
+            source="sqlite",
+        )
     try:
         row = store.upsert_model(
             provider_id,
@@ -663,6 +677,7 @@ async def upsert_provider_model(
             enabled=enabled,
             capabilities=capabilities,
             max_output=max_output,
+            context_window=context_window,
             source=existing.source if existing else "manual",
         )
     except ValueError as exc:

@@ -64,13 +64,19 @@ export interface ContextUsageView {
 const WARN_RATIO = 0.75
 const DANGER_RATIO = 0.9
 
+export interface ContextUsageThresholds {
+  warnRatio?: number
+  dangerRatio?: number
+}
+
 /** (占用, 上限) → 视图模型；`used` 为 null（拿不到）时返回 null = **整个控件不渲染**。
  *
  *  `limit` 非正数（0 / 负数 / NaN —— 目录里理论上不会有，但它是外部快照）一律当作「未知」走
  *  药丸档：用 0 当分母会得到 Infinity%，画出一个满环的谎。 */
 export function buildContextUsageView(
   used: number | null | undefined,
-  limit: number | null | undefined
+  limit: number | null | undefined,
+  thresholds: ContextUsageThresholds = {}
 ): ContextUsageView | null {
   if (typeof used !== 'number' || !Number.isFinite(used) || used < 0) return null
   const hasLimit = typeof limit === 'number' && Number.isFinite(limit) && limit > 0
@@ -87,6 +93,8 @@ export function buildContextUsageView(
   }
   const raw = used / limit
   const ratio = Math.min(1, Math.max(0, raw))
+  const warnRatio = thresholds.warnRatio ?? WARN_RATIO
+  const dangerRatio = thresholds.dangerRatio ?? DANGER_RATIO
   return {
     used,
     limit,
@@ -94,7 +102,7 @@ export function buildContextUsageView(
     percent: Math.round(raw * 100),
     variant: 'ring',
     overflow: raw > 1,
-    tone: raw >= DANGER_RATIO ? 'danger' : raw >= WARN_RATIO ? 'warn' : 'normal'
+    tone: raw >= dangerRatio ? 'danger' : raw >= warnRatio ? 'warn' : 'normal'
   }
 }
 

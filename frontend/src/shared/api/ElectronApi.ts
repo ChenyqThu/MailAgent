@@ -697,14 +697,14 @@ function createElectronChatRuntime(): ChatApi {
       })
     },
     // harness-chat lane A B2 — gateway turn-persist broadcast（lifecycle persistTurn /
-    // persistPausedAssistant 落库后广播）。运行时窄化与发射端两值联合同步（'finished'|'paused'）；
+    // persistPausedAssistant / Compact 落库后广播）。运行时窄化与发射端联合同步；
     // 值域不符静默丢弃。web (HttpApi) 无此通道（optional 方法缺省 → 轮询降级）。
     // codex r2 [C] — runId 随载荷透传（per-run settle 去重 + own-run 归属）；非字符串窄化为 null
     //（unleased persist / 旧载荷同形）。
     onTurnPersisted(
       handler: (payload: {
         sessionId: number
-        status: 'finished' | 'paused'
+        status: 'finished' | 'paused' | 'compacted'
         runId: string | null
       }) => void
     ): () => void {
@@ -713,7 +713,7 @@ function createElectronChatRuntime(): ChatApi {
         if (
           p &&
           typeof p.sessionId === 'number' &&
-          (p.status === 'finished' || p.status === 'paused')
+          (p.status === 'finished' || p.status === 'paused' || p.status === 'compacted')
         ) {
           handler({
             sessionId: p.sessionId,

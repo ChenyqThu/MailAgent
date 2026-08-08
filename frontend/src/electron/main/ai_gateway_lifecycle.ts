@@ -25,6 +25,7 @@ import { join } from 'path'
 import { startAiGatewayServer, type AiGatewayHandle } from '../../ai-gateway/server'
 import {
   resolveAiGatewayPort,
+  type AiGatewayConfig,
   type IslandApprovalAnnounce,
   type PersistTurnInput
 } from '../../ai-gateway/config'
@@ -55,6 +56,11 @@ import { classOfTool } from '../../ai-gateway/tools/policy'
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
 import { selectMessagesForModelContext } from '../../ai-gateway/compactSelect'
+import {
+  CompactCoordinator,
+  shouldAutoCompact,
+  type CompactPersistence
+} from '../../ai-gateway/compact'
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
 import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import {
@@ -91,7 +97,8 @@ import type { SkillCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 // import inside startEmbeddedAiGateway: MAILAGENT_LLM_PROVIDER_REGISTRY off keeps the module
 // graph free of the new SDKs (a broken provider package can't take down the flag-off gateway).
 // Pinned by tests/ai-gateway/provider_lazy_import.test.ts.
-import type { ProviderModelResolver } from '../../ai-gateway/providerRef'
+import { parseProviderRef, type ProviderModelResolver } from '../../ai-gateway/providerRef'
+import { resolveContextWindow } from '@shared/modelCatalog/contextWindow'
 import {
   backfillLegacyDefaultProviderKey,
   getLlmProviderModelResolver,
@@ -636,6 +643,28 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     return value
   }
 
+  const AUTO_COMPACT_SETTING_TTL_MS = 3_000
+  let _autoCompactSettingCache: { at: number; value: boolean } | null = null
+  const resolveAutoCompactEnabled = async (): Promise<boolean> => {
+    const now = Date.now()
+    if (
+      _autoCompactSettingCache &&
+      now - _autoCompactSettingCache.at < AUTO_COMPACT_SETTING_TTL_MS
+    ) {
+      return _autoCompactSettingCache.value
+    }
+    let value = false
+    try {
+      const result = await domain.getAutoCompactSetting(AbortSignal.timeout(2_000))
+      value = result.mode === 'on'
+    } catch (err) {
+      console.warn('[ai-gateway] auto-compact setting unavailable — automatic compact disabled', err)
+      value = false
+    }
+    _autoCompactSettingCache = { at: now, value }
+    return value
+  }
+
   // 08-05 WP-11 — the per-tool approval tiers + send whitelist resolver prepareChatRun hot-reads
   // per MANUAL run (headless/im never call it). Same shape as the mode resolver above: short TTL
   // (a Settings tier change lands within seconds, no per-turn loopback storm) + bounded timeout;
@@ -712,36 +741,47 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     })
   }
 
-  const handle = await startAiGatewayServer({
+  const compactEnabled = envBool('MAILAGENT_CHAT_COMPACT', true)
+  const autoCompactFeatureEnabled = envBool('MAILAGENT_CHAT_AUTO_COMPACT', true)
+  const compactPersistence: CompactPersistence | undefined = compactEnabled
+    ? {
+        listSessionMessages: (sessionId: number) => listMessages(sessionId),
+        getSessionModel: (sessionId: number) => getSession(sessionId)?.backend_model ?? null,
+        appendCompactMessage: (input) => {
+          appendMessage({
+            sessionId: input.sessionId,
+            role: 'system',
+            content: input.summary,
+            status: 'complete',
+            model: input.metadata.model,
+            metadata: JSON.stringify(input.metadata),
+            uiMessageJson: input.uiMessageJson
+          })
+        }
+      }
+    : undefined
+
+  const gatewayConfig: AiGatewayConfig = {
     port: resolveAiGatewayPort(),
     baseUrl: llmBaseUrl,
     apiKey,
     model: getLlmModel(),
     providerRegistryEnabled,
     providerModelResolver,
-    ...(envBool('MAILAGENT_CHAT_COMPACT', true)
+    ...(autoCompactFeatureEnabled && compactPersistence
+      ? {
+          onCompactCompleted: (sessionId: number) =>
+            broadcastChatEvent('chat:turn-persisted', {
+              sessionId,
+              status: 'compacted',
+              runId: null
+            })
+        }
+      : {}),
+    ...(compactPersistence
       ? {
           selectMessagesForModelContext,
-          compactPersistence: {
-            listSessionMessages: (sessionId: number) => listMessages(sessionId),
-            getSessionModel: (sessionId: number) => getSession(sessionId)?.backend_model ?? null,
-            appendCompactMessage: (input: {
-              sessionId: number
-              summary: string
-              metadata: import('../../ai-gateway/compactSelect').CompactMessageMetadata
-              uiMessageJson: string
-            }) => {
-              appendMessage({
-                sessionId: input.sessionId,
-                role: 'system',
-                content: input.summary,
-                status: 'complete',
-                model: input.metadata.model,
-                metadata: JSON.stringify(input.metadata),
-                uiMessageJson: input.uiMessageJson
-              })
-            }
-          }
+          compactPersistence
         }
       : {}),
     // #12 (dogfood session-history) — eager-persist: write the user message at turn START so the
@@ -1251,7 +1291,62 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // Single-flight + fresh-cache short-circuit inside refreshConnectorManifest; the fetch is
     // 3s-bounded per request and never throws. Flag off → unwired → zero work, byte-identical.
     ensureConnectorManifest: mcpConnectorsEnabled ? () => refreshConnectorManifest() : undefined
-  })
+  }
+
+  if (compactPersistence && autoCompactFeatureEnabled) {
+    const compactCoordinator = new CompactCoordinator(gatewayConfig, compactPersistence)
+    gatewayConfig.compactCoordinator = compactCoordinator
+    gatewayConfig.resolveAutoCompactEnabled = resolveAutoCompactEnabled
+    gatewayConfig.maybeAutoCompact = (turn: PersistTurnInput): void => {
+      setTimeout(() => {
+        void (async () => {
+          if (turn.sessionId == null) return
+          const settingEnabled = await resolveAutoCompactEnabled()
+          let contextWindow: number | null = null
+          try {
+            if (providerModelResolver) {
+              contextWindow = (await providerModelResolver.resolve(turn.model)).contextWindow ?? null
+            } else {
+              const ref = parseProviderRef(turn.model)
+              contextWindow = resolveContextWindow({
+                providerId: ref.providerId,
+                modelId: ref.modelId,
+                protocol: turn.protocol ?? null,
+                snapshotModel: null
+              })
+            }
+          } catch (err) {
+            console.warn('[ai-gateway] auto-compact context window resolution failed', err)
+          }
+          if (
+            !shouldAutoCompact({
+              p3Enabled: compactEnabled,
+              settingEnabled,
+              contextTokens: turn.contextTokens,
+              contextWindow,
+              runActive: activeRuns.hasActive(turn.sessionId),
+              compactActive: compactCoordinator.hasActive(turn.sessionId)
+            })
+          ) {
+            return
+          }
+          try {
+            const result = await compactCoordinator.run(turn.sessionId, {
+              reason: 'threshold',
+              contextWindow
+            })
+            if (result.status === 'completed') {
+              gatewayConfig.onCompactCompleted?.(turn.sessionId)
+            }
+          } catch (err) {
+            console.warn('[ai-gateway] automatic compact skipped or failed', err)
+          }
+        })()
+      }, 0)
+    }
+  }
+
+  const handle = await startAiGatewayServer(gatewayConfig)
   _handle = handle
   gatewayPort = handle.port // Part B — now the announce closure can stamp our port on /decide callbacks
   const healthy = await pollHealth(handle.port)

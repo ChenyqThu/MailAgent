@@ -286,6 +286,21 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       return data.mode
     },
 
+    async getAutoCompact(): Promise<'on' | 'off'> {
+      const data = await request<{ mode: string }>(baseUrl, 'GET', '/agent/auto-compact')
+      return data.mode === 'off' ? 'off' : 'on'
+    },
+
+    async setAutoCompact(mode: 'on' | 'off'): Promise<'on' | 'off'> {
+      const data = await request<{ mode: string }>(baseUrl, 'PUT', '/agent/auto-compact', {
+        body: { mode }
+      })
+      if (data.mode !== 'on' && data.mode !== 'off') {
+        throw new Error(`unexpected auto-compact response: ${String(data.mode)}`)
+      }
+      return data.mode
+    },
+
     // ── 08-05 WP-11 — built-in 写工具的 per-tool 审批档（owner UI 专属写面）──────────────
 
     async getToolPrefs(): Promise<ToolApprovalPrefsPayload> {

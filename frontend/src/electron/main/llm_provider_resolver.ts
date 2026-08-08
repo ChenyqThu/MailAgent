@@ -5,6 +5,7 @@ import type {
 } from '../../ai-gateway/providerRef'
 
 import { MAX_OUTPUT_TOKENS } from '@shared/lib/llm_limits'
+import { resolveContextWindow } from '@shared/modelCatalog/contextWindow'
 
 import { daemonRequest } from './daemon_api'
 import { getLlmApiKey, getLlmBaseUrl } from './llm_settings'
@@ -18,6 +19,7 @@ export { sanitizedUpstreamErrorMessage } from '../../ai-gateway/upstreamError'
 
 export interface MainProcessResolvedProviderModel extends ResolvedProviderModel {
   maxOutputTokens: number
+  contextWindow: number | null
 }
 
 export interface MainProcessProviderModelResolver extends ProviderModelResolver {
@@ -89,10 +91,24 @@ export async function getLlmProviderModelResolver(): Promise<MainProcessProvider
           const configuredMax = latestSnapshot?.providers
             .find((provider) => provider.id === resolved.providerId)
             ?.models.find((model) => model.enabled && model.id === resolved.modelId)?.maxOutput
+          const snapshotProvider = latestSnapshot?.providers.find(
+            (provider) => provider.id === resolved.providerId
+          )
+          const snapshotModel = snapshotProvider?.models.find(
+            (model) => model.enabled && model.id === resolved.modelId
+          )
           return {
             ...resolved,
             maxOutputTokens:
-              configuredMax == null ? MAX_OUTPUT_TOKENS : Math.min(MAX_OUTPUT_TOKENS, configuredMax)
+              configuredMax == null
+                ? MAX_OUTPUT_TOKENS
+                : Math.min(MAX_OUTPUT_TOKENS, configuredMax),
+            contextWindow: resolveContextWindow({
+              providerId: resolved.providerId,
+              modelId: resolved.modelId,
+              protocol: resolved.protocol,
+              snapshotModel
+            })
           }
         }
       }

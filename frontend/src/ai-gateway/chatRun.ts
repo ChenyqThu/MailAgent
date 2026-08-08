@@ -29,6 +29,7 @@ import { createAnthropic } from '@ai-sdk/anthropic'
 import {
   isProviderCredentialsError,
   parseProviderRef,
+  type ProviderProtocol,
   type ResolvedProviderModel
 } from './providerRef'
 import type {
@@ -242,6 +243,8 @@ export interface PreparedChatRun {
   rawMessages: MailAgentUIMessage[]
   sessionId: number | null
   modelId: string
+  protocol: ProviderProtocol
+  contextWindow?: number | null
   /** The per-request audit collector the tools push into (drained in onFinish → chat_tool_call). */
   auditEntries: GatewayToolAuditEntry[]
   /** Tool names exposed this run (for the AG-UI STATE_SNAPSHOT capabilities). */
@@ -581,6 +584,8 @@ export async function prepareChatRun(
       rawMessages,
       sessionId,
       modelId,
+      protocol: resolvedModel.protocol,
+      contextWindow: resolvedModel.contextWindow ?? null,
       auditEntries,
       toolNames: hasTools ? Object.keys(tools as ToolSet) : [],
       originalBody: body,
@@ -985,6 +990,7 @@ export function makePersistOnFinish(
     const turn: PersistTurnInput = {
       sessionId: run.sessionId,
       model: run.modelId,
+      protocol: run.protocol,
       userMessage: lastUserMessage(run.rawMessages),
       responseMessage: persistedResponseMessage,
       usage: usage
@@ -1025,6 +1031,16 @@ export function makePersistOnFinish(
       } catch (err) {
         console.error('[ai-gateway] captureTurnMemory threw (turn streamed OK)', err)
       }
+    }
+    // P4 auto compact is deliberately scheduled after persistence and memory capture, but remains
+    // fire-and-forget: detached drain awaits this onFinish before releasing the session lease, so
+    // awaiting compact here would extend the E_RUN_ACTIVE window by an entire model call. The
+    // injected callback defers its active-run check until the lease is released and self-swallows
+    // every failure. P5 follow-up queue dispatch must remain AFTER this trigger (compact first).
+    try {
+      cfg.maybeAutoCompact?.(turn)
+    } catch (err) {
+      console.error('[ai-gateway] maybeAutoCompact threw (turn streamed OK)', err)
     }
   }
 }

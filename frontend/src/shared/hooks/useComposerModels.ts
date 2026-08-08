@@ -22,7 +22,7 @@
 // `/v1/models` 响应里本来就没有 context window 与能力标注。故这里叠一层**只读目录**。
 //
 // 🔴 优先级恒为 **DB 行 > 目录 > 裸 id**：用户在 Settings 里手填过的值必须赢，否则「改了
-// 没用」。目录只填 DB 行留白的那些字段（`contextWindow` 例外 —— `llm_model` 根本没有这一列）。
+// 没用」。目录只填 DB 行留白的那些字段；contextWindow 本轮也遵守同一优先级。
 // 🔴 目录查不到 → 静默降级（不写 '?'、不写 0、不猜），那一行长得和引入目录之前逐字一样。
 
 import { useMemo } from 'react'
@@ -62,7 +62,7 @@ export interface ComposerModelOption {
   capabilities: LlmModelCapabilities | null
   /** 该模型单次回答的最大输出 token 数（llm_model.max_output → 目录）；null = 未标注。 */
   maxOutput: number | null
-  /** 上下文窗口 token 数 —— **只可能来自目录**（`llm_model` 没有这一列）；null = 未命中。 */
+  /** 上下文窗口 token 数（llm_model.context_window → 目录）；null = 未标注。 */
   contextWindow: number | null
   /** 目录命中结果的原件，hover 能力卡的数据源；null = 未命中（卡不挂、静默降级）。 */
   catalogMeta: CatalogModelMeta | null
@@ -106,6 +106,7 @@ export type ComposerModelMeta = Map<
       displayName: string | null
       capabilities: LlmModelCapabilities | null
       maxOutput: number | null
+      contextWindow: number | null
     }
   >
 >
@@ -133,6 +134,7 @@ export function composeComposerModelOption(
     rowDisplayName: string | null
     rowCapabilities: LlmModelCapabilities | null
     rowMaxOutput: number | null
+    rowContextWindow: number | null
   },
   lookup: ModelCatalogLookup = lookupModelMeta
 ): ComposerModelOption {
@@ -146,7 +148,7 @@ export function composeComposerModelOption(
     displayName: base.rowDisplayName ?? meta?.displayName ?? base.modelId,
     capabilities: base.rowCapabilities ?? meta?.capabilities ?? null,
     maxOutput: base.rowMaxOutput ?? meta?.maxOutput ?? null,
-    contextWindow: meta?.contextWindow ?? null,
+    contextWindow: base.rowContextWindow ?? meta?.contextWindow ?? null,
     catalogMeta: meta
   }
 }
@@ -172,7 +174,8 @@ export function buildComposerModelOption(
       modelId,
       rowDisplayName: model?.displayName?.trim() ? model.displayName.trim() : null,
       rowCapabilities: model?.capabilities ?? null,
-      rowMaxOutput: model?.maxOutput ?? null
+      rowMaxOutput: model?.maxOutput ?? null,
+      rowContextWindow: model?.contextWindow ?? null
     },
     lookup
   )
@@ -233,7 +236,8 @@ export function useComposerModels(): ComposerModelOption[] {
         bucket.set(m.id, {
           displayName: m.displayName,
           capabilities: m.capabilities,
-          maxOutput: m.maxOutput
+          maxOutput: m.maxOutput,
+          contextWindow: m.contextWindow
         })
       }
     }

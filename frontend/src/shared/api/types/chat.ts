@@ -712,6 +712,10 @@ export interface ChatApi {
    * throws Error&{code} on failure (the store re-GETs to converge).
    */
   setApprovalMode(mode: GlobalApprovalMode): Promise<GlobalApprovalMode>
+  /** P4 owner setting; missing row is server-canonical 'on'. */
+  getAutoCompact(): Promise<'on' | 'off'>
+  /** P4 owner-only write face. No gateway tool can reach this endpoint. */
+  setAutoCompact(mode: 'on' | 'off'): Promise<'on' | 'off'>
   /**
    * 08-05 WP-11 — read the per-tool approval tiers of every built-in write tool + the send
    * recipient whitelist + the acceptEdits preset membership (GET /api/agent/tool-prefs).
@@ -897,12 +901,11 @@ export interface ChatApi {
   ): () => void
   /**
    * harness-chat lane A B2 (task 07-15) — subscribe to gateway turn persists
-   * (`chat:turn-persisted` main→renderer broadcast): EVERY completed-turn persist ('finished') and
-   * every approval-pause eager persist ('paused') fires it, so a panel can refresh a session whose
-   * DETACHED run settled in the background, and the history lists can refresh unread badges
-   * (updated_at just bumped). Deliberately a NEW event — 'chat:session-updated' keeps its 3-value
-   * island-settle union untouched. Electron-only; optional — web (HttpApi) omits it and degrades to
-   * the /api/ai/run/active poll. Returns an unsubscribe function.
+   * (`chat:turn-persisted` main→renderer broadcast): EVERY completed-turn persist ('finished'),
+   * approval-pause eager persist ('paused'), and Compact row append ('compacted') fires it, so a
+   * panel can refresh DB-owned history. A compacted event received during the panel's own stream is
+   * queued until that stream settles, avoiding a mid-stream runtime remount. Electron-only;
+   * optional — web (HttpApi) omits it and degrades to reload/poll convergence.
    *
    * codex r2 [C] — `runId` is the run's gateway ActiveRunRegistry id (per-run settle dedup +
    * own-run attribution in useBackgroundChatRun); null = an unleased persist (headless agent run).
@@ -910,7 +913,7 @@ export interface ChatApi {
   onTurnPersisted?(
     handler: (payload: {
       sessionId: number
-      status: 'finished' | 'paused'
+      status: 'finished' | 'paused' | 'compacted'
       runId: string | null
     }) => void
   ): () => void

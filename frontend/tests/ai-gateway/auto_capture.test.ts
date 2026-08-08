@@ -2,8 +2,9 @@
 //
 // Pure-Node (no chat_db / better-sqlite3): makePersistOnFinish is a pure function over an injected
 // AiGatewayConfig, and the domain client is driven by a recording mock fetch. The RED LINE under test:
-// captureTurnMemory is fired AFTER persist, is NEVER awaited (a pending/throwing capture cannot block
-// the already-streamed reply), is skipped on abort, and is wholly absent (no-op) when the flag is off.
+// captureTurnMemory and maybeAutoCompact are fired AFTER persist and are NEVER awaited (pending or
+// throwing callbacks cannot block the already-streamed reply). Both are skipped on abort and wholly
+// absent when their flags are off.
 
 import { describe, expect, test } from 'vitest'
 
@@ -27,6 +28,7 @@ function makeRun(over: Partial<PreparedChatRun> = {}): PreparedChatRun {
     rawMessages: [{ id: 'u1', role: 'user', parts: [{ type: 'text', text: '以后中文回我' }] }],
     sessionId: 42,
     modelId: 'claude-sonnet-4-6',
+    protocol: 'anthropic',
     auditEntries: [],
     toolNames: [],
     ...over
@@ -99,6 +101,70 @@ describe('makePersistOnFinish — M1c auto-capture trigger', () => {
     await expect(
       fire(makePersistOnFinish(cfg, makeRun()), { responseMessage: asst, isAborted: false })
     ).resolves.toBeUndefined()
+  })
+})
+
+describe('makePersistOnFinish — P4 auto compact trigger', () => {
+  test('runs after persist and memory capture with protocol preserved', async () => {
+    const order: string[] = []
+    const turns: PersistTurnInput[] = []
+    const cfg = {
+      persistTurn: async () => {
+        order.push('persist')
+      },
+      captureTurnMemory: () => order.push('capture'),
+      maybeAutoCompact: (turn: PersistTurnInput) => {
+        order.push('auto')
+        turns.push(turn)
+      }
+    } as AiGatewayConfig
+
+    await fire(makePersistOnFinish(cfg, makeRun()), { responseMessage: asst, isAborted: false })
+
+    expect(order).toEqual(['persist', 'capture', 'auto'])
+    expect(turns[0]).toMatchObject({ sessionId: 42, model: 'claude-sonnet-4-6', protocol: 'anthropic' })
+  })
+
+  test('red line — pending auto compact work never blocks onFinish', async () => {
+    let started = false
+    const cfg = {
+      persistTurn: () => {},
+      maybeAutoCompact: () => {
+        started = true
+        void new Promise(() => {})
+      }
+    } as AiGatewayConfig
+
+    await expect(
+      fire(makePersistOnFinish(cfg, makeRun()), { responseMessage: asst, isAborted: false })
+    ).resolves.toBeUndefined()
+    expect(started).toBe(true)
+  })
+
+  test('red line — throwing auto compact callback is swallowed', async () => {
+    const cfg = {
+      persistTurn: () => {},
+      maybeAutoCompact: () => {
+        throw new Error('auto compact boom')
+      }
+    } as AiGatewayConfig
+
+    await expect(
+      fire(makePersistOnFinish(cfg, makeRun()), { responseMessage: asst, isAborted: false })
+    ).resolves.toBeUndefined()
+  })
+
+  test('aborted turn does not trigger auto compact', async () => {
+    let calls = 0
+    const cfg = {
+      persistTurn: () => {},
+      maybeAutoCompact: () => {
+        calls += 1
+      }
+    } as AiGatewayConfig
+
+    await fire(makePersistOnFinish(cfg, makeRun()), { responseMessage: asst, isAborted: true })
+    expect(calls).toBe(0)
   })
 })
 

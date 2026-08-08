@@ -1425,6 +1425,11 @@ export class MailAgentDomainClient {
     return this._req<{ mode: string }>('GET', '/agent/approval-mode', { signal })
   }
 
+  /** P4 GET /agent/auto-compact. Read-only from the gateway; only owner UI reaches PUT. */
+  getAutoCompactSetting(signal?: AbortSignal): Promise<{ mode: string }> {
+    return this._req<{ mode: string }>('GET', '/agent/auto-compact', { signal })
+  }
+
   /** 08-05 WP-11 — GET /agent/tool-prefs → the per-tool approval tiers of every built-in write
    *  tool (factory default + explicit override + folded effective) + the send recipient
    *  whitelist. Consulted by the lifecycle's resolveToolApprovalPrefs (short-TTL cache; any

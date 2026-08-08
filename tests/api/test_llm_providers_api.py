@@ -364,7 +364,16 @@ def test_snapshot_shape_and_version_increments_on_crud(client: TestClient):
     model_ids = {m["id"] for m in default["models"]}
     assert model_ids == {"claude-sonnet-4-6", "gpt-5.5"}
     assert all(
-        set(m.keys()) == {"id", "displayName", "enabled", "capabilities", "maxOutput", "source"}
+        set(m.keys())
+        == {
+            "id",
+            "displayName",
+            "enabled",
+            "capabilities",
+            "maxOutput",
+            "contextWindow",
+            "source",
+        }
         for m in default["models"]
     )
 
@@ -449,7 +458,7 @@ def test_model_upsert_manual_add_and_merge_semantics(client: TestClient):
     # 手动添加：新行默认 enabled=True + source='manual'
     r = client.put(
         f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
-        json={"id": "claude-manual-1", "maxOutput": 32000},
+        json={"id": "claude-manual-1", "maxOutput": 32000, "contextWindow": 200_000},
     )
     assert r.status_code == 200
     m = r.json()["data"]
@@ -457,6 +466,7 @@ def test_model_upsert_manual_add_and_merge_semantics(client: TestClient):
     assert m["enabled"] is True
     assert m["source"] == "manual"
     assert m["maxOutput"] == 32000
+    assert m["contextWindow"] == 200_000
     assert m["capabilities"] is None  # 不臆造能力位
 
     # merge 语义：只传 enabled=False，maxOutput/其余键保留现行值
@@ -468,6 +478,7 @@ def test_model_upsert_manual_add_and_merge_semantics(client: TestClient):
     m = r.json()["data"]
     assert m["enabled"] is False
     assert m["maxOutput"] == 32000
+    assert m["contextWindow"] == 200_000
     assert m["source"] == "manual"
 
     # capabilities 可标注；再次只动 maxOutput 时保留
@@ -482,7 +493,15 @@ def test_model_upsert_manual_add_and_merge_semantics(client: TestClient):
     )
     m = r.json()["data"]
     assert m["maxOutput"] is None
+    assert m["contextWindow"] == 200_000
     assert m["capabilities"] == {"tools": True, "vision": False}
+
+    r = client.put(
+        f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models",
+        json={"id": "claude-manual-1", "contextWindow": None},
+    )
+    assert r.status_code == 200
+    assert r.json()["data"]["contextWindow"] is None
 
 
 def test_model_upsert_and_delete_error_paths(client: TestClient):
@@ -521,7 +540,8 @@ def test_model_upsert_and_delete_error_paths(client: TestClient):
 
 def test_model_upsert_strict_validation(client: TestClient):
     """MEDIUM-6：enabled 严格 bool（拒 "false"/1 隐式转换）/ capabilities 只允许
-    tools·vision·reasoning 三键且值 bool / maxOutput = null 或 1..2_000_000 / 未知
+    tools·vision·reasoning 三键且值 bool / maxOutput、contextWindow = null 或
+    1..2_000_000 / 未知
     顶层字段 400。"""
     url = f"/api/llm/providers/{DEFAULT_PROVIDER_ID}/models"
     client.get("/api/llm/providers")  # seed
@@ -540,6 +560,11 @@ def test_model_upsert_strict_validation(client: TestClient):
     assert _put({"maxOutput": -3}).status_code == 400
     assert _put({"maxOutput": 2_000_001}).status_code == 400
     assert _put({"maxOutput": True}).status_code == 400
+    # contextWindow 同一严格整数边界（未知保持 null，不做必填）。
+    assert _put({"contextWindow": 0}).status_code == 400
+    assert _put({"contextWindow": -3}).status_code == 400
+    assert _put({"contextWindow": 2_000_001}).status_code == 400
+    assert _put({"contextWindow": True}).status_code == 400
     # 未知顶层字段 → 400（source 是服务端派生列，不收）
     assert _put({"source": "fetched"}).status_code == 400
     # 以上全被拒 → 行未落库
@@ -555,12 +580,14 @@ def test_model_upsert_strict_validation(client: TestClient):
         {
             "enabled": False,
             "maxOutput": 1,
+            "contextWindow": 2_000_000,
             "capabilities": {"tools": True, "vision": False, "reasoning": True},
         }
     )
     assert r.status_code == 200
     m = r.json()["data"]
     assert m["enabled"] is False and m["maxOutput"] == 1
+    assert m["contextWindow"] == 2_000_000
     assert m["capabilities"] == {"tools": True, "vision": False, "reasoning": True}
     assert _put({"maxOutput": 2_000_000}).json()["data"]["maxOutput"] == 2_000_000
 

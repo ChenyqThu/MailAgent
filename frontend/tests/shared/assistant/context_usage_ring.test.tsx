@@ -13,7 +13,7 @@
 //   5. **挂载点真的在 composer 里、且在 Send 之前** —— 组件写好了但没人挂 = 功能不存在。
 
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import i18n from '@shared/i18n'
@@ -212,11 +212,43 @@ describe('contextUsage.lib', () => {
     const over = buildContextUsageView(400_000, 200_000)
     expect(over).toMatchObject({ ratio: 1, percent: 200, overflow: true, tone: 'danger' })
   })
+
+  test('P4 阈值注入：0.799 不提醒、0.80 提醒；默认参数仍保持旧 0.75 行为且没有 0.85 档', () => {
+    expect(
+      buildContextUsageView(799, 1_000, { warnRatio: 0.8, dangerRatio: 0.9 })?.tone
+    ).toBe('normal')
+    expect(
+      buildContextUsageView(800, 1_000, { warnRatio: 0.8, dangerRatio: 0.9 })?.tone
+    ).toBe('warn')
+    expect(
+      buildContextUsageView(850, 1_000, { warnRatio: 0.8, dangerRatio: 0.9 })?.tone
+    ).toBe('warn')
+    expect(buildContextUsageView(750, 1_000)?.tone).toBe('warn')
+  })
 })
 
 // ── 组件 ────────────────────────────────────────────────────────────────────
 
 describe('ContextUsageRing', () => {
+  test('P4 flag 注入后 80% 明确提示接近上限；flag off 保持旧阈值且无新文案', async () => {
+    listMessages.mockResolvedValue([row({ id: 1, context_tokens: 160_000 })])
+    const { rerender } = render(
+      <Harness value={controls({ compactEnabled: true, autoCompactEnabled: false })}>
+        <ContextUsageRing />
+      </Harness>
+    )
+    fireEvent.click(await screen.findByTestId('context-usage'))
+    const warning = '已接近模型上下文上限；达到 90% 时会在当前回复结束后自动压缩。'
+    expect(screen.queryByText(warning)).toBeNull()
+
+    rerender(
+      <Harness value={controls({ compactEnabled: true, autoCompactEnabled: true })}>
+        <ContextUsageRing />
+      </Harness>
+    )
+    expect(await screen.findByText(warning)).toBeTruthy()
+  })
+
   test('上限命中 → 比例环 + 短文案', async () => {
     listMessages.mockResolvedValue([row({ id: 1, context_tokens: 91_000 })])
     render(

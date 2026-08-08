@@ -58,6 +58,7 @@ export interface LlmProviderModel {
   /** null = 上游未标注（snapshot 不臆造能力位）——渲染时区分「未知」与 false。 */
   capabilities: LlmModelCapabilities | null
   maxOutput: number | null
+  contextWindow: number | null
   source: 'fetched' | 'manual'
   fetchedAt: number | null
 }
@@ -164,6 +165,7 @@ export async function upsertLlmProviderModel(
     enabled?: boolean
     capabilities?: LlmModelCapabilities | null
     maxOutput?: number | null
+    contextWindow?: number | null
   }
 ): Promise<LlmProviderModel> {
   return request(

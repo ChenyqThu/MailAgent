@@ -65,6 +65,7 @@ export function ProviderModelsPanel({
   const [adding, setAdding] = React.useState(false)
   // maxOutput 输入的本地草稿（blur 提交）；key = model id。
   const [maxOutputDraft, setMaxOutputDraft] = React.useState<Record<string, string>>({})
+  const [contextWindowDraft, setContextWindowDraft] = React.useState<Record<string, string>>({})
 
   const invalidate = async (): Promise<void> => {
     await qc.invalidateQueries({ queryKey: qk.llm.providerModels(providerId) })
@@ -109,6 +110,29 @@ export function ProviderModelsPanel({
     } catch (err) {
       toastError(t('settings.providers.models.title'), errorMessage(err))
       setMaxOutputDraft((d) => ({ ...d, [model.id]: model.maxOutput?.toString() ?? '' }))
+    }
+  }
+
+  async function handleContextWindowBlur(model: LlmProviderModel, raw: string): Promise<void> {
+    const trimmed = raw.trim()
+    const next = trimmed === '' ? null : Number.parseInt(trimmed, 10)
+    if (next !== null && (!Number.isFinite(next) || next <= 0)) {
+      setContextWindowDraft((draft) => ({
+        ...draft,
+        [model.id]: model.contextWindow?.toString() ?? ''
+      }))
+      return
+    }
+    if (next === (model.contextWindow ?? null)) return
+    try {
+      await upsertLlmProviderModel(providerId, { id: model.id, contextWindow: next })
+      await invalidate()
+    } catch (err) {
+      toastError(t('settings.providers.models.title'), errorMessage(err))
+      setContextWindowDraft((draft) => ({
+        ...draft,
+        [model.id]: model.contextWindow?.toString() ?? ''
+      }))
     }
   }
 
@@ -195,6 +219,18 @@ export function ProviderModelsPanel({
                 onBlur={(e) => void handleMaxOutputBlur(m, e.target.value)}
                 className="h-6 w-[92px] px-1.5 text-[11px]"
                 aria-label={t('settings.providers.models.maxOutputAria', { model: m.id })}
+              />
+              <Input
+                type="number"
+                disabled={readOnly}
+                value={contextWindowDraft[m.id] ?? m.contextWindow?.toString() ?? ''}
+                placeholder={t('settings.providers.models.contextWindowPlaceholder')}
+                onChange={(e) =>
+                  setContextWindowDraft((draft) => ({ ...draft, [m.id]: e.target.value }))
+                }
+                onBlur={(e) => void handleContextWindowBlur(m, e.target.value)}
+                className="h-6 w-[92px] px-1.5 text-[11px]"
+                aria-label={t('settings.providers.models.contextWindowAria', { model: m.id })}
               />
               {!readOnly && (
                 <button

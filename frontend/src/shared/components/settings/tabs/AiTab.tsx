@@ -20,6 +20,7 @@ import { useQueryClient } from '@tanstack/react-query'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useUpstreamModels, useEnabledModels, FALLBACK_MODELS } from '@shared/hooks/useLlmModels'
 import { useProviderRegistryEnabled } from '@shared/hooks/useLlmProviders'
+import { useChatCompactFlags } from '@shared/hooks/useChatCompactEnabled'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
@@ -80,6 +81,42 @@ export function AiTab(): React.ReactElement {
   const [autoTitleModel, setAutoTitleModel] = React.useState<string>(
     () => readAutoTitleSettings().model
   )
+  const compactFlags = useChatCompactFlags()
+  const [autoCompactMode, setAutoCompactMode] = React.useState<'on' | 'off' | null>(null)
+  const [autoCompactSaving, setAutoCompactSaving] = React.useState(false)
+
+  React.useEffect(() => {
+    if (!compactFlags.chatCompactEnabled || !compactFlags.chatAutoCompactEnabled) return undefined
+    let cancelled = false
+    void api.chat
+      .getAutoCompact()
+      .then((mode) => {
+        if (!cancelled) setAutoCompactMode(mode)
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setAutoCompactMode(null)
+          toastError(t('settings.ai.autoCompact.title'), errorMessage(err))
+        }
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [api, compactFlags.chatAutoCompactEnabled, compactFlags.chatCompactEnabled, t])
+
+  const updateAutoCompact = async (enabled: boolean): Promise<void> => {
+    const previous = autoCompactMode
+    setAutoCompactSaving(true)
+    try {
+      const mode = await api.chat.setAutoCompact(enabled ? 'on' : 'off')
+      setAutoCompactMode(mode)
+    } catch (err) {
+      setAutoCompactMode(previous)
+      toastError(t('settings.ai.autoCompact.title'), errorMessage(err))
+    } finally {
+      setAutoCompactSaving(false)
+    }
+  }
 
   // PART 2 — auto-approval mode (renderer-local localStorage; default 'always' = every write asks).
   // 'auto-reversible' lets reversible preview-tier writes (flag/archive/pin/resync/memory) run without
@@ -623,6 +660,26 @@ export function AiTab(): React.ReactElement {
           )}
         </Section>
       </div>
+
+      {compactFlags.chatCompactEnabled && compactFlags.chatAutoCompactEnabled && (
+        <div id={AI_TAB_ANCHOR_IDS.autoCompact} className={AI_TAB_ANCHOR_SCROLL_MT}>
+          <Section
+            title={t('settings.ai.autoCompact.title')}
+            helper={t('settings.ai.autoCompact.helper')}
+          >
+            <Row
+              label={t('settings.ai.autoCompact.enabledLabel')}
+              helper={t('settings.ai.autoCompact.enabledHelper')}
+            >
+              <Switch
+                checked={autoCompactMode === 'on'}
+                disabled={autoCompactMode === null || autoCompactSaving}
+                onCheckedChange={(checked) => void updateAutoCompact(checked)}
+              />
+            </Row>
+          </Section>
+        </div>
+      )}
 
       <div id={AI_TAB_ANCHOR_IDS.approval} className={AI_TAB_ANCHOR_SCROLL_MT}>
         <Section

@@ -32,6 +32,7 @@ export interface ProviderSnapshotModel {
    *  Consumers must treat null as "unknown", NOT as all-false / all-true. */
   capabilities: ProviderSnapshotModelCapabilities | null
   maxOutput: number | null
+  contextWindow?: number | null
   source: 'fetched' | 'manual'
 }
 
@@ -67,6 +68,7 @@ export interface ResolvedProviderModel extends ParsedProviderRef {
    *  chatRun.ts leave it undefined, and callers fall back to 64_000 themselves. Optional so every
    *  existing ResolvedProviderModel producer stays source-compatible. */
   maxOutputTokens?: number
+  contextWindow?: number | null
 }
 
 export interface ProviderModelResolver {

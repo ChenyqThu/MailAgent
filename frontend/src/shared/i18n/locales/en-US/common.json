@@ -1467,7 +1467,8 @@
       "estimateNote": "Segments are estimated from character counts (≈); \"Tools & other\" is the reported total minus the rest — tool schemas, skill and connector catalogs, etc.",
       "estimateExceeds": "The estimates already exceed the reported total, so the split is indicative only.",
       "segmentsLoading": "Computing segments…",
-      "segmentsUnavailable": "Segment details unavailable (can't read the system prompt config)"
+      "segmentsUnavailable": "Segment details unavailable (can't read the system prompt config)",
+      "nearLimit": "Approaching the model context limit. Automatic compact runs after the current reply at 90%."
     },
     "compact": {
       "action": "Compact context",
@@ -2516,6 +2517,8 @@
         "manualAdd": "Add",
         "maxOutputPlaceholder": "maxOutput",
         "maxOutputAria": "Max output tokens for {model}",
+        "contextWindowPlaceholder": "context",
+        "contextWindowAria": "Context window tokens for {model}",
         "deleteAria": "Delete model {model}",
         "cap": {
           "tools": "tools",
@@ -3026,6 +3029,12 @@
         "enabledHelper": "After the first turn, generate a title with the chosen model and save it; a manual rename always wins.",
         "modelLabel": "Title model",
         "modelHelper": "Model used to generate the title — a fast, cheap small model (e.g. haiku) is recommended."
+      },
+      "autoCompact": {
+        "title": "Automatic context compact",
+        "helper": "Controls automatic compact for interactive chats. Manual /compact remains available.",
+        "enabledLabel": "Compact near the context limit",
+        "enabledHelper": "Warn at 80% and compact after the current reply at 90%. Unknown model windows never trigger automatically."
       },
       "approval": {
         "title": "Agent action approval",

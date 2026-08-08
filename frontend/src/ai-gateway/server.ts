@@ -26,7 +26,10 @@ import { createServer, type IncomingMessage, type Server, type ServerResponse } 
 import { UI_MESSAGE_STREAM_HEADERS } from 'ai'
 
 import type { AiGatewayConfig } from './config'
-import type { MailAgentUIMessageMetadata } from '@shared/assistant/uiMessage'
+import {
+  chatMessageToUIMessage,
+  type MailAgentUIMessageMetadata
+} from '@shared/assistant/uiMessage'
 import {
   approvalInputPreview,
   extractApprovalStashInput,
@@ -57,7 +60,7 @@ import { sanitizedUpstreamErrorMessage } from './upstreamError'
 import { runHeadlessSearchAgent } from './searchAgentRun'
 import { resolveAgentRunSeconds, runHeadlessAgent } from './agentRun'
 import type { HeadlessAgentResult } from '../shared/api/types'
-import { CompactCoordinator } from './compact'
+import { CompactCoordinator, shouldRecoverContextOverflow } from './compact'
 
 const GATEWAY_VERSION = '0.2.0'
 
@@ -201,7 +204,7 @@ async function handleChat(
     writeJson(res, prepared.status, prepared.body)
     return
   }
-  const run = prepared.run
+  let run = prepared.run
 
   // B1 — atomic same-session gate. A concurrent second POST that raced past the pre-check loses
   // here: its just-started upstream call is aborted and it answers 409 (封 §3.2 的行序交错 —
@@ -323,6 +326,209 @@ async function handleChat(
   }
   if (exposeHeaders.length > 0) {
     runIdHeaders['access-control-expose-headers'] = exposeHeaders.join(', ')
+  }
+
+  if (
+    entry.trustedMode === 'manual_chat' &&
+    cfg.compactCoordinator != null &&
+    cfg.compactPersistence != null
+  ) {
+    let responseStarted = false
+    const writeHeaders = (): void => {
+      if (responseStarted || clientGone || res.destroyed) return
+      res.writeHead(200, {
+        ...UI_MESSAGE_STREAM_HEADERS,
+        ...corsHeadersFor(req.headers.origin),
+        ...runIdHeaders
+      })
+      responseStarted = true
+    }
+    const writeChunk = async (chunk: unknown): Promise<void> => {
+      if (clientGone || res.destroyed || res.writableEnded) {
+        clientGone = true
+        return
+      }
+      writeHeaders()
+      if (!responseStarted) return
+      const ok = res.write(`data: ${JSON.stringify(chunk)}\n\n`)
+      if (!ok && !clientGone && !res.destroyed) {
+        await new Promise<void>((resolve) => {
+          const settle = (): void => {
+            res.off('drain', settle)
+            res.off('close', settle)
+            resolve()
+          }
+          res.once('drain', settle)
+          res.once('close', settle)
+        })
+      }
+    }
+    const flushChunks = async (chunks: readonly unknown[]): Promise<void> => {
+      for (const chunk of chunks) await writeChunk(chunk)
+    }
+    const isPrelude = (chunk: unknown): boolean => {
+      const type =
+        chunk !== null && typeof chunk === 'object'
+          ? (chunk as { type?: unknown }).type
+          : undefined
+      return type === 'start' || type === 'start-step' || type === 'message-metadata'
+    }
+    type FinishEvent = Parameters<ReturnType<typeof makePersistOnFinish>>[0]
+    const drainAttempt = async (
+      attempt: number
+    ): Promise<{ recover: boolean; deferred: unknown[]; error: unknown }> => {
+      const deferred: unknown[] = []
+      let rawError: unknown = null
+      let finishEvent: FinishEvent | null = null
+      const persistFinish = makePersistOnFinish(cfg, run)
+      try {
+        const stream = run.result.toUIMessageStream({
+          ...streamOptions,
+          originalMessages: run.rawMessages,
+          onError: (error: unknown) => {
+            rawError = error
+            const message = error instanceof Error ? error.message : String(error)
+            console.error('[ai-gateway] /api/ai/chat stream error', error)
+            return message
+          },
+          onFinish: (event) => {
+            finishEvent = event
+          }
+        })
+        for await (const chunk of stream) {
+          const type =
+            chunk !== null && typeof chunk === 'object'
+              ? (chunk as { type?: unknown }).type
+              : undefined
+          if (!responseStarted && type === 'error') {
+            deferred.push(chunk)
+            if (
+              shouldRecoverContextOverflow({
+                attempt,
+                hasWrittenBytes: false,
+                error: rawError,
+                protocol: run.protocol
+              })
+            ) {
+              return { recover: true, deferred, error: rawError }
+            }
+            await flushChunks(deferred)
+            deferred.length = 0
+            continue
+          }
+          if (!responseStarted && isPrelude(chunk)) {
+            deferred.push(chunk)
+            continue
+          }
+          if (deferred.length > 0) {
+            await flushChunks(deferred)
+            deferred.length = 0
+          }
+          await writeChunk(chunk)
+        }
+        if (deferred.length > 0) await flushChunks(deferred)
+        if (finishEvent != null) await persistFinish(finishEvent)
+        return { recover: false, deferred: [], error: rawError }
+      } catch (error) {
+        if (
+          shouldRecoverContextOverflow({
+            attempt,
+            hasWrittenBytes: responseStarted,
+            error,
+            protocol: run.protocol
+          })
+        ) {
+          return { recover: true, deferred, error }
+        }
+        throw error
+      }
+    }
+
+    if (!detached) {
+      res.on('close', () => {
+        if (runToken != null && run.sessionId != null) {
+          cfg.activeRuns?.release(run.sessionId, runToken.runId)
+        }
+      })
+    }
+    try {
+      for (let attempt = 0; attempt < 2; attempt += 1) {
+        const outcome = await drainAttempt(attempt)
+        if (!outcome.recover) break
+        if (attempt > 0 || run.sessionId == null) {
+          await flushChunks(
+            outcome.deferred.length > 0
+              ? outcome.deferred
+              : [
+                  {
+                    type: 'error',
+                    errorText:
+                      outcome.error instanceof Error
+                        ? outcome.error.message
+                        : String(outcome.error)
+                  }
+                ]
+          )
+          break
+        }
+        try {
+          const compactResult = await cfg.compactCoordinator.run(run.sessionId, {
+            reason: 'overflow',
+            contextWindow: run.contextWindow ?? null
+          })
+          if (compactResult.status !== 'completed') {
+            await flushChunks(outcome.deferred)
+            break
+          }
+          cfg.onCompactCompleted?.(run.sessionId)
+          const retryMessages = cfg.compactPersistence
+            .listSessionMessages(run.sessionId)
+            .map(chatMessageToUIMessage)
+          const retryPrepared = await prepareChatRun(
+            { ...body, messages: retryMessages },
+            cfg,
+            controller.signal,
+            entry.trustedMode
+          )
+          if (!retryPrepared.ok) {
+            await flushChunks(outcome.deferred)
+            break
+          }
+          const previousRunId = run.runId
+          run = retryPrepared.run
+          run.runId = previousRunId
+        } catch (error) {
+          console.warn('[ai-gateway] context overflow recovery failed', error)
+          await flushChunks(
+            outcome.deferred.length > 0
+              ? outcome.deferred
+              : [
+                  {
+                    type: 'error',
+                    errorText:
+                      outcome.error instanceof Error
+                        ? outcome.error.message
+                        : String(outcome.error)
+                  }
+                ]
+          )
+          break
+        }
+      }
+      if (responseStarted && !clientGone && !res.destroyed) res.write('data: [DONE]\n\n')
+    } catch (error) {
+      console.error('[ai-gateway] /api/ai/chat overflow-aware drain failed', error)
+    } finally {
+      if (runToken != null && run.sessionId != null) {
+        cfg.activeRuns?.release(run.sessionId, runToken.runId)
+      }
+      try {
+        res.end()
+      } catch {
+        /* already destroyed */
+      }
+    }
+    return
   }
 
   if (!detached) {
@@ -1187,9 +1393,9 @@ function dispatch(route: string, res: ServerResponse, work: Promise<void>): void
  * drive it directly.
  */
 export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
-  const compactCoordinator = cfg.compactPersistence
-    ? new CompactCoordinator(cfg, cfg.compactPersistence)
-    : null
+  const compactCoordinator =
+    cfg.compactCoordinator ??
+    (cfg.compactPersistence ? new CompactCoordinator(cfg, cfg.compactPersistence) : null)
   return createServer((req, res) => {
     const url = req.url ?? '/'
     const method = req.method ?? 'GET'

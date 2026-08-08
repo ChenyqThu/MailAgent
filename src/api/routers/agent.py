@@ -254,6 +254,8 @@ async def rollback_profile_doc(name: str, request: Request, body: Optional[dict[
 
 CHAT_APPROVAL_MODES: tuple[str, ...] = ("manual", "bypass")
 _APPROVAL_MODE_KEY = "chat_approval_mode"
+CHAT_AUTO_COMPACT_MODES: tuple[str, ...] = ("on", "off")
+_AUTO_COMPACT_KEY = "chat_auto_compact"
 
 
 @router.get("/approval-mode", dependencies=[Depends(verify_cf_access)])
@@ -283,6 +285,32 @@ async def set_approval_mode(request: Request, body: Optional[dict[str, Any]] = N
     store.set_owner_setting(_APPROVAL_MODE_KEY, mode)
 
     logger.info(f"chat approval mode switched: {previous} → {mode} (owner UI)")
+    return success_envelope({"mode": mode}, request=request, source="sqlite")
+
+
+@router.get("/auto-compact", dependencies=[Depends(verify_cf_access)])
+async def get_auto_compact(request: Request):
+    """读 owner 自动 Compact 开关。缺行/脏值按冻结决策缺省为 on。"""
+    raw = get_agent_config_store().get_owner_setting(_AUTO_COMPACT_KEY)
+    mode = raw if raw in CHAT_AUTO_COMPACT_MODES else "on"
+    return success_envelope({"mode": mode}, request=request, source="sqlite")
+
+
+@router.put("/auto-compact", dependencies=[Depends(verify_cf_access)])
+async def set_auto_compact(request: Request, body: Optional[dict[str, Any]] = None):
+    """写 owner 自动 Compact 开关；仅 owner UI 可达，越域值一律 400。"""
+    mode = (body or {}).get("mode")
+    if mode not in CHAT_AUTO_COMPACT_MODES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"body.mode must be one of {CHAT_AUTO_COMPACT_MODES}",
+            http_status=400,
+            source="sqlite",
+        )
+    store = get_agent_config_store()
+    previous = store.get_owner_setting(_AUTO_COMPACT_KEY) or "on"
+    store.set_owner_setting(_AUTO_COMPACT_KEY, mode)
+    logger.info(f"chat auto compact switched: {previous} → {mode} (owner UI)")
     return success_envelope({"mode": mode}, request=request, source="sqlite")
 
 

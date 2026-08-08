@@ -240,10 +240,12 @@ def test_model_crud(tmp_path):
         enabled=True,
         capabilities={"tools": True, "vision": False, "reasoning": True},
         max_output=8192,
+        context_window=200_000,
     )
     (m,) = st.list_models("dash")
     assert m.capabilities == {"tools": True, "vision": False, "reasoning": True}
     assert m.max_output == 8192 and m.enabled is True and m.source == "manual"
+    assert m.context_window == 200_000
 
     assert st.set_model_enabled("dash", "qwen-max", False) is True
     assert st.list_models("dash")[0].enabled is False
@@ -252,6 +254,38 @@ def test_model_crud(tmp_path):
     assert st.delete_model("dash", "qwen-max") is True
     assert st.list_models("dash") == []
     assert st.delete_model("dash", "qwen-max") is False
+
+
+def test_additive_migration_adds_nullable_context_window(tmp_path):
+    db_path = tmp_path / "agent_config.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE llm_model (
+                provider_id TEXT NOT NULL,
+                model_id TEXT NOT NULL,
+                display_name TEXT,
+                group_name TEXT,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                capabilities_json TEXT,
+                max_output INTEGER,
+                source TEXT NOT NULL DEFAULT 'manual',
+                fetched_at INTEGER,
+                PRIMARY KEY (provider_id, model_id)
+            );
+            INSERT INTO llm_model(provider_id, model_id, enabled) VALUES ('legacy', 'm1', 1);
+            """
+        )
+
+    LlmProviderStore(str(db_path))
+
+    with sqlite3.connect(db_path) as conn:
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(llm_model)")}
+        row = conn.execute(
+            "SELECT context_window FROM llm_model WHERE provider_id='legacy' AND model_id='m1'"
+        ).fetchone()
+    assert "context_window" in columns
+    assert row == (None,)
 
 
 def test_merge_fetched_preserves_manual_rows_and_enabled_state(tmp_path):
@@ -301,7 +335,7 @@ def test_snapshot_shape_matches_contract(tmp_path):
         enabled_models=[],
     )
     st.create_provider("dash", protocol="openai-compatible", base_url="https://d.example/v1")
-    st.upsert_model("dash", "qwen-max", enabled=True)
+    st.upsert_model("dash", "qwen-max", enabled=True, context_window=131_072)
     st.upsert_model("dash", "qwen-turbo", enabled=False)
     # disabled provider 整体不出现在 snapshot
     st.create_provider("off", protocol="openai", enabled=False)
@@ -326,7 +360,9 @@ def test_snapshot_shape_matches_contract(tmp_path):
     assert dash_models["qwen-max"]["enabled"] is True
     assert dash_models["qwen-turbo"]["enabled"] is False
     assert set(dash_models["qwen-max"].keys()) == {
-        "id", "displayName", "enabled", "capabilities", "maxOutput", "source",
+        "id", "displayName", "enabled", "capabilities", "maxOutput", "contextWindow", "source",
     }
+    assert dash_models["qwen-max"]["contextWindow"] == 131_072
+    assert dash_models["qwen-turbo"]["contextWindow"] is None
     # 无 key 的 provider → apiKey ""
     assert by_id["dash"]["apiKey"] == ""

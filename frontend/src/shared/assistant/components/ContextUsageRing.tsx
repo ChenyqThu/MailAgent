@@ -69,6 +69,7 @@ import { DUR } from '@shared/lib/gsap'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
+import { COMPACT_AUTO_RATIO, COMPACT_WARN_RATIO } from '@shared/assistant/compactConstants'
 
 import { useChatComposerControls } from './composerControlsContext'
 import { formatTokens } from './modelDetailCard.lib'
@@ -368,7 +369,15 @@ export function ContextUsageRing(): React.JSX.Element | null {
       ? null
       : (controls?.availableModels.find((m) => m.ref === activeModel)?.contextWindow ?? null)
 
-  const view = buildContextUsageView(used, limit)
+  const automaticCompactEnabled =
+    controls?.compactEnabled === true && controls.autoCompactEnabled === true
+  const view = buildContextUsageView(
+    used,
+    limit,
+    automaticCompactEnabled
+      ? { warnRatio: COMPACT_WARN_RATIO, dangerRatio: COMPACT_AUTO_RATIO }
+      : undefined
+  )
   if (!view) return null
 
   const usedText = formatTokens(view.used)
@@ -428,6 +437,11 @@ export function ContextUsageRing(): React.JSX.Element | null {
           //（16b 踩过）。
           className="glass-pop absolute bottom-full right-0 z-50 mb-1.5 w-[260px] max-w-full rounded-[var(--r-ctl)] p-3"
         >
+          {automaticCompactEnabled && view.ratio != null && view.ratio >= COMPACT_WARN_RATIO && (
+            <p className="mb-2 rounded-md bg-warn/10 px-2 py-1.5 text-aux text-warn">
+              {t('chat.contextUsage.nearLimit')}
+            </p>
+          )}
           <ContextUsageDetails
             breakdown={breakdown}
             loading={promptLoading}

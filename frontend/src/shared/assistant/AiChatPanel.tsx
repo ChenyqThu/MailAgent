@@ -41,7 +41,7 @@ import { useSessionModelPreference } from '@shared/hooks/useSessionModelPreferen
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
 import { buildMentionContext } from '@shared/lib/mention-context'
 import { useApprovalMode } from '@shared/lib/approvalMode'
-import { useChatCompactEnabled } from '@shared/hooks/useChatCompactEnabled'
+import { useChatCompactFlags } from '@shared/hooks/useChatCompactEnabled'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 import { errorMessage } from '@shared/lib/ipcErrors'
 
@@ -167,7 +167,9 @@ export function AIChatPanel({
   // 「这轮到底会不会思考」的诚实投影（喂 contextSnapshot.capabilities）：改前是 Brain 布尔，
   // 现在是「档位适用且不是不思考」。
   const thinkingActive = effort.bodyTier !== undefined && effort.bodyTier !== 'none'
-  const compactEnabled = useChatCompactEnabled()
+  const compactFlags = useChatCompactFlags()
+  const compactEnabled = compactFlags.chatCompactEnabled
+  const autoCompactEnabled = compactEnabled && compactFlags.chatAutoCompactEnabled
   const [compactActive, setCompactActive] = useState(false)
   const [islandRefreshNonce, setIslandRefreshNonce] = useState(0)
   const aiSdkRunningRef = useRef(false)
@@ -263,6 +265,7 @@ export function AIChatPanel({
       modelPickerDisabled: false,
       sendDisabled: approvalSendDisabled || compactActive,
       compactEnabled,
+      autoCompactEnabled,
       compactActive,
       onCompact,
       onCompactStop,
@@ -283,6 +286,7 @@ export function AIChatPanel({
       approvalSendDisabled,
       compactActive,
       compactEnabled,
+      autoCompactEnabled,
       onCompact,
       onCompactStop,
       mentions,
