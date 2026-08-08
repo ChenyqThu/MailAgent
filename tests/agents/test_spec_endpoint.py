@@ -81,10 +81,12 @@ def _seed_custom(store, agent_id="dms", *, trigger=None, budget=None, tool_polic
 
 def _running_job(repo, *, agent_id="dms", trigger_kind="cron",
                  fire_key="20260703T090000Z", email_internal_id=None, token="tok-1",
-                 claim=True):
+                 claim=True, extra_params=None):
     params = {"agent_id": agent_id, "trigger_kind": trigger_kind, "fire_key": fire_key}
     if email_internal_id is not None:
         params["email_internal_id"] = email_internal_id
+    if extra_params:
+        params.update(extra_params)
     job_id, _ = repo.enqueue(
         job_type="agent_run", target_kind="agent", target_key=agent_id,
         params=params, idempotency_key=f"k-{agent_id}-{fire_key}",
@@ -129,6 +131,36 @@ def test_spec_cron_full_shape(env, client):
     }
     assert "report" in spec["toolPolicy"]["skills"]  # report capability tiers survive mount gating
     assert spec["sessionTitle"].startswith("DMS Approver · ")
+
+
+def test_spec_agent_call_carries_eager_session_and_invocation(env, client):
+    _seed_custom(env.store, trigger=None)
+    invocation = {
+        "instruction": "Summarize <priority> & risks",
+        "contextNote": "Keep it concise",
+        "references": [
+            {"type": "session", "id": 12},
+            {"type": "report", "id": "weekly"},
+        ],
+        "parentSessionId": 5,
+        "parentToolCallId": "tc-call",
+        "invokedBy": "main_agent",
+        "userRequested": False,
+    }
+    job_id = _running_job(
+        env.repo,
+        trigger_kind="manual",
+        fire_key="agent-call:5:tc-call",
+        extra_params={"session_id": 44, "invocation": invocation},
+    )
+    response = client.get(
+        f"/api/agent-runs/{job_id}/spec", headers={"X-Claim-Token": "tok-1"}
+    )
+    assert response.status_code == 200
+    spec = response.json()["data"]
+    assert spec["sessionId"] == 44
+    assert spec["invocation"] == invocation
+    assert spec["prompt"]["taskPrompt"] == "Approve the DMS request"
 
 
 def test_spec_email_carries_fenced_envelope(env, client, monkeypatch):

@@ -18,10 +18,8 @@ import json
 import time
 from typing import Any, Callable, Mapping, Optional
 
-# 岛 stash TTL（秒）—— 跨端对应 gateway ``frontend/src/ai-gateway/approvalStash.ts`` 的
-# ``DEFAULT_STASH_TTL_MS = 30 * 60 * 1000``（同值还锚着 island ack pending TTL 与延长版
-# ApprovalGuard TTL）。pending 超过此龄 = stash 必已 GC / gateway 已重启 → 审批无决策面，
-# fail-closed 方向是「写没发生」→ 读侧视为已过期作废。两端改 TTL 必须同步。
+# 旧行回退 TTL（秒）—— 新 gateway 在 paused_handoff result_json 透传 approvalTtlSec，读侧优先
+# 使用该正数；缺失/非法（升级前旧行）才回退本 30min。跨端锚点见 approvalStash.ts。
 APPROVAL_PENDING_TTL_SEC = 30 * 60
 
 # derive_agent_run_state 的完整值域（有限枚举，UI 按此穷举渲染）。
@@ -100,4 +98,11 @@ def derive_agent_run_state(
         age = now_fn() - float(ts)
     except (TypeError, ValueError):
         return "paused_expired"  # 无时间戳 → 无法证明可批, fail-closed 视为过期
-    return "paused_expired" if age > APPROVAL_PENDING_TTL_SEC else "paused_pending"
+    ttl = result.get("approvalTtlSec")
+    try:
+        ttl_sec = float(ttl)
+        if ttl_sec <= 0:
+            raise ValueError
+    except (TypeError, ValueError):
+        ttl_sec = APPROVAL_PENDING_TTL_SEC
+    return "paused_expired" if age > ttl_sec else "paused_pending"

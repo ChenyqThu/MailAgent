@@ -90,6 +90,21 @@ def test_paused_exactly_at_ttl_still_pending():
     assert derive_agent_run_state(row, now_fn=lambda: _NOW) == "paused_pending"
 
 
+def test_paused_uses_transmitted_positive_ttl_before_legacy_fallback():
+    row = _paused("pending", finished_at=_NOW - 3600)
+    row["result"]["approvalTtlSec"] = 7200
+    assert derive_agent_run_state(row, now_fn=lambda: _NOW) == "paused_pending"
+    row["result"]["approvalTtlSec"] = 1800
+    assert derive_agent_run_state(row, now_fn=lambda: _NOW) == "paused_expired"
+
+
+@pytest.mark.parametrize("invalid", [None, 0, -1, "bad"])
+def test_paused_invalid_transmitted_ttl_falls_back_to_30m(invalid):
+    row = _paused("pending", finished_at=_NOW - APPROVAL_PENDING_TTL_SEC - 1)
+    row["result"]["approvalTtlSec"] = invalid
+    assert derive_agent_run_state(row, now_fn=lambda: _NOW) == "paused_expired"
+
+
 def test_paused_missing_approval_state_treated_as_pending_then_aged():
     # 边界：缺 approval_state（worker 恒写 pending, 缺失=保守按 pending）→ 仍走龄推导。
     fresh = _paused(None, finished_at=_NOW - 10)

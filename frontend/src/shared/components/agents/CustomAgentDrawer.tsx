@@ -141,6 +141,7 @@ export function CustomAgentDrawer({
 
   const [enabled, setEnabled] = useState(false)
   const [title, setTitle] = useState('')
+  const [description, setDescription] = useState('')
   const [avatar, setAvatar] = useState<AgentAvatarConfig | null>(null)
   const [avatarDirty, setAvatarDirty] = useState(false)
   const [prompt, setPrompt] = useState('')
@@ -205,6 +206,7 @@ export function CustomAgentDrawer({
     if (create || !cfg) {
       setEnabled(false)
       setTitle('')
+      setDescription('')
       setAvatar(null)
       setAvatarDirty(false)
       setPrompt('')
@@ -239,6 +241,7 @@ export function CustomAgentDrawer({
     }
     setEnabled(cfg.enabled)
     setTitle(cfg.title)
+    setDescription(cfg.description ?? '')
     setAvatar(cfg.avatar ?? null)
     setAvatarDirty(false)
     setPrompt(cfg.prompt_is_default ? '' : cfg.prompt)
@@ -422,6 +425,7 @@ export function CustomAgentDrawer({
               id,
               type: 'custom',
               title: title.trim() || id,
+              description: description.trim() || null,
               enabled,
               model: model || null,
               prompt: prompt.trim() || null
@@ -430,6 +434,7 @@ export function CustomAgentDrawer({
         .then(() =>
           save(id, {
             title: title.trim() || id,
+            description: description.trim() || null,
             enabled,
             model,
             prompt: prompt.trim() || null,
@@ -450,6 +455,7 @@ export function CustomAgentDrawer({
     const editPatch: ReportConfigPatch = {
       enabled,
       title: title.trim() || cfg.title,
+      description: description.trim() || null,
       prompt: promptDirty ? prompt : cfg.prompt_is_default ? null : cfg.prompt,
       model,
       trigger,
@@ -578,6 +584,21 @@ export function CustomAgentDrawer({
               onNameChange={setTitle}
               namePlaceholder={t('agents.custom.titlePlaceholder')}
               inputStyle={inputStyle}
+            />
+          </Field>
+
+          <Field
+            label={t('agents.custom.descriptionLabel')}
+            hint={t('agents.custom.descriptionHint')}
+          >
+            <textarea
+              value={description}
+              maxLength={1000}
+              rows={3}
+              placeholder={t('agents.custom.descriptionPlaceholder')}
+              onChange={(event) => setDescription(event.target.value)}
+              className="scrollbar-thin"
+              style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.5, minHeight: 72 }}
             />
           </Field>
 

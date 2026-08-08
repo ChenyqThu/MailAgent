@@ -45,8 +45,13 @@ import {
 import type { ConnectorCatalogEntry } from '../../ai-gateway/prompts/stable_prompt'
 import type { ToolSet } from 'ai'
 import type { GatewayToolApprovalPrefs, GlobalApprovalMode } from '../../ai-gateway/tools/types'
-import { ApprovalGuard } from '../../ai-gateway/security/approval'
+import {
+  ApprovalGuard,
+  HIGH_RISK_OUTBOUND_APPROVAL_TTL_MS,
+  NORMAL_APPROVAL_TTL_MS
+} from '../../ai-gateway/security/approval'
 import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approvalStash'
+import { classOfTool } from '../../ai-gateway/tools/policy'
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
@@ -56,10 +61,13 @@ import {
   appendToolCall,
   createAgentSession,
   createImSession,
+  findSessionByParentToolCall,
   findAssistantMessageRowIdByUiId,
   findUserMessageRowIdByUiId,
   getFirstUserText,
   getSession,
+  markToolCallApprovalExpired,
+  setAgentSessionJobId,
   updateMessage,
   updateSessionTitle,
   updateToolCall
@@ -394,8 +402,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // is a first-class fail-open path (the announce POST to serve-api never throws; the island socket
   // send fails closed → debug-only log, no retry, no queue backlog — covered by direct unit tests, see
   // research/island-no-island-degradation.md), so users without the island app get inert no-op, not
-  // errors. An explicit env false is the emergency rollback — the guard then keeps its 5-min TTL
-  // (byte-identical to pre-cutover).
+  // errors. An explicit custom-agent-call flag false keeps the established 30-min single TTL.
   const islandAgentEnabled = envBool('MAILAGENT_ISLAND_AGENT_ENABLED', true)
   // 07-15 owner拍板（无灵动岛方案优先，task 07-15-harness-chat lane A）— the SERVER-SIDE approval
   // resume infra (stash + extended guard TTL + /pending + /decide + settle broadcast) is now
@@ -409,14 +416,27 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // gate than the old flag-gated wiring. (customAgentsEnabled still gates the S4 headless agent-run
   // endpoint + job settle below; default ON since E3 cutover, env explicit false = kill-switch.)
   const customAgentsEnabled = envBool('MAILAGENT_CUSTOM_AGENTS_ENABLED', true)
+  const customAgentCallEnabled = envBool('MAILAGENT_CUSTOM_AGENT_CALL', true)
   const serverResumeEnabled = true
   // The guard record must outlive the stash window so a verify()/consume() on the eventual in-app (or
   // island) approve doesn't expire first — extended TTL whenever server-side resume is live (always).
-  const approvalGuard = new ApprovalGuard({ ttlMs: DEFAULT_STASH_TTL_MS })
+  const approvalTtlForTool = customAgentCallEnabled
+    ? (toolName: string) =>
+        classOfTool(toolName) === 'outbound'
+          ? HIGH_RISK_OUTBOUND_APPROVAL_TTL_MS
+          : NORMAL_APPROVAL_TTL_MS
+    : undefined
+  const approvalGuard = new ApprovalGuard({
+    ttlMs: DEFAULT_STASH_TTL_MS,
+    ttlMsForTool: approvalTtlForTool
+  })
   // Part B / S6 W2 / 07-15 — per-gateway stash of paused approval runs (server-side resume source).
   // Always built: the stash's PRESENCE is the gate everywhere downstream (/pending + /decide + the
   // chatRun stash leg), and it must hold with both flags off (in-panel card is the primary surface).
-  const approvalStash: ApprovalRunStash | undefined = new ApprovalRunStash()
+  const approvalStash: ApprovalRunStash | undefined = new ApprovalRunStash({
+    ttlMs: DEFAULT_STASH_TTL_MS,
+    ttlMsForTool: approvalTtlForTool
+  })
   // harness-chat lane A (B1) — MAILAGENT_CHAT_DETACHED_RUNS gates detach-tolerant chat runs: client
   // disconnect no longer aborts /api/ai/chat's upstream call (the gateway drains server-side to
   // persistTurn); the composer stop goes through POST /api/ai/run/stop. Default ON; an explicit env
@@ -931,13 +951,21 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           }
         }
       : undefined,
+    markApprovalExpired: (toolCallId: string) => markToolCallApprovalExpired(toolCallId),
     // Factory: the gateway builds the tools per request bound to a fresh audit collector
     // (closure). Read tools always; the approval-gated write tools under
     // MAILAGENT_AI_SDK_WRITE_TOOLS — S3: an env-only KILL-SWITCH, default literal true (the
     // cutover master it used to follow was GA'd away). `approvalMode` (PART 2) comes from the
     // request body (default 'always'); 'auto-reversible' lets reversible preview writes skip the
     // card. The blocking send always asks regardless (safety floor in auditedSendTool).
-    buildTools: (collector, approvalMode, contextMode, agentRunContext, toolApprovalPrefs) => {
+    buildTools: (
+      collector,
+      approvalMode,
+      contextMode,
+      agentRunContext,
+      toolApprovalPrefs,
+      parentSessionId
+    ) => {
       // Stage 1 PR2/PR3 — dynamic MCP connector tools. Two admitted shapes (shouldLoadConnectorTools):
       // manual_chat without an agentRunContext (PR2, unchanged), and a headless agent run whose
       // per-agent connector grants parse non-empty (PR3 — grant 外的 headless run performs ZERO
@@ -1054,6 +1082,18 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
           // flag that gates the S4 headless kernel; default off → byte-identical to the S4 set).
           customAgentToolsEnabled: customAgentsEnabled,
+          customAgentCallEnabled,
+          parentSessionId,
+          findSessionByParentToolCall,
+          createAgentCallSession: (input) =>
+            createAgentSession({
+              agentId: input.agentId,
+              title: input.title,
+              parentSessionId: input.parentSessionId,
+              parentToolCallId: input.parentToolCallId,
+              invokedBy: input.invokedBy
+            }),
+          setAgentSessionJobId,
           // S5 W4 (ADR-004) — the per-agent run context of a headless agent run, from
           // wrapCfgForAgentRun's buildTools wrapper (4th param). Manual runs pass undefined →
           // assembly byte-identical.
@@ -1085,6 +1125,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     islandAgentEnabled,
     serverResumeEnabled,
     approvalStash,
+    approvalTtlResponseEnabled: customAgentCallEnabled,
     // B1 — detach-tolerant chat runs (MAILAGENT_CHAT_DETACHED_RUNS, default on). Registry undefined
     // when the env kill-switch is false → /api/ai/chat keeps close→abort + run endpoints 404.
     detachedRunsEnabled,

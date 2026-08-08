@@ -403,6 +403,29 @@ def test_create_search_agent(report_client: TestClient) -> None:
     assert data["tools_json"] == ["email_search_fulltext"]
 
 
+def test_create_report_agent_persists_normalized_description(report_client: TestClient) -> None:
+    response = report_client.post(
+        "/api/report-agents",
+        json={
+            "id": "weekly_description",
+            "type": "report",
+            "title": "Weekly",
+            "description": "  Weekly status summary  ",
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["data"]["description"] == "Weekly status summary"
+
+
+def test_create_agent_rejects_overlong_description(report_client: TestClient) -> None:
+    response = report_client.post(
+        "/api/report-agents",
+        json={"id": "too_long_description", "type": "report", "description": "x" * 1001},
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def test_create_agent_conflict_409(report_client: TestClient) -> None:
     """id 已存在 → 409 E_CONFLICT。"""
     r = report_client.post("/api/report-agents", json={"id": _AGENT_ID, "type": "report"})

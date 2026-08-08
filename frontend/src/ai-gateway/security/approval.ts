@@ -133,6 +133,8 @@ export interface ApprovalVerifyResult {
 /** Default approval validity window (5 min) — long enough for a human to review a card,
  *  short enough that a stale approval can't be replayed much later. */
 export const DEFAULT_APPROVAL_TTL_MS = 5 * 60 * 1000
+export const NORMAL_APPROVAL_TTL_MS = 86_400_000
+export const HIGH_RISK_OUTBOUND_APPROVAL_TTL_MS = 7_200_000
 
 /** Canonical JSON: object keys sorted recursively so hashing is order-independent
  *  (two inputs that differ only in key order hash equal). Arrays keep order. */
@@ -164,18 +166,21 @@ export function hashApprovalInput(input: unknown): string {
 export class ApprovalGuard {
   private readonly store = new Map<string, ApprovalRecord>()
   private readonly ttlMs: number
+  private readonly ttlMsForTool?: (toolName: string) => number
   private readonly now: () => number
   private readonly genId: () => string
   private readonly genIdempotency: () => string
 
   constructor(opts?: {
     ttlMs?: number
+    ttlMsForTool?: (toolName: string) => number
     now?: () => number
     genId?: () => string
     /** Phase 04b — injectable idempotency-key generator (deterministic in tests). */
     genIdempotency?: () => string
   }) {
     this.ttlMs = opts?.ttlMs ?? DEFAULT_APPROVAL_TTL_MS
+    this.ttlMsForTool = opts?.ttlMsForTool
     this.now = opts?.now ?? (() => Date.now())
     this.genId = opts?.genId ?? (() => `apr-${randomUUID()}`)
     this.genIdempotency = opts?.genIdempotency ?? (() => `idem-${randomUUID()}`)
@@ -213,7 +218,7 @@ export class ApprovalGuard {
       // blocking (outbound send) carries a one-shot idempotency key Python's send ledger keys on.
       ...(risk === 'blocking' ? { idempotencyKey: this.genIdempotency() } : {}),
       createdAt,
-      expiresAt: createdAt + this.ttlMs
+      expiresAt: createdAt + (this.ttlMsForTool?.(toolName) ?? this.ttlMs)
     }
     this.store.set(toolCallId, record)
     return record

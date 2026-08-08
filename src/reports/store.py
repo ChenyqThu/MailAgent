@@ -38,6 +38,7 @@ _AGENT_PATCH_FIELDS = {
     "tool_policy_json",  # v30: custom agent 工具收窄（allowed_tools 交集；NULL=不额外收窄）
     "budget_json",  # v30: custom agent 预算（runs/day + runtime；legacy max_steps 宽容忽略）
     "avatar_json",  # v42: agent visual identity（shape/palette/variant_id；NULL=按 id 派生）
+    "description",  # v43: agent description（NULL=未设置）
 }
 
 # schedule_json 解析不出 cadence（空 / NULL / 非法 / 缺键 —— CLI 新建 report agent 的默认
@@ -163,6 +164,7 @@ class ReportStore:
         *,
         type: str = "report",
         title: Optional[str] = None,
+        description: Optional[str] = None,
         enabled: bool = False,
         model: Optional[str] = None,
         prompt: Optional[str] = None,
@@ -179,10 +181,10 @@ class ReportStore:
             raise ValueError(f"report_agent {agent_id!r} already exists")
         with self._connection() as conn:
             conn.execute(
-                "INSERT INTO report_agent (id, type, enabled, title, model, prompt, "
-                "tools_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO report_agent (id, type, enabled, title, description, model, prompt, "
+                "tools_json, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (
-                    agent_id, type, 1 if enabled else 0, title, model, prompt,
+                    agent_id, type, 1 if enabled else 0, title, description, model, prompt,
                     tools_json, time.time(),
                 ),
             )

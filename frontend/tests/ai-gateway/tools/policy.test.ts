@@ -54,6 +54,11 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // S5 W3 — custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED), all classified
     // capability_change (2 silent reads + 4 edit writes).
     customAgentToolsEnabled: true,
+    customAgentCallEnabled: true,
+    parentSessionId: 1,
+    findSessionByParentToolCall: () => null,
+    createAgentCallSession: () => 2,
+    setAgentSessionJobId: () => undefined,
     // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS), classified read
     // (2 silent reads) + domain_write (3 edit writes, 恒 HITL).
     calendarToolsEnabled: true,

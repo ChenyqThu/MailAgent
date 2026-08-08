@@ -29,6 +29,7 @@ import { createExecTools } from './exec'
 import { createSkillSupplyTools } from './skill_supply'
 import { createCustomAgentTools } from './agents'
 import { createAgentCatalogTools } from './agent_catalog'
+import { createAgentCallTools } from './agent_call'
 import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
 import { createNotionAgentTools } from './notion_agent'
 import {
@@ -148,6 +149,17 @@ export interface BuildGatewayToolsOpts {
    *  The SAME flag gates the S4 headless kernel, so off (default) → not added → ToolSet byte-identical
    *  to the S4 set. */
   customAgentToolsEnabled?: boolean
+  customAgentCallEnabled?: boolean
+  parentSessionId?: number | null
+  findSessionByParentToolCall?: (parentSessionId: number, parentToolCallId: string) => number | null
+  createAgentCallSession?: (input: {
+    agentId: string
+    title: string
+    parentSessionId: number
+    parentToolCallId: string
+    invokedBy: 'user' | 'main_agent'
+  }) => number
+  setAgentSessionJobId?: (sessionId: number, jobId: number) => void
   /** calendar epic 4.1/4.2 (MAILAGENT_CALENDAR_AGENT_TOOLS) — when true AND approvalGuard is
    *  supplied, the five calendar tools are added: calendar_events_list / calendar_event_get
    *  (silent reads; event text comes back CALENDAR_EVENT-fenced) + calendar_event_reschedule /
@@ -446,6 +458,29 @@ export function buildGatewayTools(
         toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode
+      })
+    )
+  }
+  if (
+    contextMode === 'manual_chat' &&
+    opts.customAgentCallEnabled &&
+    opts.customAgentToolsEnabled &&
+    opts.approvalGuard &&
+    opts.parentSessionId != null &&
+    opts.findSessionByParentToolCall &&
+    opts.createAgentCallSession &&
+    opts.setAgentSessionJobId
+  ) {
+    Object.assign(
+      tools,
+      createAgentCallTools(opts.domain, collector, opts.approvalGuard, {
+        contextMode,
+        approvalMode: opts.approvalMode,
+        toolApprovalPrefs: prefTiers,
+        parentSessionId: opts.parentSessionId,
+        findSessionByParentToolCall: opts.findSessionByParentToolCall,
+        createAgentSession: opts.createAgentCallSession,
+        setAgentSessionJobId: opts.setAgentSessionJobId
       })
     )
   }

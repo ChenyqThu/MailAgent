@@ -247,6 +247,15 @@ function clipSummary(text: string, max = 180): string {
   return one.length > max ? `${one.slice(0, max)}…` : one
 }
 
+function escapeXml(value: string): string {
+  return value
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+    .replaceAll("'", '&apos;')
+}
+
 /** Resolve the finished run's step count (StreamTextResult.steps is a Promise). Best-effort → 0. */
 async function resolveSteps(result: { steps?: unknown }): Promise<number> {
   try {
@@ -284,7 +293,23 @@ export async function runHeadlessAgent(
   // id (derived from jobId) lets persistTurn's eager-write dedup behave.
   const taskPrompt = spec.prompt?.taskPrompt ?? ''
   const envelope = spec.prompt?.emailEnvelope ?? ''
-  const userText = envelope ? `${taskPrompt}\n\n${envelope}` : taskPrompt
+  const invocation = spec.invocation
+  const delegation = invocation
+    ? [
+        `<delegation_instruction from="main_agent">${escapeXml(invocation.instruction)}</delegation_instruction>`,
+        invocation.contextNote
+          ? `<context_note>${escapeXml(invocation.contextNote)}</context_note>`
+          : '',
+        invocation.references.length > 0
+          ? `<references>${invocation.references
+              .map((ref) => `${ref.type}:${escapeXml(String(ref.id))}`)
+              .join(', ')}</references>`
+          : ''
+      ]
+        .filter(Boolean)
+        .join('\n')
+    : ''
+  const userText = [taskPrompt, delegation, envelope].filter(Boolean).join('\n\n')
   const body: Record<string, unknown> = {
     messages: [
       { id: `agent-user-${opts.jobId}`, role: 'user', parts: [{ type: 'text', text: userText }] }
@@ -399,7 +424,18 @@ export async function runHeadlessAgent(
   } catch (err) {
     // A thrown drain failure. A budget/timeout abort OR a client (worker) disconnect surface as
     // `aborted` → E_BUDGET_TIME (ADR-003 D7); otherwise a structured upstream code.
-    if (abortSignal.aborted) return budgetTimeError(await resolveSteps(run.result))
+    if (abortSignal.aborted) {
+      if (abortSignal.reason === 'E_RUN_STOPPED') {
+        return {
+          ok: false,
+          outcome: 'error',
+          sessionId,
+          steps: await resolveSteps(run.result),
+          error: { code: 'E_RUN_STOPPED', message: 'Agent run stopped' }
+        }
+      }
+      return budgetTimeError(await resolveSteps(run.result))
+    }
     const { code, message } = normalizeAgentError(err)
     return {
       ok: false,
@@ -415,7 +451,18 @@ export async function runHeadlessAgent(
   // throw). Detect it here so an aborted run is never mislabeled 'completed'. The endpoint's
   // AbortSignal.timeout(maxRunSeconds) fires before the worker's http timeout (+margin), so an abort
   // here is dominantly budget exhaustion.
-  if (abortSignal.aborted || aborted) return budgetTimeError(steps)
+  if (abortSignal.aborted || aborted) {
+    if (abortSignal.reason === 'E_RUN_STOPPED') {
+      return {
+        ok: false,
+        outcome: 'error',
+        sessionId,
+        steps,
+        error: { code: 'E_RUN_STOPPED', message: 'Agent run stopped' }
+      }
+    }
+    return budgetTimeError(steps)
+  }
   if (streamError != null || errorText) {
     // Prefer the original error object (captured in onError) over the chunk's errorText so the code
     // stays structured (E_QUOTA / E_UPSTREAM) instead of collapsing everything into E_AGENT.
@@ -429,12 +476,21 @@ export async function runHeadlessAgent(
     // paused_handoff — the turn stopped at an approval gate. NOT a success: the worker stamps
     // result_json.approval_state='pending' (island on → a card awaits; island off → it's effectively
     // void). The read side must never render this as "completed".
+    const pending = sessionId == null ? null : cfg.approvalStash?.peekBySession(sessionId)
     return {
       ok: true,
       outcome: 'paused_handoff',
       sessionId,
       steps,
-      summary: clipSummary(assistantText)
+      summary: clipSummary(assistantText),
+      ...(cfg.approvalTtlResponseEnabled && pending
+        ? {
+            approvalTtlSec: Math.max(
+              1,
+              Math.ceil((pending.expiresAt - pending.createdAt) / 1000)
+            )
+          }
+        : {})
     }
   }
   const usage = await Promise.resolve(run.result.usage).catch(() => undefined)

@@ -83,8 +83,16 @@ export async function resumeApprovalRun(
   const stash = cfg.approvalStash
   if (!stash) return { ok: false, status: 'not_found', error: 'approval stash not wired' }
 
-  const entry = stash.claim(input.toolCallId, input.resumeToken)
-  if (!entry) return { ok: false, status: 'not_found', error: 'no live pending approval' }
+  const claimed = stash.claimDetailed(input.toolCallId, input.resumeToken)
+  const entry = claimed.entry
+  if (!entry) {
+    if (claimed.reason === 'expired') cfg.markApprovalExpired?.(input.toolCallId)
+    return {
+      ok: false,
+      status: 'not_found',
+      error: claimed.reason === 'expired' ? 'approval expired' : 'no live pending approval'
+    }
+  }
 
   // Renderer-won-the-race short-circuit: if a TERMINAL decision already landed in-app (approved +
   // executed → usedAt, OR rejected → rejectedAt; ApprovalGuard.isResolved), do NOT re-run/re-persist.
@@ -247,6 +255,9 @@ export async function resumeApprovalRun(
         }
       }
       // A real guard/write error (hash mismatch, expiry, domain failure) → surface it.
+      if (auditErrorCode(audit.outputJson) === 'E_APPROVAL_EXPIRED') {
+        cfg.markApprovalExpired?.(entry.toolCallId)
+      }
       const errMsg = parseAuditError(audit.outputJson)
       return {
         ok: false,
@@ -269,6 +280,15 @@ export async function resumeApprovalRun(
     status: 'rejected',
     sessionId: entry.sessionId,
     summary: clipSummary(assistantText)
+  }
+}
+
+function auditErrorCode(outputJson: string): string | null {
+  try {
+    const parsed = JSON.parse(outputJson) as { error?: unknown }
+    return typeof parsed.error === 'string' ? parsed.error : null
+  } catch {
+    return null
   }
 }
 

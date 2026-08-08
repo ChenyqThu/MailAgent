@@ -759,6 +759,7 @@ export const customAgentCreateSchema = z
   .object({
     id: z.string().min(1).max(128),
     title: z.string().min(1).max(200).optional(),
+    description: z.string().max(1000).nullable().optional(),
     prompt: z.string().max(20_000).optional(),
     model: z.string().max(128).optional(),
     enabled: z.boolean().optional(),
@@ -783,6 +784,7 @@ export const customAgentUpdateSchema = z
   .object({
     agent_id: z.string().min(1).max(128),
     title: z.string().min(1).max(200).optional(),
+    description: z.string().max(1000).nullable().optional(),
     prompt: z.string().max(20_000).nullable().optional(),
     model: z.string().max(128).optional(),
     enabled: z.boolean().optional(),
@@ -810,6 +812,31 @@ export const customAgentRunNowSchema = z.object({
   agent_id: z.string().min(1).max(128)
 })
 export type CustomAgentRunNowInput = z.infer<typeof customAgentRunNowSchema>
+
+export const customAgentCallSchema = z
+  .object({
+    agent_id: z.string().min(1).max(128),
+    instruction: z.string().min(1).max(8000),
+    context_note: z.string().max(4000).optional(),
+    source_session_id: z.number().int().positive().optional(),
+    email_internal_ids: z.array(z.number().int().positive()).max(50).optional(),
+    email_thread_ids: z.array(z.string().min(1).max(256)).max(50).optional(),
+    calendar_event_ids: z.array(z.string().min(1).max(512)).max(50).optional(),
+    notion_refs: z
+      .array(
+        z.object({
+          connector_id: z.string().min(1).max(128),
+          object_id: z.string().min(1).max(512),
+          object_type: z.string().min(1).max(128).optional()
+        })
+      )
+      .max(50)
+      .optional(),
+    report_ids: z.array(z.string().min(1).max(256)).max(50).optional(),
+    user_requested: z.boolean().optional()
+  })
+  .strict()
+export type CustomAgentCallInput = z.infer<typeof customAgentCallSchema>
 
 // ── calendar schemas (calendar epic 4.1/4.2) — the agent reads the local calendar SSoT and
 //    proposes reschedule / RSVP / delete. Behind MAILAGENT_CALENDAR_AGENT_TOOLS. Reads are silent

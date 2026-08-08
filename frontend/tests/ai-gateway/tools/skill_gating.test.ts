@@ -46,6 +46,11 @@ function buildAllTools() {
     skillInstallToolsEnabled: true,
     // S5 W3 — custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED), same rationale (CORE_UNGATED).
     customAgentToolsEnabled: true,
+    customAgentCallEnabled: true,
+    parentSessionId: 1,
+    findSessionByParentToolCall: () => null,
+    createAgentCallSession: () => 2,
+    setAgentSessionJobId: () => undefined,
     // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS), same rationale
     // (classified CORE_UNGATED).
     calendarToolsEnabled: true,
@@ -243,6 +248,11 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       execToolsEnabled: true,
       skillInstallToolsEnabled: true,
       customAgentToolsEnabled: true,
+      customAgentCallEnabled: true,
+      parentSessionId: 1,
+      findSessionByParentToolCall: () => null,
+      createAgentCallSession: () => 2,
+      setAgentSessionJobId: () => undefined,
       calendarToolsEnabled: true,
       contextMode: 'manual_chat', // manual probe isolates the mount gate from the mode floor
       agentRunContext: { agentId: 'dms', skills: [] }

@@ -288,7 +288,7 @@ class AgentRunWorker:
         ``derive_agent_run_state`` 读态（expired 亦在彼处按龄推导, 不写库）。
         """
         out: dict[str, Any] = {}
-        for key in ("sessionId", "steps", "outcome", "summary", "usage"):
+        for key in ("sessionId", "steps", "outcome", "summary", "usage", "approvalTtlSec"):
             val = resp.get(key)
             if val is not None:
                 out[key] = val

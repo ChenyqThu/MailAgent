@@ -16,13 +16,23 @@ function triggerSummary(trigger: unknown): Record<string, unknown> | null {
   }
 }
 
-async function catalogRow(domain: MailAgentDomainClient, agent: any, signal?: AbortSignal) {
+async function catalogRow(
+  domain: MailAgentDomainClient,
+  agent: {
+    id: string
+    title: string
+    description?: string | null
+    enabled: boolean
+    trigger?: unknown
+  },
+  signal?: AbortSignal
+) {
   const runs = await domain.listAgentRuns(agent.id, 1, signal)
   const latest = runs[0]
   return {
     id: agent.id,
     title: agent.title,
-    description: null,
+    description: agent.description ?? null,
     enabled: agent.enabled === true,
     trigger: triggerSummary(agent.trigger),
     latestRun: latest ? { finishedAt: latest.finishedAt, state: latest.state } : null

@@ -28,7 +28,10 @@ registry：builtin 懒 enable-覆盖行 + installed 全行）· `agent_skill_eve
   rollback + `profile_hash()` + `installed_rows_fingerprint()`。`resolve_enabled` 三级回退
   `row ?? manifest.default ?? code.default`。
 - `src/agent_config/templates.py` —— SOUL/AGENT/RULES/USER seed 模板（SOUL **surface-agnostic**，
-  不谎称「正在看某封邮件」）。
+  不谎称「正在看某封邮件」）。**AGENT 模板 2026-08-07（harness 优化 P0）已更新为 `plan_update`
+  真实用法**（复杂多步任务用 / 单检索总结翻译禁）——此前模板要求调用一个不存在的工具；配套幂等
+  迁移只升级**未编辑过**的默认 AGENT 文档（`WHERE content=旧默认逐字`，用户改过一个字都不动），
+  见 ai-sdk-gateway-architecture.md §13.24.1。
 - `src/agent_config/projections.py` —— MEMORY（复用 `ChatDb.memory_summary`）/ SKILLS 只读投影 +
   `compute_installed_skills_hash` + `skill_overrides_map` + `resolved_skills`（Settings 用）。
 - `src/agent_config/validator.py` —— RULES deny-list（**negation-aware**：「禁止无需确认发送」放行）。

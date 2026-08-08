@@ -213,6 +213,7 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         "type": agent_type,
         "enabled": bool(agent.get("enabled")),
         "title": agent.get("title") or "",
+        "description": agent.get("description"),
         "schedule": schedule,
         "window_hours": agent.get("window_hours"),
         "prompt": prompt or (get_default_prompt(cadence) if agent_type == "report" else ""),
@@ -273,6 +274,17 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
         db_patch["kos_enrich"] = 1 if raw["kos_enrich"] else 0
     if "title" in raw:
         db_patch["title"] = str(raw["title"])
+    if "description" in raw:
+        description = raw["description"]
+        if description is None:
+            db_patch["description"] = None
+        elif isinstance(description, str):
+            normalized = description.strip()
+            if len(normalized) > 1000:
+                raise ValueError("description must be at most 1000 characters")
+            db_patch["description"] = normalized or None
+        else:
+            raise ValueError("description must be string or null")
     if "prompt" in raw:
         # None / "" → 重置为默认（存空，resolve_agent 回填）。
         p = raw["prompt"]

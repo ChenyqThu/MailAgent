@@ -1000,6 +1000,7 @@
       "custom_agent_update": "Update custom agent",
       "custom_agent_delete": "Delete custom agent",
       "custom_agent_run_now": "Run custom agent now",
+      "custom_agent_call": "Call custom agent",
       "web_fetch": "Fetch web page",
       "web_search": "Web search",
       "run_command": "Run command",
@@ -1023,6 +1024,42 @@
         "done": "Done",
         "blocked": "Blocked",
         "unavailable": "Unavailable"
+      }
+    },
+    "agentCallCard": {
+      "title": "Custom agent call",
+      "approvalTitle": "Approve custom agent call",
+      "approve": "Approve call",
+      "unknownAgent": "Unknown custom agent",
+      "noInstruction": "No instruction provided.",
+      "contextCount": "Context references: {count}",
+      "invalid": "This custom agent result could not be displayed.",
+      "queuedHint": "Waiting for an execution slot.",
+      "runningHint": "The custom agent is working.",
+      "waitingHint": "The child session is waiting for confirmation. Open it to review and decide there.",
+      "emptyAnswer": "The run completed without a final answer.",
+      "truncated": "The displayed answer was truncated.",
+      "duration": "Duration: {seconds}s",
+      "unknownError": "The child run did not provide an error message.",
+      "openSession": "Open child session",
+      "cancel": "Cancel queued run",
+      "stop": "Stop child run",
+      "status": {
+        "queued": "Queued",
+        "running": "Running",
+        "waiting_approval": "Waiting for confirmation",
+        "completed": "Completed",
+        "failed": "Failed",
+        "stopped": "Stopped"
+      },
+      "risk": {
+        "loading": "Loading current permission summary…",
+        "unavailable": "Permission summary unavailable; review the target and instruction carefully.",
+        "readonly": "Read-only and report capabilities only",
+        "exec": "Local files and commands",
+        "web": "Web access: {level}",
+        "connectors": "External services: {count}",
+        "tools": "Allowed tools: {count}"
       }
     },
     "customAgentCard": {
@@ -4138,6 +4175,9 @@
       "newTileHint": "An autonomous agent triggered on a schedule or email events",
       "enableHint": "When enabled, runs automatically on the trigger below (won't run when trigger is None).",
       "titlePlaceholder": "e.g. DMS approval helper",
+      "descriptionLabel": "Description",
+      "descriptionHint": "Shown in the Agent Catalog so the main agent can choose the right specialist.",
+      "descriptionPlaceholder": "Briefly describe when this agent should be used",
       "promptLabel": "Task prompt",
       "promptHint": "Instructions injected on each trigger (what the agent should do)",
       "promptPlaceholder": "Describe the task the agent should complete on each trigger",

@@ -49,7 +49,7 @@ export class ActiveRunRegistry {
     this.now = opts?.now ?? (() => Date.now())
   }
 
-  /** True when a LIVE (non-stale) run is registered for this session. */
+  /** True when a live run is registered for this session. Aborted entries age out defensively. */
   hasActive(sessionId: number): boolean {
     return this.getActive(sessionId) != null
   }
@@ -58,20 +58,20 @@ export class ActiveRunRegistry {
   getActive(sessionId: number): ActiveRunEntry | null {
     const entry = this.bySession.get(sessionId)
     if (!entry) return null
-    if (this.now() - entry.startedAt >= STALE_RUN_MS) return null
+    if (this.now() - entry.startedAt >= STALE_RUN_MS && entry.controller.signal.aborted) return null
     return { runId: entry.runId, sessionId: entry.sessionId, startedAt: entry.startedAt }
   }
 
   /**
-   * Register a new run for a session. Returns the minted runId, or null when a LIVE run already
-   * holds the session (the caller rejects the second POST with 409). A STALE entry (drain wedged
-   * past STALE_RUN_MS) is aborted + replaced rather than blocking the session forever.
+   * Register a new run for a session. Returns the minted runId, or null when a live run already
+   * holds the session (the caller rejects the second POST with 409). A non-aborted headless run may
+   * legitimately outlive STALE_RUN_MS, so only an already-aborted entry can be replaced.
    */
   register(sessionId: number, controller: AbortController): { runId: string } | null {
     const existing = this.bySession.get(sessionId)
     if (existing) {
-      if (this.now() - existing.startedAt < STALE_RUN_MS) return null
-      // stale — abort the wedged run defensively and take the slot.
+      if (!existing.controller.signal.aborted) return null
+      // already aborted — take the slot; its stale finally cannot evict this newer run.
       try {
         existing.controller.abort()
       } catch {
@@ -98,7 +98,7 @@ export class ActiveRunRegistry {
     if (!entry) return { stopped: false }
     this.bySession.delete(sessionId)
     try {
-      entry.controller.abort()
+      entry.controller.abort('E_RUN_STOPPED')
     } catch {
       /* already settled */
     }

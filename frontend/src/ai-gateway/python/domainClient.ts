@@ -514,6 +514,19 @@ export interface DomainExecFileWriteResult {
 export interface DomainPolicyVerdict {
   decision: 'auto_allow' | 'ask'
   rule_id: number | null
+  audit_status?: 'auto_user_requested' | 'auto_delegation_readonly'
+}
+
+export interface DomainAgentCallEnqueueResult {
+  jobId: number
+  wasCreated: boolean
+  sessionId: number
+}
+
+export interface DomainAgentRunDetail extends AgentRunHistoryItem {
+  agentTitle: string
+  finalAnswer?: string | null
+  finalAnswerTruncated?: boolean
 }
 
 /** One PolicyRule (camelCase, GET/POST /api/agent/policy/rules). `dangerous` = a wide interpreter
@@ -1600,6 +1613,33 @@ export class MailAgentDomainClient {
       'POST',
       `/agent-runs/${jobId}/approval-state`,
       { body: { state }, signal }
+    )
+  }
+
+  enqueueAgentCall(
+    body: {
+      agent_id: string
+      fire_key: string
+      session_id: number
+      invocation: Record<string, unknown>
+    },
+    signal?: AbortSignal
+  ): Promise<DomainAgentCallEnqueueResult> {
+    return this._req<DomainAgentCallEnqueueResult>('POST', '/agent-runs/call', { body, signal })
+  }
+
+  getAgentRun(jobId: number, signal?: AbortSignal): Promise<DomainAgentRunDetail> {
+    return this._req<DomainAgentRunDetail>('GET', `/agent-runs/${jobId}`, { signal })
+  }
+
+  cancelAgentRun(
+    jobId: number,
+    signal?: AbortSignal
+  ): Promise<{ cancelled: boolean; state?: string }> {
+    return this._req<{ cancelled: boolean; state?: string }>(
+      'POST',
+      `/agent-runs/${jobId}/cancel`,
+      { signal }
     )
   }
 

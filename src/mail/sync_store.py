@@ -591,7 +591,10 @@ class SyncStore:
     # v42 (custom-agent epic W4, 2026-07): report_agent +avatar_json (nullable TEXT)。空值由前端
     #                按 agent_id 确定性派生 shape/palette/variant；显式 JSON 保存用户在 custom
     #                agent 编辑器选择的身份。纯展示元数据，不改变内置 agent 行为。
-    DB_VERSION = 42  # v42: report_agent avatar identity
+    # v43 (harness optimization P2, 2026-08): report_agent +description TEXT。NULL/空 = 未设置；
+    #                wire 写侧 strip 并限制 1000 字符，读侧原样投影。additive ALTER，无回填。
+    #                回滚 (回退 v43): 列可留（旧代码无害）；必要时降 db_version。
+    DB_VERSION = 43  # v43: report_agent description
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1593,7 +1596,8 @@ class SyncStore:
                 budget_json TEXT,              -- v30: custom agent 预算（runs/day + runtime；存量 max_steps 宽容忽略；NULL=全默认）
                 mark_read_after_processing INTEGER, -- v32: preprocess 处理后自动标已读（NULL=默认 true）
                 context_source TEXT,           -- v38: preprocess 参考上下文源 'standing_docs'|'notion_context'（NULL=按 LLM_CONTEXT_PAGE_ID 继承派生）
-                avatar_json TEXT               -- v42: 可选头像 shape/palette/variant JSON；NULL=按 agent id 派生
+                avatar_json TEXT,              -- v42: 可选头像 shape/palette/variant JSON；NULL=按 agent id 派生
+                description TEXT               -- v43: 可选 agent 描述；NULL=未设置
             )
         """)
         # report: ReportDoc 块模型 SSoT（blocks_json）+ 列表展示冗余字段。
@@ -2362,6 +2366,19 @@ class SyncStore:
             except sqlite3.OperationalError as e:
                 _migration_guard_columns(
                     cursor, "report_agent", {"avatar_json"}, "v42 migration", e,
+                )
+
+        # === v43: report_agent description ===
+        if current_version < 43:
+            try:
+                cursor.execute("PRAGMA table_info(report_agent)")
+                _agent_cols = {row[1] for row in cursor.fetchall()}
+                if "description" not in _agent_cols:
+                    cursor.execute("ALTER TABLE report_agent ADD COLUMN description TEXT")
+                    logger.info("v43 migration: report_agent +description")
+            except sqlite3.OperationalError as e:
+                _migration_guard_columns(
+                    cursor, "report_agent", {"description"}, "v43 migration", e,
                 )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块

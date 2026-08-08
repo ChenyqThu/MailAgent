@@ -27,6 +27,7 @@ from loguru import logger
 from pydantic import BaseModel
 
 from src.agents.fence import fence_email_envelope
+from src.agents.run_queue import enqueue_agent_run
 from src.agents.run_state import AGENT_RUN_STATES, derive_agent_run_state
 from src.agents.trigger import (
     EmailFilterTrigger,
@@ -41,8 +42,18 @@ from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_job_repo, get_report_store, get_repository
 from src.sync.async_jobs import AsyncJob
+from src.chat.db import ChatDb
 
 router = APIRouter(prefix="/api/agent-runs", tags=["agent-runs"])
+
+FINAL_ANSWER_MAX_CHARS = 10_000
+
+
+class AgentCallEnqueueBody(BaseModel):
+    agent_id: str
+    fire_key: str
+    session_id: int
+    invocation: dict[str, Any]
 
 
 # ── per-agent 工具面常量（S5 ADR-004 §5.1 / D3，单源 —— spec 投影与 Settings tool-options
@@ -363,6 +374,12 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         "budget": {"maxRunSeconds": budget.max_run_seconds},
         "sessionTitle": _session_title(agent, agent_id, fired_at),
     }
+    invocation = params.get("invocation")
+    session_id = params.get("session_id")
+    if isinstance(session_id, int) and session_id > 0:
+        spec["sessionId"] = session_id
+    if isinstance(invocation, dict):
+        spec["invocation"] = invocation
     fallback = _parse_fallback_models(agent.get("fallback_models_json"))
     if fallback is not None:
         spec["fallbackModels"] = fallback
@@ -463,6 +480,7 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
         "agentId": job.target_key,
         "state": state,
         "outcome": result.get("outcome"),
+        "summary": result.get("summary"),
         "approvalState": result.get("approval_state"),
         "sessionId": result.get("sessionId"),
         "createdAt": job.created_at,
@@ -475,6 +493,99 @@ def _run_history_item(job: AsyncJob) -> dict[str, Any]:
             if job.finished_at is not None else None
         ),
     }
+
+
+@router.post("/call", dependencies=[Depends(verify_cf_access)])
+async def enqueue_agent_call(request: Request, body: AgentCallEnqueueBody):
+    _require_flag()
+    if not body.fire_key.startswith("agent-call:"):
+        raise APIError(
+            "E_INVALID_ARG",
+            "fire_key must start with 'agent-call:'",
+            http_status=400,
+            source="agent-runs",
+        )
+    agent = get_report_store().get_agent(body.agent_id)
+    if agent is None or agent.get("type") != "custom" or not agent.get("enabled"):
+        raise APIError(
+            "E_NOT_FOUND", f"custom agent {body.agent_id!r} not found or disabled",
+            http_status=404, source="agent-runs",
+        )
+    budget = parse_budget(agent.get("budget_json"))
+    job_id, was_created = enqueue_agent_run(
+        get_job_repo(),
+        agent_id=body.agent_id,
+        trigger_kind="manual",
+        fire_key=body.fire_key,
+        budget=budget,
+        params={"session_id": body.session_id, "invocation": body.invocation},
+    )
+    job = get_job_repo().get(job_id)
+    params = job.params if job and isinstance(job.params, dict) else {}
+    return success_envelope(
+        {
+            "jobId": job_id,
+            "wasCreated": was_created,
+            "sessionId": params.get("session_id") or body.session_id,
+        },
+        request=request,
+        source="agent-runs",
+    )
+
+
+@router.get("/{job_id:int}", dependencies=[Depends(verify_cf_access)])
+async def get_agent_run(request: Request, job_id: int):
+    _require_flag()
+    job = get_job_repo().get(job_id)
+    if job is None or job.job_type != "agent_run":
+        raise APIError("E_NOT_FOUND", f"agent run {job_id} not found", http_status=404, source="agent-runs")
+    item = _run_history_item(job)
+    agent = get_report_store().get_agent(job.target_key)
+    item["agentTitle"] = ((agent or {}).get("title") or job.target_key).strip()
+    if item["state"] in {"completed", "paused_approved", "paused_rejected"}:
+        answer = None
+        session_id = item.get("sessionId")
+        if isinstance(session_id, int):
+            message = ChatDb().get_latest_assistant_message(session_id)
+            if message:
+                answer = message.get("content")
+        result = job.result if isinstance(job.result, dict) else {}
+        if not isinstance(answer, str) or not answer:
+            summary = result.get("summary")
+            answer = summary if isinstance(summary, str) else None
+        if isinstance(answer, str):
+            item["finalAnswerTruncated"] = len(answer) > FINAL_ANSWER_MAX_CHARS
+            item["finalAnswer"] = answer[:FINAL_ANSWER_MAX_CHARS]
+        else:
+            item["finalAnswer"] = None
+            item["finalAnswerTruncated"] = False
+    return success_envelope(item, request=request, source="agent-runs")
+
+
+@router.post("/{job_id:int}/cancel", dependencies=[Depends(verify_cf_access)])
+async def cancel_agent_run(request: Request, job_id: int):
+    _require_flag()
+    repo = get_job_repo()
+    job = repo.get(job_id)
+    if job is None or job.job_type != "agent_run":
+        raise APIError("E_NOT_FOUND", f"agent run {job_id} not found", http_status=404, source="agent-runs")
+    cancelled = repo.mark_terminal(
+        job_id,
+        status="aborted",
+        result={"outcome": "stopped", "reason": "user_cancelled"},
+        expect_status="queued",
+    )
+    if cancelled:
+        return success_envelope({"cancelled": True}, request=request, source="agent-runs")
+    current = repo.get(job_id)
+    return success_envelope(
+        {
+            "cancelled": False,
+            "state": _run_history_item(current)["state"] if current else "failed",
+        },
+        request=request,
+        source="agent-runs",
+    )
 
 
 def _annotate_auto_whitelist(items: list[dict[str, Any]]) -> None:

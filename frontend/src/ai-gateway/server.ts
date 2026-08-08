@@ -568,6 +568,7 @@ async function handleApprovalResolve(
     const code = (e as { code?: unknown }).code
     const message = e instanceof Error ? e.message : String(e)
     if (typeof code === 'string') {
+      if (code === 'E_APPROVAL_EXPIRED') cfg.markApprovalExpired?.(toolCallId)
       writeJson(res, approvalErrorStatus(code), { error: code, hint: message })
     } else {
       // Unexpected non-ApprovalError on a security-adjacent endpoint — log for forensics
@@ -832,8 +833,11 @@ async function handleAgentRun(
 
   // Pre-create the persist session (origin='agent'). A failure degrades to a non-persisted run
   // rather than aborting (the tool loop + approval still work; only the history row is missing).
-  let sessionId: number | null = null
+  let sessionId: number | null = spec.sessionId ?? null
   try {
+    if (sessionId != null) {
+      // custom_agent_call eagerly created the child session and stored it in the job spec.
+    } else {
     const firedAt = Date.parse(spec.trigger.firedAt)
     sessionId = cfg.createAgentSession({
       agentId: spec.agentId,
@@ -843,6 +847,7 @@ async function handleAgentRun(
       triggerKind: spec.trigger.kind,
       triggerFiredAt: Number.isFinite(firedAt) ? firedAt : null
     })
+    }
   } catch (err) {
     console.error(
       '[ai-gateway] /api/ai/agent-run createAgentSession failed (run continues unsaved)',
@@ -862,7 +867,10 @@ async function handleAgentRun(
     clientClosed = true
     clientAbort.abort()
   })
-  const merged = AbortSignal.any([clientAbort.signal, AbortSignal.timeout(maxRunSeconds * 1000)])
+  const stopController = new AbortController()
+  const lease = sessionId != null ? cfg.activeRuns?.register(sessionId, stopController) ?? null : null
+  const timeoutSignal = AbortSignal.timeout(maxRunSeconds * 1000)
+  const merged = AbortSignal.any([clientAbort.signal, timeoutSignal, stopController.signal])
 
   // runHeadlessAgent normalizes every drain failure, but prepareChatRun sits before its try block —
   // an unexpected throw there must still answer the worker (same belt handleApprovalDecide wears);
@@ -873,6 +881,8 @@ async function handleAgentRun(
   } catch (err) {
     console.error('[ai-gateway] /api/ai/agent-run crashed', err)
     if (!clientClosed) writeJson(res, 500, { error: 'E_AGENT_RUN_CRASH' })
+  } finally {
+    if (lease && sessionId != null) cfg.activeRuns?.release(sessionId, lease.runId)
   }
 }
 

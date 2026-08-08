@@ -1000,6 +1000,7 @@
       "custom_agent_update": "修改 Custom Agent",
       "custom_agent_delete": "删除 Custom Agent",
       "custom_agent_run_now": "立即运行 Custom Agent",
+      "custom_agent_call": "调用 Custom Agent",
       "web_fetch": "抓取网页",
       "web_search": "联网搜索",
       "run_command": "执行命令",
@@ -1023,6 +1024,42 @@
         "done": "已完成",
         "blocked": "受阻",
         "unavailable": "不可用"
+      }
+    },
+    "agentCallCard": {
+      "title": "调用 Custom Agent",
+      "approvalTitle": "确认调用 Custom Agent",
+      "approve": "批准调用",
+      "unknownAgent": "未知 Custom Agent",
+      "noInstruction": "未提供任务指令。",
+      "contextCount": "上下文引用：{count}",
+      "invalid": "无法显示这条 Custom Agent 调用结果。",
+      "queuedHint": "正在等待执行槽位。",
+      "runningHint": "Custom Agent 正在处理任务。",
+      "waitingHint": "子会话正在等待确认。请打开子会话，并只在那里审阅和决定。",
+      "emptyAnswer": "运行已完成，但没有最终答复。",
+      "truncated": "当前展示的答复已截断。",
+      "duration": "耗时：{seconds} 秒",
+      "unknownError": "子运行未提供错误详情。",
+      "openSession": "打开子会话",
+      "cancel": "取消排队",
+      "stop": "停止子运行",
+      "status": {
+        "queued": "排队中",
+        "running": "运行中",
+        "waiting_approval": "等待确认",
+        "completed": "已完成",
+        "failed": "失败",
+        "stopped": "已停止"
+      },
+      "risk": {
+        "loading": "正在读取当前权限摘要…",
+        "unavailable": "无法读取权限摘要，请仔细核对目标 Agent 与任务指令。",
+        "readonly": "仅包含读取与报告能力",
+        "exec": "本机文件与命令",
+        "web": "联网权限：{level}",
+        "connectors": "外部服务：{count}",
+        "tools": "可用工具：{count}"
       }
     },
     "customAgentCard": {
@@ -4138,6 +4175,9 @@
       "newTileHint": "定时或邮件事件触发的自主 Agent",
       "enableHint": "启用后按下方触发条件自动运行（触发为「无」时不会自动跑）。",
       "titlePlaceholder": "如 DMS 审批助手",
+      "descriptionLabel": "说明",
+      "descriptionHint": "显示在 Agent Catalog 中，帮助主 Agent 选择合适的专家。",
+      "descriptionPlaceholder": "简要说明这个 Agent 适合处理什么任务",
       "promptLabel": "任务提示词",
       "promptHint": "触发时注入的任务指令（告诉 Agent 要做什么）",
       "promptPlaceholder": "描述这个 Agent 每次触发时要完成的任务",

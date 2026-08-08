@@ -517,7 +517,21 @@ function CustomAgentCard({
             </span>
           )}
         </div>
-        <div style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-3))', marginTop: 3 }}>
+        {cfg.description && (
+          <div
+            style={{
+              fontSize: 12.5,
+              color: 'rgb(var(--ink-fg-2))',
+              marginTop: 3,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+              whiteSpace: 'nowrap'
+            }}
+          >
+            {cfg.description}
+          </div>
+        )}
+        <div style={{ fontSize: 12, color: 'rgb(var(--ink-fg-3))', marginTop: 2 }}>
           {triggerSummary}
         </div>
       </div>

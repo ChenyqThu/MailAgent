@@ -143,6 +143,7 @@ function specSummary(
     id: agent.id,
     type: agent.type,
     title: agent.title,
+    description: agent.description ?? null,
     enabled: agent.enabled,
     model: agent.model,
     prompt: agent.prompt,
@@ -164,6 +165,7 @@ function specSummary(
 /** The friendly-input shape create/update share (the ALLOWLISTED fields, rev3.1 §7). */
 interface ConfigPatchInput {
   title?: string
+  description?: string | null
   prompt?: string | null
   model?: string
   enabled?: boolean
@@ -219,6 +221,7 @@ function toConfigPatch(
   }
   const patch: ReportConfigPatch = {}
   if (input.title !== undefined) patch.title = input.title
+  if (input.description !== undefined) patch.description = input.description
   if (input.prompt !== undefined) patch.prompt = input.prompt
   if (input.model !== undefined) patch.model = input.model
   if (input.enabled !== undefined) patch.enabled = input.enabled

@@ -28,9 +28,8 @@ import { randomUUID } from 'node:crypto'
 import type { MailAgentUIMessage } from '@shared/assistant/uiMessage'
 import type { AgentContextMode, AgentRunContext } from './tools/policy'
 
-/** 30 min — long enough for a human to notice the island card and come back; matches the island ack
- *  pending TTL (island_agent.DEFAULT_AGENT_ACK_TTL_SEC) AND the extended ApprovalGuard TTL the
- *  lifecycle sets when island agent is on (so verify() doesn't expire before the stash does). */
+/** Legacy/off fallback. New paused rows carry their per-tool TTL through result.approvalTtlSec;
+ *  Python run_state uses this 30min value only for older rows without that field. */
 export const DEFAULT_STASH_TTL_MS = 30 * 60 * 1000
 
 /** Cap the pending map so a stream of never-clicked approvals can't grow unbounded (each paused turn
@@ -92,11 +91,18 @@ export interface StashedApprovalRun extends StashInput {
 export class ApprovalRunStash {
   private readonly store = new Map<string, StashedApprovalRun>()
   private readonly ttlMs: number
+  private readonly ttlMsForTool?: (toolName: string) => number
   private readonly now: () => number
   private readonly genToken: () => string
 
-  constructor(opts?: { ttlMs?: number; now?: () => number; genToken?: () => string }) {
+  constructor(opts?: {
+    ttlMs?: number
+    ttlMsForTool?: (toolName: string) => number
+    now?: () => number
+    genToken?: () => string
+  }) {
     this.ttlMs = opts?.ttlMs ?? DEFAULT_STASH_TTL_MS
+    this.ttlMsForTool = opts?.ttlMsForTool
     this.now = opts?.now ?? (() => Date.now())
     this.genToken = opts?.genToken ?? (() => randomUUID())
   }
@@ -117,7 +123,7 @@ export class ApprovalRunStash {
       ...input,
       resumeToken,
       createdAt,
-      expiresAt: createdAt + this.ttlMs
+      expiresAt: createdAt + (this.ttlMsForTool?.(input.toolName) ?? this.ttlMs)
     })
     return resumeToken
   }
@@ -128,16 +134,23 @@ export class ApprovalRunStash {
    * legitimate approval. An expired entry is dropped + rejected. A missing entry → null (fail-closed:
    * gateway restarted / already claimed).
    */
-  claim(toolCallId: string, resumeToken: string): StashedApprovalRun | null {
+  claimDetailed(
+    toolCallId: string,
+    resumeToken: string
+  ): { entry: StashedApprovalRun | null; reason: 'ok' | 'not_found' | 'expired' | 'token_mismatch' } {
     const entry = this.store.get(toolCallId)
-    if (!entry) return null
+    if (!entry) return { entry: null, reason: 'not_found' }
     if (this.now() >= entry.expiresAt) {
       this.store.delete(toolCallId)
-      return null
+      return { entry: null, reason: 'expired' }
     }
-    if (entry.resumeToken !== resumeToken) return null // wrong token → do NOT delete (no grief)
+    if (entry.resumeToken !== resumeToken) return { entry: null, reason: 'token_mismatch' }
     this.store.delete(toolCallId) // valid → one-shot
-    return entry
+    return { entry, reason: 'ok' }
+  }
+
+  claim(toolCallId: string, resumeToken: string): StashedApprovalRun | null {
+    return this.claimDetailed(toolCallId, resumeToken).entry
   }
 
   /** Read-only probe (never mutates / never expires it) — for diagnostics. */

@@ -152,7 +152,7 @@ import { resolveDataRoot } from '../db'
 // src/chat/db.py 头注释（Python 侧 SELECT * 读，不建表、不写这一列）。
 // v24 (harness optimization P1, task 08-07) — headless session provenance. Three nullable
 // source columns plus two read indexes; parent/invocation columns intentionally remain P2.
-const CHAT_DB_VERSION = 24
+const CHAT_DB_VERSION = 25
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1140,6 +1140,30 @@ function migrate(db: Database.Database): void {
         ON ai_chat_sessions(trigger_id, trigger_fired_at DESC)`)
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '24')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  if (current < 25) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      if (!hasColumn(db, 'ai_chat_sessions', 'parent_session_id')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN parent_session_id INTEGER')
+      }
+      if (!hasColumn(db, 'ai_chat_sessions', 'parent_tool_call_id')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN parent_tool_call_id TEXT')
+      }
+      if (!hasColumn(db, 'ai_chat_sessions', 'invoked_by')) {
+        db.exec('ALTER TABLE ai_chat_sessions ADD COLUMN invoked_by TEXT')
+      }
+      db.exec(`CREATE INDEX IF NOT EXISTS idx_chat_sessions_parent
+        ON ai_chat_sessions(parent_session_id, created_at ASC)`)
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '25')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

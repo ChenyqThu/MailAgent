@@ -121,7 +121,7 @@ describe('chat_db — v6 → v7 anchor migration', () => {
     // v20 — ai_chat_sessions.last_read_at; v21 — ai_chat_sessions.pinned_at/starred;
     // v22 — origin value-domain registers 'im'; v23 — context tokens;
     // v24 — trigger provenance columns + agent/trigger query indexes.
-    expect(ver).toBe('24')
+    expect(ver).toBe('25')
 
     // Anchor columns added + backfilled for the pre-existing email row.
     const row = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 1').get() as {

@@ -261,6 +261,9 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
   test('字段在场：title / prompt / trigger seg / time budget', async () => {
     renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
     expect(screen.getByPlaceholderText('如 DMS 审批助手')).toBeTruthy()
+    expect(
+      screen.getByPlaceholderText('简要说明这个 Agent 适合处理什么任务').getAttribute('maxlength')
+    ).toBe('1000')
     expect(screen.getByPlaceholderText(/描述这个 Agent/)).toBeTruthy()
     // trigger seg 三态
     expect(screen.getByText('无（草稿）')).toBeTruthy()
@@ -281,11 +284,15 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), {
       target: { value: '每日巡检' }
     })
+    fireEvent.change(screen.getByPlaceholderText('简要说明这个 Agent 适合处理什么任务'), {
+      target: { value: '每天检查关键项目状态' }
+    })
     // 选「定时」→ 构建器默认「每周 周一~周五 09:00」（与旧 cron 占位 0 9 * * 1-5 同义）
     fireEvent.click(screen.getByText('定时'))
     fireEvent.click(screen.getByText('创建'))
     await vi.waitFor(() => expect(mockCreateAgent).toHaveBeenCalledTimes(1))
     expect(mockCreateAgent.mock.calls[0][0].type).toBe('custom')
+    expect(mockCreateAgent.mock.calls[0][0].description).toBe('每天检查关键项目状态')
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
     const patch = mockSetConfig.mock.calls[0][1]
     expect(patch.trigger.kind).toBe('schedule')
@@ -303,7 +310,25 @@ describe('CustomAgentDrawer — 新建（两段式）', () => {
     expect(Array.isArray(patch.tool_policy.allowed_tools)).toBe(true)
     expect(patch.budget.max_steps).toBeUndefined()
     expect(patch.budget.max_run_seconds).toBe(1800)
+    expect(patch.description).toBe('每天检查关键项目状态')
     await vi.waitFor(() => expect(onClose).toHaveBeenCalled())
+  })
+
+  test('description 编辑值往返到 config patch，清空时发送 null', async () => {
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(
+      <CustomAgentDrawer
+        cfg={makeCustomCfg({ description: '用于处理 DMS 审批任务' })}
+        open
+        onClose={() => {}}
+      />
+    )
+    const field = screen.getByPlaceholderText('简要说明这个 Agent 适合处理什么任务')
+    expect((field as HTMLTextAreaElement).value).toBe('用于处理 DMS 审批任务')
+    fireEvent.change(field, { target: { value: '   ' } })
+    fireEvent.click(screen.getByText('保存'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].description).toBeNull()
   })
 
   test('构建器全能力：改成「每月 最后一个周五 18:30」原样落 wire', async () => {

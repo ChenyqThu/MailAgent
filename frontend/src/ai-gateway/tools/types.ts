@@ -94,6 +94,9 @@ export interface GatewayToolAuditEntry {
     | 'auto_accept_edits'
     | 'auto_bypass'
     | 'auto_reversible'
+    | 'auto_user_requested'
+    | 'auto_delegation_readonly'
+    | 'approval_expired'
   /** S2 W1 — exec-tool whitelist audit (chat_tool_call.whitelist_rule_id): the PolicyRule id that
    *  auto-allowed this run without a card (approvalStatus='auto_whitelist'). null/omitted otherwise. */
   whitelistRuleId?: number | null
@@ -373,7 +376,7 @@ export function auditedWriteTool<I>(
     policyAuditStatus?: 'auto_whitelist' | 'auto_tool_mode'
     run: (
       input: I,
-      ctx: { userEdited: boolean; signal: AbortSignal | undefined }
+      ctx: { userEdited: boolean; signal: AbortSignal | undefined; toolCallId: string }
     ) => Promise<unknown>
   },
   collector: GatewayToolAuditCollector,
@@ -415,6 +418,10 @@ export function auditedWriteTool<I>(
   // approval_status='auto_whitelist' + whitelist_rule_id. Presence of a key = "this call was
   // whitelist-skipped", so execute overrides the default 'approved' audit. Cleared on read.
   const whitelistRuleIdByCall = new Map<string, number | null>()
+  const whitelistAuditStatusByCall = new Map<
+    string,
+    'auto_user_requested' | 'auto_delegation_readonly'
+  >()
 
   // 07-16 (codex r1 P2-4) — same idiom for the card-skip paths of needsApproval: stash WHY the
   // card was skipped so execute audits a distinct approval_status ('auto_bypass' /
@@ -480,6 +487,9 @@ export function auditedWriteTool<I>(
           .then((verdict) => {
             if (verdict.decision === 'auto_allow') {
               whitelistRuleIdByCall.set(toolCallId, verdict.rule_id)
+              if (verdict.audit_status) {
+                whitelistAuditStatusByCall.set(toolCallId, verdict.audit_status)
+              }
               return false
             }
             return true
@@ -556,7 +566,7 @@ export function auditedWriteTool<I>(
           status: 'error',
           durationMs: Date.now() - start,
           confirmationTier: opts.risk,
-          approvalStatus: 'rejected'
+          approvalStatus: code === 'E_APPROVAL_EXPIRED' ? 'approval_expired' : 'rejected'
         })
         throw new ToolExecutionError(code, message)
       }
@@ -572,13 +582,20 @@ export function auditedWriteTool<I>(
       const autoSkip = autoSkipByCall.get(toolCallId)
       autoSkipByCall.delete(toolCallId)
       const approvalStatus = wasWhitelisted
-        ? (opts.policyAuditStatus ?? 'auto_whitelist')
+        ? ((whitelistAuditStatusByCall.get(toolCallId) as GatewayToolAuditEntry['approvalStatus']) ??
+          opts.policyAuditStatus ??
+          'auto_whitelist')
         : (autoSkip ?? (userEdited ? 'edited' : 'approved'))
+      whitelistAuditStatusByCall.delete(toolCallId)
       // userEditedInputJson records the EXECUTED (effective) input when edited; input_json
       // stays the model-proposed (history) input — matching the legacy audit shape.
       const userEditedJson = userEdited ? safeJson(effectiveInput) : null
       try {
-        const output = await opts.run(effectiveInput as I, { userEdited, signal: abortSignal })
+        const output = await opts.run(effectiveInput as I, {
+          userEdited,
+          signal: abortSignal,
+          toolCallId
+        })
         collector.push({
           toolUseId: toolCallId,
           toolName: opts.name,
@@ -770,7 +787,7 @@ export function auditedSendTool<I>(
           status: 'error',
           durationMs: Date.now() - start,
           confirmationTier: AUDIT_TIER,
-          approvalStatus: 'rejected'
+          approvalStatus: code === 'E_APPROVAL_EXPIRED' ? 'approval_expired' : 'rejected'
         })
         throw new ToolExecutionError(code, message)
       }

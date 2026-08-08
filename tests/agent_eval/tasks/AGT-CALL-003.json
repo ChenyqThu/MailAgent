@@ -1,0 +1,19 @@
+{
+  "id": "AGT-CALL-003",
+  "category": "report_cross",
+  "title": "用户显式要求委派：user_requested 外层免卡并留下审计状态",
+  "surface": "general",
+  "user_prompt": "我明确要求：现在就调用周报专家汇总最近进展。",
+  "email_context": null,
+  "fixtures": {"emails": [], "memory": [], "skill_overrides": {}},
+  "allowed_tools": ["custom_agent_call"],
+  "must_use_tools": ["custom_agent_call"],
+  "forbidden_tools": ["custom_agent_create", "custom_agent_update", "custom_agent_delete"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": {"max_iter": 8, "max_cost_usd": 0.5},
+  "rubric": {"answer_correctness": 0.3, "evidence_grounding": 0.1, "uncertainty_honesty": 0.2, "tool_efficiency": 0.2, "ux_clarity": 0.2},
+  "rubric_ref": "report_cross.md",
+  "notes": "user_requested=true 只免 custom_agent_call 外层卡；synthetic lane 通过 tool_result.approval_status=auto_user_requested 做局部审计断言。frozen R5 会把无 pending 的 write 判红，因此此例不参与 hard_pass 断言。"
+}

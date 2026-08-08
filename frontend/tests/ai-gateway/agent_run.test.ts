@@ -10,7 +10,7 @@
 // error passthrough, createAgentSession wiring). This wave adds ZERO gateway tools — agent-run is an
 // endpoint, not a tool.
 
-import { afterEach, describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 import { APICallError, simulateReadableStream } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
 
@@ -189,6 +189,51 @@ describe('resolveAgentRunSeconds', () => {
 })
 
 describe('headless execution discipline system channel', () => {
+  test('delegation invocation appends an XML-escaped envelope after the fixed task prompt', async () => {
+    const captured = { system: '', user: '' }
+    const cfg: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => capturePromptModel(captured),
+      buildTools: () => ({}),
+      persistTurn: () => {}
+    }
+    const result = await runHeadlessAgent(
+      cfg,
+      {
+        jobId: 7,
+        spec: makeSpec({
+          invocation: {
+            instruction: 'Check <priority> & "quote"',
+            contextNote: "owner's note",
+            references: [
+              { type: 'session', id: 12 },
+              { type: 'report', id: 'weekly' }
+            ],
+            parentSessionId: 5,
+            parentToolCallId: 'tc-call',
+            invokedBy: 'main_agent',
+            userRequested: false
+          }
+        }),
+        sessionId: 44
+      },
+      new AbortController().signal
+    )
+    expect(result.outcome).toBe('completed')
+    expect(captured.user.indexOf('总结今天的邮件')).toBeLessThan(
+      captured.user.indexOf('<delegation_instruction')
+    )
+    expect(captured.user).toContain(
+      '<delegation_instruction from="main_agent">Check &lt;priority&gt; &amp; &quot;quote&quot;</delegation_instruction>'
+    )
+    expect(captured.user).toContain('<context_note>owner&apos;s note</context_note>')
+    expect(captured.user).toContain('<references>session:12, report:weekly</references>')
+    expect(captured.user).not.toContain('Check <priority>')
+  })
+
   test('headless run gets the trusted discipline while task/envelope stay in the user channel', async () => {
     const captured = { system: '', user: '' }
     const thirdPartyMarker = 'THIRD_PARTY_EMAIL_PROMPT_FRAGMENT'
@@ -1231,6 +1276,7 @@ describe('runHeadlessAgent — drain outcomes', () => {
     expect(result.ok).toBe(true)
     expect(result.outcome).toBe('paused_handoff')
     expect(result.sessionId).toBe(55)
+    expect(result.approvalTtlSec).toBeUndefined()
     expect(stash.size()).toBe(1) // island on → stashed for server-side (island) resume
     // S5 W4 (ADR-004 §4.4) — the pause FREEZES the per-agent tool context into the stash (from the
     // pause-time server cfg, wrapCfgForAgentRun set it): the island resume rebuilds the exact same
@@ -1287,6 +1333,39 @@ describe('runHeadlessAgent — drain outcomes', () => {
     expect(stash.peekBySession(55)?.toolName).toBe('email_draft_reply')
     // but the island announce leg is island-only → never fired.
     expect(announced).toHaveLength(0)
+  })
+
+  test('approval TTL is emitted only when the custom-agent-call flag enables the new response shape', async () => {
+    const guard = new ApprovalGuard()
+    const stash = new ApprovalRunStash({ ttlMs: 123_000 })
+    const cfg: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () =>
+        mockToolCallModel('email_draft_reply', { internal_id: 5, body_markdown: 'x' }),
+      buildTools: (collector, _am, mode) =>
+        buildGatewayTools(
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            contextMode: mode
+          },
+          collector
+        ),
+      approvalStash: stash,
+      approvalTtlResponseEnabled: true,
+      persistTurn: () => {}
+    }
+    const result = await runHeadlessAgent(
+      cfg,
+      { jobId: 7, spec: makeSpec(), sessionId: 55 },
+      new AbortController().signal
+    )
+    expect(result.outcome).toBe('paused_handoff')
+    expect(result.approvalTtlSec).toBe(123)
   })
 
   test('upstream APICallError 429 (no abort) → outcome error E_QUOTA, never mislabeled completed', async () => {
@@ -1357,6 +1436,34 @@ describe('runHeadlessAgent — drain outcomes', () => {
     expect(result.ok).toBe(false)
     expect(result.outcome).toBe('error')
     expect(result.error?.code).toBe('E_BUDGET_TIME')
+  })
+
+  test('explicit stop abort is distinguished from budget timeout', async () => {
+    const ac = new AbortController()
+    const cfg: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () =>
+        new MockLanguageModelV3({
+          doStream: async () => {
+            ac.abort('E_RUN_STOPPED')
+            const error = new Error('stopped')
+            error.name = 'AbortError'
+            throw error
+          }
+        }),
+      buildTools: () => ({}),
+      persistTurn: () => {}
+    }
+    const result = await runHeadlessAgent(
+      cfg,
+      { jobId: 7, spec: makeSpec(), sessionId: 55 },
+      ac.signal
+    )
+    expect(result.outcome).toBe('error')
+    expect(result.error?.code).toBe('E_RUN_STOPPED')
   })
 })
 
@@ -1455,6 +1562,18 @@ describe('POST /api/ai/agent-run', () => {
         triggerFiredAt: Date.parse('2026-07-03T09:00:00Z')
       }
     ])
+  })
+
+  test('eager custom-agent-call session is reused without creating a second session', async () => {
+    const createAgentSession = vi.fn(() => 99)
+    const base = await startWith({
+      fetchAgentRunSpec: async () => makeSpec({ sessionId: 77 }),
+      createAgentSession
+    })
+    const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
+    expect(res.status).toBe(200)
+    expect((await res.json()).sessionId).toBe(77)
+    expect(createAgentSession).not.toHaveBeenCalled()
   })
 
   test('createAgentSession failure → run continues unsaved (sessionId null), still 200', async () => {

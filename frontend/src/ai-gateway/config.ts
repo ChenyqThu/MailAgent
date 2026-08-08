@@ -180,7 +180,8 @@ export interface AiGatewayConfig {
      *  wrapper (wrapCfgForAgentRun) structurally never forwards this parameter, so per-tool
      *  convenience can never leak into an unattended run. null/absent → every write asks
      *  (fail-closed), byte-identical to pre-WP-11. */
-    toolApprovalPrefs?: GatewayToolApprovalPrefs | null
+    toolApprovalPrefs?: GatewayToolApprovalPrefs | null,
+    parentSessionId?: number | null
   ) => ToolSet
   /** Test-harness-only override for deterministic single-step fixtures. Production never sets this;
    *  normal manual/headless runs use chatRun's 10k internal sentinel. */
@@ -260,6 +261,7 @@ export interface AiGatewayConfig {
    *  ApprovalGuard.peek (risk / reason / expiry) + optional A2UI. Returns null when no record is
    *  found → the mirror falls back to a minimal fail-closed interrupt. Omitted → same fallback. */
   resolveApprovalRequest?: (info: ApprovalRequestResolveInfo) => ToolApprovalRequestPayload | null
+  markApprovalExpired?: (toolCallId: string) => void
   /** Phase 06 (context injection; always injected since S3). Returns the standing-context
    *  config (/chat/config projection) used to build streamText `system`. Set by the Electron wrapper
    *  ONLY when the flag is on; it fetches the SAME serve-api /chat/config the legacy runtime uses
@@ -343,6 +345,9 @@ export interface AiGatewayConfig {
    *  turn pauses awaiting approval; POST /api/ai/approval/decide claims + resumes from it. Omitted →
    *  no server-side resume (renderer path only). */
   approvalStash?: ApprovalRunStash
+  /** P2 custom_agent_call — emit per-entry approvalTtlSec on paused headless results. Main-process
+   *  flag only; absent/false preserves the legacy result shape. */
+  approvalTtlResponseEnabled?: boolean
   /** Part B — fire-and-forget announce a paused approval to the island (lifecycle → serve-api
    *  /api/island/agent/announce). Called by makePersistOnFinish AFTER stashing, with the resumeToken
    *  the stash minted. 🔴 MUST be fire-and-forget (returns void, never awaited) so a slow/failed

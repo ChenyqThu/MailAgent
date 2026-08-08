@@ -112,6 +112,7 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'custom_agent_update',
   'custom_agent_delete',
   'custom_agent_run_now',
+  'custom_agent_call',
   // web
   'web_fetch',
   'web_search',

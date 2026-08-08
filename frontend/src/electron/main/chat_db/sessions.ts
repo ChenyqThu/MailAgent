@@ -197,11 +197,14 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
  */
 export function createAgentSession(input: {
   agentId: string
-  jobId: number
+  jobId?: number | null
   title: string
   triggerId?: string | null
   triggerKind?: string | null
   triggerFiredAt?: number | null
+  parentSessionId?: number | null
+  parentToolCallId?: string | null
+  invokedBy?: 'user' | 'main_agent' | null
 }): number {
   const db = getChatDb()
   const now = Date.now()
@@ -210,20 +213,43 @@ export function createAgentSession(input: {
       `INSERT INTO ai_chat_sessions
         (email_id, anchor_type, anchor_id, backend_kind, backend_model,
          backend_agent_page_id, title, created_at, updated_at, origin, agent_id, agent_job_id,
-         trigger_id, trigger_kind, trigger_fired_at)
-       VALUES (NULL, 'general', NULL, 'ai-sdk', NULL, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?)`
+         trigger_id, trigger_kind, trigger_fired_at, parent_session_id, parent_tool_call_id, invoked_by)
+       VALUES (NULL, 'general', NULL, 'ai-sdk', NULL, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       input.title,
       now,
       now,
       input.agentId,
-      String(input.jobId),
+      input.jobId == null ? null : String(input.jobId),
       input.triggerId ?? null,
       input.triggerKind ?? null,
-      input.triggerFiredAt ?? null
+      input.triggerFiredAt ?? null,
+      input.parentSessionId ?? null,
+      input.parentToolCallId ?? null,
+      input.invokedBy ?? null
     )
   return Number(result.lastInsertRowid)
+}
+
+export function findSessionByParentToolCall(
+  parentSessionId: number,
+  parentToolCallId: string
+): number | null {
+  const row = getChatDb()
+    .prepare(
+      `SELECT id FROM ai_chat_sessions
+       WHERE parent_session_id = ? AND parent_tool_call_id = ?
+       ORDER BY created_at ASC, id ASC LIMIT 1`
+    )
+    .get(parentSessionId, parentToolCallId) as { id: number } | undefined
+  return row ? Number(row.id) : null
+}
+
+export function setAgentSessionJobId(sessionId: number, jobId: number): void {
+  getChatDb()
+    .prepare('UPDATE ai_chat_sessions SET agent_job_id = ? WHERE id = ?')
+    .run(String(jobId), sessionId)
 }
 
 /**

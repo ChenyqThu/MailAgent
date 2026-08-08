@@ -55,6 +55,8 @@ export { closeChatDb, getChatDb, resolveChatDbPath } from './chat_db/connection'
 export {
   createAgentSession,
   createImSession,
+  findSessionByParentToolCall,
+  setAgentSessionJobId,
   createNewSession,
   deleteSession,
   getFirstUserText,
@@ -68,6 +70,8 @@ export {
   updateSessionStarred,
   updateSessionTitle
 } from './chat_db/sessions'
+
+export { markToolCallApprovalExpired } from './chat_db/tool_calls'
 
 export {
   abortStreamingMessages,

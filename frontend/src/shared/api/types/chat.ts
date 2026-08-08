@@ -92,6 +92,20 @@ export interface AgentRunSpec {
   budget: { maxRunSeconds: number }
   fallbackModels?: string[]
   sessionTitle: string
+  sessionId?: number
+  invocation?: {
+    instruction: string
+    contextNote?: string
+    references: Array<{
+      type: 'session' | 'report' | 'notion' | 'email' | 'calendar'
+      id: string | number
+      title?: string
+    }>
+    parentSessionId: number
+    parentToolCallId: string
+    invokedBy: 'user' | 'main_agent'
+    userRequested: boolean
+  }
 }
 
 /** runHeadlessAgent's terminal result. The /api/ai/agent-run endpoint maps this to the wire shape
@@ -105,6 +119,7 @@ export interface HeadlessAgentResult {
   steps: number
   summary?: string
   usage?: { inputTokens?: number | null; outputTokens?: number | null; totalTokens?: number | null }
+  approvalTtlSec?: number
   /** Present only on outcome==='error'. The endpoint sends `error.code` (a STRING) to the worker,
    *  which stores it as async_jobs.last_error (AgentRunWorker._map_response str()s resp.error). */
   error?: { code: string; message: string }

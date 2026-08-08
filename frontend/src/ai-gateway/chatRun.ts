@@ -437,13 +437,16 @@ export async function prepareChatRun(
   // (wrapCfgForAgentRun injects it); manual callers pass undefined there and the prefs ride the
   // 5th slot. The headless wrapper's 3-arg signature structurally drops the 5th argument, so a
   // headless run can never receive the prefs even if this call site changes.
-  const tools = cfg.buildTools?.(
-    auditEntries,
-    approvalMode,
-    contextMode,
-    undefined,
-    toolApprovalPrefs
-  )
+  const tools = sessionId == null
+    ? cfg.buildTools?.(auditEntries, approvalMode, contextMode, undefined, toolApprovalPrefs)
+    : cfg.buildTools?.(
+        auditEntries,
+        approvalMode,
+        contextMode,
+        undefined,
+        toolApprovalPrefs,
+        sessionId
+      )
   const hasTools = tools != null && Object.keys(tools).length > 0
   // W6 — the run holds the suggest_followups tool (manual chat with a real gateway ToolSet). Drives
   // (a) the follow-up guidance block in the system prompt below and (b) the hasToolCall stop

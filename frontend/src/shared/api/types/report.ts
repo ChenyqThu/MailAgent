@@ -312,6 +312,7 @@ export interface ReportAgentConfig {
   type: string
   enabled: boolean
   title: string
+  description?: string | null
   schedule: ReportSchedule
   window_hours: number | null
   prompt: string
@@ -374,6 +375,7 @@ export type AgentAvatarConfig = AgentAvatarGenerated | AgentAvatarImage
 export interface ReportConfigPatch {
   enabled?: boolean
   title?: string
+  description?: string | null
   /** null / '' → 重置为内置默认 prompt。 */
   prompt?: string | null
   model?: string
@@ -412,6 +414,7 @@ export interface ReportAgentCreateInput {
    *  trigger/tool_policy/budget 经 setConfig 补齐）。 */
   type?: 'search' | 'report' | 'preprocess' | 'custom'
   title?: string
+  description?: string | null
   enabled?: boolean
   model?: string | null
   prompt?: string | null
@@ -441,6 +444,8 @@ export interface AgentRunHistoryItem {
   state: AgentRunState
   /** gateway 终态 outcome（completed | paused_handoff | error），可空。 */
   outcome?: string | null
+  /** Gateway one-line progress/final summary when result_json carries one. */
+  summary?: string | null
   /** 审批终态（pending | approved | rejected），仅 paused_handoff 有意义。 */
   approvalState?: string | null
   /** 该 run 的 ai_chat.db session（可打开查看 headless 对话历史）。 */

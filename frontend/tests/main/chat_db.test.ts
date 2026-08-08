@@ -31,6 +31,7 @@ import {
   deleteMessagesFromId,
   deleteSession,
   getChatDb,
+  findSessionByParentToolCall,
   getMessage,
   getOrCreateSession,
   getSession,
@@ -40,10 +41,12 @@ import {
   listMessages,
   listSessionsForEmail,
   listToolCallsForMessage,
+  markToolCallApprovalExpired,
   resolveChatDbPath,
   updateMessage,
   updateSessionPinned,
   updateSessionStarred,
+  setAgentSessionJobId,
   updateToolCall
 } from '../../src/electron/main/chat_db'
 
@@ -142,7 +145,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // WP-15 context 环 (08-05): bumped to 23 — ai_chat_messages.context_tokens (末 step 的
     // inputTokens = 上下文占用；≠ tokens_input 的多 step 求和).
     // harness optimization P1 (08-07): v24 — trigger provenance columns + query indexes.
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -253,6 +256,24 @@ describe('chat_db — path + schema bootstrap', () => {
     )
   })
 
+  test('v25 parent provenance supports eager create + replay lookup + later job linkage', () => {
+    const id = createAgentSession({
+      agentId: 'child',
+      title: 'Child',
+      parentSessionId: 7,
+      parentToolCallId: 'tool-1',
+      invokedBy: 'main_agent'
+    })
+    expect(findSessionByParentToolCall(7, 'tool-1')).toBe(id)
+    expect(findSessionByParentToolCall(7, 'missing')).toBeNull()
+    setAgentSessionJobId(id, 99)
+    const session = getSession(id)
+    expect(session?.parent_session_id).toBe(7)
+    expect(session?.parent_tool_call_id).toBe('tool-1')
+    expect(session?.invoked_by).toBe('main_agent')
+    expect(session?.agent_job_id).toBe('99')
+  })
+
   test('v23 database upgrades to v24 with the three nullable provenance columns', () => {
     const db = getChatDb()
     db.exec('DROP INDEX IF EXISTS idx_chat_sessions_trigger_fired')
@@ -269,7 +290,7 @@ describe('chat_db — path + schema bootstrap', () => {
       expect.arrayContaining(['trigger_id', 'trigger_kind', 'trigger_fired_at'])
     )
     const version = migrated.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as { value: string }
-    expect(version.value).toBe('24')
+    expect(version.value).toBe('25')
   })
 
   test('createAgentSession — an interactive session reads origin as null/undefined (not agent)', () => {
@@ -289,7 +310,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
   })
 
   test('fresh DB v23 — ai_chat_messages.context_tokens 与 tokens_input 是两列两语义', () => {
@@ -353,7 +374,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
     const cols = reopened.prepare('PRAGMA table_info(ai_chat_sessions)').all() as Array<{
       name: string
     }>
@@ -417,7 +438,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
     // bumped to v5; 需求 5 bumped to v6; P2a → v8; P4 Phase 02 → v9 → a v1 DB now
     // climbs the whole ladder to v17.
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // v6 column present after climbing from v1.
@@ -522,7 +543,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('24')
+    ).toBe('25')
     // Narrow CHECK gone, widened CHECK in place.
     const sql = (
       db
@@ -567,7 +588,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('24')
+    ).toBe('25')
     // Simulate the crash window: roll the meta back to v3 while the physical
     // schema (content_offset + thinking columns, v4 table shape) stays at v6.
     db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
@@ -579,7 +600,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
     // Columns are still present exactly once (no duplication, no loss).
     const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
       name: string
@@ -1004,6 +1025,32 @@ describe('chat_db — chat_tool_call (Sprint 19)', () => {
     expect(JSON.parse(fresh.user_edited_input_json!).body_markdown).toContain('Wednesday')
   })
 
+  test('approval expiry marks only the latest matching tool-use row', () => {
+    const older = seedAssistantMessage()
+    const newer = seedAssistantMessage()
+    appendToolCall({
+      messageId: older.messageId,
+      toolUseId: 'toolu_reused',
+      toolName: 'email_archive',
+      inputJson: '{}',
+      confirmationTier: 'edit',
+      status: 'pending'
+    })
+    appendToolCall({
+      messageId: newer.messageId,
+      toolUseId: 'toolu_reused',
+      toolName: 'email_archive',
+      inputJson: '{}',
+      confirmationTier: 'edit',
+      status: 'pending'
+    })
+    markToolCallApprovalExpired('toolu_reused')
+    expect(getToolCallByUseId(older.messageId, 'toolu_reused')?.approval_status).toBeNull()
+    expect(getToolCallByUseId(newer.messageId, 'toolu_reused')?.approval_status).toBe(
+      'approval_expired'
+    )
+  })
+
   test('listToolCallsForMessage returns rows in insertion order', () => {
     const { messageId } = seedAssistantMessage()
     appendToolCall({
@@ -1249,7 +1296,7 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -1392,7 +1439,7 @@ describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () =
       value: string
     }
     // v4 DB now climbs the whole ladder to v17 (content_offset added at v5).
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
     // Column present, pre-existing row reads NULL (degrade path in renderer).
     const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('content_offset')
@@ -1454,7 +1501,7 @@ describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
     // Column present, pre-existing row reads NULL (no thinking block in renderer).
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('thinking')
@@ -1790,7 +1837,7 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
           value: string
         }
       ).value
-    ).toBe('24')
+    ).toBe('25')
     // The 'rebuild' backfill indexed the pre-existing row: trigram CJK substring hits.
     expect(ftsHits('超时复盘')).toBe(1)
     expect(ftsHits('redis')).toBe(1)
@@ -1840,7 +1887,7 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
     const ver = getChatDb()
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
     // Rebuild is idempotent — the row is indexed exactly once.
     expect(ftsHits('重入收敛')).toBe(1)
   })
@@ -1936,7 +1983,7 @@ describe('chat_db — v17 → v18 migration (chat_tool_call.whitelist_rule_id)',
           value: string
         }
       ).value
-    ).toBe('24')
+    ).toBe('25')
     expect(hasCol()).toBe(true)
   })
 
@@ -1949,7 +1996,7 @@ describe('chat_db — v17 → v18 migration (chat_tool_call.whitelist_rule_id)',
     const ver = getChatDb()
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('24')
+    expect(ver.value).toBe('25')
     expect(hasCol()).toBe(true)
   })
 })

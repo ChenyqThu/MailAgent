@@ -13,11 +13,13 @@ mandatory approval cards.
    - output: conversational result, saved report, or another clearly described deliverable.
 3. For an update, list or fetch the existing agent first. Preserve anything the user did not ask to
    change.
-4. Show a complete configuration summary: id/title, instructions, trigger, timezone, all six
+4. Optionally collect a description of at most 1000 characters. It explains when the main agent
+   should discover and choose this specialist in the Agent Catalog; it is not the run instruction.
+5. Show a complete configuration summary: id/title/description, instructions, trigger, timezone, all six
    capability tiers, output, daily run limit, maximum runtime, enabled state, and mounted skills.
-5. Ask the user to agree to that summary. Only then call the create or update tool. The tool's
+6. Ask the user to agree to that summary. Only then call the create or update tool. The tool's
    approval card is the final authorization gate; never bypass or pre-approve it.
-6. Report success only from the returned tool result. A rejected, failed, or missing result is not a
+7. Report success only from the returned tool result. A rejected, failed, or missing result is not a
    successful change.
 
 ## Capability vocabulary

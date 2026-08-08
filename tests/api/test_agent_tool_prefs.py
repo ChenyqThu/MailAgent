@@ -50,6 +50,7 @@ EXPECTED_FIXED_ASK = {
     "custom_agent_create",
     "custom_agent_update",
     "custom_agent_delete",
+    "custom_agent_call",
 }
 # D2=a：设 auto 需红警告 + 一次性确认。
 EXPECTED_DANGER_AUTO = {"calendar_event_delete", "notion_agent_chat"}

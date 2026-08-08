@@ -200,6 +200,123 @@ def test_pending_count_flag_off_404(client, runs_env, monkeypatch):
     assert client.get("/api/agent-runs/pending-count").status_code == 404
 
 
+# ── custom_agent_call enqueue / single-run / cancel ───────────────────────────
+
+
+class _AgentStoreStub:
+    def __init__(self, agent=None):
+        self.agent = agent or {
+            "id": "reader",
+            "type": "custom",
+            "enabled": True,
+            "title": "Reader",
+            "budget_json": None,
+        }
+
+    def get_agent(self, agent_id):
+        return self.agent if agent_id == self.agent["id"] else None
+
+
+def test_agent_call_enqueue_replay_reuses_job_and_original_session(
+    client, runs_env, monkeypatch
+):
+    monkeypatch.setattr(agent_runs, "get_report_store", lambda: _AgentStoreStub())
+    first = client.post(
+        "/api/agent-runs/call",
+        json={
+            "agent_id": "reader",
+            "fire_key": "agent-call:10:tc-1",
+            "session_id": 22,
+            "invocation": {"instruction": "summarize"},
+        },
+    )
+    second = client.post(
+        "/api/agent-runs/call",
+        json={
+            "agent_id": "reader",
+            "fire_key": "agent-call:10:tc-1",
+            "session_id": 99,
+            "invocation": {"instruction": "must not replace original params"},
+        },
+    )
+    assert first.status_code == second.status_code == 200
+    one = first.json()["data"]
+    two = second.json()["data"]
+    assert one == {"jobId": one["jobId"], "wasCreated": True, "sessionId": 22}
+    assert two == {"jobId": one["jobId"], "wasCreated": False, "sessionId": 22}
+    job = runs_env.repo.get(one["jobId"])
+    assert job.params["session_id"] == 22
+    assert job.params["invocation"] == {"instruction": "summarize"}
+
+
+def test_agent_call_enqueue_rejects_non_agent_call_fire_key(client, runs_env, monkeypatch):
+    monkeypatch.setattr(agent_runs, "get_report_store", lambda: _AgentStoreStub())
+    response = client.post(
+        "/api/agent-runs/call",
+        json={
+            "agent_id": "reader",
+            "fire_key": "cron:2026-08-08T09:00:00Z",
+            "session_id": 22,
+            "invocation": {"instruction": "summarize"},
+        },
+    )
+    assert response.status_code == 400
+    assert response.json()["error"]["code"] == "E_INVALID_ARG"
+    assert runs_env.repo.list_agent_runs(limit=10) == []
+
+
+def test_get_single_run_projects_title_and_truncates_latest_answer(
+    client, runs_env, monkeypatch
+):
+    monkeypatch.setattr(agent_runs, "get_report_store", lambda: _AgentStoreStub())
+    answer = "x" * (agent_runs.FINAL_ANSWER_MAX_CHARS + 7)
+
+    class _ChatDbStub:
+        def get_latest_assistant_message(self, session_id):
+            assert session_id == 7
+            return {"content": answer}
+
+    monkeypatch.setattr(agent_runs, "ChatDb", _ChatDbStub)
+    job_id = _enqueue_run(
+        runs_env.repo,
+        "reader",
+        status="succeeded",
+        result={"outcome": "completed", "sessionId": 7, "summary": "fallback"},
+    )
+    response = client.get(f"/api/agent-runs/{job_id}")
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["agentTitle"] == "Reader"
+    assert data["finalAnswer"] == answer[: agent_runs.FINAL_ANSWER_MAX_CHARS]
+    assert data["finalAnswerTruncated"] is True
+
+
+def test_get_single_run_flag_off_404(client, runs_env, monkeypatch):
+    job_id = _enqueue_run(runs_env.repo, "reader")
+    monkeypatch.setattr(agent_runs, "_custom_agents_enabled", lambda: False)
+    assert client.get(f"/api/agent-runs/{job_id}").status_code == 404
+
+
+def test_cancel_queued_run_uses_cas_and_records_stopped(client, runs_env):
+    job_id = _enqueue_run(runs_env.repo, "reader")
+    response = client.post(f"/api/agent-runs/{job_id}/cancel")
+    assert response.status_code == 200
+    assert response.json()["data"] == {"cancelled": True}
+    job = runs_env.repo.get(job_id)
+    assert job.status == "aborted"
+    assert job.result == {"outcome": "stopped", "reason": "user_cancelled"}
+
+
+def test_cancel_running_run_refuses_queued_cas(client, runs_env):
+    job_id = _enqueue_run(runs_env.repo, "reader")
+    claimed = runs_env.repo.claim_next(types=runs_env.repo.AGENT_JOB_TYPES)
+    assert claimed is not None and claimed.job_id == job_id
+    response = client.post(f"/api/agent-runs/{job_id}/cancel")
+    assert response.status_code == 200
+    assert response.json()["data"] == {"cancelled": False, "state": "running"}
+    assert runs_env.repo.get(job_id).status == "running"
+
+
 # ── 免卡 badge 分源投影（S6 W3-2，ADR-004 rev3.1 §4.4 / F#3）───────────────────────
 # rule-source（whitelist_rule_id 非空）与 grant-source（rule_id=null，per-tool）两桶分流。
 # 🔴 投影不得假设 rule_id 非空 —— grant 级免卡（open web_fetch / web_search）行天然 null。

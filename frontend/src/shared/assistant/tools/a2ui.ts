@@ -117,6 +117,7 @@ export const A2UI_COMPONENTS = {
   // and renders a before/after grant/skill diff (the payload carries ONLY the model's patch —
   // "before" can never come from model input).
   CustomAgentApprovalCard: 'CustomAgentApprovalCard',
+  CustomAgentCallCard: 'CustomAgentCallCard',
   // 1.5.0 dogfood (task 07-07) — the identity-only edit-tier approval card shared by web_fetch /
   // web_search / custom_agent_delete / custom_agent_run_now. These tools deliberately produce NO
   // audited ui_payload (componentForTool returns null for them, unchanged), so this key is a

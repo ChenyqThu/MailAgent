@@ -190,6 +190,7 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   custom_agent_update: 'capability_change',
   custom_agent_delete: 'capability_change',
   custom_agent_run_now: 'capability_change',
+  custom_agent_call: 'capability_change',
   // S2 W4 — skill_read is a silent read (its third-party content is SKILL_DOC-fenced at the tool).
   skill_read: 'read',
   // calendar epic 4.1 — calendar reads (event text is CALENDAR_EVENT-fenced at the tool).

@@ -196,15 +196,27 @@ async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
     # 结构闸（config_patch_to_db 非 dict → ValueError → 400）。放建行前 = 任何坏配置拒收且**不建
     # 行**（create 端点原子性；否则坏 tool_policy/budget 会在建行之后才 400 留下孤儿草稿行）。转换
     # 结果留到建行后 update 落库（store.create_agent 不接受这三列）。
-    v30_patch: Optional[dict[str, Any]] = None
+    create_patch: Optional[dict[str, Any]] = None
+    description_value: Optional[str] = None
+    if "description" in raw:
+        try:
+            description_value = wire.config_patch_to_db(
+                {"description": raw["description"]}
+            )["description"]
+        except ValueError as exc:
+            raise APIError("E_INVALID_ARG", str(exc), source="sqlite")
     if agent_type == "custom":
         from src.agents.trigger import validate_agent_config_patch
 
         try:
             validate_agent_config_patch(raw)
-            v30_raw = {k: raw[k] for k in ("trigger", "tool_policy", "budget") if k in raw}
-            if v30_raw:
-                v30_patch = wire.config_patch_to_db(v30_raw)
+            patch_raw = {
+                k: raw[k]
+                for k in ("trigger", "tool_policy", "budget")
+                if k in raw
+            }
+            if patch_raw:
+                create_patch = wire.config_patch_to_db(patch_raw)
         except ValueError as exc:
             raise APIError("E_INVALID_ARG", str(exc), source="sqlite")
     tools = raw.get("tools_json")
@@ -217,6 +229,7 @@ async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
             agent_id,
             type=agent_type,
             title=raw.get("title"),
+            description=description_value,
             enabled=bool(raw.get("enabled", False)),
             model=raw.get("model"),
             prompt=raw.get("prompt"),
@@ -226,8 +239,8 @@ async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
         raise APIError("E_CONFLICT", str(exc), http_status=409, source="sqlite")
     # custom：v30 三字段（已在建行前深校验+转换）经 update 落库——store.create_agent 不接受这三列，
     # 单独 update，避免「带 trigger 建 agent」时静默丢弃。单源复用 set_config 的规范化（wire）。
-    if v30_patch:
-        agent = store.update_agent(agent_id, v30_patch) or agent
+    if create_patch:
+        agent = store.update_agent(agent_id, create_patch) or agent
     return success_envelope(wire.resolve_agent(agent), request=request, source="sqlite")
 
 

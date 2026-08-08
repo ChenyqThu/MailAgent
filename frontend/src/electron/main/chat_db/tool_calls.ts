@@ -115,6 +115,17 @@ export function updateToolCall(toolCallId: number, patch: UpdateToolCallPatch): 
   db.prepare(`UPDATE chat_tool_call SET ${fields.join(', ')} WHERE id = ?`).run(...params)
 }
 
+export function markToolCallApprovalExpired(toolUseId: string): void {
+  getChatDb()
+    .prepare(
+      `UPDATE chat_tool_call SET approval_status='approval_expired', updated_at=?
+       WHERE id = (
+         SELECT id FROM chat_tool_call WHERE tool_use_id=? ORDER BY created_at DESC, id DESC LIMIT 1
+       )`
+    )
+    .run(Date.now(), toolUseId)
+}
+
 export function listToolCallsForMessage(messageId: number): ChatToolCall[] {
   return getChatDb()
     .prepare('SELECT * FROM chat_tool_call WHERE message_id = ? ORDER BY created_at ASC, id ASC')

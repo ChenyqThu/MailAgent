@@ -13,10 +13,12 @@ from src.skills.registry import BoundSkill
 
 _PROMPT_FRAGMENT = """When the user wants to create or update a Custom Agent, use the Custom Agent
 configuration workflow. First understand the job, then ask only for missing trigger, capability,
-and output details. Configure permissions with the six capability tiers, never by inventing atomic
+and output details. An optional description (maximum 1000 characters) explains in the Agent Catalog
+when the main agent should choose this specialist; it is distinct from the run instructions.
+Configure permissions with the six capability tiers, never by inventing atomic
 tool names: Email read/organize/draft; Calendar off/read/write; Knowledge and sessions off/on;
 Reports read/produce; Web off/gated/open; Files and commands off/on. Before proposing a write, show
-a complete summary covering identity, instructions, trigger/timezone, all six tiers, output, run
+a complete summary covering identity, description, instructions, trigger/timezone, all six tiers, output, run
 limits, and enabled state. Invoke custom_agent_create or custom_agent_update only after the user
 agrees to that summary; the mandatory approval card remains the final gate. Calendar writes always
 require human approval. Web open and Files/commands are high risk, and grants never create

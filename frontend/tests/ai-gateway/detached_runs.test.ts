@@ -484,15 +484,15 @@ describe('ActiveRunRegistry — unit', () => {
     expect(reg.stop(5).stopped).toBe(false)
   })
 
-  test('a stale (wedged) entry never blocks the session: hasActive false + register takes over', () => {
+  test('a live headless run remains registered past 15m so stop still reaches it', () => {
     let now = 1_000_000
     const reg = new ActiveRunRegistry({ now: () => now })
     const oldCtl = new AbortController()
-    reg.register(7, oldCtl)
+    const old = reg.register(7, oldCtl)
     now += STALE_RUN_MS + 1
-    expect(reg.hasActive(7)).toBe(false)
-    const b = reg.register(7, new AbortController())
-    expect(b).not.toBeNull()
-    expect(oldCtl.signal.aborted).toBe(true) // the wedged run was defensively aborted
+    expect(reg.hasActive(7)).toBe(true)
+    expect(reg.register(7, new AbortController())).toBeNull()
+    expect(reg.stop(7)).toEqual({ stopped: true, runId: old?.runId })
+    expect(oldCtl.signal.aborted).toBe(true)
   })
 })

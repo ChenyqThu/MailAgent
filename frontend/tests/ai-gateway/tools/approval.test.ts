@@ -17,8 +17,11 @@ import type { Tool } from 'ai'
 import {
   ApprovalError,
   ApprovalGuard,
+  HIGH_RISK_OUTBOUND_APPROVAL_TTL_MS,
+  NORMAL_APPROVAL_TTL_MS,
   hashApprovalInput
 } from '../../../src/ai-gateway/security/approval'
+import { DEFAULT_STASH_TTL_MS } from '../../../src/ai-gateway/approvalStash'
 import { createWriteTools } from '../../../src/ai-gateway/tools/write'
 import type { GatewayToolAuditEntry } from '../../../src/ai-gateway/tools/types'
 import { mockDomain, okEnvelope } from './_helpers'
@@ -26,6 +29,33 @@ import { mockDomain, okEnvelope } from './_helpers'
 // ── ApprovalGuard unit ──────────────────────────────────────────────────────
 
 describe('ApprovalGuard — register / verify', () => {
+  test('custom-agent-call TTL policy uses 24h normal / 2h outbound; off falls back to 30m', () => {
+    const now = 1_000
+    const ttlForTool = (name: string) =>
+      name === 'email_prepare_send'
+        ? HIGH_RISK_OUTBOUND_APPROVAL_TTL_MS
+        : NORMAL_APPROVAL_TTL_MS
+    const on = new ApprovalGuard({
+      ttlMs: DEFAULT_STASH_TTL_MS,
+      ttlMsForTool: ttlForTool,
+      now: () => now
+    })
+    expect(on.register('normal', 'email_archive', 'edit', {}).expiresAt).toBe(
+      now + NORMAL_APPROVAL_TTL_MS
+    )
+    expect(on.register('outbound', 'email_prepare_send', 'blocking', {}).expiresAt).toBe(
+      now + HIGH_RISK_OUTBOUND_APPROVAL_TTL_MS
+    )
+
+    const off = new ApprovalGuard({ ttlMs: DEFAULT_STASH_TTL_MS, now: () => now })
+    expect(off.register('off-normal', 'email_archive', 'edit', {}).expiresAt).toBe(
+      now + DEFAULT_STASH_TTL_MS
+    )
+    expect(off.register('off-send', 'email_prepare_send', 'blocking', {}).expiresAt).toBe(
+      now + DEFAULT_STASH_TTL_MS
+    )
+  })
+
   test('register stamps a record; verify with the same input passes (not edited)', () => {
     const g = new ApprovalGuard()
     const rec = g.register('tc1', 'email_flag', 'preview', { internal_id: 9, is_flagged: true })

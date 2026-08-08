@@ -23,6 +23,7 @@ import { SkillInstallCard } from './generic/SkillInstallCard'
 import { SkillInstallConfirmCard } from './generic/SkillInstallConfirmCard'
 import { SkillUninstallCard } from './generic/SkillUninstallCard'
 import { CustomAgentApprovalCard } from './generic/CustomAgentApprovalCard'
+import { CustomAgentCallCard } from './generic/CustomAgentCallCard'
 import { SimpleApprovalCard } from './generic/SimpleApprovalCard'
 import { CalendarApprovalCard } from './calendar/CalendarApprovalCard'
 
@@ -136,6 +137,11 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.CustomAgentApprovalCard,
     toolNames: ['custom_agent_create', 'custom_agent_update'],
     render: CustomAgentApprovalCard
+  },
+  {
+    component: A2UI_COMPONENTS.CustomAgentCallCard,
+    toolNames: ['custom_agent_call'],
+    render: CustomAgentCallCard
   },
   // 1.5.0 dogfood (task 07-07) — identity-only edit-tier approval card for the four tools that were
   // missing a rich card and so fell through to the buttonless ToolTraceCard (approval-paused shown

@@ -1,6 +1,8 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 24）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 25）。
+v25（harness optimization P2，task 08-07）= ``ai_chat_sessions.parent_session_id`` /
+``parent_tool_call_id`` / ``invoked_by``。三列均 nullable，父会话删除不级联；Python 只读。
 v24（harness optimization P1，task 08-07）= ``ai_chat_sessions.trigger_id`` / ``trigger_kind`` /
 ``trigger_fired_at`` 与 agent/trigger 两个查询索引。三列均 nullable；Python 只读且通过
 ``_has_column`` 兼容尚未迁移的 v23 库。

@@ -117,6 +117,7 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("custom_agent_update", "agents", "ask", configurable=False),
     BuiltinToolPolicy("custom_agent_delete", "agents", "ask", configurable=False),
     BuiltinToolPolicy("custom_agent_run_now", "agents", "auto"),
+    BuiltinToolPolicy("custom_agent_call", "agents", "ask", configurable=False),
     # ── exec：file 两写可配；run_command 的可配面 = policy_rules（不给 raw auto）───
     BuiltinToolPolicy("file_read", "exec", "ask"),
     BuiltinToolPolicy("file_write", "exec", "ask"),

@@ -4,9 +4,11 @@
 // hands out an unguessable resumeToken, and claim()s it ONE-SHOT (single-use, token- + expiry-gated)
 // so an island decision resumes at most once. Pure Node — no ai / http / electron.
 
-import { describe, expect, test } from 'vitest'
+import { describe, expect, test, vi } from 'vitest'
 
 import { ApprovalRunStash } from '../../src/ai-gateway/approvalStash'
+import { resumeApprovalRun } from '../../src/ai-gateway/approvalResume'
+import type { AiGatewayConfig } from '../../src/ai-gateway/config'
 import type { MailAgentUIMessage } from '../../src/shared/assistant/uiMessage'
 
 const RESP = { id: 'a1', role: 'assistant', parts: [] } as unknown as MailAgentUIMessage
@@ -74,6 +76,45 @@ describe('ApprovalRunStash — stash + one-shot claim', () => {
     clock = 1_000 + 101 // past expiry
     expect(s.claim('tc1', token)).toBeNull()
     expect(s.size()).toBe(0)
+  })
+
+  test('per-tool TTL selects different expiry windows and reports expired distinctly', () => {
+    let clock = 1000
+    const s = new ApprovalRunStash({
+      ttlMs: 30,
+      ttlMsForTool: (name) => (name === 'email_prepare_send' ? 200 : 100),
+      now: () => clock
+    })
+    s.stash(makeInput('normal'))
+    s.stash({ ...makeInput('outbound'), toolName: 'email_prepare_send' })
+    expect(s.peek('normal')!.expiresAt).toBe(1100)
+    expect(s.peek('outbound')!.expiresAt).toBe(1200)
+    clock = 1101
+    expect(s.claimDetailed('normal', 'bad').reason).toBe('expired')
+    expect(s.claimDetailed('outbound', 'bad').reason).toBe('token_mismatch')
+  })
+
+  test('expired resume is distinct from not_found and requests approval_expired audit marking', async () => {
+    let clock = 0
+    const stash = new ApprovalRunStash({ ttlMs: 100, now: () => clock })
+    const token = stash.stash(makeInput('expired-resume'))
+    clock = 101
+    const markApprovalExpired = vi.fn()
+    const cfg = {
+      port: 0,
+      baseUrl: 'https://example.invalid',
+      apiKey: 'test',
+      model: 'test',
+      approvalStash: stash,
+      markApprovalExpired
+    } as AiGatewayConfig
+    const result = await resumeApprovalRun(
+      cfg,
+      { toolCallId: 'expired-resume', decision: 'approve', resumeToken: token },
+      new AbortController().signal
+    )
+    expect(result).toMatchObject({ ok: false, status: 'not_found', error: 'approval expired' })
+    expect(markApprovalExpired).toHaveBeenCalledWith('expired-resume')
   })
 
   test('peek is read-only (does not consume / does not expire)', () => {
