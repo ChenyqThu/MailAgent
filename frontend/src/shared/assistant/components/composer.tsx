@@ -186,6 +186,7 @@ export function ThreadComposer(): React.JSX.Element {
   // unless the user handler prevented default (radix composeEventHandlers checks defaultPrevented).
   // The Input itself is disabled too (typing fenced while the approval resume holds the lease).
   const sendDisabled = controls?.sendDisabled === true
+  const queueModeActive = controls?.queuedInputEnabled === true && controls.queueModeActive === true
   const composerText = useAuiState((state) => state.composer.text)
   return (
     <ComposerPrimitive.Root
@@ -198,6 +199,14 @@ export function ThreadComposer(): React.JSX.Element {
           e.preventDefault()
           aui.composer().setText('')
           controls.onCompact?.()
+          return
+        }
+        if (queueModeActive) {
+          e.preventDefault()
+          const text = composerText.trim()
+          if (!text) return
+          controls?.onEnqueueQueuedInput?.(text)
+          aui.composer().setText('')
         }
       }}
       className="border-t border-[var(--hairline)] bg-ink-2"
@@ -208,7 +217,8 @@ export function ThreadComposer(): React.JSX.Element {
           file:// navigation default and doesn't consume the drop. Layout classes moved off Root
           so the wash paints. */}
       <ComposerPrimitive.AttachmentDropzone
-        disabled={sendDisabled}
+        disabled={sendDisabled || queueModeActive}
+        aria-disabled={sendDisabled || queueModeActive}
         className="flex flex-col gap-2 px-3 py-2.5 transition-colors duration-fast data-[dragging=true]:bg-coral/5"
       >
         <ComposerChips controls={controls} />

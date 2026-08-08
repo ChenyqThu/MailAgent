@@ -152,7 +152,9 @@ import { resolveDataRoot } from '../db'
 // src/chat/db.py 头注释（Python 侧 SELECT * 读，不建表、不写这一列）。
 // v24 (harness optimization P1, task 08-07) — headless session provenance. Three nullable
 // source columns plus two read indexes; parent/invocation columns intentionally remain P2.
-const CHAT_DB_VERSION = 25
+// v25 (harness optimization P2, task 08-07) — child-session parent provenance.
+// v26 (harness optimization P5, task 08-07) — queued-input persistence + dispatch indexes.
+const CHAT_DB_VERSION = 26
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -1164,6 +1166,43 @@ function migrate(db: Database.Database): void {
         ON ai_chat_sessions(parent_session_id, created_at ASC)`)
       db.prepare(
         "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '25')"
+      ).run()
+      db.exec('COMMIT')
+    } catch (err) {
+      db.exec('ROLLBACK')
+      throw err
+    }
+  }
+
+  if (current < 26) {
+    db.exec('BEGIN IMMEDIATE')
+    try {
+      db.exec(`
+CREATE TABLE IF NOT EXISTS chat_queued_input (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  session_id INTEGER NOT NULL,
+  run_id TEXT,
+  mode TEXT NOT NULL DEFAULT 'follow_up',
+  content TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'queued',
+  claimed_at INTEGER,
+  delivered_message_id INTEGER,
+  created_at INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  CHECK (mode IN ('follow_up', 'steering')),
+  CHECK (status IN ('queued', 'claimed', 'sent', 'canceled', 'restored')),
+  FOREIGN KEY (session_id) REFERENCES ai_chat_sessions(id) ON DELETE CASCADE
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_queued_input_dispatch
+  ON chat_queued_input(session_id, status, created_at ASC);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_queued_input_delivery
+  ON chat_queued_input(delivered_message_id)
+  WHERE delivered_message_id IS NOT NULL;
+      `)
+      db.prepare(
+        "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '26')"
       ).run()
       db.exec('COMMIT')
     } catch (err) {

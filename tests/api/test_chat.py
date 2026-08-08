@@ -345,6 +345,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "chatCompactEnabled": True,
         # P4 — auto compact/overflow projection, default ON.
         "chatAutoCompactEnabled": True,
+        # P5 — queued input renderer projection, default ON.
+        "chatQueuedInputEnabled": True,
         # R3 (task 07-05) — S1 openness 三分面 flag 投影（E3 cutover 默认 ON，env_file=None → fallback True）。
         "sessionToolsEnabled": True,
         "configToolsEnabled": True,
@@ -376,6 +378,7 @@ def test_chat_config_openness_flags_hot_read(
         "MAILAGENT_SESSION_PROVENANCE=false\n"
         "MAILAGENT_CHAT_COMPACT=false\n"
         "MAILAGENT_CHAT_AUTO_COMPACT=false\n"
+        "MAILAGENT_CHAT_QUEUED_INPUT=false\n"
     )
     with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
         data = c.get("/api/chat/config").json()["data"]
@@ -385,6 +388,7 @@ def test_chat_config_openness_flags_hot_read(
     assert data["sessionProvenanceEnabled"] is False
     assert data["chatCompactEnabled"] is False
     assert data["chatAutoCompactEnabled"] is False
+    assert data["chatQueuedInputEnabled"] is False
     # 既有字段回归：exec flag 同一热读通道
     assert data["execPolicyEnabled"] is True
 

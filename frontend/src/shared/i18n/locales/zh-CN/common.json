@@ -1483,6 +1483,17 @@
       "reason": "原因",
       "reasonValue": { "manual": "手动", "threshold": "阈值", "overflow": "溢出恢复" }
     },
+    "queuedInput": {
+      "queued": "将在当前任务完成后发送",
+      "afterApproval": "审批解决后送达",
+      "claimed": "发送中…",
+      "restored": "任务已中断，待确认",
+      "edit": "编辑排队消息",
+      "delete": "删除排队消息",
+      "send": "发送排队消息",
+      "enqueueFailed": "消息入队失败",
+      "dispatchedLabel": "排队补充"
+    },
     "approvalMode": {
       "label": "授权模式",
       "manual": {

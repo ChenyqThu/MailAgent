@@ -720,7 +720,94 @@ async function handleRunStop(
     return
   }
   const out = cfg.activeRuns.stop(sessionId)
+  if (cfg.queuedInputStore) {
+    cfg.queuedInputStore.restoreForSession(sessionId)
+    cfg.onQueuedInputChanged?.(sessionId)
+  }
   writeJson(res, 200, { stopped: out.stopped })
+}
+
+function queuedInputNotImplemented(res: ServerResponse): void {
+  writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'queued input not enabled' })
+}
+
+function parsePositiveInteger(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : null
+}
+
+async function handleQueuedInputList(
+  res: ServerResponse,
+  cfg: AiGatewayConfig,
+  rawUrl: string
+): Promise<void> {
+  if (!cfg.queuedInputStore) return queuedInputNotImplemented(res)
+  const raw = new URL(rawUrl, 'http://127.0.0.1').searchParams.get('sessionId')
+  const sessionId = raw == null ? null : Number.parseInt(raw, 10)
+  if (sessionId == null || !Number.isInteger(sessionId) || sessionId <= 0) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (integer) required' })
+    return
+  }
+  writeJson(res, 200, { items: cfg.queuedInputStore.list(sessionId) })
+}
+
+async function handleQueuedInputEnqueue(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig
+): Promise<void> {
+  if (!cfg.queuedInputStore) return queuedInputNotImplemented(res)
+  const body = await readJsonBody(req)
+  const sessionId = parsePositiveInteger(body.sessionId)
+  if (sessionId == null || typeof body.content !== 'string') {
+    writeJson(res, 400, { error: 'E_INVALID_ARG' })
+    return
+  }
+  try {
+    const item = cfg.queuedInputStore.enqueue(sessionId, body.content)
+    cfg.onQueuedInputChanged?.(sessionId)
+    if (!cfg.activeRuns?.hasActive(sessionId)) cfg.dispatchQueuedInputIfIdle?.(sessionId)
+    writeJson(res, 200, { item })
+  } catch (error) {
+    const code = error instanceof Error ? error.message : 'E_INVALID_ARG'
+    writeJson(res, 400, { error: code === 'E_QUEUE_FULL' ? code : 'E_INVALID_ARG' })
+  }
+}
+
+async function handleQueuedInputMutation(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig,
+  action: 'update' | 'cancel' | 'send'
+): Promise<void> {
+  if (!cfg.queuedInputStore) return queuedInputNotImplemented(res)
+  const body = await readJsonBody(req)
+  const id = parsePositiveInteger(body.id)
+  if (id == null || (action === 'update' && typeof body.content !== 'string')) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG' })
+    return
+  }
+  const existing = cfg.queuedInputStore.get(id)
+  if (!existing) {
+    writeJson(res, 409, { error: 'E_QUEUED_INPUT_STATE' })
+    return
+  }
+  try {
+    const changed =
+      action === 'update'
+        ? cfg.queuedInputStore.update(id, body.content as string)
+        : action === 'cancel'
+          ? cfg.queuedInputStore.cancel(id)
+          : cfg.queuedInputStore.confirm(id)
+    if (!changed) {
+      writeJson(res, 409, { error: 'E_QUEUED_INPUT_STATE' })
+      return
+    }
+    cfg.onQueuedInputChanged?.(existing.sessionId)
+    if (action === 'send') cfg.dispatchQueuedInputIfIdle?.(existing.sessionId)
+    writeJson(res, 200, { ok: true })
+  } catch {
+    writeJson(res, 400, { error: 'E_INVALID_ARG' })
+  }
 }
 
 async function handleCompact(
@@ -1542,6 +1629,39 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
     }
     if (method === 'POST' && path === '/api/ai/run/stop') {
       dispatch('/api/ai/run/stop', res, handleRunStop(req, res, cfg))
+      return
+    }
+
+    if (method === 'GET' && path === '/api/ai/queued-input') {
+      dispatch('/api/ai/queued-input', res, handleQueuedInputList(res, cfg, url))
+      return
+    }
+    if (method === 'POST' && path === '/api/ai/queued-input') {
+      dispatch('/api/ai/queued-input', res, handleQueuedInputEnqueue(req, res, cfg))
+      return
+    }
+    if (method === 'POST' && path === '/api/ai/queued-input/update') {
+      dispatch(
+        '/api/ai/queued-input/update',
+        res,
+        handleQueuedInputMutation(req, res, cfg, 'update')
+      )
+      return
+    }
+    if (method === 'POST' && path === '/api/ai/queued-input/cancel') {
+      dispatch(
+        '/api/ai/queued-input/cancel',
+        res,
+        handleQueuedInputMutation(req, res, cfg, 'cancel')
+      )
+      return
+    }
+    if (method === 'POST' && path === '/api/ai/queued-input/send') {
+      dispatch(
+        '/api/ai/queued-input/send',
+        res,
+        handleQueuedInputMutation(req, res, cfg, 'send')
+      )
       return
     }
 

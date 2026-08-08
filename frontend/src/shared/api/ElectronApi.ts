@@ -722,6 +722,14 @@ function createElectronChatRuntime(): ChatApi {
           })
         }
       })
+    },
+    onQueuedInputChanged(handler: (payload: { sessionId: number }) => void): () => void {
+      return subscribe('chat:queued-input-changed', (...args: unknown[]) => {
+        const payload = args[0] as { sessionId?: unknown } | undefined
+        if (payload && typeof payload.sessionId === 'number') {
+          handler({ sessionId: payload.sessionId })
+        }
+      })
     }
   }
 }

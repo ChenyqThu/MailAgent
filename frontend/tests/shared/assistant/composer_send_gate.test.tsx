@@ -167,6 +167,90 @@ describe('codex r2 [D] — sendDisabled gates the whole composer, not just the S
   })
 })
 
+describe('P5 queued input submit gate', () => {
+  test('flag on + queue mode enqueues text, clears composer, and disables attachment dropzone', async () => {
+    const fetchMock = stubChatFetch()
+    const onEnqueueQueuedInput = vi.fn()
+    const { container } = render(
+      <Harness
+        sendDisabled={false}
+        controls={{ queuedInputEnabled: true, queueModeActive: true, onEnqueueQueuedInput }}
+      />
+    )
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+    expect(textarea.disabled).toBe(false)
+    fireEvent.change(textarea, { target: { value: 'follow up' } })
+    fireEvent.submit(container.querySelector('form')!)
+
+    expect(onEnqueueQueuedInput).toHaveBeenCalledWith('follow up')
+    await waitFor(() => expect(textarea.value).toBe(''))
+    expect(container.querySelector('[aria-disabled="true"]')).toBeTruthy()
+    expect(chatPosts(fetchMock)).toBe(0)
+  })
+
+  test('empty text does not enqueue', () => {
+    const onEnqueueQueuedInput = vi.fn()
+    const { container } = render(
+      <Harness
+        sendDisabled={false}
+        controls={{ queuedInputEnabled: true, queueModeActive: true, onEnqueueQueuedInput }}
+      />
+    )
+    fireEvent.submit(container.querySelector('form')!)
+    expect(onEnqueueQueuedInput).not.toHaveBeenCalled()
+  })
+
+  test('sendDisabled takes precedence and blocks enqueue', () => {
+    const onEnqueueQueuedInput = vi.fn()
+    const { container } = render(
+      <Harness
+        sendDisabled={true}
+        controls={{ queuedInputEnabled: true, queueModeActive: true, onEnqueueQueuedInput }}
+      />
+    )
+    fireEvent.submit(container.querySelector('form')!)
+    expect(onEnqueueQueuedInput).not.toHaveBeenCalled()
+  })
+
+  test('flag off keeps the legacy send path even when queueModeActive is true', async () => {
+    const fetchMock = stubChatFetch()
+    const onEnqueueQueuedInput = vi.fn()
+    const { container } = render(
+      <Harness
+        sendDisabled={false}
+        controls={{ queuedInputEnabled: false, queueModeActive: true, onEnqueueQueuedInput }}
+      />
+    )
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'send normally' } })
+    fireEvent.submit(container.querySelector('form')!)
+    await waitFor(() => expect(chatPosts(fetchMock)).toBe(1))
+    expect(onEnqueueQueuedInput).not.toHaveBeenCalled()
+  })
+
+  test('/compact interception takes precedence over enqueue', async () => {
+    const fetchMock = stubChatFetch()
+    const onCompact = vi.fn()
+    const onEnqueueQueuedInput = vi.fn()
+    const { container } = render(
+      <Harness
+        sendDisabled={false}
+        controls={{
+          compactEnabled: true,
+          onCompact,
+          queuedInputEnabled: true,
+          queueModeActive: true,
+          onEnqueueQueuedInput
+        }}
+      />
+    )
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: '/compact' } })
+    fireEvent.submit(container.querySelector('form')!)
+    expect(onCompact).toHaveBeenCalledOnce()
+    expect(onEnqueueQueuedInput).not.toHaveBeenCalled()
+    expect(chatPosts(fetchMock)).toBe(0)
+  })
+})
+
 // ── codex r3 P2 — the AGENT composer's real interaction paths ────────────────────────────────────
 
 function fakeMessage(over: Partial<ChatMessage>): ChatMessage {

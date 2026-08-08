@@ -37,6 +37,9 @@ export interface ChatComposerControls {
    *  value is session-scoped by useApprovalDecideBusy (only the deciding session is fenced).
    *  Optional: absent/undefined → byte-identical to the pre-P1-2 composer. */
   sendDisabled?: boolean
+  queuedInputEnabled?: boolean
+  queueModeActive?: boolean
+  onEnqueueQueuedInput?: (text: string) => void
   // C2-① @mention — referenced-email chips. The panel resolves each chip's body excerpt at SEND time
   // (buildMentionContext) and prepends an untrusted-framed block to the turn; chips clear after send.
   mentions: ReadonlyArray<SearchHit>

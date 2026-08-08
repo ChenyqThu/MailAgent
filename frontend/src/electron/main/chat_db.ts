@@ -73,6 +73,26 @@ export {
 
 export { markToolCallApprovalExpired } from './chat_db/tool_calls'
 
+export type {
+  QueuedInput,
+  QueuedInputMode,
+  QueuedInputStatus
+} from './chat_db/queuedInput'
+export {
+  cancelQueuedInput,
+  claimQueuedInput,
+  confirmQueuedInput,
+  enqueueQueuedInput,
+  getQueuedInput,
+  listDispatchableQueuedInput,
+  listQueuedInput,
+  markSent,
+  restoreAllStale,
+  restoreForSession,
+  revertClaimed,
+  updateQueuedInput
+} from './chat_db/queuedInput'
+
 export {
   abortStreamingMessages,
   appendMessage,

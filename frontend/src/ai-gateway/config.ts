@@ -126,6 +126,28 @@ export interface PersistTurnInput {
   runId?: string | null
 }
 
+export interface GatewayQueuedInput {
+  id: number
+  sessionId: number
+  runId: string | null
+  mode: 'follow_up' | 'steering'
+  content: string
+  status: 'queued' | 'claimed' | 'sent' | 'canceled' | 'restored'
+  createdAt: number
+  updatedAt: number
+  deliveredMessageId: number | null
+}
+
+export interface QueuedInputStore {
+  list(sessionId: number): GatewayQueuedInput[]
+  enqueue(sessionId: number, content: string): GatewayQueuedInput
+  get(id: number): GatewayQueuedInput | null
+  update(id: number, content: string): boolean
+  cancel(id: number): boolean
+  confirm(id: number): boolean
+  restoreForSession(sessionId: number): number
+}
+
 export interface AiGatewayConfig {
   /** bind port. host is always 127.0.0.1 (loopback). 0 = kernel-assigned (tests). */
   port: number
@@ -152,6 +174,14 @@ export interface AiGatewayConfig {
   captureTurnMemory?: (turn: PersistTurnInput) => void
   /** P4 automatic compact trigger. Fire-and-forget only; onFinish never awaits it. */
   maybeAutoCompact?: (turn: PersistTurnInput) => void
+  /** P5 queued-input dispatcher. Lifecycle serializes this after maybeAutoCompact. */
+  dispatchQueuedInput?: (turn: PersistTurnInput) => void
+  /** P5 idle trigger used by queue endpoints after enqueue/confirm. */
+  dispatchQueuedInputIfIdle?: (sessionId: number) => void
+  /** P5 store is Electron-main-owned; omitted keeps all endpoints flag-off. */
+  queuedInputStore?: QueuedInputStore
+  /** P5 renderer invalidation signal after any queue state transition. */
+  onQueuedInputChanged?: (sessionId: number) => void
   /** P4 owner setting resolver. Any failure must resolve false at the injection boundary. */
   resolveAutoCompactEnabled?: () => Promise<boolean> | boolean
   /** Build the LanguageModel for a model id. Injected by tests (mock model); the

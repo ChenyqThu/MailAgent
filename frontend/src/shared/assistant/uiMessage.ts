@@ -47,6 +47,7 @@ export interface MailAgentUIMessageMetadata {
    *  metadata write makes the client clone the message → cache miss → timing lands. Persisted into
    *  ui_message_json too, so a history reload keeps the badge. useMessageTiming() reads this. */
   timing?: MessageTiming
+  queuedInputDispatch?: { rowIds: number[] }
 }
 
 export type MailAgentUIMessage = UIMessage<MailAgentUIMessageMetadata>

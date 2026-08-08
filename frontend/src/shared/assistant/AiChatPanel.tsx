@@ -42,6 +42,8 @@ import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-atta
 import { buildMentionContext } from '@shared/lib/mention-context'
 import { useApprovalMode } from '@shared/lib/approvalMode'
 import { useChatCompactFlags } from '@shared/hooks/useChatCompactEnabled'
+import { useChatQueuedInputEnabled } from '@shared/hooks/useChatQueuedInputEnabled'
+import { fetchPendingApproval } from '@shared/assistant/approvalRecordClient'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 import { errorMessage } from '@shared/lib/ipcErrors'
 
@@ -54,6 +56,7 @@ import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
 import { ThreadRunStatusBar } from './components/ThreadRunStatusBar'
+import { QueuedInputBar } from './components/QueuedInputBar'
 import { ChatComposerControlsProvider } from './components/composerControls'
 import type { ChatComposerControls } from './components/composerControlsContext'
 import { ReadOnlyTranscript } from './ReadOnlyTranscript'
@@ -170,6 +173,7 @@ export function AIChatPanel({
   const compactFlags = useChatCompactFlags()
   const compactEnabled = compactFlags.chatCompactEnabled
   const autoCompactEnabled = compactEnabled && compactFlags.chatAutoCompactEnabled
+  const queuedInputEnabled = useChatQueuedInputEnabled()
   const [compactActive, setCompactActive] = useState(false)
   const [islandRefreshNonce, setIslandRefreshNonce] = useState(0)
   const aiSdkRunningRef = useRef(false)
@@ -255,49 +259,6 @@ export function AIChatPanel({
     queryClientForRead,
     t
   ])
-
-  const composerControls = useMemo<ChatComposerControls>(
-    () => ({
-      effort: effort.control,
-      model: backend.model,
-      availableModels,
-      onModelChange,
-      modelPickerDisabled: false,
-      sendDisabled: approvalSendDisabled || compactActive,
-      compactEnabled,
-      autoCompactEnabled,
-      compactActive,
-      onCompact,
-      onCompactStop,
-      mentions,
-      onAddMention,
-      onRemoveMention,
-      attachments,
-      onAddAttachment,
-      onRemoveAttachment,
-      // WP-15 — context 环读这个会话最新一轮的 context_tokens。
-      sessionId: chat.activeSessionId
-    }),
-    [
-      effort.control,
-      backend.model,
-      availableModels,
-      onModelChange,
-      approvalSendDisabled,
-      compactActive,
-      compactEnabled,
-      autoCompactEnabled,
-      onCompact,
-      onCompactStop,
-      mentions,
-      onAddMention,
-      onRemoveMention,
-      attachments,
-      onAddAttachment,
-      onRemoveAttachment,
-      chat.activeSessionId
-    ]
-  )
 
   // Context injection — build + send the typed AgentContextSnapshot, read
   // ContextChips from it, and seed prior-session messages (reload). S3 — always
@@ -512,6 +473,85 @@ export function AIChatPanel({
     contextInjectionOn && gatewayBaseUrl != null && initialMessages && initialMessages.length > 0
       ? chat.activeSessionId
       : null
+  const pendingApprovalTruth = useQuery({
+    queryKey: qk.agentApprovalPending(chat.activeSessionId),
+    queryFn: () =>
+      chat.activeSessionId == null ? Promise.resolve(null) : fetchPendingApproval(chat.activeSessionId),
+    enabled: queuedInputEnabled && chat.activeSessionId != null,
+    staleTime: 3_000,
+    refetchOnWindowFocus: true
+  })
+  const approvalPendingExists = pendingApprovalTruth.data != null
+  const queueModeActive =
+    queuedInputEnabled &&
+    chat.activeSessionId != null &&
+    (aiSdkRunning || backgroundActive || approvalPendingExists)
+  const onEnqueueQueuedInput = useCallback(
+    (content: string): void => {
+      if (gatewayBaseUrl == null || chat.activeSessionId == null) return
+      void fetch(`${gatewayBaseUrl}/api/ai/queued-input`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ sessionId: chat.activeSessionId, content })
+      })
+        .then(async (response) => {
+          if (!response.ok) throw new Error((await response.json())?.error ?? 'enqueue failed')
+          await queryClientForRead.invalidateQueries({
+            queryKey: qk.chat.queuedInput(chat.activeSessionId)
+          })
+        })
+        .catch((error: unknown) => toastError(t('chat.queuedInput.enqueueFailed'), errorMessage(error)))
+    },
+    [chat.activeSessionId, gatewayBaseUrl, queryClientForRead, t]
+  )
+  const composerControls = useMemo<ChatComposerControls>(
+    () => ({
+      effort: effort.control,
+      model: backend.model,
+      availableModels,
+      onModelChange,
+      modelPickerDisabled: false,
+      sendDisabled: approvalSendDisabled || compactActive,
+      queuedInputEnabled,
+      queueModeActive,
+      onEnqueueQueuedInput,
+      compactEnabled,
+      autoCompactEnabled,
+      compactActive,
+      onCompact,
+      onCompactStop,
+      mentions,
+      onAddMention,
+      onRemoveMention,
+      attachments,
+      onAddAttachment,
+      onRemoveAttachment,
+      sessionId: chat.activeSessionId
+    }),
+    [
+      effort.control,
+      backend.model,
+      availableModels,
+      onModelChange,
+      approvalSendDisabled,
+      compactActive,
+      queuedInputEnabled,
+      queueModeActive,
+      onEnqueueQueuedInput,
+      compactEnabled,
+      autoCompactEnabled,
+      onCompact,
+      onCompactStop,
+      mentions,
+      onAddMention,
+      onRemoveMention,
+      attachments,
+      onAddAttachment,
+      onRemoveAttachment,
+      chat.activeSessionId
+    ]
+  )
   const pendingApprovalCard =
     pendingApprovalSessionId !== null ? (
       <PendingApprovalPanel
@@ -531,11 +571,19 @@ export function AIChatPanel({
   // WP-14 — 回合级运行条：阶段/工具名/秒表自取 thread 作用域，detached run 的秒表用 ageMs 接续。
   // mx-3 对齐 composer 的 px-3 内距（它住在 Viewport 之外、composer 之上）。
   const runStatusSlot = (
-    <ThreadRunStatusBar
-      backgroundActive={backgroundActive}
-      backgroundStartedAt={backgroundStartedAt}
-      className="mx-3 mb-2"
-    />
+    <>
+      <QueuedInputBar
+        enabled={queuedInputEnabled}
+        gatewayBaseUrl={gatewayBaseUrl}
+        sessionId={chat.activeSessionId}
+        approvalPendingExists={approvalPendingExists}
+      />
+      <ThreadRunStatusBar
+        backgroundActive={backgroundActive}
+        backgroundStartedAt={backgroundStartedAt}
+        className="mx-3 mb-2"
+      />
+    </>
   )
 
   // Sidebar session preview cache (lazy on open).

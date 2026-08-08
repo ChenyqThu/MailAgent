@@ -101,14 +101,37 @@ export function UserMessageAttachments(): React.JSX.Element {
 }
 
 export function UserMessage(): React.JSX.Element {
+  const { t } = useTranslation()
   const hasAttachments = useAuiState((s) => (s.message.attachments?.length ?? 0) > 0)
+  const queuedEnvelope = useAuiState((s) => {
+    const text = s.message.content
+      .filter((part) => part.type === 'text')
+      .map((part) => ('text' in part ? part.text : ''))
+      .join('')
+    if (!text.startsWith('<queued_followups>')) return null
+    const messages = [...text.matchAll(/<message>([\s\S]*?)<\/message>/g)].map((match) =>
+      match[1].replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+    )
+    return messages.length > 0 ? messages : null
+  })
   // An image-only send has no text part — skip the accent bubble instead of painting an empty pill.
   const hasBubbleContent = useAuiState((s) => s.message.content.length > 0)
   return (
     <MessagePrimitive.Root className="group mb-4 flex w-full flex-col items-end">
       {hasBubbleContent && (
         <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[rgb(var(--c-accent))] px-3.5 py-2 text-body leading-relaxed text-[rgb(var(--c-accent-fg))] shadow-sm">
-          <MessagePrimitive.Parts />
+          {queuedEnvelope ? (
+            <div className="space-y-1.5">
+              <div className="text-micro font-medium opacity-75">
+                {t('chat.queuedInput.dispatchedLabel')}
+              </div>
+              {queuedEnvelope.map((message, index) => (
+                <p key={index}>{message}</p>
+              ))}
+            </div>
+          ) : (
+            <MessagePrimitive.Parts />
+          )}
         </div>
       )}
       {hasAttachments && <UserMessageAttachments />}

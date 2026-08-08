@@ -1036,11 +1036,16 @@ export function makePersistOnFinish(
     // fire-and-forget: detached drain awaits this onFinish before releasing the session lease, so
     // awaiting compact here would extend the E_RUN_ACTIVE window by an entire model call. The
     // injected callback defers its active-run check until the lease is released and self-swallows
-    // every failure. P5 follow-up queue dispatch must remain AFTER this trigger (compact first).
+    // every failure. P5 dispatch ordering is guaranteed by the lifecycle post-turn serial chain.
     try {
       cfg.maybeAutoCompact?.(turn)
     } catch (err) {
       console.error('[ai-gateway] maybeAutoCompact threw (turn streamed OK)', err)
+    }
+    try {
+      cfg.dispatchQueuedInput?.(turn)
+    } catch (err) {
+      console.error('[ai-gateway] dispatchQueuedInput threw (turn streamed OK)', err)
     }
   }
 }

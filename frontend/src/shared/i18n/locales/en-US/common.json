@@ -1483,6 +1483,17 @@
       "reason": "Reason",
       "reasonValue": { "manual": "Manual", "threshold": "Threshold", "overflow": "Overflow recovery" }
     },
+    "queuedInput": {
+      "queued": "Will send after the current task finishes",
+      "afterApproval": "Will deliver after approval is resolved",
+      "claimed": "Sending…",
+      "restored": "Task interrupted · confirmation required",
+      "edit": "Edit queued message",
+      "delete": "Delete queued message",
+      "send": "Send queued message",
+      "enqueueFailed": "Could not queue message",
+      "dispatchedLabel": "Queued follow-ups"
+    },
     "approvalMode": {
       "label": "Permission mode",
       "manual": {

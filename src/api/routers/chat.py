@@ -639,6 +639,9 @@ async def chat_config(request: Request):
             "chatAutoCompactEnabled": _hot_bool(
                 env_vals, "MAILAGENT_CHAT_AUTO_COMPACT", True
             ),
+            "chatQueuedInputEnabled": _hot_bool(
+                env_vals, "MAILAGENT_CHAT_QUEUED_INPUT", True
+            ),
             # R3 (task 07-05) — S1 openness 三分面 flag 的前端可观测投影。均为 main-env-only
             # flag（gateway 工具注册在 electron main 读 env，非 pydantic）；这里 hot-read 同一
             # .env，完全镜像 execPolicyEnabled 的读法。消费方：CustomAgentDrawer 的 grant_web

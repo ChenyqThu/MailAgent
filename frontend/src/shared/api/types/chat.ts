@@ -183,6 +183,18 @@ export interface ChatMessage {
   updated_at: number
 }
 
+export interface QueuedInput {
+  id: number
+  sessionId: number
+  runId: string | null
+  mode: 'follow_up' | 'steering'
+  content: string
+  status: 'queued' | 'claimed' | 'sent' | 'canceled' | 'restored'
+  createdAt: number
+  updatedAt: number
+  deliveredMessageId?: number | null
+}
+
 // P2c (task 06-18-custom-ai-harness-agent) — session anchor. 'email' rows carry
 // email_id (= anchor_id); 'general' (context-free, Cmd+O) rows have both NULL.
 // Mirror of model.ts AnchorType — kept inline so api/types stays the boundary
@@ -917,4 +929,5 @@ export interface ChatApi {
       runId: string | null
     }) => void
   ): () => void
+  onQueuedInputChanged?(handler: (payload: { sessionId: number }) => void): () => void
 }

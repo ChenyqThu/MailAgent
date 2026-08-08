@@ -67,6 +67,7 @@ export const qk = {
     allSessions: () => ['chat', 'allSessions'] as const,
     agentUnread: () => ['chat', 'agentUnread'] as const,
     messages: (sessionId: string | number) => ['chat', 'messages', sessionId] as const,
+    queuedInput: (sessionId: number | null) => ['chat', 'queuedInput', sessionId] as const,
     kosAvailable: () => ['chat', 'kosAvailable'] as const,
     config: (flag: string) => ['chat', 'config', flag] as const
   },

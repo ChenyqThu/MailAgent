@@ -55,6 +55,7 @@ import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approva
 import { classOfTool } from '../../ai-gateway/tools/policy'
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
+import { runQueuedInputDispatch } from '../../ai-gateway/queuedInputDispatch'
 import { selectMessagesForModelContext } from '../../ai-gateway/compactSelect'
 import {
   CompactCoordinator,
@@ -62,20 +63,35 @@ import {
   type CompactPersistence
 } from '../../ai-gateway/compact'
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
-import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
+import {
+  chatMessageToUIMessage,
+  extractTextFromUIMessage
+} from '@shared/assistant/uiMessage'
 import {
   appendMessage,
   appendToolCall,
+  cancelQueuedInput,
+  claimQueuedInput,
+  confirmQueuedInput,
   createAgentSession,
   createImSession,
+  enqueueQueuedInput,
   findSessionByParentToolCall,
   findAssistantMessageRowIdByUiId,
   findUserMessageRowIdByUiId,
   getFirstUserText,
+  getQueuedInput,
   getSession,
+  listDispatchableQueuedInput,
+  listQueuedInput,
   listMessages,
+  markSent,
   markToolCallApprovalExpired,
   setAgentSessionJobId,
+  restoreAllStale,
+  restoreForSession,
+  revertClaimed,
+  updateQueuedInput,
   updateMessage,
   updateSessionTitle,
   updateToolCall
@@ -202,14 +218,22 @@ function persistTurn(turn: PersistTurnInput): void {
       eagerWrittenUserMessages.delete(key)
     }
   }
+  let userMessageRowId: number | null = null
   if (!eagerWritten && turn.userMessage) {
-    appendMessage({
+    userMessageRowId = appendMessage({
       sessionId: turn.sessionId,
       role: 'user',
       content: extractTextFromUIMessage(turn.userMessage),
       status: 'complete',
       uiMessageJson: JSON.stringify(turn.userMessage)
-    })
+    }).id
+  } else if (turn.userMessage) {
+    userMessageRowId = findUserMessageRowIdByUiId(turn.sessionId, turn.userMessage.id)
+  }
+  const queuedRowIds = turn.userMessage?.metadata?.queuedInputDispatch?.rowIds
+  if (userMessageRowId != null && Array.isArray(queuedRowIds) && queuedRowIds.length > 0) {
+    markSent(turn.sessionId, queuedRowIds, userMessageRowId)
+    broadcastChatEvent('chat:queued-input-changed', { sessionId: turn.sessionId })
   }
   // R2-3 — upsert by UIMessage id: if the approval pause already persisted a redacted copy of this
   // assistant message (persistPausedAssistant, same merged id on resume), REPLACE that row with the
@@ -462,10 +486,12 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // on the response 'close' in server.ts), so the rollback target is "old drain behaviour + the
   // approval-resume mutex kept". CLAUDE.md 开关表 carries the same wording.
   const detachedRunsEnabled = envBool('MAILAGENT_CHAT_DETACHED_RUNS', true)
+  const queuedInputEnabled = envBool('MAILAGENT_CHAT_QUEUED_INPUT', true)
   const activeRuns = new ActiveRunRegistry()
   // Set after the server listens (chicken-and-egg: the announce needs the gateway's own port, known
   // only post-listen; a paused approval fires well after startup so this is populated by then).
   let gatewayPort = 0
+  if (queuedInputEnabled) restoreAllStale()
   // S3 — the A2UI rich tool cards are always on (MAILAGENT_A2UI_TOOL_CARDS GA'd away):
   // backend side stamps the A2UI render payload into the write-tool audit (ui_payload_json);
   // the renderer mounts the cards unconditionally (registerToolUIs).
@@ -768,6 +794,21 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     model: getLlmModel(),
     providerRegistryEnabled,
     providerModelResolver,
+    ...(queuedInputEnabled
+      ? {
+          queuedInputStore: {
+            list: listQueuedInput,
+            enqueue: enqueueQueuedInput,
+            get: getQueuedInput,
+            update: updateQueuedInput,
+            cancel: cancelQueuedInput,
+            confirm: confirmQueuedInput,
+            restoreForSession
+          },
+          onQueuedInputChanged: (sessionId: number) =>
+            broadcastChatEvent('chat:queued-input-changed', { sessionId })
+        }
+      : {}),
     ...(autoCompactFeatureEnabled && compactPersistence
       ? {
           onCompactCompleted: (sessionId: number) =>
@@ -1293,13 +1334,26 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     ensureConnectorManifest: mcpConnectorsEnabled ? () => refreshConnectorManifest() : undefined
   }
 
+  const postTurnChains = new Map<number, Promise<void>>()
+  const chainPostTurn = (sessionId: number, task: () => Promise<void>): void => {
+    // P5 dispatch must remain after P4 compact. Future P6+ post-turn actions must use this chain.
+    const previous = postTurnChains.get(sessionId) ?? Promise.resolve()
+    const next = previous.catch(() => undefined).then(task)
+    const chained = next.finally(() => {
+      if (postTurnChains.get(sessionId) === chained) postTurnChains.delete(sessionId)
+    })
+    postTurnChains.set(sessionId, chained)
+  }
+
+  let compactCoordinator: CompactCoordinator | null = null
   if (compactPersistence && autoCompactFeatureEnabled) {
-    const compactCoordinator = new CompactCoordinator(gatewayConfig, compactPersistence)
+    compactCoordinator = new CompactCoordinator(gatewayConfig, compactPersistence)
     gatewayConfig.compactCoordinator = compactCoordinator
     gatewayConfig.resolveAutoCompactEnabled = resolveAutoCompactEnabled
     gatewayConfig.maybeAutoCompact = (turn: PersistTurnInput): void => {
       setTimeout(() => {
-        void (async () => {
+        if (turn.sessionId == null) return
+        chainPostTurn(turn.sessionId, async () => {
           if (turn.sessionId == null) return
           const settingEnabled = await resolveAutoCompactEnabled()
           let contextWindow: number | null = null
@@ -1341,9 +1395,51 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           } catch (err) {
             console.warn('[ai-gateway] automatic compact skipped or failed', err)
           }
-        })()
+        })
       }, 0)
     }
+  }
+
+  if (queuedInputEnabled) {
+    const dispatchDeps = {
+      hasActiveRun: (sessionId: number) => activeRuns.hasActive(sessionId),
+      compactActive: (sessionId: number) => compactCoordinator?.hasActive(sessionId) === true,
+      listDispatchable: listDispatchableQueuedInput,
+      claim: claimQueuedInput,
+      revert: (ids: number[]) => {
+        revertClaimed(ids)
+      },
+      listSessionUIMessages: (sessionId: number) =>
+        listMessages(sessionId).map(chatMessageToUIMessage),
+      getSessionModel: (sessionId: number) => getSession(sessionId)?.backend_model ?? null,
+      postChat: async (body: unknown) => {
+        const response = await fetch(`http://127.0.0.1:${gatewayPort}/api/ai/chat`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body)
+        })
+        return {
+          ok: response.ok,
+          drain: async () => {
+            await response.arrayBuffer()
+          }
+        }
+      },
+      broadcast: (sessionId: number) =>
+        broadcastChatEvent('chat:queued-input-changed', { sessionId }),
+      now: () => Date.now(),
+      sleep: (ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms))
+    }
+    const scheduleDispatch = (sessionId: number): void => {
+      setTimeout(
+        () => chainPostTurn(sessionId, () => runQueuedInputDispatch(dispatchDeps, sessionId)),
+        0
+      )
+    }
+    gatewayConfig.dispatchQueuedInput = (turn): void => {
+      if (turn.sessionId != null) scheduleDispatch(turn.sessionId)
+    }
+    gatewayConfig.dispatchQueuedInputIfIdle = scheduleDispatch
   }
 
   const handle = await startAiGatewayServer(gatewayConfig)
