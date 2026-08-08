@@ -22,6 +22,7 @@ import { ExecApprovalCard } from './generic/ExecApprovalCard'
 import { SkillInstallCard } from './generic/SkillInstallCard'
 import { SkillInstallConfirmCard } from './generic/SkillInstallConfirmCard'
 import { SkillUninstallCard } from './generic/SkillUninstallCard'
+import { SkillPublishCard } from './generic/SkillPublishCard'
 import { CustomAgentApprovalCard } from './generic/CustomAgentApprovalCard'
 import { CustomAgentCallCard } from './generic/CustomAgentCallCard'
 import { SimpleApprovalCard } from './generic/SimpleApprovalCard'
@@ -129,6 +130,11 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.SkillUninstallCard,
     toolNames: ['skill_uninstall'],
     render: SkillUninstallCard
+  },
+  {
+    component: A2UI_COMPONENTS.SkillPublishCard,
+    toolNames: ['skill_draft_publish'],
+    render: SkillPublishCard
   },
   // S6 W3-2 — custom-agent CRUD approval card (behind MAILAGENT_CUSTOM_AGENTS_ENABLED). The
   // permission summary + server-fact before/after diff card; delete/run_now stay on the generic

@@ -10,9 +10,9 @@
 // Pure UI test — better-sqlite3 / IPC free. useMailApi + env-flag intent are module-mocked.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { createElement } from 'react'
+import { act, createElement } from 'react'
 import type { SkillSummary } from '../../src/shared/api/types'
 
 vi.mock('react-i18next', () => ({
@@ -25,7 +25,8 @@ vi.mock('react-i18next', () => ({
 const { notionMaster } = vi.hoisted(() => ({ notionMaster: { value: true } }))
 vi.mock('@shared/components/settings/custom-ai/shared', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@shared/components/settings/custom-ai/shared')>()),
-  useEnvFlagIntent: () => notionMaster.value
+  useEnvFlagIntent: () => notionMaster.value,
+  fetchSkillCreatorEnabled: async () => true
 }))
 
 // notion_agent's expandable config panel always mounts inside CollapsibleRegion — stub it so the
@@ -41,9 +42,24 @@ vi.mock('@shared/lib/skill_overrides', () => ({
 }))
 vi.mock('@shared/state/toast', () => ({ toastError: vi.fn() }))
 
-const { listSkills } = vi.hoisted(() => ({ listSkills: vi.fn<() => Promise<SkillSummary[]>>() }))
+const { listSkills, listSkillEntrypoints, listSkillTrust, grantSkillTrust, revokeSkillTrust } = vi.hoisted(() => ({
+  listSkills: vi.fn<() => Promise<SkillSummary[]>>(),
+  listSkillEntrypoints: vi.fn(),
+  listSkillTrust: vi.fn(),
+  grantSkillTrust: vi.fn(),
+  revokeSkillTrust: vi.fn()
+}))
 vi.mock('@shared/hooks/useMailApi', () => ({
-  useMailApi: () => ({ chat: { listSkills, setSkillEnabled: vi.fn() } })
+  useMailApi: () => ({
+    chat: {
+      listSkills,
+      setSkillEnabled: vi.fn(),
+      listSkillEntrypoints,
+      listSkillTrust,
+      grantSkillTrust,
+      revokeSkillTrust
+    }
+  })
 }))
 
 import { SkillsSection } from '../../src/shared/components/settings/custom-ai/SkillsSection'
@@ -60,13 +76,19 @@ function skill(partial: Partial<SkillSummary> & { name: string }): SkillSummary 
     available: partial.available ?? true,
     unavailableReason: partial.unavailableReason ?? null,
     toolCount: partial.toolCount ?? 1,
-    scopes: partial.scopes ?? []
+    scopes: partial.scopes ?? [],
+    installDir: partial.installDir ?? null,
+    trustState: partial.trustState ?? null,
+    lastError: partial.lastError ?? null
   } as SkillSummary
 }
 
 function renderUi() {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
-  return render(createElement(QueryClientProvider, { client: qc }, createElement(SkillsSection)))
+  return {
+    ...render(createElement(QueryClientProvider, { client: qc }, createElement(SkillsSection))),
+    queryClient: qc
+  }
 }
 
 beforeEach(() => {
@@ -76,6 +98,10 @@ beforeEach(() => {
     skill({ name: 'calendar', title: 'Calendar' }),
     skill({ name: 'notion_agent', title: 'Notion Agent', enabled: false, defaultEnabled: false })
   ])
+  listSkillEntrypoints.mockResolvedValue([])
+  listSkillTrust.mockResolvedValue({ skillName: '', currentPackageHash: null, trusts: [] })
+  grantSkillTrust.mockResolvedValue({})
+  revokeSkillTrust.mockResolvedValue({ id: 'trust-1', revoked: true })
 })
 
 afterEach(() => {
@@ -103,5 +129,86 @@ describe('SkillsSection — clarification notes', () => {
     renderUi()
     await waitFor(() => expect(screen.getByText('Notion Agent')).toBeTruthy())
     expect(screen.queryByText('settings.skills.notionAgentMasterOff')).toBeNull()
+  })
+
+  test('user-created row grants trust for the server-listed entrypoint', async () => {
+    listSkills.mockResolvedValue([
+      skill({
+        name: 'user-skill',
+        title: 'User Skill',
+        sourceType: 'user_created',
+        trustState: 'stale',
+        lastError: 'tampered:main.py'
+      })
+    ])
+    listSkillEntrypoints.mockResolvedValue([
+      { name: 'user-skill', dir: '/skills/user-skill', files: ['main.py'] }
+    ])
+    listSkillTrust.mockResolvedValue({
+      skillName: 'user-skill',
+      currentPackageHash: 'abcdef0123456789',
+      trusts: []
+    })
+    renderUi()
+    await waitFor(() => expect(screen.getByText('User Skill')).toBeTruthy())
+    expect(screen.getByText('stale')).toBeTruthy()
+    expect(screen.getByText('tampered:main.py')).toBeTruthy()
+    fireEvent.click(screen.getByText('User Skill'))
+    await waitFor(() => expect(screen.getByText('settings.skills.trustVersion')).toBeTruthy())
+    const trustButton = screen.getByRole('button', { name: 'settings.skills.trustVersion' })
+    await waitFor(() => expect(trustButton.hasAttribute('disabled')).toBe(false))
+    await act(async () => {
+      fireEvent.click(trustButton)
+      await Promise.resolve()
+    })
+    await waitFor(() =>
+      expect(grantSkillTrust).toHaveBeenCalledWith(
+        'user-skill',
+        '/skills/user-skill/main.py',
+        {
+          argvPattern: [],
+          cwdScope: ['/skills/user-skill'],
+          readScopes: [],
+          writeScopes: [],
+          networkMode: 'off',
+          secretNames: []
+        }
+      )
+    )
+  })
+
+  test('revoking active trust refreshes both trust detail and resolved skill badge', async () => {
+    listSkills.mockResolvedValue([
+      skill({ name: 'user-skill', title: 'User Skill', sourceType: 'user_created', trustState: 'trusted' })
+    ])
+    listSkillEntrypoints.mockResolvedValue([
+      { name: 'user-skill', dir: '/skills/user-skill', files: ['main.py'] }
+    ])
+    listSkillTrust.mockResolvedValue({
+      currentPackageHash: 'abcdef0123456789',
+      trusts: [{
+        id: 'trust-1',
+        skillName: 'user-skill',
+        packageHash: 'abcdef0123456789',
+        entrypoint: '/skills/user-skill/main.py',
+        policy: {
+          argvPattern: [], cwdScope: ['/skills/user-skill'], readScopes: [], writeScopes: [], networkMode: 'off', secretNames: []
+        },
+        trustedAt: 1,
+        revokedAt: null,
+        state: 'trusted'
+      }]
+    })
+    const { queryClient } = renderUi()
+    const invalidate = vi.spyOn(queryClient, 'invalidateQueries')
+    await waitFor(() => expect(screen.getByText('User Skill')).toBeTruthy())
+    fireEvent.click(screen.getByText('User Skill'))
+    await waitFor(() => expect(screen.getByText('settings.skills.revokeTrust')).toBeTruthy())
+    fireEvent.click(screen.getByText('settings.skills.revokeTrust'))
+    await waitFor(() => expect(revokeSkillTrust).toHaveBeenCalledWith('user-skill', 'trust-1'))
+    await waitFor(() => {
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['skill-trust', 'user-skill'] })
+      expect(invalidate).toHaveBeenCalledWith({ queryKey: ['skills'] })
+    })
   })
 })

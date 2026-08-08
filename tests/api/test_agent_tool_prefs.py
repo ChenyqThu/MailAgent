@@ -38,6 +38,9 @@ EXPECTED_DEFAULT_AUTO = {
     "web_fetch",
     "web_search",
     "skill_uninstall",
+    "skill_draft_create",
+    "skill_draft_write_file",
+    "skill_draft_discard",
     "custom_agent_run_now",
 }
 # configurable=False（固定形状）：send=收件人白名单 / run_command=policy_rules /
@@ -47,6 +50,7 @@ EXPECTED_FIXED_ASK = {
     "run_command",
     "skill_install",
     "skill_install_confirm",
+    "skill_draft_publish",
     "custom_agent_create",
     "custom_agent_update",
     "custom_agent_delete",

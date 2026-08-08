@@ -34,6 +34,8 @@ import type {
   SkillPackPreview,
   SkillSecretMeta,
   SkillSummary,
+  SkillDraftSummary,
+  SkillTrustRule,
   SkillUninstallResult,
   ToolApprovalPrefsPayload,
   ToolApprovalTierValue
@@ -252,6 +254,49 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       await request(baseUrl, 'POST', `/agent/skills/${encodeURIComponent(name)}/enabled`, {
         body: { enabled }
       })
+    },
+
+    async listSkillDrafts(): Promise<SkillDraftSummary[]> {
+      const data = await request<{ drafts: SkillDraftSummary[] }>(baseUrl, 'GET', '/agent/skills/drafts')
+      return data.drafts ?? []
+    },
+
+    async getSkillDraft(id: string): Promise<SkillDraftSummary> {
+      return request(baseUrl, 'GET', `/agent/skills/drafts/${encodeURIComponent(id)}`)
+    },
+
+    async readSkillDraftFile(id: string, path: string): Promise<string> {
+      const data = await request<{ content: string }>(
+        baseUrl,
+        'GET',
+        `/agent/skills/drafts/${encodeURIComponent(id)}/file`,
+        { query: { path } }
+      )
+      return data.content
+    },
+
+    async publishSkillDraft(id: string, enabled: boolean): Promise<void> {
+      await request(baseUrl, 'POST', `/agent/skills/drafts/${encodeURIComponent(id)}/publish`, {
+        body: { enabled }
+      })
+    },
+
+    async discardSkillDraft(id: string): Promise<void> {
+      await request(baseUrl, 'POST', `/agent/skills/drafts/${encodeURIComponent(id)}/discard`, { body: {} })
+    },
+
+    async listSkillTrust(name: string): Promise<{ currentPackageHash: string | null; trusts: SkillTrustRule[] }> {
+      return request(baseUrl, 'GET', `/agent/skills/${encodeURIComponent(name)}/trust`)
+    },
+
+    async grantSkillTrust(name: string, entrypoint: string, policy: SkillTrustRule['policy']): Promise<SkillTrustRule> {
+      return request(baseUrl, 'POST', `/agent/skills/${encodeURIComponent(name)}/trust`, {
+        body: { entrypoint, policy }
+      })
+    },
+
+    async revokeSkillTrust(name: string, trustId: string): Promise<void> {
+      await request(baseUrl, 'DELETE', `/agent/skills/${encodeURIComponent(name)}/trust/${encodeURIComponent(trustId)}`)
     },
 
     async getApprovalMode(): Promise<GlobalApprovalMode> {

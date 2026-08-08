@@ -112,6 +112,10 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("skill_install", "supply", "ask", configurable=False),
     BuiltinToolPolicy("skill_install_confirm", "supply", "ask", configurable=False),
     BuiltinToolPolicy("skill_uninstall", "supply", "auto"),
+    BuiltinToolPolicy("skill_draft_create", "supply", "auto"),
+    BuiltinToolPolicy("skill_draft_write_file", "supply", "auto"),
+    BuiltinToolPolicy("skill_draft_publish", "supply", "ask", configurable=False),
+    BuiltinToolPolicy("skill_draft_discard", "supply", "auto"),
     # ── custom agent CRUD：create/update/delete 保持现状；run_now = A 组放宽 ──────
     BuiltinToolPolicy("custom_agent_create", "agents", "ask", configurable=False),
     BuiltinToolPolicy("custom_agent_update", "agents", "ask", configurable=False),

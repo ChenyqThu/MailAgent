@@ -39,6 +39,7 @@ EXPECTED_TOOLS = {
     # Configuration/workflow-only builtin. The six CRUD tools live in the gateway and remain
     # manual-chat-only capability changes rather than manifest invocation tools.
     "custom_agent": {},
+    "skill_creator": {},
 }
 
 

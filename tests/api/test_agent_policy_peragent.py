@@ -238,8 +238,14 @@ def test_peragent_exec_rejects_non_skill_argv1(client, fresh_agent_cfg, fresh_sk
 # ── per-agent exec：挂载归属闸（S6 W3, rev3.1 §5.2 —— 形状闸之上第四层纯收窄）──────────────
 
 
-def test_peragent_exec_mount_gate_create_and_evaluate(client, fresh_agent_cfg, fresh_skills_dir,
-                                                      custom_agent_env, tmp_path):
+def test_peragent_exec_mount_gate_create_and_evaluate(
+    client,
+    fresh_agent_cfg,
+    fresh_skills_dir,
+    custom_agent_env,
+    tmp_path,
+    monkeypatch,
+):
     """建规侧：引用未挂载 installed skill → 400（提示先挂载）；挂载（含默认集缺省 = 未挂）后
     201。evaluate 侧：挂载 + 首跑在位 → auto_allow；owner 卸挂载 → 规则静默 dormant（ask），
     规则行不删 —— 重挂载即恢复（fail-closed 方向全程成立）。"""
@@ -267,8 +273,26 @@ def test_peragent_exec_mount_gate_create_and_evaluate(client, fresh_agent_cfg, f
     digest = hashlib.sha256(open(main_py, "rb").read()).hexdigest()
     fresh_agent_cfg.merge_first_run_approved(
         "dms-approve", {os.path.realpath(main_py): {"version": "1.0", "entrypoint_hash": digest}})
+    skill_row = fresh_agent_cfg.get_skill("dms-approve")
+    assert skill_row is not None and skill_row.package_hash
     body = {"capability": "exec", "action": {"argv": [os.path.realpath("/bin/echo"), main_py]},
             "contextMode": "untrusted_trigger", "agentId": "dms"}
+    assert client.post("/api/agent/policy/evaluate", json=body).json()["data"]["decision"] == "ask"
+    fresh_agent_cfg.grant_skill_trust(
+        "trust-dms-approve-mismatch",
+        "dms-approve",
+        skill_row.package_hash,
+        os.path.realpath(main_py),
+        {"argvPattern": [os.path.realpath("/bin/echo"), "pattern:^never$"]},
+    )
+    assert client.post("/api/agent/policy/evaluate", json=body).json()["data"]["decision"] == "ask"
+    trust = fresh_agent_cfg.grant_skill_trust(
+        "trust-dms-approve",
+        "dms-approve",
+        skill_row.package_hash,
+        os.path.realpath(main_py),
+        {"argvPattern": [os.path.realpath("/bin/echo"), main_py]},
+    )
     d = client.post("/api/agent/policy/evaluate", json=body).json()["data"]
     assert d == {"decision": "auto_allow", "rule_id": rid}
     # owner 卸挂载 → 同 action dormant skip（规则行仍在，不放行）。
@@ -279,6 +303,36 @@ def test_peragent_exec_mount_gate_create_and_evaluate(client, fresh_agent_cfg, f
     _mount_skills(custom_agent_env, "dms", ["dms-approve"])
     d3 = client.post("/api/agent/policy/evaluate", json=body).json()["data"]
     assert d3["decision"] == "auto_allow"
+    fresh_agent_cfg.install_skill(
+        "dms-approve",
+        source_type=skill_row.source_type,
+        manifest=skill_row.manifest,
+        manifest_version=skill_row.manifest_version,
+        version=skill_row.version,
+        source_uri=skill_row.source_uri,
+        package_hash="f" * 64,
+        files_json=skill_row.files_json,
+        enabled=skill_row.enabled,
+    )
+    assert client.post("/api/agent/policy/evaluate", json=body).json()["data"]["decision"] == "ask"
+    fresh_agent_cfg.install_skill(
+        "dms-approve",
+        source_type=skill_row.source_type,
+        manifest=skill_row.manifest,
+        manifest_version=skill_row.manifest_version,
+        version=skill_row.version,
+        source_uri=skill_row.source_uri,
+        package_hash=skill_row.package_hash,
+        files_json=skill_row.files_json,
+        enabled=skill_row.enabled,
+    )
+    assert fresh_agent_cfg.revoke_skill_trust(trust.id) is True
+    assert client.post("/api/agent/policy/evaluate", json=body).json()["data"]["decision"] == "ask"
+    monkeypatch.setattr("src.skills.flags.skill_creator_enabled", lambda: False)
+    assert (
+        client.post("/api/agent/policy/evaluate", json=body).json()["data"]["decision"]
+        == "auto_allow"
+    )
 
 
 # ── per-agent web：域名白名单建规 + 双键 evaluate（S6 W3，ADR-004 rev3.1 F#1 语义翻转）────────

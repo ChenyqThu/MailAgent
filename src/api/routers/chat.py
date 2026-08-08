@@ -628,6 +628,7 @@ async def chat_config(request: Request):
             # 这里 hot-read 同一 .env 供前端显隐（flag-off → 前端 SkillPacksSection return null，
             # 整个区块在 DOM 不存在；字段恒发）。只驱动安装/管理 UI 显隐，不改变 gateway 是否注册工具。
             "skillInstallEnabled": _hot_bool(env_vals, "MAILAGENT_OPENNESS_SKILL_INSTALL", True),
+            "skillCreatorEnabled": _hot_bool(env_vals, "MAILAGENT_SKILL_CREATOR", True),
             # S5 — Settings「Custom AI Agents」建/改/run 历史入口显隐 gate。custom agent 内核 flag
             # MAILAGENT_CUSTOM_AGENTS_ENABLED（gateway CRUD 工具注册在 electron main 读，Python worker/
             # 端点走 pydantic）；这里 hot-read 同一 .env 供前端显隐（flag-off → 前端 CustomAgent 入口/

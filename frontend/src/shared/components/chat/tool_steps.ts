@@ -97,6 +97,12 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'skill_install',
   'skill_install_confirm',
   'skill_uninstall',
+  'skill_draft_create',
+  'skill_draft_write_file',
+  'skill_draft_read',
+  'skill_draft_validate',
+  'skill_draft_publish',
+  'skill_draft_discard',
   'skill_list_installed',
   // chat sessions
   'chat_session_list',

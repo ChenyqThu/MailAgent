@@ -371,9 +371,11 @@ def _skill_unresolved_problem(store: Any, argv: list[str], run_cwd: str) -> Opti
         if rp == skills_root:
             return f"argv references the skills root directory itself ({tok!r})"
         first = rp[len(skills_root) + 1:].split(os.sep, 1)[0]
+        if first == ".draft":
+            return f"draft:{rp}"
         skdir = skills_root + os.sep + first
         rel = rp[len(skdir) + 1:].replace(os.sep, "/") if rp.startswith(skdir + os.sep) else None
-        rels = _manifest_rels(first) if first != ".quarantine" else None
+        rels = _manifest_rels(first) if first not in {".quarantine", ".draft"} else None
         if rels is None or rel is None or rel not in rels:
             return (
                 f"argv references {rp} inside the managed skills directory but it is not part of "
@@ -450,6 +452,14 @@ async def run_command(request: Request, body: RunRequest):
 
     probe = probe_skill_exec(body.argv, run_cwd)
     store = get_agent_config_store()
+    unresolved = _skill_unresolved_problem(store, body.argv, run_cwd)
+    if unresolved is not None and unresolved.startswith("draft:"):
+        raise APIError(
+            "E_SKILL_DRAFT",
+            "skill drafts are never executable; publish the draft first",
+            http_status=409,
+            source="exec",
+        )
     gate_checks = check_skill_gates(store, probe)
     for check in gate_checks:
         if check.tampered:
@@ -464,7 +474,6 @@ async def run_command(request: Request, body: RunRequest):
 
     # ADR-004 D4-②：盲区独立 deny —— probe 认不出执行对象的 skills-root 内引用（裸 token /
     # 目录 / quarantine / 清单外路径）硬拒，**独立于审批**（人批了也不跑）。409 文案给修复路径。
-    unresolved = _skill_unresolved_problem(store, body.argv, run_cwd)
     if unresolved is not None:
         raise APIError(
             "E_SKILL_UNRESOLVED",

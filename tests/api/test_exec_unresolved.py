@@ -120,6 +120,33 @@ def test_quarantine_ref_409(client, fresh_agent_cfg, fresh_skills_dir):
     assert (code, err) == (409, "E_SKILL_UNRESOLVED")
 
 
+def test_draft_ref_has_dedicated_409_and_file_floor_denies(
+    client, fresh_agent_cfg, fresh_skills_dir
+):
+    draft = fresh_skills_dir / ".draft" / "x-abc123456789" / "content"
+    draft.mkdir(parents=True)
+    script = draft / "main.py"
+    script.write_text("print('never')")
+
+    code, err, message = _err(
+        client.post("/api/exec/run", json={"argv": ["/bin/echo", str(script)]})
+    )
+    assert (code, err) == (409, "E_SKILL_DRAFT")
+    assert message == "skill drafts are never executable; publish the draft first"
+
+    read_code, read_err, _ = _err(
+        client.post("/api/exec/file_read", json={"path": str(script)})
+    )
+    assert (read_code, read_err) == (403, "E_EXEC_FLOOR_DENIED")
+    write_code, write_err, _ = _err(
+        client.post(
+            "/api/exec/file_write",
+            json={"path": str(draft / "out.txt"), "content": "blocked"},
+        )
+    )
+    assert (write_code, write_err) == (403, "E_EXEC_FLOOR_DENIED")
+
+
 def test_outside_skills_root_manual_semantics_unchanged(client, fresh_agent_cfg,
                                                         fresh_skills_dir, tmp_path):
     """范围界定（codex P2-1）：skills root **外**的路径 token / 裸实参零变化。"""

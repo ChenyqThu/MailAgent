@@ -404,6 +404,40 @@ export interface SkillSummary {
   toolCount: number
   /** Union of the skill tools' auth_scopes (side-effect summary). */
   scopes: string[]
+  installDir: string | null
+  trustState: 'trusted' | 'stale' | 'revoked' | null
+  lastError: string | null
+}
+
+export interface SkillDraftSummary {
+  id: string
+  name: string
+  status: 'draft' | 'valid' | 'invalid' | 'published' | 'discarded'
+  manifest: Record<string, unknown> | null
+  validation: Record<string, unknown> | null
+  files?: Array<{ path: string; bytes: number }>
+  replacesInstalled?: boolean
+  currentPackageHash?: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface SkillTrustRule {
+  id: string
+  skillName: string
+  packageHash: string
+  entrypoint: string
+  policy: {
+    argvPattern: string[]
+    cwdScope: string[]
+    readScopes: string[]
+    writeScopes: string[]
+    networkMode: 'off' | 'gated'
+    secretNames: string[]
+  }
+  trustedAt: number
+  revokedAt: number | null
+  state: 'trusted' | 'stale' | 'revoked'
 }
 
 /** S2 W1 — one exec automation-policy rule (GET /agent/policy/rules, camelCase). A structured
@@ -712,6 +746,14 @@ export interface ChatApi {
    * on failure (E_NOT_FOUND for an unknown skill, E_INVALID_ARG for a bad arg).
    */
   setSkillEnabled(name: string, enabled: boolean): Promise<void>
+  listSkillDrafts(): Promise<SkillDraftSummary[]>
+  getSkillDraft(id: string): Promise<SkillDraftSummary>
+  readSkillDraftFile(id: string, path: string): Promise<string>
+  publishSkillDraft(id: string, enabled: boolean): Promise<void>
+  discardSkillDraft(id: string): Promise<void>
+  listSkillTrust(name: string): Promise<{ currentPackageHash: string | null; trusts: SkillTrustRule[] }>
+  grantSkillTrust(name: string, entrypoint: string, policy: SkillTrustRule['policy']): Promise<SkillTrustRule>
+  revokeSkillTrust(name: string, trustId: string): Promise<void>
   /**
    * 07-16 approval-mode switcher — read the owner-global chat approval mode
    * (GET /api/agent/approval-mode; persisted in backend agent_config.db so desktop and the

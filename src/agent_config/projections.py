@@ -110,8 +110,28 @@ def resolved_skills(manifest_skills: Iterable[Any], store: AgentConfigStore) -> 
     rows = {r.skill_name: r for r in store.list_skills()}
     out: list[dict[str, Any]] = []
     for s in manifest_skills:
+        if s.name == "skill_creator":
+            from src.skills.flags import skill_creator_enabled
+
+            if not skill_creator_enabled():
+                continue
         row = rows.get(s.name)
         override = row.enabled if row else None
+        trust_state: Optional[str] = None
+        if row is not None:
+            trusts = store.list_skill_trust(s.name)
+            states = [
+                "revoked"
+                if trust.revoked_at is not None
+                else "trusted"
+                if row.package_hash and trust.package_hash == row.package_hash
+                else "stale"
+                for trust in trusts
+            ]
+            for candidate in ("trusted", "stale", "revoked"):
+                if candidate in states:
+                    trust_state = candidate
+                    break
         out.append(
             {
                 "name": s.name,
@@ -126,6 +146,8 @@ def resolved_skills(manifest_skills: Iterable[Any], store: AgentConfigStore) -> 
                 "scopes": sorted({sc for t in s.tools for sc in t.auth_scopes}),
                 "sourceType": row.source_type if row else "builtin",
                 "installDir": _skill_install_dir(s.name) if row and row.files_json else None,
+                "trustState": trust_state,
+                "lastError": row.last_error if row else None,
             }
         )
     return out

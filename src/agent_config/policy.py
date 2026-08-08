@@ -490,7 +490,7 @@ def headless_exec_rule_problem(
     if not rp.startswith(skills_root + os.sep):
         return "argv[1] must resolve inside the managed skills directory"
     first = rp[len(skills_root) + 1:].split(os.sep, 1)[0]
-    if not first or first == ".quarantine":
+    if not first or first in {".quarantine", ".draft"}:
         return "argv[1] must point into an installed skill directory"
     row = store.get_skill(first)
     import json as _json
@@ -536,9 +536,53 @@ def exec_entrypoint_skill(matcher: ExecMatcher) -> Optional[str]:
     if not rp.startswith(skills_root + os.sep):
         return None
     first = rp[len(skills_root) + 1:].split(os.sep, 1)[0]
-    if not first or first == ".quarantine":
+    if not first or first in {".quarantine", ".draft"}:
         return None
     return first
+
+
+def _trusted_headless_exec(
+    store: "AgentConfigStore",
+    matcher: ExecMatcher,
+    action_descriptor: dict[str, Any],
+) -> bool:
+    """P8 fourth headless gate: current package hash + pinned entrypoint + argv snapshot."""
+    try:
+        from src.skills.flags import skill_creator_enabled
+
+        if not skill_creator_enabled():
+            return True
+        skill_name = exec_entrypoint_skill(matcher)
+        if skill_name is None or not matcher.argv_template or matcher.argv_template[0].pin is None:
+            return False
+        row = store.get_skill(skill_name)
+        if row is None or not row.package_hash:
+            return False
+        entrypoint = os.path.realpath(matcher.argv_template[0].pin)
+        trust = store.find_active_skill_trust(skill_name, row.package_hash, entrypoint)
+        if trust is None:
+            return False
+        pattern = trust.policy.get("argvPattern")
+        if pattern is None:
+            pattern = trust.policy.get("argv_pattern")
+        if pattern is None or pattern == []:
+            return True
+        argv = action_descriptor.get("argv")
+        if not isinstance(argv, list) or not all(isinstance(item, str) for item in argv):
+            return False
+        if not isinstance(pattern, list) or len(pattern) != len(argv):
+            return False
+        for expected, actual in zip(pattern, argv):
+            if not isinstance(expected, str):
+                return False
+            if expected.startswith("pattern:"):
+                if re.fullmatch(expected[len("pattern:"):], actual) is None:
+                    return False
+            elif expected != actual:
+                return False
+        return True
+    except Exception:  # noqa: BLE001 — trust read/parse failure is fail-closed
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -657,6 +701,12 @@ def evaluate(
             except Exception:  # noqa: BLE001 — 匹配异常视为不匹配（fail-closed）
                 continue
             if matched:
+                if (
+                    agent_id is not None
+                    and capability == "exec"
+                    and not _trusted_headless_exec(store, matcher, action_descriptor)
+                ):
+                    continue
                 try:
                     store.bump_policy_rule_use(rule.id)
                 except Exception:  # noqa: BLE001 — 计数失败不影响放行判定

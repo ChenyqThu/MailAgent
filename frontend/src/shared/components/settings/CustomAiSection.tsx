@@ -20,6 +20,7 @@ import { MemoryCaptureModelSection } from './custom-ai/MemoryCaptureModelSection
 import { StandingDocsSection } from './custom-ai/StandingDocsSection'
 import { ExecPolicySection } from './custom-ai/ExecPolicySection'
 import { SkillPacksSection } from './custom-ai/SkillPacksSection'
+import { SkillDraftsSection } from './custom-ai/SkillDraftsSection'
 import { SystemCapabilitiesSection } from './custom-ai/SystemCapabilitiesSection'
 
 // Re-export the previously public symbols so external / historical import sites resolve
@@ -55,6 +56,7 @@ export function CustomAiSection(): React.ReactElement {
       <div id={AI_TAB_ANCHOR_IDS.skillPacks} className={mt}>
         <SkillPacksSection />
       </div>
+      <SkillDraftsSection />
       {/* Lane 2 #8 — 记忆双开关放记忆家族之首 (编译偏好 / 抽取模型都以记忆开着为前提)。 */}
       <div id={AI_TAB_ANCHOR_IDS.memory} className={mt}>
         <MemorySection />

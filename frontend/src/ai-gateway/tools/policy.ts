@@ -136,6 +136,12 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // does not apply to it; see the registration comment + policy.test.ts carve-out).
   suggest_followups: 'read',
   plan_update: 'read',
+  skill_draft_create: 'capability_change',
+  skill_draft_write_file: 'capability_change',
+  skill_draft_read: 'capability_change',
+  skill_draft_validate: 'capability_change',
+  skill_draft_publish: 'capability_change',
+  skill_draft_discard: 'capability_change',
   // artifact — local, deletable/replaceable output. It never leaves the machine and never needs
   // an approval card; unlike domain_write it is available silently in every context mode.
   report_write: 'artifact',

@@ -574,6 +574,19 @@ export interface DomainSkillFetchPreview {
   skillMdExcerpt: string
 }
 
+export interface DomainSkillDraft {
+  id: string
+  name: string
+  status: 'draft' | 'valid' | 'invalid' | 'published' | 'discarded'
+  manifest: Record<string, unknown> | null
+  validation: Record<string, unknown> | null
+  files?: Array<{ path: string; bytes: number }>
+  replacesInstalled?: boolean
+  currentPackageHash?: string | null
+  createdAt: number
+  updatedAt: number
+}
+
 /** POST /agent/skills/confirm data block (the row landed + content promoted). */
 export interface DomainSkillConfirmResult {
   name: string
@@ -1581,6 +1594,66 @@ export class MailAgentDomainClient {
    *  The TOOL fences (UNTRUSTED_SKILL_DOC) + truncates before the model sees the content. */
   skillDocRead(name: string, signal?: AbortSignal): Promise<DomainSkillDocResult> {
     return this._req<DomainSkillDocResult>('GET', `/agent/skills/${encodeURIComponent(name)}/doc`, {
+      signal
+    })
+  }
+
+  skillDraftCreate(
+    input: { name: string; manifest?: Record<string, unknown> },
+    signal?: AbortSignal
+  ): Promise<DomainSkillDraft> {
+    return this._req<DomainSkillDraft>('POST', '/agent/skills/drafts', { body: input, signal })
+  }
+
+  skillDraftWriteFile(
+    input: { draftId: string; path: string; content: string },
+    signal?: AbortSignal
+  ): Promise<{ path: string; bytes: number }> {
+    return this._req('PUT', `/agent/skills/drafts/${encodeURIComponent(input.draftId)}/file`, {
+      body: { path: input.path, content: input.content },
+      signal
+    })
+  }
+
+  skillDraftGet(draftId: string, signal?: AbortSignal): Promise<DomainSkillDraft> {
+    return this._req('GET', `/agent/skills/drafts/${encodeURIComponent(draftId)}`, { signal })
+  }
+
+  skillDraftReadFile(
+    draftId: string,
+    path: string,
+    signal?: AbortSignal
+  ): Promise<{ path: string; content: string }> {
+    return this._req('GET', `/agent/skills/drafts/${encodeURIComponent(draftId)}/file`, {
+      query: { path },
+      signal
+    })
+  }
+
+  skillDraftValidate(
+    draftId: string,
+    signal?: AbortSignal
+  ): Promise<{ draftId: string; validation: Record<string, unknown> }> {
+    return this._req('POST', `/agent/skills/drafts/${encodeURIComponent(draftId)}/validate`, {
+      body: {},
+      signal
+    })
+  }
+
+  skillDraftPublish(
+    draftId: string,
+    enabled: boolean,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req('POST', `/agent/skills/drafts/${encodeURIComponent(draftId)}/publish`, {
+      body: { enabled },
+      signal
+    })
+  }
+
+  skillDraftDiscard(draftId: string, signal?: AbortSignal): Promise<DomainSkillDraft> {
+    return this._req('POST', `/agent/skills/drafts/${encodeURIComponent(draftId)}/discard`, {
+      body: {},
       signal
     })
   }

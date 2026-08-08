@@ -246,6 +246,7 @@ def skill_env(tmp_path, monkeypatch):
         source_type="local_folder",
         manifest={"name": "dms-approve", "type": "script"},
         version="1.0",
+        package_hash="a" * 64,
         files_json=json.dumps({"main.py": digest}),
     )
     return st, str(main_py), digest
@@ -362,6 +363,13 @@ def test_evaluate_allows_conforming_pinned_rule_after_first_run(skill_env):
         "dms-approve",
         {os.path.realpath(main_py): {"version": "1.0", "entrypoint_hash": digest}},
     )
+    st.grant_skill_trust(
+        "trust-dms-approve",
+        "dms-approve",
+        "a" * 64,
+        os.path.realpath(main_py),
+        {},
+    )
     assert P.evaluate(st, "exec", action, "untrusted_trigger", agent_id="dms",
                       mounted_skills=mounted) == {
         "decision": "auto_allow", "rule_id": rule.id,
@@ -386,6 +394,13 @@ def test_evaluate_mount_gate_unmounted_rule_is_dormant(skill_env):
     st.merge_first_run_approved(
         "dms-approve",
         {os.path.realpath(main_py): {"version": "1.0", "entrypoint_hash": digest}},
+    )
+    st.grant_skill_trust(
+        "trust-dms-approve",
+        "dms-approve",
+        "a" * 64,
+        os.path.realpath(main_py),
+        {},
     )
     action = {"argv": [argv0, main_py], "cwd": None}
     # 挂载在位 → auto_allow（对照组）。

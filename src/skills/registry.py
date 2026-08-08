@@ -68,7 +68,15 @@ def _server_version() -> str:
 @lru_cache(maxsize=1)
 def code_builtin_skills() -> tuple[BoundSkill, ...]:
     """代码内置 builtin skills（进程内缓存 —— 不随运行时变化）。新增 builtin 在此登记 builder。"""
-    from src.skills.builtin import calendar, custom_agent, email, notion_agent, report, search
+    from src.skills.builtin import (
+        calendar,
+        custom_agent,
+        email,
+        notion_agent,
+        report,
+        search,
+        skill_creator,
+    )
 
     return (
         email.build_skill(),
@@ -77,6 +85,7 @@ def code_builtin_skills() -> tuple[BoundSkill, ...]:
         calendar.build_skill(),
         notion_agent.build_skill(),
         custom_agent.build_skill(),
+        skill_creator.build_skill(),
     )
 
 

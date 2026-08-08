@@ -87,6 +87,7 @@ describe('componentRegistry — resolution', () => {
       'notion_agent_chat',
       'run_command',
       'set_skill_enabled',
+      'skill_draft_publish',
       'skill_install',
       'skill_install_confirm',
       'skill_uninstall',
@@ -107,6 +108,7 @@ describe('componentRegistry — resolution', () => {
       'SimpleApprovalCard',
       'SkillInstallCard',
       'SkillInstallConfirmCard',
+      'SkillPublishCard',
       'SkillToggleCard',
       'SkillUninstallCard',
       'SystemDocApprovalCard'

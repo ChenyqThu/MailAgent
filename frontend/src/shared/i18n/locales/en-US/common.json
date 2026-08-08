@@ -989,6 +989,12 @@
       "skill_install": "Install skill",
       "skill_install_confirm": "Confirm skill install",
       "skill_uninstall": "Uninstall skill",
+      "skill_draft_create": "Create skill draft",
+      "skill_draft_write_file": "Write skill draft file",
+      "skill_draft_read": "Read skill draft",
+      "skill_draft_validate": "Validate skill draft",
+      "skill_draft_publish": "Publish skill draft",
+      "skill_draft_discard": "Discard skill draft",
       "skill_list_installed": "List installed skills",
       "chat_session_list": "List past chats",
       "agent_catalog_list": "List agent catalog",
@@ -1226,6 +1232,15 @@
       "installed": "Installed {name}.",
       "installExecuted": "Install executed ({name}).",
       "error": "Install failed — commonly because the quarantine contents changed after preview (a hash mismatch refuses the install). Ask the assistant to re-download and try again."
+    },
+    "skillPublishCard": {
+      "title": "Publish skill draft",
+      "factsError": "The server facts could not be loaded. Publishing is unavailable.",
+      "loading": "Loading verified draft facts…",
+      "files": "{count} files",
+      "enabled": "Enabled after publish: {value}",
+      "replaceWarning": "This replaces the installed version; existing version trust becomes stale.",
+      "approve": "Publish"
     },
     "skillUninstallCard": {
       "title": "Uninstall skill",
@@ -2085,6 +2100,29 @@
       "loading": "Loading skills…",
       "calendarChatNote": "This toggle only governs the outward Skill interface and capability declaration; the calendar tools in chat are controlled by the Calendar item under System capabilities.",
       "notionAgentMasterOff": "Master switch MAILAGENT_NOTION_AGENT_TOOL is off: even when enabled here, the notion_agent tool won't be registered in chat."
+      ,"sourceBuiltin": "Builtin · product trusted",
+      "sourceUserCreated": "User-created",
+      "sourceThirdParty": "Third-party",
+      "currentHash": "Current package hash",
+      "argvPattern": "Argv pattern (one item per line; prefix regex with pattern:)",
+      "cwdScope": "Working-directory scopes",
+      "readScopes": "Read scopes",
+      "writeScopes": "Write scopes",
+      "networkMode": "Network mode snapshot",
+      "secretNames": "Secret names",
+      "trustVersion": "Trust this version",
+      "revokeTrust": "Revoke"
+    },
+    "skillDrafts": {
+      "title": "Skill drafts",
+      "desc": "Isolated drafts are never executable. Review validation and publish explicitly.",
+      "empty": "No skill drafts.",
+      "noSkillMd": "SKILL.md is missing or unreadable.",
+      "enableAfterPublish": "Enable after publishing",
+      "publish": "Publish",
+      "discard": "Discard",
+      "publishConfirm": "Publish {name}? Enabled after publish: {enabled}",
+      "discardConfirm": "Discard {name}?"
     },
     "anchorNav": {
       "ariaLabel": "Sections on this page"

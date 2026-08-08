@@ -104,3 +104,14 @@ export async function fetchSkillInstallEnabled(): Promise<boolean> {
     return false
   }
 }
+
+export async function fetchSkillCreatorEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return false
+    const body = (await resp.json()) as { data?: { skillCreatorEnabled?: unknown } }
+    return body?.data?.skillCreatorEnabled === true
+  } catch {
+    return false
+  }
+}

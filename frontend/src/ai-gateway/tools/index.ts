@@ -27,6 +27,7 @@ import { createProfileTools } from './profile'
 import { createWebTools } from './web'
 import { createExecTools } from './exec'
 import { createSkillSupplyTools } from './skill_supply'
+import { createSkillCreatorTools } from './skill_creator'
 import { createCustomAgentTools } from './agents'
 import { createAgentCatalogTools } from './agent_catalog'
 import { createAgentCallTools } from './agent_call'
@@ -142,6 +143,8 @@ export interface BuildGatewayToolsOpts {
    *  cards per install per ADR-002 §4) + skill_read (silent read, SKILL_DOC-fenced output). Off
    *  (default) → not added → ToolSet byte-identical to the v1.2.0 set. */
   skillInstallToolsEnabled?: boolean
+  /** MAILAGENT_SKILL_CREATOR — six manual-only Skill draft tools. */
+  skillCreatorToolsEnabled?: boolean
   /** S5 W3 (MAILAGENT_CUSTOM_AGENTS_ENABLED) — when true AND approvalGuard is supplied, the six
    *  custom-agent CRUD tools are added: custom_agent_list / custom_agent_get (silent reads) +
    *  custom_agent_create / custom_agent_update / custom_agent_delete / custom_agent_run_now
@@ -436,6 +439,18 @@ export function buildGatewayTools(
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
+  if (opts.skillCreatorToolsEnabled && opts.approvalGuard && contextMode === 'manual_chat') {
+    Object.assign(
+      tools,
+      createSkillCreatorTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
         toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode

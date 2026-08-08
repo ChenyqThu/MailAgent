@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import json
 import os
+import uuid
 from typing import Any, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -527,6 +528,176 @@ async def set_send_whitelist(request: Request, body: Optional[dict[str, Any]] = 
 # ── skill 管理（PR5 —— enablement 迁后端 + install/uninstall）────────────────────────
 
 
+def _require_skill_creator() -> None:
+    from src.skills.flags import skill_creator_enabled
+
+    if not skill_creator_enabled():
+        raise APIError(
+            "E_NOT_FOUND", "skill creator feature is disabled", http_status=404, source="sqlite"
+        )
+
+
+def _draft_dict(row: Any, *, include_tree: bool = False) -> dict[str, Any]:
+    payload = {
+        "id": row.id,
+        "name": row.name,
+        "status": row.status,
+        "manifest": row.manifest,
+        "validation": row.validation,
+        "sourceSessionId": row.source_session_id,
+        "createdAt": row.created_at,
+        "updatedAt": row.updated_at,
+    }
+    if include_tree:
+        from src.skills.draft import list_draft_tree
+
+        payload["files"] = list_draft_tree(row.id) if row.status != "discarded" else []
+        installed = get_agent_config_store().get_skill(row.name)
+        payload["replacesInstalled"] = bool(installed and installed.files_json)
+        payload["currentPackageHash"] = installed.package_hash if installed else None
+    return payload
+
+
+def _pack_api_error(exc: Exception) -> APIError:
+    from src.skills.pack_verify import PackError
+
+    if isinstance(exc, PackError):
+        return APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite")
+    return APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite")
+
+
+@router.get("/skills/drafts", dependencies=[Depends(verify_cf_access)])
+async def list_skill_drafts(request: Request):
+    _require_skill_creator()
+    drafts = [_draft_dict(row) for row in get_agent_config_store().list_skill_drafts()]
+    return success_envelope(
+        {"drafts": drafts}, request=request, source="sqlite", meta_extra={"count": len(drafts)}
+    )
+
+
+@router.post("/skills/drafts", dependencies=[Depends(verify_cf_access)])
+async def create_skill_draft(request: Request, body: Optional[dict[str, Any]] = None):
+    _require_skill_creator()
+    raw = body or {}
+    name = raw.get("name")
+    manifest = raw.get("manifest")
+    if not isinstance(name, str):
+        raise APIError("E_INVALID_ARG", "body.name is required", http_status=400, source="sqlite")
+    if manifest is not None and not isinstance(manifest, dict):
+        raise APIError("E_INVALID_ARG", "body.manifest must be an object", http_status=400, source="sqlite")
+    try:
+        from src.skills.draft import create_draft
+
+        row = create_draft(
+            name,
+            manifest=manifest,
+            source_session_id=raw.get("sourceSessionId")
+            if isinstance(raw.get("sourceSessionId"), int) else None,
+        )
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    return success_envelope(_draft_dict(row, include_tree=True), request=request, source="sqlite")
+
+
+@router.get("/skills/drafts/{draft_id}", dependencies=[Depends(verify_cf_access)])
+async def get_skill_draft(draft_id: str, request: Request):
+    _require_skill_creator()
+    try:
+        from src.skills.draft import draft_dir
+
+        draft_dir(draft_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    row = get_agent_config_store().get_skill_draft(draft_id)
+    if row is None:
+        raise APIError("E_NOT_FOUND", f"skill draft not found: {draft_id}", http_status=404, source="sqlite")
+    return success_envelope(_draft_dict(row, include_tree=True), request=request, source="sqlite")
+
+
+@router.get("/skills/drafts/{draft_id}/file", dependencies=[Depends(verify_cf_access)])
+async def get_skill_draft_file(draft_id: str, request: Request, path: str = Query(...)):
+    _require_skill_creator()
+    try:
+        from src.skills.draft import read_draft_file
+
+        content = read_draft_file(draft_id, path)
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    return success_envelope({"path": path, "content": content}, request=request, source="sqlite")
+
+
+@router.put("/skills/drafts/{draft_id}/file", dependencies=[Depends(verify_cf_access)])
+async def put_skill_draft_file(
+    draft_id: str, request: Request, body: Optional[dict[str, Any]] = None
+):
+    _require_skill_creator()
+    raw = body or {}
+    path = raw.get("path")
+    content = raw.get("content")
+    if not isinstance(path, str) or not isinstance(content, str):
+        raise APIError("E_INVALID_ARG", "body.path and body.content must be strings", http_status=400, source="sqlite")
+    try:
+        from src.skills.draft import write_draft_file
+
+        result = write_draft_file(draft_id, path, content)
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    return success_envelope(result, request=request, source="sqlite")
+
+
+@router.delete("/skills/drafts/{draft_id}/file", dependencies=[Depends(verify_cf_access)])
+async def remove_skill_draft_file(draft_id: str, request: Request, path: str = Query(...)):
+    _require_skill_creator()
+    try:
+        from src.skills.draft import delete_draft_file
+
+        removed = delete_draft_file(draft_id, path)
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    return success_envelope({"path": path, "removed": removed}, request=request, source="sqlite")
+
+
+@router.post("/skills/drafts/{draft_id}/validate", dependencies=[Depends(verify_cf_access)])
+async def validate_skill_draft(draft_id: str, request: Request):
+    _require_skill_creator()
+    try:
+        from src.skills.draft import validate_draft
+
+        validation = validate_draft(draft_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    return success_envelope({"draftId": draft_id, "validation": validation}, request=request, source="sqlite")
+
+
+@router.post("/skills/drafts/{draft_id}/publish", dependencies=[Depends(verify_cf_access)])
+async def publish_skill_draft(
+    draft_id: str, request: Request, body: Optional[dict[str, Any]] = None
+):
+    _require_skill_creator()
+    enabled = (body or {}).get("enabled", True)
+    if not isinstance(enabled, bool):
+        raise APIError("E_INVALID_ARG", "body.enabled must be boolean", http_status=400, source="sqlite")
+    try:
+        from src.skills.draft import publish_draft
+
+        result = publish_draft(draft_id, enabled)
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    return success_envelope(result, request=request, source="sqlite")
+
+
+@router.post("/skills/drafts/{draft_id}/discard", dependencies=[Depends(verify_cf_access)])
+async def discard_skill_draft(draft_id: str, request: Request):
+    _require_skill_creator()
+    try:
+        from src.skills.draft import discard_draft
+
+        row = discard_draft(draft_id)
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    return success_envelope(_draft_dict(row), request=request, source="sqlite")
+
+
 @router.get("/skills", dependencies=[Depends(verify_cf_access)])
 async def list_agent_skills(request: Request):
     """Settings 面的解析后 skill 列表：manifest skill ⋈ store 启用覆盖 + source_type。"""
@@ -570,6 +741,105 @@ async def list_skill_entrypoints(request: Request):
     out.sort(key=lambda x: x["name"])
     return success_envelope({"skills": out}, request=request, source="sqlite",
                             meta_extra={"count": len(out)})
+
+
+def _skill_trust_dict(trust: Any, current_hash: Optional[str]) -> dict[str, Any]:
+    state = (
+        "revoked"
+        if trust.revoked_at is not None
+        else "trusted"
+        if current_hash and trust.package_hash == current_hash
+        else "stale"
+    )
+    return {
+        "id": trust.id,
+        "skillName": trust.skill_name,
+        "packageHash": trust.package_hash,
+        "entrypoint": trust.entrypoint,
+        "policy": trust.policy,
+        "trustedAt": trust.trusted_at,
+        "revokedAt": trust.revoked_at,
+        "state": state,
+    }
+
+
+def _validated_trust_policy(raw: Any) -> dict[str, Any]:
+    if not isinstance(raw, dict):
+        raise APIError("E_INVALID_ARG", "body.policy must be an object", http_status=400, source="sqlite")
+    allowed = {
+        "argvPattern", "cwdScope", "readScopes", "writeScopes", "networkMode", "secretNames"
+    }
+    unknown = set(raw) - allowed
+    if unknown:
+        raise APIError(
+            "E_INVALID_ARG", f"unknown policy fields: {sorted(unknown)}", http_status=400, source="sqlite"
+        )
+    policy: dict[str, Any] = {}
+    for key in ("argvPattern", "cwdScope", "readScopes", "writeScopes", "secretNames"):
+        value = raw.get(key, [])
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise APIError("E_INVALID_ARG", f"policy.{key} must be a string array", http_status=400, source="sqlite")
+        policy[key] = value
+    network_mode = raw.get("networkMode", "off")
+    if network_mode not in {"off", "gated"}:
+        raise APIError("E_INVALID_ARG", "policy.networkMode must be off or gated", http_status=400, source="sqlite")
+    policy["networkMode"] = network_mode
+    return policy
+
+
+@router.get("/skills/{name}/trust", dependencies=[Depends(verify_cf_access)])
+async def list_skill_trust(name: str, request: Request):
+    _require_skill_creator()
+    store = get_agent_config_store()
+    row = store.get_skill(name)
+    if row is None:
+        raise APIError("E_NOT_FOUND", f"skill not installed: {name}", http_status=404, source="sqlite")
+    trusts = [_skill_trust_dict(item, row.package_hash) for item in store.list_skill_trust(name)]
+    return success_envelope(
+        {"skillName": name, "currentPackageHash": row.package_hash, "trusts": trusts},
+        request=request,
+        source="sqlite",
+        meta_extra={"count": len(trusts)},
+    )
+
+
+@router.post("/skills/{name}/trust", dependencies=[Depends(verify_cf_access)])
+async def grant_skill_trust(name: str, request: Request, body: Optional[dict[str, Any]] = None):
+    _require_skill_creator()
+    raw = body or {}
+    entrypoint = raw.get("entrypoint")
+    if not isinstance(entrypoint, str) or not os.path.isabs(entrypoint):
+        raise APIError("E_INVALID_ARG", "body.entrypoint must be an absolute path", http_status=400, source="sqlite")
+    policy = _validated_trust_policy(raw.get("policy"))
+    store = get_agent_config_store()
+    row = store.get_skill(name)
+    if row is None or not row.package_hash or not row.files_json:
+        raise APIError("E_NOT_FOUND", f"supply-chain skill not installed: {name}", http_status=404, source="sqlite")
+    try:
+        files = json.loads(row.files_json)
+    except (TypeError, ValueError):
+        files = None
+    if not isinstance(files, dict) or not files:
+        raise APIError("E_INVALID_ARG", "skill has no file manifest", http_status=400, source="sqlite")
+    from src.skills.pack_fetch import skill_dir
+
+    root = os.path.realpath(skill_dir(name))
+    rp = os.path.realpath(entrypoint)
+    rel = rp[len(root) + 1:].replace(os.sep, "/") if rp.startswith(root + os.sep) else None
+    if rel is None or rel not in files:
+        raise APIError("E_INVALID_ARG", "entrypoint is not in the current skill file manifest", http_status=400, source="sqlite")
+    trust = store.grant_skill_trust(uuid.uuid4().hex, name, row.package_hash, rp, policy)
+    return success_envelope(_skill_trust_dict(trust, row.package_hash), request=request, source="sqlite")
+
+
+@router.delete("/skills/{name}/trust/{trust_id}", dependencies=[Depends(verify_cf_access)])
+async def revoke_skill_trust(name: str, trust_id: str, request: Request):
+    _require_skill_creator()
+    store = get_agent_config_store()
+    if not any(item.id == trust_id for item in store.list_skill_trust(name)):
+        raise APIError("E_NOT_FOUND", f"skill trust not found: {trust_id}", http_status=404, source="sqlite")
+    revoked = store.revoke_skill_trust(trust_id)
+    return success_envelope({"id": trust_id, "revoked": revoked}, request=request, source="sqlite")
 
 
 @router.post("/skills/{name}/enabled", dependencies=[Depends(verify_cf_access)])

@@ -111,6 +111,7 @@ export const A2UI_COMPONENTS = {
   SkillInstallCard: 'SkillInstallCard',
   SkillInstallConfirmCard: 'SkillInstallConfirmCard',
   SkillUninstallCard: 'SkillUninstallCard',
+  SkillPublishCard: 'SkillPublishCard',
   // S6 W3-2 (ADR-004 rev3.1 §7 D5 / D-fix-2) — custom_agent_create / custom_agent_update approval
   // card (edit tier + capability_change). Renders a permission summary (name / purpose / requested
   // grants, exec + web-open red); for UPDATE the card fetches the agent's CURRENT row server-side
@@ -170,6 +171,8 @@ export function componentForTool(toolName: string): string | null {
       return A2UI_COMPONENTS.SkillInstallConfirmCard
     case 'skill_uninstall':
       return A2UI_COMPONENTS.SkillUninstallCard
+    case 'skill_draft_publish':
+      return A2UI_COMPONENTS.SkillPublishCard
     case 'custom_agent_create':
     case 'custom_agent_update':
       return A2UI_COMPONENTS.CustomAgentApprovalCard

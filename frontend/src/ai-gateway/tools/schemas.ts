@@ -591,6 +591,41 @@ export const skillReadSchema = z.object({
 })
 export type SkillReadInput = z.infer<typeof skillReadSchema>
 
+export const skillDraftCreateSchema = z.object({
+  name: z.string().regex(/^[a-z][a-z0-9_-]{0,40}$/),
+  manifest: z.record(z.string(), z.unknown()).optional()
+})
+export type SkillDraftCreateInput = z.infer<typeof skillDraftCreateSchema>
+
+export const skillDraftWriteFileSchema = z.object({
+  draftId: z.string().min(1).max(64),
+  path: z.string().min(1).max(512),
+  content: z.string().max(1024 * 1024)
+})
+export type SkillDraftWriteFileInput = z.infer<typeof skillDraftWriteFileSchema>
+
+export const skillDraftReadSchema = z.object({
+  draftId: z.string().min(1).max(64),
+  path: z.string().min(1).max(512).optional()
+})
+export type SkillDraftReadInput = z.infer<typeof skillDraftReadSchema>
+
+export const skillDraftValidateSchema = z.object({
+  draftId: z.string().min(1).max(64)
+})
+export type SkillDraftValidateInput = z.infer<typeof skillDraftValidateSchema>
+
+export const skillDraftPublishSchema = z.object({
+  draftId: z.string().min(1).max(64),
+  enabled: z.boolean().default(true)
+})
+export type SkillDraftPublishInput = z.infer<typeof skillDraftPublishSchema>
+
+export const skillDraftDiscardSchema = z.object({
+  draftId: z.string().min(1).max(64)
+})
+export type SkillDraftDiscardInput = z.infer<typeof skillDraftDiscardSchema>
+
 // ── custom-agent CRUD schemas (S5 W3; grants opened S6 W3-2) — the assistant helps the owner
 //    build / edit / run a custom agent through conversation. Behind MAILAGENT_CUSTOM_AGENTS_ENABLED.
 //    list/get are silent reads; create/update/delete/run_now are edit-tier writes (class

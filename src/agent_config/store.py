@@ -54,7 +54,13 @@ STORABLE_DOC_NAMES: tuple[str, ...] = PROFILE_DOC_NAMES + (MEMORY_DOC_NAME,)
 PROJECTION_DOC_NAMES: tuple[str, ...] = ("skills",)
 
 # 可安装 skill 的来源类型（builtin 来自代码，不算"安装"）。
-INSTALLABLE_SOURCE_TYPES: tuple[str, ...] = ("local_folder", "skill_pack", "document", "mcp")
+INSTALLABLE_SOURCE_TYPES: tuple[str, ...] = (
+    "local_folder",
+    "skill_pack",
+    "document",
+    "mcp",
+    "user_created",
+)
 ALL_SOURCE_TYPES: tuple[str, ...] = ("builtin",) + INSTALLABLE_SOURCE_TYPES
 
 # R5（GPT-5.5 review）—— skill_name 必须是规范 slug：小写字母开头，[a-z0-9_-]，≤41 字符。
@@ -105,6 +111,8 @@ class SkillRow:
     source_type: str
     enabled: Optional[bool]  # None=无覆盖（回退 manifest/code 默认）；True/False=用户覆盖
     granted_scopes: tuple[str, ...]
+    # Deprecated dead column. P8 起版本信任唯一真源 = agent_skill_trust；保留列与 upsert 仅为
+    # additive schema 兼容，任何运行时判定都不得读取本字段。
     trusted: bool
     source_uri: Optional[str] = None
     version: Optional[str] = None
@@ -137,6 +145,30 @@ class PolicyRuleRow:
     created_at: str
     last_used_at: Optional[str]
     use_count: int
+
+
+@dataclass(frozen=True)
+class SkillDraftRow:
+    id: str
+    name: str
+    status: str
+    root_path: str
+    manifest: Optional[dict[str, Any]]
+    validation: Optional[dict[str, Any]]
+    source_session_id: Optional[int]
+    created_at: int
+    updated_at: int
+
+
+@dataclass(frozen=True)
+class SkillTrustRow:
+    id: str
+    skill_name: str
+    package_hash: str
+    entrypoint: str
+    policy: dict[str, Any]
+    trusted_at: int
+    revoked_at: Optional[int]
 
 
 @dataclass(frozen=True)
@@ -505,6 +537,35 @@ CREATE TABLE IF NOT EXISTS connector_tool (
     updated_at         INTEGER NOT NULL,
     PRIMARY KEY (connector_id, tool_name)
 );
+
+-- P8 Skill Creator 草稿记录。文件正文只落 skills root 下的隔离目录，不进 DB。
+-- 只由受控 service/gateway 工具与 owner 显式动作写入；模型没有绕过发布确认的直写通道。
+CREATE TABLE IF NOT EXISTS agent_skill_draft (
+    id                TEXT PRIMARY KEY,
+    name              TEXT,
+    status            TEXT NOT NULL,
+    root_path         TEXT NOT NULL,
+    manifest_json     TEXT,
+    validation_json   TEXT,
+    source_session_id INTEGER,
+    created_at        INTEGER NOT NULL,
+    updated_at        INTEGER NOT NULL,
+    CHECK(status IN ('draft','valid','invalid','published','discarded'))
+);
+CREATE INDEX IF NOT EXISTS idx_agent_skill_draft_status ON agent_skill_draft(status);
+
+-- P8 版本信任唯一真源。只由 owner Settings 显式动作写入，gateway/模型无 grant 通道。
+CREATE TABLE IF NOT EXISTS agent_skill_trust (
+    id            TEXT PRIMARY KEY,
+    skill_name    TEXT NOT NULL,
+    package_hash  TEXT NOT NULL,
+    entrypoint    TEXT NOT NULL,
+    policy_json   TEXT NOT NULL,
+    trusted_at    INTEGER NOT NULL,
+    revoked_at    INTEGER,
+    UNIQUE(skill_name, package_hash, entrypoint)
+);
+CREATE INDEX IF NOT EXISTS idx_agent_skill_trust_name ON agent_skill_trust(skill_name);
 """
 
 
@@ -1129,6 +1190,163 @@ class AgentConfigStore:
         with self._connection() as conn:
             rows = conn.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
+
+    def create_skill_draft(
+        self,
+        draft_id: str,
+        name: str,
+        root_path: str,
+        *,
+        manifest: Optional[dict[str, Any]] = None,
+        source_session_id: Optional[int] = None,
+    ) -> SkillDraftRow:
+        now = _now()
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO agent_skill_draft "
+                "(id,name,status,root_path,manifest_json,validation_json,source_session_id,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?,?)",
+                (
+                    draft_id,
+                    name,
+                    "draft",
+                    root_path,
+                    json.dumps(manifest, ensure_ascii=False, sort_keys=True)
+                    if manifest is not None else None,
+                    None,
+                    source_session_id,
+                    now,
+                    now,
+                ),
+            )
+            conn.commit()
+        row = self.get_skill_draft(draft_id)
+        assert row is not None
+        return row
+
+    def get_skill_draft(self, draft_id: str) -> Optional[SkillDraftRow]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_skill_draft WHERE id = ?", (draft_id,)
+            ).fetchone()
+        return _row_to_skill_draft(row) if row else None
+
+    def list_skill_drafts(self, *, include_terminal: bool = True) -> list[SkillDraftRow]:
+        sql = "SELECT * FROM agent_skill_draft"
+        if not include_terminal:
+            sql += " WHERE status NOT IN ('published','discarded')"
+        sql += " ORDER BY updated_at DESC, id ASC"
+        with self._connection() as conn:
+            rows = conn.execute(sql).fetchall()
+        return [_row_to_skill_draft(row) for row in rows]
+
+    def update_skill_draft(
+        self,
+        draft_id: str,
+        *,
+        status: Optional[str] = None,
+        manifest: Any = _UNSET,
+        validation: Any = _UNSET,
+    ) -> SkillDraftRow:
+        if status is not None and status not in {
+            "draft", "valid", "invalid", "published", "discarded"
+        }:
+            raise ValueError(f"invalid skill draft status: {status!r}")
+        sets = ["updated_at = ?"]
+        values: list[Any] = [_now()]
+        if status is not None:
+            sets.append("status = ?")
+            values.append(status)
+        if manifest is not _UNSET:
+            sets.append("manifest_json = ?")
+            values.append(
+                json.dumps(manifest, ensure_ascii=False, sort_keys=True)
+                if manifest is not None else None
+            )
+        if validation is not _UNSET:
+            sets.append("validation_json = ?")
+            values.append(
+                json.dumps(validation, ensure_ascii=False, sort_keys=True)
+                if validation is not None else None
+            )
+        values.append(draft_id)
+        with self._connection() as conn:
+            cur = conn.execute(
+                f"UPDATE agent_skill_draft SET {', '.join(sets)} WHERE id = ?", values
+            )
+            conn.commit()
+        if cur.rowcount == 0:
+            raise KeyError(draft_id)
+        row = self.get_skill_draft(draft_id)
+        assert row is not None
+        return row
+
+    def mark_skill_draft_published(self, draft_id: str) -> SkillDraftRow:
+        return self.update_skill_draft(draft_id, status="published")
+
+    def mark_skill_draft_discarded(self, draft_id: str) -> SkillDraftRow:
+        return self.update_skill_draft(draft_id, status="discarded")
+
+    def grant_skill_trust(
+        self,
+        trust_id: str,
+        skill_name: str,
+        package_hash: str,
+        entrypoint: str,
+        policy: dict[str, Any],
+    ) -> SkillTrustRow:
+        now = _now()
+        with self._connection() as conn:
+            conn.execute(
+                "INSERT INTO agent_skill_trust "
+                "(id,skill_name,package_hash,entrypoint,policy_json,trusted_at,revoked_at) "
+                "VALUES (?,?,?,?,?,?,NULL) "
+                "ON CONFLICT(skill_name,package_hash,entrypoint) DO UPDATE SET "
+                "id=excluded.id, policy_json=excluded.policy_json, trusted_at=excluded.trusted_at, "
+                "revoked_at=NULL",
+                (
+                    trust_id,
+                    skill_name,
+                    package_hash,
+                    entrypoint,
+                    json.dumps(policy, ensure_ascii=False, sort_keys=True),
+                    now,
+                ),
+            )
+            conn.commit()
+        row = self.find_active_skill_trust(skill_name, package_hash, entrypoint)
+        assert row is not None
+        return row
+
+    def revoke_skill_trust(self, trust_id: str) -> bool:
+        with self._connection() as conn:
+            cur = conn.execute(
+                "UPDATE agent_skill_trust SET revoked_at = ? "
+                "WHERE id = ? AND revoked_at IS NULL",
+                (_now(), trust_id),
+            )
+            conn.commit()
+        return cur.rowcount > 0
+
+    def list_skill_trust(self, skill_name: str) -> list[SkillTrustRow]:
+        with self._connection() as conn:
+            rows = conn.execute(
+                "SELECT * FROM agent_skill_trust WHERE skill_name = ? "
+                "ORDER BY trusted_at DESC, id ASC",
+                (skill_name,),
+            ).fetchall()
+        return [_row_to_skill_trust(row) for row in rows]
+
+    def find_active_skill_trust(
+        self, skill_name: str, package_hash: str, entrypoint: str
+    ) -> Optional[SkillTrustRow]:
+        with self._connection() as conn:
+            row = conn.execute(
+                "SELECT * FROM agent_skill_trust WHERE skill_name = ? AND package_hash = ? "
+                "AND entrypoint = ? AND revoked_at IS NULL ORDER BY trusted_at DESC LIMIT 1",
+                (skill_name, package_hash, entrypoint),
+            ).fetchone()
+        return _row_to_skill_trust(row) if row else None
 
     def installed_rows_fingerprint(self) -> str:
         """安装行的确定性指纹串（installed_skills_hash 的 store 半部）。
@@ -1934,6 +2152,42 @@ def _row_to_policy_rule(row: sqlite3.Row) -> PolicyRuleRow:
         created_at=row["created_at"],
         last_used_at=row["last_used_at"],
         use_count=row["use_count"],
+    )
+
+
+def _json_object_or_none(raw: Optional[str]) -> Optional[dict[str, Any]]:
+    if raw is None:
+        return None
+    try:
+        value = json.loads(raw)
+    except (TypeError, ValueError):
+        return None
+    return value if isinstance(value, dict) else None
+
+
+def _row_to_skill_draft(row: sqlite3.Row) -> SkillDraftRow:
+    return SkillDraftRow(
+        id=row["id"],
+        name=row["name"] or "",
+        status=row["status"],
+        root_path=row["root_path"],
+        manifest=_json_object_or_none(row["manifest_json"]),
+        validation=_json_object_or_none(row["validation_json"]),
+        source_session_id=row["source_session_id"],
+        created_at=int(row["created_at"]),
+        updated_at=int(row["updated_at"]),
+    )
+
+
+def _row_to_skill_trust(row: sqlite3.Row) -> SkillTrustRow:
+    return SkillTrustRow(
+        id=row["id"],
+        skill_name=row["skill_name"],
+        package_hash=row["package_hash"],
+        entrypoint=row["entrypoint"],
+        policy=_json_object_or_none(row["policy_json"]) or {},
+        trusted_at=int(row["trusted_at"]),
+        revoked_at=int(row["revoked_at"]) if row["revoked_at"] is not None else None,
     )
 
 

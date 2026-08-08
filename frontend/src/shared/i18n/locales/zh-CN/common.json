@@ -989,6 +989,12 @@
       "skill_install": "安装技能",
       "skill_install_confirm": "确认安装技能",
       "skill_uninstall": "卸载技能",
+      "skill_draft_create": "创建技能草稿",
+      "skill_draft_write_file": "写入技能草稿文件",
+      "skill_draft_read": "读取技能草稿",
+      "skill_draft_validate": "校验技能草稿",
+      "skill_draft_publish": "发布技能草稿",
+      "skill_draft_discard": "丢弃技能草稿",
       "skill_list_installed": "列出已装技能",
       "chat_session_list": "列出历史会话",
       "agent_catalog_list": "列出 Agent 目录",
@@ -1226,6 +1232,15 @@
       "installed": "已安装 {name}。",
       "installExecuted": "安装已执行（{name}）。",
       "error": "安装失败——常见原因是隔离区内容在预览后发生变化（hash 不符即拒装）。可让助手重新下载后再试。"
+    },
+    "skillPublishCard": {
+      "title": "发布技能草稿",
+      "factsError": "无法加载服务端事实，不能发布。",
+      "loading": "正在加载已校验的草稿事实…",
+      "files": "{count} 个文件",
+      "enabled": "发布后启用：{value}",
+      "replaceWarning": "将替换已安装版本；既有版本信任会变为失效。",
+      "approve": "发布"
     },
     "skillUninstallCard": {
       "title": "卸载 Skill",
@@ -2085,6 +2100,29 @@
       "loading": "正在加载技能…",
       "calendarChatNote": "此开关只管对外 Skill 接口与能力声明；聊天中的日历工具由「系统能力」区的日历项控制。",
       "notionAgentMasterOff": "主开关 MAILAGENT_NOTION_AGENT_TOOL 已关闭：即使在此启用，聊天中也不会注册 notion_agent 工具。"
+      ,"sourceBuiltin": "内置 · 产品可信",
+      "sourceUserCreated": "用户创建",
+      "sourceThirdParty": "第三方",
+      "currentHash": "当前包哈希",
+      "argvPattern": "Argv 模式（每行一项；正则加 pattern: 前缀）",
+      "cwdScope": "工作目录范围",
+      "readScopes": "读取范围",
+      "writeScopes": "写入范围",
+      "networkMode": "网络模式快照",
+      "secretNames": "Secret 名称",
+      "trustVersion": "信任此版本",
+      "revokeTrust": "撤销"
+    },
+    "skillDrafts": {
+      "title": "技能草稿",
+      "desc": "隔离草稿永不执行；请检查校验结果后显式发布。",
+      "empty": "暂无技能草稿。",
+      "noSkillMd": "SKILL.md 缺失或无法读取。",
+      "enableAfterPublish": "发布后启用",
+      "publish": "发布",
+      "discard": "丢弃",
+      "publishConfirm": "发布 {name}？发布后启用：{enabled}",
+      "discardConfirm": "丢弃 {name}？"
     },
     "anchorNav": {
       "ariaLabel": "本页区块导航"

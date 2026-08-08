@@ -160,6 +160,7 @@ class ExecFloor:
         skills_root = _skills_root()
         if skills_root:
             trees.append(os.path.join(skills_root, ".quarantine"))
+            trees.append(os.path.join(skills_root, ".draft"))
         for t in trees:
             if t:
                 self._prefix_trees.append(os.path.realpath(t))

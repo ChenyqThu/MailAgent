@@ -559,6 +559,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // are 恒 HITL (never auto-approved). main-env-only, NO vite define (mirrors the other openness
   // flags). Explicit false → buildGatewayTools output byte-identical to pre-cutover (v1.2.0).
   const skillInstallToolsEnabled = envBool('MAILAGENT_OPENNESS_SKILL_INSTALL', true)
+  const skillCreatorToolsEnabled = envBool('MAILAGENT_SKILL_CREATOR', true)
   // calendar epic 4.1/4.2 — MAILAGENT_CALENDAR_AGENT_TOOLS gates the five calendar tools
   // (calendar_events_list / calendar_event_get silent reads with CALENDAR_EVENT-fenced event text +
   // calendar_event_reschedule / calendar_event_rsvp / calendar_event_delete, all edit-tier writes —
@@ -1183,6 +1184,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           execToolsEnabled,
           // S2 W4 — skill-supply tools (MAILAGENT_OPENNESS_SKILL_INSTALL, default off).
           skillInstallToolsEnabled,
+          skillCreatorToolsEnabled,
           // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS, default on).
           calendarToolsEnabled,
           // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL, default on; skill-gated).

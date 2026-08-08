@@ -337,7 +337,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # S2 W1 — exec 策略管理页显隐 flag（MAILAGENT_OPENNESS_EXEC_TOOLS，E3 cutover 默认 ON）。
         "execPolicyEnabled": True,
         # S2 W4b — Settings「Skill 安装」区显隐 flag（MAILAGENT_OPENNESS_SKILL_INSTALL，E3 cutover 默认 ON）。
-        "skillInstallEnabled": True,
+            "skillInstallEnabled": True,
+            "skillCreatorEnabled": True,
         # S5 — Custom AI Agents 入口显隐 flag（MAILAGENT_CUSTOM_AGENTS_ENABLED，E3 cutover 默认 ON；
         # 此处跟随 stub.custom_agents_enabled=True）。
         "customAgentsEnabled": True,
@@ -427,8 +428,9 @@ def test_chat_config_skill_catalog_lists_every_builtin(
         "report",
         "calendar",
         "notion_agent",
-        "custom_agent",
-    }
+            "custom_agent",
+            "skill_creator",
+        }
     assert set(catalog[0]) == {
         "name",
         "title",

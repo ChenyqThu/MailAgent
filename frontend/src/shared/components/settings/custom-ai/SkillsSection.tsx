@@ -22,7 +22,7 @@ import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collap
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { NotionAgentSkillConfig } from './NotionAgentSkillConfig'
-import { useEnvFlagIntent } from './shared'
+import { fetchSkillCreatorEnabled, useEnvFlagIntent } from './shared'
 
 // task 07-21 — skills that carry an inline per-skill config panel in their row's expand area. Today
 // only notion_agent (bind agent / default model / doctor, moved out of 设置-AI). A row NOT listed
@@ -88,11 +88,84 @@ function SkillMeta({
                 {t('settings.skills.scopes')}: {skill.scopes.join(', ')}
               </span>
             ) : null}
+            <span className="rounded-full border border-ink-border px-1.5 py-0.5 text-micro">
+              {skill.sourceType === 'builtin' ? t('settings.skills.sourceBuiltin') : skill.sourceType === 'user_created' ? t('settings.skills.sourceUserCreated') : t('settings.skills.sourceThirdParty')}
+            </span>
+            {skill.sourceType !== 'builtin' ? <span className="text-micro">{skill.trustState ?? 'none'}</span> : null}
           </span>
+          {skill.lastError ? <span className="text-meta text-fail">{skill.lastError}</span> : null}
         </span>
       </div>
     </>
   )
+}
+
+function SkillTrustPanel({ skill }: { skill: SkillSummary }): React.ReactElement | null {
+  const { t } = useTranslation()
+  const api = useMailApi()
+  const qc = useQueryClient()
+  const { data: enabled } = useQuery({ queryKey: ['chat-config', 'skillCreatorEnabled'], queryFn: fetchSkillCreatorEnabled })
+  const { data: entrypoints = [] } = useQuery({ queryKey: ['skill-entrypoints'], queryFn: () => api.chat.listSkillEntrypoints(), enabled: enabled === true })
+  const { data: trust } = useQuery({
+    queryKey: ['skill-trust', skill.name],
+    queryFn: () => api.chat.listSkillTrust(skill.name),
+    enabled: enabled === true && skill.sourceType !== 'builtin'
+  })
+  const candidates = entrypoints.find((item) => item.name === skill.name)
+  const [selected, setSelected] = React.useState('')
+  const [argvPattern, setArgvPattern] = React.useState('')
+  const [cwdScope, setCwdScope] = React.useState('')
+  const [readScopes, setReadScopes] = React.useState('')
+  const [writeScopes, setWriteScopes] = React.useState('')
+  const [networkMode, setNetworkMode] = React.useState<'off' | 'gated'>('off')
+  const [secretNames, setSecretNames] = React.useState('')
+  if (enabled !== true || skill.sourceType === 'builtin') return null
+  const entrypoint = selected || (candidates?.files[0] ? `${candidates.dir}/${candidates.files[0]}` : '')
+  const parseList = (value: string): string[] => value.split(/[\n,]/).map((item) => item.trim()).filter(Boolean)
+  async function grant(): Promise<void> {
+    if (!entrypoint) return
+    await api.chat.grantSkillTrust(skill.name, entrypoint, {
+      argvPattern: parseList(argvPattern),
+      cwdScope: parseList(cwdScope || candidates?.dir || ''),
+      readScopes: parseList(readScopes),
+      writeScopes: parseList(writeScopes),
+      networkMode,
+      secretNames: parseList(secretNames)
+    })
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ['skill-trust', skill.name] }),
+      qc.invalidateQueries({ queryKey: qk.skills() })
+    ])
+  }
+  async function revoke(trustId: string): Promise<void> {
+    await api.chat.revokeSkillTrust(skill.name, trustId)
+    await Promise.all([
+      qc.invalidateQueries({ queryKey: ['skill-trust', skill.name] }),
+      qc.invalidateQueries({ queryKey: qk.skills() })
+    ])
+  }
+  return <div className="space-y-2 border-t border-ink-border-soft px-4 py-3 text-meta">
+    <div>{t('settings.skills.currentHash')}: <code>{trust?.currentPackageHash?.slice(0, 12) ?? '—'}</code></div>
+    <select value={entrypoint} onChange={(event) => setSelected(event.target.value)} className="w-full rounded-md border border-ink-border bg-ink-1 px-2 py-1">
+      {(candidates?.files ?? []).map((file) => {
+        const value = `${candidates?.dir}/${file}`
+        return <option key={value} value={value}>{file}</option>
+      })}
+    </select>
+    <div className="grid gap-2 sm:grid-cols-2">
+      <label>{t('settings.skills.argvPattern')}<textarea value={argvPattern} onChange={(event) => setArgvPattern(event.target.value)} className="mt-1 w-full rounded-md border border-ink-border bg-ink-1 px-2 py-1" /></label>
+      <label>{t('settings.skills.cwdScope')}<input value={cwdScope || candidates?.dir || ''} onChange={(event) => setCwdScope(event.target.value)} className="mt-1 w-full rounded-md border border-ink-border bg-ink-1 px-2 py-1" /></label>
+      <label>{t('settings.skills.readScopes')}<input value={readScopes} onChange={(event) => setReadScopes(event.target.value)} className="mt-1 w-full rounded-md border border-ink-border bg-ink-1 px-2 py-1" /></label>
+      <label>{t('settings.skills.writeScopes')}<input value={writeScopes} onChange={(event) => setWriteScopes(event.target.value)} className="mt-1 w-full rounded-md border border-ink-border bg-ink-1 px-2 py-1" /></label>
+      <label>{t('settings.skills.networkMode')}<select value={networkMode} onChange={(event) => setNetworkMode(event.target.value as 'off' | 'gated')} className="mt-1 w-full rounded-md border border-ink-border bg-ink-1 px-2 py-1"><option value="off">off</option><option value="gated">gated</option></select></label>
+      <label>{t('settings.skills.secretNames')}<input value={secretNames} onChange={(event) => setSecretNames(event.target.value)} className="mt-1 w-full rounded-md border border-ink-border bg-ink-1 px-2 py-1" /></label>
+    </div>
+    <button type="button" disabled={!entrypoint} onClick={() => void grant()} className="rounded-md border border-ink-border px-3 py-1 disabled:opacity-50">{t('settings.skills.trustVersion')}</button>
+    {(trust?.trusts ?? []).map((item) => <div key={item.id} className="flex items-center justify-between gap-2 rounded-md bg-ink-2 p-2">
+      <span>{item.state} · {item.packageHash.slice(0, 12)} · {item.entrypoint}</span>
+      {item.revokedAt == null ? <button type="button" onClick={() => void revoke(item.id)}>{t('settings.skills.revokeTrust')}</button> : null}
+    </div>)}
+  </div>
 }
 
 /** task 07-22 — per-skill clarification note (null for skills without one):
@@ -166,7 +239,8 @@ export function SkillsSection(): React.ReactElement {
     return skills.map((skill) => {
       const ConfigPanel = CONFIG_PANELS[skill.name]
       const extraNote = extraNoteFor(skill)
-      if (!ConfigPanel) {
+      const hasDetails = Boolean(ConfigPanel) || skill.sourceType !== 'builtin' || Boolean(skill.lastError)
+      if (!hasDetails) {
         // Plain toggle row (unchanged) — no config panel for this skill.
         return (
           <Row key={skill.name} label={<SkillMeta skill={skill} extraNote={extraNote} />}>
@@ -207,7 +281,8 @@ export function SkillsSection(): React.ReactElement {
             </div>
           </div>
           <CollapsibleRegion expanded={isOpen} id={bodyId}>
-            <ConfigPanel />
+            {ConfigPanel ? <ConfigPanel /> : null}
+            <SkillTrustPanel skill={skill} />
           </CollapsibleRegion>
         </div>
       )

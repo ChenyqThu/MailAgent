@@ -121,6 +121,12 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'skill_install_confirm',
   'skill_uninstall',
   'skill_read',
+  'skill_draft_create',
+  'skill_draft_write_file',
+  'skill_draft_read',
+  'skill_draft_validate',
+  'skill_draft_publish',
+  'skill_draft_discard',
   // S5 W3 custom-agent CRUD 工具（behind MAILAGENT_CUSTOM_AGENTS_ENABLED）—— agent 管理面，无 skill
   // 归属（它们*管理* custom agent，不*属于*任何 skill），开关权在独立 flag，永不 skill-gated
   // （list/get silent 读；create/update/delete/run_now = edit-tier + capability_change 恒人审）。

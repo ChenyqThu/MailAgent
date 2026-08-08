@@ -252,6 +252,11 @@ async def test_dms_full_chain(client, fresh_agent_cfg, fresh_skills_dir, dms_env
     eps = _data(client.get("/api/agent/skills/entrypoints"))["skills"]
     assert eps == [{"name": "dms-cli", "dir": skdir,
                     "files": ["SKILL.md", "approve.py", "manifest.json"]}]
+    skill_row = fresh_agent_cfg.get_skill("dms-cli")
+    assert skill_row is not None and skill_row.package_hash
+    fresh_agent_cfg.grant_skill_trust(
+        "trust-dms-cli", "dms-cli", skill_row.package_hash, os.path.realpath(entry), {}
+    )
 
     # ── ② Settings 唯一通道建 pinned-entrypoint 规则（contextMode 服务端派生）──────
     matcher = {
