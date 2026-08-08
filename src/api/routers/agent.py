@@ -1075,15 +1075,28 @@ def _derive_rule_context_mode(agent: dict[str, Any]) -> str:
     ``frontend/src/shared/components/agents/custom-agent/shared.ts::deriveHeadlessMode``
     （展示）。跨表一致性闸：``tests/api/test_context_mode_consistency.py``（canonical 表
     在闸里，TS 两份从源码抽取比对 —— 改这里先改闸）。"""
-    from src.agents.trigger import _as_dict, parse_trigger
+    from src.agents.trigger import _as_dict, parse_trigger, parse_trigger_set, trigger_v2_enabled
 
     # 阶段 0b 预置映射行：kind='im' → 'im_chat'。parse_trigger 尚不认识 'im'（保存面在阶段 2
     # 才放开，validate_agent_config_patch 仍拒 → 这种行当前存不进库，本分支 dormant），故在
     # parse 前 peek 原始 kind；``_as_dict`` 是有意的私有 import（trigger_json 归一化单源，
     # 镜像 test_trigger_kind_parity 对 ``_RULE_KEYS`` 的处理）。阶段 2 给 parse_trigger 加
     # im 分支后应把此 peek 收回 post-parse。
-    if (_as_dict(agent.get("trigger_json")) or {}).get("kind") == "im":
+    raw = _as_dict(agent.get("trigger_json")) or {}
+    if raw.get("kind") == "im" or any(
+        isinstance(item, dict) and item.get("kind") == "im"
+        for item in (raw.get("triggers") if isinstance(raw.get("triggers"), list) else [])
+    ):
         return "im_chat"
+    if trigger_v2_enabled() and raw.get("v") == 2:
+        entries = parse_trigger_set(raw)
+        if not entries:
+            raise ValueError("trigger_json is empty or not an object")
+        return (
+            "cron_headless"
+            if all(entry.trigger.kind in ("cron", "schedule") for entry in entries)
+            else "untrusted_trigger"
+        )
     trig = parse_trigger(agent.get("trigger_json"))  # TriggerValidationError（ValueError）on 坏配置
     return "cron_headless" if trig.kind in ("cron", "schedule") else "untrusted_trigger"
 

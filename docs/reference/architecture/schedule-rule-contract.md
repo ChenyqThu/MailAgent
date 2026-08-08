@@ -39,6 +39,31 @@ recurrence 计算几乎必然在 DST / 月末 / interval 相位上分叉，故�
 
 ## 1. 持久化形状
 
+### 1.0 Custom Agent Trigger v2 envelope
+
+Custom Agent 的 `trigger_json` 可使用 v2 envelope 包住多个 trigger；trigger 之间为 OR，
+每个元素由稳定 `id` 与独立 `enabled` 控制：
+
+```json
+{
+  "v": 2,
+  "triggers": [
+    {
+      "id": "trg_01jabc",
+      "enabled": true,
+      "kind": "schedule",
+      "rule": { "freq": "weekly", "interval": 1, "weekdays": [1], "monthMode": "date", "monthDay": 1, "ordinal": 1, "weekday": 1, "hour": 9, "minute": 0, "clamp": false },
+      "anchor": "2026-08-08",
+      "timezone": "America/Los_Angeles"
+    }
+  ]
+}
+```
+
+Envelope 只增加 `v/triggers/id/enabled`；下述 schedule 元素内的 `rule/anchor/timezone`
+形状与求值语义逐字不变。v1 单对象永久可读，首次编辑 custom agent 时才写回 v2；
+`project_progress` 专型行继续保持 v1。
+
 存进 `report_agent.trigger_json`（custom agent）与 `report_agent.schedule_json`（报告 agent）：
 
 ```jsonc

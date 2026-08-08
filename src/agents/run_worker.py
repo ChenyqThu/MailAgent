@@ -1,6 +1,7 @@
 """``AgentRunWorker`` —— custom agent headless run 的执行外壳（S4 W2, ADR D1/D2/D4）。
 
 形状抄 ``src/sync/job_worker.py``（asyncio 主循环 + stop_event + 串行, 并发=1），但**不跑**
+并发=1 也天然满足 per-agent 串行；若未来提高并发，必须先加 per-agent 锁。
 tool loop —— 它只 claim + poke，真正的多轮 tool loop 在 gateway 路径 C（W3）：
 
     claim_next(AGENT_JOB_TYPES) → set_claim_token(能力令牌) → POST gateway /api/ai/agent-run

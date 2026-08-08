@@ -42,6 +42,8 @@ import { ThreadAttachmentBar } from './ThreadAttachmentBar'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 import { MeetingInviteCard } from '../calendar/MeetingInviteCard'
 import { ComposePanel, ComposePanelInner } from './compose/ComposePanel'
+import { CustomAgentDrawer } from '../agents/CustomAgentDrawer'
+import { useTriggerV2Enabled } from '../agents/hooks'
 import type { ComposeGuardHandle } from './compose/useComposeGuard'
 import { closeCompose, useComposeStore } from '@shared/state/compose'
 import type { ComposeMode } from '@shared/api/types'
@@ -200,7 +202,9 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const queryClient = useQueryClient()
+  const triggerV2Enabled = useTriggerV2Enabled()
   const [showTranslation, setShowTranslation] = useState(false)
+  const [followupOpen, setFollowupOpen] = useState(false)
   const [pending, setPending] = useState<PendingMap>(NO_PENDING)
   const [propsExpanded, setPropsExpanded] = useState(false)
   const morePropsId = useId()
@@ -852,6 +856,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         onResync={handleResync}
         resyncState={{ pending: pending.resync }}
         onLlmRun={handleLlmRun}
+        onCreateFollowupAgent={
+          triggerV2Enabled && (email.thread_id || email.message_id?.replace(/^<|>$/g, ''))
+            ? () => setFollowupOpen(true)
+            : undefined
+        }
         llmRunState={{ pending: pending.llmRun }}
         onToggleRead={() => void handleToggleRead(email.is_read)}
         isRead={email.is_read}
@@ -871,6 +880,20 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         deleteState={{ pending: pending.delete }}
         onPrev={onPrev}
         onNext={onNext}
+      />
+      <CustomAgentDrawer
+        cfg={null}
+        open={followupOpen}
+        create
+        initial={{
+          title: `${t('toolbar.followupAgent')}: ${(email.subject || '').slice(0, 48)}`,
+          trigger: {
+            enabled: false,
+            kind: 'email_filter',
+            thread_ids: [email.thread_id || email.message_id?.replace(/^<|>$/g, '') || '']
+          }
+        }}
+        onClose={() => setFollowupOpen(false)}
       />
 
       <div ref={bodyScopeRef} className="flex-1 overflow-y-auto scrollbar-thin">

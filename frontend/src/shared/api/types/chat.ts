@@ -34,6 +34,7 @@ export interface AgentRunSpec {
      *    3. `src/api/routers/agent.py::_derive_rule_context_mode`             —— Python，建规盖章
      *  前两处的一致性由 `frontend/tests/components/contextModeTable.test.ts` 锁死；
      *  第 3 处由 `tests/api/test_agent_policy_peragent.py` 锁死。 */
+    id?: string | null
     kind: string
     firedAt: string
     emailInternalId?: number

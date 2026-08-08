@@ -37,6 +37,8 @@ from src.agents.trigger import (
     parse_budget,
     parse_tool_policy,
     parse_trigger,
+    parse_trigger_set,
+    trigger_v2_enabled,
 )
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
@@ -277,6 +279,7 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
     params = job.params or {}
     agent_id = params.get("agent_id")
     trigger_kind = params.get("trigger_kind")
+    trigger_id = params.get("trigger_id") if isinstance(params.get("trigger_id"), str) else None
     fire_key = params.get("fire_key")
     email_internal_id = params.get("email_internal_id")
     if not agent_id:
@@ -308,14 +311,28 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         isinstance(raw_trigger, str) and not raw_trigger.strip()
     )
     trig: Optional[Trigger] = None
-    if not (trigger_unconfigured and trigger_kind == "manual"):
+    if trigger_v2_enabled() and not trigger_unconfigured:
         try:
-            trig = parse_trigger(raw_trigger)
+            trigger_entries = parse_trigger_set(raw_trigger)
         except TriggerValidationError as exc:
             raise APIError(
                 "E_SPEC_AGENT_INVALID", f"bad trigger_json: {exc}",
                 http_status=409, source="agent-runs",
             )
+        if not trigger_entries:
+            trigger_unconfigured = True
+        else:
+            selected = next((entry for entry in trigger_entries if entry.id == trigger_id), None)
+            trig = (selected or trigger_entries[0]).trigger
+    if not (trigger_unconfigured and trigger_kind == "manual"):
+        if trig is None:
+            try:
+                trig = parse_trigger(raw_trigger)
+            except TriggerValidationError as exc:
+                raise APIError(
+                    "E_SPEC_AGENT_INVALID", f"bad trigger_json: {exc}",
+                    http_status=409, source="agent-runs",
+                )
     budget = parse_budget(agent.get("budget_json"))
     tool_policy = _tool_policy_lenient(agent.get("tool_policy_json"))
     # S5 ADR-004 §5.1（显式修订 ADR-003 D6）：allowed_tools 未配置（NULL/缺 key）→ 投影
@@ -330,7 +347,11 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
     fired_at = _fired_at_iso(trigger_kind, fire_key, job.created_at)
 
     prompt: dict[str, Any] = {"taskPrompt": (agent.get("prompt") or "")}
-    trigger_out: dict[str, Any] = {"kind": trigger_kind or trig.kind, "firedAt": fired_at}
+    trigger_out: dict[str, Any] = {
+        "id": trigger_id,
+        "kind": trigger_kind or (trig.kind if trig is not None else "manual"),
+        "firedAt": fired_at,
+    }
     if isinstance(trig, EmailFilterTrigger) and email_internal_id is not None:
         trigger_out["emailInternalId"] = email_internal_id
         matched = _matched_rule(trig)

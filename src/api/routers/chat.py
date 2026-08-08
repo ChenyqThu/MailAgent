@@ -656,6 +656,7 @@ async def chat_config(request: Request):
             "sessionProvenanceEnabled": _hot_bool(
                 env_vals, "MAILAGENT_SESSION_PROVENANCE", True
             ),
+            "triggerV2Enabled": _hot_bool(env_vals, "MAILAGENT_TRIGGER_V2", True),
             # task 07-12 P3 — Settings「模型服务」区（provider 管理 UI）+ 功能位选择器分组
             # 显隐 gate。与上面 enabledModels 的聚合投影**同源同语义**（pydantic 冻结单例读，
             # 翻 MAILAGENT_LLM_PROVIDER_REGISTRY 需重启 serve-api）——UI 门控与投影行为

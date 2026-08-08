@@ -21,8 +21,10 @@ import type {
   AgentAvatarConfig,
   CustomAgentToolPolicy,
   CustomAgentTrigger,
+  CustomAgentTriggerV2Entry,
   ReportAgentConfig,
-  ReportConfigPatch
+  ReportConfigPatch,
+  TriggerSetV2
 } from '@shared/api/types'
 import { ReportIcon, Switch } from './primitives'
 import {
@@ -51,6 +53,7 @@ import {
   useDeleteAgent,
   useOpennessFlags,
   useSetConfig,
+  useTriggerV2Enabled,
   useToolOptions
 } from './hooks'
 import { ModelSelectItems } from './drawers/ModelSelectItems'
@@ -114,12 +117,14 @@ export function CustomAgentDrawer({
   cfg,
   open,
   create = false,
+  initial,
   onClose
 }: {
   cfg: ReportAgentConfig | null
   open: boolean
   /** true = 新建空态（cfg 为 null）；false = 编辑既有 cfg。 */
   create?: boolean
+  initial?: { title?: string; trigger?: CustomAgentTriggerV2Entry }
   onClose: () => void
 }): React.ReactElement | null {
   const { t } = useTranslation()
@@ -127,6 +132,7 @@ export function CustomAgentDrawer({
   const { create: createAgent, isCreating } = useCreateAgent()
   const { remove, isDeleting } = useDeleteAgent()
   const { models: enabledModels } = useEnabledModels()
+  const triggerV2Enabled = useTriggerV2Enabled()
   // 工具清单只在抽屉打开时拉（后端权威 defaults；端点未就绪 → 空 → 提示）。
   const { options: toolOptions } = useToolOptions(open)
   // R3 — openness flag 分面（webToolsEnabled/execToolsEnabled），驱动「额外能力」区禁用提示。
@@ -162,6 +168,10 @@ export function CustomAgentDrawer({
   const [senderPattern, setSenderPattern] = useState('')
   const [subjectPattern, setSubjectPattern] = useState('')
   const [folders, setFolders] = useState('') // 逗号分隔
+  const [threadIds, setThreadIds] = useState('')
+  const [triggerEntries, setTriggerEntries] = useState<CustomAgentTriggerV2Entry[]>([])
+  const [editingTriggerIndex, setEditingTriggerIndex] = useState<number | null>(null)
+  const [triggerEnabled, setTriggerEnabled] = useState(false)
   const [selectedTools, setSelectedTools] = useState<string[]>([])
   // toolsMode='defaults'（新建 / 编辑 tool_policy=NULL 行）→ 工具区展示后端默认安全集，且未
   // 触碰不写库；'explicit'（编辑显式 allowed_tools 行）→ 展示行内集合。toolsDirty=用户本次
@@ -205,14 +215,14 @@ export function CustomAgentDrawer({
     setCreatedId(null)
     if (create || !cfg) {
       setEnabled(false)
-      setTitle('')
+      setTitle(initial?.title ?? '')
       setDescription('')
       setAvatar(null)
       setAvatarDirty(false)
       setPrompt('')
       setPromptDirty(false)
       setModel('')
-      setTriggerKind('none')
+      setTriggerKind(initial?.trigger?.kind === 'email_filter' ? 'email_filter' : 'none')
       setCronMode('schedule')
       setCron('0 9 * * 1-5')
       setTriggerTz('UTC')
@@ -222,6 +232,14 @@ export function CustomAgentDrawer({
       setSenderPattern('')
       setSubjectPattern('')
       setFolders('')
+      setThreadIds(
+        initial?.trigger?.kind === 'email_filter'
+          ? (initial.trigger.thread_ids ?? []).join(', ')
+          : ''
+      )
+      setTriggerEntries(initial?.trigger ? [initial.trigger] : [])
+      setEditingTriggerIndex(initial?.trigger ? 0 : null)
+      setTriggerEnabled(initial?.trigger?.enabled ?? false)
       // 新建默认勾选由下方独立 effect 从后端 defaults 初始化（toolOptions 可能尚未就位）。
       setSelectedTools([])
       setToolsMode('defaults')
@@ -247,7 +265,11 @@ export function CustomAgentDrawer({
     setPrompt(cfg.prompt_is_default ? '' : cfg.prompt)
     setPromptDirty(false)
     setModel(cfg.model || '')
-    const trig = cfg.trigger
+    const triggerSet = cfg.trigger?.v === 2 ? cfg.trigger : null
+    const trig = triggerSet?.triggers[0] ?? (cfg.trigger?.v === 1 ? cfg.trigger : null)
+    setTriggerEntries(triggerSet?.triggers ?? (trig ? [{ ...trig, enabled: true }] : []))
+    setEditingTriggerIndex(triggerSet?.triggers.length ? 0 : trig ? 0 : null)
+    setTriggerEnabled(triggerSet?.triggers[0]?.enabled ?? Boolean(trig))
     const defaultSchedule = newScheduleValue({
       ...DEFAULT_RULE,
       freq: 'weekly',
@@ -256,12 +278,13 @@ export function CustomAgentDrawer({
     if (trig?.kind === 'schedule') {
       setTriggerKind('cron')
       setCronMode('schedule')
-      setSchedule(readTriggerSchedule(trig) ?? defaultSchedule)
+      setSchedule(readTriggerSchedule({ ...trig, v: 1 }) ?? defaultSchedule)
       setCron('0 9 * * 1-5')
       setTriggerTz('UTC')
       setSenderPattern('')
       setSubjectPattern('')
       setFolders('')
+      setThreadIds('')
     } else if (trig?.kind === 'cron') {
       // 老 cron 行：停在 legacy 态原样展示/编辑，**不自动映射**（契约 §4）。
       setTriggerKind('cron')
@@ -272,11 +295,13 @@ export function CustomAgentDrawer({
       setSenderPattern('')
       setSubjectPattern('')
       setFolders('')
+      setThreadIds('')
     } else if (trig?.kind === 'email_filter') {
       setTriggerKind('email_filter')
       setSenderPattern(trig.sender_pattern ?? '')
       setSubjectPattern(trig.subject_pattern ?? '')
       setFolders((trig.folders ?? []).join(', '))
+      setThreadIds((trig.thread_ids ?? []).join(', '))
       setCronMode('schedule')
       setCron('0 9 * * 1-5')
       setTriggerTz('UTC')
@@ -318,7 +343,7 @@ export function CustomAgentDrawer({
     setSkillsDirty(false)
     setMaxRunsPerDay(cfg.budget?.max_runs_per_day ?? DEFAULT_MAX_RUNS_PER_DAY)
     setMaxRunSeconds(cfg.budget?.max_run_seconds ?? DEFAULT_MAX_RUN_SECONDS)
-  }, [open, cfg, create])
+  }, [open, cfg, create, initial])
 
   // 'defaults' 模式（新建 / 编辑 NULL-policy 行）：toolOptions 就位后用后端 defaults 初始化
   // 默认勾选（展示与 NULL 投影的真实默认安全集一致）。用户触碰工具区（toolsDirty）后不再
@@ -346,6 +371,60 @@ export function CustomAgentDrawer({
     padding: '9px 11px'
   }
 
+  const editTrigger = (index: number): void => {
+    const entry = triggerEntries[index]
+    if (!entry) return
+    setEditingTriggerIndex(index)
+    setTriggerEnabled(entry.enabled)
+    if (entry.kind === 'schedule') {
+      setTriggerKind('cron')
+      setCronMode('schedule')
+      setSchedule(readTriggerSchedule({ ...entry, v: 1 }) ?? schedule)
+    } else if (entry.kind === 'cron') {
+      setTriggerKind('cron')
+      setCronMode('legacy')
+      setCron(entry.cron)
+      setTriggerTz(entry.timezone || 'UTC')
+    } else {
+      setTriggerKind('email_filter')
+      setSenderPattern(entry.sender_pattern ?? '')
+      setSubjectPattern(entry.subject_pattern ?? '')
+      setFolders((entry.folders ?? []).join(', '))
+      setThreadIds((entry.thread_ids ?? []).join(', '))
+    }
+  }
+
+  const addTrigger = (): void => {
+    setEditingTriggerIndex(triggerEntries.length)
+    setTriggerEnabled(false)
+    setTriggerKind('email_filter')
+    setSenderPattern('')
+    setSubjectPattern('')
+    setFolders('')
+    setThreadIds('')
+  }
+
+  const triggerEntrySummary = (entry: CustomAgentTriggerV2Entry): string => {
+    if (entry.kind === 'cron') return `${entry.cron} · ${entry.timezone || 'UTC'}`
+    if (entry.kind === 'schedule') return `${entry.rule.freq} · ${entry.timezone}`
+    const predicates = [
+      entry.sender_pattern,
+      entry.subject_pattern,
+      entry.folders?.join(', '),
+      entry.thread_ids?.join(', ')
+    ].filter((value): value is string => Boolean(value))
+    return predicates.join(' · ')
+  }
+
+  const policyTriggerKind = triggerV2Enabled
+    ? triggerEntries.some((entry) => entry.kind === 'email_filter') ||
+      (editingTriggerIndex !== null && triggerKind === 'email_filter')
+      ? 'email_filter'
+      : (triggerEntries[0]?.kind ?? (triggerKind === 'none' ? null : triggerKind))
+    : triggerKind === 'none'
+      ? null
+      : triggerKind
+
   // trigger tagged-union 构造（none → null = 草稿/禁用触发）。
   const buildTrigger = (): CustomAgentTrigger | null => {
     if (triggerKind === 'cron') {
@@ -362,6 +441,11 @@ export function CustomAgentDrawer({
         .map((s) => s.trim())
         .filter(Boolean)
       if (fl.length) trig.folders = fl
+      const tids = threadIds
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean)
+      if (tids.length) trig.thread_ids = tids
       return trig
     }
     return null
@@ -378,7 +462,8 @@ export function CustomAgentDrawer({
       triggerKind === 'email_filter' &&
       !senderPattern.trim() &&
       !subjectPattern.trim() &&
-      !folders.trim()
+      !folders.trim() &&
+      !threadIds.trim()
     ) {
       return t('agents.custom.errEmailPredicate')
     }
@@ -398,7 +483,20 @@ export function CustomAgentDrawer({
     }
     setErr(null)
     setSaveFailed(false)
-    const trigger = buildTrigger()
+    const builtTrigger = buildTrigger()
+    const nextEntries = [...triggerEntries]
+    if (triggerV2Enabled && editingTriggerIndex !== null && builtTrigger) {
+      const { v: _v, ...entryTrigger } = builtTrigger
+      const previous = nextEntries[editingTriggerIndex]
+      nextEntries[editingTriggerIndex] = {
+        ...(previous?.id ? { id: previous.id } : {}),
+        enabled: triggerEnabled,
+        ...entryTrigger
+      }
+    }
+    const trigger: CustomAgentTrigger | TriggerSetV2 | null = triggerV2Enabled
+      ? { v: 2, triggers: nextEntries }
+      : builtTrigger
     const budget = {
       v: 1 as const,
       max_runs_per_day: maxRunsPerDay,
@@ -637,6 +735,65 @@ export function CustomAgentDrawer({
 
           {/* trigger 判别式 —— seg 控件（非空 sentinel，避 radix SelectItem 空串崩） */}
           <Field label={t('agents.custom.trigger.label')} hint={t('agents.custom.trigger.hint')}>
+            {triggerV2Enabled && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginBottom: 10 }}>
+                {triggerEntries.map((entry, index) => (
+                  <div
+                    key={entry.id ?? `new-${index}`}
+                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 8, border: '1px solid rgb(var(--ink-border))', borderRadius: 8 }}
+                  >
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12.5 }}>
+                        {t(`agents.custom.trigger.kind.${entry.kind}`)}
+                      </div>
+                      <div
+                        style={{
+                          marginTop: 2,
+                          color: 'rgb(var(--ink-fg-3))',
+                          fontSize: 11.5,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {triggerEntrySummary(entry)}
+                      </div>
+                    </div>
+                    <Switch
+                      on={entry.enabled}
+                      onChange={(checked) => {
+                        setTriggerEntries((items) =>
+                          items.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: checked } : item)
+                        )
+                        if (editingTriggerIndex === index) setTriggerEnabled(checked)
+                      }}
+                    />
+                    <button type="button" className="btn-ghost" onClick={() => editTrigger(index)}>
+                      {t('agents.custom.trigger.edit')}
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-ghost"
+                      onClick={() => {
+                        setTriggerEntries((items) => items.filter((_, itemIndex) => itemIndex !== index))
+                        setEditingTriggerIndex(null)
+                      }}
+                    >
+                      {t('agents.custom.trigger.delete')}
+                    </button>
+                  </div>
+                ))}
+                <button type="button" className="btn-ghost" onClick={addTrigger}>
+                  {t('agents.custom.trigger.add')}
+                </button>
+                {editingTriggerIndex !== null && (
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 8, fontSize: 12.5 }}>
+                    <Switch on={triggerEnabled} onChange={setTriggerEnabled} />
+                    {t('agents.custom.trigger.enabled')}
+                  </label>
+                )}
+              </div>
+            )}
             <div className="seg" style={{ width: '100%' }}>
               {TRIGGER_KINDS.map((k) => (
                 <button
@@ -644,7 +801,13 @@ export function CustomAgentDrawer({
                   type="button"
                   className={triggerKind === k ? 'on' : ''}
                   style={{ flex: 1, justifyContent: 'center' }}
-                  onClick={() => setTriggerKind(k)}
+                  onClick={() => {
+                    setTriggerKind(k)
+                    if (triggerV2Enabled && editingTriggerIndex === null && k !== 'none') {
+                      setEditingTriggerIndex(triggerEntries.length)
+                      setTriggerEnabled(false)
+                    }
+                  }}
                 >
                   {t(`agents.custom.trigger.kind.${k}`)}
                 </button>
@@ -753,6 +916,15 @@ export function CustomAgentDrawer({
                   onChange={(e) => setFolders(e.target.value)}
                   style={inputStyle}
                 />
+                {triggerV2Enabled && (
+                  <input
+                    type="text"
+                    value={threadIds}
+                    placeholder={t('agents.custom.trigger.threadIdsPlaceholder')}
+                    onChange={(e) => setThreadIds(e.target.value)}
+                    style={inputStyle}
+                  />
+                )}
                 <div style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', lineHeight: 1.5 }}>
                   {t('agents.custom.trigger.emailHint')}
                 </div>
@@ -767,7 +939,7 @@ export function CustomAgentDrawer({
               setToolsDirty(true)
             }}
             agentTitle={title.trim() || (cfg ? cfg.title : t('agents.custom.newTitle'))}
-            triggerKind={create ? triggerKind : (cfg?.trigger?.kind ?? null)}
+            triggerKind={policyTriggerKind}
             grantExec={grantExec}
             onGrantExecChange={(next) => {
               setGrantExec(next)
@@ -828,7 +1000,7 @@ export function CustomAgentDrawer({
             <AutomationPolicySection
               agentId={cfg.id}
               agentTitle={title.trim() || cfg.title}
-              triggerKind={cfg.trigger?.kind ?? null}
+              triggerKind={policyTriggerKind}
               writeToolChoices={toolOptions.tools
                 .filter((tl) => tl.class === 'domain_write' && selectedTools.includes(tl.name))
                 .map((tl) => tl.name)}

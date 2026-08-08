@@ -231,16 +231,21 @@ def report_config_set(
 
     # S4: 保存时深校验 custom agent trigger（坏 cron/未知 kind/超长 pattern → E_INVALID_ARG;
     # 运行时 worker/dispatch 仍 fail-closed 双保险）。TriggerValidationError 是 ValueError 子类。
-    from src.agents.trigger import validate_agent_config_patch
+    from src.agents.trigger import normalize_agent_config_patch
+    store = _store(cli)
+    existing = store.get_agent(agent_id)
+    if existing is None:
+        raise emit_cli_error(cli, CliNotFoundError(f"report_agent {agent_id!r} not found"))
     try:
-        validate_agent_config_patch(raw)
-        db_patch = wire.config_patch_to_db(raw)
+        normalized_raw = normalize_agent_config_patch(
+            raw,
+            stored_trigger=existing.get("trigger_json"),
+            agent_type=existing.get("type"),
+        )
+        db_patch = wire.config_patch_to_db(normalized_raw)
     except ValueError as e:
         raise emit_cli_error(cli, CliInvalidArgError(str(e)))
 
-    store = _store(cli)
-    if store.get_agent(agent_id) is None:
-        raise emit_cli_error(cli, CliNotFoundError(f"report_agent {agent_id!r} not found"))
     updated = store.update_agent(agent_id, db_patch)
     emit(cli, wire.resolve_agent(updated) if updated else {})
 

@@ -1666,6 +1666,7 @@ class NewWatcher:
             sender = getattr(email_obj, "sender", None)
             subject = getattr(email_obj, "subject", None)
             mailbox = getattr(email_obj, "mailbox", None)
+            thread_id = getattr(email_obj, "thread_id", None)
             repo = self._agent_job_repo
 
             async def _bg():
@@ -1676,6 +1677,7 @@ class NewWatcher:
                         sender=sender,
                         subject=subject,
                         mailbox=mailbox,
+                        thread_id=thread_id,
                         internal_id=internal_id,
                         repo=repo,
                     )

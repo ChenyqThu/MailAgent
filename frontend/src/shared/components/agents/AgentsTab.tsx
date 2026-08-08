@@ -455,18 +455,21 @@ function CustomAgentCard({
   }
 
   const triggerSummary = ((): string => {
-    const trig = cfg.trigger
+    const configured = cfg.trigger
+    const triggers = configured?.v === 2 ? configured.triggers : configured ? [configured] : []
+    const trig = triggers.find((entry) => !('enabled' in entry) || entry.enabled) ?? triggers[0]
+    const suffix = triggers.length > 1 ? ` · +${triggers.length - 1}` : ''
     if (trig?.kind === 'cron') {
-      return t('agents.custom.card.triggerCron', { cron: trig.cron, tz: trig.timezone || 'UTC' })
+      return `${t('agents.custom.card.triggerCron', { cron: trig.cron, tz: trig.timezone || 'UTC' })}${suffix}`
     }
     // 07-24 结构化排程：摘要用构建器同一套句子生成器（卡片与抽屉口径一致）。
     if (trig?.kind === 'schedule') {
-      return t('agents.custom.card.triggerSchedule', {
+      return `${t('agents.custom.card.triggerSchedule', {
         text: sentenceText(t, i18n.language || 'zh-CN', coerceRule(trig.rule)),
         tz: trig.timezone
-      })
+      })}${suffix}`
     }
-    if (trig?.kind === 'email_filter') return t('agents.custom.card.triggerEmail')
+    if (trig?.kind === 'email_filter') return `${t('agents.custom.card.triggerEmail')}${suffix}`
     return t('agents.custom.card.triggerNone')
   })()
 

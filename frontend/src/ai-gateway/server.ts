@@ -1195,7 +1195,7 @@ async function handleAgentRun(
         agentId: spec.agentId,
         jobId,
         title: spec.sessionTitle,
-        triggerId: null,
+        triggerId: spec.trigger.id ?? null,
         triggerKind: spec.trigger.kind,
         triggerFiredAt: Number.isFinite(firedAt) ? firedAt : null
       })

@@ -38,13 +38,17 @@ from src.agents.trigger import (
     TriggerValidationError,
     parse_budget,
     parse_trigger,
+    parse_trigger_set,
+    trigger_v2_enabled,
 )
 
 FIRE_WINDOW_MIN = 30  # 单窗宽（沿 report worker FIRE_WINDOW_MIN 常量）：>此值的错过 occurrence 不补
 TICK_INTERVAL_SEC = 60
 
 
-def _marker_key(agent_id: str) -> str:
+def _marker_key(agent_id: str, trigger_id: Optional[str] = None) -> str:
+    if trigger_id is not None:
+        return f"agent_trigger_last_fire:{agent_id}:{trigger_id}"
     return f"agent_trigger_last_fire:{agent_id}"
 
 
@@ -157,42 +161,51 @@ async def tick_loop(
                 if not agent.get("enabled") or agent.get("type") != "custom":
                     continue
                 try:
-                    trig = parse_trigger(agent.get("trigger_json"))
+                    if trigger_v2_enabled():
+                        entries = parse_trigger_set(agent.get("trigger_json"))
+                    else:
+                        entries = ((None, True, parse_trigger(agent.get("trigger_json"))),)
                 except TriggerValidationError as e:
                     logger.warning(
                         f"[agent-trigger] skip agent={agent.get('id')} bad trigger_json: {e}"
                     )
                     continue
-                if isinstance(trig, EmailFilterTrigger):
-                    continue  # email_filter → new_watcher 第 5 hook 负责，本 worker 不碰
-                # cron / schedule 都是定时 headless，同走本 worker（fire_key/marker 同机制）。
-                now = now_fn()
-                key = _marker_key(agent["id"])
-                last_marker = sync_store.get_state(key)
-                fire_at = _due_fire(trig, now, last_marker)
-                if fire_at is None:
-                    continue
-                budget = parse_budget(agent.get("budget_json"))
-                fire_key = fire_at.strftime("%Y%m%dT%H%M%SZ")
-                logger.info(f"[agent-trigger] firing cron agent={agent['id']} occurrence={fire_key}")
-                try:
-                    enqueue_agent_run(
-                        repo,
-                        agent_id=agent["id"],
-                        # schedule 也报 "cron"：下游（run_worker 标签 / gateway contextMode
-                        # cron_headless / _fired_at_iso 的 fire_key 解析）按定时族处理，零改动。
-                        trigger_kind="cron",
-                        fire_key=fire_key,
-                        budget=budget,
+                for entry in entries:
+                    trigger_id = getattr(entry, "id", entry[0] if isinstance(entry, tuple) else None)
+                    enabled = getattr(entry, "enabled", entry[1] if isinstance(entry, tuple) else True)
+                    trig = getattr(entry, "trigger", entry[2] if isinstance(entry, tuple) else None)
+                    if not enabled or isinstance(trig, EmailFilterTrigger):
+                        continue
+                    now = now_fn()
+                    key = _marker_key(agent["id"], trigger_id)
+                    last_marker = sync_store.get_state(key)
+                    fire_at = _due_fire(trig, now, last_marker)
+                    if fire_at is None:
+                        continue
+                    budget = parse_budget(agent.get("budget_json"))
+                    fire_key = fire_at.strftime("%Y%m%dT%H%M%SZ")
+                    logger.info(
+                        f"[agent-trigger] firing cron agent={agent['id']} "
+                        f"trigger_id={trigger_id} occurrence={fire_key}"
                     )
-                except Exception as e:  # noqa: BLE001 — 单 agent 入队失败不杀 loop
-                    logger.warning(f"[agent-trigger] enqueue failed agent={agent['id']}: {e}")
-                finally:
-                    # 记 marker（即使超限/失败也记，避免同 occurrence 每 tick 重试）。
                     try:
-                        sync_store.set_state(key, _make_marker(fire_at, _trigger_hash(trig)))
-                    except Exception as e:  # noqa: BLE001
-                        logger.debug(f"[agent-trigger] set_state failed agent={agent['id']}: {e}")
+                        enqueue_agent_run(
+                            repo,
+                            agent_id=agent["id"],
+                            # schedule 也报 "cron"：下游（run_worker 标签 / gateway contextMode
+                            # cron_headless / _fired_at_iso 的 fire_key 解析）按定时族处理，零改动。
+                            trigger_kind="cron",
+                            fire_key=fire_key,
+                            budget=budget,
+                            trigger_id=trigger_id,
+                        )
+                    except Exception as e:  # noqa: BLE001 — 单 agent 入队失败不杀 loop
+                        logger.warning(f"[agent-trigger] enqueue failed agent={agent['id']}: {e}")
+                    finally:
+                        try:
+                            sync_store.set_state(key, _make_marker(fire_at, _trigger_hash(trig)))
+                        except Exception as e:  # noqa: BLE001
+                            logger.debug(f"[agent-trigger] set_state failed agent={agent['id']}: {e}")
         except asyncio.CancelledError:
             raise
         except Exception as e:  # noqa: BLE001 — list_agents / tick 整体异常不杀 loop

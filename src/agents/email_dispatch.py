@@ -23,6 +23,8 @@ from src.agents.trigger import (
     TriggerValidationError,
     parse_budget,
     parse_trigger,
+    parse_trigger_set,
+    trigger_v2_enabled,
 )
 
 
@@ -32,6 +34,7 @@ def dispatch_email_agents(
     sender: Optional[str],
     subject: Optional[str],
     mailbox: Optional[str],
+    thread_id: Optional[str] = None,
     internal_id: int,
     repo: Any,
     now_fn: Callable[[], float] = time.time,
@@ -45,47 +48,57 @@ def dispatch_email_agents(
     for agent in agents:
         agent_id = agent.get("id")
         try:
-            trig = parse_trigger(agent.get("trigger_json"))
+            if trigger_v2_enabled():
+                entries = parse_trigger_set(agent.get("trigger_json"))
+            else:
+                entries = ((None, True, parse_trigger(agent.get("trigger_json"))),)
         except TriggerValidationError as e:
             logger.warning(f"[custom-agent] skip agent={agent_id} bad trigger_json: {e}")
             continue
-        if not isinstance(trig, EmailFilterTrigger):
-            continue  # cron → AgentTriggerWorker 负责，本路径只处理 email_filter
-        try:
-            matcher = AgentEmailMatcher(trig)
-            if not matcher.is_match(sender=sender, subject=subject, mailbox=mailbox):
+        for entry in entries:
+            trigger_id = getattr(entry, "id", entry[0] if isinstance(entry, tuple) else None)
+            enabled = getattr(entry, "enabled", entry[1] if isinstance(entry, tuple) else True)
+            trig = getattr(entry, "trigger", entry[2] if isinstance(entry, tuple) else None)
+            if not enabled or not isinstance(trig, EmailFilterTrigger):
                 continue
-        except Exception as e:  # noqa: BLE001 — 正则匹配异常隔离到单 agent
-            logger.warning(f"[custom-agent] match error agent={agent_id}: {e}")
-            continue
-        budget = parse_budget(agent.get("budget_json"))
-        try:
-            res = enqueue_agent_run(
-                repo,
-                agent_id=str(agent_id),
-                trigger_kind="email_filter",
-                fire_key=str(internal_id),
-                budget=budget,
-                params={"email_internal_id": internal_id},
-                now_fn=now_fn,
-            )
-        except Exception as e:  # noqa: BLE001 — 入队异常隔离到单 agent
-            logger.warning(f"[custom-agent] enqueue error agent={agent_id}: {e}")
-            continue
-        if res is not None:
-            job = repo.get(res[0])
-            skipped = bool(
-                job and isinstance(job.result, dict) and job.result.get("outcome") == "skipped"
-            )
-            if skipped:
+            try:
+                matcher = AgentEmailMatcher(trig)
+                if not matcher.is_match(
+                    sender=sender, subject=subject, mailbox=mailbox, thread_id=thread_id
+                ):
+                    continue
+            except Exception as e:  # noqa: BLE001 — 正则匹配异常隔离到单 agent
+                logger.warning(f"[custom-agent] match error agent={agent_id}: {e}")
+                continue
+            budget = parse_budget(agent.get("budget_json"))
+            try:
+                res = enqueue_agent_run(
+                    repo,
+                    agent_id=str(agent_id),
+                    trigger_kind="email_filter",
+                    fire_key=str(internal_id),
+                    budget=budget,
+                    params={"email_internal_id": internal_id},
+                    trigger_id=trigger_id,
+                    now_fn=now_fn,
+                )
+            except Exception as e:  # noqa: BLE001 — 入队异常隔离到单 agent
+                logger.warning(f"[custom-agent] enqueue error agent={agent_id}: {e}")
+                continue
+            if res is not None:
+                job = repo.get(res[0])
+                skipped = bool(
+                    job and isinstance(job.result, dict) and job.result.get("outcome") == "skipped"
+                )
+                if skipped:
+                    logger.info(
+                        f"[custom-agent] email_filter matched agent={agent_id} "
+                        f"internal_id={internal_id} → daily limit, recorded skipped"
+                    )
+                    continue
+                fired += 1
                 logger.info(
                     f"[custom-agent] email_filter matched agent={agent_id} "
-                    f"internal_id={internal_id} → daily limit, recorded skipped"
+                    f"trigger_id={trigger_id} internal_id={internal_id} → enqueued"
                 )
-                continue
-            fired += 1
-            logger.info(
-                f"[custom-agent] email_filter matched agent={agent_id} "
-                f"internal_id={internal_id} → enqueued"
-            )
     return fired

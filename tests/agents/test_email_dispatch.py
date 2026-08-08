@@ -93,3 +93,40 @@ def test_injection_subject_does_not_bypass_folder_gate(repo):
     )
     assert n == 0
     assert repo.count_agent_runs_since("a1", 0) == 0
+
+
+def test_v2_two_email_triggers_create_two_jobs_and_thread_gate(repo, monkeypatch):
+    monkeypatch.setattr("src.agents.email_dispatch.trigger_v2_enabled", lambda: True)
+    agents = [_agent("a1", {
+        "v": 2,
+        "triggers": [
+            {"id": "trg_one", "enabled": True, "kind": "email_filter", "thread_ids": ["thread-1"]},
+            {"id": "trg_two", "enabled": True, "kind": "email_filter", "folders": ["收件箱"]},
+            {"id": "trg_off", "enabled": False, "kind": "email_filter", "folders": ["收件箱"]},
+        ],
+    })]
+    assert dispatch_email_agents(
+        agents, sender="a@b.com", subject="x", mailbox="收件箱", thread_id="thread-1",
+        internal_id=88, repo=repo,
+    ) == 2
+    jobs = repo.list_agent_runs(agent_id="a1")
+    assert {job.params.get("trigger_id") for job in jobs} == {"trg_one", "trg_two"}
+    assert dispatch_email_agents(
+        agents, sender="a@b.com", subject="x", mailbox="收件箱", thread_id="other",
+        internal_id=89, repo=repo,
+    ) == 1
+
+
+def test_flag_off_v2_email_trigger_fails_closed(repo, monkeypatch):
+    monkeypatch.setattr("src.agents.email_dispatch.trigger_v2_enabled", lambda: False)
+    agents = [_agent("a1", {
+        "v": 2,
+        "triggers": [
+            {"id": "trg_one", "enabled": True, "kind": "email_filter", "folders": ["收件箱"]},
+        ],
+    })]
+    assert dispatch_email_agents(
+        agents, sender="a@b.com", subject="x", mailbox="收件箱",
+        internal_id=90, repo=repo,
+    ) == 0
+    assert repo.count_agent_runs_since("a1", 0) == 0

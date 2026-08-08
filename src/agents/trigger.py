@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import json
 import re
+import uuid
 from dataclasses import dataclass
 from typing import Any, Optional, Tuple, Union
 
@@ -35,6 +36,9 @@ from typing import Any, Optional, Tuple, Union
 # （to_thread 亦无用，实测证实）。这层 task 隔离**不是** ReDoS 防线，别据此放宽 pattern 校验。
 MAX_PATTERN_LEN = 256
 MATCH_INPUT_CAP = 512  # matcher 匹配前 subject/sender 各取前 N 字符
+MAX_THREAD_IDS = 50
+MAX_THREAD_ID_LEN = 256
+TRIGGER_V2_ENV = "MAILAGENT_TRIGGER_V2"
 
 # budget 两门默认 + clamp（07-28 W1）。tool loop 只保留 gateway 内部 10000 步终止哨兵，
 # 不再把步数作为用户预算；旧行里的 max_steps 由 parse_budget 宽容忽略。
@@ -84,10 +88,18 @@ class EmailFilterTrigger:
     subject_pattern: Optional[str] = None
     sender_pattern: Optional[str] = None
     folders: Tuple[str, ...] = ()
+    thread_ids: Tuple[str, ...] = ()
     kind: str = "email_filter"
 
 
 Trigger = Union[CronTrigger, ScheduleTrigger, EmailFilterTrigger]
+
+
+@dataclass(frozen=True)
+class TriggerEntry:
+    id: Optional[str]
+    enabled: bool
+    trigger: Trigger
 
 
 @dataclass(frozen=True)
@@ -189,6 +201,19 @@ def _validate_folders(value: Any) -> Tuple[str, ...]:
     return tuple(v for v in value if v)
 
 
+def _validate_thread_ids(value: Any) -> Tuple[str, ...]:
+    if value is None:
+        return ()
+    if not isinstance(value, list) or not all(isinstance(x, str) for x in value):
+        raise TriggerValidationError("thread_ids must be a list of strings")
+    values = tuple(v for v in value if v)
+    if len(values) > MAX_THREAD_IDS:
+        raise TriggerValidationError(f"thread_ids has too many entries ({len(values)}>{MAX_THREAD_IDS})")
+    if any(len(v) > MAX_THREAD_ID_LEN for v in values):
+        raise TriggerValidationError(f"thread_ids entries must be <= {MAX_THREAD_ID_LEN} chars")
+    return values
+
+
 def _validate_cron_expr(expr: Any) -> str:
     """cron 校验（ADR D5 条件 ③）：强制标准 5-field + croniter.is_valid。"""
     from croniter import croniter  # flag-off / 无 custom cron agent 时不加载
@@ -269,6 +294,157 @@ def parse_trigger(raw: Union[str, dict, None]) -> Trigger:
     raise TriggerValidationError(
         f"unknown trigger kind={kind!r} (expect cron|schedule|email_filter)"
     )
+
+
+def trigger_v2_enabled() -> bool:
+    """热读 .env 的 Trigger v2 门；缺失/空/坏值均回默认 true。"""
+    try:
+        from dotenv import dotenv_values
+
+        from src.api.deps import get_env_file_path
+
+        raw = (dotenv_values(get_env_file_path()) or {}).get(TRIGGER_V2_ENV)
+    except Exception:  # noqa: BLE001 — .env 不可读时保持默认 on
+        raw = None
+    if raw is None or raw == "":
+        return True
+    normalized = str(raw).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return True
+
+
+def new_trigger_id() -> str:
+    return "trg_" + uuid.uuid4().hex[:10]
+
+
+def _validate_trigger_id(value: Any) -> str:
+    if not isinstance(value, str):
+        raise TriggerValidationError("trigger id must be a string")
+    if len(value) > 32 or re.fullmatch(r"trg_[a-z0-9_]+", value) is None:
+        raise TriggerValidationError(
+            "trigger id must start with 'trg_', contain only [a-z0-9_], and be <=32 chars"
+        )
+    return value
+
+
+def parse_trigger_set(raw: Union[str, dict, None]) -> tuple[TriggerEntry, ...]:
+    data = _as_dict(raw)
+    if data is None:
+        raise TriggerValidationError("trigger_json is empty or not an object")
+    version = data.get("v", 1)
+    if version == 1:
+        return (TriggerEntry(id=None, enabled=True, trigger=parse_trigger(data)),)
+    if version != 2:
+        raise TriggerValidationError(f"unsupported trigger version v={version!r} (expect 1 or 2)")
+    raw_entries = data.get("triggers")
+    if not isinstance(raw_entries, list):
+        raise TriggerValidationError("v2 triggers must be a list")
+    entries: list[TriggerEntry] = []
+    seen_ids: set[str] = set()
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, dict):
+            raise TriggerValidationError("each v2 trigger must be an object")
+        trigger_id = _validate_trigger_id(raw_entry.get("id"))
+        if trigger_id in seen_ids:
+            raise TriggerValidationError(f"duplicate trigger id={trigger_id!r}")
+        seen_ids.add(trigger_id)
+        enabled = raw_entry.get("enabled")
+        if type(enabled) is not bool:
+            raise TriggerValidationError("trigger enabled must be a boolean")
+        trigger_data = {k: v for k, v in raw_entry.items() if k not in {"id", "enabled", "thread_ids"}}
+        thread_ids = _validate_thread_ids(raw_entry.get("thread_ids"))
+        if raw_entry.get("kind") == "email_filter" and thread_ids:
+            try:
+                parsed = parse_trigger(trigger_data)
+            except TriggerValidationError as exc:
+                if "needs at least one" not in str(exc):
+                    raise
+                parsed = EmailFilterTrigger()
+            if not isinstance(parsed, EmailFilterTrigger):
+                raise TriggerValidationError("thread_ids is only valid for email_filter triggers")
+            parsed = EmailFilterTrigger(
+                subject_pattern=parsed.subject_pattern,
+                sender_pattern=parsed.sender_pattern,
+                folders=parsed.folders,
+                thread_ids=thread_ids,
+            )
+        else:
+            if raw_entry.get("thread_ids") is not None:
+                if raw_entry.get("kind") != "email_filter":
+                    raise TriggerValidationError("thread_ids is only valid for email_filter triggers")
+            parsed = parse_trigger(trigger_data)
+        entries.append(TriggerEntry(id=trigger_id, enabled=enabled, trigger=parsed))
+    return tuple(entries)
+
+
+def _entry_to_wire(entry: TriggerEntry) -> dict[str, Any]:
+    trigger = entry.trigger
+    wire: dict[str, Any] = {"id": entry.id, "enabled": entry.enabled, "kind": trigger.kind}
+    if isinstance(trigger, CronTrigger):
+        wire.update({"cron": trigger.cron, "timezone": trigger.timezone})
+    elif isinstance(trigger, ScheduleTrigger):
+        rule = trigger.rule
+        wire.update({
+            "rule": {
+                "freq": rule.freq,
+                "interval": rule.interval,
+                "weekdays": list(rule.weekdays),
+                "monthMode": rule.month_mode,
+                "monthDay": rule.month_day,
+                "ordinal": rule.ordinal,
+                "weekday": rule.weekday,
+                "hour": rule.hour,
+                "minute": rule.minute,
+                "clamp": rule.clamp,
+            },
+            "anchor": trigger.anchor,
+            "timezone": trigger.timezone,
+        })
+    else:
+        if trigger.subject_pattern is not None:
+            wire["subject_pattern"] = trigger.subject_pattern
+        if trigger.sender_pattern is not None:
+            wire["sender_pattern"] = trigger.sender_pattern
+        if trigger.folders:
+            wire["folders"] = list(trigger.folders)
+        if trigger.thread_ids:
+            wire["thread_ids"] = list(trigger.thread_ids)
+    return wire
+
+
+def normalize_trigger_patch(raw: Any, stored_trigger: Any = None) -> dict[str, Any]:
+    """保存面统一写 v2；缺 id 时补齐，单 v1 patch 尽量保留存量单 trigger id。"""
+    data = _as_dict(raw)
+    if data is None:
+        raise TriggerValidationError("trigger_json is empty or not an object")
+    if data.get("v", 1) == 1:
+        parsed = parse_trigger(data)
+        preserved_id: Optional[str] = None
+        stored = _as_dict(stored_trigger)
+        if stored and stored.get("v") == 2:
+            stored_entries = parse_trigger_set(stored)
+            if len(stored_entries) == 1 and stored_entries[0].trigger.kind == parsed.kind:
+                preserved_id = stored_entries[0].id
+        entry = TriggerEntry(id=preserved_id or new_trigger_id(), enabled=True, trigger=parsed)
+        normalized = {"v": 2, "triggers": [_entry_to_wire(entry)]}
+        parse_trigger_set(normalized)
+        return normalized
+    if data.get("v") != 2:
+        parse_trigger_set(data)
+    raw_entries = data.get("triggers")
+    if not isinstance(raw_entries, list):
+        raise TriggerValidationError("v2 triggers must be a list")
+    filled = []
+    for item in raw_entries:
+        if not isinstance(item, dict):
+            raise TriggerValidationError("each v2 trigger must be an object")
+        filled.append({**item, "id": item.get("id") or new_trigger_id()})
+    normalized = {"v": 2, "triggers": filled}
+    entries = parse_trigger_set(normalized)
+    return {"v": 2, "triggers": [_entry_to_wire(entry) for entry in entries]}
 
 
 def _clamp_int(value: Any, default: int, lo: int, hi: int) -> int:
@@ -412,7 +588,30 @@ def validate_agent_config_patch(patch: dict) -> None:
     """
     trig = patch.get("trigger")
     if trig is not None:
-        parse_trigger(trig)  # 抛 TriggerValidationError（ValueError）on 坏配置
+        if trigger_v2_enabled():
+            parse_trigger_set(trig)
+        else:
+            parse_trigger(trig)  # flag off：v2 继续走既有 unsupported version 路径
     tp = patch.get("tool_policy")
     if tp is not None:
         parse_tool_policy(tp)  # 抛 ToolPolicyValidationError（ValueError）on 坏形状
+
+
+def normalize_agent_config_patch(
+    patch: dict,
+    *,
+    stored_trigger: Any = None,
+    agent_type: Optional[str] = None,
+) -> dict:
+    """三写路共用的保存 normalization；仅 custom + flag on 把 trigger 物化为 v2。"""
+    validate_agent_config_patch(patch)
+    normalized = dict(patch)
+    if (
+        trigger_v2_enabled()
+        and agent_type == "custom"
+        and patch.get("trigger") is not None
+    ):
+        normalized["trigger"] = normalize_trigger_patch(
+            patch["trigger"], stored_trigger=stored_trigger
+        )
+    return normalized

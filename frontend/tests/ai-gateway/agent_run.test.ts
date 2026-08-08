@@ -1564,6 +1564,21 @@ describe('POST /api/ai/agent-run', () => {
     ])
   })
 
+  test('spec trigger id is forwarded into the agent session provenance', async () => {
+    const createAgentSession = vi.fn(() => 56)
+    const base = await startWith({
+      fetchAgentRunSpec: async () => makeSpec({
+        trigger: { id: 'trg_mail', kind: 'email_filter', firedAt: '2026-07-03T09:00:00Z' }
+      }),
+      createAgentSession
+    })
+    const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
+    expect(res.status).toBe(200)
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ triggerId: 'trg_mail' })
+    )
+  })
+
   test('eager custom-agent-call session is reused without creating a second session', async () => {
     const createAgentSession = vi.fn(() => 99)
     const base = await startWith({

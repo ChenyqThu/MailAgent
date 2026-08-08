@@ -279,7 +279,19 @@ export type CustomAgentTrigger =
       subject_pattern?: string
       sender_pattern?: string
       folders?: string[]
+      thread_ids?: string[]
     }
+
+export type CustomAgentTriggerV2Entry = CustomAgentTrigger extends infer Trigger
+  ? Trigger extends { v: 1 }
+    ? Omit<Trigger, 'v'> & { id?: string; enabled: boolean }
+    : never
+  : never
+
+export interface TriggerSetV2 {
+  v: 2
+  triggers: CustomAgentTriggerV2Entry[]
+}
 
 /** v30 Custom Agent 工具收窄（矩阵地板之后的 allowed_tools 交集；null/缺失 = 不额外收窄）。 */
 export interface CustomAgentToolPolicy {
@@ -344,7 +356,7 @@ export interface ReportAgentConfig {
   /** v30 触发/工具/预算。trigger 对 type='custom'（CRUD）与 'project_progress'（S5 W5a 单例行，
    *  复用 email_filter 词汇存 sender/subject）均有意义并投影；tool_policy/budget 仍 custom-only
    *  （其余恒 null，project_progress 执行不进 gateway）。 */
-  trigger?: CustomAgentTrigger | null
+  trigger?: CustomAgentTrigger | TriggerSetV2 | null
   tool_policy?: CustomAgentToolPolicy | null
   budget?: CustomAgentBudget | null
   /** v42 visual identity. null/absent = derive a stable shape/palette from the agent id. */
@@ -399,7 +411,7 @@ export interface ReportConfigPatch {
   context_source?: 'standing_docs' | 'notion_context' | null
   /** v30 Custom Agent：触发/工具/预算（wire.config_patch_to_db 写对应 *_json 列）。
    *  null = 清空该配置；object = 覆写。仅 type='custom' 有意义。 */
-  trigger?: CustomAgentTrigger | null
+  trigger?: CustomAgentTrigger | TriggerSetV2 | null
   tool_policy?: CustomAgentToolPolicy | null
   budget?: CustomAgentBudget | null
   avatar?: AgentAvatarConfig | null

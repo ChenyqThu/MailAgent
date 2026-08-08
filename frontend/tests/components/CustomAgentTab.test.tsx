@@ -258,6 +258,261 @@ describe('AgentsTab — Custom Agent 区 + flag 门控', () => {
 })
 
 describe('CustomAgentDrawer — 新建（两段式）', () => {
+  test('Trigger v2：新建自动 trigger 默认 disabled，保存构造 envelope', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { triggerV2Enabled: true, connectorToolsEnabled: true } })
+    }) as unknown as typeof fetch
+    mockCreateAgent.mockResolvedValue(makeCustomCfg())
+    mockSetConfig.mockResolvedValue(makeCustomCfg())
+    renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
+    fireEvent.change(screen.getByPlaceholderText('如 DMS 审批助手'), {
+      target: { value: 'v2 agent' }
+    })
+    await screen.findByText('添加 Trigger')
+    fireEvent.click(screen.getByText('定时'))
+    fireEvent.click(screen.getByText('创建'))
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger).toMatchObject({
+      v: 2,
+      triggers: [{ enabled: false, kind: 'schedule' }]
+    })
+  })
+
+  test('Trigger v2：删除、编辑、启停后保存保留稳定 id', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { triggerV2Enabled: true, connectorToolsEnabled: true } })
+    }) as unknown as typeof fetch
+    const cfg = makeCustomCfg({
+      trigger: {
+        v: 2,
+        triggers: [
+          {
+            id: 'trg_email',
+            enabled: true,
+            kind: 'email_filter',
+            subject_pattern: 'old subject'
+          },
+          {
+            id: 'trg_cron',
+            enabled: false,
+            kind: 'cron',
+            cron: '0 9 * * *',
+            timezone: 'UTC'
+          }
+        ]
+      }
+    })
+    mockSetConfig.mockResolvedValue(cfg)
+    renderUi(<CustomAgentDrawer cfg={cfg} open onClose={() => {}} />)
+
+    await screen.findByText('old subject')
+    const cronSummary = screen.getByText('0 9 * * * · UTC')
+    const cronRow = cronSummary.parentElement?.parentElement
+    const cronDelete = cronRow?.querySelectorAll('button')[2]
+    if (!cronDelete) throw new Error('cron trigger delete button missing')
+    fireEvent.click(cronDelete)
+    const emailSummary = await screen.findByText('old subject')
+    const emailEdit = emailSummary.parentElement?.parentElement?.querySelectorAll('button')[1]
+    if (!emailEdit) throw new Error('email trigger edit button missing')
+    fireEvent.click(emailEdit)
+    fireEvent.change(screen.getByPlaceholderText(/主题正则/), {
+      target: { value: 'new subject' }
+    })
+    fireEvent.click(screen.getAllByRole('switch')[1])
+    fireEvent.click(screen.getByText('保存'))
+
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger).toEqual({
+      v: 2,
+      triggers: [
+        {
+          id: 'trg_email',
+          enabled: false,
+          kind: 'email_filter',
+          subject_pattern: 'new subject'
+        }
+      ]
+    })
+  })
+
+  test('Trigger v2：打开存量 email_filter 时预填 thread_ids', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { triggerV2Enabled: true, connectorToolsEnabled: true } })
+    }) as unknown as typeof fetch
+    const cfg = makeCustomCfg({
+      trigger: {
+        v: 2,
+        triggers: [
+          {
+            id: 'trg_email',
+            enabled: true,
+            kind: 'email_filter',
+            thread_ids: ['thread-123']
+          }
+        ]
+      }
+    })
+
+    renderUi(<CustomAgentDrawer cfg={cfg} open onClose={() => {}} />)
+
+    expect(
+      (await screen.findByPlaceholderText('线程 ID（可留空，逗号分隔）') as HTMLInputElement)
+        .value
+    ).toBe('thread-123')
+  })
+
+  test('Trigger v2：清空 email_filter 谓词后 payload 不保留旧键', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { triggerV2Enabled: true, connectorToolsEnabled: true } })
+    }) as unknown as typeof fetch
+    const cfg = makeCustomCfg({
+      trigger: {
+        v: 2,
+        triggers: [
+          {
+            id: 'trg_email',
+            enabled: true,
+            kind: 'email_filter',
+            subject_pattern: 'DMS',
+            folders: ['收件箱']
+          }
+        ]
+      }
+    })
+    mockSetConfig.mockResolvedValue(cfg)
+    renderUi(<CustomAgentDrawer cfg={cfg} open onClose={() => {}} />)
+
+    fireEvent.change(await screen.findByPlaceholderText(/文件夹/), { target: { value: '' } })
+    fireEvent.click(screen.getByText('保存'))
+
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger).toEqual({
+      v: 2,
+      triggers: [
+        {
+          id: 'trg_email',
+          enabled: true,
+          kind: 'email_filter',
+          subject_pattern: 'DMS'
+        }
+      ]
+    })
+  })
+
+  test('Trigger v2：email_filter 切换 legacy cron 时替换旧 entry', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { triggerV2Enabled: true, connectorToolsEnabled: true } })
+    }) as unknown as typeof fetch
+    const cfg = makeCustomCfg({
+      trigger: {
+        v: 2,
+        triggers: [
+          {
+            id: 'trg_email',
+            enabled: true,
+            kind: 'email_filter',
+            sender_pattern: 'boss@example.com',
+            subject_pattern: 'DMS',
+            folders: ['收件箱'],
+            thread_ids: ['thread-123']
+          },
+          {
+            id: 'trg_cron_seed',
+            enabled: false,
+            kind: 'cron',
+            cron: '0 9 * * *',
+            timezone: 'UTC'
+          }
+        ]
+      }
+    })
+    mockSetConfig.mockResolvedValue(cfg)
+    renderUi(<CustomAgentDrawer cfg={cfg} open onClose={() => {}} />)
+
+    const editButtons = await screen.findAllByRole('button', { name: '编辑' })
+    fireEvent.click(editButtons[1])
+    fireEvent.click(editButtons[0])
+    fireEvent.click(screen.getByRole('button', { name: '定时' }))
+    fireEvent.change(screen.getByPlaceholderText('0 9 * * 1-5'), {
+      target: { value: '15 10 * * 1-5' }
+    })
+    fireEvent.click(screen.getByText('保存'))
+
+    await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(1))
+    expect(mockSetConfig.mock.calls[0][1].trigger.triggers[0]).toEqual({
+      id: 'trg_email',
+      enabled: true,
+      kind: 'cron',
+      cron: '15 10 * * 1-5',
+      timezone: 'UTC'
+    })
+  })
+
+  test('Trigger v2：schedule 列表行显示本地化文案', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { triggerV2Enabled: true, connectorToolsEnabled: true } })
+    }) as unknown as typeof fetch
+    const cfg = makeCustomCfg({
+      trigger: {
+        v: 2,
+        triggers: [
+          {
+            id: 'trg_schedule',
+            enabled: true,
+            kind: 'schedule',
+            rule: {
+              freq: 'daily',
+              interval: 1,
+              weekdays: [1],
+              monthMode: 'date',
+              monthDay: 1,
+              ordinal: 1,
+              weekday: 1,
+              hour: 9,
+              minute: 0,
+              clamp: false
+            },
+            anchor: '2026-08-08',
+            timezone: 'America/Los_Angeles'
+          }
+        ]
+      }
+    })
+
+    renderUi(<CustomAgentDrawer cfg={cfg} open onClose={() => {}} />)
+
+    expect(await screen.findByText('排程')).toBeTruthy()
+    expect(screen.queryByText('agents.custom.trigger.kind.schedule')).toBeNull()
+  })
+
+  test('邮件线程快捷入口 initial：标题与 thread_ids 注入编辑器', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { triggerV2Enabled: true } })
+    }) as unknown as typeof fetch
+    renderUi(
+      <CustomAgentDrawer
+        cfg={null}
+        open
+        create
+        initial={{
+          title: '跟进：采购审批',
+          trigger: { enabled: false, kind: 'email_filter', thread_ids: ['thread-123'] }
+        }}
+        onClose={() => {}}
+      />
+    )
+    await screen.findByText('添加 Trigger')
+    expect((screen.getByPlaceholderText('如 DMS 审批助手') as HTMLInputElement).value).toBe('跟进：采购审批')
+    expect((screen.getByPlaceholderText('线程 ID（可留空，逗号分隔）') as HTMLInputElement).value).toBe('thread-123')
+  })
+
   test('字段在场：title / prompt / trigger seg / time budget', async () => {
     renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
     expect(screen.getByPlaceholderText('如 DMS 审批助手')).toBeTruthy()

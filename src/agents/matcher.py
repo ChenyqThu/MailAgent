@@ -25,6 +25,7 @@ class AgentEmailMatcher:
 
     def __init__(self, trigger: EmailFilterTrigger):
         self._folders = frozenset(trigger.folders) if trigger.folders else frozenset({_DEFAULT_FOLDER})
+        self._thread_ids = frozenset(trigger.thread_ids)
         self._subject_re: Optional[Pattern[str]] = (
             re.compile(trigger.subject_pattern, re.UNICODE)
             if trigger.subject_pattern else None
@@ -41,10 +42,13 @@ class AgentEmailMatcher:
         sender: Optional[str],
         subject: Optional[str],
         mailbox: Optional[str],
+        thread_id: Optional[str] = None,
     ) -> bool:
         """该邮件是否命中触发规则。输入截断 ``MATCH_INPUT_CAP`` 后再匹配。"""
         # folder gate（mailbox 显示名须在白名单内）。
         if (mailbox or "").strip() not in self._folders:
+            return False
+        if self._thread_ids and (thread_id or "") not in self._thread_ids:
             return False
         # subject gate（配了才要求匹配；输入截断防 ReDoS）。
         if self._subject_re is not None:

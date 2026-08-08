@@ -36,6 +36,7 @@ def enqueue_agent_run(
     fire_key: str,
     budget: Budget,
     params: Optional[Dict[str, Any]] = None,
+    trigger_id: Optional[str] = None,
     now_fn: Callable[[], float] = time.time,
 ) -> Tuple[int, bool]:
     """runs/day 门 + 幂等 enqueue 一个 agent_run job。
@@ -60,6 +61,8 @@ def enqueue_agent_run(
         "trigger_kind": trigger_kind,
         "fire_key": fire_key,
     }
+    if trigger_id is not None:
+        payload["trigger_id"] = trigger_id
     if params:
         payload.update(params)
     job_id, was_created = repo.enqueue(
@@ -67,7 +70,11 @@ def enqueue_agent_run(
         target_kind="agent",
         target_key=agent_id,
         params=payload,
-        idempotency_key=f"agent_run:{agent_id}:{fire_key}",
+        idempotency_key=(
+            f"agent_run:{agent_id}:{trigger_id}:{fire_key}"
+            if trigger_id is not None
+            else f"agent_run:{agent_id}:{fire_key}"
+        ),
     )
     if used >= budget.max_runs_per_day:
         if was_created:

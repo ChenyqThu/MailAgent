@@ -297,6 +297,24 @@ export function useSessionProvenanceEnabled(): boolean {
   return q.data ?? false
 }
 
+export function useTriggerV2Enabled(): boolean {
+  const q = useQuery({
+    queryKey: qk.chat.config('triggerV2Enabled'),
+    queryFn: async () => {
+      try {
+        const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+        if (!resp.ok) return false
+        const body = (await resp.json()) as { data?: { triggerV2Enabled?: unknown } }
+        return body?.data?.triggerV2Enabled === true
+      } catch {
+        return false
+      }
+    },
+    staleTime: 15_000
+  })
+  return q.data === true
+}
+
 /** S6 W2（P5 红点链）— 全局 + per-agent 待审批（paused_pending）计数，5s 轮询（SystemAlertBadge 先例）。
  *  enabled=false（flag off / customAgentsEnabled=false）→ 不发请求、不轮询、恒返 {total:0,byAgent:{}}
  *  → 所有红点面字节级不渲染。读失败（flag off / 不可达）→ 服务端已守读优雅降级返 EMPTY。 */

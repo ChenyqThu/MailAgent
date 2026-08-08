@@ -160,6 +160,7 @@
     "resync": "重传 Notion",
     "resyncPending": "重传中…",
     "llmRun": "AI 重跑",
+    "followupAgent": "为此线程建立跟进 Agent",
     "llmRunPending": "AI 处理中…",
     "openNotion": "在 Notion 打开",
     "prev": "上一封",
@@ -4217,7 +4218,7 @@
       "create": "创建",
       "errTitleRequired": "请填写名称。",
       "errCron5": "cron 必须是标准 5 段（分 时 日 月 周）。",
-      "errEmailPredicate": "邮件触发至少填一项：发件人 / 主题 / 文件夹。",
+      "errEmailPredicate": "邮件触发至少填一项：发件人 / 主题 / 文件夹 / 线程 ID。",
       "errMaxRunSeconds": "单次运行秒数需在 1–{max} 之间。",
       "errMaxRunsPerDay": "每日运行上限不能为负。",
       "trigger": {
@@ -4226,6 +4227,7 @@
         "kind": {
           "none": "无（草稿）",
           "cron": "定时",
+          "schedule": "排程",
           "email_filter": "邮件事件"
         },
         "noneHint": "未配置触发条件：Agent 保存为草稿、不会自动运行（仍可在下方手动运行一次）。",
@@ -4236,7 +4238,12 @@
         "senderPlaceholder": "发件人正则（可留空），如 dms@corp\\.com",
         "subjectPlaceholder": "主题正则（可留空），如 DMS.*审批",
         "foldersPlaceholder": "文件夹（可留空，逗号分隔），如 收件箱, 审批",
-        "emailHint": "发件人 / 主题为正则；文件夹为逗号分隔的白名单。三项至少填一项。"
+        "threadIdsPlaceholder": "线程 ID（可留空，逗号分隔）",
+        "emailHint": "发件人 / 主题为正则；文件夹与线程 ID 为精确白名单。至少填一项。",
+        "add": "添加 Trigger",
+        "edit": "编辑",
+        "delete": "删除",
+        "enabled": "启用自动触发"
       },
       "tools": {
         "label": "可用工具",

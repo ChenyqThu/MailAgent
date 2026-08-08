@@ -160,6 +160,7 @@
     "resync": "Resync Notion",
     "resyncPending": "Resyncing…",
     "llmRun": "Re-run AI",
+    "followupAgent": "Create follow-up Agent for this thread",
     "llmRunPending": "AI processing…",
     "openNotion": "Open in Notion",
     "prev": "Previous",
@@ -4217,7 +4218,7 @@
       "create": "Create",
       "errTitleRequired": "Name is required.",
       "errCron5": "Cron must be a standard 5-field expression (min hour dom mon dow).",
-      "errEmailPredicate": "Email trigger needs at least one of: sender / subject / folders.",
+      "errEmailPredicate": "Email trigger needs at least one of: sender / subject / folders / thread IDs.",
       "errMaxRunSeconds": "Max run seconds must be between 1 and {max}.",
       "errMaxRunsPerDay": "Max runs per day cannot be negative.",
       "trigger": {
@@ -4226,6 +4227,7 @@
         "kind": {
           "none": "None (draft)",
           "cron": "Schedule",
+          "schedule": "Schedule",
           "email_filter": "Email event"
         },
         "noneHint": "No trigger configured: the agent is saved as a draft and won't run automatically (you can still run it once manually below).",
@@ -4236,7 +4238,12 @@
         "senderPlaceholder": "Sender regex (optional), e.g. dms@corp\\.com",
         "subjectPlaceholder": "Subject regex (optional), e.g. DMS.*approval",
         "foldersPlaceholder": "Folders (optional, comma-separated), e.g. Inbox, Approvals",
-        "emailHint": "Sender / subject are regex; folders is a comma-separated allowlist. Fill at least one."
+        "threadIdsPlaceholder": "Thread IDs (optional, comma-separated)",
+        "emailHint": "Sender / subject are regex; folders and thread IDs are exact allowlists. Fill at least one.",
+        "add": "Add Trigger",
+        "edit": "Edit",
+        "delete": "Delete",
+        "enabled": "Automatic trigger enabled"
       },
       "tools": {
         "label": "Allowed tools",

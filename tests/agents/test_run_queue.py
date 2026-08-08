@@ -90,6 +90,22 @@ def test_params_carry_extra(repo):
     assert job.params["agent_id"] == "a1"
 
 
+def test_trigger_id_uses_isolated_idempotency_namespace(repo):
+    first = enqueue_agent_run(
+        repo, agent_id="a1", trigger_kind="cron", fire_key="same", budget=Budget(),
+        trigger_id="trg_one",
+    )
+    second = enqueue_agent_run(
+        repo, agent_id="a1", trigger_kind="cron", fire_key="same", budget=Budget(),
+        trigger_id="trg_two",
+    )
+    legacy = enqueue_agent_run(
+        repo, agent_id="a1", trigger_kind="cron", fire_key="same", budget=Budget(),
+    )
+    assert len({first[0], second[0], legacy[0]}) == 3
+    assert repo.get(first[0]).params["trigger_id"] == "trg_one"
+
+
 def test_sync_atomicity_invariant():
     """守护 runs/day 门的「同步原子性不变量」（codex S4 终审 P3 finding）。
 

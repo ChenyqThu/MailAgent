@@ -48,6 +48,7 @@ import type { AgentContextMode } from './policy'
 import type {
   CustomAgentToolPolicy,
   CustomAgentTrigger,
+  TriggerSetV2,
   ReportAgentConfig,
   ReportConfigPatch,
   ReportAgentCreateInput
@@ -94,8 +95,13 @@ function isoOrNull(v: number | null | undefined): string | null {
 }
 
 /** A compact human-readable summary of a custom-agent trigger (for the list/get output). */
-function triggerSummary(trigger: CustomAgentTrigger | null | undefined): string {
+function triggerSummary(trigger: CustomAgentTrigger | TriggerSetV2 | null | undefined): string {
   if (!trigger) return 'disabled (no trigger)'
+  if (trigger.v === 2) {
+    return trigger.triggers.length === 0
+      ? 'disabled (no trigger)'
+      : `${trigger.triggers.filter((item) => item.enabled).length}/${trigger.triggers.length} triggers enabled`
+  }
   if (trigger.kind === 'cron') {
     return `cron ${trigger.cron}${trigger.timezone ? ` (${trigger.timezone})` : ''}`
   }
@@ -511,6 +517,12 @@ export function createCustomAgentTools(
       }
       const patch = toConfigPatch(input, currentToolPolicy)
       if (Object.keys(patch).length === 0) invalidArg('at least one field to change is required')
+      if (input.trigger !== undefined && input.trigger !== null) {
+        const current = await domain.getReportAgent(input.agent_id, signal)
+        if (current?.trigger?.v === 2 && current.trigger.triggers.length > 1) {
+          invalidArg('agent has multiple triggers, edit in Settings')
+        }
+      }
       const agent = await domain.setReportAgentConfig(input.agent_id, patch, signal)
       return { updated: true, ...specSummary(agent), user_edited: userEdited }
     }

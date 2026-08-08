@@ -431,6 +431,31 @@ describe('custom_agent_create / update (edit-tier capability_change writes)', ()
     expect(put.body).toEqual({ trigger: null })
   })
 
+  test('v1 trigger update refuses to overwrite a stored v2 multi-trigger set', async () => {
+    const { domain, calls } = recordingDomain({
+      getAgent: {
+        ...CUSTOM_AGENT,
+        trigger: {
+          v: 2,
+          triggers: [
+            { id: 'trg_one', enabled: true, kind: 'cron', cron: '0 9 * * *' },
+            { id: 'trg_two', enabled: false, kind: 'email_filter', folders: ['收件箱'] }
+          ]
+        }
+      }
+    })
+    const tools = createCustomAgentTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await expect(
+      approveAndRun(tools.custom_agent_update, {
+        agent_id: 'dms-approver',
+        trigger: { kind: 'email_filter', folders: ['收件箱'] }
+      })
+    ).rejects.toThrow(/E_INVALID_ARG|multiple triggers|edit in Settings/)
+    expect(calls.filter((call) => call.method === 'PUT')).toHaveLength(0)
+  })
+
   test('identity pin: a raw-changed create input (no applyEdit) → E_APPROVAL_HASH_MISMATCH, no POST', async () => {
     const collector: GatewayToolAuditCollector = []
     const { domain, calls } = recordingDomain()

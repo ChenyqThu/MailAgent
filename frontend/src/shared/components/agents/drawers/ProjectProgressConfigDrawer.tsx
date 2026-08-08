@@ -216,7 +216,7 @@ export function ProjectProgressConfigDrawer({
   useEffect(() => {
     if (!open || !cfg) return
     setEnabled(cfg.enabled)
-    const trig = cfg.trigger
+    const trig = cfg.trigger?.v === 1 ? cfg.trigger : null
     setSender(trig?.kind === 'email_filter' ? (trig.sender_pattern ?? '') : '')
     setSubject(trig?.kind === 'email_filter' ? (trig.subject_pattern ?? '') : '')
     setTriggerDirty(false)

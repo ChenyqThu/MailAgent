@@ -11,32 +11,40 @@ import { describe, expect, test, beforeEach, vi } from 'vitest'
 import { render, cleanup, fireEvent, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const pinSpy = vi.fn(async (_id: number, pinned: boolean): Promise<boolean> => pinned)
+const { pinSpy, emailGetSpy } = vi.hoisted(() => ({
+  pinSpy: vi.fn(async (_id: number, pinned: boolean): Promise<boolean> => pinned),
+  emailGetSpy: vi.fn()
+}))
+
+function makeEmail(id: number, overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    internal_id: id,
+    message_id: `<msg-${id}@example.com>`,
+    thread_id: 'thread-A',
+    subject: 'redis timeout',
+    sender: 'alice@example.com',
+    sender_name: 'Alice',
+    to_addr: 'me@example.com',
+    date_received: '2026-05-15T09:00:00+08:00',
+    mailbox: '收件箱',
+    is_read: true,
+    is_flagged: false,
+    is_important: false,
+    sync_status: 'synced',
+    notion_page_id: null,
+    notion_url: null,
+    body_html: '<p>hi</p>',
+    body_text: 'hi',
+    lang: 'en',
+    attachments: [],
+    ...overrides
+  }
+}
 
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     email: {
-      get: vi.fn(async (id: number) => ({
-        internal_id: id,
-        message_id: `<msg-${id}@example.com>`,
-        thread_id: 'thread-A',
-        subject: 'redis timeout',
-        sender: 'alice@example.com',
-        sender_name: 'Alice',
-        to_addr: 'me@example.com',
-        date_received: '2026-05-15T09:00:00+08:00',
-        mailbox: '收件箱',
-        is_read: true,
-        is_flagged: false,
-        is_important: false,
-        sync_status: 'synced',
-        notion_page_id: null,
-        notion_url: null,
-        body_html: '<p>hi</p>',
-        body_text: 'hi',
-        lang: 'en',
-        attachments: []
-      })),
+      get: emailGetSpy,
       aiFields: vi.fn(async () => null),
       listByThread: vi.fn(async () => []),
       pin: pinSpy,
@@ -96,6 +104,11 @@ async function waitForToolbar(c: HTMLElement): Promise<void> {
 beforeEach(() => {
   cleanup()
   pinSpy.mockClear()
+  emailGetSpy.mockImplementation(async (id: number) => makeEmail(id))
+  global.fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({ data: { triggerV2Enabled: true } })
+  }) as unknown as typeof fetch
   usePinned.getState().setPinned([])
 })
 
@@ -126,5 +139,38 @@ describe('入口 3 — EmailDetail / EmailToolbar 的置顶按钮', () => {
     // 详情页恒单封语义 —— 不许把级联写喷到整条线程。
     expect(pinSpy.mock.calls[0]?.[2]).toBeUndefined()
     await waitFor(() => expect(pinBtn(c).getAttribute('aria-pressed')).toBe('false'))
+  })
+})
+
+describe('P6 — 邮件线程跟进 Agent 入口', () => {
+  test('flag on + thread_id → 渲染快捷入口', async () => {
+    const container = renderDetail(201)
+    await waitFor(() =>
+      expect(
+        container.querySelector(`button[aria-label="${i18n.t('toolbar.followupAgent')}"]`)
+      ).not.toBeNull()
+    )
+  })
+
+  test('flag on + thread_id 缺失时用 message_id 去尖括号兜底', async () => {
+    emailGetSpy.mockImplementation(async (id: number) => makeEmail(id, { thread_id: null }))
+    const container = renderDetail(202)
+    await waitFor(() =>
+      expect(
+        container.querySelector(`button[aria-label="${i18n.t('toolbar.followupAgent')}"]`)
+      ).not.toBeNull()
+    )
+  })
+
+  test('flag off 即使有 thread_id 也不渲染快捷入口', async () => {
+    global.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { triggerV2Enabled: false } })
+    }) as unknown as typeof fetch
+    const container = renderDetail(203)
+    await waitFor(() => expect(global.fetch).toHaveBeenCalled())
+    expect(
+      container.querySelector(`button[aria-label="${i18n.t('toolbar.followupAgent')}"]`)
+    ).toBeNull()
   })
 })

@@ -85,6 +85,7 @@ interface ToolbarProps {
 
   onLlmRun?: () => void
   llmRunState?: WriteActionState
+  onCreateFollowupAgent?: () => void
 
   onToggleRead?: () => void
   isRead?: boolean
@@ -675,6 +676,7 @@ export function EmailToolbar({
   resyncState,
   onLlmRun,
   llmRunState,
+  onCreateFollowupAgent,
   onToggleRead,
   isRead,
   readState,
@@ -882,6 +884,14 @@ export function EmailToolbar({
         pending={llmRunState?.pending}
         onClick={onLlmRun}
       />
+      {onCreateFollowupAgent && (
+        <GhostBtn
+          icon={<AtomIcon size={13} strokeWidth={2} />}
+          label={t('toolbar.followupAgent')}
+          showLabel={wantsLabels}
+          onClick={onCreateFollowupAgent}
+        />
+      )}
 
       {/* Right cluster: Open Notion · Divider · Prev · Next · Divider · AIPanelToggle.
           AIPanelToggle sits at the **very right** because it's the "open

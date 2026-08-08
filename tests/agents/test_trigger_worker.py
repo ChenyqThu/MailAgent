@@ -245,6 +245,70 @@ async def test_tick_loop_fires_only_enabled_custom_cron(tmp_path):
 
 
 @pytest.mark.asyncio
+async def test_v2_triggers_use_independent_markers_and_skip_disabled(tmp_path, monkeypatch):
+    monkeypatch.setattr(tw, "trigger_v2_enabled", lambda: True)
+    db = tmp_path / "s.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    agent = {
+        "id": "multi", "type": "custom", "enabled": 1,
+        "trigger_json": json.dumps({
+            "v": 2,
+            "triggers": [
+                {"id": "trg_one", "enabled": True, "kind": "cron", "cron": "0 9 * * *", "timezone": "UTC"},
+                {"id": "trg_two", "enabled": True, "kind": "cron", "cron": "0 9 * * *", "timezone": "UTC"},
+                {"id": "trg_off", "enabled": False, "kind": "cron", "cron": "0 9 * * *", "timezone": "UTC"},
+            ],
+        }),
+        "budget_json": None,
+    }
+    now = datetime(2026, 8, 8, 9, 0, 30, tzinfo=_UTC)
+    ev = asyncio.Event()
+    task = asyncio.create_task(tw.tick_loop(
+        sync_store=ss, store=_FakeStore([agent]), repo=repo, shutdown_event=ev,
+        interval_sec=0.01, now_fn=lambda: now,
+    ))
+    await asyncio.sleep(0.05)
+    ev.set()
+    await asyncio.wait_for(task, timeout=2)
+    jobs = repo.list_agent_runs(agent_id="multi")
+    assert {job.params.get("trigger_id") for job in jobs} == {"trg_one", "trg_two"}
+    assert ss.get_state("agent_trigger_last_fire:multi:trg_one") is not None
+    assert ss.get_state("agent_trigger_last_fire:multi:trg_two") is not None
+    assert ss.get_state("agent_trigger_last_fire:multi:trg_off") is None
+
+
+@pytest.mark.asyncio
+async def test_flag_off_v2_schedule_trigger_fails_closed(tmp_path, monkeypatch):
+    monkeypatch.setattr(tw, "trigger_v2_enabled", lambda: False)
+    db = tmp_path / "s.db"
+    ss = SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    agent = {
+        "id": "multi", "type": "custom", "enabled": 1,
+        "trigger_json": json.dumps({
+            "v": 2,
+            "triggers": [
+                {"id": "trg_one", "enabled": True, "kind": "cron", "cron": "0 9 * * *", "timezone": "UTC"},
+            ],
+        }),
+        "budget_json": None,
+    }
+    now = datetime(2026, 8, 8, 9, 0, 30, tzinfo=_UTC)
+    ev = asyncio.Event()
+    task = asyncio.create_task(tw.tick_loop(
+        sync_store=ss, store=_FakeStore([agent]), repo=repo, shutdown_event=ev,
+        interval_sec=0.01, now_fn=lambda: now,
+    ))
+    await asyncio.sleep(0.04)
+    ev.set()
+    await asyncio.wait_for(task, timeout=2)
+    assert repo.count_agent_runs_since("multi", 0) == 0
+    assert ss.get_state("agent_trigger_last_fire:multi") is None
+    assert ss.get_state("agent_trigger_last_fire:multi:trg_one") is None
+
+
+@pytest.mark.asyncio
 async def test_tick_loop_skips_malformed_trigger(tmp_path):
     db = tmp_path / "s.db"
     ss = SyncStore(str(db))

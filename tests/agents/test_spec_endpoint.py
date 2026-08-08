@@ -513,6 +513,44 @@ def test_empty_trigger_non_manual_still_409(env, client):
     assert r.json()["error"]["code"] == "E_SPEC_AGENT_INVALID"
 
 
+def test_v2_trigger_id_projects_and_selects_entry(env, client, monkeypatch):
+    monkeypatch.setattr(agent_runs, "trigger_v2_enabled", lambda: True)
+    trigger = {
+        "v": 2,
+        "triggers": [
+            {"id": "trg_mail", "enabled": True, "kind": "email_filter", "folders": ["收件箱"]},
+            {"id": "trg_cron", "enabled": True, "kind": "cron", "cron": "0 9 * * *", "timezone": "UTC"},
+        ],
+    }
+    _seed_custom(env.store, trigger=trigger)
+    jid = _running_job(
+        env.repo,
+        trigger_kind="cron",
+        extra_params={"trigger_id": "trg_cron"},
+    )
+    r = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "tok-1"})
+    assert r.status_code == 200
+    assert r.json()["data"]["trigger"]["id"] == "trg_cron"
+
+
+def test_v2_empty_trigger_manual_run_200(env, client, monkeypatch):
+    monkeypatch.setattr(agent_runs, "trigger_v2_enabled", lambda: True)
+    _seed_custom(env.store, trigger={"v": 2, "triggers": []})
+    jid = _running_job(env.repo, trigger_kind="manual", fire_key="manual:v2-empty")
+    r = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "tok-1"})
+    assert r.status_code == 200
+    assert r.json()["data"]["trigger"]["id"] is None
+
+
+def test_bad_v2_trigger_manual_still_409(env, client, monkeypatch):
+    monkeypatch.setattr(agent_runs, "trigger_v2_enabled", lambda: True)
+    _seed_custom(env.store, trigger=None)
+    _set_raw_trigger(env.db, '{"v":2,"triggers":[{"id":"bad","enabled":true,"kind":"cron","cron":"0 9 * * *"}]}')
+    jid = _running_job(env.repo, trigger_kind="manual", fire_key="manual:bad-v2")
+    r = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "tok-1"})
+    assert r.status_code == 409
+
+
 @pytest.mark.parametrize("raw_trigger", [
     '{"v":1,"kind":"cron","cron":"not a cron"}',  # 合法 JSON、非法 cron
     '{"v":1,"kind":"telepathy"}',                 # 未知 kind

@@ -364,8 +364,10 @@ def test_set_config_accepts_valid_trigger_on_custom(
     )
     assert r.status_code == 200
     data = r.json()["data"]
-    assert data["trigger"]["kind"] == "email_filter"
-    assert data["trigger"]["subject_pattern"] == "DMS.*审批"
+    assert data["trigger"]["v"] == 2
+    assert data["trigger"]["triggers"][0]["kind"] == "email_filter"
+    assert data["trigger"]["triggers"][0]["subject_pattern"] == "DMS.*审批"
+    assert data["trigger"]["triggers"][0]["id"].startswith("trg_")
 
 
 def test_set_config_normal_patch_unaffected_by_validation(report_client: TestClient) -> None:
@@ -610,7 +612,9 @@ def test_create_custom_agent_with_trigger_persists(report_client: TestClient, mo
     )
     assert r.status_code == 200
     data = r.json()["data"]
-    assert data["trigger"]["kind"] == "cron" and data["trigger"]["cron"] == "0 9 * * 1-5"
+    assert data["trigger"]["v"] == 2
+    assert data["trigger"]["triggers"][0]["kind"] == "cron"
+    assert data["trigger"]["triggers"][0]["cron"] == "0 9 * * 1-5"
     assert "max_steps" not in data["budget"]
     assert data["budget"]["max_run_seconds"] == 900
 

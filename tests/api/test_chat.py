@@ -353,6 +353,7 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "webToolsEnabled": True,
         # P1 — main-env-only session provenance flag 的未读 UI 只读投影（默认 ON）。
         "sessionProvenanceEnabled": True,
+        "triggerV2Enabled": True,
         # task 07-12 P3/P5 — Settings「模型服务」区门控（MAILAGENT_LLM_PROVIDER_REGISTRY，
         # pydantic 默认已 cutover 翻 on 2026-07-13；此处 pin 的是 getattr 的 stub 兜底：
         # stub 无该字段 → False（fail-safe 走 legacy 投影，真实 config 恒有字段）。
@@ -379,6 +380,7 @@ def test_chat_config_openness_flags_hot_read(
         "MAILAGENT_CHAT_COMPACT=false\n"
         "MAILAGENT_CHAT_AUTO_COMPACT=false\n"
         "MAILAGENT_CHAT_QUEUED_INPUT=false\n"
+        "MAILAGENT_TRIGGER_V2=false\n"
     )
     with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
         data = c.get("/api/chat/config").json()["data"]
@@ -389,6 +391,7 @@ def test_chat_config_openness_flags_hot_read(
     assert data["chatCompactEnabled"] is False
     assert data["chatAutoCompactEnabled"] is False
     assert data["chatQueuedInputEnabled"] is False
+    assert data["triggerV2Enabled"] is False
     # 既有字段回归：exec flag 同一热读通道
     assert data["execPolicyEnabled"] is True
 

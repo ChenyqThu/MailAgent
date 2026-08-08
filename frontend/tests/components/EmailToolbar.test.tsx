@@ -23,6 +23,15 @@ beforeEach(() => {
 })
 
 describe('EmailToolbar — write button wiring', () => {
+  test('thread follow-up agent action renders only when callback is supplied', () => {
+    const onCreateFollowupAgent = vi.fn()
+    const { rerender } = render(<EmailToolbar />)
+    expect(screen.queryByLabelText('为此线程建立跟进 Agent')).toBeNull()
+    rerender(<EmailToolbar onCreateFollowupAgent={onCreateFollowupAgent} />)
+    fireEvent.click(screen.getByLabelText('为此线程建立跟进 Agent'))
+    expect(onCreateFollowupAgent).toHaveBeenCalledTimes(1)
+  })
+
   test('clicking 起草回复 fires onCreateDraft once', () => {
     const onCreateDraft = vi.fn()
     render(<EmailToolbar onCreateDraft={onCreateDraft} />)

@@ -242,6 +242,8 @@ export type {
   ReportSchedule,
   ScheduleRuleWire,
   CustomAgentTrigger,
+  CustomAgentTriggerV2Entry,
+  TriggerSetV2,
   CustomAgentToolPolicy,
   CustomAgentBudget,
   ReportAgentConfig,

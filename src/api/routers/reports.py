@@ -206,14 +206,14 @@ async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
         except ValueError as exc:
             raise APIError("E_INVALID_ARG", str(exc), source="sqlite")
     if agent_type == "custom":
-        from src.agents.trigger import validate_agent_config_patch
+        from src.agents.trigger import normalize_agent_config_patch
 
         try:
-            validate_agent_config_patch(raw)
+            normalized_raw = normalize_agent_config_patch(raw, agent_type="custom")
             patch_raw = {
-                k: raw[k]
+                k: normalized_raw[k]
                 for k in ("trigger", "tool_policy", "budget")
-                if k in raw
+                if k in normalized_raw
             }
             if patch_raw:
                 create_patch = wire.config_patch_to_db(patch_raw)
@@ -251,15 +251,20 @@ async def set_config(request: Request, agent_id: str, body: Optional[dict[str, A
     raw = body or {}
     # S4: 保存时深校验 custom agent trigger（坏 cron/未知 kind/超长 pattern → 400，给 owner 反馈；
     # 运行时 worker/dispatch 仍 fail-closed 双保险）。TriggerValidationError 是 ValueError 子类。
-    from src.agents.trigger import validate_agent_config_patch
+    from src.agents.trigger import normalize_agent_config_patch
+    store = get_report_store()
+    existing = store.get_agent(agent_id)
+    if existing is None:
+        raise APIError("E_NOT_FOUND", f"report_agent {agent_id!r} not found", source="sqlite")
     try:
-        validate_agent_config_patch(raw)
-        db_patch = wire.config_patch_to_db(raw)
+        normalized_raw = normalize_agent_config_patch(
+            raw,
+            stored_trigger=existing.get("trigger_json"),
+            agent_type=existing.get("type"),
+        )
+        db_patch = wire.config_patch_to_db(normalized_raw)
     except ValueError as exc:
         raise APIError("E_INVALID_ARG", str(exc), source="sqlite")
-    store = get_report_store()
-    if store.get_agent(agent_id) is None:
-        raise APIError("E_NOT_FOUND", f"report_agent {agent_id!r} not found", source="sqlite")
     updated = store.update_agent(agent_id, db_patch)
     return success_envelope(
         wire.resolve_agent(updated) if updated else {}, request=request, source="sqlite"
