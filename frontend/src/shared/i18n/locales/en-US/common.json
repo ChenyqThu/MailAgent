@@ -1469,6 +1469,19 @@
       "segmentsLoading": "Computing segments…",
       "segmentsUnavailable": "Segment details unavailable (can't read the system prompt config)"
     },
+    "compact": {
+      "action": "Compact context",
+      "running": "Compacting context…",
+      "stop": "Stop compacting",
+      "completed": "Context compacted",
+      "failed": "Context compact failed",
+      "notNeeded": "Context is already within the compact target",
+      "tokensBefore": "Before",
+      "tokensAfter": "After (estimated)",
+      "model": "Model",
+      "reason": "Reason",
+      "reasonValue": { "manual": "Manual", "threshold": "Threshold", "overflow": "Overflow recovery" }
+    },
     "approvalMode": {
       "label": "Permission mode",
       "manual": {

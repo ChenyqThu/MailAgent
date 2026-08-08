@@ -1469,6 +1469,19 @@
       "segmentsLoading": "正在计算分段…",
       "segmentsUnavailable": "分段明细暂不可用（读不到系统提示配置）"
     },
+    "compact": {
+      "action": "压缩上下文",
+      "running": "正在压缩上下文…",
+      "stop": "停止压缩",
+      "completed": "已压缩上下文",
+      "failed": "上下文压缩失败",
+      "notNeeded": "当前上下文已低于压缩目标",
+      "tokensBefore": "压缩前",
+      "tokensAfter": "压缩后估计",
+      "model": "模型",
+      "reason": "原因",
+      "reasonValue": { "manual": "手动", "threshold": "阈值", "overflow": "溢出恢复" }
+    },
     "approvalMode": {
       "label": "授权模式",
       "manual": {

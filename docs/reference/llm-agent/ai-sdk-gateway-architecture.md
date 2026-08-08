@@ -1218,9 +1218,9 @@ Claude Code permission-mode 参照的 owner 级全局审批模式。**08-05 WP-1
 - **acceptEdits 退役收口**：模式值域收窄为 `manual|bypass`（PUT acceptEdits → 400；GET 对脏/存量值 fail-closed 折 manual）；存量 `chat_approval_mode='acceptEdits'` 行由 `store._migrate_additive` **一次性行为保持折算**——15 个成员（`tool_prefs.ACCEPT_EDITS_PRESET`，原 TS 集合的数据归宿）落显式 auto 覆盖 + 模式改回 manual（幂等：折算后判据消失不重跑）。UI 侧：`ApprovalModePicker` 二档 + 菜单底部「按工具调整审批档…」深链；编辑面 = per-tool 三档图标单选（WP-10 UI 语言）+ 按组批量 + 「编辑放行预设」按钮（一键把 15 工具设显式 auto）+ Reset permissions + send 白名单编辑。🔴 **08-06 起这个编辑面在独立的 Connectors 配置台 `/connectors`**（左栏「内置工具」按 `tool_prefs.TOOL_PREF_GROUPS` 功能域分组 → 右栏 `BuiltinDetailPane`，**每个类别默认折叠**）；原 `ToolApprovalSection.tsx` 已删除，设置 → AI「工具审批档」区只剩一张指向配置台的深链卡（同一份数据不在两处都能改）。布局与必须保住的语义见 [`mcp-connectors.md`](./mcp-connectors.md) §13。
 - **测试闸改判台账**（引用 08-05 拍板）：`approval_mode.test.ts` 重写（acceptEdits 两集 pin + BYPASS_STILL_ASK pin 删除；新增 per-tool 梯子/审计/deny/manual-only 套件）；`notion_agent.test.ts` bypass 断言反转 + per-tool 档套件；`approval_mode_global.test.ts` 注入面二档化 + prefs 注入/headless 隔离；`send_approval.test.ts` 白名单套件；`build.test.ts` deny 剔除 + 非 manual 零 diff；agent_eval `rules.py` R5 对 `default_approval:'auto'` 豁免缺卡分支（`test_rules.py` 三探针换默认 ask 工具 + 新增豁免 pin；s4/s6 两条「frozen R5 会标记」断言按新边界改判）。`policy.test.ts` 4×8 矩阵 / headless matrix / exec deny 地板 / guard 链测试**原样全绿**（F §2.6 结构性地板未动）。
 
-## 13.24 Harness 优化 epic P0–P2（2026-08-07/08：plan_update 恢复 + Session 来源 + custom_agent_call 父子会话）
+## 13.24 Harness 优化 epic P0–P3（2026-08-07/08：plan_update 恢复 + Session 来源 + custom_agent_call 父子会话 + 手动 /compact）
 
-> 需求真源 = `docs/MailAgent-Harness-Optimization-Final/`（Q1–Q100 + G1–G9 冻结，owner 侧文档、未入库）；epic 台账 = `.trellis/tasks/08-07-harness-optimization-p0-p9/`（prd + 十份阶段 brief）。三阶段各自独立 flag、默认全 ON、显式 false 应急回退（off 形态有测试断言）；G1–G9 固定常量（180s / 24h / 2h / 只读 Plan 卡等）**不做配置**。
+> 需求真源 = `docs/MailAgent-Harness-Optimization-Final/`（Q1–Q100 + G1–G9 冻结，owner 侧文档、未入库）；epic 台账 = `.trellis/tasks/08-07-harness-optimization-p0-p9/`（prd + 十份阶段 brief）。各阶段独立 flag、默认全 ON、显式 false 应急回退（off 形态有测试断言）；G1–G9 固定常量（180s / 24h / 2h / 0.25·64K 压缩目标 / 只读 Plan 卡等）**不做配置**。
 
 ### 13.24.1 P0 — plan_update 最小恢复（`MAILAGENT_PLAN_TOOL`，默认 ON）
 
@@ -1249,3 +1249,16 @@ Claude Code permission-mode 参照的 owner 级全局审批模式。**08-05 WP-1
 - **eval**：`agentcall` lane 3 tasks（risky 委派弹卡正例 / headless 递归 forbidden 护栏 / user_requested 免卡审计），synthetic lane-local，data+tests only。
 
 验收基线（2026-08-08 主 session 本机）：pytest 全集 6504+ passed / vitest 全量 4455 passed / typecheck 0 / agent_eval 153 passed / validate_catalog 61=61 OK。
+
+### 13.24.4 P3 — 手动 /compact（`MAILAGENT_CHAT_COMPACT`，默认 ON，无新表无 CHAT_DB bump）
+
+把长会话压成固定结构摘要，之后每轮送模型 = System Prompt + 最新有效摘要 + 边界后原始消息；**完整历史一条不删**。
+
+- **持久化**（B.4：复用 `ai_chat_messages`）：一条 `role='system'` 行——`content`=摘要 markdown、`metadata`=A.6 `CompactMessageMetadata`（kind/version/compactedThroughMessageId/firstKeptMessageId/tokensBefore/estimatedTokensAfter/model/reason/valid/createdAt）、`ui_message_json`=Compact 卡 UIMessage（`role:'system'` + 单 `data-compact` part 携带 metadata+summary）。这是仓内**首个** system 行写入路径；渲染由 `message.tsx` 的 `data.by_name.compact → CompactCard` 承接，绝不落 assistant 气泡回退。
+- **装配**（🔴 架构前提：gateway 不读 `.db`，历史 100% 由 renderer useChat state 随 body 上行）：边界随 `body.messages` 里的 marker 传递——`compactSelect.ts::selectMessagesForModelContext` 在 `convertToModelMessages` **前**从尾找最新一条 `metadata.kind='compact' && valid && 摘要非空` 的 marker：丢弃 marker 及之前全部消息（malformed/invalid marker 也从模型输入滤掉），摘要经 `appendCompactSummaryToSystem` 追加到 system 尾部并套 `UNTRUSTED_COMPACT_SUMMARY` 围栏（摘要里引用的邮件/网页/Notion 内容仍是 data 不是指令，09§6）。**位置基准 = 数组位置**，不做 DB id 算术。用户编辑/删除历史的失效路径：`markCompactInvalid`（🔴 必须**双写** DB `metadata` 与 `ui_message_json`——renderer 上行读的是后者，单写前者失效不了）当前为防御性 helper，仓内尚无单条消息编辑/删除触发方。
+- **摘要生成**（`compact.ts`，G4 常量逐字：`COMPACT_TARGET_RATIO=0.25` / `COMPACT_TARGET_ABSOLUTE_CAP_TOKENS=65_536` / 输出 ≤8K）：当前 session 模型（`getSession().backend_model` 回退 gateway 默认）+ **无 tools** + `effortCallOptions(model,'none',protocol)`；输入 = **DB 行**（lifecycle 注入 `listMessages`，非 renderer state）序列化转录（ui_message_json 优先、单条 12K 截断、旧摘要行天然折入）套 `UNTRUSTED_CONVERSATION_TRANSCRIPT` 围栏；prompt 固定十节英文标题 + ID/副作用/拒绝/审批/约束保留清单。边界从尾按字符启发式估算（`contextUsage.lib.ts` 零依赖纯函数直接 import）累积到 `min(window×0.25, 64K) − 8K`，**snap 到 user 行**（防孤儿 tool result）；P3 阶段 window 恒 null → 64K（签名留 `contextWindow` 参数给 P4）。全历史 ≤ 目标 → `not_needed` 不调模型。
+- **端点**：`POST /api/ai/compact {sessionId}` 同步等完成（`/api/ai/title` 先例；serve-api 反代 `_proxy_buffered` read timeout=None 罩得住）+ `POST /api/ai/compact/stop`；409 `E_RUN_ACTIVE`（chat run 在途）/ 409 `E_COMPACT_ACTIVE`（per-session `CompactCoordinator` + AbortController）；abort/失败**不写行不切边界**（C.6）。两端点入 `ai_gateway_proxy.py` allowlist（远程 web 可用）。flag 门 = cfg 依赖存在性（off → 404 + selector 不接线 = 装配字节级现状）。
+- **UI**：入口①上下文环弹层「压缩上下文」钮（compact 在途变 Stop、chat run 在途禁用）；入口② composer `onSubmit` 对 `text.trim()==='/compact'` **全等拦截**（镜像 IM `/model` 首段全等纪律；未引入第二套 slash 框架——桌面 composer 本无 slash 体系）。🔴 成功后 `refreshAfterCompact`（reload → invalidate messages query → runtime remount nonce）——**没有这一步，下一轮 body.messages 仍是旧全量**（gateway 不读 DB 的直接推论）。compact 在途并入 `sendDisabled`。flag 投影 = `/chat/config.chatCompactEnabled`（`_hot_bool` 热读，renderer 不直读 env）。
+- **范围钉死**：v1 仅 manual chat 面板；IM 不加 `/compact` 指令；headless 不接（30min 预算天然有界）；reason 只产 `'manual'`（'threshold'/'overflow' 是 P4 值，类型先留）。
+
+验收基线（2026-08-08 主 session 本机）：pytest 全集 6509 passed / vitest 全量 363 文件 4476 passed / typecheck 0 / agent_eval 153 passed / validate_catalog 61=61 OK。

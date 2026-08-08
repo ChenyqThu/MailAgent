@@ -24,6 +24,7 @@ import {
   AttachmentPrimitive,
   ComposerPrimitive,
   ThreadPrimitive,
+  useAui,
   useAuiState,
   type Attachment
 } from '@assistant-ui/react'
@@ -178,16 +179,26 @@ function ComposerChips({
 
 export function ThreadComposer(): React.JSX.Element {
   const { t } = useTranslation()
+  const aui = useAui()
   const controls = useChatComposerControls()
   // codex r2 [D] — sendDisabled must gate the REAL submit path, not just the Send button: the
   // assistant-ui Input's Enter requestSubmit()s the Root form, whose composed handler calls send()
   // unless the user handler prevented default (radix composeEventHandlers checks defaultPrevented).
   // The Input itself is disabled too (typing fenced while the approval resume holds the lease).
   const sendDisabled = controls?.sendDisabled === true
+  const composerText = useAuiState((state) => state.composer.text)
   return (
     <ComposerPrimitive.Root
       onSubmit={(e) => {
-        if (sendDisabled) e.preventDefault()
+        if (sendDisabled) {
+          e.preventDefault()
+          return
+        }
+        if (composerText.trim() === '/compact' && controls?.compactEnabled === true) {
+          e.preventDefault()
+          aui.composer().setText('')
+          controls.onCompact?.()
+        }
       }}
       className="border-t border-[var(--hairline)] bg-ink-2"
     >

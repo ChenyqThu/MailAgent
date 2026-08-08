@@ -50,6 +50,8 @@ CROSS_LANGUAGE_FLAGS = {
     "MAILAGENT_AI_SDK_WRITE_TOOLS": [_LIFECYCLE],
     "MAILAGENT_AI_SDK_SEND_TOOL": [_LIFECYCLE],
     "MAILAGENT_CUSTOM_AGENT_CALL": [_LIFECYCLE],
+    # P3 manual compact: Node injects service/selector; Python projects the same flag to renderer.
+    "MAILAGENT_CHAT_COMPACT": [_LIFECYCLE, _CHAT],
     # standing context：Python env-only 热读
     "MAILAGENT_STANDING_CONTEXT_ENABLED": [_CHAT],
     # MCP connector 总闸（08-01 阶段 1）：Node envBool（gateway 动态工具注入 + manifest 拉取）

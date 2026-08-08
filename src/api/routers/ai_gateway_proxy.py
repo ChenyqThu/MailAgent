@@ -235,6 +235,16 @@ async def proxy_title(request: Request, _: None = Depends(verify_cf_access)) -> 
     return await _proxy_buffered(request, "/api/ai/title")
 
 
+@router.post("/api/ai/compact")
+async def proxy_compact(request: Request, _: None = Depends(verify_cf_access)) -> Response:
+    return await _proxy_buffered(request, "/api/ai/compact")
+
+
+@router.post("/api/ai/compact/stop")
+async def proxy_compact_stop(request: Request, _: None = Depends(verify_cf_access)) -> Response:
+    return await _proxy_buffered(request, "/api/ai/compact/stop")
+
+
 @router.post("/api/ai/approval/resolve")
 async def proxy_approval_resolve(
     request: Request, _: None = Depends(verify_cf_access)

@@ -91,11 +91,17 @@ function stubControls(over: Partial<ChatComposerControls> = {}): ChatComposerCon
 
 const qc = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } })
 
-function Harness({ sendDisabled }: { sendDisabled: boolean }): React.ReactElement {
+function Harness({
+  sendDisabled,
+  controls = {}
+}: {
+  sendDisabled: boolean
+  controls?: Partial<ChatComposerControls>
+}): React.ReactElement {
   return (
     <QueryClientProvider client={qc}>
       <AiSdkRuntimeProvider gatewayBaseUrl="http://127.0.0.1:1" sessionId={7}>
-        <ChatComposerControlsProvider value={stubControls({ sendDisabled })}>
+        <ChatComposerControlsProvider value={stubControls({ sendDisabled, ...controls })}>
           <ThreadComposer />
         </ChatComposerControlsProvider>
       </AiSdkRuntimeProvider>
@@ -141,6 +147,23 @@ describe('codex r2 [D] — sendDisabled gates the whole composer, not just the S
     rerender(<Harness sendDisabled={false} />)
     fireEvent.submit(container.querySelector('form')!)
     await waitFor(() => expect(chatPosts(fetchMock)).toBe(1))
+  })
+
+  test('/compact exact submit runs the action without sending and clears the composer', async () => {
+    const fetchMock = stubChatFetch()
+    const onCompact = vi.fn()
+    const { container } = render(
+      <Harness sendDisabled={false} controls={{ compactEnabled: true, onCompact }} />
+    )
+    const textarea = screen.getByRole('textbox') as HTMLTextAreaElement
+
+    fireEvent.change(textarea, { target: { value: ' /compact ' } })
+    fireEvent.submit(container.querySelector('form')!)
+
+    expect(onCompact).toHaveBeenCalledOnce()
+    await waitFor(() => expect(textarea.value).toBe(''))
+    await new Promise((resolve) => setTimeout(resolve, 20))
+    expect(chatPosts(fetchMock)).toBe(0)
   })
 })
 

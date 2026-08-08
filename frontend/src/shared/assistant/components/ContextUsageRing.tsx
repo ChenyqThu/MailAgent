@@ -277,6 +277,7 @@ export function ContextUsageRing(): React.JSX.Element | null {
   const controls = useChatComposerControls()
   const sessionId = controls?.sessionId ?? null
   const { tokens: used, rows } = useContextTokens(sessionId)
+  const threadRunning = useAuiState((state) => state.thread.isRunning)
 
   // 「开着的是**哪个会话**的明细」而不是一个裸 boolean：切会话时环会先因为没有占用值而整个
   // 消失（组件 return null 但**状态还在**），等新会话的数字回来时一个裸 open=true 会让弹层
@@ -432,6 +433,21 @@ export function ContextUsageRing(): React.JSX.Element | null {
             loading={promptLoading}
             overflow={view.overflow}
           />
+          {controls?.compactEnabled === true && controls.sessionId != null && (
+            <button
+              type="button"
+              disabled={
+                controls.compactActive !== true && (threadRunning || controls.sendDisabled === true)
+              }
+              onClick={() => {
+                if (controls.compactActive) controls.onCompactStop?.()
+                else controls.onCompact?.()
+              }}
+              className="mt-2 w-full rounded-md border border-ink-border px-2 py-1.5 text-left text-aux text-ink-fg hover:bg-ink-4 disabled:opacity-40"
+            >
+              {controls.compactActive ? t('chat.compact.stop') : t('chat.compact.action')}
+            </button>
+          )}
         </div>
       )}
     </div>

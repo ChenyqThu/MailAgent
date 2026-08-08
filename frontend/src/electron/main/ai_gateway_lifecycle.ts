@@ -54,6 +54,7 @@ import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approva
 import { classOfTool } from '../../ai-gateway/tools/policy'
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
+import { selectMessagesForModelContext } from '../../ai-gateway/compactSelect'
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
 import { extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import {
@@ -66,6 +67,7 @@ import {
   findUserMessageRowIdByUiId,
   getFirstUserText,
   getSession,
+  listMessages,
   markToolCallApprovalExpired,
   setAgentSessionJobId,
   updateMessage,
@@ -717,6 +719,31 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     model: getLlmModel(),
     providerRegistryEnabled,
     providerModelResolver,
+    ...(envBool('MAILAGENT_CHAT_COMPACT', true)
+      ? {
+          selectMessagesForModelContext,
+          compactPersistence: {
+            listSessionMessages: (sessionId: number) => listMessages(sessionId),
+            getSessionModel: (sessionId: number) => getSession(sessionId)?.backend_model ?? null,
+            appendCompactMessage: (input: {
+              sessionId: number
+              summary: string
+              metadata: import('../../ai-gateway/compactSelect').CompactMessageMetadata
+              uiMessageJson: string
+            }) => {
+              appendMessage({
+                sessionId: input.sessionId,
+                role: 'system',
+                content: input.summary,
+                status: 'complete',
+                model: input.metadata.model,
+                metadata: JSON.stringify(input.metadata),
+                uiMessageJson: input.uiMessageJson
+              })
+            }
+          }
+        }
+      : {}),
     // #12 (dogfood session-history) — eager-persist: write the user message at turn START so the
     // session appears in history even when the first turn is HITL-paused and onFinish skips
     // persistTurn. eagerWrittenUserMessages（module-level Set，keyed `${sessionId}:${messageId}`）

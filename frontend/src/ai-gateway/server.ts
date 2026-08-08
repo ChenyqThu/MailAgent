@@ -57,6 +57,7 @@ import { sanitizedUpstreamErrorMessage } from './upstreamError'
 import { runHeadlessSearchAgent } from './searchAgentRun'
 import { resolveAgentRunSeconds, runHeadlessAgent } from './agentRun'
 import type { HeadlessAgentResult } from '../shared/api/types'
+import { CompactCoordinator } from './compact'
 
 const GATEWAY_VERSION = '0.2.0'
 
@@ -516,6 +517,64 @@ async function handleRunStop(
   writeJson(res, 200, { stopped: out.stopped })
 }
 
+async function handleCompact(
+  req: IncomingMessage,
+  res: ServerResponse,
+  cfg: AiGatewayConfig,
+  coordinator: CompactCoordinator | null
+): Promise<void> {
+  if (!coordinator) {
+    writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'chat compact not enabled' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const sessionId =
+    typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (integer) required' })
+    return
+  }
+  if (cfg.activeRuns?.hasActive(sessionId)) {
+    writeJson(res, 409, { error: 'E_RUN_ACTIVE', hint: 'chat run active for session' })
+    return
+  }
+  if (coordinator.hasActive(sessionId)) {
+    writeJson(res, 409, { error: 'E_COMPACT_ACTIVE', hint: 'compact active for session' })
+    return
+  }
+  try {
+    writeJson(res, 200, await coordinator.run(sessionId))
+  } catch (err) {
+    if (err instanceof Error && err.message === 'E_COMPACT_ACTIVE') {
+      writeJson(res, 409, { error: 'E_COMPACT_ACTIVE', hint: 'compact active for session' })
+      return
+    }
+    writeJson(res, 500, {
+      error: 'E_COMPACT_FAILED',
+      hint: err instanceof Error ? err.message : String(err)
+    })
+  }
+}
+
+async function handleCompactStop(
+  req: IncomingMessage,
+  res: ServerResponse,
+  coordinator: CompactCoordinator | null
+): Promise<void> {
+  if (!coordinator) {
+    writeJson(res, 404, { error: 'E_NOT_IMPLEMENTED', hint: 'chat compact not enabled' })
+    return
+  }
+  const body = await readJsonBody(req)
+  const sessionId =
+    typeof body.sessionId === 'number' && Number.isInteger(body.sessionId) ? body.sessionId : null
+  if (sessionId == null) {
+    writeJson(res, 400, { error: 'E_INVALID_ARG', hint: 'sessionId (integer) required' })
+    return
+  }
+  writeJson(res, 200, { stopped: coordinator.stop(sessionId) })
+}
+
 /** Map an ApprovalError-shaped `.code` to an HTTP status for the resolve endpoint. */
 function approvalErrorStatus(code: string): number {
   switch (code) {
@@ -838,15 +897,15 @@ async function handleAgentRun(
     if (sessionId != null) {
       // custom_agent_call eagerly created the child session and stored it in the job spec.
     } else {
-    const firedAt = Date.parse(spec.trigger.firedAt)
-    sessionId = cfg.createAgentSession({
-      agentId: spec.agentId,
-      jobId,
-      title: spec.sessionTitle,
-      triggerId: null,
-      triggerKind: spec.trigger.kind,
-      triggerFiredAt: Number.isFinite(firedAt) ? firedAt : null
-    })
+      const firedAt = Date.parse(spec.trigger.firedAt)
+      sessionId = cfg.createAgentSession({
+        agentId: spec.agentId,
+        jobId,
+        title: spec.sessionTitle,
+        triggerId: null,
+        triggerKind: spec.trigger.kind,
+        triggerFiredAt: Number.isFinite(firedAt) ? firedAt : null
+      })
     }
   } catch (err) {
     console.error(
@@ -868,7 +927,8 @@ async function handleAgentRun(
     clientAbort.abort()
   })
   const stopController = new AbortController()
-  const lease = sessionId != null ? cfg.activeRuns?.register(sessionId, stopController) ?? null : null
+  const lease =
+    sessionId != null ? (cfg.activeRuns?.register(sessionId, stopController) ?? null) : null
   const timeoutSignal = AbortSignal.timeout(maxRunSeconds * 1000)
   const merged = AbortSignal.any([clientAbort.signal, timeoutSignal, stopController.signal])
 
@@ -1127,6 +1187,9 @@ function dispatch(route: string, res: ServerResponse, work: Promise<void>): void
  * drive it directly.
  */
 export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
+  const compactCoordinator = cfg.compactPersistence
+    ? new CompactCoordinator(cfg, cfg.compactPersistence)
+    : null
   return createServer((req, res) => {
     const url = req.url ?? '/'
     const method = req.method ?? 'GET'
@@ -1203,6 +1266,16 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
 
     if (method === 'POST' && path === '/api/ai/chat') {
       dispatch('/api/ai/chat', res, handleChat(req, res, cfg))
+      return
+    }
+
+    if (method === 'POST' && path === '/api/ai/compact') {
+      dispatch('/api/ai/compact', res, handleCompact(req, res, cfg, compactCoordinator))
+      return
+    }
+
+    if (method === 'POST' && path === '/api/ai/compact/stop') {
+      dispatch('/api/ai/compact/stop', res, handleCompactStop(req, res, compactCoordinator))
       return
     }
 

@@ -82,6 +82,7 @@ export {
   getMessage,
   listLastNMessages,
   listMessages,
+  markCompactInvalid,
   updateMessage
 } from './chat_db/messages'
 

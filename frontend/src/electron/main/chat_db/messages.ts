@@ -167,6 +167,43 @@ export function listMessages(sessionId: number): ChatMessage[] {
     .all(sessionId) as ChatMessage[]
 }
 
+export function markCompactInvalid(messageId: number): void {
+  const row = getMessage(messageId)
+  if (!row?.metadata) return
+  try {
+    const metadata = JSON.parse(row.metadata) as Record<string, unknown>
+    if (metadata.kind !== 'compact') return
+    const invalidMetadata = { ...metadata, valid: false }
+    let uiMessageJson = row.ui_message_json
+    if (uiMessageJson) {
+      try {
+        const uiMessage = JSON.parse(uiMessageJson) as {
+          metadata?: Record<string, unknown>
+          parts?: Array<{ type?: unknown; data?: Record<string, unknown> }>
+        }
+        uiMessage.metadata = invalidMetadata
+        uiMessage.parts = uiMessage.parts?.map((part) =>
+          part.type === 'data-compact'
+            ? {
+                ...part,
+                data: { ...part.data, metadata: invalidMetadata }
+              }
+            : part
+        )
+        uiMessageJson = JSON.stringify(uiMessage)
+      } catch {
+        // Malformed canonical JSON stays untouched; reload already falls back safely.
+      }
+    }
+    updateMessage(messageId, {
+      metadata: JSON.stringify(invalidMetadata),
+      uiMessageJson
+    })
+  } catch {
+    // Malformed metadata is already unusable by the selector; leave the forensic bytes untouched.
+  }
+}
+
 /**
  * Sprint 19 P1 — sliding window history loader. Returns the last N messages
  * in chronological order (oldest → newest), used by the harness to cap

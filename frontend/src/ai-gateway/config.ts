@@ -42,6 +42,8 @@ import type { AgentRunSpec } from '@shared/api/types'
 // MEDIUM-6 — type-only + from the SDK-free providerRef: providers.ts (six provider SDK imports)
 // must only ever load via the lifecycle's flag-on dynamic import.
 import type { ProviderModelResolver } from './providerRef'
+import type { CompactPersistence } from './compact'
+import type { SelectedModelContext } from './compactSelect'
 
 /** Part B — what makePersistOnFinish tells the lifecycle when a turn pauses at an island-eligible
  *  approval gate (announce → serve-api). NO token/secret in here beyond the resumeToken, which is the
@@ -326,6 +328,10 @@ export interface AiGatewayConfig {
    *  same-session 409 concurrency gate. Omitted (hand-built harness cfgs only) → both endpoints
    *  404 and /api/ai/chat runs without a lease domain. */
   activeRuns?: ActiveRunRegistry
+  /** P3 manual compact. Dependency presence is the feature flag gate. */
+  compactPersistence?: CompactPersistence
+  /** P3 context selector. Omitted keeps prepareChatRun's pre-compact assembly path unchanged. */
+  selectMessagesForModelContext?: (messages: MailAgentUIMessage[]) => SelectedModelContext
 
   // ── Part B (harness agent 上岛) — full-offline island approval resume ────────────────────────────
   /** MAILAGENT_ISLAND_AGENT_ENABLED. Since the 2026-07-15 owner拍板 (island-independent approvals)

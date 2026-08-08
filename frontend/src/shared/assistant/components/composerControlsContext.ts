@@ -52,6 +52,10 @@ export interface ChatComposerControls {
    *  知道 activeSessionId，而这个 context 的定位就是「把面板持有的 chat 状态桥进 composer」。
    *  Optional —— 不供给（旧测试 / 只读 notion-agent 线程）时环整个不渲染，与引入前逐字一致。 */
   sessionId?: number | null
+  compactEnabled?: boolean
+  compactActive?: boolean
+  onCompact?: () => void
+  onCompactStop?: () => void
 }
 
 /** Provider 组件在 composerControls.tsx，故 context 对象需导出（仅这两个文件用）。 */

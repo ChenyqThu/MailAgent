@@ -25,6 +25,7 @@ import { getAssistantPartComponents } from '../tools/registerToolUIs'
 import { TurnStatusLine } from './TurnStatusLine'
 import { AssistantActionBar, UserActionBar } from './action-bar'
 import { FollowupSuggestions } from './FollowupSuggestions'
+import { CompactCard } from './CompactCard'
 
 /** Displayable image bytes of a sent attachment, or null for a non-image one. The AI SDK converter
  *  turns a user `file` part with an image/* mediaType into `{type:'image', image:<data URL>}` inside
@@ -180,12 +181,10 @@ export function AssistantMessage(): React.JSX.Element {
 
 export function SystemMessage(): React.JSX.Element {
   return (
-    <MessagePrimitive.Root className="mb-3 flex w-full items-center justify-center gap-2 px-3">
-      <div className="h-px flex-1 bg-ink-border-soft" />
-      <div className="shrink-0 text-micro font-mono uppercase tracking-wider text-ink-fg-3">
-        <MessagePrimitive.Parts />
+    <MessagePrimitive.Root className="mb-3 flex w-full items-center justify-center px-3">
+      <div className="w-full max-w-[92%] text-micro font-mono uppercase tracking-wider text-ink-fg-3">
+        <MessagePrimitive.Parts components={{ data: { by_name: { compact: CompactCard } } }} />
       </div>
-      <div className="h-px flex-1 bg-ink-border-soft" />
     </MessagePrimitive.Root>
   )
 }

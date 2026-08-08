@@ -41,6 +41,9 @@ import { useSessionModelPreference } from '@shared/hooks/useSessionModelPreferen
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
 import { buildMentionContext } from '@shared/lib/mention-context'
 import { useApprovalMode } from '@shared/lib/approvalMode'
+import { useChatCompactEnabled } from '@shared/hooks/useChatCompactEnabled'
+import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
+import { errorMessage } from '@shared/lib/ipcErrors'
 
 import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
 import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
@@ -58,6 +61,7 @@ import { useChatContextChips } from './context/useChatContextChips'
 import { useAgentContextSnapshot } from './context/useAgentContextSnapshot'
 import type { CapabilityContext, ContextScope } from './context/contextSnapshot'
 import { chatMessageToUIMessage } from './uiMessage'
+import { refreshAfterCompact } from './compactRefresh'
 
 // W8 (task 08-04 WP2) — the model pref moved into useSessionModelPreference: PER-SESSION truth
 // (ai_chat_sessions.backend_model) with the shared localStorage key demoted to "default for a NEW
@@ -163,6 +167,12 @@ export function AIChatPanel({
   // 「这轮到底会不会思考」的诚实投影（喂 contextSnapshot.capabilities）：改前是 Brain 布尔，
   // 现在是「档位适用且不是不思考」。
   const thinkingActive = effort.bodyTier !== undefined && effort.bodyTier !== 'none'
+  const compactEnabled = useChatCompactEnabled()
+  const [compactActive, setCompactActive] = useState(false)
+  const [islandRefreshNonce, setIslandRefreshNonce] = useState(0)
+  const aiSdkRunningRef = useRef(false)
+  const chatReloadActiveSession = chat.reloadActiveSession
+  const queryClientForRead = useQueryClient()
 
   // composer-parity C2 — @mention + attachment chips (panel-owned, surfaced via composerControls). The
   // mention body excerpts are resolved at SEND time; buildInjectedContext assembles the full prefix,
@@ -197,6 +207,53 @@ export function AIChatPanel({
     return `${attachmentContext}${mentionContext}`
   }, [mentions, mailApi, attachments])
 
+  const onCompactStop = useCallback((): void => {
+    const sessionId = chat.activeSessionId
+    if (gatewayBaseUrl == null || sessionId == null) return
+    void fetch(`${gatewayBaseUrl}/api/ai/compact/stop`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId })
+    })
+  }, [chat.activeSessionId, gatewayBaseUrl])
+
+  const onCompact = useCallback((): void => {
+    const sessionId = chat.activeSessionId
+    if (gatewayBaseUrl == null || sessionId == null || compactActive || aiSdkRunningRef.current) {
+      return
+    }
+    setCompactActive(true)
+    toastInfo(t('chat.compact.running'))
+    void fetch(`${gatewayBaseUrl}/api/ai/compact`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ sessionId })
+    })
+      .then(async (response) => {
+        const body = (await response.json()) as { status?: string; error?: string; hint?: string }
+        if (!response.ok) throw new Error(body.hint ?? body.error ?? `HTTP ${response.status}`)
+        if (body.status === 'not_needed') {
+          toastInfo(t('chat.compact.notNeeded'))
+          return
+        }
+        await refreshAfterCompact(
+          chatReloadActiveSession,
+          () => queryClientForRead.invalidateQueries({ queryKey: qk.chat.messages(sessionId) }),
+          () => setIslandRefreshNonce((nonce) => nonce + 1)
+        )
+        toastSuccess(t('chat.compact.completed'))
+      })
+      .catch((error: unknown) => toastError(t('chat.compact.failed'), errorMessage(error)))
+      .finally(() => setCompactActive(false))
+  }, [
+    chat.activeSessionId,
+    chatReloadActiveSession,
+    compactActive,
+    gatewayBaseUrl,
+    queryClientForRead,
+    t
+  ])
+
   const composerControls = useMemo<ChatComposerControls>(
     () => ({
       effort: effort.control,
@@ -204,7 +261,11 @@ export function AIChatPanel({
       availableModels,
       onModelChange,
       modelPickerDisabled: false,
-      sendDisabled: approvalSendDisabled,
+      sendDisabled: approvalSendDisabled || compactActive,
+      compactEnabled,
+      compactActive,
+      onCompact,
+      onCompactStop,
       mentions,
       onAddMention,
       onRemoveMention,
@@ -220,6 +281,10 @@ export function AIChatPanel({
       availableModels,
       onModelChange,
       approvalSendDisabled,
+      compactActive,
+      compactEnabled,
+      onCompact,
+      onCompactStop,
       mentions,
       onAddMention,
       onRemoveMention,
@@ -285,13 +350,10 @@ export function AIChatPanel({
   // sensed by ThreadRunningBridge below — see that module for why bare thread.isRunning was wrong.
   // 🔴 IPC 订阅必须用返回的 disposer 清理（fe0437e：跨 contextBridge removeListener 匹配不到 →
   // listener 泄漏 + StrictMode 双订阅）。onSessionUpdated 是 optional（web HttpApi 缺省）→ ?. 。
-  const [islandRefreshNonce, setIslandRefreshNonce] = useState(0)
-  const aiSdkRunningRef = useRef(false)
   // harness-chat lane A (07-15) — reactive mirror of the mid-stream verdict (ThreadRunningBridge
   // onRunningChange) for the background-run placeholder (an own attached stream must not read as a
   // background run).
   const [aiSdkRunning, setAiSdkRunning] = useState(false)
-  const chatReloadActiveSession = chat.reloadActiveSession
   useEffect(() => {
     // Single runtime (S3) — subscribe whenever the live ai-sdk path is the active surface (a D6
     // read-only legacy re-scope has no runtime to refresh). contextInjectionOn = !legacy && gateway.
@@ -347,7 +409,6 @@ export function AIChatPanel({
 
   // B4 — read watermark: whenever the ACTIVE session's rows are (re)loaded the user is looking at
   // them → mark read (fire-and-forget) + refresh the unified history so its badge clears.
-  const queryClientForRead = useQueryClient()
   useEffect(() => {
     if (chatActiveSessionId == null || chat.messagesSessionId !== chatActiveSessionId) return
     void mailApi.chat.markSessionRead(chatActiveSessionId).then(() => {

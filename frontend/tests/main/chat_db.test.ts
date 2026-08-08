@@ -42,6 +42,7 @@ import {
   listSessionsForEmail,
   listToolCallsForMessage,
   markToolCallApprovalExpired,
+  markCompactInvalid,
   resolveChatDbPath,
   updateMessage,
   updateSessionPinned,
@@ -152,6 +153,35 @@ describe('chat_db — path + schema bootstrap', () => {
     const db = getChatDb()
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
+  })
+
+  test('markCompactInvalid defensively flips metadata.valid without changing content', () => {
+    const session = createNewSession({ anchorType: 'general', backendKind: 'ai-sdk' })
+    const message = appendMessage({
+      sessionId: session.id,
+      role: 'system',
+      content: 'summary',
+      status: 'complete',
+      metadata: JSON.stringify({ kind: 'compact', version: 1, valid: true }),
+      uiMessageJson: JSON.stringify({
+        id: 'compact-test',
+        role: 'system',
+        metadata: { kind: 'compact', version: 1, valid: true },
+        parts: [
+          {
+            type: 'data-compact',
+            data: { metadata: { kind: 'compact', version: 1, valid: true }, summary: 'summary' }
+          }
+        ]
+      })
+    })
+    markCompactInvalid(message.id)
+    const updated = getMessage(message.id)
+    expect(updated?.content).toBe('summary')
+    expect(JSON.parse(updated?.metadata ?? '{}').valid).toBe(false)
+    const canonical = JSON.parse(updated?.ui_message_json ?? '{}')
+    expect(canonical.metadata.valid).toBe(false)
+    expect(canonical.parts[0].data.metadata.valid).toBe(false)
   })
 
   test('fresh DB schema includes the v5 chat_tool_call.content_offset column', () => {
