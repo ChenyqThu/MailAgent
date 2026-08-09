@@ -46,6 +46,21 @@ def _catalog_write_tools() -> dict[str, str]:
     return out
 
 
+def test_catalog_counts_match_tools_dict():
+    data = json.loads(CATALOG_PATH.read_text(encoding="utf-8"))
+    tools = data["tools"]
+    expected = {
+        "total": len(tools),
+        "silent": sum(row["tier"] == "silent" for row in tools.values()),
+        "preview": sum(row["tier"] == "preview" for row in tools.values()),
+        "edit": sum(row["tier"] == "edit" for row in tools.values()),
+        "write": sum(bool(row.get("write", False)) for row in tools.values()),
+        "gateway_only": sum(bool(row.get("gateway_only", False)) for row in tools.values()),
+        "legacy_retired": sum(bool(row.get("legacy_retired", False)) for row in tools.values()),
+    }
+    assert data["counts"] == expected
+
+
 def test_registry_matches_catalog_write_universe():
     from src.agent_config.tool_prefs import BUILTIN_TOOL_POLICY_BY_NAME
 

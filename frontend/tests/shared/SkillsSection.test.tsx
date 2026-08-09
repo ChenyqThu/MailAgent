@@ -19,6 +19,9 @@ vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key })
 }))
 
+const { navigate } = vi.hoisted(() => ({ navigate: vi.fn() }))
+vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
+
 // Env-flag intent (notion master switch) — controlled per test via a mutable holder.
 // Partial-mock the shared helpers module so useEnvFlagIntent is deterministic while
 // resolveApiBaseUrl / the flag fetchers keep their real implementations.
@@ -96,6 +99,8 @@ beforeEach(() => {
   listSkills.mockResolvedValue([
     skill({ name: 'email', title: 'Email' }),
     skill({ name: 'calendar', title: 'Calendar' }),
+    skill({ name: 'skill_creator', title: 'Skill Creator', toolCount: 0 }),
+    skill({ name: 'custom_agent', title: 'Custom Agent', toolCount: 0 }),
     skill({ name: 'notion_agent', title: 'Notion Agent', enabled: false, defaultEnabled: false })
   ])
   listSkillEntrypoints.mockResolvedValue([])
@@ -129,6 +134,23 @@ describe('SkillsSection — clarification notes', () => {
     renderUi()
     await waitFor(() => expect(screen.getByText('Notion Agent')).toBeTruthy())
     expect(screen.queryByText('settings.skills.notionAgentMasterOff')).toBeNull()
+  })
+
+  test('skill_creator and custom_agent notes deep-link to their builtin connector groups', async () => {
+    renderUi()
+    await waitFor(() => expect(screen.getByText('Skill Creator')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('settings.skills.skillCreatorChatNote'))
+    fireEvent.click(screen.getByText('settings.skills.customAgentChatNote'))
+
+    expect(navigate).toHaveBeenNthCalledWith(1, {
+      to: '/connectors',
+      search: { item: 'builtin:supply' }
+    })
+    expect(navigate).toHaveBeenNthCalledWith(2, {
+      to: '/connectors',
+      search: { item: 'builtin:agents' }
+    })
   })
 
   test('user-created row grants trust for the server-listed entrypoint', async () => {

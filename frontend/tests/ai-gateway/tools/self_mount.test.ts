@@ -266,16 +266,15 @@ describe('discover_skills (M4c) — silent read', () => {
         enabled: boolean
         available: boolean
         unavailable_reason: string | null
-        tool_count: number
       }>
     }
     expect(out.count).toBe(2)
     expect(out.skills[0]).toMatchObject({
       name: 'report',
       enabled: false,
-      available: true,
-      tool_count: 2
+      available: true
     })
+    expect(out.skills[0]).not.toHaveProperty('tool_count')
     expect(out.skills[1]).toMatchObject({
       name: 'kos',
       available: false,
@@ -391,6 +390,7 @@ describe('discover_skills (M4c) — silent read', () => {
     // and the tool description itself teaches the split (so the model checks the right list).
     expect(String(tools.discover_skills.description)).toContain('external_connectors')
     expect(String(tools.discover_skills.description)).toContain('mcp__')
+    expect(String(tools.discover_skills.description)).not.toContain('how many tools it owns')
   })
 
   test('no connector catalog (absent / null / []) → output BYTE-IDENTICAL to before D1', async () => {

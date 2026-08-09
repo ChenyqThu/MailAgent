@@ -61,6 +61,13 @@ import { SYSTEM_CAP_SCROLL_TARGETS } from './scrollTargets'
 // 字符串把本文件的依赖树拉进一个常量模块）；此处保留同名 re-export，既有 import 站点不动。
 export { SYSTEM_CAP_SCROLL_TARGETS } from './scrollTargets'
 
+export const WEB_TOOL_COUNT = 2
+export const KOS_TOOL_COUNT = 6
+export const SESSION_TOOL_COUNT = 3
+export const CONFIG_TOOL_COUNT = 4
+export const SELF_MOUNT_TOOL_COUNT = 3
+export const CALENDAR_TOOL_COUNT = 5
+
 function scrollToSection(id: string): void {
   document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' })
 }
@@ -205,7 +212,7 @@ export function WebCapabilityRow(): React.ReactElement {
             </span>
             <span className="mt-0.5">
               <span className="inline-flex items-center rounded-full bg-ink-4 border border-ink-border px-1.5 py-0.5 text-micro font-mono text-ink-fg-2">
-                {t('settings.skills.toolCount', { n: 2 })}
+                {t('settings.skills.toolCount', { n: WEB_TOOL_COUNT })}
               </span>
             </span>
           </span>
@@ -289,7 +296,7 @@ export function SystemCapabilitiesSection(): React.ReactElement {
       source: { kind: 'always', note: t('settings.systemCapabilities.kos.control') },
       // issue #57 起 6 件（query/search/get_page/find_experts/list_pages/get_backlinks）。
       // 与 gateway 注册面同步的权威清单见 tools/kos.ts + agents/toolGroups.ts 的 knowledge 组。
-      toolCount: 6,
+      toolCount: KOS_TOOL_COUNT,
       enabled: true
     },
     {
@@ -298,7 +305,7 @@ export function SystemCapabilitiesSection(): React.ReactElement {
       title: t('settings.systemCapabilities.session.title'),
       desc: t('settings.systemCapabilities.session.desc'),
       source: { kind: 'flag', flagName: 'MAILAGENT_OPENNESS_SESSION_TOOLS' },
-      toolCount: 3,
+      toolCount: SESSION_TOOL_COUNT,
       enabled: flags.sessionToolsEnabled !== false
     },
     {
@@ -307,7 +314,7 @@ export function SystemCapabilitiesSection(): React.ReactElement {
       title: t('settings.systemCapabilities.config.title'),
       desc: t('settings.systemCapabilities.config.desc'),
       source: { kind: 'flag', flagName: 'MAILAGENT_OPENNESS_CONFIG_TOOLS' },
-      toolCount: 4,
+      toolCount: CONFIG_TOOL_COUNT,
       enabled: flags.configToolsEnabled !== false
     },
     {
@@ -316,7 +323,7 @@ export function SystemCapabilitiesSection(): React.ReactElement {
       title: t('settings.systemCapabilities.selfMount.title'),
       desc: t('settings.systemCapabilities.selfMount.desc'),
       source: { kind: 'flag', flagName: 'MAILAGENT_SKILL_SELF_MOUNT' },
-      toolCount: 3,
+      toolCount: SELF_MOUNT_TOOL_COUNT,
       enabled: selfMountEnabled
     },
     {
@@ -325,7 +332,7 @@ export function SystemCapabilitiesSection(): React.ReactElement {
       title: t('settings.systemCapabilities.calendar.title'),
       desc: t('settings.systemCapabilities.calendar.desc'),
       source: { kind: 'flag', flagName: 'MAILAGENT_CALENDAR_AGENT_TOOLS' },
-      toolCount: 5,
+      toolCount: CALENDAR_TOOL_COUNT,
       enabled: calendarEnabled
     }
   ]

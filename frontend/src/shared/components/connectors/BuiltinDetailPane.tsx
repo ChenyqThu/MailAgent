@@ -242,6 +242,12 @@ export function BuiltinDetailPane({
   ]
 
   const hasSendWhitelist = rows.some((r) => r.toolName === 'email_prepare_send')
+  const readOnlyToolsNote =
+    group === 'supply'
+      ? t('connectorsConsole.builtinReadOnlyTools.supply')
+      : group === 'agents'
+        ? t('connectorsConsole.builtinReadOnlyTools.agents')
+        : null
 
   return (
     <div>
@@ -255,6 +261,9 @@ export function BuiltinDetailPane({
               defaultValue: t('settings.ai.toolPrefs.helper')
             })}
           </p>
+          {readOnlyToolsNote != null ? (
+            <p className="mt-1 text-meta leading-relaxed text-ink-fg-3">{readOnlyToolsNote}</p>
+          ) : null}
         </div>
         <div className="flex shrink-0 items-center gap-1.5">
           <Button

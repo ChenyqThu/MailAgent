@@ -697,10 +697,14 @@
       "web": "联网检索与网页抓取（URL 与查询词是数据出境面）。",
       "calendar": "日程改期 / 回复邀请 / 删除事件（删除为破坏性操作）。",
       "capability": "技能开关与身份文档等能力面改动（均有历史与回滚补偿）。",
-      "supply": "Skill 安装与卸载（供应链面；安装恒两段确认）。",
-      "agents": "Custom Agent 的创建 / 修改 / 删除 / 立即运行。",
+      "supply": "Skill 安装、卸载与 draft 的创建 / 写文件 / 读取 / 校验（供应链面；安装恒两段确认）。",
+      "agents": "Custom Agent 的创建 / 修改 / 删除 / 立即运行，以及从对话调用 Agent。",
       "exec": "本地文件读写与命令执行（命令免卡走自动化策略白名单）。",
       "outbound": "发送邮件与外呼类工具（不可逆或数据出机，默认恒确认）。"
+    },
+    "builtinReadOnlyTools": {
+      "supply": "本组还包含无需审批档的只读工具：skill_draft_read、skill_draft_validate。",
+      "agents": "本组还包含无需审批档的只读工具：custom_agent_list、custom_agent_get。"
     },
     "settingsLink": {
       "movedTitle": "已迁移到 Connectors 配置台",
@@ -2094,12 +2098,14 @@
       "desc": "Custom AI 可使用的能力。关闭某个技能后，它的工具与提示词指引都不会注入下一次对话。",
       "enabled": "已启用",
       "unavailable": "不可用：{reason}",
-      "toolCount": "{n} 个工具",
+      "toolCount": "{n} 个 API 工具",
       "scopes": "权限范围",
       "empty": "暂无可用技能（技能清单加载失败）。",
       "loading": "正在加载技能…",
       "calendarChatNote": "此开关只管对外 Skill 接口与能力声明；聊天中的日历工具由「系统能力」区的日历项控制。",
-      "notionAgentMasterOff": "主开关 MAILAGENT_NOTION_AGENT_TOOL 已关闭：即使在此启用，聊天中也不会注册 notion_agent 工具。"
+      "notionAgentMasterOff": "主开关 MAILAGENT_NOTION_AGENT_TOOL 已关闭：即使在此启用，聊天中也不会注册 notion_agent 工具。",
+      "skillCreatorChatNote": "此 Skill 提供工作流指引；其驱动的 6 个 chat 工具审批档在「连接与工具 → Skill 供应链」。",
+      "customAgentChatNote": "此 Skill 提供工作流指引；其驱动的 7 个 chat 工具审批档在「连接与工具 → Custom Agent」。"
       ,"sourceBuiltin": "内置 · 产品可信",
       "sourceUserCreated": "用户创建",
       "sourceThirdParty": "第三方",

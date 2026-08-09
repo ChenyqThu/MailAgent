@@ -995,7 +995,7 @@ owner 拍板原话：
 
 | 原位置 | 现位置 | 处置 |
 |---|---|---|
-| 设置 → AI → 「工具审批档」区（`ToolApprovalSection.tsx`，28 个内置写工具的 per-tool `ask/auto/deny`） | `/connectors` 左栏「内置工具」段 → 右栏 `BuiltinDetailPane` | 组件**已删除**；设置页该 Section 只剩一张「已迁移」深链卡 |
+| 设置 → AI → 「工具审批档」区（`ToolApprovalSection.tsx`，33 项，以 `BUILTIN_TOOL_POLICIES` 为准） | `/connectors` 左栏「内置工具」段 → 右栏 `BuiltinDetailPane` | 组件**已删除**；设置页该 Section 只剩一张「已迁移」深链卡 |
 | 设置 → AI → Custom AI 区 → 「外部连接（MCP）」（`ConnectorsSection.tsx`） | `/connectors` 左栏「外部连接」段 → 右栏 `ConnectorDetailPane` / `CatalogDetailPane` / `ComposioAccountPane` | 组件**保留但降级**成深链卡（flag off 时 `return null` + 零请求的门控语义原样保留） |
 | composer「+」菜单 →「外部连接」→「管理」 | 同上 | 深链目标从「设置页 AI tab + 锚点滚动」改成 `/connectors?item=external` |
 

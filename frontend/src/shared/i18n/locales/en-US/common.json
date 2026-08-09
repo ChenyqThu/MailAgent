@@ -697,10 +697,14 @@
       "web": "Web search and page fetching (URLs and query strings leave the machine).",
       "calendar": "Reschedule / RSVP / delete calendar events (delete is destructive).",
       "capability": "Skill toggles and identity-document changes (all with history and rollback).",
-      "supply": "Skill install and uninstall (supply chain; install always double-confirms).",
-      "agents": "Create / update / delete / run-now for Custom Agents.",
+      "supply": "Skill install, uninstall, and draft create / write-file / read / validate (supply chain; install always double-confirms).",
+      "agents": "Create / update / delete / run-now for Custom Agents, plus calling an Agent from chat.",
       "exec": "Local file read-write and command execution (command bypass rides the policy whitelist).",
       "outbound": "Sending email and outbound-call tools (irreversible or data-egress; always confirm by default)."
+    },
+    "builtinReadOnlyTools": {
+      "supply": "This group also includes read-only tools with no approval profile: skill_draft_read and skill_draft_validate.",
+      "agents": "This group also includes read-only tools with no approval profile: custom_agent_list and custom_agent_get."
     },
     "settingsLink": {
       "movedTitle": "Moved to the Connectors console",
@@ -2094,12 +2098,14 @@
       "desc": "Capabilities the Custom AI can use. Disabling a skill removes its tools and its prompt guidance from the next conversation.",
       "enabled": "Enabled",
       "unavailable": "Unavailable: {reason}",
-      "toolCount": "{n, plural, one {# tool} other {# tools}}",
+      "toolCount": "{n, plural, one {# API tool} other {# API tools}}",
       "scopes": "Scopes",
       "empty": "No skills available (the skill manifest could not be loaded).",
       "loading": "Loading skills…",
       "calendarChatNote": "This toggle only governs the outward Skill interface and capability declaration; the calendar tools in chat are controlled by the Calendar item under System capabilities.",
-      "notionAgentMasterOff": "Master switch MAILAGENT_NOTION_AGENT_TOOL is off: even when enabled here, the notion_agent tool won't be registered in chat."
+      "notionAgentMasterOff": "Master switch MAILAGENT_NOTION_AGENT_TOOL is off: even when enabled here, the notion_agent tool won't be registered in chat.",
+      "skillCreatorChatNote": "This Skill provides workflow guidance; approval profiles for its 6 chat tools are under Connectors & Tools → Skill supply chain.",
+      "customAgentChatNote": "This Skill provides workflow guidance; approval profiles for its 7 chat tools are under Connectors & Tools → Custom Agent."
       ,"sourceBuiltin": "Builtin · product trusted",
       "sourceUserCreated": "User-created",
       "sourceThirdParty": "Third-party",

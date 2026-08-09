@@ -8,6 +8,7 @@
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { Loader2 } from 'lucide-react'
 
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -187,16 +188,40 @@ function SkillTrustPanel({ skill }: { skill: SkillSummary }): React.ReactElement
  *  · calendar: the toggle governs the outward Skill Delivery API + advertisedSkills only; the 5
  *    chat calendar tools are controlled by the calendar env flag (系统能力 区), NOT this toggle.
  *  · notion_agent: when the master flag MAILAGENT_NOTION_AGENT_TOOL is off, the gateway won't
- *    register notion_agent_chat even if the skill toggle is on (灭活标注). */
+ *    register notion_agent_chat even if the skill toggle is on (灭活标注).
+ *  · skill_creator / custom_agent: the pill counts Skill Delivery API tools; their gateway chat
+ *    tool approval profiles live in the Connectors console. */
 function useSkillExtraNote(): (skill: SkillSummary) => React.ReactNode {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const notionMasterEnabled = useEnvFlagIntent('MAILAGENT_NOTION_AGENT_TOOL', true)
-  return (skill: SkillSummary): React.ReactNode => {
+  function skillExtraNote(skill: SkillSummary): React.ReactNode {
     if (skill.name === 'calendar') return t('settings.skills.calendarChatNote')
     if (skill.name === 'notion_agent' && !notionMasterEnabled)
       return t('settings.skills.notionAgentMasterOff')
+    if (skill.name === 'skill_creator')
+      return (
+        <button
+          type="button"
+          className="text-left underline decoration-ink-border underline-offset-2 hover:text-ink-fg-2"
+          onClick={() => void navigate({ to: '/connectors', search: { item: 'builtin:supply' } })}
+        >
+          {t('settings.skills.skillCreatorChatNote')}
+        </button>
+      )
+    if (skill.name === 'custom_agent')
+      return (
+        <button
+          type="button"
+          className="text-left underline decoration-ink-border underline-offset-2 hover:text-ink-fg-2"
+          onClick={() => void navigate({ to: '/connectors', search: { item: 'builtin:agents' } })}
+        >
+          {t('settings.skills.customAgentChatNote')}
+        </button>
+      )
     return null
   }
+  return skillExtraNote
 }
 
 export function SkillsSection(): React.ReactElement {

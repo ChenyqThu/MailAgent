@@ -1,6 +1,6 @@
 // Connectors 独立配置台（08-06，owner 拍板；参考 LobeHub 的呈现结构）。
 //
-// 把原来散在 设置→AI 的两个区 ——「工具审批档」（28 个内置写工具的 per-tool ask/auto/deny）
+// 把原来散在 设置→AI 的两个区 ——「工具审批档」（33 项，以 BUILTIN_TOOL_POLICIES 为准）
 // 与「外部连接（MCP）」（connector 连接 / 授权 / per-tool auto/ask/off）—— 合并成一个
 // 左右两栏 master-detail 的独立页：
 //

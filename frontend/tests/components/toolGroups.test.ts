@@ -57,7 +57,7 @@ const HEADLESS_TOOL_OPTIONS: AgentRunToolOption[] = [
 ]
 
 describe('toolGroups — R3 工具分组常量', () => {
-  test('当前 35 个 headless 工具全部有家族归属（无一落 fallback）且无一丢失', () => {
+  test('当前 headless 工具全集均有家族归属（无一落 fallback）且无一丢失', () => {
     const groups = groupToolOptions(HEADLESS_TOOL_OPTIONS)
     expect(groups.find((g) => g.id === FALLBACK_TOOL_GROUP_ID)).toBeUndefined()
     const grouped = groups.flatMap((g) => g.tools.map((t) => t.name)).sort()
