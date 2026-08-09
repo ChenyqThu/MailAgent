@@ -270,26 +270,15 @@ export function CustomAgentDrawer({
           ? (initial.trigger.thread_ids ?? []).join(', ')
           : ''
       )
-      setCalendarTitlePattern(
-        initial?.trigger?.kind.startsWith('calendar_')
-          ? (initial.trigger.title_pattern ?? '')
-          : ''
-      )
-      setCalendarOrganizerPattern(
-        initial?.trigger?.kind.startsWith('calendar_')
-          ? (initial.trigger.organizer_pattern ?? '')
-          : ''
-      )
-      setCalendarAttendeePattern(
-        initial?.trigger?.kind.startsWith('calendar_')
-          ? (initial.trigger.attendee_pattern ?? '')
-          : ''
-      )
-      setCalendarIds(
-        initial?.trigger?.kind.startsWith('calendar_')
-          ? (initial.trigger.calendar_ids ?? []).join(', ')
-          : ''
-      )
+      const calendarInitial =
+        initial?.trigger?.kind === 'calendar_event_change' ||
+        initial?.trigger?.kind === 'calendar_before_start'
+          ? initial.trigger
+          : null
+      setCalendarTitlePattern(calendarInitial?.title_pattern ?? '')
+      setCalendarOrganizerPattern(calendarInitial?.organizer_pattern ?? '')
+      setCalendarAttendeePattern(calendarInitial?.attendee_pattern ?? '')
+      setCalendarIds((calendarInitial?.calendar_ids ?? []).join(', '))
       const initialLead =
         initial?.trigger?.kind === 'calendar_before_start'
           ? leadParts(initial.trigger.lead_seconds)
@@ -365,10 +354,7 @@ export function CustomAgentDrawer({
       setCron('0 9 * * 1-5')
       setTriggerTz('UTC')
       setSchedule(defaultSchedule)
-    } else if (
-      trig?.kind === 'calendar_event_change' ||
-      trig?.kind === 'calendar_before_start'
-    ) {
+    } else if (trig?.kind === 'calendar_event_change' || trig?.kind === 'calendar_before_start') {
       setTriggerKind(trig.kind)
       setCalendarTitlePattern(trig.title_pattern ?? '')
       setCalendarOrganizerPattern(trig.organizer_pattern ?? '')
@@ -555,7 +541,10 @@ export function CustomAgentDrawer({
       if (calendarTitlePattern.trim()) trig.title_pattern = calendarTitlePattern.trim()
       if (calendarOrganizerPattern.trim()) trig.organizer_pattern = calendarOrganizerPattern.trim()
       if (calendarAttendeePattern.trim()) trig.attendee_pattern = calendarAttendeePattern.trim()
-      const ids = calendarIds.split(',').map((value) => value.trim()).filter(Boolean)
+      const ids = calendarIds
+        .split(',')
+        .map((value) => value.trim())
+        .filter(Boolean)
       if (ids.length) trig.calendar_ids = ids
       return trig
     }
@@ -724,13 +713,22 @@ export function CustomAgentDrawer({
   const onExport = (): void => {
     if (!cfg) return
     setErr(null)
-    void fetch(`${resolveApiBaseUrl()}/report-agents/${encodeURIComponent(cfg.id)}/export`, { credentials: 'include' })
+    void fetch(`${resolveApiBaseUrl()}/report-agents/${encodeURIComponent(cfg.id)}/export`, {
+      credentials: 'include'
+    })
       .then(async (response) => {
         const envelope = (await response.json()) as { data?: unknown; error?: { message?: string } }
-        if (!response.ok || !envelope.data) throw new Error(envelope.error?.message ?? response.statusText)
-        const url = URL.createObjectURL(new Blob([JSON.stringify(envelope.data, null, 2)], { type: 'application/json' }))
+        if (!response.ok || !envelope.data)
+          throw new Error(envelope.error?.message ?? response.statusText)
+        const url = URL.createObjectURL(
+          new Blob([JSON.stringify(envelope.data, null, 2)], { type: 'application/json' })
+        )
         const anchor = document.createElement('a')
-        const slug = (cfg.title || cfg.id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || cfg.id
+        const slug =
+          (cfg.title || cfg.id)
+            .toLowerCase()
+            .replace(/[^a-z0-9]+/g, '-')
+            .replace(/^-|-$/g, '') || cfg.id
         anchor.href = url
         anchor.download = `agent-${slug}.json`
         anchor.click()
@@ -875,7 +873,14 @@ export function CustomAgentDrawer({
                 {triggerEntries.map((entry, index) => (
                   <div
                     key={entry.id ?? `new-${index}`}
-                    style={{ display: 'flex', alignItems: 'center', gap: 8, padding: 8, border: '1px solid rgb(var(--ink-border))', borderRadius: 8 }}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: 8,
+                      border: '1px solid rgb(var(--ink-border))',
+                      borderRadius: 8
+                    }}
                   >
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <div style={{ fontSize: 12.5 }}>
@@ -898,7 +903,9 @@ export function CustomAgentDrawer({
                       on={entry.enabled}
                       onChange={(checked) => {
                         setTriggerEntries((items) =>
-                          items.map((item, itemIndex) => itemIndex === index ? { ...item, enabled: checked } : item)
+                          items.map((item, itemIndex) =>
+                            itemIndex === index ? { ...item, enabled: checked } : item
+                          )
                         )
                         if (editingTriggerIndex === index) setTriggerEnabled(checked)
                       }}
@@ -910,7 +917,9 @@ export function CustomAgentDrawer({
                       type="button"
                       className="btn-ghost"
                       onClick={() => {
-                        setTriggerEntries((items) => items.filter((_, itemIndex) => itemIndex !== index))
+                        setTriggerEntries((items) =>
+                          items.filter((_, itemIndex) => itemIndex !== index)
+                        )
                         setEditingTriggerIndex(null)
                       }}
                     >
@@ -1109,14 +1118,23 @@ export function CustomAgentDrawer({
                       onChange={(e) => setLeadAmount(Number(e.target.value))}
                       style={inputStyle}
                     />
-                    <Select value={leadUnit} onValueChange={(value) => setLeadUnit(value as LeadUnit)}>
+                    <Select
+                      value={leadUnit}
+                      onValueChange={(value) => setLeadUnit(value as LeadUnit)}
+                    >
                       <SelectTrigger>
                         <SelectValue />
                       </SelectTrigger>
                       <SelectContent className="z-[70]">
-                        <SelectItem value="minutes">{t('agents.custom.trigger.leadUnitMinutes')}</SelectItem>
-                        <SelectItem value="hours">{t('agents.custom.trigger.leadUnitHours')}</SelectItem>
-                        <SelectItem value="days">{t('agents.custom.trigger.leadUnitDays')}</SelectItem>
+                        <SelectItem value="minutes">
+                          {t('agents.custom.trigger.leadUnitMinutes')}
+                        </SelectItem>
+                        <SelectItem value="hours">
+                          {t('agents.custom.trigger.leadUnitHours')}
+                        </SelectItem>
+                        <SelectItem value="days">
+                          {t('agents.custom.trigger.leadUnitDays')}
+                        </SelectItem>
                       </SelectContent>
                     </Select>
                   </div>
@@ -1293,7 +1311,12 @@ export function CustomAgentDrawer({
             </button>
           ))}
         {!create && cfg?.type === 'custom' && agentPluginsEnabled ? (
-          <button type="button" onClick={onExport} className="btn-ghost" style={{ fontFamily: 'inherit' }}>
+          <button
+            type="button"
+            onClick={onExport}
+            className="btn-ghost"
+            style={{ fontFamily: 'inherit' }}
+          >
             {t('agents.custom.export')}
           </button>
         ) : null}

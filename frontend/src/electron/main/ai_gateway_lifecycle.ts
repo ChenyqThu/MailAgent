@@ -63,10 +63,7 @@ import {
   type CompactPersistence
 } from '../../ai-gateway/compact'
 import { buildToolA2UIPayload } from '../../shared/assistant/tools/a2ui'
-import {
-  chatMessageToUIMessage,
-  extractTextFromUIMessage
-} from '@shared/assistant/uiMessage'
+import { chatMessageToUIMessage, extractTextFromUIMessage } from '@shared/assistant/uiMessage'
 import {
   appendMessage,
   appendToolCall,
@@ -685,7 +682,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       const result = await domain.getAutoCompactSetting(AbortSignal.timeout(2_000))
       value = result.mode === 'on'
     } catch (err) {
-      console.warn('[ai-gateway] auto-compact setting unavailable — automatic compact disabled', err)
+      console.warn(
+        '[ai-gateway] auto-compact setting unavailable — automatic compact disabled',
+        err
+      )
       value = false
     }
     _autoCompactSettingCache = { at: now, value }
@@ -1349,8 +1349,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
 
   let compactCoordinator: CompactCoordinator | null = null
   if (compactPersistence && autoCompactFeatureEnabled) {
-    compactCoordinator = new CompactCoordinator(gatewayConfig, compactPersistence)
-    gatewayConfig.compactCoordinator = compactCoordinator
+    const coordinator = new CompactCoordinator(gatewayConfig, compactPersistence)
+    compactCoordinator = coordinator
+    gatewayConfig.compactCoordinator = coordinator
     gatewayConfig.resolveAutoCompactEnabled = resolveAutoCompactEnabled
     gatewayConfig.maybeAutoCompact = (turn: PersistTurnInput): void => {
       setTimeout(() => {
@@ -1361,7 +1362,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           let contextWindow: number | null = null
           try {
             if (providerModelResolver) {
-              contextWindow = (await providerModelResolver.resolve(turn.model)).contextWindow ?? null
+              contextWindow =
+                (await providerModelResolver.resolve(turn.model)).contextWindow ?? null
             } else {
               const ref = parseProviderRef(turn.model)
               contextWindow = resolveContextWindow({
@@ -1381,13 +1383,13 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
               contextTokens: turn.contextTokens,
               contextWindow,
               runActive: activeRuns.hasActive(turn.sessionId),
-              compactActive: compactCoordinator.hasActive(turn.sessionId)
+              compactActive: coordinator.hasActive(turn.sessionId)
             })
           ) {
             return
           }
           try {
-            const result = await compactCoordinator.run(turn.sessionId, {
+            const result = await coordinator.run(turn.sessionId, {
               reason: 'threshold',
               contextWindow
             })
