@@ -93,6 +93,12 @@ def test_template_has_v2_trigger_id_and_valid_skills(plugin_client, monkeypatch)
     assert trigger["v"] == 2 and trigger["triggers"][0]["id"].startswith("trg_")
     assert agent["tool_policy"]["skills"] == ["email", "search", "calendar"]
     assert store.get_agent(agent["id"])["enabled"] == 0
+    # model=None 必须落 NULL 而非字面 'None'（config_patch_to_db 旧的无条件 str() 之坑）：
+    # 否则导出吐 'None' 字符串、再导入报虚假的 model unmet。
+    assert store.get_agent(agent["id"])["model"] in (None, "")
+    assert response.json()["data"]["unmet_dependencies"] == []
+    exported = client.get(f"/api/report-agents/{agent['id']}/export")
+    assert exported.json()["data"]["agent"]["model"] is None
     assert client.post("/api/report-agents/import", json={"template": "unknown"}).status_code == 404
 
 

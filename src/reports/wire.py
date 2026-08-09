@@ -290,7 +290,10 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
         p = raw["prompt"]
         db_patch["prompt"] = (str(p).strip() or None) if p is not None else None
     if "model" in raw:
-        db_patch["model"] = str(raw["model"])
+        # None / "" → 重置为默认（存 NULL，resolve 侧回落）；此前无条件 str() 会把
+        # None 落成字面 'None' 字符串（P9 agent 导入/模板是首个显式传 null 的调用方）。
+        m = raw["model"]
+        db_patch["model"] = (str(m).strip() or None) if m is not None else None
     if "window_hours" in raw:
         try:
             db_patch["window_hours"] = int(raw["window_hours"])

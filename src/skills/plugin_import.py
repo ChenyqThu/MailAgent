@@ -168,6 +168,22 @@ def import_plugin(
                     target = skill_path / notice.name
                     if not target.exists():
                         import_file_into_draft(draft_id, notice.name, notice.read_bytes(), store=store)
+                # 外部 plugin 不会自带 MailAgent 的三 marker 测试纪律（06§4.4 是 Creator
+                # 工作流要求，§8 导入面无此门槛）——validate/publish 的硬闸会把外部包挡成
+                # 永久 invalid。自带 tests/ 的不覆盖，缺失时补占位骨架让草稿可发布。
+                tests_dir = skill_path / "tests"
+                if not (tests_dir.is_dir() and any(tests_dir.iterdir())):
+                    title = mapped["title"]
+                    placeholder = (
+                        "# Tests (auto-generated at plugin import — refine before relying on them)\n\n"
+                        "## Positive\n"
+                        f"- \"{title}\" should apply when the user asks for the capability described in SKILL.md.\n\n"
+                        "## Negative\n"
+                        "- It should not apply to unrelated requests.\n\n"
+                        "## Expected Output\n"
+                        "- The response follows the guidance in SKILL.md.\n"
+                    )
+                    import_file_into_draft(draft_id, "tests/prompts.md", placeholder.encode("utf-8"), store=store)
                 validation = validate_draft(draft_id, store=store)
                 item: dict[str, Any] = {"path": rel_path, "status": "ready" if validation["valid"] else "invalid", "draftId": draft_id}
                 if not validation["valid"]:

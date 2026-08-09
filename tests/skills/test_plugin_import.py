@@ -71,6 +71,21 @@ def test_components_are_independent_and_sanitize_names(plugin_env):
     assert store.get_skill_draft(by_path["skills/email"]["draftId"]) is not None
 
 
+def test_missing_tests_get_placeholder_and_existing_tests_survive(plugin_env):
+    """外部包不带 MailAgent 三 marker 测试 ⇒ importer 补占位骨架让草稿可发布；自带者不覆盖。"""
+    tmp, _, store = plugin_env
+    source = tmp / "source"; source.mkdir(); _plugin(source)
+    _skill(source, "no-tests", skill_md="# Real body", tests=False)
+    _skill(source, "own-tests")
+    result = import_plugin(local_path=str(source), store=store)
+    by_path = {item["path"]: item for item in result["skills"]}
+    assert by_path["skills/no-tests"]["status"] == "ready"
+    auto = Path(draft_content_dir(by_path["skills/no-tests"]["draftId"])) / "tests/prompts.md"
+    assert "auto-generated at plugin import" in auto.read_text(encoding="utf-8")
+    own = Path(draft_content_dir(by_path["skills/own-tests"]["draftId"])) / "tests/prompts.md"
+    assert own.read_text(encoding="utf-8").startswith("## Positive")
+
+
 def test_frontmatter_binary_license_notice_and_a9_shape(plugin_env):
     tmp, _, store = plugin_env
     source = tmp / "external-plugin"; source.mkdir(); _plugin(source, version="1.2.3", license="MIT")
