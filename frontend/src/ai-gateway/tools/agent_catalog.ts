@@ -6,6 +6,10 @@ import { auditedReadTool, type GatewayToolAuditCollector } from './types'
 
 export const GATEWAY_AGENT_CATALOG_TOOL_NAMES = ['agent_catalog_list', 'agent_catalog_get'] as const
 
+/** Latest-run fields are echoed straight from the domain client — track its types rather than
+ *  restating them, so a shape change upstream surfaces here as a type error, not a silent drift. */
+type AgentRunSummary = Awaited<ReturnType<MailAgentDomainClient['listAgentRuns']>>[number]
+
 function triggerSummary(trigger: unknown): Record<string, unknown> | null {
   if (!trigger || typeof trigger !== 'object' || Array.isArray(trigger)) return null
   const value = trigger as Record<string, unknown>
@@ -26,7 +30,14 @@ async function catalogRow(
     trigger?: unknown
   },
   signal?: AbortSignal
-) {
+): Promise<{
+  id: string
+  title: string
+  description: string | null
+  enabled: boolean
+  trigger: ReturnType<typeof triggerSummary>
+  latestRun: { finishedAt: AgentRunSummary['finishedAt']; state: AgentRunSummary['state'] } | null
+}> {
   const runs = await domain.listAgentRuns(agent.id, 1, signal)
   const latest = runs[0]
   return {
@@ -44,24 +55,34 @@ export function createAgentCatalogTools(
   collector: GatewayToolAuditCollector = []
 ): Record<string, Tool> {
   return {
-    agent_catalog_list: auditedReadTool({
-      name: 'agent_catalog_list',
-      description: 'List available custom agents using only non-sensitive catalog metadata.',
-      inputSchema: z.object({}),
-      run: async (_input, signal) => {
-        const agents = (await domain.listReportAgents(signal)).filter((agent) => agent.type === 'custom')
-        return { agents: await Promise.all(agents.map((agent) => catalogRow(domain, agent, signal))) }
-      }
-    }, collector),
-    agent_catalog_get: auditedReadTool({
-      name: 'agent_catalog_get',
-      description: 'Read non-sensitive catalog metadata for one custom agent.',
-      inputSchema: z.object({ agent_id: z.string().min(1) }),
-      run: async (input, signal) => {
-        const agent = await domain.getReportAgent(input.agent_id, signal)
-        if (!agent || agent.type !== 'custom') return { found: false, agent: null }
-        return { found: true, agent: await catalogRow(domain, agent, signal) }
-      }
-    }, collector)
+    agent_catalog_list: auditedReadTool(
+      {
+        name: 'agent_catalog_list',
+        description: 'List available custom agents using only non-sensitive catalog metadata.',
+        inputSchema: z.object({}),
+        run: async (_input, signal) => {
+          const agents = (await domain.listReportAgents(signal)).filter(
+            (agent) => agent.type === 'custom'
+          )
+          return {
+            agents: await Promise.all(agents.map((agent) => catalogRow(domain, agent, signal)))
+          }
+        }
+      },
+      collector
+    ),
+    agent_catalog_get: auditedReadTool(
+      {
+        name: 'agent_catalog_get',
+        description: 'Read non-sensitive catalog metadata for one custom agent.',
+        inputSchema: z.object({ agent_id: z.string().min(1) }),
+        run: async (input, signal) => {
+          const agent = await domain.getReportAgent(input.agent_id, signal)
+          if (!agent || agent.type !== 'custom') return { found: false, agent: null }
+          return { found: true, agent: await catalogRow(domain, agent, signal) }
+        }
+      },
+      collector
+    )
   }
 }
