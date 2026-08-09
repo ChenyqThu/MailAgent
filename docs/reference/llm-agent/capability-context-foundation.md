@@ -18,9 +18,13 @@ eval 评测的不是抽象 agent，而是「某套 **agent profile + active skil
 镜像 `src/security/api_keys.py` 纪律：per-call 短连接、`CREATE TABLE IF NOT EXISTS`、路径解析
 `resolve_agent_config_db_path()`（env `MAILAGENT_AGENT_CONFIG_DB_PATH` → sync_store 同目录 →
 DATA_ROOT）、`get_agent_config_store()` lru_cache 单例。**绝不写 `ai_chat.db`**（其 schema owner 是
-前端 `chat_db.ts`，BASE-3 不变式：`src/chat/db.py` 0 CREATE TABLE）。4 表：`agent_skills`（统一
+前端 `chat_db.ts`，BASE-3 不变式：`src/chat/db.py` 0 CREATE TABLE）。
+
+🔴 **权威表清单 = `src/agent_config/store.py` 的 `_DDL`（+ `llm_providers.py` 的独立 DDL），不是本节**。
+本文档主题只覆盖 Phase -1/0A 的**初始 4 表**：`agent_skills`（统一
 registry：builtin 懒 enable-覆盖行 + installed 全行）· `agent_skill_events`（审计）·
 `agent_profile_docs`（SOUL/AGENT/RULES/USER 可编辑；**v1.0.1 起 Settings → AI tab → Custom AI 区有「身份文档」编辑器 `StandingDocsSection`**——查看/编辑全文 + 保存 + per-doc rollback，flag `MAILAGENT_STANDING_DOCS_EDITOR` 默认 on；此前仅 agent `update_system_md` 工具 / `/api/agent/profile/docs` API 改）· `agent_profile_history`（full-snapshot rollback）。
+后续批次沿同一开库纪律陆续加表（截至 2026-08-08 全库 16 表），各归其批次文档：`skill_secrets`（S2 skill 供应链，per-skill Fernet secret）· `external_credential`（飞书 IM 等外部凭证）· `policy_rules`（exec/web 白名单，S5 ADR-004）· `owner_settings` / `tool_approval_pref`（审批模式与 per-tool 档）· `connector` / `connector_tool`（MCP connectors，见 mcp-connectors.md）· `agent_skill_draft` / `agent_skill_trust`（P8 Skill Creator，见 ai-sdk-gateway-architecture.md §13.24.9）· `llm_provider` / `llm_model` / `llm_provider_meta`（provider registry，见 llm-provider-registry.md）。
 
 ## 模块
 
