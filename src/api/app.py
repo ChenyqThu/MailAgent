@@ -189,6 +189,16 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_PM2_RUNNING": 409,
     "E_PM2_CONFLICT": 409,  # 别名: 老 cli_runner exit-9 拼法
     "E_DISABLED": 403,  # 功能 flag 关（如 MAILAGENT_USER_MD_COMPILE）→ 端点拒绝
+    "E_MATTER_NOT_FOUND": 404,
+    "E_CHILD_NOT_FOUND": 404,
+    "E_VERSION_CONFLICT": 409,
+    "E_IDEMPOTENCY_CONFLICT": 409,
+    "E_INVALID_STATE": 409,
+    "E_UPDATE_STALE": 409,
+    "E_UPDATE_ALREADY_REVIEWED": 409,
+    "E_RUN_ACTIVE": 409,
+    "E_RESOURCE_IDENTITY_CONFLICT": 409,
+    "E_DEPENDENCY_EXISTS": 409,
 }
 
 
@@ -396,6 +406,7 @@ from src.api.routers import (  # noqa: E402
     kos,
     llm,
     llm_providers,
+    matters,
     reports,
     settings,
     skills,
@@ -419,6 +430,7 @@ app.include_router(ai.router)
 app.include_router(email_views.router)
 app.include_router(jobs.router)
 app.include_router(reports.router)
+app.include_router(matters.router)
 app.include_router(chat.router)
 app.include_router(settings.router)
 app.include_router(skills.router)

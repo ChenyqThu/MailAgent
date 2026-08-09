@@ -4618,5 +4618,120 @@
   "common": {
     "cancel": "取消",
     "imageLoadFailed": "图片加载失败"
+  },
+  "matters": {
+    "nav": "事项",
+    "title": "事项工作台",
+    "subtitle": "把跨邮件、会议与文档的工作持续推进到完成",
+    "views": {
+      "focus": "聚焦",
+      "active": "进行中",
+      "waiting": "等待中",
+      "blocked": "受阻",
+      "planned": "计划中",
+      "monitoring": "监控中",
+      "all": "全部",
+      "completed": "已完成",
+      "archived": "已归档",
+      "trash": "回收站"
+    },
+    "density": { "label": "列表密度", "compact": "紧凑", "comfortable": "舒适" },
+    "list": {
+      "search": "搜索标题、编号、描述或摘要",
+      "archived": "已归档",
+      "trashDays": "回收站 · {count} 天后清除"
+    },
+    "empty": {
+      "default": "这个视图里还没有事项。",
+      "archived": "归档的事项会留在这里，可随时恢复。",
+      "trash": "删除的事项在这里保留 30 天，可随时恢复。删除事项不会删除邮件、日历或外部文档。"
+    },
+    "focus": {
+      "title": "聚焦",
+      "count": "当前有 {count} 个需要留意的事项",
+      "dueSoon": "临近到期",
+      "empty": "未来 7 天没有临近到期的事项。"
+    },
+    "create": {
+      "title": "新建事项",
+      "name": "标题",
+      "type": "类型",
+      "typePlaceholder": "选择内置类型或输入自定义类型",
+      "priority": "优先级",
+      "description": "目的与背景",
+      "descriptionHint": "你写的这段，Agent 不会改写",
+      "submit": "新建事项",
+      "creating": "正在创建…"
+    },
+    "detail": {
+      "empty": "选择一个事项查看详情",
+      "created": "创建于 {date}",
+      "due": "截止 {date}",
+      "noDue": "未设截止时间",
+      "agentUnbound": "未绑定跟进 Agent",
+      "addTag": "添加标签"
+    },
+    "tabs": { "state": "状态", "timeline": "时间线" },
+    "status": {
+      "inbox": "收件",
+      "planned": "计划中",
+      "active": "进行中",
+      "waiting": "等待中",
+      "blocked": "受阻",
+      "monitoring": "监控中",
+      "done": "已完成",
+      "canceled": "已取消"
+    },
+    "health": { "unknown": "未知", "on_track": "正常", "at_risk": "有风险", "off_track": "偏离" },
+    "actions": {
+      "archive": "归档",
+      "restoreArchive": "取消归档",
+      "trash": "移到回收站",
+      "restore": "恢复",
+      "permanentDelete": "永久删除"
+    },
+    "delete": {
+      "title": "永久删除事项",
+      "hint": "请输入 {id} 确认。此操作不可撤销，但不会删除邮件、日历或外部文档。"
+    },
+    "state": {
+      "title": "当前状态",
+      "noSummary": "还没有当前摘要。",
+      "summaryGuard": "当前摘要由系统维护；你的目的与背景始终保留在下方，Agent 不可覆盖。",
+      "descriptionLabel": "你写的目的与背景（Agent 不可改写）",
+      "noDescription": "还没有填写目的与背景。"
+    },
+    "item": {
+      "addTitle": "添加事项条目",
+      "kind": "类型",
+      "name": "标题",
+      "description": "补充说明",
+      "add": "添加",
+      "empty": "还没有条目。先补一个能推动事项前进的结构化条目。",
+      "checklist": "清单 {count} 项",
+      "kinds": {
+        "action": "行动项",
+        "milestone": "里程碑",
+        "decision": "决策",
+        "blocker": "阻塞",
+        "question": "待解问题",
+        "note": "备注"
+      }
+    },
+    "timeline": {
+      "filter": "时间线参与者筛选",
+      "all": "全部",
+      "me": "我",
+      "agent": "Agent",
+      "system": "系统",
+      "empty": "这个筛选下还没有事件。"
+    },
+    "events": {},
+    "toast": {
+      "saved": "事项已更新",
+      "saveFailed": "事项更新失败",
+      "createFailed": "事项创建失败",
+      "deleteFailed": "事项删除失败"
+    }
   }
 }

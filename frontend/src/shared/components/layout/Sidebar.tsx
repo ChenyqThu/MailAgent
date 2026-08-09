@@ -19,7 +19,7 @@ import { useQuery } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
+import { BriefcaseBusiness, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import {
@@ -53,6 +53,7 @@ import {
   useAgentUnreadCount,
   useSessionProvenanceEnabled
 } from '@shared/components/agents/hooks'
+import { useMattersEnabled } from '@shared/components/matters/hooks'
 
 import { AccountSwitcherPopover } from './AccountSwitcherPopover'
 import { SidebarFolderTree } from './SidebarFolderTree'
@@ -248,6 +249,7 @@ export function Sidebar(): React.ReactElement {
   const collapsed = useNavCollapsed((s) => s.collapsed)
   const toggleCollapsed = useNavCollapsed((s) => s.toggle)
   const sessionProvenanceEnabled = useSessionProvenanceEnabled()
+  const mattersEnabled = useMattersEnabled()
   const agentUnreadTotal = useAgentUnreadCount(sessionProvenanceEnabled).total
   const view = useEmailFilter((s) => s.view)
   const setView = useEmailFilter((s) => s.setView)
@@ -587,6 +589,15 @@ export function Sidebar(): React.ReactElement {
           </h2>
         </div>
         <nav className="px-2 space-y-px">
+          {mattersEnabled ? (
+            <NavRow
+              icon={<BriefcaseBusiness size={15} strokeWidth={1.75} />}
+              label={t('matters.nav')}
+              selected={pathname === '/matters'}
+              onClick={() => void navigate({ to: '/matters' })}
+              title={collapsed ? t('matters.nav') : undefined}
+            />
+          ) : null}
           <NavRow
             icon={<ChartPieIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label="LLM Dashboard"

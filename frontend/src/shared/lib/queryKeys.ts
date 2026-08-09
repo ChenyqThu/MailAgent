@@ -222,6 +222,13 @@ export const qk = {
     search: (normalised: string) => ['mention', 'search', normalised] as const
   },
 
+  matters: {
+    all: () => ['matters'] as const,
+    list: () => ['matters', 'list'] as const,
+    detail: (publicId: string) => ['matters', 'detail', publicId] as const,
+    config: () => ['matters', 'config'] as const
+  },
+
   contactSuggest: (debounced: string, exclude: readonly string[]) =>
     ['contactSuggest', debounced, exclude] as const,
 

@@ -4618,5 +4618,61 @@
   "common": {
     "cancel": "Cancel",
     "imageLoadFailed": "Image failed to load"
+  },
+  "matters": {
+    "nav": "Matters",
+    "title": "Matters workspace",
+    "subtitle": "Keep work moving across email, meetings, and documents",
+    "views": {
+      "focus": "Focus",
+      "active": "Active",
+      "waiting": "Waiting",
+      "blocked": "Blocked",
+      "planned": "Planned",
+      "monitoring": "Monitoring",
+      "all": "All",
+      "completed": "Completed",
+      "archived": "Archived",
+      "trash": "Trash"
+    },
+    "density": { "label": "List density", "compact": "Compact", "comfortable": "Comfortable" },
+    "list": { "search": "Search title, ID, description, or summary", "archived": "Archived", "trashDays": "Trash · purges in {count} days" },
+    "empty": {
+      "default": "There are no matters in this view yet.",
+      "archived": "Archived matters stay here and can be restored anytime.",
+      "trash": "Deleted matters stay here for 30 days and can be restored. Deleting a matter never deletes email, calendar, or external documents."
+    },
+    "focus": { "title": "Focus", "count": "{count} matters need attention", "dueSoon": "Due soon", "empty": "Nothing is due in the next seven days." },
+    "create": {
+      "title": "Create matter",
+      "name": "Title",
+      "type": "Type",
+      "typePlaceholder": "Choose a built-in type or enter your own",
+      "priority": "Priority",
+      "description": "Purpose and background",
+      "descriptionHint": "Agents will never rewrite what you enter here",
+      "submit": "Create matter",
+      "creating": "Creating…"
+    },
+    "detail": { "empty": "Select a matter to view details", "created": "Created {date}", "due": "Due {date}", "noDue": "No due date", "agentUnbound": "No follow-up agent bound", "addTag": "Add tag" },
+    "tabs": { "state": "State", "timeline": "Timeline" },
+    "status": { "inbox": "Inbox", "planned": "Planned", "active": "Active", "waiting": "Waiting", "blocked": "Blocked", "monitoring": "Monitoring", "done": "Done", "canceled": "Canceled" },
+    "health": { "unknown": "Unknown", "on_track": "On track", "at_risk": "At risk", "off_track": "Off track" },
+    "actions": { "archive": "Archive", "restoreArchive": "Unarchive", "trash": "Move to trash", "restore": "Restore", "permanentDelete": "Delete permanently" },
+    "delete": { "title": "Delete matter permanently", "hint": "Enter {id} to confirm. This cannot be undone, but it will not delete email, calendar, or external documents." },
+    "state": { "title": "Current state", "noSummary": "No current summary yet.", "summaryGuard": "The system maintains this summary. Your purpose and background below is preserved and cannot be overwritten by an agent.", "descriptionLabel": "Your purpose and background (agents cannot rewrite this)", "noDescription": "No purpose or background has been entered." },
+    "item": {
+      "addTitle": "Add matter item",
+      "kind": "Type",
+      "name": "Title",
+      "description": "Details",
+      "add": "Add",
+      "empty": "No items yet. Add a structured item that moves this matter forward.",
+      "checklist": "{count} checklist items",
+      "kinds": { "action": "Action", "milestone": "Milestone", "decision": "Decision", "blocker": "Blocker", "question": "Question", "note": "Note" }
+    },
+    "timeline": { "filter": "Timeline actor filter", "all": "All", "me": "Me", "agent": "Agent", "system": "System", "empty": "There are no events for this filter." },
+    "events": {},
+    "toast": { "saved": "Matter updated", "saveFailed": "Could not update matter", "createFailed": "Could not create matter", "deleteFailed": "Could not delete matter" }
   }
 }

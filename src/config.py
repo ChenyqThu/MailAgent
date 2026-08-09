@@ -915,6 +915,11 @@ class Config(BaseSettings):
             "才真正激活某个 agent（on 但不配 grant/规则 = 恒 HITL，per-agent opt-in 是天然开关）。"
         ),
     )
+    matters_enabled: bool = Field(
+        default=False,
+        validation_alias="MAILAGENT_MATTERS_ENABLED",
+        description="Matters workspace feature flag. Restart required after changing it.",
+    )
 
     # =========================================================================
     # Sprint 16 dual-backend (2026-05): 邮件后端 single-driver 显式切换

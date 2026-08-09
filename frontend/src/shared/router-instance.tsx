@@ -237,6 +237,15 @@ const agentsRoute = createRoute({
   }
 })
 
+const mattersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/matters',
+  component: lazyRouteComponent(
+    () => import('./components/layout/MattersLayout'),
+    'MattersLayout'
+  )
+})
+
 // /connectors — Connectors 独立配置台（08-06 owner 拍板：不再是设置页里的区块）。
 // `?item=` 深链到具体条目（builtin:<group> / connector:<id> / catalog:<id> / composio /
 // external）；值域宽松 —— 具体解析在页面里（parseItemParam），手敲 URL 落到默认选中而不崩页。
@@ -372,6 +381,7 @@ export const router = createRouter({
     inboxRoute,
     sessionsRoute,
     agentsRoute,
+    mattersRoute,
     connectorsRoute,
     adminRoute.addChildren([adminIndexRoute, adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute

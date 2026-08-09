@@ -49,6 +49,17 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
 from loguru import logger
 
+from src.matters.models import (
+    MatterActorKind,
+    MatterHealth,
+    MatterItemKind,
+    MatterItemStatus,
+    MatterPriority,
+    MatterStatus,
+    MatterUpdateReviewStatus,
+    sql_check_clause,
+)
+
 
 # Draft→Sent 提升判定用的 mailbox label 集合（见 _save_email_v3 cross-backend merge）。
 # issue #42 C 案起单源迁至 src/mail/mailbox_semantics.py，此处 re-export 保兼容
@@ -98,6 +109,143 @@ LLM_PROCESSING_INDEX_DDLS = (
     "CREATE INDEX IF NOT EXISTS idx_llm_status ON llm_processing(status)",
     "CREATE INDEX IF NOT EXISTS idx_llm_retry "
     "ON llm_processing(next_retry_at) WHERE status='failed'",
+)
+
+
+# ==================== Matters DDL single source (v44) ====================
+MATTER_TABLE_DDLS = (
+    """CREATE TABLE IF NOT EXISTS matter_seq (
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        created_at INTEGER NOT NULL
+    )""",
+    f"""CREATE TABLE IF NOT EXISTS matter (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        public_id TEXT NOT NULL UNIQUE CHECK (public_id LIKE 'MAT-%'),
+        title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+        description TEXT NOT NULL DEFAULT '',
+        matter_type TEXT NULL CHECK (matter_type IS NULL OR length(trim(matter_type)) > 0),
+        tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json)),
+        status TEXT NOT NULL DEFAULT 'inbox' CHECK (status {sql_check_clause(MatterStatus)}),
+        health TEXT NOT NULL DEFAULT 'unknown' CHECK (health {sql_check_clause(MatterHealth)}),
+        priority TEXT NOT NULL DEFAULT 'p1' CHECK (priority {sql_check_clause(MatterPriority)}),
+        owner_id TEXT NULL,
+        source TEXT NOT NULL DEFAULT 'manual',
+        due_at INTEGER NULL,
+        waiting_context_json TEXT NULL CHECK (waiting_context_json IS NULL OR json_valid(waiting_context_json)),
+        next_attention_at INTEGER NULL,
+        attention_reason TEXT NULL,
+        last_activity_at INTEGER NULL,
+        latest_accepted_update_id INTEGER NULL,
+        current_summary TEXT NULL,
+        summary_at INTEGER NULL,
+        summary_by_kind TEXT NULL CHECK (summary_by_kind IS NULL OR summary_by_kind {sql_check_clause(MatterActorKind)}),
+        summary_by_id TEXT NULL,
+        version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+        archived_at INTEGER NULL,
+        archived_by_kind TEXT NULL CHECK (archived_by_kind IS NULL OR archived_by_kind {sql_check_clause(MatterActorKind)}),
+        archived_by_id TEXT NULL,
+        deleted_at INTEGER NULL,
+        deleted_by_kind TEXT NULL CHECK (deleted_by_kind IS NULL OR deleted_by_kind {sql_check_clause(MatterActorKind)}),
+        deleted_by_id TEXT NULL,
+        purge_after INTEGER NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        FOREIGN KEY(latest_accepted_update_id) REFERENCES matter_update(id) ON DELETE SET NULL
+    )""",
+    f"""CREATE TABLE IF NOT EXISTS matter_item (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL CHECK (kind {sql_check_clause(MatterItemKind)}),
+        title TEXT NOT NULL CHECK (length(trim(title)) > 0),
+        description TEXT NULL,
+        position INTEGER NOT NULL DEFAULT 0,
+        status TEXT NULL CHECK (status IS NULL OR status {sql_check_clause(MatterItemStatus)}),
+        priority TEXT NULL CHECK (priority IS NULL OR priority {sql_check_clause(MatterPriority)}),
+        owner_kind TEXT NULL CHECK (owner_kind IS NULL OR owner_kind {sql_check_clause(MatterActorKind)}),
+        owner_id TEXT NULL,
+        waiting_on_stakeholder_id INTEGER NULL,
+        due_at INTEGER NULL,
+        completed_at INTEGER NULL,
+        checklist_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(checklist_json)),
+        source_resource_id INTEGER NULL,
+        source_locator_json TEXT NULL CHECK (source_locator_json IS NULL OR json_valid(source_locator_json)),
+        created_by_kind TEXT NOT NULL CHECK (created_by_kind {sql_check_clause(MatterActorKind)}),
+        created_by_id TEXT NULL,
+        version INTEGER NOT NULL DEFAULT 1 CHECK (version >= 1),
+        deleted_at INTEGER NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK (kind = 'action' OR (
+            status IS NULL AND priority IS NULL AND owner_kind IS NULL AND owner_id IS NULL
+            AND waiting_on_stakeholder_id IS NULL AND due_at IS NULL AND completed_at IS NULL
+            AND checklist_json = '[]'
+        ))
+    )""",
+    f"""CREATE TABLE IF NOT EXISTS matter_event (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        kind TEXT NOT NULL,
+        happened_at INTEGER NOT NULL,
+        actor_kind TEXT NOT NULL CHECK (actor_kind {sql_check_clause(MatterActorKind)}),
+        actor_id TEXT NULL,
+        source TEXT NOT NULL,
+        resource_id INTEGER NULL,
+        item_id INTEGER NULL REFERENCES matter_item(id) ON DELETE SET NULL,
+        update_id INTEGER NULL REFERENCES matter_update(id) ON DELETE SET NULL,
+        reverses_event_id INTEGER NULL REFERENCES matter_event(id) ON DELETE SET NULL,
+        dedupe_key TEXT NOT NULL UNIQUE,
+        payload_json TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(payload_json)),
+        created_at INTEGER NOT NULL
+    )""",
+    f"""CREATE TABLE IF NOT EXISTS matter_update (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        review_status TEXT NOT NULL CHECK (review_status {sql_check_clause(MatterUpdateReviewStatus)}),
+        summary TEXT NULL,
+        from_event_id INTEGER NULL REFERENCES matter_event(id) ON DELETE SET NULL,
+        to_event_id INTEGER NULL REFERENCES matter_event(id) ON DELETE SET NULL,
+        anchored_matter_version INTEGER NOT NULL CHECK (anchored_matter_version >= 1),
+        official_state_version INTEGER NULL CHECK (official_state_version IS NULL OR official_state_version >= 1),
+        original_proposal_json TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(original_proposal_json)),
+        reviewed_result_json TEXT NULL CHECK (reviewed_result_json IS NULL OR json_valid(reviewed_result_json)),
+        changes_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(changes_json)),
+        accepted_change_ids_json TEXT NULL CHECK (accepted_change_ids_json IS NULL OR json_valid(accepted_change_ids_json)),
+        citations_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(citations_json)),
+        confidence REAL NULL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+        agent_run_id INTEGER NULL,
+        is_stale INTEGER NOT NULL DEFAULT 0 CHECK (is_stale IN (0, 1)),
+        stale_at INTEGER NULL,
+        stale_reason TEXT NULL,
+        created_by_kind TEXT NOT NULL CHECK (created_by_kind {sql_check_clause(MatterActorKind)}),
+        created_by_id TEXT NULL,
+        created_at INTEGER NOT NULL,
+        reviewed_at INTEGER NULL,
+        reviewed_by_kind TEXT NULL CHECK (reviewed_by_kind IS NULL OR reviewed_by_kind {sql_check_clause(MatterActorKind)}),
+        reviewed_by_id TEXT NULL,
+        accepted_at INTEGER NULL,
+        rejected_at INTEGER NULL,
+        review_reason TEXT NULL
+    )""",
+)
+
+MATTER_INDEX_DDLS = (
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_public_id ON matter(public_id)",
+    "CREATE INDEX IF NOT EXISTS idx_matter_live_status ON matter(status, priority, due_at) WHERE deleted_at IS NULL AND archived_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_attention ON matter(next_attention_at) WHERE deleted_at IS NULL AND next_attention_at IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_archived ON matter(archived_at DESC) WHERE deleted_at IS NULL AND archived_at IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_trash ON matter(deleted_at DESC) WHERE deleted_at IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_updated ON matter(updated_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_matter_item_live ON matter_item(matter_id, kind, position, id) WHERE deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_item_action_status ON matter_item(matter_id, status, due_at) WHERE kind='action' AND deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_item_source ON matter_item(source_resource_id) WHERE source_resource_id IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_event_dedupe ON matter_event(dedupe_key)",
+    "CREATE INDEX IF NOT EXISTS idx_matter_event_timeline ON matter_event(matter_id, happened_at DESC, id DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_matter_event_kind ON matter_event(matter_id, kind, happened_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_matter_event_resource ON matter_event(resource_id, happened_at DESC) WHERE resource_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_update_review ON matter_update(matter_id, review_status, created_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_matter_update_range ON matter_update(matter_id, from_event_id, to_event_id)",
+    "CREATE INDEX IF NOT EXISTS idx_matter_update_run ON matter_update(agent_run_id) WHERE agent_run_id IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_update_stale ON matter_update(matter_id, is_stale, created_at DESC) WHERE review_status='pending'",
 )
 
 
@@ -594,7 +742,7 @@ class SyncStore:
     # v43 (harness optimization P2, 2026-08): report_agent +description TEXT。NULL/空 = 未设置；
     #                wire 写侧 strip 并限制 1000 字符，读侧原样投影。additive ALTER，无回填。
     #                回滚 (回退 v43): 列可留（旧代码无害）；必要时降 db_version。
-    DB_VERSION = 43  # v43: report_agent description
+    DB_VERSION = 44  # v44: Matter aggregate base tables
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -2380,6 +2528,28 @@ class SyncStore:
                 _migration_guard_columns(
                     cursor, "report_agent", {"description"}, "v43 migration", e,
                 )
+
+        # === v44: Matter aggregate base tables (P1) ===
+        if current_version < 44:
+            try:
+                for ddl in MATTER_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in MATTER_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except sqlite3.OperationalError as e:
+                required = {"matter_seq", "matter", "matter_item", "matter_event", "matter_update"}
+                present = {
+                    row[0]
+                    for row in cursor.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    ).fetchall()
+                }
+                missing = sorted(required - present)
+                if missing:
+                    raise SyncStoreMigrationError(
+                        f"v44 migration: tables still missing {missing}: {e}"
+                    ) from e
+                raise
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
