@@ -343,6 +343,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # S5 — Custom AI Agents 入口显隐 flag（MAILAGENT_CUSTOM_AGENTS_ENABLED，E3 cutover 默认 ON；
         # 此处跟随 stub.custom_agents_enabled=True）。
         "customAgentsEnabled": True,
+        # @ custom-agent call 入口显隐（MAILAGENT_CUSTOM_AGENT_CALL，默认 ON）。
+        "customAgentCallEnabled": True,
         # P3 — manual compact renderer projection, default ON.
         "chatCompactEnabled": True,
         # P4 — auto compact/overflow projection, default ON.
@@ -384,6 +386,7 @@ def test_chat_config_openness_flags_hot_read(
         "MAILAGENT_CHAT_AUTO_COMPACT=false\n"
         "MAILAGENT_CHAT_QUEUED_INPUT=false\n"
         "MAILAGENT_TRIGGER_V2=false\n"
+        "MAILAGENT_CUSTOM_AGENT_CALL=false\n"
     )
     with _config_client(monkeypatch, _ChatConfigStub(), env_file=str(env)) as c:
         data = c.get("/api/chat/config").json()["data"]
@@ -395,6 +398,7 @@ def test_chat_config_openness_flags_hot_read(
     assert data["chatAutoCompactEnabled"] is False
     assert data["chatQueuedInputEnabled"] is False
     assert data["triggerV2Enabled"] is False
+    assert data["customAgentCallEnabled"] is False
     # 既有字段回归：exec flag 同一热读通道
     assert data["execPolicyEnabled"] is True
 

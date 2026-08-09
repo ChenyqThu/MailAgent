@@ -760,7 +760,13 @@
     },
     "mention": {
       "loading": "搜索邮件中…",
-      "empty": "没有匹配的邮件"
+      "empty": "没有匹配的邮件",
+      "emails": "邮件",
+      "agents": "Agent",
+      "agentsEmpty": "没有已启用的自定义 Agent",
+      "noMatches": "没有匹配的邮件或 Agent",
+      "emailChip": "已引用邮件：{label}",
+      "agentChip": "已提及 Agent：{label}"
     },
     "slash": {
       "empty": "没有匹配的命令"

@@ -19,11 +19,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, FileText, ListTodo, Mail, PenLine, Search, Square } from 'lucide-react'
+import { ArrowUp, Bot, FileText, ListTodo, Mail, PenLine, Search, Square } from 'lucide-react'
 import {
   ComposerPrimitive,
   ThreadPrimitive,
-  unstable_defaultDirectiveFormatter,
   unstable_useSlashCommandAdapter,
   useAui,
   useAuiState,
@@ -48,7 +47,9 @@ import { ContextUsageRing } from '@shared/assistant/components/ContextUsageRing'
 import { EffortPicker } from '@shared/assistant/components/EffortPicker'
 import { ModelPicker } from '@shared/assistant/components/ModelPicker'
 
+import { AGENT_MENTION_CATEGORY_ID, parseComposerMentionIds } from './agentMention'
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
+import { useAgentMentionAdapter } from './useAgentMentionAdapter'
 
 // ── @ email mention adapter (async FTS search bridged into a sync trigger adapter) ───────────────
 // The trigger popover takes a SYNCHRONOUS adapter (search(query) → items[]) plus a separate isLoading
@@ -57,6 +58,7 @@ import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
 // current query; the fetch setStates the results, which re-creates the adapter and re-runs search to
 // return the fresh items. isLoading is driven from React state (set in the timer, cleared on settle).
 const MENTION_SENTINEL = '\u0000'
+const EMAIL_MENTION_CATEGORY_ID = 'email'
 
 /** Local mirror of @assistant-ui/core's Unstable_TriggerAdapter (not re-exported from react). */
 type TriggerAdapter = {
@@ -120,7 +122,7 @@ function useEmailMentionAdapter(controls: ChatComposerControls | null): {
   const adapter = useMemo<TriggerAdapter>(
     () => ({
       categories: () => [],
-      categoryItems: () => [],
+      categoryItems: () => stateRef.current.items,
       search: (query: string) => {
         if (query === MENTION_SENTINEL) return []
         if (query !== stateRef.current.query) {
@@ -159,6 +161,63 @@ function useEmailMentionAdapter(controls: ChatComposerControls | null): {
   )
 
   return { adapter, isLoading: loading, onInserted }
+}
+
+function AgentMentionTrigger({
+  controls,
+  emailMention
+}: {
+  controls: ChatComposerControls
+  emailMention: ReturnType<typeof useEmailMentionAdapter>
+}): React.JSX.Element {
+  const { t } = useTranslation()
+  const agentMention = useAgentMentionAdapter(controls)
+  const adapter = useMemo<TriggerAdapter>(
+    () => ({
+      categories: () => [
+        { id: EMAIL_MENTION_CATEGORY_ID, label: t('agentView.mention.emails') },
+        ...agentMention.adapter.categories()
+      ],
+      categoryItems: (categoryId: string) =>
+        categoryId === EMAIL_MENTION_CATEGORY_ID
+          ? emailMention.adapter.categoryItems(categoryId)
+          : agentMention.adapter.categoryItems(categoryId),
+      search: (query: string) => [
+        ...emailMention.adapter.search(query),
+        ...agentMention.adapter.search(query)
+      ]
+    }),
+    [agentMention.adapter, emailMention.adapter, t]
+  )
+  const onInserted = useCallback(
+    (item: Unstable_TriggerItem): void => {
+      if (item.type === 'agent') agentMention.onInserted(item)
+      else emailMention.onInserted(item)
+    },
+    [agentMention, emailMention]
+  )
+  return (
+    <AgentTriggerPopover
+      char="@"
+      adapter={adapter}
+      isLoading={emailMention.isLoading || agentMention.isLoading}
+      directive={{ onInserted }}
+      iconMap={{ email: Mail, agent: Bot }}
+      fallbackIcon={(props) => <Mail {...props} />}
+      loadingLabel={t('agentView.mention.loading')}
+      emptyItemsLabel={(activeCategoryId) =>
+        activeCategoryId === AGENT_MENTION_CATEGORY_ID
+          ? t('agentView.mention.agentsEmpty')
+          : activeCategoryId === EMAIL_MENTION_CATEGORY_ID
+            ? t('agentView.mention.empty')
+            : t('agentView.mention.noMatches')
+      }
+      emptyCategoriesLabel={t('agentView.mention.empty')}
+      renderItemIcon={(item) =>
+        item.type === 'agent' ? agentMention.renderItemIcon(item) : null
+      }
+    />
+  )
 }
 
 // ── / slash commands (send a representative quick-action prompt) ─────────────────────────────────
@@ -216,7 +275,7 @@ export function AgentComposer(): React.JSX.Element {
   const { t } = useTranslation()
   const aui = useAui()
   const controls = useChatComposerControls()
-  const mention = useEmailMentionAdapter(controls)
+  const emailMention = useEmailMentionAdapter(controls)
   // codex r2 [D] — sendDisabled gates EVERY send path, not just the Send button: the Lexical
   // input's Enter calls aui.composer().send() directly (submitMode 'none' turns it off), slash
   // commands append through the thread (guarded in execute below), and the Root form gate covers
@@ -234,16 +293,15 @@ export function AgentComposer(): React.JSX.Element {
   // 不再显示 placeholder（用户要求）。空线程 = thread.messages 为空（同 AgentThread 的 isNewChatView）。
   const isEmptyThread = useAuiState((s) => s.thread.messages.length === 0)
   useEffect(() => {
-    if (!controls || controls.mentions.length === 0) return
-    const present = new Set<number>()
-    for (const seg of unstable_defaultDirectiveFormatter.parse(composerText)) {
-      if (seg.kind === 'mention') {
-        const m = /^email-(\d+)$/.exec(seg.id)
-        if (m) present.add(Number(m[1]))
-      }
-    }
+    if (!controls) return
+    const agentMentions = controls.agentMentions ?? []
+    if (controls.mentions.length === 0 && agentMentions.length === 0) return
+    const present = parseComposerMentionIds(composerText)
     for (const mentioned of controls.mentions) {
-      if (!present.has(mentioned.internal_id)) controls.onRemoveMention(mentioned.internal_id)
+      if (!present.emailIds.has(mentioned.internal_id)) controls.onRemoveMention(mentioned.internal_id)
+    }
+    for (const agent of agentMentions) {
+      if (!present.agentIds.has(agent.id)) controls.onRemoveAgentMention?.(agent.id)
     }
   }, [composerText, controls])
 
@@ -383,17 +441,7 @@ export function AgentComposer(): React.JSX.Element {
         </BorderGlow>
 
         {/* @ email mention — async FTS search → inline directive chip + controls.mentions for send context. */}
-        {controls && (
-          <AgentTriggerPopover
-            char="@"
-            adapter={mention.adapter}
-            isLoading={mention.isLoading}
-            directive={{ onInserted: mention.onInserted }}
-            fallbackIcon={(props) => <Mail {...props} />}
-            loadingLabel={t('agentView.mention.loading')}
-            emptyItemsLabel={t('agentView.mention.empty')}
-          />
-        )}
+        {controls && <AgentMentionTrigger controls={controls} emailMention={emailMention} />}
         {/* / slash commands. */}
         <AgentTriggerPopover char="/" {...slash} emptyItemsLabel={t('agentView.slash.empty')} />
       </ComposerPrimitive.Root>

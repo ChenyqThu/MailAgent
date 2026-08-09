@@ -23,7 +23,7 @@ import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { History, Maximize2, Plus, Settings, Sparkles, X } from 'lucide-react'
 
-import type { ChatBackendKind, SearchHit } from '@shared/api/types'
+import type { ChatBackendKind, ReportAgentConfig, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { useActiveEmail } from '@shared/state/active-email'
 import { hideAIChatPanel, useAIChatPanel } from '@shared/state/ai-chat-panel'
@@ -39,7 +39,7 @@ import { useComposerEffort } from '@shared/hooks/useComposerEffort'
 import { useComposerModels } from '@shared/hooks/useComposerModels'
 import { useSessionModelPreference } from '@shared/hooks/useSessionModelPreference'
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
-import { buildMentionContext } from '@shared/lib/mention-context'
+import { buildAgentMentionEnvelope, buildMentionContext } from '@shared/lib/mention-context'
 import { useApprovalMode } from '@shared/lib/approvalMode'
 import { useChatCompactFlags } from '@shared/hooks/useChatCompactEnabled'
 import { useChatQueuedInputEnabled } from '@shared/hooks/useChatQueuedInputEnabled'
@@ -184,12 +184,19 @@ export function AIChatPanel({
   // mention body excerpts are resolved at SEND time; buildInjectedContext assembles the full prefix,
   // sent as body.injectedContext → gateway, chips cleared after a clean send (onConsumeInjected).
   const [mentions, setMentions] = useState<SearchHit[]>([])
+  const [agentMentions, setAgentMentions] = useState<ReportAgentConfig[]>([])
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   const onAddMention = useCallback((hit: SearchHit): void => {
     setMentions((cur) => (cur.some((m) => m.internal_id === hit.internal_id) ? cur : [...cur, hit]))
   }, [])
   const onRemoveMention = useCallback((internalId: number): void => {
     setMentions((cur) => cur.filter((m) => m.internal_id !== internalId))
+  }, [])
+  const onAddAgentMention = useCallback((agent: ReportAgentConfig): void => {
+    setAgentMentions((cur) => (cur.some((item) => item.id === agent.id) ? cur : [...cur, agent]))
+  }, [])
+  const onRemoveAgentMention = useCallback((agentId: string): void => {
+    setAgentMentions((cur) => cur.filter((agent) => agent.id !== agentId))
   }, [])
   const onAddAttachment = useCallback((attachment: ChatAttachment): void => {
     setAttachments((cur) => [...cur, attachment])
@@ -199,6 +206,7 @@ export function AIChatPanel({
   }, [])
   const onConsumeInjected = useCallback((): void => {
     setMentions([])
+    setAgentMentions([])
     setAttachments([])
   }, [])
   // issue #61 Lane 3 (A2) — chips now render from the assistant-ui composer state (fed by the
@@ -208,10 +216,11 @@ export function AIChatPanel({
     [onAddAttachment, onRemoveAttachment]
   )
   const buildInjectedContext = useCallback(async (): Promise<string> => {
+    const agentContext = buildAgentMentionEnvelope(agentMentions)
     const mentionContext = await buildMentionContext(mentions, mailApi)
     const attachmentContext = buildAttachmentBlock(attachments)
-    return `${attachmentContext}${mentionContext}`
-  }, [mentions, mailApi, attachments])
+    return `${agentContext}${attachmentContext}${mentionContext}`
+  }, [agentMentions, mentions, mailApi, attachments])
 
   const onCompactStop = useCallback((): void => {
     const sessionId = chat.activeSessionId
@@ -524,6 +533,9 @@ export function AIChatPanel({
       mentions,
       onAddMention,
       onRemoveMention,
+      agentMentions,
+      onAddAgentMention,
+      onRemoveAgentMention,
       attachments,
       onAddAttachment,
       onRemoveAttachment,
@@ -546,6 +558,9 @@ export function AIChatPanel({
       mentions,
       onAddMention,
       onRemoveMention,
+      agentMentions,
+      onAddAgentMention,
+      onRemoveAgentMention,
       attachments,
       onAddAttachment,
       onRemoveAttachment,

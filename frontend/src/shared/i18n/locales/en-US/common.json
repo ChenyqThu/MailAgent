@@ -760,7 +760,13 @@
     },
     "mention": {
       "loading": "Searching emails…",
-      "empty": "No matching emails"
+      "empty": "No matching emails",
+      "emails": "Emails",
+      "agents": "Agents",
+      "agentsEmpty": "No enabled custom agents",
+      "noMatches": "No matching emails or agents",
+      "emailChip": "Mentioned email: {label}",
+      "agentChip": "Mentioned agent: {label}"
     },
     "slash": {
       "empty": "No matching commands"

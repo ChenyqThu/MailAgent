@@ -4,7 +4,8 @@
 // state surfaced via the popover scope's isLoading). The @ trigger uses `directive` (inserts an inline
 // chip); the / trigger uses `action` (fires a slash-command handler). Pass exactly one of the two.
 
-import { memo, type ComponentPropsWithoutRef, type FC } from 'react'
+import { memo, type ComponentPropsWithoutRef, type FC, type ReactNode } from 'react'
+import { useTranslation } from 'react-i18next'
 import {
   ComposerPrimitive,
   unstable_defaultDirectiveFormatter,
@@ -36,8 +37,9 @@ type BaseProps = Omit<
   fallbackIcon?: IconComponent
   backLabel?: string
   emptyCategoriesLabel?: string
-  emptyItemsLabel?: string
+  emptyItemsLabel?: string | ((activeCategoryId: string | null) => string)
   loadingLabel?: string
+  renderItemIcon?: (item: Unstable_TriggerItem) => ReactNode
 }
 
 type AgentTriggerPopoverProps = BaseProps &
@@ -91,10 +93,13 @@ const Items: FC<{
   iconMap?: Record<string, IconComponent>
   fallbackIcon: IconComponent
   backLabel: string
-  emptyLabel: string
+  emptyLabel: string | ((activeCategoryId: string | null) => string)
   loadingLabel: string
-}> = ({ iconMap, fallbackIcon, backLabel, emptyLabel, loadingLabel }) => {
-  const { isLoading } = unstable_useTriggerPopoverScopeContext()
+  renderItemIcon?: (item: Unstable_TriggerItem) => ReactNode
+}> = ({ iconMap, fallbackIcon, backLabel, emptyLabel, loadingLabel, renderItemIcon }) => {
+  const { activeCategoryId, isLoading } = unstable_useTriggerPopoverScopeContext()
+  const resolvedEmptyLabel =
+    typeof emptyLabel === 'function' ? emptyLabel(activeCategoryId) : emptyLabel
   return (
     <ComposerPrimitive.Unstable_TriggerPopoverItems>
       {(items) => (
@@ -116,7 +121,9 @@ const Items: FC<{
                   className="flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-1.5 text-start outline-none transition-colors duration-fast hover:bg-ink-4 data-[highlighted]:bg-ink-4"
                 >
                   <span className="flex w-full min-w-0 items-center gap-2 text-aux font-medium text-ink-fg">
-                    <Icon className="size-3.5 shrink-0 text-coral" />
+                    {renderItemIcon?.(item) ?? (
+                      <Icon className="size-3.5 shrink-0 text-coral" />
+                    )}
                     <span className="truncate">{item.label}</span>
                   </span>
                   {item.description && (
@@ -129,7 +136,7 @@ const Items: FC<{
             })}
             {items.length === 0 && (
               <div className="px-3 py-2 text-aux text-ink-fg-3">
-                {isLoading ? loadingLabel : emptyLabel}
+                {isLoading ? loadingLabel : resolvedEmptyLabel}
               </div>
             )}
           </div>
@@ -146,6 +153,7 @@ const AgentTriggerPopoverImpl: FC<AgentTriggerPopoverProps> = ({
   emptyCategoriesLabel = 'No items',
   emptyItemsLabel = 'No matching items',
   loadingLabel = 'Loading…',
+  renderItemIcon,
   className,
   directive,
   action,
@@ -181,6 +189,7 @@ const AgentTriggerPopoverImpl: FC<AgentTriggerPopoverProps> = ({
         backLabel={backLabel}
         emptyLabel={emptyItemsLabel}
         loadingLabel={loadingLabel}
+        renderItemIcon={renderItemIcon}
       />
     </ComposerPrimitive.Unstable_TriggerPopover>
   )
@@ -192,14 +201,22 @@ export const AgentTriggerPopover = memo(AgentTriggerPopoverImpl) as FC<AgentTrig
 /** Inline @ email-mention chip (coral pill, our tokens). Rendered by LexicalComposerInput for each
  *  inserted directive node; `label` is the email subject. */
 export function AgentDirectiveChip({
+  directiveType,
   label
 }: {
   directiveId: string
   directiveType: string
   label: string
 }): React.JSX.Element {
+  const { t } = useTranslation()
   return (
-    <span className="inline-flex items-baseline gap-1 rounded-md bg-coral/15 px-1.5 py-0.5 text-meta font-medium text-coral">
+    <span
+      className="inline-flex items-baseline gap-1 rounded-md bg-coral/15 px-1.5 py-0.5 text-meta font-medium text-coral"
+      title={t(
+        directiveType === 'agent' ? 'agentView.mention.agentChip' : 'agentView.mention.emailChip',
+        { label }
+      )}
+    >
       <AtSign className="size-3 self-center" />
       <span>{label}</span>
     </span>

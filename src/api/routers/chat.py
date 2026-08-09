@@ -637,6 +637,9 @@ async def chat_config(request: Request):
             "customAgentsEnabled": _hot_bool(
                 env_vals, "MAILAGENT_CUSTOM_AGENTS_ENABLED", cfg.custom_agents_enabled
             ),
+            "customAgentCallEnabled": _hot_bool(
+                env_vals, "MAILAGENT_CUSTOM_AGENT_CALL", True
+            ),
             "chatCompactEnabled": _hot_bool(env_vals, "MAILAGENT_CHAT_COMPACT", True),
             "chatAutoCompactEnabled": _hot_bool(
                 env_vals, "MAILAGENT_CHAT_AUTO_COMPACT", True

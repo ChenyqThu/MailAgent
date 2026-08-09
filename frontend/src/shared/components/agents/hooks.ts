@@ -275,6 +275,27 @@ export function useCustomAgentsEnabled(): boolean {
   return q.data ?? false
 }
 
+/** /chat/config.customAgentCallEnabled（MAILAGENT_CUSTOM_AGENT_CALL，默认 ON）。
+ *  renderer 只用它隐藏 @Agent 入口；gateway 是否注册工具仍由 electron main 的同名 flag 决定。 */
+export function useCustomAgentCallEnabled(): boolean {
+  const q = useQuery({
+    queryKey: qk.chat.config('customAgentCallEnabled'),
+    queryFn: async () => {
+      try {
+        const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+        if (!resp.ok) return false
+        const body = (await resp.json()) as { data?: { customAgentCallEnabled?: unknown } }
+        return body?.data?.customAgentCallEnabled === true
+      } catch {
+        return false
+      }
+    },
+    staleTime: 30_000,
+    retry: false
+  })
+  return q.data ?? false
+}
+
 /** P1 — /chat/config.sessionProvenanceEnabled（MAILAGENT_SESSION_PROVENANCE，默认 ON）。
  *  该 flag 仍由 Electron main 决定 gateway 行为；renderer 只消费 serve-api 对同一 .env 的
  *  main-env-only 热读投影，避免绕过 env:get 白名单直接读取 snapshot。缺字段/不可达时隐藏未读 UI。 */

@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import type { ToolCallMessagePartProps } from '@assistant-ui/react'
 import {
-  Bot,
   CheckCircle2,
   CircleDashed,
   Clock3,
@@ -14,6 +13,7 @@ import {
 import { useTranslation } from 'react-i18next'
 
 import type { AgentRunState, ReportAgentConfig } from '@shared/api/types'
+import { AgentAvatar } from '@shared/components/agents/AgentAvatar'
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
 import {
   projectAgentCallState,
@@ -213,7 +213,7 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
   }, [props.result, args])
 
   useEffect(() => {
-    if (phase !== 'pending' || !args.agent_id) return
+    if (!args.agent_id) return
     let cancelled = false
     fetchAgent(args.agent_id)
       .then((row) => {
@@ -306,7 +306,13 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
     ].filter((item): item is string => item != null)
     return (
       <CardFrame
-        icon={<Bot size={13} />}
+        icon={
+          <AgentAvatar
+            agentId={args.agent_id ?? 'unknown-agent'}
+            config={facts?.avatar}
+            size={16}
+          />
+        }
         title={t('chat.agentCallCard.approvalTitle')}
         phase={phase}
       >
@@ -343,7 +349,17 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
 
   if (phase === 'rejected' || phase === 'expired' || phase === 'error') {
     return (
-      <CardFrame icon={<Bot size={13} />} title={t('chat.agentCallCard.title')} phase={phase}>
+      <CardFrame
+        icon={
+          <AgentAvatar
+            agentId={args.agent_id ?? 'unknown-agent'}
+            config={facts?.avatar}
+            size={16}
+          />
+        }
+        title={t('chat.agentCallCard.title')}
+        phase={phase}
+      >
         <TerminalBanner phase={phase} />
       </CardFrame>
     )
@@ -366,9 +382,7 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
       aria-label={t('chat.agentCallCard.title')}
     >
       <div className="flex items-center gap-2 border-b border-ink-border-soft px-3 py-2">
-        <span className="grid h-5 w-5 shrink-0 place-items-center rounded-md bg-ink-3 text-coral">
-          <Bot size={13} />
-        </span>
+        <AgentAvatar agentId={view.agentId} config={facts?.avatar} size={20} />
         <span className="min-w-0 flex-1 truncate text-aux font-medium text-ink-fg">
           {view.agentTitle}
         </span>

@@ -4,7 +4,7 @@
 
 import { createContext, useContext } from 'react'
 
-import type { SearchHit } from '@shared/api/types'
+import type { ReportAgentConfig, SearchHit } from '@shared/api/types'
 import type { ChatAttachment } from '@shared/lib/chat-attachments'
 import type { ComposerEffortControl } from '@shared/hooks/useComposerEffort'
 import type { ComposerModelOption } from '@shared/hooks/useComposerModels'
@@ -45,6 +45,11 @@ export interface ChatComposerControls {
   mentions: ReadonlyArray<SearchHit>
   onAddMention: (hit: SearchHit) => void
   onRemoveMention: (internalId: number) => void
+  // @ custom-agent mentions are trusted local config metadata. Keep them separate from email mentions:
+  // buildMentionContext resolves every SearchHit through email.body(), which is invalid for agent ids.
+  agentMentions: ReadonlyArray<ReportAgentConfig>
+  onAddAgentMention: (agent: ReportAgentConfig) => void
+  onRemoveAgentMention: (agentId: string) => void
   // C2-② attachments — local text/binary chips. Text content (≤5k chars) is prepended as an untrusted
   // block; binary chips are metadata-only (the model acknowledges but can't read them).
   attachments: ReadonlyArray<ChatAttachment>

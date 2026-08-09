@@ -18,7 +18,12 @@ import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Mail, Settings, X } from 'lucide-react'
 
-import type { ChatBackendKind, ChatSession, SearchHit } from '@shared/api/types'
+import type {
+  ChatBackendKind,
+  ChatSession,
+  ReportAgentConfig,
+  SearchHit
+} from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -29,6 +34,7 @@ import { useSessionModelPreference } from '@shared/hooks/useSessionModelPreferen
 import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-attachments'
 import {
   buildMentionContext,
+  buildAgentMentionEnvelope,
   renderEmailExcerptBlock,
   wrapUntrustedEmailContext
 } from '@shared/lib/mention-context'
@@ -166,6 +172,7 @@ export function AgentConversation({
   const thinkingActive = effort.bodyTier !== undefined && effort.bodyTier !== 'none'
 
   const [mentions, setMentions] = useState<SearchHit[]>([])
+  const [agentMentions, setAgentMentions] = useState<ReportAgentConfig[]>([])
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   // assistant-modal P5 — the modal's removable email context (general session + the current email's body
   // injected at send). INDEPENDENT of `mentions` on purpose: a mention rides a lexical in-field directive
@@ -189,6 +196,12 @@ export function AgentConversation({
   const onRemoveMention = useCallback((internalId: number): void => {
     setMentions((cur) => cur.filter((m) => m.internal_id !== internalId))
   }, [])
+  const onAddAgentMention = useCallback((agent: ReportAgentConfig): void => {
+    setAgentMentions((cur) => (cur.some((item) => item.id === agent.id) ? cur : [...cur, agent]))
+  }, [])
+  const onRemoveAgentMention = useCallback((agentId: string): void => {
+    setAgentMentions((cur) => cur.filter((agent) => agent.id !== agentId))
+  }, [])
   const onAddAttachment = useCallback((attachment: ChatAttachment): void => {
     setAttachments((cur) => [...cur, attachment])
   }, [])
@@ -197,6 +210,7 @@ export function AgentConversation({
   }, [])
   const onConsumeInjected = useCallback((): void => {
     setMentions([])
+    setAgentMentions([])
     setAttachments([])
   }, [])
   // issue #61 Lane 3 (A2) — chips now render from the assistant-ui composer state (fed by the
@@ -225,11 +239,12 @@ export function AgentConversation({
     )
   }, [emailContext, mailApi])
   const buildInjectedContext = useCallback(async (): Promise<string> => {
+    const agentContext = buildAgentMentionEnvelope(agentMentions)
     const emailContextBlock = await buildEmailContextBlock()
     const mentionContext = await buildMentionContext(mentions, mailApi)
     const attachmentContext = buildAttachmentBlock(attachments)
-    return `${emailContextBlock}${attachmentContext}${mentionContext}`
-  }, [buildEmailContextBlock, mentions, mailApi, attachments])
+    return `${agentContext}${emailContextBlock}${attachmentContext}${mentionContext}`
+  }, [agentMentions, buildEmailContextBlock, mentions, mailApi, attachments])
 
   // assistant-modal — keep the modal's default email context pointing at the CURRENTLY active email while
   // the chat is NEW/empty (user: 每次唤出默认带的是当前这封, not the previous one). Re-resolves whenever the
@@ -279,6 +294,9 @@ export function AgentConversation({
       mentions,
       onAddMention,
       onRemoveMention,
+      agentMentions,
+      onAddAgentMention,
+      onRemoveAgentMention,
       attachments,
       onAddAttachment,
       onRemoveAttachment,
@@ -294,6 +312,9 @@ export function AgentConversation({
       mentions,
       onAddMention,
       onRemoveMention,
+      agentMentions,
+      onAddAgentMention,
+      onRemoveAgentMention,
       attachments,
       onAddAttachment,
       onRemoveAttachment,

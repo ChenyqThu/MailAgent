@@ -11,7 +11,36 @@
 // Sibling of chat-attachments.ts (buildAttachmentBlock): same
 // untrusted-content framing, same `---` divider wrapper.
 
-import type { MailApi, SearchHit } from '../api/types'
+import type { MailApi, ReportAgentConfig, SearchHit } from '../api/types'
+
+function escapeXml(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&apos;')
+}
+
+/** Trusted local metadata for explicit @ custom-agent delegation. This block intentionally sits
+ *  outside the untrusted email/attachment fences and is prepended before those contexts. */
+export function buildAgentMentionEnvelope(agents: ReadonlyArray<ReportAgentConfig>): string {
+  if (agents.length === 0) return ''
+  const rows = agents.map((agent) => {
+    const description =
+      agent.description == null ? '' : ` description="${escapeXml(agent.description)}"`
+    return `  <agent id="${escapeXml(agent.id)}" title="${escapeXml(agent.title)}"${description} />`
+  })
+  return [
+    '<mentioned_agents>',
+    ...rows,
+    '</mentioned_agents>',
+    "The user explicitly @-mentioned the agent(s) above. Delegate the user's request to them by",
+    'calling custom_agent_call with the EXACT id attribute as agent_id, and set user_requested: true.',
+    '',
+    ''
+  ].join('\n')
+}
 
 /** Cap each mentioned email's body excerpt at this many characters before
  *  fencing it into the prompt. Matches the attachment content budget class:
