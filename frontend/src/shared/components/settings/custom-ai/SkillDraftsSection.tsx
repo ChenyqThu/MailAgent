@@ -7,7 +7,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import type { SkillDraftSummary } from '@shared/api/types'
 import { toastError } from '@shared/state/toast'
 import { Section } from '../parts/Section'
-import { fetchSkillCreatorEnabled } from './shared'
+import { fetchAgentPluginsEnabled, fetchSkillCreatorEnabled } from './shared'
 
 export function SkillDraftsSection(): React.ReactElement | null {
   const { t } = useTranslation()
@@ -17,13 +17,31 @@ export function SkillDraftsSection(): React.ReactElement | null {
   const [docs, setDocs] = React.useState<Record<string, string>>({})
   const [details, setDetails] = React.useState<Record<string, SkillDraftSummary>>({})
   const [enabled, setEnabled] = React.useState<Record<string, boolean>>({})
+  const [pluginResult, setPluginResult] = React.useState<Awaited<ReturnType<typeof api.chat.importAgentPlugin>> | null>(null)
+  const fileRef = React.useRef<HTMLInputElement>(null)
   const { data: flag } = useQuery({ queryKey: ['chat-config', 'skillCreatorEnabled'], queryFn: fetchSkillCreatorEnabled })
+  const { data: pluginsEnabled } = useQuery({ queryKey: ['chat-config', 'agentPluginsEnabled'], queryFn: fetchAgentPluginsEnabled })
   const { data: drafts = [] } = useQuery<SkillDraftSummary[]>({
     queryKey: ['skill-drafts'],
     queryFn: () => api.chat.listSkillDrafts(),
     enabled: flag === true
   })
   if (flag !== true) return null
+
+  async function importPlugin(file: File): Promise<void> {
+    try {
+      const bytes = new Uint8Array(await file.arrayBuffer())
+      let binary = ''
+      for (const byte of bytes) binary += String.fromCharCode(byte)
+      const result = await api.chat.importAgentPlugin(window.btoa(binary))
+      setPluginResult(result)
+      await qc.invalidateQueries({ queryKey: ['skill-drafts'] })
+    } catch (error) {
+      toastError(t('settings.skillDrafts.pluginImport'), String(error))
+    } finally {
+      if (fileRef.current) fileRef.current.value = ''
+    }
+  }
 
   async function expand(draft: SkillDraftSummary): Promise<void> {
     if (open === draft.id) {
@@ -73,6 +91,24 @@ export function SkillDraftsSection(): React.ReactElement | null {
 
   return (
     <Section title={t('settings.skillDrafts.title')} helper={t('settings.skillDrafts.desc')}>
+      {pluginsEnabled === true ? <div className="border-b border-ink-border-soft px-4 py-3">
+        <input ref={fileRef} type="file" accept=".zip,application/zip" className="hidden" onChange={(event) => {
+          const file = event.target.files?.[0]
+          if (file) void importPlugin(file)
+        }} />
+        <button type="button" className="rounded-md border border-ink-border px-3 py-1.5 text-meta" onClick={() => fileRef.current?.click()}>
+          {t('settings.skillDrafts.pluginImport')}
+        </button>
+        {pluginResult ? <div className="mt-3 space-y-2 text-meta">
+          <div>{pluginResult.plugin.name}</div>
+          {pluginResult.skills.map((item) => <div key={item.path} className={item.status === 'ready' ? 'text-success' : 'text-fail'}>
+            {item.path}: {item.status}{item.errors?.length ? ` — ${item.errors.join('; ')}` : ''}
+          </div>)}
+          {pluginResult.mcpServers.length ? <div className="rounded-md bg-ink-2 p-2 text-ink-fg-2">
+            {t('settings.skillDrafts.mcpDetected', { names: pluginResult.mcpServers.map((item) => item.name).join(', ') })}
+          </div> : null}
+        </div> : null}
+      </div> : null}
       {drafts.length === 0 ? <div className="px-4 py-3 text-aux text-ink-fg-3">{t('settings.skillDrafts.empty')}</div> : drafts.map((draft) => {
         const detail = details[draft.id] ?? draft
         return <div key={draft.id} className="border-b border-ink-border-soft px-4 py-3 last:border-b-0">

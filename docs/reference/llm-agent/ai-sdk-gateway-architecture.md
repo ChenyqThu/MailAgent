@@ -1218,7 +1218,7 @@ Claude Code permission-mode 参照的 owner 级全局审批模式。**08-05 WP-1
 - **acceptEdits 退役收口**：模式值域收窄为 `manual|bypass`（PUT acceptEdits → 400；GET 对脏/存量值 fail-closed 折 manual）；存量 `chat_approval_mode='acceptEdits'` 行由 `store._migrate_additive` **一次性行为保持折算**——15 个成员（`tool_prefs.ACCEPT_EDITS_PRESET`，原 TS 集合的数据归宿）落显式 auto 覆盖 + 模式改回 manual（幂等：折算后判据消失不重跑）。UI 侧：`ApprovalModePicker` 二档 + 菜单底部「按工具调整审批档…」深链；编辑面 = per-tool 三档图标单选（WP-10 UI 语言）+ 按组批量 + 「编辑放行预设」按钮（一键把 15 工具设显式 auto）+ Reset permissions + send 白名单编辑。🔴 **08-06 起这个编辑面在独立的 Connectors 配置台 `/connectors`**（左栏「内置工具」按 `tool_prefs.TOOL_PREF_GROUPS` 功能域分组 → 右栏 `BuiltinDetailPane`，**每个类别默认折叠**）；原 `ToolApprovalSection.tsx` 已删除，设置 → AI「工具审批档」区只剩一张指向配置台的深链卡（同一份数据不在两处都能改）。布局与必须保住的语义见 [`mcp-connectors.md`](./mcp-connectors.md) §13。
 - **测试闸改判台账**（引用 08-05 拍板）：`approval_mode.test.ts` 重写（acceptEdits 两集 pin + BYPASS_STILL_ASK pin 删除；新增 per-tool 梯子/审计/deny/manual-only 套件）；`notion_agent.test.ts` bypass 断言反转 + per-tool 档套件；`approval_mode_global.test.ts` 注入面二档化 + prefs 注入/headless 隔离；`send_approval.test.ts` 白名单套件；`build.test.ts` deny 剔除 + 非 manual 零 diff；agent_eval `rules.py` R5 对 `default_approval:'auto'` 豁免缺卡分支（`test_rules.py` 三探针换默认 ask 工具 + 新增豁免 pin；s4/s6 两条「frozen R5 会标记」断言按新边界改判）。`policy.test.ts` 4×8 矩阵 / headless matrix / exec deny 地板 / guard 链测试**原样全绿**（F §2.6 结构性地板未动）。
 
-## 13.24 Harness 优化 epic P0–P8（2026-08-07/08：plan_update 恢复 + Session 来源 + custom_agent_call 父子会话 + Compact 手动/自动/溢出恢复 + Queued-Input + 多 Trigger v2 + Calendar Trigger + Skill Creator/Trust）
+## 13.24 Harness 优化 epic P0–P9（2026-08-07/09：plan_update 恢复 + Session 来源 + custom_agent_call 父子会话 + Compact 手动/自动/溢出恢复 + Queued-Input + 多 Trigger v2 + Calendar Trigger + Skill Creator/Trust + Agent Plugins）
 
 > 需求真源 = `docs/MailAgent-Harness-Optimization-Final/`（Q1–Q100 + G1–G9 冻结，owner 侧文档、未入库）；epic 台账 = `.trellis/tasks/08-07-harness-optimization-p0-p9/`（prd + 十份阶段 brief）。各阶段独立 flag、默认全 ON、显式 false 应急回退（off 形态有测试断言）；G1–G9 固定常量（180s / 24h / 2h / 0.25·64K 压缩目标 / 只读 Plan 卡等）**不做配置**。
 
@@ -1334,3 +1334,11 @@ Run active（含审批等待）时 Enter 入队不发请求；Run 真正 onFinis
 - **flag**：双载体（Node envBool `ai_gateway_lifecycle.ts` 注册面 + Python 热读 `src/skills/flags.py::skill_creator_enabled` 管端点/投影/evaluate 第四闸 + `/chat/config.skillCreatorEnabled` 投影 renderer）；登记三件套齐（CROSS_LANGUAGE_FLAGS + .env.example + orphans baseline）。off 语义：6 工具不注册 / drafts+trust 端点 404 / 投影无 skill_creator / UI 两区不渲染 / 第四闸跳过（回 P8 前 headless 语义）；**表 DDL、floor deny、E_SKILL_DRAFT 文案不受 flag 控制**。
 
 验收基线（2026-08-08 主 session 本机，R1+R2 终态）：pytest 全集 6601 passed / vitest 全量 371 文件 4557 passed（1 skipped 预存）/ typecheck 0 / agent_eval 153 passed。
+
+#### 13.24.10 P9 Agent Plugins
+
+`MAILAGENT_AGENT_PLUGINS` 默认 ON、Python 热读单载体；`/chat/config.agentPluginsEnabled` 仅作 renderer 投影。交付包括 Custom Agent JSON 白名单导入/导出与「会前准备」模板，以及 Vercel Agent Plugins 1.0 的 Skill 草稿导入和 Skill/Plugin ZIP 导出。
+
+安全边界保持不变：Plugin Skill 只进入 P8 `.draft` 隔离区，仍须验证、发布与逐版本信任；`mcp.json` 只检测展示，不连接不授权；ZIP 复用 traversal/symlink/100 MiB 解压护栏并增加 15 MiB 上传原包上限；导出重算 package hash，排除 Secret、config、会话、审批规则和绝对路径，同时保留 License/NOTICE。Agent 导入统一经过 `normalize_agent_config_patch`，强制 `enabled=false`，依赖缺失只报告、不安装不授权。
+
+验收基线：plugin manifest、bomb/traversal/symlink、组件独立失败、MCP 只展示、二进制草稿、License/NOTICE、hash mismatch、Agent 白名单/强制关闭/依赖检查/模板、flag-off 五端点与双语 UI 均由 pytest/vitest/typecheck/agent_eval 覆盖。

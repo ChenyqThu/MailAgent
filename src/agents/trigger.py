@@ -730,9 +730,18 @@ def normalize_agent_config_patch(
     agent_type: Optional[str] = None,
 ) -> dict:
     """三写路共用的保存 normalization；仅 custom + flag on 把 trigger 物化为 v2。"""
-    validate_agent_config_patch(patch)
-    if "trigger" in patch and patch.get("trigger") is not None:
-        entries = parse_trigger_set(patch["trigger"])
+    normalized = dict(patch)
+    if (
+        trigger_v2_enabled()
+        and agent_type == "custom"
+        and patch.get("trigger") is not None
+    ):
+        normalized["trigger"] = normalize_trigger_patch(
+            patch["trigger"], stored_trigger=stored_trigger
+        )
+    validate_agent_config_patch(normalized)
+    if "trigger" in normalized and normalized.get("trigger") is not None:
+        entries = parse_trigger_set(normalized["trigger"])
         if not calendar_trigger_enabled() and any(
             isinstance(
                 entry.trigger,
@@ -743,13 +752,4 @@ def normalize_agent_config_patch(
             raise TriggerValidationError(
                 "calendar triggers are disabled by MAILAGENT_CALENDAR_TRIGGER"
             )
-    normalized = dict(patch)
-    if (
-        trigger_v2_enabled()
-        and agent_type == "custom"
-        and patch.get("trigger") is not None
-    ):
-        normalized["trigger"] = normalize_trigger_patch(
-            patch["trigger"], stored_trigger=stored_trigger
-        )
     return normalized

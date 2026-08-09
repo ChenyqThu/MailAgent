@@ -9,12 +9,14 @@ Bearer（Bearer 是 ``/api/skills`` 的外部 agent 通道，agent 改自身配�
 
 from __future__ import annotations
 
+import base64
+import binascii
 import json
 import os
 import uuid
 from typing import Any, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Query, Request, Response
 from loguru import logger
 
 from src.agent_config.projections import (
@@ -537,6 +539,15 @@ def _require_skill_creator() -> None:
         )
 
 
+def _require_agent_plugins() -> None:
+    from src.skills.flags import agent_plugins_enabled
+
+    if not agent_plugins_enabled():
+        raise APIError(
+            "E_NOT_FOUND", "agent plugins feature is disabled", http_status=404, source="sqlite"
+        )
+
+
 def _draft_dict(row: Any, *, include_tree: bool = False) -> dict[str, Any]:
     payload = {
         "id": row.id,
@@ -564,6 +575,44 @@ def _pack_api_error(exc: Exception) -> APIError:
     if isinstance(exc, PackError):
         return APIError(exc.code, exc.message, http_status=exc.http_status, source="sqlite")
     return APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite")
+
+
+@router.post("/skills/plugin/import", dependencies=[Depends(verify_cf_access)])
+async def import_agent_plugin(request: Request, body: Optional[dict[str, Any]] = None):
+    _require_agent_plugins()
+    raw = body or {}
+    local_path = raw.get("localPath")
+    zip_base64 = raw.get("zipBase64")
+    if (isinstance(local_path, str)) == (isinstance(zip_base64, str)):
+        raise APIError("E_INVALID_ARG", "provide exactly one of localPath or zipBase64", http_status=400, source="sqlite")
+    try:
+        zip_bytes = base64.b64decode(zip_base64, validate=True) if isinstance(zip_base64, str) else None
+    except (binascii.Error, ValueError) as exc:
+        raise APIError("E_INVALID_ARG", "zipBase64 is invalid", http_status=400, source="sqlite") from exc
+    try:
+        from src.skills.plugin_import import import_plugin
+
+        result = import_plugin(local_path=local_path, zip_bytes=zip_bytes)
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    return success_envelope(result, request=request, source="sqlite")
+
+
+@router.get("/skills/{name}/export", dependencies=[Depends(verify_cf_access)])
+async def export_agent_skill(name: str, format: str = Query("skill")):
+    _require_agent_plugins()
+    try:
+        from src.skills.plugin_export import export_skill
+
+        payload = export_skill(name, format=format)
+    except Exception as exc:  # noqa: BLE001
+        raise _pack_api_error(exc) from exc
+    suffix = "plugin" if format == "plugin" else "skill"
+    return Response(
+        content=payload,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}-{suffix}.zip"'},
+    )
 
 
 @router.get("/skills/drafts", dependencies=[Depends(verify_cf_access)])

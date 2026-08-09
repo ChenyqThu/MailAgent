@@ -118,6 +118,7 @@ class SkillPackageManifest(BaseModel):
     # 占位不实现验签（S2 无发布方生态 / 密钥分发；字段先占位避免 v3 再迁移）。
     signature: Optional[str] = None
     publisher: Optional[str] = None
+    license: Optional[str] = None
     tools: list[dict[str, Any]] = Field(default_factory=list)
 
     # 供应链 manifest 应严格：拒未知字段（防投毒经额外字段夹带被下游误读）。

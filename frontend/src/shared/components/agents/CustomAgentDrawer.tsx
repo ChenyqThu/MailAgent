@@ -46,13 +46,14 @@ import {
 } from '@shared/components/ui/select'
 import { Drawer } from '@shared/components/ui/drawer'
 import { StatefulButton } from '@shared/components/ui/stateful-button'
-import { useEnabledModels } from '@shared/hooks/useLlmModels'
+import { resolveApiBaseUrl, useEnabledModels } from '@shared/hooks/useLlmModels'
 import {
   useConnectorOptions,
   useCreateAgent,
   useDeleteAgent,
   useOpennessFlags,
   useSetConfig,
+  useAgentPluginsEnabled,
   useCalendarTriggerEnabled,
   useTriggerV2Enabled,
   useToolOptions
@@ -154,6 +155,7 @@ export function CustomAgentDrawer({
   const { models: enabledModels } = useEnabledModels()
   const triggerV2Enabled = useTriggerV2Enabled()
   const calendarTriggerEnabled = useCalendarTriggerEnabled()
+  const agentPluginsEnabled = useAgentPluginsEnabled()
   // 工具清单只在抽屉打开时拉（后端权威 defaults；端点未就绪 → 空 → 提示）。
   const { options: toolOptions } = useToolOptions(open)
   // R3 — openness flag 分面（webToolsEnabled/execToolsEnabled），驱动「额外能力」区禁用提示。
@@ -719,6 +721,24 @@ export function CustomAgentDrawer({
       .catch((e: unknown) => setErr(errText(e)))
   }
 
+  const onExport = (): void => {
+    if (!cfg) return
+    setErr(null)
+    void fetch(`${resolveApiBaseUrl()}/report-agents/${encodeURIComponent(cfg.id)}/export`, { credentials: 'include' })
+      .then(async (response) => {
+        const envelope = (await response.json()) as { data?: unknown; error?: { message?: string } }
+        if (!response.ok || !envelope.data) throw new Error(envelope.error?.message ?? response.statusText)
+        const url = URL.createObjectURL(new Blob([JSON.stringify(envelope.data, null, 2)], { type: 'application/json' }))
+        const anchor = document.createElement('a')
+        const slug = (cfg.title || cfg.id).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || cfg.id
+        anchor.href = url
+        anchor.download = `agent-${slug}.json`
+        anchor.click()
+        URL.revokeObjectURL(url)
+      })
+      .catch((error: unknown) => setErr(errText(error)))
+  }
+
   // UTC 置顶 + 全 IANA 时区（去重 UTC，防 SelectItem key 撞）。
   const tzOptions = ['UTC', ...Intl.supportedValuesOf('timeZone').filter((z) => z !== 'UTC')]
 
@@ -1272,6 +1292,11 @@ export function CustomAgentDrawer({
               {t('agents.search.delete')}
             </button>
           ))}
+        {!create && cfg?.type === 'custom' && agentPluginsEnabled ? (
+          <button type="button" onClick={onExport} className="btn-ghost" style={{ fontFamily: 'inherit' }}>
+            {t('agents.custom.export')}
+          </button>
+        ) : null}
         <span style={{ flex: 1 }} />
         <button
           type="button"

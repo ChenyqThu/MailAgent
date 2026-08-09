@@ -3,7 +3,8 @@
 // 移植自 ~/Downloads/agents/agents-tab.jsx，接 report:getConfig/setConfig/runNow。
 // 配置抽屉（Config/Search/Preprocess/ProjectProgress）已机械抽到 ./drawers；本文件保留概览卡
 // 与 tab 装配，抽屉经 import 组合渲染。
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 
 import type { ReportAgentConfig } from '@shared/api/types'
@@ -12,7 +13,9 @@ import { CustomAgentDrawer, RunStateBadge } from './CustomAgentDrawer'
 import { AgentPendingCountBadge, PendingDot } from './AgentPendingBadge'
 import {
   useAgentPendingCount,
+  useAgentPluginsEnabled,
   useAgentUnreadCount,
+  useCalendarTriggerEnabled,
   useAgentRuns,
   useCustomAgentsEnabled,
   useSessionProvenanceEnabled,
@@ -33,6 +36,7 @@ import { ProjectProgressConfigDrawer } from './drawers/ProjectProgressConfigDraw
 import { AgentAvatar } from './AgentAvatar'
 import { coerceRule, isScheduleValue } from './schedule'
 import { sentenceText } from './schedule/sentence'
+import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
 import { formatCalendarLead } from './custom-agent/shared'
 
 function scheduleText(
@@ -936,6 +940,35 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   >(null)
   // S5 — MAILAGENT_CUSTOM_AGENTS_ENABLED（/chat/config 热读）；控 NewAgentTile 可点性。
   const customAgentsEnabled = useCustomAgentsEnabled()
+  const agentPluginsEnabled = useAgentPluginsEnabled()
+  const calendarTriggerEnabled = useCalendarTriggerEnabled()
+  const queryClient = useQueryClient()
+  const importRef = useRef<HTMLInputElement>(null)
+  const [importNotice, setImportNotice] = useState<string | null>(null)
+  async function importAgent(body: Record<string, unknown>): Promise<void> {
+    try {
+      const response = await fetch(`${resolveApiBaseUrl()}/report-agents/import`, {
+        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+      })
+      const envelope = (await response.json()) as { data?: { agent?: ReportAgentConfig; unmet_dependencies?: Array<{ type: string; ref: string }> }; error?: { message?: string } }
+      if (!response.ok || !envelope.data?.agent) throw new Error(envelope.error?.message ?? response.statusText)
+      await queryClient.invalidateQueries({ queryKey: ['report', 'config'] })
+      const unmet = envelope.data.unmet_dependencies ?? []
+      setImportNotice(unmet.length ? t('agents.custom.unmetDependencies', { items: unmet.map((item) => `${item.type}: ${item.ref}`).join(', ') }) : null)
+      setCustomDrawer({ mode: 'edit', id: envelope.data.agent.id })
+    } catch (error) {
+      toastError(t('agents.custom.import'), errorMessage(error))
+    }
+  }
+  async function importAgentFile(file: File): Promise<void> {
+    try {
+      await importAgent({ payload: JSON.parse(await file.text()) as unknown })
+    } catch (error) {
+      toastError(t('agents.custom.import'), errorMessage(error))
+    } finally {
+      if (importRef.current) importRef.current.value = ''
+    }
+  }
   // 红点链 ③（P5）：Custom AI Agents 区 header dot（全局待审批 total>0）。flag off → 不轮询 → total 0。
   const customPendingTotal = useAgentPendingCount(customAgentsEnabled).total
   // v27 — AI 邮件预处理配置抽屉开合（后端播种单行，只编辑、无新建）。
@@ -1248,6 +1281,16 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
             enabled={customAgentsEnabled}
             onClick={() => setCustomDrawer({ mode: 'create' })}
           />
+          {customAgentsEnabled && agentPluginsEnabled ? <div className="flex flex-wrap items-center gap-2">
+            <input ref={importRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => {
+              const file = event.target.files?.[0]
+              if (file) void importAgentFile(file)
+            }} />
+            <button type="button" className="btn-ghost" onClick={() => importRef.current?.click()}>{t('agents.custom.import')}</button>
+            <button type="button" className="btn-ghost" onClick={() => void importAgent({ template: 'meeting_prep' })}>{t('agents.custom.meetingPrepTemplate')}</button>
+            {!calendarTriggerEnabled ? <span className="text-meta text-warn">{t('agents.custom.calendarRequired')}</span> : null}
+            {importNotice ? <div className="w-full text-meta text-warn">{importNotice}</div> : null}
+          </div> : null}
         </div>
       </div>
       {/* 始终挂载，由 open 驱动进/退场动画（退场播完才卸载，见 useExitAnimation）。 */}

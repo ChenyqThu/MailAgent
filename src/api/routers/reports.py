@@ -44,6 +44,15 @@ def _custom_agents_enabled() -> bool:
         return False
 
 
+def _require_agent_plugins() -> None:
+    from src.skills.flags import agent_plugins_enabled
+
+    if not agent_plugins_enabled():
+        raise APIError(
+            "E_NOT_FOUND", "agent plugins feature is disabled", http_status=404, source="sqlite"
+        )
+
+
 # ============================================================
 # report 产物（读 + 删）
 # ============================================================
@@ -242,6 +251,35 @@ async def create_agent(request: Request, body: Optional[dict[str, Any]] = None):
     if create_patch:
         agent = store.update_agent(agent_id, create_patch) or agent
     return success_envelope(wire.resolve_agent(agent), request=request, source="sqlite")
+
+
+@router.post("/report-agents/import", dependencies=[Depends(verify_cf_access)])
+async def import_agent(request: Request, body: Optional[dict[str, Any]] = None):
+    _require_agent_plugins()
+    if not _custom_agents_enabled():
+        raise APIError("E_NOT_FOUND", "custom agents feature is disabled", http_status=404, source="sqlite")
+    from src.agents.plugin_compat import import_custom_agent
+
+    try:
+        result = import_custom_agent(body or {}, get_report_store())
+    except KeyError as exc:
+        raise APIError("E_NOT_FOUND", f"unknown agent template: {exc.args[0]}", http_status=404, source="sqlite") from exc
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite") from exc
+    return success_envelope(result, request=request, source="sqlite")
+
+
+@router.get("/report-agents/{agent_id}/export", dependencies=[Depends(verify_cf_access)])
+async def export_agent(request: Request, agent_id: str):
+    _require_agent_plugins()
+    if not _custom_agents_enabled():
+        raise APIError("E_NOT_FOUND", "custom agents feature is disabled", http_status=404, source="sqlite")
+    row = get_report_store().get_agent(agent_id)
+    if row is None or row.get("type") != "custom":
+        raise APIError("E_NOT_FOUND", f"custom agent {agent_id!r} not found", http_status=404, source="sqlite")
+    from src.agents.plugin_compat import export_custom_agent
+
+    return success_envelope(export_custom_agent(row), request=request, source="sqlite")
 
 
 @router.put("/report-agents/{agent_id}", dependencies=[Depends(verify_cf_access)])

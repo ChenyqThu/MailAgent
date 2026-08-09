@@ -2111,7 +2111,9 @@
       "networkMode": "网络模式快照",
       "secretNames": "Secret 名称",
       "trustVersion": "信任此版本",
-      "revokeTrust": "撤销"
+      "revokeTrust": "撤销",
+      "exportSkill": "导出 Skill",
+      "exportPlugin": "导出为 Plugin"
     },
     "skillDrafts": {
       "title": "技能草稿",
@@ -2122,7 +2124,9 @@
       "publish": "发布",
       "discard": "丢弃",
       "publishConfirm": "发布 {name}？发布后启用：{enabled}",
-      "discardConfirm": "丢弃 {name}？"
+      "discardConfirm": "丢弃 {name}？",
+      "pluginImport": "导入 Agent Plugin",
+      "mcpDetected": "检测到 MCP Server：{names}，当前版本暂未导入"
     },
     "anchorNav": {
       "ariaLabel": "本页区块导航"
@@ -4239,6 +4243,11 @@
       }
     },
     "custom": {
+      "import": "导入 Agent",
+      "export": "导出",
+      "meetingPrepTemplate": "用模板创建：会前准备",
+      "calendarRequired": "需启用日历同步",
+      "unmetDependencies": "未满足依赖：{items}",
       "section": "完全自定义 Agent",
       "sectionHint": "自定义触发（定时 / 邮件事件）、任务提示词、可用工具与预算，让 Agent 自动跑起来。",
       "newTitle": "新建自定义 Agent",

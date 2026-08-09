@@ -115,3 +115,14 @@ export async function fetchSkillCreatorEnabled(): Promise<boolean> {
     return false
   }
 }
+
+export async function fetchAgentPluginsEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return false
+    const body = (await resp.json()) as { data?: { agentPluginsEnabled?: unknown } }
+    return body?.data?.agentPluginsEnabled === true
+  } catch {
+    return false
+  }
+}

@@ -2111,7 +2111,9 @@
       "networkMode": "Network mode snapshot",
       "secretNames": "Secret names",
       "trustVersion": "Trust this version",
-      "revokeTrust": "Revoke"
+      "revokeTrust": "Revoke",
+      "exportSkill": "Export Skill",
+      "exportPlugin": "Export as Plugin"
     },
     "skillDrafts": {
       "title": "Skill drafts",
@@ -2122,7 +2124,9 @@
       "publish": "Publish",
       "discard": "Discard",
       "publishConfirm": "Publish {name}? Enabled after publish: {enabled}",
-      "discardConfirm": "Discard {name}?"
+      "discardConfirm": "Discard {name}?",
+      "pluginImport": "Import Agent Plugin",
+      "mcpDetected": "Detected MCP Servers: {names}. This version does not import them yet."
     },
     "anchorNav": {
       "ariaLabel": "Sections on this page"
@@ -4239,6 +4243,11 @@
       }
     },
     "custom": {
+      "import": "Import Agent",
+      "export": "Export",
+      "meetingPrepTemplate": "Create from template: Meeting prep",
+      "calendarRequired": "Calendar sync must be enabled",
+      "unmetDependencies": "Unmet dependencies: {items}",
       "section": "Custom Agents",
       "sectionHint": "Define triggers (schedule / email events), a task prompt, allowed tools and budgets to let an agent run on its own.",
       "newTitle": "New Custom Agent",

@@ -15,6 +15,7 @@
 import { request } from './http_client'
 import type {
   AgentProfileDoc,
+  AgentPluginImportResult,
   AgentProfileHistoryEntry,
   ChatAnchorType,
   ChatApi,
@@ -283,6 +284,10 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
 
     async discardSkillDraft(id: string): Promise<void> {
       await request(baseUrl, 'POST', `/agent/skills/drafts/${encodeURIComponent(id)}/discard`, { body: {} })
+    },
+
+    async importAgentPlugin(zipBase64: string): Promise<AgentPluginImportResult> {
+      return request(baseUrl, 'POST', '/agent/skills/plugin/import', { body: { zipBase64 } })
     },
 
     async listSkillTrust(name: string): Promise<{ currentPackageHash: string | null; trusts: SkillTrustRule[] }> {

@@ -422,6 +422,21 @@ export interface SkillDraftSummary {
   updatedAt: number
 }
 
+export interface AgentPluginImportResult {
+  plugin: { name: string; version?: string; source: string }
+  skills: Array<{
+    path: string
+    status: 'ready' | 'invalid' | 'unsupported'
+    draftId?: string
+    errors?: string[]
+  }>
+  mcpServers: Array<{
+    name: string
+    status: 'detected_not_imported' | 'invalid'
+    errors?: string[]
+  }>
+}
+
 export interface SkillTrustRule {
   id: string
   skillName: string
@@ -751,6 +766,7 @@ export interface ChatApi {
   readSkillDraftFile(id: string, path: string): Promise<string>
   publishSkillDraft(id: string, enabled: boolean): Promise<void>
   discardSkillDraft(id: string): Promise<void>
+  importAgentPlugin(zipBase64: string): Promise<AgentPluginImportResult>
   listSkillTrust(name: string): Promise<{ currentPackageHash: string | null; trusts: SkillTrustRule[] }>
   grantSkillTrust(name: string, entrypoint: string, policy: SkillTrustRule['policy']): Promise<SkillTrustRule>
   revokeSkillTrust(name: string, trustId: string): Promise<void>

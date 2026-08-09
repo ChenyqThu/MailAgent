@@ -44,6 +44,10 @@ the normal workflow.
   the request.
 - Email event: collect at least one sender, subject, or folder condition. Never invent a broad match
   when the user has not supplied one.
+- Calendar change (`calendar_event_change`): runs when matching event business fields change; key
+  filters are `title_pattern`, `organizer_pattern`, `attendee_pattern`, and `calendar_ids`.
+- Before start (`calendar_before_start`): runs at event start minus `lead_seconds`, optionally using
+  the same filters; lead time must be from 60 seconds through 30 days (2,592,000 seconds).
 
 ## Safety floors
 

@@ -339,6 +339,7 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # S2 W4b — Settings「Skill 安装」区显隐 flag（MAILAGENT_OPENNESS_SKILL_INSTALL，E3 cutover 默认 ON）。
             "skillInstallEnabled": True,
             "skillCreatorEnabled": True,
+            "agentPluginsEnabled": True,
         # S5 — Custom AI Agents 入口显隐 flag（MAILAGENT_CUSTOM_AGENTS_ENABLED，E3 cutover 默认 ON；
         # 此处跟随 stub.custom_agents_enabled=True）。
         "customAgentsEnabled": True,

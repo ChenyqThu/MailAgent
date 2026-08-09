@@ -119,6 +119,23 @@ function mockFlag(enabled: boolean): void {
   }) as unknown as typeof fetch
 }
 
+function mockPluginFlags(agentPluginsEnabled: boolean): void {
+  global.fetch = vi.fn().mockResolvedValue({
+    ok: true,
+    json: async () => ({
+      data: {
+        customAgentsEnabled: true,
+        agentPluginsEnabled,
+        calendarTriggerEnabled: true,
+        triggerV2Enabled: true,
+        connectorToolsEnabled: true,
+        webToolsEnabled: true,
+        execToolsEnabled: true
+      }
+    })
+  }) as unknown as typeof fetch
+}
+
 function makeCustomCfg(over: Partial<ReportAgentConfig> = {}): ReportAgentConfig {
   return {
     id: 'dms_helper',
@@ -1739,5 +1756,84 @@ describe('RunStateBadge — 9 状态穷举渲染', () => {
   test.each(cases)('state=%s → 徽标 "%s"', (state, label) => {
     renderUi(<RunStateBadge state={state} />)
     expect(screen.getByText(label)).toBeTruthy()
+  })
+})
+
+describe('P9 Agent Plugins UI', () => {
+  test('AgentsTab renders import and meeting template entries only when flag is on', async () => {
+    mockPluginFlags(true)
+    mockGetConfig.mockResolvedValue([])
+    const { unmount } = renderUi(<AgentsTab onOpenReports={() => {}} />)
+    expect(await screen.findByText('导入 Agent')).toBeTruthy()
+    expect(screen.getByText('用模板创建：会前准备')).toBeTruthy()
+    unmount()
+
+    mockPluginFlags(false)
+    renderUi(<AgentsTab onOpenReports={() => {}} />)
+    await screen.findByText('新建自定义 Agent')
+    expect(screen.queryByText('导入 Agent')).toBeNull()
+    expect(screen.queryByText('用模板创建：会前准备')).toBeNull()
+  })
+
+  test('meeting template import surfaces unmet dependency refs', async () => {
+    const cfg = makeCustomCfg()
+    mockGetConfig.mockResolvedValue([cfg])
+    global.fetch = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input)
+      if (url.endsWith('/report-agents/import') && init?.method === 'POST') {
+        return new Response(JSON.stringify({
+          status: 'success',
+          schema_version: 1,
+          data: {
+            agent: cfg,
+            enabled_forced_off: true,
+            unmet_dependencies: [
+              { type: 'skill', ref: 'calendar' },
+              { type: 'connector', ref: 'caldav' }
+            ]
+          }
+        }), { status: 200, headers: { 'content-type': 'application/json' } })
+      }
+      return new Response(JSON.stringify({
+        status: 'success',
+        schema_version: 1,
+        data: {
+          customAgentsEnabled: true,
+          agentPluginsEnabled: true,
+          calendarTriggerEnabled: true,
+          triggerV2Enabled: true,
+          connectorToolsEnabled: true,
+          webToolsEnabled: true,
+          execToolsEnabled: true
+        }
+      }), { status: 200, headers: { 'content-type': 'application/json' } })
+    }) as typeof fetch
+
+    renderUi(<AgentsTab onOpenReports={() => {}} />)
+    fireEvent.click(await screen.findByText('用模板创建：会前准备'))
+    expect(await screen.findByText(/未满足依赖：skill: calendar, connector: caldav/)).toBeTruthy()
+    const importCall = vi.mocked(global.fetch).mock.calls.find(([input]) => String(input).endsWith('/report-agents/import'))
+    expect(importCall?.[1]).toMatchObject({
+      method: 'POST',
+      credentials: 'include',
+      body: JSON.stringify({ template: 'meeting_prep' })
+    })
+  })
+
+  test('CustomAgentDrawer export is limited to edit custom mode with flag on', async () => {
+    mockPluginFlags(true)
+    const first = renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    expect(await screen.findByText('导出')).toBeTruthy()
+    first.unmount()
+
+    renderUi(<CustomAgentDrawer cfg={null} open create onClose={() => {}} />)
+    await screen.findByText('创建')
+    expect(screen.queryByText('导出')).toBeNull()
+    cleanup()
+
+    mockPluginFlags(false)
+    renderUi(<CustomAgentDrawer cfg={makeCustomCfg()} open onClose={() => {}} />)
+    await screen.findByText('保存')
+    expect(screen.queryByText('导出')).toBeNull()
   })
 })

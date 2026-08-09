@@ -172,6 +172,42 @@ def write_draft_file(
     return {"path": relpath.replace(os.sep, "/"), "bytes": len(encoded)}
 
 
+def import_file_into_draft(
+    draft_id: str,
+    relpath: str,
+    data: bytes,
+    *,
+    store: Optional[AgentConfigStore] = None,
+) -> dict[str, Any]:
+    """Import arbitrary bytes through the same draft containment and quota guards."""
+    store = store or get_agent_config_store()
+    row = store.get_skill_draft(draft_id)
+    if row is None:
+        raise PackError("E_NOT_FOUND", f"skill draft not found: {draft_id}", http_status=404)
+    _require_mutable(row)
+    if not isinstance(data, bytes):
+        raise PackError("E_INVALID_ARG", "draft import data must be bytes", http_status=400)
+    if len(data) > MAX_DRAFT_FILE_BYTES:
+        raise PackError("E_DRAFT_LIMIT", "draft file exceeds 1 MiB", http_status=413)
+    if os.path.normpath(relpath) == "manifest.json":
+        raise PackError("E_INVALID_ARG", "manifest.json must use write_draft_file", http_status=400)
+    content_dir = draft_content_dir(draft_id)
+    _assert_no_escape(content_dir)
+    target = _reject_member_path(relpath, content_dir)
+    existing_size = os.path.getsize(target) if os.path.isfile(target) else 0
+    file_count, total_bytes = _tree_stats(content_dir)
+    if not os.path.isfile(target) and file_count >= MAX_DRAFT_FILES:
+        raise PackError("E_DRAFT_LIMIT", "draft exceeds 200 files", http_status=413)
+    if total_bytes - existing_size + len(data) > MAX_DRAFT_TOTAL_BYTES:
+        raise PackError("E_DRAFT_LIMIT", "draft exceeds 10 MiB", http_status=413)
+    os.makedirs(os.path.dirname(target), exist_ok=True)
+    with open(target, "wb") as handle:
+        handle.write(data)
+    _assert_no_escape(content_dir)
+    store.update_skill_draft(draft_id, status="draft", validation=None)
+    return {"path": relpath.replace(os.sep, "/"), "bytes": len(data)}
+
+
 def delete_draft_file(
     draft_id: str, relpath: str, *, store: Optional[AgentConfigStore] = None
 ) -> bool:

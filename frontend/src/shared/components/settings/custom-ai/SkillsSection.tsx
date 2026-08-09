@@ -22,7 +22,7 @@ import { CollapseChevron, CollapsibleRegion } from '@shared/components/ui/collap
 import { Section } from '../parts/Section'
 import { Row } from '../parts/Row'
 import { NotionAgentSkillConfig } from './NotionAgentSkillConfig'
-import { fetchSkillCreatorEnabled, useEnvFlagIntent } from './shared'
+import { fetchAgentPluginsEnabled, fetchSkillCreatorEnabled, resolveApiBaseUrl, useEnvFlagIntent } from './shared'
 
 // task 07-21 — skills that carry an inline per-skill config panel in their row's expand area. Today
 // only notion_agent (bind agent / default model / doctor, moved out of 设置-AI). A row NOT listed
@@ -105,6 +105,7 @@ function SkillTrustPanel({ skill }: { skill: SkillSummary }): React.ReactElement
   const api = useMailApi()
   const qc = useQueryClient()
   const { data: enabled } = useQuery({ queryKey: ['chat-config', 'skillCreatorEnabled'], queryFn: fetchSkillCreatorEnabled })
+  const { data: pluginsEnabled } = useQuery({ queryKey: ['chat-config', 'agentPluginsEnabled'], queryFn: fetchAgentPluginsEnabled })
   const { data: entrypoints = [] } = useQuery({ queryKey: ['skill-entrypoints'], queryFn: () => api.chat.listSkillEntrypoints(), enabled: enabled === true })
   const { data: trust } = useQuery({
     queryKey: ['skill-trust', skill.name],
@@ -144,7 +145,21 @@ function SkillTrustPanel({ skill }: { skill: SkillSummary }): React.ReactElement
       qc.invalidateQueries({ queryKey: qk.skills() })
     ])
   }
+  async function download(format: 'skill' | 'plugin'): Promise<void> {
+    const response = await fetch(`${resolveApiBaseUrl()}/agent/skills/${encodeURIComponent(skill.name)}/export?format=${format}`, { credentials: 'include' })
+    if (!response.ok) throw new Error(await response.text())
+    const url = URL.createObjectURL(await response.blob())
+    const anchor = document.createElement('a')
+    anchor.href = url
+    anchor.download = `${skill.name}-${format}.zip`
+    anchor.click()
+    URL.revokeObjectURL(url)
+  }
   return <div className="space-y-2 border-t border-ink-border-soft px-4 py-3 text-meta">
+    {pluginsEnabled === true && skill.installDir ? <div className="flex gap-2">
+      <button type="button" className="rounded-md border border-ink-border px-2 py-1" onClick={() => void download('skill')}>{t('settings.skills.exportSkill')}</button>
+      <button type="button" className="rounded-md border border-ink-border px-2 py-1" onClick={() => void download('plugin')}>{t('settings.skills.exportPlugin')}</button>
+    </div> : null}
     <div>{t('settings.skills.currentHash')}: <code>{trust?.currentPackageHash?.slice(0, 12) ?? '—'}</code></div>
     <select value={entrypoint} onChange={(event) => setSelected(event.target.value)} className="w-full rounded-md border border-ink-border bg-ink-1 px-2 py-1">
       {(candidates?.files ?? []).map((file) => {
