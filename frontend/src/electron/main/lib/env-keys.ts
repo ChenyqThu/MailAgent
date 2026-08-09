@@ -162,7 +162,7 @@ export const MANAGED_ENV_KEYS = [
   // — 联网能力开关 (task 07-07 R4a)。原为 main-env-only flag（gateway 启动 envBool 读一次,
   // ai_gateway_lifecycle.ts webToolsEnabled）→ Settings 系统能力区「联网」卡改真开关后纳入白名单,
   // 好让用户从 UI 开关 web_fetch/web_search。默认 ON（E3 cutover），显式 false 应急回退。
-  // restart-required（gateway 启动读一次，翻它须重启后端才生效; EnvField/开关标 markRestartRequired）。
+  // gateway 启动读一次；翻它需退出重开 App，mail-sync 重启横幅对此无效。
   // 非 secret（普通 boolean flag）。
   'MAILAGENT_OPENNESS_WEB_TOOLS',
 
@@ -173,6 +173,17 @@ export const MANAGED_ENV_KEYS = [
   // (gateway 启动读一次)。非 secret。🔴 总闸 MAILAGENT_IM_FEISHU **有意不在册** ——
   // 灰度期由 env 手动管理 (双载体, 翻它要同时重启 serve 与 app), UI 只显示状态不给开关。
   'MAILAGENT_IM_WEB_ENABLED',
+
+  // — Labs 默认 OFF 灰度 flag。cutover 默认 ON 后须从 Labs 撤条目。
+  // 外部 MCP 连接器：Python serve-api + Electron gateway 双载体；完整生效需重启 serve/
+  // serve-api 并退出重开 App。Labs 行内按钮只负责两路后端重启，App 侧按文案手动重开。
+  'MAILAGENT_MCP_CONNECTORS',
+  // 技能目录注入系统提示：Electron gateway 单载体，默认 OFF；需退出重开 App。
+  'MAILAGENT_SKILL_CATALOG_PROMPT',
+  // 五层记忆自动整理：Python pydantic 启动读取，默认 OFF；需重启后端。
+  'MAILAGENT_MEMORY_LAYERS',
+  // AG-UI 镜像端点：Electron gateway 单载体，默认 OFF；需退出重开 App。
+  'MAILAGENT_AG_UI_MIRROR',
 
   // — Notifications (PR D NotificationsTab)
   'FEISHU_NOTIFY_ENABLED',

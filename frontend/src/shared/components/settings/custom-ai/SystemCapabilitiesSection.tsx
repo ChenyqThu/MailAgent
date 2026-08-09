@@ -45,7 +45,6 @@ import {
 
 import { useOpennessFlags, useCustomAgentsEnabled } from '@shared/components/agents/hooks'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
-import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
 import { Switch } from '@shared/components/ui/switch'
 import { Button } from '@shared/components/ui/button'
@@ -157,11 +156,11 @@ function CapabilityHelper({
  *
  *  开关 checked 反映 **.env 意图值**（读 useEnvStore snapshot，非 /chat/config 的 gateway
  *  运行态）——flag 是 gateway 启动 envBool 读一次的 restart-required 值，翻它后 .env 立即变但
- *  gateway 未变；开关跟随 .env 意图 + markRestartRequired 拉起全局重启横幅即可。envBool 语义镜像
+ *  gateway 未变；开关跟随 .env 意图。该 flag 只由 Electron gateway 读取，mail-sync 重启横幅
+ *  对它无效，因此只提示退出重开 App，不调用 markRestartRequired。envBool 语义镜像
  *  （ai_gateway_lifecycle.ts:86）：未设（'') → 默认 true（E3 cutover）；否则 lowercased ∈ {1,true}。 */
 export function WebCapabilityRow(): React.ReactElement {
   const { t } = useTranslation()
-  const markRestartRequired = useRestartStore((s) => s.markRestartRequired)
   const envState = useEnvStore((s) => s.state)
   const [submitting, setSubmitting] = React.useState(false)
 
@@ -181,8 +180,6 @@ export function WebCapabilityRow(): React.ReactElement {
     try {
       const result = await applyEnvPatch({ MAILAGENT_OPENNESS_WEB_TOOLS: next ? 'true' : 'false' })
       if (result.ok) {
-        // restart-required：gateway 启动读一次 → 拉起全局重启横幅（同 EnvField.persist）。
-        if (result.changedKeys.length > 0) markRestartRequired(result.changedKeys)
         toastSuccess(t('settings.systemCapabilities.web.title'))
       } else {
         toastError(

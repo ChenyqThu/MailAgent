@@ -2404,7 +2404,7 @@
         "title": "Web access",
         "desc": "Lets the assistant fetch web pages and run web searches (web fetch + web search).",
         "switchLabel": "Enable web access",
-        "restartHint": "Requires a backend restart to take effect.",
+        "restartHint": "Quit and reopen the App for changes to take effect.",
         "tavily": {
           "label": "Tavily API Key",
           "helper": "web_search defaults to DuckDuckGo, which is blocked on mainland-China networks; enter a Tavily API key to switch to Tavily (reachable in China). Separate multiple Tavily keys with commas to auto-rotate when one runs out of quota; leave empty to use DuckDuckGo (unreachable in China). Stored only in the local .env, never returned to the UI. Takes effect on save.",
@@ -2815,7 +2815,49 @@
       "integrations": "Integrations",
       "realtime": "Realtime & Storage",
       "remote": "Remote Access",
-      "island": "Island & Updates"
+      "island": "Island & Updates",
+      "labs": "Labs"
+    },
+    "labs": {
+      "page": {
+        "eyebrow": "LABS",
+        "title": "Labs",
+        "intro": "Manage default-off experimental capabilities that are still under staged validation."
+      },
+      "warning": "Experimental features may be unstable. Once promoted, they move into their regular settings area.",
+      "saved": "Experimental setting saved",
+      "saveFailed": "Failed to save experimental setting",
+      "waitingForRestart": "Waiting for restart",
+      "restart": {
+        "backendCta": "Restart backend",
+        "busy": "Restarting…",
+        "success": "Backend restarted",
+        "failed": "Backend restart failed"
+      },
+      "advanced": {
+        "label": "Advanced experiments",
+        "helper": "Low-level capabilities for protocol compatibility and developer debugging."
+      },
+      "mcpConnectors": {
+        "label": "External service connectors",
+        "helper": "Connect direct Notion / Atlassian services and Composio-managed connectors. When enabled, an external connections section appears under Connections & Tools in the sidebar.",
+        "restartHint": "Restart the backend and quit and reopen the App for the full change to take effect."
+      },
+      "skillCatalogPrompt": {
+        "label": "Skill catalog prompt",
+        "helper": "Inject the skill catalog into the AI system prompt for discoverability, adding about 300 tokens per turn.",
+        "restartHint": "Quit and reopen the App."
+      },
+      "memoryLayers": {
+        "label": "Five-layer memory organization",
+        "helper": "Automatically classifies extracted memories into identity, preferences, context, dynamics, and experience with isolated budgets per layer.",
+        "restartHint": "Restart the backend."
+      },
+      "agUiMirror": {
+        "label": "AG-UI protocol mirror",
+        "helper": "Expose the developer-oriented AG-UI protocol mirror endpoint for compatibility testing and debugging.",
+        "restartHint": "Quit and reopen the App."
+      }
     },
     "accounts": {
       "notion": {

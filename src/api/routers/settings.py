@@ -148,6 +148,15 @@ _MANAGED_ENV_KEYS: List[str] = [
     # （gateway envBool 读一次）→ 设置-AI「飞书对话」区的真开关。默认 OFF；restart-required。
     # 🔴 总闸 MAILAGENT_IM_FEISHU 有意不受管（灰度期 env 手动管理）。镜像 env-keys.ts。
     "MAILAGENT_IM_WEB_ENABLED",
+    # — Labs 默认 OFF 灰度 flag（逐字镜像 env-keys.ts）。
+    # MCP_CONNECTORS = Python serve-api + Electron gateway 双载体；完整生效需后端重启 + App 重开。
+    "MAILAGENT_MCP_CONNECTORS",
+    # Electron gateway 单载体；默认 OFF；需退出重开 App。
+    "MAILAGENT_SKILL_CATALOG_PROMPT",
+    # Python pydantic 启动读取；默认 OFF；需重启后端。
+    "MAILAGENT_MEMORY_LAYERS",
+    # Electron gateway 单载体；默认 OFF；需退出重开 App。
+    "MAILAGENT_AG_UI_MIRROR",
     # — Notifications
     "FEISHU_NOTIFY_ENABLED",
     "FEISHU_APP_ID",

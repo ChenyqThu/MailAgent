@@ -60,3 +60,6 @@ export { BellIcon } from './animated/bell'
 export { BotIcon } from './animated/bot'
 export { WifiIcon } from './animated/wifi'
 export { RadioIcon } from './animated/radio'
+
+// 第五批（Settings Labs）：lucide FlaskConical 静止态 + IconShell tween 微动效。
+export { FlaskConicalIcon } from './animated/flask-conical'

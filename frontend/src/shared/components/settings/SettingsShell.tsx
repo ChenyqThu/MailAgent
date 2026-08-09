@@ -35,6 +35,7 @@ import { AiTab } from './tabs/AiTab'
 import { GeneralTab } from './tabs/GeneralTab'
 import { IntegrationsTab } from './tabs/IntegrationsTab'
 import { IslandUpdatesTab } from './tabs/IslandUpdatesTab'
+import { LabsTab } from './tabs/LabsTab'
 import { NotificationsTab } from './tabs/NotificationsTab'
 import { RealtimeStorageTab } from './tabs/RealtimeStorageTab'
 import { RemoteAccessTab } from './tabs/RemoteAccessTab'
@@ -159,6 +160,9 @@ export function SettingsShell(): React.ReactElement {
             </TabsContent>
             <TabsContent value="island">
               <IslandUpdatesTab />
+            </TabsContent>
+            <TabsContent value="labs">
+              <LabsTab />
             </TabsContent>
           </div>
         </SettingsScrollContext.Provider>

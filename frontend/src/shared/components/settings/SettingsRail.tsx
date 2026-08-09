@@ -20,6 +20,7 @@ import {
   BlocksIcon,
   BotMessageSquareIcon,
   ConnectIcon,
+  FlaskConicalIcon,
   RadioIcon,
   RefreshCwIcon,
   RouteIcon,
@@ -45,7 +46,8 @@ const TAB_ORDER: TabEntry[] = [
   { value: 'integrations', Icon: ConnectIcon, labelKey: 'settings.tabs.integrations' },
   { value: 'realtime', Icon: WifiIcon, labelKey: 'settings.tabs.realtime' },
   { value: 'remote', Icon: RouteIcon, labelKey: 'settings.tabs.remote' },
-  { value: 'island', Icon: RadioIcon, labelKey: 'settings.tabs.island' }
+  { value: 'island', Icon: RadioIcon, labelKey: 'settings.tabs.island' },
+  { value: 'labs', Icon: FlaskConicalIcon, labelKey: 'settings.tabs.labs' }
 ]
 
 /** 单个设置 tab —— 整个 TabsTrigger（含文字区）作为 hover/focus 触发面，经

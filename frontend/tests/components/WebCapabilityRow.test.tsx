@@ -3,7 +3,7 @@
 // task 07-07 R4 — 系统能力区「联网」卡（SystemCapabilitiesSection 的 WebCapabilityRow）。覆盖：
 //   • 真开关 checked 反映 .env 意图值（未设 → 默认 ON；'false' → OFF）——envBool 镜像。
 //   • 开关 ON → 联动渲染 Tavily key（EnvField password）；OFF → 不渲染。
-//   • 拨动开关 → applyEnvPatch 写 MAILAGENT_OPENNESS_WEB_TOOLS + markRestartRequired（restart-required）。
+//   • 拨动开关 → applyEnvPatch 写 MAILAGENT_OPENNESS_WEB_TOOLS，但不误拉只重启 mail-sync 的横幅。
 //   • Tavily reveal：已配置态 placeholder + reveal 切 password↔text。
 //   • Tavily 清除按钮（codex medium fix）：有值时在场 → 点击 applyEnvPatch({TAVILY_API_KEY:null})。
 //
@@ -64,7 +64,7 @@ describe('WebCapabilityRow — 联网真开关 + Tavily key', () => {
     expect(screen.queryByLabelText('Tavily API Key')).toBeNull()
   })
 
-  test('拨动开关 → 写 MAILAGENT_OPENNESS_WEB_TOOLS + 触发重启横幅（restart-required）', async () => {
+  test('拨动开关 → 写 MAILAGENT_OPENNESS_WEB_TOOLS，不触发 mail-sync 重启横幅', async () => {
     mockEnvSet.mockResolvedValue({
       ok: true,
       path: '/tmp/.env',
@@ -77,8 +77,8 @@ describe('WebCapabilityRow — 联网真开关 + Tavily key', () => {
     await waitFor(() =>
       expect(mockEnvSet).toHaveBeenCalledWith({ MAILAGENT_OPENNESS_WEB_TOOLS: 'false' })
     )
-    await waitFor(() => expect(useRestartStore.getState().required).toBe(true))
-    expect(useRestartStore.getState().changedKeys).toContain('MAILAGENT_OPENNESS_WEB_TOOLS')
+    expect(useRestartStore.getState().required).toBe(false)
+    expect(useRestartStore.getState().changedKeys).not.toContain('MAILAGENT_OPENNESS_WEB_TOOLS')
   })
 
   test('Tavily 已配置（***）→ secretSet placeholder + reveal 切换 password↔text', () => {

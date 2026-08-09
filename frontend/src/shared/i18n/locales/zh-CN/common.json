@@ -2404,7 +2404,7 @@
         "title": "联网",
         "desc": "让助手抓取网页并执行网络搜索（网页抓取 + 网络搜索）。",
         "switchLabel": "启用联网",
-        "restartHint": "修改后需重启后端生效。",
+        "restartHint": "修改后需退出重开 App 才生效。",
         "tavily": {
           "label": "Tavily API Key",
           "helper": "web_search 默认走 DuckDuckGo，国内网络被阻断不可用；填入 Tavily API key 即改走 Tavily（国内可达）。多个 Tavily key 用逗号隔开，额度用完自动切换下一个；留空则用 DuckDuckGo（国内不可达）。仅本机 .env 存储，不回传界面。保存即生效。",
@@ -2815,7 +2815,49 @@
       "integrations": "集成",
       "realtime": "实时与存储",
       "remote": "远程访问",
-      "island": "灵动岛与更新"
+      "island": "灵动岛与更新",
+      "labs": "实验室"
+    },
+    "labs": {
+      "page": {
+        "eyebrow": "LABS",
+        "title": "实验室",
+        "intro": "集中管理仍在灰度验证、默认关闭的实验能力。"
+      },
+      "warning": "实验性功能可能不稳定；功能转正后会移入对应的正式设置。",
+      "saved": "实验设置已保存",
+      "saveFailed": "实验设置保存失败",
+      "waitingForRestart": "等待重启生效",
+      "restart": {
+        "backendCta": "重启后端",
+        "busy": "重启中…",
+        "success": "后端已重启",
+        "failed": "后端重启失败"
+      },
+      "advanced": {
+        "label": "高级实验",
+        "helper": "面向协议兼容与开发调试的低层能力。"
+      },
+      "mcpConnectors": {
+        "label": "外部服务连接器",
+        "helper": "连接 Notion / Atlassian 直连服务与 Composio 托管连接器；开启后左侧导航会出现「连接与工具」的外部连接段。",
+        "restartHint": "需重启后端并退出重开 App 后完整生效。"
+      },
+      "skillCatalogPrompt": {
+        "label": "技能目录提示",
+        "helper": "把技能名单注入 AI 的系统提示，提高技能可发现性；每轮约增加 300 token。",
+        "restartHint": "需退出重开 App。"
+      },
+      "memoryLayers": {
+        "label": "五层记忆整理",
+        "helper": "自动按身份、偏好、上下文、动态、经验五层分类抽取记忆，并隔离各层预算。",
+        "restartHint": "需重启后端。"
+      },
+      "agUiMirror": {
+        "label": "AG-UI 协议镜像",
+        "helper": "开放面向开发者的 AG-UI 协议镜像端点，用于兼容性验证与调试。",
+        "restartHint": "需退出重开 App。"
+      }
     },
     "accounts": {
       "notion": {
