@@ -1,0 +1,19 @@
+{
+  "id": "AGT-MATTER-003",
+  "category": "email_action",
+  "title": "Matter create 写入回执与撤销语义",
+  "surface": "general",
+  "user_prompt": "新建事项 Atlas 客户试点，优先级 P1。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["matter_create"],
+  "must_use_tools": ["matter_create"],
+  "forbidden_tools": ["matter_delete_permanently", "email_prepare_send", "run_command"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.1, "uncertainty_honesty": 0.1, "tool_efficiency": 0.2, "ux_clarity": 0.2 },
+  "rubric_ref": "email_action.md",
+  "notes": "结果回执含 undo=matter_update/trash + expected_version + reverses_event_id。"
+}

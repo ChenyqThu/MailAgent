@@ -8,7 +8,9 @@
 //   - manual_chat + resolver 'manual' → the request-level 'always'|'auto-reversible' semantics
 //     stand byte-identical (Manual parity);
 //   - WP-11: manual_chat resolves cfg.resolveToolApprovalPrefs and hands the prefs to
-//     cfg.buildTools' 5TH slot (4th = agentRunContext, undefined for manual); headless modes
+//     cfg.buildTools' 5TH slot (4th = agentRunContext, undefined for manual); Matters P3 adds the
+//     6th (sessionId, undefined without a session) and 7th (matterScopeFilter, null without a
+//     matter-anchored contextSnapshot) slots — inert here, asserted as undefined/null; headless modes
 //     consult NEITHER resolver (custom-agent runs are governed solely by their per-agent grants
 //     matrix — the load-bearing isolation gate);
 //   - resolver failure / absence fail-closes (mode → request-level; prefs → null = ask);
@@ -94,6 +96,8 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'bypass',
       'manual_chat',
       undefined,
+      null,
+      undefined,
       null
     )
   })
@@ -106,6 +110,8 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       expect.any(Array),
       'always',
       'manual_chat',
+      undefined,
+      null,
       undefined,
       null
     )
@@ -121,6 +127,8 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'always',
       'manual_chat',
       undefined,
+      null,
+      undefined,
       null
     )
     // body 'auto-reversible' → honored unchanged
@@ -130,6 +138,8 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       expect.any(Array),
       'auto-reversible',
       'manual_chat',
+      undefined,
+      null,
       undefined,
       null
     )
@@ -142,7 +152,15 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       const { cfg, buildTools } = makeCfg({ resolveGlobalApprovalMode: resolver })
       await runPrepared(cfg, body(), mode)
       expect(resolver).not.toHaveBeenCalled()
-      expect(buildTools).toHaveBeenCalledWith(expect.any(Array), 'always', mode, undefined, null)
+      expect(buildTools).toHaveBeenCalledWith(
+        expect.any(Array),
+        'always',
+        mode,
+        undefined,
+        null,
+        undefined,
+        null
+      )
     }
   )
 
@@ -157,6 +175,8 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'always',
       'manual_chat',
       undefined,
+      null,
+      undefined,
       null
     )
   })
@@ -168,6 +188,8 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       expect.any(Array),
       'always',
       'manual_chat',
+      undefined,
+      null,
       undefined,
       null
     )
@@ -182,6 +204,8 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'always',
       'manual_chat',
       undefined,
+      null,
+      undefined,
       null
     )
     const b = makeCfg({ resolveGlobalApprovalMode: resolver })
@@ -190,6 +214,8 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       expect.any(Array),
       'always',
       'manual_chat',
+      undefined,
+      null,
       undefined,
       null
     )
@@ -207,7 +233,9 @@ describe('prepareChatRun — 08-05 WP-11 per-tool approval prefs injection (manu
       'always',
       'manual_chat',
       undefined,
-      PREFS
+      PREFS,
+      undefined,
+      null
     )
   })
 
@@ -218,7 +246,15 @@ describe('prepareChatRun — 08-05 WP-11 per-tool approval prefs injection (manu
       const { cfg, buildTools } = makeCfg({ resolveToolApprovalPrefs: prefsResolver })
       await runPrepared(cfg, body(), mode)
       expect(prefsResolver).not.toHaveBeenCalled()
-      expect(buildTools).toHaveBeenCalledWith(expect.any(Array), 'always', mode, undefined, null)
+      expect(buildTools).toHaveBeenCalledWith(
+        expect.any(Array),
+        'always',
+        mode,
+        undefined,
+        null,
+        undefined,
+        null
+      )
     }
   )
 
@@ -232,6 +268,8 @@ describe('prepareChatRun — 08-05 WP-11 per-tool approval prefs injection (manu
       expect.any(Array),
       'always',
       'manual_chat',
+      undefined,
+      null,
       undefined,
       null
     )

@@ -67,6 +67,11 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL), classified 'outbound' (edit-tier
     // 恒 HITL, un-grantable → stripped headless). Built here so the FULL-set drift guards see it.
     notionAgentToolsEnabled: true,
+    // Matters MVP P3 (D6) — nine matter tools (MAILAGENT_MATTERS_ENABLED), classified read (2) +
+    // domain_write (7). The gateway class layer admits them in every venue incl. headless — the
+    // real headless gate is the HEADLESS_TOOL_OPTIONS checkbox face (matter is headless_excluded
+    // there) intersected in wrapCfgForAgentRun's allowedTools filter.
+    matterToolsEnabled: true,
     ...(contextMode !== undefined ? { contextMode } : {})
   })
 }
@@ -369,7 +374,10 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
       ...CLASSES_OF('domain_write')
     ]) {
       if (CONDITIONAL_HEADLESS_READ_TOOLS.has(name)) {
-        expect(filtered[name], `${name} is headless+grant only, never an im_chat tool`).toBeUndefined()
+        expect(
+          filtered[name],
+          `${name} is headless+grant only, never an im_chat tool`
+        ).toBeUndefined()
         continue
       }
       expect(filtered[name], `${name} must survive im_chat`).toBeDefined()
@@ -608,10 +616,7 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
   // interactive UI supply (composer-top chips + the hasToolCall stop condition), registered only
   // in manual_chat. The class matrix's "reads register everywhere" deliberately does not apply to
   // it — see the registration comment in tools/index.ts.
-  const VENUE_GATED_READ_TOOLS = new Set([
-    'suggest_followups',
-    ...CONDITIONAL_HEADLESS_READ_TOOLS
-  ])
+  const VENUE_GATED_READ_TOOLS = new Set(['suggest_followups', ...CONDITIONAL_HEADLESS_READ_TOOLS])
 
   test.each(['untrusted_trigger', 'cron_headless', 'im_chat'] as const)(
     '%s → every capability_change/exec/web/outbound tool absent from the ToolSet; read + domain_write present',

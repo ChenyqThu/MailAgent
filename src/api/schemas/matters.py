@@ -16,6 +16,13 @@ class MutationEnvelope(StrictModel):
     idempotency_key: str = Field(min_length=1, max_length=256)
     expected_version: int | None = Field(default=None, ge=1)
     reason: str | None = Field(default=None, max_length=2000)
+    reverses_event_id: int | None = Field(default=None, ge=1)
+
+
+class MatterUndoDescriptor(StrictModel):
+    tool: str = Field(min_length=1, max_length=128)
+    input: dict[str, Any]
+    label: str = Field(min_length=1, max_length=500)
 
 
 class MutationOnly(StrictModel):
@@ -24,6 +31,12 @@ class MutationOnly(StrictModel):
 
 class PermanentDeleteRequest(StrictModel):
     confirmation: str = Field(min_length=1, max_length=128)
+    mutation: MutationEnvelope
+
+
+class MatterChatScopeRequest(StrictModel):
+    scope: str = Field(pattern="^(matter|global)$")
+    session_id: int = Field(ge=1)
     mutation: MutationEnvelope
 
 
@@ -106,6 +119,7 @@ class MatterNoteCreateRequest(StrictModel):
 
 
 class MatterResourceCreateRequest(StrictModel):
+    resource_id: int | None = Field(default=None, ge=1)
     provider: str | None = None
     external_key: str | None = None
     kind: str | None = None

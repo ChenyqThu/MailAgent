@@ -32,6 +32,7 @@ import { createCustomAgentTools } from './agents'
 import { createAgentCatalogTools } from './agent_catalog'
 import { createAgentCallTools } from './agent_call'
 import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
+import { createMatterReadTools, createMatterWriteTools } from './matters'
 import { createNotionAgentTools } from './notion_agent'
 import {
   admitDynamicTools,
@@ -169,6 +170,10 @@ export interface BuildGatewayToolsOpts {
    *  calendar_event_rsvp / calendar_event_delete (edit-tier writes, D4 恒 HITL — always ask, no
    *  whitelist/免卡 channel). Off → not added → ToolSet byte-identical to the pre-epic set. */
   calendarToolsEnabled?: boolean
+  /** MAILAGENT_MATTERS_ENABLED — all nine Matter tools are all-or-nothing with approvalGuard. */
+  matterToolsEnabled?: boolean
+  /** Server-derived G5 filter; never exposed in either email tool schema. */
+  matterScopeFilter?: { matterId: number } | null
   /** task 07-21 (MAILAGENT_NOTION_AGENT_TOOL) — when true AND approvalGuard is supplied, the
    *  notion_agent_chat tool is added: an edit-tier write (恒 HITL — external AI call to the
    *  notion-agent CLI, side effects on the Notion side, no whitelist/免卡 channel). Unlike the
@@ -266,7 +271,9 @@ export function buildGatewayTools(
   const toolPrefs = contextMode === 'manual_chat' ? (opts.toolApprovalPrefs ?? null) : null
   const prefTiers = toolPrefs?.tools
   const tools: ToolSet = {
-    ...createEmailReadTools(opts.domain, collector),
+    ...createEmailReadTools(opts.domain, collector, {
+      matterScopeFilter: opts.matterScopeFilter
+    }),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
     ...createReportTools(opts.domain, collector, opts.agentRunContext?.agentId)
   }
@@ -515,6 +522,19 @@ export function buildGatewayTools(
         a2uiEnabled: opts.a2uiEnabled,
         approvalMode: opts.approvalMode,
         // 08-05 WP-11 — the per-tool tier map (manual only; null-collapsed above).
+        toolApprovalPrefs: prefTiers,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
+  if (opts.matterToolsEnabled && opts.approvalGuard) {
+    Object.assign(tools, createMatterReadTools(opts.domain, collector))
+    Object.assign(
+      tools,
+      createMatterWriteTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
         toolApprovalPrefs: prefTiers,
         oneShot: opts.oneShotWrites,
         contextMode

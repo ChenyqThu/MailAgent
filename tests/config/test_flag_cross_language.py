@@ -171,6 +171,7 @@ NODE_PYDANTIC_DUAL_CARRIER_FLAGS = {
     # env 键 → (pydantic 字段名, 两侧期望默认)
     # MCP connector 总闸：灰度未 cutover（ship-off → dogfood → cutover 另拍）。
     "MAILAGENT_MCP_CONNECTORS": ("mcp_connectors_enabled", False),
+    "MAILAGENT_MATTERS_ENABLED": ("matters_enabled", False),
     # 飞书 IM 总闸（08-01 阶段 2）：**cutover 2026-08-04**（owner dogfood 通过）。翻默认漏一侧
     # = 「桥在跑但 gateway /api/ai/im-chat 404」或反过来「端点开着却没有桥来调」。
     "MAILAGENT_IM_FEISHU": ("im_feishu_enabled", True),

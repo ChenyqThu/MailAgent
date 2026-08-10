@@ -111,6 +111,8 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // read — no side effects (silent tier; untrusted content in results is fenced at the tool).
   email_list_filter: 'read',
   email_search_fulltext: 'read',
+  matter_find: 'read',
+  matter_get: 'read',
   email_get: 'read',
   email_body: 'read',
   email_list_thread: 'read',
@@ -164,6 +166,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // face as email_draft_reply: they only write the Drafts folder, nothing leaves the machine.
   email_draft_compose: 'domain_write',
   email_draft_update: 'domain_write',
+  matter_create: 'domain_write',
+  matter_update: 'domain_write',
+  matter_item_mutate: 'domain_write',
+  matter_resource_mutate: 'domain_write',
+  matter_stakeholder_mutate: 'domain_write',
+  matter_relation_mutate: 'domain_write',
+  matter_add_note: 'domain_write',
   // capability_change — changes the agent's own capability/identity surface. NEVER auto-approved
   // by the auto-reversible path, manual_chat-only, in every future mode permanently denied
   // (ADR-001 §9 red line).

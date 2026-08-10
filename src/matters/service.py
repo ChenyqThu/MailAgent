@@ -27,6 +27,7 @@ from .models import (
 )
 from .repository import MatterRepository
 from .resource_identity import EMAIL_PROVIDER, email_resource_key, thread_resource_key
+from .events import CHAT_SCOPE_EXPANDED, CHAT_SCOPE_RESTORED
 
 TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 ACTION_ONLY_ITEM_FIELDS = {
@@ -50,6 +51,13 @@ DIRECT_PATCH_FIELDS = {
     "next_attention_at",
     "attention_reason",
 }
+# D5 bounded projection: context_snapshot resource entries only pass through the
+# short structured metadata keys the MailAgent write side actually produces
+# (_resolve_source_resource: email -> internal_id/message_id/date_received,
+# thread -> thread_id). Free-text keys (cached_excerpt / excerpt / text_excerpt /
+# snippet / body ...) are the *source* of the truncated `excerpt` field and must
+# never ride out untruncated through metadata — whitelist, 宁缺勿滥.
+SNAPSHOT_METADATA_KEYS = ("internal_id", "message_id", "thread_id", "date_received")
 
 
 class MatterError(RuntimeError):
@@ -79,6 +87,7 @@ class MatterService:
         source: str,
         actor: Actor = Actor(),
         reason: str | None = None,
+        reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
         self._validate_actor(actor)
         title = str(data.get("title") or "").strip()
@@ -145,9 +154,21 @@ class MatterService:
                 reason=reason,
                 payload={"public_id": public_id},
                 happened_at=now,
+                reverses_event_id=reverses_event_id,
             )
             matter = self.repository.get_matter_by_id(conn, matter_id)
-            result = self._mutation(matter, [event_id, *resource_event_ids], resources=linked)
+            result = self._mutation(
+                matter,
+                [event_id, *resource_event_ids],
+                resources=linked,
+                undo=self._undo_descriptor(
+                    "matter_update",
+                    "撤销创建：移入废纸篓",
+                    {"public_id": public_id, "operation": "trash"},
+                    matter,
+                    event_id,
+                ),
+            )
             result["warnings"].extend(warnings)
             return result
 
@@ -170,7 +191,169 @@ class MatterService:
                 )
             if "updates" in include_set:
                 result["updates"] = self.repository.list_updates(conn, matter["id"])
+            if "resources" in include_set:
+                result["resources"] = self.repository.list_resources(conn, matter["id"], {})
+            if "stakeholders" in include_set:
+                result["stakeholders"] = [
+                    dict(row)
+                    for row in conn.execute(
+                        "SELECT * FROM matter_stakeholder WHERE matter_id=? AND deleted_at IS NULL ORDER BY id",
+                        (matter["id"],),
+                    )
+                ]
+            if "relations" in include_set:
+                result["relations"] = self.list_relations(public_id)
             return result
+
+    def context_snapshot(self, public_id: str) -> dict[str, Any]:
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            core_fields = (
+                "id",
+                "public_id",
+                "title",
+                "matter_type",
+                "tags",
+                "status",
+                "health",
+                "priority",
+                "due_at",
+                "waiting_context",
+                "description",
+                "current_summary",
+                "version",
+            )
+            core = {field: matter.get(field) for field in core_fields}
+            core["type"] = core.pop("matter_type")
+            accepted_at = matter.get("created_at")
+            if matter.get("latest_accepted_update_id") is not None:
+                row = conn.execute(
+                    "SELECT accepted_at FROM matter_update WHERE id=?",
+                    (matter["latest_accepted_update_id"],),
+                ).fetchone()
+                if row and row["accepted_at"] is not None:
+                    accepted_at = int(row["accepted_at"])
+            core["summary_accepted_at"] = accepted_at
+
+            item_rows = conn.execute(
+                "SELECT kind,title,status,due_at,owner_kind,owner_id "
+                "FROM matter_item WHERE matter_id=? AND deleted_at IS NULL "
+                "AND (status IS NULL OR status NOT IN ('done','canceled')) "
+                "ORDER BY position,id LIMIT 50",
+                (matter["id"],),
+            ).fetchall()
+            items = [dict(row) for row in item_rows]
+
+            stakeholder_rows = conn.execute(
+                "SELECT id,display_name,email_normalized,organization,role,relationship,is_waiting_on "
+                "FROM matter_stakeholder WHERE matter_id=? AND deleted_at IS NULL "
+                "ORDER BY is_waiting_on DESC,id LIMIT 20",
+                (matter["id"],),
+            ).fetchall()
+            stakeholders = [
+                {**dict(row), "is_waiting_on": bool(row["is_waiting_on"])}
+                for row in stakeholder_rows
+            ]
+
+            resources = []
+            for joined in self.repository.list_resources(
+                conn, matter["id"], {"pinned": True}
+            )[:10]:
+                resource = joined["resource"]
+                metadata = resource.get("metadata") or {}
+                excerpt = next(
+                    (
+                        metadata.get(key)
+                        for key in ("cached_excerpt", "excerpt", "text_excerpt", "snippet")
+                        if isinstance(metadata.get(key), str)
+                    ),
+                    None,
+                )
+                resources.append(
+                    {
+                        "id": resource["id"],
+                        "kind": resource["kind"],
+                        "provider": resource["provider"],
+                        "external_key": resource["external_key"],
+                        "title": resource.get("title"),
+                        "canonical_url": resource.get("canonical_url"),
+                        "revision": resource.get("revision"),
+                        "access_policy": resource.get("access_policy"),
+                        # Whitelist projection (D5): free-text metadata never rides
+                        # out untruncated — excerpts only leave via `excerpt` below.
+                        "metadata": {
+                            key: metadata[key]
+                            for key in SNAPSHOT_METADATA_KEYS
+                            if key in metadata
+                        },
+                        "excerpt": excerpt[:2000] if excerpt else None,
+                    }
+                )
+
+            event_rows = conn.execute(
+                "SELECT kind,happened_at,actor_kind,payload_json FROM matter_event "
+                "WHERE matter_id=? AND happened_at>=? ORDER BY happened_at DESC,id DESC LIMIT 30",
+                (matter["id"], accepted_at),
+            ).fetchall()
+            events = []
+            for row in event_rows:
+                payload = json.loads(row["payload_json"] or "{}")
+                summary_parts = []
+                for key in ("fields", "item_id", "resource_id", "stakeholder_id", "relation_id"):
+                    if key in payload:
+                        summary_parts.append(f"{key}={payload[key]}")
+                events.append(
+                    {
+                        "kind": row["kind"],
+                        "happened_at": row["happened_at"],
+                        "actor_kind": row["actor_kind"],
+                        "summary": ", ".join(summary_parts) or row["kind"],
+                    }
+                )
+            return {
+                "matter": core,
+                "items": items,
+                "stakeholders": stakeholders,
+                "resources": resources,
+                "events": events,
+            }
+
+    def record_chat_scope(
+        self,
+        public_id: str,
+        *,
+        scope: str,
+        session_id: int,
+        idempotency_key: str,
+        source: str,
+        actor: Actor = Actor(),
+        reason: str | None = None,
+        reverses_event_id: int | None = None,
+    ) -> dict[str, Any]:
+        if scope not in {"matter", "global"}:
+            raise MatterError("E_INVALID_ARG", f"invalid chat scope: {scope}")
+        now = self.clock_ms()
+        dedupe_key = f"chat_scope:{session_id}:{self._dedupe(idempotency_key)}"
+        kind = CHAT_SCOPE_EXPANDED if scope == "global" else CHAT_SCOPE_RESTORED
+        from_scope = "matter" if scope == "global" else "global"
+        with self.repository.transaction() as conn:
+            replay = self._replay(conn, dedupe_key, kind)
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            event_id = self._append_event(
+                conn,
+                matter_id=matter["id"],
+                kind=kind,
+                actor=actor,
+                source=source,
+                dedupe_key=dedupe_key,
+                reason=reason,
+                payload={"session_id": session_id, "from": from_scope, "to": scope},
+                happened_at=now,
+                reverses_event_id=reverses_event_id,
+            )
+            return self._mutation(matter, [event_id])
 
     def list_matters(
         self,
@@ -196,6 +379,7 @@ class MatterService:
         source: str,
         actor: Actor = Actor(),
         reason: str | None = None,
+        reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
         unknown = set(patch) - DIRECT_PATCH_FIELDS - MANUAL_UPDATE_FIELDS
         if unknown:
@@ -301,9 +485,37 @@ class MatterService:
                 update_id=update_id,
                 payload={"fields": sorted(patch)},
                 happened_at=now,
+                reverses_event_id=reverses_event_id,
             )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            before_patch = {
+                field: matter.get(field)
+                for field in patch
+                if field
+                in {
+                    "title",
+                    "description",
+                    "matter_type",
+                    "tags",
+                    "status",
+                    "health",
+                    "current_summary",
+                    "due_at",
+                    "waiting_context",
+                    "next_attention_at",
+                    "attention_reason",
+                }
+            }
             return self._mutation(
-                self.repository.get_matter_by_id(conn, matter["id"]), [event_id]
+                after,
+                [event_id],
+                undo=self._undo_descriptor(
+                    "matter_update",
+                    "撤销事项更新",
+                    {"public_id": public_id, "operation": "patch", "patch": before_patch},
+                    after,
+                    event_id,
+                ),
             )
 
     def archive(self, public_id: str, **mutation: Any) -> dict[str, Any]:
@@ -361,6 +573,7 @@ class MatterService:
         source: str,
         actor: Actor = Actor(),
         reason: str | None = None,
+        reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
         kind = str(data.get("kind") or "")
         title = str(data.get("title") or "").strip()
@@ -409,11 +622,20 @@ class MatterService:
                 item_id=item_id,
                 payload={"kind": kind},
                 happened_at=now,
+                reverses_event_id=reverses_event_id,
             )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
             return self._mutation(
-                self.repository.get_matter_by_id(conn, matter["id"]),
+                after,
                 [event_id],
                 item=self.repository.get_item(conn, matter["id"], item_id),
+                undo=self._undo_descriptor(
+                    "matter_item_mutate",
+                    "撤销新增事项条目",
+                    {"public_id": public_id, "operation": "delete", "item_id": item_id},
+                    after,
+                    event_id,
+                ),
             )
 
     def update_item(
@@ -469,6 +691,7 @@ class MatterService:
         source: str,
         actor: Actor = Actor(),
         reason: str | None = None,
+        reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
@@ -517,11 +740,52 @@ class MatterService:
                 item_id=item_id,
                 payload={"fields": sorted(patch)},
                 happened_at=now,
+                reverses_event_id=reverses_event_id,
             )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            if event_kind == "item_deleted":
+                reverse_input = {"public_id": public_id, "operation": "restore", "item_id": item_id}
+            elif event_kind == "item_restored":
+                reverse_input = {"public_id": public_id, "operation": "delete", "item_id": item_id}
+            else:
+                reversible_fields = {
+                    key: item.get(key)
+                    for key in patch
+                    if key
+                    in {
+                        "kind",
+                        "title",
+                        "description",
+                        "position",
+                        "status",
+                        "priority",
+                        "owner_kind",
+                        "owner_id",
+                        "waiting_on_stakeholder_id",
+                        "due_at",
+                        "completed_at",
+                        "checklist",
+                        "source_resource_id",
+                        "source_locator",
+                    }
+                }
+                reverse_input = {
+                    "public_id": public_id,
+                    "operation": "update",
+                    "item_id": item_id,
+                    "patch": reversible_fields,
+                }
             return self._mutation(
-                self.repository.get_matter_by_id(conn, matter["id"]),
+                after,
                 [event_id],
                 item=self.repository.get_item(conn, matter["id"], item_id),
+                undo=self._undo_descriptor(
+                    "matter_item_mutate",
+                    "撤销条目变更",
+                    reverse_input,
+                    after,
+                    event_id,
+                ),
             )
 
     def _timestamp_transition(
@@ -536,6 +800,7 @@ class MatterService:
         source: str,
         actor: Actor = Actor(),
         reason: str | None = None,
+        reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
@@ -579,9 +844,25 @@ class MatterService:
                 reason=reason,
                 payload={},
                 happened_at=now,
+                reverses_event_id=reverses_event_id,
             )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            reverse_operation = {
+                "archive": "reopen",
+                "reopen": "archive",
+                "trash": "restore",
+                "restore": "trash",
+            }[operation]
             return self._mutation(
-                self.repository.get_matter_by_id(conn, matter["id"]), [event_id]
+                after,
+                [event_id],
+                undo=self._undo_descriptor(
+                    "matter_update",
+                    f"撤销{operation}",
+                    {"public_id": public_id, "operation": reverse_operation},
+                    after,
+                    event_id,
+                ),
             )
 
     def list_resources(self, public_id: str, **filters: Any) -> list[dict[str, Any]]:
@@ -599,6 +880,7 @@ class MatterService:
         source: str,
         actor: Actor = Actor(),
         reason: str | None = None,
+        reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
         now = self.clock_ms()
         self._dedupe(idempotency_key)
@@ -610,7 +892,15 @@ class MatterService:
             warnings: list[str] = list(snapshot.get("warnings", [])) if snapshot else []
             pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
             for spec in specs:
-                resource, _ = self._upsert_resource(conn, spec, now)
+                if spec.get("resource_id") is not None:
+                    resource = self.repository.get_resource(conn, int(spec["resource_id"]))
+                    if resource is None:
+                        raise MatterError(
+                            "E_CHILD_NOT_FOUND",
+                            f"resource {spec['resource_id']} not found",
+                        )
+                else:
+                    resource, _ = self._upsert_resource(conn, spec, now)
                 link = self.repository.get_resource_link(conn, matter["id"], resource["id"], live_only=True)
                 if link:
                     results.append({"resource": resource, "link": link})
@@ -646,10 +936,25 @@ class MatterService:
                         conn, matter_id=matter["id"], kind="resource_linked", actor=actor,
                         source=source, dedupe_key=event_key, reason=reason,
                         resource_id=resource["id"], payload={"link_id": link_id}, happened_at=now,
+                        reverses_event_id=reverses_event_id,
                     ))
                 link = self.repository.get_resource_link(conn, matter["id"], resource["id"], live_only=True)
                 results.append({"resource": resource, "link": link})
-            result = self._mutation(self.repository.get_matter_by_id(conn, matter["id"]), event_ids, resources=results)
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            undo = None
+            if len(pending) == 1 and event_ids:
+                undo = self._undo_descriptor(
+                    "matter_resource_mutate",
+                    "撤销资料关联",
+                    {
+                        "public_id": public_id,
+                        "operation": "unlink",
+                        "resource_id": pending[0][0]["id"],
+                    },
+                    after,
+                    event_ids[0],
+                )
+            result = self._mutation(after, event_ids, resources=results, undo=undo)
             result["warnings"] = list(dict.fromkeys(warnings))
             return result
 
@@ -657,6 +962,7 @@ class MatterService:
         self, public_id: str, resource_id: int, patch: Mapping[str, Any], *,
         expected_version: int, idempotency_key: str, source: str,
         actor: Actor = Actor(), reason: str | None = None,
+        reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
@@ -715,11 +1021,33 @@ class MatterService:
                 conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
                 dedupe_key=dedupe_key, reason=reason, resource_id=resource_id,
                 payload={"fields": sorted(patch)}, happened_at=now,
+                reverses_event_id=reverses_event_id,
             )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            if access_patch:
+                reverse_patch = {"scope": "resource", "access_policy": resource["access_policy"]}
+            else:
+                reverse_patch = {
+                    key: (link["confirmed_at"] is not None if key == "confirmed" else link.get(key))
+                    for key in patch
+                    if key in {"pinned", "relation_type", "sub_state", "confirmed"}
+                }
             return self._mutation(
-                self.repository.get_matter_by_id(conn, matter["id"]), [event_id],
+                after, [event_id],
                 resource=self.repository.get_resource(conn, resource_id),
                 link=self.repository.get_resource_link(conn, matter["id"], resource_id, live_only=True),
+                undo=self._undo_descriptor(
+                    "matter_resource_mutate",
+                    "撤销资料变更",
+                    {
+                        "public_id": public_id,
+                        "operation": "update",
+                        "resource_id": resource_id,
+                        "patch": reverse_patch,
+                    },
+                    after,
+                    event_id,
+                ),
             )
 
     def unlink_resource(self, public_id: str, resource_id: int, **mutation: Any) -> dict[str, Any]:
@@ -731,6 +1059,7 @@ class MatterService:
     def _set_resource_deleted(
         self, public_id: str, resource_id: int, deleted: bool, *, expected_version: int,
         idempotency_key: str, source: str, actor: Actor = Actor(), reason: str | None = None,
+        reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
@@ -750,8 +1079,24 @@ class MatterService:
                 conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
                 dedupe_key=dedupe_key, reason=reason, resource_id=resource_id,
                 payload={"link_id": link["id"]}, happened_at=now,
+                reverses_event_id=reverses_event_id,
             )
-            return self._mutation(self.repository.get_matter_by_id(conn, matter["id"]), [event_id])
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            return self._mutation(
+                after,
+                [event_id],
+                undo=self._undo_descriptor(
+                    "matter_resource_mutate",
+                    "撤销资料解除关联" if deleted else "撤销资料恢复",
+                    {
+                        "public_id": public_id,
+                        "operation": "restore" if deleted else "unlink",
+                        "resource_id": resource_id,
+                    },
+                    after,
+                    event_id,
+                ),
+            )
 
     def list_stakeholders(self, public_id: str, *, waiting_only: bool = False, include_deleted: bool = False) -> list[dict[str, Any]]:
         with self.repository.connect() as conn:
@@ -781,6 +1126,7 @@ class MatterService:
     def _mutate_stakeholder(
         self, public_id: str, stakeholder_id: int | None, data: Mapping[str, Any], event_kind: str, *,
         expected_version: int, idempotency_key: str, source: str, actor: Actor = Actor(), reason: str | None = None,
+        reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
@@ -838,9 +1184,40 @@ class MatterService:
             event_id = self._append_event(
                 conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
                 dedupe_key=dedupe_key, reason=reason, payload={"stakeholder_id": stakeholder_id}, happened_at=now,
+                reverses_event_id=reverses_event_id,
             )
             stakeholder = dict(conn.execute("SELECT * FROM matter_stakeholder WHERE id=?", (stakeholder_id,)).fetchone())
-            return self._mutation(self.repository.get_matter_by_id(conn, matter["id"]), [event_id], stakeholder=stakeholder)
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            if event_kind == "stakeholder_added":
+                reverse_input = {"public_id": public_id, "operation": "delete", "stakeholder_id": stakeholder_id}
+            elif event_kind == "stakeholder_removed":
+                reverse_input = {"public_id": public_id, "operation": "restore", "stakeholder_id": stakeholder_id}
+            elif event_kind == "stakeholder_restored":
+                reverse_input = {"public_id": public_id, "operation": "delete", "stakeholder_id": stakeholder_id}
+            else:
+                before = dict(existing) if existing is not None else {}
+                reverse_input = {
+                    "public_id": public_id,
+                    "operation": "update",
+                    "stakeholder_id": stakeholder_id,
+                    "patch": {
+                        key: before.get("email_normalized") if key == "email" else before.get(key)
+                        for key in data
+                        if key in {"display_name", "email", "organization", "role", "relationship", "is_waiting_on", "last_contact_at", "source_resource_id"}
+                    },
+                }
+            return self._mutation(
+                after,
+                [event_id],
+                stakeholder=stakeholder,
+                undo=self._undo_descriptor(
+                    "matter_stakeholder_mutate",
+                    "撤销干系人变更",
+                    reverse_input,
+                    after,
+                    event_id,
+                ),
+            )
 
     def list_relations(self, public_id: str, *, direction: str = "both", relation_type: str | None = None) -> list[dict[str, Any]]:
         with self.repository.connect() as conn:
@@ -903,8 +1280,21 @@ class MatterService:
                 conn, matter_id=source_matter["id"], kind="relation_added", actor=actor,
                 source=mutation["source"], dedupe_key=dedupe_key, reason=mutation.get("reason"),
                 payload={"relation_id": relation_id, "target_public_id": target["public_id"]}, happened_at=now,
+                reverses_event_id=mutation.get("reverses_event_id"),
             )
-            return self._mutation(self.repository.get_matter_by_id(conn, source_matter["id"]), [event_id], relation=dict(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()))
+            after = self.repository.get_matter_by_id(conn, source_matter["id"])
+            return self._mutation(
+                after,
+                [event_id],
+                relation=dict(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()),
+                undo=self._undo_descriptor(
+                    "matter_relation_mutate",
+                    "撤销事项关系",
+                    {"public_id": public_id, "operation": "delete", "relation_id": relation_id},
+                    after,
+                    event_id,
+                ),
+            )
 
     def patch_relation(self, public_id: str, relation_id: int, patch: Mapping[str, Any], **mutation: Any) -> dict[str, Any]:
         return self._mutate_relation(public_id, relation_id, patch, "relation_updated", **mutation)
@@ -915,7 +1305,7 @@ class MatterService:
     def restore_relation(self, public_id: str, relation_id: int, **mutation: Any) -> dict[str, Any]:
         return self._mutate_relation(public_id, relation_id, {"deleted_at": None}, "relation_restored", **mutation)
 
-    def _mutate_relation(self, public_id: str, relation_id: int, patch: Mapping[str, Any], event_kind: str, *, expected_version: int, idempotency_key: str, source: str, actor: Actor = Actor(), reason: str | None = None) -> dict[str, Any]:
+    def _mutate_relation(self, public_id: str, relation_id: int, patch: Mapping[str, Any], event_kind: str, *, expected_version: int, idempotency_key: str, source: str, actor: Actor = Actor(), reason: str | None = None, reverses_event_id: int | None = None) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         with self.repository.transaction() as conn:
@@ -935,8 +1325,35 @@ class MatterService:
             if not self.repository.cas_update_matter(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
                 raise self._version_conflict()
             conn.execute(f"UPDATE matter_relation SET {', '.join(f'{key}=?' for key in changes)} WHERE id=?", (*changes.values(), relation_id))
-            event_id = self._append_event(conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source, dedupe_key=dedupe_key, reason=reason, payload={"relation_id": relation_id}, happened_at=now)
-            return self._mutation(self.repository.get_matter_by_id(conn, matter["id"]), [event_id], relation=dict(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()))
+            event_id = self._append_event(conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source, dedupe_key=dedupe_key, reason=reason, payload={"relation_id": relation_id}, happened_at=now, reverses_event_id=reverses_event_id)
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            if event_kind == "relation_removed":
+                reverse_input = {"public_id": public_id, "operation": "restore", "relation_id": relation_id}
+            elif event_kind == "relation_restored":
+                reverse_input = {"public_id": public_id, "operation": "delete", "relation_id": relation_id}
+            else:
+                reverse_input = {
+                    "public_id": public_id,
+                    "operation": "update",
+                    "relation_id": relation_id,
+                    "patch": {
+                        key: (relation["confirmed_at"] is not None if key == "confirmed" else relation[key])
+                        for key in patch
+                        if key in {"relation_type", "confidence", "confirmed"}
+                    },
+                }
+            return self._mutation(
+                after,
+                [event_id],
+                relation=dict(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()),
+                undo=self._undo_descriptor(
+                    "matter_relation_mutate",
+                    "撤销事项关系变更",
+                    reverse_input,
+                    after,
+                    event_id,
+                ),
+            )
 
     def lookup_resource_links(self, provider: str, keys: list[str]) -> dict[str, list[dict[str, Any]]]:
         with self.repository.connect() as conn:
@@ -1099,6 +1516,7 @@ class MatterService:
         item_id: int | None = None,
         update_id: int | None = None,
         resource_id: int | None = None,
+        reverses_event_id: int | None = None,
     ) -> int:
         event_payload = dict(payload)
         event_payload.update(
@@ -1120,6 +1538,7 @@ class MatterService:
                 "resource_id": resource_id,
                 "item_id": item_id,
                 "update_id": update_id,
+                "reverses_event_id": reverses_event_id,
                 "dedupe_key": dedupe_key,
                 "payload_json": self._dump(event_payload),
                 "created_at": happened_at,
@@ -1171,6 +1590,26 @@ class MatterService:
         }
         result.update(extra)
         return result
+
+    @staticmethod
+    def _undo_descriptor(
+        tool: str,
+        label: str,
+        input_data: Mapping[str, Any],
+        matter: Mapping[str, Any] | None,
+        event_id: int,
+    ) -> dict[str, Any] | None:
+        if matter is None:
+            return None
+        return {
+            "tool": tool,
+            "input": {
+                **dict(input_data),
+                "expected_version": matter["version"],
+                "reverses_event_id": event_id,
+            },
+            "label": label,
+        }
 
     @staticmethod
     def _version_conflict() -> MatterError:

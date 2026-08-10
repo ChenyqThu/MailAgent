@@ -43,10 +43,19 @@ export function snapshotForModel(snapshot: AgentContextSnapshot): Record<string,
         }
       }
     : null
+  const activeMatter = snapshot.activeMatter
+    ? {
+        ...snapshot.activeMatter,
+        resources: snapshot.activeMatter.resources.map(
+          ({ excerpt: _excerpt, ...resource }) => resource
+        )
+      }
+    : null
   return {
     version: snapshot.version,
     scope: snapshot.scope,
     activeEmail,
+    activeMatter,
     selection: snapshot.selection ?? null,
     references: snapshot.references.map((r) => ({
       type: r.type,
@@ -129,10 +138,12 @@ const HEADER_LINES = [
  */
 export function buildContextSystemBlock(snapshot: AgentContextSnapshot): string {
   const hasEmail = snapshot.activeEmail != null
+  const hasMatter = snapshot.activeMatter != null
   const hasRefs = snapshot.references.length > 0
   const hasAtt = snapshot.attachments.length > 0
   if (
     !hasEmail &&
+    !hasMatter &&
     !hasRefs &&
     !hasAtt &&
     (snapshot.selection?.selectedEmailIds.length ?? 0) === 0
@@ -155,6 +166,24 @@ export function buildContextSystemBlock(snapshot: AgentContextSnapshot): string 
   const body = snapshot.activeEmail?.body
   if (snapshot.activeEmail && body?.markdown != null && body.charsIncluded > 0) {
     parts.push(untrustedBlock('EMAIL_BODY', `id=${snapshot.activeEmail.internalId}`, body.markdown))
+  }
+
+  if (snapshot.activeMatter) {
+    parts.push(
+      snapshot.activeMatter.scope === 'global'
+        ? 'Matter retrieval scope: 用户已显式授权本会话全库检索。'
+        : 'Matter retrieval scope: 检索限于本事项关联范围。'
+    )
+    for (const resource of snapshot.activeMatter.resources) {
+      if (resource.excerpt) {
+        parts.push(
+          fenceUntrusted('MATTER_EXCERPT', resource.excerpt, {
+            id: resource.id,
+            provider: resource.provider
+          })
+        )
+      }
+    }
   }
 
   // attachment excerpts — untrusted.

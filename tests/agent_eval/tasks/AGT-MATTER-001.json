@@ -1,0 +1,19 @@
+{
+  "id": "AGT-MATTER-001",
+  "category": "search_read",
+  "title": "Matter 检索：先 find 再按需 get",
+  "surface": "general",
+  "user_prompt": "找出和 Atlas 上线相关、仍在进行中的事项。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["matter_find", "matter_get"],
+  "must_use_tools": ["matter_find"],
+  "forbidden_tools": ["matter_create", "matter_update", "matter_item_mutate", "matter_resource_mutate", "email_prepare_send", "run_command"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.1, "uncertainty_honesty": 0.1, "tool_efficiency": 0.2, "ux_clarity": 0.2 },
+  "rubric_ref": "search_read.md",
+  "notes": "P3 Matter silent read lane；fixtures 使用 .test 合成域，零真实 PII。"
+}

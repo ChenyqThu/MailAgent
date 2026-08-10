@@ -178,6 +178,7 @@ async def list_emails(
     exclude_drafts: bool = Query(False),
     limit: int = Query(50, ge=1, le=LIST_LIMIT_MAX),
     offset: int = Query(0, ge=0),
+    matter_id: Optional[int] = Query(None, ge=1),
 ):
     """列出邮件 metadata (分页 + 过滤)。
 
@@ -219,6 +220,7 @@ async def list_emails(
         exclude_drafts=exclude_drafts,
         limit=limit,
         offset=offset,
+        matter_id=matter_id,
     )
     rows = result.get("emails", [])
     data = [wire.meta_record_to_list_item(r) for r in rows]
@@ -394,6 +396,7 @@ async def search_emails(
     until: Optional[str] = Query(None, description="YYYY-MM-DD"),
     limit: int = Query(50, ge=0, le=SEARCH_LIMIT_MAX),
     raw: bool = Query(False, description="true=直传 FTS5; false(默认)=查询语法 + CJK smart"),
+    matter_id: Optional[int] = Query(None, ge=1),
 ):
     """FTS5 全文搜索邮件正文 + subject + sender。
 
@@ -446,6 +449,7 @@ async def search_emails(
         mailbox=mailbox,
         since_date=since,
         until_date=until,
+        matter_id=matter_id,
     )
     hits = search_result.hits
     transformed_query = search_result.transformed_query

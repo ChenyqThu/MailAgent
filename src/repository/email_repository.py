@@ -37,6 +37,7 @@ from src.repository.search_query import (
     escape_like_value,
     parse_search_query,
 )
+from src.matters.resource_identity import parse_resource_key
 
 
 # ============================================================
@@ -1149,6 +1150,54 @@ class EmailRepository:
 
     LIST_LIMIT_MAX = 500
 
+    def _matter_email_internal_ids(self, matter_id: int) -> list[int]:
+        conn = self._connect()
+        try:
+            rows = conn.execute(
+                "SELECT r.external_key FROM matter_resource mr "
+                "JOIN resource r ON r.id=mr.resource_id "
+                "WHERE mr.matter_id=? AND mr.deleted_at IS NULL "
+                "AND r.provider='mailagent' AND r.kind IN ('email','thread')",
+                (matter_id,),
+            ).fetchall()
+            direct_ids: set[int] = set()
+            thread_ids: set[str] = set()
+            for row in rows:
+                try:
+                    kind, value = parse_resource_key(row["external_key"])
+                except ValueError:
+                    continue
+                if kind == "email":
+                    direct_ids.add(int(value))
+                else:
+                    thread_ids.add(value)
+            if thread_ids:
+                placeholders = ",".join("?" for _ in thread_ids)
+                thread_rows = conn.execute(
+                    f"SELECT internal_id FROM email_metadata WHERE thread_id IN ({placeholders})",
+                    tuple(thread_ids),
+                ).fetchall()
+                direct_ids.update(int(row["internal_id"]) for row in thread_rows)
+            return sorted(direct_ids)
+        finally:
+            conn.close()
+
+    def _append_matter_filter(
+        self, predicates: list[FilterPredicate], matter_id: Optional[int]
+    ) -> None:
+        if matter_id is None:
+            return
+        internal_ids = self._matter_email_internal_ids(matter_id)
+        if not internal_ids:
+            predicates.append(FilterPredicate("0"))
+            return
+        placeholders = ",".join("?" for _ in internal_ids)
+        predicates.append(
+            FilterPredicate(
+                f"m.internal_id IN ({placeholders})", tuple(internal_ids)
+            )
+        )
+
     def list_metadata(
         self,
         *,
@@ -1166,6 +1215,7 @@ class EmailRepository:
         exclude_drafts: bool = False,
         limit: int = 50,
         offset: int = 0,
+        matter_id: Optional[int] = None,
     ) -> dict:
         """CLI ``email list`` 用 — 返回 ``{total, limit, offset, emails: [EmailMetadataRecord, ...]}``.
 
@@ -1187,6 +1237,13 @@ class EmailRepository:
 
         clauses: list[str] = []
         params: list = []
+        if matter_id is not None:
+            linked_ids = self._matter_email_internal_ids(matter_id)
+            if not linked_ids:
+                return {"total": 0, "limit": min(limit, self.LIST_LIMIT_MAX), "offset": offset, "emails": []}
+            placeholders = ",".join("?" for _ in linked_ids)
+            clauses.append(f"internal_id IN ({placeholders})")
+            params.extend(linked_ids)
         if mailbox:
             predicate, vals = sql_in_predicate(
                 "mailbox", filter_labels_for_mailbox(mailbox)
@@ -1470,6 +1527,7 @@ class EmailRepository:
         until_date: Optional[str] = None,
         now: Optional[str] = None,
         tz_offset_minutes: Optional[int] = None,
+        matter_id: Optional[int] = None,
     ) -> EmailSearchResult:
         """搜索正文并返回调用方需要透传的 meta。
 
@@ -1496,6 +1554,7 @@ class EmailRepository:
                 now=now,
                 tz_offset_minutes=tz_offset_minutes,
             )
+            self._append_matter_filter(structured_filters, matter_id)
             hits = self._search_email_bodies_raw(
                 query,
                 limit=probe,
@@ -1521,6 +1580,7 @@ class EmailRepository:
                     until_date=until_date,
                     now=now,
                     tz_offset_minutes=tz_offset_minutes,
+                    matter_id=matter_id,
                 )
                 if trigram_result is not None:
                     return self._finalize_search(
@@ -1537,6 +1597,7 @@ class EmailRepository:
                 now=now,
                 tz_offset_minutes=tz_offset_minutes,
             )
+            self._append_matter_filter(structured_filters, matter_id)
             if transformed != query:
                 logger.debug(
                     f"search_email_bodies_smart: query={query!r} → "
@@ -1571,6 +1632,7 @@ class EmailRepository:
             until_date=until_date,
             now=now,
             tz_offset_minutes=tz_offset_minutes,
+            matter_id=matter_id,
         )
         return self._finalize_search(hits, transformed, parsed.warnings, limit)
 
@@ -1655,6 +1717,7 @@ class EmailRepository:
         until_date: Optional[str],
         now: Optional[str],
         tz_offset_minutes: Optional[int],
+        matter_id: Optional[int] = None,
     ) -> Optional[EmailSearchResult]:
         """裸全文 query 的 CJK trigram 路由 (T7)。
 
@@ -1689,6 +1752,7 @@ class EmailRepository:
             now=now,
             tz_offset_minutes=tz_offset_minutes,
         )
+        self._append_matter_filter(structured_filters, matter_id)
         warnings = [*parsed.warnings, *plan_warnings, *structured_warnings]
 
         # 全部 term 被拦截 (例如纯单字 CJK query '我') → 不查, 返回空 + warning。
@@ -2366,6 +2430,7 @@ class EmailRepository:
         until_date: Optional[str],
         now: Optional[str],
         tz_offset_minutes: Optional[int],
+        matter_id: Optional[int] = None,
     ) -> tuple[list[EmailSearchHit], str]:
         fts_expr = self._build_positive_fts_expr(parsed)
         neg_fts_expr = self._build_negative_fts_expr(parsed)
@@ -2391,6 +2456,7 @@ class EmailRepository:
             now=now,
             tz_offset_minutes=tz_offset_minutes,
         )
+        self._append_matter_filter(filters, matter_id)
         parsed.warnings.extend(structured_warnings)
 
         predicates: list[FilterPredicate] = [

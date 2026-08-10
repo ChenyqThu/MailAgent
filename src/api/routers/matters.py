@@ -11,6 +11,7 @@ from src.api.auth import verify_cf_access
 from src.api.deps import get_settings
 from src.api.schemas.matters import (
     MatterCreateRequest,
+    MatterChatScopeRequest,
     MatterItemCreateRequest,
     MatterItemPatchRequest,
     MatterNoteCreateRequest,
@@ -73,6 +74,7 @@ def _mutation_args(
         "source": mutation.source,
         "actor": Actor(kind="user", actor_id=None),
         "reason": mutation.reason,
+        "reverses_event_id": mutation.reverses_event_id,
     }
     if require_version:
         result["expected_version"] = mutation.expected_version
@@ -177,6 +179,35 @@ async def get_matter(
         value.strip() for value in (include or "").split(",") if value.strip()
     ]
     result = _call(service.get_matter, matter_id, include=include_values)
+    return success_envelope(result, request=request)
+
+
+@router.get("/{matter_id}/context-snapshot")
+async def get_matter_context_snapshot(
+    matter_id: str,
+    request: Request,
+    service: MatterService = Depends(get_matter_service),
+):
+    return success_envelope(
+        _call(service.context_snapshot, matter_id), request=request
+    )
+
+
+@router.post("/{matter_id}/chat-scope")
+async def record_matter_chat_scope(
+    matter_id: str,
+    body: MatterChatScopeRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.record_chat_scope,
+        matter_id,
+        scope=body.scope,
+        session_id=body.session_id,
+        **_mutation_args(body.mutation, idempotency_key, require_version=False),
+    )
     return success_envelope(result, request=request)
 
 

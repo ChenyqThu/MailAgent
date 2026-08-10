@@ -565,6 +565,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // vite define (mirrors the openness flags). Explicit false → buildGatewayTools output
   // byte-identical to the pre-epic set.
   const calendarToolsEnabled = envBool('MAILAGENT_CALENDAR_AGENT_TOOLS', true)
+  const matterToolsEnabled = envBool('MAILAGENT_MATTERS_ENABLED', false)
   // task 07-21 — MAILAGENT_NOTION_AGENT_TOOL gates the notion_agent_chat tool (edit-tier 恒 HITL —
   // delegates a Notion request to the notion-agent CLI via serve-api /api/skills/invoke). Unlike the
   // other tool families this one is SKILL-gated (skill_gating maps it to the notion_agent skill), so
@@ -1073,7 +1074,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       contextMode,
       agentRunContext,
       toolApprovalPrefs,
-      parentSessionId
+      parentSessionId,
+      matterScopeFilter
     ) => {
       // Stage 1 PR2/PR3 — dynamic MCP connector tools. Two admitted shapes (shouldLoadConnectorTools):
       // manual_chat without an agentRunContext (PR2, unchanged), and a headless agent run whose
@@ -1187,6 +1189,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           skillCreatorToolsEnabled,
           // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS, default on).
           calendarToolsEnabled,
+          matterToolsEnabled,
+          matterScopeFilter,
           // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL, default on; skill-gated).
           notionAgentToolsEnabled,
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same

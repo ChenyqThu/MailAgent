@@ -436,21 +436,52 @@ export async function prepareChatRun(
       )
     }
   }
+  let contextSnapshot: AgentContextSnapshot | null = null
+  if (cfg.systemPromptProvider && body.contextSnapshot != null) {
+    if (isValidContextSnapshot(body.contextSnapshot)) {
+      contextSnapshot = body.contextSnapshot
+    } else if (
+      typeof body.contextSnapshot === 'object' &&
+      !Array.isArray(body.contextSnapshot) &&
+      'version' in (body.contextSnapshot as object)
+    ) {
+      return {
+        ok: false,
+        status: 400,
+        body: { error: 'E_INVALID_ARG', hint: 'contextSnapshot failed schema validation' }
+      }
+    }
+  }
   const auditEntries: GatewayToolAuditEntry[] = []
+  const matterScopeFilter =
+    contextSnapshot?.scope.anchorType === 'matter' &&
+    contextSnapshot.activeMatter?.scope === 'matter' &&
+    typeof contextSnapshot.scope.anchorId === 'number'
+      ? { matterId: contextSnapshot.scope.anchorId }
+      : null
   // WP-11 — the 4th slot (agentRunContext) belongs to the HEADLESS wrapper's own signature
   // (wrapCfgForAgentRun injects it); manual callers pass undefined there and the prefs ride the
   // 5th slot. The headless wrapper's 3-arg signature structurally drops the 5th argument, so a
   // headless run can never receive the prefs even if this call site changes.
   const tools =
     sessionId == null
-      ? cfg.buildTools?.(auditEntries, approvalMode, contextMode, undefined, toolApprovalPrefs)
+      ? cfg.buildTools?.(
+          auditEntries,
+          approvalMode,
+          contextMode,
+          undefined,
+          toolApprovalPrefs,
+          undefined,
+          matterScopeFilter
+        )
       : cfg.buildTools?.(
           auditEntries,
           approvalMode,
           contextMode,
           undefined,
           toolApprovalPrefs,
-          sessionId
+          sessionId,
+          matterScopeFilter
         )
   const hasTools = tools != null && Object.keys(tools).length > 0
   // W6 — the run holds the suggest_followups tool (manual chat with a real gateway ToolSet). Drives
@@ -468,22 +499,6 @@ export async function prepareChatRun(
     // snapshot that CLAIMS to be typed (carries a `version`) but fails validation → 400 (no off-spec
     // blob into the prompt); an UNtyped passthrough blob (no version — the AG-UI mirror's open
     // context, handled by the AG-UI route's own redacting readContext) is ignored here. Absent → null.
-    let contextSnapshot: AgentContextSnapshot | null = null
-    if (body.contextSnapshot != null) {
-      if (isValidContextSnapshot(body.contextSnapshot)) {
-        contextSnapshot = body.contextSnapshot
-      } else if (
-        typeof body.contextSnapshot === 'object' &&
-        !Array.isArray(body.contextSnapshot) &&
-        'version' in (body.contextSnapshot as object)
-      ) {
-        return {
-          ok: false,
-          status: 400,
-          body: { error: 'E_INVALID_ARG', hint: 'contextSnapshot failed schema validation' }
-        }
-      }
-    }
     // The provider is contracted to return null (not throw) on a /chat/config blip → context-light.
     // D1 — the connector catalog it carries is manual-shape (zero-arg shared cache); scope it to
     // THIS run before assembly (headless: granted connectors only; seam-refused shapes: none).

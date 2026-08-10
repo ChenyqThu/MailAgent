@@ -79,6 +79,7 @@ export interface DomainEmailListOpts {
    *  drafts into "my mail" (the UI's /list-enriched already defaults to excluding them); an
    *  explicit mailbox (incl. 草稿箱) never sets it. undefined → param omitted → server default. */
   excludeDrafts?: boolean
+  matterId?: number
 }
 
 /** Search filters for FTS (email_search_fulltext / email_search_attachments). */
@@ -88,6 +89,19 @@ export interface DomainSearchOpts {
   since?: string
   until?: string
   limit?: number
+  matterId?: number
+}
+
+export interface DomainMatterMutation {
+  source: string
+  idempotency_key: string
+  expected_version?: number
+  reason?: string
+  reverses_event_id?: number
+}
+
+export type DomainMatterResult = Record<string, unknown> & {
+  undo?: { tool: string; input: Record<string, unknown>; label: string } | null
 }
 
 /** Filters for report_list. */
@@ -753,8 +767,147 @@ export class MailAgentDomainClient {
         isRead: opts.isRead,
         isFlagged: opts.isFlagged,
         exclude_drafts: opts.excludeDrafts,
+        matter_id: opts.matterId,
         limit: opts.limit
       },
+      signal
+    })
+  }
+
+  listMatters(
+    opts: {
+      q?: string
+      status?: string
+      health?: string
+      priority?: string
+      type?: string
+      tag?: string
+      view?: string
+      archived?: boolean
+      deleted?: boolean
+      limit?: number
+    },
+    signal?: AbortSignal
+  ): Promise<{ items: Array<Record<string, unknown>>; next_cursor?: string | null }> {
+    return this._req('GET', '/matters', { query: opts, signal })
+  }
+
+  getMatter(
+    publicId: string,
+    include: readonly string[],
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req('GET', `/matters/${encodeURIComponent(publicId)}`, {
+      query: { include: include.join(',') },
+      signal
+    })
+  }
+
+  createMatter(
+    data: Record<string, unknown>,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    return this._req('POST', '/matters', { body: { ...data, mutation }, signal })
+  }
+
+  updateMatter(
+    publicId: string,
+    operation: 'patch' | 'archive' | 'reopen' | 'trash' | 'restore',
+    patch: Record<string, unknown> | undefined,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    const path = `/matters/${encodeURIComponent(publicId)}`
+    if (operation === 'patch') {
+      return this._req('PATCH', path, { body: { ...(patch ?? {}), mutation }, signal })
+    }
+    return this._req('POST', `${path}/${operation}`, { body: { mutation }, signal })
+  }
+
+  mutateMatterItem(
+    publicId: string,
+    operation: 'create' | 'update' | 'delete' | 'restore',
+    itemId: number | undefined,
+    data: Record<string, unknown> | undefined,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    const base = `/matters/${encodeURIComponent(publicId)}/items`
+    if (operation === 'create')
+      return this._req('POST', base, { body: { ...(data ?? {}), mutation }, signal })
+    const itemPath = `${base}/${itemId}`
+    if (operation === 'update')
+      return this._req('PATCH', itemPath, { body: { ...(data ?? {}), mutation }, signal })
+    if (operation === 'delete') return this._req('DELETE', itemPath, { body: { mutation }, signal })
+    return this._req('POST', `${itemPath}/restore`, { body: { mutation }, signal })
+  }
+
+  mutateMatterResource(
+    publicId: string,
+    operation: 'link' | 'update' | 'unlink' | 'restore',
+    resourceId: number | undefined,
+    data: Record<string, unknown> | undefined,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    const base = `/matters/${encodeURIComponent(publicId)}/resources`
+    if (operation === 'link')
+      return this._req('POST', base, { body: { ...(data ?? {}), mutation }, signal })
+    const resourcePath = `${base}/${resourceId}`
+    if (operation === 'update')
+      return this._req('PATCH', resourcePath, { body: { ...(data ?? {}), mutation }, signal })
+    if (operation === 'unlink')
+      return this._req('DELETE', resourcePath, { body: { mutation }, signal })
+    return this._req('POST', `${resourcePath}/restore`, { body: { mutation }, signal })
+  }
+
+  mutateMatterStakeholder(
+    publicId: string,
+    operation: 'create' | 'update' | 'delete' | 'restore',
+    stakeholderId: number | undefined,
+    data: Record<string, unknown> | undefined,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    const base = `/matters/${encodeURIComponent(publicId)}/stakeholders`
+    if (operation === 'create')
+      return this._req('POST', base, { body: { ...(data ?? {}), mutation }, signal })
+    const stakeholderPath = `${base}/${stakeholderId}`
+    if (operation === 'update')
+      return this._req('PATCH', stakeholderPath, { body: { ...(data ?? {}), mutation }, signal })
+    if (operation === 'delete')
+      return this._req('DELETE', stakeholderPath, { body: { mutation }, signal })
+    return this._req('POST', `${stakeholderPath}/restore`, { body: { mutation }, signal })
+  }
+
+  mutateMatterRelation(
+    publicId: string,
+    operation: 'create' | 'update' | 'delete' | 'restore',
+    relationId: number | undefined,
+    data: Record<string, unknown> | undefined,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    const base = `/matters/${encodeURIComponent(publicId)}/relations`
+    if (operation === 'create')
+      return this._req('POST', base, { body: { ...(data ?? {}), mutation }, signal })
+    const relationPath = `${base}/${relationId}`
+    if (operation === 'update')
+      return this._req('PATCH', relationPath, { body: { ...(data ?? {}), mutation }, signal })
+    if (operation === 'delete')
+      return this._req('DELETE', relationPath, { body: { mutation }, signal })
+    return this._req('POST', `${relationPath}/restore`, { body: { mutation }, signal })
+  }
+
+  addMatterNote(
+    publicId: string,
+    data: Record<string, unknown>,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    return this._req('POST', `/matters/${encodeURIComponent(publicId)}/notes`, {
+      body: { ...data, mutation },
       signal
     })
   }
@@ -767,7 +920,8 @@ export class MailAgentDomainClient {
         mailbox: opts.mailbox,
         since: opts.since,
         until: opts.until,
-        limit: opts.limit
+        limit: opts.limit,
+        matter_id: opts.matterId
       },
       signal
     })

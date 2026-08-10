@@ -1,0 +1,19 @@
+{
+  "id": "AGT-MATTER-002",
+  "category": "email_action",
+  "title": "Matter get + item typed mutation",
+  "surface": "general",
+  "user_prompt": "在 MAT-000042 里新增一个本周五完成的 action：确认发布窗口。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["matter_get", "matter_item_mutate"],
+  "must_use_tools": ["matter_get", "matter_item_mutate"],
+  "forbidden_tools": ["matter_delete_permanently", "matter_resource_mutate", "email_prepare_send", "run_command"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.1, "uncertainty_honesty": 0.1, "tool_efficiency": 0.2, "ux_clarity": 0.2 },
+  "rubric_ref": "email_action.md",
+  "notes": "写结果必须返回 committed version/event_ids/undo；默认 approval=auto 可无卡执行。"
+}

@@ -132,6 +132,16 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'calendar_event_reschedule',
   'calendar_event_rsvp',
   'calendar_event_delete',
+  // matter (Matters MVP P3)
+  'matter_find',
+  'matter_get',
+  'matter_create',
+  'matter_update',
+  'matter_item_mutate',
+  'matter_resource_mutate',
+  'matter_stakeholder_mutate',
+  'matter_relation_mutate',
+  'matter_add_note',
   // notion
   'notion_agent_chat',
   // legacy (deleted engine, still present in persisted history)

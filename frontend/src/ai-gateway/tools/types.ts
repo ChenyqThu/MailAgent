@@ -374,6 +374,8 @@ export function auditedWriteTool<I>(
      *  per-tool 'auto' seam so incident forensics can tell a tier-skip from a grant/rule-skip.
      *  Pure audit vocabulary — needsApproval/guard semantics untouched. */
     policyAuditStatus?: 'auto_whitelist' | 'auto_tool_mode'
+    /** Per-call safety escalation that outranks approval preferences and global bypass. */
+    forceApproval?: (input: I) => boolean
     run: (
       input: I,
       ctx: { userEdited: boolean; signal: AbortSignal | undefined; toolCallId: string }
@@ -452,6 +454,7 @@ export function auditedWriteTool<I>(
       // tools from the manual ToolSet — this is the belt for a hand-built assembly.
       if (modeDenied || prefDenied) return false
       guard.register(toolCallId, opts.name, opts.risk, input, opts.editableFields)
+      if (opts.forceApproval?.(input) === true) return true
       // The manual_chat approval ladder (F §4.3, 08-05 WP-11 D1=a) — consulted in priority
       // order; every branch is double-gated on manual_chat (prepareChatRun only injects the
       // global mode / the pref map for manual runs, and this consumption-side re-check keeps a
@@ -582,7 +585,9 @@ export function auditedWriteTool<I>(
       const autoSkip = autoSkipByCall.get(toolCallId)
       autoSkipByCall.delete(toolCallId)
       const approvalStatus = wasWhitelisted
-        ? ((whitelistAuditStatusByCall.get(toolCallId) as GatewayToolAuditEntry['approvalStatus']) ??
+        ? ((whitelistAuditStatusByCall.get(
+            toolCallId
+          ) as GatewayToolAuditEntry['approvalStatus']) ??
           opts.policyAuditStatus ??
           'auto_whitelist')
         : (autoSkip ?? (userEdited ? 'edited' : 'approved'))

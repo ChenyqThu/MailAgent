@@ -42,6 +42,14 @@ EXPECTED_DEFAULT_AUTO = {
     "skill_draft_write_file",
     "skill_draft_discard",
     "custom_agent_run_now",
+    # Matters MVP P3 决策 D7：matter 本地可逆写默认 auto（审计 + 可撤销回执）。
+    "matter_create",
+    "matter_update",
+    "matter_item_mutate",
+    "matter_resource_mutate",
+    "matter_stakeholder_mutate",
+    "matter_relation_mutate",
+    "matter_add_note",
 }
 # configurable=False（固定形状）：send=收件人白名单 / run_command=policy_rules /
 # 供应链两卡 / custom-agent CRUD（run_now 除外）。

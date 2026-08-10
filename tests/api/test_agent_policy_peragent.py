@@ -482,9 +482,9 @@ def test_tool_options_contract_shape(client, monkeypatch):
 
 def test_tool_options_consistent_with_tool_catalog():
     """HEADLESS_TOOL_OPTIONS 与 tests/agent_eval/tool_catalog.json 的 tool_class 轴单源一致：
-    集合 = catalog 内全部 read+domain_write+artifact 工具，减去 legacy_retired（产品里已不存在）
-    与 manual_only（venue 门控，headless 结构性拿不到）两类标记行；class 逐名相同（R4 catalog 闸的
-    Python 侧延伸，新读/写工具漏 HEADLESS_TOOL_OPTIONS 必红）。"""
+    集合 = catalog 内全部 read+domain_write+artifact 工具，减去 legacy_retired（产品里已不存在）、
+    manual_only 与 headless_excluded（均 venue 门控，headless 结构性拿不到）三类标记行；class
+    逐名相同（R4 catalog 闸的 Python 侧延伸，新读/写工具漏 HEADLESS_TOOL_OPTIONS 必红）。"""
     from src.api.routers.agent_runs import (
         DEFAULT_CUSTOM_AGENT_ALLOWED_TOOLS,
         HEADLESS_TOOL_OPTIONS,
@@ -492,21 +492,25 @@ def test_tool_options_consistent_with_tool_catalog():
 
     catalog_path = Path(__file__).resolve().parents[1] / "agent_eval" / "tool_catalog.json"
     catalog = json.loads(catalog_path.read_text())["tools"]
-    # 两类标记行不进 headless 工具面（判据在 catalog 的行标记上，不在这里手抄工具名）：
+    # 三类标记行不进 headless 工具面（判据在 catalog 的行标记上，不在这里手抄工具名）：
     #   legacy_retired（plan_update / skill_list_installed / email_search）—— 在 catalog 里只为 frozen
     #     baseline v0.13.0.jsonl 的历史 tool_use 保留、产品里已不存在；
     #   manual_only（suggest_followups）—— chat UI 优化 W6 的交互 UI 供给（追问 chips + 本回合的
     #     hasToolCall 停机条件），buildGatewayTools 只在 contextMode==='manual_chat' 注册（tools/index.ts
-    #     的 venue 闸，policy.test.ts MANUAL_ONLY_READ_TOOLS 锁死它在 headless/im 缺席）。
-    # 两者都必须留在 catalog 里（前者供 frozen trace 解析，后者是活的 gateway 工具、validate_catalog
-    # 的反向闸要求它在源里），故排除只能读行标记 —— tool-options 端点不得提供这两类名字：
-    # 一个是已不存在的工具，一个是 headless run 永远挂不上的工具（勾了也没有消费点）。
+    #     的 venue 闸，policy.test.ts MANUAL_ONLY_READ_TOOLS 锁死它在 headless/im 缺席）；
+    #   headless_excluded（venue 门控：P3 拍板 matter 工具 headless 结构性不注册——连读面都不给，
+    #     不进勾选面即结构性拿不到；与 manual_only 不同，matter 工具在 im_chat 也注册，故不能复用
+    #     那个标记；P4 matter_followup 相位再议）。
+    # 三者都必须留在 catalog 里（legacy_retired 供 frozen trace 解析，后两类是活的 gateway 工具、
+    # validate_catalog 的反向闸要求它们在源里），故排除只能读行标记 —— tool-options 端点不得提供
+    # 这些名字：要么是已不存在的工具，要么是 headless run 永远挂不上的工具（勾了也没有消费点）。
     expected = {
         name: meta["tool_class"]
         for name, meta in catalog.items()
             if meta["tool_class"] in ("read", "domain_write", "artifact")
             and not meta.get("legacy_retired")
             and not meta.get("manual_only")
+            and not meta.get("headless_excluded")
             and name != "plan_update"  # core-unmanaged: every headless run gets the local no-op plan tool
         }
     assert dict(HEADLESS_TOOL_OPTIONS) == expected

@@ -29,6 +29,7 @@ export interface AgentContextSnapshot {
   version: ContextSnapshotVersion
   scope: ContextScope
   activeEmail?: ActiveEmailContext | null
+  activeMatter?: ActiveMatterContext | null
   selection?: SelectionContext | null
   references: ReferenceContext[]
   attachments: AttachmentContext[]
@@ -40,7 +41,7 @@ export interface AgentContextSnapshot {
 
 export interface ContextScope {
   surface: 'email-chat' | 'general-agent' | 'search-agent'
-  anchorType: 'email' | 'general'
+  anchorType: 'email' | 'general' | 'matter'
   anchorId: number | null
   sessionId: number | null
   backendKind: 'ai-sdk' | 'legacy-custom-api' | 'legacy-notion-agent'
@@ -73,6 +74,44 @@ export interface ActiveEmailContext {
   }
   /** Metadata above is trusted; the body is untrusted user content (§7). */
   trust: 'trusted-metadata-untrusted-body'
+}
+
+export interface ActiveMatterContext {
+  id: number
+  publicId: string
+  title: string
+  type: string | null
+  tags: string[]
+  status: string
+  health: string
+  priority: string
+  dueAt: number | null
+  waitingContext: Record<string, unknown> | null
+  description: string
+  currentSummary: string | null
+  version: number
+  summaryAcceptedAt: number | null
+  scope: 'matter' | 'global'
+  items: Array<Record<string, unknown>>
+  stakeholders: Array<Record<string, unknown>>
+  resources: Array<{
+    id: number
+    kind: string
+    provider: string
+    externalKey: string
+    title: string | null
+    canonicalUrl: string | null
+    revision: string | null
+    accessPolicy: string
+    metadata: Record<string, unknown>
+    excerpt: string | null
+  }>
+  events: Array<{
+    kind: string
+    happenedAt: number
+    actorKind: string
+    summary: string
+  }>
 }
 
 export interface SelectionContext {
@@ -304,6 +343,20 @@ export function buildAgentContextSnapshot(input: BuildAgentContextInput): AgentC
   }
 }
 
+export function buildMatterContextSnapshot(
+  input: Omit<BuildAgentContextInput, 'activeEmail'> & { activeMatter: ActiveMatterContext }
+): AgentContextSnapshot {
+  const snapshot = buildAgentContextSnapshot({ ...input, activeEmail: null })
+  return {
+    ...snapshot,
+    activeMatter: input.activeMatter,
+    privacy: {
+      ...snapshot.privacy,
+      userVisibleSummary: `matter context; ${input.activeMatter.resources.length} pinned resource excerpt(s)`
+    }
+  }
+}
+
 /** One-line, user-facing summary of what the snapshot carries (drives ContextChips' detail + the
  *  system block's privacy note). Deterministic so a test can assert it. */
 function summarizePrivacy(args: {
@@ -349,6 +402,29 @@ export function isValidContextSnapshot(value: unknown): value is AgentContextSna
   if (v.scope == null || typeof v.scope !== 'object') return false
   const scope = v.scope as Record<string, unknown>
   if (typeof scope.surface !== 'string' || typeof scope.anchorType !== 'string') return false
+  if (!['email', 'general', 'matter'].includes(scope.anchorType as string)) return false
+  if (scope.anchorType === 'matter') {
+    if (
+      v.activeMatter == null ||
+      typeof v.activeMatter !== 'object' ||
+      Array.isArray(v.activeMatter)
+    ) {
+      return false
+    }
+    const matter = v.activeMatter as Record<string, unknown>
+    if (
+      typeof matter.id !== 'number' ||
+      typeof matter.publicId !== 'string' ||
+      typeof matter.title !== 'string' ||
+      !['matter', 'global'].includes(String(matter.scope)) ||
+      !Array.isArray(matter.items) ||
+      !Array.isArray(matter.stakeholders) ||
+      !Array.isArray(matter.resources) ||
+      !Array.isArray(matter.events)
+    ) {
+      return false
+    }
+  }
   if (!Array.isArray(v.references) || !Array.isArray(v.attachments)) return false
   if (v.uiState == null || typeof v.uiState !== 'object') return false
   if (v.privacy == null || typeof v.privacy !== 'object') return false

@@ -74,6 +74,308 @@ export const emailSearchFulltextSchema = z.object({
 })
 export type EmailSearchFulltextInput = z.infer<typeof emailSearchFulltextSchema>
 
+const matterIdempotencyFields = {
+  idempotency_key: z.string().trim().min(1).max(256).optional(),
+  reason: z.string().max(2000).optional(),
+  reverses_event_id: z.number().int().positive().optional()
+}
+
+const matterVersionedFields = {
+  ...matterIdempotencyFields,
+  expected_version: z.number().int().positive()
+}
+
+export const matterFindSchema = z.object({
+  q: z.string().trim().optional(),
+  status: z
+    .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
+    .optional(),
+  health: z.enum(['unknown', 'on_track', 'at_risk', 'off_track']).optional(),
+  priority: z.enum(['p0', 'p1', 'p2', 'p3']).optional(),
+  type: z.string().trim().min(1).max(128).optional(),
+  tag: z.string().trim().min(1).optional(),
+  view: z.string().trim().min(1).optional(),
+  archived: z.boolean().optional(),
+  deleted: z.boolean().optional(),
+  limit: z.number().int().min(1).max(50).default(20)
+})
+export type MatterFindInput = z.infer<typeof matterFindSchema>
+
+export const MATTER_GET_INCLUDES = [
+  'items',
+  'resources',
+  'stakeholders',
+  'timeline',
+  'relations'
+] as const
+export const matterGetSchema = z.object({
+  public_id: z.string().trim().min(1),
+  include: z.array(z.enum(MATTER_GET_INCLUDES)).default(['items', 'stakeholders'])
+})
+export type MatterGetInput = z.infer<typeof matterGetSchema>
+
+export const matterCreateSchema = z.object({
+  title: z.string().trim().min(1).max(500),
+  description: z.string().default(''),
+  type: z.string().trim().min(1).max(128).optional(),
+  tags: z.array(z.string()).default([]),
+  status: z
+    .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
+    .default('inbox'),
+  health: z.enum(['unknown', 'on_track', 'at_risk', 'off_track']).default('unknown'),
+  priority: z.enum(['p0', 'p1', 'p2', 'p3']).default('p1'),
+  due_at: z.number().int().nullable().optional(),
+  waiting_context: z.record(z.string(), z.unknown()).nullable().optional(),
+  ...matterIdempotencyFields
+})
+export type MatterCreateInput = z.infer<typeof matterCreateSchema>
+
+const matterPatchSchema = z
+  .object({
+    title: z.string().trim().min(1).max(500).optional(),
+    type: z.string().trim().min(1).max(128).nullable().optional(),
+    tags: z.array(z.string()).optional(),
+    priority: z.enum(['p0', 'p1', 'p2', 'p3']).optional(),
+    due_at: z.number().int().nullable().optional(),
+    waiting_context: z.record(z.string(), z.unknown()).nullable().optional(),
+    status: z
+      .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
+      .optional(),
+    health: z.enum(['unknown', 'on_track', 'at_risk', 'off_track']).optional(),
+    current_summary: z.string().nullable().optional()
+  })
+  .strict()
+
+export const matterUpdateSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    operation: z.enum(['patch', 'archive', 'reopen', 'trash', 'restore']),
+    patch: matterPatchSchema.optional(),
+    ...matterVersionedFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.operation === 'patch' && value.patch == null) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'patch is required for operation=patch',
+        path: ['patch']
+      })
+    }
+    if (value.operation !== 'patch' && value.patch != null) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'patch is only valid for operation=patch',
+        path: ['patch']
+      })
+    }
+  })
+export type MatterUpdateInput = z.infer<typeof matterUpdateSchema>
+
+const matterChecklistEntrySchema = z.object({
+  id: z.string().trim().min(1),
+  text: z.string().trim().min(1),
+  done: z.boolean().default(false)
+})
+const matterItemFields = {
+  kind: z.enum(['action', 'milestone', 'decision', 'blocker', 'question', 'note']).optional(),
+  title: z.string().trim().min(1).max(500).optional(),
+  description: z.string().nullable().optional(),
+  position: z.number().int().optional(),
+  status: z
+    .enum(['open', 'in_progress', 'waiting', 'blocked', 'done', 'canceled'])
+    .nullable()
+    .optional(),
+  priority: z.enum(['p0', 'p1', 'p2', 'p3']).nullable().optional(),
+  owner_kind: z.enum(['user', 'agent', 'system']).nullable().optional(),
+  owner_id: z.string().nullable().optional(),
+  waiting_on_stakeholder_id: z.number().int().positive().nullable().optional(),
+  due_at: z.number().int().nullable().optional(),
+  completed_at: z.number().int().nullable().optional(),
+  checklist: z.array(matterChecklistEntrySchema).optional(),
+  source_resource_id: z.number().int().positive().nullable().optional(),
+  source_locator: z.record(z.string(), z.unknown()).nullable().optional()
+}
+export const matterItemMutateSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    operation: z.enum(['create', 'update', 'delete', 'restore']),
+    item_id: z.number().int().positive().optional(),
+    item: z.object(matterItemFields).strict().optional(),
+    patch: z.object(matterItemFields).strict().optional(),
+    ...matterVersionedFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.operation === 'create' && value.item_id != null)
+      ctx.addIssue({ code: 'custom', message: 'create forbids item_id', path: ['item_id'] })
+    if (value.operation !== 'create' && value.item_id == null)
+      ctx.addIssue({ code: 'custom', message: 'item_id is required', path: ['item_id'] })
+    if (value.operation === 'create' && value.item == null)
+      ctx.addIssue({ code: 'custom', message: 'item is required', path: ['item'] })
+    if (value.operation === 'update' && value.patch == null)
+      ctx.addIssue({ code: 'custom', message: 'patch is required', path: ['patch'] })
+    const fields = value.operation === 'create' ? value.item : value.patch
+    if (fields?.kind != null && fields.kind !== 'action') {
+      for (const key of [
+        'status',
+        'priority',
+        'owner_kind',
+        'owner_id',
+        'waiting_on_stakeholder_id',
+        'due_at',
+        'completed_at',
+        'checklist'
+      ] as const) {
+        if (
+          fields[key] != null &&
+          !(key === 'checklist' && Array.isArray(fields[key]) && fields[key].length === 0)
+        ) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'non-action item forbids action-only fields',
+            path: [value.operation === 'create' ? 'item' : 'patch', key]
+          })
+        }
+      }
+    }
+  })
+export type MatterItemMutateInput = z.infer<typeof matterItemMutateSchema>
+
+export const matterResourceMutateSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    operation: z.enum(['link', 'update', 'unlink', 'restore']),
+    resource_id: z.number().int().positive().optional(),
+    resource: z
+      .object({
+        provider: z.string().trim().min(1),
+        external_key: z.string().trim().min(1),
+        kind: z.enum(['email', 'thread', 'event', 'doc', 'file', 'url']),
+        title: z.string().optional(),
+        canonical_url: z.string().optional(),
+        metadata: z.record(z.string(), z.unknown()).optional(),
+        access_policy: z.enum(['allowed', 'metadata_only', 'excluded']).optional(),
+        pinned: z.boolean().optional(),
+        relation_type: z.string().nullable().optional(),
+        confirmed: z.boolean().optional(),
+        sub_state: z.enum(['none', 'active', 'paused']).optional()
+      })
+      .strict()
+      .optional(),
+    patch: z
+      .object({
+        scope: z.enum(['resource', 'link']).optional(),
+        access_policy: z.enum(['allowed', 'metadata_only', 'excluded']).optional(),
+        pinned: z.boolean().optional(),
+        relation_type: z.string().nullable().optional(),
+        sub_state: z.enum(['active', 'paused']).optional(),
+        confirmed: z.boolean().optional()
+      })
+      .strict()
+      .optional(),
+    ...matterVersionedFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.operation === 'link' && (value.resource_id == null) === (value.resource == null))
+      ctx.addIssue({
+        code: 'custom',
+        message: 'link requires exactly one of resource_id or resource',
+        path: ['resource']
+      })
+    if (value.operation !== 'link' && value.resource_id == null)
+      ctx.addIssue({ code: 'custom', message: 'resource_id is required', path: ['resource_id'] })
+    if (value.operation === 'update' && value.patch == null)
+      ctx.addIssue({ code: 'custom', message: 'patch is required', path: ['patch'] })
+    if (value.patch?.access_policy != null && value.patch.scope !== 'resource')
+      ctx.addIssue({
+        code: 'custom',
+        message: "access_policy requires scope='resource'",
+        path: ['patch', 'scope']
+      })
+  })
+export type MatterResourceMutateInput = z.infer<typeof matterResourceMutateSchema>
+
+const stakeholderFields = z
+  .object({
+    person_key: z.string().optional(),
+    display_name: z.string().nullable().optional(),
+    email: z.string().nullable().optional(),
+    organization: z.string().nullable().optional(),
+    role: z.string().nullable().optional(),
+    relationship: z.string().nullable().optional(),
+    is_waiting_on: z.boolean().optional(),
+    last_contact_at: z.number().int().nullable().optional(),
+    source_resource_id: z.number().int().positive().nullable().optional()
+  })
+  .strict()
+export const matterStakeholderMutateSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    operation: z.enum(['create', 'update', 'delete', 'restore']),
+    stakeholder_id: z.number().int().positive().optional(),
+    stakeholder: stakeholderFields.optional(),
+    patch: stakeholderFields.optional(),
+    ...matterVersionedFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.operation === 'create' && value.stakeholder_id != null)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'create forbids stakeholder_id',
+        path: ['stakeholder_id']
+      })
+    if (value.operation !== 'create' && value.stakeholder_id == null)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'stakeholder_id is required',
+        path: ['stakeholder_id']
+      })
+    if (value.operation === 'create' && value.stakeholder == null)
+      ctx.addIssue({ code: 'custom', message: 'stakeholder is required', path: ['stakeholder'] })
+    if (value.operation === 'update' && value.patch == null)
+      ctx.addIssue({ code: 'custom', message: 'patch is required', path: ['patch'] })
+  })
+export type MatterStakeholderMutateInput = z.infer<typeof matterStakeholderMutateSchema>
+
+const relationFields = z
+  .object({
+    target_public_id: z.string().trim().min(1).optional(),
+    relation_type: z
+      .enum(['related_to', 'depends_on', 'blocks', 'follow_up_of', 'supersedes'])
+      .nullable()
+      .optional(),
+    confidence: z.number().min(0).max(1).nullable().optional(),
+    confirmed: z.boolean().optional()
+  })
+  .strict()
+export const matterRelationMutateSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    operation: z.enum(['create', 'update', 'delete', 'restore']),
+    relation_id: z.number().int().positive().optional(),
+    relation: relationFields.optional(),
+    patch: relationFields.omit({ target_public_id: true }).optional(),
+    ...matterVersionedFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.operation === 'create' && value.relation_id != null)
+      ctx.addIssue({ code: 'custom', message: 'create forbids relation_id', path: ['relation_id'] })
+    if (value.operation !== 'create' && value.relation_id == null)
+      ctx.addIssue({ code: 'custom', message: 'relation_id is required', path: ['relation_id'] })
+    if (value.operation === 'create' && value.relation == null)
+      ctx.addIssue({ code: 'custom', message: 'relation is required', path: ['relation'] })
+    if (value.operation === 'update' && value.patch == null)
+      ctx.addIssue({ code: 'custom', message: 'patch is required', path: ['patch'] })
+  })
+export type MatterRelationMutateInput = z.infer<typeof matterRelationMutateSchema>
+
+export const matterAddNoteSchema = z.object({
+  public_id: z.string().trim().min(1),
+  title: z.string().trim().min(1).max(500).optional(),
+  text: z.string().trim().min(1),
+  ...matterVersionedFields
+})
+export type MatterAddNoteInput = z.infer<typeof matterAddNoteSchema>
+
 /** email_get — single email metadata. */
 export const emailGetSchema = z.object({
   internal_id: z.number().int()

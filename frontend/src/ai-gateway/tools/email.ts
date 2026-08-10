@@ -47,7 +47,8 @@ const ATTACHMENT_TEXT_MAX_CHARS = 12000
  *  gateway creates one per request and drains it in onFinish). */
 export function createEmailReadTools(
   domain: MailAgentDomainClient,
-  collector: GatewayToolAuditCollector = []
+  collector: GatewayToolAuditCollector = [],
+  opts: { matterScopeFilter?: { matterId: number } | null } = {}
 ): Record<string, Tool> {
   // bind every tool's audit to this request's collector (generic — preserves the
   // per-tool input typing inferred from each zod inputSchema).
@@ -92,7 +93,8 @@ export function createEmailReadTools(
           // drafts (aligns with the UI's /list-enriched default). An explicit mailbox is the
           // user's choice, drafts included: never send the flag then (server default false).
           excludeDrafts: mailbox === undefined ? true : undefined,
-          limit: input.limit
+          limit: input.limit,
+          matterId: opts.matterScopeFilter?.matterId
         },
         signal
       )
@@ -125,7 +127,8 @@ export function createEmailReadTools(
           mailbox: input.mailbox,
           since: input.since,
           until: input.until,
-          limit: input.limit
+          limit: input.limit,
+          matterId: opts.matterScopeFilter?.matterId
         },
         signal
       )
