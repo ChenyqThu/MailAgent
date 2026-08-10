@@ -40,6 +40,7 @@ import {
   listLastNMessages,
   listMessages,
   listSessionsForEmail,
+  listSessionsForMatter,
   listToolCallsForMessage,
   markToolCallApprovalExpired,
   markCompactInvalid,
@@ -79,6 +80,79 @@ afterEach(() => {
   delete process.env['AI_CHAT_DB_PATH']
   if (existsSync(tmpDir)) rmSync(tmpDir, { recursive: true, force: true })
 })
+
+function seedV26ChatDb(): void {
+  // eslint-disable-next-line @typescript-eslint/no-require-imports
+  const BetterSqlite3 = require('better-sqlite3') as typeof import('better-sqlite3')
+  const seed = new BetterSqlite3(dbPath)
+  seed.exec(`
+    CREATE TABLE chat_db_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+    CREATE TABLE ai_chat_sessions (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      email_id INTEGER,
+      anchor_type TEXT NOT NULL DEFAULT 'email'
+        CHECK (anchor_type IN ('email', 'general')),
+      anchor_id INTEGER,
+      backend_kind TEXT NOT NULL
+        CHECK (backend_kind IN ('notion-agent', 'custom-api', 'ai-sdk')),
+      backend_model TEXT,
+      backend_agent_page_id TEXT,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL,
+      title TEXT,
+      archived INTEGER NOT NULL DEFAULT 0,
+      origin TEXT,
+      agent_id TEXT,
+      agent_job_id TEXT,
+      last_read_at INTEGER,
+      pinned_at INTEGER,
+      starred INTEGER NOT NULL DEFAULT 0,
+      trigger_id TEXT,
+      trigger_kind TEXT,
+      trigger_fired_at INTEGER,
+      parent_session_id INTEGER,
+      parent_tool_call_id TEXT,
+      invoked_by TEXT,
+      CHECK (
+        (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
+        OR
+        (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
+      )
+    );
+    CREATE TABLE ai_chat_messages (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      session_id INTEGER NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      status TEXT NOT NULL,
+      created_at INTEGER NOT NULL,
+      updated_at INTEGER NOT NULL
+    );
+    CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
+    CREATE INDEX idx_sessions_anchor
+      ON ai_chat_sessions(anchor_type, anchor_id, updated_at DESC);
+    CREATE INDEX idx_chat_sessions_agent_updated
+      ON ai_chat_sessions(agent_id, updated_at DESC);
+    CREATE INDEX idx_chat_sessions_trigger_fired
+      ON ai_chat_sessions(trigger_id, trigger_fired_at DESC);
+    CREATE INDEX idx_chat_sessions_parent
+      ON ai_chat_sessions(parent_session_id, created_at ASC);
+    INSERT INTO chat_db_meta (key, value) VALUES ('schema_version', '26');
+    INSERT INTO ai_chat_sessions
+      (id, email_id, anchor_type, anchor_id, backend_kind, backend_model,
+       backend_agent_page_id, created_at, updated_at, title, archived, origin,
+       agent_id, agent_job_id, last_read_at, pinned_at, starred, trigger_id,
+       trigger_kind, trigger_fired_at, parent_session_id, parent_tool_call_id, invoked_by)
+      VALUES
+      (7, NULL, 'general', NULL, 'ai-sdk', 'openai/gpt-5', NULL,
+       1000, 2000, 'legacy v26', 1, 'interactive', NULL, NULL, 1500, 1400, 1,
+       'trigger-1', 'manual', 1300, 3, 'toolu_parent', 'user');
+    INSERT INTO ai_chat_messages
+      (session_id, role, content, status, created_at, updated_at)
+      VALUES (7, 'user', 'preserve me', 'complete', 1000, 1000);
+  `)
+  seed.close()
+}
 
 describe('chat_db — path + schema bootstrap', () => {
   test('resolveChatDbPath honours $AI_CHAT_DB_PATH', () => {
@@ -146,7 +220,84 @@ describe('chat_db — path + schema bootstrap', () => {
     // WP-15 context 环 (08-05): bumped to 23 — ai_chat_messages.context_tokens (末 step 的
     // inputTokens = 上下文占用；≠ tokens_input 的多 step 求和).
     // harness optimization P1 (08-07): v24 — trigger provenance columns + query indexes.
-    expect(ver.value).toBe('26')
+    // Matters MVP P3 (08-10): v27 — matter anchor CHECK + coupling branch.
+    expect(ver.value).toBe('27')
+  })
+
+  test('v26 DB rebuilds to v27 with matter CHECK, rows, FKs, and all session indexes intact', () => {
+    closeChatDb()
+    seedV26ChatDb()
+
+    const db = getChatDb()
+    const version = db
+      .prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'")
+      .get() as { value: string }
+    expect(version.value).toBe('27')
+
+    const legacy = db.prepare('SELECT * FROM ai_chat_sessions WHERE id = 7').get() as Record<
+      string,
+      unknown
+    >
+    expect(legacy).toMatchObject({
+      anchor_type: 'general',
+      title: 'legacy v26',
+      archived: 1,
+      starred: 1,
+      trigger_id: 'trigger-1',
+      parent_tool_call_id: 'toolu_parent'
+    })
+    expect(
+      db.prepare('SELECT content FROM ai_chat_messages WHERE session_id = 7').get()
+    ).toEqual({ content: 'preserve me' })
+    expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([])
+
+    const indexes = db
+      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ai_chat_sessions'")
+      .all() as Array<{ name: string }>
+    expect(new Set(indexes.map((row) => row.name))).toEqual(
+      new Set([
+        'idx_sessions_email',
+        'idx_sessions_anchor',
+        'idx_chat_sessions_agent_updated',
+        'idx_chat_sessions_trigger_fired',
+        'idx_chat_sessions_parent'
+      ])
+    )
+
+    expect(() =>
+      db.prepare(
+        `INSERT INTO ai_chat_sessions
+          (email_id, anchor_type, anchor_id, backend_kind, created_at, updated_at)
+         VALUES (NULL, 'matter', 42, 'ai-sdk', 3000, 3000)`
+      ).run()
+    ).not.toThrow()
+    expect(() =>
+      db.prepare(
+        `INSERT INTO ai_chat_sessions
+          (email_id, anchor_type, anchor_id, backend_kind, created_at, updated_at)
+         VALUES (42, 'matter', 42, 'ai-sdk', 3000, 3000)`
+      ).run()
+    ).toThrow()
+  })
+
+  test('v27 shape with meta rolled back to 26 re-enters by advancing meta only', () => {
+    const db = getChatDb()
+    db.exec('CREATE INDEX idx_v27_reentry_probe ON ai_chat_sessions(title)')
+    db.prepare(
+      "UPDATE chat_db_meta SET value = '26' WHERE key = 'schema_version'"
+    ).run()
+    closeChatDb()
+
+    const reopened = getChatDb()
+    const version = reopened
+      .prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'")
+      .get() as { value: string }
+    expect(version.value).toBe('27')
+    expect(
+      reopened
+        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_v27_reentry_probe'")
+        .get()
+    ).toEqual({ name: 'idx_v27_reentry_probe' })
   })
 
   test('fresh DB schema includes the v2 metadata column', () => {
@@ -320,7 +471,7 @@ describe('chat_db — path + schema bootstrap', () => {
       expect.arrayContaining(['trigger_id', 'trigger_kind', 'trigger_fired_at'])
     )
     const version = migrated.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as { value: string }
-    expect(version.value).toBe('26')
+    expect(version.value).toBe('27')
   })
 
   test('createAgentSession — an interactive session reads origin as null/undefined (not agent)', () => {
@@ -340,7 +491,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('26')
+    expect(ver.value).toBe('27')
   })
 
   test('fresh DB v23 — ai_chat_messages.context_tokens 与 tokens_input 是两列两语义', () => {
@@ -404,7 +555,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('26')
+    expect(ver.value).toBe('27')
     const cols = reopened.prepare('PRAGMA table_info(ai_chat_sessions)').all() as Array<{
       name: string
     }>
@@ -468,7 +619,7 @@ describe('chat_db — path + schema bootstrap', () => {
     // Sprint 19 (PR-1a → bug-fix): v1 DB jumped to v4; task 06-08-chat Bug 2
     // bumped to v5; 需求 5 bumped to v6; P2a → v8; P4 Phase 02 → v9 → a v1 DB now
     // climbs the whole ladder to v17.
-    expect(ver.value).toBe('26')
+    expect(ver.value).toBe('27')
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('metadata')
     // v6 column present after climbing from v1.
@@ -573,7 +724,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('26')
+    ).toBe('27')
     // Narrow CHECK gone, widened CHECK in place.
     const sql = (
       db
@@ -618,7 +769,7 @@ describe('chat_db — path + schema bootstrap', () => {
           value: string
         }
       ).value
-    ).toBe('26')
+    ).toBe('27')
     // Simulate the crash window: roll the meta back to v3 while the physical
     // schema (content_offset + thinking columns, v4 table shape) stays at v6.
     db.prepare("UPDATE chat_db_meta SET value = '3' WHERE key = 'schema_version'").run()
@@ -630,7 +781,7 @@ describe('chat_db — path + schema bootstrap', () => {
     const ver = reopened
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('26')
+    expect(ver.value).toBe('27')
     // Columns are still present exactly once (no duplication, no loss).
     const msgCols = reopened.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{
       name: string
@@ -1326,7 +1477,7 @@ describe('chat_db — v3 → v4 migration (drop UNIQUE on ai_chat_sessions)', ()
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('26')
+    expect(ver.value).toBe('27')
     // UNIQUE gone — CREATE TABLE SQL no longer contains UNIQUE clause on
     // (email_id, backend_kind, backend_agent_page_id).
     const tableSql = (
@@ -1469,7 +1620,7 @@ describe('chat_db — v4 → v5 migration (chat_tool_call.content_offset)', () =
       value: string
     }
     // v4 DB now climbs the whole ladder to v17 (content_offset added at v5).
-    expect(ver.value).toBe('26')
+    expect(ver.value).toBe('27')
     // Column present, pre-existing row reads NULL (degrade path in renderer).
     const cols = db.prepare('PRAGMA table_info(chat_tool_call)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('content_offset')
@@ -1531,7 +1682,7 @@ describe('chat_db — v5 → v6 migration (ai_chat_messages.thinking)', () => {
     const ver = db.prepare("SELECT value FROM chat_db_meta WHERE key = 'schema_version'").get() as {
       value: string
     }
-    expect(ver.value).toBe('26')
+    expect(ver.value).toBe('27')
     // Column present, pre-existing row reads NULL (no thinking block in renderer).
     const cols = db.prepare('PRAGMA table_info(ai_chat_messages)').all() as Array<{ name: string }>
     expect(cols.map((c) => c.name)).toContain('thinking')
@@ -1606,6 +1757,96 @@ describe('chat_db — createNewSession (multi-session per email)', () => {
     expect(a.id).not.toBe(b.id)
     expect(a.backend_agent_page_id).toBeNull()
     expect(b.backend_agent_page_id).toBeNull()
+  })
+})
+
+describe('chat_db — matter anchors', () => {
+  test('rejects missing/non-positive matterId and matter anchors carrying emailId', () => {
+    expect(() =>
+      getOrCreateSession({ anchorType: 'matter', backendKind: 'ai-sdk' })
+    ).toThrow(/positive integer matterId/)
+    expect(() =>
+      getOrCreateSession({ anchorType: 'matter', matterId: 0, backendKind: 'ai-sdk' })
+    ).toThrow(/positive integer matterId/)
+    expect(() =>
+      getOrCreateSession({ anchorType: 'matter', matterId: 1.5, backendKind: 'ai-sdk' })
+    ).toThrow(/positive integer matterId/)
+    expect(() =>
+      getOrCreateSession({
+        anchorType: 'matter',
+        matterId: 5,
+        emailId: 5,
+        backendKind: 'ai-sdk'
+      })
+    ).toThrow(/must not carry an emailId/)
+  })
+
+  test('getOrCreateSession reuses only the interactive matter session, never an agent row', () => {
+    const db = getChatDb()
+    const now = Date.now()
+    const agent = db
+      .prepare(
+        `INSERT INTO ai_chat_sessions
+          (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+           backend_agent_page_id, title, created_at, updated_at, origin)
+         VALUES (NULL, 'matter', 77, 'ai-sdk', NULL, NULL, 'agent run', ?, ?, 'agent')`
+      )
+      .run(now, now)
+
+    const interactive = getOrCreateSession({
+      anchorType: 'matter',
+      matterId: 77,
+      backendKind: 'ai-sdk',
+      title: 'Matter 77'
+    })
+    const reused = getOrCreateSession({
+      anchorType: 'matter',
+      matterId: 77,
+      backendKind: 'ai-sdk'
+    })
+
+    expect(interactive.id).not.toBe(Number(agent.lastInsertRowid))
+    expect(reused.id).toBe(interactive.id)
+    expect(interactive).toMatchObject({
+      email_id: null,
+      anchor_type: 'matter',
+      anchor_id: 77,
+      title: 'Matter 77'
+    })
+  })
+
+  test('createNewSession allows multiple matter sessions and list excludes agent origin', () => {
+    const first = createNewSession({
+      anchorType: 'matter',
+      matterId: 88,
+      backendKind: 'ai-sdk',
+      title: 'First matter chat'
+    })
+    const second = createNewSession({
+      anchorType: 'matter',
+      matterId: 88,
+      backendKind: 'ai-sdk',
+      title: 'Second matter chat'
+    })
+    const now = Date.now()
+    const agent = getChatDb()
+      .prepare(
+        `INSERT INTO ai_chat_sessions
+          (email_id, anchor_type, anchor_id, backend_kind, backend_model,
+           backend_agent_page_id, title, created_at, updated_at, origin)
+         VALUES (NULL, 'matter', 88, 'ai-sdk', NULL, NULL, 'headless', ?, ?, 'agent')`
+      )
+      .run(now, now)
+
+    expect(first.id).not.toBe(second.id)
+    expect(first.title).toBe('First matter chat')
+    expect(second.title).toBe('Second matter chat')
+    expect(listSessionsForMatter(88).map((session) => session.id)).toEqual(
+      expect.arrayContaining([first.id, second.id])
+    )
+    expect(listSessionsForMatter(88).map((session) => session.id)).not.toContain(
+      Number(agent.lastInsertRowid)
+    )
   })
 })
 
@@ -1867,7 +2108,7 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
           value: string
         }
       ).value
-    ).toBe('26')
+    ).toBe('27')
     // The 'rebuild' backfill indexed the pre-existing row: trigram CJK substring hits.
     expect(ftsHits('超时复盘')).toBe(1)
     expect(ftsHits('redis')).toBe(1)
@@ -1917,7 +2158,7 @@ describe('chat_db — v16 → v17 migration (ai_chat_messages_fts)', () => {
     const ver = getChatDb()
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('26')
+    expect(ver.value).toBe('27')
     // Rebuild is idempotent — the row is indexed exactly once.
     expect(ftsHits('重入收敛')).toBe(1)
   })
@@ -2013,7 +2254,7 @@ describe('chat_db — v17 → v18 migration (chat_tool_call.whitelist_rule_id)',
           value: string
         }
       ).value
-    ).toBe('26')
+    ).toBe('27')
     expect(hasCol()).toBe(true)
   })
 
@@ -2026,7 +2267,7 @@ describe('chat_db — v17 → v18 migration (chat_tool_call.whitelist_rule_id)',
     const ver = getChatDb()
       .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
       .get() as { value: string }
-    expect(ver.value).toBe('26')
+    expect(ver.value).toBe('27')
     expect(hasCol()).toBe(true)
   })
 })

@@ -31,7 +31,21 @@ function resolveAnchor(input: OpenSessionInput): {
     }
     return { anchorType: 'general', emailId: null, anchorId: null }
   }
-  // codex review NIT — reject any anchorType that's neither 'general' nor 'email'
+  if (anchorType === 'matter') {
+    if (input.emailId != null) {
+      throw new Error(
+        `getOrCreateSession: matter anchor must not carry an emailId (got ${input.emailId})`
+      )
+    }
+    const matterId = input.matterId
+    if (typeof matterId !== 'number' || !Number.isInteger(matterId) || matterId <= 0) {
+      throw new Error(
+        `getOrCreateSession: anchor_type='matter' requires a positive integer matterId, got ${String(matterId)}`
+      )
+    }
+    return { anchorType: 'matter', emailId: null, anchorId: matterId }
+  }
+  // codex review NIT — reject any anchorType that's neither 'general', 'matter', nor 'email'
   // (parity with router/runtime/dispatcher/db.py) instead of silently treating it
   // as email. input is wire-sourced, so a bad string can reach here at runtime.
   if (anchorType !== 'email') {
@@ -65,7 +79,9 @@ export function getOrCreateSession(input: OpenSessionInput): ChatSession {
   // general rows; zero regression for the per-email sidebar). General: keyed on
   // anchor_type + email_id IS NULL, reusing the most-recently-touched general
   // session (no anchor_id to dedupe on → "latest" is the contract; an explicit
-  // fresh general session goes through createNewSession).
+  // fresh general session goes through createNewSession). Matter: keyed on its
+  // internal integer anchor_id and interactive origin only, so a headless agent
+  // run for the same Matter is never revived as the owner's conversation.
   let existing: ChatSession | undefined
   if (anchorType === 'email') {
     existing = db
@@ -74,7 +90,7 @@ export function getOrCreateSession(input: OpenSessionInput): ChatSession {
           WHERE email_id = ? AND backend_kind = ? AND ${pageClause}`
       )
       .get(emailId, input.backendKind, ...pageParams) as ChatSession | undefined
-  } else {
+  } else if (anchorType === 'general') {
     existing = db
       .prepare(
         `SELECT * FROM ai_chat_sessions
@@ -83,6 +99,16 @@ export function getOrCreateSession(input: OpenSessionInput): ChatSession {
           ORDER BY updated_at DESC LIMIT 1`
       )
       .get(input.backendKind, ...pageParams) as ChatSession | undefined
+  } else {
+    existing = db
+      .prepare(
+        `SELECT * FROM ai_chat_sessions
+          WHERE anchor_type = 'matter' AND anchor_id = ?
+            AND backend_kind = ? AND ${pageClause}
+            AND COALESCE(origin, 'interactive') = 'interactive'
+          ORDER BY updated_at DESC LIMIT 1`
+      )
+      .get(anchorId, input.backendKind, ...pageParams) as ChatSession | undefined
   }
 
   if (existing) {
@@ -103,8 +129,8 @@ export function getOrCreateSession(input: OpenSessionInput): ChatSession {
     .prepare(
       `INSERT INTO ai_chat_sessions
         (email_id, anchor_type, anchor_id, backend_kind, backend_model,
-         backend_agent_page_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+         backend_agent_page_id, title, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       emailId,
@@ -113,6 +139,7 @@ export function getOrCreateSession(input: OpenSessionInput): ChatSession {
       input.backendKind,
       backendModel,
       backendAgentPageId,
+      input.title ?? null,
       now,
       now
     )
@@ -125,7 +152,7 @@ export function getOrCreateSession(input: OpenSessionInput): ChatSession {
     backend_kind: input.backendKind,
     backend_model: backendModel,
     backend_agent_page_id: backendAgentPageId,
-    title: null,
+    title: input.title ?? null,
     archived: false,
     created_at: now,
     updated_at: now
@@ -159,8 +186,8 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
     .prepare(
       `INSERT INTO ai_chat_sessions
         (email_id, anchor_type, anchor_id, backend_kind, backend_model,
-         backend_agent_page_id, created_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+         backend_agent_page_id, title, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       emailId,
@@ -169,6 +196,7 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
       input.backendKind,
       backendModel,
       backendAgentPageId,
+      input.title ?? null,
       now,
       now
     )
@@ -180,7 +208,7 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
     backend_kind: input.backendKind,
     backend_model: backendModel,
     backend_agent_page_id: backendAgentPageId,
-    title: null,
+    title: input.title ?? null,
     archived: false,
     created_at: now,
     updated_at: now
@@ -281,6 +309,14 @@ export function listSessionsForEmail(emailId: number): ChatSession[] {
   return getChatDb()
     .prepare('SELECT * FROM ai_chat_sessions WHERE email_id = ? ORDER BY updated_at DESC')
     .all(emailId) as ChatSession[]
+}
+
+export function listSessionsForMatter(matterId: number): ChatSession[] {
+  return getChatDb()
+    .prepare(
+      "SELECT * FROM ai_chat_sessions WHERE anchor_type = 'matter' AND anchor_id = ? AND COALESCE(origin, 'interactive') <> 'agent' ORDER BY updated_at DESC"
+    )
+    .all(matterId) as ChatSession[]
 }
 
 /** P2c — list general (context-free) sessions, newest-first. The per-email

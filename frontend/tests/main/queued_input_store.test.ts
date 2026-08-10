@@ -100,15 +100,21 @@ describe('queued input store', () => {
   test('v26 table and indexes exist', () => {
     sessionId()
     const db = getChatDb()
-    const version = db.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as {
+    const version = db
+      .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
+      .get() as {
       value: string
     }
-    expect(version.value).toBe('26')
-    const sql = db.prepare("SELECT sql FROM sqlite_master WHERE name='chat_queued_input'").get() as {
+    expect(version.value).toBe('27')
+    const sql = db
+      .prepare("SELECT sql FROM sqlite_master WHERE name='chat_queued_input'")
+      .get() as {
       sql: string
     }
     expect(sql.sql).toContain("CHECK (mode IN ('follow_up', 'steering'))")
-    expect(sql.sql).toContain("CHECK (status IN ('queued', 'claimed', 'sent', 'canceled', 'restored'))")
+    expect(sql.sql).toContain(
+      "CHECK (status IN ('queued', 'claimed', 'sent', 'canceled', 'restored'))"
+    )
     const indexes = db.prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as Array<{
       name: string
     }>

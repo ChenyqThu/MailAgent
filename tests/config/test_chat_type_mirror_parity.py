@@ -240,6 +240,28 @@ def _parse_quoted_group(path, pattern: str, what: str) -> Set[str]:
     return values
 
 
+def test_chat_anchor_type_mirror_parity():
+    """Matter anchor 加值时，TS、DB 写面与 serve-api 校验必须同批更新。"""
+    expected = {"email", "general", "matter"}
+    model = _parse_string_union("AnchorType", CHAT_MODEL_TS)
+    api = _parse_string_union("ChatAnchorType", CHAT_TYPES_TS)
+    python = _parse_quoted_group(
+        CHAT_DB_PY,
+        r"_ANCHOR_TYPES\s*=\s*\(([^)]+)\)",
+        "chat/db.py 的 _ANCHOR_TYPES",
+    )
+    router = _parse_quoted_group(
+        CHAT_ROUTER_PY,
+        r"_SESSION_ANCHOR_TYPES\s*=\s*\(([^)]+)\)",
+        "chat.py 的 _SESSION_ANCHOR_TYPES",
+    )
+    assert model == expected, f"chat_model.ts 的 AnchorType 漂移: {sorted(model)}"
+    assert api == expected, f"api/types/chat.ts 的 ChatAnchorType 漂移: {sorted(api)}"
+    assert python == expected, f"src/chat/db.py 的 _ANCHOR_TYPES 漂移: {sorted(python)}"
+    assert router == expected, f"src/api/routers/chat.py 的 anchor 类型漂移: {sorted(router)}"
+    assert model == api == python == router
+
+
 def test_chat_session_origin_filter_mirror_parity():
     """会话来源筛选跨 DB/API 边界手抄时，值集合必须保持一致。
 

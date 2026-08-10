@@ -1,6 +1,8 @@
 """ai_chat.db 读 + 写访问 —— serve-api 远程 chat 端点（V2.1 阶段 2 读 + 阶段 3 3b-3 写）。
 
-ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 26）。
+ai_chat.db = 前端 owned schema（``frontend/src/electron/main/chat_db.ts``，CHAT_DB_VERSION 27）。
+v27（Matters MVP P3，task 08-09）= ``ai_chat_sessions.anchor_type`` 新增 ``'matter'``：
+``email_id`` 必须 NULL，``anchor_id`` 存 Matter 内部正整数 id；前端 rebuild/swap 扩宽 CHECK。
 v26（harness optimization P5，task 08-07）= ``chat_queued_input`` 队列表与调度索引。
 v25（harness optimization P2，task 08-07）= ``ai_chat_sessions.parent_session_id`` /
 ``parent_tool_call_id`` / ``invoked_by``。三列均 nullable，父会话删除不级联；Python 只读。
@@ -118,8 +120,11 @@ def _now_ms() -> int:
     return int(time.time() * 1000)
 
 
+_ANCHOR_TYPES = ("email", "general", "matter")
+
+
 def _resolve_anchor(
-    anchor_type: str, email_id: Optional[int]
+    anchor_type: str, email_id: Optional[int], matter_id: Optional[int] = None
 ) -> tuple[str, Optional[int], Optional[int]]:
     """P2c — 把 (anchor_type, email_id) 解析成 (anchor_type, email_id, anchor_id)。镜像
     chat_db.ts ``resolveAnchor``：email（默认）→ email_id 必须非负 int、anchor_id=email_id；
@@ -131,8 +136,16 @@ def _resolve_anchor(
         if email_id is not None:
             raise ValueError(f"general anchor must not carry an emailId (got {email_id!r})")
         return "general", None, None
-    if anchor_type != "email":
-        raise ValueError(f"anchor_type must be 'email' or 'general', got {anchor_type!r}")
+    if anchor_type == "matter":
+        if email_id is not None:
+            raise ValueError(f"matter anchor must not carry an emailId (got {email_id!r})")
+        if not isinstance(matter_id, int) or isinstance(matter_id, bool) or matter_id <= 0:
+            raise ValueError(
+                f"anchor_type='matter' requires a positive integer matterId, got {matter_id!r}"
+            )
+        return "matter", None, matter_id
+    if anchor_type not in _ANCHOR_TYPES:
+        raise ValueError(f"anchor_type must be one of {_ANCHOR_TYPES!r}, got {anchor_type!r}")
     if not isinstance(email_id, int) or isinstance(email_id, bool) or email_id < 0:
         raise ValueError(
             f"anchor_type='email' requires a non-negative integer emailId, got {email_id!r}"
@@ -650,6 +663,7 @@ class ChatDb:
         backend_agent_page_id: Optional[str] = None,
         *,
         anchor_type: str = "email",
+        matter_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """复用既有 session 或新建。镜像 chat_db.ts getOrCreateSession（P2c anchor-aware）。
 
@@ -658,7 +672,7 @@ class ChatDb:
         即契约；显式新建走 create_new_session）。pageId 为 None 时走 ``IS NULL`` 分支（SQLite 把
         UNIQUE NULL 当永远互异）。命中且 backendModel 变了 → 刷新 model + updated_at。
         """
-        anchor_type, email_id, anchor_id = _resolve_anchor(anchor_type, email_id)
+        anchor_type, email_id, anchor_id = _resolve_anchor(anchor_type, email_id, matter_id)
         now = _now_ms()
         page_clause = (
             "backend_agent_page_id IS NULL"
@@ -673,13 +687,22 @@ class ChatDb:
                     f"WHERE email_id = ? AND backend_kind = ? AND {page_clause}",
                     (email_id, backend_kind, *page_params),
                 ).fetchone()
-            else:
+            elif anchor_type == "general":
                 existing = conn.execute(
                     f"SELECT * FROM ai_chat_sessions "
                     f"WHERE anchor_type = 'general' AND email_id IS NULL "
                     f"AND backend_kind = ? AND {page_clause} "
                     f"ORDER BY updated_at DESC LIMIT 1",
                     (backend_kind, *page_params),
+                ).fetchone()
+            else:
+                existing = conn.execute(
+                    f"SELECT * FROM ai_chat_sessions "
+                    f"WHERE anchor_type = 'matter' AND anchor_id = ? "
+                    f"AND backend_kind = ? AND {page_clause} "
+                    f"AND COALESCE(origin, 'interactive') = 'interactive' "
+                    f"ORDER BY updated_at DESC LIMIT 1",
+                    (anchor_id, backend_kind, *page_params),
                 ).fetchone()
 
             if existing is not None:
@@ -720,10 +743,11 @@ class ChatDb:
         backend_agent_page_id: Optional[str] = None,
         *,
         anchor_type: str = "email",
+        matter_id: Optional[int] = None,
     ) -> Dict[str, Any]:
         """无条件 INSERT 新 session（绕过复用查找）。镜像 chat_db.ts createNewSession
         （「+ 新建会话」显式意图，v4 drop UNIQUE 后多 session/邮件合法；P2c anchor-aware）。"""
-        anchor_type, email_id, anchor_id = _resolve_anchor(anchor_type, email_id)
+        anchor_type, email_id, anchor_id = _resolve_anchor(anchor_type, email_id, matter_id)
         now = _now_ms()
         with self._write_connection() as conn:
             cur = conn.execute(

@@ -31,7 +31,7 @@ _AI_CHAT_DDL = """
 CREATE TABLE ai_chat_sessions (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     email_id INTEGER,
-    anchor_type TEXT NOT NULL DEFAULT 'email' CHECK (anchor_type IN ('email','general')),
+    anchor_type TEXT NOT NULL DEFAULT 'email' CHECK (anchor_type IN ('email','general','matter')),
     anchor_id INTEGER,
     backend_kind TEXT NOT NULL,
     backend_model TEXT,
@@ -53,6 +53,8 @@ CREATE TABLE ai_chat_sessions (
         (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
         OR
         (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
+        OR
+        (anchor_type = 'matter' AND email_id IS NULL AND anchor_id IS NOT NULL)
     )
 );
 CREATE TABLE ai_chat_messages (
@@ -880,6 +882,61 @@ def test_create_new_session_accepts_ai_sdk_kind(chat_client: TestClient) -> None
     )
     assert r.status_code == 200
     assert r.json()["data"]["backend_kind"] == "ai-sdk"
+
+
+def test_open_matter_session_reuses_with_flag_off(
+    chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Matter anchor 是结构能力，不受 MAILAGENT_MATTERS_ENABLED 门控。"""
+    monkeypatch.setenv("MAILAGENT_MATTERS_ENABLED", "false")
+    payload = {"anchorType": "matter", "matterId": 501, "backendKind": "ai-sdk"}
+    first = chat_client.post("/api/chat/sessions", json=payload)
+    second = chat_client.post("/api/chat/sessions", json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["data"]["id"] == second.json()["data"]["id"]
+    assert first.json()["data"]["email_id"] is None
+    assert first.json()["data"]["anchor_type"] == "matter"
+    assert first.json()["data"]["anchor_id"] == 501
+
+
+def test_create_new_matter_session_always_inserts(chat_client: TestClient) -> None:
+    payload = {"anchorType": "matter", "matterId": 502, "backendKind": "ai-sdk"}
+    first = chat_client.post("/api/chat/sessions/new", json=payload)
+    second = chat_client.post("/api/chat/sessions/new", json=payload)
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert first.json()["data"]["id"] != second.json()["data"]["id"]
+    assert first.json()["data"]["anchor_type"] == "matter"
+    assert first.json()["data"]["anchor_id"] == 502
+
+
+@pytest.mark.parametrize("route", ["/api/chat/sessions", "/api/chat/sessions/new"])
+@pytest.mark.parametrize("matter_id", [None, 0, -1, True, 1.5, "1"])
+def test_matter_session_requires_positive_integer_id_422(
+    chat_client: TestClient, route: str, matter_id: object
+) -> None:
+    r = chat_client.post(
+        route,
+        json={"anchorType": "matter", "matterId": matter_id, "backendKind": "ai-sdk"},
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+@pytest.mark.parametrize("route", ["/api/chat/sessions", "/api/chat/sessions/new"])
+def test_matter_session_rejects_email_id_422(chat_client: TestClient, route: str) -> None:
+    r = chat_client.post(
+        route,
+        json={
+            "anchorType": "matter",
+            "matterId": 503,
+            "emailId": 503,
+            "backendKind": "ai-sdk",
+        },
+    )
+    assert r.status_code == 422
+    assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
 def test_get_session_found_and_null(chat_client: TestClient) -> None:

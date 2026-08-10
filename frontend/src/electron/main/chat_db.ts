@@ -65,6 +65,7 @@ export {
   listAllSessions,
   listGeneralSessions,
   listSessionsForEmail,
+  listSessionsForMatter,
   updateSessionArchived,
   updateSessionPinned,
   updateSessionStarred,

@@ -54,15 +54,16 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     async newSession(input: {
       anchorType?: ChatAnchorType
       emailId?: number | null
+      matterId?: number
       backendKind: ChatBackendKind
       backendModel?: string | null
       backendAgentPageId?: string | null
     }): Promise<ChatSession> {
       // POST /chat/sessions/new（单一真源；ai-sdk 的 onEnsureSession 会话创建走这里）。
       // throw Error&{code} 由 request() 透传（E_INVALID_ARG / E_DISPATCH）。
-      // email 路径**逐字节零回归**：不带 anchorType（serve-api 默认 'email'）；仅 'general'
-      // 显式带 anchorType:'general' + emailId:null（serve-api _validate_session_opts 拒
-      // general 携 emailId），createNewSession 无条件 INSERT 新 general 行。
+      // email 路径**逐字节零回归**：不带 anchorType（serve-api 默认 'email'）；'general'
+      // 显式带 anchorType:'general' + emailId:null；'matter' 显式带 matterId 且绝不带 emailId。
+      // serve-api _validate_session_opts 逐分支校验，createNewSession 始终无条件 INSERT。
       const base = {
         backendKind: input.backendKind,
         backendModel: input.backendModel ?? null,
@@ -71,6 +72,8 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
       const body =
         input.anchorType === 'general'
           ? { anchorType: 'general', emailId: null, ...base }
+          : input.anchorType === 'matter'
+            ? { anchorType: 'matter', matterId: input.matterId, ...base }
           : { emailId: input.emailId ?? null, ...base }
       return request<ChatSession>(baseUrl, 'POST', '/chat/sessions/new', { body })
     },

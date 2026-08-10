@@ -232,6 +232,7 @@ export function AgentThreadList(props: AgentThreadListProps): React.ReactElement
                         title={titleOf(s, t)}
                         isEmail={s.anchor_type === 'email'}
                         fromIm={s.origin === 'im'}
+                        fromMatter={s.anchor_type === 'matter'}
                         isArchived={g === 'archived'}
                         pinned={s.pinned_at != null}
                         starred={Boolean(s.starred)}
@@ -268,6 +269,7 @@ function SessionRow({
   title,
   isEmail,
   fromIm,
+  fromMatter,
   isArchived,
   pinned,
   starred,
@@ -290,6 +292,8 @@ function SessionRow({
   /** Stage 2 PR-1 (Q18=A 信任可见) — origin='im' session (飞书会话): rows carry a「来自飞书」badge
    *  so provenance is explicit in the desktop list, not only in the DB column. */
   fromIm: boolean
+  /** Matters MVP P3 — matter-anchored sessions carry an explicit provenance badge. */
+  fromMatter: boolean
   isArchived: boolean
   pinned: boolean
   starred: boolean
@@ -432,6 +436,11 @@ function SessionRow({
           // the i18n key ships with a defaultValue（locale files归 PR-4 信任可见收尾）.
           <span className="shrink-0 rounded-full border border-ink-border-soft bg-ink-3 px-1.5 py-px text-micro text-ink-fg-3">
             {t('agentView.fromFeishu', { defaultValue: '来自飞书' })}
+          </span>
+        )}
+        {fromMatter && (
+          <span className="shrink-0 rounded-full border border-ink-border-soft bg-ink-3 px-1.5 py-px text-micro text-ink-fg-3">
+            {t('agentView.fromMatter', { defaultValue: '事项' })}
           </span>
         )}
         {unread && (

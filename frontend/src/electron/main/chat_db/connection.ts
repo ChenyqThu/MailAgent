@@ -154,7 +154,10 @@ import { resolveDataRoot } from '../db'
 // source columns plus two read indexes; parent/invocation columns intentionally remain P2.
 // v25 (harness optimization P2, task 08-07) — child-session parent provenance.
 // v26 (harness optimization P5, task 08-07) — queued-input persistence + dispatch indexes.
-const CHAT_DB_VERSION = 26
+// v27 (Matters MVP P3, task 08-09) — widen the session anchor CHECK to admit matter rows:
+// email_id=NULL + anchor_id=matter internal integer id. Rebuild/swap preserves all later columns,
+// rows, dependent tables, and the five session indexes; migration is structural and always-on.
+const CHAT_DB_VERSION = 27
 
 export function resolveChatDbPath(): string {
   const fromEnv = process.env['AI_CHAT_DB_PATH']
@@ -229,6 +232,15 @@ function isV13SessionShape(db: Database.Database): boolean {
     .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_chat_sessions'")
     .get() as { sql?: string } | undefined
   return /'ai-sdk'/.test(row?.sql ?? '')
+}
+
+/** Matters MVP P3 — is ai_chat_sessions already the widened v27 shape (anchor_type
+ *  CHECK admits 'matter')? Used by the v26→v27 rebuild re-entry guard. */
+function isV27SessionShape(db: Database.Database): boolean {
+  const row = db
+    .prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='ai_chat_sessions'")
+    .get() as { sql?: string } | undefined
+  return /'matter'/.test(row?.sql ?? '')
 }
 
 /** P2c — one-time .pre-v7.bak snapshot before the destructive v6→v7 rebuild.
@@ -1208,6 +1220,102 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_queued_input_delivery
     } catch (err) {
       db.exec('ROLLBACK')
       throw err
+    }
+  }
+
+  // v26 → v27 — Matters MVP P3: widen anchor_type + coupling CHECK for matter sessions.
+  // Same v13 discipline: FK OFF only outside a transaction, rebuild/swap in one immediate
+  // transaction, restore every existing session index, then verify dependent-table integrity.
+  // The migration is structural and deliberately independent of MAILAGENT_MATTERS_ENABLED.
+  if (current < 27 && isV27SessionShape(db)) {
+    db.prepare(
+      "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '27')"
+    ).run()
+  } else if (current < 27) {
+    db.pragma('foreign_keys = OFF')
+    try {
+      db.exec('BEGIN IMMEDIATE')
+      try {
+        db.exec(`
+          CREATE TABLE ai_chat_sessions_v27 (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            email_id INTEGER,
+            anchor_type TEXT NOT NULL DEFAULT 'email'
+              CHECK (anchor_type IN ('email', 'general', 'matter')),
+            anchor_id INTEGER,
+            backend_kind TEXT NOT NULL
+              CHECK (backend_kind IN ('notion-agent', 'custom-api', 'ai-sdk')),
+            backend_model TEXT,
+            backend_agent_page_id TEXT,
+            created_at INTEGER NOT NULL,
+            updated_at INTEGER NOT NULL,
+            title TEXT,
+            archived INTEGER NOT NULL DEFAULT 0,
+            origin TEXT,
+            agent_id TEXT,
+            agent_job_id TEXT,
+            last_read_at INTEGER,
+            pinned_at INTEGER,
+            starred INTEGER NOT NULL DEFAULT 0,
+            trigger_id TEXT,
+            trigger_kind TEXT,
+            trigger_fired_at INTEGER,
+            parent_session_id INTEGER,
+            parent_tool_call_id TEXT,
+            invoked_by TEXT,
+            CHECK (
+              (anchor_type = 'email' AND email_id IS NOT NULL AND anchor_id = email_id)
+              OR
+              (anchor_type = 'general' AND anchor_id IS NULL AND email_id IS NULL)
+              OR
+              (anchor_type = 'matter' AND email_id IS NULL AND anchor_id IS NOT NULL)
+            )
+          );
+          INSERT INTO ai_chat_sessions_v27
+            (id, email_id, anchor_type, anchor_id, backend_kind, backend_model,
+             backend_agent_page_id, created_at, updated_at, title, archived,
+             origin, agent_id, agent_job_id, last_read_at, pinned_at, starred,
+             trigger_id, trigger_kind, trigger_fired_at, parent_session_id,
+             parent_tool_call_id, invoked_by)
+            SELECT id, email_id, anchor_type, anchor_id, backend_kind, backend_model,
+                   backend_agent_page_id, created_at, updated_at, title, archived,
+                   origin, agent_id, agent_job_id, last_read_at, pinned_at, starred,
+                   trigger_id, trigger_kind, trigger_fired_at, parent_session_id,
+                   parent_tool_call_id, invoked_by
+            FROM ai_chat_sessions;
+          DROP TABLE ai_chat_sessions;
+          ALTER TABLE ai_chat_sessions_v27 RENAME TO ai_chat_sessions;
+          DROP INDEX IF EXISTS idx_sessions_email;
+          CREATE INDEX idx_sessions_email ON ai_chat_sessions(email_id, updated_at DESC);
+          DROP INDEX IF EXISTS idx_sessions_anchor;
+          CREATE INDEX idx_sessions_anchor
+            ON ai_chat_sessions(anchor_type, anchor_id, updated_at DESC);
+          DROP INDEX IF EXISTS idx_chat_sessions_agent_updated;
+          CREATE INDEX idx_chat_sessions_agent_updated
+            ON ai_chat_sessions(agent_id, updated_at DESC);
+          DROP INDEX IF EXISTS idx_chat_sessions_trigger_fired;
+          CREATE INDEX idx_chat_sessions_trigger_fired
+            ON ai_chat_sessions(trigger_id, trigger_fired_at DESC);
+          DROP INDEX IF EXISTS idx_chat_sessions_parent;
+          CREATE INDEX idx_chat_sessions_parent
+            ON ai_chat_sessions(parent_session_id, created_at ASC);
+        `)
+        db.prepare(
+          "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '27')"
+        ).run()
+        db.exec('COMMIT')
+      } catch (err) {
+        db.exec('ROLLBACK')
+        throw err
+      }
+      const violations = db.prepare('PRAGMA foreign_key_check').all() as unknown[]
+      if (violations.length > 0) {
+        throw new Error(
+          `chat_db v26→v27 migration left FK violations: ${JSON.stringify(violations)}`
+        )
+      }
+    } finally {
+      db.pragma('foreign_keys = ON')
     }
   }
 }

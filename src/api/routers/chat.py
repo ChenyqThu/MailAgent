@@ -703,17 +703,24 @@ async def chat_config(request: Request):
 # ``:int`` 转换器已挡住非 int（"new"/"all" 不匹配 {id:int}），此处顺序兼顾可读性。
 
 
-# P2c — anchor-aware session 入参校验。email（默认）→ emailId 必须非负 int；general → 无
-# emailId（**绝不**接受 emailId sentinel，下沉到 db._resolve_anchor 也 defense-in-depth）。
-def _validate_session_opts(opts: Dict[str, Any], route: str) -> tuple[str, Optional[int], str]:
+# P2c / Matters MVP P3 — anchor-aware session 入参校验。email（默认）→ emailId 必须非负
+# int；general → 无 emailId；matter → matterId 必须正整数且无 emailId。下沉到
+# db._resolve_anchor 仍 defense-in-depth，绝不接受 sentinel。
+_SESSION_ANCHOR_TYPES = ("email", "general", "matter")
+
+
+def _validate_session_opts(
+    opts: Dict[str, Any], route: str
+) -> tuple[str, Optional[int], Optional[int], str]:
     anchor_type = opts.get("anchorType") or "email"
-    if anchor_type not in ("email", "general"):
+    if anchor_type not in _SESSION_ANCHOR_TYPES:
         raise APIError(
             "E_INVALID_ARG",
-            f"{route} requires anchorType in {{email, general}}",
+            f"{route} requires anchorType in {{email, general, matter}}",
             source="sqlite",
         )
     email_id = opts.get("emailId")
+    matter_id = opts.get("matterId")
     if anchor_type == "email":
         if not isinstance(email_id, int) or isinstance(email_id, bool) or email_id < 0:
             raise APIError(
@@ -721,7 +728,7 @@ def _validate_session_opts(opts: Dict[str, Any], route: str) -> tuple[str, Optio
                 f"{route} email anchor requires emailId:int (non-negative)",
                 source="sqlite",
             )
-    else:
+    elif anchor_type == "general":
         # codex review HIGH — reject a general anchor carrying ANY emailId (incl. 0);
         # don't silently drop it (that's the banned sentinel).
         if email_id is not None:
@@ -731,6 +738,25 @@ def _validate_session_opts(opts: Dict[str, Any], route: str) -> tuple[str, Optio
                 source="sqlite",
             )
         # general session 无 emailId（CHECK 强制 email_id IS NULL）。
+    else:
+        if email_id is not None:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"{route} matter anchor must not carry an emailId",
+                http_status=422,
+                source="sqlite",
+            )
+        if (
+            not isinstance(matter_id, int)
+            or isinstance(matter_id, bool)
+            or matter_id <= 0
+        ):
+            raise APIError(
+                "E_INVALID_ARG",
+                f"{route} matter anchor requires matterId:int (positive)",
+                http_status=422,
+                source="sqlite",
+            )
     backend_kind = opts.get("backendKind")
     # P4 Phase 06a (cutover) — 'ai-sdk' is a valid persistable session kind (chat_db v13 widened the
     # CHECK); a chat authored through the embedded AI SDK Gateway. The serve-api only PERSISTS the
@@ -742,21 +768,22 @@ def _validate_session_opts(opts: Dict[str, Any], route: str) -> tuple[str, Optio
             f"{route} requires backendKind in {{notion-agent, custom-api, ai-sdk}}",
             source="sqlite",
         )
-    return anchor_type, email_id, backend_kind
+    return anchor_type, email_id, matter_id, backend_kind
 
 
 @router.post("/sessions", dependencies=[Depends(verify_cf_access)])
 async def open_session(request: Request, body: Optional[Dict[str, Any]] = None):
     """getOrCreateSession：复用既有 session 或新建。镜像 chat:getOrCreateSession → ChatSession。
-    body = OpenSessionInput（camelCase；P2c 加 anchorType: 'email'|'general'，缺省 'email'）。"""
+    body = OpenSessionInput（camelCase；anchorType: 'email'|'general'|'matter'，缺省 'email'）。"""
     opts = body or {}
-    anchor_type, email_id, backend_kind = _validate_session_opts(opts, "sessions")
+    anchor_type, email_id, matter_id, backend_kind = _validate_session_opts(opts, "sessions")
     session = get_chat_db().get_or_create_session(
         email_id=email_id,
         backend_kind=backend_kind,
         backend_model=opts.get("backendModel"),
         backend_agent_page_id=opts.get("backendAgentPageId"),
         anchor_type=anchor_type,
+        matter_id=matter_id,
     )
     return success_envelope(session, request=request, source="sqlite")
 
@@ -764,15 +791,18 @@ async def open_session(request: Request, body: Optional[Dict[str, Any]] = None):
 @router.post("/sessions/new", dependencies=[Depends(verify_cf_access)])
 async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
     """createNewSession：无条件 INSERT 新 session（绕过复用）。镜像 chat:newSession → ChatSession。
-    P2c：支持 anchorType（general session 无 emailId）。"""
+    P2c / Matters MVP P3：支持 general 与 matter anchor。"""
     opts = body or {}
-    anchor_type, email_id, backend_kind = _validate_session_opts(opts, "sessions/new")
+    anchor_type, email_id, matter_id, backend_kind = _validate_session_opts(
+        opts, "sessions/new"
+    )
     session = get_chat_db().create_new_session(
         email_id=email_id,
         backend_kind=backend_kind,
         backend_model=opts.get("backendModel"),
         backend_agent_page_id=opts.get("backendAgentPageId"),
         anchor_type=anchor_type,
+        matter_id=matter_id,
     )
     return success_envelope(session, request=request, source="sqlite")
 

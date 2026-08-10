@@ -28,9 +28,10 @@ export type MessageStatus = 'pending' | 'streaming' | 'complete' | 'error' | 'ab
 // task 06-18-custom-ai-harness-agent Phase 2 (P2c) — chat session anchor.
 //   'email'   = anchored to a specific inbox email (email_id NOT NULL, anchor_id = email_id).
 //   'general' = a context-free agent session (Cmd+O in P3); email_id IS NULL, anchor_id IS NULL.
+//   'matter'  = anchored to a Matter internal integer id; email_id IS NULL, anchor_id = matter id.
 // The ai_chat_sessions v7 migration adds a table CHECK coupling anchor_type ↔ email_id/anchor_id
 // so a sentinel like email_id=0 is impossible by construction (architecture.md §1.4 / DR-5).
-export type AnchorType = 'email' | 'general'
+export type AnchorType = 'email' | 'general' | 'matter'
 // FILTER vocabulary (≠ the origin column's free-text value domain, which gained 'im' in CHAT_DB
 // v22): stage 2 PR-1 adds no IM filter — im rows ride the default 'interactive' clause (Q18=A).
 // Mirror: api/types/chat.ts (parity gate) + the two Python mirrors, see that file's red note.
@@ -159,9 +160,12 @@ export interface OpenSessionInput {
   anchorType?: AnchorType
   /** Required when anchorType is 'email' (the default); ignored for 'general'. */
   emailId?: number | null
+  /** Required positive internal Matter id when anchorType is 'matter'. */
+  matterId?: number
   backendKind: BackendKind
   backendModel?: string | null
   backendAgentPageId?: string | null
+  title?: string | null
 }
 
 export interface AppendMessageInput {

@@ -205,7 +205,7 @@ export interface QueuedInput {
 // email_id (= anchor_id); 'general' (context-free, Cmd+O) rows have both NULL.
 // Mirror of model.ts AnchorType — kept inline so api/types stays the boundary
 // surface without importing chat internals.
-export type ChatAnchorType = 'email' | 'general'
+export type ChatAnchorType = 'email' | 'general' | 'matter'
 // API/IPC boundary mirror of shared/chat_model.ts. Keep inline so this file remains import-free;
 // tests/config/test_chat_type_mirror_parity.py locks the string-union values on both sides.
 // 🔴 This is the FILTER vocabulary, NOT the origin COLUMN's value domain (that one is free text —
@@ -698,6 +698,7 @@ export interface ChatApi {
   newSession(input: {
     anchorType?: ChatAnchorType
     emailId?: number | null
+    matterId?: number
     backendKind: ChatBackendKind
     backendModel?: string | null
     backendAgentPageId?: string | null
