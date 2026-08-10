@@ -4,16 +4,18 @@
 // from CommandPalette.tsx so the agentic search flow can reuse the exact same
 // row rendering. Pure move — no behaviour change.
 
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify'
-import { Mail, Paperclip } from 'lucide-react'
+import { BriefcaseBusiness, Mail, Paperclip, Plus } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { highlightTerms } from '@shared/lib/highlight_terms'
 import { parseSender } from '@shared/lib/mail_parse'
 import { formatRelativeTime } from '@shared/format'
 import type { AIPriority, SearchHit } from '@shared/api/types'
+import type { MatterResourceLinkHit } from '@shared/api/types/matter'
+import { MatterLinkPopover } from '@shared/components/matters/MatterLinkPopover'
 
 // DOMPurify Config uses mutable arrays — keep the literals plain so the
 // types match without an `as const` cast (which would mark them readonly).
@@ -50,6 +52,7 @@ export interface EmailHitRowProps {
   setHighlight(idx: number): void
   queryTerms: ReadonlyArray<string>
   onActivate(): void
+  matterLinks?: MatterResourceLinkHit[]
 }
 
 export function EmailHitRow({
@@ -58,9 +61,11 @@ export function EmailHitRow({
   selected,
   setHighlight,
   queryTerms,
-  onActivate
+  onActivate,
+  matterLinks
 }: EmailHitRowProps): React.ReactElement {
   const { t } = useTranslation()
+  const [matterPopoverOpen, setMatterPopoverOpen] = useState(false)
   const parsed = parseSender(hit.sender)
   const senderName = parsed.name || parsed.email.split('@')[0] || hit.sender
   const senderAddr = parsed.email
@@ -86,7 +91,7 @@ export function EmailHitRow({
       aria-selected={selected}
       onMouseEnter={() => setHighlight(flatIdx)}
       onClick={onActivate}
-      className={cn('pal-row', selected && 'is-selected')}
+      className={cn('pal-row', matterLinks !== undefined && 'group relative', selected && 'is-selected')}
     >
       <span className="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
         <Mail size={14} strokeWidth={1.75} />
@@ -153,6 +158,55 @@ export function EmailHitRow({
           />
         )}
       </div>
+      {matterLinks !== undefined ? (
+        <div
+          className="relative flex shrink-0 items-center gap-1"
+          onClick={(event) => event.stopPropagation()}
+          onKeyDown={(event) => event.stopPropagation()}
+        >
+          {matterLinks.length > 0 ? (
+            <>
+              {matterLinks.slice(0, 2).map((matter) => (
+                <span
+                  key={matter.public_id}
+                  title={matter.title}
+                  className="inline-flex max-w-24 items-center gap-1 rounded-[var(--r-pill)] border border-info/25 bg-info/10 px-1.5 py-0.5 font-mono text-[10px] text-info"
+                >
+                  <BriefcaseBusiness size={9} strokeWidth={2} className="shrink-0" aria-hidden />
+                  <span className="truncate">{matter.public_id}</span>
+                </span>
+              ))}
+              {matterLinks.length > 2 ? (
+                <span className="font-mono text-[10px] text-ink-fg-3">+{matterLinks.length - 2}</span>
+              ) : null}
+            </>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setMatterPopoverOpen(true)}
+              className={cn(
+                'inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-1.5 py-1 text-[10px] text-ink-fg-2 transition hover:bg-ink-fg/[0.08] hover:text-ink-fg',
+                selected ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+              )}
+            >
+              <Plus size={10} strokeWidth={2} aria-hidden />
+              {t('palette.matters.add')}
+            </button>
+          )}
+          <MatterLinkPopover
+            open={matterPopoverOpen}
+            source={{
+              internalId: hit.internal_id,
+              threadId: null,
+              subject: hit.subject,
+              sender: hit.sender,
+              receivedAt: hit.date_received ?? null,
+              threadCount: 1
+            }}
+            onClose={() => setMatterPopoverOpen(false)}
+          />
+        </div>
+      ) : null}
       <span className="pal-hint items-center gap-1.5 text-micro font-mono text-ink-fg-2 shrink-0">
         <kbd className="text-micro font-mono px-1 py-px rounded bg-ink-fg/[0.06] border border-ink-border text-ink-fg-1 leading-none">
           ⏎

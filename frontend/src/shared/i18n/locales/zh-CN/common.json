@@ -591,6 +591,27 @@
       "unread": "未读",
       "hasAttachment": "有附件"
     },
+    "matters": {
+      "title": "事项",
+      "add": "加入事项",
+      "emptyTitle": "没有匹配的事项",
+      "emptyHint": "事项索引覆盖标题、目的、当前状态、条目与干系人；关联资料正文仍由邮件或文档自身索引负责。",
+      "moreMatches": "另有 {n} 处命中",
+      "scope": {
+        "all": "全部",
+        "email": "邮件",
+        "matter": "事项"
+      },
+      "fields": {
+        "title": "标题",
+        "description": "目的",
+        "currentSummary": "当前状态",
+        "status": "状态",
+        "items": "条目",
+        "stakeholders": "干系人",
+        "notes": "备注"
+      }
+    },
     "history": {
       "title": "最近搜索",
       "clear": "清空",

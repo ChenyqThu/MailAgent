@@ -225,6 +225,7 @@ export const qk = {
   matters: {
     all: () => ['matters'] as const,
     list: (q?: string) => q ? ['matters', 'list', q] as const : ['matters', 'list'] as const,
+    paletteSearch: (normalised: string) => ['matters', 'palette-search', normalised] as const,
     detail: (publicId: string) => ['matters', 'detail', publicId] as const,
     resources: (publicId: string) => ['matters', 'detail', publicId, 'resources'] as const,
     stakeholders: (publicId: string) => ['matters', 'detail', publicId, 'stakeholders'] as const,

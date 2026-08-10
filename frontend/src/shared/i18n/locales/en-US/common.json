@@ -591,6 +591,27 @@
       "unread": "Unread",
       "hasAttachment": "Has attachment"
     },
+    "matters": {
+      "title": "Matters",
+      "add": "Add to matter",
+      "emptyTitle": "No matching matters",
+      "emptyHint": "Matter search covers titles, purpose, current state, items, and stakeholders. Linked resource content stays in email or document search.",
+      "moreMatches": "{n} more matches",
+      "scope": {
+        "all": "All",
+        "email": "Email",
+        "matter": "Matters"
+      },
+      "fields": {
+        "title": "Title",
+        "description": "Purpose",
+        "currentSummary": "Current state",
+        "status": "Status",
+        "items": "Items",
+        "stakeholders": "Stakeholders",
+        "notes": "Notes"
+      }
+    },
     "history": {
       "title": "Recent searches",
       "clear": "Clear",

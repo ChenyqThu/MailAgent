@@ -83,8 +83,18 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { extractTerms } from '@shared/lib/highlight_terms'
 import { hasDslToken, toggleDslToken } from '@shared/lib/dsl_token'
 import type { MailboxSummary, SearchAgentPhase, SearchHit, SearchResult } from '@shared/api/types'
+import type { Matter } from '@shared/api/types/matter'
+import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hooks'
+import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { EmailHitRow } from './EmailHitRow'
+import { MatterHitRow } from './MatterHitRow'
 import { PaletteThinkingPhrases } from './PaletteThinkingPhrases'
+import {
+  buildPaletteMatterLookupKeys,
+  lookupMattersForEmail,
+  paletteScopeVisibility,
+  type PaletteScope
+} from './paletteMatters'
 
 // G-A7 ① — 远程 web build 上 runSearchAgent 必返 E_UNSUPPORTED（LLM key 在桌面）。
 // 用项目一致的 VITE_BUILD_TARGET 信号（见 factory.ts / StatusBar.tsx / EnvField.tsx）
@@ -134,7 +144,7 @@ const FIXED_FACETS: ReadonlyArray<{ token: string; labelKey: string }> = [
   { token: 'has:attachment', labelKey: 'palette.facet.hasAttachment' }
 ]
 
-type Group = 'jump' | 'ai' | 'email' | 'actions'
+type Group = 'jump' | 'matter' | 'ai' | 'email' | 'actions'
 
 // ─── Tiny helpers ──────────────────────────────────────────────────────
 
@@ -213,8 +223,11 @@ export function CommandPalette(): React.ReactElement | null {
   const { t } = useTranslation()
   const open = useCommandPalette((s) => s.open)
   const mailApi = useMailApi()
+  const mattersApi = useMattersApi()
+  const mattersEnabled = useMattersEnabled()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  const openMatter = useMatterNavigation((state) => state.open)
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const setActiveEmail = useActiveEmail((s) => s.setActive)
   const setView = useEmailFilter((s) => s.setView)
@@ -245,7 +258,17 @@ export function CommandPalette(): React.ReactElement | null {
     [setView, setActiveMailbox, setActiveEmail, navigate]
   )
 
+  const activateMatter = useCallback(
+    (matter: Matter): void => {
+      closeCommandPalette()
+      openMatter(matter.public_id)
+      void navigate({ to: '/matters' })
+    },
+    [navigate, openMatter]
+  )
+
   const [query, setQuery] = useState('')
+  const [scope, setScope] = useState<PaletteScope>('all')
   const [highlight, setHighlight] = useState(0)
   const [lastLatencyMs, setLastLatencyMs] = useState<number | null>(null)
   const [actionRunning, setActionRunning] = useState<string | null>(null)
@@ -272,6 +295,7 @@ export function CommandPalette(): React.ReactElement | null {
   const [prevOpen, setPrevOpen] = useState(open)
   if (prevOpen !== open) {
     setPrevOpen(open)
+    setScope('all')
     if (open) {
       setQuery('')
       setHighlight(0)
@@ -319,6 +343,8 @@ export function CommandPalette(): React.ReactElement | null {
   // T3: CJK transform 统一到后端 smart 模式，前端只 trim（消除前端/后端双 normalizer 分叉）。
   const normalised = useMemo(() => debouncedRaw.trim(), [debouncedRaw])
   const queryTerms = useMemo(() => extractTerms(debouncedRaw), [debouncedRaw])
+  const hasQuery = normalised.length > 0
+  const scopeVisibility = useMemo(() => paletteScopeVisibility(scope), [scope])
   const lang = detectLang(query)
   const langLabel = lang === 'zh' ? t('palette.lang.zh') : t('palette.lang.en')
 
@@ -390,6 +416,17 @@ export function CommandPalette(): React.ReactElement | null {
     }
   }
   const isSearching = searchQ.isFetching && normalised.length > 0
+
+  const mattersQ = useQuery({
+    queryKey: qk.matters.paletteSearch(normalised),
+    queryFn: () => mattersApi.list({ q: normalised, limit: 8 }),
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+    enabled: open && mattersEnabled && hasQuery
+  })
+  const matterHits: Matter[] = useMemo(() => mattersQ.data?.items ?? [], [mattersQ.data?.items])
+  const visibleMatterHits = mattersEnabled ? matterHits : []
+  const isSearchingMatters = mattersQ.isFetching && hasQuery
 
   // G-B3 — record history on a *settled* successful search (not every keystroke):
   // debounce → normalised → searchQ resolves (non-placeholder) → push once. This
@@ -712,6 +749,26 @@ export function CommandPalette(): React.ReactElement | null {
     return hits.filter((h) => !aiIds.has(h.internal_id))
   }, [hits, aiHits])
 
+  const emailProviderHits = useMemo(() => [...aiHits, ...dedupedHits], [aiHits, dedupedHits])
+  const emailProviderCount = useMemo(
+    () => new Set(emailProviderHits.map((hit) => hit.internal_id)).size,
+    [emailProviderHits]
+  )
+  const lookupKeys = useMemo(
+    () =>
+      buildPaletteMatterLookupKeys(
+        scopeVisibility.showEmail ? emailProviderHits : [],
+        open && mattersEnabled && hasQuery
+      ),
+    [emailProviderHits, hasQuery, mattersEnabled, open, scopeVisibility.showEmail]
+  )
+  const matterLookupQ = useQuery({
+    queryKey: qk.matters.resourceLookup('mailagent', lookupKeys),
+    queryFn: () => mattersApi.lookupResourceLinks('mailagent', lookupKeys),
+    enabled: open && mattersEnabled && hasQuery && lookupKeys.length > 0,
+    staleTime: 10_000
+  })
+
   // ──────────────────────────────────────────────────────────────────
   // G-B3 — facet chips: is:unread / has:attachment (DSL tokens the palette
   //   otherwise hides behind the static cheat-sheet). active = the live query
@@ -837,29 +894,51 @@ export function CommandPalette(): React.ReactElement | null {
 
   const flat: FlatEntry[] = useMemo(() => {
     const out: FlatEntry[] = []
-    jumpItems.forEach((j, i) =>
-      out.push({ group: 'jump', indexInGroup: i, isAiEntry: j.isAiEntry, run: j.run })
-    )
+    if (scopeVisibility.showNonProviderGroups) {
+      jumpItems.forEach((j, i) =>
+        out.push({ group: 'jump', indexInGroup: i, isAiEntry: j.isAiEntry, run: j.run })
+      )
+    }
+    if (scopeVisibility.showMatter) {
+      visibleMatterHits.forEach((matter, i) =>
+        out.push({ group: 'matter', indexInGroup: i, run: () => activateMatter(matter) })
+      )
+    }
     // AI agentic hits: same activate closure as EMAIL hits; the AI summary row
     // and the in-flight phrase row are NOT entries (non-interactive).
-    aiHits.forEach((h, i) => out.push({ group: 'ai', indexInGroup: i, run: () => activateHit(h) }))
+    if (scopeVisibility.showEmail) {
+      aiHits.forEach((h, i) => out.push({ group: 'ai', indexInGroup: i, run: () => activateHit(h) }))
+    }
     // Search hit may live in a mailbox the user isn't currently viewing.
     // activateHit syncs view + mailbox so EmailList scrolls to + highlights
     // the row instead of silently jumping the EmailDetail pane.
     // dedupedHits — AI 命中已显示的 internal_id 不在 EMAIL 组重复（G-A7 ⑤）。
-    dedupedHits.forEach((h, i) =>
-      out.push({ group: 'email', indexInGroup: i, run: () => activateHit(h) })
-    )
-    actionItems.forEach((a, i) =>
-      out.push({
-        group: 'actions',
-        indexInGroup: i,
-        disabled: a.disabled,
-        run: () => a.run()
-      })
-    )
+    if (scopeVisibility.showEmail) {
+      dedupedHits.forEach((h, i) =>
+        out.push({ group: 'email', indexInGroup: i, run: () => activateHit(h) })
+      )
+    }
+    if (scopeVisibility.showNonProviderGroups) {
+      actionItems.forEach((a, i) =>
+        out.push({
+          group: 'actions',
+          indexInGroup: i,
+          disabled: a.disabled,
+          run: () => a.run()
+        })
+      )
+    }
     return out
-  }, [jumpItems, aiHits, dedupedHits, actionItems, activateHit])
+  }, [
+    jumpItems,
+    visibleMatterHits,
+    aiHits,
+    dedupedHits,
+    actionItems,
+    scopeVisibility,
+    activateMatter,
+    activateHit
+  ])
 
   // Clamp highlight in render (no extra paint cycle).
   if (flat.length > 0 && highlight >= flat.length) {
@@ -875,7 +954,7 @@ export function CommandPalette(): React.ReactElement | null {
   const jumpToGroupBoundary = useCallback(
     (forward: boolean) => {
       if (flat.length === 0) return
-      const order: Group[] = ['jump', 'ai', 'email', 'actions']
+      const order: Group[] = ['jump', 'matter', 'ai', 'email', 'actions']
       const present = order.filter((g) => flat.some((f) => f.group === g))
       if (present.length <= 1) return
       const curGroup = flat[highlight]?.group ?? present[0]
@@ -954,26 +1033,33 @@ export function CommandPalette(): React.ReactElement | null {
 
   // EMAIL 组以 dedupedHits 为准（AI 命中已在 AI 组显示，G-A7 ⑤）。
   const hasHits = dedupedHits.length > 0
-  const hasQuery = normalised.length > 0
   // AI 命中存在且去重后 EMAIL 组为空 → 整组不渲染（命中全在 AI 组，避免误导「未找到」空态）。
-  const showEmailGroup = hasQuery && (dedupedHits.length > 0 || aiHits.length === 0)
+  const showEmailGroup =
+    scopeVisibility.showEmail && hasQuery && (dedupedHits.length > 0 || aiHits.length === 0)
   // G-A7 ② — AI 搜索跑完一次且 0 命中（agent 诚实说没找到）→ 渲染明确空态。
   const showAiEmpty = aiCompleted && !aiSearching && aiHits.length === 0
   const countLabel =
     totalIndexed === null
       ? `${dedupedHits.length}`
       : t('palette.email.countLabel', { n: dedupedHits.length, total: totalIndexed })
+  const scopeItems: ReadonlyArray<{ id: PaletteScope; count: number }> = [
+    { id: 'all', count: emailProviderCount + visibleMatterHits.length },
+    { id: 'email', count: emailProviderCount },
+    { id: 'matter', count: visibleMatterHits.length }
+  ]
 
   // Pre-compute flat index offsets for each group so renderer can stamp
   // data-flat-idx without recomputing during the map. Order matches the flat
-  // index builder: jump → ai → email → actions.
+  // index builder: jump → matter → ai → email → actions.
   let cursor = 0
   const jumpStartIdx = cursor
-  cursor += jumpItems.length
+  cursor += scopeVisibility.showNonProviderGroups ? jumpItems.length : 0
+  const matterStartIdx = cursor
+  cursor += scopeVisibility.showMatter ? visibleMatterHits.length : 0
   const aiStartIdx = cursor
-  cursor += aiHits.length
+  cursor += scopeVisibility.showEmail ? aiHits.length : 0
   const emailStartIdx = cursor
-  cursor += dedupedHits.length
+  cursor += scopeVisibility.showEmail ? dedupedHits.length : 0
   const actionStartIdx = cursor
 
   return createPortal(
@@ -1120,6 +1206,28 @@ export function CommandPalette(): React.ReactElement | null {
           </div>
         )}
 
+        {mattersEnabled && hasQuery ? (
+          <div className="flex shrink-0 items-center gap-1.5 border-b border-ink-border-soft px-4 py-1.5">
+            {scopeItems.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                aria-pressed={scope === item.id}
+                onClick={() => setScope(item.id)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-micro transition',
+                  scope === item.id
+                    ? 'border-coral/40 bg-coral/[0.14] text-coral'
+                    : 'border-ink-border-soft bg-ink-fg/[0.04] text-ink-fg-2 hover:bg-ink-fg/[0.08] hover:text-ink-fg'
+                )}
+              >
+                <span>{t(`palette.matters.scope.${item.id}`)}</span>
+                <span className="font-mono text-[10px] opacity-70">{item.count}</span>
+              </button>
+            ))}
+          </div>
+        ) : null}
+
         {/* Result body */}
         <ul
           id="palette-listbox"
@@ -1128,7 +1236,7 @@ export function CommandPalette(): React.ReactElement | null {
           className="flex-1 overflow-y-auto scrollbar-thin py-2"
         >
           {/* JUMP group */}
-          {jumpItems.length > 0 && (
+          {scopeVisibility.showNonProviderGroups && jumpItems.length > 0 && (
             <>
               <GroupHeader title="Jump" countLabel={String(jumpItems.length)} />
               <div className="px-3 space-y-px">
@@ -1167,6 +1275,69 @@ export function CommandPalette(): React.ReactElement | null {
               </div>
             </>
           )}
+
+          {mattersEnabled && scopeVisibility.showMatter && hasQuery && (visibleMatterHits.length > 0 || scope === 'matter') ? (
+            <>
+              <GroupHeader
+                title={t('palette.matters.title')}
+                countLabel={String(visibleMatterHits.length)}
+                aside={
+                  isSearchingMatters ? (
+                    <>
+                      <Loader2
+                        size={12}
+                        strokeWidth={2}
+                        className="animate-spin text-ink-fg-2 motion-reduce:animate-none"
+                        aria-hidden
+                      />
+                      <span>{t('palette.searching')}</span>
+                    </>
+                  ) : undefined
+                }
+              />
+              {visibleMatterHits.length > 0 ? (
+                <div className="space-y-px px-3">
+                  {visibleMatterHits.map((matter, index) => {
+                    const idx = matterStartIdx + index
+                    return (
+                      <MatterHitRow
+                        key={matter.public_id}
+                        matter={matter}
+                        flatIdx={idx}
+                        selected={idx === highlight}
+                        setHighlight={setHighlight}
+                        queryTerms={queryTerms}
+                        onActivate={() => activateMatter(matter)}
+                      />
+                    )
+                  })}
+                </div>
+              ) : (
+                <div className="px-5">
+                  <div className="empty-tile">
+                    {isSearchingMatters ? (
+                      <Loader2
+                        size={18}
+                        strokeWidth={1.75}
+                        className="animate-spin text-ink-fg-3 motion-reduce:animate-none"
+                        aria-hidden
+                      />
+                    ) : (
+                      <SearchIcon size={18} strokeWidth={1.75} className="text-ink-fg-3" aria-hidden />
+                    )}
+                    <div className="text-aux text-ink-fg-1">
+                      {isSearchingMatters ? t('palette.searching') : t('palette.matters.emptyTitle')}
+                    </div>
+                    {!isSearchingMatters ? (
+                      <div className="text-center text-meta text-ink-fg-3">
+                        {t('palette.matters.emptyHint')}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : null}
 
           {/* G-B3 — empty-state recall: when the query box is empty, surface
               recent searches + saved searches (clickable → setQuery). Falls
@@ -1256,7 +1427,7 @@ export function CommandPalette(): React.ReactElement | null {
               顶部渲染一行 phrase+shimmer（不展开过程，phase 驱动短语组 G-A7 ③）；命中
               用同款 EmailHitRow（纳入 flat 键盘索引）；summary 行 / phrase 行 / 空态 tile
               / 转普通搜索行均不进 flat 索引（非交互或自管点击）。 */}
-          {(aiSearching || aiHits.length > 0 || showAiEmpty) && (
+          {scopeVisibility.showEmail && (aiSearching || aiHits.length > 0 || showAiEmpty) && (
             <>
               <GroupHeader
                 title="AI Search"
@@ -1301,6 +1472,11 @@ export function CommandPalette(): React.ReactElement | null {
                         setHighlight={setHighlight}
                         queryTerms={queryTerms}
                         onActivate={() => activateHit(h)}
+                        matterLinks={
+                          mattersEnabled && matterLookupQ.data
+                            ? lookupMattersForEmail(matterLookupQ.data, h.internal_id)
+                            : undefined
+                        }
                       />
                     )
                   })}
@@ -1384,6 +1560,11 @@ export function CommandPalette(): React.ReactElement | null {
                         setHighlight={setHighlight}
                         queryTerms={queryTerms}
                         onActivate={() => activateHit(h)}
+                        matterLinks={
+                          mattersEnabled && matterLookupQ.data
+                            ? lookupMattersForEmail(matterLookupQ.data, h.internal_id)
+                            : undefined
+                        }
                       />
                     )
                   })}
@@ -1444,7 +1625,7 @@ export function CommandPalette(): React.ReactElement | null {
           )}
 
           {/* AI ACTIONS group */}
-          {actionItems.length > 0 && (
+          {scopeVisibility.showNonProviderGroups && actionItems.length > 0 && (
             <>
               <GroupHeader
                 title="AI Actions"
