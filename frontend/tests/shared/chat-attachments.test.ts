@@ -7,12 +7,14 @@
 // (extension/MIME detection, content cap, binary skip) without
 // renderer or React harness overhead.
 
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import {
   ATTACHMENT_MAX_CONTENT_CHARS,
+  ATTACHMENT_MAX_CONVERT_BYTES,
   buildAttachmentBlock,
   formatAttachmentSize,
+  isConvertibleAttachment,
   isTextAttachment,
   readAttachment,
   type ChatAttachment
@@ -159,5 +161,134 @@ describe('readAttachment', () => {
     const a1 = await readAttachment(f1)
     const a2 = await readAttachment(f2)
     expect(a1.id).not.toBe(a2.id)
+  })
+})
+
+// ---------------------------------------------------------------------------
+// task 08-10 WP3 — office documents go through the server-side converter.
+// ---------------------------------------------------------------------------
+
+describe('isConvertibleAttachment', () => {
+  test.each([
+    ['report.docx', ''],
+    ['deck.pptx', 'application/vnd.openxmlformats'],
+    ['book.xlsx', ''],
+    ['legacy.doc', 'application/msword'],
+    ['macro.xlsm', '']
+  ])('%s → convertible', (filename, mime) => {
+    expect(isConvertibleAttachment(filename, mime)).toBe(true)
+  })
+
+  test('csv stays on the local text path — direct read is the more faithful output', () => {
+    expect(isConvertibleAttachment('data.csv', 'text/csv')).toBe(false)
+    expect(isTextAttachment('data.csv', 'text/csv')).toBe(true)
+  })
+
+  test('🔴 pdf is NOT sent — the server pdf lane ships off, so it would be a wasted round-trip', () => {
+    expect(isConvertibleAttachment('doc.pdf', 'application/pdf')).toBe(false)
+  })
+
+  test('images stay metadata-only', () => {
+    expect(isConvertibleAttachment('photo.png', 'image/png')).toBe(false)
+  })
+})
+
+describe('readAttachment — document conversion', () => {
+  function mockFetch(impl: () => unknown): ReturnType<typeof vi.fn> {
+    const fn = vi.fn(async () => impl() as Response)
+    vi.stubGlobal('fetch', fn)
+    return fn
+  }
+
+  afterEach(() => {
+    vi.unstubAllGlobals()
+    vi.restoreAllMocks()
+  })
+
+  function docxFile(name = 'report.docx'): File {
+    return new File([new Uint8Array([0x50, 0x4b, 0x03, 0x04])], name, {
+      type: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'
+    })
+  }
+
+  test('converted markdown lands in content', async () => {
+    mockFetch(() => ({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        data: { status: 'converted', markdown: '# Title\n\n| a | b |\n| --- | --- |' }
+      })
+    }))
+    const a = await readAttachment(docxFile())
+    expect(a.content).toContain('| --- |')
+  })
+
+  test('sends filename + base64, and includes credentials for the remote build', async () => {
+    const fn = mockFetch(() => ({
+      ok: true,
+      json: async () => ({ status: 'success', data: { status: 'converted', markdown: 'x' } })
+    }))
+    await readAttachment(docxFile('合同.docx'))
+    expect(fn).toHaveBeenCalledTimes(1)
+    const [url, init] = fn.mock.calls[0] as unknown as [string, RequestInit]
+    expect(url).toContain('/attachment/convert')
+    // 🔴 remote web authenticates by CF Access cookie; omitting this is a real
+    // bug shipped on another endpoint — pin it so we don't repeat it.
+    expect(init.credentials).toBe('include')
+    const body = JSON.parse(String(init.body)) as { filename: string; contentBase64: string }
+    expect(body.filename).toBe('合同.docx')
+    expect(body.contentBase64.length).toBeGreaterThan(0)
+  })
+
+  test('endpoint disabled (404) → metadata-only, never throws', async () => {
+    mockFetch(() => ({ ok: false, status: 404, json: async () => ({}) }))
+    const a = await readAttachment(docxFile())
+    expect(a.content).toBeNull()
+    expect(a.filename).toBe('report.docx')
+  })
+
+  test('server says unsupported → metadata-only', async () => {
+    mockFetch(() => ({
+      ok: true,
+      json: async () => ({ status: 'success', data: { status: 'unsupported', markdown: null } })
+    }))
+    expect((await readAttachment(docxFile())).content).toBeNull()
+  })
+
+  test('transport failure → metadata-only, message still sendable', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        throw new Error('network down')
+      })
+    )
+    await expect(readAttachment(docxFile())).resolves.toMatchObject({ content: null })
+  })
+
+  test('converted markdown is capped at ATTACHMENT_MAX_CONTENT_CHARS', async () => {
+    mockFetch(() => ({
+      ok: true,
+      json: async () => ({
+        status: 'success',
+        data: { status: 'converted', markdown: 'y'.repeat(ATTACHMENT_MAX_CONTENT_CHARS + 500) }
+      })
+    }))
+    const a = await readAttachment(docxFile())
+    expect(a.content?.length).toBe(ATTACHMENT_MAX_CONTENT_CHARS)
+  })
+
+  test('oversized document skips the round-trip entirely', async () => {
+    const fn = mockFetch(() => ({ ok: true, json: async () => ({}) }))
+    const big = new File(['x'], 'huge.docx', { type: '' })
+    Object.defineProperty(big, 'size', { value: ATTACHMENT_MAX_CONVERT_BYTES + 1 })
+    expect((await readAttachment(big)).content).toBeNull()
+    expect(fn).not.toHaveBeenCalled()
+  })
+
+  test('text and image files never hit the converter', async () => {
+    const fn = mockFetch(() => ({ ok: true, json: async () => ({}) }))
+    await readAttachment(new File(['hello'], 'a.txt', { type: 'text/plain' }))
+    await readAttachment(new File([new Uint8Array([1])], 'b.png', { type: 'image/png' }))
+    expect(fn).not.toHaveBeenCalled()
   })
 })

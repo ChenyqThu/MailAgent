@@ -769,3 +769,136 @@ def attachment_text(
         source="sqlite",
         meta_extra={"attachment_id": ctx["id"], "status": status},
     )
+
+
+# ============================================================
+# POST /api/attachment/convert — 内存文档 → markdown（task 08-10 WP3）
+# ============================================================
+#
+# 给 **chat 附件**用：用户往对话里拖一个 docx，模型此前只能看到文件名（chat 附件是
+# renderer 内存里的 File 对象，非文本类型一律 content=null）。本端点把字节转成 markdown
+# 填进那个 content，模型同一轮就能读到正文。
+#
+# 🔴 与本文件其余端点的根本区别：**这里的输入不是已入库的附件**，没有 attachment_id、
+# 不碰 email_attachment / AttachmentStore、不查库。就是「一段字节进、一段 markdown 出」。
+#
+# 🔴 **全程 in-memory，文件永不落盘**：走 anydoc 的 to_markdown_bytes（实测与路径版产出
+# 逐字节相同）。这既省掉一整类临时文件泄漏面，也与 chat 附件「从未落盘」的现状语义一致
+# —— 用户往对话里拖的文件不该因为要读它而在磁盘上留下副本。
+#
+# 鉴权沿用本 router 的 verify_cf_access（桌面 = 主进程 webRequest 注入本地 token，
+# 远程 web = CF Access cookie）。本端点是 Python serve-api 自己的路由，远程天然可达，
+# **不需要**进 ai_gateway_proxy 的转发表——那张表是给活在 Node gateway 里的端点用的。
+
+#: 解码后的字节上限。base64 传输会膨胀约 33%，故 wire 上大约 20 MiB。
+#: 与 pack_fetch 的 20 MiB / vision_ocr 的 15 MB 同量级；chat 里拖的文档远小于此。
+_CONVERT_MAX_BYTES = 15 * 1024 * 1024
+
+#: 单个 chat 附件进 prompt 的字符上限。
+#:
+#: 🔴 **跨语言手抄常量**，TS 侧镜像 = `frontend/src/shared/lib/chat-attachments.ts` 的
+#: `ATTACHMENT_MAX_CONTENT_CHARS`。两侧都要截：服务端截防止把一份 300 页文档整个吐回
+#: renderer，客户端截是入 prompt 前的最后一道。值不一致会让 `truncated` 标记说谎
+#: （服务端说没截、客户端又截了一刀，模型不知道自己看的是片段）。
+#: 一致性闸：`tests/config/test_chat_attachment_chars_parity.py`。
+#:
+#: 20000 而非沿用旧的 5000：5000 是为「粘贴一段日志/代码」定的，一份 docx 转成 markdown
+#: 后通常几千到几万字符，5000 会把正文腰斩。20000 × ~0.25 token/char ≈ 5k token/份，
+#: 多文件仍受 buildAttachmentBlock 的总量护栏约束。
+CHAT_ATTACHMENT_MAX_CHARS = 20000
+
+
+@router.post("/convert", dependencies=[Depends(verify_cf_access)])
+async def convert_attachment(request: Request, body: Optional[dict[str, Any]] = None):
+    """内存文档字节 → GFM markdown。flag 关 / 不支持 / 失败 → 404 或 status!='converted'。
+
+    请求体（base64 JSON，沿用 P9 plugin import 的既有约定，不引入 multipart 依赖）::
+
+        {"filename": "report.docx", "contentBase64": "..."}
+
+    响应 data::
+
+        {"status": "converted"|"unsupported", "markdown": str|null,
+         "truncated": bool, "extractor": "anydoc"|null, "filename": str}
+
+    转换失败**不是错误**（返回 200 + status='unsupported'）—— 调用方据此回落到
+    metadata-only，用户的消息照常发得出去。真正的 4xx 只留给参数问题与超限。
+    """
+    import base64
+    import binascii
+
+    from src.converter import anydoc_extract
+
+    # flag off ⇒ 端点不存在。renderer 侧据此静默回落，不给用户看半截功能。
+    if not anydoc_extract.anydoc_enabled():
+        raise APIError(
+            "E_NOT_FOUND", "document conversion is disabled",
+            http_status=404, source="sqlite",
+        )
+
+    raw = body or {}
+    filename = raw.get("filename")
+    content_b64 = raw.get("contentBase64")
+    if not isinstance(filename, str) or not filename.strip():
+        raise APIError("E_INVALID_ARG", "filename is required", http_status=400, source="sqlite")
+    if not isinstance(content_b64, str) or not content_b64:
+        raise APIError(
+            "E_INVALID_ARG", "contentBase64 is required", http_status=400, source="sqlite",
+        )
+
+    # 先按 base64 长度估算解码后大小，超限直接拒 —— 不要先解码再判断（那正好把
+    # 「防 OOM」的护栏放在会 OOM 的操作之后）。base64 每 4 字符 → 3 字节。
+    if (len(content_b64) // 4) * 3 > _CONVERT_MAX_BYTES:
+        raise APIError(
+            "E_TOO_LARGE",
+            f"file exceeds {_CONVERT_MAX_BYTES // (1024 * 1024)} MiB conversion limit",
+            http_status=413, source="sqlite",
+        )
+    try:
+        data_bytes = base64.b64decode(content_b64, validate=True)
+    except (binascii.Error, ValueError) as exc:
+        raise APIError(
+            "E_INVALID_ARG", "contentBase64 is invalid", http_status=400, source="sqlite",
+        ) from exc
+    if len(data_bytes) > _CONVERT_MAX_BYTES:
+        raise APIError(
+            "E_TOO_LARGE",
+            f"file exceeds {_CONVERT_MAX_BYTES // (1024 * 1024)} MiB conversion limit",
+            http_status=413, source="sqlite",
+        )
+
+    ext = Path(filename).suffix.lower()
+    # lane 判定复用提取链同一套（含 flag + LANES），于是 chat 与邮件附件的可转换集合
+    # 天然一致 —— 不会出现「邮件里读得出、聊天里读不出」这种最难解释的分裂。
+    if not anydoc_extract.lane_active(ext):
+        return success_envelope(
+            {
+                "status": "unsupported", "markdown": None, "truncated": False,
+                "extractor": None, "filename": filename,
+            },
+            request=request, source="sqlite",
+        )
+
+    markdown = anydoc_extract.convert_bytes(
+        data_bytes, anydoc_extract.format_for_extension(ext),
+    )
+    if markdown is None:
+        return success_envelope(
+            {
+                "status": "unsupported", "markdown": None, "truncated": False,
+                "extractor": None, "filename": filename,
+            },
+            request=request, source="sqlite",
+        )
+
+    truncated = False
+    if len(markdown) > CHAT_ATTACHMENT_MAX_CHARS:
+        markdown = markdown[:CHAT_ATTACHMENT_MAX_CHARS]
+        truncated = True
+    return success_envelope(
+        {
+            "status": "converted", "markdown": markdown, "truncated": truncated,
+            "extractor": anydoc_extract.ANYDOC_EXTRACTOR, "filename": filename,
+        },
+        request=request, source="sqlite",
+    )

@@ -590,11 +590,17 @@ _BACKTICK_FULLKEY_RE = re.compile(r"`([A-Z][A-Z0-9_]+)`")
 # 列 1 里 `` `KEY`(value) `` 形态 = 该行混了非 bool 默认（如 (5000)/(haiku)）→ 不可对账。
 _INLINE_ANNOT_RE = re.compile(r"`[A-Z][A-Z0-9_]+`\s*\(")
 # 列 2 前导字面量：首个 backtick 词或首个裸词。
-_LEADING_LITERAL_RE = re.compile(r"^\s*`?([A-Za-z\[\]][A-Za-z0-9_\-\[\]]*)`?")
+# 逗号被纳入 token：形如 `office,legacy` 的**枚举列表**默认值（task 08-10 的
+# MAILAGENT_ANYDOC_LANES）此前会被截成 `office`，于是闸拿一个残缺值去对账、
+# 报一个假的漂移。🔴 「部分抽取比抽不到更毒」—— 它长得像抽取成功。
+_LEADING_LITERAL_RE = re.compile(r"^\s*`?([A-Za-z\[\]][A-Za-z0-9_\-\[\],]*)`?")
+
+#: 单个枚举词（applescript / hybrid / important…）。
+_ENUM_WORD = r"[a-z][a-z0-9_\-]*"
 
 
 def _parse_default_literal(col2: str) -> Optional[str]:
-    """列 2 → 前导字面量 'true'/'false'/枚举词；无法干净解析返回 None。"""
+    """列 2 → 前导字面量 'true'/'false'/枚举词/逗号分隔枚举列表；无法干净解析返回 None。"""
     if "前" in col2:  # 如「`true`（前 3，…）」= 默认仅适用前 N 个 flag，整行不可对账
         return None
     m = _LEADING_LITERAL_RE.match(col2.strip())
@@ -603,7 +609,9 @@ def _parse_default_literal(col2: str) -> Optional[str]:
     tok = m.group(1)
     if tok in ("true", "false"):
         return tok
-    if re.fullmatch(r"[a-z][a-z0-9_\-]*", tok):  # 枚举词（applescript / hybrid / important…）
+    # 单个枚举词，或逗号分隔的枚举列表（`office,legacy`）。列表要求整体干净匹配，
+    # 不接受尾随逗号 / 空项 —— 宁可判不可对账，也不要拿半个值去比。
+    if re.fullmatch(rf"{_ENUM_WORD}(,{_ENUM_WORD})*", tok):
         return tok
     return None  # `[]` / `—` / 数字等 → 不可对账
 
