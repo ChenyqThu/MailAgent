@@ -104,6 +104,12 @@ def extract_text(
     ext = (p.suffix or Path(filename or '').suffix or '').lower()
 
     try:
+        # anydoc lane（task 08-10 WP2）。flag off / lane 未启用 / 转换失败 / 产出为空
+        # 一律返回 None，落回下方原有分派 —— 下面每一条分支都逐字未动，off 时字节级等价。
+        anydoc_result = _try_anydoc(p, ext)
+        if anydoc_result is not None:
+            return anydoc_result
+
         if ext in _PDF_EXTENSIONS:
             return _extract_pdf(p)
         if ext in _DOCX_EXTENSIONS:
@@ -131,6 +137,37 @@ def extract_text(
             text='', extractor='none', status='failed',
             error_message=str(e),
         )
+
+
+def _try_anydoc(path: Path, ext: str) -> Optional[ExtractResult]:
+    """anydoc lane：成功返回 ExtractResult，其余一律 None（调用方回落原生 extractor）。
+
+    回落是**静默且完整**的：flag off、lane 未启用、包没装、格式不支持、文件损坏、
+    产出为空 —— 全都落回原来那条分派链，产出与改动前逐字节相同。这条纪律是本 lane
+    可以默认开 office/legacy 的前提：最坏情况是「没变好」，而不是「变坏」。
+
+    🔴 PDF 走到这里时通常已被 lane 判定挡掉（默认 LANES 不含 pdf）。真开了 pdf lane
+    且 anydoc 失败，回落目标是 ``_extract_pdf``（其内部本就是 pypdf → 无文本层才
+    Vision OCR）而**不是**直接 OCR —— 实测 anydoc 会把 pypdf 能正常抽取的 PDF 误判成
+    ImageBased，直接跳 OCR 等于把一份正确的合同全文换成 OCR 猜测。
+    """
+    from src.converter import anydoc_extract
+
+    if not anydoc_extract.lane_active(ext):
+        return None
+
+    md = anydoc_extract.convert_path(path)
+    if md is None:
+        logger.debug(f'anydoc produced nothing for {path.name}; falling back to native extractor')
+        return None
+
+    text, truncated = _truncate(md)
+    if not text.strip():
+        return None
+    return ExtractResult(
+        text=text, extractor=anydoc_extract.ANYDOC_EXTRACTOR,
+        status='extracted', truncated=truncated,
+    )
 
 
 def _ocr_enabled() -> bool:

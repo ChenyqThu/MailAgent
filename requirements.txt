@@ -51,6 +51,14 @@ pypdf>=4.0.0            # PR-2b: PDF 文本提取
 python-docx>=1.1.0      # PR-2b: docx 文本提取
 python-pptx>=1.0.0      # PR-2b: pptx 文本提取
 
+# anydoc 文档提取（task 08-10 WP2，flag MAILAGENT_ANYDOC_ENABLED 默认关）：
+# docx/pptx/xlsx/老 .doc → 带结构的 GFM markdown。纯本地 Rust 解析器，零网络零 API key、
+# 零传递依赖，macOS arm64 abi3 wheel 仅 3.2 MB。🔴 PyPI 名 firecrawl-anydoc，import 名 anydoc。
+# 上面四个 extractor 依赖**全部保留**：anydoc 失败一律回落它们（含 pdf lane 默认不启用，
+# PDF 仍由 pypdf 主责）。运行期在 src/converter/anydoc_extract.py 懒 import（缺失软着陆）；
+# 打包须重新生成 requirements.lock.txt 才进嵌入式 venv。
+firecrawl-anydoc>=0.1.7
+
 # 附件 OCR（批次4 PR-G，flag MAILAGENT_ATTACHMENT_OCR_ENABLED 默认开）：图片附件 +
 # 无文本层扫描件 PDF 经 macOS Vision.framework 识别中英文本。pyobjc-framework-Vision
 # 连带 pyobjc-core / Cocoa / Quartz（PDF 渲染）/ CoreML ≈7.1MB 压缩，钉版本防 ABI 漂移。

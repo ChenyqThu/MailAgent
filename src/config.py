@@ -126,6 +126,24 @@ class Config(BaseSettings):
         description="是否启用附件 OCR（macOS Vision，图片 + 扫描件 PDF）。默认开；显式 false 回现状（图片/扫描件维持 unsupported/failed）。",
     )
 
+    # anydoc 文档提取（task 08-10 WP2）：docx/pptx/xlsx/老 .doc → 带结构的 GFM markdown。
+    # 纯本地 Rust 解析器（`firecrawl-anydoc`，import 名 `anydoc`），零网络零 key。
+    # 收的是实测缺陷：python-docx 的 paragraph.text 丢 hyperlink 内的 run（真丢字）、
+    # docx/xlsx 表格缺 |---| 分隔行（不是合法 GFM）、老 .doc 依赖未打包的 LibreOffice。
+    # 默认 false = extract_text() 走原实现、字节级等价（有测试断言）。
+    # 详见 src/converter/anydoc_extract.py 模块 docstring。
+    mailagent_anydoc_enabled: bool = Field(
+        default=False, env="MAILAGENT_ANYDOC_ENABLED",
+        description="是否用 anydoc 提取文档附件文本（docx/pptx/xlsx/老 .doc → GFM markdown）。默认关；显式 true 启用，失败自动回落原生 extractor。",
+    )
+    # 🔴 `pdf` 有意不在默认值里：25 份真实 PDF 实测 20 份与 pypdf 持平、3 份回归，其中
+    # 「伪粗体重复抽取」既不抛异常也不返回空 ⇒ 无判据可拦，会静默把垃圾写进 FTS 与 AI
+    # context。收益≈0、风险明确。要开 PDF 就写成 "office,legacy,pdf"。
+    mailagent_anydoc_lanes: str = Field(
+        default="office,legacy", env="MAILAGENT_ANYDOC_LANES",
+        description="anydoc 生效的 lane（逗号分隔，可选 office/legacy/pdf）。默认 office,legacy —— pdf 因实测回归有意不含。",
+    )
+
     # 日历同步配置
     calendar_database_id: str = Field(default="", env="CALENDAR_DATABASE_ID")
     calendar_name: str = Field(default="日历", env="CALENDAR_NAME")

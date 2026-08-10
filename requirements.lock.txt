@@ -16,6 +16,12 @@
 #   然后恢复本文件头注释、提交 lock diff。🔴 只改 requirements.txt/pyproject 不重新生成 lock
 #   = 改动不进包（provision 只认本文件）。
 #
+# 例外——**零传递依赖的单包**可以直接按字母序插一行，不必整体重解析：整体重解析会把
+#   其余上百个包一并升到 PyPI 最新，那与本文件「锁定现状」的目的相反，且把一次加包的
+#   diff 放大成上百行、每一行都是未经验证的版本跳变。判据是「pip install 该包时输出的
+#   Installing collected packages 只有它自己」。已按此例外增量加入的包：
+#     - firecrawl-anydoc==0.1.7（2026-08，task 08-10；实测零传递依赖，3.2 MB abi3 wheel）
+#
 # 平台注：pin 基于 macOS arm64 / CPython 3.11 解析，freeze 输出不带环境 marker；
 #   本文件仅供嵌入式打包（build-python-venv.sh）消费，开发 venv 不用它。
 #
@@ -67,6 +73,7 @@ faiss-cpu==1.14.3
 fastapi==0.115.14
 fastembed==0.8.0
 filelock==3.29.4
+firecrawl-anydoc==0.1.7
 flatbuffers==25.12.19
 frozenlist==1.8.0
 fsspec==2026.6.0
