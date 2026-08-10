@@ -1,13 +1,20 @@
 import { useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
-import { createMattersApi } from '@shared/api/matters'
+import { createMattersApi, createMatterChatApi } from '@shared/api/matters'
+import type { MatterChatApi } from '@shared/api/matters'
 import type { MattersApi } from '@shared/api/types/matter'
 import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
 import { qk } from '@shared/lib/queryKeys'
 
 export function useMattersApi(): MattersApi {
   return useMemo(() => createMattersApi(resolveApiBaseUrl()), [])
+}
+
+/** P3 — the Matter Chat surface's own serve-api face (context snapshot / scope audit / undo).
+ *  Separate from `useMattersApi` for the same reason the factories are separate (api/matters.ts). */
+export function useMatterChatApi(): MatterChatApi {
+  return useMemo(() => createMatterChatApi(resolveApiBaseUrl()), [])
 }
 
 export function useMattersEnabled(): boolean {

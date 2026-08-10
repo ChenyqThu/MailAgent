@@ -810,6 +810,7 @@
     "historyTitle": "Chats",
     "emptyHistory": "No conversations yet",
     "fromFeishu": "From Feishu",
+    "fromMatter": "Matter",
     "group": {
       "pinned": "Pinned",
       "today": "Today",
@@ -1050,6 +1051,15 @@
       "calendar_event_reschedule": "Reschedule event",
       "calendar_event_rsvp": "RSVP to invite",
       "calendar_event_delete": "Delete event",
+      "matter_find": "Find matters",
+      "matter_get": "Read matter",
+      "matter_create": "Create matter",
+      "matter_update": "Update matter",
+      "matter_item_mutate": "Edit matter item",
+      "matter_resource_mutate": "Link matter resource",
+      "matter_stakeholder_mutate": "Edit matter stakeholder",
+      "matter_relation_mutate": "Edit matter relation",
+      "matter_add_note": "Add matter note",
       "notion_agent_chat": "Ask the Notion agent",
       "plan_update": "Update plan",
       "suggest_followups": "Suggesting follow-ups"
@@ -4772,6 +4782,65 @@
       "threadSubscribed": "The entire thread is subscribed; later replies will enter this matter automatically",
       "threadPaused": "The thread subscription is paused",
       "noCandidates": "No active matters are available"
+    },
+    "chat": {
+      "title": "Matter chat",
+      "open": "Matter chat",
+      "newSession": "New conversation",
+      "injectedContext": "Injected context",
+      "chips": {
+        "acceptedState": "Accepted state",
+        "openItems": "{count} open items",
+        "openItemsUnknown": "Open items",
+        "stakeholders": "{count} stakeholders",
+        "stakeholdersUnknown": "Stakeholders",
+        "pinned": "{count} pinned resources",
+        "pinnedUnknown": "Pinned resources",
+        "changes": "Changes since the last accepted update",
+        "unavailable": "Context counts are unavailable right now; the chat still works."
+      },
+      "scope": {
+        "label": "Search scope",
+        "matter": "This matter",
+        "global": "Everything",
+        "matterNote": "Search is limited to this matter",
+        "globalNote": "Search across everything is allowed",
+        "auditFailed": "Could not switch the search scope; still limited to this matter"
+      },
+      "prompts": {
+        "blocked": "What is blocked right now?",
+        "changes": "What changed this week?",
+        "reviewDate": "Move the review date to next Monday",
+        "owing": "Who still owes us something?"
+      },
+      "empty": {
+        "title": "Move this forward from here",
+        "hint": "The chat only looks at this matter's evidence by default. Explicit instructions are written straight through — reversible and on the record."
+      },
+      "footnote": "Chat history is not official matter knowledge; only tool writes, accepted updates and deterministic events are kept.",
+      "writeLabels": {
+        "matter_create": "Matter created",
+        "matter_update": "Matter updated",
+        "matter_item_mutate": "Item updated",
+        "matter_resource_mutate": "Linked resource updated",
+        "matter_stakeholder_mutate": "Stakeholder updated",
+        "matter_relation_mutate": "Matter link updated",
+        "matter_add_note": "Note added"
+      },
+      "receipt": {
+        "written": "Written",
+        "writtenWithLabel": "Written · {label}",
+        "undo": "Undo",
+        "undone": "Undone"
+      },
+      "undo": {
+        "conflict": "This matter changed after the write; it can no longer be undone directly",
+        "failed": "Could not undo the write"
+      },
+      "gap": {
+        "title": "Context gap · widening the search needs your approval",
+        "expand": "Widen to everything"
+      }
     },
     "events": {},
     "toast": { "saved": "Matter updated", "saveFailed": "Could not update matter", "createFailed": "Could not create matter", "deleteFailed": "Could not delete matter" }

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
@@ -56,8 +56,19 @@ export function MattersWorkspace(): React.ReactElement | null {
   const [search, setSearch] = useState('')
   const [density, setDensity] = useState<MatterDensity>('compact')
   const [createOpen, setCreateOpen] = useState(false)
+  // P3 — 事项对话 open state. Owned here (not in MatterDetail) so switching / clearing the selected
+  // matter closes the panel, which also resets the panel's own per-session state (scope falls back
+  // to 'matter' on every reopen — D8 deliberately does not persist it).
+  const [chatOpen, setChatOpen] = useState(false)
   const navigationTarget = useMatterNavigation((state) => state.targetPublicId)
   const clearNavigationTarget = useMatterNavigation((state) => state.clear)
+
+  /** Every selection change goes through here so the chat panel can never stay open over a
+   *  DIFFERENT matter (it is anchored on the one it was opened for). */
+  const selectMatter = useCallback((publicId: string | null): void => {
+    setSelectedId(publicId)
+    setChatOpen(false)
+  }, [])
 
   const list = useQuery({
     queryKey: qk.matters.list(),
@@ -69,23 +80,24 @@ export function MattersWorkspace(): React.ReactElement | null {
   const visible = useMemo(() => filterView(allMatters, view), [allMatters, view])
 
   useEffect(() => {
-    if (selectedId && !visible.some((matter) => matter.public_id === selectedId)) setSelectedId(null)
-  }, [selectedId, visible])
+    if (selectedId && !visible.some((matter) => matter.public_id === selectedId))
+      selectMatter(null)
+  }, [selectMatter, selectedId, visible])
 
   useEffect(() => {
     if (!navigationTarget) return
     if (!allMatters.some((matter) => matter.public_id === navigationTarget)) return
     setView('all')
-    setSelectedId(navigationTarget)
+    selectMatter(navigationTarget)
     clearNavigationTarget()
-  }, [allMatters, clearNavigationTarget, navigationTarget])
+  }, [allMatters, clearNavigationTarget, navigationTarget, selectMatter])
 
   const create = useMutation({
     mutationFn: (input: MatterCreateInput) => api.create(input),
     onSuccess: async (result) => {
       setCreateOpen(false)
       await queryClient.invalidateQueries({ queryKey: qk.matters.list() })
-      setSelectedId(result.matter?.public_id ?? null)
+      selectMatter(result.matter?.public_id ?? null)
       setView('all')
     },
     onError: (error) => toastError(t('matters.toast.createFailed'), errorMessage(error))
@@ -93,7 +105,9 @@ export function MattersWorkspace(): React.ReactElement | null {
 
   if (!enabled) return null
 
-  const selected = selectedId ? allMatters.find((matter) => matter.public_id === selectedId) ?? null : null
+  const selected = selectedId
+    ? (allMatters.find((matter) => matter.public_id === selectedId) ?? null)
+    : null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -112,8 +126,13 @@ export function MattersWorkspace(): React.ReactElement | null {
             ]}
             ariaLabel={t('matters.density.label')}
           />
-          <button type="button" onClick={() => setCreateOpen(true)} className="inline-flex items-center gap-1.5 rounded-[var(--r-ctl)] bg-coral/100 px-3 py-2 text-body font-medium text-accent-fg">
-            <Plus size={15} />{t('matters.create.submit')}
+          <button
+            type="button"
+            onClick={() => setCreateOpen(true)}
+            className="inline-flex items-center gap-1.5 rounded-[var(--r-ctl)] bg-coral/100 px-3 py-2 text-body font-medium text-accent-fg"
+          >
+            <Plus size={15} />
+            {t('matters.create.submit')}
           </button>
         </div>
       </header>
@@ -127,11 +146,13 @@ export function MattersWorkspace(): React.ReactElement | null {
                 type="button"
                 onClick={() => {
                   setView(value)
-                  setSelectedId(null)
+                  selectMatter(null)
                 }}
                 className={cn(
                   'relative flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-body max-[900px]:w-auto',
-                  view === value ? 'row-selected acc-select font-medium text-ink-fg' : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
+                  view === value
+                    ? 'row-selected acc-select font-medium text-ink-fg'
+                    : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
                 )}
               >
                 {VIEW_ICONS[value]}
@@ -143,7 +164,7 @@ export function MattersWorkspace(): React.ReactElement | null {
 
         <div className="min-w-0 flex-1">
           {view === 'focus' ? (
-            <MatterFocus matters={visible} onSelect={(matter) => setSelectedId(matter.public_id)} />
+            <MatterFocus matters={visible} onSelect={(matter) => selectMatter(matter.public_id)} />
           ) : (
             <div className="grid h-full min-h-0 grid-cols-[minmax(280px,0.9fr)_minmax(420px,1.45fr)] max-[1180px]:grid-cols-1">
               <div className={cn('min-h-0', selected && 'max-[1180px]:hidden')}>
@@ -154,16 +175,26 @@ export function MattersWorkspace(): React.ReactElement | null {
                   density={density}
                   search={search}
                   onSearchChange={setSearch}
-                  onSelect={(matter: Matter) => setSelectedId(matter.public_id)}
+                  onSelect={(matter: Matter) => selectMatter(matter.public_id)}
                   onCreate={() => setCreateOpen(true)}
                 />
               </div>
               <div className={cn('min-h-0', !selected && 'max-[1180px]:hidden')}>
                 {selected ? (
-                  <MatterDetail matterId={selected.public_id} onBack={() => setSelectedId(null)} onRemoved={() => setSelectedId(null)} />
+                  <MatterDetail
+                    matterId={selected.public_id}
+                    onBack={() => selectMatter(null)}
+                    onRemoved={() => selectMatter(null)}
+                    chatOpen={chatOpen}
+                    onToggleChat={() => setChatOpen((open) => !open)}
+                    onCloseChat={() => setChatOpen(false)}
+                  />
                 ) : (
                   <div className="grid h-full place-items-center p-8 text-center text-body text-ink-fg-2">
-                    <div><Ban size={28} className="mx-auto mb-3 opacity-60" />{t('matters.detail.empty')}</div>
+                    <div>
+                      <Ban size={28} className="mx-auto mb-3 opacity-60" />
+                      {t('matters.detail.empty')}
+                    </div>
                   </div>
                 )}
               </div>
@@ -172,7 +203,12 @@ export function MattersWorkspace(): React.ReactElement | null {
         </div>
       </div>
 
-      <MatterCreateDialog open={createOpen} busy={create.isPending} onClose={() => setCreateOpen(false)} onCreate={(input) => create.mutate(input)} />
+      <MatterCreateDialog
+        open={createOpen}
+        busy={create.isPending}
+        onClose={() => setCreateOpen(false)}
+        onCreate={(input) => create.mutate(input)}
+      />
     </div>
   )
 }

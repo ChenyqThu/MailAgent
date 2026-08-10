@@ -84,6 +84,15 @@ describe('componentRegistry — resolution', () => {
       'email_resync',
       'file_read',
       'file_write',
+      // Matters MVP P3 — the 7 matter write tools share MatterWriteCard (approval → real
+      // approve/reject; completed → the write receipt, but only inside the Matter Chat panel).
+      'matter_add_note',
+      'matter_create',
+      'matter_item_mutate',
+      'matter_relation_mutate',
+      'matter_resource_mutate',
+      'matter_stakeholder_mutate',
+      'matter_update',
       'notion_agent_chat',
       'run_command',
       'set_skill_enabled',
@@ -103,6 +112,7 @@ describe('componentRegistry — resolution', () => {
       'DraftComposeCard',
       'DraftReplyCard',
       'ExecApprovalCard',
+      'MatterWriteCard',
       'NotionSyncCard',
       'SendApprovalCard',
       'SimpleApprovalCard',

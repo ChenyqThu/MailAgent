@@ -810,6 +810,7 @@
     "historyTitle": "会话",
     "emptyHistory": "还没有会话",
     "fromFeishu": "来自飞书",
+    "fromMatter": "事项",
     "group": {
       "pinned": "置顶",
       "today": "今天",
@@ -1050,6 +1051,15 @@
       "calendar_event_reschedule": "改期日程",
       "calendar_event_rsvp": "回复会议邀请",
       "calendar_event_delete": "删除日程",
+      "matter_find": "检索事项",
+      "matter_get": "读取事项",
+      "matter_create": "创建事项",
+      "matter_update": "更新事项",
+      "matter_item_mutate": "编辑事项条目",
+      "matter_resource_mutate": "关联事项资料",
+      "matter_stakeholder_mutate": "编辑事项干系人",
+      "matter_relation_mutate": "编辑事项关联",
+      "matter_add_note": "添加事项备注",
       "notion_agent_chat": "咨询 Notion Agent",
       "plan_update": "更新计划",
       "suggest_followups": "准备追问建议"
@@ -4848,6 +4858,65 @@
       "threadSubscribed": "整条会话已订阅，后续回复会自动进入事项",
       "threadPaused": "整条会话订阅已暂停",
       "noCandidates": "没有可加入的进行中事项"
+    },
+    "chat": {
+      "title": "事项对话",
+      "open": "事项对话",
+      "newSession": "新会话",
+      "injectedContext": "已注入的上下文",
+      "chips": {
+        "acceptedState": "当前已接受状态",
+        "openItems": "{count} 个开放项",
+        "openItemsUnknown": "开放项",
+        "stakeholders": "{count} 位干系人",
+        "stakeholdersUnknown": "干系人",
+        "pinned": "{count} 份置顶资料",
+        "pinnedUnknown": "置顶资料",
+        "changes": "自上次接受更新以来的变化",
+        "unavailable": "上下文计数暂时读不到，不影响对话。"
+      },
+      "scope": {
+        "label": "检索范围",
+        "matter": "本事项",
+        "global": "全库",
+        "matterNote": "检索范围限于本事项",
+        "globalNote": "已允许全库检索",
+        "auditFailed": "检索范围切换失败，仍限于本事项"
+      },
+      "prompts": {
+        "blocked": "现在卡在哪？",
+        "changes": "本周有什么变化？",
+        "reviewDate": "把复核日期改到下周一",
+        "owing": "谁还欠我们东西？"
+      },
+      "empty": {
+        "title": "从这里推进这件事",
+        "hint": "对话默认只看本事项的证据。明确的指令会直接写入，可逆且留痕。"
+      },
+      "footnote": "对话历史不是正式事项知识；只有工具写入、已接受的更新和确定性事件会沉淀。",
+      "writeLabels": {
+        "matter_create": "已创建事项",
+        "matter_update": "事项已更新",
+        "matter_item_mutate": "条目已更新",
+        "matter_resource_mutate": "关联资料已更新",
+        "matter_stakeholder_mutate": "干系人已更新",
+        "matter_relation_mutate": "事项关联已更新",
+        "matter_add_note": "已添加备注"
+      },
+      "receipt": {
+        "written": "已写入",
+        "writtenWithLabel": "已写入 · {label}",
+        "undo": "撤销",
+        "undone": "已撤销"
+      },
+      "undo": {
+        "conflict": "事项已被后续修改，无法直接撤销",
+        "failed": "撤销失败"
+      },
+      "gap": {
+        "title": "上下文缺口 · 需要你授权扩大检索",
+        "expand": "扩大到全库"
+      }
     },
     "events": {},
     "toast": {

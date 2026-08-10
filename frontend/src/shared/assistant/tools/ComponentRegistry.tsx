@@ -27,6 +27,7 @@ import { CustomAgentApprovalCard } from './generic/CustomAgentApprovalCard'
 import { CustomAgentCallCard } from './generic/CustomAgentCallCard'
 import { SimpleApprovalCard } from './generic/SimpleApprovalCard'
 import { CalendarApprovalCard } from './calendar/CalendarApprovalCard'
+import { MatterWriteCard } from './matters/MatterWriteCard'
 
 /** One registration: an A2UI component (by name) + the tool names that render through it. */
 export interface ToolUIRegistration {
@@ -182,5 +183,25 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     component: A2UI_COMPONENTS.CalendarApprovalCard,
     toolNames: ['calendar_event_reschedule', 'calendar_event_rsvp', 'calendar_event_delete'],
     render: CalendarApprovalCard
+  },
+  // Matters MVP P3 — the 7 matter write tools (behind MAILAGENT_MATTERS_ENABLED; a registration
+  // for a tool the gateway never emits is inert). One card, two jobs: an approval-paused part gets
+  // real approve/reject buttons (matter_resource_mutate can force a card at any time, and per-tool
+  // prefs let an owner set any of the 7 to `ask` — without this they hit the buttonless
+  // ToolTraceCard spinner, the v1.5.0 deadlock), and a COMPLETED part renders the write receipt +
+  // undo — but only inside the Matter Chat panel (MatterChatSurfaceContext); everywhere else it
+  // falls through to ToolTraceCard byte-identically.
+  {
+    component: A2UI_COMPONENTS.MatterWriteCard,
+    toolNames: [
+      'matter_create',
+      'matter_update',
+      'matter_item_mutate',
+      'matter_resource_mutate',
+      'matter_stakeholder_mutate',
+      'matter_relation_mutate',
+      'matter_add_note'
+    ],
+    render: MatterWriteCard
   }
 ])

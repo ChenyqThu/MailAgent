@@ -224,11 +224,17 @@ export const qk = {
 
   matters: {
     all: () => ['matters'] as const,
-    list: (q?: string) => q ? ['matters', 'list', q] as const : ['matters', 'list'] as const,
+    list: (q?: string) => (q ? (['matters', 'list', q] as const) : (['matters', 'list'] as const)),
     paletteSearch: (normalised: string) => ['matters', 'palette-search', normalised] as const,
     detail: (publicId: string) => ['matters', 'detail', publicId] as const,
     resources: (publicId: string) => ['matters', 'detail', publicId, 'resources'] as const,
     stakeholders: (publicId: string) => ['matters', 'detail', publicId, 'stakeholders'] as const,
+    // P3 — bounded matter projection injected into the Matter Chat snapshot. Under the same
+    // ['matters','detail',id] prefix so a matter write invalidates it with everything else.
+    contextSnapshot: (publicId: string) =>
+      ['matters', 'detail', publicId, 'context-snapshot'] as const,
+    chatSessions: (matterInternalId: number) =>
+      ['matters', 'chat-sessions', matterInternalId] as const,
     resourceLookup: (provider: string, keys: readonly string[]) =>
       ['matters', 'links', provider, ...keys] as const,
     captureCandidates: (q: string) => ['matters', 'capture-candidates', q] as const,

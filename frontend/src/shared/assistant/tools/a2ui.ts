@@ -137,7 +137,14 @@ export const A2UI_COMPONENTS = {
   // serve-api and renders a before→after diff (CalendarApprovalCard precedent — "before" is never
   // projected from model args). email_draft_reply keeps its own card (reply-shaped: no subject,
   // empty recipients = server-derived reply-all).
-  DraftComposeCard: 'DraftComposeCard'
+  DraftComposeCard: 'DraftComposeCard',
+  // Matters MVP P3 — the 7 matter write tools' part card. Like SimpleApprovalCard this is a
+  // ComponentRegistry key ONLY: `componentForTool` deliberately returns null for the matter tools
+  // (no audited ui_payload), the card reads the tool part directly. It routes an approval-paused
+  // part to SimpleApprovalCard (D7 identity-level approval — otherwise these edit-tier writes hit
+  // the buttonless ToolTraceCard spinner) and a completed one to the write receipt + undo inside
+  // the Matter Chat panel (D9).
+  MatterWriteCard: 'MatterWriteCard'
 } as const
 
 /** Which A2UI component renders a given gateway write tool. Unknown / read tools → null
