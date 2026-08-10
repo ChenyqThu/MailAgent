@@ -1,14 +1,26 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { X } from 'lucide-react'
+import { Mail, X } from 'lucide-react'
 
 import { BUILTIN_MATTER_TYPES, MATTER_PRIORITIES } from '@shared/api/types/matter'
-import type { MatterCreateInput, MatterPriority } from '@shared/api/types/matter'
+import type { MatterCreateInput, MatterLinkScope, MatterPriority } from '@shared/api/types/matter'
 import { SegmentedControl } from '@shared/components/ui/segmented'
+
+import { stripEmailSubjectPrefix } from './matterResource'
+
+export interface MatterCreateSource {
+  internalId: number
+  threadId: string | null
+  subject: string
+  sender: string
+  receivedAt: number | string | null
+  threadCount: number
+}
 
 interface MatterCreateDialogProps {
   open: boolean
   busy?: boolean
+  source?: MatterCreateSource | null
   onClose(): void
   onCreate(input: MatterCreateInput): void
 }
@@ -16,6 +28,7 @@ interface MatterCreateDialogProps {
 export function MatterCreateDialog({
   open,
   busy = false,
+  source = null,
   onClose,
   onCreate
 }: MatterCreateDialogProps): React.ReactElement | null {
@@ -24,6 +37,16 @@ export function MatterCreateDialog({
   const [matterType, setMatterType] = useState('')
   const [priority, setPriority] = useState<MatterPriority>('p1')
   const [description, setDescription] = useState('')
+  const [linkScope, setLinkScope] = useState<MatterLinkScope>(source?.threadId ? 'thread' : 'single')
+
+  useEffect(() => {
+    if (!open) return
+    setTitle(source ? stripEmailSubjectPrefix(source.subject) : '')
+    setMatterType('')
+    setPriority('p1')
+    setDescription('')
+    setLinkScope(source?.threadId ? 'thread' : 'single')
+  }, [open, source])
 
   if (!open) return null
 
@@ -34,7 +57,15 @@ export function MatterCreateDialog({
       title: trimmedTitle,
       matter_type: matterType.trim() || null,
       priority,
-      description
+      description,
+      source_resource: source
+        ? {
+            provider: 'mailagent',
+            kind: 'email',
+            internal_id: source.internalId,
+            link_scope: source.threadId ? linkScope : 'single'
+          }
+        : undefined
     })
   }
 
@@ -48,13 +79,28 @@ export function MatterCreateDialog({
       >
         <header className="flex items-center justify-between border-b border-ink-border px-5 py-4">
           <h2 id="matter-create-title" className="text-title font-semibold text-ink-fg">
-            {t('matters.create.title')}
+            {t(source ? 'matters.create.fromEmailTitle' : 'matters.create.title')}
           </h2>
           <button type="button" onClick={onClose} className="rounded-[var(--r-ctl)] p-1.5 hover:bg-ink-3">
             <X size={16} />
           </button>
         </header>
         <div className="space-y-4 p-5">
+          {source ? (
+            <div className="flex gap-3 rounded-[var(--r-card)] border border-ink-border bg-ink-2 px-3 py-3">
+              <Mail size={15} className="mt-0.5 shrink-0 text-coral" />
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-aux font-medium text-ink-fg">{source.subject}</div>
+                <div className="mt-1 truncate text-meta text-ink-fg-3">
+                  {t('matters.create.sourceMeta', {
+                    sender: source.sender,
+                    time: source.receivedAt ? new Date(source.receivedAt).toLocaleString() : '—',
+                    count: source.threadCount
+                  })}
+                </div>
+              </div>
+            </div>
+          ) : null}
           <label className="block space-y-1.5">
             <span className="text-aux text-ink-fg-1">{t('matters.create.name')}</span>
             <input
@@ -88,6 +134,35 @@ export function MatterCreateDialog({
               ariaLabel={t('matters.create.priority')}
             />
           </div>
+          {source ? (
+            <div className="space-y-1.5">
+              <span className="text-aux text-ink-fg-1">{t('matters.create.linkScope')}</span>
+              <div role="tablist" aria-label={t('matters.create.linkScope')} className="seg">
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={linkScope === 'thread'}
+                  disabled={!source.threadId}
+                  onClick={() => setLinkScope('thread')}
+                  className={linkScope === 'thread' ? 'seg-active' : undefined}
+                >
+                  {t('matters.create.scopeThread', { count: source.threadCount })}
+                </button>
+                <button
+                  type="button"
+                  role="tab"
+                  aria-selected={linkScope === 'single'}
+                  onClick={() => setLinkScope('single')}
+                  className={linkScope === 'single' ? 'seg-active' : undefined}
+                >
+                  {t('matters.create.scopeSingle')}
+                </button>
+              </div>
+              <p className="text-meta text-ink-fg-3">
+                {t(source.threadId ? 'matters.create.scopeHint' : 'matters.create.threadUnavailable')}
+              </p>
+            </div>
+          ) : null}
           <label className="block space-y-1.5">
             <span className="text-aux text-ink-fg-1">{t('matters.create.description')}</span>
             <textarea

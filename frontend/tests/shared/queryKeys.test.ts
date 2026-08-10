@@ -192,4 +192,22 @@ describe('qk — agent-runs / agent / ai-gateway / compose / report / misc', () 
     expect(qk.contactSuggest('q', ['a@x'])).toEqual(['contactSuggest', 'q', ['a@x']])
     expect(qk.attachment.dataUrl('att1')).toEqual(['attachment', 'att1', 'dataUrl'])
   })
+
+  test('matters', () => {
+    expect(qk.matters.all()).toEqual(['matters'])
+    expect(qk.matters.list()).toEqual(['matters', 'list'])
+    expect(qk.matters.list('vendor')).toEqual(['matters', 'list', 'vendor'])
+    expect(qk.matters.detail('MAT-0001')).toEqual(['matters', 'detail', 'MAT-0001'])
+    expect(qk.matters.resources('MAT-0001')).toEqual(['matters', 'detail', 'MAT-0001', 'resources'])
+    expect(qk.matters.stakeholders('MAT-0001')).toEqual(['matters', 'detail', 'MAT-0001', 'stakeholders'])
+    expect(qk.matters.resourceLookup('mailagent', ['email:1', 'thread:t1'])).toEqual([
+      'matters',
+      'links',
+      'mailagent',
+      'email:1',
+      'thread:t1'
+    ])
+    expect(qk.matters.captureCandidates('vendor')).toEqual(['matters', 'capture-candidates', 'vendor'])
+    expect(qk.matters.config()).toEqual(['matters', 'config'])
+  })
 })

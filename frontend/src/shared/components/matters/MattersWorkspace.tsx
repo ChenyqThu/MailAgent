@@ -31,6 +31,7 @@ import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
 import type { MatterDensity } from './MatterList'
 import { useMattersApi, useMattersEnabled } from './hooks'
+import { useMatterNavigation } from './navigation'
 
 const VIEW_ICONS: Record<MatterView, React.ReactNode> = {
   focus: <Focus size={14} />,
@@ -55,6 +56,8 @@ export function MattersWorkspace(): React.ReactElement | null {
   const [search, setSearch] = useState('')
   const [density, setDensity] = useState<MatterDensity>('compact')
   const [createOpen, setCreateOpen] = useState(false)
+  const navigationTarget = useMatterNavigation((state) => state.targetPublicId)
+  const clearNavigationTarget = useMatterNavigation((state) => state.clear)
 
   const list = useQuery({
     queryKey: qk.matters.list(),
@@ -68,6 +71,14 @@ export function MattersWorkspace(): React.ReactElement | null {
   useEffect(() => {
     if (selectedId && !visible.some((matter) => matter.public_id === selectedId)) setSelectedId(null)
   }, [selectedId, visible])
+
+  useEffect(() => {
+    if (!navigationTarget) return
+    if (!allMatters.some((matter) => matter.public_id === navigationTarget)) return
+    setView('all')
+    setSelectedId(navigationTarget)
+    clearNavigationTarget()
+  }, [allMatters, clearNavigationTarget, navigationTarget])
 
   const create = useMutation({
     mutationFn: (input: MatterCreateInput) => api.create(input),

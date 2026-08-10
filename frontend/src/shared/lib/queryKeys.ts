@@ -224,8 +224,13 @@ export const qk = {
 
   matters: {
     all: () => ['matters'] as const,
-    list: () => ['matters', 'list'] as const,
+    list: (q?: string) => q ? ['matters', 'list', q] as const : ['matters', 'list'] as const,
     detail: (publicId: string) => ['matters', 'detail', publicId] as const,
+    resources: (publicId: string) => ['matters', 'detail', publicId, 'resources'] as const,
+    stakeholders: (publicId: string) => ['matters', 'detail', publicId, 'stakeholders'] as const,
+    resourceLookup: (provider: string, keys: readonly string[]) =>
+      ['matters', 'links', provider, ...keys] as const,
+    captureCandidates: (q: string) => ['matters', 'capture-candidates', q] as const,
     config: () => ['matters', 'config'] as const
   },
 

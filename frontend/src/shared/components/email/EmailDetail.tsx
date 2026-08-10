@@ -10,7 +10,7 @@
 //       - Attachments 2-col grid
 //       - Footer (internal_id + Notion link)
 
-import { useCallback, useEffect, useId, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
 import { ArrowLeft, ChevronDown, ExternalLink, Languages, Mail, RotateCcw } from 'lucide-react'
@@ -41,6 +41,13 @@ import { AttachmentList } from './AttachmentList'
 import { ThreadAttachmentBar } from './ThreadAttachmentBar'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 import { MeetingInviteCard } from '../calendar/MeetingInviteCard'
+import { MatterLinkPopover } from '../matters/MatterLinkPopover'
+import {
+  buildMatterResourceLookupKeys,
+  deriveMatterLinkButtonState,
+  mergeMatterResourceLinkHits
+} from '../matters/matterResource'
+import { useMattersApi, useMattersEnabled } from '../matters/hooks'
 import { ComposePanel, ComposePanelInner } from './compose/ComposePanel'
 import { CustomAgentDrawer } from '../agents/CustomAgentDrawer'
 import { useTriggerV2Enabled } from '../agents/hooks'
@@ -201,6 +208,8 @@ const llmAgentUpgradeFired = new Set<number>()
 export function EmailDetail({ internalId }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
+  const mattersApi = useMattersApi()
+  const mattersEnabled = useMattersEnabled()
   const queryClient = useQueryClient()
   const triggerV2Enabled = useTriggerV2Enabled()
   const [showTranslation, setShowTranslation] = useState(false)
@@ -320,6 +329,33 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const [translateError, setTranslateError] = useState<{ code: string; message: string } | null>(
     null
   )
+  const [matterPopoverOpen, setMatterPopoverOpen] = useState(false)
+
+  const matterLookupKeys = useMemo(
+    () => buildMatterResourceLookupKeys(internalId, detailQ.data?.thread_id),
+    [detailQ.data?.thread_id, internalId]
+  )
+  const matterLookupQ = useQuery({
+    queryKey: qk.matters.resourceLookup('mailagent', matterLookupKeys),
+    queryFn: () => mattersApi.lookupResourceLinks('mailagent', matterLookupKeys),
+    enabled: mattersEnabled && detailQ.data !== null && detailQ.data !== undefined && matterLookupKeys.length > 0,
+    staleTime: 10_000
+  })
+  const linkedMatters = useMemo(
+    () => mergeMatterResourceLinkHits(matterLookupQ.data, matterLookupKeys),
+    [matterLookupKeys, matterLookupQ.data]
+  )
+  const matterLinkState = deriveMatterLinkButtonState(linkedMatters.length)
+  const matterThreadQ = useQuery({
+    queryKey: qk.email.thread(detailQ.data?.thread_id ?? null),
+    queryFn: () => mailApi.email.listByThread(detailQ.data?.thread_id ?? null),
+    enabled: mattersEnabled && Boolean(detailQ.data?.thread_id),
+    staleTime: 30_000
+  })
+
+  useEffect(() => {
+    setMatterPopoverOpen(false)
+  }, [internalId])
 
   const translateMut = useMutation({
     mutationFn: async () => {
@@ -859,6 +895,29 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         onCreateFollowupAgent={
           triggerV2Enabled && (email.thread_id || email.message_id?.replace(/^<|>$/g, ''))
             ? () => setFollowupOpen(true)
+            : undefined
+        }
+        matterLink={
+          mattersEnabled
+            ? {
+                count: linkedMatters.length,
+                state: matterLinkState,
+                onToggle: () => setMatterPopoverOpen((value) => !value),
+                popover: (
+                  <MatterLinkPopover
+                    open={matterPopoverOpen}
+                    source={{
+                      internalId: email.internal_id,
+                      threadId: email.thread_id ?? null,
+                      subject: email.subject,
+                      sender: email.sender_name || email.sender,
+                      receivedAt: email.date_received ?? null,
+                      threadCount: Math.max(1, matterThreadQ.data?.length ?? 1)
+                    }}
+                    onClose={() => setMatterPopoverOpen(false)}
+                  />
+                )
+              }
             : undefined
         }
         llmRunState={{ pending: pending.llmRun }}

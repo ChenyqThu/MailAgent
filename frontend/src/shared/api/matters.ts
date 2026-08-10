@@ -6,6 +6,9 @@ import type {
   MatterListResponse,
   MatterMutationOptions,
   MatterMutationResult,
+  MatterResourceListItem,
+  MatterResourceLookupResponse,
+  MatterStakeholder,
   MatterTimelineResponse,
   MattersApi,
   MutationEnvelope
@@ -156,6 +159,117 @@ export function createMattersApi(baseUrl: string): MattersApi {
         `/matters/${segment(matterId)}/items/${segment(itemId)}/restore`,
         mutationRequest(options)
       )
+    },
+
+    async listResources(matterId, options = {}): Promise<MatterResourceListItem[]> {
+      const result = await request<{ items: MatterResourceListItem[] }>(
+        baseUrl,
+        'GET',
+        `/matters/${segment(matterId)}/resources`,
+        {
+          query: {
+            kind: options.kind,
+            pinned: options.pinned,
+            access_policy: options.accessPolicy,
+            sub_state: options.subState,
+            include_unavailable: options.includeUnavailable
+          }
+        }
+      )
+      return result.items
+    },
+
+    linkResource(matterId, input, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/resources`,
+        mutationRequest(options, input)
+      )
+    },
+
+    patchResource(matterId, resourceId, input, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'PATCH',
+        `/matters/${segment(matterId)}/resources/${segment(resourceId)}`,
+        mutationRequest(options, input)
+      )
+    },
+
+    unlinkResource(matterId, resourceId, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'DELETE',
+        `/matters/${segment(matterId)}/resources/${segment(resourceId)}`,
+        mutationRequest(options)
+      )
+    },
+
+    restoreResource(matterId, resourceId, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/resources/${segment(resourceId)}/restore`,
+        mutationRequest(options)
+      )
+    },
+
+    async listStakeholders(matterId, options = {}): Promise<MatterStakeholder[]> {
+      const result = await request<{ items: MatterStakeholder[] }>(
+        baseUrl,
+        'GET',
+        `/matters/${segment(matterId)}/stakeholders`,
+        {
+          query: {
+            waiting_only: options.waitingOnly,
+            include_deleted: options.includeDeleted
+          }
+        }
+      )
+      return result.items
+    },
+
+    createStakeholder(matterId, input, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/stakeholders`,
+        mutationRequest(options, input)
+      )
+    },
+
+    patchStakeholder(matterId, stakeholderId, input, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'PATCH',
+        `/matters/${segment(matterId)}/stakeholders/${segment(stakeholderId)}`,
+        mutationRequest(options, input)
+      )
+    },
+
+    deleteStakeholder(matterId, stakeholderId, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'DELETE',
+        `/matters/${segment(matterId)}/stakeholders/${segment(stakeholderId)}`,
+        mutationRequest(options)
+      )
+    },
+
+    restoreStakeholder(matterId, stakeholderId, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/stakeholders/${segment(stakeholderId)}/restore`,
+        mutationRequest(options)
+      )
+    },
+
+    lookupResourceLinks(provider, keys): Promise<MatterResourceLookupResponse> {
+      return request(baseUrl, 'GET', '/matters/links/by-resource', {
+        query: { provider, keys: keys.join(',') }
+      })
     },
 
     timeline(matterId, cursor, limit = 50): Promise<MatterTimelineResponse> {

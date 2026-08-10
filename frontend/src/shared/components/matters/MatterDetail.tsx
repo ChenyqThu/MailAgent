@@ -28,15 +28,20 @@ import type {
   MatterItem,
   MatterItemCreateInput,
   MatterItemKind,
+  MatterResourceListItem,
   MatterStatus
 } from '@shared/api/types/matter'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
+import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { AddItemModal } from './AddItemModal'
+import { MatterContextRail } from './MatterContextRail'
+import { MatterContextTab } from './MatterContextTab'
+import { ResourceDrawer } from './ResourceDrawer'
 import { useMattersApi } from './hooks'
 
 interface MatterDetailProps {
@@ -45,7 +50,7 @@ interface MatterDetailProps {
   onRemoved(): void
 }
 
-type DetailTab = 'state' | 'timeline'
+type DetailTab = 'state' | 'context' | 'timeline'
 type TimelineFilter = 'all' | MatterActorKind
 
 export function MatterDetail({ matterId, onBack, onRemoved }: MatterDetailProps): React.ReactElement {
@@ -59,6 +64,8 @@ export function MatterDetail({ matterId, onBack, onRemoved }: MatterDetailProps)
   const [tagDraft, setTagDraft] = useState('')
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
+  const [drawerItem, setDrawerItem] = useState<MatterResourceListItem | null>(null)
+  const showContextRail = useMediaQuery('(min-width: 1400px)')
 
   const detail = useQuery({
     queryKey: qk.matters.detail(matterId),
@@ -68,11 +75,25 @@ export function MatterDetail({ matterId, onBack, onRemoved }: MatterDetailProps)
   const matter = detail.data?.matter
   const items = detail.data?.items ?? []
   const timeline = detail.data?.timeline ?? []
+  const resources = useQuery({
+    queryKey: qk.matters.resources(matterId),
+    queryFn: () => api.listResources(matterId, { includeUnavailable: true }),
+    staleTime: 15_000
+  })
+  const stakeholders = useQuery({
+    queryKey: qk.matters.stakeholders(matterId),
+    queryFn: () => api.listStakeholders(matterId),
+    staleTime: 15_000
+  })
+  const resourceItems = resources.data ?? []
+  const stakeholderItems = stakeholders.data ?? []
 
   const refresh = async (): Promise<void> => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: qk.matters.list() }),
-      queryClient.invalidateQueries({ queryKey: qk.matters.detail(matterId) })
+      queryClient.invalidateQueries({ queryKey: qk.matters.detail(matterId) }),
+      queryClient.invalidateQueries({ queryKey: qk.matters.resources(matterId) }),
+      queryClient.invalidateQueries({ queryKey: qk.matters.stakeholders(matterId) })
     ])
   }
 
@@ -139,6 +160,20 @@ export function MatterDetail({ matterId, onBack, onRemoved }: MatterDetailProps)
     onError: (error) => toastError(t('matters.toast.deleteFailed'), errorMessage(error))
   })
 
+  const toggleResourcePin = useMutation({
+    mutationFn: (item: MatterResourceListItem) => {
+      if (!matter) return Promise.reject(new Error('Matter is not loaded'))
+      return api.patchResource(
+        matterId,
+        item.resource.id,
+        { pinned: !item.link.pinned },
+        { expectedVersion: matter.version }
+      )
+    },
+    onSuccess: () => void refresh(),
+    onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
+  })
+
   if (detail.isLoading || !matter) {
     return <div className="grid h-full place-items-center text-body text-ink-fg-2">{t('common.loading')}</div>
   }
@@ -151,7 +186,8 @@ export function MatterDetail({ matterId, onBack, onRemoved }: MatterDetailProps)
   }
 
   return (
-    <article className="flex h-full min-w-0 flex-col bg-ink-0/35">
+    <div className="flex h-full min-w-0 bg-ink-0/35">
+    <article className="flex h-full min-w-0 flex-1 flex-col">
       <header className="border-b border-ink-border px-5 py-4">
         <div className="flex items-start gap-3">
           <button type="button" onClick={onBack} className="mt-0.5 hidden rounded-[var(--r-ctl)] p-1.5 hover:bg-ink-3 max-[1180px]:block">
@@ -237,7 +273,7 @@ export function MatterDetail({ matterId, onBack, onRemoved }: MatterDetailProps)
 
       <div className="border-b border-ink-border px-5 pt-2">
         <div className="flex gap-5">
-          {(['state', 'timeline'] as const).map((value) => (
+          {(['state', 'context', 'timeline'] as const).map((value) => (
             <button
               key={value}
               type="button"
@@ -245,6 +281,11 @@ export function MatterDetail({ matterId, onBack, onRemoved }: MatterDetailProps)
               className={cn('border-b-2 px-1 py-2 text-body', tab === value ? 'border-coral text-ink-fg' : 'border-transparent text-ink-fg-2')}
             >
               {t(`matters.tabs.${value}`)}
+              {value === 'context' ? (
+                <span className="ml-1.5 rounded-[var(--r-pill)] bg-ink-3 px-1.5 py-0.5 text-meta font-mono text-ink-fg-2">
+                  {resourceItems.length + stakeholderItems.length}
+                </span>
+              ) : null}
             </button>
           ))}
         </div>
@@ -263,6 +304,15 @@ export function MatterDetail({ matterId, onBack, onRemoved }: MatterDetailProps)
               }}
             />
           </div>
+        ) : tab === 'context' ? (
+          <MatterContextTab
+            matter={matter}
+            items={items}
+            resources={resourceItems}
+            stakeholders={stakeholderItems}
+            onOpenResource={setDrawerItem}
+            onChanged={() => void refresh()}
+          />
         ) : (
           <Timeline events={timeline} />
         )}
@@ -291,6 +341,23 @@ export function MatterDetail({ matterId, onBack, onRemoved }: MatterDetailProps)
         </div>
       ) : null}
     </article>
+    {showContextRail ? (
+      <MatterContextRail
+        resources={resourceItems}
+        stakeholders={stakeholderItems}
+        onOpenResource={setDrawerItem}
+        onTogglePin={(item) => toggleResourcePin.mutate(item)}
+      />
+    ) : null}
+    <ResourceDrawer
+      open={drawerItem !== null}
+      matterId={matterId}
+      matterVersion={matter.version}
+      item={drawerItem}
+      onClose={() => setDrawerItem(null)}
+      onChanged={() => void refresh()}
+    />
+    </div>
   )
 }
 

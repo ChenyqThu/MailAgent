@@ -24,7 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useTranslation } from 'react-i18next'
-import { AlertCircle, ArrowLeft, ChevronDown, Loader2 } from 'lucide-react'
+import { AlertCircle, ArrowLeft, BriefcaseBusiness, ChevronDown, Loader2 } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import {
@@ -86,6 +86,13 @@ interface ToolbarProps {
   onLlmRun?: () => void
   llmRunState?: WriteActionState
   onCreateFollowupAgent?: () => void
+
+  matterLink?: {
+    count: number
+    state: 'unlinked' | 'single' | 'multiple'
+    onToggle(): void
+    popover?: React.ReactNode
+  }
 
   onToggleRead?: () => void
   isRead?: boolean
@@ -677,6 +684,7 @@ export function EmailToolbar({
   onLlmRun,
   llmRunState,
   onCreateFollowupAgent,
+  matterLink,
   onToggleRead,
   isRead,
   readState,
@@ -828,6 +836,28 @@ export function EmailToolbar({
         pending={pinState?.pending}
         onClick={onTogglePin}
       />
+      {matterLink ? (
+        <div className="relative">
+          <GhostBtn
+            icon={
+              <span className="relative">
+                <BriefcaseBusiness size={13} strokeWidth={1.75} />
+                {matterLink.state === 'multiple' ? (
+                  <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-coral/100 px-0.5 text-center text-[8px] leading-3.5 text-accent-fg">
+                    {matterLink.count}
+                  </span>
+                ) : null}
+              </span>
+            }
+            label={t('toolbar.matters')}
+            showLabel={wantsLabels}
+            active={matterLink.state !== 'unlinked'}
+            pressed={matterLink.state !== 'unlinked'}
+            onClick={matterLink.onToggle}
+          />
+          {matterLink.popover}
+        </div>
+      ) : null}
 
       {/* Mark Important — passive indicator. Source: RFC headers
           (Importance / X-Priority), already parsed into is_important by

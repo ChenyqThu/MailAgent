@@ -163,6 +163,7 @@
     "followupAgent": "为此线程建立跟进 Agent",
     "llmRunPending": "AI 处理中…",
     "openNotion": "在 Notion 打开",
+    "matters": "事项",
     "prev": "上一封",
     "next": "下一封",
     "more": "更多",
@@ -4617,6 +4618,8 @@
   },
   "common": {
     "cancel": "取消",
+    "close": "关闭",
+    "save": "保存",
     "imageLoadFailed": "图片加载失败"
   },
   "matters": {
@@ -4654,12 +4657,19 @@
     },
     "create": {
       "title": "新建事项",
+      "fromEmailTitle": "从邮件创建事项",
       "name": "标题",
       "type": "类型",
       "typePlaceholder": "选择内置类型或输入自定义类型",
       "priority": "优先级",
       "description": "目的与背景",
       "descriptionHint": "你写的这段，Agent 不会改写",
+      "sourceMeta": "{sender} · {time} · 会话 {count} 封",
+      "linkScope": "关联范围",
+      "scopeThread": "整条会话 · {count} 封",
+      "scopeSingle": "仅当前这封",
+      "scopeHint": "默认整条会话，后续回复会自动跟进",
+      "threadUnavailable": "这封邮件没有可用会话，只能关联当前邮件",
       "submit": "新建事项",
       "creating": "正在创建…"
     },
@@ -4671,7 +4681,7 @@
       "agentUnbound": "未绑定跟进 Agent",
       "addTag": "添加标签"
     },
-    "tabs": { "state": "状态", "timeline": "时间线" },
+    "tabs": { "state": "状态", "context": "上下文", "timeline": "时间线" },
     "status": {
       "inbox": "收件",
       "planned": "计划中",
@@ -4725,6 +4735,98 @@
       "agent": "Agent",
       "system": "系统",
       "empty": "这个筛选下还没有事件。"
+    },
+    "context": {
+      "stakeholders": "干系人",
+      "unnamedStakeholder": "未命名干系人",
+      "noRole": "未填写角色或组织",
+      "waiting": "等待中",
+      "noStakeholders": "还没有干系人。",
+      "noStakeholdersTitle": "还没有干系人",
+      "noStakeholdersHint": "手动添加，后续 Agent 可建议。",
+      "addStakeholder": "添加干系人",
+      "editStakeholder": "编辑干系人",
+      "lastContact": "最近联系",
+      "pinnedResources": "置顶资料",
+      "linkedResources": "关联资料",
+      "noResourcesRail": "还没有关联资料。解除关联不会删除原始邮件或文档。",
+      "noResourcesTitle": "还没有关联资料",
+      "noResourcesHint": "资料与事项是多对多的：同一封邮件可以属于多个事项，解除关联不会删除原件。",
+      "followupAgent": "跟进 Agent",
+      "agentGuide": "未绑定跟进 Agent。绑定后可按计划检查变化并提出更新提案。",
+      "pin": "置顶",
+      "unpin": "取消置顶",
+      "unavailable": "已失效",
+      "groups": {
+        "mail": "邮件与会话",
+        "meetings": "会议",
+        "documents": "文档",
+        "attachments": "附件与链接"
+      },
+      "kind": {
+        "email": "邮件",
+        "thread": "会话",
+        "event": "会议",
+        "doc": "文档",
+        "file": "附件",
+        "url": "链接"
+      },
+      "fields": {
+        "name": "姓名",
+        "email": "邮箱",
+        "role": "角色",
+        "organization": "组织",
+        "waiting": "等待中"
+      },
+      "injectionTitle": "Agent 与对话实际会看到什么",
+      "injection": {
+        "acceptedState": "当前已接受状态",
+        "openItems": "{count} 个开放项",
+        "stakeholderCount": "{count} 位干系人",
+        "pinnedCount": "{count} 份置顶资料的元数据与摘录",
+        "changes": "自上次接受更新以来的变化事件",
+        "description": "关联资料的正文不会整体塞进每一轮提示。默认只带结构化状态与置顶资料的摘录，其余按需检索。外部系统仍是内容权威，本地只存稳定引用、版本与新鲜度。",
+        "shield": "每份资料可设为「允许读取 / 仅元数据 / 排除」；资料正文按不可信数据处理"
+      }
+    },
+    "resource": {
+      "type": "类型",
+      "lastActivity": "最近活动",
+      "revision": "版本",
+      "linkMethod": "关联方式",
+      "manualConfirmed": "手动关联 · 已确认",
+      "manualLink": "手动关联",
+      "visibility": "内容可见性",
+      "visibilityGlobalHint": "改档会影响该资料在所有事项下的可见性。",
+      "visibilityChanged": "资料可见性已更新，将影响所有事项",
+      "access": {
+        "allowed": "允许读取",
+        "metadata_only": "仅元数据",
+        "excluded": "排除"
+      },
+      "cachedExcerpt": "缓存摘录",
+      "openSource": "在来源系统打开",
+      "openEmail": "在邮件中打开",
+      "authoritativeSource": "外部系统仍是这份资料的内容权威。MailAgent 只保存稳定引用、版本/哈希、新鲜度与有限的缓存文本，用于变化检测与引用，不复制整份内容。",
+      "untrusted": "这份内容按不可信数据处理，不能扩展工具权限或改写指令",
+      "pauseSubscription": "暂停订阅",
+      "resumeSubscription": "恢复订阅",
+      "subscriptionActive": "已订阅后续",
+      "subscriptionPaused": "订阅已暂停",
+      "unlink": "解除关联",
+      "unlinkedNoDelete": "已解除关联，不会删除原始邮件"
+    },
+    "capture": {
+      "title": "事项",
+      "linked": "已关联事项",
+      "create": "创建新事项",
+      "addExisting": "加入已有事项",
+      "search": "搜索事项",
+      "open": "打开",
+      "unlink": "解除",
+      "threadSubscribed": "整条会话已订阅，后续回复会自动进入事项",
+      "threadPaused": "整条会话订阅已暂停",
+      "noCandidates": "没有可加入的进行中事项"
     },
     "events": {},
     "toast": {
