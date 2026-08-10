@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
+from .models import MATTER_SEARCH_FIELDS
+
 
 class MatterRepository:
     def __init__(self, db_path: str | Path):
@@ -223,31 +225,194 @@ class MatterRepository:
                 "EXISTS (SELECT 1 FROM json_each(matter.tags_json) WHERE value=?)"
             )
             params.append(filters["tag"])
-        if filters.get("q"):
-            query = f"%{filters['q']}%"
-            clauses.append(
-                "(title LIKE ? OR description LIKE ? OR current_summary LIKE ?)"
+        query_text = str(filters.get("q") or "").strip()
+        search_join = ""
+        select_prefix = "matter.*"
+        if query_text:
+            search_join = " JOIN matter_search_document search_doc ON search_doc.matter_id=matter.id"
+            if len(query_text) >= 3:
+                search_join += " JOIN matter_fts ON matter_fts.rowid=matter.id"
+                clauses.append("matter_fts MATCH ?")
+                params.append(self._fts_query(query_text))
+            else:
+                like = f"%{self._escape_like(query_text)}%"
+                clauses.append(
+                    "(" + " OR ".join(
+                        f"search_doc.{column} LIKE ? ESCAPE '\\'"
+                        for column in self._search_columns()
+                    ) + ")"
+                )
+                params.extend(like for _ in self._search_columns())
+            select_prefix += ", " + ", ".join(
+                f"search_doc.{column} AS search_{column}"
+                for column in self._search_columns()
             )
-            params.extend((query, query, query))
         order_column = "updated_at" if sort != "created_at" else "created_at"
         if cursor:
-            clauses.append(f"({order_column} < ? OR ({order_column}=? AND id < ?))")
+            clauses.append(
+                f"(matter.{order_column} < ? OR "
+                f"(matter.{order_column}=? AND matter.id < ?))"
+            )
             params.extend((cursor[0], cursor[0], cursor[1]))
         where = " AND ".join(clauses) or "1=1"
         total = int(
             conn.execute(
-                f"SELECT COUNT(*) FROM matter WHERE {where}", params
+                f"SELECT COUNT(*) FROM matter{search_join} WHERE {where}", params
             ).fetchone()[0]
         )
         rows = conn.execute(
-            f"SELECT * FROM matter WHERE {where} ORDER BY {order_column} DESC, id DESC LIMIT ?",
+            f"SELECT {select_prefix} FROM matter{search_join} WHERE {where} "
+            f"ORDER BY matter.{order_column} DESC, matter.id DESC LIMIT ?",
             (*params, limit + 1),
         ).fetchall()
         next_cursor = None
         if len(rows) > limit:
             last = rows[limit - 1]
             next_cursor = (int(last[order_column]), int(last["id"]))
-        return [self._matter_row(row) for row in rows[:limit]], next_cursor, total
+        results = [self._matter_row(row) for row in rows[:limit]]
+        if query_text:
+            for result in results:
+                self._add_search_match(result, query_text)
+        return results, next_cursor, total
+
+    def upsert_resource(
+        self, conn: sqlite3.Connection, values: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], bool]:
+        existing = conn.execute(
+            "SELECT * FROM resource WHERE provider=? AND external_key=?",
+            (values["provider"], values["external_key"]),
+        ).fetchone()
+        if existing:
+            return self._resource_row(existing), False
+        columns = tuple(values)
+        cursor = conn.execute(
+            f"INSERT INTO resource ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+            tuple(values[column] for column in columns),
+        )
+        row = conn.execute("SELECT * FROM resource WHERE id=?", (cursor.lastrowid,)).fetchone()
+        return self._resource_row(row), True
+
+    def get_resource(self, conn: sqlite3.Connection, resource_id: int) -> dict[str, Any] | None:
+        row = conn.execute("SELECT * FROM resource WHERE id=?", (resource_id,)).fetchone()
+        return self._resource_row(row) if row else None
+
+    def get_resource_link(
+        self, conn: sqlite3.Connection, matter_id: int, resource_id: int, *, live_only: bool = False
+    ) -> dict[str, Any] | None:
+        sql = "SELECT * FROM matter_resource WHERE matter_id=? AND resource_id=?"
+        if live_only:
+            sql += " AND deleted_at IS NULL"
+        sql += " ORDER BY id DESC LIMIT 1"
+        row = conn.execute(sql, (matter_id, resource_id)).fetchone()
+        return self._resource_link_row(row) if row else None
+
+    def insert_resource_link(self, conn: sqlite3.Connection, values: Mapping[str, Any]) -> int:
+        columns = tuple(values)
+        cursor = conn.execute(
+            f"INSERT INTO matter_resource ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+            tuple(values[column] for column in columns),
+        )
+        return int(cursor.lastrowid)
+
+    def list_resources(self, conn: sqlite3.Connection, matter_id: int, filters: Mapping[str, Any]) -> list[dict[str, Any]]:
+        clauses = ["mr.matter_id=?"]
+        params: list[Any] = [matter_id]
+        if not filters.get("include_deleted"):
+            clauses.append("mr.deleted_at IS NULL")
+        if filters.get("kind"):
+            clauses.append("r.kind=?")
+            params.append(filters["kind"])
+        if filters.get("pinned") is not None:
+            clauses.append("mr.pinned=?")
+            params.append(1 if filters["pinned"] else 0)
+        if filters.get("access_policy"):
+            clauses.append("r.access_policy=?")
+            params.append(filters["access_policy"])
+        if filters.get("sub_state"):
+            clauses.append("mr.sub_state=?")
+            params.append(filters["sub_state"])
+        rows = conn.execute(
+            "SELECT r.*, mr.id AS link_id, mr.matter_id AS link_matter_id, mr.relation_type, mr.pinned, mr.added_by_kind, "
+            "mr.added_by_id, mr.confidence, mr.provenance_json, mr.confirmed_at, mr.sub_state, "
+            "mr.deleted_at AS link_deleted_at, mr.created_at AS link_created_at, mr.updated_at AS link_updated_at "
+            f"FROM matter_resource mr JOIN resource r ON r.id=mr.resource_id WHERE {' AND '.join(clauses)} "
+            "ORDER BY mr.pinned DESC, mr.created_at, mr.id",
+            params,
+        ).fetchall()
+        return [self._joined_resource_row(conn, row) for row in rows]
+
+    def lookup_resource_links(self, conn: sqlite3.Connection, provider: str, keys: list[str]) -> dict[str, list[dict[str, Any]]]:
+        results = {key: [] for key in keys}
+        if not keys:
+            return results
+        placeholders = ",".join("?" for _ in keys)
+        rows = conn.execute(
+            "SELECT r.id AS resource_id, r.external_key, r.kind, mr.id AS link_id, mr.pinned, mr.sub_state, "
+            "m.public_id, m.title, m.status, m.health, m.priority, m.archived_at "
+            "FROM resource r JOIN matter_resource mr ON mr.resource_id=r.id "
+            "JOIN matter m ON m.id=mr.matter_id "
+            f"WHERE r.provider=? AND r.external_key IN ({placeholders}) AND mr.deleted_at IS NULL "
+            "AND m.deleted_at IS NULL ORDER BY m.updated_at DESC, m.id DESC",
+            (provider, *keys),
+        ).fetchall()
+        for row in rows:
+            item = dict(row)
+            item["available"] = self.resource_available(conn, provider, row["kind"], row["external_key"])
+            results[row["external_key"]].append(item)
+        return results
+
+    def resource_available(self, conn: sqlite3.Connection, provider: str, kind: str, external_key: str) -> bool:
+        if provider != "mailagent" or kind not in {"email", "thread"}:
+            return True
+        if kind == "email":
+            try:
+                internal_id = int(external_key.split(":", 1)[1])
+            except (IndexError, ValueError):
+                return False
+            return conn.execute("SELECT 1 FROM email_metadata WHERE internal_id=?", (internal_id,)).fetchone() is not None
+        thread_id = external_key.split(":", 1)[1] if ":" in external_key else ""
+        return conn.execute("SELECT 1 FROM email_metadata WHERE thread_id=? LIMIT 1", (thread_id,)).fetchone() is not None
+
+    def rebuild_all_search_documents(self) -> int:
+        with self.transaction() as conn:
+            ids = [int(row[0]) for row in conn.execute("SELECT id FROM matter")]
+            for matter_id in ids:
+                self.refresh_search_projection(conn, matter_id)
+            return len(ids)
+
+    def refresh_search_projection(self, conn: sqlite3.Connection, matter_id: int) -> None:
+        row = conn.execute("SELECT * FROM matter WHERE id=?", (matter_id,)).fetchone()
+        conn.execute("DELETE FROM matter_fts WHERE rowid=?", (matter_id,))
+        conn.execute("DELETE FROM matter_search_document WHERE matter_id=?", (matter_id,))
+        if not row:
+            return
+        tags = self._json(row["tags_json"], [])
+        title = " ".join([row["title"], *(f"#{tag}" for tag in tags)])
+        items_text = self._aggregate_items(conn, matter_id, note=False)
+        notes_text = self._aggregate_items(conn, matter_id, note=True)
+        stakeholders_text = "\n".join(
+            " ".join(str(value or "") for value in stakeholder)
+            for stakeholder in conn.execute(
+                "SELECT display_name,email_normalized,organization,role FROM matter_stakeholder "
+                "WHERE matter_id=? AND deleted_at IS NULL ORDER BY id",
+                (matter_id,),
+            ).fetchall()
+        )
+        values = (
+            matter_id, title, row["description"] or "", row["current_summary"] or "",
+            row["status"] or "", items_text, stakeholders_text, notes_text, row["updated_at"],
+        )
+        conn.execute(
+            "INSERT INTO matter_search_document "
+            "(matter_id,title,description,current_summary,status_text,items_text,stakeholders_text,notes_text,updated_at) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
+            values,
+        )
+        conn.execute(
+            "INSERT INTO matter_fts(rowid,title,description,current_summary,status_text,items_text,stakeholders_text,notes_text) "
+            "VALUES (?,?,?,?,?,?,?,?)",
+            (matter_id, *values[1:8]),
+        )
 
     def delete_matter(self, conn: sqlite3.Connection, matter_id: int) -> None:
         conn.execute("DELETE FROM matter WHERE id=?", (matter_id,))
@@ -264,9 +429,86 @@ class MatterRepository:
     @classmethod
     def _matter_row(cls, row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
+        for key in tuple(result):
+            if key.startswith("search_"):
+                continue
         result["tags"] = cls._json(result.pop("tags_json"), [])
         result["waiting_context"] = cls._json(result.pop("waiting_context_json"), None)
         return result
+
+    @classmethod
+    def _resource_row(cls, row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["metadata"] = cls._json(result.pop("metadata_json"), {})
+        return result
+
+    @classmethod
+    def _resource_link_row(cls, row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["pinned"] = bool(result["pinned"])
+        result["provenance"] = cls._json(result.pop("provenance_json"), {})
+        return result
+
+    def _joined_resource_row(self, conn: sqlite3.Connection, row: sqlite3.Row) -> dict[str, Any]:
+        raw = dict(row)
+        resource = {key: raw[key] for key in (
+            "id", "kind", "provider", "external_key", "canonical_url", "title", "metadata_json",
+            "revision", "content_hash", "permission_state", "sync_state", "access_policy", "last_checked_at",
+            "created_at", "updated_at",
+        )}
+        resource["metadata"] = self._json(resource.pop("metadata_json"), {})
+        resource["available"] = self.resource_available(conn, resource["provider"], resource["kind"], resource["external_key"])
+        link = {
+            "id": raw["link_id"], "matter_id": raw["link_matter_id"], "resource_id": raw["id"],
+            "relation_type": raw["relation_type"], "pinned": bool(raw["pinned"]),
+            "added_by_kind": raw["added_by_kind"], "added_by_id": raw["added_by_id"],
+            "confidence": raw["confidence"], "provenance": self._json(raw["provenance_json"], {}),
+            "confirmed_at": raw["confirmed_at"], "sub_state": raw["sub_state"],
+            "deleted_at": raw["link_deleted_at"], "created_at": raw["link_created_at"], "updated_at": raw["link_updated_at"],
+        }
+        return {"resource": resource, "link": link}
+
+    @staticmethod
+    def _aggregate_items(conn: sqlite3.Connection, matter_id: int, *, note: bool) -> str:
+        comparator = "=" if note else "<>"
+        rows = conn.execute(
+            f"SELECT title,description FROM matter_item WHERE matter_id=? AND kind {comparator} 'note' "
+            "AND deleted_at IS NULL ORDER BY position,id",
+            (matter_id,),
+        ).fetchall()
+        return "\n".join(" ".join(str(value or "") for value in row) for row in rows)
+
+    @staticmethod
+    def _search_columns() -> tuple[str, ...]:
+        return ("title", "description", "current_summary", "status_text", "items_text", "stakeholders_text", "notes_text")
+
+    @staticmethod
+    def _escape_like(value: str) -> str:
+        return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+    @staticmethod
+    def _fts_query(value: str) -> str:
+        return '"' + value.replace('"', '""') + '"'
+
+    def _add_search_match(self, result: dict[str, Any], query: str) -> None:
+        lowered = query.lower()
+        matched_fields: list[str] = []
+        snippets: dict[str, str] = {}
+        column_map = dict(zip(MATTER_SEARCH_FIELDS, self._search_columns(), strict=True))
+        for field, column in column_map.items():
+            text = str(result.pop(f"search_{column}", "") or "")
+            if lowered in text.lower():
+                matched_fields.append(field)
+                snippets[field] = self._snippet(text, query)
+        result["matched_fields"] = matched_fields
+        result["snippets"] = snippets
+
+    @staticmethod
+    def _snippet(text: str, query: str) -> str:
+        compact = " ".join(text.split())
+        index = compact.lower().find(query.lower())
+        start = max(0, index - 40) if index >= 0 else 0
+        return compact[start:start + 120]
 
     @classmethod
     def _item_row(cls, row: sqlite3.Row) -> dict[str, Any]:

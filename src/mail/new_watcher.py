@@ -26,6 +26,8 @@ Usage:
 """
 
 import asyncio
+import json
+import sqlite3
 import time
 from datetime import datetime, timedelta, timezone
 from typing import List, Dict, Optional, Any
@@ -34,6 +36,11 @@ from loguru import logger
 from src.config import config as settings
 from src.config import notion_enabled
 from src.models import Email
+from src.matters.resource_identity import (
+    EMAIL_PROVIDER,
+    email_resource_key,
+    thread_resource_key,
+)
 from src.mail.sync_store import (
     DRAFT_MAILBOX_LABELS,
     SyncStore,
@@ -1410,6 +1417,7 @@ class NewWatcher:
                 self.sync_store.mark_synced_local(internal_id)
                 self._stats["emails_synced"] += 1
                 logger.info(f"Email synced (local-only, Notion disabled): {internal_id}")
+                await self._maybe_link_matter_thread_subscriptions(email_obj, internal_id)
                 self._maybe_trigger_project_progress_hook(email_obj, internal_id, "")
                 self._maybe_trigger_llm_hook(email_obj, internal_id, "")
                 self._maybe_trigger_kos_hook(email_obj, internal_id, "")
@@ -1429,6 +1437,8 @@ class NewWatcher:
                 self.sync_store.mark_synced_v3(internal_id, page_id)
                 self._stats["emails_synced"] += 1
                 logger.info(f"Email synced successfully: {internal_id} -> {page_id}")
+
+                await self._maybe_link_matter_thread_subscriptions(email_obj, internal_id)
 
                 # 8. 项目周报外挂钩子（非阻塞、异常不影响主流程）
                 self._maybe_trigger_project_progress_hook(email_obj, internal_id, page_id)
@@ -1522,6 +1532,119 @@ class NewWatcher:
             self._bg_tasks = tasks
         tasks.add(task)
         task.add_done_callback(tasks.discard)
+
+    async def _maybe_link_matter_thread_subscriptions(
+        self, email_obj: Email, internal_id: int
+    ) -> None:
+        if not bool(getattr(settings, "matters_enabled", False)):
+            return
+        thread_id = str(getattr(email_obj, "thread_id", "") or "").strip()
+        if not thread_id:
+            return
+
+        def _link() -> None:
+            db_path = str(self.sync_store.db_path)
+            thread_key = thread_resource_key(thread_id)
+            with sqlite3.connect(db_path, timeout=30.0) as lookup_conn:
+                lookup_conn.row_factory = sqlite3.Row
+                subscriptions = lookup_conn.execute(
+                    "SELECT mr.matter_id FROM resource r "
+                    "JOIN matter_resource mr ON mr.resource_id=r.id "
+                    "JOIN matter m ON m.id=mr.matter_id "
+                    "WHERE r.provider=? AND r.external_key=? AND r.kind='thread' "
+                    "AND mr.deleted_at IS NULL AND mr.sub_state='active' AND m.deleted_at IS NULL",
+                    (EMAIL_PROVIDER, thread_key),
+                ).fetchall()
+            for subscription in subscriptions:
+                matter_id = int(subscription["matter_id"])
+                try:
+                    conn = sqlite3.connect(db_path, timeout=30.0)
+                    conn.execute("PRAGMA foreign_keys=ON")
+                    conn.execute("BEGIN IMMEDIATE")
+                    now = int(time.time() * 1000)
+                    email_key = email_resource_key(internal_id)
+                    conn.execute(
+                        "INSERT OR IGNORE INTO resource "
+                        "(kind,provider,external_key,title,metadata_json,access_policy,created_at,updated_at) "
+                        "VALUES ('email',?,?,?,?, 'allowed',?,?)",
+                        (
+                            EMAIL_PROVIDER,
+                            email_key,
+                            getattr(email_obj, "subject", None),
+                            json.dumps({"internal_id": internal_id}, separators=(",", ":")),
+                            now,
+                            now,
+                        ),
+                    )
+                    resource_id = int(
+                        conn.execute(
+                            "SELECT id FROM resource WHERE provider=? AND external_key=?",
+                            (EMAIL_PROVIDER, email_key),
+                        ).fetchone()[0]
+                    )
+                    cursor = conn.execute(
+                        "INSERT OR IGNORE INTO matter_resource "
+                        "(matter_id,resource_id,added_by_kind,provenance_json,sub_state,created_at,updated_at) "
+                        "VALUES (?,?,'system',?,'none',?,?)",
+                        (
+                            matter_id,
+                            resource_id,
+                            json.dumps(
+                                {"via": "thread_subscription", "thread_key": thread_key},
+                                separators=(",", ":"),
+                            ),
+                            now,
+                            now,
+                        ),
+                    )
+                    if cursor.rowcount:
+                        conn.execute(
+                            "INSERT OR IGNORE INTO matter_event "
+                            "(matter_id,kind,happened_at,actor_kind,source,resource_id,dedupe_key,payload_json,created_at) "
+                            "VALUES (?,'resource_linked',?,'system','thread_subscription',?,?,?,?)",
+                            (
+                                matter_id,
+                                now,
+                                resource_id,
+                                f"matter:{matter_id}:auto_link:email:{internal_id}",
+                                json.dumps(
+                                    {"via": "thread_subscription", "thread_key": thread_key},
+                                    separators=(",", ":"),
+                                ),
+                                now,
+                            ),
+                        )
+                        conn.execute(
+                            "UPDATE matter SET last_activity_at=?,updated_at=?,version=version+1 WHERE id=?",
+                            (now, now, matter_id),
+                        )
+                    conn.commit()
+                except Exception as exc:
+                    try:
+                        conn.rollback()
+                    except Exception:
+                        pass
+                    logger.warning(
+                        f"Matter thread subscription auto-link failed "
+                        f"(matter_id={matter_id}, internal_id={internal_id}): {exc}"
+                    )
+                finally:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        try:
+            await asyncio.to_thread(_link)
+        except Exception as exc:
+            # 订阅 lookup 本身失败（DB busy 等）也不许穿透——本函数在 _sync_email 的
+            # 大 try 里、且调用点位于 mark_synced 之后，异常外泄会把已 synced 的邮件
+            # 改写成 failed（外层 except mark_failed_v3），违反「自动关联失败不阻断
+            # 邮件同步」。per-matter 事务失败已在 _link 内部各自兜住，这里兜整体。
+            logger.warning(
+                f"Matter thread subscription lookup failed "
+                f"(internal_id={internal_id}): {exc}"
+            )
 
     def _maybe_trigger_project_progress_hook(
         self, email_obj: Email, internal_id: int, notion_page_id: str

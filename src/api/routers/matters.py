@@ -15,6 +15,12 @@ from src.api.schemas.matters import (
     MatterItemPatchRequest,
     MatterNoteCreateRequest,
     MatterPatchRequest,
+    MatterRelationCreateRequest,
+    MatterRelationPatchRequest,
+    MatterResourceCreateRequest,
+    MatterResourcePatchRequest,
+    MatterStakeholderCreateRequest,
+    MatterStakeholderPatchRequest,
     MutationEnvelope,
     MutationOnly,
     PermanentDeleteRequest,
@@ -144,6 +150,20 @@ async def create_matter(
         **_mutation_args(body.mutation, idempotency_key, require_version=False),
     )
     return success_envelope(result, request=request, status_code=201)
+
+
+@router.get("/links/by-resource")
+async def lookup_links_by_resource(
+    request: Request,
+    provider: str,
+    keys: str,
+    service: MatterService = Depends(get_matter_service),
+):
+    key_values = [value.strip() for value in keys.split(",") if value.strip()]
+    if not key_values or len(key_values) > 50:
+        raise APIError("E_INVALID_ARG", "keys must contain 1-50 resource keys", source="sqlite")
+    result = _call(service.lookup_resource_links, provider.strip().lower(), key_values)
+    return success_envelope({"results": result}, request=request)
 
 
 @router.get("/{matter_id}")
@@ -395,3 +415,163 @@ async def create_note(
         **_mutation_args(body.mutation, idempotency_key),
     )
     return success_envelope(result, request=request, status_code=201)
+
+
+@router.get("/{matter_id}/resources")
+async def list_resources(
+    matter_id: str, request: Request, kind: str | None = None,
+    pinned: bool | None = None, access_policy: str | None = None,
+    sub_state: str | None = None, include_unavailable: bool = True,
+    service: MatterService = Depends(get_matter_service),
+):
+    items = _call(
+        service.list_resources, matter_id, kind=kind, pinned=pinned,
+        access_policy=access_policy, sub_state=sub_state,
+    )
+    if not include_unavailable:
+        items = [item for item in items if item["resource"]["available"]]
+    return success_envelope({"items": items}, request=request)
+
+
+@router.post("/{matter_id}/resources")
+async def create_resource(
+    matter_id: str, body: MatterResourceCreateRequest, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.add_resource, matter_id,
+        body.model_dump(exclude={"mutation"}, exclude_none=True),
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request, status_code=201)
+
+
+@router.patch("/{matter_id}/resources/{resource_id}")
+async def patch_resource(
+    matter_id: str, resource_id: int, body: MatterResourcePatchRequest, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.patch_resource, matter_id, resource_id,
+        body.model_dump(exclude={"mutation"}, exclude_unset=True),
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
+@router.delete("/{matter_id}/resources/{resource_id}")
+async def delete_resource(
+    matter_id: str, resource_id: int, body: MutationOnly, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.unlink_resource, matter_id, resource_id, **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)
+
+
+@router.post("/{matter_id}/resources/{resource_id}/restore")
+async def restore_resource(
+    matter_id: str, resource_id: int, body: MutationOnly, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.restore_resource, matter_id, resource_id, **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)
+
+
+@router.get("/{matter_id}/stakeholders")
+async def list_stakeholders(
+    matter_id: str, request: Request, waiting_only: bool = False, include_deleted: bool = False,
+    service: MatterService = Depends(get_matter_service),
+):
+    return success_envelope({"items": _call(service.list_stakeholders, matter_id, waiting_only=waiting_only, include_deleted=include_deleted)}, request=request)
+
+
+@router.post("/{matter_id}/stakeholders")
+async def create_stakeholder(
+    matter_id: str, body: MatterStakeholderCreateRequest, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.create_stakeholder, matter_id, body.model_dump(exclude={"mutation"}, exclude_none=True), **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request, status_code=201)
+
+
+@router.patch("/{matter_id}/stakeholders/{stakeholder_id}")
+async def patch_stakeholder(
+    matter_id: str, stakeholder_id: int, body: MatterStakeholderPatchRequest, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.update_stakeholder, matter_id, stakeholder_id, body.model_dump(exclude={"mutation"}, exclude_unset=True), **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)
+
+
+@router.delete("/{matter_id}/stakeholders/{stakeholder_id}")
+async def delete_stakeholder(
+    matter_id: str, stakeholder_id: int, body: MutationOnly, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.delete_stakeholder, matter_id, stakeholder_id, **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)
+
+
+@router.post("/{matter_id}/stakeholders/{stakeholder_id}/restore")
+async def restore_stakeholder(
+    matter_id: str, stakeholder_id: int, body: MutationOnly, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.restore_stakeholder, matter_id, stakeholder_id, **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)
+
+
+@router.get("/{matter_id}/relations")
+async def list_relations(
+    matter_id: str, request: Request, direction: str = "both", relation_type: str | None = Query(default=None, alias="type"),
+    service: MatterService = Depends(get_matter_service),
+):
+    return success_envelope({"items": _call(service.list_relations, matter_id, direction=direction, relation_type=relation_type)}, request=request)
+
+
+@router.post("/{matter_id}/relations")
+async def create_relation(
+    matter_id: str, body: MatterRelationCreateRequest, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.create_relation, matter_id, body.model_dump(exclude={"mutation"}), **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request, status_code=201)
+
+
+@router.patch("/{matter_id}/relations/{relation_id}")
+async def patch_relation(
+    matter_id: str, relation_id: int, body: MatterRelationPatchRequest, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.patch_relation, matter_id, relation_id, body.model_dump(exclude={"mutation"}, exclude_unset=True), **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)
+
+
+@router.delete("/{matter_id}/relations/{relation_id}")
+async def delete_relation(
+    matter_id: str, relation_id: int, body: MutationOnly, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.delete_relation, matter_id, relation_id, **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)
+
+
+@router.post("/{matter_id}/relations/{relation_id}/restore")
+async def restore_relation(
+    matter_id: str, relation_id: int, body: MutationOnly, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(service.restore_relation, matter_id, relation_id, **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)

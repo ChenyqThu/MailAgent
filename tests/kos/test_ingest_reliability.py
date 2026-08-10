@@ -113,7 +113,10 @@ _NET_ERR = KOSError("connect timeout", code="E_KOS_NETWORK")
 
 class TestSchemaMigration:
     def test_db_version_includes_avatar_migration(self):
-        assert SyncStore.DB_VERSION == 43
+        # v43 引入 avatar 迁移；后续版本推进（v44 matters、v45 资源域）不该让本测试
+        # 变红——钉下界而非死等号（死 pin 在 P1 升 44 时就已断，因 kos 目录不在
+        # P1 验收口径里才拖到 P2 才被发现）。
+        assert SyncStore.DB_VERSION >= 43
 
     def test_fresh_db_has_full_schema_and_index(self, tmp_path):
         store = _store(tmp_path)

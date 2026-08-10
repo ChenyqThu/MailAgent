@@ -14,13 +14,19 @@ from .models import (
     MATTER_ITEM_KINDS,
     MATTER_ITEM_STATUSES,
     MATTER_PRIORITIES,
+    MATTER_ACCESS_POLICIES,
+    MATTER_RELATION_TYPES,
+    MATTER_RESOURCE_KINDS,
+    MATTER_RESOURCE_SUBSCRIPTION_STATES,
     MATTER_STATUSES,
     MatterActorKind,
     MatterItemKind,
     format_public_id,
     normalize_tags,
+    person_key_for_email,
 )
 from .repository import MatterRepository
+from .resource_identity import EMAIL_PROVIDER, email_resource_key, thread_resource_key
 
 TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 ACTION_ONLY_ITEM_FIELDS = {
@@ -76,8 +82,6 @@ class MatterService:
     ) -> dict[str, Any]:
         self._validate_actor(actor)
         title = str(data.get("title") or "").strip()
-        if not title:
-            raise MatterError("E_INVALID_ARG", "title is required")
         status = str(data.get("status") or "inbox")
         health = str(data.get("health") or "unknown")
         priority = str(data.get("priority") or "p1")
@@ -91,6 +95,12 @@ class MatterService:
             replay = self._replay(conn, dedupe_key, "matter_created")
             if replay:
                 return replay
+            source_spec = data.get("source_resource")
+            source_snapshot = self._resolve_source_resource(conn, source_spec) if source_spec else None
+            if not title and source_snapshot:
+                title = source_snapshot["title"] or "Untitled Matter"
+            if not title:
+                raise MatterError("E_INVALID_ARG", "title is required")
             seq = self.repository.allocate_sequence(conn, now)
             public_id = format_public_id(seq)
             matter_id = self.repository.insert_matter(
@@ -115,6 +125,15 @@ class MatterService:
                     "updated_at": now,
                 },
             )
+            linked: list[dict[str, Any]] = []
+            warnings: list[str] = []
+            if source_snapshot:
+                linked, warnings, resource_event_ids = self._link_source_snapshot(
+                    conn, matter_id, source_snapshot, actor=actor, now=now,
+                    source=source, reason=reason,
+                )
+            else:
+                resource_event_ids = []
             self.refresh_search_projection(conn, matter_id)
             event_id = self._append_event(
                 conn,
@@ -128,7 +147,9 @@ class MatterService:
                 happened_at=now,
             )
             matter = self.repository.get_matter_by_id(conn, matter_id)
-            return self._mutation(matter, [event_id])
+            result = self._mutation(matter, [event_id, *resource_event_ids], resources=linked)
+            result["warnings"].extend(warnings)
+            return result
 
     def get_matter(
         self, public_id: str, *, include: Sequence[str] = ()
@@ -563,6 +584,439 @@ class MatterService:
                 self.repository.get_matter_by_id(conn, matter["id"]), [event_id]
             )
 
+    def list_resources(self, public_id: str, **filters: Any) -> list[dict[str, Any]]:
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            return self.repository.list_resources(conn, matter["id"], filters)
+
+    def add_resource(
+        self,
+        public_id: str,
+        data: Mapping[str, Any],
+        *,
+        expected_version: int,
+        idempotency_key: str,
+        source: str,
+        actor: Actor = Actor(),
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        now = self.clock_ms()
+        self._dedupe(idempotency_key)
+        with self.repository.transaction() as conn:
+            matter = self._require_matter(conn, public_id)
+            snapshot = self._resolve_source_resource(conn, data.get("source_resource")) if data.get("source_resource") else None
+            specs = snapshot["resources"] if snapshot else [dict(data)]
+            results: list[dict[str, Any]] = []
+            warnings: list[str] = list(snapshot.get("warnings", [])) if snapshot else []
+            pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
+            for spec in specs:
+                resource, _ = self._upsert_resource(conn, spec, now)
+                link = self.repository.get_resource_link(conn, matter["id"], resource["id"], live_only=True)
+                if link:
+                    results.append({"resource": resource, "link": link})
+                    warnings.append("already_linked")
+                else:
+                    pending.append((resource, spec))
+            if not pending:
+                result = self._mutation(matter, [], resources=results)
+                result["warnings"] = list(dict.fromkeys(warnings))
+                return result
+            if not self.repository.cas_update_matter(
+                conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}
+            ):
+                raise self._version_conflict()
+            event_ids = []
+            for resource, spec in pending:
+                link_id = self.repository.insert_resource_link(
+                    conn,
+                    {
+                        "matter_id": matter["id"], "resource_id": resource["id"],
+                        "relation_type": spec.get("relation_type"), "pinned": 1 if spec.get("pinned") else 0,
+                        "added_by_kind": actor.kind, "added_by_id": actor.actor_id,
+                        "confidence": spec.get("confidence"),
+                        "provenance_json": self._dump(spec.get("provenance") or {}),
+                        "confirmed_at": now if spec.get("confirmed") else None,
+                        "sub_state": spec.get("sub_state") or "none", "created_at": now, "updated_at": now,
+                    },
+                )
+                event_key = f"matter:{matter['id']}:resource_linked:{resource['id']}"
+                existing = self.repository.find_event(conn, event_key)
+                if not existing:
+                    event_ids.append(self._append_event(
+                        conn, matter_id=matter["id"], kind="resource_linked", actor=actor,
+                        source=source, dedupe_key=event_key, reason=reason,
+                        resource_id=resource["id"], payload={"link_id": link_id}, happened_at=now,
+                    ))
+                link = self.repository.get_resource_link(conn, matter["id"], resource["id"], live_only=True)
+                results.append({"resource": resource, "link": link})
+            result = self._mutation(self.repository.get_matter_by_id(conn, matter["id"]), event_ids, resources=results)
+            result["warnings"] = list(dict.fromkeys(warnings))
+            return result
+
+    def patch_resource(
+        self, public_id: str, resource_id: int, patch: Mapping[str, Any], *,
+        expected_version: int, idempotency_key: str, source: str,
+        actor: Actor = Actor(), reason: str | None = None,
+    ) -> dict[str, Any]:
+        now = self.clock_ms()
+        dedupe_key = self._dedupe(idempotency_key)
+        if "access_policy" in patch:
+            replay_kind = "resource_access_policy_changed"
+        elif patch.get("sub_state") == "paused":
+            replay_kind = "resource_subscription_paused"
+        elif patch.get("sub_state") == "active":
+            replay_kind = "resource_subscription_resumed"
+        else:
+            replay_kind = "resource_updated"
+        with self.repository.transaction() as conn:
+            replay = self._replay(conn, dedupe_key, replay_kind)
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            resource = self.repository.get_resource(conn, resource_id)
+            link = self.repository.get_resource_link(conn, matter["id"], resource_id, live_only=True)
+            if not resource or not link:
+                raise MatterError("E_CHILD_NOT_FOUND", f"resource {resource_id} not linked")
+            access_patch = "access_policy" in patch
+            link_fields = {"pinned", "relation_type", "sub_state", "confirmed"} & set(patch)
+            if access_patch:
+                if patch.get("scope") != "resource" or link_fields:
+                    raise MatterError("E_INVALID_ARG", "access_policy requires scope='resource' and cannot mix link fields")
+                self._require_value("access_policy", str(patch["access_policy"]), MATTER_ACCESS_POLICIES)
+                conn.execute("UPDATE resource SET access_policy=?, updated_at=? WHERE id=?", (patch["access_policy"], now, resource_id))
+                event_kind = "resource_access_policy_changed"
+            else:
+                if "scope" in patch and patch.get("scope") not in (None, "link"):
+                    raise MatterError("E_INVALID_ARG", "link updates use scope='link'")
+                changes: dict[str, Any] = {"updated_at": now}
+                if "pinned" in patch:
+                    changes["pinned"] = 1 if patch["pinned"] else 0
+                if "relation_type" in patch:
+                    changes["relation_type"] = patch["relation_type"]
+                if "confirmed" in patch and patch["confirmed"]:
+                    changes["confirmed_at"] = link["confirmed_at"] or now
+                if "sub_state" in patch:
+                    sub_state = str(patch["sub_state"])
+                    self._require_value("sub_state", sub_state, MATTER_RESOURCE_SUBSCRIPTION_STATES)
+                    if resource["kind"] != "thread" or sub_state == "none":
+                        raise MatterError("E_INVALID_STATE", "subscription state is only active/paused on thread resources")
+                    changes["sub_state"] = sub_state
+                assignments = ", ".join(f"{key}=?" for key in changes)
+                conn.execute(f"UPDATE matter_resource SET {assignments} WHERE id=?", (*changes.values(), link["id"]))
+                if patch.get("sub_state") == "paused":
+                    event_kind = "resource_subscription_paused"
+                elif patch.get("sub_state") == "active":
+                    event_kind = "resource_subscription_resumed"
+                else:
+                    event_kind = "resource_updated"
+            if not self.repository.cas_update_matter(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+                raise self._version_conflict()
+            event_id = self._append_event(
+                conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
+                dedupe_key=dedupe_key, reason=reason, resource_id=resource_id,
+                payload={"fields": sorted(patch)}, happened_at=now,
+            )
+            return self._mutation(
+                self.repository.get_matter_by_id(conn, matter["id"]), [event_id],
+                resource=self.repository.get_resource(conn, resource_id),
+                link=self.repository.get_resource_link(conn, matter["id"], resource_id, live_only=True),
+            )
+
+    def unlink_resource(self, public_id: str, resource_id: int, **mutation: Any) -> dict[str, Any]:
+        return self._set_resource_deleted(public_id, resource_id, True, **mutation)
+
+    def restore_resource(self, public_id: str, resource_id: int, **mutation: Any) -> dict[str, Any]:
+        return self._set_resource_deleted(public_id, resource_id, False, **mutation)
+
+    def _set_resource_deleted(
+        self, public_id: str, resource_id: int, deleted: bool, *, expected_version: int,
+        idempotency_key: str, source: str, actor: Actor = Actor(), reason: str | None = None,
+    ) -> dict[str, Any]:
+        now = self.clock_ms()
+        dedupe_key = self._dedupe(idempotency_key)
+        event_kind = "resource_unlinked" if deleted else "resource_restored"
+        with self.repository.transaction() as conn:
+            replay = self._replay(conn, dedupe_key, event_kind)
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            link = self.repository.get_resource_link(conn, matter["id"], resource_id)
+            if not link or (deleted and link["deleted_at"] is not None) or (not deleted and link["deleted_at"] is None):
+                raise MatterError("E_CHILD_NOT_FOUND", f"resource link {resource_id} not found")
+            if not self.repository.cas_update_matter(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+                raise self._version_conflict()
+            conn.execute("UPDATE matter_resource SET deleted_at=?, updated_at=? WHERE id=?", (now if deleted else None, now, link["id"]))
+            event_id = self._append_event(
+                conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
+                dedupe_key=dedupe_key, reason=reason, resource_id=resource_id,
+                payload={"link_id": link["id"]}, happened_at=now,
+            )
+            return self._mutation(self.repository.get_matter_by_id(conn, matter["id"]), [event_id])
+
+    def list_stakeholders(self, public_id: str, *, waiting_only: bool = False, include_deleted: bool = False) -> list[dict[str, Any]]:
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            clauses = ["matter_id=?"]
+            params: list[Any] = [matter["id"]]
+            if waiting_only:
+                clauses.append("is_waiting_on=1")
+            if not include_deleted:
+                clauses.append("deleted_at IS NULL")
+            return [dict(row) for row in conn.execute(
+                f"SELECT * FROM matter_stakeholder WHERE {' AND '.join(clauses)} ORDER BY id", params
+            )]
+
+    def create_stakeholder(self, public_id: str, data: Mapping[str, Any], **mutation: Any) -> dict[str, Any]:
+        return self._mutate_stakeholder(public_id, None, data, "stakeholder_added", **mutation)
+
+    def update_stakeholder(self, public_id: str, stakeholder_id: int, patch: Mapping[str, Any], **mutation: Any) -> dict[str, Any]:
+        return self._mutate_stakeholder(public_id, stakeholder_id, patch, "stakeholder_updated", **mutation)
+
+    def delete_stakeholder(self, public_id: str, stakeholder_id: int, **mutation: Any) -> dict[str, Any]:
+        return self._mutate_stakeholder(public_id, stakeholder_id, {"deleted_at": self.clock_ms()}, "stakeholder_removed", **mutation)
+
+    def restore_stakeholder(self, public_id: str, stakeholder_id: int, **mutation: Any) -> dict[str, Any]:
+        return self._mutate_stakeholder(public_id, stakeholder_id, {"deleted_at": None}, "stakeholder_restored", **mutation)
+
+    def _mutate_stakeholder(
+        self, public_id: str, stakeholder_id: int | None, data: Mapping[str, Any], event_kind: str, *,
+        expected_version: int, idempotency_key: str, source: str, actor: Actor = Actor(), reason: str | None = None,
+    ) -> dict[str, Any]:
+        now = self.clock_ms()
+        dedupe_key = self._dedupe(idempotency_key)
+        with self.repository.transaction() as conn:
+            replay = self._replay(conn, dedupe_key, event_kind)
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            existing = None
+            if stakeholder_id is not None:
+                existing = conn.execute("SELECT * FROM matter_stakeholder WHERE id=? AND matter_id=?", (stakeholder_id, matter["id"])).fetchone()
+                if not existing:
+                    raise MatterError("E_CHILD_NOT_FOUND", f"stakeholder {stakeholder_id} not found")
+            email = self._optional_text(data.get("email_normalized", data.get("email")))
+            if email:
+                email = email.lower()
+            if stakeholder_id is None:
+                person_key = str(data.get("person_key") or person_key_for_email(email))
+                duplicate = conn.execute(
+                    "SELECT * FROM matter_stakeholder WHERE matter_id=? AND person_key=? AND deleted_at IS NULL",
+                    (matter["id"], person_key),
+                ).fetchone()
+                if duplicate:
+                    result = self._mutation(matter, [], stakeholder=dict(duplicate))
+                    result["warnings"] = ["already_linked"]
+                    return result
+                values = {
+                    "matter_id": matter["id"], "person_key": person_key,
+                    "display_name": self._optional_text(data.get("display_name")), "email_normalized": email,
+                    "organization": self._optional_text(data.get("organization")), "role": self._optional_text(data.get("role")),
+                    "relationship": self._optional_text(data.get("relationship")), "is_waiting_on": 1 if data.get("is_waiting_on") else 0,
+                    "last_contact_at": data.get("last_contact_at"), "source_resource_id": data.get("source_resource_id"),
+                    "created_at": now, "updated_at": now,
+                }
+                columns = tuple(values)
+                cursor = conn.execute(f"INSERT INTO matter_stakeholder ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})", tuple(values[c] for c in columns))
+                stakeholder_id = int(cursor.lastrowid)
+            else:
+                allowed = {"display_name", "organization", "role", "relationship", "is_waiting_on", "last_contact_at", "source_resource_id", "deleted_at"}
+                changes = {key: value for key, value in data.items() if key in allowed}
+                if email is not None:
+                    changes["email_normalized"] = email
+                changes["updated_at"] = now
+                assignments = ", ".join(f"{key}=?" for key in changes)
+                conn.execute(f"UPDATE matter_stakeholder SET {assignments} WHERE id=?", (*changes.values(), stakeholder_id))
+                if event_kind == "stakeholder_removed":
+                    conn.execute(
+                        "UPDATE matter_item SET waiting_on_stakeholder_id=NULL, updated_at=?, version=version+1 "
+                        "WHERE matter_id=? AND waiting_on_stakeholder_id=?",
+                        (now, matter["id"], stakeholder_id),
+                    )
+            if not self.repository.cas_update_matter(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+                raise self._version_conflict()
+            self.refresh_search_projection(conn, matter["id"])
+            event_id = self._append_event(
+                conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
+                dedupe_key=dedupe_key, reason=reason, payload={"stakeholder_id": stakeholder_id}, happened_at=now,
+            )
+            stakeholder = dict(conn.execute("SELECT * FROM matter_stakeholder WHERE id=?", (stakeholder_id,)).fetchone())
+            return self._mutation(self.repository.get_matter_by_id(conn, matter["id"]), [event_id], stakeholder=stakeholder)
+
+    def list_relations(self, public_id: str, *, direction: str = "both", relation_type: str | None = None) -> list[dict[str, Any]]:
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            clauses = ["r.deleted_at IS NULL"]
+            params: list[Any] = []
+            if direction == "outgoing":
+                clauses.append("r.source_matter_id=?")
+                params.append(matter["id"])
+            elif direction == "incoming":
+                clauses.append("r.target_matter_id=?")
+                params.append(matter["id"])
+            else:
+                clauses.append("(r.source_matter_id=? OR r.target_matter_id=?)")
+                params.extend((matter["id"], matter["id"]))
+            if relation_type:
+                clauses.append("r.relation_type=?")
+                params.append(relation_type)
+            return [dict(row) for row in conn.execute(
+                "SELECT r.*, sm.public_id AS source_public_id, sm.title AS source_title, "
+                "tm.public_id AS target_public_id, tm.title AS target_title FROM matter_relation r "
+                "JOIN matter sm ON sm.id=r.source_matter_id JOIN matter tm ON tm.id=r.target_matter_id "
+                f"WHERE {' AND '.join(clauses)} ORDER BY r.id", params
+            )]
+
+    def create_relation(self, public_id: str, data: Mapping[str, Any], **mutation: Any) -> dict[str, Any]:
+        now = self.clock_ms()
+        expected_version = mutation["expected_version"]
+        dedupe_key = self._dedupe(mutation["idempotency_key"])
+        actor = mutation.get("actor", Actor())
+        with self.repository.transaction() as conn:
+            replay = self._replay(conn, dedupe_key, "relation_added")
+            if replay:
+                return replay
+            source_matter = self._require_matter(conn, public_id)
+            target = self._require_matter(conn, str(data.get("target_public_id") or ""))
+            if source_matter["id"] == target["id"]:
+                raise MatterError("E_INVALID_ARG", "matter relation cannot self-loop")
+            relation_type = data.get("relation_type")
+            if relation_type is not None:
+                self._require_value("relation_type", str(relation_type), MATTER_RELATION_TYPES)
+            existing = conn.execute(
+                "SELECT * FROM matter_relation WHERE source_matter_id=? AND target_matter_id=? "
+                "AND relation_type IS ? AND deleted_at IS NULL",
+                (source_matter["id"], target["id"], relation_type),
+            ).fetchone()
+            if existing:
+                result = self._mutation(source_matter, [], relation=dict(existing))
+                result["warnings"] = ["already_linked"]
+                return result
+            if not self.repository.cas_update_matter(conn, source_matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+                raise self._version_conflict()
+            cursor = conn.execute(
+                "INSERT INTO matter_relation(source_matter_id,target_matter_id,relation_type,confidence,provenance_json,confirmed_at,created_at,updated_at) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (source_matter["id"], target["id"], relation_type, data.get("confidence"), self._dump(data.get("provenance") or {}), now if data.get("confirmed") else None, now, now),
+            )
+            relation_id = int(cursor.lastrowid)
+            event_id = self._append_event(
+                conn, matter_id=source_matter["id"], kind="relation_added", actor=actor,
+                source=mutation["source"], dedupe_key=dedupe_key, reason=mutation.get("reason"),
+                payload={"relation_id": relation_id, "target_public_id": target["public_id"]}, happened_at=now,
+            )
+            return self._mutation(self.repository.get_matter_by_id(conn, source_matter["id"]), [event_id], relation=dict(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()))
+
+    def patch_relation(self, public_id: str, relation_id: int, patch: Mapping[str, Any], **mutation: Any) -> dict[str, Any]:
+        return self._mutate_relation(public_id, relation_id, patch, "relation_updated", **mutation)
+
+    def delete_relation(self, public_id: str, relation_id: int, **mutation: Any) -> dict[str, Any]:
+        return self._mutate_relation(public_id, relation_id, {"deleted_at": self.clock_ms()}, "relation_removed", **mutation)
+
+    def restore_relation(self, public_id: str, relation_id: int, **mutation: Any) -> dict[str, Any]:
+        return self._mutate_relation(public_id, relation_id, {"deleted_at": None}, "relation_restored", **mutation)
+
+    def _mutate_relation(self, public_id: str, relation_id: int, patch: Mapping[str, Any], event_kind: str, *, expected_version: int, idempotency_key: str, source: str, actor: Actor = Actor(), reason: str | None = None) -> dict[str, Any]:
+        now = self.clock_ms()
+        dedupe_key = self._dedupe(idempotency_key)
+        with self.repository.transaction() as conn:
+            replay = self._replay(conn, dedupe_key, event_kind)
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            relation = conn.execute("SELECT * FROM matter_relation WHERE id=? AND source_matter_id=?", (relation_id, matter["id"])).fetchone()
+            if not relation:
+                raise MatterError("E_CHILD_NOT_FOUND", f"relation {relation_id} not found")
+            if "relation_type" in patch and patch["relation_type"] is not None:
+                self._require_value("relation_type", str(patch["relation_type"]), MATTER_RELATION_TYPES)
+            changes = {key: value for key, value in patch.items() if key in {"relation_type", "confidence", "deleted_at"}}
+            if patch.get("confirmed"):
+                changes["confirmed_at"] = relation["confirmed_at"] or now
+            changes["updated_at"] = now
+            if not self.repository.cas_update_matter(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+                raise self._version_conflict()
+            conn.execute(f"UPDATE matter_relation SET {', '.join(f'{key}=?' for key in changes)} WHERE id=?", (*changes.values(), relation_id))
+            event_id = self._append_event(conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source, dedupe_key=dedupe_key, reason=reason, payload={"relation_id": relation_id}, happened_at=now)
+            return self._mutation(self.repository.get_matter_by_id(conn, matter["id"]), [event_id], relation=dict(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()))
+
+    def lookup_resource_links(self, provider: str, keys: list[str]) -> dict[str, list[dict[str, Any]]]:
+        with self.repository.connect() as conn:
+            return self.repository.lookup_resource_links(conn, provider, keys)
+
+    def _resolve_source_resource(self, conn: sqlite3.Connection, source_spec: Any) -> dict[str, Any]:
+        if not isinstance(source_spec, Mapping) or source_spec.get("provider") != EMAIL_PROVIDER or source_spec.get("kind") != "email":
+            raise MatterError("E_INVALID_ARG", "source_resource must be a mailagent email")
+        internal_id = int(source_spec.get("internal_id") or 0)
+        row = conn.execute("SELECT internal_id,subject,thread_id,date_received,message_id FROM email_metadata WHERE internal_id=?", (internal_id,)).fetchone()
+        if not row:
+            raise MatterError("E_UPSTREAM", f"email {internal_id} not found")
+        email_spec = {
+            "provider": EMAIL_PROVIDER, "kind": "email", "external_key": email_resource_key(internal_id),
+            "title": row["subject"], "metadata": {"internal_id": internal_id, "message_id": row["message_id"], "date_received": row["date_received"]},
+            "sub_state": "none",
+        }
+        resources = [email_spec]
+        warnings: list[str] = []
+        if source_spec.get("link_scope", "thread") == "thread":
+            if row["thread_id"]:
+                resources.append({
+                    "provider": EMAIL_PROVIDER, "kind": "thread", "external_key": thread_resource_key(row["thread_id"]),
+                    "title": row["subject"], "metadata": {"thread_id": row["thread_id"]}, "sub_state": "active",
+                })
+            else:
+                warnings.append("thread_unavailable")
+        elif source_spec.get("link_scope") != "single":
+            raise MatterError("E_INVALID_ARG", "link_scope must be thread or single")
+        return {"title": row["subject"], "resources": resources, "warnings": warnings}
+
+    def _link_source_snapshot(
+        self, conn: sqlite3.Connection, matter_id: int, snapshot: Mapping[str, Any], *,
+        actor: Actor, now: int, source: str, reason: str | None,
+    ) -> tuple[list[dict[str, Any]], list[str], list[int]]:
+        results = []
+        warnings = list(snapshot.get("warnings", []))
+        event_ids: list[int] = []
+        for spec in snapshot["resources"]:
+            resource, _ = self._upsert_resource(conn, spec, now)
+            link = self.repository.get_resource_link(conn, matter_id, resource["id"], live_only=True)
+            if link:
+                warnings.append("already_linked")
+            else:
+                link_id = self.repository.insert_resource_link(conn, {
+                    "matter_id": matter_id, "resource_id": resource["id"], "relation_type": None,
+                    "pinned": 0, "added_by_kind": actor.kind, "added_by_id": actor.actor_id,
+                    "confidence": None, "provenance_json": "{}", "confirmed_at": None,
+                    "sub_state": spec.get("sub_state", "none"), "created_at": now, "updated_at": now,
+                })
+                event_ids.append(self._append_event(
+                    conn, matter_id=matter_id, kind="resource_linked", actor=actor,
+                    source=source, dedupe_key=f"matter:{matter_id}:resource_linked:{resource['id']}",
+                    reason=reason, resource_id=resource["id"], payload={"link_id": link_id}, happened_at=now,
+                ))
+                link = self.repository.get_resource_link(conn, matter_id, resource["id"], live_only=True)
+            results.append({"resource": resource, "link": link})
+        return results, list(dict.fromkeys(warnings)), event_ids
+
+    def _upsert_resource(self, conn: sqlite3.Connection, data: Mapping[str, Any], now: int) -> tuple[dict[str, Any], bool]:
+        provider = str(data.get("provider") or "").strip().lower()
+        external_key = str(data.get("external_key") or "").strip()
+        kind = str(data.get("kind") or "")
+        if not provider or not external_key:
+            raise MatterError("E_INVALID_ARG", "resource provider and external_key are required")
+        self._require_value("kind", kind, MATTER_RESOURCE_KINDS)
+        if data.get("sub_state") not in (None, "none") and kind != "thread":
+            raise MatterError("E_INVALID_STATE", "subscription state is only supported for thread resources")
+        existing = conn.execute("SELECT * FROM resource WHERE provider=? AND external_key=?", (provider, external_key)).fetchone()
+        if existing and existing["kind"] != kind:
+            raise MatterError("E_RESOURCE_IDENTITY_CONFLICT", "resource identity already exists with another kind")
+        return self.repository.upsert_resource(conn, {
+            "kind": kind, "provider": provider, "external_key": external_key,
+            "canonical_url": self._optional_text(data.get("canonical_url")), "title": self._optional_text(data.get("title")),
+            "metadata_json": self._dump(data.get("metadata") or {}), "revision": data.get("revision"),
+            "content_hash": data.get("content_hash"), "permission_state": data.get("permission_state"),
+            "sync_state": data.get("sync_state"), "access_policy": data.get("access_policy") or "allowed",
+            "last_checked_at": data.get("last_checked_at"), "created_at": now, "updated_at": now,
+        })
+
     def _normalize_item(self, kind: str, data: Mapping[str, Any]) -> dict[str, Any]:
         if kind != MatterItemKind.ACTION.value:
             offending = [
@@ -644,6 +1098,7 @@ class MatterService:
         reason: str | None,
         item_id: int | None = None,
         update_id: int | None = None,
+        resource_id: int | None = None,
     ) -> int:
         event_payload = dict(payload)
         event_payload.update(
@@ -662,6 +1117,7 @@ class MatterService:
                 "actor_kind": actor.kind,
                 "actor_id": actor.actor_id,
                 "source": source or "desktop_ui",
+                "resource_id": resource_id,
                 "item_id": item_id,
                 "update_id": update_id,
                 "dedupe_key": dedupe_key,
@@ -755,4 +1211,7 @@ class MatterService:
     def refresh_search_projection(
         self, conn: sqlite3.Connection, matter_id: int
     ) -> None:
-        """P2 extension seam; v44 has no search projection table yet."""
+        self.repository.refresh_search_projection(conn, matter_id)
+
+    def rebuild_all_search_documents(self) -> int:
+        return self.repository.rebuild_all_search_documents()

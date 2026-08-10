@@ -55,6 +55,10 @@ from src.matters.models import (
     MatterItemKind,
     MatterItemStatus,
     MatterPriority,
+    MatterAccessPolicy,
+    MatterRelationType,
+    MatterResourceKind,
+    MatterResourceSubscriptionState,
     MatterStatus,
     MatterUpdateReviewStatus,
     sql_check_clause,
@@ -112,7 +116,7 @@ LLM_PROCESSING_INDEX_DDLS = (
 )
 
 
-# ==================== Matters DDL single source (v44) ====================
+# ==================== Matters DDL single source (v45) ====================
 MATTER_TABLE_DDLS = (
     """CREATE TABLE IF NOT EXISTS matter_seq (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -163,11 +167,11 @@ MATTER_TABLE_DDLS = (
         priority TEXT NULL CHECK (priority IS NULL OR priority {sql_check_clause(MatterPriority)}),
         owner_kind TEXT NULL CHECK (owner_kind IS NULL OR owner_kind {sql_check_clause(MatterActorKind)}),
         owner_id TEXT NULL,
-        waiting_on_stakeholder_id INTEGER NULL,
+        waiting_on_stakeholder_id INTEGER NULL REFERENCES matter_stakeholder(id) ON DELETE SET NULL,
         due_at INTEGER NULL,
         completed_at INTEGER NULL,
         checklist_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(checklist_json)),
-        source_resource_id INTEGER NULL,
+        source_resource_id INTEGER NULL REFERENCES resource(id) ON DELETE SET NULL,
         source_locator_json TEXT NULL CHECK (source_locator_json IS NULL OR json_valid(source_locator_json)),
         created_by_kind TEXT NOT NULL CHECK (created_by_kind {sql_check_clause(MatterActorKind)}),
         created_by_id TEXT NULL,
@@ -189,7 +193,7 @@ MATTER_TABLE_DDLS = (
         actor_kind TEXT NOT NULL CHECK (actor_kind {sql_check_clause(MatterActorKind)}),
         actor_id TEXT NULL,
         source TEXT NOT NULL,
-        resource_id INTEGER NULL,
+        resource_id INTEGER NULL REFERENCES resource(id) ON DELETE SET NULL,
         item_id INTEGER NULL REFERENCES matter_item(id) ON DELETE SET NULL,
         update_id INTEGER NULL REFERENCES matter_update(id) ON DELETE SET NULL,
         reverses_event_id INTEGER NULL REFERENCES matter_event(id) ON DELETE SET NULL,
@@ -226,6 +230,83 @@ MATTER_TABLE_DDLS = (
         rejected_at INTEGER NULL,
         review_reason TEXT NULL
     )""",
+    f"""CREATE TABLE IF NOT EXISTS resource (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        kind TEXT NOT NULL CHECK (kind {sql_check_clause(MatterResourceKind)}),
+        provider TEXT NOT NULL CHECK (provider = lower(trim(provider)) AND length(provider) > 0),
+        external_key TEXT NOT NULL CHECK (length(trim(external_key)) > 0),
+        canonical_url TEXT NULL,
+        title TEXT NULL,
+        metadata_json TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(metadata_json)),
+        revision TEXT NULL,
+        content_hash TEXT NULL,
+        permission_state TEXT NULL,
+        sync_state TEXT NULL,
+        access_policy TEXT NOT NULL DEFAULT 'allowed' CHECK (access_policy {sql_check_clause(MatterAccessPolicy)}),
+        last_checked_at INTEGER NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )""",
+    f"""CREATE TABLE IF NOT EXISTS matter_resource (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        resource_id INTEGER NOT NULL REFERENCES resource(id) ON DELETE RESTRICT,
+        relation_type TEXT NULL,
+        pinned INTEGER NOT NULL DEFAULT 0 CHECK (pinned IN (0, 1)),
+        added_by_kind TEXT NOT NULL CHECK (added_by_kind {sql_check_clause(MatterActorKind)}),
+        added_by_id TEXT NULL,
+        confidence REAL NULL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+        provenance_json TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(provenance_json)),
+        confirmed_at INTEGER NULL,
+        sub_state TEXT NOT NULL DEFAULT 'none' CHECK (sub_state {sql_check_clause(MatterResourceSubscriptionState)}),
+        deleted_at INTEGER NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )""",
+    """CREATE TABLE IF NOT EXISTS matter_stakeholder (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        person_key TEXT NOT NULL,
+        display_name TEXT NULL,
+        email_normalized TEXT NULL,
+        organization TEXT NULL,
+        role TEXT NULL,
+        relationship TEXT NULL,
+        is_waiting_on INTEGER NOT NULL DEFAULT 0 CHECK (is_waiting_on IN (0, 1)),
+        last_contact_at INTEGER NULL,
+        source_resource_id INTEGER NULL REFERENCES resource(id) ON DELETE SET NULL,
+        deleted_at INTEGER NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )""",
+    f"""CREATE TABLE IF NOT EXISTS matter_relation (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        source_matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        target_matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        relation_type TEXT NULL CHECK (relation_type IS NULL OR relation_type {sql_check_clause(MatterRelationType)}),
+        confidence REAL NULL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+        provenance_json TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(provenance_json)),
+        confirmed_at INTEGER NULL,
+        deleted_at INTEGER NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        CHECK (source_matter_id <> target_matter_id)
+    )""",
+    """CREATE TABLE IF NOT EXISTS matter_search_document (
+        matter_id INTEGER PRIMARY KEY REFERENCES matter(id) ON DELETE CASCADE,
+        title TEXT NOT NULL DEFAULT '',
+        description TEXT NOT NULL DEFAULT '',
+        current_summary TEXT NOT NULL DEFAULT '',
+        status_text TEXT NOT NULL DEFAULT '',
+        items_text TEXT NOT NULL DEFAULT '',
+        stakeholders_text TEXT NOT NULL DEFAULT '',
+        notes_text TEXT NOT NULL DEFAULT '',
+        updated_at INTEGER NOT NULL
+    )""",
+    """CREATE VIRTUAL TABLE IF NOT EXISTS matter_fts USING fts5(
+        title, description, current_summary, status_text, items_text,
+        stakeholders_text, notes_text, tokenize='trigram'
+    )""",
 )
 
 MATTER_INDEX_DDLS = (
@@ -246,6 +327,20 @@ MATTER_INDEX_DDLS = (
     "CREATE INDEX IF NOT EXISTS idx_matter_update_range ON matter_update(matter_id, from_event_id, to_event_id)",
     "CREATE INDEX IF NOT EXISTS idx_matter_update_run ON matter_update(agent_run_id) WHERE agent_run_id IS NOT NULL",
     "CREATE INDEX IF NOT EXISTS idx_matter_update_stale ON matter_update(matter_id, is_stale, created_at DESC) WHERE review_status='pending'",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_resource_provider_key ON resource(provider, external_key)",
+    "CREATE INDEX IF NOT EXISTS idx_resource_kind ON resource(kind)",
+    "CREATE INDEX IF NOT EXISTS idx_resource_canonical_url ON resource(canonical_url) WHERE canonical_url IS NOT NULL",
+    "CREATE INDEX IF NOT EXISTS idx_resource_sync_state ON resource(sync_state, last_checked_at) WHERE sync_state IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_resource_live ON matter_resource(matter_id, resource_id) WHERE deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_resource_group ON matter_resource(matter_id, pinned DESC, relation_type, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_matter_resource_reverse ON matter_resource(resource_id, matter_id) WHERE deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_resource_subscription ON matter_resource(resource_id, sub_state) WHERE deleted_at IS NULL AND sub_state IN ('active','paused')",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_stakeholder_person ON matter_stakeholder(matter_id, person_key) WHERE deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_stakeholder_email ON matter_stakeholder(email_normalized) WHERE email_normalized IS NOT NULL AND deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_stakeholder_waiting ON matter_stakeholder(matter_id, is_waiting_on) WHERE deleted_at IS NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_relation_live ON matter_relation(source_matter_id, target_matter_id, relation_type) WHERE deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_relation_source ON matter_relation(source_matter_id, relation_type) WHERE deleted_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_relation_target ON matter_relation(target_matter_id, relation_type) WHERE deleted_at IS NULL",
 )
 
 
@@ -742,7 +837,7 @@ class SyncStore:
     # v43 (harness optimization P2, 2026-08): report_agent +description TEXT。NULL/空 = 未设置；
     #                wire 写侧 strip 并限制 1000 字符，读侧原样投影。additive ALTER，无回填。
     #                回滚 (回退 v43): 列可留（旧代码无害）；必要时降 db_version。
-    DB_VERSION = 44  # v44: Matter aggregate base tables
+    DB_VERSION = 45  # v45: Matter resources, stakeholders, relations, search
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -2550,6 +2645,85 @@ class SyncStore:
                         f"v44 migration: tables still missing {missing}: {e}"
                     ) from e
                 raise
+
+        # === v45: Matter resources, stakeholders, relations, search projection ===
+        if current_version < 45:
+            try:
+                for ddl in MATTER_TABLE_DDLS:
+                    cursor.execute(ddl)
+
+                item_fks = {
+                    (row[2], row[3], row[6])
+                    for row in cursor.execute("PRAGMA foreign_key_list(matter_item)")
+                }
+                event_fks = {
+                    (row[2], row[3], row[6])
+                    for row in cursor.execute("PRAGMA foreign_key_list(matter_event)")
+                }
+                needs_rebuild = not {
+                    ("matter_stakeholder", "waiting_on_stakeholder_id", "SET NULL"),
+                    ("resource", "source_resource_id", "SET NULL"),
+                }.issubset(item_fks) or (
+                    "resource", "resource_id", "SET NULL"
+                ) not in event_fks
+
+                if needs_rebuild:
+                    cursor.execute("PRAGMA defer_foreign_keys = ON")
+                    item_ddl = MATTER_TABLE_DDLS[2].replace(
+                        "CREATE TABLE IF NOT EXISTS matter_item",
+                        "CREATE TABLE matter_item_v45",
+                        1,
+                    )
+                    event_ddl = (
+                        MATTER_TABLE_DDLS[3]
+                        .replace(
+                            "CREATE TABLE IF NOT EXISTS matter_event",
+                            "CREATE TABLE matter_event_v45",
+                            1,
+                        )
+                        .replace("REFERENCES matter_item(id)", "REFERENCES matter_item_v45(id)")
+                        .replace("REFERENCES matter_event(id)", "REFERENCES matter_event_v45(id)")
+                    )
+                    cursor.execute("DROP TABLE IF EXISTS matter_event_v45")
+                    cursor.execute("DROP TABLE IF EXISTS matter_item_v45")
+                    cursor.execute(item_ddl)
+                    cursor.execute(event_ddl)
+                    cursor.execute(
+                        "INSERT INTO matter_item_v45 SELECT * FROM matter_item"
+                    )
+                    cursor.execute(
+                        "INSERT INTO matter_event_v45 SELECT * FROM matter_event"
+                    )
+                    cursor.execute("DROP TABLE matter_event")
+                    cursor.execute("DROP TABLE matter_item")
+                    cursor.execute("ALTER TABLE matter_item_v45 RENAME TO matter_item")
+                    cursor.execute("ALTER TABLE matter_event_v45 RENAME TO matter_event")
+
+                for ddl in MATTER_INDEX_DDLS:
+                    cursor.execute(ddl)
+
+                from src.matters.repository import MatterRepository
+
+                repository = MatterRepository(self.db_path)
+                matter_ids = [
+                    int(row[0]) for row in cursor.execute("SELECT id FROM matter")
+                ]
+                for matter_id in matter_ids:
+                    repository.refresh_search_projection(conn, matter_id)
+
+                # 只查本次 rebuild 的两张表——全库 foreign_key_check 会把无关表的
+                # 历史畸形（如老迁移测试用 CTAS 重建、丢了 PK 的 email_metadata 造成
+                # "foreign key mismatch"）算到 v45 头上，v45 只对自己动过的表负责。
+                violations = [
+                    *cursor.execute("PRAGMA foreign_key_check(matter_item)").fetchall(),
+                    *cursor.execute("PRAGMA foreign_key_check(matter_event)").fetchall(),
+                ]
+                if violations:
+                    raise SyncStoreMigrationError(
+                        f"v45 migration: foreign_key_check failed: {violations}"
+                    )
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(f"v45 migration failed: {e}") from e
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

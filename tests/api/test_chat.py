@@ -364,6 +364,10 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # stub 无该字段 → False（fail-safe 走 legacy 投影，真实 config 恒有字段）。
         # pydantic 默认值本身由 test_provider_routing.test_flag_default_on_after_cutover pin。
         "providerRegistryEnabled": False,
+        # Matters P1 — 事项工作台入口门控（MAILAGENT_MATTERS_ENABLED，默认 off 灰度中）；
+        # 同 providerRegistryEnabled 走 getattr 兜底：stub 无该字段 → False。
+        # （P1 commit a4c2ee1c 加进 /chat/config 时漏了本 pin，P2 session 补账。）
+        "mattersEnabled": False,
         # 08-01 PR4 — MCP 连接区门控（MAILAGENT_MCP_CONNECTORS，pydantic 默认 off 灰度中）；
         # 同 providerRegistryEnabled 走 getattr 兜底：stub 无该字段 → False。
         "connectorToolsEnabled": False,

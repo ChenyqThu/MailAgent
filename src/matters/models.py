@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from typing import Iterable, TypeAlias
+import uuid
 
 
 class MatterStatus(StrEnum):
@@ -154,6 +155,16 @@ MATTER_UPDATE_REVIEW_STATUSES = _values(MatterUpdateReviewStatus)
 MATTER_ACTOR_KINDS = _values(MatterActorKind)
 MATTER_RESOURCE_SUBSCRIPTION_STATES = _values(MatterResourceSubscriptionState)
 BUILTIN_MATTER_TYPES = ("客户交付", "商务", "售前", "问题", "内部", "产品")
+MATTER_SEARCH_FIELDS = (
+    "title",
+    "description",
+    "current_summary",
+    "status",
+    "items",
+    "stakeholders",
+    "notes",
+)
+MATTER_PERSON_NS = uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
 
 MAX_TAGS = 20
 MAX_TAG_LENGTH = 64
@@ -163,6 +174,13 @@ def format_public_id(seq: int) -> str:
     if seq < 1:
         raise ValueError("Matter sequence must be positive")
     return f"MAT-{seq:04d}"
+
+
+def person_key_for_email(email: str | None) -> str:
+    normalized = str(email or "").strip().lower()
+    if normalized:
+        return str(uuid.uuid5(MATTER_PERSON_NS, normalized))
+    return str(uuid.uuid4())
 
 
 def normalize_tags(tags: Iterable[str] | None) -> tuple[str, ...]:

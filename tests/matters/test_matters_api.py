@@ -88,6 +88,7 @@ def test_flag_off_returns_disabled_envelope_for_all_methods(client):
         ("get", "/api/matters", {}),
         ("post", "/api/matters", {"json": {"title": "x", "mutation": _mutation("x")}}),
         ("get", "/api/matters/MAT-0001", {}),
+        ("get", "/api/matters/links/by-resource?provider=mailagent&keys=email:1", {}),
     ):
         response = getattr(http, method)(path, **kwargs)
         assert response.status_code == 403
@@ -113,3 +114,61 @@ def test_version_conflict_error_shape(client):
     assert payload["data"] is None
     assert payload["error"]["code"] == "E_VERSION_CONFLICT"
     assert payload["error"]["hint"]
+
+
+def test_p2_resource_stakeholder_relation_lookup_and_search_api(client):
+    http, _ = client
+    first = http.post(
+        "/api/matters", json={"title": "Searchable Alpha", "mutation": _mutation("p2-first")}
+    ).json()["data"]
+    second = http.post(
+        "/api/matters", json={"title": "Target", "mutation": _mutation("p2-second")}
+    ).json()["data"]
+    public_id = first["matter"]["public_id"]
+
+    linked_response = http.post(
+        f"/api/matters/{public_id}/resources",
+        json={
+            "provider": "mailagent",
+            "external_key": "email:77",
+            "kind": "email",
+            "mutation": _mutation("p2-resource", first["version"]),
+        },
+    )
+    assert linked_response.status_code == 201
+    linked = linked_response.json()["data"]
+    resource_id = linked["resources"][0]["resource"]["id"]
+
+    lookup = http.get(
+        "/api/matters/links/by-resource?provider=mailagent&keys=email:77"
+    )
+    assert lookup.status_code == 200
+    assert lookup.json()["data"]["results"]["email:77"][0]["resource_id"] == resource_id
+
+    stakeholder = http.post(
+        f"/api/matters/{public_id}/stakeholders",
+        json={
+            "display_name": "Needle Person",
+            "email": "person@example.com",
+            "mutation": _mutation("p2-stakeholder", linked["version"]),
+        },
+    )
+    assert stakeholder.status_code == 201
+    stakeholder_data = stakeholder.json()["data"]
+
+    relation = http.post(
+        f"/api/matters/{public_id}/relations",
+        json={
+            "target_public_id": second["matter"]["public_id"],
+            "relation_type": "related_to",
+            "mutation": _mutation("p2-relation", stakeholder_data["version"]),
+        },
+    )
+    assert relation.status_code == 201
+    assert len(http.get(f"/api/matters/{public_id}/relations").json()["data"]["items"]) == 1
+
+    search = http.get("/api/matters?q=Needle")
+    assert search.status_code == 200
+    hit = search.json()["data"]["items"][0]
+    assert hit["public_id"] == public_id
+    assert "stakeholders" in hit["matched_fields"]

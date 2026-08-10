@@ -49,4 +49,6 @@ def test_v44_adds_matter_tables_and_is_idempotent(tmp_path):
 
     assert MATTER_TABLES <= _names(path, "table")
     assert MATTER_INDEXES <= _names(path, "index")
-    assert _version(path) == SyncStore.DB_VERSION == 44
+    # 版本终值跟 DB_VERSION 走（v45 起由 tests/matters/test_matter_v45_migration.py
+    # 另行 pin 当前版本号）；本测试只钉 v44 语义——matter 五表/索引可从 43 幂等重建。
+    assert _version(path) == SyncStore.DB_VERSION >= 44

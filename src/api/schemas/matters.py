@@ -27,8 +27,15 @@ class PermanentDeleteRequest(StrictModel):
     mutation: MutationEnvelope
 
 
+class MatterSourceResource(StrictModel):
+    provider: str = "mailagent"
+    kind: str = "email"
+    internal_id: int = Field(ge=1)
+    link_scope: str = Field(default="thread", pattern="^(thread|single)$")
+
+
 class MatterCreateRequest(StrictModel):
-    title: str = Field(min_length=1, max_length=500)
+    title: str | None = Field(default=None, max_length=500)
     description: str = ""
     matter_type: str | None = Field(default=None, max_length=128)
     tags: list[str] = Field(default_factory=list)
@@ -37,6 +44,7 @@ class MatterCreateRequest(StrictModel):
     priority: str = "p1"
     due_at: int | None = None
     waiting_context: dict[str, Any] | None = None
+    source_resource: MatterSourceResource | None = None
     mutation: MutationEnvelope
 
 
@@ -94,4 +102,73 @@ class MatterItemPatchRequest(StrictModel):
 class MatterNoteCreateRequest(StrictModel):
     title: str | None = Field(default=None, max_length=500)
     text: str | None = None
+    mutation: MutationEnvelope
+
+
+class MatterResourceCreateRequest(StrictModel):
+    provider: str | None = None
+    external_key: str | None = None
+    kind: str | None = None
+    canonical_url: str | None = None
+    title: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    access_policy: str = "allowed"
+    relation_type: str | None = None
+    pinned: bool = False
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    confirmed: bool = False
+    sub_state: str = "none"
+    source_resource: MatterSourceResource | None = None
+    mutation: MutationEnvelope
+
+
+class MatterResourcePatchRequest(StrictModel):
+    scope: str | None = None
+    access_policy: str | None = None
+    pinned: bool | None = None
+    relation_type: str | None = None
+    sub_state: str | None = None
+    confirmed: bool | None = None
+    mutation: MutationEnvelope
+
+
+class MatterStakeholderCreateRequest(StrictModel):
+    person_key: str | None = None
+    display_name: str | None = None
+    email: str | None = None
+    organization: str | None = None
+    role: str | None = None
+    relationship: str | None = None
+    is_waiting_on: bool = False
+    last_contact_at: int | None = None
+    source_resource_id: int | None = None
+    mutation: MutationEnvelope
+
+
+class MatterStakeholderPatchRequest(StrictModel):
+    display_name: str | None = None
+    email: str | None = None
+    organization: str | None = None
+    role: str | None = None
+    relationship: str | None = None
+    is_waiting_on: bool | None = None
+    last_contact_at: int | None = None
+    source_resource_id: int | None = None
+    mutation: MutationEnvelope
+
+
+class MatterRelationCreateRequest(StrictModel):
+    target_public_id: str
+    relation_type: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    provenance: dict[str, Any] = Field(default_factory=dict)
+    confirmed: bool = False
+    mutation: MutationEnvelope
+
+
+class MatterRelationPatchRequest(StrictModel):
+    relation_type: str | None = None
+    confidence: float | None = Field(default=None, ge=0, le=1)
+    confirmed: bool | None = None
     mutation: MutationEnvelope
