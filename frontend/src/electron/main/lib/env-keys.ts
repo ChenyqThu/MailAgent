@@ -202,10 +202,9 @@ export const MANAGED_ENV_KEYS = [
   'PROJECT_PROGRESS_FILTER_BU',
   'PROJECT_PROGRESS_SUBJECT_PATTERN',
   'PROJECT_PROGRESS_SENDER',
-  'OFFICE_CONVERT_ENABLED',
   // 附件 OCR (Lane 2 #9)。macOS Vision 本地识别图片/扫描件 PDF → 可搜索; 无网络出口。
-  // config.py Field 默认 true → EnvField defaultOn; IntegrationsTab 附件处理区
-  // OFFICE_CONVERT_ENABLED 旁。显式 false = 图片/扫描件回「不支持」现状。
+  // config.py Field 默认 true → EnvField defaultOn; IntegrationsTab 附件处理区。
+  // 显式 false = 图片/扫描件回「不支持」现状。
   'MAILAGENT_ATTACHMENT_OCR_ENABLED',
   'STATS_REPORT_URL',
   'STATS_REPORT_INTERVAL',

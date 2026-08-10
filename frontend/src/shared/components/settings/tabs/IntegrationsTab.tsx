@@ -364,16 +364,12 @@ export function IntegrationsTab(): React.ReactElement {
           ProjectProgressConfigDrawer（活字段 SYNC_ENABLED / DATABASE_ID / FILTER_BU
           搬进抽屉；AUTO_SYNC_ENABLED / SUBJECT_PATTERN / SENDER 是 v31 行迁移后的死
           配置 —— 活版本 = 抽屉的启用开关 / 发件人 / 标题正则，直接移除）。 */}
+      {/* 原「Office 附件转换」区。OFFICE_CONVERT_ENABLED 随 2026-08 Notion 派生退役
+          删除（Notion 侧沙盒电脑可直接读 office 文件），本区收窄为附件的文字识别。 */}
       <Section
-        title={t('settings.integrations.office.title')}
-        helper={t('settings.integrations.office.helper')}
+        title={t('settings.integrations.attachments.title')}
+        helper={t('settings.integrations.attachments.helper')}
       >
-        <EnvField
-          envKey="OFFICE_CONVERT_ENABLED"
-          control="toggle"
-          label={t('settings.integrations.office.enabled.label')}
-          helper={t('settings.integrations.office.enabled.helper')}
-        />
         {/* Lane 2 #9 — 附件 OCR。默认 ON (config.py 默认 true) → defaultOn 让未设时
             如实显示为开。「本地识别、不联网」对有隐私顾虑的用户是加分项, 写进 helper。 */}
         <EnvField

@@ -1476,25 +1476,16 @@ class NewWatcher:
         - 详见 docs/reference/architecture/architecture_v4_sqlite_ssot.md
 
         v4 子步骤:
-            1. **预跑 Office 转换**：把 docx→pdf / xlsx→csv 产物追加到 email_obj.attachments
-               这样 dual-write 时附件列表完整（含 derived 行），Notion sync 后续会 skip 重复转换
-            2. build_storage_payloads → SQLite commit
+            1. build_storage_payloads → SQLite commit
+
+        原先第 1 步是「预跑 Office 转换」（docx→pdf / xlsx→csv 产物追加进
+        email_obj.attachments，好让 dual-write 的附件列表含 derived 行）。2026-08 随
+        Notion 派生退役一并删除 —— 它不受 OFFICE_CONVERT_ENABLED 门控，是自动链路里
+        产生派生附件的第二条路。存量 derived 行不受影响（读路径未动）。
         """
         if not getattr(settings, "body_dual_write_enabled", True):
             return
         try:
-            # v4 step 1: 预跑 Office 转换（让 derived CSV/PDF 进 email_attachment 表）
-            try:
-                derived = self.notion_sync._convert_office_attachments(email_obj)
-                if derived:
-                    email_obj.attachments.extend(derived)
-                    logger.debug(
-                        f"[v4] pre-converted {len(derived)} Office derivatives for internal_id={internal_id}"
-                    )
-            except Exception as e:
-                logger.warning(f"[v4] pre-conversion failed for internal_id={internal_id}: {e}")
-
-            # v4 step 2: 构造 payload + 事务 commit
             body, attachments = build_storage_payloads(
                 email_obj,
                 internal_id,

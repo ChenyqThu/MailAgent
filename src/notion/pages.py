@@ -12,7 +12,6 @@ if TYPE_CHECKING:
     from src.repository import AttachmentRecord, EmailBodyRecord, EmailRepository
 
 from src.models import Email, Attachment
-from src.converter.office_converter import convert_office_attachment, is_convertible
 from src.mail.mailbox_semantics import is_sent_mailbox
 from src.notion._common import BEIJING_TZ, CreateEmailFromSqliteResult
 
@@ -86,70 +85,6 @@ class PageOps:
             logger.warning(f"Failed to upload {len(failed_filenames)} attachments: {failed_filenames}")
 
         return uploaded_attachments, failed_filenames
-
-    def _convert_office_attachments(self, email: Email) -> List[Attachment]:
-        """将 Office 附件转换为更通用的格式
-
-        docx/pptx → PDF, xlsx → CSV。转换后的文件作为额外附件追加，
-        原始文件仍保留上传。转换失败不影响正常同步流程。
-
-        Args:
-            email: Email 对象
-
-        Returns:
-            转换生成的新 Attachment 列表
-        """
-        converted_attachments = []
-
-        # v4: dual-write 路径会预转一次，second pass 跳过已转过的原始附件，避免重复
-        already_converted_origins = {
-            a.derived_from_filename for a in email.attachments
-            if a.derived_from_filename
-        }
-        convertible = [
-            a for a in email.attachments
-            if is_convertible(a.filename) and a.filename not in already_converted_origins
-        ]
-        if not convertible:
-            if already_converted_origins:
-                logger.debug(
-                    f"Office conversion skipped (pre-converted by dual-write): {already_converted_origins}"
-                )
-            return converted_attachments
-
-        logger.info(f"Found {len(convertible)} convertible Office attachments")
-
-        for attachment in convertible:
-            try:
-                # 转换后文件放在与原附件同目录（共享临时目录，统一清理）
-                output_dir = str(Path(attachment.path).parent)
-                converted_paths = convert_office_attachment(attachment.path, output_dir)
-
-                for converted_path in converted_paths:
-                    p = Path(converted_path)
-                    ext = p.suffix.lower()
-                    content_type = "application/pdf" if ext == ".pdf" else "text/csv"
-
-                    converted_attachments.append(Attachment(
-                        filename=p.name,
-                        content_type=content_type,
-                        size=p.stat().st_size,
-                        path=str(p),
-                        content_id=None,
-                        is_inline=False,
-                        # v4: 关联原 docx/xlsx/pptx，供 email_attachment.derived_from 写入
-                        derived_from_filename=attachment.filename,
-                        derived_format="pdf" if ext == ".pdf" else "csv",
-                    ))
-
-            except Exception as e:
-                logger.warning(f"Failed to convert {attachment.filename}, skipping: {e}")
-
-        if converted_attachments:
-            logger.info(f"Generated {len(converted_attachments)} converted attachments: "
-                        f"{[a.filename for a in converted_attachments]}")
-
-        return converted_attachments
 
     async def _upload_eml_file(self, email: Email) -> Optional[str]:
         """生成并上传 .eml 归档文件
@@ -706,8 +641,8 @@ class PageOps:
                 path=str(target),
                 content_id=att.content_id,
                 is_inline=att.is_inline,
-                # derived_from_filename 留空：v4 dual-write 阶段已转过，
-                # 不需要让 _convert_office_attachments 二次处理
+                # derived_from_filename 留空：自动派生已于 2026-08 退役，此处不再有
+                # 「让下游二次转换」的语义；derived_format 仍从存量行透传。
                 derived_from_filename=None,
                 derived_format=att.derived_format,
             ))
@@ -906,12 +841,11 @@ class PageOps:
                 logger.error(f"Failed to check if page exists, aborting to prevent duplicates: {e}")
                 raise
 
-            # 2. 转换 Office 附件（docx/pptx→PDF, xlsx→CSV），追加到附件列表
-            from src.config import config as app_config
-            if app_config.office_convert_enabled:
-                converted = self._convert_office_attachments(email)
-                if converted:
-                    email.attachments.extend(converted)
+            # 2.（已退役）Office 派生 —— 原先在此把 docx/pptx→PDF、xlsx→CSV 追加进
+            #    附件列表，受 OFFICE_CONVERT_ENABLED 门控。2026-08 退役：Notion 侧已有
+            #    沙盒电脑可直接处理 office 文件，派生失去意义；它也是自动链路对未打包进
+            #    .app 的系统级 LibreOffice 的最后一条依赖。历史派生附件不做清理。
+            #    序号有意留空，避免为一次删除重排下方全部步骤注释。
 
             # 3. 上传附件（使用提取的方法）
             uploaded_attachments, failed_attachments = await self._upload_attachments(email)

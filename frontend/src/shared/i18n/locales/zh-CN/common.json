@@ -3347,13 +3347,9 @@
       }
     },
     "integrations": {
-      "office": {
-        "title": "Office 附件转换",
-        "helper": "docx/pptx → PDF(LibreOffice), xlsx → CSV(pandas)",
-        "enabled": {
-          "label": "启用转换",
-          "helper": "依赖 LibreOffice + python-calamine"
-        }
+      "attachments": {
+        "title": "附件处理",
+        "helper": "让附件里的文字能被搜索到。全部在本机完成，不联网。"
       },
       "ocr": {
         "label": "图片与扫描件文字识别（OCR）",

@@ -330,9 +330,6 @@ class Config(BaseSettings):
     # E4 WP2: outbox 积压告警 — 行龄 ≥5min 仍 pending 的条目数超过该值触发 warning
     alert_outbox_backlog_threshold: int = Field(default=100, env="ALERT_OUTBOX_BACKLOG_THRESHOLD", description="outbox 积压告警阈值（行龄≥5min 的 pending 条数）")
 
-    # Office 文档转换配置
-    office_convert_enabled: bool = Field(default=True, env="OFFICE_CONVERT_ENABLED", description="是否启用 Office 附件转换（docx/pptx→PDF, xlsx→CSV）")
-
     # 防锁屏保活配置
     keep_alive_enabled: bool = Field(default=False, env="KEEP_ALIVE_ENABLED", description="是否启用防锁屏保活")
     keep_alive_dim: bool = Field(default=True, env="KEEP_ALIVE_DIM", description="保活时是否调低屏幕亮度")

@@ -114,8 +114,6 @@ class TestBackfillBody:
             patch("src.sync.backfill_builders.build_storage_payloads",
                   return_value=(MagicMock(body_format="html", markdown="x",
                                           html="<p>x</p>", has_inline_images=False), [])),
-            patch("src.notion.sync.NotionSync._convert_office_attachments",
-                  return_value=[]),
         ):
             result = _invoke(
                 cli_runner, "body", "--dry-run", "--limit", "5",
@@ -142,8 +140,6 @@ class TestBackfillBody:
             patch("src.sync.backfill_builders.build_storage_payloads",
                   return_value=(MagicMock(body_format="html", markdown="x",
                                           html="<p>x</p>", has_inline_images=False), [])),
-            patch("src.notion.sync.NotionSync._convert_office_attachments",
-                  return_value=[]),
         ):
             result = _invoke(
                 cli_runner, "body", "--dry-run",
@@ -223,8 +219,6 @@ class TestBackfillBody:
             patch("src.sync.backfill_builders.build_storage_payloads",
                   return_value=(MagicMock(body_format="html", markdown="x",
                                           html="<p>x</p>", has_inline_images=False), [])),
-            patch("src.notion.sync.NotionSync._convert_office_attachments",
-                  return_value=[]),
         ):
             result = _invoke(
                 cli_runner, "body",
@@ -259,8 +253,6 @@ class TestBackfillBody:
             patch("src.sync.backfill_builders.build_storage_payloads",
                   return_value=(MagicMock(body_format="html", markdown="x",
                                           html="<p>x</p>", has_inline_images=False), [])),
-            patch("src.notion.sync.NotionSync._convert_office_attachments",
-                  return_value=[]),
         ):
             result = _invoke(
                 cli_runner, "body",
@@ -301,8 +293,6 @@ class TestBackfillBody:
             patch("src.sync.backfill_builders.build_storage_payloads",
                   return_value=(MagicMock(body_format="html", markdown="x",
                                           html="<p>x</p>", has_inline_images=False), [])),
-            patch("src.notion.sync.NotionSync._convert_office_attachments",
-                  return_value=[]),
         ):
             result = _invoke(
                 cli_runner, "body",

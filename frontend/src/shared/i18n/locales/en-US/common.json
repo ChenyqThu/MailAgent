@@ -3347,13 +3347,9 @@
       }
     },
     "integrations": {
-      "office": {
-        "title": "Office attachment conversion",
-        "helper": "docx/pptx → PDF (LibreOffice); xlsx → CSV (pandas)",
-        "enabled": {
-          "label": "Enable conversion",
-          "helper": "Depends on LibreOffice + python-calamine"
-        }
+      "attachments": {
+        "title": "Attachment processing",
+        "helper": "Makes text inside attachments searchable. Everything runs on this Mac, no network involved."
       },
       "ocr": {
         "label": "Text recognition for images & scans (OCR)",

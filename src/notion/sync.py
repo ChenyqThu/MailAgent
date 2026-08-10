@@ -192,7 +192,6 @@ class NotionSync:
             "_build_image_map",
             "_build_children",
             "_handle_thread_relations",
-            "_convert_office_attachments",
         ):
             if name in self.__dict__:
                 setattr(self._pages, name, self.__dict__[name])
@@ -286,9 +285,6 @@ class NotionSync:
 
     async def _upload_attachments(self, email: Email):
         return await self._ensure_pages()._upload_attachments(email)
-
-    def _convert_office_attachments(self, email: Email) -> List[Attachment]:
-        return self._ensure_pages()._convert_office_attachments(email)
 
     async def _upload_eml_file(self, email: Email) -> Optional[str]:
         return await self._ensure_pages()._upload_eml_file(email)

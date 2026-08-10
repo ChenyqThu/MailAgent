@@ -258,34 +258,9 @@ def _backfill_one_body(
     email.mailbox = mailbox
     email.internal_id = iid
 
-    from src.converter.office_converter import is_convertible
-
-    expected_convertibles = [
-        att.filename for att in email.attachments if is_convertible(att.filename)
-    ]
-    try:
-        derived = notion_sync._convert_office_attachments(email)
-        if derived:
-            email.attachments.extend(derived)
-            derived_origins = {
-                item.derived_from_filename
-                for item in derived if item.derived_from_filename
-            }
-            missed = set(expected_convertibles) - derived_origins
-            if missed:
-                logger.warning(
-                    f"[{iid}] Office convert produced no derivative for: {missed} "
-                    f"(expected {len(expected_convertibles)}, got {len(derived_origins)})"
-                )
-        elif expected_convertibles:
-            logger.warning(
-                f"[{iid}] Office convert returned empty but "
-                f"{len(expected_convertibles)} convertible attachments expected: "
-                f"{expected_convertibles}"
-            )
-    except Exception as exc:  # noqa: BLE001 - conversion is a best-effort derivative
-        logger.warning(f"[{iid}] Office pre-convert raised (non-fatal): {exc}")
-
+    # 此处原有一段搭车的 Office 派生（把 docx→pdf / xlsx→csv 追加进 email.attachments
+    # 再一起落库）。2026-08 随 Notion 派生退役删除 —— 本函数的语义是「补正文」，派生
+    # 只是搭了个便车。需要显式补派生仍走 `mailagent backfill derivatives`（该命令保留）。
     body, attachments = build_storage_payloads(
         email,
         iid,
