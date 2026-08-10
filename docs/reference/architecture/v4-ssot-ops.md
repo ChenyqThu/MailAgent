@@ -83,7 +83,7 @@ for h in hits:
 
 **前端入口**：
 - CLI `mailagent attachment search '<query>' [--mailbox X --since Y --until Z --limit N] [--raw]` （默认 smart）
-- CLI `mailagent attachment extract --pending --include-missing [--requeue-unsupported] [--limit N --dry-run]` —— 触发抽取 pending 附件 + 一次性补 enqueue 历史 + 存量回填（见下）
+- CLI `mailagent attachment extract --pending --include-missing [--requeue-unsupported] [--requeue-extractor anydoc] [--limit N --dry-run]` —— 触发抽取 pending 附件 + 一次性补 enqueue 历史 + 存量回填（终态失败回填 / 换代回填，见下）
 - Webhook event `search_email_attachments`（自动从 Redis 消费）
 - Chat agent tool `email_search_attachments`（silent tier, category=read）
 
@@ -98,6 +98,7 @@ for h in hits:
 5. 失败 → `status='failed'` + 指数退避（1m / 5m / 15m / 1h / 2h）；超 5 次 → `next_retry_at=NULL` dead
 6. unsupported (zip / 无 soffice 时的 .doc/.ppt/.xls / 未知二进制) → `status='unsupported'` 不索引也不重试
 7. **存量回填**（extractor 覆盖面扩展后把历史终态行拨回重跑）：`mailagent attachment extract --requeue-unsupported [--dry-run]` —— 圈选 `status='unsupported' AND 扩展名 ∈ (OCR 图片集 ∪ 老格式集)` + `status='failed' AND 扩展名 = .pdf` → `UPDATE ... SET status='pending'`（清 retry/error），worker 用新 extractor 重跑。扩展名集单源 `attachment_text.py` 的 `OCR_IMAGE_EXTENSIONS`/`LEGACY_OFFICE_EXTENSIONS`；`enqueue_attachment_text_extraction` 的 `INSERT OR IGNORE` 幂等语义不动（已存在的 `unsupported` 行不会被 `--include-missing` 捕获，`--requeue-unsupported` 是唯一显式重置路径）
+   - **换代回填**（task 08-10 WP4，与上一条互补）：`mailagent attachment extract --requeue-extractor anydoc --pending [--limit N] [--dry-run]` —— 上一条捞的是**终态失败**的行（unsupported/failed），这条捞 `status='extracted'` 但用**旧 extractor** 抽的行（预设集 `anydoc` = `docx,pptx,xlsx,soffice_bridge,pypdf`，单源 `EmailRepository.ANYDOC_BACKFILL_EXTRACTORS`；也可直接传逗号分隔的 extractor 名）。🔴 **拨回 pending 不丢已有文本** —— 只重置调度字段，`text_content` 不动；新 extractor 万一失败，旧文本仍在库里、FTS 仍可搜，不会把「有旧文本」降级成「没有文本」。拨回量受 `--limit` 约束且**挑最旧的先拨**（`updated_at ASC`），所以反复跑同一条命令能稳定推进存量而不是每轮抓同一批。🔴 只在 `MAILAGENT_ANYDOC_ENABLED=true` 且 lane 已 dogfood 通过后跑（否则重跑会原样抽回旧 extractor，白做一轮）。`vision_ocr`/`pdf_ocr`/`plaintext` **有意不在预设集**（anydoc 不做 OCR；plaintext 直读已是最忠实产出）
 
 **Cap**: 单 attachment 文本 ≤ 256 KB（utf-8 字节）。超出 `truncated=True` 标记，FTS5 索引大小可控。
 

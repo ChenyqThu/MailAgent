@@ -1868,6 +1868,97 @@ class TestRequeueUnsupportedAttachmentTexts:
         assert res["total"] == 0
 
 
+class TestRequeueExtractorAttachmentTexts:
+    """task 08-10 WP4: 换代回填 —— 把旧 extractor 抽出的**已成功**行拨回重跑。
+
+    与上面那个方法互补：那个捞终态失败（unsupported/failed），这个捞
+    status='extracted' 但 extractor 是旧的。
+    """
+
+    def _seed(
+        self, repo: EmailRepository, fresh_db: Path, internal_id: int,
+        filename: str, extractor: str, *, text: str = "old text", status: str = "extracted",
+    ) -> int:
+        _insert_metadata_full(fresh_db, internal_id, mailbox="收件箱")
+        id_map = repo.commit_email_with_body(
+            internal_id,
+            BodyPayload(html="", markdown="body", body_format="html"),
+            [AttachmentPayload(
+                filename=filename, content=b"x",
+                content_type="application/octet-stream", is_inline=False,
+            )],
+        )
+        att_id = id_map[filename]
+        repo.commit_attachment_text(att_id, text=text, extractor=extractor, status=status)
+        return att_id
+
+    def test_circles_only_named_extractors_in_extracted_state(
+        self, repo: EmailRepository, fresh_db: Path
+    ):
+        docx = self._seed(repo, fresh_db, 940, "a.docx", "docx")
+        xlsx = self._seed(repo, fresh_db, 941, "b.xlsx", "xlsx")
+        # 不该被圈：未点名的 extractor / 已是 anydoc / 非 extracted 状态
+        ocr = self._seed(repo, fresh_db, 942, "c.png", "vision_ocr")
+        already = self._seed(repo, fresh_db, 943, "d.docx", "anydoc")
+        unsup = self._seed(repo, fresh_db, 944, "e.zip", "none", text="", status="unsupported")
+
+        res = repo.requeue_extractor_attachment_texts(["docx", "xlsx"], dry_run=False)
+        assert res["total"] == 2
+        assert res["by_extractor"] == {"docx": 1, "xlsx": 1}
+        assert repo.get_attachment_text(docx).status == "pending"
+        assert repo.get_attachment_text(xlsx).status == "pending"
+        assert repo.get_attachment_text(ocr).status == "extracted"
+        assert repo.get_attachment_text(already).status == "extracted"
+        assert repo.get_attachment_text(unsup).status == "unsupported"
+
+    def test_dry_run_writes_nothing(self, repo: EmailRepository, fresh_db: Path):
+        att = self._seed(repo, fresh_db, 945, "a.docx", "docx")
+        res = repo.requeue_extractor_attachment_texts(["docx"], dry_run=True)
+        assert res["total"] == 1 and res["requeued"] == 0 and res["dry_run"] is True
+        assert repo.get_attachment_text(att).status == "extracted"
+
+    def test_requeue_preserves_existing_text(self, repo: EmailRepository, fresh_db: Path):
+        """🔴 拨回 pending 绝不能丢已有文本 —— 否则新 extractor 失败就等于把
+        「有旧文本」降级成「没有文本」，比不回填还糟。"""
+        att = self._seed(repo, fresh_db, 946, "a.docx", "docx", text="重要合同正文")
+        repo.requeue_extractor_attachment_texts(["docx"], dry_run=False)
+        row = repo.get_attachment_text(att)
+        assert row.status == "pending"
+        assert row.text_content == "重要合同正文"
+
+    def test_limit_batches_oldest_first(self, repo: EmailRepository, fresh_db: Path):
+        """分批回填要能稳定推进，而不是每轮都抓同一批。"""
+        import sqlite3 as _sq
+
+        ids = [self._seed(repo, fresh_db, 950 + i, f"f{i}.docx", "docx") for i in range(3)]
+        conn = _sq.connect(str(fresh_db))
+        for offset, att in enumerate(ids):  # 人为拉开 updated_at，ids[0] 最旧
+            conn.execute(
+                "UPDATE email_attachment_text SET updated_at = ? WHERE attachment_id = ?",
+                (1000.0 + offset, att),
+            )
+        conn.commit()
+        conn.close()
+
+        res = repo.requeue_extractor_attachment_texts(["docx"], dry_run=False, limit=2)
+        assert res["total"] == 3 and res["requeued"] == 2
+        assert repo.get_attachment_text(ids[0]).status == "pending"
+        assert repo.get_attachment_text(ids[1]).status == "pending"
+        assert repo.get_attachment_text(ids[2]).status == "extracted"
+
+    def test_empty_extractor_list_is_noop(self, repo: EmailRepository, fresh_db: Path):
+        att = self._seed(repo, fresh_db, 960, "a.docx", "docx")
+        res = repo.requeue_extractor_attachment_texts([], dry_run=False)
+        assert res["total"] == 0 and res["requeued"] == 0
+        assert repo.get_attachment_text(att).status == "extracted"
+
+    def test_backfill_preset_excludes_ocr_and_plaintext(self):
+        """OCR 两条 anydoc 根本不做，plaintext 直读已是最忠实产出 —— 都不该进回填集。"""
+        preset = set(EmailRepository.ANYDOC_BACKFILL_EXTRACTORS)
+        assert {"docx", "pptx", "xlsx", "soffice_bridge", "pypdf"} == preset
+        assert not preset & {"vision_ocr", "pdf_ocr", "plaintext", "anydoc", "none"}
+
+
 class TestSearchAttachmentTexts:
     """测 FTS5 + smart wrapper attachment search."""
 

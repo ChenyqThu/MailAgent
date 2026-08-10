@@ -468,6 +468,12 @@ def attachment_extract(
         help="把历史 unsupported (OCR 图片 ∪ 老格式) + failed pdf 行拨回 pending 重跑 "
              "(新 extractor 覆盖面扩展后回填存量; 可与 --pending 组合先 requeue 再处理)",
     ),
+    requeue_extractor: Optional[str] = typer.Option(
+        None, "--requeue-extractor",
+        help="把指定 extractor 抽出的**已成功**行拨回 pending 重跑（逗号分隔；"
+             "'anydoc' = 预设集 docx,pptx,xlsx,soffice_bridge,pypdf）。"
+             "换 extractor 后回填存量用；旧文本保留，重跑失败不会退化成「没有文本」",
+    ),
     limit: int = typer.Option(50, "--limit", help="最多处理多少 attachment"),
     dry_run: bool = typer.Option(False, "--dry-run"),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
@@ -491,11 +497,13 @@ def attachment_extract(
     cli: "CliContext" = ctx.obj
     _apply_local_output(ctx, output)
 
-    if not pending and not include_missing and not requeue_unsupported:
+    if not pending and not include_missing and not requeue_unsupported and not requeue_extractor:
         raise emit_cli_error(cli, CliInvalidArgError(
-            "must pass at least one of --pending / --include-missing / --requeue-unsupported",
+            "must pass at least one of --pending / --include-missing / "
+            "--requeue-unsupported / --requeue-extractor",
             hint="--pending 处理已 enqueue 的; --include-missing 扫历史补 enqueue; "
-                 "--requeue-unsupported 把 unsupported/failed 存量拨回 pending 重跑",
+                 "--requeue-unsupported 把 unsupported/failed 存量拨回 pending 重跑; "
+                 "--requeue-extractor 把某个 extractor 抽出的已成功行拨回重跑（换代回填）",
         ))
 
     if limit <= 0 or limit > 1000:
@@ -515,6 +523,18 @@ def attachment_extract(
     requeued = None
     if requeue_unsupported:
         requeued = repo.requeue_unsupported_attachment_texts(dry_run=dry_run)
+
+    # Step 0b: requeue-extractor — 换代回填 (task 08-10 WP4)。与上面互补：那个捞终态
+    # 失败的行, 这个捞 status='extracted' 但用旧 extractor 抽的行。拨回量受 --limit
+    # 约束并挑最旧的先拨, 所以「反复跑同一条命令」能稳定推进 1384 条存量而不是每轮抓同一批。
+    requeued_extractor = None
+    if requeue_extractor:
+        names = [s.strip() for s in requeue_extractor.split(",") if s.strip()]
+        if names == ["anydoc"]:
+            names = list(repo.ANYDOC_BACKFILL_EXTRACTORS)
+        requeued_extractor = repo.requeue_extractor_attachment_texts(
+            names, dry_run=dry_run, limit=limit,
+        )
 
     # Step 1: include-missing — 扫 email_attachment 没对应 _text 行的, 补 enqueue
     enqueued_missing = 0
@@ -545,6 +565,7 @@ def attachment_extract(
 
     data = {
         "requeued": requeued,
+        "requeued_extractor": requeued_extractor,
         "enqueued_missing": enqueued_missing,
         "processed": batch.processed,
         "extracted": batch.extracted,

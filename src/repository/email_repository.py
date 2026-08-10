@@ -3932,6 +3932,86 @@ class EmailRepository:
         finally:
             conn.close()
 
+    #: anydoc 回填圈选的旧 extractor 集合（task 08-10 WP4）。
+    #:
+    #: 这些是**已成功抽取**的行 —— 与上面那个方法圈的 unsupported/failed 正好相反。
+    #: `pdf_ocr` / `vision_ocr` / `plaintext` **有意不在集合里**：OCR 两条 anydoc 根本
+    #: 不做（它不做 OCR），plaintext 直读已是最忠实产出。`pypdf` 在集合里是为了 owner
+    #: 真开 pdf lane 后能回填，默认 LANES 不含 pdf 时这些行会原样抽回 pypdf、无副作用。
+    ANYDOC_BACKFILL_EXTRACTORS = ('docx', 'pptx', 'xlsx', 'soffice_bridge', 'pypdf')
+
+    def requeue_extractor_attachment_texts(
+        self, extractors: Sequence[str], *, dry_run: bool = False, limit: Optional[int] = None
+    ) -> dict:
+        """把指定 extractor 抽出来的**已成功**行拨回 pending，让新 extractor 重跑。
+
+        与 `requeue_unsupported_attachment_texts` 的区别：那个捞的是终态失败的行
+        （unsupported / failed），这个捞的是 `status='extracted'` 但用**旧 extractor**
+        抽的行 —— 换代（task 08-10 anydoc）之后回填存量用。
+
+        🔴 **拨回 pending 不会丢已有文本**：`text_content` 一列不动，只重置调度字段。
+        万一新 extractor 反而失败，worker 会走 `mark_attachment_text_failure` 的退避，
+        旧文本仍在库里、FTS 仍可搜 —— 「有旧文本」不会被降级成「没有文本」。
+
+        Args:
+            extractors: 圈选的 extractor 名（见 `ANYDOC_BACKFILL_EXTRACTORS`）。空 → no-op。
+            dry_run: True → 只数不写。
+            limit: 每次最多拨回多少行（分批回填；None = 不限）。挑最旧的先拨
+                （`updated_at ASC`），这样反复跑能稳定推进而不是每次都抓同一批。
+
+        Returns:
+            dict: ``{by_extractor: {name: count}, total, requeued, dry_run}``。
+            `total` 是符合条件的总行数，`requeued` 是本次实际拨回的（受 limit 约束）。
+        """
+        names = [e for e in dict.fromkeys(extractors) if e]
+        if not names:
+            return {"by_extractor": {}, "total": 0, "requeued": 0, "dry_run": dry_run}
+
+        placeholders = ",".join("?" for _ in names)
+        conn = self._connect()
+        now = time.time()
+        try:
+            by_extractor = {
+                str(row[0]): int(row[1])
+                for row in conn.execute(
+                    f"""SELECT extractor, COUNT(*) FROM email_attachment_text
+                         WHERE status = 'extracted' AND extractor IN ({placeholders})
+                         GROUP BY extractor""",
+                    names,
+                ).fetchall()
+            }
+            total = sum(by_extractor.values())
+            requeued = total if limit is None else min(total, max(0, limit))
+            result = {
+                "by_extractor": by_extractor,
+                "total": total,
+                "requeued": 0 if dry_run else requeued,
+                "dry_run": dry_run,
+            }
+            if dry_run or requeued == 0:
+                return result
+
+            limit_clause = "" if limit is None else " ORDER BY updated_at ASC LIMIT ?"
+            params: list[object] = [now, *names]
+            if limit is not None:
+                params.append(requeued)
+            conn.execute(
+                f"""UPDATE email_attachment_text
+                       SET status = 'pending', retry_count = 0,
+                           next_retry_at = NULL, error_message = NULL,
+                           updated_at = ?
+                     WHERE attachment_id IN (
+                       SELECT attachment_id FROM email_attachment_text
+                        WHERE status = 'extracted' AND extractor IN ({placeholders})
+                        {limit_clause}
+                     )""",
+                params,
+            )
+            conn.commit()
+            return result
+        finally:
+            conn.close()
+
     # 老 email_attachment_fts (unicode61) SELECT 骨架 —— raw / flag-off / v38 缺表降级共用
     # (与批次3 迁移前 search_attachment_texts 逐字节等价, 只是 MATCH 串来源参数化)。
     _ATTACHMENT_UNICODE61_SELECT = """
