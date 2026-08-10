@@ -23,6 +23,21 @@ from src.converter.attachment_text import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _native_extractors_only(monkeypatch):
+    """本文件测的是**原生 extractor**（pypdf / python-docx / python-pptx / calamine /
+    soffice 桥），故整个模块显式关掉 anydoc lane。
+
+    🔴 anydoc 于 2026-08-10 cutover 成默认开（task 08-10）。当时这里 5 个用例转红，
+    因为 `extract_text()` 开始返回 extractor='anydoc'。**修法是关 flag 而不是把断言
+    改成 'anydoc'** —— 原生 extractor 并没有下岗，它们是 anydoc 失败/不支持时的回落
+    目标，必须保持独立覆盖。anydoc lane 自己的覆盖在 test_anydoc_extract.py。
+    """
+    from src.converter import anydoc_extract
+
+    monkeypatch.setattr(anydoc_extract, 'anydoc_enabled', lambda: False)
+
+
 class TestDispatch:
     def test_missing_file(self, tmp_path: Path):
         r = extract_text(tmp_path / "nope.pdf")

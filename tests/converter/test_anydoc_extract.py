@@ -94,10 +94,15 @@ class TestLanesConfigParsing:
         assert LANE_PDF not in default
         assert LANE_OFFICE in default and LANE_LEGACY in default
 
-    def test_flag_ships_off(self):
+    def test_flag_ships_on(self):
+        """2026-08-10 owner 拍板 cutover：全量直切，不进 Labs（Labs 只收灰度）。
+
+        有意偏离本仓「新功能 ship-off」惯例——原生链路在 docx 上会丢字，off 等于
+        bug 继续存在；且失败恒回落原生 extractor，最坏是「没变好」不是「变坏」。
+        """
         from src.config import Config
 
-        assert Config.model_fields['mailagent_anydoc_enabled'].default is False
+        assert Config.model_fields['mailagent_anydoc_enabled'].default is True
 
 
 class TestFlagOffEquivalence:

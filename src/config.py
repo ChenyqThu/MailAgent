@@ -130,11 +130,15 @@ class Config(BaseSettings):
     # 纯本地 Rust 解析器（`firecrawl-anydoc`，import 名 `anydoc`），零网络零 key。
     # 收的是实测缺陷：python-docx 的 paragraph.text 丢 hyperlink 内的 run（真丢字）、
     # docx/xlsx 表格缺 |---| 分隔行（不是合法 GFM）、老 .doc 依赖未打包的 LibreOffice。
-    # 默认 false = extract_text() 走原实现、字节级等价（有测试断言）。
+    # **默认开（2026-08-10 owner 拍板 cutover，全量用户直切）**；显式 false 应急回退 =
+    # extract_text() 走原生 extractor、字节级等价（有测试断言）。
+    # 有意偏离本仓「新功能 ship-off 灰度」惯例的理由：原生链路在 docx 上**会丢字**
+    # （python-docx 的 paragraph.text 不含超链接内的 run），off 等于 bug 继续存在；
+    # 且任何失败都自动回落原生 extractor，最坏情况是「没变好」而不是「变坏」。
     # 详见 src/converter/anydoc_extract.py 模块 docstring。
     mailagent_anydoc_enabled: bool = Field(
-        default=False, env="MAILAGENT_ANYDOC_ENABLED",
-        description="是否用 anydoc 提取文档附件文本（docx/pptx/xlsx/老 .doc → GFM markdown）。默认关；显式 true 启用，失败自动回落原生 extractor。",
+        default=True, env="MAILAGENT_ANYDOC_ENABLED",
+        description="是否用 anydoc 提取文档附件文本（docx/pptx/xlsx/老 .doc → GFM markdown）。默认开；显式 false 应急回退到原生 extractor。失败自动回落。",
     )
     # 🔴 `pdf` 有意不在默认值里：25 份真实 PDF 实测 20 份与 pypdf 持平、3 份回归，其中
     # 「伪粗体重复抽取」既不抛异常也不返回空 ⇒ 无判据可拦，会静默把垃圾写进 FTS 与 AI
