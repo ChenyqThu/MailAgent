@@ -63,3 +63,7 @@ export { RadioIcon } from './animated/radio'
 
 // 第五批（Settings Labs）：lucide FlaskConical 静止态 + IconShell tween 微动效。
 export { FlaskConicalIcon } from './animated/flask-conical'
+
+// 第六批（用户点名）：邮件工具栏「在 Notion 打开」从 AtomIcon（与"跟进 Agent"撞图）
+// 换成 box —— 描边绘制型动画。
+export { BoxIcon } from './animated/box'

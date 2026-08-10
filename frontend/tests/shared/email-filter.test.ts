@@ -99,6 +99,32 @@ describe('二值筛选轴', () => {
     expect(axesOf(useEmailFilter.getState())).toEqual(NO_FILTER_AXES)
     expect(useEmailFilter.getState().customMailboxPath).toEqual(['A', 'ProjectX'])
   })
+
+  test('focusUnread 切视图并只留 unread —— 单次 set，其余轴归零', () => {
+    const s = useEmailFilter.getState()
+    s.toggleBool('failed')
+    s.toggleBool('hasAttach')
+    s.toggleFlagMark('flagged')
+    s.setCustomMailbox('ProjectX', ['ProjectX'])
+
+    useEmailFilter.getState().focusUnread('inbox')
+
+    const next = useEmailFilter.getState()
+    expect(axesOf(next)).toEqual({ ...NO_FILTER_AXES, unread: true })
+    expect(next.view).toBe('inbox')
+    // 自定义文件夹必须让位，否则列表仍钉在 ProjectX 上、收件箱的未读一封也看不到。
+    expect(next.customMailbox).toBeNull()
+    expect(next.customMailboxPath).toEqual([])
+  })
+
+  test('🔴 focusUnread 不能拆成 setView + toggleBool —— setView 会把 unread 清掉', () => {
+    useEmailFilter.getState().setView('inbox')
+    useEmailFilter.getState().toggleBool('unread')
+    expect(useEmailFilter.getState().unread).toBe(true)
+    // 顺序反过来（先开轴再切视图）就是 focusUnread 存在的理由：
+    useEmailFilter.getState().setView('inbox')
+    expect(useEmailFilter.getState().unread).toBe(false)
+  })
 })
 
 describe('hasActiveFilter', () => {

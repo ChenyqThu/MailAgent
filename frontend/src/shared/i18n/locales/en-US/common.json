@@ -681,6 +681,7 @@
     "drafts": "Drafts",
     "flagged": "Flagged",
     "allMail": "All mail",
+    "showUnreadOnly": "Show unread only",
     "aiSessions": "AI sessions",
     "agentView": "MailAgent",
     "connectors": "Connectors",

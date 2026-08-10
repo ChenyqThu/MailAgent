@@ -31,6 +31,7 @@ import {
   AnimatedIconActiveProvider,
   ArchiveIcon,
   AtomIcon,
+  BoxIcon,
   CheckCheckIcon,
   ChevronDownIcon,
   ChevronUpIcon,
@@ -932,7 +933,7 @@ export function EmailToolbar({
           "更多"无菜单内容 — 等有真实次要操作时再以溢出菜单引入。) */}
       <div className="ml-auto flex items-center gap-1">
         <IconOnlyBtn
-          icon={<AtomIcon size={13} strokeWidth={2} />}
+          icon={<BoxIcon size={13} strokeWidth={2} />}
           label={t('toolbar.openNotion')}
           onClick={openNotion}
         />

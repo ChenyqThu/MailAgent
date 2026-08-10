@@ -526,9 +526,19 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
   // measures itself; once `measure()` lands the height jumps to the
   // real value.
   const [height, setHeight] = useState<number>(400)
-  // Track whether the iframe document is ready so the translations-only
-  // effect can run inject without waiting for srcDoc to change.
-  const [docReady, setDocReady] = useState(false)
+  // iframe 文档「换代计数」—— 每次 setupObservers() 成功接管一份文档就 +1。
+  //
+  // 🔴 为什么不是 boolean（原 docReady 的真 bug）：切邮件时 srcDoc 变 → 文档生命周期
+  // effect 的 cleanup `setDocReady(false)` 与新一轮 `setupObservers()` 里的
+  // `setDocReady(true)` 落在**同一个 React 批次**里（`:643` 的 readyState==='complete'
+  // 分支在刚设完 srcDoc 时读到的往往还是上一封的 contentDocument，于是同步就跑了），
+  // false→true 净变化为零 ⇒ 不产生重渲染 ⇒ 下面的注入 effect 收不到「文档换代了」这个
+  // 信号。它先前那次注入打在旧/半加载文档上，会被 iframe 真正的 `load` 冲掉，而 load
+  // 之后再没有任何依赖变化能让它重跑 —— 表现为「翻译按钮亮着但正文没译文，手动关一次
+  // 再开就好了」（toggle 让 translations 走 segments→null→segments，依赖真的变了）。
+  //
+  // 单调递增的计数不会被批处理吞掉：无论中间经过多少次 false/true，计数一定变。
+  const [docGeneration, setDocGeneration] = useState(0)
 
   useEffect(() => {
     const iframe = iframeRef.current
@@ -633,7 +643,9 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
         })
       })
       measure()
-      setDocReady(true)
+      // load 与 readyState 两路都可能走到这里（同一份文档被接管两次）→ 计数 +2 →
+      // 注入 effect 跑两次。幂等无害：injectTranslations 首行就是 clear。
+      setDocGeneration((g) => g + 1)
     }
 
     function onLoad(): void {
@@ -648,7 +660,7 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
       iframe.removeEventListener('load', onLoad)
       ro?.disconnect()
       clickDoc?.removeEventListener('click', onDocClick, true)
-      setDocReady(false)
+      // 不复位 docGeneration —— 计数只增不减正是它能穿透 React 批处理的原因（见其声明处）。
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional: 此 effect 是 iframe 文档生命周期, 只能跟 srcDoc; onImageClick 列入会让正文 iframe 整个重挂。
   }, [srcDoc])
@@ -665,7 +677,8 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
   // 视觉高度缩 — 用户验证 "切回原文底部留大片空白"。imperative 写 DOM 在当前
   // 帧立即生效, 不依赖 React 调度 / 不依赖任何 observer fire 时机。
   useEffect(() => {
-    if (!docReady) return
+    // 0 = 还没有任何一份文档被接管过（iframe 未 load）。
+    if (docGeneration === 0) return
     const iframe = iframeRef.current
     const doc = iframe?.contentDocument
     if (!iframe || !doc?.body) return
@@ -687,7 +700,9 @@ function BodyIframe({ srcDoc, translations, onImageClick }: BodyIframeProps): Re
     const next = Math.max(120, Math.min(Math.round(doc.body.scrollHeight), 80000))
     iframe.style.height = `${next}px`
     setHeight(next)
-  }, [translations, docReady, srcDoc])
+    // srcDoc 已不在 deps：它变化必然导致文档换代 → docGeneration +1 → 本 effect 重跑。
+    // 留着只会让 effect 在新文档尚未 load 时对旧文档多跑一次（无害但无意义）。
+  }, [translations, docGeneration])
 
   return (
     <iframe

@@ -49,10 +49,7 @@ import { useNavCollapsed } from '@shared/state/nav-shell'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { openNewCompose } from '@shared/state/compose-new'
 import { deriveAccount } from '@shared/lib/account'
-import {
-  useAgentUnreadCount,
-  useSessionProvenanceEnabled
-} from '@shared/components/agents/hooks'
+import { useAgentUnreadCount, useSessionProvenanceEnabled } from '@shared/components/agents/hooks'
 import { useMattersEnabled } from '@shared/components/matters/hooks'
 
 import { AccountSwitcherPopover } from './AccountSwitcherPopover'
@@ -193,15 +190,37 @@ function NavRow({
  *  unread-tracking. */
 function CountRight({
   count,
-  selected
+  selected,
+  onClick,
+  clickHint
 }: {
   count: number
   selected: boolean
+  /** 传了才可点 —— 只有「未读」语义的徽标接（收件箱）。草稿总数 / 旗标数不接：
+   *  它们不是未读计数，点了筛未读只会给出一个语义不符的空列表。
+   *  🔴 有意不加 tabIndex：NavRow 整行已是 <button>，往里塞一个进 tab 序的焦点点
+   *  会让键盘用户每行多按一次 Tab。键盘等价路径 = 列表头筛选菜单里既有的「未读」轴。 */
+  onClick?: () => void
+  clickHint?: string
 }): React.ReactElement | null {
   if (count <= 0) return null
+  const interactive = onClick
+    ? {
+        role: 'button' as const,
+        title: clickHint,
+        // stopPropagation：不让点击冒泡到 NavRow 的 onClick —— 那个会 setView()
+        // 把 unread 轴清掉（见 email-filter.ts focusUnread 的注释）。
+        onClick: (e: React.MouseEvent): void => {
+          e.stopPropagation()
+          onClick()
+        }
+      }
+    : {}
+  const clickable = onClick ? 'cursor-pointer' : undefined
   if (selected) {
     return (
       <span
+        {...interactive}
         className={cn(
           // 收紧选中态 count pill — 旧 px-1.5 py-0.5 text-micro rounded 视觉偏大
           // (用户反馈)。压到 text-[10px] + px-1 py-px + rounded-[3px], 更贴合
@@ -209,7 +228,8 @@ function CountRight({
           // 主题 v2 — 配色走 .acc-pill 配方 (accent/.16 底 + accent/.32 描边
           // + 内顶 1px 白光, 亮色字转 accent-dim), 几何仍由上行 utility 控制。
           'text-[10px] leading-none font-mono tabular-nums px-1 py-px rounded-[3px]',
-          'acc-pill'
+          'acc-pill',
+          clickable
         )}
       >
         {count}
@@ -217,7 +237,14 @@ function CountRight({
     )
   }
   return (
-    <span className="text-meta font-mono text-ink-fg-2 tabular-nums">
+    <span
+      {...interactive}
+      className={cn(
+        'text-meta font-mono text-ink-fg-2 tabular-nums transition-colors duration-fast',
+        clickable,
+        onClick && 'hover:text-ink-fg'
+      )}
+    >
       {count.toLocaleString('en-US')}
     </span>
   )
@@ -253,6 +280,7 @@ export function Sidebar(): React.ReactElement {
   const agentUnreadTotal = useAgentUnreadCount(sessionProvenanceEnabled).total
   const view = useEmailFilter((s) => s.view)
   const setView = useEmailFilter((s) => s.setView)
+  const focusUnread = useEmailFilter((s) => s.focusUnread)
   // 多文件夹同步 (P3) — 自定义文件夹激活时内建 MAILBOXES 行全不高亮 (互斥)。
   const customMailbox = useEmailFilter((s) => s.customMailbox)
   const setActiveMailbox = useMailbox((s) => s.setActive)
@@ -321,6 +349,16 @@ export function Sidebar(): React.ReactElement {
   // and outside the anchor, so the popover's own handler closes it.
   const [accountOpen, setAccountOpen] = useState(false)
   const accountButtonRef = useRef<HTMLButtonElement>(null)
+
+  /** 未读徽标点击 —— 切进该 view 并只看未读。收的是「徽标常亮 N 但列表里翻不到那几封」
+   *  的可发现性缺口（实测一封 2026-05 的老未读因 davmail folderSizeLimit 窗口外、
+   *  入向已读回收够不着，徽标永久挂 1）。 */
+  const handleUnreadBadgeClick = (next: EmailView): void => {
+    focusUnread(next)
+    const nextMailbox = mailboxForView(next)
+    if (nextMailbox) setActiveMailbox(nextMailbox)
+    void navigate({ to: '/', search: { view: next } })
+  }
 
   const handleViewClick = (next: EmailView): void => {
     setView(next)
@@ -470,7 +508,12 @@ export function Sidebar(): React.ReactElement {
             onClick={() => handleViewClick('inbox')}
             right={
               inboxUnread > 0 ? (
-                <CountRight count={inboxUnread} selected={selectedView === 'inbox'} />
+                <CountRight
+                  count={inboxUnread}
+                  selected={selectedView === 'inbox'}
+                  onClick={() => handleUnreadBadgeClick('inbox')}
+                  clickHint={t('nav.showUnreadOnly')}
+                />
               ) : undefined
             }
             collapsedBadge={inboxUnread}
@@ -560,7 +603,10 @@ export function Sidebar(): React.ReactElement {
             selected={onAgents}
             right={
               agentUnreadTotal > 0 ? (
-                <span className="h-2 w-2 rounded-full bg-[rgb(var(--c-accent))]" aria-label={t('agents.unread')} />
+                <span
+                  className="h-2 w-2 rounded-full bg-[rgb(var(--c-accent))]"
+                  aria-label={t('agents.unread')}
+                />
               ) : undefined
             }
             collapsedBadge={agentUnreadTotal}

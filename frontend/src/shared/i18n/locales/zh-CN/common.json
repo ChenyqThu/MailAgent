@@ -681,6 +681,7 @@
     "drafts": "草稿箱",
     "flagged": "已标旗",
     "allMail": "所有邮件",
+    "showUnreadOnly": "只看未读",
     "aiSessions": "AI 会话历史",
     "agentView": "MailAgent",
     "connectors": "Connectors",
