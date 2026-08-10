@@ -3932,13 +3932,40 @@ class EmailRepository:
         finally:
             conn.close()
 
-    #: anydoc 回填圈选的旧 extractor 集合（task 08-10 WP4）。
+    #: anydoc 回填圈选的旧 extractor **全集**（task 08-10 WP4），按 lane 分组。
     #:
     #: 这些是**已成功抽取**的行 —— 与上面那个方法圈的 unsupported/failed 正好相反。
-    #: `pdf_ocr` / `vision_ocr` / `plaintext` **有意不在集合里**：OCR 两条 anydoc 根本
-    #: 不做（它不做 OCR），plaintext 直读已是最忠实产出。`pypdf` 在集合里是为了 owner
-    #: 真开 pdf lane 后能回填，默认 LANES 不含 pdf 时这些行会原样抽回 pypdf、无副作用。
-    ANYDOC_BACKFILL_EXTRACTORS = ('docx', 'pptx', 'xlsx', 'soffice_bridge', 'pypdf')
+    #: `pdf_ocr` / `vision_ocr` / `plaintext` **有意不在任何组里**：OCR 两条 anydoc 根本
+    #: 不做（它不做 OCR），plaintext 直读已是最忠实产出。
+    ANYDOC_BACKFILL_BY_LANE = {
+        'office': ('docx', 'pptx', 'xlsx'),
+        'legacy': ('soffice_bridge',),
+        'pdf': ('pypdf',),
+    }
+
+    #: 全集（跨全部 lane）。**回填时不要直接用它** —— 用 `anydoc_backfill_extractors()`，
+    #: 否则会把 lane 没开的行也拨回 pending、再原样抽回旧 extractor，白跑一轮。
+    ANYDOC_BACKFILL_EXTRACTORS = tuple(
+        e for group in ANYDOC_BACKFILL_BY_LANE.values() for e in group
+    )
+
+    @staticmethod
+    def anydoc_backfill_extractors() -> tuple:
+        """当前**启用的 lane** 对应的待回填 extractor 集合。
+
+        🔴 跟随 lane 而不是用全集：pdf lane 默认关，若把 572 条 `pypdf` 行一起拨回
+        pending，worker 会原样再用 pypdf 抽一遍 —— 纯浪费，还把真正该回填的行挤到后面。
+        owner 哪天开了 pdf lane，同一条命令会自动带上它们。
+        """
+        from src.converter import anydoc_extract
+
+        lanes = anydoc_extract.enabled_lanes()
+        return tuple(
+            e
+            for lane, group in EmailRepository.ANYDOC_BACKFILL_BY_LANE.items()
+            if lane in lanes
+            for e in group
+        )
 
     def requeue_extractor_attachment_texts(
         self, extractors: Sequence[str], *, dry_run: bool = False, limit: Optional[int] = None

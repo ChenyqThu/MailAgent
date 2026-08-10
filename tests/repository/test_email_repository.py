@@ -1958,6 +1958,24 @@ class TestRequeueExtractorAttachmentTexts:
         assert {"docx", "pptx", "xlsx", "soffice_bridge", "pypdf"} == preset
         assert not preset & {"vision_ocr", "pdf_ocr", "plaintext", "anydoc", "none"}
 
+    def test_backfill_set_follows_enabled_lanes(self, monkeypatch):
+        """🔴 跟随 lane：pdf lane 关着时不能带 pypdf —— 否则 572 条会被拨回 pending
+        再原样抽回 pypdf，纯浪费，还把真正该回填的行挤到后面。"""
+        from src.converter import anydoc_extract
+
+        monkeypatch.setattr(anydoc_extract, 'enabled_lanes', lambda: frozenset({'office', 'legacy'}))
+        assert set(EmailRepository.anydoc_backfill_extractors()) == {
+            "docx", "pptx", "xlsx", "soffice_bridge",
+        }
+
+        monkeypatch.setattr(
+            anydoc_extract, 'enabled_lanes', lambda: frozenset({'office', 'legacy', 'pdf'}),
+        )
+        assert "pypdf" in EmailRepository.anydoc_backfill_extractors()
+
+        monkeypatch.setattr(anydoc_extract, 'enabled_lanes', lambda: frozenset())
+        assert EmailRepository.anydoc_backfill_extractors() == ()
+
 
 class TestSearchAttachmentTexts:
     """测 FTS5 + smart wrapper attachment search."""

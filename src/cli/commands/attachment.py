@@ -531,7 +531,9 @@ def attachment_extract(
     if requeue_extractor:
         names = [s.strip() for s in requeue_extractor.split(",") if s.strip()]
         if names == ["anydoc"]:
-            names = list(repo.ANYDOC_BACKFILL_EXTRACTORS)
+            # 跟随当前启用的 lane —— pdf lane 关着就不带 pypdf，否则那些行会被拨回
+            # pending 再原样抽回 pypdf，白跑一轮还挤占真正该回填的行。
+            names = list(repo.anydoc_backfill_extractors())
         requeued_extractor = repo.requeue_extractor_attachment_texts(
             names, dry_run=dry_run, limit=limit,
         )
