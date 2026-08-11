@@ -7,7 +7,7 @@ from typing import Any, Callable
 from fastapi import APIRouter, Depends, Header, Query, Request
 
 from src.api.app import APIError, success_envelope
-from src.api.auth import verify_cf_access
+from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_settings
 from src.api.schemas.matters import (
     MatterCreateRequest,
@@ -29,6 +29,7 @@ from src.api.schemas.matters import (
     PermanentDeleteRequest,
 )
 from src.matters.repository import MatterRepository
+from src.matters.attention import AttentionService, SNOOZE_3D_MS
 from src.matters.run_service import MatterRunService
 from src.matters.service import Actor, MatterError, MatterService
 
@@ -53,6 +54,10 @@ def get_matter_service(settings=Depends(get_settings)) -> MatterService:
 
 def get_matter_run_service(settings=Depends(get_settings)) -> MatterRunService:
     return MatterRunService(MatterRepository(settings.sync_store_db_path))
+
+
+def get_attention_service(settings=Depends(get_settings)) -> AttentionService:
+    return AttentionService(MatterRepository(settings.sync_store_db_path))
 
 
 router = APIRouter(
@@ -111,6 +116,50 @@ def _decode_cursor(cursor: str | None) -> tuple[int, int] | None:
 
 def _encode_cursor(cursor: tuple[int, int] | None) -> str | None:
     return f"{cursor[0]}:{cursor[1]}" if cursor else None
+
+
+MATTER_NOTIFY_LEVELS = ("high", "all", "off")
+
+
+class MatterPatchWithScheduleRequest(MatterPatchRequest):
+    schedule_json: dict[str, Any] | None = None
+
+
+@router.get("/attention")
+async def list_global_attention(
+    request: Request,
+    state: str | None = "open",
+    kind: str | None = None,
+    service: AttentionService = Depends(get_attention_service),
+):
+    return success_envelope(
+        {"items": _call(service.list_attention, state=state, kind=kind)},
+        request=request,
+    )
+
+
+@router.get("/notify-level")
+async def get_matter_notify_level(request: Request):
+    from src.agent_config.store import get_agent_config_store
+
+    raw = get_agent_config_store().get_owner_setting("matter_notify_level")
+    level = raw if raw in MATTER_NOTIFY_LEVELS else "high"
+    return success_envelope({"level": level}, request=request, source="sqlite")
+
+
+@router.put("/notify-level")
+async def set_matter_notify_level(request: Request, body: dict[str, Any] | None = None):
+    from src.agent_config.store import get_agent_config_store
+
+    level = (body or {}).get("level")
+    if level not in MATTER_NOTIFY_LEVELS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"body.level must be one of {MATTER_NOTIFY_LEVELS}",
+            source="sqlite",
+        )
+    get_agent_config_store().set_owner_setting("matter_notify_level", level)
+    return success_envelope({"level": level}, request=request, source="sqlite")
 
 
 @router.get("")
@@ -230,7 +279,7 @@ async def record_matter_chat_scope(
 @router.patch("/{matter_id}")
 async def patch_matter(
     matter_id: str,
-    body: MatterPatchRequest,
+    body: MatterPatchWithScheduleRequest,
     request: Request,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
     service: MatterService = Depends(get_matter_service),
@@ -787,3 +836,126 @@ async def cancel_matter_run(
     args = _mutation_args(body.mutation, idempotency_key, require_version=False)
     result = _call(service.cancel_run, matter_id, run_id, **args)
     return success_envelope(result, request=request)
+
+
+@router.get("/{matter_id}/attention")
+async def list_matter_attention(
+    matter_id: str,
+    request: Request,
+    state: str | None = "open",
+    kind: str | None = None,
+    service: AttentionService = Depends(get_attention_service),
+):
+    return success_envelope(
+        {
+            "items": _call(
+                service.list_attention,
+                public_id=matter_id,
+                state=state,
+                kind=kind,
+            )
+        },
+        request=request,
+    )
+
+
+def _attention_mutation(body: dict[str, Any], header_key: str | None) -> dict[str, Any]:
+    try:
+        mutation = MutationEnvelope.model_validate(body.get("mutation") or {})
+    except Exception as exc:
+        raise APIError("E_INVALID_ARG", "mutation is required", source="sqlite") from exc
+    return _mutation_args(mutation, header_key, require_version=False)
+
+
+@router.post("/{matter_id}/attention/{signal_id}/resolve")
+async def resolve_attention(
+    matter_id: str,
+    signal_id: int,
+    body: dict[str, Any],
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: AttentionService = Depends(get_attention_service),
+):
+    args = _attention_mutation(body, idempotency_key)
+    return success_envelope(
+        _call(
+            service.triage,
+            matter_id,
+            signal_id,
+            "resolve",
+            idempotency_key=args["idempotency_key"],
+            reason=args.get("reason"),
+        ),
+        request=request,
+    )
+
+
+@router.post("/{matter_id}/attention/{signal_id}/snooze")
+async def snooze_attention(
+    matter_id: str,
+    signal_id: int,
+    body: dict[str, Any],
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: AttentionService = Depends(get_attention_service),
+):
+    args = _attention_mutation(body, idempotency_key)
+    until = body.get("until")
+    if body.get("preset") == "3d":
+        until = service.clock_ms() + SNOOZE_3D_MS
+    return success_envelope(
+        _call(
+            service.triage,
+            matter_id,
+            signal_id,
+            "snooze",
+            idempotency_key=args["idempotency_key"],
+            reason=args.get("reason"),
+            until=until,
+        ),
+        request=request,
+    )
+
+
+@router.post("/{matter_id}/attention/{signal_id}/dismiss")
+async def dismiss_attention(
+    matter_id: str,
+    signal_id: int,
+    body: dict[str, Any],
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: AttentionService = Depends(get_attention_service),
+):
+    args = _attention_mutation(body, idempotency_key)
+    return success_envelope(
+        _call(
+            service.triage,
+            matter_id,
+            signal_id,
+            "dismiss",
+            idempotency_key=args["idempotency_key"],
+            reason=body.get("reason") or args.get("reason"),
+        ),
+        request=request,
+    )
+
+
+async def acknowledge_attention_notified(
+    matter_id: str,
+    signal_id: int,
+    request: Request,
+    service: AttentionService = Depends(get_attention_service),
+):
+    return success_envelope(
+        _call(service.acknowledge_notified, matter_id, signal_id), request=request
+    )
+
+
+_internal_router = APIRouter(prefix="/api/matters", tags=["matters"])
+_internal_router.add_api_route(
+    "/{matter_id}/attention/{signal_id}/notified",
+    acknowledge_attention_notified,
+    methods=["POST"],
+    dependencies=[Depends(verify_local_token), Depends(require_matters_enabled)],
+)
+router.routes.extend(_internal_router.routes)

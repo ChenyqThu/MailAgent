@@ -27,6 +27,7 @@ import httpx
 from loguru import logger
 
 from .events import UPDATE_PROPOSED
+from .attention import AttentionFact, AttentionService
 from .models import MATTER_CHANGE_KINDS, MATTER_RUN_STATUSES, MatterRunTrigger
 from .service import Actor, MatterError, MatterService
 
@@ -232,15 +233,21 @@ class MatterRunService(MatterService):
         reverses_event_id: int | None = None,
         trigger_kind: str = MatterRunTrigger.MANUAL.value,
     ) -> dict[str, Any]:
-        if trigger_kind != MatterRunTrigger.MANUAL.value:
-            # P5 才有 schedule；REST/工具面结构上也传不进别的值，防御留痕。
+        if trigger_kind not in (
+            MatterRunTrigger.MANUAL.value,
+            MatterRunTrigger.SCHEDULE.value,
+        ):
             raise MatterError("E_INVALID_ARG", f"unsupported trigger_kind: {trigger_kind}")
         key = self._dedupe(idempotency_key)
         now = self.clock_ms()
         with self.repository.transaction() as conn:
             matter = self._require_matter(conn, public_id)
             matter_id = int(matter["id"])
-            run_key = f"{MATTER_FOLLOWUP_JOB_TYPE}:{matter_id}:manual:{key}"
+            run_key = (
+                f"{MATTER_FOLLOWUP_JOB_TYPE}:{matter_id}:manual:{key}"
+                if trigger_kind == MatterRunTrigger.MANUAL.value
+                else key
+            )
             existing = conn.execute(
                 "SELECT * FROM matter_run WHERE idempotency_key=?", (run_key,)
             ).fetchone()
@@ -284,7 +291,7 @@ class MatterRunService(MatterService):
                 (
                     matter_id,
                     matter.get("agent_profile_id"),
-                    MatterRunTrigger.MANUAL.value,
+                    trigger_kind,
                     self._dump({"source": source, "reason": reason}),
                     run_key,
                     self._dump(watermark),
@@ -303,7 +310,7 @@ class MatterRunService(MatterService):
                 params={
                     "matter_id": matter_id,
                     "matter_run_id": run_id,
-                    "trigger_kind": MatterRunTrigger.MANUAL.value,
+                    "trigger_kind": trigger_kind,
                 },
                 idempotency_key=run_key,
             )
@@ -727,6 +734,18 @@ class MatterRunService(MatterService):
                     "change_count": len(validated),
                 },
                 happened_at=now,
+            )
+            AttentionService(self.repository, clock_ms=self.clock_ms)._open_episode_in_conn(
+                conn,
+                AttentionFact(
+                    int(matter["id"]),
+                    "needs_review",
+                    f"update:{update_id}",
+                    "info",
+                    "有一条 Agent 提案等待评审",
+                    {"update_id": update_id},
+                ),
+                now,
             )
             return {"update_id": update_id, "dropped": dropped}
 

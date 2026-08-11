@@ -51,7 +51,9 @@ ACTION_ONLY_ITEM_FIELDS = {
 MANUAL_UPDATE_FIELDS = {"status", "health", "current_summary"}
 # P4 绑定三键（D2）：走既有 PATCH 白名单 + 事件 agent_binding_changed；
 # schedule_json P5 才有写面（本相位零消费，不进白名单）。
-BINDING_PATCH_FIELDS = {"agent_profile_id", "agent_enabled", "matter_instructions"}
+BINDING_PATCH_FIELDS = {
+    "agent_profile_id", "agent_enabled", "matter_instructions", "schedule_json",
+}
 MATTER_INSTRUCTIONS_MAX_CHARS = 4000
 DIRECT_PATCH_FIELDS = {
     "title",
@@ -1572,6 +1574,18 @@ class MatterService:
                     update_id,
                 ),
             )
+            from .attention import AttentionService
+
+            AttentionService(self.repository, clock_ms=self.clock_ms).resolve_subject(
+                conn,
+                matter_id=int(matter["id"]),
+                kind="needs_review",
+                subject_key=f"update:{update_id}",
+                state="resolved",
+                now=now,
+                actor=actor,
+                source=source,
+            )
             direct_changes["latest_accepted_update_id"] = update_id
             if resolved_summary is not None:
                 direct_changes.update(
@@ -1631,6 +1645,18 @@ class MatterService:
                     "UPDATE matter_update SET review_status='superseded', "
                     "reviewed_at=?, reviewed_by_kind=?, reviewed_by_id=? WHERE id=?",
                     (now, actor.kind, actor.actor_id, row["id"]),
+                )
+                AttentionService(
+                    self.repository, clock_ms=self.clock_ms
+                ).resolve_subject(
+                    conn,
+                    matter_id=int(matter["id"]),
+                    kind="needs_review",
+                    subject_key=f"update:{int(row['id'])}",
+                    state="resolved",
+                    now=now,
+                    actor=Actor(kind="system"),
+                    source="matter_review",
                 )
                 event_ids.append(
                     self._append_event(
@@ -1692,6 +1718,18 @@ class MatterService:
                 "reviewed_by_kind=?, reviewed_by_id=?, rejected_at=?, review_reason=? "
                 "WHERE id=?",
                 (now, actor.kind, actor.actor_id, now, reason_text, update_id),
+            )
+            from .attention import AttentionService
+
+            AttentionService(self.repository, clock_ms=self.clock_ms).resolve_subject(
+                conn,
+                matter_id=int(matter["id"]),
+                kind="needs_review",
+                subject_key=f"update:{update_id}",
+                state="dismissed",
+                now=now,
+                actor=actor,
+                source=source,
             )
             if not self._cas_update(
                 conn, matter["id"], expected_version, {"updated_at": now}
@@ -1937,6 +1975,36 @@ class MatterService:
                 if row is None or (row["type"] or "") != "custom":
                     warnings.append("agent_profile_dangling")
             changes["agent_profile_id"] = profile_id
+        if "schedule_json" in binding:
+            schedule = binding["schedule_json"]
+            if schedule is None:
+                changes["schedule_json"] = None
+            else:
+                from zoneinfo import ZoneInfo
+
+                from src.agents.schedule_rule import (
+                    ScheduleRuleError,
+                    parse_anchor,
+                    parse_rule,
+                )
+
+                if not isinstance(schedule, Mapping) or set(schedule) != {
+                    "kind", "rule", "anchor", "timezone",
+                } or schedule.get("kind") != "schedule":
+                    raise MatterError(
+                        "E_INVALID_ARG",
+                        "schedule_json must contain kind, rule, anchor, timezone",
+                    )
+                try:
+                    parse_rule(schedule.get("rule"))
+                    parse_anchor(schedule.get("anchor"))
+                    timezone_name = schedule.get("timezone")
+                    if not isinstance(timezone_name, str) or not timezone_name.strip():
+                        raise ScheduleRuleError("timezone is required")
+                    ZoneInfo(timezone_name)
+                except Exception as exc:
+                    raise MatterError("E_INVALID_ARG", f"invalid schedule_json: {exc}") from exc
+                changes["schedule_json"] = self._dump(dict(schedule))
         return changes, warnings
 
     def _cas_update(

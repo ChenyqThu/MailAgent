@@ -260,3 +260,32 @@ def test_service_layer_rejects_overlong_instructions(env):
             source="desktop_ui",
         )
     assert excinfo.value.code == "E_INVALID_ARG"
+
+
+def test_binding_patch_accepts_valid_schedule_and_rejects_bad_shape(env):
+    client, _, _, pid, version = env
+    schedule = {
+        "kind": "schedule",
+        "rule": {
+            "freq": "weekly", "interval": 1, "weekdays": [1, 2, 3, 4, 5],
+            "monthMode": "date", "monthDay": 1, "ordinal": 1, "weekday": 1,
+            "hour": 9, "minute": 0, "clamp": False,
+        },
+        "anchor": "2026-08-11",
+        "timezone": "America/Los_Angeles",
+    }
+    accepted = client.patch(
+        f"/api/matters/{pid}",
+        json={"schedule_json": schedule, "mutation": _mutation("schedule", version)},
+    )
+    assert accepted.status_code == 200
+    assert accepted.json()["data"]["matter"]["schedule_json"]
+    rejected = client.patch(
+        f"/api/matters/{pid}",
+        json={
+            "schedule_json": {"kind": "schedule", "rule": {}},
+            "mutation": _mutation("bad-schedule", accepted.json()["data"]["version"]),
+        },
+    )
+    assert rejected.status_code == 400
+    assert rejected.json()["error"]["code"] == "E_INVALID_ARG"

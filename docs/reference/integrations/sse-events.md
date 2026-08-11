@@ -96,6 +96,13 @@ es.addEventListener('mailagent', e => {
 |---|---|---|
 | `calendar.synced` | `CalendarSyncWorker` reconcile 落库有实际变化（upsert/软删 > 0；无变化不发） | `{calendar: str, upserted: int, soft_deleted: int}` |
 
+### Matter Attention
+
+| event_type | 触发 | data 字段 |
+|---|---|---|
+| `matter.attention` | `MatterAgendaWorker` 单次 tick 内有 episode 新开、关闭、升档或 snooze 到期 | `{matter_ids: number[]}`；每 tick 最多一条聚合失效事件 |
+| `matter.notify` | worker 判定 open episode 符合 owner 通知级别且尚未收到投递 ACK | `{matter_id, public_id, matter_title, signal_id, kind, severity, why}`；`last_notified_at` 只由 `/notified` ACK 写入 |
+
 ## 客户端断线 / 重连
 
 服务端 **不保留** 历史事件 — at-most-once 语义。客户端断连后重连漏掉的事件需要

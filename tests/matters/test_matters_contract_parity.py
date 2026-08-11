@@ -17,6 +17,9 @@ ENUMS = (
     models.MatterPriority,
     models.MatterItemKind,
     models.MatterItemStatus,
+    models.MatterAttentionKind,
+    models.MatterAttentionState,
+    models.MatterAttentionSeverity,
     models.MatterUpdateReviewStatus,
     models.MatterActorKind,
 )
@@ -34,6 +37,7 @@ TS_ARRAYS = {
     "MATTER_RELATION_TYPES": models.MATTER_RELATION_TYPES,
     "MATTER_ATTENTION_KINDS": models.MATTER_ATTENTION_KINDS,
     "MATTER_ATTENTION_STATES": models.MATTER_ATTENTION_STATES,
+    "MATTER_ATTENTION_SEVERITIES": models.MATTER_ATTENTION_SEVERITIES,
     "MATTER_CHANGE_KINDS": models.MATTER_CHANGE_KINDS,
     "MATTER_RUN_STATUSES": models.MATTER_RUN_STATUSES,
     "MATTER_RUN_TRIGGERS": models.MATTER_RUN_TRIGGERS,

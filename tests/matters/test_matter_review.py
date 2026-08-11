@@ -100,8 +100,13 @@ def test_accept_applies_selected_changes_and_bumps_version_once(env):
                 "SELECT kind FROM matter_event ORDER BY id"
             )
         ]
+        attention_state = conn.execute(
+            "SELECT state FROM matter_attention WHERE subject_key=? ORDER BY id DESC",
+            (f"update:{update_id}",),
+        ).fetchone()[0]
     assert "update_accepted" in kinds
     assert "item_created" in kinds
+    assert attention_state == "resolved"
 
 
 def test_accept_with_edited_change_uses_edited_after(env):
@@ -204,10 +209,15 @@ def test_accept_supersedes_other_pendings(env):
         first = conn.execute(
             "SELECT review_status FROM matter_update WHERE id=?", (first_id,)
         ).fetchone()
+        first_attention = conn.execute(
+            "SELECT state FROM matter_attention WHERE subject_key=? ORDER BY id DESC",
+            (f"update:{first_id}",),
+        ).fetchone()[0]
         kinds = [
             row[0] for row in conn.execute("SELECT kind FROM matter_event")
         ]
     assert first["review_status"] == "superseded"
+    assert first_attention == "resolved"
     assert "update_superseded" in kinds
 
 
@@ -233,7 +243,12 @@ def test_reject_requires_reason_and_bumps_version(env):
     assert result["undo"] is None  # reject 无 undo
     with sqlite3.connect(path) as conn:
         kinds = [row[0] for row in conn.execute("SELECT kind FROM matter_event")]
+        attention_state = conn.execute(
+            "SELECT state FROM matter_attention WHERE subject_key=? ORDER BY id DESC",
+            (f"update:{update_id}",),
+        ).fetchone()[0]
     assert "update_rejected" in kinds
+    assert attention_state == "dismissed"
 
 
 def test_list_updates_page_summary_projection(env):

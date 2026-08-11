@@ -801,6 +801,7 @@ class EmailNotionSyncApp:
             # 两者独立 worker、独立 AsyncJobRepository（连接 per-call 短命，同一 db 文件 WAL 并发安全）。
             agent_trigger_task = None
             agent_run_task = None
+            matter_agenda_task = None
             self.agent_run_worker = None
             if config.custom_agents_enabled:
                 from src.agents import trigger_worker as agent_trigger_worker
@@ -837,6 +838,30 @@ class EmailNotionSyncApp:
                     "[agent] agent run worker enabled "
                     "(custom_agents=%s matter_agent=%s)"
                     % (config.custom_agents_enabled, config.matter_agent_enabled)
+                )
+            if config.matters_enabled:
+                from src.agent_config.store import AgentConfigStore, resolve_agent_config_db_path
+                from src.matters.repository import MatterRepository
+                from src.matters.worker import MatterAgendaWorker
+
+                owner_store = AgentConfigStore(
+                    db_path=resolve_agent_config_db_path(report_db_path)
+                )
+                self.matter_agenda_worker = MatterAgendaWorker(
+                    repository=MatterRepository(report_db_path),
+                    sync_store=self.watcher.sync_store,
+                    matter_agent_enabled=bool(config.matter_agent_enabled),
+                    notify_level_reader=lambda: (
+                        owner_store.get_owner_setting("matter_notify_level") or "high"
+                    ),
+                )
+                matter_agenda_task = self._spawn_supervised(
+                    lambda: self.matter_agenda_worker.run(self._shutdown_event),
+                    "matter_agenda",
+                )
+                logger.info(
+                    "[matters] agenda worker enabled "
+                    f"(matter_agent={config.matter_agent_enabled})"
                 )
 
             # 飞书对话 bot 长连接（08-01 阶段 2，flag MAILAGENT_IM_FEISHU，
@@ -924,6 +949,8 @@ class EmailNotionSyncApp:
                 tasks.append(agent_trigger_task)
             if agent_run_task:
                 tasks.append(agent_run_task)
+            if matter_agenda_task:
+                tasks.append(matter_agenda_task)
             if im_feishu_task:
                 # 先 stop() 让它优雅断开 WS（cancel 路径下 await 不可靠），再 cancel
                 if self.im_feishu_worker:

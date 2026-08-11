@@ -38,6 +38,11 @@ UPDATE_ACCEPTED = "update_accepted"
 UPDATE_REJECTED = "update_rejected"
 UPDATE_SUPERSEDED = "update_superseded"
 AGENT_BINDING_CHANGED = "agent_binding_changed"
+# P5 (Attention lifecycle)
+ATTENTION_OPENED = "attention_opened"
+ATTENTION_RESOLVED = "attention_resolved"
+ATTENTION_SNOOZED = "attention_snoozed"
+ATTENTION_DISMISSED = "attention_dismissed"
 
 MATTER_EVENT_KINDS = (
     MATTER_CREATED,
@@ -72,4 +77,8 @@ MATTER_EVENT_KINDS = (
     UPDATE_REJECTED,
     UPDATE_SUPERSEDED,
     AGENT_BINDING_CHANGED,
+    ATTENTION_OPENED,
+    ATTENTION_RESOLVED,
+    ATTENTION_SNOOZED,
+    ATTENTION_DISMISSED,
 )

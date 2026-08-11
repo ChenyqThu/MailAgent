@@ -51,6 +51,9 @@ from loguru import logger
 
 from src.matters.models import (
     MatterActorKind,
+    MatterAttentionKind,
+    MatterAttentionSeverity,
+    MatterAttentionState,
     MatterHealth,
     MatterItemKind,
     MatterItemStatus,
@@ -341,6 +344,24 @@ MATTER_TABLE_DDLS = (
         coalesced_trigger_count INTEGER NOT NULL DEFAULT 0,
         created_at INTEGER NOT NULL
     )""",
+    f"""CREATE TABLE IF NOT EXISTS matter_attention (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id),
+        kind TEXT NOT NULL CHECK (kind {sql_check_clause(MatterAttentionKind)}),
+        subject_key TEXT NOT NULL,
+        state TEXT NOT NULL DEFAULT 'open' CHECK (state {sql_check_clause(MatterAttentionState)}),
+        severity TEXT NOT NULL CHECK (severity {sql_check_clause(MatterAttentionSeverity)}),
+        why TEXT NOT NULL,
+        recurrence_no INTEGER NOT NULL DEFAULT 1,
+        first_opened_at INTEGER NOT NULL,
+        last_observed_at INTEGER NOT NULL,
+        snoozed_until INTEGER NULL,
+        resolved_at INTEGER NULL,
+        dismissed_at INTEGER NULL,
+        cleared_at INTEGER NULL,
+        last_notified_at INTEGER NULL,
+        payload_json TEXT NULL CHECK (payload_json IS NULL OR json_valid(payload_json))
+    )""",
 )
 
 MATTER_INDEX_DDLS = (
@@ -381,6 +402,8 @@ MATTER_INDEX_DDLS = (
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_run_one_active ON matter_run(matter_id) WHERE started_at IS NOT NULL AND completed_at IS NULL AND canceled_at IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_matter_run_history ON matter_run(matter_id, queued_at DESC)",
     "CREATE INDEX IF NOT EXISTS idx_matter_run_async_job ON matter_run(async_job_id) WHERE async_job_id IS NOT NULL",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_attention_active ON matter_attention(matter_id, kind, subject_key) WHERE state IN ('open','snoozed')",
+    "CREATE INDEX IF NOT EXISTS idx_matter_attention_state ON matter_attention(state, matter_id)",
 )
 
 
@@ -884,7 +907,7 @@ class SyncStore:
     #                (schedule_json P5 预留零消费)。matter_update 提案列 v44 已建齐,
     #                本版零动作; matter_update.agent_run_id 语义冻结 = matter_run.id (D1)。
     #                回滚 (回退 v46): 表/列可留 (旧代码无消费点, 无害); 必要时降 db_version。
-    DB_VERSION = 46  # v46: Matter agent runs + binding columns (P4)
+    DB_VERSION = 47  # v47: Matter Attention episodes (P5)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -2816,6 +2839,28 @@ class SyncStore:
                 )
                 _migration_guard_index(
                     cursor, "uq_matter_run_one_active", "v46 migration", e
+                )
+
+        # === v47: Matter Attention episodes (P5) ===
+        if current_version < 47:
+            try:
+                for ddl in MATTER_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in MATTER_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor,
+                    "matter_attention",
+                    {"id", "matter_id", "kind", "subject_key", "state", "severity",
+                     "why", "recurrence_no", "first_opened_at", "last_observed_at",
+                     "snoozed_until", "resolved_at", "dismissed_at", "cleared_at",
+                     "last_notified_at", "payload_json"},
+                    "v47 migration",
+                    e,
+                )
+                _migration_guard_index(
+                    cursor, "uq_matter_attention_active", "v47 migration", e
                 )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块

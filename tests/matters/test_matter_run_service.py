@@ -306,3 +306,23 @@ def test_finish_run_merges_error_and_is_idempotent(env):
     # 已终态 → no-op
     assert service.finish_run(run["id"], "ok") is False
     assert service.get_run(run["id"])["status"] == "warn"
+
+
+def test_schedule_enqueue_uses_occurrence_idempotency_and_trigger(env):
+    service, pid, _, _, _ = env
+    key = "matter_followup:1:schedule:2026-08-11T09:00:00+00:00"
+    result = service.enqueue_run(
+        pid,
+        idempotency_key=key,
+        source="matter_schedule",
+        trigger_kind="schedule",
+    )
+    assert result["run"]["trigger_kind"] == "schedule"
+    assert result["run"]["idempotency_key"] == key
+    replay = service.enqueue_run(
+        pid,
+        idempotency_key=key,
+        source="matter_schedule",
+        trigger_kind="schedule",
+    )
+    assert replay["run"]["id"] == result["run"]["id"]

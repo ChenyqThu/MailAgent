@@ -84,6 +84,12 @@ class MatterAttentionState(StrEnum):
     DISMISSED = "dismissed"
 
 
+class MatterAttentionSeverity(StrEnum):
+    INFO = "info"
+    WARN = "warn"
+    CRITICAL = "critical"
+
+
 class MatterChangeKind(StrEnum):
     FACT = "fact"
     INFERENCE = "inference"
@@ -147,6 +153,7 @@ MATTER_RESOURCE_KINDS = _values(MatterResourceKind)
 MATTER_RELATION_TYPES = _values(MatterRelationType)
 MATTER_ATTENTION_KINDS = _values(MatterAttentionKind)
 MATTER_ATTENTION_STATES = _values(MatterAttentionState)
+MATTER_ATTENTION_SEVERITIES = _values(MatterAttentionSeverity)
 MATTER_CHANGE_KINDS = _values(MatterChangeKind)
 MATTER_RUN_STATUSES = _values(MatterRunStatus)
 MATTER_RUN_TRIGGERS = _values(MatterRunTrigger)
