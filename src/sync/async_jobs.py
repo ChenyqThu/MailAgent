@@ -74,7 +74,6 @@ class AsyncJobRepository:
     MAINTENANCE_JOB_TYPES = frozenset({
         "resync",
         "backfill_body",
-        "backfill_derivatives",
         "backfill_metadata",
     })
     AGENT_JOB_TYPES = frozenset({

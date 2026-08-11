@@ -91,7 +91,7 @@ for h in hits:
 1. 邮件 sync 写 `email_attachment` 时，`commit_email_with_body` 自动 enqueue 非 inline 附件成 `email_attachment_text(status='pending')`
 2. 长驻服务里的 **attachment_text worker**（`src/mail/attachment_text_worker.py` `tick_loop`，`src/service.py` 按 supervised 模式注册）每 `MAILAGENT_ATTACHMENT_TEXT_WORKER_POLL_INTERVAL_SEC`（默认 60s）跑一轮，每轮消费最多 `MAILAGENT_ATTACHMENT_TEXT_WORKER_LIMIT_PER_CYCLE`（默认 25）个 pending / retry-ready 行，自动吸收队列。总开关 `MAILAGENT_ATTACHMENT_TEXT_WORKER_ENABLED`（默认 true）；显式 false → 不 spawn worker，回纯手动现状。手动补量 / dry-run / `--include-missing` 仍用 CLI `mailagent attachment extract --pending --limit 50`（与 worker 共享单一消费逻辑 `process_pending_extractions()`，行为逐字节一致）。
 3. extractor 派发：`.pdf` → pypdf（无文本层扫描件级联 Vision OCR，extractor `pdf_ocr`）/ `.docx` → python-docx / `.pptx` → python-pptx / `.xlsx` → python-calamine / `.txt/.md/.csv` → 直接 read_text / 图片（png/jpg/jpeg/gif/heic/webp/tiff/bmp）→ macOS Vision OCR（extractor `vision_ocr`，批次4 PR-G，flag `MAILAGENT_ATTACHMENT_OCR_ENABLED` 默认开；懒 import 缺 pyobjc 软着陆维持 unsupported；护栏 PDF 20 页 / 单图 15MB / 渲染长边 4096px）/ 老 Office `.doc/.ppt/.xls` → soffice 桥（`office_converter._run_soffice_convert(format=docx/pptx/xlsx)` tempdir 转出 → 复用 python-docx/pptx/calamine 抽取，extractor `soffice_bridge`，批次4 PR-H，无独立 flag；soffice 缺失 graceful 落 unsupported）
-   - **anydoc lane**（task 08-10 WP2，flag `MAILAGENT_ANYDOC_ENABLED` 默认**关**）：开启后在上述派发**之前**先试 `anydoc`（`firecrawl-anydoc`，🔴 import 名 `anydoc`；纯本地 Rust、零网络零 key、零传递依赖），产出带结构的 GFM（真 `#` 标题层级 + 合法 `|---|` 表格 + 保留超链接），extractor 标 `anydoc`。生效范围由 `MAILAGENT_ANYDOC_LANES`（默认 `office,legacy`）控制：`office` = docx/pptx/xlsx/odt/odp/ods/rtf/epub + **xlsm/docm 等宏格式（原为 unsupported，属净新增）**；`legacy` = 老 OLE `.doc/.ppt/.xls`（走通即**不再需要 LibreOffice**）。🔴 **`.csv` 有意不入任何 lane**（现状直读已是最忠实产出）。
+   - **anydoc lane**（task 08-10 WP2，flag `MAILAGENT_ANYDOC_ENABLED` **默认开，cutover 2026-08-10 全量直切**；显式 false 应急回退）：在上述派发**之前**先试 `anydoc`（`firecrawl-anydoc`，🔴 import 名 `anydoc`；纯本地 Rust、零网络零 key、零传递依赖），产出带结构的 GFM（真 `#` 标题层级 + 合法 `|---|` 表格 + 保留超链接），extractor 标 `anydoc`。生效范围由 `MAILAGENT_ANYDOC_LANES`（默认 `office,legacy`）控制：`office` = docx/pptx/xlsx/odt/odp/ods/rtf/epub + **xlsm/docm 等宏格式（原为 unsupported，属净新增）**；`legacy` = 老 OLE `.doc/.ppt/.xls`（走通即**不再需要 LibreOffice**）。🔴 **`.csv` 有意不入任何 lane**（现状直读已是最忠实产出）。
    - 🔴 **`pdf` 有意不在默认 lane 里**：25 份真实 PDF 实测 20 份与 pypdf 持平、2 份略丰富、**3 份回归** —— 其中一份把 PDF 靠重复绘制实现的伪粗体整个抽出（`TThheerreeiissnnoo…`，连续重复字符占比 0.426 vs pypdf 0.026），**它既不抛异常也不返回空 ⇒ 无判据可拦**，会静默把垃圾写进 FTS 与 AI context；另一份把 pypdf 能正常抽出 44K 字符的合同误判成 `ImageBased` 拒绝。要启用写 `MAILAGENT_ANYDOC_LANES=office,legacy,pdf`。
    - **回落纪律**：flag off / lane 未启用 / 缺包 / 转换异常 / 产出为空 —— 一律**静默完整落回**上面的原生分派（每条原生分支一字未动，off 时逐字节等价，有测试断言）。判据只认**异常类型**（`anydoc.ConvertError` 全家）与**空产出**，**不解析错误字符串**。🔴 pdf lane 真开启后 anydoc 失败的回落目标是 `_extract_pdf`（内含 pypdf → 无文本层才 OCR）而**非**直接跳 OCR —— 否则会把一份 pypdf 本可正确抽取的合同换成 OCR 猜测。
 4. 成功 → `status='extracted'` + text 入 FTS5（trigger 自动同步）
@@ -125,15 +125,12 @@ mailagent email resync 53675 --replace-existing                           # arch
 mailagent email resync --range 53000-53100 --replace-existing
 mailagent email resync --ids 53674,53675,53677
 
-# Office 衍生附件补救（追加 derived row，不动现有 row；适合 backfill silent fail）
-mailagent backfill derivatives --dry-run                                  # 看候选数
-mailagent backfill derivatives --internal-id 53677                        # 单封
-mailagent backfill derivatives                                            # 全量补
+# （已退役）Office 衍生附件补救 —— `backfill derivatives` / `attachment derive` 于 2026-08
+# 随 Notion 派生整体退役（Notion 侧沙盒电脑可直接读 office 文件）。存量 derived 行保留。
 ```
 
 **注意**:
 - `mailagent email resync` 默认 `skip_parent_lookup=True`（diff 验证用），新页不会重建线程关系
-- `mailagent backfill derivatives` 补完后，Notion 老页**不会**自动出现 derived 附件；要更新需要 `mailagent email resync --replace-existing`
 - 灰度切 `NOTION_READ_FROM_SQLITE=true` 操作步骤见 [`docs/phase4-complete.md`](../../archive/2026-05/phase4-complete.md) §6
 
 ## 关键开关

@@ -206,40 +206,11 @@ def attachment_download(
 
 
 # ============================================================
-# derive (PR-5 US-009) — deprecated alias
+# （已退役）derive — 曾是 `backfill derivatives` 的 deprecated alias。
+# Office 派生附件本身于 2026-08 退役（Notion 已有沙盒电脑可直接读 office 文件），
+# 两条命令一并移除。存量派生行与 email_attachment.derived_from/derived_format
+# 两列保留，`attachment list` 照常显示。
 # ============================================================
-
-@app.command("derive")
-def attachment_derive(
-    ctx: typer.Context,
-    internal_id: int = typer.Argument(..., help="邮件 internal_id"),
-    dry_run: bool = typer.Option(
-        False, "--dry-run",
-        help="Forwarded to backfill derivatives dry-run.",
-    ),
-    output: Optional[str] = typer.Option(None, "-o", "--output"),
-) -> None:
-    """DEPRECATED — use ``backfill derivatives --internal-id N`` instead."""
-    cli: "CliContext" = ctx.obj
-    _apply_local_output(ctx, output)
-
-    print(
-        "'attachment derive' is deprecated; "
-        "use 'mailagent backfill derivatives --internal-id N' instead.",
-        file=sys.stderr,
-    )
-
-    from src.cli.commands.backfill import _run_backfill_derivatives_inline
-
-    raise _run_backfill_derivatives_inline(
-        cli,
-        internal_id=internal_id,
-        dry_run=dry_run,
-        max_failures=20,
-        progress_every=10,
-        allow_concurrent=False,
-        data_extra={"deprecated_alias": True},
-    )
 
 
 # ============================================================

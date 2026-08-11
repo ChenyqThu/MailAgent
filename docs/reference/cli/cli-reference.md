@@ -45,10 +45,8 @@ mailagent --help                 # 列 15 个 group (email/admin/attachment/llm/
 | 命令 | 说明 |
 |---|---|
 | `email resync <internal_id\|--range LO-HI\|--ids 1,2,3> [--dry-run/--replace-existing/--no-parent/--max-failures/--resume-from/--progress-every/--allow-concurrent]` | 重传到 Notion（PR-4 batch + 长任务契约：SIGINT 二次 / 熔断 / checkpoint resume / PM2 检测） |
-| `attachment derive <internal_id> [--dry-run]` | PR-5 alias → `backfill derivatives` (deprecation warning + `data.deprecated_alias=true`) |
 | `attachment cleanup-orphans [--no-dry-run --yes]` | 删 data/attachments 下孤儿目录 |
 | `backfill body [--since-date/--until-date/--mailbox/--internal-ids/--all/--limit/--force/--dry-run/--resume-from/--retry-dead]` | v4 历史邮件正文 backfill (PR-5 inline + LongTaskContext: 真 max-failures / checkpoint resume / SIGINT 二次 / dead-letter 表) |
-| `backfill derivatives [--internal-id N --dry-run]` | v4 衍生附件 (docx→PDF / xlsx→CSV) 补齐 (PR-5 inline) |
 | `project-progress sync [--internal-id/--all-history/--limit/--sheets/--dry-run/--force/--backfill-project-start/--first-migration-dry-run]` | 项目周报同步 (PR-5 inline 直调 ProjectProgressRunner) |
 | `init {fetch-cache,analyze,fix-properties,fix-critical,update-parents,sync-new,all} [...]` | 初始化同步 7 个 sub-action (PR-5 inline 直调 InitialSync) |
 | `llm run <internal_id> [--dry-run/--force/--no-overwrite]` | 单封 LLM 分类 + Notion 写 AI 字段 |

@@ -1881,7 +1881,7 @@ class SyncStore:
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS async_jobs (
                 job_id INTEGER PRIMARY KEY AUTOINCREMENT,
-                job_type TEXT NOT NULL,                 -- resync | backfill_body | backfill_derivatives | backfill_metadata
+                job_type TEXT NOT NULL,                 -- resync | backfill_body | backfill_metadata | agent_run
                 target_kind TEXT NOT NULL DEFAULT '',   -- range | ids | all (LongTaskContext target_kind)
                 target_key TEXT NOT NULL DEFAULT '',     -- '53000-53100' / 'ids:1,2,3' / 'all'
                 params_json TEXT NOT NULL DEFAULT '{}',  -- job_type 特定参数 (replace_existing / force / ...)

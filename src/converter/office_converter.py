@@ -1,29 +1,25 @@
-"""Office 文档转换器
+"""LibreOffice (soffice) headless 桥。
 
-将 docx/pptx 转为 PDF，xlsx 转为 CSV，作为额外附件上传到 Notion。
+**当前唯一用途**：老 Office 二进制格式（.doc/.ppt/.xls）在 anydoc 之外的兜底 ——
+`converter/attachment_text.py::_extract_legacy_office` 用它转成 docx/pptx/xlsx 再抽文本。
 
-依赖：
-- docx/pptx → PDF: LibreOffice headless (soffice --headless --convert-to pdf)
-- xlsx → CSV: pandas + python-calamine (Rust 引擎，高性能)
+原先本模块还负责「Notion 派生附件」（docx/pptx→PDF、xlsx→CSV 作为额外附件上传到
+Notion）。派生已于 2026-08 整体退役（Notion 侧有沙盒电脑可直接读 office 文件），
+`convert_office_attachment` / `is_convertible` / `convert_to_pdf` / `convert_to_csv`
+连同 `backfill derivatives` CLI 一并删除；pandas 依赖也随之从本模块消失。
+
+🔴 LibreOffice **没有打进 .app**，是未声明的系统依赖。缺失时 `_run_soffice_convert`
+返回 False（不抛），老格式附件 graceful 落 unsupported。anydoc 的 legacy lane 默认开着，
+实测存量 45 条 .doc 全部由 anydoc 接管、本桥一次都没被用到 —— 它现在纯粹是兜底。
 """
 
 import subprocess
 import tempfile
 import shutil
 from pathlib import Path
-from typing import Optional, List
+from typing import Optional
 
 from loguru import logger
-
-# xlsx → csv 转换所需 pandas — 延迟到实际转换时 import (见 convert_xlsx_to_csv)。
-# pandas 冷 import ~0.4s, 而 office_converter 被 notion.pages → notion.sync 链式拉进
-# CLI 启动路径, 大量只读命令 (email draft --dry-run 等) 根本不转 xlsx, 不该为它付这笔
-# 启动开销。lazy 化后整条 import 链不再加载 pandas, CLI 冷启动快 ~0.4-0.5s。
-
-# 支持转换的扩展名映射
-OFFICE_TO_PDF_EXTENSIONS = {'.docx', '.pptx'}
-EXCEL_TO_CSV_EXTENSIONS = {'.xlsx'}
-ALL_CONVERTIBLE_EXTENSIONS = OFFICE_TO_PDF_EXTENSIONS | EXCEL_TO_CSV_EXTENSIONS
 
 # soffice 可执行文件搜索路径
 _SOFFICE_PATHS = [
@@ -101,118 +97,6 @@ def _run_soffice_convert(input_path: str, output_dir: str, format: str = "pdf", 
     except Exception as e:
         logger.error(f"soffice error: {e}")
         return False
-
-
-def convert_to_pdf(input_path: str, output_dir: str) -> Optional[str]:
-    """将 docx/pptx 转换为 PDF
-
-    Args:
-        input_path: 输入文件路径
-        output_dir: 输出目录
-
-    Returns:
-        PDF 文件路径，失败返回 None
-    """
-    inp = Path(input_path)
-    if inp.suffix.lower() not in OFFICE_TO_PDF_EXTENSIONS:
-        return None
-
-    expected_output = Path(output_dir) / f"{inp.stem}.pdf"
-
-    logger.info(f"Converting {inp.name} → PDF...")
-    if _run_soffice_convert(input_path, output_dir):
-        if expected_output.exists() and expected_output.stat().st_size > 0:
-            logger.info(f"Converted: {inp.name} → {expected_output.name} ({expected_output.stat().st_size} bytes)")
-            return str(expected_output)
-
-    logger.warning(f"Failed to convert {inp.name} to PDF")
-    return None
-
-
-def convert_to_csv(input_path: str, output_dir: str) -> List[str]:
-    """将 xlsx 转换为 CSV（支持多 sheet）
-
-    Args:
-        input_path: 输入文件路径
-        output_dir: 输出目录
-
-    Returns:
-        CSV 文件路径列表，失败返回空列表
-    """
-    inp = Path(input_path)
-    if inp.suffix.lower() not in EXCEL_TO_CSV_EXTENSIONS:
-        return []
-
-    try:
-        import pandas as pd
-    except ImportError:
-        logger.warning("pandas not installed, skipping xlsx → csv conversion")
-        return []
-
-    try:
-        logger.info(f"Converting {inp.name} → CSV...")
-
-        # 优先使用 calamine 引擎（Rust，4-18x 更快）
-        try:
-            sheets = pd.read_excel(input_path, sheet_name=None, engine="calamine")
-        except ImportError:
-            logger.debug("python-calamine not available, falling back to openpyxl")
-            sheets = pd.read_excel(input_path, sheet_name=None, engine="openpyxl")
-
-        csv_paths = []
-        for sheet_name, df in sheets.items():
-            # 跳过空 sheet
-            if df.empty:
-                continue
-
-            # 安全的文件名
-            safe_name = str(sheet_name).replace("/", "_").replace("\\", "_").replace(":", "_")
-
-            if len(sheets) == 1:
-                csv_filename = f"{inp.stem}.csv"
-            else:
-                csv_filename = f"{inp.stem}_{safe_name}.csv"
-
-            csv_path = str(Path(output_dir) / csv_filename)
-            # utf-8-sig (BOM) 确保 Excel/Notion 打开 CJK 不乱码
-            df.to_csv(csv_path, index=False, encoding="utf-8-sig")
-
-            file_size = Path(csv_path).stat().st_size
-            logger.info(f"Converted: {inp.name} [sheet: {sheet_name}] → {csv_filename} ({file_size} bytes)")
-            csv_paths.append(csv_path)
-
-        return csv_paths
-
-    except Exception as e:
-        logger.error(f"Failed to convert {inp.name} to CSV: {e}")
-        return []
-
-
-def convert_office_attachment(input_path: str, output_dir: str) -> List[str]:
-    """统一入口：根据扩展名自动选择转换方式
-
-    Args:
-        input_path: 输入文件路径
-        output_dir: 输出目录
-
-    Returns:
-        转换后的文件路径列表
-    """
-    ext = Path(input_path).suffix.lower()
-
-    if ext in OFFICE_TO_PDF_EXTENSIONS:
-        result = convert_to_pdf(input_path, output_dir)
-        return [result] if result else []
-
-    elif ext in EXCEL_TO_CSV_EXTENSIONS:
-        return convert_to_csv(input_path, output_dir)
-
-    return []
-
-
-def is_convertible(filename: str) -> bool:
-    """判断文件是否支持转换"""
-    return Path(filename).suffix.lower() in ALL_CONVERTIBLE_EXTENSIONS
 
 
 def check_soffice_available() -> bool:

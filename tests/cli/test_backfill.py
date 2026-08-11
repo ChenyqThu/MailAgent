@@ -1,4 +1,4 @@
-"""mailagent backfill body / derivatives tests (PR-5 US-001).
+"""mailagent backfill body tests (PR-5 US-001).
 
 Inline implementation — no subprocess.run. Tests patch the internal helpers
 directly inside src.cli.commands.backfill.
@@ -13,9 +13,6 @@ Covers:
 - backfill body max-failures circuit breaker → exit 8
 - backfill body checkpoint resume (--resume-from skips lower ids)
 - backfill body dead-letter (fetch returns None → success, dead=True)
-- backfill derivatives --dry-run (inline)
-- backfill derivatives --internal-id passthrough
-- backfill derivatives non-dry-run missing auth → exit 4
 """
 
 from __future__ import annotations
@@ -351,46 +348,3 @@ class TestBackfillBody:
 # ============================================================
 # backfill derivatives
 # ============================================================
-
-class TestBackfillDerivatives:
-    def test_dry_run_smoke(self, cli_runner, cli_env, seeded_db):
-        """dry-run with no candidates: exits 0, data.mode=='inline'."""
-        with patch("src.cli.commands.backfill._find_candidates", return_value=[]):
-            result = _invoke(
-                cli_runner, "derivatives", "--dry-run",
-                "-o", "json", db_path=seeded_db,
-            )
-        assert result.exit_code == 0, result.output
-        payload = _xj(result.output)
-        assert payload["data"]["action"] == "backfill-derivatives"
-        assert payload["data"]["mode"] == "inline"
-
-    def test_internal_id_passthrough(self, cli_runner, cli_env, seeded_db):
-        """--internal-id filters candidates to that internal_id."""
-        captured = {}
-
-        def _fake_find(db_path, internal_id_filter=None):
-            captured["filter"] = internal_id_filter
-            return []
-
-        with patch("src.cli.commands.backfill._find_candidates", side_effect=_fake_find):
-            result = _invoke(
-                cli_runner, "derivatives", "--internal-id", "53677", "--dry-run",
-                "-o", "json", db_path=seeded_db,
-            )
-        assert result.exit_code == 0, result.output
-        assert captured["filter"] == 53677
-
-    def test_non_dry_run_missing_auth_exit_4(
-        self, cli_runner, cli_env, seeded_db, monkeypatch,
-    ):
-        monkeypatch.delenv("MAILAGENT_CLI_API_KEY", raising=False)
-        monkeypatch.delenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", raising=False)
-        with patch("src.cli.commands.backfill._find_candidates", return_value=[]):
-            result = _invoke(
-                cli_runner, "derivatives",
-                "-o", "json", db_path=seeded_db,
-            )
-        assert result.exit_code == 4
-        payload = _xj(result.output)
-        assert payload["error"]["code"] == "E_AUTH_FAILED"

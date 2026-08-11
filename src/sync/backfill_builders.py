@@ -1,6 +1,6 @@
 """Backfill builders — transport-neutral 取数 / 执行单元 (D2a 从 cli/commands/backfill.py 下沉)。
 
-历史回填 (body / derivatives / metadata) 的 candidate picker + unit builder + 单封
+历史回填 (body / metadata) 的 candidate picker + unit builder + 单封
 执行体。**纯 transport-neutral**: 只依赖 domain 层 (mail / notion / repository /
 converter), 不 import cli / typer / output —— 故可被两个传输共用:
 
@@ -23,9 +23,7 @@ tests/sync/test_job_parity.py + tests/sync/test_job_worker.py (job runner) 锁�
 from __future__ import annotations
 
 import sqlite3
-import tempfile
 import time
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, Optional
 
 from loguru import logger
@@ -33,14 +31,13 @@ from loguru import logger
 from src.mail.reader import EmailReader
 from src.mail.sync_store import SyncStore
 from src.notion.sync import NotionSync
-from src.repository import AttachmentStore, EmailRepository
+from src.repository import EmailRepository
 from src.repository.storage_payload_builder import build_storage_payloads
 
 if TYPE_CHECKING:
     from src.mail.backend.base import IMailBackend
 
 _BackfillRecord = dict[str, Any]
-_DerivativeCandidate = tuple[int, int, str, str]
 
 
 # ============================================================
@@ -260,7 +257,7 @@ def _backfill_one_body(
 
     # 此处原有一段搭车的 Office 派生（把 docx→pdf / xlsx→csv 追加进 email.attachments
     # 再一起落库）。2026-08 随 Notion 派生退役删除 —— 本函数的语义是「补正文」，派生
-    # 只是搭了个便车。需要显式补派生仍走 `mailagent backfill derivatives`（该命令保留）。
+    # 只是搭了个便车。Office 派生本身已于 2026-08 整体退役（含 backfill derivatives 命令）。
     body, attachments = build_storage_payloads(
         email,
         iid,
@@ -336,152 +333,6 @@ def _make_body_units(
         return _runner
 
     return [(int(rec["internal_id"]), _make_unit(rec)) for rec in records]
-
-
-# ============================================================
-# Derivative backfill helpers
-# ============================================================
-
-
-def _find_candidates(
-    db_path: str, internal_id_filter: Optional[int] = None,
-) -> list[_DerivativeCandidate]:
-    """Find convertible attachments without a derived child row."""
-    from src.converter.office_converter import is_convertible
-
-    conn = sqlite3.connect(db_path)
-    try:
-        sql = """
-            SELECT a.id, a.internal_id, a.filename, a.local_path
-              FROM email_attachment a
-             WHERE a.derived_from IS NULL
-               AND a.local_path IS NOT NULL
-               AND NOT EXISTS (
-                 SELECT 1 FROM email_attachment c
-                  WHERE c.derived_from = a.id
-               )
-        """
-        params: list[Any] = []
-        if internal_id_filter is not None:
-            sql += " AND a.internal_id = ?"
-            params.append(internal_id_filter)
-        rows = conn.execute(sql, params).fetchall()
-    finally:
-        conn.close()
-    return [
-        (int(r[0]), int(r[1]), r[2], r[3])
-        for r in rows if is_convertible(r[2])
-    ]
-
-
-def _insert_derived(
-    repo: EmailRepository,
-    parent_att_id: int,
-    parent_internal_id: int,
-    derived_path: Path,
-    derived_format: str,
-) -> int:
-    """Persist a derived file and add its email_attachment row."""
-    content = derived_path.read_bytes()
-    _target, used_filename = repo.attachment_store.save(
-        parent_internal_id, derived_path.name, content,
-    )
-    sha = AttachmentStore.sha256(content)
-    local_path = repo.attachment_store.relative_path(parent_internal_id, used_filename)
-
-    content_type = "application/pdf" if derived_format == "pdf" else "text/csv"
-    conn = sqlite3.connect(str(repo.db_path))
-    try:
-        conn.execute("PRAGMA foreign_keys=ON")
-        cur = conn.execute(
-            """INSERT INTO email_attachment
-               (internal_id, content_id, filename, content_type, size_bytes,
-                is_inline, local_path, sha256, derived_from, derived_format,
-                created_at, schema_version)
-               VALUES (?, NULL, ?, ?, ?, 0, ?, ?, ?, ?, ?, 1)""",
-            (
-                parent_internal_id,
-                used_filename,
-                content_type,
-                len(content),
-                local_path,
-                sha,
-                parent_att_id,
-                derived_format,
-                time.time(),
-            ),
-        )
-        conn.commit()
-        return int(cur.lastrowid)
-    finally:
-        conn.close()
-
-
-def _resolve_local_path(local_path: str) -> Path:
-    path = Path(local_path)
-    return path if path.is_absolute() else Path.cwd() / path
-
-
-def _backfill_one_derivative(
-    candidate: _DerivativeCandidate,
-    repo: EmailRepository,
-    *,
-    dry_run: bool,
-) -> dict[str, Any]:
-    from src.converter.office_converter import convert_office_attachment
-
-    att_id, iid, filename, local_path = candidate
-    result: dict[str, Any] = {
-        "att_id": att_id,
-        "filename": filename,
-    }
-    if dry_run:
-        result["dry_run"] = True
-        return result
-
-    src_path = _resolve_local_path(local_path)
-    if not src_path.is_file():
-        raise FileNotFoundError(f"source file missing: {src_path}")
-    src_bytes = src_path.read_bytes()
-
-    inserted: list[int] = []
-    with tempfile.TemporaryDirectory(prefix=f"derive-{iid}-") as tmp:
-        tmp_dir = Path(tmp)
-        tmp_src = tmp_dir / filename
-        tmp_src.write_bytes(src_bytes)
-
-        converted = convert_office_attachment(str(tmp_src), str(tmp_dir))
-        if not converted:
-            raise RuntimeError("conversion returned empty list")
-
-        for converted_path in converted:
-            path = Path(converted_path)
-            derived_format = "pdf" if path.suffix.lower() == ".pdf" else "csv"
-            new_id = _insert_derived(repo, att_id, iid, path, derived_format)
-            inserted.append(new_id)
-            logger.info(
-                f"[att_id={att_id}->{new_id}] {filename} -> "
-                f"{path.name} ({derived_format})"
-            )
-
-    result["derived_ids"] = inserted
-    result["derived_count"] = len(inserted)
-    return result
-
-
-def _make_derivative_units(
-    candidates: list[_DerivativeCandidate],
-    *,
-    repo: EmailRepository,
-    dry_run: bool,
-) -> list[tuple[int, Any]]:
-    def _make_unit(candidate: _DerivativeCandidate):
-        def _runner() -> dict[str, Any]:
-            return _backfill_one_derivative(candidate, repo, dry_run=dry_run)
-
-        return _runner
-
-    return [(candidate[1], _make_unit(candidate)) for candidate in candidates]
 
 
 # ============================================================

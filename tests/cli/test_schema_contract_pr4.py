@@ -95,20 +95,6 @@ class TestPR4SchemaContract:
         schema, registry = schema_loader("backfill-body.schema.json")
         validate(instance=payload, schema=schema, registry=registry)
 
-    def test_backfill_derivatives_dry_run(
-        self, cli_runner, cli_env, seeded_db, schema_loader,
-    ):
-        from jsonschema import validate
-
-        result = _invoke(
-            cli_runner, "backfill", "derivatives", "--dry-run",
-            "-o", "json", db_path=seeded_db,
-        )
-        assert result.exit_code == 0
-        payload = _last_json(result.output)
-        schema, registry = schema_loader("backfill-derivatives.schema.json")
-        validate(instance=payload, schema=schema, registry=registry)
-
     # ---- project-progress ----
 
     def test_project_progress_sync_dry_run(

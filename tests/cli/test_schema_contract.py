@@ -192,18 +192,6 @@ class TestSchemaContract:
         schema, registry = schema_loader("attachment-download.schema.json")
         validate(instance=payload, schema=schema, registry=registry)
 
-    def test_attachment_derive_dry_run_matches_schema(
-        self, cli_runner, cli_env, seeded_db, schema_loader,
-    ):
-        from jsonschema import validate
-
-        result = _invoke(cli_runner, "attachment", "derive", "12345",
-                         "--dry-run", "-o", "json", db_path=seeded_db)
-        assert result.exit_code == 0, result.output
-        payload = _last_json(result.output)
-        schema, registry = schema_loader("attachment-derive.schema.json")
-        validate(instance=payload, schema=schema, registry=registry)
-
     # ============================================================
     # PR-3 US-002: attachment cleanup-orphans
     # ============================================================

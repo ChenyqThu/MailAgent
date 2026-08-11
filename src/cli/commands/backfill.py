@@ -19,12 +19,10 @@ from src.sync.backfill_builders import (
     _body_row_count,
     _dead_count,
     _ensure_dead_table,
-    _find_candidates,
     _hydrate_internal_ids,
     _hydrate_metadata_records,
     _list_dead,
     _make_body_units,
-    _make_derivative_units,
     _make_metadata_units,
     _pick_candidates,
     _pick_metadata_candidates,
@@ -384,82 +382,12 @@ def backfill_body(
 
 
 # ============================================================
-# backfill derivatives
+# （已退役）backfill derivatives — Office 派生附件于 2026-08 退役
 # ============================================================
-
-
-def _run_backfill_derivatives_inline(
-    cli: "CliContext",
-    *,
-    internal_id: Optional[int],
-    dry_run: bool,
-    max_failures: int,
-    progress_every: int,
-    resume_from: Optional[int] = None,
-    allow_concurrent: bool = False,
-    data_extra: Optional[dict[str, Any]] = None,
-) -> typer.Exit:
-    """Run the inline derivatives backfill and return its rendered exit."""
-    db_path = cli.cli_config.sync_store_db_path
-
-    _common_auth_and_pm2(cli, dry_run=dry_run, allow_concurrent=allow_concurrent)
-
-    candidates = _find_candidates(db_path, internal_id)
-    repo = EmailRepository(
-        db_path=db_path,
-        attachment_store=AttachmentStore(cli.cli_config.attachment_storage_dir),
-    )
-    units = _make_derivative_units(candidates, repo=repo, dry_run=dry_run)
-    target_kind = "ids" if internal_id is not None else "all"
-    target_key = f"ids:{internal_id}" if internal_id is not None else "all"
-
-    ltc = LongTaskContext(
-        cli=cli,
-        command="backfill-derivatives",
-        target_kind=target_kind,
-        target_key=target_key,
-        max_failures=max_failures,
-        checkpoint_every=progress_every,
-        progress_every=max(1, progress_every // 5),
-        resume_from=resume_from,
-        payload={"internal_id": internal_id},
-    )
-    results, summary = ltc.run(units, dry_run=dry_run)
-    return _render_backfill_results(
-        cli,
-        results,
-        summary,
-        action="backfill-derivatives",
-        dry_run=dry_run,
-        target_kind=target_kind,
-        target_key=target_key,
-        data_extra=data_extra,
-    )
-
-
-@app.command("derivatives")
-def backfill_derivatives(
-    ctx: typer.Context,
-    internal_id: Optional[int] = typer.Option(None, "--internal-id", help="仅补单封"),
-    dry_run: bool = typer.Option(False, "--dry-run"),
-    max_failures: int = typer.Option(20, "--max-failures"),
-    progress_every: int = typer.Option(10, "--progress-every"),
-    resume_from: Optional[int] = typer.Option(None, "--resume-from"),
-    allow_concurrent: bool = typer.Option(False, "--allow-concurrent"),
-    output: Optional[str] = typer.Option(None, "-o", "--output"),
-) -> None:
-    """Backfill missing Office-derived attachment rows inline."""
-    cli: "CliContext" = ctx.obj
-    apply_local_output(ctx, output)
-    raise _run_backfill_derivatives_inline(
-        cli,
-        internal_id=internal_id,
-        dry_run=dry_run,
-        max_failures=max_failures,
-        progress_every=progress_every,
-        resume_from=resume_from,
-        allow_concurrent=allow_concurrent,
-    )
+#
+# Notion 侧已有沙盒电脑可直接处理 office 文件，派生（docx/pptx→PDF、xlsx→CSV）
+# 失去意义。产生派生的自动链路先行删除，本命令与 `attachment derive` 别名随后。
+# email_attachment.derived_from / derived_format 两列与存量派生行保留，读路径不变。
 
 
 # ============================================================

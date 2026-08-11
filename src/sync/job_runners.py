@@ -36,7 +36,6 @@ if TYPE_CHECKING:
 JOB_TYPES = frozenset({
     "resync",
     "backfill_body",
-    "backfill_derivatives",
     "backfill_metadata",
 })
 
@@ -126,7 +125,7 @@ def run_job(
             deps, target_kind=job.target_kind, target_key=job.target_key,
             params=job.params, on_unit_done=on_unit_done, resume_from=resume_from,
         )
-    if job.job_type in ("backfill_body", "backfill_derivatives", "backfill_metadata"):
+    if job.job_type in ("backfill_body", "backfill_metadata"):
         return run_backfill_job(
             deps, job.job_type, target_kind=job.target_kind, target_key=job.target_key,
             params=job.params, on_unit_done=on_unit_done, resume_from=resume_from,
@@ -270,13 +269,6 @@ def run_backfill_job(
             db_path=db_path,
             dry_run=False,
         )
-
-    elif job_type == "backfill_derivatives":
-        single = internal_ids[0] if internal_ids else params.get("internal_id")
-        candidates = bf._find_candidates(
-            db_path, int(single) if single is not None else None,
-        )
-        units = bf._make_derivative_units(candidates, repo=deps.email_repo, dry_run=False)
 
     elif job_type == "backfill_metadata":
         source = params.get("source", "notion")

@@ -530,6 +530,7 @@ mailagent attachment download <attachment_id> [--dest PATH]
     $ mailagent attachment download 1024 > /tmp/file.bin
 
 mailagent attachment derive <internal_id> [--dry-run]      # alias，主入口移到 backfill
+  # ⚠️ 2026-08 已退役：Office 派生附件整体删除，本命令与 `backfill derivatives` 均不再存在。
 
   v2 改动：保留作 alias，主入口建议 `mailagent backfill derivatives --internal-id N`。
   原因：derive 的对象其实是 email 的附件集合，归 backfill resource 更直观。
@@ -624,6 +625,7 @@ mailagent backfill body [flags]
     $ mailagent backfill body --internal-ids 53000-53100 --dry-run
 
 mailagent backfill derivatives [flags]
+  # ⚠️ 2026-08 已退役（见上）。以下为历史记录。
 
   扫所有 email_attachment 补漏 Office 衍生。对应 scripts/backfill_derivatives.py。
 

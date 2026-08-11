@@ -265,7 +265,7 @@ Backfill 写 `fetched_source` 区分来源，UI 可提示 "该邮件 body 来自
 | **P1-09** 单测 | `tests/repository/` | 43 个 case，覆盖事务/CASCADE/derived_from/cid 重写/Markdown 转换/落盘失败回滚 |
 | **P1-10** e2e | pm2 restart + 启动日志 | `[v4] email body dual-write enabled` 已在 pid=8752 生效 |
 | **P1-11** CLAUDE.md | `CLAUDE.md` | v4 章节已加（schema 速查 / EmailRepository 用法 / Phase 推进） |
-| **P1-12** Office 转换链路 ⚠️ **2026-08 已退役** | `src/models.py` (Attachment +2 字段), ~~`src/notion/sync.py` (_convert_office_attachments)~~ | derived_from_filename / derived_format 贯通到 email_attachment 表。**自动派生（Notion sync + v4 dual-write 预转）已随 Notion 沙盒电脑上线删除**，`_convert_office_attachments` 不复存在；两个 DB 列与存量 derived 行保留，显式 `mailagent backfill derivatives` 命令仍在 |
+| **P1-12** Office 转换链路 ⚠️ **2026-08 已退役** | `src/models.py` (Attachment +2 字段), ~~`src/notion/sync.py` (_convert_office_attachments)~~ | derived_from_filename / derived_format 贯通到 email_attachment 表。**自动派生（Notion sync + v4 dual-write 预转）已随 Notion 沙盒电脑上线删除**，`_convert_office_attachments` 不复存在；`backfill derivatives` / `attachment derive` 两条 CLI 与 `backfill_derivatives` job type 随后一并删除。**保留**：`derived_from` / `derived_format` 两列 + 存量 derived 行 + 读路径（`attachment list` 照常显示） |
 | **P1-13** inline image cid 重写 | `src/repository/storage_payload_builder.py` (_rewrite_cid_to_local) | `<img src="cid:xxx">` → `attachments/{int_id}/{filename}` |
 
 ### Phase 2 待办（下一 session 入口点）

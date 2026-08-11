@@ -6,7 +6,7 @@
 // 进度展示 + 终态 toast 由 shared/state/resyncJob.ts::watchResyncJob 编排。
 
 /** async_jobs.job_type — 与后端 src/sync/job_runners.py JOB_TYPES 对齐。 */
-export type JobType = 'resync' | 'backfill_body' | 'backfill_derivatives' | 'backfill_metadata'
+export type JobType = 'resync' | 'backfill_body' | 'backfill_metadata'
 
 /** async_jobs.status 状态机 (queued → running → 终态)。 */
 export type JobStatus =
