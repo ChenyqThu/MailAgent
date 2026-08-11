@@ -13,11 +13,29 @@ seeded_db: internal_id=12345 (is_read=1/is_flagged=0/notion_page_id 已种), ema
 
 from __future__ import annotations
 
-import shutil
+import os
 
-import pytest
+# --- MUST run before anything that can reach src.api.* (import-time env reads) ---
+# 本文件的 `_read_ai_fields` 从 src.api.routers.email_views 取两个纯映射函数，那条
+# import 链会拉起 src/api/auth.py —— 它在**模块级**做 fail-closed 检查：既没有
+# CF_AUDIENCE 也没有 MAILAGENT_LOCAL_API_TOKEN 且没开 bypass ⇒ 直接 RuntimeError。
+#
+# 🔴 这里必须是**模块级 setdefault**，不能写成 autouse fixture：fixture 只在测试函数
+# 执行前跑，一旦将来有人把那条 lazy import 提到文件顶部，fixture 就来不及了。
+# （auth bypass 是 dev-only：单设 AUTH_DISABLED 而不声明 dev 上下文同样 RuntimeError，
+# 所以两个键必须成对出现。写法与 tests/api/conftest.py、tests/agents/test_spec_endpoint.py
+# 一致。）
+#
+# 修复的是一个隔离缺陷：此前本文件单独跑必挂、跑全量却通过 —— 因为全量时别的测试
+# 已经在 env 就绪的情况下 import 过 src.api.auth，sys.modules 缓存让模块级检查不再执行。
+os.environ.setdefault("MAILAGENT_API_AUTH_DISABLED", "true")
+os.environ.setdefault("MAILAGENT_API_DEV", "true")
 
-from tests.cli.conftest import extract_last_json_object as _extract
+import shutil  # noqa: E402
+
+import pytest  # noqa: E402
+
+from tests.cli.conftest import extract_last_json_object as _extract  # noqa: E402
 
 
 def _service_ctx(db_path):
@@ -375,6 +393,13 @@ def _read_ai_fields(db_path, internal_id):
     import json
     import sqlite3
 
+    # 🔴 必须先让 src.api.app 完整初始化再取 email_views。app 模块**在文件末尾**才
+    # import + 挂载 routers（它自己的注释解释了原因：router 顶层反过来 `from src.api.app
+    # import APIError, success_envelope`，提前挂载会循环）。若本测试是该链路的第一个
+    # import 入口而直接 import email_views，就会撞上
+    # "partially initialized module ... has no attribute 'router'"。
+    # 跑全量时 app 早被别的测试 import 过，所以这个坑只在单跑本文件时露头。
+    import src.api.app  # noqa: F401
     from src.api.routers.email_views import _map_priority, _map_review_status
 
     conn = sqlite3.connect(str(db_path))
