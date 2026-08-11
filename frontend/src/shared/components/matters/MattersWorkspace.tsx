@@ -12,29 +12,33 @@ import {
   List,
   Monitor,
   Plus,
+  Sparkles,
   ShieldAlert,
+  TriangleAlert,
   Trash2
 } from 'lucide-react'
 
-import type { Matter, MatterCreateInput } from '@shared/api/types/matter'
+import type { Matter, MatterCreateInput, MatterUpdate } from '@shared/api/types/matter'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { filterView, MATTER_VIEWS } from '@shared/lib/matterDerive'
+import { filterView, MATTER_VIEWS, openAttentionFor } from '@shared/lib/matterDerive'
 import type { MatterView } from '@shared/lib/matterDerive'
 import { qk } from '@shared/lib/queryKeys'
-import { toastError } from '@shared/state/toast'
+import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { MatterCreateDialog } from './MatterCreateDialog'
 import { MatterDetail } from './MatterDetail'
 import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
 import type { MatterDensity } from './MatterList'
-import { useMattersApi, useMattersEnabled } from './hooks'
+import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
 import { useMatterNavigation } from './navigation'
 
 const VIEW_ICONS: Record<MatterView, React.ReactNode> = {
   focus: <Focus size={14} />,
+  attention: <TriangleAlert size={14} />,
+  review: <Sparkles size={14} />,
   active: <CircleDot size={14} />,
   waiting: <Clock3 size={14} />,
   blocked: <ShieldAlert size={14} />,
@@ -49,13 +53,14 @@ const VIEW_ICONS: Record<MatterView, React.ReactNode> = {
 export function MattersWorkspace(): React.ReactElement | null {
   const { t } = useTranslation()
   const api = useMattersApi()
-  const enabled = useMattersEnabled()
+  const { mattersEnabled: enabled, matterAgentEnabled } = useMatterFlags()
   const queryClient = useQueryClient()
-  const [view, setView] = useState<MatterView>('all')
+  const [view, setView] = useState<MatterView>('focus')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
   const [density, setDensity] = useState<MatterDensity>('compact')
   const [createOpen, setCreateOpen] = useState(false)
+  const [reviewTarget, setReviewTarget] = useState<{ matterId: string; updateId: number } | null>(null)
   // P3 — 事项对话 open state. Owned here (not in MatterDetail) so switching / clearing the selected
   // matter closes the panel, which also resets the panel's own per-session state (scope falls back
   // to 'matter' on every reopen — D8 deliberately does not persist it).
@@ -77,7 +82,37 @@ export function MattersWorkspace(): React.ReactElement | null {
     staleTime: 30_000
   })
   const allMatters = list.data?.items ?? []
-  const visible = useMemo(() => filterView(allMatters, view), [allMatters, view])
+  const attentionQuery = useGlobalAttention(enabled)
+  const attentionItems = attentionQuery.data?.items ?? []
+  const attentionIndex = useMemo(() => {
+    const index = new Map<string, typeof attentionItems>()
+    for (const signal of attentionItems) {
+      const matterId = signal.matter?.public_id
+      if (!matterId) continue
+      index.set(matterId, [...(index.get(matterId) ?? []), signal])
+    }
+    return index
+  }, [attentionItems])
+  const pendingUpdates = useQuery({
+    queryKey: [...qk.matters.all(), 'pending-updates'],
+    queryFn: async (): Promise<Array<{ matterId: string; updates: MatterUpdate[] }>> => Promise.all(allMatters.filter((matter) => matter.archived_at == null && matter.deleted_at == null).map(async (matter) => {
+      const summaries = await api.listUpdates(matter.public_id, 'pending')
+      const updates = await Promise.all(summaries.items.map((update) => api.getUpdate(matter.public_id, update.id)))
+      return { matterId: matter.public_id, updates }
+    })),
+    enabled: enabled && matterAgentEnabled && allMatters.length > 0,
+    staleTime: 15_000
+  })
+  const updateIndex = useMemo(() => new Map((pendingUpdates.data ?? []).map((entry) => [entry.matterId, entry.updates] as const)), [pendingUpdates.data])
+  const visible = useMemo(() => filterView(allMatters, view, attentionIndex, updateIndex), [allMatters, attentionIndex, updateIndex, view])
+  const attentionAction = useAttentionAction()
+
+  const handleAttentionAction = (matterId: string, signalId: number, action: 'resolved' | 'snoozed' | 'dismissed'): void => {
+    attentionAction.mutate({ matterId, signalId, action }, {
+      onSuccess: () => toastSuccess(t(`matters.attention.toast.${action}`)),
+      onError: (error) => toastError(t('matters.attention.toast.failed'), errorMessage(error))
+    })
+  }
 
   useEffect(() => {
     if (selectedId && !visible.some((matter) => matter.public_id === selectedId))
@@ -140,7 +175,10 @@ export function MattersWorkspace(): React.ReactElement | null {
       <div className="flex min-h-0 flex-1 max-[900px]:flex-col">
         <aside className="w-44 shrink-0 border-r border-ink-border bg-ink-1/45 p-2 max-[900px]:w-full max-[900px]:overflow-x-auto max-[900px]:border-b max-[900px]:border-r-0">
           <nav className="space-y-1 max-[900px]:flex max-[900px]:min-w-max max-[900px]:space-x-1 max-[900px]:space-y-0">
-            {MATTER_VIEWS.map((value) => (
+            {MATTER_VIEWS.map((value) => {
+              const count = value === 'focus' ? 0 : filterView(allMatters, value, attentionIndex, updateIndex).length
+              const critical = value === 'attention' && attentionItems.some((signal) => signal.state === 'open' && signal.severity === 'critical')
+              return (
               <button
                 key={value}
                 type="button"
@@ -150,21 +188,23 @@ export function MattersWorkspace(): React.ReactElement | null {
                 }}
                 className={cn(
                   'relative flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-body max-[900px]:w-auto',
+                  (value === 'active' || value === 'all') && 'mt-2 border-t border-ink-border pt-3',
                   view === value
                     ? 'row-selected acc-select font-medium text-ink-fg'
-                    : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
+                    : critical ? 'text-fail hover:bg-fail/10' : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
                 )}
               >
                 {VIEW_ICONS[value]}
-                {t(`matters.views.${value}`)}
+                <span className="min-w-0 flex-1">{t(`matters.views.${value}`)}</span>
+                {count > 0 ? <span className={cn('font-mono text-meta tabular-nums', critical && 'text-fail')}>{count}</span> : null}
               </button>
-            ))}
+            )})}
           </nav>
         </aside>
 
         <div className="min-w-0 flex-1">
           {view === 'focus' ? (
-            <MatterFocus matters={visible} onSelect={(matter) => selectMatter(matter.public_id)} />
+            <MatterFocus matters={allMatters} signals={attentionItems} updates={updateIndex} onSelect={(matter) => { setView('all'); selectMatter(matter.public_id) }} onReview={(matter, updateId) => { setView('review'); selectMatter(matter.public_id); setReviewTarget({ matterId: matter.public_id, updateId }) }} onSignal={handleAttentionAction} onView={(next) => setView(next)} />
           ) : (
             <div className="grid h-full min-h-0 grid-cols-[minmax(280px,0.9fr)_minmax(420px,1.45fr)] max-[1180px]:grid-cols-1">
               <div className={cn('min-h-0', selected && 'max-[1180px]:hidden')}>
@@ -173,6 +213,7 @@ export function MattersWorkspace(): React.ReactElement | null {
                   view={view}
                   selectedId={selectedId}
                   density={density}
+                  attention={attentionIndex}
                   search={search}
                   onSearchChange={setSearch}
                   onSelect={(matter: Matter) => selectMatter(matter.public_id)}
@@ -188,6 +229,10 @@ export function MattersWorkspace(): React.ReactElement | null {
                     chatOpen={chatOpen}
                     onToggleChat={() => setChatOpen((open) => !open)}
                     onCloseChat={() => setChatOpen(false)}
+                    attentionSignals={openAttentionFor(selected, attentionIndex)}
+                    onAttentionAction={handleAttentionAction}
+                    initialReviewId={reviewTarget?.matterId === selected.public_id ? reviewTarget.updateId : null}
+                    onReviewOpened={() => setReviewTarget(null)}
                   />
                 ) : (
                   <div className="grid h-full place-items-center p-8 text-center text-body text-ink-fg-2">

@@ -65,6 +65,12 @@ export type MatterAttentionKind = (typeof MATTER_ATTENTION_KINDS)[number]
 export const MATTER_ATTENTION_STATES = ['open', 'resolved', 'snoozed', 'dismissed'] as const
 export type MatterAttentionState = (typeof MATTER_ATTENTION_STATES)[number]
 
+export const MATTER_ATTENTION_SEVERITIES = ['info', 'warn', 'critical'] as const
+export type MatterAttentionSeverity = (typeof MATTER_ATTENTION_SEVERITIES)[number]
+
+export const MATTER_NOTIFY_LEVELS = ['high', 'all', 'off'] as const
+export type MatterNotifyLevel = (typeof MATTER_NOTIFY_LEVELS)[number]
+
 export const MATTER_CHANGE_KINDS = ['fact', 'inference', 'field', 'action', 'resource'] as const
 export type MatterChangeKind = (typeof MATTER_CHANGE_KINDS)[number]
 
@@ -123,9 +129,30 @@ export interface MatterChecklistEntry {
 }
 
 export interface MatterAttentionSignal {
+  id?: number
+  matter_id?: number
   kind: MatterAttentionKind
   state: MatterAttentionState
-  severity?: 'critical' | 'warning' | 'info'
+  severity?: MatterAttentionSeverity
+  why?: string
+  recurrence_no?: number
+  first_opened_at?: number
+  last_observed_at?: number
+  snoozed_until?: number | null
+  resolved_at?: number | null
+  dismissed_at?: number | null
+  cleared_at?: number | null
+  last_notified_at?: number | null
+  payload?: Record<string, unknown> | null
+  matter?: Pick<Matter, 'public_id' | 'title' | 'status' | 'health' | 'priority'>
+}
+
+export interface MatterAttentionListResponse {
+  items: MatterAttentionSignal[]
+}
+
+export interface MatterNotifyLevelResponse {
+  level: MatterNotifyLevel
 }
 
 export interface Matter {
@@ -433,6 +460,7 @@ export interface MatterPatchInput {
   agent_profile_id?: string | null
   agent_enabled?: boolean
   matter_instructions?: string | null
+  schedule_json?: string | null
 }
 
 export interface MatterItemCreateInput {
@@ -626,4 +654,11 @@ export interface MattersApi {
   getUpdate(matterId: string, updateId: number): Promise<MatterUpdate>
   acceptUpdate(matterId: string, updateId: number, input: MatterUpdateAcceptInput, options: MatterMutationOptions): Promise<MatterMutationResult>
   rejectUpdate(matterId: string, updateId: number, reason: string, options: MatterMutationOptions): Promise<MatterMutationResult>
+  listAttention(state?: MatterAttentionState, kind?: MatterAttentionKind): Promise<MatterAttentionListResponse>
+  listMatterAttention(matterId: string, state?: MatterAttentionState, kind?: MatterAttentionKind): Promise<MatterAttentionListResponse>
+  resolveAttention(matterId: string, signalId: number): Promise<MatterAttentionSignal>
+  snoozeAttention(matterId: string, signalId: number, input: { preset: '3d' } | { until: number }): Promise<MatterAttentionSignal>
+  dismissAttention(matterId: string, signalId: number, reason?: string): Promise<MatterAttentionSignal>
+  getNotifyLevel(): Promise<MatterNotifyLevelResponse>
+  setNotifyLevel(level: MatterNotifyLevel): Promise<MatterNotifyLevelResponse>
 }

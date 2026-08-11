@@ -1,6 +1,10 @@
 import { request } from './http_client'
 import type {
   MatterDetailResponse,
+  MatterAttentionListResponse,
+  MatterAttentionSignal,
+  MatterNotifyLevel,
+  MatterNotifyLevelResponse,
   MatterItem,
   MatterListOptions,
   MatterListResponse,
@@ -358,6 +362,27 @@ export function createMattersApi(baseUrl: string): MattersApi {
     },
     rejectUpdate(matterId, updateId, reason, options): Promise<MatterMutationResult> {
       return request(baseUrl, 'POST', `/matters/${segment(matterId)}/updates/${segment(updateId)}/reject`, mutationRequest(options, { reason }))
+    },
+    listAttention(state = 'open', kind): Promise<MatterAttentionListResponse> {
+      return request(baseUrl, 'GET', '/matters/attention', { query: { state, kind } })
+    },
+    listMatterAttention(matterId, state = 'open', kind): Promise<MatterAttentionListResponse> {
+      return request(baseUrl, 'GET', `/matters/${segment(matterId)}/attention`, { query: { state, kind } })
+    },
+    resolveAttention(matterId, signalId): Promise<MatterAttentionSignal> {
+      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/attention/${segment(signalId)}/resolve`, mutationRequest({ expectedVersion: null }))
+    },
+    snoozeAttention(matterId, signalId, input): Promise<MatterAttentionSignal> {
+      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/attention/${segment(signalId)}/snooze`, mutationRequest({ expectedVersion: null }, input))
+    },
+    dismissAttention(matterId, signalId, reason): Promise<MatterAttentionSignal> {
+      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/attention/${segment(signalId)}/dismiss`, mutationRequest({ expectedVersion: null }, reason ? { reason } : {}))
+    },
+    getNotifyLevel(): Promise<MatterNotifyLevelResponse> {
+      return request(baseUrl, 'GET', '/matters/notify-level')
+    },
+    setNotifyLevel(level: MatterNotifyLevel): Promise<MatterNotifyLevelResponse> {
+      return request(baseUrl, 'PUT', '/matters/notify-level', { body: { level } })
     }
   }
 }

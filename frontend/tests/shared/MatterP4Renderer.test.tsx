@@ -164,6 +164,19 @@ describe('P4 renderer surfaces', () => {
     expect(patch).toHaveBeenCalledWith({ agent_enabled: false })
   })
 
+  test('binding schedule recommends weekdays at 09:00 and persists the shared rule shape', () => {
+    const patch = vi.fn()
+    render(<MatterAgentCard matter={{ ...matter, agent_profile_id: profile.id, agent_enabled: true }} runs={[]} enabled onPatch={patch} profiles={[profile]} />)
+    fireEvent.click(screen.getByText('编辑排程'))
+    fireEvent.click(screen.getByText('推荐：每个工作日 09:00'))
+    fireEvent.click(screen.getByText('保存'))
+    const payload = patch.mock.calls[0]?.[0]
+    const schedule = JSON.parse(payload.schedule_json)
+    expect(schedule.kind).toBe('schedule')
+    expect(schedule.rule).toMatchObject({ freq: 'weekly', weekdays: [1, 2, 3, 4, 5], hour: 9, minute: 0 })
+    expect(schedule.timezone).toBeTruthy()
+  })
+
   test('ReviewModal citations call the resource opener', () => {
     const openResource = vi.fn()
     render(

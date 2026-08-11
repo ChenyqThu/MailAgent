@@ -46,7 +46,12 @@ vi.mock('@shared/components/matters/hooks', () => ({
   useMatterRuns: () => ({ data: undefined, isLoading: false }),
   useMatterUpdates: () => ({ data: undefined, isLoading: false }),
   useStartMatterRun: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
-  useMatterAgentProfiles: () => ({ data: [], isLoading: false })
+  useMatterAgentProfiles: () => ({ data: [], isLoading: false }),
+  // P5 lane ②：MattersWorkspace/MatterDetail 又多消费三个 attention hook。本测试只看
+  // 面板/rail 槽位，一律给「无信号」惰性桩（Focus 与 AttnBand 不渲染，P3 断言面不变）。
+  useGlobalAttention: () => ({ data: undefined, isLoading: false }),
+  useMatterAttention: () => ({ data: undefined, isLoading: false }),
+  useAttentionAction: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false })
 }))
 // P4 lane ③：useMatterChatSession 直调 serve-api 的 list-for-matter——mock 掉防真网络。
 vi.mock('@shared/api/chat_api', () => ({

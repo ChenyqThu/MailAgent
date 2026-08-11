@@ -1,7 +1,7 @@
 import { describe, expect, test } from 'vitest'
 
 import type { Matter, MatterItem } from '../../src/shared/api/types/matter'
-import { filterView, nextAction, rankOf, trashDaysRemaining } from '../../src/shared/lib/matterDerive'
+import { filterView, MATTER_VIEWS, nextAction, rankOf, trashDaysRemaining } from '../../src/shared/lib/matterDerive'
 
 function matter(overrides: Partial<Matter> = {}): Matter {
   return {
@@ -89,6 +89,18 @@ describe('filterView', () => {
     const archivedFocused = matter({ public_id: 'MAT-0007', due_at: 100, archived_at: 10 })
     expect(filterView([focused, archivedFocused], 'focus')).toEqual([focused])
   })
+
+  test('attention and review consume optional indexes without changing legacy callers', () => {
+    const attention = new Map([[live.public_id, [{ id: 7, kind: 'run_failed' as const, state: 'open' as const, severity: 'critical' as const }]]])
+    const updates = new Map([[live.public_id, [{ id: 8, review_status: 'pending' as const } as never]]])
+    expect(filterView(values, 'attention', attention)).toEqual([live])
+    expect(filterView(values, 'review', undefined, updates)).toEqual([live])
+    expect(filterView(values, 'attention')).toEqual([])
+  })
+})
+
+test('MATTER_VIEWS pins P5 ordering while preserving completed', () => {
+  expect(MATTER_VIEWS).toEqual(['focus', 'attention', 'review', 'active', 'waiting', 'blocked', 'planned', 'monitoring', 'all', 'completed', 'archived', 'trash'])
 })
 
 describe('rankOf', () => {
@@ -104,6 +116,12 @@ describe('rankOf', () => {
 
   test('missing due date sorts last', () => {
     expect(rankOf(matter())[2]).toBe(Number.MAX_SAFE_INTEGER)
+  })
+
+  test('optional attention index overrides embedded fallback', () => {
+    const value = matter({ attention_signals: [] })
+    const attention = new Map([[value.public_id, [{ kind: 'deadline_near' as const, state: 'open' as const, severity: 'warn' as const }]]])
+    expect(rankOf(value, attention)[0]).toBe(1)
   })
 })
 

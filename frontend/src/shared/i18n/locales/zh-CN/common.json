@@ -3343,6 +3343,7 @@
           "helper": "逗号分隔: critical, error, warning, info"
         }
       },
+      "matters": { "title": "事项通知", "helper": "控制本机原生通知的事项信号范围。", "level": "通知级别", "high": "高价值（默认）", "all": "全部", "off": "关闭", "saved": "事项通知设置已保存", "failed": "事项通知设置保存失败" },
       "page": {
         "eyebrow": "NOTIFICATIONS",
         "title": "通知",
@@ -4659,6 +4660,8 @@
     "subtitle": "把跨邮件、会议与文档的工作持续推进到完成",
     "views": {
       "focus": "聚焦",
+      "attention": "需关注",
+      "review": "待审阅",
       "active": "进行中",
       "waiting": "等待中",
       "blocked": "受阻",
@@ -4681,10 +4684,30 @@
       "trash": "删除的事项在这里保留 30 天，可随时恢复。删除事项不会删除邮件、日历或外部文档。"
     },
     "focus": {
-      "title": "聚焦",
-      "count": "当前有 {count} 个需要留意的事项",
-      "dueSoon": "临近到期",
-      "empty": "未来 7 天没有临近到期的事项。"
+      "title": "今天需要你的判断",
+      "summary": "{openCount} 个未完成事项 · {attentionCount} 条待关注信号 · {reviewCount} 条更新提案待审阅",
+      "attention": "需关注",
+      "review": "待审阅提案",
+      "due14": "14 天内到期",
+      "healthyRate": "健康活跃率",
+      "reviewSection": "待审阅 · Agent 更新提案",
+      "changeCount": "{count} 项变化",
+      "hasField": "含状态字段变更",
+      "sourceCount": "{count} 条带来源",
+      "attentionSection": "需关注信号",
+      "attentionHint": "可解决 / 稍后 / 忽略",
+      "attentionEmpty": "没有待关注信号",
+      "attentionEmptyDetail": "所有未完成事项都有可信的当前状态，以及明确的下一步或等待原因。",
+      "dueSection": "临近到期",
+      "dueEmpty": "14 天内没有到期项"
+    },
+    "attention": {
+      "resolve": "解决",
+      "snooze": "稍后提醒（3 天）",
+      "snoozeShort": "稍后",
+      "dismiss": "忽略本次",
+      "kind": { "wait_overdue": "等待逾期", "action_overdue": "行动逾期", "deadline_near": "临近截止", "health_down": "健康下降", "needs_review": "需要审阅", "run_failed": "跟进失败", "context_gap": "上下文缺口" },
+      "toast": { "resolved": "信号已解决", "snoozed": "已稍后提醒 · 3 天后重新出现", "dismissed": "已忽略本次 · 该类信号仍会再次出现", "failed": "信号操作失败" }
     },
     "create": {
       "title": "新建事项",
@@ -4941,7 +4964,7 @@
     },
     "runOverlay": { "runningTitle": "跟进运行中", "doneTitle": "跟进运行", "capability": "手动触发 · 观察+建议", "proposal": "已产出提案 · {count} 项变化", "warn": "已产出提案 · 部分降级", "failed": "运行失败", "review": "审阅" },
     "review": { "title": "更新提案审阅", "heading": "更新提案 · {title}", "run": "运行 #{id}", "confidence": "置信 {value}%", "stale": "已过期", "watermark": "事件范围 {from} → {to}", "proposedSummary": "提议的当前状态", "finishEdit": "完成编辑", "editAccept": "编辑后接受", "compare": "对比当前已接受状态", "changes": "逐项变化 · 已选 {selected}/{total}", "clearAll": "全部取消", "selectAll": "全部勾选", "questions": "Agent 提出的待解问题", "staleHint": "提案已过期，让 Agent 重新跑一轮", "staleReload": "提案已过期，已刷新事项数据。请重载后让 Agent 重新跑一轮。", "versionReload": "事项已被更新，已刷新最新版本。请重载后重试。", "openCitation": "打开证据 #{id}", "rejectReason": "拒绝原因", "confirmReject": "确认拒绝", "editedArchive": "Agent 原始提案与你编辑后的版本都会留档", "rejectArchive": "拒绝也会留档，并成为 Agent 后续的上下文", "reject": "拒绝", "later": "稍后", "acceptAll": "全部接受", "acceptSelected": "接受所选 {count} 项", "attention": "跟进 Agent 提出了 {count} 项变化，等待你审阅" },
-    "agentBinding": { "title": "绑定跟进 Agent", "empty": "先在 Custom AI 创建一个 Agent", "instructions": "事项专属指令（可选）", "dangling": "绑定的 Agent 已不存在", "plan": "计划", "next": "下次", "last": "上次", "capability": "能力上限 观察 + 建议，不能对外发信或改写外部文档", "unbind": "解绑" },
+    "agentBinding": { "title": "绑定跟进 Agent", "empty": "先在 Custom AI 创建一个 Agent", "instructions": "事项专属指令（可选）", "dangling": "绑定的 Agent 已不存在", "plan": "计划", "next": "下次", "last": "上次", "capability": "能力上限 观察 + 建议，不能对外发信或改写外部文档", "unbind": "解绑", "recommended": "推荐：每个工作日 09:00", "addSchedule": "添加排程", "scheduleEdit": "编辑排程" },
     "events": {},
     "toast": {
       "saved": "事项已更新",

@@ -34,6 +34,7 @@ import {
   collectMainListIds
 } from '@shared/lib/emailInvalidation'
 import type { SseEvent } from '@shared/api/types'
+import { globalAttentionKey, isMatterAttentionDetailKey } from '@shared/components/matters/hooks'
 
 const DEBOUNCE_MS = 200
 
@@ -152,6 +153,22 @@ export function useEventBridge(): void {
 
     // ---- event → invalidate router ----
     function handleEvent(ev: SseEvent): void {
+      // Matters P5 — matter.attention 走这里而**不是** planInvalidation：那个 switch 的
+      // directive 词表（main-list / supplements / thread-members）全是邮件域概念，matter
+      // 缓存一个都用不上。加分支的人注意：SSE 事件在本文件有两个分发点，matter 域在此、
+      // 邮件域在 emailInvalidation.ts（后者 default 分支会静默丢弃未注册类型）。
+      if (ev.event_type === 'matter.attention') {
+        debounceInvalidate('matters:global-attention', () =>
+          queryClient.invalidateQueries({ queryKey: globalAttentionKey() })
+        )
+        // 事件不带 matterId（聚合失效）→ 已打开的每个事项详情信号缓存都要失效，按形状判。
+        debounceInvalidate('matters:detail-attention', () =>
+          queryClient.invalidateQueries({
+            predicate: (query) => isMatterAttentionDetailKey(query.queryKey)
+          })
+        )
+        return
+      }
       const directives = planInvalidation(ev.event_type, ev.internal_id, ev.data)
       const ids = eventInternalIds(ev.internal_id, ev.data)
       for (const directive of directives) runDirective(directive, ids)

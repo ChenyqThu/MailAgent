@@ -4,8 +4,10 @@ import { Archive, Search, Trash2 } from 'lucide-react'
 
 import type { Matter } from '@shared/api/types/matter'
 import { compareMatterRank, nextAction, trashDaysRemaining } from '@shared/lib/matterDerive'
-import type { MatterView } from '@shared/lib/matterDerive'
+import { openAttentionFor } from '@shared/lib/matterDerive'
+import type { MatterAttentionIndex, MatterView } from '@shared/lib/matterDerive'
 import { cn } from '@shared/lib/cn'
+import { AttentionPip } from './attention'
 
 export type MatterDensity = 'compact' | 'comfortable'
 
@@ -14,6 +16,7 @@ interface MatterListProps {
   view: MatterView
   selectedId: string | null
   density: MatterDensity
+  attention?: MatterAttentionIndex
   search: string
   onSearchChange(value: string): void
   onSelect(matter: Matter): void
@@ -25,6 +28,7 @@ export function MatterList({
   view,
   selectedId,
   density,
+  attention,
   search,
   onSearchChange,
   onSelect,
@@ -41,8 +45,8 @@ export function MatterList({
           .toLocaleLowerCase()
           .includes(query)
       })
-      .sort(compareMatterRank)
-  }, [matters, search])
+      .sort((left, right) => compareMatterRank(left, right, attention))
+  }, [attention, matters, search])
 
   return (
     <section className="flex h-full min-w-0 flex-col border-r border-ink-border bg-ink-1/55">
@@ -64,6 +68,7 @@ export function MatterList({
             matter={matter}
             selected={selectedId === matter.public_id}
             density={density}
+            signals={openAttentionFor(matter, attention)}
             onSelect={() => onSelect(matter)}
           />
         ))}
@@ -92,12 +97,14 @@ interface MatterRowProps {
   matter: Matter
   selected: boolean
   density: MatterDensity
+  signals: ReturnType<typeof openAttentionFor>
   onSelect(): void
 }
 
-function MatterRow({ matter, selected, density, onSelect }: MatterRowProps): React.ReactElement {
+function MatterRow({ matter, selected, density, signals, onSelect }: MatterRowProps): React.ReactElement {
   const { t } = useTranslation()
   const days = trashDaysRemaining(matter)
+  const critical = signals.some((signal) => signal.severity === 'critical')
   return (
     <button
       type="button"
@@ -108,6 +115,7 @@ function MatterRow({ matter, selected, density, onSelect }: MatterRowProps): Rea
         // Theme v3 mapping: prototype tone colors map to repository semantic tokens;
         // selection keeps the canonical wash + left-bar signature instead of inline colors.
         selected ? 'row-selected acc-select' : 'hover:bg-ink-3'
+        , !selected && critical && 'border-l-[3px] border-l-fail'
       )}
     >
       <div className="flex items-start gap-3">
@@ -137,6 +145,9 @@ function MatterRow({ matter, selected, density, onSelect }: MatterRowProps): Rea
                 </span>
               ))}
             </span>
+          ) : null}
+          {density === 'comfortable' && signals.length > 0 ? (
+            <span className="mt-2 flex flex-wrap gap-1">{signals.map((signal, index) => <AttentionPip key={signal.id ?? `${signal.kind}-${index}`} signal={signal} />)}</span>
           ) : null}
           <span className="mt-1.5 flex items-center gap-2 text-meta text-ink-fg-2">
             <span className="font-mono">{matter.public_id}</span>

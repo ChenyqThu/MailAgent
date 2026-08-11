@@ -7,9 +7,16 @@ import { useTranslation } from 'react-i18next'
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
+import { useMatterFlags, useNotifyLevel, useSetNotifyLevel } from '@shared/components/matters/hooks'
+import type { MatterNotifyLevel } from '@shared/api/types/matter'
+import { toastError, toastSuccess } from '@shared/state/toast'
+import { errorMessage } from '@shared/lib/ipcErrors'
 
 export function NotificationsTab(): React.ReactElement {
   const { t } = useTranslation()
+  const { mattersEnabled } = useMatterFlags()
+  const notifyLevel = useNotifyLevel(mattersEnabled)
+  const setNotifyLevel = useSetNotifyLevel()
 
   return (
     <>
@@ -49,6 +56,27 @@ export function NotificationsTab(): React.ReactElement {
           helper={t('settings.notifications.feishu.chatId.helper')}
         />
       </Section>
+
+      {mattersEnabled ? (
+        <Section title={t('settings.notifications.matters.title')} helper={t('settings.notifications.matters.helper')}>
+          <label className="grid gap-2">
+            <span className="text-body font-medium text-ink-fg">{t('settings.notifications.matters.level')}</span>
+            <select
+              value={notifyLevel.data?.level ?? 'high'}
+              disabled={notifyLevel.isLoading || setNotifyLevel.isPending}
+              onChange={(event) => setNotifyLevel.mutate(event.target.value as MatterNotifyLevel, {
+                onSuccess: () => toastSuccess(t('settings.notifications.matters.saved')),
+                onError: (error) => toastError(t('settings.notifications.matters.failed'), errorMessage(error))
+              })}
+              className="max-w-sm rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body"
+            >
+              <option value="high">{t('settings.notifications.matters.high')}</option>
+              <option value="all">{t('settings.notifications.matters.all')}</option>
+              <option value="off">{t('settings.notifications.matters.off')}</option>
+            </select>
+          </label>
+        </Section>
+      ) : null}
 
       <Section
         title={t('settings.notifications.alert.title')}

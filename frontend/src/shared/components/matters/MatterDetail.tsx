@@ -23,6 +23,7 @@ import {
 import { MATTER_HEALTH_VALUES, MATTER_ITEM_KINDS, MATTER_STATUSES } from '@shared/api/types/matter'
 import type {
   Matter,
+  MatterAttentionSignal,
   MatterActorKind,
   MatterEvent,
   MatterHealth,
@@ -32,6 +33,9 @@ import type {
   MatterResourceListItem,
   MatterStatus
 } from '@shared/api/types/matter'
+import { preview } from '@shared/components/agents/schedule/occurrences'
+import { sentenceText } from '@shared/components/agents/schedule/sentence'
+import { isScheduleValue } from '@shared/components/agents/schedule/types'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { cn } from '@shared/lib/cn'
 import { asWriteError, errorMessage } from '@shared/lib/ipcErrors'
@@ -49,8 +53,10 @@ import { MatterRunsPane } from './MatterRunsPane'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
 import { resolveMatterCitationTarget } from './navigation'
 import { RunOverlay } from './RunOverlay'
+import { AttnBand } from './attention'
 import {
   useMatterAgentProfiles,
+  useMatterAttention,
   useMatterFlags,
   useMatterRuns,
   useMatterUpdates,
@@ -67,6 +73,14 @@ interface MatterDetailProps {
   chatOpen?: boolean
   onToggleChat?(): void
   onCloseChat?(): void
+  attentionSignals?: readonly MatterAttentionSignal[]
+  onAttentionAction?(
+    matterId: string,
+    signalId: number,
+    action: 'resolved' | 'snoozed' | 'dismissed'
+  ): void
+  initialReviewId?: number | null
+  onReviewOpened?(): void
 }
 
 type DetailTab = 'state' | 'context' | 'timeline' | 'runs'
@@ -78,9 +92,13 @@ export function MatterDetail({
   onRemoved,
   chatOpen = false,
   onToggleChat,
-  onCloseChat
+  onCloseChat,
+  attentionSignals = [],
+  onAttentionAction = () => undefined,
+  initialReviewId = null,
+  onReviewOpened
 }: MatterDetailProps): React.ReactElement {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const api = useMattersApi()
   const queryClient = useQueryClient()
   const navigate = useNavigate()
@@ -95,6 +113,9 @@ export function MatterDetail({
   const [drawerItem, setDrawerItem] = useState<MatterResourceListItem | null>(null)
   const [reviewId, setReviewId] = useState<number | null>(null)
   const [reviewError, setReviewError] = useState<string | null>(null)
+  // Agent 芯片「下次运行」的基准时刻挂载时冻结（react-hooks/purity：render 期间不许
+  // 调 Date.now()）。与 MatterFocus / MatterAgentCard 同一模式。
+  const [now] = useState(() => Date.now())
   const [overlayRunId, setOverlayRunId] = useState<number | null>(null)
   const showContextRail = useMediaQuery('(min-width: 1400px)')
   const { matterAgentEnabled } = useMatterFlags()
@@ -102,6 +123,7 @@ export function MatterDetail({
   const updatesQuery = useMatterUpdates(matterId, 'pending', matterAgentEnabled)
   const startRun = useStartMatterRun(matterId)
   const profilesQuery = useMatterAgentProfiles(matterAgentEnabled)
+  const matterAttentionQuery = useMatterAttention(matterId)
 
   const detail = useQuery({
     queryKey: qk.matters.detail(matterId),
@@ -125,20 +147,33 @@ export function MatterDetail({
   const stakeholderItems = stakeholders.data ?? []
   const runs = runsQuery.data?.items ?? []
   const updates = updatesQuery.data?.items ?? []
+  const detailAttention = matterAttentionQuery.data?.items ?? attentionSignals
   const profiles = profilesQuery.data ?? []
-  const activeRun = runs.find((run) => run.lifecycle_state === 'queued' || run.lifecycle_state === 'running')
+  const activeRun = runs.find(
+    (run) => run.lifecycle_state === 'queued' || run.lifecycle_state === 'running'
+  )
   const overlayRun = runs.find((run) => run.id === overlayRunId)
-  const selectedUpdate = useQuery({ queryKey: [...qk.matters.detail(matterId), 'update', reviewId], queryFn: () => api.getUpdate(matterId, reviewId as number), enabled: reviewId != null })
+  const selectedUpdate = useQuery({
+    queryKey: [...qk.matters.detail(matterId), 'update', reviewId],
+    queryFn: () => api.getUpdate(matterId, reviewId as number),
+    enabled: reviewId != null
+  })
 
   useEffect(() => setReviewError(null), [reviewId])
+  useEffect(() => {
+    if (initialReviewId == null) return
+    setReviewId(initialReviewId)
+    onReviewOpened?.()
+  }, [initialReviewId, onReviewOpened])
 
   const refresh = async (): Promise<void> => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: qk.matters.list() }),
       queryClient.invalidateQueries({ queryKey: qk.matters.detail(matterId) }),
       queryClient.invalidateQueries({ queryKey: qk.matters.resources(matterId) }),
-      queryClient.invalidateQueries({ queryKey: qk.matters.stakeholders(matterId) })
-      ,queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'runs'] }), queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'updates'] })
+      queryClient.invalidateQueries({ queryKey: qk.matters.stakeholders(matterId) }),
+      queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'runs'] }),
+      queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'updates'] })
     ])
   }
 
@@ -219,11 +254,29 @@ export function MatterDetail({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const cancelRun = useMutation({ mutationFn: (runId: number) => api.cancelRun(matterId, runId), onSuccess: () => void refresh(), onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error)) })
+  const cancelRun = useMutation({
+    mutationFn: (runId: number) => api.cancelRun(matterId, runId),
+    onSuccess: () => void refresh(),
+    onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
+  })
   const reviewMutation = useMutation({
-    mutationFn: ({ kind, payload }: { kind: 'accept'; payload: ReviewAcceptPayload } | { kind: 'reject'; payload: string }) => {
+    mutationFn: ({
+      kind,
+      payload
+    }: { kind: 'accept'; payload: ReviewAcceptPayload } | { kind: 'reject'; payload: string }) => {
       if (!matter || reviewId == null) return Promise.reject(new Error('Review is not loaded'))
-      return kind === 'accept' ? api.acceptUpdate(matterId, reviewId, { selected_change_ids: payload.selectedIds, edited_changes: payload.editedChanges, edited_summary: payload.editedSummary }, { expectedVersion: matter.version }) : api.rejectUpdate(matterId, reviewId, payload, { expectedVersion: matter.version })
+      return kind === 'accept'
+        ? api.acceptUpdate(
+            matterId,
+            reviewId,
+            {
+              selected_change_ids: payload.selectedIds,
+              edited_changes: payload.editedChanges,
+              edited_summary: payload.editedSummary
+            },
+            { expectedVersion: matter.version }
+          )
+        : api.rejectUpdate(matterId, reviewId, payload, { expectedVersion: matter.version })
     },
     onSuccess: async () => {
       const next = updates.filter((item) => item.id !== reviewId)[0]
@@ -237,13 +290,19 @@ export function MatterDetail({
       if (writeError.code === 'E_UPDATE_STALE' || writeError.code === 'E_VERSION_CONFLICT') {
         setReviewError(
           writeError.code === 'E_UPDATE_STALE'
-            ? t('matters.review.staleReload', { defaultValue: '提案已过期，已刷新事项数据。请重载后让 Agent 重新跑一轮。' })
-            : t('matters.review.versionReload', { defaultValue: '事项已被更新，已刷新最新版本。请重载后重试。' })
+            ? t('matters.review.staleReload', {
+                defaultValue: '提案已过期，已刷新事项数据。请重载后让 Agent 重新跑一轮。'
+              })
+            : t('matters.review.versionReload', {
+                defaultValue: '事项已被更新，已刷新最新版本。请重载后重试。'
+              })
         )
         void Promise.all([
           queryClient.invalidateQueries({ queryKey: qk.matters.detail(matterId) }),
           queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'updates'] }),
-          queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'update', reviewId] })
+          queryClient.invalidateQueries({
+            queryKey: [...qk.matters.detail(matterId), 'update', reviewId]
+          })
         ])
         return
       }
@@ -278,6 +337,13 @@ export function MatterDetail({
     }
     setDrawerItem(target.item)
   }
+  const schedule = parseMatterSchedule(matter.schedule_json)
+  const scheduleLabel = schedule ? sentenceText(t, i18n.language || 'zh-CN', schedule.rule) : null
+  const nextRun = schedule
+    ? preview(schedule.rule, schedule.timezone, schedule.anchor, now, 1).find(
+        (entry) => entry.kind === 'run'
+      )
+    : null
 
   return (
     // `relative` is the containing block for the narrow-layout chat overlay below.
@@ -326,10 +392,16 @@ export function MatterDetail({
                       })
                     : t('matters.detail.noDue')}
                 </span>
-                {matter.agent_profile_id && (matter.agent_enabled === true || matter.agent_enabled === 1) ? (
+                {matter.agent_profile_id &&
+                (matter.agent_enabled === true || matter.agent_enabled === 1) ? (
                   <span className="inline-flex items-center gap-1 rounded-[var(--r-pill)] border border-ai/25 bg-ai/10 px-2 py-1 text-meta text-ai">
                     <Sparkles size={12} />
-                    {profiles.find((profile) => profile.id === matter.agent_profile_id)?.title ?? matter.agent_profile_id} · {t('matters.runs.manual')}
+                    {profiles.find((profile) => profile.id === matter.agent_profile_id)?.title ??
+                      matter.agent_profile_id}{' '}
+                    · {scheduleLabel ?? t('matters.runs.manual')}
+                    {nextRun && nextRun.kind === 'run'
+                      ? ` · ${t('matters.agentBinding.next')} ${new Date(nextRun.utcMs).toLocaleString()}`
+                      : ''}
                   </span>
                 ) : (
                   <span className="inline-flex items-center gap-1 rounded-[var(--r-pill)] border border-dashed border-ink-border px-2 py-1 text-meta text-ink-fg-2">
@@ -386,7 +458,41 @@ export function MatterDetail({
                 {t('matters.chat.open')}
               </button>
             ) : null}
-            {matterAgentEnabled ? <button type="button" disabled={Boolean(activeRun) || startRun.isPending} onClick={() => startRun.mutate({ expectedVersion: matter.version }, { onSuccess: (result) => { setOverlayRunId(result.run.id); if (result.coalesced) toastInfo(t('matters.runs.coalesced', { defaultValue: '已有一轮跟进在进行' })) }, onError: (error) => toastError(t('matters.runs.startFailed', { defaultValue: '请刷新后重试' }), errorMessage(error)) })} className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux disabled:opacity-50">{activeRun || startRun.isPending ? <Loader2 size={13} className="animate-spin"/> : <Play size={13}/>} {activeRun ? t('matters.runs.runningButton', { defaultValue: '运行中…' }) : t('matters.runs.runNow', { defaultValue: '立即跟进' })}</button> : null}
+            {matterAgentEnabled ? (
+              <button
+                type="button"
+                disabled={Boolean(activeRun) || startRun.isPending}
+                onClick={() =>
+                  startRun.mutate(
+                    { expectedVersion: matter.version },
+                    {
+                      onSuccess: (result) => {
+                        setOverlayRunId(result.run.id)
+                        if (result.coalesced)
+                          toastInfo(
+                            t('matters.runs.coalesced', { defaultValue: '已有一轮跟进在进行' })
+                          )
+                      },
+                      onError: (error) =>
+                        toastError(
+                          t('matters.runs.startFailed', { defaultValue: '请刷新后重试' }),
+                          errorMessage(error)
+                        )
+                    }
+                  )
+                }
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux disabled:opacity-50"
+              >
+                {activeRun || startRun.isPending ? (
+                  <Loader2 size={13} className="animate-spin" />
+                ) : (
+                  <Play size={13} />
+                )}{' '}
+                {activeRun
+                  ? t('matters.runs.runningButton', { defaultValue: '运行中…' })
+                  : t('matters.runs.runNow', { defaultValue: '立即跟进' })}
+              </button>
+            ) : null}
             <div className="relative">
               <button
                 type="button"
@@ -441,7 +547,14 @@ export function MatterDetail({
 
         <div className="border-b border-ink-border px-5 pt-2">
           <div className="flex gap-5">
-            {(['state', 'context', 'timeline', ...(matterAgentEnabled ? ['runs' as const] : [])] as const).map((value) => (
+            {(
+              [
+                'state',
+                'context',
+                'timeline',
+                ...(matterAgentEnabled ? ['runs' as const] : [])
+              ] as const
+            ).map((value) => (
               <button
                 key={value}
                 type="button"
@@ -457,17 +570,58 @@ export function MatterDetail({
                     {resourceItems.length + stakeholderItems.length}
                   </span>
                 ) : null}
-                {value === 'runs' ? <span className="ml-1.5 rounded-[var(--r-pill)] bg-ink-3 px-1.5 py-0.5 text-meta font-mono text-ink-fg-2">{runs.length}</span> : null}
+                {value === 'runs' ? (
+                  <span className="ml-1.5 rounded-[var(--r-pill)] bg-ink-3 px-1.5 py-0.5 text-meta font-mono text-ink-fg-2">
+                    {runs.length}
+                  </span>
+                ) : null}
               </button>
             ))}
           </div>
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin">
-          {updates.length > 0 ? <div className="mb-5 flex items-center gap-3 rounded-[var(--r-card)] border border-ai/25 bg-ai/[0.06] p-4"><span className="grid size-8 place-items-center rounded-lg bg-ai/12 text-ai"><Sparkles size={16}/></span><div className="min-w-0 flex-1"><p className="text-body font-medium">{t('matters.review.attention', { count: updates[0].change_count, defaultValue: `跟进 Agent 提出了 ${updates[0].change_count} 项变化，等待你审阅` })}</p><p className="mt-1 text-meta text-ink-fg-2">{new Date(updates[0].created_at).toLocaleString()} · #{updates[0].agent_run_id ?? '—'}</p></div><button type="button" onClick={() => setReviewId(updates[0].id)} className="rounded-lg bg-ai px-3 py-2 text-aux text-white">{t('matters.runs.review', { defaultValue: '审阅' })}</button></div> : null}
+          {updates.length > 0 ? (
+            <div className="mb-5 flex items-center gap-3 rounded-[var(--r-card)] border border-ai/25 bg-ai/[0.06] p-4">
+              <span className="grid size-8 place-items-center rounded-lg bg-ai/12 text-ai">
+                <Sparkles size={16} />
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="text-body font-medium">
+                  {t('matters.review.attention', {
+                    count: updates[0].change_count,
+                    defaultValue: `跟进 Agent 提出了 ${updates[0].change_count} 项变化，等待你审阅`
+                  })}
+                </p>
+                <p className="mt-1 text-meta text-ink-fg-2">
+                  {new Date(updates[0].created_at).toLocaleString()} · #
+                  {updates[0].agent_run_id ?? '—'}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReviewId(updates[0].id)}
+                className="rounded-lg bg-ai px-3 py-2 text-aux text-white"
+              >
+                {t('matters.runs.review', { defaultValue: '审阅' })}
+              </button>
+            </div>
+          ) : null}
+          <div className="mb-5">
+            <AttnBand
+              matter={matter}
+              signals={detailAttention}
+              hasProposal={updates.length > 0}
+              onAction={onAttentionAction}
+            />
+          </div>
           {tab === 'state' ? (
             <div className="space-y-5">
-              <StateCard matter={matter} pendingCount={updates.length} onReview={() => setReviewId(updates[0]?.id ?? null)} />
+              <StateCard
+                matter={matter}
+                pendingCount={updates.length}
+                onReview={() => setReviewId(updates[0]?.id ?? null)}
+              />
               <ItemGroups
                 items={items}
                 onToggle={(item) =>
@@ -488,7 +642,14 @@ export function MatterDetail({
               onOpenResource={setDrawerItem}
               onChanged={() => void refresh()}
             />
-          ) : tab === 'runs' ? <MatterRunsPane runs={runs} updates={updates} onReview={setReviewId} onCancel={(runId) => cancelRun.mutate(runId)}/> : (
+          ) : tab === 'runs' ? (
+            <MatterRunsPane
+              runs={runs}
+              updates={updates}
+              onReview={setReviewId}
+              onCancel={(runId) => cancelRun.mutate(runId)}
+            />
+          ) : (
             <Timeline events={timeline} />
           )}
         </div>
@@ -570,10 +731,40 @@ export function MatterDetail({
         onClose={() => setDrawerItem(null)}
         onChanged={() => void refresh()}
       />
-      {overlayRun ? <RunOverlay run={overlayRun} update={updates.find((item) => item.agent_run_id === overlayRun.id)} onReview={setReviewId} onClose={() => setOverlayRunId(null)}/> : null}
-      {selectedUpdate.data ? <MatterUpdateReview matter={matter} update={selectedUpdate.data} busy={reviewMutation.isPending} error={reviewError} onClose={() => setReviewId(null)} onAccept={(payload) => reviewMutation.mutate({ kind: 'accept', payload })} onReject={(payload) => reviewMutation.mutate({ kind: 'reject', payload })} onOpenResource={openReviewSource}/> : null}
+      {overlayRun ? (
+        <RunOverlay
+          run={overlayRun}
+          update={updates.find((item) => item.agent_run_id === overlayRun.id)}
+          onReview={setReviewId}
+          onClose={() => setOverlayRunId(null)}
+        />
+      ) : null}
+      {selectedUpdate.data ? (
+        <MatterUpdateReview
+          matter={matter}
+          update={selectedUpdate.data}
+          busy={reviewMutation.isPending}
+          error={reviewError}
+          onClose={() => setReviewId(null)}
+          onAccept={(payload) => reviewMutation.mutate({ kind: 'accept', payload })}
+          onReject={(payload) => reviewMutation.mutate({ kind: 'reject', payload })}
+          onOpenResource={openReviewSource}
+        />
+      ) : null}
     </div>
   )
+}
+
+function parseMatterSchedule(
+  raw: string | null | undefined
+): import('@shared/components/agents/schedule/types').ScheduleValue | null {
+  if (!raw) return null
+  try {
+    const value: unknown = JSON.parse(raw)
+    return isScheduleValue(value) ? value : null
+  } catch {
+    return null
+  }
 }
 
 function StatusMenu({
@@ -602,7 +793,15 @@ function StatusMenu({
   )
 }
 
-function StateCard({ matter, pendingCount, onReview }: { matter: Matter; pendingCount: number; onReview(): void }): React.ReactElement {
+function StateCard({
+  matter,
+  pendingCount,
+  onReview
+}: {
+  matter: Matter
+  pendingCount: number
+  onReview(): void
+}): React.ReactElement {
   const { t } = useTranslation()
   return (
     <section className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/75 p-4">
@@ -621,7 +820,15 @@ function StateCard({ matter, pendingCount, onReview }: { matter: Matter; pending
           {matter.description || t('matters.state.noDescription')}
         </p>
       </div>
-      {pendingCount > 0 ? <button type="button" onClick={onReview} className="mt-4 inline-flex items-center gap-1 rounded-lg bg-ai/10 px-3 py-2 text-aux text-ai"><Sparkles size={12}/>有 {pendingCount} 条新提案</button> : null}
+      {pendingCount > 0 ? (
+        <button
+          type="button"
+          onClick={onReview}
+          className="mt-4 inline-flex items-center gap-1 rounded-lg bg-ai/10 px-3 py-2 text-aux text-ai"
+        >
+          <Sparkles size={12} />有 {pendingCount} 条新提案
+        </button>
+      ) : null}
     </section>
   )
 }

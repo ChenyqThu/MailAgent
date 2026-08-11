@@ -50,7 +50,7 @@ import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { openNewCompose } from '@shared/state/compose-new'
 import { deriveAccount } from '@shared/lib/account'
 import { useAgentUnreadCount, useSessionProvenanceEnabled } from '@shared/components/agents/hooks'
-import { useMattersEnabled } from '@shared/components/matters/hooks'
+import { useGlobalAttention, useMattersEnabled } from '@shared/components/matters/hooks'
 
 import { AccountSwitcherPopover } from './AccountSwitcherPopover'
 import { SidebarFolderTree } from './SidebarFolderTree'
@@ -259,6 +259,11 @@ function TotalCount({ count }: { count: number }): React.ReactElement | null {
   )
 }
 
+export function MatterAttentionBadge({ count }: { count: number }): React.ReactElement | null {
+  if (count <= 0) return null
+  return <span className="min-w-[18px] rounded-full bg-fail px-1.5 py-0.5 text-center text-[10px] font-semibold font-mono tabular-nums text-white">{count}</span>
+}
+
 // 全部走 AnimatedIcon（mailbox/feather/square-pen/zap/folders）；整行 hover/focus 经 NavRow 的
 // AnimatedIconActiveProvider 驱动（trigger='parent' 仅保留标注语义）。已标旗用 zap（用户点名）。
 const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
@@ -277,6 +282,8 @@ export function Sidebar(): React.ReactElement {
   const toggleCollapsed = useNavCollapsed((s) => s.toggle)
   const sessionProvenanceEnabled = useSessionProvenanceEnabled()
   const mattersEnabled = useMattersEnabled()
+  const matterAttention = useGlobalAttention(mattersEnabled)
+  const matterAttentionCount = matterAttention.data?.items.length ?? 0
   const agentUnreadTotal = useAgentUnreadCount(sessionProvenanceEnabled).total
   const view = useEmailFilter((s) => s.view)
   const setView = useEmailFilter((s) => s.setView)
@@ -642,6 +649,8 @@ export function Sidebar(): React.ReactElement {
               selected={pathname === '/matters'}
               onClick={() => void navigate({ to: '/matters' })}
               title={collapsed ? t('matters.nav') : undefined}
+              right={<MatterAttentionBadge count={matterAttentionCount} />}
+              collapsedBadge={matterAttentionCount}
             />
           ) : null}
           <NavRow
