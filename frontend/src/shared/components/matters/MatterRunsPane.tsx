@@ -1,0 +1,20 @@
+import { Activity, Ban, Eye, Loader2, Sparkles, X } from 'lucide-react'
+import { useTranslation } from 'react-i18next'
+import type { MatterRun, MatterUpdateSummary } from '@shared/api/types/matter'
+
+const tone: Record<MatterRun['lifecycle_state'], string> = {
+  queued: 'bg-ai/10 text-ai', running: 'bg-ai/10 text-ai', ok: 'bg-ok/10 text-ok', noop: 'bg-ink-3 text-ink-fg-2', warn: 'bg-warn/10 text-warn', fail: 'bg-fail/10 text-fail', canceled: 'bg-ink-3 text-ink-fg-2'
+}
+
+export function MatterRunsPane({ runs, updates, onReview, onCancel }: { runs: MatterRun[]; updates: MatterUpdateSummary[]; onReview(updateId: number): void; onCancel(runId: number): void }): React.ReactElement {
+  const { t } = useTranslation()
+  if (runs.length === 0) return <div className="rounded-[var(--r-card)] border border-dashed border-ink-border p-10 text-center"><Sparkles className="mx-auto text-ai" size={22}/><h3 className="mt-3 text-body font-medium">{t('matters.runs.emptyTitle', { defaultValue: '还没有跟进运行' })}</h3><p className="mt-1 text-aux text-ink-fg-2">{t('matters.runs.emptyHint', { defaultValue: '绑定一个跟进 Agent，或点右上角「立即跟进」跑一次。' })}</p></div>
+  return <section><div className="mb-2 flex items-center justify-between text-meta text-ink-fg-3"><span className="font-semibold uppercase tracking-wide">{t('matters.runs.title', { defaultValue: '跟进运行' })}</span><span>{t('matters.runs.traceHint', { defaultValue: '无变化的运行不会产生更新，但仍然留痕' })}</span></div><div className="divide-y divide-ink-border overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1">{runs.map((run) => {
+    const update = updates.find((item) => item.agent_run_id === run.id && item.review_status === 'pending')
+    const tools = Number(run.usage?.tool_calls ?? run.usage?.tools ?? run.usage?.steps ?? 0)
+    const telemetry = [tools > 0 ? `${tools} tools` : null, run.duration_ms != null ? `${(run.duration_ms / 1000).toFixed(1)}s` : null, run.cost_usd != null ? `$${run.cost_usd.toFixed(4)}` : null].filter(Boolean).join(' · ')
+    const changed = update?.change_count ?? 0
+    const description = run.lifecycle_state === 'canceled' ? t('matters.runs.canceled', { defaultValue: '已取消' }) : run.lifecycle_state === 'noop' ? t('matters.runs.noChanges', { defaultValue: '未检出变化' }) : changed > 0 ? t('matters.runs.changed', { count: changed, defaultValue: `检出 ${changed} 项变化` }) : run.lifecycle_state === 'queued' ? t('matters.runs.queued', { defaultValue: '排队中' }) : run.lifecycle_state === 'running' ? t('matters.runs.running', { defaultValue: '读取与比对变化中' }) : t(`matters.runs.status.${run.lifecycle_state}`, { defaultValue: run.lifecycle_state })
+    return <div key={run.id} className="flex items-center gap-3 px-4 py-3"><span className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-meta ${tone[run.lifecycle_state]}`}>{run.lifecycle_state === 'queued' || run.lifecycle_state === 'running' ? <Loader2 size={11} className="animate-spin"/> : run.lifecycle_state === 'canceled' ? <Ban size={11}/> : <Activity size={11}/>} {t(`matters.runs.status.${run.lifecycle_state}`, { defaultValue: run.lifecycle_state })}</span><time className="font-mono text-meta text-ink-fg-2">{new Date(run.queued_at).toLocaleString()}</time><span className="rounded-full bg-ink-3 px-2 py-1 text-meta">{run.trigger_kind === 'manual' ? t('matters.runs.manual', { defaultValue: '手动' }) : t('matters.runs.schedule', { defaultValue: '定时' })}</span><span className="min-w-0 flex-1 truncate text-body">{description}</span>{telemetry ? <span className="font-mono text-meta text-ink-fg-3">{telemetry}</span> : null}{update && run.lifecycle_state !== 'noop' ? <button type="button" onClick={() => onReview(update.id)} className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] bg-ai/10 px-2.5 py-1.5 text-aux text-ai"><Eye size={12}/>{t('matters.runs.review', { defaultValue: '查看提案' })}</button> : null}{run.lifecycle_state === 'queued' || run.lifecycle_state === 'running' ? <button type="button" onClick={() => onCancel(run.id)} className="rounded p-1.5 text-ink-fg-2 hover:bg-ink-3"><X size={14}/></button> : null}</div>
+  })}</div></section>
+}

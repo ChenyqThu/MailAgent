@@ -613,3 +613,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     }
   }
 }
+
+export async function listSessionsForMatter(baseUrl: string, matterId: number): Promise<ChatSession[]> {
+  try {
+    return await request<ChatSession[]>(baseUrl, 'GET', '/chat/sessions/all', { query: { matterId } })
+  } catch {
+    return []
+  }
+}

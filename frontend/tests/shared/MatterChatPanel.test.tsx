@@ -17,7 +17,7 @@ import type { Matter } from '@shared/api/types/matter'
 import type { MatterContextSnapshotPayload } from '@shared/api/matters'
 import type { ChatSession } from '@shared/api/types'
 
-const { chatApi, mailApi, toastError } = vi.hoisted(() => ({
+const { chatApi, mailApi, toastError, listSessionsForMatter } = vi.hoisted(() => ({
   chatApi: {
     contextSnapshot: vi.fn(),
     recordChatScope: vi.fn(),
@@ -30,7 +30,10 @@ const { chatApi, mailApi, toastError } = vi.hoisted(() => ({
       newSession: vi.fn()
     }
   },
-  toastError: vi.fn()
+  toastError: vi.fn(),
+  // P4 lane ③：useMatterChatSession 的会话发现改走 serve-api 的 list-for-matter 端点
+  // （不再 listAllSessions 拉 300 条客户端筛）——mock 到模块边界，别让测试打真网络。
+  listSessionsForMatter: vi.fn<() => Promise<ChatSession[]>>(async () => [])
 }))
 
 vi.mock('@shared/components/matters/hooks', () => ({
@@ -38,6 +41,7 @@ vi.mock('@shared/components/matters/hooks', () => ({
   useMatterChatApi: () => chatApi,
   useMattersEnabled: () => true
 }))
+vi.mock('@shared/api/chat_api', () => ({ listSessionsForMatter }))
 vi.mock('@shared/hooks/useMailApi', () => ({ useMailApi: () => mailApi }))
 vi.mock('@shared/state/toast', () => ({
   toastError,
@@ -158,6 +162,7 @@ function renderPanel(): ReturnType<typeof render> {
 beforeEach(() => {
   vi.clearAllMocks()
   mailApi.chat.listAllSessions.mockResolvedValue([session()])
+  listSessionsForMatter.mockResolvedValue([session()])
   mailApi.chat.listMessages.mockResolvedValue([])
   chatApi.contextSnapshot.mockResolvedValue(snapshotPayload())
   chatApi.recordChatScope.mockResolvedValue({})
@@ -203,7 +208,7 @@ describe('MatterChatPanel — snapshot fail-soft', () => {
 describe('MatterChatPanel — G5 scope switch', () => {
   test('switching to 全库 audits the change first, then flips locally', async () => {
     renderPanel()
-    await waitFor(() => expect(mailApi.chat.listAllSessions).toHaveBeenCalled())
+    await waitFor(() => expect(listSessionsForMatter).toHaveBeenCalled())
     fireEvent.click(screen.getByText('全库'))
     await waitFor(() =>
       expect(chatApi.recordChatScope).toHaveBeenCalledWith('MAT-0042', 'global', 31)
@@ -214,7 +219,7 @@ describe('MatterChatPanel — G5 scope switch', () => {
   test('a failed audit keeps the STRICTER scope (never silently widen the search reach)', async () => {
     chatApi.recordChatScope.mockRejectedValue(new Error('offline'))
     renderPanel()
-    await waitFor(() => expect(mailApi.chat.listAllSessions).toHaveBeenCalled())
+    await waitFor(() => expect(listSessionsForMatter).toHaveBeenCalled())
     fireEvent.click(screen.getByText('全库'))
     await waitFor(() => expect(toastError).toHaveBeenCalled())
     expect(screen.getByText('检索范围限于本事项')).toBeTruthy()
@@ -222,7 +227,7 @@ describe('MatterChatPanel — G5 scope switch', () => {
 
   test('switching back to 本事项 records the symmetric restore event', async () => {
     renderPanel()
-    await waitFor(() => expect(mailApi.chat.listAllSessions).toHaveBeenCalled())
+    await waitFor(() => expect(listSessionsForMatter).toHaveBeenCalled())
     fireEvent.click(screen.getByText('全库'))
     await waitFor(() => expect(screen.getByText('已允许全库检索')).toBeTruthy())
     fireEvent.click(screen.getByText('本事项'))
@@ -250,9 +255,7 @@ describe('MatterContextGapCard — written, deliberately not triggered in P3', (
 
 describe('selectMatterSessions — which session the panel reuses', () => {
   test('newest interactive session for THIS matter; never a headless agent run', async () => {
-    const { selectMatterSessions } = await import(
-      '@shared/components/matters/useMatterChatSession'
-    )
+    const { selectMatterSessions } = await import('@shared/components/matters/useMatterChatSession')
     const rows = [
       { ...session(), id: 1, updated_at: 10 },
       { ...session(), id: 2, updated_at: 30 },

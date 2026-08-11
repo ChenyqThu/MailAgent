@@ -155,18 +155,26 @@ async def list_all_sessions(
     created_before: Optional[int] = Query(None, alias="createdBefore"),
     archived: Optional[bool] = Query(None),
     starred: Optional[bool] = Query(None),
+    matter_id: Optional[int] = Query(None, alias="matterId", ge=1),
     limit: int = Query(300, ge=1, le=300),
 ):
     """跨邮件 session 历史（含 first_user_message 预览 + message_count + join email
     subject/sender）。镜像 chat:listAllSessions → ChatSessionListItem[]。
     include_archived=true 时含归档会话（用于归档分组视图）。"""
-    summaries = get_chat_db().list_all_sessions(
-        limit=limit, include_archived=include_archived, origin=origin,
-        agent_id=_session_scope(request, agent_id), agent_job_id=agent_job_id,
-        trigger_id=trigger_id, trigger_kind=trigger_kind,
-        created_after=created_after, created_before=created_before,
-        archived=archived, starred=starred,
-    )
+    if matter_id is not None:
+        summaries = get_chat_db()._read_all(
+            "SELECT * FROM ai_chat_sessions WHERE anchor_type='matter' AND anchor_id=? "
+            "AND COALESCE(origin, 'interactive') <> 'agent' ORDER BY updated_at DESC LIMIT ?",
+            (matter_id, limit),
+        )
+    else:
+        summaries = get_chat_db().list_all_sessions(
+            limit=limit, include_archived=include_archived, origin=origin,
+            agent_id=_session_scope(request, agent_id), agent_job_id=agent_job_id,
+            trigger_id=trigger_id, trigger_kind=trigger_kind,
+            created_after=created_after, created_before=created_before,
+            archived=archived, starred=starred,
+        )
     _project_session_runs(summaries, get_settings().sync_store_db_path)
     # codex review NIT — general sessions have email_id=None; exclude them so the
     # email metadata join doesn't query a NULL id (and skips get_settings() when no
@@ -665,6 +673,7 @@ async def chat_config(request: Request):
             # /api/matters/* 的 require_matters_enabled 读取同一个冻结 settings
             # 单例；不做 hot-read，避免 UI 显示入口但端点仍按旧值返回 E_DISABLED。
             "mattersEnabled": bool(getattr(cfg, "matters_enabled", False)),
+            "matterAgentEnabled": bool(getattr(cfg, "matter_agent_enabled", False)),
             "triggerV2Enabled": _hot_bool(env_vals, "MAILAGENT_TRIGGER_V2", True),
             "calendarTriggerEnabled": _hot_bool(
                 env_vals, "MAILAGENT_CALENDAR_TRIGGER", True

@@ -6,10 +6,15 @@ import type {
   MatterListResponse,
   MatterMutationOptions,
   MatterMutationResult,
+  MatterRun,
+  MatterRunListResponse,
+  MatterRunStartResult,
   MatterResourceListItem,
   MatterResourceLookupResponse,
   MatterStakeholder,
   MatterTimelineResponse,
+  MatterUpdate,
+  MatterUpdateListResponse,
   MattersApi,
   MutationEnvelope
 } from './types/matter'
@@ -327,6 +332,32 @@ export function createMattersApi(baseUrl: string): MattersApi {
         `/matters/${segment(matterId)}/notes`,
         mutationRequest(options, input)
       )
+    },
+    listRuns(matterId): Promise<MatterRunListResponse> {
+      return request(baseUrl, 'GET', `/matters/${segment(matterId)}/runs`)
+    },
+    async getRun(matterId, runId): Promise<MatterRun> {
+      const result = await request<{ run: MatterRun }>(baseUrl, 'GET', `/matters/${segment(matterId)}/runs/${segment(runId)}`)
+      return result.run
+    },
+    startRun(matterId, options): Promise<MatterRunStartResult> {
+      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/runs`, mutationRequest(options))
+    },
+    cancelRun(matterId, runId): Promise<MatterMutationResult> {
+      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/runs/${segment(runId)}/cancel`, mutationRequest({ expectedVersion: null }))
+    },
+    listUpdates(matterId, reviewStatus): Promise<MatterUpdateListResponse> {
+      return request(baseUrl, 'GET', `/matters/${segment(matterId)}/updates`, { query: { review_status: reviewStatus } })
+    },
+    async getUpdate(matterId, updateId): Promise<MatterUpdate> {
+      const result = await request<{ update: MatterUpdate }>(baseUrl, 'GET', `/matters/${segment(matterId)}/updates/${segment(updateId)}`)
+      return result.update
+    },
+    acceptUpdate(matterId, updateId, input, options): Promise<MatterMutationResult> {
+      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/updates/${segment(updateId)}/accept`, mutationRequest(options, input))
+    },
+    rejectUpdate(matterId, updateId, reason, options): Promise<MatterMutationResult> {
+      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/updates/${segment(updateId)}/reject`, mutationRequest(options, { reason }))
     }
   }
 }

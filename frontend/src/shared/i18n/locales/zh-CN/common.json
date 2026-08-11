@@ -1061,6 +1061,9 @@
       "matter_stakeholder_mutate": "编辑事项干系人",
       "matter_relation_mutate": "编辑事项关联",
       "matter_add_note": "添加事项备注",
+      "matter_run_control": "控制跟进运行",
+      "matter_review_update": "评审更新提案",
+      "matter_update_propose": "提交更新提案",
       "notion_agent_chat": "咨询 Notion Agent",
       "plan_update": "更新计划",
       "suggest_followups": "准备追问建议"
@@ -4898,7 +4901,9 @@
         "matter_resource_mutate": "关联资料已更新",
         "matter_stakeholder_mutate": "干系人已更新",
         "matter_relation_mutate": "事项关联已更新",
-        "matter_add_note": "已添加备注"
+        "matter_add_note": "已添加备注",
+        "matter_run_control": "跟进运行已更新",
+        "matter_review_update": "提案评审已更新"
       },
       "receipt": {
         "written": "已写入",
@@ -4915,6 +4920,28 @@
         "expand": "扩大到全库"
       }
     },
+    "runs": {
+      "title": "跟进运行",
+      "emptyTitle": "还没有跟进运行",
+      "emptyHint": "绑定一个跟进 Agent，或点右上角「立即跟进」跑一次。",
+      "traceHint": "无变化的运行不会产生更新，但仍然留痕",
+      "manual": "手动",
+      "schedule": "定时",
+      "review": "查看提案",
+      "queued": "排队中",
+      "running": "读取与比对变化中",
+      "noChanges": "未检出变化",
+      "canceled": "已取消",
+      "changed": "检出 {count} 项变化",
+      "runNow": "立即跟进",
+      "runningButton": "运行中…",
+      "coalesced": "已有一轮跟进在进行",
+      "startFailed": "请刷新后重试",
+      "status": { "queued": "排队中", "running": "运行中", "ok": "完成", "noop": "无变化", "warn": "部分降级", "fail": "失败", "canceled": "已取消" }
+    },
+    "runOverlay": { "runningTitle": "跟进运行中", "doneTitle": "跟进运行", "capability": "手动触发 · 观察+建议", "proposal": "已产出提案 · {count} 项变化", "warn": "已产出提案 · 部分降级", "failed": "运行失败", "review": "审阅" },
+    "review": { "title": "更新提案审阅", "heading": "更新提案 · {title}", "run": "运行 #{id}", "confidence": "置信 {value}%", "stale": "已过期", "watermark": "事件范围 {from} → {to}", "proposedSummary": "提议的当前状态", "finishEdit": "完成编辑", "editAccept": "编辑后接受", "compare": "对比当前已接受状态", "changes": "逐项变化 · 已选 {selected}/{total}", "clearAll": "全部取消", "selectAll": "全部勾选", "questions": "Agent 提出的待解问题", "staleHint": "提案已过期，让 Agent 重新跑一轮", "staleReload": "提案已过期，已刷新事项数据。请重载后让 Agent 重新跑一轮。", "versionReload": "事项已被更新，已刷新最新版本。请重载后重试。", "openCitation": "打开证据 #{id}", "rejectReason": "拒绝原因", "confirmReject": "确认拒绝", "editedArchive": "Agent 原始提案与你编辑后的版本都会留档", "rejectArchive": "拒绝也会留档，并成为 Agent 后续的上下文", "reject": "拒绝", "later": "稍后", "acceptAll": "全部接受", "acceptSelected": "接受所选 {count} 项", "attention": "跟进 Agent 提出了 {count} 项变化，等待你审阅" },
+    "agentBinding": { "title": "绑定跟进 Agent", "empty": "先在 Custom AI 创建一个 Agent", "instructions": "事项专属指令（可选）", "dangling": "绑定的 Agent 已不存在", "plan": "计划", "next": "下次", "last": "上次", "capability": "能力上限 观察 + 建议，不能对外发信或改写外部文档", "unbind": "解绑" },
     "events": {},
     "toast": {
       "saved": "事项已更新",

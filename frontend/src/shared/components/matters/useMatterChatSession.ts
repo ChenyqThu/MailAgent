@@ -20,6 +20,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 
 import type { ChatMessage, ChatSession } from '@shared/api/types'
+import { listSessionsForMatter } from '@shared/api/chat_api'
+import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
 import { useMailApi } from '@shared/hooks/useMailApi'
 
 export interface UseMatterChatSessionResult {
@@ -79,8 +81,8 @@ export function useMatterChatSession(matterInternalId: number): UseMatterChatSes
     const generation = navGenerationRef.current
     void (async (): Promise<void> => {
       try {
-        const rows = await mailApi.chat.listAllSessions({ origin: 'interactive' })
-        const newest = selectMatterSessions(rows, matterInternalId)[0] ?? null
+        const rows = await listSessionsForMatter(resolveApiBaseUrl(), matterInternalId)
+        const newest = rows[0] ?? null
         if (cancelled || !mountedRef.current || generation !== navGenerationRef.current) return
         if (newest === null) return
         setActiveSessionId(newest.id)

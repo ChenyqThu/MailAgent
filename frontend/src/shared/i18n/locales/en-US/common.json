@@ -1061,6 +1061,9 @@
       "matter_stakeholder_mutate": "Edit matter stakeholder",
       "matter_relation_mutate": "Edit matter relation",
       "matter_add_note": "Add matter note",
+      "matter_run_control": "Control follow-up run",
+      "matter_review_update": "Review update proposal",
+      "matter_update_propose": "Propose matter update",
       "notion_agent_chat": "Ask the Notion agent",
       "plan_update": "Update plan",
       "suggest_followups": "Suggesting follow-ups"
@@ -4822,7 +4825,9 @@
         "matter_resource_mutate": "Linked resource updated",
         "matter_stakeholder_mutate": "Stakeholder updated",
         "matter_relation_mutate": "Matter link updated",
-        "matter_add_note": "Note added"
+        "matter_add_note": "Note added",
+        "matter_run_control": "Follow-up run updated",
+        "matter_review_update": "Proposal review updated"
       },
       "receipt": {
         "written": "Written",
@@ -4839,6 +4844,28 @@
         "expand": "Widen to everything"
       }
     },
+    "runs": {
+      "title": "Follow-up runs",
+      "emptyTitle": "No follow-up runs yet",
+      "emptyHint": "Bind a follow-up agent, or use Run now in the header.",
+      "traceHint": "No-change runs create no update, but remain in history",
+      "manual": "Manual",
+      "schedule": "Scheduled",
+      "review": "Review proposal",
+      "queued": "Queued",
+      "running": "Reading and comparing changes",
+      "noChanges": "No changes found",
+      "canceled": "Canceled",
+      "changed": "Found {count} changes",
+      "runNow": "Run now",
+      "runningButton": "Running…",
+      "coalesced": "A follow-up run is already active",
+      "startFailed": "Refresh and try again",
+      "status": { "queued": "Queued", "running": "Running", "ok": "Complete", "noop": "No changes", "warn": "Partially degraded", "fail": "Failed", "canceled": "Canceled" }
+    },
+    "runOverlay": { "runningTitle": "Follow-up running", "doneTitle": "Follow-up run", "capability": "Manual · Observe + advise", "proposal": "Proposal ready · {count} changes", "warn": "Proposal ready · partially degraded", "failed": "Run failed", "review": "Review" },
+    "review": { "title": "Review update proposal", "heading": "Update proposal · {title}", "run": "Run #{id}", "confidence": "Confidence {value}%", "stale": "Expired", "watermark": "Event range {from} → {to}", "proposedSummary": "Proposed current state", "finishEdit": "Finish editing", "editAccept": "Edit before accepting", "compare": "Compare accepted state", "changes": "Changes · {selected}/{total} selected", "clearAll": "Clear all", "selectAll": "Select all", "questions": "Questions from the agent", "staleHint": "This proposal expired. Run the agent again.", "staleReload": "This proposal expired and the matter was refreshed. Reload, then run the agent again.", "versionReload": "The matter changed and its latest version was refreshed. Reload, then retry.", "openCitation": "Open evidence #{id}", "rejectReason": "Rejection reason", "confirmReject": "Reject proposal", "editedArchive": "The original and edited proposal will both be retained", "rejectArchive": "Rejections are retained as future agent context", "reject": "Reject", "later": "Later", "acceptAll": "Accept all", "acceptSelected": "Accept {count} selected", "attention": "The follow-up agent proposed {count} changes for review" },
+    "agentBinding": { "title": "Bind follow-up agent", "empty": "Create an agent in Custom AI first", "instructions": "Matter-specific instructions (optional)", "dangling": "The bound agent no longer exists", "plan": "Plan", "next": "Next", "last": "Last", "capability": "Capability limit: observe + advise; cannot send mail or modify external documents", "unbind": "Unbind" },
     "events": {},
     "toast": { "saved": "Matter updated", "saveFailed": "Could not update matter", "createFailed": "Could not create matter", "deleteFailed": "Could not delete matter" }
   }

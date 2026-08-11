@@ -45,7 +45,9 @@ const WRITE_LABELLED_TOOLS = new Set([
   'matter_resource_mutate',
   'matter_stakeholder_mutate',
   'matter_relation_mutate',
-  'matter_add_note'
+  'matter_add_note',
+  'matter_run_control',
+  'matter_review_update'
 ])
 
 export function MatterWriteCard(props: ToolCallMessagePartProps): React.JSX.Element {

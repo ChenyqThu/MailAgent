@@ -70,6 +70,7 @@ export type MatterChangeKind = (typeof MATTER_CHANGE_KINDS)[number]
 
 export const MATTER_RUN_STATUSES = ['ok', 'noop', 'warn', 'fail'] as const
 export type MatterRunStatus = (typeof MATTER_RUN_STATUSES)[number]
+export type MatterRunLifecycleState = 'queued' | 'running' | 'ok' | 'noop' | 'warn' | 'fail' | 'canceled'
 
 export const MATTER_RUN_TRIGGERS = ['manual', 'schedule'] as const
 export type MatterRunTrigger = (typeof MATTER_RUN_TRIGGERS)[number]
@@ -159,6 +160,10 @@ export interface Matter {
   purge_after: number | null
   created_at: number
   updated_at: number
+  agent_profile_id?: string | null
+  agent_enabled?: number | boolean
+  matter_instructions?: string | null
+  schedule_json?: string | null
   attention_signals?: MatterAttentionSignal[]
   items?: MatterItem[]
   matched_fields?: MatterSearchField[]
@@ -298,6 +303,74 @@ export interface MatterMutationResult {
   warnings?: string[]
 }
 
+export interface MatterRun {
+  id: number
+  matter_id: number
+  agent_profile_id: string | null
+  trigger_kind: MatterRunTrigger
+  lifecycle_state: MatterRunLifecycleState
+  status: MatterRunStatus | null
+  model: string | null
+  usage: Record<string, unknown> | null
+  cost_usd: number | null
+  error: Record<string, unknown> | null
+  queued_at: number
+  started_at: number | null
+  completed_at: number | null
+  cancel_requested_at: number | null
+  canceled_at: number | null
+  update_id: number | null
+  duration_ms: number | null
+  [key: string]: unknown
+}
+
+export interface MatterRunListResponse { items: MatterRun[]; next_cursor: number | null }
+export interface MatterRunStartResult { run: MatterRun; coalesced: boolean }
+export interface MatterProposalSource { resource_id: number; locator?: Record<string, unknown> | null; evidence?: string | null }
+export interface MatterProposalChange {
+  id: string
+  kind: MatterChangeKind
+  target?: Record<string, unknown> | null
+  before?: unknown
+  after?: unknown
+  text?: string | null
+  reason?: string | null
+  detail?: string | null
+  confidence?: number | null
+  conf?: number | null
+  sources?: MatterProposalSource[]
+}
+export interface MatterUpdateSummary {
+  id: number
+  review_status: MatterUpdateReviewStatus
+  summary: string | null
+  created_at: number
+  change_count: number
+  is_stale: boolean
+  agent_run_id: number | null
+  confidence: number | null
+  anchored_matter_version: number
+  created_by_kind: MatterActorKind
+}
+export interface MatterUpdate extends MatterUpdateSummary {
+  matter_id: number
+  from_event_id: number | null
+  to_event_id: number | null
+  original_proposal: { summary?: string | null; changes?: MatterProposalChange[]; open_questions?: string[]; confidence?: number | null }
+  reviewed_result: Record<string, unknown> | null
+  changes: MatterProposalChange[]
+  accepted_change_ids: string[] | null
+  citations: MatterProposalSource[]
+  stale_at: number | null
+  stale_reason: string | null
+}
+export interface MatterUpdateListResponse { items: MatterUpdateSummary[]; next_cursor: number | null }
+export interface MatterUpdateAcceptInput {
+  selected_change_ids: string[]
+  edited_changes?: Array<{ change_id: string; after?: unknown; text?: string | null; edit_reason?: string | null }>
+  edited_summary?: string | null
+}
+
 export interface MatterListResponse {
   items: Matter[]
   next_cursor: string | null
@@ -357,6 +430,9 @@ export interface MatterPatchInput {
   waiting_context?: Record<string, unknown> | null
   next_attention_at?: number | null
   attention_reason?: string | null
+  agent_profile_id?: string | null
+  agent_enabled?: boolean
+  matter_instructions?: string | null
 }
 
 export interface MatterItemCreateInput {
@@ -542,4 +618,12 @@ export interface MattersApi {
     input: MatterNoteCreateInput,
     options: MatterMutationOptions
   ): Promise<MatterMutationResult>
+  listRuns(matterId: string): Promise<MatterRunListResponse>
+  getRun(matterId: string, runId: number): Promise<MatterRun>
+  startRun(matterId: string, options: MatterMutationOptions): Promise<MatterRunStartResult>
+  cancelRun(matterId: string, runId: number): Promise<MatterMutationResult>
+  listUpdates(matterId: string, reviewStatus?: MatterUpdateReviewStatus): Promise<MatterUpdateListResponse>
+  getUpdate(matterId: string, updateId: number): Promise<MatterUpdate>
+  acceptUpdate(matterId: string, updateId: number, input: MatterUpdateAcceptInput, options: MatterMutationOptions): Promise<MatterMutationResult>
+  rejectUpdate(matterId: string, updateId: number, reason: string, options: MatterMutationOptions): Promise<MatterMutationResult>
 }

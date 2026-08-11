@@ -39,7 +39,18 @@ const { mattersApi, chatApi, mailApi, mattersEnabled } = vi.hoisted(() => ({
 vi.mock('@shared/components/matters/hooks', () => ({
   useMattersApi: () => mattersApi,
   useMatterChatApi: () => chatApi,
-  useMattersEnabled: () => mattersEnabled.value
+  useMattersEnabled: () => mattersEnabled.value,
+  // P4 lane ③ 起 MatterDetail 还消费这五个 hook；本测试只看面板/rail 槽位，
+  // agent 面全部给「flag 关」的惰性桩（runs 标签与「立即跟进」不渲染，P3 断言面不变）。
+  useMatterFlags: () => ({ mattersEnabled: mattersEnabled.value, matterAgentEnabled: false }),
+  useMatterRuns: () => ({ data: undefined, isLoading: false }),
+  useMatterUpdates: () => ({ data: undefined, isLoading: false }),
+  useStartMatterRun: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
+  useMatterAgentProfiles: () => ({ data: [], isLoading: false })
+}))
+// P4 lane ③：useMatterChatSession 直调 serve-api 的 list-for-matter——mock 掉防真网络。
+vi.mock('@shared/api/chat_api', () => ({
+  listSessionsForMatter: vi.fn(async () => [])
 }))
 vi.mock('@shared/hooks/useMailApi', () => ({ useMailApi: () => mailApi }))
 vi.mock('@shared/state/toast', () => ({
