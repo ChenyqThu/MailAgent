@@ -95,6 +95,27 @@ export function compareMatterRank(
   return a[0] - b[0] || a[1] - b[1] || a[2] - b[2] || right.updated_at - left.updated_at
 }
 
+/** 事项有没有一个明确的下一步。
+ *
+ * 🔴 判定与文案分离：`deriveFocusStats` 的「健康」以前是拿 `nextAction()` 的返回串
+ * `.includes('缺少下一步')` 判的 —— 改一下那句措辞（或把它 i18n 化）就会让健康率**静默失效**，
+ * 而且没有任何测试会红。语义单源放这里，文案只负责展示。 */
+export function hasNextAction(
+  matter: Matter,
+  items: readonly MatterItem[] = matter.items ?? []
+): boolean {
+  const actions = items.filter((item) => item.kind === 'action' && item.deleted_at === null)
+  if (actions.some((item) => item.status === 'open' || item.status === 'in_progress')) return true
+  if (actions.some((item) => item.status === 'waiting')) return true
+  if (
+    items.some(
+      (item) => item.kind === 'blocker' && item.deleted_at === null && item.status !== 'done'
+    )
+  )
+    return true
+  return matter.status === 'monitoring' || matter.status === 'done'
+}
+
 export function nextAction(
   matter: Matter,
   items: readonly MatterItem[] = matter.items ?? []
@@ -149,7 +170,7 @@ export function deriveFocusStats(
     (matter) =>
       matter.summary_at != null &&
       matter.summary_at >= now - 8 * DAY &&
-      !nextAction(matter).includes('缺少下一步')
+      hasNextAction(matter)
   ).length
   return {
     openCount: open.length,
