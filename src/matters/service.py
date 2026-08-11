@@ -9,6 +9,8 @@ import time
 from dataclasses import dataclass
 from typing import Any, Mapping, Sequence
 
+from loguru import logger
+
 from .models import (
     MATTER_ACTOR_KINDS,
     MATTER_HEALTH_VALUES,
@@ -55,7 +57,10 @@ from .events import (
     AGENT_BINDING_CHANGED,
     CHAT_SCOPE_EXPANDED,
     CHAT_SCOPE_RESTORED,
+    ITEM_CREATED,
+    MATTER_CREATED,
     MATTER_UPDATED,
+    RELATION_ADDED,
     RESOURCE_LINKED,
     RESOURCE_SUGGESTION_ACCEPTED,
     RESOURCE_SUGGESTION_REJECTED,
@@ -202,7 +207,7 @@ class MatterService:
             event_id = self._append_event(
                 conn,
                 matter_id=matter_id,
-                kind="matter_created",
+                kind=MATTER_CREATED,
                 actor=actor,
                 source=source,
                 dedupe_key=dedupe_key,
@@ -902,7 +907,7 @@ class MatterService:
             event_id = self._append_event(
                 conn,
                 matter_id=matter["id"],
-                kind="matter_updated",
+                kind=MATTER_UPDATED,
                 actor=actor,
                 source=source,
                 dedupe_key=dedupe_key,
@@ -1002,6 +1007,16 @@ class MatterService:
                 conn, matter["id"], expected_version, {"updated_at": self.clock_ms()}
             ):
                 raise self._version_conflict()
+            # 🔴 这里**有意不写 matter_event**：`matter_event.matter_id` 是
+            # `ON DELETE CASCADE`，同一条语句就会把刚写的事件一起删掉 —— 写了也留不下。
+            # （P1 审计把"不写事件"记成缺口，前提不成立。）审计要活过这次删除，就只能落在
+            # 事项之外，所以走结构化日志。
+            logger.warning(
+                "[matters] matter permanently deleted "
+                f"public_id={public_id} title={matter['title']!r} "
+                f"actor={actor.kind}:{actor.actor_id or '-'} source={source} "
+                f"reason={reason or '-'}"
+            )
             self.repository.delete_matter(conn, matter["id"])
             return {"deleted": True, "public_id": public_id}
 
@@ -1056,7 +1071,7 @@ class MatterService:
             event_id = self._append_event(
                 conn,
                 matter_id=matter["id"],
-                kind="item_created",
+                kind=ITEM_CREATED,
                 actor=actor,
                 source=source,
                 dedupe_key=dedupe_key,
@@ -1441,7 +1456,7 @@ class MatterService:
                 existing = self.repository.find_event(conn, event_key)
                 if not existing:
                     event_ids.append(self._append_event(
-                        conn, matter_id=matter["id"], kind="resource_linked", actor=actor,
+                        conn, matter_id=matter["id"], kind=RESOURCE_LINKED, actor=actor,
                         source=source, dedupe_key=event_key, reason=reason,
                         resource_id=resource["id"], payload={"link_id": link_id}, happened_at=now,
                         reverses_event_id=reverses_event_id,
@@ -1984,7 +1999,7 @@ class MatterService:
             )
             relation_id = int(cursor.lastrowid)
             event_id = self._append_event(
-                conn, matter_id=source_matter["id"], kind="relation_added", actor=actor,
+                conn, matter_id=source_matter["id"], kind=RELATION_ADDED, actor=actor,
                 source=mutation["source"], dedupe_key=dedupe_key, reason=mutation.get("reason"),
                 payload={"relation_id": relation_id, "target_public_id": target["public_id"]}, happened_at=now,
                 reverses_event_id=mutation.get("reverses_event_id"),
@@ -2756,7 +2771,7 @@ class MatterService:
                     "sub_state": spec.get("sub_state", "none"), "created_at": now, "updated_at": now,
                 })
                 event_ids.append(self._append_event(
-                    conn, matter_id=matter_id, kind="resource_linked", actor=actor,
+                    conn, matter_id=matter_id, kind=RESOURCE_LINKED, actor=actor,
                     source=source, dedupe_key=f"matter:{matter_id}:resource_linked:{resource['id']}",
                     reason=reason, resource_id=resource["id"], payload={"link_id": link_id}, happened_at=now,
                 ))
