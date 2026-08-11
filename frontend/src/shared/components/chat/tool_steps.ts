@@ -142,6 +142,10 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'matter_stakeholder_mutate',
   'matter_relation_mutate',
   'matter_add_note',
+  // matter (Matters MVP P4 — run control / review / headless propose)
+  'matter_run_control',
+  'matter_review_update',
+  'matter_update_propose',
   // notion
   'notion_agent_chat',
   // legacy (deleted engine, still present in persisted history)

@@ -222,6 +222,12 @@ export function createNewSession(input: OpenSessionInput): ChatSession {
  * same history UI and onServerResumeSettled can resolve the job from the session. NOT deduped (each
  * run is its own session). Returns the new session id. The gateway (electron main) calls this via the
  * cfg.createAgentSession hook, wired only when MAILAGENT_CUSTOM_AGENTS_ENABLED is on.
+ *
+ * Matters MVP P4 (D7) — an optional `anchor` makes the row anchor_type='matter' + anchor_id=<matter
+ * id> instead of the general anchor, so a follow-up run's session hangs off its Matter. ADDITIVE:
+ * omitting it reproduces the pre-P4 INSERT byte-for-byte, and CHAT_DB v27's CHECK already admits
+ * matter+agent, so no migration is involved. A non-positive/non-integer id is rejected rather than
+ * written as a dangling anchor (mirrors resolveAnchor's matter branch above).
  */
 export function createAgentSession(input: {
   agentId: string
@@ -233,18 +239,29 @@ export function createAgentSession(input: {
   parentSessionId?: number | null
   parentToolCallId?: string | null
   invokedBy?: 'user' | 'main_agent' | null
+  anchor?: { type: 'matter'; id: number }
 }): number {
   const db = getChatDb()
   const now = Date.now()
+  const matterId = input.anchor?.id
+  if (input.anchor !== undefined && (!Number.isInteger(matterId) || (matterId as number) <= 0)) {
+    throw new Error(
+      `createAgentSession: anchor.type='matter' requires a positive integer id, got ${String(matterId)}`
+    )
+  }
+  const anchorType = input.anchor ? 'matter' : 'general'
+  const anchorId = input.anchor ? (matterId as number) : null
   const result = db
     .prepare(
       `INSERT INTO ai_chat_sessions
         (email_id, anchor_type, anchor_id, backend_kind, backend_model,
          backend_agent_page_id, title, created_at, updated_at, origin, agent_id, agent_job_id,
          trigger_id, trigger_kind, trigger_fired_at, parent_session_id, parent_tool_call_id, invoked_by)
-       VALUES (NULL, 'general', NULL, 'ai-sdk', NULL, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`
+       VALUES (NULL, ?, ?, 'ai-sdk', NULL, NULL, ?, ?, ?, 'agent', ?, ?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
+      anchorType,
+      anchorId,
       input.title,
       now,
       now,
@@ -358,9 +375,9 @@ export function listAllSessions(options: ListAllSessionsOptions = {}): ChatSessi
       ? "s.origin = 'agent'"
       : origin === 'im'
         ? "s.origin = 'im'"
-      : origin === 'all'
-        ? '1 = 1'
-        : "COALESCE(s.origin, 'interactive') <> 'agent'"
+        : origin === 'all'
+          ? '1 = 1'
+          : "COALESCE(s.origin, 'interactive') <> 'agent'"
   // dogfood-3 — includeArchived (default false → only active sessions, byte-identical to before; the
   // agent view passes true to also pull archived rows for its bottom "归档" group). SELECT now carries
   // s.archived so the renderer can split active vs archived. The archived branch is a fixed boolean (no

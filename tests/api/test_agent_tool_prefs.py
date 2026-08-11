@@ -50,6 +50,9 @@ EXPECTED_DEFAULT_AUTO = {
     "matter_stakeholder_mutate",
     "matter_relation_mutate",
     "matter_add_note",
+    # Matters MVP P4 D8：启动/取消一轮跟进 run —— 本地可逆（取消不回滚已观察到的事实，
+    # 但它本身不落任何 Matter 状态），与 custom_agent_run_now 同档。
+    "matter_run_control",
 }
 # configurable=False（固定形状）：send=收件人白名单 / run_command=policy_rules /
 # 供应链两卡 / custom-agent CRUD（run_now 除外）。
@@ -63,6 +66,10 @@ EXPECTED_FIXED_ASK = {
     "custom_agent_update",
     "custom_agent_delete",
     "custom_agent_call",
+    # Matters MVP P4 D8：评审决定的免卡形状是 gateway 侧的**动态** policyEvaluate（非 manual
+    # 恒卡 / manual 拒绝免卡 / manual 接受且选中含 field change 弹卡），不是一个静态档 ——
+    # 故不可配置且出厂 ask：owner 把它调成无条件 auto 就会绕过 field-accept 那张卡。
+    "matter_review_update",
 }
 # D2=a：设 auto 需红警告 + 一次性确认。
 EXPECTED_DANGER_AUTO = {"calendar_event_delete", "notion_agent_chat"}

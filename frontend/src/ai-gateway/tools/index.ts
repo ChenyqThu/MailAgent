@@ -32,7 +32,7 @@ import { createCustomAgentTools } from './agents'
 import { createAgentCatalogTools } from './agent_catalog'
 import { createAgentCallTools } from './agent_call'
 import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
-import { createMatterReadTools, createMatterWriteTools } from './matters'
+import { createMatterReadTools, createMatterRunTools, createMatterWriteTools } from './matters'
 import { createNotionAgentTools } from './notion_agent'
 import {
   admitDynamicTools,
@@ -170,10 +170,27 @@ export interface BuildGatewayToolsOpts {
    *  calendar_event_rsvp / calendar_event_delete (edit-tier writes, D4 恒 HITL — always ask, no
    *  whitelist/免卡 channel). Off → not added → ToolSet byte-identical to the pre-epic set. */
   calendarToolsEnabled?: boolean
-  /** MAILAGENT_MATTERS_ENABLED — all nine Matter tools are all-or-nothing with approvalGuard. */
+  /** MAILAGENT_MATTERS_ENABLED (P3, extended by P4 D8) — the Matter tool family is all-or-nothing
+   *  with approvalGuard: two silent reads + the NINE domain_write tools (seven mutations + the two
+   *  review-side tools matter_run_control / matter_review_update). Class domain_write keeps them
+   *  registered in every owner-present venue and in the headless modes (where the always-ask edit
+   *  tier stashes → paused_handoff), and structurally OUT of a matter_followup run (D5). The same
+   *  flag also gates the run-only `matter_update_propose` below — a proposal tool without the
+   *  Matter domain behind it would be a dead end. Off (default) → not added → ToolSet
+   *  byte-identical to the pre-P3 set. */
   matterToolsEnabled?: boolean
-  /** Server-derived G5 filter; never exposed in either email tool schema. */
+  /** Server-derived G5 filter; never exposed in either email tool schema. Manual Matter chat sets
+   *  it from the panel's scope; a P4 follow-up run derives its own from agentRunContext.matterRun
+   *  (see effectiveMatterScope below) — the two never both apply. */
   matterScopeFilter?: { matterId: number } | null
+  /** MAILAGENT_MATTER_AGENT_ENABLED (P4 D11) — the follow-up venue's kill-switch, threaded from
+   *  the lifecycle. The AUTHORITATIVE gate is the endpoint (a spec stamped runKind
+   *  'matter_followup' is refused 403 before any run starts), so a matterRun anchor can only exist
+   *  when the flag was on; this is the registration-side belt for a hand-built/future path that
+   *  builds a context without going through that door. Written `!== false` (planToolsEnabled
+   *  先例): the lifecycle ALWAYS threads the value, so an explicit false really does strip the
+   *  tool, while a harness cfg that omits it keeps the pre-P4 assembly semantics. */
+  matterAgentEnabled?: boolean
   /** task 07-21 (MAILAGENT_NOTION_AGENT_TOOL) — when true AND approvalGuard is supplied, the
    *  notion_agent_chat tool is added: an edit-tier write (恒 HITL — external AI call to the
    *  notion-agent CLI, side effects on the Notion side, no whitelist/免卡 channel). Unlike the
@@ -270,9 +287,18 @@ export function buildGatewayTools(
   // consumption-side manual re-check) — headless stays grants-only, im stays matrix-only.
   const toolPrefs = contextMode === 'manual_chat' ? (opts.toolApprovalPrefs ?? null) : null
   const prefTiers = toolPrefs?.tools
+  // P4 (D5) — a follow-up run carries its Matter anchor in the run context instead of the
+  // caller-supplied filter (the headless path has no panel to derive one from). The manual filter
+  // wins when both are somehow present, so a manual assembly is byte-identical to P3.
+  const matterRun = opts.agentRunContext?.matterRun
+  const effectiveMatterScope =
+    opts.matterScopeFilter ?? (matterRun ? { matterId: matterRun.matterId } : null)
   const tools: ToolSet = {
     ...createEmailReadTools(opts.domain, collector, {
-      matterScopeFilter: opts.matterScopeFilter
+      matterScopeFilter: effectiveMatterScope,
+      // 🔴 email_get's MEMBERSHIP guard is run-only (G5): the manual filter narrows lists, it does
+      // not police a direct read, and P3's manual semantics must stay byte-identical.
+      matterGetScope: matterRun ? { matterId: matterRun.matterId } : null
     }),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
     ...createReportTools(opts.domain, collector, opts.agentRunContext?.agentId)
@@ -528,6 +554,15 @@ export function buildGatewayTools(
       })
     )
   }
+  // Matters MVP P3 (D6) + P4 (D8) — the Matter family behind MAILAGENT_MATTERS_ENABLED. Mixed set
+  // (2 silent reads + 9 edit-tier writes) → all-or-nothing on flag + guard (calendar 先例: a write
+  // tool cannot exist without its guard, and registering only the reads would advertise a half
+  // capability). CORE_UNGATED (no skill ownership) so applySkillGating never drops them; class
+  // read/domain_write (policy.ts), so the LAST assembly step keeps the writes in owner-present and
+  // headless venues alike — and strips ALL NINE inside a matter_followup run (D5). No
+  // agentRunContext is threaded into the write factory: no per-agent whitelist may 免卡 a Matter
+  // write, and matter_review_update's own policyEvaluate is a SERVER-fact seam, not a grant.
+  // flag-off (default) → not added → byte-identical to the pre-P3 set.
   if (opts.matterToolsEnabled && opts.approvalGuard) {
     Object.assign(tools, createMatterReadTools(opts.domain, collector))
     Object.assign(
@@ -540,6 +575,13 @@ export function buildGatewayTools(
         contextMode
       })
     )
+    // P4 (D6) — matter_update_propose exists ONLY inside a follow-up run: its identity (which
+    // Matter, which run) comes from the server-assembled anchor, so outside that context there is
+    // nothing for it to address. Guard-free by design (class artifact, silent — report_write
+    // 先例): it writes a PENDING proposal the owner still has to review.
+    if (matterRun && opts.matterAgentEnabled !== false) {
+      Object.assign(tools, createMatterRunTools(opts.domain, collector, matterRun))
+    }
   }
   // task 07-21 — notion-agent tool behind MAILAGENT_NOTION_AGENT_TOOL. One edit-tier write (恒 HITL,
   // class 'outbound') → needs the approval guard (all-or-nothing on flag + guard). Registered here

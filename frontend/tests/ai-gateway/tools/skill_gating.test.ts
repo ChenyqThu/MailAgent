@@ -21,6 +21,9 @@ import { mockDomain, okEnvelope } from './_helpers'
  *  🔴 维护：加新 tool-gating flag 时必须在此把它开齐，否则下方 FORWARD 完整性守护（every gateway
  *  tool ∈ 已分类）看不到该 flag 门控的工具 → 漏归类不会变红（review L2）。 */
 const CONDITIONAL_HEADLESS_CORE_TOOLS = new Set(['agent_catalog_list', 'agent_catalog_get'])
+/** Matters MVP P4 — matter_update_propose registers only inside a follow-up run context (it binds
+ *  to a server-assembled Matter+run anchor), so a manual/mount build cannot contain it. */
+const MATTER_RUN_ONLY_TOOLS = new Set(['matter_update_propose'])
 
 function buildAllTools() {
   const manual = buildGatewayTools({
@@ -60,6 +63,11 @@ function buildAllTools() {
     // skill-gated (GATEWAY_SKILL_TOOLS notion_agent), so the FORWARD/REVERSE drift guards need it
     // built here to see it classified.
     notionAgentToolsEnabled: true,
+    // Matters MVP P3/P4 — the matter family (MAILAGENT_MATTERS_ENABLED). 🔴 P3 landed the nine
+    // tools WITHOUT adding them here, which is exactly why the FORWARD guard below never noticed
+    // that they were also missing from CORE_UNGATED_GATEWAY_TOOLS: two holes cancelling out. P4
+    // closes both (handoff 遗留 #4).
+    matterToolsEnabled: true,
     // S2 W0 — the drift guard reasons over the MANUAL-session universe (fail-closed default is
     // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
     contextMode: 'manual_chat'
@@ -74,7 +82,20 @@ function buildAllTools() {
       skills: []
     }
   })
-  return { ...manual, ...grantedHeadless }
+  // P4 — the only assembly that yields matter_update_propose (a Matter+run anchor from the spec).
+  const matterRun = buildGatewayTools({
+    domain: mockDomain(() => okEnvelope([])),
+    approvalGuard: new ApprovalGuard(),
+    matterToolsEnabled: true,
+    contextMode: 'matter_followup',
+    agentRunContext: {
+      agentId: 'matter:MAT-000042',
+      allowedTools: [],
+      skills: [],
+      matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 }
+    }
+  })
+  return { ...manual, ...grantedHeadless, ...matterRun }
 }
 
 describe('applySkillGating (pure semantics)', () => {
@@ -257,6 +278,7 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       createAgentCallSession: () => 2,
       setAgentSessionJobId: () => undefined,
       calendarToolsEnabled: true,
+      matterToolsEnabled: true,
       contextMode: 'manual_chat', // manual probe isolates the mount gate from the mode floor
       agentRunContext: { agentId: 'dms', skills: [] }
     })
@@ -265,7 +287,9 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
     }
     // the mount list is NOT a second switch for the core floor (ADR §5.1)
     for (const n of CORE_UNGATED_GATEWAY_TOOLS) {
-      if (CONDITIONAL_HEADLESS_CORE_TOOLS.has(n)) {
+      // Context-conditional members (headless+grant catalog reads / the matter-run-only propose)
+      // are absent from THIS probe by construction — their gate is the run context, not mounting.
+      if (CONDITIONAL_HEADLESS_CORE_TOOLS.has(n) || MATTER_RUN_ONLY_TOOLS.has(n)) {
         expect(tools[n]).toBeUndefined()
       } else {
         expect(tools[n]).toBeDefined()

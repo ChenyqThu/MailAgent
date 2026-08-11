@@ -19,6 +19,30 @@ export interface AgentRunSpec {
   jobId: number
   agentId: string
   agentTitle: string
+  /** Matters MVP P4 (D5/D7) — the SERVER's run-kind stamp, currently the single literal
+   *  `'matter_followup'` (absent on every custom-agent run). It is deliberately NOT a trigger
+   *  kind: `deriveContextMode` reads it BEFORE the whole trigger.kind ladder, because a Matter
+   *  follow-up's trigger.kind is 'manual' and the ladder would fail-close it to
+   *  untrusted_trigger — a mode that still admits domain writes.
+   *
+   *  🔴 The three-mirror sync note below applies to `trigger.kind` ONLY. runKind has its own
+   *  gate (an independent assertion block in tests/api/test_context_mode_consistency.py pinning
+   *  the agentRun.ts branch + its position ahead of the ladder), and it is deliberately absent
+   *  from `deriveHeadlessMode` (shared.ts): that mirror describes CUSTOM-AGENT rule provenance,
+   *  and a Matter run is not a custom-agent rule scenario (D5). */
+  runKind?: string
+  /** P4 — the Matter a follow-up run is anchored to, assembled by `src/matters/run_spec.py`.
+   *  `title` feeds the prompt/session title; `id`(internal int) + `publicId` + `runId` are what
+   *  `agentRunContextFromSpec` projects into AgentRunContext.matterRun (email-read scoping + the
+   *  matter_update_propose registration/identity). 🔴 The model has NO control surface over any of
+   *  them — the propose tool's schema carries no matter_id / run_id at all; the handler stamps
+   *  both from this server-assembled anchor. Absent on every non-Matter run. */
+  matter?: {
+    id: number
+    publicId: string
+    title: string
+    runId: number
+  }
   trigger: {
     /** 'cron' | 'schedule' → cron_headless, 'email_filter' → untrusted_trigger, 'im' → im_chat
      *  (阶段 0b 预置 —— 阶段 2 飞书对话；当前无任何 spec 会带它); anything else
@@ -768,8 +792,14 @@ export interface ChatApi {
   publishSkillDraft(id: string, enabled: boolean): Promise<void>
   discardSkillDraft(id: string): Promise<void>
   importAgentPlugin(zipBase64: string): Promise<AgentPluginImportResult>
-  listSkillTrust(name: string): Promise<{ currentPackageHash: string | null; trusts: SkillTrustRule[] }>
-  grantSkillTrust(name: string, entrypoint: string, policy: SkillTrustRule['policy']): Promise<SkillTrustRule>
+  listSkillTrust(
+    name: string
+  ): Promise<{ currentPackageHash: string | null; trusts: SkillTrustRule[] }>
+  grantSkillTrust(
+    name: string,
+    entrypoint: string,
+    policy: SkillTrustRule['policy']
+  ): Promise<SkillTrustRule>
   revokeSkillTrust(name: string, trustId: string): Promise<void>
   /**
    * 07-16 approval-mode switcher — read the owner-global chat approval mode

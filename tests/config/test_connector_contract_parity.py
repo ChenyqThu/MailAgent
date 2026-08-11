@@ -265,8 +265,25 @@ def test_rank_is_dense_and_monotonic_on_both_legs():
 # ── ② caller context_mode 值域 ─────────────────────────────────────────────────
 
 
+#: Matters MVP P4 —— TS 有第五个 mode ``matter_followup``，但它**结构上到不了 connector 面**，
+#: 故不进 Python 的 caller 白名单：
+#:   * connector 工具的唯一加载缝 ``connector.ts::shouldLoadConnectorTools`` 只认四个 mode
+#:     （manual/im 要求无 agentRunContext；两个 headless 要求 grants 非空），其余一律 false ——
+#:     跟进 run 连 manifest 都不会拉，更不会注册任何 ``mcp__*`` 工具；
+#:   * 且 D5 的矩阵行只放行 read + artifact，connector_write 在这个 venue 恒 false；
+#:   * 且跟进 run 的 spec 结构上不带任何 grants（D5：`toolPolicy` 只投 allowedTools + skills）。
+#: ⇒ gateway 永远不会以这个 mode 调 ``/api/connector/*``；把它加进 CALLER_CONTEXT_MODES 反而要
+#: 在 owner-present / headless 里二选一站队（下一个用例的划尽闸），等于**替一个不存在的调用面
+#: 提前做了 connector 产品决策** —— 正是 service.py 那段注释明令禁止的「继承」。
+#: 🔴 这不是「把闸放宽成子集」：下面仍是**逐项有序相等**，只是先按本表剔除；任何**新**增的 mode
+#: 依旧会让闸红（不在本表里就必须同步 Python 白名单）。将来若真要让跟进 venue 用 connector：
+#: 从本表删掉它 + 同批改 CALLER_CONTEXT_MODES + 显式划进两张白名单之一。
+CONNECTOR_UNREACHABLE_CONTEXT_MODES: Tuple[str, ...] = ("matter_followup",)
+
+
 def test_caller_context_modes_match_gateway_agent_context_modes():
-    """Python 的 caller 白名单 ↔ TS ``AGENT_CONTEXT_MODES``（**有序**逐项相等）。
+    """Python 的 caller 白名单 ↔ TS ``AGENT_CONTEXT_MODES``（**有序**逐项相等，剔除够不着
+    connector 面的 mode，见 ``CONNECTOR_UNREACHABLE_CONTEXT_MODES``）。
 
     TS 侧是 gateway 实际会发出的 ``caller.context_mode`` 全集；Python 侧是它的接收白名单。
     右边多一个 → 那种 mode 的调用被 Python 400（功能整条不可用，报错还指向"调用方 bug"）；
@@ -274,9 +291,38 @@ def test_caller_context_modes_match_gateway_agent_context_modes():
     """
     py_modes = py_str_tuple(SERVICE_PY, "CALLER_CONTEXT_MODES")
     ts_modes = ts_const_string_array(POLICY_TS, "export const AGENT_CONTEXT_MODES = [")
-    assert py_modes == ts_modes, (
-        f"caller context_mode 值域漂移：py={py_modes!r} ts={ts_modes!r}"
+    # canary：剔除表里的名字必须真的是一个 TS mode（改名/删除 → 这里先红，而不是静默少剔一项）
+    for mode in CONNECTOR_UNREACHABLE_CONTEXT_MODES:
+        assert mode in ts_modes, (
+            f"{mode} 不在 TS AGENT_CONTEXT_MODES 里了 —— 剔除表过期，更新本闸"
+        )
+    expected = tuple(m for m in ts_modes if m not in CONNECTOR_UNREACHABLE_CONTEXT_MODES)
+    assert py_modes == expected, (
+        f"caller context_mode 值域漂移：py={py_modes!r} ts(剔除后)={expected!r}"
     )
+
+
+def test_connector_load_seam_really_excludes_the_unreachable_modes():
+    """上面那张剔除表的**理由本身**要可证伪：加载缝里不许出现这些 mode 的字面量。
+
+    没有这条，剔除表就是一句自说自话的注释 —— 某天有人在 ``shouldLoadConnectorTools`` 里给
+    跟进 venue 开了口子，第一个用例仍然绿（它只比对值域），而 Python 会 400 掉那些调用。
+    """
+    text = CONNECTOR_TS.read_text(encoding="utf-8")
+    seam = re.search(
+        r"export function shouldLoadConnectorTools\b.*?\n\}", text, re.DOTALL
+    )
+    assert seam, "shouldLoadConnectorTools 抽取失败 —— 加载缝被移动/改名，更新本闸"
+    literals = set(re.findall(r"'([a-z_]+)'", seam.group(0)))
+    assert "manual_chat" in literals and "cron_headless" in literals, (
+        f"加载缝里抽不到已知 mode 字面量（习语变了？）：{sorted(literals)!r}"
+    )
+    for mode in CONNECTOR_UNREACHABLE_CONTEXT_MODES:
+        assert mode not in literals, (
+            f"{mode} 出现在 connector 加载缝里 —— 这个 venue 现在够得着 connector 了，"
+            "必须把它从 CONNECTOR_UNREACHABLE_CONTEXT_MODES 删掉 + 同批加进 "
+            "CALLER_CONTEXT_MODES 并显式划进 owner-present / headless 之一"
+        )
 
 
 def test_owner_present_and_headless_partition_the_caller_modes():

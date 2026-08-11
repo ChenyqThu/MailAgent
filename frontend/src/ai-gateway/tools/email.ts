@@ -48,7 +48,17 @@ const ATTACHMENT_TEXT_MAX_CHARS = 12000
 export function createEmailReadTools(
   domain: MailAgentDomainClient,
   collector: GatewayToolAuditCollector = [],
-  opts: { matterScopeFilter?: { matterId: number } | null } = {}
+  opts: {
+    /** G5 (P3) — server-derived Matter narrowing of the LIST/SEARCH results. Never in either
+     *  tool's schema. Manual Matter chat and a P4 follow-up run both set it. */
+    matterScopeFilter?: { matterId: number } | null
+    /** P4 (D5) — the follow-up run's Matter MEMBERSHIP guard for email_get, deliberately a
+     *  SECOND option rather than a reuse of matterScopeFilter: the two mean different things
+     *  (narrow a result set vs. refuse an out-of-Matter row) and only the run context may ask
+     *  for the second. Manual Matter chat keeps passing matterScopeFilter alone, so its
+     *  email_get stays byte-identical to P3. */
+    matterGetScope?: { matterId: number } | null
+  } = {}
 ): Record<string, Tool> {
   // bind every tool's audit to this request's collector (generic — preserves the
   // per-tool input typing inferred from each zod inputSchema).
@@ -157,7 +167,7 @@ export function createEmailReadTools(
       'Does NOT include the body — call email_body for that.',
     inputSchema: emailGetSchema,
     run: async (input, signal) => {
-      const row = await domain.getEmail(input.internal_id, signal)
+      const row = await domain.getEmail(input.internal_id, signal, opts.matterGetScope?.matterId)
       if (!row) throw new DomainError('E_NOT_FOUND', `email ${input.internal_id} not found`)
       return row
     }

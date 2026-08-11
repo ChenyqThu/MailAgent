@@ -566,6 +566,15 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // byte-identical to the pre-epic set.
   const calendarToolsEnabled = envBool('MAILAGENT_CALENDAR_AGENT_TOOLS', true)
   const matterToolsEnabled = envBool('MAILAGENT_MATTERS_ENABLED', false)
+  // Matters MVP P4 (D11) — MAILAGENT_MATTER_AGENT_ENABLED gates the follow-up RUN venue: with it
+  // off, POST /api/ai/agent-run rejects a spec stamped runKind='matter_followup' (403 E_DISABLED,
+  // fail-closed) so no run ever starts. Default OFF (ship-off → dogfood → cutover 另拍, the island
+  // /MCP 模式). main-env-only, NO vite define (mirrors the other tool-family flags). 🔴 Double
+  // carrier: the Python serve-api reads the SAME env via pydantic (matter_agent_enabled — the runs
+  // /proposal REST gate + the worker); both defaults MUST stay false together
+  // (tests/config/test_flag_cross_language.py), else a run would start with no place to submit its
+  // proposal (or the endpoints would sit live with nothing able to reach them).
+  const matterAgentEnabled = envBool('MAILAGENT_MATTER_AGENT_ENABLED', false)
   // task 07-21 — MAILAGENT_NOTION_AGENT_TOOL gates the notion_agent_chat tool (edit-tier 恒 HITL —
   // delegates a Notion request to the notion-agent CLI via serve-api /api/skills/invoke). Unlike the
   // other tool families this one is SKILL-gated (skill_gating maps it to the notion_agent skill), so
@@ -1191,6 +1200,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           calendarToolsEnabled,
           matterToolsEnabled,
           matterScopeFilter,
+          // P4 (D11) — the follow-up kill-switch's registration-side belt (the endpoint gate is
+          // the authoritative one). ALWAYS threaded, so an explicit false really strips the tool.
+          matterAgentEnabled,
           // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL, default on; skill-gated).
           notionAgentToolsEnabled,
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
@@ -1299,6 +1311,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // S4 W3 (ADR-003 D3) — pre-create the ai_chat.db session (origin='agent') a headless run persists
     // into. Wired only when custom agents are on. A create failure returns null (the run streams but
     // persists nothing) rather than throwing → the endpoint degrades gracefully.
+    // P4 (D11) — the follow-up venue kill-switch consumed by handleAgentRun.
+    matterAgentEnabled,
     createAgentSession: customAgentsEnabled
       ? (input: {
           agentId: string
@@ -1307,6 +1321,8 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           triggerId?: string | null
           triggerKind?: string | null
           triggerFiredAt?: number | null
+          /** P4 (D7) — Matter-anchored session for a follow-up run; omitted → general anchor. */
+          anchor?: { type: 'matter'; id: number }
         }) => {
           try {
             return createAgentSession(input)

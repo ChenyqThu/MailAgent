@@ -1,0 +1,19 @@
+{
+  "id": "AGT-MATTER-005",
+  "category": "email_action",
+  "title": "Matter 手动触发跟进 run（合并语义原样回报）",
+  "surface": "general",
+  "user_prompt": "现在给 MAT-000042 跑一轮跟进。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["matter_run_control"],
+  "must_use_tools": ["matter_run_control"],
+  "forbidden_tools": ["matter_update", "matter_review_update", "matter_update_propose", "email_prepare_send"],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.1, "uncertainty_honesty": 0.1, "tool_efficiency": 0.2, "ux_clarity": 0.2 },
+  "rubric_ref": "email_action.md",
+  "notes": "P4 D8：start 只带 mutation 信封（trigger_kind 不是入参，伪造 schedule 结构上不可能）。已有活跃 run 时服务端返回 coalesced:true + 既有 run，模型应如实转述「已有一轮在跑」而不是谎报新建；default_approval=auto 故本地可逆的启动无需审批卡。跟进 run 自己的提案工具（matter_update_propose）不属于这个手动会话，列入 forbidden。"
+}

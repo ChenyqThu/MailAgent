@@ -67,16 +67,38 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL), classified 'outbound' (edit-tier
     // 恒 HITL, un-grantable → stripped headless). Built here so the FULL-set drift guards see it.
     notionAgentToolsEnabled: true,
-    // Matters MVP P3 (D6) — nine matter tools (MAILAGENT_MATTERS_ENABLED), classified read (2) +
-    // domain_write (7). The gateway class layer admits them in every venue incl. headless — the
-    // real headless gate is the HEADLESS_TOOL_OPTIONS checkbox face (matter is headless_excluded
-    // there) intersected in wrapCfgForAgentRun's allowedTools filter.
+    // Matters MVP P3 (D6) + P4 (D8) — eleven matter tools (MAILAGENT_MATTERS_ENABLED), classified
+    // read (2) + domain_write (9). The gateway class layer admits them in every venue incl.
+    // headless — the real headless gate is the HEADLESS_TOOL_OPTIONS checkbox face (matter is
+    // headless_excluded there) intersected in wrapCfgForAgentRun's allowedTools filter. The
+    // twelfth, matter_update_propose, is run-context-only (see MATTER_RUN_ONLY_TOOLS).
     matterToolsEnabled: true,
     ...(contextMode !== undefined ? { contextMode } : {})
   })
 }
 
 const CONDITIONAL_HEADLESS_READ_TOOLS = new Set(['agent_catalog_list', 'agent_catalog_get'])
+
+/** Matters MVP P4 (D6) — matter_update_propose registers ONLY inside a follow-up run (the ToolSet
+ *  needs a server-assembled Matter+run anchor to bind it to), so it can never appear in the
+ *  manual full-set build. Same shape as CONDITIONAL_HEADLESS_READ_TOOLS: a classified tool whose
+ *  registration has an extra CONTEXT condition, given its own builder for the drift guards. */
+const MATTER_RUN_ONLY_TOOLS = new Set(['matter_update_propose'])
+
+function buildMatterRunTools() {
+  return buildGatewayTools({
+    domain: mockDomain(() => okEnvelope([])),
+    approvalGuard: new ApprovalGuard(),
+    matterToolsEnabled: true,
+    contextMode: 'matter_followup',
+    agentRunContext: {
+      agentId: 'matter:MAT-000042',
+      allowedTools: [],
+      skills: [],
+      matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 }
+    }
+  })
+}
 
 function buildGrantedHeadlessCatalogTools() {
   return buildGatewayTools({
@@ -189,6 +211,20 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       web: false,
       outbound: false,
       connector_write: true
+    },
+    // Matters MVP P4 (D5) — the strictest row of all: ONLY read + artifact. domain_write is the
+    // one that distinguishes it from every other non-manual mode (they all admit domain writes and
+    // let the always-ask edit tier stash instead) — a follow-up run observes and PROPOSES, it never
+    // writes, so its single output channel is the artifact-class matter_update_propose.
+    matter_followup: {
+      read: true,
+      artifact: true,
+      domain_write: false,
+      capability_change: false,
+      exec: false,
+      web: false,
+      outbound: false,
+      connector_write: false
     }
   }
 
@@ -287,20 +323,25 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
         const expected =
           mode === 'manual_chat'
             ? true // grants never consulted in manual
-            : cls === 'read' || cls === 'artifact' || cls === 'domain_write'
-              ? true
-              : mode === 'im_chat'
-                ? // stage 2 PR-1 (08-04 拍板) — connector 全开放 in im_chat; every OTHER class
-                  // keeps the hard floor and grants are STILL never consulted (web is the venue
-                  // switch, pinned in its own describe — not part of the grants axis).
-                  cls === 'connector_write'
-                : cls === 'exec'
-                  ? execGranted
-                  : cls === 'web'
-                    ? webGranted
-                    : cls === 'connector_write'
-                      ? connectorGranted // PR3 — the connector axis lifts ONLY its own row
-                      : false // capability_change + outbound (send):恒 false under ANY grants
+            : mode === 'matter_followup'
+              ? // P4 (D5) — the follow-up row is evaluated BEFORE the generic
+                // read/artifact/domain_write line, and grants are never consulted: a Matter bound
+                // to a profile carrying exec/web/connector grants still gets read+artifact only.
+                cls === 'read' || cls === 'artifact'
+              : cls === 'read' || cls === 'artifact' || cls === 'domain_write'
+                ? true
+                : mode === 'im_chat'
+                  ? // stage 2 PR-1 (08-04 拍板) — connector 全开放 in im_chat; every OTHER class
+                    // keeps the hard floor and grants are STILL never consulted (web is the venue
+                    // switch, pinned in its own describe — not part of the grants axis).
+                    cls === 'connector_write'
+                  : cls === 'exec'
+                    ? execGranted
+                    : cls === 'web'
+                      ? webGranted
+                      : cls === 'connector_write'
+                        ? connectorGranted // PR3 — the connector axis lifts ONLY its own row
+                        : false // capability_change + outbound (send):恒 false under ANY grants
         expect(
           isToolClassAllowedInMode(cls, mode, grants),
           `${cls} × ${mode} × ${JSON.stringify(grants)}`
@@ -373,10 +414,10 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
       ...CLASSES_OF('artifact'),
       ...CLASSES_OF('domain_write')
     ]) {
-      if (CONDITIONAL_HEADLESS_READ_TOOLS.has(name)) {
+      if (CONDITIONAL_HEADLESS_READ_TOOLS.has(name) || MATTER_RUN_ONLY_TOOLS.has(name)) {
         expect(
           filtered[name],
-          `${name} is headless+grant only, never an im_chat tool`
+          `${name} is context-conditional (headless+grant / matter-run only), never in a manual build`
         ).toBeUndefined()
         continue
       }
@@ -607,7 +648,12 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
   test('manual_chat → the FULL flag-on set (byte-identical keys to the pre-W0 assembly — W0 adds/removes no tool)', () => {
     const keys = Object.keys(buildAllTools('manual_chat')).sort()
     const expected = Object.keys(GATEWAY_TOOL_CLASSES)
-      .filter((name) => !CONDITIONAL_HEADLESS_READ_TOOLS.has(name))
+      .filter(
+        (name) =>
+          !CONDITIONAL_HEADLESS_READ_TOOLS.has(name) &&
+          // P4 — run-context-only tools are absent from EVERY manual assembly by construction.
+          !MATTER_RUN_ONLY_TOOLS.has(name)
+      )
       .sort()
     expect(keys).toEqual(expected)
   })
@@ -684,7 +730,9 @@ describe('drift guards — classification completeness + eval catalog mirror', (
   test('REVERSE: every classified name exists as a real gateway tool (catches rename/delete)', () => {
     const real = new Set([
       ...Object.keys(buildAllTools('manual_chat')),
-      ...Object.keys(buildGrantedHeadlessCatalogTools())
+      ...Object.keys(buildGrantedHeadlessCatalogTools()),
+      // P4 — the matter-run context is the only assembly that can produce matter_update_propose.
+      ...Object.keys(buildMatterRunTools())
     ])
     for (const name of Object.keys(GATEWAY_TOOL_CLASSES)) {
       expect(real.has(name), `${name} classified but not a real gateway tool`).toBe(true)

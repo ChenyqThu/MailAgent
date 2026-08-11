@@ -144,7 +144,25 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'calendar_event_get',
   'calendar_event_reschedule',
   'calendar_event_rsvp',
-  'calendar_event_delete'
+  'calendar_event_delete',
+  // Matters MVP P3/P4 —— Matter 家族 12 件（behind MAILAGENT_MATTERS_ENABLED）：2 读 + 9 写 +
+  // 跟进 run 专属的 matter_update_propose。开关权在独立 flag（calendar 先例；Python 无 matter
+  // builtin skill，GATEWAY_SKILL_TOOLS 无映射），永不 skill-gated。
+  // 🔴 P3 落地时**漏了**这 12 个名字：完整性守护（每个 gateway 工具必被分类）本该当场变红，
+  // 却因为 skill_gating.test.ts 的 buildAllTools 没开 matterToolsEnabled 而静默放过 —— 两个
+  // 缺口互相抵消。P4 一次性补齐（名单 + 那处 buildAllTools），闭掉 handoff 遗留 #4。
+  'matter_find',
+  'matter_get',
+  'matter_create',
+  'matter_update',
+  'matter_item_mutate',
+  'matter_resource_mutate',
+  'matter_stakeholder_mutate',
+  'matter_relation_mutate',
+  'matter_add_note',
+  'matter_run_control',
+  'matter_review_update',
+  'matter_update_propose'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

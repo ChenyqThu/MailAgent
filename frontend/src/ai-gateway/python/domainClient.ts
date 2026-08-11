@@ -104,6 +104,15 @@ export type DomainMatterResult = Record<string, unknown> & {
   undo?: { tool: string; input: Record<string, unknown>; label: string } | null
 }
 
+/** P4 — GET /matters/{id}/updates/{update_id}. Contracts §3.8 wraps the row in `update`; the type
+ *  spells BOTH shapes because its one consumer (matter_review_update's approval seam) treats an
+ *  unreadable payload as "ask" — a wrapper change must degrade to an extra approval card, never
+ *  to a crash or to a silent card-free accept. */
+export type DomainMatterUpdateDetail = Record<string, unknown> & {
+  update?: Record<string, unknown>
+  changes?: unknown
+}
+
 /** Filters for report_list. */
 export interface DomainReportListOpts {
   cadence?: 'daily' | 'weekly' | 'monthly' | 'custom'
@@ -912,6 +921,86 @@ export class MailAgentDomainClient {
     })
   }
 
+  // ── Matters MVP P4 — follow-up runs, proposals, review (contracts §3.8/§3.9) ───────────────
+  //
+  // 🔴 `proposeMatterUpdate` targets the INTERNAL proposal endpoint (verify_local_token + the
+  // matters/agent double flag gate, never the cf_access face): only the gateway, running a
+  // server-assembled matter_followup spec, can reach it. The matter/run identity comes from the
+  // path — the tool's input carries neither (D6).
+
+  /** POST /matters/{public_id}/runs/{run_id}/proposal — the follow-up run's single write.
+   *  409 E_PROPOSAL_EXISTS when this run already submitted one (at most one proposal per run). */
+  proposeMatterUpdate(
+    publicId: string,
+    runId: number,
+    proposal: Record<string, unknown>,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req('POST', `/matters/${encodeURIComponent(publicId)}/runs/${runId}/proposal`, {
+      body: proposal,
+      signal
+    })
+  }
+
+  /** POST /matters/{public_id}/runs — start a manual follow-up run. `trigger_kind` is NOT part of
+   *  the request: 'manual' is the only kind this face produces (contracts §4.4 — a schedule start
+   *  is the scheduler's own internal path). An already-active run returns 200 + coalesced:true. */
+  startMatterRun(
+    publicId: string,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    return this._req('POST', `/matters/${encodeURIComponent(publicId)}/runs`, {
+      body: { mutation },
+      signal
+    })
+  }
+
+  /** POST /matters/{public_id}/runs/{run_id}/cancel — CAS cancel (queued → canceled outright;
+   *  running → a cooperative cancel request). Never rolls back what the run already observed. */
+  cancelMatterRun(
+    publicId: string,
+    runId: number,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    return this._req('POST', `/matters/${encodeURIComponent(publicId)}/runs/${runId}/cancel`, {
+      body: { mutation },
+      signal
+    })
+  }
+
+  /** GET /matters/{public_id}/updates/{update_id} — the full proposal (original + changes +
+   *  citations + reviewed result). Consumed by matter_review_update's dynamic approval seam to
+   *  decide whether the SELECTED changes touch a `field` (→ approval card). */
+  getMatterUpdate(
+    publicId: string,
+    updateId: number,
+    signal?: AbortSignal
+  ): Promise<DomainMatterUpdateDetail> {
+    return this._req('GET', `/matters/${encodeURIComponent(publicId)}/updates/${updateId}`, {
+      signal
+    })
+  }
+
+  /** POST /matters/{public_id}/updates/{update_id}/accept|reject — the owner's review decision.
+   *  accept applies the selected (optionally edited) changes in ONE transaction and bumps the
+   *  Matter version exactly once; reject applies nothing but still records the decision. */
+  reviewMatterUpdate(
+    publicId: string,
+    updateId: number,
+    decision: 'accept' | 'reject',
+    payload: Record<string, unknown>,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    return this._req(
+      'POST',
+      `/matters/${encodeURIComponent(publicId)}/updates/${updateId}/${decision}`,
+      { body: { ...payload, mutation }, signal }
+    )
+  }
+
   /** email_search_fulltext — FTS body search. GET /email/search (param is `q`). */
   searchEmailsFulltext(opts: DomainSearchOpts, signal?: AbortSignal): Promise<SearchResult> {
     return this._req<SearchResult>('GET', '/email/search', {
@@ -928,11 +1017,21 @@ export class MailAgentDomainClient {
   }
 
   /** email_get — single email metadata. GET /email/{id}?include=attachments.
-   *  E_NOT_FOUND → null (mirrors httpApi.email.get). */
-  async getEmail(internalId: number, signal?: AbortSignal): Promise<EmailGet_EmailRecord | null> {
+   *  E_NOT_FOUND → null (mirrors httpApi.email.get).
+   *
+   *  P4 (D5) — `matterScope` (internal int matter id) is the SERVER-side membership guard of a
+   *  matter_followup run: when present the endpoint verifies internal_id ∈ that Matter's
+   *  access_policy='allowed' resource set and 403s E_MATTER_SCOPE otherwise. Only the matter-run
+   *  context passes it (tools/index.ts) — the manual matterScopeFilter deliberately does NOT
+   *  (G5: manual scoping stays a list/search-side filter, P3 semantics byte-identical). */
+  async getEmail(
+    internalId: number,
+    signal?: AbortSignal,
+    matterScope?: number
+  ): Promise<EmailGet_EmailRecord | null> {
     try {
       return await this._req<EmailGet_EmailRecord>('GET', `/email/${internalId}`, {
-        query: { include: 'attachments' },
+        query: { include: 'attachments', matter_scope: matterScope },
         signal
       })
     } catch (e) {

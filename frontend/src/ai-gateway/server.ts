@@ -368,9 +368,7 @@ async function handleChat(
     }
     const isPrelude = (chunk: unknown): boolean => {
       const type =
-        chunk !== null && typeof chunk === 'object'
-          ? (chunk as { type?: unknown }).type
-          : undefined
+        chunk !== null && typeof chunk === 'object' ? (chunk as { type?: unknown }).type : undefined
       return type === 'start' || type === 'start-step' || type === 'message-metadata'
     }
     type FinishEvent = Parameters<ReturnType<typeof makePersistOnFinish>>[0]
@@ -463,9 +461,7 @@ async function handleChat(
                   {
                     type: 'error',
                     errorText:
-                      outcome.error instanceof Error
-                        ? outcome.error.message
-                        : String(outcome.error)
+                      outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
                   }
                 ]
           )
@@ -506,9 +502,7 @@ async function handleChat(
                   {
                     type: 'error',
                     errorText:
-                      outcome.error instanceof Error
-                        ? outcome.error.message
-                        : String(outcome.error)
+                      outcome.error instanceof Error ? outcome.error.message : String(outcome.error)
                   }
                 ]
           )
@@ -1183,6 +1177,18 @@ async function handleAgentRun(
     return
   }
 
+  // Matters MVP P4 (D11) — the follow-up venue's kill-switch, enforced on the SERVER-assembled
+  // spec (the poke body carries no runKind). Fail-closed and BEFORE any session/run work: with the
+  // flag off the Python side 403s the proposal endpoint, so a run would burn a full LLM turn only
+  // to lose its single output channel. The Python worker maps this code onto the matter_run row.
+  if (spec.runKind === 'matter_followup' && cfg.matterAgentEnabled !== true) {
+    writeJson(res, 403, {
+      error: 'E_DISABLED',
+      hint: 'matter follow-up agent is disabled (MAILAGENT_MATTER_AGENT_ENABLED)'
+    })
+    return
+  }
+
   // Pre-create the persist session (origin='agent'). A failure degrades to a non-persisted run
   // rather than aborting (the tool loop + approval still work; only the history row is missing).
   let sessionId: number | null = spec.sessionId ?? null
@@ -1191,13 +1197,19 @@ async function handleAgentRun(
       // custom_agent_call eagerly created the child session and stored it in the job spec.
     } else {
       const firedAt = Date.parse(spec.trigger.firedAt)
+      // P4 (D7) — a follow-up run's session is ANCHORED to its Matter (CHAT_DB v27 already admits
+      // matter+agent) and stamped trigger_kind='matter_followup' rather than the spec's 'manual',
+      // so the Matter's run history is queryable off the session row and the P3 panel's
+      // getOrCreate (origin='interactive' only) can never pick it up.
+      const matterAnchor = spec.runKind === 'matter_followup' && spec.matter ? spec.matter.id : null
       sessionId = cfg.createAgentSession({
         agentId: spec.agentId,
         jobId,
         title: spec.sessionTitle,
         triggerId: spec.trigger.id ?? null,
-        triggerKind: spec.trigger.kind,
-        triggerFiredAt: Number.isFinite(firedAt) ? firedAt : null
+        triggerKind: matterAnchor == null ? spec.trigger.kind : 'matter_followup',
+        triggerFiredAt: Number.isFinite(firedAt) ? firedAt : null,
+        ...(matterAnchor == null ? {} : { anchor: { type: 'matter' as const, id: matterAnchor } })
       })
     }
   } catch (err) {
@@ -1657,11 +1669,7 @@ export function createAiGatewayServer(cfg: AiGatewayConfig): Server {
       return
     }
     if (method === 'POST' && path === '/api/ai/queued-input/send') {
-      dispatch(
-        '/api/ai/queued-input/send',
-        res,
-        handleQueuedInputMutation(req, res, cfg, 'send')
-      )
+      dispatch('/api/ai/queued-input/send', res, handleQueuedInputMutation(req, res, cfg, 'send'))
       return
     }
 

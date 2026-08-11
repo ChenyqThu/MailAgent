@@ -55,18 +55,32 @@ import type { ToolSet } from 'ai'
  *  not registered); web gated by the MAILAGENT_IM_WEB_ENABLED venue switch
  *  (Q19=A — a Settings switch, NOT a grant; default off); exec / capability_change / outbound
  *  permanently denied, per-agent grants never consulted. Asserted in trusted code by
- *  POST /api/ai/im-chat (stage 2 PR-1, MAILAGENT_IM_FEISHU-gated). */
+ *  POST /api/ai/im-chat (stage 2 PR-1, MAILAGENT_IM_FEISHU-gated).
+ *
+ *  'matter_followup' (Matters MVP P4, decisions D5): the FIFTH venue — a Matter follow-up run
+ *  (观察 + 建议, never 执行). It is the STRICTEST row of all: ONLY 'read' and 'artifact' register;
+ *  domain_write / connector_write / exec / web / capability_change / outbound are all denied and
+ *  🔴 per-agent grants + im venue switches are NOT consulted at all, so binding a Matter to a
+ *  strongly-granted Agent Profile (grant_exec / grant_web / connector ceilings) can never widen
+ *  the face — the profile contributes model/persona only (D2). The run's single output channel is
+ *  the artifact-class `matter_update_propose`; every state change goes through the owner's review
+ *  (matter_review_update in a manual/im session). The allow-list in the spec
+ *  (MATTER_FOLLOWUP_ALLOWED_TOOLS) is the SECOND, independent belt — this matrix row is the first.
+ *  Asserted in trusted code by POST /api/ai/agent-run when the SERVER-assembled spec carries
+ *  runKind==='matter_followup' (agentRun.ts deriveContextMode), never from a request body. */
 export const AGENT_CONTEXT_MODES = [
   'manual_chat',
   'untrusted_trigger',
   'cron_headless',
-  'im_chat'
+  'im_chat',
+  'matter_followup'
 ] as const
 export type AgentContextMode = (typeof AGENT_CONTEXT_MODES)[number]
 
-/** Fail-closed normalization: only the four known modes pass through; absent / unknown / any
- *  client-supplied junk → 'untrusted_trigger' (the strictest). This is the ONLY way a mode enters
- *  the policy layer, so "forgot to pass the mode" always degrades toward safety. */
+/** Fail-closed normalization: only the five known modes pass through; absent / unknown / any
+ *  client-supplied junk → 'untrusted_trigger' (the strictest of the general-purpose modes). This
+ *  is the ONLY way a mode enters the policy layer, so "forgot to pass the mode" always degrades
+ *  toward safety. */
 export function normalizeContextMode(value: unknown): AgentContextMode {
   return (AGENT_CONTEXT_MODES as readonly unknown[]).includes(value)
     ? (value as AgentContextMode)
@@ -147,6 +161,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // artifact — local, deletable/replaceable output. It never leaves the machine and never needs
   // an approval card; unlike domain_write it is available silently in every context mode.
   report_write: 'artifact',
+  // Matters MVP P4 (D6) — a Matter follow-up run's ONLY output channel: it writes a PENDING
+  // proposal (matter_update row, review_status='pending'), never the Matter's own state. Same
+  // artifact shape as report_write (silent, no guard, no card): the owner's later
+  // matter_review_update is what commits anything, so the proposal itself is a local, reviewable,
+  // discardable artifact. It is the ONE class the matter_followup row admits besides 'read', and
+  // it only ever REGISTERS inside a matter-run context (tools/index.ts).
+  matter_update_propose: 'artifact',
   chat_session_list: 'read',
   chat_session_search: 'read',
   chat_session_get: 'read',
@@ -173,6 +194,16 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   matter_stakeholder_mutate: 'domain_write',
   matter_relation_mutate: 'domain_write',
   matter_add_note: 'domain_write',
+  // Matters MVP P4 (D8) — the two REVIEW-side tools an owner-present session uses to drive the
+  // follow-up loop: start/cancel a run, and accept/reject a pending proposal. Both are
+  // in-domain and reversible-by-compensation (a cancel does not roll back what a run已 observed;
+  // an accepted Update is corrected by a new Manual Update), hence domain_write rather than
+  // capability_change — the follow-up Agent's own capability face is fixed by the matter_followup
+  // matrix row, not by these calls. 🔴 matter_review_update carries the DYNAMIC approval
+  // (policyEvaluate, matters.ts): non-manual venues 恒卡, manual reject免卡, manual accept touching
+  // a `field` change asks.
+  matter_run_control: 'domain_write',
+  matter_review_update: 'domain_write',
   // capability_change — changes the agent's own capability/identity surface. NEVER auto-approved
   // by the auto-reversible path, manual_chat-only, in every future mode permanently denied
   // (ADR-001 §9 red line).
@@ -443,6 +474,20 @@ export interface AgentRunContext {
    *  by the matrix / intersection / whitelist. Absent on manual entrypoints (the pre-S6 shape,
    *  byte-identical), so pending → jobId:null for a non-agent approval. */
   jobId?: number
+  /** Matters MVP P4 (D5/D7) — the Matter this run follows up, built by agentRunContextFromSpec
+   *  from the SERVER-assembled spec's `matter` key (never a body). Present ONLY for a
+   *  matter_followup run; every manual/im/cron context omits it, so every pre-P4 assembly is
+   *  byte-identical. Two consumers, both in tools/index.ts: (a) it SCOPES the email read tools to
+   *  this Matter's resource set (the headless counterpart of the manual matterScopeFilter), and
+   *  (b) it is the registration condition + the server-stamped identity of
+   *  `matter_update_propose` (the model never passes matter_id / run_id — they are not in the
+   *  schema at all). NOT a policy input: the matrix row keys on the MODE, so a mis-threaded
+   *  matterRun can never widen a tool face. */
+  matterRun?: {
+    matterId: number
+    publicId: string
+    runId: number
+  }
 }
 
 /** Stage 2 PR-1 (grill Q19=A) — VENUE-level switches of the im_chat row. 🔴 NOT grants: the
@@ -480,6 +525,14 @@ export function isToolClassAllowedInMode(
   venue?: ImVenueSwitches
 ): boolean {
   if (mode === 'manual_chat') return true
+  // Matters MVP P4 (D5) — 🔴 this row MUST stay ABOVE the generic read/domain_write/artifact line
+  // below: that line admits domain writes in every non-manual mode, so a matter_followup branch
+  // placed after it could no longer deny them. A follow-up run observes and PROPOSES; the only
+  // classes it may ever hold are 'read' and 'artifact' (matter_update_propose). grants and venue
+  // switches are deliberately NOT consulted — a Matter bound to an Agent Profile carrying
+  // grant_exec / grant_web / connector ceilings still gets nothing here (D2: a profile contributes
+  // model + persona only).
+  if (mode === 'matter_followup') return toolClass === 'read' || toolClass === 'artifact'
   if (toolClass === 'read' || toolClass === 'domain_write' || toolClass === 'artifact') return true
   // Stage 2 PR-1 (08-04 拍板) — im_chat: connector tools fully open (write approval follows the
   // 08-05 per-tool tier: ask → Feishu card, auto → card-free — decided at the connector factory,

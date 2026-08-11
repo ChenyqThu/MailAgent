@@ -77,6 +77,12 @@ CROSS_LANGUAGE_FLAGS = {
     # IM 上网独立开关（grill Q19=A，🔴 不做成 grant）：Node only（gateway ToolSet 的 im_chat
     # venue switch；Python 不读）。登记防改名漏一侧，真变双载体时在此加 _CHAT/_CONFIG。
     "MAILAGENT_IM_WEB_ENABLED": [_LIFECYCLE],
+    # Matter 跟进 Agent 总闸（Matters MVP P4 D11）：Node envBool（gateway POST /api/ai/agent-run
+    # 见 runKind='matter_followup' 的 spec 即按此 flag fail-closed 403）＋ pydantic（serve-api 的
+    # runs / proposal REST 门 + worker）—— 与 MCP_CONNECTORS 同形态的双载体。
+    # 🔴 双侧默认必须同为 false（灰度未 cutover）；翻默认两边一起翻，否则会出现「run 起得来但
+    # 提案端点 403（唯一产出通道没了、白烧一轮 LLM）」或反过来「端点开着却没有 run 能到达」。
+    "MAILAGENT_MATTER_AGENT_ENABLED": [_LIFECYCLE, _CONFIG],
 }
 
 # cutover 5 openness flag：Node envBool 默认 vs Python _hot_bool 字面量，须逐字相等。
@@ -172,6 +178,8 @@ NODE_PYDANTIC_DUAL_CARRIER_FLAGS = {
     # MCP connector 总闸：灰度未 cutover（ship-off → dogfood → cutover 另拍）。
     "MAILAGENT_MCP_CONNECTORS": ("mcp_connectors_enabled", False),
     "MAILAGENT_MATTERS_ENABLED": ("matters_enabled", False),
+    # Matter 跟进 Agent 总闸（P4）：灰度未 cutover，两侧同为 false。
+    "MAILAGENT_MATTER_AGENT_ENABLED": ("matter_agent_enabled", False),
     # 飞书 IM 总闸（08-01 阶段 2）：**cutover 2026-08-04**（owner dogfood 通过）。翻默认漏一侧
     # = 「桥在跑但 gateway /api/ai/im-chat 404」或反过来「端点开着却没有桥来调」。
     "MAILAGENT_IM_FEISHU": ("im_feishu_enabled", True),

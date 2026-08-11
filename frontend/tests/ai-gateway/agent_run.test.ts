@@ -1567,9 +1567,10 @@ describe('POST /api/ai/agent-run', () => {
   test('spec trigger id is forwarded into the agent session provenance', async () => {
     const createAgentSession = vi.fn(() => 56)
     const base = await startWith({
-      fetchAgentRunSpec: async () => makeSpec({
-        trigger: { id: 'trg_mail', kind: 'email_filter', firedAt: '2026-07-03T09:00:00Z' }
-      }),
+      fetchAgentRunSpec: async () =>
+        makeSpec({
+          trigger: { id: 'trg_mail', kind: 'email_filter', firedAt: '2026-07-03T09:00:00Z' }
+        }),
       createAgentSession
     })
     const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
@@ -1603,5 +1604,306 @@ describe('POST /api/ai/agent-run', () => {
     const body = (await res.json()) as { outcome: string; sessionId: number | null }
     expect(body.outcome).toBe('completed')
     expect(body.sessionId).toBeNull()
+  })
+})
+
+// ── Matters MVP P4 (D5/D6/D7/D11) — the fifth venue: matter_followup ─────────────────────────────
+//
+// The DoD of this phase: a follow-up run bound to a MAXIMALLY granted Agent Profile still reaches
+// streamText with an observe-and-propose face only. Everything below drives the REAL chain
+// (runHeadlessAgent → agentRunContextFromSpec → wrapCfgForAgentRun → buildGatewayTools →
+// applyContextModePolicy), so it fails if ANY link forgets the mode.
+
+/** The fixed allow-list a follow-up run's spec carries (Python MATTER_FOLLOWUP_ALLOWED_TOOLS). */
+const MATTER_FOLLOWUP_ALLOWED_TOOLS = [
+  'matter_get',
+  'email_list_filter',
+  'email_search_fulltext',
+  'email_get',
+  'matter_update_propose'
+]
+
+/** 🔴 The MOUNT list a follow-up spec must also carry. The allow-list and the skill mount list are
+ *  two INDEPENDENT reductions and a tool needs BOTH: three of the five allow-listed names are
+ *  skill-owned (email → email_list_filter/email_get, search → email_search_fulltext), so a spec
+ *  projecting `skills: []` would hand the run a Matter it cannot read any mail for. The
+ *  `skills: []` case is pinned as its own test below so this coupling can never regress silently.
+ *  (matter_get / matter_update_propose are CORE_UNGATED — never mount-gated.) */
+const MATTER_FOLLOWUP_MOUNTED_SKILLS = ['email', 'search']
+
+/** The server-assembled spec of a follow-up run: the fixed allow-list + mount list + the Matter
+ *  anchor + the runKind stamp. */
+function makeMatterSpec(over?: Partial<AgentRunSpec>): AgentRunSpec {
+  return makeSpec({
+    runKind: 'matter_followup',
+    matter: { id: 42, publicId: 'MAT-000042', title: 'Atlas rollout', runId: 7 },
+    // trigger.kind stays 'manual' — exactly the value that would fail-close to untrusted_trigger
+    // if anything read the ladder instead of runKind.
+    trigger: { kind: 'manual', firedAt: '2026-08-10T09:00:00Z' },
+    toolPolicy: {
+      allowedTools: MATTER_FOLLOWUP_ALLOWED_TOOLS,
+      skills: MATTER_FOLLOWUP_MOUNTED_SKILLS
+    },
+    sessionTitle: '跟进 · Atlas rollout',
+    ...over
+  })
+}
+
+describe('deriveContextMode — runKind outranks the whole trigger.kind ladder (P4 D5)', () => {
+  test("runKind='matter_followup' wins over EVERY trigger kind (incl. the ones with their own row)", () => {
+    for (const kind of ['manual', 'cron', 'schedule', 'email_filter', 'im', 'junk']) {
+      expect(
+        deriveContextMode(makeMatterSpec({ trigger: { kind, firedAt: '2026-08-10T09:00:00Z' } })),
+        kind
+      ).toBe('matter_followup')
+    }
+  })
+
+  test('without runKind the ladder is byte-identical to pre-P4 (no matter branch leaks in)', () => {
+    expect(deriveContextMode(makeSpec({ trigger: { kind: 'cron', firedAt: 'x' } }))).toBe(
+      'cron_headless'
+    )
+    expect(deriveContextMode(makeSpec({ trigger: { kind: 'email_filter', firedAt: 'x' } }))).toBe(
+      'untrusted_trigger'
+    )
+    expect(deriveContextMode(makeSpec({ trigger: { kind: 'manual', firedAt: 'x' } }))).toBe(
+      'untrusted_trigger'
+    )
+    // an unknown runKind is NOT a mode: it falls through to the ladder (fail-closed).
+    expect(
+      deriveContextMode(
+        makeSpec({ runKind: 'something_else', trigger: { kind: 'manual', firedAt: 'x' } })
+      )
+    ).toBe('untrusted_trigger')
+  })
+})
+
+describe('agentRunContextFromSpec — the Matter anchor is all-or-nothing (P4 D7)', () => {
+  test('a well-formed spec projects {matterId, publicId, runId}', () => {
+    expect(agentRunContextFromSpec(makeMatterSpec()).matterRun).toEqual({
+      matterId: 42,
+      publicId: 'MAT-000042',
+      runId: 7
+    })
+  })
+
+  test('no runKind → no anchor even when a matter object rides along (context byte-identical)', () => {
+    const ctx = agentRunContextFromSpec(
+      makeSpec({ matter: { id: 42, publicId: 'MAT-000042', title: 't', runId: 7 } })
+    )
+    expect(ctx.matterRun).toBeUndefined()
+    expect('matterRun' in ctx).toBe(false)
+  })
+
+  test.each([
+    ['missing matter', undefined],
+    ['missing runId', { id: 42, publicId: 'MAT-000042', title: 't' }],
+    ['zero runId', { id: 42, publicId: 'MAT-000042', title: 't', runId: 0 }],
+    ['non-integer id', { id: 4.2, publicId: 'MAT-000042', title: 't', runId: 7 }],
+    ['empty publicId', { id: 42, publicId: '', title: 't', runId: 7 }],
+    ['junk publicId type', { id: 42, publicId: 7, title: 't', runId: 7 }],
+    ['junk matter type', 'MAT-000042']
+  ])('malformed anchor (%s) → undefined, never a half-anchor', (_label, matter) => {
+    const spec = makeMatterSpec({ matter: matter as AgentRunSpec['matter'] })
+    expect(agentRunContextFromSpec(spec).matterRun).toBeUndefined()
+  })
+})
+
+describe('matter_followup venue — a maximally granted profile still gets NO write face (DoD)', () => {
+  /** Production-shaped cfg: every tool family flag on, buildTools forwarding the run context. */
+  function fullFlagCfg(seenTools: string[][]): AiGatewayConfig {
+    const guard = new ApprovalGuard()
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => captureToolsModel(seenTools),
+      buildTools: (collector, _am, mode, agentRunContext) =>
+        buildGatewayTools(
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            sendToolEnabled: true,
+            sendSigningSecret: 'secret',
+            execToolsEnabled: true,
+            webToolsEnabled: true,
+            calendarToolsEnabled: true,
+            skillInstallToolsEnabled: true,
+            customAgentToolsEnabled: true,
+            notionAgentToolsEnabled: true,
+            matterToolsEnabled: true,
+            contextMode: mode,
+            agentRunContext
+          },
+          collector
+        ),
+      persistTurn: () => {}
+    }
+  }
+
+  /** The grants a "strong" custom-agent profile could carry. If any of them could leak through,
+   *  binding such a profile to a Matter would silently hand a follow-up run exec/web/connectors. */
+  const MAX_GRANTS = {
+    grantExec: true,
+    grantWeb: 'open',
+    grantConnectors: { notion: 'update' }
+  } as unknown as AgentRunSpec['toolPolicy']
+
+  test('全开 grants + the fixed allow-list → exactly the read+propose face reaches streamText', async () => {
+    const seenTools: string[][] = []
+    const spec = makeMatterSpec({
+      toolPolicy: {
+        ...MAX_GRANTS,
+        allowedTools: MATTER_FOLLOWUP_ALLOWED_TOOLS,
+        skills: MATTER_FOLLOWUP_MOUNTED_SKILLS
+      } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      fullFlagCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools.length).toBeGreaterThan(0)
+    // 🔴 plan_update rides along by the P0 intersection exemption (a zero-side-effect local
+    // scratchpad, class 'read', orthogonal to capability authorization — agentRun.ts). Everything
+    // else is exactly the server's allow-list.
+    expect(seenTools[0].sort()).toEqual([
+      'email_get',
+      'email_list_filter',
+      'email_search_fulltext',
+      'matter_get',
+      'matter_update_propose',
+      'plan_update'
+    ])
+    for (const denied of [
+      'matter_create',
+      'matter_update',
+      'matter_item_mutate',
+      'matter_add_note',
+      'matter_run_control',
+      'matter_review_update',
+      'email_flag',
+      'email_draft_reply',
+      'calendar_event_reschedule',
+      'run_command',
+      'file_write',
+      'web_fetch',
+      'web_search',
+      'skill_install',
+      'custom_agent_create',
+      'email_prepare_send',
+      'notion_agent_chat'
+    ]) {
+      expect(seenTools[0], `${denied} must never reach a follow-up run`).not.toContain(denied)
+    }
+  })
+
+  // 🔴 Cross-lane contract pin (found by the DoD test above): the fixed allow-list alone is NOT
+  // enough — the spec must ALSO mount the skills owning its email reads. With `skills: []` the
+  // per-agent mount gate (a second, independent applySkillGating pass) strips all three, leaving a
+  // follow-up run that cannot read a single mail of the Matter it is following. Pinned here so a
+  // change to the Python spec projection turns this red instead of shipping a silently blind run.
+  test('skills:[] strips the three email reads — the mount list is a SECOND requirement', async () => {
+    const seenTools: string[][] = []
+    const spec = makeMatterSpec({
+      toolPolicy: {
+        allowedTools: MATTER_FOLLOWUP_ALLOWED_TOOLS,
+        skills: []
+      } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      fullFlagCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].sort()).toEqual(['matter_get', 'matter_update_propose', 'plan_update'])
+  })
+
+  test('the matrix is the FIRST belt: a write name smuggled into allowedTools is still stripped', async () => {
+    const seenTools: string[][] = []
+    const spec = makeMatterSpec({
+      toolPolicy: {
+        ...MAX_GRANTS,
+        // A tampered/buggy spec listing every write it can think of. Both belts (matrix +
+        // allow-list) are asserted independently: this one proves the matrix alone suffices.
+        allowedTools: [
+          'matter_get',
+          'matter_create',
+          'matter_update',
+          'matter_review_update',
+          'matter_run_control',
+          'email_flag',
+          'email_prepare_send',
+          'run_command'
+        ]
+      } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      fullFlagCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].sort()).toEqual(['matter_get', 'plan_update'])
+  })
+
+  test('no Matter anchor → matter_update_propose is not registered even under the right mode', async () => {
+    const seenTools: string[][] = []
+    const spec = makeMatterSpec({ matter: undefined })
+    await runHeadlessAgent(
+      fullFlagCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0]).not.toContain('matter_update_propose')
+    // the read face still narrows to the allow-list (the mode is still matter_followup)
+    expect(seenTools[0]).toContain('matter_get')
+  })
+})
+
+describe('POST /api/ai/agent-run — matter_followup gating + Matter-anchored session (P4 D7/D11)', () => {
+  test('flag off → 403 E_DISABLED before any session is created', async () => {
+    const createAgentSession = vi.fn(() => 55)
+    const base = await startWith({
+      fetchAgentRunSpec: async () => makeMatterSpec(),
+      createAgentSession
+      // matterAgentEnabled omitted → off
+    })
+    const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
+    expect(res.status).toBe(403)
+    expect((await res.json()).error).toBe('E_DISABLED')
+    expect(createAgentSession).not.toHaveBeenCalled()
+  })
+
+  test('flag on → the session is anchored to the Matter and stamped trigger_kind', async () => {
+    const createAgentSession = vi.fn(() => 55)
+    const base = await startWith({
+      fetchAgentRunSpec: async () => makeMatterSpec(),
+      createAgentSession,
+      matterAgentEnabled: true
+    })
+    const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
+    expect(res.status).toBe(200)
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        anchor: { type: 'matter', id: 42 },
+        triggerKind: 'matter_followup',
+        title: '跟进 · Atlas rollout'
+      })
+    )
+  })
+
+  test('a non-matter run is byte-identical: no anchor key, trigger kind untouched', async () => {
+    const createAgentSession = vi.fn(() => 55)
+    const base = await startWith({
+      fetchAgentRunSpec: async () => makeSpec(),
+      createAgentSession,
+      matterAgentEnabled: true
+    })
+    expect((await postAgentRun(base, { jobId: 7, claimToken: 'tok' })).status).toBe(200)
+    const arg = createAgentSession.mock.calls[0][0] as Record<string, unknown>
+    expect('anchor' in arg).toBe(false)
+    expect(arg.triggerKind).toBe('cron')
   })
 })

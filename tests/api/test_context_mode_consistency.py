@@ -124,3 +124,95 @@ def test_ts_mirrors_match_canonical_table(label):
         f"{label} 与 canonical 表漂移：ts={ts_table} expected={expected} —— "
         "三处镜像（agent.py / agentRun.ts / shared.ts）必须同批改"
     )
+
+
+# ── Matters MVP P4 D5：第五 context mode `matter_followup` 的**独立**断言节 ──────────────────
+#
+# 🔴 它刻意**不进**上面那张 trigger-kind 表：`matter_followup` 不是 trigger 的一种，而是服务端
+# spec 上的 `runKind` 盖章字段（`src/matters/run_spec.py`）。Matter 手动跟进的 trigger.kind 恒为
+# 'manual'，若走 kind 阶梯会 fail-close 到 untrusted_trigger —— 安全方向没错，但**那一档仍放行
+# domain_write**，正是本 mode 要禁掉的东西。`deriveHeadlessMode`（shared.ts，custom-agent 抽屉的
+# 展示镜像）同理**不加**这一支：Matter run 不是 custom-agent 规则场景。
+#
+# 🔴 与上面那张表的物理隔离：runKind 分支在 agentRun.ts 里写成**花括号块**
+# （`if (...) {\n return '...'\n}`），因为 `_extract_ts_table` 的习语是 `if (…) return '…'` 单行
+# 且**要求**条件里抽得出 `kind === '…'`；单行写法会被它抓到却抽不出 kind → 那张表的闸会误红。
+# 块写法对它不可见，本节的抽取器则专抓块写法。两边各自抽取失败都必须红，不许静默跳过。
+
+_AGENT_RUN_TS = _REPO_ROOT / "frontend/src/ai-gateway/agentRun.ts"
+_POLICY_TS = _REPO_ROOT / "frontend/src/ai-gateway/tools/policy.ts"
+MATTER_FOLLOWUP_MODE = "matter_followup"
+
+
+def _read(path: Path) -> str:
+    assert path.exists(), f"TS 源文件移动了？{path}"
+    return path.read_text(encoding="utf-8")
+
+
+def test_run_kind_branch_precedes_the_whole_trigger_kind_ladder():
+    """agentRun.ts：runKind 分支存在，且位于 kind 阶梯**之前**（顺序即语义）。"""
+    src = _read(_AGENT_RUN_TS)
+    match = re.search(r"function deriveContextMode\b.*?\n}", src, re.DOTALL)
+    assert match, "deriveContextMode 不见了 —— 镜像函数被移动/改名，更新本闸"
+    body = match.group(0)
+
+    branch = re.search(
+        r"if\s*\(\s*spec\.runKind\s*===\s*'(?P<kind>[a-z_]+)'\s*\)\s*\{\s*"
+        r"return\s*'(?P<mode>[a-z_]+)'",
+        body,
+    )
+    assert branch, (
+        "抽不到 runKind 分支（习语变了？）—— 期望块写法 "
+        "`if (spec.runKind === 'matter_followup') { return 'matter_followup' }`；"
+        "🔴 别改成单行，那会让上面的 trigger-kind 表抽取器误红"
+    )
+    assert branch.group("kind") == MATTER_FOLLOWUP_MODE
+    assert branch.group("mode") == MATTER_FOLLOWUP_MODE
+
+    ladder = re.search(r"const kind\s*=\s*spec\.trigger", body)
+    assert ladder, "kind 阶梯的起点（`const kind = spec.trigger…`）不见了 —— 更新本闸"
+    assert branch.start() < ladder.start(), (
+        "runKind 分支跑到 kind 阶梯后面去了：Matter run 的 trigger.kind='manual' 会先被阶梯"
+        "fail-close 成 untrusted_trigger（那一档放行 domain_write）—— 顺序就是语义"
+    )
+
+
+def test_policy_registers_the_fifth_mode():
+    src = _read(_POLICY_TS)
+    modes = re.search(r"AGENT_CONTEXT_MODES\s*=\s*\[(.*?)\]", src, re.DOTALL)
+    assert modes, "AGENT_CONTEXT_MODES 抽取失败 —— 习语变了，更新本闸"
+    names = re.findall(r"'([a-z_]+)'", modes.group(1))
+    assert names, "AGENT_CONTEXT_MODES 里一个 mode 都没抽到 —— 抽取器坏了"
+    assert MATTER_FOLLOWUP_MODE in names, (
+        f"{MATTER_FOLLOWUP_MODE} 不在 AGENT_CONTEXT_MODES 里 —— "
+        "normalizeContextMode 会把它 fail-close 成 untrusted_trigger，整个跟进 venue 形同虚设"
+    )
+
+
+def test_matter_followup_matrix_branch_precedes_the_generic_pass():
+    """policy.ts：matter_followup 分支必须在「read/domain_write/artifact 全放行」那行**之前**。
+
+    那一行对所有非 manual mode 无条件放行 domain_write；插在它后面 = 分支永不生效、写工具照发。
+    """
+    src = _read(_POLICY_TS)
+    match = re.search(r"export function isToolClassAllowedInMode\b.*?\n}", src, re.DOTALL)
+    assert match, "isToolClassAllowedInMode 不见了 —— 更新本闸"
+    body = match.group(0)
+
+    branch = re.search(rf"if\s*\(\s*mode\s*===\s*'{MATTER_FOLLOWUP_MODE}'\s*\)", body)
+    assert branch, f"抽不到 {MATTER_FOLLOWUP_MODE} 的矩阵分支（习语变了？）"
+    generic = re.search(
+        r"if\s*\(\s*toolClass\s*===\s*'read'.*?'domain_write'.*?\)\s*return true", body, re.DOTALL
+    )
+    assert generic, "抽不到 read/domain_write/artifact 通用放行行 —— 更新本闸"
+    assert branch.start() < generic.start(), (
+        "matter_followup 分支排在通用放行行之后：domain_write 会在它之前被无条件放行，"
+        "跟进 run 将拿到全部 Matter 写工具"
+    )
+
+    # 分支体只放行 read + artifact（拿分支之后到下一个 `if` 之前的那一段）。
+    tail = body[branch.end() : generic.start()]
+    allowed = set(re.findall(r"toolClass\s*===\s*'([a-z_]+)'", tail))
+    assert allowed == {"read", "artifact"}, (
+        f"matter_followup 分支放行的 class 集合变了：{sorted(allowed)}（期望 read + artifact）"
+    )

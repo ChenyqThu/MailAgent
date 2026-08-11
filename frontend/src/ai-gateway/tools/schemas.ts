@@ -376,6 +376,153 @@ export const matterAddNoteSchema = z.object({
 })
 export type MatterAddNoteInput = z.infer<typeof matterAddNoteSchema>
 
+// ── Matters MVP P4 — follow-up run: propose (D6) + the two review-side tools (D8) ─────────────
+//
+// 🔴 The mutation fields are spelled out here instead of spreading matterVersionedFields: neither
+// tool can ever carry `reverses_event_id` (a run start / a review decision is not the reversal of
+// an audit event), and matter_run_control's expected_version is OPTIONAL (an input anchor, not the
+// concurrency gate matterVersionedFields models).
+const matterReviewIdempotencyFields = {
+  idempotency_key: z.string().trim().min(1).max(256).optional(),
+  reason: z.string().max(2000).optional()
+}
+
+/** One evidence source of a proposed change. 🔴 `resource_id` is REQUIRED and must belong to this
+ *  Matter — the Python service re-validates it against the Matter's resource set and drops the
+ *  source (and, for a `fact`, the whole change) when it does not (D6 anti-hallucination). */
+const matterProposalSourceSchema = z
+  .object({
+    resource_id: z.number().int().positive(),
+    locator: z.record(z.string(), z.unknown()).optional(),
+    evidence: z.string().max(500).optional()
+  })
+  .strict()
+
+/** A proposed field/state value. Structured Matter fields (waiting_context) are objects, scalar
+ *  ones (status/priority/due_at) are strings/numbers — hence the explicit union rather than a bare
+ *  unknown (an unbounded `any` would give the model no shape guidance at all). */
+const matterProposalValueSchema = z.union([
+  z.string(),
+  z.number(),
+  z.boolean(),
+  z.null(),
+  z.record(z.string(), z.unknown())
+])
+
+const matterProposalChangeSchema = z
+  .object({
+    id: z.string().trim().min(1).max(64),
+    kind: z.enum(['fact', 'inference', 'field', 'action', 'resource']),
+    target: z
+      .object({
+        entity: z.enum(['matter', 'item', 'resource', 'stakeholder']),
+        id: z.union([z.string(), z.number()]).optional(),
+        field: z.string().trim().min(1).max(64).optional()
+      })
+      .strict()
+      .optional(),
+    operation: z.enum(['add', 'replace', 'remove']).optional(),
+    before: matterProposalValueSchema.optional(),
+    after: matterProposalValueSchema.optional(),
+    text: z.string().max(2000).optional(),
+    reason: z.string().max(1000).optional(),
+    is_inference: z.boolean().optional(),
+    sources: z.array(matterProposalSourceSchema).max(5).default([])
+  })
+  .strict()
+
+/** matter_update_propose — the follow-up run's ONLY output channel (D6).
+ *  🔴 There is deliberately NO matter_id / run_id / from_event_id / to_event_id /
+ *  anchored_matter_version field: all of them are stamped server-side from the run context
+ *  (AgentRunContext.matterRun + the Python run row), so the model structurally cannot address
+ *  another Matter, another run, or a different event watermark. */
+export const matterUpdateProposeSchema = z
+  .object({
+    summary: z.string().trim().min(1).max(2000),
+    changes: z.array(matterProposalChangeSchema).max(20).default([]),
+    open_questions: z.array(z.string().trim().min(1).max(500)).max(5).optional(),
+    confidence: z.number().min(0).max(1).optional()
+  })
+  .strict()
+export type MatterUpdateProposeInput = z.infer<typeof matterUpdateProposeSchema>
+
+/** matter_run_control — start or cancel a follow-up run (D8).
+ *  🔴 No `trigger_kind` field: a manual start is the ONLY kind this tool can produce (the gateway
+ *  pins it), so forging `trigger_kind=schedule` is structurally impossible (contracts §4.4). Also
+ *  no agent id / tool policy / prompt / budget — the authoritative spec comes from the Matter
+ *  binding, never from the model. */
+export const matterRunControlSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    operation: z.enum(['start', 'cancel']),
+    run_id: z.number().int().positive().optional(),
+    expected_version: z.number().int().positive().optional(),
+    ...matterReviewIdempotencyFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.operation === 'cancel' && value.run_id == null)
+      ctx.addIssue({ code: 'custom', message: 'run_id is required to cancel', path: ['run_id'] })
+    if (value.operation === 'start' && value.run_id != null)
+      ctx.addIssue({ code: 'custom', message: 'start forbids run_id', path: ['run_id'] })
+  })
+export type MatterRunControlInput = z.infer<typeof matterRunControlSchema>
+
+const matterEditedChangeSchema = z
+  .object({
+    change_id: z.string().trim().min(1).max(64),
+    after: matterProposalValueSchema.optional(),
+    text: z.string().max(2000).optional(),
+    edit_reason: z.string().max(1000).optional()
+  })
+  .strict()
+
+/** matter_review_update — accept or reject one pending proposal (D8, contracts §4.4).
+ *  Shape only: whether an id actually exists in the stored proposal, whether the Update is stale,
+ *  and whether the Matter version still matches are all SERVER checks (E_UPDATE_STALE /
+ *  E_VERSION_CONFLICT). Zod's job is to make the illegal request shapes unrepresentable. */
+export const matterReviewUpdateSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    update_id: z.number().int().positive(),
+    decision: z.enum(['accept', 'reject']),
+    selected_change_ids: z.array(z.string().trim().min(1).max(64)).max(20).optional(),
+    edited_changes: z.array(matterEditedChangeSchema).max(20).optional(),
+    edited_summary: z.string().max(2000).optional(),
+    expected_version: z.number().int().positive(),
+    ...matterReviewIdempotencyFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.decision === 'reject') {
+      if (!value.reason || value.reason.trim().length === 0)
+        ctx.addIssue({ code: 'custom', message: 'reject requires a reason', path: ['reason'] })
+      for (const key of ['selected_change_ids', 'edited_changes', 'edited_summary'] as const) {
+        if (value[key] != null)
+          ctx.addIssue({ code: 'custom', message: `reject forbids ${key}`, path: [key] })
+      }
+      return
+    }
+    // accept — selected_change_ids must be PRESENT; an explicitly empty array is the
+    // "accept the summary only" case (contracts §4.4), never an accidental omission.
+    if (value.selected_change_ids == null) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'accept requires selected_change_ids (pass [] to accept a summary-only Update)',
+        path: ['selected_change_ids']
+      })
+      return
+    }
+    const selected = new Set(value.selected_change_ids)
+    for (const edit of value.edited_changes ?? []) {
+      if (!selected.has(edit.change_id))
+        ctx.addIssue({
+          code: 'custom',
+          message: `edited change ${edit.change_id} is not in selected_change_ids`,
+          path: ['edited_changes']
+        })
+    }
+  })
+export type MatterReviewUpdateInput = z.infer<typeof matterReviewUpdateSchema>
+
 /** email_get — single email metadata. */
 export const emailGetSchema = z.object({
   internal_id: z.number().int()

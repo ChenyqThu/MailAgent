@@ -443,7 +443,20 @@ export interface AiGatewayConfig {
     triggerId?: string | null
     triggerKind?: string | null
     triggerFiredAt?: number | null
+    /** Matters MVP P4 (D7) — anchor the created session to a Matter instead of the default
+     *  general anchor. ADDITIVE: every pre-P4 caller omits it and gets the identical
+     *  general-anchor row (CHAT_DB v27's CHECK already admits anchor_type='matter' with
+     *  origin='agent', so no migration is involved). */
+    anchor?: { type: 'matter'; id: number }
   }) => number | null
+  /** Matters MVP P4 (D11) — MAILAGENT_MATTER_AGENT_ENABLED, read in Electron main only (no vite
+   *  define). Gates POST /api/ai/agent-run for a spec stamped runKind='matter_followup' (off →
+   *  403 E_DISABLED, fail-closed) — the venue's kill-switch on the gateway side. Double-carrier
+   *  with the Python pydantic `matter_agent_enabled` (runs/proposal REST + the worker); both env
+   *  defaults MUST stay false together (tests/config/test_flag_cross_language.py). Everything
+   *  else about a matter run (the matrix row, the propose registration) keys on the spec, not on
+   *  this flag — an off flag means "no run ever starts", not "a run starts with a wider face". */
+  matterAgentEnabled?: boolean
   // ── Stage 2 PR-1 (task 08-01 messenger, MAILAGENT_IM_FEISHU) — im_chat entrypoint ──────────────
   /** MAILAGENT_IM_FEISHU (env default ON — cutover 2026-08-04). When true the gateway registers
    *  POST /api/ai/im-chat — the ONLY entrypoint asserting 'im_chat' in trusted code. Off/absent →

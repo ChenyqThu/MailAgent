@@ -105,6 +105,7 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("calendar_event_reschedule", "calendar", "ask"),
     BuiltinToolPolicy("calendar_event_rsvp", "calendar", "ask"),
     BuiltinToolPolicy("calendar_event_delete", "calendar", "ask", danger_auto=True),
+    # ── B 组：Matter 域（P3 七写 + P4 评审两件）──────────────────────────────────
     BuiltinToolPolicy("matter_create", "matters", "auto"),
     BuiltinToolPolicy("matter_update", "matters", "auto"),
     BuiltinToolPolicy("matter_item_mutate", "matters", "auto"),
@@ -112,6 +113,14 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("matter_stakeholder_mutate", "matters", "auto"),
     BuiltinToolPolicy("matter_relation_mutate", "matters", "auto"),
     BuiltinToolPolicy("matter_add_note", "matters", "auto"),
+    # P4 D8：run 控制本地可逆（取消不回滚已观察到的事实，但也没落任何状态），出厂 auto 可配。
+    BuiltinToolPolicy("matter_run_control", "matters", "auto"),
+    # P4 D8：评审决定**不走 per-tool 档** —— 它的免卡形状是 gateway 侧的动态 policyEvaluate
+    # （非 manual 恒卡 / manual 拒绝免卡 / manual 接受且选中含 field change 才弹卡）。故
+    # configurable=False（owner 不能把它调成无条件 auto，那会绕过 field-accept 那张卡），
+    # default_tier 保持 'ask'（run_command / custom_agent_call 先例：固定形状行恒 ask，
+    # 免卡走各自的专属通道）。
+    BuiltinToolPolicy("matter_review_update", "matters", "ask", configurable=False),
     # ── B 组：能力/身份面（全部有 history/rollback 补偿）─────────────────────────
     BuiltinToolPolicy("set_skill_enabled", "capability", "ask"),
     BuiltinToolPolicy("update_system_md", "capability", "ask"),

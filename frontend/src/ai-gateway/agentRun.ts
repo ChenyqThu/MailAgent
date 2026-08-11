@@ -81,8 +81,20 @@ export interface RunHeadlessAgentOpts {
  *
  *  `im`（阶段 0b 预置，harness-expansion epic grill Q10=A）→ 'im_chat'：阶段 2 飞书对话的第四
  *  场合。当前没有任何 spec 会带这个 kind（Python `parse_trigger` 尚不认识 'im'，行存不进库），
- *  本分支 dormant。 */
+ *  本分支 dormant。
+ *
+ *  🔴 Matters MVP P4 (D5) — `spec.runKind === 'matter_followup'` 先于整张 kind 阶梯判定：runKind 是
+ *  服务端 spec 的**盖章字段**（`src/matters/run_spec.py`），不是 trigger 词表的成员。Matter 手动
+ *  跟进的 trigger.kind 恒为 'manual'，走 kind 阶梯会 fail-close 到 untrusted_trigger —— 安全方向
+ *  没错，但那一档仍然放行 domain_write，正是 matter_followup 要禁掉的。
+ *  🔴 分支体**故意写成花括号块**：`tests/api/test_context_mode_consistency.py` 的 kind 表抽取器
+ *  匹配 `if (…) return '…'` 单行习语并要求条件里有 `kind === '…'` 字面量；单行写法会被它抓到、
+ *  却抽不出 kind → 那张（与本分支无关的）三镜像表闸会误红。块写法对它不可见，而本分支自己的
+ *  漂移守护是同一文件里新增的独立断言节（习语 + 行序都钉死）。 */
 export function deriveContextMode(spec: AgentRunSpec): AgentContextMode {
+  if (spec.runKind === 'matter_followup') {
+    return 'matter_followup'
+  }
   const kind = spec.trigger?.kind
   if (kind === 'email_filter') return 'untrusted_trigger'
   if (kind === 'calendar_event_change') return 'untrusted_trigger'
@@ -134,6 +146,11 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // Conditional include: absent/empty grants keep the modeGrants object byte-identical to the
   // pre-PR3 two-key shape (the stash-freeze assertions depend on that).
   const connectors = parseConnectorGrants(toolPolicy?.grantConnectors)
+  // P4 (D5/D7) — the Matter anchor of a follow-up run. Same discriminated discipline as the
+  // grants: BOTH the runKind stamp and every field's runtime type are re-checked here, so a
+  // partial/junk `matter` key can never mint a half-anchor (a scope filter without a runId would
+  // silently register a propose tool that cannot address any run).
+  const matterRun = matterRunFromSpec(spec)
   return {
     agentId: spec.agentId,
     allowedTools: Array.isArray(allowedRaw)
@@ -150,8 +167,30 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     // S6 W1 — carry the run's jobId so a paused approval freezes it into the stash for the
     // record-view pending projection. Conditional include: a caller that omits it (every existing
     // test + the shared type's cast callers) yields the pre-S6 object shape, byte-identical.
-    ...(jobId != null ? { jobId } : {})
+    ...(jobId != null ? { jobId } : {}),
+    // P4 — conditional include for the same reason: a non-matter run's context object keeps the
+    // pre-P4 shape (the stash-freeze assertions depend on that).
+    ...(matterRun !== undefined ? { matterRun } : {})
   }
+}
+
+/** P4 (D5/D7) — the fail-closed funnel for the spec's Matter anchor. Returns undefined unless the
+ *  spec is stamped `runKind: 'matter_followup'` AND carries a fully-formed `matter` object
+ *  ({id, publicId, title, runId} — `title` is prompt-side only, so it is not projected here).
+ *  Every field is re-derived from the JSON at runtime (the shared TYPE states what the server
+ *  promises; this assumes it may lie — ADR-004 P1-4). A malformed anchor yields undefined rather
+ *  than a partial object: the matter scope filter and the propose tool must be all-or-nothing. */
+function matterRunFromSpec(spec: AgentRunSpec): AgentRunContext['matterRun'] {
+  if (spec.runKind !== 'matter_followup') return undefined
+  const matter = spec.matter
+  if (matter == null || typeof matter !== 'object') return undefined
+  const matterId = matter.id
+  const publicId = matter.publicId
+  const runId = matter.runId
+  if (!Number.isInteger(matterId) || (matterId as number) <= 0) return undefined
+  if (typeof publicId !== 'string' || publicId.length === 0) return undefined
+  if (!Number.isInteger(runId) || (runId as number) <= 0) return undefined
+  return { matterId, publicId, runId }
 }
 
 /**
@@ -227,7 +266,8 @@ export function wrapCfgForAgentRun(
           cls === 'web' ||
           isMcpToolName(name) ||
           keep.has(name)
-        ) out[name] = t
+        )
+          out[name] = t
       }
       return out
     }
@@ -488,10 +528,7 @@ export async function runHeadlessAgent(
       summary: clipSummary(assistantText),
       ...(cfg.approvalTtlResponseEnabled && pending
         ? {
-            approvalTtlSec: Math.max(
-              1,
-              Math.ceil((pending.expiresAt - pending.createdAt) / 1000)
-            )
+            approvalTtlSec: Math.max(1, Math.ceil((pending.expiresAt - pending.createdAt) / 1000))
           }
         : {})
     }

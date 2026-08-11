@@ -246,13 +246,15 @@ describe('chat_db — path + schema bootstrap', () => {
       trigger_id: 'trigger-1',
       parent_tool_call_id: 'toolu_parent'
     })
-    expect(
-      db.prepare('SELECT content FROM ai_chat_messages WHERE session_id = 7').get()
-    ).toEqual({ content: 'preserve me' })
+    expect(db.prepare('SELECT content FROM ai_chat_messages WHERE session_id = 7').get()).toEqual({
+      content: 'preserve me'
+    })
     expect(db.prepare('PRAGMA foreign_key_check').all()).toEqual([])
 
     const indexes = db
-      .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ai_chat_sessions'")
+      .prepare(
+        "SELECT name FROM sqlite_master WHERE type = 'index' AND tbl_name = 'ai_chat_sessions'"
+      )
       .all() as Array<{ name: string }>
     expect(new Set(indexes.map((row) => row.name))).toEqual(
       new Set([
@@ -265,27 +267,29 @@ describe('chat_db — path + schema bootstrap', () => {
     )
 
     expect(() =>
-      db.prepare(
-        `INSERT INTO ai_chat_sessions
+      db
+        .prepare(
+          `INSERT INTO ai_chat_sessions
           (email_id, anchor_type, anchor_id, backend_kind, created_at, updated_at)
          VALUES (NULL, 'matter', 42, 'ai-sdk', 3000, 3000)`
-      ).run()
+        )
+        .run()
     ).not.toThrow()
     expect(() =>
-      db.prepare(
-        `INSERT INTO ai_chat_sessions
+      db
+        .prepare(
+          `INSERT INTO ai_chat_sessions
           (email_id, anchor_type, anchor_id, backend_kind, created_at, updated_at)
          VALUES (42, 'matter', 42, 'ai-sdk', 3000, 3000)`
-      ).run()
+        )
+        .run()
     ).toThrow()
   })
 
   test('v27 shape with meta rolled back to 26 re-enters by advancing meta only', () => {
     const db = getChatDb()
     db.exec('CREATE INDEX idx_v27_reentry_probe ON ai_chat_sessions(title)')
-    db.prepare(
-      "UPDATE chat_db_meta SET value = '26' WHERE key = 'schema_version'"
-    ).run()
+    db.prepare("UPDATE chat_db_meta SET value = '26' WHERE key = 'schema_version'").run()
     closeChatDb()
 
     const reopened = getChatDb()
@@ -295,7 +299,9 @@ describe('chat_db — path + schema bootstrap', () => {
     expect(version.value).toBe('27')
     expect(
       reopened
-        .prepare("SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_v27_reentry_probe'")
+        .prepare(
+          "SELECT name FROM sqlite_master WHERE type = 'index' AND name = 'idx_v27_reentry_probe'"
+        )
         .get()
     ).toEqual({ name: 'idx_v27_reentry_probe' })
   })
@@ -431,10 +437,51 @@ describe('chat_db — path + schema bootstrap', () => {
     expect(session?.trigger_id).toBeNull()
     expect(session?.trigger_kind).toBe('schedule')
     expect(session?.trigger_fired_at).toBe(firedAt)
-    const indexes = getChatDb().prepare("SELECT name FROM sqlite_master WHERE type='index'").all() as Array<{ name: string }>
+    const indexes = getChatDb()
+      .prepare("SELECT name FROM sqlite_master WHERE type='index'")
+      .all() as Array<{ name: string }>
     expect(indexes.map((row) => row.name)).toEqual(
       expect.arrayContaining(['idx_chat_sessions_agent_updated', 'idx_chat_sessions_trigger_fired'])
     )
+  })
+
+  test('P4 anchor — createAgentSession can anchor a follow-up run to its Matter', () => {
+    const id = createAgentSession({
+      agentId: 'matter:MAT-000042',
+      jobId: 91,
+      title: '跟进 · Atlas rollout',
+      triggerKind: 'matter_followup',
+      anchor: { type: 'matter', id: 42 }
+    })
+    const session = getSession(id)
+    expect(session?.anchor_type).toBe('matter')
+    expect(session?.anchor_id).toBe(42)
+    expect(session?.email_id).toBeNull()
+    expect(session?.origin).toBe('agent')
+    expect(session?.trigger_kind).toBe('matter_followup')
+    // 🔴 the run's session must NOT leak into the P3 matter chat panel (origin='agent' filter).
+    expect(listSessionsForMatter(42).map((row) => row.id)).not.toContain(id)
+  })
+
+  test('P4 anchor — omitting it is byte-identical to the pre-P4 general row', () => {
+    const id = createAgentSession({ agentId: 'dms', jobId: 92, title: 'DMS' })
+    const session = getSession(id)
+    expect(session?.anchor_type).toBe('general')
+    expect(session?.anchor_id).toBeNull()
+    expect(session?.email_id).toBeNull()
+  })
+
+  test('P4 anchor — a non-positive/non-integer matter id is rejected, never written dangling', () => {
+    for (const bad of [0, -1, 1.5, Number.NaN]) {
+      expect(() =>
+        createAgentSession({
+          agentId: 'matter:x',
+          jobId: 93,
+          title: 't',
+          anchor: { type: 'matter', id: bad }
+        })
+      ).toThrow(/positive integer id/)
+    }
   })
 
   test('v25 parent provenance supports eager create + replay lookup + later job linkage', () => {
@@ -466,11 +513,15 @@ describe('chat_db — path + schema bootstrap', () => {
     closeChatDb()
 
     const migrated = getChatDb()
-    const columns = migrated.prepare('PRAGMA table_info(ai_chat_sessions)').all() as Array<{ name: string }>
+    const columns = migrated.prepare('PRAGMA table_info(ai_chat_sessions)').all() as Array<{
+      name: string
+    }>
     expect(columns.map((column) => column.name)).toEqual(
       expect.arrayContaining(['trigger_id', 'trigger_kind', 'trigger_fired_at'])
     )
-    const version = migrated.prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'").get() as { value: string }
+    const version = migrated
+      .prepare("SELECT value FROM chat_db_meta WHERE key='schema_version'")
+      .get() as { value: string }
     expect(version.value).toBe('27')
   })
 
@@ -1762,9 +1813,9 @@ describe('chat_db — createNewSession (multi-session per email)', () => {
 
 describe('chat_db — matter anchors', () => {
   test('rejects missing/non-positive matterId and matter anchors carrying emailId', () => {
-    expect(() =>
-      getOrCreateSession({ anchorType: 'matter', backendKind: 'ai-sdk' })
-    ).toThrow(/positive integer matterId/)
+    expect(() => getOrCreateSession({ anchorType: 'matter', backendKind: 'ai-sdk' })).toThrow(
+      /positive integer matterId/
+    )
     expect(() =>
       getOrCreateSession({ anchorType: 'matter', matterId: 0, backendKind: 'ai-sdk' })
     ).toThrow(/positive integer matterId/)
