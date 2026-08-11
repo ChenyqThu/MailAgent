@@ -3,10 +3,12 @@ import { useTranslation } from 'react-i18next'
 import { Archive, Search, Trash2 } from 'lucide-react'
 
 import type { Matter } from '@shared/api/types/matter'
-import { compareMatterRank, nextAction, trashDaysRemaining } from '@shared/lib/matterDerive'
+import { nextAction, trashDaysRemaining } from '@shared/lib/matterDerive'
 import { openAttentionFor } from '@shared/lib/matterDerive'
 import type { MatterAttentionIndex, MatterView } from '@shared/lib/matterDerive'
 import { cn } from '@shared/lib/cn'
+
+import { getOrderedVisibleMatters } from './matterListOrder'
 
 interface MatterListProps {
   matters: readonly Matter[]
@@ -30,18 +32,10 @@ export function MatterList({
   onCreate
 }: MatterListProps): React.ReactElement {
   const { t } = useTranslation()
-  const visible = useMemo(() => {
-    const query = search.trim().toLocaleLowerCase()
-    return matters
-      .filter((matter) => {
-        if (!query) return true
-        return [matter.title, matter.public_id, matter.description, matter.current_summary ?? '']
-          .join('\n')
-          .toLocaleLowerCase()
-          .includes(query)
-      })
-      .sort((left, right) => compareMatterRank(left, right, attention))
-  }, [attention, matters, search])
+  const visible = useMemo(
+    () => getOrderedVisibleMatters(matters, search, attention),
+    [attention, matters, search]
+  )
 
   return (
     <section className="flex h-full min-w-0 flex-col border-r border-ink-border bg-ink-1/55">

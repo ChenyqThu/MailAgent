@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -8,6 +8,7 @@ import {
   Bot,
   Check,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   MessageSquare,
   MoreHorizontal,
@@ -61,6 +62,7 @@ import { cn } from '@shared/lib/cn'
 import { asWriteError, errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useMediaQuery } from '@shared/hooks/useMediaQuery'
+import { useShortcut } from '@shared/hooks/useShortcut'
 import { useActiveEmail } from '@shared/state/active-email'
 import { openMatterChat, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
@@ -96,6 +98,8 @@ interface MatterDetailProps {
   ): void
   initialReviewId?: number | null
   onReviewOpened?(): void
+  navigationMatterIds?: readonly string[]
+  onNavigateMatter?(matterId: string): void
 }
 
 type DetailTab = 'state' | 'context' | 'timeline' | 'runs'
@@ -111,7 +115,9 @@ export function MatterDetail({
   attentionSignals = [],
   onAttentionAction = () => undefined,
   initialReviewId = null,
-  onReviewOpened
+  onReviewOpened,
+  navigationMatterIds = [],
+  onNavigateMatter
 }: MatterDetailProps): React.ReactElement {
   const { t, i18n } = useTranslation()
   const api = useMattersApi()
@@ -143,6 +149,49 @@ export function MatterDetail({
   const startRun = useStartMatterRun(matterId)
   const profilesQuery = useMatterAgentProfiles(matterAgentEnabled)
   const matterAttentionQuery = useMatterAttention(matterId)
+  const navigationIndex = useMemo(
+    () => navigationMatterIds.indexOf(matterId),
+    [matterId, navigationMatterIds]
+  )
+  const navigationTotal = navigationMatterIds.length
+  const showNavigation = Boolean(onNavigateMatter) && navigationIndex >= 0 && navigationTotal > 0
+  const canNavigatePrevious = showNavigation && navigationIndex > 0
+  const canNavigateNext = showNavigation && navigationIndex < navigationTotal - 1
+  const navigateByOffset = useCallback(
+    (offset: -1 | 1): boolean => {
+      if (!onNavigateMatter) return false
+      const nextMatterId = navigationMatterIds[navigationIndex + offset]
+      if (!nextMatterId) return false
+      onNavigateMatter(nextMatterId)
+      return true
+    },
+    [navigationIndex, navigationMatterIds, onNavigateMatter]
+  )
+  const handlePreviousMatter = useCallback(() => {
+    navigateByOffset(-1)
+  }, [navigateByOffset])
+  const handleNextMatter = useCallback(() => {
+    navigateByOffset(1)
+  }, [navigateByOffset])
+  const handlePreviousMatterShortcut = useCallback(
+    (event: KeyboardEvent): boolean => {
+      if (!navigateByOffset(-1)) return false
+      event.preventDefault()
+      return true
+    },
+    [navigateByOffset]
+  )
+  const handleNextMatterShortcut = useCallback(
+    (event: KeyboardEvent): boolean => {
+      if (!navigateByOffset(1)) return false
+      event.preventDefault()
+      return true
+    },
+    [navigateByOffset]
+  )
+
+  useShortcut('k', handlePreviousMatterShortcut, { enabled: canNavigatePrevious })
+  useShortcut('j', handleNextMatterShortcut, { enabled: canNavigateNext })
 
   const detail = useQuery({
     queryKey: qk.matters.detail(matterId),
@@ -532,12 +581,15 @@ export function MatterDetail({
                       })
                     : t('matters.detail.noDue')}
                 </span>
-                {matter.agent_profile_id &&
-                (matter.agent_enabled === true || matter.agent_enabled === 1) ? (
+                {/* 判定与右栏绑定卡同源：跟进 Agent 自 0811 起是内置的，profile 可为空，
+                    `agent_enabled` 才是权威。此前这里额外要求 profile 非空，导致同一屏
+                    右栏显示「内置 · 已启用」而头部显示「未绑定跟进 Agent」。 */}
+                {matter.agent_enabled === true || matter.agent_enabled === 1 ? (
                   <span className="inline-flex items-center gap-1 rounded-[var(--r-pill)] border border-ai/25 bg-ai/10 px-2 py-1 text-meta text-ai">
                     <Sparkles size={12} />
                     {profiles.find((profile) => profile.id === matter.agent_profile_id)?.title ??
-                      matter.agent_profile_id}{' '}
+                      matter.agent_profile_id ??
+                      t('matters.agentBinding.title')}{' '}
                     · {scheduleLabel ?? t('matters.runs.manual')}
                     {nextRun && nextRun.kind === 'run'
                       ? ` · ${t('matters.agentBinding.next')} ${new Date(nextRun.utcMs).toLocaleString()}`
@@ -583,6 +635,18 @@ export function MatterDetail({
             </div>
             {/* P3 — 事项对话 entry. Sits left of the 「更多」 menu (the design's 「立即跟进」
                 neighbour is P4 and is deliberately not rendered yet: 界面跟 Phase 走). */}
+            {showNavigation ? (
+              <MatterPrevNext
+                current={navigationIndex + 1}
+                total={navigationTotal}
+                previousLabel={t('matters.detail.previousMatter')}
+                nextLabel={t('matters.detail.nextMatter')}
+                canPrevious={canNavigatePrevious}
+                canNext={canNavigateNext}
+                onPrevious={handlePreviousMatter}
+                onNext={handleNextMatter}
+              />
+            ) : null}
             <button
               type="button"
               onClick={() =>
@@ -863,6 +927,56 @@ export function MatterDetail({
           onOpenResource={openReviewSource}
         />
       ) : null}
+    </div>
+  )
+}
+
+interface MatterPrevNextProps {
+  current: number
+  total: number
+  previousLabel: string
+  nextLabel: string
+  canPrevious: boolean
+  canNext: boolean
+  onPrevious(): void
+  onNext(): void
+}
+
+function MatterPrevNext({
+  current,
+  total,
+  previousLabel,
+  nextLabel,
+  canPrevious,
+  canNext,
+  onPrevious,
+  onNext
+}: MatterPrevNextProps): React.ReactElement {
+  return (
+    <div className="inline-flex shrink-0 items-center overflow-hidden rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 text-ink-fg-1">
+      <button
+        type="button"
+        title={previousLabel}
+        aria-label={previousLabel}
+        disabled={!canPrevious}
+        onClick={onPrevious}
+        className="grid size-7 place-items-center transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:pointer-events-none disabled:opacity-40"
+      >
+        <ChevronUp size={14} />
+      </button>
+      <span className="w-16 text-center font-mono text-meta tabular-nums text-ink-fg-2">
+        {current} / {total}
+      </span>
+      <button
+        type="button"
+        title={nextLabel}
+        aria-label={nextLabel}
+        disabled={!canNext}
+        onClick={onNext}
+        className="grid size-7 place-items-center transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:pointer-events-none disabled:opacity-40"
+      >
+        <ChevronDown size={14} />
+      </button>
     </div>
   )
 }
@@ -1290,7 +1404,10 @@ function Timeline({ events }: { events: readonly MatterEvent[] }): React.ReactEl
               </time>
             </div>
             <p className="mt-1 text-meta text-ink-fg-2">
-              {event.actor_kind} · {event.source}
+              {/* actor/source 都 fallback 回原值：source 的值域会随触发方式增长
+                  （定时/事件/条件…），漏一个也只是显示原始标识，不该是缺失占位符。 */}
+              {t(`matters.eventActor.${event.actor_kind}`, { defaultValue: event.actor_kind })} ·{' '}
+              {t(`matters.eventSource.${event.source}`, { defaultValue: event.source })}
             </p>
           </div>
         ))}

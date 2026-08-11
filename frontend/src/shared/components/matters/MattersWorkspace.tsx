@@ -31,6 +31,7 @@ import { MatterDetail } from './MatterDetail'
 import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
 import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
+import { getOrderedVisibleMatters } from './matterListOrder'
 import { useMatterNavigation } from './navigation'
 
 const MATTER_LIST_WIDTH_STORAGE_KEY = 'mailagent.matters.listWidth'
@@ -89,7 +90,9 @@ export function MattersWorkspace(): React.ReactElement | null {
   const [search, setSearch] = useState('')
   const [matterListWidth, setMatterListWidth] = useState(readMatterListWidth)
   const [createOpen, setCreateOpen] = useState(false)
-  const [reviewTarget, setReviewTarget] = useState<{ matterId: string; updateId: number } | null>(null)
+  const [reviewTarget, setReviewTarget] = useState<{ matterId: string; updateId: number } | null>(
+    null
+  )
   const navigationTarget = useMatterNavigation((state) => state.targetPublicId)
   const clearNavigationTarget = useMatterNavigation((state) => state.clear)
   const workspaceGridRef = useRef<HTMLDivElement>(null)
@@ -117,12 +120,15 @@ export function MattersWorkspace(): React.ReactElement | null {
     writeMatterListWidth(drag.currentWidth)
   }, [])
 
-  useEffect(() => () => {
-    const drag = resizeDragRef.current
-    if (!drag) return
-    document.body.style.cursor = drag.previousCursor
-    document.body.style.userSelect = drag.previousUserSelect
-  }, [])
+  useEffect(
+    () => () => {
+      const drag = resizeDragRef.current
+      if (!drag) return
+      document.body.style.cursor = drag.previousCursor
+      document.body.style.userSelect = drag.previousUserSelect
+    },
+    []
+  )
 
   const list = useQuery({
     queryKey: qk.matters.list(),
@@ -144,28 +150,56 @@ export function MattersWorkspace(): React.ReactElement | null {
   }, [attentionItems])
   const pendingUpdates = useQuery({
     queryKey: [...qk.matters.all(), 'pending-updates'],
-    queryFn: async (): Promise<Array<{ matterId: string; updates: MatterUpdate[] }>> => Promise.all(allMatters.filter((matter) => matter.archived_at == null && matter.deleted_at == null).map(async (matter) => {
-      const summaries = await api.listUpdates(matter.public_id, 'pending')
-      const updates = await Promise.all(summaries.items.map((update) => api.getUpdate(matter.public_id, update.id)))
-      return { matterId: matter.public_id, updates }
-    })),
+    queryFn: async (): Promise<Array<{ matterId: string; updates: MatterUpdate[] }>> =>
+      Promise.all(
+        allMatters
+          .filter((matter) => matter.archived_at == null && matter.deleted_at == null)
+          .map(async (matter) => {
+            const summaries = await api.listUpdates(matter.public_id, 'pending')
+            const updates = await Promise.all(
+              summaries.items.map((update) => api.getUpdate(matter.public_id, update.id))
+            )
+            return { matterId: matter.public_id, updates }
+          })
+      ),
     enabled: enabled && matterAgentEnabled && allMatters.length > 0,
     staleTime: 15_000
   })
-  const updateIndex = useMemo(() => new Map((pendingUpdates.data ?? []).map((entry) => [entry.matterId, entry.updates] as const)), [pendingUpdates.data])
-  const visible = useMemo(() => filterView(allMatters, view, attentionIndex, updateIndex), [allMatters, attentionIndex, updateIndex, view])
+  const updateIndex = useMemo(
+    () =>
+      new Map((pendingUpdates.data ?? []).map((entry) => [entry.matterId, entry.updates] as const)),
+    [pendingUpdates.data]
+  )
+  const visible = useMemo(
+    () => filterView(allMatters, view, attentionIndex, updateIndex),
+    [allMatters, attentionIndex, updateIndex, view]
+  )
+  const orderedVisible = useMemo(
+    () => getOrderedVisibleMatters(visible, search, attentionIndex),
+    [attentionIndex, search, visible]
+  )
+  const orderedVisibleIds = useMemo(
+    () => orderedVisible.map((matter) => matter.public_id),
+    [orderedVisible]
+  )
   const attentionAction = useAttentionAction()
 
-  const handleAttentionAction = (matterId: string, signalId: number, action: 'resolved' | 'snoozed' | 'dismissed'): void => {
-    attentionAction.mutate({ matterId, signalId, action }, {
-      onSuccess: () => toastSuccess(t(`matters.attention.toast.${action}`)),
-      onError: (error) => toastError(t('matters.attention.toast.failed'), errorMessage(error))
-    })
+  const handleAttentionAction = (
+    matterId: string,
+    signalId: number,
+    action: 'resolved' | 'snoozed' | 'dismissed'
+  ): void => {
+    attentionAction.mutate(
+      { matterId, signalId, action },
+      {
+        onSuccess: () => toastSuccess(t(`matters.attention.toast.${action}`)),
+        onError: (error) => toastError(t('matters.attention.toast.failed'), errorMessage(error))
+      }
+    )
   }
 
   useEffect(() => {
-    if (selectedId && !visible.some((matter) => matter.public_id === selectedId))
-      selectMatter(null)
+    if (selectedId && !visible.some((matter) => matter.public_id === selectedId)) selectMatter(null)
   }, [selectMatter, selectedId, visible])
 
   useEffect(() => {
@@ -195,56 +229,81 @@ export function MattersWorkspace(): React.ReactElement | null {
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center justify-between gap-3 border-b border-ink-border bg-ink-1/65 px-4 py-3">
-        <div>
-          <h1 className="text-title font-semibold text-ink-fg">{t('matters.title')}</h1>
-          <p className="text-meta text-ink-fg-2">{t('matters.subtitle')}</p>
-        </div>
-        <div className="flex items-center gap-2">
+      {/* 设计 §7.4：去掉「事项工作台」通栏页头，「+ 新建事项」下沉到状态栏顶部 ——
+          一级导航已经告诉用户身在何处，通栏标题只是在重复它并吃掉一整条竖直空间。 */}
+      <div className="flex min-h-0 flex-1 max-[900px]:flex-col">
+        <aside className="w-44 shrink-0 border-r border-ink-border bg-ink-1/45 p-2 max-[900px]:w-full max-[900px]:overflow-x-auto max-[900px]:border-b max-[900px]:border-r-0">
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
-            className="inline-flex items-center gap-1.5 rounded-[var(--r-ctl)] bg-coral/100 px-3 py-2 text-body font-medium text-accent-fg"
+            className="mb-2 inline-flex w-full items-center justify-center gap-1.5 rounded-[var(--r-ctl)] bg-coral/100 px-3 py-2 text-body font-medium text-accent-fg max-[900px]:w-auto"
           >
             <Plus size={15} />
             {t('matters.create.submit')}
           </button>
-        </div>
-      </header>
-
-      <div className="flex min-h-0 flex-1 max-[900px]:flex-col">
-        <aside className="w-44 shrink-0 border-r border-ink-border bg-ink-1/45 p-2 max-[900px]:w-full max-[900px]:overflow-x-auto max-[900px]:border-b max-[900px]:border-r-0">
           <nav className="space-y-1 max-[900px]:flex max-[900px]:min-w-max max-[900px]:space-x-1 max-[900px]:space-y-0">
             {MATTER_VIEWS.map((value) => {
-              const count = value === 'focus' ? 0 : filterView(allMatters, value, attentionIndex, updateIndex).length
-              const critical = value === 'attention' && attentionItems.some((signal) => signal.state === 'open' && signal.severity === 'critical')
+              const count =
+                value === 'focus'
+                  ? 0
+                  : filterView(allMatters, value, attentionIndex, updateIndex).length
+              const critical =
+                value === 'attention' &&
+                attentionItems.some(
+                  (signal) => signal.state === 'open' && signal.severity === 'critical'
+                )
               return (
-              <button
-                key={value}
-                type="button"
-                onClick={() => {
-                  setView(value)
-                  selectMatter(null)
-                }}
-                className={cn(
-                  'relative flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-body max-[900px]:w-auto',
-                  (value === 'active' || value === 'all') && 'mt-2 border-t border-ink-border pt-3',
-                  view === value
-                    ? 'row-selected acc-select font-medium text-ink-fg'
-                    : critical ? 'text-fail hover:bg-fail/10' : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
-                )}
-              >
-                {VIEW_ICONS[value]}
-                <span className="min-w-0 flex-1">{t(`matters.views.${value}`)}</span>
-                {count > 0 ? <span className={cn('font-mono text-meta tabular-nums', critical && 'text-fail')}>{count}</span> : null}
-              </button>
-            )})}
+                <button
+                  key={value}
+                  type="button"
+                  onClick={() => {
+                    setView(value)
+                    selectMatter(null)
+                  }}
+                  className={cn(
+                    'relative flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-body max-[900px]:w-auto',
+                    (value === 'active' || value === 'all') &&
+                      'mt-2 border-t border-ink-border pt-3',
+                    view === value
+                      ? 'row-selected acc-select font-medium text-ink-fg'
+                      : critical
+                        ? 'text-fail hover:bg-fail/10'
+                        : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
+                  )}
+                >
+                  {VIEW_ICONS[value]}
+                  <span className="min-w-0 flex-1">{t(`matters.views.${value}`)}</span>
+                  {count > 0 ? (
+                    <span
+                      className={cn('font-mono text-meta tabular-nums', critical && 'text-fail')}
+                    >
+                      {count}
+                    </span>
+                  ) : null}
+                </button>
+              )
+            })}
           </nav>
         </aside>
 
         <div className="min-w-0 flex-1">
           {view === 'focus' ? (
-            <MatterFocus matters={allMatters} signals={attentionItems} updates={updateIndex} onSelect={(matter) => { setView('all'); selectMatter(matter.public_id) }} onReview={(matter, updateId) => { setView('review'); selectMatter(matter.public_id); setReviewTarget({ matterId: matter.public_id, updateId }) }} onSignal={handleAttentionAction} onView={(next) => setView(next)} />
+            <MatterFocus
+              matters={allMatters}
+              signals={attentionItems}
+              updates={updateIndex}
+              onSelect={(matter) => {
+                setView('all')
+                selectMatter(matter.public_id)
+              }}
+              onReview={(matter, updateId) => {
+                setView('review')
+                selectMatter(matter.public_id)
+                setReviewTarget({ matterId: matter.public_id, updateId })
+              }}
+              onSignal={handleAttentionAction}
+              onView={(next) => setView(next)}
+            />
           ) : (
             <div
               ref={workspaceGridRef}
@@ -290,19 +349,34 @@ export function MattersWorkspace(): React.ReactElement | null {
                 onPointerMove={(event) => {
                   const drag = resizeDragRef.current
                   if (!drag || drag.pointerId !== event.pointerId) return
-                  const nextWidth = clampMatterListWidth(drag.startWidth + event.clientX - drag.startX)
+                  const nextWidth = clampMatterListWidth(
+                    drag.startWidth + event.clientX - drag.startX
+                  )
                   drag.currentWidth = nextWidth
-                  workspaceGridRef.current?.style.setProperty('--matter-list-width', `${nextWidth}px`)
+                  workspaceGridRef.current?.style.setProperty(
+                    '--matter-list-width',
+                    `${nextWidth}px`
+                  )
                 }}
-                onPointerUp={(event) => finishMatterListResize(event.currentTarget, event.pointerId)}
-                onPointerCancel={(event) => finishMatterListResize(event.currentTarget, event.pointerId)}
-                onLostPointerCapture={(event) => finishMatterListResize(event.currentTarget, event.pointerId)}
+                onPointerUp={(event) =>
+                  finishMatterListResize(event.currentTarget, event.pointerId)
+                }
+                onPointerCancel={(event) =>
+                  finishMatterListResize(event.currentTarget, event.pointerId)
+                }
+                onLostPointerCapture={(event) =>
+                  finishMatterListResize(event.currentTarget, event.pointerId)
+                }
                 onKeyDown={(event) => {
                   if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
                   event.preventDefault()
-                  const delta = event.key === 'ArrowLeft' ? -MATTER_LIST_WIDTH_STEP : MATTER_LIST_WIDTH_STEP
+                  const delta =
+                    event.key === 'ArrowLeft' ? -MATTER_LIST_WIDTH_STEP : MATTER_LIST_WIDTH_STEP
                   const nextWidth = clampMatterListWidth(matterListWidth + delta)
-                  workspaceGridRef.current?.style.setProperty('--matter-list-width', `${nextWidth}px`)
+                  workspaceGridRef.current?.style.setProperty(
+                    '--matter-list-width',
+                    `${nextWidth}px`
+                  )
                   setMatterListWidth(nextWidth)
                   writeMatterListWidth(nextWidth)
                 }}
@@ -315,9 +389,13 @@ export function MattersWorkspace(): React.ReactElement | null {
                     matterId={selected.public_id}
                     onBack={() => selectMatter(null)}
                     onRemoved={() => selectMatter(null)}
+                    navigationMatterIds={orderedVisibleIds}
+                    onNavigateMatter={selectMatter}
                     attentionSignals={openAttentionFor(selected, attentionIndex)}
                     onAttentionAction={handleAttentionAction}
-                    initialReviewId={reviewTarget?.matterId === selected.public_id ? reviewTarget.updateId : null}
+                    initialReviewId={
+                      reviewTarget?.matterId === selected.public_id ? reviewTarget.updateId : null
+                    }
                     onReviewOpened={() => setReviewTarget(null)}
                   />
                 ) : (

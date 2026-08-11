@@ -277,7 +277,7 @@ describe('MatterDetail — detail editing and rendering', () => {
     )
 
     fireEvent.click(screen.getByRole('button', { name: '编辑' }))
-    fireEvent.change(screen.getByRole('textbox', { name: /你写的目的与背景/ }), {
+    fireEvent.change(screen.getByRole('textbox', { name: /核心目标/ }), {
       target: { value: '## 新背景' }
     })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))

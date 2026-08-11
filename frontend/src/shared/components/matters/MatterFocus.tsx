@@ -290,8 +290,10 @@ function StatTile({
       {...(onClick ? { type: 'button' as const, onClick } : {})}
       className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/75 p-4 text-left hover:bg-ink-2"
     >
+      {/* 设计 §7.2：语义色从图标扩到数值 —— 数字才是一眼要读的东西，
+          只给图标上色等于把语义放在了视线的次要位置。 */}
       <div className="flex items-center justify-between">
-        <strong className="text-[24px] leading-none">{value}</strong>
+        <strong className={cn('text-[24px] leading-none', colors)}>{value}</strong>
         <Icon size={17} className={colors} />
       </div>
       <p className="mt-2 text-meta text-ink-fg-2">{label}</p>
