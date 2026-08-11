@@ -13,6 +13,12 @@ import { create } from 'zustand'
 
 import type { ChatBackendKind } from '@shared/api/types'
 
+export interface MatterChatTarget {
+  id: number
+  publicId: string
+  title: string
+}
+
 /** assistant-modal (新大版本) — dock mode of the floating AI chat modal. `fullscreen` is an ACTION
  *  (navigate to the agent view), NOT a persisted dock mode, so only these two are cached. */
 export type AssistantMode = 'floating' | 'sidebar'
@@ -54,6 +60,15 @@ interface AIChatPanelStore {
   pendingAgentSessionId: number | null
   requestOpenAgentSession(sessionId: number): void
   consumeOpenAgentSession(): void
+
+  // Matters MVP P6-A lane A5 — the main-window dock can wear the Matter Agent identity without
+  // changing the gateway/tool policy. `matterConversationEpoch` is a UI reset signal: every explicit
+  // 事项对话 invocation starts a fresh interactive round, including when the dock is already visible.
+  matterTarget: MatterChatTarget | null
+  matterConversationEpoch: number
+  openMatterChat(target: MatterChatTarget): void
+  startNewMatterConversation(): void
+  clearMatterChat(): void
 }
 
 const SIDEBAR_STORAGE_KEY = 'mailagent.chat.sidebarOpen'
@@ -146,6 +161,21 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
   },
   consumeOpenAgentSession() {
     set({ pendingAgentSessionId: null })
+  },
+  matterTarget: null,
+  matterConversationEpoch: 0,
+  openMatterChat(target) {
+    set((state) => ({
+      visible: true,
+      matterTarget: target,
+      matterConversationEpoch: state.matterConversationEpoch + 1
+    }))
+  },
+  startNewMatterConversation() {
+    set((state) => ({ matterConversationEpoch: state.matterConversationEpoch + 1 }))
+  },
+  clearMatterChat() {
+    set({ matterTarget: null })
   }
 }))
 
@@ -166,6 +196,7 @@ export function openAIChatSession(
   backendKind: ChatBackendKind
 ): void {
   const s = useAIChatPanel.getState()
+  s.clearMatterChat()
   s.requestOpenSession(emailId, sessionId, backendKind)
   s.setVisible(true)
 }
@@ -173,7 +204,9 @@ export function openAIChatSession(
 // ── assistant-modal (新大版本) — non-React entry points for the FAB / shortcuts / fullscreen jump ──
 /** Open (expand) the AI chat modal in its cached dock mode. Called by the FAB + ⌘J. */
 export function openChatModal(): void {
-  useAIChatPanel.getState().openChatModal()
+  const state = useAIChatPanel.getState()
+  state.clearMatterChat()
+  state.openChatModal()
 }
 /** Minimise the modal back to the FAB (keeps the cached mode; next open restores it). */
 export function hideChatModal(): void {
@@ -183,4 +216,9 @@ export function hideChatModal(): void {
  *  router navigate + hideChatModal(). */
 export function requestOpenAgentSession(sessionId: number): void {
   useAIChatPanel.getState().requestOpenAgentSession(sessionId)
+}
+
+/** Open the main-window assistant dock as the Matter Agent, anchored by the matter's INTERNAL id. */
+export function openMatterChat(target: MatterChatTarget): void {
+  useAIChatPanel.getState().openMatterChat(target)
 }

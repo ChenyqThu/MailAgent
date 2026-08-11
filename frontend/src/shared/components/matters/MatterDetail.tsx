@@ -62,10 +62,10 @@ import { asWriteError, errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { useActiveEmail } from '@shared/state/active-email'
+import { openMatterChat, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 
 import { AddItemModal } from './AddItemModal'
-import { MatterChatPanel } from './MatterChatPanel'
 import { MatterContextRail } from './MatterContextRail'
 import { MatterContextTab } from './MatterContextTab'
 import { ResourceDrawer } from './ResourceDrawer'
@@ -88,11 +88,6 @@ interface MatterDetailProps {
   matterId: string
   onBack(): void
   onRemoved(): void
-  /** P3 — the 事项对话 panel takes the ContextRail's slot while open (owner state lives in the
-   *  workspace so it resets when the selected matter changes). */
-  chatOpen?: boolean
-  onToggleChat?(): void
-  onCloseChat?(): void
   attentionSignals?: readonly MatterAttentionSignal[]
   onAttentionAction?(
     matterId: string,
@@ -113,9 +108,6 @@ export function MatterDetail({
   matterId,
   onBack,
   onRemoved,
-  chatOpen = false,
-  onToggleChat,
-  onCloseChat,
   attentionSignals = [],
   onAttentionAction = () => undefined,
   initialReviewId = null,
@@ -126,6 +118,8 @@ export function MatterDetail({
   const queryClient = useQueryClient()
   const navigate = useNavigate()
   const setActiveEmail = useActiveEmail((state) => state.setActive)
+  const assistantVisible = useAIChatPanel((state) => state.visible)
+  const activeMatterChatId = useAIChatPanel((state) => state.matterTarget?.id ?? null)
   const [tab, setTab] = useState<DetailTab>('state')
   const [addKind, setAddKind] = useState<MatterItemKind>('action')
   const [addOpen, setAddOpen] = useState(false)
@@ -156,6 +150,7 @@ export function MatterDetail({
     staleTime: 15_000
   })
   const matter = detail.data?.matter
+  const chatOpen = Boolean(matter && assistantVisible && activeMatterChatId === matter.id)
   const items = detail.data?.items ?? []
   const timeline = detail.data?.timeline ?? []
   const resources = useQuery({
@@ -588,22 +583,22 @@ export function MatterDetail({
             </div>
             {/* P3 — 事项对话 entry. Sits left of the 「更多」 menu (the design's 「立即跟进」
                 neighbour is P4 and is deliberately not rendered yet: 界面跟 Phase 走). */}
-            {onToggleChat ? (
-              <button
-                type="button"
-                onClick={onToggleChat}
-                aria-pressed={chatOpen}
-                className={cn(
-                  'inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux transition-colors duration-fast',
-                  chatOpen
-                    ? 'bg-coral/12 text-coral'
-                    : 'border border-ink-border text-ink-fg-1 hover:bg-ink-3'
-                )}
-              >
-                <MessageSquare size={13} />
-                {t('matters.chat.open')}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              onClick={() =>
+                openMatterChat({ id: matter.id, publicId: matter.public_id, title: matter.title })
+              }
+              aria-pressed={chatOpen}
+              className={cn(
+                'inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux transition-colors duration-fast',
+                chatOpen
+                  ? 'bg-coral/12 text-coral'
+                  : 'border border-ink-border text-ink-fg-1 hover:bg-ink-3'
+              )}
+            >
+              <MessageSquare size={13} />
+              {t('matters.chat.open')}
+            </button>
             {matterAgentEnabled ? (
               <button
                 type="button"
@@ -825,10 +820,8 @@ export function MatterDetail({
           </div>
         ) : null}
       </article>
-      {/* P3 — the chat panel TAKES the rail's slot (design 附录 C: `!chatOpen` 才渲染 rail).
-          Below the实装 rail breakpoint the rail is already hidden, so the panel floats instead of
-          squeezing the detail column to nothing. */}
-      {showContextRail && !chatOpen ? (
+      {/* P6-A — Matter Chat lives in AssistantChatModal, so the context rail keeps its slot. */}
+      {showContextRail ? (
         <MatterContextRail
           matter={matter}
           runs={runs}
@@ -839,13 +832,7 @@ export function MatterDetail({
           stakeholders={stakeholderItems}
           onOpenResource={setDrawerItem}
           onTogglePin={(item) => toggleResourcePin.mutate(item)}
-        />
-      ) : null}
-      {chatOpen ? (
-        <MatterChatPanel
-          matter={matter}
-          overlay={!showContextRail}
-          onClose={() => onCloseChat?.()}
+          onChanged={() => void refresh()}
         />
       ) : null}
       <ResourceDrawer

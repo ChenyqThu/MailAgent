@@ -273,6 +273,15 @@ MATTER_TABLE_DDLS = (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
     )""",
+    """CREATE TABLE IF NOT EXISTS matter_resource_rejection (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        resource_key TEXT NOT NULL,
+        rejected_at INTEGER NOT NULL,
+        evidence_fingerprint TEXT NOT NULL,
+        reason TEXT NULL,
+        UNIQUE (matter_id, resource_key)
+    )""",
     """CREATE TABLE IF NOT EXISTS matter_stakeholder (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
@@ -391,6 +400,7 @@ MATTER_INDEX_DDLS = (
     "CREATE INDEX IF NOT EXISTS idx_matter_resource_group ON matter_resource(matter_id, pinned DESC, relation_type, created_at)",
     "CREATE INDEX IF NOT EXISTS idx_matter_resource_reverse ON matter_resource(resource_id, matter_id) WHERE deleted_at IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_matter_resource_subscription ON matter_resource(resource_id, sub_state) WHERE deleted_at IS NULL AND sub_state IN ('active','paused')",
+    "CREATE INDEX IF NOT EXISTS idx_matter_resource_rejection_matter ON matter_resource_rejection(matter_id, rejected_at DESC)",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_stakeholder_person ON matter_stakeholder(matter_id, person_key) WHERE deleted_at IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_matter_stakeholder_email ON matter_stakeholder(email_normalized) WHERE email_normalized IS NOT NULL AND deleted_at IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_matter_stakeholder_waiting ON matter_stakeholder(matter_id, is_waiting_on) WHERE deleted_at IS NULL",
@@ -911,7 +921,8 @@ class SyncStore:
     # v47 (Matters P5, 2026-08): matter_attention 表 + active/state 索引。
     # v48 (Matters dogfood batch 2): mailagent email/thread external_key 归一；碰撞时
     #                合并活跃 matter_resource、重指历史链接与资源外键，并回填邮件元数据。
-    DB_VERSION = 48  # v48: normalize MailAgent Matter resource identities
+    # v49 (Matters P6-A): persistent resource-suggestion rejection memory.
+    DB_VERSION = 49
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -2987,6 +2998,15 @@ class SyncStore:
                 ValueError,
             ) as e:
                 raise SyncStoreMigrationError(f"v48 migration failed: {e}") from e
+
+        if current_version < 49:
+            try:
+                for ddl in MATTER_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in MATTER_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(f"v49 migration failed: {e}") from e
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

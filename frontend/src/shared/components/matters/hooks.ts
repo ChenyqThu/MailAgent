@@ -5,10 +5,10 @@ import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query'
 import { createMattersApi, createMatterChatApi } from '@shared/api/matters'
 import type { MatterChatApi } from '@shared/api/matters'
 import type { ReportAgentConfig } from '@shared/api/types'
-import type { MattersApi } from '@shared/api/types/matter'
 import type {
   MatterAttentionListResponse,
   MatterAttentionSignal,
+  MattersApi,
   MatterMutationOptions,
   MatterNotifyLevel,
   MatterNotifyLevelResponse,

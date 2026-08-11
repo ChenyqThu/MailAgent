@@ -24,6 +24,8 @@ const CONDITIONAL_HEADLESS_CORE_TOOLS = new Set(['agent_catalog_list', 'agent_ca
 /** Matters MVP P4 — matter_update_propose registers only inside a follow-up run context (it binds
  *  to a server-assembled Matter+run anchor), so a manual/mount build cannot contain it. */
 const MATTER_RUN_ONLY_TOOLS = new Set(['matter_update_propose'])
+/** P6-A — registered after both skill-gating passes because the Matter flag is its only switch. */
+const POST_GATING_CORE_TOOLS = new Set(['matter_suggest_related_resources'])
 
 function buildAllTools() {
   const manual = buildGatewayTools({
@@ -170,7 +172,9 @@ describe('drift guard (review M2 — completeness, both directions)', () => {
       ...COLLISION_EXEMPT_GATEWAY_TOOLS,
       ...CORE_UNGATED_GATEWAY_TOOLS
     ])
-    const unclassified = Object.keys(buildAllTools()).filter((n) => !classified.has(n))
+    const unclassified = Object.keys(buildAllTools()).filter(
+      (n) => !classified.has(n) && !POST_GATING_CORE_TOOLS.has(n)
+    )
     expect(unclassified).toEqual([])
   })
 

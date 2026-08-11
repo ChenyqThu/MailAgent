@@ -1,8 +1,7 @@
 // @vitest-environment happy-dom
 //
-// Matters MVP P3 (lane ③) — the two surface-level invariants:
-//   · MatterDetail: the chat panel TAKES the ContextRail's slot (design 附录 C 「!chatOpen 才渲染
-//     rail」) — they are never both on screen, and closing the chat brings the rail back;
+// Matters MVP P6-A lane A5 — the two surface-level invariants:
+//   · MatterDetail: the ContextRail keeps its slot while 事项对话 targets the existing AI dock;
 //   · MattersWorkspace with the flag off: nothing renders and nothing is requested.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -11,6 +10,7 @@ import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/re
 
 import i18n from '@shared/i18n'
 import type { Matter, MatterItem } from '@shared/api/types/matter'
+import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 
 const localStorageValues = new Map<string, string>()
 const localStorageStub = {
@@ -75,6 +75,7 @@ vi.mock('@shared/components/matters/hooks', () => ({
 }))
 // P4 lane ③：useMatterChatSession 直调 serve-api 的 list-for-matter——mock 掉防真网络。
 vi.mock('@shared/api/chat_api', () => ({
+  createChatRuntime: vi.fn(),
   listSessionsForMatter: vi.fn(async () => [])
 }))
 vi.mock('@shared/hooks/useMailApi', () => ({ useMailApi: () => mailApi }))
@@ -139,7 +140,7 @@ function stubWideViewport(): void {
   })) as unknown as typeof window.matchMedia
 }
 
-function renderDetail(chatOpen: boolean): ReturnType<typeof render> {
+function renderDetail(): ReturnType<typeof render> {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
   })
@@ -149,9 +150,6 @@ function renderDetail(chatOpen: boolean): ReturnType<typeof render> {
         matterId="MAT-0042"
         onBack={vi.fn()}
         onRemoved={vi.fn()}
-        chatOpen={chatOpen}
-        onToggleChat={vi.fn()}
-        onCloseChat={vi.fn()}
       />
     </QueryClientProvider>
   )
@@ -162,6 +160,7 @@ beforeEach(() => {
   window.localStorage.clear()
   mattersEnabled.value = true
   matterAgentEnabled.value = false
+  useAIChatPanel.setState({ visible: false, matterTarget: null, matterConversationEpoch: 0 })
   mattersApi.list.mockResolvedValue({ items: [matter()] })
   mattersApi.get.mockResolvedValue({ matter: matter(), items: [], timeline: [] })
   mattersApi.patch.mockResolvedValue({ matter: matter() })
@@ -172,20 +171,32 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
-describe('MatterDetail — chat panel vs ContextRail', () => {
-  test('closed: the rail renders and the chat panel does not', async () => {
-    renderDetail(false)
+describe('MatterDetail — chat entry and ContextRail', () => {
+  test('the rail renders and no standalone chat panel occupies the detail layout', async () => {
+    renderDetail()
     await waitFor(() => expect(screen.getByText('Vendor launch')).toBeTruthy())
     expect(screen.getByText('还没有关联资料。解除关联不会删除原始邮件或文档。')).toBeTruthy()
     expect(screen.queryByTestId('matter-chat-panel')).toBeNull()
-    // the entry point is there either way
-    expect(screen.getByText('事项对话')).toBeTruthy()
+    expect(screen.getByRole('button', { name: '事项对话' })).toBeTruthy()
   })
 
-  test('open: the chat panel takes the rail slot — the rail is gone', async () => {
-    renderDetail(true)
-    await waitFor(() => expect(screen.getByTestId('matter-chat-panel')).toBeTruthy())
-    expect(screen.queryByText('还没有关联资料。解除关联不会删除原始邮件或文档。')).toBeNull()
+  test('clicking 事项对话 targets the AI dock, keeps the rail, and starts a new round each time', async () => {
+    renderDetail()
+    const openButton = await screen.findByRole('button', { name: '事项对话' })
+
+    fireEvent.click(openButton)
+    expect(useAIChatPanel.getState().visible).toBe(true)
+    expect(useAIChatPanel.getState().matterTarget).toEqual({
+      id: 42,
+      publicId: 'MAT-0042',
+      title: 'Vendor launch'
+    })
+    expect(useAIChatPanel.getState().matterConversationEpoch).toBe(1)
+    expect(screen.getByText('还没有关联资料。解除关联不会删除原始邮件或文档。')).toBeTruthy()
+    expect(screen.queryByTestId('matter-chat-panel')).toBeNull()
+
+    fireEvent.click(openButton)
+    expect(useAIChatPanel.getState().matterConversationEpoch).toBe(2)
   })
 })
 
@@ -219,7 +230,7 @@ describe('MatterDetail — detail editing and rendering', () => {
       timeline: []
     })
 
-    renderDetail(false)
+    renderDetail()
 
     expect(await screen.findByRole('tablist', { name: '事项详情' })).toBeTruthy()
     expect(screen.getByRole('tab', { name: /运行/ })).toBeTruthy()
@@ -230,7 +241,7 @@ describe('MatterDetail — detail editing and rendering', () => {
   })
 
   test('patches title, priority, type, and purpose inline', async () => {
-    renderDetail(false)
+    renderDetail()
     await screen.findByText('Vendor launch')
 
     fireEvent.click(screen.getByRole('button', { name: '编辑事项标题' }))

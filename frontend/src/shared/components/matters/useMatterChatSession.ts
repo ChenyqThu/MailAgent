@@ -4,15 +4,12 @@
 // runtime), scoped to ONE matter's anchor and trimmed to what the panel actually needs — the design
 // gives the panel a 新会话 button and no history list, so there is no session-list surface here.
 //
-// Two deliberate differences from the email/general hooks, both forced by what exists:
+// Two deliberate differences from the email/general hooks:
 //
-//  1. 🔴 There is no HTTP face for `listSessionsForMatter` (lane ① added it to the main-process
-//     chat_db only; serve-api exposes `/chat/sessions?emailId=`, `/chat/sessions/general` and
-//     `/chat/sessions/all`). So the matter's sessions are derived from
-//     `listAllSessions({origin:'interactive'})` filtered on `anchor_type==='matter' &&
-//     anchor_id===<matter.id>` — the rows already carry both columns, and `origin='interactive'`
-//     is the same filter D3 prescribes for the getOrCreate reuse lookup (never adopt an
-//     origin='agent' run's session).
+//  1. Session discovery uses the serve-api matter filter directly:
+//     `GET /chat/sessions/all?matterId=<internalId>` via `listSessionsForMatter`. The endpoint returns
+//     newest-first interactive sessions for the exact matter anchor; there is no client-side 300-row
+//     scan/filter fallback.
 //  2. Reuse ≠ eager create: opening the panel SELECTS the newest existing interactive session for
 //     this matter; when there is none the thread starts fresh and the row is created lazily on the
 //     first send (`onEnsureSession`), exactly like the email panel. No empty session rows leak.

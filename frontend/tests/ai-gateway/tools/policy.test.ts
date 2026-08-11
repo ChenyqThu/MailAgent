@@ -84,6 +84,9 @@ const CONDITIONAL_HEADLESS_READ_TOOLS = new Set(['agent_catalog_list', 'agent_ca
  *  manual full-set build. Same shape as CONDITIONAL_HEADLESS_READ_TOOLS: a classified tool whose
  *  registration has an extra CONTEXT condition, given its own builder for the drift guards. */
 const MATTER_RUN_ONLY_TOOLS = new Set(['matter_update_propose'])
+/** P6-A — explicitly manual-only and intentionally absent from policy.ts. The index registration
+ *  gate is the primary belt; classOfTool's fail-closed exec fallback is the secondary belt. */
+const MANUAL_ONLY_UNCLASSIFIED_TOOLS = new Set(['matter_suggest_related_resources'])
 
 function buildMatterRunTools() {
   return buildGatewayTools({
@@ -647,14 +650,15 @@ describe('applyContextModePolicy', () => {
 describe('buildGatewayTools × contextMode (registration-time filter wiring)', () => {
   test('manual_chat → the FULL flag-on set (byte-identical keys to the pre-W0 assembly — W0 adds/removes no tool)', () => {
     const keys = Object.keys(buildAllTools('manual_chat')).sort()
-    const expected = Object.keys(GATEWAY_TOOL_CLASSES)
-      .filter(
+    const expected = [
+      ...Object.keys(GATEWAY_TOOL_CLASSES).filter(
         (name) =>
           !CONDITIONAL_HEADLESS_READ_TOOLS.has(name) &&
           // P4 — run-context-only tools are absent from EVERY manual assembly by construction.
           !MATTER_RUN_ONLY_TOOLS.has(name)
-      )
-      .sort()
+      ),
+      ...MANUAL_ONLY_UNCLASSIFIED_TOOLS
+    ].sort()
     expect(keys).toEqual(expected)
   })
 
@@ -722,7 +726,7 @@ describe('buildGatewayTools × contextMode (registration-time filter wiring)', (
 describe('drift guards — classification completeness + eval catalog mirror', () => {
   test('FORWARD: every real gateway tool (all flags on, manual_chat) is classified', () => {
     const unclassified = Object.keys(buildAllTools('manual_chat')).filter(
-      (n) => GATEWAY_TOOL_CLASSES[n] === undefined
+      (n) => GATEWAY_TOOL_CLASSES[n] === undefined && !MANUAL_ONLY_UNCLASSIFIED_TOOLS.has(n)
     )
     expect(unclassified).toEqual([])
   })

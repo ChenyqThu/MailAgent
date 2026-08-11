@@ -1,4 +1,5 @@
 import type { Tool } from 'ai'
+import { z } from 'zod'
 
 import type {
   DomainMatterMutation,
@@ -32,6 +33,9 @@ import {
 } from './types'
 
 export const GATEWAY_MATTER_READ_TOOL_NAMES = ['matter_find', 'matter_get'] as const
+export const GATEWAY_MATTER_SUGGESTION_TOOL_NAMES = [
+  'matter_suggest_related_resources'
+] as const
 export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
   'matter_create',
   'matter_update',
@@ -51,6 +55,44 @@ export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
  *  its own array (not the write family) because it is class `artifact`, silent, and guard-free —
  *  the same shape as report_write. */
 export const GATEWAY_MATTER_RUN_TOOL_NAMES = ['matter_update_propose'] as const
+
+const matterSuggestRelatedResourcesSchema = z
+  .object({
+    matter_id: z.string().trim().min(1),
+    kinds: z
+      .array(z.enum(['email', 'thread', 'event', 'doc', 'file', 'url']))
+      .min(1)
+      .optional(),
+    query: z.string().trim().min(1).optional(),
+    expand_reason: z
+      .enum(['context_gap', 'verification', 'matter_instructions'])
+      .optional(),
+    limit: z.number().int().min(1).max(50).default(10)
+  })
+  .strict()
+
+interface MatterSuggestionResult {
+  items: Array<{ resource?: { kind?: string }; [key: string]: unknown }>
+  suppressed: unknown[]
+  local_candidate_count: number
+  expanded: boolean
+}
+
+type DomainRequest = <T>(
+  method: string,
+  path: string,
+  opts?: { body?: unknown; signal?: AbortSignal }
+) => Promise<T>
+
+function domainRequest<T>(
+  domain: MailAgentDomainClient,
+  method: string,
+  path: string,
+  opts?: { body?: unknown; signal?: AbortSignal }
+): Promise<T> {
+  const request = (domain as unknown as { _req: DomainRequest })._req
+  return request.call(domain, method, path, opts) as Promise<T>
+}
 
 function mutation(input: {
   idempotency_key?: string
@@ -116,6 +158,68 @@ export function createMatterReadTools(
   )
 
   return { matter_find, matter_get }
+}
+
+export function createMatterSuggestionTools(
+  domain: MailAgentDomainClient,
+  collector: GatewayToolAuditCollector = [],
+  guard: ApprovalGuard,
+  opts: {
+    a2uiEnabled?: boolean
+    approvalMode?: GatewayApprovalMode
+    toolApprovalPrefs?: GatewayToolApprovalPrefs['tools']
+    oneShot?: boolean
+    contextMode?: AgentContextMode
+  } = {}
+): Record<string, Tool> {
+  const matter_suggest_related_resources = auditedWriteTool(
+    {
+      a2uiEnabled: opts.a2uiEnabled,
+      approvalMode: opts.approvalMode,
+      toolApprovalPrefs: opts.toolApprovalPrefs,
+      oneShot: opts.oneShot,
+      contextMode: opts.contextMode,
+      name: 'matter_suggest_related_resources',
+      description:
+        'Suggest relevant resources that are not yet confirmed on a Matter. The default search stays within durable Matter anchors and runs silently. Set expand_reason only when the user explicitly needs a whole-library search; that expansion always requires approval. Suggestions are returned without confirming them.',
+      inputSchema: matterSuggestRelatedResourcesSchema,
+      risk: 'edit',
+      forceApproval: (input) => input.expand_reason != null,
+      policyEvaluate: async (input) =>
+        input.expand_reason == null
+          ? { decision: 'auto_allow', rule_id: null }
+          : { decision: 'ask', rule_id: null },
+      run: async (input, { signal }) => {
+        const result = await domainRequest<MatterSuggestionResult>(
+          domain,
+          'POST',
+          `/matters/${encodeURIComponent(input.matter_id)}/resource-suggestions/discover`,
+          {
+            body: {
+              query: input.query,
+              expand_reason: input.expand_reason,
+              limit: input.limit,
+              kinds: input.kinds
+            },
+            signal
+          }
+        )
+        if (input.kinds == null) return result
+        const kinds = new Set(input.kinds)
+        return {
+          ...result,
+          items: result.items.filter((item) => {
+            const kind = item.resource?.kind
+            return kind != null && kinds.has(kind as (typeof input.kinds)[number])
+          })
+        }
+      }
+    },
+    collector,
+    guard
+  )
+
+  return { matter_suggest_related_resources }
 }
 
 export function createMatterWriteTools(

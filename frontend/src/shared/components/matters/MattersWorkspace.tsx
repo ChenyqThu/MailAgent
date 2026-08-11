@@ -90,10 +90,6 @@ export function MattersWorkspace(): React.ReactElement | null {
   const [matterListWidth, setMatterListWidth] = useState(readMatterListWidth)
   const [createOpen, setCreateOpen] = useState(false)
   const [reviewTarget, setReviewTarget] = useState<{ matterId: string; updateId: number } | null>(null)
-  // P3 — 事项对话 open state. Owned here (not in MatterDetail) so switching / clearing the selected
-  // matter closes the panel, which also resets the panel's own per-session state (scope falls back
-  // to 'matter' on every reopen — D8 deliberately does not persist it).
-  const [chatOpen, setChatOpen] = useState(false)
   const navigationTarget = useMatterNavigation((state) => state.targetPublicId)
   const clearNavigationTarget = useMatterNavigation((state) => state.clear)
   const workspaceGridRef = useRef<HTMLDivElement>(null)
@@ -106,11 +102,8 @@ export function MattersWorkspace(): React.ReactElement | null {
     previousUserSelect: string
   } | null>(null)
 
-  /** Every selection change goes through here so the chat panel can never stay open over a
-   *  DIFFERENT matter (it is anchored on the one it was opened for). */
   const selectMatter = useCallback((publicId: string | null): void => {
     setSelectedId(publicId)
-    setChatOpen(false)
   }, [])
 
   const finishMatterListResize = useCallback((target: HTMLDivElement, pointerId: number): void => {
@@ -322,9 +315,6 @@ export function MattersWorkspace(): React.ReactElement | null {
                     matterId={selected.public_id}
                     onBack={() => selectMatter(null)}
                     onRemoved={() => selectMatter(null)}
-                    chatOpen={chatOpen}
-                    onToggleChat={() => setChatOpen((open) => !open)}
-                    onCloseChat={() => setChatOpen(false)}
                     attentionSignals={openAttentionFor(selected, attentionIndex)}
                     onAttentionAction={handleAttentionAction}
                     initialReviewId={reviewTarget?.matterId === selected.public_id ? reviewTarget.updateId : null}
@@ -349,6 +339,11 @@ export function MattersWorkspace(): React.ReactElement | null {
         busy={create.isPending}
         onClose={() => setCreateOpen(false)}
         onCreate={(input) => create.mutate(input)}
+        onUseExisting={(candidate) => {
+          setCreateOpen(false)
+          setView('all')
+          selectMatter(candidate.matter.public_id)
+        }}
       />
     </div>
   )

@@ -5,6 +5,8 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel, Field
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
@@ -28,6 +30,8 @@ from src.api.schemas.matters import (
     MutationOnly,
     PermanentDeleteRequest,
 )
+from src.matters.create_research import MatterCreateResearchService
+from src.repository.email_repository import EmailRepository
 from src.matters.repository import MatterRepository
 from src.matters.attention import AttentionService, SNOOZE_3D_MS
 from src.matters.run_service import MatterRunService
@@ -50,6 +54,15 @@ def require_matter_agent_enabled(settings=Depends(get_settings)) -> None:
 
 def get_matter_service(settings=Depends(get_settings)) -> MatterService:
     return MatterService(MatterRepository(settings.sync_store_db_path))
+
+
+def get_matter_create_research_service(
+    settings=Depends(get_settings),
+) -> MatterCreateResearchService:
+    return MatterCreateResearchService(
+        EmailRepository(settings.sync_store_db_path),
+        MatterService(MatterRepository(settings.sync_store_db_path)),
+    )
 
 
 def get_matter_run_service(settings=Depends(get_settings)) -> MatterRunService:
@@ -123,6 +136,15 @@ MATTER_NOTIFY_LEVELS = ("high", "all", "off")
 
 class MatterPatchWithScheduleRequest(MatterPatchRequest):
     schedule_json: dict[str, Any] | None = None
+
+
+class MatterCreateDraftRequest(BaseModel):
+    internal_id: int = Field(gt=0)
+    thread_id: str | None = None
+    link_scope: str | None = None
+    title: str | None = None
+    matter_type: str | None = None
+    description: str | None = None
 
 
 @router.get("/attention")
@@ -219,6 +241,37 @@ async def create_matter(
     return success_envelope(result, request=request, status_code=201)
 
 
+@router.post("/duplicate-candidates")
+async def find_duplicate_candidates(
+    body: dict[str, Any],
+    request: Request,
+    service: MatterService = Depends(get_matter_service),
+):
+    return success_envelope(
+        {"items": _call(service.duplicate_candidates, body)}, request=request
+    )
+
+
+@router.post("/create-draft")
+async def create_matter_draft(
+    body: MatterCreateDraftRequest,
+    request: Request,
+    service: MatterCreateResearchService = Depends(
+        get_matter_create_research_service
+    ),
+):
+    try:
+        result = await service.create_draft(body.model_dump(exclude_none=True))
+    except MatterError as exc:
+        raise APIError(
+            exc.code,
+            exc.message,
+            hint=exc.hint,
+            source="sqlite",
+        ) from exc
+    return success_envelope(result, request=request)
+
+
 @router.get("/links/by-resource")
 async def lookup_links_by_resource(
     request: Request,
@@ -254,7 +307,7 @@ async def get_matter_context_snapshot(
     service: MatterService = Depends(get_matter_service),
 ):
     return success_envelope(
-        _call(service.context_snapshot, matter_id), request=request
+        _call(service.context_snapshot, matter_id, prepare_discovery=False), request=request
     )
 
 
@@ -543,6 +596,20 @@ async def create_resource(
     return success_envelope(result, request=request, status_code=201)
 
 
+@router.post("/{matter_id}/resources/{resource_id}/fetch")
+async def fetch_url_resource(
+    matter_id: str,
+    resource_id: int,
+    request: Request,
+    force: bool = Query(default=False),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = await run_in_threadpool(
+        _call, service.fetch_url_resource, matter_id, resource_id, force=force
+    )
+    return success_envelope(result, request=request)
+
+
 @router.patch("/{matter_id}/resources/{resource_id}")
 async def patch_resource(
     matter_id: str, resource_id: int, body: MatterResourcePatchRequest, request: Request,
@@ -553,6 +620,39 @@ async def patch_resource(
         service.patch_resource, matter_id, resource_id,
         body.model_dump(exclude={"mutation"}, exclude_unset=True),
         **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
+@router.post("/{matter_id}/resources/{resource_id}/reject-suggestion")
+async def reject_resource_suggestion(
+    matter_id: str, resource_id: int, body: MutationOnly, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.reject_resource_suggestion,
+        matter_id,
+        resource_id,
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
+@router.post("/{matter_id}/resource-suggestions/discover")
+async def discover_resource_suggestions(
+    matter_id: str,
+    body: dict[str, Any] | None,
+    request: Request,
+    service: MatterService = Depends(get_matter_service),
+):
+    payload = body or {}
+    result = _call(
+        service.discover_resource_suggestions,
+        matter_id,
+        query=payload.get("query"),
+        expand_reason=payload.get("expand_reason"),
+        limit=payload.get("limit", 10),
     )
     return success_envelope(result, request=request)
 

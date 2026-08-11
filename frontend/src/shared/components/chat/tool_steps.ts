@@ -135,6 +135,7 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   // matter (Matters MVP P3)
   'matter_find',
   'matter_get',
+  'matter_suggest_related_resources',
   'matter_create',
   'matter_update',
   'matter_item_mutate',

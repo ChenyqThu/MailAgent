@@ -31,12 +31,14 @@ import {
   groupMatterResources,
   isMatterResourceAvailable
 } from './matterResource'
+import { MatterSuggestedResourceActions } from './MatterSuggestedResourceActions'
 
 interface MatterContextRailProps {
   resources: MatterResourceListItem[]
   stakeholders: MatterStakeholder[]
   onOpenResource(item: MatterResourceListItem): void
   onTogglePin(item: MatterResourceListItem): void
+  onChanged(): void
   matter: Matter
   runs: MatterRun[]
   matterAgentEnabled: boolean
@@ -51,6 +53,7 @@ export function MatterContextRail({
   stakeholders,
   onOpenResource,
   onTogglePin,
+  onChanged,
   matter,
   runs,
   matterAgentEnabled,
@@ -115,8 +118,10 @@ export function MatterContextRail({
               <ResourceRailRow
                 key={item.link.id}
                 item={item}
+                matter={matter}
                 onOpen={onOpenResource}
                 onTogglePin={onTogglePin}
+                onChanged={onChanged}
               />
             ))}
           </div>
@@ -144,8 +149,10 @@ export function MatterContextRail({
                       <ResourceRailRow
                         key={item.link.id}
                         item={item}
+                        matter={matter}
                         onOpen={onOpenResource}
                         onTogglePin={onTogglePin}
+                        onChanged={onChanged}
                         compact
                       />
                     ))
@@ -442,13 +449,17 @@ function RailSection({
 
 function ResourceRailRow({
   item,
+  matter,
   onOpen,
   onTogglePin,
+  onChanged,
   compact = false
 }: {
   item: MatterResourceListItem
+  matter: Matter
   onOpen(item: MatterResourceListItem): void
   onTogglePin(item: MatterResourceListItem): void
+  onChanged(): void
   compact?: boolean
 }): React.ReactElement {
   const { t } = useTranslation()
@@ -456,48 +467,55 @@ function ResourceRailRow({
     (item.resource.kind === 'doc' && DOC_PROVIDER_ICONS[item.resource.provider.toLowerCase()]) ||
     RESOURCE_KIND_ICONS[item.resource.kind]
   const available = isMatterResourceAvailable(item)
+  const suggested = item.link.confirmed_at === null
   return (
-    <div className="group flex items-start gap-2 rounded-[var(--r-ctl)] px-2 py-2 hover:bg-ink-3">
-      <button
-        type="button"
-        onClick={() => onOpen(item)}
-        className="flex min-w-0 flex-1 items-start gap-2 text-left"
-      >
-        <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded bg-ink-4 text-ink-fg-2">
-          <Icon size={11} />
-        </span>
-        <span className="min-w-0 flex-1">
-          <span className="block truncate text-aux text-ink-fg">
-            {item.resource.title || item.resource.external_key}
+    <div className={cn('group rounded-[var(--r-ctl)] px-2 py-2 hover:bg-ink-3', suggested && 'border border-ai/20 bg-ai/[0.06]')}>
+      <div className="flex items-start gap-2">
+        <button
+          type="button"
+          onClick={() => onOpen(item)}
+          className="flex min-w-0 flex-1 items-start gap-2 text-left"
+        >
+          <span className={cn('mt-0.5 grid size-5 shrink-0 place-items-center rounded bg-ink-4 text-ink-fg-2', suggested && 'bg-ai/15 text-ai')}>
+            <Icon size={11} />
           </span>
-          <span className="mt-0.5 flex items-center gap-1.5 text-meta text-ink-fg-3">
-            <span className="truncate">{t(`matters.context.kind.${item.resource.kind}`)}</span>
-            {item.link.sub_state !== 'none' ? (
-              <RefreshCcw
-                size={10}
-                className={item.link.sub_state === 'paused' ? 'text-warn' : 'text-ok'}
-              />
-            ) : null}
-            {!available ? (
-              <span className="rounded-[var(--r-pill)] bg-fail/10 px-1 text-[10px] text-fail">
-                {t('matters.context.unavailable')}
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-1.5">
+              <span className="min-w-0 flex-1 truncate text-aux text-ink-fg">
+                {item.resource.title || item.resource.external_key}
               </span>
-            ) : null}
+              {suggested ? <Sparkles size={10} className="shrink-0 text-ai" aria-label={t('matters.resource.suggested')} /> : null}
+            </span>
+            <span className="mt-0.5 flex items-center gap-1.5 text-meta text-ink-fg-3">
+              <span className="truncate">{t(`matters.context.kind.${item.resource.kind}`)}</span>
+              {item.link.sub_state !== 'none' ? (
+                <RefreshCcw
+                  size={10}
+                  className={item.link.sub_state === 'paused' ? 'text-warn' : 'text-ok'}
+                />
+              ) : null}
+              {!available ? (
+                <span className="rounded-[var(--r-pill)] bg-fail/10 px-1 text-[10px] text-fail">
+                  {t('matters.context.unavailable')}
+                </span>
+              ) : null}
+            </span>
           </span>
-        </span>
-      </button>
-      <button
-        type="button"
-        title={t(item.link.pinned ? 'matters.context.unpin' : 'matters.context.pin')}
-        onClick={() => onTogglePin(item)}
-        className={cn(
-          'mt-0.5 rounded p-1 text-ink-fg-3 opacity-0 hover:bg-ink-4 hover:text-ink-fg group-hover:opacity-100',
-          item.link.pinned && 'text-coral opacity-100',
-          compact && 'mt-0'
-        )}
-      >
-        <Pin size={12} />
-      </button>
+        </button>
+        <button
+          type="button"
+          title={t(item.link.pinned ? 'matters.context.unpin' : 'matters.context.pin')}
+          onClick={() => onTogglePin(item)}
+          className={cn(
+            'mt-0.5 rounded p-1 text-ink-fg-3 opacity-0 hover:bg-ink-4 hover:text-ink-fg group-hover:opacity-100',
+            item.link.pinned && 'text-coral opacity-100',
+            compact && 'mt-0'
+          )}
+        >
+          <Pin size={12} />
+        </button>
+      </div>
+      <MatterSuggestedResourceActions matter={matter} item={item} onChanged={onChanged} compact />
     </div>
   )
 }

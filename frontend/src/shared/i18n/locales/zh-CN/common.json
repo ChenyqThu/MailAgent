@@ -1054,6 +1054,7 @@
       "calendar_event_delete": "删除日程",
       "matter_find": "检索事项",
       "matter_get": "读取事项",
+      "matter_suggest_related_resources": "发现相关资料",
       "matter_create": "创建事项",
       "matter_update": "更新事项",
       "matter_item_mutate": "编辑事项条目",
@@ -4736,7 +4737,42 @@
       "scopeHint": "默认整条会话，后续回复会自动跟进",
       "threadUnavailable": "这封邮件没有可用会话，只能关联当前邮件",
       "submit": "新建事项",
-      "creating": "正在创建…"
+      "creating": "正在创建…",
+      "research": {
+        "helper": "调研邮件会话、相关邮件与可用文档，生成一份可修改的创建建议。",
+        "action": "调研并预填",
+        "retry": "重新调研",
+        "progress": {
+          "0": "正在读取邮件会话与成员…",
+          "1": "正在检索相关邮件与重复事项…",
+          "2": "正在整理文档、资源与干系人建议…"
+        },
+        "timeout": "调研等待超时",
+        "failedTitle": "调研没有完成",
+        "failedHint": "{error}。你仍可直接修改下面的表单并手动创建。",
+        "readyTitle": "调研建议已预填",
+        "readyHint": "已查看会话中的 {threadCount} 封邮件，并找到 {relatedCount} 封相关邮件。",
+        "notion": {
+          "disabled": "Notion 未启用，本次只使用邮件信息。",
+          "searched": "已同时检索可用的 Notion 页面。",
+          "failed": "Notion 检索失败，其余邮件调研结果仍可使用。"
+        },
+        "partialWarning": "部分外部来源不可用，已保留其余建议。",
+        "editableNotice": "以下是 AI 建议，不会自动创建或写入；标题、类型、描述和建议清单都可以继续调整。",
+        "resources": "建议资源 · {count}",
+        "stakeholders": "建议干系人 · {count}",
+        "removeResource": "移除建议资源 {title}",
+        "removeStakeholder": "移除建议干系人 {email}"
+      },
+      "duplicates": {
+        "title": "可能已有这些事项",
+        "hint": "这里只提示，不会阻止或自动合并。请核对理由后选择已有事项，或继续创建新的事项。",
+        "loading": "正在检查重复事项…",
+        "confidence": "匹配置信度 {value}%",
+        "addExisting": "加入已有事项",
+        "openExisting": "打开已有事项",
+        "nonBlocking": "没有合适的就忽略这些提示，继续创建。"
+      }
     },
     "detail": {
       "empty": "选择一个事项查看详情",
@@ -4874,6 +4910,13 @@
       "linkMethod": "关联方式",
       "manualConfirmed": "手动关联 · 已确认",
       "manualLink": "手动关联",
+      "agentSuggested": "Agent 建议关联",
+      "suggested": "建议态",
+      "suggestedCount": "{count} 条待确认建议",
+      "suggestionConfidence": "置信度 {value}%",
+      "confirmSuggestion": "确认关联",
+      "rejectSuggestion": "不相关",
+      "suggestionActionFailed": "无法更新资源建议",
       "visibility": "内容可见性",
       "visibilityGlobalHint": "改档会影响该资料在所有事项下的可见性。",
       "visibilityChanged": "资料可见性已更新，将影响所有事项",
@@ -4910,6 +4953,8 @@
     "chat": {
       "title": "事项对话",
       "open": "事项对话",
+      "agentName": "事项 Agent",
+      "removeContext": "移除上下文",
       "newSession": "新会话",
       "injectedContext": "已注入的上下文",
       "chips": {
@@ -4929,17 +4974,17 @@
         "global": "全库",
         "matterNote": "检索范围限于本事项",
         "globalNote": "已允许全库检索",
-        "auditFailed": "检索范围切换失败，仍限于本事项"
+        "auditFailed": "检索范围切换失败，已保留当前范围"
       },
       "prompts": {
-        "blocked": "现在卡在哪？",
-        "changes": "本周有什么变化？",
-        "reviewDate": "把复核日期改到下周一",
-        "owing": "谁还欠我们东西？"
+        "status": "总结当前状态",
+        "nextStep": "补一个下一步",
+        "draftFollowup": "起草跟进邮件",
+        "updateSummary": "更新摘要"
       },
       "empty": {
         "title": "从这里推进这件事",
-        "hint": "对话默认只看本事项的证据。明确的指令会直接写入，可逆且留痕。"
+        "hint": "基于本事项的 {count} 条上下文回答"
       },
       "footnote": "对话历史不是正式事项知识；只有工具写入、已接受的更新和确定性事件会沉淀。",
       "writeLabels": {
@@ -4965,7 +5010,11 @@
       },
       "gap": {
         "title": "上下文缺口 · 需要你授权扩大检索",
-        "expand": "扩大到全库"
+        "expand": "授权扩检索",
+        "expanding": "正在检索…",
+        "result": "已加入 {count} 条建议态资源",
+        "suppressed": "{count} 条此前已标记不相关，已跳过",
+        "failed": "扩检索失败"
       }
     },
     "runs": {

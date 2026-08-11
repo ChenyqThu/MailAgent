@@ -207,6 +207,29 @@ export function MatterLinkPopover({
         source={source}
         onClose={() => setCreateOpen(false)}
         onCreate={(input) => create.mutate(input)}
+        onUseExisting={async (candidate, linkScope) => {
+          const detail = await api.get(candidate.matter.public_id)
+          await api.linkResource(
+            candidate.matter.public_id,
+            {
+              source_resource: {
+                provider: 'mailagent',
+                kind: 'email',
+                internal_id: source.internalId,
+                link_scope: source.threadId ? linkScope : 'single'
+              }
+            },
+            {
+              expectedVersion: detail.matter.version,
+              reason: 'user_selected_duplicate_matter'
+            }
+          )
+          setCreateOpen(false)
+          await refresh()
+          openMatter(candidate.matter.public_id)
+          void navigate({ to: '/matters' })
+          onClose()
+        }}
       />
     </>
   )

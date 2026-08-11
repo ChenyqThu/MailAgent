@@ -135,6 +135,12 @@ class MatterResourceSubscriptionState(StrEnum):
     PAUSED = "paused"
 
 
+class MatterResourceExpansionReason(StrEnum):
+    CONTEXT_GAP = "context_gap"
+    VERIFICATION = "verification"
+    MATTER_INSTRUCTIONS = "matter_instructions"
+
+
 EnumValues: TypeAlias = type[StrEnum] | Iterable[str]
 
 
@@ -161,6 +167,7 @@ MATTER_ACCESS_POLICIES = _values(MatterAccessPolicy)
 MATTER_UPDATE_REVIEW_STATUSES = _values(MatterUpdateReviewStatus)
 MATTER_ACTOR_KINDS = _values(MatterActorKind)
 MATTER_RESOURCE_SUBSCRIPTION_STATES = _values(MatterResourceSubscriptionState)
+MATTER_RESOURCE_EXPANSION_REASONS = _values(MatterResourceExpansionReason)
 BUILTIN_MATTER_TYPES = ("客户交付", "商务", "售前", "问题", "内部", "产品")
 MATTER_SEARCH_FIELDS = (
     "title",

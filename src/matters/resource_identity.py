@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
+
 EMAIL_PROVIDER = "mailagent"
 
 
@@ -64,3 +67,25 @@ def normalize_resource_key(provider: str, kind: str, external_key: str) -> str:
             )
         return email_resource_key(int(value))
     return thread_resource_key(value)
+
+
+def rejection_resource_key(provider: str, kind: str, external_key: str) -> str:
+    """Return the provider-qualified canonical key used by rejection memory."""
+    normalized = normalize_resource_key(provider, kind, external_key)
+    return f"{str(provider).strip().lower()}:{normalized}"
+
+
+def evidence_fingerprint(resource_key: str, evidence: list[str] | tuple[str, ...]) -> str:
+    """Hash stable evidence anchors for a resource suggestion.
+
+    "Substantially new evidence" means the normalized set of durable anchors changes:
+    linked thread ids, stakeholder email addresses, matched matter keywords, or an explicit
+    expansion reason/query. Timestamps, random ids, and confidence are deliberately excluded,
+    so repeating the same search cannot bypass a rejection while a genuinely new anchor can.
+    """
+    payload = {
+        "resource_key": str(resource_key),
+        "evidence": sorted({str(item).strip() for item in evidence if str(item).strip()}),
+    }
+    encoded = json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()

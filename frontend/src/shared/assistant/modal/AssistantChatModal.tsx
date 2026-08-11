@@ -5,12 +5,13 @@
 // mode is a real embedded column that PUSHES the email content (resizable + width-cached, matching the
 // legacy AIChatPanel) rather than a floating overlay. The FLOATING mode positions the SAME element
 // `fixed` (0 flow footprint). Switching floating↔sidebar only swaps this wrapper's className/positioning
-// — the body (AgentConversation + its useGeneralChat stream + ai-sdk runtime) is the SAME React subtree
-// at the SAME mount point, so a mode switch never remounts it (no dropped stream / lost timing).
+// — the active conversation body remains at the SAME mount point, so a mode switch never remounts it
+// (no dropped stream / lost timing).
 //
-// 🔴 Body = AgentConversation (the SAME general-agent conversation as /sessions), so the three modes
-//    share one component and the fullscreen jump (P6) is seamless. fullscreen is an ACTION (navigate to
-//    /sessions), not a persisted mode.
+// The default body is AgentConversation (the SAME general-agent conversation as /sessions). A matter
+// invocation swaps in MatterChatPanel as a body-only adapter; the outer dock, controls, model/grant
+// settings and gateway tool ceiling stay shared. fullscreen remains an ACTION to the general /sessions
+// view, not a persisted mode.
 //
 // Mount-once: the body (useGeneralChat session load) only mounts after the FIRST open, then stays mounted
 // (hidden via CSS when minimised) so the conversation survives minimise/restore + a mode switch.
@@ -45,6 +46,7 @@ import {
 } from '@shared/state/ai-chat-panel'
 import { AgentConversation } from '@shared/components/agents/AgentConversation'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
+import { MatterChatPanel } from '@shared/components/matters/MatterChatPanel'
 import { ChatModalHistoryDropdown } from './ChatModalHistoryDropdown'
 import { titleOf } from './sessionTitle'
 
@@ -104,6 +106,10 @@ function AssistantChatModalInner(): React.JSX.Element {
   const visible = useAIChatPanel((s) => s.visible)
   const mode = useAIChatPanel((s) => s.mode)
   const setMode = useAIChatPanel((s) => s.setMode)
+  const matterTarget = useAIChatPanel((s) => s.matterTarget)
+  const matterConversationEpoch = useAIChatPanel((s) => s.matterConversationEpoch)
+  const startNewMatterConversation = useAIChatPanel((s) => s.startNewMatterConversation)
+  const clearMatterChat = useAIChatPanel((s) => s.clearMatterChat)
   const [menuOpen, setMenuOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
   const sidebar = mode === 'sidebar'
@@ -179,7 +185,10 @@ function AssistantChatModalInner(): React.JSX.Element {
   // fullscreen = ACTION: park the active session for AgentViewLayout to select (P6), navigate, minimise.
   const onFullscreen = (): void => {
     setMenuOpen(false)
-    if (chat.activeSessionId != null) requestOpenAgentSession(chat.activeSessionId)
+    if (matterTarget === null && chat.activeSessionId != null) {
+      requestOpenAgentSession(chat.activeSessionId)
+    }
+    clearMatterChat()
     void navigate({ to: '/sessions' })
     hideChatModal()
   }
@@ -261,41 +270,54 @@ function AssistantChatModalInner(): React.JSX.Element {
         {/* P4 标题状态机：新会话→"新对话"；有 activeItem→titleOf（首条输入概览 first_user_message →
             AI 摘要 title，优先级同 AgentThreadList）。点击展开 history 下拉切会话（去 archived）。 */}
         <div className="relative min-w-0 flex-1">
-          <button
-            type="button"
-            onClick={() => setHistoryOpen((o) => !o)}
-            aria-label={t('chat.modal.history')}
-            aria-expanded={historyOpen}
-            className="flex max-w-full items-center gap-1 rounded-md px-1.5 py-1 text-body font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3"
-          >
-            <span className="truncate">
-              {activeItem ? titleOf(activeItem, t) : t('chat.modal.newChat')}
-            </span>
-            <ChevronDown
-              size={14}
-              strokeWidth={2}
-              className={cn(
-                'shrink-0 text-ink-fg-3 transition-transform duration-fast',
-                historyOpen && 'rotate-180'
+          {matterTarget ? (
+            <div className="flex min-w-0 items-center gap-2 px-1.5 py-1">
+              <span className="shrink-0 text-body font-semibold text-ink-fg">
+                {t('matters.chat.agentName')}
+              </span>
+              <span className="truncate font-mono text-meta text-ink-fg-3">
+                {matterTarget.publicId}
+              </span>
+            </div>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => setHistoryOpen((o) => !o)}
+                aria-label={t('chat.modal.history')}
+                aria-expanded={historyOpen}
+                className="flex max-w-full items-center gap-1 rounded-md px-1.5 py-1 text-body font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3"
+              >
+                <span className="truncate">
+                  {activeItem ? titleOf(activeItem, t) : t('chat.modal.newChat')}
+                </span>
+                <ChevronDown
+                  size={14}
+                  strokeWidth={2}
+                  className={cn(
+                    'shrink-0 text-ink-fg-3 transition-transform duration-fast',
+                    historyOpen && 'rotate-180'
+                  )}
+                />
+              </button>
+              {historyOpen && (
+                <ChatModalHistoryDropdown
+                  items={items}
+                  activeSessionId={chat.activeSessionId}
+                  onSelect={(id) => {
+                    void chat.selectSession(id)
+                    setHistoryOpen(false)
+                  }}
+                  onClose={() => setHistoryOpen(false)}
+                />
               )}
-            />
-          </button>
-          {historyOpen && (
-            <ChatModalHistoryDropdown
-              items={items}
-              activeSessionId={chat.activeSessionId}
-              onSelect={(id) => {
-                void chat.selectSession(id)
-                setHistoryOpen(false)
-              }}
-              onClose={() => setHistoryOpen(false)}
-            />
+            </>
           )}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <button
             type="button"
-            onClick={() => chat.newSession()}
+            onClick={() => (matterTarget ? startNewMatterConversation() : chat.newSession())}
             aria-label={t('chat.modal.newSession')}
             title={t('chat.modal.newSession')}
             className={HEADER_BTN}
@@ -337,18 +359,31 @@ function AssistantChatModalInner(): React.JSX.Element {
           </button>
         </div>
       </div>
-      {/* body: 通用 agent 对话（三模式共享同一组件，welcomeAlign='left' 对齐截图）。 */}
+      {/* body: general AgentConversation or the matter-only body adapter, inside one shared dock. */}
       <div className="flex min-h-0 flex-1 flex-col">
         {/* P2-9 — local boundary: a streaming-render crash resets in place
             instead of blanking the whole window; switching session while
             crashed auto-clears via resetKeys. */}
-        <ChatPanelBoundary resetKeys={[chat.activeSessionId]}>
-          <AgentConversation
-            chat={chat}
-            activeItem={activeItem}
-            welcomeAlign="left"
-            initialMentionEmailId={activeEmailId ?? undefined}
-          />
+        <ChatPanelBoundary
+          resetKeys={[
+            matterTarget?.id ?? chat.activeSessionId,
+            matterTarget ? matterConversationEpoch : 'general'
+          ]}
+        >
+          {matterTarget ? (
+            <MatterChatPanel
+              key={matterTarget.id}
+              matter={matterTarget}
+              conversationEpoch={matterConversationEpoch}
+            />
+          ) : (
+            <AgentConversation
+              chat={chat}
+              activeItem={activeItem}
+              welcomeAlign="left"
+              initialMentionEmailId={activeEmailId ?? undefined}
+            />
+          )}
         </ChatPanelBoundary>
       </div>
     </div>

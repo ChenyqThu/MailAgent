@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from .models import (
     MATTER_ACCESS_POLICIES,
     MATTER_RELATION_TYPES,
     MATTER_RESOURCE_KINDS,
+    MATTER_RESOURCE_EXPANSION_REASONS,
     MATTER_RESOURCE_SUBSCRIPTION_STATES,
     MATTER_STATUSES,
     MATTER_UPDATE_REVIEW_STATUSES,
@@ -30,14 +32,27 @@ from .repository import MatterRepository
 from .resource_identity import (
     EMAIL_PROVIDER,
     MatterError,
+    evidence_fingerprint,
     email_resource_key,
     normalize_resource_key,
+    rejection_resource_key,
     thread_resource_key,
+)
+from .url_fetch import (
+    URL_CACHE_METADATA_KEY,
+    URL_CACHE_TEXT_KEY,
+    cached_url_text,
+    content_hash,
+    describe_url_cache,
+    fetch_readable_url,
 )
 from .events import (
     AGENT_BINDING_CHANGED,
     CHAT_SCOPE_EXPANDED,
     CHAT_SCOPE_RESTORED,
+    RESOURCE_LINKED,
+    RESOURCE_SUGGESTION_ACCEPTED,
+    RESOURCE_SUGGESTION_REJECTED,
     UPDATE_ACCEPTED,
     UPDATE_REJECTED,
     UPDATE_SUPERSEDED,
@@ -79,6 +94,8 @@ DIRECT_PATCH_FIELDS = {
 # snippet / body ...) are the *source* of the truncated `excerpt` field and must
 # never ride out untruncated through metadata — whitelist, 宁缺勿滥.
 SNAPSHOT_METADATA_KEYS = ("internal_id", "message_id", "thread_id", "date_received")
+RESOURCE_DISCOVERY_MAX_CANDIDATES = 50
+RESOURCE_DISCOVERY_SCAN_LIMIT = 500
 
 
 @dataclass(frozen=True)
@@ -88,9 +105,10 @@ class Actor:
 
 
 class MatterService:
-    def __init__(self, repository: MatterRepository, *, clock_ms=None):
+    def __init__(self, repository: MatterRepository, *, clock_ms=None, url_fetcher=None):
         self.repository = repository
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
+        self.url_fetcher = url_fetcher or fetch_readable_url
 
     def create_matter(
         self,
@@ -205,7 +223,10 @@ class MatterService:
             if "updates" in include_set:
                 result["updates"] = self.repository.list_updates(conn, matter["id"])
             if "resources" in include_set:
-                result["resources"] = self.repository.list_resources(conn, matter["id"], {})
+                result["resources"] = [
+                    self._decorate_url_resource(item)
+                    for item in self.repository.list_resources(conn, matter["id"], {})
+                ]
             if "stakeholders" in include_set:
                 result["stakeholders"] = [
                     dict(row)
@@ -218,7 +239,149 @@ class MatterService:
                 result["relations"] = self.list_relations(public_id)
             return result
 
-    def context_snapshot(self, public_id: str) -> dict[str, Any]:
+    def duplicate_candidates(self, data: Mapping[str, Any]) -> list[dict[str, Any]]:
+        """Return explainable possible duplicates without mutating any Matter."""
+        public_id = str(data.get("matter_id") or "").strip()
+        with self.repository.connect() as conn:
+            exclude_matter_id = None
+            if public_id:
+                source = self._require_matter(conn, public_id)
+                exclude_matter_id = int(source["id"])
+                document = conn.execute(
+                    "SELECT * FROM matter_search_document WHERE matter_id=?",
+                    (source["id"],),
+                ).fetchone()
+                title = source["title"]
+                text = " ".join(
+                    str(document[key] or "")
+                    for key in (
+                        "title", "description", "current_summary", "items_text",
+                        "stakeholders_text", "notes_text",
+                    )
+                ) if document else title
+                stakeholder_emails = {
+                    row[0]
+                    for row in conn.execute(
+                        "SELECT email_normalized FROM matter_stakeholder "
+                        "WHERE matter_id=? AND deleted_at IS NULL AND email_normalized IS NOT NULL",
+                        (source["id"],),
+                    )
+                }
+                resource_keys = {
+                    f"{row[0]}:{row[1]}"
+                    for row in conn.execute(
+                        "SELECT r.provider,r.external_key FROM matter_resource mr "
+                        "JOIN resource r ON r.id=mr.resource_id "
+                        "WHERE mr.matter_id=? AND mr.deleted_at IS NULL",
+                        (source["id"],),
+                    )
+                }
+                reference_at = int(source["created_at"])
+            else:
+                title = str(data.get("title") or "").strip()
+                text = " ".join(
+                    str(data.get(key) or "")
+                    for key in ("title", "description", "current_summary")
+                )
+                stakeholder_emails = self._input_emails(data.get("stakeholders"))
+                resource_keys = self._input_resource_keys(data.get("resources"))
+                reference_at = int(data.get("reference_at") or self.clock_ms())
+            query_terms = self._semantic_terms(text)
+            if not query_terms and not stakeholder_emails and not resource_keys:
+                return []
+            candidates = []
+            for row in self.repository.list_duplicate_candidate_rows(
+                conn, exclude_matter_id=exclude_matter_id
+            ):
+                reasons: list[dict[str, Any]] = []
+                confidence = 0.0
+                candidate_resources = set(row["resource_keys"])
+                shared_resources = sorted(resource_keys & candidate_resources)
+                if shared_resources:
+                    ratio = len(shared_resources) / max(1, len(resource_keys))
+                    contribution = min(0.48, 0.32 + ratio * 0.16)
+                    confidence += contribution
+                    reasons.append({
+                        "kind": "resource_overlap",
+                        "label": "关联资料重叠",
+                        "weight": round(contribution, 3),
+                        "evidence": shared_resources[:5],
+                    })
+                shared_people = sorted(
+                    stakeholder_emails & set(row["stakeholder_emails"])
+                )
+                if shared_people:
+                    ratio = len(shared_people) / max(1, len(stakeholder_emails))
+                    contribution = min(0.28, 0.18 + ratio * 0.10)
+                    confidence += contribution
+                    reasons.append({
+                        "kind": "stakeholder_overlap",
+                        "label": "干系人重叠",
+                        "weight": round(contribution, 3),
+                        "evidence": shared_people[:5],
+                    })
+                candidate_text = " ".join(
+                    str(row.get(key) or "")
+                    for key in (
+                        "search_title", "search_description", "search_summary",
+                        "items_text", "stakeholders_text", "notes_text",
+                    )
+                )
+                candidate_terms = self._semantic_terms(candidate_text)
+                shared_terms = sorted(query_terms & candidate_terms)
+                union = query_terms | candidate_terms
+                similarity = len(shared_terms) / max(1, len(union))
+                if shared_terms and similarity >= 0.04:
+                    contribution = min(0.20, 0.08 + similarity * 0.6)
+                    confidence += contribution
+                    reasons.append({
+                        "kind": "semantic_overlap",
+                        "label": "主题与上下文相似",
+                        "weight": round(contribution, 3),
+                        "evidence": shared_terms[:8],
+                    })
+                age_ms = abs(reference_at - int(row["created_at"]))
+                if age_ms <= 30 * 24 * 60 * 60 * 1000 and reasons:
+                    confidence += 0.04
+                    reasons.append({
+                        "kind": "time_proximity",
+                        "label": "创建时间接近（30 天内）",
+                        "weight": 0.04,
+                        "evidence": [],
+                    })
+                if confidence < 0.18:
+                    continue
+                candidates.append({
+                    "matter": {
+                        "public_id": row["public_id"],
+                        "title": row["title"],
+                        "status": row["status"],
+                        "health": row["health"],
+                        "priority": row["priority"],
+                        "updated_at": row["updated_at"],
+                    },
+                    "confidence": round(min(confidence, 0.99), 3),
+                    "reasons": reasons,
+                })
+            return sorted(
+                candidates,
+                key=lambda item: (-item["confidence"], -item["matter"]["updated_at"]),
+            )[:20]
+
+    def context_snapshot(
+        self, public_id: str, *, prepare_discovery: bool = True
+    ) -> dict[str, Any]:
+        if prepare_discovery:
+            prepared = self.discover_resource_suggestions(
+                public_id, limit=10, bump_version=False
+            )
+            if prepared["local_candidate_count"] == 0:
+                self.discover_resource_suggestions(
+                    public_id,
+                    expand_reason="context_gap",
+                    limit=10,
+                    bump_version=False,
+                )
         with self.repository.connect() as conn:
             matter = self._require_matter(conn, public_id)
             core_fields = (
@@ -269,9 +432,16 @@ class MatterService:
             ]
 
             resources = []
-            for joined in self.repository.list_resources(
-                conn, matter["id"], {"pinned": True}
-            )[:10]:
+            visible_resources = [
+                joined
+                for joined in self.repository.list_resources(conn, matter["id"], {})
+                if joined["link"]["pinned"]
+                or (
+                    joined["link"]["confirmed_at"] is None
+                    and joined["link"]["added_by_kind"] == "agent"
+                )
+            ]
+            for joined in visible_resources[:10]:
                 resource = joined["resource"]
                 metadata = resource.get("metadata") or {}
                 excerpt = next(
@@ -912,7 +1082,73 @@ class MatterService:
     def list_resources(self, public_id: str, **filters: Any) -> list[dict[str, Any]]:
         with self.repository.connect() as conn:
             matter = self._require_matter(conn, public_id)
-            return self.repository.list_resources(conn, matter["id"], filters)
+            return [
+                self._decorate_url_resource(item)
+                for item in self.repository.list_resources(conn, matter["id"], filters)
+            ]
+
+    def fetch_url_resource(
+        self, public_id: str, resource_id: int, *, force: bool = False
+    ) -> dict[str, Any]:
+        now = self.clock_ms()
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            resource = self.repository.get_resource(conn, resource_id)
+            link = self.repository.get_resource_link(
+                conn, matter["id"], resource_id, live_only=True
+            )
+        self._validate_url_fetch_resource(resource, link)
+        cache = describe_url_cache(resource, now)
+        if cache["is_fresh"] and not force:
+            return {
+                "resource": self._resource_with_url_cache(resource),
+                "cache_hit": True,
+                "cache": cache,
+                "content": cached_url_text(resource),
+            }
+
+        fetched = self.url_fetcher(str(resource["canonical_url"]))
+        text = str(fetched.get("text") or "")
+        fetched_hash = content_hash(text)
+        fetched_at = self.clock_ms()
+        with self.repository.transaction() as conn:
+            matter = self._require_matter(conn, public_id)
+            current = self.repository.get_resource(conn, resource_id)
+            link = self.repository.get_resource_link(
+                conn, matter["id"], resource_id, live_only=True
+            )
+            self._validate_url_fetch_resource(current, link)
+            metadata = dict(current.get("metadata") or {})
+            metadata[URL_CACHE_TEXT_KEY] = text
+            metadata[URL_CACHE_METADATA_KEY] = {
+                "fetched_at": fetched_at,
+                "content_hash": fetched_hash,
+                "final_url": str(fetched.get("final_url") or current["canonical_url"]),
+                "content_type": fetched.get("content_type"),
+                "status": fetched.get("status"),
+                "truncated": bool(fetched.get("truncated")),
+            }
+            title = current.get("title") or self._optional_text(fetched.get("title"))
+            conn.execute(
+                "UPDATE resource SET title=?, metadata_json=?, revision=?, content_hash=?, "
+                "last_checked_at=?, updated_at=? WHERE id=?",
+                (
+                    title,
+                    self._dump(metadata),
+                    fetched_hash,
+                    fetched_hash,
+                    fetched_at,
+                    fetched_at,
+                    resource_id,
+                ),
+            )
+            updated = self.repository.get_resource(conn, resource_id)
+        return {
+            "resource": self._resource_with_url_cache(updated),
+            "cache_hit": False,
+            "cache": describe_url_cache(updated, fetched_at),
+            "content": text,
+        }
 
     def add_resource(
         self,
@@ -1010,23 +1246,30 @@ class MatterService:
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        if "access_policy" in patch:
-            replay_kind = "resource_access_policy_changed"
-        elif patch.get("sub_state") == "paused":
-            replay_kind = "resource_subscription_paused"
-        elif patch.get("sub_state") == "active":
-            replay_kind = "resource_subscription_resumed"
-        else:
-            replay_kind = "resource_updated"
         with self.repository.transaction() as conn:
-            replay = self._replay(conn, dedupe_key, replay_kind)
-            if replay:
-                return replay
+            if patch.get("confirmed") is True:
+                replay = self._replay(conn, dedupe_key, RESOURCE_SUGGESTION_ACCEPTED)
+                if replay:
+                    return replay
             matter = self._require_matter(conn, public_id)
             resource = self.repository.get_resource(conn, resource_id)
             link = self.repository.get_resource_link(conn, matter["id"], resource_id, live_only=True)
             if not resource or not link:
                 raise MatterError("E_CHILD_NOT_FOUND", f"resource {resource_id} not linked")
+            accepting_suggestion = patch.get("confirmed") is True and link["confirmed_at"] is None
+            if "access_policy" in patch:
+                replay_kind = "resource_access_policy_changed"
+            elif patch.get("sub_state") == "paused":
+                replay_kind = "resource_subscription_paused"
+            elif patch.get("sub_state") == "active":
+                replay_kind = "resource_subscription_resumed"
+            elif accepting_suggestion:
+                replay_kind = RESOURCE_SUGGESTION_ACCEPTED
+            else:
+                replay_kind = "resource_updated"
+            replay = self._replay(conn, dedupe_key, replay_kind)
+            if replay:
+                return replay
             access_patch = "access_policy" in patch
             link_fields = {"pinned", "relation_type", "sub_state", "confirmed"} & set(patch)
             if access_patch:
@@ -1045,6 +1288,15 @@ class MatterService:
                     changes["relation_type"] = patch["relation_type"]
                 if "confirmed" in patch and patch["confirmed"]:
                     changes["confirmed_at"] = link["confirmed_at"] or now
+                    conn.execute(
+                        "DELETE FROM matter_resource_rejection WHERE matter_id=? AND resource_key=?",
+                        (
+                            matter["id"],
+                            rejection_resource_key(
+                                resource["provider"], resource["kind"], resource["external_key"]
+                            ),
+                        ),
+                    )
                 if "sub_state" in patch:
                     sub_state = str(patch["sub_state"])
                     self._require_value("sub_state", sub_state, MATTER_RESOURCE_SUBSCRIPTION_STATES)
@@ -1057,6 +1309,8 @@ class MatterService:
                     event_kind = "resource_subscription_paused"
                 elif patch.get("sub_state") == "active":
                     event_kind = "resource_subscription_resumed"
+                elif accepting_suggestion:
+                    event_kind = RESOURCE_SUGGESTION_ACCEPTED
                 else:
                     event_kind = "resource_updated"
             if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
@@ -1096,6 +1350,187 @@ class MatterService:
 
     def unlink_resource(self, public_id: str, resource_id: int, **mutation: Any) -> dict[str, Any]:
         return self._set_resource_deleted(public_id, resource_id, True, **mutation)
+
+    def reject_resource_suggestion(
+        self, public_id: str, resource_id: int, *, expected_version: int,
+        idempotency_key: str, source: str, actor: Actor = Actor(),
+        reason: str | None = None, reverses_event_id: int | None = None,
+    ) -> dict[str, Any]:
+        now = self.clock_ms()
+        dedupe_key = self._dedupe(idempotency_key)
+        with self.repository.transaction() as conn:
+            replay = self._replay(conn, dedupe_key, RESOURCE_SUGGESTION_REJECTED)
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            resource = self.repository.get_resource(conn, resource_id)
+            link = self.repository.get_resource_link(
+                conn, matter["id"], resource_id, live_only=True
+            )
+            if not resource or not link:
+                raise MatterError("E_CHILD_NOT_FOUND", f"resource {resource_id} not linked")
+            if link["confirmed_at"] is not None:
+                raise MatterError(
+                    "E_INVALID_STATE", "only unconfirmed resource suggestions can be rejected"
+                )
+            provenance = link.get("provenance") or {}
+            stable_evidence = provenance.get("evidence") or []
+            canonical_key = rejection_resource_key(
+                resource["provider"], resource["kind"], resource["external_key"]
+            )
+            fingerprint = str(provenance.get("evidence_fingerprint") or "")
+            if not fingerprint:
+                fingerprint = evidence_fingerprint(canonical_key, stable_evidence)
+            if not self._cas_update(
+                conn, matter["id"], expected_version,
+                {"updated_at": now, "last_activity_at": now},
+            ):
+                raise self._version_conflict()
+            conn.execute(
+                "UPDATE matter_resource SET deleted_at=?,updated_at=? WHERE id=?",
+                (now, now, link["id"]),
+            )
+            self.repository.upsert_resource_rejection(
+                conn,
+                {
+                    "matter_id": matter["id"],
+                    "resource_key": canonical_key,
+                    "rejected_at": now,
+                    "evidence_fingerprint": fingerprint,
+                    "reason": reason,
+                },
+            )
+            event_id = self._append_event(
+                conn, matter_id=matter["id"], kind=RESOURCE_SUGGESTION_REJECTED,
+                actor=actor, source=source, dedupe_key=dedupe_key, reason=reason,
+                resource_id=resource_id,
+                payload={"link_id": link["id"], "evidence_fingerprint": fingerprint},
+                happened_at=now, reverses_event_id=reverses_event_id,
+            )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            return self._mutation(after, [event_id], resource=resource)
+
+    def discover_resource_suggestions(
+        self, public_id: str, *, query: str | None = None,
+        expand_reason: str | None = None, limit: int = 10,
+        bump_version: bool = True,
+    ) -> dict[str, Any]:
+        """Discover email resources, persisting only unconfirmed suggestions.
+
+        The first pass is confined to durable Matter anchors (linked threads and stakeholder
+        addresses). Keyword-only global search is allowed only for a declared context gap,
+        verification query, or explicit matter instructions.
+        """
+        limit = max(1, min(int(limit), RESOURCE_DISCOVERY_MAX_CANDIDATES))
+        if expand_reason is not None:
+            self._require_value(
+                "expand_reason", expand_reason, MATTER_RESOURCE_EXPANSION_REASONS
+            )
+        now = self.clock_ms()
+        with self.repository.transaction() as conn:
+            matter = self._require_matter(conn, public_id)
+            candidates, local_count, expanded = self._email_resource_candidates(
+                conn, matter, query=query, expand_reason=expand_reason,
+                limit=limit,
+            )
+            linked: list[dict[str, Any]] = []
+            suppressed: list[dict[str, Any]] = []
+            event_ids: list[int] = []
+            for candidate in candidates:
+                canonical_key = rejection_resource_key(
+                    EMAIL_PROVIDER, "email", candidate["external_key"]
+                )
+                fingerprint = evidence_fingerprint(
+                    canonical_key, candidate["evidence"]
+                )
+                rejection = self.repository.get_resource_rejection(
+                    conn, matter["id"], canonical_key
+                )
+                if rejection and rejection["evidence_fingerprint"] == fingerprint:
+                    suppressed.append({
+                        "external_key": candidate["external_key"],
+                        "reason": "rejected_same_evidence",
+                    })
+                    continue
+                provenance = {
+                    "discovery_scope": candidate["scope"],
+                    "expand_reason": expand_reason if candidate["scope"] == "expanded" else None,
+                    "reason": candidate["reason"],
+                    "evidence": candidate["evidence"],
+                    "evidence_fingerprint": fingerprint,
+                }
+                resource, _ = self._upsert_resource(
+                    conn,
+                    {
+                        "provider": EMAIL_PROVIDER,
+                        "kind": "email",
+                        "external_key": candidate["external_key"],
+                        "title": candidate["title"],
+                        "metadata": candidate["metadata"],
+                    },
+                    now,
+                )
+                live = self.repository.get_resource_link(
+                    conn, matter["id"], resource["id"], live_only=True
+                )
+                if live:
+                    continue
+                deleted = self.repository.get_resource_link(
+                    conn, matter["id"], resource["id"]
+                )
+                if deleted:
+                    conn.execute(
+                        "UPDATE matter_resource SET added_by_kind='agent',added_by_id=NULL,"
+                        "confidence=?,provenance_json=?,confirmed_at=NULL,deleted_at=NULL,updated_at=? "
+                        "WHERE id=?",
+                        (candidate["confidence"], self._dump(provenance), now, deleted["id"]),
+                    )
+                    link_id = deleted["id"]
+                else:
+                    link_id = self.repository.insert_resource_link(
+                        conn,
+                        {
+                            "matter_id": matter["id"], "resource_id": resource["id"],
+                            "relation_type": None, "pinned": 0,
+                            "added_by_kind": "agent", "added_by_id": None,
+                            "confidence": candidate["confidence"],
+                            "provenance_json": self._dump(provenance),
+                            "confirmed_at": None, "sub_state": "none",
+                            "created_at": now, "updated_at": now,
+                        },
+                    )
+                event_key = (
+                    f"matter:{matter['id']}:resource_linked:{resource['id']}:{fingerprint}"
+                )
+                if not self.repository.find_event(conn, event_key):
+                    event_ids.append(self._append_event(
+                        conn, matter_id=matter["id"], kind=RESOURCE_LINKED,
+                        actor=Actor(kind="agent"), source="matter_followup",
+                        dedupe_key=event_key, reason=candidate["reason"],
+                        resource_id=resource["id"],
+                        payload={"link_id": link_id, "suggested": True, "evidence_fingerprint": fingerprint},
+                        happened_at=now,
+                    ))
+                linked.append({
+                    "resource": resource,
+                    "link": self.repository.get_resource_link(
+                        conn, matter["id"], resource["id"], live_only=True
+                    ),
+                    "reason": candidate["reason"],
+                    "confidence": candidate["confidence"],
+                })
+            if linked and bump_version:
+                if not self._cas_update(
+                    conn, matter["id"], int(matter["version"]),
+                    {"updated_at": now, "last_activity_at": now},
+                ):
+                    raise self._version_conflict()
+            return {
+                "items": linked,
+                "suppressed": suppressed,
+                "local_candidate_count": local_count,
+                "expanded": expanded,
+            }
 
     def restore_resource(self, public_id: str, resource_id: int, **mutation: Any) -> dict[str, Any]:
         return self._set_resource_deleted(public_id, resource_id, False, **mutation)
@@ -2180,6 +2615,200 @@ class MatterService:
             else None,
         }
 
+    @staticmethod
+    def _semantic_terms(value: str) -> set[str]:
+        text = str(value or "").casefold()
+        terms = {
+            token
+            for token in re.findall(r"[\w@.-]+", text, flags=re.UNICODE)
+            if len(token) >= 3 and not token.isdigit()
+        }
+        compact_cjk = "".join(re.findall(r"[\u3400-\u9fff]", text))
+        terms.update(
+            compact_cjk[index : index + 2]
+            for index in range(max(0, len(compact_cjk) - 1))
+        )
+        return terms
+
+    @staticmethod
+    def _input_emails(value: Any) -> set[str]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return set()
+        emails = set()
+        for item in value:
+            raw = item.get("email") if isinstance(item, Mapping) else item
+            email = str(raw or "").strip().casefold()
+            if "@" in email:
+                emails.add(email)
+        return emails
+
+    @staticmethod
+    def _input_resource_keys(value: Any) -> set[str]:
+        if not isinstance(value, Sequence) or isinstance(value, (str, bytes)):
+            return set()
+        keys = set()
+        for item in value:
+            if not isinstance(item, Mapping):
+                continue
+            provider = str(item.get("provider") or "").strip().lower()
+            kind = str(item.get("kind") or "").strip()
+            external_key = str(item.get("external_key") or "").strip()
+            if provider and kind and external_key:
+                keys.add(
+                    f"{provider}:{normalize_resource_key(provider, kind, external_key)}"
+                )
+        return keys
+
+    def _email_resource_candidates(
+        self, conn: sqlite3.Connection, matter: Mapping[str, Any], *,
+        query: str | None, expand_reason: str | None, limit: int,
+    ) -> tuple[list[dict[str, Any]], int, bool]:
+        linked_rows = conn.execute(
+            "SELECT r.kind,r.external_key FROM matter_resource mr "
+            "JOIN resource r ON r.id=mr.resource_id "
+            "WHERE mr.matter_id=? AND mr.deleted_at IS NULL AND r.provider=?",
+            (matter["id"], EMAIL_PROVIDER),
+        ).fetchall()
+        linked_keys = {row["external_key"] for row in linked_rows}
+        thread_ids = {
+            row["external_key"].split(":", 1)[1]
+            for row in linked_rows
+            if row["kind"] == "thread" and ":" in row["external_key"]
+        }
+        linked_email_ids = [
+            int(row["external_key"].split(":", 1)[1])
+            for row in linked_rows
+            if row["kind"] == "email" and ":" in row["external_key"]
+        ]
+        if linked_email_ids:
+            placeholders = ",".join("?" for _ in linked_email_ids)
+            thread_ids.update(
+                row[0]
+                for row in conn.execute(
+                    f"SELECT DISTINCT thread_id FROM email_metadata WHERE internal_id IN ({placeholders}) "
+                    "AND thread_id IS NOT NULL",
+                    linked_email_ids,
+                ).fetchall()
+            )
+        stakeholder_emails = {
+            row[0].casefold()
+            for row in conn.execute(
+                "SELECT email_normalized FROM matter_stakeholder "
+                "WHERE matter_id=? AND deleted_at IS NULL AND email_normalized IS NOT NULL",
+                (matter["id"],),
+            ).fetchall()
+        }
+        document = conn.execute(
+            "SELECT * FROM matter_search_document WHERE matter_id=?", (matter["id"],)
+        ).fetchone()
+        matter_text = " ".join(
+            str(document[key] or "")
+            for key in (
+                "title", "description", "current_summary", "items_text",
+                "stakeholders_text", "notes_text",
+            )
+        ) if document else str(matter["title"])
+        query_terms = self._semantic_terms(" ".join((matter_text, str(query or ""))))
+        rows = conn.execute(
+            "SELECT internal_id,message_id,thread_id,subject,sender,sender_name,to_addr,cc_addr,"
+            "date_received,snippet FROM email_metadata ORDER BY date_received DESC,internal_id DESC LIMIT ?",
+            (RESOURCE_DISCOVERY_SCAN_LIMIT,),
+        ).fetchall()
+
+        def build_candidate(row: sqlite3.Row, scope: str) -> dict[str, Any] | None:
+            external_key = email_resource_key(int(row["internal_id"]))
+            if external_key in linked_keys:
+                return None
+            addresses = " ".join(
+                str(row[key] or "") for key in ("sender", "to_addr", "cc_addr")
+            ).casefold()
+            evidence = []
+            score = 0.0
+            if row["thread_id"] and row["thread_id"] in thread_ids:
+                evidence.append(f"thread:{row['thread_id']}")
+                score += 0.62
+            matched_people = sorted(
+                email for email in stakeholder_emails if email in addresses
+            )
+            if matched_people:
+                evidence.extend(f"stakeholder:{email}" for email in matched_people)
+                score += min(0.28, 0.18 + len(matched_people) * 0.05)
+            email_terms = self._semantic_terms(
+                " ".join(str(row[key] or "") for key in ("subject", "sender_name", "snippet"))
+            )
+            matched_terms = sorted(query_terms & email_terms)
+            if matched_terms:
+                evidence.extend(f"keyword:{term}" for term in matched_terms[:8])
+                score += min(0.24, 0.08 + len(matched_terms) * 0.03)
+            if scope == "local" and not any(
+                item.startswith(("thread:", "stakeholder:")) for item in evidence
+            ):
+                return None
+            if scope == "expanded":
+                evidence.append(f"expansion:{expand_reason}")
+                if query:
+                    evidence.extend(
+                        f"query:{term}" for term in sorted(self._semantic_terms(query))[:8]
+                    )
+                if not matched_terms and not matched_people:
+                    return None
+                score = max(score, 0.45 if expand_reason == "verification" else 0.36)
+            if score < 0.25:
+                return None
+            reason_parts = []
+            if row["thread_id"] and row["thread_id"] in thread_ids:
+                reason_parts.append("与已关联邮件处于同一线程")
+            if matched_people:
+                reason_parts.append("涉及事项干系人")
+            if matched_terms:
+                reason_parts.append(f"命中主题词：{', '.join(matched_terms[:4])}")
+            if scope == "expanded":
+                reason_parts.append(f"因 {expand_reason} 外扩检索")
+            return {
+                "external_key": external_key,
+                "title": row["subject"],
+                "metadata": {
+                    "internal_id": int(row["internal_id"]),
+                    "message_id": row["message_id"],
+                    "thread_id": row["thread_id"],
+                    "date_received": row["date_received"],
+                },
+                "scope": scope,
+                "reason": "；".join(reason_parts),
+                "evidence": sorted(set(evidence)),
+                "confidence": round(min(score, 0.98), 3),
+            }
+
+        local = [candidate for row in rows if (candidate := build_candidate(row, "local"))]
+        local.sort(key=lambda item: -item["confidence"])
+        should_expand = False
+        if expand_reason == "context_gap":
+            should_expand = not local
+        elif expand_reason == "verification":
+            if not str(query or "").strip():
+                raise MatterError(
+                    "E_INVALID_ARG", "verification expansion requires a query"
+                )
+            should_expand = True
+        elif expand_reason == "matter_instructions":
+            if not str(matter.get("matter_instructions") or "").strip():
+                raise MatterError(
+                    "E_INVALID_STATE", "matter has no instructions requiring expansion"
+                )
+            should_expand = True
+        expanded: list[dict[str, Any]] = []
+        if should_expand:
+            local_keys = {item["external_key"] for item in local}
+            expanded = [
+                candidate
+                for row in rows
+                if (candidate := build_candidate(row, "expanded"))
+                and candidate["external_key"] not in local_keys
+            ]
+            expanded.sort(key=lambda item: -item["confidence"])
+        combined = (local + expanded)[:limit]
+        return combined, len(local), should_expand
+
     def _append_event(
         self,
         conn: sqlite3.Connection,
@@ -2255,6 +2884,36 @@ class MatterService:
         if not matter:
             raise MatterError("E_MATTER_NOT_FOUND", f"matter {public_id} not found")
         return matter
+
+    def _decorate_url_resource(self, item: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(item)
+        resource = result.get("resource")
+        if isinstance(resource, Mapping):
+            result["resource"] = self._resource_with_url_cache(resource)
+        return result
+
+    def _resource_with_url_cache(self, resource: Mapping[str, Any]) -> dict[str, Any]:
+        result = dict(resource)
+        if result.get("kind") == "url":
+            result["url_fetch_cache"] = describe_url_cache(result, self.clock_ms())
+            metadata = dict(result.get("metadata") or {})
+            metadata.pop(URL_CACHE_TEXT_KEY, None)
+            metadata.pop(URL_CACHE_METADATA_KEY, None)
+            result["metadata"] = metadata
+        return result
+
+    @staticmethod
+    def _validate_url_fetch_resource(
+        resource: Mapping[str, Any] | None, link: Mapping[str, Any] | None
+    ) -> None:
+        if resource is None or link is None:
+            raise MatterError("E_CHILD_NOT_FOUND", "linked resource not found")
+        if resource.get("kind") != "url":
+            raise MatterError("E_INVALID_STATE", "readable fetch is only supported for URL resources")
+        if resource.get("access_policy") != "allowed":
+            raise MatterError("E_INVALID_STATE", "URL resource content access is not allowed")
+        if not str(resource.get("canonical_url") or "").strip():
+            raise MatterError("E_INVALID_STATE", "URL resource has no canonical_url")
 
     @staticmethod
     def _mutation(

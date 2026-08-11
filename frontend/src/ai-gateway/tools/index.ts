@@ -32,7 +32,12 @@ import { createCustomAgentTools } from './agents'
 import { createAgentCatalogTools } from './agent_catalog'
 import { createAgentCallTools } from './agent_call'
 import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
-import { createMatterReadTools, createMatterRunTools, createMatterWriteTools } from './matters'
+import {
+  createMatterReadTools,
+  createMatterRunTools,
+  createMatterSuggestionTools,
+  createMatterWriteTools
+} from './matters'
 import { createNotionAgentTools } from './notion_agent'
 import {
   admitDynamicTools,
@@ -624,6 +629,22 @@ export function buildGatewayTools(
   const mounted = opts.agentRunContext
     ? applySkillGating(gated, opts.agentRunContext.skills ?? [])
     : gated
+  // Matters MVP P6-A — resource discovery is a manual-chat-only supply tool. Register it AFTER
+  // both skill-gating passes: the Matter flag is its sole capability switch, and no advertised or
+  // mounted skill may accidentally hide it. It stays out of policy.ts by explicit adjudication;
+  // the manual venue gate here plus classOfTool's fail-closed exec fallback form the two belts.
+  if (opts.matterToolsEnabled && opts.approvalGuard && contextMode === 'manual_chat') {
+    Object.assign(
+      mounted,
+      createMatterSuggestionTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        toolApprovalPrefs: prefTiers,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
+  }
   // Stage 0b — dynamic tools (none exist yet; stage 1 fills the input): admitted only with a
   // runtime class registration (fail-closed — an unregistered dynamic tool never enters the
   // ToolSet), after both skill-gating passes (no skill family) and BEFORE the context-mode

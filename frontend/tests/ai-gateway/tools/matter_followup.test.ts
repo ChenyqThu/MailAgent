@@ -13,7 +13,11 @@ import { describe, expect, test } from 'vitest'
 import type { Tool } from 'ai'
 
 import { buildGatewayTools } from '../../../src/ai-gateway/tools'
-import { createMatterRunTools, createMatterWriteTools } from '../../../src/ai-gateway/tools/matters'
+import {
+  createMatterRunTools,
+  createMatterSuggestionTools,
+  createMatterWriteTools
+} from '../../../src/ai-gateway/tools/matters'
 import { createEmailReadTools } from '../../../src/ai-gateway/tools/email'
 import {
   matterReviewUpdateSchema,
@@ -110,6 +114,87 @@ describe('matter_update_propose — registration is anchored to a run (D6)', () 
     })
     expect(manual.matter_update_propose).toBeUndefined()
     expect(manual.matter_find).toBeDefined() // the rest of the family is there
+  })
+})
+
+describe('matter_suggest_related_resources — manual-only dynamic approval', () => {
+  test('registers only for manual chat while the Matter flag is on', () => {
+    const build = (contextMode: AgentContextMode, matterToolsEnabled = true) =>
+      buildGatewayTools({
+        domain: mockDomain(() => okEnvelope({ items: [] })),
+        approvalGuard: new ApprovalGuard(),
+        matterToolsEnabled,
+        contextMode
+      })
+
+    expect(build('manual_chat').matter_suggest_related_resources).toBeDefined()
+    expect(build('manual_chat', false).matter_suggest_related_resources).toBeUndefined()
+    expect(build('im_chat').matter_suggest_related_resources).toBeUndefined()
+    expect(build('untrusted_trigger').matter_suggest_related_resources).toBeUndefined()
+    expect(build('cron_headless').matter_suggest_related_resources).toBeUndefined()
+    expect(build('matter_followup').matter_suggest_related_resources).toBeUndefined()
+  })
+
+  test('Matter-scoped search is silent and posts the exact discover wire shape', async () => {
+    const { domain, calls } = recordingDomain({
+      items: [{ resource: { kind: 'email', external_key: 'email:31' } }],
+      suppressed: [],
+      local_candidate_count: 1,
+      expanded: false
+    })
+    const tool = createMatterSuggestionTools(
+      domain,
+      [],
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat' }
+    ).matter_suggest_related_resources
+    const input = { matter_id: 'MAT-000042', kinds: ['email'], query: 'launch', limit: 7 }
+    const needsApproval = tool.needsApproval as (
+      value: unknown,
+      options: { toolCallId: string; messages: unknown[] }
+    ) => boolean | Promise<boolean>
+
+    expect(await needsApproval(input, { toolCallId: 'tc-local', messages: [] })).toBe(false)
+    await (tool.execute as (value: unknown, options: unknown) => Promise<unknown>)(input, {
+      toolCallId: 'tc-local',
+      messages: [],
+      abortSignal: undefined
+    })
+    expect(calls).toEqual([
+      {
+        url: 'http://127.0.0.1:8200/api/matters/MAT-000042/resource-suggestions/discover',
+        body: {
+          query: 'launch',
+          limit: 7,
+          kinds: ['email']
+        }
+      }
+    ])
+  })
+
+  test('whole-library expansion always asks, including bypass mode', async () => {
+    const tool = createMatterSuggestionTools(
+      mockDomain(() => okEnvelope({ items: [] })),
+      [],
+      new ApprovalGuard(),
+      { contextMode: 'manual_chat', approvalMode: 'bypass' }
+    ).matter_suggest_related_resources
+    const needsApproval = tool.needsApproval as (
+      value: unknown,
+      options: { toolCallId: string; messages: unknown[] }
+    ) => boolean | Promise<boolean>
+
+    expect(
+      await needsApproval(
+        {
+          matter_id: 'MAT-000042',
+          query: 'outside evidence',
+          expand_reason: 'verification',
+          limit: 10
+        },
+        { toolCallId: 'tc-expanded', messages: [] }
+      )
+    ).toBe(true)
   })
 })
 

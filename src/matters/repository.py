@@ -315,6 +315,71 @@ class MatterRepository:
         )
         return int(cursor.lastrowid)
 
+    def get_resource_rejection(
+        self, conn: sqlite3.Connection, matter_id: int, resource_key: str
+    ) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT * FROM matter_resource_rejection WHERE matter_id=? AND resource_key=?",
+            (matter_id, resource_key),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def upsert_resource_rejection(
+        self, conn: sqlite3.Connection, values: Mapping[str, Any]
+    ) -> None:
+        conn.execute(
+            "INSERT INTO matter_resource_rejection "
+            "(matter_id,resource_key,rejected_at,evidence_fingerprint,reason) "
+            "VALUES (?,?,?,?,?) ON CONFLICT(matter_id,resource_key) DO UPDATE SET "
+            "rejected_at=excluded.rejected_at,evidence_fingerprint=excluded.evidence_fingerprint,"
+            "reason=excluded.reason",
+            (
+                values["matter_id"],
+                values["resource_key"],
+                values["rejected_at"],
+                values["evidence_fingerprint"],
+                values.get("reason"),
+            ),
+        )
+
+    def list_duplicate_candidate_rows(
+        self, conn: sqlite3.Connection, *, exclude_matter_id: int | None = None
+    ) -> list[dict[str, Any]]:
+        params: list[Any] = []
+        excluded = ""
+        if exclude_matter_id is not None:
+            excluded = " AND m.id<>?"
+            params.append(exclude_matter_id)
+        rows = conn.execute(
+            "SELECT m.*, d.title AS search_title, d.description AS search_description, "
+            "d.current_summary AS search_summary, d.items_text, d.stakeholders_text, d.notes_text "
+            "FROM matter m JOIN matter_search_document d ON d.matter_id=m.id "
+            "WHERE m.deleted_at IS NULL" + excluded + " ORDER BY m.updated_at DESC, m.id DESC LIMIT 500",
+            params,
+        ).fetchall()
+        results: list[dict[str, Any]] = []
+        for row in rows:
+            item = dict(row)
+            item["stakeholder_emails"] = [
+                value[0]
+                for value in conn.execute(
+                    "SELECT email_normalized FROM matter_stakeholder "
+                    "WHERE matter_id=? AND deleted_at IS NULL AND email_normalized IS NOT NULL",
+                    (row["id"],),
+                ).fetchall()
+            ]
+            item["resource_keys"] = [
+                f"{value[0]}:{value[1]}"
+                for value in conn.execute(
+                    "SELECT r.provider,r.external_key FROM matter_resource mr "
+                    "JOIN resource r ON r.id=mr.resource_id "
+                    "WHERE mr.matter_id=? AND mr.deleted_at IS NULL",
+                    (row["id"],),
+                ).fetchall()
+            ]
+            results.append(item)
+        return results
+
     def list_resources(self, conn: sqlite3.Connection, matter_id: int, filters: Mapping[str, Any]) -> list[dict[str, Any]]:
         clauses = ["mr.matter_id=?"]
         params: list[Any] = [matter_id]

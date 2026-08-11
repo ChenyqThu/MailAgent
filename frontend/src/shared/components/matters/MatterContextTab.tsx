@@ -24,6 +24,7 @@ import { toastError } from '@shared/state/toast'
 
 import { groupMatterResources, isMatterResourceAvailable } from './matterResource'
 import { useMattersApi } from './hooks'
+import { MatterSuggestedResourceActions } from './MatterSuggestedResourceActions'
 
 interface MatterContextTabProps {
   matter: Matter
@@ -58,6 +59,7 @@ export function MatterContextTab({
 
   const openItems = items.filter((item) => item.deleted_at === null && item.status !== 'done' && item.status !== 'canceled').length
   const pinnedResources = resources.filter((item) => item.link.pinned).length
+  const suggestedResources = resources.filter((item) => item.link.confirmed_at === null).length
 
   return (
     <div className="space-y-6">
@@ -100,7 +102,9 @@ export function MatterContextTab({
       </section>
 
       <section>
-        <SectionHeader title={t('matters.context.linkedResources')} count={resources.length} />
+        <SectionHeader title={t('matters.context.linkedResources')} count={resources.length}>
+          {suggestedResources > 0 ? <Pip tone="ai">{t('matters.resource.suggestedCount', { count: suggestedResources })}</Pip> : null}
+        </SectionHeader>
         {resources.length > 0 ? (
           <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-2">
             {groups.map((group) => group.items.length > 0 ? (
@@ -108,19 +112,28 @@ export function MatterContextTab({
                 <div className="flex items-center gap-2 bg-ink-3/70 px-4 py-2 text-meta font-medium text-ink-fg-2">
                   <span>{t(`matters.context.groups.${group.key}`)}</span><span className="font-mono text-ink-fg-3">{group.items.length}</span>
                 </div>
-                {group.items.map((item) => (
-                  <button key={item.link.id} type="button" onClick={() => onOpenResource(item)} className="flex w-full items-center gap-3 border-t border-ink-border px-4 py-3 text-left first:border-t-0 hover:bg-ink-3">
-                    <span className="grid size-7 shrink-0 place-items-center rounded bg-ink-4 text-ink-fg-2"><Link2 size={13} /></span>
-                    <span className="min-w-0 flex-1">
-                      <span className="block truncate text-body text-ink-fg">{item.resource.title || item.resource.external_key}</span>
-                      <span className="mt-1 flex flex-wrap items-center gap-1.5 text-meta text-ink-fg-3">
-                        <span>{t('matters.resource.manualLink')}</span>
-                        {item.link.sub_state !== 'none' ? <Pip tone={item.link.sub_state === 'paused' ? 'warn' : 'ok'}><RefreshCcw size={10} />{t(item.link.sub_state === 'paused' ? 'matters.resource.subscriptionPaused' : 'matters.resource.subscriptionActive')}</Pip> : null}
-                        {!isMatterResourceAvailable(item) ? <Pip tone="fail">{t('matters.context.unavailable')}</Pip> : null}
-                      </span>
-                    </span>
-                  </button>
-                ))}
+                {group.items.map((item) => {
+                  const suggested = item.link.confirmed_at === null
+                  return (
+                    <div key={item.link.id} className={`border-t border-ink-border px-4 py-3 first:border-t-0 ${suggested ? 'bg-ai/[0.06]' : ''}`}>
+                      <button type="button" onClick={() => onOpenResource(item)} className="flex w-full items-center gap-3 text-left hover:opacity-80">
+                        <span className={`grid size-7 shrink-0 place-items-center rounded ${suggested ? 'bg-ai/15 text-ai' : 'bg-ink-4 text-ink-fg-2'}`}><Link2 size={13} /></span>
+                        <span className="min-w-0 flex-1">
+                          <span className="flex items-center gap-2">
+                            <span className="min-w-0 flex-1 truncate text-body text-ink-fg">{item.resource.title || item.resource.external_key}</span>
+                            {suggested ? <Pip tone="ai">{t('matters.resource.suggested')}</Pip> : null}
+                          </span>
+                          <span className="mt-1 flex flex-wrap items-center gap-1.5 text-meta text-ink-fg-3">
+                            <span>{t(suggested ? 'matters.resource.agentSuggested' : 'matters.resource.manualLink')}</span>
+                            {item.link.sub_state !== 'none' ? <Pip tone={item.link.sub_state === 'paused' ? 'warn' : 'ok'}><RefreshCcw size={10} />{t(item.link.sub_state === 'paused' ? 'matters.resource.subscriptionPaused' : 'matters.resource.subscriptionActive')}</Pip> : null}
+                            {!isMatterResourceAvailable(item) ? <Pip tone="fail">{t('matters.context.unavailable')}</Pip> : null}
+                          </span>
+                        </span>
+                      </button>
+                      <MatterSuggestedResourceActions matter={matter} item={item} onChanged={onChanged} />
+                    </div>
+                  )
+                })}
               </div>
             ) : null)}
           </div>
@@ -237,8 +250,8 @@ function SectionHeader({ title, count, children }: { title: string; count?: numb
   return <div className="mb-3 flex items-center gap-2"><h2 className="text-body font-semibold text-ink-fg">{title}{count === undefined ? null : <span className="ml-1 font-mono text-meta text-ink-fg-3">· {count}</span>}</h2><div className="ml-auto">{children}</div></div>
 }
 
-function Pip({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'warn' | 'ok' | 'fail' }): React.ReactElement {
-  const tones = { neutral: 'bg-ink-4 text-ink-fg-2', warn: 'bg-warn/10 text-warn', ok: 'bg-ok/10 text-ok', fail: 'bg-fail/10 text-fail' }
+function Pip({ children, tone = 'neutral' }: { children: React.ReactNode; tone?: 'neutral' | 'warn' | 'ok' | 'fail' | 'ai' }): React.ReactElement {
+  const tones = { neutral: 'bg-ink-4 text-ink-fg-2', warn: 'bg-warn/10 text-warn', ok: 'bg-ok/10 text-ok', fail: 'bg-fail/10 text-fail', ai: 'bg-ai/10 text-ai' }
   return <span className={`inline-flex items-center gap-1 rounded-[var(--r-pill)] px-2 py-1 text-meta ${tones[tone]}`}>{children}</span>
 }
 

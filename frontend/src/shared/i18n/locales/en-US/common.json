@@ -1054,6 +1054,7 @@
       "calendar_event_delete": "Delete event",
       "matter_find": "Find matters",
       "matter_get": "Read matter",
+      "matter_suggest_related_resources": "Discover related resources",
       "matter_create": "Create matter",
       "matter_update": "Update matter",
       "matter_item_mutate": "Edit matter item",
@@ -4707,7 +4708,42 @@
       "scopeHint": "The entire thread is linked by default so later replies are followed automatically",
       "threadUnavailable": "This email has no available thread, so only the current message can be linked",
       "submit": "Create matter",
-      "creating": "Creating…"
+      "creating": "Creating…",
+      "research": {
+        "helper": "Research the email thread, related messages, and available documents to prepare an editable draft.",
+        "action": "Research and prefill",
+        "retry": "Research again",
+        "progress": {
+          "0": "Reading the email thread and participants…",
+          "1": "Searching related messages and possible duplicates…",
+          "2": "Organizing document, resource, and stakeholder suggestions…"
+        },
+        "timeout": "Research timed out",
+        "failedTitle": "Research did not finish",
+        "failedHint": "{error}. You can still edit the form below and create the matter manually.",
+        "readyTitle": "Research suggestions are prefilled",
+        "readyHint": "Reviewed {threadCount} messages in the thread and found {relatedCount} related messages.",
+        "notion": {
+          "disabled": "Notion is not enabled, so this draft uses email context only.",
+          "searched": "Available Notion pages were searched as well.",
+          "failed": "Notion search failed; the remaining email research is still available."
+        },
+        "partialWarning": "Some external sources were unavailable; the remaining suggestions are preserved.",
+        "editableNotice": "These are AI suggestions and nothing is created or written automatically. You can edit the title, type, description, and suggestion lists.",
+        "resources": "Suggested resources · {count}",
+        "stakeholders": "Suggested stakeholders · {count}",
+        "removeResource": "Remove suggested resource {title}",
+        "removeStakeholder": "Remove suggested stakeholder {email}"
+      },
+      "duplicates": {
+        "title": "These matters may already exist",
+        "hint": "This is only a suggestion; creation is never blocked and nothing is merged automatically. Review the reasons, use an existing matter, or keep creating a new one.",
+        "loading": "Checking for possible duplicates…",
+        "confidence": "Match confidence {value}%",
+        "addExisting": "Add to existing",
+        "openExisting": "Open existing",
+        "nonBlocking": "Ignore these suggestions if none fit and continue creating."
+      }
     },
     "detail": { "empty": "Select a matter to view details", "created": "Created {date}", "due": "Due {date}", "noDue": "No due date", "agentUnbound": "No follow-up agent bound", "addTag": "Add tag", "title": "Matter title", "editTitle": "Edit matter title", "type": "Matter type", "typeUnset": "No type", "typeCustom": "Custom…", "typeCustomPlaceholder": "Enter a custom type", "priority": "Matter priority" },
     "tabs": { "state": "State", "context": "Context", "timeline": "Timeline", "label": "Matter details", "runs": "Runs" },
@@ -4769,6 +4805,13 @@
       "linkMethod": "Link method",
       "manualConfirmed": "Linked manually · Confirmed",
       "manualLink": "Linked manually",
+      "agentSuggested": "Suggested by agent",
+      "suggested": "Suggested",
+      "suggestedCount": "{count} suggestions to review",
+      "suggestionConfidence": "Confidence {value}%",
+      "confirmSuggestion": "Confirm link",
+      "rejectSuggestion": "Not relevant",
+      "suggestionActionFailed": "Could not update the resource suggestion",
       "visibility": "Content visibility",
       "visibilityGlobalHint": "Changing this affects the resource's visibility in every matter.",
       "visibilityChanged": "Resource visibility updated for every matter",
@@ -4801,6 +4844,8 @@
     "chat": {
       "title": "Matter chat",
       "open": "Matter chat",
+      "agentName": "Matter Agent",
+      "removeContext": "Remove context",
       "newSession": "New conversation",
       "injectedContext": "Injected context",
       "chips": {
@@ -4820,17 +4865,17 @@
         "global": "Everything",
         "matterNote": "Search is limited to this matter",
         "globalNote": "Search across everything is allowed",
-        "auditFailed": "Could not switch the search scope; still limited to this matter"
+        "auditFailed": "Could not switch the search scope; the current scope was kept"
       },
       "prompts": {
-        "blocked": "What is blocked right now?",
-        "changes": "What changed this week?",
-        "reviewDate": "Move the review date to next Monday",
-        "owing": "Who still owes us something?"
+        "status": "Summarize current status",
+        "nextStep": "Add a next step",
+        "draftFollowup": "Draft a follow-up email",
+        "updateSummary": "Update the summary"
       },
       "empty": {
         "title": "Move this forward from here",
-        "hint": "The chat only looks at this matter's evidence by default. Explicit instructions are written straight through — reversible and on the record."
+        "hint": "Answering from {count} context items in this matter"
       },
       "footnote": "Chat history is not official matter knowledge; only tool writes, accepted updates and deterministic events are kept.",
       "writeLabels": {
@@ -4856,7 +4901,11 @@
       },
       "gap": {
         "title": "Context gap · widening the search needs your approval",
-        "expand": "Widen to everything"
+        "expand": "Authorize wider search",
+        "expanding": "Searching…",
+        "result": "Added {count} suggested resources",
+        "suppressed": "Skipped {count} previously rejected matches",
+        "failed": "Could not widen the search"
       }
     },
     "runs": {

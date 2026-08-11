@@ -530,7 +530,11 @@ export function AgentConversation({
   // assistant-modal P5 — removable email-context chip (modal only; null otherwise → AgentThread renders
   // nothing in the contextChip slot).
   const emailContextChip = emailContext ? (
-    <EmailContextChip subject={emailContext.subject} onRemove={onRemoveEmailContext} />
+    <ConversationContextChip
+      icon={<Mail size={12} strokeWidth={2} className="shrink-0 text-coral" />}
+      label={emailContext.subject || t('chat.modal.emailContextUntitled')}
+      onRemove={onRemoveEmailContext}
+    />
   ) : null
 
   if (secretsQ.isSuccess && !backendConfigured) {
@@ -696,28 +700,32 @@ export function AgentConversation({
   )
 }
 
-/** assistant-modal P5 — the modal's email-context chip: an attachment-style pill above the composer with
- *  the carried email's subject (truncated) + a × to remove it (after which the email body is no longer
- *  injected). Internal (not exported) → react-refresh-safe. */
-function EmailContextChip({
-  subject,
+/** assistant-modal P5 / Matters P6-A — the shared removable context chip used by email and matter
+ *  conversations. The caller owns what removal means for context injection. */
+export function ConversationContextChip({
+  icon,
+  label,
+  removeLabel,
   onRemove
 }: {
-  subject: string
+  icon: React.ReactNode
+  label: string
+  removeLabel?: string
   onRemove: () => void
 }): React.JSX.Element {
   const { t } = useTranslation()
+  const resolvedRemoveLabel = removeLabel ?? t('chat.modal.removeContext')
   return (
     <div className="flex items-center gap-1.5 self-start rounded-lg border border-[var(--hairline)] bg-ink-2 py-1 pl-2 pr-1 text-meta text-ink-fg-1">
-      <Mail size={12} strokeWidth={2} className="shrink-0 text-coral" />
-      <span className="max-w-[18rem] truncate" title={subject}>
-        {subject || t('chat.modal.emailContextUntitled')}
+      {icon}
+      <span className="max-w-[18rem] truncate" title={label}>
+        {label}
       </span>
       <button
         type="button"
         onClick={onRemove}
-        aria-label={t('chat.modal.removeContext')}
-        title={t('chat.modal.removeContext')}
+        aria-label={resolvedRemoveLabel}
+        title={resolvedRemoveLabel}
         className="grid size-5 shrink-0 place-items-center rounded text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
       >
         <X size={13} strokeWidth={2} />

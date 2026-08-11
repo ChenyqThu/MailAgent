@@ -17,11 +17,14 @@ import type { Matter } from '@shared/api/types/matter'
 import type { MatterContextSnapshotPayload } from '@shared/api/matters'
 import type { ChatSession } from '@shared/api/types'
 
-const { chatApi, mailApi, toastError, listSessionsForMatter } = vi.hoisted(() => ({
+const { chatApi, mattersApi, mailApi, toastError, listSessionsForMatter } = vi.hoisted(() => ({
   chatApi: {
     contextSnapshot: vi.fn(),
     recordChatScope: vi.fn(),
     applyUndo: vi.fn()
+  },
+  mattersApi: {
+    discoverResourceSuggestions: vi.fn()
   },
   mailApi: {
     chat: {
@@ -37,11 +40,14 @@ const { chatApi, mailApi, toastError, listSessionsForMatter } = vi.hoisted(() =>
 }))
 
 vi.mock('@shared/components/matters/hooks', () => ({
-  useMattersApi: () => ({}),
+  useMattersApi: () => mattersApi,
   useMatterChatApi: () => chatApi,
   useMattersEnabled: () => true
 }))
-vi.mock('@shared/api/chat_api', () => ({ listSessionsForMatter }))
+vi.mock('@shared/api/chat_api', () => ({
+  createChatRuntime: vi.fn(),
+  listSessionsForMatter
+}))
 vi.mock('@shared/hooks/useMailApi', () => ({ useMailApi: () => mailApi }))
 vi.mock('@shared/state/toast', () => ({
   toastError,
@@ -154,7 +160,10 @@ function renderPanel(): ReturnType<typeof render> {
   })
   return render(
     <QueryClientProvider client={client}>
-      <MatterChatPanel matter={matter()} overlay={false} onClose={vi.fn()} />
+      <MatterChatPanel
+        matter={{ id: 42, publicId: 'MAT-0042', title: 'Vendor launch' }}
+        conversationEpoch={1}
+      />
     </QueryClientProvider>
   )
 }
@@ -164,30 +173,34 @@ beforeEach(() => {
   mailApi.chat.listAllSessions.mockResolvedValue([session()])
   listSessionsForMatter.mockResolvedValue([session()])
   mailApi.chat.listMessages.mockResolvedValue([])
+  mailApi.chat.newSession.mockResolvedValue(session())
   chatApi.contextSnapshot.mockResolvedValue(snapshotPayload())
   chatApi.recordChatScope.mockResolvedValue({})
+  mattersApi.discoverResourceSuggestions.mockResolvedValue({
+    items: [],
+    suppressed: [],
+    local_candidate_count: 0,
+    expanded: true
+  })
 })
 
 afterEach(cleanup)
 
 describe('MatterChatPanel — chrome', () => {
-  test('header, injected-context chips (from the snapshot) and the footnote', async () => {
+  test('renders the Matter Agent identity, shared matter chip, and snapshot-backed count', async () => {
     renderPanel()
-    expect(screen.getByText('MAT-0042')).toBeTruthy()
-    expect(screen.getByText('已注入的上下文')).toBeTruthy()
-    await waitFor(() => expect(screen.getByText('2 个开放项')).toBeTruthy())
-    expect(screen.getByText('当前已接受状态')).toBeTruthy()
-    expect(screen.getByText('1 位干系人')).toBeTruthy()
-    expect(screen.getByText('1 份置顶资料')).toBeTruthy()
-    expect(screen.getByText('自上次接受更新以来的变化')).toBeTruthy()
-    expect(
-      screen.getByText('对话历史不是正式事项知识；只有工具写入、已接受的更新和确定性事件会沉淀。')
-    ).toBeTruthy()
+    expect(screen.getByText('事项 Agent')).toBeTruthy()
+    expect(screen.getByText('Vendor launch')).toBeTruthy()
+    expect(screen.getByText('MAT-0042 Vendor launch')).toBeTruthy()
+    await waitFor(() => expect(screen.getByText('基于本事项的 6 条上下文回答')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: '移除上下文' }))
+    expect(screen.queryByText('MAT-0042 Vendor launch')).toBeNull()
+    expect(screen.getByText('基于本事项的 0 条上下文回答')).toBeTruthy()
   })
 
-  test('scope defaults to 本事项 and says so', () => {
+  test('scope defaults to 全库 and says so', () => {
     renderPanel()
-    expect(screen.getByText('检索范围限于本事项')).toBeTruthy()
+    expect(screen.getByText('已允许全库检索')).toBeTruthy()
   })
 })
 
@@ -198,58 +211,74 @@ describe('MatterChatPanel — snapshot fail-soft', () => {
     )
     renderPanel()
     await waitFor(() => expect(screen.getByText('上下文计数暂时读不到，不影响对话。')).toBeTruthy())
-    // placeholder chips (no counts) — and the panel itself is still there.
-    expect(screen.getByText('开放项')).toBeTruthy()
-    expect(screen.getByText('干系人')).toBeTruthy()
+    expect(screen.getByText('基于本事项的 0 条上下文回答')).toBeTruthy()
     expect(screen.getByTestId('matter-chat-panel')).toBeTruthy()
   })
 })
 
 describe('MatterChatPanel — G5 scope switch', () => {
-  test('switching to 全库 audits the change first, then flips locally', async () => {
+  test('switching to 本事项 creates a session, audits first, then flips locally', async () => {
     renderPanel()
     await waitFor(() => expect(listSessionsForMatter).toHaveBeenCalled())
-    fireEvent.click(screen.getByText('全库'))
+    fireEvent.click(screen.getByText('本事项'))
     await waitFor(() =>
-      expect(chatApi.recordChatScope).toHaveBeenCalledWith('MAT-0042', 'global', 31)
+      expect(chatApi.recordChatScope).toHaveBeenCalledWith('MAT-0042', 'matter', 31)
     )
-    await waitFor(() => expect(screen.getByText('已允许全库检索')).toBeTruthy())
+    expect(mailApi.chat.newSession.mock.invocationCallOrder[0]).toBeLessThan(
+      chatApi.recordChatScope.mock.invocationCallOrder[0]
+    )
+    await waitFor(() => expect(screen.getByText('检索范围限于本事项')).toBeTruthy())
   })
 
-  test('a failed audit keeps the STRICTER scope (never silently widen the search reach)', async () => {
+  test('a failed audit keeps the current global scope', async () => {
     chatApi.recordChatScope.mockRejectedValue(new Error('offline'))
     renderPanel()
     await waitFor(() => expect(listSessionsForMatter).toHaveBeenCalled())
-    fireEvent.click(screen.getByText('全库'))
+    fireEvent.click(screen.getByText('本事项'))
     await waitFor(() => expect(toastError).toHaveBeenCalled())
-    expect(screen.getByText('检索范围限于本事项')).toBeTruthy()
+    expect(screen.getByText('已允许全库检索')).toBeTruthy()
   })
 
-  test('switching back to 本事项 records the symmetric restore event', async () => {
+  test('switching back to 全库 records the symmetric restore event', async () => {
     renderPanel()
     await waitFor(() => expect(listSessionsForMatter).toHaveBeenCalled())
-    fireEvent.click(screen.getByText('全库'))
-    await waitFor(() => expect(screen.getByText('已允许全库检索')).toBeTruthy())
     fireEvent.click(screen.getByText('本事项'))
+    await waitFor(() => expect(screen.getByText('检索范围限于本事项')).toBeTruthy())
+    fireEvent.click(screen.getByText('全库'))
     await waitFor(() =>
-      expect(chatApi.recordChatScope).toHaveBeenLastCalledWith('MAT-0042', 'matter', 31)
+      expect(chatApi.recordChatScope).toHaveBeenLastCalledWith('MAT-0042', 'global', 31)
     )
   })
 })
 
-describe('MatterContextGapCard — written, deliberately not triggered in P3', () => {
-  test('renders the warn card and its 扩大到全库 action', () => {
+describe('MatterContextGapCard — explicit P6 discovery action', () => {
+  test('renders the warn card and its explicit authorization action', () => {
     const onExpand = vi.fn()
     render(<MatterContextGapCard onExpand={onExpand} />)
     expect(screen.getByText('上下文缺口 · 需要你授权扩大检索')).toBeTruthy()
-    fireEvent.click(screen.getByText('扩大到全库'))
+    fireEvent.click(screen.getByText('授权扩检索'))
     expect(onExpand).toHaveBeenCalledTimes(1)
   })
 
-  test('P3 has NO trigger path: the panel never renders it', async () => {
+  test('discovers only after a click and presents suppressed rejection-memory matches', async () => {
+    const payload = snapshotPayload()
+    payload.resources = []
+    chatApi.contextSnapshot.mockResolvedValue(payload)
+    mattersApi.discoverResourceSuggestions.mockResolvedValue({
+      items: [{}, {}],
+      suppressed: [{ external_key: 'email:9', reason: 'rejected_same_evidence' }],
+      local_candidate_count: 1,
+      expanded: true
+    })
     renderPanel()
-    await waitFor(() => expect(screen.getByTestId('matter-chat-panel')).toBeTruthy())
-    expect(screen.queryByTestId('matter-context-gap')).toBeNull()
+    await waitFor(() => expect(screen.getByTestId('matter-context-gap')).toBeTruthy())
+    expect(mattersApi.discoverResourceSuggestions).not.toHaveBeenCalled()
+    fireEvent.click(screen.getByText('授权扩检索'))
+    await waitFor(() => expect(mattersApi.discoverResourceSuggestions).toHaveBeenCalledWith(
+      'MAT-0042',
+      { query: 'Vendor launch', expandReason: 'context_gap', limit: 10 }
+    ))
+    expect(await screen.findByText('已加入 2 条建议态资源 · 1 条此前已标记不相关，已跳过')).toBeTruthy()
   })
 })
 

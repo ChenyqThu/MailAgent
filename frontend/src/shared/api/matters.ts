@@ -3,6 +3,8 @@ import type {
   MatterDetailResponse,
   MatterAttentionListResponse,
   MatterAttentionSignal,
+  MatterCreateDraftRequest,
+  MatterCreateDraftResponse,
   MatterNotifyLevel,
   MatterNotifyLevelResponse,
   MatterItem,
@@ -13,6 +15,8 @@ import type {
   MatterRun,
   MatterRunListResponse,
   MatterRunStartResult,
+  MatterDuplicateCandidate,
+  MatterResourceDiscoveryResult,
   MatterResourceListItem,
   MatterResourceLookupResponse,
   MatterStakeholder,
@@ -98,6 +102,23 @@ export function createMattersApi(baseUrl: string): MattersApi {
 
     create(input, options = {}): Promise<MatterMutationResult> {
       return request(baseUrl, 'POST', '/matters', mutationRequest(options, input))
+    },
+
+    createDraft(
+      input: MatterCreateDraftRequest,
+      signal?: AbortSignal
+    ): Promise<MatterCreateDraftResponse> {
+      return request(baseUrl, 'POST', '/matters/create-draft', { body: input, signal })
+    },
+
+    async duplicateCandidates(input): Promise<MatterDuplicateCandidate[]> {
+      const result = await request<{ items: MatterDuplicateCandidate[] }>(
+        baseUrl,
+        'POST',
+        '/matters/duplicate-candidates',
+        { body: input }
+      )
+      return result.items
     },
 
     get(matterId, include = []): Promise<MatterDetailResponse> {
@@ -266,6 +287,30 @@ export function createMattersApi(baseUrl: string): MattersApi {
       )
     },
 
+    rejectResourceSuggestion(matterId, resourceId, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/resources/${segment(resourceId)}/reject-suggestion`,
+        mutationRequest(options)
+      )
+    },
+
+    discoverResourceSuggestions(matterId, input = {}): Promise<MatterResourceDiscoveryResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/resource-suggestions/discover`,
+        {
+          body: {
+            query: input.query,
+            expand_reason: input.expandReason,
+            limit: input.limit
+          }
+        }
+      )
+    },
+
     async listStakeholders(matterId, options = {}): Promise<MatterStakeholder[]> {
       const result = await request<{ items: MatterStakeholder[] }>(
         baseUrl,
@@ -389,10 +434,7 @@ export function createMattersApi(baseUrl: string): MattersApi {
 
 // ── Matter Chat (P3) ───────────────────────────────────────────────────────────────────────────
 // The two endpoints the chat panel owns (lane ②: routers/matters.py :186 / :197) plus the undo
-// executor. Deliberately a SEPARATE factory/interface rather than new members on `MattersApi`:
-// that interface lives in `api/types/matter.ts`, the cross-language contract mirror this lane must
-// not edit (whitelist), and an object literal returned as `MattersApi` would fail excess-property
-// checking anyway.
+// executor remain a separate API surface because they serve Matter Chat rather than aggregate CRUD.
 
 /** Bounded matter projection served by `GET /matters/{public_id}/context-snapshot` (D5). Fields
  *  mirror `MatterService.context_snapshot`; everything is already capped server-side (items ≤50,

@@ -46,6 +46,7 @@ export interface UseMatterContextSnapshotInput {
 export interface UseMatterContextSnapshotResult {
   snapshot: AgentContextSnapshot | null
   chips: MatterContextChipCounts | null
+  hasContextGap: boolean
   isLoading: boolean
   isError: boolean
 }
@@ -162,6 +163,10 @@ export function useMatterContextSnapshot(
   return {
     snapshot,
     chips,
+    hasContextGap:
+      enabled &&
+      payload !== null &&
+      (payload.matter.waiting_context !== null || (payload.resources?.length ?? 0) === 0),
     isLoading: enabled && query.isLoading,
     isError: enabled && query.isError
   }

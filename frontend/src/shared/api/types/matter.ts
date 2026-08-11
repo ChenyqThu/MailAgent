@@ -228,6 +228,23 @@ export interface MatterResource {
   created_at: number
   updated_at: number
   available?: boolean
+  url_fetch_cache?: MatterUrlFetchCache
+}
+
+export interface MatterUrlFetchCache {
+  state: 'missing' | 'stale' | 'fresh'
+  has_content: boolean
+  is_fresh: boolean
+  fetched_at: number | null
+  fresh_until: number | null
+  age_ms: number | null
+  freshness_ms: number
+  content_hash: string | null
+  final_url: string | null
+  content_type: string | null
+  status: number | null
+  truncated: boolean
+  content_chars: number
 }
 
 export interface MatterResourceLink {
@@ -251,6 +268,105 @@ export interface MatterResourceListItem {
   resource: MatterResource
   link: MatterResourceLink
   available?: boolean
+}
+
+export type MatterResourceExpansionReason =
+  | 'context_gap'
+  | 'verification'
+  | 'matter_instructions'
+
+export interface MatterCandidateReason {
+  kind: 'resource_overlap' | 'stakeholder_overlap' | 'semantic_overlap' | 'time_proximity'
+  label: string
+  weight: number
+  evidence: string[]
+}
+
+export interface MatterDuplicateCandidate {
+  matter: Pick<Matter, 'public_id' | 'title' | 'status' | 'health' | 'priority' | 'updated_at'>
+  confidence: number
+  reasons: MatterCandidateReason[]
+}
+
+export interface MatterDuplicateCandidateInput {
+  matter_id?: string
+  title?: string
+  description?: string
+  current_summary?: string
+  stakeholders?: Array<{ email?: string | null } | string>
+  resources?: Array<{ provider: string; kind: string; external_key: string }>
+  reference_at?: number
+}
+
+export interface MatterCreateDraftRequest {
+  internal_id: number
+  thread_id?: string | null
+  link_scope?: MatterLinkScope | null
+  title?: string | null
+  matter_type?: BuiltinMatterType | null
+  description?: string | null
+}
+
+export type MatterCreateDraftResourceReasonKind =
+  | 'source_email'
+  | 'same_thread'
+  | 'full_text_match'
+  | 'notion_search_match'
+
+export interface MatterCreateDraftReason {
+  kind: MatterCreateDraftResourceReasonKind | 'sender' | 'recipient'
+  label: string
+  evidence: string[]
+}
+
+export interface MatterCreateDraftResource {
+  provider: 'mailagent' | 'notion'
+  kind: 'email' | 'doc'
+  external_key: string
+  title: string
+  url: string | null
+  excerpt: string | null
+  reason: MatterCreateDraftReason
+}
+
+export interface MatterCreateDraftStakeholder {
+  email: string
+  display_name: string | null
+  reason: MatterCreateDraftReason
+}
+
+export interface MatterCreateDraftResponse {
+  source: {
+    internal_id: number
+    thread_id: string | null
+    link_scope: MatterLinkScope
+  }
+  draft: {
+    title: string
+    matter_type: BuiltinMatterType | null
+    description: string
+    resources: MatterCreateDraftResource[]
+    stakeholders: MatterCreateDraftStakeholder[]
+    duplicate_candidates: MatterDuplicateCandidate[]
+  }
+  research: {
+    thread_email_count: number
+    related_email_count: number
+    notion_status: 'disabled' | 'searched' | 'failed'
+    warnings: Array<{ code: 'notion_search_failed'; message: string }>
+  }
+}
+
+export interface MatterResourceSuggestion extends MatterResourceListItem {
+  reason: string
+  confidence: number
+}
+
+export interface MatterResourceDiscoveryResult {
+  items: MatterResourceSuggestion[]
+  suppressed: Array<{ external_key: string; reason: 'rejected_same_evidence' }>
+  local_candidate_count: number
+  expanded: boolean
 }
 
 export interface MatterStakeholder {
@@ -586,6 +702,8 @@ export type MatterStakeholderPatchInput = Partial<MatterStakeholderCreateInput>
 export interface MattersApi {
   list(options?: MatterListOptions): Promise<MatterListResponse>
   create(input: MatterCreateInput, options?: MatterMutationOptions): Promise<MatterMutationResult>
+  createDraft(input: MatterCreateDraftRequest, signal?: AbortSignal): Promise<MatterCreateDraftResponse>
+  duplicateCandidates(input: MatterDuplicateCandidateInput): Promise<MatterDuplicateCandidate[]>
   get(matterId: string, include?: string[]): Promise<MatterDetailResponse>
   patch(
     matterId: string,
@@ -648,6 +766,15 @@ export interface MattersApi {
     resourceId: number,
     options: MatterMutationOptions
   ): Promise<MatterMutationResult>
+  rejectResourceSuggestion(
+    matterId: string,
+    resourceId: number,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  discoverResourceSuggestions(
+    matterId: string,
+    input?: { query?: string; expandReason?: MatterResourceExpansionReason; limit?: number }
+  ): Promise<MatterResourceDiscoveryResult>
   listStakeholders(
     matterId: string,
     options?: MatterStakeholderListOptions
