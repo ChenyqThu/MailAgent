@@ -48,7 +48,6 @@ import type {
 } from '@shared/api/types/matter'
 import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
-import { isScheduleValue } from '@shared/components/agents/schedule/types'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
@@ -75,6 +74,7 @@ import { MatterContextTab } from './MatterContextTab'
 import { ResourceDrawer } from './ResourceDrawer'
 import { MatterRunsPane } from './MatterRunsPane'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
+import { parseMatterSchedule } from './matterSchedule'
 import { resolveMatterCitationTarget } from './navigation'
 import { RunOverlay } from './RunOverlay'
 import { AttnBand } from './attention'
@@ -1013,18 +1013,6 @@ function MatterPrevNext({
       </button>
     </div>
   )
-}
-
-function parseMatterSchedule(
-  raw: string | null | undefined
-): import('@shared/components/agents/schedule/types').ScheduleValue | null {
-  if (!raw) return null
-  try {
-    const value: unknown = JSON.parse(raw)
-    return isScheduleValue(value) ? value : null
-  } catch {
-    return null
-  }
 }
 
 function StatusMenu({

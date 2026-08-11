@@ -14,7 +14,7 @@ import { ScheduleBuilder } from '@shared/components/agents/schedule/ScheduleBuil
 import { newScheduleValue } from '@shared/components/agents/schedule/migrate'
 import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
-import { DEFAULT_RULE, isScheduleValue } from '@shared/components/agents/schedule/types'
+import { DEFAULT_RULE } from '@shared/components/agents/schedule/types'
 import type { ScheduleValue } from '@shared/components/agents/schedule/types'
 import {
   Select,
@@ -31,6 +31,7 @@ import {
   groupMatterResources,
   isMatterResourceAvailable
 } from './matterResource'
+import { parseMatterSchedule } from './matterSchedule'
 import { MatterGlobalAgentModal } from './MatterGlobalAgentModal'
 import { MatterSuggestedResourceActions } from './MatterSuggestedResourceActions'
 
@@ -201,7 +202,7 @@ export function MatterAgentCard({
   const [globalAgentOpen, setGlobalAgentOpen] = useState(false)
   const [profileId, setProfileId] = useState(matter.agent_profile_id ?? BUILTIN_PROFILE_VALUE)
   const [instructions, setInstructions] = useState(matter.matter_instructions ?? '')
-  const persistedSchedule = parseSchedule(matter.schedule_json)
+  const persistedSchedule = parseMatterSchedule(matter.schedule_json)
   const [schedule, setSchedule] = useState<ScheduleValue | null>(persistedSchedule)
   // 「下次运行」的基准时刻在挂载时冻结：render 期间调 Date.now() 会被 react-hooks/purity
   // 拒绝（重渲染时结果不稳定）。MatterFocus 用的是同一个惰性初始化模式。
@@ -429,16 +430,6 @@ export function MatterAgentCard({
       ) : null}
     </div>
   )
-}
-
-function parseSchedule(raw: string | null | undefined): ScheduleValue | null {
-  if (!raw) return null
-  try {
-    const value: unknown = JSON.parse(raw)
-    return isScheduleValue(value) ? value : null
-  } catch {
-    return null
-  }
 }
 
 function RailSection({
