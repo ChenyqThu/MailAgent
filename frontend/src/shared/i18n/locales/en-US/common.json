@@ -2899,6 +2899,15 @@
         "label": "AG-UI protocol mirror",
         "helper": "Expose the developer-oriented AG-UI protocol mirror endpoint for compatibility testing and debugging.",
         "restartHint": "Quit and reopen the App."
+      },
+      "matters": {
+        "label": "Matters",
+        "helper": "Collect one piece of work that is scattered across mail, meetings and documents into a Matter: state and next step, linked resources, stakeholders, timeline, and a chat that only sees this matter's evidence.",
+        "restartHint": "Restart the backend and Matters appears in the sidebar; the matter tools inside AI need an App restart."
+      },
+      "matterAgent": {
+        "helper": "Bind a follow-up agent to a matter: run it manually or on a schedule to diff changes read-only and propose an update you review item by item before anything is written. Adds attention signals and macOS notifications.",
+        "restartHint": "Requires Matters. Takes effect after a backend restart; native notifications need an App restart."
       }
     },
     "accounts": {

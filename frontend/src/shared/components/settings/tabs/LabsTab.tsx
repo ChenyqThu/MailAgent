@@ -24,6 +24,8 @@ type LabFlag =
   | 'MAILAGENT_SKILL_CATALOG_PROMPT'
   | 'MAILAGENT_MEMORY_LAYERS'
   | 'MAILAGENT_AG_UI_MIRROR'
+  | 'MAILAGENT_MATTERS_ENABLED'
+  | 'MAILAGENT_MATTER_AGENT_ENABLED'
 
 interface ExperimentalFlagRowProps {
   envKey: LabFlag
@@ -35,6 +37,8 @@ interface ExperimentalFlagRowProps {
   helper: React.ReactNode
   restartHint: React.ReactNode
   waitingForRestart?: boolean
+  /** 依赖别的 flag 才有意义时置真（开关变灰，但 helper 仍解释原因）。 */
+  dependencyUnmet?: boolean
   onToggle: (checked: boolean) => void
   onRestartBackend?: () => void
 }
@@ -49,6 +53,7 @@ function ExperimentalFlagRow({
   helper,
   restartHint,
   waitingForRestart = false,
+  dependencyUnmet = false,
   onToggle,
   onRestartBackend
 }: ExperimentalFlagRowProps): React.ReactElement {
@@ -93,7 +98,7 @@ function ExperimentalFlagRow({
         ) : null}
         <Switch
           checked={checked}
-          disabled={!ready || isWeb || saving || restarting}
+          disabled={!ready || isWeb || saving || restarting || dependencyUnmet}
           onCheckedChange={onToggle}
           aria-label={typeof label === 'string' ? label : envKey}
         />
@@ -121,7 +126,12 @@ export function LabsTab(): React.ReactElement {
   const skillCatalog = isEnabled(values['MAILAGENT_SKILL_CATALOG_PROMPT'] ?? '')
   const memoryLayers = isEnabled(values['MAILAGENT_MEMORY_LAYERS'] ?? '')
   const agUiMirror = isEnabled(values['MAILAGENT_AG_UI_MIRROR'] ?? '')
+  const matters = isEnabled(values['MAILAGENT_MATTERS_ENABLED'] ?? '')
+  const matterAgent = isEnabled(values['MAILAGENT_MATTER_AGENT_ENABLED'] ?? '')
   const connectorRuntime = runtimeFlags.connectorToolsEnabled
+  // 跟进 Agent 只在「事项」开着时有意义（后端 worker 的 schedule 段与 gateway venue 都叠这两个
+  // 条件）。关掉事项时把它一并关掉并禁用开关，免得留一个开着却毫无作用的行。
+  const matterAgentDisabled = !matters
 
   async function saveFlag(flag: LabFlag, patch: Record<string, string>): Promise<void> {
     setSavingKey(flag)
@@ -242,6 +252,46 @@ export function LabsTab(): React.ReactElement {
             })
           }
           onRestartBackend={() => void restartBackend('MAILAGENT_MEMORY_LAYERS')}
+        />
+      </Section>
+
+      <Section title={t('settings.labs.matters.label')}>
+        <ExperimentalFlagRow
+          envKey="MAILAGENT_MATTERS_ENABLED"
+          checked={matters}
+          ready={ready}
+          saving={savingKey === 'MAILAGENT_MATTERS_ENABLED'}
+          restarting={restartingKey === 'MAILAGENT_MATTERS_ENABLED'}
+          label="MAILAGENT_MATTERS_ENABLED"
+          helper={t('settings.labs.matters.helper')}
+          restartHint={t('settings.labs.matters.restartHint')}
+          onToggle={(checked) =>
+            void saveFlag(
+              'MAILAGENT_MATTERS_ENABLED',
+              // 关掉「事项」时把跟进 Agent 一并关掉——留一个开着却毫无作用的键只会误导下次阅读。
+              checked
+                ? { MAILAGENT_MATTERS_ENABLED: 'true' }
+                : { MAILAGENT_MATTERS_ENABLED: 'false', MAILAGENT_MATTER_AGENT_ENABLED: 'false' }
+            )
+          }
+          onRestartBackend={() => void restartBackend('MAILAGENT_MATTERS_ENABLED')}
+        />
+        <ExperimentalFlagRow
+          envKey="MAILAGENT_MATTER_AGENT_ENABLED"
+          checked={matterAgent}
+          ready={ready}
+          saving={savingKey === 'MAILAGENT_MATTER_AGENT_ENABLED'}
+          restarting={restartingKey === 'MAILAGENT_MATTER_AGENT_ENABLED'}
+          label="MAILAGENT_MATTER_AGENT_ENABLED"
+          helper={t('settings.labs.matterAgent.helper')}
+          restartHint={t('settings.labs.matterAgent.restartHint')}
+          dependencyUnmet={matterAgentDisabled}
+          onToggle={(checked) =>
+            void saveFlag('MAILAGENT_MATTER_AGENT_ENABLED', {
+              MAILAGENT_MATTER_AGENT_ENABLED: checked ? 'true' : 'false'
+            })
+          }
+          onRestartBackend={() => void restartBackend('MAILAGENT_MATTER_AGENT_ENABLED')}
         />
       </Section>
 
