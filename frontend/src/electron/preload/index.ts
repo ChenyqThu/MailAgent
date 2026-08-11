@@ -1,7 +1,25 @@
-import { contextBridge } from 'electron'
+import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
-const api = {}
+interface MatterNavigatePayload {
+  publicId: string
+  signalId: number | string
+}
+
+const api = {
+  matters: {
+    onNavigate(handler: (payload: MatterNavigatePayload) => void): () => void {
+      const listener = (
+        _event: Electron.IpcRendererEvent,
+        payload: MatterNavigatePayload
+      ): void => {
+        handler(payload)
+      }
+      ipcRenderer.on('matters:navigate', listener)
+      return () => ipcRenderer.removeListener('matters:navigate', listener)
+    }
+  }
+}
 
 if (process.contextIsolated) {
   try {

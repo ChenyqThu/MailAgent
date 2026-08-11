@@ -46,6 +46,7 @@ import { CommandPalette } from './components/command/CommandPalette'
 import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
+import { useMatterNavigation } from './components/matters/navigation'
 import type { DeeplinkTarget } from './lib/deeplink_target'
 
 // F6 — mailagent:// deeplink target。形状单源自 @shared/lib/deeplink_target（issue #68：
@@ -143,6 +144,30 @@ function useGeneralAgentMenu(): void {
   }, [navigate])
 }
 
+function useMatterNotificationNavigation(): void {
+  const navigate = useNavigate()
+  useEffect(() => {
+    const mattersApi = (
+      window as unknown as {
+        api?: {
+          matters?: {
+            onNavigate(handler: (payload: unknown) => void): () => void
+          }
+        }
+      }
+    ).api?.matters
+    if (!mattersApi) return
+
+    return mattersApi.onNavigate((payload) => {
+      if (!payload || typeof payload !== 'object') return
+      const publicId = (payload as { publicId?: unknown }).publicId
+      if (typeof publicId !== 'string' || publicId.length === 0) return
+      useMatterNavigation.getState().open(publicId)
+      void navigate({ to: '/matters' })
+    })
+  }, [navigate])
+}
+
 // Popmenu showcase（dev-only 审批物, ⌃⇧P 开）。生产构建时 Vite 把 import.meta.env.DEV
 // 换成 false → 三元折成 null, 这个动态 import 不可达, 不进 chunk 图也不渲染。
 const PopmenuShowcaseMount = import.meta.env.DEV
@@ -152,6 +177,7 @@ const PopmenuShowcaseMount = import.meta.env.DEV
 function RootLayout(): React.ReactElement {
   useDeeplinkRouter()
   useGeneralAgentMenu()
+  useMatterNotificationNavigation()
   return (
     <>
       <Outlet />
@@ -240,10 +266,7 @@ const agentsRoute = createRoute({
 const mattersRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/matters',
-  component: lazyRouteComponent(
-    () => import('./components/layout/MattersLayout'),
-    'MattersLayout'
-  )
+  component: lazyRouteComponent(() => import('./components/layout/MattersLayout'), 'MattersLayout')
 })
 
 // /connectors — Connectors 独立配置台（08-06 owner 拍板：不再是设置页里的区块）。

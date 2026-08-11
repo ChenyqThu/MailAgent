@@ -47,6 +47,8 @@ interface ParsedSseEvent {
   data: string
 }
 
+type SseEventTap = (payload: unknown) => void
+
 // ---- 内部状态 -------------------------------------------------------------
 
 const BACKOFF_MS = [1000, 2000, 5000, 10_000, 30_000]
@@ -58,6 +60,7 @@ let _reconnectTimer: NodeJS.Timeout | null = null
 let _backoffIdx = 0
 let _attemptId = 0 // 自增避免 stale loop 复活
 let _sseUrl = ''
+const _sseEventTaps = new Set<SseEventTap>()
 
 // ---- broadcast helpers --------------------------------------------------
 
@@ -72,6 +75,22 @@ function broadcast(channel: string, payload: unknown): void {
       }
     }
   }
+}
+
+export function onSseEvent(callback: SseEventTap): () => void {
+  _sseEventTaps.add(callback)
+  return () => _sseEventTaps.delete(callback)
+}
+
+function dispatchSseEvent(payload: unknown): void {
+  for (const callback of _sseEventTaps) {
+    try {
+      callback(payload)
+    } catch {
+      // main 侧旁路消费者不能伤害 renderer 事件桥
+    }
+  }
+  broadcast('events:received', payload)
 }
 
 function setState(next: EventsConnectionState, error: string | null = null): void {
@@ -190,7 +209,7 @@ async function streamLoop(myAttemptId: number): Promise<void> {
         _lastEventTs = Date.now()
         try {
           const payload = JSON.parse(ev.data)
-          broadcast('events:received', payload)
+          dispatchSseEvent(payload)
         } catch (err) {
           // 单条 JSON 错不应该破坏整个流
           console.error('[events_bridge] failed to parse event JSON', err, ev.data)
@@ -311,5 +330,10 @@ export const __testing = {
     _backoffIdx = 0
     _attemptId = 0
     _sseUrl = ''
+    _sseEventTaps.clear()
+  },
+  dispatchSseEvent,
+  sseEventTapCount(): number {
+    return _sseEventTaps.size
   }
 }

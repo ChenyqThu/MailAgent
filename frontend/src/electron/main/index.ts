@@ -32,6 +32,7 @@ import { registerChatLocalBridge } from './chat_local_bridge'
 import { getChatDb } from './chat_db'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { startEventsBridge } from './events_bridge'
+import { registerMatterNotifications } from './matter_notifications'
 import { registerDraftHandlers } from './handlers/draft'
 // Sprint 6 §2.2 — admin / llm dashboard / calendar / settings IPC handlers.
 import { registerAdminHandlers } from './handlers/admin'
@@ -419,6 +420,7 @@ app.whenReady().then(async () => {
   // Sprint 16 — 主进程持久连接 mail-sync 本地 SSE endpoint, 通过 IPC broadcast
   // 把事件转发给 renderer; 替换 EmailList / Sidebar 5s 硬轮询. 失败自动指数退避
   // 重连, renderer 通过 events:status 看连接状态决定是否启用 fallback polling.
+  registerMatterNotifications()
   startEventsBridge()
   // Sprint 6 §2.2 — admin dashboard / LLM dashboard / calendar list /
   // settings page. Each handler group is read-only by default (admin:health,
