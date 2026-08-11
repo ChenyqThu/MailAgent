@@ -18,7 +18,6 @@ import {
   Plus,
   RotateCcw,
   Save,
-  Tag,
   Trash2,
   Sparkles,
   X
@@ -44,7 +43,8 @@ import type {
   MatterPatchInput,
   MatterPriority,
   MatterResourceListItem,
-  MatterStatus
+  MatterStatus,
+  MatterTagDefinition
 } from '@shared/api/types/matter'
 import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
@@ -73,11 +73,21 @@ import { MatterContextRail } from './MatterContextRail'
 import { MatterContextTab } from './MatterContextTab'
 import { ResourceDrawer } from './ResourceDrawer'
 import { MatterRunsPane } from './MatterRunsPane'
+import { MatterTagChip } from './MatterTagMarker'
+import { MatterTagManagerModal } from './MatterTagManagerModal'
+import { MatterTagPicker } from './MatterTagPicker'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
 import { parseMatterSchedule } from './matterSchedule'
 import { resolveMatterCitationTarget } from './navigation'
 import { RunOverlay } from './RunOverlay'
 import { AttnBand } from './attention'
+import {
+  listMatterTagsSafely,
+  MATTER_TAGS_QUERY_KEY,
+  matterTagMap,
+  mergeMatterTagDefinitions,
+  resolveMatterTag
+} from './matterTags'
 import {
   useMatterAgentProfiles,
   useMatterAttention,
@@ -128,11 +138,7 @@ function parseDateInputValue(value: string): number | null {
   const month = Number(match[2])
   const day = Number(match[3])
   const date = new Date(year, month - 1, day)
-  if (
-    date.getFullYear() !== year ||
-    date.getMonth() !== month - 1 ||
-    date.getDate() !== day
-  ) {
+  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
     return null
   }
   return date.getTime()
@@ -160,7 +166,7 @@ export function MatterDetail({
   const [addKind, setAddKind] = useState<MatterItemKind>('action')
   const [addOpen, setAddOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
-  const [tagDraft, setTagDraft] = useState('')
+  const [tagManagerOpen, setTagManagerOpen] = useState(false)
   const [titleEditing, setTitleEditing] = useState(false)
   const [titleDraft, setTitleDraft] = useState('')
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
@@ -242,8 +248,18 @@ export function MatterDetail({
     queryFn: () => api.listStakeholders(matterId),
     staleTime: 15_000
   })
+  const tagsQuery = useQuery<{ items: MatterTagDefinition[] }>({
+    queryKey: MATTER_TAGS_QUERY_KEY,
+    queryFn: () => listMatterTagsSafely(api),
+    staleTime: 30_000
+  })
   const resourceItems = resources.data ?? []
   const stakeholderItems = stakeholders.data ?? []
+  const tagItems = useMemo(
+    () => mergeMatterTagDefinitions(tagsQuery.data?.items ?? [], matter?.tags ?? []),
+    [matter?.tags, tagsQuery.data?.items]
+  )
+  const tagsByName = useMemo(() => matterTagMap(tagItems), [tagItems])
   const runs = runsQuery.data?.items ?? []
   const updates = updatesQuery.data?.items ?? []
   const detailAttention = matterAttentionQuery.data?.items ?? attentionSignals
@@ -313,6 +329,7 @@ export function MatterDetail({
       queryClient.invalidateQueries({ queryKey: qk.matters.detail(matterId) }),
       queryClient.invalidateQueries({ queryKey: qk.matters.resources(matterId) }),
       queryClient.invalidateQueries({ queryKey: qk.matters.stakeholders(matterId) }),
+      queryClient.invalidateQueries({ queryKey: MATTER_TAGS_QUERY_KEY }),
       queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'runs'] }),
       queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'updates'] })
     ])
@@ -457,13 +474,6 @@ export function MatterDetail({
         {t('common.loading')}
       </div>
     )
-  }
-
-  const addTag = (): void => {
-    const tag = tagDraft.trim().replace(/^#/, '')
-    if (!tag || matter.tags.includes(tag)) return
-    patch.mutate({ tags: [...matter.tags, tag] })
-    setTagDraft('')
   }
 
   const saveTitle = (): void => {
@@ -632,33 +642,23 @@ export function MatterDetail({
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-1.5">
                 {matter.tags.map((tag) => (
-                  <button
+                  <MatterTagChip
                     key={tag}
-                    type="button"
-                    onClick={() =>
+                    tag={resolveMatterTag(tagsByName, tag)}
+                    disabled={patch.isPending}
+                    onRemove={() =>
                       patch.mutate({ tags: matter.tags.filter((value) => value !== tag) })
                     }
-                    aria-label={t('matters.actions.removeTag', { tag })}
-                    className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 text-meta text-ink-fg-1 transition-colors duration-fast ease-standard hover:text-fail focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-                  >
-                    #{tag}
-                  </button>
-                ))}
-                <label className="inline-flex items-center gap-1 rounded-[var(--r-pill)] border border-dashed border-ink-border px-2 py-1">
-                  <Tag size={12} className="text-ink-fg-2" />
-                  <input
-                    value={tagDraft}
-                    onChange={(event) => setTagDraft(event.target.value)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter') {
-                        event.preventDefault()
-                        addTag()
-                      }
-                    }}
-                    placeholder={t('matters.detail.addTag')}
-                    className="w-24 bg-transparent text-meta outline-none"
+                    removeLabel={t('matters.actions.removeTag', { tag })}
                   />
-                </label>
+                ))}
+                <MatterTagPicker
+                  selectedTags={matter.tags}
+                  tagDefinitions={tagItems}
+                  disabled={patch.isPending}
+                  onChange={(tags) => patch.mutate({ tags })}
+                  onManage={() => setTagManagerOpen(true)}
+                />
               </div>
             </div>
             {/* P3 — 事项对话 entry. Sits left of the 「更多」 menu (the design's 「立即跟进」
@@ -879,6 +879,12 @@ export function MatterDetail({
           busy={addItem.isPending}
           onClose={() => setAddOpen(false)}
           onAdd={(input) => addItem.mutate(input)}
+        />
+
+        <MatterTagManagerModal
+          open={tagManagerOpen}
+          tags={tagItems}
+          onOpenChange={setTagManagerOpen}
         />
 
         {deleteOpen ? (
@@ -1391,9 +1397,7 @@ function StateCard({
       </div>
       <div className="mt-4 rounded-[var(--r-ctl)] border border-dashed border-ink-border p-3">
         <div className="flex items-center justify-between gap-3">
-          <h3 className="text-meta font-medium text-ink-fg-2">
-            {t('matters.state.goalChecks')}
-          </h3>
+          <h3 className="text-meta font-medium text-ink-fg-2">{t('matters.state.goalChecks')}</h3>
           <span className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 font-mono text-[11px] leading-4 text-ink-fg-2">
             {t('matters.state.goalChecksCount', {
               done: doneGoalChecks,

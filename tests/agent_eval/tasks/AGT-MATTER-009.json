@@ -1,0 +1,31 @@
+{
+  "id": "AGT-MATTER-009",
+  "category": "email_action",
+  "title": "Matter 跟进触发幂等：追赶窗口内合并",
+  "surface": "general",
+  "user_prompt": "同一个定时触发在追赶窗口里又评估了一次；给 MAT-000042 跑跟进，但不要重复产出。",
+  "email_context": null,
+  "fixtures": { "emails": [], "memory": [], "skill_overrides": {} },
+  "allowed_tools": ["matter_run_control"],
+  "must_use_tools": ["matter_run_control"],
+  "forbidden_tools": [
+    "matter_create",
+    "matter_update",
+    "matter_item_mutate",
+    "matter_resource_mutate",
+    "matter_stakeholder_mutate",
+    "matter_relation_mutate",
+    "matter_add_note",
+    "matter_review_update",
+    "matter_update_propose",
+    "email_prepare_send",
+    "email_send"
+  ],
+  "expected_evidence": [],
+  "no_hit_expected": false,
+  "safety_critical": false,
+  "budget": { "max_iter": 8, "max_cost_usd": 0.5 },
+  "rubric": { "answer_correctness": 0.4, "evidence_grounding": 0.1, "uncertainty_honesty": 0.2, "tool_efficiency": 0.2, "ux_clarity": 0.1 },
+  "rubric_ref": "email_action.md",
+  "notes": "P7 幂等闸：重复触发只能通过 matter_run_control 合并到既有活跃 run（coalesced:true），不得新建第二个跟进 run，也不得产生第二份 matter_update_propose。"
+}

@@ -5,6 +5,7 @@ from __future__ import annotations
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Header, Query, Request
+from fastapi.responses import PlainTextResponse
 from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
@@ -31,6 +32,7 @@ from src.api.schemas.matters import (
     PermanentDeleteRequest,
 )
 from src.matters.create_research import MatterCreateResearchService
+from src.matters.export import export_matter, export_matter_markdown
 from src.repository.email_repository import EmailRepository
 from src.matters.repository import MatterRepository
 from src.matters.attention import AttentionService, SNOOZE_3D_MS
@@ -295,6 +297,27 @@ async def lookup_links_by_resource(
         raise APIError("E_INVALID_ARG", "keys must contain 1-50 resource keys", source="sqlite")
     result = _call(service.lookup_resource_links, provider.strip().lower(), key_values)
     return success_envelope({"results": result}, request=request)
+
+
+@router.get("/{public_id}/export")
+async def export_matter_endpoint(
+    public_id: str,
+    request: Request,
+    format: str = Query("json", pattern="^(json|markdown)$"),
+    service: MatterService = Depends(get_matter_service),
+):
+    """事项导出（P7）。资料**只导出引用不导出正文** —— 外部系统仍是内容权威，
+    而且资料正文是按不可信数据处理的，不该被搬到一个没有围栏的地方。"""
+    if format == "markdown":
+        text = _call(export_matter_markdown, service, public_id)
+        return PlainTextResponse(
+            text,
+            headers={
+                "Content-Disposition": f'attachment; filename="{public_id}.md"',
+            },
+            media_type="text/markdown; charset=utf-8",
+        )
+    return success_envelope(_call(export_matter, service, public_id), request=request)
 
 
 @router.get("/tags")

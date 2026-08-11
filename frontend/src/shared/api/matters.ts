@@ -15,6 +15,8 @@ import type {
   MatterRun,
   MatterRunListResponse,
   MatterRunStartResult,
+  MatterTagListResponse,
+  MatterTagMutationResult,
   MatterDuplicateCandidate,
   MatterResourceDiscoveryResult,
   MatterResourceListItem,
@@ -119,6 +121,32 @@ export function createMattersApi(baseUrl: string): MattersApi {
         { body: input }
       )
       return result.items
+    },
+
+    listTags(): Promise<MatterTagListResponse> {
+      return request(baseUrl, 'GET', '/matters/tags')
+    },
+
+    setTagStyle(name, input, options = {}): Promise<MatterTagMutationResult> {
+      return request(
+        baseUrl,
+        'PUT',
+        `/matters/tags/${segment(name)}`,
+        mutationRequest(options, input)
+      )
+    },
+
+    renameTag(name, nextName, options = {}): Promise<MatterTagMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/tags/${segment(name)}/rename`,
+        mutationRequest(options, { name: nextName })
+      )
+    },
+
+    deleteTag(name, options = {}): Promise<MatterTagMutationResult> {
+      return request(baseUrl, 'DELETE', `/matters/tags/${segment(name)}`, mutationRequest(options))
     },
 
     get(matterId, include = []): Promise<MatterDetailResponse> {
@@ -386,42 +414,89 @@ export function createMattersApi(baseUrl: string): MattersApi {
       return request(baseUrl, 'GET', `/matters/${segment(matterId)}/runs`)
     },
     async getRun(matterId, runId): Promise<MatterRun> {
-      const result = await request<{ run: MatterRun }>(baseUrl, 'GET', `/matters/${segment(matterId)}/runs/${segment(runId)}`)
+      const result = await request<{ run: MatterRun }>(
+        baseUrl,
+        'GET',
+        `/matters/${segment(matterId)}/runs/${segment(runId)}`
+      )
       return result.run
     },
     startRun(matterId, options): Promise<MatterRunStartResult> {
-      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/runs`, mutationRequest(options))
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/runs`,
+        mutationRequest(options)
+      )
     },
     cancelRun(matterId, runId): Promise<MatterMutationResult> {
-      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/runs/${segment(runId)}/cancel`, mutationRequest({ expectedVersion: null }))
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/runs/${segment(runId)}/cancel`,
+        mutationRequest({ expectedVersion: null })
+      )
     },
     listUpdates(matterId, reviewStatus): Promise<MatterUpdateListResponse> {
-      return request(baseUrl, 'GET', `/matters/${segment(matterId)}/updates`, { query: { review_status: reviewStatus } })
+      return request(baseUrl, 'GET', `/matters/${segment(matterId)}/updates`, {
+        query: { review_status: reviewStatus }
+      })
     },
     async getUpdate(matterId, updateId): Promise<MatterUpdate> {
-      const result = await request<{ update: MatterUpdate }>(baseUrl, 'GET', `/matters/${segment(matterId)}/updates/${segment(updateId)}`)
+      const result = await request<{ update: MatterUpdate }>(
+        baseUrl,
+        'GET',
+        `/matters/${segment(matterId)}/updates/${segment(updateId)}`
+      )
       return result.update
     },
     acceptUpdate(matterId, updateId, input, options): Promise<MatterMutationResult> {
-      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/updates/${segment(updateId)}/accept`, mutationRequest(options, input))
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/updates/${segment(updateId)}/accept`,
+        mutationRequest(options, input)
+      )
     },
     rejectUpdate(matterId, updateId, reason, options): Promise<MatterMutationResult> {
-      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/updates/${segment(updateId)}/reject`, mutationRequest(options, { reason }))
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/updates/${segment(updateId)}/reject`,
+        mutationRequest(options, { reason })
+      )
     },
     listAttention(state = 'open', kind): Promise<MatterAttentionListResponse> {
       return request(baseUrl, 'GET', '/matters/attention', { query: { state, kind } })
     },
     listMatterAttention(matterId, state = 'open', kind): Promise<MatterAttentionListResponse> {
-      return request(baseUrl, 'GET', `/matters/${segment(matterId)}/attention`, { query: { state, kind } })
+      return request(baseUrl, 'GET', `/matters/${segment(matterId)}/attention`, {
+        query: { state, kind }
+      })
     },
     resolveAttention(matterId, signalId): Promise<MatterAttentionSignal> {
-      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/attention/${segment(signalId)}/resolve`, mutationRequest({ expectedVersion: null }))
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/attention/${segment(signalId)}/resolve`,
+        mutationRequest({ expectedVersion: null })
+      )
     },
     snoozeAttention(matterId, signalId, input): Promise<MatterAttentionSignal> {
-      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/attention/${segment(signalId)}/snooze`, mutationRequest({ expectedVersion: null }, input))
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/attention/${segment(signalId)}/snooze`,
+        mutationRequest({ expectedVersion: null }, input)
+      )
     },
     dismissAttention(matterId, signalId, reason): Promise<MatterAttentionSignal> {
-      return request(baseUrl, 'POST', `/matters/${segment(matterId)}/attention/${segment(signalId)}/dismiss`, mutationRequest({ expectedVersion: null }, reason ? { reason } : {}))
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/attention/${segment(signalId)}/dismiss`,
+        mutationRequest({ expectedVersion: null }, reason ? { reason } : {})
+      )
     },
     getNotifyLevel(): Promise<MatterNotifyLevelResponse> {
       return request(baseUrl, 'GET', '/matters/notify-level')

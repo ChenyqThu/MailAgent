@@ -11,7 +11,13 @@ export function getOrderedVisibleMatters(
   return matters
     .filter((matter) => {
       if (!query) return true
-      return [matter.title, matter.public_id, matter.description, matter.current_summary ?? '']
+      return [
+        matter.title,
+        matter.public_id,
+        matter.description,
+        matter.current_summary ?? '',
+        ...matter.tags
+      ]
         .join('\n')
         .toLocaleLowerCase()
         .includes(query)

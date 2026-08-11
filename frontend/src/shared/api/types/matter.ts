@@ -108,6 +108,28 @@ export type MatterTagShape = (typeof MATTER_TAG_SHAPES)[number]
 export const MATTER_TAG_DEFAULT_COLOR: MatterTagColor = '--c-accent'
 export const MATTER_TAG_DEFAULT_SHAPE: MatterTagShape = 'circle'
 
+export interface MatterTagDefinition {
+  name: string
+  color: MatterTagColor
+  shape: MatterTagShape
+  created_at: number | null
+  usage_count: number
+  inferred?: boolean
+}
+
+export interface MatterTagListResponse {
+  items: MatterTagDefinition[]
+}
+
+export interface MatterTagMutationResult {
+  tag?: MatterTagDefinition
+  deleted?: boolean
+  name?: string
+  event_ids?: number[]
+  warnings?: string[]
+  affected_count?: number
+}
+
 export const MATTER_ACCESS_POLICIES = ['allowed', 'metadata_only', 'excluded'] as const
 export type MatterAccessPolicy = (typeof MATTER_ACCESS_POLICIES)[number]
 
@@ -731,6 +753,18 @@ export interface MattersApi {
     signal?: AbortSignal
   ): Promise<MatterCreateDraftResponse>
   duplicateCandidates(input: MatterDuplicateCandidateInput): Promise<MatterDuplicateCandidate[]>
+  listTags(): Promise<MatterTagListResponse>
+  setTagStyle(
+    name: string,
+    input: { color: MatterTagColor; shape: MatterTagShape },
+    options?: MatterMutationOptions
+  ): Promise<MatterTagMutationResult>
+  renameTag(
+    name: string,
+    nextName: string,
+    options?: MatterMutationOptions
+  ): Promise<MatterTagMutationResult>
+  deleteTag(name: string, options?: MatterMutationOptions): Promise<MatterTagMutationResult>
   get(matterId: string, include?: string[]): Promise<MatterDetailResponse>
   patch(
     matterId: string,

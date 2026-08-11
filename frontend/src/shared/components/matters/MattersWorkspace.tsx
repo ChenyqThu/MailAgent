@@ -18,7 +18,12 @@ import {
   Trash2
 } from 'lucide-react'
 
-import type { Matter, MatterCreateInput, MatterUpdate } from '@shared/api/types/matter'
+import type {
+  Matter,
+  MatterCreateInput,
+  MatterTagDefinition,
+  MatterUpdate
+} from '@shared/api/types/matter'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { filterView, MATTER_VIEWS, openAttentionFor } from '@shared/lib/matterDerive'
@@ -32,6 +37,7 @@ import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
 import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
 import { getOrderedVisibleMatters } from './matterListOrder'
+import { listMatterTagsSafely, MATTER_TAGS_QUERY_KEY } from './matterTags'
 import { useMatterNavigation } from './navigation'
 
 const MATTER_LIST_WIDTH_STORAGE_KEY = 'mailagent.matters.listWidth'
@@ -136,7 +142,14 @@ export function MattersWorkspace(): React.ReactElement | null {
     enabled,
     staleTime: 30_000
   })
+  const tagsQuery = useQuery<{ items: MatterTagDefinition[] }>({
+    queryKey: MATTER_TAGS_QUERY_KEY,
+    queryFn: () => listMatterTagsSafely(api),
+    enabled,
+    staleTime: 30_000
+  })
   const allMatters = list.data?.items ?? []
+  const tagItems = tagsQuery.data?.items ?? []
   const attentionQuery = useGlobalAttention(enabled)
   const attentionItems = attentionQuery.data?.items ?? []
   const attentionIndex = useMemo(() => {
@@ -317,6 +330,7 @@ export function MattersWorkspace(): React.ReactElement | null {
                   selectedId={selectedId}
                   attention={attentionIndex}
                   search={search}
+                  tagDefinitions={tagItems}
                   onSearchChange={setSearch}
                   onSelect={(matter: Matter) => selectMatter(matter.public_id)}
                   onCreate={() => setCreateOpen(true)}

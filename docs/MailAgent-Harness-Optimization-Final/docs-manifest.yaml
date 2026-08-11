@@ -1,0 +1,180 @@
+version: "2.1-final"
+status: "grill-closed-development-ready"
+last_updated: "2026-08-07"
+repository: "ChenyqThu/MailAgent"
+decision_scope: "Q1-Q100,G1-G9"
+entrypoints:
+  readme: "README.md"
+  master: "MAILAGENT_HARNESS_OPTIMIZATION_MASTER.md"
+  handoff: "15-development-handoff.md"
+  decisions: "13-accepted-decisions.md"
+  implementation_confirmation_rules: "grill.md"
+documents:
+  - path: "CHANGELOG.md"
+    title: "文档体系变更记录"
+    category: "main"
+    order: 1
+    bytes: 2403
+    sha256: "c604659df4ea009b5d514a94c2afebb08d5e4b26bd8b3709273f1fa1431eb927"
+  - path: "00-executive-summary.md"
+    title: "执行摘要"
+    category: "main"
+    order: 2
+    bytes: 5438
+    sha256: "60807df37ee830b9b68ee784f6bfd73d7edb11aa0f61c4dbe7a4ac93691135c8"
+  - path: "01-current-state-assessment.md"
+    title: "MailAgent 当前情况评估"
+    category: "main"
+    order: 3
+    bytes: 6724
+    sha256: "dd00c7bbd27ad62476b22277d5f0eea470f2422b1677a1d1d9e6f32f5e9a68b0"
+  - path: "02-product-vision-and-scope.md"
+    title: "产品愿景与范围"
+    category: "main"
+    order: 4
+    bytes: 4499
+    sha256: "8c10ce6e0f9a1f05a29680ef2e999b9a93113c8b1b2d1fd908e28c0a1ee22d88"
+  - path: "03-target-architecture.md"
+    title: "目标架构：在现有 AI SDK Harness 上渐进增强"
+    category: "main"
+    order: 5
+    bytes: 5696
+    sha256: "4908661b3526ca07e4e358a2f24cc38ffa92840e1b7568ed78eb415e521788f4"
+  - path: "04-custom-agent-2.md"
+    title: "Custom Agent 2.0"
+    category: "main"
+    order: 6
+    bytes: 8038
+    sha256: "fd3210b1cc7dd643c69b5a284a3bb7bb095b0b3fd3aaacefe6892d97c87260e4"
+  - path: "05-ai-sdk-harness-enhancements.md"
+    title: "AI SDK Harness 核心增强"
+    category: "main"
+    order: 7
+    bytes: 5744
+    sha256: "3e60860e2209c8743644c0fd8d7648b8f9f2112b33b7a940c8ce2619303f76f9"
+  - path: "06-connectors-skills-plugins.md"
+    title: "Connector、Skill Creator 与 Agent Plugins"
+    category: "main"
+    order: 8
+    bytes: 5293
+    sha256: "d07bbedd3b0ce1ffa5790810f00da18fda584397508d558085daa2621c3d6c90"
+  - path: "07-session-context-compaction.md"
+    title: "Session、跨 Session 查询与 Context Compact"
+    category: "main"
+    order: 9
+    bytes: 4018
+    sha256: "90c6f1cf214325fbd2fb861400c8a32def30b67663720aa9ec2943c0cf94b30b"
+  - path: "08-office-scenarios-and-templates.md"
+    title: "办公场景与预设模板"
+    category: "main"
+    order: 10
+    bytes: 3535
+    sha256: "250ab0502fe4399b1b398b3c6f2dd7627e3c4c9a19639b67dd2b201406546610"
+  - path: "09-security-policy-governance.md"
+    title: "安全、权限与治理"
+    category: "main"
+    order: 11
+    bytes: 4706
+    sha256: "08cd067e7468b69b53ccbc6adc60fc0def0ce95e091c864d90dc9b99d0f8f687"
+  - path: "10-eval-observability-reliability.md"
+    title: "Eval、可观测性与可靠性"
+    category: "main"
+    order: 12
+    bytes: 4471
+    sha256: "6f98b9bf7f5f689ae47c21987ab31b347010cf828f3f88f0c7a49fb91267f746"
+  - path: "11-implementation-roadmap.md"
+    title: "渐进式实施路线图"
+    category: "main"
+    order: 13
+    bytes: 3566
+    sha256: "1dfe8a6c37377867a5f7a70dc073b81b4215e107df70717bfc9a3732dfb7011e"
+  - path: "12-code-change-map.md"
+    title: "源码修改地图"
+    category: "main"
+    order: 14
+    bytes: 5876
+    sha256: "f51cd0b56c1ac3b69f0883dc0b583810891b600fb6290f4ed4314c3da273bb5d"
+  - path: "13-accepted-decisions.md"
+    title: "已接受的架构与产品决策"
+    category: "main"
+    order: 15
+    bytes: 7370
+    sha256: "a585a2361559c7aaba2cde1bfb481c71b6c002fe3dc8c964471f7270a327cdee"
+  - path: "14-comparison-matrix.md"
+    title: "外部项目横向对比与最终借鉴结论"
+    category: "main"
+    order: 16
+    bytes: 3699
+    sha256: "9f273cf6bb29ead6057c2ae10412ea09132659ec23e40364d9d5ad9cc7751eaa"
+  - path: "15-development-handoff.md"
+    title: "开发 Handoff"
+    category: "main"
+    order: 17
+    bytes: 7250
+    sha256: "0675672ceb5b659cf58a635a1ca99148c15c50a8e8c43eb413edb2cb609aad62"
+  - path: "grill.md"
+    title: "Grill 已关闭：G1–G9 决议与实现期确认规则"
+    category: "main"
+    order: 18
+    bytes: 3963
+    sha256: "1ce7f5b2f77aa6052ee744d26d382cab7f2d4c9b824b142ed4969e0d7b79b407"
+  - path: "references/01-pi-mono.md"
+    title: "Pi Mono 研究：只吸收交互与上下文能力，不替换 Runtime"
+    category: "reference"
+    order: 1
+    bytes: 2430
+    sha256: "12478e30c29717c29b2b28253cda46a64f61cd8b65f57eb6efd056b7b3476758"
+  - path: "references/02-craft-agents-oss.md"
+    title: "Craft Agents OSS 研究：借鉴 Source 与执行前检查，不引入 Backend 平台"
+    category: "reference"
+    order: 2
+    bytes: 3114
+    sha256: "956ff8ef173e407cee8f6dfde3afce34acd35357e63c3a166fe506cc282065cb"
+  - path: "references/03-lobehub.md"
+    title: "LobeHub 研究：借鉴人工干预与父子运行可见性，不复制平台"
+    category: "reference"
+    order: 3
+    bytes: 2773
+    sha256: "dd12b159e2fc5ef0df67d6c0d8e4312314628f1b26d018b0a12fb454109c46d0"
+  - path: "references/04-vercel-agent-plugins.md"
+    title: "Vercel Agent Plugins 研究"
+    category: "reference"
+    order: 4
+    bytes: 2151
+    sha256: "22fabb923ec4e4520c390af6a8b1557f0d33608477450bbfe1c9516ca149683e"
+  - path: "references/05-anthropic-skill-creator.md"
+    title: "Anthropic Skill Creator 研究"
+    category: "reference"
+    order: 5
+    bytes: 1868
+    sha256: "ff14d413cf533387f1ac2d771c91c5d56951f9447728e5aa442800509137f821"
+  - path: "appendices/A-contracts.md"
+    title: "附录 A：建议契约"
+    category: "appendix"
+    order: 1
+    bytes: 5314
+    sha256: "3ec858821ce4b31e2765daa80eeb180885e952e9fa141b2607df4e5029d5272b"
+  - path: "appendices/B-data-model.md"
+    title: "附录 B：最小数据模型变更"
+    category: "appendix"
+    order: 2
+    bytes: 5070
+    sha256: "20259d6d6428f88508cb12fbaa7faf0d2443256c3229ee92f78e054468221906"
+  - path: "appendices/C-pr-checklist.md"
+    title: "附录 C：逐 PR 验收清单"
+    category: "appendix"
+    order: 3
+    bytes: 3493
+    sha256: "4c596fb016fd32ed20806b123574d779f19d26b2e132febb1f13b98e7db80ad6"
+  - path: "appendices/D-glossary.md"
+    title: "附录 D：术语表"
+    category: "appendix"
+    order: 4
+    bytes: 1559
+    sha256: "fe2ec7cfe9df9aa8d36831653efd291acba9af06d6dcda691afafe4dfe7ceb2e"
+  - path: "appendices/E-source-index.md"
+    title: "附录 E：源码索引"
+    category: "appendix"
+    order: 5
+    bytes: 4826
+    sha256: "ce6e93f380314750d94cc2fd90ed8f636ec8dc370fdd68380f87d454635bb2aa"
