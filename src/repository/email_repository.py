@@ -1150,16 +1150,27 @@ class EmailRepository:
 
     LIST_LIMIT_MAX = 500
 
-    def _matter_email_internal_ids(self, matter_id: int) -> list[int]:
+    def _matter_email_internal_ids(
+        self, matter_id: int, *, allowed_only: bool = False
+    ) -> list[int]:
+        """matter 关联邮件集合展开（P3 引入）。
+
+        ``allowed_only=False``（默认）= P3 manual chat 语义**字节级不变**（scope 过滤
+        ≠ 访问控制的既有取舍，留痕不翻案，P6 复议）；``allowed_only=True`` = P4 run
+        路径的访问控制维（仅 access_policy='allowed' 的资源 —— metadata_only 的正文
+        在这里挡住，D5）。
+        """
         conn = self._connect()
         try:
-            rows = conn.execute(
+            sql = (
                 "SELECT r.external_key FROM matter_resource mr "
                 "JOIN resource r ON r.id=mr.resource_id "
                 "WHERE mr.matter_id=? AND mr.deleted_at IS NULL "
-                "AND r.provider='mailagent' AND r.kind IN ('email','thread')",
-                (matter_id,),
-            ).fetchall()
+                "AND r.provider='mailagent' AND r.kind IN ('email','thread')"
+            )
+            if allowed_only:
+                sql += " AND r.access_policy='allowed'"
+            rows = conn.execute(sql, (matter_id,)).fetchall()
             direct_ids: set[int] = set()
             thread_ids: set[str] = set()
             for row in rows:
@@ -1181,6 +1192,13 @@ class EmailRepository:
             return sorted(direct_ids)
         finally:
             conn.close()
+
+    def matter_scope_contains(self, matter_id: int, internal_id: int) -> bool:
+        """P4 headless 域守卫（D5）：internal_id 是否在 matter 的 **allowed** 关联集内
+        （access_policy='allowed' 且关联未删；metadata_only/excluded 均不放行）。"""
+        return internal_id in self._matter_email_internal_ids(
+            matter_id, allowed_only=True
+        )
 
     def _append_matter_filter(
         self, predicates: list[FilterPredicate], matter_id: Optional[int]

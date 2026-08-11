@@ -32,6 +32,12 @@ RELATION_REMOVED = "relation_removed"
 RELATION_RESTORED = "relation_restored"
 CHAT_SCOPE_EXPANDED = "chat_scope_expanded"
 CHAT_SCOPE_RESTORED = "chat_scope_restored"
+# P4 (跟进 Agent 提案/评审/绑定)
+UPDATE_PROPOSED = "update_proposed"
+UPDATE_ACCEPTED = "update_accepted"
+UPDATE_REJECTED = "update_rejected"
+UPDATE_SUPERSEDED = "update_superseded"
+AGENT_BINDING_CHANGED = "agent_binding_changed"
 
 MATTER_EVENT_KINDS = (
     MATTER_CREATED,
@@ -61,4 +67,9 @@ MATTER_EVENT_KINDS = (
     RELATION_RESTORED,
     CHAT_SCOPE_EXPANDED,
     CHAT_SCOPE_RESTORED,
+    UPDATE_PROPOSED,
+    UPDATE_ACCEPTED,
+    UPDATE_REJECTED,
+    UPDATE_SUPERSEDED,
+    AGENT_BINDING_CHANGED,
 )

@@ -250,6 +250,11 @@ async def get_email(
     include: str = Query(
         "", description="逗号分隔: body / attachments / all (默认仅 metadata)"
     ),
+    matter_scope: Optional[int] = Query(
+        None, ge=1,
+        description="Matters P4 (D5): 在场时校验 internal_id ∈ 该 matter 的 allowed "
+        "关联集，否则 403 E_MATTER_SCOPE（headless matter run 的 email_get 守卫）",
+    ),
 ):
     """获取单封邮件 metadata + 可选 body 摘要 / attachments。
 
@@ -258,6 +263,15 @@ async def get_email(
     + ``attachments`` (list | [])。404 (E_NOT_FOUND) 当 metadata 缺失。
     body 是 SUMMARY (format/size_bytes/...), 非内容 — 内容走 /body 端点。
     """
+    if matter_scope is not None and not repo.matter_scope_contains(
+        matter_scope, internal_id
+    ):
+        raise APIError(
+            "E_MATTER_SCOPE",
+            f"email {internal_id} is outside matter {matter_scope} scope",
+            hint="Only resources linked to this matter with access_policy=allowed are readable.",
+            source="sqlite",
+        )
     parts = _parse_include(include)
 
     if parts:

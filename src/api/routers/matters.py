@@ -22,11 +22,14 @@ from src.api.schemas.matters import (
     MatterResourcePatchRequest,
     MatterStakeholderCreateRequest,
     MatterStakeholderPatchRequest,
+    MatterUpdateAcceptRequest,
+    MatterUpdateRejectRequest,
     MutationEnvelope,
     MutationOnly,
     PermanentDeleteRequest,
 )
 from src.matters.repository import MatterRepository
+from src.matters.run_service import MatterRunService
 from src.matters.service import Actor, MatterError, MatterService
 
 
@@ -35,8 +38,21 @@ def require_matters_enabled(settings=Depends(get_settings)) -> None:
         raise APIError("E_DISABLED", "Matters feature is disabled", source="sqlite")
 
 
+def require_matter_agent_enabled(settings=Depends(get_settings)) -> None:
+    """P4 双 flag 门的第二道（runs/propose 面）。updates/review 面**有意不挂**——
+    agent flag 事后关掉时 owner 仍能评审/拒绝清账既有 pending 提案（D11）。"""
+    if not bool(getattr(settings, "matter_agent_enabled", False)):
+        raise APIError(
+            "E_DISABLED", "Matter agent feature is disabled", source="sqlite"
+        )
+
+
 def get_matter_service(settings=Depends(get_settings)) -> MatterService:
     return MatterService(MatterRepository(settings.sync_store_db_path))
+
+
+def get_matter_run_service(settings=Depends(get_settings)) -> MatterRunService:
+    return MatterRunService(MatterRepository(settings.sync_store_db_path))
 
 
 router = APIRouter(
@@ -605,4 +621,169 @@ async def restore_relation(
     service: MatterService = Depends(get_matter_service),
 ):
     result = _call(service.restore_relation, matter_id, relation_id, **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)
+
+
+# ── P4: Updates 评审面（只挂 matters 闸 —— agent flag 关掉仍可清账，D11）──────────
+
+
+@router.get("/{matter_id}/updates")
+async def list_updates(
+    matter_id: str,
+    request: Request,
+    review_status: str | None = None,
+    stale: bool | None = None,
+    cursor: int | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.list_updates_page,
+        matter_id,
+        review_status=review_status,
+        stale=stale,
+        cursor=cursor,
+        limit=limit,
+    )
+    return success_envelope(result, request=request, meta_extra={"limit": limit})
+
+
+@router.get("/{matter_id}/updates/{update_id}")
+async def get_update(
+    matter_id: str,
+    update_id: int,
+    request: Request,
+    service: MatterService = Depends(get_matter_service),
+):
+    return success_envelope(
+        _call(service.get_update_detail, matter_id, update_id), request=request
+    )
+
+
+@router.post("/{matter_id}/updates/{update_id}/accept")
+async def accept_update(
+    matter_id: str,
+    update_id: int,
+    body: MatterUpdateAcceptRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    # exclude_unset：edited_changes 的 after 需要区分「未提供」与「显式 null」。
+    edited = (
+        [entry.model_dump(exclude_unset=True) for entry in body.edited_changes]
+        if body.edited_changes is not None
+        else None
+    )
+    result = _call(
+        service.accept_update,
+        matter_id,
+        update_id,
+        selected_change_ids=body.selected_change_ids,
+        edited_changes=edited,
+        edited_summary=body.edited_summary,
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
+@router.post("/{matter_id}/updates/{update_id}/reject")
+async def reject_update(
+    matter_id: str,
+    update_id: int,
+    body: MatterUpdateRejectRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    args = _mutation_args(body.mutation, idempotency_key)
+    args.pop("reason", None)  # reject 的 reason 权威在顶层 body.reason
+    result = _call(
+        service.reject_update,
+        matter_id,
+        update_id,
+        reason=body.reason,
+        **args,
+    )
+    return success_envelope(result, request=request)
+
+
+# ── P4: Runs 面（cf_access + 双 flag 门，D10）────────────────────────────────────
+
+
+@router.get(
+    "/{matter_id}/runs", dependencies=[Depends(require_matter_agent_enabled)]
+)
+async def list_matter_runs(
+    matter_id: str,
+    request: Request,
+    cursor: int | None = None,
+    limit: int = Query(default=50, ge=1, le=100),
+    status: str | None = None,
+    trigger_kind: str | None = None,
+    service: MatterRunService = Depends(get_matter_run_service),
+):
+    result = _call(
+        service.list_runs,
+        matter_id,
+        cursor=cursor,
+        limit=limit,
+        status=status,
+        trigger_kind=trigger_kind,
+    )
+    return success_envelope(result, request=request, meta_extra={"limit": limit})
+
+
+@router.get(
+    "/{matter_id}/runs/{run_id}",
+    dependencies=[Depends(require_matter_agent_enabled)],
+)
+async def get_matter_run(
+    matter_id: str,
+    run_id: int,
+    request: Request,
+    service: MatterRunService = Depends(get_matter_run_service),
+):
+    run = _call(service.get_run_projection, matter_id, run_id)
+    return success_envelope(
+        {"run": run, "lifecycle_state": run["lifecycle_state"]}, request=request
+    )
+
+
+@router.post(
+    "/{matter_id}/runs", dependencies=[Depends(require_matter_agent_enabled)]
+)
+async def create_matter_run(
+    matter_id: str,
+    body: MutationOnly,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterRunService = Depends(get_matter_run_service),
+):
+    """Run Now（D3/D10）。body **无 trigger_kind**（manual 由服务端钉死，contracts §4.4）；
+    ``expected_version`` 作 input anchor（可缺省 —— gateway 工具面可不带；带则不符 409）。"""
+    args = _mutation_args(body.mutation, idempotency_key, require_version=False)
+    result = _call(
+        service.enqueue_run,
+        matter_id,
+        expected_version=body.mutation.expected_version,
+        **args,
+    )
+    return success_envelope(result, request=request)
+
+
+@router.post(
+    "/{matter_id}/runs/{run_id}/cancel",
+    dependencies=[Depends(require_matter_agent_enabled)],
+)
+async def cancel_matter_run(
+    matter_id: str,
+    run_id: int,
+    body: MutationOnly,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterRunService = Depends(get_matter_run_service),
+):
+    args = _mutation_args(body.mutation, idempotency_key, require_version=False)
+    result = _call(service.cancel_run, matter_id, run_id, **args)
     return success_envelope(result, request=request)

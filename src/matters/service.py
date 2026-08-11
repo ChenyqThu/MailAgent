@@ -19,6 +19,7 @@ from .models import (
     MATTER_RESOURCE_KINDS,
     MATTER_RESOURCE_SUBSCRIPTION_STATES,
     MATTER_STATUSES,
+    MATTER_UPDATE_REVIEW_STATUSES,
     MatterActorKind,
     MatterItemKind,
     format_public_id,
@@ -27,7 +28,14 @@ from .models import (
 )
 from .repository import MatterRepository
 from .resource_identity import EMAIL_PROVIDER, email_resource_key, thread_resource_key
-from .events import CHAT_SCOPE_EXPANDED, CHAT_SCOPE_RESTORED
+from .events import (
+    AGENT_BINDING_CHANGED,
+    CHAT_SCOPE_EXPANDED,
+    CHAT_SCOPE_RESTORED,
+    UPDATE_ACCEPTED,
+    UPDATE_REJECTED,
+    UPDATE_SUPERSEDED,
+)
 
 TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
 ACTION_ONLY_ITEM_FIELDS = {
@@ -41,6 +49,10 @@ ACTION_ONLY_ITEM_FIELDS = {
     "checklist",
 }
 MANUAL_UPDATE_FIELDS = {"status", "health", "current_summary"}
+# P4 绑定三键（D2）：走既有 PATCH 白名单 + 事件 agent_binding_changed；
+# schedule_json P5 才有写面（本相位零消费，不进白名单）。
+BINDING_PATCH_FIELDS = {"agent_profile_id", "agent_enabled", "matter_instructions"}
+MATTER_INSTRUCTIONS_MAX_CHARS = 4000
 DIRECT_PATCH_FIELDS = {
     "title",
     "description",
@@ -381,7 +393,9 @@ class MatterService:
         reason: str | None = None,
         reverses_event_id: int | None = None,
     ) -> dict[str, Any]:
-        unknown = set(patch) - DIRECT_PATCH_FIELDS - MANUAL_UPDATE_FIELDS
+        unknown = (
+            set(patch) - DIRECT_PATCH_FIELDS - MANUAL_UPDATE_FIELDS - BINDING_PATCH_FIELDS
+        )
         if unknown:
             raise MatterError(
                 "E_INVALID_ARG", f"unsupported patch fields: {sorted(unknown)}"
@@ -418,6 +432,15 @@ class MatterService:
                     field = "waiting_context_json"
                     value = self._dump(value) if value is not None else None
                 direct_changes[field] = value
+            binding = {
+                field: patch[field] for field in BINDING_PATCH_FIELDS if field in patch
+            }
+            binding_warnings: list[str] = []
+            if binding:
+                binding_changes, binding_warnings = self._normalize_binding_patch(
+                    conn, binding
+                )
+                direct_changes.update(binding_changes)
             manual = {
                 field: patch[field] for field in MANUAL_UPDATE_FIELDS if field in patch
             }
@@ -469,7 +492,7 @@ class MatterService:
                         }
                     )
                 direct_changes["latest_accepted_update_id"] = update_id
-            if not self.repository.cas_update_matter(
+            if not self._cas_update(
                 conn, matter["id"], expected_version, direct_changes
             ):
                 raise self._version_conflict()
@@ -487,6 +510,21 @@ class MatterService:
                 happened_at=now,
                 reverses_event_id=reverses_event_id,
             )
+            event_ids = [event_id]
+            if binding:
+                event_ids.append(
+                    self._append_event(
+                        conn,
+                        matter_id=matter["id"],
+                        kind=AGENT_BINDING_CHANGED,
+                        actor=actor,
+                        source=source,
+                        dedupe_key=f"{dedupe_key}:agent_binding",
+                        reason=reason,
+                        payload={"fields": sorted(binding)},
+                        happened_at=now,
+                    )
+                )
             after = self.repository.get_matter_by_id(conn, matter["id"])
             before_patch = {
                 field: matter.get(field)
@@ -506,9 +544,9 @@ class MatterService:
                     "attention_reason",
                 }
             }
-            return self._mutation(
+            result = self._mutation(
                 after,
-                [event_id],
+                event_ids,
                 undo=self._undo_descriptor(
                     "matter_update",
                     "撤销事项更新",
@@ -517,6 +555,8 @@ class MatterService:
                     event_id,
                 ),
             )
+            result["warnings"].extend(binding_warnings)
+            return result
 
     def archive(self, public_id: str, **mutation: Any) -> dict[str, Any]:
         return self._timestamp_transition(
@@ -556,7 +596,7 @@ class MatterService:
                 raise MatterError(
                     "E_INVALID_STATE", "matter must be in Trash before permanent delete"
                 )
-            if not self.repository.cas_update_matter(
+            if not self._cas_update(
                 conn, matter["id"], expected_version, {"updated_at": self.clock_ms()}
             ):
                 raise self._version_conflict()
@@ -588,7 +628,7 @@ class MatterService:
             if replay:
                 return replay
             matter = self._require_matter(conn, public_id)
-            if not self.repository.cas_update_matter(
+            if not self._cas_update(
                 conn,
                 matter["id"],
                 expected_version,
@@ -719,7 +759,7 @@ class MatterService:
             changes.update(normalized)
             changes["kind"] = kind
             changes["updated_at"] = now
-            if not self.repository.cas_update_matter(
+            if not self._cas_update(
                 conn,
                 matter["id"],
                 expected_version,
@@ -829,7 +869,7 @@ class MatterService:
             changes[f"{by_prefix}_by_id"] = actor.actor_id if set_value else None
             if column == "deleted_at":
                 changes["purge_after"] = now + TRASH_RETENTION_MS if set_value else None
-            if not self.repository.cas_update_matter(
+            if not self._cas_update(
                 conn, matter["id"], expected_version, changes
             ):
                 raise self._version_conflict()
@@ -911,7 +951,7 @@ class MatterService:
                 result = self._mutation(matter, [], resources=results)
                 result["warnings"] = list(dict.fromkeys(warnings))
                 return result
-            if not self.repository.cas_update_matter(
+            if not self._cas_update(
                 conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}
             ):
                 raise self._version_conflict()
@@ -1015,7 +1055,7 @@ class MatterService:
                     event_kind = "resource_subscription_resumed"
                 else:
                     event_kind = "resource_updated"
-            if not self.repository.cas_update_matter(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+            if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
                 raise self._version_conflict()
             event_id = self._append_event(
                 conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
@@ -1072,7 +1112,7 @@ class MatterService:
             link = self.repository.get_resource_link(conn, matter["id"], resource_id)
             if not link or (deleted and link["deleted_at"] is not None) or (not deleted and link["deleted_at"] is None):
                 raise MatterError("E_CHILD_NOT_FOUND", f"resource link {resource_id} not found")
-            if not self.repository.cas_update_matter(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+            if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
                 raise self._version_conflict()
             conn.execute("UPDATE matter_resource SET deleted_at=?, updated_at=? WHERE id=?", (now if deleted else None, now, link["id"]))
             event_id = self._append_event(
@@ -1178,7 +1218,7 @@ class MatterService:
                         "WHERE matter_id=? AND waiting_on_stakeholder_id=?",
                         (now, matter["id"], stakeholder_id),
                     )
-            if not self.repository.cas_update_matter(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+            if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
                 raise self._version_conflict()
             self.refresh_search_projection(conn, matter["id"])
             event_id = self._append_event(
@@ -1268,7 +1308,7 @@ class MatterService:
                 result = self._mutation(source_matter, [], relation=dict(existing))
                 result["warnings"] = ["already_linked"]
                 return result
-            if not self.repository.cas_update_matter(conn, source_matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+            if not self._cas_update(conn, source_matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
                 raise self._version_conflict()
             cursor = conn.execute(
                 "INSERT INTO matter_relation(source_matter_id,target_matter_id,relation_type,confidence,provenance_json,confirmed_at,created_at,updated_at) "
@@ -1322,7 +1362,7 @@ class MatterService:
             if patch.get("confirmed"):
                 changes["confirmed_at"] = relation["confirmed_at"] or now
             changes["updated_at"] = now
-            if not self.repository.cas_update_matter(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+            if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
                 raise self._version_conflict()
             conn.execute(f"UPDATE matter_relation SET {', '.join(f'{key}=?' for key in changes)} WHERE id=?", (*changes.values(), relation_id))
             event_id = self._append_event(conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source, dedupe_key=dedupe_key, reason=reason, payload={"relation_id": relation_id}, happened_at=now, reverses_event_id=reverses_event_id)
@@ -1358,6 +1398,574 @@ class MatterService:
     def lookup_resource_links(self, provider: str, keys: list[str]) -> dict[str, list[dict[str, Any]]]:
         with self.repository.connect() as conn:
             return self.repository.lookup_resource_links(conn, provider, keys)
+
+    # ── P4: Updates 评审面（D9）────────────────────────────────────────────────
+
+    def list_updates_page(
+        self,
+        public_id: str,
+        *,
+        review_status: str | None = None,
+        stale: bool | None = None,
+        cursor: int | None = None,
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        if review_status is not None:
+            self._require_value(
+                "review_status", review_status, MATTER_UPDATE_REVIEW_STATUSES
+            )
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            clauses = ["matter_id=?"]
+            params: list[Any] = [matter["id"]]
+            if review_status is not None:
+                clauses.append("review_status=?")
+                params.append(review_status)
+            if stale is not None:
+                clauses.append("is_stale=?")
+                params.append(1 if stale else 0)
+            if cursor is not None:
+                clauses.append("id < ?")
+                params.append(cursor)
+            params.append(limit + 1)
+            rows = conn.execute(
+                f"SELECT * FROM matter_update WHERE {' AND '.join(clauses)} "
+                "ORDER BY id DESC LIMIT ?",
+                params,
+            ).fetchall()
+            next_cursor = int(rows[limit - 1]["id"]) if len(rows) > limit else None
+            items = []
+            for row in rows[:limit]:
+                full = self.repository._update_row(row)
+                items.append(
+                    {
+                        "id": full["id"],
+                        "review_status": full["review_status"],
+                        "summary": full["summary"],
+                        "created_at": full["created_at"],
+                        "change_count": len(full["changes"] or []),
+                        "is_stale": bool(full["is_stale"]),
+                        "agent_run_id": full["agent_run_id"],
+                        "confidence": full["confidence"],
+                        "anchored_matter_version": full["anchored_matter_version"],
+                        "created_by_kind": full["created_by_kind"],
+                    }
+                )
+            return {"items": items, "next_cursor": next_cursor}
+
+    def get_update_detail(self, public_id: str, update_id: int) -> dict[str, Any]:
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            return {"update": self._require_update(conn, matter, update_id)}
+
+    def accept_update(
+        self,
+        public_id: str,
+        update_id: int,
+        *,
+        selected_change_ids: list[str] | None = None,
+        edited_changes: list[Mapping[str, Any]] | None = None,
+        edited_summary: str | None = None,
+        expected_version: int,
+        idempotency_key: str,
+        source: str,
+        actor: Actor = Actor(),
+        reason: str | None = None,
+        reverses_event_id: int | None = None,
+    ) -> dict[str, Any]:
+        """接受提案（D9 单事务十步；version 恰 bump 一次；其余 pending 转 superseded）。"""
+        now = self.clock_ms()
+        dedupe_key = self._dedupe(idempotency_key)
+        with self.repository.transaction() as conn:
+            replay = self._replay(conn, dedupe_key, UPDATE_ACCEPTED)
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            update = self._require_update(conn, matter, update_id)
+            if update["review_status"] != "pending":
+                raise MatterError(
+                    "E_UPDATE_ALREADY_REVIEWED",
+                    f"update is already {update['review_status']}",
+                )
+            if bool(update["is_stale"]) or int(update["anchored_matter_version"]) != int(
+                matter["version"]
+            ):
+                raise MatterError(
+                    "E_UPDATE_STALE",
+                    "proposal anchor is stale",
+                    hint="Re-run the follow-up agent to get a fresh proposal.",
+                )
+            if int(matter["version"]) != int(expected_version):
+                raise self._version_conflict()
+            changes = [c for c in (update["changes"] or []) if isinstance(c, Mapping)]
+            by_id = {str(c.get("id")): dict(c) for c in changes}
+            if selected_change_ids is None:
+                selected = [str(c.get("id")) for c in changes]
+            else:
+                selected = [str(value) for value in selected_change_ids]
+                unknown = sorted(set(selected) - set(by_id))
+                if unknown:
+                    raise MatterError(
+                        "E_INVALID_ARG", f"unknown change ids: {unknown}"
+                    )
+            selected_set = set(selected)
+            edits: dict[str, dict[str, Any]] = {}
+            for entry in edited_changes or []:
+                edit = dict(entry)
+                edit_id = str(edit.get("change_id") or "")
+                if edit_id not in by_id:
+                    raise MatterError(
+                        "E_INVALID_ARG",
+                        f"edited change references unknown id: {edit_id}",
+                    )
+                if edit_id not in selected_set:
+                    raise MatterError(
+                        "E_INVALID_ARG", f"edited change {edit_id} is not selected"
+                    )
+                edits[edit_id] = edit
+            direct_changes: dict[str, Any] = {
+                "updated_at": now,
+                "last_activity_at": now,
+            }
+            applied_events: list[tuple[str, dict[str, Any], int | None, int | None]] = []
+            warnings: list[str] = []
+            for change_id in selected:
+                change = dict(by_id[change_id])
+                edit = edits.get(change_id)
+                if edit is not None and "after" in edit:
+                    change["after"] = edit["after"]
+                if edit is not None and edit.get("text") is not None:
+                    change["text"] = edit["text"]
+                self._apply_accepted_change(
+                    conn,
+                    matter,
+                    update_id,
+                    change_id,
+                    change,
+                    direct_changes=direct_changes,
+                    applied_events=applied_events,
+                    warnings=warnings,
+                    actor=actor,
+                    now=now,
+                )
+            resolved_summary = (
+                edited_summary if edited_summary is not None else update.get("summary")
+            )
+            reviewed_result = {
+                "edited_summary": edited_summary,
+                "edited_changes": [edits[cid] for cid in selected if cid in edits],
+                "accepted_change_ids": selected,
+            }
+            conn.execute(
+                "UPDATE matter_update SET review_status='accepted', "
+                "reviewed_result_json=?, accepted_change_ids_json=?, reviewed_at=?, "
+                "reviewed_by_kind=?, reviewed_by_id=?, accepted_at=?, review_reason=? "
+                "WHERE id=?",
+                (
+                    self._dump(reviewed_result),
+                    self._dump(selected),
+                    now,
+                    actor.kind,
+                    actor.actor_id,
+                    now,
+                    reason,
+                    update_id,
+                ),
+            )
+            direct_changes["latest_accepted_update_id"] = update_id
+            if resolved_summary is not None:
+                direct_changes.update(
+                    {
+                        "current_summary": resolved_summary,
+                        "summary_at": now,
+                        "summary_by_kind": actor.kind,
+                        "summary_by_id": actor.actor_id,
+                    }
+                )
+            if not self._cas_update(conn, matter["id"], expected_version, direct_changes):
+                raise self._version_conflict()
+            self.refresh_search_projection(conn, matter["id"])
+            event_ids = [
+                self._append_event(
+                    conn,
+                    matter_id=matter["id"],
+                    kind=UPDATE_ACCEPTED,
+                    actor=actor,
+                    source=source,
+                    dedupe_key=dedupe_key,
+                    reason=reason,
+                    update_id=update_id,
+                    payload={
+                        "update_id": update_id,
+                        "accepted_change_ids": selected,
+                    },
+                    happened_at=now,
+                    reverses_event_id=reverses_event_id,
+                )
+            ]
+            for index, (kind, payload, item_id, resource_id) in enumerate(applied_events):
+                event_ids.append(
+                    self._append_event(
+                        conn,
+                        matter_id=matter["id"],
+                        kind=kind,
+                        actor=actor,
+                        source=source,
+                        dedupe_key=f"{dedupe_key}:chg:{index}",
+                        reason=None,
+                        item_id=item_id,
+                        resource_id=resource_id,
+                        update_id=update_id,
+                        payload=payload,
+                        happened_at=now,
+                    )
+                )
+            # superseded 自动化（v1 简化）：同 matter 其余 pending 全部转 superseded。
+            others = conn.execute(
+                "SELECT id FROM matter_update WHERE matter_id=? "
+                "AND review_status='pending' AND id != ?",
+                (matter["id"], update_id),
+            ).fetchall()
+            for row in others:
+                conn.execute(
+                    "UPDATE matter_update SET review_status='superseded', "
+                    "reviewed_at=?, reviewed_by_kind=?, reviewed_by_id=? WHERE id=?",
+                    (now, actor.kind, actor.actor_id, row["id"]),
+                )
+                event_ids.append(
+                    self._append_event(
+                        conn,
+                        matter_id=matter["id"],
+                        kind=UPDATE_SUPERSEDED,
+                        actor=actor,
+                        source=source,
+                        dedupe_key=f"{dedupe_key}:superseded:{row['id']}",
+                        reason=None,
+                        update_id=int(row["id"]),
+                        payload={
+                            "update_id": int(row["id"]),
+                            "superseded_by": update_id,
+                        },
+                        happened_at=now,
+                    )
+                )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            result = self._mutation(
+                after, event_ids, update=self._get_update_row(conn, update_id)
+            )
+            result["warnings"].extend(warnings)
+            return result
+
+    def reject_update(
+        self,
+        public_id: str,
+        update_id: int,
+        *,
+        reason: str,
+        expected_version: int,
+        idempotency_key: str,
+        source: str,
+        actor: Actor = Actor(),
+        reverses_event_id: int | None = None,
+    ) -> dict[str, Any]:
+        """拒绝提案：不应用、留档 reason、version 照 bump（REST #3）、无 undo。stale 行可拒。"""
+        reason_text = self._optional_text(reason)
+        if not reason_text:
+            raise MatterError("E_INVALID_ARG", "reject reason is required")
+        now = self.clock_ms()
+        dedupe_key = self._dedupe(idempotency_key)
+        with self.repository.transaction() as conn:
+            replay = self._replay(conn, dedupe_key, UPDATE_REJECTED)
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            update = self._require_update(conn, matter, update_id)
+            if update["review_status"] != "pending":
+                raise MatterError(
+                    "E_UPDATE_ALREADY_REVIEWED",
+                    f"update is already {update['review_status']}",
+                )
+            if int(matter["version"]) != int(expected_version):
+                raise self._version_conflict()
+            conn.execute(
+                "UPDATE matter_update SET review_status='rejected', reviewed_at=?, "
+                "reviewed_by_kind=?, reviewed_by_id=?, rejected_at=?, review_reason=? "
+                "WHERE id=?",
+                (now, actor.kind, actor.actor_id, now, reason_text, update_id),
+            )
+            if not self._cas_update(
+                conn, matter["id"], expected_version, {"updated_at": now}
+            ):
+                raise self._version_conflict()
+            event_id = self._append_event(
+                conn,
+                matter_id=matter["id"],
+                kind=UPDATE_REJECTED,
+                actor=actor,
+                source=source,
+                dedupe_key=dedupe_key,
+                reason=reason_text,
+                update_id=update_id,
+                payload={"update_id": update_id},
+                happened_at=now,
+                reverses_event_id=reverses_event_id,
+            )
+            after = self.repository.get_matter_by_id(conn, matter["id"])
+            return self._mutation(
+                after, [event_id], update=self._get_update_row(conn, update_id)
+            )
+
+    def _apply_accepted_change(
+        self,
+        conn: sqlite3.Connection,
+        matter: Mapping[str, Any],
+        update_id: int,
+        change_id: str,
+        change: Mapping[str, Any],
+        *,
+        direct_changes: dict[str, Any],
+        applied_events: list[tuple[str, dict[str, Any], int | None, int | None]],
+        warnings: list[str],
+        actor: Actor,
+        now: int,
+    ) -> None:
+        """逐 change 应用（D9 步骤 4）：field→matter 列；action→item；resource→link
+        确认；fact/inference 只留档不落结构化状态。"""
+        kind = str(change.get("kind") or "")
+        if kind in ("fact", "inference"):
+            return
+        if kind == "field":
+            target = change.get("target")
+            field = target.get("field") if isinstance(target, Mapping) else None
+            value = change.get("after")
+            if field == "status":
+                self._require_value("status", str(value), MATTER_STATUSES)
+                direct_changes["status"] = str(value)
+            elif field == "health":
+                self._require_value("health", str(value), MATTER_HEALTH_VALUES)
+                direct_changes["health"] = str(value)
+            elif field == "priority":
+                self._require_value("priority", str(value), MATTER_PRIORITIES)
+                direct_changes["priority"] = str(value)
+            elif field == "due_at":
+                if value is not None and not isinstance(value, int):
+                    raise MatterError(
+                        "E_INVALID_ARG", f"change {change_id}: due_at must be int|null"
+                    )
+                direct_changes["due_at"] = value
+            elif field == "waiting_context":
+                direct_changes["waiting_context_json"] = (
+                    self._dump(value) if value is not None else None
+                )
+            else:
+                raise MatterError(
+                    "E_INVALID_ARG", f"change {change_id}: field not allowed: {field}"
+                )
+            applied_events.append(
+                ("matter_updated", {"fields": [field], "via_update_id": update_id}, None, None)
+            )
+            return
+        if kind == "action":
+            target = change.get("target")
+            if target is None:
+                title = self._optional_text(change.get("text") or change.get("after"))
+                if not title:
+                    raise MatterError(
+                        "E_INVALID_ARG", f"action change {change_id} missing title text"
+                    )
+                item_id = self.repository.insert_item(
+                    conn,
+                    {
+                        "matter_id": matter["id"],
+                        "kind": MatterItemKind.ACTION.value,
+                        "title": title,
+                        "description": self._optional_text(change.get("reason")),
+                        "position": 0,
+                        **self._normalize_item(
+                            MatterItemKind.ACTION.value, {"status": "open"}
+                        ),
+                        "created_by_kind": actor.kind,
+                        "created_by_id": actor.actor_id,
+                        "created_at": now,
+                        "updated_at": now,
+                    },
+                )
+                applied_events.append(
+                    (
+                        "item_created",
+                        {"kind": "action", "via_update_id": update_id},
+                        item_id,
+                        None,
+                    )
+                )
+                return
+            item_id = target.get("id") if isinstance(target, Mapping) else None
+            item = (
+                self.repository.get_item(conn, matter["id"], int(item_id))
+                if isinstance(item_id, int)
+                else None
+            )
+            if item is None or item.get("deleted_at") is not None:
+                raise MatterError(
+                    "E_INVALID_STATE",
+                    f"action change {change_id}: target item {item_id} not found",
+                )
+            after = change.get("after")
+            item_patch: dict[str, Any] = {}
+            if isinstance(after, Mapping):
+                allowed_keys = {
+                    "title", "description", "status", "priority", "due_at",
+                    "completed_at",
+                }
+                item_patch = {
+                    key: after[key] for key in after if key in allowed_keys
+                }
+            elif isinstance(after, str):
+                item_patch = {"status": after}
+            elif after is not None:
+                raise MatterError(
+                    "E_INVALID_ARG",
+                    f"action change {change_id}: unsupported after shape",
+                )
+            if change.get("text") is not None and "title" not in item_patch:
+                item_patch["title"] = str(change["text"])
+            if "status" in item_patch:
+                self._require_value(
+                    "status", str(item_patch["status"]), MATTER_ITEM_STATUSES
+                )
+            if "priority" in item_patch and item_patch["priority"] is not None:
+                self._require_value(
+                    "priority", str(item_patch["priority"]), MATTER_PRIORITIES
+                )
+            if not item_patch:
+                warnings.append(f"action_change_noop:{change_id}")
+                return
+            item_patch["updated_at"] = now
+            self.repository.update_item(conn, matter["id"], int(item_id), item_patch)
+            applied_events.append(
+                (
+                    "item_updated",
+                    {
+                        "fields": sorted(k for k in item_patch if k != "updated_at"),
+                        "via_update_id": update_id,
+                    },
+                    int(item_id),
+                    None,
+                )
+            )
+            return
+        if kind == "resource":
+            target = change.get("target")
+            resource_id = target.get("id") if isinstance(target, Mapping) else None
+            link = (
+                self.repository.get_resource_link(
+                    conn, matter["id"], int(resource_id), live_only=True
+                )
+                if isinstance(resource_id, int)
+                else None
+            )
+            if link is None:
+                warnings.append(f"resource_change_skipped:{change_id}")
+                return
+            conn.execute(
+                "UPDATE matter_resource SET confirmed_at=COALESCE(confirmed_at, ?), "
+                "updated_at=? WHERE id=?",
+                (now, now, link["id"]),
+            )
+            applied_events.append(
+                (
+                    "resource_updated",
+                    {"via_update_id": update_id, "confirmed": True},
+                    None,
+                    int(resource_id),
+                )
+            )
+            return
+        raise MatterError(
+            "E_INVALID_ARG", f"change {change_id}: unsupported kind {kind}"
+        )
+
+    def _require_update(
+        self, conn: sqlite3.Connection, matter: Mapping[str, Any], update_id: int
+    ) -> dict[str, Any]:
+        row = conn.execute(
+            "SELECT * FROM matter_update WHERE id=? AND matter_id=?",
+            (update_id, matter["id"]),
+        ).fetchone()
+        if row is None:
+            raise MatterError("E_CHILD_NOT_FOUND", f"update {update_id} not found")
+        return self.repository._update_row(row)
+
+    def _get_update_row(
+        self, conn: sqlite3.Connection, update_id: int
+    ) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT * FROM matter_update WHERE id=?", (update_id,)
+        ).fetchone()
+        return self.repository._update_row(row) if row else None
+
+    def _normalize_binding_patch(
+        self, conn: sqlite3.Connection, binding: Mapping[str, Any]
+    ) -> tuple[dict[str, Any], list[str]]:
+        """绑定三键归一（D2）：instructions ≤4000；profile 悬空只 warning 不硬拒。"""
+        changes: dict[str, Any] = {}
+        warnings: list[str] = []
+        if "matter_instructions" in binding:
+            value = binding["matter_instructions"]
+            if value is not None:
+                value = str(value)
+                if len(value) > MATTER_INSTRUCTIONS_MAX_CHARS:
+                    raise MatterError(
+                        "E_INVALID_ARG",
+                        f"matter_instructions exceeds {MATTER_INSTRUCTIONS_MAX_CHARS} characters",
+                    )
+                value = value.strip() or None
+            changes["matter_instructions"] = value
+        if "agent_enabled" in binding:
+            changes["agent_enabled"] = 1 if binding["agent_enabled"] else 0
+        if "agent_profile_id" in binding:
+            profile_id = binding["agent_profile_id"]
+            if profile_id is not None:
+                profile_id = str(profile_id)
+                try:
+                    row = conn.execute(
+                        "SELECT type FROM report_agent WHERE id=?",
+                        (profile_id,),
+                    ).fetchone()
+                except sqlite3.OperationalError:
+                    row = None  # report_agent 表未建（纯 SyncStore 环境）→ 按悬空处理
+                if row is None or (row["type"] or "") != "custom":
+                    warnings.append("agent_profile_dangling")
+            changes["agent_profile_id"] = profile_id
+        return changes, warnings
+
+    def _cas_update(
+        self,
+        conn: sqlite3.Connection,
+        matter_id: int,
+        expected_version: int,
+        changes: Mapping[str, Any],
+    ) -> bool:
+        """cas_update_matter 的**唯一** service 出口：bump 成功即触发 stale 钩子（D9）。
+
+        所有 bump version 的写路径都必须走这里 —— pending 提案的锚随之失效
+        （is_stale 物化，幂等 UPDATE），accept 对 stale 行硬拒 E_UPDATE_STALE。
+        """
+        ok = self.repository.cas_update_matter(conn, matter_id, expected_version, changes)
+        if ok:
+            self._mark_stale_proposals(conn, matter_id, int(expected_version) + 1)
+        return ok
+
+    def _mark_stale_proposals(
+        self, conn: sqlite3.Connection, matter_id: int, new_version: int
+    ) -> None:
+        conn.execute(
+            "UPDATE matter_update SET is_stale=1, stale_at=?, "
+            "stale_reason='matter_version_advanced' "
+            "WHERE matter_id=? AND review_status='pending' AND is_stale=0 "
+            "AND anchored_matter_version < ?",
+            (self.clock_ms(), matter_id, new_version),
+        )
 
     def _resolve_source_resource(self, conn: sqlite3.Connection, source_spec: Any) -> dict[str, Any]:
         if not isinstance(source_spec, Mapping) or source_spec.get("provider") != EMAIL_PROVIDER or source_spec.get("kind") != "email":

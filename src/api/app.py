@@ -199,6 +199,8 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_RUN_ACTIVE": 409,
     "E_RESOURCE_IDENTITY_CONFLICT": 409,
     "E_DEPENDENCY_EXISTS": 409,
+    "E_PROPOSAL_EXISTS": 409,  # Matters P4: 每 run 至多一个提案
+    "E_MATTER_SCOPE": 403,  # Matters P4: email 读越出 matter 关联域（headless 守卫）
 }
 
 
@@ -406,6 +408,7 @@ from src.api.routers import (  # noqa: E402
     kos,
     llm,
     llm_providers,
+    matter_agent,
     matters,
     reports,
     settings,
@@ -431,6 +434,10 @@ app.include_router(email_views.router)
 app.include_router(jobs.router)
 app.include_router(reports.router)
 app.include_router(matters.router)
+# Matters P4 (D6) — matter run 提案内部端点 /api/matters/{id}/runs/{rid}/proposal。
+# verify_local_token（不接受 CF JWT，Remote Web 不可调）+ matters/matter_agent 双 flag 门；
+# 唯一调用方 = embedded gateway 的 matter_update_propose 工具。
+app.include_router(matter_agent.router)
 app.include_router(chat.router)
 app.include_router(settings.router)
 app.include_router(skills.router)

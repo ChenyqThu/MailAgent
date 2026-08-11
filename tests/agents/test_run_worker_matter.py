@@ -1,0 +1,269 @@
+"""AgentRunWorker 的 matter_followup 分派（Matters P4, D3/D4）。
+
+覆盖：flag off fail-closed / noop 短路不 poke / 终态四值映射（ok/noop/warn/fail）
+/ cancel 收敛 canceled / 孤儿收敛。gateway 全靠 mock httpx（同 test_run_worker.py）。
+"""
+
+from __future__ import annotations
+
+import asyncio
+
+import pytest
+
+import src.agents.run_worker as run_worker
+from src.agents.run_worker import AgentRunWorker
+from src.mail.sync_store import SyncStore
+from src.matters.repository import MatterRepository
+from src.matters.run_service import MatterRunService
+from src.sync.async_jobs import AsyncJobRepository
+
+
+@pytest.fixture
+def env(tmp_path, monkeypatch):
+    db = tmp_path / "matter-worker.db"
+    SyncStore(str(db))
+    repo = AsyncJobRepository(str(db))
+    service = MatterRunService(MatterRepository(db))
+    monkeypatch.setattr(run_worker, "_matter_agent_flags_on", lambda: True)
+    created = service.create_matter(
+        {"title": "Worker Matter"}, idempotency_key="create", source="desktop_ui"
+    )
+    pid = created["matter"]["public_id"]
+    linked = service.add_resource(
+        pid,
+        {"provider": "mailagent", "external_key": "doc:d1", "kind": "doc"},
+        expected_version=created["version"], idempotency_key="link",
+        source="desktop_ui",
+    )
+    return repo, service, pid, linked["version"]
+
+
+def _enqueue_and_claim(service, repo, pid, version, key="r1"):
+    run = service.enqueue_run(
+        pid, expected_version=version, idempotency_key=key, source="desktop_ui"
+    )["run"]
+    job = repo.claim_next(types=repo.AGENT_JOB_TYPES)
+    assert job is not None and job.job_id == run["async_job_id"]
+    return run, job
+
+
+class _FakeResp:
+    def __init__(self, status_code, body):
+        self.status_code = status_code
+        self._body = body
+
+    def json(self):
+        return self._body
+
+
+def _patch_client(monkeypatch, *, resp=None, on_poke=None):
+    calls = []
+
+    class _FakeClient:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            calls.append({"url": url, "json": json})
+            if on_poke is not None and url.endswith("/api/ai/agent-run"):
+                on_poke()
+            return resp if resp is not None else _FakeResp(200, {"ok": True})
+
+    monkeypatch.setattr(run_worker.httpx, "AsyncClient", _FakeClient)
+    return calls
+
+
+def _pokes(calls):
+    return [c for c in calls if c["url"].endswith("/api/ai/agent-run")]
+
+
+def _run(coro):
+    return asyncio.run(coro)
+
+
+def test_flag_off_fails_closed(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+    monkeypatch.setattr(run_worker, "_matter_agent_flags_on", lambda: False)
+    calls = _patch_client(monkeypatch)
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    assert repo.get(job.job_id).status == "failed"
+    assert repo.get(job.job_id).last_error == "E_DISABLED"
+    row = service.get_run(run["id"])
+    assert row["status"] == "fail" and row["completed_at"] is not None
+    assert _pokes(calls) == []  # off → 连 gateway 都不碰
+
+
+def test_noop_short_circuit_does_not_poke_gateway(env, monkeypatch):
+    repo, service, pid, version = env
+    # 第一轮完成并落 output_watermark = 当前指纹 → 第二轮无变化
+    first, first_job = _enqueue_and_claim(service, repo, pid, version)
+    assert service.mark_started(first["id"])
+    current = service.current_watermark(first["matter_id"])
+    service.finish_run(first["id"], "ok", output_watermark=current)
+    repo.mark_terminal(first_job.job_id, status="succeeded")
+
+    second, job = _enqueue_and_claim(service, repo, pid, version, key="r2")
+    calls = _patch_client(monkeypatch)
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    job_row = repo.get(job.job_id)
+    assert job_row.status == "succeeded"
+    assert job_row.result == {"outcome": "noop"}
+    row = service.get_run(second["id"])
+    assert row["status"] == "noop"
+    assert row["started_at"] is None  # noop 短路：从未 started
+    assert row["output_watermark_json"] is not None
+    assert _pokes(calls) == []  # 🔴 不 poke gateway、零 LLM token
+
+
+def test_completed_with_proposal_maps_ok(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+
+    def propose():
+        service.propose_update(pid, run["id"], {"summary": "有发现", "changes": []})
+
+    calls = _patch_client(
+        monkeypatch,
+        resp=_FakeResp(200, {"ok": True, "outcome": "completed", "sessionId": 42, "steps": 5,
+                             "usage": {"input": 10}}),
+        on_poke=propose,
+    )
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    job_row = repo.get(job.job_id)
+    assert job_row.status == "succeeded"
+    assert job_row.result["matterRunStatus"] == "ok"
+    assert job_row.result["updateId"] is not None
+    row = service.get_run(run["id"])
+    assert row["status"] == "ok"
+    assert row["chat_session_id"] == 42
+    assert row["output_watermark_json"] is not None
+    assert len(_pokes(calls)) == 1
+
+
+def test_completed_without_proposal_maps_noop(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+    _patch_client(monkeypatch, resp=_FakeResp(200, {"ok": True, "outcome": "completed"}))
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    assert repo.get(job.job_id).status == "succeeded"
+    assert service.get_run(run["id"])["status"] == "noop"
+
+
+def test_completed_with_dropped_changes_maps_warn(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+
+    def propose():
+        result = service.propose_update(
+            pid, run["id"],
+            {
+                "summary": "有发现但有幻觉",
+                "changes": [
+                    {"id": "chg_01", "kind": "fact", "text": "无源", "sources": []},
+                ],
+            },
+        )
+        assert result["dropped"]
+
+    _patch_client(
+        monkeypatch,
+        resp=_FakeResp(200, {"ok": True, "outcome": "completed"}),
+        on_poke=propose,
+    )
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    assert repo.get(job.job_id).result["matterRunStatus"] == "warn"
+    assert service.get_run(run["id"])["status"] == "warn"
+
+
+def test_gateway_error_maps_fail(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+    _patch_client(
+        monkeypatch,
+        resp=_FakeResp(200, {"ok": False, "outcome": "error", "error": "E_BUDGET_TIME"}),
+    )
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    job_row = repo.get(job.job_id)
+    assert job_row.status == "failed"
+    assert job_row.last_error == "E_BUDGET_TIME"
+    row = service.get_run(run["id"])
+    assert row["status"] == "fail"
+    assert "E_BUDGET_TIME" in (row["error_json"] or "")
+
+
+def test_cancel_requested_converges_canceled(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+
+    def request_cancel():
+        with service.repository.transaction() as conn:
+            conn.execute(
+                "UPDATE matter_run SET cancel_requested_at=1 WHERE id=?", (run["id"],)
+            )
+
+    _patch_client(
+        monkeypatch,
+        resp=_FakeResp(200, {"ok": False, "outcome": "error", "error": "E_RUN_STOPPED"}),
+        on_poke=request_cancel,
+    )
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    assert repo.get(job.job_id).status == "aborted"
+    row = service.get_run(run["id"])
+    assert row["canceled_at"] is not None
+    assert row["status"] is None  # D3：canceled 时 status 保持 NULL
+    assert row["completed_at"] is None
+
+
+def test_second_active_run_cas_fails_with_run_active(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+    # 另一条 run 已 started（直接插行绕过 enqueue 单活跃检查）→ CAS 必撞 partial unique
+    with service.repository.transaction() as conn:
+        conn.execute(
+            "INSERT INTO matter_run(matter_id,trigger_kind,idempotency_key,"
+            "queued_at,started_at,created_at) VALUES (?,?,?,?,?,?)",
+            (run["matter_id"], "manual", "other-active", 1, 2, 1),
+        )
+    calls = _patch_client(monkeypatch)
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    assert repo.get(job.job_id).last_error == "E_RUN_ACTIVE"
+    assert service.get_run(run["id"])["status"] == "fail"
+    assert _pokes(calls) == []
+
+
+def test_orphan_sweep_converges_failed_job_runs(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+    # 模拟 worker 崩溃后重启：job 被 recover_orphaned_agents 标 failed，run 悬在 queued
+    repo.mark_terminal(job.job_id, status="failed", last_error="E_ORPHANED")
+    _patch_client(monkeypatch)
+    worker = AgentRunWorker(repo=repo)
+    worker.stop()  # run() 只做启动扫尾即退出
+    _run(worker.run())
+
+    row = service.get_run(run["id"])
+    assert row["status"] == "fail"
+    assert "E_ORPHANED" in (row["error_json"] or "")

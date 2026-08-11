@@ -175,12 +175,39 @@ def _custom_agents_enabled() -> bool:
         return False
 
 
+def _matter_agent_enabled() -> bool:
+    """Matters P4 双 flag（matters AND matter_agent）。异常 → fail-closed False。"""
+    from src.api.deps import get_settings
+
+    try:
+        settings = get_settings()
+        return bool(settings.matters_enabled) and bool(
+            getattr(settings, "matter_agent_enabled", False)
+        )
+    except Exception:  # noqa: BLE001 — 配置读失败 → 保守当 feature off
+        return False
+
+
 def _require_flag() -> None:
     """flag off → 404（feature 不存在；对齐 aguiMirror off 形状）。挂在 verify_local_token 之后。"""
     if not _custom_agents_enabled():
         raise APIError(
             "E_NOT_FOUND",
             "custom agents feature is disabled",
+            http_status=404,
+            source="agent-runs",
+        )
+
+
+def _require_run_pull_flag() -> None:
+    """spec pull 面的放宽版 flag 门（Matters P4）：custom agents **或** matter agent 任一
+    开着即放行 —— matter_followup job 的 spec 也走本端点，custom flag 单独关掉不该把
+    matter run 打成 404（matter 分支自身还有 assemble_matter_spec 的双 flag 409 防绕）。
+    两族全关 → 维持 404。"""
+    if not (_custom_agents_enabled() or _matter_agent_enabled()):
+        raise APIError(
+            "E_NOT_FOUND",
+            "agent runs feature is disabled",
             http_status=404,
             source="agent-runs",
         )
@@ -277,7 +304,21 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
     坏配置 fail-closed：agent 不存在 / 非 custom / disabled / 坏 trigger_json → 409
     E_SPEC_AGENT_INVALID（gateway 收到即放弃该 run，worker 标 failed）。**例外**：
     trigger_json 为空（未配置触发条件）且本 job 是 manual 触发 → 放行（见下方注释）。
+
+    Matters P4：``matter_followup`` job 顶部分派到 ``src.matters.run_spec``（薄转发，
+    report/custom-agent 路径一字不动）；flag off / 坏语境 → 同码 409。
     """
+    if job.job_type == "matter_followup":
+        from src.matters.run_spec import assemble_matter_spec
+        from src.matters.service import MatterError
+
+        try:
+            return assemble_matter_spec(job)
+        except MatterError as exc:
+            raise APIError(
+                "E_SPEC_AGENT_INVALID", exc.message,
+                http_status=409, source="agent-runs",
+            ) from exc
     params = job.params or {}
     agent_id = params.get("agent_id")
     trigger_kind = params.get("trigger_kind")
@@ -466,7 +507,7 @@ async def get_run_spec(request: Request, job_id: int):
     （job 不存在或非 agent_run）· 409 E_SPEC_ALREADY_CLAIMED（重复 pull / 非 running）·
     409 E_SPEC_AGENT_INVALID（agent 坏配置）。双 pull 结构性只有一个 200。
     """
-    _require_flag()
+    _require_run_pull_flag()
     claim_token = request.headers.get("X-Claim-Token") or ""
     if not claim_token:
         raise APIError(

@@ -939,6 +939,16 @@ class Config(BaseSettings):
         validation_alias="MAILAGENT_MATTERS_ENABLED",
         description="Matters workspace feature flag. Restart required after changing it.",
     )
+    matter_agent_enabled: bool = Field(
+        default=False,
+        validation_alias="MAILAGENT_MATTER_AGENT_ENABLED",
+        description=(
+            "Matter 跟进 Agent (P4) feature flag：runs/propose 端点 + matter_followup "
+            "worker 分派 + spec assembler。语义 AND：MAILAGENT_MATTERS_ENABLED off 时"
+            "本 flag 无意义（matters router 全 403 在前）。off 时 updates/review REST "
+            "仍可用（清账既有 pending 提案）。Restart required after changing it."
+        ),
+    )
 
     # =========================================================================
     # Sprint 16 dual-backend (2026-05): 邮件后端 single-driver 显式切换

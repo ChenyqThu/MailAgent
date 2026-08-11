@@ -48,7 +48,10 @@ def test_v45_fresh_and_migrated_foreign_keys_are_equivalent_and_clean(tmp_path):
     assert foreign_keys(fresh, "matter_event") == foreign_keys(migrated, "matter_event")
     with sqlite3.connect(migrated) as conn:
         assert conn.execute("PRAGMA foreign_key_check").fetchall() == []
-        assert conn.execute("SELECT value FROM sync_state WHERE key='db_version'").fetchone()[0] == "45"
+        # v46+ 起版本前进到当前 DB_VERSION（本测试关注的是 v45 FK 重建路径本身）。
+        assert conn.execute(
+            "SELECT value FROM sync_state WHERE key='db_version'"
+        ).fetchone()[0] == str(SyncStore.DB_VERSION)
 
 
 def test_v45_migration_is_idempotent_and_backfills_search_projection(tmp_path):

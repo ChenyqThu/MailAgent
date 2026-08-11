@@ -69,8 +69,10 @@ class AsyncJobRepository:
     # 公共 REST 只收维护族, recover_orphaned 对两族分别处理 (维护族 requeue, agent 族失败不重放)。
     #   - MAINTENANCE: 与 src/sync/job_runners.py JOB_TYPES(=runner registry) 逐一致
     #     (test_job_types_match_runner_registry 断言); JobWorker 串行 claim + run_job 执行。
-    #   - AGENT: agent_run (S4 custom agent headless run)。run_job **不处理** (无 runner 分支);
-    #     执行走独立 AgentRunWorker (W2) → poke gateway。LLM run 非幂等 → 孤儿绝不 requeue。
+    #   - AGENT: agent_run (S4 custom agent headless run) + matter_followup (Matters P4
+    #     跟进 run, 同为 poke-gateway 的 LLM run —— 同族共享 claim/孤儿纪律)。run_job
+    #     **不处理** (无 runner 分支); 执行走独立 AgentRunWorker (W2, P4 起按 job_type
+    #     分派) → poke gateway。LLM run 非幂等 → 孤儿绝不 requeue。
     MAINTENANCE_JOB_TYPES = frozenset({
         "resync",
         "backfill_body",
@@ -78,6 +80,7 @@ class AsyncJobRepository:
     })
     AGENT_JOB_TYPES = frozenset({
         "agent_run",
+        "matter_followup",
     })
     # 并集 = enqueue 合法性总闸 (向后兼容: 既有 job_type 全在 MAINTENANCE 里)。
     VALID_JOB_TYPES = MAINTENANCE_JOB_TYPES | AGENT_JOB_TYPES

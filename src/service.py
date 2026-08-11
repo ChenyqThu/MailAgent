@@ -804,7 +804,6 @@ class EmailNotionSyncApp:
             self.agent_run_worker = None
             if config.custom_agents_enabled:
                 from src.agents import trigger_worker as agent_trigger_worker
-                from src.agents.run_worker import AgentRunWorker
                 from src.sync.async_jobs import AsyncJobRepository
                 agent_trigger_task = self._spawn_supervised(
                     lambda: agent_trigger_worker.tick_loop(
@@ -815,6 +814,18 @@ class EmailNotionSyncApp:
                     ),
                     "agent_trigger",
                 )
+                logger.info(
+                    "[agent] custom agent trigger worker enabled "
+                    "(MAILAGENT_CUSTOM_AGENTS_ENABLED)"
+                )
+            # AgentRunWorker（Matters P4 起）：custom agents **或** matter 跟进 Agent
+            # 任一开着都要起 —— matter_followup job 与 agent_run 同族同 worker（D3
+            # 「不起第二个 poll worker」）；trigger worker 仍只归 custom agents。
+            if config.custom_agents_enabled or (
+                config.matters_enabled and config.matter_agent_enabled
+            ):
+                from src.agents.run_worker import AgentRunWorker
+                from src.sync.async_jobs import AsyncJobRepository
                 self.agent_run_worker = AgentRunWorker(
                     repo=AsyncJobRepository(report_db_path),
                     store=report_store,
@@ -823,8 +834,9 @@ class EmailNotionSyncApp:
                     self.agent_run_worker.run, "agent_run"
                 )
                 logger.info(
-                    "[agent] custom agent trigger+run workers enabled "
-                    "(MAILAGENT_CUSTOM_AGENTS_ENABLED)"
+                    "[agent] agent run worker enabled "
+                    "(custom_agents=%s matter_agent=%s)"
+                    % (config.custom_agents_enabled, config.matter_agent_enabled)
                 )
 
             # 飞书对话 bot 长连接（08-01 阶段 2，flag MAILAGENT_IM_FEISHU，

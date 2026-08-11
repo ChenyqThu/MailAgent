@@ -55,21 +55,48 @@ class _GatewayPokeError(Exception):
         self.code = code
 
 
+def _matter_agent_flags_on() -> bool:
+    """matter_followup 执行前 pre-flight 热读（D11：matters AND matter_agent）。
+
+    读 pydantic 单例（重启生效语义与 flag 文档一致）；import/读失败 → fail-closed False
+    （job 收敛 failed E_DISABLED，不悬挂）。测试经 monkeypatch 本函数控制。
+    """
+    try:
+        from src.config import config
+
+        return bool(config.matters_enabled) and bool(
+            getattr(config, "matter_agent_enabled", False)
+        )
+    except Exception:  # noqa: BLE001 — 配置不可用 → 保守当 off
+        return False
+
+
 class AgentRunWorker:
-    """agent_run 串行执行主循环（认领 → poke gateway → 写终态）。"""
+    """agent_run / matter_followup 串行执行主循环（认领 → poke gateway → 写终态）。
+
+    P4 泛化：构造器不再硬依赖 ``ReportStore`` 类型 —— title/timeout 经注入的
+    resolver 取（缺省 resolver 复用 store 的既有逻辑，report 路径行为字节级不变）；
+    ``_execute`` 按 ``job.job_type`` 分派（``matter_followup`` → ``_execute_matter``，
+    含 flag pre-flight / 便宜比对 noop 短路 / started CAS / 终态四值映射）。
+    """
 
     def __init__(
         self,
         *,
         repo: "AsyncJobRepository",
-        store: "ReportStore",
+        store: Optional["ReportStore"] = None,
         poll_interval_sec: int = 5,
         now_fn: Callable[[], float] = time.time,
+        title_resolver: Optional[Callable[["AsyncJob"], Optional[str]]] = None,
+        timeout_resolver: Optional[Callable[["AsyncJob"], float]] = None,
     ):
         self.repo = repo
         self.store = store
         self.poll_interval_sec = poll_interval_sec
         self.now_fn = now_fn
+        self._title_resolver = title_resolver or self._default_title_resolver
+        self._timeout_resolver = timeout_resolver or self._default_timeout_resolver
+        self._matter_service_cache = None
         self._stop_event = asyncio.Event()
         self._stats = {"claimed": 0, "succeeded": 0, "failed": 0}
 
@@ -84,6 +111,7 @@ class AgentRunWorker:
     async def run(self) -> None:
         """主循环. 调用方 asyncio.create_task(worker.run())."""
         recovered = self.repo.recover_orphaned_agents()
+        self._recover_matter_runs()
         logger.info(
             f"[agent-run-worker] starting poll_interval={self.poll_interval_sec}s "
             f"(failed {recovered} orphaned agent_run job(s))"
@@ -109,6 +137,9 @@ class AgentRunWorker:
 
     async def _execute(self, job: "AsyncJob") -> None:
         """跑单个 agent_run：set token → poke → 映射终态 → 岛结果通知。**绝不悬挂 running**（全路径写终态）。"""
+        if job.job_type == "matter_followup":
+            await self._execute_matter(job)
+            return
         job_id = job.job_id
         status = "failed"
         result: Optional[dict] = None
@@ -134,6 +165,180 @@ class AgentRunWorker:
             await self._announce_terminal(job, status, result, last_error)
         except Exception as exc:  # noqa: BLE001 — 通知路径绝不影响 job 终态 / worker 存活
             logger.warning(f"[agent-run-worker] announce_terminal crash job_id={job_id}: {exc}")
+
+    # ── matter_followup 分派（Matters P4, D3/D4）────────────────────────────────
+
+    def _matter_service(self):
+        """惰性构造 ``MatterRunService``（repo 同 db 文件；连接 per-call 短命）。"""
+        if self._matter_service_cache is None:
+            from src.matters.repository import MatterRepository
+            from src.matters.run_service import MatterRunService
+
+            self._matter_service_cache = MatterRunService(
+                MatterRepository(str(self.repo.db_path))
+            )
+        return self._matter_service_cache
+
+    def _recover_matter_runs(self) -> None:
+        """启动扫尾：failed/aborted 的 matter_followup job 反查 matter_run 收敛 fail。"""
+        try:
+            self._matter_service().recover_orphaned_runs()
+        except Exception as exc:  # noqa: BLE001 — 扫尾失败不阻断 worker 启动
+            logger.warning(f"[agent-run-worker] matter orphan sweep failed: {exc}")
+
+    async def _execute_matter(self, job: "AsyncJob") -> None:
+        """matter_followup：flag pre-flight → 便宜比对（noop 短路不 poke）→ started CAS
+        → poke→map 链 → 终态四值映射（ok/noop/warn/fail + canceled）。
+
+        **绝不悬挂**：任何路径同时收敛 async job 终态 + matter_run 终态。
+        """
+        job_id = job.job_id
+        params = job.params or {}
+        run_id = params.get("matter_run_id")
+        try:
+            svc = self._matter_service()
+            if not isinstance(run_id, int):
+                self._mark(job_id, "failed", last_error="E_MATTER_RUN_MISSING")
+                return
+            if not _matter_agent_flags_on():
+                # flag off → fail-closed（terminal，不悬挂；D11）。
+                svc.finish_run(run_id, "fail", error={"code": "E_DISABLED"})
+                self._mark(job_id, "failed", last_error="E_DISABLED")
+                return
+            run = svc.get_run(run_id)
+            matter_id = params.get("matter_id")
+            if run is None or run.get("matter_id") != matter_id:
+                self._mark(job_id, "failed", last_error="E_MATTER_RUN_MISSING")
+                return
+            if run.get("canceled_at") is not None or run.get("completed_at") is not None:
+                # 已被取消/终态（cancel 竞态窗）→ job 收敛 aborted，不再执行。
+                self._mark(
+                    job_id, "aborted",
+                    result={"outcome": "stopped", "reason": "run_already_terminal"},
+                )
+                return
+            # ① 便宜比对（D4）：无差异 → noop，不 poke gateway、零 LLM token。
+            current = svc.current_watermark(int(matter_id))
+            from src.matters.run_service import watermark_diff
+
+            baseline_source = svc.last_output_watermark(
+                int(matter_id), exclude_run_id=run_id
+            )
+            diff = watermark_diff(baseline_source, current)
+            if not diff["changed"]:
+                svc.finish_run(run_id, "noop", output_watermark=current)
+                self._mark(job_id, "succeeded", result={"outcome": "noop"})
+                return
+            metadata_only = svc.touched_all_metadata_only(
+                int(matter_id), diff.get("touched_resources") or []
+            )
+            # ② started CAS（撞 uq_matter_run_one_active → E_RUN_ACTIVE；run 一并收敛
+            # fail —— 留着 queued 会永久堵住后续 enqueue 的单活跃检查）。
+            if not svc.mark_started(run_id):
+                svc.finish_run(run_id, "fail", error={"code": "E_RUN_ACTIVE"})
+                self._mark(job_id, "failed", last_error="E_RUN_ACTIVE")
+                return
+            # ③ 既有 poke→map 链（spec 由 gateway 回拉，_assemble_spec 按 job_type 分派）。
+            claim_token = secrets.token_urlsafe(32)
+            self.repo.set_claim_token(job_id, claim_token)
+            timeout_s = self._resolve_timeout(job)
+            try:
+                resp = await self._poke_gateway(job_id, claim_token, timeout_s)
+            except _GatewayPokeError as exc:
+                self._finish_matter_transport_failure(svc, run_id, job_id, exc.code)
+                return
+            self._map_matter_response(
+                svc, run_id, job_id, resp,
+                output_watermark=current, metadata_only=metadata_only,
+            )
+        except Exception as exc:  # noqa: BLE001 — 兜底：不留 running/queued 悬挂
+            logger.error(
+                f"[agent-run-worker] matter execute crash job_id={job_id}: {exc}",
+                exc_info=True,
+            )
+            try:
+                if isinstance(run_id, int):
+                    self._matter_service().finish_run(
+                        run_id, "fail",
+                        error={"code": f"E_WORKER_CRASH: {type(exc).__name__}"},
+                    )
+            except Exception:  # noqa: BLE001
+                pass
+            self._mark(
+                job_id, "failed", last_error=f"E_WORKER_CRASH: {type(exc).__name__}"
+            )
+
+    def _finish_matter_transport_failure(
+        self, svc, run_id: int, job_id: int, code: str
+    ) -> None:
+        """transport 失败（poke 异常 / 非 2xx）→ fail；cancel_requested 在场 → canceled。"""
+        run = svc.get_run(run_id) or {}
+        if run.get("cancel_requested_at") is not None:
+            svc.finish_run(run_id, canceled=True)
+            self._mark(
+                job_id, "aborted",
+                result={"outcome": "stopped", "reason": "user_cancelled"},
+            )
+            return
+        svc.finish_run(run_id, "fail", error={"code": code})
+        self._mark(job_id, "failed", last_error=code)
+
+    def _map_matter_response(
+        self,
+        svc,
+        run_id: int,
+        job_id: int,
+        resp: dict,
+        *,
+        output_watermark: dict,
+        metadata_only: bool,
+    ) -> None:
+        """gateway 响应 → matter_run 终态四值（D3 映射）+ async job 终态。
+
+        succeeded + 有提案 → ok；无提案 → noop；校验剔除过 change（error_json.dropped，
+        propose 端点暂存）或变更集仅 metadata_only 资源 → warn；transport failed/aborted
+        → fail（cancel_requested_at 在场 → canceled，status 留 NULL）。
+        """
+        session_id = resp.get("sessionId") if isinstance(resp.get("sessionId"), int) else None
+        ok = bool(resp.get("ok"))
+        outcome = resp.get("outcome")
+        if ok and outcome == "completed":
+            run = svc.get_run(run_id) or {}
+            update_id = svc.update_id_for_run(run_id)
+            dropped = svc.dropped_of(run)
+            degraded = bool(dropped) or metadata_only
+            status = "warn" if degraded else ("ok" if update_id is not None else "noop")
+            usage = {
+                key: resp[key] for key in ("usage", "steps") if resp.get(key) is not None
+            }
+            svc.finish_run(
+                run_id,
+                status,
+                output_watermark=output_watermark,
+                usage=usage or None,
+                model=resp.get("model"),
+                chat_session_id=session_id,
+            )
+            result = self._result_json(resp)
+            result["matterRunStatus"] = status
+            if update_id is not None:
+                result["updateId"] = update_id
+            self._mark(job_id, "succeeded", result=result)
+            return
+        # 非 completed（error / ok=false / 未预期 outcome）→ transport 失败语义。
+        run = svc.get_run(run_id) or {}
+        if run.get("cancel_requested_at") is not None:
+            svc.finish_run(run_id, canceled=True, chat_session_id=session_id)
+            self._mark(
+                job_id, "aborted",
+                result={"outcome": "stopped", "reason": "user_cancelled"},
+            )
+            return
+        err = str(resp.get("error") or "E_RUN_ERROR")
+        svc.finish_run(
+            run_id, "fail", error={"code": err}, chat_session_id=session_id
+        )
+        self._mark(job_id, "failed", last_error=err)
 
     def _mark(
         self, job_id: int, status: str, *, result: Optional[dict] = None, last_error: Optional[str] = None
@@ -182,7 +387,7 @@ class AgentRunWorker:
         self, job: "AsyncJob", agent_id: str, kind: str, result: Optional[dict], last_error: Optional[str]
     ) -> tuple[str, str]:
         """岛卡 title/summary：title=「{agent 名} · {触发源}」；summary=结果摘要 / 错误码。"""
-        name = self._agent_title(agent_id) or agent_id or "Agent"
+        name = self._title_resolver(job) or agent_id or "Agent"
         trigger_kind = str((job.params or {}).get("trigger_kind") or "")
         trigger_label = {
             "cron": "定时",
@@ -199,6 +404,11 @@ class AgentRunWorker:
         else:
             summary = (last_error or "").strip() or "运行失败"
         return title, summary
+
+    def _default_title_resolver(self, job: "AsyncJob") -> Optional[str]:
+        """缺省 title resolver：report_agent 行 title（既有行为字节级不变）。"""
+        agent_id = str((job.params or {}).get("agent_id") or job.target_key or "")
+        return self._agent_title(agent_id)
 
     def _agent_title(self, agent_id: str) -> Optional[str]:
         """从 report_agent 行取 title（岛卡展示用）。读失败/无 title → None（回退 agent_id）。"""
@@ -317,7 +527,16 @@ class AgentRunWorker:
         return fallback
 
     def _resolve_timeout(self, job: "AsyncJob") -> float:
-        """httpx 总超时 = agent budget 的 max_run_seconds + 余量。agent 缺失/坏 budget → 默认预算。"""
+        """httpx 总超时 = resolver 给的 run 预算秒数 + 余量（drain 有界，超时兜底防卡死）。"""
+        return float(self._timeout_resolver(job)) + _HTTP_MARGIN_SEC
+
+    def _default_timeout_resolver(self, job: "AsyncJob") -> float:
+        """缺省 timeout resolver：matter_followup → 1800s 常量（profile budget 不咨询，
+        D7）；agent_run → report_agent budget（既有行为字节级不变，缺失/坏 budget → 默认）。"""
+        if job.job_type == "matter_followup":
+            from src.matters.run_spec import MATTER_FOLLOWUP_MAX_RUN_SECONDS
+
+            return float(MATTER_FOLLOWUP_MAX_RUN_SECONDS)
         budget = Budget()
         agent_id = (job.params or {}).get("agent_id")
         if agent_id and self.store is not None:
@@ -327,7 +546,7 @@ class AgentRunWorker:
                     budget = parse_budget(row.get("budget_json"))
             except Exception as exc:  # noqa: BLE001 — budget 读失败退默认, 不阻断
                 logger.debug(f"[agent-run-worker] budget read failed agent={agent_id}: {exc}")
-        return budget.max_run_seconds + _HTTP_MARGIN_SEC
+        return budget.max_run_seconds
 
     def _gateway_base(self) -> str:
         return f"http://127.0.0.1:{self._gateway_port()}"

@@ -73,6 +73,10 @@ class MatterPatchRequest(StrictModel):
     waiting_context: dict[str, Any] | None = None
     next_attention_at: int | None = None
     attention_reason: str | None = None
+    # P4 绑定三键（D2）：agent_profile_id 显式 null = 解绑。
+    agent_profile_id: str | None = Field(default=None, max_length=128)
+    agent_enabled: bool | None = None
+    matter_instructions: str | None = Field(default=None, max_length=4000)
     mutation: MutationEnvelope
 
 
@@ -186,3 +190,60 @@ class MatterRelationPatchRequest(StrictModel):
     confidence: float | None = Field(default=None, ge=0, le=1)
     confirmed: bool | None = None
     mutation: MutationEnvelope
+
+
+# ── P4: Updates 评审 / Runs / 提案（D6/D9/D10）─────────────────────────────────
+
+
+class MatterUpdateEditedChange(StrictModel):
+    """编辑后接受的单条编辑（D9）：只引用原 change id，**不许新 target**（extra=forbid）。"""
+
+    change_id: str = Field(min_length=1, max_length=64)
+    after: Any = None
+    text: str | None = Field(default=None, max_length=2000)
+    edit_reason: str | None = Field(default=None, max_length=2000)
+
+
+class MatterUpdateAcceptRequest(StrictModel):
+    selected_change_ids: list[str] | None = Field(default=None, max_length=50)
+    edited_changes: list[MatterUpdateEditedChange] | None = Field(
+        default=None, max_length=50
+    )
+    edited_summary: str | None = Field(default=None, max_length=2000)
+    mutation: MutationEnvelope
+
+
+class MatterUpdateRejectRequest(StrictModel):
+    reason: str = Field(min_length=1, max_length=2000)
+    mutation: MutationEnvelope
+
+
+class MatterProposalSource(StrictModel):
+    """提案证据源（gateway matter_update_propose 工具入参形状，lane ② 契约）。"""
+
+    resource_id: int = Field(ge=1)
+    locator: dict[str, Any] | None = None
+    evidence: str | None = Field(default=None, max_length=2000)
+
+
+class MatterProposalChange(StrictModel):
+    """D6 Change 形状。🔴 matter_id/run_id/from|to_event_id/anchored_matter_version
+    不在 schema 里 —— 全部服务端从 run 语境盖章，模型结构性不可传（extra=forbid）。"""
+
+    id: str = Field(min_length=1, max_length=64)
+    kind: str = Field(pattern="^(fact|inference|field|action|resource)$")
+    target: dict[str, Any] | None = None
+    operation: str | None = Field(default=None, pattern="^(add|replace|remove)$")
+    before: Any = None
+    after: Any = None
+    text: str | None = Field(default=None, max_length=2000)
+    reason: str | None = Field(default=None, max_length=2000)
+    is_inference: bool | None = None
+    sources: list[MatterProposalSource] = Field(default_factory=list, max_length=5)
+
+
+class MatterProposalRequest(StrictModel):
+    summary: str | None = Field(default=None, max_length=2000)
+    changes: list[MatterProposalChange] = Field(default_factory=list, max_length=20)
+    open_questions: list[str] | None = Field(default=None, max_length=5)
+    confidence: float | None = Field(default=None, ge=0, le=1)

@@ -59,6 +59,8 @@ from src.matters.models import (
     MatterRelationType,
     MatterResourceKind,
     MatterResourceSubscriptionState,
+    MatterRunStatus,
+    MatterRunTrigger,
     MatterStatus,
     MatterUpdateReviewStatus,
     sql_check_clause,
@@ -152,6 +154,10 @@ MATTER_TABLE_DDLS = (
         deleted_by_kind TEXT NULL CHECK (deleted_by_kind IS NULL OR deleted_by_kind {sql_check_clause(MatterActorKind)}),
         deleted_by_id TEXT NULL,
         purge_after INTEGER NULL,
+        agent_profile_id TEXT NULL,
+        agent_enabled INTEGER NOT NULL DEFAULT 0 CHECK (agent_enabled IN (0, 1)),
+        matter_instructions TEXT NULL,
+        schedule_json TEXT NULL CHECK (schedule_json IS NULL OR json_valid(schedule_json)),
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL,
         FOREIGN KEY(latest_accepted_update_id) REFERENCES matter_update(id) ON DELETE SET NULL
@@ -307,6 +313,34 @@ MATTER_TABLE_DDLS = (
         title, description, current_summary, status_text, items_text,
         stakeholders_text, notes_text, tokenize='trigram'
     )""",
+    # v46 (P4): matter 跟进 Agent run 账本 (contracts §2.11)。async_job_id 跨表逻辑引用
+    # async_jobs.job_id (同库无 FK — async_jobs 建表不在本 DDL 组, 且 job 行可被清理);
+    # chat_session_id 跨 CHAT_DB 逻辑引用。matter_update.agent_run_id 语义 = 本表 id
+    # (D1 冻结; v44 时代注释里的「跨库指向 async_jobs.job_id」作废, 该列彼时零消费方)。
+    f"""CREATE TABLE IF NOT EXISTS matter_run (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
+        agent_profile_id TEXT NULL,
+        async_job_id INTEGER NULL,
+        chat_session_id INTEGER NULL,
+        trigger_kind TEXT NOT NULL CHECK (trigger_kind {sql_check_clause(MatterRunTrigger)}),
+        trigger_payload_json TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(trigger_payload_json)),
+        idempotency_key TEXT NOT NULL UNIQUE,
+        input_watermark_json TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(input_watermark_json)),
+        output_watermark_json TEXT NULL CHECK (output_watermark_json IS NULL OR json_valid(output_watermark_json)),
+        status TEXT NULL CHECK (status IS NULL OR status {sql_check_clause(MatterRunStatus)}),
+        model TEXT NULL,
+        usage_json TEXT NULL CHECK (usage_json IS NULL OR json_valid(usage_json)),
+        cost_usd REAL NULL CHECK (cost_usd IS NULL OR cost_usd >= 0),
+        error_json TEXT NULL CHECK (error_json IS NULL OR json_valid(error_json)),
+        queued_at INTEGER NOT NULL,
+        started_at INTEGER NULL,
+        completed_at INTEGER NULL,
+        cancel_requested_at INTEGER NULL,
+        canceled_at INTEGER NULL,
+        coalesced_trigger_count INTEGER NOT NULL DEFAULT 0,
+        created_at INTEGER NOT NULL
+    )""",
 )
 
 MATTER_INDEX_DDLS = (
@@ -341,6 +375,12 @@ MATTER_INDEX_DDLS = (
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_relation_live ON matter_relation(source_matter_id, target_matter_id, relation_type) WHERE deleted_at IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_matter_relation_source ON matter_relation(source_matter_id, relation_type) WHERE deleted_at IS NULL",
     "CREATE INDEX IF NOT EXISTS idx_matter_relation_target ON matter_relation(target_matter_id, relation_type) WHERE deleted_at IS NULL",
+    # v46 (P4): matter_run 索引 (contracts §2.11)。uq_matter_run_one_active partial
+    # unique = 单活跃 run 的数据库最终防线 (worker started_at CAS 撞它 → E_RUN_ACTIVE)。
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_run_idempotency ON matter_run(idempotency_key)",
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_run_one_active ON matter_run(matter_id) WHERE started_at IS NOT NULL AND completed_at IS NULL AND canceled_at IS NULL",
+    "CREATE INDEX IF NOT EXISTS idx_matter_run_history ON matter_run(matter_id, queued_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_matter_run_async_job ON matter_run(async_job_id) WHERE async_job_id IS NOT NULL",
 )
 
 
@@ -837,7 +877,14 @@ class SyncStore:
     # v43 (harness optimization P2, 2026-08): report_agent +description TEXT。NULL/空 = 未设置；
     #                wire 写侧 strip 并限制 1000 字符，读侧原样投影。additive ALTER，无回填。
     #                回滚 (回退 v43): 列可留（旧代码无害）；必要时降 db_version。
-    DB_VERSION = 45  # v45: Matter resources, stakeholders, relations, search
+    # v44/v45 (Matters P1/P2): matter aggregate 基表 / resources+stakeholders+relations+search。
+    # v46 (Matters P4, 2026-08): matter_run 表 + 4 索引 (contracts §2.11, DDL 单源
+    #                MATTER_TABLE_DDLS/MATTER_INDEX_DDLS) + matter 加绑定四列
+    #                agent_profile_id/agent_enabled/matter_instructions/schedule_json
+    #                (schedule_json P5 预留零消费)。matter_update 提案列 v44 已建齐,
+    #                本版零动作; matter_update.agent_run_id 语义冻结 = matter_run.id (D1)。
+    #                回滚 (回退 v46): 表/列可留 (旧代码无消费点, 无害); 必要时降 db_version。
+    DB_VERSION = 46  # v46: Matter agent runs + binding columns (P4)
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -2724,6 +2771,52 @@ class SyncStore:
                     )
             except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
                 raise SyncStoreMigrationError(f"v45 migration failed: {e}") from e
+
+        # === v46: Matter agent runs + binding columns (P4) ===
+        # matter_run 表 + 4 索引 (DDL 单源 MATTER_TABLE_DDLS/MATTER_INDEX_DDLS,
+        # IF NOT EXISTS 幂等) + matter 加绑定四列 (v43 加列范式: 新库 CREATE 已含列,
+        # 旧库 PRAGMA 探列后 additive ALTER)。matter_update 的提案列 v44 已全量建好,
+        # 本版**零动作** (D1)。
+        if current_version < 46:
+            try:
+                for ddl in MATTER_TABLE_DDLS:
+                    cursor.execute(ddl)
+                cursor.execute("PRAGMA table_info(matter)")
+                _matter_cols = {row[1] for row in cursor.fetchall()}
+                for _col, _col_ddl in (
+                    ("agent_profile_id", "agent_profile_id TEXT NULL"),
+                    (
+                        "agent_enabled",
+                        "agent_enabled INTEGER NOT NULL DEFAULT 0 "
+                        "CHECK (agent_enabled IN (0, 1))",
+                    ),
+                    ("matter_instructions", "matter_instructions TEXT NULL"),
+                    (
+                        "schedule_json",
+                        "schedule_json TEXT NULL "
+                        "CHECK (schedule_json IS NULL OR json_valid(schedule_json))",
+                    ),
+                ):
+                    if _col not in _matter_cols:
+                        cursor.execute(f"ALTER TABLE matter ADD COLUMN {_col_ddl}")
+                        logger.info(f"v46 migration: matter +{_col}")
+                for ddl in MATTER_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "matter",
+                    {"agent_profile_id", "agent_enabled", "matter_instructions",
+                     "schedule_json"},
+                    "v46 migration", e,
+                )
+                _migration_guard_columns(
+                    cursor, "matter_run",
+                    {"id", "matter_id", "idempotency_key", "status"},
+                    "v46 migration", e,
+                )
+                _migration_guard_index(
+                    cursor, "uq_matter_run_one_active", "v46 migration", e
+                )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
