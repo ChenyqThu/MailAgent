@@ -97,8 +97,7 @@ class MatterAgendaWorker:
             rows = conn.execute(
                 "SELECT id,public_id,schedule_json FROM matter WHERE deleted_at IS NULL "
                 "AND archived_at IS NULL AND status NOT IN ('done','canceled') "
-                "AND agent_enabled=1 AND agent_profile_id IS NOT NULL "
-                "AND schedule_json IS NOT NULL"
+                "AND agent_enabled=1 AND schedule_json IS NOT NULL"
             ).fetchall()
         for row in rows:
             try:

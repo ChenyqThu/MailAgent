@@ -117,9 +117,9 @@ describe('P4 renderer surfaces', () => {
     expect(confirm.disabled).toBe(false)
   })
 
-  test('binding card guides unbound matters and saves the selected profile', () => {
+  test('unbound card uses the built-in agent and can switch to a custom profile', () => {
     const patch = vi.fn()
-    const view = render(
+    render(
       <MatterAgentCard
         matter={matter}
         runs={[]}
@@ -129,10 +129,15 @@ describe('P4 renderer surfaces', () => {
       />
     )
 
-    expect(screen.getByText('绑定跟进 Agent')).toBeTruthy()
-    fireEvent.change(view.container.querySelector('select') as HTMLSelectElement, {
-      target: { value: profile.id }
-    })
+    expect(screen.getByText('跟进 Agent')).toBeTruthy()
+    expect(screen.getByText('内置')).toBeTruthy()
+    expect(screen.getByText('计划')).toBeTruthy()
+    expect(screen.getByText('下次')).toBeTruthy()
+    expect(screen.getByText('上次')).toBeTruthy()
+    expect(screen.getByRole('switch')).toBeTruthy()
+    fireEvent.click(screen.getByText('改用 Custom Agent'))
+    fireEvent.click(screen.getByRole('combobox'))
+    fireEvent.click(screen.getByRole('option', { name: profile.title }))
     fireEvent.click(screen.getByText('保存'))
     expect(patch).toHaveBeenCalledWith({
       agent_profile_id: profile.id,
@@ -166,7 +171,9 @@ describe('P4 renderer surfaces', () => {
 
   test('binding schedule recommends weekdays at 09:00 and persists the shared rule shape', () => {
     const patch = vi.fn()
-    render(<MatterAgentCard matter={{ ...matter, agent_profile_id: profile.id, agent_enabled: true }} runs={[]} enabled onPatch={patch} profiles={[profile]} />)
+    render(<MatterAgentCard matter={{ ...matter, agent_enabled: true }} runs={[]} enabled onPatch={patch} profiles={[]} />)
+    expect(screen.getByText('跟进 Agent')).toBeTruthy()
+    expect(screen.getByText('内置')).toBeTruthy()
     fireEvent.click(screen.getByText('编辑排程'))
     fireEvent.click(screen.getByText('推荐：每个工作日 09:00'))
     fireEvent.click(screen.getByText('保存'))

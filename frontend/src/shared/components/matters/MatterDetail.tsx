@@ -37,6 +37,13 @@ import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
 import { isScheduleValue } from '@shared/components/agents/schedule/types'
 import { SegmentedControl } from '@shared/components/ui/segmented'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@shared/components/ui/select'
 import { cn } from '@shared/lib/cn'
 import { asWriteError, errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
@@ -371,17 +378,21 @@ export function MatterDetail({
               <h1 className="mt-1 text-heading font-semibold text-ink-fg">{matter.title}</h1>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <StatusMenu value={matter.status} onChange={(status) => patch.mutate({ status })} />
-                <select
+                <Select
                   value={matter.health}
-                  onChange={(event) => patch.mutate({ health: event.target.value as MatterHealth })}
-                  className="rounded-[var(--r-pill)] border border-ink-border bg-ink-2 px-2 py-1 text-meta"
+                  onValueChange={(health) => patch.mutate({ health: health as MatterHealth })}
                 >
-                  {MATTER_HEALTH_VALUES.map((value) => (
-                    <option key={value} value={value}>
-                      {t(`matters.health.${value}`)}
-                    </option>
-                  ))}
-                </select>
+                  <SelectTrigger className="h-auto w-auto rounded-[var(--r-pill)] px-2 py-1 text-meta">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {MATTER_HEALTH_VALUES.map((value) => (
+                      <SelectItem key={value} value={value}>
+                        {t(`matters.health.${value}`)}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
                 <span className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 text-meta font-mono uppercase">
                   {matter.priority}
                 </span>
@@ -776,20 +787,18 @@ function StatusMenu({
 }): React.ReactElement {
   const { t } = useTranslation()
   return (
-    <label className="relative inline-flex items-center">
-      <select
-        value={value}
-        onChange={(event) => onChange(event.target.value as MatterStatus)}
-        className="appearance-none rounded-[var(--r-pill)] border border-coral/30 bg-coral/10 py-1 pl-2 pr-7 text-meta text-coral"
-      >
+    <Select value={value} onValueChange={(status) => onChange(status as MatterStatus)}>
+      <SelectTrigger className="h-auto w-auto rounded-[var(--r-pill)] border-coral/30 bg-coral/10 px-2 py-1 text-meta text-coral">
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent>
         {MATTER_STATUSES.map((status) => (
-          <option key={status} value={status}>
+          <SelectItem key={status} value={status}>
             {t(`matters.status.${status}`)}
-          </option>
+          </SelectItem>
         ))}
-      </select>
-      <ChevronDown size={12} className="pointer-events-none absolute right-2" />
-    </label>
+      </SelectContent>
+    </Select>
   )
 }
 

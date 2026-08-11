@@ -3,10 +3,26 @@ import { useTranslation } from 'react-i18next'
 import { Mail, X } from 'lucide-react'
 
 import { BUILTIN_MATTER_TYPES, MATTER_PRIORITIES } from '@shared/api/types/matter'
-import type { MatterCreateInput, MatterLinkScope, MatterPriority } from '@shared/api/types/matter'
+import type {
+  BuiltinMatterType,
+  MatterCreateInput,
+  MatterLinkScope,
+  MatterPriority
+} from '@shared/api/types/matter'
 import { SegmentedControl } from '@shared/components/ui/segmented'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@shared/components/ui/select'
 
 import { stripEmailSubjectPrefix } from './matterResource'
+
+const TYPE_UNSET = '__matter_type_unset__'
+const TYPE_CUSTOM = '__matter_type_custom__'
+type MatterTypeSelection = BuiltinMatterType | typeof TYPE_UNSET | typeof TYPE_CUSTOM
 
 export interface MatterCreateSource {
   internalId: number
@@ -34,7 +50,8 @@ export function MatterCreateDialog({
 }: MatterCreateDialogProps): React.ReactElement | null {
   const { t } = useTranslation()
   const [title, setTitle] = useState('')
-  const [matterType, setMatterType] = useState('')
+  const [matterTypeSelection, setMatterTypeSelection] = useState<MatterTypeSelection>(TYPE_UNSET)
+  const [customMatterType, setCustomMatterType] = useState('')
   const [priority, setPriority] = useState<MatterPriority>('p1')
   const [description, setDescription] = useState('')
   const [linkScope, setLinkScope] = useState<MatterLinkScope>(source?.threadId ? 'thread' : 'single')
@@ -42,7 +59,8 @@ export function MatterCreateDialog({
   useEffect(() => {
     if (!open) return
     setTitle(source ? stripEmailSubjectPrefix(source.subject) : '')
-    setMatterType('')
+    setMatterTypeSelection(TYPE_UNSET)
+    setCustomMatterType('')
     setPriority('p1')
     setDescription('')
     setLinkScope(source?.threadId ? 'thread' : 'single')
@@ -53,9 +71,15 @@ export function MatterCreateDialog({
   const submit = (): void => {
     const trimmedTitle = title.trim()
     if (!trimmedTitle) return
+    const matterType =
+      matterTypeSelection === TYPE_UNSET
+        ? null
+        : matterTypeSelection === TYPE_CUSTOM
+          ? customMatterType.trim() || null
+          : matterTypeSelection
     onCreate({
       title: trimmedTitle,
-      matter_type: matterType.trim() || null,
+      matter_type: matterType,
       priority,
       description,
       source_resource: source
@@ -110,21 +134,36 @@ export function MatterCreateDialog({
               className="w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body outline-none focus:border-coral/60"
             />
           </label>
-          <label className="block space-y-1.5">
+          <div className="space-y-1.5">
             <span className="text-aux text-ink-fg-1">{t('matters.create.type')}</span>
-            <input
-              list="matter-types"
-              value={matterType}
-              onChange={(event) => setMatterType(event.target.value)}
-              placeholder={t('matters.create.typePlaceholder')}
-              className="w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body outline-none focus:border-coral/60"
-            />
-            <datalist id="matter-types">
-              {BUILTIN_MATTER_TYPES.map((type) => (
-                <option key={type} value={type} />
-              ))}
-            </datalist>
-          </label>
+            <Select
+              value={matterTypeSelection}
+              onValueChange={(value) => setMatterTypeSelection(value as MatterTypeSelection)}
+            >
+              <SelectTrigger aria-label={t('matters.create.type')}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={TYPE_UNSET}>{t('matters.create.typeUnset')}</SelectItem>
+                {BUILTIN_MATTER_TYPES.map((type) => (
+                  <SelectItem key={type} value={type}>
+                    {type}
+                  </SelectItem>
+                ))}
+                <SelectItem value={TYPE_CUSTOM}>{t('matters.create.typeCustom')}</SelectItem>
+              </SelectContent>
+            </Select>
+            {matterTypeSelection === TYPE_CUSTOM ? (
+              <input
+                autoFocus
+                value={customMatterType}
+                onChange={(event) => setCustomMatterType(event.target.value)}
+                placeholder={t('matters.create.typeCustomPlaceholder')}
+                aria-label={t('matters.create.typeCustom')}
+                className="w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body outline-none focus:border-coral/60"
+              />
+            ) : null}
+          </div>
           <div className="space-y-1.5">
             <span className="text-aux text-ink-fg-1">{t('matters.create.priority')}</span>
             <SegmentedControl<MatterPriority>

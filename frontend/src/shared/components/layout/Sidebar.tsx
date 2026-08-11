@@ -19,11 +19,12 @@ import { useQuery } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { BriefcaseBusiness, ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
+import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import {
   AnimatedIconActiveProvider,
+  BriefcaseBusinessIcon,
   CalendarCheckIcon,
   ChartLineIcon,
   ChartPieIcon,
@@ -590,6 +591,18 @@ export function Sidebar(): React.ReactElement {
           </h2>
         </div>
         <nav className="px-2 space-y-px">
+          {/* dogfood 反馈：事项是主动工作面而非只读看板，归 AI AGENTS 段首。 */}
+          {mattersEnabled ? (
+            <NavRow
+              icon={<BriefcaseBusinessIcon size={15} strokeWidth={1.75} trigger="parent" />}
+              label={t('matters.nav')}
+              selected={pathname === '/matters'}
+              onClick={() => void navigate({ to: '/matters' })}
+              title={collapsed ? t('matters.nav') : undefined}
+              right={<MatterAttentionBadge count={matterAttentionCount} />}
+              collapsedBadge={matterAttentionCount}
+            />
+          ) : null}
           {/* /sessions — MailAgent 交互式通用 agent 视图。dogfood-2 user feedback：排在
               Custom AI 前 + 无底色，仅 icon 用 coral 强调色（不再整行 coral 填充）。 */}
           <NavRow
@@ -642,17 +655,6 @@ export function Sidebar(): React.ReactElement {
           </h2>
         </div>
         <nav className="px-2 space-y-px">
-          {mattersEnabled ? (
-            <NavRow
-              icon={<BriefcaseBusiness size={15} strokeWidth={1.75} />}
-              label={t('matters.nav')}
-              selected={pathname === '/matters'}
-              onClick={() => void navigate({ to: '/matters' })}
-              title={collapsed ? t('matters.nav') : undefined}
-              right={<MatterAttentionBadge count={matterAttentionCount} />}
-              collapsedBadge={matterAttentionCount}
-            />
-          ) : null}
           <NavRow
             icon={<ChartPieIcon size={15} strokeWidth={1.75} trigger="parent" />}
             label="LLM Dashboard"

@@ -67,3 +67,6 @@ export { FlaskConicalIcon } from './animated/flask-conical'
 // 第六批（用户点名）：邮件工具栏「在 Notion 打开」从 AtomIcon（与"跟进 Agent"撞图）
 // 换成 box —— 描边绘制型动画。
 export { BoxIcon } from './animated/box'
+
+// 第七批（用户点名）：主菜单「事项」→ briefcase-business，接上动画体系。
+export { BriefcaseBusinessIcon } from './animated/briefcase-business'

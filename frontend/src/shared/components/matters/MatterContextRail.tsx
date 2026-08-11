@@ -29,6 +29,13 @@ import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
 import { DEFAULT_RULE, isScheduleValue } from '@shared/components/agents/schedule/types'
 import type { ScheduleValue } from '@shared/components/agents/schedule/types'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@shared/components/ui/select'
 import { cn } from '@shared/lib/cn'
 
 import { groupMatterResources, isMatterResourceAvailable } from './matterResource'
@@ -53,6 +60,8 @@ const RESOURCE_ICONS = {
   file: File,
   url: Link2
 } as const
+
+const BUILTIN_PROFILE_VALUE = '__builtin__'
 
 export function MatterContextRail({
   resources,
@@ -198,7 +207,7 @@ export function MatterAgentCard({
   const { t, i18n } = useTranslation()
   const [editing, setEditing] = useState(false)
   const [scheduleEditing, setScheduleEditing] = useState(false)
-  const [profileId, setProfileId] = useState(matter.agent_profile_id ?? '')
+  const [profileId, setProfileId] = useState(matter.agent_profile_id ?? BUILTIN_PROFILE_VALUE)
   const [instructions, setInstructions] = useState(matter.matter_instructions ?? '')
   const persistedSchedule = parseSchedule(matter.schedule_json)
   const [schedule, setSchedule] = useState<ScheduleValue | null>(persistedSchedule)
@@ -219,29 +228,33 @@ export function MatterAgentCard({
         <p className="text-aux leading-5 text-ink-fg-2">{t('matters.context.agentGuide')}</p>
       </div>
     )
-  if (!matter.agent_profile_id || editing)
+  if (editing)
     return (
       <div className="rounded-[var(--r-card)] border border-ai/25 bg-ink-2 p-3">
         <div className="mb-2 flex items-center gap-2 text-ai">
           <Sparkles size={14} />
           <strong className="text-aux">{t('matters.agentBinding.title')}</strong>
         </div>
-        {custom.length === 0 ? (
-          <p className="text-aux text-ink-fg-2">{t('matters.agentBinding.empty')}</p>
-        ) : (
-          <select
-            value={profileId}
-            onChange={(event) => setProfileId(event.target.value)}
-            className="w-full rounded-lg border border-ink-border bg-ink-1 px-2 py-2 text-aux"
-          >
-            <option value="">—</option>
+        <Select value={profileId} onValueChange={setProfileId}>
+          <SelectTrigger className="w-full">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            <SelectItem value={BUILTIN_PROFILE_VALUE}>
+              {t('matters.agentBinding.builtinOption')}
+            </SelectItem>
             {custom.map((item) => (
-              <option key={item.id} value={item.id}>
+              <SelectItem key={item.id} value={item.id}>
                 {item.title}
-              </option>
+              </SelectItem>
             ))}
-          </select>
-        )}
+          </SelectContent>
+        </Select>
+        {custom.length === 0 ? (
+          <p className="mt-2 text-meta leading-5 text-ink-fg-3">
+            {t('matters.agentBinding.empty')}
+          </p>
+        ) : null}
         <textarea
           maxLength={4000}
           value={instructions}
@@ -250,23 +263,20 @@ export function MatterAgentCard({
           className="mt-2 w-full rounded-lg border border-ink-border bg-ink-1 p-2 text-aux"
         />
         <div className="mt-2 flex justify-end gap-2">
-          {matter.agent_profile_id ? (
-            <button type="button" onClick={() => setEditing(false)} className="px-2 py-1 text-aux">
-              {t('common.cancel')}
-            </button>
-          ) : null}
+          <button type="button" onClick={() => setEditing(false)} className="px-2 py-1 text-aux">
+            {t('common.cancel')}
+          </button>
           <button
             type="button"
-            disabled={!profileId}
             onClick={() => {
               onPatch({
-                agent_profile_id: profileId || null,
+                agent_profile_id: profileId === BUILTIN_PROFILE_VALUE ? null : profileId,
                 agent_enabled: true,
                 matter_instructions: instructions || null
               })
               setEditing(false)
             }}
-            className="rounded-lg bg-ai px-3 py-1.5 text-aux text-white disabled:opacity-50"
+            className="rounded-lg bg-ai px-3 py-1.5 text-aux text-white"
           >
             {t('common.save')}
           </button>
@@ -296,8 +306,13 @@ export function MatterAgentCard({
       <div className="flex items-center gap-2">
         <Sparkles size={14} className="text-ai" />
         <strong className="min-w-0 flex-1 truncate text-aux">
-          {profile?.title ?? matter.agent_profile_id}
+          {profile?.title ?? matter.agent_profile_id ?? t('matters.agentBinding.title')}
         </strong>
+        {!matter.agent_profile_id ? (
+          <span className="rounded-[var(--r-pill)] bg-ai/10 px-1.5 py-0.5 text-[10px] text-ai">
+            {t('matters.agentBinding.builtin')}
+          </span>
+        ) : null}
         <button
           type="button"
           role="switch"
@@ -387,16 +402,28 @@ export function MatterAgentCard({
         >
           {t('matters.agentBinding.scheduleEdit')}
         </button>
-        <button type="button" onClick={() => setEditing(true)} className="text-meta text-ai">
-          {t('common.edit')}
-        </button>
         <button
           type="button"
-          onClick={() => onPatch({ agent_profile_id: null, agent_enabled: false })}
-          className="text-meta text-fail"
+          onClick={() => {
+            setProfileId(matter.agent_profile_id ?? BUILTIN_PROFILE_VALUE)
+            setInstructions(matter.matter_instructions ?? '')
+            setEditing(true)
+          }}
+          className="text-meta text-ai"
         >
-          {t('matters.agentBinding.unbind')}
+          {matter.agent_profile_id
+            ? t('common.edit')
+            : t('matters.agentBinding.useCustomAgent')}
         </button>
+        {matter.agent_profile_id ? (
+          <button
+            type="button"
+            onClick={() => onPatch({ agent_profile_id: null, agent_enabled: false })}
+            className="text-meta text-fail"
+          >
+            {t('matters.agentBinding.unbind')}
+          </button>
+        ) : null}
       </div>
     </div>
   )

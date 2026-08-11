@@ -4695,7 +4695,9 @@
       "fromEmailTitle": "Create matter from email",
       "name": "Title",
       "type": "Type",
-      "typePlaceholder": "Choose a built-in type or enter your own",
+      "typeUnset": "Not specified",
+      "typeCustom": "Custom…",
+      "typeCustomPlaceholder": "Enter a custom type",
       "priority": "Priority",
       "description": "Purpose and background",
       "descriptionHint": "Agents will never rewrite what you enter here",
@@ -4878,7 +4880,7 @@
     },
     "runOverlay": { "runningTitle": "Follow-up running", "doneTitle": "Follow-up run", "capability": "Manual · Observe + advise", "proposal": "Proposal ready · {count} changes", "warn": "Proposal ready · partially degraded", "failed": "Run failed", "review": "Review" },
     "review": { "title": "Review update proposal", "heading": "Update proposal · {title}", "run": "Run #{id}", "confidence": "Confidence {value}%", "stale": "Expired", "watermark": "Event range {from} → {to}", "proposedSummary": "Proposed current state", "finishEdit": "Finish editing", "editAccept": "Edit before accepting", "compare": "Compare accepted state", "changes": "Changes · {selected}/{total} selected", "clearAll": "Clear all", "selectAll": "Select all", "questions": "Questions from the agent", "staleHint": "This proposal expired. Run the agent again.", "staleReload": "This proposal expired and the matter was refreshed. Reload, then run the agent again.", "versionReload": "The matter changed and its latest version was refreshed. Reload, then retry.", "openCitation": "Open evidence #{id}", "rejectReason": "Rejection reason", "confirmReject": "Reject proposal", "editedArchive": "The original and edited proposal will both be retained", "rejectArchive": "Rejections are retained as future agent context", "reject": "Reject", "later": "Later", "acceptAll": "Accept all", "acceptSelected": "Accept {count} selected", "attention": "The follow-up agent proposed {count} changes for review" },
-    "agentBinding": { "title": "Bind follow-up agent", "empty": "Create an agent in Custom AI first", "instructions": "Matter-specific instructions (optional)", "dangling": "The bound agent no longer exists", "plan": "Plan", "next": "Next", "last": "Last", "capability": "Capability limit: observe + advise; cannot send mail or modify external documents", "unbind": "Unbind", "recommended": "Recommended: weekdays at 09:00", "addSchedule": "Add schedule", "scheduleEdit": "Edit schedule" },
+    "agentBinding": { "title": "Follow-up Agent", "builtin": "Built-in", "builtinOption": "Built-in (default model)", "useCustomAgent": "Use Custom Agent", "empty": "Create an agent in Custom AI to change the model or add a persona", "instructions": "Matter-specific instructions (optional)", "dangling": "The bound agent no longer exists", "plan": "Plan", "next": "Next", "last": "Last", "capability": "Capability limit: observe + advise; cannot send mail or modify external documents", "unbind": "Unbind", "recommended": "Recommended: weekdays at 09:00", "addSchedule": "Add schedule", "scheduleEdit": "Edit schedule" },
     "events": {},
     "toast": { "saved": "Matter updated", "saveFailed": "Could not update matter", "createFailed": "Could not create matter", "deleteFailed": "Could not delete matter" }
   }

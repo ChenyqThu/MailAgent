@@ -49,6 +49,56 @@ describe('MatterCreateDialog email source scope', () => {
   })
 })
 
+describe('MatterCreateDialog type selection', () => {
+  test('submits null when the type is not specified', () => {
+    const onCreate = vi.fn()
+    const view = render(<MatterCreateDialog open onClose={vi.fn()} onCreate={onCreate} />)
+
+    fireEvent.change(view.getByRole('textbox', { name: '标题' }), {
+      target: { value: 'Launch readiness' }
+    })
+    fireEvent.click(view.getByRole('button', { name: '新建事项' }))
+
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ matter_type: null }))
+  })
+
+  test('submits a selected built-in type', async () => {
+    const onCreate = vi.fn()
+    const view = render(<MatterCreateDialog open onClose={vi.fn()} onCreate={onCreate} />)
+
+    fireEvent.change(view.getByRole('textbox', { name: '标题' }), {
+      target: { value: 'Launch readiness' }
+    })
+    fireEvent.click(view.getByRole('combobox', { name: '类型' }))
+    fireEvent.click(await view.findByRole('option', { name: '商务' }))
+    fireEvent.click(view.getByRole('button', { name: '新建事项' }))
+
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ matter_type: '商务' }))
+  })
+
+  test('keeps the custom type escape hatch and resets it on reopen', async () => {
+    const onCreate = vi.fn()
+    const view = render(<MatterCreateDialog open onClose={vi.fn()} onCreate={onCreate} />)
+
+    fireEvent.change(view.getByRole('textbox', { name: '标题' }), {
+      target: { value: 'Launch readiness' }
+    })
+    fireEvent.click(view.getByRole('combobox', { name: '类型' }))
+    fireEvent.click(await view.findByRole('option', { name: '自定义…' }))
+    fireEvent.change(view.getByRole('textbox', { name: '自定义…' }), {
+      target: { value: '  合规审查  ' }
+    })
+    fireEvent.click(view.getByRole('button', { name: '新建事项' }))
+
+    expect(onCreate).toHaveBeenCalledWith(expect.objectContaining({ matter_type: '合规审查' }))
+
+    view.rerender(<MatterCreateDialog open={false} onClose={vi.fn()} onCreate={onCreate} />)
+    view.rerender(<MatterCreateDialog open onClose={vi.fn()} onCreate={onCreate} />)
+    await waitFor(() => expect(view.getByRole('combobox', { name: '类型' }).textContent).toContain('未指定'))
+    expect(view.queryByRole('textbox', { name: '自定义…' })).toBeNull()
+  })
+})
+
 function source(overrides: Partial<React.ComponentProps<typeof MatterCreateDialog>['source'] & object> = {}) {
   return {
     internalId: 42856,

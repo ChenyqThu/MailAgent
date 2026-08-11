@@ -4,6 +4,13 @@ import { X } from 'lucide-react'
 
 import { MATTER_ITEM_KINDS } from '@shared/api/types/matter'
 import type { MatterItemCreateInput, MatterItemKind } from '@shared/api/types/matter'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@shared/components/ui/select'
 
 interface AddItemModalProps {
   open: boolean
@@ -44,20 +51,21 @@ export function AddItemModal({
           </button>
         </header>
         <div className="space-y-4 p-5">
-          <label className="block space-y-1.5">
+          <div className="space-y-1.5">
             <span className="text-aux text-ink-fg-1">{t('matters.item.kind')}</span>
-            <select
-              value={kind}
-              onChange={(event) => setKind(event.target.value as MatterItemKind)}
-              className="w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body"
-            >
-              {MATTER_ITEM_KINDS.map((value) => (
-                <option key={value} value={value}>
-                  {t(`matters.item.kinds.${value}`)}
-                </option>
-              ))}
-            </select>
-          </label>
+            <Select value={kind} onValueChange={(value) => setKind(value as MatterItemKind)}>
+              <SelectTrigger aria-label={t('matters.item.kind')}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {MATTER_ITEM_KINDS.map((value) => (
+                  <SelectItem key={value} value={value}>
+                    {t(`matters.item.kinds.${value}`)}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <label className="block space-y-1.5">
             <span className="text-aux text-ink-fg-1">{t('matters.item.name')}</span>
             <input
