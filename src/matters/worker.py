@@ -13,8 +13,16 @@ from src.agents.schedule_rule import parse_anchor, parse_rule, prev_occurrence
 from src.events.publisher import safe_publish
 
 from .attention import AttentionService
+from .models import MatterRunTrigger
 from .repository import MatterRepository
 from .run_service import MatterRunService
+from .triggers import (
+    EVENT_TRIGGER_CRITERIA,
+    idempotency_key,
+    is_legacy_shape,
+    marker_key,
+    parse_trigger_set,
+)
 
 TICK_SECONDS = 60
 CATCHUP_WINDOW = timedelta(minutes=30)
@@ -91,6 +99,11 @@ class MatterAgendaWorker:
         return value if value in ("high", "all", "off") else "high"
 
     def _schedule_tick(self) -> set[int]:
+        """遍历所有启用的 trigger entry，按 kind 分派到三条判定路径（P6-B D6/D16）。
+
+        🔴 单条 entry 解析失败**只跳过那一条** —— 一个坏掉的 event trigger 不该顺带
+        让同一事项的定时跟进也停摆。
+        """
         now = datetime.fromtimestamp(self.clock_ms() / 1000, timezone.utc)
         changed: set[int] = set()
         with self.repository.connect() as conn:
@@ -100,42 +113,105 @@ class MatterAgendaWorker:
                 "AND agent_enabled=1 AND schedule_json IS NOT NULL"
             ).fetchall()
         for row in rows:
+            matter_id = int(row["id"])
+            raw = row["schedule_json"]
             try:
-                schedule = json.loads(row["schedule_json"])
-                if not isinstance(schedule, dict) or schedule.get("kind") != "schedule":
-                    raise ValueError("invalid schedule shape")
-                rule = parse_rule(schedule.get("rule"))
-                anchor = parse_anchor(schedule.get("anchor"))
-                timezone_name = schedule.get("timezone")
-                if not isinstance(timezone_name, str) or not timezone_name:
-                    raise ValueError("timezone is required")
-                occurrence = prev_occurrence(rule, timezone_name, anchor, now)
-                if occurrence is None or now - occurrence > CATCHUP_WINDOW:
-                    continue
-                marker_key = f"matter.schedule.last_fire.{int(row['id'])}"
-                marker = self.sync_store.get_state(marker_key)
-                occurrence_iso = occurrence.isoformat()
-                if marker:
-                    try:
-                        if occurrence <= datetime.fromisoformat(marker):
-                            continue
-                    except ValueError:
-                        logger.warning(f"[matter-agenda] invalid marker {marker_key}={marker!r}")
-                self.run_service.enqueue_run(
-                    row["public_id"],
-                    idempotency_key=(
-                        f"matter_followup:{int(row['id'])}:schedule:{occurrence_iso}"
-                    ),
-                    source="matter_schedule",
-                    trigger_kind="schedule",
-                )
-                self.sync_store.set_state(marker_key, occurrence_iso)
-                changed.add(int(row["id"]))
+                legacy = is_legacy_shape(raw)
+                entries = parse_trigger_set(raw, seed=str(matter_id))
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    f"[matter-agenda] skipping schedule matter={row['public_id']}: {exc}"
+                    f"[matter-agenda] skipping matter={row['public_id']}: {exc}"
                 )
+                continue
+            for entry in entries:
+                if not entry.enabled:
+                    continue
+                try:
+                    fired = self._fire_trigger(row, matter_id, entry, now, legacy=legacy)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        f"[matter-agenda] skipping trigger {entry.id} "
+                        f"matter={row['public_id']}: {exc}"
+                    )
+                    continue
+                if fired:
+                    changed.add(matter_id)
         return changed
+
+    def _fire_trigger(self, row, matter_id: int, entry, now, *, legacy: bool) -> bool:
+        """判定单条 trigger 是否该触发；触发则入队并推进 marker。返回是否入队。"""
+        if entry.kind == MatterRunTrigger.MANUAL:
+            return False
+        if entry.kind == MatterRunTrigger.SCHEDULE:
+            occurrence = prev_occurrence(
+                parse_rule(entry.rule), entry.timezone, parse_anchor(entry.anchor), now
+            )
+            if occurrence is None or now - occurrence > CATCHUP_WINDOW:
+                return False
+            stamp = occurrence.isoformat()
+            key = marker_key(matter_id, entry, legacy=legacy)
+            marker = self.sync_store.get_state(key)
+            if marker:
+                try:
+                    if occurrence <= datetime.fromisoformat(marker):
+                        return False
+                except ValueError:
+                    logger.warning(f"[matter-agenda] invalid marker {key}={marker!r}")
+        else:
+            # EVENT / CONDITION：判据各自产出一个**稳定**的证据标识；marker 存的就是它。
+            # 同一条持续 open 的信号、同一个已消费过的事件，标识不变 ⇒ 只 fire 一次。
+            stamp = (
+                self._event_evidence(matter_id, entry)
+                if entry.kind == MatterRunTrigger.EVENT
+                else self._condition_evidence(matter_id, entry)
+            )
+            if stamp is None:
+                return False
+            key = marker_key(matter_id, entry, legacy=legacy)
+            if self.sync_store.get_state(key) == stamp:
+                return False
+
+        self.run_service.enqueue_run(
+            row["public_id"],
+            idempotency_key=idempotency_key(matter_id, entry, stamp, legacy=legacy),
+            source=f"matter_{entry.kind}",
+            trigger_kind=str(entry.kind),
+        )
+        self.sync_store.set_state(key, stamp)
+        return True
+
+    def _event_evidence(self, matter_id: int, entry) -> str | None:
+        """最新一条符合该 event trigger 判据的 `matter_event` 行 id。"""
+        event_kind, resource_kinds = EVENT_TRIGGER_CRITERIA[entry.event_type]
+        with self.repository.connect() as conn:
+            rows = conn.execute(
+                "SELECT e.id, e.payload_json FROM matter_event e "
+                "WHERE e.matter_id=? AND e.kind=? ORDER BY e.id DESC LIMIT 20",
+                (matter_id, event_kind),
+            ).fetchall()
+            for event_row in rows:
+                if not resource_kinds:
+                    return f"event:{int(event_row['id'])}"
+                try:
+                    payload = json.loads(event_row["payload_json"] or "{}")
+                except (TypeError, ValueError):
+                    continue
+                kind = payload.get("resource_kind") or payload.get("kind")
+                if kind in resource_kinds:
+                    return f"event:{int(event_row['id'])}"
+        return None
+
+    def _condition_evidence(self, matter_id: int, entry) -> str | None:
+        """该条件当前是否有 open 信号；返回信号的稳定标识。"""
+        with self.repository.connect() as conn:
+            signal = conn.execute(
+                "SELECT id, subject_key FROM matter_attention "
+                "WHERE matter_id=? AND kind=? AND state='open' ORDER BY id LIMIT 1",
+                (matter_id, entry.condition),
+            ).fetchone()
+        if signal is None:
+            return None
+        return f"signal:{int(signal['id'])}:{signal['subject_key']}"
 
     def _retry_tick(self) -> set[int]:
         now = self.clock_ms()

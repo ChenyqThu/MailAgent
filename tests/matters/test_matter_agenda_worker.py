@@ -177,3 +177,149 @@ def test_noop_scheduled_run_creates_no_retry_or_notification(tmp_path):
     assert worker._retry_tick() == set()
     assert worker.attention.list_attention(public_id=matter["public_id"]) == []
     assert worker.attention.eligible_notifications("all") == []
+
+
+# ==================== P6-B D6/D15/D16：EVENT / CONDITION 两条新判定路径 ====================
+
+
+def _matter_with_triggers(path, triggers):
+    """建一个事项并写入 v2 trigger envelope（绕过 service 直接写库，专测 worker 判定）。"""
+    repo = MatterRepository(path)
+    service = MatterService(repo, clock_ms=lambda: NOW)
+    result = service.create_matter({"title": "triggered"}, idempotency_key="create", source="test")
+    matter = result["matter"]
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE matter SET agent_enabled=1,schedule_json=? WHERE id=?",
+            (json.dumps({"v": 2, "triggers": triggers}), matter["id"]),
+        )
+        conn.commit()
+    return repo, matter
+
+
+def _worker(repo, state):
+    return MatterAgendaWorker(
+        repository=repo, sync_store=state, matter_agent_enabled=True,
+        clock_ms=lambda: NOW, run_service=FakeRuns(),
+    )
+
+
+def _open_signal(path, matter_id, kind, subject_key="health"):
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO matter_attention"
+            "(matter_id,kind,subject_key,state,severity,why,recurrence_no,"
+            "first_opened_at,last_observed_at) "
+            "VALUES (?,?,?,'open','warn','why',1,?,?)",
+            (matter_id, kind, subject_key, NOW, NOW),
+        )
+        conn.commit()
+
+
+def test_condition_trigger_fires_once_while_signal_stays_open(tmp_path):
+    """🔴 同一条持续 open 的信号只能 fire 一次 —— 否则条件成立期间每 tick 都跑一次。"""
+    path = tmp_path / "cond.db"
+    SyncStore(str(path))
+    repo, matter = _matter_with_triggers(path, [
+        {"id": "mtr_c1", "kind": "condition", "enabled": True, "condition": "health_down"},
+    ])
+    _open_signal(path, matter["id"], "health_down")
+    state = FakeState()
+    worker = _worker(repo, state)
+
+    assert worker._schedule_tick() == {matter["id"]}
+    assert worker._schedule_tick() == set(), "signal still open → must not re-fire"
+    assert len(worker.run_service.calls) == 1
+    assert worker.run_service.calls[0][1]["trigger_kind"] == "condition"
+
+
+def test_condition_trigger_does_not_fire_without_open_signal(tmp_path):
+    path = tmp_path / "cond-none.db"
+    SyncStore(str(path))
+    repo, matter = _matter_with_triggers(path, [
+        {"id": "mtr_c1", "kind": "condition", "enabled": True, "condition": "action_overdue"},
+    ])
+    worker = _worker(repo, FakeState())
+    assert worker._schedule_tick() == set()
+    assert worker.run_service.calls == []
+
+
+def test_event_trigger_fires_on_new_matching_event_only(tmp_path):
+    path = tmp_path / "event.db"
+    SyncStore(str(path))
+    repo, matter = _matter_with_triggers(path, [
+        {"id": "mtr_e1", "kind": "event", "enabled": True,
+         "event_type": "resource_linked_mail"},
+    ])
+    state = FakeState()
+    worker = _worker(repo, state)
+
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO matter_event(matter_id,kind,actor_kind,source,payload_json,"
+            "happened_at,created_at,dedupe_key) "
+            "VALUES (?,'resource_linked','user','test',?,?,?,'evt-1')",
+            (matter["id"], json.dumps({"resource_kind": "email"}), NOW, NOW),
+        )
+        conn.commit()
+
+    assert worker._schedule_tick() == {matter["id"]}
+    assert worker._schedule_tick() == set(), "same event must not re-fire"
+    assert worker.run_service.calls[0][1]["trigger_kind"] == "event"
+
+
+def test_event_trigger_ignores_events_of_other_resource_kinds(tmp_path):
+    path = tmp_path / "event-doc.db"
+    SyncStore(str(path))
+    repo, matter = _matter_with_triggers(path, [
+        {"id": "mtr_e1", "kind": "event", "enabled": True,
+         "event_type": "resource_doc_updated"},
+    ])
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO matter_event(matter_id,kind,actor_kind,source,payload_json,"
+            "happened_at,created_at,dedupe_key) "
+            "VALUES (?,'resource_updated','user','test',?,?,?,'evt-2')",
+            (matter["id"], json.dumps({"resource_kind": "email"}), NOW, NOW),
+        )
+        conn.commit()
+    worker = _worker(repo, FakeState())
+    assert worker._schedule_tick() == set()
+
+
+def test_disabled_trigger_never_fires(tmp_path):
+    path = tmp_path / "disabled.db"
+    SyncStore(str(path))
+    repo, matter = _matter_with_triggers(path, [
+        {"id": "mtr_c1", "kind": "condition", "enabled": False, "condition": "health_down"},
+    ])
+    _open_signal(path, matter["id"], "health_down")
+    worker = _worker(repo, FakeState())
+    assert worker._schedule_tick() == set()
+
+
+def test_broken_entry_does_not_starve_sibling_trigger(tmp_path):
+    """🔴 一条坏掉的 trigger 不该让同一事项的其它 trigger 一起停摆。"""
+    path = tmp_path / "mixed.db"
+    SyncStore(str(path))
+    repo, matter = _matter_with_triggers(path, [
+        {"id": "mtr_ok", "kind": "condition", "enabled": True, "condition": "health_down"},
+        {"id": "mtr_bad", "kind": "schedule", "enabled": True,
+         "rule": {"freq": "daily"}, "anchor": "2026-08-01", "timezone": "UTC"},
+    ])
+    _open_signal(path, matter["id"], "health_down")
+    worker = _worker(repo, FakeState())
+    # 坏的那条（rule 缺键，深校验在 schedule_rule 里才炸）被单独跳过，
+    # 同一事项的 condition 触发照常工作。
+    assert worker._schedule_tick() == {matter["id"]}
+    assert [c[1]["trigger_kind"] for c in worker.run_service.calls] == ["condition"]
+
+
+def test_manual_trigger_never_auto_fires(tmp_path):
+    path = tmp_path / "manual.db"
+    SyncStore(str(path))
+    repo, _ = _matter_with_triggers(path, [
+        {"id": "mtr_m1", "kind": "manual", "enabled": True},
+    ])
+    worker = _worker(repo, FakeState())
+    assert worker._schedule_tick() == set()

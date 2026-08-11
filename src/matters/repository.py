@@ -499,10 +499,8 @@ class MatterRepository:
     @classmethod
     def _matter_row(cls, row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
-        for key in tuple(result):
-            if key.startswith("search_"):
-                continue
         result["tags"] = cls._json(result.pop("tags_json"), [])
+        result["goal_checks"] = cls._json(result.pop("goal_checks_json", None), [])
         result["waiting_context"] = cls._json(result.pop("waiting_context_json"), None)
         return result
 

@@ -25,6 +25,7 @@ from .models import (
     MatterActorKind,
     MatterItemKind,
     format_public_id,
+    normalize_goal_checks,
     normalize_tags,
     person_key_for_email,
 )
@@ -82,6 +83,7 @@ DIRECT_PATCH_FIELDS = {
     "matter_type",
     "priority",
     "tags",
+    "goal_checks",
     "due_at",
     "waiting_context",
     "next_attention_at",
@@ -109,6 +111,22 @@ class MatterService:
         self.repository = repository
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self.url_fetcher = url_fetcher or fetch_readable_url
+
+    def _default_schedule_json(self, now: int) -> str:
+        """新建事项的默认跟进排程（D2 方案 A：默认开 + 连排程一起给）。
+
+        `agent_enabled` 的建表默认在 v50 翻成 1，但开关开着而没有排程 = 永远不跑 =
+        一个说谎的开关，所以两者必须一起给。
+        """
+        from datetime import datetime
+
+        from .triggers import default_schedule_entry, dump_trigger_set, parse_trigger_set
+
+        anchor = datetime.fromtimestamp(now / 1000).date().isoformat()
+        entries = parse_trigger_set(
+            [default_schedule_entry(anchor=anchor)], seed=f"default:{now}"
+        )
+        return self._dump(dump_trigger_set(entries))
 
     def create_matter(
         self,
@@ -161,6 +179,7 @@ class MatterService:
                     if data.get("waiting_context") is not None
                     else None,
                     "last_activity_at": now,
+                    "schedule_json": self._default_schedule_json(now),
                     "created_at": now,
                     "updated_at": now,
                 },
@@ -571,10 +590,13 @@ class MatterService:
             raise MatterError(
                 "E_INVALID_ARG", f"unsupported patch fields: {sorted(unknown)}"
             )
-        if "description" in patch and actor.kind != MatterActorKind.USER.value:
-            raise MatterError(
-                "E_INVALID_ARG", "description can only be changed by a user"
-            )
+        # D7：核心目标与它的完成标志都是**用户写的**，Agent 只能建议不能落库。
+        # 「让 Agent 改写」走的是"产出建议文本 → 落进用户的编辑框待确认"，不是直接写。
+        for user_only in ("description", "goal_checks"):
+            if user_only in patch and actor.kind != MatterActorKind.USER.value:
+                raise MatterError(
+                    "E_INVALID_ARG", f"{user_only} can only be changed by a user"
+                )
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         with self.repository.transaction() as conn:
@@ -602,6 +624,14 @@ class MatterService:
                 elif field == "tags":
                     field = "tags_json"
                     value = self._dump(normalize_tags(value))
+                elif field == "goal_checks":
+                    # D5 完成标志。与 description 同权限（`_require_user_actor` 在下面
+                    # 统一判）：目标是用户写的，Agent 只能建议不能落库。
+                    field = "goal_checks_json"
+                    try:
+                        value = self._dump(normalize_goal_checks(value))
+                    except ValueError as exc:
+                        raise MatterError("E_INVALID_ARG", str(exc)) from exc
                 elif field == "waiting_context":
                     field = "waiting_context_json"
                     value = self._dump(value) if value is not None else None
@@ -2425,23 +2455,33 @@ class MatterService:
                     parse_rule,
                 )
 
-                if not isinstance(schedule, Mapping) or set(schedule) != {
-                    "kind", "rule", "anchor", "timezone",
-                } or schedule.get("kind") != "schedule":
-                    raise MatterError(
-                        "E_INVALID_ARG",
-                        "schedule_json must contain kind, rule, anchor, timezone",
-                    )
+                # P6-B D16：内容升成 v2 envelope（多 trigger），v1 单对象仍接受并
+                # 惰性升格。结构校验交给 triggers.parse_trigger_set，schedule 分支的
+                # 值域深校验仍走 schedule_rule（不复制它的规则）。
+                from .triggers import TriggerError, normalize_trigger_json
+
                 try:
-                    parse_rule(schedule.get("rule"))
-                    parse_anchor(schedule.get("anchor"))
-                    timezone_name = schedule.get("timezone")
-                    if not isinstance(timezone_name, str) or not timezone_name.strip():
-                        raise ScheduleRuleError("timezone is required")
-                    ZoneInfo(timezone_name)
-                except Exception as exc:
+                    normalized = normalize_trigger_json(schedule)
+                except TriggerError as exc:
                     raise MatterError("E_INVALID_ARG", f"invalid schedule_json: {exc}") from exc
-                changes["schedule_json"] = self._dump(dict(schedule))
+                if normalized is None:
+                    changes["schedule_json"] = None
+                else:
+                    for entry in normalized["triggers"]:
+                        if entry["kind"] != "schedule":
+                            continue
+                        try:
+                            parse_rule(entry.get("rule"))
+                            parse_anchor(entry.get("anchor"))
+                            timezone_name = entry.get("timezone")
+                            if not isinstance(timezone_name, str) or not timezone_name.strip():
+                                raise ScheduleRuleError("timezone is required")
+                            ZoneInfo(timezone_name)
+                        except Exception as exc:
+                            raise MatterError(
+                                "E_INVALID_ARG", f"invalid schedule_json: {exc}"
+                            ) from exc
+                    changes["schedule_json"] = self._dump(normalized)
         return changes, warnings
 
     def _cas_update(
