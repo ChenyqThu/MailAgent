@@ -35,7 +35,7 @@ describe('Matter TypeScript vocabulary', () => {
     expect(MATTER_ATTENTION_STATES).toHaveLength(4)
     expect(MATTER_CHANGE_KINDS).toHaveLength(5)
     expect(MATTER_RUN_STATUSES).toEqual(['ok', 'noop', 'warn', 'fail'])
-    expect(MATTER_RUN_TRIGGERS).toEqual(['manual', 'schedule'])
+    expect(MATTER_RUN_TRIGGERS).toEqual(['manual', 'schedule', 'event', 'condition'])
     expect(MATTER_ACCESS_POLICIES).toEqual(['allowed', 'metadata_only', 'excluded'])
     expect(MATTER_UPDATE_REVIEW_STATUSES).toHaveLength(4)
     expect(MATTER_ACTOR_KINDS).toEqual(['user', 'agent', 'system'])

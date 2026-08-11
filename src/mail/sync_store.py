@@ -65,6 +65,8 @@ from src.matters.models import (
     MatterRunStatus,
     MatterRunTrigger,
     MatterStatus,
+    MatterTagColor,
+    MatterTagShape,
     MatterUpdateReviewStatus,
     sql_check_clause,
 )
@@ -135,6 +137,7 @@ MATTER_TABLE_DDLS = (
         description TEXT NOT NULL DEFAULT '',
         matter_type TEXT NULL CHECK (matter_type IS NULL OR length(trim(matter_type)) > 0),
         tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json)),
+        goal_checks_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(goal_checks_json)),
         status TEXT NOT NULL DEFAULT 'inbox' CHECK (status {sql_check_clause(MatterStatus)}),
         health TEXT NOT NULL DEFAULT 'unknown' CHECK (health {sql_check_clause(MatterHealth)}),
         priority TEXT NOT NULL DEFAULT 'p1' CHECK (priority {sql_check_clause(MatterPriority)}),
@@ -159,7 +162,7 @@ MATTER_TABLE_DDLS = (
         deleted_by_id TEXT NULL,
         purge_after INTEGER NULL,
         agent_profile_id TEXT NULL,
-        agent_enabled INTEGER NOT NULL DEFAULT 0 CHECK (agent_enabled IN (0, 1)),
+        agent_enabled INTEGER NOT NULL DEFAULT 1 CHECK (agent_enabled IN (0, 1)),
         matter_instructions TEXT NULL,
         schedule_json TEXT NULL CHECK (schedule_json IS NULL OR json_valid(schedule_json)),
         created_at INTEGER NOT NULL,
@@ -272,6 +275,14 @@ MATTER_TABLE_DDLS = (
         deleted_at INTEGER NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
+    )""",
+    f"""CREATE TABLE IF NOT EXISTS matter_tag (
+        name TEXT PRIMARY KEY,
+        color TEXT NOT NULL DEFAULT '{MatterTagColor.ACCENT}'
+            CHECK (color {sql_check_clause(MatterTagColor)}),
+        shape TEXT NOT NULL DEFAULT '{MatterTagShape.CIRCLE}'
+            CHECK (shape {sql_check_clause(MatterTagShape)}),
+        created_at INTEGER NOT NULL
     )""",
     """CREATE TABLE IF NOT EXISTS matter_resource_rejection (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -922,7 +933,7 @@ class SyncStore:
     # v48 (Matters dogfood batch 2): mailagent email/thread external_key 归一；碰撞时
     #                合并活跃 matter_resource、重指历史链接与资源外键，并回填邮件元数据。
     # v49 (Matters P6-A): persistent resource-suggestion rejection memory.
-    DB_VERSION = 49
+    DB_VERSION = 50
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -3007,6 +3018,33 @@ class SyncStore:
                     cursor.execute(ddl)
             except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
                 raise SyncStoreMigrationError(f"v49 migration failed: {e}") from e
+
+        # === v50: 标签定义表 + 完成标志清单 (P6-B D4/D5/D14) ===
+        # 🔴 只改 schema，绝不 UPDATE 既有 matter 行：`agent_enabled` 的建表默认从 0 翻成
+        # 1 只对**新建**事项生效，存量事项不回填（D2）—— 用户没要求过的事项不该在升级
+        # 后突然开始自动跑跟进。
+        if current_version < 50:
+            try:
+                for ddl in MATTER_TABLE_DDLS:
+                    cursor.execute(ddl)
+                cursor.execute("PRAGMA table_info(matter)")
+                _matter_cols = {row[1] for row in cursor.fetchall()}
+                if "goal_checks_json" not in _matter_cols:
+                    cursor.execute(
+                        "ALTER TABLE matter ADD COLUMN goal_checks_json TEXT NOT NULL "
+                        "DEFAULT '[]' CHECK (json_valid(goal_checks_json))"
+                    )
+                    logger.info("v50 migration: matter +goal_checks_json")
+                for ddl in MATTER_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "matter", {"goal_checks_json"}, "v50 migration", e,
+                )
+                _migration_guard_columns(
+                    cursor, "matter_tag", {"name", "color", "shape", "created_at"},
+                    "v50 migration", e,
+                )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

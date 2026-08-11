@@ -108,6 +108,29 @@ class MatterRunStatus(StrEnum):
 class MatterRunTrigger(StrEnum):
     MANUAL = "manual"
     SCHEDULE = "schedule"
+    EVENT = "event"
+    CONDITION = "condition"
+
+
+class MatterTagColor(StrEnum):
+    """标签色，取值是既有主题 token 名 —— 不新增颜色（P6-B D4）。"""
+
+    ACCENT = "--c-accent"
+    INFO = "--c-info"
+    OK = "--c-ok"
+    WARN = "--c-warn"
+    CRIT = "--c-crit"
+    AI = "--c-ai"
+
+
+class MatterTagShape(StrEnum):
+    """标签形状。与颜色是两个独立维度：同色可靠形状区分，同形可靠颜色区分。"""
+
+    CIRCLE = "circle"
+    RING = "ring"
+    SQUARE = "square"
+    DIAMOND = "diamond"
+    BAR = "bar"
 
 
 class MatterAccessPolicy(StrEnum):
@@ -168,6 +191,8 @@ MATTER_UPDATE_REVIEW_STATUSES = _values(MatterUpdateReviewStatus)
 MATTER_ACTOR_KINDS = _values(MatterActorKind)
 MATTER_RESOURCE_SUBSCRIPTION_STATES = _values(MatterResourceSubscriptionState)
 MATTER_RESOURCE_EXPANSION_REASONS = _values(MatterResourceExpansionReason)
+MATTER_TAG_COLORS = _values(MatterTagColor)
+MATTER_TAG_SHAPES = _values(MatterTagShape)
 BUILTIN_MATTER_TYPES = ("客户交付", "商务", "售前", "问题", "内部", "产品")
 MATTER_SEARCH_FIELDS = (
     "title",
@@ -182,6 +207,15 @@ MATTER_PERSON_NS = uuid.UUID("6ba7b811-9dad-11d1-80b4-00c04fd430c8")
 
 MAX_TAGS = 20
 MAX_TAG_LENGTH = 64
+
+# `matter.tags_json` 里出现、但 `matter_tag` 定义表里没有的名字（存量数据、或别处
+# 直接 patch 进来的）按这两个默认值渲染 —— 定义表缺行不让标签变成孤儿（D4）。
+MATTER_TAG_DEFAULT_COLOR = MatterTagColor.ACCENT
+MATTER_TAG_DEFAULT_SHAPE = MatterTagShape.CIRCLE
+
+# 完成标志（goal_checks_json）的护栏，量级与 tags 对齐。
+MAX_GOAL_CHECKS = 20
+MAX_GOAL_CHECK_LENGTH = 200
 
 
 def format_public_id(seq: int) -> str:
@@ -211,6 +245,27 @@ def normalize_tags(tags: Iterable[str] | None) -> tuple[str, ...]:
             normalized.append(tag)
         if len(normalized) > MAX_TAGS:
             raise ValueError(f"at most {MAX_TAGS} tags are allowed")
+    return tuple(normalized)
+
+
+def normalize_goal_checks(entries: Iterable[object] | None) -> tuple[dict[str, object], ...]:
+    """完成标志清单归一化：``[{"t": str, "done": bool}]``（D5）。
+
+    空文本行直接丢弃（前端加一行再删文字的中间态不该落库）；其余非法形状一律
+    ``ValueError`` —— 这个字段会渲染成可勾选清单，静默吞掉坏数据会让用户以为存上了。
+    """
+    normalized: list[dict[str, object]] = []
+    for raw in entries or ():
+        if not isinstance(raw, dict):
+            raise ValueError("goal check must be an object")
+        text = str(raw.get("t", "")).strip()
+        if not text:
+            continue
+        if len(text) > MAX_GOAL_CHECK_LENGTH:
+            raise ValueError(f"goal check exceeds {MAX_GOAL_CHECK_LENGTH} characters")
+        normalized.append({"t": text, "done": bool(raw.get("done", False))})
+        if len(normalized) > MAX_GOAL_CHECKS:
+            raise ValueError(f"at most {MAX_GOAL_CHECKS} goal checks are allowed")
     return tuple(normalized)
 
 

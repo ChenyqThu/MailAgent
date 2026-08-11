@@ -85,8 +85,28 @@ export type MatterRunLifecycleState =
   | 'fail'
   | 'canceled'
 
-export const MATTER_RUN_TRIGGERS = ['manual', 'schedule'] as const
+export const MATTER_RUN_TRIGGERS = ['manual', 'schedule', 'event', 'condition'] as const
 export type MatterRunTrigger = (typeof MATTER_RUN_TRIGGERS)[number]
+
+/** 标签色 —— 值是既有主题 token 名，不新增颜色（P6-B D4）。 */
+export const MATTER_TAG_COLORS = [
+  '--c-accent',
+  '--c-info',
+  '--c-ok',
+  '--c-warn',
+  '--c-crit',
+  '--c-ai'
+] as const
+export type MatterTagColor = (typeof MATTER_TAG_COLORS)[number]
+
+/** 标签形状。与颜色是两个独立维度：同色可靠形状区分，同形可靠颜色区分。 */
+export const MATTER_TAG_SHAPES = ['circle', 'ring', 'square', 'diamond', 'bar'] as const
+export type MatterTagShape = (typeof MATTER_TAG_SHAPES)[number]
+
+/** `matter.tags_json` 里出现但 `matter_tag` 定义表没有的名字按这两个默认值渲染 —— 定义表
+ *  缺行不让标签变成孤儿。与 Python `MATTER_TAG_DEFAULT_*` 同值。 */
+export const MATTER_TAG_DEFAULT_COLOR: MatterTagColor = '--c-accent'
+export const MATTER_TAG_DEFAULT_SHAPE: MatterTagShape = 'circle'
 
 export const MATTER_ACCESS_POLICIES = ['allowed', 'metadata_only', 'excluded'] as const
 export type MatterAccessPolicy = (typeof MATTER_ACCESS_POLICIES)[number]
@@ -270,10 +290,7 @@ export interface MatterResourceListItem {
   available?: boolean
 }
 
-export type MatterResourceExpansionReason =
-  | 'context_gap'
-  | 'verification'
-  | 'matter_instructions'
+export type MatterResourceExpansionReason = 'context_gap' | 'verification' | 'matter_instructions'
 
 export interface MatterCandidateReason {
   kind: 'resource_overlap' | 'stakeholder_overlap' | 'semantic_overlap' | 'time_proximity'
@@ -702,7 +719,10 @@ export type MatterStakeholderPatchInput = Partial<MatterStakeholderCreateInput>
 export interface MattersApi {
   list(options?: MatterListOptions): Promise<MatterListResponse>
   create(input: MatterCreateInput, options?: MatterMutationOptions): Promise<MatterMutationResult>
-  createDraft(input: MatterCreateDraftRequest, signal?: AbortSignal): Promise<MatterCreateDraftResponse>
+  createDraft(
+    input: MatterCreateDraftRequest,
+    signal?: AbortSignal
+  ): Promise<MatterCreateDraftResponse>
   duplicateCandidates(input: MatterDuplicateCandidateInput): Promise<MatterDuplicateCandidate[]>
   get(matterId: string, include?: string[]): Promise<MatterDetailResponse>
   patch(
