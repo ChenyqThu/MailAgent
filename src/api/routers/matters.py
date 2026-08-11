@@ -147,6 +147,17 @@ class MatterCreateDraftRequest(BaseModel):
     description: str | None = None
 
 
+class MatterTagStyleRequest(BaseModel):
+    color: str
+    shape: str
+    mutation: MutationEnvelope
+
+
+class MatterTagRenameRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=64)
+    mutation: MutationEnvelope
+
+
 @router.get("/attention")
 async def list_global_attention(
     request: Request,
@@ -284,6 +295,65 @@ async def lookup_links_by_resource(
         raise APIError("E_INVALID_ARG", "keys must contain 1-50 resource keys", source="sqlite")
     result = _call(service.lookup_resource_links, provider.strip().lower(), key_values)
     return success_envelope({"results": result}, request=request)
+
+
+@router.get("/tags")
+async def list_matter_tags(
+    request: Request,
+    service: MatterService = Depends(get_matter_service),
+):
+    return success_envelope({"items": _call(service.list_tags)}, request=request)
+
+
+@router.put("/tags/{name}")
+async def upsert_matter_tag_style(
+    name: str,
+    body: MatterTagStyleRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.upsert_tag_style,
+        name,
+        color=body.color,
+        shape=body.shape,
+        **_mutation_args(body.mutation, idempotency_key, require_version=False),
+    )
+    return success_envelope(result, request=request)
+
+
+@router.post("/tags/{name}/rename")
+async def rename_matter_tag(
+    name: str,
+    body: MatterTagRenameRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.rename_tag,
+        name,
+        body.name,
+        **_mutation_args(body.mutation, idempotency_key, require_version=False),
+    )
+    return success_envelope(result, request=request)
+
+
+@router.delete("/tags/{name}")
+async def delete_matter_tag(
+    name: str,
+    body: MutationOnly,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.delete_tag,
+        name,
+        **_mutation_args(body.mutation, idempotency_key, require_version=False),
+    )
+    return success_envelope(result, request=request)
 
 
 @router.get("/{matter_id}")

@@ -85,8 +85,8 @@ class BuiltinToolPolicy:
 
 
 #: canonical 注册表 —— 覆盖 tool_catalog.json 全部 write:true 且 tier != silent 的
-#: built-in 工具（33 项，以 BUILTIN_TOOL_POLICIES 为准；connector 动态工具**不在**此表——
-#: 那是 WP-10 自己的三档体系）。
+#: built-in 工具（数量以本元组为准，别在注释里写死一个会过期的数字；connector 动态工具
+#: **不在**此表——那是 WP-10 自己的三档体系）。
 #: 完整性由 tests/config/test_tool_prefs_catalog_parity.py 双向钉死。
 BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     # ── 第一刀：email 四写（preview / 可逆 / 频次最高）──────────────────────────

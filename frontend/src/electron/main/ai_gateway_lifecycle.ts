@@ -1303,18 +1303,22 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           }
         }
       : undefined,
-    // S4 W3 (ADR-003 D2) — pull the authoritative agent-run spec by jobId + claimToken. Wired only
-    // when MAILAGENT_CUSTOM_AGENTS_ENABLED is on → off (default) → POST /api/ai/agent-run 404s.
-    fetchAgentRunSpec: customAgentsEnabled
-      ? (jobId: number, claimToken: string) => domain.fetchAgentRunSpec(jobId, claimToken)
-      : undefined,
+    // S4 W3 (ADR-003 D2) — pull the authoritative agent-run spec by jobId + claimToken.
+    // 🔴 Matter follow-up runs are headless runs too, and they have their own flag: gating this on
+    // customAgentsEnabled alone made every matter run 404 whenever custom agents were turned off
+    // (the Python spec pull had already been widened; this side had not).
+    fetchAgentRunSpec:
+      customAgentsEnabled || matterAgentEnabled
+        ? (jobId: number, claimToken: string) => domain.fetchAgentRunSpec(jobId, claimToken)
+        : undefined,
     // S4 W3 (ADR-003 D3) — pre-create the ai_chat.db session (origin='agent') a headless run persists
     // into. Wired only when custom agents are on. A create failure returns null (the run streams but
     // persists nothing) rather than throwing → the endpoint degrades gracefully.
     // P4 (D11) — the follow-up venue kill-switch consumed by handleAgentRun.
     matterAgentEnabled,
-    createAgentSession: customAgentsEnabled
-      ? (input: {
+    createAgentSession:
+      customAgentsEnabled || matterAgentEnabled
+        ? (input: {
           agentId: string
           jobId: number
           title: string

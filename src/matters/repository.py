@@ -8,7 +8,11 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterator, Mapping
 
-from .models import MATTER_SEARCH_FIELDS
+from .models import (
+    MATTER_SEARCH_FIELDS,
+    MATTER_TAG_DEFAULT_COLOR,
+    MATTER_TAG_DEFAULT_SHAPE,
+)
 from .resource_identity import parse_resource_key
 
 
@@ -276,6 +280,209 @@ class MatterRepository:
                 self._add_search_match(result, query_text)
         return results, next_cursor, total
 
+    def list_tags(self, conn: sqlite3.Connection) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            """
+            WITH referenced AS (
+                SELECT json_each.value AS name, COUNT(DISTINCT matter.id) AS usage_count
+                FROM matter, json_each(matter.tags_json)
+                WHERE matter.deleted_at IS NULL
+                  AND json_each.type = 'text'
+                  AND length(trim(json_each.value)) > 0
+                GROUP BY json_each.value
+            )
+            SELECT * FROM (
+                SELECT
+                    t.name AS name,
+                    t.color AS color,
+                    t.shape AS shape,
+                    t.created_at AS created_at,
+                    COALESCE(r.usage_count, 0) AS usage_count,
+                    0 AS inferred
+                FROM matter_tag t
+                LEFT JOIN referenced r ON r.name = t.name
+                UNION ALL
+                SELECT
+                    r.name AS name,
+                    ? AS color,
+                    ? AS shape,
+                    NULL AS created_at,
+                    r.usage_count AS usage_count,
+                    1 AS inferred
+                FROM referenced r
+                LEFT JOIN matter_tag t ON t.name = r.name
+                WHERE t.name IS NULL
+            )
+            ORDER BY lower(name), name
+            """,
+            (MATTER_TAG_DEFAULT_COLOR.value, MATTER_TAG_DEFAULT_SHAPE.value),
+        ).fetchall()
+        return [self._tag_row(row) for row in rows]
+
+    def get_tag(self, conn: sqlite3.Connection, name: str) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT name,color,shape,created_at FROM matter_tag WHERE name=?",
+            (name,),
+        ).fetchone()
+        return self._tag_row(row) if row else None
+
+    def tag_is_referenced(
+        self, conn: sqlite3.Connection, name: str, *, include_deleted: bool = True
+    ) -> bool:
+        clauses = ["json_each.value=?"]
+        if not include_deleted:
+            clauses.append("matter.deleted_at IS NULL")
+        return (
+            conn.execute(
+                "SELECT 1 FROM matter, json_each(matter.tags_json) "
+                f"WHERE {' AND '.join(clauses)} LIMIT 1",
+                (name,),
+            ).fetchone()
+            is not None
+        )
+
+    def upsert_tag(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        name: str,
+        color: str,
+        shape: str,
+        created_at: int,
+    ) -> dict[str, Any]:
+        conn.execute(
+            "INSERT INTO matter_tag(name,color,shape,created_at) VALUES (?,?,?,?) "
+            "ON CONFLICT(name) DO UPDATE SET color=excluded.color,shape=excluded.shape",
+            (name, color, shape, created_at),
+        )
+        tag = self.get_tag(conn, name)
+        if tag is None:
+            raise RuntimeError(f"failed to upsert matter tag {name!r}")
+        return tag
+
+    def merge_or_rename_tag_definition(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        old_name: str,
+        new_name: str,
+        created_at: int,
+    ) -> dict[str, Any]:
+        old_tag = self.get_tag(conn, old_name)
+        new_tag = self.get_tag(conn, new_name)
+        if old_tag and new_tag:
+            conn.execute("DELETE FROM matter_tag WHERE name=?", (old_name,))
+        elif old_tag:
+            conn.execute(
+                "UPDATE matter_tag SET name=? WHERE name=?", (new_name, old_name)
+            )
+        elif not new_tag:
+            conn.execute(
+                "INSERT INTO matter_tag(name,color,shape,created_at) VALUES (?,?,?,?)",
+                (
+                    new_name,
+                    MATTER_TAG_DEFAULT_COLOR.value,
+                    MATTER_TAG_DEFAULT_SHAPE.value,
+                    created_at,
+                ),
+            )
+        tag = self.get_tag(conn, new_name)
+        if tag is None:
+            raise RuntimeError(f"failed to resolve renamed matter tag {new_name!r}")
+        return tag
+
+    def delete_tag(self, conn: sqlite3.Connection, name: str) -> bool:
+        cursor = conn.execute("DELETE FROM matter_tag WHERE name=?", (name,))
+        return cursor.rowcount > 0
+
+    def list_matter_rows_with_tag(
+        self, conn: sqlite3.Connection, name: str
+    ) -> list[dict[str, Any]]:
+        rows = conn.execute(
+            "SELECT DISTINCT matter.id, matter.public_id, matter.tags_json, matter.version "
+            "FROM matter, json_each(matter.tags_json) "
+            "WHERE json_each.value=? ORDER BY matter.id",
+            (name,),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def rename_tag_references(
+        self, conn: sqlite3.Connection, *, old_name: str, new_name: str, updated_at: int
+    ) -> list[dict[str, Any]]:
+        changed: list[dict[str, Any]] = []
+        for row in self.list_matter_rows_with_tag(conn, old_name):
+            before = self._json(row["tags_json"], [])
+            after = self._rename_tag_values(before, old_name, new_name)
+            if after == before:
+                continue
+            conn.execute(
+                "UPDATE matter SET tags_json=?, updated_at=?, last_activity_at=?, "
+                "version=version+1 WHERE id=?",
+                (self._dump(after), updated_at, updated_at, row["id"]),
+            )
+            changed.append(
+                {
+                    "id": int(row["id"]),
+                    "public_id": row["public_id"],
+                    "version": int(row["version"]),
+                    "before": before,
+                    "after": after,
+                }
+            )
+        return changed
+
+    def remove_tag_references(
+        self, conn: sqlite3.Connection, *, name: str, updated_at: int
+    ) -> list[dict[str, Any]]:
+        changed: list[dict[str, Any]] = []
+        for row in self.list_matter_rows_with_tag(conn, name):
+            before = self._json(row["tags_json"], [])
+            after = self._remove_tag_values(before, name)
+            if after == before:
+                continue
+            conn.execute(
+                "UPDATE matter SET tags_json=?, updated_at=?, last_activity_at=?, "
+                "version=version+1 WHERE id=?",
+                (self._dump(after), updated_at, updated_at, row["id"]),
+            )
+            changed.append(
+                {
+                    "id": int(row["id"]),
+                    "public_id": row["public_id"],
+                    "version": int(row["version"]),
+                    "before": before,
+                    "after": after,
+                }
+            )
+        return changed
+
+    def get_tag_mutation(
+        self, conn: sqlite3.Connection, dedupe_key: str
+    ) -> dict[str, Any] | None:
+        row = conn.execute(
+            "SELECT value FROM sync_state WHERE key=?", (f"matter_tag_mutation:{dedupe_key}",)
+        ).fetchone()
+        if not row:
+            return None
+        return self._json(row["value"], None)
+
+    def put_tag_mutation(
+        self,
+        conn: sqlite3.Connection,
+        dedupe_key: str,
+        *,
+        value: Mapping[str, Any],
+        updated_at: int,
+    ) -> None:
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_state(key,value,updated_at) VALUES (?,?,?)",
+            (
+                f"matter_tag_mutation:{dedupe_key}",
+                self._dump(value),
+                updated_at,
+            ),
+        )
+
     def upsert_resource(
         self, conn: sqlite3.Connection, values: Mapping[str, Any]
     ) -> tuple[dict[str, Any], bool]:
@@ -496,12 +703,55 @@ class MatterRepository:
         except (TypeError, json.JSONDecodeError):
             return fallback
 
+    @staticmethod
+    def _dump(value: Any) -> str:
+        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+    @staticmethod
+    def _rename_tag_values(value: Any, old_name: str, new_name: str) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result: list[str] = []
+        seen: set[str] = set()
+        for raw_tag in value:
+            tag = str(raw_tag).strip()
+            if not tag:
+                continue
+            if tag == old_name:
+                tag = new_name
+            if tag in seen:
+                continue
+            seen.add(tag)
+            result.append(tag)
+        return result
+
+    @staticmethod
+    def _remove_tag_values(value: Any, name: str) -> list[str]:
+        if not isinstance(value, list):
+            return []
+        result: list[str] = []
+        seen: set[str] = set()
+        for raw_tag in value:
+            tag = str(raw_tag).strip()
+            if not tag or tag == name or tag in seen:
+                continue
+            seen.add(tag)
+            result.append(tag)
+        return result
+
     @classmethod
     def _matter_row(cls, row: sqlite3.Row) -> dict[str, Any]:
         result = dict(row)
         result["tags"] = cls._json(result.pop("tags_json"), [])
         result["goal_checks"] = cls._json(result.pop("goal_checks_json", None), [])
         result["waiting_context"] = cls._json(result.pop("waiting_context_json"), None)
+        return result
+
+    @staticmethod
+    def _tag_row(row: sqlite3.Row) -> dict[str, Any]:
+        result = dict(row)
+        result["usage_count"] = int(result.get("usage_count") or 0)
+        result["inferred"] = bool(result.get("inferred", False))
         return result
 
     @classmethod
