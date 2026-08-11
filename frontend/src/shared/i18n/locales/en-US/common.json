@@ -4681,8 +4681,7 @@
       "archived": "Archived",
       "trash": "Trash"
     },
-    "density": { "label": "List density", "compact": "Compact", "comfortable": "Comfortable" },
-    "list": { "search": "Search title, ID, description, or summary", "archived": "Archived", "trashDays": "Trash · purges in {count} days" },
+    "list": { "search": "Search title, ID, description, or summary", "archived": "Archived", "trashDays": "Trash · purges in {count} days", "resize": "Resize matter list" },
     "empty": {
       "default": "There are no matters in this view yet.",
       "archived": "Archived matters stay here and can be restored anytime.",
@@ -4710,13 +4709,13 @@
       "submit": "Create matter",
       "creating": "Creating…"
     },
-    "detail": { "empty": "Select a matter to view details", "created": "Created {date}", "due": "Due {date}", "noDue": "No due date", "agentUnbound": "No follow-up agent bound", "addTag": "Add tag" },
-    "tabs": { "state": "State", "context": "Context", "timeline": "Timeline" },
+    "detail": { "empty": "Select a matter to view details", "created": "Created {date}", "due": "Due {date}", "noDue": "No due date", "agentUnbound": "No follow-up agent bound", "addTag": "Add tag", "title": "Matter title", "editTitle": "Edit matter title", "type": "Matter type", "typeUnset": "No type", "typeCustom": "Custom…", "typeCustomPlaceholder": "Enter a custom type", "priority": "Matter priority" },
+    "tabs": { "state": "State", "context": "Context", "timeline": "Timeline", "label": "Matter details", "runs": "Runs" },
     "status": { "inbox": "Inbox", "planned": "Planned", "active": "Active", "waiting": "Waiting", "blocked": "Blocked", "monitoring": "Monitoring", "done": "Done", "canceled": "Canceled" },
     "health": { "unknown": "Unknown", "on_track": "On track", "at_risk": "At risk", "off_track": "Off track" },
-    "actions": { "archive": "Archive", "restoreArchive": "Unarchive", "trash": "Move to trash", "restore": "Restore", "permanentDelete": "Delete permanently" },
+    "actions": { "archive": "Archive", "restoreArchive": "Unarchive", "trash": "Move to trash", "restore": "Restore", "permanentDelete": "Delete permanently", "edit": "Edit", "save": "Save", "cancel": "Cancel", "removeTag": "Remove tag {tag}" },
     "delete": { "title": "Delete matter permanently", "hint": "Enter {id} to confirm. This cannot be undone, but it will not delete email, calendar, or external documents." },
-    "state": { "title": "Current state", "noSummary": "No current summary yet.", "summaryGuard": "The system maintains this summary. Your purpose and background below is preserved and cannot be overwritten by an agent.", "descriptionLabel": "Your purpose and background (agents cannot rewrite this)", "noDescription": "No purpose or background has been entered." },
+    "state": { "title": "Current state", "noSummary": "No current summary yet.", "summaryGuard": "The system maintains this summary. Your purpose and background below is preserved and cannot be overwritten by an agent.", "descriptionLabel": "Your purpose and background (agents cannot rewrite this)", "noDescription": "No purpose or background has been entered.", "descriptionPlaceholder": "Add the purpose, background, constraints, or completion criteria…", "markdownHint": "Markdown is supported." },
     "item": {
       "addTitle": "Add matter item",
       "kind": "Type",
@@ -4784,7 +4783,8 @@
       "subscriptionActive": "Following new replies",
       "subscriptionPaused": "Subscription paused",
       "unlink": "Unlink",
-      "unlinkedNoDelete": "Unlinked without deleting the original email"
+      "unlinkedNoDelete": "Unlinked without deleting the original email",
+      "noSourceLink": "No source link"
     },
     "capture": {
       "title": "Matters",

@@ -76,7 +76,14 @@ export type MatterChangeKind = (typeof MATTER_CHANGE_KINDS)[number]
 
 export const MATTER_RUN_STATUSES = ['ok', 'noop', 'warn', 'fail'] as const
 export type MatterRunStatus = (typeof MATTER_RUN_STATUSES)[number]
-export type MatterRunLifecycleState = 'queued' | 'running' | 'ok' | 'noop' | 'warn' | 'fail' | 'canceled'
+export type MatterRunLifecycleState =
+  | 'queued'
+  | 'running'
+  | 'ok'
+  | 'noop'
+  | 'warn'
+  | 'fail'
+  | 'canceled'
 
 export const MATTER_RUN_TRIGGERS = ['manual', 'schedule'] as const
 export type MatterRunTrigger = (typeof MATTER_RUN_TRIGGERS)[number]
@@ -351,9 +358,19 @@ export interface MatterRun {
   [key: string]: unknown
 }
 
-export interface MatterRunListResponse { items: MatterRun[]; next_cursor: number | null }
-export interface MatterRunStartResult { run: MatterRun; coalesced: boolean }
-export interface MatterProposalSource { resource_id: number; locator?: Record<string, unknown> | null; evidence?: string | null }
+export interface MatterRunListResponse {
+  items: MatterRun[]
+  next_cursor: number | null
+}
+export interface MatterRunStartResult {
+  run: MatterRun
+  coalesced: boolean
+}
+export interface MatterProposalSource {
+  resource_id: number
+  locator?: Record<string, unknown> | null
+  evidence?: string | null
+}
 export interface MatterProposalChange {
   id: string
   kind: MatterChangeKind
@@ -383,7 +400,12 @@ export interface MatterUpdate extends MatterUpdateSummary {
   matter_id: number
   from_event_id: number | null
   to_event_id: number | null
-  original_proposal: { summary?: string | null; changes?: MatterProposalChange[]; open_questions?: string[]; confidence?: number | null }
+  original_proposal: {
+    summary?: string | null
+    changes?: MatterProposalChange[]
+    open_questions?: string[]
+    confidence?: number | null
+  }
   reviewed_result: Record<string, unknown> | null
   changes: MatterProposalChange[]
   accepted_change_ids: string[] | null
@@ -391,10 +413,18 @@ export interface MatterUpdate extends MatterUpdateSummary {
   stale_at: number | null
   stale_reason: string | null
 }
-export interface MatterUpdateListResponse { items: MatterUpdateSummary[]; next_cursor: number | null }
+export interface MatterUpdateListResponse {
+  items: MatterUpdateSummary[]
+  next_cursor: number | null
+}
 export interface MatterUpdateAcceptInput {
   selected_change_ids: string[]
-  edited_changes?: Array<{ change_id: string; after?: unknown; text?: string | null; edit_reason?: string | null }>
+  edited_changes?: Array<{
+    change_id: string
+    after?: unknown
+    text?: string | null
+    edit_reason?: string | null
+  }>
   edited_summary?: string | null
 }
 
@@ -445,10 +475,14 @@ export interface MatterCreateInput {
   source_resource?: MatterSourceResourceInput
 }
 
+// 字段集镜像后端 service.py 的 DIRECT_PATCH_FIELDS + BINDING_PATCH_FIELDS。
+// priority 原本只在「接受提案」路径可写（_apply_accepted_change），手动 PATCH 不能改 ——
+// 0811 dogfood 反馈「创建后优先级不能改」时把后端白名单补齐，此处同步。
 export interface MatterPatchInput {
   title?: string
   description?: string
   matter_type?: string | null
+  priority?: MatterPriority
   tags?: string[]
   status?: MatterStatus
   health?: MatterHealth
@@ -650,15 +684,43 @@ export interface MattersApi {
   getRun(matterId: string, runId: number): Promise<MatterRun>
   startRun(matterId: string, options: MatterMutationOptions): Promise<MatterRunStartResult>
   cancelRun(matterId: string, runId: number): Promise<MatterMutationResult>
-  listUpdates(matterId: string, reviewStatus?: MatterUpdateReviewStatus): Promise<MatterUpdateListResponse>
+  listUpdates(
+    matterId: string,
+    reviewStatus?: MatterUpdateReviewStatus
+  ): Promise<MatterUpdateListResponse>
   getUpdate(matterId: string, updateId: number): Promise<MatterUpdate>
-  acceptUpdate(matterId: string, updateId: number, input: MatterUpdateAcceptInput, options: MatterMutationOptions): Promise<MatterMutationResult>
-  rejectUpdate(matterId: string, updateId: number, reason: string, options: MatterMutationOptions): Promise<MatterMutationResult>
-  listAttention(state?: MatterAttentionState, kind?: MatterAttentionKind): Promise<MatterAttentionListResponse>
-  listMatterAttention(matterId: string, state?: MatterAttentionState, kind?: MatterAttentionKind): Promise<MatterAttentionListResponse>
+  acceptUpdate(
+    matterId: string,
+    updateId: number,
+    input: MatterUpdateAcceptInput,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  rejectUpdate(
+    matterId: string,
+    updateId: number,
+    reason: string,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  listAttention(
+    state?: MatterAttentionState,
+    kind?: MatterAttentionKind
+  ): Promise<MatterAttentionListResponse>
+  listMatterAttention(
+    matterId: string,
+    state?: MatterAttentionState,
+    kind?: MatterAttentionKind
+  ): Promise<MatterAttentionListResponse>
   resolveAttention(matterId: string, signalId: number): Promise<MatterAttentionSignal>
-  snoozeAttention(matterId: string, signalId: number, input: { preset: '3d' } | { until: number }): Promise<MatterAttentionSignal>
-  dismissAttention(matterId: string, signalId: number, reason?: string): Promise<MatterAttentionSignal>
+  snoozeAttention(
+    matterId: string,
+    signalId: number,
+    input: { preset: '3d' } | { until: number }
+  ): Promise<MatterAttentionSignal>
+  dismissAttention(
+    matterId: string,
+    signalId: number,
+    reason?: string
+  ): Promise<MatterAttentionSignal>
   getNotifyLevel(): Promise<MatterNotifyLevelResponse>
   setNotifyLevel(level: MatterNotifyLevel): Promise<MatterNotifyLevelResponse>
 }

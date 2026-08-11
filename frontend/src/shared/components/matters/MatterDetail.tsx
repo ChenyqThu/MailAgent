@@ -12,15 +12,24 @@ import {
   MessageSquare,
   MoreHorizontal,
   Loader2,
+  Pencil,
   Play,
   Plus,
   RotateCcw,
+  Save,
   Tag,
   Trash2,
-  Sparkles
+  Sparkles,
+  X
 } from 'lucide-react'
 
-import { MATTER_HEALTH_VALUES, MATTER_ITEM_KINDS, MATTER_STATUSES } from '@shared/api/types/matter'
+import {
+  BUILTIN_MATTER_TYPES,
+  MATTER_HEALTH_VALUES,
+  MATTER_ITEM_KINDS,
+  MATTER_PRIORITIES,
+  MATTER_STATUSES
+} from '@shared/api/types/matter'
 import type {
   Matter,
   MatterAttentionSignal,
@@ -30,12 +39,16 @@ import type {
   MatterItem,
   MatterItemCreateInput,
   MatterItemKind,
+  MatterPatchInput,
+  MatterPriority,
   MatterResourceListItem,
   MatterStatus
 } from '@shared/api/types/matter'
 import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
 import { isScheduleValue } from '@shared/components/agents/schedule/types'
+import { TranslatedBody } from '@shared/components/email/TranslatedBody'
+import { Input } from '@shared/components/ui/input'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import {
   Select,
@@ -93,6 +106,9 @@ interface MatterDetailProps {
 type DetailTab = 'state' | 'context' | 'timeline' | 'runs'
 type TimelineFilter = 'all' | MatterActorKind
 
+const DETAIL_TYPE_UNSET = '__detail_type_unset__'
+const DETAIL_TYPE_CUSTOM = '__detail_type_custom__'
+
 export function MatterDetail({
   matterId,
   onBack,
@@ -115,6 +131,8 @@ export function MatterDetail({
   const [addOpen, setAddOpen] = useState(false)
   const [moreOpen, setMoreOpen] = useState(false)
   const [tagDraft, setTagDraft] = useState('')
+  const [titleEditing, setTitleEditing] = useState(false)
+  const [titleDraft, setTitleDraft] = useState('')
   const [deleteConfirmation, setDeleteConfirmation] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [drawerItem, setDrawerItem] = useState<MatterResourceListItem | null>(null)
@@ -160,6 +178,45 @@ export function MatterDetail({
     (run) => run.lifecycle_state === 'queued' || run.lifecycle_state === 'running'
   )
   const overlayRun = runs.find((run) => run.id === overlayRunId)
+  const detailTabOptions = useMemo(
+    () =>
+      (
+        [
+          'state',
+          'context',
+          'timeline',
+          ...(matterAgentEnabled ? (['runs'] as const) : [])
+        ] as const
+      ).map((value) => {
+        const count =
+          value === 'context'
+            ? resourceItems.length + stakeholderItems.length
+            : value === 'runs'
+              ? runs.length
+              : null
+        return {
+          value,
+          label: (
+            <span className="inline-flex items-center gap-1.5">
+              {t(`matters.tabs.${value}`)}
+              {count !== null ? (
+                <span
+                  className={cn(
+                    'min-w-5 rounded-[var(--r-pill)] border px-1.5 font-mono text-[11px] leading-4',
+                    tab === value
+                      ? 'border-ink-border bg-ink-fg/[0.08] text-ink-fg-1'
+                      : 'border-ink-border-soft bg-ink-2/70 text-ink-fg-2'
+                  )}
+                >
+                  {count}
+                </span>
+              ) : null}
+            </span>
+          )
+        }
+      }),
+    [matterAgentEnabled, resourceItems.length, runs.length, stakeholderItems.length, t, tab]
+  )
   const selectedUpdate = useQuery({
     queryKey: [...qk.matters.detail(matterId), 'update', reviewId],
     queryFn: () => api.getUpdate(matterId, reviewId as number),
@@ -172,6 +229,9 @@ export function MatterDetail({
     setReviewId(initialReviewId)
     onReviewOpened?.()
   }, [initialReviewId, onReviewOpened])
+  useEffect(() => {
+    if (!titleEditing) setTitleDraft(matter?.title ?? '')
+  }, [matter?.title, titleEditing])
 
   const refresh = async (): Promise<void> => {
     await Promise.all([
@@ -185,7 +245,7 @@ export function MatterDetail({
   }
 
   const patch = useMutation({
-    mutationFn: (input: Parameters<typeof api.patch>[1]) => {
+    mutationFn: (input: MatterPatchInput) => {
       if (!matter) return Promise.reject(new Error('Matter is not loaded'))
       return api.patch(matterId, input, { expectedVersion: matter.version })
     },
@@ -332,6 +392,16 @@ export function MatterDetail({
     setTagDraft('')
   }
 
+  const saveTitle = (): void => {
+    const title = titleDraft.trim()
+    if (!title || title === matter.title) {
+      setTitleDraft(matter.title)
+      setTitleEditing(false)
+      return
+    }
+    patch.mutate({ title }, { onSuccess: () => setTitleEditing(false) })
+  }
+
   const openReviewSource = (resourceId: number): void => {
     const item = resourceItems.find((candidate) => candidate.resource.id === resourceId)
     if (!item) return
@@ -368,14 +438,71 @@ export function MatterDetail({
             <div className="min-w-0 flex-1">
               <div className="flex flex-wrap items-center gap-2 text-meta text-ink-fg-2">
                 <span className="font-mono">{matter.public_id}</span>
-                {matter.matter_type ? <span>{matter.matter_type}</span> : null}
+                <MatterTypeEditor
+                  value={matter.matter_type}
+                  busy={patch.isPending}
+                  onChange={(matterType) => patch.mutate({ matter_type: matterType })}
+                />
                 <span>
                   {t('matters.detail.created', {
                     date: new Date(matter.created_at).toLocaleDateString()
                   })}
                 </span>
               </div>
-              <h1 className="mt-1 text-heading font-semibold text-ink-fg">{matter.title}</h1>
+              <div className="group/title mt-1 flex min-h-8 items-center gap-1.5">
+                {titleEditing ? (
+                  <>
+                    <Input
+                      autoFocus
+                      value={titleDraft}
+                      onChange={(event) => setTitleDraft(event.target.value)}
+                      onKeyDown={(event) => {
+                        if (event.key === 'Enter') saveTitle()
+                        if (event.key === 'Escape') {
+                          setTitleDraft(matter.title)
+                          setTitleEditing(false)
+                        }
+                      }}
+                      aria-label={t('matters.detail.title')}
+                      className="h-8 min-w-0 flex-1 px-2 text-heading font-semibold"
+                    />
+                    <button
+                      type="button"
+                      disabled={!titleDraft.trim() || patch.isPending}
+                      onClick={saveTitle}
+                      aria-label={t('matters.actions.save')}
+                      className="rounded-[var(--r-ctl)] p-1.5 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+                    >
+                      <Save size={14} />
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setTitleDraft(matter.title)
+                        setTitleEditing(false)
+                      }}
+                      aria-label={t('matters.actions.cancel')}
+                      className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+                    >
+                      <X size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <h1 className="min-w-0 text-heading font-semibold text-ink-fg">
+                      {matter.title}
+                    </h1>
+                    <button
+                      type="button"
+                      onClick={() => setTitleEditing(true)}
+                      aria-label={t('matters.detail.editTitle')}
+                      className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 opacity-0 transition-[color,background-color,opacity,transform] duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] group-hover/title:opacity-100"
+                    >
+                      <Pencil size={13} />
+                    </button>
+                  </>
+                )}
+              </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <StatusMenu value={matter.status} onChange={(status) => patch.mutate({ status })} />
                 <Select
@@ -393,9 +520,16 @@ export function MatterDetail({
                     ))}
                   </SelectContent>
                 </Select>
-                <span className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 text-meta font-mono uppercase">
-                  {matter.priority}
-                </span>
+                <SegmentedControl<MatterPriority>
+                  value={matter.priority}
+                  onChange={(priority) => patch.mutate({ priority })}
+                  options={MATTER_PRIORITIES.map((value) => ({
+                    value,
+                    label: value.toUpperCase()
+                  }))}
+                  ariaLabel={t('matters.detail.priority')}
+                  className="font-mono uppercase"
+                />
                 <span className="text-meta text-ink-fg-2">
                   {matter.due_at
                     ? t('matters.detail.due', {
@@ -429,7 +563,8 @@ export function MatterDetail({
                     onClick={() =>
                       patch.mutate({ tags: matter.tags.filter((value) => value !== tag) })
                     }
-                    className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 text-meta text-ink-fg-1 hover:text-fail"
+                    aria-label={t('matters.actions.removeTag', { tag })}
+                    className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 text-meta text-ink-fg-1 transition-colors duration-fast ease-standard hover:text-fail focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
                   >
                     #{tag}
                   </button>
@@ -556,39 +691,14 @@ export function MatterDetail({
           </div>
         </header>
 
-        <div className="border-b border-ink-border px-5 pt-2">
-          <div className="flex gap-5">
-            {(
-              [
-                'state',
-                'context',
-                'timeline',
-                ...(matterAgentEnabled ? ['runs' as const] : [])
-              ] as const
-            ).map((value) => (
-              <button
-                key={value}
-                type="button"
-                onClick={() => setTab(value)}
-                className={cn(
-                  'border-b-2 px-1 py-2 text-body',
-                  tab === value ? 'border-coral text-ink-fg' : 'border-transparent text-ink-fg-2'
-                )}
-              >
-                {t(`matters.tabs.${value}`)}
-                {value === 'context' ? (
-                  <span className="ml-1.5 rounded-[var(--r-pill)] bg-ink-3 px-1.5 py-0.5 text-meta font-mono text-ink-fg-2">
-                    {resourceItems.length + stakeholderItems.length}
-                  </span>
-                ) : null}
-                {value === 'runs' ? (
-                  <span className="ml-1.5 rounded-[var(--r-pill)] bg-ink-3 px-1.5 py-0.5 text-meta font-mono text-ink-fg-2">
-                    {runs.length}
-                  </span>
-                ) : null}
-              </button>
-            ))}
-          </div>
+        <div className="border-b border-ink-border px-5 py-2">
+          <SegmentedControl<DetailTab>
+            value={tab}
+            onChange={setTab}
+            options={detailTabOptions}
+            ariaLabel={t('matters.tabs.label')}
+            size="md"
+          />
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin">
@@ -632,6 +742,10 @@ export function MatterDetail({
                 matter={matter}
                 pendingCount={updates.length}
                 onReview={() => setReviewId(updates[0]?.id ?? null)}
+                saving={patch.isPending}
+                onDescriptionSave={(description, onSaved) =>
+                  patch.mutate({ description }, { onSuccess: onSaved })
+                }
               />
               <ItemGroups
                 items={items}
@@ -802,16 +916,121 @@ function StatusMenu({
   )
 }
 
+function MatterTypeEditor({
+  value,
+  busy,
+  onChange
+}: {
+  value: string | null
+  busy: boolean
+  onChange(value: string | null): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [customOpen, setCustomOpen] = useState(false)
+  const [customDraft, setCustomDraft] = useState('')
+  const isBuiltin = value !== null && BUILTIN_MATTER_TYPES.some((type) => type === value)
+  const selectValue = value === null ? DETAIL_TYPE_UNSET : isBuiltin ? value : value
+
+  useEffect(() => {
+    if (!customOpen) setCustomDraft(isBuiltin ? '' : (value ?? ''))
+  }, [customOpen, isBuiltin, value])
+
+  const saveCustom = (): void => {
+    const next = customDraft.trim()
+    if (!next) return
+    onChange(next)
+    setCustomOpen(false)
+  }
+
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      <Select
+        value={selectValue}
+        disabled={busy}
+        onValueChange={(next) => {
+          if (next === DETAIL_TYPE_CUSTOM) {
+            setCustomOpen(true)
+            return
+          }
+          setCustomOpen(false)
+          onChange(next === DETAIL_TYPE_UNSET ? null : next)
+        }}
+      >
+        <SelectTrigger
+          aria-label={t('matters.detail.type')}
+          className="h-auto w-auto min-w-24 rounded-[var(--r-pill)] px-2 py-1 text-meta"
+        >
+          <SelectValue>{value ?? t('matters.detail.typeUnset')}</SelectValue>
+        </SelectTrigger>
+        <SelectContent>
+          <SelectItem value={DETAIL_TYPE_UNSET}>{t('matters.detail.typeUnset')}</SelectItem>
+          {value !== null && !isBuiltin ? <SelectItem value={value}>{value}</SelectItem> : null}
+          {BUILTIN_MATTER_TYPES.map((type) => (
+            <SelectItem key={type} value={type}>
+              {type}
+            </SelectItem>
+          ))}
+          <SelectItem value={DETAIL_TYPE_CUSTOM}>{t('matters.detail.typeCustom')}</SelectItem>
+        </SelectContent>
+      </Select>
+      {customOpen ? (
+        <div className="flex items-center gap-1">
+          <Input
+            autoFocus
+            value={customDraft}
+            onChange={(event) => setCustomDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Enter') saveCustom()
+              if (event.key === 'Escape') setCustomOpen(false)
+            }}
+            placeholder={t('matters.detail.typeCustomPlaceholder')}
+            aria-label={t('matters.detail.typeCustomPlaceholder')}
+            className="h-7 w-36 px-2 text-meta"
+          />
+          <button
+            type="button"
+            disabled={!customDraft.trim() || busy}
+            onClick={saveCustom}
+            aria-label={t('matters.actions.save')}
+            className="rounded-[var(--r-ctl)] p-1.5 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+          >
+            <Save size={13} />
+          </button>
+          <button
+            type="button"
+            onClick={() => setCustomOpen(false)}
+            aria-label={t('matters.actions.cancel')}
+            className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+          >
+            <X size={13} />
+          </button>
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
 function StateCard({
   matter,
   pendingCount,
-  onReview
+  onReview,
+  saving,
+  onDescriptionSave
 }: {
   matter: Matter
   pendingCount: number
   onReview(): void
+  saving: boolean
+  onDescriptionSave(description: string, onSaved: () => void): void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState(matter.description)
+
+  useEffect(() => {
+    if (!editing) setDraft(matter.description)
+  }, [editing, matter.description])
+
   return (
     <section className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/75 p-4">
       <h2 className="text-title font-semibold">{t('matters.state.title')}</h2>
@@ -822,12 +1041,61 @@ function StateCard({
         {t('matters.state.summaryGuard')}
       </p>
       <div className="mt-4 rounded-[var(--r-ctl)] border border-dashed border-ink-border p-3">
-        <div className="text-meta font-medium text-ink-fg-2">
-          {t('matters.state.descriptionLabel')}
+        <div className="flex items-center justify-between gap-3">
+          <div className="text-meta font-medium text-ink-fg-2">
+            {t('matters.state.descriptionLabel')}
+          </div>
+          {!editing ? (
+            <button
+              type="button"
+              onClick={() => setEditing(true)}
+              className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-2 py-1 text-meta text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+            >
+              <Pencil size={12} />
+              {t('matters.actions.edit')}
+            </button>
+          ) : null}
         </div>
-        <p className="mt-2 whitespace-pre-wrap text-body text-ink-fg-1">
-          {matter.description || t('matters.state.noDescription')}
-        </p>
+        {editing ? (
+          <div className="mt-2">
+            <textarea
+              autoFocus
+              rows={7}
+              value={draft}
+              onChange={(event) => setDraft(event.target.value)}
+              placeholder={t('matters.state.descriptionPlaceholder')}
+              aria-label={t('matters.state.descriptionLabel')}
+              className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
+            />
+            <p className="mt-1 text-meta text-ink-fg-2">{t('matters.state.markdownHint')}</p>
+            <div className="mt-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDraft(matter.description)
+                  setEditing(false)
+                }}
+                className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+              >
+                {t('matters.actions.cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={saving || draft === matter.description}
+                onClick={() => onDescriptionSave(draft, () => setEditing(false))}
+                className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
+              >
+                {t('matters.actions.save')}
+              </button>
+            </div>
+          </div>
+        ) : matter.description ? (
+          <div className="mt-2 [&_.mail-body_p:last-child]:mb-0">
+            <TranslatedBody text={matter.description} />
+          </div>
+        ) : (
+          <p className="mt-2 text-body text-ink-fg-2">{t('matters.state.noDescription')}</p>
+        )}
       </div>
       {pendingCount > 0 ? (
         <button
@@ -956,7 +1224,9 @@ function ItemGroup({
                     {item.title}
                   </div>
                   {item.description ? (
-                    <p className="mt-1 text-aux text-ink-fg-2">{item.description}</p>
+                    <div className="mt-1 [&_.mail-body]:text-aux [&_.mail-body]:leading-relaxed [&_.mail-body_p]:mb-2 [&_.mail-body_p:last-child]:mb-0">
+                      <TranslatedBody text={item.description} />
+                    </div>
                   ) : null}
                   {item.checklist.length > 0 ? (
                     <button

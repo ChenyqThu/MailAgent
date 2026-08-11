@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 from .models import MATTER_SEARCH_FIELDS
+from .resource_identity import parse_resource_key
 
 
 class MatterRepository:
@@ -364,14 +365,18 @@ class MatterRepository:
     def resource_available(self, conn: sqlite3.Connection, provider: str, kind: str, external_key: str) -> bool:
         if provider != "mailagent" or kind not in {"email", "thread"}:
             return True
+        try:
+            parsed_kind, identifier = parse_resource_key(
+                external_key if ":" in external_key else f"{kind}:{external_key}"
+            )
+        except ValueError:
+            return False
+        if parsed_kind != kind:
+            return False
         if kind == "email":
-            try:
-                internal_id = int(external_key.split(":", 1)[1])
-            except (IndexError, ValueError):
-                return False
+            internal_id = int(identifier)
             return conn.execute("SELECT 1 FROM email_metadata WHERE internal_id=?", (internal_id,)).fetchone() is not None
-        thread_id = external_key.split(":", 1)[1] if ":" in external_key else ""
-        return conn.execute("SELECT 1 FROM email_metadata WHERE thread_id=? LIMIT 1", (thread_id,)).fetchone() is not None
+        return conn.execute("SELECT 1 FROM email_metadata WHERE thread_id=? LIMIT 1", (identifier,)).fetchone() is not None
 
     def rebuild_all_search_documents(self) -> int:
         with self.transaction() as conn:

@@ -76,6 +76,26 @@ def test_resource_identity_duplicate_link_unlink_restore_and_sub_state(service):
     assert exc.value.code == "E_INVALID_STATE"
 
 
+def test_resource_write_normalizes_bare_mailagent_keys_and_availability_is_tolerant(service):
+    with service.repository.transaction() as conn:
+        conn.execute(
+            "INSERT INTO email_metadata(internal_id,message_id,thread_id,date_received) "
+            "VALUES (123,'message-123','thread-123','2026-08-11T00:00:00Z')"
+        )
+    created = create_matter(service, "Normalized resource")
+    linked = service.add_resource(
+        created["matter"]["public_id"],
+        {"provider": "mailagent", "external_key": "123", "kind": "email"},
+        **mutation(created["version"], "link-bare-email"),
+    )
+    assert linked["resources"][0]["resource"]["external_key"] == "email:123"
+    with service.repository.connect() as conn:
+        assert service.repository.resource_available(conn, "mailagent", "email", "123") is True
+        assert service.repository.resource_available(conn, "mailagent", "email", "email:123") is True
+        assert service.repository.resource_available(conn, "mailagent", "thread", "thread-123") is True
+        assert service.repository.resource_available(conn, "mailagent", "thread", "thread:thread-123") is True
+
+
 def test_resource_access_policy_requires_explicit_resource_scope(service):
     created = create_matter(service)
     public_id = created["matter"]["public_id"]

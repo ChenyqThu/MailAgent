@@ -4681,11 +4681,11 @@
       "archived": "已归档",
       "trash": "回收站"
     },
-    "density": { "label": "列表密度", "compact": "紧凑", "comfortable": "舒适" },
     "list": {
       "search": "搜索标题、编号、描述或摘要",
       "archived": "已归档",
-      "trashDays": "回收站 · {count} 天后清除"
+      "trashDays": "回收站 · {count} 天后清除",
+      "resize": "调整事项清单宽度"
     },
     "empty": {
       "default": "这个视图里还没有事项。",
@@ -4744,9 +4744,16 @@
       "due": "截止 {date}",
       "noDue": "未设截止时间",
       "agentUnbound": "未绑定跟进 Agent",
-      "addTag": "添加标签"
+      "addTag": "添加标签",
+      "title": "事项标题",
+      "editTitle": "编辑事项标题",
+      "type": "事项类型",
+      "typeUnset": "未指定类型",
+      "typeCustom": "自定义…",
+      "typeCustomPlaceholder": "输入自定义类型",
+      "priority": "事项优先级"
     },
-    "tabs": { "state": "状态", "context": "上下文", "timeline": "时间线" },
+    "tabs": { "state": "状态", "context": "上下文", "timeline": "时间线", "label": "事项详情", "runs": "运行" },
     "status": {
       "inbox": "收件",
       "planned": "计划中",
@@ -4763,7 +4770,11 @@
       "restoreArchive": "取消归档",
       "trash": "移到回收站",
       "restore": "恢复",
-      "permanentDelete": "永久删除"
+      "permanentDelete": "永久删除",
+      "edit": "编辑",
+      "save": "保存",
+      "cancel": "取消",
+      "removeTag": "移除标签 {tag}"
     },
     "delete": {
       "title": "永久删除事项",
@@ -4774,7 +4785,9 @@
       "noSummary": "还没有当前摘要。",
       "summaryGuard": "当前摘要由系统维护；你的目的与背景始终保留在下方，Agent 不可覆盖。",
       "descriptionLabel": "你写的目的与背景（Agent 不可改写）",
-      "noDescription": "还没有填写目的与背景。"
+      "noDescription": "还没有填写目的与背景。",
+      "descriptionPlaceholder": "写下目的、背景、约束或完成标准…",
+      "markdownHint": "支持 Markdown 格式。"
     },
     "item": {
       "addTitle": "添加事项条目",
@@ -4879,7 +4892,8 @@
       "subscriptionActive": "已订阅后续",
       "subscriptionPaused": "订阅已暂停",
       "unlink": "解除关联",
-      "unlinkedNoDelete": "已解除关联，不会删除原始邮件"
+      "unlinkedNoDelete": "已解除关联，不会删除原始邮件",
+      "noSourceLink": "未提供来源链接"
     },
     "capture": {
       "title": "事项",

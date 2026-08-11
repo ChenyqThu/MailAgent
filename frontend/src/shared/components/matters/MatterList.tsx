@@ -7,15 +7,11 @@ import { compareMatterRank, nextAction, trashDaysRemaining } from '@shared/lib/m
 import { openAttentionFor } from '@shared/lib/matterDerive'
 import type { MatterAttentionIndex, MatterView } from '@shared/lib/matterDerive'
 import { cn } from '@shared/lib/cn'
-import { AttentionPip } from './attention'
-
-export type MatterDensity = 'compact' | 'comfortable'
 
 interface MatterListProps {
   matters: readonly Matter[]
   view: MatterView
   selectedId: string | null
-  density: MatterDensity
   attention?: MatterAttentionIndex
   search: string
   onSearchChange(value: string): void
@@ -27,7 +23,6 @@ export function MatterList({
   matters,
   view,
   selectedId,
-  density,
   attention,
   search,
   onSearchChange,
@@ -67,7 +62,6 @@ export function MatterList({
             key={matter.public_id}
             matter={matter}
             selected={selectedId === matter.public_id}
-            density={density}
             signals={openAttentionFor(matter, attention)}
             onSelect={() => onSelect(matter)}
           />
@@ -96,12 +90,11 @@ export function MatterList({
 interface MatterRowProps {
   matter: Matter
   selected: boolean
-  density: MatterDensity
   signals: ReturnType<typeof openAttentionFor>
   onSelect(): void
 }
 
-function MatterRow({ matter, selected, density, signals, onSelect }: MatterRowProps): React.ReactElement {
+function MatterRow({ matter, selected, signals, onSelect }: MatterRowProps): React.ReactElement {
   const { t } = useTranslation()
   const days = trashDaysRemaining(matter)
   const critical = signals.some((signal) => signal.severity === 'critical')
@@ -110,8 +103,7 @@ function MatterRow({ matter, selected, density, signals, onSelect }: MatterRowPr
       type="button"
       onClick={onSelect}
       className={cn(
-        'relative w-full border-b border-ink-border px-4 text-left transition-colors duration-fast',
-        density === 'comfortable' ? 'py-3.5' : 'py-2.5',
+        'relative w-full border-b border-ink-border px-4 py-2.5 text-left transition-colors duration-fast',
         // Theme v3 mapping: prototype tone colors map to repository semantic tokens;
         // selection keeps the canonical wash + left-bar signature instead of inline colors.
         selected ? 'row-selected acc-select' : 'hover:bg-ink-3'
@@ -137,18 +129,6 @@ function MatterRow({ matter, selected, density, signals, onSelect }: MatterRowPr
             <span className="shrink-0 text-meta font-mono uppercase text-ink-fg-2">{matter.priority}</span>
           </span>
           <span className="mt-1 block truncate text-aux text-ink-fg-1">{nextAction(matter)}</span>
-          {density === 'comfortable' && matter.tags.length > 0 ? (
-            <span className="mt-2 flex flex-wrap gap-1">
-              {matter.tags.map((tag) => (
-                <span key={tag} className="rounded-[var(--r-pill)] bg-ink-3 px-1.5 py-0.5 text-meta text-ink-fg-2">
-                  #{tag}
-                </span>
-              ))}
-            </span>
-          ) : null}
-          {density === 'comfortable' && signals.length > 0 ? (
-            <span className="mt-2 flex flex-wrap gap-1">{signals.map((signal, index) => <AttentionPip key={signal.id ?? `${signal.kind}-${index}`} signal={signal} />)}</span>
-          ) : null}
           <span className="mt-1.5 flex items-center gap-2 text-meta text-ink-fg-2">
             <span className="font-mono">{matter.public_id}</span>
             {matter.archived_at !== null && matter.deleted_at === null ? (

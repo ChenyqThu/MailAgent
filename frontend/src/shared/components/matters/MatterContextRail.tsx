@@ -1,19 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import {
-  Bot,
-  ChevronDown,
-  ChevronRight,
-  File,
-  FileText,
-  Link2,
-  Mail,
-  Pin,
-  RefreshCcw,
-  Shield,
-  Sparkles,
-  Users
-} from 'lucide-react'
+import { Bot, ChevronDown, ChevronRight, Pin, RefreshCcw, Shield, Sparkles } from 'lucide-react'
 
 import type { ReportAgentConfig } from '@shared/api/types'
 import type {
@@ -38,7 +25,12 @@ import {
 } from '@shared/components/ui/select'
 import { cn } from '@shared/lib/cn'
 
-import { groupMatterResources, isMatterResourceAvailable } from './matterResource'
+import {
+  DOC_PROVIDER_ICONS,
+  RESOURCE_KIND_ICONS,
+  groupMatterResources,
+  isMatterResourceAvailable
+} from './matterResource'
 
 interface MatterContextRailProps {
   resources: MatterResourceListItem[]
@@ -51,15 +43,6 @@ interface MatterContextRailProps {
   onPatch(input: MatterPatchInput): void
   profiles: ReportAgentConfig[]
 }
-
-const RESOURCE_ICONS = {
-  email: Mail,
-  thread: Mail,
-  event: Users,
-  doc: FileText,
-  file: File,
-  url: Link2
-} as const
 
 const BUILTIN_PROFILE_VALUE = '__builtin__'
 
@@ -411,9 +394,7 @@ export function MatterAgentCard({
           }}
           className="text-meta text-ai"
         >
-          {matter.agent_profile_id
-            ? t('common.edit')
-            : t('matters.agentBinding.useCustomAgent')}
+          {matter.agent_profile_id ? t('common.edit') : t('matters.agentBinding.useCustomAgent')}
         </button>
         {matter.agent_profile_id ? (
           <button
@@ -471,7 +452,9 @@ function ResourceRailRow({
   compact?: boolean
 }): React.ReactElement {
   const { t } = useTranslation()
-  const Icon = RESOURCE_ICONS[item.resource.kind]
+  const Icon =
+    (item.resource.kind === 'doc' && DOC_PROVIDER_ICONS[item.resource.provider.toLowerCase()]) ||
+    RESOURCE_KIND_ICONS[item.resource.kind]
   const available = isMatterResourceAvailable(item)
   return (
     <div className="group flex items-start gap-2 rounded-[var(--r-ctl)] px-2 py-2 hover:bg-ink-3">

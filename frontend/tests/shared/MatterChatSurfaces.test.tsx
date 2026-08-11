@@ -7,15 +7,31 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
-import type { Matter } from '@shared/api/types/matter'
+import type { Matter, MatterItem } from '@shared/api/types/matter'
 
-const { mattersApi, chatApi, mailApi, mattersEnabled } = vi.hoisted(() => ({
+const localStorageValues = new Map<string, string>()
+const localStorageStub = {
+  get length() { return localStorageValues.size },
+  clear: () => localStorageValues.clear(),
+  getItem: (key: string) => localStorageValues.get(key) ?? null,
+  key: (index: number) => [...localStorageValues.keys()][index] ?? null,
+  removeItem: (key: string) => localStorageValues.delete(key),
+  setItem: (key: string, value: string) => localStorageValues.set(key, value)
+} satisfies Storage
+
+Object.defineProperty(globalThis, 'localStorage', { configurable: true, value: localStorageStub })
+Object.defineProperty(window, 'localStorage', { configurable: true, value: localStorageStub })
+
+const { mattersApi, chatApi, mailApi, mattersEnabled, matterAgentEnabled } = vi.hoisted(() => ({
   mattersApi: {
     get: vi.fn(),
     list: vi.fn(),
+    patch: vi.fn(),
+    listUpdates: vi.fn(async () => ({ items: [] })),
+    getUpdate: vi.fn(),
     listResources: vi.fn(async () => []),
     listStakeholders: vi.fn(async () => [])
   },
@@ -33,16 +49,20 @@ const { mattersApi, chatApi, mailApi, mattersEnabled } = vi.hoisted(() => ({
       newSession: vi.fn()
     }
   },
-  mattersEnabled: { value: true }
+  mattersEnabled: { value: true },
+  matterAgentEnabled: { value: false }
 }))
 
 vi.mock('@shared/components/matters/hooks', () => ({
   useMattersApi: () => mattersApi,
   useMatterChatApi: () => chatApi,
   useMattersEnabled: () => mattersEnabled.value,
-  // P4 lane ③ 起 MatterDetail 还消费这五个 hook；本测试只看面板/rail 槽位，
-  // agent 面全部给「flag 关」的惰性桩（runs 标签与「立即跟进」不渲染，P3 断言面不变）。
-  useMatterFlags: () => ({ mattersEnabled: mattersEnabled.value, matterAgentEnabled: false }),
+  // P4 lane ③ 起 MatterDetail 还消费这五个 hook；默认给「flag 关」的惰性桩，
+  // 详情 dogfood 回归可单独打开 runs 标签。
+  useMatterFlags: () => ({
+    mattersEnabled: mattersEnabled.value,
+    matterAgentEnabled: matterAgentEnabled.value
+  }),
   useMatterRuns: () => ({ data: undefined, isLoading: false }),
   useMatterUpdates: () => ({ data: undefined, isLoading: false }),
   useStartMatterRun: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
@@ -139,8 +159,12 @@ function renderDetail(chatOpen: boolean): ReturnType<typeof render> {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  window.localStorage.clear()
   mattersEnabled.value = true
+  matterAgentEnabled.value = false
+  mattersApi.list.mockResolvedValue({ items: [matter()] })
   mattersApi.get.mockResolvedValue({ matter: matter(), items: [], timeline: [] })
+  mattersApi.patch.mockResolvedValue({ matter: matter() })
   mattersApi.listResources.mockResolvedValue([])
   mattersApi.listStakeholders.mockResolvedValue([])
   stubWideViewport()
@@ -165,6 +189,97 @@ describe('MatterDetail — chat panel vs ContextRail', () => {
   })
 })
 
+describe('MatterDetail — detail editing and rendering', () => {
+  test('uses segmented detail tabs and renders markdown descriptions', async () => {
+    const note: MatterItem = {
+      id: 8,
+      matter_id: 42,
+      kind: 'note',
+      title: 'Release note',
+      description: '**条目重点**',
+      position: 0,
+      status: 'open',
+      priority: null,
+      owner_kind: null,
+      owner_id: null,
+      waiting_on_stakeholder_id: null,
+      due_at: null,
+      completed_at: null,
+      checklist: [],
+      source_resource_id: null,
+      source_locator: null,
+      created_at: 1,
+      updated_at: 1,
+      deleted_at: null
+    }
+    matterAgentEnabled.value = true
+    mattersApi.get.mockResolvedValue({
+      matter: { ...matter(), description: '**背景重点**' },
+      items: [note],
+      timeline: []
+    })
+
+    renderDetail(false)
+
+    expect(await screen.findByRole('tablist', { name: '事项详情' })).toBeTruthy()
+    expect(screen.getByRole('tab', { name: /运行/ })).toBeTruthy()
+    expect(await screen.findByText('背景重点')).toBeTruthy()
+    expect(screen.getByText('条目重点')).toBeTruthy()
+    expect(screen.queryByText('**背景重点**')).toBeNull()
+    expect(screen.queryByText('**条目重点**')).toBeNull()
+  })
+
+  test('patches title, priority, type, and purpose inline', async () => {
+    renderDetail(false)
+    await screen.findByText('Vendor launch')
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑事项标题' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '事项标题' }), {
+      target: { value: 'Vendor launch revised' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() =>
+      expect(mattersApi.patch).toHaveBeenCalledWith(
+        'MAT-0042',
+        { title: 'Vendor launch revised' },
+        { expectedVersion: 3 }
+      )
+    )
+
+    fireEvent.click(screen.getByRole('tab', { name: 'P2' }))
+    await waitFor(() =>
+      expect(mattersApi.patch).toHaveBeenCalledWith(
+        'MAT-0042',
+        { priority: 'p2' },
+        { expectedVersion: 3 }
+      )
+    )
+
+    fireEvent.click(screen.getByRole('combobox', { name: '事项类型' }))
+    fireEvent.click(await screen.findByRole('option', { name: '产品' }))
+    await waitFor(() =>
+      expect(mattersApi.patch).toHaveBeenCalledWith(
+        'MAT-0042',
+        { matter_type: '产品' },
+        { expectedVersion: 3 }
+      )
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByRole('textbox', { name: /你写的目的与背景/ }), {
+      target: { value: '## 新背景' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() =>
+      expect(mattersApi.patch).toHaveBeenCalledWith(
+        'MAT-0042',
+        { description: '## 新背景' },
+        { expectedVersion: 3 }
+      )
+    )
+  })
+})
+
 describe('MattersWorkspace — flag off', () => {
   test('renders nothing and issues no matters request', () => {
     mattersEnabled.value = false
@@ -179,5 +294,60 @@ describe('MattersWorkspace — flag off', () => {
     expect(container.firstChild).toBeNull()
     expect(mattersApi.list).not.toHaveBeenCalled()
     expect(chatApi.contextSnapshot).not.toHaveBeenCalled()
+  })
+})
+
+describe('MattersWorkspace — resizable matter list', () => {
+  test('restores, drags, clamps, and persists the list width', async () => {
+    window.localStorage.setItem('mailagent.matters.listWidth', '400')
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <MattersWorkspace />
+      </QueryClientProvider>
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '全部' }))
+    const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
+    const grid = separator.parentElement as HTMLDivElement
+    expect(grid.style.getPropertyValue('--matter-list-width')).toBe('400px')
+
+    let capturedPointer: number | null = null
+    separator.setPointerCapture = vi.fn((pointerId: number) => { capturedPointer = pointerId })
+    separator.hasPointerCapture = vi.fn((pointerId: number) => capturedPointer === pointerId)
+    separator.releasePointerCapture = vi.fn(() => { capturedPointer = null })
+
+    fireEvent.pointerDown(separator, { button: 0, clientX: 400, pointerId: 7 })
+    fireEvent.pointerMove(separator, { clientX: 900, pointerId: 7 })
+    expect(grid.style.getPropertyValue('--matter-list-width')).toBe('480px')
+    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('400')
+    expect(document.body.style.cursor).toBe('col-resize')
+    expect(document.body.style.userSelect).toBe('none')
+
+    fireEvent.pointerUp(separator, { pointerId: 7 })
+    await waitFor(() => expect(separator.getAttribute('aria-valuenow')).toBe('480'))
+    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('480')
+    expect(document.body.style.cursor).toBe('')
+    expect(document.body.style.userSelect).toBe('')
+  })
+
+  test('supports keyboard resizing', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <MattersWorkspace />
+      </QueryClientProvider>
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '全部' }))
+    const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
+    fireEvent.keyDown(separator, { key: 'ArrowLeft' })
+
+    expect(separator.getAttribute('aria-valuenow')).toBe('304')
+    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('304')
   })
 })

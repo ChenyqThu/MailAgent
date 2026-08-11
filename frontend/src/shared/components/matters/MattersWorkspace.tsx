@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
@@ -19,7 +19,6 @@ import {
 } from 'lucide-react'
 
 import type { Matter, MatterCreateInput, MatterUpdate } from '@shared/api/types/matter'
-import { SegmentedControl } from '@shared/components/ui/segmented'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { filterView, MATTER_VIEWS, openAttentionFor } from '@shared/lib/matterDerive'
@@ -31,9 +30,39 @@ import { MatterCreateDialog } from './MatterCreateDialog'
 import { MatterDetail } from './MatterDetail'
 import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
-import type { MatterDensity } from './MatterList'
 import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
 import { useMatterNavigation } from './navigation'
+
+const MATTER_LIST_WIDTH_STORAGE_KEY = 'mailagent.matters.listWidth'
+const DEFAULT_MATTER_LIST_WIDTH = 320
+const MIN_MATTER_LIST_WIDTH = 280
+const MAX_MATTER_LIST_WIDTH = 480
+const MATTER_LIST_WIDTH_STEP = 16
+
+function clampMatterListWidth(width: number): number {
+  return Math.min(MAX_MATTER_LIST_WIDTH, Math.max(MIN_MATTER_LIST_WIDTH, width))
+}
+
+function readMatterListWidth(): number {
+  try {
+    if (typeof localStorage === 'undefined') return DEFAULT_MATTER_LIST_WIDTH
+    const raw = localStorage.getItem(MATTER_LIST_WIDTH_STORAGE_KEY)
+    if (raw === null) return DEFAULT_MATTER_LIST_WIDTH
+    const persisted = Number(raw)
+    return Number.isFinite(persisted) ? clampMatterListWidth(persisted) : DEFAULT_MATTER_LIST_WIDTH
+  } catch {
+    return DEFAULT_MATTER_LIST_WIDTH
+  }
+}
+
+function writeMatterListWidth(width: number): void {
+  try {
+    if (typeof localStorage === 'undefined') return
+    localStorage.setItem(MATTER_LIST_WIDTH_STORAGE_KEY, String(width))
+  } catch {
+    // localStorage unavailable — the resized width still works for this session.
+  }
+}
 
 const VIEW_ICONS: Record<MatterView, React.ReactNode> = {
   focus: <Focus size={14} />,
@@ -58,7 +87,7 @@ export function MattersWorkspace(): React.ReactElement | null {
   const [view, setView] = useState<MatterView>('focus')
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
-  const [density, setDensity] = useState<MatterDensity>('compact')
+  const [matterListWidth, setMatterListWidth] = useState(readMatterListWidth)
   const [createOpen, setCreateOpen] = useState(false)
   const [reviewTarget, setReviewTarget] = useState<{ matterId: string; updateId: number } | null>(null)
   // P3 — 事项对话 open state. Owned here (not in MatterDetail) so switching / clearing the selected
@@ -67,12 +96,39 @@ export function MattersWorkspace(): React.ReactElement | null {
   const [chatOpen, setChatOpen] = useState(false)
   const navigationTarget = useMatterNavigation((state) => state.targetPublicId)
   const clearNavigationTarget = useMatterNavigation((state) => state.clear)
+  const workspaceGridRef = useRef<HTMLDivElement>(null)
+  const resizeDragRef = useRef<{
+    pointerId: number
+    startX: number
+    startWidth: number
+    currentWidth: number
+    previousCursor: string
+    previousUserSelect: string
+  } | null>(null)
 
   /** Every selection change goes through here so the chat panel can never stay open over a
    *  DIFFERENT matter (it is anchored on the one it was opened for). */
   const selectMatter = useCallback((publicId: string | null): void => {
     setSelectedId(publicId)
     setChatOpen(false)
+  }, [])
+
+  const finishMatterListResize = useCallback((target: HTMLDivElement, pointerId: number): void => {
+    const drag = resizeDragRef.current
+    if (!drag || drag.pointerId !== pointerId) return
+    resizeDragRef.current = null
+    if (target.hasPointerCapture(pointerId)) target.releasePointerCapture(pointerId)
+    document.body.style.cursor = drag.previousCursor
+    document.body.style.userSelect = drag.previousUserSelect
+    setMatterListWidth(drag.currentWidth)
+    writeMatterListWidth(drag.currentWidth)
+  }, [])
+
+  useEffect(() => () => {
+    const drag = resizeDragRef.current
+    if (!drag) return
+    document.body.style.cursor = drag.previousCursor
+    document.body.style.userSelect = drag.previousUserSelect
   }, [])
 
   const list = useQuery({
@@ -152,15 +208,6 @@ export function MattersWorkspace(): React.ReactElement | null {
           <p className="text-meta text-ink-fg-2">{t('matters.subtitle')}</p>
         </div>
         <div className="flex items-center gap-2">
-          <SegmentedControl<MatterDensity>
-            value={density}
-            onChange={setDensity}
-            options={[
-              { value: 'compact', label: t('matters.density.compact') },
-              { value: 'comfortable', label: t('matters.density.comfortable') }
-            ]}
-            ariaLabel={t('matters.density.label')}
-          />
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
@@ -206,19 +253,68 @@ export function MattersWorkspace(): React.ReactElement | null {
           {view === 'focus' ? (
             <MatterFocus matters={allMatters} signals={attentionItems} updates={updateIndex} onSelect={(matter) => { setView('all'); selectMatter(matter.public_id) }} onReview={(matter, updateId) => { setView('review'); selectMatter(matter.public_id); setReviewTarget({ matterId: matter.public_id, updateId }) }} onSignal={handleAttentionAction} onView={(next) => setView(next)} />
           ) : (
-            <div className="grid h-full min-h-0 grid-cols-[minmax(280px,0.9fr)_minmax(420px,1.45fr)] max-[1180px]:grid-cols-1">
+            <div
+              ref={workspaceGridRef}
+              className="grid h-full min-h-0 grid-cols-[var(--matter-list-width)_6px_minmax(420px,1fr)] max-[1180px]:grid-cols-1"
+              style={{ '--matter-list-width': `${matterListWidth}px` } as React.CSSProperties}
+            >
               <div className={cn('min-h-0', selected && 'max-[1180px]:hidden')}>
                 <MatterList
                   matters={visible}
                   view={view}
                   selectedId={selectedId}
-                  density={density}
                   attention={attentionIndex}
                   search={search}
                   onSearchChange={setSearch}
                   onSelect={(matter: Matter) => selectMatter(matter.public_id)}
                   onCreate={() => setCreateOpen(true)}
                 />
+              </div>
+              <div
+                role="separator"
+                aria-label={t('matters.list.resize')}
+                aria-orientation="vertical"
+                aria-valuemin={MIN_MATTER_LIST_WIDTH}
+                aria-valuemax={MAX_MATTER_LIST_WIDTH}
+                aria-valuenow={matterListWidth}
+                tabIndex={0}
+                className="group relative z-10 cursor-col-resize touch-none outline-none max-[1180px]:hidden"
+                onPointerDown={(event) => {
+                  if (event.button !== 0) return
+                  event.preventDefault()
+                  event.currentTarget.setPointerCapture(event.pointerId)
+                  resizeDragRef.current = {
+                    pointerId: event.pointerId,
+                    startX: event.clientX,
+                    startWidth: matterListWidth,
+                    currentWidth: matterListWidth,
+                    previousCursor: document.body.style.cursor,
+                    previousUserSelect: document.body.style.userSelect
+                  }
+                  document.body.style.cursor = 'col-resize'
+                  document.body.style.userSelect = 'none'
+                }}
+                onPointerMove={(event) => {
+                  const drag = resizeDragRef.current
+                  if (!drag || drag.pointerId !== event.pointerId) return
+                  const nextWidth = clampMatterListWidth(drag.startWidth + event.clientX - drag.startX)
+                  drag.currentWidth = nextWidth
+                  workspaceGridRef.current?.style.setProperty('--matter-list-width', `${nextWidth}px`)
+                }}
+                onPointerUp={(event) => finishMatterListResize(event.currentTarget, event.pointerId)}
+                onPointerCancel={(event) => finishMatterListResize(event.currentTarget, event.pointerId)}
+                onLostPointerCapture={(event) => finishMatterListResize(event.currentTarget, event.pointerId)}
+                onKeyDown={(event) => {
+                  if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return
+                  event.preventDefault()
+                  const delta = event.key === 'ArrowLeft' ? -MATTER_LIST_WIDTH_STEP : MATTER_LIST_WIDTH_STEP
+                  const nextWidth = clampMatterListWidth(matterListWidth + delta)
+                  workspaceGridRef.current?.style.setProperty('--matter-list-width', `${nextWidth}px`)
+                  setMatterListWidth(nextWidth)
+                  writeMatterListWidth(nextWidth)
+                }}
+              >
+                <span className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-ink-border transition-colors group-hover:bg-coral/70 group-focus-visible:bg-coral/70" />
               </div>
               <div className={cn('min-h-0', !selected && 'max-[1180px]:hidden')}>
                 {selected ? (

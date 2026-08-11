@@ -27,7 +27,13 @@ from .models import (
     person_key_for_email,
 )
 from .repository import MatterRepository
-from .resource_identity import EMAIL_PROVIDER, email_resource_key, thread_resource_key
+from .resource_identity import (
+    EMAIL_PROVIDER,
+    MatterError,
+    email_resource_key,
+    normalize_resource_key,
+    thread_resource_key,
+)
 from .events import (
     AGENT_BINDING_CHANGED,
     CHAT_SCOPE_EXPANDED,
@@ -59,6 +65,7 @@ DIRECT_PATCH_FIELDS = {
     "title",
     "description",
     "matter_type",
+    "priority",
     "tags",
     "due_at",
     "waiting_context",
@@ -72,14 +79,6 @@ DIRECT_PATCH_FIELDS = {
 # snippet / body ...) are the *source* of the truncated `excerpt` field and must
 # never ride out untruncated through metadata — whitelist, 宁缺勿滥.
 SNAPSHOT_METADATA_KEYS = ("internal_id", "message_id", "thread_id", "date_received")
-
-
-class MatterError(RuntimeError):
-    def __init__(self, code: str, message: str, *, hint: str | None = None):
-        super().__init__(message)
-        self.code = code
-        self.message = message
-        self.hint = hint
 
 
 @dataclass(frozen=True)
@@ -425,6 +424,9 @@ class MatterService:
                     value = str(value or "").strip()
                     if not value:
                         raise MatterError("E_INVALID_ARG", "title cannot be empty")
+                elif field == "priority":
+                    value = str(value)
+                    self._require_value("priority", value, MATTER_PRIORITIES)
                 elif field == "matter_type":
                     value = self._optional_text(value)
                 elif field == "tags":
@@ -2096,6 +2098,7 @@ class MatterService:
         if not provider or not external_key:
             raise MatterError("E_INVALID_ARG", "resource provider and external_key are required")
         self._require_value("kind", kind, MATTER_RESOURCE_KINDS)
+        external_key = normalize_resource_key(provider, kind, external_key)
         if data.get("sub_state") not in (None, "none") and kind != "thread":
             raise MatterError("E_INVALID_STATE", "subscription state is only supported for thread resources")
         existing = conn.execute("SELECT * FROM resource WHERE provider=? AND external_key=?", (provider, external_key)).fetchone()

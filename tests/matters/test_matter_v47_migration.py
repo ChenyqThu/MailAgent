@@ -35,7 +35,7 @@ def test_v47_fresh_db_has_attention_table_and_indexes(tmp_path):
     SyncStore(str(path))
     assert COLUMNS <= _columns(path)
     assert INDEXES <= _indexes(path)
-    assert _version(path) == "47"
+    assert _version(path) == str(SyncStore.DB_VERSION)
 
 
 def test_v47_upgrade_from_46_and_idempotent_rerun(tmp_path):
@@ -49,7 +49,7 @@ def test_v47_upgrade_from_46_and_idempotent_rerun(tmp_path):
     SyncStore(str(path))
     assert COLUMNS <= _columns(path)
     assert INDEXES <= _indexes(path)
-    assert _version(path) == "47"
+    assert _version(path) == str(SyncStore.DB_VERSION)
 
 
 def test_v47_attention_vocabulary_and_event_registry_are_canonical():

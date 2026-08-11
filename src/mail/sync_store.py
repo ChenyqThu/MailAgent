@@ -68,6 +68,7 @@ from src.matters.models import (
     MatterUpdateReviewStatus,
     sql_check_clause,
 )
+from src.matters.resource_identity import MatterError, normalize_resource_key
 
 
 # Draft→Sent 提升判定用的 mailbox label 集合（见 _save_email_v3 cross-backend merge）。
@@ -907,7 +908,10 @@ class SyncStore:
     #                (schedule_json P5 预留零消费)。matter_update 提案列 v44 已建齐,
     #                本版零动作; matter_update.agent_run_id 语义冻结 = matter_run.id (D1)。
     #                回滚 (回退 v46): 表/列可留 (旧代码无消费点, 无害); 必要时降 db_version。
-    DB_VERSION = 47  # v47: Matter Attention episodes (P5)
+    # v47 (Matters P5, 2026-08): matter_attention 表 + active/state 索引。
+    # v48 (Matters dogfood batch 2): mailagent email/thread external_key 归一；碰撞时
+    #                合并活跃 matter_resource、重指历史链接与资源外键，并回填邮件元数据。
+    DB_VERSION = 48  # v48: normalize MailAgent Matter resource identities
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -2862,6 +2866,127 @@ class SyncStore:
                 _migration_guard_index(
                     cursor, "uq_matter_attention_active", "v47 migration", e
                 )
+
+        # === v48: normalize MailAgent email/thread resource identities ===
+        if current_version < 48:
+            try:
+                cursor.execute(
+                    "SELECT * FROM resource WHERE provider='mailagent' "
+                    "AND kind IN ('email','thread') ORDER BY id"
+                )
+                for legacy in list(cursor.fetchall()):
+                    canonical_key = normalize_resource_key(
+                        legacy["provider"], legacy["kind"], legacy["external_key"]
+                    )
+
+                    metadata_json = legacy["metadata_json"]
+                    if legacy["kind"] == "email" and json.loads(metadata_json) == {}:
+                        internal_id = int(canonical_key.split(":", 1)[1])
+                        email_row = cursor.execute(
+                            "SELECT internal_id,message_id,date_received "
+                            "FROM email_metadata WHERE internal_id=?",
+                            (internal_id,),
+                        ).fetchone()
+                        if email_row:
+                            metadata_json = json.dumps(
+                                {
+                                    "internal_id": internal_id,
+                                    "message_id": email_row["message_id"],
+                                    "date_received": email_row["date_received"],
+                                },
+                                ensure_ascii=False,
+                                separators=(",", ":"),
+                            )
+
+                    if canonical_key == legacy["external_key"]:
+                        if metadata_json != legacy["metadata_json"]:
+                            cursor.execute(
+                                "UPDATE resource SET metadata_json=? WHERE id=?",
+                                (metadata_json, legacy["id"]),
+                            )
+                        continue
+
+                    canonical = cursor.execute(
+                        "SELECT * FROM resource WHERE provider=? AND external_key=?",
+                        (legacy["provider"], canonical_key),
+                    ).fetchone()
+                    if canonical is None:
+                        cursor.execute(
+                            "UPDATE resource SET external_key=?, metadata_json=? WHERE id=?",
+                            (canonical_key, metadata_json, legacy["id"]),
+                        )
+                        continue
+
+                    canonical_metadata = canonical["metadata_json"]
+                    if json.loads(canonical_metadata) == {} and json.loads(metadata_json) != {}:
+                        canonical_metadata = metadata_json
+                    cursor.execute(
+                        "UPDATE resource SET metadata_json=? WHERE id=?",
+                        (canonical_metadata, canonical["id"]),
+                    )
+
+                    cursor.execute(
+                        "SELECT * FROM matter_resource WHERE resource_id=? "
+                        "AND deleted_at IS NULL ORDER BY id",
+                        (legacy["id"],),
+                    )
+                    for legacy_link in cursor.fetchall():
+                        canonical_link = cursor.execute(
+                            "SELECT * FROM matter_resource WHERE matter_id=? "
+                            "AND resource_id=? AND deleted_at IS NULL ORDER BY id LIMIT 1",
+                            (legacy_link["matter_id"], canonical["id"]),
+                        ).fetchone()
+                        if canonical_link is None:
+                            continue
+                        cursor.execute(
+                            "UPDATE matter_resource SET "
+                            "relation_type=COALESCE(relation_type, ?), "
+                            "pinned=MAX(pinned, ?), "
+                            "confidence=COALESCE(confidence, ?), "
+                            "provenance_json=CASE WHEN provenance_json='{}' "
+                            "THEN ? ELSE provenance_json END, "
+                            "confirmed_at=COALESCE(confirmed_at, ?), "
+                            "sub_state=CASE WHEN sub_state='none' THEN ? ELSE sub_state END, "
+                            "created_at=MIN(created_at, ?), updated_at=MAX(updated_at, ?) "
+                            "WHERE id=?",
+                            (
+                                legacy_link["relation_type"],
+                                legacy_link["pinned"],
+                                legacy_link["confidence"],
+                                legacy_link["provenance_json"],
+                                legacy_link["confirmed_at"],
+                                legacy_link["sub_state"],
+                                legacy_link["created_at"],
+                                legacy_link["updated_at"],
+                                canonical_link["id"],
+                            ),
+                        )
+                        cursor.execute(
+                            "DELETE FROM matter_resource WHERE id=?",
+                            (legacy_link["id"],),
+                        )
+
+                    cursor.execute(
+                        "UPDATE matter_resource SET resource_id=? WHERE resource_id=?",
+                        (canonical["id"], legacy["id"]),
+                    )
+                    for table, column in (
+                        ("matter_item", "source_resource_id"),
+                        ("matter_event", "resource_id"),
+                        ("matter_stakeholder", "source_resource_id"),
+                    ):
+                        cursor.execute(
+                            f"UPDATE {table} SET {column}=? WHERE {column}=?",
+                            (canonical["id"], legacy["id"]),
+                        )
+                    cursor.execute("DELETE FROM resource WHERE id=?", (legacy["id"],))
+            except (
+                MatterError,
+                sqlite3.OperationalError,
+                sqlite3.IntegrityError,
+                ValueError,
+            ) as e:
+                raise SyncStoreMigrationError(f"v48 migration failed: {e}") from e
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

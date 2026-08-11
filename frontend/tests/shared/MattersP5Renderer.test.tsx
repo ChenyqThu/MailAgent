@@ -8,6 +8,7 @@ import i18n from '@shared/i18n'
 import type { Matter, MatterAttentionListResponse, MatterAttentionSignal, MatterUpdate } from '@shared/api/types/matter'
 import { MatterAttentionBadge } from '@shared/components/layout/Sidebar'
 import { AttnBand } from '@shared/components/matters/attention'
+import { MatterList } from '@shared/components/matters/MatterList'
 import { deriveFocusStats } from '@shared/lib/matterDerive'
 import { globalAttentionKey, matterAttentionKey, useAttentionAction } from '@shared/components/matters/hooks'
 
@@ -38,6 +39,25 @@ describe('P5 renderer surfaces', () => {
   test('Sidebar matter badge renders only for N > 0', () => {
     const view = render(<div><MatterAttentionBadge count={0}/><MatterAttentionBadge count={4}/></div>)
     expect(view.container.textContent).toBe('4')
+  })
+
+  test('MatterList keeps the compact row and omits tag and signal rows', () => {
+    render(
+      <MatterList
+        matters={[{ ...matter, tags: ['launch'] }]}
+        view="all"
+        selectedId={null}
+        attention={new Map([[matter.public_id, [signal()]]])}
+        search=""
+        onSearchChange={vi.fn()}
+        onSelect={vi.fn()}
+        onCreate={vi.fn()}
+      />
+    )
+
+    expect(screen.getByRole('button', { name: /Launch/ }).className).toContain('py-2.5')
+    expect(screen.queryByText('#launch')).toBeNull()
+    expect(screen.queryByText('跟进运行失败')).toBeNull()
   })
 
   test('AttnBand removes needs_review when proposal card is present', () => {

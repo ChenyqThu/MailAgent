@@ -39,6 +39,23 @@ def test_version_conflict_uses_aggregate_cas(service):
     assert exc.value.code == "E_VERSION_CONFLICT"
 
 
+def test_patch_matter_allows_valid_priority_and_rejects_invalid_priority(service):
+    created = _create(service)
+    changed = service.patch_matter(
+        created["matter"]["public_id"],
+        {"priority": "p0"},
+        **_mutation(created["version"], "priority-p0"),
+    )
+    assert changed["matter"]["priority"] == "p0"
+    with pytest.raises(MatterError) as exc_info:
+        service.patch_matter(
+            created["matter"]["public_id"],
+            {"priority": "urgent"},
+            **_mutation(changed["version"], "priority-invalid"),
+        )
+    assert exc_info.value.code == "E_INVALID_ARG"
+
+
 def test_public_id_is_unique_and_sequence_rolls_back_with_create(service, monkeypatch):
     original = service.repository.insert_matter
 
