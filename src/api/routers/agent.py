@@ -25,6 +25,7 @@ from src.agent_config.projections import (
 )
 from src.agent_config.store import (
     INSTALLABLE_SOURCE_TYPES,
+    MATTER_AGENT_DOC_NAME,
     MEMORY_DOC_NAME,
     STORABLE_DOC_NAMES,
     get_agent_config_store,
@@ -182,7 +183,13 @@ async def write_profile_doc(name: str, request: Request, body: Optional[dict[str
                        http_status=404, source="sqlite")
     raw = body or {}
     content = raw.get("content")
-    if not isinstance(content, str) or not content.strip():
+    if not isinstance(content, str):
+        raise APIError("E_INVALID_ARG", "body.content must be a string",
+                       http_status=400, source="sqlite")
+    # 身份文档为空会让恒注入的 prompt 缺一段，所以拒空；但 matter_agent 相反 ——
+    # 空内容**就是**「恢复默认」的表示法（run_spec 回落代码里的任务契约），
+    # 拒空等于把「恢复默认」这个动作从 API 上抹掉。
+    if not content.strip() and name != MATTER_AGENT_DOC_NAME:
         raise APIError("E_INVALID_ARG", "body.content must be a non-empty string",
                        http_status=400, source="sqlite")
     updated_by = raw.get("updatedBy") if raw.get("updatedBy") in ("user", "agent_proposed") else "user"

@@ -31,6 +31,7 @@ import {
   groupMatterResources,
   isMatterResourceAvailable
 } from './matterResource'
+import { MatterGlobalAgentModal } from './MatterGlobalAgentModal'
 import { MatterSuggestedResourceActions } from './MatterSuggestedResourceActions'
 
 interface MatterContextRailProps {
@@ -197,6 +198,7 @@ export function MatterAgentCard({
   const { t, i18n } = useTranslation()
   const [editing, setEditing] = useState(false)
   const [scheduleEditing, setScheduleEditing] = useState(false)
+  const [globalAgentOpen, setGlobalAgentOpen] = useState(false)
   const [profileId, setProfileId] = useState(matter.agent_profile_id ?? BUILTIN_PROFILE_VALUE)
   const [instructions, setInstructions] = useState(matter.matter_instructions ?? '')
   const persistedSchedule = parseSchedule(matter.schedule_json)
@@ -412,7 +414,19 @@ export function MatterAgentCard({
             {t('matters.agentBinding.unbind')}
           </button>
         ) : null}
+        {/* 全局配置改的是"这个 Agent 是谁"，事项级改的是"什么时候跑" —— 入口放一起，
+            但文案上要能看出改动是全局生效的。 */}
+        <button
+          type="button"
+          onClick={() => setGlobalAgentOpen(true)}
+          className="text-meta text-ink-fg-2 hover:text-ink-fg"
+        >
+          {t('matters.globalAgent.open')}
+        </button>
       </div>
+      {globalAgentOpen ? (
+        <MatterGlobalAgentModal onClose={() => setGlobalAgentOpen(false)} />
+      ) : null}
     </div>
   )
 }
@@ -469,14 +483,24 @@ function ResourceRailRow({
   const available = isMatterResourceAvailable(item)
   const suggested = item.link.confirmed_at === null
   return (
-    <div className={cn('group rounded-[var(--r-ctl)] px-2 py-2 hover:bg-ink-3', suggested && 'border border-ai/20 bg-ai/[0.06]')}>
+    <div
+      className={cn(
+        'group rounded-[var(--r-ctl)] px-2 py-2 hover:bg-ink-3',
+        suggested && 'border border-ai/20 bg-ai/[0.06]'
+      )}
+    >
       <div className="flex items-start gap-2">
         <button
           type="button"
           onClick={() => onOpen(item)}
           className="flex min-w-0 flex-1 items-start gap-2 text-left"
         >
-          <span className={cn('mt-0.5 grid size-5 shrink-0 place-items-center rounded bg-ink-4 text-ink-fg-2', suggested && 'bg-ai/15 text-ai')}>
+          <span
+            className={cn(
+              'mt-0.5 grid size-5 shrink-0 place-items-center rounded bg-ink-4 text-ink-fg-2',
+              suggested && 'bg-ai/15 text-ai'
+            )}
+          >
             <Icon size={11} />
           </span>
           <span className="min-w-0 flex-1">
@@ -484,7 +508,13 @@ function ResourceRailRow({
               <span className="min-w-0 flex-1 truncate text-aux text-ink-fg">
                 {item.resource.title || item.resource.external_key}
               </span>
-              {suggested ? <Sparkles size={10} className="shrink-0 text-ai" aria-label={t('matters.resource.suggested')} /> : null}
+              {suggested ? (
+                <Sparkles
+                  size={10}
+                  className="shrink-0 text-ai"
+                  aria-label={t('matters.resource.suggested')}
+                />
+              ) : null}
             </span>
             <span className="mt-0.5 flex items-center gap-1.5 text-meta text-ink-fg-3">
               <span className="truncate">{t(`matters.context.kind.${item.resource.kind}`)}</span>

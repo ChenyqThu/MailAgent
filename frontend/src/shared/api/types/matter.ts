@@ -155,6 +155,11 @@ export interface MatterChecklistEntry {
   done: boolean
 }
 
+export interface MatterGoalCheck {
+  t: string
+  done: boolean
+}
+
 export interface MatterAttentionSignal {
   id?: number
   matter_id?: number
@@ -189,6 +194,7 @@ export interface Matter {
   description: string
   matter_type: string | null
   tags: string[]
+  goal_checks?: MatterGoalCheck[]
   status: MatterStatus
   health: MatterHealth
   priority: MatterPriority
@@ -617,6 +623,7 @@ export interface MatterPatchInput {
   matter_type?: string | null
   priority?: MatterPriority
   tags?: string[]
+  goal_checks?: MatterGoalCheck[]
   status?: MatterStatus
   health?: MatterHealth
   current_summary?: string | null

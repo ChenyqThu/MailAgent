@@ -36,6 +36,7 @@ import type {
   MatterAttentionSignal,
   MatterActorKind,
   MatterEvent,
+  MatterGoalCheck,
   MatterHealth,
   MatterItem,
   MatterItemCreateInput,
@@ -49,6 +50,7 @@ import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
 import { isScheduleValue } from '@shared/components/agents/schedule/types'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
+import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import {
@@ -107,6 +109,34 @@ type TimelineFilter = 'all' | MatterActorKind
 
 const DETAIL_TYPE_UNSET = '__detail_type_unset__'
 const DETAIL_TYPE_CUSTOM = '__detail_type_custom__'
+const DATE_INPUT_RE = /^(\d{4})-(\d{2})-(\d{2})$/
+
+function formatDateInputValue(timestamp: number | null): string {
+  if (timestamp == null) return ''
+  const date = new Date(timestamp)
+  const year = date.getFullYear()
+  const month = String(date.getMonth() + 1).padStart(2, '0')
+  const day = String(date.getDate()).padStart(2, '0')
+  return `${year}-${month}-${day}`
+}
+
+function parseDateInputValue(value: string): number | null {
+  if (!value) return null
+  const match = DATE_INPUT_RE.exec(value)
+  if (!match) return null
+  const year = Number(match[1])
+  const month = Number(match[2])
+  const day = Number(match[3])
+  const date = new Date(year, month - 1, day)
+  if (
+    date.getFullYear() !== year ||
+    date.getMonth() !== month - 1 ||
+    date.getDate() !== day
+  ) {
+    return null
+  }
+  return date.getTime()
+}
 
 export function MatterDetail({
   matterId,
@@ -574,13 +604,11 @@ export function MatterDetail({
                   ariaLabel={t('matters.detail.priority')}
                   className="font-mono uppercase"
                 />
-                <span className="text-meta text-ink-fg-2">
-                  {matter.due_at
-                    ? t('matters.detail.due', {
-                        date: new Date(matter.due_at).toLocaleDateString()
-                      })
-                    : t('matters.detail.noDue')}
-                </span>
+                <DueDateControl
+                  value={matter.due_at}
+                  saving={patch.isPending}
+                  onChange={(due_at) => patch.mutate({ due_at })}
+                />
                 {/* 判定与右栏绑定卡同源：跟进 Agent 自 0811 起是内置的，profile 可为空，
                     `agent_enabled` 才是权威。此前这里额外要求 profile 非空，导致同一屏
                     右栏显示「内置 · 已启用」而头部显示「未绑定跟进 Agent」。 */}
@@ -804,6 +832,12 @@ export function MatterDetail({
                 saving={patch.isPending}
                 onDescriptionSave={(description, onSaved) =>
                   patch.mutate({ description }, { onSuccess: onSaved })
+                }
+                onSummarySave={(current_summary, onSaved) =>
+                  patch.mutate({ current_summary }, { onSuccess: onSaved })
+                }
+                onGoalChecksSave={(goal_checks, onSaved) =>
+                  patch.mutate({ goal_checks }, { onSuccess: onSaved })
                 }
               />
               <ItemGroups
@@ -1111,33 +1145,200 @@ function MatterTypeEditor({
   )
 }
 
+function DueDateControl({
+  value,
+  saving,
+  onChange
+}: {
+  value: number | null
+  saving: boolean
+  onChange(value: number | null): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [editing, setEditing] = useState(false)
+  const inputValue = formatDateInputValue(value)
+  const label =
+    value == null
+      ? t('matters.detail.noDue')
+      : t('matters.detail.due', { date: new Date(value).toLocaleDateString() })
+
+  return (
+    <span className="inline-flex items-center gap-1 text-meta text-ink-fg-2">
+      {editing ? (
+        <Input
+          autoFocus
+          type="date"
+          value={inputValue}
+          disabled={saving}
+          onChange={(event) => {
+            onChange(parseDateInputValue(event.target.value))
+            setEditing(false)
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Escape') setEditing(false)
+          }}
+          onBlur={() => setEditing(false)}
+          aria-label={label}
+          className="h-7 w-[9.5rem] rounded-[var(--r-pill)] px-2 py-1 text-meta"
+        />
+      ) : (
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => setEditing(true)}
+          className="rounded-[var(--r-pill)] px-2 py-1 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+        >
+          {label}
+        </button>
+      )}
+      {value != null ? (
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => onChange(null)}
+          aria-label={t('matters.detail.noDue')}
+          className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+        >
+          <X size={12} />
+        </button>
+      ) : null}
+    </span>
+  )
+}
+
 function StateCard({
   matter,
   pendingCount,
   onReview,
   saving,
-  onDescriptionSave
+  onDescriptionSave,
+  onSummarySave,
+  onGoalChecksSave
 }: {
   matter: Matter
   pendingCount: number
   onReview(): void
   saving: boolean
   onDescriptionSave(description: string, onSaved: () => void): void
+  onSummarySave(summary: string | null, onSaved: () => void): void
+  onGoalChecksSave(goalChecks: MatterGoalCheck[], onSaved?: () => void): void
 }): React.ReactElement {
   const { t } = useTranslation()
-  const [editing, setEditing] = useState(false)
-  const [draft, setDraft] = useState(matter.description)
+  const [summaryEditing, setSummaryEditing] = useState(false)
+  const [summaryDraft, setSummaryDraft] = useState(matter.current_summary ?? '')
+  const [descriptionEditing, setDescriptionEditing] = useState(false)
+  const [descriptionDraft, setDescriptionDraft] = useState(matter.description)
+  const [addingGoalCheck, setAddingGoalCheck] = useState(false)
+  const [goalCheckDraft, setGoalCheckDraft] = useState('')
+  const goalChecks = matter.goal_checks ?? []
+  const doneGoalChecks = goalChecks.filter((check) => check.done).length
+  const summaryValue = matter.current_summary ?? ''
+  const normalizedSummaryDraft = summaryDraft.trim() ? summaryDraft : null
 
   useEffect(() => {
-    if (!editing) setDraft(matter.description)
-  }, [editing, matter.description])
+    if (!summaryEditing) setSummaryDraft(matter.current_summary ?? '')
+  }, [matter.current_summary, summaryEditing])
+  useEffect(() => {
+    if (!descriptionEditing) setDescriptionDraft(matter.description)
+  }, [descriptionEditing, matter.description])
+
+  const saveSummary = (): void => {
+    onSummarySave(normalizedSummaryDraft, () => setSummaryEditing(false))
+  }
+
+  const saveGoalCheck = (): void => {
+    const text = goalCheckDraft.trim()
+    if (!text) {
+      setGoalCheckDraft('')
+      setAddingGoalCheck(false)
+      return
+    }
+    onGoalChecksSave([...goalChecks, { t: text, done: false }], () => {
+      setGoalCheckDraft('')
+      setAddingGoalCheck(false)
+    })
+  }
+
+  const setGoalCheckDone = (index: number, done: boolean): void => {
+    onGoalChecksSave(
+      goalChecks.map((check, candidateIndex) =>
+        candidateIndex === index ? { ...check, done } : check
+      )
+    )
+  }
+
+  const removeGoalCheck = (index: number): void => {
+    onGoalChecksSave(goalChecks.filter((_, candidateIndex) => candidateIndex !== index))
+  }
 
   return (
     <section className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/75 p-4">
-      <h2 className="text-title font-semibold">{t('matters.state.title')}</h2>
-      <p className="mt-3 whitespace-pre-wrap text-body text-ink-fg-1">
-        {matter.current_summary || t('matters.state.noSummary')}
-      </p>
+      <div className="flex items-center justify-between gap-3">
+        <h2 className="text-title font-semibold">{t('matters.state.title')}</h2>
+        {!summaryEditing ? (
+          <button
+            type="button"
+            onClick={() => setSummaryEditing(true)}
+            aria-label={`${t('matters.state.title')} ${t('matters.actions.edit')}`}
+            className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+          >
+            <Pencil size={12} />
+          </button>
+        ) : null}
+      </div>
+      {summaryEditing ? (
+        <div className="mt-3">
+          <textarea
+            autoFocus
+            rows={5}
+            value={summaryDraft}
+            onChange={(event) => setSummaryDraft(event.target.value)}
+            placeholder={t('matters.state.summaryPlaceholder')}
+            aria-label={t('matters.state.title')}
+            className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
+          />
+          <div className="mt-2 flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setSummaryDraft(summaryValue)
+                setSummaryEditing(false)
+              }}
+              className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+            >
+              {t('matters.actions.cancel')}
+            </button>
+            <button
+              type="button"
+              disabled={saving || normalizedSummaryDraft === (matter.current_summary ?? null)}
+              onClick={saveSummary}
+              className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
+            >
+              {t('matters.actions.save')}
+            </button>
+          </div>
+        </div>
+      ) : (
+        <>
+          <p className="mt-3 whitespace-pre-wrap text-body text-ink-fg-1">
+            {matter.current_summary || t('matters.state.noSummary')}
+          </p>
+          {matter.current_summary && (matter.summary_at != null || matter.summary_by_kind) ? (
+            <p className="mt-2 flex flex-wrap items-center gap-2 text-meta text-ink-fg-2">
+              {matter.summary_at != null ? (
+                <span>
+                  {t('matters.state.summaryUpdatedAt', {
+                    time: new Date(matter.summary_at).toLocaleString()
+                  })}
+                </span>
+              ) : null}
+              {matter.summary_by_kind ? (
+                <span>{t(`matters.state.summaryBy.${matter.summary_by_kind}`)}</span>
+              ) : null}
+            </p>
+          ) : null}
+        </>
+      )}
       <p className="mt-3 border-t border-ink-border pt-3 text-meta text-ink-fg-2">
         {t('matters.state.summaryGuard')}
       </p>
@@ -1146,10 +1347,10 @@ function StateCard({
           <div className="text-meta font-medium text-ink-fg-2">
             {t('matters.state.descriptionLabel')}
           </div>
-          {!editing ? (
+          {!descriptionEditing ? (
             <button
               type="button"
-              onClick={() => setEditing(true)}
+              onClick={() => setDescriptionEditing(true)}
               className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-2 py-1 text-meta text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
             >
               <Pencil size={12} />
@@ -1157,13 +1358,13 @@ function StateCard({
             </button>
           ) : null}
         </div>
-        {editing ? (
+        {descriptionEditing ? (
           <div className="mt-2">
             <textarea
               autoFocus
               rows={7}
-              value={draft}
-              onChange={(event) => setDraft(event.target.value)}
+              value={descriptionDraft}
+              onChange={(event) => setDescriptionDraft(event.target.value)}
               placeholder={t('matters.state.descriptionPlaceholder')}
               aria-label={t('matters.state.descriptionLabel')}
               className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
@@ -1173,8 +1374,8 @@ function StateCard({
               <button
                 type="button"
                 onClick={() => {
-                  setDraft(matter.description)
-                  setEditing(false)
+                  setDescriptionDraft(matter.description)
+                  setDescriptionEditing(false)
                 }}
                 className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
               >
@@ -1182,8 +1383,10 @@ function StateCard({
               </button>
               <button
                 type="button"
-                disabled={saving || draft === matter.description}
-                onClick={() => onDescriptionSave(draft, () => setEditing(false))}
+                disabled={saving || descriptionDraft === matter.description}
+                onClick={() =>
+                  onDescriptionSave(descriptionDraft, () => setDescriptionEditing(false))
+                }
                 className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
               >
                 {t('matters.actions.save')}
@@ -1197,6 +1400,112 @@ function StateCard({
         ) : (
           <p className="mt-2 text-body text-ink-fg-2">{t('matters.state.noDescription')}</p>
         )}
+      </div>
+      <div className="mt-4 rounded-[var(--r-ctl)] border border-dashed border-ink-border p-3">
+        <div className="flex items-center justify-between gap-3">
+          <h3 className="text-meta font-medium text-ink-fg-2">
+            {t('matters.state.goalChecks')}
+          </h3>
+          <span className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 font-mono text-[11px] leading-4 text-ink-fg-2">
+            {t('matters.state.goalChecksCount', {
+              done: doneGoalChecks,
+              total: goalChecks.length
+            })}
+          </span>
+        </div>
+        {goalChecks.length > 0 ? (
+          <ul className="mt-3 space-y-1.5">
+            {goalChecks.map((check, index) => (
+              <li
+                key={`${index}-${check.t}`}
+                className="group/check flex items-center gap-2 rounded-[var(--r-ctl)] px-2 py-1.5 transition-colors duration-fast ease-standard hover:bg-ink-2 focus-within:bg-ink-2"
+              >
+                <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                  <Checkbox
+                    checked={check.done}
+                    disabled={saving}
+                    onCheckedChange={(done) => setGoalCheckDone(index, done)}
+                  />
+                  <span
+                    className={cn(
+                      'min-w-0 flex-1 break-words text-body',
+                      check.done ? 'text-ink-fg-3 line-through' : 'text-ink-fg-1'
+                    )}
+                  >
+                    {check.t}
+                  </span>
+                </label>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={() => removeGoalCheck(index)}
+                  aria-label={t('matters.actions.trash')}
+                  className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-3 opacity-0 transition-[color,background-color,opacity] duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40 group-hover/check:opacity-100 group-focus-within/check:opacity-100"
+                >
+                  <Trash2 size={12} />
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
+        {addingGoalCheck ? (
+          <div className="mt-3 flex items-center gap-2">
+            <Input
+              autoFocus
+              value={goalCheckDraft}
+              disabled={saving}
+              onChange={(event) => setGoalCheckDraft(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') saveGoalCheck()
+                if (event.key === 'Escape') {
+                  setGoalCheckDraft('')
+                  setAddingGoalCheck(false)
+                }
+              }}
+              placeholder={t('matters.state.goalCheckPlaceholder')}
+              aria-label={t('matters.state.goalChecks')}
+              className="h-8 flex-1 px-2 text-body"
+            />
+            <button
+              type="button"
+              disabled={saving || !goalCheckDraft.trim()}
+              onClick={saveGoalCheck}
+              aria-label={t('matters.actions.save')}
+              className="rounded-[var(--r-ctl)] p-1.5 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+            >
+              <Check size={13} />
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setGoalCheckDraft('')
+                setAddingGoalCheck(false)
+              }}
+              aria-label={t('matters.actions.cancel')}
+              className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            disabled={saving}
+            onClick={() => setAddingGoalCheck(true)}
+            className={cn(
+              'mt-3 rounded-[var(--r-ctl)] border border-dashed border-ink-border px-3 py-2 text-left text-aux text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-2 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50',
+              goalChecks.length === 0 ? 'w-full' : 'inline-flex'
+            )}
+          >
+            {t('matters.state.goalCheckAdd')}
+          </button>
+        )}
+        {goalChecks.length > 0 && doneGoalChecks === goalChecks.length ? (
+          <div className="mt-3 flex items-start gap-2 rounded-[var(--r-ctl)] border border-ok/25 bg-ok/10 px-3 py-2 text-aux text-ok">
+            <Check size={13} className="mt-0.5 shrink-0" />
+            <span>{t('matters.state.goalChecksAllDone')}</span>
+          </div>
+        ) : null}
       </div>
       {pendingCount > 0 ? (
         <button

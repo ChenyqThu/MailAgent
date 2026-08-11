@@ -48,8 +48,18 @@ PROFILE_DOC_NAMES: tuple[str, ...] = ("soul", "agent", "rules", "user")
 # 单独经 /chat/config 的 memorySummary（MEMORY fence，untrusted 背景）注入，不进 standing_context
 # 那 4 份可信身份、不进 profile_hash。seed 为空串（首次 get 落一行空 doc）。
 MEMORY_DOC_NAME: str = "memory"
-# 可存储（落表 + get/set/history/rollback）的全部 doc 名 = 4 份身份 + memory.md。
-STORABLE_DOC_NAMES: tuple[str, ...] = PROFILE_DOC_NAMES + (MEMORY_DOC_NAME,)
+# 事项跟进 Agent 的任务契约（Matters P6-B D3/D17）—— 同样落 agent_profile_docs 复用
+# content + history/rollback，同样**刻意排除出 PROFILE_DOC_NAMES**：它只在 matter
+# followup 的 headless run spec 里当任务契约用，不该注入到每一次普通对话的身份里。
+# 🔴 seed 为空：行缺失或内容为空时 run_spec 逐字回落代码里的 _TASK_CONTRACT，
+# 所以「用户从没编辑过」== 「跟随代码默认」，以后改默认文案能自动惠及未自定义的用户；
+# 「恢复默认」也就等于把这行清空，而不是把当前默认文本写进库里冻住。
+MATTER_AGENT_DOC_NAME: str = "matter_agent"
+# 可存储（落表 + get/set/history/rollback）的全部 doc 名 = 4 份身份 + memory.md + 事项契约。
+STORABLE_DOC_NAMES: tuple[str, ...] = PROFILE_DOC_NAMES + (
+    MEMORY_DOC_NAME,
+    MATTER_AGENT_DOC_NAME,
+)
 # 投影文档（只读视图，SKILLS 来自 skill registry）—— 不存表。
 PROJECTION_DOC_NAMES: tuple[str, ...] = ("skills",)
 

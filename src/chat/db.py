@@ -319,6 +319,7 @@ class ChatDb:
         created_before: Optional[int] = None,
         archived: Optional[bool] = None,
         starred: Optional[bool] = None,
+        matter_id: Optional[int] = None,
     ) -> List[Dict[str, Any]]:
         """跨邮件 session 历史（含 first_user_message 预览 + message_count，排除无消息 session）。
         镜像 listAllSessions → ChatSessionSummary[]。
@@ -370,6 +371,14 @@ class ChatDb:
                 return []
             clauses.append("s.starred = ?")
             params.append(1 if starred else 0)
+        if matter_id is not None:
+            # 事项对话锚在 matter 上。以前这条是 chat 路由里的一段手写 SQL 旁路，于是
+            # 上面所有过滤参数对 matterId 查询全部静默失效，连 first_user_message 预览和
+            # message_count 都拿不到 —— 现在它只是众多条件里的一条。
+            if not self._has_column("ai_chat_sessions", "anchor_type"):
+                return []
+            clauses.append("s.anchor_type = 'matter' AND s.anchor_id = ?")
+            params.append(matter_id)
         clauses.append("EXISTS (SELECT 1 FROM ai_chat_messages m WHERE m.session_id = s.id)")
         where_clause = " AND ".join(clauses)
         return self._read_all(
