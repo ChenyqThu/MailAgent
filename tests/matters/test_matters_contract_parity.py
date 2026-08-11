@@ -8,7 +8,7 @@ import pytest
 
 from src.api.routers import chat
 from src.mail import sync_store
-from src.matters import models
+from src.matters import models, triggers
 
 
 ENUMS = (
@@ -45,6 +45,8 @@ TS_ARRAYS = {
     "MATTER_UPDATE_REVIEW_STATUSES": models.MATTER_UPDATE_REVIEW_STATUSES,
     "MATTER_ACTOR_KINDS": models.MATTER_ACTOR_KINDS,
     "MATTER_RESOURCE_SUBSCRIPTION_STATES": models.MATTER_RESOURCE_SUBSCRIPTION_STATES,
+    "MATTER_EVENT_TRIGGER_TYPES": triggers.EVENT_TRIGGER_TYPES,
+    "MATTER_CONDITION_TRIGGER_TYPES": triggers.CONDITION_TRIGGER_TYPES,
     "MATTER_TAG_COLORS": models.MATTER_TAG_COLORS,
     "MATTER_TAG_SHAPES": models.MATTER_TAG_SHAPES,
     "MATTER_SEARCH_FIELDS": models.MATTER_SEARCH_FIELDS,

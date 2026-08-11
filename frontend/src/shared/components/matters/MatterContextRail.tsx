@@ -10,12 +10,10 @@ import type {
   MatterRun,
   MatterStakeholder
 } from '@shared/api/types/matter'
-import { ScheduleBuilder } from '@shared/components/agents/schedule/ScheduleBuilder'
 import { newScheduleValue } from '@shared/components/agents/schedule/migrate'
 import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
 import { DEFAULT_RULE } from '@shared/components/agents/schedule/types'
-import type { ScheduleValue } from '@shared/components/agents/schedule/types'
 import {
   Select,
   SelectContent,
@@ -31,7 +29,12 @@ import {
   groupMatterResources,
   isMatterResourceAvailable
 } from './matterResource'
-import { parseMatterSchedule } from './matterSchedule'
+import {
+  parseMatterSchedule,
+  parseTriggerEntries,
+  serializeTriggerEntries
+} from './matterSchedule'
+import { MatterTriggerEditor } from './MatterTriggerEditor'
 import { MatterGlobalAgentModal } from './MatterGlobalAgentModal'
 import { MatterSuggestedResourceActions } from './MatterSuggestedResourceActions'
 
@@ -200,10 +203,13 @@ export function MatterAgentCard({
   const [editing, setEditing] = useState(false)
   const [scheduleEditing, setScheduleEditing] = useState(false)
   const [globalAgentOpen, setGlobalAgentOpen] = useState(false)
+  const [triggerDraft, setTriggerDraft] = useState(() =>
+    parseTriggerEntries(matter.schedule_json)
+  )
   const [profileId, setProfileId] = useState(matter.agent_profile_id ?? BUILTIN_PROFILE_VALUE)
   const [instructions, setInstructions] = useState(matter.matter_instructions ?? '')
   const persistedSchedule = parseMatterSchedule(matter.schedule_json)
-  const [schedule, setSchedule] = useState<ScheduleValue | null>(persistedSchedule)
+  const schedule = persistedSchedule
   // 「下次运行」的基准时刻在挂载时冻结：render 期间调 Date.now() 会被 react-hooks/purity
   // 拒绝（重渲染时结果不稳定）。MatterFocus 用的是同一个惰性初始化模式。
   const [now] = useState(() => Date.now())
@@ -284,16 +290,19 @@ export function MatterAgentCard({
   const label = schedule
     ? sentenceText(t, i18n.language || 'zh-CN', schedule.rule)
     : t('matters.runs.manual')
-  const recommended = (): void =>
-    setSchedule(
-      newScheduleValue({
-        ...DEFAULT_RULE,
-        freq: 'weekly',
-        weekdays: [1, 2, 3, 4, 5],
-        hour: 9,
-        minute: 0
-      })
-    )
+  const recommended = (): void => {
+    const seeded = newScheduleValue({
+      ...DEFAULT_RULE,
+      freq: 'weekly',
+      weekdays: [1, 2, 3, 4, 5],
+      hour: 9,
+      minute: 0
+    })
+    setTriggerDraft((entries) => [
+      ...entries.filter((entry) => entry.kind !== 'schedule'),
+      { id: 'mtr_recommended', kind: 'schedule', enabled: true, ...seeded }
+    ])
+  }
   return (
     <div className="rounded-[var(--r-card)] border border-ai/25 bg-ink-2 p-3">
       <div className="flex items-center gap-2">
@@ -346,40 +355,28 @@ export function MatterAgentCard({
           >
             {t('matters.agentBinding.recommended')}
           </button>
-          {schedule ? (
-            <ScheduleBuilder value={schedule} onChange={setSchedule} occurrences={3} />
-          ) : (
-            <button
-              type="button"
-              onClick={recommended}
-              className="w-full rounded-lg border border-dashed border-ai/30 p-3 text-aux text-ai"
-            >
-              {t('matters.agentBinding.addSchedule')}
-            </button>
-          )}
+          <MatterTriggerEditor entries={triggerDraft} onChange={setTriggerDraft} />
           <div className="mt-3 flex justify-end gap-2">
             <button
               type="button"
               onClick={() => {
-                setSchedule(persistedSchedule)
+                setTriggerDraft(parseTriggerEntries(matter.schedule_json))
                 setScheduleEditing(false)
               }}
               className="text-meta"
             >
               {t('common.cancel')}
             </button>
-            {schedule ? (
-              <button
-                type="button"
-                onClick={() => {
-                  onPatch({ schedule_json: JSON.stringify(schedule) })
-                  setScheduleEditing(false)
-                }}
-                className="rounded-lg bg-ai px-3 py-1.5 text-meta text-white"
-              >
-                {t('common.save')}
-              </button>
-            ) : null}
+            <button
+              type="button"
+              onClick={() => {
+                onPatch({ schedule_json: serializeTriggerEntries(triggerDraft) })
+                setScheduleEditing(false)
+              }}
+              className="rounded-lg bg-ai px-3 py-1.5 text-meta text-white"
+            >
+              {t('common.save')}
+            </button>
           </div>
         </div>
       ) : null}

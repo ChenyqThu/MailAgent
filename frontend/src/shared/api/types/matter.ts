@@ -88,6 +88,20 @@ export type MatterRunLifecycleState =
 export const MATTER_RUN_TRIGGERS = ['manual', 'schedule', 'event', 'condition'] as const
 export type MatterRunTrigger = (typeof MATTER_RUN_TRIGGERS)[number]
 
+/** 事件型触发的可选项。**刻意小于设计稿**：只收录能映射到既有判据的项 —— 设计画的
+ *  「会议结束」（日历与事项零接线）不做，与其给一个永不触发的选项，不如不给。 */
+export const MATTER_EVENT_TRIGGER_TYPES = ['resource_doc_updated', 'resource_linked_mail'] as const
+export type MatterEventTriggerType = (typeof MATTER_EVENT_TRIGGER_TYPES)[number]
+
+/** 条件型触发的可选项，各自直接对应一条既有的 attention 信号。设计画的「超过 5 天无进展」
+ *  后端没有对应判据，不做。 */
+export const MATTER_CONDITION_TRIGGER_TYPES = [
+  'action_overdue',
+  'health_down',
+  'wait_overdue'
+] as const
+export type MatterConditionTriggerType = (typeof MATTER_CONDITION_TRIGGER_TYPES)[number]
+
 /** 标签色 —— 值是既有主题 token 名，不新增颜色（P6-B D4）。 */
 export const MATTER_TAG_COLORS = [
   '--c-accent',

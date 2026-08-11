@@ -178,8 +178,14 @@ describe('P4 renderer surfaces', () => {
     fireEvent.click(screen.getByText('推荐：每个工作日 09:00'))
     fireEvent.click(screen.getByText('保存'))
     const payload = patch.mock.calls[0]?.[0]
-    const schedule = JSON.parse(payload.schedule_json)
-    expect(schedule.kind).toBe('schedule')
+    // P6-B：保存写的是 v2 envelope（多条触发并存），排程只是其中一条 entry。
+    const envelope = JSON.parse(payload.schedule_json)
+    expect(envelope.v).toBe(2)
+    const schedule = envelope.triggers.find(
+      (entry: { kind: string }) => entry.kind === 'schedule'
+    )
+    expect(schedule).toBeTruthy()
+    expect(schedule.enabled).toBe(true)
     expect(schedule.rule).toMatchObject({ freq: 'weekly', weekdays: [1, 2, 3, 4, 5], hour: 9, minute: 0 })
     expect(schedule.timezone).toBeTruthy()
   })

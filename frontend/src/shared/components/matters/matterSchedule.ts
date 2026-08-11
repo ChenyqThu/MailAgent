@@ -50,3 +50,45 @@ export function countEnabledTriggers(raw: string | null | undefined): number {
   if (!Array.isArray(triggers)) return 0
   return triggers.filter((entry) => (entry as { enabled?: unknown })?.enabled !== false).length
 }
+
+export type MatterTriggerKind = 'schedule' | 'event' | 'condition' | 'manual'
+
+/** 一条触发规则。schedule 形态的字段与 `ScheduleValue` 同形（rule/anchor/timezone），
+ *  所以它可以直接喂给既有的 ScheduleBuilder。 */
+export interface MatterTriggerEntry {
+  id: string
+  kind: MatterTriggerKind
+  enabled?: boolean
+  rule?: unknown
+  anchor?: string
+  timezone?: string
+  event_type?: string
+  condition?: string
+  [key: string]: unknown
+}
+
+/** 把库里存的内容解析成 entry 列表。v1 单对象升成单条，形状非法回空列表。 */
+export function parseTriggerEntries(raw: string | null | undefined): MatterTriggerEntry[] {
+  if (!raw) return []
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    return []
+  }
+  if (isScheduleValue(value)) {
+    return [{ id: 'mtr_legacy', kind: 'schedule', enabled: true, ...value }]
+  }
+  const triggers = (value as { triggers?: unknown } | null)?.triggers
+  if (!Array.isArray(triggers)) return []
+  return triggers.filter(
+    (entry): entry is MatterTriggerEntry =>
+      typeof entry === 'object' && entry !== null && typeof (entry as { id?: unknown }).id === 'string'
+  )
+}
+
+/** 写回库的形状。空列表写 null（后端据此清空排程）。 */
+export function serializeTriggerEntries(entries: readonly MatterTriggerEntry[]): string | null {
+  if (entries.length === 0) return null
+  return JSON.stringify({ v: 2, triggers: entries })
+}
