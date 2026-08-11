@@ -300,7 +300,7 @@ export function MatterAgentCard({
     })
     setTriggerDraft((entries) => [
       ...entries.filter((entry) => entry.kind !== 'schedule'),
-      { id: 'mtr_recommended', kind: 'schedule', enabled: true, ...seeded }
+      { ...seeded, id: 'mtr_recommended', kind: 'schedule' as const, enabled: true }
     ])
   }
   return (

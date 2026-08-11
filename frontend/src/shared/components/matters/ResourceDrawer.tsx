@@ -30,6 +30,22 @@ interface ResourceDrawerProps {
   onChanged(): void
 }
 
+/** 资料摘录取自 metadata，key 顺序与 Python 侧 `context_snapshot` 一致
+ *  （`service.py`: cached_excerpt → excerpt → text_excerpt → snippet）。
+ *
+ *  🔴 这一段此前写的是 `resource.excerpt` —— 而 `resource` 表根本没有这一列，后端也从不
+ *  在 list 投影里产出它，所以「概要」一直是空的：那次 dogfood 修复从未真正生效，只是
+ *  类型检查没照到（根 tsconfig 是 `files: []` + references，裸跑 tsc 什么都不查）。 */
+const EXCERPT_KEYS = ['cached_excerpt', 'excerpt', 'text_excerpt', 'snippet'] as const
+
+function resourceExcerpt(metadata: Record<string, unknown> | null | undefined): string | null {
+  for (const key of EXCERPT_KEYS) {
+    const value = metadata?.[key]
+    if (typeof value === 'string' && value.trim()) return value.slice(0, 2000)
+  }
+  return null
+}
+
 export function ResourceDrawer({
   open,
   matterId,
@@ -93,6 +109,7 @@ export function ResourceDrawer({
   const canOpenSource =
     Boolean(resource.canonical_url) || (mailId !== null && Number.isFinite(mailId))
   const metadata = resource.metadata ?? {}
+  const excerpt = resourceExcerpt(metadata)
   const metaLabel =
     typeof metadata.sender === 'string'
       ? metadata.sender
@@ -243,9 +260,9 @@ export function ResourceDrawer({
               {/* 0811 dogfood：这一节此前只渲染样板说明，resource.excerpt 一次都没用到，
                   所以「概要」永远是空的。excerpt 是外部内容（邮件正文 / Notion 摘录），
                   按不可信数据渲染 —— 纯文本 + 保留换行，不跑 markdown/HTML 管线。 */}
-              {resource.excerpt ? (
+              {excerpt ? (
                 <p className="mb-3 whitespace-pre-wrap break-words text-aux leading-5 text-ink-fg">
-                  {resource.excerpt}
+                  {excerpt}
                 </p>
               ) : null}
               <p className="text-aux leading-5 text-ink-fg-2">

@@ -7,6 +7,7 @@ import {
 } from '@shared/api/types/matter'
 import { ScheduleBuilder } from '@shared/components/agents/schedule/ScheduleBuilder'
 import { newScheduleValue } from '@shared/components/agents/schedule/migrate'
+import { DEFAULT_RULE } from '@shared/components/agents/schedule/types'
 import type { ScheduleValue } from '@shared/components/agents/schedule/types'
 import { cn } from '@shared/lib/cn'
 
@@ -46,7 +47,7 @@ export function MatterTriggerEditor({
     const base = { id: `mtr_new_${entries.length}_${kind}`, kind, enabled: true }
     const seeded: MatterTriggerEntry =
       kind === 'schedule'
-        ? { ...base, ...(newScheduleValue() as unknown as Record<string, unknown>) }
+        ? { ...(newScheduleValue(DEFAULT_RULE) as unknown as Record<string, unknown>), ...base }
         : kind === 'event'
           ? { ...base, event_type: MATTER_EVENT_TRIGGER_TYPES[0] }
           : kind === 'condition'

@@ -77,7 +77,7 @@ export function parseTriggerEntries(raw: string | null | undefined): MatterTrigg
     return []
   }
   if (isScheduleValue(value)) {
-    return [{ id: 'mtr_legacy', kind: 'schedule', enabled: true, ...value }]
+    return [{ ...value, id: 'mtr_legacy', kind: 'schedule', enabled: true }]
   }
   const triggers = (value as { triggers?: unknown } | null)?.triggers
   if (!Array.isArray(triggers)) return []
