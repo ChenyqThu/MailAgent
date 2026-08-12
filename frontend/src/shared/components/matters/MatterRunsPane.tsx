@@ -1,6 +1,7 @@
 import { Activity, Ban, Eye, Loader2, Sparkles, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { MatterRun, MatterUpdateSummary } from '@shared/api/types/matter'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
 
 const tone: Record<MatterRun['lifecycle_state'], string> = {
   queued: 'bg-ai/10 text-ai', running: 'bg-ai/10 text-ai', ok: 'bg-ok/10 text-ok', noop: 'bg-ink-3 text-ink-fg-2', warn: 'bg-warn/10 text-warn', fail: 'bg-fail/10 text-fail', canceled: 'bg-ink-3 text-ink-fg-2'
@@ -8,7 +9,7 @@ const tone: Record<MatterRun['lifecycle_state'], string> = {
 
 export function MatterRunsPane({ runs, updates, onReview, onCancel }: { runs: MatterRun[]; updates: MatterUpdateSummary[]; onReview(updateId: number): void; onCancel(runId: number): void }): React.ReactElement {
   const { t } = useTranslation()
-  if (runs.length === 0) return <div className="rounded-[var(--r-card)] border border-dashed border-ink-border p-10 text-center"><Sparkles className="mx-auto text-ai" size={22}/><h3 className="mt-3 text-body font-medium">{t('matters.runs.emptyTitle', { defaultValue: '还没有跟进运行' })}</h3><p className="mt-1 text-aux text-ink-fg-2">{t('matters.runs.emptyHint', { defaultValue: '绑定一个跟进 Agent，或点右上角「立即跟进」跑一次。' })}</p></div>
+  if (runs.length === 0) return <EmptyState icon={<Sparkles size={22} className="text-ai" />} title={t('matters.runs.emptyTitle', { defaultValue: '还没有跟进运行' })} hint={t('matters.runs.emptyHint', { defaultValue: '绑定一个跟进 Agent，或点右上角「立即跟进」跑一次。' })} />
   return <section><div className="mb-2 flex items-center justify-between text-meta text-ink-fg-3"><span className="font-semibold uppercase tracking-wide">{t('matters.runs.title', { defaultValue: '跟进运行' })}</span><span>{t('matters.runs.traceHint', { defaultValue: '无变化的运行不会产生更新，但仍然留痕' })}</span></div><div className="divide-y divide-ink-border overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1">{runs.map((run) => {
     const update = updates.find((item) => item.agent_run_id === run.id && item.review_status === 'pending')
     const tools = Number(run.usage?.tool_calls ?? run.usage?.tools ?? run.usage?.steps ?? 0)

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  parseRunActions,
   parseTriggerEntries,
   serializeTriggerEntries
 } from '@shared/components/matters/matterSchedule'
@@ -70,5 +71,38 @@ describe('trigger entries', () => {
   it('returns nothing for absent or malformed input', () => {
     expect(parseTriggerEntries(null)).toEqual([])
     expect(parseTriggerEntries('{')).toEqual([])
+  })
+})
+
+describe('run actions（跟进时执行四项）', () => {
+  it('没配过 / v1 行 / 坏 JSON 都回落到出厂默认前两项', () => {
+    expect(parseRunActions(null)).toEqual(['summary', 'items'])
+    expect(parseRunActions(JSON.stringify(V1))).toEqual(['summary', 'items'])
+    expect(parseRunActions('{')).toEqual(['summary', 'items'])
+    expect(parseRunActions(JSON.stringify({ v: 2, triggers: [] }))).toEqual(['summary', 'items'])
+  })
+
+  it('读出显式配置，剔除未知值与重复', () => {
+    const raw = JSON.stringify({ v: 2, triggers: [], actions: ['draft', 'nope', 'draft'] })
+    expect(parseRunActions(raw)).toEqual(['draft'])
+    // 全是未知值 ⇒ 与"没配过"同义，回落默认而不是空数组（空数组会让跟进什么都不做）。
+    expect(parseRunActions(JSON.stringify({ v: 2, triggers: [], actions: ['nope'] }))).toEqual([
+      'summary',
+      'items'
+    ])
+  })
+
+  it('与默认相同时不写 actions 键 —— 让"没配过"和"配成默认"在库里长得一样', () => {
+    const entries = parseTriggerEntries(JSON.stringify(V1))
+    const asDefault = serializeTriggerEntries(entries, ['summary', 'items'])
+    expect(JSON.parse(asDefault as string).actions).toBeUndefined()
+    const custom = serializeTriggerEntries(entries, ['proposal'])
+    expect(JSON.parse(custom as string).actions).toEqual(['proposal'])
+  })
+
+  it('往返不丢勾选', () => {
+    const entries = parseTriggerEntries(JSON.stringify(V1))
+    const raw = serializeTriggerEntries(entries, ['draft', 'proposal'])
+    expect(parseRunActions(raw)).toEqual(['draft', 'proposal'])
   })
 })

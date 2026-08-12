@@ -5,6 +5,7 @@ import { Save, Trash2, X } from 'lucide-react'
 
 import { MATTER_TAG_COLORS, MATTER_TAG_SHAPES } from '@shared/api/types/matter'
 import type { MatterTagColor, MatterTagDefinition, MatterTagShape } from '@shared/api/types/matter'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Button } from '@shared/components/ui/button'
 import {
   Dialog,
@@ -126,9 +127,7 @@ export function MatterTagManagerModal({
 
         <div className="min-h-0 overflow-y-auto pr-1 scrollbar-thin">
           {tags.length === 0 ? (
-            <div className="rounded-[var(--r-card)] border border-dashed border-ink-border p-8 text-center text-body text-ink-fg-2">
-              {t('matters.tags.noTags')}
-            </div>
+            <EmptyState title={t('matters.tags.noTags')} />
           ) : (
             <div className="space-y-2">
               {tags.map((tag) => {

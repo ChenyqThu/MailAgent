@@ -52,6 +52,48 @@ CONDITION_TRIGGER_TYPES: tuple[str, ...] = tuple(sorted(CONDITION_TRIGGER_KINDS)
 
 MAX_TRIGGERS = 8
 
+#: 「跟进时执行」四项（设计 §5.2 的 ACTIONS）。跟触发方式同属一张「跟进规则」卡，
+#: 所以**跟着 envelope 走**、不新开一列 —— 零 DB 迁移。
+#:
+#: 🔴 勾选**不扩大工具面**。allowlist 与 Observe+Assist 上限是服务端强制的结构红线：
+#: 勾了 `draft` 也只是让提案里带一段可直接用的回信草稿，不会多给一个发信/存草稿工具。
+#: 这里定的是「本次跟进要产出什么」，不是「能调用什么」。
+RUN_ACTIONS: tuple[str, ...] = ("summary", "items", "draft", "proposal")
+
+#: 出厂默认 = 设计稿里预先勾上的前两项。空/缺失 → 用它（不写库）。
+DEFAULT_RUN_ACTIONS: tuple[str, ...] = ("summary", "items")
+
+
+def normalize_run_actions(raw: Any) -> tuple[str, ...]:
+    """归一化「跟进时执行」：保序去重、剔除未知值；空输入回落默认。
+
+    未知值**丢弃而不抛** —— 与 trigger 相反：trigger 认不出就意味着"排程静默失效"，
+    必须炸；而 action 认不出只是少做一件事，不该让整个事项的配置保存不下来。
+    """
+    if raw is None:
+        return DEFAULT_RUN_ACTIONS
+    if not isinstance(raw, (list, tuple)):
+        return DEFAULT_RUN_ACTIONS
+    seen: list[str] = []
+    for value in raw:
+        if isinstance(value, str) and value in RUN_ACTIONS and value not in seen:
+            seen.append(value)
+    return tuple(seen) if seen else DEFAULT_RUN_ACTIONS
+
+
+def parse_run_actions(raw: Any) -> tuple[str, ...]:
+    """从 `schedule_json` 的内容里取「跟进时执行」。v1 行 / 无该键 → 默认两项。"""
+    if isinstance(raw, (str, bytes)):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return DEFAULT_RUN_ACTIONS
+    if not isinstance(raw, Mapping):
+        return DEFAULT_RUN_ACTIONS
+    if "actions" not in raw:
+        return DEFAULT_RUN_ACTIONS
+    return normalize_run_actions(raw.get("actions"))
+
 
 class TriggerError(ValueError):
     """trigger 配置非法。调用侧转成 `E_INVALID_ARG`。"""
@@ -223,19 +265,31 @@ def parse_trigger_set(raw: Any, *, seed: str = "") -> tuple[TriggerEntry, ...]:
     return tuple(parsed)
 
 
-def dump_trigger_set(entries: Iterable[TriggerEntry]) -> dict[str, Any]:
-    return {
+def dump_trigger_set(
+    entries: Iterable[TriggerEntry], *, actions: Iterable[str] | None = None
+) -> dict[str, Any]:
+    envelope: dict[str, Any] = {
         "v": TRIGGER_ENVELOPE_VERSION,
         "triggers": [entry.to_dict() for entry in entries],
     }
+    # 与默认相同就不写这个键 —— 让"没配过"和"配成默认值"在库里长得一样，将来改默认能跟着走
+    # （同 matter_agent 文档"空 = 跟随默认"的纪律）。
+    normalized = normalize_run_actions(list(actions) if actions is not None else None)
+    if normalized != DEFAULT_RUN_ACTIONS:
+        envelope["actions"] = list(normalized)
+    return envelope
 
 
 def normalize_trigger_json(raw: Any, *, seed: str = "") -> dict[str, Any] | None:
-    """写侧归一化：任何合法输入 → v2 envelope。空集合返回 None（列写 NULL）。"""
+    """写侧归一化：任何合法输入 → v2 envelope。空集合返回 None（列写 NULL）。
+
+    🔴 「跟进时执行」跟着 envelope 一起过一遍，否则前端刚存的勾选会在下一次保存排程时
+    被静默丢掉（旧实现只保留 triggers）。
+    """
     entries = parse_trigger_set(raw, seed=seed)
     if not entries:
         return None
-    return dump_trigger_set(entries)
+    return dump_trigger_set(entries, actions=parse_run_actions(raw))
 
 
 def is_legacy_shape(raw: Any) -> bool:

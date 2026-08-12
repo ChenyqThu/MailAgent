@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { Check, Plus, Search, Settings2, Tag } from 'lucide-react'
 
 import type { MatterTagDefinition } from '@shared/api/types/matter'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Popover, PopoverContent, PopoverTrigger } from '@shared/components/ui/popover'
 import { cn } from '@shared/lib/cn'
 
@@ -124,9 +125,7 @@ export function MatterTagPicker({
             )
           })}
           {filteredTags.length === 0 && !canCreate ? (
-            <p className="px-3 py-5 text-center text-aux text-ink-fg-2">
-              {t('matters.tags.empty')}
-            </p>
+            <EmptyState title={t('matters.tags.empty')} className="px-3 py-5" />
           ) : null}
           {canCreate ? (
             <button

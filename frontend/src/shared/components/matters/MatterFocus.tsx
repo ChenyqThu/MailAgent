@@ -13,6 +13,7 @@ import {
 } from 'lucide-react'
 
 import type { Matter, MatterAttentionSignal, MatterUpdate } from '@shared/api/types/matter'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
 import type { MatterView } from '@shared/lib/matterDerive'
 import { deriveFocusStats, isLiveMatter } from '@shared/lib/matterDerive'
 import { cn } from '@shared/lib/cn'
@@ -224,10 +225,10 @@ export function MatterFocus({
               })}
             </div>
           ) : (
-            <Empty
-              icon={CheckCircle2}
+            <EmptyState
+              icon={<CheckCircle2 size={22} className="text-ok" />}
               title={t('matters.focus.attentionEmpty')}
-              detail={t('matters.focus.attentionEmptyDetail')}
+              hint={t('matters.focus.attentionEmptyDetail')}
             />
           )}
         </section>
@@ -255,7 +256,7 @@ export function MatterFocus({
               ))}
             </div>
           ) : (
-            <Empty icon={Calendar} title={t('matters.focus.dueEmpty')} />
+            <EmptyState icon={<Calendar size={22} className="text-ok" />} title={t('matters.focus.dueEmpty')} />
           )}
         </section>
       </div>
@@ -336,23 +337,6 @@ function Chip({
     >
       {children}
     </span>
-  )
-}
-function Empty({
-  icon: Icon,
-  title,
-  detail
-}: {
-  icon: typeof Calendar
-  title: string
-  detail?: string
-}): React.ReactElement {
-  return (
-    <div className="rounded-[var(--r-card)] border border-dashed border-ink-border p-7 text-center">
-      <Icon size={22} className="mx-auto text-ok" />
-      <p className="mt-2 text-body font-medium">{title}</p>
-      {detail ? <p className="mx-auto mt-1 max-w-xl text-meta text-ink-fg-2">{detail}</p> : null}
-    </div>
   )
 }
 function formatAgo(at: number, now: number): string {

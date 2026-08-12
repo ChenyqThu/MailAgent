@@ -1,3 +1,5 @@
+import { MATTER_DEFAULT_RUN_ACTIONS, MATTER_RUN_ACTIONS } from '@shared/api/types/matter'
+import type { MatterRunAction } from '@shared/api/types/matter'
 import { isScheduleValue } from '@shared/components/agents/schedule/types'
 import type { ScheduleValue } from '@shared/components/agents/schedule/types'
 
@@ -83,12 +85,52 @@ export function parseTriggerEntries(raw: string | null | undefined): MatterTrigg
   if (!Array.isArray(triggers)) return []
   return triggers.filter(
     (entry): entry is MatterTriggerEntry =>
-      typeof entry === 'object' && entry !== null && typeof (entry as { id?: unknown }).id === 'string'
+      typeof entry === 'object' &&
+      entry !== null &&
+      typeof (entry as { id?: unknown }).id === 'string'
   )
 }
 
-/** 写回库的形状。空列表写 null（后端据此清空排程）。 */
-export function serializeTriggerEntries(entries: readonly MatterTriggerEntry[]): string | null {
+/** 「跟进时执行」四项：从库里的内容取。无该键 / v1 行 → 出厂默认前两项。
+ *  归一化规则与 Python `triggers.parse_run_actions` 同源（保序去重、剔未知、空回落默认）。 */
+export function parseRunActions(raw: string | null | undefined): MatterRunAction[] {
+  if (!raw) return [...MATTER_DEFAULT_RUN_ACTIONS]
+  let value: unknown
+  try {
+    value = JSON.parse(raw)
+  } catch {
+    return [...MATTER_DEFAULT_RUN_ACTIONS]
+  }
+  const actions = (value as { actions?: unknown } | null)?.actions
+  if (!Array.isArray(actions)) return [...MATTER_DEFAULT_RUN_ACTIONS]
+  const picked: MatterRunAction[] = []
+  for (const entry of actions) {
+    if (
+      typeof entry === 'string' &&
+      (MATTER_RUN_ACTIONS as readonly string[]).includes(entry) &&
+      !picked.includes(entry as MatterRunAction)
+    ) {
+      picked.push(entry as MatterRunAction)
+    }
+  }
+  return picked.length > 0 ? picked : [...MATTER_DEFAULT_RUN_ACTIONS]
+}
+
+function sameActions(a: readonly MatterRunAction[], b: readonly MatterRunAction[]): boolean {
+  return a.length === b.length && a.every((value, index) => value === b[index])
+}
+
+/** 写回库的形状。空列表写 null（后端据此清空排程）。
+ *  actions 与出厂默认相同则**不写这个键** —— 让"没配过"和"配成默认"在库里长得一样，
+ *  将来改默认能跟着走（同 Python `dump_trigger_set` 的纪律）。 */
+export function serializeTriggerEntries(
+  entries: readonly MatterTriggerEntry[],
+  actions?: readonly MatterRunAction[]
+): string | null {
   if (entries.length === 0) return null
-  return JSON.stringify({ v: 2, triggers: entries })
+  const envelope: Record<string, unknown> = { v: 2, triggers: entries }
+  if (actions && !sameActions(actions, MATTER_DEFAULT_RUN_ACTIONS)) {
+    envelope.actions = [...actions]
+  }
+  return JSON.stringify(envelope)
 }

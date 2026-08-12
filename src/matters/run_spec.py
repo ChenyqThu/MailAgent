@@ -70,6 +70,30 @@ def default_task_contract() -> str:
     return _TASK_CONTRACT
 
 
+#: 「跟进时执行」四项各自要求 run 产出什么（设计 §5.2 ACTIONS）。
+#: 🔴 措辞一律停留在**产出**层面 —— 这四条不发工具、不改权限。勾了 draft 也只是让提案里
+#: 多带一段可直接用的回信文本，工具 allowlist 与 Observe+Assist 上限一个字节都不变。
+_RUN_ACTION_CLAUSES: dict[str, str] = {
+    "summary": "- 更新当前状态摘要（提案的 summary 字段）。",
+    "items": "- 逐条核对已有行动项是否有进展，有变化的写成 kind=action 的变更项。",
+    "draft": "- 若需要对外跟进，在提案里附一段可直接使用的回信草稿文本"
+    "（**只是文本**：你没有发信或存草稿的工具，也不要声称已经发出）。",
+    "proposal": "- 即使只有推断级别的判断，也整理成提案送审阅，不要因为"
+    "「证据不够硬」而直接结束（仍然要如实标注 kind=inference）。",
+}
+
+
+def _run_actions_section(schedule_json: Any) -> str:
+    """把 owner 勾的「跟进时执行」翻成任务契约的一段。未配过 = 默认前两项。"""
+    from .triggers import parse_run_actions
+
+    actions = parse_run_actions(schedule_json)
+    clauses = [_RUN_ACTION_CLAUSES[name] for name in actions if name in _RUN_ACTION_CLAUSES]
+    if not clauses:
+        return ""
+    return "【本次跟进要做的事】\n" + "\n".join(clauses)
+
+
 def _task_contract() -> str:
     """跟进 run 的任务契约：owner 在全局配置面写过就用他的，否则回落代码默认（D3/D17）。
 
@@ -262,7 +286,12 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
     current = service.current_watermark(matter_id)
     diff = watermark_diff(baseline, current)
 
-    sections = [_task_contract(), _snapshot_section(snapshot), _manifest_section(diff, snapshot)]
+    sections = [
+        _task_contract(),
+        _run_actions_section(matter.get("schedule_json")),
+        _snapshot_section(snapshot),
+        _manifest_section(diff, snapshot),
+    ]
     persona_parts = []
     if profile and (profile.get("prompt") or "").strip():
         persona_parts.append(str(profile["prompt"]).strip())
@@ -271,7 +300,7 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         persona_parts.append(instructions)
     if persona_parts:
         sections.append("【补充指引】\n" + PERSONA_PREFIX + "\n" + "\n\n".join(persona_parts))
-    task_prompt = "\n\n".join(sections)
+    task_prompt = "\n\n".join(section for section in sections if section)
 
     fired_at = datetime.fromtimestamp(job.created_at, tz=timezone.utc).isoformat()
     spec: dict[str, Any] = {

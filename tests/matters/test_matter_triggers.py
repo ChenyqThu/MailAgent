@@ -134,3 +134,69 @@ def test_default_schedule_entry_is_every_three_days_at_nine():
     parsed = parse_trigger_set([entry], seed="new")
     assert parsed[0].kind == "schedule"
     assert dump_trigger_set(parsed)["v"] == 2
+
+
+# ── 「跟进时执行」四项（设计 §5.2 ACTIONS）─────────────────────────────────────
+
+
+def test_run_actions_default_to_the_two_the_design_pre_checks():
+    from src.matters.triggers import DEFAULT_RUN_ACTIONS, parse_run_actions
+
+    assert DEFAULT_RUN_ACTIONS == ("summary", "items")
+    # 没配过 / v1 行 / 没有 actions 键 —— 都是"跟随默认"，不是"一件事都不做"。
+    assert parse_run_actions(None) == DEFAULT_RUN_ACTIONS
+    assert parse_run_actions('{"v":2,"triggers":[]}') == DEFAULT_RUN_ACTIONS
+    assert parse_run_actions('{"kind":"schedule","rule":{}}') == DEFAULT_RUN_ACTIONS
+    assert parse_run_actions("not json") == DEFAULT_RUN_ACTIONS
+
+
+def test_run_actions_normalize_keeps_order_drops_unknown_and_dedupes():
+    from src.matters.triggers import DEFAULT_RUN_ACTIONS, normalize_run_actions
+
+    assert normalize_run_actions(["draft", "summary", "draft"]) == ("draft", "summary")
+    # 未知值丢弃而不抛：认不出一个 action 只是少做一件事，不该让整份配置存不下来
+    # （trigger 相反 —— 认不出等于排程静默失效，那里必须炸）。
+    assert normalize_run_actions(["nope", "items"]) == ("items",)
+    assert normalize_run_actions(["nope"]) == DEFAULT_RUN_ACTIONS
+    assert normalize_run_actions([]) == DEFAULT_RUN_ACTIONS
+
+
+def test_envelope_omits_actions_when_they_equal_the_default():
+    """配成默认值和没配过在库里长得一样 —— 将来改默认能跟着走。"""
+    from src.matters.triggers import dump_trigger_set, parse_trigger_set
+
+    entries = parse_trigger_set(
+        {"kind": "manual", "id": "trg_a", "enabled": True}, seed="1"
+    )
+    assert "actions" not in dump_trigger_set(entries, actions=["summary", "items"])
+    assert dump_trigger_set(entries, actions=["draft"])["actions"] == ["draft"]
+
+
+def test_normalize_trigger_json_does_not_drop_actions_on_resave():
+    """🔴 回归闸：旧实现只保留 triggers，前端刚存的勾选会在下一次保存排程时被静默丢掉。"""
+    from src.matters.triggers import normalize_trigger_json, parse_run_actions
+
+    raw = {
+        "v": 2,
+        "triggers": [{"id": "trg_a", "kind": "manual", "enabled": True}],
+        "actions": ["draft", "proposal"],
+    }
+    out = normalize_trigger_json(raw, seed="1")
+    assert out is not None
+    assert parse_run_actions(out) == ("draft", "proposal")
+
+
+def test_task_contract_states_the_checked_actions_without_widening_tools():
+    """勾选进 prompt，但一个字都不许承诺工具面 —— draft 那条必须写明"你没有发信工具"。"""
+    from src.matters import run_spec
+
+    section = run_spec._run_actions_section(
+        '{"v":2,"triggers":[],"actions":["draft","proposal"]}'
+    )
+    assert "回信草稿" in section
+    assert "没有发信或存草稿的工具" in section
+    assert "摘要" not in section  # summary 没勾 ⇒ 不出现
+
+    default_section = run_spec._run_actions_section(None)
+    assert "摘要" in default_section and "行动项" in default_section
+    assert "回信草稿" not in default_section

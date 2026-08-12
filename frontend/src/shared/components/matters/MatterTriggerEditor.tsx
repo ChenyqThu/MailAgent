@@ -3,8 +3,10 @@ import { AlertTriangle, Clock, Hand, Plus, Trash2, Zap } from 'lucide-react'
 
 import {
   MATTER_CONDITION_TRIGGER_TYPES,
-  MATTER_EVENT_TRIGGER_TYPES
+  MATTER_EVENT_TRIGGER_TYPES,
+  MATTER_RUN_ACTIONS
 } from '@shared/api/types/matter'
+import type { MatterRunAction } from '@shared/api/types/matter'
 import { ScheduleBuilder } from '@shared/components/agents/schedule/ScheduleBuilder'
 import { newScheduleValue } from '@shared/components/agents/schedule/migrate'
 import { DEFAULT_RULE } from '@shared/components/agents/schedule/types'
@@ -32,12 +34,24 @@ const KINDS: readonly MatterTriggerKind[] = ['schedule', 'event', 'condition', '
 
 export function MatterTriggerEditor({
   entries,
-  onChange
+  onChange,
+  actions,
+  onActionsChange
 }: {
   entries: readonly MatterTriggerEntry[]
   onChange(next: MatterTriggerEntry[]): void
+  actions: readonly MatterRunAction[]
+  onActionsChange(next: MatterRunAction[]): void
 }): React.ReactElement {
   const { t } = useTranslation()
+
+  const toggleAction = (action: MatterRunAction): void => {
+    onActionsChange(
+      actions.includes(action)
+        ? actions.filter((value) => value !== action)
+        : MATTER_RUN_ACTIONS.filter((value) => value === action || actions.includes(value))
+    )
+  }
 
   const update = (index: number, patch: Partial<MatterTriggerEntry>): void => {
     onChange(entries.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)))
@@ -162,6 +176,30 @@ export function MatterTriggerEditor({
         ))}
       </div>
       <p className="text-meta leading-5 text-ink-fg-3">{t('matters.trigger.independentHint')}</p>
+
+      {/* 「跟进时执行」（设计 §5.2 ACTIONS）。🔴 勾选定的是**产出什么**，不是能调用什么 ——
+          工具 allowlist 与「只观察与建议」的上限由服务端强制，勾 draft 也不会多一个发信工具。 */}
+      <div className="mt-3 border-t border-ink-border pt-3">
+        <p className="text-meta font-medium text-ink-fg-2">{t('matters.runActions.title')}</p>
+        <div className="mt-1.5 space-y-1">
+          {MATTER_RUN_ACTIONS.map((action) => (
+            <label
+              key={action}
+              className="flex cursor-pointer items-start gap-2 rounded-[var(--r-ctl)] px-1 py-1 hover:bg-ink-2"
+            >
+              <input
+                type="checkbox"
+                checked={actions.includes(action)}
+                onChange={() => toggleAction(action)}
+                className="mt-0.5 size-3.5 shrink-0 accent-[rgb(var(--c-ai))]"
+              />
+              <span className="min-w-0 text-meta leading-5 text-ink-fg-1">
+                {t(`matters.runActions.${action}`)}
+              </span>
+            </label>
+          ))}
+        </div>
+      </div>
     </div>
   )
 }

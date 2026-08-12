@@ -49,6 +49,7 @@ import type {
 import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
 import { SegmentedControl } from '@shared/components/ui/segmented'
@@ -1536,22 +1537,24 @@ function ItemGroups({
       'question'
     ]
     return (
-      <section className="rounded-[var(--r-card)] border border-dashed border-ink-border p-6 text-center">
-        <p className="text-body text-ink-fg-2">{t('matters.item.empty')}</p>
-        <div className="mt-4 flex flex-wrap justify-center gap-2">
-          {starterKinds.map((kind) => (
-            <button
-              key={kind}
-              type="button"
-              onClick={() => onAdd(kind)}
-              className="rounded-[var(--r-ctl)] border border-ink-border px-3 py-2 text-body hover:bg-ink-3"
-            >
-              <Plus size={13} className="mr-1 inline" />
-              {t(`matters.item.kinds.${kind}`)}
-            </button>
-          ))}
-        </div>
-      </section>
+      <EmptyState
+        title={t('matters.item.empty')}
+        action={
+          <div className="flex flex-wrap justify-center gap-2">
+            {starterKinds.map((kind) => (
+              <button
+                key={kind}
+                type="button"
+                onClick={() => onAdd(kind)}
+                className="rounded-[var(--r-ctl)] border border-ink-border px-3 py-2 text-body hover:bg-ink-3"
+              >
+                <Plus size={13} className="mr-1 inline" />
+                {t(`matters.item.kinds.${kind}`)}
+              </button>
+            ))}
+          </div>
+        }
+      />
     )
   }
   return (
@@ -1713,9 +1716,7 @@ function Timeline({ events }: { events: readonly MatterEvent[] }): React.ReactEl
           </div>
         ))}
         {visible.length === 0 ? (
-          <div className="rounded-[var(--r-card)] border border-dashed border-ink-border p-8 text-center text-body text-ink-fg-2">
-            {t('matters.timeline.empty')}
-          </div>
+          <EmptyState title={t('matters.timeline.empty')} />
         ) : null}
       </div>
     </section>

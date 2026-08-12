@@ -31,6 +31,7 @@ import {
 } from './matterResource'
 import {
   parseMatterSchedule,
+  parseRunActions,
   parseTriggerEntries,
   serializeTriggerEntries
 } from './matterSchedule'
@@ -203,9 +204,8 @@ export function MatterAgentCard({
   const [editing, setEditing] = useState(false)
   const [scheduleEditing, setScheduleEditing] = useState(false)
   const [globalAgentOpen, setGlobalAgentOpen] = useState(false)
-  const [triggerDraft, setTriggerDraft] = useState(() =>
-    parseTriggerEntries(matter.schedule_json)
-  )
+  const [triggerDraft, setTriggerDraft] = useState(() => parseTriggerEntries(matter.schedule_json))
+  const [actionsDraft, setActionsDraft] = useState(() => parseRunActions(matter.schedule_json))
   const [profileId, setProfileId] = useState(matter.agent_profile_id ?? BUILTIN_PROFILE_VALUE)
   const [instructions, setInstructions] = useState(matter.matter_instructions ?? '')
   const persistedSchedule = parseMatterSchedule(matter.schedule_json)
@@ -355,12 +355,18 @@ export function MatterAgentCard({
           >
             {t('matters.agentBinding.recommended')}
           </button>
-          <MatterTriggerEditor entries={triggerDraft} onChange={setTriggerDraft} />
+          <MatterTriggerEditor
+            entries={triggerDraft}
+            onChange={setTriggerDraft}
+            actions={actionsDraft}
+            onActionsChange={setActionsDraft}
+          />
           <div className="mt-3 flex justify-end gap-2">
             <button
               type="button"
               onClick={() => {
                 setTriggerDraft(parseTriggerEntries(matter.schedule_json))
+                setActionsDraft(parseRunActions(matter.schedule_json))
                 setScheduleEditing(false)
               }}
               className="text-meta"
@@ -370,7 +376,7 @@ export function MatterAgentCard({
             <button
               type="button"
               onClick={() => {
-                onPatch({ schedule_json: serializeTriggerEntries(triggerDraft) })
+                onPatch({ schedule_json: serializeTriggerEntries(triggerDraft, actionsDraft) })
                 setScheduleEditing(false)
               }}
               className="rounded-lg bg-ai px-3 py-1.5 text-meta text-white"

@@ -102,6 +102,15 @@ export const MATTER_CONDITION_TRIGGER_TYPES = [
 ] as const
 export type MatterConditionTriggerType = (typeof MATTER_CONDITION_TRIGGER_TYPES)[number]
 
+/** 「跟进时执行」四项（设计 §5.2 ACTIONS），跟着 schedule_json 的 v2 envelope 走。
+ *  🔴 勾选**不扩大工具面** —— 工具 allowlist 与 Observe+Assist 上限由服务端强制，
+ *  这四项定的是「本次跟进要产出什么」，不是「能调用什么」。 */
+export const MATTER_RUN_ACTIONS = ['summary', 'items', 'draft', 'proposal'] as const
+export type MatterRunAction = (typeof MATTER_RUN_ACTIONS)[number]
+
+/** 出厂默认 = 设计稿里预先勾上的前两项（与 Python DEFAULT_RUN_ACTIONS 同源，有 parity 闸）。 */
+export const MATTER_DEFAULT_RUN_ACTIONS = ['summary', 'items'] as const
+
 /** 标签色 —— 值是既有主题 token 名，不新增颜色（P6-B D4）。 */
 export const MATTER_TAG_COLORS = [
   '--c-accent',

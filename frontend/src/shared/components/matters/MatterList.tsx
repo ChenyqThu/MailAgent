@@ -4,6 +4,7 @@ import { Archive, Search, Trash2 } from 'lucide-react'
 
 import type { Matter } from '@shared/api/types/matter'
 import type { MatterTagDefinition } from '@shared/api/types/matter'
+import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { nextAction, trashDaysRemaining } from '@shared/lib/matterDerive'
 import { openAttentionFor } from '@shared/lib/matterDerive'
 import type { MatterAttentionIndex, MatterView } from '@shared/lib/matterDerive'
@@ -68,24 +69,23 @@ export function MatterList({
           />
         ))}
         {visible.length === 0 ? (
-          <div className="px-5 py-12 text-center">
-            <p className="text-body text-ink-fg-2">
-              {view === 'trash'
-                ? t('matters.empty.trash')
-                : view === 'archived'
-                  ? t('matters.empty.archived')
-                  : t('matters.empty.default')}
-            </p>
-            {view !== 'trash' && view !== 'archived' ? (
+          <EmptyState
+            title={view === 'trash'
+              ? t('matters.empty.trash')
+              : view === 'archived'
+                ? t('matters.empty.archived')
+                : t('matters.empty.default')}
+            className="px-5 py-12"
+            action={view !== 'trash' && view !== 'archived' ? (
               <button
                 type="button"
                 onClick={onCreate}
-                className="mt-4 rounded-[var(--r-ctl)] bg-coral/100 px-3 py-2 text-body font-medium text-accent-fg"
+                className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-2 text-body font-medium text-accent-fg"
               >
                 {t('matters.create.submit')}
               </button>
             ) : null}
-          </div>
+          />
         ) : null}
       </div>
     </section>
