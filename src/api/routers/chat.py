@@ -148,8 +148,8 @@ def _matter_meta_for_sessions(
 ) -> Dict[int, Dict[str, Any]]:
     """批量取 matter-anchored session 的 public_id/title（join sync_store.db matter）。
 
-    ``anchor_id`` 是 matter 的**内部** id，而事项的所有 REST 面（context-snapshot / chat-scope /
-    undo）都按 ``MAT-xxxx`` 寻址 —— 不带上 public_id，前端从历史里选中一个事项会话时就只剩一个数字，
+    ``anchor_id`` 是 matter 的**内部** id，而事项的所有 REST 面（context-snapshot / undo）都按
+    ``MAT-xxxx`` 寻址 —— 不带上 public_id，前端从历史里选中一个事项会话时就只剩一个数字，
     既拿不到上下文也标不出身份（收口进主 chat 前这条路由根本不存在，因为事项对话是另一套面板）。
 
     形状与 ``_email_meta_for_sessions`` 逐条对齐（同库、同 best-effort：库缺 / 表缺 / 锁 → 空 map，
@@ -884,8 +884,8 @@ async def get_session(request: Request, session_id: int):
     🔴 matter-anchored 行同样投影 ``matter_public_id`` / ``matter_title``（与 ``/sessions/all``
     共用 ``_matter_meta_for_sessions``，不写第二份 join）。少了它，凡是走这条单行读的入口
     （远程 / fullscreen 跳转 / ``/sessions/all`` 暂时不含该行）拿到的事项会话就只剩一个内部
-    ``anchor_id``，前端认不出身份 → 退化成"普通会话"：没有事项 chip、没有检索范围、没有缺口卡，
-    且请求不带 matter 快照 ⇒ gateway 的 ``matterScopeFilter`` 变成 null，用户以为在这件事里说话，
+    ``anchor_id``，前端认不出身份 → 退化成"普通会话"：没有事项 chip、没有缺口卡、没有写入回执，
+    且请求不带 matter 快照 ⇒ 模型手里没有这件事的任何上下文，用户以为在这件事里说话，
     模型却在全局范围跑。
     """
     session = get_chat_db().get_session(session_id)

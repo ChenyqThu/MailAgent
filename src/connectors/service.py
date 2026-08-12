@@ -67,14 +67,16 @@ CONNECTOR_REAUTH_MESSAGE = (
     "Connectors console (sidebar → Connectors → External connections)."
 )
 
-#: caller.context_mode 的合法值域（镜像 TS ``AGENT_CONTEXT_MODES``：manual + 两个 headless
-#: + im_chat）。Python ``policy.CONTEXT_MODES`` 只有前三个（policy_rules 的
+#: caller.context_mode 的合法值域（镜像 TS ``AGENT_CONTEXT_MODES``：manual + 三个无人值守
+#: venue + im_chat；``matter_followup`` 自 0812 owner 拍板起够得着 connector 只读面）。
+#: Python ``policy.CONTEXT_MODES`` 只有前三个（policy_rules 的
 #: 轴），故这里独立成表 —— 本闸判的是「谁在调」，不是「哪条白名单规则命中」。
 CALLER_CONTEXT_MODES: tuple[str, ...] = (
     "manual_chat",
     "untrusted_trigger",
     "cron_headless",
     "im_chat",
+    "matter_followup",
 )
 
 #: owner 在环、不加服务端天花板的模式（阶段 2 PR-1，08-04 拍板「connector 对 im_chat 全开放」）：
@@ -85,8 +87,15 @@ CALLER_CONTEXT_MODES: tuple[str, ...] = (
 #: 将来第五种 mode 落进哪一侧是一次独立决策，谁都不许"继承"。
 OWNER_PRESENT_CONTEXT_MODES: tuple[str, ...] = ("manual_chat", "im_chat")
 
-#: 需要 per-connector grant 才能调的模式（headless run：无人在环，靠 owner 预先配的天花板）。
-HEADLESS_CONTEXT_MODES: tuple[str, ...] = ("untrusted_trigger", "cron_headless")
+#: 无人值守的模式（headless run：无人在环）。前两个靠 owner 预先配的 per-agent 天花板
+#: （``grant_connectors``）；``matter_followup``（0812）不读任何 agent 行 —— 天花板由
+#: venue 本身**钉死 'read'**（见 ``resolve_caller_ceiling``），比 grant 语义更窄：spec /
+#: gateway 怎么声称都抬不到写面。
+HEADLESS_CONTEXT_MODES: tuple[str, ...] = (
+    "untrusted_trigger",
+    "cron_headless",
+    "matter_followup",
+)
 
 
 class ConnectorInvokeDenied(Exception):
@@ -180,6 +189,10 @@ def resolve_caller_ceiling(
       ``None``：owner 本人在环，审批链在 gateway 侧（08-05 per-tool 三档：``ask`` 档弹卡
       ——manual 桌面卡 / im 经 PR-3 飞书按钮投递，``auto`` 档免卡执行；im_chat 自阶段 2
       PR-1 起与 manual 同档，08-04 拍板「全开放」），服务端不再叠加天花板。
+    - ``matter_followup``（0812 owner 拍板）→ 恒 ``'read'``：天花板由 venue 钉死，**不读**
+      任何 agent 行 / grants —— 跟进 run 的 agentId 是 ``matter:<public_id>`` 哨兵（无
+      report_agent 行），且 D2 禁止绑定 profile 的 grants 外溢到 matter run；服务端固定
+      read 让被篡改的 spec 也结构性够不到 connector 写面。
     - headless（``untrusted_trigger`` / ``cron_headless``）→ 按 ``agent_id`` 读该 agent 的
       ``grant_connectors``；无 agent_id / 无行 / 该 connector 不在 grants 里 → **拒**
       （grant 外根本不该注册，走到这里说明第一道漏了或被绕过）。
@@ -205,6 +218,10 @@ def resolve_caller_ceiling(
         )
     if mode in OWNER_PRESENT_CONTEXT_MODES:
         return None
+    if mode == "matter_followup":
+        # 0812 —— venue 级定值，先于 agent-grant 分支：不查 report_agent、不认 spec 的
+        # 天花板声称，read 就是这个场地的结构上限（write/update 类工具 ceiling_allows 必拒）。
+        return "read"
     if mode not in HEADLESS_CONTEXT_MODES:
         # 当前值域下不可达（四个 mode 已被上面两张白名单划尽），保留作将来第五种 mode 的
         # fail-closed 兜底 —— 新场地必须被显式划进 owner-present 或 headless 之一才放行。

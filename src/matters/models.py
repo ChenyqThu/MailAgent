@@ -164,6 +164,25 @@ class MatterResourceExpansionReason(StrEnum):
     MATTER_INSTRUCTIONS = "matter_instructions"
 
 
+class MatterSuggestionBulkAction(StrEnum):
+    """批量处置资料建议的两个动作（0812 dogfood：Agent 一轮挂十几份，逐条点会连着推进
+    十几次版本号，中间任何一次错位就触发冲突）。逐条口保持不变，这是整批口。"""
+
+    CONFIRM = "confirm"
+    REJECT = "reject"
+
+
+class MatterSuggestionBulkSkipReason(StrEnum):
+    """整批里**没做**的那些条各自的原因 —— 混成一个数字正是「不知道到底成了几条」的病根。"""
+
+    #: 同一个 idempotency_key 已经处置过这一条（重放）。
+    ALREADY_APPLIED = "already_applied"
+    #: 这条已经是确认态：confirm 无事可做，reject 也不允许（与逐条口同判据）。
+    ALREADY_CONFIRMED = "already_confirmed"
+    #: 资料不存在 / 不属于本事项 / link 已软删。
+    NOT_LINKED = "not_linked"
+
+
 EnumValues: TypeAlias = type[StrEnum] | Iterable[str]
 
 
@@ -191,6 +210,13 @@ MATTER_UPDATE_REVIEW_STATUSES = _values(MatterUpdateReviewStatus)
 MATTER_ACTOR_KINDS = _values(MatterActorKind)
 MATTER_RESOURCE_SUBSCRIPTION_STATES = _values(MatterResourceSubscriptionState)
 MATTER_RESOURCE_EXPANSION_REASONS = _values(MatterResourceExpansionReason)
+MATTER_SUGGESTION_BULK_ACTIONS = _values(MatterSuggestionBulkAction)
+MATTER_SUGGESTION_BULK_SKIP_REASONS = _values(MatterSuggestionBulkSkipReason)
+#: 一次批量处置的资料建议上限。取 discovery 单轮候选上限（50）的 4 倍 —— 界面上的
+#: 「全部确认」只可能对着当前列表里的建议按，比一轮 discovery 多几轮积压也够用；上限
+#: 存在的意义是挡住构造出来的超长 id 列表把单个事务撑爆。
+#: 🔴 单源：REST schema（`src/api/schemas/matters.py`）import 它，不要在那边再写一遍 200。
+MATTER_SUGGESTION_BULK_MAX = 200
 MATTER_TAG_COLORS = _values(MatterTagColor)
 MATTER_TAG_SHAPES = _values(MatterTagShape)
 BUILTIN_MATTER_TYPES = ("客户交付", "商务", "售前", "问题", "内部", "产品")

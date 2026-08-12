@@ -177,9 +177,26 @@ def derive_crud_type(tool: Any) -> str:
     """MCP 工具 annotations → crud_type（PRD：接上 manifest 就有的语义位，零额外建模）。
 
     映射（annotations 三个 hint 都是三态 ``bool | None``，None = 服务器未声明）：
-      - ``read_only_hint`` 显式 True         → ``read``
-      - ``idempotent_hint`` 显式 True        → ``update``
+      - ``read_only_hint`` 显式 True，且 destructive 不为 True → ``read``
+      - ``read_only_hint`` 显式 True，但 destructive 也为 True → ``write``
+      - ``idempotent_hint`` 显式 True（非只读）→ ``update``
       - 其余（含 destructive、完全未注解）    → ``write``
+
+    🔴 裁决③（0812 review）：``read_only_hint is True`` **不再无条件短路** —— 但只对
+    ``destructive_hint`` 这一个组合收紧。原实现里 ``destructive_hint`` 完全不参与判定，
+    于是一个同时声明 ``readOnlyHint=true`` 且 ``destructiveHint=true`` 的远端工具会被归成
+    read，进而在**天花板恒 'read' 的无人值守场地**（matter 跟进 run、邮件预处理分类）里
+    静默可用。这两个 hint 的语义方向真的冲突（一个说「无副作用」、一个说「可能破坏性
+    写入」），信谁都不安全 ⇒ 按 ``write`` 走保守面（rank 上 read＜write＜update，且写类
+    默认关、无人值守场地按档不注册）。``derive_destructive`` 的单列语义不受影响。
+
+    🔴 ``read_only_hint ∧ idempotent_hint`` **有意不收紧**（0812 owner 拍板撤回）：MCP spec
+    对 ``idempotentHint`` 写的是「This property is meaningful only when ``readOnlyHint``
+    == false」—— 只读工具上标幂等**不是自相矛盾**，是按 spec 该被忽略的冗余标注，现实
+    manifest 里很常见。而按 write 处理的代价是不成比例的：真·只读工具一旦掉成 write，就在
+    天花板恒 read 的场地结构性不注册，owner 把 per-tool 档设成 auto **也救不回来**（天花板
+    是服务端强制的）；annotations 又不落库 ⇒ 影响面事前查不到、事后难归因 = 静默地把用户
+    要的能力拿掉。以后再看到"矛盾注解"四个字想顺手把它收紧回去的，先读这一段。
 
     🔴 裁决①（spike 2026-08-03 实测证伪原映射）：``destructive_hint=True`` **不再**映射
     ``delete`` —— MCP annotations **没有 delete 语义位**，spec 里 destructiveHint 的语义是
@@ -198,9 +215,13 @@ def derive_crud_type(tool: Any) -> str:
     """
     ann = getattr(tool, "annotations", None)
     if ann is not None:
-        if getattr(ann, "read_only_hint", None) is True:
-            return "read"
-        if getattr(ann, "idempotent_hint", None) is True:
+        read_only = getattr(ann, "read_only_hint", None) is True
+        destructive = getattr(ann, "destructive_hint", None) is True
+        idempotent = getattr(ann, "idempotent_hint", None) is True
+        if read_only:
+            # 🔴 只对 destructive 收紧；idempotent 是 spec 说该忽略的冗余标注，见上。
+            return "write" if destructive else "read"
+        if idempotent:
             return "update"
     return "write"
 

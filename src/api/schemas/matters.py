@@ -6,6 +6,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from src.matters.models import MATTER_SUGGESTION_BULK_MAX, MatterSuggestionBulkAction
+
 
 class StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -31,12 +33,6 @@ class MutationOnly(StrictModel):
 
 class PermanentDeleteRequest(StrictModel):
     confirmation: str = Field(min_length=1, max_length=128)
-    mutation: MutationEnvelope
-
-
-class MatterChatScopeRequest(StrictModel):
-    scope: str = Field(pattern="^(matter|global)$")
-    session_id: int = Field(ge=1)
     mutation: MutationEnvelope
 
 
@@ -151,6 +147,17 @@ class MatterResourcePatchRequest(StrictModel):
     mutation: MutationEnvelope
 
 
+class MatterSuggestionBulkRequest(StrictModel):
+    """整批确认 / 忽略资料建议。`resource_ids` 里混进已处置 / 不属于本事项的 id 不算错误
+    （服务端逐条分类计数返回），故这里只校验形状与上限。
+
+    🔴 动作值域与条数上限都从 `src/matters/models.py` 取，不在这里手抄第二份。"""
+
+    action: MatterSuggestionBulkAction
+    resource_ids: list[int] = Field(min_length=1, max_length=MATTER_SUGGESTION_BULK_MAX)
+    mutation: MutationEnvelope
+
+
 class MatterStakeholderCreateRequest(StrictModel):
     person_key: str | None = None
     display_name: str | None = None
@@ -219,11 +226,33 @@ class MatterUpdateRejectRequest(StrictModel):
 
 
 class MatterProposalSource(StrictModel):
-    """提案证据源（gateway matter_update_propose 工具入参形状，lane ② 契约）。"""
+    """提案证据源（gateway matter_update_propose 工具入参形状，lane ② 契约）。
 
-    resource_id: int = Field(ge=1)
+    二选一：``resource_id`` 指本事项**已关联**的资源；``change_id`` 指同一份提案里正在
+    **新建**关联的那条 ``kind=resource`` change（那时还没有 resource_id）。两者都不给 /
+    都给 → 服务端按越界处理（source 丢弃，fact 随之整条丢弃）。
+    """
+
+    resource_id: int | None = Field(default=None, ge=1)
+    change_id: str | None = Field(default=None, min_length=1, max_length=64)
     locator: dict[str, Any] | None = None
     evidence: str | None = Field(default=None, max_length=2000)
+
+
+class MatterProposalNewResource(StrictModel):
+    """提案里**新建**的一份外部资料的身份（0812）。
+
+    键名逐个取自 ``resource`` 表既有列 / ``MatterService._upsert_resource`` 既有入参 ——
+    不另造命名。值域裁决全在服务端 ``src/matters/resource_proposal.py``（provider 白名单
+    = builtin + 已连接 connector，external_key 按 provider 既有约定，mailagent 侧还验存在
+    性）；这里只做长度与非空。
+    """
+
+    provider: str = Field(min_length=1, max_length=64)
+    kind: str = Field(min_length=1, max_length=32)
+    external_key: str = Field(min_length=1, max_length=512)
+    title: str | None = Field(default=None, max_length=500)
+    canonical_url: str | None = Field(default=None, max_length=2000)
 
 
 class MatterProposalChange(StrictModel):
@@ -233,6 +262,8 @@ class MatterProposalChange(StrictModel):
     id: str = Field(min_length=1, max_length=64)
     kind: str = Field(pattern="^(fact|inference|field|action|resource)$")
     target: dict[str, Any] | None = None
+    #: ``kind=resource`` 的第二形态：新建一条资料关联（与 ``target.id`` 的"确认既有"互斥）。
+    resource: MatterProposalNewResource | None = None
     operation: str | None = Field(default=None, pattern="^(add|replace|remove)$")
     before: Any = None
     after: Any = None

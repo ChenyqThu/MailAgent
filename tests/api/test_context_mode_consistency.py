@@ -193,16 +193,31 @@ def test_matter_followup_matrix_branch_precedes_the_generic_pass():
     """policy.ts：matter_followup 分支必须在「read/domain_write/artifact 全放行」那行**之前**。
 
     那一行对所有非 manual mode 无条件放行 domain_write；插在它后面 = 分支永不生效、写工具照发。
+
+    0812 owner 拍板后分支体是**块**（read/artifact 恒放行 + web 仅 grant 下放行 + 其余
+    `return false`）—— 本闸钉：① 顺序（分支在通用放行行之前）② 分支体提到的 class 恰为
+    read/artifact/web ③ web 那行必须 grant 条件（`grants?.web`，不许写成无条件放行）
+    ④ 分支体以 `return false` 收尾（domain_write/connector_write/exec/capability_change/
+    outbound 在这个 venue 结构性拿不到 —— 「一个写工具都不给」的矩阵侧形态）。
     """
     src = _read(_POLICY_TS)
     match = re.search(r"export function isToolClassAllowedInMode\b.*?\n}", src, re.DOTALL)
     assert match, "isToolClassAllowedInMode 不见了 —— 更新本闸"
     body = match.group(0)
 
-    branch = re.search(rf"if\s*\(\s*mode\s*===\s*'{MATTER_FOLLOWUP_MODE}'\s*\)", body)
-    assert branch, f"抽不到 {MATTER_FOLLOWUP_MODE} 的矩阵分支（习语变了？）"
+    branch = re.search(
+        rf"if\s*\(\s*mode\s*===\s*'{MATTER_FOLLOWUP_MODE}'\s*\)\s*\{{(?P<block>.*?)\n  \}}",
+        body,
+        re.DOTALL,
+    )
+    assert branch, f"抽不到 {MATTER_FOLLOWUP_MODE} 的矩阵分支块（习语变了？）—— 更新本闸"
+    # 🔴 通用放行行的锚要求 'read' 后紧跟 'domain_write'（分支体内的
+    # `toolClass === 'read' || toolClass === 'artifact'` 不许被它误认）。
     generic = re.search(
-        r"if\s*\(\s*toolClass\s*===\s*'read'.*?'domain_write'.*?\)\s*return true", body, re.DOTALL
+        r"if\s*\(\s*toolClass\s*===\s*'read'\s*\|\|\s*toolClass\s*===\s*'domain_write'"
+        r".*?\)\s*return true",
+        body,
+        re.DOTALL,
     )
     assert generic, "抽不到 read/domain_write/artifact 通用放行行 —— 更新本闸"
     assert branch.start() < generic.start(), (
@@ -210,9 +225,18 @@ def test_matter_followup_matrix_branch_precedes_the_generic_pass():
         "跟进 run 将拿到全部 Matter 写工具"
     )
 
-    # 分支体只放行 read + artifact（拿分支之后到下一个 `if` 之前的那一段）。
-    tail = body[branch.end() : generic.start()]
-    allowed = set(re.findall(r"toolClass\s*===\s*'([a-z_]+)'", tail))
-    assert allowed == {"read", "artifact"}, (
-        f"matter_followup 分支放行的 class 集合变了：{sorted(allowed)}（期望 read + artifact）"
+    block = branch.group("block")
+    allowed = set(re.findall(r"toolClass\s*===\s*'([a-z_]+)'", block))
+    assert allowed == {"read", "artifact", "web"}, (
+        f"matter_followup 分支提到的 class 集合变了：{sorted(allowed)}"
+        "（期望 read + artifact + web —— 多出成员 = 有 venue 放宽没过裁决，少了 = 读面塌了）"
+    )
+    web_line = re.search(r"toolClass\s*===\s*'web'.*", block)
+    assert web_line and "grants?.web" in web_line.group(0), (
+        "web 在 matter_followup 分支里必须是 grant 条件放行（`grants?.web === 'gated'/'open'`）"
+        "—— 无条件放行 = spec 没授权也注册出网工具"
+    )
+    assert re.search(r"return false\s*$", block.strip()), (
+        "matter_followup 分支体必须以 `return false` 收尾 —— 少了它，未列出的 class 会落进"
+        "下面的 grant 阶梯（grantExec 将能在这个 venue 抬起 exec）"
     )

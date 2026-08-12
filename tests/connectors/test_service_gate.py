@@ -95,6 +95,26 @@ def test_resolve_caller_im_chat_is_owner_present_no_ceiling():
     assert svc.OWNER_PRESENT_CONTEXT_MODES == ("manual_chat", "im_chat")
 
 
+def test_resolve_caller_matter_followup_is_venue_pinned_read():
+    """0812 owner 拍板：matter_followup 进 HEADLESS 白名单，但天花板由 venue **钉死 'read'** ——
+    不读 report_agent 行（跟进 run 的 agentId 是 ``matter:<public_id>`` 哨兵，无行可读；D2 也
+    禁止绑定 profile 的 grants 外溢），带不带 agent_id 都一样。write/update 类工具随后被
+    ``ceiling_allows`` 挡（服务端第二道，独立于 gateway 注册期的 rank 过滤）——
+    「全部只读、一个写工具都不给」在执行侧的形态。"""
+    assert svc.resolve_caller_ceiling({"context_mode": "matter_followup"}, CID) == "read"
+    assert (
+        svc.resolve_caller_ceiling(
+            {"context_mode": "matter_followup", "agent_id": "matter:MAT-000001"}, CID
+        )
+        == "read"
+    )
+    assert "matter_followup" in svc.HEADLESS_CONTEXT_MODES
+    # venue 上限的实效（与 test_ceiling_rank_is_monotonic 的通用矩阵独立点名一次）：
+    assert svc.ceiling_allows("read", "read") is True
+    assert svc.ceiling_allows("write", "read") is False
+    assert svc.ceiling_allows("update", "read") is False
+
+
 def test_resolve_caller_bad_shape_is_400():
     for bad in ({"context_mode": "nope"}, {}, "manual_chat", 7):
         with pytest.raises(svc.ConnectorInvokeDenied) as e:

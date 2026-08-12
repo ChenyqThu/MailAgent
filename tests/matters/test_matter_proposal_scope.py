@@ -32,6 +32,33 @@ STATUS_CHANGE = {
     "sources": [],
 }
 
+SPEC_URL = "https://example.com/spec"
+NEW_RESOURCE_CHANGE = {
+    "id": "chg_res_new",
+    "kind": "resource",
+    "resource": {
+        "provider": "web",
+        "kind": "url",
+        "external_key": SPEC_URL,
+        "title": "规格稿",
+    },
+    "sources": [],
+}
+
+
+def _link_state(path, external_key):
+    """(link 是否活着, confirmed_at) —— 复活会同时翻这两项。"""
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            "SELECT mr.deleted_at, mr.confirmed_at FROM matter_resource mr "
+            "JOIN resource r ON r.id=mr.resource_id WHERE r.external_key=?",
+            (external_key,),
+        ).fetchone()
+    if row is None:
+        return None
+    return (row["deleted_at"] is None, row["confirmed_at"])
+
 
 @pytest.fixture
 def env(tmp_path):
@@ -269,6 +296,129 @@ def test_summaryless_proposal_cannot_silently_overwrite_a_fresher_summary(env):
     )
 
 
+def test_accepting_an_old_proposal_cannot_revive_a_link_owner_just_removed(env):
+    """🔴 owner 在评审期间解除关联 → 那份提案里的同一份资料**不许**被接受时静默复活。
+
+    `_apply_new_resource_link` 对 soft-deleted 的 link 走的是「复活那一行 + 标 confirmed」，
+    所以带 `resource` 的 change **不是**无条件的纯追加：只要本事项曾经有过这份资料的 link，
+    接受就会覆盖 owner 刚做的决定。把它当纯追加 ⇒ 解除关联那次写入（scope={resource_id}）
+    与提案 scope 不重叠 ⇒ 提案不 stale ⇒ 覆盖静默发生。`expected_version` 补不了这个洞：
+    它只保护「请求发出之后」的并发。
+    """
+    service, pid, path = env
+    added = service.add_resource(
+        pid,
+        {
+            "provider": "web",
+            "kind": "url",
+            "external_key": SPEC_URL,
+            "title": "规格稿",
+        },
+        expected_version=service.get_matter(pid)["matter"]["version"],
+        idempotency_key="add-web",
+        source="desktop_ui",
+    )
+    resource_id = added["resources"][0]["resource"]["id"]
+    update_id, _ = _propose(service, pid, [NEW_RESOURCE_CHANGE])
+    service.unlink_resource(
+        pid,
+        resource_id,
+        expected_version=service.get_matter(pid)["matter"]["version"],
+        idempotency_key="unlink-web",
+        source="desktop_ui",
+    )
+    assert _link_state(path, SPEC_URL) == (False, None)
+
+    assert _is_stale(path, update_id) is True
+    with pytest.raises(MatterError) as excinfo:
+        service.accept_update(
+            pid,
+            update_id,
+            expected_version=service.get_matter(pid)["matter"]["version"],
+            idempotency_key="acc-revive",
+            source="desktop_ui",
+        )
+    assert excinfo.value.code == "E_UPDATE_STALE"
+    # owner 的解除仍然成立 —— 没有被旧提案静默翻回来。
+    assert _link_state(path, SPEC_URL) == (False, None)
+
+
+def test_rejected_suggestion_cannot_be_revived_by_an_old_proposal(env):
+    """同一个洞的第二个形态：owner 点的是「忽略这条建议」（soft delete + 记抑制）。"""
+    service, pid, path = env
+    added = service.add_resource(
+        pid,
+        {"provider": "web", "kind": "url", "external_key": SPEC_URL, "title": "规格稿"},
+        expected_version=service.get_matter(pid)["matter"]["version"],
+        idempotency_key="add-web",
+        source="desktop_ui",
+    )
+    resource_id = added["resources"][0]["resource"]["id"]
+    update_id, _ = _propose(service, pid, [NEW_RESOURCE_CHANGE])
+    service.reject_resource_suggestion(
+        pid,
+        resource_id,
+        reason="与本事项无关",
+        expected_version=service.get_matter(pid)["matter"]["version"],
+        idempotency_key="reject-web",
+        source="desktop_ui",
+    )
+
+    assert _is_stale(path, update_id) is True
+    with pytest.raises(MatterError) as excinfo:
+        service.accept_update(
+            pid,
+            update_id,
+            expected_version=service.get_matter(pid)["matter"]["version"],
+            idempotency_key="acc-revive",
+            source="desktop_ui",
+        )
+    assert excinfo.value.code == "E_UPDATE_STALE"
+    assert _link_state(path, SPEC_URL) == (False, None)
+
+
+def test_a_genuinely_new_resource_proposal_stays_pure_append(env):
+    """🔴 反向闸：**真·全新**资料（本事项从没关联过）仍是纯追加。
+
+    否则收窄就退回了「任何一次无关写入都把带新资料的提案作废」那个钝化代理 —— 正是
+    本模块当初要消灭的东西。这里改的是**另一条**资料的关联状态。
+    """
+    service, pid, path = env
+    other = service.add_resource(
+        pid,
+        {
+            "provider": "web",
+            "kind": "url",
+            "external_key": "https://example.com/other",
+            "title": "别的资料",
+        },
+        expected_version=service.get_matter(pid)["matter"]["version"],
+        idempotency_key="add-other",
+        source="desktop_ui",
+    )
+    other_id = other["resources"][0]["resource"]["id"]
+    update_id, _ = _propose(service, pid, [NEW_RESOURCE_CHANGE])
+    service.unlink_resource(
+        pid,
+        other_id,
+        expected_version=service.get_matter(pid)["matter"]["version"],
+        idempotency_key="unlink-other",
+        source="desktop_ui",
+    )
+
+    assert _is_stale(path, update_id) is False
+    result = service.accept_update(
+        pid,
+        update_id,
+        expected_version=service.get_matter(pid)["matter"]["version"],
+        idempotency_key="acc-new",
+        source="desktop_ui",
+    )
+    assert result["update"]["review_status"] == "accepted"
+    # 接受确实把这份新资料关联上了（纯追加语义没被误伤）。
+    assert _link_state(path, SPEC_URL)[0] is True
+
+
 def test_unparsable_change_shape_fails_closed(env):
     """change 形状无法解析 → fail closed 标 stale（宁可多作废一次）。"""
     service, pid, path = env
@@ -330,6 +480,61 @@ def test_proposal_scope_ignores_fact_inference_and_item_creation():
     assert scope.resource_ids == frozenset()
     assert scope.wildcard is False
     assert scope.fields == frozenset({"current_summary"})
+
+
+NEW_RESOURCE_CHANGES = [
+    {
+        "id": "chg_res",
+        "kind": "resource",
+        "resource": {
+            "provider": "notion",
+            "kind": "doc",
+            "external_key": "page:abc",
+        },
+    }
+]
+
+
+def test_new_resource_link_is_pure_append_only_when_never_linked():
+    """`kind=resource` 带 `resource`（新建关联）的三种解析结果。
+
+    · 解析器说「本事项没关联过」→ 纯追加，不进目标集（不进 = 无关写入不作废这份提案，
+      正是本模块要收窄掉的钝化代理）；
+    · 解析器交出既有 resource_id（含 owner 解除过的 soft-deleted 行）→ 进目标集；
+    · 没给解析器 → fail closed（身份断不出来时不许猜"它是全新的"）。
+    带 target.id 的确认形态不变。
+    """
+    fresh = proposal_scope(NEW_RESOURCE_CHANGES, resolve_new_resource=lambda spec: None)
+    assert fresh.wildcard is False
+    assert fresh.resource_ids == frozenset()
+    assert fresh.overlaps(scope_from_resources([7])) is False
+
+    known = proposal_scope(NEW_RESOURCE_CHANGES, resolve_new_resource=lambda spec: 7)
+    assert known.wildcard is False
+    assert known.resource_ids == frozenset({7})
+    assert known.overlaps(scope_from_resources([7])) is True
+
+    assert proposal_scope(NEW_RESOURCE_CHANGES) == SCOPE_EVERYTHING
+    # 确认既有 link 的老形态照旧进目标集（不经解析器）
+    confirm = proposal_scope([{"kind": "resource", "target": {"entity": "resource", "id": 7}}])
+    assert confirm.resource_ids == frozenset({7})
+
+
+@pytest.mark.parametrize(
+    "resolver",
+    [
+        lambda spec: (_ for _ in ()).throw(ValueError("identity undecidable")),
+        lambda spec: "7",
+        lambda spec: True,
+    ],
+    ids=["raises", "not-an-int", "bool-is-not-an-id"],
+)
+def test_new_resource_identity_failures_fail_closed(resolver):
+    """解析器抛异常 / 交出认不出的东西 → wildcard，绝不退回"纯追加"。"""
+    assert (
+        proposal_scope(NEW_RESOURCE_CHANGES, resolve_new_resource=resolver)
+        == SCOPE_EVERYTHING
+    )
 
 
 def test_proposal_scope_always_touches_current_summary():

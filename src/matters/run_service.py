@@ -29,6 +29,12 @@ from loguru import logger
 from .events import UPDATE_PROPOSED
 from .attention import AttentionFact, AttentionService
 from .models import MATTER_CHANGE_KINDS, MATTER_RUN_STATUSES, MatterRunTrigger
+from .resource_proposal import (
+    ResourceProposalError,
+    new_resource_spec,
+    normalize_new_resource,
+    propose_allowed_providers,
+)
 from .service import Actor, MatterError, MatterService
 
 # gateway loopback 端口解析 —— 同形抄 ai_gateway_proxy._resolve_gateway_port /
@@ -110,13 +116,23 @@ def watermark_diff(
 class MatterRunService(MatterService):
     """run 编排面（子类化 ``MatterService`` 复用 repository/事件/校验习语）。"""
 
-    def __init__(self, repository, *, job_repo=None, clock_ms=None):
+    def __init__(self, repository, *, job_repo=None, clock_ms=None, settings=None):
         super().__init__(repository, clock_ms=clock_ms)
         if job_repo is None:
             from src.sync.async_jobs import AsyncJobRepository
 
             job_repo = AsyncJobRepository(str(repository.db_path))
         self.job_repo = job_repo
+        #: 提案 provider 白名单要问「总闸开没开 + 哪些 connector 连着」。None = 惰性取
+        #: 全局 config（镜像 run_spec._default_settings 的 settings=None 习语），测试可注入。
+        self._settings = settings
+
+    def _resolve_settings(self) -> Any:
+        if self._settings is None:
+            from src.config import config
+
+            self._settings = config
+        return self._settings
 
     # ── watermark（D4）─────────────────────────────────────────────────────────
 
@@ -755,7 +771,14 @@ class MatterRunService(MatterService):
         matter: Mapping[str, Any],
         changes: list[dict[str, Any]],
     ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-        """防幻觉校验（D6 逐条）。返回 (保留的 changes, 剔除明细)。"""
+        """防幻觉校验（D6 逐条）。返回 (保留的 changes, 剔除明细)。
+
+        0812 起多一条通道：``kind=resource`` 除了「确认既有 link」，还能描述一份**新**外部
+        资料（``change.resource`` = provider/kind/external_key/title/canonical_url）。新形状
+        走 ``resource_proposal`` 单源校验：provider 必须落在「builtin + 已连接 connector」
+        白名单里，external_key 按各 provider 既有约定，mailagent 侧还要真的存在。任一环节
+        推导不出 → **剔除该 change**（fail-closed，不是放行）。
+        """
         linked_resource_ids = {
             int(row["resource_id"])
             for row in conn.execute(
@@ -784,21 +807,44 @@ class MatterRunService(MatterService):
                 }
             )
 
+        # 🔴 两趟：先把 kind=resource 的**新建**形状裁完，第二趟才轮到 fact —— 否则
+        # 「fact 引用同一份提案里正在新建的 resource」这条合法引用会因为次序而认不出来。
+        # 第一趟只记结论，change 的原始顺序由第二趟保持。
+        new_resources, resource_errors = self._validate_new_resources(conn, changes)
+
         for change in changes:
+            change_id = str(change.get("id") or "")
             kind = str(change.get("kind") or "")
             if kind not in MATTER_CHANGE_KINDS:
                 drop(change, "invalid_kind")
                 continue
+            if kind == "resource" and change_id in resource_errors:
+                error = resource_errors[change_id]
+                drop(change, error.reason, detail=error.detail)
+                continue
+            if kind == "resource" and change_id in new_resources:
+                # 归一后的身份回写进 change —— accept 侧读的是这份服务端产物，不是模型原话。
+                change["resource"] = dict(new_resources[change_id])
             kept_sources: list[dict[str, Any]] = []
             foreign_sources: list[Any] = []
             for source in change.get("sources") or []:
                 if not isinstance(source, Mapping):
                     continue
                 resource_id = source.get("resource_id")
+                source_change_id = source.get("change_id")
                 if isinstance(resource_id, int) and resource_id in linked_resource_ids:
                     kept_sources.append(dict(source))
+                elif (
+                    resource_id is None
+                    and isinstance(source_change_id, str)
+                    and source_change_id in new_resources
+                ):
+                    # 本提案正在新建的资料：还没有 resource_id，用 change_id 引用。
+                    kept_sources.append(dict(source))
                 else:
-                    foreign_sources.append(resource_id)
+                    foreign_sources.append(
+                        resource_id if resource_id is not None else source_change_id
+                    )
             change["sources"] = kept_sources
             if kind == "fact" and not kept_sources:
                 drop(change, "fact_without_source", foreign_sources=foreign_sources)
@@ -822,6 +868,45 @@ class MatterRunService(MatterService):
                         continue
             validated.append(change)
         return validated, dropped
+
+    def _validate_new_resources(
+        self, conn: sqlite3.Connection, changes: list[dict[str, Any]]
+    ) -> tuple[dict[str, dict[str, Any]], dict[str, ResourceProposalError]]:
+        """第一趟：裁 ``kind=resource`` 里描述**新**资料的那些条。
+
+        返回 ``({change_id: 归一后的 spec}, {change_id: 失败原因})``。既有形状
+        （``target.id`` 确认既有 link）不出现在任何一张表里 —— 那条分支一字未动。
+        """
+        allowed = propose_allowed_providers(self._resolve_settings())
+        kept: dict[str, dict[str, Any]] = {}
+        errors: dict[str, ResourceProposalError] = {}
+        for change in changes:
+            if str(change.get("kind") or "") != "resource":
+                continue
+            spec = new_resource_spec(change)
+            if spec is None:
+                continue
+            change_id = str(change.get("id") or "")
+            target = change.get("target")
+            if isinstance(target, Mapping) and target.get("id") is not None:
+                # 「确认既有 link」与「新建关联」是互斥的两个形态（gateway zod 也这么拒）。
+                # 两个都给 = 说不清要做哪件事 —— 不猜，剔除。
+                errors[change_id] = ResourceProposalError(
+                    "resource_spec_invalid",
+                    "a resource change confirms target.id or proposes resource, never both",
+                )
+                continue
+            try:
+                kept[change_id] = normalize_new_resource(
+                    spec,
+                    allowed_providers=allowed,
+                    exists=lambda provider, kind, key: self.repository.resource_available(
+                        conn, provider, kind, key
+                    ),
+                )
+            except ResourceProposalError as exc:
+                errors[change_id] = exc
+        return kept, errors
 
     def _stash_dropped(
         self, conn: sqlite3.Connection, run_id: int, dropped: list[dict[str, Any]]

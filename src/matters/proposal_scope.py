@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import Any, Mapping
+from typing import Any, Callable, Mapping, Optional
 
 # 提案能触及的 matter 字段（canonical 名）。
 # 前五项 = `run_service.PROPOSAL_FIELD_WHITELIST`（kind='field' 的 target.field 值域）；
@@ -95,7 +95,13 @@ def _scope_from_ids(values: Any, kind: str) -> MatterWriteScope:
     return MatterWriteScope(resource_ids=frozenset(ids))
 
 
-def proposal_scope(changes_json: Any) -> MatterWriteScope:
+def proposal_scope(
+    changes_json: Any,
+    *,
+    resolve_new_resource: Optional[
+        Callable[[Mapping[str, Any]], Optional[int]]
+    ] = None,
+) -> MatterWriteScope:
     """从 `matter_update.changes_json` 推导这份提案**接受时会写到哪些对象**。
 
     与 `MatterService._apply_accepted_change` 的分支一一对应：
@@ -103,8 +109,20 @@ def proposal_scope(changes_json: Any) -> MatterWriteScope:
     - `field`：写 matter 的一个字段列。
     - `action` 且 `target=None`：新建 item（纯追加，不可能与既有对象冲突）→ 不触及。
     - `action` 且 `target={"id": <int>}`：改那一条 item。
-    - `resource`：确认那一条 resource link。
+    - `resource` 且带 `target.id`：确认那一条 resource link。
+    - `resource` 且带 `resource`（新建关联）：由 `resolve_new_resource` 回答「本事项**已经**
+      有过这份资料的 link 吗」—— 有（含 owner 解除过的 soft-deleted 行）就把那个
+      `resource_id` 纳入目标集，没有才是纯追加。见下方 🔴。
     - 其余（含未知 kind / 形状意外 / JSON 不是数组）→ fail closed 触及一切。
+
+    🔴 `resource` 的新建形态**不是**无条件的纯追加：`_apply_new_resource_link` 对
+    soft-deleted 的 link 走的是「复活那一行 + 标 confirmed」。所以「Agent 提案里含资源 X →
+    owner 评审期间解除 X 的关联 / 忽略这条建议 → 接受旧提案」会把 owner 刚做的明确决定
+    静默翻回来（`expected_version` 只保护「请求发出之后」的并发，补不了错误的目标集）。
+    `resolve_new_resource(spec) -> resource_id | None` 就是那一问：返回 id = 有既有对象
+    ⇒ 进目标集；返回 None = 真·全新 ⇒ 纯追加（**不**退回 wildcard —— 那正是本模块要
+    收窄掉的钝化代理）；**没给回调 / 回调抛异常 / 返回值不是 int** ⇒ fail closed 触及一切
+    （身份推导不出来时不许猜"它是全新的"）。
 
     🔴 `current_summary` **恒在**目标集里，与提案自己有没有 summary 无关：判据必须按
     「accept **能**写到哪」推，不能按「提案自己写了什么」推。accept 接口允许**任意**提案
@@ -153,6 +171,23 @@ def proposal_scope(changes_json: Any) -> MatterWriteScope:
             item_ids.add(int(item_id))
             continue
         if kind == "resource":
+            spec = change.get("resource")
+            if isinstance(spec, Mapping):
+                # 新建一条资料关联。落这里不判 target.id：新形状本来就没有 id，按老分支走会
+                # fail-closed 成 wildcard，让任何一次无关写入都把带新资料的提案作废。但它也
+                # **不是**无条件纯追加 —— accept 会复活 owner 解除过的那一行，所以先问身份。
+                if resolve_new_resource is None:
+                    return SCOPE_EVERYTHING  # fail closed：没有解析器就断不出是不是全新
+                try:
+                    existing_id = resolve_new_resource(spec)
+                except Exception:  # noqa: BLE001 — 身份推导失败一律 fail closed
+                    return SCOPE_EVERYTHING
+                if existing_id is None:
+                    continue  # 真·全新资料：本事项从没关联过，纯追加
+                if isinstance(existing_id, bool) or not isinstance(existing_id, int):
+                    return SCOPE_EVERYTHING  # fail closed：回调给了个认不出的东西
+                resource_ids.add(int(existing_id))
+                continue
             target = change.get("target")
             resource_id = target.get("id") if isinstance(target, Mapping) else None
             if isinstance(resource_id, bool) or not isinstance(resource_id, int):

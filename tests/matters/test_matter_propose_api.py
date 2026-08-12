@@ -226,6 +226,58 @@ def test_propose_flag_gates(env):
     assert response.json()["error"]["code"] == "E_DISABLED"
 
 
+def test_propose_carries_a_new_resource_link_over_the_wire(env):
+    """0812：新形状（change.resource + sources[].change_id）要真的穿得过 pydantic。
+
+    provider 取 ``web`` —— 它在 builtin 白名单里，不依赖任何 connector 连接状态，所以这条
+    测试钉的是**线上形状**而不是白名单（白名单裁决在 test_matter_resource_proposal.py）。
+    """
+    client, _, service, pid, run_id, _, _ = env
+    response = client.post(
+        _url(pid, run_id),
+        json={
+            "summary": "供应商发了故障通告",
+            "changes": [
+                {
+                    "id": "chg_res",
+                    "kind": "resource",
+                    "operation": "add",
+                    "resource": {
+                        "provider": "web",
+                        "kind": "url",
+                        "external_key": "https://status.example.test/incident/42",
+                        "title": "故障通告",
+                    },
+                    "text": "供应商状态页登记了本次故障",
+                    "sources": [],
+                },
+                {
+                    "id": "chg_fact",
+                    "kind": "fact",
+                    "text": "故障已于 14:20 恢复",
+                    "sources": [{"change_id": "chg_res", "evidence": "状态页时间线"}],
+                },
+            ],
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["dropped"] == []
+    detail = service.get_update_detail(pid, data["update_id"])["update"]
+    kept = {c["id"]: c for c in detail["changes"]}
+    # 服务端归一后的身份（canonical_url 由 external_key 兜底），不是模型原话
+    assert kept["chg_res"]["resource"] == {
+        "provider": "web",
+        "kind": "url",
+        "external_key": "https://status.example.test/incident/42",
+        "title": "故障通告",
+        "canonical_url": "https://status.example.test/incident/42",
+    }
+    assert kept["chg_fact"]["sources"] == [
+        {"change_id": "chg_res", "evidence": "状态页时间线"}
+    ]
+
+
 def test_propose_schema_forbids_anchor_fields(env):
     client, _, _, pid, run_id, _, _ = env
     response = client.post(

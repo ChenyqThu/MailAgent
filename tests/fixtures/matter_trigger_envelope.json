@@ -1,0 +1,59 @@
+{
+  "note": "Matter「跟进规则」写侧 envelope 的跨语言黄金 fixture。前端 builder (frontend/src/shared/components/matters/matterSchedule.ts::buildTriggerEnvelope) 与 pydantic 写侧模型 (src/api/routers/matters.py::MatterPatchWithScheduleRequest) 各写各的、无闸 —— 0812 dogfood「跟进规则保存必定失败」就是这么来的：builder 返回 JSON 字符串，pydantic 要 dict[str, Any]，FastAPI 校验层 422 把整条 PATCH 打掉。两侧都读这一个文件。",
+  "read_by": [
+    "frontend/tests/components/matters/matterTriggerEnvelopeParity.test.ts",
+    "tests/matters/test_matter_trigger_envelope_parity.py"
+  ],
+  "case": "每个工作日 09:00 + 非默认 actions（勾上 draft）",
+  "input": {
+    "entries": [
+      {
+        "v": 1,
+        "kind": "schedule",
+        "rule": {
+          "freq": "weekly",
+          "interval": 1,
+          "weekdays": [1, 2, 3, 4, 5],
+          "monthMode": "date",
+          "monthDay": 1,
+          "ordinal": 1,
+          "weekday": 1,
+          "hour": 9,
+          "minute": 0,
+          "clamp": false
+        },
+        "anchor": "2026-08-12",
+        "timezone": "America/Los_Angeles",
+        "id": "mtr_recommended",
+        "enabled": true
+      }
+    ],
+    "actions": ["summary", "items", "draft"]
+  },
+  "envelope": {
+    "v": 2,
+    "triggers": [
+      {
+        "v": 1,
+        "kind": "schedule",
+        "rule": {
+          "freq": "weekly",
+          "interval": 1,
+          "weekdays": [1, 2, 3, 4, 5],
+          "monthMode": "date",
+          "monthDay": 1,
+          "ordinal": 1,
+          "weekday": 1,
+          "hour": 9,
+          "minute": 0,
+          "clamp": false
+        },
+        "anchor": "2026-08-12",
+        "timezone": "America/Los_Angeles",
+        "id": "mtr_recommended",
+        "enabled": true
+      }
+    ],
+    "actions": ["summary", "items", "draft"]
+  }
+}

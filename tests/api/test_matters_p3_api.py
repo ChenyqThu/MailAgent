@@ -1,8 +1,6 @@
 """P3 API-face coverage (p3-decisions D5/D8/D9):
 
 - GET  /api/matters/{id}/context-snapshot — 200 bounded shape + flag-off rejection
-- POST /api/matters/{id}/chat-scope       — event lands, no version bump, replay,
-                                            flag-off rejection
 - GET  /api/email/list?matter_id=          — matter-scope filter
 - GET  /api/email/search?q=&matter_id=     — matter-scope filter
 
@@ -147,7 +145,21 @@ def test_context_snapshot_endpoint_shape(matters_client):
     response = http.get(f"/api/matters/{public_id}/context-snapshot")
     assert response.status_code == 200
     data = response.json()["data"]
-    assert set(data) == {"matter", "items", "stakeholders", "resources", "events"}
+    assert set(data) == {
+        "matter",
+        "items",
+        "stakeholders",
+        "resources",
+        "resource_counts",
+        "events",
+    }
+    # `resources` 是投影（pinned / 未确认的 agent 建议），`resource_counts` 才是真实计数 ——
+    # 前端「缺上下文」判据必须用后者，见 useMatterContextSnapshot.hasContextGap。
+    assert data["resource_counts"] == {
+        "linked_resources": 0,
+        "confirmed_resources": 0,
+        "unconfirmed_suggestions": 0,
+    }
     assert data["matter"]["public_id"] == public_id
     # matter_type is projected as `type` on the snapshot wire.
     assert "type" in data["matter"]
@@ -174,78 +186,9 @@ def test_context_snapshot_flag_off_rejected(matters_client):
     assert response.json()["error"]["code"] == "E_DISABLED"
 
 
-# ===========================================================================
-# POST /api/matters/{id}/chat-scope
-# ===========================================================================
-
-
-def test_chat_scope_endpoint_records_event_without_version_bump(matters_client):
-    http, _ = matters_client
-    created = _create_matter(http)
-    public_id = created["matter"]["public_id"]
-
-    response = http.post(
-        f"/api/matters/{public_id}/chat-scope",
-        json={"scope": "global", "session_id": 11, "mutation": _mutation("scope-1")},
-    )
-    assert response.status_code == 200
-    data = response.json()["data"]
-    # 🔴 D8: no aggregate version bump.
-    assert data["version"] == 1
-    expanded_event_ids = data["event_ids"]
-
-    timeline = http.get(f"/api/matters/{public_id}/timeline").json()["data"]["items"]
-    expanded = [e for e in timeline if e["kind"] == "chat_scope_expanded"]
-    assert len(expanded) == 1
-    assert expanded[0]["actor_kind"] == "user"
-    payload = expanded[0]["payload"]
-    assert payload["session_id"] == 11
-    assert payload["from"] == "matter"
-    assert payload["to"] == "global"
-
-    # Replay with the same idempotency key: same event, no duplicate row.
-    replay = http.post(
-        f"/api/matters/{public_id}/chat-scope",
-        json={"scope": "global", "session_id": 11, "mutation": _mutation("scope-1")},
-    )
-    assert replay.status_code == 200
-    assert replay.json()["data"]["event_ids"] == expanded_event_ids
-
-    # Switching back records the symmetric restore event.
-    restored = http.post(
-        f"/api/matters/{public_id}/chat-scope",
-        json={"scope": "matter", "session_id": 11, "mutation": _mutation("scope-2")},
-    )
-    assert restored.status_code == 200
-    assert restored.json()["data"]["version"] == 1
-    timeline = http.get(f"/api/matters/{public_id}/timeline").json()["data"]["items"]
-    restore_events = [e for e in timeline if e["kind"] == "chat_scope_restored"]
-    assert len(restore_events) == 1
-    assert restore_events[0]["payload"]["from"] == "global"
-    assert restore_events[0]["payload"]["to"] == "matter"
-    assert len([e for e in timeline if e["kind"] == "chat_scope_expanded"]) == 1
-
-
-def test_chat_scope_rejects_invalid_scope_value(matters_client):
-    http, _ = matters_client
-    created = _create_matter(http)
-    response = http.post(
-        f"/api/matters/{created['matter']['public_id']}/chat-scope",
-        json={"scope": "everything", "session_id": 1, "mutation": _mutation("bad")},
-    )
-    assert response.status_code == 422
-
-
-def test_chat_scope_flag_off_rejected(matters_client):
-    http, settings = matters_client
-    created = _create_matter(http)
-    settings.matters_enabled = False
-    response = http.post(
-        f"/api/matters/{created['matter']['public_id']}/chat-scope",
-        json={"scope": "global", "session_id": 1, "mutation": _mutation("off")},
-    )
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "E_DISABLED"
+# 0812 dogfood —— `POST /api/matters/{id}/chat-scope` 已随「本事项 / 全库」检索范围开关
+# 一并移除（默认恒全库），本节三个用例随端点删除。历史 `chat_scope_*` 事件行仍要能渲染，
+# 那条保证在前端 `matterTimelineModel` 的 legacy 用例里。
 
 
 # ===========================================================================

@@ -172,3 +172,74 @@ def test_p2_resource_stakeholder_relation_lookup_and_search_api(client):
     hit = search.json()["data"]["items"][0]
     assert hit["public_id"] == public_id
     assert "stakeholders" in hit["matched_fields"]
+
+
+def test_bulk_resource_suggestion_endpoint(client):
+    """整批口的 REST 面：一次版本推进 + 混入非法 id 不整批失败 + 值域由 schema 挡住。"""
+    http, _ = client
+    created = http.post(
+        "/api/matters", json={"title": "Bulk API", "mutation": _mutation("bulk-create")}
+    ).json()["data"]
+    public_id = created["matter"]["public_id"]
+
+    version = created["version"]
+    resource_ids = []
+    for index in (91, 92, 93):
+        linked = http.post(
+            f"/api/matters/{public_id}/resources",
+            json={
+                "provider": "mailagent",
+                "external_key": f"email:{index}",
+                "kind": "email",
+                "mutation": _mutation(f"bulk-link-{index}", version),
+            },
+        ).json()["data"]
+        resource_ids.append(linked["resources"][0]["resource"]["id"])
+        version = linked["version"]
+
+    response = http.post(
+        f"/api/matters/{public_id}/resource-suggestions/bulk",
+        json={
+            "action": "confirm",
+            "resource_ids": [*resource_ids[:2], 424_242],
+            "mutation": _mutation("bulk-confirm", version),
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert data["counts"] == {"applied": 2, "skipped": 1}
+    assert data["skipped"] == [{"resource_id": 424_242, "reason": "not_linked"}]
+    assert data["version"] == version + 1
+
+    # 还有一条没处置 ⇒ 这一批真要落库 ⇒ 旧版本号必须 409（对照：整批都无事可做时不校验
+    # 版本，见 test_matter_suggestion_bulk.py::test_bulk_with_nothing_applicable_keeps_the_version）。
+    stale = http.post(
+        f"/api/matters/{public_id}/resource-suggestions/bulk",
+        json={
+            "action": "reject",
+            "resource_ids": resource_ids[2:],
+            "mutation": _mutation("bulk-stale", version),
+        },
+    )
+    assert stale.status_code == 409
+    assert stale.json()["error"]["code"] == "E_VERSION_CONFLICT"
+
+    bad_action = http.post(
+        f"/api/matters/{public_id}/resource-suggestions/bulk",
+        json={
+            "action": "delete",
+            "resource_ids": resource_ids,
+            "mutation": _mutation("bulk-bad", data["version"]),
+        },
+    )
+    assert bad_action.status_code == 422
+
+    empty = http.post(
+        f"/api/matters/{public_id}/resource-suggestions/bulk",
+        json={
+            "action": "confirm",
+            "resource_ids": [],
+            "mutation": _mutation("bulk-empty", data["version"]),
+        },
+    )
+    assert empty.status_code == 422

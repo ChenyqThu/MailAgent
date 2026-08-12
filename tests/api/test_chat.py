@@ -199,7 +199,7 @@ def test_list_all_sessions_projects_matter_identity(
 ) -> None:
     """0812 —— 事项对话收口进主 chat 后，历史下拉里的 matter 会话必须自带 MAT-xxxx。
 
-    anchor_id 是**内部** id，而事项的 REST 面（context-snapshot / chat-scope / undo）全按 public_id
+    anchor_id 是**内部** id，而事项的 REST 面（context-snapshot / undo）全按 public_id
     寻址：不投影这两列，从历史里选中一个事项会话就只剩一个数字，既拿不到上下文也标不出身份。
 
     🔴 同时钉住 anchor_type 判据：email 会话的 anchor_id 与 matter.id 是两个 id 空间，这里让它们
@@ -300,8 +300,8 @@ def test_get_session_projects_matter_identity(
 
     ``/sessions/all`` 拿不到那行时（远程入口 / fullscreen 跳转 / 列表未含该行）前端会转而调
     ``GET /sessions/{id}``。此前这条路由只返回 ``anchor_type='matter'`` + 内部 ``anchor_id``，
-    前端认不出 MAT- 编号 → 整场对话退化成"普通会话"：无事项 chip / 无检索范围 / 请求不带 matter
-    快照 ⇒ gateway 的 matterScopeFilter 变 null，用户以为在这件事里说话、模型却在全局跑。
+    前端认不出 MAT- 编号 → 整场对话退化成"普通会话"：无事项 chip / 无写入回执 surface / 请求不带
+    matter 快照 ⇒ 模型手里没有这件事的任何上下文，用户以为在这件事里说话、模型却在全局跑。
     """
     _seed_matter_session(ai_chat_db, sync_store_db, with_matter_table=True)
     with _matter_client(ai_chat_db, sync_store_db, monkeypatch) as c:

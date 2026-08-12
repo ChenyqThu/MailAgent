@@ -6,6 +6,7 @@ import pytest
 
 from src.mail.sync_store import SyncStore
 from src.matters.events import (
+    RESOURCE_LINKED,
     RESOURCE_SUGGESTION_ACCEPTED,
     RESOURCE_SUGGESTION_REJECTED,
     RESOURCE_UPDATED,
@@ -214,6 +215,11 @@ def test_suggestion_acceptance_rate_uses_dedicated_event_kinds(env):
 
 
 def test_run_context_prepares_unconfirmed_matter_first_suggestions_without_version_bump(env):
+    """跟进 run 的本地那一趟：durable anchor 建议入库，但不推事项版本号。
+
+    🔴 0812 修法 4 起这一趟由调用方（``run_spec.assemble_matter_spec``）显式发起 ——
+    ``context_snapshot`` 本身一行都不写库，见下面那条只读断言。
+    """
     service, path = env
     _insert_email(
         path, 20, thread_id="run-thread", subject="Run baseline",
@@ -232,6 +238,7 @@ def test_run_context_prepares_unconfirmed_matter_first_suggestions_without_versi
         {"provider": "mailagent", "kind": "email", "external_key": "email:20"},
         **_mutation(created["version"], "link-run-anchor"),
     )
+    service.discover_resource_suggestions(public_id, limit=10, bump_version=False)
     snapshot = service.context_snapshot(public_id)
     assert "email:21" in {
         resource["external_key"] for resource in snapshot["resources"]
@@ -244,6 +251,47 @@ def test_run_context_prepares_unconfirmed_matter_first_suggestions_without_versi
     )
     assert suggestion["link"]["confirmed_at"] is None
     assert suggestion["link"]["added_by_kind"] == "agent"
+
+
+def test_context_snapshot_never_writes_and_never_self_signs_a_context_gap(env):
+    """🔴 只读投影不许写库，更不许自己给自己签 `context_gap` 的条子。
+
+    修复前：``context_snapshot`` 先跑一遍 discovery，本地候选为 0 时**自动升级**成全库
+    keyword 外扩（``query=None``，最脏形态）—— 没有用户声明、没有审批，而 run_spec 用的
+    正是默认值 ⇒ 每次跟进 run 自动开火。email 22/23 与事项零 durable 关联，只共享
+    「follow / evidence」这类文档词；自动外扩会把它们全拉进来。
+    """
+    service, path = env
+    _insert_email(
+        path, 22, thread_id="unrelated-a", subject="Quarterly newsletter digest",
+        sender="digest@example.com", snippet="follow up on evidence and delivery",
+    )
+    _insert_email(
+        path, 23, thread_id="unrelated-b", subject="Recall notice for follow up",
+        sender="noreply@example.com", snippet="this message has been recalled",
+    )
+    created = service.create_matter(
+        {"title": "Follow up evidence", "description": "delivery follow up evidence"},
+        idempotency_key="create-readonly",
+        source="desktop_ui",
+    )
+    public_id = created["matter"]["public_id"]
+    with sqlite3.connect(path) as conn:
+        before = conn.execute("SELECT COUNT(*) FROM matter_resource").fetchone()[0]
+
+    snapshot = service.context_snapshot(public_id)
+
+    assert snapshot["resources"] == []
+    assert snapshot["resource_counts"] == {
+        "linked_resources": 0,
+        "confirmed_resources": 0,
+        "unconfirmed_suggestions": 0,
+    }
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT COUNT(*) FROM matter_resource").fetchone()[0] == before
+        assert conn.execute(
+            "SELECT COUNT(*) FROM matter_event WHERE kind=?", (RESOURCE_LINKED,)
+        ).fetchone()[0] == 0
 
 
 def test_duplicate_candidates_use_multiple_explainable_signals_not_prefix(env):

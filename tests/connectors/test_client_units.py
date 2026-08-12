@@ -83,10 +83,42 @@ def test_derive_crud_type_mapping():
     assert derive_crud_type(_tool(readOnlyHint=False, destructiveHint=False)) == "write"
     # 完全未注解 → write（不按 spec 缺省收紧 —— 见 derive_crud_type docstring）。
     assert derive_crud_type(_tool()) == "write"
-    # read 优先于其它 hint（readOnly 为真时 destructive 无意义）。
-    assert derive_crud_type(_tool(readOnlyHint=True, destructiveHint=True)) == "read"
     # idempotent 优先于 destructive（Notion move-pages 型）。
     assert derive_crud_type(_tool(idempotentHint=True, destructiveHint=True)) == "update"
+
+
+@pytest.mark.parametrize(
+    ("ann", "expected"),
+    [
+        # readOnly 单独在场 = 唯一还能判 read 的组合。
+        ({"readOnlyHint": True}, "read"),
+        ({"readOnlyHint": True, "destructiveHint": False}, "read"),
+        ({"readOnlyHint": True, "idempotentHint": False}, "read"),
+        # 🔴 真·矛盾注解：「只读」与「破坏性」语义方向相反（一个说无副作用、一个说可能
+        # 破坏性写入），信谁都不安全 ⇒ 不判 read，按 write 走保守面。
+        ({"readOnlyHint": True, "destructiveHint": True}, "write"),
+        ({"readOnlyHint": True, "destructiveHint": True, "idempotentHint": True}, "write"),
+        # 🔴 readOnly ∧ idempotent **仍判 read** —— 有意如此，别再把它收紧回去。
+        # MCP spec 对 idempotentHint 的原文是「This property is meaningful only when
+        # `readOnlyHint` == false」：只读工具上标幂等**不是自相矛盾**，是按 spec 该被忽略的
+        # 冗余标注，现实 manifest 里很常见。而按 write 处理的代价不成比例 —— 真·只读工具
+        # 一旦掉成 write，就在天花板恒 read 的场地（matter 跟进 run / 邮件预处理）结构性
+        # 不注册，owner 把 per-tool 档设成 auto 也救不回来（天花板服务端强制）；annotations
+        # 又不落库 ⇒ 影响面事前查不到、事后难归因 = 静默地把用户要的能力拿掉。
+        ({"readOnlyHint": True, "idempotentHint": True}, "read"),
+        ({"readOnlyHint": True, "idempotentHint": True, "destructiveHint": False}, "read"),
+    ],
+)
+def test_derive_crud_type_read_only_short_circuit_is_narrowed_to_destructive(
+    ann, expected
+):
+    """`readOnlyHint=True` 不再无条件短路成 read —— 但**只**对 destructive 收紧。
+
+    修的是一个真口子：同时声明 `readOnlyHint=true` **且** `destructiveHint=true` 的远端
+    工具原本被归成 read ⇒ 天花板恒 'read' 的无人值守场地（matter 跟进 run / 预处理分类）
+    里静默可用。destructive 位单独落列的语义不变（`derive_destructive` 照旧只认显式 True）。
+    """
+    assert derive_crud_type(_tool(**ann)) == expected
 
 
 def test_derive_crud_type_never_produces_delete():

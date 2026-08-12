@@ -116,7 +116,7 @@ def test_url_fetch_cache_freshness_rest_and_context_fence(tmp_path):
     finally:
         app.dependency_overrides.clear()
 
-    snapshot = service.context_snapshot(public_id, prepare_discovery=False)
+    snapshot = service.context_snapshot(public_id)
     resource = snapshot["resources"][0]
     expected_fence = fence_matter_excerpt(
         resource_id=resource["id"],

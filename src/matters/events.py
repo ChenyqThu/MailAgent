@@ -32,6 +32,9 @@ RELATION_ADDED = "relation_added"
 RELATION_UPDATED = "relation_updated"
 RELATION_REMOVED = "relation_removed"
 RELATION_RESTORED = "relation_restored"
+# 🔴 产出路径已退役（0812 dogfood：事项对话的检索范围开关整体移除，默认恒全库；写侧
+# `record_chat_scope` 与 `POST /{id}/chat-scope` 已删）。这两个常量**保留仅为渲染历史事件**
+# —— 活库里已有 chat_scope_* 事件行，从 MATTER_EVENT_KINDS 里拿掉会让它们变成非法 kind。
 CHAT_SCOPE_EXPANDED = "chat_scope_expanded"
 CHAT_SCOPE_RESTORED = "chat_scope_restored"
 # P4 (跟进 Agent 提案/评审/绑定)

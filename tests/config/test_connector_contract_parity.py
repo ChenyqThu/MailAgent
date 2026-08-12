@@ -265,20 +265,14 @@ def test_rank_is_dense_and_monotonic_on_both_legs():
 # ── ② caller context_mode 值域 ─────────────────────────────────────────────────
 
 
-#: Matters MVP P4 —— TS 有第五个 mode ``matter_followup``，但它**结构上到不了 connector 面**，
-#: 故不进 Python 的 caller 白名单：
-#:   * connector 工具的唯一加载缝 ``connector.ts::shouldLoadConnectorTools`` 只认四个 mode
-#:     （manual/im 要求无 agentRunContext；两个 headless 要求 grants 非空），其余一律 false ——
-#:     跟进 run 连 manifest 都不会拉，更不会注册任何 ``mcp__*`` 工具；
-#:   * 且 D5 的矩阵行只放行 read + artifact，connector_write 在这个 venue 恒 false；
-#:   * 且跟进 run 的 spec 结构上不带任何 grants（D5：`toolPolicy` 只投 allowedTools + skills）。
-#: ⇒ gateway 永远不会以这个 mode 调 ``/api/connector/*``；把它加进 CALLER_CONTEXT_MODES 反而要
-#: 在 owner-present / headless 里二选一站队（下一个用例的划尽闸），等于**替一个不存在的调用面
-#: 提前做了 connector 产品决策** —— 正是 service.py 那段注释明令禁止的「继承」。
-#: 🔴 这不是「把闸放宽成子集」：下面仍是**逐项有序相等**，只是先按本表剔除；任何**新**增的 mode
-#: 依旧会让闸红（不在本表里就必须同步 Python 白名单）。将来若真要让跟进 venue 用 connector：
-#: 从本表删掉它 + 同批改 CALLER_CONTEXT_MODES + 显式划进两张白名单之一。
-CONNECTOR_UNREACHABLE_CONTEXT_MODES: Tuple[str, ...] = ("matter_followup",)
+#: 0812 owner 拍板（「跟进 run 全库授权 + 全部只读工具」）后本表**清空**：``matter_followup``
+#: 按 P4 时本表注释预留的迁移路径（"从本表删掉它 + 同批改 CALLER_CONTEXT_MODES + 显式划进
+#: 两张白名单之一"）迁进了 HEADLESS_CONTEXT_MODES —— 加载缝 ``shouldLoadConnectorTools``
+#: 现在认它（grants 非空才拉 manifest），矩阵行放行 connector READ（class 'read'），而
+#: connector_write 仍恒 false；服务端 ``resolve_caller_ceiling`` 对该 venue 不读 agent 行、
+#: 天花板钉死 'read'。**机制保留**：将来再出现「结构上够不着 connector 面」的新 mode，
+#: 往这里加即可（下面的值域闸仍是逐项有序相等 + canary 校验剔除项确为 TS mode）。
+CONNECTOR_UNREACHABLE_CONTEXT_MODES: Tuple[str, ...] = ()
 
 
 def test_caller_context_modes_match_gateway_agent_context_modes():

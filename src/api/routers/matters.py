@@ -14,7 +14,6 @@ from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_settings
 from src.api.schemas.matters import (
     MatterCreateRequest,
-    MatterChatScopeRequest,
     MatterItemCreateRequest,
     MatterItemPatchRequest,
     MatterNoteCreateRequest,
@@ -25,6 +24,7 @@ from src.api.schemas.matters import (
     MatterResourcePatchRequest,
     MatterStakeholderCreateRequest,
     MatterStakeholderPatchRequest,
+    MatterSuggestionBulkRequest,
     MatterUpdateAcceptRequest,
     MatterUpdateRejectRequest,
     MutationEnvelope,
@@ -400,26 +400,8 @@ async def get_matter_context_snapshot(
     service: MatterService = Depends(get_matter_service),
 ):
     return success_envelope(
-        _call(service.context_snapshot, matter_id, prepare_discovery=False), request=request
+        _call(service.context_snapshot, matter_id), request=request
     )
-
-
-@router.post("/{matter_id}/chat-scope")
-async def record_matter_chat_scope(
-    matter_id: str,
-    body: MatterChatScopeRequest,
-    request: Request,
-    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
-    service: MatterService = Depends(get_matter_service),
-):
-    result = _call(
-        service.record_chat_scope,
-        matter_id,
-        scope=body.scope,
-        session_id=body.session_id,
-        **_mutation_args(body.mutation, idempotency_key, require_version=False),
-    )
-    return success_envelope(result, request=request)
 
 
 @router.patch("/{matter_id}")
@@ -727,6 +709,28 @@ async def reject_resource_suggestion(
         service.reject_resource_suggestion,
         matter_id,
         resource_id,
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
+@router.post("/{matter_id}/resource-suggestions/bulk")
+async def bulk_resolve_resource_suggestions(
+    matter_id: str, body: MatterSuggestionBulkRequest, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    """整批确认 / 忽略资料建议 —— 一次版本校验、一次版本推进。
+
+    HTTP 200 恒成功（含「一条都没做」）：批里混进已确认 / 已删 / 不属于本事项的 id 由
+    `data.skipped` 逐条给出原因，不整批打回（建议列表是异步刷新的，UI 手里那份必然可能
+    带上刚被别处处置掉的条目）。真正的错误只剩版本冲突与参数非法。
+    """
+    result = _call(
+        service.bulk_resolve_resource_suggestions,
+        matter_id,
+        body.resource_ids,
+        str(body.action),
         **_mutation_args(body.mutation, idempotency_key),
     )
     return success_envelope(result, request=request)
