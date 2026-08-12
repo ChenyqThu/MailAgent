@@ -345,7 +345,11 @@ describe('ConnectorQuickPanel — 管理深链', () => {
     await openPanel()
 
     fireEvent.click(screen.getByRole('button', { name: 'chat.connectors.manage' }))
-    expect(navigateMock).toHaveBeenCalledWith({ to: '/connectors', search: { item: 'external' } })
+    // 0812：配置台从独立 /connectors 撤回 Settings 的 connectors tab（深链带 item 透传）。
+    expect(navigateMock).toHaveBeenCalledWith({
+      to: '/settings',
+      search: { tab: 'connectors', item: 'external' }
+    })
     await waitFor(() => expect(screen.queryByRole('dialog', { name: LABEL })).toBeNull())
     expect(screen.queryByRole('menu', { name: TOOLS_LABEL })).toBeNull()
   })

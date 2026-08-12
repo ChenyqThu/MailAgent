@@ -15,8 +15,9 @@ import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
-import { AnimatedIconActiveProvider, SearchIcon } from '@shared/components/icons'
+import { AnimatedIconActiveProvider, CircleHelpIcon, SearchIcon } from '@shared/components/icons'
 import { useCommandPalette } from '@shared/state/command-palette'
+import { openKeyboardHelp } from '@shared/state/keyboard-help'
 
 import { AccentPickerPopover } from './AccentPickerPopover'
 import { LocalePicker } from './LocalePicker'
@@ -92,6 +93,19 @@ export function TitleBar(): React.ReactElement {
         <TitleBarAgentPendingBadge />
         {/* 07-04 — 检测到新版本时出更新 icon (强调色配置左侧); 无更新时 null。 */}
         <UpdateIndicator />
+        <button
+          type="button"
+          onClick={openKeyboardHelp}
+          title={t('nav.shortcuts')}
+          aria-label={t('nav.shortcuts')}
+          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          className={cn(
+            'group flex items-center justify-center p-1.5 rounded transition-colors duration-fast',
+            'text-ink-fg-2 hover:text-ink-fg-1 hover:bg-ink-3 active:bg-ink-4'
+          )}
+        >
+          <CircleHelpIcon size={13} strokeWidth={2} />
+        </button>
         <AccentPickerPopover />
         <span className="hidden md:inline text-ink-fg-3">·</span>
         <SurfacePickerPopover />

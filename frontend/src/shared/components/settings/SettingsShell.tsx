@@ -32,6 +32,7 @@ import { SettingsRail } from './SettingsRail'
 import { SettingsScrollContext } from './settingsScrollContext'
 import { AccountsTab } from './tabs/AccountsTab'
 import { AiTab } from './tabs/AiTab'
+import { ConnectorsTab } from './tabs/ConnectorsTab'
 import { GeneralTab } from './tabs/GeneralTab'
 import { IntegrationsTab } from './tabs/IntegrationsTab'
 import { IslandUpdatesTab } from './tabs/IslandUpdatesTab'
@@ -67,6 +68,7 @@ export function SettingsShell(): React.ReactElement {
     typeof search.tab === 'string' && (SETTINGS_TABS as readonly string[]).includes(search.tab)
       ? (search.tab as SettingsTab)
       : 'general'
+  const isConnectorsTab = tab === 'connectors'
 
   // 切 tab 时当前激活 panel 淡入. Radix TabsContent 仅 mount/unmount 无过渡 (硬替换),
   // 这里给 panel 容器做 autoAlpha 0→1 + y:4→0 (DUR.base). reduced-motion 短路.
@@ -115,7 +117,9 @@ export function SettingsShell(): React.ReactElement {
       <section
         ref={contentRef}
         aria-label="settings content"
-        className="glass-3 flex-1 min-w-0 min-h-0 overflow-y-auto scrollbar-thin"
+        className={`glass-3 flex-1 min-w-0 min-h-0 ${
+          isConnectorsTab ? 'flex flex-col overflow-hidden' : 'overflow-y-auto scrollbar-thin'
+        }`}
       >
         <RestartBanner />
         {isWeb ? (
@@ -132,7 +136,11 @@ export function SettingsShell(): React.ReactElement {
         <SettingsScrollContext.Provider value={contentRef}>
           <div
             ref={panelScopeRef}
-            className="mx-auto w-full max-w-full md:max-w-[760px] px-4 sm:px-6 md:px-10 pt-6 md:pt-8 pb-24"
+            className={
+              isConnectorsTab
+                ? 'min-h-0 flex-1'
+                : 'mx-auto w-full max-w-full md:max-w-[760px] px-4 sm:px-6 md:px-10 pt-6 md:pt-8 pb-24'
+            }
           >
             <TabsContent value="general">
               <GeneralTab />
@@ -145,6 +153,9 @@ export function SettingsShell(): React.ReactElement {
             </TabsContent>
             <TabsContent value="ai">
               <AiTab />
+            </TabsContent>
+            <TabsContent value="connectors" className="h-full min-h-0">
+              <ConnectorsTab />
             </TabsContent>
             <TabsContent value="notifications">
               <NotificationsTab />

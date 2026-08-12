@@ -160,8 +160,7 @@ export function ConnectorQuickContent({
 
   function handleManage(): void {
     onClose()
-    // 08-06 — connector 的唯一操作面已迁到独立的 Connectors 配置台（设置页那个区只剩深链）。
-    void navigate({ to: '/connectors', search: { item: 'external' } })
+    void navigate({ to: '/settings', search: { tab: 'connectors', item: 'external' } })
   }
 
   return (

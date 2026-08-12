@@ -24,6 +24,7 @@ import {
   RadioIcon,
   RefreshCwIcon,
   RouteIcon,
+  SlidersHorizontalIcon,
   UserIcon,
   WifiIcon
 } from '@shared/components/icons'
@@ -42,6 +43,7 @@ const TAB_ORDER: TabEntry[] = [
   { value: 'accounts', Icon: UserIcon, labelKey: 'settings.tabs.accounts' },
   { value: 'sync', Icon: RefreshCwIcon, labelKey: 'settings.tabs.sync' },
   { value: 'ai', Icon: BotMessageSquareIcon, labelKey: 'settings.tabs.ai' },
+  { value: 'connectors', Icon: SlidersHorizontalIcon, labelKey: 'settings.tabs.connectors' },
   { value: 'notifications', Icon: BellIcon, labelKey: 'settings.tabs.notifications' },
   { value: 'integrations', Icon: ConnectIcon, labelKey: 'settings.tabs.integrations' },
   { value: 'realtime', Icon: WifiIcon, labelKey: 'settings.tabs.realtime' },

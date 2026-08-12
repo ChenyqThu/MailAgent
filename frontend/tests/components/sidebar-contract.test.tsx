@@ -7,7 +7,7 @@
 //   2. exactly three .app-nav-section-header elements
 //   3. at most one .row-selected inside the shell
 //   4. no <a href="#"> inside .app-nav-bottom
-//   5. exactly 13 nav rows (5 MAILBOXES + 3 AI AGENTS + 3 VIEW + 2 bottom)
+//   5. exactly 11 nav rows (5 MAILBOXES + 2 AI AGENTS + 3 VIEW + 1 bottom)
 //      P6: removed archive + drafts rows (old folder_email viewer deleted);
 //      草稿箱 row 后以 email_metadata 主链路回归 (DRAFTS_SYNC_ENABLED 对账同步)
 //   6. AI 会话历史 row renders as a disabled <div> (DESIGN.md §9.4)
@@ -121,13 +121,13 @@ describe('Sidebar §2.11 contract', () => {
     expect(bottomDeadAnchors).toHaveLength(0)
   })
 
-  test('exactly 13 nav rows (5 + 3 + 3 + 2)', async () => {
+  test('exactly 11 nav rows (5 + 2 + 3 + 1)', async () => {
     // MAILBOXES: 收件箱, 发件箱, 草稿箱, 已标旗, 所有邮件 (5)
-    // AI AGENTS: 3 (MailAgent + Custom AI + Connectors — 08-06 配置台入口)
-    // VIEW: 3; bottom: 2
+    // AI AGENTS: 2 (MailAgent + Custom AI)
+    // VIEW: 3; bottom: 1
     const container = await renderSidebar()
     const allRows = container.querySelectorAll('[data-app-nav] .row')
-    expect(allRows).toHaveLength(13)
+    expect(allRows).toHaveLength(11)
   })
 
   test('AI 会话历史 row renders enabled (Sprint 18 review — 不再灰禁)', async () => {
@@ -137,7 +137,7 @@ describe('Sidebar §2.11 contract', () => {
     const container = await renderSidebar()
     const disabledRows = container.querySelectorAll('[data-disabled="true"]')
     expect(disabledRows.length).toBe(0)
-    // AI 会话历史 row 仍渲染 (enabled NavRow), 12 row 总数契约在上面 test 守.
+    // AI 会话历史 row 仍渲染 (enabled NavRow), 11 row 总数契约在上面 test 守.
   })
 })
 

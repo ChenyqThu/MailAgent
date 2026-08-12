@@ -269,19 +269,23 @@ const mattersRoute = createRoute({
   component: lazyRouteComponent(() => import('./components/layout/MattersLayout'), 'MattersLayout')
 })
 
-// /connectors — Connectors 独立配置台（08-06 owner 拍板：不再是设置页里的区块）。
-// `?item=` 深链到具体条目（builtin:<group> / connector:<id> / catalog:<id> / composio /
-// external）；值域宽松 —— 具体解析在页面里（parseItemParam），手敲 URL 落到默认选中而不崩页。
+// /connectors — 旧独立配置台入口保留为 redirect。`?item=` 深链到 Settings Connectors tab
+// 的具体条目（builtin:<group> / connector:<id> / catalog:<id> / composio / external）。
 const connectorsRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/connectors',
-  component: lazyRouteComponent(
-    () => import('./components/layout/ConnectorsLayout'),
-    'ConnectorsLayout'
-  ),
   validateSearch: (search: Record<string, unknown>): { item?: string } => {
     const item = search.item
     return typeof item === 'string' && item.length > 0 ? { item } : {}
+  },
+  beforeLoad: ({ search }) => {
+    throw redirect({
+      to: '/settings',
+      search: search.item
+        ? { tab: 'connectors', item: search.item }
+        : { tab: 'connectors' },
+      replace: true
+    })
   }
 })
 
@@ -353,6 +357,7 @@ export const SETTINGS_TABS = [
   'accounts',
   'sync',
   'ai',
+  'connectors',
   'notifications',
   'integrations',
   'realtime',
@@ -361,6 +366,10 @@ export const SETTINGS_TABS = [
   'labs'
 ] as const
 export type SettingsTab = (typeof SETTINGS_TABS)[number]
+export interface SettingsSearch {
+  tab: SettingsTab
+  item?: string
+}
 
 const settingsRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -369,12 +378,14 @@ const settingsRoute = createRoute({
     () => import('./components/layout/SettingsLayout'),
     'SettingsLayout'
   ),
-  validateSearch: (search: Record<string, unknown>): { tab: SettingsTab } => {
+  validateSearch: (search: Record<string, unknown>): SettingsSearch => {
     const t = search.tab
-    if (typeof t === 'string' && (SETTINGS_TABS as readonly string[]).includes(t)) {
-      return { tab: t as SettingsTab }
-    }
-    return { tab: 'general' }
+    const tab: SettingsTab =
+      typeof t === 'string' && (SETTINGS_TABS as readonly string[]).includes(t)
+        ? (t as SettingsTab)
+        : 'general'
+    const item = search.item
+    return typeof item === 'string' && item.length > 0 ? { tab, item } : { tab }
   }
 })
 

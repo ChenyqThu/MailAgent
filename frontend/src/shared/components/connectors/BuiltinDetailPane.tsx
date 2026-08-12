@@ -196,9 +196,10 @@ export function BuiltinDetailPane({
 }): React.ReactElement {
   const { t } = useTranslation()
   const api = useMailApi()
-  // 🔴 owner 拍板：类别默认折叠，点组头单独展开。「换功能域折叠态归零」由父级 key={group}
-  // 重挂载承担（不是 effect 里 setState —— react-hooks/set-state-in-effect）。
-  const [expanded, setExpanded] = React.useState(false)
+  // 🔴 owner 拍板（0812 撤回 08-06 的"默认折叠"）：类别**默认展开**，用户可手动收起。
+  // 「换功能域折叠态归零」仍由父级 key={group} 重挂载承担（不是 effect 里 setState ——
+  // react-hooks/set-state-in-effect），所以切组会回到展开态，这正是要的行为。
+  const [expanded, setExpanded] = React.useState(true)
   const [confirmDanger, setConfirmDanger] = React.useState<
     | { kind: 'row'; row: ToolApprovalPrefRow }
     | { kind: 'bulk'; group: string; dangerTools: string[] }

@@ -4,7 +4,7 @@
 // caret + collapse chevron). Avatar monogram visible only in collapsed
 // mode. Three section groups, EXACTLY: MAILBOXES, AI AGENTS, VIEW
 // (DESIGN.md §2.11 lint rule #2: three and only three section headers).
-// Bottom strip: 设置 + 快捷键. The whole shell mounts on every page that
+// Bottom strip: 设置. The whole shell mounts on every page that
 // uses it (InboxLayout / SearchLayout / PageFrame); cross-page state
 // (collapsed) survives in localStorage + storage event (state/nav-shell).
 //
@@ -28,8 +28,6 @@ import {
   CalendarCheckIcon,
   ChartLineIcon,
   ChartPieIcon,
-  CircleHelpIcon,
-  ConnectIcon,
   FeatherIcon,
   FolderInputIcon,
   FoldersIcon,
@@ -47,7 +45,6 @@ import { isDraftsMailbox, isInboxMailbox, mailboxForView } from '@shared/lib/mai
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
-import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { openNewCompose } from '@shared/state/compose-new'
 import { deriveAccount } from '@shared/lib/account'
 import { useAgentUnreadCount, useSessionProvenanceEnabled } from '@shared/components/agents/hooks'
@@ -632,15 +629,6 @@ export function Sidebar(): React.ReactElement {
             collapsedBadge={agentUnreadTotal}
             onClick={() => navigate({ to: '/agents', search: { tab: 'agents' } })}
           />
-          {/* Connectors 独立配置台（08-06）— 内置工具审批档 + 外部连接（MCP）的统一入口。
-              挂在 AI AGENTS 段内（三段铁律：不新增 section header）。 */}
-          <NavRow
-            icon={<ConnectIcon size={15} strokeWidth={1.75} trigger="parent" />}
-            label={t('nav.connectors')}
-            title={collapsed ? t('nav.connectors') : undefined}
-            selected={pathname === '/connectors'}
-            onClick={() => navigate({ to: '/connectors' })}
-          />
         </nav>
 
         <div className="app-nav-section-spacer my-3 mx-4 border-t [border-top-color:var(--hairline)]" />
@@ -679,7 +667,7 @@ export function Sidebar(): React.ReactElement {
         </nav>
       </div>
 
-      {/* ── Bottom strip · 设置 + 快捷键 ──────────────────────────────── */}
+      {/* ── Bottom strip · 设置 ──────────────────────────────────────── */}
       <div className="app-nav-bottom border-t [border-top-color:var(--hairline)] p-2 space-y-px">
         <NavRow
           icon={<SettingsIcon size={15} strokeWidth={1.75} trigger="parent" />}
@@ -688,13 +676,6 @@ export function Sidebar(): React.ReactElement {
           selected={pathname === '/settings'}
           onClick={() => navigate({ to: '/settings', search: { tab: 'general' } })}
           right={<kbd>⌘,</kbd>}
-        />
-        <NavRow
-          icon={<CircleHelpIcon size={15} strokeWidth={1.75} trigger="parent" />}
-          label={t('nav.shortcuts')}
-          title={collapsed ? t('nav.shortcuts') : undefined}
-          onClick={openKeyboardHelp}
-          right={<kbd>?</kbd>}
         />
       </div>
     </aside>

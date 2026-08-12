@@ -209,8 +209,10 @@ describe('ConnectorsConsole — 内置工具左栏', () => {
   })
 })
 
-describe('ConnectorsConsole — 类别默认折叠（owner 拍板）', () => {
-  test('右栏类别默认折叠（aria-expanded=false + 0fr + inert），点组头展开', async () => {
+// 🔴 0812 owner 撤回 08-06 的「默认折叠」：内置工具详情**默认展开**（原话「内置工具的详情页
+// 都默认展开」）。折叠能力保留，几何断言仍是三重的，只是初始方向反过来。
+describe('ConnectorsConsole — 类别默认展开（0812 owner 拍板，撤回 08-06 的默认折叠）', () => {
+  test('右栏类别默认展开（aria-expanded=true + 1fr + 非 inert），点组头可收起', async () => {
     const { container } = renderUi()
     await waitFor(() =>
       expect(
@@ -219,20 +221,21 @@ describe('ConnectorsConsole — 类别默认折叠（owner 拍板）', () => {
     )
     const toggle = groupToggle(container, 'draft')
     const region = collapsibleRegion(container, 'draft')
-    // 折叠几何三重断言：开关态 + grid 行高 0fr + inert（键盘/AT 不可达）。
-    expect(toggle.getAttribute('aria-expanded')).toBe('false')
-    expect(region.className).toContain('grid-rows-[0fr]')
-    expect(region.hasAttribute('inert')).toBe(true)
-
-    fireEvent.click(toggle)
+    // 展开几何三重断言：开关态 + grid 行高 1fr + 非 inert（键盘/AT 可达）。
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
     expect(region.className).toContain('grid-rows-[1fr]')
     expect(region.hasAttribute('inert')).toBe(false)
-    // 展开后行可见。
+    // 默认就能看见行，不用先点一下。
     expect(within(region).getByText('email_draft_reply')).toBeTruthy()
+
+    // 折叠能力没被删掉。
+    fireEvent.click(toggle)
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    expect(region.className).toContain('grid-rows-[0fr]')
+    expect(region.hasAttribute('inert')).toBe(true)
   })
 
-  test('切换功能域后折叠态归零（不是记住上一组的展开）', async () => {
+  test('切换功能域后折叠态归零（回到展开，不是记住上一组的收起）', async () => {
     const { container } = renderUi()
     await waitFor(() =>
       expect(
@@ -240,7 +243,7 @@ describe('ConnectorsConsole — 类别默认折叠（owner 拍板）', () => {
       ).toBeTruthy()
     )
     fireEvent.click(groupToggle(container, 'draft'))
-    expect(groupToggle(container, 'draft').getAttribute('aria-expanded')).toBe('true')
+    expect(groupToggle(container, 'draft').getAttribute('aria-expanded')).toBe('false')
 
     fireEvent.click(masterRow('calendar'))
     await waitFor(() =>
@@ -248,7 +251,8 @@ describe('ConnectorsConsole — 类别默认折叠（owner 拍板）', () => {
         screen.getByRole('heading', { name: 'settings.ai.toolPrefs.group.calendar' })
       ).toBeTruthy()
     )
-    expect(groupToggle(container, 'calendar').getAttribute('aria-expanded')).toBe('false')
+    // key={group} 重挂载 ⇒ 新组回到默认展开，而不是继承上一组被收起的状态。
+    expect(groupToggle(container, 'calendar').getAttribute('aria-expanded')).toBe('true')
   })
 })
 

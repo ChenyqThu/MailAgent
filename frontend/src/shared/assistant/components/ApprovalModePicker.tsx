@@ -332,7 +332,7 @@ export function ApprovalModePicker({ variant }: { variant: 'icon' | 'chip' }): R
                   role="menuitem"
                   onClick={() => {
                     closeMenu()
-                    void router.navigate({ to: '/connectors' })
+                    void router.navigate({ to: '/settings', search: { tab: 'connectors' } })
                   }}
                   className="mt-1 flex w-full items-center gap-2 border-t border-ink-border-soft px-3 py-1.5 text-left text-micro text-ink-fg-2 transition-colors duration-fast hover:bg-ink-4 hover:text-ink-fg"
                 >

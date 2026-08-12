@@ -1,4 +1,4 @@
-// Connectors 独立配置台（08-06，owner 拍板；参考 LobeHub 的呈现结构）。
+// Connectors 配置台（08-06 先独立页，Lane A1 撤回后承载在 Settings → Connectors tab）。
 //
 // 把原来散在 设置→AI 的两个区 ——「工具审批档」（33 项，以 BUILTIN_TOOL_POLICIES 为准）
 // 与「外部连接（MCP）」（connector 连接 / 授权 / per-tool auto/ask/off）—— 合并成一个
@@ -14,11 +14,12 @@
 //   右栏（detail）= 选中项的配置面，见 BuiltinDetailPane / ConnectorDetailPane /
 //   CatalogDetailPane / ComposioAccountPane。
 //
-// 深链：`/connectors?item=builtin:<group>|connector:<id>|catalog:<id>|composio|external`。
+// 深链：`/settings?tab=connectors&item=builtin:<group>|connector:<id>|catalog:<id>|composio|external`。
+// 旧 `/connectors?item=...` 在 router-instance.tsx 保留 redirect。
 // `catalog:<id>` 在该家已配置后自动归一成 `connector:<id>`（目录连接发起后行由授权流建出，
 // 选中项跟着数据走，轮询由 connector detail 接手）。
 //
-// 🔴 设置→AI 里原来那两个区已降级成指向本页的深链 —— 同一份数据只有这一个可写面。
+// 🔴 设置→AI 里原来那两个区已降级成指向本 tab 的深链 —— 同一份数据只有这一个可写面。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
