@@ -5,35 +5,23 @@ import { useTranslation } from 'react-i18next'
 import {
   Archive,
   ArrowLeft,
-  ArrowRight,
-  BellOff,
-  Bot,
   Check,
   ChevronDown,
   ChevronUp,
   ChevronRight,
-  Circle,
-  EyeOff,
-  FileCheck,
-  FileText,
-  Link2,
-  ListChecks,
+  Clock,
   MessageSquare,
   MoreHorizontal,
   Loader2,
   Pencil,
   Play,
   Plus,
-  RefreshCw,
   RotateCcw,
   Save,
   Trash2,
   Sparkles,
-  TriangleAlert,
-  Users,
   X
 } from 'lucide-react'
-import type { LucideIcon } from 'lucide-react'
 
 import {
   BUILTIN_MATTER_TYPES,
@@ -45,8 +33,6 @@ import {
 import type {
   Matter,
   MatterAttentionSignal,
-  MatterActorKind,
-  MatterEvent,
   MatterGoalCheck,
   MatterHealth,
   MatterItem,
@@ -65,32 +51,39 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
 import { SegmentedControl } from '@shared/components/ui/segmented'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue
-} from '@shared/components/ui/select'
+import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/components/ui/select'
 import { cn } from '@shared/lib/cn'
 import { asWriteError, errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
-import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { useActiveEmail } from '@shared/state/active-email'
 import { openMatterChat, useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 
 import { AddItemModal } from './AddItemModal'
-import { MatterContextRail } from './MatterContextRail'
+import { MatterAgentConfigModal } from './MatterAgentConfigModal'
 import { MatterContextTab } from './MatterContextTab'
 import { ResourceDrawer } from './ResourceDrawer'
 import { MatterRunsPane } from './MatterRunsPane'
 import { MatterTagChip } from './MatterTagMarker'
 import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { MatterTagPicker } from './MatterTagPicker'
+import { MatterTimeline } from './MatterTimeline'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
 import { parseMatterSchedule } from './matterSchedule'
+import {
+  MATTER_DETAIL_TAB_ICONS,
+  MATTER_HEALTH_ICONS,
+  MATTER_HEALTH_TEXT_CLASS,
+  MATTER_PRIORITY_TONES,
+  MATTER_STATUS_ICONS,
+  MATTER_STATUS_TONES,
+  MATTER_TONE_CHIP_CLASS,
+  MATTER_TONE_DOT_CLASS,
+  MATTER_TONE_OUTLINE_CLASS,
+  MATTER_TONE_TEXT_CLASS,
+  matterDueTone
+} from './matterVocab'
 import { resolveMatterCitationTarget } from './navigation'
 import { RunOverlay } from './RunOverlay'
 import { AttnBand } from './attention'
@@ -128,7 +121,6 @@ interface MatterDetailProps {
 }
 
 type DetailTab = 'state' | 'context' | 'timeline' | 'runs'
-type TimelineFilter = 'all' | MatterActorKind
 
 const DETAIL_TYPE_UNSET = '__detail_type_unset__'
 const DETAIL_TYPE_CUSTOM = '__detail_type_custom__'
@@ -191,7 +183,7 @@ export function MatterDetail({
   // 调 Date.now()）。与 MatterFocus / MatterAgentCard 同一模式。
   const [now] = useState(() => Date.now())
   const [overlayRunId, setOverlayRunId] = useState<number | null>(null)
-  const showContextRail = useMediaQuery('(min-width: 1400px)')
+  const [agentConfigOpen, setAgentConfigOpen] = useState(false)
   const { matterAgentEnabled } = useMatterFlags()
   const runsQuery = useMatterRuns(matterId, matterAgentEnabled)
   const updatesQuery = useMatterUpdates(matterId, 'pending', matterAgentEnabled)
@@ -267,6 +259,7 @@ export function MatterDetail({
     staleTime: 30_000
   })
   const resourceItems = resources.data ?? []
+  const hasSuggestedResources = resourceItems.some((item) => item.link.confirmed_at === null)
   const stakeholderItems = stakeholders.data ?? []
   const tagItems = useMemo(
     () => mergeMatterTagDefinitions(tagsQuery.data?.items ?? [], matter?.tags ?? []),
@@ -297,10 +290,15 @@ export function MatterDetail({
             : value === 'runs'
               ? runs.length
               : null
+        // 设计 detail.jsx:578 `DETAIL_TABS` 每档带一个 icon（target/layers/history/activity），
+        // 实现此前四个 tab 一个 icon 都没有。
+        const TabIcon = MATTER_DETAIL_TAB_ICONS[value]
         return {
           value,
+          ariaLabel: t(`matters.tabs.${value}`),
           label: (
             <span className="inline-flex items-center gap-1.5">
+              <TabIcon size={13} />
               {t(`matters.tabs.${value}`)}
               {count !== null ? (
                 <span
@@ -314,11 +312,26 @@ export function MatterDetail({
                   {count}
                 </span>
               ) : null}
+              {/* 设计 detail.jsx:602 —— 有未确认的 AI 建议资料时，上下文 tab 挂一个 6px 红点。 */}
+              {value === 'context' && hasSuggestedResources ? (
+                <span
+                  aria-label={t('matters.resource.suggested')}
+                  className="size-1.5 rounded-full bg-ai"
+                />
+              ) : null}
             </span>
           )
         }
       }),
-    [matterAgentEnabled, resourceItems.length, runs.length, stakeholderItems.length, t, tab]
+    [
+      hasSuggestedResources,
+      matterAgentEnabled,
+      resourceItems.length,
+      runs.length,
+      stakeholderItems.length,
+      t,
+      tab
+    ]
   )
   const selectedUpdate = useQuery({
     queryKey: [...qk.matters.detail(matterId), 'update', reviewId],
@@ -355,6 +368,23 @@ export function MatterDetail({
     },
     onSuccess: () => void refresh(),
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
+  })
+
+  /**
+   * 跟进规则模态专用：`expectedVersion` 由模态给（它打开时冻结的那一版），不取这里的
+   * 「当前最新」。🔴 上面那个 `patch` 在**发起时**读 `matter.version`，对于「挂载时初始化
+   * 草稿、之后才提交」的模态等于把乐观锁架空：期间别处改了排程，保存会带着新版本号把它
+   * 静默覆盖。失败也不弹 toast —— 错误要留在模态里，草稿才不会丢。
+   */
+  const patchAgentConfig = useMutation({
+    mutationFn: ({
+      input,
+      expectedVersion
+    }: {
+      input: MatterPatchInput
+      expectedVersion: number
+    }) => api.patch(matterId, input, { expectedVersion }),
+    onSuccess: () => void refresh()
   })
 
   const transition = useMutation({
@@ -489,6 +519,30 @@ export function MatterDetail({
     )
   }
 
+  /**
+   * 「立即跟进」与失效提案上的「重新跑一轮」发起的是同一次跟进，只差后者要顺手关掉审阅面
+   * （否则用户盯着一张已经作废的提案等新结果）。共用一个函数，省得两处的 coalesced /
+   * 失败提示各写一份、日后漂开。
+   */
+  const startFollowUpRun = (onStarted?: () => void): void => {
+    startRun.mutate(
+      { expectedVersion: matter.version },
+      {
+        onSuccess: (result) => {
+          setOverlayRunId(result.run.id)
+          onStarted?.()
+          if (result.coalesced)
+            toastInfo(t('matters.runs.coalesced', { defaultValue: '已有一轮跟进在进行' }))
+        },
+        onError: (error) =>
+          toastError(
+            t('matters.runs.startFailed', { defaultValue: '请刷新后重试' }),
+            errorMessage(error)
+          )
+      }
+    )
+  }
+
   const saveTitle = (): void => {
     const title = titleDraft.trim()
     if (!title || title === matter.title) {
@@ -518,6 +572,19 @@ export function MatterDetail({
         (entry) => entry.kind === 'run'
       )
     : null
+  // 跟进 Agent 自 0811 起是内置的，profile 可为空 ⇒ `agent_enabled` 才是绑定与否的权威。
+  const agentBound = matter.agent_enabled === true || matter.agent_enabled === 1
+  const agentPillLabel = agentBound
+    ? `${
+        profiles.find((profile) => profile.id === matter.agent_profile_id)?.title ??
+        matter.agent_profile_id ??
+        t('matters.agentBinding.title')
+      } · ${scheduleLabel ?? t('matters.runs.manual')}${
+        nextRun && nextRun.kind === 'run'
+          ? ` · ${t('matters.agentBinding.next')} ${new Date(nextRun.utcMs).toLocaleString()}`
+          : ''
+      }`
+    : t('matters.detail.agentUnbound')
 
   return (
     // `relative` is the containing block for the narrow-layout chat overlay below.
@@ -533,16 +600,24 @@ export function MatterDetail({
               <ArrowLeft size={16} />
             </button>
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-2 text-meta text-ink-fg-2">
+              {/* 设计 detail.jsx:110/123 的元信息行：`pub · 类型 · 创建于 <相对时间>`，
+                  分隔点是内容不是间距。创建时间设计写的是 fmtAgo（相对），不是绝对日期。 */}
+              <div className="flex flex-wrap items-center gap-1.5 text-meta text-ink-fg-2">
                 <span className="font-mono">{matter.public_id}</span>
+                <span aria-hidden className="text-ink-fg-3">
+                  ·
+                </span>
                 <MatterTypeEditor
                   value={matter.matter_type}
                   busy={patch.isPending}
                   onChange={(matterType) => patch.mutate({ matter_type: matterType })}
                 />
-                <span>
+                <span aria-hidden className="text-ink-fg-3">
+                  ·
+                </span>
+                <span title={new Date(matter.created_at).toLocaleString()}>
                   {t('matters.detail.created', {
-                    date: new Date(matter.created_at).toLocaleDateString()
+                    date: formatMatterAgo(matter.created_at, now, i18n.language || 'zh-CN')
                   })}
                 </span>
               </div>
@@ -600,56 +675,28 @@ export function MatterDetail({
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-2">
                 <StatusMenu value={matter.status} onChange={(status) => patch.mutate({ status })} />
-                <Select
-                  value={matter.health}
-                  onValueChange={(health) => patch.mutate({ health: health as MatterHealth })}
-                >
-                  <SelectTrigger className="h-auto w-auto rounded-[var(--r-pill)] px-2 py-1 text-meta">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {MATTER_HEALTH_VALUES.map((value) => (
-                      <SelectItem key={value} value={value}>
-                        {t(`matters.health.${value}`)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <SegmentedControl<MatterPriority>
+                <HealthMenu value={matter.health} onChange={(health) => patch.mutate({ health })} />
+                <PriorityMenu
                   value={matter.priority}
                   onChange={(priority) => patch.mutate({ priority })}
-                  options={MATTER_PRIORITIES.map((value) => ({
-                    value,
-                    label: value.toUpperCase()
-                  }))}
-                  ariaLabel={t('matters.detail.priority')}
-                  className="font-mono uppercase"
                 />
                 <DueDateControl
                   value={matter.due_at}
+                  now={now}
                   saving={patch.isPending}
                   onChange={(due_at) => patch.mutate({ due_at })}
                 />
-                {/* 判定与右栏绑定卡同源：跟进 Agent 自 0811 起是内置的，profile 可为空，
-                    `agent_enabled` 才是权威。此前这里额外要求 profile 非空，导致同一屏
-                    右栏显示「内置 · 已启用」而头部显示「未绑定跟进 Agent」。 */}
-                {matter.agent_enabled === true || matter.agent_enabled === 1 ? (
-                  <span className="inline-flex items-center gap-1 rounded-[var(--r-pill)] border border-ai/25 bg-ai/10 px-2 py-1 text-meta text-ai">
-                    <Sparkles size={12} />
-                    {profiles.find((profile) => profile.id === matter.agent_profile_id)?.title ??
-                      matter.agent_profile_id ??
-                      t('matters.agentBinding.title')}{' '}
-                    · {scheduleLabel ?? t('matters.runs.manual')}
-                    {nextRun && nextRun.kind === 'run'
-                      ? ` · ${t('matters.agentBinding.next')} ${new Date(nextRun.utcMs).toLocaleString()}`
-                      : ''}
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1 rounded-[var(--r-pill)] border border-dashed border-ink-border px-2 py-1 text-meta text-ink-fg-2">
-                    <Bot size={12} />
-                    {t('matters.detail.agentUnbound')}
-                  </span>
-                )}
+                {/* 设计 detail.jsx:162 —— 一个 flex spacer 把跟进 Agent 推到行尾。 */}
+                <span className="flex-1" />
+                {/* 🔴 pill 必须是**按钮**（设计 detail.jsx:163 `onClick={ctx.onOpenAgent}`）：
+                    它此前是个纯 <span>，而唯一的跟进配置 UI 在 ≥1400px 才渲染的右栏里 ——
+                    窗口小一点就完全没有入口（0812 dogfood「无法切换跟进的方式」）。 */}
+                <AgentPill
+                  bound={agentBound}
+                  interactive={matterAgentEnabled}
+                  label={agentPillLabel}
+                  onOpen={() => setAgentConfigOpen(true)}
+                />
               </div>
               <div className="mt-3 flex flex-wrap items-center gap-1.5">
                 {matter.tags.map((tag) => (
@@ -706,25 +753,7 @@ export function MatterDetail({
               <button
                 type="button"
                 disabled={Boolean(activeRun) || startRun.isPending}
-                onClick={() =>
-                  startRun.mutate(
-                    { expectedVersion: matter.version },
-                    {
-                      onSuccess: (result) => {
-                        setOverlayRunId(result.run.id)
-                        if (result.coalesced)
-                          toastInfo(
-                            t('matters.runs.coalesced', { defaultValue: '已有一轮跟进在进行' })
-                          )
-                      },
-                      onError: (error) =>
-                        toastError(
-                          t('matters.runs.startFailed', { defaultValue: '请刷新后重试' }),
-                          errorMessage(error)
-                        )
-                    }
-                  )
-                }
+                onClick={() => startFollowUpRun()}
                 className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux disabled:opacity-50"
               >
                 {activeRun || startRun.isPending ? (
@@ -869,6 +898,7 @@ export function MatterDetail({
               resources={resourceItems}
               stakeholders={stakeholderItems}
               onOpenResource={setDrawerItem}
+              onTogglePin={(item) => toggleResourcePin.mutate(item)}
               onChanged={() => void refresh()}
             />
           ) : tab === 'runs' ? (
@@ -879,7 +909,7 @@ export function MatterDetail({
               onCancel={(runId) => cancelRun.mutate(runId)}
             />
           ) : (
-            <Timeline events={timeline} />
+            <MatterTimeline events={timeline} />
           )}
         </div>
 
@@ -935,19 +965,18 @@ export function MatterDetail({
           </div>
         ) : null}
       </article>
-      {/* P6-A — Matter Chat lives in AssistantChatModal, so the context rail keeps its slot. */}
-      {showContextRail ? (
-        <MatterContextRail
+      {/* 右侧上下文抽屉已移除（0812 dogfood D-D：与「上下文」tab 重复，且它 ≥1400px 才
+          渲染，把跟进配置藏在窗口宽度后面）。它独有的三样东西各自迁走：绑定卡 →
+          MatterAgentConfigModal；资料置顶钮 / 置顶分区 / 按 kind 取图标 → MatterContextTab。 */}
+      {agentConfigOpen ? (
+        <MatterAgentConfigModal
           matter={matter}
           runs={runs}
-          matterAgentEnabled={matterAgentEnabled}
-          onPatch={(input) => patch.mutate(input)}
           profiles={profiles}
-          resources={resourceItems}
-          stakeholders={stakeholderItems}
-          onOpenResource={setDrawerItem}
-          onTogglePin={(item) => toggleResourcePin.mutate(item)}
-          onChanged={() => void refresh()}
+          onPatch={(input, expectedVersion) =>
+            patchAgentConfig.mutateAsync({ input, expectedVersion })
+          }
+          onClose={() => setAgentConfigOpen(false)}
         />
       ) : null}
       <ResourceDrawer
@@ -976,6 +1005,10 @@ export function MatterDetail({
           onAccept={(payload) => reviewMutation.mutate({ kind: 'accept', payload })}
           onReject={(payload) => reviewMutation.mutate({ kind: 'reject', payload })}
           onOpenResource={openReviewSource}
+          // 提案失效后的出口：直接再跑一轮并关掉这张已作废的审阅面（原来只能先「拒绝」，
+          // 再自己回详情头点「立即跟进」）。
+          onRerun={() => startFollowUpRun(() => setReviewId(null))}
+          rerunBusy={startRun.isPending}
         />
       ) : null}
     </div>
@@ -1032,6 +1065,10 @@ function MatterPrevNext({
   )
 }
 
+/**
+ * 状态 chip（设计 detail.jsx:142 → `StatusChip` = 按 status tone 上色的 Pip + 每档一个 icon）。
+ * 🔴 改动前是 shadcn Select，trigger 写死 coral ⇒ 8 档一个颜色、8 个 icon 全丢。
+ */
 function StatusMenu({
   value,
   onChange
@@ -1040,15 +1077,131 @@ function StatusMenu({
   onChange(value: MatterStatus): void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const Icon = MATTER_STATUS_ICONS[value]
   return (
     <Select value={value} onValueChange={(status) => onChange(status as MatterStatus)}>
-      <SelectTrigger className="h-auto w-auto rounded-[var(--r-pill)] border-coral/30 bg-coral/10 px-2 py-1 text-meta text-coral">
-        <SelectValue />
+      <SelectTrigger
+        aria-label={t('matters.detail.status')}
+        className={cn(
+          'h-auto w-auto justify-start gap-1 whitespace-nowrap rounded-[var(--r-ctl)] px-2 py-1 text-meta',
+          // 🔴 icon 与文字必须是 trigger 的**直接**子节点：base 上有 `[&>span]:line-clamp-1`
+          // （0,2,0 特异性），包一层 span 会被它把 display 改成 -webkit-box，gap 直接失效。
+          // 末位那个 svg 是 trigger 自带的 chevron，单独收小。
+          '[&>svg:last-child]:size-3 [&>svg:last-child]:opacity-50',
+          MATTER_TONE_CHIP_CLASS[MATTER_STATUS_TONES[value]]
+        )}
+      >
+        <Icon size={11} className="shrink-0" />
+        {t(`matters.status.${value}`)}
       </SelectTrigger>
       <SelectContent>
-        {MATTER_STATUSES.map((status) => (
-          <SelectItem key={status} value={status}>
-            {t(`matters.status.${status}`)}
+        {MATTER_STATUSES.map((status) => {
+          const ItemIcon = MATTER_STATUS_ICONS[status]
+          return (
+            <SelectItem key={status} value={status}>
+              <span className="inline-flex items-center gap-2">
+                <ItemIcon
+                  size={12}
+                  className={MATTER_TONE_TEXT_CLASS[MATTER_STATUS_TONES[status]]}
+                />
+                {t(`matters.status.${status}`)}
+              </span>
+            </SelectItem>
+          )
+        })}
+      </SelectContent>
+    </Select>
+  )
+}
+
+/**
+ * 健康度（设计 detail.jsx:145 → `HealthChip` = **裸文本无边框无底**，icon 与文字同色）。
+ * 保留可改（设计原型这里是只读展示，实现侧的可改是净增能力），但去掉 pill 边框与 chevron。
+ */
+function HealthMenu({
+  value,
+  onChange
+}: {
+  value: MatterHealth
+  onChange(value: MatterHealth): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const Icon = MATTER_HEALTH_ICONS[value]
+  return (
+    <Select value={value} onValueChange={(health) => onChange(health as MatterHealth)}>
+      <SelectTrigger
+        aria-label={t('matters.detail.health')}
+        className={cn(
+          // `!bg-transparent` 压 SelectTrigger 自带的 authored `.input-surface`（见 matterVocab
+          // 的说明）—— 设计要的是**裸文本**，有输入框底就不是裸的了。
+          'h-auto w-auto justify-start gap-1 whitespace-nowrap rounded-[var(--r-ctl)] border-0 !bg-transparent px-1.5 py-1 text-meta',
+          // 末位 svg = trigger 自带的 chevron，设计里健康度没有它（裸文本 + icon）。
+          '[&>svg:last-child]:hidden hover:!bg-ink-fg/[0.05]',
+          MATTER_HEALTH_TEXT_CLASS[value]
+        )}
+      >
+        <Icon size={11} strokeWidth={2.4} className="shrink-0" />
+        {t(`matters.health.${value}`)}
+      </SelectTrigger>
+      <SelectContent>
+        {MATTER_HEALTH_VALUES.map((health) => {
+          const ItemIcon = MATTER_HEALTH_ICONS[health]
+          return (
+            <SelectItem key={health} value={health}>
+              <span className="inline-flex items-center gap-2">
+                <ItemIcon
+                  size={12}
+                  strokeWidth={2.4}
+                  className={MATTER_HEALTH_TEXT_CLASS[health]}
+                />
+                {t(`matters.health.${health}`)}
+              </span>
+            </SelectItem>
+          )
+        })}
+      </SelectContent>
+    </Select>
+  )
+}
+
+/**
+ * 优先级（设计 detail.jsx:146-155 → 单个 mono 小标签按 tone 上色 + chevron，菜单每项前一个
+ * 7px 彩色圆点）。🔴 改动前是 SegmentedControl，四档全平铺、占宽四倍、无颜色。
+ * 档位文案仍是 P0…P3 —— 设计源 `PRIORITY[*].label` 本身就是这四个字面量，不发明中文档位名。
+ */
+function PriorityMenu({
+  value,
+  onChange
+}: {
+  value: MatterPriority
+  onChange(value: MatterPriority): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <Select value={value} onValueChange={(priority) => onChange(priority as MatterPriority)}>
+      <SelectTrigger
+        aria-label={t('matters.detail.priority')}
+        className={cn(
+          'h-auto w-auto justify-start gap-1 rounded-[var(--r-ctl)] px-1.5 py-1 font-mono text-[10.5px] font-semibold uppercase tracking-[0.02em]',
+          '[&>svg:last-child]:size-3 [&>svg:last-child]:opacity-50',
+          MATTER_TONE_CHIP_CLASS[MATTER_PRIORITY_TONES[value]]
+        )}
+      >
+        {value.toUpperCase()}
+      </SelectTrigger>
+      <SelectContent>
+        {MATTER_PRIORITIES.map((priority) => (
+          <SelectItem key={priority} value={priority}>
+            <span className="inline-flex items-center gap-2">
+              <span
+                aria-hidden
+                className={cn(
+                  'size-[7px] shrink-0 rounded-full',
+                  MATTER_TONE_DOT_CLASS[MATTER_PRIORITY_TONES[priority]]
+                )}
+              />
+              <span className="font-mono">{priority.toUpperCase()}</span>
+            </span>
           </SelectItem>
         ))}
       </SelectContent>
@@ -1056,6 +1209,68 @@ function StatusMenu({
   )
 }
 
+/** 详情头右端的跟进 Agent 入口（设计 detail.jsx:163-174）。 */
+function AgentPill({
+  bound,
+  interactive,
+  label,
+  onOpen
+}: {
+  bound: boolean
+  interactive: boolean
+  label: string
+  onOpen(): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const skin = cn(
+    'inline-flex items-center gap-1.5 rounded-[var(--r-pill)] px-2 py-1 text-meta',
+    bound
+      ? 'border border-ai/20 bg-ai/[0.08] text-ink-fg-1'
+      : 'border border-dashed border-ink-border text-ink-fg-2'
+  )
+  if (!interactive) {
+    return (
+      <span className={skin}>
+        <Sparkles size={11} className={bound ? 'text-ai' : undefined} />
+        {label}
+      </span>
+    )
+  }
+  return (
+    <button
+      type="button"
+      onClick={onOpen}
+      title={t('matters.agentConfig.open')}
+      className={cn(skin, 'transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.05]')}
+    >
+      <Sparkles size={11} className={bound ? 'text-ai' : undefined} />
+      {label}
+      <ChevronDown size={9} className="opacity-60" />
+    </button>
+  )
+}
+
+/** 相对时间（设计 `helpers.jsx::fmtAgo`）。走 Intl 而不是手写中文串 —— 组件里不硬编码文案。 */
+function formatMatterAgo(at: number, now: number, locale: string): string {
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
+  const minutes = Math.round((at - now) / 60_000)
+  if (Math.abs(minutes) < 60) return rtf.format(minutes, 'minute')
+  const hours = Math.round(minutes / 60)
+  if (Math.abs(hours) < 24) return rtf.format(hours, 'hour')
+  const days = Math.round(hours / 24)
+  if (Math.abs(days) < 30) return rtf.format(days, 'day')
+  return rtf.format(Math.round(days / 30), 'month')
+}
+
+/**
+ * 类型切换（设计 detail.jsx:111-122 → 元信息行里的**裸文本按钮** + 8px chevron，只在
+ * hover/打开时才浮出一层 6% 底；负 margin 抵掉 padding，让它在文字流里不额外占宽）。
+ * 🔴 改动前是常驻 pill 的 shadcn Select（`min-w-24` + 完整边框 + 输入框底），是这一行里
+ * 视觉最重的元素，与刚改轻的 status/health/priority 三个 chip 不匹配。
+ *
+ * 「未指定类型」与「自定义类型」两个分支是实现侧比设计**多出来**的能力（设计只有 6 个
+ * 固定值），保留 —— 这里只换触发器与菜单的形态。
+ */
 function MatterTypeEditor({
   value,
   busy,
@@ -1098,9 +1313,25 @@ function MatterTypeEditor({
       >
         <SelectTrigger
           aria-label={t('matters.detail.type')}
-          className="h-auto w-auto min-w-24 rounded-[var(--r-pill)] px-2 py-1 text-meta"
+          className={cn(
+            // 负 margin 抵消 padding：hover 底比文字大一圈，但按钮的外框仍与文字等宽，
+            // 于是它在 `pub · 类型 · 创建于…` 这行里不会撑开额外的间距（设计 margin:'-2px -5px'）。
+            'h-auto w-auto justify-start gap-[3px] whitespace-nowrap rounded-[var(--r-ctl)] border-0 -mx-[5px] -my-[2px] px-[5px] py-[2px]',
+            // 字号与颜色**跟随同行元信息**（base 自带 text-aux + text-ink-fg 会让它比邻居大一号、
+            // 深一档）。用 inherit 而不是写死 ink-fg-2：这一行的颜色改了它自动跟着改。
+            'text-meta text-inherit',
+            // `!` 压 SelectTrigger 自带的 authored `.input-surface`（见 matterVocab 里的说明：
+            // 它写在 `@tailwind utilities` 之后且不在 layer 里，必胜 utilities）——
+            // 设计要的是裸文本，只有 hover / 菜单打开时才浮出 6% 底。
+            '!bg-transparent hover:!bg-ink-fg/[0.06] data-[state=open]:!bg-ink-fg/[0.06]',
+            // 末位 svg = trigger 自带的 chevron，设计是 8px + 0.55 透明度。
+            '[&>svg:last-child]:size-2 [&>svg:last-child]:opacity-[0.55]'
+          )}
         >
-          <SelectValue>{value ?? t('matters.detail.typeUnset')}</SelectValue>
+          {/* 🔴 文本必须是 trigger 的**直接**子节点：base 上有 `[&>span]:line-clamp-1`
+              （0,2,0 特异性），包一层 <SelectValue>（渲染成 span）会被它把 display 改成
+              -webkit-box，gap-[3px] 直接失效。同 StatusMenu / HealthMenu 的做法。 */}
+          {value ?? t('matters.detail.typeUnset')}
         </SelectTrigger>
         <SelectContent>
           <SelectItem value={DETAIL_TYPE_UNSET}>{t('matters.detail.typeUnset')}</SelectItem>
@@ -1153,10 +1384,12 @@ function MatterTypeEditor({
 function DueDateControl({
   value,
   saving,
+  now,
   onChange
 }: {
   value: number | null
   saving: boolean
+  now: number
   onChange(value: number | null): void
 }): React.ReactElement {
   const { t } = useTranslation()
@@ -1166,6 +1399,8 @@ function DueDateControl({
     value == null
       ? t('matters.detail.noDue')
       : t('matters.detail.due', { date: new Date(value).toLocaleDateString() })
+  // 设计 detail.jsx:50 `DueButton`：未设置 = 虚线边框 + fg-3；已设置 = 按 due tone 上色的实线。
+  const tone = matterDueTone(value, now)
 
   return (
     <span className="inline-flex items-center gap-1 text-meta text-ink-fg-2">
@@ -1191,8 +1426,14 @@ function DueDateControl({
           type="button"
           disabled={saving}
           onClick={() => setEditing(true)}
-          className="rounded-[var(--r-pill)] px-2 py-1 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+          className={cn(
+            'inline-flex items-center gap-1 rounded-[var(--r-ctl)] border px-2 py-1 transition-colors duration-fast ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50',
+            tone === null
+              ? 'border-dashed border-ink-border text-ink-fg-3 hover:text-ink-fg'
+              : MATTER_TONE_OUTLINE_CLASS[tone]
+          )}
         >
+          <Clock size={11} />
           {label}
         </button>
       )}
@@ -1679,157 +1920,6 @@ function ItemGroup({
         })}
       </div>
     </div>
-  )
-}
-
-/** 节点圆的 actor 配色（设计稿 `TL_TONE`：agent=--c-ai / me=--c-accent / system=--ink-fg-3，
- *  边框取该色 40% alpha）。实现的 actor 值域是 user/agent/system，设计的 `me` 即 user。 */
-const TIMELINE_TONE: Record<string, string> = {
-  agent: 'border-ai/40 text-ai',
-  user: 'border-coral/40 text-coral',
-  system: 'border-ink-border text-ink-fg-3'
-}
-
-/**
- * 事件 kind → 节点图标。
- *
- * 设计稿 `TL_ICON` 只覆盖 9 个 mock kind（run/email/update/status/doc/item/decision/created/
- * resource），而实到的事件有 38 个。多出来的**不自己发明符号**，一律回到设计稿里同语义位置
- * 已经用过的那个 icon：干系人=users（rail/ContextTab 通用）· 对话=message（chat.jsx）·
- * 接受/拒绝=check/x（review.jsx 的两个按钮）· 订阅=refresh、仅元数据=eyeoff（rail.jsx）·
- * 信号=alert（ATTN_META 主用）· 稍后提醒=bellsnooze（list.jsx onSignal）。
- * 归不到的走设计稿的兜底 `dot`。
- */
-const TIMELINE_ICONS: ReadonlyArray<readonly [RegExp, LucideIcon]> = [
-  [/^matter_created$/, Plus], // TL_ICON.created
-  [/^matter_updated$/, FileCheck], // TL_ICON.update
-  [/^matter_(archived|reopened|trashed|restored)$/, ArrowRight], // TL_ICON.status
-  [/^item_/, ListChecks], // TL_ICON.item（= ITEM_KIND.action）
-  [/^resource_updated$/, FileText], // TL_ICON.doc
-  [/^resource_suggestion_/, Sparkles], // rail「Agent 发现的资料」
-  [/^resource_access_policy_changed$/, EyeOff], // rail「仅元数据」
-  [/^resource_subscription_/, RefreshCw], // rail「已订阅后续」
-  [/^resource_/, Link2], // TL_ICON.resource
-  [/^stakeholder_/, Users],
-  [/^relation_/, Link2],
-  [/^chat_scope_/, MessageSquare],
-  [/^update_proposed$/, Sparkles],
-  [/^update_accepted$/, Check],
-  [/^update_rejected$/, X],
-  [/^update_superseded$/, ArrowRight],
-  [/^agent_binding_changed$/, Sparkles],
-  [/^attention_resolved$/, Check],
-  [/^attention_snoozed$/, BellOff],
-  [/^attention_dismissed$/, EyeOff],
-  [/^attention_/, TriangleAlert]
-]
-
-function timelineIcon(kind: string): LucideIcon {
-  for (const [pattern, icon] of TIMELINE_ICONS) {
-    if (pattern.test(kind)) return icon
-  }
-  return Circle // 设计稿兜底 'dot'
-}
-
-/** 事件 payload 里的「改了哪些字段」。形状非法一律当没有 —— 时间线是审计面，
- *  宁可少显示一行，也不要把脏数据当成变更详情渲染出去。 */
-function changedFields(event: MatterEvent): string[] {
-  const fields = (event.payload as { fields?: unknown } | null | undefined)?.fields
-  if (!Array.isArray(fields)) return []
-  return fields.filter((field): field is string => typeof field === 'string' && field.length > 0)
-}
-
-function Timeline({ events }: { events: readonly MatterEvent[] }): React.ReactElement {
-  const { t } = useTranslation()
-  const [filter, setFilter] = useState<TimelineFilter>('all')
-  const options = useMemo(
-    () => [
-      { value: 'all' as const, label: t('matters.timeline.all') },
-      { value: 'user' as const, label: t('matters.timeline.me') },
-      { value: 'agent' as const, label: t('matters.timeline.agent') },
-      { value: 'system' as const, label: t('matters.timeline.system') }
-    ],
-    [t]
-  )
-  const visible = filter === 'all' ? events : events.filter((event) => event.actor_kind === filter)
-  return (
-    <section>
-      {/* 标题 + 右侧筛选 = 设计稿 `RailLabel right={<Segmented/>}>业务时间线 · 只追加</RailLabel>`。
-          🔴 不用仓库的 SectionHeader —— 它是 mono UPPERCASE，且有 CI lint 规则
-          `no-cjk-in-mono-size` 禁 CJK；这里沿用 matters 内部同形态的小标题。 */}
-      <h2 className="mb-2 flex items-center justify-between gap-3 text-meta font-semibold uppercase tracking-[0.08em] text-ink-fg-2">
-        <span className="min-w-0 truncate">{t('matters.timeline.sectionTitle')}</span>
-        <SegmentedControl<TimelineFilter>
-          value={filter}
-          onChange={setFilter}
-          options={options}
-          ariaLabel={t('matters.timeline.filter')}
-        />
-      </h2>
-
-      {/* 时间轴本体（设计稿 detail.jsx `Timeline`）：一条贯穿竖线 + 每条事件一个圆节点。
-          此前是一堆独立卡片，没有任何时间轴形态。竖线 left 15px = 节点半径 11.5 + pl-1 的 4px，
-          正好穿过圆心；节点用 bg-ink-0 盖住线，边框按 actor 取色。 */}
-      <div className="relative pl-1">
-        <span aria-hidden className="absolute bottom-2.5 left-[15px] top-2.5 w-px bg-ink-border" />
-        {visible.map((event) => {
-          const tone = TIMELINE_TONE[event.actor_kind] ?? TIMELINE_TONE.system
-          const Icon = timelineIcon(event.kind)
-          return (
-            <div key={event.id} className="relative flex gap-[11px] py-[7px]">
-              <span
-                className={cn(
-                  'z-[1] grid size-[23px] shrink-0 place-items-center rounded-full border bg-ink-0',
-                  tone
-                )}
-              >
-                <Icon size={11} />
-              </span>
-              <div className="min-w-0 flex-1 pt-0.5">
-                <div className="text-meta leading-[1.55] text-ink-fg-1">
-                  {t(`matters.events.${event.kind}`, { defaultValue: event.kind })}
-                </div>
-                {/* 变更详情（补充规格 v2 §6「每条下方补一句变更详情」）。payload 一直存在 DB 里，
-                    渲染层此前一次都没读过 ⇒ 每条事件只有名字、看不出改了什么。
-                    🔴 后端目前只写字段**名**（`{"fields": [...]}`），没写旧值/新值，所以这里
-                    如实呈现到字段粒度；值级的 from→to 要先扩 payload，未做即不假装有。 */}
-                {changedFields(event).length > 0 ? (
-                  <div className="mt-0.5 text-meta leading-[1.55] text-ink-fg-3">
-                    {t('matters.timeline.changedFields', {
-                      fields: changedFields(event)
-                        .map((field) => t(`matters.eventField.${field}`, { defaultValue: field }))
-                        .join('、')
-                    })}
-                  </div>
-                ) : null}
-                <div className="mt-[3px] flex flex-wrap items-center gap-[7px]">
-                  <time className="font-mono text-micro text-ink-fg-3">
-                    {new Date(event.happened_at).toLocaleString()}
-                  </time>
-                  {event.actor_kind === 'agent' ? (
-                    <span className="inline-flex items-center gap-1 rounded-[var(--r-pill)] bg-ai/10 px-1.5 py-0.5 text-micro text-ai">
-                      <Sparkles size={9} />
-                      {t('matters.timeline.agent')}
-                    </span>
-                  ) : (
-                    <span className="text-micro text-ink-fg-3">
-                      ·{' '}
-                      {t(`matters.eventActor.${event.actor_kind}`, {
-                        defaultValue: event.actor_kind
-                      })}
-                    </span>
-                  )}
-                  <span className="text-micro text-ink-fg-3">
-                    · {t(`matters.eventSource.${event.source}`, { defaultValue: event.source })}
-                  </span>
-                </div>
-              </div>
-            </div>
-          )
-        })}
-        {visible.length === 0 ? <EmptyState title={t('matters.timeline.empty')} /> : null}
-      </div>
-    </section>
   )
 }
 

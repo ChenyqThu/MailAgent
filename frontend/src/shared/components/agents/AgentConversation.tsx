@@ -16,14 +16,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { Mail, Settings, X } from 'lucide-react'
+import { Mail, Settings } from 'lucide-react'
 
-import type {
-  ChatBackendKind,
-  ChatSession,
-  ReportAgentConfig,
-  SearchHit
-} from '@shared/api/types'
+import type { ChatBackendKind, ChatSession, ReportAgentConfig, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -54,8 +49,20 @@ import { type ChatComposerControls } from '@shared/assistant/components/composer
 import { useAgentContextSnapshot } from '@shared/assistant/context/useAgentContextSnapshot'
 import type { CapabilityContext, ContextScope } from '@shared/assistant/context/contextSnapshot'
 import { chatMessageToUIMessage } from '@shared/assistant/uiMessage'
+import {
+  ChatPromptDispatcher,
+  type ChatPromptRequest
+} from '@shared/assistant/components/ChatPromptDispatcher'
+import { ConversationContextChip } from '@shared/components/agents/ConversationContextChip'
+import { MatterChatSurfaceContext } from '@shared/components/matters/matterChatContext'
+import {
+  matterIdentityFromSession,
+  useMatterConversation
+} from '@shared/components/matters/useMatterConversation'
+import { useAIChatPanel, type MatterChatTarget } from '@shared/state/ai-chat-panel'
 
 import { AgentThread } from './AgentThread'
+import { createEnsureSession } from './ensureSession'
 import { AgentQuickActions } from './AgentQuickActions'
 import { AgentRecordConversation } from './AgentRecordView'
 
@@ -81,13 +88,18 @@ export interface AgentConversationProps {
    *  session + the email body injected at send). Resolved once on mount; the user can × remove it (then
    *  it won't re-add). /sessions omits it → no chip, no injection (byte-identical). */
   initialMentionEmailId?: number
+  /** 0812 —— dock 以「事项对话」唤出时带的那件事。与 initialMentionEmailId 同性质：空会话上作为
+   *  一枚可移除的 context chip 提供，×掉就不再自动重新 seed。/sessions 不传 → 无 chip、无注入。
+   *  （**历史里选中**的 matter 会话不走这里，走 activeItem 自己的 anchor —— 见下方 sessionMatter。）*/
+  initialMatterTarget?: MatterChatTarget
 }
 
 export function AgentConversation({
   chat,
   activeItem,
   welcomeAlign = 'center',
-  initialMentionEmailId
+  initialMentionEmailId,
+  initialMatterTarget
 }: AgentConversationProps): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -138,6 +150,14 @@ export function AgentConversation({
   // mirror). Detected off the session metadata, not the run-row context, so the lock is universal.
   const isAgentRecord = activeItem?.origin === 'agent'
   const useAiSdkRuntime = !isLegacySession && gatewayLive && !metadataPending
+  // 0812 —— 会话行自己的事项身份（判定单源见 matterIdentityFromSession 的注释：这是「历史里选中的
+  // 事项会话被当成 general 渲染」那个 bug 的修复点）。
+  // 🔴 三态：resolved / none / **unresolved**（是事项会话但公共编号没拿到）。第三态绝不能与
+  // 「普通会话」合流 —— 那会让用户在一个看起来正常的页面里以全局范围操作，可能命中错误的事项。
+  const sessionMatterIdentity = useMemo(() => matterIdentityFromSession(activeItem), [activeItem])
+  const sessionMatter: MatterChatTarget | null =
+    sessionMatterIdentity.state === 'resolved' ? sessionMatterIdentity.target : null
+  const matterContextUnresolved = sessionMatterIdentity.state === 'unresolved'
 
   // ── composer controls (model / thinking / @mention / attachments) ──────────
   // W8 — per-session model. `sessionModel` is THREE-valued on purpose: undefined while the row is
@@ -183,10 +203,13 @@ export function AgentConversation({
   )
   // Track the email id whose chip the user explicitly removed, so the reactive seed below doesn't re-add
   // it — but switching to a DIFFERENT email re-offers its context.
-  const emailContextRemovedRef = useRef<number | null>(null)
+  // 🔴 0812 codex #3 —— 这里是 **state 而不是 ref**：外部指令（邮件工具栏「创建事项」）必须能
+  // 撤销这次手动移除，而"清一个 ref"不会让下面那个 seed effect 重跑（它的依赖一个都没变），
+  // chip 于是永远不出现、指令永远等不到 —— 那条待发指令就这么悬着，等下一次重挂时突然发出去。
+  const [removedEmailContextId, setRemovedEmailContextId] = useState<number | null>(null)
   const onRemoveEmailContext = useCallback((): void => {
     setEmailContext((cur) => {
-      if (cur) emailContextRemovedRef.current = cur.internalId
+      if (cur) setRemovedEmailContextId(cur.internalId)
       return null
     })
   }, [])
@@ -250,7 +273,7 @@ export function AgentConversation({
   // the chat is NEW/empty (user: 每次唤出默认带的是当前这封, not the previous one). Re-resolves whenever the
   // active email changes; FREEZES once a conversation starts (activeSessionId set or messages exist) so the
   // chip keeps reflecting that conversation's email; never re-adds an email the user explicitly removed
-  // (emailContextRemovedRef). /sessions passes no initialMentionEmailId → chip cleared, no injection.
+  // (removedEmailContextId). /sessions passes no initialMentionEmailId → chip cleared, no injection.
   const chatIsEmpty = chat.activeSessionId === null && chat.messages.length === 0
   useEffect(() => {
     if (initialMentionEmailId == null) {
@@ -260,21 +283,35 @@ export function AgentConversation({
       return undefined
     }
     if (!chatIsEmpty) return undefined
-    if (emailContextRemovedRef.current === initialMentionEmailId) return undefined
+    if (removedEmailContextId === initialMentionEmailId) return undefined
+    // 0812 —— 先同步立起 chip（只带 id，标题随后补）。原来「等 email.get 回来才立 chip」有两个
+    // 后果：唤出瞬间 chip 闪一下才出现；以及取标题失败时**根本没有 chip**，于是「带着这封邮件
+    // 提问」静默退化成一次没有引用的提问。注入用的是 internalId（正文在 send 时另取），标题只是
+    // 显示，拿不到就退回「未命名」文案。外部指令（ChatPromptDispatcher）也据此判「引用就位了没」。
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setEmailContext((cur) =>
+      cur && cur.internalId === initialMentionEmailId
+        ? cur
+        : { internalId: initialMentionEmailId, subject: '' }
+    )
     let cancelled = false
     void (async () => {
       try {
         const email = await mailApi.email.get(initialMentionEmailId)
         if (cancelled || !email) return
-        setEmailContext({ internalId: initialMentionEmailId, subject: email.subject ?? '' })
+        setEmailContext((cur) =>
+          cur && cur.internalId === initialMentionEmailId
+            ? { internalId: initialMentionEmailId, subject: email.subject ?? '' }
+            : cur
+        )
       } catch {
-        /* best-effort — no chip on fetch failure */
+        /* best-effort — 标题取不到就留空，chip 仍在（显示回退到「未命名」）。 */
       }
     })()
     return (): void => {
       cancelled = true
     }
-  }, [initialMentionEmailId, chatIsEmpty, mailApi])
+  }, [initialMentionEmailId, chatIsEmpty, mailApi, removedEmailContextId])
 
   // P1-2 (07-15 codex r1) — an in-panel approval decide runs the server-side resume synchronously
   // and holds that session's run lease; disable the composer for its duration (a send would 409).
@@ -283,6 +320,10 @@ export function AgentConversation({
   const { sendDisabled: approvalSendDisabled, onDecideBusyChange } = useApprovalDecideBusy(
     chat.activeSessionId
   )
+  // 🔴 事项身份未就绪 → 一律禁发（codex #2）。这条会话**是**事项对话，但我们拿不到它的 MAT- 编号，
+  // 于是既不能注入事项上下文、也推不出 gateway 的 matterScopeFilter。放行 = 用户以为在这件事里说话、
+  // 模型却在全局范围跑，可能检索/操作**另一件**事。宁可让这一屏说"上下文未就绪"。
+  const sendDisabled = approvalSendDisabled || matterContextUnresolved
   const composerControls = useMemo<ChatComposerControls>(
     () => ({
       effort: effort.control,
@@ -290,7 +331,7 @@ export function AgentConversation({
       availableModels,
       onModelChange,
       modelPickerDisabled: false,
-      sendDisabled: approvalSendDisabled,
+      sendDisabled,
       mentions,
       onAddMention,
       onRemoveMention,
@@ -308,7 +349,7 @@ export function AgentConversation({
       model,
       availableModels,
       onModelChange,
-      approvalSendDisabled,
+      sendDisabled,
       mentions,
       onAddMention,
       onRemoveMention,
@@ -321,6 +362,78 @@ export function AgentConversation({
       chatActiveSessionId
     ]
   )
+
+  // ── session creation (lazy, at-most-once, anchor-aware) ────────────────────
+  // ai-sdk: create the session on the FIRST send, adopt it (history / reload), and hand the id to the
+  // gateway latch for the dual-write.
+  // 🔴 0812 起它必须**幂等**：事项对话的检索范围切换要先有 session_id 才能落审计，于是 onEnsureSession
+  // 不再只被 transport 调用。原来的实现无条件新建 —— 两个调用方就会造出两条会话（审计记在 A、对话跑在
+  // B）。existing 短路 + inflight 去重后，两条路共享同一次创建。
+  // 🔴 0812 codex #1 起，去重键还必须绑**线程身份**（navEpoch + 事项锚点）：切到另一件事时复用
+  // 上一件事的在途创建，会把 B 的审计写进 A 的会话、拿 A 的 session 持久化 B 的消息，最后那次
+  // adopt 还会把界面从 B 拽回 A。判定与落地前复核都在 `./ensureSession` 的 createEnsureSession 里。
+  const chatAdoptSession = chat.adoptSession
+  const activeSessionIdRef = useRef<number | null>(chat.activeSessionId)
+  activeSessionIdRef.current = chat.activeSessionId
+  const navEpochRef = useRef(chat.navEpoch)
+  navEpochRef.current = chat.navEpoch
+  const matterAnchorRef = useRef<MatterChatTarget | null>(null)
+  // 这几个 ref 让工厂只造一次（造第二次 = 在途状态清零 = 去重失效）。
+  const mailApiRef = useRef(mailApi)
+  mailApiRef.current = mailApi
+  const modelRef = useRef(model)
+  modelRef.current = model
+  const adoptRef = useRef(chatAdoptSession)
+  adoptRef.current = chatAdoptSession
+  const onEnsureSession = useMemo(
+    () =>
+      createEnsureSession({
+        getExistingSessionId: () => activeSessionIdRef.current,
+        // 锚点从 ref 读（matter binding 在本 hook 之后才算得出来；真正执行时它已就位）。
+        getIdentity: () => ({
+          navEpoch: navEpochRef.current,
+          anchorId: matterAnchorRef.current?.id ?? null
+        }),
+        createSession: (identity) =>
+          mailApiRef.current.chat.newSession(
+            identity.anchorId !== null
+              ? {
+                  anchorType: 'matter',
+                  matterId: identity.anchorId,
+                  backendKind: 'ai-sdk',
+                  backendModel: modelRef.current
+                }
+              : {
+                  anchorType: 'general',
+                  emailId: null,
+                  backendKind: 'ai-sdk',
+                  backendModel: modelRef.current
+                }
+          ),
+        adopt: (session) => {
+          adoptRef.current(session)
+          activeSessionIdRef.current = session.id
+        }
+      }),
+    []
+  )
+
+  // ── matter binding (chip / 检索范围 / 缺口卡 / 快捷 prompt / 写入回执 surface) ──────────────
+  // 0812：事项对话没有第二套 UI —— 这里只是往同一个 thread 上挂事项那几件事。
+  const chatIsEmptyForMatter = chat.activeSessionId === null && chat.messages.length === 0
+  const matter = useMatterConversation({
+    seed: initialMatterTarget ?? null,
+    sessionMatter,
+    sessionMatterUnresolved: matterContextUnresolved,
+    chatIsEmpty: chatIsEmptyForMatter,
+    navEpoch: chat.navEpoch,
+    sessionId: chat.activeSessionId,
+    ensureSession: onEnsureSession,
+    enabled: useAiSdkRuntime,
+    thinkingEnabled: thinkingActive
+  })
+  const matterAnchor = matter.anchor
+  matterAnchorRef.current = matterAnchor
 
   // ── context snapshot (email session → inject that email's body; general → SOUL-only prompt) ──────
   // S3 — always on for live ai-sdk sessions (the CONTEXT_INJECTION flag was GA'd away).
@@ -345,13 +458,23 @@ export function AgentConversation({
     }),
     [thinkingActive]
   )
-  const { snapshot: contextSnapshot } = useAgentContextSnapshot({
+  const { snapshot: emailContextSnapshot } = useAgentContextSnapshot({
     activeInternalId: emailAnchorId,
     scope: contextScope,
     capabilities: contextCapabilities,
     panelMode: 'fullscreen',
-    enabled: contextInjectionOn
+    // 事项对话用事项那份快照（anchorType='matter' 是 gateway 推 matterScopeFilter 的判据）；
+    // 这里不能再产出一份 general 快照顶上去。事项身份未就绪时同样不产 —— 一份 general 快照顶上去
+    // 正是「把事项会话当普通会话跑」的那条路（codex #2）。
+    enabled: contextInjectionOn && matterAnchor === null && !matterContextUnresolved
   })
+  // 事项快照 fail-soft：读不到 → null → context-light 一轮，对话照常（D10 验收）。
+  // 未就绪 → null（且上面已禁发）：宁可没有快照，也不发一份说"这是通用对话"的快照。
+  const contextSnapshot = matterContextUnresolved
+    ? null
+    : matterAnchor === null
+      ? emailContextSnapshot
+      : matter.snapshot
   // PART 2 — auto-approval mode (Settings → AI), threaded into the ai-sdk runtime body.
   const approvalMode = useApprovalMode()
   // ── harness-chat lane A (07-15) — session-switch persistence awareness ──────
@@ -458,25 +581,17 @@ export function AgentConversation({
   const pendingSlotContent = pendingApprovalCard
   // WP-14 — 回合级运行条（阶段短语 / 当前工具名 / 回合秒表 + detached run 的 ageMs 接续）。
   // 住在 AgentThread 的 sticky ViewportFooter 里，跟着 composer 走、不随消息流滚走。
+  // 事项控件（缺口卡 + 检索范围）与运行条同住这个槽：它们都属于 composer 上方的常驻带，
+  // 跟着 composer 走、不随消息流滚走。非事项对话时 matter.controls 为 null → 字节级现状。
   const runStatusSlot = (
-    <ThreadRunStatusBar
-      backgroundActive={backgroundActive}
-      backgroundStartedAt={backgroundStartedAt}
-    />
+    <>
+      {matter.controls}
+      <ThreadRunStatusBar
+        backgroundActive={backgroundActive}
+        backgroundStartedAt={backgroundStartedAt}
+      />
+    </>
   )
-
-  // ai-sdk: create the backend_kind='ai-sdk' general session on the first send, adopt it (history /
-  // reload), and hand the id to the gateway latch for the dual-write.
-  const onEnsureSession = useCallback(async (): Promise<number> => {
-    const session = await mailApi.chat.newSession({
-      anchorType: 'general',
-      emailId: null,
-      backendKind: 'ai-sdk',
-      backendModel: model
-    })
-    chat.adoptSession(session)
-    return session.id
-  }, [mailApi, model, chat])
 
   // Phase 10b — turn-complete handler (AgentThread's running→idle edge). Two jobs:
   //  (1) refresh the unified history on a session's FIRST completed turn so a brand-new conversation
@@ -528,7 +643,7 @@ export function AgentConversation({
   const backendConfigured = secretsQ.data?.llmApiKey === true
 
   // assistant-modal P5 — removable email-context chip (modal only; null otherwise → AgentThread renders
-  // nothing in the contextChip slot).
+  // nothing in the contextChip slot). 0812：事项 chip 与它并排（同一条 chip 带）。
   const emailContextChip = emailContext ? (
     <ConversationContextChip
       icon={<Mail size={12} strokeWidth={2} className="shrink-0 text-coral" />}
@@ -536,6 +651,61 @@ export function AgentConversation({
       onRemove={onRemoveEmailContext}
     />
   ) : null
+  const contextChips =
+    emailContextChip || matter.chip ? (
+      <div className="flex flex-wrap items-center gap-1.5">
+        {matter.chip}
+        {emailContextChip}
+      </div>
+    ) : null
+
+  // 0812 —— 外部入口（邮件工具栏「创建事项」）递进来的指令。三道门：
+  //   ① 空会话才发（否则指令会落进一场无关的对话里；下面的 effect 负责先 newSession）；
+  //   ② 指令声明了要带哪封邮件时，等那枚 chip 就位（不然就是一条指着空气的指令）；
+  //   ③ 真正的「发 or 预填」判定在 ChatPromptDispatcher 里（它才看得见 thread 是否在跑）。
+  //
+  // 🔴 codex #3 —— ②那道门此前是**没有出口的**：用户先手动 × 掉这封邮件的 chip、再点「创建事项」，
+  // chip 就永远不会重建（seed effect 记着那次移除），指令于是永远悬在 store 里，直到之后某次
+  // 重挂、removed 记忆复位、chip 重新出现 —— 那条旧指令在一个意想不到的时刻自动发了出去，还可能
+  // 触发事项写操作。修法两条：
+  //   (a) 点「创建事项」是一次**新的用户动作**，显式覆盖此前对这封邮件的手动移除；
+  //   (b) 本宿主根本给不出那封邮件的引用（当前邮件不是它 / 没有活动邮件）时，**当场消费成"只预填"**
+  //       —— 决不把一条待发指令悬在那里等未来。
+  const pendingPrompt = useAIChatPanel((s) => s.pendingPrompt)
+  const consumeChatPrompt = useAIChatPanel((s) => s.consumeChatPrompt)
+  const chatNewSession = chat.newSession
+  useEffect(() => {
+    if (pendingPrompt === null) return
+    if (!chatIsEmptyForMatter) chatNewSession()
+  }, [pendingPrompt, chatIsEmptyForMatter, chatNewSession])
+  // (a) —— 只清"这封邮件"的移除记忆；改的是 state 而非 ref，seed effect 才会重跑把 chip 立回来。
+  const pendingPromptEmailId = pendingPrompt?.emailId ?? null
+  const pendingPromptNonce = pendingPrompt?.nonce ?? null
+  useEffect(() => {
+    if (pendingPromptEmailId === null) return
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRemovedEmailContextId((cur) => (cur === pendingPromptEmailId ? null : cur))
+    // nonce 入 deps：同一封邮件连点两次也各算一次新动作。
+  }, [pendingPromptEmailId, pendingPromptNonce])
+  const promptRequest = useMemo<ChatPromptRequest | null>(() => {
+    if (pendingPrompt === null || !chatIsEmptyForMatter) return null
+    if (pendingPrompt.emailId == null) {
+      return { nonce: pendingPrompt.nonce, text: pendingPrompt.text, prefillOnly: false }
+    }
+    if (emailContext?.internalId === pendingPrompt.emailId) {
+      return { nonce: pendingPrompt.nonce, text: pendingPrompt.text, prefillOnly: false }
+    }
+    // (b) 这个宿主不是那封邮件的宿主 → 引用永远不会就位。消费成"只预填"，用户看得见、可自己决定。
+    if (initialMentionEmailId !== pendingPrompt.emailId) {
+      return { nonce: pendingPrompt.nonce, text: pendingPrompt.text, prefillOnly: true }
+    }
+    // 宿主就是那封邮件、chip 正在同一轮里建立 → 下一帧就位（seed effect 是同步立 chip 的）。
+    return null
+  }, [pendingPrompt, chatIsEmptyForMatter, emailContext, initialMentionEmailId])
+  const onPromptDispatched = useCallback(
+    (nonce: number): void => consumeChatPrompt(nonce),
+    [consumeChatPrompt]
+  )
 
   if (secretsQ.isSuccess && !backendConfigured) {
     return (
@@ -617,6 +787,16 @@ export function AgentConversation({
           {t('chat.aiSdk.readOnlyLegacy')}
         </div>
       )}
+      {/* 🔴 codex #2 —— 这条会话锚在某件事上，但公共编号没拿到。既然拿不到，就**如实说**并禁发；
+          绝不静默降级成普通对话（那会让"更新这件事"在全局范围里跑）。 */}
+      {matterContextUnresolved && (
+        <div
+          data-matter-context-unresolved
+          className="mx-3 my-2 rounded-md border border-warn/30 bg-warn/10 px-3 py-2 text-aux text-ink-fg-1"
+        >
+          {t('matters.chat.contextUnresolved')}
+        </div>
+      )}
 
       <ChatComposerControlsProvider value={composerControls}>
         {metadataPending ? (
@@ -671,14 +851,20 @@ export function AgentConversation({
               {/* 07-15 — feeds the settle handler's mid-stream guard + the background-run
                   placeholder's own-stream mask (renders nothing). */}
               <ThreadRunningBridge runningRef={aiSdkRunningRef} onRunningChange={setAiSdkRunning} />
-              <AgentThread
-                quickActions={<AgentQuickActions />}
-                onTurnComplete={handleTurnComplete}
-                welcomeAlign={welcomeAlign}
-                contextChip={emailContextChip}
-                pendingSlot={pendingSlotContent}
-                runStatusSlot={runStatusSlot}
-              />
+              {/* 0812 —— 外部指令派发（渲染 null；住在 provider 里才拿得到 thread）。 */}
+              <ChatPromptDispatcher request={promptRequest} onDispatched={onPromptDispatched} />
+              {/* 0812 —— 事项写入回执 + 撤销的 surface。没有它，matter 写入卡会 fall through 成
+                  通用 ToolTraceCard（回执与撤销当场消失）。非事项对话 surface=null → 现状不变。 */}
+              <MatterChatSurfaceContext.Provider value={matter.surface}>
+                <AgentThread
+                  quickActions={matter.quickPrompts ?? <AgentQuickActions />}
+                  onTurnComplete={handleTurnComplete}
+                  welcomeAlign={welcomeAlign}
+                  contextChip={contextChips}
+                  pendingSlot={pendingSlotContent}
+                  runStatusSlot={runStatusSlot}
+                />
+              </MatterChatSurfaceContext.Provider>
             </AiSdkRuntimeProvider>
           )
         ) : reloadMessagesReady && chat.messages.length > 0 ? (
@@ -700,36 +886,6 @@ export function AgentConversation({
   )
 }
 
-/** assistant-modal P5 / Matters P6-A — the shared removable context chip used by email and matter
- *  conversations. The caller owns what removal means for context injection. */
-export function ConversationContextChip({
-  icon,
-  label,
-  removeLabel,
-  onRemove
-}: {
-  icon: React.ReactNode
-  label: string
-  removeLabel?: string
-  onRemove: () => void
-}): React.JSX.Element {
-  const { t } = useTranslation()
-  const resolvedRemoveLabel = removeLabel ?? t('chat.modal.removeContext')
-  return (
-    <div className="flex items-center gap-1.5 self-start rounded-lg border border-[var(--hairline)] bg-ink-2 py-1 pl-2 pr-1 text-meta text-ink-fg-1">
-      {icon}
-      <span className="max-w-[18rem] truncate" title={label}>
-        {label}
-      </span>
-      <button
-        type="button"
-        onClick={onRemove}
-        aria-label={resolvedRemoveLabel}
-        title={resolvedRemoveLabel}
-        className="grid size-5 shrink-0 place-items-center rounded text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-      >
-        <X size={13} strokeWidth={2} />
-      </button>
-    </div>
-  )
-}
+// 0812：chip 本体下沉成零依赖叶子（./ConversationContextChip）以断开与事项适配层的 import 环；
+// 这里保留 re-export，既有 `@shared/components/agents/AgentConversation` 的 import 路径不变。
+export { ConversationContextChip } from './ConversationContextChip'

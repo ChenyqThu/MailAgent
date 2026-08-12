@@ -8,10 +8,12 @@
 // — the active conversation body remains at the SAME mount point, so a mode switch never remounts it
 // (no dropped stream / lost timing).
 //
-// The default body is AgentConversation (the SAME general-agent conversation as /sessions). A matter
-// invocation swaps in MatterChatPanel as a body-only adapter; the outer dock, controls, model/grant
-// settings and gateway tool ceiling stay shared. fullscreen remains an ACTION to the general /sessions
-// view, not a persisted mode.
+// The body is ALWAYS AgentConversation (the SAME general-agent conversation as /sessions).
+// 🔴 0812 收口：事项对话曾在这里换成 MatterChatPanel 这个第二套 chat UI —— 设计稿
+// (`matters/chat.jsx`) 开头就写着 *No second chat UI*，而那套面板还漏掉了模型选择器 / effort 档 /
+// @mention / 附件（它没有 ChatComposerControlsProvider）。现在事项只是 AgentConversation 上的一枚
+// context chip + 一组事项控件（见 useMatterConversation），dock / header / 历史下拉全部共用。
+// fullscreen remains an ACTION to the general /sessions view, not a persisted mode.
 //
 // Mount-once: the body (useGeneralChat session load) only mounts after the FIRST open, then stays mounted
 // (hidden via CSS when minimised) so the conversation survives minimise/restore + a mode switch.
@@ -44,9 +46,13 @@ import {
   requestOpenAgentSession,
   type AssistantMode
 } from '@shared/state/ai-chat-panel'
+import type { ChatSession } from '@shared/api/types'
+import { listSessionsForMatter } from '@shared/api/chat_api'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { toastError } from '@shared/state/toast'
+import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
 import { AgentConversation } from '@shared/components/agents/AgentConversation'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
-import { MatterChatPanel } from '@shared/components/matters/MatterChatPanel'
 import { ChatModalHistoryDropdown } from './ChatModalHistoryDropdown'
 import { titleOf } from './sessionTitle'
 
@@ -117,7 +123,6 @@ function AssistantChatModalInner(): React.JSX.Element {
   const setMode = useAIChatPanel((s) => s.setMode)
   const matterTarget = useAIChatPanel((s) => s.matterTarget)
   const matterConversationEpoch = useAIChatPanel((s) => s.matterConversationEpoch)
-  const startNewMatterConversation = useAIChatPanel((s) => s.startNewMatterConversation)
   const clearMatterChat = useAIChatPanel((s) => s.clearMatterChat)
   const [menuOpen, setMenuOpen] = useState(false)
   const [historyOpen, setHistoryOpen] = useState(false)
@@ -206,12 +211,46 @@ function AssistantChatModalInner(): React.JSX.Element {
   const items = sessionsQ.data ?? []
   const activeItem = items.find((s) => s.id === chat.activeSessionId) ?? null
 
+  // 0812 —— 「事项对话」= 定位到这件事最近一次会话（没有则开一场新的，带上事项 chip）。
+  // 会话发现走 serve-api 的 list-for-matter（origin=interactive、去归档、newest-first），与收口前
+  // useMatterChatSession 同一条路 —— 事项历史仍然找得回来，只是现在活在同一个历史下拉里。
+  // 依赖 epoch：dock 已经开着时再点一次也要重新定位（可能刚在别的会话里）。
+  const chatSelectSession = chat.selectSession
+  const chatNewSession = chat.newSession
+  const matterTargetId = matterTarget?.id ?? null
+  //
+  // 🔴 0812 codex #5 —— 查询**失败**与「这件事还没有历史」是两回事。失败时保留当前会话（不走
+  // 新建分支）并如实告知，否则 serve-api 抖一下就会给同一件事再开一条会话、把历史割裂；反复抖动
+  // 能攒出一串重复的事项会话。重试 = 再点一次「事项对话」（epoch 自增会重跑本 effect）。
+  useEffect(() => {
+    if (matterTargetId === null) return undefined
+    let cancelled = false
+    void (async () => {
+      let rows: ChatSession[]
+      try {
+        rows = await listSessionsForMatter(resolveApiBaseUrl(), matterTargetId)
+      } catch (error) {
+        if (cancelled) return
+        toastError(t('matters.chat.sessionsLoadFailed'), errorMessage(error))
+        return
+      }
+      if (cancelled) return
+      const newest = rows[0] ?? null
+      if (newest) {
+        void chatSelectSession(newest.id)
+      } else {
+        chatNewSession()
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [matterTargetId, matterConversationEpoch, chatSelectSession, chatNewSession, t])
+
   // fullscreen = ACTION: park the active session for AgentViewLayout to select (P6), navigate, minimise.
   const onFullscreen = (): void => {
     setMenuOpen(false)
-    if (matterTarget === null && chat.activeSessionId != null) {
-      requestOpenAgentSession(chat.activeSessionId)
-    }
+    if (chat.activeSessionId != null) requestOpenAgentSession(chat.activeSessionId)
     clearMatterChat()
     void navigate({ to: '/sessions' })
     hideChatModal()
@@ -293,55 +332,47 @@ function AssistantChatModalInner(): React.JSX.Element {
       <div className="flex h-11 shrink-0 items-center justify-between gap-2 border-b border-[var(--hairline)] px-3">
         {/* P4 标题状态机：新会话→"新对话"；有 activeItem→titleOf（首条输入概览 first_user_message →
             AI 摘要 title，优先级同 AgentThreadList）。点击展开 history 下拉切会话（去 archived）。 */}
+        {/* 0812 —— 事项对话不再有自己的 header 分支（那是"第二套 UI"的最后一块）：事项身份
+            由 composer 上方的 context chip 承载，标题/历史下拉一视同仁。 */}
         <div className="relative min-w-0 flex-1">
-          {matterTarget ? (
-            <div className="flex min-w-0 items-center gap-2 px-1.5 py-1">
-              <span className="shrink-0 text-body font-semibold text-ink-fg">
-                {t('matters.chat.agentName')}
-              </span>
-              <span className="truncate font-mono text-meta text-ink-fg-3">
-                {matterTarget.publicId}
-              </span>
-            </div>
-          ) : (
-            <>
-              <button
-                type="button"
-                onClick={() => setHistoryOpen((o) => !o)}
-                aria-label={t('chat.modal.history')}
-                aria-expanded={historyOpen}
-                className="flex max-w-full items-center gap-1 rounded-md px-1.5 py-1 text-body font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3"
-              >
-                <span className="truncate">
-                  {activeItem ? titleOf(activeItem, t) : t('chat.modal.newChat')}
-                </span>
-                <ChevronDown
-                  size={14}
-                  strokeWidth={2}
-                  className={cn(
-                    'shrink-0 text-ink-fg-3 transition-transform duration-fast',
-                    historyOpen && 'rotate-180'
-                  )}
-                />
-              </button>
-              {historyOpen && (
-                <ChatModalHistoryDropdown
-                  items={items}
-                  activeSessionId={chat.activeSessionId}
-                  onSelect={(id) => {
-                    void chat.selectSession(id)
-                    setHistoryOpen(false)
-                  }}
-                  onClose={() => setHistoryOpen(false)}
-                />
+          <button
+            type="button"
+            onClick={() => setHistoryOpen((o) => !o)}
+            aria-label={t('chat.modal.history')}
+            aria-expanded={historyOpen}
+            className="flex max-w-full items-center gap-1 rounded-md px-1.5 py-1 text-body font-medium text-ink-fg transition-colors duration-fast hover:bg-ink-3"
+          >
+            <span className="truncate">
+              {activeItem ? titleOf(activeItem, t) : t('chat.modal.newChat')}
+            </span>
+            <ChevronDown
+              size={14}
+              strokeWidth={2}
+              className={cn(
+                'shrink-0 text-ink-fg-3 transition-transform duration-fast',
+                historyOpen && 'rotate-180'
               )}
-            </>
+            />
+          </button>
+          {historyOpen && (
+            <ChatModalHistoryDropdown
+              items={items}
+              activeSessionId={chat.activeSessionId}
+              onSelect={(id) => {
+                // 显式换会话 = 不再跟着上一次的事项种子走（选中的会话若本身锚在某件事上，
+                // AgentConversation 会从它自己的 anchor 认出来）。
+                clearMatterChat()
+                void chat.selectSession(id)
+                setHistoryOpen(false)
+              }}
+              onClose={() => setHistoryOpen(false)}
+            />
           )}
         </div>
         <div className="flex shrink-0 items-center gap-0.5">
           <button
             type="button"
-            onClick={() => (matterTarget ? startNewMatterConversation() : chat.newSession())}
+            onClick={() => chat.newSession()}
             aria-label={t('chat.modal.newSession')}
             title={t('chat.modal.newSession')}
             className={HEADER_BTN}
@@ -383,31 +414,19 @@ function AssistantChatModalInner(): React.JSX.Element {
           </button>
         </div>
       </div>
-      {/* body: general AgentConversation or the matter-only body adapter, inside one shared dock. */}
+      {/* body: ONE conversation component. 事项只是它身上的一枚 context chip（+ 一组事项控件）。 */}
       <div className="flex min-h-0 flex-1 flex-col">
         {/* P2-9 — local boundary: a streaming-render crash resets in place
             instead of blanking the whole window; switching session while
             crashed auto-clears via resetKeys. */}
-        <ChatPanelBoundary
-          resetKeys={[
-            matterTarget?.id ?? chat.activeSessionId,
-            matterTarget ? matterConversationEpoch : 'general'
-          ]}
-        >
-          {matterTarget ? (
-            <MatterChatPanel
-              key={matterTarget.id}
-              matter={matterTarget}
-              conversationEpoch={matterConversationEpoch}
-            />
-          ) : (
-            <AgentConversation
-              chat={chat}
-              activeItem={activeItem}
-              welcomeAlign="left"
-              initialMentionEmailId={activeEmailId ?? undefined}
-            />
-          )}
+        <ChatPanelBoundary resetKeys={[chat.activeSessionId, matterConversationEpoch]}>
+          <AgentConversation
+            chat={chat}
+            activeItem={activeItem}
+            welcomeAlign="left"
+            initialMentionEmailId={activeEmailId ?? undefined}
+            initialMatterTarget={matterTarget ?? undefined}
+          />
         </ChatPanelBoundary>
       </div>
     </div>

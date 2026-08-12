@@ -1,7 +1,7 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
 import type { ReportAgentConfig } from '@shared/api/types'
@@ -11,7 +11,7 @@ import type {
   MatterRun,
   MatterUpdate
 } from '@shared/api/types/matter'
-import { MatterAgentCard } from '@shared/components/matters/MatterContextRail'
+import { MatterAgentConfigModal } from '@shared/components/matters/MatterAgentConfigModal'
 import { MatterRunsPane } from '@shared/components/matters/MatterRunsPane'
 import { MatterUpdateReview } from '@shared/components/matters/MatterUpdateReview'
 import { resolveMatterCitationTarget } from '@shared/components/matters/navigation'
@@ -21,29 +21,80 @@ await i18n.changeLanguage('zh-CN')
 afterEach(cleanup)
 
 const run = (state: MatterRun['lifecycle_state'], updateId: number | null = null): MatterRun => ({
-  id: 7, matter_id: 1, agent_profile_id: null, trigger_kind: 'manual', lifecycle_state: state,
+  id: 7,
+  matter_id: 1,
+  agent_profile_id: null,
+  trigger_kind: 'manual',
+  lifecycle_state: state,
   status: state === 'ok' || state === 'noop' || state === 'warn' || state === 'fail' ? state : null,
-  model: null, usage: { tool_calls: 2 }, cost_usd: null, error: state === 'fail' ? { message: 'boom' } : null,
-  queued_at: 1, started_at: 1, completed_at: state === 'running' ? null : 1001,
-  cancel_requested_at: null, canceled_at: state === 'canceled' ? 1001 : null,
-  update_id: updateId, duration_ms: 1000
+  model: null,
+  usage: { tool_calls: 2 },
+  cost_usd: null,
+  error: state === 'fail' ? { message: 'boom' } : null,
+  queued_at: 1,
+  started_at: 1,
+  completed_at: state === 'running' ? null : 1001,
+  cancel_requested_at: null,
+  canceled_at: state === 'canceled' ? 1001 : null,
+  update_id: updateId,
+  duration_ms: 1000
 })
 
 const matter: Matter = {
-  id: 1, public_id: 'MAT-0001', title: 'Launch', description: '', matter_type: null, tags: [],
-  status: 'active', health: 'on_track', priority: 'p1', owner_id: null, source: 'desktop_ui', due_at: null,
-  waiting_context: null, next_attention_at: null, attention_reason: null, last_activity_at: null,
-  latest_accepted_update_id: null, current_summary: 'Old', summary_at: null, summary_by_kind: null,
-  summary_by_id: null, version: 2, archived_at: null, archived_by_kind: null, archived_by_id: null,
-  deleted_at: null, deleted_by_kind: null, deleted_by_id: null, purge_after: null, created_at: 1, updated_at: 1
+  id: 1,
+  public_id: 'MAT-0001',
+  title: 'Launch',
+  description: '',
+  matter_type: null,
+  tags: [],
+  status: 'active',
+  health: 'on_track',
+  priority: 'p1',
+  owner_id: null,
+  source: 'desktop_ui',
+  due_at: null,
+  waiting_context: null,
+  next_attention_at: null,
+  attention_reason: null,
+  last_activity_at: null,
+  latest_accepted_update_id: null,
+  current_summary: 'Old',
+  summary_at: null,
+  summary_by_kind: null,
+  summary_by_id: null,
+  version: 2,
+  archived_at: null,
+  archived_by_kind: null,
+  archived_by_id: null,
+  deleted_at: null,
+  deleted_by_kind: null,
+  deleted_by_id: null,
+  purge_after: null,
+  created_at: 1,
+  updated_at: 1
 }
 
 const update: MatterUpdate = {
-  id: 9, matter_id: 1, review_status: 'pending', summary: 'New', created_at: 2, change_count: 1,
-  is_stale: false, agent_run_id: 7, confidence: 0.8, anchored_matter_version: 2, created_by_kind: 'agent',
-  from_event_id: 1, to_event_id: 4, original_proposal: { open_questions: [] }, reviewed_result: null,
-  changes: [{ id: 'c1', kind: 'fact', text: 'Confirmed', sources: [] }], accepted_change_ids: null,
-  citations: [], stale_at: null, stale_reason: null
+  id: 9,
+  matter_id: 1,
+  review_status: 'pending',
+  summary: 'New',
+  created_at: 2,
+  change_count: 1,
+  is_stale: false,
+  agent_run_id: 7,
+  confidence: 0.8,
+  anchored_matter_version: 2,
+  created_by_kind: 'agent',
+  from_event_id: 1,
+  to_event_id: 4,
+  original_proposal: { open_questions: [] },
+  reviewed_result: null,
+  changes: [{ id: 'c1', kind: 'fact', text: 'Confirmed', sources: [] }],
+  accepted_change_ids: null,
+  citations: [],
+  stale_at: null,
+  stale_reason: null
 }
 
 const profile = {
@@ -92,7 +143,19 @@ const resource = (kind: 'email' | 'doc', externalKey: string): MatterResourceLis
 describe('P4 renderer surfaces', () => {
   test('RunsPane renders terminal states and noop never offers review', () => {
     const review = vi.fn()
-    render(<MatterRunsPane runs={[run('ok', 9), { ...run('noop'), id: 8 }, { ...run('warn', 9), id: 10 }, { ...run('fail'), id: 11 }]} updates={[update]} onReview={review} onCancel={vi.fn()} />)
+    render(
+      <MatterRunsPane
+        runs={[
+          run('ok', 9),
+          { ...run('noop'), id: 8 },
+          { ...run('warn', 9), id: 10 },
+          { ...run('fail'), id: 11 }
+        ]}
+        updates={[update]}
+        onReview={review}
+        onCancel={vi.fn()}
+      />
+    )
     expect(screen.getByText('完成')).toBeTruthy()
     expect(screen.getByText('无变化')).toBeTruthy()
     expect(screen.getAllByText('部分降级').length).toBeGreaterThan(0)
@@ -108,86 +171,203 @@ describe('P4 renderer surfaces', () => {
 
   test('ReviewModal disables stale acceptance and requires reject reason', () => {
     const reject = vi.fn()
-    const view = render(<MatterUpdateReview matter={matter} update={{ ...update, is_stale: true }} onClose={vi.fn()} onAccept={vi.fn()} onReject={reject} />)
+    const view = render(
+      <MatterUpdateReview
+        matter={matter}
+        update={{ ...update, is_stale: true }}
+        onClose={vi.fn()}
+        onAccept={vi.fn()}
+        onReject={reject}
+      />
+    )
     expect((screen.getByText('全部接受') as HTMLButtonElement).disabled).toBe(true)
     fireEvent.click(screen.getByText('拒绝'))
     const confirm = screen.getByText('确认拒绝') as HTMLButtonElement
     expect(confirm.disabled).toBe(true)
-    fireEvent.change(view.container.querySelector('textarea:last-of-type') as HTMLTextAreaElement, { target: { value: 'Not accurate' } })
+    fireEvent.change(view.container.querySelector('textarea:last-of-type') as HTMLTextAreaElement, {
+      target: { value: 'Not accurate' }
+    })
     expect(confirm.disabled).toBe(false)
   })
 
-  test('unbound card uses the built-in agent and can switch to a custom profile', () => {
-    const patch = vi.fn()
+  // 0812 D-B：跟进配置从右栏绑定卡搬进 `MatterAgentConfigModal`（右栏 ≥1400px 才渲染，
+  // 窗口小一点就没有任何入口）。三条断言跟着搬，语义不变。
+  test('agent config modal binds a custom profile and enables it in one patch', () => {
+    const patch = vi.fn().mockResolvedValue(undefined)
     render(
-      <MatterAgentCard
+      <MatterAgentConfigModal
         matter={matter}
         runs={[]}
-        enabled
-        onPatch={patch}
         profiles={[profile]}
+        onPatch={patch}
+        onClose={vi.fn()}
       />
     )
 
-    expect(screen.getByText('跟进 Agent')).toBeTruthy()
-    expect(screen.getByText('内置')).toBeTruthy()
+    expect(screen.getByText('跟进规则')).toBeTruthy()
     expect(screen.getByText('计划')).toBeTruthy()
     expect(screen.getByText('下次')).toBeTruthy()
     expect(screen.getByText('上次')).toBeTruthy()
-    expect(screen.getByRole('switch')).toBeTruthy()
-    fireEvent.click(screen.getByText('改用 Custom Agent'))
+    fireEvent.click(screen.getByRole('switch'))
+    fireEvent.click(screen.getByText('高级 · 覆盖全局配置'))
     fireEvent.click(screen.getByRole('combobox'))
     fireEvent.click(screen.getByRole('option', { name: profile.title }))
     fireEvent.click(screen.getByText('保存'))
-    expect(patch).toHaveBeenCalledWith({
-      agent_profile_id: profile.id,
-      agent_enabled: true,
-      matter_instructions: null
-    })
+    // 第二个实参 = 打开模态时冻结的版本号（乐观锁的判据）。
+    expect(patch).toHaveBeenCalledWith(
+      {
+        agent_profile_id: profile.id,
+        agent_enabled: true,
+        matter_instructions: null,
+        schedule_json: null
+      },
+      matter.version
+    )
   })
 
-  test('binding card renders bound toggle and three status rows', () => {
-    const patch = vi.fn()
+  test('agent config modal renders the bound toggle and three status rows', () => {
+    const patch = vi.fn().mockResolvedValue(undefined)
     render(
-      <MatterAgentCard
+      <MatterAgentConfigModal
         matter={{ ...matter, agent_profile_id: profile.id, agent_enabled: true }}
         runs={[run('ok')]}
-        enabled
-        onPatch={patch}
         profiles={[profile]}
+        onPatch={patch}
+        onClose={vi.fn()}
       />
     )
 
-    expect(screen.getByText(profile.title)).toBeTruthy()
+    // 绑定 profile 时它出现两处：顶部条带的标题 + 「高级」里 Agent 选择器的当前值。
+    expect(screen.getAllByText(profile.title).length).toBeGreaterThan(0)
     expect(screen.getByText('计划')).toBeTruthy()
     expect(screen.getByText('下次')).toBeTruthy()
     expect(screen.getByText('上次')).toBeTruthy()
-    expect(screen.getByText('手动')).toBeTruthy()
+    // 没有排程时「计划」= 手动；页脚摘要句跟着当前草稿走。
+    expect(screen.getByText(/将按「手动」触发/)).toBeTruthy()
     const toggle = screen.getByRole('switch')
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     fireEvent.click(toggle)
-    expect(patch).toHaveBeenCalledWith({ agent_enabled: false })
+    expect(screen.getByText('已停用 · 不会自动运行')).toBeTruthy()
+    fireEvent.click(screen.getByText('保存'))
+    expect(patch).toHaveBeenCalledWith(
+      expect.objectContaining({ agent_enabled: false }),
+      matter.version
+    )
   })
 
-  test('binding schedule recommends weekdays at 09:00 and persists the shared rule shape', () => {
-    const patch = vi.fn()
-    render(<MatterAgentCard matter={{ ...matter, agent_enabled: true }} runs={[]} enabled onPatch={patch} profiles={[]} />)
-    expect(screen.getByText('跟进 Agent')).toBeTruthy()
-    expect(screen.getByText('内置')).toBeTruthy()
-    fireEvent.click(screen.getByText('编辑排程'))
+  test('agent config modal recommends weekdays at 09:00 and persists the shared rule shape', () => {
+    const patch = vi.fn().mockResolvedValue(undefined)
+    render(
+      <MatterAgentConfigModal
+        matter={{ ...matter, agent_enabled: true }}
+        runs={[]}
+        profiles={[]}
+        onPatch={patch}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByText('Matter Agent · 系统内置')).toBeTruthy()
     fireEvent.click(screen.getByText('推荐：每个工作日 09:00'))
     fireEvent.click(screen.getByText('保存'))
     const payload = patch.mock.calls[0]?.[0]
     // P6-B：保存写的是 v2 envelope（多条触发并存），排程只是其中一条 entry。
     const envelope = JSON.parse(payload.schedule_json)
     expect(envelope.v).toBe(2)
-    const schedule = envelope.triggers.find(
-      (entry: { kind: string }) => entry.kind === 'schedule'
-    )
+    const schedule = envelope.triggers.find((entry: { kind: string }) => entry.kind === 'schedule')
     expect(schedule).toBeTruthy()
     expect(schedule.enabled).toBe(true)
-    expect(schedule.rule).toMatchObject({ freq: 'weekly', weekdays: [1, 2, 3, 4, 5], hour: 9, minute: 0 })
+    expect(schedule.rule).toMatchObject({
+      freq: 'weekly',
+      weekdays: [1, 2, 3, 4, 5],
+      hour: 9,
+      minute: 0
+    })
     expect(schedule.timezone).toBeTruthy()
+  })
+
+  // codex 反例 #7：草稿只在挂载时初始化，保存却用父组件**当前最新**的版本号 ⇒ 期间别处
+  // 改了排程也不触发乐观锁冲突，把那次改动静默覆盖回去。
+  test('agent config modal saves with the version frozen at open time', () => {
+    const patch = vi.fn().mockResolvedValue(undefined)
+    const view = render(
+      <MatterAgentConfigModal
+        matter={{ ...matter, version: 3, agent_enabled: true }}
+        runs={[]}
+        profiles={[]}
+        onPatch={patch}
+        onClose={vi.fn()}
+      />
+    )
+    // 详情页刷新到 v4（别处把排程改成了别的东西），模态里还是 v3 时的草稿。
+    view.rerender(
+      <MatterAgentConfigModal
+        matter={{
+          ...matter,
+          version: 4,
+          agent_enabled: true,
+          schedule_json: '{"v":2,"triggers":[]}'
+        }}
+        runs={[]}
+        profiles={[]}
+        onPatch={patch}
+        onClose={vi.fn()}
+      />
+    )
+    expect(screen.getByText('这个事项在别处已被改动。直接保存会覆盖那次改动。')).toBeTruthy()
+    fireEvent.click(screen.getByText('保存'))
+    expect(patch.mock.calls[0]?.[1]).toBe(3)
+  })
+
+  // codex 反例 #8：原实现发起 mutation 后立即 onClose ⇒ 版本冲突/网络错误时四个字段的
+  // 编辑全丢，用户只剩一个 toast。
+  test('agent config modal keeps the draft and shows the error when the patch fails', async () => {
+    const patch = vi.fn().mockRejectedValue(new Error('version conflict'))
+    const close = vi.fn()
+    render(
+      <MatterAgentConfigModal
+        matter={{ ...matter, agent_enabled: true }}
+        runs={[]}
+        profiles={[]}
+        onPatch={patch}
+        onClose={close}
+      />
+    )
+    fireEvent.click(screen.getByText('推荐：每个工作日 09:00'))
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
+    expect(close).not.toHaveBeenCalled()
+    expect(screen.getByRole('alert').textContent).toContain('version conflict')
+    // 草稿还在：重试一次发出去的排程与第一次逐字相同（不是被重置回 matter 的空排程）。
+    fireEvent.click(screen.getByText('保存'))
+    expect(patch).toHaveBeenCalledTimes(2)
+    const first = patch.mock.calls[0]?.[0] as { schedule_json: string | null }
+    const second = patch.mock.calls[1]?.[0] as { schedule_json: string | null }
+    expect(first.schedule_json).toContain('"kind":"schedule"')
+    expect(second.schedule_json).toBe(first.schedule_json)
+  })
+
+  // codex 反例 #9：声明了 aria-modal 却没有初始聚焦 / Esc / 焦点恢复，键盘用户能 Tab 到背景。
+  test('agent config modal takes focus, closes on Esc, and restores focus on unmount', () => {
+    const opener = document.createElement('button')
+    document.body.append(opener)
+    opener.focus()
+    const close = vi.fn()
+    const view = render(
+      <MatterAgentConfigModal
+        matter={matter}
+        runs={[]}
+        profiles={[]}
+        onPatch={vi.fn().mockResolvedValue(undefined)}
+        onClose={close}
+      />
+    )
+    const dialog = screen.getByRole('dialog')
+    expect(dialog.contains(document.activeElement)).toBe(true)
+    fireEvent.keyDown(dialog, { key: 'Escape' })
+    expect(close).toHaveBeenCalledTimes(1)
+    view.unmount()
+    expect(document.activeElement).toBe(opener)
+    opener.remove()
   })
 
   test('ReviewModal citations call the resource opener', () => {

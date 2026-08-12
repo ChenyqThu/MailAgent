@@ -74,7 +74,7 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
           ? { anchorType: 'general', emailId: null, ...base }
           : input.anchorType === 'matter'
             ? { anchorType: 'matter', matterId: input.matterId, ...base }
-          : { emailId: input.emailId ?? null, ...base }
+            : { emailId: input.emailId ?? null, ...base }
       return request<ChatSession>(baseUrl, 'POST', '/chat/sessions/new', { body })
     },
 
@@ -261,7 +261,11 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     },
 
     async listSkillDrafts(): Promise<SkillDraftSummary[]> {
-      const data = await request<{ drafts: SkillDraftSummary[] }>(baseUrl, 'GET', '/agent/skills/drafts')
+      const data = await request<{ drafts: SkillDraftSummary[] }>(
+        baseUrl,
+        'GET',
+        '/agent/skills/drafts'
+      )
       return data.drafts ?? []
     },
 
@@ -286,25 +290,37 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
     },
 
     async discardSkillDraft(id: string): Promise<void> {
-      await request(baseUrl, 'POST', `/agent/skills/drafts/${encodeURIComponent(id)}/discard`, { body: {} })
+      await request(baseUrl, 'POST', `/agent/skills/drafts/${encodeURIComponent(id)}/discard`, {
+        body: {}
+      })
     },
 
     async importAgentPlugin(zipBase64: string): Promise<AgentPluginImportResult> {
       return request(baseUrl, 'POST', '/agent/skills/plugin/import', { body: { zipBase64 } })
     },
 
-    async listSkillTrust(name: string): Promise<{ currentPackageHash: string | null; trusts: SkillTrustRule[] }> {
+    async listSkillTrust(
+      name: string
+    ): Promise<{ currentPackageHash: string | null; trusts: SkillTrustRule[] }> {
       return request(baseUrl, 'GET', `/agent/skills/${encodeURIComponent(name)}/trust`)
     },
 
-    async grantSkillTrust(name: string, entrypoint: string, policy: SkillTrustRule['policy']): Promise<SkillTrustRule> {
+    async grantSkillTrust(
+      name: string,
+      entrypoint: string,
+      policy: SkillTrustRule['policy']
+    ): Promise<SkillTrustRule> {
       return request(baseUrl, 'POST', `/agent/skills/${encodeURIComponent(name)}/trust`, {
         body: { entrypoint, policy }
       })
     },
 
     async revokeSkillTrust(name: string, trustId: string): Promise<void> {
-      await request(baseUrl, 'DELETE', `/agent/skills/${encodeURIComponent(name)}/trust/${encodeURIComponent(trustId)}`)
+      await request(
+        baseUrl,
+        'DELETE',
+        `/agent/skills/${encodeURIComponent(name)}/trust/${encodeURIComponent(trustId)}`
+      )
     },
 
     async getApprovalMode(): Promise<GlobalApprovalMode> {
@@ -614,10 +630,14 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
   }
 }
 
-export async function listSessionsForMatter(baseUrl: string, matterId: number): Promise<ChatSession[]> {
-  try {
-    return await request<ChatSession[]>(baseUrl, 'GET', '/chat/sessions/all', { query: { matterId } })
-  } catch {
-    return []
-  }
+/** 某件事最近的会话（newest-first）。
+ *
+ *  🔴 **有意让异常冒泡**（0812 codex #5）：这里曾 `catch → []`，于是 serve-api 短暂不可达 / 鉴权失败 /
+ *  超时统统长得像"这件事还没有历史"，调用方据此走「无历史 ⇒ 新建」分支 —— 同一件事又开一条会话、
+ *  原历史被割裂，反复抖动能攒出一串重复的事项会话。"查不到"与"没有"必须是两个可区分的结果。 */
+export async function listSessionsForMatter(
+  baseUrl: string,
+  matterId: number
+): Promise<ChatSession[]> {
+  return await request<ChatSession[]>(baseUrl, 'GET', '/chat/sessions/all', { query: { matterId } })
 }

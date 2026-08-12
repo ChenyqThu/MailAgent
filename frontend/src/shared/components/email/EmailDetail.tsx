@@ -34,6 +34,7 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { useActiveEmail, pickNext, pickPrev } from '@shared/state/active-email'
 import { useTogglePin } from '@shared/hooks/usePinnedSync'
 import { usePinned } from '@shared/state/pinned'
+import { startChatWithPrompt } from '@shared/state/ai-chat-panel'
 
 import { EmailBodyFrame } from './EmailBodyFrame'
 import { EmailToolbar, type TranslateStatus } from './EmailToolbar'
@@ -41,7 +42,6 @@ import { AttachmentList } from './AttachmentList'
 import { ThreadAttachmentBar } from './ThreadAttachmentBar'
 import { AIFieldsBlock } from '../ai/AIFieldsBlock'
 import { MeetingInviteCard } from '../calendar/MeetingInviteCard'
-import { MatterLinkPopover } from '../matters/MatterLinkPopover'
 import {
   buildMatterResourceLookupKeys,
   deriveMatterLinkButtonState,
@@ -325,8 +325,6 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const [translateError, setTranslateError] = useState<{ code: string; message: string } | null>(
     null
   )
-  const [matterPopoverOpen, setMatterPopoverOpen] = useState(false)
-
   const matterLookupKeys = useMemo(
     () => buildMatterResourceLookupKeys(internalId, detailQ.data?.thread_id),
     [detailQ.data?.thread_id, internalId]
@@ -346,17 +344,6 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     [matterLookupKeys, matterLookupQ.data]
   )
   const matterLinkState = deriveMatterLinkButtonState(linkedMatters.length)
-  const matterThreadQ = useQuery({
-    queryKey: qk.email.thread(detailQ.data?.thread_id ?? null),
-    queryFn: () => mailApi.email.listByThread(detailQ.data?.thread_id ?? null),
-    enabled: mattersEnabled && Boolean(detailQ.data?.thread_id),
-    staleTime: 30_000
-  })
-
-  useEffect(() => {
-    setMatterPopoverOpen(false)
-  }, [internalId])
-
   const translateMut = useMutation({
     mutationFn: async () => {
       if (internalId === null) throw new Error('no email selected')
@@ -690,6 +677,16 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     }
   }, [internalId, mailApi, queryClient, t])
 
+  // 0812 —— 「创建事项」：唤起右下角 AI chat，带上这封邮件的引用 + 一条指令，由主 agent 处理。
+  // 🔴 走既有注入面：邮件引用是 AgentConversation 的 email context chip（→ injectedContext），
+  //    指令是一条普通用户消息 —— 不新造第五条注入路径，也因此扛得住审批 resume 剥 injectedContext。
+  // 🔴 指令文案（locale）明确要求 agent 先查重、再决定新建还是加入既有事项：这是把
+  //    MatterLinkPopover 的「重复候选 / 加入已有」交接给 agent 的那一句，删了能力就真的消失了。
+  const handleCreateMatter = useCallback((): void => {
+    if (internalId === null) return
+    startChatWithPrompt(t('toolbar.createMatterPrompt'), internalId)
+  }, [internalId, t])
+
   // Sprint 15 D 块 — Optimistic UI for read/flag toggle. 直接 setQueryData
   // 让 detail panel 瞬时翻, 避免 CLI fork 500ms + invalidate 双重 await 卡顿;
   // 同步更新 ['emails'] 列表 cache, 这样 EmailRow 不需要等 5s poll 也能反映新
@@ -892,26 +889,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         onResync={handleResync}
         resyncState={{ pending: pending.resync }}
         onLlmRun={handleLlmRun}
-        matterLink={
+        createMatter={
           mattersEnabled
             ? {
                 count: linkedMatters.length,
                 state: matterLinkState,
-                onToggle: () => setMatterPopoverOpen((value) => !value),
-                popover: (
-                  <MatterLinkPopover
-                    open={matterPopoverOpen}
-                    source={{
-                      internalId: email.internal_id,
-                      threadId: email.thread_id ?? null,
-                      subject: email.subject,
-                      sender: email.sender_name || email.sender,
-                      receivedAt: email.date_received ?? null,
-                      threadCount: Math.max(1, matterThreadQ.data?.length ?? 1)
-                    }}
-                    onClose={() => setMatterPopoverOpen(false)}
-                  />
-                )
+                onClick: handleCreateMatter
               }
             : undefined
         }

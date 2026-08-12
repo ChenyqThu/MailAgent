@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 //
 // Matters MVP P6-A lane A5 — the two surface-level invariants:
-//   · MatterDetail: the ContextRail keeps its slot while 事项对话 targets the existing AI dock;
+//   · MatterDetail: 事项对话 targets the existing AI dock (0812: the context rail is gone,
+//     so the same tests now pin its absence and the header pill's follow-up modal);
 //   · MattersWorkspace with the flag off: nothing renders and nothing is requested.
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
@@ -14,7 +15,9 @@ import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 
 const localStorageValues = new Map<string, string>()
 const localStorageStub = {
-  get length() { return localStorageValues.size },
+  get length() {
+    return localStorageValues.size
+  },
   clear: () => localStorageValues.clear(),
   getItem: (key: string) => localStorageValues.get(key) ?? null,
   key: (index: number) => [...localStorageValues.keys()][index] ?? null,
@@ -140,17 +143,27 @@ function stubWideViewport(): void {
   })) as unknown as typeof window.matchMedia
 }
 
+/** 窄窗口：所有媒体查询都不命中（老右栏的 `min-width: 1400px` 首当其冲）。 */
+function stubNarrowViewport(): void {
+  window.matchMedia = ((query: string) => ({
+    matches: false,
+    media: query,
+    onchange: null,
+    addEventListener: () => {},
+    removeEventListener: () => {},
+    addListener: () => {},
+    removeListener: () => {},
+    dispatchEvent: () => false
+  })) as unknown as typeof window.matchMedia
+}
+
 function renderDetail(): ReturnType<typeof render> {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
   })
   return render(
     <QueryClientProvider client={client}>
-      <MatterDetail
-        matterId="MAT-0042"
-        onBack={vi.fn()}
-        onRemoved={vi.fn()}
-      />
+      <MatterDetail matterId="MAT-0042" onBack={vi.fn()} onRemoved={vi.fn()} />
     </QueryClientProvider>
   )
 }
@@ -171,16 +184,18 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
-describe('MatterDetail — chat entry and ContextRail', () => {
-  test('the rail renders and no standalone chat panel occupies the detail layout', async () => {
+describe('MatterDetail — chat entry, no context rail', () => {
+  // 0812 D-D：右侧上下文栏已移除（与「上下文」tab 重复，且 ≥1400px 才渲染 ⇒ 把跟进配置
+  // 藏在窗口宽度后面）。这里的断言从「rail 保住槽位」翻成「宽视口下 rail 也不该再出现」。
+  test('no context rail and no standalone chat panel occupy the detail layout', async () => {
     renderDetail()
     await waitFor(() => expect(screen.getByText('Vendor launch')).toBeTruthy())
-    expect(screen.getByText('还没有关联资料。解除关联不会删除原始邮件或文档。')).toBeTruthy()
+    expect(screen.queryByText('还没有关联资料。解除关联不会删除原始邮件或文档。')).toBeNull()
     expect(screen.queryByTestId('matter-chat-panel')).toBeNull()
     expect(screen.getByRole('button', { name: '事项对话' })).toBeTruthy()
   })
 
-  test('clicking 事项对话 targets the AI dock, keeps the rail, and starts a new round each time', async () => {
+  test('clicking 事项对话 targets the AI dock and starts a new round each time', async () => {
     renderDetail()
     const openButton = await screen.findByRole('button', { name: '事项对话' })
 
@@ -192,11 +207,24 @@ describe('MatterDetail — chat entry and ContextRail', () => {
       title: 'Vendor launch'
     })
     expect(useAIChatPanel.getState().matterConversationEpoch).toBe(1)
-    expect(screen.getByText('还没有关联资料。解除关联不会删除原始邮件或文档。')).toBeTruthy()
     expect(screen.queryByTestId('matter-chat-panel')).toBeNull()
 
     fireEvent.click(openButton)
     expect(useAIChatPanel.getState().matterConversationEpoch).toBe(2)
+  })
+
+  // 0812 D-B 的核心 bug：跟进配置入口此前只在右栏里，窄窗口下不可达。现在挂在详情头的
+  // Agent pill 上 —— 这个测试跑在**没有**任何宽度前提的 happy-dom 里，能开就是能开。
+  test('the follow-up rules modal opens from the header pill at any width', async () => {
+    matterAgentEnabled.value = true
+    stubNarrowViewport() // 窄窗口 —— 老入口（右栏）在这个宽度下根本不渲染
+    renderDetail()
+    fireEvent.click(await screen.findByRole('button', { name: /未绑定跟进 Agent/ }))
+    expect(
+      await screen.findByText('能力来自全局 Matter Agent，这里只定这件事什么时候触发、跑完做什么。')
+    ).toBeTruthy()
+    expect(screen.getByText('触发方式')).toBeTruthy()
+    expect(screen.getByText('跟进时执行')).toBeTruthy()
   })
 })
 
@@ -257,7 +285,9 @@ describe('MatterDetail — detail editing and rendering', () => {
       )
     )
 
-    fireEvent.click(screen.getByRole('tab', { name: 'P2' }))
+    // 0812 D-A：优先级从四档平铺的 SegmentedControl 收成一个彩色标签 + 下拉菜单。
+    fireEvent.click(screen.getByRole('combobox', { name: '事项优先级' }))
+    fireEvent.click(await screen.findByRole('option', { name: 'P2' }))
     await waitFor(() =>
       expect(mattersApi.patch).toHaveBeenCalledWith(
         'MAT-0042',
@@ -326,9 +356,13 @@ describe('MattersWorkspace — resizable matter list', () => {
     expect(grid.style.getPropertyValue('--matter-list-width')).toBe('400px')
 
     let capturedPointer: number | null = null
-    separator.setPointerCapture = vi.fn((pointerId: number) => { capturedPointer = pointerId })
+    separator.setPointerCapture = vi.fn((pointerId: number) => {
+      capturedPointer = pointerId
+    })
     separator.hasPointerCapture = vi.fn((pointerId: number) => capturedPointer === pointerId)
-    separator.releasePointerCapture = vi.fn(() => { capturedPointer = null })
+    separator.releasePointerCapture = vi.fn(() => {
+      capturedPointer = null
+    })
 
     fireEvent.pointerDown(separator, { button: 0, clientX: 400, pointerId: 7 })
     fireEvent.pointerMove(separator, { clientX: 900, pointerId: 7 })

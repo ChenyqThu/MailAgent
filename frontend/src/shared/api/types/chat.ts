@@ -306,6 +306,18 @@ export interface ChatSessionListItem extends ChatSession {
   message_count: number
   email_subject: string | null
   email_sender: string | null
+  // 0812（事项对话收口进主 chat）— matter-anchored 会话的身份。`anchor_id` 是 matter 的**内部** id，
+  // 而事项的 REST 面（context-snapshot / chat-scope / undo）全按 MAT-xxxx 寻址；不带这两个字段，
+  // 从历史里选中一个事项会话就只剩一个数字，既拿不到上下文也标不出身份。
+  // 🔴 与 email_subject/email_sender 同性质：**join 投影，不是 ai_chat.db 的列**，所以住在
+  // ChatSessionListItem 而不是 ChatSession（后者是 DB 行镜像，有 test_chat_type_mirror_parity 守着）。
+  // `/chat/sessions/all` 与单条 `GET /chat/sessions/{id}` **都**会填（后者 0812 codex #2 补齐 ——
+  // 此前不填，于是走单行读的入口拿到的事项会话被当成普通对话渲染）。
+  // 🔴 拿不到（服务端 join 失败 / 旧 serve-api）时读侧**不许**降级成普通会话：判定单源
+  // `matterIdentityFromSession` 的第三态 `unresolved` → 界面说「上下文未就绪」并禁发。
+  // 非 matter 行恒 null（判据带 anchor_type：email 的 anchor_id 与 matter.id 是两个 id 空间）。
+  matter_public_id?: string | null
+  matter_title?: string | null
 }
 
 // Sprint 19 §D #3 — chat_tool_call audit row, mirrored from main-side

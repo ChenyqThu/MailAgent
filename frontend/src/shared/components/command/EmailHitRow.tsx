@@ -4,7 +4,7 @@
 // from CommandPalette.tsx so the agentic search flow can reuse the exact same
 // row rendering. Pure move — no behaviour change.
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify'
 import { Briefcase, Mail, Paperclip, Plus } from 'lucide-react'
@@ -66,6 +66,8 @@ export function EmailHitRow({
 }: EmailHitRowProps): React.ReactElement {
   const { t } = useTranslation()
   const [matterPopoverOpen, setMatterPopoverOpen] = useState(false)
+  // 弹层 portal 到 body（结果列表本身是滚动裁剪容器），这个容器是它的定位锚点。
+  const matterAnchorRef = useRef<HTMLDivElement>(null)
   const parsed = parseSender(hit.sender)
   const senderName = parsed.name || parsed.email.split('@')[0] || hit.sender
   const senderAddr = parsed.email
@@ -91,7 +93,11 @@ export function EmailHitRow({
       aria-selected={selected}
       onMouseEnter={() => setHighlight(flatIdx)}
       onClick={onActivate}
-      className={cn('pal-row', matterLinks !== undefined && 'group relative', selected && 'is-selected')}
+      className={cn(
+        'pal-row',
+        matterLinks !== undefined && 'group relative',
+        selected && 'is-selected'
+      )}
     >
       <span className="w-5 h-5 grid place-items-center text-ink-fg-2 shrink-0">
         <Mail size={14} strokeWidth={1.75} />
@@ -160,6 +166,7 @@ export function EmailHitRow({
       </div>
       {matterLinks !== undefined ? (
         <div
+          ref={matterAnchorRef}
           className="relative flex shrink-0 items-center gap-1"
           onClick={(event) => event.stopPropagation()}
           onKeyDown={(event) => event.stopPropagation()}
@@ -177,7 +184,9 @@ export function EmailHitRow({
                 </span>
               ))}
               {matterLinks.length > 2 ? (
-                <span className="font-mono text-[10px] text-ink-fg-3">+{matterLinks.length - 2}</span>
+                <span className="font-mono text-[10px] text-ink-fg-3">
+                  +{matterLinks.length - 2}
+                </span>
               ) : null}
             </>
           ) : (
@@ -195,6 +204,7 @@ export function EmailHitRow({
           )}
           <MatterLinkPopover
             open={matterPopoverOpen}
+            anchorRef={matterAnchorRef}
             source={{
               internalId: hit.internal_id,
               threadId: null,

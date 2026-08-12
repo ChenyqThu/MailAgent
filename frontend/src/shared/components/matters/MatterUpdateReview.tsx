@@ -69,6 +69,9 @@ interface MatterUpdateReviewProps {
   onAccept(payload: ReviewAcceptPayload): void
   onReject(reason: string): void
   onOpenResource?(resourceId: number): void
+  /** 提案失效后的出口：跑一轮新的跟进。不传 = 不渲染按钮（上层没接线时不假装有出口）。 */
+  onRerun?(): void
+  rerunBusy?: boolean
 }
 
 export function MatterUpdateReview({
@@ -79,7 +82,9 @@ export function MatterUpdateReview({
   onClose,
   onAccept,
   onReject,
-  onOpenResource
+  onOpenResource,
+  onRerun,
+  rerunBusy = false
 }: MatterUpdateReviewProps): React.ReactElement {
   const { t } = useTranslation()
   const [selected, setSelected] = useState(() => new Set(update.changes.map((change) => change.id)))
@@ -253,7 +258,20 @@ export function MatterUpdateReview({
             </div>
           ) : null}
           {update.is_stale ? (
-            <p className="mt-4 text-aux text-fail">{t('matters.review.staleHint')}</p>
+            <div className="mt-4 flex flex-wrap items-center gap-2">
+              <p className="min-w-0 flex-1 text-aux text-fail">{t('matters.review.staleHint')}</p>
+              {onRerun ? (
+                <button
+                  type="button"
+                  disabled={rerunBusy}
+                  onClick={onRerun}
+                  className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux disabled:opacity-50"
+                >
+                  <RefreshCcw size={12} className={rerunBusy ? 'animate-spin' : undefined} />
+                  {t('matters.review.staleRerun')}
+                </button>
+              ) : null}
+            </div>
           ) : null}
 
           {rejecting ? (

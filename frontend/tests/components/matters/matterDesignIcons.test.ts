@@ -91,8 +91,101 @@ describe('资源 kind 图标 = 设计原型 helpers.jsx 的 RES_KIND 表', () =>
   })
 })
 
+describe('详情头 chips + tab 图标 = 设计原型 helpers.jsx 的 MATTER_STATUS/HEALTH/PRIORITY 与 detail.jsx 的 DETAIL_TABS', () => {
+  const source = read('src/shared/components/matters/matterVocab.ts')
+
+  it('状态 8 档逐位对应', () => {
+    const actual = extractMap(source, 'export const MATTER_STATUS_ICONS', [
+      'inbox',
+      'planned',
+      'active',
+      'waiting',
+      'blocked',
+      'monitoring',
+      'done',
+      'canceled'
+    ])
+    expect(actual).toEqual({
+      inbox: 'Inbox', // inbox
+      planned: 'Calendar', // calendar
+      active: 'Play', // play
+      waiting: 'Hourglass', // hourglass
+      blocked: 'Ban', // ban
+      monitoring: 'Eye', // eye
+      done: 'CheckCircle2', // checkcircle
+      canceled: 'X' // x
+    })
+  })
+
+  it('健康度 4 档逐位对应', () => {
+    const actual = extractMap(source, 'export const MATTER_HEALTH_ICONS', [
+      'unknown',
+      'on_track',
+      'at_risk',
+      'off_track'
+    ])
+    expect(actual).toEqual({
+      unknown: 'Minus', // minus
+      on_track: 'ArrowUp', // arrowup
+      at_risk: 'TriangleAlert', // alert
+      off_track: 'ArrowDown' // arrowdown
+    })
+  })
+
+  it('详情 4 个 tab 各有 icon（此前一个都没有）', () => {
+    const actual = extractMap(source, 'export const MATTER_DETAIL_TAB_ICONS', [
+      'state',
+      'context',
+      'timeline',
+      'runs'
+    ])
+    expect(actual).toEqual({
+      state: 'Target', // target
+      context: 'Layers', // layers
+      timeline: 'History', // history
+      runs: 'Activity' // activity
+    })
+  })
+
+  it('status / priority 的 tone 与原型同档（chip 不再是 8 档一个颜色）', () => {
+    // tone 表的值是字符串字面量、不是组件名，所以不走 extractMap，直接钉内容（同 TIMELINE_TONE）。
+    const statusStart = source.indexOf('export const MATTER_STATUS_TONES')
+    expect(statusStart, '找不到 MATTER_STATUS_TONES —— 表被改名或挪走了，闸失效').toBeGreaterThan(
+      -1
+    )
+    const statusBody = source.slice(statusStart, statusStart + 400)
+    for (const [key, tone] of [
+      ['inbox', 'neutral'],
+      ['planned', 'info'],
+      ['active', 'success'],
+      ['waiting', 'warn'],
+      ['blocked', 'critical'],
+      ['monitoring', 'info'],
+      ['done', 'success'],
+      ['canceled', 'neutral']
+    ] as const) {
+      expect(statusBody, `status ${key} 的 tone 应为 ${tone}`).toMatch(
+        new RegExp(`\\b${key}:\\s*'${tone}'`)
+      )
+    }
+    const priorityStart = source.indexOf('export const MATTER_PRIORITY_TONES')
+    expect(
+      priorityStart,
+      '找不到 MATTER_PRIORITY_TONES —— 表被改名或挪走了，闸失效'
+    ).toBeGreaterThan(-1)
+    const priorityBody = source.slice(priorityStart, priorityStart + 240)
+    expect(priorityBody).toMatch(/\bp0:\s*'critical'/)
+    expect(priorityBody).toMatch(/\bp1:\s*'warn'/)
+    expect(priorityBody).toMatch(/\bp2:\s*'neutral'/)
+    expect(priorityBody).toMatch(/\bp3:\s*'neutral'/)
+  })
+})
+
 describe('时间轴节点 = 设计原型 detail.jsx 的 TL_ICON / TL_TONE', () => {
-  const source = read('src/shared/components/matters/MatterDetail.tsx')
+  // 时间线本体已从 MatterDetail 拆到 MatterTimeline（叙述/合并/分档三层逻辑放不进
+  // 那个 2000 行的文件）。表跟着搬，闸也跟着搬 —— 上面 `indexOf` 的 -1 断言正是为了
+  // 让「表挪走了但闸还在读旧文件」这种失效必须红，而不是静默变成零校验。
+  const source = read('src/shared/components/matters/MatterTimeline.tsx')
 
   it('TL_ICON 覆盖的 9 类语义逐项落地', () => {
     // 设计只画了 9 个 mock kind，实到 38 个事件；这里只钉死设计明确画过的那几条映射。

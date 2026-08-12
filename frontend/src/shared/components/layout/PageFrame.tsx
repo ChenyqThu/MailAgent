@@ -22,6 +22,10 @@ interface PageFrameProps {
    *  flex-col overflow-hidden"` 让 main 不创建外层滚动条,把高度链直接
    *  传给子节点. Other pages (admin / llm / calendar) 不传, 沿用默认. */
   mainClassName?: string
+  /** 0812 dogfood — <main> 右侧的行内槽位, 目前只有 AI chat dock 用它 (MattersLayout).
+   *  必须是 <main> 的**兄弟**而非子节点: dock 的 sidebar 模式靠这个 flex 位置吃宽度 /
+   *  挤压正文 (见 AssistantChatDock 头注释). 不传 = 该路由没有 dock, 字节级同现状. */
+  rightDock?: React.ReactNode
 }
 
 const DEFAULT_MAIN = 'flex-1 overflow-y-auto min-w-0 scrollbar-thin'
@@ -29,7 +33,8 @@ const DEFAULT_MAIN = 'flex-1 overflow-y-auto min-w-0 scrollbar-thin'
 export function PageFrame({
   children,
   ariaLabel,
-  mainClassName
+  mainClassName,
+  rightDock
 }: PageFrameProps): React.ReactElement {
   return (
     // Sprint 18 review — 移除老 `bg-ink-0`. 旧 Sprint 6 代码在 PageFrame 顶层
@@ -44,6 +49,7 @@ export function PageFrame({
         <main aria-label={ariaLabel} className={cn(mainClassName ?? DEFAULT_MAIN)}>
           {children}
         </main>
+        {rightDock}
       </div>
       <StatusBar />
     </div>

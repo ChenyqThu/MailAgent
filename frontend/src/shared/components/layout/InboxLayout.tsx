@@ -6,29 +6,22 @@
 // the AI chat surface in the main window is the AssistantChatModal dock
 // (floating / sidebar modes) + its FAB, mounted unconditionally below.
 
-import { lazy, Suspense, useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useSearch } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
 import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { useActiveEmail } from '@shared/state/active-email'
-import { useAIChatPanel } from '@shared/state/ai-chat-panel'
 import { useEmailFilter } from '@shared/state/email-filter'
-import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 
 import { TitleBar } from './TitleBar'
 import { Sidebar } from './Sidebar'
 import { StatusBar } from './StatusBar'
 import { EmailList } from '../email/EmailList'
 import { EmailDetail } from '../email/EmailDetail'
+import { AssistantChatDock } from '@shared/assistant/modal/AssistantChatDock'
 import { ChatModalFab } from '@shared/assistant/modal/ChatModalFab'
-
-const AssistantChatModal = lazy(() =>
-  import('@shared/assistant/modal/AssistantChatModal').then((module) => ({
-    default: module.AssistantChatModal
-  }))
-)
 
 // #6 — EmailList 宽度用户可拖拽 (≥lg 固定列模式; <lg 列表占满, 不可拖)。
 // clamp + localStorage + try-catch。default 340 = 原 lg:w-[340px] 宽度。
@@ -57,12 +50,6 @@ function writeListWidthPref(px: number): void {
 
 export function InboxLayout(): React.ReactElement {
   const activeId = useActiveEmail((s) => s.activeInternalId)
-  const chatVisible = useAIChatPanel((s) => s.visible)
-  const [mountChat, setMountChat] = useState(chatVisible)
-  useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    if (chatVisible) setMountChat(true)
-  }, [chatVisible])
   // RESPONSIVE-XCUT-01 — <lg(1024) 列表/详情单栏切换：选中邮件 → 详情 absolute
   // 覆盖列表；未选中 → 详情 hidden, 列表占满。≥lg 维持桌面三栏并排（零回归）。
   const belowLg = useIsBelowLg()
@@ -179,18 +166,9 @@ export function InboxLayout(): React.ReactElement {
         </div>
         {/* assistant-modal — dock 内嵌在 master-detail 行内：sidebar 模式 = 可调宽 flex 列（挤压正文）；
             floating 模式 = 自身 position:fixed 脱流（0 flow 占位，不挤压）；最小化 = hidden。
-            渲染在行内（非 portal）正是为了让 sidebar 能真正挤压正文。 */}
-        {mountChat && (
-          <Suspense
-            fallback={
-              chatVisible ? (
-                <Skeleton rows={6} className="h-full w-96 shrink-0 p-6" width="2/3" />
-              ) : null
-            }
-          >
-            <AssistantChatModal />
-          </Suspense>
-        )}
+            渲染在行内（非 portal）正是为了让 sidebar 能真正挤压正文 —— 也是它不能提到
+            RootLayout 做全局单例的原因（见 AssistantChatDock 头注释）。 */}
+        <AssistantChatDock />
       </div>
       {/* Sprint 17 — 旧 Sprint 5 fixed BatchActionBar 移除. floating bar
           (Sprint 12 设计, components/email/BatchActionBar.tsx) 由 EmailList

@@ -6,7 +6,6 @@ import { cleanup, fireEvent, render, waitFor } from '@testing-library/react'
 
 import type { Matter, MatterResourceListItem } from '../../src/shared/api/types/matter'
 import i18n from '../../src/shared/i18n'
-import { MatterContextRail } from '../../src/shared/components/matters/MatterContextRail'
 import { MatterContextTab } from '../../src/shared/components/matters/MatterContextTab'
 
 await i18n.changeLanguage('zh-CN')
@@ -35,11 +34,17 @@ describe('MatterContextTab', () => {
   })
 
   test('distinguishes suggestions and confirms them with the backend confidence and reason', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      status: 'success',
-      schema_version: 1,
-      data: { matter: matter(), event_ids: [] }
-    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: 'success',
+            schema_version: 1,
+            data: { matter: matter(), event_ids: [] }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+    )
     vi.stubGlobal('fetch', fetchMock)
     const onChanged = vi.fn()
     const item = resource('email', 'Suggested vendor email', 'none', true)
@@ -52,6 +57,7 @@ describe('MatterContextTab', () => {
           resources={[item]}
           stakeholders={[]}
           onOpenResource={vi.fn()}
+          onTogglePin={vi.fn()}
           onChanged={onChanged}
         />
       </QueryClientProvider>
@@ -63,16 +69,24 @@ describe('MatterContextTab', () => {
     fireEvent.click(view.getByRole('button', { name: /确认关联/ }))
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
-    expect(String(fetchMock.mock.calls[0][0])).toContain(`/matters/MAT-0042/resources/${item.resource.id}`)
+    expect(String(fetchMock.mock.calls[0][0])).toContain(
+      `/matters/MAT-0042/resources/${item.resource.id}`
+    )
     expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ confirmed: true })
   })
 
   test('rejects a suggestion through the rejection-memory endpoint', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
-      status: 'success',
-      schema_version: 1,
-      data: { matter: matter(), event_ids: [] }
-    }), { status: 200, headers: { 'content-type': 'application/json' } }))
+    const fetchMock = vi.fn(
+      async () =>
+        new Response(
+          JSON.stringify({
+            status: 'success',
+            schema_version: 1,
+            data: { matter: matter(), event_ids: [] }
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } }
+        )
+    )
     vi.stubGlobal('fetch', fetchMock)
     const onChanged = vi.fn()
     const item = resource('email', 'Irrelevant vendor email', 'none', true)
@@ -85,6 +99,7 @@ describe('MatterContextTab', () => {
           resources={[item]}
           stakeholders={[]}
           onOpenResource={vi.fn()}
+          onTogglePin={vi.fn()}
           onChanged={onChanged}
         />
       </QueryClientProvider>
@@ -97,35 +112,38 @@ describe('MatterContextTab', () => {
     )
   })
 
-  test('shows the same suggestion reason and actions in the context rail', () => {
-    const item = resource('email', 'Rail suggestion', 'none', true)
+  // 0812 D-D：右侧上下文栏已移除（与本 tab 重复），它独有的置顶入口迁到了这里。
+  test('pins a resource from the tab and lists pinned ones in their own section', () => {
+    const onTogglePin = vi.fn()
+    const item = { ...resource('doc', 'Pinned contract', 'none') }
+    item.link.pinned = true
     const client = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
     const view = render(
       <QueryClientProvider client={client}>
-        <MatterContextRail
+        <MatterContextTab
           matter={matter()}
-          runs={[]}
-          matterAgentEnabled={false}
-          onPatch={vi.fn()}
-          profiles={[]}
+          items={[]}
           resources={[item]}
           stakeholders={[]}
           onOpenResource={vi.fn()}
-          onTogglePin={vi.fn()}
+          onTogglePin={onTogglePin}
           onChanged={vi.fn()}
         />
       </QueryClientProvider>
     )
 
-    expect(view.getByTestId(`matter-resource-suggestion-${item.resource.id}`)).toBeTruthy()
-    expect(view.getByText('同一会话中的近期回复')).toBeTruthy()
-    expect(view.getByRole('button', { name: /确认关联/ })).toBeTruthy()
-    expect(view.getByRole('button', { name: /不相关/ })).toBeTruthy()
+    expect(view.getByText('置顶资料')).toBeTruthy()
+    const unpin = view.getAllByRole('button', { name: '取消置顶' })
+    expect(unpin.length).toBe(2) // 置顶分区一份 + 分组列表一份
+    fireEvent.click(unpin[0])
+    expect(onTogglePin).toHaveBeenCalledWith(item)
   })
 })
 
 function renderTab(resources: MatterResourceListItem[]) {
-  const client = new QueryClient({ defaultOptions: { queries: { retry: false }, mutations: { retry: false } } })
+  const client = new QueryClient({
+    defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
+  })
   return render(
     <QueryClientProvider client={client}>
       <MatterContextTab
@@ -134,6 +152,7 @@ function renderTab(resources: MatterResourceListItem[]) {
         resources={resources}
         stakeholders={[]}
         onOpenResource={vi.fn()}
+        onTogglePin={vi.fn()}
         onChanged={vi.fn()}
       />
     </QueryClientProvider>

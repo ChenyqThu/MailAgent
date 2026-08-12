@@ -24,10 +24,16 @@ import type {
   MatterStakeholderCreateInput
 } from '@shared/api/types/matter'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { CollapseChevron } from '@shared/components/ui/collapsible'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { toastError } from '@shared/state/toast'
 
-import { groupMatterResources, isMatterResourceAvailable } from './matterResource'
+import {
+  DOC_PROVIDER_ICONS,
+  RESOURCE_KIND_ICONS,
+  groupMatterResources,
+  isMatterResourceAvailable
+} from './matterResource'
 import { useMattersApi } from './hooks'
 import { MatterSuggestedResourceActions } from './MatterSuggestedResourceActions'
 
@@ -37,6 +43,8 @@ interface MatterContextTabProps {
   resources: MatterResourceListItem[]
   stakeholders: MatterStakeholder[]
   onOpenResource(item: MatterResourceListItem): void
+  /** 置顶/取消置顶。0812 起是**唯一**入口 —— 右侧上下文栏（原持有者）已移除。 */
+  onTogglePin(item: MatterResourceListItem): void
   onChanged(): void
 }
 
@@ -46,12 +54,15 @@ export function MatterContextTab({
   resources,
   stakeholders,
   onOpenResource,
+  onTogglePin,
   onChanged
 }: MatterContextTabProps): React.ReactElement {
   const { t } = useTranslation()
   const api = useMattersApi()
   const groups = useMemo(() => groupMatterResources(resources), [resources])
+  const pinned = resources.filter((item) => item.link.pinned)
   const [editor, setEditor] = useState<MatterStakeholder | 'new' | null>(null)
+  const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
 
   const remove = useMutation({
     mutationFn: (stakeholderId: number) =>
@@ -147,6 +158,26 @@ export function MatterContextTab({
         )}
       </section>
 
+      {/* 「置顶资料」独立分区（原只存在于右侧上下文栏）。置顶决定 Agent 每轮带哪几份摘录，
+          是个高频判断，不该混在长列表里。 */}
+      {pinned.length > 0 ? (
+        <section>
+          <SectionHeader title={t('matters.context.pinnedResources')} count={pinned.length} />
+          <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-2">
+            {pinned.map((item) => (
+              <ResourceRow
+                key={item.link.id}
+                matter={matter}
+                item={item}
+                onOpen={onOpenResource}
+                onTogglePin={onTogglePin}
+                onChanged={onChanged}
+              />
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       <section>
         <SectionHeader title={t('matters.context.linkedResources')} count={resources.length}>
           {suggestedResources > 0 ? (
@@ -157,74 +188,38 @@ export function MatterContextTab({
         </SectionHeader>
         {resources.length > 0 ? (
           <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-2">
-            {groups.map((group) =>
-              group.items.length > 0 ? (
+            {groups.map((group) => {
+              if (group.items.length === 0) return null
+              const open = collapsed[group.key] !== true
+              return (
                 <div key={group.key} className="border-b border-ink-border last:border-b-0">
-                  <div className="flex items-center gap-2 bg-ink-3/70 px-4 py-2 text-meta font-medium text-ink-fg-2">
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    onClick={() =>
+                      setCollapsed((value) => ({ ...value, [group.key]: !value[group.key] }))
+                    }
+                    className="flex w-full items-center gap-2 bg-ink-3/70 px-4 py-2 text-left text-meta font-medium text-ink-fg-2 hover:text-ink-fg"
+                  >
+                    <CollapseChevron expanded={open} size={12} />
                     <span>{t(`matters.context.groups.${group.key}`)}</span>
                     <span className="font-mono text-ink-fg-3">{group.items.length}</span>
-                  </div>
-                  {group.items.map((item) => {
-                    const suggested = item.link.confirmed_at === null
-                    return (
-                      <div
-                        key={item.link.id}
-                        className={`border-t border-ink-border px-4 py-3 first:border-t-0 ${suggested ? 'bg-ai/[0.06]' : ''}`}
-                      >
-                        <button
-                          type="button"
-                          onClick={() => onOpenResource(item)}
-                          className="flex w-full items-center gap-3 text-left hover:opacity-80"
-                        >
-                          <span
-                            className={`grid size-7 shrink-0 place-items-center rounded ${suggested ? 'bg-ai/15 text-ai' : 'bg-ink-4 text-ink-fg-2'}`}
-                          >
-                            <Link2 size={13} />
-                          </span>
-                          <span className="min-w-0 flex-1">
-                            <span className="flex items-center gap-2">
-                              <span className="min-w-0 flex-1 truncate text-body text-ink-fg">
-                                {item.resource.title || item.resource.external_key}
-                              </span>
-                              {suggested ? (
-                                <Pip tone="ai">{t('matters.resource.suggested')}</Pip>
-                              ) : null}
-                            </span>
-                            <span className="mt-1 flex flex-wrap items-center gap-1.5 text-meta text-ink-fg-3">
-                              <span>
-                                {t(
-                                  suggested
-                                    ? 'matters.resource.agentSuggested'
-                                    : 'matters.resource.manualLink'
-                                )}
-                              </span>
-                              {item.link.sub_state !== 'none' ? (
-                                <Pip tone={item.link.sub_state === 'paused' ? 'warn' : 'ok'}>
-                                  <RefreshCcw size={10} />
-                                  {t(
-                                    item.link.sub_state === 'paused'
-                                      ? 'matters.resource.subscriptionPaused'
-                                      : 'matters.resource.subscriptionActive'
-                                  )}
-                                </Pip>
-                              ) : null}
-                              {!isMatterResourceAvailable(item) ? (
-                                <Pip tone="fail">{t('matters.context.unavailable')}</Pip>
-                              ) : null}
-                            </span>
-                          </span>
-                        </button>
-                        <MatterSuggestedResourceActions
+                  </button>
+                  {open
+                    ? group.items.map((item) => (
+                        <ResourceRow
+                          key={item.link.id}
                           matter={matter}
                           item={item}
+                          onOpen={onOpenResource}
+                          onTogglePin={onTogglePin}
                           onChanged={onChanged}
                         />
-                      </div>
-                    )
-                  })}
+                      ))
+                    : null}
                 </div>
-              ) : null
-            )}
+              )
+            })}
           </div>
         ) : (
           <EmptyState
@@ -282,6 +277,88 @@ export function MatterContextTab({
           onChanged()
         }}
       />
+    </div>
+  )
+}
+
+/** 一行关联资料。图标按 kind 取（`matterResource.ts` 单源）—— 此前这里一律用 Link2，
+ *  邮件/会议/文档长得一模一样；置顶钮此前只在右栏有，右栏删掉后这里是唯一入口。 */
+function ResourceRow({
+  matter,
+  item,
+  onOpen,
+  onTogglePin,
+  onChanged
+}: {
+  matter: Matter
+  item: MatterResourceListItem
+  onOpen(item: MatterResourceListItem): void
+  onTogglePin(item: MatterResourceListItem): void
+  onChanged(): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  // 成员索引而非查表函数：react-hooks/static-components 只认得前者（见 matterResource.ts）。
+  const Icon =
+    (item.resource.kind === 'doc' && DOC_PROVIDER_ICONS[item.resource.provider.toLowerCase()]) ||
+    RESOURCE_KIND_ICONS[item.resource.kind]
+  const suggested = item.link.confirmed_at === null
+  return (
+    <div
+      className={`group border-t border-ink-border px-4 py-3 first:border-t-0 ${suggested ? 'bg-ai/[0.06]' : ''}`}
+    >
+      <div className="flex items-center gap-3">
+        <button
+          type="button"
+          onClick={() => onOpen(item)}
+          className="flex min-w-0 flex-1 items-center gap-3 text-left hover:opacity-80"
+        >
+          <span
+            className={`grid size-7 shrink-0 place-items-center rounded ${suggested ? 'bg-ai/15 text-ai' : 'bg-ink-4 text-ink-fg-2'}`}
+          >
+            <Icon size={13} />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="flex items-center gap-2">
+              <span className="min-w-0 flex-1 truncate text-body text-ink-fg">
+                {item.resource.title || item.resource.external_key}
+              </span>
+              {suggested ? <Pip tone="ai">{t('matters.resource.suggested')}</Pip> : null}
+            </span>
+            <span className="mt-1 flex flex-wrap items-center gap-1.5 text-meta text-ink-fg-3">
+              {/* kind 由左侧图标承载 —— 再写一遍文字会和上面的分组标题重复。 */}
+              <span>
+                {t(suggested ? 'matters.resource.agentSuggested' : 'matters.resource.manualLink')}
+              </span>
+              {item.link.sub_state !== 'none' ? (
+                <Pip tone={item.link.sub_state === 'paused' ? 'warn' : 'ok'}>
+                  <RefreshCcw size={10} />
+                  {t(
+                    item.link.sub_state === 'paused'
+                      ? 'matters.resource.subscriptionPaused'
+                      : 'matters.resource.subscriptionActive'
+                  )}
+                </Pip>
+              ) : null}
+              {!isMatterResourceAvailable(item) ? (
+                <Pip tone="fail">{t('matters.context.unavailable')}</Pip>
+              ) : null}
+            </span>
+          </span>
+        </button>
+        <button
+          type="button"
+          title={t(item.link.pinned ? 'matters.context.unpin' : 'matters.context.pin')}
+          aria-label={t(item.link.pinned ? 'matters.context.unpin' : 'matters.context.pin')}
+          aria-pressed={item.link.pinned}
+          onClick={() => onTogglePin(item)}
+          className={`shrink-0 rounded-[var(--r-ctl)] p-1.5 text-ink-fg-3 opacity-0 transition-opacity duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:opacity-100 group-hover:opacity-100 ${
+            item.link.pinned ? 'text-coral opacity-100' : ''
+          }`}
+        >
+          <Pin size={13} />
+        </button>
+      </div>
+      <MatterSuggestedResourceActions matter={matter} item={item} onChanged={onChanged} />
     </div>
   )
 }

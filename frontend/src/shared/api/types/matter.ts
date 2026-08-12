@@ -504,6 +504,10 @@ export interface MatterEvent {
   source: string
   item_id: number | null
   update_id: number | null
+  /** 资料类事件的对象指针。后端一直在返回（`_event_row` 是整行 dict），此前漏声明。 */
+  resource_id: number | null
+  /** 反向事件（撤销）指回被它抵消的那条。时间线 append-only，纠错就靠这个字段。 */
+  reverses_event_id: number | null
   dedupe_key: string
   payload: Record<string, unknown>
   created_at: number

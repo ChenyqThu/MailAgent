@@ -56,9 +56,9 @@ export function isMatterResourceAvailable(item: MatterResourceListItem): boolean
   )
 }
 
-// 资料图标单源。原本 MatterContextRail 里私有一份、抽屉里没有 —— 0811 dogfood 反馈
-// 「文档样式不好」时下沉到这里，三处展示面（抽屉头 / 上下文标签列表 / rail 紧凑行）共用，
-// 避免同一个 kind 在两处长得不一样。
+// 资料图标单源。原本右侧上下文栏里私有一份、抽屉里没有 —— 0811 dogfood 反馈
+// 「文档样式不好」时下沉到这里，各展示面（抽屉头 / 上下文 tab 的资料行）共用，
+// 避免同一个 kind 在两处长得不一样。（右栏 0812 已删，它那份消费点随之消失。）
 // 逐项对照设计原型 helpers.jsx 的 `RES_KIND` 词表（右侧注释是原型写的语义名）。
 // 🔴 改动前 6 项里 4 项与它不符，其中 event 用了 Users（干系人图标）表示"会议"是错位。
 export const RESOURCE_KIND_ICONS: Record<MatterResourceKind, LucideIcon> = {

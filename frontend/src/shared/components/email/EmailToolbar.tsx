@@ -46,9 +46,17 @@ import {
 } from '@shared/components/icons'
 import { DUR } from '@shared/lib/gsap'
 import { HoverTip } from '@shared/components/ui/HoverTip'
+import { useAnchoredPosition } from '@shared/hooks/useAnchoredPosition'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import type { ComposeMode } from '@shared/api/types'
+
+// 🔴 本文件里所有向下溢出 header 的浮层都必须 portal 到 body、并把 HoverTip 切到 portal
+// 模式：header 为了窄宽下不横向溢出挂了 `overflow-x-auto`（见根组件 className 注释），按
+// CSS Overflow 3「一轴 auto 则另一轴的 visible 计算成 auto」，它同时也是**纵向**裁剪容器，
+// 任何 `absolute` 子浮层都只剩几像素露在 44px 高的框内 = 用户眼里"点了没反应"（0812 dogfood）。
+/** 撰写下拉的 min-width，同时是锚点右边界夹取的依据（与 `min-w-[160px]` 同值）。 */
+const COMPOSE_MENU_WIDTH = 160
 
 export type TranslateStatus = 'idle' | 'loading' | 'translated' | 'error'
 
@@ -86,11 +94,15 @@ interface ToolbarProps {
   onLlmRun?: () => void
   llmRunState?: WriteActionState
 
-  matterLink?: {
+  /** 0812 —— 「创建事项」：不再开 MatterLinkPopover（新建 / 加入已有 / 重复候选），而是唤起右下角
+   *  AI chat，带上这封邮件的引用 + 一条指令，由主 agent 去查重、决定新建还是关联。
+   *  🔴 去重能力没有消失、换了承载：指令文案（locale `toolbar.createMatterPrompt`）明确要求先查
+   *  既有事项，恒注入的 `matters` skill 方法论也写着 find-before-create。
+   *  `count`/`state` 仍在：徽标把「这封邮件已挂在 N 件事上」当场摆出来，正是查重的第一手信号。 */
+  createMatter?: {
     count: number
     state: 'unlinked' | 'single' | 'multiple'
-    onToggle(): void
-    popover?: React.ReactNode
+    onClick(): void
   }
 
   onToggleRead?: () => void
@@ -179,6 +191,9 @@ interface GhostBtnProps {
   disabled?: boolean
   /** Set for toggle semantics (Read / Flag). aria-pressed mirrors `active`. */
   pressed?: boolean
+  /** 该按钮挂着一个弹层，且此刻是展开的。用**背景**表达（`active` 用的是前景色），
+   *  于是"已关联 + 弹层开着"两种态可以同时看见、互不吞没（0812 dogfood：点了零反馈）。 */
+  expanded?: boolean
   onClick?: () => void
 }
 
@@ -191,6 +206,7 @@ function GhostBtn({
   pending,
   disabled,
   pressed,
+  expanded,
   onClick
 }: GhostBtnProps): React.ReactElement {
   const isDisabled = disabled === true || pending === true || !onClick
@@ -207,6 +223,7 @@ function GhostBtn({
       disabled={isDisabled}
       aria-label={label}
       aria-pressed={pressed === true ? true : pressed === false ? false : undefined}
+      aria-expanded={expanded === undefined ? undefined : expanded}
       data-disabled={isDisabled ? '' : undefined}
       tabIndex={isDisabled ? -1 : 0}
       className={cn(
@@ -216,6 +233,8 @@ function GhostBtn({
         // 语义色 text-urg (--c-urg 不随 accent 主题切换, 用户验收: 与 UI 规范不符)。
         active ? 'text-coral' : 'text-ink-fg-1',
         'hover:text-ink-fg hover:bg-ink-4',
+        // 弹层展开 = 按下态背景（与 hover 同一档 ink-4，松手不掉）。
+        expanded === true && 'bg-ink-4',
         'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-ink-fg-1'
       )}
     >
@@ -234,7 +253,7 @@ function GhostBtn({
   // itself is the cue — no tooltip needed.
   if (showLabel && !isDisabled) return btn
   return (
-    <HoverTip text={hoverHint ?? label} side="bottom">
+    <HoverTip text={hoverHint ?? label} side="bottom" portal>
       {btn}
     </HoverTip>
   )
@@ -300,7 +319,7 @@ function PrimaryBtn({
   )
   if (showLabel) return btn
   return (
-    <HoverTip text={hoverHint ?? label} side="bottom">
+    <HoverTip text={hoverHint ?? label} side="bottom" portal>
       {btn}
     </HoverTip>
   )
@@ -323,6 +342,10 @@ function ComposeSplitButton({
   const [menuOpen, setMenuOpen] = useState(false)
   const [iconActive, setIconActive] = useState(false)
   const wrapRef = useRef<HTMLDivElement>(null)
+  // 0812 codex #8 —— 菜单 portal 到 body 之后，Esc 关闭时焦点会落到 body 而不是回到触发钮，
+  // 键盘用户当场丢失位置。存触发钮的 ref，Esc 关闭后显式归位（点选/外点不抢焦点：那两条路
+  // 焦点要么跟着新打开的撰写面走、要么本来就在用户点的地方）。
+  const triggerRef = useRef<HTMLButtonElement>(null)
   // 下拉菜单出入场：与主题/材质弹层同款（顶部微展开 + 淡入），退场延迟卸载。
   const { shouldRender: menuShouldRender, scopeRef: menuRef } = useExitAnimation<HTMLDivElement>(
     menuOpen,
@@ -333,14 +356,27 @@ function ComposeSplitButton({
     }
   )
 
+  // 菜单 portal 到 body（与事项弹层同因：本 header 是 overflow 裁剪容器），位置按锚点算。
+  const menuPosition = useAnchoredPosition(wrapRef, menuShouldRender, {
+    width: COMPOSE_MENU_WIDTH,
+    align: 'start',
+    gap: 4
+  })
+
   // Close on outside click / Escape (mirrors the appearance popover pattern).
   useEffect(() => {
     if (!menuOpen) return
     const onDown = (e: MouseEvent): void => {
-      if (wrapRef.current && !wrapRef.current.contains(e.target as Node)) setMenuOpen(false)
+      const target = e.target as Node
+      // menuRef 也要算"内部" —— 菜单 portal 出去后在 DOM 上不再是 wrapRef 的后代，
+      // 只判 wrapRef 会在 mousedown 阶段先把菜单关掉，menuitem 的 click 就永远不触发。
+      if (wrapRef.current?.contains(target) || menuRef.current?.contains(target)) return
+      setMenuOpen(false)
     }
     const onKey = (e: KeyboardEvent): void => {
-      if (e.key === 'Escape') setMenuOpen(false)
+      if (e.key !== 'Escape') return
+      setMenuOpen(false)
+      if (triggerRef.current?.isConnected) triggerRef.current.focus()
     }
     document.addEventListener('mousedown', onDown)
     document.addEventListener('keydown', onKey)
@@ -394,6 +430,7 @@ function ComposeSplitButton({
         </button>
         {/* Split chevron — opens the mode menu. */}
         <button
+          ref={triggerRef}
           type="button"
           onClick={() => setMenuOpen((v) => !v)}
           disabled={pending}
@@ -410,39 +447,43 @@ function ComposeSplitButton({
         </button>
       </div>
 
-      {menuShouldRender && (
-        <div
-          ref={menuRef}
-          role="menu"
-          className={cn(
-            'absolute left-0 top-full mt-1 z-50 min-w-[160px]',
-            // 实心 bg-ink-2 (对齐 ResyncConfirmDialog 弹层底色): 当年 glass-pop 是
-            // 半透明 + blur, 会透出底下标题/正文, 下拉菜单观感发脏 — 菜单是功能性
-            // 弹层不是装饰玻璃, 用实心底保证可读.
-            // (2026-08-05: glass-pop 本身已改成不透明 rgb(--ink-2), 两者底色现已同值;
-            //  这里维持自成一套 = 保住比浮层档更轻的 shadow, 这条 shadow-[…] 是活的.)
-            // 主题 v3 C8/批 4: 紧凑菜单档 rounded-md(6) → --r-ctl(8)
-            'rounded-[var(--r-ctl)] bg-ink-2 border border-ink-border-soft py-1',
-            'shadow-[0_8px_24px_rgba(0,0,0,0.35)]'
-          )}
-        >
-          {items.map((it) => (
-            <button
-              key={it.mode}
-              type="button"
-              role="menuitem"
-              onClick={() => pick(it.mode)}
-              className={cn(
-                'w-full flex items-center justify-between gap-3 px-3 py-1.5 text-aux',
-                'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast'
-              )}
-            >
-              <span className="whitespace-nowrap">{it.label}</span>
-              <kbd className="text-[10px]">{it.hint}</kbd>
-            </button>
-          ))}
-        </div>
-      )}
+      {menuShouldRender &&
+        menuPosition &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            style={{ top: menuPosition.top, left: menuPosition.left }}
+            className={cn(
+              'fixed z-50 min-w-[160px]',
+              // 实心 bg-ink-2 (对齐 ResyncConfirmDialog 弹层底色): 当年 glass-pop 是
+              // 半透明 + blur, 会透出底下标题/正文, 下拉菜单观感发脏 — 菜单是功能性
+              // 弹层不是装饰玻璃, 用实心底保证可读.
+              // (2026-08-05: glass-pop 本身已改成不透明 rgb(--ink-2), 两者底色现已同值;
+              //  这里维持自成一套 = 保住比浮层档更轻的 shadow, 这条 shadow-[…] 是活的.)
+              // 主题 v3 C8/批 4: 紧凑菜单档 rounded-md(6) → --r-ctl(8)
+              'rounded-[var(--r-ctl)] bg-ink-2 border border-ink-border-soft py-1',
+              'shadow-[0_8px_24px_rgba(0,0,0,0.35)]'
+            )}
+          >
+            {items.map((it) => (
+              <button
+                key={it.mode}
+                type="button"
+                role="menuitem"
+                onClick={() => pick(it.mode)}
+                className={cn(
+                  'w-full flex items-center justify-between gap-3 px-3 py-1.5 text-aux',
+                  'text-ink-fg-1 hover:text-ink-fg hover:bg-ink-4 transition-colors duration-fast'
+                )}
+              >
+                <span className="whitespace-nowrap">{it.label}</span>
+                <kbd className="text-[10px]">{it.hint}</kbd>
+              </button>
+            ))}
+          </div>,
+          document.body
+        )}
     </div>
   )
 }
@@ -489,7 +530,7 @@ function IconOnlyBtn({
     </button>
   )
   return (
-    <HoverTip text={label} side="bottom">
+    <HoverTip text={label} side="bottom" portal>
       {btn}
     </HoverTip>
   )
@@ -562,7 +603,7 @@ function TranslateButton({
   )
   if (showLabel) return btn
   return (
-    <HoverTip text={`${label} · ⌥T`} side="bottom">
+    <HoverTip text={`${label} · ⌥T`} side="bottom" portal>
       {btn}
     </HoverTip>
   )
@@ -682,7 +723,7 @@ export function EmailToolbar({
   resyncState,
   onLlmRun,
   llmRunState,
-  matterLink,
+  createMatter,
   onToggleRead,
   isRead,
   readState,
@@ -838,35 +879,12 @@ export function EmailToolbar({
         pending={pinState?.pending}
         onClick={onTogglePin}
       />
-      {matterLink ? (
-        <div className="relative">
-          <GhostBtn
-            icon={
-              <span className="relative">
-                <BriefcaseBusiness size={13} strokeWidth={1.75} />
-                {matterLink.state === 'multiple' ? (
-                  <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-coral/100 px-0.5 text-center text-[8px] leading-3.5 text-accent-fg">
-                    {matterLink.count}
-                  </span>
-                ) : null}
-              </span>
-            }
-            label={t('toolbar.matters')}
-            showLabel={wantsLabels}
-            active={matterLink.state !== 'unlinked'}
-            pressed={matterLink.state !== 'unlinked'}
-            onClick={matterLink.onToggle}
-          />
-          {matterLink.popover}
-        </div>
-      ) : null}
-
       {/* Mark Important — passive indicator. Source: RFC headers
           (Importance / X-Priority), already parsed into is_important by
           the reader. No write path; hover explains. Renders ONLY when true
           so the toolbar isn't padded for non-important mail. */}
       {isImportant === true && (
-        <HoverTip text={t('toolbar.importantHint')} side="bottom">
+        <HoverTip text={t('toolbar.importantHint')} side="bottom" portal>
           <span
             role="img"
             aria-label={t('toolbar.important')}
@@ -918,8 +936,30 @@ export function EmailToolbar({
       />
       {/* 「为此线程建立跟进 Agent」已移除（0812 dogfood）：它建的是一个 Custom Agent
           （trigger=email_filter + thread_id），而**事项**本身就是这条线程的跟进载体，且更完整
-          ——有状态/行动项/干系人/时间线，跟进产出恒走人工审阅。左边的「事项」按钮已提供
-          「为此线程建立事项」。Custom Agent 仍可在 Agents 页手建，能力未减。 */}
+          ——有状态/行动项/干系人/时间线，跟进产出恒走人工审阅。Custom Agent 仍可在 Agents 页手建，
+          能力未减。「创建事项」接了它的位置（AI 重跑右侧）。 */}
+      {createMatter ? (
+        <GhostBtn
+          icon={
+            <span className="relative">
+              <BriefcaseBusiness size={13} strokeWidth={1.75} />
+              {createMatter.state === 'multiple' ? (
+                <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-coral/100 px-0.5 text-center text-[8px] leading-3.5 text-accent-fg">
+                  {createMatter.count}
+                </span>
+              ) : null}
+            </span>
+          }
+          label={t('toolbar.createMatter')}
+          showLabel={wantsLabels}
+          // active/pressed = 「这封邮件已挂在事项上」—— 点下去仍是"交给 agent 处理"，
+          // 它会看见同样的事实并建议加入而不是重复新建。
+          active={createMatter.state !== 'unlinked'}
+          pressed={createMatter.state !== 'unlinked'}
+          hoverHint={t('toolbar.createMatterHint')}
+          onClick={createMatter.onClick}
+        />
+      ) : null}
 
       {/* Right cluster: Open Notion · Divider · Prev · Next · Divider · AIPanelToggle.
           AIPanelToggle sits at the **very right** because it's the "open

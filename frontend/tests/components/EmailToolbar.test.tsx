@@ -132,3 +132,36 @@ describe('EmailToolbar — write button wiring', () => {
     expect(screen.queryByRole('img', { name: /重要/ })).toBeNull()
   })
 })
+
+describe('EmailToolbar — 创建事项 (0812)', () => {
+  test('点击「创建事项」把动作交出去（不再自己开弹层）', () => {
+    const onClick = vi.fn()
+    render(<EmailToolbar createMatter={{ count: 0, state: 'unlinked', onClick }} />)
+    fireEvent.click(screen.getByRole('button', { name: /^创建事项$/ }))
+    expect(onClick).toHaveBeenCalledTimes(1)
+  })
+
+  test('它坐在「AI 重跑」右边（owner 指定的位置）', () => {
+    render(
+      <EmailToolbar
+        onLlmRun={vi.fn()}
+        createMatter={{ count: 0, state: 'unlinked', onClick: vi.fn() }}
+      />
+    )
+    const buttons = screen.getAllByRole('button')
+    const llm = buttons.findIndex((b) => /^AI 重跑$/.test(b.getAttribute('aria-label') ?? ''))
+    const create = buttons.findIndex((b) => /^创建事项$/.test(b.getAttribute('aria-label') ?? ''))
+    expect(llm).toBeGreaterThanOrEqual(0)
+    expect(create).toBe(llm + 1)
+  })
+
+  test('已关联多件事时把数量摆出来 —— 这是用户侧的第一手查重信号', () => {
+    render(<EmailToolbar createMatter={{ count: 3, state: 'multiple', onClick: vi.fn() }} />)
+    expect(screen.getByText('3')).toBeTruthy()
+  })
+
+  test('matters 未启用（不传 createMatter）→ 按钮根本不渲染', () => {
+    render(<EmailToolbar onLlmRun={vi.fn()} />)
+    expect(screen.queryByRole('button', { name: /^创建事项$/ })).toBeNull()
+  })
+})

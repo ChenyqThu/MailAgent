@@ -1,12 +1,10 @@
 import { useTranslation } from 'react-i18next'
-import { AlertTriangle, Clock, Hand, Plus, Trash2, Zap } from 'lucide-react'
+import { AlertTriangle, Clock, Hand, Trash2, Zap } from 'lucide-react'
 
 import {
   MATTER_CONDITION_TRIGGER_TYPES,
-  MATTER_EVENT_TRIGGER_TYPES,
-  MATTER_RUN_ACTIONS
+  MATTER_EVENT_TRIGGER_TYPES
 } from '@shared/api/types/matter'
-import type { MatterRunAction } from '@shared/api/types/matter'
 import { ScheduleBuilder } from '@shared/components/agents/schedule/ScheduleBuilder'
 import { newScheduleValue } from '@shared/components/agents/schedule/migrate'
 import { DEFAULT_RULE } from '@shared/components/agents/schedule/types'
@@ -21,6 +19,12 @@ import type { MatterTriggerEntry, MatterTriggerKind } from './matterSchedule'
  * 🔴 EVENT / CONDITION 的选项集**刻意小于设计稿**：只列能映射到既有判据的项。设计画的
  * 「会议结束」（日历与事项零接线）和「超过 5 天无进展」（后端无此判据）不做 —— 与其四个
  * 选项里两个永不触发，不如少给两个。`wait_overdue` 的文案也按**真实阈值 7 天**写。
+ *
+ * 🔴 四档说明卡与多触发模型的调和（0812 dogfood D-B）：设计 `matter-agent.jsx:402-420`
+ * 把四档画成 2×2 单选卡（一件事只有一种触发方式），而本仓的存储是 v2 envelope、**多条
+ * 并存**。砍掉多触发去像设计是功能倒退，于是取设计的**说明力**、留实现的**表达力**：
+ * 卡片保留 icon + 档名 + hint 文案与选中态，语义从「单选」改成「加一条这种触发」——
+ * 已有该档时卡片呈选中态（点它不重复添加），删除仍走下面每条自己的删除钮。
  */
 
 const KIND_ICONS: Record<MatterTriggerKind, typeof Clock> = {
@@ -34,24 +38,12 @@ const KINDS: readonly MatterTriggerKind[] = ['schedule', 'event', 'condition', '
 
 export function MatterTriggerEditor({
   entries,
-  onChange,
-  actions,
-  onActionsChange
+  onChange
 }: {
   entries: readonly MatterTriggerEntry[]
   onChange(next: MatterTriggerEntry[]): void
-  actions: readonly MatterRunAction[]
-  onActionsChange(next: MatterRunAction[]): void
 }): React.ReactElement {
   const { t } = useTranslation()
-
-  const toggleAction = (action: MatterRunAction): void => {
-    onActionsChange(
-      actions.includes(action)
-        ? actions.filter((value) => value !== action)
-        : MATTER_RUN_ACTIONS.filter((value) => value === action || actions.includes(value))
-    )
-  }
 
   const update = (index: number, patch: Partial<MatterTriggerEntry>): void => {
     onChange(entries.map((entry, i) => (i === index ? { ...entry, ...patch } : entry)))
@@ -72,6 +64,46 @@ export function MatterTriggerEditor({
 
   return (
     <div className="space-y-2">
+      {/* 设计 `matter-agent.jsx:402-420` 的 2×2 说明卡：icon + 档名 + hint。 */}
+      <div className="grid grid-cols-2 gap-1.5">
+        {KINDS.map((kind) => {
+          const Icon = KIND_ICONS[kind]
+          const on = entries.some((entry) => entry.kind === kind && entry.enabled !== false)
+          return (
+            <button
+              key={kind}
+              type="button"
+              aria-pressed={on}
+              // 已经有这一档 ⇒ 卡片退成状态指示（下面那条 entry 才是可编辑/可删的本体）。
+              // 留着可点会让人以为还能再点出点什么，实际是 no-op。
+              disabled={on}
+              onClick={() => add(kind)}
+              className={cn(
+                'flex items-start gap-2 rounded-[var(--r-ctl)] border p-2.5 text-left transition-colors duration-fast ease-standard',
+                on
+                  ? 'cursor-default border-coral/45 bg-coral/[0.08]'
+                  : 'border-ink-border bg-ink-2 hover:border-coral/25'
+              )}
+            >
+              <Icon
+                size={13}
+                className={cn('mt-0.5 shrink-0', on ? 'text-coral' : 'text-ink-fg-3')}
+              />
+              <span className="min-w-0">
+                <span
+                  className={cn('block text-aux', on ? 'font-semibold text-coral' : 'text-ink-fg')}
+                >
+                  {t(`matters.trigger.kind.${kind}`)}
+                </span>
+                <span className="mt-0.5 block text-meta leading-[1.45] text-ink-fg-3">
+                  {t(`matters.trigger.hint.${kind}`)}
+                </span>
+              </span>
+            </button>
+          )
+        })}
+      </div>
+
       {entries.map((entry, index) => {
         const Icon = KIND_ICONS[entry.kind]
         return (
@@ -162,44 +194,7 @@ export function MatterTriggerEditor({
         )
       })}
 
-      <div className="flex flex-wrap gap-1.5">
-        {KINDS.map((kind) => (
-          <button
-            key={kind}
-            type="button"
-            onClick={() => add(kind)}
-            className="inline-flex items-center gap-1 rounded-[var(--r-pill)] border border-dashed border-ink-border px-2 py-1 text-meta text-ink-fg-2 hover:border-ai/40 hover:text-ai"
-          >
-            <Plus size={11} />
-            {t(`matters.trigger.kind.${kind}`)}
-          </button>
-        ))}
-      </div>
       <p className="text-meta leading-5 text-ink-fg-3">{t('matters.trigger.independentHint')}</p>
-
-      {/* 「跟进时执行」（设计 §5.2 ACTIONS）。🔴 勾选定的是**产出什么**，不是能调用什么 ——
-          工具 allowlist 与「只观察与建议」的上限由服务端强制，勾 draft 也不会多一个发信工具。 */}
-      <div className="mt-3 border-t border-ink-border pt-3">
-        <p className="text-meta font-medium text-ink-fg-2">{t('matters.runActions.title')}</p>
-        <div className="mt-1.5 space-y-1">
-          {MATTER_RUN_ACTIONS.map((action) => (
-            <label
-              key={action}
-              className="flex cursor-pointer items-start gap-2 rounded-[var(--r-ctl)] px-1 py-1 hover:bg-ink-2"
-            >
-              <input
-                type="checkbox"
-                checked={actions.includes(action)}
-                onChange={() => toggleAction(action)}
-                className="mt-0.5 size-3.5 shrink-0 accent-[rgb(var(--c-ai))]"
-              />
-              <span className="min-w-0 text-meta leading-5 text-ink-fg-1">
-                {t(`matters.runActions.${action}`)}
-              </span>
-            </label>
-          ))}
-        </div>
-      </div>
     </div>
   )
 }

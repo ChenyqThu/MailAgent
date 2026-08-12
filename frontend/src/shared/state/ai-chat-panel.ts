@@ -61,14 +61,23 @@ interface AIChatPanelStore {
   requestOpenAgentSession(sessionId: number): void
   consumeOpenAgentSession(): void
 
-  // Matters MVP P6-A lane A5 — the main-window dock can wear the Matter Agent identity without
-  // changing the gateway/tool policy. `matterConversationEpoch` is a UI reset signal: every explicit
-  // 事项对话 invocation starts a fresh interactive round, including when the dock is already visible.
+  // Matters MVP P6-A lane A5 / 0812 收口 — 事项**不再有第二套 chat UI**：`matterTarget` 现在只是
+  // 「这次唤出 dock 时默认带上哪件事」的**种子**（与 activeEmailId 同性质），由 AgentConversation
+  // 渲染成一枚可移除的 context chip。`matterConversationEpoch` 每次显式「事项对话」自增 —— dock 已
+  // 经开着时也要能重新定位到这件事（epoch 变 = 重新按这个 matter 找它最近一次会话）。
   matterTarget: MatterChatTarget | null
   matterConversationEpoch: number
   openMatterChat(target: MatterChatTarget): void
-  startNewMatterConversation(): void
   clearMatterChat(): void
+
+  // 0812 —— 外部入口（邮件工具栏「创建事项」）把一条**指令**递给 dock 里的主 agent。
+  // 走既有注入面：指令本身是一条普通用户消息，邮件引用仍由 AgentConversation 的 email context chip
+  // （→ injectedContext）承载 —— 不新造注入路径。
+  // `nonce` 让同一条指令能被连点两次（内容相同也算两次请求）；`emailId` 是「等这封邮件的 chip 就位
+  // 再发」的门（没有它就会发出一条指着空气的指令）。
+  pendingPrompt: { text: string; emailId: number | null; nonce: number } | null
+  requestChatPrompt(text: string, emailId: number | null): void
+  consumeChatPrompt(nonce: number): void
 }
 
 const SIDEBAR_STORAGE_KEY = 'mailagent.chat.sidebarOpen'
@@ -171,11 +180,19 @@ export const useAIChatPanel = create<AIChatPanelStore>((set, get) => ({
       matterConversationEpoch: state.matterConversationEpoch + 1
     }))
   },
-  startNewMatterConversation() {
-    set((state) => ({ matterConversationEpoch: state.matterConversationEpoch + 1 }))
-  },
   clearMatterChat() {
     set({ matterTarget: null })
+  },
+  pendingPrompt: null,
+  requestChatPrompt(text, emailId) {
+    set((state) => ({
+      pendingPrompt: { text, emailId, nonce: (state.pendingPrompt?.nonce ?? 0) + 1 }
+    }))
+  },
+  consumeChatPrompt(nonce) {
+    // 只清「自己那一条」：消费与新请求可能交错（用户在派发落地前又点了一次），
+    // 无条件置 null 会把后来的那条一起吞掉。
+    set((state) => (state.pendingPrompt?.nonce === nonce ? { pendingPrompt: null } : {}))
   }
 }))
 
@@ -218,7 +235,19 @@ export function requestOpenAgentSession(sessionId: number): void {
   useAIChatPanel.getState().requestOpenAgentSession(sessionId)
 }
 
-/** Open the main-window assistant dock as the Matter Agent, anchored by the matter's INTERNAL id. */
+/** Open the main-window assistant dock carrying THIS matter as its default context chip. */
 export function openMatterChat(target: MatterChatTarget): void {
   useAIChatPanel.getState().openMatterChat(target)
+}
+
+/** 0812 —— 从别的界面把一条指令递给 dock 里的**主** agent（邮件工具栏「创建事项」）。
+ *
+ *  展开 dock（不换事项身份：这是一次通用请求，故先 clearMatterChat）+ 排队指令。真正「立即发出还是
+ *  预填 composer」由 AgentConversation / ChatPromptDispatcher 判定 —— 只有它们看得见 run 是否在途、
+ *  composer 是否被审批闸锁着、以及 `emailId` 那枚引用 chip 就位了没有。 */
+export function startChatWithPrompt(text: string, emailId: number | null): void {
+  const state = useAIChatPanel.getState()
+  state.clearMatterChat()
+  state.openChatModal()
+  state.requestChatPrompt(text, emailId)
 }
