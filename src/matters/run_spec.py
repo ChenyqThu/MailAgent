@@ -13,13 +13,19 @@ grantConnectors: {已连接 connector: 'read'}}``。🔴 ``grantExec`` **依然�
 读工具；矩阵行在 exec 判定之前就 return，服务端 ``resolve_caller_ceiling`` 还把 matter venue
 的 connector 天花板钉死 'read'）；``budget`` 恒 1800s 常量（profile budget 不咨询）。
 
-prompt 四段（服务端唯一 prompt 权威，模型侧无 body 控制面）：
-  1. 任务契约（固定文案，只观察与建议）；
-  2. matter 快照（``context_snapshot`` 投影；资源摘录逐份套 ``UNTRUSTED_MATTER_EXCERPT``
+prompt **五段**（服务端唯一 prompt 权威，模型侧无 body 控制面）—— 顺序 = 下面
+``assemble_matter_spec`` 里 ``sections`` 列表的顺序，**改段数/顺序必须同步改前端**
+``frontend/src/shared/components/matters/MatterPromptAssembly.tsx`` 的 ``STEPS``
+（那块只读披露就是照这份清单向 owner 说明「你改的是哪一段」）：
+  1. 任务契约（``_task_contract``：owner 在全局配置面写过就整份换成他的，否则回落代码内置的
+     ``_TASK_CONTRACT``）；
+  2. 本次跟进要做的事（0812：``_run_actions_section`` 把事项级「跟进时执行」四项勾选翻成条款；
+     一项都没勾 → 返回空串 → 该段整体消失。🔴 只影响**产出要求**，不发工具不改权限）；
+  3. matter 快照（``context_snapshot`` 投影；资源摘录逐份套 ``UNTRUSTED_MATTER_EXCERPT``
      围栏 —— 围栏词与 TS contextSerializer.ts ``fenceUntrusted('MATTER_EXCERPT', …)`` 一致，
      attrs 同为 ``{id, provider}``）；
-  3. 变化清单（D4 manifest：资源 rev 差异 + 新事件数 + 上次接受更新 + 末行的检索时间窗）；
-  4. persona（可选：profile.prompt + matter_instructions，前缀声明从属于任务契约）。
+  4. 变化清单（D4 manifest：资源 rev 差异 + 新事件数 + 上次接受更新 + 末行的检索时间窗）；
+  5. persona（可选：profile.prompt + matter_instructions，前缀声明从属于任务契约）。
 """
 
 from __future__ import annotations

@@ -275,6 +275,23 @@ _APPROVAL_MODE_KEY = "chat_approval_mode"
 CHAT_AUTO_COMPACT_MODES: tuple[str, ...] = ("on", "off")
 _AUTO_COMPACT_KEY = "chat_auto_compact"
 
+# ── 跟进 run 的网页检索档（0812 dogfood）────────────────────────────────────────────────
+#
+# Matter 跟进 run（matter_followup 场地）的 web class 工具面，owner 可配三档：
+#   keep        —— web_search + web_fetch 都给（默认，0812 owner 拍板的现状）
+#   search_only —— 只给 web_search，丢掉 web_fetch（URL 编码外传通道）
+#   off         —— 整个 web class 都不给
+# 语义单源在 gateway（frontend/src/ai-gateway/agentRun.ts 的 matterRunAdmitsWeb 腰带）；
+# 本端点只负责**持久化 + 值域把关**，形状逐条抄 auto-compact 先例。
+#
+# 🔴 越域值一律 400、绝不静默回落：静默回落会让 UI 显示的档与实际生效的档劈叉，而这是
+# 一个「无人值守 run 能不能出网」的安全档 —— 劈叉比报错危险得多。
+# 缺省（从未设置）= 'keep'（= gateway 侧同一个默认值；gateway 读失败也 fail-safe 到它，
+# 一次瞬时故障绝不静默砍掉无人值守 run 的能力）。
+MATTER_RUN_WEB_FACES: tuple[str, ...] = ("keep", "search_only", "off")
+MATTER_RUN_WEB_FACE_DEFAULT = "keep"
+_MATTER_WEB_FACE_KEY = "matter_run_web_face"
+
 
 @router.get("/approval-mode", dependencies=[Depends(verify_cf_access)])
 async def get_approval_mode(request: Request):
@@ -329,6 +346,33 @@ async def set_auto_compact(request: Request, body: Optional[dict[str, Any]] = No
     previous = store.get_owner_setting(_AUTO_COMPACT_KEY) or "on"
     store.set_owner_setting(_AUTO_COMPACT_KEY, mode)
     logger.info(f"chat auto compact switched: {previous} → {mode} (owner UI)")
+    return success_envelope({"mode": mode}, request=request, source="sqlite")
+
+
+@router.get("/matter-web-face", dependencies=[Depends(verify_cf_access)])
+async def get_matter_web_face(request: Request):
+    """读跟进 run 的网页检索档。缺行/脏值 → 'keep'（= gateway 侧同一个默认值）。"""
+    raw = get_agent_config_store().get_owner_setting(_MATTER_WEB_FACE_KEY)
+    mode = raw if raw in MATTER_RUN_WEB_FACES else MATTER_RUN_WEB_FACE_DEFAULT
+    return success_envelope({"mode": mode}, request=request, source="sqlite")
+
+
+@router.put("/matter-web-face", dependencies=[Depends(verify_cf_access)])
+async def set_matter_web_face(request: Request, body: Optional[dict[str, Any]] = None):
+    """写跟进 run 的网页检索档；仅 owner UI 可达，越域值一律 400（绝不静默回落 —— 见上方
+    常量处的说明：UI 显示的档与实际生效的档劈叉，比一个 400 危险得多）。"""
+    mode = (body or {}).get("mode")
+    if mode not in MATTER_RUN_WEB_FACES:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"body.mode must be one of {MATTER_RUN_WEB_FACES}",
+            http_status=400,
+            source="sqlite",
+        )
+    store = get_agent_config_store()
+    previous = store.get_owner_setting(_MATTER_WEB_FACE_KEY) or MATTER_RUN_WEB_FACE_DEFAULT
+    store.set_owner_setting(_MATTER_WEB_FACE_KEY, mode)
+    logger.info(f"matter run web face switched: {previous} → {mode} (owner UI)")
     return success_envelope({"mode": mode}, request=request, source="sqlite")
 
 

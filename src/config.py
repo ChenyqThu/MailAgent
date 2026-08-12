@@ -967,9 +967,15 @@ class Config(BaseSettings):
         ),
     )
     matters_enabled: bool = Field(
-        default=False,
+        default=True,
         validation_alias="MAILAGENT_MATTERS_ENABLED",
-        description="Matters workspace feature flag. Restart required after changing it.",
+        description=(
+            "Matters/事项工作台总闸（一级导航「事项」+ /api/matters/* + matter 工具家族）。"
+            "默认开（2026-08-12 owner 拍板：事项是核心功能，一级导航默认显示）；env 显式 false "
+            "= 应急回退 → 导航项不渲染、matters router 全 403、gateway matter 工具家族不注册。"
+            "🔴 与 MAILAGENT_MATTER_AGENT_ENABLED 是两件事：跟进 Agent（无人值守 + 有网络出口）"
+            "仍默认关，本 flag 翻默认不带它一起翻。Restart required after changing it."
+        ),
     )
     matter_agent_enabled: bool = Field(
         default=False,

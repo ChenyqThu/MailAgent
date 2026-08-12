@@ -13,6 +13,8 @@
 用正则匹配模式抽取默认值，不硬编码行号。
 """
 
+import re
+
 import pytest
 
 from . import _parsers as p
@@ -177,7 +179,9 @@ NODE_PYDANTIC_DUAL_CARRIER_FLAGS = {
     # env 键 → (pydantic 字段名, 两侧期望默认)
     # MCP connector 总闸：灰度未 cutover（ship-off → dogfood → cutover 另拍）。
     "MAILAGENT_MCP_CONNECTORS": ("mcp_connectors_enabled", False),
-    "MAILAGENT_MATTERS_ENABLED": ("matters_enabled", False),
+    # Matters 域总闸：**cutover 2026-08-12**（owner 拍板事项为核心功能，一级导航默认显示）。
+    # 🔴 只翻这一条，下面的跟进 Agent 保持 false（无人值守 + 有网络出口，未获默认开授权）。
+    "MAILAGENT_MATTERS_ENABLED": ("matters_enabled", True),
     # Matter 跟进 Agent 总闸（P4）：灰度未 cutover，两侧同为 false。
     "MAILAGENT_MATTER_AGENT_ENABLED": ("matter_agent_enabled", False),
     # 飞书 IM 总闸（08-01 阶段 2）：**cutover 2026-08-04**（owner dogfood 通过）。翻默认漏一侧
@@ -214,4 +218,89 @@ def test_dual_carrier_node_pydantic_defaults_match_expected():
         + "\n".join(f"  {d}" for d in drift)
         + "\n→ cutover（翻 true）就两侧一起翻，并同步改 NODE_PYDANTIC_DUAL_CARRIER_FLAGS 的"
         "期望值；只翻一侧会让 gateway 与 serve-api 割裂。"
+    )
+
+
+# =============================================================================
+# 上面两个用例只盯 ai_gateway_lifecycle.ts 这一个 Node 载体。同一个 env 键的默认值其实还能
+# 长在 main 进程别的模块、以及 renderer 的 Settings 开关里 —— 那两份不在任何闸下面。
+#
+# 🔴 实证（0812 matters cutover）：`MAILAGENT_MATTERS_ENABLED` 的默认值一共有**四份**手抄：
+#   ① src/config.py pydantic Field default          ← 上面的用例盯着
+#   ② ai_gateway_lifecycle.ts envBool               ← 上面的用例盯着
+#   ③ electron/main/matter_notifications.ts envBool ← 没人盯
+#   ④ settings/tabs/LabsTab.tsx 的 `values[KEY] ?? '<默认>'` ← 没人盯
+# ④ 漏改正是本轮修的真 bug（后端开着、Settings 开关渲染成关，还连带把依赖它的下一行误锁成
+# 「依赖未满足」）；③ 漏改则是「事项 UI 藏起来了、matter 通知照旧往桌面推」。两者都不报错。
+# =============================================================================
+
+# main 进程里除 lifecycle 外还读 envBool 的模块（新增一处就往这里加一行）。
+_EXTRA_NODE_ENVBOOL_SOURCES = [
+    p.REPO_ROOT / "frontend" / "src" / "electron" / "main" / "matter_notifications.ts",
+]
+
+LABS_TAB_TSX = (
+    p.REPO_ROOT / "frontend" / "src" / "shared" / "components" / "settings" / "tabs" / "LabsTab.tsx"
+)
+
+# LabsTab 的缺省渲染：`values['KEY'] ?? 'true'` / `?? ''`（`''` = 缺键按 off 渲染）。
+_LABS_FALLBACK_RE = re.compile(r"values\[\s*'([A-Z][A-Z0-9_]+)'\s*\]\s*\?\?\s*'([^']*)'")
+
+
+def _labs_tab_defaults() -> dict:
+    """LabsTab.tsx 每个 flag 行的**缺键渲染默认**（升级用户的 .env 里没有该键时开关显示什么）。
+
+    `?? ''` → False（isEnabled('') 为假）；`?? 'true'` → True。抽不到任何一条即解析器失效。
+    """
+    text = LABS_TAB_TSX.read_text(encoding="utf-8")
+    out = {}
+    for key, literal in _LABS_FALLBACK_RE.findall(text):
+        out[key] = literal.strip().lower() in ("1", "true")
+    assert out, f"{LABS_TAB_TSX.name}: 一条 `values['KEY'] ?? '…'` 都没抽到 —— 解析器需更新"
+    return out
+
+
+def test_every_node_and_renderer_copy_of_a_flag_default_agrees():
+    """同一个 env 键在 **lifecycle / main 其它模块 / LabsTab renderer** 里的默认值必须一致。
+
+    只对账「多处出现」的键 —— 只在一处出现的键没有镜像、不构成手抄。
+    """
+    _skip_if_lifecycle_absent()
+    lifecycle = p.parse_env_bool_defaults()
+    assert lifecycle, "ai_gateway_lifecycle.ts envBool 抽取为空 —— _ENV_BOOL_RE 坏了"
+
+    # 载体名 → {env 键: 默认}
+    carriers = {"ai_gateway_lifecycle.ts": lifecycle}
+    for src_path in _EXTRA_NODE_ENVBOOL_SOURCES:
+        if not src_path.exists():
+            continue
+        parsed = p.parse_env_bool_defaults(src=src_path.read_text(encoding="utf-8"))
+        assert parsed, (
+            f"canary: {src_path.name} 登记为 envBool 载体却一个都没抽到 —— 它改写法/搬家了，"
+            f"把它从 _EXTRA_NODE_ENVBOOL_SOURCES 移除或更新解析器，别让本闸静默失去这一侧"
+        )
+        carriers[src_path.name] = parsed
+    if LABS_TAB_TSX.exists():
+        carriers[LABS_TAB_TSX.name] = _labs_tab_defaults()
+
+    seen: dict = {}
+    for carrier_name, defaults in carriers.items():
+        for env_key, value in defaults.items():
+            seen.setdefault(env_key, []).append((carrier_name, value))
+
+    # canary：本仓当下确实存在跨载体的键，否则本用例就是在空转
+    multi = {k: v for k, v in seen.items() if len(v) > 1}
+    assert multi, "一个跨载体 flag 都没抽到 —— 解析器/路径漂了，本闸已失效（不是「没有镜像」）"
+
+    drift = [
+        f"{env_key}: " + " / ".join(f"{name}={value}" for name, value in copies)
+        for env_key, copies in sorted(multi.items())
+        if len({value for _, value in copies}) > 1
+    ]
+    assert not drift, (
+        "同一个 flag 的默认值在多个载体之间不一致（翻默认漏改一处）：\n"
+        + "\n".join(f"  {d}" for d in drift)
+        + "\n→ 翻默认必须把该键的**每一份**副本一起翻：pydantic Field default、"
+        "ai_gateway_lifecycle.ts 的 envBool、main 里其它 envBool 调用点、"
+        "以及 LabsTab.tsx 的 `values[KEY] ?? '…'`（漏最后一条 = 后端开着但设置开关谎报关闭）。"
     )
