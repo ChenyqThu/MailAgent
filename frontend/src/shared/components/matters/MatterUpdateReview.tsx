@@ -1,21 +1,22 @@
 import {
   Check,
+  CheckCircle2,
   Edit3,
   Layers,
   Link,
+  ListChecks,
   RefreshCcw,
   Shield,
   Sparkles,
+  SquarePen,
   TriangleAlert,
-  X
+  X,
+  Zap
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
-import {
-  MATTER_HEALTH_VALUES,
-  MATTER_STATUSES
-} from '@shared/api/types/matter'
+import { MATTER_HEALTH_VALUES, MATTER_STATUSES } from '@shared/api/types/matter'
 import type {
   Matter,
   MatterHealth,
@@ -24,12 +25,15 @@ import type {
   MatterUpdate
 } from '@shared/api/types/matter'
 
+// 逐项照设计原型 review.jsx 的 `CHANGE_KIND` 词表（icon + tone + label + hint 四件）。
+// 🔴 改动前三处不符：action/resource 的 tone 用了 ai（稿子是 info）、两条 hint 是空的、
+// 五项全都没有 icon；label/hint 还是**硬编码中文**，英文用户直接看到中文。
 const kindMeta = {
-  fact: ['事实', '有来源支撑，可直接记录', 'text-ok'],
-  inference: ['推断', 'Agent 的解释，需你判断', 'text-warn'],
-  field: ['字段变更', '会改写正式业务状态', 'text-fail'],
-  action: ['行动项', '', 'text-ai'],
-  resource: ['关联资料', '', 'text-ai']
+  fact: { icon: CheckCircle2, tone: 'text-ok' }, // checkcircle / success
+  inference: { icon: Zap, tone: 'text-warn' }, // zap / warn
+  field: { icon: SquarePen, tone: 'text-fail' }, // edit / critical
+  action: { icon: ListChecks, tone: 'text-info' }, // listcheck / info
+  resource: { icon: Link, tone: 'text-info' } // link / info
 } as const
 
 const statusTone: Record<MatterStatus, string> = {
@@ -78,9 +82,7 @@ export function MatterUpdateReview({
   onOpenResource
 }: MatterUpdateReviewProps): React.ReactElement {
   const { t } = useTranslation()
-  const [selected, setSelected] = useState(
-    () => new Set(update.changes.map((change) => change.id))
-  )
+  const [selected, setSelected] = useState(() => new Set(update.changes.map((change) => change.id)))
   const [editing, setEditing] = useState(false)
   const [summary, setSummary] = useState(update.summary ?? '')
   const [changes, setChanges] = useState(update.changes)
@@ -142,7 +144,10 @@ export function MatterUpdateReview({
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin">
           {error ? (
-            <div role="alert" className="mb-4 flex items-start gap-2 rounded-lg border border-fail/30 bg-fail/[0.07] p-3 text-aux text-fail">
+            <div
+              role="alert"
+              className="mb-4 flex items-start gap-2 rounded-lg border border-fail/30 bg-fail/[0.07] p-3 text-aux text-fail"
+            >
               <RefreshCcw size={14} className="mt-0.5 shrink-0" />
               <span>{error}</span>
             </div>
@@ -200,9 +205,7 @@ export function MatterUpdateReview({
             <button
               type="button"
               onClick={() =>
-                setSelected(
-                  allSelected ? new Set() : new Set(changes.map((change) => change.id))
-                )
+                setSelected(allSelected ? new Set() : new Set(changes.map((change) => change.id)))
               }
               className="text-aux text-ai"
             >
@@ -298,9 +301,7 @@ export function MatterUpdateReview({
           <button
             type="button"
             disabled={busy || selected.size === 0 || update.is_stale}
-            onClick={() =>
-              onAccept({ selectedIds: [...selected], editedSummary, editedChanges })
-            }
+            onClick={() => onAccept({ selectedIds: [...selected], editedSummary, editedChanges })}
             className="rounded-lg bg-ai px-3 py-2 text-aux font-medium text-white disabled:opacity-50"
           >
             {allSelected
@@ -341,13 +342,14 @@ function ChangeRow({
         <input type="checkbox" checked={selected} onChange={onToggle} className="mt-1" />
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2">
-            <span className={`rounded-full bg-ink-3 px-2 py-1 text-aux ${meta[2]}`}>
-              {meta[0]}
+            <span
+              className={`inline-flex items-center gap-1 rounded-full bg-ink-3 px-2 py-1 text-aux ${meta.tone}`}
+            >
+              <meta.icon size={11} />
+              {t(`matters.review.changeKind.${change.kind}.label`, { defaultValue: change.kind })}
             </span>
             {confidence != null ? (
-              <span className="text-aux text-ink-fg-3">
-                {Math.round(confidence * 100)}%
-              </span>
+              <span className="text-aux text-ink-fg-3">{Math.round(confidence * 100)}%</span>
             ) : null}
             {(change.sources?.length ?? 0) === 0 && change.kind !== 'field' ? (
               <span className="rounded-full bg-warn/10 px-2 py-1 text-aux text-warn">
@@ -355,7 +357,9 @@ function ChangeRow({
               </span>
             ) : null}
           </div>
-          <p className="mt-2 text-aux text-ink-fg-3">{meta[1]}</p>
+          <p className="mt-2 text-aux text-ink-fg-3">
+            {t(`matters.review.changeKind.${change.kind}.hint`, { defaultValue: '' })}
+          </p>
 
           {change.kind === 'field' ? (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-body">
@@ -424,9 +428,7 @@ function FieldValue({
     return <MatterHealthChip value={text as MatterHealth} />
   }
   return (
-    <span className={`rounded px-2 py-1 ${accent ? 'bg-ai/10 text-ai' : 'bg-ink-3'}`}>
-      {text}
-    </span>
+    <span className={`rounded px-2 py-1 ${accent ? 'bg-ai/10 text-ai' : 'bg-ink-3'}`}>{text}</span>
   )
 }
 
