@@ -164,10 +164,12 @@ def test_accept_already_reviewed_and_stale_paths(env):
 def test_stale_hook_marks_pending_and_accept_rejects_stale(env):
     service, pid, version, path = env
     update_id, _ = _insert_pending(service, pid)
-    # 任一 bump version 的写路径（这里用 patch title）都必须触发 stale 钩子
+    # 与提案目标**重叠**的写路径（CHANGES 里 chg_03 改 due_at，这里也改 due_at）
+    # 必须触发 stale 钩子。改无关字段不再触发 —— 见
+    # test_matter_proposal_scope.py::test_unrelated_field_write_keeps_proposal_acceptable。
     current = service.get_matter(pid)["matter"]["version"]
     service.patch_matter(
-        pid, {"title": "改标题"}, expected_version=current,
+        pid, {"due_at": 1_900_000}, expected_version=current,
         idempotency_key="patch-1", source="desktop_ui",
     )
     with sqlite3.connect(path) as conn:

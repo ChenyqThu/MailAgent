@@ -189,6 +189,145 @@ def test_list_all_sessions_with_email_join(chat_client: TestClient) -> None:
     assert s["message_count"] == 2
     assert s["email_subject"] == "Quarterly redis review"
     assert s["email_sender"] == "Alice"  # sender_name 优先于 sender
+    # matter 投影对非 matter 行恒 None（下面那个用例证明它对 matter 行不 None）。
+    assert s["matter_public_id"] is None
+    assert s["matter_title"] is None
+
+
+def test_list_all_sessions_projects_matter_identity(
+    ai_chat_db: Path, sync_store_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """0812 —— 事项对话收口进主 chat 后，历史下拉里的 matter 会话必须自带 MAT-xxxx。
+
+    anchor_id 是**内部** id，而事项的 REST 面（context-snapshot / chat-scope / undo）全按 public_id
+    寻址：不投影这两列，从历史里选中一个事项会话就只剩一个数字，既拿不到上下文也标不出身份。
+
+    🔴 同时钉住 anchor_type 判据：email 会话的 anchor_id 与 matter.id 是两个 id 空间，这里让它们
+    **故意撞号**（都是 4242）——只按 anchor_id 查表会把邮件会话贴上别人的 MAT-xxxx。
+    """
+    now = int(time.time() * 1000)
+    conn = sqlite3.connect(str(ai_chat_db))
+    conn.execute(
+        "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+        "backend_model, backend_agent_page_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (777, None, "matter", 4242, "ai-sdk", None, None, now, now),
+    )
+    conn.execute(
+        "INSERT INTO ai_chat_messages (id, session_id, role, content, status, created_at, "
+        "updated_at) VALUES (?,?,?,?,?,?,?)",
+        (7771, 777, "user", "这件事到哪了?", "complete", now, now),
+    )
+    conn.commit()
+    conn.close()
+
+    conn = sqlite3.connect(str(sync_store_db))
+    conn.execute("CREATE TABLE matter (id INTEGER PRIMARY KEY, public_id TEXT, title TEXT)")
+    conn.execute(
+        "INSERT INTO matter (id, public_id, title) VALUES (?,?,?)",
+        (4242, "MAT-0042", "Vendor launch"),
+    )
+    # 与上面那封邮件的 internal_id 撞号 —— 只按 anchor_id 查表就会误贴。
+    conn.execute(
+        "INSERT INTO matter (id, public_id, title) VALUES (?,?,?)",
+        (EMAIL_ID, "MAT-9999", "不该出现在邮件会话上"),
+    )
+    conn.commit()
+    conn.close()
+
+    chat_db = ChatDb(str(ai_chat_db))
+    monkeypatch.setattr("src.api.routers.chat.get_chat_db", lambda: chat_db)
+
+    class _StubConfig:
+        sync_store_db_path = str(sync_store_db)
+
+    monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _StubConfig())
+    with TestClient(app, raise_server_exceptions=False) as c:
+        data = c.get("/api/chat/sessions/all").json()["data"]
+    by_id = {row["id"]: row for row in data}
+    assert by_id[777]["matter_public_id"] == "MAT-0042"
+    assert by_id[777]["matter_title"] == "Vendor launch"
+    assert by_id[SESSION_ID]["matter_public_id"] is None
+
+
+def _seed_matter_session(
+    ai_chat_db: Path, sync_store_db: Path, *, with_matter_table: bool
+) -> None:
+    """777 = 一条 matter-anchored 会话（anchor_id=4242）。``with_matter_table=False`` 模拟
+    join 读不到（库里根本没有 matter 表 / 锁 / 被删）—— 那时两键必须是 None 而不是消失。"""
+    now = int(time.time() * 1000)
+    conn = sqlite3.connect(str(ai_chat_db))
+    conn.execute(
+        "INSERT INTO ai_chat_sessions (id, email_id, anchor_type, anchor_id, backend_kind, "
+        "backend_model, backend_agent_page_id, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?)",
+        (777, None, "matter", 4242, "ai-sdk", None, None, now, now),
+    )
+    conn.commit()
+    conn.close()
+    if not with_matter_table:
+        return
+    conn = sqlite3.connect(str(sync_store_db))
+    conn.execute("CREATE TABLE matter (id INTEGER PRIMARY KEY, public_id TEXT, title TEXT)")
+    conn.execute(
+        "INSERT INTO matter (id, public_id, title) VALUES (?,?,?)",
+        (4242, "MAT-0042", "Vendor launch"),
+    )
+    # 与那封邮件的 internal_id 撞号 —— 只按 anchor_id 查表就会把邮件会话误贴成事项会话。
+    conn.execute(
+        "INSERT INTO matter (id, public_id, title) VALUES (?,?,?)",
+        (EMAIL_ID, "MAT-9999", "不该出现在邮件会话上"),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _matter_client(
+    ai_chat_db: Path, sync_store_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> TestClient:
+    chat_db = ChatDb(str(ai_chat_db))
+    monkeypatch.setattr("src.api.routers.chat.get_chat_db", lambda: chat_db)
+
+    class _StubConfig:
+        sync_store_db_path = str(sync_store_db)
+
+    monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _StubConfig())
+    return TestClient(app, raise_server_exceptions=False)
+
+
+def test_get_session_projects_matter_identity(
+    ai_chat_db: Path, sync_store_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """🔴 codex #2 —— **单条** session 读也必须带 matter 投影。
+
+    ``/sessions/all`` 拿不到那行时（远程入口 / fullscreen 跳转 / 列表未含该行）前端会转而调
+    ``GET /sessions/{id}``。此前这条路由只返回 ``anchor_type='matter'`` + 内部 ``anchor_id``，
+    前端认不出 MAT- 编号 → 整场对话退化成"普通会话"：无事项 chip / 无检索范围 / 请求不带 matter
+    快照 ⇒ gateway 的 matterScopeFilter 变 null，用户以为在这件事里说话、模型却在全局跑。
+    """
+    _seed_matter_session(ai_chat_db, sync_store_db, with_matter_table=True)
+    with _matter_client(ai_chat_db, sync_store_db, monkeypatch) as c:
+        data = c.get("/api/chat/sessions/777").json()["data"]
+    assert data["anchor_type"] == "matter"
+    assert data["matter_public_id"] == "MAT-0042"
+    assert data["matter_title"] == "Vendor launch"
+
+
+def test_get_session_matter_projection_is_null_when_join_unavailable(
+    ai_chat_db: Path, sync_store_db: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """join 读不到时两键仍**在场**且为 None —— 读侧据此进入「上下文未就绪」而不是"普通会话"。"""
+    _seed_matter_session(ai_chat_db, sync_store_db, with_matter_table=False)
+    with _matter_client(ai_chat_db, sync_store_db, monkeypatch) as c:
+        data = c.get("/api/chat/sessions/777").json()["data"]
+    assert data["anchor_type"] == "matter"
+    assert data["matter_public_id"] is None
+    assert data["matter_title"] is None
+
+
+def test_get_session_non_matter_row_unchanged(chat_client: TestClient) -> None:
+    """非 matter 行不碰：email 会话的 anchor_id 与 matter.id 是两个 id 空间，投影不该介入。"""
+    data = chat_client.get(f"/api/chat/sessions/{SESSION_ID}").json()["data"]
+    assert data["anchor_type"] == "email"
+    assert "matter_public_id" not in data
 
 
 # ── messages ──────────────────────────────────────────────────────────────
@@ -431,7 +570,9 @@ def test_chat_config_connector_flag_projection(monkeypatch: pytest.MonkeyPatch) 
 def test_chat_config_skill_catalog_lists_every_builtin(
     monkeypatch: pytest.MonkeyPatch, fresh_agent_cfg
 ) -> None:
-    """阶段 0.5 —— skillCatalog 列出全部 6 个 code-owned builtin，字段是 prompt 需要的六个。"""
+    """阶段 0.5 —— skillCatalog 列出全部 code-owned builtin，字段是 prompt 需要的六个。
+    🔴 名单里也包含**关掉的** skill（matters 的 default_enabled 跟随 MAILAGENT_MATTERS_ENABLED，
+    测试环境为 off）—— 「关掉 ≠ 从名单消失」正是渐进披露的前提。"""
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         catalog = c.get("/api/chat/config").json()["data"]["skillCatalog"]
     assert {row["name"] for row in catalog} == {
@@ -440,9 +581,10 @@ def test_chat_config_skill_catalog_lists_every_builtin(
         "report",
         "calendar",
         "notion_agent",
-            "custom_agent",
-            "skill_creator",
-        }
+        "custom_agent",
+        "skill_creator",
+        "matters",
+    }
     assert set(catalog[0]) == {
         "name",
         "title",
@@ -606,6 +748,27 @@ def test_chat_config_custom_agent_fragment_follows_skill_toggle(
         data = c.get("/api/chat/config").json()["data"]
     assert "custom_agent" not in data["advertisedSkills"]
     assert data["trustedSkillFragments"] == ""
+
+
+def test_chat_config_matters_skill_fragment_reaches_system_prompt(
+    monkeypatch: pytest.MonkeyPatch, fresh_agent_cfg
+) -> None:
+    """0812 — 「挂一个事项跟进 skill」的真判据：它既要出现在 advertisedSkills，其 prompt_fragment
+    还得进 trustedSkillFragments（后者是白名单，漏加 = skill 挂了但一句话也没进 system prompt）。
+
+    显式 set_enabled 而不是靠 default —— default_enabled 跟随 MAILAGENT_MATTERS_ENABLED（测试环境
+    默认 off），这里要钉的是「advertised 之后 fragment 到底进不进 prompt」。"""
+    fresh_agent_cfg.set_enabled("matters", True)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert "matters" in data["advertisedSkills"]
+    assert "matter_find" in data["trustedSkillFragments"]
+
+    fresh_agent_cfg.set_enabled("matters", False)
+    with _config_client(monkeypatch, _ChatConfigStub()) as c:
+        data = c.get("/api/chat/config").json()["data"]
+    assert "matters" not in data["advertisedSkills"]
+    assert "matter_find" not in data["trustedSkillFragments"]
 
 
 def test_chat_config_skill_overrides_fail_closed(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -35,6 +35,15 @@ from .models import (
     normalize_tags,
     person_key_for_email,
 )
+from .proposal_scope import (
+    SCOPE_EVERYTHING,
+    SCOPE_NOTHING,
+    MatterWriteScope,
+    proposal_scope,
+    scope_from_items,
+    scope_from_matter_columns,
+    scope_from_resources,
+)
 from .repository import MatterRepository
 from .resource_identity import (
     EMAIL_PROVIDER,
@@ -52,6 +61,13 @@ from .url_fetch import (
     content_hash,
     describe_url_cache,
     fetch_readable_url,
+)
+from .event_changes import (
+    ITEM_CHANGE_FIELDS,
+    MATTER_CHANGE_FIELDS,
+    STAKEHOLDER_CHANGE_FIELDS,
+    build_changes,
+    truncated_text,
 )
 from .events import (
     AGENT_BINDING_CHANGED,
@@ -802,8 +818,19 @@ class MatterService:
                 )
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
+        # 绑定三键与其余字段分家（去重）：binding 字段只进 agent_binding_changed，
+        # 其余进 matter_updated —— 原来两条事件的 happened_at 与 fields 完全相同，
+        # UI 上就是两行在讲同一件事。纯 binding 的 patch 只写一条。
+        binding_fields = sorted(set(patch) & BINDING_PATCH_FIELDS)
+        plain_fields = sorted(set(patch) - BINDING_PATCH_FIELDS)
+        binding_only = bool(binding_fields) and not plain_fields
         with self.repository.transaction() as conn:
-            replay = self._replay(conn, dedupe_key, "matter_updated")
+            # 主事件（持 dedupe_key 那条）的 kind 随上面的分家而变；replay 两种都认
+            # —— 它们都只可能由 patch_matter 写出，"这把钥匙被另一种 mutation 用过"
+            # 的判据不该被这次形状调整误伤（也顺带兼容升级前写下的老 dedupe_key）。
+            replay = self._replay(
+                conn, dedupe_key, (MATTER_UPDATED, AGENT_BINDING_CHANGED)
+            )
             if replay:
                 return replay
             matter = self._require_matter(conn, public_id)
@@ -839,9 +866,9 @@ class MatterService:
                     field = "waiting_context_json"
                     value = self._dump(value) if value is not None else None
                 direct_changes[field] = value
-            binding = {
-                field: patch[field] for field in BINDING_PATCH_FIELDS if field in patch
-            }
+            # 单源：事件分家用的 binding_fields 与归一化喂的 binding 必须是同一个集合，
+            # 否则「哪些字段进哪条事件」会跟「哪些字段被归一化」悄悄劈叉。
+            binding = {field: patch[field] for field in binding_fields}
             binding_warnings: list[str] = []
             if binding:
                 binding_changes, binding_warnings = self._normalize_binding_patch(
@@ -900,39 +927,83 @@ class MatterService:
                     )
                 direct_changes["latest_accepted_update_id"] = update_id
             if not self._cas_update(
-                conn, matter["id"], expected_version, direct_changes
+                conn,
+                matter["id"],
+                expected_version,
+                direct_changes,
+                # 改 title/tags/description 这类提案碰不到的字段 → 不作废任何提案；
+                # 改 status/health/due_at/current_summary → 只作废也动这些字段的提案。
+                scope=scope_from_matter_columns(direct_changes),
             ):
                 raise self._version_conflict()
             self.refresh_search_projection(conn, matter["id"])
-            event_id = self._append_event(
-                conn,
-                matter_id=matter["id"],
-                kind=MATTER_UPDATED,
-                actor=actor,
-                source=source,
-                dedupe_key=dedupe_key,
-                reason=reason,
-                update_id=update_id,
-                payload={"fields": sorted(patch)},
-                happened_at=now,
-                reverses_event_id=reverses_event_id,
-            )
-            event_ids = [event_id]
-            if binding:
-                event_ids.append(
-                    self._append_event(
-                        conn,
-                        matter_id=matter["id"],
-                        kind=AGENT_BINDING_CHANGED,
-                        actor=actor,
-                        source=source,
-                        dedupe_key=f"{dedupe_key}:agent_binding",
-                        reason=reason,
-                        payload={"fields": sorted(binding)},
-                        happened_at=now,
-                    )
-                )
+            # 落库后的真身当 after 像：`matter` 与 `after` 都是 _matter_row 投影，
+            # 键空间与 patch 字段名 1:1（tags/goal_checks/waiting_context 已解析），
+            # 所以 from→to 直接按字段名对比即可，不必再手工映射 *_json 列。
             after = self.repository.get_matter_by_id(conn, matter["id"])
+            event_ids: list[int] = []
+            if binding_only:
+                # 纯 binding patch：只写一条，且由它持 dedupe_key（replay 的落点）。
+                event_id = self._append_event(
+                    conn,
+                    matter_id=matter["id"],
+                    kind=AGENT_BINDING_CHANGED,
+                    actor=actor,
+                    source=source,
+                    dedupe_key=dedupe_key,
+                    reason=reason,
+                    payload={
+                        "fields": binding_fields,
+                        "changes": build_changes(
+                            binding_fields, matter, after, allowed=MATTER_CHANGE_FIELDS
+                        ),
+                    },
+                    happened_at=now,
+                    reverses_event_id=reverses_event_id,
+                )
+                event_ids.append(event_id)
+            else:
+                event_id = self._append_event(
+                    conn,
+                    matter_id=matter["id"],
+                    kind=MATTER_UPDATED,
+                    actor=actor,
+                    source=source,
+                    dedupe_key=dedupe_key,
+                    reason=reason,
+                    update_id=update_id,
+                    payload={
+                        "fields": plain_fields,
+                        "changes": build_changes(
+                            plain_fields, matter, after, allowed=MATTER_CHANGE_FIELDS
+                        ),
+                    },
+                    happened_at=now,
+                    reverses_event_id=reverses_event_id,
+                )
+                event_ids.append(event_id)
+                if binding_fields:
+                    event_ids.append(
+                        self._append_event(
+                            conn,
+                            matter_id=matter["id"],
+                            kind=AGENT_BINDING_CHANGED,
+                            actor=actor,
+                            source=source,
+                            dedupe_key=f"{dedupe_key}:agent_binding",
+                            reason=reason,
+                            payload={
+                                "fields": binding_fields,
+                                "changes": build_changes(
+                                    binding_fields,
+                                    matter,
+                                    after,
+                                    allowed=MATTER_CHANGE_FIELDS,
+                                ),
+                            },
+                            happened_at=now,
+                        )
+                    )
             before_patch = {
                 field: matter.get(field)
                 for field in patch
@@ -1050,6 +1121,8 @@ class MatterService:
                 matter["id"],
                 expected_version,
                 {"updated_at": now, "last_activity_at": now},
+                # 新建 item：纯追加，没有任何既有对象被改 → 不作废任何提案。
+                scope=SCOPE_NOTHING,
             ):
                 raise self._version_conflict()
             item_id = self.repository.insert_item(
@@ -1077,7 +1150,8 @@ class MatterService:
                 dedupe_key=dedupe_key,
                 reason=reason,
                 item_id=item_id,
-                payload={"kind": kind},
+                # title = 句子必需的标识（"新增待解问题「…」"）；光有 item_id 写不出来。
+                payload={"kind": kind, "title": truncated_text(title)},
                 happened_at=now,
                 reverses_event_id=reverses_event_id,
             )
@@ -1181,11 +1255,14 @@ class MatterService:
                 matter["id"],
                 expected_version,
                 {"updated_at": now, "last_activity_at": now},
+                # 只有 target 落在这条 item 上的提案才失效。
+                scope=scope_from_items([item_id]),
             ):
                 raise self._version_conflict()
             if not self.repository.update_item(conn, matter["id"], item_id, changes):
                 raise MatterError("E_CHILD_NOT_FOUND", f"item {item_id} not found")
             self.refresh_search_projection(conn, matter["id"])
+            item_after = self.repository.get_item(conn, matter["id"], item_id)
             event_id = self._append_event(
                 conn,
                 matter_id=matter["id"],
@@ -1195,7 +1272,17 @@ class MatterService:
                 dedupe_key=dedupe_key,
                 reason=reason,
                 item_id=item_id,
-                payload={"fields": sorted(patch)},
+                payload={
+                    "fields": sorted(patch),
+                    # 标识（句子必需）+ 值级前后像。delete/restore 的 patch 只有
+                    # deleted_at，不在 ITEM_CHANGE_FIELDS 里 → changes 为空数组，
+                    # 由事件 kind 自己叙述。
+                    "kind": kind,
+                    "title": truncated_text((item_after or item).get("title")),
+                    "changes": build_changes(
+                        patch, item, item_after, allowed=ITEM_CHANGE_FIELDS
+                    ),
+                },
                 happened_at=now,
                 reverses_event_id=reverses_event_id,
             )
@@ -1235,7 +1322,7 @@ class MatterService:
             return self._mutation(
                 after,
                 [event_id],
-                item=self.repository.get_item(conn, matter["id"], item_id),
+                item=item_after,
                 undo=self._undo_descriptor(
                     "matter_item_mutate",
                     "撤销条目变更",
@@ -1435,7 +1522,12 @@ class MatterService:
                 result["warnings"] = list(dict.fromkeys(warnings))
                 return result
             if not self._cas_update(
-                conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}
+                conn,
+                matter["id"],
+                expected_version,
+                {"updated_at": now, "last_activity_at": now},
+                # 新关联的 resource：提案不可能已经引用它（propose 时它还没 link）。
+                scope=scope_from_resources([int(resource["id"]) for resource, _ in pending]),
             ):
                 raise self._version_conflict()
             event_ids = []
@@ -1458,7 +1550,14 @@ class MatterService:
                     event_ids.append(self._append_event(
                         conn, matter_id=matter["id"], kind=RESOURCE_LINKED, actor=actor,
                         source=source, dedupe_key=event_key, reason=reason,
-                        resource_id=resource["id"], payload={"link_id": link_id}, happened_at=now,
+                        resource_id=resource["id"],
+                        payload={
+                            "link_id": link_id,
+                            # 资料名 + 类型 = 句子必需的标识（"关联了邮件《…》"）。
+                            "title": truncated_text(resource.get("title")),
+                            "resource_kind": resource.get("kind"),
+                        },
+                        happened_at=now,
                         reverses_event_id=reverses_event_id,
                     ))
                 link = self.repository.get_resource_link(conn, matter["id"], resource["id"], live_only=True)
@@ -1556,12 +1655,25 @@ class MatterService:
                     event_kind = RESOURCE_SUGGESTION_ACCEPTED
                 else:
                     event_kind = "resource_updated"
-            if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+            if not self._cas_update(
+                conn,
+                matter["id"],
+                expected_version,
+                {"updated_at": now, "last_activity_at": now},
+                # 「接受/拒绝资料建议」「置顶」「订阅」都只动这一条 link —— owner 连点 12 次
+                # 接受资料建议就把待审提案作废，正是这里没收窄导致的。
+                scope=scope_from_resources([resource_id]),
+            ):
                 raise self._version_conflict()
             event_id = self._append_event(
                 conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
                 dedupe_key=dedupe_key, reason=reason, resource_id=resource_id,
-                payload={"fields": sorted(patch)}, happened_at=now,
+                payload={
+                    "fields": sorted(patch),
+                    "title": truncated_text(resource.get("title")),
+                    "resource_kind": resource.get("kind"),
+                },
+                happened_at=now,
                 reverses_event_id=reverses_event_id,
             )
             after = self.repository.get_matter_by_id(conn, matter["id"])
@@ -1627,6 +1739,7 @@ class MatterService:
             if not self._cas_update(
                 conn, matter["id"], expected_version,
                 {"updated_at": now, "last_activity_at": now},
+                scope=scope_from_resources([resource_id]),
             ):
                 raise self._version_conflict()
             conn.execute(
@@ -1647,7 +1760,12 @@ class MatterService:
                 conn, matter_id=matter["id"], kind=RESOURCE_SUGGESTION_REJECTED,
                 actor=actor, source=source, dedupe_key=dedupe_key, reason=reason,
                 resource_id=resource_id,
-                payload={"link_id": link["id"], "evidence_fingerprint": fingerprint},
+                payload={
+                    "link_id": link["id"],
+                    "evidence_fingerprint": fingerprint,
+                    "title": truncated_text(resource.get("title")),
+                    "resource_kind": resource.get("kind"),
+                },
                 happened_at=now, reverses_event_id=reverses_event_id,
             )
             after = self.repository.get_matter_by_id(conn, matter["id"])
@@ -1751,7 +1869,12 @@ class MatterService:
                         actor=Actor(kind="agent"), source="matter_followup",
                         dedupe_key=event_key, reason=candidate["reason"],
                         resource_id=resource["id"],
-                        payload={"link_id": link_id, "suggested": True, "evidence_fingerprint": fingerprint},
+                        payload={
+                            "link_id": link_id, "suggested": True,
+                            "evidence_fingerprint": fingerprint,
+                            "title": truncated_text(resource.get("title")),
+                            "resource_kind": resource.get("kind"),
+                        },
                         happened_at=now,
                     ))
                 linked.append({
@@ -1766,6 +1889,10 @@ class MatterService:
                 if not self._cas_update(
                     conn, matter["id"], int(matter["version"]),
                     {"updated_at": now, "last_activity_at": now},
+                    # 新发现的资料建议：只碰这些 link，不改任何既有业务字段。
+                    scope=scope_from_resources(
+                        [int(entry["resource"]["id"]) for entry in linked]
+                    ),
                 ):
                     raise self._version_conflict()
             return {
@@ -1794,13 +1921,25 @@ class MatterService:
             link = self.repository.get_resource_link(conn, matter["id"], resource_id)
             if not link or (deleted and link["deleted_at"] is not None) or (not deleted and link["deleted_at"] is None):
                 raise MatterError("E_CHILD_NOT_FOUND", f"resource link {resource_id} not found")
-            if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
+            resource = self.repository.get_resource(conn, resource_id) or {}
+            if not self._cas_update(
+                conn,
+                matter["id"],
+                expected_version,
+                {"updated_at": now, "last_activity_at": now},
+                scope=scope_from_resources([resource_id]),
+            ):
                 raise self._version_conflict()
             conn.execute("UPDATE matter_resource SET deleted_at=?, updated_at=? WHERE id=?", (now if deleted else None, now, link["id"]))
             event_id = self._append_event(
                 conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
                 dedupe_key=dedupe_key, reason=reason, resource_id=resource_id,
-                payload={"link_id": link["id"]}, happened_at=now,
+                payload={
+                    "link_id": link["id"],
+                    "title": truncated_text(resource.get("title")),
+                    "resource_kind": resource.get("kind"),
+                },
+                happened_at=now,
                 reverses_event_id=reverses_event_id,
             )
             after = self.repository.get_matter_by_id(conn, matter["id"])
@@ -1857,11 +1996,12 @@ class MatterService:
             if replay:
                 return replay
             matter = self._require_matter(conn, public_id)
-            existing = None
+            existing: dict[str, Any] | None = None
             if stakeholder_id is not None:
-                existing = conn.execute("SELECT * FROM matter_stakeholder WHERE id=? AND matter_id=?", (stakeholder_id, matter["id"])).fetchone()
-                if not existing:
+                row = conn.execute("SELECT * FROM matter_stakeholder WHERE id=? AND matter_id=?", (stakeholder_id, matter["id"])).fetchone()
+                if not row:
                     raise MatterError("E_CHILD_NOT_FOUND", f"stakeholder {stakeholder_id} not found")
+                existing = dict(row)
             email = self._optional_text(data.get("email_normalized", data.get("email")))
             if email:
                 email = email.lower()
@@ -1903,12 +2043,21 @@ class MatterService:
             if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
                 raise self._version_conflict()
             self.refresh_search_projection(conn, matter["id"])
+            stakeholder = dict(conn.execute("SELECT * FROM matter_stakeholder WHERE id=?", (stakeholder_id,)).fetchone())
             event_id = self._append_event(
                 conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
-                dedupe_key=dedupe_key, reason=reason, payload={"stakeholder_id": stakeholder_id}, happened_at=now,
+                dedupe_key=dedupe_key, reason=reason,
+                payload={
+                    "stakeholder_id": stakeholder_id,
+                    # 名字 = 句子必需的标识；裸 stakeholder_id 写不出"把张三标成在等他"。
+                    "display_name": truncated_text(stakeholder.get("display_name")),
+                    "changes": build_changes(
+                        data, existing, stakeholder, allowed=STAKEHOLDER_CHANGE_FIELDS
+                    ),
+                },
+                happened_at=now,
                 reverses_event_id=reverses_event_id,
             )
-            stakeholder = dict(conn.execute("SELECT * FROM matter_stakeholder WHERE id=?", (stakeholder_id,)).fetchone())
             after = self.repository.get_matter_by_id(conn, matter["id"])
             if event_kind == "stakeholder_added":
                 reverse_input = {"public_id": public_id, "operation": "delete", "stakeholder_id": stakeholder_id}
@@ -2001,7 +2150,12 @@ class MatterService:
             event_id = self._append_event(
                 conn, matter_id=source_matter["id"], kind=RELATION_ADDED, actor=actor,
                 source=mutation["source"], dedupe_key=dedupe_key, reason=mutation.get("reason"),
-                payload={"relation_id": relation_id, "target_public_id": target["public_id"]}, happened_at=now,
+                payload={
+                    "relation_id": relation_id,
+                    "target_public_id": target["public_id"],
+                    "target_title": truncated_text(target.get("title")),
+                },
+                happened_at=now,
                 reverses_event_id=mutation.get("reverses_event_id"),
             )
             after = self.repository.get_matter_by_id(conn, source_matter["id"])
@@ -2169,9 +2323,12 @@ class MatterService:
                     "E_UPDATE_ALREADY_REVIEWED",
                     f"update is already {update['review_status']}",
                 )
-            if bool(update["is_stale"]) or int(update["anchored_matter_version"]) != int(
-                matter["version"]
-            ):
+            # 🔴 判据只认物化的 `is_stale`（由 `_mark_stale_proposals` 按目标集重叠写下）。
+            # 这里原本还叠了一条 `anchored_matter_version != matter.version` —— 那是"版本号
+            # 前进即作废"的另一副面孔：不删掉它，收窄就不生效（无关写入照样把版本号推前，
+            # 提案照样被拒）。`expected_version` 的乐观并发保护是另一套（下面 E_VERSION_CONFLICT），
+            # 不受影响。
+            if bool(update["is_stale"]):
                 raise MatterError(
                     "E_UPDATE_STALE",
                     "proposal anchor is stale",
@@ -2412,7 +2569,12 @@ class MatterService:
                 source=source,
             )
             if not self._cas_update(
-                conn, matter["id"], expected_version, {"updated_at": now}
+                conn,
+                matter["id"],
+                expected_version,
+                {"updated_at": now},
+                # 拒绝一份提案不写任何业务状态 —— 不该顺带作废并排等审的另一份。
+                scope=SCOPE_NOTHING,
             ):
                 raise self._version_conflict()
             event_id = self._append_event(
@@ -2479,8 +2641,25 @@ class MatterService:
                 raise MatterError(
                     "E_INVALID_ARG", f"change {change_id}: field not allowed: {field}"
                 )
+            # 接受提案落下来的字段变更也要能写成句子（"状态 进行中 → 等待中"）。
+            # 前像取 `matter`（进 accept 事务时的快照）—— 同一次 accept 里两条 change 撞同
+            # 一个字段是罕见的边角，那时两条事件的 from 都指向接受前的状态，语义仍然自洽。
             applied_events.append(
-                ("matter_updated", {"fields": [field], "via_update_id": update_id}, None, None)
+                (
+                    "matter_updated",
+                    {
+                        "fields": [field],
+                        "via_update_id": update_id,
+                        "changes": build_changes(
+                            [field],
+                            matter,
+                            {field: direct_changes.get(field)},
+                            allowed=MATTER_CHANGE_FIELDS,
+                        ),
+                    },
+                    None,
+                    None,
+                )
             )
             return
         if kind == "action":
@@ -2511,7 +2690,11 @@ class MatterService:
                 applied_events.append(
                     (
                         "item_created",
-                        {"kind": "action", "via_update_id": update_id},
+                        {
+                            "kind": "action",
+                            "via_update_id": update_id,
+                            "title": truncated_text(title),
+                        },
                         item_id,
                         None,
                     )
@@ -2560,12 +2743,20 @@ class MatterService:
                 return
             item_patch["updated_at"] = now
             self.repository.update_item(conn, matter["id"], int(item_id), item_patch)
+            patched_fields = sorted(k for k in item_patch if k != "updated_at")
             applied_events.append(
                 (
                     "item_updated",
                     {
-                        "fields": sorted(k for k in item_patch if k != "updated_at"),
+                        "fields": patched_fields,
                         "via_update_id": update_id,
+                        "kind": item.get("kind"),
+                        "title": truncated_text(
+                            item_patch.get("title", item.get("title"))
+                        ),
+                        "changes": build_changes(
+                            patched_fields, item, item_patch, allowed=ITEM_CHANGE_FIELDS
+                        ),
                     },
                     int(item_id),
                     None,
@@ -2590,10 +2781,16 @@ class MatterService:
                 "updated_at=? WHERE id=?",
                 (now, now, link["id"]),
             )
+            resource = self.repository.get_resource(conn, int(resource_id)) or {}
             applied_events.append(
                 (
                     "resource_updated",
-                    {"via_update_id": update_id, "confirmed": True},
+                    {
+                        "via_update_id": update_id,
+                        "confirmed": True,
+                        "title": truncated_text(resource.get("title")),
+                        "resource_kind": resource.get("kind"),
+                    },
                     None,
                     int(resource_id),
                 )
@@ -2703,27 +2900,60 @@ class MatterService:
         matter_id: int,
         expected_version: int,
         changes: Mapping[str, Any],
+        *,
+        scope: MatterWriteScope | None = None,
     ) -> bool:
         """cas_update_matter 的**唯一** service 出口：bump 成功即触发 stale 钩子（D9）。
 
-        所有 bump version 的写路径都必须走这里 —— pending 提案的锚随之失效
-        （is_stale 物化，幂等 UPDATE），accept 对 stale 行硬拒 E_UPDATE_STALE。
+        所有 bump version 的写路径都必须走这里 —— 与本次写入**目标有重叠**的 pending 提案
+        随之失效（is_stale 物化，幂等 UPDATE），accept 对 stale 行硬拒 E_UPDATE_STALE。
+
+        `scope` = 本次写入实际触及的对象集（matter 字段 / item id / resource id）。
+        🔴 缺省 `None` 是 **fail-closed**：调用方没声明触及了什么 ⇒ 当作触及一切 ⇒ 照旧作废
+        全部 pending 提案。收窄是逐个调用点显式声明出来的，不是默认得来的。
         """
         ok = self.repository.cas_update_matter(conn, matter_id, expected_version, changes)
         if ok:
-            self._mark_stale_proposals(conn, matter_id, int(expected_version) + 1)
+            self._mark_stale_proposals(
+                conn,
+                matter_id,
+                int(expected_version) + 1,
+                scope if scope is not None else SCOPE_EVERYTHING,
+            )
         return ok
 
     def _mark_stale_proposals(
-        self, conn: sqlite3.Connection, matter_id: int, new_version: int
+        self,
+        conn: sqlite3.Connection,
+        matter_id: int,
+        new_version: int,
+        scope: MatterWriteScope,
     ) -> None:
-        conn.execute(
-            "UPDATE matter_update SET is_stale=1, stale_at=?, "
-            "stale_reason='matter_version_advanced' "
+        """把与本次写入**目标有重叠**的 pending 提案标 stale。
+
+        判据是「证据变了」而不是「版本号前进了」：owner 在评审期间点 12 次「接受资料建议」+
+        4 次改标签，不该把正等着他审的那份提案作废掉。反过来，任何推导不出目标的情况
+        （`scope.wildcard` / 提案 changes_json 形状认不出）都按重叠处理 —— 见
+        `proposal_scope` 模块的 fail-closed 纪律。
+        """
+        candidates = conn.execute(
+            "SELECT id, changes_json FROM matter_update "
             "WHERE matter_id=? AND review_status='pending' AND is_stale=0 "
             "AND anchored_matter_version < ?",
-            (self.clock_ms(), matter_id, new_version),
-        )
+            (matter_id, new_version),
+        ).fetchall()
+        if not candidates:
+            return
+        now = self.clock_ms()
+        for row in candidates:
+            touched = proposal_scope(row["changes_json"])
+            if not scope.overlaps(touched):
+                continue
+            conn.execute(
+                "UPDATE matter_update SET is_stale=1, stale_at=?, "
+                "stale_reason='matter_version_advanced' WHERE id=?",
+                (now, int(row["id"])),
+            )
 
     def _resolve_source_resource(self, conn: sqlite3.Connection, source_spec: Any) -> dict[str, Any]:
         if not isinstance(source_spec, Mapping) or source_spec.get("provider") != EMAIL_PROVIDER or source_spec.get("kind") != "email":
@@ -3117,8 +3347,9 @@ class MatterService:
         event_ids: list[int] = []
         for row in changed_rows:
             matter_id = int(row["id"])
+            # 重命名/删除标签只改 tags_json —— 提案结构上碰不到标签，不作废任何提案。
             self._mark_stale_proposals(
-                conn, matter_id, int(row.get("version") or 0) + 1
+                conn, matter_id, int(row.get("version") or 0) + 1, SCOPE_NOTHING
             )
             self.refresh_search_projection(conn, matter_id)
             event_ids.append(
@@ -3208,14 +3439,17 @@ class MatterService:
         self,
         conn: sqlite3.Connection,
         dedupe_key: str,
-        expected_kind: str,
+        expected_kind: str | tuple[str, ...],
         *,
         include_item: bool = False,
     ) -> dict[str, Any] | None:
         event = self.repository.find_event(conn, dedupe_key)
         if not event:
             return None
-        if event["kind"] != expected_kind:
+        expected = (
+            (expected_kind,) if isinstance(expected_kind, str) else tuple(expected_kind)
+        )
+        if event["kind"] not in expected:
             raise MatterError(
                 "E_IDEMPOTENCY_CONFLICT",
                 "idempotency key was used for another mutation",
@@ -3327,7 +3561,19 @@ class MatterService:
 
     @staticmethod
     def _dump(value: Any) -> str:
-        return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+        # 🔴 `allow_nan=False` 是最终防线：Python 默认会把 NaN/Infinity 输出成**非标准**
+        # JSON 字面量，本仓所有 *_json 列都带 `CHECK (json_valid(...))` ⇒ 写库当场失败，
+        # 而此时业务更新往往已经做完 ⇒ **整笔事务回滚**，对外表现成 500 而不是参数错误。
+        # 非有限浮点会从 `waiting_context` / `checklist` / 提案 change 的 `after` 这些
+        # `dict[str, Any]` 口子进来（JSON 解析器默认就认这三个字面量）。
+        try:
+            return json.dumps(
+                value, ensure_ascii=False, separators=(",", ":"), allow_nan=False
+            )
+        except ValueError as exc:
+            raise MatterError(
+                "E_INVALID_ARG", f"value is not JSON serializable: {exc}"
+            ) from exc
 
     @staticmethod
     def _dedupe(idempotency_key: str) -> str:

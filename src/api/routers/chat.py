@@ -40,6 +40,11 @@ router = APIRouter(prefix="/api/chat", tags=["chat"])
 
 logger = logging.getLogger(__name__)
 
+# code-owned builtin skill 里，其 ``prompt_fragment`` 允许进 gateway system prompt 的白名单
+# （``/chat/config.trustedSkillFragments``）。安装态第三方 skill 的 fragment 永不进这里 —— 那是
+# 恒注入的可信面。加名字前先问：这段文字该不该对**每一轮**对话说话。
+TRUSTED_PROMPT_FRAGMENT_SKILLS = frozenset({"custom_agent", "matters"})
+
 
 def _session_scope(request: Request, requested_agent_id: Optional[str]) -> Optional[str]:
     current = (request.headers.get("X-MailAgent-Agent-Id") or "").strip()
@@ -138,6 +143,41 @@ def _email_meta_for_sessions(
     return meta
 
 
+def _matter_meta_for_sessions(
+    matter_ids: List[int], sync_db_path: str
+) -> Dict[int, Dict[str, Any]]:
+    """批量取 matter-anchored session 的 public_id/title（join sync_store.db matter）。
+
+    ``anchor_id`` 是 matter 的**内部** id，而事项的所有 REST 面（context-snapshot / chat-scope /
+    undo）都按 ``MAT-xxxx`` 寻址 —— 不带上 public_id，前端从历史里选中一个事项会话时就只剩一个数字，
+    既拿不到上下文也标不出身份（收口进主 chat 前这条路由根本不存在，因为事项对话是另一套面板）。
+
+    形状与 ``_email_meta_for_sessions`` 逐条对齐（同库、同 best-effort：库缺 / 表缺 / 锁 → 空 map，
+    端点降级成 nulls 而不是 500）。
+    """
+    if not matter_ids:
+        return {}
+    if not os.path.exists(sync_db_path):
+        return {}
+    meta: Dict[int, Dict[str, Any]] = {}
+    try:
+        conn = sqlite3.connect(sync_db_path, timeout=5.0)
+        conn.row_factory = sqlite3.Row
+        try:
+            placeholders = ",".join("?" * len(matter_ids))
+            rows = conn.execute(
+                f"SELECT id, public_id, title FROM matter WHERE id IN ({placeholders})",
+                matter_ids,
+            ).fetchall()
+            for r in rows:
+                meta[r["id"]] = {"public_id": r["public_id"], "title": r["title"]}
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        pass
+    return meta
+
+
 # 注意路由顺序：静态 /sessions/all 在动态 /sessions/{id}/messages 之前声明。后者 {session_id:int}
 # 约束已能挡住 "all"（非 int 不匹配），此处顺序仅为可读性 + 双保险。
 
@@ -179,11 +219,36 @@ async def list_all_sessions(
         if email_ids
         else {}
     )
+    # matter-anchored 会话的身份（public_id/title）：同一份 sync_store.db，同样只在真有这类行时才连库。
+    matter_ids = list(
+        {
+            s.get("anchor_id")
+            for s in summaries
+            if s.get("anchor_type") == "matter" and s.get("anchor_id") is not None
+        }
+    )
+    matter_meta = (
+        _matter_meta_for_sessions(matter_ids, get_settings().sync_store_db_path)
+        if matter_ids
+        else {}
+    )
+    def _matter_fields(summary: Dict[str, Any]) -> Dict[str, Any]:
+        # 🔴 判据带上 anchor_type：email 会话的 anchor_id 与 matter.id 活在两个 id 空间里，只按
+        # anchor_id 查表会把一封邮件的会话贴上别人的 MAT-xxxx。
+        if summary.get("anchor_type") != "matter":
+            return {"matter_public_id": None, "matter_title": None}
+        row = matter_meta.get(summary.get("anchor_id"), {})
+        return {
+            "matter_public_id": row.get("public_id"),
+            "matter_title": row.get("title"),
+        }
+
     items = [
         {
             **s,
             "email_subject": meta.get(s["email_id"], {}).get("subject"),
             "email_sender": meta.get(s["email_id"], {}).get("sender"),
+            **_matter_fields(s),
         }
         for s in summaries
     ]
@@ -538,15 +603,18 @@ async def chat_config(request: Request):
         advertised_skills = advertised_skill_names(
             build_manifest(None).skills, get_agent_config_store()
         )
-        # W6: only the code-owned Custom Agent builder workflow is prompt-injected. Installed
-        # third-party fragments remain excluded from the post-cutover gateway prompt. Reusing the
-        # advertised-skill result makes the Settings toggle authoritative for both visibility and
-        # workflow guidance; an empty string means the trusted skill is deliberately disabled.
+        # W6: only CODE-OWNED workflow skills are prompt-injected. Installed third-party fragments
+        # remain excluded from the post-cutover gateway prompt. Reusing the advertised-skill result
+        # makes the Settings toggle authoritative for both visibility and workflow guidance; an
+        # empty string means every trusted skill is deliberately disabled.
+        # 🔴 白名单是**集合**，不是再串一个 `or`：这里每加一个名字都是在扩大恒注入 prompt 的可信面，
+        #    集合让「有哪些」一眼可数（漏改这里 = 新 builtin 的 prompt_fragment 进不了 system prompt，
+        #    skill 挂了等于白挂）。
         advertised_set = set(advertised_skills)
         trusted_skill_fragments = "\n\n".join(
             skill.prompt_fragment.strip()
             for skill in code_builtin_skills()
-            if skill.name == "custom_agent"
+            if skill.name in TRUSTED_PROMPT_FRAGMENT_SKILLS
             and skill.name in advertised_set
             and skill.prompt_fragment.strip()
         )
@@ -811,8 +879,32 @@ async def new_session(request: Request, body: Optional[Dict[str, Any]] = None):
 
 @router.get("/sessions/{session_id:int}", dependencies=[Depends(verify_cf_access)])
 async def get_session(request: Request, session_id: int):
-    """单 session 行。镜像 chat_db getSession → ChatSession | null（data=null 当不存在，不 404）。"""
+    """单 session 行。镜像 chat_db getSession → ChatSession | null（data=null 当不存在，不 404）。
+
+    🔴 matter-anchored 行同样投影 ``matter_public_id`` / ``matter_title``（与 ``/sessions/all``
+    共用 ``_matter_meta_for_sessions``，不写第二份 join）。少了它，凡是走这条单行读的入口
+    （远程 / fullscreen 跳转 / ``/sessions/all`` 暂时不含该行）拿到的事项会话就只剩一个内部
+    ``anchor_id``，前端认不出身份 → 退化成"普通会话"：没有事项 chip、没有检索范围、没有缺口卡，
+    且请求不带 matter 快照 ⇒ gateway 的 ``matterScopeFilter`` 变成 null，用户以为在这件事里说话，
+    模型却在全局范围跑。
+    """
     session = get_chat_db().get_session(session_id)
+    if isinstance(session, dict) and session.get("anchor_type") == "matter":
+        anchor_id = session.get("anchor_id")
+        row = (
+            _matter_meta_for_sessions(
+                [anchor_id], get_settings().sync_store_db_path
+            ).get(anchor_id, {})
+            if isinstance(anchor_id, int)
+            else {}
+        )
+        # join 读不到（库缺 / 表缺 / 锁）→ 两键为 None。读侧据此进入「上下文未就绪」，
+        # 而**不是**当成普通会话 —— 「缺元数据」与「不是事项」绝不能是同一个值。
+        session = {
+            **session,
+            "matter_public_id": row.get("public_id"),
+            "matter_title": row.get("title"),
+        }
     return success_envelope(session, request=request, source="sqlite")
 
 

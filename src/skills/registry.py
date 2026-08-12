@@ -72,6 +72,7 @@ def code_builtin_skills() -> tuple[BoundSkill, ...]:
         calendar,
         custom_agent,
         email,
+        matters,
         notion_agent,
         report,
         search,
@@ -86,6 +87,7 @@ def code_builtin_skills() -> tuple[BoundSkill, ...]:
         notion_agent.build_skill(),
         custom_agent.build_skill(),
         skill_creator.build_skill(),
+        matters.build_skill(),
     )
 
 
