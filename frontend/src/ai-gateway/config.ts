@@ -22,7 +22,7 @@ import type {
 } from './tools/types'
 // 🔴 type-only — same erasure discipline. The runtime policy functions live in tools/policy.ts
 // (pure, type-only `ai` import) and are consumed by chatRun/tools, never here.
-import type { AgentContextMode, AgentRunContext } from './tools/policy'
+import type { AgentContextMode, AgentRunContext, MatterRunWebFace } from './tools/policy'
 // 🔴 type-only imports — fully erased (same discipline as GatewayToolAuditEntry above), so the
 // AG-UI mirror types never pull the `ai` chunk into the main bundle when the gateway is off.
 import type { ToolApprovalRequestPayload } from './agui/interruptMapper'
@@ -257,6 +257,17 @@ export interface AiGatewayConfig {
     | Promise<GatewayToolApprovalPrefs | null>
     | GatewayToolApprovalPrefs
     | null
+  /** 0812 dogfood — hot-read the owner's web tier for Matter follow-up runs (owner_settings
+   *  `matter_run_web_face` via GET /api/agent/matter-web-face). Called by runHeadlessAgent ONCE
+   *  per run and ONLY when the pulled spec carries a Matter anchor (every other run, manual or
+   *  headless, never touches it). The Electron wrapper implements it as a short-TTL-cached fetch
+   *  CONTRACTED to resolve 'keep' on any failure — 🔴 fail-SAFE, not fail-closed: this governs
+   *  what an UNATTENDED run may read from the web, so a transient loopback/DB error must not
+   *  silently amputate a capability the owner deliberately left on (they would never see it).
+   *  agentRun.ts guards with its own try/catch + literal narrowing anyway. Omitted (harness/test
+   *  cfgs) → the default tier applies and the run context keeps its pre-dogfood shape,
+   *  byte-identical. */
+  resolveMatterRunWebFace?: () => Promise<MatterRunWebFace> | MatterRunWebFace
   /** Phase 04a — apply a UI edit to a pending edit-tier approval (POST /api/ai/approval/resolve).
    *  The Electron wrapper implements this as `approvalGuard.applyEdit(toolCallId, editedFields)`:
    *  it overlays the editable fields onto the original input (identity pinned) so the next

@@ -1,20 +1,29 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Loader2, RotateCcw, Shield, Sparkles, X } from 'lucide-react'
+import { Loader2, RotateCcw, Sparkles, X } from 'lucide-react'
 
+import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
+import { MatterPromptAssembly } from './MatterPromptAssembly'
+import { MatterToolFacePanel } from './MatterToolFacePanel'
 import { MATTER_GLOBAL_AGENT_DOC_KEY, useMatterGlobalAgentDoc } from './useMatterGlobalAgentDoc'
 
 /**
- * 全局 Matter Agent 配置（P6-B D3/D17）—— **只做 prompt**。
+ * 全局 Matter Agent 配置（P6-B D3/D17；0812 dogfood Lane C 扩成三块）。
  *
- * 设计稿还画了「8 个可用工具勾选」与「授权级别三档」，两者都**刻意不做**：在本仓架构里
- * 它们是服务端强制的（固定工具 allowlist、不下发任何 grant 键、policy 只放行读 + artifact），
- * 做成 UI 开关后用户勾上「对外发送邮件」也不会生效 —— 那就是又造一个说谎的界面。
- * 所以这里改为**如实陈述**这两条由系统固定。
+ * owner 原话：「该显示的默认 system prompt（不可改部分和可改部分）都没显示出来，工具那块
+ * 也是」。所以本弹窗现在自上而下是三块：
+ *   1. `MatterPromptAssembly` —— 每轮 prompt 由哪几段拼成、你改的是哪一段（只读）；
+ *   2. 任务契约编辑框 —— **唯一可改的那一段**（库里空 = 跟随代码默认，见下）；
+ *   3. `MatterToolFacePanel` —— 工具面逐项列出 + 唯一可改的网页三档。
+ *
+ * 设计稿画的「8 个可用工具勾选」仍**不做**：那 30 件工具是服务端按 CLASS 强制推导的
+ * （matter_followup 矩阵行 + wrap 腰带），勾选框勾不掉也勾不上 —— 画出来就是假开关。
+ * 改为「列出来 + 标明哪些固定」。真正可配的只有网页那一档（owner_settings
+ * `matter_run_web_face`，服务端确实读它），它就做成真开关。
  *
  * 「恢复默认」= 把内容清空（后端据此回落代码里的任务契约），不是把当前默认文本写进库 ——
  * 这样以后默认文案升级，没自定义过的用户能跟着走。
@@ -45,7 +54,7 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
 
   const save = useMutation({
     mutationFn: async (content: string): Promise<void> => {
-      const response = await fetch(`/api/agent/profile/docs/${DOC_NAME}`, {
+      const response = await fetch(`${resolveApiBaseUrl()}/agent/profile/docs/${DOC_NAME}`, {
         method: 'POST',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },
@@ -83,7 +92,10 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          <div className="flex items-center justify-between gap-2">
+          {/* 🔴 先说清「你改的是哪一段」：下面那个框只是每轮 prompt 的第一段。 */}
+          <MatterPromptAssembly />
+
+          <div className="mt-4 flex items-center justify-between gap-2">
             <label className="text-meta font-medium text-ink-fg-2" htmlFor="matter-global-prompt">
               {t('matters.globalAgent.promptLabel')}
             </label>
@@ -101,6 +113,13 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
               </span>
             ) : null}
           </div>
+          {doc.isError ? (
+            /* 🔴 失败必须说出来，且不能让保存键继续可点——读失败时 draft 是一份空草稿，
+               点保存会把它当"新内容"覆盖用户可能已有的自定义文本，是数据损坏路径。 */
+            <p className="mt-2 text-meta leading-5 text-warn">
+              {t('matters.globalAgent.loadFailed')}
+            </p>
+          ) : null}
           {doc.isLoading ? (
             <div className="mt-2 flex items-center gap-2 text-meta text-ink-fg-2">
               <Loader2 size={13} className="animate-spin" />
@@ -118,17 +137,10 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
           )}
           <p className="mt-2 text-meta text-ink-fg-2">{t('matters.globalAgent.promptHint')}</p>
 
-          {/* D3 末条：工具面与授权级别由系统固定、事项级不能提权 —— 如实陈述，
-              而不是画一排永远不生效的 disabled 勾选框。 */}
-          <div className="mt-4 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2/50 p-3">
-            <p className="flex items-center gap-1.5 text-meta font-medium text-ink-fg-1">
-              <Shield size={13} className="text-ok" />
-              {t('matters.globalAgent.fixedTitle')}
-            </p>
-            <p className="mt-1.5 text-meta leading-relaxed text-ink-fg-2">
-              {t('matters.globalAgent.fixedBody')}
-            </p>
-          </div>
+          {/* 0812 dogfood：工具面从一段散文换成**逐项列出**的清单（含唯一可改的网页三档）。
+              清单本身在零依赖叶子 `@shared/lib/matterToolFace`，与 gateway 真实 ToolSet
+              有双向闸；固定项仍不画 disabled 勾选框（那是永远不生效的假开关）。 */}
+          <MatterToolFacePanel />
         </div>
 
         <footer className="flex items-center justify-between gap-3 border-t border-ink-border px-5 py-3">
@@ -150,7 +162,7 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
             </button>
             <button
               type="button"
-              disabled={save.isPending || doc.isLoading}
+              disabled={save.isPending || doc.isLoading || doc.isError}
               /* 与默认逐字相同 ⇒ 存空串回到"跟随默认"，而不是把这份快照冻进库里
                  （否则以后默认文案升级，这个用户永远停在今天这版）。 */
               onClick={() => save.mutate(isDefault ? '' : draft)}

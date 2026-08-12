@@ -1700,6 +1700,15 @@ export class MailAgentDomainClient {
     return this._req<{ mode: string }>('GET', '/agent/auto-compact', { signal })
   }
 
+  /** 0812 dogfood GET /agent/matter-web-face → the owner's web tier for Matter follow-up runs
+   *  ({mode: 'keep'|'search_only'|'off'}; serve-api reads dirty/missing rows as 'keep'). Consulted
+   *  by the lifecycle's resolveMatterRunWebFace (short-TTL cache + bounded timeout; any failure →
+   *  'keep', fail-SAFE). Read-only from the gateway: the tier is an owner UI action
+   *  (verify_cf_access PUT) — no gateway tool can reach it (policy_rules 同款纪律). */
+  getMatterRunWebFace(signal?: AbortSignal): Promise<{ mode: string }> {
+    return this._req<{ mode: string }>('GET', '/agent/matter-web-face', { signal })
+  }
+
   /** 08-05 WP-11 — GET /agent/tool-prefs → the per-tool approval tiers of every built-in write
    *  tool (factory default + explicit override + folded effective) + the send recipient
    *  whitelist. Consulted by the lifecycle's resolveToolApprovalPrefs (short-TTL cache; any

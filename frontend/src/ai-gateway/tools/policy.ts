@@ -496,6 +496,38 @@ export interface AgentRunContext {
     publicId: string
     runId: number
   }
+  /** 0812 dogfood — the owner-configured web tier of THIS follow-up run, resolved ONCE by
+   *  runHeadlessAgent (owner_settings `matter_run_web_face` via the lifecycle's TTL-cached hot
+   *  read) and consumed ONLY by wrapCfgForAgentRun's matter belt (matterRunAdmitsWeb). It rides
+   *  the run context — rather than being re-read at wrap time — for the same reason the grants
+   *  do: the approval stash FREEZES this object, so an island resume rebuilds the exact same
+   *  face and a mid-run setting change can never widen a paused run.
+   *  🔴 NOT a policy input (the matrix row keys on the MODE alone) and NOT set by
+   *  agentRunContextFromSpec: absent means "use MATTER_RUN_WEB_FACE_DEFAULT", so every context
+   *  built without a resolver (tests, manual entrypoints, non-matter runs) stays byte-identical. */
+  matterWebFace?: MatterRunWebFace
+}
+
+/** 0812 dogfood — the three tiers of a Matter follow-up run's web tool face. Declared as a
+ *  RUNTIME array (type derived from it) rather than a bare literal union so the two narrowing
+ *  sites — agentRun's resolver funnel and the lifecycle's wire read — share ONE vocabulary
+ *  instead of each hand-copying the three literals. The belt that interprets a tier lives in
+ *  agentRun.ts (matterRunAdmitsWeb); the Python value domain that persists it is
+ *  `MATTER_RUN_WEB_FACES` in src/api/routers/agent.py — that ONE cross-language copy is what
+ *  tests/config/test_matter_web_face_parity.py pins. */
+export const MATTER_RUN_WEB_FACES = ['keep', 'search_only', 'off'] as const
+export type MatterRunWebFace = (typeof MATTER_RUN_WEB_FACES)[number]
+
+/** Narrow an untrusted value (an owner-setting wire string, an injected resolver's return) to a
+ *  tier; anything else → null and the CALLER picks the fallback. Mirrors parseWebGrant's
+ *  discipline — one narrowing funnel, never a literal chain per call site — but deliberately
+ *  returns null instead of collapsing to a tier: unlike a grant, the safe fallback here is the
+ *  DEFAULT ('keep'), and that decision belongs at the call site where the 🔴 fail-safe rationale
+ *  is written, not buried in a parser. */
+export function parseMatterRunWebFace(value: unknown): MatterRunWebFace | null {
+  return (MATTER_RUN_WEB_FACES as readonly unknown[]).includes(value)
+    ? (value as MatterRunWebFace)
+    : null
 }
 
 /** Stage 2 PR-1 (grill Q19=A) — VENUE-level switches of the im_chat row. 🔴 NOT grants: the

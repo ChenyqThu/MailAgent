@@ -1,4 +1,9 @@
 // Labs 收编纪律：只收默认 OFF 的灰度 flag；cutover 默认 ON 后从此处撤条目。
+//
+// 🔴 一处**有意的例外**（0812）：`MAILAGENT_MATTERS_ENABLED` 已 cutover 默认 ON，但**仍留在
+// 这里** —— 它没有第二个关它的界面（IM_FEISHU 之类 cutover 后能撤，是因为设置里另有专属区）。
+// 照字面执行「cutover 后撤条目」会把唯一的应急回退开关删掉。撤之前先给它一个正式落点。
+// 例外的代价：它是本页唯一缺省渲染为 on 的行（见下方 `?? 'true'`）。
 
 import * as React from 'react'
 import { useTranslation } from 'react-i18next'
@@ -126,7 +131,10 @@ export function LabsTab(): React.ReactElement {
   const skillCatalog = isEnabled(values['MAILAGENT_SKILL_CATALOG_PROMPT'] ?? '')
   const memoryLayers = isEnabled(values['MAILAGENT_MEMORY_LAYERS'] ?? '')
   const agUiMirror = isEnabled(values['MAILAGENT_AG_UI_MIRROR'] ?? '')
-  const matters = isEnabled(values['MAILAGENT_MATTERS_ENABLED'] ?? '')
+  // 🔴 唯一一个**默认 on** 的 Labs flag（cutover 2026-08-12：事项为核心功能）。其余五行的
+  // `?? ''`（缺键 ⇒ off）在这里会撒谎：升级用户的 .env 里根本没有这个键，后端已经开着，开关却
+  // 渲染成关 —— 连带把下面的跟进 Agent 行也误锁成 dependencyUnmet。缺省值必须跟着 pydantic 走。
+  const matters = isEnabled(values['MAILAGENT_MATTERS_ENABLED'] ?? 'true')
   const matterAgent = isEnabled(values['MAILAGENT_MATTER_AGENT_ENABLED'] ?? '')
   const connectorRuntime = runtimeFlags.connectorToolsEnabled
   // 跟进 Agent 只在「事项」开着时有意义（后端 worker 的 schedule 段与 gateway venue 都叠这两个

@@ -52,7 +52,11 @@ import {
   NORMAL_APPROVAL_TTL_MS
 } from '../../ai-gateway/security/approval'
 import { ApprovalRunStash, DEFAULT_STASH_TTL_MS } from '../../ai-gateway/approvalStash'
-import { classOfTool } from '../../ai-gateway/tools/policy'
+import {
+  classOfTool,
+  parseMatterRunWebFace,
+  type MatterRunWebFace
+} from '../../ai-gateway/tools/policy'
 import { ActiveRunRegistry } from '../../ai-gateway/activeRuns'
 import { extractApprovalStashInput } from '../../ai-gateway/chatRun'
 import { runQueuedInputDispatch } from '../../ai-gateway/queuedInputDispatch'
@@ -565,7 +569,14 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // vite define (mirrors the openness flags). Explicit false → buildGatewayTools output
   // byte-identical to the pre-epic set.
   const calendarToolsEnabled = envBool('MAILAGENT_CALENDAR_AGENT_TOOLS', true)
-  const matterToolsEnabled = envBool('MAILAGENT_MATTERS_ENABLED', false)
+  // Matters MVP — MAILAGENT_MATTERS_ENABLED gates the whole matter tool family. Default ON
+  // (cutover 2026-08-12: owner ruled 事项 is a core feature and its nav entry ships visible); an
+  // explicit env false is the emergency rollback → the family is never registered, byte-identical
+  // to the pre-Matters set. main-env-only, NO vite define (mirrors the other tool-family flags).
+  // 🔴 Double carrier: the Python serve-api reads the SAME env via pydantic (matters_enabled — the
+  // /api/matters/* gate + the /chat/config projection the nav reads); both defaults MUST stay true
+  // together (tests/config/test_flag_cross_language.py).
+  const matterToolsEnabled = envBool('MAILAGENT_MATTERS_ENABLED', true)
   // Matters MVP P4 (D11) — MAILAGENT_MATTER_AGENT_ENABLED gates the follow-up RUN venue: with it
   // off, POST /api/ai/agent-run rejects a spec stamped runKind='matter_followup' (403 E_DISABLED,
   // fail-closed) so no run ever starts. Default OFF (ship-off → dogfood → cutover 另拍, the island
@@ -699,6 +710,36 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       value = false
     }
     _autoCompactSettingCache = { at: now, value }
+    return value
+  }
+
+  // 0812 dogfood — the owner's web tier for Matter follow-up runs. Same shape as the two
+  // resolvers above (short TTL so a Settings change lands within seconds without a per-run
+  // loopback storm + bounded timeout), with ONE deliberate difference: it is fail-SAFE, not
+  // fail-closed. 🔴 A transient loopback/DB error resolving to 'off' would silently strip an
+  // unattended run's web reads with nothing in the UI to show for it; resolving to 'keep' (the
+  // documented default, also what serve-api returns for a missing/dirty row) at worst keeps a
+  // capability the owner left on. An owner who wants web off gets it from the NEXT successful
+  // read — and turning it off is not a containment action taken under attack, it is a preference.
+  const MATTER_WEB_FACE_TTL_MS = 3_000
+  let _matterWebFaceCache: { at: number; value: MatterRunWebFace } | null = null
+  const resolveMatterRunWebFace = async (): Promise<MatterRunWebFace> => {
+    const now = Date.now()
+    if (_matterWebFaceCache && now - _matterWebFaceCache.at < MATTER_WEB_FACE_TTL_MS) {
+      return _matterWebFaceCache.value
+    }
+    let value: MatterRunWebFace = 'keep'
+    try {
+      const r = await domain.getMatterRunWebFace(AbortSignal.timeout(2_000))
+      value = parseMatterRunWebFace(r.mode) ?? 'keep'
+    } catch (err) {
+      console.warn(
+        '[ai-gateway] matter web face setting unavailable — follow-up runs keep the default tier',
+        err
+      )
+      value = 'keep' // fail-safe
+    }
+    _matterWebFaceCache = { at: now, value }
     return value
   }
 
@@ -940,6 +981,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // 08-05 WP-11 — the per-tool approval tiers resolver (short-TTL cached, fail-closed null =
     // ask semantics). prepareChatRun consults it per MANUAL run only.
     resolveToolApprovalPrefs,
+    // 0812 dogfood — the Matter follow-up web tier resolver (short-TTL cached, fail-SAFE 'keep';
+    // see its construction above). runHeadlessAgent consults it per MATTER run only.
+    resolveMatterRunWebFace,
     // 07-01 — M2 per-query recall (retrieveMemory → /chat/memory/search) is retired. The bounded
     // memory.md is now injected into the cacheable stable prefix via /chat/config.memorySummary
     // (getSystemPromptConfig above already carries it, on a 15s TTL — NOT frozen per session), so

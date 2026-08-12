@@ -38,10 +38,12 @@ import {
   MATTER_RUN_PROPOSE_TOOL,
   normalizeContextMode,
   parseConnectorGrants,
+  parseMatterRunWebFace,
   parseWebGrant,
   type AgentContextMode,
   type AgentRunContext,
-  type GatewayToolClass
+  type GatewayToolClass,
+  type MatterRunWebFace
 } from './tools/policy'
 // RELATIVE import (pure TS, zero imports — safe for the tsx harness): the ONE naming source for
 // connector tools, used below to exempt them from the allowedTools intersection by NAME (their
@@ -203,23 +205,50 @@ function matterRunFromSpec(spec: AgentRunSpec): AgentRunContext['matterRun'] {
 
 /** 🔴 0812 codex修复批 — the SINGLE decision point for web tools in a Matter follow-up run
  *  (owner 拍板 pending on codex's 🔴 “grantWeb:'open' 是无审批的数据外传通道”). The wrap belt
- *  below consults ONLY this constant, and the final ToolSet is the intersection of both belts —
- *  so flipping this one value implements any of the three candidate outcomes without touching
- *  the matrix (policy.ts) or the Python spec assembler:
+ *  below consults ONLY this tier, and the final ToolSet is the intersection of both belts —
+ *  so the tier alone implements any of the three candidate outcomes without touching the matrix
+ *  (policy.ts) or the Python spec assembler:
  *    'keep'        — status quo: the matrix's grant-gated web pair (web_search + web_fetch)
  *                    survives the belt;
  *    'search_only' — the belt keeps web_search and drops web_fetch (the URL-encoding exfil
  *                    channel) even when the matrix admitted both;
  *    'off'         — the belt drops the whole web class regardless of the spec's grantWeb.
- */
-export const MATTER_RUN_WEB_FACE: 'keep' | 'off' | 'search_only' = 'keep'
+ *
+ *  🔴 0812 dogfood — this is no longer a compile-time constant: owner configures it in Settings
+ *  (owner_settings `matter_run_web_face`, GET/PUT /api/agent/matter-web-face), the lifecycle
+ *  hot-reads it on a short TTL, and runHeadlessAgent freezes the resolved tier onto the run
+ *  context (ctx.matterWebFace). The constant below survives ONLY as the DEFAULT — the value used
+ *  when nothing resolved a tier (no resolver injected: every test/harness cfg and every
+ *  pre-dogfood call site) and the fail-safe when the read throws. 🔴 fail-safe is 'keep', NOT
+ *  'off': a transient DB/loopback error must not silently amputate an unattended run's ability
+ *  to check the web — the owner would never see it happen. */
+export const MATTER_RUN_WEB_FACE_DEFAULT: MatterRunWebFace = 'keep'
 
-/** The wrap belt's web verdict for a matter run — see MATTER_RUN_WEB_FACE. */
-function matterRunAdmitsWeb(name: string, cls: GatewayToolClass): boolean {
+/** The wrap belt's web verdict for a matter run — see MATTER_RUN_WEB_FACE_DEFAULT. */
+function matterRunAdmitsWeb(name: string, cls: GatewayToolClass, face: MatterRunWebFace): boolean {
   if (cls !== 'web') return false
-  if (MATTER_RUN_WEB_FACE === 'off') return false
-  if (MATTER_RUN_WEB_FACE === 'search_only') return name === 'web_search'
+  if (face === 'off') return false
+  if (face === 'search_only') return name === 'web_search'
   return true
+}
+
+/** Resolve THIS run's web tier from the injected owner-setting reader. Returns undefined when no
+ *  resolver is wired (tests / harness cfgs) so the run context keeps its pre-dogfood shape and the
+ *  belt falls back to MATTER_RUN_WEB_FACE_DEFAULT — i.e. `keep` behaviour stays byte-identical.
+ *  Any failure OR any junk value resolves to the default (fail-safe 'keep', see above). */
+async function resolveMatterRunWebFace(
+  cfg: AiGatewayConfig
+): Promise<MatterRunWebFace | undefined> {
+  if (!cfg.resolveMatterRunWebFace) return undefined
+  try {
+    return parseMatterRunWebFace(await cfg.resolveMatterRunWebFace()) ?? MATTER_RUN_WEB_FACE_DEFAULT
+  } catch (err) {
+    console.warn(
+      '[ai-gateway] matter web face unavailable — follow-up run keeps the default web tier',
+      err
+    )
+    return MATTER_RUN_WEB_FACE_DEFAULT
+  }
 }
 
 /**
@@ -295,7 +324,7 @@ export function wrapCfgForAgentRun(
     // allowedTools:['report_write'] handed the run a local write tool, i.e. the two belts were
     // NOT independent. Now a matter run's belt admits ONLY: class 'read' (connector reads
     // included — their runtime-registered class is 'read'), the one artifact propose channel BY
-    // NAME, and the web class under the MATTER_RUN_WEB_FACE single point. It never consults
+    // NAME, and the web class under the matterWebFace single point. It never consults
     // `keep`, never exempts exec/mcp/plan_update by name (plan_update is class 'read' anyway),
     // so a broken matrix row can no longer flow through — the independence is pinned by the
     // “mutation #2” tests in agent_run.test.ts. A tool MISSING from the class map fail-closes to
@@ -304,11 +333,19 @@ export function wrapCfgForAgentRun(
     buildTools: (collector, approvalMode, mode) => {
       const built = cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}
       const matterReadFace = ctx.matterRun != null
+      // The tier was resolved ONCE at run start and frozen onto the context (so a pause→resume
+      // rebuild reads the same value the fresh spawn did). Absent → the default, which is what
+      // every pre-dogfood context carries.
+      const webFace = ctx.matterWebFace ?? MATTER_RUN_WEB_FACE_DEFAULT
       const out: ToolSet = {}
       for (const [name, t] of Object.entries(built)) {
         const cls = classOfTool(name)
         if (matterReadFace) {
-          if (cls === 'read' || name === MATTER_RUN_PROPOSE_TOOL || matterRunAdmitsWeb(name, cls))
+          if (
+            cls === 'read' ||
+            name === MATTER_RUN_PROPOSE_TOOL ||
+            matterRunAdmitsWeb(name, cls, webFace)
+          )
             out[name] = t
           continue
         }
@@ -421,7 +458,15 @@ export async function runHeadlessAgent(
   // wrapCfgForAgentRun is the SHARED wrapper the island resume also rebuilds through, so a
   // pause→resume chain keeps the exact same tool face. Both fresh and resumed drains use chatRun's
   // internal 10k termination sentinel; the worker's run-seconds abort remains the actual budget.
-  const agentRunContext = agentRunContextFromSpec(spec, opts.jobId)
+  const specContext = agentRunContextFromSpec(spec, opts.jobId)
+  // 0812 dogfood — the owner's web tier is read ONCE here, and ONLY for a run that actually
+  // carries a Matter anchor (every other run does zero work → byte-identical). The resolved tier
+  // is frozen onto the context so (a) the wrap belt below and (b) an island resume rebuilding
+  // from the stashed context see the SAME value — a Settings change mid-run can never widen a
+  // paused run's face. No resolver wired → undefined → the context keeps its pre-dogfood shape.
+  const webFace = specContext.matterRun != null ? await resolveMatterRunWebFace(cfg) : undefined
+  const agentRunContext: AgentRunContext =
+    webFace !== undefined ? { ...specContext, matterWebFace: webFace } : specContext
   const cfg2 = wrapCfgForAgentRun(
     cfg,
     agentRunContext,

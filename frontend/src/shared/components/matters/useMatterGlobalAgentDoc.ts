@@ -1,5 +1,7 @@
 import { useQuery, type UseQueryResult } from '@tanstack/react-query'
 
+import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
+
 /**
  * 全局 Matter Agent 任务契约（`agent_config.db` 的 `matter_agent` 文档）的读单源。
  *
@@ -24,7 +26,7 @@ export function useMatterGlobalAgentDoc(): UseQueryResult<MatterGlobalAgentDoc> 
   return useQuery({
     queryKey: MATTER_GLOBAL_AGENT_DOC_KEY,
     queryFn: async (): Promise<MatterGlobalAgentDoc> => {
-      const response = await fetch(`/api/agent/profile/docs/${DOC_NAME}`, {
+      const response = await fetch(`${resolveApiBaseUrl()}/agent/profile/docs/${DOC_NAME}`, {
         credentials: 'include'
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)

@@ -47,7 +47,9 @@ import type { AgentRunSpec } from '../../src/shared/api/types'
 import {
   registerRuntimeToolClass,
   resetRuntimeToolClasses,
-  type AgentContextMode
+  type AgentContextMode,
+  type AgentRunContext,
+  type MatterRunWebFace
 } from '../../src/ai-gateway/tools/policy'
 import { tool, type ToolSet } from 'ai'
 import { z } from 'zod'
@@ -2143,6 +2145,164 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
       new AbortController().signal
     )
     expect(seenTools[0].filter((n) => n.startsWith('mcp__'))).toEqual([])
+  })
+
+  // ── 0812 dogfood — the web tier is an owner SETTING, not a compile-time constant ────────────
+  //
+  // 🔴 `keep` must stay byte-identical to the pre-setting behaviour, and that is pinned by
+  // REUSING EXPECTED_MATTER_FACE: the DoD test above asserts that exact list with NO resolver
+  // wired (the default path), and the first test below asserts the SAME list with the tier
+  // explicitly resolved to 'keep'. The two tiers that reduce derive their expectation from that
+  // one list too, so they can only ever differ from it by the web names.
+
+  function webFaceCfg(
+    seenTools: string[][],
+    resolveMatterRunWebFace: AiGatewayConfig['resolveMatterRunWebFace']
+  ): AiGatewayConfig {
+    return { ...fullFlagCfg(seenTools), resolveMatterRunWebFace }
+  }
+
+  test("tier 'keep' → the face is IDENTICAL to the no-resolver default (both web tools survive)", async () => {
+    const seenTools: string[][] = []
+    await runHeadlessAgent(
+      webFaceCfg(seenTools, () => 'keep'),
+      { jobId: 7, spec: makeMatterSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].sort()).toEqual(EXPECTED_MATTER_FACE)
+  })
+
+  test("tier 'search_only' drops web_fetch (the URL-encoding exfil channel) and keeps web_search", async () => {
+    const seenTools: string[][] = []
+    await runHeadlessAgent(
+      webFaceCfg(seenTools, async () => 'search_only'),
+      { jobId: 7, spec: makeMatterSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].sort()).toEqual(EXPECTED_MATTER_FACE.filter((n) => n !== 'web_fetch'))
+  })
+
+  test("tier 'off' drops the whole web class — the spec's grantWeb:'open' is not the last word", async () => {
+    const seenTools: string[][] = []
+    await runHeadlessAgent(
+      webFaceCfg(seenTools, () => 'off'),
+      { jobId: 7, spec: makeMatterSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].sort()).toEqual(
+      EXPECTED_MATTER_FACE.filter((n) => n !== 'web_fetch' && n !== 'web_search')
+    )
+    // a targeted drop, not a face collapse
+    expect(seenTools[0]).toContain('matter_update_propose')
+    expect(seenTools[0]).toContain('email_list_filter')
+  })
+
+  test('a THROWING resolver fails SAFE to keep — a transient read error never amputates an unattended run', async () => {
+    const seenTools: string[][] = []
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await runHeadlessAgent(
+      webFaceCfg(seenTools, () => {
+        throw new Error('serve-api unreachable')
+      }),
+      { jobId: 7, spec: makeMatterSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].sort()).toEqual(EXPECTED_MATTER_FACE)
+    warn.mockRestore()
+  })
+
+  test('a junk tier value resolves to the default (keep), never to the narrowest', async () => {
+    const seenTools: string[][] = []
+    await runHeadlessAgent(
+      webFaceCfg(seenTools, () => 'sure' as unknown as MatterRunWebFace),
+      { jobId: 7, spec: makeMatterSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].sort()).toEqual(EXPECTED_MATTER_FACE)
+  })
+
+  test('the resolver is consulted ONCE per matter run and NEVER for a non-matter run', async () => {
+    const resolver = vi.fn(() => 'off' as MatterRunWebFace)
+    await runHeadlessAgent(
+      webFaceCfg([], resolver),
+      { jobId: 7, spec: makeMatterSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(resolver).toHaveBeenCalledTimes(1)
+    resolver.mockClear()
+    // a plain cron spec carries no Matter anchor → zero work, byte-identical to pre-dogfood
+    await runHeadlessAgent(
+      webFaceCfg([], resolver),
+      { jobId: 8, spec: makeSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(resolver).not.toHaveBeenCalled()
+  })
+
+  test('the resolved tier is FROZEN onto the run context (what the approval stash freezes)', async () => {
+    const seenCtx: AgentRunContext[] = []
+    function ctxCapturingCfg(
+      resolveMatterRunWebFace?: AiGatewayConfig['resolveMatterRunWebFace']
+    ): AiGatewayConfig {
+      return {
+        port: 0,
+        baseUrl: 'https://crs.example/api',
+        apiKey: 'sk-test',
+        model: 'claude-sonnet-4-6',
+        createModel: () => captureToolsModel([]),
+        buildTools: (_collector, _am, _mode, agentRunContext) => {
+          if (agentRunContext) seenCtx.push(agentRunContext)
+          return {}
+        },
+        persistTurn: () => {},
+        resolveMatterRunWebFace
+      }
+    }
+    await runHeadlessAgent(
+      ctxCapturingCfg(() => 'search_only'),
+      { jobId: 7, spec: makeMatterSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenCtx[0].matterWebFace).toBe('search_only')
+    // …and without a resolver the context keeps its pre-dogfood SHAPE (the key is absent, not
+    // 'keep' — every stash-freeze / context-equality assertion in this file stays valid).
+    seenCtx.length = 0
+    await runHeadlessAgent(
+      ctxCapturingCfg(),
+      { jobId: 7, spec: makeMatterSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect('matterWebFace' in seenCtx[0]).toBe(false)
+  })
+
+  test('resume path: the wrapper ALONE honours the frozen tier (an island resume cannot widen it)', () => {
+    const donor = tool({ description: 'd', inputSchema: z.object({}), execute: async () => ({}) })
+    const base: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      buildTools: () => ({
+        email_list_filter: donor,
+        matter_update_propose: donor,
+        web_search: donor,
+        web_fetch: donor
+      })
+    }
+    // approvalResume rebuilds through wrapCfgForAgentRun with the STASHED context — the tier
+    // rides that object, so the resumed drain reproduces the paused run's face exactly.
+    const wrapped = wrapCfgForAgentRun(base, {
+      agentId: 'matter:MAT-000042',
+      allowedTools: [],
+      modeGrants: { web: 'open' },
+      matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 },
+      matterWebFace: 'search_only'
+    })
+    expect(Object.keys(wrapped.buildTools!([], undefined, 'matter_followup')).sort()).toEqual([
+      'email_list_filter',
+      'matter_update_propose',
+      'web_search'
+    ])
   })
 })
 

@@ -82,7 +82,7 @@ function handleSseEvent(payload: unknown): void {
 }
 
 export function registerMatterNotifications(): () => void {
-  if (!envBool('MAILAGENT_MATTERS_ENABLED', false)) return () => undefined
+  if (!envBool('MAILAGENT_MATTERS_ENABLED', true)) return () => undefined
   return onSseEvent(handleSseEvent)
 }
 
