@@ -79,6 +79,8 @@ export interface DomainEmailListOpts {
    *  drafts into "my mail" (the UI's /list-enriched already defaults to excluding them); an
    *  explicit mailbox (incl. 草稿箱) never sets it. undefined → param omitted → server default. */
   excludeDrafts?: boolean
+  /** 🔴 0812 —— no gateway caller sets it any more (both Matter narrowings retired); kept as the
+   *  typed mirror of the `matter_id` query param the Python endpoint still serves. */
   matterId?: number
 }
 
@@ -89,6 +91,7 @@ export interface DomainSearchOpts {
   since?: string
   until?: string
   limit?: number
+  /** 🔴 0812 —— see DomainEmailListOpts.matterId: wire capability, currently no gateway producer. */
   matterId?: number
 }
 
@@ -1019,11 +1022,12 @@ export class MailAgentDomainClient {
   /** email_get — single email metadata. GET /email/{id}?include=attachments.
    *  E_NOT_FOUND → null (mirrors httpApi.email.get).
    *
-   *  P4 (D5) — `matterScope` (internal int matter id) is the SERVER-side membership guard of a
-   *  matter_followup run: when present the endpoint verifies internal_id ∈ that Matter's
-   *  access_policy='allowed' resource set and 403s E_MATTER_SCOPE otherwise. Only the matter-run
-   *  context passes it (tools/index.ts) — the manual matterScopeFilter deliberately does NOT
-   *  (G5: manual scoping stays a list/search-side filter, P3 semantics byte-identical). */
+   *  `matterScope` (internal int matter id) is the SERVER-side membership guard: when present the
+   *  endpoint verifies internal_id ∈ that Matter's access_policy='allowed' resource set and 403s
+   *  E_MATTER_SCOPE otherwise. 🔴 0812 owner拍板 —— NO gateway caller passes it any more (the
+   *  follow-up run's anchor narrowing and the manual 事项对话 检索范围 toggle were both retired,
+   *  see tools/email.ts). Kept as the typed mirror of a query param the Python endpoint still
+   *  serves and still tests; it is a wire capability, not tool plumbing. */
   async getEmail(
     internalId: number,
     signal?: AbortSignal,

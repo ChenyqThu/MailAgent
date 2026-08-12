@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Settings, Shield, Sparkles, X } from 'lucide-react'
+import { Loader2, Settings, Shield, Sparkles, X } from 'lucide-react'
 
 import type { ReportAgentConfig } from '@shared/api/types'
 import type { Matter, MatterPatchInput, MatterRun } from '@shared/api/types/matter'
@@ -27,11 +27,13 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { MatterGlobalAgentModal } from './MatterGlobalAgentModal'
 import { MatterTriggerEditor } from './MatterTriggerEditor'
 import {
+  buildTriggerEnvelope,
   parseMatterSchedule,
+  parseMatterScheduleValue,
   parseRunActions,
-  parseTriggerEntries,
-  serializeTriggerEntries
+  parseTriggerEntries
 } from './matterSchedule'
+import { effectiveContract, useMatterGlobalAgentDoc } from './useMatterGlobalAgentDoc'
 
 /**
  * 事项级「跟进规则」配置（设计 `matter-agent.jsx:362-492` 的 560px Modal）。
@@ -80,6 +82,7 @@ export function MatterAgentConfigModal({
   const [profileId, setProfileId] = useState(matter.agent_profile_id ?? BUILTIN_PROFILE_VALUE)
   const [instructions, setInstructions] = useState(matter.matter_instructions ?? '')
   const [advancedOpen, setAdvancedOpen] = useState(false)
+  const [contractOpen, setContractOpen] = useState(false)
   const [globalAgentOpen, setGlobalAgentOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
@@ -107,12 +110,18 @@ export function MatterAgentConfigModal({
     ignoreOutsideTargets: true
   })
 
+  // 「专属指令」是**追加**在全局任务契约之后的（Python `run_spec._task_contract()` 恒生效，
+  // 事项级只是加一段【补充指引】），所以把当前生效的契约全文就地摆出来 —— 不写出来就只剩
+  // 一句「留空使用默认」，用户看不到那个默认到底是什么（0812 dogfood owner 的正面诉求）。
+  const contractDoc = useMatterGlobalAgentDoc()
+  const contractText = effectiveContract(contractDoc.data)
+
   const profile = profiles.find((item) => item.id === matter.agent_profile_id)
   const dangling = Boolean(matter.agent_profile_id) && !profile
   const latest = runs.find((run) => run.completed_at != null)
   // 「计划」跟着草稿走（改一下就能看到句子变），「下次」只认已保存的排程 —— 还没保存的
   // 草稿算不出一个真会发生的时刻，写出来就是承诺一件没安排的事。
-  const draftSchedule = parseMatterSchedule(serializeTriggerEntries(triggerDraft, actionsDraft))
+  const draftSchedule = parseMatterScheduleValue(buildTriggerEnvelope(triggerDraft, actionsDraft))
   const savedSchedule = parseMatterSchedule(matter.schedule_json)
   const planLabel = draftSchedule
     ? sentenceText(t, i18n.language || 'zh-CN', draftSchedule.rule)
@@ -169,7 +178,7 @@ export function MatterAgentConfigModal({
         agent_enabled: agentOn,
         agent_profile_id: profileId === BUILTIN_PROFILE_VALUE ? null : profileId,
         matter_instructions: instructions.trim() ? instructions : null,
-        schedule_json: serializeTriggerEntries(triggerDraft, actionsDraft)
+        schedule_json: buildTriggerEnvelope(triggerDraft, actionsDraft)
       },
       baseVersion
     ).then(
@@ -376,12 +385,47 @@ export function MatterAgentConfigModal({
                 rows={3}
                 value={instructions}
                 onChange={(event) => setInstructions(event.target.value)}
-                placeholder={t('matters.agentBinding.instructions')}
+                placeholder={t('matters.agentConfig.instructionsPlaceholder')}
                 className="mt-1.5 w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 p-2 text-aux leading-relaxed text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
               />
               <p className="mt-1.5 text-meta leading-5 text-ink-fg-3">
                 {t('matters.agentConfig.instructionsHint')}
               </p>
+
+              {/* 「被追加在谁之后」的那个"谁"，就地可读。只读：改的入口是上面那颗
+                  「全局配置」，同一份文档两个可写面只会各改各的。 */}
+              <button
+                type="button"
+                onClick={() => setContractOpen((value) => !value)}
+                aria-expanded={contractOpen}
+                aria-controls="matter-agent-contract"
+                className="mt-2 flex items-center gap-1.5 text-meta text-ink-fg-2 hover:text-ink-fg"
+              >
+                <CollapseChevron expanded={contractOpen} size={11} />
+                {t('matters.agentConfig.contractDisclosure')}
+              </button>
+              <CollapsibleRegion expanded={contractOpen} id="matter-agent-contract">
+                {contractDoc.isLoading ? (
+                  <p className="mt-1.5 flex items-center gap-1.5 text-meta text-ink-fg-3">
+                    <Loader2 size={11} className="animate-spin" />
+                    {t('common.loading')}
+                  </p>
+                ) : contractDoc.isError ? (
+                  /* 🔴 失败必须说出来。静默留白正是 owner 把「有默认契约」读成
+                     「完全没预设」的成因。 */
+                  <p className="mt-1.5 text-meta leading-5 text-warn">
+                    {t('matters.agentConfig.contractFailed')}
+                  </p>
+                ) : contractText ? (
+                  <pre className="mt-1.5 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-[var(--r-ctl)] border border-ink-border bg-ink-0/40 p-2 font-mono text-meta leading-relaxed text-ink-fg-2 scrollbar-thin">
+                    {contractText}
+                  </pre>
+                ) : (
+                  <p className="mt-1.5 text-meta leading-5 text-ink-fg-3">
+                    {t('matters.agentConfig.contractEmpty')}
+                  </p>
+                )}
+              </CollapsibleRegion>
               {matter.agent_profile_id ? (
                 <button
                   type="button"

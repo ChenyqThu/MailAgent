@@ -1,7 +1,8 @@
 // @vitest-environment happy-dom
 
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import i18n from '@shared/i18n'
 import type { ReportAgentConfig } from '@shared/api/types'
@@ -19,6 +20,30 @@ import { RunOverlay } from '@shared/components/matters/RunOverlay'
 
 await i18n.changeLanguage('zh-CN')
 afterEach(cleanup)
+
+// 跟进配置模态会读全局 Matter Agent 的任务契约（「专属指令」旁的只读披露区），所以要
+// 一个 QueryClient + 一个确定的响应。契约全文是本轮 dogfood 的正面诉求，必须真的渲染出来。
+const CONTRACT_TEXT = '【任务契约】这是当前生效的全局任务契约全文。'
+
+const renderModal = (ui: React.ReactElement): ReturnType<typeof render> => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const wrapper = ({ children }: { children: React.ReactNode }): React.ReactElement => (
+    <QueryClientProvider client={client}>{children}</QueryClientProvider>
+  )
+  return render(ui, { wrapper })
+}
+
+beforeEach(() => {
+  vi.stubGlobal(
+    'fetch',
+    vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => ({ data: { content: '', defaultContent: CONTRACT_TEXT } })
+    })
+  )
+})
+
+afterEach(() => vi.unstubAllGlobals())
 
 const run = (state: MatterRun['lifecycle_state'], updateId: number | null = null): MatterRun => ({
   id: 7,
@@ -194,7 +219,7 @@ describe('P4 renderer surfaces', () => {
   // 窗口小一点就没有任何入口）。三条断言跟着搬，语义不变。
   test('agent config modal binds a custom profile and enables it in one patch', () => {
     const patch = vi.fn().mockResolvedValue(undefined)
-    render(
+    renderModal(
       <MatterAgentConfigModal
         matter={matter}
         runs={[]}
@@ -209,7 +234,7 @@ describe('P4 renderer surfaces', () => {
     expect(screen.getByText('下次')).toBeTruthy()
     expect(screen.getByText('上次')).toBeTruthy()
     fireEvent.click(screen.getByRole('switch'))
-    fireEvent.click(screen.getByText('高级 · 覆盖全局配置'))
+    fireEvent.click(screen.getByText('高级 · 在全局配置之上追加'))
     fireEvent.click(screen.getByRole('combobox'))
     fireEvent.click(screen.getByRole('option', { name: profile.title }))
     fireEvent.click(screen.getByText('保存'))
@@ -227,7 +252,7 @@ describe('P4 renderer surfaces', () => {
 
   test('agent config modal renders the bound toggle and three status rows', () => {
     const patch = vi.fn().mockResolvedValue(undefined)
-    render(
+    renderModal(
       <MatterAgentConfigModal
         matter={{ ...matter, agent_profile_id: profile.id, agent_enabled: true }}
         runs={[run('ok')]}
@@ -257,7 +282,7 @@ describe('P4 renderer surfaces', () => {
 
   test('agent config modal recommends weekdays at 09:00 and persists the shared rule shape', () => {
     const patch = vi.fn().mockResolvedValue(undefined)
-    render(
+    renderModal(
       <MatterAgentConfigModal
         matter={{ ...matter, agent_enabled: true }}
         runs={[]}
@@ -271,7 +296,10 @@ describe('P4 renderer surfaces', () => {
     fireEvent.click(screen.getByText('保存'))
     const payload = patch.mock.calls[0]?.[0]
     // P6-B：保存写的是 v2 envelope（多条触发并存），排程只是其中一条 entry。
-    const envelope = JSON.parse(payload.schedule_json)
+    // 🔴 envelope 是**对象**：pydantic 写侧要 dict，发字符串会在 FastAPI 校验层 422 把整条
+    // PATCH 打掉（0812 dogfood「跟进规则保存必定失败」）。形状闸见 matterTriggerEnvelopeParity。
+    const envelope = payload.schedule_json
+    expect(typeof envelope).not.toBe('string')
     expect(envelope.v).toBe(2)
     const schedule = envelope.triggers.find((entry: { kind: string }) => entry.kind === 'schedule')
     expect(schedule).toBeTruthy()
@@ -285,11 +313,31 @@ describe('P4 renderer surfaces', () => {
     expect(schedule.timezone).toBeTruthy()
   })
 
+  // 0812 dogfood：「留空使用默认」写在界面上，那个默认却从不显示 ⇒ owner 读成「完全没预设」。
+  // 「专属指令」是**追加**在全局任务契约之后的，所以那份契约必须就地可读。
+  test('agent config modal discloses the global task contract in effect', async () => {
+    renderModal(
+      <MatterAgentConfigModal
+        matter={{ ...matter, agent_enabled: true }}
+        runs={[]}
+        profiles={[]}
+        onPatch={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByText('高级 · 在全局配置之上追加'))
+    // 文案不再说「覆盖」——那是与 run_spec.py 相反的谎话。
+    expect(screen.getByText(/追加在全局任务契约之后/)).toBeTruthy()
+    fireEvent.click(screen.getByText('查看当前生效的全局任务契约'))
+    // 库里 content 为空 ⇒ 生效值 = defaultContent，界面必须显示它而不是留白。
+    await waitFor(() => expect(screen.getByText(CONTRACT_TEXT)).toBeTruthy())
+  })
+
   // codex 反例 #7：草稿只在挂载时初始化，保存却用父组件**当前最新**的版本号 ⇒ 期间别处
   // 改了排程也不触发乐观锁冲突，把那次改动静默覆盖回去。
   test('agent config modal saves with the version frozen at open time', () => {
     const patch = vi.fn().mockResolvedValue(undefined)
-    const view = render(
+    const view = renderModal(
       <MatterAgentConfigModal
         matter={{ ...matter, version: 3, agent_enabled: true }}
         runs={[]}
@@ -323,7 +371,7 @@ describe('P4 renderer surfaces', () => {
   test('agent config modal keeps the draft and shows the error when the patch fails', async () => {
     const patch = vi.fn().mockRejectedValue(new Error('version conflict'))
     const close = vi.fn()
-    render(
+    renderModal(
       <MatterAgentConfigModal
         matter={{ ...matter, agent_enabled: true }}
         runs={[]}
@@ -340,10 +388,10 @@ describe('P4 renderer surfaces', () => {
     // 草稿还在：重试一次发出去的排程与第一次逐字相同（不是被重置回 matter 的空排程）。
     fireEvent.click(screen.getByText('保存'))
     expect(patch).toHaveBeenCalledTimes(2)
-    const first = patch.mock.calls[0]?.[0] as { schedule_json: string | null }
-    const second = patch.mock.calls[1]?.[0] as { schedule_json: string | null }
-    expect(first.schedule_json).toContain('"kind":"schedule"')
-    expect(second.schedule_json).toBe(first.schedule_json)
+    const first = patch.mock.calls[0]?.[0] as { schedule_json: { triggers: { kind: string }[] } }
+    const second = patch.mock.calls[1]?.[0] as { schedule_json: { triggers: { kind: string }[] } }
+    expect(first.schedule_json.triggers.some((entry) => entry.kind === 'schedule')).toBe(true)
+    expect(second.schedule_json).toEqual(first.schedule_json)
   })
 
   // codex 反例 #9：声明了 aria-modal 却没有初始聚焦 / Esc / 焦点恢复，键盘用户能 Tab 到背景。
@@ -352,7 +400,7 @@ describe('P4 renderer surfaces', () => {
     document.body.append(opener)
     opener.focus()
     const close = vi.fn()
-    const view = render(
+    const view = renderModal(
       <MatterAgentConfigModal
         matter={matter}
         runs={[]}

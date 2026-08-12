@@ -184,10 +184,6 @@ export interface BuildGatewayToolsOpts {
    *  Matter domain behind it would be a dead end. Off (default) → not added → ToolSet
    *  byte-identical to the pre-P3 set. */
   matterToolsEnabled?: boolean
-  /** Server-derived G5 filter; never exposed in either email tool schema. Manual Matter chat sets
-   *  it from the panel's scope; a P4 follow-up run derives its own from agentRunContext.matterRun
-   *  (see effectiveMatterScope below) — the two never both apply. */
-  matterScopeFilter?: { matterId: number } | null
   /** MAILAGENT_MATTER_AGENT_ENABLED (P4 D11) — the follow-up venue's kill-switch, threaded from
    *  the lifecycle. The AUTHORITATIVE gate is the endpoint (a spec stamped runKind
    *  'matter_followup' is refused 403 before any run starts), so a matterRun anchor can only exist
@@ -292,19 +288,15 @@ export function buildGatewayTools(
   // consumption-side manual re-check) — headless stays grants-only, im stays matrix-only.
   const toolPrefs = contextMode === 'manual_chat' ? (opts.toolApprovalPrefs ?? null) : null
   const prefTiers = toolPrefs?.tools
-  // P4 (D5) — a follow-up run carries its Matter anchor in the run context instead of the
-  // caller-supplied filter (the headless path has no panel to derive one from). The manual filter
-  // wins when both are somehow present, so a manual assembly is byte-identical to P3.
+  // P4 (D5) → 0812 owner拍板 — NO caller narrows the email reads to a Matter any more, in EITHER
+  // venue: a follow-up run's whole point is discovering NEW evidence (the old anchor-derived
+  // matterScopeFilter/matterGetScope locked it inside what was already linked — structurally
+  // unable to see a new mail), and the manual panel's「本事项 / 全库」toggle was removed with the
+  // same call (事项对话 reads the full library). The anchor (matterRun) now feeds ONLY the propose
+  // tool's identity below, so both tool-side scoping options are gone rather than left null.
   const matterRun = opts.agentRunContext?.matterRun
-  const effectiveMatterScope =
-    opts.matterScopeFilter ?? (matterRun ? { matterId: matterRun.matterId } : null)
   const tools: ToolSet = {
-    ...createEmailReadTools(opts.domain, collector, {
-      matterScopeFilter: effectiveMatterScope,
-      // 🔴 email_get's MEMBERSHIP guard is run-only (G5): the manual filter narrows lists, it does
-      // not police a direct read, and P3's manual semantics must stay byte-identical.
-      matterGetScope: matterRun ? { matterId: matterRun.matterId } : null
-    }),
+    ...createEmailReadTools(opts.domain, collector),
     ...createKosReadTools(opts.domain, collector, { timeDecayEnabled: opts.kosTimeDecayEnabled }),
     ...createReportTools(opts.domain, collector, opts.agentRunContext?.agentId)
   }

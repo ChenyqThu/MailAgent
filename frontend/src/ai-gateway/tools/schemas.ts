@@ -387,14 +387,47 @@ const matterReviewIdempotencyFields = {
   reason: z.string().max(2000).optional()
 }
 
-/** One evidence source of a proposed change. 🔴 `resource_id` is REQUIRED and must belong to this
- *  Matter — the Python service re-validates it against the Matter's resource set and drops the
- *  source (and, for a `fact`, the whole change) when it does not (D6 anti-hallucination). */
+/** One evidence source of a proposed change — exactly one of `resource_id` / `change_id`.
+ *  🔴 `resource_id` must belong to this Matter and `change_id` must name a `kind: 'resource'`
+ *  change IN THIS SAME proposal that survived validation. The Python service re-validates both
+ *  against server facts and drops the source (and, for a `fact`, the whole change) when it does
+ *  not (D6 anti-hallucination) — the zod rule below only makes the ambiguous shapes
+ *  unrepresentable, it is never the authority. */
 const matterProposalSourceSchema = z
   .object({
-    resource_id: z.number().int().positive(),
+    resource_id: z.number().int().positive().optional(),
+    change_id: z.string().trim().min(1).max(64).optional(),
     locator: z.record(z.string(), z.unknown()).optional(),
     evidence: z.string().max(500).optional()
+  })
+  .strict()
+  .superRefine((value, ctx) => {
+    const given = [value.resource_id != null, value.change_id != null].filter(Boolean).length
+    if (given !== 1)
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'a source needs exactly one of resource_id (already linked) or change_id (a new resource proposed in this same call)',
+        path: ['resource_id']
+      })
+  })
+
+/** The identity of a resource this proposal wants to link for the FIRST time (0812).
+ *  Field names are the existing `resource` table columns / `_upsert_resource` inputs — no second
+ *  vocabulary. 🔴 `provider` is a SERVER-side whitelist (built-ins plus the connectors that are
+ *  actually connected); the regex here only rejects free-form strings, it does not decide
+ *  membership. `external_key` conventions per provider (`email:<id>` / an http(s) URL /
+ *  `<entity>:<id>`) are likewise re-derived server-side and fail closed. */
+const matterProposalNewResourceSchema = z
+  .object({
+    provider: z
+      .string()
+      .trim()
+      .regex(/^[a-z][a-z0-9_-]{0,63}$/, 'provider must be a lowercase connector/source id'),
+    kind: z.enum(['email', 'thread', 'event', 'doc', 'file', 'url']),
+    external_key: z.string().trim().min(1).max(512),
+    title: z.string().trim().max(500).optional(),
+    canonical_url: z.string().trim().max(2000).optional()
   })
   .strict()
 
@@ -421,6 +454,9 @@ const matterProposalChangeSchema = z
       })
       .strict()
       .optional(),
+    /** `kind: 'resource'` has two shapes: `target.id` CONFIRMS a resource already linked to this
+     *  Matter, `resource` LINKS a newly found one for the first time. Exactly one of them. */
+    resource: matterProposalNewResourceSchema.optional(),
     operation: z.enum(['add', 'replace', 'remove']).optional(),
     before: matterProposalValueSchema.optional(),
     after: matterProposalValueSchema.optional(),
@@ -430,6 +466,22 @@ const matterProposalChangeSchema = z
     sources: z.array(matterProposalSourceSchema).max(5).default([])
   })
   .strict()
+  .superRefine((value, ctx) => {
+    if (value.resource == null) return
+    if (value.kind !== 'resource')
+      ctx.addIssue({
+        code: 'custom',
+        message: 'only a kind="resource" change can carry a resource identity',
+        path: ['resource']
+      })
+    if (value.target?.id != null)
+      ctx.addIssue({
+        code: 'custom',
+        message:
+          'a resource change either confirms an existing link (target.id) or proposes a new one (resource), never both',
+        path: ['resource']
+      })
+  })
 
 /** matter_update_propose — the follow-up run's ONLY output channel (D6).
  *  🔴 There is deliberately NO matter_id / run_id / from_event_id / to_event_id /

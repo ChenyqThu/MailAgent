@@ -219,8 +219,7 @@ export interface AiGatewayConfig {
      *  convenience can never leak into an unattended run. null/absent → every write asks
      *  (fail-closed), byte-identical to pre-WP-11. */
     toolApprovalPrefs?: GatewayToolApprovalPrefs | null,
-    parentSessionId?: number | null,
-    matterScopeFilter?: { matterId: number } | null
+    parentSessionId?: number | null
   ) => ToolSet
   /** Test-harness-only override for deterministic single-step fixtures. Production never sets this;
    *  normal manual/headless runs use chatRun's 10k internal sentinel. */

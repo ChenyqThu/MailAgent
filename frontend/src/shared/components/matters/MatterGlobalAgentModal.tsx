@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Loader2, RotateCcw, Shield, Sparkles, X } from 'lucide-react'
 
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { toastError, toastSuccess } from '@shared/state/toast'
+
+import { MATTER_GLOBAL_AGENT_DOC_KEY, useMatterGlobalAgentDoc } from './useMatterGlobalAgentDoc'
 
 /**
  * 全局 Matter Agent 配置（P6-B D3/D17）—— **只做 prompt**。
@@ -26,23 +28,7 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
   const [draft, setDraft] = useState('')
   const [loaded, setLoaded] = useState(false)
 
-  const doc = useQuery({
-    queryKey: ['matters', 'global-agent-doc'],
-    queryFn: async (): Promise<{ content: string; defaultContent: string }> => {
-      const response = await fetch(`/api/agent/profile/docs/${DOC_NAME}`, {
-        credentials: 'include'
-      })
-      if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const payload = (await response.json()) as {
-        data?: { content?: string; defaultContent?: string }
-      }
-      return {
-        content: payload.data?.content ?? '',
-        defaultContent: payload.data?.defaultContent ?? ''
-      }
-    },
-    staleTime: 30_000
-  })
+  const doc = useMatterGlobalAgentDoc()
 
   const defaultContent = doc.data?.defaultContent ?? ''
 
@@ -68,7 +54,7 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
     },
     onSuccess: () => {
-      void queryClient.invalidateQueries({ queryKey: ['matters', 'global-agent-doc'] })
+      void queryClient.invalidateQueries({ queryKey: MATTER_GLOBAL_AGENT_DOC_KEY })
       toastSuccess(t('matters.globalAgent.saved'))
       onClose()
     },

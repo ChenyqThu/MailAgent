@@ -9,8 +9,9 @@
 //     stand byte-identical (Manual parity);
 //   - WP-11: manual_chat resolves cfg.resolveToolApprovalPrefs and hands the prefs to
 //     cfg.buildTools' 5TH slot (4th = agentRunContext, undefined for manual); Matters P3 adds the
-//     6th (sessionId, undefined without a session) and 7th (matterScopeFilter, null without a
-//     matter-anchored contextSnapshot) slots — inert here, asserted as undefined/null; headless modes
+//     6th (sessionId, undefined without a session) slot — inert here, asserted as undefined. (The
+//     P3 7th slot matterScopeFilter is GONE since 0812: 事项对话 reads the full library, so no
+//     caller narrows the email reads by Matter and the parameter was removed.) Headless modes
 //     consult NEITHER resolver (custom-agent runs are governed solely by their per-agent grants
 //     matrix — the load-bearing isolation gate);
 //   - resolver failure / absence fail-closes (mode → request-level; prefs → null = ask);
@@ -97,8 +98,7 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'manual_chat',
       undefined,
       null,
-      undefined,
-      null
+      undefined
     )
   })
 
@@ -112,8 +112,7 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'manual_chat',
       undefined,
       null,
-      undefined,
-      null
+      undefined
     )
   })
 
@@ -128,8 +127,7 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'manual_chat',
       undefined,
       null,
-      undefined,
-      null
+      undefined
     )
     // body 'auto-reversible' → honored unchanged
     const b = makeCfg({ resolveGlobalApprovalMode: resolver })
@@ -140,8 +138,7 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'manual_chat',
       undefined,
       null,
-      undefined,
-      null
+      undefined
     )
   })
 
@@ -158,8 +155,7 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
         mode,
         undefined,
         null,
-        undefined,
-        null
+        undefined
       )
     }
   )
@@ -176,8 +172,7 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'manual_chat',
       undefined,
       null,
-      undefined,
-      null
+      undefined
     )
   })
 
@@ -190,8 +185,7 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'manual_chat',
       undefined,
       null,
-      undefined,
-      null
+      undefined
     )
   })
 
@@ -205,8 +199,7 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'manual_chat',
       undefined,
       null,
-      undefined,
-      null
+      undefined
     )
     const b = makeCfg({ resolveGlobalApprovalMode: resolver })
     await runPrepared(b.cfg, body({ approvalMode: 'acceptEdits' }), 'manual_chat')
@@ -216,8 +209,7 @@ describe('prepareChatRun — owner-global approval mode injection (manual_chat o
       'manual_chat',
       undefined,
       null,
-      undefined,
-      null
+      undefined
     )
   })
 })
@@ -234,8 +226,7 @@ describe('prepareChatRun — 08-05 WP-11 per-tool approval prefs injection (manu
       'manual_chat',
       undefined,
       PREFS,
-      undefined,
-      null
+      undefined
     )
   })
 
@@ -252,8 +243,7 @@ describe('prepareChatRun — 08-05 WP-11 per-tool approval prefs injection (manu
         mode,
         undefined,
         null,
-        undefined,
-        null
+        undefined
       )
     }
   )
@@ -270,8 +260,7 @@ describe('prepareChatRun — 08-05 WP-11 per-tool approval prefs injection (manu
       'manual_chat',
       undefined,
       null,
-      undefined,
-      null
+      undefined
     )
   })
 })

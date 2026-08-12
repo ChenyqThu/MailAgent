@@ -4,8 +4,7 @@
 //   · resolveMatterUndoRequest: the undo descriptor → REST mapping (pure, one case per tool).
 //   · applyUndo: the wire shape a receipt's 撤销 actually sends (fresh idempotency key, the
 //     descriptor's expected_version + reverses_event_id, source/reason).
-//   · recordChatScope: the G5 audit call (POST + no expected_version — a scope switch is a session
-//     property, not an aggregate change).
+//   （recordChatScope / G5 审计已随 0812 检索范围开关的移除一并删除 —— 见下面那条"只剩两个方法"。）
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -191,16 +190,11 @@ describe('createMatterChatApi — wire shapes', () => {
     expect(fetchMock).not.toHaveBeenCalled()
   })
 
-  test('recordChatScope posts scope + session_id and never an expected_version', async () => {
+  // 0812 —— recordChatScope（G5 审计）随「本事项 / 全库」检索范围开关一并删除：没有调用方了，
+  // 留着就是一个能往时间线写事件的无主写口。服务端 `POST /{id}/chat-scope` 同批删除。
+  test('MatterChatApi 只剩两个方法（没有留下 chat-scope 这个无主写口）', () => {
     const api = createMatterChatApi('/api')
-    await api.recordChatScope('MAT-0042', 'global', 31)
-    const { url, init, body } = lastCall()
-    expect(url).toBe('/api/matters/MAT-0042/chat-scope')
-    expect(init.method).toBe('POST')
-    expect(body.scope).toBe('global')
-    expect(body.session_id).toBe(31)
-    expect((body.mutation as Record<string, unknown>).expected_version).toBeNull()
-    expect((body.mutation as Record<string, unknown>).reverses_event_id).toBeUndefined()
+    expect(Object.keys(api).sort()).toEqual(['applyUndo', 'contextSnapshot'])
   })
 
   test('contextSnapshot is a plain GET on the bounded projection', async () => {

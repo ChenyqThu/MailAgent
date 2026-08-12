@@ -5106,6 +5106,11 @@
       "confirmSuggestion": "确认关联",
       "rejectSuggestion": "不相关",
       "suggestionActionFailed": "无法更新资源建议",
+      "bulkPrompt": "{count} 条 Agent 建议待处置",
+      "bulkConfirm": "全部确认",
+      "bulkReject": "全部忽略",
+      "bulkConfirmDone": "已确认 {applied} 条建议{skipped, plural, =0 {} other {，跳过 # 条}}",
+      "bulkRejectDone": "已忽略 {applied} 条建议{skipped, plural, =0 {} other {，跳过 # 条}}",
       "visibility": "内容可见性",
       "visibilityGlobalHint": "改档会影响该资料在所有事项下的可见性。",
       "visibilityChanged": "资料可见性已更新，将影响所有事项",
@@ -5158,14 +5163,6 @@
         "pinnedUnknown": "置顶资料",
         "changes": "自上次接受更新以来的变化",
         "unavailable": "上下文计数暂时读不到，不影响对话。"
-      },
-      "scope": {
-        "label": "检索范围",
-        "matter": "本事项",
-        "global": "全库",
-        "matterNote": "检索范围限于本事项",
-        "globalNote": "已允许全库检索",
-        "auditFailed": "检索范围切换失败，已保留当前范围"
       },
       "prompts": {
         "status": "总结当前状态",
@@ -5228,7 +5225,7 @@
       "status": { "queued": "排队中", "running": "运行中", "ok": "完成", "noop": "无变化", "warn": "部分降级", "fail": "失败", "canceled": "已取消" }
     },
     "runOverlay": { "runningTitle": "跟进运行中", "doneTitle": "跟进运行", "capability": "手动触发 · 观察+建议", "proposal": "已产出提案 · {count} 项变化", "warn": "已产出提案 · 部分降级", "failed": "运行失败", "review": "审阅" },
-    "review": { "changeKind": { "fact": { "label": "事实", "hint": "有来源支撑，可直接记录" }, "inference": { "label": "推断", "hint": "Agent 的解释，需你判断" }, "field": { "label": "字段变更", "hint": "会改写正式业务状态" }, "action": { "label": "行动项", "hint": "会新增或修改行动项" }, "resource": { "label": "关联资料", "hint": "会把资料正式关联到事项" } }, "title": "更新提案审阅", "heading": "更新提案 · {title}", "run": "运行 #{id}", "confidence": "置信 {value}%", "stale": "基线已变", "watermark": "事件范围 {from} → {to}", "proposedSummary": "提议的当前状态", "finishEdit": "完成编辑", "editAccept": "编辑后接受", "compare": "对比当前已接受状态", "changes": "逐项变化 · 已选 {selected}/{total}", "clearAll": "全部取消", "selectAll": "全部勾选", "questions": "Agent 提出的待解问题", "staleHint": "这份提案依据的事项内容已经变了，它要改的地方后来被改过。让 Agent 按最新情况重新跑一轮。", "staleRerun": "重新跑一轮", "staleReload": "这份提案依据的事项内容已经变了，事项数据已刷新。让 Agent 按最新情况重新跑一轮。", "versionReload": "事项已被更新，已刷新最新版本。请重载后重试。", "openCitation": "打开证据 #{id}", "rejectReason": "拒绝原因", "confirmReject": "确认拒绝", "editedArchive": "Agent 原始提案与你编辑后的版本都会留档", "rejectArchive": "拒绝也会留档，并成为 Agent 后续的上下文", "reject": "拒绝", "later": "稍后", "acceptAll": "全部接受", "acceptSelected": "接受所选 {count} 项", "attention": "跟进 Agent 提出了 {count} 项变化，等待你审阅" },
+    "review": { "changeKind": { "fact": { "label": "事实", "hint": "有来源支撑，可直接记录" }, "inference": { "label": "推断", "hint": "Agent 的解释，需你判断" }, "field": { "label": "字段变更", "hint": "会改写正式业务状态" }, "action": { "label": "行动项", "hint": "会新增或修改行动项" }, "resource": { "label": "关联资料", "hint": "会把资料正式关联到事项" } }, "title": "更新提案审阅", "heading": "更新提案 · {title}", "run": "运行 #{id}", "confidence": "置信 {value}%", "stale": "基线已变", "watermark": "事件范围 {from} → {to}", "proposedSummary": "提议的当前状态", "finishEdit": "完成编辑", "editAccept": "编辑后接受", "compare": "对比当前已接受状态", "changes": "逐项变化 · 已选 {selected}/{total}", "clearAll": "全部取消", "selectAll": "全部勾选", "questions": "Agent 提出的待解问题", "staleHint": "这份提案依据的事项内容已经变了，它要改的地方后来被改过。让 Agent 按最新情况重新跑一轮。", "staleRerun": "重新跑一轮", "staleReload": "这份提案依据的事项内容已经变了，事项数据已刷新。让 Agent 按最新情况重新跑一轮。", "versionReload": "事项已被更新，已刷新最新版本。请重载后重试。", "openCitation": "打开证据 #{id}", "pendingCitation": "本提案新建的资料", "newResource": { "badge": "将新建关联", "untitled": "（无标题）", "hint": "接受后这份资料才会关联进本事项" }, "rejectReason": "拒绝原因", "confirmReject": "确认拒绝", "editedArchive": "Agent 原始提案与你编辑后的版本都会留档", "rejectArchive": "拒绝也会留档，并成为 Agent 后续的上下文", "reject": "拒绝", "later": "稍后", "acceptAll": "全部接受", "acceptSelected": "接受所选 {count} 项", "attention": "跟进 Agent 提出了 {count} 项变化，等待你审阅" },
       "trigger": {
         "kind": {
           "schedule": "定时",
@@ -5285,10 +5282,14 @@
         "builtinSubtitle": "负责新建、事项对话与跟进；prompt 与工具集在全局配置一份",
         "toggle": "启用跟进",
         "triggerLabel": "触发方式",
-        "advanced": "高级 · 覆盖全局配置",
+        "advanced": "高级 · 在全局配置之上追加",
         "profileLabel": "执行的 Agent",
-        "instructionsLabel": "覆盖 prompt",
-        "instructionsHint": "留空则使用全局 Matter Agent 的 system prompt。",
+        "instructionsLabel": "事项专属指令（追加）",
+        "instructionsHint": "这段会追加在全局任务契约之后、从属于它，不会替换它。留空 = 只按全局任务契约跟进。",
+        "instructionsPlaceholder": "例：只盯 Acme 采购部的回复，其他抄送方的邮件不用单独总结。每次跟进先点名列出还没回复的人，再把当前卡点写成一句话。对方一旦给出报价，就把金额和有效期单独列出来。",
+        "contractDisclosure": "查看当前生效的全局任务契约",
+        "contractFailed": "全局任务契约读取失败，这里无法显示当前生效的全文。可打开上方「全局配置」重试。",
+        "contractEmpty": "当前没有取到任务契约全文。可打开上方「全局配置」查看。",
         "summaryActive": "将按「{plan}」触发，结果进「运行」，改写仍需你接受",
         "summaryDisabled": "已停用 · 不会自动运行",
         "open": "配置跟进规则",
@@ -5296,7 +5297,7 @@
         "reload": "重新载入",
         "saving": "保存中…"
       },
-    "agentBinding": { "title": "跟进 Agent", "builtin": "内置", "builtinOption": "内置（默认模型）", "useCustomAgent": "改用 Custom Agent", "empty": "可在 Custom AI 创建 Agent，以更换模型或添加人设", "instructions": "事项专属指令（可选）", "dangling": "绑定的 Agent 已不存在", "plan": "计划", "next": "下次", "last": "上次", "capability": "能力上限 观察 + 建议，不能对外发信或改写外部文档", "unbind": "解绑", "recommended": "推荐：每个工作日 09:00", "addSchedule": "添加排程", "scheduleEdit": "编辑排程" },
+    "agentBinding": { "title": "跟进 Agent", "builtin": "内置", "builtinOption": "内置（默认模型）", "useCustomAgent": "改用 Custom Agent", "empty": "可在 Custom AI 创建 Agent，以更换模型或添加人设", "dangling": "绑定的 Agent 已不存在", "plan": "计划", "next": "下次", "last": "上次", "capability": "能力上限 观察 + 建议，不能对外发信或改写外部文档", "unbind": "解绑", "recommended": "推荐：每个工作日 09:00", "addSchedule": "添加排程", "scheduleEdit": "编辑排程" },
     "events": {
       "matter_created": "创建事项",
       "matter_updated": "更新事项",

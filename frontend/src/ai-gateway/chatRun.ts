@@ -453,12 +453,10 @@ export async function prepareChatRun(
     }
   }
   const auditEntries: GatewayToolAuditEntry[] = []
-  const matterScopeFilter =
-    contextSnapshot?.scope.anchorType === 'matter' &&
-    contextSnapshot.activeMatter?.scope === 'matter' &&
-    typeof contextSnapshot.scope.anchorId === 'number'
-      ? { matterId: contextSnapshot.scope.anchorId }
-      : null
+  // 0812 owner拍板 — the Matter chat's「本事项 / 全库」toggle is gone (matter chat always reads the
+  // full library), so the manual matterScopeFilter derivation that used to sit here is gone too.
+  // With the P4 follow-up derivation already retired, NO caller narrows the email reads by Matter
+  // any more and the tool-side option was removed with it (tools/index.ts, tools/email.ts).
   // WP-11 — the 4th slot (agentRunContext) belongs to the HEADLESS wrapper's own signature
   // (wrapCfgForAgentRun injects it); manual callers pass undefined there and the prefs ride the
   // 5th slot. The headless wrapper's 3-arg signature structurally drops the 5th argument, so a
@@ -471,8 +469,7 @@ export async function prepareChatRun(
           contextMode,
           undefined,
           toolApprovalPrefs,
-          undefined,
-          matterScopeFilter
+          undefined
         )
       : cfg.buildTools?.(
           auditEntries,
@@ -480,8 +477,7 @@ export async function prepareChatRun(
           contextMode,
           undefined,
           toolApprovalPrefs,
-          sessionId,
-          matterScopeFilter
+          sessionId
         )
   const hasTools = tools != null && Object.keys(tools).length > 0
   // W6 — the run holds the suggest_followups tool (manual chat with a real gateway ToolSet). Drives

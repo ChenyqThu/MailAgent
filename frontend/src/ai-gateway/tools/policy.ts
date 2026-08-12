@@ -57,17 +57,25 @@ import type { ToolSet } from 'ai'
  *  permanently denied, per-agent grants never consulted. Asserted in trusted code by
  *  POST /api/ai/im-chat (stage 2 PR-1, MAILAGENT_IM_FEISHU-gated).
  *
- *  'matter_followup' (Matters MVP P4, decisions D5): the FIFTH venue — a Matter follow-up run
- *  (观察 + 建议, never 执行). It is the STRICTEST row of all: ONLY 'read' and 'artifact' register;
- *  domain_write / connector_write / exec / web / capability_change / outbound are all denied and
- *  🔴 per-agent grants + im venue switches are NOT consulted at all, so binding a Matter to a
- *  strongly-granted Agent Profile (grant_exec / grant_web / connector ceilings) can never widen
- *  the face — the profile contributes model/persona only (D2). The run's single output channel is
- *  the artifact-class `matter_update_propose`; every state change goes through the owner's review
- *  (matter_review_update in a manual/im session). The allow-list in the spec
- *  (MATTER_FOLLOWUP_ALLOWED_TOOLS) is the SECOND, independent belt — this matrix row is the first.
- *  Asserted in trusted code by POST /api/ai/agent-run when the SERVER-assembled spec carries
- *  runKind==='matter_followup' (agentRun.ts deriveContextMode), never from a request body. */
+ *  'matter_followup' (Matters MVP P4, decisions D5; widened by the 0812 owner拍板): the FIFTH
+ *  venue — a Matter follow-up run (观察 + 建议, never 执行). The boundary is BY CLASS, not by
+ *  resource scope: every 'read' tool registers (the run's whole point is discovering NEW
+ *  evidence, so it reads the full library), 'artifact' ONLY under the one propose NAME
+ *  (MATTER_RUN_PROPOSE_TOOL — 0812 codex修复批: report_write shares the class and is a local
+ *  write, whole-class admission was a hole), plus 'web' under the SPEC-authored read grant
+ *  (run_spec.py writes grantWeb — the outbound-network-READ class; connector READS are class
+ *  'read' and ride the grantConnectors read ceilings at registration). Every write-capable class
+ *  — domain_write / connector_write / exec / capability_change / outbound — is denied, and 🔴 the
+ *  exec grant + im venue switches are NOT consulted at all: binding a Matter to a
+ *  strongly-granted Agent Profile (grant_exec / connector write ceilings) can never widen the
+ *  face — the profile contributes model/persona only (D2), and the grants this row DOES read
+ *  (web) are authored solely by the server-side spec assembler, never copied from a profile.
+ *  The run's single output channel is the artifact-class `matter_update_propose`; every state
+ *  change goes through the owner's review (matter_review_update in a manual/im session). The
+ *  wrapCfgForAgentRun read-face exemption (agentRun.ts) is the SECOND, independent belt — this
+ *  matrix row is the first. Asserted in trusted code by POST /api/ai/agent-run when the
+ *  SERVER-assembled spec carries runKind==='matter_followup' (agentRun.ts deriveContextMode),
+ *  never from a request body. */
 export const AGENT_CONTEXT_MODES = [
   'manual_chat',
   'untrusted_trigger',
@@ -501,6 +509,14 @@ export interface ImVenueSwitches {
   imWebEnabled?: boolean
 }
 
+/** 0812 codex修复批 — the ONE artifact NAME the matter_followup row admits. The row used to admit
+ *  the WHOLE artifact class, which silently covered report_write (a LOCAL WRITE: tools/report.ts
+ *  persists/replaces Reports data) — a follow-up run's only artifact channel is the proposal
+ *  tool, so the admission is BY NAME now. Defined here (not imported from tools/matters.ts)
+ *  because policy.ts is the class layer's zero-dependency root — importing the tool module would
+ *  cycle through types.ts. */
+export const MATTER_RUN_PROPOSE_TOOL = 'matter_update_propose'
+
 /** Registration-time matrix row (ADR-001 D3, exec row revised by ADR-004 D2, web row added by
  *  ADR-004 rev3.1 D2, im_chat row added by stage 0b — grill Q10=A — and opened by stage 2 PR-1
  *  — the 08-04 拍板): may a tool of this class exist in the ToolSet of a run in this mode?
@@ -522,17 +538,33 @@ export function isToolClassAllowedInMode(
   toolClass: GatewayToolClass,
   mode: AgentContextMode,
   grants?: AgentModeGrants,
-  venue?: ImVenueSwitches
+  venue?: ImVenueSwitches,
+  /** 0812 codex修复批 — ONLY the matter_followup row reads it (artifact admission is BY NAME
+   *  there, see MATTER_RUN_PROPOSE_TOOL); every other mode ignores it, so an omitted argument
+   *  (types.ts's runtime modeDenied belt, every existing caller/test) is byte-identical outside
+   *  matter runs and FAIL-CLOSED inside them (no name → no artifact). */
+  toolName?: string
 ): boolean {
   if (mode === 'manual_chat') return true
   // Matters MVP P4 (D5) — 🔴 this row MUST stay ABOVE the generic read/domain_write/artifact line
   // below: that line admits domain writes in every non-manual mode, so a matter_followup branch
-  // placed after it could no longer deny them. A follow-up run observes and PROPOSES; the only
-  // classes it may ever hold are 'read' and 'artifact' (matter_update_propose). grants and venue
-  // switches are deliberately NOT consulted — a Matter bound to an Agent Profile carrying
-  // grant_exec / grant_web / connector ceilings still gets nothing here (D2: a profile contributes
-  // model + persona only).
-  if (mode === 'matter_followup') return toolClass === 'read' || toolClass === 'artifact'
+  // placed after it could no longer deny them. A follow-up run observes and PROPOSES; the classes
+  // it may hold are 'read' + 'artifact' — and 'artifact' ONLY under the one propose NAME (0812
+  // codex修复批: the class also contains report_write, a LOCAL WRITE — whole-class admission was
+  // the hole that let an allowedTools list pull it into an unattended run) — + since the 0812
+  // owner拍板 (「全部只读工具，一个写工具都不给」) 'web' under the spec-authored read grant (the
+  // same gated/open literals as the generic headless row; run_spec.py is the only author of that
+  // grant, a profile's grants are never copied into a matter spec). Everything write-capable
+  // (domain_write / connector_write / exec / capability_change / outbound) returns false BEFORE
+  // the grant ladder below — grant_exec can never lift exec here, and venue switches are never
+  // consulted (connector READS are class 'read', already admitted; connector WRITES stay denied
+  // even under a tampered write/update ceiling).
+  if (mode === 'matter_followup') {
+    if (toolClass === 'read') return true
+    if (toolClass === 'artifact') return toolName === MATTER_RUN_PROPOSE_TOOL
+    if (toolClass === 'web') return grants?.web === 'gated' || grants?.web === 'open'
+    return false
+  }
   if (toolClass === 'read' || toolClass === 'domain_write' || toolClass === 'artifact') return true
   // Stage 2 PR-1 (08-04 拍板) — im_chat: connector tools fully open (write approval follows the
   // 08-05 per-tool tier: ask → Feishu card, auto → card-free — decided at the connector factory,
@@ -605,7 +637,9 @@ export function applyContextModePolicy(
   if (mode === 'manual_chat') return tools
   const out: ToolSet = {}
   for (const [name, t] of Object.entries(tools)) {
-    if (isToolClassAllowedInMode(classOfTool(name), mode, grants, venue)) out[name] = t
+    // 0812 codex修复批 — the NAME rides along so the matter_followup row can admit artifact
+    // by name (MATTER_RUN_PROPOSE_TOOL); every other mode ignores the argument.
+    if (isToolClassAllowedInMode(classOfTool(name), mode, grants, venue, name)) out[name] = t
   }
   return out
 }

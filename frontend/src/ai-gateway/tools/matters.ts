@@ -33,9 +33,7 @@ import {
 } from './types'
 
 export const GATEWAY_MATTER_READ_TOOL_NAMES = ['matter_find', 'matter_get'] as const
-export const GATEWAY_MATTER_SUGGESTION_TOOL_NAMES = [
-  'matter_suggest_related_resources'
-] as const
+export const GATEWAY_MATTER_SUGGESTION_TOOL_NAMES = ['matter_suggest_related_resources'] as const
 export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
   'matter_create',
   'matter_update',
@@ -64,9 +62,7 @@ const matterSuggestRelatedResourcesSchema = z
       .min(1)
       .optional(),
     query: z.string().trim().min(1).optional(),
-    expand_reason: z
-      .enum(['context_gap', 'verification', 'matter_instructions'])
-      .optional(),
+    expand_reason: z.enum(['context_gap', 'verification', 'matter_instructions']).optional(),
     limit: z.number().int().min(1).max(50).default(10)
   })
   .strict()
@@ -490,7 +486,11 @@ export function createMatterRunTools(
         'concrete changes you propose. Every factual change must carry at least one source; anything ' +
         'you inferred must be marked is_inference. Put what you could not determine into ' +
         'open_questions instead of guessing. Nothing here is applied automatically — the owner ' +
-        'reviews and decides. If there is no meaningful change, do not call this tool at all.',
+        'reviews and decides. If there is no meaningful change, do not call this tool at all. ' +
+        'To bring in NEW evidence you found (an email, a Notion/Jira page, a web page not yet ' +
+        'attached to this Matter), add a kind="resource" change carrying `resource` ' +
+        '{provider, kind, external_key, title, canonical_url}; the owner links it by accepting. ' +
+        'A fact may cite such a pending resource with sources[].change_id instead of resource_id.',
       inputSchema: matterUpdateProposeSchema,
       run: (input, signal) =>
         domain.proposeMatterUpdate(matterRun.publicId, matterRun.runId, input, signal)

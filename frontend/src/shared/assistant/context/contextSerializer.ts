@@ -169,11 +169,8 @@ export function buildContextSystemBlock(snapshot: AgentContextSnapshot): string 
   }
 
   if (snapshot.activeMatter) {
-    parts.push(
-      snapshot.activeMatter.scope === 'global'
-        ? 'Matter retrieval scope: 用户已显式授权本会话全库检索。'
-        : 'Matter retrieval scope: 检索限于本事项关联范围。'
-    )
+    // 0812 —— 事项对话的检索范围开关已下线（恒全库），随之删掉这里那句「Matter retrieval scope: …」：
+    // 一句永远只有一种取值的提示对模型没有信息量。
     for (const resource of snapshot.activeMatter.resources) {
       if (resource.excerpt) {
         parts.push(

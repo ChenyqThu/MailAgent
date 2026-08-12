@@ -4,8 +4,8 @@
 //
 //   🔴 #2 事项身份**未就绪** ≠ 普通会话。单条 `GET /chat/sessions/{id}` 曾不带 matter join 投影，
 //        于是远程入口 / fullscreen 跳转 / `/sessions/all` 暂时不含该行时，一条 `anchor_type='matter'`
-//        的会话只剩内部 anchor_id → 旧代码把它当普通对话渲染：没有事项 chip、没有检索范围、请求
-//        不带 matter 快照 ⇒ gateway 的 matterScopeFilter 变 null。用户在一个看起来仍是原历史对话
+//        的会话只剩内部 anchor_id → 旧代码把它当普通对话渲染：没有事项 chip、没有写入回执、请求
+//        不带 matter 快照 ⇒ 模型手里没有这件事的任何上下文。用户在一个看起来仍是原历史对话
 //        的页面里说「更新这件事」，模型实际在全局范围跑，可能操作**错误的事项**。
 //        修复后：如实说「上下文未就绪」+ 禁发 + 不产 general 快照。
 //
@@ -117,7 +117,6 @@ vi.mock('@shared/components/matters/hooks', () => ({
     contextSnapshot: vi.fn(async () => {
       throw new Error('not needed')
     }),
-    recordChatScope: vi.fn(async () => ({})),
     applyUndo: vi.fn(async () => ({}))
   }),
   useMattersEnabled: () => true

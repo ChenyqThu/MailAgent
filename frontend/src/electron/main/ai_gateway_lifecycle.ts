@@ -1083,8 +1083,7 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
       contextMode,
       agentRunContext,
       toolApprovalPrefs,
-      parentSessionId,
-      matterScopeFilter
+      parentSessionId
     ) => {
       // Stage 1 PR2/PR3 — dynamic MCP connector tools. Two admitted shapes (shouldLoadConnectorTools):
       // manual_chat without an agentRunContext (PR2, unchanged), and a headless agent run whose
@@ -1199,7 +1198,6 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS, default on).
           calendarToolsEnabled,
           matterToolsEnabled,
-          matterScopeFilter,
           // P4 (D11) — the follow-up kill-switch's registration-side belt (the endpoint gate is
           // the authoritative one). ALWAYS threaded, so an explicit false really strips the tool.
           matterAgentEnabled,
@@ -1319,23 +1317,23 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     createAgentSession:
       customAgentsEnabled || matterAgentEnabled
         ? (input: {
-          agentId: string
-          jobId: number
-          title: string
-          triggerId?: string | null
-          triggerKind?: string | null
-          triggerFiredAt?: number | null
-          /** P4 (D7) — Matter-anchored session for a follow-up run; omitted → general anchor. */
-          anchor?: { type: 'matter'; id: number }
-        }) => {
-          try {
-            return createAgentSession(input)
-          } catch (err) {
-            console.error('[ai-gateway] createAgentSession failed (run will be unsaved)', err)
-            return null
+            agentId: string
+            jobId: number
+            title: string
+            triggerId?: string | null
+            triggerKind?: string | null
+            triggerFiredAt?: number | null
+            /** P4 (D7) — Matter-anchored session for a follow-up run; omitted → general anchor. */
+            anchor?: { type: 'matter'; id: number }
+          }) => {
+            try {
+              return createAgentSession(input)
+            } catch (err) {
+              console.error('[ai-gateway] createAgentSession failed (run will be unsaved)', err)
+              return null
+            }
           }
-        }
-      : undefined,
+        : undefined,
     // Stage 2 PR-1 (task 08-01 messenger) — the im_chat entrypoint gate + its session hook.
     // imFeishuEnabled gates POST /api/ai/im-chat registration (off → 404, byte-identical);
     // createImSession pre-creates the origin='im' ai_chat.db session on a conversation's first

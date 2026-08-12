@@ -140,9 +140,15 @@ export function truncateAtSentence(s: string, max: number): string {
  *     — owner-present like manual, grants never consulted (write approval follows the per-tool
  *     tier since 08-05: ask → the Feishu card, auto → card-free; a stray agentRunContext on an
  *     im run is refused like the manual stray).
- *   - headless agent run (PR3): flag on + mode 'untrusted_trigger'/'cron_headless' + an
+ *   - headless agent run (PR3; matter_followup joined by the 0812 owner拍板 — a follow-up run's
+ *     spec now authors read-ceiling grants so it can search connected services for new
+ *     evidence): flag on + mode 'untrusted_trigger'/'cron_headless'/'matter_followup' + an
  *     agentRunContext whose connector grants parse NON-EMPTY (fail-closed re-parse — junk/empty
- *     grants keep the run at zero fetches, exactly the PR2 behaviour).
+ *     grants keep the run at zero fetches, exactly the PR2 behaviour). The matter venue's WRITE
+ *     denial does not live here: registration rank-filters on the read ceilings and the
+ *     matter_followup matrix row denies connector_write outright, and Python's
+ *     resolve_caller_ceiling pins the venue to a server-fixed 'read' ceiling regardless of what
+ *     the grants claim.
  * absent/unknown modes are always false.
  */
 export function shouldLoadConnectorTools(
@@ -153,7 +159,13 @@ export function shouldLoadConnectorTools(
 ): boolean {
   if (flagEnabled !== true) return false
   if (contextMode === 'manual_chat' || contextMode === 'im_chat') return !hasAgentRunContext
-  if (contextMode !== 'untrusted_trigger' && contextMode !== 'cron_headless') return false
+  if (
+    contextMode !== 'untrusted_trigger' &&
+    contextMode !== 'cron_headless' &&
+    contextMode !== 'matter_followup'
+  ) {
+    return false
+  }
   return hasAgentRunContext && parseConnectorGrants(connectorGrants) !== undefined
 }
 
@@ -567,7 +579,13 @@ export function createConnectorTools(
   } = {}
 ): ToolSet {
   const contextMode = normalizeContextMode(opts.contextMode)
-  const headlessAgent = contextMode === 'untrusted_trigger' || contextMode === 'cron_headless'
+  // 0812 — matter_followup is an unattended venue like the two custom-agent modes: the grant
+  // ceiling filter below applies (the spec's ceilings are read-only, so no write tool is ever
+  // built) and reads register silent (per-tool ask/auto tiers are an owner-present concept).
+  const headlessAgent =
+    contextMode === 'untrusted_trigger' ||
+    contextMode === 'cron_headless' ||
+    contextMode === 'matter_followup'
   // 08-05 (WP-10) — the owner-present venues where the per-tool tier decides the approval shape
   // (auto 免卡 / ask 弹卡). Mirrors OWNER_PRESENT_CONTEXT_MODES server-side: manual + im (场地二
   // 放开 — the im 'ask' card rides the existing PR-3 Feishu button chain unchanged).

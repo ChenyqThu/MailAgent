@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ExternalLink, Pause, Play, Plus, Search, Trash2, X } from 'lucide-react'
@@ -15,6 +15,7 @@ import { MatterCreateDialog } from './MatterCreateDialog'
 import type { MatterCreateSource } from './MatterCreateDialog'
 import { buildMatterResourceLookupKeys, mergeMatterResourceLinkHits } from './matterResource'
 import { useMattersApi } from './hooks'
+import { useMatterMutation } from './matterMutation'
 import { useMatterNavigation } from './navigation'
 
 /** 面板宽度 / 列表最大高度 —— 与旧 `w-[340px]` / `max-h-[540px]` 逐字一致，只是从 class
@@ -79,7 +80,10 @@ export function MatterLinkPopover({
     ])
   }
 
-  const link = useMutation({
+  // 捕获浮层一次面对多个事项 ⇒ 目标事项从 mutation 变量里取（`useMatterMutation` 的
+  // resolver 形态），冲突时刷新的才是**被写的那个**事项。
+  const link = useMatterMutation({
+    matterId: ({ matter }: { matter: Matter; scope: MatterLinkScope }) => matter.public_id,
     mutationFn: async ({ matter, scope }: { matter: Matter; scope: MatterLinkScope }) =>
       api.linkResource(
         matter.public_id,
@@ -97,7 +101,8 @@ export function MatterLinkPopover({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const unlink = useMutation({
+  const unlink = useMatterMutation({
+    matterId: (entry: (typeof linked)[number]) => entry.publicId,
     mutationFn: async (entry: (typeof linked)[number]) => {
       const detail = await api.get(entry.publicId)
       let version = detail.matter.version
@@ -116,7 +121,8 @@ export function MatterLinkPopover({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const subscription = useMutation({
+  const subscription = useMatterMutation({
+    matterId: (entry: (typeof linked)[number]) => entry.publicId,
     mutationFn: async (entry: (typeof linked)[number]) => {
       if (!entry.subscription) return
       const detail = await api.get(entry.publicId)
@@ -131,7 +137,10 @@ export function MatterLinkPopover({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const create = useMutation({
+  // 新建没有 `expectedVersion`（事项还不存在），结构上撞不到版本冲突 —— 走同一个出口只是
+  // 为了让「这个文件里还有一个裸 useMutation」不成立（闸按文件判，见 matterMutationGate）。
+  const create = useMatterMutation({
+    matterId: null,
     mutationFn: (input: Parameters<typeof api.create>[0]) => api.create(input),
     onSuccess: async (result) => {
       setCreateOpen(false)

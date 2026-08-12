@@ -22,6 +22,7 @@ import type {
   MatterResourceListItem,
   MatterResourceLookupResponse,
   MatterStakeholder,
+  MatterSuggestionBulkResult,
   MatterTimelineResponse,
   MatterUpdate,
   MatterUpdateListResponse,
@@ -324,6 +325,15 @@ export function createMattersApi(baseUrl: string): MattersApi {
       )
     },
 
+    bulkResolveResourceSuggestions(matterId, input, options): Promise<MatterSuggestionBulkResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/resource-suggestions/bulk`,
+        mutationRequest(options, { action: input.action, resource_ids: input.resourceIds })
+      )
+    },
+
     discoverResourceSuggestions(matterId, input = {}): Promise<MatterResourceDiscoveryResult> {
       return request(
         baseUrl,
@@ -545,6 +555,15 @@ export interface MatterContextSnapshotPayload {
     metadata: Record<string, unknown>
     excerpt: string | null
   }>
+  /** 🔴 `resources` 上面那个数组是**投影**（pinned 或未确认的 agent 建议），不是「这个事项
+   *  有多少资料」。这里是不受该投影限制的真实计数 —— 判断「缺不缺上下文」必须用它，
+   *  用 `resources.length === 0` 会形成自噬循环（把 agent 建议全确认掉 ⇒ 投影归零 ⇒
+   *  弹缺上下文卡 ⇒ 外扩灌垃圾）。旧后端不发此字段 ⇒ optional。 */
+  resource_counts?: {
+    linked_resources: number
+    confirmed_resources: number
+    unconfirmed_suggestions: number
+  }
   events: Array<{
     kind: string
     happened_at: number
@@ -574,13 +593,6 @@ export interface MatterUndoRequest {
 
 export interface MatterChatApi {
   contextSnapshot(matterId: string): Promise<MatterContextSnapshotPayload>
-  /** G5 audit — records `chat_scope_expanded` / `chat_scope_restored` on the matter timeline. */
-  recordChatScope(
-    matterId: string,
-    scope: 'matter' | 'global',
-    sessionId: number,
-    options?: MatterMutationOptions
-  ): Promise<Record<string, unknown>>
   /** Execute one undo descriptor (renderer-direct REST, no LLM). Resolves to the mutation result;
    *  rejects with `Error & {code}` — `E_VERSION_CONFLICT` when the matter moved on. */
   applyUndo(
@@ -706,17 +718,6 @@ export function createMatterChatApi(baseUrl: string): MatterChatApi {
   return {
     contextSnapshot(matterId): Promise<MatterContextSnapshotPayload> {
       return request(baseUrl, 'GET', `/matters/${segment(matterId)}/context-snapshot`)
-    },
-
-    recordChatScope(matterId, scope, sessionId, options = {}): Promise<Record<string, unknown>> {
-      return request(
-        baseUrl,
-        'POST',
-        `/matters/${segment(matterId)}/chat-scope`,
-        // 🔴 no expected_version: a scope switch is a SESSION property, not an aggregate change
-        // (D8) — it neither reads nor bumps matter.version.
-        mutationRequest({ ...options, expectedVersion: null }, { scope, session_id: sessionId })
-      )
     },
 
     applyUndo(descriptor, options = {}): Promise<MatterMutationResult> {

@@ -111,6 +111,25 @@ export type MatterRunAction = (typeof MATTER_RUN_ACTIONS)[number]
 /** 出厂默认 = 设计稿里预先勾上的前两项（与 Python DEFAULT_RUN_ACTIONS 同源，有 parity 闸）。 */
 export const MATTER_DEFAULT_RUN_ACTIONS = ['summary', 'items'] as const
 
+/**
+ * 「跟进规则」写侧的线上形状 —— PATCH body 里 `schedule_json` 的值。
+ *
+ * 🔴 **写侧是对象，读侧是字符串**，两者不是一个东西，别互抄：
+ * - 写：`MatterPatchInput.schedule_json` ↔ pydantic `MatterPatchWithScheduleRequest.schedule_json:
+ *   dict[str, Any] | None` —— 发字符串会在 FastAPI 校验层 422，整条 PATCH（含 agent_enabled /
+ *   profile / instructions）全被拒（0812 dogfood「跟进规则保存必定失败」的根因就是这里抄成了
+ *   字符串）。
+ * - 读：`Matter.schedule_json` 是 DB 列，确实是字符串（服务端 `_dump` 后落库）。
+ *
+ * 跨语言闸：`tests/fixtures/matter_trigger_envelope.json`
+ * （vitest `matterTriggerEnvelopeParity.test.ts` + pytest `test_matter_trigger_envelope_parity.py`）。
+ */
+export interface MatterTriggerEnvelope {
+  v: number
+  triggers: Record<string, unknown>[]
+  actions?: MatterRunAction[]
+}
+
 /** 标签色 —— 值是既有主题 token 名，不新增颜色（P6-B D4）。 */
 export const MATTER_TAG_COLORS = [
   '--c-accent',
@@ -430,11 +449,32 @@ export interface MatterResourceSuggestion extends MatterResourceListItem {
   confidence: number
 }
 
+/** 整批处置资料建议。逐条口不变，这是「全部确认 / 全部忽略」的整批口。 */
+export const MATTER_SUGGESTION_BULK_ACTIONS = ['confirm', 'reject'] as const
+export type MatterSuggestionBulkAction = (typeof MATTER_SUGGESTION_BULK_ACTIONS)[number]
+
+/** 批里**没做**的那些条各自的原因。混成一个数字就说不清「到底成了几条」，所以分开计数。 */
+export const MATTER_SUGGESTION_BULK_SKIP_REASONS = [
+  'already_applied',
+  'already_confirmed',
+  'not_linked'
+] as const
+export type MatterSuggestionBulkSkipReason = (typeof MATTER_SUGGESTION_BULK_SKIP_REASONS)[number]
+
+export interface MatterSuggestionBulkResult extends MatterMutationResult {
+  action: MatterSuggestionBulkAction
+  applied: number[]
+  skipped: Array<{ resource_id: number; reason: MatterSuggestionBulkSkipReason }>
+  counts: { applied: number; skipped: number }
+}
+
 export interface MatterResourceDiscoveryResult {
   items: MatterResourceSuggestion[]
   suppressed: Array<{ external_key: string; reason: 'rejected_same_evidence' }>
   local_candidate_count: number
   expanded: boolean
+  /** true = 该事项已挂满未审建议（服务端 `RESOURCE_SUGGESTION_BACKLOG_CAP`），本次不再堆新的。 */
+  backlog_capped?: boolean
 }
 
 export interface MatterStakeholder {
@@ -555,14 +595,27 @@ export interface MatterRunStartResult {
   coalesced: boolean
 }
 export interface MatterProposalSource {
-  resource_id: number
+  /** 已关联资源的 id。与 `change_id` 二选一（同提案新建的资源此时还没有 id）。 */
+  resource_id?: number | null
+  /** 引用同一份提案里 `kind: 'resource'` 的新建关联（服务端校验它确实存在且未被剔除）。 */
+  change_id?: string | null
   locator?: Record<string, unknown> | null
   evidence?: string | null
+}
+/** 提案要**新建**关联的一份外部资料的身份（服务端归一后的产物，非模型原话）。 */
+export interface MatterProposalNewResource {
+  provider: string
+  kind: MatterResourceKind
+  external_key: string
+  title?: string | null
+  canonical_url?: string | null
 }
 export interface MatterProposalChange {
   id: string
   kind: MatterChangeKind
   target?: Record<string, unknown> | null
+  /** `kind: 'resource'` 的第二形态：把这份新资料关联进事项（与 `target.id` 的确认互斥）。 */
+  resource?: MatterProposalNewResource | null
   before?: unknown
   after?: unknown
   text?: string | null
@@ -683,7 +736,8 @@ export interface MatterPatchInput {
   agent_profile_id?: string | null
   agent_enabled?: boolean
   matter_instructions?: string | null
-  schedule_json?: string | null
+  /** 🔴 对象，不是字符串 —— 见 `MatterTriggerEnvelope` 的注释。 */
+  schedule_json?: MatterTriggerEnvelope | null
 }
 
 export interface MatterItemCreateInput {
@@ -859,6 +913,13 @@ export interface MattersApi {
     resourceId: number,
     options: MatterMutationOptions
   ): Promise<MatterMutationResult>
+  /** 整批确认 / 整批忽略 —— 一次版本校验、一次版本推进。批里混进已处置 / 不属于本事项的
+   *  id 不整批失败，各自落在返回的 `skipped` 里。 */
+  bulkResolveResourceSuggestions(
+    matterId: string,
+    input: { action: MatterSuggestionBulkAction; resourceIds: number[] },
+    options: MatterMutationOptions
+  ): Promise<MatterSuggestionBulkResult>
   discoverResourceSuggestions(
     matterId: string,
     input?: { query?: string; expandReason?: MatterResourceExpansionReason; limit?: number }

@@ -88,8 +88,13 @@ export function createWebTools(
   // unreachable in a real run, this is the defensive second reading of the same literal.
   const contextMode = normalizeContextMode(opts.contextMode)
   const agentId = opts.agentRunContext?.agentId
+  // 0812 — matter_followup joined the headless set: run_spec.py authors grantWeb for follow-up
+  // runs (the matrix row admits 'web' only under that grant), and the grant-tier免卡 wiring below
+  // must match registration or every fetch would stash an approval nobody is present to answer.
   const headlessAgent =
-    (contextMode === 'untrusted_trigger' || contextMode === 'cron_headless') &&
+    (contextMode === 'untrusted_trigger' ||
+      contextMode === 'cron_headless' ||
+      contextMode === 'matter_followup') &&
     typeof agentId === 'string' &&
     agentId.length > 0
   const webGrant = headlessAgent ? parseWebGrant(opts.agentRunContext?.modeGrants?.web) : 'off'

@@ -307,7 +307,7 @@ export interface ChatSessionListItem extends ChatSession {
   email_subject: string | null
   email_sender: string | null
   // 0812（事项对话收口进主 chat）— matter-anchored 会话的身份。`anchor_id` 是 matter 的**内部** id，
-  // 而事项的 REST 面（context-snapshot / chat-scope / undo）全按 MAT-xxxx 寻址；不带这两个字段，
+  // 而事项的 REST 面（context-snapshot / undo）全按 MAT-xxxx 寻址；不带这两个字段，
   // 从历史里选中一个事项会话就只剩一个数字，既拿不到上下文也标不出身份。
   // 🔴 与 email_subject/email_sender 同性质：**join 投影，不是 ai_chat.db 的列**，所以住在
   // ChatSessionListItem 而不是 ChatSession（后者是 DB 行镜像，有 test_chat_type_mirror_parity 守着）。

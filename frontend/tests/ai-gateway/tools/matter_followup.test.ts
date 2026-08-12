@@ -109,8 +109,7 @@ describe('matter_update_propose — registration is anchored to a run (D6)', () 
       domain: mockDomain(() => okEnvelope([])),
       approvalGuard: new ApprovalGuard(),
       matterToolsEnabled: true,
-      contextMode: 'manual_chat',
-      matterScopeFilter: { matterId: 42 }
+      contextMode: 'manual_chat'
     })
     expect(manual.matter_update_propose).toBeUndefined()
     expect(manual.matter_find).toBeDefined() // the rest of the family is there
@@ -142,12 +141,9 @@ describe('matter_suggest_related_resources — manual-only dynamic approval', ()
       local_candidate_count: 1,
       expanded: false
     })
-    const tool = createMatterSuggestionTools(
-      domain,
-      [],
-      new ApprovalGuard(),
-      { contextMode: 'manual_chat' }
-    ).matter_suggest_related_resources
+    const tool = createMatterSuggestionTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    }).matter_suggest_related_resources
     const input = { matter_id: 'MAT-000042', kinds: ['email'], query: 'launch', limit: 7 }
     const needsApproval = tool.needsApproval as (
       value: unknown,
@@ -246,6 +242,56 @@ describe('matter_update_propose — identity is stamped, never taken from the mo
     expect(matterUpdateProposeSchema.safeParse({ summary: 's', changes: [change] }).success).toBe(
       false
     )
+  })
+})
+
+/** 0812 — 新发现的证据的结构化落地通道。zod 只让**歧义形状**不可表达；provider 到底算不算
+ *  数、external_key 合不合既有约定，权威在 Python（`src/matters/resource_proposal.py`）。 */
+describe('matter_update_propose — proposing a NEW resource link', () => {
+  const parse = (changes: unknown[]) =>
+    matterUpdateProposeSchema.safeParse({ summary: 's', changes })
+
+  const NEW_RESOURCE = {
+    id: 'chg_res',
+    kind: 'resource',
+    resource: {
+      provider: 'notion',
+      kind: 'doc',
+      external_key: 'page:2f1a4c9e',
+      title: 'Q3 rollout plan',
+      canonical_url: 'https://www.notion.so/2f1a4c9e'
+    },
+    sources: []
+  }
+
+  test('accepts a resource identity built from the existing column names', () => {
+    expect(parse([NEW_RESOURCE]).success).toBe(true)
+  })
+
+  test('rejects a free-form provider string (shape gate; membership is a server call)', () => {
+    const bad = { ...NEW_RESOURCE, resource: { ...NEW_RESOURCE.resource, provider: 'Notion Inc.' } }
+    expect(parse([bad]).success).toBe(false)
+  })
+
+  test('a resource identity may not ride on another change kind', () => {
+    expect(parse([{ ...NEW_RESOURCE, kind: 'fact', text: 'x' }]).success).toBe(false)
+  })
+
+  test('confirming an existing link and proposing a new one are mutually exclusive', () => {
+    const both = { ...NEW_RESOURCE, target: { entity: 'resource', id: 7 } }
+    expect(parse([both]).success).toBe(false)
+    // …but either one alone is fine
+    expect(
+      parse([{ id: 'c', kind: 'resource', target: { entity: 'resource', id: 7 } }]).success
+    ).toBe(true)
+  })
+
+  test('a source is exactly one of resource_id / change_id', () => {
+    const fact = (sources: unknown[]) => [{ id: 'chg_f', kind: 'fact', text: 't', sources }]
+    expect(parse(fact([{ resource_id: 91 }])).success).toBe(true)
+    expect(parse(fact([{ change_id: 'chg_res', evidence: '计划页时间表' }])).success).toBe(true)
+    expect(parse(fact([{ resource_id: 91, change_id: 'chg_res' }])).success).toBe(false)
+    expect(parse(fact([{ evidence: 'trust me' }])).success).toBe(false)
   })
 })
 
@@ -450,29 +496,8 @@ describe('matter_review_update — the dynamic approval verdict (D8)', () => {
   })
 })
 
-describe('email read tools — Matter scoping (G5: list/search narrow, email_get guards)', () => {
-  test('a run context scopes list/search AND passes email_get the membership guard', async () => {
-    const { domain, calls } = recordingDomain({ items: [] })
-    const tools = createEmailReadTools(domain, [], {
-      matterScopeFilter: { matterId: 42 },
-      matterGetScope: { matterId: 42 }
-    })
-    await runTool(tools.email_list_filter, { limit: 20 })
-    await runTool(tools.email_get, { internal_id: 51201 })
-    expect(calls[0].url).toContain('matter_id=42')
-    expect(calls[1].url).toContain('matter_scope=42')
-  })
-
-  test('the MANUAL shape (filter only) leaves email_get byte-identical to P3', async () => {
-    const { domain, calls } = recordingDomain({ items: [] })
-    const tools = createEmailReadTools(domain, [], { matterScopeFilter: { matterId: 42 } })
-    await runTool(tools.email_list_filter, { limit: 20 })
-    await runTool(tools.email_get, { internal_id: 51201 })
-    expect(calls[0].url).toContain('matter_id=42')
-    expect(calls[1].url).not.toContain('matter_scope')
-  })
-
-  test('no scope at all → neither param appears', async () => {
+describe('email read tools — 0812: no Matter narrowing left in EITHER venue', () => {
+  test('the read tools carry no narrowing param at all (the options are gone)', async () => {
     const { domain, calls } = recordingDomain({ items: [] })
     const tools = createEmailReadTools(domain, [])
     await runTool(tools.email_list_filter, { limit: 20 })
@@ -481,7 +506,13 @@ describe('email read tools — Matter scoping (G5: list/search narrow, email_get
     expect(calls[1].url).not.toContain('matter_scope')
   })
 
-  test('buildGatewayTools derives the run scope from the anchor (no caller filter needed)', async () => {
+  test('0812 owner拍板: a follow-up run is NOT scoped to the anchor any more (full-library reads)', async () => {
+    // The run's whole point is discovering NEW evidence — the old anchor→matterScopeFilter/
+    // matterGetScope derivation locked it inside what was already linked (structurally unable to
+    // see a new mail). The anchor now feeds ONLY matter_update_propose's identity; the email
+    // reads carry neither narrowing param. 🔴 The MANUAL panel filter (事项对话 检索范围) that used
+    // to be the other producer was removed in the same batch — 事项对话 reads the full library —
+    // so both createEmailReadTools options were deleted rather than left permanently null.
     const { domain, calls } = recordingDomain({ items: [] })
     const tools = buildGatewayTools({
       domain,
@@ -495,9 +526,10 @@ describe('email read tools — Matter scoping (G5: list/search narrow, email_get
         matterRun: MATTER_RUN
       }
     })
+    expect(tools.matter_update_propose).toBeDefined() // the anchor still binds the propose tool
     await runTool(tools.email_list_filter, { limit: 20 })
     await runTool(tools.email_get, { internal_id: 51201 })
-    expect(calls[0].url).toContain('matter_id=42')
-    expect(calls[1].url).toContain('matter_scope=42')
+    expect(calls[0].url).not.toContain('matter_id')
+    expect(calls[1].url).not.toContain('matter_scope')
   })
 })

@@ -1,5 +1,5 @@
 import { MATTER_DEFAULT_RUN_ACTIONS, MATTER_RUN_ACTIONS } from '@shared/api/types/matter'
-import type { MatterRunAction } from '@shared/api/types/matter'
+import type { MatterRunAction, MatterTriggerEnvelope } from '@shared/api/types/matter'
 import { isScheduleValue } from '@shared/components/agents/schedule/types'
 import type { ScheduleValue } from '@shared/components/agents/schedule/types'
 
@@ -15,15 +15,22 @@ import type { ScheduleValue } from '@shared/components/agents/schedule/types'
  * 🔴 这两处解析以前是两份重复的 `isScheduleValue(JSON.parse(raw))`，只认 v1 —— 存储升级后
  * 它们会把 v2 行读成"没有排程"，而新建事项默认就是 v2，等于每个新事项的绑定卡都谎报未排期。
  * 收成一份，两种形状都认。
+ *
+ * 🔴 每个解析器都分两层：`*Value` 吃**已解析的值**，无后缀的吃 **DB 列字符串**。写侧
+ * builder（`buildTriggerEnvelope`）产出的是对象，预览路径直接走 `*Value` —— 为了迁就
+ * 只吃字符串的旧签名而 `JSON.stringify` 一次再 parse 回来，正是把"写侧是对象"这件事
+ * 藏起来的那种绕法。
  */
-export function parseMatterSchedule(raw: string | null | undefined): ScheduleValue | null {
+function decodeColumn(raw: string | null | undefined): unknown {
   if (!raw) return null
-  let value: unknown
   try {
-    value = JSON.parse(raw)
+    return JSON.parse(raw)
   } catch {
     return null
   }
+}
+
+export function parseMatterScheduleValue(value: unknown): ScheduleValue | null {
   if (isScheduleValue(value)) return value
   const triggers = (value as { triggers?: unknown } | null)?.triggers
   if (!Array.isArray(triggers)) return null
@@ -38,15 +45,13 @@ export function parseMatterSchedule(raw: string | null | undefined): ScheduleVal
   return null
 }
 
+export function parseMatterSchedule(raw: string | null | undefined): ScheduleValue | null {
+  return parseMatterScheduleValue(decodeColumn(raw))
+}
+
 /** 该事项配了几条启用中的触发器（v1 行恒为 0 或 1）。 */
 export function countEnabledTriggers(raw: string | null | undefined): number {
-  if (!raw) return 0
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch {
-    return 0
-  }
+  const value = decodeColumn(raw)
   if (isScheduleValue(value)) return 1
   const triggers = (value as { triggers?: unknown } | null)?.triggers
   if (!Array.isArray(triggers)) return 0
@@ -71,13 +76,10 @@ export interface MatterTriggerEntry {
 
 /** 把库里存的内容解析成 entry 列表。v1 单对象升成单条，形状非法回空列表。 */
 export function parseTriggerEntries(raw: string | null | undefined): MatterTriggerEntry[] {
-  if (!raw) return []
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch {
-    return []
-  }
+  return parseTriggerEntriesValue(decodeColumn(raw))
+}
+
+export function parseTriggerEntriesValue(value: unknown): MatterTriggerEntry[] {
   if (isScheduleValue(value)) {
     return [{ ...value, id: 'mtr_legacy', kind: 'schedule', enabled: true }]
   }
@@ -94,13 +96,10 @@ export function parseTriggerEntries(raw: string | null | undefined): MatterTrigg
 /** 「跟进时执行」四项：从库里的内容取。无该键 / v1 行 → 出厂默认前两项。
  *  归一化规则与 Python `triggers.parse_run_actions` 同源（保序去重、剔未知、空回落默认）。 */
 export function parseRunActions(raw: string | null | undefined): MatterRunAction[] {
-  if (!raw) return [...MATTER_DEFAULT_RUN_ACTIONS]
-  let value: unknown
-  try {
-    value = JSON.parse(raw)
-  } catch {
-    return [...MATTER_DEFAULT_RUN_ACTIONS]
-  }
+  return parseRunActionsValue(decodeColumn(raw))
+}
+
+export function parseRunActionsValue(value: unknown): MatterRunAction[] {
   const actions = (value as { actions?: unknown } | null)?.actions
   if (!Array.isArray(actions)) return [...MATTER_DEFAULT_RUN_ACTIONS]
   const picked: MatterRunAction[] = []
@@ -120,17 +119,24 @@ function sameActions(a: readonly MatterRunAction[], b: readonly MatterRunAction[
   return a.length === b.length && a.every((value, index) => value === b[index])
 }
 
-/** 写回库的形状。空列表写 null（后端据此清空排程）。
+/** PATCH body 里 `schedule_json` 的值。空列表写 null（后端据此清空排程）。
+ *
+ *  🔴 返回**对象**，不是 JSON 字符串：pydantic `MatterPatchWithScheduleRequest.schedule_json`
+ *  的类型是 `dict[str, Any] | None`，发字符串会在 FastAPI 校验层 422，把整条 PATCH（含
+ *  agent_enabled / profile / instructions）一起打掉。这里改名就是为了让返回值的形状写在
+ *  名字上 —— 老名字 `serializeTriggerEntries` 读起来像"序列化成字符串"，正是当初抄错的诱因。
+ *  两侧形状由 `tests/fixtures/matter_trigger_envelope.json` 跨语言钉死。
+ *
  *  actions 与出厂默认相同则**不写这个键** —— 让"没配过"和"配成默认"在库里长得一样，
  *  将来改默认能跟着走（同 Python `dump_trigger_set` 的纪律）。 */
-export function serializeTriggerEntries(
+export function buildTriggerEnvelope(
   entries: readonly MatterTriggerEntry[],
   actions?: readonly MatterRunAction[]
-): string | null {
+): MatterTriggerEnvelope | null {
   if (entries.length === 0) return null
-  const envelope: Record<string, unknown> = { v: 2, triggers: entries }
+  const envelope: MatterTriggerEnvelope = { v: 2, triggers: [...entries] }
   if (actions && !sameActions(actions, MATTER_DEFAULT_RUN_ACTIONS)) {
     envelope.actions = [...actions]
   }
-  return JSON.stringify(envelope)
+  return envelope
 }

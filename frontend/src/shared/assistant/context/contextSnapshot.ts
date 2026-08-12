@@ -91,7 +91,6 @@ export interface ActiveMatterContext {
   currentSummary: string | null
   version: number
   summaryAcceptedAt: number | null
-  scope: 'matter' | 'global'
   items: Array<Record<string, unknown>>
   stakeholders: Array<Record<string, unknown>>
   resources: Array<{
@@ -416,7 +415,6 @@ export function isValidContextSnapshot(value: unknown): value is AgentContextSna
       typeof matter.id !== 'number' ||
       typeof matter.publicId !== 'string' ||
       typeof matter.title !== 'string' ||
-      !['matter', 'global'].includes(String(matter.scope)) ||
       !Array.isArray(matter.items) ||
       !Array.isArray(matter.stakeholders) ||
       !Array.isArray(matter.resources) ||

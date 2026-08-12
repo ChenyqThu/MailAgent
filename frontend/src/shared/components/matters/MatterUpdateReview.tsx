@@ -5,6 +5,7 @@ import {
   Layers,
   Link,
   ListChecks,
+  Plus,
   RefreshCcw,
   Shield,
   Sparkles,
@@ -24,6 +25,8 @@ import type {
   MatterStatus,
   MatterUpdate
 } from '@shared/api/types/matter'
+
+import { DOC_PROVIDER_ICONS, RESOURCE_KIND_ICONS } from './matterResource'
 
 // 逐项照设计原型 review.jsx 的 `CHANGE_KIND` 词表（icon + tone + label + hint 四件）。
 // 🔴 改动前三处不符：action/resource 的 tone 用了 ai（稿子是 info）、两条 hint 是空的、
@@ -404,28 +407,79 @@ function ChangeRow({
             <p className="mt-2 text-body">{change.text}</p>
           )}
 
+          {change.resource ? <NewResourceCard resource={change.resource} /> : null}
+
           {change.reason ? (
             <p className="mt-2 text-aux text-ink-fg-2">理由：{change.reason}</p>
           ) : null}
           <div className="mt-2 flex flex-wrap gap-1">
-            {change.sources?.map((source) => (
-              <button
-                type="button"
-                key={source.resource_id}
-                onClick={() => onOpenResource?.(source.resource_id)}
-                className="inline-flex items-center gap-1 rounded-full bg-ink-3 px-2 py-1 text-aux text-ai"
-                aria-label={t('matters.review.openCitation', {
-                  id: source.resource_id,
-                  defaultValue: `打开证据 #${source.resource_id}`
-                })}
-              >
-                <Link size={10} />#{source.resource_id}
-              </button>
-            ))}
+            {change.sources?.map((source) =>
+              source.resource_id != null ? (
+                <button
+                  type="button"
+                  key={`res-${source.resource_id}`}
+                  onClick={() => onOpenResource?.(source.resource_id as number)}
+                  className="inline-flex items-center gap-1 rounded-full bg-ink-3 px-2 py-1 text-aux text-ai"
+                  aria-label={t('matters.review.openCitation', {
+                    id: source.resource_id,
+                    defaultValue: `打开证据 #${source.resource_id}`
+                  })}
+                >
+                  <Link size={10} />#{source.resource_id}
+                </button>
+              ) : (
+                // 同提案里正在新建的资料：还没有 resource_id，点不开也不该假装能点开。
+                <span
+                  key={`chg-${source.change_id}`}
+                  className="inline-flex items-center gap-1 rounded-full bg-ink-3 px-2 py-1 text-aux text-ink-fg-2"
+                >
+                  <Link size={10} />
+                  {t('matters.review.pendingCitation')}
+                </span>
+              )
+            )}
           </div>
         </div>
       </div>
     </article>
+  )
+}
+
+/** 「将新建关联」的资料卡。owner 是在这个界面上按下接受的 —— 看不清 provider / 标题 /
+ *  链接就等于盲签，所以这三样必须在场，且明说"接受后才会关联进来"。 */
+function NewResourceCard({
+  resource
+}: {
+  resource: NonNullable<MatterProposalChange['resource']>
+}): React.ReactElement {
+  const { t } = useTranslation()
+  // 🔴 成员索引而非查表函数：react-hooks/static-components 不接受 `const C = fn(...)`
+  //（见 matterResource.ts 文末的说明）。与抽屉 / 上下文 tab 同一套图标单源。
+  const Icon =
+    (resource.kind === 'doc' && DOC_PROVIDER_ICONS[resource.provider.toLowerCase()]) ||
+    RESOURCE_KIND_ICONS[resource.kind]
+  return (
+    <div className="mt-2 rounded-[var(--r-ctl)] border border-info/30 bg-info/[0.06] p-2.5">
+      <p className="flex items-center gap-1.5 text-meta font-medium text-info">
+        <Plus size={11} />
+        {t('matters.review.newResource.badge')}
+      </p>
+      <div className="mt-1.5 flex items-start gap-2">
+        <Icon size={14} className="mt-0.5 shrink-0 text-ink-fg-2" />
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-body">
+            {resource.title || t('matters.review.newResource.untitled')}
+          </p>
+          <p className="mt-0.5 truncate font-mono text-meta text-ink-fg-3">
+            {resource.provider} · {resource.external_key}
+          </p>
+          {resource.canonical_url ? (
+            <p className="mt-0.5 truncate text-meta text-ink-fg-2">{resource.canonical_url}</p>
+          ) : null}
+        </div>
+      </div>
+      <p className="mt-1.5 text-meta text-ink-fg-3">{t('matters.review.newResource.hint')}</p>
+    </div>
   )
 }
 

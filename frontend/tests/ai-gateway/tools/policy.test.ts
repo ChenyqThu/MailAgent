@@ -21,6 +21,7 @@ import {
   applyContextModePolicy,
   classOfTool,
   isToolClassAllowedInMode,
+  MATTER_RUN_PROPOSE_TOOL,
   mayAutoApprove,
   normalizeContextMode,
   parseConnectorGrants,
@@ -215,13 +216,18 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       outbound: false,
       connector_write: true
     },
-    // Matters MVP P4 (D5) — the strictest row of all: ONLY read + artifact. domain_write is the
-    // one that distinguishes it from every other non-manual mode (they all admit domain writes and
-    // let the always-ask edit tier stash instead) — a follow-up run observes and PROPOSES, it never
-    // writes, so its single output channel is the artifact-class matter_update_propose.
+    // Matters MVP P4 (D5) → 0812 owner拍板 + codex修复批 — read registers; artifact is BY NAME
+    // now (false here because this base table's class-only call carries no toolName — the
+    // MATTER_RUN_PROPOSE_TOOL lift is pinned in the behavior-belt describe below; report_write
+    // shares the class and is a local write, whole-class admission was the hole); web is
+    // GRANT-dependent (false here because this base table carries no grants — the spec-authored
+    // gated/open lift is pinned in the 3-axis sweep below). domain_write is the one that
+    // distinguishes it from every other non-manual mode (they all admit domain writes and let the
+    // always-ask edit tier stash instead) — a follow-up run observes and PROPOSES, it never
+    // writes, so its single structured output channel is the artifact-class matter_update_propose.
     matter_followup: {
       read: true,
-      artifact: true,
+      artifact: false,
       domain_write: false,
       capability_change: false,
       exec: false,
@@ -327,10 +333,15 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
           mode === 'manual_chat'
             ? true // grants never consulted in manual
             : mode === 'matter_followup'
-              ? // P4 (D5) — the follow-up row is evaluated BEFORE the generic
-                // read/artifact/domain_write line, and grants are never consulted: a Matter bound
-                // to a profile carrying exec/web/connector grants still gets read+artifact only.
-                cls === 'read' || cls === 'artifact'
+              ? // P4 (D5) → 0812 owner拍板 + codex修复批 — the follow-up row is evaluated BEFORE
+                // the generic read/artifact/domain_write line. read always; artifact ONLY by name
+                // (this sweep passes no toolName → false; the propose lift is pinned in the
+                // behavior-belt describe); web ONLY under the spec-authored gated/open grant
+                // (run_spec.py is the sole author — profile grants are never copied into a matter
+                // spec); exec/connector_write/domain_write/capability_change/outbound stay denied
+                // under ANY grants — the exec grant and write-capable connector ceilings can lift
+                // NOTHING here.
+                cls === 'read' || (cls === 'web' && webGranted)
               : cls === 'read' || cls === 'artifact' || cls === 'domain_write'
                 ? true
                 : mode === 'im_chat'
@@ -467,6 +478,92 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
     expect(granted.skill_install).toBeUndefined()
     expect(granted.email_prepare_send).toBeUndefined()
     expect(build({ exec: true, web: 'open' } as AgentModeGrants).email_prepare_send).toBeUndefined()
+  })
+})
+
+// ── 0812 codex修复批 — matter_followup 的安全事实由**行为**断言承担 ────────────────────────────
+// （tests/api/test_context_mode_consistency.py 的正则闸只钉分支形状与顺序，AST 之外的诱饵能骗过
+// 它 —— 见 codex 报告。这里对全部 GatewayToolClass 穷举断言真实控制流。）
+describe('matter_followup — behavior belt across every tool class (0812)', () => {
+  const MAX_GRANTS: AgentModeGrants = { exec: true, web: 'open', connectors: { notion: 'update' } }
+  const WRITE_CAPABLE: GatewayToolClass[] = [
+    'domain_write',
+    'capability_change',
+    'exec',
+    'outbound',
+    'connector_write'
+  ]
+
+  test('full sweep: read always; artifact only under the propose NAME; web only granted; every write class false', () => {
+    for (const cls of GATEWAY_TOOL_CLASS_VALUES) {
+      // class-only call (no grants, no name): read is the only unconditional pass
+      expect(isToolClassAllowedInMode(cls, 'matter_followup'), `${cls} · bare`).toBe(cls === 'read')
+      // maximal (tampered) grants: web joins via its own grant; write classes still all false
+      expect(isToolClassAllowedInMode(cls, 'matter_followup', MAX_GRANTS), `${cls} · max`).toBe(
+        cls === 'read' || cls === 'web'
+      )
+      // the propose NAME lifts ONLY the artifact class — a write-class tool wearing the name
+      // gains nothing (no name-based bypass across classes)
+      expect(
+        isToolClassAllowedInMode(
+          cls,
+          'matter_followup',
+          MAX_GRANTS,
+          undefined,
+          MATTER_RUN_PROPOSE_TOOL
+        ),
+        `${cls} · named propose`
+      ).toBe(cls === 'read' || cls === 'artifact' || cls === 'web')
+    }
+    for (const cls of WRITE_CAPABLE) {
+      expect(isToolClassAllowedInMode(cls, 'matter_followup', MAX_GRANTS), cls).toBe(false)
+    }
+  })
+
+  test('artifact by name: matter_update_propose only; report_write (the other artifact) stays out', () => {
+    const artifact = (name?: string) =>
+      isToolClassAllowedInMode('artifact', 'matter_followup', undefined, undefined, name)
+    expect(artifact(MATTER_RUN_PROPOSE_TOOL)).toBe(true)
+    expect(artifact('report_write')).toBe(false)
+    expect(artifact(undefined)).toBe(false)
+    expect(artifact('')).toBe(false)
+  })
+
+  test('web needs the spec-authored grant: absent/off/junk deny; gated/open admit', () => {
+    for (const bad of [
+      undefined,
+      {},
+      { web: 'off' },
+      { web: true } as unknown as AgentModeGrants,
+      { web: 'yes' } as unknown as AgentModeGrants
+    ]) {
+      expect(
+        isToolClassAllowedInMode('web', 'matter_followup', bad as AgentModeGrants | undefined),
+        JSON.stringify(bad)
+      ).toBe(false)
+    }
+    expect(isToolClassAllowedInMode('web', 'matter_followup', { web: 'gated' })).toBe(true)
+    expect(isToolClassAllowedInMode('web', 'matter_followup', { web: 'open' })).toBe(true)
+  })
+
+  test('assembled end-to-end: a matter-run ToolSet holds ONLY read-class tools + the propose channel', () => {
+    const tools = buildMatterRunTools()
+    expect(tools.matter_update_propose).toBeDefined()
+    for (const name of Object.keys(tools)) {
+      const cls = classOfTool(name)
+      expect(
+        cls === 'read' || name === MATTER_RUN_PROPOSE_TOOL,
+        `${name} (class ${cls}) escaped the matter matrix row`
+      ).toBe(true)
+    }
+    expect(tools.report_write).toBeUndefined()
+    for (const name of [
+      ...CLASSES_OF('domain_write'),
+      ...CLASSES_OF('capability_change'),
+      ...CLASSES_OF('outbound')
+    ]) {
+      expect(tools[name], `${name} must be stripped in matter_followup`).toBeUndefined()
+    }
   })
 })
 

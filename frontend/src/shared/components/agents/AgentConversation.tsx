@@ -321,8 +321,8 @@ export function AgentConversation({
     chat.activeSessionId
   )
   // 🔴 事项身份未就绪 → 一律禁发（codex #2）。这条会话**是**事项对话，但我们拿不到它的 MAT- 编号，
-  // 于是既不能注入事项上下文、也推不出 gateway 的 matterScopeFilter。放行 = 用户以为在这件事里说话、
-  // 模型却在全局范围跑，可能检索/操作**另一件**事。宁可让这一屏说"上下文未就绪"。
+  // 于是注入不了这件事的上下文快照（事项写工具也没有 surface）。放行 = 用户以为在这件事里说话、
+  // 模型手里却没有它的任何上下文，可能检索/操作**另一件**事。宁可让这一屏说"上下文未就绪"。
   const sendDisabled = approvalSendDisabled || matterContextUnresolved
   const composerControls = useMemo<ChatComposerControls>(
     () => ({
@@ -366,12 +366,13 @@ export function AgentConversation({
   // ── session creation (lazy, at-most-once, anchor-aware) ────────────────────
   // ai-sdk: create the session on the FIRST send, adopt it (history / reload), and hand the id to the
   // gateway latch for the dual-write.
-  // 🔴 0812 起它必须**幂等**：事项对话的检索范围切换要先有 session_id 才能落审计，于是 onEnsureSession
-  // 不再只被 transport 调用。原来的实现无条件新建 —— 两个调用方就会造出两条会话（审计记在 A、对话跑在
-  // B）。existing 短路 + inflight 去重后，两条路共享同一次创建。
-  // 🔴 0812 codex #1 起，去重键还必须绑**线程身份**（navEpoch + 事项锚点）：切到另一件事时复用
-  // 上一件事的在途创建，会把 B 的审计写进 A 的会话、拿 A 的 session 持久化 B 的消息，最后那次
-  // adopt 还会把界面从 B 拽回 A。判定与落地前复核都在 `./ensureSession` 的 createEnsureSession 里。
+  // 🔴 它是**幂等**的：existing 短路 + inflight 去重，重复调用共享同一次创建（原来的实现无条件
+  // 新建，两个调用方就会造出两条会话）。检索范围切换那个第二调用方 0812 已随开关移除，只剩
+  // transport 一条路 —— 幂等与下面的线程身份闸保留（去掉它们只能靠"现在只有一个调用方"这条
+  // 会随时失效的前提）。
+  // 🔴 0812 codex #1：去重键必须绑**线程身份**（navEpoch + 事项锚点）：切到另一件事时复用上一件事
+  // 的在途创建，会拿 A 的 session 持久化 B 的消息，最后那次 adopt 还会把界面从 B 拽回 A。
+  // 判定与落地前复核都在 `./ensureSession` 的 createEnsureSession 里。
   const chatAdoptSession = chat.adoptSession
   const activeSessionIdRef = useRef<number | null>(chat.activeSessionId)
   activeSessionIdRef.current = chat.activeSessionId
@@ -428,7 +429,6 @@ export function AgentConversation({
     chatIsEmpty: chatIsEmptyForMatter,
     navEpoch: chat.navEpoch,
     sessionId: chat.activeSessionId,
-    ensureSession: onEnsureSession,
     enabled: useAiSdkRuntime,
     thinkingEnabled: thinkingActive
   })
@@ -463,7 +463,7 @@ export function AgentConversation({
     scope: contextScope,
     capabilities: contextCapabilities,
     panelMode: 'fullscreen',
-    // 事项对话用事项那份快照（anchorType='matter' 是 gateway 推 matterScopeFilter 的判据）；
+    // 事项对话用事项那份快照（anchorType='matter'）；
     // 这里不能再产出一份 general 快照顶上去。事项身份未就绪时同样不产 —— 一份 general 快照顶上去
     // 正是「把事项会话当普通会话跑」的那条路（codex #2）。
     enabled: contextInjectionOn && matterAnchor === null && !matterContextUnresolved

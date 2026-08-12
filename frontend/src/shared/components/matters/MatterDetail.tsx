@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
@@ -70,6 +70,7 @@ import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { MatterTagPicker } from './MatterTagPicker'
 import { MatterTimeline } from './MatterTimeline'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
+import { isMatterStaleError, useMatterMutation } from './matterMutation'
 import { parseMatterSchedule } from './matterSchedule'
 import {
   MATTER_DETAIL_TAB_ICONS,
@@ -361,7 +362,8 @@ export function MatterDetail({
     ])
   }
 
-  const patch = useMutation({
+  const patch = useMatterMutation({
+    matterId,
     mutationFn: (input: MatterPatchInput) => {
       if (!matter) return Promise.reject(new Error('Matter is not loaded'))
       return api.patch(matterId, input, { expectedVersion: matter.version })
@@ -376,7 +378,8 @@ export function MatterDetail({
    * 草稿、之后才提交」的模态等于把乐观锁架空：期间别处改了排程，保存会带着新版本号把它
    * 静默覆盖。失败也不弹 toast —— 错误要留在模态里，草稿才不会丢。
    */
-  const patchAgentConfig = useMutation({
+  const patchAgentConfig = useMatterMutation({
+    matterId,
     mutationFn: ({
       input,
       expectedVersion
@@ -387,7 +390,8 @@ export function MatterDetail({
     onSuccess: () => void refresh()
   })
 
-  const transition = useMutation({
+  const transition = useMatterMutation({
+    matterId,
     mutationFn: async (operation: 'archive' | 'reopen' | 'trash' | 'restore') => {
       if (!matter) throw new Error('Matter is not loaded')
       return api[operation](matterId, { expectedVersion: matter.version })
@@ -399,7 +403,8 @@ export function MatterDetail({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const addItem = useMutation({
+  const addItem = useMatterMutation({
+    matterId,
     mutationFn: (input: MatterItemCreateInput) => {
       if (!matter) return Promise.reject(new Error('Matter is not loaded'))
       return api.createItem(matterId, input, { expectedVersion: matter.version })
@@ -411,7 +416,8 @@ export function MatterDetail({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const updateItem = useMutation({
+  const updateItem = useMatterMutation({
+    matterId,
     mutationFn: ({ item, status }: { item: MatterItem; status: 'done' | 'open' }) => {
       if (!matter) return Promise.reject(new Error('Matter is not loaded'))
       return api.patchItem(
@@ -425,7 +431,8 @@ export function MatterDetail({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const permanentDelete = useMutation({
+  const permanentDelete = useMatterMutation({
+    matterId,
     mutationFn: async () => {
       if (!matter) throw new Error('Matter is not loaded')
       return api.permanentDelete(matterId, deleteConfirmation, {
@@ -441,7 +448,8 @@ export function MatterDetail({
     onError: (error) => toastError(t('matters.toast.deleteFailed'), errorMessage(error))
   })
 
-  const toggleResourcePin = useMutation({
+  const toggleResourcePin = useMatterMutation({
+    matterId,
     mutationFn: (item: MatterResourceListItem) => {
       if (!matter) return Promise.reject(new Error('Matter is not loaded'))
       return api.patchResource(
@@ -455,12 +463,14 @@ export function MatterDetail({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const cancelRun = useMutation({
+  const cancelRun = useMatterMutation({
+    matterId,
     mutationFn: (runId: number) => api.cancelRun(matterId, runId),
     onSuccess: () => void refresh(),
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
-  const reviewMutation = useMutation({
+  const reviewMutation = useMatterMutation({
+    matterId,
     mutationFn: ({
       kind,
       payload
@@ -487,8 +497,11 @@ export function MatterDetail({
       setReviewId(next?.id ?? null)
     },
     onError: (error) => {
+      // 🔴 这里**只剩文案**：重新拉取由 `useMatterMutation` 统一做掉了（原来这一处是全仓
+      // 唯一写对了的，另外四处漏了 —— 那正是 0812「完全无法操作」的成因）。别在这里再抄
+      // 一遍 invalidate，两套刷新会漂开。
       const writeError = asWriteError(error)
-      if (writeError.code === 'E_UPDATE_STALE' || writeError.code === 'E_VERSION_CONFLICT') {
+      if (isMatterStaleError(error)) {
         setReviewError(
           writeError.code === 'E_UPDATE_STALE'
             ? t('matters.review.staleReload', {
@@ -498,13 +511,6 @@ export function MatterDetail({
                 defaultValue: '事项已被更新，已刷新最新版本。请重载后重试。'
               })
         )
-        void Promise.all([
-          queryClient.invalidateQueries({ queryKey: qk.matters.detail(matterId) }),
-          queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'updates'] }),
-          queryClient.invalidateQueries({
-            queryKey: [...qk.matters.detail(matterId), 'update', reviewId]
-          })
-        ])
         return
       }
       toastError(t('matters.toast.saveFailed'), errorMessage(error))

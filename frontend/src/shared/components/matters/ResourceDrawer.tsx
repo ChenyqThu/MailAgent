@@ -1,4 +1,3 @@
-import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ExternalLink, Pin, RefreshCcw, Shield, X } from 'lucide-react'
@@ -20,6 +19,7 @@ import {
   isMatterResourceAvailable
 } from './matterResource'
 import { useMattersApi } from './hooks'
+import { useMatterMutation } from './matterMutation'
 
 interface ResourceDrawerProps {
   open: boolean
@@ -59,7 +59,8 @@ export function ResourceDrawer({
   const navigate = useNavigate()
   const setActiveEmail = useActiveEmail((state) => state.setActive)
 
-  const patch = useMutation({
+  const patch = useMatterMutation({
+    matterId,
     mutationFn: (input: {
       access_policy?: MatterAccessPolicy
       pinned?: boolean
@@ -78,7 +79,8 @@ export function ResourceDrawer({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const unlink = useMutation({
+  const unlink = useMatterMutation({
+    matterId,
     mutationFn: () => {
       if (!item) return Promise.reject(new Error('Resource is not loaded'))
       return api.unlinkResource(matterId, item.resource.id, {

@@ -1,5 +1,4 @@
 import { useMemo, useState } from 'react'
-import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import {
   Edit3,
@@ -35,7 +34,11 @@ import {
   isMatterResourceAvailable
 } from './matterResource'
 import { useMattersApi } from './hooks'
-import { MatterSuggestedResourceActions } from './MatterSuggestedResourceActions'
+import { useMatterMutation } from './matterMutation'
+import {
+  MatterSuggestedResourceActions,
+  MatterSuggestedResourceBulkActions
+} from './MatterSuggestedResourceActions'
 
 interface MatterContextTabProps {
   matter: Matter
@@ -64,7 +67,8 @@ export function MatterContextTab({
   const [editor, setEditor] = useState<MatterStakeholder | 'new' | null>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
 
-  const remove = useMutation({
+  const remove = useMatterMutation({
+    matterId: matter.public_id,
     mutationFn: (stakeholderId: number) =>
       api.deleteStakeholder(matter.public_id, stakeholderId, {
         expectedVersion: matter.version,
@@ -186,6 +190,13 @@ export function MatterContextTab({
             </Pip>
           ) : null}
         </SectionHeader>
+        {/* Agent 一轮能挂十几份建议，逐条点是 0812 dogfood 的第二条 P0。逐条钮保留 —— 用户
+            要挑着来；批量口只是省掉「全要 / 全不要」这两种最常见的整批处置。 */}
+        <MatterSuggestedResourceBulkActions
+          matter={matter}
+          resources={resources}
+          onChanged={onChanged}
+        />
         {resources.length > 0 ? (
           <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-2">
             {groups.map((group) => {
@@ -388,7 +399,8 @@ function StakeholderModal({
     setForm(stakeholderToInput(stakeholder))
   }
 
-  const save = useMutation({
+  const save = useMatterMutation({
+    matterId: matter.public_id,
     mutationFn: () =>
       stakeholder
         ? api.patchStakeholder(matter.public_id, stakeholder.id, form, {

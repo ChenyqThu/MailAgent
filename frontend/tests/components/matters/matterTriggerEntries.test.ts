@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  buildTriggerEnvelope,
   parseRunActions,
+  parseRunActionsValue,
   parseTriggerEntries,
-  serializeTriggerEntries
+  parseTriggerEntriesValue
 } from '@shared/components/matters/matterSchedule'
 
 const RULE = {
@@ -47,12 +49,14 @@ describe('trigger entries', () => {
     expect(parseTriggerEntries(JSON.stringify(envelope))).toEqual([])
   })
 
-  it('serializes to a v2 envelope, and an empty list clears the column', () => {
+  it('builds a v2 envelope object, and an empty list clears the column', () => {
     const entries = parseTriggerEntries(JSON.stringify(V1))
-    const raw = serializeTriggerEntries(entries)
-    expect(raw).toBeTruthy()
-    expect(JSON.parse(raw as string).v).toBe(2)
-    expect(serializeTriggerEntries([])).toBeNull()
+    const built = buildTriggerEnvelope(entries)
+    expect(built).toBeTruthy()
+    // 🔴 对象，不是 JSON 字符串 —— pydantic 写侧要 dict，发字符串会在校验层 422（0812 dogfood）。
+    expect(typeof built).toBe('object')
+    expect(built?.v).toBe(2)
+    expect(buildTriggerEnvelope([])).toBeNull()
   })
 
   it('round-trips without losing entries', () => {
@@ -64,7 +68,7 @@ describe('trigger entries', () => {
       ]
     }
     const once = parseTriggerEntries(JSON.stringify(envelope))
-    const twice = parseTriggerEntries(serializeTriggerEntries(once))
+    const twice = parseTriggerEntriesValue(buildTriggerEnvelope(once))
     expect(twice).toEqual(once)
   })
 
@@ -94,15 +98,15 @@ describe('run actions（跟进时执行四项）', () => {
 
   it('与默认相同时不写 actions 键 —— 让"没配过"和"配成默认"在库里长得一样', () => {
     const entries = parseTriggerEntries(JSON.stringify(V1))
-    const asDefault = serializeTriggerEntries(entries, ['summary', 'items'])
-    expect(JSON.parse(asDefault as string).actions).toBeUndefined()
-    const custom = serializeTriggerEntries(entries, ['proposal'])
-    expect(JSON.parse(custom as string).actions).toEqual(['proposal'])
+    const asDefault = buildTriggerEnvelope(entries, ['summary', 'items'])
+    expect(asDefault?.actions).toBeUndefined()
+    const custom = buildTriggerEnvelope(entries, ['proposal'])
+    expect(custom?.actions).toEqual(['proposal'])
   })
 
   it('往返不丢勾选', () => {
     const entries = parseTriggerEntries(JSON.stringify(V1))
-    const raw = serializeTriggerEntries(entries, ['draft', 'proposal'])
-    expect(parseRunActions(raw)).toEqual(['draft', 'proposal'])
+    const envelope = buildTriggerEnvelope(entries, ['draft', 'proposal'])
+    expect(parseRunActionsValue(envelope)).toEqual(['draft', 'proposal'])
   })
 })

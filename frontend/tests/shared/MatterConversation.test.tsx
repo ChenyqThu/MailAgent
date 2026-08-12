@@ -4,7 +4,6 @@
 // （那套面板是设计稿明令禁止的第二套 chat UI，已删）；断言对象从「面板」换成 useMatterConversation
 // 产出的绑定，覆盖面一条不减：
 //   · 可移除的事项 chip（移除后不再自动重新 seed）
-//   · 检索范围默认全库 + G5「审计先行」链（ensureSession → recordChatScope → 本地翻档）
 //   · 快照 fail-soft（读不到不挡对话）
 //   · 上下文缺口卡 + 授权扩检索
 //   · 写入回执 surface（没有它，matter 写入卡会退化成通用工具卡）
@@ -24,7 +23,6 @@ import type { MatterChatTarget } from '@shared/state/ai-chat-panel'
 const { chatApi, mattersApi, toastError } = vi.hoisted(() => ({
   chatApi: {
     contextSnapshot: vi.fn(),
-    recordChatScope: vi.fn(),
     applyUndo: vi.fn()
   },
   mattersApi: {
@@ -104,7 +102,6 @@ interface HarnessProps {
   chatIsEmpty?: boolean
   navEpoch?: number
   sessionId?: number | null
-  ensureSession?: () => Promise<number>
 }
 
 /** 最近一次 render 的绑定 —— surface.runUndo / undoStates 没有 DOM 观测面，测试直接读它。 */
@@ -118,7 +115,6 @@ function Harness(props: HarnessProps): React.JSX.Element {
     chatIsEmpty: props.chatIsEmpty ?? true,
     navEpoch: props.navEpoch ?? 0,
     sessionId: props.sessionId ?? null,
-    ensureSession: props.ensureSession ?? (async () => 31),
     enabled: true,
     thinkingEnabled: false
   })
@@ -162,7 +158,6 @@ function renderBinding(props: HarnessProps = {}): {
 beforeEach(() => {
   vi.clearAllMocks()
   chatApi.contextSnapshot.mockResolvedValue(snapshotPayload())
-  chatApi.recordChatScope.mockResolvedValue({})
   chatApi.applyUndo.mockResolvedValue({})
   mattersApi.discoverResourceSuggestions.mockResolvedValue({
     items: [],
@@ -199,7 +194,7 @@ describe('useMatterConversation — 锚点与 chip', () => {
 
   test('历史里选中的事项会话按它自己的 anchor 认身份（与种子无关）', () => {
     // 关键回归：`anchor_type='matter'` 的历史会话此前会以 general 渲染 —— 丢事项上下文，
-    // 也丢 gateway 的 matterScopeFilter。sessionMatter 就是那条修复路径的输入。
+    // 也丢写入回执 surface。sessionMatter 就是那条修复路径的输入。
     renderBinding({ seed: null, sessionMatter: MATTER, chatIsEmpty: false })
     expect(screen.getByText('MAT-0042 Vendor launch')).toBeTruthy()
     expect(screen.getByTestId('harness').dataset.anchor).toBe('MAT-0042')
@@ -293,65 +288,17 @@ describe('useMatterConversation — 快照 fail-soft', () => {
   })
 })
 
-describe('useMatterConversation — G5 检索范围', () => {
-  test('默认全库并明说', () => {
+describe('useMatterConversation — 检索范围开关已移除（恒全库）', () => {
+  test('composer 上方不再有任何检索范围控件', async () => {
     renderBinding({ seed: MATTER })
-    expect(screen.getByText('已允许全库检索')).toBeTruthy()
-  })
-
-  test('切到本事项：先 ensureSession 拿到 session_id，再落审计，最后才翻档', async () => {
-    const ensureSession = vi.fn(async () => 31)
-    renderBinding({ seed: MATTER, ensureSession })
-    fireEvent.click(screen.getByText('本事项'))
-    await waitFor(() =>
-      expect(chatApi.recordChatScope).toHaveBeenCalledWith('MAT-0042', 'matter', 31)
-    )
-    expect(ensureSession.mock.invocationCallOrder[0]).toBeLessThan(
-      chatApi.recordChatScope.mock.invocationCallOrder[0]
-    )
-    await waitFor(() => expect(screen.getByText('检索范围限于本事项')).toBeTruthy())
-  })
-
-  test('审计失败 → 保留当前范围（审计不成立就不许改行为）', async () => {
-    chatApi.recordChatScope.mockRejectedValue(new Error('offline'))
-    renderBinding({ seed: MATTER })
-    fireEvent.click(screen.getByText('本事项'))
-    await waitFor(() => expect(toastError).toHaveBeenCalled())
-    expect(screen.getByText('已允许全库检索')).toBeTruthy()
-  })
-
-  test('切回全库同样落一条对称的审计', async () => {
-    renderBinding({ seed: MATTER })
-    fireEvent.click(screen.getByText('本事项'))
-    await waitFor(() => expect(screen.getByText('检索范围限于本事项')).toBeTruthy())
-    fireEvent.click(screen.getByText('全库'))
-    await waitFor(() =>
-      expect(chatApi.recordChatScope).toHaveBeenLastCalledWith('MAT-0042', 'global', 31)
-    )
-  })
-
-  test('🔴 建会话期间用户切到另一件事 → 这次范围切换作废，不把 A 的审计写到 B 头上', async () => {
-    // ensureSession 是异步的（真实实现里它可能正在建一条会话）。审计**必须**在拿到 session 之后
-    // 再核一次「现在还是不是刚才那件事」——否则就是 codex #1/#2 那条「B 的范围记进 A 的会话」。
-    let release: (id: number) => void = () => {}
-    const ensureSession = vi.fn(
-      () =>
-        new Promise<number>((resolve) => {
-          release = resolve
-        })
-    )
-    const { rerender } = renderBinding({ sessionMatter: MATTER, chatIsEmpty: false, ensureSession })
-    fireEvent.click(screen.getByText('本事项'))
-    await waitFor(() => expect(ensureSession).toHaveBeenCalled())
-    // 还没落地，用户已经点到另一件事。
-    rerender({
-      sessionMatter: { id: 99, publicId: 'MAT-0099', title: 'Другое' },
-      chatIsEmpty: false,
-      ensureSession
-    })
-    release(31)
-    await waitFor(() => expect(screen.getByText('MAT-0099 Другое')).toBeTruthy())
-    expect(chatApi.recordChatScope).not.toHaveBeenCalled()
+    await waitFor(() => expect(screen.getByText('MAT-0042 Vendor launch')).toBeTruthy())
+    // 0812 owner拍板：「单搞一个事项的检索范围没意义」。控件、两句说明、以及它背后的
+    // recordChatScope 审计链一并退役 —— 事项对话恒全库。
+    for (const label of ['检索范围', '本事项', '全库', '已允许全库检索', '检索范围限于本事项']) {
+      expect(screen.queryByText(label), label).toBeNull()
+    }
+    // 缺口卡 / 快照失败提示都不在时，这一格整块不渲染（不留空容器）。
+    expect(screen.queryByTestId('matter-chat-controls')).toBeNull()
   })
 })
 

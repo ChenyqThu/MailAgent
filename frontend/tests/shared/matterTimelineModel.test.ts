@@ -149,6 +149,26 @@ describe('narrateEvent — 每种 kind 都有真句子', () => {
     }
     await i18n.changeLanguage('zh-CN')
   })
+
+  // 🔴 0812 —— 事项对话的「本事项 / 全库」检索范围开关整体移除后，chat_scope_* **不会再产生新
+  // 事件**，但 owner 活库里已经有这样的行。narrate 分支 / AUDIT_KINDS / locale 三处因此**保留**，
+  // 这条用例就是那三处的看门人：谁顺手把它们当死代码删掉，这里会红。
+  it('退役的 chat_scope_* 历史事件仍叙述得出来（产出路径已死，渲染路径必须活）', async () => {
+    for (const [kind, expected] of [
+      ['chat_scope_expanded', '扩大了事项对话的检索范围'],
+      ['chat_scope_restored', '把事项对话的检索范围收了回来']
+    ] as const) {
+      const event = ev({ kind, payload: { session_id: 's1', from: 'matter', to: 'global' } })
+      expect(narrateEvent(event, t).text).toBe(expected)
+      // 纯操作记录 —— 仍归审计档（默认收起但可达）。
+      expect(matterEventTier(event)).toBe('audit')
+    }
+    await i18n.changeLanguage('en-US')
+    expect(narrateEvent(ev({ kind: 'chat_scope_expanded' }), t).text).toBe(
+      'Widened the retrieval scope for matter chat'
+    )
+    await i18n.changeLanguage('zh-CN')
+  })
 })
 
 describe('叙述句的具体形态', () => {

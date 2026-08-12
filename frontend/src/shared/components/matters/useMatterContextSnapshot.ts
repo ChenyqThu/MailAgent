@@ -24,8 +24,6 @@ import { qk } from '@shared/lib/queryKeys'
 
 import { useMatterChatApi } from './hooks'
 
-export type MatterChatScope = 'matter' | 'global'
-
 /** The five counts behind the「已注入的上下文」chips (design 附录 C). null while unavailable. */
 export interface MatterContextChipCounts {
   openItems: number
@@ -37,7 +35,6 @@ export interface MatterContextChipCounts {
 export interface UseMatterContextSnapshotInput {
   publicId: string
   scope: ContextScope
-  chatScope: MatterChatScope
   capabilities: CapabilityContext
   /** false → no query runs and the snapshot is null (flag off / panel closed). */
   enabled: boolean
@@ -72,10 +69,7 @@ function readUiState(): {
 }
 
 /** Wire payload (snake_case, Python) → the typed ActiveMatterContext (camelCase, lane ②). */
-export function toActiveMatterContext(
-  payload: MatterContextSnapshotPayload,
-  chatScope: MatterChatScope
-): ActiveMatterContext {
+export function toActiveMatterContext(payload: MatterContextSnapshotPayload): ActiveMatterContext {
   const matter = payload.matter
   return {
     id: matter.id,
@@ -92,7 +86,6 @@ export function toActiveMatterContext(
     currentSummary: matter.current_summary ?? null,
     version: matter.version,
     summaryAcceptedAt: matter.summary_accepted_at ?? null,
-    scope: chatScope,
     items: payload.items ?? [],
     stakeholders: payload.stakeholders ?? [],
     resources: (payload.resources ?? []).map((resource) => ({
@@ -129,10 +122,28 @@ export function toChipCounts(payload: MatterContextSnapshotPayload): MatterConte
   }
 }
 
+/** 「这个事项真的缺上下文吗」——判据只看**真实关联数**，不看 `resources` 那个投影。
+ *
+ * 🔴 `payload.resources` 只含 pinned 或未确认的 agent 建议：「已确认但没 pin」的资料根本
+ * 不进。旧判据 `resources.length === 0` 于是构成自噬循环 —— agent 挂 3 条建议（可见 3、
+ * 不弹卡）→ 用户把 3 条都确认（可见 0）→ **弹「缺上下文」**→ 点外扩 → 灌一批垃圾（可见
+ * 10、卡片消失）。用户越配合越被灌垃圾。现在改看后端另发的 `resource_counts`（修法 5）。
+ *
+ * `waiting_context` 那半边**保留**：它是「这个事项在等外部输入」的显式声明，与资料多少
+ * 正交（等得到东西才叫等），是这张卡最原始的语义。活库里恒 NULL 只说明 owner 没用过
+ * 那个字段，不是判据本身错。旧后端不发 `resource_counts` ⇒ 退回旧投影判据（fail-soft）。
+ */
+export function hasContextGap(payload: MatterContextSnapshotPayload): boolean {
+  if (payload.matter.waiting_context !== null) return true
+  const counts = payload.resource_counts
+  if (counts == null) return (payload.resources?.length ?? 0) === 0
+  return counts.linked_resources === 0
+}
+
 export function useMatterContextSnapshot(
   input: UseMatterContextSnapshotInput
 ): UseMatterContextSnapshotResult {
-  const { publicId, scope, chatScope, capabilities, enabled } = input
+  const { publicId, scope, capabilities, enabled } = input
   const api = useMatterChatApi()
 
   const query = useQuery({
@@ -148,12 +159,12 @@ export function useMatterContextSnapshot(
     if (!enabled || payload === null) return null
     return buildMatterContextSnapshot({
       scope,
-      activeMatter: toActiveMatterContext(payload, chatScope),
+      activeMatter: toActiveMatterContext(payload),
       uiState: readUiState(),
       capabilities,
       createdAt: new Date().toISOString()
     })
-  }, [enabled, payload, scope, chatScope, capabilities])
+  }, [enabled, payload, scope, capabilities])
 
   const chips = useMemo<MatterContextChipCounts | null>(
     () => (payload === null ? null : toChipCounts(payload)),
@@ -163,10 +174,7 @@ export function useMatterContextSnapshot(
   return {
     snapshot,
     chips,
-    hasContextGap:
-      enabled &&
-      payload !== null &&
-      (payload.matter.waiting_context !== null || (payload.resources?.length ?? 0) === 0),
+    hasContextGap: enabled && payload !== null && hasContextGap(payload),
     isLoading: enabled && query.isLoading,
     isError: enabled && query.isError
   }

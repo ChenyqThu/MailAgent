@@ -487,8 +487,8 @@ describe('shouldLoadConnectorTools — the ONE seam', () => {
     expect(shouldLoadConnectorTools(true, 'im_chat', true)).toBe(false)
   })
 
-  test('headless shape (PR3): flag on + headless mode + agentRunContext + NON-EMPTY parsed grants', () => {
-    for (const mode of ['untrusted_trigger', 'cron_headless'] as const) {
+  test('headless shape (PR3; matter_followup joined by the 0812 owner拍板): flag on + headless mode + agentRunContext + NON-EMPTY parsed grants', () => {
+    for (const mode of ['untrusted_trigger', 'cron_headless', 'matter_followup'] as const) {
       expect(shouldLoadConnectorTools(true, mode, true, { notion: 'read' })).toBe(true)
       expect(shouldLoadConnectorTools(true, mode, true, { notion: 'write' })).toBe(true)
       // no grants / empty / junk-only grants → zero calls (the PR2 headless behaviour)
@@ -1136,6 +1136,22 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
         updateToolCount: 1
       }
     ])
+  })
+
+  test('matter_followup (0812): the read-ceiling grants narrow the catalog to reads only', () => {
+    // The follow-up spec only ever authors 'read' ceilings, so the prompt catalog a matter run
+    // sees can never advertise a connector write — the arithmetic mirror of the matrix row's
+    // connector_write denial.
+    expect(connectorCatalogForRun(CATALOG, 'matter_followup', true, { notion: 'read' })).toEqual([
+      {
+        connectorId: 'notion',
+        displayName: 'Notion',
+        readToolCount: 2,
+        writeToolCount: 0,
+        updateToolCount: 0
+      }
+    ])
+    expect(connectorCatalogForRun(CATALOG, 'matter_followup', true)).toBeNull() // no grants → null
   })
 
   test('a granted connector narrowed to ZERO tools drops off the catalog entirely', () => {

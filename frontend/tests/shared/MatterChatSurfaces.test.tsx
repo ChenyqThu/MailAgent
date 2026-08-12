@@ -42,7 +42,6 @@ const { mattersApi, chatApi, mailApi, mattersEnabled, matterAgentEnabled } = vi.
     contextSnapshot: vi.fn(async () => {
       throw new Error('not needed')
     }),
-    recordChatScope: vi.fn(),
     applyUndo: vi.fn()
   },
   mailApi: {

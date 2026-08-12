@@ -29,7 +29,7 @@ const { mattersApi, startRunMutate } = vi.hoisted(() => ({
 
 vi.mock('@shared/components/matters/hooks', () => ({
   useMattersApi: () => mattersApi,
-  useMatterChatApi: () => ({ contextSnapshot: vi.fn(), recordChatScope: vi.fn() }),
+  useMatterChatApi: () => ({ contextSnapshot: vi.fn() }),
   useMattersEnabled: () => true,
   useMatterFlags: () => ({ mattersEnabled: true, matterAgentEnabled: true }),
   useMatterRuns: () => ({ data: undefined, isLoading: false }),

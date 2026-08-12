@@ -1,0 +1,86 @@
+/**
+ * 所有带乐观锁（`expectedVersion`）的事项写操作的**唯一出口**。
+ *
+ * 0812 dogfood P0「不管点哪个都是 matter version changed，完全无法操作」的病根不是冲突
+ * 本身，而是**冲突之后 UI 永不自愈**：`expectedVersion` 取自渲染时那份 `matter.version`，
+ * 而各处 `onError` 只弹 toast、不刷新任何 query ⇒ 发生过一次冲突（后台 Agent 在写 / 用户
+ * 连点两下 / 上一次成功的刷新还没落地）之后，手里的版本号就永远停在旧值，**之后每一次
+ * 点击都必定失败**，只能刷新整页。
+ *
+ * 🔴 为什么是一个共享出口而不是「每处补一个 onError」：这次漏掉的就是四处（确认建议 /
+ * 忽略建议 / 删干系人 / 存干系人），而它们与已经写对的那处（提案审阅）长得一模一样 ——
+ * 靠人记得写是这类 bug 的复发机制。这里把「冲突 ⇒ 重新拉事项」焊在包装里，调用方**没有
+ * 关掉它的入口**：`onError` 只能追加自己的 UI 反馈，跑不掉刷新那一步。
+ *
+ * 配套的结构闸：`frontend/tests/components/matters/matterMutationGate.test.ts` —— 事项组件
+ * 目录下凡是出现 `expectedVersion` 的文件，都不许再直接用 `useMutation`。
+ */
+
+import { useMutation, useQueryClient } from '@tanstack/react-query'
+import type { QueryClient, UseMutationOptions, UseMutationResult } from '@tanstack/react-query'
+
+import { asWriteError } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
+
+/**
+ * 「手里这份事项已经过期」的两个后端错误码。
+ * - `E_VERSION_CONFLICT` — `mutation.expected_version` 与库里的当前版本不符（乐观锁）。
+ * - `E_UPDATE_STALE` — 提案在评审期间被别的写入作废（accept 对 stale 行硬拒）。
+ * 两者的处置相同：重新拉取事项，下一次操作才有最新版本可用。
+ */
+export const MATTER_STALE_CODES = ['E_VERSION_CONFLICT', 'E_UPDATE_STALE'] as const
+
+export function isMatterStaleError(error: unknown): boolean {
+  const code = asWriteError(error).code
+  return MATTER_STALE_CODES.some((candidate) => candidate === code)
+}
+
+/**
+ * 冲突后的重新拉取。失效 `['matters','detail',id]` 前缀即可覆盖 detail / resources /
+ * stakeholders / runs / updates / context-snapshot（见 `queryKeys.ts` 里它们共用的前缀），
+ * 不用逐个列 —— 少列一个就是下一个「某个面永远停在旧数据」。
+ */
+export async function refetchMatterAfterStale(
+  client: QueryClient,
+  matterId: string | null | undefined
+): Promise<void> {
+  await Promise.all([
+    client.invalidateQueries({ queryKey: qk.matters.list() }),
+    ...(matterId ? [client.invalidateQueries({ queryKey: qk.matters.detail(matterId) })] : [])
+  ])
+}
+
+/** 事项标识：定值，或从 mutation 变量里取（一个面板对多个事项写入时，如捕获浮层）。 */
+export type MatterMutationTarget<TVariables> =
+  | string
+  | null
+  | ((variables: TVariables) => string | null | undefined)
+
+export type UseMatterMutationOptions<TData, TVariables, TOnMutateResult> = UseMutationOptions<
+  TData,
+  Error,
+  TVariables,
+  TOnMutateResult
+> & {
+  /** 本次写入的目标事项 —— 冲突时按它重新拉取。 */
+  matterId: MatterMutationTarget<TVariables>
+}
+
+export function useMatterMutation<TData = unknown, TVariables = void, TOnMutateResult = unknown>(
+  options: UseMatterMutationOptions<TData, TVariables, TOnMutateResult>
+): UseMutationResult<TData, Error, TVariables, TOnMutateResult> {
+  const client = useQueryClient()
+  const { matterId, onError, ...rest } = options
+  return useMutation<TData, Error, TVariables, TOnMutateResult>({
+    ...rest,
+    onError: (error, variables, onMutateResult, context) => {
+      // 🔴 恒先刷新再交给调用方：调用方的 onError 可能弹 toast、可能改本地状态，但它无论
+      // 怎么写都影响不到这一步。这就是「以后新加 mutation 忘了处理冲突」不可能发生的原因。
+      if (isMatterStaleError(error)) {
+        const target = typeof matterId === 'function' ? matterId(variables) : matterId
+        void refetchMatterAfterStale(client, target)
+      }
+      return onError?.(error, variables, onMutateResult, context)
+    }
+  })
+}

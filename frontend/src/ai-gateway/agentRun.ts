@@ -35,11 +35,13 @@ import {
 } from './chatRun'
 import {
   classOfTool,
+  MATTER_RUN_PROPOSE_TOOL,
   normalizeContextMode,
   parseConnectorGrants,
   parseWebGrant,
   type AgentContextMode,
-  type AgentRunContext
+  type AgentRunContext,
+  type GatewayToolClass
 } from './tools/policy'
 // RELATIVE import (pure TS, zero imports — safe for the tsx harness): the ONE naming source for
 // connector tools, used below to exempt them from the allowedTools intersection by NAME (their
@@ -135,7 +137,13 @@ export function intersectAllowedTools(all: ToolSet, allowed?: string[]): ToolSet
  *  discriminated-construction tests. */
 export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): AgentRunContext {
   const toolPolicy = spec.toolPolicy
-  const allowedRaw: unknown = toolPolicy?.allowedTools
+  // 0812 codex修复批 — a matter_followup spec's allowedTools is FORCED to []: the run's tool face
+  // is fixed server-side (the matrix row + the wrap belt derive it BY CLASS), so a list on the
+  // spec has no legal use there — and before this fix, the wrap belt's `keep.has(name)` let such
+  // a list pull matrix-admitted tools (e.g. report_write, class artifact) back into an unattended
+  // run. The stamp is the SAME field matterRunFromSpec keys on, checked before the anchor's shape
+  // so even a malformed-anchor matter spec (matterRun undefined → generic belt) keeps [].
+  const allowedRaw: unknown = spec.runKind === 'matter_followup' ? [] : toolPolicy?.allowedTools
   // S6 W3 (rev3.1 §5.1) — the mount list mirrors allowedTools' fail-closed shape: the Python
   // projection always emits the RESOLVED array (NULL → default mount set substituted server-side,
   // never re-derived here), so a spec missing/malforming it is a broken spec → [] (zero mounts),
@@ -191,6 +199,27 @@ function matterRunFromSpec(spec: AgentRunSpec): AgentRunContext['matterRun'] {
   if (typeof publicId !== 'string' || publicId.length === 0) return undefined
   if (!Number.isInteger(runId) || (runId as number) <= 0) return undefined
   return { matterId, publicId, runId }
+}
+
+/** 🔴 0812 codex修复批 — the SINGLE decision point for web tools in a Matter follow-up run
+ *  (owner 拍板 pending on codex's 🔴 “grantWeb:'open' 是无审批的数据外传通道”). The wrap belt
+ *  below consults ONLY this constant, and the final ToolSet is the intersection of both belts —
+ *  so flipping this one value implements any of the three candidate outcomes without touching
+ *  the matrix (policy.ts) or the Python spec assembler:
+ *    'keep'        — status quo: the matrix's grant-gated web pair (web_search + web_fetch)
+ *                    survives the belt;
+ *    'search_only' — the belt keeps web_search and drops web_fetch (the URL-encoding exfil
+ *                    channel) even when the matrix admitted both;
+ *    'off'         — the belt drops the whole web class regardless of the spec's grantWeb.
+ */
+export const MATTER_RUN_WEB_FACE: 'keep' | 'off' | 'search_only' = 'keep'
+
+/** The wrap belt's web verdict for a matter run — see MATTER_RUN_WEB_FACE. */
+function matterRunAdmitsWeb(name: string, cls: GatewayToolClass): boolean {
+  if (cls !== 'web') return false
+  if (MATTER_RUN_WEB_FACE === 'off') return false
+  if (MATTER_RUN_WEB_FACE === 'search_only') return name === 'web_search'
+  return true
 }
 
 /**
@@ -255,11 +284,34 @@ export function wrapCfgForAgentRun(
     // prefs out of headless runs: prepareChatRun passes them in the 5th buildTools slot, which
     // this signature drops on the floor (and the inner call below deliberately forwards only
     // ctx). Do not widen the signature — headless approval semantics are grants-only.
+    //
+    // 🔴 0812 (owner拍板「能力=全部只读工具，红线=一个写工具都不给」＋ codex修复批) — a MATTER
+    // follow-up run (ctx.matterRun present; only matter_followup specs ever mint one) derives its
+    // tool face BY CLASS from the one canonical source (GATEWAY_TOOL_CLASSES via classOfTool),
+    // not from a hand-copied name list. 🔴 The matter branch is FIRST and SELF-CONTAINED (it
+    // `continue`s past every generic exemption below): the first cut of this filter merged it
+    // into the generic OR-chain, whose `keep.has(name)` / unconditional exec/web/mcp passes
+    // re-admitted anything the matrix let through — codex proved a spec with
+    // allowedTools:['report_write'] handed the run a local write tool, i.e. the two belts were
+    // NOT independent. Now a matter run's belt admits ONLY: class 'read' (connector reads
+    // included — their runtime-registered class is 'read'), the one artifact propose channel BY
+    // NAME, and the web class under the MATTER_RUN_WEB_FACE single point. It never consults
+    // `keep`, never exempts exec/mcp/plan_update by name (plan_update is class 'read' anyway),
+    // so a broken matrix row can no longer flow through — the independence is pinned by the
+    // “mutation #2” tests in agent_run.test.ts. A tool MISSING from the class map fail-closes to
+    // 'exec' in classOfTool → EXCLUDED here, never silently admitted; new read tools flow in
+    // with zero spec changes.
     buildTools: (collector, approvalMode, mode) => {
       const built = cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}
+      const matterReadFace = ctx.matterRun != null
       const out: ToolSet = {}
       for (const [name, t] of Object.entries(built)) {
         const cls = classOfTool(name)
+        if (matterReadFace) {
+          if (cls === 'read' || name === MATTER_RUN_PROPOSE_TOOL || matterRunAdmitsWeb(name, cls))
+            out[name] = t
+          continue
+        }
         if (
           name === 'plan_update' ||
           cls === 'exec' ||

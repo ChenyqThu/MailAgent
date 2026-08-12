@@ -21,6 +21,8 @@ import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
 
+import { useMatterMutation } from './matterMutation'
+
 export function useMattersApi(): MattersApi {
   return useMemo(() => createMattersApi(resolveApiBaseUrl()), [])
 }
@@ -208,12 +210,16 @@ export function useSetNotifyLevel(): UseMutationResult<
   })
 }
 
+/** 🔴 带 `expectedVersion` 的写 ⇒ 必须走 `useMatterMutation`（它把「冲突后重新拉取」焊死在
+ *  包装里）。这里的 version 藏在调用方传进来的 options 里，肉眼扫文件看不见 —— 所以
+ *  `matterMutationGate.test.ts` 对本函数单列了一条断言。 */
 export function useStartMatterRun(
   matterId: string
 ): UseMutationResult<MatterRunStartResult, Error, MatterMutationOptions> {
   const api = useMattersApi()
   const client = useQueryClient()
-  return useMutation({
+  return useMatterMutation({
+    matterId,
     mutationFn: (options: MatterMutationOptions) => api.startRun(matterId, options),
     onSuccess: () => client.invalidateQueries({ queryKey: runKey(matterId) })
   })

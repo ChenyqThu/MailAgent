@@ -10,6 +10,10 @@
 // error passthrough, createAgentSession wiring). This wave adds ZERO gateway tools — agent-run is an
 // endpoint, not a tool.
 
+import { readFileSync } from 'node:fs'
+import { dirname, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
+
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { APICallError, simulateReadableStream } from 'ai'
 import { MockLanguageModelV3 } from 'ai/test'
@@ -1607,32 +1611,55 @@ describe('POST /api/ai/agent-run', () => {
   })
 })
 
-// ── Matters MVP P4 (D5/D6/D7/D11) — the fifth venue: matter_followup ─────────────────────────────
+// ── Matters MVP P4 (D5/D6/D7/D11) → 0812 owner拍板 — the fifth venue: matter_followup ───────────
 //
-// The DoD of this phase: a follow-up run bound to a MAXIMALLY granted Agent Profile still reaches
-// streamText with an observe-and-propose face only. Everything below drives the REAL chain
-// (runHeadlessAgent → agentRunContextFromSpec → wrapCfgForAgentRun → buildGatewayTools →
-// applyContextModePolicy), so it fails if ANY link forgets the mode.
+// 0812 reframe (「能力=全部只读工具，红线=一个写工具都不给」): the run's face is derived BY
+// CLASS from the one canonical source (GATEWAY_TOOL_CLASSES via the matrix row + the
+// wrapCfgForAgentRun read-face exemption), not from a hand-copied name list. The DoD stays: a
+// follow-up run — even one whose spec is tampered with maximal grants — reaches streamText with
+// ZERO write-capable tools. Everything below drives the REAL chain (runHeadlessAgent →
+// agentRunContextFromSpec → wrapCfgForAgentRun → buildGatewayTools → applyContextModePolicy),
+// so it fails if ANY link forgets the mode.
 
-/** The fixed allow-list a follow-up run's spec carries (Python MATTER_FOLLOWUP_ALLOWED_TOOLS). */
-const MATTER_FOLLOWUP_ALLOWED_TOOLS = [
-  'matter_get',
-  'email_list_filter',
-  'email_search_fulltext',
-  'email_get',
-  'matter_update_propose'
-]
+/** The spec toolPolicy a follow-up run carries since 0812 (Python run_spec.py): NO hand-copied
+ *  name list — allowedTools:[] (the read face is class-derived gateway-side), the mount list
+ *  covering every skill-owned read family, and the spec-authored web read grant. */
+const MATTER_FOLLOWUP_TOOL_POLICY = {
+  allowedTools: [] as string[],
+  skills: ['email', 'search', 'report'],
+  grantWeb: 'open'
+}
 
-/** 🔴 The MOUNT list a follow-up spec must also carry. The allow-list and the skill mount list are
- *  two INDEPENDENT reductions and a tool needs BOTH: three of the five allow-listed names are
- *  skill-owned (email → email_list_filter/email_get, search → email_search_fulltext), so a spec
- *  projecting `skills: []` would hand the run a Matter it cannot read any mail for. The
- *  `skills: []` case is pinned as its own test below so this coupling can never regress silently.
- *  (matter_get / matter_update_propose are CORE_UNGATED — never mount-gated.) */
-const MATTER_FOLLOWUP_MOUNTED_SKILLS = ['email', 'search']
+/** 🔴 Class facts from the test-side catalog MIRROR (tests/agent_eval/tool_catalog.json) —
+ *  deliberately NOT from GATEWAY_TOOL_CLASSES: the face itself is derived from the source map, so
+ *  a mutation that mis-classes a write tool as 'read' there flips the assembled face but NOT this
+ *  table — the no-write-tools loop below turns red instead of following the mutation (the
+ *  mutation-sensitivity the 0812 derivation demands; the policy.test.ts catalog-parity gate reds
+ *  on the same mutation from the other side). */
+const CATALOG_TOOLS = (
+  JSON.parse(
+    readFileSync(
+      resolve(
+        dirname(fileURLToPath(import.meta.url)),
+        '../../../tests/agent_eval/tool_catalog.json'
+      ),
+      'utf-8'
+    )
+  ) as { tools: Record<string, { tool_class: string; legacy_retired?: boolean }> }
+).tools
+const WRITE_CAPABLE_CLASSES = new Set([
+  'domain_write',
+  'capability_change',
+  'exec',
+  'outbound',
+  'connector_write'
+])
+const CATALOG_WRITE_CAPABLE_NAMES = Object.entries(CATALOG_TOOLS)
+  .filter(([, t]) => t.legacy_retired !== true && WRITE_CAPABLE_CLASSES.has(t.tool_class))
+  .map(([n]) => n)
 
-/** The server-assembled spec of a follow-up run: the fixed allow-list + mount list + the Matter
- *  anchor + the runKind stamp. */
+/** The server-assembled spec of a follow-up run: the 0812 toolPolicy + the Matter anchor + the
+ *  runKind stamp. */
 function makeMatterSpec(over?: Partial<AgentRunSpec>): AgentRunSpec {
   return makeSpec({
     runKind: 'matter_followup',
@@ -1640,10 +1667,7 @@ function makeMatterSpec(over?: Partial<AgentRunSpec>): AgentRunSpec {
     // trigger.kind stays 'manual' — exactly the value that would fail-close to untrusted_trigger
     // if anything read the ladder instead of runKind.
     trigger: { kind: 'manual', firedAt: '2026-08-10T09:00:00Z' },
-    toolPolicy: {
-      allowedTools: MATTER_FOLLOWUP_ALLOWED_TOOLS,
-      skills: MATTER_FOLLOWUP_MOUNTED_SKILLS
-    },
+    toolPolicy: { ...MATTER_FOLLOWUP_TOOL_POLICY } as AgentRunSpec['toolPolicy'],
     sessionTitle: '跟进 · Atlas rollout',
     ...over
   })
@@ -1743,21 +1767,54 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
     }
   }
 
-  /** The grants a "strong" custom-agent profile could carry. If any of them could leak through,
-   *  binding such a profile to a Matter would silently hand a follow-up run exec/web/connectors. */
+  /** The grants a tampered/buggy spec could carry beyond what run_spec.py authors. If any of the
+   *  write-capable ones could leak through, a follow-up run would silently hold exec/connector
+   *  writes. (grantWeb IS consulted since 0812 — run_spec authors it deliberately.) */
   const MAX_GRANTS = {
     grantExec: true,
     grantWeb: 'open',
     grantConnectors: { notion: 'update' }
   } as unknown as AgentRunSpec['toolPolicy']
 
-  test('全开 grants + the fixed allow-list → exactly the read+propose face reaches streamText', async () => {
+  /** The read face this cfg's flag set assembles under the 0812 class derivation: every read tool
+   *  of the enabled families + the artifact propose channel + plan_update + the granted web pair.
+   *  (No session/profile/self-mount flags in this cfg — those reads join in production the same
+   *  class-derived way; the mechanism, not the flag set, is what is pinned here.) */
+  const EXPECTED_MATTER_FACE = [
+    'calendar_event_get',
+    'calendar_events_list',
+    'email_attachment_text',
+    'email_body',
+    'email_get',
+    'email_list_filter',
+    'email_list_thread',
+    'email_search_attachments',
+    'email_search_fulltext',
+    'email_thread_attachments',
+    'kos_find_experts',
+    'kos_get_backlinks',
+    'kos_get_page',
+    'kos_list_pages',
+    'kos_query',
+    'kos_search',
+    'matter_find',
+    'matter_get',
+    'matter_update_propose',
+    'plan_update',
+    'report_get',
+    'report_list',
+    'skill_read',
+    'web_fetch',
+    'web_search'
+  ]
+
+  test('0812 DoD: 全开(含被篡改的) grants → the FULL read face + propose + web, ZERO write-capable tools', async () => {
     const seenTools: string[][] = []
     const spec = makeMatterSpec({
       toolPolicy: {
         ...MAX_GRANTS,
-        allowedTools: MATTER_FOLLOWUP_ALLOWED_TOOLS,
-        skills: MATTER_FOLLOWUP_MOUNTED_SKILLS
+        allowedTools: [],
+        skills: MATTER_FOLLOWUP_TOOL_POLICY.skills
       } as AgentRunSpec['toolPolicy']
     })
     await runHeadlessAgent(
@@ -1766,70 +1823,70 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
       new AbortController().signal
     )
     expect(seenTools.length).toBeGreaterThan(0)
-    // 🔴 plan_update rides along by the P0 intersection exemption (a zero-side-effect local
-    // scratchpad, class 'read', orthogonal to capability authorization — agentRun.ts). Everything
-    // else is exactly the server's allow-list.
-    expect(seenTools[0].sort()).toEqual([
-      'email_get',
-      'email_list_filter',
-      'email_search_fulltext',
-      'matter_get',
-      'matter_update_propose',
-      'plan_update'
-    ])
-    for (const denied of [
-      'matter_create',
-      'matter_update',
-      'matter_item_mutate',
-      'matter_add_note',
-      'matter_run_control',
-      'matter_review_update',
-      'email_flag',
-      'email_draft_reply',
-      'calendar_event_reschedule',
-      'run_command',
-      'file_write',
-      'web_fetch',
-      'web_search',
-      'skill_install',
-      'custom_agent_create',
-      'email_prepare_send',
-      'notion_agent_chat'
-    ]) {
+    expect(seenTools[0].sort()).toEqual(EXPECTED_MATTER_FACE)
+    // 🔴 THE red line, pinned from the independent catalog mirror (mutation-sensitive): every
+    // write-capable name per tool_catalog.json must be absent. Mis-classing e.g. email_flag as
+    // 'read' in GATEWAY_TOOL_CLASSES would put it INTO the face while the catalog still says
+    // domain_write → this loop turns red (it does not follow the source mutation).
+    for (const denied of CATALOG_WRITE_CAPABLE_NAMES) {
       expect(seenTools[0], `${denied} must never reach a follow-up run`).not.toContain(denied)
     }
+    // and the reverse belt: every face member is read/artifact/web per the catalog mirror.
+    for (const name of seenTools[0]) {
+      const cls = CATALOG_TOOLS[name]?.tool_class
+      expect(
+        ['read', 'artifact', 'web'],
+        `${name} (class ${cls}) is not a read-grade tool`
+      ).toContain(cls)
+    }
+    // report_write (artifact) stays out: the artifact exemption is BY NAME for the one propose
+    // channel — a follow-up run's only structured output is matter_update_propose.
+    expect(seenTools[0]).not.toContain('report_write')
+    // grantExec leaked nothing (readability pins for the loop above):
+    expect(seenTools[0]).not.toContain('run_command')
+    expect(seenTools[0]).not.toContain('email_prepare_send')
+    expect(seenTools[0]).not.toContain('notion_agent_chat')
   })
 
-  // 🔴 Cross-lane contract pin (found by the DoD test above): the fixed allow-list alone is NOT
-  // enough — the spec must ALSO mount the skills owning its email reads. With `skills: []` the
-  // per-agent mount gate (a second, independent applySkillGating pass) strips all three, leaving a
-  // follow-up run that cannot read a single mail of the Matter it is following. Pinned here so a
-  // change to the Python spec projection turns this red instead of shipping a silently blind run.
-  test('skills:[] strips the three email reads — the mount list is a SECOND requirement', async () => {
+  // 🔴 Cross-lane contract pin: the class-derived face and the skill MOUNT list are two
+  // INDEPENDENT reductions and a skill-owned read needs BOTH. With `skills: []` the per-agent
+  // mount gate (a second applySkillGating pass) strips the email/search/report families, leaving
+  // a follow-up run that cannot read a single mail. Pinned so a Python spec projection change
+  // turns this red instead of shipping a silently blind run.
+  test('skills:[] strips the email/search/report families — the mount list is a SECOND requirement', async () => {
     const seenTools: string[][] = []
     const spec = makeMatterSpec({
-      toolPolicy: {
-        allowedTools: MATTER_FOLLOWUP_ALLOWED_TOOLS,
-        skills: []
-      } as AgentRunSpec['toolPolicy']
+      toolPolicy: { allowedTools: [], skills: [], grantWeb: 'open' } as AgentRunSpec['toolPolicy']
     })
     await runHeadlessAgent(
       fullFlagCfg(seenTools),
       { jobId: 7, spec, sessionId: null },
       new AbortController().signal
     )
-    expect(seenTools[0].sort()).toEqual(['matter_get', 'matter_update_propose', 'plan_update'])
+    const names = seenTools[0]
+    for (const gone of [
+      'email_list_filter',
+      'email_body',
+      'email_search_fulltext',
+      'report_list'
+    ]) {
+      expect(names, `${gone} is skill-owned and must be mount-gated`).not.toContain(gone)
+    }
+    // CORE_UNGATED reads + the propose channel survive (the mount gate only governs skill families)
+    for (const kept of ['kos_query', 'matter_get', 'matter_update_propose', 'plan_update']) {
+      expect(names, `${kept} must survive (not skill-owned)`).toContain(kept)
+    }
   })
 
-  test('the matrix is the FIRST belt: a write name smuggled into allowedTools is still stripped', async () => {
+  test('the matrix is the FIRST belt: write names smuggled into allowedTools are still stripped', async () => {
     const seenTools: string[][] = []
     const spec = makeMatterSpec({
       toolPolicy: {
         ...MAX_GRANTS,
-        // A tampered/buggy spec listing every write it can think of. Both belts (matrix +
-        // allow-list) are asserted independently: this one proves the matrix alone suffices.
+        // A tampered/buggy spec listing every write it can think of. allowedTools no longer
+        // narrows the matter read face (the class exemption supersedes it), and it can never
+        // WIDEN it either: the matrix stripped these writes before the intersection runs.
         allowedTools: [
-          'matter_get',
           'matter_create',
           'matter_update',
           'matter_review_update',
@@ -1837,7 +1894,8 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
           'email_flag',
           'email_prepare_send',
           'run_command'
-        ]
+        ],
+        skills: MATTER_FOLLOWUP_TOOL_POLICY.skills
       } as AgentRunSpec['toolPolicy']
     })
     await runHeadlessAgent(
@@ -1845,10 +1903,108 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
       { jobId: 7, spec, sessionId: null },
       new AbortController().signal
     )
-    expect(seenTools[0].sort()).toEqual(['matter_get', 'plan_update'])
+    expect(seenTools[0].sort()).toEqual(EXPECTED_MATTER_FACE)
   })
 
-  test('no Matter anchor → matter_update_propose is not registered even under the right mode', async () => {
+  // ── 0812 codex修复批 — the SECOND belt made independent (mutation-verified) ────────────────
+
+  // 🔴 Mutation #1 (先写先红): 'report_write' is class 'artifact'. Before this batch the matrix's
+  // matter row admitted the WHOLE artifact class AND the wrapper's `keep.has(name)` re-admitted
+  // anything an allowedTools list smuggled in — so a matter spec carrying
+  // allowedTools:['report_write'] handed an unattended run a LOCAL WRITE tool (tools/report.ts
+  // persists/replaces Reports data). The fixed chain keeps it out through TWO independent belts:
+  // the matrix admits artifact BY NAME (only matter_update_propose), and the wrapper's matter
+  // branch never consults `keep` (agentRunContextFromSpec additionally forces allowedTools:[] on
+  // every matter_followup spec — the list has no legal use there).
+  test("mutation #1: allowedTools:['report_write'] never reaches a follow-up run", async () => {
+    const seenTools: string[][] = []
+    const spec = makeMatterSpec({
+      toolPolicy: {
+        allowedTools: ['report_write'],
+        skills: MATTER_FOLLOWUP_TOOL_POLICY.skills,
+        grantWeb: 'open'
+      } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      fullFlagCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0]).not.toContain('report_write')
+    // the run's own channels stay intact — this is a targeted drop, not a face collapse
+    expect(seenTools[0]).toContain('matter_update_propose')
+    expect(seenTools[0]).toContain('email_list_filter')
+  })
+
+  // 🔴 Mutation #2's permanent in-repo shadow (codex: “两道闸不独立” — the old wrapper filter
+  // admitted cls==='web' / mcp names / keep-listed names UNCONDITIONALLY, so a broken matrix row
+  // flowed straight through it). This drives the wrapper ALONE with a builder that returns write
+  // tools of EVERY write-capable class — simulating a first belt that mis-admitted everything —
+  // and pins that the matter branch still reduces the face to read/propose/web. The live mutation
+  // run (policy.ts matter row → `return true`) is executed by hand during review; this test is
+  // what keeps the independence from rotting afterwards.
+  test('mutation #2 shadow: the wrapper belt ALONE drops every write-capable tool of a matter run', () => {
+    const donor = tool({ description: 'd', inputSchema: z.object({}), execute: async () => ({}) })
+    resetRuntimeToolClasses()
+    registerRuntimeToolClass('mcp__notion__notion_search', 'read')
+    registerRuntimeToolClass('mcp__notion__notion_update_page', 'connector_write')
+    const base: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      buildTools: () => ({
+        // what a HEALTHY first belt would emit…
+        email_list_filter: donor,
+        matter_update_propose: donor,
+        web_search: donor,
+        mcp__notion__notion_search: donor,
+        // …plus one leak from EVERY write-capable class a broken matrix row could pass:
+        report_write: donor, // artifact, but not the propose channel
+        email_flag: donor, // domain_write
+        matter_update: donor, // domain_write
+        run_command: donor, // exec (the old belt admitted cls==='exec' unconditionally)
+        skill_install: donor, // capability_change
+        email_prepare_send: donor, // outbound
+        notion_agent_chat: donor, // outbound
+        mcp__notion__notion_update_page: donor // connector_write (old belt: isMcpToolName pass)
+      })
+    }
+    const wrapped = wrapCfgForAgentRun(base, {
+      agentId: 'matter:MAT-000042',
+      // a hostile allowedTools listing every leaked name — the matter branch must not consult it
+      allowedTools: ['report_write', 'email_flag', 'run_command', 'email_prepare_send'],
+      modeGrants: { web: 'open', connectors: { notion: 'update' } },
+      matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 }
+    })
+    const built = wrapped.buildTools!([], undefined, 'matter_followup')
+    expect(Object.keys(built).sort()).toEqual([
+      'email_list_filter',
+      'matter_update_propose',
+      'mcp__notion__notion_search',
+      'web_search'
+    ])
+  })
+
+  test('no grantWeb in the spec → the web pair does not register (the grant is the only lift)', async () => {
+    const seenTools: string[][] = []
+    const spec = makeMatterSpec({
+      toolPolicy: {
+        allowedTools: [],
+        skills: MATTER_FOLLOWUP_TOOL_POLICY.skills
+      } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      fullFlagCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0]).not.toContain('web_fetch')
+    expect(seenTools[0]).not.toContain('web_search')
+    expect(seenTools[0]).toContain('email_list_filter') // the read face is unaffected
+  })
+
+  test('no Matter anchor → the read-face exemption collapses (fail-closed near-zero face)', async () => {
     const seenTools: string[][] = []
     const spec = makeMatterSpec({ matter: undefined })
     await runHeadlessAgent(
@@ -1856,9 +2012,137 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
       { jobId: 7, spec, sessionId: null },
       new AbortController().signal
     )
+    // No anchor → no matterRun context → no propose tool AND no class exemption: with
+    // allowedTools:[] the face falls to the unconditional exemptions only (plan_update + the
+    // granted web pair). A malformed spec gets nearly nothing — never a full read face it could
+    // not propose from.
     expect(seenTools[0]).not.toContain('matter_update_propose')
-    // the read face still narrows to the allow-list (the mode is still matter_followup)
-    expect(seenTools[0]).toContain('matter_get')
+    expect(seenTools[0]).not.toContain('matter_get')
+    expect(seenTools[0]).not.toContain('email_list_filter')
+    expect(seenTools[0]).toContain('plan_update')
+  })
+
+  // ── 0812 — connector reads join the matter face (owner: Notion/Jira/Confluence 检索) ──────────
+
+  const MATTER_CONNECTOR_MANIFEST: ConnectorToolManifestEntry[] = [
+    {
+      connectorId: 'notion',
+      connectorName: 'Notion',
+      toolName: 'notion-search',
+      description: 'Search pages',
+      inputSchemaJson: null,
+      crudType: 'read',
+      destructive: false,
+      mode: 'auto',
+      orphan: false
+    },
+    {
+      connectorId: 'notion',
+      connectorName: 'Notion',
+      toolName: 'notion-update-page',
+      description: 'Update a page',
+      inputSchemaJson: null,
+      crudType: 'write',
+      destructive: true,
+      mode: 'auto',
+      orphan: false
+    }
+  ]
+
+  /** fullFlagCfg + the production connector wiring (seam → createConnectorTools → dynamicTools),
+   *  mirroring the lifecycle exactly like the PR3 connectorAwareCfg above. */
+  function matterConnectorCfg(seenTools: string[][]): AiGatewayConfig {
+    const guard = new ApprovalGuard()
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => captureToolsModel(seenTools),
+      buildTools: (collector, _am, mode, agentRunContext) => {
+        let dynamicTools: ToolSet | undefined
+        const connectorGrants = agentRunContext?.modeGrants?.connectors
+        if (shouldLoadConnectorTools(true, mode, agentRunContext != null, connectorGrants)) {
+          dynamicTools = createConnectorTools(
+            minimalDomain(),
+            collector,
+            guard,
+            MATTER_CONNECTOR_MANIFEST,
+            {
+              contextMode: mode,
+              ...(agentRunContext != null
+                ? { connectorGrants, agentId: agentRunContext.agentId }
+                : {})
+            }
+          )
+        }
+        return buildGatewayTools(
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            matterToolsEnabled: true,
+            contextMode: mode,
+            agentRunContext,
+            dynamicTools
+          },
+          collector
+        )
+      },
+      persistTurn: () => {}
+    }
+  }
+
+  test("grantConnectors {notion:'read'} → the connector READ reaches a follow-up run; the write never does", async () => {
+    const seenTools: string[][] = []
+    const spec = makeMatterSpec({
+      toolPolicy: {
+        ...MATTER_FOLLOWUP_TOOL_POLICY,
+        grantConnectors: { notion: 'read' }
+      } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      matterConnectorCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    const names = seenTools[0]
+    // 🔴 connector tools are runtime-registered (`mcp__*`, never in any static catalog/list):
+    // their admission is grant + per-tool mode, name-exempt from the allowedTools intersection —
+    // allowedTools:[] must NOT strip them (the coordinator-flagged误杀).
+    expect(names).toContain('mcp__notion__notion_search')
+    expect(names).not.toContain('mcp__notion__notion_update_page') // above the read ceiling
+    expect(names).toContain('matter_update_propose') // the rest of the face is intact
+  })
+
+  test("a tampered 'update' ceiling still yields READS ONLY (the matrix denies connector_write in this venue)", async () => {
+    const seenTools: string[][] = []
+    const spec = makeMatterSpec({
+      toolPolicy: {
+        ...MATTER_FOLLOWUP_TOOL_POLICY,
+        grantConnectors: { notion: 'update' }
+      } as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      matterConnectorCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0]).toContain('mcp__notion__notion_search')
+    // the ceiling admitted the write at REGISTRATION, but the matter_followup matrix row denies
+    // class connector_write outright — and Python resolve_caller_ceiling pins 'read' server-side
+    // as the third belt even if both TS belts were bypassed.
+    expect(seenTools[0]).not.toContain('mcp__notion__notion_update_page')
+  })
+
+  test('no grantConnectors → zero connector work for a follow-up run (the seam refuses)', async () => {
+    const seenTools: string[][] = []
+    await runHeadlessAgent(
+      matterConnectorCfg(seenTools),
+      { jobId: 7, spec: makeMatterSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].filter((n) => n.startsWith('mcp__'))).toEqual([])
   })
 })
 

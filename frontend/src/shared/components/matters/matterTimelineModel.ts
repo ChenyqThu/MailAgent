@@ -151,6 +151,9 @@ export function readChanges(event: MatterEvent): MatterEventChange[] | null {
  * `matter_updated` 不在这里，它按触及的字段二次判定（见 `matterEventTier`）。
  */
 const AUDIT_KINDS: ReadonlySet<string> = new Set([
+  // 🔴 chat_scope_* 的**产出路径已退役**（0812：事项对话的检索范围开关整体移除，写侧端点与
+  // service 方法都已删）。这两个 kind 与下面 narrate 的分支**保留仅为渲染历史事件** —— 活库里
+  // 已经有这样的事件行，删掉判定就只剩兜底文案。
   'chat_scope_expanded',
   'chat_scope_restored',
   'resource_access_policy_changed',
@@ -705,6 +708,9 @@ export function narrateEvent(event: MatterEvent, t: Translate): TimelineSentence
       return say(event.kind)
 
     /* ---- 对话检索范围（审计） ---- */
+    // 🔴 产出路径已退役（0812 检索范围开关移除），**保留仅为渲染历史事件**：活库里已有这两种
+    // 事件行，删掉分支它们会退成兜底文案。配套 locale 键 matters.narrative/events.chat_scope_*
+    // 同理保留。回归闸见 matterTimelineModel.test.ts 的 legacy chat_scope 用例。
     case 'chat_scope_expanded':
     case 'chat_scope_restored':
       return say(event.kind)
