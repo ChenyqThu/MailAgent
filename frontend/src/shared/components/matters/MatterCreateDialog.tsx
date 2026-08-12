@@ -1,6 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowRight, FileText, LoaderCircle, Mail, Sparkles, Users, X } from 'lucide-react'
+import {
+  ArrowRight,
+  Briefcase,
+  Check,
+  FileText,
+  LoaderCircle,
+  Mail,
+  Sparkles,
+  Users,
+  X
+} from 'lucide-react'
 
 import { BUILTIN_MATTER_TYPES, MATTER_PRIORITIES } from '@shared/api/types/matter'
 import type {
@@ -289,7 +299,12 @@ export function MatterCreateDialog({
         className="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-md"
       >
         <header className="flex shrink-0 items-center justify-between border-b border-ink-border px-5 py-4">
-          <h2 id="matter-create-title" className="text-lead font-semibold text-ink-fg">
+          {/* 设计 create.jsx:47 `ModalHead icon="briefcase"` —— 实现此前弹窗头无 icon。 */}
+          <h2
+            id="matter-create-title"
+            className="flex items-center gap-2 text-lead font-semibold text-ink-fg"
+          >
+            <Briefcase size={15} className="shrink-0 text-coral" />
             {t(source ? 'matters.create.fromEmailTitle' : 'matters.create.title')}
           </h2>
           <button
@@ -646,8 +661,10 @@ export function MatterCreateDialog({
             type="button"
             disabled={!title.trim() || busy || usingExistingId !== null}
             onClick={submit}
-            className="rounded-[var(--r-ctl)] bg-coral/100 px-4 py-2 text-body font-medium text-accent-fg disabled:opacity-50"
+            className="inline-flex items-center gap-1.5 rounded-[var(--r-ctl)] bg-coral/100 px-4 py-2 text-body font-medium text-accent-fg disabled:opacity-50"
           >
+            {/* 设计 create.jsx:100 `Btn kind="primary" icon="check"`。 */}
+            <Check size={14} className="shrink-0" />
             {busy ? t('matters.create.creating') : t('matters.create.submit')}
           </button>
         </footer>
