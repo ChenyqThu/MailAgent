@@ -1892,12 +1892,11 @@ class DavMailBackend(IMailBackend):
                     window_floor_iso=window_floor.isoformat(),
                 )
 
-            # 本地指纹: 窗口放宽 2 天 —— 远端按 INTERNALDATE 筛、本地存 Date header
-            # 归一值, 边界处可能差几小时; 取窄了会把边界邮件误判成缺失 (后果是幂等
-            # 重抓而非错误, 但没必要)。
-            local_floor = (window_floor - timedelta(days=2)).isoformat()
+            # 本地指纹 (全集, **不按 date 窗口** —— 见该方法 docstring: 本地
+            # date_received 来自 Date header, 与远端 INTERNALDATE 不同源, 拿它当
+            # 集合边界会把"Date 很老但最近才进 INBOX"的邮件常态误判成缺失)。
             known_msgids, known_uid_pairs = (
-                self.sync_store.get_inbox_reconcile_fingerprints(local_floor)
+                self.sync_store.get_inbox_reconcile_fingerprints()
             )
 
             missing: list[dict] = []

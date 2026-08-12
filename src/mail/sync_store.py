@@ -5102,7 +5102,7 @@ class SyncStore:
             ]
 
     def get_inbox_reconcile_fingerprints(
-        self, since_iso: str, mailbox: str = INBOX_LABEL
+        self, mailbox: str = INBOX_LABEL
     ) -> tuple[set, set]:
         """收件箱对账 (方案 C) 专用: 取本地"已有哪些邮件"的两套指纹。
 
@@ -5117,10 +5117,12 @@ class SyncStore:
           注意 uid 会漂移, 所以这条通道天然只能"尽力而为": 漂移后可能重抓一次,
           由 save_email 幂等兜住。
 
-        ``since_iso``: 只取 ``date_received >= since_iso`` 的行。调用方应传比远端
-        SEARCH 窗口**更宽**的下界 —— 远端按 INTERNALDATE 筛、本地存的是 Date header
-        归一值, 两者可能差几小时; 窗口取窄了会把边界邮件误判成缺失。误判的后果是
-        幂等重抓 (merge guard 兜底), 不是错误, 但没必要。
+        🔴 **两套指纹都不按 date 窗口过滤** (曾经按, 2026-08-11 实测踩过):
+        本地 ``date_received`` 来自 **Date header**, 可被发送方伪造 / 缺失 / 严重
+        滞后, 而远端 SEARCH 按 INTERNALDATE 筛 —— 两者不同源, 用它做集合边界会把
+        "Date 很老但最近才进 INBOX"的邮件判成缺失。实测 13 封候选里 4 封 (31%)
+        是这种假阳性 (本地早已 synced)。后果虽幂等 (merge guard 兜住), 但会每轮
+        重复 fetch 同几封、污染 recovered 计数、把"漏抓"这个本该罕见的信号变成噪音。
 
         mailbox 按 `filter_labels_for_mailbox` 展开成变体集 IN 查
         (内建 canonical 禁止 `= ?` 精确匹配, 见 CLAUDE.md mailbox 语义单源纪律)。
@@ -5132,14 +5134,26 @@ class SyncStore:
         uid_pairs: set = set()
         with self._connection() as conn:
             cursor = conn.cursor()
-            # 主判据: 窗口内的非空 message_id (量大, 必须按窗口收敛)
+            # 主判据: 非空 message_id 全集, **不按 date 窗口过滤**。
+            #
+            # 🔴 2026-08-11 实测: 按窗口过滤会产生**常态假阳性** —— 13 封候选里 4 封
+            # (31%) 是本地早已 synced 的邮件, 只因它们的 Date header 是 7 月的
+            # (远端按 INTERNALDATE 命中窗口, 本地 date_received 落在窗口外) 而查不到。
+            # 后果虽然幂等 (merge guard 兜住, 不建重复行), 但会每轮重复 fetch 同几封、
+            # 污染 recovered 计数、把"漏抓"这个本该罕见的告警变成噪音。
+            # 这与 uid_pairs 放弃窗口过滤是同一个理由: **date_received 来自 Date
+            # header, 不可信**。
+            #
+            # 代价: 全表 message_id 集合。活库实测 ~1.3 万条 ≈ 800KB, 6-7 万封的
+            # 大邮箱约 4MB, 一次查询几十毫秒、**每 30 分钟才一次**、用完即释放 ——
+            # 相比"每轮都误报几封缺失"完全划算。
             cursor.execute(
                 f"""
                 SELECT message_id FROM email_metadata
-                WHERE {predicate} AND date_received >= ?
+                WHERE {predicate}
                   AND message_id IS NOT NULL AND message_id != ''
                 """,
-                (*params, since_iso),
+                params,
             )
             message_ids = {row["message_id"] for row in cursor.fetchall()}
 

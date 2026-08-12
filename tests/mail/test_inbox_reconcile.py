@@ -428,7 +428,7 @@ def test_uid_pairs_only_from_null_message_id_rows(tmp_path):
         "date_received": _old(1).isoformat(), "mailbox": "收件箱",
         "imap_uid": 501, "imap_uidvalidity": 1, "sync_status": "synced",
     })
-    msgids, uid_pairs = store.get_inbox_reconcile_fingerprints(_old(3).isoformat())
+    msgids, uid_pairs = store.get_inbox_reconcile_fingerprints()
     assert "has-mid@t" in msgids
     assert (1, 501) in uid_pairs
     assert (1, 500) not in uid_pairs, (
@@ -451,23 +451,30 @@ def test_null_message_id_rows_ignore_date_window(tmp_path):
         "mailbox": "收件箱", "imap_uid": 777, "imap_uidvalidity": 1,
         "sync_status": "synced",
     })
-    _, uid_pairs = store.get_inbox_reconcile_fingerprints(_old(2).isoformat())
+    _, uid_pairs = store.get_inbox_reconcile_fingerprints()
     assert (1, 777) in uid_pairs, (
         "无 ID 行被 date 窗口滤掉了 —— 会导致每轮重复补抓 + 重复建行"
     )
 
 
-def test_message_ids_still_windowed(tmp_path):
-    """有 Message-ID 的行仍按窗口收敛 (量大, 不能全表扫)。"""
+def test_message_ids_ignore_date_window_too(tmp_path):
+    """🔴 message_ids 同样不按 date 窗口 —— 2026-08-11 实测的常态假阳性。
+
+    13 封候选里 4 封是本地早已 synced 的邮件, 只因 Date header 是 7 月的
+    (远端按 INTERNALDATE 命中窗口、本地 date_received 在窗口外) 而被判缺失。
+    幂等归幂等, 但会每轮重复 fetch、污染 recovered 计数, 把"漏抓"变成噪音。
+    """
     store = SyncStore(str(tmp_path / "t.db"))
     store.save_email({
-        "internal_id": 1_000_000_121, "message_id": "ancient@t", "subject": "老",
-        "date_received": "2020-01-01T00:00:00+00:00", "mailbox": "收件箱",
+        "internal_id": 1_000_000_121, "message_id": "old-date-but-synced@t",
+        "subject": "Date 是 7 月、最近才进 INBOX",
+        "date_received": "2026-07-03T12:36:15+00:00", "mailbox": "收件箱",
         "sync_status": "synced",
     })
-    msgids, _ = store.get_inbox_reconcile_fingerprints(_old(2).isoformat())
-    assert "ancient@t" not in msgids
-
+    msgids, _ = store.get_inbox_reconcile_fingerprints()
+    assert "old-date-but-synced@t" in msgids, (
+        "按窗口滤掉了 Date 很老的已同步邮件 —— 会被误判成缺失并每轮重抓"
+    )
 
 # ============================================================
 # E — 通知 provenance 门控
