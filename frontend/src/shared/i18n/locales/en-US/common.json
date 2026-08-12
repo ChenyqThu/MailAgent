@@ -4764,7 +4764,8 @@
       "checklist": "{count} checklist items",
       "kinds": { "action": "Action", "milestone": "Milestone", "decision": "Decision", "blocker": "Blocker", "question": "Question", "note": "Note" }
     },
-    "timeline": { "filter": "Timeline actor filter", "all": "All", "me": "Me", "agent": "Agent", "system": "System", "empty": "There are no events for this filter." },
+    "timeline": { "filter": "Timeline actor filter", "all": "All", "me": "Me", "agent": "Agent", "system": "System", "empty": "There are no events for this filter.", "changedFields": "Changed: {fields}", "sectionTitle": "Business timeline · append-only" },
+    "eventField": { "title": "Title", "description": "Core goal", "current_summary": "Current status summary", "status": "Status", "health": "Health", "priority": "Priority", "matter_type": "Type", "tags": "Tags", "goal_checks": "Done criteria", "due_at": "Due date", "waiting_context": "Waiting reason", "next_attention_at": "Next attention", "attention_reason": "Attention reason", "agent_profile_id": "Follow-up agent", "agent_enabled": "Follow-up toggle", "matter_instructions": "Matter instructions", "schedule_json": "Follow-up rules" },
     "context": {
       "stakeholders": "Stakeholders",
       "unnamedStakeholder": "Unnamed stakeholder",

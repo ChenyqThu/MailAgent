@@ -1,12 +1,12 @@
 import {
-  AlertTriangle,
   Check,
   Edit3,
   Layers,
-  Link2,
+  Link,
   RefreshCcw,
   Shield,
   Sparkles,
+  TriangleAlert,
   X
 } from 'lucide-react'
 import { useMemo, useState } from 'react'
@@ -129,7 +129,7 @@ export function MatterUpdateReview({
               </span>
               {update.is_stale ? (
                 <span className="inline-flex items-center gap-1 rounded-full bg-fail/10 px-2 py-1 text-meta text-fail">
-                  <AlertTriangle size={11} />
+                  <TriangleAlert size={11} />
                   {t('matters.review.stale')}
                 </span>
               ) : null}
@@ -397,7 +397,7 @@ function ChangeRow({
                   defaultValue: `打开证据 #${source.resource_id}`
                 })}
               >
-                <Link2 size={10} />#{source.resource_id}
+                <Link size={10} />#{source.resource_id}
               </button>
             ))}
           </div>

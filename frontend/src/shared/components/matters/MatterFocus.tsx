@@ -80,7 +80,7 @@ export function MatterFocus({
     <section className="h-full overflow-y-auto p-5 scrollbar-thin">
       <div className="mx-auto max-w-[880px] space-y-5">
         <header>
-          <h1 className="text-heading font-semibold text-ink-fg">{t('matters.focus.title')}</h1>
+          <h1 className="text-subj font-semibold text-ink-fg">{t('matters.focus.title')}</h1>
           <p className="mt-1 text-body text-ink-fg-2">{t('matters.focus.summary', { ...stats })}</p>
         </header>
         <div className="grid grid-cols-4 gap-3 max-[1000px]:grid-cols-2">

@@ -1,7 +1,7 @@
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { ExternalLink, Pin, RefreshCcw, Shield, Trash2, X } from 'lucide-react'
+import { ExternalLink, Pin, RefreshCcw, Shield, X } from 'lucide-react'
 
 import { MATTER_ACCESS_POLICIES } from '@shared/api/types/matter'
 import type {
@@ -306,7 +306,7 @@ export function ResourceDrawer({
             onClick={() => unlink.mutate()}
             className="ml-auto inline-flex items-center gap-1.5 rounded-[var(--r-ctl)] px-3 py-2 text-aux text-fail hover:bg-fail/10"
           >
-            <Trash2 size={13} />
+            <X size={13} />
             {t('matters.resource.unlink')}
           </button>
         </footer>

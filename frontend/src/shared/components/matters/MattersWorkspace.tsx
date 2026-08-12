@@ -4,16 +4,15 @@ import { useTranslation } from 'react-i18next'
 import {
   Archive,
   Ban,
+  Calendar,
   CheckCircle2,
-  CircleDot,
-  Clock3,
-  Focus,
-  Inbox,
-  List,
-  Monitor,
+  Eye,
+  Hourglass,
+  Layers,
+  Play,
   Plus,
   Sparkles,
-  ShieldAlert,
+  Target,
   TriangleAlert,
   Trash2
 } from 'lucide-react'
@@ -71,19 +70,22 @@ function writeMatterListWidth(width: number): void {
   }
 }
 
+// 🔴 逐项对照设计原型 `list.jsx` 的 VIEWS 表（设计 §7.6「icon 全部对照原型替换」）。
+// 右侧注释是原型里写的语义名 —— 改动前 12 项里有 7 项与它不符，其中 monitoring 用了
+// Monitor（显示器）是望文生义，原型要的是 eye（盯着看）。
 const VIEW_ICONS: Record<MatterView, React.ReactNode> = {
-  focus: <Focus size={14} />,
-  attention: <TriangleAlert size={14} />,
-  review: <Sparkles size={14} />,
-  active: <CircleDot size={14} />,
-  waiting: <Clock3 size={14} />,
-  blocked: <ShieldAlert size={14} />,
-  planned: <Inbox size={14} />,
-  monitoring: <Monitor size={14} />,
-  all: <List size={14} />,
-  completed: <CheckCircle2 size={14} />,
-  archived: <Archive size={14} />,
-  trash: <Trash2 size={14} />
+  focus: <Target size={14} />, // target
+  attention: <TriangleAlert size={14} />, // alert
+  review: <Sparkles size={14} />, // sparkles
+  active: <Play size={14} />, // play
+  waiting: <Hourglass size={14} />, // hourglass
+  blocked: <Ban size={14} />, // ban
+  planned: <Calendar size={14} />, // calendar
+  monitoring: <Eye size={14} />, // eye
+  all: <Layers size={14} />, // layers
+  completed: <CheckCircle2 size={14} />, // checkcircle
+  archived: <Archive size={14} />, // archive
+  trash: <Trash2 size={14} /> // trash
 }
 
 export function MattersWorkspace(): React.ReactElement | null {

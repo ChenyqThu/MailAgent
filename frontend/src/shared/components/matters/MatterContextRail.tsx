@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { Bot, ChevronDown, ChevronRight, Pin, RefreshCcw, Shield, Sparkles } from 'lucide-react'
+import { ChevronDown, ChevronRight, Pin, RefreshCw, Shield, Sparkles } from 'lucide-react'
 
 import type { ReportAgentConfig } from '@shared/api/types'
 import type {
@@ -222,7 +222,7 @@ export function MatterAgentCard({
     return (
       <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-3">
         <div className="mb-2 flex items-center gap-2 text-ai">
-          <Bot size={14} />
+          <Sparkles size={14} />
         </div>
         <p className="text-aux leading-5 text-ink-fg-2">{t('matters.context.agentGuide')}</p>
       </div>
@@ -513,7 +513,7 @@ function ResourceRailRow({
             <span className="mt-0.5 flex items-center gap-1.5 text-meta text-ink-fg-3">
               <span className="truncate">{t(`matters.context.kind.${item.resource.kind}`)}</span>
               {item.link.sub_state !== 'none' ? (
-                <RefreshCcw
+                <RefreshCw
                   size={10}
                   className={item.link.sub_state === 'paused' ? 'text-warn' : 'text-ok'}
                 />

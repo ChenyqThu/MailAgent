@@ -1,7 +1,7 @@
 import { useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify'
-import { BriefcaseBusiness } from 'lucide-react'
+import { Briefcase } from 'lucide-react'
 
 import type { Matter } from '@shared/api/types/matter'
 import { cn } from '@shared/lib/cn'
@@ -46,7 +46,7 @@ export function MatterHitRow({
       className={cn('pal-row items-start', selected && 'is-selected')}
     >
       <span className="mt-0.5 grid h-5 w-5 shrink-0 place-items-center text-info">
-        <BriefcaseBusiness size={14} strokeWidth={1.75} />
+        <Briefcase size={14} strokeWidth={1.75} />
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2">

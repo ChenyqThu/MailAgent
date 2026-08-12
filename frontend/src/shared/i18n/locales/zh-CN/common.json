@@ -4883,7 +4883,28 @@
       "me": "我",
       "agent": "Agent",
       "system": "系统",
-      "empty": "这个筛选下还没有事件。"
+      "empty": "这个筛选下还没有事件。",
+      "changedFields": "改动：{fields}",
+      "sectionTitle": "业务时间线 · 只追加"
+    },
+    "eventField": {
+      "title": "标题",
+      "description": "核心目标",
+      "current_summary": "当前状态摘要",
+      "status": "状态",
+      "health": "健康度",
+      "priority": "优先级",
+      "matter_type": "分类",
+      "tags": "标签",
+      "goal_checks": "完成标志",
+      "due_at": "截止时间",
+      "waiting_context": "等待原因",
+      "next_attention_at": "下次关注时间",
+      "attention_reason": "关注原因",
+      "agent_profile_id": "跟进 Agent",
+      "agent_enabled": "跟进开关",
+      "matter_instructions": "专属指令",
+      "schedule_json": "跟进规则"
     },
     "context": {
       "stakeholders": "干系人",

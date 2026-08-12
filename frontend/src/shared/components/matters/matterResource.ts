@@ -1,4 +1,13 @@
-import { BookOpen, File, FileText, Link2, Mail, Users, type LucideIcon } from 'lucide-react'
+import {
+  BookOpen,
+  Calendar,
+  FileText,
+  Link,
+  Mail,
+  MessageSquare,
+  Paperclip,
+  type LucideIcon
+} from 'lucide-react'
 
 import type {
   MatterResourceKind,
@@ -50,13 +59,15 @@ export function isMatterResourceAvailable(item: MatterResourceListItem): boolean
 // 资料图标单源。原本 MatterContextRail 里私有一份、抽屉里没有 —— 0811 dogfood 反馈
 // 「文档样式不好」时下沉到这里，三处展示面（抽屉头 / 上下文标签列表 / rail 紧凑行）共用，
 // 避免同一个 kind 在两处长得不一样。
+// 逐项对照设计原型 helpers.jsx 的 `RES_KIND` 词表（右侧注释是原型写的语义名）。
+// 🔴 改动前 6 项里 4 项与它不符，其中 event 用了 Users（干系人图标）表示"会议"是错位。
 export const RESOURCE_KIND_ICONS: Record<MatterResourceKind, LucideIcon> = {
-  email: Mail,
-  thread: Mail,
-  event: Users,
-  doc: FileText,
-  file: File,
-  url: Link2
+  email: Mail, // mail
+  thread: MessageSquare, // message
+  event: Calendar, // calendar
+  doc: FileText, // filetext
+  file: Paperclip, // paperclip
+  url: Link // link
 }
 
 // doc 再按 provider 细分，Notion 与 Confluence 一眼可辨。

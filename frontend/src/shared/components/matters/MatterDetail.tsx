@@ -5,23 +5,35 @@ import { useTranslation } from 'react-i18next'
 import {
   Archive,
   ArrowLeft,
+  ArrowRight,
+  BellOff,
   Bot,
   Check,
   ChevronDown,
   ChevronUp,
   ChevronRight,
+  Circle,
+  EyeOff,
+  FileCheck,
+  FileText,
+  Link2,
+  ListChecks,
   MessageSquare,
   MoreHorizontal,
   Loader2,
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   RotateCcw,
   Save,
   Trash2,
   Sparkles,
+  TriangleAlert,
+  Users,
   X
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 
 import {
   BUILTIN_MATTER_TYPES,
@@ -549,7 +561,7 @@ export function MatterDetail({
                         }
                       }}
                       aria-label={t('matters.detail.title')}
-                      className="h-8 min-w-0 flex-1 px-2 text-heading font-semibold"
+                      className="h-8 min-w-0 flex-1 px-2 text-subj font-semibold"
                     />
                     <button
                       type="button"
@@ -574,9 +586,7 @@ export function MatterDetail({
                   </>
                 ) : (
                   <>
-                    <h1 className="min-w-0 text-heading font-semibold text-ink-fg">
-                      {matter.title}
-                    </h1>
+                    <h1 className="min-w-0 text-subj font-semibold text-ink-fg">{matter.title}</h1>
                     <button
                       type="button"
                       onClick={() => setTitleEditing(true)}
@@ -1672,6 +1682,63 @@ function ItemGroup({
   )
 }
 
+/** 节点圆的 actor 配色（设计稿 `TL_TONE`：agent=--c-ai / me=--c-accent / system=--ink-fg-3，
+ *  边框取该色 40% alpha）。实现的 actor 值域是 user/agent/system，设计的 `me` 即 user。 */
+const TIMELINE_TONE: Record<string, string> = {
+  agent: 'border-ai/40 text-ai',
+  user: 'border-coral/40 text-coral',
+  system: 'border-ink-border text-ink-fg-3'
+}
+
+/**
+ * 事件 kind → 节点图标。
+ *
+ * 设计稿 `TL_ICON` 只覆盖 9 个 mock kind（run/email/update/status/doc/item/decision/created/
+ * resource），而实到的事件有 38 个。多出来的**不自己发明符号**，一律回到设计稿里同语义位置
+ * 已经用过的那个 icon：干系人=users（rail/ContextTab 通用）· 对话=message（chat.jsx）·
+ * 接受/拒绝=check/x（review.jsx 的两个按钮）· 订阅=refresh、仅元数据=eyeoff（rail.jsx）·
+ * 信号=alert（ATTN_META 主用）· 稍后提醒=bellsnooze（list.jsx onSignal）。
+ * 归不到的走设计稿的兜底 `dot`。
+ */
+const TIMELINE_ICONS: ReadonlyArray<readonly [RegExp, LucideIcon]> = [
+  [/^matter_created$/, Plus], // TL_ICON.created
+  [/^matter_updated$/, FileCheck], // TL_ICON.update
+  [/^matter_(archived|reopened|trashed|restored)$/, ArrowRight], // TL_ICON.status
+  [/^item_/, ListChecks], // TL_ICON.item（= ITEM_KIND.action）
+  [/^resource_updated$/, FileText], // TL_ICON.doc
+  [/^resource_suggestion_/, Sparkles], // rail「Agent 发现的资料」
+  [/^resource_access_policy_changed$/, EyeOff], // rail「仅元数据」
+  [/^resource_subscription_/, RefreshCw], // rail「已订阅后续」
+  [/^resource_/, Link2], // TL_ICON.resource
+  [/^stakeholder_/, Users],
+  [/^relation_/, Link2],
+  [/^chat_scope_/, MessageSquare],
+  [/^update_proposed$/, Sparkles],
+  [/^update_accepted$/, Check],
+  [/^update_rejected$/, X],
+  [/^update_superseded$/, ArrowRight],
+  [/^agent_binding_changed$/, Sparkles],
+  [/^attention_resolved$/, Check],
+  [/^attention_snoozed$/, BellOff],
+  [/^attention_dismissed$/, EyeOff],
+  [/^attention_/, TriangleAlert]
+]
+
+function timelineIcon(kind: string): LucideIcon {
+  for (const [pattern, icon] of TIMELINE_ICONS) {
+    if (pattern.test(kind)) return icon
+  }
+  return Circle // 设计稿兜底 'dot'
+}
+
+/** 事件 payload 里的「改了哪些字段」。形状非法一律当没有 —— 时间线是审计面，
+ *  宁可少显示一行，也不要把脏数据当成变更详情渲染出去。 */
+function changedFields(event: MatterEvent): string[] {
+  const fields = (event.payload as { fields?: unknown } | null | undefined)?.fields
+  if (!Array.isArray(fields)) return []
+  return fields.filter((field): field is string => typeof field === 'string' && field.length > 0)
+}
+
 function Timeline({ events }: { events: readonly MatterEvent[] }): React.ReactElement {
   const { t } = useTranslation()
   const [filter, setFilter] = useState<TimelineFilter>('all')
@@ -1687,37 +1754,80 @@ function Timeline({ events }: { events: readonly MatterEvent[] }): React.ReactEl
   const visible = filter === 'all' ? events : events.filter((event) => event.actor_kind === filter)
   return (
     <section>
-      <SegmentedControl<TimelineFilter>
-        value={filter}
-        onChange={setFilter}
-        options={options}
-        ariaLabel={t('matters.timeline.filter')}
-      />
-      <div className="mt-4 space-y-3">
-        {visible.map((event) => (
-          <div
-            key={event.id}
-            className="rounded-[var(--r-ctl)] border border-ink-border bg-ink-1/65 px-4 py-3"
-          >
-            <div className="flex items-center justify-between gap-3">
-              <span className="text-body font-medium">
-                {t(`matters.events.${event.kind}`, { defaultValue: event.kind })}
+      {/* 标题 + 右侧筛选 = 设计稿 `RailLabel right={<Segmented/>}>业务时间线 · 只追加</RailLabel>`。
+          🔴 不用仓库的 SectionHeader —— 它是 mono UPPERCASE，且有 CI lint 规则
+          `no-cjk-in-mono-size` 禁 CJK；这里沿用 matters 内部同形态的小标题。 */}
+      <h2 className="mb-2 flex items-center justify-between gap-3 text-meta font-semibold uppercase tracking-[0.08em] text-ink-fg-2">
+        <span className="min-w-0 truncate">{t('matters.timeline.sectionTitle')}</span>
+        <SegmentedControl<TimelineFilter>
+          value={filter}
+          onChange={setFilter}
+          options={options}
+          ariaLabel={t('matters.timeline.filter')}
+        />
+      </h2>
+
+      {/* 时间轴本体（设计稿 detail.jsx `Timeline`）：一条贯穿竖线 + 每条事件一个圆节点。
+          此前是一堆独立卡片，没有任何时间轴形态。竖线 left 15px = 节点半径 11.5 + pl-1 的 4px，
+          正好穿过圆心；节点用 bg-ink-0 盖住线，边框按 actor 取色。 */}
+      <div className="relative pl-1">
+        <span aria-hidden className="absolute bottom-2.5 left-[15px] top-2.5 w-px bg-ink-border" />
+        {visible.map((event) => {
+          const tone = TIMELINE_TONE[event.actor_kind] ?? TIMELINE_TONE.system
+          const Icon = timelineIcon(event.kind)
+          return (
+            <div key={event.id} className="relative flex gap-[11px] py-[7px]">
+              <span
+                className={cn(
+                  'z-[1] grid size-[23px] shrink-0 place-items-center rounded-full border bg-ink-0',
+                  tone
+                )}
+              >
+                <Icon size={11} />
               </span>
-              <time className="text-meta text-ink-fg-2">
-                {new Date(event.happened_at).toLocaleString()}
-              </time>
+              <div className="min-w-0 flex-1 pt-0.5">
+                <div className="text-meta leading-[1.55] text-ink-fg-1">
+                  {t(`matters.events.${event.kind}`, { defaultValue: event.kind })}
+                </div>
+                {/* 变更详情（补充规格 v2 §6「每条下方补一句变更详情」）。payload 一直存在 DB 里，
+                    渲染层此前一次都没读过 ⇒ 每条事件只有名字、看不出改了什么。
+                    🔴 后端目前只写字段**名**（`{"fields": [...]}`），没写旧值/新值，所以这里
+                    如实呈现到字段粒度；值级的 from→to 要先扩 payload，未做即不假装有。 */}
+                {changedFields(event).length > 0 ? (
+                  <div className="mt-0.5 text-meta leading-[1.55] text-ink-fg-3">
+                    {t('matters.timeline.changedFields', {
+                      fields: changedFields(event)
+                        .map((field) => t(`matters.eventField.${field}`, { defaultValue: field }))
+                        .join('、')
+                    })}
+                  </div>
+                ) : null}
+                <div className="mt-[3px] flex flex-wrap items-center gap-[7px]">
+                  <time className="font-mono text-micro text-ink-fg-3">
+                    {new Date(event.happened_at).toLocaleString()}
+                  </time>
+                  {event.actor_kind === 'agent' ? (
+                    <span className="inline-flex items-center gap-1 rounded-[var(--r-pill)] bg-ai/10 px-1.5 py-0.5 text-micro text-ai">
+                      <Sparkles size={9} />
+                      {t('matters.timeline.agent')}
+                    </span>
+                  ) : (
+                    <span className="text-micro text-ink-fg-3">
+                      ·{' '}
+                      {t(`matters.eventActor.${event.actor_kind}`, {
+                        defaultValue: event.actor_kind
+                      })}
+                    </span>
+                  )}
+                  <span className="text-micro text-ink-fg-3">
+                    · {t(`matters.eventSource.${event.source}`, { defaultValue: event.source })}
+                  </span>
+                </div>
+              </div>
             </div>
-            <p className="mt-1 text-meta text-ink-fg-2">
-              {/* actor/source 都 fallback 回原值：source 的值域会随触发方式增长
-                  （定时/事件/条件…），漏一个也只是显示原始标识，不该是缺失占位符。 */}
-              {t(`matters.eventActor.${event.actor_kind}`, { defaultValue: event.actor_kind })} ·{' '}
-              {t(`matters.eventSource.${event.source}`, { defaultValue: event.source })}
-            </p>
-          </div>
-        ))}
-        {visible.length === 0 ? (
-          <EmptyState title={t('matters.timeline.empty')} />
-        ) : null}
+          )
+        })}
+        {visible.length === 0 ? <EmptyState title={t('matters.timeline.empty')} /> : null}
       </div>
     </section>
   )

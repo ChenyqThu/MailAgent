@@ -1,4 +1,4 @@
-import { BellRing, Check, X } from 'lucide-react'
+import { BellOff, Check, X } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import type { Matter, MatterAttentionSignal } from '@shared/api/types/matter'
@@ -64,7 +64,7 @@ export function AttentionActions({
         onClick={() => onAction(matterId, signal.id as number, 'snoozed')}
         className={buttonClass}
       >
-        <BellRing size={12} />
+        <BellOff size={12} />
         {compact ? null : t('matters.attention.snoozeShort')}
       </button>
       <button

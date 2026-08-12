@@ -7,7 +7,7 @@
 import { useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify'
-import { BriefcaseBusiness, Mail, Paperclip, Plus } from 'lucide-react'
+import { Briefcase, Mail, Paperclip, Plus } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { highlightTerms } from '@shared/lib/highlight_terms'
@@ -172,7 +172,7 @@ export function EmailHitRow({
                   title={matter.title}
                   className="inline-flex max-w-24 items-center gap-1 rounded-[var(--r-pill)] border border-info/25 bg-info/10 px-1.5 py-0.5 font-mono text-[10px] text-info"
                 >
-                  <BriefcaseBusiness size={9} strokeWidth={2} className="shrink-0" aria-hidden />
+                  <Briefcase size={9} strokeWidth={2} className="shrink-0" aria-hidden />
                   <span className="truncate">{matter.public_id}</span>
                 </span>
               ))}
