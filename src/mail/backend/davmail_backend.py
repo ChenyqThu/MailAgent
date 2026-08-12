@@ -28,7 +28,11 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from loguru import logger
 
-from src.mail.backend.base import IMailBackend, MarkerUnavailableError
+from src.mail.backend.base import (
+    FolderFetchError,
+    IMailBackend,
+    MarkerUnavailableError,
+)
 from src.mail.backend.imap_client import (
     DavMailConnectionError,
     _status_message_count,
@@ -310,6 +314,40 @@ def _lowest_visible_uid(imap) -> Optional[int]:
             raw = raw.decode("utf-8", errors="replace")
         m = re.search(r"UID\s+(\d+)", str(raw))
         return int(m.group(1)) if m else None
+    except Exception:
+        return None
+
+
+def _oldest_visible_internaldate(imap) -> Optional[datetime]:
+    """SELECT 后取视图内**最老一封**的 INTERNALDATE —— 对账完整性闸的判据。
+
+    🔴 `davmail.folderSizeLimit` 把 IMAP 视图截断成最近 N 封, ``SEARCH SINCE``
+    **打不穿这个上限**: 它的真实语义是「最近 N 封 ∩ 最近 X 天」而不是「服务器上
+    最近 X 天的全部邮件」。若窗口内邮件数超过 N (或服务长时间停摆), 窗口较老的那段
+    在 IMAP 层根本不可见 —— 对账看不见它, 于是**也判断不出它缺失**。
+
+    有了这个下界就能自证: 最老可见时间 <= 窗口起点 ⇒ 窗口被完整覆盖 (complete);
+    否则窗口已被截断 (incomplete), 本轮不能记成"查全了"。少了它, 对账会在容量不足时
+    **静默失去兜底能力**, 比没有兜底更危险 (因为看起来有)。
+
+    读不到 / 空 mailbox → ``None`` (调用方按 incomplete 保守处理)。
+    """
+    try:
+        typ, data = imap.fetch("1", "(INTERNALDATE)")
+        if typ != "OK" or not data or not data[0]:
+            return None
+        raw = data[0]
+        if isinstance(raw, tuple):
+            raw = raw[0]
+        if isinstance(raw, (bytes, bytearray)):
+            raw = raw.decode("utf-8", errors="replace")
+        m = re.search(r'INTERNALDATE\s+"([^"]+)"', str(raw))
+        if not m:
+            return None
+        from email.utils import parsedate_to_datetime as _pdt
+        # IMAP INTERNALDATE: "11-Aug-2026 18:41:17 +0000" → RFC822 可解析形态
+        dt = _pdt(m.group(1).replace("-", " ", 2))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
     except Exception:
         return None
 
@@ -1408,21 +1446,47 @@ class DavMailBackend(IMailBackend):
 
         ## 多 folder (收件箱 + 发件箱)
 
-        INBOX 用 ``since_row_id`` (= 持久化的 INBOX uidnext marker) 做 ``UID >`` 增量。
+        🔴 **两种 marker 语义, 下界规则相反 — 不要混用** (2026-08-11 丢邮件事故根因):
+
+        =============== ============================== ==================
+        folder          marker 是什么                   SEARCH 下界
+        =============== ============================== ==================
+        INBOX           ``STATUS(UIDNEXT)``             ``UID {m}:*``
+                        = **下一个将分配的 UID**         (inclusive)
+        Sent / custom   ``MAX(imap_uid)`` (SQLite)      ``UID {m+1}:*``
+                        = **已导入的最大 UID**           (exclusive)
+        =============== ============================== ==================
+
+        RFC 3501: UIDNEXT 是"此后到达邮件的 UID 下界", 即新邮件 ``UID >= UIDNEXT``。
+        所以 INBOX 的下界必须 **inclusive** —— 用 ``m+1`` 会恒定跳过 ``UID == m``
+        的那一封。而 Sent/custom 的 marker 是"已经导入过的最大 UID", 对它 ``+1``
+        才对。两者共用同一个 ``+1`` 公式正是本次事故的根因: 每当新邮件恰好拿到
+        ``UID == 上轮 UIDNEXT`` 时就被永久跳过 (生产实测 351 封漏 3 封)。
+
+        实测生产 DavMail **不做 RFC 3501 的范围反转** (``UID <越界>:*`` 直接返空,
+        而非退化成"返回最大 UID 那封"), 所以没有任何兜底会掩盖这个 off-by-one。
+
+        ``max(1, ...)``: UID 从 1 起, 首次同步 marker=0 时 ``UID 0:*`` 非法。
+
         Sent (发件箱) 的 IMAP UID 空间和 INBOX **独立**, 不能复用 since_row_id, 故 marker
         从 SQLite 派生 (``MAX(imap_uid) WHERE mailbox='发件箱'``); 首次 (无 davmail-origin
         发件箱行) 退化为 ``SENTSINCE <SYNC_START_DATE>`` 日期下限回填。重复拉到的存量
         AppleScript 发件邮件由 ``_save_email_v3`` 的 cross-backend merge protection 兜底
-        (按 message_id merge, 不建重复行/重复 Notion 页), 故首次回填安全。
+        (按 message_id merge, 不建重复行/重复 Notion 页), 故首次回填安全 —— inclusive
+        下界带来的"每轮重抓边界那一封"同样靠它去重, 且顺带更新漂移的 imap_uid
+        (实测 32% 的行 uid 与服务器现值不符), 所以**不要**在上层加 message_id 预过滤
+        绕开它 (会连 Draft→Sent 提升一起绕掉)。
         """
         out: list[dict] = []
         try:
             with imap_session(self.cfg, timeout=60) as imap:
                 # --- INBOX (主路径, since_row_id = INBOX uidnext marker) ---
+                # inclusive 下界: marker 是 UIDNEXT, 新邮件 UID >= marker (见 docstring)
+                inbox_lower = max(1, int(since_row_id or 0))
                 out.extend(
                     self._fetch_new_in_folder(
                         imap, "INBOX", INBOX_LABEL,
-                        ("UID", f"{int(since_row_id) + 1}:*"),
+                        ("UID", f"{inbox_lower}:*"),
                         track_inbox_uidvalidity=True,
                     )
                 )
@@ -1516,8 +1580,10 @@ class DavMailBackend(IMailBackend):
         # imaplib 拆成多 atom → SELECT 失败)。简单名 quote 无害 (实测)。
         typ, _ = imap.select(quote_mailbox(imap_folder), readonly=True)
         if typ != "OK":
-            logger.warning(f"[davmail-backend] SELECT {imap_folder!r} failed: {typ}")
-            return []
+            # 协议失败 ≠ 空结果: raise 让调用方守住游标 (见 FolderFetchError)
+            raise FolderFetchError(
+                f"SELECT {imap_folder!r} failed: typ={typ!r}"
+            )
         # 从 SELECT 响应读 UIDVALIDITY (untagged response), 避免协议违反
         # (RFC 3501 §6.3.10: STATUS 不能跟在 SELECT 同 mailbox 之后).
         uv = _read_uidvalidity_from_select(imap)
@@ -1543,13 +1609,20 @@ class DavMailBackend(IMailBackend):
 
         key, arg = search_criteria
         typ, data = imap.uid("search", None, key, arg)
-        if typ != "OK" or not data or not data[0]:
+        # 🔴 协议失败与「OK + 空结果」必须分开 (见 FolderFetchError):
+        # 前者 raise (游标不推进, 下轮重试), 后者是合法空成功 (游标照常推进)。
+        # 合并成一个 `if` 正是丢邮件事故的一半根因。
+        if typ != "OK":
+            raise FolderFetchError(
+                f"UID SEARCH {key} {arg!r} in {imap_folder!r} failed: typ={typ!r}"
+            )
+        if not data or not data[0]:
             _persist_uv()
-            return []
+            return []                      # OK + 空: 窗口内确实没有新邮件
         uids = data[0].split()
         if not uids:
             _persist_uv()
-            return []
+            return []                      # 同上
         # max_messages 截断: UID SEARCH 返回升序, 取末尾 N (最新) 防大文件夹首拉灌爆。
         if max_messages and max_messages > 0 and len(uids) > max_messages:
             logger.info(
@@ -1563,9 +1636,12 @@ class DavMailBackend(IMailBackend):
             "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS "
             "(MESSAGE-ID SUBJECT FROM DATE REFERENCES IN-REPLY-TO)])",
         )
+        # SEARCH 已经证明这些 UID 存在, 所以 FETCH 拿不到 = 协议失败, 不是空结果。
         if typ != "OK" or not data:
-            _persist_uv()
-            return []
+            raise FolderFetchError(
+                f"UID FETCH ({len(uids)} uids) in {imap_folder!r} failed: "
+                f"typ={typ!r} data_empty={not data}"
+            )
         # 每封邮件的 imap_uidvalidity = 本 folder 的 uv (不再用 inbox_uidvalidity —
         # 修复 Sent/自定义文件夹 uidvalidity 张冠李戴的潜在问题)。
         parsed = self._parse_batch_headers(data, uidvalidity=uv)
@@ -1574,18 +1650,21 @@ class DavMailBackend(IMailBackend):
             try:
                 item["internal_id"] = self.sync_store.allocate_davmail_internal_id()
             except Exception as e:
-                logger.error(
-                    f"[davmail-backend] allocate_davmail_internal_id failed for "
+                # 整批失败: 跳过单封会让这封落在游标推进后的窗口里 → 永久丢失。
+                raise FolderFetchError(
+                    f"allocate_davmail_internal_id failed for "
                     f"imap_uid={item.get('imap_uid')} folder={imap_folder!r}: {e}"
-                )
-                continue
+                ) from e
             item["backend_origin"] = "davmail"
             item["mailbox"] = mailbox_label
             out.append(item)
         if len(out) != len(uids):
-            logger.warning(
-                f"[davmail-backend] _fetch_new_in_folder({mailbox_label}): parsed "
-                f"{len(out)} from {len(uids)} UIDs (missing {len(uids) - len(out)})"
+            # 部分解析失败: SEARCH 说有 N 封、只解析出 M 封, 差额那几封若随游标推进
+            # 出窗就永久丢失 —— 整批视为失败, 下轮重取 (重复由 message_id merge 去重)。
+            raise FolderFetchError(
+                f"_fetch_new_in_folder({mailbox_label}): parsed {len(out)} from "
+                f"{len(uids)} UIDs (missing {len(uids) - len(out)}) — batch treated "
+                f"as failure so the cursor is not advanced past the missing ones"
             )
         _persist_uv()
         return out
@@ -1710,6 +1789,196 @@ class DavMailBackend(IMailBackend):
         except Exception as e:
             logger.warning(f"[davmail-backend] fetch_inbox_seen_flags failed: {e}")
             return None
+
+    def reconcile_inbox(self, window_days: int) -> "InboxReconcileResult":
+        """收件箱对账兜底 (2026-08-11 丢邮件事故 · 方案 C) — **只补不删**。
+
+        增量链路 (UID marker) 依赖"UID 单调递增"这个假设, 而 davmail/EWS 上它
+        **不完全成立** (2026-08 实测 348 封里 110 封 / 32% 的本地 imap_uid 与服务器
+        现值不符, 最大偏差 +1535)。本方法与漏抓成因**无关**: 直接比对服务器与本地
+        "有哪些邮件", 因此能兜住 off-by-one / 协议失败 / UID 重编号 / 以及尚未发现的
+        任何成因。
+
+        ## 判据: Message-ID, 不是 UID
+
+        UID 会被重新编号 ⇒ 按 uid 比对会产出大量假阳性。只有无 Message-ID 的邮件
+        (异常通道) 才退化到 ``(uidvalidity, uid)`` 尽力比对。
+
+        ## 🔴 只补不删
+
+        单向的「服务器有 → 本地缺 → 补抓」。**绝不**做反向删除: 截断视图外的老邮件、
+        已归档 / 被规则移出 INBOX 的邮件都会在服务器侧"缺席", 按缺席删本地 = 批量误删
+        (issue #58 入向已读回收踩过的「缺席 ≠ 判据」同一个坑)。
+
+        ## 🔴 完整性闸
+
+        ``SEARCH SINCE`` 打不穿 ``folderSizeLimit`` 截断视图, 真实语义是
+        「最近 N 封 ∩ 最近 X 天」。所以取视图内最老一封的 INTERNALDATE 自证覆盖:
+        覆盖到窗口起点才 ``complete``, 否则 ``incomplete`` (补抓照做, 但本轮不算
+        "查全了")。少了它, 容量不足时对账会静默失去兜底能力。
+
+        调用方: ``new_watcher._reconcile_inbox`` (独立低频节拍, 绝不挂 5s radar poll)。
+        """
+        from src.mail.backend.types import InboxReconcileResult
+
+        window_days = max(1, int(window_days or 1))
+        now = datetime.now(timezone.utc)
+        window_floor = now - timedelta(days=window_days)
+        since_arg = window_floor.strftime("%d-%b-%Y")
+
+        def _skip(reason: str) -> "InboxReconcileResult":
+            return InboxReconcileResult(
+                status="skipped",
+                window_floor_iso=window_floor.isoformat(),
+                reason=reason,
+            )
+
+        with imap_session(self.cfg, timeout=120) as imap:
+            # 快照预检: 远端 STATUS **+ 本地行数** 都与上轮一致 → 静止态, 跳过重操作
+            # (SEARCH + 数百封 FETCH)。
+            #
+            # 🔴 **有意不做 STATUS 快照预检** (「远端没变就跳过本轮」那种优化)。
+            #
+            # 它看起来很自然 —— reconcile_drafts 就是这么干的 —— 但在 INBOX 上要成立,
+            # 必须维持一个很强的不变量:「**任何**本地行丢失都能打破快照」。
+            # 实践中这个不变量非常难守, 2026-08-11 这批 review 里它已经破了两次:
+            #   1. 只绑远端 STATUS → 本地误删后远端不变 ⇒ 永久跳过;
+            #   2. 补上本地 date_received 窗口 COUNT → Date header 可伪造/缺失,
+            #      Date 很老的行不入计数, 删了也不变 ⇒ 还是永久跳过;
+            #   3. 换成当前 UID 空间的 COUNT|SUM|MAX 摘要 → 仍漏 imap_uid IS NULL 的
+            #      AppleScript 存量行、旧 UIDVALIDITY 的行, 且等和交换 (删 {10,40}
+            #      增 {20,30}) 三个量全不变。
+            # 每补一个洞都要再证明一次全称命题, 而**漏掉任何一个都让兜底机制静默失效**。
+            #
+            # 收益侧: 省的只是低频 (默认 1800s) 的一次 SEARCH + 数百封 header FETCH
+            # (实测 2 天窗口 113 封)。用「兜底机制可能被静默禁用」换这个, 不成比例 ——
+            # 兜底的正确性远比它的性能重要, 何况静止态本来就没有代价问题。
+            #
+            # 真要做, 唯一可靠的形态是 SQLite trigger 维护的本地变更 epoch (O(1) 且不
+            # 依赖任何数据特性); 但本仓大量使用 INSERT OR REPLACE (= DELETE + INSERT,
+            # 会触发两次 trigger), 引入 trigger 的语义面比省下的那次 SEARCH 贵得多。
+            typ, _ = imap.select(quote_mailbox("INBOX"), readonly=True)
+            if typ != "OK":
+                return _skip(f"SELECT INBOX failed: typ={typ!r}")
+            uv = _read_uidvalidity_from_select(imap)
+            if not uv:
+                # uidvalidity 读不到 → 无法给补抓的行打正确的 uid 空间标记
+                return _skip("UIDVALIDITY unavailable")
+            self.inbox_uidvalidity = uv
+
+            oldest_visible = _oldest_visible_internaldate(imap)
+
+            typ, data = imap.uid("search", None, "SINCE", since_arg)
+            if typ != "OK":
+                return _skip(f"UID SEARCH SINCE {since_arg} failed: typ={typ!r}")
+            uids = data[0].split() if (data and data[0]) else []
+
+            # 完整性闸: 视图最老一封必须早于/等于窗口起点, 否则窗口被截断了。
+            # 读不到最老时间 → 保守按 incomplete (宁可报不确定, 不谎称查全)。
+            if oldest_visible is None:
+                status = "incomplete" if uids else "complete"
+            elif oldest_visible <= window_floor:
+                status = "complete"
+            else:
+                status = "incomplete"
+
+            if not uids:
+                return InboxReconcileResult(
+                    status=status,
+                    remote_total=0,
+                    oldest_visible_iso=(
+                        oldest_visible.isoformat() if oldest_visible else None
+                    ),
+                    window_floor_iso=window_floor.isoformat(),
+                )
+
+            # 本地指纹: 窗口放宽 2 天 —— 远端按 INTERNALDATE 筛、本地存 Date header
+            # 归一值, 边界处可能差几小时; 取窄了会把边界邮件误判成缺失 (后果是幂等
+            # 重抓而非错误, 但没必要)。
+            local_floor = (window_floor - timedelta(days=2)).isoformat()
+            known_msgids, known_uid_pairs = (
+                self.sync_store.get_inbox_reconcile_fingerprints(local_floor)
+            )
+
+            missing: list[dict] = []
+            empty_msgid = 0
+            duplicate_msgid = 0
+            seen_remote_msgids: set[str] = set()
+
+            for i in range(0, len(uids), 50):
+                chunk_uids = uids[i:i + 50]
+                chunk = b",".join(chunk_uids).decode()
+                typ, data = imap.uid(
+                    "fetch", chunk,
+                    "(UID FLAGS INTERNALDATE BODY.PEEK[HEADER.FIELDS "
+                    "(MESSAGE-ID SUBJECT FROM DATE REFERENCES IN-REPLY-TO)])",
+                )
+                if typ != "OK" or not data:
+                    # 对账是补偿性的, 单批失败不该让整轮作废 —— 但必须让本轮
+                    # 不能自称 complete (这批里缺什么就永远不知道了)。
+                    logger.warning(
+                        f"[inbox-reconcile] UID FETCH chunk failed (typ={typ!r}), "
+                        f"batch skipped; round downgraded to incomplete"
+                    )
+                    status = "incomplete"
+                    continue
+                parsed = self._parse_batch_headers(data, uidvalidity=uv)
+                # 🔴 部分解析同样不能算"查全": _parse_batch_headers 会静默丢弃缺 UID /
+                # MIME 解析失败的项并返回**较短**的列表。少了这道校验, 恰好是需要补抓
+                # 的那封被丢掉时, 本轮仍会写 last_complete_at 自称成功 —— 这正是
+                # 上一轮 review 在增量路径上指出的"部分结果被当成功"在对账路径的翻版。
+                if len(parsed) != len(chunk_uids):
+                    logger.warning(
+                        f"[inbox-reconcile] chunk parsed {len(parsed)} from "
+                        f"{len(chunk_uids)} UIDs (missing "
+                        f"{len(chunk_uids) - len(parsed)}); round downgraded to "
+                        f"incomplete"
+                    )
+                    status = "incomplete"
+                for item in parsed:
+                    mid = (item.get("message_id") or "").strip()
+                    uid_pair = (uv, item.get("imap_uid"))
+                    if not mid:
+                        # 异常通道: 无 Message-ID 无稳定标识, 退化到 (uv, uid) 比对。
+                        empty_msgid += 1
+                        if uid_pair in known_uid_pairs:
+                            continue
+                    else:
+                        if mid in seen_remote_msgids:
+                            # 远端两封物理邮件共用一个 Message-ID: 当前 schema 的
+                            # UNIQUE 表达不了, 不静默合并, 计数 + 跳过。
+                            duplicate_msgid += 1
+                            continue
+                        seen_remote_msgids.add(mid)
+                        if mid in known_msgids:
+                            continue
+                    try:
+                        item["internal_id"] = (
+                            self.sync_store.allocate_davmail_internal_id()
+                        )
+                    except Exception as e:
+                        logger.error(
+                            f"[inbox-reconcile] allocate internal_id failed "
+                            f"(uid={item.get('imap_uid')}): {e}"
+                        )
+                        status = "incomplete"
+                        continue
+                    item["backend_origin"] = "davmail"
+                    item["mailbox"] = INBOX_LABEL
+                    item["ingest_reason"] = "inbox_reconcile"
+                    missing.append(item)
+
+            return InboxReconcileResult(
+                status=status,
+                missing=missing,
+                remote_total=len(uids),
+                oldest_visible_iso=(
+                    oldest_visible.isoformat() if oldest_visible else None
+                ),
+                window_floor_iso=window_floor.isoformat(),
+                empty_msgid=empty_msgid,
+                duplicate_msgid=duplicate_msgid,
+            )
 
     def reconcile_drafts(self) -> tuple[list[dict], list[int]]:
         """草稿箱对账 — 返回 (新草稿 email dicts, 已消失草稿的 internal_ids)。
@@ -2129,6 +2398,7 @@ class DavMailBackend(IMailBackend):
             self.sync_store.set_state(self._folder_uidvalidity_key(imap_name), str(int(uv)))
         except Exception as e:
             logger.warning(f"[davmail-backend] _set_folder_uidvalidity({imap_name!r}={uv}) failed: {e}")
+
 
     def set_last_max_row_id(self, row_id: int) -> None:
         """写 marker 内存缓存 (持久化由调用方走 sync_store)."""

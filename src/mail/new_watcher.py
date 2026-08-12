@@ -57,6 +57,7 @@ from src.repository import (
 from src.mail.backend.base import MarkerUnavailableError
 from src.mail.backend.imap_client import parse_folder_csv_or_json
 from src.mail.backend.serial_executor import run_backend_io
+from src.mail.ingest_provenance import should_suppress_reconcile_notify
 from src.mail.throttle_pause import is_uid_backfill_paused
 
 # 标准邮箱 (非自定义文件夹) —— L2/L3 gate 不影响这些; 自定义文件夹 = mailbox 不在此集合。
@@ -345,6 +346,7 @@ class NewWatcher:
         # 入向已读回收 (issue #58) 的独立低频节拍游标 (monotonic 秒)。None = 从未跑过,
         # 首次进入即执行; 与 5s radar poll 解耦, 间隔见 inbound_read_reconcile_interval_sec。
         self._last_inbound_read_reconcile_at: Optional[float] = None
+        self._last_inbox_reconcile_at: Optional[float] = None
         # KOS 失败重试 (issue #59, 第 6c 步) 的不健康冷却截止 (monotonic 秒):
         # 探活失败后到此刻之前整段跳过, 不必每个 5s tick 都对着倒掉的 KOS 探活。
         self._kos_unhealthy_until: Optional[float] = None
@@ -575,8 +577,14 @@ class NewWatcher:
                 # PR #23 (credit @KevinWangQQ) 游标守卫: check_for_changes 用轻量
                 # STATUS 证明有新邮件后, 这里的重量级 SEARCH/FETCH 若失败 (超时/断连),
                 # 本轮**不推进游标**、不更新 last_sync_time — 下轮同窗口自动重试,
-                # IMAP 恢复即自愈。合法返空 ([]) 仍照常推进 (UIDNEXT 差值会高估:
-                # 删信/SEARCH 不匹配, 空成功不推进会卡死)。
+                # IMAP 恢复即自愈。
+                #
+                # 🔴 2026-08-11 事故后收窄「合法返空」的定义 (B1′):
+                # 只有 backend **明确报告 OK + 空结果**才算合法空成功 (照常推进 —
+                # UIDNEXT 差值会因删信等原因高估, 空成功不推进会把游标卡死);
+                # SELECT/SEARCH/FETCH 非 OK、批量解析少项、internal_id 分配失败
+                # 现在一律 raise FolderFetchError (不再静默 return []), 走下面的
+                # `new_emails = None` 分支守住游标。见 backend.base.FolderFetchError。
                 try:
                     new_emails = self.backend.get_new_emails(last_max_row_id)
                 except Exception as e:
@@ -585,6 +593,16 @@ class NewWatcher:
                         f"({last_max_row_id}, {current_max}] retried next poll: {e}"
                     )
                     new_emails = None
+
+                # B2 留痕: STATUS 说有新邮件、实际一封没取到 —— 多数是良性的
+                # (UIDNEXT 被删信/其他原因推高而 SEARCH 无匹配), 但这**曾经是**
+                # 丢邮件的静默现场, 必须可观测而不是完全无声。
+                if new_emails is not None and not new_emails and estimated_count > 0:
+                    self._record_empty_fetch_gap(last_max_row_id, current_max,
+                                                 estimated_count)
+
+                # 任一封写库失败 → 本轮不推进游标 (失败那封会随游标推进永久出窗)。
+                save_failed = False
 
                 if new_emails:
                     logger.info(f"SQLite found {len(new_emails)} new emails")
@@ -633,16 +651,27 @@ class NewWatcher:
                         if email_meta.get('imap_uidvalidity') is not None:
                             payload['imap_uidvalidity'] = email_meta.get('imap_uidvalidity')
 
-                        self.sync_store.save_email(payload)
+                        if not self.sync_store.save_email(payload):
+                            # 写库失败若被忽略, 这封会随下面的游标推进永久出窗
+                            # (与 get_new_emails 失败同等严重, 故同等处理)。
+                            save_failed = True
+                            logger.error(
+                                f"save_email failed for internal_id={internal_id} "
+                                f"(msgid={email_meta.get('message_id')!r}, "
+                                f"imap_uid={email_meta.get('imap_uid')}) — cursor "
+                                f"NOT advanced, window retried next poll"
+                            )
+                            continue
                         logger.debug(
                             f"Added email {internal_id} to SyncStore "
                             f"(pending, origin={backend_origin or 'applescript'}, "
                             f"imap_uid={email_meta.get('imap_uid')})"
                         )
 
-                # 4. 更新 last_max_row_id（立即持久化）— 仅成功 (含空成功) 时推进;
-                # None = get_new_emails 失败, 游标留在原位等下轮重试
-                if new_emails is not None:
+                # 4. 更新 last_max_row_id（立即持久化）— 仅成功 (含**合法**空成功) 时推进;
+                # None = get_new_emails 失败 (含 FolderFetchError), save_failed = 有邮件
+                # 没写进库 —— 两者都把游标留在原位等下轮重试。
+                if new_emails is not None and not save_failed:
                     self.sync_store.set_last_max_row_id(current_max)
                     self.sync_store.set_last_sync_time(datetime.now().isoformat())
         else:
@@ -679,6 +708,11 @@ class NewWatcher:
         # 8. 入向已读回收 (issue #58, davmail-only, 默认关) — 独立低频节拍, 不挂每轮。
         # 位置在 throttle-pause guard 之后, EWS 限流时本轮已 return 不会走到这里。
         await self._reconcile_inbound_read()
+
+        # 9. 收件箱对账兜底 (2026-08-11 丢邮件事故, davmail-only, 默认关) —
+        # 同样是独立低频节拍。放在 pending 处理之后: 本轮补抓的行会由下一轮
+        # (或本轮之后的 tick) 的 _process_pending_emails 抓正文。
+        await self._reconcile_inbox()
 
     async def _reconcile_inbound_read(self):
         """入向「未读→已读」单向回收 (davmail-only, MAILAGENT_INBOUND_READ_RECONCILE_ENABLED)。
@@ -1106,6 +1140,215 @@ class NewWatcher:
                     f"[kos-retry] internal_id={iid} still failing "
                     f"code={outcome.error_code}"
                 )
+
+    # sync_state 键 (镜像 davmail.* / kos.* 先例, **不进 DB_VERSION**)
+    _RECONCILE_LAST_COMPLETE_KEY = "inbox_reconcile.last_complete_at"
+    _RECONCILE_TRUNCATED_KEY = "inbox_reconcile.window_truncated_total"
+    _RECONCILE_OLDEST_VISIBLE_KEY = "inbox_reconcile.oldest_visible_date"
+    _RECONCILE_RECOVERED_KEY = "inbox_reconcile.recovered_total"
+    _RECONCILE_LAST_RUN_KEY = "inbox_reconcile.last_run_at"
+
+    async def _reconcile_inbox(self):
+        """收件箱对账兜底 (2026-08-11 丢邮件事故 · 方案 C, davmail-only, 默认关)。
+
+        增量 marker 依赖"UID 单调递增", 而 davmail/EWS 上该假设不完全成立
+        (实测 32% 的行 uid 与服务器现值不符)。本对账**与漏抓成因无关**: 直接按
+        Message-ID 比对服务器与本地, 补回任何原因漏掉的邮件。
+
+        🔴 **绝不挂 5s radar poll** —— UID SEARCH 在大邮箱会重现 EWS 全量枚举限流
+        (issue #46), 故独立低频节拍 (默认 1800s)。
+        🔴 **只补不删** (见 backend.reconcile_inbox docstring)。
+
+        补抓的行走 ``save_email(pending)`` 进主链路, 与正常新邮件同路: 由
+        ``_process_pending_emails`` 抓正文 → Notion / LLM / FTS / KOS 全套。
+        唯一差别是 ``ingest_reason='inbox_reconcile'``, 供飞书通知门控用
+        (见 ``_suppress_reconcile_notify``)。
+        """
+        if not getattr(settings, "inbox_reconcile_enabled", False):
+            return                          # flag off: 字节级 inert, 零 IMAP 命令
+        backend = self.backend
+        if not hasattr(backend, "reconcile_inbox"):
+            return                          # AppleScript fallback: 整段不激活
+
+        interval = max(60, int(getattr(settings, "inbox_reconcile_interval_sec", 1800)))
+        now = time.monotonic()
+        last = self._last_inbox_reconcile_at
+        if last is not None and (now - last) < interval:
+            return
+        self._last_inbox_reconcile_at = now
+
+        window_days = max(1, int(getattr(settings, "inbox_reconcile_window_days", 2)))
+        try:
+            # backend-io 单线程队列: SEARCH+FETCH 可能数十秒, 不能占着 event loop
+            # (会连带冻住 fanout / reverse / island 所有 worker 的 tick)。
+            result = await run_backend_io(backend.reconcile_inbox, window_days)
+        except Exception as e:
+            logger.warning(f"[inbox-reconcile] failed (skip cycle): {e}")
+            return
+
+        try:
+            self.sync_store.set_state(
+                self._RECONCILE_LAST_RUN_KEY, datetime.now().isoformat()
+            )
+            if result.oldest_visible_iso:
+                self.sync_store.set_state(
+                    self._RECONCILE_OLDEST_VISIBLE_KEY, result.oldest_visible_iso
+                )
+        except Exception:
+            pass
+
+        if result.status == "skipped":
+            logger.info(f"[inbox-reconcile] skipped: {result.reason}")
+            return
+
+        if result.status == "incomplete":
+            # 🔴 容量不足 / 长时间停摆: 窗口被 folderSizeLimit 截断视图打断,
+            # 窗口更老那段在 IMAP 层不可见 ⇒ 缺什么都判断不出来。补抓照做,
+            # 但**不能**记成一次成功对账, 否则"看起来有兜底"比没有更危险。
+            try:
+                n = int(
+                    self.sync_store.get_state(self._RECONCILE_TRUNCATED_KEY) or 0
+                ) + 1
+                self.sync_store.set_state(self._RECONCILE_TRUNCATED_KEY, str(n))
+            except Exception:
+                pass
+            logger.warning(
+                f"[inbox-reconcile] 窗口未被完整覆盖 (incomplete): 视图最老一封 "
+                f"{result.oldest_visible_iso} 晚于窗口起点 {result.window_floor_iso} "
+                f"—— folderSizeLimit 截断视图装不下 {window_days} 天。"
+                f"调小 MAILAGENT_INBOX_RECONCILE_WINDOW_DAYS 或调大 "
+                f"DAVMAIL_FOLDER_SIZE_LIMIT; 本轮补抓照做但不算「查全」。"
+            )
+        else:
+            try:
+                self.sync_store.set_state(
+                    self._RECONCILE_LAST_COMPLETE_KEY, datetime.now().isoformat()
+                )
+            except Exception:
+                pass
+
+        if result.empty_msgid or result.duplicate_msgid:
+            logger.warning(
+                f"[inbox-reconcile] 异常 Message-ID: 空 {result.empty_msgid} 封 / "
+                f"远端重复 {result.duplicate_msgid} 封 (重复的已跳过 —— 当前 schema 的 "
+                f"message_id UNIQUE 表达不了两封物理邮件共用一个 ID)"
+            )
+
+        if not result.missing:
+            logger.debug(
+                f"[inbox-reconcile] {result.status}: 远端 {result.remote_total} 封, "
+                f"本地无缺失"
+            )
+            return
+
+        saved = 0
+        merged = 0
+        for meta in result.missing:
+            payload = {
+                "internal_id": meta["internal_id"],
+                "message_id": meta.get("message_id"),
+                "subject": meta.get("subject", ""),
+                "sender": meta.get("sender") or meta.get("sender_email", ""),
+                "sender_name": meta.get("sender_name", ""),
+                "date_received": meta.get("date_received", ""),
+                "mailbox": meta.get("mailbox", INBOX_LABEL),
+                "is_read": meta.get("is_read", False),
+                "is_flagged": meta.get("is_flagged", False),
+                "thread_id": meta.get("thread_id"),
+                "sync_status": "pending",
+                "backend_origin": "davmail",
+                "ingest_reason": "inbox_reconcile",
+            }
+            if meta.get("imap_uid") is not None:
+                payload["imap_uid"] = meta["imap_uid"]
+            if meta.get("imap_uidvalidity") is not None:
+                payload["imap_uidvalidity"] = meta["imap_uidvalidity"]
+            try:
+                if self.sync_store.save_email(payload):
+                    # 🔴 save_email 只返回 bool, 分不清「新建行」与「merge 进已有行」——
+                    # merge guard 命中时新分配的 internal_id **不会存在于库中**。
+                    # 用它回查区分, 否则边界误判 (远端 Date header 与 INTERNALDATE 不同口径)
+                    # 造成的重复"补抓"会被虚假累计成 recovered, 让这个数字失去意义。
+                    if self.sync_store.get(meta["internal_id"]) is not None:
+                        saved += 1
+                    else:
+                        merged += 1
+                else:
+                    logger.error(
+                        f"[inbox-reconcile] save_email failed for "
+                        f"uid={meta.get('imap_uid')} msgid={meta.get('message_id')!r}"
+                    )
+            except Exception as e:
+                logger.error(f"[inbox-reconcile] save_email raised: {e}")
+
+        if saved:
+            try:
+                total = int(
+                    self.sync_store.get_state(self._RECONCILE_RECOVERED_KEY) or 0
+                ) + saved
+                self.sync_store.set_state(self._RECONCILE_RECOVERED_KEY, str(total))
+            except Exception:
+                pass
+        if saved:
+            logger.warning(
+                f"[inbox-reconcile] 补回 {saved} 封增量链路漏掉的邮件 "
+                f"(status={result.status}, 候选 {len(result.missing)} / 远端 "
+                f"{result.remote_total} 封, 其中 {merged} 封 merge 进已有行不计)。"
+                f"漏抓不该发生 —— 若持续出现请查增量 marker 语义与 IMAP 协议失败日志。"
+            )
+        elif merged:
+            # 全部 merge = 没有真漏, 只是判据边界把已有行当成了候选。info 不告警。
+            logger.info(
+                f"[inbox-reconcile] {merged} 封候选全部 merge 进已有行 (无真实缺失)"
+            )
+
+    def _suppress_reconcile_notify(self, internal_id: int) -> bool:
+        """对账补抓的老邮件不推飞书 (E) —— 判定走 ingest_provenance 单源。
+
+        🔴 三个通知入口 (本方法 / handlers.handle_ai_reviewed / reverse_sync._try_notify)
+        共用同一判据, 不许各写一份: service.py 会按配置在后两者之间切换, 只堵一个
+        入口 = 换个配置就漏。
+        """
+        return should_suppress_reconcile_notify(
+            self.sync_store,
+            internal_id,
+            int(getattr(settings, "reconcile_notify_max_age_sec", 7200) or 0),
+        )
+
+    _EMPTY_GAP_TOTAL_KEY = "sync.empty_fetch_gap.total"
+    _EMPTY_GAP_LAST_KEY = "sync.empty_fetch_gap.last_at"
+    _EMPTY_GAP_LAST_WINDOW_KEY = "sync.empty_fetch_gap.last_window"
+
+    def _record_empty_fetch_gap(
+        self, last_max_row_id: int, current_max: int, estimated_count: int
+    ) -> None:
+        """STATUS 说有新邮件、SEARCH/FETCH 一封没取到 —— 留痕 (B2)。
+
+        🔴 这个落差**曾经是完全静默的**, 而 2026-08-11 那三封丢失邮件的现场就长这样
+        (日志里只有 ``Detected ~1 new emails``, 没有任何后续)。落差本身多数良性
+        (UIDNEXT 会被删信等推高, SEARCH 无匹配是正常的), 所以**不告警、不阻断**,
+        只记 warning + 累计计数, 让"静默"变成"可查"。
+
+        真正守住游标的是 B1′ (FolderFetchError) 与 save_failed, 不是这里。
+        """
+        try:
+            total = int(self.sync_store.get_state(self._EMPTY_GAP_TOTAL_KEY) or 0) + 1
+            self.sync_store.set_state(self._EMPTY_GAP_TOTAL_KEY, str(total))
+            self.sync_store.set_state(
+                self._EMPTY_GAP_LAST_KEY, datetime.now().isoformat()
+            )
+            self.sync_store.set_state(
+                self._EMPTY_GAP_LAST_WINDOW_KEY, f"({last_max_row_id}, {current_max}]"
+            )
+        except Exception as e:      # 留痕失败绝不能拖垮 poll
+            logger.debug(f"[watcher] empty-fetch-gap bookkeeping failed: {e}")
+            total = -1
+        logger.warning(
+            f"[watcher] STATUS 报告 ~{estimated_count} 封新邮件, 但窗口 "
+            f"({last_max_row_id}, {current_max}] 一封都没取到 (OK+空结果, 游标照常推进; "
+            f"累计 {total} 次). 多为 UIDNEXT 高估(删信等), 若持续出现且伴随丢信请查 "
+            f"UID SEARCH 语义与 folderSizeLimit 截断窗口."
+        )
 
     async def _reconcile_drafts(self):
         """草稿箱对账 (davmail-only, DRAFTS_SYNC_ENABLED)。
@@ -2064,6 +2307,11 @@ class NewWatcher:
                     f"[feishu] skip custom folder internal_id={internal_id} "
                     f"mailbox={mailbox!r} (L3 降噪; 加 FOLDER_NOTIFY_ENABLED 可开)"
                 )
+                return
+
+            # E: 对账补抓的**老**邮件不推送 (通知是实时性语义)。判据是
+            # 「补抓来源 AND 超龄」—— 正常增量 (含停机后的积压) 不受此门约束。
+            if self._suppress_reconcile_notify(internal_id):
                 return
 
             email_date = getattr(email_obj, "date", None)

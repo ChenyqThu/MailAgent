@@ -27,6 +27,7 @@ from typing import Any, Dict, Optional, Tuple
 from loguru import logger
 
 from src.llm_agent.preprocess_config import get_preprocess_config
+from src.mail.ingest_provenance import should_suppress_reconcile_notify
 from src.mail.mailbox_semantics import is_sent_mailbox
 from src.mail.sync_store import SyncStore
 from src.mail.sqlite_radar import SQLiteRadar
@@ -347,6 +348,15 @@ class NotionToMailSync:
         )
 
         if not should_notify:
+            return False
+
+        # 对账补抓的老邮件不推 (2026-08-11 事故配套)。判据单源 —— 这是
+        # REDIS_EVENTS_ENABLED 关闭时的通知入口, 与 handlers.handle_ai_reviewed
+        # 二选一, 两处都要堵 (internal_id 由 _sync_single_page 注入进 page)。
+        if should_suppress_reconcile_notify(
+            self.sync_store, page.get("internal_id"),
+            int(getattr(config, "reconcile_notify_max_age_sec", 7200) or 0),
+        ):
             return False
 
         return await self._feishu.notify_important_email(page)

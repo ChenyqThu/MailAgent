@@ -399,6 +399,62 @@ pm2 restart mail-sync
 - [`docs/next-session-handoff.md`](../../archive/2026-05/next-session-handoff.md) — cold-pickup
 - [`docs/roadmap-post-cutover.md`](roadmap-post-cutover.md) — 短中长期 roadmap
 
+## 增量 marker 语义契约（davmail，2026-08-11 丢邮件事故）
+
+> **一句话**：同一个 `get_new_emails` 里活着**两种语义相反的 marker**，共用一个 `+1`
+> 公式就会静默丢信。改这段代码前先看这张表。
+
+| folder | marker 是什么 | 从哪来 | SEARCH 下界 |
+|---|---|---|---|
+| **INBOX** | **UIDNEXT** = *下一个将分配的* UID | `STATUS(UIDNEXT)`，持久化为 `last_max_row_id` | `UID {m}:*` **inclusive** |
+| **Sent / custom** | **已导入的最大 UID** | `MAX(imap_uid)` from SQLite | `UID {m+1}:*` **exclusive** |
+
+RFC 3501 定义 UIDNEXT 为「此后到达邮件 UID 的**下界**」⇒ 新邮件 `UID >= UIDNEXT`。
+所以 INBOX 的下界必须 inclusive；而 Sent/custom 的 marker 是「已经处理过的最大值」，
+对它 `+1` 才对。
+
+**事故**：两个分支曾共用 `f"{since_row_id + 1}:*"`。于是每当新邮件恰好拿到
+`UID == 上轮 UIDNEXT`，它就落在窗口外 → 配合「空结果照常推进游标」→ **永久跳过**，
+全程无日志、无告警、不进 `dead_letter`。生产实测 2026-08 的 351 封里漏 3 封（0.9%）。
+
+**为什么不是全漏**：UIDNEXT 通常跑在最大 UID 前面若干号（实测 +2，空洞成因未确定），
+新邮件多数拿到 `UID > 上轮 UIDNEXT`，`> marker` 恰好也能覆盖。只有"恰好等于"才漏 ——
+所以它能潜伏很久，且看起来像随机丢信。
+
+🔴 **没有任何兜底会掩盖它**：生产 DavMail 实测**不做 RFC 3501 的范围反转**
+（`UID <越界>:*` 直接返空，而非退化成"返回最大 UID 那封"）：
+
+```
+UIDNEXT = 162611,  视图内最大 UID = 162609
+UID 162609:*  → 1 封 [162609]     UID 162610:*  → 0 封 []   ← 无反转
+UID 162611:*  → 0 封 []           UID 162601:*  → 4 封      ← 多封窗口正常
+```
+
+**这是第二次踩 marker 语义混用**（第一次是 issue #34「切 backend marker id-space
+混用丢数据」）。回归网 `tests/mail/backend/test_inbox_marker_semantics.py` 把两种
+语义**各自的下界规则**都钉死了，防第三次。
+
+### 配套：取数三态（`FolderFetchError`）
+
+`_fetch_new_in_folder` 曾把 SELECT/SEARCH/FETCH 非 OK、批量解析少项、
+internal_id 分配失败**统统 `return []`**，与「窗口内真的没有新邮件」不可区分，
+上层照常推进游标 ⇒ 同样永久丢信。现在三态严格分开：
+
+- `OK` + 空结果 → `[]`，**合法空成功，游标照常推进**
+  （UIDNEXT 差值会因删信等高估，空成功不推进会把游标卡死）
+- 协议 / 解析 / 分配失败 → **raise `FolderFetchError`**，游标不推进，下轮同窗口重试
+- 有结果 → list
+
+隔离语义靠现有 try 层级天然成立：INBOX 的异常冒泡到 `get_new_emails` 顶层 re-raise
+→ `_poll_cycle` 守住游标；Sent/custom 的调用各自包在 inner try 里，捕获后只 log，
+**不牵连 INBOX 主路径**。另外 `save_email()` 的返回值现在也参与游标提交判定
+（此前完全没接，写库失败的那封会随游标推进出窗）。
+
+⚠️ **一个"焊死了错误行为的闸"**：`tests/mail/test_poll_cycle_cursor_guard.py`（PR #23）
+原先把「返空 → 推进」写成 **"🔒 铁律"**。它的论证只对 `OK + 空` 成立，却被泛化成
+"任何 `[]` 都推进"，于是把「协议失败后永久关窗」一并锚死 —— 一条**恒绿、看起来在
+保护正确性、实际在阻止修复**的测试。这正是本次事故的认知根源，值得作为反面样本记住。
+
 ## DavMail 大邮箱运维（`davmail.folderSizeLimit`，2026-07-17，issue #46）
 
 **现象**：`davmail.properties` 的 `davmail.folderSizeLimit` 留空（默认）时，DavMail 对每次 IMAP `SELECT`/`EXAMINE`/`SEARCH` 都会触发对整个 Exchange folder 的 **EWS 全量枚举**——不是一次性建索引，是**每次**都重新枚举。大邮箱下这个代价随邮件数线性增长，且单封新邮件的处理会触发两次（`EXAMINE` 一次，紧跟的 `UID SEARCH` 又一次）。

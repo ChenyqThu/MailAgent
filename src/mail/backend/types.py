@@ -165,3 +165,34 @@ class SendResult:
     archived_to_sent: bool = False  # 是否做了手动 Sent 归档 (davmail_archive_sent 兜底命中)
     method: Optional[str] = None  # "smtp_davmail" / "smtp_applescript" / etc
     error: Optional[str] = None
+
+
+@dataclass
+class InboxReconcileResult:
+    """收件箱对账 (2026-08-11 丢邮件事故 · 方案 C) 的一轮结果。
+
+    ``status`` 三值:
+
+    - ``complete``   — 窗口被截断视图完整覆盖, 本轮结论可信 (真的"查全了");
+    - ``incomplete`` — 视图截断打断了窗口 (folderSizeLimit 容量不足 / 长时间停摆),
+      **补抓照做但不能记成一次成功对账** —— 窗口更老的那段根本不可见, 缺什么都
+      判断不出来。少了这个区分, 对账会在容量不足时静默失去兜底能力;
+    - ``skipped``    — SELECT/SEARCH 失败、UIDVALIDITY 异常等, 本轮整轮作废。
+
+    ``missing`` 是可直接喂 ``save_email`` 的 payload(已带 internal_id /
+    backend_origin / mailbox / ingest_reason)。
+
+    异常通道计数 (见 ``empty_msgid`` / ``duplicate_msgid``): 远端存在无 Message-ID
+    或重复 Message-ID 的邮件时单独计数并告警, **不混进正常的集合差** ——
+    当前 schema 的 ``message_id TEXT UNIQUE`` 无法表达"两封物理邮件共用一个
+    Message-ID", 这是已知能力边界, 必须留痕而不是静默合并。
+    """
+
+    status: str
+    missing: list = field(default_factory=list)
+    remote_total: int = 0
+    oldest_visible_iso: Optional[str] = None
+    window_floor_iso: Optional[str] = None
+    empty_msgid: int = 0
+    duplicate_msgid: int = 0
+    reason: Optional[str] = None

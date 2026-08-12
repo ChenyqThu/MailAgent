@@ -54,6 +54,29 @@ class MarkerUnavailableError(Exception):
     """
 
 
+class FolderFetchError(Exception):
+    """取某个 folder 的新邮件时**协议层或解析层失败** — 与「合法空结果」严格区分.
+
+    🔴 2026-08-11 丢邮件事故 (PR #23 的游标守卫只覆盖了一半):
+    ``_fetch_new_in_folder`` 曾在 SELECT / SEARCH / FETCH 返回非 OK、批量解析少项、
+    internal_id 分配失败时统统 ``return []``, 上层 ``_poll_cycle`` 无法把它与
+    「窗口内真的没有新邮件」区分开, 于是照常推进游标 ⇒ 窗口内的邮件**永久跳过**,
+    且全程无日志、无告警、不进 dead_letter。
+
+    三态语义 (调用方必须照此处理):
+
+    - ``OK`` + 空结果 → 返回 ``[]``, **合法空成功, 游标照常推进**
+      (UIDNEXT 差值会因删信等原因高估, 空成功不推进会把游标卡死);
+    - 协议 / 解析 / 分配失败 → **raise 本异常**, 游标**不推进**, 下轮同窗口重试;
+    - 正常取到 → 返回非空 list。
+
+    隔离语义: INBOX 是主路径, 本异常冒泡到 ``get_new_emails`` 顶层后 re-raise,
+    由 ``_poll_cycle`` 守住游标; Sent / custom folder 的调用各自包在 inner try 里,
+    捕获后只 log —— 它们有各自从 SQLite 派生的 marker, 本轮不推进即可,
+    **不牵连 INBOX 主路径**。
+    """
+
+
 @runtime_checkable
 class IMailBackend(Protocol):
     """邮件后端协议 — 真实消费面 (17 方法).

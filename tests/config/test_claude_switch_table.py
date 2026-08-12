@@ -14,9 +14,15 @@ WP0 实测现状 0 漂移 → 应立即绿。cutover 后这几行默认字面量
 from . import _parsers as p
 
 # 表里可对账行的下限 / skip 行的上限 —— 解析器失效会让 comparable 掉到 0、skip 冲高，
-# 这两个哨兵把「退化成全 skip」拦成红。当前实测：comparable≈20 行、skip≈3 行。
+# 这两个哨兵把「退化成全 skip」拦成红。当前实测：comparable≈20 行、skip=9 行。
+#
+# skip 的绝大多数是**数值型默认值**（`_parse_default_literal` 有意不对账数字，见其注释），
+# 每加一个数值型开关就 +1。2026-08-11 收件箱对账批加了 3 个（INTERVAL_SEC /
+# WINDOW_DAYS / NOTIFY_MAX_AGE_SEC）⇒ 6→9，故上限 8→11（保持原来 +2 的余量）。
+# 🔴 调高它是在**降低**本闸强度，只有在确认新增 skip 来自「已知不可对账的类型」
+# （数字 / `[]` / `—`）时才可以；若是布尔/枚举行变得不可解析，那是格式退化，应改表不改闸。
 _MIN_COMPARABLE = 15
-_MAX_SKIPPED = 8
+_MAX_SKIPPED = 11
 # canary：这些关键 flag 必须落在「可对账」集合里（解析器认得它们）。
 _CANARY_KEYS = {
     "MAILAGENT_BACKEND",

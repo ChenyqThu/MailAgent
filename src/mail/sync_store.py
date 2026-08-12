@@ -534,6 +534,33 @@ def _local_tz():
     return datetime.now().astimezone().tzinfo or timezone.utc
 
 
+def _storage_message_id(value: Optional[str]) -> Optional[str]:
+    """持久化边界: 空 / 纯空白 message_id 一律归一为 ``None``, **绝不写空字符串**.
+
+    🔴 2026-08-11 事故 (davmail 丢邮件调查中经 codex review 发现的第三个 bug):
+    ``message_id`` 列是 ``TEXT UNIQUE``, 而两条写入路径都是 ``INSERT OR REPLACE``
+    (``_save_email_v3`` / ``save_emails_batch``)。davmail 侧
+    ``_normalize_message_id`` 把缺失的 Message-ID 归一成 **空字符串** 而非 None,
+    于是:
+
+    1. 空串在 merge guard 的 ``if message_id:`` 门前 falsy → 跳过 merge 保护;
+    2. 落到 ``INSERT OR REPLACE`` 时撞 UNIQUE('') → SQLite **删掉冲突的老行**再插新行;
+    3. **不抛异常**, ``save_email`` 返回 ``True``。
+
+    结果是**老邮件整行被静默删除** (连 ``notion_page_id`` 一起 → Notion 端孤儿页),
+    而不是新邮件写失败 —— 所以「检查 save_email 返回值」这类修法拦不住它。
+    实测: 空串两封后库里只剩第二封; NULL 两封则共存 (SQLite UNIQUE 允许多个 NULL)。
+
+    ⚠️ 归一放在**持久化边界**而非各产出点: 产出点有 davmail batch parser /
+    header parser / imap_folder_reader 等多处 (其中两处已各自 ``or None``,
+    两处没有), 只在边界收口才能覆盖未来新增的调用方。
+    """
+    if value is None:
+        return None
+    s = str(value).strip()
+    return s or None
+
+
 def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
     """把 date_received 归一成 ISO 8601 (UTC 偏移) 字符串.
 
@@ -933,7 +960,7 @@ class SyncStore:
     # v48 (Matters dogfood batch 2): mailagent email/thread external_key 归一；碰撞时
     #                合并活跃 matter_resource、重指历史链接与资源外键，并回填邮件元数据。
     # v49 (Matters P6-A): persistent resource-suggestion rejection memory.
-    DB_VERSION = 50
+    DB_VERSION = 51
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1046,6 +1073,11 @@ class SyncStore:
         # v3 架构：email_metadata 表（internal_id 为主键）
         # v8: is_pinned / pinned_at —— 前端置顶 / pin 持久化
         # v9: is_important —— 邮件原生重要性（Importance / X-Priority header）
+        # v51: ingest_reason —— 入库来源 provenance（飞书通知门控判据）
+        #
+        # 🔴 message_id 是 TEXT UNIQUE 且写入走 INSERT OR REPLACE ⇒ **绝不能存空字符串**
+        # （空串撞 UNIQUE 会静默删掉冲突的老行）。无 Message-ID 一律存 NULL，
+        # 收口在 _storage_message_id()。
         cursor.execute("""
             CREATE TABLE IF NOT EXISTS email_metadata (
                 internal_id INTEGER PRIMARY KEY,
@@ -1078,7 +1110,8 @@ class SyncStore:
                 draft_source_internal_id INTEGER,
                 draft_in_reply_to TEXT,
                 draft_references TEXT,
-                in_reply_to TEXT
+                in_reply_to TEXT,
+                ingest_reason TEXT
             )
         """)
 
@@ -3046,6 +3079,46 @@ class SyncStore:
                     "v50 migration", e,
                 )
 
+        # === v51: 空 message_id 修复 + 入库来源 provenance (2026-08-11 丢邮件事故) ===
+        #
+        # (1) message_id='' → NULL —— 空串撞 TEXT UNIQUE 时 INSERT OR REPLACE 会**静默
+        #     删掉**冲突的老行 (连 notion_page_id 一起), 且不报错。NULL 在 SQLite UNIQUE
+        #     下可共存, 是唯一安全的"无 Message-ID"表示。写入侧已由 _storage_message_id
+        #     收口, 这里清存量。幂等 (WHERE 命中即为空集)。
+        #
+        # (2) ingest_reason —— 邮件是怎么进库的, 供飞书通知门控判据用。
+        #     🔴 值域 realtime | startup_catchup | inbox_reconcile;
+        #     **NULL = 存量行/未知, 语义等同 realtime (照常通知)** —— 有意不回填:
+        #     回填成任何具体值都是在编造历史, 而 NULL→按 realtime 处理正是安全默认
+        #     (宁可多通知, 不可漏通知)。这与"ALTER 加列必回填"的一般纪律相反, 因为
+        #     此列的缺省语义本身就是有意义的, 不是待补的空洞。
+        if current_version < 51:
+            # 🔴 DML 清理与 DDL 加列**分开 try**: 合在一起时, UPDATE 因锁/触发器等
+            # OperationalError 失败、而 ingest_reason 列恰好已存在的话,
+            # _migration_guard_columns 会判定"已迁移"吞掉错误并推进 db_version ⇒
+            # 空串存量永久不再被清理 (迁移只跑一次)。DML 失败必须无条件 raise。
+            cursor.execute(
+                "UPDATE email_metadata SET message_id = NULL WHERE message_id = ''"
+            )
+            if cursor.rowcount:
+                logger.info(
+                    f"v51 migration: email_metadata message_id ''→NULL "
+                    f"({cursor.rowcount} row(s))"
+                )
+            try:
+                cursor.execute("PRAGMA table_info(email_metadata)")
+                _em_cols = {row[1] for row in cursor.fetchall()}
+                if "ingest_reason" not in _em_cols:
+                    cursor.execute(
+                        "ALTER TABLE email_metadata ADD COLUMN ingest_reason TEXT"
+                    )
+                    logger.info("v51 migration: email_metadata +ingest_reason")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                # 只有"列已存在"这一种并发/重入形态才允许被 guard 吞
+                _migration_guard_columns(
+                    cursor, "email_metadata", {"ingest_reason"}, "v51 migration", e,
+                )
+
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
@@ -3374,6 +3447,13 @@ class SyncStore:
                 set_parts.append(f"{key} = ?")
                 if key in ('is_read', 'is_flagged', 'is_important'):
                     values.append(1 if value else 0)
+                elif key == 'message_id':
+                    # 🔴 第三条写 message_id 的路径 (davmail 主链路: fetch MIME 后回填)。
+                    # 少了这行归一, 无 Message-ID 的邮件会被重新写成 '' —— v51 迁移
+                    # 只清一次存量, 之后再写入的空串没人管; 第二封撞 UNIQUE 后
+                    # 走 _resolve_message_id_conflict / FAILED → 重试 → 死信。
+                    # 见 _storage_message_id docstring。
+                    values.append(_storage_message_id(value))
                 else:
                     values.append(value)
 
@@ -3384,7 +3464,8 @@ class SyncStore:
         values.append(now)
         values.append(internal_id)
 
-        new_message_id = data.get('message_id')
+        # 归一后再判 UNIQUE guard: '' 是 falsy 但会真的撞约束, 用原值判会漏进 UPDATE
+        new_message_id = _storage_message_id(data.get('message_id'))
 
         with self._connection() as conn:
             cursor = conn.cursor()
@@ -4004,7 +4085,10 @@ class SyncStore:
         message_id 这个对外唯一标识 — 一封 message_id 在 sync_store 只能有一条记录.
         """
         internal_id = email['internal_id']
-        message_id = email.get('message_id')
+        # 空串 → None: 空串会撞 UNIQUE 并让 INSERT OR REPLACE 静默删掉老行, 见
+        # _storage_message_id docstring。下面的 INSERT 必须用这个局部变量而非
+        # email.get('message_id'), 否则归一不生效。
+        message_id = _storage_message_id(email.get('message_id'))
         now = time.time()
 
         with self._connection() as conn:
@@ -4090,17 +4174,17 @@ class SyncStore:
                      notion_thread_id, sync_error, retry_count, next_retry_at,
                      imap_uidvalidity, imap_uid, backend_origin,
                      draft_source_internal_id, draft_in_reply_to, draft_references,
-                     in_reply_to,
+                     in_reply_to, ingest_reason,
                      created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?,
                             ?, ?, ?,
-                            ?,
+                            ?, ?,
                             COALESCE((SELECT created_at FROM email_metadata WHERE internal_id = ?), ?),
                             ?)
                 """, (
                     internal_id,
-                    email.get('message_id'),
+                    message_id,          # 已过 _storage_message_id: '' → None
                     email.get('thread_id'),
                     email.get('subject', ''),
                     email.get('sender', ''),
@@ -4124,6 +4208,9 @@ class SyncStore:
                     email.get('draft_in_reply_to'),
                     email.get('draft_references'),
                     email.get('in_reply_to'),
+                    # v51 provenance: 邮件怎么进库的 (飞书通知门控判据)。
+                    # NULL = 存量/未知, 语义等同 realtime (照常通知)。
+                    email.get('ingest_reason'),
                     internal_id,
                     now,
                     now
@@ -4213,7 +4300,9 @@ class SyncStore:
         batch_data = []
         for email in emails:
             internal_id = email.get('internal_id')
-            message_id = email.get('message_id')
+            # 空串 → None (见 _storage_message_id): 本路径**没有** merge guard,
+            # 空串撞 UNIQUE 时 executemany 的 INSERT OR REPLACE 会直接删掉老行。
+            message_id = _storage_message_id(email.get('message_id'))
 
             # v3 架构
             if internal_id is not None:
@@ -4226,7 +4315,7 @@ class SyncStore:
 
             batch_data.append((
                 internal_id,
-                email.get('message_id'),
+                message_id,          # 已过 _storage_message_id: '' → None
                 email.get('thread_id'),
                 email.get('subject', ''),
                 email.get('sender', ''),
@@ -5011,6 +5100,73 @@ class SyncStore:
                 }
                 for row in cursor.fetchall()
             ]
+
+    def get_inbox_reconcile_fingerprints(
+        self, since_iso: str, mailbox: str = INBOX_LABEL
+    ) -> tuple[set, set]:
+        """收件箱对账 (方案 C) 专用: 取本地"已有哪些邮件"的两套指纹。
+
+        返回 ``(message_ids, uid_pairs)``:
+
+        - ``message_ids``: 非空 message_id 集合 —— **对账的主判据**。
+          🔴 不能用 imap_uid 当主判据: davmail 的 UID 会被重新编号 (2026-08 实测
+          348 封里 110 封 / 32% 与服务器现值不符, 最大偏差 +1535), 按 uid 比对会
+          产出大量假阳性"缺失"。
+        - ``uid_pairs``: ``(imap_uidvalidity, imap_uid)`` 集合 —— 仅用于**无
+          Message-ID 的邮件**这条异常通道 (它们没有稳定标识可比)。
+          注意 uid 会漂移, 所以这条通道天然只能"尽力而为": 漂移后可能重抓一次,
+          由 save_email 幂等兜住。
+
+        ``since_iso``: 只取 ``date_received >= since_iso`` 的行。调用方应传比远端
+        SEARCH 窗口**更宽**的下界 —— 远端按 INTERNALDATE 筛、本地存的是 Date header
+        归一值, 两者可能差几小时; 窗口取窄了会把边界邮件误判成缺失。误判的后果是
+        幂等重抓 (merge guard 兜底), 不是错误, 但没必要。
+
+        mailbox 按 `filter_labels_for_mailbox` 展开成变体集 IN 查
+        (内建 canonical 禁止 `= ?` 精确匹配, 见 CLAUDE.md mailbox 语义单源纪律)。
+        """
+        predicate, params = sql_in_predicate(
+            "mailbox", filter_labels_for_mailbox(mailbox)
+        )
+        message_ids: set = set()
+        uid_pairs: set = set()
+        with self._connection() as conn:
+            cursor = conn.cursor()
+            # 主判据: 窗口内的非空 message_id (量大, 必须按窗口收敛)
+            cursor.execute(
+                f"""
+                SELECT message_id FROM email_metadata
+                WHERE {predicate} AND date_received >= ?
+                  AND message_id IS NOT NULL AND message_id != ''
+                """,
+                (*params, since_iso),
+            )
+            message_ids = {row["message_id"] for row in cursor.fetchall()}
+
+            # 异常通道: **只**取 message_id IS NULL 的行, 且**不按窗口过滤**。
+            #
+            # 🔴 两处都是有意的:
+            # (1) 限定 IS NULL —— 收全部行会让"某封有 Message-ID 的旧行"恰好占用了
+            #     远端某封无 ID 邮件的 uid, 从而把后者**误判成已存在**而永不补抓;
+            # (2) 不按窗口 —— 本地 date_received 来自 **Date header**, 而远端按
+            #     INTERNALDATE 筛。Date 可被发送方伪造/缺失/严重滞后, 窗口过滤会让
+            #     这类行查不到 ⇒ 每轮都判缺失 ⇒ 而 NULL 不进 merge guard ⇒
+            #     **每 30 分钟真的新增一行 + 一个 Notion 页**。无 Message-ID 的行
+            #     天然极少 (活库实测 21 行), 全取的代价可忽略。
+            cursor.execute(
+                f"""
+                SELECT imap_uidvalidity, imap_uid FROM email_metadata
+                WHERE {predicate}
+                  AND (message_id IS NULL OR message_id = '')
+                  AND imap_uid IS NOT NULL
+                """,
+                params,
+            )
+            uid_pairs = {
+                (row["imap_uidvalidity"], row["imap_uid"])
+                for row in cursor.fetchall()
+            }
+        return message_ids, uid_pairs
 
     def update_ai_main_columns(
         self,

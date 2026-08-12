@@ -16,8 +16,10 @@ import time
 from typing import TYPE_CHECKING, Awaitable, Callable, Dict, Optional
 from loguru import logger
 
+from src.config import config
 from src.llm_agent.preprocess_config import get_preprocess_config
 from src.mail.charset_utils import decode_mime_bytes
+from src.mail.ingest_provenance import should_suppress_reconcile_notify
 from src.mail.mailbox_semantics import is_sent_mailbox
 from src.mail.sync_store import SyncStore
 from src.notify.feishu import FeishuNotifier
@@ -287,6 +289,13 @@ class EventHandlers:
             ai_priority in notify_priorities
             and ai_action in self.FLAG_ACTIONS
             and not is_sent_mailbox(mailbox)
+            # 对账补抓的老邮件不推 (2026-08-11 事故配套)。判据单源 ——
+            # service.py 会按 REDIS_EVENTS_ENABLED 在本入口与 reverse_sync._try_notify
+            # 之间切换, 只堵一个 = 换个配置就漏。
+            and not should_suppress_reconcile_notify(
+                self.sync_store, internal_id,
+                int(getattr(config, "reconcile_notify_max_age_sec", 7200) or 0),
+            )
         )
         if should_notify and self.feishu:
             # Notion webhook 只含变更字段，补全缺失的展示字段

@@ -251,6 +251,38 @@ class Config(BaseSettings):
                     "避免每轮 UID SEARCH UNSEEN 重现 EWS 全量枚举限流事故。",
     )
 
+    # 收件箱对账兜底（2026-08-11 丢邮件事故 · 方案 C）
+    inbox_reconcile_enabled: bool = Field(
+        default=False,
+        validation_alias="MAILAGENT_INBOX_RECONCILE_ENABLED",
+        description="是否启用收件箱对账兜底（davmail-only）。按 Message-ID 比对服务器与"
+                    "本地，补抓漏掉的邮件。与漏抓成因无关，兜住增量链路的任何缺口"
+                    "（含 UID 重编号这类未知成因）。默认关（灰度，ship-off → dogfood → "
+                    "cutover）；false = 字节级 inert，不发任何 IMAP 命令。",
+    )
+    inbox_reconcile_interval_sec: int = Field(
+        default=1800,
+        validation_alias="MAILAGENT_INBOX_RECONCILE_INTERVAL_SEC",
+        description="收件箱对账的独立低频周期（秒），默认 1800（30min）。"
+                    "🔴 绝不挂 5s radar poll —— UID SEARCH 在大邮箱会重现 EWS 全量枚举"
+                    "限流（issue #46）。",
+    )
+    inbox_reconcile_window_days: int = Field(
+        default=2,
+        validation_alias="MAILAGENT_INBOX_RECONCILE_WINDOW_DAYS",
+        description="对账回看窗口（天），默认 2。漏抓只发生在增量边界附近，不需要全量。"
+                    "🔴 上限受 DAVMAIL_FOLDER_SIZE_LIMIT 截断视图约束：实测 500 封视图下"
+                    "14 天窗口即撞顶（窗口更老的邮件在 IMAP 层根本不可见），建议 ≤7 天。"
+                    "撞顶时对账会记 incomplete 并告警，不会静默假装查全了。",
+    )
+    reconcile_notify_max_age_sec: int = Field(
+        default=7200,
+        validation_alias="MAILAGENT_RECONCILE_NOTIFY_MAX_AGE_SEC",
+        description="对账补抓邮件的飞书通知年龄上限（秒），默认 7200（2h）。超龄只入库不推送。"
+                    "🔴 只对 ingest_reason='inbox_reconcile' 的邮件生效 —— 正常增量路径"
+                    "（含服务停机后补上的积压）不受此门约束，那些**应该**通知。",
+    )
+
     # 飞书通知配置
     feishu_app_id: str = Field(default="", env="FEISHU_APP_ID", description="飞书应用 App ID")
     feishu_app_secret: str = Field(default="", env="FEISHU_APP_SECRET", description="飞书应用 App Secret")
