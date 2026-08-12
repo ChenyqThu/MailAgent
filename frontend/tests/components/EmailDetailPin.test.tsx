@@ -142,33 +142,14 @@ describe('入口 3 — EmailDetail / EmailToolbar 的置顶按钮', () => {
   })
 })
 
-describe('P6 — 邮件线程跟进 Agent 入口', () => {
-  test('flag on + thread_id → 渲染快捷入口', async () => {
+// 🔴 0812：「为此线程建立跟进 Agent」入口整个移除 —— 它建的是 Custom Agent，而**事项**
+// 本身就是这条线程的跟进载体且更完整（有状态/行动项/干系人/时间线，产出恒走人工审阅），
+// 左邻的「事项」按钮早已提供"为此线程建立事项"。P6 的三条用例随功能一起删。
+// 保留一条反向断言：这个入口确实不该再出现，免得日后被无意重新接线。
+describe('邮件工具栏 — 线程跟进 Agent 入口已退役', () => {
+  test('即使 triggerV2 开着也不再渲染该入口', async () => {
     const container = renderDetail(201)
-    await waitFor(() =>
-      expect(
-        container.querySelector(`button[aria-label="${i18n.t('toolbar.followupAgent')}"]`)
-      ).not.toBeNull()
-    )
-  })
-
-  test('flag on + thread_id 缺失时用 message_id 去尖括号兜底', async () => {
-    emailGetSpy.mockImplementation(async (id: number) => makeEmail(id, { thread_id: null }))
-    const container = renderDetail(202)
-    await waitFor(() =>
-      expect(
-        container.querySelector(`button[aria-label="${i18n.t('toolbar.followupAgent')}"]`)
-      ).not.toBeNull()
-    )
-  })
-
-  test('flag off 即使有 thread_id 也不渲染快捷入口', async () => {
-    global.fetch = vi.fn().mockResolvedValue({
-      ok: true,
-      json: async () => ({ data: { triggerV2Enabled: false } })
-    }) as unknown as typeof fetch
-    const container = renderDetail(203)
-    await waitFor(() => expect(global.fetch).toHaveBeenCalled())
+    await waitForToolbar(container)
     expect(
       container.querySelector(`button[aria-label="${i18n.t('toolbar.followupAgent')}"]`)
     ).toBeNull()

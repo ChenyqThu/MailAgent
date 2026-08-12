@@ -23,16 +23,9 @@ beforeEach(() => {
 })
 
 describe('EmailToolbar — write button wiring', () => {
-  test('thread follow-up agent action renders only when callback is supplied', () => {
-    const onCreateFollowupAgent = vi.fn()
-    const { rerender } = render(<EmailToolbar />)
-    expect(screen.queryByLabelText('为此线程建立跟进 Agent')).toBeNull()
-    rerender(<EmailToolbar onCreateFollowupAgent={onCreateFollowupAgent} />)
-    fireEvent.click(screen.getByLabelText('为此线程建立跟进 Agent'))
-    expect(onCreateFollowupAgent).toHaveBeenCalledTimes(1)
-  })
-
-  test('clicking 起草回复 fires onCreateDraft once', () => {
+  // 「为此线程建立跟进 Agent」按钮 0812 移除：事项本身就是线程的跟进载体且更完整，
+  // 左邻的「事项」按钮已提供"为此线程建立事项"。原用例连同功能一起删，不留焊死的空壳。
+  test('起草回复 wiring —— clicking fires onCreateDraft once', () => {
     const onCreateDraft = vi.fn()
     render(<EmailToolbar onCreateDraft={onCreateDraft} />)
     const btn = screen.getByRole('button', { name: /起草回复/ })

@@ -56,8 +56,17 @@ const SIDEBAR_WIDTH_DEFAULT = 400
 const SIDEBAR_WIDTH_MIN = 320
 const SIDEBAR_WIDTH_MAX = 720
 const SIDEBAR_WIDTH_PREF = 'mailagent.chat.dockSidebarWidth'
+//: 侧栏最多吃掉视口的一半 —— 上界只有固定的 720px 时，窗口缩窄不会让侧栏让位，
+//: 400px 的默认宽能把主内容区挤到几乎没有（0812 dogfood：「宽度很小时溢出」）。
+//: 视口本身比 MIN 还窄时以 MIN 为准（那种尺寸下横向滚动已不可避免，不再叠加压缩）。
+const SIDEBAR_VIEWPORT_SHARE = 0.5
+function sidebarWidthCap(): number {
+  if (typeof window === 'undefined') return SIDEBAR_WIDTH_MAX
+  return Math.max(SIDEBAR_WIDTH_MIN, Math.round(window.innerWidth * SIDEBAR_VIEWPORT_SHARE))
+}
 function clampSidebarWidth(px: number): number {
-  return Math.min(SIDEBAR_WIDTH_MAX, Math.max(SIDEBAR_WIDTH_MIN, px))
+  const upper = Math.min(SIDEBAR_WIDTH_MAX, sidebarWidthCap())
+  return Math.min(upper, Math.max(SIDEBAR_WIDTH_MIN, px))
 }
 function readSidebarWidthPref(): number {
   try {
@@ -125,6 +134,21 @@ function AssistantChatModalInner(): React.JSX.Element {
   // inline width 跟手（不走 React state 避免每帧 re-render），mouseup 才落 state + localStorage。teardown
   // 存 ref，onUp 与 unmount 共用 → 拖拽中卸载不漏 listener / 不留 body col-resize·user-select 残留。
   const [sidebarWidth, setSidebarWidth] = useState(readSidebarWidthPref)
+
+  // 视口上界只在拖拽/首次读取时算过一次，缩窗口时侧栏不会自己让位 —— 补一个 resize 重夹。
+  // 🔴 只在真的需要收窄时 setState（缩到一半又拉回来时不覆写用户偏好，也不每帧 re-render）；
+  // localStorage 里存的仍是用户拖出来的值，窗口拉宽后自然恢复。
+  useEffect(() => {
+    const onResize = (): void => {
+      setSidebarWidth((current) => {
+        const next = clampSidebarWidth(current)
+        return next === current ? current : next
+      })
+    }
+    window.addEventListener('resize', onResize)
+    return () => window.removeEventListener('resize', onResize)
+  }, [])
+
   const rootRef = useRef<HTMLDivElement>(null)
   const dragTeardownRef = useRef<(() => void) | null>(null)
   const startResize = (e: React.MouseEvent): void => {

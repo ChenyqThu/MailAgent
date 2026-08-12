@@ -744,7 +744,11 @@ export function EmailToolbar({
       // pl-4 (= 正文 px-4 的 16px) 让首个按钮 (回复 CTA) 左边缘与下方标题/正文左起点
       // 对齐; 右侧 pr-3 不变 (右端 nav/AI 按钮维持原边距)。
       className={cn(
+        // min-w-0 + 横向可滚：窄宽下 density 已把文案收成纯 icon，但 icon 本身不该被压扁
+        // 或撑破容器 —— 此前两者都没有，按钮放不下时整条工具栏直接横向溢出（0812 dogfood）。
+        // scrollbar-none 沿用列表面的既有约定，不出现一条常驻滚动条。
         'relative z-[15] h-11 border-b border-ink-border-soft flex items-center pr-3 gap-1 shrink-0',
+        'min-w-0 overflow-x-auto scrollbar-none',
         // <lg 返回按钮占左侧 → pl 收窄；≥lg 无返回按钮 → pl-4 对齐正文起点。
         onBack ? 'pl-2 lg:pl-4' : 'pl-4'
       )}
