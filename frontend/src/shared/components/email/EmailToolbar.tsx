@@ -30,7 +30,6 @@ import { cn } from '@shared/lib/cn'
 import {
   AnimatedIconActiveProvider,
   ArchiveIcon,
-  AtomIcon,
   BoxIcon,
   CheckCheckIcon,
   ChevronDownIcon,
@@ -86,7 +85,6 @@ interface ToolbarProps {
 
   onLlmRun?: () => void
   llmRunState?: WriteActionState
-  onCreateFollowupAgent?: () => void
 
   matterLink?: {
     count: number
@@ -684,7 +682,6 @@ export function EmailToolbar({
   resyncState,
   onLlmRun,
   llmRunState,
-  onCreateFollowupAgent,
   matterLink,
   onToggleRead,
   isRead,
@@ -915,14 +912,10 @@ export function EmailToolbar({
         pending={llmRunState?.pending}
         onClick={onLlmRun}
       />
-      {onCreateFollowupAgent && (
-        <GhostBtn
-          icon={<AtomIcon size={13} strokeWidth={2} />}
-          label={t('toolbar.followupAgent')}
-          showLabel={wantsLabels}
-          onClick={onCreateFollowupAgent}
-        />
-      )}
+      {/* 「为此线程建立跟进 Agent」已移除（0812 dogfood）：它建的是一个 Custom Agent
+          （trigger=email_filter + thread_id），而**事项**本身就是这条线程的跟进载体，且更完整
+          ——有状态/行动项/干系人/时间线，跟进产出恒走人工审阅。左边的「事项」按钮已提供
+          「为此线程建立事项」。Custom Agent 仍可在 Agents 页手建，能力未减。 */}
 
       {/* Right cluster: Open Notion · Divider · Prev · Next · Divider · AIPanelToggle.
           AIPanelToggle sits at the **very right** because it's the "open

@@ -156,7 +156,7 @@ export function ResourceDrawer({
                 <ResourceIcon size={15} className="shrink-0 text-ink-fg-2 group-hover:text-coral" />
                 <h2
                   id="matter-resource-drawer-title"
-                  className="min-w-0 flex-1 truncate text-title font-semibold"
+                  className="min-w-0 flex-1 truncate text-lead font-semibold"
                 >
                   {resource.title || resource.external_key}
                 </h2>
@@ -167,7 +167,7 @@ export function ResourceDrawer({
                 <ResourceIcon size={15} className="shrink-0 text-ink-fg-2" />
                 <h2
                   id="matter-resource-drawer-title"
-                  className="min-w-0 flex-1 truncate text-title font-semibold text-ink-fg"
+                  className="min-w-0 flex-1 truncate text-lead font-semibold text-ink-fg"
                 >
                   {resource.title || resource.external_key}
                 </h2>

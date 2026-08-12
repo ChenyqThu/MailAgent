@@ -135,7 +135,15 @@ async def get_profile_doc(name: str, request: Request):
     doc = get_agent_config_store().get_profile_doc(name)
     if name == MEMORY_DOC_NAME:
         return success_envelope(_memory_doc_dict(doc), request=request, source="sqlite")
-    return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
+    payload = _editable_doc_dict(doc)
+    if name == MATTER_AGENT_DOC_NAME:
+        # 这份文档**有意不 seed**（库里空 = 跟随代码默认，将来默认文案升级能跟着走）。
+        # 但"不 seed"不等于"界面显示空白" —— 把当前生效的默认全文一并交出去，让配置面
+        # 如实呈现（0812 dogfood：空 textarea 被读成"预设完全没做"）。
+        from src.matters.run_spec import default_task_contract
+
+        payload["defaultContent"] = default_task_contract()
+    return success_envelope(payload, request=request, source="sqlite")
 
 
 @router.get("/profile/history", dependencies=[Depends(verify_cf_access)])

@@ -210,7 +210,7 @@ function StakeholderModal({
     <div className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4" role="presentation">
       <section role="dialog" aria-modal="true" aria-labelledby="matter-stakeholder-title" className="w-full max-w-md rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-md">
         <header className="flex items-center justify-between border-b border-ink-border px-5 py-4">
-          <h2 id="matter-stakeholder-title" className="text-title font-semibold">{t(stakeholder ? 'matters.context.editStakeholder' : 'matters.context.addStakeholder')}</h2>
+          <h2 id="matter-stakeholder-title" className="text-lead font-semibold">{t(stakeholder ? 'matters.context.editStakeholder' : 'matters.context.addStakeholder')}</h2>
           <button type="button" onClick={onClose} className="rounded-[var(--r-ctl)] p-1.5 hover:bg-ink-3"><X size={16} /></button>
         </header>
         <div className="grid gap-3 p-5">

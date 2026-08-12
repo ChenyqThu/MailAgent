@@ -261,9 +261,7 @@ export function MatterCreateDialog({
       setResearchState('success')
     } catch (error) {
       if (researchRequestRef.current !== requestId) return
-      setResearchError(
-        timedOut ? t('matters.create.research.timeout') : errorMessage(error)
-      )
+      setResearchError(timedOut ? t('matters.create.research.timeout') : errorMessage(error))
       setResearchState('error')
     } finally {
       window.clearTimeout(timeout)
@@ -285,10 +283,13 @@ export function MatterCreateDialog({
         role="dialog"
         aria-modal="true"
         aria-labelledby="matter-create-title"
-        className="w-full max-w-xl rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-md"
+        /* 🔴 高度必须钳在视口内并让**内容区**滚动，不能让整个对话框长高：调研回填会灌进
+           摘要 + 干系人 + 资料列表，内容一长，外层 `place-items-center` 会把 footer 顶出
+           视口 —— 按钮既看不见也点不到（0812 dogfood 实测）。范式同 MatterGlobalAgentModal。 */
+        className="flex max-h-full w-full max-w-xl flex-col overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-md"
       >
-        <header className="flex items-center justify-between border-b border-ink-border px-5 py-4">
-          <h2 id="matter-create-title" className="text-title font-semibold text-ink-fg">
+        <header className="flex shrink-0 items-center justify-between border-b border-ink-border px-5 py-4">
+          <h2 id="matter-create-title" className="text-lead font-semibold text-ink-fg">
             {t(source ? 'matters.create.fromEmailTitle' : 'matters.create.title')}
           </h2>
           <button
@@ -299,7 +300,7 @@ export function MatterCreateDialog({
             <X size={16} />
           </button>
         </header>
-        <div className="space-y-4 p-5">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto p-5">
           {source ? (
             <div className="space-y-3 rounded-[var(--r-card)] border border-ink-border bg-ink-2 px-3 py-3">
               <div className="flex gap-3">
@@ -358,7 +359,10 @@ export function MatterCreateDialog({
             </div>
           ) : null}
           {researchState === 'error' ? (
-            <div role="alert" className="rounded-[var(--r-card)] border border-coral/25 bg-coral/[0.06] p-3">
+            <div
+              role="alert"
+              className="rounded-[var(--r-card)] border border-coral/25 bg-coral/[0.06] p-3"
+            >
               <p className="text-aux font-medium text-ink-fg">
                 {t('matters.create.research.failedTitle')}
               </p>
@@ -630,7 +634,7 @@ export function MatterCreateDialog({
             <span className="text-meta text-ink-fg-2">{t('matters.create.descriptionHint')}</span>
           </label>
         </div>
-        <footer className="flex justify-end gap-2 border-t border-ink-border px-5 py-4">
+        <footer className="flex shrink-0 justify-end gap-2 border-t border-ink-border px-5 py-4">
           <button
             type="button"
             onClick={onClose}

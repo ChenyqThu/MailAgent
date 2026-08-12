@@ -43,7 +43,7 @@ export function AddItemModal({
         className="w-full max-w-lg rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-md"
       >
         <header className="flex items-center justify-between border-b border-ink-border px-5 py-4">
-          <h2 id="matter-add-item-title" className="text-title font-semibold">
+          <h2 id="matter-add-item-title" className="text-lead font-semibold">
             {t('matters.item.addTitle')}
           </h2>
           <button type="button" onClick={onClose} className="rounded-[var(--r-ctl)] p-1.5 hover:bg-ink-3">

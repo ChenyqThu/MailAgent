@@ -113,7 +113,7 @@ export function MatterUpdateReview({
             <Sparkles size={16} />
           </span>
           <div className="min-w-0 flex-1">
-            <h2 className="truncate text-title font-semibold">
+            <h2 className="truncate text-lead font-semibold">
               {t('matters.review.heading', { title: matter.title })}
             </h2>
             <p className="mt-1 text-meta text-ink-fg-2">

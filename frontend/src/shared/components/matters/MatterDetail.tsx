@@ -894,7 +894,7 @@ export function MatterDetail({
               aria-modal="true"
               className="w-full max-w-md rounded-[var(--r-card)] border border-fail/30 bg-ink-1 p-5 shadow-md"
             >
-              <h2 className="text-title font-semibold text-fail">{t('matters.delete.title')}</h2>
+              <h2 className="text-lead font-semibold text-fail">{t('matters.delete.title')}</h2>
               <p className="mt-2 text-body text-ink-fg-1">
                 {t('matters.delete.hint', { id: matter.public_id })}
               </p>
@@ -1268,7 +1268,7 @@ function StateCard({
   return (
     <section className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/75 p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-title font-semibold">{t('matters.state.title')}</h2>
+        <h2 className="text-lead font-semibold">{t('matters.state.title')}</h2>
         {!summaryEditing ? (
           <button
             type="button"

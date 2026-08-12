@@ -28,23 +28,34 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
 
   const doc = useQuery({
     queryKey: ['matters', 'global-agent-doc'],
-    queryFn: async (): Promise<string> => {
+    queryFn: async (): Promise<{ content: string; defaultContent: string }> => {
       const response = await fetch(`/api/agent/profile/docs/${DOC_NAME}`, {
         credentials: 'include'
       })
       if (!response.ok) throw new Error(`HTTP ${response.status}`)
-      const payload = (await response.json()) as { data?: { content?: string } }
-      return payload.data?.content ?? ''
+      const payload = (await response.json()) as {
+        data?: { content?: string; defaultContent?: string }
+      }
+      return {
+        content: payload.data?.content ?? '',
+        defaultContent: payload.data?.defaultContent ?? ''
+      }
     },
     staleTime: 30_000
   })
 
+  const defaultContent = doc.data?.defaultContent ?? ''
+
   useEffect(() => {
     if (doc.data !== undefined && !loaded) {
-      setDraft(doc.data)
+      // 🔴 库里空 = 跟随代码默认。空框会被读成"没有预设"（0812 dogfood 实测），所以未自定义
+      // 时把**当前生效的默认全文**填进来：看得见、可直接改。存储语义不变，见下方 save。
+      setDraft(doc.data.content || doc.data.defaultContent)
       setLoaded(true)
     }
   }, [doc.data, loaded])
+
+  const isDefault = draft.trim() === defaultContent.trim()
 
   const save = useMutation({
     mutationFn: async (content: string): Promise<void> => {
@@ -69,7 +80,7 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
       <div className="flex max-h-full w-full max-w-[620px] flex-col overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-raised">
         <header className="flex items-start justify-between gap-3 border-b border-ink-border px-5 py-4">
           <div className="min-w-0">
-            <h2 className="flex items-center gap-2 text-title font-semibold">
+            <h2 className="flex items-center gap-2 text-lead font-semibold">
               <Sparkles size={15} className="text-ai" />
               {t('matters.globalAgent.title')}
             </h2>
@@ -86,9 +97,24 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
         </header>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-5 py-4">
-          <label className="text-meta font-medium text-ink-fg-2" htmlFor="matter-global-prompt">
-            {t('matters.globalAgent.promptLabel')}
-          </label>
+          <div className="flex items-center justify-between gap-2">
+            <label className="text-meta font-medium text-ink-fg-2" htmlFor="matter-global-prompt">
+              {t('matters.globalAgent.promptLabel')}
+            </label>
+            {!doc.isLoading && defaultContent ? (
+              <span
+                className={
+                  isDefault
+                    ? 'rounded-full bg-ok/[0.12] px-2 py-0.5 text-meta text-ok'
+                    : 'rounded-full bg-ai/[0.12] px-2 py-0.5 text-meta text-ai'
+                }
+              >
+                {t(
+                  isDefault ? 'matters.globalAgent.usingDefault' : 'matters.globalAgent.customized'
+                )}
+              </span>
+            ) : null}
+          </div>
           {doc.isLoading ? (
             <div className="mt-2 flex items-center gap-2 text-meta text-ink-fg-2">
               <Loader2 size={13} className="animate-spin" />
@@ -122,7 +148,7 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
         <footer className="flex items-center justify-between gap-3 border-t border-ink-border px-5 py-3">
           <button
             type="button"
-            onClick={() => setDraft('')}
+            onClick={() => setDraft(defaultContent)}
             className="inline-flex items-center gap-1.5 text-meta text-ink-fg-2 hover:text-ink-fg"
           >
             <RotateCcw size={13} />
@@ -139,7 +165,9 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
             <button
               type="button"
               disabled={save.isPending || doc.isLoading}
-              onClick={() => save.mutate(draft)}
+              /* 与默认逐字相同 ⇒ 存空串回到"跟随默认"，而不是把这份快照冻进库里
+                 （否则以后默认文案升级，这个用户永远停在今天这版）。 */
+              onClick={() => save.mutate(isDefault ? '' : draft)}
               className="inline-flex items-center gap-1.5 rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-body font-medium text-accent-fg disabled:opacity-60"
             >
               {save.isPending ? <Loader2 size={13} className="animate-spin" /> : null}
