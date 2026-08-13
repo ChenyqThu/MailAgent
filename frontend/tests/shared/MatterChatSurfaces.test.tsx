@@ -284,8 +284,10 @@ describe('MatterDetail — detail editing and rendering', () => {
       )
     )
 
-    // 0812 D-A：优先级从四档平铺的 SegmentedControl 收成一个彩色标签 + 下拉菜单。
-    fireEvent.click(screen.getByRole('combobox', { name: '事项优先级' }))
+    // 0812 D-A：优先级从四档平铺的 SegmentedControl 收成一个彩色标签 + 下拉菜单；
+    // 轮 3 #2：面板从 shadcn Select 换成设计 PickMenu（Popmenu 逃生舱）→ 触发器是
+    // button 不再是 combobox（同类型控件的处理）。
+    fireEvent.click(screen.getByRole('button', { name: '事项优先级' }))
     fireEvent.click(await screen.findByRole('option', { name: 'P2' }))
     await waitFor(() =>
       expect(mattersApi.patch).toHaveBeenCalledWith(

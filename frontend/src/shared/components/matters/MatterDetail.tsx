@@ -34,7 +34,9 @@ import {
   MATTER_HEALTH_VALUES,
   MATTER_ITEM_KINDS,
   MATTER_PRIORITIES,
-  MATTER_STATUSES
+  MATTER_STATUSES,
+  MATTER_TAG_DEFAULT_COLOR,
+  MATTER_TAG_DEFAULT_SHAPE
 } from '@shared/api/types/matter'
 import type {
   Matter,
@@ -58,6 +60,7 @@ import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
+import { Popmenu } from '@shared/components/ui/Popmenu'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/components/ui/select'
 import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
@@ -751,13 +754,16 @@ export function MatterDetail({
                   saving={patch.isPending}
                   onSave={(waiting_context) => patch.mutate({ waiting_context })}
                 />
-                {/* D9（0813 dogfood）—— 右对齐改用 pill 自己的 `ml-auto`，不再靠一个
-                    `flex-1` 的空 spacer：这一行是 `flex-wrap` 的，spacer 只在「全部挤得进
-                    同一行」时才把 pill 推到行尾；一旦 chip 多到换行，spacer 与 pill 就分处
-                    两行，pill 反而贴着左边。`ml-auto` 对**所在那一行**恒成立。 */}
-                {/* 🔴 pill 必须是**按钮**（设计 detail.jsx:163 `onClick={ctx.onOpenAgent}`）：
-                    它此前是个纯 <span>，而唯一的跟进配置 UI 在 ≥1400px 才渲染的右栏里 ——
-                    窗口小一点就完全没有入口（0812 dogfood「无法切换跟进的方式」）。 */}
+              </div>
+              {/* 轮 3 #8 —— 跟进 pill **完全独立成行、自然左对齐**：轮 2 曾按设计
+                  detail.jsx:210 把它塞进上面那行右对齐（`ml-auto`），owner 打回
+                  「表现太奇怪了」——pill 的标签长（profile · 排程 · 下次运行），在
+                  flex-wrap 行里右浮会随换行跳位。设计源没有第二种版式，按 owner
+                  裁决独立成行（adjudication > 设计稿）。 */}
+              {/* 🔴 pill 必须是**按钮**（设计 detail.jsx:163 `onClick={ctx.onOpenAgent}`）：
+                  它此前是个纯 <span>，而唯一的跟进配置 UI 在 ≥1400px 才渲染的右栏里 ——
+                  窗口小一点就完全没有入口（0812 dogfood「无法切换跟进的方式」）。 */}
+              <div className="mt-2 flex items-center">
                 <AgentPill
                   bound={agentBound}
                   interactive={matterAgentEnabled}
@@ -782,6 +788,27 @@ export function MatterDetail({
                   tagDefinitions={tagItems}
                   disabled={patch.isPending}
                   onChange={(tags) => patch.mutate({ tags })}
+                  // 轮 3 #2 —— 设计的创建流带 StylePicker：名字进 matter.tags；选了非默认
+                  // 样式才 upsert 定义行（`upsert_tag_style` 服务端就是 upsert，行不存在会建；
+                  // 默认样式跳过写 = 与旧「加名字即隐式建标签」路径逐字节同）。样式写失败
+                  // 不拦标签本身 —— 标签已在，样式仍可去管理器里补。
+                  onCreate={(name, color, shape) => {
+                    patch.mutate({ tags: [...matter.tags, name] })
+                    if (color !== MATTER_TAG_DEFAULT_COLOR || shape !== MATTER_TAG_DEFAULT_SHAPE) {
+                      api
+                        .setTagStyle(
+                          name,
+                          { color, shape },
+                          { reason: 'user_updated_matter_tag_style' }
+                        )
+                        .then(() =>
+                          queryClient.invalidateQueries({ queryKey: MATTER_TAGS_QUERY_KEY })
+                        )
+                        .catch((error: unknown) =>
+                          toastError(t('matters.toast.saveFailed'), errorMessage(error))
+                        )
+                    }
+                  }}
                   onManage={() => setTagManagerOpen(true)}
                 />
               </div>
@@ -1226,8 +1253,15 @@ function MatterPrevNext({
 }
 
 /**
- * 状态 chip（设计 detail.jsx:142 → `StatusChip` = 按 status tone 上色的 Pip + 每档一个 icon）。
- * 🔴 改动前是 shadcn Select，trigger 写死 coral ⇒ 8 档一个颜色、8 个 icon 全丢。
+ * 状态选择面（轮 3 #2 —— 第三次返工，这次照设计**逐属性**落）。
+ *
+ * 触发器 = 裸 `StatusChip`（设计 detail.jsx:190-192：Pip + 每档一个 icon，无下拉箭头）。
+ * 点它打开的**不是下拉**，是设计 create.jsx:108-131 的 `StatusMenu` **模态**：380px 宽、
+ * ModalHead（target icon 井 + 「更改业务状态」+ 副题「状态变更会写入时间线…」）+ 八档
+ * 状态行（icon 按 tone 上色 size 14 · 13px 标签 · 选中 = `--ink-3` 底 + accent 勾）。
+ *
+ * 🔴 前两轮失败的根因正是这里：只把 trigger 修成了 Pip，打开的面板仍是 shadcn Select
+ * 的库存样式（勾在左、pl-7、glass-pop）—— 与设计的选择面一个属性都对不上。
  */
 function StatusMenu({
   value,
@@ -1237,41 +1271,119 @@ function StatusMenu({
   onChange(value: MatterStatus): void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
   const Icon = MATTER_STATUS_ICONS[value]
+  // 设计 Modal = fadeIn 遮罩 + popIn 卡片（ui.jsx:204-222）；走仓库统一 `useExitAnimation`
+  // 通道（同 AddItemModal / 永久删除确认），不自造 keyframes。
+  const modalAnim = useExitAnimation<HTMLDivElement>(open, { card: '[data-anim-card]' })
+  // 设计 Modal 支持 Esc 关闭（ui.jsx:206-210）；只在打开期间挂 document。
+  useEffect(() => {
+    if (!open) return undefined
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return (): void => document.removeEventListener('keydown', onKey)
+  }, [open])
   return (
-    <Select value={value} onValueChange={(status) => onChange(status as MatterStatus)}>
-      <SelectTrigger
+    <>
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-haspopup="dialog"
+        aria-expanded={open}
         aria-label={t('matters.detail.status')}
+        title={t('matters.detail.status')}
         className={cn(
-          'h-auto w-auto justify-start gap-1 whitespace-nowrap rounded-[var(--r-ctl)] px-[7px] py-[3px] text-meta leading-none',
-          // 🔴 icon 与文字必须是 trigger 的**直接**子节点：base 上有 `[&>span]:line-clamp-1`
-          // （0,2,0 特异性），包一层 span 会被它把 display 改成 -webkit-box，gap 直接失效。
-          // D4 —— 末位那个 svg 是 trigger 自带的 chevron，**藏掉**：设计 detail.jsx:190-192 的
-          // 状态就是一枚裸 `StatusChip`（Pip），没有下拉箭头（同 HealthMenu 的处理）。
-          '[&>svg:last-child]:hidden',
+          'inline-flex items-center gap-1 whitespace-nowrap rounded-[var(--r-ctl)] border px-[7px] py-[3px] text-meta leading-none',
+          'transition-opacity duration-fast ease-standard hover:opacity-80',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
           MATTER_TONE_CHIP_CLASS[MATTER_STATUS_TONES[value]]
         )}
       >
         <Icon size={11} className="shrink-0" />
         {t(`matters.status.${value}`)}
-      </SelectTrigger>
-      <SelectContent>
-        {MATTER_STATUSES.map((status) => {
-          const ItemIcon = MATTER_STATUS_ICONS[status]
-          return (
-            <SelectItem key={status} value={status}>
-              <span className="inline-flex items-center gap-2">
-                <ItemIcon
-                  size={12}
-                  className={MATTER_TONE_TEXT_CLASS[MATTER_STATUS_TONES[status]]}
-                />
-                {t(`matters.status.${status}`)}
+      </button>
+      {modalAnim.shouldRender ? (
+        <div
+          ref={modalAnim.scopeRef}
+          role="presentation"
+          onClick={(event) => {
+            // 设计的遮罩点击即关（ui.jsx:211）；只认遮罩本体，卡片内点击不冒到这里关掉。
+            if (event.target === event.currentTarget) setOpen(false)
+          }}
+          className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4"
+        >
+          <section
+            data-anim-card
+            role="dialog"
+            aria-modal="true"
+            aria-label={t('matters.detail.statusModalTitle')}
+            className="w-full max-w-[380px] rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-md"
+          >
+            <header className="flex items-start gap-3 border-b border-ink-border-soft px-[18px] pb-3.5 pt-4">
+              <span className="grid size-7 shrink-0 place-items-center rounded-[var(--r-ctl)] bg-coral/12 text-coral">
+                <Target size={15} />
               </span>
-            </SelectItem>
-          )
-        })}
-      </SelectContent>
-    </Select>
+              <div className="min-w-0 flex-1">
+                <h2 className="text-lead font-semibold tracking-[-0.01em] text-ink-fg">
+                  {t('matters.detail.statusModalTitle')}
+                </h2>
+                <p className="mt-0.5 text-meta text-ink-fg-2">
+                  {t('matters.detail.statusModalSub')}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOpen(false)}
+                aria-label={t('common.cancel')}
+                className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg"
+              >
+                <X size={15} />
+              </button>
+            </header>
+            <div
+              role="listbox"
+              aria-label={t('matters.detail.status')}
+              className="flex flex-col gap-0.5 p-3"
+            >
+              {MATTER_STATUSES.map((status) => {
+                const ItemIcon = MATTER_STATUS_ICONS[status]
+                const selected = status === value
+                return (
+                  <button
+                    key={status}
+                    type="button"
+                    role="option"
+                    aria-selected={selected}
+                    onClick={() => {
+                      setOpen(false)
+                      if (status !== value) onChange(status)
+                    }}
+                    className={cn(
+                      'flex w-full items-center gap-2.5 rounded-[var(--r-ctl)] px-3 py-2 text-left transition-colors duration-fast ease-standard',
+                      selected ? 'bg-ink-3' : 'hover:bg-ink-fg/[0.04]'
+                    )}
+                  >
+                    <ItemIcon
+                      size={14}
+                      className={cn(
+                        'shrink-0',
+                        MATTER_TONE_TEXT_CLASS[MATTER_STATUS_TONES[status]]
+                      )}
+                    />
+                    <span className="min-w-0 flex-1 text-body text-ink-fg">
+                      {t(`matters.status.${status}`)}
+                    </span>
+                    {selected ? <Check size={13} className="shrink-0 text-coral" /> : null}
+                  </button>
+                )
+              })}
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </>
   )
 }
 
@@ -1326,13 +1438,14 @@ function HealthMenu({
 }
 
 /**
- * 优先级（设计 detail.jsx:194-203 → `PriorityTag` 是一枚 mono 小标签按 tone 上色，
- * **chevron 在标签外面**：8px、`--ink-fg-3`、不带底色。菜单每项前一个 7px 彩色圆点）。
+ * 优先级选择面（轮 3 #2）。触发器 = `PriorityTag` mono 小标签 + **标签外** 8px chevron
+ * （设计 detail.jsx:194-203，轮 2 已对齐）；打开的面板照设计 `PickMenu`
+ * （detail.jsx:120-145）：窄面板 · 行 = 7px tone 圆点 + 标签(flex-1) + 行尾 accent 勾，
+ * 选中底 `--ink-fg/0.06`、hover `--ink-fg/0.04`。
  *
- * 🔴 D4 —— 改动前 chevron 是 trigger 自带的那个，长在**标签内部**、12px、继承 tone 色，
- * 把一枚本该只有「P0」两个字宽的标签撑成一块带箭头的按钮。故 trigger 退成透明壳，
- * tone chip 收进内层 —— 用 `<div>` 而不是 `<span>`：base 上的 `[&>span]:line-clamp-1`
- * 会把直接 span 子节点的 display 改成 -webkit-box（同 StatusMenu 注释那条坑）。
+ * 🔴 前两轮只修了 trigger，面板仍是 shadcn SelectContent 库存样式（勾在左、pl-7、
+ * text-aux）—— 这轮把面板换成仓库统一弹层基座 `Popmenu` 的逃生舱（同 MatterDatePicker
+ * 先例），定位 / outside-click / Esc / 退场动效与全 app 一致，行按设计逐属性画。
  */
 function PriorityMenu({
   value,
@@ -1342,42 +1455,75 @@ function PriorityMenu({
   onChange(value: MatterPriority): void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   return (
-    <Select value={value} onValueChange={(priority) => onChange(priority as MatterPriority)}>
-      <SelectTrigger
+    <span className="relative inline-flex">
+      <button
+        ref={triggerRef}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
         aria-label={t('matters.detail.priority')}
+        title={t('matters.detail.priority')}
         className={cn(
-          'h-auto w-auto justify-start gap-[3px] rounded-[var(--r-ctl)] border-0 !bg-transparent p-0',
+          'inline-flex items-center gap-[3px] rounded-[var(--r-ctl)]',
           'transition-opacity duration-fast ease-standard hover:opacity-80',
-          '[&>svg:last-child]:size-2 [&>svg:last-child]:shrink-0 [&>svg:last-child]:text-ink-fg-3 [&>svg:last-child]:opacity-100'
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70'
         )}
       >
-        <div
+        <span
           className={cn(
             'rounded-[var(--r-ctl)] border px-[5px] py-[2px] font-mono text-[10.5px] font-semibold uppercase leading-none tracking-[0.02em]',
             MATTER_TONE_CHIP_CLASS[MATTER_PRIORITY_TONES[value]]
           )}
         >
           {value.toUpperCase()}
-        </div>
-      </SelectTrigger>
-      <SelectContent>
-        {MATTER_PRIORITIES.map((priority) => (
-          <SelectItem key={priority} value={priority}>
-            <span className="inline-flex items-center gap-2">
-              <span
-                aria-hidden
+        </span>
+        <ChevronDown size={8} className="shrink-0 text-ink-fg-3" />
+      </button>
+      <Popmenu
+        open={open}
+        onClose={() => setOpen(false)}
+        ariaLabel={t('matters.detail.priority')}
+        triggerRef={triggerRef}
+        align="start"
+        width={124}
+      >
+        <div role="listbox" aria-label={t('matters.detail.priority')}>
+          {MATTER_PRIORITIES.map((priority) => {
+            const selected = priority === value
+            return (
+              <button
+                key={priority}
+                type="button"
+                role="option"
+                aria-selected={selected}
+                onClick={() => {
+                  setOpen(false)
+                  if (priority !== value) onChange(priority)
+                }}
                 className={cn(
-                  'size-[7px] shrink-0 rounded-full',
-                  MATTER_TONE_DOT_CLASS[MATTER_PRIORITY_TONES[priority]]
+                  'flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2 py-1.5 text-left text-meta text-ink-fg transition-colors duration-fast ease-standard',
+                  selected ? 'bg-ink-fg/[0.06]' : 'hover:bg-ink-fg/[0.04]'
                 )}
-              />
-              <span className="font-mono">{priority.toUpperCase()}</span>
-            </span>
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+              >
+                <span
+                  aria-hidden
+                  className={cn(
+                    'size-[7px] shrink-0 rounded-full',
+                    MATTER_TONE_DOT_CLASS[MATTER_PRIORITY_TONES[priority]]
+                  )}
+                />
+                <span className="min-w-0 flex-1 font-mono">{priority.toUpperCase()}</span>
+                {selected ? <Check size={11} className="shrink-0 text-coral" /> : null}
+              </button>
+            )
+          })}
+        </div>
+      </Popmenu>
+    </span>
   )
 }
 
@@ -1398,7 +1544,7 @@ function AgentPill({
   // `--c-ai/0.06` 底 + ai 前景），不是灰色。「还没设置自动跟进」是个邀请，灰掉它等于
   // 把这个入口藏起来；sparkles 两态恒 ai 色同理。
   const skin = cn(
-    'ml-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-meta',
+    'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-meta',
     bound
       ? 'border-ai/20 bg-ai/[0.08] text-ink-fg-1'
       : 'border-dashed border-ai/45 bg-ai/[0.06] text-ai'
@@ -1518,8 +1664,11 @@ function MatterTypeEditor({
         selected ? 'bg-coral/10 text-ink-fg' : 'text-ink-fg-1 hover:bg-ink-fg/[0.05]'
       )}
     >
-      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {/* 设计 detail.jsx:83-85：勾**紧跟**标签（label 不吃 flex），行尾 spacer ——
+          不是「勾钉在最右」。 */}
+      <span className="min-w-0 truncate">{label}</span>
       {selected ? <Check size={12} className="shrink-0 text-coral" /> : null}
+      <span aria-hidden className="flex-1" />
     </button>
   )
 
