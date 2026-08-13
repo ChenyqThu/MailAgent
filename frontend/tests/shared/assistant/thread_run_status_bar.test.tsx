@@ -12,7 +12,7 @@
 //   3. **reduced-motion 不 tick 就不显示秒表**（沿用 useToolElapsed 的契约：冻住的读数是谎话）。
 //
 // 渲染用的是真 ai-sdk runtime 管线（useAISDKRuntime → AISDKMessageConverter），harness 逐字沿用
-// TurnStatusLine.test.tsx，所以 parts / status 是生产派生出来的形状，不是手捏的。
+// TurnPresence.test.tsx，所以 parts / status 是生产派生出来的形状，不是手捏的。
 
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'
@@ -51,7 +51,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
-/** 退出套件默认的 reduced-motion（先例：TurnStatusLine.test.tsx / ToolTraceCard.test.tsx）。 */
+/** 退出套件默认的 reduced-motion（先例：TurnPresence.test.tsx / ToolTraceCard.test.tsx）。 */
 function allowMotion(): void {
   vi.stubGlobal(
     'matchMedia',

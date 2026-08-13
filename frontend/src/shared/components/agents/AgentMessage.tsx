@@ -17,7 +17,7 @@ import { useTranslation } from 'react-i18next'
 import { ComposerPrimitive, MessagePrimitive, useAuiState } from '@assistant-ui/react'
 
 import { MessageTiming } from '@shared/assistant/components/MessageTiming'
-import { TurnStatusLine } from '@shared/assistant/components/TurnStatusLine'
+import { TurnPresence, TurnPresenceEmpty } from '@shared/assistant/components/TurnPresence'
 import { UserMessageAttachments } from '@shared/assistant/components/message'
 import { getAssistantPartComponents } from '@shared/assistant/tools/registerToolUIs'
 import { AssistantActionBar, UserActionBar } from '@shared/assistant/components/action-bar'
@@ -62,15 +62,24 @@ export function AgentUserMessage(): React.JSX.Element {
 
 export function AgentAssistantMessage(): React.JSX.Element {
   // part components (generic ToolTraceCard fallback; A2UI by_name rich cards always on since S3;
-  // consecutive tool calls folded by ToolGroupCard via getAssistantPartComponents) + the truth-
-  // driven TurnStatusLine on the Empty slot (replaces the永动 ThinkingPhrases rotation — harness-chat
-  // lane B). Memoized once per mount so the reference stays stable.
+  // consecutive tool calls folded by ToolGroupCard via getAssistantPartComponents). living-bot-
+  // avatar WP5 — the turn status surface moved OUT of the Empty slot into TurnPresence above the
+  // content (the avatar must persist through writing/tool phases; Empty unmounts on the first
+  // part). Empty is explicit null so the no-content phase draws nothing. Memoized once per mount
+  // so the reference stays stable.
   const partComponents = useMemo(
-    () => ({ ...getAssistantPartComponents(), Empty: TurnStatusLine }),
+    () => ({ ...getAssistantPartComponents(), Empty: TurnPresenceEmpty }),
     []
   )
   return (
     <MessagePrimitive.Root className="group relative mx-auto w-full max-w-[var(--thread-max-width)]">
+      {/* WP5 — in-flow presence row, latest assistant message only (TurnPresence's own
+          isLast/readOnly gates). No config on purpose: every LIVE session on this surface is an
+          interactive one with no bound agent — agent-bound sessions (origin='agent') render only
+          through AgentRecordConversation, whose read-only thread makes TurnPresence return null,
+          so an agent-avatar config would have nothing to show on. Official assistant look it is;
+          no new data channel for a structurally unreachable case. */}
+      <TurnPresence className="mb-1.5 px-1" />
       <div className="min-w-0 px-1 text-body leading-relaxed text-ink-fg">
         <MessagePrimitive.Parts components={partComponents} />
       </div>
