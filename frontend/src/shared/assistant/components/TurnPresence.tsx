@@ -48,6 +48,7 @@ import {
   isAgentAvatarImage,
   OFFICIAL_ASSISTANT_AVATAR
 } from '@shared/components/agents/agentAvatarIdentity'
+import { avatarShellClass } from '@shared/components/agents/avatarShell'
 import { useAssistantIdentity } from '@shared/assistant/assistantIdentity'
 
 /** 主 agent 身份（0813）→ 本行的头像/名字投影：owner 配置的 bot 头像直接用；上传图走
@@ -194,23 +195,27 @@ export function TurnPresenceRow({
         className
       )}
     >
-      {imageSrc ? (
-        <img
-          src={imageSrc}
-          alt=""
-          width={28}
-          height={28}
-          draggable={false}
-          className="h-7 w-7 shrink-0 rounded-full object-cover"
-        />
-      ) : (
-        <BotAvatar
-          animated
-          size={28}
-          state={botState}
-          config={config ?? OFFICIAL_ASSISTANT_AVATAR}
-        />
-      )}
+      {/* 0813 dogfood：外壳口径与 AgentAvatar 收成同一份（avatarShell）——
+          此前这里 bot **完全没有外壳**、只有上传图 rounded-full，跟列表侧的一律圆裁三方分裂。 */}
+      <span className={avatarShellClass(28)}>
+        {imageSrc ? (
+          <img
+            src={imageSrc}
+            alt=""
+            width={28}
+            height={28}
+            draggable={false}
+            className="h-7 w-7 object-cover"
+          />
+        ) : (
+          <BotAvatar
+            animated
+            size={28}
+            state={botState}
+            config={config ?? OFFICIAL_ASSISTANT_AVATAR}
+          />
+        )}
+      </span>
       {text}
       {stopwatch}
     </div>
@@ -253,7 +258,7 @@ export function AssistantPanelBotAvatar({ working }: { working: boolean }): Reac
   const state: BotState = working ? 'working' : 'idle'
   const identity = useAssistantPresenceIdentity()
   return (
-    <span className="inline-flex shrink-0" data-testid="panel-bot-avatar" data-bot-state={state}>
+    <span className={avatarShellClass(20)} data-testid="panel-bot-avatar" data-bot-state={state}>
       {identity.imageSrc ? (
         <img
           src={identity.imageSrc}
@@ -261,7 +266,7 @@ export function AssistantPanelBotAvatar({ working }: { working: boolean }): Reac
           width={20}
           height={20}
           draggable={false}
-          className="h-5 w-5 rounded-full object-cover"
+          className="h-5 w-5 object-cover"
         />
       ) : (
         <BotAvatar animated size={20} state={state} config={identity.config} />

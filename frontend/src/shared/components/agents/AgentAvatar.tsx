@@ -11,6 +11,7 @@ import { BOT_AVATAR_COLORS, COLORS } from '@shared/bot-avatar/colors'
 import { BOT_AVATAR_SHAPES } from '@shared/bot-avatar/shapes'
 import type { BotColor, BotShape, BotState } from '@shared/bot-avatar/types'
 import { isAgentAvatarImage, resolveAgentAvatar, shuffledAgentAvatar } from './agentAvatarIdentity'
+import { avatarShellClass } from './avatarShell'
 import { fileToAvatarImage, type AvatarImageFailure } from './avatarImage'
 
 export function AgentAvatar({
@@ -33,12 +34,17 @@ export function AgentAvatar({
   animated?: boolean
 }): React.ReactElement {
   const avatar = useMemo(() => resolveAgentAvatar(agentId, config), [agentId, config])
-  // 上传态（WP7）：同一层圆裁剪外壳里换成图片，object-cover 兜住非正方源（客户端已裁成
+  // 上传态（WP7）：同一层裁剪外壳里换成图片，object-cover 兜住非正方源（客户端已裁成
   // 正方，这里是防手改库/未来放宽比例的最后一道）。所有消费点都走本组件，故一处即全局。
+  //
+  // 0813 dogfood：外壳从 rounded-full 换成圆角方形（avatarShell 单源）。上传图**跟随**
+  // 同一档 —— ① 混排列表里 bot 圆角方、上传图正圆 = 又一次口径分裂；② 上传图早已被
+  // 客户端居中裁成正方（avatarImage.squareCrop），圆裁是在已经裁过一次的图上再切掉四角，
+  // 圆角方形严格**多**露出用户自己的照片。
   const uploaded = isAgentAvatarImage(config) ? config.data : null
   return (
     <span
-      className={cn('inline-flex shrink-0 overflow-hidden rounded-full', className)}
+      className={cn(avatarShellClass(size), className)}
       style={{ width: size, height: size }}
       title={title}
       aria-hidden={title ? undefined : true}
@@ -152,7 +158,7 @@ export function AgentAvatarEditor({
           <div className="flex items-center gap-3">
             {/* 编辑预览是动画位点（prd §6.2）：眼睛跟指针 + showcase 随机动作巡演 ——
                 编辑时的「活」感展示（0813 dogfood）。 */}
-            <span className="inline-flex shrink-0 overflow-hidden rounded-full">
+            <span className={avatarShellClass(48)}>
               <BotAvatar
                 config={resolved}
                 state={previewState}
@@ -178,7 +184,16 @@ export function AgentAvatarEditor({
             <div className="mb-2 text-micro font-medium uppercase tracking-wider text-ink-fg-3">
               {t('agents.avatar.shape')}
             </div>
-            <div className="grid grid-cols-8 gap-1.5" data-testid="avatar-shape-grid">
+            {/* 0813 dogfood：形状排改自适应换行网格（原 grid-cols-8 恒单行 —— 窄容器里
+                8 格挤到比格内 30px bot 还小，就是 owner 说的「显示不下」）。auto-fill 按
+                容器宽度能塞几列就几列、塞不下自动折行，故对**任意条数**成立（并行批会把
+                形状加到 10+，这里不按 8 硬编码）；`min(36px,100%)` 让轨道下限跟着容器收，
+                容器再窄也不溢出 ⇒ 结构上产生不了横向滚动条。用 auto-fill 而非 auto-fit：
+                auto-fit 会在条数少时把空轨道折叠、把格子拉成大方块。 */}
+            <div
+              className="grid grid-cols-[repeat(auto-fill,minmax(min(36px,100%),1fr))] gap-1.5"
+              data-testid="avatar-shape-grid"
+            >
               {BOT_AVATAR_SHAPES.map((shape) => (
                 <button
                   key={shape}

@@ -20,12 +20,14 @@ import { useAISDKRuntime } from '@assistant-ui/react-ai-sdk'
 
 import i18n from '@shared/i18n'
 import {
+  AssistantPanelBotAvatar,
   CELEBRATE_FADE_MS,
   CELEBRATE_HOLD_MS,
   TurnPresence,
   TurnPresenceEmpty,
   TurnPresenceRow
 } from '@shared/assistant/components/TurnPresence'
+import { avatarShellRadiusClass } from '@shared/components/agents/avatarShell'
 import { ThreadReadOnlyContext } from '@shared/assistant/components/threadReadOnlyContext'
 import { useStallLevel } from '@shared/assistant/runtime/useTurnStage'
 
@@ -524,5 +526,38 @@ describe('主 agent 身份（assistantName / imageSrc）', () => {
     const img = container.querySelector('img')
     expect(img?.getAttribute('src')).toBe(src)
     expect(container.querySelector('[data-bot-eye]')).toBeNull()
+  })
+})
+
+// ── 0813 dogfood：头像容器口径与列表侧收成同一份（avatarShell 圆角方形）────────────
+// 修的是三方分裂：此前这里 bot **完全没有外壳**、上传图 rounded-full，而 AgentAvatar
+// （列表/卡片/抽屉）一律圆裁。
+
+describe('回合头像容器（圆角方形，与 AgentAvatar 同一口径）', () => {
+  test('bot 头像有圆角方形外壳，不是正圆', () => {
+    const { container } = render(
+      <TurnPresenceRow stage="thinking" stallLevel={0} completed={false} />
+    )
+    const shell = container.querySelector('svg')?.parentElement
+    expect(shell?.className).toContain(avatarShellRadiusClass(28))
+    expect(container.innerHTML).not.toContain('rounded-full')
+  })
+
+  test('上传图走同一个外壳（img 自身不再 rounded-full）', () => {
+    const src = `data:image/webp;base64,${'A'.repeat(24)}`
+    const { container } = render(
+      <TurnPresenceRow stage="thinking" stallLevel={0} completed={false} imageSrc={src} />
+    )
+    const img = container.querySelector('img')
+    expect(img?.className).not.toContain('rounded-full')
+    expect(img?.className).toContain('object-cover')
+    expect(img?.parentElement?.className).toContain(avatarShellRadiusClass(28))
+  })
+
+  test('面板头 20px 同款外壳', () => {
+    const { container } = render(<AssistantPanelBotAvatar working={false} />)
+    const shell = container.querySelector('[data-testid="panel-bot-avatar"]') as HTMLElement
+    expect(shell.className).toContain(avatarShellRadiusClass(20))
+    expect(shell.className).toContain('overflow-hidden')
   })
 })

@@ -12,12 +12,17 @@ import i18n from '@shared/i18n'
 import { BOT_AVATAR_COLORS } from '../../src/shared/bot-avatar/colors'
 import { BOT_AVATAR_SHAPES } from '../../src/shared/bot-avatar/shapes'
 import { deriveBotAvatar, mapLegacyGeneratedToBot } from '../../src/shared/bot-avatar/random'
-import { AgentAvatarEditor } from '../../src/shared/components/agents/AgentAvatar'
+import { AgentAvatar, AgentAvatarEditor } from '../../src/shared/components/agents/AgentAvatar'
 import {
   isAgentAvatarImage,
   resolveAgentAvatar,
   shuffledAgentAvatar
 } from '../../src/shared/components/agents/agentAvatarIdentity'
+import {
+  AVATAR_SHELL_CARD_SIZE,
+  avatarShellClass,
+  avatarShellRadiusClass
+} from '../../src/shared/components/agents/avatarShell'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -223,5 +228,89 @@ describe('AgentAvatarEditor（Grok 化：tab / 网格 / 骰子 / 重置）', () 
     const next = onChange.mock.calls[0][0]
     expect(next).toEqual(shuffledAgentAvatar('daily', explicit))
     expect(next).not.toEqual(explicit)
+  })
+})
+
+// ── 0813 dogfood：容器 = 圆角方形（不是圆）──────────────────────────────────────
+// owner「头像要变成方的，圆的会截断一些地方」→ 承载容器换圆角方形，口径由 avatarShell
+// 单源供给（此前 AgentAvatar 圆裁 / TurnPresence bot 无壳 / 上传图 rounded-full 三方分裂）。
+// 🔴 本批**不**声称根治截断：cube/cylinder/cone 冲出 viewBox 的那一层归形状几何调参。
+
+describe('头像容器口径（avatarShell：圆角方形）', () => {
+  test('圆角恒带 22% 上限、按尺寸分两档，且永远不是正圆', () => {
+    // 上限的意义：token 是绝对 px，18px 位点上 8px ≈ 边长 44% ≈ 又变回圆。
+    for (const size of [18, 20, 22, 24, 28, 40, 42, 48]) {
+      const cls = avatarShellRadiusClass(size)
+      expect(cls).toContain('22%')
+      expect(cls).not.toContain('rounded-full')
+    }
+    expect(avatarShellRadiusClass(AVATAR_SHELL_CARD_SIZE - 1)).toContain('--r-ctl')
+    expect(avatarShellRadiusClass(AVATAR_SHELL_CARD_SIZE)).toContain('--r-card')
+    // 只用仓内 v3 圆角 token，不写死像素字面值。
+    expect(avatarShellRadiusClass(20)).toMatch(/var\(--r-(ctl|card)\)/)
+  })
+
+  test('外壳恒裁切（否则圆角不生效）', () => {
+    expect(avatarShellClass(40)).toContain('overflow-hidden')
+    expect(avatarShellClass(40)).toContain('shrink-0')
+  })
+
+  test('bot 头像：外壳是圆角方形，不再有 rounded-full', () => {
+    const { container } = render(<AgentAvatar agentId="daily" config={null} size={42} />)
+    const shell = container.firstElementChild as HTMLElement
+    expect(shell.className).toContain(avatarShellRadiusClass(42))
+    expect(container.innerHTML).not.toContain('rounded-full')
+    expect(container.querySelector('svg')).toBeTruthy()
+  })
+
+  test('上传图跟随同一档（不留正圆特例 —— 混排列表里口径要一致）', () => {
+    const DATA_URI = `data:image/webp;base64,${'A'.repeat(40)}`
+    const { container } = render(
+      <AgentAvatar agentId="daily" config={{ type: 'image', data: DATA_URI }} size={24} />
+    )
+    const shell = container.firstElementChild as HTMLElement
+    expect(shell.className).toContain(avatarShellRadiusClass(24))
+    const img = container.querySelector('img')
+    expect(img?.className).not.toContain('rounded-full')
+    // object-cover 兜非正方源那道防线不许被顺手删掉。
+    expect(img?.className).toContain('object-cover')
+  })
+
+  test('编辑器 Bot 预览（48px）走卡片档，且不再 rounded-full', () => {
+    const { container } = render(
+      <AgentAvatarEditor agentId="daily" value={null} onChange={vi.fn()} />
+    )
+    const shells = Array.from(container.querySelectorAll('span')).filter((node) =>
+      node.className.includes(avatarShellRadiusClass(48))
+    )
+    expect(shells).toHaveLength(1)
+    expect(avatarShellRadiusClass(48)).toContain('--r-card')
+  })
+})
+
+describe('形状/颜色选择器换行（owner：显示不下就换行，不要横向滚动条）', () => {
+  test('形状排是自适应换行网格，不按条数硬编码列数', () => {
+    render(<AgentAvatarEditor agentId="daily" value={null} onChange={vi.fn()} />)
+    const grid = screen.getByTestId('avatar-shape-grid')
+    // auto-fill：能塞几列塞几列、塞不下折行 ⇒ 对任意 N 成立（并行批会把形状加到 10+）。
+    expect(grid.className).toContain('auto-fill')
+    // 恒定列数（grid-cols-8 之流）= 加一个形状就破版，必须不在场。
+    expect(grid.className).not.toMatch(/grid-cols-\d/)
+    // 轨道下限跟着容器收 ⇒ 容器再窄也不溢出，结构上产生不了横向滚动条。
+    expect(grid.className).toContain('min(36px,100%)')
+    // 条数是数据驱动的，布局不该知道它。
+    expect(within(grid).getAllByRole('button')).toHaveLength(BOT_AVATAR_SHAPES.length)
+  })
+
+  test('颜色排换行（flex-wrap）', () => {
+    render(<AgentAvatarEditor agentId="daily" value={null} onChange={vi.fn()} />)
+    expect(screen.getByTestId('avatar-color-grid').className).toContain('flex-wrap')
+  })
+
+  test('编辑器整棵子树没有横向滚动容器', () => {
+    const { container } = render(
+      <AgentAvatarEditor agentId="daily" value={null} onChange={vi.fn()} />
+    )
+    expect(container.innerHTML).not.toMatch(/overflow-x-(auto|scroll)/)
   })
 })
