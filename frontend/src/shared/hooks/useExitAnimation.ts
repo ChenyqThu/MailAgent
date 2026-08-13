@@ -33,6 +33,16 @@ export interface ExitAnimationOpts {
   backdrop?: boolean | string
   /** 卡片进场起始 vars（也是退场目标）。默认 { autoAlpha:0, y:8, scale:0.97 }。 */
   from?: gsap.TweenVars
+  /**
+   * 进场终点的**补充** vars，合并在默认 `{autoAlpha:1, y:0, scale:1}` 之上。
+   *
+   * 🔴 需要它的唯一场景：`from` 里带了默认终点没有的位移轴（如 slide-over 的 `x:24`）。
+   * GSAP 的 `fromTo` 只补间「to 里列出的」属性，from 独有的属性会被当成 `set` 一直留着 ——
+   * CommandPalette 的 `xPercent:-50` 正是**故意**吃这条语义把居中留住；而水平滑入需要它
+   * 真的动回 0，就必须在这里补 `{x:0}`，否则整段滑入会退化成「结束时 clearProps 一下瞬移」。
+   * 默认 undefined ⇒ 既有 20 处调用点逐字节不变。
+   */
+  to?: gsap.TweenVars
   /** 进场时长。默认 DUR.base。 */
   enterDuration?: number
   /** 退场时长。默认 DUR.fast。 */
@@ -61,6 +71,7 @@ export function useExitAnimation<T extends HTMLElement = HTMLDivElement>(
     card,
     backdrop = true,
     from,
+    to,
     enterDuration = DUR.base,
     exitDuration = DUR.fast,
     syncBackdrop = false
@@ -112,7 +123,14 @@ export function useExitAnimation<T extends HTMLElement = HTMLDivElement>(
         tl.fromTo(
           cardEl,
           cardFrom,
-          { autoAlpha: 1, y: 0, scale: 1, duration: enterDuration, clearProps: 'transform' },
+          {
+            autoAlpha: 1,
+            y: 0,
+            scale: 1,
+            ...to,
+            duration: enterDuration,
+            clearProps: 'transform'
+          },
           0
         )
       } else {

@@ -26,7 +26,7 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { CollapseChevron } from '@shared/components/ui/collapsible'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useActiveEmail } from '@shared/state/active-email'
-import { toastError, toastSuccess } from '@shared/state/toast'
+import { toastError } from '@shared/state/toast'
 
 import {
   DOC_PROVIDER_ICONS,
@@ -39,6 +39,7 @@ import { MatterLinkResourceModal } from './MatterLinkResourceModal'
 import type { MatterLinkResourceTab } from './MatterLinkResourceModal'
 import { MatterRelationsSection } from './MatterRelationsSection'
 import { useMatterMutation } from './matterMutation'
+import { useMatterUndoToast } from './useMatterUndoToast'
 import { MatterStakeholderPicker } from './MatterStakeholderPicker'
 import {
   MatterSuggestedResourceActions,
@@ -436,6 +437,7 @@ function ResourceRow({
 }): React.ReactElement {
   const { t } = useTranslation()
   const api = useMattersApi()
+  const pushUndoToast = useMatterUndoToast()
   // 成员索引而非查表函数：react-hooks/static-components 只认得前者（见 matterResource.ts）。
   const Icon =
     (item.resource.kind === 'doc' && DOC_PROVIDER_ICONS[item.resource.provider.toLowerCase()]) ||
@@ -451,8 +453,10 @@ function ResourceRow({
         expectedVersion: matter.version,
         reason: 'user_unlinked_resource'
       }),
-    onSuccess: () => {
-      toastSuccess(t('matters.resource.unlinkedNoDelete'))
+    // G-33 —— 单条解除关联在服务端有反向操作（`_mutate_resource_link` 返回 restore
+    // descriptor），toast 带撤销。
+    onSuccess: (result) => {
+      pushUndoToast(t('matters.resource.unlinkedNoDelete'), result, matter.public_id)
       onChanged()
     },
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))

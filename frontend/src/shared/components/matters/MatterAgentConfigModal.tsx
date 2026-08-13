@@ -20,9 +20,11 @@ import {
   SelectValue
 } from '@shared/components/ui/select'
 import { Switch } from '@shared/components/ui/switch'
+import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { toastSuccess } from '@shared/state/toast'
 
 import { MatterGlobalAgentModal } from './MatterGlobalAgentModal'
 import { MatterTriggerEditor } from './MatterTriggerEditor'
@@ -89,6 +91,12 @@ export function MatterAgentConfigModal({
   // 「下次运行」的基准时刻挂载时冻结：render 期间调 Date.now() 会被 react-hooks/purity 拒绝。
   const [now] = useState(() => Date.now())
   const scopeRef = useRef<HTMLDivElement>(null)
+  // G-32 —— 遮罩 fadeIn + 卡片 popIn。只做进场：调用方 `{agentConfigOpen ? <Modal …/> : null}`
+  // 硬挂载，且模态的草稿状态按挂载初始化，改成常驻会让上一次的编辑残留到下一次打开。
+  const animScopeRef = useEnterAnimation<HTMLDivElement>({
+    card: '[data-anim-card]',
+    backdrop: true
+  })
 
   // 关闭后焦点回到打开它的那颗 Agent pill（不然焦点掉回 body，键盘用户直接迷路）。
   // 🔴 必须声明在 `useFocusTrap` **之前**：同一个组件里 effect 按声明顺序跑，放在后面的话
@@ -184,6 +192,10 @@ export function MatterAgentConfigModal({
     ).then(
       () => {
         setSaving(false)
+        // G-33 —— 设计 §2.23「跟进规则已保存 · {label}」：把生效的排程一起说出来，模态关掉之后
+        // 用户还能确认自己刚设的是什么。不带撤销（patch 的 undo descriptor 会把四个字段整体
+        // 回滚，与"撤销这次排程改动"不是一回事，且改配置本就可以再改回来）。
+        toastSuccess(t('matters.toast.agentRuleSaved', { label: planLabel }))
         onClose()
       },
       (error: unknown) => {
@@ -195,7 +207,12 @@ export function MatterAgentConfigModal({
 
   return (
     <div
-      ref={scopeRef}
+      // 根节点上已经有一个 ref（focus trap 的 fallback），动效 scope 只能与它并存 ——
+      // 内联合并两个 ref，而不是给某一方另找宿主节点（会改 DOM 结构与布局）。
+      ref={(node) => {
+        scopeRef.current = node
+        animScopeRef.current = node
+      }}
       tabIndex={-1}
       className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4"
       role="presentation"
@@ -204,6 +221,7 @@ export function MatterAgentConfigModal({
           已经把语义说全了。 */}
       <div
         ref={dialogRef}
+        data-anim-card
         role="dialog"
         aria-modal="true"
         aria-labelledby="matter-agent-config-title"

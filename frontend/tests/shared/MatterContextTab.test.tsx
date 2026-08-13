@@ -15,6 +15,15 @@ afterEach(() => {
   vi.unstubAllGlobals()
 })
 
+/** 🔴 断言"这次点击发出的那一发请求"，而不是 `calls[0]`。批次 2a 把 `MatterRelationsSection`
+ *  挂进本 tab 之后，组件挂载时先打一发 `GET …/relations`，index 断言从此恒错（这两个用例在
+ *  批次 4 之前就已经红了，与撤销/动效无关）—— 按 URL 找那一发，才是本用例真正要断言的东西。 */
+function callTo(fetchMock: { mock: { calls: unknown[][] } }, needle: string): unknown[] {
+  const hit = fetchMock.mock.calls.find((call) => String(call[0]).includes(needle))
+  if (!hit) throw new Error(`no fetch call matching ${needle}`)
+  return hit
+}
+
 describe('MatterContextTab', () => {
   test('renders canonical resource groups and subscription state', () => {
     const view = renderTab([
@@ -69,10 +78,10 @@ describe('MatterContextTab', () => {
     fireEvent.click(view.getByRole('button', { name: /确认关联/ }))
 
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
-    expect(String(fetchMock.mock.calls[0][0])).toContain(
-      `/matters/MAT-0042/resources/${item.resource.id}`
+    const confirmCall = callTo(fetchMock, `/matters/MAT-0042/resources/${item.resource.id}`)
+    expect(JSON.parse(String((confirmCall[1] as { body?: unknown } | undefined)?.body))).toMatchObject(
+      { confirmed: true }
     )
-    expect(JSON.parse(String(fetchMock.mock.calls[0][1]?.body))).toMatchObject({ confirmed: true })
   })
 
   test('rejects a suggestion through the rejection-memory endpoint', async () => {
@@ -107,9 +116,7 @@ describe('MatterContextTab', () => {
 
     fireEvent.click(view.getByRole('button', { name: /不相关/ }))
     await waitFor(() => expect(onChanged).toHaveBeenCalledTimes(1))
-    expect(String(fetchMock.mock.calls[0][0])).toContain(
-      `/matters/MAT-0042/resources/${item.resource.id}/reject-suggestion`
-    )
+    callTo(fetchMock, `/matters/MAT-0042/resources/${item.resource.id}/reject-suggestion`)
   })
 
   // 0812 D-D：右侧上下文栏已移除（与本 tab 重复），它独有的置顶入口迁到了这里。

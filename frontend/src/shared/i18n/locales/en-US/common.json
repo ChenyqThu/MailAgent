@@ -4782,7 +4782,7 @@
       }
     },
     "detail": { "empty": "Select a matter to view details", "created": "Created {date}", "due": "Due {date}", "noDue": "No due date", "agentUnbound": "No follow-up agent bound", "addTag": "Add tag", "title": "Matter title", "editTitle": "Edit matter title", "previousMatter": "Previous (K)", "nextMatter": "Next (J)", "type": "Matter type", "typeUnset": "No type", "typeCustom": "Custom…", "typeCustomPlaceholder": "Enter a custom type", "priority": "Matter priority", "status": "Matter status", "health": "Matter health", "trashedBanner": "Moved to trash · purged permanently in {count} days; linked email and external documents are untouched", "archivedBanner": "Archived {time} · archiving changes neither the business status nor the history", "waitingBoth": "Waiting on {names} · {context}", "waitingNames": "Waiting on {names}", "waitingContext": "Waiting · {context}", "waitingEdit": "Edit waiting reason", "waitingClear": "Clear waiting reason", "waitingPlaceholder": "Who or what are you waiting on?" },
-    "tags": { "pickerLabel": "Tags", "search": "Search or create tags", "create": "Create tag \"{name}\"", "manage": "Manage all tags…", "empty": "No matching tags", "usageCount": "{count} uses", "managerTitle": "Manage tags", "managerDescription": "Click the marker on the left to change shape and color; renaming syncs to all matters, and deleting only removes the tag itself.", "renamePlaceholder": "Tag name", "style": "Change shape and color for {name}", "shape": "Shape", "color": "Color", "saveRename": "Rename {name}", "delete": "Delete {name}", "deleteConfirm": "Confirm delete", "deleteWarning": "This affects {count} matters.", "deleted": "Tag deleted", "saved": "Tag updated", "renameSaved": "Tag renamed", "noTags": "No tags yet", "shapes": { "circle": "Dot", "ring": "Ring", "square": "Square", "diamond": "Diamond", "bar": "Bar" }, "colors": { "--c-accent": "Accent", "--c-info": "Info", "--c-ok": "Success", "--c-warn": "Warning", "--c-crit": "Critical", "--c-ai": "AI" } },
+    "tags": { "pickerLabel": "Tags", "search": "Search or create tags", "create": "Create tag \"{name}\"", "manage": "Manage all tags…", "empty": "No matching tags", "usageCount": "{count} uses", "managerTitle": "Manage tags", "managerDescription": "Click the marker on the left to change shape and color; renaming syncs to all matters, and deleting only removes the tag itself.", "renamePlaceholder": "Tag name", "style": "Change shape and color for {name}", "shape": "Shape", "color": "Color", "saveRename": "Rename {name}", "delete": "Delete {name}", "deleteConfirm": "Confirm delete", "deleteWarning": "This affects {count} matters.", "deletedDetail": "Deleted tag #{name} · affected {count} matters", "saved": "Tag updated", "renameSaved": "Tag renamed", "noTags": "No tags yet", "shapes": { "circle": "Dot", "ring": "Ring", "square": "Square", "diamond": "Diamond", "bar": "Bar" }, "colors": { "--c-accent": "Accent", "--c-info": "Info", "--c-ok": "Success", "--c-warn": "Warning", "--c-crit": "Critical", "--c-ai": "AI" } },
     "tabs": { "state": "State", "context": "Context", "timeline": "Progress", "label": "Matter details", "runs": "Runs" },
     "status": { "inbox": "Inbox", "planned": "Planned", "active": "Active", "waiting": "Waiting", "blocked": "Blocked", "monitoring": "Monitoring", "done": "Done", "canceled": "Canceled" },
     "health": { "unknown": "Unknown", "on_track": "On track", "at_risk": "At risk", "off_track": "Off track" },
@@ -4968,7 +4968,7 @@
       "submit": "Link",
       "selected": "{count} selected",
       "pinAfterLink": "Pin after linking · excerpt enters the agent context",
-      "linked": "Linked {count} resources",
+      "linkedDetail": "Linked {count} resources{subscribed, plural, =0 {} other { · # threads now subscribed for follow-up mail}}",
       "mailSearchPlaceholder": "Search mail and threads: subject / sender",
       "groupRelated": "Related to this matter",
       "groupRelatedHint": "Similarity is a suggestion — you confirm",
@@ -5032,6 +5032,8 @@
       }
     },
     "stakeholderPicker": {
+      "added": "Added {count} stakeholders",
+      "updated": "Stakeholder updated",
       "stepPick": "Add stakeholders",
       "stepRole": "Set roles",
       "pickDescription": "Stakeholders are who owns what here, not a recipient list. Candidates come from people seen in this matter's linked mail.",
@@ -5093,7 +5095,8 @@
       "subscriptionActive": "Following new replies",
       "subscriptionPaused": "Subscription paused",
       "unlink": "Unlink",
-      "unlinkedNoDelete": "Unlinked without deleting the original email",
+      "unlinkedNoDelete": "Unlinked · the original resource is not deleted",
+      "suggestionConfirmed": "Officially linked · unlinking never deletes the original resource",
       "noSourceLink": "No source link"
     },
     "capture": {
@@ -5259,7 +5262,22 @@
       "matter_agenda": "Attention sweep",
       "matter_retry": "Retry"
     },
-    "toast": { "saved": "Matter updated", "saveFailed": "Could not update matter", "createFailed": "Could not create matter", "deleteFailed": "Could not delete matter" },
+    "toast": {
+      "saveFailed": "Could not update matter",
+      "createFailed": "Could not create matter",
+      "deleteFailed": "Could not delete matter",
+      "created": "Matter created · only the title is required, everything else can come later",
+      "reviewAccepted": "Accepted {count} changes; the current state is updated",
+      "reviewRejected": "Rejected · the official state is unchanged; the proposal and reason are archived",
+      "agentRuleSaved": "Follow-up rule saved · {label}",
+      "transition": {
+        "archive": "Archived · archiving is orthogonal to business status",
+        "reopen": "Unarchived · business status unchanged",
+        "trash": "Moved to trash · linked emails and external documents are untouched",
+        "restore": "Restored from trash · business status unchanged"
+      }
+    },
+    "undo": { "action": "Undo" },
     "shell": {
       "tagsTitle": "Tags",
       "footnoteLocal": "Local SQLite · single user, single machine",

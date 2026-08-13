@@ -40,7 +40,14 @@ export function MatterSuggestedResourceActions({
         { confirmed: true },
         { expectedVersion: matter.version, reason: 'user_confirmed_resource_suggestion' }
       ),
-    onSuccess: onChanged,
+    // G-33 —— 设计 §2.23「已正式关联 · 解除关联不会删除原始资料」。此前确认建议是**静默**的，
+    // 用户点完只看到那条建议从列表里消失，不知道它去了哪。
+    // 🔴 不带撤销：设计那张表没给这一格配撤销，且"撤销确认"会把资料退回建议态 —— 与「取消
+    // 关联」是两件事，混在同一颗按钮里只会让人误删关联。
+    onSuccess: () => {
+      toastSuccess(t('matters.resource.suggestionConfirmed'))
+      onChanged()
+    },
     onError: (error) =>
       toastError(t('matters.resource.suggestionActionFailed'), errorMessage(error))
   })

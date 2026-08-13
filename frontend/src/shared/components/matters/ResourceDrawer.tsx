@@ -1,3 +1,4 @@
+import { useRef } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ExternalLink, Pin, RefreshCcw, Shield, X } from 'lucide-react'
@@ -9,6 +10,7 @@ import type {
   MatterResourceSubscriptionState
 } from '@shared/api/types/matter'
 import { SegmentedControl } from '@shared/components/ui/segmented'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useActiveEmail } from '@shared/state/active-email'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -20,6 +22,7 @@ import {
 } from './matterResource'
 import { useMattersApi } from './hooks'
 import { useMatterMutation } from './matterMutation'
+import { useMatterUndoToast } from './useMatterUndoToast'
 
 interface ResourceDrawerProps {
   open: boolean
@@ -58,6 +61,7 @@ export function ResourceDrawer({
   const api = useMattersApi()
   const navigate = useNavigate()
   const setActiveEmail = useActiveEmail((state) => state.setActive)
+  const pushUndoToast = useMatterUndoToast()
 
   const patch = useMatterMutation({
     matterId,
@@ -88,19 +92,36 @@ export function ResourceDrawer({
         reason: 'user_unlinked_resource'
       })
     },
-    onSuccess: () => {
-      toastSuccess(t('matters.resource.unlinkedNoDelete'))
+    // G-33 —— 同 MatterContextTab 行级解除：服务端返回 restore descriptor，toast 带撤销。
+    onSuccess: (result) => {
+      pushUndoToast(t('matters.resource.unlinkedNoDelete'), result, matterId)
       onChanged()
       onClose()
     },
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  if (!open || !item) return null
+  // G-32 —— 设计 §2.x 抽屉 = `slideIn 220ms`（translateX 24px + 淡入）+ 遮罩 `fadeIn`。
+  // `syncBackdrop` 让遮罩与面板同时长进来，否则遮罩 120ms 先"啪"一下、面板再慢慢滑。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: '[data-anim-card]',
+    backdrop: '[data-anim-backdrop]',
+    from: { autoAlpha: 0, x: 24 },
+    to: { x: 0 },
+    syncBackdrop: true
+  })
+  // 🔴 调用方是 `open={drawerItem !== null}` + `item={drawerItem}` —— 两者同时归 null，
+  // 退场期间面板会瞬间空掉。留住最后一份非空 item（同 EventDetailDrawer 的 RSVP 卡对
+  // `pendingRsvp` 的处理），只影响这 220ms 的渲染，写操作全部走 props 上的 `item`。
+  const lastItemRef = useRef(item)
+  if (item) lastItemRef.current = item
+  const shown = item ?? lastItemRef.current
 
-  const resource = item.resource
-  const link = item.link
-  const available = isMatterResourceAvailable(item)
+  if (!shouldRender || !shown) return null
+
+  const resource = shown.resource
+  const link = shown.link
+  const available = isMatterResourceAvailable(shown)
   const mailId =
     resource.kind === 'email' && resource.external_key.startsWith('email:')
       ? Number(resource.external_key.slice('email:'.length))
@@ -130,14 +151,16 @@ export function ResourceDrawer({
   }
 
   return (
-    <div className="fixed inset-0 z-50" role="presentation">
+    <div ref={scopeRef} className="fixed inset-0 z-50" role="presentation">
       <button
         type="button"
+        data-anim-backdrop
         aria-label={t('common.close')}
         onClick={onClose}
         className="absolute inset-0 bg-black/35"
       />
       <aside
+        data-anim-card
         role="dialog"
         aria-modal="true"
         aria-labelledby="matter-resource-drawer-title"

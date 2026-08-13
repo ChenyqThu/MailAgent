@@ -4,6 +4,7 @@ import { X } from 'lucide-react'
 
 import { MATTER_ITEM_KINDS } from '@shared/api/types/matter'
 import type { MatterItemCreateInput, MatterItemKind } from '@shared/api/types/matter'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import {
   Select,
   SelectContent,
@@ -31,12 +32,22 @@ export function AddItemModal({
   const [kind, setKind] = useState<MatterItemKind>(initialKind)
   const [title, setTitle] = useState('')
   const [description, setDescription] = useState('')
+  // G-32 —— 浮层入场（设计 §1.4a `fadeIn` 遮罩 + `popIn` 卡片）走仓库统一通道
+  // `useExitAnimation`（GSAP，reduced-motion 内置短路），不自造 keyframes。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: '[data-anim-card]'
+  })
 
-  if (!open) return null
+  if (!shouldRender) return null
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4" role="presentation">
+    <div
+      ref={scopeRef}
+      className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4"
+      role="presentation"
+    >
       <section
+        data-anim-card
         role="dialog"
         aria-modal="true"
         aria-labelledby="matter-add-item-title"

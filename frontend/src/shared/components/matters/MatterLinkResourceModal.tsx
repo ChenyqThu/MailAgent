@@ -50,6 +50,7 @@ import {
   normalizeMatterLinkUrl
 } from './matterLinkProviders'
 import { useMatterMutation } from './matterMutation'
+import { useMatterUndoToast } from './useMatterUndoToast'
 
 export type MatterLinkResourceTab = 'mail' | 'link' | 'file'
 
@@ -94,6 +95,7 @@ export function MatterLinkResourceModal({
   const { t } = useTranslation()
   const api = useMattersApi()
   const mailApi = useMailApi()
+  const pushUndoToast = useMatterUndoToast()
 
   const [tab, setTab] = useState<MatterLinkResourceTab>(initialTab)
   const [search, setSearch] = useState('')
@@ -241,8 +243,11 @@ export function MatterLinkResourceModal({
       // 🔴 逐条串行 + 每条用**上一条返回的 version**：`add_resource` 是带 CAS 的写，一批并发
       // 发出去必然自撞乐观锁（0812 那条「Agent 挂十几份就撞锁」是同一个病根）。
       let version = matter.version
+      // G-33 —— 留住最后一条写入的返回，供「只关联了一项」时给 toast 配撤销（见 onSuccess）。
+      let lastResult: MatterMutationResult | null = null
       const advance = (next: MatterMutationResult | null | undefined): void => {
         version = next?.matter?.version ?? version + 1
+        lastResult = next ?? null
       }
       for (const internalId of mailPicked) {
         advance(
@@ -298,10 +303,24 @@ export function MatterLinkResourceModal({
           )
         )
       }
-      return { version }
+      return { version, lastResult: lastResult as MatterMutationResult | null }
     },
-    onSuccess: () => {
-      toastSuccess(t('matters.linkResource.linked', { count: selectedCount }))
+    // G-33 —— 设计 §2.23：报「关联了几项」+「几条会话被订阅」，订阅是这次操作的**后续影响**，
+    // 不说出来用户不知道以后的回复会自动进来。
+    // 🔴 撤销只在**恰好一项**时给：后端每次 `add_resource` 只为单条产出 undo descriptor，多选
+    // 是 N 次串行写入，拿最后一条的 descriptor 当「撤销」会只撤掉一条却让人以为全撤了。这条
+    // 纪律与后端 `len(pending) == 1` 的判据同源。
+    onSuccess: (result) => {
+      const subscribedThreads = subscribeThread ? mailPicked.length : 0
+      const title = t('matters.linkResource.linkedDetail', {
+        count: selectedCount,
+        subscribed: subscribedThreads
+      })
+      if (selectedCount === 1) {
+        pushUndoToast(title, result.lastResult, matter.public_id)
+      } else {
+        toastSuccess(title)
+      }
       onOpenChange(false)
       onChanged()
     },

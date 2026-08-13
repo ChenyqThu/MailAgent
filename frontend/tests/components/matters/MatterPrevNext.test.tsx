@@ -21,6 +21,8 @@ const { mattersApi, matterAgentEnabled } = vi.hoisted(() => ({
 }))
 
 vi.mock('@shared/components/matters/hooks', () => ({
+  // G-33 —— `useMatterUndoToast` 经这条通道执行撤销；本用例不点撤销，给个哑实现即可。
+  useMatterChatApi: () => ({ contextSnapshot: vi.fn(), applyUndo: vi.fn() }),
   useMattersApi: () => mattersApi,
   useMatterFlags: () => ({
     mattersEnabled: true,
@@ -33,6 +35,7 @@ vi.mock('@shared/components/matters/hooks', () => ({
   useMatterAttention: () => ({ data: undefined, isLoading: false })
 }))
 vi.mock('@shared/state/toast', () => ({
+  useToastStore: { getState: () => ({ push: vi.fn(), dismiss: vi.fn() }) },
   toastError: vi.fn(),
   toastSuccess: vi.fn(),
   toastInfo: vi.fn()

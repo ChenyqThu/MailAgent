@@ -25,6 +25,7 @@ import type {
   MatterStatus,
   MatterUpdate
 } from '@shared/api/types/matter'
+import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 
 import { DOC_PROVIDER_ICONS, RESOURCE_KIND_ICONS } from './matterResource'
 
@@ -90,6 +91,13 @@ export function MatterUpdateReview({
   rerunBusy = false
 }: MatterUpdateReviewProps): React.ReactElement {
   const { t } = useTranslation()
+  // G-32 —— 遮罩 fadeIn + 卡片 popIn。只做进场：调用方是 `{reviewUpdate ? <Review …/> : null}`，
+  // 关闭时 update 与挂载条件一起消失，接退场要先把父级数据保活改造一遍（见 useEnterAnimation
+  // 头注）。
+  const animRef = useEnterAnimation<HTMLDivElement>({
+    card: '[data-anim-card]',
+    backdrop: true
+  })
   const [selected, setSelected] = useState(() => new Set(update.changes.map((change) => change.id)))
   const [editing, setEditing] = useState(false)
   const [summary, setSummary] = useState(update.summary ?? '')
@@ -111,8 +119,9 @@ export function MatterUpdateReview({
   const allSelected = selected.size === changes.length
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4">
+    <div ref={animRef} className="fixed inset-0 z-50 grid place-items-center bg-black/55 p-4">
       <section
+        data-anim-card
         role="dialog"
         aria-modal="true"
         aria-label={t('matters.review.title')}

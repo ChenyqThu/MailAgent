@@ -93,10 +93,14 @@ export function MatterTagManagerModal({
 
   const deleteMutation = useMutation({
     mutationFn: (name: string) => api.deleteTag(name, { reason: 'user_deleted_matter_tag' }),
-    onSuccess: async () => {
+    // G-33 —— 设计 §2.23：删标签要说清「影响了几个事项」（服务端 `delete_tag` 返回
+    // `affected_count`，此前只丢掉不用）。
+    // 🔴 **不带撤销**：`delete_tag` 不产出 undo descriptor，反向操作也不是一次调用 —— 它把标签
+    // 从 N 个事项上摘掉，"撤销"需要按事项逐个补回，当前 API 表达不了。宁可不给按钮。
+    onSuccess: async (result, name) => {
       setPendingDeleteName(null)
       await invalidateMatterTags()
-      toastSuccess(t('matters.tags.deleted'))
+      toastSuccess(t('matters.tags.deletedDetail', { name, count: result.affected_count ?? 0 }))
     },
     onError: (error) => toastError(t('matters.toast.deleteFailed'), errorMessage(error))
   })

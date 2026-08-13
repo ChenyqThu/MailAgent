@@ -3,6 +3,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Loader2, RotateCcw, Sparkles, X } from 'lucide-react'
 
+import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -36,6 +37,11 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
   const queryClient = useQueryClient()
   const [draft, setDraft] = useState('')
   const [loaded, setLoaded] = useState(false)
+  // G-32 —— 遮罩 fadeIn + 卡片 popIn；只做进场（调用方硬挂载，见 useEnterAnimation 头注）。
+  const animScopeRef = useEnterAnimation<HTMLDivElement>({
+    card: '[data-anim-card]',
+    backdrop: true
+  })
 
   const doc = useMatterGlobalAgentDoc()
 
@@ -71,8 +77,14 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
   })
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-0/60 p-6">
-      <div className="flex max-h-full w-full max-w-[620px] flex-col overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-raised">
+    <div
+      ref={animScopeRef}
+      className="fixed inset-0 z-50 flex items-center justify-center bg-ink-0/60 p-6"
+    >
+      <div
+        data-anim-card
+        className="flex max-h-full w-full max-w-[620px] flex-col overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-raised"
+      >
         <header className="flex items-start justify-between gap-3 border-b border-ink-border px-5 py-4">
           <div className="min-w-0">
             <h2 className="flex items-center gap-2 text-lead font-semibold">

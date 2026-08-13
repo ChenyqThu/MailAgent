@@ -33,7 +33,7 @@ import {
 import { Input } from '@shared/components/ui/input'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { toastError } from '@shared/state/toast'
+import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { useMattersApi } from './hooks'
 import { useMatterMutation } from './matterMutation'
@@ -180,7 +180,16 @@ export function MatterStakeholderPicker({
       }
       return { version }
     },
+    // G-33 —— 设计 §2.23「已添加 N 位干系人 · 姓名与职位随联系人库同步」。编辑既有干系人走
+    // 同一条 mutation，那种情况说「已更新」而不是「已添加 1 位」。
+    // 🔴 不带撤销：这里是 N 次串行写入（同 `MatterLinkResourceModal` 的理由），且服务端只为
+    // 最后一条产出 descriptor。
     onSuccess: () => {
+      toastSuccess(
+        editing
+          ? t('matters.stakeholderPicker.updated')
+          : t('matters.stakeholderPicker.added', { count: picked.length })
+      )
       onOpenChange(false)
       onChanged()
     },

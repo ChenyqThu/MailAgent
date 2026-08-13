@@ -58,7 +58,9 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/components/ui/select'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { cn } from '@shared/lib/cn'
+import { DUR } from '@shared/lib/gsap'
 import {
   formatMatterAgo,
   formatMatterDueRelative,
@@ -82,6 +84,7 @@ import { MatterTagPicker } from './MatterTagPicker'
 import { MatterTimeline } from './MatterTimeline'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
 import { isMatterStaleError, useMatterMutation } from './matterMutation'
+import { useMatterUndoToast } from './useMatterUndoToast'
 import { parseMatterSchedule } from './matterSchedule'
 import {
   MATTER_DETAIL_TAB_ICONS,
@@ -197,6 +200,16 @@ export function MatterDetail({
   const [now] = useState(() => Date.now())
   const [overlayRunId, setOverlayRunId] = useState<number | null>(null)
   const [agentConfigOpen, setAgentConfigOpen] = useState(false)
+  // G-32 —— 头部「更多」下拉按菜单档 popIn（从触发按钮那侧长出来），永久删除确认按模态档
+  // fadeIn + popIn。两者的内容都只依赖 `matter`（关闭期间不会塌），故进退场都做。
+  const moreMenuAnim = useExitAnimation<HTMLDivElement>(moreOpen, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
+    enterDuration: DUR.fast
+  })
+  const deleteDialogAnim = useExitAnimation<HTMLDivElement>(deleteOpen, {
+    card: '[data-anim-card]'
+  })
   const { matterAgentEnabled } = useMatterFlags()
   const runsQuery = useMatterRuns(matterId, matterAgentEnabled)
   const updatesQuery = useMatterUpdates(matterId, 'pending', matterAgentEnabled)
@@ -331,6 +344,8 @@ export function MatterDetail({
     if (!titleEditing) setTitleDraft(matter?.title ?? '')
   }, [matter?.title, titleEditing])
 
+  const pushUndoToast = useMatterUndoToast()
+
   const refresh = async (): Promise<void> => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: qk.matters.list() }),
@@ -377,9 +392,11 @@ export function MatterDetail({
       if (!matter) throw new Error('Matter is not loaded')
       return api[operation](matterId, { expectedVersion: matter.version })
     },
-    onSuccess: async () => {
+    // G-33 —— 四个生命周期动作各自报自己的后果（设计 §2.23），不再统一「事项已更新」。
+    // 四者在服务端都有反向操作（`_timestamp_transition` 恒返回 undo descriptor），故都带撤销。
+    onSuccess: async (result, operation) => {
       await refresh()
-      toastSuccess(t('matters.toast.saved'))
+      pushUndoToast(t(`matters.toast.transition.${operation}`), result, matterId)
     },
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
@@ -492,11 +509,22 @@ export function MatterDetail({
           )
         : api.rejectUpdate(matterId, reviewId, payload, { expectedVersion: matter.version })
     },
-    onSuccess: async () => {
+    // G-33 —— 接受/拒绝各报各的后果（设计 §2.23）。
+    // 🔴 **两者都不带撤销**：`accept_update` / `reject_update` 在服务端不产出 undo descriptor
+    // （service.py 那两个方法没有 `_undo_descriptor` 调用），也没有等价的反向端点 —— 接受会
+    // 把 N 项变化落进正式状态并写多条事件，"反过来"不是一次调用能表达的。这里如实只报结果，
+    // 不做假撤销按钮。
+    onSuccess: async (_result, variables) => {
       const next = updates.filter((item) => item.id !== reviewId)[0]
       setReviewError(null)
       await refresh()
-      toastSuccess(t('matters.toast.saved'))
+      toastSuccess(
+        variables.kind === 'accept'
+          ? t('matters.toast.reviewAccepted', {
+              count: variables.payload.selectedIds.length
+            })
+          : t('matters.toast.reviewRejected')
+      )
       setReviewId(next?.id ?? null)
     },
     onError: (error) => {
@@ -791,8 +819,11 @@ export function MatterDetail({
               >
                 <MoreHorizontal size={17} />
               </button>
-              {moreOpen ? (
-                <div className="absolute right-0 top-10 z-20 w-48 rounded-[var(--r-card)] border border-ink-border bg-ink-1 p-1 shadow-md">
+              {moreMenuAnim.shouldRender ? (
+                <div
+                  ref={moreMenuAnim.scopeRef}
+                  className="absolute right-0 top-10 z-20 w-48 rounded-[var(--r-card)] border border-ink-border bg-ink-1 p-1 shadow-md"
+                >
                   {matter.archived_at === null && matter.deleted_at === null ? (
                     <MenuButton
                       icon={<Archive size={14} />}
@@ -1005,9 +1036,13 @@ export function MatterDetail({
           onOpenChange={setTagManagerOpen}
         />
 
-        {deleteOpen ? (
-          <div className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4">
+        {deleteDialogAnim.shouldRender ? (
+          <div
+            ref={deleteDialogAnim.scopeRef}
+            className="fixed inset-0 z-50 grid place-items-center bg-black/50 p-4"
+          >
             <section
+              data-anim-card
               role="dialog"
               aria-modal="true"
               className="w-full max-w-md rounded-[var(--r-card)] border border-fail/30 bg-ink-1 p-5 shadow-md"

@@ -7,6 +7,8 @@ import { Bot, ExternalLink, Pause, Play, Plus, Search, Sparkles, Trash2, X } fro
 
 import type { Matter, MatterLinkScope } from '@shared/api/types/matter'
 import { useAnchoredPosition } from '@shared/hooks/useAnchoredPosition'
+import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
+import { DUR } from '@shared/lib/gsap'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess, useToastStore } from '@shared/state/toast'
@@ -177,6 +179,15 @@ export function MatterLinkPopover({
   onCloseRef.current = onClose
   const openerRef = useRef<HTMLElement | null>(null)
   const panelActive = open && !createOpen
+  // G-32 —— 捕获浮层按菜单档 popIn（DUR.fast，从锚点那侧长出来）。只做进场：`open` 归 false
+  // 时 `useAnchoredPosition` 同步停止测量、position 归 null，退场没有可动的元素。
+  // 🔴 `deps` 里必须带上真实挂载条件：面板要先量锚点、下一帧才进 DOM，只依赖 reduced-motion
+  // 的话首帧 effect 跑时 scope 还是 null，动效一次都不会播。
+  const animScopeRef = useEnterAnimation<HTMLDivElement>({
+    from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
+    duration: DUR.fast,
+    deps: [panelActive && position !== null]
+  })
   useEffect(() => {
     if (!panelActive) return undefined
     openerRef.current =
@@ -216,6 +227,7 @@ export function MatterLinkPopover({
                 className="fixed inset-0 z-[99] cursor-default"
               />
               <div
+                ref={animScopeRef}
                 role="dialog"
                 aria-label={t('matters.capture.title')}
                 style={{ top: position.top, left: position.left, width: PANEL_WIDTH }}

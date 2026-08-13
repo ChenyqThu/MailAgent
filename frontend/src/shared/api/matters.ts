@@ -761,6 +761,38 @@ export function resolveMatterUndoRequest(
   return { ...resolved, expectedVersion, reversesEventId }
 }
 
+/**
+ * G-33 —— 从一次写操作的返回里读出 undo descriptor。
+ *
+ * 服务端 `_mutation(...)` 恒发 `undo` 键（没有反向操作时为 `null`），但 `MatterMutationResult`
+ * 是跨语言契约镜像（parity gate: `tests/matters/test_matters_contract_parity.py`），P3 已经立过
+ * 「本仓这一侧只做局部加宽、不改镜像文件」的先例（见本文件顶部 `MatterUndoMutationOptions`）。
+ * 这里沿用同一条纪律：不改类型，改成运行时读 + 结构校验。
+ *
+ * 🔴 校验不是形式主义 —— 交出去的 descriptor 会被原样执行成一次真实写入。tool/label 必须是
+ * 非空字符串、input 必须是对象，任何一项不符就当作"这次操作没有反向操作"（返回 null），
+ * 而不是半懂不懂地发一个请求出去。
+ */
+export function readMatterUndoDescriptor(result: unknown): MatterUndoDescriptor | null {
+  const undo = asRecord(result).undo
+  if (undo == null) return null
+  const record = asRecord(undo)
+  const tool = typeof record.tool === 'string' ? record.tool : ''
+  const label = typeof record.label === 'string' ? record.label : ''
+  if (tool.length === 0 || label.length === 0) return null
+  if (record.input == null || typeof record.input !== 'object' || Array.isArray(record.input)) {
+    return null
+  }
+  const descriptor: MatterUndoDescriptor = {
+    tool,
+    label,
+    input: record.input as Record<string, unknown>
+  }
+  // 🔴 「后端给了 descriptor」≠「这个客户端执行得了」：`resolveMatterUndoRequest` 认不出的
+  // tool/operation 会在点下去那一刻才失败。宁可不显示撤销按钮，也不显示一个点了报错的。
+  return resolveMatterUndoRequest(descriptor) === null ? null : descriptor
+}
+
 export function createMatterChatApi(baseUrl: string): MatterChatApi {
   return {
     contextSnapshot(matterId): Promise<MatterContextSnapshotPayload> {

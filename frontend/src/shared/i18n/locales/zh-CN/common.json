@@ -4855,7 +4855,7 @@
       "delete": "删除 {name}",
       "deleteConfirm": "确认删除",
       "deleteWarning": "会影响 {count} 个事项。",
-      "deleted": "标签已删除",
+      "deletedDetail": "已删除标签 #{name} · 影响 {count} 个事项",
       "saved": "标签已更新",
       "renameSaved": "标签已重命名",
       "noTags": "还没有标签",
@@ -5172,7 +5172,7 @@
       "submit": "关联",
       "selected": "已选 {count} 项",
       "pinAfterLink": "关联后置顶 · 摘录进入 Agent 上下文",
-      "linked": "已关联 {count} 项资料",
+      "linkedDetail": "已关联 {count} 项资料{subscribed, plural, =0 {} other { · # 个会话已订阅后续邮件}}",
       "mailSearchPlaceholder": "搜索邮件与会话：主题 / 发件人",
       "groupRelated": "与本事项相关",
       "groupRelatedHint": "相似度只是建议，需你确认",
@@ -5236,6 +5236,8 @@
       }
     },
     "stakeholderPicker": {
+      "added": "已添加 {count} 位干系人",
+      "updated": "干系人已更新",
       "stepPick": "添加干系人",
       "stepRole": "定角色",
       "pickDescription": "干系人是这件事的责任归属，不是收件人列表。候选来自本事项已关联邮件里出现过的人。",
@@ -5301,7 +5303,8 @@
       "subscriptionActive": "已订阅后续",
       "subscriptionPaused": "订阅已暂停",
       "unlink": "解除关联",
-      "unlinkedNoDelete": "已解除关联，不会删除原始邮件",
+      "unlinkedNoDelete": "已取消关联 · 原始资料未删除",
+      "suggestionConfirmed": "已正式关联 · 解除关联不会删除原始资料",
       "noSourceLink": "未提供来源链接"
     },
     "capture": {
@@ -5604,11 +5607,21 @@
       "matter_retry": "失败重试"
     },
     "toast": {
-      "saved": "事项已更新",
       "saveFailed": "事项更新失败",
       "createFailed": "事项创建失败",
-      "deleteFailed": "事项删除失败"
+      "deleteFailed": "事项删除失败",
+      "created": "事项已创建 · 只有标题是必填的，其余可以随后补齐",
+      "reviewAccepted": "已接受 {count} 项变化，当前状态已更新",
+      "reviewRejected": "已拒绝 · 正式状态保持不变，提案与理由已留档",
+      "agentRuleSaved": "跟进规则已保存 · {label}",
+      "transition": {
+        "archive": "已归档 · 归档与业务状态正交",
+        "reopen": "已取消归档 · 业务状态不变",
+        "trash": "已移到回收站 · 关联的邮件与外部文档不受影响",
+        "restore": "已从回收站恢复 · 业务状态不变"
+      }
     },
+    "undo": { "action": "撤销" },
     "shell": {
       "tagsTitle": "标签",
       "footnoteLocal": "本地 SQLite · 单人单机",

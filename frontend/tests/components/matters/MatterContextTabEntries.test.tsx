@@ -25,6 +25,8 @@ const { navigate, listRelations, deleteStakeholder, unlinkResource, list } = vi.
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
 vi.mock('@shared/components/matters/hooks', () => ({
+  // G-33 —— `useMatterUndoToast` 经这条通道执行撤销；本用例不点撤销，给个哑实现即可。
+  useMatterChatApi: () => ({ contextSnapshot: vi.fn(), applyUndo: vi.fn() }),
   useMattersApi: () => ({
     listRelations,
     deleteStakeholder,

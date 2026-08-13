@@ -23,6 +23,7 @@ import type {
   MatterPriority
 } from '@shared/api/types/matter'
 import { SegmentedControl } from '@shared/components/ui/segmented'
+import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import {
   Select,
   SelectContent,
@@ -185,7 +186,14 @@ export function MatterCreateDialog({
     }
   }, [api, description, linkScope, open, source, title])
 
-  if (!open) return null
+  // G-32 —— 入场遮罩 fadeIn + 卡片 popIn，走仓库统一动效通道（reduced-motion 内置短路）。
+  // 关闭期间表单字段不会被清（上面那个 effect 的 `!open` 分支只中止调研请求），退场动画
+  // 期间内容不塌。
+  const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
+    card: '[data-anim-card]'
+  })
+
+  if (!shouldRender) return null
 
   const submit = (): void => {
     const trimmedTitle = title.trim()
@@ -288,8 +296,13 @@ export function MatterCreateDialog({
   }
 
   return (
-    <div className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4" role="presentation">
+    <div
+      ref={scopeRef}
+      className="fixed inset-0 z-50 grid place-items-center bg-black/45 p-4"
+      role="presentation"
+    >
       <section
+        data-anim-card
         role="dialog"
         aria-modal="true"
         aria-labelledby="matter-create-title"

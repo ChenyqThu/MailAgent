@@ -252,6 +252,10 @@ export function MattersWorkspace(): React.ReactElement | null {
       await queryClient.invalidateQueries({ queryKey: qk.matters.list() })
       selectMatter(result.matter?.public_id ?? null)
       setView('all')
+      // G-33 —— 设计 §2.23：创建后的这一句同时是「其余可以随后补齐」的教学位。
+      // 🔴 不带撤销：后端确实给了「移入废纸篓」的 undo descriptor，但这里刚刚把用户**导航到
+      // 了新建的事项详情**，撤销等于当场把他正看着的东西删掉；设计那张表也没给创建配撤销。
+      toastSuccess(t('matters.toast.created'))
     },
     onError: (error) => toastError(t('matters.toast.createFailed'), errorMessage(error))
   })
