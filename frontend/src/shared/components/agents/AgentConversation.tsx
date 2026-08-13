@@ -863,9 +863,9 @@ export function AgentConversation({
                   contextChip={contextChips}
                   pendingSlot={pendingSlotContent}
                   runStatusSlot={runStatusSlot}
-                  // 0812 G-20 —— 事项对话的空态与脚注（非事项对话两者为 null → 通用现状）。
+                  // 0812 G-20 —— 事项对话的空态（非事项对话为 null → 通用现状）。
+                  // D15（0813 dogfood）：输入区下的「对话历史不是正式事项知识…」脚注已删。
                   welcomeOverride={matter.welcome ?? undefined}
-                  composerFootnote={matter.footnote}
                 />
               </MatterChatSurfaceContext.Provider>
             </AiSdkRuntimeProvider>

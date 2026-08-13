@@ -94,14 +94,22 @@ function timelineIcon(kind: string): LucideIcon {
   return Circle // 设计稿兜底 'dot'
 }
 
-/** 进展节点的 tone 色板（设计 `PROG_KIND[*].color` 的 token 化：圆节点边框取 40% alpha）。 */
+/**
+ * 进展节点的 tone 色板（设计 `PROG_KIND[*].color` 的 token 化）。
+ *
+ * 🔴 **只上色，不给描边**（D13）。设计里节点确实带一圈 `alpha(c, 0.4)` 的发丝边，但它的
+ * 圆底 `rgb(var(--ink-0))` **与详情页背景完全同色**、看不见，读起来只有「一个带淡色轮廓的
+ * 图标」。本仓的详情壳是 `bg-ink-0/35`（半透，压在玻璃壁纸上），同一个不透明圆底在这里是
+ * 实打实的一块色，叠上描边就成了 owner 报的「图标多了外圈」。圆底得留着盖住贯穿竖线，
+ * 于是去掉的是描边那一层。
+ */
 const PROGRESS_TONE = {
-  ai: 'border-ai/40 text-ai',
-  info: 'border-info/40 text-info',
-  ok: 'border-ok/40 text-ok',
-  warn: 'border-warn/40 text-warn',
-  crit: 'border-crit/40 text-crit',
-  neutral: 'border-ink-border text-ink-fg-3'
+  ai: 'text-ai',
+  info: 'text-info',
+  ok: 'text-ok',
+  warn: 'text-warn',
+  crit: 'text-crit',
+  neutral: 'text-ink-fg-3'
 } as const
 
 interface ProgressVisual {
@@ -355,9 +363,10 @@ function TimelineRow({
 
   return (
     <div className="relative flex gap-[11px] py-[7px]" data-testid="matter-timeline-entry">
+      {/* D13 —— 圆底只为盖住贯穿竖线，**不描边**（见 PROGRESS_TONE 的说明）。 */}
       <span
         className={cn(
-          'z-[1] grid size-[25px] shrink-0 place-items-center rounded-full border bg-ink-0',
+          'z-[1] grid size-[25px] shrink-0 place-items-center rounded-full bg-ink-0',
           visual.tone
         )}
       >

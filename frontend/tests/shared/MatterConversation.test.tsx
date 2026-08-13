@@ -172,7 +172,7 @@ afterEach(cleanup)
 describe('useMatterConversation — 锚点与 chip', () => {
   test('dock 带的种子在空会话上变成一枚可移除 chip；移除后不再自动 seed', async () => {
     renderBinding({ seed: MATTER })
-    expect(screen.getByText('MAT-0042 Vendor launch')).toBeTruthy()
+    expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy()
     expect(screen.getByTestId('harness').dataset.anchor).toBe('MAT-0042')
     // 写入回执 surface 随锚点在场 —— 没有它 matter 写入卡会退化成通用工具卡。
     expect(screen.getByTestId('harness').dataset.surface).toBe('MAT-0042')
@@ -180,7 +180,7 @@ describe('useMatterConversation — 锚点与 chip', () => {
     expect(screen.getByTestId('harness').dataset.prompts).toBe('present')
 
     fireEvent.click(screen.getByRole('button', { name: '移除上下文' }))
-    await waitFor(() => expect(screen.queryByText('MAT-0042 Vendor launch')).toBeNull())
+    await waitFor(() => expect(screen.queryByText('MAT-0042 · Vendor launch')).toBeNull())
     // 种子被移除 → 这轮回落成普通对话（锚点没了，检索范围控件也跟着收起）。
     expect(screen.getByTestId('harness').dataset.anchor).toBe('')
     expect(screen.queryByTestId('matter-chat-controls')).toBeNull()
@@ -188,7 +188,7 @@ describe('useMatterConversation — 锚点与 chip', () => {
 
   test('会话已经开始后不再采纳种子（chip 只在空会话上 seed）', () => {
     renderBinding({ seed: MATTER, chatIsEmpty: false })
-    expect(screen.queryByText('MAT-0042 Vendor launch')).toBeNull()
+    expect(screen.queryByText('MAT-0042 · Vendor launch')).toBeNull()
     expect(screen.getByTestId('harness').dataset.anchor).toBe('')
   })
 
@@ -196,7 +196,7 @@ describe('useMatterConversation — 锚点与 chip', () => {
     // 关键回归：`anchor_type='matter'` 的历史会话此前会以 general 渲染 —— 丢事项上下文，
     // 也丢写入回执 surface。sessionMatter 就是那条修复路径的输入。
     renderBinding({ seed: null, sessionMatter: MATTER, chatIsEmpty: false })
-    expect(screen.getByText('MAT-0042 Vendor launch')).toBeTruthy()
+    expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy()
     expect(screen.getByTestId('harness').dataset.anchor).toBe('MAT-0042')
   })
 })
@@ -272,7 +272,7 @@ describe('useMatterConversation — 身份未就绪时整个绑定惰性', () =>
   test('🔴 unresolved 时**绝不**退回去采纳 dock 带的种子（那会绑到另一件事上）', () => {
     // 半个事项 UI（chip 显示 B、这条历史其实锚在 A）比没有更危险：它让用户以为上下文就位了。
     renderBinding({ seed: MATTER, sessionMatterUnresolved: true, chatIsEmpty: true })
-    expect(screen.queryByText('MAT-0042 Vendor launch')).toBeNull()
+    expect(screen.queryByText('MAT-0042 · Vendor launch')).toBeNull()
   })
 })
 
@@ -284,14 +284,14 @@ describe('useMatterConversation — 快照 fail-soft', () => {
     renderBinding({ seed: MATTER })
     await waitFor(() => expect(screen.getByText('上下文计数暂时读不到，不影响对话。')).toBeTruthy())
     expect(screen.getByTestId('matter-chat-controls')).toBeTruthy()
-    expect(screen.getByText('MAT-0042 Vendor launch')).toBeTruthy()
+    expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy()
   })
 })
 
 describe('useMatterConversation — 检索范围开关已移除（恒全库）', () => {
   test('composer 上方不再有任何检索范围控件', async () => {
     renderBinding({ seed: MATTER })
-    await waitFor(() => expect(screen.getByText('MAT-0042 Vendor launch')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy())
     // 0812 owner拍板：「单搞一个事项的检索范围没意义」。控件、两句说明、以及它背后的
     // recordChatScope 审计链一并退役 —— 事项对话恒全库。
     for (const label of ['检索范围', '本事项', '全库', '已允许全库检索', '检索范围限于本事项']) {

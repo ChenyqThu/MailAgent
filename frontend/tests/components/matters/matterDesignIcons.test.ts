@@ -147,6 +147,26 @@ describe('详情头 chips + tab 图标 = 设计原型 helpers.jsx 的 MATTER_STA
     })
   })
 
+  it('条目类型 6 档逐位对应（D8：状态 tab 分节此前一个 icon 都没有）', () => {
+    const actual = extractMap(source, 'export const MATTER_ITEM_KIND_ICONS', [
+      'action',
+      'milestone',
+      'decision',
+      'blocker',
+      'question',
+      'note'
+    ])
+    // 右侧是原型 helpers.jsx `ITEM_KIND[*].icon` 写的语义名。
+    expect(actual).toEqual({
+      action: 'ListChecks', // listcheck
+      milestone: 'Milestone', // milestone
+      decision: 'Gavel', // gavel
+      blocker: 'Ban', // ban
+      question: 'HelpCircle', // helpcircle
+      note: 'FileText' // note —— 原型画的是「带折角与横线的文档」，不是便签
+    })
+  })
+
   it('status / priority 的 tone 与原型同档（chip 不再是 8 档一个颜色）', () => {
     // tone 表的值是字符串字面量、不是组件名，所以不走 extractMap，直接钉内容（同 TIMELINE_TONE）。
     const statusStart = source.indexOf('export const MATTER_STATUS_TONES')
@@ -205,15 +225,18 @@ describe('时间轴节点 = 设计原型 detail.jsx 的 TL_ICON / TL_TONE', () =
 
   it('进展节点按 PROG_KIND 定色（G-18 两层复刻后，主视图节点色来自 kind 不来自 actor）', () => {
     // PROGRESS_TONE 的值是 class 字符串（不是组件名），所以不走 extractMap，直接钉内容。
-    // 设计 progress.jsx `PROG_KIND[*].color`：--c-ai / --c-ok / --c-warn / --c-crit，
-    // 圆节点边框取 40% alpha。
+    // 设计 progress.jsx `PROG_KIND[*].color`：--c-ai / --c-ok / --c-warn / --c-crit。
+    // 🔴 **只上色不描边**（D13，2026-08-13 dogfood）：设计里那圈 40% alpha 发丝边成立的前提是
+    // 圆底与页面同色、看不见；本仓详情壳是半透的 `bg-ink-0/35`，不透明圆底 + 描边被 owner
+    // 读成「图标多了外圈」。改动前这里钉的是 `border-*\/40`，一并改判 —— 描边回归即红。
     const start = source.indexOf('const PROGRESS_TONE')
     expect(start, '找不到 PROGRESS_TONE —— 表被改名或挪走了，闸失效').toBeGreaterThan(-1)
     const body = source.slice(start, start + 400)
-    expect(body).toMatch(/ai:\s*'border-ai\/40/)
-    expect(body).toMatch(/ok:\s*'border-ok\/40/)
-    expect(body).toMatch(/warn:\s*'border-warn\/40/)
-    expect(body).toMatch(/crit:\s*'border-crit\/40/)
+    expect(body).toMatch(/ai:\s*'text-ai'/)
+    expect(body).toMatch(/ok:\s*'text-ok'/)
+    expect(body).toMatch(/warn:\s*'text-warn'/)
+    expect(body).toMatch(/crit:\s*'text-crit'/)
+    expect(body, 'D13：节点不再描边').not.toMatch(/border-/)
     // 操作日志弹窗的 actor 配色沿设计 AuditLogModal：agent=--c-ai / me=--c-accent / system=fg-3。
     const auditStart = source.indexOf('const AUDIT_ACTOR_TONE')
     expect(auditStart, '找不到 AUDIT_ACTOR_TONE —— 表被改名或挪走了，闸失效').toBeGreaterThan(-1)

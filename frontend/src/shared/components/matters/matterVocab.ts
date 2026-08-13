@@ -6,10 +6,15 @@ import {
   Calendar,
   CheckCircle2,
   Eye,
+  FileText,
+  Gavel,
+  HelpCircle,
   History,
   Hourglass,
   Inbox,
   Layers,
+  ListChecks,
+  Milestone,
   Minus,
   Play,
   Target,
@@ -20,6 +25,7 @@ import {
 
 import type {
   MatterHealth,
+  MatterItemKind,
   MatterItemStatus,
   MatterPriority,
   MatterStatus
@@ -77,6 +83,33 @@ export const MATTER_HEALTH_TEXT_CLASS: Record<MatterHealth, string> = {
   on_track: 'text-ok',
   at_risk: 'text-warn',
   off_track: 'text-crit'
+}
+
+/**
+ * 条目类型的 icon（设计 `helpers.jsx` 的 `ITEM_KIND[*].icon`）—— D8：状态 tab 的六个分节
+ * 此前是**裸标题、一个 icon 都没有**，设计里每节标签前都带本类型的符号。
+ *
+ * `note` 取 `FileText`：设计的 `note` path 画的就是「带折角与横线的文档」
+ * （helpers.jsx:60），不是便签。与 `RESOURCE_KIND_ICONS.doc` 同符号但分属两张表。
+ */
+export const MATTER_ITEM_KIND_ICONS: Record<MatterItemKind, LucideIcon> = {
+  action: ListChecks, // listcheck
+  milestone: Milestone, // milestone
+  decision: Gavel, // gavel
+  blocker: Ban, // ban
+  question: HelpCircle, // helpcircle
+  note: FileText // note
+}
+
+/** 设计 `ITEM_KIND[*].color`：action=--c-accent / milestone=--c-info / decision=--c-ai /
+ *  blocker=--c-crit / question=--c-warn / note=--ink-fg-2。 */
+export const MATTER_ITEM_KIND_TEXT_CLASS: Record<MatterItemKind, string> = {
+  action: 'text-coral',
+  milestone: 'text-info',
+  decision: 'text-ai',
+  blocker: 'text-crit',
+  question: 'text-warn',
+  note: 'text-ink-fg-2'
 }
 
 /** 设计 `detail.jsx` 的 `ITEM_STATUS[*].tone`（done/canceled 在行内不出 Pip，仍给全值域）。 */

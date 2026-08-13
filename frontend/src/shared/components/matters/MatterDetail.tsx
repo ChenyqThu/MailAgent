@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -11,6 +11,7 @@ import {
   ChevronUp,
   ChevronRight,
   Clock,
+  FileCheck,
   Hourglass,
   Link2,
   MessageSquare,
@@ -21,6 +22,7 @@ import {
   RefreshCw,
   RotateCcw,
   Save,
+  Target,
   Trash2,
   Sparkles,
   TriangleAlert,
@@ -57,6 +59,7 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/components/ui/select'
+import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
@@ -93,6 +96,8 @@ import {
   MATTER_DETAIL_TAB_ICONS,
   MATTER_HEALTH_ICONS,
   MATTER_HEALTH_TEXT_CLASS,
+  MATTER_ITEM_KIND_ICONS,
+  MATTER_ITEM_KIND_TEXT_CLASS,
   MATTER_ITEM_STATUS_TONES,
   MATTER_PRIORITY_TONES,
   MATTER_STATUS_ICONS,
@@ -141,8 +146,6 @@ interface MatterDetailProps {
 
 type DetailTab = 'state' | 'context' | 'timeline' | 'runs'
 
-const DETAIL_TYPE_UNSET = '__detail_type_unset__'
-const DETAIL_TYPE_CUSTOM = '__detail_type_custom__'
 const DATE_INPUT_RE = /^(\d{4})-(\d{2})-(\d{2})$/
 
 function formatDateInputValue(timestamp: number | null): string {
@@ -203,6 +206,12 @@ export function MatterDetail({
   const [now] = useState(() => Date.now())
   const [overlayRunId, setOverlayRunId] = useState<number | null>(null)
   const [agentConfigOpen, setAgentConfigOpen] = useState(false)
+  // D7 —— tab 面板的进场（见下方渲染处的说明）。`deps:[tab]` 让每次切 tab 重跑一次。
+  const tabPanelAnim = useEnterAnimation<HTMLDivElement>({
+    from: { autoAlpha: 0, y: 4 },
+    duration: DUR.fast,
+    deps: [tab]
+  })
   // G-32 —— 头部「更多」下拉按菜单档 popIn（从触发按钮那侧长出来），永久删除确认按模态档
   // fadeIn + popIn。两者的内容都只依赖 `matter`（关闭期间不会塌），故进退场都做。
   const moreMenuAnim = useExitAnimation<HTMLDivElement>(moreOpen, {
@@ -213,6 +222,27 @@ export function MatterDetail({
   const deleteDialogAnim = useExitAnimation<HTMLDivElement>(deleteOpen, {
     card: '[data-anim-card]'
   })
+  // D14（0813 dogfood）—— 「更多」菜单点外部/按 Esc 收起。此前只有再点一次触发器能关：
+  // 点正文、切 tab、滚动都留着它挂在右上角。形态照 `EffortPicker` 的先例（同样是
+  // `useExitAnimation` 驱动的自绘菜单）：mousedown 判包含 + keydown 判 Escape，
+  // 都挂 document 且只在打开期间挂。
+  const moreAnchorRef = useRef<HTMLDivElement>(null)
+  useEffect(() => {
+    if (!moreOpen) return undefined
+    const onPointer = (event: MouseEvent): void => {
+      const anchor = moreAnchorRef.current
+      if (anchor && !anchor.contains(event.target as Node)) setMoreOpen(false)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setMoreOpen(false)
+    }
+    document.addEventListener('mousedown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return (): void => {
+      document.removeEventListener('mousedown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [moreOpen])
   const { matterAgentEnabled } = useMatterFlags()
   const runsQuery = useMatterRuns(matterId, matterAgentEnabled)
   const updatesQuery = useMatterUpdates(matterId, 'pending', matterAgentEnabled)
@@ -745,8 +775,10 @@ export function MatterDetail({
                   saving={patch.isPending}
                   onSave={(waiting_context) => patch.mutate({ waiting_context })}
                 />
-                {/* 设计 detail.jsx:162 —— 一个 flex spacer 把跟进 Agent 推到行尾。 */}
-                <span className="flex-1" />
+                {/* D9（0813 dogfood）—— 右对齐改用 pill 自己的 `ml-auto`，不再靠一个
+                    `flex-1` 的空 spacer：这一行是 `flex-wrap` 的，spacer 只在「全部挤得进
+                    同一行」时才把 pill 推到行尾；一旦 chip 多到换行，spacer 与 pill 就分处
+                    两行，pill 反而贴着左边。`ml-auto` 对**所在那一行**恒成立。 */}
                 {/* 🔴 pill 必须是**按钮**（设计 detail.jsx:163 `onClick={ctx.onOpenAgent}`）：
                     它此前是个纯 <span>，而唯一的跟进配置 UI 在 ≥1400px 才渲染的右栏里 ——
                     窗口小一点就完全没有入口（0812 dogfood「无法切换跟进的方式」）。 */}
@@ -818,31 +850,45 @@ export function MatterDetail({
                 <Play size={13} /> {t('matters.runs.runNow')}
               </button>
             ) : null}
-            <div className="relative">
+            <div ref={moreAnchorRef} className="relative">
               <button
                 type="button"
                 onClick={() => setMoreOpen((value) => !value)}
+                aria-haspopup="menu"
+                aria-expanded={moreOpen}
+                aria-label={t('matters.detail.more')}
+                title={t('matters.detail.more')}
                 className="rounded-[var(--r-ctl)] p-2 hover:bg-ink-3"
               >
                 <MoreHorizontal size={17} />
               </button>
               {moreMenuAnim.shouldRender ? (
+                /* D14 —— 选中任一项也收起菜单（设计 detail.jsx:13 `onClose(); fn();`）。
+                   点外部收起挂在上面那个 effect 上。 */
                 <div
                   ref={moreMenuAnim.scopeRef}
+                  role="menu"
+                  aria-label={t('matters.detail.more')}
                   className="absolute right-0 top-10 z-20 w-48 rounded-[var(--r-card)] border border-ink-border bg-ink-1 p-1 shadow-md"
                 >
                   {matter.archived_at === null && matter.deleted_at === null ? (
                     <MenuButton
                       icon={<Archive size={14} />}
                       label={t('matters.actions.archive')}
-                      onClick={() => transition.mutate('archive')}
+                      onClick={() => {
+                        setMoreOpen(false)
+                        transition.mutate('archive')
+                      }}
                     />
                   ) : null}
                   {matter.archived_at !== null && matter.deleted_at === null ? (
                     <MenuButton
                       icon={<RotateCcw size={14} />}
                       label={t('matters.actions.restoreArchive')}
-                      onClick={() => transition.mutate('reopen')}
+                      onClick={() => {
+                        setMoreOpen(false)
+                        transition.mutate('reopen')
+                      }}
                     />
                   ) : null}
                   {matter.deleted_at === null ? (
@@ -850,20 +896,29 @@ export function MatterDetail({
                       icon={<Trash2 size={14} />}
                       label={t('matters.actions.trash')}
                       danger
-                      onClick={() => transition.mutate('trash')}
+                      onClick={() => {
+                        setMoreOpen(false)
+                        transition.mutate('trash')
+                      }}
                     />
                   ) : (
                     <>
                       <MenuButton
                         icon={<RotateCcw size={14} />}
                         label={t('matters.actions.restore')}
-                        onClick={() => transition.mutate('restore')}
+                        onClick={() => {
+                          setMoreOpen(false)
+                          transition.mutate('restore')
+                        }}
                       />
                       <MenuButton
                         icon={<Trash2 size={14} />}
                         label={t('matters.actions.permanentDelete')}
                         danger
-                        onClick={() => setDeleteOpen(true)}
+                        onClick={() => {
+                          setMoreOpen(false)
+                          setDeleteOpen(true)
+                        }}
                       />
                     </>
                   )}
@@ -959,73 +1014,80 @@ export function MatterDetail({
               onAction={onAttentionAction}
             />
           </div>
-          {tab === 'state' ? (
-            <div className="space-y-5">
-              {/* 设计 detail.jsx:663-667 —— 「背景与目标」独立成卡、排在「当前状态」之前
+          {/* D7（0813 dogfood）—— tab 切换过渡。此前是硬替换：点一下整块内容当场换人，
+              读起来像跳帧。用 `useEnterAnimation`（进场半条，退场没有意义 —— 旧 tab 的数据
+              随 `tab` 一起消失，接退场要把四份数据全保活）+ `key={tab}` 保证每次切换都重新
+              挂载、动效从头播。位移只有 4px、只动 transform/opacity，不碰高度（§1 红线）；
+              reduced-motion 由 hook 内部短路。 */}
+          <div key={tab} ref={tabPanelAnim}>
+            {tab === 'state' ? (
+              <div className="space-y-5">
+                {/* 设计 detail.jsx:663-667 —— 「背景与目标」独立成卡、排在「当前状态」之前
                   （补充规格 §5.1）。这两张卡此前挤在同一张 StateCard 里，且顺序相反。 */}
-              <GoalCard
+                <GoalCard
+                  matter={matter}
+                  saving={patch.isPending}
+                  onDescriptionSave={(description, onSaved) =>
+                    patch.mutate({ description }, { onSuccess: onSaved })
+                  }
+                  onGoalChecksSave={(goal_checks, onSaved) =>
+                    patch.mutate({ goal_checks }, { onSuccess: onSaved })
+                  }
+                />
+                <StateCard
+                  matter={matter}
+                  pendingCount={updates.length}
+                  onReview={() => setReviewId(updates[0]?.id ?? null)}
+                  saving={patch.isPending}
+                  now={now}
+                  locale={i18n.language || 'zh-CN'}
+                  onSummarySave={(current_summary, onSaved) =>
+                    patch.mutate({ current_summary }, { onSuccess: onSaved })
+                  }
+                  // G-10 —— 「重新生成摘要」实质 = 触发一次跟进 run；flag 关时只留新鲜度指示。
+                  onRegenerate={matterAgentEnabled ? () => startFollowUpRun() : undefined}
+                  regenerating={Boolean(activeRun) || startRun.isPending}
+                />
+                <ItemGroups
+                  items={items}
+                  stakeholders={stakeholderItems}
+                  resources={resourceItems}
+                  now={now}
+                  locale={i18n.language || 'zh-CN'}
+                  busy={renameItem.isPending || removeItem.isPending || updateItem.isPending}
+                  onToggle={(item) =>
+                    updateItem.mutate({ item, status: item.status === 'done' ? 'open' : 'done' })
+                  }
+                  onAdd={(kind) => {
+                    setAddKind(kind)
+                    setAddOpen(true)
+                  }}
+                  onRename={(item, title) => renameItem.mutate({ item, title })}
+                  onDelete={(item) => removeItem.mutate(item)}
+                  onOpenResource={setDrawerItem}
+                />
+              </div>
+            ) : tab === 'context' ? (
+              <MatterContextTab
                 matter={matter}
-                saving={patch.isPending}
-                onDescriptionSave={(description, onSaved) =>
-                  patch.mutate({ description }, { onSuccess: onSaved })
-                }
-                onGoalChecksSave={(goal_checks, onSaved) =>
-                  patch.mutate({ goal_checks }, { onSuccess: onSaved })
-                }
-              />
-              <StateCard
-                matter={matter}
-                pendingCount={updates.length}
-                onReview={() => setReviewId(updates[0]?.id ?? null)}
-                saving={patch.isPending}
-                now={now}
-                locale={i18n.language || 'zh-CN'}
-                onSummarySave={(current_summary, onSaved) =>
-                  patch.mutate({ current_summary }, { onSuccess: onSaved })
-                }
-                // G-10 —— 「重新生成摘要」实质 = 触发一次跟进 run；flag 关时只留新鲜度指示。
-                onRegenerate={matterAgentEnabled ? () => startFollowUpRun() : undefined}
-                regenerating={Boolean(activeRun) || startRun.isPending}
-              />
-              <ItemGroups
                 items={items}
-                stakeholders={stakeholderItems}
                 resources={resourceItems}
-                now={now}
-                locale={i18n.language || 'zh-CN'}
-                busy={renameItem.isPending || removeItem.isPending || updateItem.isPending}
-                onToggle={(item) =>
-                  updateItem.mutate({ item, status: item.status === 'done' ? 'open' : 'done' })
-                }
-                onAdd={(kind) => {
-                  setAddKind(kind)
-                  setAddOpen(true)
-                }}
-                onRename={(item, title) => renameItem.mutate({ item, title })}
-                onDelete={(item) => removeItem.mutate(item)}
+                stakeholders={stakeholderItems}
                 onOpenResource={setDrawerItem}
+                onTogglePin={(item) => toggleResourcePin.mutate(item)}
+                onChanged={() => void refresh()}
               />
-            </div>
-          ) : tab === 'context' ? (
-            <MatterContextTab
-              matter={matter}
-              items={items}
-              resources={resourceItems}
-              stakeholders={stakeholderItems}
-              onOpenResource={setDrawerItem}
-              onTogglePin={(item) => toggleResourcePin.mutate(item)}
-              onChanged={() => void refresh()}
-            />
-          ) : tab === 'runs' ? (
-            <MatterRunsPane
-              runs={runs}
-              updates={updates}
-              onReview={setReviewId}
-              onCancel={(runId) => cancelRun.mutate(runId)}
-            />
-          ) : (
-            <MatterTimeline events={timeline} />
-          )}
+            ) : tab === 'runs' ? (
+              <MatterRunsPane
+                runs={runs}
+                updates={updates}
+                onReview={setReviewId}
+                onCancel={(runId) => cancelRun.mutate(runId)}
+              />
+            ) : (
+              <MatterTimeline events={timeline} />
+            )}
+          </div>
         </div>
 
         <AddItemModal
@@ -1202,11 +1264,12 @@ function StatusMenu({
       <SelectTrigger
         aria-label={t('matters.detail.status')}
         className={cn(
-          'h-auto w-auto justify-start gap-1 whitespace-nowrap rounded-[var(--r-ctl)] px-2 py-1 text-meta',
+          'h-auto w-auto justify-start gap-1 whitespace-nowrap rounded-[var(--r-ctl)] px-[7px] py-[3px] text-meta leading-none',
           // 🔴 icon 与文字必须是 trigger 的**直接**子节点：base 上有 `[&>span]:line-clamp-1`
           // （0,2,0 特异性），包一层 span 会被它把 display 改成 -webkit-box，gap 直接失效。
-          // 末位那个 svg 是 trigger 自带的 chevron，单独收小。
-          '[&>svg:last-child]:size-3 [&>svg:last-child]:opacity-50',
+          // D4 —— 末位那个 svg 是 trigger 自带的 chevron，**藏掉**：设计 detail.jsx:190-192 的
+          // 状态就是一枚裸 `StatusChip`（Pip），没有下拉箭头（同 HealthMenu 的处理）。
+          '[&>svg:last-child]:hidden',
           MATTER_TONE_CHIP_CLASS[MATTER_STATUS_TONES[value]]
         )}
       >
@@ -1284,9 +1347,13 @@ function HealthMenu({
 }
 
 /**
- * 优先级（设计 detail.jsx:146-155 → 单个 mono 小标签按 tone 上色 + chevron，菜单每项前一个
- * 7px 彩色圆点）。🔴 改动前是 SegmentedControl，四档全平铺、占宽四倍、无颜色。
- * 档位文案仍是 P0…P3 —— 设计源 `PRIORITY[*].label` 本身就是这四个字面量，不发明中文档位名。
+ * 优先级（设计 detail.jsx:194-203 → `PriorityTag` 是一枚 mono 小标签按 tone 上色，
+ * **chevron 在标签外面**：8px、`--ink-fg-3`、不带底色。菜单每项前一个 7px 彩色圆点）。
+ *
+ * 🔴 D4 —— 改动前 chevron 是 trigger 自带的那个，长在**标签内部**、12px、继承 tone 色，
+ * 把一枚本该只有「P0」两个字宽的标签撑成一块带箭头的按钮。故 trigger 退成透明壳，
+ * tone chip 收进内层 —— 用 `<div>` 而不是 `<span>`：base 上的 `[&>span]:line-clamp-1`
+ * 会把直接 span 子节点的 display 改成 -webkit-box（同 StatusMenu 注释那条坑）。
  */
 function PriorityMenu({
   value,
@@ -1301,12 +1368,19 @@ function PriorityMenu({
       <SelectTrigger
         aria-label={t('matters.detail.priority')}
         className={cn(
-          'h-auto w-auto justify-start gap-1 rounded-[var(--r-ctl)] px-1.5 py-1 font-mono text-[10.5px] font-semibold uppercase tracking-[0.02em]',
-          '[&>svg:last-child]:size-3 [&>svg:last-child]:opacity-50',
-          MATTER_TONE_CHIP_CLASS[MATTER_PRIORITY_TONES[value]]
+          'h-auto w-auto justify-start gap-[3px] rounded-[var(--r-ctl)] border-0 !bg-transparent p-0',
+          'transition-opacity duration-fast ease-standard hover:opacity-80',
+          '[&>svg:last-child]:size-2 [&>svg:last-child]:shrink-0 [&>svg:last-child]:text-ink-fg-3 [&>svg:last-child]:opacity-100'
         )}
       >
-        {value.toUpperCase()}
+        <div
+          className={cn(
+            'rounded-[var(--r-ctl)] border px-[5px] py-[2px] font-mono text-[10.5px] font-semibold uppercase leading-none tracking-[0.02em]',
+            MATTER_TONE_CHIP_CLASS[MATTER_PRIORITY_TONES[value]]
+          )}
+        >
+          {value.toUpperCase()}
+        </div>
       </SelectTrigger>
       <SelectContent>
         {MATTER_PRIORITIES.map((priority) => (
@@ -1341,16 +1415,19 @@ function AgentPill({
   onOpen(): void
 }): React.ReactElement {
   const { t } = useTranslation()
+  // D9 —— 未绑定态照设计 detail.jsx:211-216 也是 **AI 色系**（虚线 `--c-ai/0.45` 边 +
+  // `--c-ai/0.06` 底 + ai 前景），不是灰色。「还没设置自动跟进」是个邀请，灰掉它等于
+  // 把这个入口藏起来；sparkles 两态恒 ai 色同理。
   const skin = cn(
-    'inline-flex items-center gap-1.5 rounded-[var(--r-pill)] px-2 py-1 text-meta',
+    'ml-auto inline-flex items-center gap-1.5 rounded-[var(--r-pill)] border px-2.5 py-1 text-meta',
     bound
-      ? 'border border-ai/20 bg-ai/[0.08] text-ink-fg-1'
-      : 'border border-dashed border-ink-border text-ink-fg-2'
+      ? 'border-ai/20 bg-ai/[0.08] text-ink-fg-1'
+      : 'border-dashed border-ai/45 bg-ai/[0.06] text-ai'
   )
   if (!interactive) {
     return (
       <span className={skin}>
-        <Sparkles size={11} className={bound ? 'text-ai' : undefined} />
+        <Sparkles size={11} className="shrink-0 text-ai" />
         {label}
       </span>
     )
@@ -1360,23 +1437,32 @@ function AgentPill({
       type="button"
       onClick={onOpen}
       title={t('matters.agentConfig.open')}
-      className={cn(skin, 'transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.05]')}
+      className={cn(
+        skin,
+        'transition-colors duration-fast ease-standard',
+        bound ? 'hover:bg-ai/[0.14]' : 'hover:bg-ai/[0.12]'
+      )}
     >
-      <Sparkles size={11} className={bound ? 'text-ai' : undefined} />
+      <Sparkles size={11} className="shrink-0 text-ai" />
       {label}
-      <ChevronDown size={9} className="opacity-60" />
+      <ChevronDown size={9} className="shrink-0 opacity-60" />
     </button>
   )
 }
 
 /**
- * 类型切换（设计 detail.jsx:111-122 → 元信息行里的**裸文本按钮** + 8px chevron，只在
- * hover/打开时才浮出一层 6% 底；负 margin 抵掉 padding，让它在文字流里不额外占宽）。
- * 🔴 改动前是常驻 pill 的 shadcn Select（`min-w-24` + 完整边框 + 输入框底），是这一行里
- * 视觉最重的元素，与刚改轻的 status/health/priority 三个 chip 不匹配。
+ * 类型切换（设计 detail.jsx:158-170 的触发器 + 71-118 的 `TypeMenu`）。
  *
- * 「未指定类型」与「自定义类型」两个分支是实现侧比设计**多出来**的能力（设计只有 6 个
- * 固定值），保留 —— 这里只换触发器与菜单的形态。
+ * 触发器 = 元信息行里的**裸文本按钮** + 8px chevron，只在 hover/打开时才浮出一层 6% 底；
+ * 负 margin 抵掉 padding，让它在文字流里不额外占宽。
+ *
+ * 🔴 D4 —— 菜单改成设计的**搜索即筛选、没命中就现场新建**：改动前是 shadcn Select 的死列表
+ * 加一个「自定义…」项，选中它会在**元信息行里**长出一个输入框 + 两个按钮（把 `pub · 类型 ·
+ * 创建于…` 这行撑变形），且要先滚到列表底部才找得到。Radix Select 的 listbox 里塞不了搜索框，
+ * 所以这里自绘 —— 收起行为（点外部 / Esc）与「更多」菜单同一条实现。
+ *
+ * 设计里还有「每个类型后面的事项计数」与「删除未被使用的自定义类型」：本仓没有类型注册表，
+ * 计数与删除都无处可取，**不造** —— 类型就是 `matter.matter_type` 上的自由字符串。
  */
 function MatterTypeEditor({
   value,
@@ -1388,100 +1474,128 @@ function MatterTypeEditor({
   onChange(value: string | null): void
 }): React.ReactElement {
   const { t } = useTranslation()
-  const [customOpen, setCustomOpen] = useState(false)
-  const [customDraft, setCustomDraft] = useState('')
-  const isBuiltin = value !== null && BUILTIN_MATTER_TYPES.some((type) => type === value)
-  const selectValue = value === null ? DETAIL_TYPE_UNSET : isBuiltin ? value : value
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState('')
+  const anchorRef = useRef<HTMLDivElement>(null)
+  const menuAnim = useExitAnimation<HTMLDivElement>(open, {
+    backdrop: false,
+    from: { autoAlpha: 0, y: -4, scale: 0.98, transformOrigin: 'top left' },
+    enterDuration: DUR.fast
+  })
+
+  // 打开时清空上一次的搜索词（关闭期间不清 —— 退场还在播，清了会当场换内容）。
+  useEffect(() => {
+    if (open) setQuery('')
+  }, [open])
 
   useEffect(() => {
-    if (!customOpen) setCustomDraft(isBuiltin ? '' : (value ?? ''))
-  }, [customOpen, isBuiltin, value])
+    if (!open) return undefined
+    const onPointer = (event: MouseEvent): void => {
+      const anchor = anchorRef.current
+      if (anchor && !anchor.contains(event.target as Node)) setOpen(false)
+    }
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') setOpen(false)
+    }
+    document.addEventListener('mousedown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return (): void => {
+      document.removeEventListener('mousedown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [open])
 
-  const saveCustom = (): void => {
-    const next = customDraft.trim()
-    if (!next) return
-    onChange(next)
-    setCustomOpen(false)
+  const keyword = query.trim()
+  // 候选 = 预置 6 项 + 当前这条自定义值（它不在预置里时也要能被看见/选中）。
+  const allTypes = useMemo(() => {
+    const list: string[] = [...BUILTIN_MATTER_TYPES]
+    if (value !== null && !list.includes(value)) list.unshift(value)
+    return list
+  }, [value])
+  const matches = keyword
+    ? allTypes.filter((type) => type.toLowerCase().includes(keyword.toLowerCase()))
+    : allTypes
+  const exact = allTypes.some((type) => type === keyword)
+
+  const pick = (next: string | null): void => {
+    setOpen(false)
+    if (next !== value) onChange(next)
   }
 
+  const row = (
+    key: string,
+    label: string,
+    selected: boolean,
+    onSelect: () => void
+  ): React.ReactElement => (
+    <button
+      key={key}
+      type="button"
+      role="option"
+      aria-selected={selected}
+      onClick={onSelect}
+      className={cn(
+        'flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2 py-1.5 text-left text-meta transition-colors duration-fast ease-standard',
+        selected ? 'bg-coral/10 text-ink-fg' : 'text-ink-fg-1 hover:bg-ink-fg/[0.05]'
+      )}
+    >
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {selected ? <Check size={12} className="shrink-0 text-coral" /> : null}
+    </button>
+  )
+
   return (
-    <div className="flex flex-wrap items-center gap-1.5">
-      <Select
-        value={selectValue}
+    <div ref={anchorRef} className="relative inline-flex">
+      <button
+        type="button"
         disabled={busy}
-        onValueChange={(next) => {
-          if (next === DETAIL_TYPE_CUSTOM) {
-            setCustomOpen(true)
-            return
-          }
-          setCustomOpen(false)
-          onChange(next === DETAIL_TYPE_UNSET ? null : next)
-        }}
+        onClick={() => setOpen((current) => !current)}
+        aria-haspopup="listbox"
+        aria-expanded={open}
+        aria-label={t('matters.detail.type')}
+        title={t('matters.detail.type')}
+        className={cn(
+          // 负 margin 抵消 padding：hover 底比文字大一圈，但按钮的外框仍与文字等宽，
+          // 于是它在 `pub · 类型 · 创建于…` 这行里不会撑开额外的间距（设计 margin:'-2px -5px'）。
+          'inline-flex items-center gap-[3px] whitespace-nowrap rounded-[var(--r-ctl)] -mx-[5px] -my-[2px] px-[5px] py-[2px]',
+          // 字号与颜色**跟随同行元信息**：用 inherit 而不是写死 ink-fg-2，这一行的颜色改了
+          // 它自动跟着改。
+          'text-meta text-inherit transition-colors duration-fast ease-standard',
+          'hover:bg-ink-fg/[0.06] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50',
+          open && 'bg-ink-fg/[0.06]'
+        )}
       >
-        <SelectTrigger
+        {value ?? t('matters.detail.typeUnset')}
+        <ChevronDown size={8} className="shrink-0 opacity-[0.55]" />
+      </button>
+      {menuAnim.shouldRender ? (
+        <div
+          ref={menuAnim.scopeRef}
+          role="listbox"
           aria-label={t('matters.detail.type')}
-          className={cn(
-            // 负 margin 抵消 padding：hover 底比文字大一圈，但按钮的外框仍与文字等宽，
-            // 于是它在 `pub · 类型 · 创建于…` 这行里不会撑开额外的间距（设计 margin:'-2px -5px'）。
-            'h-auto w-auto justify-start gap-[3px] whitespace-nowrap rounded-[var(--r-ctl)] border-0 -mx-[5px] -my-[2px] px-[5px] py-[2px]',
-            // 字号与颜色**跟随同行元信息**（base 自带 text-aux + text-ink-fg 会让它比邻居大一号、
-            // 深一档）。用 inherit 而不是写死 ink-fg-2：这一行的颜色改了它自动跟着改。
-            'text-meta text-inherit',
-            // `!` 压 SelectTrigger 自带的 authored `.input-surface`（见 matterVocab 里的说明：
-            // 它写在 `@tailwind utilities` 之后且不在 layer 里，必胜 utilities）——
-            // 设计要的是裸文本，只有 hover / 菜单打开时才浮出 6% 底。
-            '!bg-transparent hover:!bg-ink-fg/[0.06] data-[state=open]:!bg-ink-fg/[0.06]',
-            // 末位 svg = trigger 自带的 chevron，设计是 8px + 0.55 透明度。
-            '[&>svg:last-child]:size-2 [&>svg:last-child]:opacity-[0.55]'
-          )}
+          className="absolute left-0 top-[calc(100%+5px)] z-30 max-h-80 w-52 overflow-y-auto rounded-[var(--r-pop)] border border-ink-border bg-ink-1 p-1.5 shadow-md scrollbar-thin"
         >
-          {/* 🔴 文本必须是 trigger 的**直接**子节点：base 上有 `[&>span]:line-clamp-1`
-              （0,2,0 特异性），包一层 <SelectValue>（渲染成 span）会被它把 display 改成
-              -webkit-box，gap-[3px] 直接失效。同 StatusMenu / HealthMenu 的做法。 */}
-          {value ?? t('matters.detail.typeUnset')}
-        </SelectTrigger>
-        <SelectContent>
-          <SelectItem value={DETAIL_TYPE_UNSET}>{t('matters.detail.typeUnset')}</SelectItem>
-          {value !== null && !isBuiltin ? <SelectItem value={value}>{value}</SelectItem> : null}
-          {BUILTIN_MATTER_TYPES.map((type) => (
-            <SelectItem key={type} value={type}>
-              {type}
-            </SelectItem>
-          ))}
-          <SelectItem value={DETAIL_TYPE_CUSTOM}>{t('matters.detail.typeCustom')}</SelectItem>
-        </SelectContent>
-      </Select>
-      {customOpen ? (
-        <div className="flex items-center gap-1">
           <Input
             autoFocus
-            value={customDraft}
-            onChange={(event) => setCustomDraft(event.target.value)}
+            value={query}
+            onChange={(event) => setQuery(event.target.value)}
             onKeyDown={(event) => {
-              if (event.key === 'Enter') saveCustom()
-              if (event.key === 'Escape') setCustomOpen(false)
+              // Enter 且当前搜索词不是既有类型 → 就地新建（设计 detail.jsx:96）。
+              if (event.key === 'Enter' && keyword && !exact) pick(keyword)
             }}
-            placeholder={t('matters.detail.typeCustomPlaceholder')}
-            aria-label={t('matters.detail.typeCustomPlaceholder')}
-            className="h-7 w-36 px-2 text-meta"
+            placeholder={t('matters.detail.typeSearchPlaceholder')}
+            aria-label={t('matters.detail.typeSearchPlaceholder')}
+            className="mb-1 h-7 w-full px-2 text-meta"
           />
-          <button
-            type="button"
-            disabled={!customDraft.trim() || busy}
-            onClick={saveCustom}
-            aria-label={t('matters.actions.save')}
-            className="rounded-[var(--r-ctl)] p-1.5 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
-          >
-            <Save size={13} />
-          </button>
-          <button
-            type="button"
-            onClick={() => setCustomOpen(false)}
-            aria-label={t('matters.actions.cancel')}
-            className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-          >
-            <X size={13} />
-          </button>
+          {!keyword
+            ? row('__unset', t('matters.detail.typeUnset'), value === null, () => pick(null))
+            : null}
+          {matches.map((type) => row(type, type, value === type, () => pick(type)))}
+          {keyword && !exact
+            ? row('__create', t('matters.detail.typeCreate', { name: keyword }), false, () =>
+                pick(keyword)
+              )
+            : null}
         </div>
       ) : null}
     </div>
@@ -1566,6 +1680,35 @@ function DueDateControl({
  * （G-06 / 补充规格 §5.1）。别再往这里加目标相关的东西 —— 两者的写入语义不同，
  * 摘要走「Agent 提案 → 你接受」，目标是用户自己写的（HANDOFF §3 硬约束①）。
  */
+/**
+ * 分节标签（设计 `ui.jsx` 的 `RailLabel`）—— D8：状态 tab 的三类分节此前是**卡片内部的一行
+ * 粗标题**，既没有 icon，也没有把「这是一节」的边界画出来。设计里每一节都是
+ * `[icon] LABEL ————————————— [right]`：标签在卡**外面**，一条发丝线把这一行填满。
+ *
+ * 🔴 不用仓库的 `SectionHeader`，也不上 `font-mono`：CI lint 规则 `no-cjk-in-mono-size`
+ * 禁 CJK 走等宽（中文在 mono 下字距会散）。同 `MatterTimeline` 的处理。
+ */
+function MatterSectionLabel({
+  icon,
+  children,
+  right
+}: {
+  icon?: React.ReactNode
+  children: React.ReactNode
+  right?: React.ReactNode
+}): React.ReactElement {
+  return (
+    <div className="mb-2 flex items-center gap-2 px-0.5">
+      {icon}
+      <h2 className="shrink-0 text-meta font-semibold uppercase tracking-[0.08em] text-ink-fg-2">
+        {children}
+      </h2>
+      <span aria-hidden className="h-px min-w-4 flex-1 bg-ink-border-soft" />
+      {right}
+    </div>
+  )
+}
+
 function StateCard({
   matter,
   pendingCount,
@@ -1608,123 +1751,128 @@ function StateCard({
   }
 
   return (
-    <section className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/75 p-4">
-      <div className="flex items-center justify-between gap-3">
-        {/* 微调项：视觉标题带「· 已接受」后缀，但 `matters.state.title` 键保持原值 ——
-            它参与下面编辑按钮的 aria-label 组合（MatterStateCard.test 断言），后缀只进视觉层。 */}
-        <h2 className="text-lead font-semibold">
-          {t('matters.state.title')}
-          <span aria-hidden className="font-normal text-ink-fg-3">
-            {' '}
-            · {t('matters.state.titleAccepted')}
+    <section>
+      {/* D8 —— 分节标签移出卡片、带 icon（设计 detail.jsx:350 `<RailLabel icon="filecheck">`）。
+          微调项：视觉标题带「· 已接受」后缀，但 `matters.state.title` 键保持原值 ——
+          它参与下面编辑按钮的 aria-label 组合（MatterStateCard.test 断言），后缀只进视觉层。 */}
+      <MatterSectionLabel
+        icon={<FileCheck size={12} className="shrink-0 text-ink-fg-2" />}
+        right={
+          <span className="flex shrink-0 items-center gap-1.5">
+            {staleDays !== null ? (
+              <span
+                className={cn(
+                  'inline-flex items-center gap-1 text-micro',
+                  stale ? 'text-warn' : 'text-ink-fg-3'
+                )}
+              >
+                {stale ? <TriangleAlert size={11} /> : <CheckCircle2 size={11} />}
+                {stale
+                  ? t('matters.state.freshnessStale', { count: staleDays })
+                  : t('matters.state.freshnessFresh', {
+                      time: formatMatterAgo(matter.summary_at as number, now, locale)
+                    })}
+              </span>
+            ) : null}
+            {onRegenerate ? (
+              <button
+                type="button"
+                disabled={regenerating}
+                onClick={onRegenerate}
+                title={t('matters.state.regenerate')}
+                aria-label={t('matters.state.regenerate')}
+                className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+              >
+                <RefreshCw size={12} className={regenerating ? 'animate-spin' : undefined} />
+              </button>
+            ) : null}
+            {!summaryEditing ? (
+              <button
+                type="button"
+                onClick={() => setSummaryEditing(true)}
+                aria-label={`${t('matters.state.title')} ${t('matters.actions.edit')}`}
+                className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+              >
+                <Pencil size={12} />
+              </button>
+            ) : null}
           </span>
-        </h2>
-        <span className="flex items-center gap-1.5">
-          {staleDays !== null ? (
-            <span
-              className={cn(
-                'inline-flex items-center gap-1 text-micro',
-                stale ? 'text-warn' : 'text-ink-fg-3'
-              )}
-            >
-              {stale ? <TriangleAlert size={11} /> : <CheckCircle2 size={11} />}
-              {stale
-                ? t('matters.state.freshnessStale', { count: staleDays })
-                : t('matters.state.freshnessFresh', {
-                    time: formatMatterAgo(matter.summary_at as number, now, locale)
-                  })}
-            </span>
-          ) : null}
-          {onRegenerate ? (
-            <button
-              type="button"
-              disabled={regenerating}
-              onClick={onRegenerate}
-              title={t('matters.state.regenerate')}
-              aria-label={t('matters.state.regenerate')}
-              className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
-            >
-              <RefreshCw size={12} className={regenerating ? 'animate-spin' : undefined} />
-            </button>
-          ) : null}
-          {!summaryEditing ? (
-            <button
-              type="button"
-              onClick={() => setSummaryEditing(true)}
-              aria-label={`${t('matters.state.title')} ${t('matters.actions.edit')}`}
-              className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-            >
-              <Pencil size={12} />
-            </button>
-          ) : null}
+        }
+      >
+        {t('matters.state.title')}
+        <span aria-hidden className="font-normal normal-case tracking-normal text-ink-fg-3">
+          {' '}
+          · {t('matters.state.titleAccepted')}
         </span>
-      </div>
-      {summaryEditing ? (
-        <div className="mt-3">
-          <textarea
-            autoFocus
-            rows={5}
-            value={summaryDraft}
-            onChange={(event) => setSummaryDraft(event.target.value)}
-            placeholder={t('matters.state.summaryPlaceholder')}
-            aria-label={t('matters.state.title')}
-            className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
-          />
-          <div className="mt-2 flex justify-end gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setSummaryDraft(summaryValue)
-                setSummaryEditing(false)
-              }}
-              className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-            >
-              {t('matters.actions.cancel')}
-            </button>
-            <button
-              type="button"
-              disabled={saving || normalizedSummaryDraft === (matter.current_summary ?? null)}
-              onClick={saveSummary}
-              className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
-            >
-              {t('matters.actions.save')}
-            </button>
+      </MatterSectionLabel>
+      <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/75 p-4">
+        {summaryEditing ? (
+          <div>
+            <textarea
+              autoFocus
+              rows={5}
+              value={summaryDraft}
+              onChange={(event) => setSummaryDraft(event.target.value)}
+              placeholder={t('matters.state.summaryPlaceholder')}
+              aria-label={t('matters.state.title')}
+              className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
+            />
+            <div className="mt-2 flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setSummaryDraft(summaryValue)
+                  setSummaryEditing(false)
+                }}
+                className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+              >
+                {t('matters.actions.cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={saving || normalizedSummaryDraft === (matter.current_summary ?? null)}
+                onClick={saveSummary}
+                className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
+              >
+                {t('matters.actions.save')}
+              </button>
+            </div>
           </div>
-        </div>
-      ) : (
-        <>
-          <p className="mt-3 whitespace-pre-wrap text-body text-ink-fg-1">
-            {matter.current_summary || t('matters.state.noSummary')}
-          </p>
-          {matter.current_summary && (matter.summary_at != null || matter.summary_by_kind) ? (
-            <p className="mt-2 flex flex-wrap items-center gap-2 text-meta text-ink-fg-2">
-              {matter.summary_at != null ? (
-                <span>
-                  {t('matters.state.summaryUpdatedAt', {
-                    time: new Date(matter.summary_at).toLocaleString()
-                  })}
-                </span>
-              ) : null}
-              {matter.summary_by_kind ? (
-                <span>{t(`matters.state.summaryBy.${matter.summary_by_kind}`)}</span>
-              ) : null}
+        ) : (
+          <>
+            <p className="whitespace-pre-wrap text-body text-ink-fg-1">
+              {matter.current_summary || t('matters.state.noSummary')}
             </p>
-          ) : null}
-        </>
-      )}
-      <p className="mt-3 border-t border-ink-border pt-3 text-meta text-ink-fg-2">
-        {t('matters.state.summaryGuard')}
-      </p>
-      {pendingCount > 0 ? (
-        <button
-          type="button"
-          onClick={onReview}
-          className="mt-4 inline-flex items-center gap-1 rounded-lg bg-ai/10 px-3 py-2 text-aux text-ai"
-        >
-          <Sparkles size={12} />
-          {t('matters.state.pendingProposals', { count: pendingCount })}
-        </button>
-      ) : null}
+            {matter.current_summary && (matter.summary_at != null || matter.summary_by_kind) ? (
+              <p className="mt-2 flex flex-wrap items-center gap-2 text-meta text-ink-fg-2">
+                {matter.summary_at != null ? (
+                  <span>
+                    {t('matters.state.summaryUpdatedAt', {
+                      time: new Date(matter.summary_at).toLocaleString()
+                    })}
+                  </span>
+                ) : null}
+                {matter.summary_by_kind ? (
+                  <span>{t(`matters.state.summaryBy.${matter.summary_by_kind}`)}</span>
+                ) : null}
+              </p>
+            ) : null}
+          </>
+        )}
+        <p className="mt-3 border-t border-ink-border pt-3 text-meta text-ink-fg-2">
+          {t('matters.state.summaryGuard')}
+        </p>
+        {pendingCount > 0 ? (
+          <button
+            type="button"
+            onClick={onReview}
+            className="mt-4 inline-flex items-center gap-1 rounded-lg bg-ai/10 px-3 py-2 text-aux text-ai"
+          >
+            <Sparkles size={12} />
+            {t('matters.state.pendingProposals', { count: pendingCount })}
+          </button>
+        ) : null}
+      </div>
     </section>
   )
 }
@@ -1788,169 +1936,176 @@ function GoalCard({
   }
 
   return (
-    <section className="overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1/75">
-      <div className="p-4">
-        <div className="flex items-center justify-between gap-3">
-          <h2 className="text-lead font-semibold">{t('matters.state.descriptionLabel')}</h2>
-          {!descriptionEditing ? (
+    <section>
+      {/* D8 —— 设计 matter-agent.jsx:277 `<RailLabel icon="target">背景与目标</RailLabel>`。 */}
+      <MatterSectionLabel
+        icon={<Target size={12} className="shrink-0 text-ink-fg-2" />}
+        right={
+          !descriptionEditing ? (
             <button
               type="button"
               onClick={() => setDescriptionEditing(true)}
-              className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-2 py-1 text-meta text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+              className="inline-flex shrink-0 items-center gap-1 rounded-[var(--r-ctl)] px-2 py-1 text-meta text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
             >
               <Pencil size={12} />
               {t('matters.actions.edit')}
             </button>
-          ) : null}
+          ) : null
+        }
+      >
+        {t('matters.state.descriptionLabel')}
+      </MatterSectionLabel>
+      <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1/75">
+        <div className="p-4">
+          {descriptionEditing ? (
+            <div>
+              <textarea
+                autoFocus
+                rows={7}
+                value={descriptionDraft}
+                onChange={(event) => setDescriptionDraft(event.target.value)}
+                placeholder={t('matters.state.descriptionPlaceholder')}
+                aria-label={t('matters.state.descriptionLabel')}
+                className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
+              />
+              <p className="mt-1 text-meta text-ink-fg-2">{t('matters.state.markdownHint')}</p>
+              <div className="mt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setDescriptionDraft(matter.description)
+                    setDescriptionEditing(false)
+                  }}
+                  className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+                >
+                  {t('matters.actions.cancel')}
+                </button>
+                <button
+                  type="button"
+                  disabled={saving || descriptionDraft === matter.description}
+                  onClick={() =>
+                    onDescriptionSave(descriptionDraft, () => setDescriptionEditing(false))
+                  }
+                  className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
+                >
+                  {t('matters.actions.save')}
+                </button>
+              </div>
+            </div>
+          ) : matter.description ? (
+            <div className="[&_.mail-body_p:last-child]:mb-0">
+              <TranslatedBody text={matter.description} />
+            </div>
+          ) : (
+            <p className="text-body text-ink-fg-2">{t('matters.state.noDescription')}</p>
+          )}
         </div>
-        {descriptionEditing ? (
-          <div className="mt-2">
-            <textarea
-              autoFocus
-              rows={7}
-              value={descriptionDraft}
-              onChange={(event) => setDescriptionDraft(event.target.value)}
-              placeholder={t('matters.state.descriptionPlaceholder')}
-              aria-label={t('matters.state.descriptionLabel')}
-              className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
-            />
-            <p className="mt-1 text-meta text-ink-fg-2">{t('matters.state.markdownHint')}</p>
-            <div className="mt-2 flex justify-end gap-2">
+        {/* 设计 matter-agent.jsx:290 —— 完成标志是同一张卡的下半分区（`fg/0.022` 底 +
+          上分隔线），不是卡里再套一个虚线框。 */}
+        <div className="border-t border-ink-border-soft bg-ink-fg/[0.02] p-4">
+          <div className="flex items-center justify-between gap-3">
+            <h3 className="text-meta font-medium text-ink-fg-2">{t('matters.state.goalChecks')}</h3>
+            <span className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 font-mono text-[11px] leading-4 text-ink-fg-2">
+              {t('matters.state.goalChecksCount', {
+                done: doneGoalChecks,
+                total: goalChecks.length
+              })}
+            </span>
+          </div>
+          {goalChecks.length > 0 ? (
+            <ul className="mt-3 space-y-1.5">
+              {goalChecks.map((check, index) => (
+                <li
+                  key={`${index}-${check.t}`}
+                  className="group/check flex items-center gap-2 rounded-[var(--r-ctl)] px-2 py-1.5 transition-colors duration-fast ease-standard hover:bg-ink-2 focus-within:bg-ink-2"
+                >
+                  <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
+                    <Checkbox
+                      checked={check.done}
+                      disabled={saving}
+                      onCheckedChange={(done) => setGoalCheckDone(index, done)}
+                    />
+                    <span
+                      className={cn(
+                        'min-w-0 flex-1 break-words text-body',
+                        check.done ? 'text-ink-fg-3 line-through' : 'text-ink-fg-1'
+                      )}
+                    >
+                      {check.t}
+                    </span>
+                  </label>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => removeGoalCheck(index)}
+                    aria-label={t('matters.actions.trash')}
+                    className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-3 opacity-0 transition-[color,background-color,opacity] duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40 group-hover/check:opacity-100 group-focus-within/check:opacity-100"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+          {addingGoalCheck ? (
+            <div className="mt-3 flex items-center gap-2">
+              <Input
+                autoFocus
+                value={goalCheckDraft}
+                disabled={saving}
+                onChange={(event) => setGoalCheckDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') saveGoalCheck()
+                  if (event.key === 'Escape') {
+                    setGoalCheckDraft('')
+                    setAddingGoalCheck(false)
+                  }
+                }}
+                placeholder={t('matters.state.goalCheckPlaceholder')}
+                aria-label={t('matters.state.goalChecks')}
+                className="h-8 flex-1 px-2 text-body"
+              />
+              <button
+                type="button"
+                disabled={saving || !goalCheckDraft.trim()}
+                onClick={saveGoalCheck}
+                aria-label={t('matters.actions.save')}
+                className="rounded-[var(--r-ctl)] p-1.5 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+              >
+                <Check size={13} />
+              </button>
               <button
                 type="button"
                 onClick={() => {
-                  setDescriptionDraft(matter.description)
-                  setDescriptionEditing(false)
-                }}
-                className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-              >
-                {t('matters.actions.cancel')}
-              </button>
-              <button
-                type="button"
-                disabled={saving || descriptionDraft === matter.description}
-                onClick={() =>
-                  onDescriptionSave(descriptionDraft, () => setDescriptionEditing(false))
-                }
-                className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
-              >
-                {t('matters.actions.save')}
-              </button>
-            </div>
-          </div>
-        ) : matter.description ? (
-          <div className="mt-2 [&_.mail-body_p:last-child]:mb-0">
-            <TranslatedBody text={matter.description} />
-          </div>
-        ) : (
-          <p className="mt-2 text-body text-ink-fg-2">{t('matters.state.noDescription')}</p>
-        )}
-      </div>
-      {/* 设计 matter-agent.jsx:290 —— 完成标志是同一张卡的下半分区（`fg/0.022` 底 +
-          上分隔线），不是卡里再套一个虚线框。 */}
-      <div className="border-t border-ink-border-soft bg-ink-fg/[0.02] p-4">
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-meta font-medium text-ink-fg-2">{t('matters.state.goalChecks')}</h3>
-          <span className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 font-mono text-[11px] leading-4 text-ink-fg-2">
-            {t('matters.state.goalChecksCount', {
-              done: doneGoalChecks,
-              total: goalChecks.length
-            })}
-          </span>
-        </div>
-        {goalChecks.length > 0 ? (
-          <ul className="mt-3 space-y-1.5">
-            {goalChecks.map((check, index) => (
-              <li
-                key={`${index}-${check.t}`}
-                className="group/check flex items-center gap-2 rounded-[var(--r-ctl)] px-2 py-1.5 transition-colors duration-fast ease-standard hover:bg-ink-2 focus-within:bg-ink-2"
-              >
-                <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
-                  <Checkbox
-                    checked={check.done}
-                    disabled={saving}
-                    onCheckedChange={(done) => setGoalCheckDone(index, done)}
-                  />
-                  <span
-                    className={cn(
-                      'min-w-0 flex-1 break-words text-body',
-                      check.done ? 'text-ink-fg-3 line-through' : 'text-ink-fg-1'
-                    )}
-                  >
-                    {check.t}
-                  </span>
-                </label>
-                <button
-                  type="button"
-                  disabled={saving}
-                  onClick={() => removeGoalCheck(index)}
-                  aria-label={t('matters.actions.trash')}
-                  className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-3 opacity-0 transition-[color,background-color,opacity] duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40 group-hover/check:opacity-100 group-focus-within/check:opacity-100"
-                >
-                  <Trash2 size={12} />
-                </button>
-              </li>
-            ))}
-          </ul>
-        ) : null}
-        {addingGoalCheck ? (
-          <div className="mt-3 flex items-center gap-2">
-            <Input
-              autoFocus
-              value={goalCheckDraft}
-              disabled={saving}
-              onChange={(event) => setGoalCheckDraft(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === 'Enter') saveGoalCheck()
-                if (event.key === 'Escape') {
                   setGoalCheckDraft('')
                   setAddingGoalCheck(false)
-                }
-              }}
-              placeholder={t('matters.state.goalCheckPlaceholder')}
-              aria-label={t('matters.state.goalChecks')}
-              className="h-8 flex-1 px-2 text-body"
-            />
+                }}
+                aria-label={t('matters.actions.cancel')}
+                className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+              >
+                <X size={13} />
+              </button>
+            </div>
+          ) : (
             <button
               type="button"
-              disabled={saving || !goalCheckDraft.trim()}
-              onClick={saveGoalCheck}
-              aria-label={t('matters.actions.save')}
-              className="rounded-[var(--r-ctl)] p-1.5 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+              disabled={saving}
+              onClick={() => setAddingGoalCheck(true)}
+              className={cn(
+                'mt-3 rounded-[var(--r-ctl)] border border-dashed border-ink-border px-3 py-2 text-left text-aux text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-2 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50',
+                goalChecks.length === 0 ? 'w-full' : 'inline-flex'
+              )}
             >
-              <Check size={13} />
+              {t('matters.state.goalCheckAdd')}
             </button>
-            <button
-              type="button"
-              onClick={() => {
-                setGoalCheckDraft('')
-                setAddingGoalCheck(false)
-              }}
-              aria-label={t('matters.actions.cancel')}
-              className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-            >
-              <X size={13} />
-            </button>
-          </div>
-        ) : (
-          <button
-            type="button"
-            disabled={saving}
-            onClick={() => setAddingGoalCheck(true)}
-            className={cn(
-              'mt-3 rounded-[var(--r-ctl)] border border-dashed border-ink-border px-3 py-2 text-left text-aux text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-2 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50',
-              goalChecks.length === 0 ? 'w-full' : 'inline-flex'
-            )}
-          >
-            {t('matters.state.goalCheckAdd')}
-          </button>
-        )}
-        {goalChecks.length > 0 && doneGoalChecks === goalChecks.length ? (
-          <div className="mt-3 flex items-start gap-2 rounded-[var(--r-ctl)] border border-ok/25 bg-ok/10 px-3 py-2 text-aux text-ok">
-            <Check size={13} className="mt-0.5 shrink-0" />
-            <span>{t('matters.state.goalChecksAllDone')}</span>
-          </div>
-        ) : null}
+          )}
+          {goalChecks.length > 0 && doneGoalChecks === goalChecks.length ? (
+            <div className="mt-3 flex items-start gap-2 rounded-[var(--r-ctl)] border border-ok/25 bg-ok/10 px-3 py-2 text-aux text-ok">
+              <Check size={13} className="mt-0.5 shrink-0" />
+              <span>{t('matters.state.goalChecksAllDone')}</span>
+            </div>
+          ) : null}
+        </div>
       </div>
     </section>
   )
@@ -2139,222 +2294,246 @@ function ItemGroup({
     onRename(item, title)
   }
 
+  const KindIcon = MATTER_ITEM_KIND_ICONS[kind]
+  // 设计 detail.jsx:322/328 —— 标签后缀是「· N 项未完成」，不是总数；note / decision
+  // 这两类没有「完成」语义（设计明确排除），只出类型名。
+  const openCount = items.filter(
+    (item) => item.status !== 'done' && item.status !== 'canceled'
+  ).length
+  const showOpenCount = openCount > 0 && kind !== 'note' && kind !== 'decision'
+
   return (
-    <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/65">
-      <div className="flex items-center justify-between border-b border-ink-border px-4 py-3">
-        <h3 className="text-body font-medium">
-          {t(`matters.item.kinds.${kind}`)} <span className="text-ink-fg-2">{items.length}</span>
-        </h3>
-        <button
-          type="button"
-          onClick={() => onAdd(kind)}
-          className="rounded-[var(--r-ctl)] p-1.5 hover:bg-ink-3"
-        >
-          <Plus size={14} />
-        </button>
-      </div>
-      <div className="divide-y divide-ink-border">
-        {items.map((item) => {
-          const isExpanded = expanded.has(item.id)
-          const done = item.status === 'done'
-          const editing = editingId === item.id
-          // G-11 meta 行的数据面：状态 Pip（action 未完成）· 等 {人} · 到期 · 完成时间 ·
-          // 来源链接。设计里的 `已阻塞 {时长}`（it.since）与 owner 头像是 mock-only 字段，
-          // 数据里没有，不渲染。
-          const waitingOn =
-            item.waiting_on_stakeholder_id != null
-              ? stakeholdersById.get(item.waiting_on_stakeholder_id)
-              : undefined
-          const sourceResource =
-            item.source_resource_id != null ? resourcesById.get(item.source_resource_id) : undefined
-          const dueTone = matterDueTone(item.due_at, now)
-          const showStatusPip =
-            item.kind === 'action' &&
-            item.status !== null &&
-            item.status !== 'done' &&
-            item.status !== 'canceled'
-          const hasMeta =
-            showStatusPip ||
-            waitingOn !== undefined ||
-            (item.due_at != null && !done) ||
-            (done && item.completed_at != null) ||
-            sourceResource !== undefined
-          return (
-            <div key={item.id} className="group/item px-4 py-3">
-              <div className="flex items-start gap-2.5">
-                {item.kind === 'action' ? (
-                  <button
-                    type="button"
-                    onClick={() => onToggle(item)}
-                    className={cn(
-                      'mt-0.5 grid h-4 w-4 place-items-center rounded border',
-                      done ? 'border-ok bg-ok text-accent-fg' : 'border-ink-border'
-                    )}
-                  >
-                    {done ? <Check size={11} /> : null}
-                  </button>
-                ) : null}
-                <div className="min-w-0 flex-1">
-                  {editing ? (
-                    <div className="flex items-center gap-1.5">
-                      <Input
-                        autoFocus
-                        value={titleDraft}
-                        onChange={(event) => setTitleDraft(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') saveEdit(item)
-                          if (event.key === 'Escape') setEditingId(null)
-                        }}
-                        aria-label={t('matters.item.editTitle')}
-                        className="h-7 min-w-0 flex-1 px-2 text-body"
-                      />
-                      <button
-                        type="button"
-                        disabled={!titleDraft.trim() || busy}
-                        onClick={() => saveEdit(item)}
-                        aria-label={t('matters.actions.save')}
-                        className="rounded-[var(--r-ctl)] p-1.5 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
-                      >
-                        <Save size={13} />
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setEditingId(null)}
-                        aria-label={t('matters.actions.cancel')}
-                        className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-                      >
-                        <X size={13} />
-                      </button>
-                    </div>
-                  ) : (
-                    <div className="flex items-start gap-1.5">
-                      <div
-                        className={cn(
-                          'min-w-0 flex-1 text-body',
-                          done && 'text-ink-fg-2 line-through'
-                        )}
-                      >
-                        {item.title}
-                      </div>
-                      {/* hover 出 ✎/🗑（设计 detail.jsx:296-298 的 rowact 形态）。 */}
-                      <span className="inline-flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-fast group-focus-within/item:opacity-100 group-hover/item:opacity-100">
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => startEdit(item)}
-                          aria-label={t('matters.item.editTitle')}
-                          className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40"
-                        >
-                          <Pencil size={12} />
-                        </button>
-                        <button
-                          type="button"
-                          disabled={busy}
-                          onClick={() => onDelete(item)}
-                          aria-label={t('matters.item.deleteItem')}
-                          className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40"
-                        >
-                          <Trash2 size={12} />
-                        </button>
-                      </span>
-                    </div>
-                  )}
-                  {item.description ? (
-                    <div className="mt-1 [&_.mail-body]:text-aux [&_.mail-body]:leading-relaxed [&_.mail-body_p]:mb-2 [&_.mail-body_p:last-child]:mb-0">
-                      <TranslatedBody text={item.description} />
-                    </div>
-                  ) : null}
-                  {hasMeta ? (
-                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
-                      {showStatusPip ? (
-                        <span
-                          className={cn(
-                            'inline-flex items-center rounded-[var(--r-pill)] border px-1.5 py-0.5 text-micro',
-                            MATTER_TONE_CHIP_CLASS[
-                              MATTER_ITEM_STATUS_TONES[item.status as MatterItemStatus]
-                            ]
-                          )}
-                        >
-                          {t(`matters.item.status.${item.status}`)}
-                        </span>
-                      ) : null}
-                      {waitingOn ? (
-                        <span className="inline-flex items-center gap-1 text-micro text-warn">
-                          <Hourglass size={10} />
-                          {t('matters.item.waitingOn', {
-                            name: waitingOn.display_name ?? waitingOn.email_normalized ?? '—'
-                          })}
-                        </span>
-                      ) : null}
-                      {item.due_at != null && !done ? (
-                        <span
-                          className={cn(
-                            'text-micro',
-                            dueTone === null || dueTone === 'neutral'
-                              ? 'text-ink-fg-3'
-                              : MATTER_TONE_TEXT_CLASS[dueTone]
-                          )}
-                        >
-                          {t('matters.item.dueRelative', {
-                            time: formatMatterDueRelative(item.due_at, now, locale)
-                          })}
-                        </span>
-                      ) : null}
-                      {done && item.completed_at != null ? (
-                        <span className="text-micro text-ink-fg-3">
-                          {t('matters.item.completedAt', {
-                            time: formatMatterAgo(item.completed_at, now, locale)
-                          })}
-                        </span>
-                      ) : null}
-                      {sourceResource ? (
-                        <button
-                          type="button"
-                          onClick={() => onOpenResource(sourceResource)}
-                          className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] text-micro text-ink-fg-3 transition-colors duration-fast ease-standard hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-                        >
-                          <Link2 size={10} />
-                          {t('matters.item.source')}
-                        </button>
-                      ) : null}
-                    </div>
-                  ) : null}
-                  {item.checklist.length > 0 ? (
+    <section>
+      {/* D8 —— 分节标签移出卡片、带本类型的 icon（设计 detail.jsx:325-330）。 */}
+      <MatterSectionLabel
+        icon={<KindIcon size={12} className={cn('shrink-0', MATTER_ITEM_KIND_TEXT_CLASS[kind])} />}
+        right={
+          <button
+            type="button"
+            onClick={() => onAdd(kind)}
+            aria-label={t('matters.item.addKind', { kind: t(`matters.item.kinds.${kind}`) })}
+            title={t('matters.item.addKind', { kind: t(`matters.item.kinds.${kind}`) })}
+            className="shrink-0 rounded-[var(--r-ctl)] p-1 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+          >
+            <Plus size={13} />
+          </button>
+        }
+      >
+        {t(`matters.item.kinds.${kind}`)}
+        {showOpenCount ? (
+          <span className="font-normal normal-case tracking-normal text-ink-fg-3">
+            {' '}
+            · {t('matters.item.openCount', { count: openCount })}
+          </span>
+        ) : null}
+      </MatterSectionLabel>
+      {/* 边框改 `ink-border-soft`（设计 detail.jsx:331）；行的几何不动 —— D8 只收分节。 */}
+      <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border-soft bg-ink-1/65">
+        <div className="divide-y divide-ink-border-soft">
+          {items.map((item) => {
+            const isExpanded = expanded.has(item.id)
+            const done = item.status === 'done'
+            const editing = editingId === item.id
+            // G-11 meta 行的数据面：状态 Pip（action 未完成）· 等 {人} · 到期 · 完成时间 ·
+            // 来源链接。设计里的 `已阻塞 {时长}`（it.since）与 owner 头像是 mock-only 字段，
+            // 数据里没有，不渲染。
+            const waitingOn =
+              item.waiting_on_stakeholder_id != null
+                ? stakeholdersById.get(item.waiting_on_stakeholder_id)
+                : undefined
+            const sourceResource =
+              item.source_resource_id != null
+                ? resourcesById.get(item.source_resource_id)
+                : undefined
+            const dueTone = matterDueTone(item.due_at, now)
+            const showStatusPip =
+              item.kind === 'action' &&
+              item.status !== null &&
+              item.status !== 'done' &&
+              item.status !== 'canceled'
+            const hasMeta =
+              showStatusPip ||
+              waitingOn !== undefined ||
+              (item.due_at != null && !done) ||
+              (done && item.completed_at != null) ||
+              sourceResource !== undefined
+            return (
+              <div key={item.id} className="group/item px-4 py-3">
+                <div className="flex items-start gap-2.5">
+                  {item.kind === 'action' ? (
                     <button
                       type="button"
-                      onClick={() =>
-                        setExpanded((current) => {
-                          const next = new Set(current)
-                          if (next.has(item.id)) next.delete(item.id)
-                          else next.add(item.id)
-                          return next
-                        })
-                      }
-                      className="mt-2 inline-flex items-center gap-1 text-meta text-ink-fg-2 hover:text-ink-fg"
+                      onClick={() => onToggle(item)}
+                      className={cn(
+                        'mt-0.5 grid h-4 w-4 place-items-center rounded border',
+                        done ? 'border-ok bg-ok text-accent-fg' : 'border-ink-border'
+                      )}
                     >
-                      {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
-                      {t('matters.item.checklist', { count: item.checklist.length })}
+                      {done ? <Check size={11} /> : null}
                     </button>
                   ) : null}
-                  {isExpanded ? (
-                    <ul className="mt-2 space-y-1 pl-4 text-aux text-ink-fg-1">
-                      {item.checklist.map((entry) => (
-                        <li
-                          key={entry.id}
-                          className={entry.done ? 'line-through text-ink-fg-2' : ''}
+                  <div className="min-w-0 flex-1">
+                    {editing ? (
+                      <div className="flex items-center gap-1.5">
+                        <Input
+                          autoFocus
+                          value={titleDraft}
+                          onChange={(event) => setTitleDraft(event.target.value)}
+                          onKeyDown={(event) => {
+                            if (event.key === 'Enter') saveEdit(item)
+                            if (event.key === 'Escape') setEditingId(null)
+                          }}
+                          aria-label={t('matters.item.editTitle')}
+                          className="h-7 min-w-0 flex-1 px-2 text-body"
+                        />
+                        <button
+                          type="button"
+                          disabled={!titleDraft.trim() || busy}
+                          onClick={() => saveEdit(item)}
+                          aria-label={t('matters.actions.save')}
+                          className="rounded-[var(--r-ctl)] p-1.5 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
                         >
-                          {entry.done ? '✓' : '○'} {entry.text}
-                        </li>
-                      ))}
-                    </ul>
-                  ) : null}
+                          <Save size={13} />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setEditingId(null)}
+                          aria-label={t('matters.actions.cancel')}
+                          className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+                        >
+                          <X size={13} />
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-start gap-1.5">
+                        <div
+                          className={cn(
+                            'min-w-0 flex-1 text-body',
+                            done && 'text-ink-fg-2 line-through'
+                          )}
+                        >
+                          {item.title}
+                        </div>
+                        {/* hover 出 ✎/🗑（设计 detail.jsx:296-298 的 rowact 形态）。 */}
+                        <span className="inline-flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-fast group-focus-within/item:opacity-100 group-hover/item:opacity-100">
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => startEdit(item)}
+                            aria-label={t('matters.item.editTitle')}
+                            className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40"
+                          >
+                            <Pencil size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            disabled={busy}
+                            onClick={() => onDelete(item)}
+                            aria-label={t('matters.item.deleteItem')}
+                            className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </span>
+                      </div>
+                    )}
+                    {item.description ? (
+                      <div className="mt-1 [&_.mail-body]:text-aux [&_.mail-body]:leading-relaxed [&_.mail-body_p]:mb-2 [&_.mail-body_p:last-child]:mb-0">
+                        <TranslatedBody text={item.description} />
+                      </div>
+                    ) : null}
+                    {hasMeta ? (
+                      <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                        {showStatusPip ? (
+                          <span
+                            className={cn(
+                              'inline-flex items-center rounded-[var(--r-pill)] border px-1.5 py-0.5 text-micro',
+                              MATTER_TONE_CHIP_CLASS[
+                                MATTER_ITEM_STATUS_TONES[item.status as MatterItemStatus]
+                              ]
+                            )}
+                          >
+                            {t(`matters.item.status.${item.status}`)}
+                          </span>
+                        ) : null}
+                        {waitingOn ? (
+                          <span className="inline-flex items-center gap-1 text-micro text-warn">
+                            <Hourglass size={10} />
+                            {t('matters.item.waitingOn', {
+                              name: waitingOn.display_name ?? waitingOn.email_normalized ?? '—'
+                            })}
+                          </span>
+                        ) : null}
+                        {item.due_at != null && !done ? (
+                          <span
+                            className={cn(
+                              'text-micro',
+                              dueTone === null || dueTone === 'neutral'
+                                ? 'text-ink-fg-3'
+                                : MATTER_TONE_TEXT_CLASS[dueTone]
+                            )}
+                          >
+                            {t('matters.item.dueRelative', {
+                              time: formatMatterDueRelative(item.due_at, now, locale)
+                            })}
+                          </span>
+                        ) : null}
+                        {done && item.completed_at != null ? (
+                          <span className="text-micro text-ink-fg-3">
+                            {t('matters.item.completedAt', {
+                              time: formatMatterAgo(item.completed_at, now, locale)
+                            })}
+                          </span>
+                        ) : null}
+                        {sourceResource ? (
+                          <button
+                            type="button"
+                            onClick={() => onOpenResource(sourceResource)}
+                            className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] text-micro text-ink-fg-3 transition-colors duration-fast ease-standard hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+                          >
+                            <Link2 size={10} />
+                            {t('matters.item.source')}
+                          </button>
+                        ) : null}
+                      </div>
+                    ) : null}
+                    {item.checklist.length > 0 ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setExpanded((current) => {
+                            const next = new Set(current)
+                            if (next.has(item.id)) next.delete(item.id)
+                            else next.add(item.id)
+                            return next
+                          })
+                        }
+                        className="mt-2 inline-flex items-center gap-1 text-meta text-ink-fg-2 hover:text-ink-fg"
+                      >
+                        {isExpanded ? <ChevronDown size={12} /> : <ChevronRight size={12} />}
+                        {t('matters.item.checklist', { count: item.checklist.length })}
+                      </button>
+                    ) : null}
+                    {isExpanded ? (
+                      <ul className="mt-2 space-y-1 pl-4 text-aux text-ink-fg-1">
+                        {item.checklist.map((entry) => (
+                          <li
+                            key={entry.id}
+                            className={entry.done ? 'line-through text-ink-fg-2' : ''}
+                          >
+                            {entry.done ? '✓' : '○'} {entry.text}
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
+                  </div>
                 </div>
               </div>
-            </div>
-          )
-        })}
+            )
+          })}
+        </div>
       </div>
-    </div>
+    </section>
   )
 }
 
@@ -2497,6 +2676,7 @@ function MenuButton({
   return (
     <button
       type="button"
+      role="menuitem"
       onClick={onClick}
       className={cn(
         'flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-body hover:bg-ink-3',

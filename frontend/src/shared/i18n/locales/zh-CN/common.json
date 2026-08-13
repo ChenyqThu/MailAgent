@@ -4824,8 +4824,9 @@
       "nextMatter": "下一条 (J)",
       "type": "事项类型",
       "typeUnset": "未指定类型",
-      "typeCustom": "自定义…",
-      "typeCustomPlaceholder": "输入自定义类型",
+      "typeSearchPlaceholder": "搜索或新建类型…",
+      "typeCreate": "新建类型「{name}」",
+      "more": "更多",
       "priority": "事项优先级",
       "status": "事项状态",
       "health": "事项健康度",
@@ -4918,6 +4919,8 @@
       "description": "补充说明",
       "add": "添加",
       "empty": "还没有条目。先补一个能推动事项前进的结构化条目。",
+      "addKind": "新增{kind}",
+      "openCount": "{count} 项未完成",
       "checklist": "清单 {count} 项",
       "status": {
         "open": "待开始",
@@ -5366,7 +5369,6 @@
         "title": "从这里推进这件事",
         "hint": "基于本事项的 {count} 条上下文回答，或用 @ 带上别的资料"
       },
-      "footnote": "对话历史不是正式事项知识；只有工具写入、已接受的更新和确定性事件会沉淀。",
       "writeLabels": {
         "matter_create": "已创建事项",
         "matter_update": "事项已更新",
@@ -5646,10 +5648,6 @@
       "footnoteLocal": "本地 SQLite · 单人单机",
       "footnoteRemote": "Remote Web 共用同一份数据",
       "backToList": "返回事项清单"
-    },
-    "chatContext": {
-      "pinnedUntitled": "未命名资料",
-      "removePinned": "从本轮上下文移除这份资料"
     }
   }
 }

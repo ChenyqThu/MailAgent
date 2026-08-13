@@ -295,7 +295,9 @@ describe('MatterDetail — detail editing and rendering', () => {
       )
     )
 
-    fireEvent.click(screen.getByRole('combobox', { name: '事项类型' }))
+    // 0813 D4：类型从 shadcn Select 换成设计的「搜索即筛选、没命中就现场新建」菜单
+    // （Radix 的 listbox 里塞不下搜索框）→ 触发器是 button 不再是 combobox。
+    fireEvent.click(screen.getByRole('button', { name: '事项类型' }))
     fireEvent.click(await screen.findByRole('option', { name: '产品' }))
     await waitFor(() =>
       expect(mattersApi.patch).toHaveBeenCalledWith(

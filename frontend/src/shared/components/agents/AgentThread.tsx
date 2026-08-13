@@ -64,8 +64,6 @@ interface AgentThreadProps {
   /** Matters G-20 — 事项对话的空态标题/副标题（设计稿："the empty state names the matter"）。
    *  省略 → 通用 greetings 一字不变。 */
   welcomeOverride?: { title: string; hint: string }
-  /** Matters G-20 — 输入区下的常驻脚注（事项对话说明「对话历史不沉淀」）。省略 → 不渲染。 */
-  composerFootnote?: React.ReactNode
 }
 
 export function AgentThread({
@@ -75,8 +73,7 @@ export function AgentThread({
   onTurnComplete,
   contextChip,
   runStatusSlot,
-  welcomeOverride,
-  composerFootnote
+  welcomeOverride
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
@@ -140,9 +137,6 @@ export function AgentThread({
                 <div className="min-h-[4.5rem]">{quickActions}</div>
               </AuiIf>
             </AuiIf>
-            {/* G-20 —— 事项对话的脚注：常驻在输入区**下方**（不是只在空态），因为它说的是这场
-                对话的性质，不是引导语。非事项对话 undefined → 什么都不渲染。 */}
-            {!readOnly && composerFootnote}
           </ThreadPrimitive.ViewportFooter>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>

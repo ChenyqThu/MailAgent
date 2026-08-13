@@ -218,7 +218,8 @@ describe('🔴 #2 事项身份未就绪 —— 绝不降级成普通会话', () 
 
   test('对照：拿得到编号 → 无告警、可发送、事项 chip 在场', async () => {
     mount(chat(), matterItem({ matter_public_id: 'MAT-0042', matter_title: 'Vendor launch' }))
-    await waitFor(() => expect(screen.getByText('MAT-0042 Vendor launch')).toBeTruthy())
+    // D15（0813 dogfood）：chip 文案是「编号 · 标题」，且**只有这一颗**（置顶资料不再各挂一颗）。
+    await waitFor(() => expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy())
     expect(document.querySelector('[data-matter-context-unresolved]')).toBeNull()
     expect(capture.composerControls?.sendDisabled).toBe(false)
     // 事项会话用事项那份快照，general 快照恒关（这条在修复前后都成立，防误读为本闸的功劳）。

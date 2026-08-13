@@ -4781,7 +4781,7 @@
         "nonBlocking": "Ignore these suggestions if none fit and continue creating."
       }
     },
-    "detail": { "empty": "Select a matter to view details", "created": "Created {date}", "due": "Due {date}", "noDue": "No due date", "agentUnbound": "No follow-up agent bound", "addTag": "Add tag", "title": "Matter title", "editTitle": "Edit matter title", "previousMatter": "Previous (K)", "nextMatter": "Next (J)", "type": "Matter type", "typeUnset": "No type", "typeCustom": "Custom…", "typeCustomPlaceholder": "Enter a custom type", "priority": "Matter priority", "status": "Matter status", "health": "Matter health", "trashedBanner": "Moved to trash · purged permanently in {count} days; linked email and external documents are untouched", "archivedBanner": "Archived {time} · archiving changes neither the business status nor the history", "waitingBoth": "Waiting on {names} · {context}", "waitingNames": "Waiting on {names}", "waitingContext": "Waiting · {context}", "waitingEdit": "Edit waiting reason", "waitingClear": "Clear waiting reason", "waitingPlaceholder": "Who or what are you waiting on?" },
+    "detail": { "empty": "Select a matter to view details", "created": "Created {date}", "due": "Due {date}", "noDue": "No due date", "agentUnbound": "No follow-up agent bound", "addTag": "Add tag", "title": "Matter title", "editTitle": "Edit matter title", "previousMatter": "Previous (K)", "nextMatter": "Next (J)", "type": "Matter type", "typeUnset": "No type", "typeSearchPlaceholder": "Search or create a type…", "typeCreate": "Create type “{name}”", "more": "More", "priority": "Matter priority", "status": "Matter status", "health": "Matter health", "trashedBanner": "Moved to trash · purged permanently in {count} days; linked email and external documents are untouched", "archivedBanner": "Archived {time} · archiving changes neither the business status nor the history", "waitingBoth": "Waiting on {names} · {context}", "waitingNames": "Waiting on {names}", "waitingContext": "Waiting · {context}", "waitingEdit": "Edit waiting reason", "waitingClear": "Clear waiting reason", "waitingPlaceholder": "Who or what are you waiting on?" },
     "tags": { "pickerLabel": "Tags", "search": "Search or create tags", "create": "Create tag \"{name}\"", "manage": "Manage all tags…", "empty": "No matching tags", "usageCount": "{count} uses", "managerTitle": "Manage tags", "managerDescription": "Click the marker on the left to change shape and color; renaming syncs to all matters, and deleting only removes the tag itself.", "renamePlaceholder": "Tag name", "style": "Change shape and color for {name}", "shape": "Shape", "color": "Color", "saveRename": "Rename {name}", "delete": "Delete {name}", "deleteConfirm": "Confirm delete", "deleteWarning": "This affects {count} matters.", "deletedDetail": "Deleted tag #{name} · affected {count} matters", "saved": "Tag updated", "renameSaved": "Tag renamed", "noTags": "No tags yet", "shapes": { "circle": "Dot", "ring": "Ring", "square": "Square", "diamond": "Diamond", "bar": "Bar" }, "colors": { "--c-accent": "Accent", "--c-info": "Info", "--c-ok": "Success", "--c-warn": "Warning", "--c-crit": "Critical", "--c-ai": "AI" } },
     "tabs": { "state": "State", "context": "Context", "timeline": "Progress", "label": "Matter details", "runs": "Runs" },
     "status": { "inbox": "Inbox", "planned": "Planned", "active": "Active", "waiting": "Waiting", "blocked": "Blocked", "monitoring": "Monitoring", "done": "Done", "canceled": "Canceled" },
@@ -4796,6 +4796,8 @@
       "description": "Details",
       "add": "Add",
       "empty": "No items yet. Add a structured item that moves this matter forward.",
+      "addKind": "Add {kind}",
+      "openCount": "{count} open",
       "checklist": "{count} checklist items",
       "status": { "open": "Not started", "in_progress": "In progress", "waiting": "Waiting", "blocked": "Blocked", "done": "Done", "canceled": "Canceled" },
       "waitingOn": "Waiting on {name}",
@@ -5158,7 +5160,6 @@
         "title": "Move this forward from here",
         "hint": "Answering from {count} context items in this matter, or @-mention other material"
       },
-      "footnote": "Chat history is not official matter knowledge; only tool writes, accepted updates and deterministic events are kept.",
       "writeLabels": {
         "matter_create": "Matter created",
         "matter_update": "Matter updated",
@@ -5296,10 +5297,6 @@
       "footnoteLocal": "Local SQLite · single user, single machine",
       "footnoteRemote": "Remote Web shares the same data",
       "backToList": "Back to matter list"
-    },
-    "chatContext": {
-      "pinnedUntitled": "Untitled resource",
-      "removePinned": "Drop this resource from the current context"
     }
   }
 }
