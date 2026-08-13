@@ -3,9 +3,8 @@
 //   1. 全部确定性可测：hash 是纯函数，随机路径的随机源可注入；
 //   2. avatar_json = NULL 的语义（按 agent_id 派生默认外观）由 deriveBotAvatar 承担，
 //      后端不回填、不迁移 —— 派生/映射的单源在这里（前端），golden 测试钉死防换脸；
-//   3. 本模块零外部依赖（域无关），hash/shuffle 语义对齐
-//      shared/components/agents/agentAvatarIdentity.ts（WP3 将把消费点迁过来；
-//      那边 import 着待移除的 @oreo-design/avatar，不能反向依赖，故 FNV-1a 就地一份）。
+//   3. 本模块零外部依赖（域无关）；shared/components/agents/agentAvatarIdentity.ts
+//      是消费方（WP3 已迁入），依赖方向恒 agents → bot-avatar，不得反向。
 
 import { BOT_AVATAR_COLORS } from './colors'
 import { BOT_AVATAR_SHAPES } from './shapes'

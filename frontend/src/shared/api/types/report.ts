@@ -3,6 +3,8 @@
 // frontend-handoff.md §5 + agents/CHANGES-vs-PRD.md §2 1:1 对齐。
 // **改字段名必须同步改后端 models.py + handoff 文档**。
 
+import type { BotAvatarBotConfig } from '@shared/bot-avatar/types'
+
 export type ReportTone = 'neutral' | 'info' | 'success' | 'warn' | 'critical'
 export type ReportCadence = 'daily' | 'weekly' | 'monthly' | 'custom'
 export type ReportStatus = 'generating' | 'ready' | 'empty' | 'failed' | 'skipped'
@@ -381,14 +383,19 @@ export interface ReportAgentConfig {
   updated_at: number | null
 }
 
-/** v42 生成式身份（Oreo shape/palette/variant）。存量行**没有** `type` 键 —— 缺省即生成式，
- *  故判别式在 image 一侧（零迁移）。 */
+/** legacy oreo 生成式身份（shape/palette/variant）。存量行**没有** `type` 键 —— 缺省即生成式，
+ *  故判别式在 image/bot 一侧（零迁移）。渲染时由 `mapLegacyGeneratedToBot` 确定性映射为
+ *  bot 外观（08-12 living-bot-avatar 起 oreo 渲染链退役，类型仅存量行解析用）。 */
 export interface AgentAvatarGenerated {
   type?: 'generated'
   shape: 'bloom' | 'silk' | 'flare' | 'nova' | 'void' | 'jade'
   palette: string
   variant_id?: string
 }
+
+/** 08-12 灵动 bot 身份（第三种 kind，prd §5.1）。shape 8 值 / color 11 值词表
+ *  单源在 `@shared/bot-avatar`（as const 数组推导），此处仅转出口别名——别手抄第二份。 */
+export type AgentAvatarBot = BotAvatarBotConfig
 
 /** 0804 WP7 用户上传身份：客户端已居中方形裁切 + 降采样（≤256×256）+ 编码 webp，
  *  `data` 是 `data:image/webp;base64,…`、**解码后 ≤150KB**（后端 `wire.config_patch_to_db`
@@ -398,7 +405,7 @@ export interface AgentAvatarImage {
   data: string
 }
 
-export type AgentAvatarConfig = AgentAvatarGenerated | AgentAvatarImage
+export type AgentAvatarConfig = AgentAvatarGenerated | AgentAvatarImage | AgentAvatarBot
 
 /** report:setConfig — friendly patch（后端 CLI 映射到 DB 列）。 */
 export interface ReportConfigPatch {

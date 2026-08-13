@@ -7,7 +7,7 @@
 // reduced-motion 必须 JS 层短路（本组件动画帧经 setAttribute 直写 DOM，CSS media
 // 管不到 —— motion-gsap.md §3 同款结论），恒回静态档：身份/状态仍可读，动画整个不出现。
 
-import { useEffect, useId, useLayoutEffect, useMemo, useRef, useSyncExternalStore } from 'react'
+import { useEffect, useId, useLayoutEffect, useMemo, useRef } from 'react'
 
 import { useReducedMotion } from '../hooks/useReducedMotion'
 import { COLORS } from './colors'
@@ -17,6 +17,7 @@ import { BOT_BODY_SPAN, BOT_VIEW_BOX, SHAPES, bodyScaleTransform } from './shape
 import { POOLS } from './states'
 import { registerTicker, unregisterTicker } from './ticker'
 import type { BotColor, BotShape, BotState, EngineFrame } from './types'
+import { useBotAvatarTheme } from './useBotAvatarTheme'
 
 export interface BotAvatarProps {
   /** 缺省 blob / orange（官方助手形象，prd §6.3 Q4） */
@@ -28,23 +29,18 @@ export interface BotAvatarProps {
   /** 显式声明才动 —— 新增 animated 位点须过性能评估（prd §4.6-3） */
   animated?: boolean
   flipX?: boolean
+  /** 眼睛跟随**全局**指针（原型语义：组件可见时监听，不是 hover 才动）。仅 animated 档
+   *  生效；不可见时随 ticker 一起停监听；reduced-motion 恒不激活。 */
+  mouseInteractive?: boolean
 }
 
-// 主题信号 = documentElement 的 data-theme attribute（appearance.ts applyResolvedTheme
-// 的唯一 DOM 落点）。不订阅 useAppearance store：本模块域无关，远程 web 与任何
-// 未挂 zustand 的宿主里也要能跟主题。缺席（boot 前/测试）按 dark —— index.css
-// :root 默认即暗色。只有 body fill 需要 JS 侧分主题；eye fill 是 CSS 变量回退串，
-// 浏览器在 paint 时自行解析，无需 JS 参与。
-function subscribeTheme(onChange: () => void): () => void {
-  if (typeof document === 'undefined' || typeof MutationObserver === 'undefined') return () => {}
-  const observer = new MutationObserver(onChange)
-  observer.observe(document.documentElement, { attributes: true, attributeFilter: ['data-theme'] })
-  return () => observer.disconnect()
-}
-
-function getThemeSnapshot(): 'light' | 'dark' {
-  if (typeof document === 'undefined') return 'dark'
-  return document.documentElement.getAttribute('data-theme') === 'light' ? 'light' : 'dark'
+/** 指针位置 → 归一 gaze（分析 §4.3：clamp(±0.6) 后归一到 [-1,1]；y 同比例）。
+ *  分母用视窗尺寸 —— 原型语义是「跟随全局指针」，眼睛随指针横穿整屏渐进转动，
+ *  用元件自身宽度做分母会在指针离开头像几十像素时就饱和。 */
+function pointerGaze(pointer: number, center: number, extent: number): number {
+  if (!(extent > 0)) return 0
+  const clamped = Math.max(-0.6, Math.min(0.6, (pointer - center) / extent))
+  return clamped / 0.6
 }
 
 export function BotAvatar({
@@ -54,11 +50,12 @@ export function BotAvatar({
   title,
   className,
   animated = false,
-  flipX = false
+  flipX = false,
+  mouseInteractive = false
 }: BotAvatarProps): React.JSX.Element {
   const reducedMotion = useReducedMotion()
   const isAnimated = animated && !reducedMotion
-  const theme = useSyncExternalStore(subscribeTheme, getThemeSnapshot, () => 'dark' as const)
+  const theme = useBotAvatarTheme()
 
   const shape: BotShape = config?.shape ?? 'blob'
   const color: BotColor = config?.color ?? 'orange'
@@ -119,14 +116,32 @@ export function BotAvatar({
       if (next) writeFrame(eyeRefs.current, next)
     }
 
+    // mouseInteractive（编辑器预览）：可见时监听**全局** pointermove，把指针相对组件
+    // 中心的位置折算成归一 gaze 交给引擎（引擎内部乘 ±13.2/±8.4 单位，分析 §4.3）。
+    const onPointerMove = (event: PointerEvent): void => {
+      const node = svgRef.current
+      if (!node) return
+      const rect = node.getBoundingClientRect()
+      engine.setGaze(
+        pointerGaze(event.clientX, rect.left + rect.width / 2, window.innerWidth),
+        pointerGaze(event.clientY, rect.top + rect.height / 2, window.innerHeight)
+      )
+    }
+
     // 可见性裁剪（prd §4.6-2）：不可见即从共享 ticker 注销。环境无 IO（happy-dom/
-    // 老 WebView）时按恒可见处理 —— 宁可多画不可不画。
+    // 老 WebView）时按恒可见处理 —— 宁可多画不可不画。指针监听与 ticker 同生命周期
+    // （复用同一道可见性闸：不可见即停监听）。
     let registered = false
     const setRegistered = (want: boolean): void => {
       if (want === registered) return
       registered = want
-      if (want) registerTicker(client)
-      else unregisterTicker(client)
+      if (want) {
+        registerTicker(client)
+        if (mouseInteractive) window.addEventListener('pointermove', onPointerMove)
+      } else {
+        unregisterTicker(client)
+        if (mouseInteractive) window.removeEventListener('pointermove', onPointerMove)
+      }
     }
     let observer: IntersectionObserver | null = null
     const el = svgRef.current
@@ -144,7 +159,7 @@ export function BotAvatar({
       setRegistered(false)
       engineRef.current = null
     }
-  }, [isAnimated, shapeDef])
+  }, [isAnimated, shapeDef, mouseInteractive])
 
   return (
     <svg

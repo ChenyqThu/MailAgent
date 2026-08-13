@@ -9,7 +9,7 @@
 // （happy-dom 的 IO 是不触发回调的哑实现，而真浏览器 observe 后必发首次回调）。
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, render } from '@testing-library/react'
+import { cleanup, fireEvent, render } from '@testing-library/react'
 
 import { BotAvatar } from '../../../src/shared/bot-avatar/BotAvatar'
 import { staticFrame } from '../../../src/shared/bot-avatar/engine'
@@ -163,5 +163,86 @@ describe('BotAvatar 动画档', () => {
     expect(__instanceCount()).toBe(2)
     unmount()
     expect(__instanceCount()).toBe(0)
+  })
+})
+
+describe('BotAvatar mouseInteractive（WP3 编辑器预览）', () => {
+  function pointermoveListenerDelta(run: () => () => void): { added: number; removed: number } {
+    const addSpy = vi.spyOn(window, 'addEventListener')
+    const removeSpy = vi.spyOn(window, 'removeEventListener')
+    const dispose = run()
+    const count = (calls: unknown[][]): number =>
+      calls.filter(([type]) => type === 'pointermove').length
+    const added = count(addSpy.mock.calls)
+    dispose()
+    const removed = count(removeSpy.mock.calls)
+    addSpy.mockRestore()
+    removeSpy.mockRestore()
+    return { added, removed }
+  }
+
+  test('animated + 可见：挂全局 pointermove，卸载对称摘除', () => {
+    stubNoReduceMatchMedia()
+    stubIntersectionObserver(true)
+    const { added, removed } = pointermoveListenerDelta(() => {
+      const { unmount } = render(<BotAvatar animated mouseInteractive />)
+      return unmount
+    })
+    expect(added).toBe(1)
+    expect(removed).toBe(1)
+  })
+
+  test('不可见 / 未 animated / reduced-motion：不挂监听', () => {
+    // 不可见（IO 报 false）
+    stubNoReduceMatchMedia()
+    stubIntersectionObserver(false)
+    let delta = pointermoveListenerDelta(() => {
+      const { unmount } = render(<BotAvatar animated mouseInteractive />)
+      return unmount
+    })
+    expect(delta.added).toBe(0)
+
+    // 静态档（未 animated）
+    stubIntersectionObserver(true)
+    delta = pointermoveListenerDelta(() => {
+      const { unmount } = render(<BotAvatar mouseInteractive />)
+      return unmount
+    })
+    expect(delta.added).toBe(0)
+
+    // reduced-motion（恢复全局 setup 的 reduce 环境）
+    vi.unstubAllGlobals()
+    delta = pointermoveListenerDelta(() => {
+      const { unmount } = render(<BotAvatar animated mouseInteractive />)
+      return unmount
+    })
+    expect(delta.added).toBe(0)
+  })
+
+  test('pointermove → 引擎收到 gaze（下一帧眼 transform 随指针偏转）', () => {
+    stubNoReduceMatchMedia()
+    stubIntersectionObserver(true)
+    // 受控 rAF：手动推帧，避免真异步
+    let frameCb: FrameRequestCallback | null = null
+    vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) => {
+      frameCb = cb
+      return 1
+    })
+    vi.stubGlobal('cancelAnimationFrame', () => {})
+
+    const { container, unmount } = render(<BotAvatar animated mouseInteractive size={40} />)
+    const eye = container.querySelector<SVGPathElement>('[data-bot-eye="0"]')
+    // 基线：推两帧让弹簧/眨眼进入稳态输出
+    frameCb?.(0)
+    frameCb?.(16)
+    const before = eye?.getAttribute('transform')
+
+    // 指针打到视窗最右缘 —— gazeX 应饱和为正值，眼睛 translate 右移
+    fireEvent.pointerMove(window, { clientX: window.innerWidth, clientY: 0 })
+    frameCb?.(32)
+    frameCb?.(48)
+    const after = eye?.getAttribute('transform')
+    expect(after).not.toBe(before)
+    unmount()
   })
 })
