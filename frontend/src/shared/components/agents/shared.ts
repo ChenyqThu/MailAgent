@@ -32,6 +32,11 @@ export const PREPROCESS_DOCS = ['soul', 'agent', 'rules', 'user'] as const
 // （xlsx→Notion），不进 gateway。
 export const PROJECT_PROGRESS_AGENT_ID = 'project_progress_sync'
 
+// 0813 主 Agent（默认助手）的编辑器派生/换一换种子 —— 主 agent 不走 id 派生外观（未配置时
+// 落 OFFICIAL_ASSISTANT_AVATAR），种子只喂 shuffle 递进。卡片与抽屉共用同一个值，否则同一个
+// 「换一换」在两处会走出两条不同的序列。
+export const MAIN_ASSISTANT_SEED = 'main-assistant'
+
 // 远程 web 下 env 写只读（镜像 AiTab.isWeb）：env:set 在 HttpApi 是 notImplemented，
 // 故启用/模型控件禁用；persona / 文档勾选 / 身份文档编辑走 HTTP row/profile 端点，仍可编辑。
 export const IS_WEB =

@@ -4374,12 +4374,12 @@
     "mainAgent": {
       "title": "主 Agent",
       "badge": "默认助手",
-      "hint": "全局对话的名字与头像；名字会出现在「思考中」文案和面板标题里",
-      "configure": "配置",
-      "collapse": "收起",
-      "nameLabel": "名字",
+      "hint": "全局对话的名字、头像与系统提示词；名字会出现在「思考中」文案和面板标题里",
+      "configure": "配置主 Agent",
       "namePlaceholder": "AI 助手（比如 Jarvis）",
-      "docsHint": "系统提示词（SOUL / AGENT / RULES / USER 身份文档）在 设置 → AI → 身份文档 里编辑"
+      "docsHint": "系统提示词（SOUL / AGENT / RULES / USER 身份文档）与 设置 → AI → 身份文档 是同一份，改哪边都一样。",
+      "configTitle": "主 Agent · {name}",
+      "identityHint": "留空则用默认名；头像未设置时用官方形象"
     },
     "custom": {
       "import": "导入 Agent",

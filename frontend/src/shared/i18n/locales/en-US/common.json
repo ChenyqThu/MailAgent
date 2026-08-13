@@ -4374,12 +4374,12 @@
     "mainAgent": {
       "title": "Main Agent",
       "badge": "Default assistant",
-      "hint": "Name and avatar of the global assistant; the name shows in the thinking line and the panel title",
-      "configure": "Configure",
-      "collapse": "Collapse",
-      "nameLabel": "Name",
+      "hint": "Name, avatar and system prompts of the global assistant; the name shows in the thinking line and the panel title",
+      "configure": "Configure main agent",
       "namePlaceholder": "AI Assistant (e.g. Jarvis)",
-      "docsHint": "System prompts (the SOUL / AGENT / RULES / USER identity docs) are edited in Settings → AI → Identity docs"
+      "docsHint": "These system prompts (the SOUL / AGENT / RULES / USER identity docs) are the same ones as in Settings → AI → Identity docs — editing either side edits the same content.",
+      "configTitle": "Main Agent · {name}",
+      "identityHint": "Leave empty to keep the default name; the official look is used when no avatar is set"
     },
     "custom": {
       "import": "Import Agent",

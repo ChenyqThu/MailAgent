@@ -31,6 +31,7 @@ import { toastError } from '@shared/state/toast'
 import { IS_WEB, PRESS_SCALE, PROJECT_PROGRESS_AGENT_ID, envFlagOn, pressHandlers } from './shared'
 import { ConfigDrawer } from './drawers/ConfigDrawer'
 import { SearchConfigDrawer } from './drawers/SearchConfigDrawer'
+import { MainAssistantDrawer } from './drawers/MainAssistantDrawer'
 import { PreprocessConfigDrawer } from './drawers/PreprocessConfigDrawer'
 import { ProjectProgressConfigDrawer } from './drawers/ProjectProgressConfigDrawer'
 import { AgentAvatar } from './AgentAvatar'
@@ -1054,6 +1055,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   }
   // 红点链 ③（P5）：Custom AI Agents 区 header dot（全局待审批 total>0）。flag off → 不轮询 → total 0。
   const customPendingTotal = useAgentPendingCount(customAgentsEnabled).total
+  // 0813 dogfood — 主 Agent（默认助手）配置抽屉开合；点整卡开，同其余五抽屉的范式。
+  const [mainAssistantOpen, setMainAssistantOpen] = useState(false)
   // v27 — AI 邮件预处理配置抽屉开合（后端播种单行，只编辑、无新建）。
   const [preprocessOpen, setPreprocessOpen] = useState(false)
   // S5 W5a — 项目周报同步配置抽屉开合（后端 v31 播种单行，只编辑、无新建）。
@@ -1150,6 +1153,7 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
     configAgent !== null ||
     searchDrawer !== null ||
     customDrawer !== null ||
+    mainAssistantOpen ||
     preprocessOpen ||
     projectProgressOpen
 
@@ -1191,8 +1195,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
               {t('agents.subtitle')}
             </p>
           </div>
-          {/* 0813 主 Agent 配置卡：默认助手的名字/头像终于有配置面（身份文档指路见卡内）。 */}
-          <MainAssistantCard />
+          {/* 0813 主 Agent 配置卡：点整卡开抽屉（名字 / 头像 / 身份文档都在里面）。 */}
+          <MainAssistantCard onConfig={() => setMainAssistantOpen(true)} />
           {/* Lane 2 #10 — env 总闸行（OR 语义，见 ReportMasterRow 注释）。 */}
           <ReportMasterRow />
           {reportAgents.length > 0 ? (
@@ -1420,6 +1424,10 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         open={customDrawer !== null}
         create={customDrawer?.mode === 'create'}
         onClose={() => setCustomDrawer(null)}
+      />
+      <MainAssistantDrawer
+        open={mainAssistantOpen}
+        onClose={() => setMainAssistantOpen(false)}
       />
       <PreprocessConfigDrawer
         cfg={preprocessAgent}

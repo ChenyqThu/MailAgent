@@ -169,6 +169,19 @@ describe('AgentsTab — Search Agents 区', () => {
     renderUi(<AgentsTab onOpenReports={() => {}} />)
     expect(await screen.findByText('暂无搜索 Agent，点上方新建。')).toBeTruthy()
   })
+
+  // 0813 dogfood：主 Agent 卡对齐其余 agent 卡的交互 —— 没有独立「配置」按钮，
+  // 点整卡开 MainAssistantDrawer（本测盯的是 AgentsTab 里的接线，抽屉本体在
+  // tests/components/MainAssistantCard.test.tsx）。
+  test('点主 Agent 卡 → 开主 Agent 抽屉（无独立「配置」按钮）', async () => {
+    mockGetConfig.mockResolvedValue([])
+    renderUi(<AgentsTab onOpenReports={() => {}} />)
+    const card = await screen.findByTestId('main-assistant-card')
+    expect(screen.queryByTestId('main-assistant-configure')).toBeNull()
+    expect(screen.queryByRole('heading', { name: '主 Agent · AI 助手' })).toBeNull()
+    fireEvent.click(card)
+    expect(await screen.findByRole('heading', { name: '主 Agent · AI 助手' })).toBeTruthy()
+  })
 })
 
 describe('SearchConfigDrawer — 编辑既有', () => {
