@@ -43,7 +43,9 @@ def contact_backfill(
     ),
     batch_size: int = typer.Option(500, "--batch-size", help="每批消化的邮件数"),
     dry_run: bool = typer.Option(
-        False, "--dry-run", help="只报告积压量, 不写库 (免 auth)",
+        False, "--dry-run",
+        help="只报告积压量, 不写扫描数据 (免 auth; 老库的 schema 迁移随 "
+             "SyncStore init 照常, 与全部 CLI 命令一致)",
     ),
     output: Optional[str] = typer.Option(None, "-o", "--output"),
 ) -> None:
@@ -70,21 +72,40 @@ def contact_backfill(
 
     db_path = cfg.sync_store_db_path
 
+    # 惯例对齐 (backfill / email 群同款, 见 email.py `_ = cli.sync_store  # 保证
+    # v10 schema` 先例): 经 CliContext.sync_store 走**完整 SyncStore init** —— 老库
+    # (≤v53) 在这里先完成 v54 迁移再扫描, 「app 未启动过 / 迁移后第一动作就是
+    # backfill」的运维场景不会撞 no such table。dry-run 同样过这道 (schema 迁移是
+    # SyncStore init 的既定副作用, 全 CLI 一致; dry-run 的「不写」只约束扫描数据)。
+    # 迁移真失败 (含库版本高于代码的降级守卫) 走错误信封, 不裸喷 traceback。
+    try:
+        _ = cli.sync_store
+    except Exception as e:
+        raise emit_cli_error(cli, CliError(
+            f"sync_store 初始化/迁移失败: {e}",
+            hint="库可能来自更新版本的 App (降级守卫), 或迁移中断待重试; "
+                 "查 logs/sync.log 与 backups/。",
+        ))
+
     from src.contacts.repository import ContactRepository
     from src.contacts.scanner import WATERMARK_KEY, run_scan
     from src.contacts.service import recalc_all_aggregates, resolve_self_addresses
 
     if dry_run:
-        with ContactRepository(db_path).connect() as conn:
-            row = conn.execute(
-                "SELECT value FROM sync_state WHERE key=?", (WATERMARK_KEY,)
-            ).fetchone()
-            watermark = int(row[0]) if row and str(row[0]).isdigit() else 0
-            pending = conn.execute(
-                "SELECT COUNT(*) FROM email_metadata WHERE internal_id > ?",
-                (0 if rescan else watermark,),
-            ).fetchone()[0]
-            contacts = conn.execute("SELECT COUNT(*) FROM contact").fetchone()[0]
+        try:
+            with ContactRepository(db_path).connect() as conn:
+                row = conn.execute(
+                    "SELECT value FROM sync_state WHERE key=?", (WATERMARK_KEY,)
+                ).fetchone()
+                watermark = int(row[0]) if row and str(row[0]).isdigit() else 0
+                pending = conn.execute(
+                    "SELECT COUNT(*) FROM email_metadata WHERE internal_id > ?",
+                    (0 if rescan else watermark,),
+                ).fetchone()[0]
+                contacts = conn.execute("SELECT COUNT(*) FROM contact").fetchone()[0]
+        except Exception as e:
+            # dry-run 的失败同样走 -o json 错误信封 (不许 rich traceback 直喷)
+            raise emit_cli_error(cli, CliError(f"contact backfill dry-run failed: {e}"))
         data = {
             "action": "contact-backfill", "dry_run": True, "rescan": rescan,
             "watermark": watermark, "pending": int(pending),
