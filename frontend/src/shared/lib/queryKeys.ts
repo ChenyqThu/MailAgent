@@ -229,6 +229,17 @@ export const qk = {
     detail: (publicId: string) => ['matters', 'detail', publicId] as const,
     resources: (publicId: string) => ['matters', 'detail', publicId, 'resources'] as const,
     stakeholders: (publicId: string) => ['matters', 'detail', publicId, 'stakeholders'] as const,
+    // G-15 / G-14 —— 全部挂在 detail 前缀下：一次事项写入 invalidate `detail(id)` 就连带刷新
+    // 关系、候选与附件（候选依赖 link 集合，关系依赖两端事项）。
+    relations: (publicId: string) => ['matters', 'detail', publicId, 'relations'] as const,
+    resourceCandidates: (publicId: string) =>
+      ['matters', 'detail', publicId, 'resource-candidates'] as const,
+    resourceAttachments: (publicId: string) =>
+      ['matters', 'detail', publicId, 'resource-attachments'] as const,
+    /** 「关联资料」弹窗里的邮件搜索。**不复用** `qk.palette.search` —— 那份 limit / staleTime
+     *  都不一样，共享会互相污染缓存。 */
+    resourcePickerMail: (normalised: string) =>
+      ['matters', 'resource-picker', 'mail', normalised] as const,
     // P3 — bounded matter projection injected into the Matter Chat snapshot. Under the same
     // ['matters','detail',id] prefix so a matter write invalidates it with everything else.
     contextSnapshot: (publicId: string) =>

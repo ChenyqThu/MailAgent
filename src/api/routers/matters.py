@@ -657,6 +657,29 @@ async def list_resources(
     return success_envelope({"items": items}, request=request)
 
 
+@router.get("/{matter_id}/resource-candidates")
+async def list_resource_candidates(
+    matter_id: str, request: Request, limit: int = Query(default=10, ge=1, le=50),
+    service: MatterService = Depends(get_matter_service),
+):
+    """只读候选（G-14「关联资料」弹窗）。与 `resource-suggestions/discover` 同引擎但零写入 ——
+    打开弹窗不该在事项上留下任何痕迹。"""
+    return success_envelope(
+        _call(service.list_resource_candidates, matter_id, limit=limit), request=request
+    )
+
+
+@router.get("/{matter_id}/resource-attachments")
+async def list_resource_attachments(
+    matter_id: str, request: Request, limit: int = Query(default=200, ge=1, le=200),
+    service: MatterService = Depends(get_matter_service),
+):
+    """本事项已关联邮件里的附件，一次批量取（G-14 tab ③）。"""
+    return success_envelope(
+        _call(service.list_resource_attachments, matter_id, limit=limit), request=request
+    )
+
+
 @router.post("/{matter_id}/resources")
 async def create_resource(
     matter_id: str, body: MatterResourceCreateRequest, request: Request,

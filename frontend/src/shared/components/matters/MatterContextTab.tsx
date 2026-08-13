@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react'
+import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
   Edit3,
@@ -19,13 +20,13 @@ import type {
   Matter,
   MatterItem,
   MatterResourceListItem,
-  MatterStakeholder,
-  MatterStakeholderCreateInput
+  MatterStakeholder
 } from '@shared/api/types/matter'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { CollapseChevron } from '@shared/components/ui/collapsible'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { toastError } from '@shared/state/toast'
+import { useActiveEmail } from '@shared/state/active-email'
+import { toastError, toastSuccess } from '@shared/state/toast'
 
 import {
   DOC_PROVIDER_ICONS,
@@ -34,11 +35,25 @@ import {
   isMatterResourceAvailable
 } from './matterResource'
 import { useMattersApi } from './hooks'
+import { MatterLinkResourceModal } from './MatterLinkResourceModal'
+import type { MatterLinkResourceTab } from './MatterLinkResourceModal'
+import { MatterRelationsSection } from './MatterRelationsSection'
 import { useMatterMutation } from './matterMutation'
+import { MatterStakeholderPicker } from './MatterStakeholderPicker'
 import {
   MatterSuggestedResourceActions,
   MatterSuggestedResourceBulkActions
 } from './MatterSuggestedResourceActions'
+import type { MatterResourceGroupKey } from './matterResource'
+
+/** G-17 ③ —— 资料分组头右侧的「+ 关联」直达对应 tab。分组与 tab 不是一一对应（文档/附件与
+ *  链接两组都落在链接与附件两个 tab 上），故只映射有明确归宿的那几组。 */
+const GROUP_TAB: Record<MatterResourceGroupKey, MatterLinkResourceTab> = {
+  mail: 'mail',
+  meetings: 'mail',
+  documents: 'link',
+  attachments: 'file'
+}
 
 interface MatterContextTabProps {
   matter: Matter
@@ -66,6 +81,21 @@ export function MatterContextTab({
   const pinned = resources.filter((item) => item.link.pinned)
   const [editor, setEditor] = useState<MatterStakeholder | 'new' | null>(null)
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({})
+  // G-14 —— 关联资料弹窗。null = 关着；值 = 打开并预选那个 tab（G-17 ③ 的分组直达）。
+  const [linkTab, setLinkTab] = useState<MatterLinkResourceTab | null>(null)
+
+  // G-17 ① —— 干系人卡「最近联系」要能点进那封邮件。判据取 `source_resource_id`（干系人是从
+  // 哪条资料推出来的），在本来就持有的 `resources` 里查，不额外发请求。
+  const emailByResourceId = useMemo(() => {
+    const index = new Map<number, number>()
+    for (const item of resources) {
+      if (item.resource.kind !== 'email') continue
+      if (!item.resource.external_key.startsWith('email:')) continue
+      const internalId = Number(item.resource.external_key.slice('email:'.length))
+      if (Number.isInteger(internalId) && internalId > 0) index.set(item.resource.id, internalId)
+    }
+    return index
+  }, [resources])
 
   const remove = useMatterMutation({
     matterId: matter.public_id,
@@ -128,12 +158,19 @@ export function MatterContextTab({
                     </p>
                   </div>
                 </div>
-                <div className="mt-3 text-meta text-ink-fg-3">
-                  {t('matters.context.lastContact')}{' '}
-                  {stakeholder.last_contact_at
-                    ? new Date(stakeholder.last_contact_at).toLocaleDateString()
-                    : '—'}
-                </div>
+                {stakeholder.relationship ? (
+                  <p className="mt-2 border-t border-ink-border pt-2 text-meta leading-5 text-ink-fg-2">
+                    {stakeholder.relationship}
+                  </p>
+                ) : null}
+                <StakeholderLastContact
+                  stakeholder={stakeholder}
+                  emailId={
+                    stakeholder.source_resource_id === null
+                      ? null
+                      : (emailByResourceId.get(stakeholder.source_resource_id) ?? null)
+                  }
+                />
                 <div className="mt-3 flex justify-end gap-1 border-t border-ink-border pt-2">
                   <button
                     type="button"
@@ -184,11 +221,23 @@ export function MatterContextTab({
 
       <section>
         <SectionHeader title={t('matters.context.linkedResources')} count={resources.length}>
-          {suggestedResources > 0 ? (
-            <Pip tone="ai">
-              {t('matters.resource.suggestedCount', { count: suggestedResources })}
-            </Pip>
-          ) : null}
+          <div className="flex items-center gap-2">
+            {suggestedResources > 0 ? (
+              <Pip tone="ai">
+                {t('matters.resource.suggestedCount', { count: suggestedResources })}
+              </Pip>
+            ) : null}
+            {/* G-14 —— 手动关联资料入口。0812 之前 ContextTab 一个添加口都没有，资料只能靠
+                ⌘K 捕获 / 线程订阅 / Agent 建议 / chat 工具进来。 */}
+            <button
+              type="button"
+              onClick={() => setLinkTab('mail')}
+              className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux hover:bg-ink-3"
+            >
+              <Plus size={13} />
+              {t('matters.linkResource.open')}
+            </button>
+          </div>
         </SectionHeader>
         {/* Agent 一轮能挂十几份建议，逐条点是 0812 dogfood 的第二条 P0。逐条钮保留 —— 用户
             要挑着来；批量口只是省掉「全要 / 全不要」这两种最常见的整批处置。 */}
@@ -203,19 +252,34 @@ export function MatterContextTab({
               if (group.items.length === 0) return null
               const open = collapsed[group.key] !== true
               return (
-                <div key={group.key} className="border-b border-ink-border last:border-b-0">
-                  <button
-                    type="button"
-                    aria-expanded={open}
-                    onClick={() =>
-                      setCollapsed((value) => ({ ...value, [group.key]: !value[group.key] }))
-                    }
-                    className="flex w-full items-center gap-2 bg-ink-3/70 px-4 py-2 text-left text-meta font-medium text-ink-fg-2 hover:text-ink-fg"
-                  >
-                    <CollapseChevron expanded={open} size={12} />
-                    <span>{t(`matters.context.groups.${group.key}`)}</span>
-                    <span className="font-mono text-ink-fg-3">{group.items.length}</span>
-                  </button>
+                <div
+                  key={group.key}
+                  className="group/head border-b border-ink-border last:border-b-0"
+                >
+                  <div className="flex items-center bg-ink-3/70 pr-2">
+                    <button
+                      type="button"
+                      aria-expanded={open}
+                      onClick={() =>
+                        setCollapsed((value) => ({ ...value, [group.key]: !value[group.key] }))
+                      }
+                      className="flex min-w-0 flex-1 items-center gap-2 px-4 py-2 text-left text-meta font-medium text-ink-fg-2 hover:text-ink-fg"
+                    >
+                      <CollapseChevron expanded={open} size={12} />
+                      <span>{t(`matters.context.groups.${group.key}`)}</span>
+                      <span className="font-mono text-ink-fg-3">{group.items.length}</span>
+                    </button>
+                    {/* G-17 ③ —— 分组头右侧「+ 关联」，开同一个弹窗但预选这一组对应的 tab。 */}
+                    <button
+                      type="button"
+                      onClick={() => setLinkTab(GROUP_TAB[group.key])}
+                      title={t('matters.linkResource.openForGroup')}
+                      aria-label={t('matters.linkResource.openForGroup')}
+                      className="shrink-0 rounded-[var(--r-ctl)] p-1 text-ink-fg-3 opacity-0 transition-opacity duration-fast ease-standard hover:bg-ink-4 hover:text-ink-fg focus-visible:opacity-100 group-hover/head:opacity-100"
+                    >
+                      <Plus size={13} />
+                    </button>
+                  </div>
                   {open
                     ? group.items.map((item) => (
                         <ResourceRow
@@ -237,9 +301,23 @@ export function MatterContextTab({
             icon={<Link2 size={22} />}
             title={t('matters.context.noResourcesTitle')}
             hint={t('matters.context.noResourcesHint')}
+            action={
+              <button
+                type="button"
+                onClick={() => setLinkTab('mail')}
+                className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux hover:bg-ink-3"
+              >
+                <Plus size={13} />
+                {t('matters.linkResource.open')}
+              </button>
+            }
           />
         )}
       </section>
+
+      {/* G-15 —— 关联事项。后端 5 个端点与 chat 工具早就齐了，此前前端零渲染面（写得进、
+          没人看得见）。 */}
+      <MatterRelationsSection matter={matter} onChanged={onChanged} />
 
       <section>
         <SectionHeader title={t('matters.context.injectionTitle')} />
@@ -278,17 +356,66 @@ export function MatterContextTab({
         </div>
       </section>
 
-      <StakeholderModal
+      {/* G-16 —— 两步 Picker 取代原来的单人平铺表单。 */}
+      <MatterStakeholderPicker
         matter={matter}
-        stakeholder={editor === 'new' ? null : editor}
+        resources={resources}
+        stakeholders={stakeholders}
+        editing={editor === 'new' ? null : editor}
         open={editor !== null}
-        onClose={() => setEditor(null)}
+        onOpenChange={(next) => {
+          if (!next) setEditor(null)
+        }}
         onChanged={() => {
           setEditor(null)
           onChanged()
         }}
       />
+
+      <MatterLinkResourceModal
+        matter={matter}
+        resources={resources}
+        open={linkTab !== null}
+        initialTab={linkTab ?? 'mail'}
+        onOpenChange={(next) => {
+          if (!next) setLinkTab(null)
+        }}
+        onChanged={onChanged}
+      />
     </div>
+  )
+}
+
+/** G-17 ① —— 「最近联系」：能定位到那封邮件时是一颗按钮，定位不到就还是一行静态文字。
+ *  🔴 不做「永远可点但点了没反应」——干系人可能是手输入的（`source_resource_id=null`），
+ *  或者它的来源资料已经被解除关联了。 */
+function StakeholderLastContact({
+  stakeholder,
+  emailId
+}: {
+  stakeholder: MatterStakeholder
+  emailId: number | null
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const setActiveEmail = useActiveEmail((state) => state.setActive)
+  const label = `${t('matters.context.lastContact')} ${
+    stakeholder.last_contact_at ? new Date(stakeholder.last_contact_at).toLocaleDateString() : '—'
+  }`
+  if (emailId === null) return <div className="mt-3 text-meta text-ink-fg-3">{label}</div>
+  return (
+    <button
+      type="button"
+      onClick={() => {
+        setActiveEmail(emailId)
+        void navigate({ to: '/' })
+      }}
+      title={t('matters.context.openLastContact')}
+      className="mt-3 inline-flex items-center gap-1 rounded-[var(--r-ctl)] text-meta text-ink-fg-2 underline-offset-2 transition-colors duration-fast ease-standard hover:text-ink-fg hover:underline"
+    >
+      {label}
+      <Link2 size={11} />
+    </button>
   )
 }
 
@@ -308,11 +435,29 @@ function ResourceRow({
   onChanged(): void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const api = useMattersApi()
   // 成员索引而非查表函数：react-hooks/static-components 只认得前者（见 matterResource.ts）。
   const Icon =
     (item.resource.kind === 'doc' && DOC_PROVIDER_ICONS[item.resource.provider.toLowerCase()]) ||
     RESOURCE_KIND_ICONS[item.resource.kind]
   const suggested = item.link.confirmed_at === null
+
+  // G-17 ② —— 行级「取消关联」。此前只在 ResourceDrawer 里有（要先点开抽屉），复用同一个
+  // mutation 形状与 reason，语义与那处一致：解除关联**不删除**原件。
+  const unlink = useMatterMutation({
+    matterId: matter.public_id,
+    mutationFn: () =>
+      api.unlinkResource(matter.public_id, item.resource.id, {
+        expectedVersion: matter.version,
+        reason: 'user_unlinked_resource'
+      }),
+    onSuccess: () => {
+      toastSuccess(t('matters.resource.unlinkedNoDelete'))
+      onChanged()
+    },
+    onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
+  })
+
   return (
     <div
       className={`group border-t border-ink-border px-4 py-3 first:border-t-0 ${suggested ? 'bg-ai/[0.06]' : ''}`}
@@ -368,163 +513,19 @@ function ResourceRow({
         >
           <Pin size={13} />
         </button>
+        <button
+          type="button"
+          disabled={unlink.isPending}
+          title={t('matters.resource.unlink')}
+          aria-label={t('matters.resource.unlink')}
+          onClick={() => unlink.mutate()}
+          className="shrink-0 rounded-[var(--r-ctl)] p-1.5 text-ink-fg-3 opacity-0 transition-opacity duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:opacity-100 group-hover:opacity-100"
+        >
+          <X size={13} />
+        </button>
       </div>
       <MatterSuggestedResourceActions matter={matter} item={item} onChanged={onChanged} />
     </div>
-  )
-}
-
-function StakeholderModal({
-  matter,
-  stakeholder,
-  open,
-  onClose,
-  onChanged
-}: {
-  matter: Matter
-  stakeholder: MatterStakeholder | null
-  open: boolean
-  onClose(): void
-  onChanged(): void
-}): React.ReactElement | null {
-  const { t } = useTranslation()
-  const api = useMattersApi()
-  const [form, setForm] = useState<MatterStakeholderCreateInput>(() =>
-    stakeholderToInput(stakeholder)
-  )
-  const [formFor, setFormFor] = useState<number | 'new'>(stakeholder?.id ?? 'new')
-  const nextFormFor = stakeholder?.id ?? 'new'
-  if (formFor !== nextFormFor) {
-    setFormFor(nextFormFor)
-    setForm(stakeholderToInput(stakeholder))
-  }
-
-  const save = useMatterMutation({
-    matterId: matter.public_id,
-    mutationFn: () =>
-      stakeholder
-        ? api.patchStakeholder(matter.public_id, stakeholder.id, form, {
-            expectedVersion: matter.version
-          })
-        : api.createStakeholder(matter.public_id, form, { expectedVersion: matter.version }),
-    onSuccess: onChanged,
-    onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
-  })
-
-  if (!open) return null
-  return (
-    <div
-      className="fixed inset-0 z-[60] grid place-items-center bg-black/45 p-4"
-      role="presentation"
-    >
-      <section
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby="matter-stakeholder-title"
-        className="w-full max-w-md rounded-[var(--r-card)] border border-ink-border bg-ink-1 shadow-md"
-      >
-        <header className="flex items-center justify-between border-b border-ink-border px-5 py-4">
-          <h2 id="matter-stakeholder-title" className="text-lead font-semibold">
-            {t(stakeholder ? 'matters.context.editStakeholder' : 'matters.context.addStakeholder')}
-          </h2>
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-[var(--r-ctl)] p-1.5 hover:bg-ink-3"
-          >
-            <X size={16} />
-          </button>
-        </header>
-        <div className="grid gap-3 p-5">
-          <Field
-            label={t('matters.context.fields.name')}
-            value={form.display_name ?? ''}
-            onChange={(value) =>
-              setForm((current) => ({ ...current, display_name: value || null }))
-            }
-          />
-          <Field
-            label={t('matters.context.fields.email')}
-            value={form.email ?? ''}
-            onChange={(value) => setForm((current) => ({ ...current, email: value || null }))}
-            type="email"
-          />
-          <Field
-            label={t('matters.context.fields.role')}
-            value={form.role ?? ''}
-            onChange={(value) => setForm((current) => ({ ...current, role: value || null }))}
-          />
-          <Field
-            label={t('matters.context.fields.organization')}
-            value={form.organization ?? ''}
-            onChange={(value) =>
-              setForm((current) => ({ ...current, organization: value || null }))
-            }
-          />
-          <label className="flex items-center justify-between rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-aux">
-            <span>{t('matters.context.fields.waiting')}</span>
-            <input
-              type="checkbox"
-              checked={form.is_waiting_on === true}
-              onChange={(event) =>
-                setForm((current) => ({ ...current, is_waiting_on: event.target.checked }))
-              }
-            />
-          </label>
-        </div>
-        <footer className="flex justify-end gap-2 border-t border-ink-border px-5 py-4">
-          <button
-            type="button"
-            onClick={onClose}
-            className="rounded-[var(--r-ctl)] px-3 py-2 text-aux hover:bg-ink-3"
-          >
-            {t('common.cancel')}
-          </button>
-          <button
-            type="button"
-            disabled={save.isPending || (!form.display_name && !form.email)}
-            onClick={() => save.mutate()}
-            className="rounded-[var(--r-ctl)] bg-coral/100 px-4 py-2 text-aux font-medium text-accent-fg disabled:opacity-50"
-          >
-            {t('common.save')}
-          </button>
-        </footer>
-      </section>
-    </div>
-  )
-}
-
-function stakeholderToInput(stakeholder: MatterStakeholder | null): MatterStakeholderCreateInput {
-  return {
-    display_name: stakeholder?.display_name ?? '',
-    email: stakeholder?.email_normalized ?? '',
-    role: stakeholder?.role ?? '',
-    organization: stakeholder?.organization ?? '',
-    is_waiting_on: stakeholder?.is_waiting_on ?? false
-  }
-}
-
-function Field({
-  label,
-  value,
-  onChange,
-  type = 'text'
-}: {
-  label: string
-  value: string
-  onChange(value: string): void
-  type?: string
-}): React.ReactElement {
-  return (
-    <label className="grid gap-1.5 text-aux text-ink-fg-1">
-      <span>{label}</span>
-      <input
-        type={type}
-        value={value}
-        onChange={(event) => onChange(event.target.value)}
-        className="rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 outline-none focus:border-coral/60"
-      />
-    </label>
   )
 }
 

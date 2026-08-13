@@ -490,6 +490,74 @@ export interface MatterSuggestionBulkResult extends MatterMutationResult {
   counts: { applied: number; skipped: number }
 }
 
+/** G-14 tab ①「与本事项相关」的一条候选（`GET /{id}/resource-candidates`，只读）。
+ *  形状 = 服务端 `_email_resource_candidates` 的候选投影，**不是** `MatterResourceListItem`
+ *  —— 它还没有 link 行，`resource` 表里也可能还没有行。 */
+export interface MatterResourceCandidate {
+  external_key: string
+  title: string | null
+  metadata: {
+    internal_id: number
+    message_id?: string | null
+    thread_id?: string | null
+    date_received?: string | null
+  }
+  scope: 'local' | 'expanded'
+  reason: string
+  evidence: string[]
+  confidence: number
+}
+
+export interface MatterResourceCandidateResult {
+  items: MatterResourceCandidate[]
+  local_candidate_count: number
+}
+
+/** G-14 tab ③：本事项已关联邮件里的一份附件（`GET /{id}/resource-attachments`，批量只读）。
+ *  Q5 裁定「不做独立上传」，所以这里只有引用，没有 upload 面。 */
+export interface MatterResourceAttachment {
+  attachment_id: number
+  internal_id: number
+  filename: string
+  content_type: string | null
+  size_bytes: number | null
+  email_subject: string | null
+  email_sender: string | null
+  email_date: string | null
+  /** 关联后的稳定标识（`attachment:<id>`），提交时原样当 external_key 用。 */
+  external_key: string
+  /** 已经关联过一次了 —— 行置灰不可再选。 */
+  linked: boolean
+}
+
+/** G-15 关联事项。`matter_relation` 行 + JOIN 出来的两端标题/PubId。 */
+export interface MatterRelation {
+  id: number
+  source_matter_id: number
+  target_matter_id: number
+  relation_type: MatterRelationType | null
+  confidence: number | null
+  /** 服务端解析好的 provenance（`service._relation_row`）。用户备注挂在 `note` 上 ——
+   *  `matter_relation` 没有 note 列，加列要 bump DB_VERSION，本批不动 schema。 */
+  provenance: Record<string, unknown>
+  provenance_json: string
+  confirmed_at: number | null
+  deleted_at: number | null
+  created_at: number
+  updated_at: number
+  source_public_id: string
+  source_title: string
+  target_public_id: string
+  target_title: string
+}
+
+export interface MatterRelationCreateInput {
+  target_public_id: string
+  relation_type?: MatterRelationType | null
+  provenance?: Record<string, unknown>
+  confirmed?: boolean
+}
+
 export interface MatterResourceDiscoveryResult {
   items: MatterResourceSuggestion[]
   suppressed: Array<{ external_key: string; reason: 'rejected_same_evidence' }>
@@ -946,6 +1014,31 @@ export interface MattersApi {
     matterId: string,
     input?: { query?: string; expandReason?: MatterResourceExpansionReason; limit?: number }
   ): Promise<MatterResourceDiscoveryResult>
+  /** G-14 tab ①：只读候选。与 `discoverResourceSuggestions` 同引擎但**不写任何东西** ——
+   *  打开「关联资料」弹窗不该在事项上留下建议行 / 事件 / 版本推进。 */
+  listResourceCandidates(
+    matterId: string,
+    options?: { limit?: number }
+  ): Promise<MatterResourceCandidateResult>
+  /** G-14 tab ③：已关联邮件的附件，**一次批量**（禁逐封扇出，ARCHITECTURE §7.1）。 */
+  listResourceAttachments(
+    matterId: string,
+    options?: { limit?: number }
+  ): Promise<MatterResourceAttachment[]>
+  listRelations(
+    matterId: string,
+    options?: { direction?: 'both' | 'outgoing' | 'incoming' }
+  ): Promise<MatterRelation[]>
+  createRelation(
+    matterId: string,
+    input: MatterRelationCreateInput,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  deleteRelation(
+    matterId: string,
+    relationId: number,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
   listStakeholders(
     matterId: string,
     options?: MatterStakeholderListOptions

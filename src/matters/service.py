@@ -52,6 +52,7 @@ from .repository import MatterRepository
 from .resource_identity import (
     EMAIL_PROVIDER,
     MatterError,
+    attachment_resource_key,
     evidence_fingerprint,
     email_resource_key,
     normalize_resource_key,
@@ -165,6 +166,10 @@ RESOURCE_KEYWORD_RECALL_MIN_WEIGHT = 3
 
 # 一个事项挂着 10 条待审建议时不再堆新的：用户先处理完再说（0812 修法 6）。
 RESOURCE_SUGGESTION_BACKLOG_CAP = 10
+
+# 「关联资料」弹窗附件 tab 一次列多少条。纯展示上限，不是业务语义 —— 挂了几百封邮件的事项
+# 把全部附件铺出来既慢又没人翻得完，用户要具体某一份可以从那封邮件本身进。
+MATTER_RESOURCE_ATTACHMENT_LIMIT = 200
 
 
 @dataclass(frozen=True)
@@ -1540,7 +1545,23 @@ class MatterService:
         with self.repository.transaction() as conn:
             matter = self._require_matter(conn, public_id)
             snapshot = self._resolve_source_resource(conn, data.get("source_resource")) if data.get("source_resource") else None
-            specs = snapshot["resources"] if snapshot else [dict(data)]
+            if snapshot:
+                # 🔴 走 `source_resource` 时，link 级字段此前被**静默丢弃** —— snapshot 只产出
+                # 资源身份（provider/kind/external_key/title/metadata/sub_state），于是下面
+                # `spec.get("pinned")` / `spec.get("confirmed")` 恒为 None：请求里明明写了
+                # `confirmed: true` 的手动关联，落库却是 `confirmed_at=NULL`，在 UI 上跟
+                # Agent 建议长得一模一样（还带「确认 / 忽略」两颗钮）。
+                # 这里把这三个 link 级字段合进每条 spec。**不含 `sub_state`** —— 那个是
+                # snapshot 按资源类型自己定的语义（email=none / thread=active），调用方要改
+                # 订阅态走 `patch_resource`。不传这些字段的老调用方行为逐字节不变。
+                link_fields = {
+                    key: data[key]
+                    for key in ("pinned", "confirmed", "relation_type")
+                    if key in data
+                }
+                specs = [{**spec, **link_fields} for spec in snapshot["resources"]]
+            else:
+                specs = [dict(data)]
             results: list[dict[str, Any]] = []
             warnings: list[str] = list(snapshot.get("warnings", [])) if snapshot else []
             pending: list[tuple[dict[str, Any], dict[str, Any]]] = []
@@ -2147,6 +2168,71 @@ class MatterService:
                 "backlog_capped": False,
             }
 
+    def list_resource_candidates(
+        self, public_id: str, *, limit: int = RESOURCE_DISCOVERY_MAX_CANDIDATES
+    ) -> dict[str, Any]:
+        """「手动关联资料」入口用的**只读**候选（G-14 tab ①「与本事项相关」那一组）。
+
+        与 `discover_resource_suggestions` 共用同一个候选引擎 `_email_resource_candidates`
+        —— 于是人工挑与 Agent 建议看到的是同一批锚点、同一套理由文案，不会出现「Agent 说相关
+        的这封，我自己搜却看不到」。差别只有一个：这里**一个字都不写**（不建 link、不发事件、
+        不推版本、不吃 backlog 配额），所以打开弹窗这个动作本身没有副作用。
+
+        🔴 有意 **不接 `query` / `expand_reason`**：`local` 档结构上要求 thread / 干系人硬锚，
+        关键词只能加分、不能独自把一封邮件拉进来（见 `_email_resource_candidates` 注释）。
+        用户在弹窗里输入的关键词走的是另一条路 —— 前端的全局邮件搜索（FTS5），那条路本来就
+        是「用户明说要搜什么」，不需要也不应该借用 agent 侧的 expansion 声明。
+        """
+        limit = max(1, min(int(limit), RESOURCE_DISCOVERY_MAX_CANDIDATES))
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            candidates, local_count, _expanded = self._email_resource_candidates(
+                conn, matter, query=None, expand_reason=None, limit=limit
+            )
+            return {"items": candidates, "local_candidate_count": local_count}
+
+    def list_resource_attachments(
+        self, public_id: str, *, limit: int = MATTER_RESOURCE_ATTACHMENT_LIMIT
+    ) -> dict[str, Any]:
+        """本事项**已关联邮件**里的附件（G-14 tab ③，Q5 裁定范围：只引用、不做独立上传）。
+
+        🔴 一条 SQL 拿全部 —— 逐封 `attachment/list/{internal_id}` 扇出在挂了几十封邮件的
+        事项上就是几十个请求（ARCHITECTURE §7.1 列表性能铁律）。
+        🔴 `is_inline=0`：正文里的 cid 图片不是「资料」，摆出来只会淹没真附件。
+        """
+        limit = max(1, min(int(limit), MATTER_RESOURCE_ATTACHMENT_LIMIT))
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            linked_keys = {
+                row["external_key"]
+                for row in conn.execute(
+                    "SELECT r.external_key FROM matter_resource mr "
+                    "JOIN resource r ON r.id=mr.resource_id "
+                    "WHERE mr.matter_id=? AND mr.deleted_at IS NULL AND r.provider=? AND r.kind='file'",
+                    (matter["id"], EMAIL_PROVIDER),
+                ).fetchall()
+            }
+            rows = conn.execute(
+                "SELECT a.id AS attachment_id, a.internal_id, a.filename, a.content_type, "
+                "a.size_bytes, m.subject AS email_subject, m.sender AS email_sender, "
+                "m.date_received AS email_date "
+                "FROM matter_resource mr "
+                "JOIN resource r ON r.id=mr.resource_id "
+                "JOIN email_metadata m ON m.internal_id = CAST(substr(r.external_key, 7) AS INTEGER) "
+                "JOIN email_attachment a ON a.internal_id = m.internal_id "
+                "WHERE mr.matter_id=? AND mr.deleted_at IS NULL AND r.provider=? "
+                "AND r.kind='email' AND COALESCE(a.is_inline,0)=0 "
+                "ORDER BY m.date_received DESC, a.id LIMIT ?",
+                (matter["id"], EMAIL_PROVIDER, limit),
+            ).fetchall()
+            items = []
+            for row in rows:
+                item = dict(row)
+                item["external_key"] = attachment_resource_key(int(row["attachment_id"]))
+                item["linked"] = item["external_key"] in linked_keys
+                items.append(item)
+            return {"items": items}
+
     def restore_resource(self, public_id: str, resource_id: int, **mutation: Any) -> dict[str, Any]:
         return self._set_resource_deleted(public_id, resource_id, False, **mutation)
 
@@ -2335,6 +2421,24 @@ class MatterService:
                 ),
             )
 
+    def _relation_row(self, row: Any) -> dict[str, Any]:
+        """关系行投影：在原始列之上**additive** 地补一个解析好的 `provenance`。
+
+        `matter_relation` 只有 `provenance_json`(TEXT)，而资料链接行（`_resource_link_row`）
+        早就把同名字段解析成 dict 交出去。两处形状不一致时，每个消费方都得自己记住
+        「关系这一份要 JSON.parse」—— 于是这里统一。`provenance_json` **保留原样**，纯加键。
+        """
+        result = dict(row)
+        raw = result.get("provenance_json")
+        parsed: Any = {}
+        if isinstance(raw, str) and raw.strip():
+            try:
+                parsed = json.loads(raw)
+            except (TypeError, ValueError):
+                parsed = {}
+        result["provenance"] = parsed if isinstance(parsed, dict) else {}
+        return result
+
     def list_relations(self, public_id: str, *, direction: str = "both", relation_type: str | None = None) -> list[dict[str, Any]]:
         with self.repository.connect() as conn:
             matter = self._require_matter(conn, public_id)
@@ -2352,7 +2456,7 @@ class MatterService:
             if relation_type:
                 clauses.append("r.relation_type=?")
                 params.append(relation_type)
-            return [dict(row) for row in conn.execute(
+            return [self._relation_row(row) for row in conn.execute(
                 "SELECT r.*, sm.public_id AS source_public_id, sm.title AS source_title, "
                 "tm.public_id AS target_public_id, tm.title AS target_title FROM matter_relation r "
                 "JOIN matter sm ON sm.id=r.source_matter_id JOIN matter tm ON tm.id=r.target_matter_id "
@@ -2381,7 +2485,7 @@ class MatterService:
                 (source_matter["id"], target["id"], relation_type),
             ).fetchone()
             if existing:
-                result = self._mutation(source_matter, [], relation=dict(existing))
+                result = self._mutation(source_matter, [], relation=self._relation_row(existing))
                 result["warnings"] = ["already_linked"]
                 return result
             if not self._cas_update(conn, source_matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
@@ -2407,7 +2511,7 @@ class MatterService:
             return self._mutation(
                 after,
                 [event_id],
-                relation=dict(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()),
+                relation=self._relation_row(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()),
                 undo=self._undo_descriptor(
                     "matter_relation_mutate",
                     "撤销事项关系",
@@ -2466,7 +2570,7 @@ class MatterService:
             return self._mutation(
                 after,
                 [event_id],
-                relation=dict(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()),
+                relation=self._relation_row(conn.execute("SELECT * FROM matter_relation WHERE id=?", (relation_id,)).fetchone()),
                 undo=self._undo_descriptor(
                     "matter_relation_mutate",
                     "撤销事项关系变更",

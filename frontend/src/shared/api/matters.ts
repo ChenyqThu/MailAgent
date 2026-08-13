@@ -18,6 +18,9 @@ import type {
   MatterTagListResponse,
   MatterTagMutationResult,
   MatterDuplicateCandidate,
+  MatterRelation,
+  MatterResourceAttachment,
+  MatterResourceCandidateResult,
   MatterResourceDiscoveryResult,
   MatterResourceListItem,
   MatterResourceLookupResponse,
@@ -346,6 +349,50 @@ export function createMattersApi(baseUrl: string): MattersApi {
             limit: input.limit
           }
         }
+      )
+    },
+
+    listResourceCandidates(matterId, options = {}): Promise<MatterResourceCandidateResult> {
+      return request(baseUrl, 'GET', `/matters/${segment(matterId)}/resource-candidates`, {
+        query: { limit: options.limit }
+      })
+    },
+
+    async listResourceAttachments(matterId, options = {}): Promise<MatterResourceAttachment[]> {
+      const result = await request<{ items: MatterResourceAttachment[] }>(
+        baseUrl,
+        'GET',
+        `/matters/${segment(matterId)}/resource-attachments`,
+        { query: { limit: options.limit } }
+      )
+      return result.items
+    },
+
+    async listRelations(matterId, options = {}): Promise<MatterRelation[]> {
+      const result = await request<{ items: MatterRelation[] }>(
+        baseUrl,
+        'GET',
+        `/matters/${segment(matterId)}/relations`,
+        { query: { direction: options.direction } }
+      )
+      return result.items
+    },
+
+    createRelation(matterId, input, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'POST',
+        `/matters/${segment(matterId)}/relations`,
+        mutationRequest(options, input)
+      )
+    },
+
+    deleteRelation(matterId, relationId, options): Promise<MatterMutationResult> {
+      return request(
+        baseUrl,
+        'DELETE',
+        `/matters/${segment(matterId)}/relations/${segment(relationId)}`,
+        mutationRequest(options)
       )
     },
 

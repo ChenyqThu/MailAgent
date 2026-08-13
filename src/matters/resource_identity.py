@@ -27,6 +27,17 @@ def thread_resource_key(thread_id: str) -> str:
     return f"thread:{value}"
 
 
+def attachment_resource_key(attachment_id: int) -> str:
+    """邮件附件被引用成 matter 资料（kind='file'）时的稳定标识。
+
+    用 `email_attachment.id`（自增 PK，行在则 id 在）而不是「文件名 + 邮件」——同一封邮件里
+    重名附件是合法的，用名字做键会把两份不同的文件折成一份。
+    🔴 `normalize_resource_key` 只规范 email/thread 两种 kind，`file` 原样透传，故这里产出的
+    字符串就是最终 external_key。
+    """
+    return f"attachment:{int(attachment_id)}"
+
+
 def parse_resource_key(key: str) -> tuple[str, str]:
     kind, separator, value = str(key or "").partition(":")
     if not separator or kind not in {"email", "thread"} or not value:
