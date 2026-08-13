@@ -13,6 +13,8 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 
 import './onboarding.css'
 
+import { availableBackendsForPlatform, detectUiPlatform } from '@shared/lib/mailBackend'
+
 import { LegacyFlow, HalfFlow, DBCorruptScreen, RollbackScreen } from './branches'
 import { OnboardingShell, StepRail, type StepDef } from './components'
 import * as ipc from './ipc'
@@ -79,8 +81,13 @@ export default function OnboardingRoot(): React.JSX.Element {
 
   // shared NEW-wizard state (collected across steps; committed once at StepDone)
   const [form, setForm] = useState<ConfigForm>({ SYNC_MAILBOXES: ['收件箱'] })
-  const [backend, setBackend] = useState<BackendKind>('applescript')
+  // 默认 backend = 平台首选项 (单源 @shared/lib/mailBackend):
+  // mac/other = applescript (与三值化之前逐字节一致), win = outlook_com (主推)。
+  const [backend, setBackend] = useState<BackendKind>(
+    () => availableBackendsForPlatform(detectUiPlatform())[0]
+  )
   const [davAck, setDavAck] = useState(false)
+  const [comAck, setComAck] = useState(false)
   const [plugins, setPlugins] = useState<Record<string, boolean>>({})
   const [fdaSkipped, setFdaSkipped] = useState(false)
   const [background, setBackground] = useState(false)
@@ -225,6 +232,8 @@ export default function OnboardingRoot(): React.JSX.Element {
             setBackend={setBackend}
             davAck={davAck}
             setDavAck={setDavAck}
+            comAck={comAck}
+            setComAck={setComAck}
             onNext={next}
             onBack={back}
           />

@@ -16,6 +16,7 @@ import { Keyboard, X } from 'lucide-react'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { cn } from '@shared/lib/cn'
+import { calendarUiEnabled, detectUiPlatform } from '@shared/lib/mailBackend'
 import { SCOPE_ORDER, type ShortcutDef, type ShortcutScope, groupByScope } from '@shared/keymap'
 import { closeKeyboardHelp, useKeyboardHelp } from '@shared/state/keyboard-help'
 
@@ -152,7 +153,11 @@ export function KeyboardHelpModal(): React.ReactElement | null {
           </button>
         </header>
         <div className="flex-1 overflow-y-auto scrollbar-thin px-3 py-2 space-y-3">
-          {SCOPE_ORDER.map((scope) => (
+          {/* Windows 日历整体出范围（2026-08-13 拍板）→ 帮助面板不列日历快捷键
+              （其注册在 CalendarLayout, win 上本就不可达, 列出来只会误导）。 */}
+          {SCOPE_ORDER.filter(
+            (scope) => scope !== 'calendar' || calendarUiEnabled(detectUiPlatform())
+          ).map((scope) => (
             <ScopeSection key={scope} scope={scope} bindings={grouped[scope]} />
           ))}
         </div>

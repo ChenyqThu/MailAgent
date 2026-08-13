@@ -29,6 +29,13 @@ import { cn } from '@shared/lib/cn'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import {
+  availableBackendsForPlatform,
+  calendarUiEnabled,
+  coerceMailBackendForPlatform,
+  detectUiPlatform,
+  type MailBackendKind
+} from '@shared/lib/mailBackend'
 import { qk } from '@shared/lib/queryKeys'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -39,7 +46,8 @@ import { EnvField } from '../parts/EnvField'
 import { AdvancedDisclosure } from '../parts/AdvancedDisclosure'
 import { FolderPicker } from '../parts/FolderPicker'
 
-type MailBackend = 'applescript' | 'davmail'
+/** backend 值域/平台过滤单源 = @shared/lib/mailBackend (禁止此处再写字面量表)。 */
+type MailBackend = MailBackendKind
 
 /** 读单个 managed-env 值, 不订阅整个 store (仿 FolderPicker/RemoteAccessTab)。 */
 function useEnvValue(key: string): string {
@@ -176,9 +184,12 @@ function MailSourceSection(): React.ReactElement {
     (import.meta as unknown as { env?: { VITE_BUILD_TARGET?: string } }).env?.VITE_BUILD_TARGET ===
     'web'
 
-  // 空值 → 默认 'applescript' (config.py 默认)。
+  // 空值/平台不可用值 → 平台首选项 (mac=applescript 同 config.py 默认; win=outlook_com)。
+  // 平台过滤单源 @shared/lib/mailBackend —— 防「win 上 .env 残留 applescript →
+  // SegmentedControl 选中一个不存在的段」。
+  const platform = detectUiPlatform()
   const rawBackend = useEnvValue('MAILAGENT_BACKEND')
-  const backend: MailBackend = rawBackend === 'davmail' ? 'davmail' : 'applescript'
+  const backend: MailBackend = coerceMailBackendForPlatform(rawBackend, platform)
 
   // PoC 默认密钥开关: DAVMAIL_POC_MODE。后端 config.py 默认 False (未设 → 需真
   // cipher, 否则 BadPaddingException); 同面板的 DAVMAIL_POC_MODE toggle 用
@@ -225,16 +236,17 @@ function MailSourceSection(): React.ReactElement {
             fluid
             tone="accent"
             ariaLabel={t('settings.accounts.source.ariaLabel', { defaultValue: '邮件源' })}
-            options={[
-              {
-                value: 'applescript',
-                label: t('settings.accounts.source.applescript', { defaultValue: 'Mail.app' })
-              },
-              {
-                value: 'davmail',
-                label: t('settings.accounts.source.davmail', { defaultValue: 'DavMail' })
-              }
-            ]}
+            options={availableBackendsForPlatform(platform).map((v) => ({
+              value: v,
+              label:
+                v === 'applescript'
+                  ? t('settings.accounts.source.applescript', { defaultValue: 'Mail.app' })
+                  : v === 'davmail'
+                    ? t('settings.accounts.source.davmail', { defaultValue: 'DavMail' })
+                    : t('settings.accounts.source.outlookCom', {
+                        defaultValue: 'Outlook（本机）'
+                      })
+            }))}
             className={isWeb ? 'pointer-events-none opacity-60' : undefined}
           />
         </div>
@@ -273,6 +285,29 @@ function MailSourceSection(): React.ReactElement {
             helper={t('settings.sync.mailboxes.helper')}
             placeholder={t('settings.sync.mailboxes.placeholder') ?? undefined}
           />
+        </>
+      ) : backend === 'outlook_com' ? (
+        <>
+          {/* outlook_com（Windows 本机 Outlook COM）—— 近空面板：零连接配置，
+              真正的 COM 探测在 Python backend probe_readiness，这里只留说明文案。 */}
+          <EnvField
+            envKey="USER_EMAIL"
+            control="text"
+            label={t('settings.accounts.outlookCom.userEmail.label', {
+              defaultValue: '邮箱地址'
+            })}
+            helper={t('settings.accounts.outlookCom.userEmail.helper', {
+              defaultValue: '你在本机 Outlook 中登录的邮箱账户（= USER_EMAIL）。'
+            })}
+          />
+          <div className="px-[var(--settings-tile-px,1rem)] py-[var(--settings-tile-py,0.875rem)]">
+            <p className="text-aux text-ink-fg-1 leading-relaxed">
+              {t('settings.accounts.outlookCom.notice', {
+                defaultValue:
+                  '直接读写本机经典版 Outlook（classic Outlook），无需额外配置连接。前提：已安装并登录经典版 Outlook（新版 Outlook 不支持）；首次运行时 Outlook 会弹出「程序正在尝试访问」授权对话框，请选择允许并设置最长时长。同步期间需保持 Outlook 运行。'
+              })}
+            </p>
+          </div>
         </>
       ) : (
         <>
@@ -483,11 +518,14 @@ function MailSourceSection(): React.ReactElement {
 
 /** 日历同步 Section — 按 backend 条件渲染（从 SyncTab 迁来，归账户）。
  *  applescript 走本机 Calendar.app（AppleScript / EventKit）；davmail 走 CalDAV
- *  （把 Exchange 日历拉进本地），端口在上方「邮件源 · 高级连接 · CalDAV 端口」。 */
-function CalendarSyncSection(): React.ReactElement {
+ *  （把 Exchange 日历拉进本地），端口在上方「邮件源 · 高级连接 · CalDAV 端口」。
+ *  🔴 Windows 恒不渲染（owner 2026-08-13 拍板：日历整体出范围，不论 backend）。 */
+function CalendarSyncSection(): React.ReactElement | null {
   const { t } = useTranslation()
+  const platform = detectUiPlatform()
   const rawBackend = useEnvValue('MAILAGENT_BACKEND')
-  const backend: MailBackend = rawBackend === 'davmail' ? 'davmail' : 'applescript'
+  const backend: MailBackend = coerceMailBackendForPlatform(rawBackend, platform)
+  if (!calendarUiEnabled(platform)) return null
   return (
     <Section
       title={t('settings.sync.calendar.title', { defaultValue: '日历同步' })}
@@ -694,12 +732,15 @@ export function AccountsTab(): React.ReactElement {
           label={t('settings.accounts.notion.databaseId.label')}
           helper={t('settings.accounts.notion.databaseId.helper')}
         />
-        <EnvField
-          envKey="CALENDAR_DATABASE_ID"
-          control="text"
-          label={t('settings.accounts.notion.calendarDatabaseId.label')}
-          helper={t('settings.accounts.notion.calendarDatabaseId.helper')}
-        />
+        {/* Windows 日历整体出范围（2026-08-13 拍板）→ 日历库 ID 字段一并隐藏 */}
+        {calendarUiEnabled(detectUiPlatform()) && (
+          <EnvField
+            envKey="CALENDAR_DATABASE_ID"
+            control="text"
+            label={t('settings.accounts.notion.calendarDatabaseId.label')}
+            helper={t('settings.accounts.notion.calendarDatabaseId.helper')}
+          />
+        )}
       </Section>
 
       <MailSourceSection />

@@ -42,6 +42,7 @@ import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { isDraftsMailbox, isInboxMailbox, mailboxForView } from '@shared/lib/mailboxSemantics'
+import { calendarUiEnabled, detectUiPlatform } from '@shared/lib/mailBackend'
 import { useEmailFilter, type EmailView } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -657,13 +658,16 @@ export function Sidebar(): React.ReactElement {
             selected={pathname === '/admin/kanban' || pathname === '/admin'}
             onClick={() => navigate({ to: '/admin/kanban' })}
           />
-          <NavRow
-            icon={<CalendarCheckIcon size={15} strokeWidth={1.75} trigger="parent" />}
-            label={t('nav.calendar')}
-            title={collapsed ? t('nav.calendar') : undefined}
-            selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}
-            onClick={() => navigate({ to: '/admin/calendar', search: { view: 'week' } })}
-          />
+          {/* Windows 日历整体出范围（2026-08-13 拍板，平台判定不看 backend）*/}
+          {calendarUiEnabled(detectUiPlatform()) && (
+            <NavRow
+              icon={<CalendarCheckIcon size={15} strokeWidth={1.75} trigger="parent" />}
+              label={t('nav.calendar')}
+              title={collapsed ? t('nav.calendar') : undefined}
+              selected={pathname.startsWith('/admin/calendar') || pathname === '/calendar'}
+              onClick={() => navigate({ to: '/admin/calendar', search: { view: 'week' } })}
+            />
+          )}
         </nav>
       </div>
 
