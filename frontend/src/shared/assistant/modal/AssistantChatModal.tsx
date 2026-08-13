@@ -46,11 +46,6 @@ import {
   requestOpenAgentSession,
   type AssistantMode
 } from '@shared/state/ai-chat-panel'
-import type { ChatSession } from '@shared/api/types'
-import { listSessionsForMatter } from '@shared/api/chat_api'
-import { errorMessage } from '@shared/lib/ipcErrors'
-import { toastError } from '@shared/state/toast'
-import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
 import { AgentConversation } from '@shared/components/agents/AgentConversation'
 import { ChatPanelBoundary } from '@shared/components/chat/ChatPanelBoundary'
 import { ChatModalHistoryDropdown } from './ChatModalHistoryDropdown'
@@ -211,41 +206,29 @@ function AssistantChatModalInner(): React.JSX.Element {
   const items = sessionsQ.data ?? []
   const activeItem = items.find((s) => s.id === chat.activeSessionId) ?? null
 
-  // 0812 —— 「事项对话」= 定位到这件事最近一次会话（没有则开一场新的，带上事项 chip）。
-  // 会话发现走 serve-api 的 list-for-matter（origin=interactive、去归档、newest-first），与收口前
-  // useMatterChatSession 同一条路 —— 事项历史仍然找得回来，只是现在活在同一个历史下拉里。
-  // 依赖 epoch：dock 已经开着时再点一次也要重新定位（可能刚在别的会话里）。
-  const chatSelectSession = chat.selectSession
+  // 0813 dogfood 轮 3 #5 —— 「事项对话」**每次都开一场新对话**（owner：默认进新会话；历史仍从
+  // 标题下拉的会话列表里进，一条不删）。
+  //
+  // 改造前这里去 serve-api 的 list-for-matter 找这件事最近一次会话并选中它。那条路除了不合
+  // owner 的默认期待，还**结构性地**打断「立即跟进」（轮 3 #6）：会话发现是异步的，而
+  // `startMatterChatWithPrompt` 在同一次点击里还递了一条待发指令 —— 指令先在当前（空）会话上
+  // append 出去，几十毫秒后 selectSession 落地把 runtime 换掉，刚发出的那轮连同它的流一起从
+  // 界面上消失，用户看到的就是「浮窗出来了，然后什么都没发生」。同步新建把这个竞态从根上删掉。
+  //
+  // 🔴 `chatIsFresh` 那道门不是优化，是**同一个竞态的另一半**：effect 是父组件的，跑在
+  // AgentConversation / ChatPromptDispatcher 这些子组件的 effect **之后**（React 子先父后）。
+  // 当前已经是一场空的新对话时，指令这一帧就已经 append 出去了，此时再 newSession() 会 bump
+  // navEpoch → runtime 重挂 → 照样把它冲掉。而「已经是空的新对话」本来就等于「新开了一场」，
+  // 什么都不做才是对的。取值走 ref：把 messages 放进 deps 会让每次消息变化都重开一场对话。
   const chatNewSession = chat.newSession
   const matterTargetId = matterTarget?.id ?? null
-  //
-  // 🔴 0812 codex #5 —— 查询**失败**与「这件事还没有历史」是两回事。失败时保留当前会话（不走
-  // 新建分支）并如实告知，否则 serve-api 抖一下就会给同一件事再开一条会话、把历史割裂；反复抖动
-  // 能攒出一串重复的事项会话。重试 = 再点一次「事项对话」（epoch 自增会重跑本 effect）。
+  const chatIsFreshRef = useRef(false)
+  chatIsFreshRef.current = chat.activeSessionId === null && chat.messages.length === 0
   useEffect(() => {
-    if (matterTargetId === null) return undefined
-    let cancelled = false
-    void (async () => {
-      let rows: ChatSession[]
-      try {
-        rows = await listSessionsForMatter(resolveApiBaseUrl(), matterTargetId)
-      } catch (error) {
-        if (cancelled) return
-        toastError(t('matters.chat.sessionsLoadFailed'), errorMessage(error))
-        return
-      }
-      if (cancelled) return
-      const newest = rows[0] ?? null
-      if (newest) {
-        void chatSelectSession(newest.id)
-      } else {
-        chatNewSession()
-      }
-    })()
-    return () => {
-      cancelled = true
-    }
-  }, [matterTargetId, matterConversationEpoch, chatSelectSession, chatNewSession, t])
+    if (matterTargetId === null) return
+    if (chatIsFreshRef.current) return
+    chatNewSession()
+  }, [matterTargetId, matterConversationEpoch, chatNewSession])
 
   // fullscreen = ACTION: park the active session for AgentViewLayout to select (P6), navigate, minimise.
   const onFullscreen = (): void => {
@@ -428,6 +411,8 @@ function AssistantChatModalInner(): React.JSX.Element {
             welcomeAlign="left"
             initialMentionEmailId={activeEmailId ?? undefined}
             initialMatterTarget={matterTarget ?? undefined}
+            // 0813 #3 —— 浮窗 / 抽屉都是横向紧张的场地：工具行走紧凑档（context 环不写数值）。
+            denseControls
           />
         </ChatPanelBoundary>
       </div>

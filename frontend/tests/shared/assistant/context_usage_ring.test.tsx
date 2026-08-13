@@ -262,6 +262,45 @@ describe('ContextUsageRing', () => {
     expect(el.querySelector('svg')).toBeTruthy()
   })
 
+  // 0813 dogfood 轮 3 #3 —— 浮窗 / 抽屉场地（denseControls）只画环、不写数值。
+  test('紧凑档：环还在、数值让位；a11y 名字里的数字一个没少', async () => {
+    listMessages.mockResolvedValue([row({ id: 1, context_tokens: 91_000 })])
+    render(
+      <Harness value={controls({ denseControls: true })}>
+        <ContextUsageRing />
+      </Harness>
+    )
+    const el = await screen.findByTestId('context-usage')
+    expect(el.getAttribute('data-variant')).toBe('ring')
+    expect(el.querySelector('svg')).toBeTruthy()
+    expect(el.textContent).not.toContain('91K')
+    expect(el.getAttribute('aria-label')).toContain('91K')
+  })
+
+  test('🔴 紧凑档 + 上限未知（pill）→ 数值**留着**：那时没有环，数值是唯一的信号', async () => {
+    listMessages.mockResolvedValue([row({ id: 1, context_tokens: 91_000 })])
+    render(
+      <Harness
+        value={controls({ denseControls: true, availableModels: [model({ contextWindow: null })] })}
+      >
+        <ContextUsageRing />
+      </Harness>
+    )
+    const el = await screen.findByTestId('context-usage')
+    expect(el.getAttribute('data-variant')).toBe('pill')
+    expect(el.textContent).toContain('91K')
+  })
+
+  test('全页场地（不传 denseControls）→ 数值照旧渲染', async () => {
+    listMessages.mockResolvedValue([row({ id: 1, context_tokens: 91_000 })])
+    render(
+      <Harness>
+        <ContextUsageRing />
+      </Harness>
+    )
+    expect((await screen.findByTestId('context-usage')).textContent).toContain('91K')
+  })
+
   test('上限未命中（目录没这个模型）→ 中性药丸，不画环', async () => {
     listMessages.mockResolvedValue([row({ id: 1, context_tokens: 91_000 })])
     render(

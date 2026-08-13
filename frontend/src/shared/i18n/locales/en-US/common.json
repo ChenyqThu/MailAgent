@@ -5138,7 +5138,6 @@
       "newSession": "New conversation",
       "injectedContext": "Injected context",
       "contextUnresolved": "This conversation is anchored to a matter, but its identifier can't be read right now, so the context isn't ready. Sending is paused so nothing runs against the wrong scope — retry shortly or reopen it from the matter page.",
-      "sessionsLoadFailed": "Couldn't load this matter's conversation history; the current conversation was kept (nothing new was created).",
       "chips": {
         "acceptedState": "Accepted state",
         "openItems": "{count} open items",

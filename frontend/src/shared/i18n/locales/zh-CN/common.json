@@ -5351,7 +5351,6 @@
       "newSession": "新会话",
       "injectedContext": "已注入的上下文",
       "contextUnresolved": "这场对话锚在某个事项上，但暂时读不到它的编号，上下文未就绪。为避免在错误的范围里操作，已暂停发送 —— 请稍后重试或从事项页重新打开。",
-      "sessionsLoadFailed": "读取该事项的历史会话失败，已保留当前对话（未新建）",
       "chips": {
         "acceptedState": "当前已接受状态",
         "openItems": "{count} 个开放项",
