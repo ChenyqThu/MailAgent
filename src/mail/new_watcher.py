@@ -347,6 +347,8 @@ class NewWatcher:
         # 首次进入即执行; 与 5s radar poll 解耦, 间隔见 inbound_read_reconcile_interval_sec。
         self._last_inbound_read_reconcile_at: Optional[float] = None
         self._last_inbox_reconcile_at: Optional[float] = None
+        # 通讯录 L0+L1 提取扫描 (task 08-13) 的独立低频节拍游标, 同上解耦 5s poll。
+        self._last_contact_extract_at: Optional[float] = None
         # KOS 失败重试 (issue #59, 第 6c 步) 的不健康冷却截止 (monotonic 秒):
         # 探活失败后到此刻之前整段跳过, 不必每个 5s tick 都对着倒掉的 KOS 探活。
         self._kos_unhealthy_until: Optional[float] = None
@@ -713,6 +715,46 @@ class NewWatcher:
         # 同样是独立低频节拍。放在 pending 处理之后: 本轮补抓的行会由下一轮
         # (或本轮之后的 tick) 的 _process_pending_emails 抓正文。
         await self._reconcile_inbox()
+
+        # 10. 通讯录 L0+L1 提取扫描 (task 08-13 WP1, 默认关) — 独立低频节拍,
+        # 纯本地 SQLite (零 IMAP 命令), 消化 email_metadata → 通讯录三表。
+        await self._extract_contacts()
+
+    async def _extract_contacts(self):
+        """通讯录 L0+L1 增量扫描 (MAILAGENT_CONTACTS_ENABLED, 默认关)。
+
+        镜像 ``_reconcile_inbox`` 的独立低频节拍纪律: flag off = 字节级 inert
+        (零 SQL 零 import); 🔴 绝不挂 5s radar poll —— 独立 interval
+        (``MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC``, 默认 120s), 每 tick 有界批
+        (batch 500 + 墙钟预算, 见 scanner.DEFAULT_TICK_BUDGET_SEC), 积压时
+        单 tick 多消化几批、追平后回低频。全程幂等 (backfill = watermark 从 0
+        的同一段代码, CLI ``mailagent contact backfill`` 催跑)。
+
+        纯本地 SQL 放 ``asyncio.to_thread``: BEGIN IMMEDIATE 的锁**等待**发生在
+        工作线程, 不冻 event loop (镜像 read-reconcile 的收敛纪律)。
+        """
+        if not getattr(settings, "contacts_enabled", False):
+            return
+        interval = max(5, int(getattr(settings, "contact_extract_interval_sec", 120)))
+        now = time.monotonic()
+        last = self._last_contact_extract_at
+        if last is not None and (now - last) < interval:
+            return
+        self._last_contact_extract_at = now
+        try:
+            # 延迟 import: flag off 时不引入 contacts 域 (字节级 inert)。
+            from src.contacts.scanner import run_tick
+
+            stats = await asyncio.to_thread(run_tick, str(self.sync_store.db_path))
+            if stats and stats.get("processed"):
+                logger.info(
+                    f"[contact-extract] processed={stats['processed']} "
+                    f"contacts+={stats['contacts_created']} "
+                    f"links+={stats['links_inserted']} "
+                    f"watermark={stats['watermark']} drained={stats['drained']}"
+                )
+        except Exception as e:
+            logger.warning(f"[contact-extract] tick failed (skip cycle): {e}")
 
     async def _reconcile_inbound_read(self):
         """入向「未读→已读」单向回收 (davmail-only, MAILAGENT_INBOUND_READ_RECONCILE_ENABLED)。

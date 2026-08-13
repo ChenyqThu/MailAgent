@@ -989,6 +989,42 @@ class Config(BaseSettings):
     )
 
     # =========================================================================
+    # 通讯录 Contact Directory (task 08-13 WP1)
+    # 🔴 字段名 contacts_enabled ≠ env MAILAGENT_CONTACTS_ENABLED → 必须
+    #    validation_alias（pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释）。
+    # =========================================================================
+    contacts_enabled: bool = Field(
+        default=False,
+        validation_alias="MAILAGENT_CONTACTS_ENABLED",
+        description=(
+            "通讯录总闸（灰度默认关，ship-off → dogfood → cutover）。on = new_watcher "
+            "挂 L0+L1 提取扫描独立低频节拍（email_metadata → contact 三表账本/聚合）；"
+            "off = 字节级 inert（零 SQL 零 tick，CLI contact backfill 亦拒绝）。"
+            "schema (v54 三表) 与本 flag 解耦——表恒在，开关只管运行时行为。"
+            "Restart required after changing it."
+        ),
+    )
+    contact_extract_interval_sec: int = Field(
+        default=120,
+        validation_alias="MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC",
+        description=(
+            "通讯录 L0+L1 扫描的独立低频周期（秒），默认 120。🔴 绝不挂 5s radar "
+            "poll（镜像 inbox_reconcile 的节拍纪律）；每 tick 有界批（500 封/批 + "
+            "墙钟预算），积压时单 tick 多消化几批、追平后回低频。"
+        ),
+    )
+    self_emails: str = Field(
+        default="",
+        validation_alias="MAILAGENT_SELF_EMAILS",
+        description=(
+            "owner 历史自有地址集（逗号分隔，Q8 拍板 env 起步）。与 USER_EMAIL 一起"
+            "构成 is_self 排除集：自有地址不建通讯录行、发出的邮件按出向计 "
+            "sent_to_count（双向性判据）。改动后建议 `mailagent contact backfill "
+            "--rescan` 重扫收敛历史口径。"
+        ),
+    )
+
+    # =========================================================================
     # Sprint 16 dual-backend (2026-05): 邮件后端 single-driver 显式切换
     # AppleScript + Mail.app (FALLBACK, 默认) ⇄ DavMail IMAP/SMTP (PRIMARY)
     # 详见 plan: ~/.claude/plans/ultrathink-docs-dual-backend-*.md

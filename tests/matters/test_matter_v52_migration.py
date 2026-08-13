@@ -6,6 +6,11 @@ email 聚合去重入库（display_name/organization 取最近更新的非空行
 
 🔴 降级模拟不用 ``DROP COLUMN``（contact_id 带出向 FK，SQLite 直接拒；仓内既有教训
 「迁移测试禁 DROP COLUMN 一律重建」）—— 重建 v51 形状的表再灌回数据。
+
+v54 (task 08-13) 起 ``matter_contact`` 在梯子末端被迁进通讯录三表后 DROP —— 本文件
+的断言改读**最终形态**（``contact`` + ``contact_email``，id 与 v52 seed 保持一致），
+v52 块的归一/聚合/回写语义仍被完整穿越（v51 老库升级必经 v52 块）。v54 自身的三形态
+测试在姊妹篇 ``test_contact_v54_migration.py``。
 """
 
 from __future__ import annotations
@@ -17,8 +22,7 @@ import pytest
 from src.mail.sync_store import SyncStore, SyncStoreMigrationError
 
 CONTACT_COLUMNS = {
-    "id", "email_normalized", "display_name", "organization",
-    "created_at", "updated_at",
+    "id", "display_name", "organization", "created_at", "updated_at",
 }
 
 _V51_STAKEHOLDER_DDL = """CREATE TABLE matter_stakeholder_v51 (
@@ -52,7 +56,8 @@ def _version(path) -> str:
 
 
 def _downgrade_to_v51(path) -> None:
-    """把库退回 v51 形状：干系人表重建成无 contact_id 的旧列集 + 删全局库。"""
+    """把库退回 v51 形状：干系人表重建成无 contact_id 的旧列集 + 删全局库
+    （v54 后「全局库」= 通讯录三表，一并删掉才是真 v51 形状）。"""
     with sqlite3.connect(path) as conn:
         conn.execute("PRAGMA foreign_keys = OFF")
         conn.execute("DROP INDEX IF EXISTS idx_matter_stakeholder_contact")
@@ -82,7 +87,10 @@ def _downgrade_to_v51(path) -> None:
             "CREATE INDEX idx_matter_stakeholder_waiting "
             "ON matter_stakeholder(matter_id, is_waiting_on) WHERE deleted_at IS NULL"
         )
-        conn.execute("DROP TABLE matter_contact")
+        conn.execute("DROP TABLE IF EXISTS matter_contact")
+        conn.execute("DROP TABLE IF EXISTS contact_email_link")
+        conn.execute("DROP TABLE IF EXISTS contact_email")
+        conn.execute("DROP TABLE IF EXISTS contact")
         conn.execute("UPDATE sync_state SET value='51' WHERE key='db_version'")
         conn.commit()
 
@@ -118,7 +126,8 @@ def _seed_matters_and_stakeholders(path) -> None:
 def test_v52_fresh_db_has_contact_table_column_and_index(tmp_path):
     path = tmp_path / "fresh.db"
     SyncStore(str(path))
-    assert CONTACT_COLUMNS <= _columns(path, "matter_contact")
+    # v54 后梯子末端的「全局库」是 contact（matter_contact 已迁移退役）
+    assert CONTACT_COLUMNS <= _columns(path, "contact")
     assert "contact_id" in _columns(path, "matter_stakeholder")
     with sqlite3.connect(path) as conn:
         assert conn.execute(
@@ -138,9 +147,13 @@ def test_v52_upgrade_normalizes_emails_seeds_contacts_and_backfills(tmp_path):
 
     with sqlite3.connect(path) as conn:
         conn.row_factory = sqlite3.Row
+        # v52 seed 的产物经 v54 迁进 contact（id 保持）+ contact_email 锚点
         contacts = {
             row["email_normalized"]: dict(row)
-            for row in conn.execute("SELECT * FROM matter_contact")
+            for row in conn.execute(
+                "SELECT c.*, ce.email_normalized FROM contact c "
+                "JOIN contact_email ce ON ce.contact_id = c.id"
+            )
         }
         # 按归一 email 去重：Alice 两行（大小写+空格脏）并成一条
         assert set(contacts) == {"alice@x.com", "bob@y.com"}
@@ -195,19 +208,19 @@ def test_v52_migration_is_idempotent_on_reentry(tmp_path):
     _seed_matters_and_stakeholders(path)
     SyncStore(str(path))
 
+    contact_sql = (
+        "SELECT c.id, ce.email_normalized FROM contact c "
+        "JOIN contact_email ce ON ce.contact_id = c.id ORDER BY c.id"
+    )
     with sqlite3.connect(path) as conn:
-        before = conn.execute(
-            "SELECT id, email_normalized FROM matter_contact ORDER BY id"
-        ).fetchall()
+        before = conn.execute(contact_sql).fetchall()
         conn.execute("UPDATE sync_state SET value='51' WHERE key='db_version'")
         conn.commit()
 
     SyncStore(str(path))
 
     with sqlite3.connect(path) as conn:
-        after = conn.execute(
-            "SELECT id, email_normalized FROM matter_contact ORDER BY id"
-        ).fetchall()
+        after = conn.execute(contact_sql).fetchall()
         assert after == before
         assert conn.execute(
             "SELECT COUNT(*) FROM matter_stakeholder WHERE contact_id IS NULL "

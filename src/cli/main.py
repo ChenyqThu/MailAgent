@@ -41,6 +41,7 @@ from src.cli.commands import init as _init_module  # noqa: E402
 from src.cli.commands import kos as _kos_module  # noqa: E402
 from src.cli.commands import llm as _llm_module  # noqa: E402
 from src.cli.commands import calendar as _calendar_module  # noqa: E402
+from src.cli.commands import contact as _contact_module  # noqa: E402
 from src.cli.commands import debug as _debug_module  # noqa: E402
 from src.cli.commands import notion as _notion_module  # noqa: E402
 from src.cli.commands import project_progress as _project_progress_module  # noqa: E402
@@ -101,6 +102,10 @@ app.add_typer(
 app.add_typer(
     _im_module.app, name="im",
     help="IM 对话 (飞书): pair 出一次性绑定码 / status 看连接与绑定状态",
+)
+app.add_typer(
+    _contact_module.app, name="contact",
+    help="通讯录: backfill 扫描催跑 + 聚合校准 (task 08-13)",
 )
 
 

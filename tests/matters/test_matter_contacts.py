@@ -43,10 +43,15 @@ def _create_matter(service: MatterService, key: str):
 
 
 def _contact_rows(service: MatterService) -> dict[str, dict]:
+    # v54 (task 08-13): 全局库 = 通讯录三表, 按锚点邮箱展开 (一人一锚时形状与
+    # 旧 matter_contact 逐键等价: id/display_name/organization + email_normalized)。
     with service.repository.connect() as conn:
         return {
             row["email_normalized"]: dict(row)
-            for row in conn.execute("SELECT * FROM matter_contact")
+            for row in conn.execute(
+                "SELECT c.*, ce.email_normalized FROM contact c "
+                "JOIN contact_email ce ON ce.contact_id = c.id"
+            )
         }
 
 

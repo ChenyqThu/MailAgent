@@ -13,6 +13,8 @@ from typing import Any, Mapping, Sequence
 
 from loguru import logger
 
+from src.contacts.service import upsert_contact_for_email
+
 from .models import (
     MATTER_ACTOR_KINDS,
     MATTER_HEALTH_VALUES,
@@ -2347,7 +2349,8 @@ class MatterService:
             )]
 
     # ---- W-C 全局干系人库（dogfood 轮 2）----------------------------------
-    # 基本信息（姓名/邮箱/组织）全局一份（matter_contact，身份 = 归一 email）；
+    # 基本信息（姓名/邮箱/组织）全局一份（v54 起 = 通讯录 contact/contact_email，
+    # task 08-13；身份 = 归一 email 锚点）；
     # 角色/等待/备注仍归各事项的 matter_stakeholder 行。库是**隐式维护**的：
     # 添加/编辑干系人与邮件提取入池时 upsert，没有独立 CRUD 控制台（backlog）。
 
@@ -2361,21 +2364,32 @@ class MatterService:
         🔴 聚合一次 LEFT JOIN 算完，绝不逐 contact 查（列表性能铁律，
         `frontend/ARCHITECTURE.md` §7.1-7.2 的后端镜像）。排序 = 关联事项数
         降序（近似"往来密度"，真实往来封数只在邮件提取端点里算——那份要扫
-        email_metadata，不该为每次开 Picker 都付一遍）。"""
+        email_metadata，不该为每次开 Picker 都付一遍）。
+
+        v54 起读通讯录三表（task 08-13；本端点 WP3 退役、切 `/api/contacts`）。
+        行为与 v52 等价：`email_normalized` 交出主邮箱（一人多邮箱取
+        is_primary），搜索命中**任一**锚点邮箱/姓名/组织；合并墓碑
+        （merged_into 非空）过滤 —— 那是同一个人的旧壳，不该在池里出现两次。"""
         sql = (
-            "SELECT c.id, c.email_normalized, c.display_name, c.organization, "
+            "SELECT c.id, "
+            "  (SELECT ce.email_normalized FROM contact_email ce "
+            "   WHERE ce.contact_id = c.id "
+            "   ORDER BY ce.is_primary DESC, ce.id ASC LIMIT 1) AS email_normalized, "
+            "c.display_name, c.organization, "
             "c.created_at, c.updated_at, "
             "COUNT(DISTINCT CASE WHEN ms.deleted_at IS NULL THEN ms.matter_id END) AS matter_count, "
             "MAX(CASE WHEN ms.deleted_at IS NULL THEN ms.last_contact_at END) AS last_contact_at "
-            "FROM matter_contact c "
+            "FROM contact c "
             "LEFT JOIN matter_stakeholder ms ON ms.contact_id = c.id "
+            "WHERE c.merged_into IS NULL "
         )
         params: list[Any] = []
         needle = str(query or "").strip().lower()
         if needle:
             like = f"%{needle}%"
             sql += (
-                "WHERE (c.email_normalized LIKE ? "
+                "AND (EXISTS (SELECT 1 FROM contact_email ce2 "
+                "     WHERE ce2.contact_id = c.id AND ce2.email_normalized LIKE ?) "
                 "OR lower(COALESCE(c.display_name, '')) LIKE ? "
                 "OR lower(COALESCE(c.organization, '')) LIKE ?) "
             )
@@ -2407,9 +2421,12 @@ class MatterService:
                 "ORDER BY date_received DESC LIMIT ?",
                 (self.CONTACT_SCAN_WINDOW,),
             ).fetchall()
+            # v54: 库内成员按 contact_email 锚点标注 (contact_id = 人级 id)。
             contact_ids = {
-                row["email_normalized"]: int(row["id"])
-                for row in conn.execute("SELECT id, email_normalized FROM matter_contact")
+                row["email_normalized"]: int(row["contact_id"])
+                for row in conn.execute(
+                    "SELECT contact_id, email_normalized FROM contact_email"
+                )
             }
         stats: dict[str, dict[str, Any]] = {}
         for row in rows:
@@ -2464,32 +2481,19 @@ class MatterService:
     ) -> int:
         """按归一 email upsert 全局联系人，返回 contact_id。
 
-        提供的非空姓名/组织 = 最后写者赢（全局一份的语义：改名就是全局改名）；
-        传 None = 不动既有值。
-
-        `fallback_*` = **只在新建这条联系人时**顶上的值（调用方手里有、但用户本次并没有
-        显式改的姓名/组织）。🔴 它有意**不**进 ON CONFLICT 分支：目标邮箱可能已经是
-        另一个人的全局联系人，拿本行的名字盖上去 = 悄悄把别人改名了。"""
-        conn.execute(
-            "INSERT INTO matter_contact "
-            "(email_normalized, display_name, organization, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?) "
-            "ON CONFLICT(email_normalized) DO UPDATE SET "
-            "display_name = COALESCE(?, matter_contact.display_name), "
-            "organization = COALESCE(?, matter_contact.organization), "
-            "updated_at = excluded.updated_at",
-            (
-                email,
-                display_name or fallback_display_name,
-                organization or fallback_organization,
-                now, now,
-                display_name, organization,
-            ),
+        v54 起全局库 = 通讯录三表（contact / contact_email，task 08-13），写侧
+        单源在 `src/contacts/service.py::upsert_contact_for_email` —— 本方法只是
+        保住 matters 内既有调用点的薄包装。语义与 v52 逐语义一致：提供的非空
+        姓名/组织 = 最后写者赢（全局一份：改名就是全局改名）；传 None = 不动
+        既有值；`fallback_*` 只在**新建**这条联系人时顶上（目标邮箱可能已经是
+        另一个人，拿本行的名字盖上去 = 悄悄把别人改名了 —— 红字原样继承）。
+        升级点：按 `contact_email` 锚点找人 ⇒ 一人多邮箱下也命中同一人。"""
+        return upsert_contact_for_email(
+            conn, email=email, now=now,
+            display_name=display_name, organization=organization,
+            fallback_display_name=fallback_display_name,
+            fallback_organization=fallback_organization,
         )
-        row = conn.execute(
-            "SELECT id FROM matter_contact WHERE email_normalized=?", (email,)
-        ).fetchone()
-        return int(row["id"])
 
     def _propagate_contact_identity(
         self, conn: sqlite3.Connection, contact_id: int, *, now: int,
@@ -2592,7 +2596,7 @@ class MatterService:
                         organization=values["organization"], now=now,
                     )
                     contact = conn.execute(
-                        "SELECT display_name, organization FROM matter_contact WHERE id=?",
+                        "SELECT display_name, organization FROM contact WHERE id=?",
                         (contact_id,),
                     ).fetchone()
                     values["display_name"] = values["display_name"] or contact["display_name"]

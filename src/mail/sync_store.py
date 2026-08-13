@@ -71,6 +71,12 @@ from src.matters.models import (
     sql_check_clause,
 )
 from src.matters.resource_identity import MatterError, normalize_resource_key
+from src.contacts.taxonomy import (
+    CONTACT_FUNCTION_VALUES,
+    CONTACT_KIND_VALUES,
+    CONTACT_MANAGER_SRC_VALUES,
+    CONTACT_SENIORITY_VALUES,
+)
 
 
 # Draft→Sent 提升判定用的 mailbox label 集合（见 _save_email_v3 cross-backend merge）。
@@ -449,6 +455,82 @@ MATTER_INDEX_DDLS = (
 MATTER_STAKEHOLDER_CONTACT_INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_matter_stakeholder_contact "
     "ON matter_stakeholder(contact_id) WHERE contact_id IS NOT NULL"
+)
+
+
+# ==================== Contact Directory DDL single source (v54) ====================
+# 通讯录三表 (task 08-13 contact-directory WP1, PRD §3.2)。🔴 独立成组, **不进**
+# MATTER_TABLE_DDLS / MATTER_INDEX_DDLS —— 既是域边界 (通讯录是跨域「人」引用库,
+# 不是 matters 子件, 代码归 src/contacts/), 也是 v52 索引教训的直接应用: matters
+# 各迁移块会对老库整组重放 MATTER_*_DDLS, 本组只从 v54 块执行 (新库满梯子同样经
+# v54 拿到), 老库升级梯子对 v44..v53 全部中间版本无重放炸点。
+# CHECK 值域经 sql_check_clause 引自 src/contacts/taxonomy.py (枚举唯一权威,
+# 不手抄 —— 仓规「第二处手抄先消灭镜像」)。
+CONTACT_TABLE_DDLS = (
+    # ① 人 (人级代理主键 —— 身份锚在 contact_email, 本体不含 email 列)。
+    #    🎨 设计增补列 (role_title / function / seniority / manager 两列) 随 v54
+    #    一次建齐, 不留二次迁移 (PRD §7-WP1)。kind_locked_at = owner 改判 kind 后
+    #    L0 启发式不再翻转的锁 (镜像 identity_locked_at 的语义粒度)。
+    f"""CREATE TABLE IF NOT EXISTS contact (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        display_name TEXT NULL,
+        name_en TEXT NULL,
+        organization TEXT NULL,
+        department TEXT NULL,
+        contact_info_json TEXT NULL CHECK (contact_info_json IS NULL OR json_valid(contact_info_json)),
+        notes TEXT NULL,
+        name_variants_json TEXT NULL CHECK (name_variants_json IS NULL OR json_valid(name_variants_json)),
+        role_title TEXT NULL,
+        function TEXT NULL CHECK (function IS NULL OR function {sql_check_clause(CONTACT_FUNCTION_VALUES)}),
+        seniority TEXT NULL CHECK (seniority IS NULL OR seniority {sql_check_clause(CONTACT_SENIORITY_VALUES)}),
+        manager_contact_id INTEGER NULL REFERENCES contact(id) ON DELETE SET NULL,
+        manager_src TEXT NULL CHECK (manager_src IS NULL OR manager_src {sql_check_clause(CONTACT_MANAGER_SRC_VALUES)}),
+        kind TEXT NOT NULL DEFAULT 'person' CHECK (kind {sql_check_clause(CONTACT_KIND_VALUES)}),
+        kind_locked_at INTEGER NULL,
+        is_self INTEGER NOT NULL DEFAULT 0 CHECK (is_self IN (0, 1)),
+        hidden_at INTEGER NULL,
+        identity_locked_at INTEGER NULL,
+        profile_json TEXT NULL CHECK (profile_json IS NULL OR json_valid(profile_json)),
+        profile_updated_at INTEGER NULL,
+        profile_mail_count INTEGER NULL,
+        profile_model TEXT NULL,
+        mail_count INTEGER NOT NULL DEFAULT 0,
+        sent_to_count INTEGER NOT NULL DEFAULT 0,
+        first_seen_at INTEGER NULL,
+        last_seen_at INTEGER NULL,
+        merged_into INTEGER NULL REFERENCES contact(id),
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )""",
+    # ② email 锚点 (一人多邮箱; 全表 UNIQUE = 一个地址只属于一个人)。
+    """CREATE TABLE IF NOT EXISTS contact_email (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        contact_id INTEGER NOT NULL REFERENCES contact(id) ON DELETE CASCADE,
+        email_normalized TEXT NOT NULL UNIQUE
+            CHECK (email_normalized = lower(trim(email_normalized)) AND length(email_normalized) > 0),
+        is_primary INTEGER NOT NULL DEFAULT 0 CHECK (is_primary IN (0, 1)),
+        former_at INTEGER NULL,
+        mail_count INTEGER NOT NULL DEFAULT 0,
+        first_seen_at INTEGER NULL,
+        last_seen_at INTEGER NULL,
+        created_at INTEGER NOT NULL
+    )""",
+    # ③ 人-邮件账本。挂 contact_email 不挂 contact: 合并 = 改锚点归属, 账本零搬。
+    #    email_metadata 行被删 (merge guard / INSERT OR REPLACE 的 REPLACE 路径)
+    #    时账本行 CASCADE 清掉, 聚合缓存靠校准自愈 (PRD §4.2 merge guard 边界)。
+    """CREATE TABLE IF NOT EXISTS contact_email_link (
+        email_id INTEGER NOT NULL REFERENCES contact_email(id) ON DELETE CASCADE,
+        internal_id INTEGER NOT NULL REFERENCES email_metadata(internal_id) ON DELETE CASCADE,
+        role TEXT NOT NULL CHECK (role IN ('sender', 'to', 'cc')),
+        seen_at INTEGER NULL,
+        PRIMARY KEY (email_id, internal_id, role)
+    )""",
+)
+
+CONTACT_INDEX_DDLS = (
+    "CREATE INDEX IF NOT EXISTS idx_contact_email_contact ON contact_email(contact_id)",
+    "CREATE INDEX IF NOT EXISTS idx_link_email ON contact_email_link(email_id, seen_at DESC)",
+    "CREATE INDEX IF NOT EXISTS idx_link_mail ON contact_email_link(internal_id)",
 )
 
 
@@ -1002,7 +1084,19 @@ class SyncStore:
     #                ⚠️ 本列在 feat/win-outlook-com worktree 分配; main 分支若并发
     #                bump v53, merge 时需重编号本迁移块。
     #                回滚 (回退 v53): 列留着无害 (旧代码零消费点)。
-    DB_VERSION = 53
+    # v54 (Contact Directory WP1, task 08-13, 2026-08): 通讯录三表 contact /
+    #                contact_email / contact_email_link (DDL 单源 CONTACT_TABLE_DDLS /
+    #                CONTACT_INDEX_DDLS, 🔴 不进 MATTER_*_DDLS) + 迁 matter_contact →
+    #                contact (**id 保持**, 每行生成 contact_email is_primary=1) +
+    #                rebuild matter_stakeholder (FK contact_id 改指 contact, 镜像 v45
+    #                先例) + DROP matter_contact。聚合缓存列迁移期恒 0, 账本 backfill
+    #                不进 migration (由 src/contacts/scanner 从 watermark=0 增量消化)。
+    #                ⚠️ PRD 原编号 v53 已被上面的 outlook_com entry_id 占用 (worktree
+    #                并发 bump), 本块按其预告重编号为 v54。
+    #                回滚 (回退 v54): 新三表可留 (旧代码零消费点); 但 matter_contact
+    #                已 DROP、stakeholder FK 已改指 contact —— 回退版本的 matters 写面
+    #                会因缺表失败, 真要回退需从 backups/ 恢复库。
+    DB_VERSION = 54
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -3256,6 +3350,154 @@ class SyncStore:
                 _migration_guard_columns(
                     cursor, "email_metadata", {"entry_id"}, "v53 migration", e,
                 )
+
+        # === v54: 通讯录 Contact Directory (task 08-13 WP1, 方案 A) ===
+        # 动作序 (PRD §3.3): ① 建三表 + 索引 ② 迁 matter_contact → contact (id 保持,
+        # matter_stakeholder.contact_id 的值因此不用改写) + 每行生成主邮箱锚点
+        # ③ rebuild matter_stakeholder (SQLite 改不了 FK 目标, contact_id 改指
+        # contact 只能整表重建 —— 完全镜像 v45 先例: PRAGMA 判据探测幂等 /
+        # defer_foreign_keys / 建-灌-DROP-RENAME / 重建 4 个索引 / 定向
+        # foreign_key_check) ④ DROP matter_contact。
+        # 🔴 DDL 与 DML 分 try (v51/v52 教训): seed/迁数据/rebuild 失败必须 raise,
+        # 绝不被「表已存在」guard 吞; 半重建状态绝不落 version (整个迁移单事务,
+        # 失败随连接回收 ROLLBACK)。
+        # 🔴 梯子冻结: MATTER_TABLE_DDLS 里 matter_contact / matter_stakeholder 的
+        # 旧形状 CREATE **原样冻结** (append-only) —— v52 块靠它们建表 + seed; 新库
+        # 满梯子先建旧形状再在这里换形, 多做一次 rebuild 是幂等成本, 换来梯子对
+        # v44..v53 全部中间版本成立。
+        # 🔴 账本 backfill 不进 migration (万封级 IO 会卡 app 首启 waitReady 门控):
+        # 这里只建空表 + 迁 18 行级 contact; 账本由 src/contacts/scanner.py 从
+        # sync_state['contact_extract.watermark']=0 增量消化 (或 CLI 手动催跑)。
+        if current_version < 54:
+            # ① 新表 + 索引 (纯 DDL, IF NOT EXISTS 幂等; 真失败必须 raise)。
+            try:
+                for ddl in CONTACT_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in CONTACT_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(
+                    f"v54 migration (contact tables): {e}"
+                ) from e
+
+            # ② 迁数据 (DML, 与 DDL 分 try, 失败无条件 raise)。INSERT OR IGNORE
+            #    幂等; matter_contact 已 DROP (重入) 时整段跳过。重入安全性由
+            #    「迁移单事务原子提交」+ OR IGNORE 双重兜底。
+            try:
+                has_legacy = cursor.execute(
+                    "SELECT name FROM sqlite_master "
+                    "WHERE type='table' AND name='matter_contact'"
+                ).fetchone() is not None
+                if has_legacy:
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO contact "
+                        "(id, display_name, organization, created_at, updated_at) "
+                        "SELECT id, display_name, organization, created_at, updated_at "
+                        "FROM matter_contact"
+                    )
+                    migrated = cursor.rowcount
+                    cursor.execute(
+                        "INSERT OR IGNORE INTO contact_email "
+                        "(contact_id, email_normalized, is_primary, created_at) "
+                        "SELECT mc.id, mc.email_normalized, 1, mc.created_at "
+                        "FROM matter_contact mc "
+                        "WHERE EXISTS (SELECT 1 FROM contact c WHERE c.id = mc.id)"
+                    )
+                    if migrated:
+                        logger.info(
+                            f"v54 migration: migrated {migrated} matter_contact "
+                            f"row(s) → contact (ids preserved)"
+                        )
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(
+                    f"v54 migration (contact seed): {e}"
+                ) from e
+
+            # ③ rebuild matter_stakeholder + ④ DROP matter_contact。
+            try:
+                sh_fk_targets = {
+                    (row[2], row[3])
+                    for row in cursor.execute(
+                        "PRAGMA foreign_key_list(matter_stakeholder)"
+                    )
+                }
+                needs_rebuild = ("matter_contact", "contact_id") in sh_fk_targets
+                if needs_rebuild:
+                    cursor.execute("PRAGMA defer_foreign_keys = ON")
+                    sh_ddl = next(
+                        ddl for ddl in MATTER_TABLE_DDLS
+                        if ddl.startswith(
+                            "CREATE TABLE IF NOT EXISTS matter_stakeholder"
+                        )
+                    )
+                    new_ddl = sh_ddl.replace(
+                        "CREATE TABLE IF NOT EXISTS matter_stakeholder",
+                        "CREATE TABLE matter_stakeholder_v54", 1,
+                    ).replace(
+                        "REFERENCES matter_contact(id)", "REFERENCES contact(id)", 1,
+                    )
+                    cursor.execute("DROP TABLE IF EXISTS matter_stakeholder_v54")
+                    cursor.execute(new_ddl)
+                    # 🔴 显式列名 INSERT —— 老库 (v52 升级路径) 的 contact_id 是
+                    # ALTER 追加在**末尾**, 新库满梯子的建表列序里它在中间;
+                    # `SELECT *` 在两条路径下列序不同必错位。
+                    _sh_cols = (
+                        "id, matter_id, person_key, display_name, email_normalized, "
+                        "organization, role, relationship, is_waiting_on, "
+                        "last_contact_at, source_resource_id, contact_id, "
+                        "deleted_at, created_at, updated_at"
+                    )
+                    cursor.execute(
+                        f"INSERT INTO matter_stakeholder_v54 ({_sh_cols}) "
+                        f"SELECT {_sh_cols} FROM matter_stakeholder"
+                    )
+                    # 🔴 入向 FK 的实际影响面 (PRD §3.3 预期「按名字解析不用动
+                    # matter_item」在这里**不成立**): DROP TABLE 在 foreign_keys=ON
+                    # 下执行隐式 DELETE FROM, matter_item.waiting_on_stakeholder_id
+                    # 的 ON DELETE SET NULL **动作**会被触发 (defer_foreign_keys 只
+                    # 延迟约束校验, 不拦动作), waiting 指针整列被清 —— 先快照、
+                    # RENAME 之后回填 (行量 = 事项行动项级, 个位数到十位数)。
+                    _waiting_rows = cursor.execute(
+                        "SELECT id, waiting_on_stakeholder_id FROM matter_item "
+                        "WHERE waiting_on_stakeholder_id IS NOT NULL"
+                    ).fetchall()
+                    cursor.execute("DROP TABLE matter_stakeholder")
+                    cursor.execute(
+                        "ALTER TABLE matter_stakeholder_v54 RENAME TO matter_stakeholder"
+                    )
+                    for _item_row in _waiting_rows:
+                        cursor.execute(
+                            "UPDATE matter_item SET waiting_on_stakeholder_id=? "
+                            "WHERE id=?",
+                            (_item_row[1], _item_row[0]),
+                        )
+                    # 重建它的 4 个索引: 3 个在 MATTER_INDEX_DDLS (重放即得) +
+                    # 关联索引 (独立常量, 不进组的理由见其注释)。漏一个 = 静默
+                    # 性能/约束回退, 迁移测试逐个断言。
+                    for ddl in MATTER_INDEX_DDLS:
+                        cursor.execute(ddl)
+                    cursor.execute(MATTER_STAKEHOLDER_CONTACT_INDEX_DDL)
+                    # 定向 foreign_key_check (v45 纪律: 只查本次动过的表 + 按名字
+                    # 解析入向 FK 的 matter_item; 全库 check 会把无关表的历史畸形
+                    # 算到 v54 头上)。
+                    violations = [
+                        *cursor.execute(
+                            "PRAGMA foreign_key_check(matter_stakeholder)"
+                        ).fetchall(),
+                        *cursor.execute(
+                            "PRAGMA foreign_key_check(matter_item)"
+                        ).fetchall(),
+                    ]
+                    if violations:
+                        raise SyncStoreMigrationError(
+                            f"v54 migration: foreign_key_check failed: {violations}"
+                        )
+                # ④ 退役旧表 (rebuild 后无任何 FK 指向它; 重入时可能已不存在)。
+                cursor.execute("DROP TABLE IF EXISTS matter_contact")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(
+                    f"v54 migration (stakeholder rebuild): {e}"
+                ) from e
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
