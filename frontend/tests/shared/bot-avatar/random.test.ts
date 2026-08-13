@@ -1,6 +1,8 @@
 // random.ts 语义契约：
 //   golden 稳定性 —— derive / legacy 映射的精确输入→输出钉死（防未来重构静默换脸，
-//   prd §5.1「同一 agent 换版本后外观稳定」的机器化）；
+//   prd §5.1「同一 agent 换版本后外观稳定」的机器化）。v2 词表换代是一次**有意的**
+//   全量换脸（8 形从 2D path 换成 3D 原语），golden 随之重钉：索引算法未动，
+//   同 id 的派生索引与 v1 相同，只是索引指到的形状名换了（blob→sphere 等双射）；
 //   shuffle —— 确定性递进（同起点恒同下一个）且 ≠ 起点（全 88 起点穷举）；
 //   randomBotAvatar —— 注入随机源可复现、词表内均匀取值。
 
@@ -19,13 +21,13 @@ describe('deriveBotAvatar：agent_id 确定性派生（golden 钉死）', () => 
   // 改动 hash / 词表顺序 / 索引算法任一处都会翻红 —— 翻红 = 全体存量 NULL 行换脸，
   // 必须回到 prd §5.1 重新评审而不是改断言了事。
   const GOLDENS: ReadonlyArray<[string, string, string]> = [
-    ['daily_report', 'hex', 'gray'],
+    ['daily_report', 'diamond', 'gray'],
     ['search', 'capsule', 'blue'],
-    ['preprocess', 'egg', 'red'],
-    ['custom_ai', 'hex', 'gray'],
-    ['project_progress', 'wedge', 'yellow'],
+    ['preprocess', 'cone', 'red'],
+    ['custom_ai', 'diamond', 'gray'],
+    ['project_progress', 'cube', 'yellow'],
     // 空 id 兜底种子 'mailagent'（对齐 resolveAgentAvatar 的 || 兜底）
-    ['', 'egg', 'brown']
+    ['', 'cone', 'brown']
   ]
 
   test.each(GOLDENS)('%j -> %s/%s', (agentId, shape, color) => {
@@ -39,11 +41,11 @@ describe('deriveBotAvatar：agent_id 确定性派生（golden 钉死）', () => 
 
 describe('mapLegacyGeneratedToBot：oreo → bot 确定性映射（golden 钉死）', () => {
   const GOLDENS: ReadonlyArray<[string, string, string, string]> = [
-    ['bloom', 'rose', 'hex', 'white'],
-    ['silk', 'ocean', 'blob', 'brown'],
-    ['flare', 'ember', 'squircle', 'red'],
-    ['nova', 'meadow', 'squircle', 'gray'],
-    ['jade', 'dusk', 'squircle', 'yellow']
+    ['bloom', 'rose', 'diamond', 'white'],
+    ['silk', 'ocean', 'sphere', 'brown'],
+    ['flare', 'ember', 'cylinder', 'red'],
+    ['nova', 'meadow', 'cylinder', 'gray'],
+    ['jade', 'dusk', 'cylinder', 'yellow']
   ]
 
   test.each(GOLDENS)('%s/%s -> %s/%s', (shape, palette, botShape, botColor) => {
@@ -63,9 +65,9 @@ describe('mapLegacyGeneratedToBot：oreo → bot 确定性映射（golden 钉死
 
 describe('shuffleBotAvatar：确定性递进且 ≠ 起点', () => {
   test('同起点恒同下一个（golden）', () => {
-    const next = shuffleBotAvatar({ shape: 'blob', color: 'orange' }, 'daily_report')
-    expect(next).toEqual({ type: 'bot', shape: 'squircle', color: 'orange' })
-    expect(shuffleBotAvatar({ shape: 'blob', color: 'orange' }, 'daily_report')).toEqual(next)
+    const next = shuffleBotAvatar({ shape: 'sphere', color: 'orange' }, 'daily_report')
+    expect(next).toEqual({ type: 'bot', shape: 'cube', color: 'gray' })
+    expect(shuffleBotAvatar({ shape: 'sphere', color: 'orange' }, 'daily_report')).toEqual(next)
   })
 
   test('全 88 起点 × 3 个 agentId 穷举：结果 ≠ 起点且在词表内', () => {
@@ -86,9 +88,9 @@ describe('shuffleBotAvatar：确定性递进且 ≠ 起点', () => {
 
   test('current 非法/缺省时起点回落 id 派生基底', () => {
     const fromNull = shuffleBotAvatar(null, 'search')
-    expect(fromNull).toEqual({ type: 'bot', shape: 'teardrop', color: 'teal' })
-    // 非法值（oreo 词表残留）与 null 同路径
-    expect(shuffleBotAvatar({ shape: 'bloom', color: 'rose' } as never, 'search')).toEqual(fromNull)
+    expect(fromNull).toEqual({ type: 'bot', shape: 'cursor', color: 'teal' })
+    // 非法值（v1 词表残留 —— random 层不做 legacy 映射，那是 resolveAgentAvatar 的职责）
+    expect(shuffleBotAvatar({ shape: 'blob', color: 'rose' } as never, 'search')).toEqual(fromNull)
     // 且 ≠ 派生基底本身
     expect(fromNull).not.toEqual(deriveBotAvatar('search'))
   })

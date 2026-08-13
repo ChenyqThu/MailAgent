@@ -1,46 +1,58 @@
-// 灵动 bot 头像 —— 唯一 React 绑定（engine/ticker/states/shapes/colors 全部无 React）。
-// 双档设计（prd §4.5/§4.6）：
+// 灵动 bot 头像 —— 唯一 React 绑定（engine/ticker/states/shapes/colors/geometry 全部无 React）。
+// 双档设计（v1 纪律不变）：
 //   静态档（默认）= 渲染 state 池首表情的一帧 SVG，零引擎、零 ticker、零定时器 ——
-//     列表位点（数百个 22px 实例同屏）与 reduced-motion 回退都走这里；
+//     列表位点（数百个 22px 实例同屏）与 reduced-motion 回退都走这里，且静态帧有
+//     模块级缓存（engine.staticFrame）：同 shape×表情只算一次几何；
 //   动画档（animated）= 引擎 + 共享 ticker + IntersectionObserver 可见性裁剪，
-//     位点按设计只有 2-4 个同屏（chat 回合头 / 面板头 / 抽屉预览）。
-// reduced-motion 必须 JS 层短路（本组件动画帧经 setAttribute 直写 DOM，CSS media
-// 管不到 —— motion-gsap.md §3 同款结论），恒回静态档：身份/状态仍可读，动画整个不出现。
+//     位点按设计只有 2-4 个同屏（chat 回合头 / 面板头 / 抽屉预览）。v2 起动画档在
+//     ambient 活跃状态下不 settle（30fps 限频常驻重绘）——新增 animated 位点须过性能评估。
+// reduced-motion 必须 JS 层短路（动画帧经 setAttribute 直写 DOM，CSS media 管不到），
+// 恒回静态档：身份/状态仍可读，动画整个不出现。
+// v2 渲染结构（镜像 avatar-lab standalone runtime）：
+//   defs/clipPath(head) → g[flip] → g[motion: ambient 平移] →
+//     back×N(mickey 耳/cursor 锥) → head path → g[clip] → eye×2
+// 头部 path 每帧都会变（3D 转头），所以 head 与 clipPath 都由 writeFrame 直写。
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef } from 'react'
 
 import { useReducedMotion } from '../hooks/useReducedMotion'
 import { COLORS } from './colors'
-import { BotFaceEngine } from './engine'
-import { staticFrame } from './engine'
-import { BOT_BODY_SPAN, BOT_VIEW_BOX, SHAPES, bodyScaleTransform } from './shapes'
+import { BotFaceEngine, staticFrame } from './engine'
+import { BACK_PATH_COUNT, BOT_VIEW_BOX, SHAPES } from './shapes'
 import { POOLS } from './states'
 import { registerTicker, unregisterTicker } from './ticker'
 import type { BotColor, BotShape, BotState, EngineFrame } from './types'
 import { useBotAvatarTheme } from './useBotAvatarTheme'
 
 export interface BotAvatarProps {
-  /** 缺省 blob / orange（官方助手形象，prd §6.3 Q4） */
+  /** 缺省 sphere / orange（官方助手形象） */
   config?: { shape?: BotShape; color?: BotColor }
   state?: BotState
   size?: number
   title?: string
   className?: string
-  /** 显式声明才动 —— 新增 animated 位点须过性能评估（prd §4.6-3） */
+  /** 显式声明才动 —— 新增 animated 位点须过性能评估 */
   animated?: boolean
   flipX?: boolean
-  /** 眼睛跟随**全局**指针（原型语义：组件可见时监听，不是 hover 才动）。仅 animated 档
+  /** 眼睛/头部跟随**全局**指针（组件可见时监听，不是 hover 才动）。仅 animated 档
    *  生效；不可见时随 ticker 一起停监听；reduced-motion 恒不激活。 */
   mouseInteractive?: boolean
 }
 
-/** 指针位置 → 归一 gaze（分析 §4.3：clamp(±0.6) 后归一到 [-1,1]；y 同比例）。
- *  分母用视窗尺寸 —— 原型语义是「跟随全局指针」，眼睛随指针横穿整屏渐进转动，
- *  用元件自身宽度做分母会在指针离开头像几十像素时就饱和。 */
+/** 指针位置 → 归一 gaze（clamp(±0.6) 后归一到 [-1,1]；分母用视窗尺寸 ——
+ *  语义是「跟随全局指针」，眼睛随指针横穿整屏渐进转动）。 */
 function pointerGaze(pointer: number, center: number, extent: number): number {
   if (!(extent > 0)) return 0
   const clamped = Math.max(-0.6, Math.min(0.6, (pointer - center) / extent))
   return clamped / 0.6
+}
+
+interface FrameRefs {
+  motion: SVGGElement | null
+  clip: SVGPathElement | null
+  head: SVGPathElement | null
+  back: Array<SVGPathElement | null>
+  eyes: Array<SVGPathElement | null>
 }
 
 export function BotAvatar({
@@ -57,10 +69,11 @@ export function BotAvatar({
   const isAnimated = animated && !reducedMotion
   const theme = useBotAvatarTheme()
 
-  const shape: BotShape = config?.shape ?? 'blob'
+  const shape: BotShape = config?.shape ?? 'sphere'
   const color: BotColor = config?.color ?? 'orange'
-  const shapeDef = SHAPES[shape]
+  const surface = SHAPES[shape]
   const palette = COLORS[color][theme]
+  const backCount = BACK_PATH_COUNT[shape]
 
   // clipPath id 每实例唯一：多实例同屏时 url(#…) 按文档序解析到第一个同名节点，
   // 共享 id 会让所有实例吃同一个（可能已卸载的）裁剪形状。useId 的冒号在
@@ -68,56 +81,37 @@ export function BotAvatar({
   const rawId = useId()
   const clipId = useMemo(() => `bot-clip-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`, [rawId])
 
-  // 形状胖瘦（eyeAnchor.bodyScaleX/Y）：body 与 clipPath 共用同一串绕中心缩放。
-  // clipPath 内容按引用方坐标系（userSpaceOnUse）解析，不吃 defs 外的 <g> 变换，
-  // 所以必须写在 clip 内的 <path> 上；恒等缩放时为 undefined，blob DOM 与 WP1 一致。
-  const bodyTransform = bodyScaleTransform(shapeDef.eyeAnchor)
-
-  // 静态档的那一帧；动画档也用它作 SSR/首帧基线（= 引擎初始快照：池首、morph=1）
-  const frame = useMemo(
-    () =>
-      staticFrame(
-        POOLS[state][0],
-        shapeDef.eyeAnchor.eyeScale,
-        shapeDef.eyeAnchor.offsetX,
-        shapeDef.eyeAnchor.offsetY
-      ),
-    [state, shapeDef]
-  )
+  // 静态档的那一帧（模块级缓存）；动画档也用它作 SSR/首帧基线（= 引擎初始快照：池首）
+  const frame = useMemo(() => staticFrame(POOLS[state][0], surface), [state, surface])
 
   const svgRef = useRef<SVGSVGElement | null>(null)
-  const eyeRefs = useRef<Array<SVGPathElement | null>>([])
+  const refs = useRef<FrameRefs>({ motion: null, clip: null, head: null, back: [], eyes: [] })
   const engineRef = useRef<BotFaceEngine | null>(null)
   // 引擎创建 effect 不依赖 state（换状态不得重建引擎），经 ref 取创建时刻的最新值
   const stateRef = useRef(state)
 
   // 每次 render 后：把 state prop 灌进引擎（内部同值 no-op），并用引擎快照回写
-  // DOM —— React 刚按静态 frame 写过 eye 属性，若不回写，动画中的重渲染会把眼睛
+  // DOM —— React 刚按静态 frame 写过几何属性，若不回写，动画中的重渲染会把画面
   // 瞬间打回池首帧。layout 时机保证发生在 paint 前，肉眼无闪烁。
   useLayoutEffect(() => {
     stateRef.current = state
     const engine = engineRef.current
     if (!engine) return
     engine.setState(state)
-    writeFrame(eyeRefs.current, engine.snapshot())
+    writeFrame(refs.current, engine.snapshot())
   })
 
   useEffect(() => {
     if (!isAnimated) return
-    const engine = new BotFaceEngine({
-      initialState: stateRef.current,
-      eyeScale: shapeDef.eyeAnchor.eyeScale,
-      offsetX: shapeDef.eyeAnchor.offsetX,
-      offsetY: shapeDef.eyeAnchor.offsetY
-    })
+    const engine = new BotFaceEngine({ surface, initialState: stateRef.current })
     engineRef.current = engine
     const client = (now: number): void => {
       const next = engine.tick(now)
-      if (next) writeFrame(eyeRefs.current, next)
+      if (next) writeFrame(refs.current, next)
     }
 
-    // mouseInteractive（编辑器预览）：可见时监听**全局** pointermove，把指针相对组件
-    // 中心的位置折算成归一 gaze 交给引擎（引擎内部乘 ±13.2/±8.4 单位，分析 §4.3）。
+    // mouseInteractive：可见时监听**全局** pointermove，把指针相对组件中心的位置
+    // 折算成归一 gaze 交给引擎（v2 引擎内部转成头部朝向 + 眼睛偏移叠加）。
     const onPointerMove = (event: PointerEvent): void => {
       const node = svgRef.current
       if (!node) return
@@ -128,9 +122,8 @@ export function BotAvatar({
       )
     }
 
-    // 可见性裁剪（prd §4.6-2）：不可见即从共享 ticker 注销。环境无 IO（happy-dom/
-    // 老 WebView）时按恒可见处理 —— 宁可多画不可不画。指针监听与 ticker 同生命周期
-    // （复用同一道可见性闸：不可见即停监听）。
+    // 可见性裁剪：不可见即从共享 ticker 注销。环境无 IO（happy-dom/老 WebView）时
+    // 按恒可见处理 —— 宁可多画不可不画。指针监听与 ticker 同生命周期。
     let registered = false
     const setRegistered = (want: boolean): void => {
       if (want === registered) return
@@ -159,7 +152,7 @@ export function BotAvatar({
       setRegistered(false)
       engineRef.current = null
     }
-  }, [isAnimated, shapeDef, mouseInteractive])
+  }, [isAnimated, surface, mouseInteractive])
 
   return (
     <svg
@@ -175,38 +168,75 @@ export function BotAvatar({
       {title ? <title>{title}</title> : null}
       <defs>
         <clipPath id={clipId}>
-          <path d={shapeDef.path} transform={bodyTransform} />
+          <path
+            ref={(node) => {
+              refs.current.clip = node
+            }}
+            d={frame.head}
+          />
         </clipPath>
       </defs>
-      {/* flipX = 原型的整体镜像串 translate(228.541 0) scale(-1 1)（analysis §4.4 配套） */}
-      <g transform={flipX ? `translate(${BOT_BODY_SPAN} 0) scale(-1 1)` : undefined}>
-        <path d={shapeDef.path} transform={bodyTransform} fill={palette.body} />
-        <g clipPath={`url(#${clipId})`}>
-          {frame.eyes.map((eye, i) => (
+      {/* v2 坐标系画布中心 (0,0)：flipX 即绕原点镜像 */}
+      <g transform={flipX ? 'scale(-1 1)' : undefined}>
+        <g
+          ref={(node) => {
+            refs.current.motion = node
+          }}
+          data-bot-motion=""
+        >
+          {Array.from({ length: backCount }, (_, i) => (
             <path
-              key={i}
+              key={`back-${i}`}
               ref={(node) => {
-                eyeRefs.current[i] = node
+                refs.current.back[i] = node
               }}
-              data-bot-eye={i}
-              d={eye.d}
-              transform={eye.transform}
-              visibility={eye.hidden ? 'hidden' : 'visible'}
-              fill={palette.eye}
+              data-bot-back={i}
+              d={frame.back[i] ?? ''}
+              fill={palette.body}
             />
           ))}
+          <path
+            ref={(node) => {
+              refs.current.head = node
+            }}
+            data-bot-head=""
+            d={frame.head}
+            fill={palette.body}
+          />
+          <g clipPath={`url(#${clipId})`}>
+            {frame.eyes.map((eye, i) => (
+              <path
+                key={i}
+                ref={(node) => {
+                  refs.current.eyes[i] = node
+                }}
+                data-bot-eye={i}
+                d={eye.d}
+                visibility={eye.visible ? 'visible' : 'hidden'}
+                fill={palette.eye}
+              />
+            ))}
+          </g>
         </g>
       </g>
     </svg>
   )
 }
 
-function writeFrame(nodes: ReadonlyArray<SVGPathElement | null>, frame: EngineFrame): void {
+function writeFrame(refs: FrameRefs, frame: EngineFrame): void {
+  refs.motion?.setAttribute(
+    'transform',
+    `translate(${frame.offsetX.toFixed(2)} ${frame.offsetY.toFixed(2)})`
+  )
+  refs.clip?.setAttribute('d', frame.head)
+  refs.head?.setAttribute('d', frame.head)
+  refs.back.forEach((node, i) => {
+    node?.setAttribute('d', frame.back[i] ?? '')
+  })
   frame.eyes.forEach((eye, i) => {
-    const node = nodes[i]
+    const node = refs.eyes[i]
     if (!node) return
     node.setAttribute('d', eye.d)
-    node.setAttribute('transform', eye.transform)
-    node.setAttribute('visibility', eye.hidden ? 'hidden' : 'visible')
+    node.setAttribute('visibility', eye.visible ? 'visible' : 'hidden')
   })
 }

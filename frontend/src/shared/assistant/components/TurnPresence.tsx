@@ -50,7 +50,7 @@ import { formatToolDuration, useToolElapsed } from '@shared/assistant/tools/gene
  *  内联常量（与 BotAvatar 的缺省一致，显式写出是为了让消费点自我说明）。模块私有：对象常量
  *  导出会触发 react-refresh/only-export-components（allowConstantExport 只放行字面量）。 */
 const OFFICIAL_ASSISTANT_BOT_CONFIG: NonNullable<BotAvatarProps['config']> = {
-  shape: 'blob',
+  shape: 'sphere',
   color: 'orange'
 }
 

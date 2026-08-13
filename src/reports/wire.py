@@ -66,15 +66,18 @@ def _normalize_avatar_image(avatar: Dict[str, Any]) -> Dict[str, Any]:
 # 无 type 键 = legacy oreo 生成式）。词表以这里为跨语言 canonical —— 前端
 # frontend/src/shared/bot-avatar/{shapes,colors}.ts 手抄同一份驱动编辑器网格与渲染，
 # 闸 = tests/config/test_bot_avatar_vocab_parity.py（任一侧漂移/改名/重排必红）。
+# v2（avatar-lab 引擎换代）：8 种 3D 参数曲面原语。v1 8 形（blob/squircle/egg/wedge/
+# hex/cloud/teardrop/capsule）由前端 shapes.ts LEGACY_BOT_SHAPE_MAP 读侧双射换脸，
+# 写侧（本白名单 + 编辑器）只认 v2 词表，存量行不迁移。
 BOT_AVATAR_SHAPES = (
-    "blob",
+    "sphere",
     "capsule",
-    "squircle",
-    "egg",
-    "wedge",
-    "hex",
-    "cloud",
-    "teardrop",
+    "cylinder",
+    "cone",
+    "cube",
+    "diamond",
+    "mickey",
+    "cursor",
 )
 BOT_AVATAR_COLORS = (
     "white",

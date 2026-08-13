@@ -307,11 +307,11 @@ describe('ConfigDrawer avatar identity (0804 dogfood 3d)', () => {
   test('展开 → 选形状 → 保存 patch 携带 avatar', () => {
     renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: '更换' }))
-    // 形状网格按 bot shape id 挂 aria-label；wedge 是八形状之一。
-    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('wedge'))
+    // 形状网格按 bot shape id 挂 aria-label；cone 是八形状之一。
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('cone'))
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(mockSave).toHaveBeenCalledTimes(1)
-    expect(mockSave.mock.calls[0][1].avatar).toMatchObject({ type: 'bot', shape: 'wedge' })
+    expect(mockSave.mock.calls[0][1].avatar).toMatchObject({ type: 'bot', shape: 'cone' })
   })
 })
 

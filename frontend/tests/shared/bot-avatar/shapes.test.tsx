@@ -1,12 +1,11 @@
 // @vitest-environment happy-dom
 //
-// WP2 形状/颜色资产的机器验收：
-//   1. 词表 ↔ 注册表一一对应（BOT_AVATAR_SHAPES/COLORS 是 WP4 parity 闸的 TS 侧）；
-//   2. 防重叠闸：8 形 × 25 表情全组合 eyeScale ≤ (distance-5)/(halfWidth₁+halfWidth₂)
-//      —— 形状调参的硬验收（prd §4.3），halfWidth 取该形 eyeScale 缩放后的半宽；
-//   3. 几何 sanity：path 非空/闭合、数字全在 viewBox 内、占幅与 blob 同级；
-//   4. 渲染消费：8 形经 BotAvatar 静态档各渲一次不抛，bodyScale 施加在 body+clipPath
-//      共用串上（blob 恒等缩放 = 无 transform，DOM 与 WP1 逐字节一致）；
+// v2 形状/颜色资产的机器验收：
+//   1. 词表 ↔ 注册表一一对应（BOT_AVATAR_SHAPES/COLORS 是 parity 闸的 TS 侧）；
+//   2. legacy 双射：v1 8 形 → v2 8 形不折叠（两个不同 v1 形状换代后仍不同脸）；
+//   3. 几何 sanity：8 形 × 代表表情的头/眼 path 非空闭合、眼坐标在 viewBox 内、
+//      背层槽位数与 BACK_PATH_COUNT 一致；
+//   4. 渲染消费：8 形经 BotAvatar 静态档各渲一次不抛，head 与 clipPath 共用同一串；
 //   5. 浅色身体（white/yellow/gray）eye 覆写为固定深色，其余色跟 --background。
 
 import { afterEach, describe, expect, test } from 'vitest'
@@ -16,129 +15,123 @@ import { BotAvatar } from '../../../src/shared/bot-avatar/BotAvatar'
 import { BOT_AVATAR_COLORS, COLORS } from '../../../src/shared/bot-avatar/colors'
 import { EXPRESSIONS, staticFrame } from '../../../src/shared/bot-avatar/engine'
 import {
+  BACK_PATH_COUNT,
   BOT_AVATAR_SHAPES,
-  SHAPES,
-  bodyScaleTransform
+  LEGACY_BOT_SHAPE_MAP,
+  SHAPES
 } from '../../../src/shared/bot-avatar/shapes'
 
 afterEach(cleanup)
 
-describe('词表 ↔ 注册表（WP4 parity 闸的 TS 侧同源）', () => {
-  test('BOT_AVATAR_SHAPES 与 SHAPES 键一一对应且无重复', () => {
+describe('词表 ↔ 注册表（parity 闸的 TS 侧同源）', () => {
+  test('BOT_AVATAR_SHAPES 与 SHAPES / BACK_PATH_COUNT 键一一对应且无重复', () => {
     expect(new Set(BOT_AVATAR_SHAPES).size).toBe(BOT_AVATAR_SHAPES.length)
     expect([...BOT_AVATAR_SHAPES].sort()).toEqual(Object.keys(SHAPES).sort())
+    expect([...BOT_AVATAR_SHAPES].sort()).toEqual(Object.keys(BACK_PATH_COUNT).sort())
   })
 
   test('BOT_AVATAR_COLORS 与 COLORS 键一一对应且无重复', () => {
     expect(new Set(BOT_AVATAR_COLORS).size).toBe(BOT_AVATAR_COLORS.length)
     expect([...BOT_AVATAR_COLORS].sort()).toEqual(Object.keys(COLORS).sort())
   })
+
+  test('SHAPES 的曲面类型与形状名一致（词表即 SurfaceType 词表）', () => {
+    for (const shape of BOT_AVATAR_SHAPES) {
+      expect(SHAPES[shape].type).toBe(shape)
+    }
+  })
 })
 
-type Ring = ReadonlyArray<ReadonlyArray<number>>
-
-function centroidX(ring: Ring): number {
-  return ring.reduce((acc, p) => acc + p[0], 0) / ring.length
-}
-function centroidY(ring: Ring): number {
-  return ring.reduce((acc, p) => acc + p[1], 0) / ring.length
-}
-function halfWidth(ring: Ring): number {
-  const xs = ring.map((p) => p[0])
-  return (Math.max(...xs) - Math.min(...xs)) / 2
-}
-
-describe('防重叠闸：8 形 × 25 表情（eyeScale 调参的机器验收）', () => {
-  // eyeScale 绕各自眼心缩放（engine transform 尾部 translate(-cx -cy)）——眼心距不随
-  // 缩放变化；offsetX/offsetY 平移整个眼组，同样不改变眼心距。
-  for (const shape of BOT_AVATAR_SHAPES) {
-    test(`${shape}`, () => {
-      const k = SHAPES[shape].eyeAnchor.eyeScale
-      EXPRESSIONS.forEach((frame, i) => {
-        const [left, right] = frame
-        const distance = Math.hypot(
-          centroidX(right) - centroidX(left),
-          centroidY(right) - centroidY(left)
-        )
-        const scaledHalfWidths = k * halfWidth(left) + k * halfWidth(right)
-        const bound = (distance - 5) / scaledHalfWidths
-        expect(k, `${shape} × expression#${i}: eyeScale ${k} > bound ${bound.toFixed(4)}`)
-          .toBeLessThanOrEqual(bound + 1e-9)
-      })
-    })
-  }
+describe('legacy 双射（v1 → v2 读侧换脸）', () => {
+  test('v1 8 形全覆盖，值全部落在 v2 词表内，且是双射（不折叠）', () => {
+    const V1 = ['blob', 'capsule', 'squircle', 'egg', 'wedge', 'hex', 'cloud', 'teardrop']
+    expect(Object.keys(LEGACY_BOT_SHAPE_MAP).sort()).toEqual([...V1].sort())
+    const values = Object.values(LEGACY_BOT_SHAPE_MAP)
+    for (const value of values) expect(BOT_AVATAR_SHAPES).toContain(value)
+    expect(new Set(values).size).toBe(V1.length)
+  })
 })
 
-describe('几何 sanity：path 形状与占幅', () => {
-  const NUMBER_RE = /-?\d+(?:\.\d+)?/g
+/** 折线 path（M/L…Z）里的坐标对；眼 path 是纯折线所以可以逐对断言 */
+function pathCoordinatePairs(d: string): Array<[number, number]> {
+  const numbers = (d.match(/-?\d+(?:\.\d+)?/g) ?? []).map(Number)
+  const pairs: Array<[number, number]> = []
+  for (let i = 0; i + 1 < numbers.length; i += 2) pairs.push([numbers[i], numbers[i + 1]])
+  return pairs
+}
+
+describe('几何 sanity：8 形 × 代表表情', () => {
+  // 代表表情取 0（idle 池首，带 27.8° yaw —— 顺带覆盖「转头后仍可渲染」）与 13（近正视）
+  const SAMPLE_EXPRESSIONS = [0, 13]
 
   for (const shape of BOT_AVATAR_SHAPES) {
-    test(`${shape} path 闭合且坐标全在 viewBox 内`, () => {
-      const path = SHAPES[shape].path
-      expect(path.length).toBeGreaterThan(0)
-      expect(path.startsWith('M')).toBe(true)
-      expect(path.endsWith('Z')).toBe(true)
-      // 全部是绝对命令（M/L/C），path 里的数字即坐标对：粗查 min/max 落在
-      // viewBox -15 -15 259 259（即 x/y ∈ [-15, 244]）内 —— 不做精确曲线包络
-      const numbers = (path.match(NUMBER_RE) ?? []).map(Number)
-      expect(numbers.length).toBeGreaterThanOrEqual(4)
-      expect(numbers.length % 2).toBe(0)
-      const xs = numbers.filter((_, i) => i % 2 === 0)
-      const ys = numbers.filter((_, i) => i % 2 === 1)
-      for (const v of xs) expect(v, `${shape} x=${v}`).toBeGreaterThanOrEqual(-15)
-      for (const v of xs) expect(v, `${shape} x=${v}`).toBeLessThanOrEqual(244)
-      for (const v of ys) expect(v, `${shape} y=${v}`).toBeGreaterThanOrEqual(-15)
-      for (const v of ys) expect(v, `${shape} y=${v}`).toBeLessThanOrEqual(244)
-      // 占幅与 blob 同级（bodyScale 前的全尺寸 path）：长边 ≥ 195，两边都 ≥ 150
-      const w = Math.max(...xs) - Math.min(...xs)
-      const h = Math.max(...ys) - Math.min(...ys)
-      expect(Math.max(w, h), `${shape} span ${w.toFixed(1)}×${h.toFixed(1)}`).toBeGreaterThanOrEqual(195)
-      expect(Math.min(w, h), `${shape} span ${w.toFixed(1)}×${h.toFixed(1)}`).toBeGreaterThanOrEqual(150)
+    test(`${shape}：头/眼 path 闭合，背层数对表，眼坐标在 viewBox 内`, () => {
+      for (const index of SAMPLE_EXPRESSIONS) {
+        const frame = staticFrame(index, SHAPES[shape])
+        expect(frame.head.startsWith('M'), `${shape}#${index} head`).toBe(true)
+        expect(frame.head.endsWith('Z'), `${shape}#${index} head`).toBe(true)
+        expect(frame.head.includes('NaN')).toBe(false)
+        expect(frame.back).toHaveLength(BACK_PATH_COUNT[shape])
+        for (const back of frame.back) {
+          expect(back.startsWith('M')).toBe(true)
+          expect(back.includes('NaN')).toBe(false)
+        }
+        expect(frame.eyes).toHaveLength(2)
+        for (const eye of frame.eyes) {
+          expect(eye.d.startsWith('M'), `${shape}#${index} eye`).toBe(true)
+          expect(eye.d.endsWith('Z'), `${shape}#${index} eye`).toBe(true)
+          // 眼 path 是折线（L 命令），坐标对可直接界检：全部落在 viewBox ±150 内
+          for (const [x, y] of pathCoordinatePairs(eye.d)) {
+            expect(x, `${shape}#${index} eye x=${x}`).toBeGreaterThanOrEqual(-150)
+            expect(x, `${shape}#${index} eye x=${x}`).toBeLessThanOrEqual(150)
+            expect(y, `${shape}#${index} eye y=${y}`).toBeGreaterThanOrEqual(-150)
+            expect(y, `${shape}#${index} eye y=${y}`).toBeLessThanOrEqual(150)
+          }
+        }
+      }
     })
   }
-})
 
-const TRANSLATE_RE = /translate\((-?\d+(?:\.\d+)?) (-?\d+(?:\.\d+)?)\)/
+  test('近正视表情（13）双眼在所有形状上都可见且不重叠', () => {
+    for (const shape of BOT_AVATAR_SHAPES) {
+      const frame = staticFrame(13, SHAPES[shape])
+      expect(frame.eyes[0].visible, `${shape} left`).toBe(true)
+      expect(frame.eyes[1].visible, `${shape} right`).toBe(true)
+      // 不重叠：左眼最大 x < 右眼最小 x（曲面贴合可能压缩间距，留 1 单位余量）
+      const leftXs = pathCoordinatePairs(frame.eyes[0].d).map(([x]) => x)
+      const rightXs = pathCoordinatePairs(frame.eyes[1].d).map(([x]) => x)
+      expect(Math.max(...leftXs), shape).toBeLessThan(Math.min(...rightXs) + 1)
+    }
+  })
+
+  test('形状身份可分：8 形对同一表情产出 8 种头轮廓', () => {
+    const heads = new Set(BOT_AVATAR_SHAPES.map((shape) => staticFrame(13, SHAPES[shape]).head))
+    expect(heads.size).toBe(BOT_AVATAR_SHAPES.length)
+  })
+
+  test('25 表情 × sphere 全量渲染无 NaN（POOLS 全索引可安全消费）', () => {
+    EXPRESSIONS.forEach((_, index) => {
+      const frame = staticFrame(index, SHAPES.sphere)
+      expect(frame.head.includes('NaN'), `expr#${index}`).toBe(false)
+      expect(frame.eyes[0].d.includes('NaN'), `expr#${index}`).toBe(false)
+      expect(frame.eyes[1].d.includes('NaN'), `expr#${index}`).toBe(false)
+    })
+  })
+})
 
 describe('渲染消费：8 形经 BotAvatar 静态档', () => {
   for (const shape of BOT_AVATAR_SHAPES) {
-    test(`${shape} 渲染不抛，body 与 clipPath 共用 bodyScale`, () => {
+    test(`${shape} 渲染不抛，head 与 clipPath 共用同一串`, () => {
       const { container } = render(<BotAvatar config={{ shape }} size={24} />)
-      // 同一 d 出现两次：clipPath 内容 + body（眼睛 clip 在头形内是 3D 错觉关键）
-      const bodyLike = container.querySelectorAll<SVGPathElement>(`path[d="${SHAPES[shape].path}"]`)
-      expect(bodyLike.length).toBe(2)
-      const expected = bodyScaleTransform(SHAPES[shape].eyeAnchor) ?? null
-      for (const node of bodyLike) {
-        expect(node.getAttribute('transform')).toBe(expected)
-      }
+      const frame = staticFrame(0, SHAPES[shape])
+      const head = container.querySelector<SVGPathElement>('[data-bot-head]')
+      expect(head?.getAttribute('d')).toBe(frame.head)
+      const clip = container.querySelector<SVGPathElement>('clipPath path')
+      expect(clip?.getAttribute('d')).toBe(frame.head)
       expect(container.querySelectorAll('[data-bot-eye]').length).toBe(2)
+      expect(container.querySelectorAll('[data-bot-back]').length).toBe(BACK_PATH_COUNT[shape])
     })
   }
-
-  test('恒等缩放（blob）无 transform；capsule 是绕中心的 0.64/0.92', () => {
-    expect(bodyScaleTransform(SHAPES.blob.eyeAnchor)).toBeUndefined()
-    const capsule = bodyScaleTransform(SHAPES.capsule.eyeAnchor)
-    expect(capsule).toContain('scale(0.64 0.92)')
-    expect(capsule).toContain('translate(114.2705 114.2705)')
-  })
-
-  test('eyeAnchor offset 进引擎：wedge 眼组相对 blob 下移 24', () => {
-    const blobEye = staticFrame(0, 1, 0, 0).eyes[0]
-    const wedgeAnchor = SHAPES.wedge.eyeAnchor
-    const wedgeEye = staticFrame(
-      0,
-      wedgeAnchor.eyeScale,
-      wedgeAnchor.offsetX,
-      wedgeAnchor.offsetY
-    ).eyes[0]
-    const blobXY = blobEye.transform.match(TRANSLATE_RE)
-    const wedgeXY = wedgeEye.transform.match(TRANSLATE_RE)
-    expect(blobXY).not.toBeNull()
-    expect(wedgeXY).not.toBeNull()
-    if (!blobXY || !wedgeXY) return
-    expect(Number(wedgeXY[1]) - Number(blobXY[1])).toBeCloseTo(wedgeAnchor.offsetX, 5)
-    expect(Number(wedgeXY[2]) - Number(blobXY[2])).toBeCloseTo(wedgeAnchor.offsetY, 5)
-  })
 })
 
 describe('色盘：浅色身体的 eye 覆写', () => {

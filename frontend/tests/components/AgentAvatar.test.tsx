@@ -2,7 +2,7 @@
 //
 // 08-12 living-bot-avatar WP3 —— 身份解析链换代（oreo → bot）+ 编辑器 Grok 化：
 //   • resolveAgentAvatar 恒返回 bot config（type:'bot'）；空/坏值/上传态按 id 派生；
-//     legacy oreo 生成式行确定性换脸（golden 引用 WP2：bloom/rose → hex/white）。
+//     legacy oreo 生成式行确定性换脸（golden 引用：bloom/rose → diamond/white）。
 //   • isAgentAvatarImage 判别一个字节不变（WP7 语义回归）。
 //   • 编辑器：Bot/上传 两 tab + 重置 + 8 形网格 + 11 色 swatch + 随机骰子。
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -35,21 +35,38 @@ describe('AgentAvatar identity（bot 语义）', () => {
   })
 
   test('显式 bot 合法身份优先；词表越域回落 id 派生', () => {
-    const explicit = { type: 'bot' as const, shape: 'hex' as const, color: 'teal' as const }
+    const explicit = { type: 'bot' as const, shape: 'diamond' as const, color: 'teal' as const }
     expect(resolveAgentAvatar('custom', explicit)).toEqual(explicit)
     expect(
-      resolveAgentAvatar('custom', { type: 'bot', shape: 'hex', color: 'neon' as never })
+      resolveAgentAvatar('custom', { type: 'bot', shape: 'diamond', color: 'neon' as never })
     ).toEqual(resolveAgentAvatar('custom'))
     expect(
       resolveAgentAvatar('custom', { type: 'bot', shape: 'star' as never, color: 'teal' })
     ).toEqual(resolveAgentAvatar('custom'))
   })
 
-  test('legacy oreo 生成式行 → 确定性换脸（golden：bloom/rose → hex/white）', () => {
+  test('v1 bot 形状名经 LEGACY_BOT_SHAPE_MAP 读侧换代（存量行不迁移仍有脸）', () => {
+    expect(resolveAgentAvatar('custom', { type: 'bot', shape: 'hex' as never, color: 'teal' })).toEqual({
+      type: 'bot',
+      shape: 'diamond',
+      color: 'teal'
+    })
+    expect(resolveAgentAvatar('custom', { type: 'bot', shape: 'blob' as never, color: 'orange' })).toEqual({
+      type: 'bot',
+      shape: 'sphere',
+      color: 'orange'
+    })
+    // v1 形状 + 越域颜色 → 仍回落 id 派生（半合法不缝合）
+    expect(
+      resolveAgentAvatar('custom', { type: 'bot', shape: 'hex' as never, color: 'neon' as never })
+    ).toEqual(resolveAgentAvatar('custom'))
+  })
+
+  test('legacy oreo 生成式行 → 确定性换脸（golden：bloom/rose → diamond/white）', () => {
     const legacy = { shape: 'bloom' as const, palette: 'rose', variant_id: 'v1' }
     expect(resolveAgentAvatar('custom', legacy)).toEqual({
       type: 'bot',
-      shape: 'hex',
+      shape: 'diamond',
       color: 'white'
     })
     // 同 shape+palette 恒同脸（variant_id 有意不进 hash），与 agentId 无关。
@@ -89,7 +106,7 @@ describe('AgentAvatar 上传态判别（WP7 语义回归，一个字节不变）
     )
     expect(isAgentAvatarImage({ type: 'image', data: '' })).toBe(false)
     expect(isAgentAvatarImage({ shape: 'nova', palette: 'aurora-pink' })).toBe(false)
-    expect(isAgentAvatarImage({ type: 'bot', shape: 'hex', color: 'teal' })).toBe(false)
+    expect(isAgentAvatarImage({ type: 'bot', shape: 'diamond', color: 'teal' })).toBe(false)
     expect(isAgentAvatarImage(null)).toBe(false)
   })
 
@@ -151,12 +168,12 @@ describe('AgentAvatarEditor（Grok 化：tab / 网格 / 骰子 / 重置）', () 
   })
 
   test('当前身份在网格上高亮（aria-pressed）；上传图身份切到 Bot tab 高亮派生基底', () => {
-    const explicit = { type: 'bot' as const, shape: 'hex' as const, color: 'teal' as const }
+    const explicit = { type: 'bot' as const, shape: 'diamond' as const, color: 'teal' as const }
     const first = render(
       <AgentAvatarEditor agentId="daily" value={explicit} onChange={vi.fn()} />
     )
     expect(
-      within(screen.getByTestId('avatar-shape-grid')).getByLabelText('hex').getAttribute(
+      within(screen.getByTestId('avatar-shape-grid')).getByLabelText('diamond').getAttribute(
         'aria-pressed'
       )
     ).toBe('true')
@@ -190,7 +207,7 @@ describe('AgentAvatarEditor（Grok 化：tab / 网格 / 骰子 / 重置）', () 
     render(
       <AgentAvatarEditor
         agentId="daily"
-        value={{ type: 'bot', shape: 'hex', color: 'teal' }}
+        value={{ type: 'bot', shape: 'diamond', color: 'teal' }}
         onChange={onChange}
       />
     )
@@ -200,7 +217,7 @@ describe('AgentAvatarEditor（Grok 化：tab / 网格 / 骰子 / 重置）', () 
 
   test('随机骰子 → shuffledAgentAvatar 语义（≠ 当前，确定性）', () => {
     const onChange = vi.fn()
-    const explicit = { type: 'bot' as const, shape: 'hex' as const, color: 'teal' as const }
+    const explicit = { type: 'bot' as const, shape: 'diamond' as const, color: 'teal' as const }
     render(<AgentAvatarEditor agentId="daily" value={explicit} onChange={onChange} />)
     fireEvent.click(screen.getByTestId('avatar-shuffle'))
     const next = onChange.mock.calls[0][0]

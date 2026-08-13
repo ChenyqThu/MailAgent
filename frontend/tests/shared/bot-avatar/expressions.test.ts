@@ -1,32 +1,38 @@
-// expressions.json 形状闸 —— 25 表情 × 2 眼 × 48 点。
-// 点数恒等是弹簧 morph 逐点 lerp 的前提（grokbot-engine-analysis.md §4.1）：
-// 任何一只眼点数漂移，morph 会读到 undefined 直接产出 NaN path。数据由脚本
-// 从原型 HTML 抽取，勿手改 —— 本闸保证重抽/替换数据集时形状契约不破。
+// v2 表情参数表形状闸 —— 25 表情 × 15 数值参数（v1 是烘焙点云 expressions.json，
+// 已随引擎换代退役）。索引 0-24 的语义被 states.ts POOLS 引用：改表 = 改所有引用
+// 该索引的状态的脸，本闸保证结构不静默漂（字段缺失/NaN 会让插值产出 NaN path）。
 
 import { describe, expect, test } from 'vitest'
 
-import EXPRESSIONS from '../../../src/shared/bot-avatar/expressions.json'
+import { EXPRESSIONS, NEUTRAL_EXPRESSION } from '../../../src/shared/bot-avatar/expressions'
+import { expressionFields } from '../../../src/shared/bot-avatar/geometry'
 
-describe('bot-avatar expressions.json', () => {
-  test('形状钉死：25 表情 × 2 眼 × 48 点', () => {
+describe('bot-avatar 表情参数表', () => {
+  test('形状钉死：25 表情，id 唯一且按索引编号', () => {
     expect(EXPRESSIONS).toHaveLength(25)
-    for (const frame of EXPRESSIONS) {
-      expect(frame).toHaveLength(2)
-      for (const ring of frame) {
-        expect(ring).toHaveLength(48)
+    const ids = EXPRESSIONS.map((e) => e.id)
+    expect(new Set(ids).size).toBe(25)
+    EXPRESSIONS.forEach((e, i) => {
+      expect(e.id).toBe(`expression-${String(i).padStart(2, '0')}`)
+    })
+  })
+
+  test('全部数值字段有限（15 字段 × 25 行 + 中性表情）', () => {
+    for (const expression of [...EXPRESSIONS, NEUTRAL_EXPRESSION]) {
+      for (const field of expressionFields) {
+        expect(Number.isFinite(expression[field]), `${expression.id}.${field}`).toBe(true)
       }
     }
   })
 
-  test('全部点是有限数值对', () => {
-    for (const frame of EXPRESSIONS) {
-      for (const ring of frame) {
-        for (const point of ring) {
-          expect(point).toHaveLength(2)
-          expect(Number.isFinite(point[0])).toBe(true)
-          expect(Number.isFinite(point[1])).toBe(true)
-        }
-      }
+  test('眼睛尺寸为正、perspective 恒 1（透视基线，改它是全局视觉决策）', () => {
+    for (const expression of EXPRESSIONS) {
+      expect(expression.widthLeft).toBeGreaterThan(0)
+      expect(expression.widthRight).toBeGreaterThan(0)
+      expect(expression.heightLeft).toBeGreaterThan(0)
+      expect(expression.heightRight).toBeGreaterThan(0)
+      expect(expression.spacing).toBeGreaterThan(0)
+      expect(expression.perspective).toBe(1)
     }
   })
 })

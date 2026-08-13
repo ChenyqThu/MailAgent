@@ -1,177 +1,185 @@
-// 灵动 bot 头像 —— framework-agnostic 引擎（零 React / 零 GSAP / 零外部依赖）。
-// 公式 1:1 移植自原型 index.html L3654-3827，逐条对照 grokbot-engine-analysis.md §4；
-// 有意的偏离只有三处，均已就地注释：
-//   1. 构造器直接以池首表情落定（morph=1），不像原型 boot 时空跑一次同帧弹簧；
-//   2. setState 对相同状态是 no-op（React 重渲染不得重置表情/重排定时器）;
-//   3. 定时用 nextAt 时间戳由 tick 检查，不用 setTimeout —— 时间可注入，测试确定性，
-//      且挂在共享 ticker 上时暂停/恢复天然一致。
+// 灵动 bot 头像 v2 —— framework-agnostic 引擎（零 React / 零 GSAP / 零外部依赖）。
+// 渲染管线自 v1 的「烘焙轮廓 + 弹簧 morph」换代为「参数化表情 + 3D 姿态投影」
+// （参照 avatar-lab standalone runtime，AGPL-3.0 上游，出处见 frontend/docs/bot-avatar.md）：
+//   过渡 = 15 个表情参数逐字段插值（spring/smooth/snappy 缓动 + 角度就近解析），
+//   每帧经 poseFromExpression → renderAvatar 重投影出头/眼 path。
+// 保留 v1 的三条工程纪律（勿回退）：
+//   1. setState 对相同状态是 no-op（React 重渲染不得重置表情/重排定时器）；
+//   2. 定时用 nextAt 时间戳由 tick 检查，不用 setTimeout —— 时间可注入，测试确定性，
+//      且挂在共享 ticker 上时暂停/恢复天然一致；
+//   3. settle 语义：无事可做时 tick 返回 null，空闲零重绘 —— v2 的新边界是
+//      ambient 活跃的状态永不 settle，由引擎内部 30fps 限频兜功耗。
 
-import EXPRESSIONS_DATA from './expressions.json'
-import { BLINK, EXPR_CADENCE, POOLS } from './states'
+import { ambientBodyOffset, applyAmbientMotion } from './ambient'
+import { EXPRESSIONS } from './expressions'
+import {
+  clamp,
+  expressionFields,
+  nearestEquivalentAngle,
+  poseFromExpression,
+  renderAvatar
+} from './geometry'
+import type { Expression } from './geometry'
+import { AMBIENT, BLINK, EXPR_CADENCE, POOLS } from './states'
 import type { BotState } from './states'
-import type { EngineFrame, ExpressionFrame, EyeFrame } from './types'
+import type { SurfaceConfig } from './surfaces'
+import type { EngineFrame } from './types'
 
-/** 25 表情 × 2 眼 × 48 点（脚本抽取自原型，tests/shared/bot-avatar 钉死形状） */
-export const EXPRESSIONS = EXPRESSIONS_DATA as unknown as readonly ExpressionFrame[]
+export { EXPRESSIONS } from './expressions'
 
-// —— 几何 / 时序常量（原型硬编码值，来源标注 grokbot-engine-analysis.md 小节）——
-const HEAD_CX = 114.2705 // §4.4 头中心 x
-const SPHERE_RADIUS = 105 // §4.4 球面半径
-const GAZE_X_UNITS = 13.2 // §4.3 gazeX ∈ [-1,1] → 平移单位
-const GAZE_Y_UNITS = 8.4 // §4.3
-const BLINK_DURATION_MS = 320 // §4.2
-const BLINK_CLOSE_PORTION = 0.42 // §4.2 闭眼快（42%）睁眼慢（58%）
-const BLINK_MIN_SCALE = 0.04 // §4.2 scaleY 下限
-const DEFAULT_SPRING_FREQUENCY = 7 // §4.1 f 默认 7（原型滑块范围 4-12）
-const MAX_DT_S = 0.1 // §4.1 dt 上限（后台回来第一帧不许爆冲）
-const SCALE_MIN = 0.02 // §4.4 scale clamp 下限
-const SCALE_MAX = 2.4 // §4.4 scale clamp 上限
-const DEPTH_VISIBLE_MIN = 0.02 // §4.4 depth ≤ 0.02 隐藏（转到脑后）
-// 弹簧收敛判定阈值（原型无此概念——它每帧无条件重绘；settle 语义是本模块为
-// 「空闲零重绘」新增的，阈值取 toFixed(2) 输出粒度之下，收敛瞬间对产出无感）
-const MORPH_SETTLE_EPS = 0.001
-const VELOCITY_SETTLE_EPS = 0.01
+// ── 时序常量 ────────────────────────────────────────────────────────────────
+/** 状态切换的过渡（应激感：短 + spring 回弹） */
+const STATE_SWITCH_TRANSITION_MS = 420
+const STATE_SWITCH_EASE: TransitionEase = 'spring'
+/** 池内表情轮换的过渡（闲适感：smooth） */
+const POOL_ROTATE_TRANSITION_MS = 500
+const POOL_ROTATE_EASE: TransitionEase = 'smooth'
+/** 手动 blink()（无状态眨眼档时）的时长兜底 */
+const DEFAULT_BLINK_DURATION_MS = 280
+/** ambient 活跃时的重绘上限（30fps —— avatar-lab runtime 同款节流） */
+const AMBIENT_FRAME_INTERVAL_MS = 1000 / 30
 
-const clamp = (v: number, min: number, max: number): number => Math.max(min, Math.min(max, v))
+// ── gaze 常量（v2 重实现：v1 是纯眼睛平移，v2 头部朝向 + 眼睛偏移叠加）─────────
+/** gazeX ∈ [-1,1] → 头部 yaw（度） */
+const GAZE_HEAD_YAW_DEG = 10
+/** gazeY ∈ [-1,1] → 头部 pitch（度；负号 = 指针在下方时低头） */
+const GAZE_HEAD_PITCH_DEG = 7
+/** gaze → 眼睛在脸面坐标内的平移 */
+const GAZE_EYE_X_UNITS = 5
+const GAZE_EYE_Y_UNITS = 3.5
 
-type Ring = ReadonlyArray<ReadonlyArray<number>>
+export type TransitionEase = 'spring' | 'smooth' | 'snappy'
 
-function centroid(ring: Ring): readonly [number, number] {
-  let x = 0
-  let y = 0
-  for (const p of ring) {
-    x += p[0]
-    y += p[1]
-  }
-  return [x / ring.length, y / ring.length]
-}
-
-function ringPath(ring: Ring): string {
-  return 'M' + ring.map((p) => p[0].toFixed(2) + ' ' + p[1].toFixed(2)).join('L') + 'Z'
+/** 过渡缓动（avatar-lab runtime easeProgress 逐字）；spring 会过冲 >1 产生回弹 */
+export function easeProgress(progress: number, ease: TransitionEase): number {
+  if (ease === 'smooth') return progress * progress * (3 - 2 * progress)
+  if (ease === 'snappy') return 1 - (1 - progress) ** 3
+  return 1 - Math.exp(-6 * progress) * Math.cos(8 * progress)
 }
 
 /**
- * 眨眼曲线（§4.2）。t = 眨眼进度 0..1（320ms 归一化），只压 scaleY。
- * 导出成纯函数是为了单测端点，引擎内部经 blinkStart 时间戳调用。
+ * 眨眼曲线（avatar-lab runtime：闭眼 42% 二次加速、睁眼 58% 二次减速）。
+ * t = 眨眼进度 0..1；返回值进 renderAvatar 的 blink 参数（1 = 全睁）。
+ * v1 是线性 + scaleY 压缩；v2 配合眼几何的高度插值（5px 下限），眨眼中眼形保持圆角。
  */
 export function blinkScaleAt(t: number): number {
-  return Math.max(
-    t < BLINK_CLOSE_PORTION
-      ? 1 - t / BLINK_CLOSE_PORTION
-      : (t - BLINK_CLOSE_PORTION) / (1 - BLINK_CLOSE_PORTION),
-    BLINK_MIN_SCALE
-  )
+  if (t <= 0.42) {
+    const closeProgress = t / 0.42
+    return 1 - closeProgress * closeProgress
+  }
+  const openProgress = (t - 0.42) / 0.58
+  return 1 - (1 - openProgress) ** 2
 }
 
-interface EyeProjection {
-  gazeX: number
-  gazeY: number
-  turn: number
-  blink: number
-  eyeScale: number
-  /** 形状层眼组平移（shapes.ts eyeAnchor，228.541 坐标系）——纯平移，叠加在投影结果之后 */
-  offsetX: number
-  offsetY: number
-}
-
-/** 球面投影 + 眨眼/gaze 合成（§4.3/§4.4，原型 render() 逐行对应） */
-function projectEyes(rings: ReadonlyArray<Ring>, p: EyeProjection): EyeFrame[] {
-  return rings.map((ring) => {
-    const [cx, cy] = centroid(ring)
-    const offset = cx - HEAD_CX
-    const baseLongitude = Math.asin(clamp(offset / SPHERE_RADIUS, -1, 1))
-    const longitude = baseLongitude + p.turn
-    const depth = Math.cos(longitude)
-    // 近侧眼变宽 / 远侧眼压缩；分子分母都垫 0.02 下限，比值永不爆炸（§4.4）
-    const perspective =
-      Math.max(depth, DEPTH_VISIBLE_MIN) / Math.max(Math.cos(baseLongitude), DEPTH_VISIBLE_MIN)
-    // offsetX 加在投影之后（不进 longitude 基准）：平移眼组不改变球面滑动语义
-    const x = HEAD_CX + SPHERE_RADIUS * Math.sin(longitude) + p.gazeX + p.offsetX
-    const y = cy + p.gazeY + p.offsetY
-    const sx = clamp(perspective * p.eyeScale, SCALE_MIN, SCALE_MAX)
-    const sy = clamp(p.blink * p.eyeScale, SCALE_MIN, SCALE_MAX)
-    return {
-      d: ringPath(ring),
-      // 先平移到目标点、绕眼心缩放（尾部 translate(-cx -cy) 把缩放原点挪到眼心）
-      transform: `translate(${x.toFixed(2)} ${y.toFixed(2)}) scale(${sx.toFixed(4)} ${sy.toFixed(4)}) translate(${(-cx).toFixed(2)} ${(-cy).toFixed(2)})`,
-      hidden: depth <= DEPTH_VISIBLE_MIN
-    }
-  })
-}
-
-/**
- * 静态档一帧：表情原样（morph=1）、无 gaze/转头/眨眼。
- * 列表位点与 reduced-motion 回退都走这里 —— 不建引擎实例、零定时器。
- */
-export function staticFrame(
-  expressionIndex: number,
-  eyeScale = 1,
-  offsetX = 0,
-  offsetY = 0
-): EngineFrame {
-  const rings = EXPRESSIONS[expressionIndex]
+/** 目标表情的角度族折到与当前值就近的等价角（防转头绕远路） */
+function resolveTargetExpression(target: Expression, current: Expression): Expression {
   return {
-    eyes: projectEyes(rings, { gazeX: 0, gazeY: 0, turn: 0, blink: 1, eyeScale, offsetX, offsetY }),
-    settled: true
+    ...target,
+    headX: nearestEquivalentAngle(target.headX, current.headX),
+    headY: nearestEquivalentAngle(target.headY, current.headY),
+    headZ: nearestEquivalentAngle(target.headZ, current.headZ),
+    leftAngle: nearestEquivalentAngle(target.leftAngle, current.leftAngle),
+    rightAngle: nearestEquivalentAngle(target.rightAngle, current.rightAngle)
   }
 }
 
+/** 逐字段插值（eased 可 >1：spring 过冲直接外推，几何层天然吃得下） */
+function lerpExpression(from: Expression, to: Expression, eased: number): Expression {
+  const out = { ...from }
+  for (const field of expressionFields) {
+    out[field] = from[field] + (to[field] - from[field]) * eased
+  }
+  return out
+}
+
+// ── 静态档 ──────────────────────────────────────────────────────────────────
+
+/** 静态帧缓存：列表位点数百个同款 22px 实例只算一次几何（key = 曲面身份 × 表情） */
+const staticFrameCache = new WeakMap<SurfaceConfig, Map<number, EngineFrame>>()
+
+/**
+ * 静态档一帧：表情原样、无过渡/gaze/眨眼/ambient。
+ * 列表位点与 reduced-motion 回退都走这里 —— 不建引擎实例、零定时器。
+ */
+export function staticFrame(expressionIndex: number, surface: SurfaceConfig): EngineFrame {
+  let perSurface = staticFrameCache.get(surface)
+  if (!perSurface) {
+    perSurface = new Map()
+    staticFrameCache.set(surface, perSurface)
+  }
+  const cached = perSurface.get(expressionIndex)
+  if (cached) return cached
+  const geometry = renderAvatar(poseFromExpression(EXPRESSIONS[expressionIndex]), surface, 1)
+  const frame: EngineFrame = {
+    head: geometry.headPath,
+    back: geometry.backPaths,
+    eyes: [
+      { d: geometry.leftPath, visible: geometry.leftVisible },
+      { d: geometry.rightPath, visible: geometry.rightVisible }
+    ],
+    offsetX: 0,
+    offsetY: 0,
+    settled: true
+  }
+  perSurface.set(expressionIndex, frame)
+  return frame
+}
+
+// ── 引擎 ────────────────────────────────────────────────────────────────────
+
 export interface BotEngineOptions {
+  /** 形状曲面（shapes.ts SHAPES[shape]） */
+  surface: SurfaceConfig
   initialState?: BotState
-  /** 弹簧频率 f（§4.1），默认 7 */
-  frequency?: number
-  /** 形状层的眼睛整体缩放（shapes.ts eyeAnchor.eyeScale） */
-  eyeScale?: number
-  /** 形状层眼组平移（shapes.ts eyeAnchor.offsetX/offsetY，228.541 坐标系） */
-  offsetX?: number
-  offsetY?: number
   /** 随机源注入口 —— 测试确定性；默认 Math.random */
   random?: () => number
-  /** 时钟注入口（毫秒，performance.now 时基）；只用于构造期/手动 blink 的排程基点 */
+  /** 时钟注入口（毫秒，performance.now 时基）；用于构造期/setState/手动 blink 的排程基点 */
   now?: () => number
 }
 
+interface TransitionState {
+  from: Expression
+  to: Expression
+  startedAt: number
+  durationMs: number
+  ease: TransitionEase
+}
+
 export class BotFaceEngine {
+  private readonly surface: SurfaceConfig
   private readonly random: () => number
   private readonly now: () => number
-  private readonly frequency: number
-  private readonly eyeScale: number
-  private readonly offsetX: number
-  private readonly offsetY: number
 
   private stateValue: BotState
   private expressionValue: number
-  /** 弹簧起点：上一次切换瞬间「正在显示」的帧快照（可变工作副本） */
-  private currentRings: number[][][]
-  private targetRings: ExpressionFrame
-  private morph = 1
-  private velocity = 0
-  private lastTick: number | null = null
+  /** 过渡终点落定后的「当前表情」（过渡中显示帧由 transition 插值得出） */
+  private displayed: Expression
+  private transition: TransitionState | null = null
   private blinkStart: number | null = null
+  private blinkDurationMs = DEFAULT_BLINK_DURATION_MS
   private gazeXValue = 0
   private gazeYValue = 0
-  private turnValue = 0
-  /** gaze/turn 变过但还没出过帧；首帧也算脏（挂载即产出一帧） */
+  /** gaze 变过但还没出过帧；首帧也算脏（挂载即产出一帧） */
   private dirty = true
   private nextExpressionAt: number | null = null
   private nextBlinkAt: number | null = null
+  /** ambient 噪声的时间基点（ambient 配置变化时重置，防状态切换瞬间跳变） */
+  private ambientStartedAt: number
+  private lastAmbientRenderAt = 0
 
-  constructor(opts: BotEngineOptions = {}) {
+  constructor(opts: BotEngineOptions) {
+    this.surface = opts.surface
     this.random = opts.random ?? Math.random
     this.now =
       opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()))
-    this.frequency = opts.frequency ?? DEFAULT_SPRING_FREQUENCY
-    this.eyeScale = opts.eyeScale ?? 1
-    this.offsetX = opts.offsetX ?? 0
-    this.offsetY = opts.offsetY ?? 0
     this.stateValue = opts.initialState ?? 'idle'
-    // 直接以池首表情落定（morph=1）：原型 boot 会对同一帧空跑一次弹簧，纯视觉 no-op
+    // 直接以池首表情落定（无 boot 过渡），镜像 v1 构造语义
     const head = POOLS[this.stateValue][0]
     this.expressionValue = head
-    this.targetRings = EXPRESSIONS[head]
-    this.currentRings = copyRings(EXPRESSIONS[head])
+    this.displayed = { ...EXPRESSIONS[head] }
     const t = this.now()
-    // 排程顺序镜像原型 setState：先眨眼后表情（随机源消费顺序是测试契约的一部分）
+    this.ambientStartedAt = t
+    // 排程顺序：先眨眼后表情（随机源消费顺序是测试契约的一部分，镜像 v1）
     this.scheduleBlink(t)
     this.scheduleExpression(t)
   }
@@ -184,27 +192,28 @@ export class BotFaceEngine {
     return this.expressionValue
   }
 
-  /** 状态切换（§4.5）：立即切池首表情 + 重排两类定时 */
+  /** 状态切换：立即向池首表情过渡（spring）+ 重排两类定时 */
   setState(next: BotState): void {
-    // 偏离原型：同态重设是 no-op —— React 重渲染/effect 重跑不得重启 morph 或重排定时
+    // 同态重设是 no-op —— React 重渲染/effect 重跑不得重启过渡或重排定时
     if (next === this.stateValue) return
+    const prevAmbient = AMBIENT[this.stateValue]
     this.stateValue = next
-    this.selectExpression(POOLS[next][0])
+    this.beginTransition(POOLS[next][0], STATE_SWITCH_TRANSITION_MS, STATE_SWITCH_EASE)
     const t = this.now()
+    const nextAmbient = AMBIENT[next]
+    if (prevAmbient.eyes !== nextAmbient.eyes || prevAmbient.body !== nextAmbient.body) {
+      this.ambientStartedAt = t
+    }
     this.scheduleBlink(t)
     this.scheduleExpression(t)
   }
 
-  /** 切换表情：从「当前显示帧」起弹（§4.1 —— currentRings 取显示快照，不是上个目标） */
+  /** 手动切换表情（编辑器/测试）：从「当前显示帧」起过渡 */
   selectExpression(index: number): void {
-    this.currentRings = this.displayedRings()
-    this.targetRings = EXPRESSIONS[index]
-    this.expressionValue = index
-    this.morph = 0
-    this.velocity = 0
+    this.beginTransition(index, POOL_ROTATE_TRANSITION_MS, POOL_ROTATE_EASE)
   }
 
-  /** gaze ∈ [-1,1]²，越界收边（§4.3） */
+  /** gaze ∈ [-1,1]²，越界收边；头部朝向 + 眼睛偏移在 buildFrame 里叠加 */
   setGaze(x: number, y: number): void {
     const nx = clamp(x, -1, 1)
     const ny = clamp(y, -1, 1)
@@ -215,118 +224,151 @@ export class BotFaceEngine {
     }
   }
 
-  /** 转头弧度（§4.4）；spin 类演出由调用方驱动本值 */
-  setTurn(radians: number): void {
-    if (radians !== this.turnValue) {
-      this.turnValue = radians
-      this.dirty = true
+  /** 手动触发一次眨眼（已在眨则忽略 —— 长按连点不得冻在闭眼） */
+  blink(): void {
+    if (this.blinkStart === null) {
+      this.blinkStart = this.now()
+      this.blinkDurationMs = BLINK[this.stateValue]?.[2] ?? DEFAULT_BLINK_DURATION_MS
     }
   }
 
-  /** 手动触发一次眨眼（已在眨则忽略，与原型「重设 blinkStart」略异——避免长按连点冻在闭眼） */
-  blink(): void {
-    if (this.blinkStart === null) this.blinkStart = this.now()
-  }
-
   /**
-   * 推进一帧。返回 null = 本帧无事可做（弹簧已收敛、无眨眼、无脏位、无到期定时），
-   * 共享 ticker 据此跳过 DOM 写入 —— 空闲表情间隙零重绘。
+   * 推进一帧。返回 null = 本帧无事可做（过渡收敛、无眨眼、无脏位、无到期定时、
+   * ambient 静止或未到 30fps 节拍），共享 ticker 据此跳过 DOM 写入。
    */
   tick(now: number): EngineFrame | null {
-    const last = this.lastTick ?? now
-    this.lastTick = now
-    const dt = Math.min(Math.max((now - last) / 1000, 0), MAX_DT_S)
-
-    // 到期定时（原型用 setTimeout；这里由 tick 检查 nextAt，见文件头偏离 3）
+    // 到期定时（v1 纪律：tick 检查 nextAt，不用 setTimeout）
     let timerFired = false
     if (this.nextExpressionAt !== null && now >= this.nextExpressionAt) {
       const pool = POOLS[this.stateValue]
       const alternatives = pool.filter((i) => i !== this.expressionValue)
-      // 单元素池（如 waking）没有替代帧：原型此时重选池首（同帧弹簧，视觉静止）
-      this.selectExpression(
+      // 单元素池（如 waking）没有替代帧：重选池首（同帧过渡，视觉静止）
+      this.beginTransition(
         alternatives.length
           ? alternatives[Math.floor(this.random() * alternatives.length)]
-          : pool[0]
+          : pool[0],
+        POOL_ROTATE_TRANSITION_MS,
+        POOL_ROTATE_EASE
       )
       this.scheduleExpression(now)
       timerFired = true
     }
     if (this.nextBlinkAt !== null && now >= this.nextBlinkAt) {
+      const cadence = BLINK[this.stateValue]
       this.blinkStart = now
+      this.blinkDurationMs = cadence?.[2] ?? DEFAULT_BLINK_DURATION_MS
       this.scheduleBlink(now)
       timerFired = true
     }
 
-    const springActive = this.morph !== 1 || this.velocity !== 0
-    if (springActive) {
-      // 临界阻尼弹簧 ζ=1（§4.1）
-      this.velocity +=
-        (-2 * this.frequency * this.velocity - this.frequency * this.frequency * (this.morph - 1)) *
-        dt
-      this.morph += this.velocity * dt
-      // NaN 防护（§4.1）：frequency/dt 异常时直接落定终态
-      if (!Number.isFinite(this.morph) || !Number.isFinite(this.velocity)) {
-        this.morph = 1
-        this.velocity = 0
-      }
-      // 收敛判定（原型每帧无条件重绘所以不需要）：在输出精度以下时钉到终态
-      if (
-        Math.abs(this.morph - 1) < MORPH_SETTLE_EPS &&
-        Math.abs(this.velocity) < VELOCITY_SETTLE_EPS
-      ) {
-        this.morph = 1
-        this.velocity = 0
+    // 过渡落定检查（提交发生在 tick，snapshot 不可变）
+    if (this.transition && now - this.transition.startedAt >= this.transition.durationMs) {
+      this.displayed = this.transition.to
+      this.transition = null
+      timerFired = true // 落定那一帧必须产出（钉住终态）
+    }
+    const transitionActive = this.transition !== null
+
+    // 眨眼走完清场（同样只在 tick 提交）
+    let blinking = false
+    if (this.blinkStart !== null) {
+      if (now - this.blinkStart >= this.blinkDurationMs) {
+        this.blinkStart = null
+        timerFired = true // 睁眼终态帧
+      } else {
+        blinking = true
       }
     }
 
-    const blinking = this.blinkStart !== null
-    if (!springActive && !blinking && !this.dirty && !timerFired) return null
+    const ambient = AMBIENT[this.stateValue]
+    const ambientActive = ambient.eyes !== 'none' || ambient.body !== 'none'
+
+    let needFrame = transitionActive || blinking || this.dirty || timerFired
+    if (!needFrame && ambientActive) {
+      needFrame = now - this.lastAmbientRenderAt >= AMBIENT_FRAME_INTERVAL_MS
+    }
+    if (!needFrame) return null
+
+    if (ambientActive) this.lastAmbientRenderAt = now
     const frame = this.buildFrame(now)
     this.dirty = false
     return frame
   }
 
-  /** 当前状态的一帧快照（不推进时间）。组件在 React 重渲染后用它回写 DOM。 */
+  /** 当前状态的一帧快照（不推进定时/不提交状态）。组件在 React 重渲染后用它回写 DOM。 */
   snapshot(now: number = this.now()): EngineFrame {
     return this.buildFrame(now)
   }
 
   private buildFrame(now: number): EngineFrame {
-    // blinkScale 先算——它会在眨眼走完时清掉 blinkStart，settled 要读清理后的值
-    const blink = this.consumeBlinkScale(now)
-    const eyes = projectEyes(this.displayedRings(), {
-      gazeX: this.gazeXValue * GAZE_X_UNITS,
-      gazeY: this.gazeYValue * GAZE_Y_UNITS,
-      turn: this.turnValue,
-      blink,
-      eyeScale: this.eyeScale,
-      offsetX: this.offsetX,
-      offsetY: this.offsetY
-    })
-    const settled = this.morph === 1 && this.velocity === 0 && this.blinkStart === null
-    return { eyes, settled }
-  }
+    let expr = this.displayedExpressionAt(now)
 
-  /** §4.2：眨眼进行中返回曲线值；走完清 blinkStart 回 1（镜像原型 blinkScale()） */
-  private consumeBlinkScale(now: number): number {
-    if (this.blinkStart === null) return 1
-    const t = (now - this.blinkStart) / BLINK_DURATION_MS
-    if (t >= 1) {
-      this.blinkStart = null
-      return 1
+    const ambient = AMBIENT[this.stateValue]
+    const ambientActive = ambient.eyes !== 'none' || ambient.body !== 'none'
+    const ambientElapsed = now - this.ambientStartedAt
+    // ambient 相位以「落定表情」为种子（相位稳定），叠加作用在显示帧上
+    const seedExpression = this.displayed
+    if (ambientActive) {
+      expr = applyAmbientMotion(expr, ambient.eyes, ambient.body, ambientElapsed)
     }
-    return blinkScaleAt(t)
+
+    // gaze：头部朝向 + 眼睛偏移叠加（additive，不与表情/ambient 冲突）
+    if (this.gazeXValue !== 0 || this.gazeYValue !== 0) {
+      expr = { ...expr }
+      expr.headY += this.gazeXValue * GAZE_HEAD_YAW_DEG
+      expr.headX -= this.gazeYValue * GAZE_HEAD_PITCH_DEG
+      const eyeX = this.gazeXValue * GAZE_EYE_X_UNITS
+      const eyeY = this.gazeYValue * GAZE_EYE_Y_UNITS
+      expr.positionXLeft += eyeX
+      expr.positionXRight += eyeX
+      expr.positionYLeft += eyeY
+      expr.positionYRight += eyeY
+    }
+
+    const blink = this.blinkValueAt(now)
+    const geometry = renderAvatar(poseFromExpression(expr), this.surface, blink)
+    const offset = ambientActive
+      ? ambientBodyOffset(seedExpression, ambient.body, ambientElapsed)
+      : { x: 0, y: 0 }
+
+    const settled = this.transition === null && this.blinkStart === null && !ambientActive
+    return {
+      head: geometry.headPath,
+      back: geometry.backPaths,
+      eyes: [
+        { d: geometry.leftPath, visible: geometry.leftVisible },
+        { d: geometry.rightPath, visible: geometry.rightVisible }
+      ],
+      offsetX: offset.x,
+      offsetY: offset.y,
+      settled
+    }
   }
 
-  /** 逐点 lerp（§4.1）：displayed = current + (target - current) · clamp(morph, 0, 1) */
-  private displayedRings(): number[][][] {
-    const t = clamp(this.morph, 0, 1)
-    return this.currentRings.map((ring, eye) =>
-      ring.map((p, i) => [
-        p[0] + (this.targetRings[eye][i][0] - p[0]) * t,
-        p[1] + (this.targetRings[eye][i][1] - p[1]) * t
-      ])
-    )
+  /** 过渡插值出「此刻显示的表情」；无过渡时即落定表情（纯函数，不提交） */
+  private displayedExpressionAt(now: number): Expression {
+    if (!this.transition) return this.displayed
+    const linear = clamp((now - this.transition.startedAt) / this.transition.durationMs, 0, 1)
+    if (linear >= 1) return this.transition.to
+    const eased = easeProgress(linear, this.transition.ease)
+    return lerpExpression(this.transition.from, this.transition.to, eased)
+  }
+
+  private blinkValueAt(now: number): number {
+    if (this.blinkStart === null) return 1
+    const t = (now - this.blinkStart) / this.blinkDurationMs
+    if (t >= 1) return 1
+    return blinkScaleAt(clamp(t, 0, 1))
+  }
+
+  /** 从「当前显示帧」起向目标表情过渡（角度就近解析） */
+  private beginTransition(index: number, durationMs: number, ease: TransitionEase): void {
+    const now = this.now()
+    const from = this.displayedExpressionAt(now)
+    const to = resolveTargetExpression(EXPRESSIONS[index], from)
+    this.expressionValue = index
+    this.displayed = to
+    this.transition = { from, to, startedAt: now, durationMs, ease }
   }
 
   private scheduleExpression(now: number): void {
@@ -339,8 +381,4 @@ export class BotFaceEngine {
     this.nextBlinkAt =
       cadence === null ? null : now + cadence[0] + this.random() * (cadence[1] - cadence[0])
   }
-}
-
-function copyRings(frame: ExpressionFrame): number[][][] {
-  return frame.map((ring) => ring.map((p) => [p[0], p[1]]))
 }
