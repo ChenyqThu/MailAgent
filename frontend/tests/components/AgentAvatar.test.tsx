@@ -2,7 +2,7 @@
 //
 // 08-12 living-bot-avatar WP3 —— 身份解析链换代（oreo → bot）+ 编辑器 Grok 化：
 //   • resolveAgentAvatar 恒返回 bot config（type:'bot'）；空/坏值/上传态按 id 派生；
-//     legacy oreo 生成式行确定性换脸（golden 引用：bloom/rose → cone/pink）。
+//     legacy oreo 生成式行确定性换脸（golden 引用：bloom/rose → kirby/teal）。
 //   • isAgentAvatarImage 判别一个字节不变（WP7 语义回归）。
 //   • 编辑器：Bot/上传 两 tab + 重置 + 8 形网格 + 11 色 swatch + 随机骰子。
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -81,13 +81,13 @@ describe('AgentAvatar identity（bot 语义）', () => {
     ).toEqual(resolveAgentAvatar('custom'))
   })
 
-  test('legacy oreo 生成式行 → 确定性换脸（golden：bloom/rose → cone/pink）', () => {
-    // 0813 自编形状退役（13→10 形）重钉 golden：索引算法未动，词表取模结果变
+  test('legacy oreo 生成式行 → 确定性换脸（golden：bloom/rose → kirby/teal）', () => {
+    // 0813 Strobi 并入 sphere（10→9 形）重钉 golden：索引算法未动，词表取模结果变
     const legacy = { shape: 'bloom' as const, palette: 'rose', variant_id: 'v1' }
     expect(resolveAgentAvatar('custom', legacy)).toEqual({
       type: 'bot',
-      shape: 'cone',
-      color: 'pink'
+      shape: 'kirby',
+      color: 'teal'
     })
     // 同 shape+palette 恒同脸（variant_id 有意不进 hash），与 agentId 无关。
     expect(resolveAgentAvatar('another_agent', { shape: 'bloom', palette: 'rose' })).toEqual(

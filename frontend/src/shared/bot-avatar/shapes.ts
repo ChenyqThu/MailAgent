@@ -1,13 +1,13 @@
-// 灵动 bot 头像 v2 —— 形状词表：10 个成品形状（avatar-lab studio 成品目录，全量）。
+// 灵动 bot 头像 v2 —— 形状词表：9 个成品形状（avatar-lab studio 成品目录）。
 // 0813 owner 拍板「直接照搬库、不要自己做的形状」：词表 = avatar-lab
 // `defaultStudioDocument.json` 里 10 个成品 avatar 的调参几何 + 组合身体
 // （多 primitive 附属曲面），**没有 lab 成品对应物的自编形状全部退役**
 // （cylinder/diamond/mickey/cursor —— 存量 avatar_json 经 LEGACY_BOT_SHAPE_MAP
 // 读侧换脸，不迁移不回写）。lab 成品 → 本仓词表的映射（slug 沿用几何家族名，
 // owner 明示不在乎名字 —— 改名会让全部存量行走 legacy 映射、徒增一次换脸）：
-//   Grok bot → sphere（= 出厂 sphere preset 逐字）
-//   Strobi → strobi（sphere 240×240×240.03671875 —— 与 Grok bot 仅 depth 差
-//     0.0367，视觉不可分但 lab 数据确实不同，按「成品一个不少」纪律单列）
+//   Grok bot / Strobi → sphere（🔴 lab 源数据里二者仅 depth 差 0.0367：
+//     240 vs 240.03671875，视觉不可分辨 —— owner 拍板合并成一个条目，
+//     所以 lab 10 成品对应本词表 9 形；不是漏搬）
 //   Nova → capsule（= 出厂 capsule preset 逐字）
 //   Cubee → cube · Citrus → cone（原 raw preset 尺寸会溢出 viewBox，成品调参值根治）
 //   Freddy / Sunee / Kirby / Cloudee / Onee → 同名形状（前四者带组合身体）
@@ -22,7 +22,6 @@ import type { BodyNodeDef } from './geometry'
 
 export const BOT_AVATAR_SHAPES = [
   'sphere',
-  'strobi',
   'capsule',
   'cone',
   'cube',
@@ -52,10 +51,9 @@ const solo = (primary: SurfaceConfig): BotShapeDef => ({ primary, nodes: [] })
  * 先回 lab studio 调完回抄）。
  */
 export const SHAPES: Record<BotShape, BotShapeDef> = {
-  // Grok bot（lab 成品几何 = 出厂 sphere preset 逐字）
+  // Grok bot（lab 成品几何 = 出厂 sphere preset 逐字）；Strobi 与之仅 depth 差
+  // 0.0367（240.03671875），视觉不可分辨 —— owner 拍板合并进本条目
   sphere: solo(surfacePresets.sphere),
-  // Strobi（与 Grok bot 仅 depth 差 0.0367 —— lab 数据如此，勿「顺手归一」）
-  strobi: solo({ type: 'sphere', width: 240, height: 240, depth: 240.03671875, roundness: 1 }),
   // Nova（= 出厂 capsule preset 逐字）
   capsule: solo(surfacePresets.capsule),
   // Citrus
@@ -317,23 +315,25 @@ export const SHAPES: Record<BotShape, BotShapeDef> = {
 /**
  * 退役形状名 → 现词表的读侧换脸（agentAvatarIdentity.ts 消费）。
  * 存量 avatar_json 里的旧形状名渲染期换脸、不迁移不回写；写侧（wire.py 白名单
- * 与编辑器）只认现词表。两组键：
+ * 与编辑器）只认现词表。三组键：
  *   - v1 8 形（2D path 时代）：保持**双射** —— v1 时代两个不同形状的 agent
- *     换代后仍不同脸（sphere/strobi 视觉上几乎同脸是 lab 目录自身的局限，
- *     名义双射仍成立）；
+ *     换代后仍不同脸（egg→kirby：kirby 主体 = 240 光球、剪影圆润，是 9 形里
+ *     离蛋形最近的没被占用者）；
  *   - v2 退役 4 形（0813 自编原语退役）：按几何相似度就近入座，与 v1 键可共享
- *     目标（12 键 > 10 形，结构上无法整体双射）——
+ *     目标（键多于形，结构上无法整体双射）——
  *       cylinder→capsule（同为竖直圆润柱体家族）
  *       diamond→sunee（同为带尖角的放射剪影；与 v1 hex 系谱一致）
  *       mickey→cloudee（同为圆主体+圆瓣多球剪影；与 v1 cloud 系谱一致）
  *       cursor→onee（同为尖头软锥；与 v1 teardrop 系谱一致）
+ *   - strobi（在词表里只存在了一批：与 Grok bot 仅 depth 差 0.0367，owner 拍板
+ *     合并）→ sphere（几何本就几乎相同，零观感变化）。
  */
 export const LEGACY_BOT_SHAPE_MAP: Record<string, BotShape> = {
   // v1 8 形（双射）
   blob: 'sphere',
   capsule: 'capsule',
   squircle: 'cube',
-  egg: 'strobi',
+  egg: 'kirby',
   wedge: 'cone',
   hex: 'sunee',
   cloud: 'cloudee',
@@ -342,7 +342,9 @@ export const LEGACY_BOT_SHAPE_MAP: Record<string, BotShape> = {
   cylinder: 'capsule',
   diamond: 'sunee',
   mickey: 'cloudee',
-  cursor: 'onee'
+  cursor: 'onee',
+  // strobi：短暂在词表（批 AA），owner 拍板与 sphere 合并
+  strobi: 'sphere'
 }
 
 const countRecord = (count: (def: BotShapeDef) => number): Record<BotShape, number> =>

@@ -1,19 +1,20 @@
 // @vitest-environment happy-dom
 //
-// 形状/颜色资产的机器验收（0813 成品目录化：10 形 = avatar-lab 成品目录全量，
+// 形状/颜色资产的机器验收（0813 成品目录化：9 形，对应 avatar-lab 10 成品 ——
+// Strobi 与 Grok bot 视觉不可分辨、owner 拍板并入 sphere；
 // 自编形状 cylinder/diamond/mickey/cursor 已退役）：
 //   1. 词表 ↔ 注册表一一对应（BOT_AVATAR_SHAPES/COLORS 是 parity 闸的 TS 侧）；
-//   2. 成品数值 pin：cube/cone/strobi 的 lab studio 调参值、组合身体 node 数逐形钉死
+//   2. 成品数值 pin：cube/cone 的 lab studio 调参值、组合身体 node 数逐形钉死
 //      （搬运错一个数字 = 某成品静默变形）；
 //   3. legacy 换脸：v1 8 形保持双射（两个不同 v1 形状换代后仍不同脸）；
-//      v2 退役 4 形按几何相似度入座（12 键 > 10 形，结构上无法整体双射）；
-//   4. 几何 sanity：10 形 × 代表表情的头/眼/背/前 path 非空闭合、槽位不变量、
+//      v2 退役 4 形按几何相似度入座（键多于形，结构上无法整体双射）；strobi→sphere；
+//   4. 几何 sanity：9 形 × 代表表情的头/眼/背/前 path 非空闭合、槽位不变量、
 //      眼坐标在 viewBox 内；
 //   5. viewBox 溢出治理：lab 成品调参值必须把 cube/cone 的投影轮廓收回 ±150
 //      （v2 raw preset 时代 |max| 实测 204/176 —— 0813 换成品值的核心动机之一；
 //      自编形状退役后 cylinder 167.6 / mickey 156.5 两个遗留溢出随之消失）；
 //      组合身体按 lab 语义**允许**少量出界（svg overflow:visible），但钉上限；
-//   6. 渲染消费：10 形经 BotAvatar 静态档各渲一次不抛，head 与 clipPath 共用同一串；
+//   6. 渲染消费：9 形经 BotAvatar 静态档各渲一次不抛，head 与 clipPath 共用同一串；
 //   7. 浅色身体（white/yellow/gray）eye 覆写为固定深色，其余色跟 --background。
 
 import { afterEach, describe, expect, test } from 'vitest'
@@ -35,7 +36,7 @@ afterEach(cleanup)
 
 describe('词表 ↔ 注册表（parity 闸的 TS 侧同源）', () => {
   test('BOT_AVATAR_SHAPES 与 SHAPES / BACK_PATH_COUNT / FRONT_PATH_COUNT 键一一对应且无重复', () => {
-    expect(BOT_AVATAR_SHAPES).toHaveLength(10)
+    expect(BOT_AVATAR_SHAPES).toHaveLength(9)
     expect(new Set(BOT_AVATAR_SHAPES).size).toBe(BOT_AVATAR_SHAPES.length)
     expect([...BOT_AVATAR_SHAPES].sort()).toEqual(Object.keys(SHAPES).sort())
     expect([...BOT_AVATAR_SHAPES].sort()).toEqual(Object.keys(BACK_PATH_COUNT).sort())
@@ -56,21 +57,14 @@ describe('词表 ↔ 注册表（parity 闸的 TS 侧同源）', () => {
 })
 
 describe('lab 成品数值 pin（搬运保真）', () => {
-  test('原语名形状：primary.type 与名字一致；strobi 是 sphere 家族', () => {
+  test('原语名形状：primary.type 与名字一致', () => {
     for (const shape of ['sphere', 'capsule', 'cone', 'cube'] as const) {
       expect(SHAPES[shape].primary.type).toBe(shape)
     }
-    expect(SHAPES.strobi.primary.type).toBe('sphere')
   })
 
-  test('sphere = Grok bot（= 出厂 preset）；strobi = Strobi（depth 240.03671875 —— lab 数据与 Grok bot 仅差这一位，不许「顺手归一」）', () => {
+  test('sphere = Grok bot（= 出厂 preset；Strobi 仅 depth 差 0.0367，owner 拍板并入本条目）', () => {
     expect(SHAPES.sphere.primary).toMatchObject({ width: 240, height: 240, depth: 240, roundness: 1 })
-    expect(SHAPES.strobi.primary).toMatchObject({
-      width: 240,
-      height: 240,
-      depth: 240.03671875,
-      roundness: 1
-    })
   })
 
   test('cube = Cubee 调参值 / cone = Citrus 调参值（raw preset 溢出治理的载体）', () => {
@@ -92,7 +86,6 @@ describe('lab 成品数值 pin（搬运保真）', () => {
   test('组合身体：freddy 3 节 / sunee 8 节 / kirby 2 节 / cloudee 4 节，其余 0 节', () => {
     const NODE_COUNTS: Record<BotShape, number> = {
       sphere: 0,
-      strobi: 0,
       capsule: 0,
       cone: 0,
       cube: 0,
@@ -116,11 +109,11 @@ describe('lab 成品数值 pin（搬运保真）', () => {
   })
 })
 
-describe('legacy 换脸（v1 8 形 + v2 退役 4 形 → 现词表读侧）', () => {
+describe('legacy 换脸（v1 8 形 + v2 退役 4 形 + strobi → 现词表读侧）', () => {
   const V1 = ['blob', 'capsule', 'squircle', 'egg', 'wedge', 'hex', 'cloud', 'teardrop']
-  const RETIRED_V2 = ['cylinder', 'diamond', 'mickey', 'cursor']
+  const RETIRED_V2 = ['cylinder', 'diamond', 'mickey', 'cursor', 'strobi']
 
-  test('键集合 = v1 8 形 + v2 退役 4 形，值全部落在现词表内', () => {
+  test('键集合 = v1 8 形 + 退役 5 形，值全部落在现词表内', () => {
     expect(Object.keys(LEGACY_BOT_SHAPE_MAP).sort()).toEqual([...V1, ...RETIRED_V2].sort())
     for (const value of Object.values(LEGACY_BOT_SHAPE_MAP)) {
       expect(BOT_AVATAR_SHAPES).toContain(value)
@@ -137,6 +130,8 @@ describe('legacy 换脸（v1 8 形 + v2 退役 4 形 → 现词表读侧）', ()
     expect(LEGACY_BOT_SHAPE_MAP.diamond).toBe('sunee')
     expect(LEGACY_BOT_SHAPE_MAP.mickey).toBe('cloudee')
     expect(LEGACY_BOT_SHAPE_MAP.cursor).toBe('onee')
+    // strobi（批 AA 短暂在词表）→ sphere：lab 源数据仅 depth 差 0.0367，合并零观感变化
+    expect(LEGACY_BOT_SHAPE_MAP.strobi).toBe('sphere')
     // 系谱一致：v1 前身与 v2 退役名落同一目标（hex→diamond→sunee 等）
     expect(LEGACY_BOT_SHAPE_MAP.hex).toBe(LEGACY_BOT_SHAPE_MAP.diamond)
     expect(LEGACY_BOT_SHAPE_MAP.cloud).toBe(LEGACY_BOT_SHAPE_MAP.mickey)
@@ -206,7 +201,7 @@ function worstMaxAbs(shape: BotShape): number {
   return Math.max(...EXPRESSIONS.map((_, index) => frameMaxAbs(shape, index)))
 }
 
-describe('几何 sanity：10 形 × 代表表情', () => {
+describe('几何 sanity：9 形 × 代表表情', () => {
   // 代表表情取 0（idle 池首，带 27.8° yaw —— 顺带覆盖「转头后仍可渲染」）与 13（近正视）
   const SAMPLE_EXPRESSIONS = [0, 13]
 
@@ -253,9 +248,8 @@ describe('几何 sanity：10 形 × 代表表情', () => {
     }
   })
 
-  test('形状身份可分：10 形对同一表情产出 10 种整体轮廓（头+背+前）', () => {
-    // 头单独比不够：kirby 的 primary 与 sphere 同为 240 球（差异全在组合身体）。
-    // sphere vs strobi 仅 depth 差 0.0367，但投影 path 逐帧仍 textually 可分（实测 27/27 帧不同）
+  test('形状身份可分：9 形对同一表情产出 9 种整体轮廓（头+背+前）', () => {
+    // 头单独比不够：kirby 的 primary 与 sphere 同为 240 球（差异全在组合身体）
     const identities = new Set(
       BOT_AVATAR_SHAPES.map((shape) => {
         const frame = staticFrame(13, SHAPES[shape])
@@ -281,11 +275,11 @@ describe('几何 sanity：10 形 × 代表表情', () => {
 })
 
 describe('viewBox 溢出治理（0813 换 lab 成品调参值的核心动机）', () => {
-  test('单曲面成品（sphere/strobi/capsule/cube/cone/onee）全表情收在 ±150 内', () => {
+  test('单曲面成品（sphere/capsule/cube/cone/onee）全表情收在 ±150 内', () => {
     // raw preset 时代 cube/cone 实测 |max| 204/176（circular+方框双层裁切事故源）；
     // Cubee/Citrus 调参值必须把它们收回 viewBox。自编形状退役后曾经的遗留溢出
     // （cylinder 167.6 / mickey 156.5）不复存在，单曲面组即全量 ≤150。
-    for (const shape of ['sphere', 'strobi', 'capsule', 'cube', 'cone', 'onee'] as const) {
+    for (const shape of ['sphere', 'capsule', 'cube', 'cone', 'onee'] as const) {
       expect(worstMaxAbs(shape), shape).toBeLessThanOrEqual(150)
     }
   })
@@ -300,7 +294,7 @@ describe('viewBox 溢出治理（0813 换 lab 成品调参值的核心动机）'
   })
 })
 
-describe('渲染消费：10 形经 BotAvatar 静态档', () => {
+describe('渲染消费：9 形经 BotAvatar 静态档', () => {
   for (const shape of BOT_AVATAR_SHAPES) {
     test(`${shape} 渲染不抛，head 与 clipPath 共用同一串，背/前槽位数对表`, () => {
       const { container } = render(<BotAvatar config={{ shape }} size={24} />)

@@ -20,16 +20,16 @@ import { BOT_AVATAR_SHAPES } from '../../../src/shared/bot-avatar/shapes'
 describe('deriveBotAvatar：agent_id 确定性派生（golden 钉死）', () => {
   // 改动 hash / 词表顺序 / 索引算法任一处都会翻红 —— 翻红 = 全体存量 NULL 行换脸，
   // 必须回到 prd §5.1 重新评审而不是改断言了事。
-  // 0813 自编形状退役（13 形 → lab 成品 10 形）是一次**有意的**派生换脸：
-  // 索引算法未动，词表长度变了 → 取模结果全变，golden 随之重钉（前两次换代同款）。
+  // 0813 Strobi 并入 sphere（10 形 → 9 形，owner 拍板）是一次**有意的**派生换脸：
+  // 索引算法未动，词表长度变了 → 取模结果全变，golden 随之重钉（前几次换代同款）。
   const GOLDENS: ReadonlyArray<[string, string, string]> = [
-    ['daily_report', 'cone', 'teal'],
-    ['search', 'cone', 'brown'],
-    ['preprocess', 'cone', 'teal'],
-    ['custom_ai', 'onee', 'brown'],
-    ['project_progress', 'sphere', 'purple'],
+    ['daily_report', 'sphere', 'blue'],
+    ['search', 'freddy', 'brown'],
+    ['preprocess', 'sunee', 'yellow'],
+    ['custom_ai', 'sphere', 'blue'],
+    ['project_progress', 'cloudee', 'red'],
     // 空 id 兜底种子 'mailagent'（对齐 resolveAgentAvatar 的 || 兜底）
-    ['', 'cone', 'orange']
+    ['', 'cone', 'brown']
   ]
 
   test.each(GOLDENS)('%j -> %s/%s', (agentId, shape, color) => {
@@ -43,11 +43,11 @@ describe('deriveBotAvatar：agent_id 确定性派生（golden 钉死）', () => 
 
 describe('mapLegacyGeneratedToBot：oreo → bot 确定性映射（golden 钉死）', () => {
   const GOLDENS: ReadonlyArray<[string, string, string, string]> = [
-    ['bloom', 'rose', 'cone', 'pink'],
-    ['silk', 'ocean', 'sunee', 'pink'],
-    ['flare', 'ember', 'capsule', 'teal'],
-    ['nova', 'meadow', 'cloudee', 'orange'],
-    ['jade', 'dusk', 'cube', 'orange']
+    ['bloom', 'rose', 'kirby', 'teal'],
+    ['silk', 'ocean', 'cube', 'orange'],
+    ['flare', 'ember', 'cone', 'orange'],
+    ['nova', 'meadow', 'cloudee', 'brown'],
+    ['jade', 'dusk', 'freddy', 'blue']
   ]
 
   test.each(GOLDENS)('%s/%s -> %s/%s', (shape, palette, botShape, botColor) => {
@@ -68,11 +68,11 @@ describe('mapLegacyGeneratedToBot：oreo → bot 确定性映射（golden 钉死
 describe('shuffleBotAvatar：确定性递进且 ≠ 起点', () => {
   test('同起点恒同下一个（golden）', () => {
     const next = shuffleBotAvatar({ shape: 'sphere', color: 'orange' }, 'daily_report')
-    expect(next).toEqual({ type: 'bot', shape: 'sphere', color: 'gray' })
+    expect(next).toEqual({ type: 'bot', shape: 'freddy', color: 'gray' })
     expect(shuffleBotAvatar({ shape: 'sphere', color: 'orange' }, 'daily_report')).toEqual(next)
   })
 
-  test('全 110 起点 × 3 个 agentId 穷举：结果 ≠ 起点且在词表内', () => {
+  test('全 99 起点 × 3 个 agentId 穷举：结果 ≠ 起点且在词表内', () => {
     for (const agentId of ['daily_report', 'a', '']) {
       for (const shape of BOT_AVATAR_SHAPES) {
         for (const color of BOT_AVATAR_COLORS) {
@@ -90,7 +90,7 @@ describe('shuffleBotAvatar：确定性递进且 ≠ 起点', () => {
 
   test('current 非法/缺省时起点回落 id 派生基底', () => {
     const fromNull = shuffleBotAvatar(null, 'search')
-    expect(fromNull).toEqual({ type: 'bot', shape: 'onee', color: 'purple' })
+    expect(fromNull).toEqual({ type: 'bot', shape: 'cloudee', color: 'brown' })
     // 非法值（v1 词表残留 —— random 层不做 legacy 映射，那是 resolveAgentAvatar 的职责）
     expect(shuffleBotAvatar({ shape: 'blob', color: 'rose' } as never, 'search')).toEqual(fromNull)
     // 且 ≠ 派生基底本身
@@ -111,7 +111,7 @@ describe('randomBotAvatar：注入随机源', () => {
     })
     expect(randomBotAvatar(makeSource([0.5, 0.5]))).toEqual({
       type: 'bot',
-      shape: BOT_AVATAR_SHAPES[5],
+      shape: BOT_AVATAR_SHAPES[4],
       color: BOT_AVATAR_COLORS[5]
     })
     // 注入源顶到 1（越 random() 契约）也收边不越界

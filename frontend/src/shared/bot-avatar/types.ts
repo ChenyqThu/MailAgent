@@ -13,10 +13,11 @@ export type { BodyNodeDef, Expression, EyeMotion, BodyMotion } from './geometry'
 export type { SurfaceConfig, SurfaceType } from './surfaces'
 
 /**
- * avatar_json 的第三种 kind。0813 成品目录化后 shape 词表为 10 个 lab 成品形状
- * （wire.py 白名单 + parity 闸同源）；组合身体是形状名在 TS 侧的派生数据
- * （SHAPES[shape].nodes），wire 结构不变仍是 {type,shape,color}。v1 8 形与
- * v2 退役 4 形（cylinder/diamond/mickey/cursor）经 shapes.ts
+ * avatar_json 的第三种 kind。0813 成品目录化后 shape 词表为 9 个 lab 成品形状
+ * （对应 lab 10 成品：Strobi 与 Grok bot 视觉不可分辨、owner 拍板并入 sphere；
+ * wire.py 白名单 + parity 闸同源）；组合身体是形状名在 TS 侧的派生数据
+ * （SHAPES[shape].nodes），wire 结构不变仍是 {type,shape,color}。v1 8 形、
+ * v2 退役 4 形（cylinder/diamond/mickey/cursor）与 strobi 经 shapes.ts
  * LEGACY_BOT_SHAPE_MAP 读侧换脸。
  */
 export interface BotAvatarBotConfig {
