@@ -5648,6 +5648,19 @@
       "footnoteLocal": "本地 SQLite · 单人单机",
       "footnoteRemote": "Remote Web 共用同一份数据",
       "backToList": "返回事项清单"
+    },
+    "datePicker": {
+      "label": "选择截止时间",
+      "grid": "日期",
+      "prevMonth": "上个月",
+      "nextMonth": "下个月",
+      "clear": "清除",
+      "presets": {
+        "today": "今天",
+        "thisWeek": "本周",
+        "nextWeek": "下周",
+        "thisMonth": "本月"
+      }
     }
   }
 }

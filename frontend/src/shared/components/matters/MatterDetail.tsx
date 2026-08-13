@@ -82,6 +82,7 @@ import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 import { AddItemModal } from './AddItemModal'
 import { MatterAgentConfigModal } from './MatterAgentConfigModal'
 import { MatterContextTab } from './MatterContextTab'
+import { MatterDatePicker } from './MatterDatePicker'
 import { ResourceDrawer } from './ResourceDrawer'
 import { MatterRunsPane } from './MatterRunsPane'
 import { MatterTagChip } from './MatterTagMarker'
@@ -145,31 +146,6 @@ interface MatterDetailProps {
 }
 
 type DetailTab = 'state' | 'context' | 'timeline' | 'runs'
-
-const DATE_INPUT_RE = /^(\d{4})-(\d{2})-(\d{2})$/
-
-function formatDateInputValue(timestamp: number | null): string {
-  if (timestamp == null) return ''
-  const date = new Date(timestamp)
-  const year = date.getFullYear()
-  const month = String(date.getMonth() + 1).padStart(2, '0')
-  const day = String(date.getDate()).padStart(2, '0')
-  return `${year}-${month}-${day}`
-}
-
-function parseDateInputValue(value: string): number | null {
-  if (!value) return null
-  const match = DATE_INPUT_RE.exec(value)
-  if (!match) return null
-  const year = Number(match[1])
-  const month = Number(match[2])
-  const day = Number(match[3])
-  const date = new Date(year, month - 1, day)
-  if (date.getFullYear() !== year || date.getMonth() !== month - 1 || date.getDate() !== day) {
-    return null
-  }
-  return date.getTime()
-}
 
 export function MatterDetail({
   matterId,
@@ -1617,8 +1593,11 @@ function DueDateControl({
   onChange(value: number | null): void
 }): React.ReactElement {
   const { t } = useTranslation()
-  const [editing, setEditing] = useState(false)
-  const inputValue = formatDateInputValue(value)
+  // 0813 dogfood #21：原来点开是个裸 `<input type="date">`，现在换成日历 popover
+  // （`MatterDatePicker`，默认落当月 + 标记今天 + 今天/本周/下周/本月快捷键）。
+  // 写入语义一字未变 —— 仍是**本地零点的 epoch 毫秒**（服务端 `_require_epoch_ms` 硬闸）。
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
   const label =
     value == null
       ? t('matters.detail.noDue')
@@ -1627,40 +1606,36 @@ function DueDateControl({
   const tone = matterDueTone(value, now)
 
   return (
-    <span className="inline-flex items-center gap-1 text-meta text-ink-fg-2">
-      {editing ? (
-        <Input
-          autoFocus
-          type="date"
-          value={inputValue}
-          disabled={saving}
-          onChange={(event) => {
-            onChange(parseDateInputValue(event.target.value))
-            setEditing(false)
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Escape') setEditing(false)
-          }}
-          onBlur={() => setEditing(false)}
-          aria-label={label}
-          className="h-7 w-[9.5rem] rounded-[var(--r-pill)] px-2 py-1 text-meta"
-        />
-      ) : (
-        <button
-          type="button"
-          disabled={saving}
-          onClick={() => setEditing(true)}
-          className={cn(
-            'inline-flex items-center gap-1 rounded-[var(--r-ctl)] border px-2 py-1 transition-colors duration-fast ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50',
-            tone === null
-              ? 'border-dashed border-ink-border text-ink-fg-3 hover:text-ink-fg'
-              : MATTER_TONE_OUTLINE_CLASS[tone]
-          )}
-        >
-          <Clock size={11} />
-          {label}
-        </button>
-      )}
+    <span className="relative inline-flex items-center gap-1 text-meta text-ink-fg-2">
+      <button
+        ref={triggerRef}
+        type="button"
+        disabled={saving}
+        onClick={() => setPickerOpen((current) => !current)}
+        aria-haspopup="dialog"
+        aria-expanded={pickerOpen}
+        className={cn(
+          'inline-flex items-center gap-1 rounded-[var(--r-ctl)] border px-2 py-1 transition-colors duration-fast ease-standard focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50',
+          tone === null
+            ? 'border-dashed border-ink-border text-ink-fg-3 hover:text-ink-fg'
+            : MATTER_TONE_OUTLINE_CLASS[tone]
+        )}
+      >
+        <Clock size={11} />
+        {label}
+      </button>
+      <MatterDatePicker
+        open={pickerOpen}
+        onClose={() => setPickerOpen(false)}
+        value={value}
+        now={now}
+        triggerRef={triggerRef}
+        ariaLabel={t('matters.datePicker.label')}
+        onSelect={(next) => {
+          onChange(next)
+          setPickerOpen(false)
+        }}
+      />
       {value != null ? (
         <button
           type="button"

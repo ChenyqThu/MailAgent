@@ -181,17 +181,23 @@ describe('MatterDetail state card', () => {
     expect(screen.queryByRole('button', { name: '重新生成摘要' })).toBeNull()
   })
 
-  test('patches due_at from a date input and can clear it', async () => {
+  // 0813 dogfood #21 —— 截止时间的编辑面从裸 `<input type="date">` 换成日历
+  // popover（`MatterDatePicker`）。这里断言的仍是**写入语义**：本地零点的 epoch
+  // 毫秒（服务端 `_require_epoch_ms` 拒秒级），只是点法换成了点日历上的一格。
+  test('patches due_at from the calendar popover and can clear it', async () => {
     renderDetail({ due_at: null })
 
     fireEvent.click(await screen.findByRole('button', { name: '未设截止时间' }))
-    const dateInput = document.querySelector('input[type="date"]') as HTMLInputElement
-    fireEvent.change(dateInput, { target: { value: '2026-08-31' } })
+    // 「明天」恒在当月网格里（42 格 ≥ 6 天前导 + 31 天，末尾至少还剩 5 格），
+    // 于是不必依赖跑测试那天是几号，也不用翻月。
+    const today = new Date()
+    const tomorrow = new Date(today.getFullYear(), today.getMonth(), today.getDate() + 1).getTime()
+    fireEvent.click(document.querySelector(`[data-day="${tomorrow}"]`) as HTMLButtonElement)
 
     await waitFor(() =>
       expect(mattersApi.patch).toHaveBeenCalledWith(
         'MAT-0042',
-        { due_at: new Date(2026, 7, 31).getTime() },
+        { due_at: tomorrow },
         { expectedVersion: 3 }
       )
     )

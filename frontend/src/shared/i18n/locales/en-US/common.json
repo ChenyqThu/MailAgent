@@ -5297,6 +5297,19 @@
       "footnoteLocal": "Local SQLite · single user, single machine",
       "footnoteRemote": "Remote Web shares the same data",
       "backToList": "Back to matter list"
+    },
+    "datePicker": {
+      "label": "Pick a due date",
+      "grid": "Dates",
+      "prevMonth": "Previous month",
+      "nextMonth": "Next month",
+      "clear": "Clear",
+      "presets": {
+        "today": "Today",
+        "thisWeek": "This week",
+        "nextWeek": "Next week",
+        "thisMonth": "This month"
+      }
     }
   }
 }
