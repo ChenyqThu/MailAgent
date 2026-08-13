@@ -66,7 +66,8 @@ def test_context_snapshot_core_fields_and_summary_accepted_at(service, clock):
             "matter_type": "客户交付",
             "tags": ["vip", "q3"],
             "priority": "p0",
-            "due_at": 9_999,
+            # A3 起 due_at 必须是真实 epoch 毫秒（<10^12 会被 E_INVALID_ARG 拒掉）。
+            "due_at": 1_786_690_800_000,
             "waiting_context": {"who": "acme"},
         },
         idempotency_key="create",
@@ -110,7 +111,7 @@ def test_context_snapshot_core_fields_and_summary_accepted_at(service, clock):
     assert core["status"] == "active"
     assert core["health"] == "on_track"
     assert core["priority"] == "p0"
-    assert core["due_at"] == 9_999
+    assert core["due_at"] == 1_786_690_800_000
     assert core["waiting_context"] == {"who": "acme"}
     assert core["current_summary"] == "All good"
     assert core["version"] == patched["version"]

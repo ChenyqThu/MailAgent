@@ -116,7 +116,13 @@ def test_snooze_expiry_and_severity_upgrade_clear_notification_ack(tmp_path):
 
 
 def test_notification_two_phase_and_episode_dedup(env):
-    _, _, base, attention = env
+    """0813 A20 语义翻转：判据仍为真时，owner 点「解决」= 直到判据翻转前不再报。
+
+    原断言（resolve 后下一 tick 立即开新 episode 再通知）正是 dogfood 实录的 bug ——
+    「解决」按不灭，60s 后逾期/健康度提醒原样回来。新语义：resolved + cleared_at IS NULL
+    抑制重开；判据翻转（fact 消失）→ 清账；之后再成立才是新 episode。
+    """
+    path, _, base, attention = env
     matter = _create(base, "health", health="off_track")
     attention.reconcile()
     first = attention.eligible_notifications("high")
@@ -125,6 +131,83 @@ def test_notification_two_phase_and_episode_dedup(env):
     attention.acknowledge_notified(matter["public_id"], first[0]["id"])
     assert attention.eligible_notifications("high") == []
     attention.triage(matter["public_id"], first[0]["id"], "resolve", idempotency_key="resolve")
+    # 判据没翻转（health 仍 off_track）→ 不重开、不再通知。
+    attention.reconcile()
+    assert attention.eligible_notifications("high") == []
+    assert attention.list_attention(public_id=matter["public_id"], state="open") == []
+    # 判据翻转（health 恢复）→ 清账；再次恶化 → 新 episode（recurrence_no+1）可再通知。
+    healthy = base.patch_matter(
+        matter["public_id"], {"health": "on_track"},
+        expected_version=matter["version"], idempotency_key="health-ok", source="test",
+    )
+    attention.reconcile()
+    base.patch_matter(
+        matter["public_id"], {"health": "off_track"},
+        expected_version=healthy["version"], idempotency_key="health-bad", source="test",
+    )
     attention.reconcile()
     second = attention.eligible_notifications("high")
     assert len(second) == 1 and second[0]["id"] != first[0]["id"]
+    assert second[0]["recurrence_no"] == 2
+
+
+def test_resolve_on_still_overdue_action_stays_quiet_until_fact_flips(env):
+    """0813 A20 owner 实录钉住：行动项仍逾期时点「解决」，提醒不再按 tick 复现。
+
+    复现链 = 1970 脏日期（A3）让 action_overdue 恒真 → 每次 reconcile 都把刚 resolve 的
+    episode 原样重开。新语义下 resolve 后保持安静；把日期改到未来（判据翻转）→ 清账；
+    再次逾期才开新 episode。
+    """
+    path, _, base, attention = env
+    matter = _create(base, "overdue")
+    _action(path, matter["id"], title="跟进产线复核", status="open", due_at=NOW - DAY)
+    attention.reconcile()
+    opened = attention.list_attention(public_id=matter["public_id"], state="open")
+    assert [signal["kind"] for signal in opened] == ["action_overdue"]
+    attention.triage(
+        matter["public_id"], opened[0]["id"], "resolve", idempotency_key="resolve-1"
+    )
+    # 判据仍为真（日期还是过去）→ 连续 reconcile 都不重开。
+    attention.reconcile()
+    attention.reconcile()
+    assert attention.list_attention(public_id=matter["public_id"], state="open") == []
+    # owner 把日期改对（未来）→ 判据翻转 → 清账。
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE matter_item SET due_at=? WHERE matter_id=?",
+            (NOW + 3 * DAY, matter["id"]),
+        )
+        conn.commit()
+    attention.reconcile()
+    resolved = attention.list_attention(public_id=matter["public_id"], state="resolved")
+    assert resolved and all(signal["cleared_at"] is not None for signal in resolved)
+    # 之后再次逾期 = 新 episode（recurrence_no+1），可以再报。
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE matter_item SET due_at=? WHERE matter_id=?",
+            (NOW - 2 * DAY, matter["id"]),
+        )
+        conn.commit()
+    attention.reconcile()
+    reopened = attention.list_attention(public_id=matter["public_id"], state="open")
+    assert [signal["kind"] for signal in reopened] == ["action_overdue"]
+    assert reopened[0]["recurrence_no"] == 2
+
+
+def test_resolved_run_failed_reopens_on_next_failure(env):
+    """事件驱动信号（run_failed/context_gap）不吃 resolved 豁免：它们没有清账循环，
+    豁免了就是永久静默 —— 同一 run 再次失败必须还能拉起新 episode。"""
+    _, _, base, attention = env
+    matter = _create(base, "runfail")
+    first = attention.open_signal(
+        matter_id=matter["id"], kind="run_failed", subject_key="run:9",
+        severity="critical", why="run 失败",
+    )
+    attention.triage(
+        matter["public_id"], first["id"], "resolve", idempotency_key="resolve-rf"
+    )
+    second = attention.open_signal(
+        matter_id=matter["id"], kind="run_failed", subject_key="run:9",
+        severity="critical", why="run 又失败",
+    )
+    assert second is not None and second["recurrence_no"] == 2

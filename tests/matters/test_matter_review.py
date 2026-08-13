@@ -32,7 +32,8 @@ CHANGES = [
         "kind": "field",
         "target": {"entity": "matter", "field": "due_at"},
         "operation": "replace",
-        "after": 1_700_000,
+        # A3 起时间戳必须是真实 epoch 毫秒（<10^12 会被 E_INVALID_ARG 拒掉）。
+        "after": 1_700_000_000_000,
         "sources": [],
     },
 ]
@@ -117,12 +118,12 @@ def test_accept_with_edited_change_uses_edited_after(env):
         pid,
         update_id,
         selected_change_ids=["chg_03"],
-        edited_changes=[{"change_id": "chg_03", "after": 1_800_000}],
+        edited_changes=[{"change_id": "chg_03", "after": 1_800_000_000_000}],
         expected_version=before["version"],
         idempotency_key="acc-1",
         source="desktop_ui",
     )
-    assert result["matter"]["due_at"] == 1_800_000
+    assert result["matter"]["due_at"] == 1_800_000_000_000
 
 
 def test_accept_rejects_unknown_selected_and_unselected_edit(env):
@@ -169,7 +170,7 @@ def test_stale_hook_marks_pending_and_accept_rejects_stale(env):
     # test_matter_proposal_scope.py::test_unrelated_field_write_keeps_proposal_acceptable。
     current = service.get_matter(pid)["matter"]["version"]
     service.patch_matter(
-        pid, {"due_at": 1_900_000}, expected_version=current,
+        pid, {"due_at": 1_900_000_000_000}, expected_version=current,
         idempotency_key="patch-1", source="desktop_ui",
     )
     with sqlite3.connect(path) as conn:

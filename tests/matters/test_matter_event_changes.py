@@ -223,28 +223,32 @@ def test_two_long_texts_sharing_a_prefix_still_count_as_a_change(service):
 # --------------------------------------------------------------------------
 
 
-def test_non_finite_float_is_skipped_instead_of_rolling_back_the_write(service):
-    """契约 = **跳过**这条 change（字段名仍在 `fields` 里），不是报错。
+def test_non_finite_due_at_is_rejected_before_any_write(service):
+    """0813 A3 起契约收紧：非有限浮点在 due_at 上直接 `E_INVALID_ARG`，什么都不写。
 
-    `json.dumps` 默认会把 NaN/Infinity 输出成**非标准** JSON 字面量，
-    `CHECK (json_valid(payload_json))` 当场拒收 —— 而此时业务更新已经写完，只有事件那一句
-    失败 ⇒ **整笔事务回滚**，一个参数问题被放大成 500。投影层不许把一次写入弄失败。
+    旧契约（写入照常落地、事件投影层跳过这条 change）针对的是「参数问题被放大成整笔
+    事务回滚 500」——现在参数在**进事务前**就被 `_require_epoch_ms` 拒掉，失败更早、
+    更干净（Infinity 再也进不了 INTEGER 列）。投影层对非有限浮点的跳过契约仍由下面的
+    `test_non_finite_float_is_not_narratable_anywhere` 钉住（build_changes 直测）。
     """
     public_id = new_matter(service)
     created = service.create_item(
         public_id, {"kind": "action", "title": "催回执"}, **mutation(1, "item")
     )
     item_id = created["item"]["id"]
-    result = service.update_item(
-        public_id,
-        item_id,
-        {"due_at": float("inf"), "title": "改过的标题"},
-        **mutation(created["version"], "inf"),
-    )
-    assert result["item"]["title"] == "改过的标题"  # 业务更新照常落地
-    payload = event_of(timeline(service, public_id), "item_updated")["payload"]
-    assert payload["fields"] == ["due_at", "title"]  # 字段名仍在
-    assert [entry["field"] for entry in payload["changes"]] == ["title"]
+    with pytest.raises(service_module.MatterError) as exc:
+        service.update_item(
+            public_id,
+            item_id,
+            {"due_at": float("inf"), "title": "改过的标题"},
+            **mutation(created["version"], "inf"),
+        )
+    assert exc.value.code == "E_INVALID_ARG"
+    # 整笔未写：标题保持原样，也没有 item_updated 事件。
+    item = service.list_items(public_id)[0]
+    assert item["title"] == "催回执"
+    kinds = [event["kind"] for event in timeline(service, public_id)]
+    assert "item_updated" not in kinds
 
 
 @pytest.mark.parametrize("bad", [float("nan"), float("inf"), float("-inf")])

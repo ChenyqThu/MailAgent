@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from typing import Any, Mapping
 
 from .events import (
@@ -21,6 +21,11 @@ from .service import Actor, MatterError, MatterService
 WAIT_OVERDUE_DAYS = 7
 DEADLINE_NEAR_DAYS = 3
 SNOOZE_3D_MS = 3 * 24 * 60 * 60 * 1000
+
+#: 事件驱动的信号（run 失败等由 `open_signal` 逐次上报，不进 `reconcile` 的判据/清账循环）。
+#: 判据型信号（逾期/临期/健康度/待评审）由 `_collect_facts` 每 tick 重算 —— 两类的
+#: 「resolved 之后还能不能重开」语义不同，见 `_open_episode_in_conn`。
+EVENT_DRIVEN_ATTENTION_KINDS = ("run_failed", "context_gap")
 
 _SEVERITY_RANK = {"info": 0, "warn": 1, "critical": 2}
 
@@ -48,7 +53,10 @@ class AttentionService(MatterService):
                 (fact.matter_id, fact.kind, fact.subject_key): fact for fact in facts
             }
             rows = conn.execute(
-                "SELECT * FROM matter_attention WHERE kind NOT IN ('run_failed','context_gap')"
+                "SELECT * FROM matter_attention WHERE kind NOT IN ("
+                + ",".join("?" for _ in EVENT_DRIVEN_ATTENTION_KINDS)
+                + ")",
+                EVENT_DRIVEN_ATTENTION_KINDS,
             ).fetchall()
             existing = {
                 (int(row["matter_id"]), row["kind"], row["subject_key"]): dict(row)
@@ -399,8 +407,20 @@ class AttentionService(MatterService):
             "ORDER BY id DESC LIMIT 1",
             (fact.matter_id, fact.kind, fact.subject_key),
         ).fetchone()
-        if previous is not None and previous["state"] == "dismissed" and previous["cleared_at"] is None:
-            return None
+        # 判据仍为真时，owner 的「解决/忽略」= 直到判据翻转前不再报（0813 A20）：
+        # `cleared_at IS NULL` = 判据自上次人工处置后从未消失过 —— reconcile 观察到判据
+        # 翻转才停 `cleared_at`，之后同一事实再成立才算新 episode（recurrence_no+1）。
+        # 此前只认 dismissed，用户点「解决」而逾期仍为真时，下一 tick 就原样重开 ——
+        # 「解决」按不灭。resolved 的豁免只给判据型信号：run_failed/context_gap 是
+        # 事件驱动、没有清账循环，resolved 也豁免会把「同一 run 再次失败」永久静默。
+        if previous is not None and previous["cleared_at"] is None:
+            if previous["state"] == "dismissed":
+                return None
+            if (
+                previous["state"] == "resolved"
+                and fact.kind not in EVENT_DRIVEN_ATTENTION_KINDS
+            ):
+                return None
         recurrence_no = int(previous["recurrence_no"]) + 1 if previous is not None else 1
         cursor = conn.execute(
             "INSERT INTO matter_attention(matter_id,kind,subject_key,state,severity,why," 

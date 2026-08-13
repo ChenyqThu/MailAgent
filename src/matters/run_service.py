@@ -855,6 +855,17 @@ class MatterRunService(MatterService):
                 if field not in PROPOSAL_FIELD_WHITELIST:
                     drop(change, "field_not_allowed", field=field)
                     continue
+                # A3：due_at 必须是 epoch 毫秒。在 propose 侧就剔除（agent 当轮拿到
+                # dropped 明细能自纠），不让秒值躺进提案等 owner accept 时才炸。
+                if field == "due_at":
+                    try:
+                        self._require_epoch_ms("due_at", change.get("after"))
+                    except MatterError:
+                        drop(
+                            change, "timestamp_not_epoch_ms",
+                            field="due_at", value=change.get("after"),
+                        )
+                        continue
             if kind == "inference":
                 change["is_inference"] = True
             if kind == "action":
@@ -865,6 +876,22 @@ class MatterRunService(MatterService):
                     )
                     if not isinstance(item_id, int) or item_id not in live_item_ids:
                         drop(change, "action_target_missing", target_id=item_id)
+                        continue
+                after = change.get("after")
+                if isinstance(after, Mapping):
+                    bad_ts = None
+                    for ts_field in ("due_at", "completed_at"):
+                        if ts_field in after:
+                            try:
+                                self._require_epoch_ms(ts_field, after.get(ts_field))
+                            except MatterError:
+                                bad_ts = ts_field
+                                break
+                    if bad_ts is not None:
+                        drop(
+                            change, "timestamp_not_epoch_ms",
+                            field=bad_ts, value=after.get(bad_ts),
+                        )
                         continue
             validated.append(change)
         return validated, dropped

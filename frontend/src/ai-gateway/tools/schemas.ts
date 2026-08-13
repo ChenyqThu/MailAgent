@@ -82,8 +82,27 @@ const matterIdempotencyFields = {
 
 const matterVersionedFields = {
   ...matterIdempotencyFields,
-  expected_version: z.number().int().positive()
+  expected_version: z
+    .number()
+    .int()
+    .positive()
+    .describe(
+      'The matter version you last read (matter_get/matter_find or a previous mutation result). ' +
+        'Sub-entity writes (items/resources/stakeholders/relations) are auto-rebased when the ' +
+        'version has moved on, so parallel appends and edits of untouched rows succeed; ' +
+        'E_VERSION_CONFLICT is returned only when the same object was concurrently modified — ' +
+        'then re-read the matter before deciding whether to retry.'
+    )
 }
+
+/** A3 (0813) — every user-facing matter timestamp is epoch MILLISECONDS. The model kept sending
+ *  epoch seconds (rendered as 1970-01-21 across the whole chain), so the unit is now declared on
+ *  every field AND enforced server-side (E_INVALID_ARG below 10^12). */
+const epochMillis = (label: string): z.ZodType<number> =>
+  z
+    .number()
+    .int()
+    .describe(`${label} as epoch MILLISECONDS (UTC), e.g. 1786690800000. Never epoch seconds.`)
 
 export const matterFindSchema = z.object({
   q: z.string().trim().optional(),
@@ -124,7 +143,7 @@ export const matterCreateSchema = z.object({
     .default('inbox'),
   health: z.enum(['unknown', 'on_track', 'at_risk', 'off_track']).default('unknown'),
   priority: z.enum(['p0', 'p1', 'p2', 'p3']).default('p1'),
-  due_at: z.number().int().nullable().optional(),
+  due_at: epochMillis('Matter due date').nullable().optional(),
   waiting_context: z.record(z.string(), z.unknown()).nullable().optional(),
   ...matterIdempotencyFields
 })
@@ -136,7 +155,7 @@ const matterPatchSchema = z
     type: z.string().trim().min(1).max(128).nullable().optional(),
     tags: z.array(z.string()).optional(),
     priority: z.enum(['p0', 'p1', 'p2', 'p3']).optional(),
-    due_at: z.number().int().nullable().optional(),
+    due_at: epochMillis('Matter due date').nullable().optional(),
     waiting_context: z.record(z.string(), z.unknown()).nullable().optional(),
     status: z
       .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
@@ -189,8 +208,8 @@ const matterItemFields = {
   owner_kind: z.enum(['user', 'agent', 'system']).nullable().optional(),
   owner_id: z.string().nullable().optional(),
   waiting_on_stakeholder_id: z.number().int().positive().nullable().optional(),
-  due_at: z.number().int().nullable().optional(),
-  completed_at: z.number().int().nullable().optional(),
+  due_at: epochMillis('Item due date').nullable().optional(),
+  completed_at: epochMillis('Completion time').nullable().optional(),
   checklist: z.array(matterChecklistEntrySchema).optional(),
   source_resource_id: z.number().int().positive().nullable().optional(),
   source_locator: z.record(z.string(), z.unknown()).nullable().optional()
@@ -303,7 +322,7 @@ const stakeholderFields = z
     role: z.string().nullable().optional(),
     relationship: z.string().nullable().optional(),
     is_waiting_on: z.boolean().optional(),
-    last_contact_at: z.number().int().nullable().optional(),
+    last_contact_at: epochMillis('Last contact time').nullable().optional(),
     source_resource_id: z.number().int().positive().nullable().optional()
   })
   .strict()

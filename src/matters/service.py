@@ -48,7 +48,11 @@ from .proposal_scope import (
     proposal_scope,
     scope_from_items,
     scope_from_matter_columns,
+    scope_from_payload,
+    scope_from_relations,
     scope_from_resources,
+    scope_from_stakeholders,
+    scope_to_payload,
 )
 from .repository import MatterRepository
 from .resource_identity import (
@@ -250,7 +254,7 @@ class MatterService:
                     "priority": priority,
                     "owner_id": actor.actor_id,
                     "source": source or "desktop_ui",
-                    "due_at": data.get("due_at"),
+                    "due_at": self._require_epoch_ms("due_at", data.get("due_at")),
                     "waiting_context_json": self._dump(data["waiting_context"])
                     if data.get("waiting_context") is not None
                     else None,
@@ -903,6 +907,8 @@ class MatterService:
                     self._require_value("priority", value, MATTER_PRIORITIES)
                 elif field == "matter_type":
                     value = self._optional_text(value)
+                elif field in ("due_at", "next_attention_at"):
+                    value = self._require_epoch_ms(field, value)
                 elif field == "tags":
                     field = "tags_json"
                     value = self._dump(normalize_tags(value))
@@ -1141,6 +1147,13 @@ class MatterService:
                 f"reason={reason or '-'}"
             )
             self.repository.delete_matter(conn, matter["id"])
+            try:
+                conn.execute(
+                    "DELETE FROM sync_state WHERE key=?",
+                    (self._version_scope_state_key(int(matter["id"])),),
+                )
+            except sqlite3.OperationalError:
+                pass  # 账本是可丢簿记；孤儿键无害，删除失败不阻断
             return {"deleted": True, "public_id": public_id}
 
     def create_item(
@@ -1168,15 +1181,15 @@ class MatterService:
             if replay:
                 return replay
             matter = self._require_matter(conn, public_id)
-            if not self._cas_update(
+            self._cas_update_rebase(
                 conn,
-                matter["id"],
+                matter,
                 expected_version,
                 {"updated_at": now, "last_activity_at": now},
-                # 新建 item：纯追加，没有任何既有对象被改 → 不作废任何提案。
+                # 新建 item：纯追加，没有任何既有对象被改 → 不作废任何提案，
+                # stale base 也不构成冲突（auto-rebase）。
                 scope=SCOPE_NOTHING,
-            ):
-                raise self._version_conflict()
+            )
             item_id = self.repository.insert_item(
                 conn,
                 {
@@ -1302,15 +1315,15 @@ class MatterService:
             changes.update(normalized)
             changes["kind"] = kind
             changes["updated_at"] = now
-            if not self._cas_update(
+            self._cas_update_rebase(
                 conn,
-                matter["id"],
+                matter,
                 expected_version,
                 {"updated_at": now, "last_activity_at": now},
-                # 只有 target 落在这条 item 上的提案才失效。
+                # 只有 target 落在这条 item 上的提案才失效；stale base 也只有在
+                # 这条 item 被并发改过时才冲突（auto-rebase）。
                 scope=scope_from_items([item_id]),
-            ):
-                raise self._version_conflict()
+            )
             if not self.repository.update_item(conn, matter["id"], item_id, changes):
                 raise MatterError("E_CHILD_NOT_FOUND", f"item {item_id} not found")
             self.refresh_search_projection(conn, matter["id"])
@@ -1589,15 +1602,14 @@ class MatterService:
                 result = self._mutation(matter, [], resources=results)
                 result["warnings"] = list(dict.fromkeys(warnings))
                 return result
-            if not self._cas_update(
+            self._cas_update_rebase(
                 conn,
-                matter["id"],
+                matter,
                 expected_version,
                 {"updated_at": now, "last_activity_at": now},
                 # 新关联的 resource：提案不可能已经引用它（propose 时它还没 link）。
                 scope=scope_from_resources([int(resource["id"]) for resource, _ in pending]),
-            ):
-                raise self._version_conflict()
+            )
             event_ids = []
             for resource, spec in pending:
                 link_id = self.repository.insert_resource_link(
@@ -1723,16 +1735,15 @@ class MatterService:
                     event_kind = RESOURCE_SUGGESTION_ACCEPTED
                 else:
                     event_kind = "resource_updated"
-            if not self._cas_update(
+            self._cas_update_rebase(
                 conn,
-                matter["id"],
+                matter,
                 expected_version,
                 {"updated_at": now, "last_activity_at": now},
                 # 「接受/拒绝资料建议」「置顶」「订阅」都只动这一条 link —— owner 连点 12 次
                 # 接受资料建议就把待审提案作废，正是这里没收窄导致的。
                 scope=scope_from_resources([resource_id]),
-            ):
-                raise self._version_conflict()
+            )
             event_id = self._append_event(
                 conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
                 dedupe_key=dedupe_key, reason=reason, resource_id=resource_id,
@@ -2257,14 +2268,13 @@ class MatterService:
             if not link or (deleted and link["deleted_at"] is not None) or (not deleted and link["deleted_at"] is None):
                 raise MatterError("E_CHILD_NOT_FOUND", f"resource link {resource_id} not found")
             resource = self.repository.get_resource(conn, resource_id) or {}
-            if not self._cas_update(
+            self._cas_update_rebase(
                 conn,
-                matter["id"],
+                matter,
                 expected_version,
                 {"updated_at": now, "last_activity_at": now},
                 scope=scope_from_resources([resource_id]),
-            ):
-                raise self._version_conflict()
+            )
             conn.execute("UPDATE matter_resource SET deleted_at=?, updated_at=? WHERE id=?", (now if deleted else None, now, link["id"]))
             event_id = self._append_event(
                 conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source,
@@ -2527,7 +2537,8 @@ class MatterService:
                     "display_name": self._optional_text(data.get("display_name")), "email_normalized": email,
                     "organization": self._optional_text(data.get("organization")), "role": self._optional_text(data.get("role")),
                     "relationship": self._optional_text(data.get("relationship")), "is_waiting_on": 1 if data.get("is_waiting_on") else 0,
-                    "last_contact_at": data.get("last_contact_at"), "source_resource_id": data.get("source_resource_id"),
+                    "last_contact_at": self._require_epoch_ms("last_contact_at", data.get("last_contact_at")),
+                    "source_resource_id": data.get("source_resource_id"),
                     "created_at": now, "updated_at": now,
                 }
                 # W-C 全局干系人库：有 email 才有全局身份。upsert 后把库里已知的
@@ -2559,6 +2570,10 @@ class MatterService:
             else:
                 allowed = {"display_name", "organization", "role", "relationship", "is_waiting_on", "last_contact_at", "source_resource_id", "deleted_at"}
                 changes = {key: value for key, value in data.items() if key in allowed}
+                if "last_contact_at" in changes:
+                    changes["last_contact_at"] = self._require_epoch_ms(
+                        "last_contact_at", changes["last_contact_at"]
+                    )
                 if email is not None:
                     changes["email_normalized"] = email
                 changes["updated_at"] = now
@@ -2582,13 +2597,37 @@ class MatterService:
                         display_name=touched_name, organization=touched_org,
                     )
                 if event_kind == "stakeholder_removed":
+                    # 顺带被清掉 waiting 指针的 item 也算本次写入的目标（进账本 scope）。
+                    unwaited_item_ids = [
+                        int(row[0])
+                        for row in conn.execute(
+                            "SELECT id FROM matter_item WHERE matter_id=? AND waiting_on_stakeholder_id=?",
+                            (matter["id"], stakeholder_id),
+                        )
+                    ]
                     conn.execute(
                         "UPDATE matter_item SET waiting_on_stakeholder_id=NULL, updated_at=?, version=version+1 "
                         "WHERE matter_id=? AND waiting_on_stakeholder_id=?",
                         (now, matter["id"], stakeholder_id),
                     )
-            if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
-                raise self._version_conflict()
+                    write_scope = MatterWriteScope(
+                        item_ids=frozenset(unwaited_item_ids),
+                        stakeholder_ids=frozenset({int(stakeholder_id)}),
+                    )
+                else:
+                    write_scope = scope_from_stakeholders([stakeholder_id])
+            if existing is None:
+                # 新增干系人：纯追加（提案结构上碰不到干系人 —— 不作废任何提案，
+                # stale base 也不构成冲突）。此前缺省 scope=None ≙ 触及一切，一次
+                # 加人就把待审提案全部作废，与 create_item 的「纯追加」判据不一致。
+                write_scope = SCOPE_NOTHING
+            self._cas_update_rebase(
+                conn,
+                matter,
+                expected_version,
+                {"updated_at": now, "last_activity_at": now},
+                scope=write_scope,
+            )
             self.refresh_search_projection(conn, matter["id"])
             stakeholder = dict(conn.execute("SELECT * FROM matter_stakeholder WHERE id=?", (stakeholder_id,)).fetchone())
             event_id = self._append_event(
@@ -2704,8 +2743,14 @@ class MatterService:
                 result = self._mutation(source_matter, [], relation=self._relation_row(existing))
                 result["warnings"] = ["already_linked"]
                 return result
-            if not self._cas_update(conn, source_matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
-                raise self._version_conflict()
+            self._cas_update_rebase(
+                conn,
+                source_matter,
+                expected_version,
+                {"updated_at": now, "last_activity_at": now},
+                # 新建关系：纯追加（提案结构上碰不到关系）。
+                scope=SCOPE_NOTHING,
+            )
             cursor = conn.execute(
                 "INSERT INTO matter_relation(source_matter_id,target_matter_id,relation_type,confidence,provenance_json,confirmed_at,created_at,updated_at) "
                 "VALUES (?,?,?,?,?,?,?,?)",
@@ -2763,8 +2808,13 @@ class MatterService:
             if patch.get("confirmed"):
                 changes["confirmed_at"] = relation["confirmed_at"] or now
             changes["updated_at"] = now
-            if not self._cas_update(conn, matter["id"], expected_version, {"updated_at": now, "last_activity_at": now}):
-                raise self._version_conflict()
+            self._cas_update_rebase(
+                conn,
+                matter,
+                expected_version,
+                {"updated_at": now, "last_activity_at": now},
+                scope=scope_from_relations([relation_id]),
+            )
             conn.execute(f"UPDATE matter_relation SET {', '.join(f'{key}=?' for key in changes)} WHERE id=?", (*changes.values(), relation_id))
             event_id = self._append_event(conn, matter_id=matter["id"], kind=event_kind, actor=actor, source=source, dedupe_key=dedupe_key, reason=reason, payload={"relation_id": relation_id}, happened_at=now, reverses_event_id=reverses_event_id)
             after = self.repository.get_matter_by_id(conn, matter["id"])
@@ -3197,7 +3247,9 @@ class MatterService:
                     raise MatterError(
                         "E_INVALID_ARG", f"change {change_id}: due_at must be int|null"
                     )
-                direct_changes["due_at"] = value
+                # A3 backstop：提案里的 due_at 同样可能是 agent 写的 epoch 秒
+                #（propose 侧已 fail-closed 剔除，这里防旧存量/直连 REST）。
+                direct_changes["due_at"] = self._require_epoch_ms("due_at", value)
             elif field == "waiting_context":
                 direct_changes["waiting_context_json"] = (
                     self._dump(value) if value is not None else None
@@ -3303,6 +3355,11 @@ class MatterService:
                 self._require_value(
                     "priority", str(item_patch["priority"]), MATTER_PRIORITIES
                 )
+            for ts_field in ("due_at", "completed_at"):
+                if ts_field in item_patch:
+                    item_patch[ts_field] = self._require_epoch_ms(
+                        ts_field, item_patch[ts_field]
+                    )
             if not item_patch:
                 warnings.append(f"action_change_noop:{change_id}")
                 return
@@ -3602,13 +3659,134 @@ class MatterService:
         """
         ok = self.repository.cas_update_matter(conn, matter_id, expected_version, changes)
         if ok:
-            self._mark_stale_proposals(
-                conn,
-                matter_id,
-                int(expected_version) + 1,
-                scope if scope is not None else SCOPE_EVERYTHING,
-            )
+            effective_scope = scope if scope is not None else SCOPE_EVERYTHING
+            new_version = int(expected_version) + 1
+            self._mark_stale_proposals(conn, matter_id, new_version, effective_scope)
+            self._record_version_scope(conn, matter_id, new_version, effective_scope)
         return ok
+
+    def _cas_update_rebase(
+        self,
+        conn: sqlite3.Connection,
+        matter: Mapping[str, Any],
+        expected_version: int,
+        changes: Mapping[str, Any],
+        *,
+        scope: MatterWriteScope,
+    ) -> None:
+        """子实体写入的 CAS：stale base 只在**目标重叠**时才算冲突（0813 A2）。
+
+        动机：Agent 并行追加 9 个子实体（item/stakeholder/resource）时，第一笔就把
+        matter.version 推前，其余 8 笔全被钝化的 matter 级 CAS 拒掉 —— 但追加与
+        「别人没碰过的行」的编辑根本没有可失去的更新。判据换成版本账本的 gap scan：
+
+        - `expected_version == 当前` → 与旧行为逐字节一致；
+        - `expected_version < 当前` → 取 (expected, current] 之间每次 bump 落下的
+          `MatterWriteScope`（`_record_version_scope` 账本），有任何一笔与本次写入目标
+          重叠（含 wildcard 级写入，如归档/接受提案）→ `E_VERSION_CONFLICT`；账本
+          覆盖不完整（老库存量 / 账本写入失败过）→ 同样冲突（fail-closed，即旧行为）；
+          全不重叠 → 以**当前**版本重放（auto-rebase），bump 照常。
+        - `expected_version > 当前` → 凭空的未来版本，直接冲突。
+
+        🔴 只给子实体路径用。matter 级字段写（patch_matter/归档/接受提案…）保持严格
+        CAS —— 「两处同时改 matter 的 state/goal 必须被挡」是拍板过的语义。
+        """
+        current = int(matter["version"])
+        expected = int(expected_version)
+        if expected != current:
+            if expected > current or self._gap_conflicts(
+                conn, int(matter["id"]), expected, current, scope
+            ):
+                raise self._version_conflict()
+        if not self._cas_update(conn, int(matter["id"]), current, changes, scope=scope):
+            raise self._version_conflict()
+
+    def _gap_conflicts(
+        self,
+        conn: sqlite3.Connection,
+        matter_id: int,
+        expected: int,
+        current: int,
+        scope: MatterWriteScope,
+    ) -> bool:
+        """(expected, current] 区间内是否存在与 `scope` 重叠的写入（或判据缺失）。"""
+        entries = self._load_version_scopes(conn, matter_id)
+        gap = {version: entry for version, entry in entries if expected < version <= current}
+        if set(gap) != set(range(expected + 1, current + 1)):
+            return True  # 账本盖不住整个 gap → fail closed（等价于旧的严格 CAS）
+        return any(entry.overlaps(scope) for entry in gap.values())
+
+    #: 每个事项在版本账本里最多保留的 bump 条目数。9 笔并行写的 gap 是个位数；64 只是
+    #: 防账本无界增长的护栏 —— 比它更老的 stale base 会因覆盖不完整而回到严格 CAS。
+    VERSION_SCOPE_RETENTION = 64
+
+    @staticmethod
+    def _version_scope_state_key(matter_id: int) -> str:
+        return f"matter_version_scopes:{matter_id}"
+
+    def _load_version_scopes(
+        self, conn: sqlite3.Connection, matter_id: int
+    ) -> list[tuple[int, MatterWriteScope]]:
+        try:
+            row = conn.execute(
+                "SELECT value FROM sync_state WHERE key=?",
+                (self._version_scope_state_key(matter_id),),
+            ).fetchone()
+        except sqlite3.OperationalError:
+            return []
+        if row is None or not row[0]:
+            return []
+        try:
+            parsed = json.loads(row[0])
+        except (TypeError, ValueError):
+            return []
+        if not isinstance(parsed, list):
+            return []
+        entries: list[tuple[int, MatterWriteScope]] = []
+        for item in parsed:
+            if not isinstance(item, Mapping):
+                continue
+            version = item.get("version")
+            if isinstance(version, bool) or not isinstance(version, int):
+                continue
+            # scope 形状不对 → scope_from_payload fail-closed 成 wildcard，
+            # gap scan 会把它当成与一切重叠的写入（保守拒绝）。
+            entries.append((int(version), scope_from_payload(item.get("scope"))))
+        return entries
+
+    def _record_version_scope(
+        self,
+        conn: sqlite3.Connection,
+        matter_id: int,
+        new_version: int,
+        scope: MatterWriteScope,
+    ) -> None:
+        """把这次 bump 的目标集追加进 sync_state 账本（`matter_version_scopes:{id}`）。
+
+        账本是**可丢**的簿记（丢了 = stale 写回到严格 CAS，绝不会放过真冲突），所以任何
+        写入失败只降级不阻断业务写；键落 sync_state 沿用 `alert.*`/`davmail.*` 先例，
+        不 bump DB_VERSION。
+        """
+        try:
+            entries = [
+                {"version": version, "scope": scope_to_payload(entry_scope)}
+                for version, entry_scope in self._load_version_scopes(conn, matter_id)
+                if version < new_version
+            ]
+            entries.append({"version": new_version, "scope": scope_to_payload(scope)})
+            entries = entries[-self.VERSION_SCOPE_RETENTION :]
+            conn.execute(
+                "INSERT OR REPLACE INTO sync_state(key, value, updated_at) VALUES (?,?,?)",
+                (
+                    self._version_scope_state_key(matter_id),
+                    self._dump(entries),
+                    time.time(),
+                ),
+            )
+        except sqlite3.OperationalError as exc:
+            logger.warning(
+                f"[matters] version scope ledger write failed matter_id={matter_id}: {exc}"
+            )
 
     def _mark_stale_proposals(
         self,
@@ -3824,8 +4002,8 @@ class MatterService:
             "owner_kind": owner_kind,
             "owner_id": data.get("owner_id"),
             "waiting_on_stakeholder_id": data.get("waiting_on_stakeholder_id"),
-            "due_at": data.get("due_at"),
-            "completed_at": data.get("completed_at"),
+            "due_at": self._require_epoch_ms("due_at", data.get("due_at")),
+            "completed_at": self._require_epoch_ms("completed_at", data.get("completed_at")),
             "checklist_json": self._dump(normalized_checklist),
             "source_resource_id": data.get("source_resource_id"),
             "source_locator_json": self._dump(data["source_locator"])
@@ -4385,6 +4563,45 @@ class MatterService:
     def _require_value(field: str, value: str, allowed: Sequence[str]) -> None:
         if value not in allowed:
             raise MatterError("E_INVALID_ARG", f"invalid {field}: {value}")
+
+    #: 时间戳字段（due_at/completed_at/last_contact_at/next_attention_at）的合法毫秒区间。
+    #: 下界 10^12 ≈ 2001-09 —— 比它小的值几乎必然是 epoch **秒**（0813 A3 实证：agent 把
+    #: 2026 年的截止日期写成 1786895999，被全链按毫秒解释成 1970-01-21）；上界 10^15
+    #: ≈ 33658 年，挡微秒。有效期内（2001..33658）的真实日期不受影响。
+    EPOCH_MS_MIN = 10**12
+    EPOCH_MS_MAX = 10**15
+
+    @classmethod
+    def _require_epoch_ms(cls, field: str, value: Any) -> int | None:
+        """校验并返回 epoch 毫秒时间戳；None 原样放行。单位错给出可自纠的错误信息。"""
+        if value is None:
+            return None
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise MatterError(
+                "E_INVALID_ARG", f"{field} must be an integer epoch-milliseconds timestamp"
+            )
+        try:
+            number = int(value)
+        except (OverflowError, ValueError) as exc:  # float('inf') / float('nan')
+            raise MatterError(
+                "E_INVALID_ARG", f"{field} must be an integer epoch-milliseconds timestamp"
+            ) from exc
+        if number != value:
+            raise MatterError(
+                "E_INVALID_ARG", f"{field} must be an integer epoch-milliseconds timestamp"
+            )
+        if not (cls.EPOCH_MS_MIN <= number < cls.EPOCH_MS_MAX):
+            raise MatterError(
+                "E_INVALID_ARG",
+                f"{field} must be epoch MILLISECONDS (13 digits for current dates, "
+                f"e.g. 1786690800000); got {number}"
+                + (
+                    " which looks like epoch seconds — multiply by 1000"
+                    if 10**9 <= number < 10**12
+                    else ""
+                ),
+            )
+        return number
 
     @staticmethod
     def _validate_actor(actor: Actor) -> None:

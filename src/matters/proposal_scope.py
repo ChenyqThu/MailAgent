@@ -36,11 +36,19 @@ _COLUMN_TO_FIELD = {"waiting_context_json": "waiting_context"}
 
 @dataclass(frozen=True)
 class MatterWriteScope:
-    """一次写入（或一份提案）触及的对象集合。"""
+    """一次写入（或一份提案）触及的对象集合。
+
+    `stakeholder_ids` / `relation_ids`（0813 A2）：提案结构上碰不到干系人/关系（change kind
+    只有 fact/inference/field/action/resource），所以这两个集合对**提案失效**永远不产生重叠 ——
+    它们存在是为了版本账本（`service._cas_update` 落的 gap scan 判据）：并发的两笔干系人写
+    只在打到**同一行**时才算真冲突。
+    """
 
     fields: frozenset[str] = frozenset()
     item_ids: frozenset[int] = frozenset()
     resource_ids: frozenset[int] = frozenset()
+    stakeholder_ids: frozenset[int] = frozenset()
+    relation_ids: frozenset[int] = frozenset()
     #: 推导不出可靠目标 / 语义上触及整个聚合 → 与任何提案都算重叠（fail-closed）。
     wildcard: bool = False
 
@@ -51,6 +59,8 @@ class MatterWriteScope:
             self.fields & other.fields
             or self.item_ids & other.item_ids
             or self.resource_ids & other.resource_ids
+            or self.stakeholder_ids & other.stakeholder_ids
+            or self.relation_ids & other.relation_ids
         )
 
 
@@ -76,23 +86,67 @@ def scope_from_matter_columns(changes: Mapping[str, Any]) -> MatterWriteScope:
 
 def scope_from_items(item_ids: Any) -> MatterWriteScope:
     """从被改动的 item id 集合推导。非 int 元素 → fail closed。"""
-    return _scope_from_ids(item_ids, "item")
+    return _scope_from_ids(item_ids, "item_ids")
 
 
 def scope_from_resources(resource_ids: Any) -> MatterWriteScope:
     """从被改动的 resource id 集合推导。非 int 元素 → fail closed。"""
-    return _scope_from_ids(resource_ids, "resource")
+    return _scope_from_ids(resource_ids, "resource_ids")
 
 
-def _scope_from_ids(values: Any, kind: str) -> MatterWriteScope:
+def scope_from_stakeholders(stakeholder_ids: Any) -> MatterWriteScope:
+    """从被改动的干系人 id 集合推导。非 int 元素 → fail closed。"""
+    return _scope_from_ids(stakeholder_ids, "stakeholder_ids")
+
+
+def scope_from_relations(relation_ids: Any) -> MatterWriteScope:
+    """从被改动的关系 id 集合推导。非 int 元素 → fail closed。"""
+    return _scope_from_ids(relation_ids, "relation_ids")
+
+
+def _scope_from_ids(values: Any, field: str) -> MatterWriteScope:
     ids: set[int] = set()
     for value in values or ():
         if isinstance(value, bool) or not isinstance(value, int):
             return SCOPE_EVERYTHING  # fail closed：拿不到确定的目标 id
         ids.add(int(value))
-    if kind == "item":
-        return MatterWriteScope(item_ids=frozenset(ids))
-    return MatterWriteScope(resource_ids=frozenset(ids))
+    return MatterWriteScope(**{field: frozenset(ids)})
+
+
+#: 版本账本（sync_state `matter_version_scopes:*`）里 scope 的 JSON 键。顺序即序列化顺序。
+_SCOPE_ID_FIELDS = ("item_ids", "resource_ids", "stakeholder_ids", "relation_ids")
+
+
+def scope_to_payload(scope: MatterWriteScope) -> dict[str, Any]:
+    """MatterWriteScope → 账本 JSON。wildcard 时不落集合（读侧也不会看）。"""
+    if scope.wildcard:
+        return {"wildcard": True}
+    payload: dict[str, Any] = {"fields": sorted(scope.fields)}
+    for field in _SCOPE_ID_FIELDS:
+        payload[field] = sorted(getattr(scope, field))
+    return payload
+
+
+def scope_from_payload(value: Any) -> MatterWriteScope:
+    """账本 JSON → MatterWriteScope。任何形状不对 → fail closed 触及一切。"""
+    if not isinstance(value, Mapping):
+        return SCOPE_EVERYTHING
+    if value.get("wildcard"):
+        return SCOPE_EVERYTHING
+    fields = value.get("fields")
+    if not isinstance(fields, list) or any(not isinstance(f, str) for f in fields):
+        return SCOPE_EVERYTHING
+    id_sets: dict[str, frozenset[int]] = {}
+    for field in _SCOPE_ID_FIELDS:
+        raw = value.get(field)
+        if raw is None:
+            raw = []
+        if not isinstance(raw, list) or any(
+            isinstance(v, bool) or not isinstance(v, int) for v in raw
+        ):
+            return SCOPE_EVERYTHING
+        id_sets[field] = frozenset(raw)
+    return MatterWriteScope(fields=frozenset(fields), **id_sets)
 
 
 def proposal_scope(
