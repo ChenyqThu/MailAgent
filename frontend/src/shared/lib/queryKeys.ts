@@ -240,6 +240,10 @@ export const qk = {
      *  都不一样，共享会互相污染缓存。 */
     resourcePickerMail: (normalised: string) =>
       ['matters', 'resource-picker', 'mail', normalised] as const,
+    /** 「关联事项」弹窗里的事项候选。🔴 **不用** `list(q)` —— 空搜索时它与工作台主列表
+     *  `list()` 是同一个 key，而两边 limit 不同（这里 12 / 主列表 100），谁后回来谁就把对方
+     *  的缓存覆盖掉，主列表当场只剩 12 条。同 `resourcePickerMail` 的理由与形状。 */
+    relationPicker: (normalised: string) => ['matters', 'relation-picker', normalised] as const,
     // P3 — bounded matter projection injected into the Matter Chat snapshot. Under the same
     // ['matters','detail',id] prefix so a matter write invalidates it with everything else.
     contextSnapshot: (publicId: string) =>

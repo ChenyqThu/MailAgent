@@ -204,8 +204,11 @@ function MatterRelationAddDialog({
   const [note, setNote] = useState('')
 
   const normalised = search.trim()
+  // 🔴 独立 key，**不能**用 `qk.matters.list(q)`：空搜索时那是工作台主列表的同一个 key
+  // （`MattersWorkspace` 用 limit 100），而这里只取 12 条 —— 共享缓存会让主列表当场缩水成
+  // 12 条。同 `resourcePickerMail` 的先例。
   const candidates = useQuery({
-    queryKey: qk.matters.list(normalised || undefined),
+    queryKey: qk.matters.relationPicker(normalised),
     queryFn: () => api.list({ q: normalised || undefined, limit: normalised ? 20 : 12 }),
     enabled: open,
     staleTime: 15_000

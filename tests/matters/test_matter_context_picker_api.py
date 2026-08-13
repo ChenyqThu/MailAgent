@@ -54,8 +54,8 @@ def _insert_email(path, internal_id: int, *, thread_id: str, subject: str) -> No
     with sqlite3.connect(path) as conn:
         conn.execute(
             "INSERT INTO email_metadata "
-            "(internal_id,message_id,thread_id,subject,sender,to_addr,date_received,snippet) "
-            "VALUES (?,?,?,?,?,?,?,?)",
+            "(internal_id,message_id,thread_id,subject,sender,to_addr,cc_addr,date_received,snippet) "
+            "VALUES (?,?,?,?,?,?,?,?,?)",
             (
                 internal_id,
                 f"message-{internal_id}",
@@ -63,6 +63,7 @@ def _insert_email(path, internal_id: int, *, thread_id: str, subject: str) -> No
                 subject,
                 "peer@example.com",
                 "owner@example.com",
+                "legal@example.com",
                 f"2026-08-{internal_id:02d}T12:00:00Z",
                 "",
             ),
@@ -167,6 +168,50 @@ def test_source_resource_link_without_link_fields_is_unchanged(client):
     assert [(item["link"]["pinned"], item["link"]["confirmed_at"]) for item in items] == [
         (False, None)
     ]
+
+
+# ── G-16 干系人候选：两条 email metadata 产出路径都必须带地址列 ──────────────
+#
+# 前端 `matterStakeholderCandidates.ts` 只从 resource metadata 推「本事项往来里出现过」的人，
+# 后端不写这三列 = 那份候选列在生产上恒空（2a review 抓到的 HIGH-2）。两条产出路径各钉一条。
+
+
+def test_manual_link_metadata_carries_address_columns(client):
+    http, path = client
+    matter = _create_matter(http)
+    _insert_email(path, 1, thread_id="t-1", subject="Kickoff")
+    _link_email(http, matter["public_id"], matter["version"], 1, "link:1")
+
+    items = http.get(f"/api/matters/{matter['public_id']}/resources").json()["data"]["items"]
+    email_item = next(item for item in items if item["resource"]["kind"] == "email")
+    metadata = email_item["resource"]["metadata"]
+    assert metadata["sender"] == "peer@example.com"
+    assert metadata["to_addr"] == "owner@example.com"
+    assert metadata["cc_addr"] == "legal@example.com"
+
+
+def test_discovered_suggestion_metadata_carries_address_columns(client):
+    http, path = client
+    matter = _create_matter(http)
+    _insert_email(path, 1, thread_id="t-1", subject="Anchor")
+    _insert_email(path, 2, thread_id="t-1", subject="Same thread follow-up")
+    _link_email(http, matter["public_id"], matter["version"], 1, "link:1")
+
+    # 只读候选端点与 discover 同引擎，弹窗里那一组走的是这条 —— 先验它（discover 会把这封
+    # 挂成建议，之后它就从「未关联候选」里消失了）。
+    candidates = http.get(f"/api/matters/{matter['public_id']}/resource-candidates")
+    assert candidates.json()["data"]["items"][0]["metadata"]["cc_addr"] == "legal@example.com"
+
+    discovered = http.post(
+        f"/api/matters/{matter['public_id']}/resource-suggestions/discover", json={}
+    )
+    assert discovered.status_code == 200, discovered.text
+    suggestions = discovered.json()["data"]["items"]
+    assert [item["resource"]["metadata"]["internal_id"] for item in suggestions] == [2]
+    metadata = suggestions[0]["resource"]["metadata"]
+    assert metadata["sender"] == "peer@example.com"
+    assert metadata["to_addr"] == "owner@example.com"
+    assert metadata["cc_addr"] == "legal@example.com"
 
 
 # ── G-14 tab ① 候选：只读 ──────────────────────────────────────────────────────

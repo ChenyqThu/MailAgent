@@ -35,6 +35,7 @@ import {
   DialogTitle
 } from '@shared/components/ui/dialog'
 import { useConnectorQuickRows } from '@shared/hooks/useConnectorQuickRows'
+import { useDebouncedValue } from '@shared/hooks/useDebouncedValue'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
@@ -57,6 +58,8 @@ export type MatterLinkResourceTab = 'mail' | 'link' | 'file'
 const MAIL_SEARCH_LIMIT = 25
 const RECENT_MAIL_LIMIT = 20
 const CANDIDATE_LIMIT = 10
+// ⌘K palette 用的也是 250ms（`CommandPalette.tsx::DEBOUNCE_MS`）。
+const MAIL_SEARCH_DEBOUNCE_MS = 250
 
 interface MatterLinkResourceModalProps {
   matter: Matter
@@ -132,7 +135,8 @@ export function MatterLinkResourceModal({
     staleTime: 30_000
   })
 
-  const normalisedSearch = search.trim()
+  // LOW-2 —— 与 ⌘K palette 同款 250ms 防抖：不防抖时每敲一个键就是一次 FTS5 全库查询。
+  const normalisedSearch = useDebouncedValue(search.trim(), MAIL_SEARCH_DEBOUNCE_MS)
   // 两条路的返回形状不同（`search` 给 SearchHit、`list` 给 EmailMeta），在 queryFn 里就收敛成
   // 这个交集 —— 弹窗只需要这四个字段，把差异挡在数据层比在渲染层各判一次干净。
   const mailSearch = useQuery<MailRow[]>({
@@ -245,27 +249,33 @@ export function MatterLinkResourceModal({
       let version = matter.version
       // G-33 —— 留住最后一条写入的返回，供「只关联了一项」时给 toast 配撤销（见 onSuccess）。
       let lastResult: MatterMutationResult | null = null
+      // LOW-3 —— 真正被订阅的会话数。勾了「订阅整条会话」**不等于**每封都能订阅：没有
+      // thread_id 的邮件后端会退成单封关联并回一条 `thread_unavailable` warning，按选中数报
+      // 就是高报。判据取每次写入自己的 warnings，不靠 UI 侧猜。
+      let subscribedThreads = 0
       const advance = (next: MatterMutationResult | null | undefined): void => {
         version = next?.matter?.version ?? version + 1
         lastResult = next ?? null
       }
       for (const internalId of mailPicked) {
-        advance(
-          await api.linkResource(
-            matter.public_id,
-            {
-              source_resource: {
-                provider: 'mailagent',
-                kind: 'email',
-                internal_id: internalId,
-                link_scope: subscribeThread ? 'thread' : 'single'
-              },
-              pinned,
-              confirmed: true
+        const result = await api.linkResource(
+          matter.public_id,
+          {
+            source_resource: {
+              provider: 'mailagent',
+              kind: 'email',
+              internal_id: internalId,
+              link_scope: subscribeThread ? 'thread' : 'single'
             },
-            { expectedVersion: version, reason: 'user_linked_resource_from_context' }
-          )
+            pinned,
+            confirmed: true
+          },
+          { expectedVersion: version, reason: 'user_linked_resource_from_context' }
         )
+        if (subscribeThread && !(result.warnings ?? []).includes('thread_unavailable')) {
+          subscribedThreads += 1
+        }
+        advance(result)
       }
       for (const card of activeLinkCards) {
         advance(
@@ -303,7 +313,11 @@ export function MatterLinkResourceModal({
           )
         )
       }
-      return { version, lastResult: lastResult as MatterMutationResult | null }
+      return {
+        version,
+        lastResult: lastResult as MatterMutationResult | null,
+        subscribedThreads
+      }
     },
     // G-33 —— 设计 §2.23：报「关联了几项」+「几条会话被订阅」，订阅是这次操作的**后续影响**，
     // 不说出来用户不知道以后的回复会自动进来。
@@ -311,10 +325,9 @@ export function MatterLinkResourceModal({
     // 是 N 次串行写入，拿最后一条的 descriptor 当「撤销」会只撤掉一条却让人以为全撤了。这条
     // 纪律与后端 `len(pending) == 1` 的判据同源。
     onSuccess: (result) => {
-      const subscribedThreads = subscribeThread ? mailPicked.length : 0
       const title = t('matters.linkResource.linkedDetail', {
         count: selectedCount,
-        subscribed: subscribedThreads
+        subscribed: result.subscribedThreads
       })
       if (selectedCount === 1) {
         pushUndoToast(title, result.lastResult, matter.public_id)
@@ -375,6 +388,7 @@ export function MatterLinkResourceModal({
               candidateRows={candidateRows}
               searchRows={searchRows}
               search={search}
+              activeQuery={normalisedSearch}
               onSearch={setSearch}
               loading={candidates.isPending || mailSearch.isFetching}
               picked={mailPicked}
@@ -464,6 +478,7 @@ function MailTab({
   candidateRows,
   searchRows,
   search,
+  activeQuery,
   onSearch,
   loading,
   picked,
@@ -474,6 +489,9 @@ function MailTab({
   candidateRows: MailRow[]
   searchRows: MailRow[]
   search: string
+  /** 防抖后**已经生效**的查询串。分组标题按它取 —— 用 `search` 会在防抖窗口里先把标题改成
+   *  「搜索结果」，而底下列的还是上一轮的「最近邮件」。 */
+  activeQuery: string
   onSearch(value: string): void
   loading: boolean
   picked: number[]
@@ -516,7 +534,7 @@ function MailTab({
       {searchRows.length > 0 ? (
         <PickerGroup
           label={t(
-            search.trim() ? 'matters.linkResource.groupResults' : 'matters.linkResource.groupRecent'
+            activeQuery ? 'matters.linkResource.groupResults' : 'matters.linkResource.groupRecent'
           )}
           count={searchRows.length}
         >

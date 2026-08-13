@@ -1,11 +1,17 @@
 // G-16 —— 干系人候选推导（纯函数，与 Picker 组件分开放：`react-refresh/only-export-components`
 // 不允许组件文件再导出非组件，而这段逻辑值得单测）。
 //
-// 🔴 候选**不打任何新请求**：`MatterResourceListItem.resource.metadata` 里已经有邮件的
-// 发件人/收件人（`_resolve_source_resource` 与候选引擎写进去的），ContextTab 本来就持有这份
-// 资料列表；扇出去逐封查邮件才是列表性能铁律禁止的那种写法。
-// 代价（有意接受）：metadata 里没有地址的老资料行推不出人来，此时候选列为空，由「按邮箱新建」
-// 手输入口兜底 —— 不做「看起来有候选其实是编的」。
+// 🔴 候选**不打任何新请求**：`MatterResourceListItem.resource.metadata` 里带着邮件的
+// 发件人/收件人，ContextTab 本来就持有这份资料列表；扇出去逐封查邮件才是列表性能铁律禁止的
+// 那种写法。
+//
+// 🔴 生产者只有两处，都在 `src/matters/service.py`：`_resolve_source_resource`（手动/捕获关联）
+// 与 `_email_resource_candidates::build_candidate`（Agent 建议）。这三个地址键是 2a review
+// 之后才补进去的 —— 在那之前两处都只写 internal_id/message_id/thread_id/date_received，
+// 于是这份候选列在生产上**恒空**（不是「只有老资料推不出」）。
+// 现在的准确边界：**批次 2a review 修复之前落库的存量 resource 行一律推不出人**（metadata 是
+// 关联那一刻的快照，后端不回填），新关联/新建议的行才有地址。存量事项上候选列仍会空，由
+// 「按邮箱新建」手输入口兜底 —— 不做「看起来有候选其实是编的」。
 
 import type { MatterResourceListItem, MatterStakeholder } from '@shared/api/types/matter'
 
@@ -27,7 +33,10 @@ export interface MatterStakeholderCandidate {
   displayName: string | null
 }
 
-/** 资料 metadata 里可能装地址的键。email 资料由后端写 `sender`；会议类资料写 `organizer`。 */
+/** 资料 metadata 里可能装地址的键。
+ *  🔴 后端**实际产出**的只有前三个（`sender` / `to_addr` / `cc_addr`，两处 email_spec 逐字
+ *  对齐）。`from` / `organizer` / `attendees` 目前**没有任何生产路径** —— 保留是为了将来接
+ *  会议类资料时不用再动这里，不是「已经在用」。改后端那两处 metadata 时同步这份清单。 */
 const ADDRESS_KEYS = ['sender', 'from', 'to_addr', 'cc_addr', 'organizer', 'attendees'] as const
 
 /** 从一行 `Foo Bar <a@b.com>, c@d.com` 里挖出地址与显示名。 */

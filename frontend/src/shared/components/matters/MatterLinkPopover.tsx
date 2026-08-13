@@ -103,7 +103,11 @@ export function MatterLinkPopover({
             kind: 'email',
             internal_id: source.internalId,
             link_scope: source.threadId ? scope : 'single'
-          }
+          },
+          // 🔴 这是**用户手动**关联 —— REST schema 的 `confirmed` 默认 False，不显式带上
+          // 就落成 `confirmed_at=NULL`，而 `ResourceRow` 正是以此当「Agent 建议」态：
+          // 用户自己挂上去的邮件会带着「确认 / 忽略」两颗钮出现在事项里。
+          confirmed: true
         },
         { expectedVersion: matter.version }
       ),
@@ -412,7 +416,9 @@ export function MatterLinkPopover({
                 kind: 'email',
                 internal_id: source.internalId,
                 link_scope: source.threadId ? linkScope : 'single'
-              }
+              },
+              // 同上：「加入该事项」也是手动关联，不该落成待确认的建议。
+              confirmed: true
             },
             {
               expectedVersion: detail.matter.version,

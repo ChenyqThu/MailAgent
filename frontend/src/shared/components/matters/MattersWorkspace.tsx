@@ -30,6 +30,7 @@ import {
   filterView,
   MATTER_VIEWS,
   matterTagView,
+  matterTagViewName,
   openAttentionFor
 } from '@shared/lib/matterDerive'
 import type { MatterBuiltinView, MatterView } from '@shared/lib/matterDerive'
@@ -237,6 +238,19 @@ export function MattersWorkspace(): React.ReactElement | null {
     if (selectedId && !visible.some((matter) => matter.public_id === selectedId)) selectMatter(null)
   }, [selectMatter, selectedId, visible])
 
+  // 🔴 幽灵标签视图：`tagViews` 只留 `count > 0` 的标签，而当前 view 是 `tag:x` 时它不受这个
+  // 过滤约束 —— 最后一条带该标签的事项被改标签 / 归档 / 删除后，左轨那一行消失了，列表却还
+  // 停在一个选不回来的空视图上（没有任何 UI 能把它切走，只能刷整页）。这里兜回 'all'。
+  // 判据用 `tagViews`（左轨真实渲染的那份）而不是 `tagItems`，否则「标签还在库里但本视图为空」
+  // 这一格仍然是幽灵。
+  useEffect(() => {
+    // 首屏还没拿到列表时 `tagViews` 必然为空 —— 那时候不算「标签消失了」。
+    if (list.isPending) return
+    if (matterTagViewName(view) === null) return
+    if (tagViews.some((entry) => entry.key === view)) return
+    setView('all')
+  }, [list.isPending, tagViews, view])
+
   useEffect(() => {
     if (!navigationTarget) return
     if (!allMatters.some((matter) => matter.public_id === navigationTarget)) return
@@ -362,7 +376,11 @@ export function MattersWorkspace(): React.ReactElement | null {
                           : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
                       )}
                     >
-                      <MatterTagMarker color={tag.color} shape={tag.shape} className="h-3.5 w-3.5" />
+                      <MatterTagMarker
+                        color={tag.color}
+                        shape={tag.shape}
+                        className="h-3.5 w-3.5"
+                      />
                       <span className="min-w-0 flex-1 truncate">{tag.name}</span>
                       <span className="font-mono text-meta tabular-nums">{count}</span>
                     </button>

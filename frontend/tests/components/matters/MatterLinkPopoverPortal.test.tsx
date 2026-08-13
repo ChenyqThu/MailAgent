@@ -31,7 +31,7 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
 vi.mock('@shared/components/matters/hooks', () => ({
   useMattersApi: () => mattersApi,
   // G-33 —— `useMatterUndoToast` 经这条通道执行撤销；本用例不点撤销，给个哑实现即可。
-  useMatterChatApi: () => ({ contextSnapshot: vi.fn(), applyUndo: vi.fn() }),
+  useMatterChatApi: () => ({ contextSnapshot: vi.fn(), applyUndo: vi.fn() })
 }))
 vi.mock('@shared/state/toast', () => ({
   useToastStore: { getState: () => ({ push: vi.fn(), dismiss: vi.fn() }) },
@@ -214,5 +214,55 @@ describe('MatterLinkPopover — 捕获浮层的三个新行（G-25）', () => {
     expect(screen.getByRole('button', { name: '创建新事项' })).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'AI 调研创建' })).toBeNull()
     expect(screen.queryByRole('button', { name: '为此线程建立跟进 Agent' })).toBeNull()
+  })
+})
+
+// ── 2a review MEDIUM —— 手动关联必须落成「已确认」 ────────────────────────────
+//
+// `ResourceRow` 以 `link.confirmed_at === null` 当「Agent 建议」态（带确认 / 忽略两颗钮），
+// 而 REST 的 `confirmed` 默认 False —— 不显式带上，用户自己从工具栏挂上去的邮件会出现在事项
+// 里等着被「确认」。捕获浮层的两个手动关联出口各钉一条。
+
+/** 只有候选列的宿主：点候选行 = 「加入已有事项」那条路。 */
+function CandidateHost(): React.ReactElement {
+  const anchorRef = useRef<HTMLDivElement>(null)
+  return (
+    <div ref={anchorRef} className="relative">
+      <MatterLinkPopover
+        open
+        anchorRef={anchorRef}
+        source={{
+          internalId: 42,
+          threadId: 'thread-9',
+          subject: 'Vendor launch',
+          sender: 'a@b.test',
+          receivedAt: null,
+          threadCount: 3
+        }}
+        onClose={vi.fn()}
+      />
+    </div>
+  )
+}
+
+describe('MatterLinkPopover — 手动关联带 confirmed', () => {
+  test('点候选事项 → linkResource 带 confirmed: true', async () => {
+    mattersApi.list.mockResolvedValue({
+      items: [{ public_id: 'MAT-0042', title: 'Vendor launch', status: 'active', version: 2 }]
+    })
+    mattersApi.linkResource.mockResolvedValue({ matter: { version: 3 } })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CandidateHost />
+      </QueryClientProvider>
+    )
+    fireEvent.click(await screen.findByRole('button', { name: /Vendor launch/ }))
+    await waitFor(() => expect(mattersApi.linkResource).toHaveBeenCalledTimes(1))
+    const [, payload] = mattersApi.linkResource.mock.calls[0]
+    expect(payload.confirmed).toBe(true)
+    expect(payload.source_resource.link_scope).toBe('thread')
   })
 })

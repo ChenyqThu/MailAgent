@@ -501,6 +501,11 @@ export interface MatterResourceCandidate {
     message_id?: string | null
     thread_id?: string | null
     date_received?: string | null
+    /** 干系人候选（G-16）的来源列 —— 与 `MatterResource.metadata` 里同名键同源，见
+     *  `matterStakeholderCandidates.ts` 的 `ADDRESS_KEYS`。 */
+    sender?: string | null
+    to_addr?: string | null
+    cc_addr?: string | null
   }
   scope: 'local' | 'expanded'
   reason: string

@@ -69,6 +69,9 @@ import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useMailApi } from '@shared/hooks/useMailApi'
+// 本文件原本自带一份同名实现，批次 2a review 的 LOW-2 要给事项「关联资料」弹窗加同款防抖，
+// 于是下沉成共享叶子 hook（行为逐字不变）。
+import { useDebouncedValue } from '@shared/hooks/useDebouncedValue'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { useMailbox } from '@shared/state/mailbox'
@@ -153,15 +156,6 @@ function detectLang(s: string): 'zh' | 'en' {
   const matches = s.match(CJK_RE)
   const ratio = matches ? matches.length / s.length : 0
   return ratio >= CJK_RATIO_THRESHOLD ? 'zh' : 'en'
-}
-
-function useDebouncedValue<T>(value: T, ms: number): T {
-  const [v, setV] = useState(value)
-  useEffect(() => {
-    const tid = window.setTimeout(() => setV(value), ms)
-    return (): void => window.clearTimeout(tid)
-  }, [value, ms])
-  return v
 }
 
 // ─── Small subcomponents ───────────────────────────────────────────────
@@ -907,7 +901,9 @@ export function CommandPalette(): React.ReactElement | null {
     // AI agentic hits: same activate closure as EMAIL hits; the AI summary row
     // and the in-flight phrase row are NOT entries (non-interactive).
     if (scopeVisibility.showEmail) {
-      aiHits.forEach((h, i) => out.push({ group: 'ai', indexInGroup: i, run: () => activateHit(h) }))
+      aiHits.forEach((h, i) =>
+        out.push({ group: 'ai', indexInGroup: i, run: () => activateHit(h) })
+      )
     }
     // Search hit may live in a mailbox the user isn't currently viewing.
     // activateHit syncs view + mailbox so EmailList scrolls to + highlights
@@ -1276,7 +1272,10 @@ export function CommandPalette(): React.ReactElement | null {
             </>
           )}
 
-          {mattersEnabled && scopeVisibility.showMatter && hasQuery && (visibleMatterHits.length > 0 || scope === 'matter') ? (
+          {mattersEnabled &&
+          scopeVisibility.showMatter &&
+          hasQuery &&
+          (visibleMatterHits.length > 0 || scope === 'matter') ? (
             <>
               <GroupHeader
                 title={t('palette.matters.title')}
@@ -1323,10 +1322,17 @@ export function CommandPalette(): React.ReactElement | null {
                         aria-hidden
                       />
                     ) : (
-                      <SearchIcon size={18} strokeWidth={1.75} className="text-ink-fg-3" aria-hidden />
+                      <SearchIcon
+                        size={18}
+                        strokeWidth={1.75}
+                        className="text-ink-fg-3"
+                        aria-hidden
+                      />
                     )}
                     <div className="text-aux text-ink-fg-1">
-                      {isSearchingMatters ? t('palette.searching') : t('palette.matters.emptyTitle')}
+                      {isSearchingMatters
+                        ? t('palette.searching')
+                        : t('palette.matters.emptyTitle')}
                     </div>
                     {!isSearchingMatters ? (
                       <div className="text-center text-meta text-ink-fg-3">

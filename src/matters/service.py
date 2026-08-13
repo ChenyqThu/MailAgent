@@ -3461,12 +3461,23 @@ class MatterService:
         if not isinstance(source_spec, Mapping) or source_spec.get("provider") != EMAIL_PROVIDER or source_spec.get("kind") != "email":
             raise MatterError("E_INVALID_ARG", "source_resource must be a mailagent email")
         internal_id = int(source_spec.get("internal_id") or 0)
-        row = conn.execute("SELECT internal_id,subject,thread_id,date_received,message_id FROM email_metadata WHERE internal_id=?", (internal_id,)).fetchone()
+        row = conn.execute("SELECT internal_id,subject,thread_id,date_received,message_id,sender,to_addr,cc_addr FROM email_metadata WHERE internal_id=?", (internal_id,)).fetchone()
         if not row:
             raise MatterError("E_UPSTREAM", f"email {internal_id} not found")
         email_spec = {
             "provider": EMAIL_PROVIDER, "kind": "email", "external_key": email_resource_key(internal_id),
-            "title": row["subject"], "metadata": {"internal_id": internal_id, "message_id": row["message_id"], "date_received": row["date_received"]},
+            "title": row["subject"],
+            # 🔴 三个地址列是**干系人候选的唯一来源**（前端 `matterStakeholderCandidates.ts` 从
+            # 这里推「本事项往来里出现过」）。此前只写 internal_id/message_id/date_received，
+            # 于是那份候选列在生产上恒空 —— 行就在手上，多带三列零额外查询。
+            "metadata": {
+                "internal_id": internal_id,
+                "message_id": row["message_id"],
+                "date_received": row["date_received"],
+                "sender": row["sender"],
+                "to_addr": row["to_addr"],
+                "cc_addr": row["cc_addr"],
+            },
             "sub_state": "none",
         }
         resources = [email_spec]
@@ -3839,6 +3850,12 @@ class MatterService:
                     "message_id": row["message_id"],
                     "thread_id": row["thread_id"],
                     "date_received": row["date_received"],
+                    # 与 `_resolve_source_resource` 同款三列：建议被确认后这份 metadata 就是
+                    # resource 行的 metadata，干系人候选从这里推人（上面那处有完整说明）。
+                    # 扫描行本来就 SELECT 了这三列，零额外查询。
+                    "sender": row["sender"],
+                    "to_addr": row["to_addr"],
+                    "cc_addr": row["cc_addr"],
                 },
                 "scope": scope,
                 "reason": "；".join(reason_parts),

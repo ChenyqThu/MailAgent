@@ -200,7 +200,12 @@ describe('qk — agent-runs / agent / ai-gateway / compose / report / misc', () 
     expect(qk.matters.paletteSearch('vendor')).toEqual(['matters', 'palette-search', 'vendor'])
     expect(qk.matters.detail('MAT-0001')).toEqual(['matters', 'detail', 'MAT-0001'])
     expect(qk.matters.resources('MAT-0001')).toEqual(['matters', 'detail', 'MAT-0001', 'resources'])
-    expect(qk.matters.stakeholders('MAT-0001')).toEqual(['matters', 'detail', 'MAT-0001', 'stakeholders'])
+    expect(qk.matters.stakeholders('MAT-0001')).toEqual([
+      'matters',
+      'detail',
+      'MAT-0001',
+      'stakeholders'
+    ])
     expect(qk.matters.resourceLookup('mailagent', ['email:1', 'thread:t1'])).toEqual([
       'matters',
       'links',
@@ -208,7 +213,44 @@ describe('qk — agent-runs / agent / ai-gateway / compose / report / misc', () 
       'email:1',
       'thread:t1'
     ])
-    expect(qk.matters.captureCandidates('vendor')).toEqual(['matters', 'capture-candidates', 'vendor'])
+    expect(qk.matters.captureCandidates('vendor')).toEqual([
+      'matters',
+      'capture-candidates',
+      'vendor'
+    ])
     expect(qk.matters.config()).toEqual(['matters', 'config'])
+    expect(qk.matters.relations('MAT-0001')).toEqual(['matters', 'detail', 'MAT-0001', 'relations'])
+    expect(qk.matters.resourceCandidates('MAT-0001')).toEqual([
+      'matters',
+      'detail',
+      'MAT-0001',
+      'resource-candidates'
+    ])
+    expect(qk.matters.resourceAttachments('MAT-0001')).toEqual([
+      'matters',
+      'detail',
+      'MAT-0001',
+      'resource-attachments'
+    ])
+    expect(qk.matters.resourcePickerMail('vendor')).toEqual([
+      'matters',
+      'resource-picker',
+      'mail',
+      'vendor'
+    ])
+    expect(qk.matters.relationPicker('vendor')).toEqual(['matters', 'relation-picker', 'vendor'])
+  })
+
+  // 2a review HIGH-1 —— 两个 picker 的候选查询**必须**与工作台主列表分家：它们 limit 更小
+  // （12 / 20 vs 主列表 100），共 key 会让谁后回来谁就把主列表缓存覆盖成一屏 12 条。
+  // 🔴 空串这一格是病根所在：`list(q)` 在 q 为空时退化成 `list()`，正好撞上主列表。
+  test('matters —— picker 候选 key 与主列表不相交', () => {
+    for (const query of ['', 'vendor']) {
+      expect(qk.matters.relationPicker(query)).not.toEqual(qk.matters.list())
+      expect(qk.matters.relationPicker(query)).not.toEqual(qk.matters.list(query || undefined))
+      expect(qk.matters.resourcePickerMail(query)).not.toEqual(qk.matters.list())
+    }
+    // 也不能与对方混在一起（两个 picker 取的是完全不同的实体）。
+    expect(qk.matters.relationPicker('vendor')).not.toEqual(qk.matters.resourcePickerMail('vendor'))
   })
 })
