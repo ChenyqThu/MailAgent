@@ -60,6 +60,13 @@ export interface ChatComposerControls {
    *  知道 activeSessionId，而这个 context 的定位就是「把面板持有的 chat 状态桥进 composer」。
    *  Optional —— 不供给（旧测试 / 只读 notion-agent 线程）时环整个不渲染，与引入前逐字一致。 */
   sessionId?: number | null
+  /** 0813 dogfood 轮 3 #3 —— **场地**告诉 composer：这里横向余量紧张（浮窗 / 抽屉 dock），
+   *  工具行的控件走紧凑变体。目前唯一消费者是 ContextUsageRing：只画环、不写「177k」那串数值
+   *  （数值仍在 hover 明细里，一个字没少）。
+   *
+   *  🔴 由场地传入、**不做全局判断**：同一个 AgentComposer 也长在 /sessions 全页里，那里横向
+   *  余量充足，数值该留着。不传（全页 / 邮件面 / 裸测试）→ 与引入前逐字一致。 */
+  denseControls?: boolean
   compactEnabled?: boolean
   autoCompactEnabled?: boolean
   compactActive?: boolean

@@ -92,6 +92,9 @@ export interface AgentConversationProps {
    *  一枚可移除的 context chip 提供，×掉就不再自动重新 seed。/sessions 不传 → 无 chip、无注入。
    *  （**历史里选中**的 matter 会话不走这里，走 activeItem 自己的 anchor —— 见下方 sessionMatter。）*/
   initialMatterTarget?: MatterChatTarget
+  /** 0813 dogfood 轮 3 #3 —— 场地横向余量紧张（浮窗 / 抽屉 dock）：composer 工具行走紧凑变体
+   *  （context 环只画环、不写数值）。/sessions 全页不传 → 现状。判定在场地、不在组件里。 */
+  denseControls?: boolean
 }
 
 export function AgentConversation({
@@ -99,7 +102,8 @@ export function AgentConversation({
   activeItem,
   welcomeAlign = 'center',
   initialMentionEmailId,
-  initialMatterTarget
+  initialMatterTarget,
+  denseControls
 }: AgentConversationProps): React.JSX.Element {
   const { t } = useTranslation()
   const navigate = useNavigate()
@@ -342,7 +346,9 @@ export function AgentConversation({
       onAddAttachment,
       onRemoveAttachment,
       // WP-15 — context 环读这个会话最新一轮的 context_tokens。
-      sessionId: chatActiveSessionId
+      sessionId: chatActiveSessionId,
+      // 0813 #3 —— 场地说了算的紧凑档（浮窗/抽屉）；undefined = 全页现状。
+      denseControls
     }),
     [
       effort.control,
@@ -359,7 +365,8 @@ export function AgentConversation({
       attachments,
       onAddAttachment,
       onRemoveAttachment,
-      chatActiveSessionId
+      chatActiveSessionId,
+      denseControls
     ]
   )
 
@@ -422,11 +429,15 @@ export function AgentConversation({
   // ── matter binding (chip / 检索范围 / 缺口卡 / 快捷 prompt / 写入回执 surface) ──────────────
   // 0812：事项对话没有第二套 UI —— 这里只是往同一个 thread 上挂事项那几件事。
   const chatIsEmptyForMatter = chat.activeSessionId === null && chat.messages.length === 0
+  // 0813 #6 —— 「事项对话 / 立即跟进」每点一次自增；传给 binding 作「新的用户动作」的标记
+  // （显式覆盖此前对这件事 chip 的手动移除，见 useMatterConversation 的 seedEpoch）。
+  const matterSeedEpoch = useAIChatPanel((s) => s.matterConversationEpoch)
   const matter = useMatterConversation({
     seed: initialMatterTarget ?? null,
     sessionMatter,
     sessionMatterUnresolved: matterContextUnresolved,
     chatIsEmpty: chatIsEmptyForMatter,
+    seedEpoch: matterSeedEpoch,
     navEpoch: chat.navEpoch,
     sessionId: chat.activeSessionId,
     enabled: useAiSdkRuntime,
@@ -687,8 +698,24 @@ export function AgentConversation({
     setRemovedEmailContextId((cur) => (cur === pendingPromptEmailId ? null : cur))
     // nonce 入 deps：同一封邮件连点两次也各算一次新动作。
   }, [pendingPromptEmailId, pendingPromptNonce])
+  // 0813 dogfood 轮 3 #6 —— 事项种子在场（「立即跟进」带着指令唤出）时**等这件事的锚点就位**。
+  //
+  // 🔴 不是保险起见：懒建会话（onEnsureSession）读的就是 `matterAnchorRef`，而 chip 是**下一帧**
+  // 才 seed 的（binding 的 effect 长在 AgentConversation 上，排在 ChatPromptDispatcher 这个子
+  // 组件的 effect 之后）。不等 → 第一轮把会话建成 `anchor_type='general'`，owner 要的「也好有个
+  // 记录」那份记录就没挂在这件事上，事项页也永远找不回这场对话。
+  // 判据是**身份相等**不是「非空」：dock 上一件事的 chip 可能还挂着（chipTarget 是 state，同样
+  // 下一帧才换），非空判据会让指令带着**上一件事**的锚点发出去。
+  // 等待有界：每次唤出都 bump epoch 并清掉手动移除记忆 ⇒ chip 必然在下一帧就位（见
+  // useMatterConversation 的 seedEpoch）。`unresolved` 那档不等 —— 那时 sendDisabled 恒真，
+  // 交给 dispatcher 当场消费成「只预填」，绝不把指令悬在那里（codex #3 的红线）。
+  const matterSeedPending =
+    initialMatterTarget !== undefined &&
+    !matterContextUnresolved &&
+    matterAnchor?.id !== initialMatterTarget.id
   const promptRequest = useMemo<ChatPromptRequest | null>(() => {
     if (pendingPrompt === null || !chatIsEmptyForMatter) return null
+    if (matterSeedPending) return null
     if (pendingPrompt.emailId == null) {
       return { nonce: pendingPrompt.nonce, text: pendingPrompt.text, prefillOnly: false }
     }
@@ -701,7 +728,7 @@ export function AgentConversation({
     }
     // 宿主就是那封邮件、chip 正在同一轮里建立 → 下一帧就位（seed effect 是同步立 chip 的）。
     return null
-  }, [pendingPrompt, chatIsEmptyForMatter, emailContext, initialMentionEmailId])
+  }, [pendingPrompt, chatIsEmptyForMatter, matterSeedPending, emailContext, initialMentionEmailId])
   const onPromptDispatched = useCallback(
     (nonce: number): void => consumeChatPrompt(nonce),
     [consumeChatPrompt]

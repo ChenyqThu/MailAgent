@@ -85,9 +85,10 @@ describe('componentRegistry — resolution', () => {
       'email_resync',
       'file_read',
       'file_write',
-      // Matters MVP P3 + P4 — the 9 matter write tools share MatterWriteCard (approval → real
+      // Matters MVP P3 + P4 + 0813 批R — every matter write tool shares MatterWriteCard (approval → real
       // approve/reject; completed → the write receipt, but only inside the Matter Chat panel).
       'matter_add_note',
+      'matter_attention_triage',
       'matter_create',
       'matter_item_mutate',
       'matter_relation_mutate',
@@ -95,6 +96,7 @@ describe('componentRegistry — resolution', () => {
       'matter_review_update',
       'matter_run_control',
       'matter_stakeholder_mutate',
+      'matter_suggestion_resolve',
       'matter_update',
       'notion_agent_chat',
       'run_command',

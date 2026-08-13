@@ -104,8 +104,23 @@ const epochMillis = (label: string): z.ZodType<number> =>
     .int()
     .describe(`${label} as epoch MILLISECONDS (UTC), e.g. 1786690800000. Never epoch seconds.`)
 
+/** O3 (0813 轮 3) — the ONE shared voice for every progress-bearing field (current_summary /
+ *  note text / proposal summary). Owner complaint「进展像操作日志」: the model kept writing
+ *  "I changed the status / added two items" because no field ever said what a progress update IS.
+ *  The Python follow-up-run contract (src/matters/run_spec.py 提案标准 last clause) states the
+ *  same discipline in Chinese — intentionally two venue-worded texts, not a mirrored constant. */
+export const MATTER_PROGRESS_STYLE =
+  'Write it as a reader-facing narrative of the WORK itself, never a log of your own edits: ' +
+  'lead with the current blocker or conclusion, then the concrete next step (who does what, ' +
+  'by when). Never write "changed status to active / added two action items" — the timeline ' +
+  'already records those operations.'
+
 export const matterFindSchema = z.object({
-  q: z.string().trim().optional(),
+  q: z
+    .string()
+    .trim()
+    .optional()
+    .describe('Free text matched over title / goal / summary / tags — use the user\'s own words.'),
   status: z
     .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
     .optional(),
@@ -120,12 +135,17 @@ export const matterFindSchema = z.object({
 })
 export type MatterFindInput = z.infer<typeof matterFindSchema>
 
+/** Mirrors what `GET /api/matters/{id}` actually branches on (src/matters/service.py::get_matter).
+ *  🔴 `updates` is not optional garnish: matter_review_update REQUIRES an `update_id`, and this is
+ *  the only read face that hands one out — without it the review tool is structurally uncallable
+ *  (0813 dogfood 轮 3). */
 export const MATTER_GET_INCLUDES = [
   'items',
   'resources',
   'stakeholders',
   'timeline',
-  'relations'
+  'relations',
+  'updates'
 ] as const
 export const matterGetSchema = z.object({
   public_id: z.string().trim().min(1),
@@ -133,18 +153,82 @@ export const matterGetSchema = z.object({
 })
 export type MatterGetInput = z.infer<typeof matterGetSchema>
 
+/** O2 (0813 轮 3) — one goal check entry. Element shape mirrors the server's
+ *  `normalize_goal_checks` consumption ({t, done}); text limit 200 / at most 20 entries are the
+ *  same server guardrails (MAX_GOAL_CHECK_LENGTH / MAX_GOAL_CHECKS). */
+const matterGoalCheckSchema = z.object({
+  t: z.string().trim().min(1).max(200).describe('One verifiable completion criterion.'),
+  done: z.boolean().default(false).describe('Whether this criterion is already met.')
+})
+
 export const matterCreateSchema = z.object({
-  title: z.string().trim().min(1).max(500),
-  description: z.string().default(''),
-  type: z.string().trim().min(1).max(128).optional(),
-  tags: z.array(z.string()).default([]),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(500)
+    .describe(
+      'Short, action-oriented name of the piece of work being pushed forward — not the source ' +
+        'email subject copied verbatim.'
+    ),
+  description: z
+    .string()
+    .default('')
+    .describe(
+      "The Matter's goal and background (shown to the owner as 「核心目标 / 目的与背景」): why " +
+        'this is being pursued, what success looks like, and the minimum context needed to judge ' +
+        'progress later. Write real substance from the conversation — NOT a summary or copy of ' +
+        'the source email (evidence belongs in linked resources). Owner-owned after creation: ' +
+        'agents cannot patch it later, so fill it in properly now.'
+    ),
+  type: z
+    .string()
+    .trim()
+    .min(1)
+    .max(128)
+    .optional()
+    .describe(
+      'Business category, e.g. 客户交付 / 商务 / 售前 / 问题 / 产品 / 内部. Reuse an existing ' +
+        'type from matter_find results when one fits.'
+    ),
+  tags: z
+    .array(z.string())
+    .default([])
+    .describe(
+      'Existing tag names when they clearly apply; do not invent a new taxonomy uninvited — ' +
+        'matter_tags_list shows what already exists.'
+    ),
   status: z
     .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
-    .default('inbox'),
-  health: z.enum(['unknown', 'on_track', 'at_risk', 'off_track']).default('unknown'),
-  priority: z.enum(['p0', 'p1', 'p2', 'p3']).default('p1'),
+    .default('inbox')
+    .describe(
+      'Lifecycle stage. Default inbox = captured but not yet planned; use active only when the ' +
+        'work is actually underway.'
+    ),
+  health: z
+    .enum(['unknown', 'on_track', 'at_risk', 'off_track'])
+    .default('unknown')
+    .describe('Progress signal independent of status; keep unknown unless evidence says otherwise.'),
+  priority: z
+    .enum(['p0', 'p1', 'p2', 'p3'])
+    .default('p1')
+    .describe('p0 = drop-everything urgent, p3 = backlog. Default p1 unless the user says otherwise.'),
   due_at: epochMillis('Matter due date').nullable().optional(),
-  waiting_context: z.record(z.string(), z.unknown()).nullable().optional(),
+  waiting_context: z
+    .record(z.string(), z.unknown())
+    .nullable()
+    .optional()
+    .describe('Only meaningful with status=waiting: who/what is being waited on and since when.'),
+  goal_checks: z
+    .array(matterGoalCheckSchema)
+    .max(20)
+    .optional()
+    .describe(
+      'Definition of done（完成标志）: a short checklist of how the owner will know this Matter ' +
+        'is complete, e.g. [{"t":"合同已签署"},{"t":"款项已到账"}]. Set it at creation when the ' +
+        'user has stated or implied what done means; like description it is owner-owned ' +
+        'afterwards — agents cannot update it later.'
+    ),
   ...matterIdempotencyFields
 })
 export type MatterCreateInput = z.infer<typeof matterCreateSchema>
@@ -161,7 +245,15 @@ const matterPatchSchema = z
       .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
       .optional(),
     health: z.enum(['unknown', 'on_track', 'at_risk', 'off_track']).optional(),
-    current_summary: z.string().nullable().optional()
+    current_summary: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        'The「当前状态」progress narrative at the top of the Matter detail page. ' +
+          MATTER_PROGRESS_STYLE +
+          ' null clears it.'
+      )
   })
   .strict()
 
@@ -196,7 +288,15 @@ const matterChecklistEntrySchema = z.object({
   done: z.boolean().default(false)
 })
 const matterItemFields = {
-  kind: z.enum(['action', 'milestone', 'decision', 'blocker', 'question', 'note']).optional(),
+  kind: z
+    .enum(['action', 'milestone', 'decision', 'blocker', 'question', 'note'])
+    .optional()
+    .describe(
+      'action = a trackable to-do (the ONLY kind that carries status/priority/owner/due/' +
+        'checklist); milestone = a dated marker; decision = a decision made and why; blocker = ' +
+        'what is blocking progress; question = an open question needing an answer; note = a ' +
+        'free-form remark (the same record matter_add_note creates).'
+    ),
   title: z.string().trim().min(1).max(500).optional(),
   description: z.string().nullable().optional(),
   position: z.number().int().optional(),
@@ -390,7 +490,11 @@ export type MatterRelationMutateInput = z.infer<typeof matterRelationMutateSchem
 export const matterAddNoteSchema = z.object({
   public_id: z.string().trim().min(1),
   title: z.string().trim().min(1).max(500).optional(),
-  text: z.string().trim().min(1),
+  text: z
+    .string()
+    .trim()
+    .min(1)
+    .describe('What happened or what was learned, written for a future reader. ' + MATTER_PROGRESS_STYLE),
   ...matterVersionedFields
 })
 export type MatterAddNoteInput = z.infer<typeof matterAddNoteSchema>
@@ -509,7 +613,12 @@ const matterProposalChangeSchema = z
  *  another Matter, another run, or a different event watermark. */
 export const matterUpdateProposeSchema = z
   .object({
-    summary: z.string().trim().min(1).max(2000),
+    summary: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2000)
+      .describe('At most 3 sentences. ' + MATTER_PROGRESS_STYLE),
     changes: z.array(matterProposalChangeSchema).max(20).default([]),
     open_questions: z.array(z.string().trim().min(1).max(500)).max(5).optional(),
     confidence: z.number().min(0).max(1).optional()
@@ -593,6 +702,129 @@ export const matterReviewUpdateSchema = z
     }
   })
 export type MatterReviewUpdateInput = z.infer<typeof matterReviewUpdateSchema>
+
+// ── 0813 轮 3 批 R — the four action surfaces that had REST but no tool ────────────────────────
+//
+// Owner complaint「工具提供的不全」. Each of these wraps an endpoint that already exists; nothing
+// new is authored server-side. Deliberately NOT mirrored here: the `kind` / `status` /
+// `trigger_kind` filter enums. They are Python vocabularies (MatterAttentionKind,
+// MATTER_RUN_LIFECYCLE_STATES, MatterRunTrigger) and every returned row already carries the
+// value, so the model can filter what it got back — copying three more enums across the language
+// boundary would buy a filter shortcut and cost three un-gated hand-copies.
+
+/** matter_attention_list — the「有哪些事项在告警」read. `state` is copied from Python's
+ *  MatterAttentionState (4 values); the server re-validates it (E_INVALID_ARG on drift). */
+export const matterAttentionListSchema = z.object({
+  public_id: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      'Limit to one Matter. OMIT it to sweep every Matter — that is the "what needs attention ' +
+        'right now" question, and the only way to answer it.'
+    ),
+  state: z
+    .enum(['open', 'snoozed', 'resolved', 'dismissed'])
+    .default('open')
+    .describe(
+      'open = still asking for attention (the default, and almost always what you want). The ' +
+        'other three answer "what did I already triage".'
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(50)
+    .describe('Newest first. The reply reports whether it truncated.')
+})
+export type MatterAttentionListInput = z.infer<typeof matterAttentionListSchema>
+
+/** matter_attention_triage — resolve / snooze / dismiss ONE signal.
+ *  🔴 No expected_version: an attention signal is not part of the Matter's versioned state (the
+ *  REST face takes the mutation envelope with require_version=False). */
+export const matterAttentionTriageSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    signal_id: z
+      .number()
+      .int()
+      .positive()
+      .describe('The signal `id` from matter_attention_list — not the Matter id.'),
+    action: z
+      .enum(['resolve', 'snooze', 'dismiss'])
+      .describe(
+        'resolve = the situation behind it is handled; the signal reopens by itself if the ' +
+          'condition comes back. snooze = not now, ask again after `until`. dismiss = stop ' +
+          'raising this one at all. Prefer resolve; only dismiss when the owner says the signal ' +
+          'itself is wrong.'
+      ),
+    until: epochMillis(
+      'Snooze expiry (required for action=snooze, must be in the future)'
+    ).optional(),
+    ...matterReviewIdempotencyFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.action === 'snooze' && value.until == null)
+      ctx.addIssue({ code: 'custom', message: 'snooze requires until', path: ['until'] })
+    if (value.action !== 'snooze' && value.until != null)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'until only applies to snooze',
+        path: ['until']
+      })
+  })
+export type MatterAttentionTriageInput = z.infer<typeof matterAttentionTriageSchema>
+
+/** matter_runs_list — what the follow-up runs actually did.
+ *  🔴 Bounded projection on the tool side (matters.ts): the raw run row carries
+ *  `trigger_payload`, which is fenced UNTRUSTED content copied from an email / calendar event.
+ *  A run history read is not a smuggling route for it. */
+export const matterRunsListSchema = z.object({
+  public_id: z.string().trim().min(1),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .default(10)
+    .describe('Most recent first. Each row says whether it produced a proposal (`update_id`).')
+})
+export type MatterRunsListInput = z.infer<typeof matterRunsListSchema>
+
+/** matter_tags_list — the tag vocabulary that already exists.
+ *  Zero parameters: the whole point is「先看看有哪些标签」before matter_create/matter_update
+ *  invents a near-duplicate one. */
+export const matterTagsListSchema = z.object({})
+export type MatterTagsListInput = z.infer<typeof matterTagsListSchema>
+
+/** matter_suggestion_resolve — the disposal half of resource suggestions.
+ *  matter_suggest_related_resources only DISCOVERS; until now the only way to act on what it
+ *  found was matter_resource_mutate patch confirmed:true per row, and rejecting was impossible.
+ *  One call, one version check, one version bump — mixed-in ids that were already handled come
+ *  back in `skipped` with a reason instead of failing the batch. */
+export const matterSuggestionResolveSchema = z.object({
+  public_id: z.string().trim().min(1),
+  resource_ids: z
+    .array(z.number().int().positive())
+    // 200 = the server's MATTER_SUGGESTION_BULK_MAX; it re-checks and 400s past it.
+    .min(1)
+    .max(200)
+    .describe(
+      'Unconfirmed resource ids, from matter_suggest_related_resources or ' +
+        'matter_get(include:["resources"]). Ids that are already confirmed / unlinked / not on ' +
+        'this Matter are reported in `skipped`, not rejected.'
+    ),
+  action: z
+    .enum(['confirm', 'reject'])
+    .describe(
+      'confirm = link them for real (the Matter now treats them as evidence). reject = record ' +
+        'that they do not belong here, which also teaches the suggester not to raise them again.'
+    ),
+  ...matterVersionedFields
+})
+export type MatterSuggestionResolveInput = z.infer<typeof matterSuggestionResolveSchema>
 
 /** email_get — single email metadata. */
 export const emailGetSchema = z.object({

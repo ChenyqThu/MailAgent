@@ -7,6 +7,7 @@
 1. `changes` 契约 —— 业务字段带原始前后像、长文本截断、`from` 键在/不在语义不同、
    老行（无 `changes` 键）照旧可读。
 2. `patch_matter` 不再对同一次绑定修改写两条 `happened_at` 与 `fields` 完全相同的事件。
+3. （0813 轮 3）`narrative` 契约 —— 叙述类事件带正文摘录，技术类事件**不带**。
 
 🔴 append-only：本批只改**新写入**的形状，历史行一律不回填、不改写。
 """
@@ -23,7 +24,9 @@ from src.matters.event_changes import (
     CHANGE_TEXT_MAX_CHARS,
     MATTER_CHANGE_FIELDS,
     MATTER_STRUCTURED_FIELDS,
+    NARRATIVE_EXCERPT_MAX_CHARS,
     build_changes,
+    build_narrative,
 )
 from src.matters.repository import MatterRepository
 from src.matters.service import MatterService
@@ -633,3 +636,258 @@ def test_accepted_proposal_fanout_carries_from_to(tmp_path):
     }
     created_item = event_of(events, "item_created")["payload"]
     assert created_item["title"] == "催 NexPay 合规回执"
+
+
+# --------------------------------------------------------------------------
+# 9. narrative —— 叙述类事件的正文摘录（0813 轮 3）
+# --------------------------------------------------------------------------
+#
+# owner：「进展仍然像操作日志」。读侧根因 = 时间线上只有「谁改了哪个字段」，
+# **事情本身写了什么**从来没上过时间线：`changes` 对 longText 只出「改写了当前状态
+# 摘要」，而它存的值本来也只有 120 字。这一节钉死三件事：
+#   · 叙述类事件（摘要改写 / 备注 / 提案采纳）带 `narrative` 正文；
+#   · 技术类事件（状态、标签、绑定、关联、干系人…）**不带**；
+#   · 正文有界且截断标记不撒谎。
+
+
+NARRATIVE_KINDS_UNDER_TEST = ("matter_updated", "item_created", "update_accepted")
+
+PROGRESS_TEXT = "对方法务已回签补充协议，卡在我方财务开票；下一步 8/15 前把发票寄出。"
+
+
+def test_summary_rewrite_carries_the_prose_not_just_the_field_name(service):
+    """这一条改完，时间线才第一次有「进展内容」而不只是「改写了X」。"""
+    public_id = new_matter(service)
+    service.patch_matter(
+        public_id, {"current_summary": PROGRESS_TEXT}, **mutation(1, "sum")
+    )
+    payload = event_of(timeline(service, public_id), "matter_updated")["payload"]
+    assert payload["narrative"] == {"text": PROGRESS_TEXT}
+    # 与 `changes` 正交：字段名那条照旧在，前端的老句式不受影响。
+    assert changes_by_field(payload)["current_summary"]["to"] == PROGRESS_TEXT
+
+
+def test_narrative_carries_more_than_the_changes_cap(service):
+    """`changes` 的 120 字上限装不下一段进展 —— 这正是另开一个键的理由。"""
+    public_id = new_matter(service)
+    long_summary = "进" * (CHANGE_TEXT_MAX_CHARS + 80)
+    service.patch_matter(
+        public_id, {"current_summary": long_summary}, **mutation(1, "sum")
+    )
+    payload = event_of(timeline(service, public_id), "matter_updated")["payload"]
+    assert len(changes_by_field(payload)["current_summary"]["to"]) == CHANGE_TEXT_MAX_CHARS
+    assert payload["narrative"] == {"text": long_summary}
+    assert "truncated" not in payload["narrative"]
+
+
+def test_narrative_is_bounded_and_flags_truncation(service):
+    """事件表不是正文存储：超限存 excerpt + 标记，完整正文在状态卡上。"""
+    public_id = new_matter(service)
+    huge = "长" * (NARRATIVE_EXCERPT_MAX_CHARS + 1)
+    service.patch_matter(public_id, {"current_summary": huge}, **mutation(1, "sum"))
+    narrative = event_of(timeline(service, public_id), "matter_updated")["payload"][
+        "narrative"
+    ]
+    assert narrative["text"] == huge[:NARRATIVE_EXCERPT_MAX_CHARS]
+    assert narrative["truncated"] is True
+
+
+def test_rewriting_the_summary_to_the_same_text_produces_no_narrative(service):
+    """没变就没进展。判据跟 `changes` 同一个（值级相等即跳过），不另起一套。"""
+    public_id = new_matter(service)
+    version = service.patch_matter(
+        public_id, {"current_summary": PROGRESS_TEXT}, **mutation(1, "sum")
+    )["version"]
+    service.patch_matter(
+        public_id,
+        {"current_summary": PROGRESS_TEXT, "priority": "p0"},
+        **mutation(version, "again"),
+    )
+    payload = timeline(service, public_id)[-1]["payload"]
+    assert [entry["field"] for entry in payload["changes"]] == ["priority"]
+    assert "narrative" not in payload
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"status": "active"},
+        {"tags": ["nexpay"]},
+        {"title": "改个标题"},
+        {"due_at": 1_800_000_000_000},
+        {"agent_enabled": True},
+    ],
+)
+def test_technical_events_carry_no_narrative(service, patch):
+    """🔴 不是所有事件都要长文。摆一段正文在「开启了跟进 Agent」下面只是把噪音放大。"""
+    public_id = new_matter(service)
+    service.patch_matter(public_id, patch, **mutation(1, "patch"))
+    for event in timeline(service, public_id):
+        assert "narrative" not in event["payload"], event["kind"]
+
+
+def test_note_carries_its_text(service):
+    """备注的全部意义就是那段正文；`/notes` 不给标题时正文同时落在 title 上。"""
+    public_id = new_matter(service)
+    long_note = "备" * (CHANGE_TEXT_MAX_CHARS + 60)
+    service.add_note(public_id, {"title": long_note, "description": long_note},
+                     **mutation(1, "note"))
+    payload = event_of(timeline(service, public_id), "item_created")["payload"]
+    # title 仍是 120 字的标识（句子用），正文走 narrative —— 两者上限不同不是笔误。
+    assert len(payload["title"]) == CHANGE_TEXT_MAX_CHARS
+    assert payload["narrative"] == {"text": long_note}
+
+
+def test_note_with_a_separate_title_narrates_the_body(service):
+    public_id = new_matter(service)
+    service.add_note(
+        public_id,
+        {"title": "8/12 电话纪要", "description": PROGRESS_TEXT},
+        **mutation(1, "note"),
+    )
+    payload = event_of(timeline(service, public_id), "item_created")["payload"]
+    assert payload["title"] == "8/12 电话纪要"
+    assert payload["narrative"] == {"text": PROGRESS_TEXT}
+
+
+def test_title_only_note_still_narrates(service):
+    """UI 只填了标题的备注：正文退回 title —— 否则长备注在时间线上永远只剩 120 字。"""
+    public_id = new_matter(service)
+    service.create_item(
+        public_id,
+        {"kind": "note", "title": PROGRESS_TEXT},
+        **mutation(1, "note"),
+    )
+    payload = event_of(timeline(service, public_id), "item_created")["payload"]
+    assert payload["narrative"] == {"text": PROGRESS_TEXT}
+
+
+def test_non_note_items_stay_short(service):
+    """行动项/待解问题的 description 是背景说明，不是进展 —— 上时间线会淹掉主句。"""
+    public_id = new_matter(service)
+    service.create_item(
+        public_id,
+        {"kind": "action", "title": "催合规回执", "description": PROGRESS_TEXT},
+        **mutation(1, "act"),
+    )
+    payload = event_of(timeline(service, public_id), "item_created")["payload"]
+    assert payload["title"] == "催合规回执"
+    assert "narrative" not in payload
+
+
+def test_accepted_proposal_carries_the_accepted_summary(tmp_path):
+    """接受提案是跟进的成果落地。原来时间线上只有「采纳 N 项」这个数字。"""
+    from src.matters.run_service import MatterRunService
+
+    path = tmp_path / "accept-narrative.db"
+    SyncStore(str(path))
+    run_service = MatterRunService(MatterRepository(path), clock_ms=lambda: 55_000)
+    created = run_service.create_matter(
+        {"title": "Narrative"}, idempotency_key="create", source="desktop_ui"
+    )
+    public_id = created["matter"]["public_id"]
+    run = run_service.enqueue_run(
+        public_id,
+        expected_version=created["version"],
+        idempotency_key="run-1",
+        source="desktop_ui",
+    )["run"]
+    assert run_service.mark_started(run["id"])
+    update_id = run_service.propose_update(
+        public_id,
+        run["id"],
+        {
+            "summary": PROGRESS_TEXT,
+            "changes": [
+                {
+                    "id": "chg_01",
+                    "kind": "field",
+                    "target": {"entity": "matter", "field": "status"},
+                    "operation": "replace",
+                    "after": "waiting",
+                    "sources": [],
+                }
+            ],
+        },
+    )["update_id"]
+    run_service.accept_update(
+        public_id,
+        update_id,
+        expected_version=run_service.get_matter(public_id)["matter"]["version"],
+        idempotency_key="acc-1",
+        source="desktop_ui",
+    )
+    events = timeline(run_service, public_id)
+    assert event_of(events, "update_accepted")["payload"]["narrative"] == {
+        "text": PROGRESS_TEXT
+    }
+    # 扇出的 matter_updated 讲的是字段变化（状态），不是进展正文 —— 不许重复挂。
+    assert "narrative" not in event_of(events, "matter_updated")["payload"]
+
+
+def test_accepted_proposal_narrates_the_edited_summary(tmp_path):
+    """owner 改过就以改后的为准 —— 落进 current_summary 的是哪段，时间线就说哪段。"""
+    from src.matters.run_service import MatterRunService
+
+    path = tmp_path / "accept-edited.db"
+    SyncStore(str(path))
+    run_service = MatterRunService(MatterRepository(path), clock_ms=lambda: 55_000)
+    created = run_service.create_matter(
+        {"title": "Edited"}, idempotency_key="create", source="desktop_ui"
+    )
+    public_id = created["matter"]["public_id"]
+    run = run_service.enqueue_run(
+        public_id,
+        expected_version=created["version"],
+        idempotency_key="run-1",
+        source="desktop_ui",
+    )["run"]
+    assert run_service.mark_started(run["id"])
+    update_id = run_service.propose_update(
+        public_id,
+        run["id"],
+        {"summary": "Agent 的原稿", "changes": []},
+    )["update_id"]
+    run_service.accept_update(
+        public_id,
+        update_id,
+        edited_summary=PROGRESS_TEXT,
+        expected_version=run_service.get_matter(public_id)["matter"]["version"],
+        idempotency_key="acc-1",
+        source="desktop_ui",
+    )
+    payload = event_of(timeline(run_service, public_id), "update_accepted")["payload"]
+    assert payload["narrative"] == {"text": PROGRESS_TEXT}
+    assert payload["accepted_change_ids"] == []
+
+
+@pytest.mark.parametrize("value", [None, "", "   ", 42, {"text": "x"}, ["x"]])
+def test_build_narrative_writes_nothing_when_there_is_no_prose(value):
+    """写不出正文时键**不出现** —— 前端按存量老行的路径退化，不许渲染空块/undefined。"""
+    assert build_narrative(value) is None
+
+
+def test_narrative_producers_are_the_three_kinds_we_signed_up_for(service):
+    """分类清单的看门人：谁顺手给别的 kind 挂正文，这里会红。"""
+    public_id = new_matter(service)
+    version = service.patch_matter(
+        public_id,
+        {"current_summary": PROGRESS_TEXT, "status": "active", "tags": ["x"]},
+        **mutation(1, "sum"),
+    )["version"]
+    version = service.add_note(
+        public_id, {"title": "纪要", "description": PROGRESS_TEXT},
+        **mutation(version, "note")
+    )["version"]
+    service.create_item(
+        public_id,
+        {"kind": "action", "title": "催回执"},
+        **mutation(version, "act"),
+    )
+    with_narrative = {
+        event["kind"]
+        for event in timeline(service, public_id)
+        if "narrative" in event["payload"]
+    }
+    assert with_narrative <= set(NARRATIVE_KINDS_UNDER_TEST)
+    assert with_narrative == {"matter_updated", "item_created"}

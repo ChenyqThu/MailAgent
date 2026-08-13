@@ -294,7 +294,7 @@ describe('ConfigDrawer avatar identity (0804 dogfood 3d)', () => {
     renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
     expect(screen.getByRole('button', { name: '更换' })).toBeTruthy()
     expect(screen.queryByTestId('avatar-shape-grid')).toBeNull()
-    expect(screen.queryByTestId('avatar-palette-grid')).toBeNull()
+    expect(screen.queryByTestId('avatar-color-grid')).toBeNull()
   })
 
   test('未触碰头像 → 保存 patch 不带 avatar 键（NULL 行保持 NULL）', () => {
@@ -307,11 +307,11 @@ describe('ConfigDrawer avatar identity (0804 dogfood 3d)', () => {
   test('展开 → 选形状 → 保存 patch 携带 avatar', () => {
     renderDrawer(<ConfigDrawer cfg={makeCfg({})} open onClose={() => {}} />)
     fireEvent.click(screen.getByRole('button', { name: '更换' }))
-    // 形状网格按 shape.name 挂 aria-label；nova 是六形状之一。
-    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Nova'))
+    // 形状网格按 bot shape id 挂 aria-label；cone 是八形状之一。
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('cone'))
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     expect(mockSave).toHaveBeenCalledTimes(1)
-    expect(mockSave.mock.calls[0][1].avatar).toMatchObject({ shape: 'nova' })
+    expect(mockSave.mock.calls[0][1].avatar).toMatchObject({ type: 'bot', shape: 'cone' })
   })
 })
 

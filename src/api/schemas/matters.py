@@ -53,6 +53,10 @@ class MatterCreateRequest(StrictModel):
     priority: str = "p1"
     due_at: int | None = None
     waiting_context: dict[str, Any] | None = None
+    # 完成标志（0813 轮 3 O2）：**创建面**开放 —— 与 description 同一 D7 语义（create 时
+    # agent 可写、之后只有 user 能改；patch 面见 MatterPatchRequest 上方注释）。值域
+    # （文本长度/条数/形状）仍由 service 的 `normalize_goal_checks` 单判（400 E_INVALID_ARG）。
+    goal_checks: list[dict[str, Any]] | None = None
     source_resource: MatterSourceResource | None = None
     mutation: MutationEnvelope
 
@@ -61,7 +65,13 @@ class MatterPatchRequest(StrictModel):
     title: str | None = Field(default=None, max_length=500)
     description: str | None = None
     matter_type: str | None = Field(default=None, max_length=128)
+    # 这里只声明**线上形状**；值域（合法 priority / goal check 文本长度与条数）仍由 service
+    # 的 `_require_value` / `normalize_goal_checks` 单判（400 E_INVALID_ARG），与
+    # MatterCreateRequest 的 `priority: str` 同形 —— 在 DTO 里再抄一份枚举 = 又一份会漂的
+    # 手抄清单，正是本 bug（DTO 漏了这两个字段导致改优先级/存完成标志恒 422）的病根。
+    priority: str | None = None
     tags: list[str] | None = None
+    goal_checks: list[dict[str, Any]] | None = None
     status: str | None = None
     health: str | None = None
     current_summary: str | None = None

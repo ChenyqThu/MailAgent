@@ -397,6 +397,14 @@ async function resolveSteps(result: { steps?: unknown }): Promise<number> {
   }
 }
 
+/** One attempt's knobs (fallback chain only — absent for the single-attempt default path). */
+interface HeadlessAttemptOpts {
+  /** Replaces `spec.model` for THIS attempt. */
+  modelOverride?: string
+  /** Fired on the first streamed text delta — the chain's "already produced something" signal. */
+  onOutput?: () => void
+}
+
 /**
  * Run one headless custom-agent turn: build a synthetic body from the spec, wrap cfg with the
  * per-agent tool narrowing, prepareChatRun under the DERIVED context mode, then
@@ -408,10 +416,11 @@ async function resolveSteps(result: { steps?: unknown }): Promise<number> {
  * turn just停在 the redacted pause; the outcome is 'paused_handoff' either way (the worker records
  * approval_state='pending', which the read side treats as "not a success").
  */
-export async function runHeadlessAgent(
+async function runHeadlessAgentOnce(
   cfg: AiGatewayConfig,
   opts: RunHeadlessAgentOpts,
-  abortSignal: AbortSignal
+  abortSignal: AbortSignal,
+  attempt?: HeadlessAttemptOpts
 ): Promise<HeadlessAgentResult> {
   const { spec, sessionId } = opts
   const contextMode = deriveContextMode(spec)
@@ -449,6 +458,13 @@ export async function runHeadlessAgent(
     sessionId
   }
   if (spec.model) body.model = spec.model
+  // 0813 dogfood r3 #10 — the Matter-level effort override. `prepareChatRun` already consumes
+  // `body.effort` (the composer's own channel): `effortTierFromBody` validates the tier and an
+  // unknown/absent value fail-closes to "send no effort parameter at all". Nothing to add on the
+  // wire side; the ONLY thing missing was that the headless entrypoint never forwarded it.
+  if (typeof spec.effort === 'string' && spec.effort.length > 0) body.effort = spec.effort
+  // Fallback chain (see runHeadlessAgent below): a retry re-enters here with the next model.
+  if (attempt?.modelOverride) body.model = attempt.modelOverride
 
   // cfg' wrapper (ADR-003 D6/D7 + ADR-004 §4.4). The allowedTools intersection is layered on
   // cfg.buildTools' OUTPUT — i.e. AFTER the full assembly chain (create* → applySkillGating →
@@ -555,6 +571,10 @@ export async function runHeadlessAgent(
       if (c.type === 'text-delta') {
         assistantText +=
           typeof c.delta === 'string' ? c.delta : typeof c.text === 'string' ? c.text : ''
+        // Fallback chain: "this attempt already put something on the record" — reported even for a
+        // turn that errors mid-text (where `steps` can still be 0 because no step ever completed),
+        // so the chain never re-runs a turn the user would see twice.
+        attempt?.onOutput?.()
       } else if (c.type === 'error') {
         // streamText surfaces a non-abort upstream error as an error chunk (it does NOT always throw
         // from the drain). Capture it so an errored run never reports 'completed'.
@@ -639,4 +659,64 @@ export async function runHeadlessAgent(
     summary: clipSummary(assistantText) || undefined,
     usage
   }
+}
+
+/** Abort-shaped failures: the run was cancelled, not the model's fault → never retried. */
+const CHAIN_STOP_CODES = new Set(['E_BUDGET_TIME', 'E_RUN_STOPPED'])
+
+/**
+ * The public entrypoint: `runHeadlessAgentOnce` walked over the spec's model chain
+ * (`spec.model` → `spec.fallbackModels[]`), 0813 dogfood r3 #10.
+ *
+ * 🔴 A retry is allowed ONLY when the attempt failed **having produced nothing** — no streamed
+ * text (`onOutput` never fired), no completed step, not paused at an approval gate, not aborted
+ * (budget / stop). Anything else is a turn the owner can already see, and re-running it would
+ * double-charge, double-persist, and possibly repeat a tool call. Concretely this covers the
+ * failures a backup model actually helps with: the model can't be resolved / that provider has no
+ * credentials (prepareChatRun's typed 503, zero cost) and an immediate upstream refusal
+ * (401 / 429 / 5xx before the first token).
+ *
+ * 🔴 No fallbacks configured (the default for every agent) → the chain is one entry long → exactly
+ * one call, byte-identical to the pre-chain function. The abort signal stays the real bound: it is
+ * re-checked between attempts and each attempt receives it, so the budget deadline can never be
+ * extended by retrying.
+ */
+export async function runHeadlessAgent(
+  cfg: AiGatewayConfig,
+  opts: RunHeadlessAgentOpts,
+  abortSignal: AbortSignal
+): Promise<HeadlessAgentResult> {
+  const primary =
+    typeof opts.spec.model === 'string' && opts.spec.model.length > 0
+      ? opts.spec.model
+      : cfg.model
+  const chain: (string | undefined)[] = [undefined]
+  for (const candidate of opts.spec.fallbackModels ?? []) {
+    if (typeof candidate !== 'string' || candidate.length === 0) continue
+    if (candidate === primary || chain.includes(candidate)) continue
+    chain.push(candidate)
+  }
+
+  let result: HeadlessAgentResult | null = null
+  for (let i = 0; i < chain.length; i++) {
+    let produced = false
+    result = await runHeadlessAgentOnce(cfg, opts, abortSignal, {
+      modelOverride: chain[i],
+      onOutput: () => {
+        produced = true
+      }
+    })
+    const retryable =
+      !result.ok &&
+      !produced &&
+      result.steps === 0 &&
+      !CHAIN_STOP_CODES.has(result.error?.code ?? '')
+    if (!retryable || i === chain.length - 1 || abortSignal.aborted) break
+    console.warn(
+      `[ai-gateway] agent-run model ${chain[i] ?? primary} failed before producing anything ` +
+        `(${result.error?.code}) — falling back to ${chain[i + 1]}`
+    )
+  }
+  // chain is never empty (it always holds the primary), so result is always assigned.
+  return result as HeadlessAgentResult
 }

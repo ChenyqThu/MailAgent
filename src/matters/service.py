@@ -84,6 +84,7 @@ from .event_changes import (
     MATTER_CHANGE_FIELDS,
     STAKEHOLDER_CHANGE_FIELDS,
     build_changes,
+    build_narrative,
     truncated_text,
 )
 from .events import (
@@ -133,6 +134,16 @@ DIRECT_PATCH_FIELDS = {
     "next_attention_at",
     "attention_reason",
 }
+# 「撤销事项更新」的前像要快照哪些字段（patch_matter 的 undo descriptor）。
+# 🔴 **从写面派生，不再手抄**：这里曾是同一份白名单的第四份手抄，且漏了 priority 与
+# goal_checks —— 于是只改优先级时前像是 `{}`，撤销发出一个空 patch：不报错、版本照 bump、
+# 值一动不动，用户看到的是「撤销成功」而实际什么都没还原。前像的每个字段都会经
+# `PATCH /api/matters/{id}` 原样回放（renderer 直连 REST、user actor），所以取值范围必须
+# 恰好是写面本身。
+# BINDING_PATCH_FIELDS **有意**不在内（维持现状，本批不扩面）：纯 binding 的 patch 只写
+# agent_binding_changed 一条事件，不产生 matter_updated，「撤销事项更新」这颗按钮不代表它；
+# 混合 patch 里的 binding 部分同样不进前像。要不要让撤销覆盖 agent 绑定是独立决策。
+UNDOABLE_PATCH_FIELDS = DIRECT_PATCH_FIELDS | MANUAL_UPDATE_FIELDS
 # D5 bounded projection: context_snapshot resource entries only pass through the
 # short structured metadata keys the MailAgent write side actually produces
 # (_resolve_source_resource: email -> internal_id/message_id/date_received,
@@ -227,6 +238,13 @@ class MatterService:
         self._require_value("health", health, MATTER_HEALTH_VALUES)
         self._require_value("priority", priority, MATTER_PRIORITIES)
         tags = normalize_tags(data.get("tags"))
+        # 完成标志（0813 轮 3 O2）：创建面开放 —— D7 的 user-only 只钉 **update** 路径
+        # （patch_matter 的 actor 闸不动），create 时 agent 把「怎样算做完」一起立起来
+        # 与 description 同权限同语义。
+        try:
+            goal_checks = normalize_goal_checks(data.get("goal_checks"))
+        except ValueError as exc:
+            raise MatterError("E_INVALID_ARG", str(exc)) from exc
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         with self.repository.transaction() as conn:
@@ -249,6 +267,7 @@ class MatterService:
                     "description": str(data.get("description") or ""),
                     "matter_type": self._optional_text(data.get("matter_type")),
                     "tags_json": self._dump(tags),
+                    "goal_checks_json": self._dump(list(goal_checks)),
                     "status": status,
                     "health": health,
                     "priority": priority,
@@ -492,6 +511,9 @@ class MatterService:
                 "due_at",
                 "waiting_context",
                 "description",
+                # goal_checks（0813 轮 3 O2）：跟进 run 与事项对话必须看得见「怎样算做完」——
+                # 没有它，「判断有没有实质进展」缺了唯一的完成判据。只读投影，不触碰 D7。
+                "goal_checks",
                 "current_summary",
                 "version",
             )
@@ -1021,6 +1043,15 @@ class MatterService:
                 )
                 event_ids.append(event_id)
             else:
+                plain_changes = build_changes(
+                    plain_fields, matter, after, allowed=MATTER_CHANGE_FIELDS
+                )
+                # 叙述正文只跟着 `current_summary` 走，判据是**它真的变了**（`changes`
+                # 里有这一条）——「摘要原样重写一遍」不产出 change，也就不该在时间线上
+                # 多出一段正文。
+                summary_rewritten = any(
+                    entry["field"] == "current_summary" for entry in plain_changes
+                )
                 event_id = self._append_event(
                     conn,
                     matter_id=matter["id"],
@@ -1030,12 +1061,12 @@ class MatterService:
                     dedupe_key=dedupe_key,
                     reason=reason,
                     update_id=update_id,
-                    payload={
-                        "fields": plain_fields,
-                        "changes": build_changes(
-                            plain_fields, matter, after, allowed=MATTER_CHANGE_FIELDS
-                        ),
-                    },
+                    payload=self._with_narrative(
+                        {"fields": plain_fields, "changes": plain_changes},
+                        (after or {}).get("current_summary")
+                        if summary_rewritten
+                        else None,
+                    ),
                     happened_at=now,
                     reverses_event_id=reverses_event_id,
                 )
@@ -1065,20 +1096,7 @@ class MatterService:
             before_patch = {
                 field: matter.get(field)
                 for field in patch
-                if field
-                in {
-                    "title",
-                    "description",
-                    "matter_type",
-                    "tags",
-                    "status",
-                    "health",
-                    "current_summary",
-                    "due_at",
-                    "waiting_context",
-                    "next_attention_at",
-                    "attention_reason",
-                }
+                if field in UNDOABLE_PATCH_FIELDS
             }
             result = self._mutation(
                 after,
@@ -1190,13 +1208,14 @@ class MatterService:
                 # stale base 也不构成冲突（auto-rebase）。
                 scope=SCOPE_NOTHING,
             )
+            description = self._optional_text(data.get("description"))
             item_id = self.repository.insert_item(
                 conn,
                 {
                     "matter_id": matter["id"],
                     "kind": kind,
                     "title": title,
-                    "description": self._optional_text(data.get("description")),
+                    "description": description,
                     "position": int(data.get("position") or 0),
                     **normalized,
                     "created_by_kind": actor.kind,
@@ -1216,7 +1235,17 @@ class MatterService:
                 reason=reason,
                 item_id=item_id,
                 # title = 句子必需的标识（"新增待解问题「…」"）；光有 item_id 写不出来。
-                payload={"kind": kind, "title": truncated_text(title)},
+                payload=self._with_narrative(
+                    {"kind": kind, "title": truncated_text(title)},
+                    # 🔴 只有**备注**是叙述类：它的全部意义就是那段正文。行动项/待解问题的
+                    # description 是背景说明，进时间线只会把「新增了什么」这句话淹掉。
+                    # 取 description 优先、退回 title：`POST /notes` 在没给标题时把正文
+                    # 同时写进两处（`title = body.title or body.text`），两边都得能取到全文
+                    # —— payload 里的 title 已经被截到 120 字，它当不了正文。
+                    (description or title)
+                    if kind == MatterItemKind.NOTE.value
+                    else None,
+                ),
                 happened_at=now,
                 reverses_event_id=reverses_event_id,
             )
@@ -2431,20 +2460,31 @@ class MatterService:
     def _upsert_contact(
         self, conn: sqlite3.Connection, *, email: str,
         display_name: str | None = None, organization: str | None = None, now: int,
+        fallback_display_name: str | None = None, fallback_organization: str | None = None,
     ) -> int:
         """按归一 email upsert 全局联系人，返回 contact_id。
 
         提供的非空姓名/组织 = 最后写者赢（全局一份的语义：改名就是全局改名）；
-        传 None = 不动既有值。"""
+        传 None = 不动既有值。
+
+        `fallback_*` = **只在新建这条联系人时**顶上的值（调用方手里有、但用户本次并没有
+        显式改的姓名/组织）。🔴 它有意**不**进 ON CONFLICT 分支：目标邮箱可能已经是
+        另一个人的全局联系人，拿本行的名字盖上去 = 悄悄把别人改名了。"""
         conn.execute(
             "INSERT INTO matter_contact "
             "(email_normalized, display_name, organization, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(email_normalized) DO UPDATE SET "
-            "display_name = COALESCE(excluded.display_name, matter_contact.display_name), "
-            "organization = COALESCE(excluded.organization, matter_contact.organization), "
+            "display_name = COALESCE(?, matter_contact.display_name), "
+            "organization = COALESCE(?, matter_contact.organization), "
             "updated_at = excluded.updated_at",
-            (email, display_name, organization, now, now),
+            (
+                email,
+                display_name or fallback_display_name,
+                organization or fallback_organization,
+                now, now,
+                display_name, organization,
+            ),
         )
         row = conn.execute(
             "SELECT id FROM matter_contact WHERE email_normalized=?", (email,)
@@ -2584,9 +2624,18 @@ class MatterService:
                 touched_name = self._optional_text(data.get("display_name")) if "display_name" in data else None
                 touched_org = self._optional_text(data.get("organization")) if "organization" in data else None
                 if contact_email and (email is not None or contact_id is None or touched_name or touched_org):
+                    # 只改邮箱、没同时改名时用本行现有的姓名/组织兜底 —— 否则库里会凭空
+                    # 多出一条裸邮箱联系人（create 路径本来就回填，两条路不该不对称）。
+                    # 兜底只在**新建**那条联系人时生效，见 `_upsert_contact` 的红字。
                     contact_id = self._upsert_contact(
                         conn, email=contact_email,
                         display_name=touched_name, organization=touched_org, now=now,
+                        fallback_display_name=self._optional_text(
+                            (existing or {}).get("display_name")
+                        ),
+                        fallback_organization=self._optional_text(
+                            (existing or {}).get("organization")
+                        ),
                     )
                     changes["contact_id"] = contact_id
                 assignments = ", ".join(f"{key}=?" for key in changes)
@@ -3061,10 +3110,17 @@ class MatterService:
                     dedupe_key=dedupe_key,
                     reason=reason,
                     update_id=update_id,
-                    payload={
-                        "update_id": update_id,
-                        "accepted_change_ids": selected,
-                    },
+                    payload=self._with_narrative(
+                        {
+                            "update_id": update_id,
+                            "accepted_change_ids": selected,
+                        },
+                        # 接受提案是**跟进的成果落地**，最该有正文的一条。落库的是
+                        # `resolved_summary`（owner 编辑过就用编辑后的），与写进
+                        # `current_summary` 的完全是同一段 —— 这段不进时间线时，
+                        # 用户只看得到「采纳 3 项」这个数字。
+                        resolved_summary,
+                    ),
                     happened_at=now,
                     reverses_event_id=reverses_event_id,
                 )
@@ -4407,6 +4463,19 @@ class MatterService:
             "usage_count": 0,
             "inferred": True,
         }
+
+    @staticmethod
+    def _with_narrative(payload: dict[str, Any], text: Any) -> dict[str, Any]:
+        """给**叙述类**事件的 payload 挂上正文摘录（`narrative` 键；见 event_changes 模块）。
+
+        写不出正文（None / 空串 / 非字符串）时原样返回 —— 键**不出现**，前端按存量老行
+        的路径退化成原来的短句。三个调用点就是全部的叙述类事件，别在别处顺手调它：
+        「不是所有事件都要长文」是这次改动的判据，不是省下来的工作量。
+        """
+        narrative = build_narrative(text)
+        if narrative is not None:
+            payload["narrative"] = narrative
+        return payload
 
     def _append_event(
         self,

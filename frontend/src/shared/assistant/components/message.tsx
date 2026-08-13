@@ -22,7 +22,7 @@ import { cn } from '@shared/lib/cn'
 import { ImageLightbox } from '@shared/components/email/EmailBodyFrame'
 
 import { getAssistantPartComponents } from '../tools/registerToolUIs'
-import { TurnStatusLine } from './TurnStatusLine'
+import { TurnPresence, TurnPresenceEmpty } from './TurnPresence'
 import { AssistantActionBar, UserActionBar } from './action-bar'
 import { FollowupSuggestions } from './FollowupSuggestions'
 import { CompactCard } from './CompactCard'
@@ -45,7 +45,7 @@ function attachmentImageSrc(attachment: CompleteAttachment): string | null {
  *  dogfood 07-27 (Lane D) — images render as a bounded thumbnail, not a paperclip pill: the pill
  *  showed only the filename, so a pasted screenshot still looked absent from the history (owner:
  *  「发出后，消息历史里没有显示图片」). assistant-ui has no image primitive for this —
- *  AttachmentPrimitive.unstable_Thumb renders the file EXTENSION as text — so the <img> is ours.
+ *  AttachmentPrimitive.unstable_Thumb renders the file EXTENSION as text — so the img element is ours.
  *  Sizes are capped (the src is a data URL up to CHAT_IMAGE_MAX_PAYLOAD_CHARS, and a 1568px-edge
  *  image at natural size would dwarf the bubble); multiple images wrap in the flex row.
  *
@@ -177,22 +177,38 @@ function AssistantMessageError(): React.JSX.Element | null {
 export function AssistantMessage(): React.JSX.Element {
   // Phase 04a — flag-aware part components (generic ToolTraceCard fallback always; A2UI
   // per-tool cards added as tools.by_name — rich cards always on since S3; consecutive tool
-  // calls folded by ToolGroupCard). harness-chat lane B — TurnStatusLine on the Empty slot so
-  // the email panel gets the same truth-driven status line the agent panel has. Memoized once
-  // per mount so the object reference stays stable across re-renders.
+  // calls folded by ToolGroupCard). living-bot-avatar WP5 — the turn status surface moved OUT
+  // of the Empty slot into TurnPresence above the bubble (the avatar must persist through
+  // writing/tool phases; Empty unmounts on the first part). Empty is explicit null so the
+  // no-content phase draws nothing inside the bubble. Memoized once per mount so the object
+  // reference stays stable across re-renders.
   const partComponents = useMemo(
-    () => ({ ...getAssistantPartComponents(), Empty: TurnStatusLine }),
+    () => ({ ...getAssistantPartComponents(), Empty: TurnPresenceEmpty }),
     []
+  )
+  // Pre-first-token (and empty aborted history rows) the bubble has zero parts — skip the shell
+  // instead of painting an empty bordered pill (TurnPresence above narrates the run). An errored
+  // turn can also have zero parts but must keep the shell: the error footer lives inside it.
+  const hasBubbleContent = useAuiState(
+    (s) =>
+      s.message.content.length > 0 ||
+      (s.message.status?.type === 'incomplete' && s.message.status.reason === 'error')
   )
   return (
     <MessagePrimitive.Root className="group mb-4 flex w-full flex-col items-start">
-      <div className="min-w-0 max-w-[85%] space-y-1.5 rounded-2xl rounded-bl-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
-        <MessagePrimitive.Parts components={partComponents} />
-        <MessagePrimitive.Error>
-          <AssistantMessageError />
-        </MessagePrimitive.Error>
-        <AssistantActionBar />
-      </div>
+      {/* WP5 — in-flow presence row: animated avatar + (stage-gated) status text, latest
+          assistant message only (TurnPresence's own isLast/readOnly gates). Interactive email
+          panel has no bound agent → official assistant look (no config). */}
+      <TurnPresence className="mb-1.5" />
+      {hasBubbleContent && (
+        <div className="min-w-0 max-w-[85%] space-y-1.5 rounded-2xl rounded-bl-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
+          <MessagePrimitive.Parts components={partComponents} />
+          <MessagePrimitive.Error>
+            <AssistantMessageError />
+          </MessagePrimitive.Error>
+          <AssistantActionBar />
+        </div>
+      )}
       {/* 0804 dogfood 1d — follow-up chips moved out of the thread-level row (above the composer)
           into THIS message, right after the action bar and outside the bubble (left-aligned with
           it via the Root's items-start). Only the LAST assistant message ever renders anything

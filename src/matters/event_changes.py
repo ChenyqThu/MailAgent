@@ -33,6 +33,35 @@
    「有 ``truncated`` 键 = 老行」走它自己的降级路径。
 5. **投影层永远不许把一次业务写入弄失败** —— 叙述不出来的值（dict、NaN/Infinity）一律
    跳过，字段名仍留在 ``fields`` 里。见 :func:`_narratable`。
+
+────────────────────────────────────────────────────────────────────────────
+``narrative`` —— 叙述类事件的正文摘录（0813 轮 3）
+────────────────────────────────────────────────────────────────────────────
+
+owner 反馈「进展仍然像操作日志」的**读侧**根因：时间线上永远只有「谁改了哪个字段」，
+**看不到事情本身写了什么**。``changes`` 解决不了这一条 —— 它的长文本上限是
+:data:`CHANGE_TEXT_MAX_CHARS`（120 字，够写「状态 A → B」不够放一段进展），而且
+前端对 longText 形态**有意只出「改写了X」不出值**（值在那里也只有 120 字，放进
+一行句子里会把时间线撑爆）。
+
+所以叙述类事件另开一个 payload 键，与 ``changes`` 正交::
+
+    "narrative": {"text": "对方法务已回签…", "truncated": true}
+
+四条纪律：
+
+a. **只有叙述类事件才有** —— 「事情本身怎么样了」的三处正文：``current_summary``
+   改写（``matter_updated``）· 备注（``item_created`` / kind=note）· 提案被采纳后
+   落库的那段摘要（``update_accepted``）。技术性/结构性事件（版本、关联、字段 flip）
+   **不发** —— 不是所有事件都要长文，硬塞只会把噪音换个更大的字号。
+b. **有界，且比 changes 宽** —— :data:`NARRATIVE_EXCERPT_MAX_CHARS`。事件表仍然
+   不是正文存储：超限存 excerpt + ``truncated`` 标记，完整正文在它自己的归宿
+   （状态卡 / 条目详情）。
+c. **只有一侧** —— 叙述的是「现在写着什么」，不是 diff。所以没有 ``from``、
+   截断标记也只有一个 ``truncated``（与 ``changes`` 的分侧标记不是同一个语义，
+   不要合并这两套）。
+d. **append-only 不回填** —— 存量事件行没有这个键；前端必须优雅退化回原来的
+   「改写了当前状态摘要」句式，不许因为读不到就崩或渲染 undefined。
 """
 
 from __future__ import annotations
@@ -43,6 +72,10 @@ from typing import Any
 
 CHANGE_TEXT_MAX_CHARS = 120
 CHANGE_LIST_MAX_ITEMS = 20
+# 叙述正文的上限。取 400 的依据：跟进契约要求摘要「不超过 3 句」，中文 3 句 ≈ 120-250 字，
+# 400 留了一档余量又不至于让一条事件行变成正文存储；再往上（比如 2K）时间线一页就要
+# 拉几十 KB payload，而多出来的那部分在 3 行 clamp 下用户也读不到。
+NARRATIVE_EXCERPT_MAX_CHARS = 400
 
 # matter 的 17 个可 patch 字段里，能写出一句自然语言的那些。
 # 排除的三个见 MATTER_STRUCTURED_FIELDS —— 它们的"前后值"是一坨 JSON，写不出句子，
@@ -92,6 +125,25 @@ def truncated_text(value: Any) -> str | None:
         return None
     text = str(value)
     return text[:CHANGE_TEXT_MAX_CHARS]
+
+
+def build_narrative(value: Any) -> dict[str, Any] | None:
+    """叙述类事件的正文摘录 → ``{"text": …, "truncated": True}``，无正文时 ``None``。
+
+    - 非字符串 / 空白串 → ``None``（"没有正文"和"正文是空串"在渲染上是同一件事：
+      两者都不该在时间线上多出一个空白块）。
+    - 截断标记只在**真被截**时出现（键不在 = 这段就是全文）。与 ``changes`` 的
+      ``from_truncated`` / ``to_truncated`` 是两套语义，不许互相回落。
+    - 调用方负责判断「这条事件算不算叙述类」；本函数只做投影，不做分类。
+    """
+    if not isinstance(value, str):
+        return None
+    text = value.strip()
+    if not text:
+        return None
+    if len(text) > NARRATIVE_EXCERPT_MAX_CHARS:
+        return {"text": text[:NARRATIVE_EXCERPT_MAX_CHARS], "truncated": True}
+    return {"text": text}
 
 
 def _scalar_narratable(value: Any) -> bool:

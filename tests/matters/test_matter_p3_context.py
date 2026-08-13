@@ -89,6 +89,7 @@ def test_context_snapshot_core_fields_and_summary_accepted_at(service, clock):
     core = snapshot["matter"]
 
     # D5 core field list (matter_type is renamed to `type` on the wire).
+    # goal_checks joined in 0813 轮 3 O2 —— 跟进 run / 事项对话必须看得见「怎样算做完」。
     assert set(core) == {
         "id",
         "public_id",
@@ -101,6 +102,7 @@ def test_context_snapshot_core_fields_and_summary_accepted_at(service, clock):
         "due_at",
         "waiting_context",
         "description",
+        "goal_checks",
         "current_summary",
         "version",
         "summary_accepted_at",

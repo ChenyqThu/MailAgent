@@ -15,15 +15,20 @@ import { describe, expect, test } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 
-import type { MatterRunAction } from '@shared/api/types/matter'
+import type { MatterAgentOverrides, MatterRunAction } from '@shared/api/types/matter'
 import {
   buildTriggerEnvelope,
+  parseAgentOverridesValue,
   type MatterTriggerEntry
 } from '@shared/components/matters/matterSchedule'
 
 interface Fixture {
   case: string
-  input: { entries: MatterTriggerEntry[]; actions: MatterRunAction[] }
+  input: {
+    entries: MatterTriggerEntry[]
+    actions: MatterRunAction[]
+    agent?: MatterAgentOverrides
+  }
   envelope: Record<string, unknown>
 }
 
@@ -44,13 +49,33 @@ describe('跨语言 envelope parity（写侧 schedule_json）', () => {
   })
 
   test('builder 的产出逐键等于 fixture', () => {
-    const built = buildTriggerEnvelope(fixture!.input.entries, fixture!.input.actions)
+    const built = buildTriggerEnvelope(
+      fixture!.input.entries,
+      fixture!.input.actions,
+      fixture!.input.agent
+    )
     expect(built).toEqual(fixture!.envelope)
   })
 
   test('产出是对象，不是 JSON 字符串（pydantic 要 dict，发字符串 422）', () => {
-    const built = buildTriggerEnvelope(fixture!.input.entries, fixture!.input.actions)
+    const built = buildTriggerEnvelope(
+      fixture!.input.entries,
+      fixture!.input.actions,
+      fixture!.input.agent
+    )
     expect(typeof built).not.toBe('string')
     expect(typeof built).toBe('object')
+  })
+
+  // 0813 轮 3 #10 —— 模型覆盖三项进同一个 envelope。写侧已经由上面那条逐键相等覆盖；这里补
+  // **读回来还是同一份**（写 → 读的闭环，与 Python `parse_agent_overrides` 同源）。
+  test('模型覆盖三项写进去、读回来逐键相同', () => {
+    expect(fixture!.input.agent, 'fixture 缺 agent 覆盖块 —— 这三项就没有裁判了').toBeTruthy()
+    const built = buildTriggerEnvelope(
+      fixture!.input.entries,
+      fixture!.input.actions,
+      fixture!.input.agent
+    )
+    expect(parseAgentOverridesValue(built)).toEqual(fixture!.input.agent)
   })
 })

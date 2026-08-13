@@ -27,9 +27,16 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { toastSuccess } from '@shared/state/toast'
 
 import { MatterGlobalAgentModal } from './MatterGlobalAgentModal'
+import { MatterModelFields } from './MatterModelFields'
+import {
+  matterModelDraftFrom,
+  useMatterModelFields,
+  type MatterModelDraft
+} from './matterModelDraft'
 import { MatterTriggerEditor } from './MatterTriggerEditor'
 import {
   buildTriggerEnvelope,
+  parseAgentOverrides,
   parseMatterSchedule,
   parseMatterScheduleValue,
   parseRunActions,
@@ -44,13 +51,34 @@ import { effectiveContract, useMatterGlobalAgentDoc } from './useMatterGlobalAge
  * **只在 ≥1400px 渲染** —— 窗口小一点，全应用就再没有任何入口能改跟进方式（0812 dogfood
  * owner 报「无法切换跟进的方式」的根因）。模态挂在详情头的 Agent pill 上，与窗口宽度无关。
  *
- * 设计画了「模型」「授权级别」两个 select，**刻意不做**：授权是服务端强制的（固定工具
- * allowlist + 只放行读与提案），per-matter 也没有模型字段 —— 做成 UI 开关就是又造一个
- * 说谎的界面（同 `MatterGlobalAgentModal` 的判断）。改用「执行的 Agent」（换 profile ⇒
- * 换模型/人设）这条**真实存在**的路径承载同一诉求。
+ * 设计画的两个 select 分别落地成：
+ *   · **模型** —— 0813 dogfood 轮 3 反馈 #10 做了（owner：「仍然没有模型配置、effort 配置、
+ *     fallback 配置……高级里面也没有模型覆盖配置」）。此前只能靠换绑 profile 间接换模型，
+ *     而 profile 是「另一个 Agent 的人设 + 模型」，想只改模型就得凭空造一个 Agent。现在
+ *     高级区里直接给三项覆盖：模型 / 思考强度 / 备用模型，落进 `schedule_json` envelope 的
+ *     `agent` 块（零 DB 迁移，解析单源 `matterSchedule.ts` ↔ Python `triggers.py`）。
+ *   · **授权级别** —— 仍然**不做**：授权是服务端按工具 class 强制的（读全放行、一个写工具
+ *     都不给），per-matter 调不动，画出来就是假开关（同 `MatterGlobalAgentModal` 的判断）。
+ *
+ * 🔴 「跟随」这三档跟随的是什么，措辞必须与服务端解析链**逐层对得上**（权威 =
+ * `src/matters/run_spec.py`）：事项级覆盖 → 绑定的执行 Agent → 全局配置里的默认 → 系统全局
+ * 默认。0813 B10 之前中间那一层不存在，所以文案只写了「执行的 Agent / 全局模型」；补上那一层
+ * 之后文案也一并改 —— 配置面说的和消费端做的不一致，就是一张永不生效的合格证。
+ *
+ * 🔴 「思考强度」只在**选定了模型**之后可选，且该模型要有 reasoning 能力。不是保守，是
+ * 结构性的：档位阶梯按模型家族给（`effortOptionsForModel`），而对没有 reasoning 能力的模型
+ * 下发 effort 参数，openai / deepseek 协议会往 wire 上塞一个多余参数（16b 契约里写着这条）。
+ * 「跟随默认」时我们根本不知道最终跑的是哪个模型，也就无从判断 —— 与其发一个可能让整个 run
+ * 400 的参数，不如把「先选模型」这句话说出来。（同一条纪律的跨层版本在 Python 侧：全局那一档
+ * 只在最终跑的模型就是全局默认模型时才下发。）
  */
 
 const BUILTIN_PROFILE_VALUE = '__builtin__'
+
+/** 库里的 envelope → 三个 select 的草稿值（哨兵化）。打开模态与「重新载入」共用一份。 */
+function agentDraftFrom(scheduleJson: string | null | undefined): MatterModelDraft {
+  return matterModelDraftFrom(parseAgentOverrides(scheduleJson))
+}
 
 interface MatterAgentConfigModalProps {
   matter: Matter
@@ -82,6 +110,7 @@ export function MatterAgentConfigModal({
   const [triggerDraft, setTriggerDraft] = useState(() => parseTriggerEntries(matter.schedule_json))
   const [actionsDraft, setActionsDraft] = useState(() => parseRunActions(matter.schedule_json))
   const [profileId, setProfileId] = useState(matter.agent_profile_id ?? BUILTIN_PROFILE_VALUE)
+  const [agentDraft, setAgentDraft] = useState(() => agentDraftFrom(matter.schedule_json))
   const [instructions, setInstructions] = useState(matter.matter_instructions ?? '')
   const [advancedOpen, setAdvancedOpen] = useState(false)
   const [contractOpen, setContractOpen] = useState(false)
@@ -126,12 +155,22 @@ export function MatterAgentConfigModal({
 
   const profile = profiles.find((item) => item.id === matter.agent_profile_id)
   const dangling = Boolean(matter.agent_profile_id) && !profile
+
+  // 模型三项的控件与派生判定都在共用的 `MatterModelFields` 里 —— 全局配置面用的是同一份
+  // （那里是「默认」、这里是「覆盖」，差别只在文案）。🔴 尤其是 effort 那道「不适用就不写
+  // 这个键」的门：两个面各写一遍，早晚有一边漏掉，而症状是整轮 run 400。
+  const modelFields = useMatterModelFields(agentDraft)
+  const agentOverrides = modelFields.block
+
   // 设计 `matter-agent.jsx:365` 的 `ovCount`：折叠起来时也要看得见「这件事有几处覆盖了全局」。
-  // 本仓的覆盖面只有两处真实存在（换执行 Agent / 追加专属指令）——设计画的模型与授权级别两个
-  // select 仍不做（模型跟着 profile 走，授权是服务端按 class 强制的，做成开关就是假 UI）。
+  // 覆盖面 = 换执行 Agent / 追加专属指令 / 模型三项（0813 #10）。授权级别仍不做（服务端按
+  // class 强制，per-matter 调不动，做成开关就是假 UI）。
   const overrideCount =
-    (profileId === BUILTIN_PROFILE_VALUE ? 0 : 1) + (instructions.trim() ? 1 : 0)
+    (profileId === BUILTIN_PROFILE_VALUE ? 0 : 1) +
+    (instructions.trim() ? 1 : 0) +
+    modelFields.configuredCount
   const latest = runs.find((run) => run.completed_at != null)
+
   // 「计划」跟着草稿走（改一下就能看到句子变），「下次」只认已保存的排程 —— 还没保存的
   // 草稿算不出一个真会发生的时刻，写出来就是承诺一件没安排的事。
   const draftSchedule = parseMatterScheduleValue(buildTriggerEnvelope(triggerDraft, actionsDraft))
@@ -176,6 +215,7 @@ export function MatterAgentConfigModal({
     setTriggerDraft(parseTriggerEntries(matter.schedule_json))
     setActionsDraft(parseRunActions(matter.schedule_json))
     setProfileId(matter.agent_profile_id ?? BUILTIN_PROFILE_VALUE)
+    setAgentDraft(agentDraftFrom(matter.schedule_json))
     setInstructions(matter.matter_instructions ?? '')
     setSaveError(null)
   }
@@ -191,7 +231,7 @@ export function MatterAgentConfigModal({
         agent_enabled: agentOn,
         agent_profile_id: profileId === BUILTIN_PROFILE_VALUE ? null : profileId,
         matter_instructions: instructions.trim() ? instructions : null,
-        schedule_json: buildTriggerEnvelope(triggerDraft, actionsDraft)
+        schedule_json: buildTriggerEnvelope(triggerDraft, actionsDraft, agentOverrides)
       },
       baseVersion
     ).then(
@@ -359,6 +399,22 @@ export function MatterAgentConfigModal({
                   {t('matters.agentBinding.empty')}
                 </p>
               ) : null}
+
+              {/* 模型三项（0813 dogfood 轮 3 #10）。控件与全局配置面共用 `MatterModelFields`
+                  —— 那边配的是**默认**、这里配的是**覆盖**，跟随时落到那一层。「跟随」这一档
+                  必须存在：覆盖面得能说"没配过"（composer 那个图标钮表达不了）。 */}
+              <MatterModelFields
+                idPrefix="matter-agent"
+                draft={agentDraft}
+                onDraftChange={setAgentDraft}
+                followKeys={{
+                  model: 'matters.agentConfig.modelFollow',
+                  effort: 'matters.agentConfig.effortFollow',
+                  fallback: 'matters.agentConfig.fallbackFollow'
+                }}
+                fallbackHintKey="matters.agentConfig.fallbackHint"
+              />
+
               <label
                 className="mt-3 block text-meta font-medium text-ink-fg-1"
                 htmlFor="matter-agent-instructions"

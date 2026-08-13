@@ -16,7 +16,7 @@
 //   1. **不接 stall 看门狗**（stallLevel 恒 0）。`deriveTurnStage` 里 stall 压过一切 running 子态，
 //      于是一个跑了 20s 的工具会把「正在联网搜索」盖成「仍在等待响应」—— 而运行条自己带回合秒表，
 //      「还要等多久」这个问题它逐秒在答，代价却是丢掉更有信息量的工具名。消息流里的
-//      `TurnStatusLine`（本包一个字节没动）继续负责 stall 升级。
+//      `TurnPresence`（本包一个字节没动）继续负责 stall 升级。
 //   2. 末条消息还不是 assistant 时（用户刚发出、assistant 消息尚未落地）用 thread 级 `isRunning`
 //      兜底成 running/空 parts → `connecting`，而不是让运行条在回合最开始那一瞬闪一下。
 

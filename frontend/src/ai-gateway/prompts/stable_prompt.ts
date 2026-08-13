@@ -84,6 +84,12 @@ export interface ConnectorCatalogEntry {
   writeToolCount: number
   /** Admitted tools with crud 'update' (edit tier). */
   updateToolCount: number
+  /** 0813 batch P — the subset of readToolCount the matter_followup venue registers (per-tool
+   *  tier 'auto' + non-destructive; matterVenueAdmitsEntry in tools/connector.ts). Consumed ONLY
+   *  by connectorCatalogForRun's matter branch so a follow-up run's prompt never advertises the
+   *  ask/destructive reads its factory skipped. Optional: absent (a hand-built row) fail-closes
+   *  to 0 there — never to the wider readToolCount. The prompt renderer ignores it. */
+  matterReadToolCount?: number
 }
 
 /** Render the connector catalog block: a one-line summary per connector — NOT one per tool (each

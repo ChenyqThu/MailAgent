@@ -34,6 +34,8 @@ import { SearchConfigDrawer } from './drawers/SearchConfigDrawer'
 import { PreprocessConfigDrawer } from './drawers/PreprocessConfigDrawer'
 import { ProjectProgressConfigDrawer } from './drawers/ProjectProgressConfigDrawer'
 import { AgentAvatar } from './AgentAvatar'
+import { useAvatarHoverShowcase } from './useAvatarHoverShowcase'
+import { MainAssistantCard } from './MainAssistantCard'
 import { coerceRule, isScheduleValue } from './schedule'
 import { sentenceText } from './schedule/sentence'
 import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
@@ -72,6 +74,8 @@ function AgentCard({
   onOpenReports: () => void
 }): React.ReactElement {
   const { t, i18n } = useTranslation()
+  // 0813 dogfood：hover 卡片 → 头像随机换动作巡演。
+  const showcase = useAvatarHoverShowcase()
   const { save } = useSetConfig()
   const { run, isRunning } = useRunNow()
   // codex MEDIUM-2 — 该 agent 的最近一份报告：走 agentId 过滤 + limit:1 的按 agent 查询（不再从
@@ -89,6 +93,7 @@ function AgentCard({
 
   return (
     <div
+      {...showcase.hoverProps}
       style={{
         borderRadius: 14,
         // 主题 v2 round 5 — 卡片实底转半透 (玻璃下死色块)。
@@ -99,7 +104,14 @@ function AgentCard({
     >
       {/* head */}
       <div className="flex items-center" style={{ gap: 13, padding: '18px 20px 16px' }}>
-        <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
+        <AgentAvatar
+          agentId={cfg.id}
+          config={cfg.avatar}
+          size={42}
+          title={cfg.title}
+          state={showcase.state}
+          animated={showcase.animated}
+        />
         <div style={{ flex: 1, minWidth: 0 }}>
           <div className="flex items-center" style={{ gap: 9 }}>
             <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
@@ -445,6 +457,8 @@ function CustomAgentCard({
   onConfig: () => void
 }): React.ReactElement {
   const { t, i18n } = useTranslation()
+  // 0813 dogfood：hover 卡片 → 头像随机换动作巡演。
+  const showcase = useAvatarHoverShowcase()
   const { save } = useSetConfig()
   // 最近一次 run 的状态徽标（listRuns 读失败/无 run → 不显徽标）。
   const { runs } = useAgentRuns(cfg.id)
@@ -499,6 +513,7 @@ function CustomAgentCard({
         }
       }}
       className="flex items-center"
+      {...showcase.hoverProps}
       style={{
         width: '100%',
         textAlign: 'left',
@@ -510,7 +525,14 @@ function CustomAgentCard({
         border: '1px solid rgb(var(--ink-border))'
       }}
     >
-      <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
+      <AgentAvatar
+        agentId={cfg.id}
+        config={cfg.avatar}
+        size={42}
+        title={cfg.title}
+        state={showcase.state}
+        animated={showcase.animated}
+      />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="flex items-center" style={{ gap: 9 }}>
           <h3
@@ -569,6 +591,8 @@ function SearchAgentCard({
   onConfig: () => void
 }): React.ReactElement {
   const { t } = useTranslation()
+  // 0813 dogfood：hover 卡片 → 头像随机换动作巡演。
+  const showcase = useAvatarHoverShowcase()
   const { save } = useSetConfig()
   const toggle = (v: boolean): void => {
     void save(cfg.id, { enabled: v })
@@ -599,10 +623,23 @@ function SearchAgentCard({
         border: '1px solid rgb(var(--ink-border))',
         transition: 'border-color 120ms'
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)')}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--ink-border))')}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)'
+        showcase.hoverProps.onMouseEnter()
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'rgb(var(--ink-border))'
+        showcase.hoverProps.onMouseLeave()
+      }}
     >
-      <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
+      <AgentAvatar
+        agentId={cfg.id}
+        config={cfg.avatar}
+        size={42}
+        title={cfg.title}
+        state={showcase.state}
+        animated={showcase.animated}
+      />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="flex items-center" style={{ gap: 9 }}>
           <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
@@ -674,6 +711,8 @@ function PreprocessAgentCard({
   onToggle?: (v: boolean) => void
 }): React.ReactElement {
   const { t } = useTranslation()
+  // 0813 dogfood：hover 卡片 → 头像随机换动作巡演。
+  const showcase = useAvatarHoverShowcase()
   return (
     <div
       role="button"
@@ -700,10 +739,23 @@ function PreprocessAgentCard({
         border: '1px solid rgb(var(--ink-border))',
         transition: 'border-color 120ms'
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)')}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--ink-border))')}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)'
+        showcase.hoverProps.onMouseEnter()
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'rgb(var(--ink-border))'
+        showcase.hoverProps.onMouseLeave()
+      }}
     >
-      <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
+      <AgentAvatar
+        agentId={cfg.id}
+        config={cfg.avatar}
+        size={42}
+        title={cfg.title}
+        state={showcase.state}
+        animated={showcase.animated}
+      />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="flex items-center" style={{ gap: 9 }}>
           <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
@@ -778,6 +830,8 @@ function ProjectProgressAgentCard({
   onToggle?: (v: boolean) => void
 }): React.ReactElement {
   const { t } = useTranslation()
+  // 0813 dogfood：hover 卡片 → 头像随机换动作巡演。
+  const showcase = useAvatarHoverShowcase()
   const rowEnabled = cfg.enabled
   // 徽标三态：总闸未开（中性）→ 总闸开且行启用（绿）→ 总闸开但行停用（灰）。
   const badgeLabel = !masterEnabled
@@ -813,10 +867,23 @@ function ProjectProgressAgentCard({
         border: '1px solid rgb(var(--ink-border))',
         transition: 'border-color 120ms'
       }}
-      onMouseEnter={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)')}
-      onMouseLeave={(e) => (e.currentTarget.style.borderColor = 'rgb(var(--ink-border))')}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)'
+        showcase.hoverProps.onMouseEnter()
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'rgb(var(--ink-border))'
+        showcase.hoverProps.onMouseLeave()
+      }}
     >
-      <AgentAvatar agentId={cfg.id} config={cfg.avatar} size={42} title={cfg.title} />
+      <AgentAvatar
+        agentId={cfg.id}
+        config={cfg.avatar}
+        size={42}
+        title={cfg.title}
+        state={showcase.state}
+        animated={showcase.animated}
+      />
       <div style={{ flex: 1, minWidth: 0 }}>
         <div className="flex items-center" style={{ gap: 9 }}>
           <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
@@ -948,13 +1015,29 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   async function importAgent(body: Record<string, unknown>): Promise<void> {
     try {
       const response = await fetch(`${resolveApiBaseUrl()}/report-agents/import`, {
-        method: 'POST', credentials: 'include', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body)
       })
-      const envelope = (await response.json()) as { data?: { agent?: ReportAgentConfig; unmet_dependencies?: Array<{ type: string; ref: string }> }; error?: { message?: string } }
-      if (!response.ok || !envelope.data?.agent) throw new Error(envelope.error?.message ?? response.statusText)
+      const envelope = (await response.json()) as {
+        data?: {
+          agent?: ReportAgentConfig
+          unmet_dependencies?: Array<{ type: string; ref: string }>
+        }
+        error?: { message?: string }
+      }
+      if (!response.ok || !envelope.data?.agent)
+        throw new Error(envelope.error?.message ?? response.statusText)
       await queryClient.invalidateQueries({ queryKey: ['report', 'config'] })
       const unmet = envelope.data.unmet_dependencies ?? []
-      setImportNotice(unmet.length ? t('agents.custom.unmetDependencies', { items: unmet.map((item) => `${item.type}: ${item.ref}`).join(', ') }) : null)
+      setImportNotice(
+        unmet.length
+          ? t('agents.custom.unmetDependencies', {
+              items: unmet.map((item) => `${item.type}: ${item.ref}`).join(', ')
+            })
+          : null
+      )
       setCustomDrawer({ mode: 'edit', id: envelope.data.agent.id })
     } catch (error) {
       toastError(t('agents.custom.import'), errorMessage(error))
@@ -1108,6 +1191,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
               {t('agents.subtitle')}
             </p>
           </div>
+          {/* 0813 主 Agent 配置卡：默认助手的名字/头像终于有配置面（身份文档指路见卡内）。 */}
+          <MainAssistantCard />
           {/* Lane 2 #10 — env 总闸行（OR 语义，见 ReportMasterRow 注释）。 */}
           <ReportMasterRow />
           {reportAgents.length > 0 ? (
@@ -1281,16 +1366,40 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
             enabled={customAgentsEnabled}
             onClick={() => setCustomDrawer({ mode: 'create' })}
           />
-          {customAgentsEnabled && agentPluginsEnabled ? <div className="flex flex-wrap items-center gap-2">
-            <input ref={importRef} type="file" accept="application/json,.json" className="hidden" onChange={(event) => {
-              const file = event.target.files?.[0]
-              if (file) void importAgentFile(file)
-            }} />
-            <button type="button" className="btn-ghost" onClick={() => importRef.current?.click()}>{t('agents.custom.import')}</button>
-            <button type="button" className="btn-ghost" onClick={() => void importAgent({ template: 'meeting_prep' })}>{t('agents.custom.meetingPrepTemplate')}</button>
-            {!calendarTriggerEnabled ? <span className="text-meta text-warn">{t('agents.custom.calendarRequired')}</span> : null}
-            {importNotice ? <div className="w-full text-meta text-warn">{importNotice}</div> : null}
-          </div> : null}
+          {customAgentsEnabled && agentPluginsEnabled ? (
+            <div className="flex flex-wrap items-center gap-2">
+              <input
+                ref={importRef}
+                type="file"
+                accept="application/json,.json"
+                className="hidden"
+                onChange={(event) => {
+                  const file = event.target.files?.[0]
+                  if (file) void importAgentFile(file)
+                }}
+              />
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => importRef.current?.click()}
+              >
+                {t('agents.custom.import')}
+              </button>
+              <button
+                type="button"
+                className="btn-ghost"
+                onClick={() => void importAgent({ template: 'meeting_prep' })}
+              >
+                {t('agents.custom.meetingPrepTemplate')}
+              </button>
+              {!calendarTriggerEnabled ? (
+                <span className="text-meta text-warn">{t('agents.custom.calendarRequired')}</span>
+              ) : null}
+              {importNotice ? (
+                <div className="w-full text-meta text-warn">{importNotice}</div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </div>
       {/* 始终挂载，由 open 驱动进/退场动画（退场播完才卸载，见 useExitAnimation）。 */}

@@ -61,6 +61,39 @@ def _normalize_avatar_image(avatar: Dict[str, Any]) -> Dict[str, Any]:
     return {"type": "image", "data": data}
 
 
+# ─── bot 头像词表（08-12 living-bot-avatar）──────────────────────────────────
+# avatar_json 第三种 kind：{"type":"bot","shape":…,"color":…}（另两种：type='image' 上传态、
+# 无 type 键 = legacy oreo 生成式）。词表以这里为跨语言 canonical —— 前端
+# frontend/src/shared/bot-avatar/{shapes,colors}.ts 手抄同一份驱动编辑器网格与渲染，
+# 闸 = tests/config/test_bot_avatar_vocab_parity.py（任一侧漂移/改名/重排必红）。
+# v2（avatar-lab 引擎换代）：8 种 3D 参数曲面原语。v1 8 形（blob/squircle/egg/wedge/
+# hex/cloud/teardrop/capsule）由前端 shapes.ts LEGACY_BOT_SHAPE_MAP 读侧双射换脸，
+# 写侧（本白名单 + 编辑器）只认 v2 词表，存量行不迁移。
+BOT_AVATAR_SHAPES = (
+    "sphere",
+    "capsule",
+    "cylinder",
+    "cone",
+    "cube",
+    "diamond",
+    "mickey",
+    "cursor",
+)
+BOT_AVATAR_COLORS = (
+    "white",
+    "brown",
+    "red",
+    "orange",
+    "yellow",
+    "green",
+    "teal",
+    "blue",
+    "purple",
+    "pink",
+    "gray",
+)
+
+
 def parse_counts(raw: Any) -> Dict[str, Any]:
     """counts_json → dict（解析失败/非 dict → {}）。"""
     if not raw:
@@ -357,6 +390,24 @@ def config_patch_to_db(raw: Dict[str, Any]) -> Dict[str, Any]:
             # （零迁移），下面那支逐字不动。
             db_patch["avatar_json"] = json.dumps(
                 _normalize_avatar_image(avatar), ensure_ascii=False
+            )
+        elif isinstance(avatar, dict) and avatar.get("type") == "bot":
+            # bot 生成式（灵动头像，08-12）。排序理由：三种 kind 的判别都压在 `type` 键上
+            # （'image' / 'bot' / 无 type = legacy oreo），而最后的 legacy 支是
+            # `isinstance(dict)` 兜底 —— bot 放它后面结构上不可达（会被按 oreo 词表误拒）；
+            # 放 image 前面又打乱「显式 type 逐个判、无 type 落兜底」的读法。存量两支逐字不动。
+            shape = avatar.get("shape")
+            color = avatar.get("color")
+            if shape not in BOT_AVATAR_SHAPES:
+                raise ValueError("avatar.shape must be a supported bot shape")
+            if color not in BOT_AVATAR_COLORS:
+                raise ValueError("avatar.color must be a supported bot color")
+            if set(avatar) != {"type", "shape", "color"}:
+                # 与 image 支的「静默剥多余键」不同：bot 的生产者只有本仓前端与 P9 导入闸，
+                # 多余键只可能是词表演进期的形状漂移 —— 宽容剥键会把它掩埋成静默丢字段。
+                raise ValueError("avatar with type=bot accepts only keys: type, shape, color")
+            db_patch["avatar_json"] = json.dumps(
+                {"type": "bot", "shape": shape, "color": color}, ensure_ascii=False
             )
         elif isinstance(avatar, dict):
             shape = avatar.get("shape")

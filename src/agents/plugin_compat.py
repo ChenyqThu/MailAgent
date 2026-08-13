@@ -16,6 +16,8 @@ from src.reports import wire
 def export_custom_agent(row: dict[str, Any]) -> dict[str, Any]:
     resolved = wire.resolve_agent(row)
     avatar = resolved.get("avatar")
+    # 上传图不出包（体积 + 隐私）；生成式配置原样导出 —— legacy oreo 与 type='bot'（08-12）
+    # 都只是词表引用，导入端零依赖即可复现外观，故判别收窄在 image 一侧、其余透传。
     if isinstance(avatar, dict) and avatar.get("type") == "image":
         avatar = None
     return {

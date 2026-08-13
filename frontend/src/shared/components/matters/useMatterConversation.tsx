@@ -94,6 +94,11 @@ export interface UseMatterConversationInput {
   sessionMatterUnresolved?: boolean
   /** 这场对话还是空的（seed 只在空会话上采纳，与邮件 chip 同门）。 */
   chatIsEmpty: boolean
+  /** 0813 dogfood 轮 3 #6 —— 「事项对话 / 立即跟进」每点一次自增（store 的
+   *  `matterConversationEpoch`）。它是**一次新的用户动作**的标记：会显式覆盖此前对这件事的手动
+   *  ×移除（同 codex #3 给邮件 chip 的处置）。少了它，用户 ×掉过这件事的 chip 之后再点「立即
+   *  跟进」，chip 与锚点永远不会回来 —— 而自动发送要等的正是那个锚点。 */
+  seedEpoch?: number
   /** 线程重置 epoch —— 换会话 / 新会话时复位撤销回执。 */
   navEpoch: number
   /** 当前会话 id（进快照的 scope；新对话为 null）。 */
@@ -139,7 +144,15 @@ export function useMatterConversation(
   const removedRef = useRef<number | null>(null)
   const sessionMatterId = sessionMatter?.id ?? null
   const seedId = seed?.id ?? null
+  // 0813 #6 —— 「又点了一次」的标记（见 seedEpoch 的注释）。ref 记上一次见到的值，effect 里比对。
+  const seedEpoch = input.seedEpoch ?? 0
+  const seenEpochRef = useRef(seedEpoch)
   useEffect(() => {
+    // 新的一次显式唤出 → 清掉手动移除记忆（这次点击就是"我要带上这件事"）。
+    if (seenEpochRef.current !== seedEpoch) {
+      seenEpochRef.current = seedEpoch
+      removedRef.current = null
+    }
     const next = sessionMatter ?? seed
     if (next === null) {
       // 既没有会话锚点也没有种子 = 这不是事项对话（FAB 唤出 / 选了普通会话）→ 收掉 chip。
@@ -153,8 +166,9 @@ export function useMatterConversation(
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setChipTarget((cur) => (cur && cur.id === next.id ? cur : next))
     // sessionMatter / seed 的对象身份每次 render 都可能变，按 id 订阅。
+    // seedEpoch 入依赖：同一件事再点一次（id 没变）也必须重跑，否则清掉的移除记忆没人消费。
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessionMatterId, seedId, chatIsEmpty])
+  }, [sessionMatterId, seedId, chatIsEmpty, seedEpoch])
 
   const onRemoveChip = useCallback((): void => {
     setChipTarget((cur) => {
@@ -192,8 +206,8 @@ export function useMatterConversation(
     [thinkingEnabled]
   )
   const snapshotEnabled = enabled && chipTarget !== null
-  // D15 —— `excludedResourceIds` 不再传：composer 上的置顶资料 chip（G-21）连同它唯一的
-  // 移除入口一起退役，恒空集 = 快照照旧带上全部置顶摘录（注入面零变化）。
+  // D15 —— composer 上的置顶资料 chip（G-21）连同它唯一的移除入口一起退役，快照于是照旧
+  // 带上全部置顶摘录（注入面零变化；hook 侧那个恒空的剔除参数也已一并删除）。
   const {
     snapshot,
     chips,
@@ -263,8 +277,8 @@ export function useMatterConversation(
   // owner 判「把全部上下文显示成一堆附件，加载感很差」：置顶资料多的事项一进对话就是一排
   // 长得像附件的方块，且它们要等 context-snapshot 回来才逐个冒出来。
   //
-  // 🔴 只收**显示层**：注入模型的那份快照一个字节没变（`excludedResourceIds` 随移除入口
-  // 一起退役 ⇒ 恒空集 ⇒ 置顶摘录照旧全带）。代价是「本轮临时排除某份置顶资料」这个能力
+  // 🔴 只收**显示层**：注入模型的那份快照一个字节没变（剔除入口没了 ⇒ 置顶摘录照旧
+  // 全带，hook 侧那个恒空的剔除参数也已删掉）。代价是「本轮临时排除某份置顶资料」这个能力
   // 没有了 —— owner 明确要单 chip，排除入口若要回来该走事项页的置顶开关，不是 composer。
   const chip = chipTarget ? (
     <ConversationContextChip

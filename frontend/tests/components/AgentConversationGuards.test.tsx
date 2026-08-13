@@ -48,7 +48,11 @@ const { stableMailApi, capture } = vi.hoisted(() => ({
   capture: {
     composerControls: null as ChatComposerControls | null,
     promptRequest: null as ChatPromptRequest | null,
-    snapshotEnabled: null as boolean | null
+    snapshotEnabled: null as boolean | null,
+    /** 每一次渲染的「这一帧派发了什么 / 这一帧 chip 在不在」配对样本（0813 #6 的判据）。
+     *  AgentThread 的 mock 在 ChatPromptDispatcher 之后渲染（同一次 pass、JSX 顺序在后），
+     *  所以它记下的 request 就是**同一帧**那一份。 */
+    samples: [] as Array<{ request: ChatPromptRequest | null; chip: boolean }>
   }
 }))
 
@@ -78,12 +82,15 @@ vi.mock('@shared/components/agents/AgentThread', () => ({
   }: {
     contextChip?: React.ReactNode
     runStatusSlot?: React.ReactNode
-  }) => (
-    <div data-testid="thread">
-      <div data-testid="context-chips">{contextChip}</div>
-      <div data-testid="run-status">{runStatusSlot}</div>
-    </div>
-  )
+  }) => {
+    capture.samples.push({ request: capture.promptRequest, chip: contextChip != null })
+    return (
+      <div data-testid="thread">
+        <div data-testid="context-chips">{contextChip}</div>
+        <div data-testid="run-status">{runStatusSlot}</div>
+      </div>
+    )
+  }
 }))
 vi.mock('@shared/assistant/components/ChatPromptDispatcher', () => ({
   ChatPromptDispatcher: ({ request }: { request: ChatPromptRequest | null }) => {
@@ -123,7 +130,9 @@ vi.mock('@shared/components/matters/hooks', () => ({
 }))
 
 const { AgentConversation } = await import('@shared/components/agents/AgentConversation')
-const { useAIChatPanel, startChatWithPrompt } = await import('@shared/state/ai-chat-panel')
+const { useAIChatPanel, startChatWithPrompt, startMatterChatWithPrompt } = await import(
+  '@shared/state/ai-chat-panel'
+)
 
 beforeAll(async () => {
   await i18n.changeLanguage('zh-CN')
@@ -169,7 +178,10 @@ function matterItem(over: Partial<ChatSessionListItem>): ChatSession {
 function mount(
   chat: UseGeneralChatReturn,
   activeItem: ChatSession | null,
-  props: { initialMentionEmailId?: number } = {}
+  props: {
+    initialMentionEmailId?: number
+    initialMatterTarget?: { id: number; publicId: string; title: string }
+  } = {}
 ): ReturnType<typeof render> {
   const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   return render(
@@ -184,6 +196,7 @@ beforeEach(() => {
   capture.composerControls = null
   capture.promptRequest = null
   capture.snapshotEnabled = null
+  capture.samples.length = 0
   useAIChatPanel.setState({ pendingPrompt: null, matterTarget: null, matterConversationEpoch: 0 })
   // web 构建目标 → gatewayBaseUrl='' → /health 探针启用；让它健康，runtime 分支才走得到。
   vi.stubEnv('VITE_BUILD_TARGET', 'web')
@@ -267,5 +280,69 @@ describe('🔴 #3 待发指令不许悬着', () => {
     await waitFor(() => expect(capture.promptRequest).not.toBeNull())
     // 关键：不是 null（挂着等一枚永不出现的 chip），而是被判定成只预填、交给用户。
     expect(capture.promptRequest).toMatchObject({ text: '创建事项', prefillOnly: true })
+  })
+})
+
+// 0813 dogfood 轮 3 #6 —— 「立即跟进」= 唤出即自动发送，且那场对话真的挂在这件事上。
+//
+// 病根在轮 2 之前是 dock 的异步「找这件事最近一次会话」把刚发出的一轮冲掉（见
+// matterChatNewSession.test.tsx）。这里钉的是剩下那一半：**锚点的时序**。懒建会话
+// （onEnsureSession）读的是事项锚点，而锚点来自 chip，chip 又是父组件 effect 下一帧才 seed 的；
+// 不等就自动发，第一轮会把会话建成 `anchor_type='general'` —— owner 要的「也好有个记录」那份
+// 记录就不在这件事名下。
+describe('🔴 #6 「立即跟进」的自动发送与锚点时序', () => {
+  const target = { id: 4242, publicId: 'MAT-0042', title: 'Vendor launch' }
+
+  /** 🔴 必须照 dock 的真实接线来：`initialMatterTarget` 是**从 store 读的**，于是它与
+   *  `pendingPrompt` 在同一次 store 更新里一起出现 —— 这正是时序 bug 的现场（那一帧 chip 还没
+   *  seed）。测试里若把 target 当静态 prop 先挂上去，chip 早就在了，闸位就永远测不到。 */
+  function MatterDockHost(): React.JSX.Element {
+    const matterTarget = useAIChatPanel((s) => s.matterTarget)
+    return (
+      <AgentConversation
+        chat={fakeChat()}
+        activeItem={null}
+        initialMatterTarget={matterTarget ?? undefined}
+      />
+    )
+  }
+
+  function mountDock(): void {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <MatterDockHost />
+      </QueryClientProvider>
+    )
+  }
+
+  test('自动发送（prefillOnly=false），且**从没有**在锚点缺席的那一帧派发出去', async () => {
+    mountDock()
+    startMatterChatWithPrompt(target, '帮我跟进这件事（MAT-0042 · Vendor launch）')
+
+    await waitFor(() => expect(capture.promptRequest).not.toBeNull())
+    // ① 自动发送：不是「只预填等用户回车」。
+    expect(capture.promptRequest).toMatchObject({ prefillOnly: false })
+    // ② 🔴 每一帧的配对样本：只要这一帧有待派发的指令，事项 chip（= 锚点）就必须已经在场。
+    const dispatched = capture.samples.filter((s) => s.request !== null)
+    expect(dispatched.length).toBeGreaterThan(0)
+    expect(dispatched.every((s) => s.chip)).toBe(true)
+    expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy()
+  })
+
+  test('× 掉这件事的 chip 之后再点「立即跟进」→ chip 重建、指令照样派发（不悬着）', async () => {
+    mountDock()
+    // 先用一次普通「事项对话」把 chip 立起来（不带指令）。
+    useAIChatPanel.getState().openMatterChat(target)
+    await waitFor(() => expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: i18n.t('matters.chat.removeContext') }))
+    await waitFor(() => expect(screen.queryByText('MAT-0042 · Vendor launch')).toBeNull())
+
+    // 又点了一次 = 一次新的用户动作（epoch 自增），显式覆盖刚才那次手动移除。
+    startMatterChatWithPrompt(target, '帮我跟进这件事（MAT-0042 · Vendor launch）')
+
+    await waitFor(() => expect(capture.promptRequest).not.toBeNull())
+    expect(capture.promptRequest).toMatchObject({ prefillOnly: false })
+    expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy()
   })
 })

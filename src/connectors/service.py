@@ -249,6 +249,21 @@ def resolve_caller_ceiling(
     return ceiling
 
 
+def is_matter_followup_caller(caller: Optional[Mapping[str, Any]]) -> bool:
+    """这个 ``caller`` 信封是不是 matter_followup 场地的调用（0813 批 P）。
+
+    HTTP invoke 路径据此给 ``invoke_connector_tool`` 传 ``deny_ask_mode=True`` +
+    ``deny_destructive=True`` —— 跟进 run 的 connector 面 = per-tool ``auto`` 档只读非破坏
+    （镜像邮件预处理的 ``only_auto_tools`` + ``deny_ask_mode`` 双道；preprocess 是工厂
+    调用面自己传 True，这里是 HTTP 面可复用的单源判定）。owner-present（审批在 gateway 侧）
+    与 headless custom agent（grant 内免卡、ask/auto 无差别是既有语义）恒 False，字节不变。
+    形状不校验（宽容 False）：非法 caller 由 ``resolve_caller_ceiling`` 先行 400。
+    """
+    if not isinstance(caller, Mapping):
+        return False
+    return caller.get("context_mode") == "matter_followup"
+
+
 async def invoke_connector_tool(
     connector_id: str,
     tool_name: str,
@@ -256,6 +271,7 @@ async def invoke_connector_tool(
     *,
     ceiling: Optional[str] = None,
     deny_ask_mode: bool = False,
+    deny_destructive: bool = False,
 ) -> dict[str, Any]:
     """闸序 + 远端调用（HTTP invoke 端点与 Python LLM 工厂的**共用**执行路径）。
 
@@ -267,9 +283,16 @@ async def invoke_connector_tool(
     ``ConnectorError`` 原样上抛（各调用面自行映射 HTTP 语义 or 回灌给模型）。
 
     ``deny_ask_mode``（08-05 场地一放开的配套）：无人值守且**没有审批链宿主**的调用面
-    （邮件预处理工厂）传 True——该场地 ``ask`` 档的忠实含义是「不可用」（无人可点头），
-    这里是工厂「不注册 ask 工具」之外**判定与执行同侧**的第二道。owner-present（manual /
-    im，审批在 gateway 侧）与 headless custom agent（grant 内免卡是既有语义）恒传 False。
+    （邮件预处理工厂 + 0813 起 matter_followup 的 HTTP invoke，见
+    ``is_matter_followup_caller``）传 True——该场地 ``ask`` 档的忠实含义是「不可用」
+    （无人可点头），这里是工厂「不注册 ask 工具」之外**判定与执行同侧**的第二道。
+    owner-present（manual / im，审批在 gateway 侧）与 headless custom agent（grant 内免卡
+    是既有语义）恒传 False。
+
+    ``deny_destructive``（0813 批 P，matter_followup 专用）：该场地的工具面承诺「只读非
+    破坏」；``derive_crud_type`` 裁决③ 已让 read+destructive 在 sync 期结构性不可能，这里
+    是不依赖那个远处不变量的同侧第二道（手改 DB 行也进不来）。preprocess **不传**（destructive
+    write 在 per-tool auto 档可用是 owner 知情拍板，master-plan §5 风险 4 留痕）。
     """
     from src.agent_config.store import (
         connector_tool_effective_mode,
@@ -327,6 +350,13 @@ async def invoke_connector_tool(
             f"tool {tool_name!r} is set to 'ask' (needs approval) — this unattended "
             "caller has no approval surface, so 'ask' behaves as unavailable here; set "
             "the tool to 'auto' in the Connectors console (sidebar → Connectors) to allow it",
+            http_status=409,
+        )
+    if deny_destructive and row.destructive:
+        raise ConnectorInvokeDenied(
+            "E_CONNECTOR_TOOL_DISABLED",
+            f"tool {tool_name!r} is marked destructive — this unattended caller never "
+            "runs destructive tools",
             http_status=409,
         )
 

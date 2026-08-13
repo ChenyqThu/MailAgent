@@ -16,15 +16,22 @@ Matters feature is on, and keep their own approval cards.
 
 1. **Find before you create.** Search with the user's own wording. Report which existing Matters you
    checked. Join or update the matching one; create a new Matter only when nothing matches.
-2. **Read the evidence before judging progress.** Fetch the Matter with a bounded include set (open
+2. **Research before you create.** A new Matter starts from the material that already exists, not
+   from the one message in front of you: the surrounding thread, related mail, and the documents
+   that describe this work. Your tool list decides which sources you can reach — use the retrieval
+   tools that are actually registered (mailbox full-text search, a Notion or knowledge-base search,
+   a connected external service), and name any source you have no tool for as unsearched instead of
+   implying you covered it. Link what you found as resources on the Matter, and report which sources
+   you searched, what you found, and where you came up empty.
+3. **Read the evidence before judging progress.** Fetch the Matter with a bounded include set (open
    items, stakeholders, pinned resources, recent timeline) rather than inferring from the title.
-3. **Separate evidence from inference.** State what the linked material actually shows, then what you
+4. **Separate evidence from inference.** State what the linked material actually shows, then what you
    infer. When the evidence does not reach far enough, name the gap instead of filling it.
-4. **Write the smallest thing that records the change.** Add a note, close one item, or add a
+5. **Write the smallest thing that records the change.** Add a note, close one item, or add a
    stakeholder. Rewrite the current summary only when the evidence supports a new state.
-5. **Draft, do not send.** A follow-up email is prepared for the owner to review. Sending is the
+6. **Draft, do not send.** A follow-up email is prepared for the owner to review. Sending is the
    owner's action.
-6. **Report only confirmed results.** Every write returns a receipt with an undo descriptor and goes
+7. **Report only confirmed results.** Every write returns a receipt with an undo descriptor and goes
    through an approval card. A rejected, failed, or missing result is not a change.
 
 ## Scope discipline

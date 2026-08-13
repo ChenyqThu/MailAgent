@@ -757,6 +757,7 @@ async def invoke_tool(
     from src.connectors.service import (
         ConnectorInvokeDenied,
         invoke_connector_tool,
+        is_matter_followup_caller,
         resolve_caller_ceiling,
     )
 
@@ -764,8 +765,17 @@ async def invoke_tool(
         ceiling = await run_in_threadpool(
             resolve_caller_ceiling, body.get("caller"), connector_id
         )
+        # 0813 批 P —— matter_followup 是无审批链宿主的无人值守场地：ask ≙ 不可用 +
+        # destructive 恒拒（gateway 注册期 matterVenueAdmitsEntry 是第一道，这里是
+        # 判定与执行同侧的第二道；其余调用面两个开关恒 False，字节不变）。
+        matter_venue = is_matter_followup_caller(body.get("caller"))
         result = await invoke_connector_tool(
-            connector_id, tool_name, body.get("arguments"), ceiling=ceiling
+            connector_id,
+            tool_name,
+            body.get("arguments"),
+            ceiling=ceiling,
+            deny_ask_mode=matter_venue,
+            deny_destructive=matter_venue,
         )
     except ConnectorInvokeDenied as e:
         raise APIError(e.code, str(e), http_status=e.http_status) from None

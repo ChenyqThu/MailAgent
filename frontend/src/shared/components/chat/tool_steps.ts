@@ -147,6 +147,12 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'matter_run_control',
   'matter_review_update',
   'matter_update_propose',
+  // matter (0813 轮 3 批 R — attention / run history / tags + the two disposal writes)
+  'matter_attention_list',
+  'matter_attention_triage',
+  'matter_runs_list',
+  'matter_tags_list',
+  'matter_suggestion_resolve',
   // notion
   'notion_agent_chat',
   // legacy (deleted engine, still present in persisted history)

@@ -1,18 +1,18 @@
 // Matters MVP P3 (lane ③) — the matter write tools' message-part card.
 //
-// ONE component for all 9 matter write tools, routing by phase — deliberately, because the same
+// ONE component for every matter write tool, routing by phase — deliberately, because the same
 // tool part passes through both surfaces of this feature:
 //
 //   pending / rejected / expired → SimpleApprovalCard (D7: identity-level approval is enough).
 //       🔴 Without a registered card these edit-tier writes fall through to the BUTTONLESS
 //       ToolTraceCard, which renders approval-paused as a permanent spinner — the v1.5.0 / G9
 //       islandless deadlock. matter_resource_mutate can force a card at any time (access_policy →
-//       allowed, adjudication #1), and per-tool prefs let an owner set any of the 9 to `ask`.
+//       allowed, adjudication #1), and per-tool prefs let an owner set any of them to `ask`.
 //   done + inside a Matter Chat panel → the write receipt (「已写入 · {写入描述}」 + 撤销), design 附录 C.
 //   everything else (done in普通 chat, authorized, error) → the generic ToolTraceCard, byte-identical
 //       to what these tools rendered before this card existed.
 //
-// 🔴 The 9 are GATEWAY_MATTER_WRITE_TOOL_NAMES (ai-gateway/tools/matters.ts) — the gateway's own
+// 🔴 The set is GATEWAY_MATTER_WRITE_TOOL_NAMES (ai-gateway/tools/matters.ts) — the gateway's own
 // write family. Three places mirror it: ComponentRegistry's toolNames (pinned by
 // ComponentRegistry.test.tsx), WRITE_LABELLED_TOOLS below, and matters.chat.writeLabels in both
 // locales. Adding a write tool means touching all three; missing the registry one is what left
@@ -41,7 +41,7 @@ import { deriveCardPhase } from '../_cardShell.lib'
 import { SimpleApprovalCard } from '../generic/SimpleApprovalCard'
 import { ToolTraceCard } from '../generic/ToolTraceCard'
 
-/** The 9 matter write tools that have a `matters.chat.writeLabels.<tool>` headline. Membership is
+/** The matter write tools that have a `matters.chat.writeLabels.<tool>` headline. Membership is
  *  checked (rather than blindly interpolating the tool name into the key) so an unregistered /
  *  renamed tool degrades to the undo label → generic 「已写入」, never to a raw i18n key on screen. */
 const WRITE_LABELLED_TOOLS = new Set([
@@ -53,7 +53,10 @@ const WRITE_LABELLED_TOOLS = new Set([
   'matter_relation_mutate',
   'matter_add_note',
   'matter_run_control',
-  'matter_review_update'
+  'matter_review_update',
+  // 0813 轮 3 批 R — the two disposal writes.
+  'matter_attention_triage',
+  'matter_suggestion_resolve'
 ])
 
 export function MatterWriteCard(props: ToolCallMessagePartProps): React.JSX.Element {

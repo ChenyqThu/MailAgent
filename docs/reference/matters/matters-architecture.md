@@ -36,7 +36,7 @@
 
 | class | 跟进 run | 说明 |
 |---|---|---|
-| `read` | ✅ **全部放行** | run 的全部意义就是发现**新**证据，所以它读整个库，不受事项已关联的资料范围限制 |
+| `read` | ✅ **全部放行** | run 的全部意义就是发现**新**证据，所以它读整个库，不受事项已关联的资料范围限制。connector 只读工具（运行时注册、class 同为 `read`）也走这条，但注册期另有场地档：per-tool `auto` 且非 destructive 才进（0813 批 P，见下方 connector 段） |
 | `artifact` | ⚠️ **只放行一个名字** | `MATTER_RUN_PROPOSE_TOOL`（`matter_update_propose`）。🔴 按名不按类 —— `report_write` 同属 artifact 但它是本地写，整类放行是个洞 |
 | `web` | ⚠️ 由 spec 的 `grantWeb` + owner 的三档共同决定 | 见 §1.2 |
 | `domain_write` / `connector_write` / `exec` / `capability_change` / `outbound` | ❌ 一律拒 | 🔴 **grant 与场地开关一概不查**：把事项绑到一个授了 `grant_exec` / connector 写权的 Agent Profile 上，也**永远**放不宽这张脸 —— profile 只贡献 model / persona（D2）|
@@ -59,6 +59,21 @@
 **实际拿得到的工具面 = 31 件**（说明书单源 `frontend/src/shared/lib/matterToolFace.ts`，
 按分组渲染在全局配置弹窗里）：28 件只读 + 1 件提案 artifact + 2 件网页（受三档约束），
 另加 connector 只读工具（`mcp__*`，运行时按已连接的家动态注册，不在任何静态清单里）。
+
+🔴 **connector 面的进入档（0813 批 P）= crud-read × per-tool `auto` × 非 destructive**
+（判据单源 `matterVenueAdmitsEntry`，`frontend/src/ai-gateway/tools/connector.ts` —— 注册与
+prompt catalog 的 `matterReadToolCount` 共用，防「宣传比工具面宽」）：`ask` 在这个无审批
+宿主的无人值守场地 ≙ **不注册**（镜像邮件预处理 `only_auto_tools` 先例，不是弹卡；普通
+headless custom agent 的「ask/auto 无差别、grant 内免卡」语义**字节不动**）、`off` 恒不注册、
+`destructive` 恒排除（`derive_crud_type` 裁决③ 已让 read+destructive 在 sync 期结构性不可能，
+场地不依赖那个远处不变量）。写类共三道：spec 只授 `'read'` 天花板（注册期 rank 过滤）→
+矩阵行拒 `connector_write` → 服务端 `resolve_caller_ceiling` 对该 venue **钉死 `'read'`**
+（不读任何 agent 行）；invoke 端点还给 matter caller 传 `deny_ask_mode` + `deny_destructive`
+（判定与执行同侧，单源 `is_matter_followup_caller`，`src/connectors/service.py`）。
+needs_reauth（status ≠ connected）与 orphan 工具行天然进不来（spec 的
+`connected_connector_ids` 与 manifest 拉取都只认 connected+enabled）；off-track
+（`row_is_off_track`）**有意不排除** —— 它只是换轨迁移提示、连接与授权仍健康，任何场地都
+不按它裁工具，排除它等于砍掉 owner 点名要的 Notion/Jira/Confluence 检索。
 
 🔴 read class 共 31 件，但有 **3 件结构上到不了**跟进 run，说明书**有意不列**（列了闸就红）：
 `suggest_followups`（另有 manual_chat 场地门）、`agent_catalog_list` / `agent_catalog_get`
@@ -136,8 +151,12 @@ v52 全局干系人库；v51 是邮件域的 `ingest_reason`，与事项无关�
 `tags_json` 里出现、但定义表没有的名字**不是孤儿** —— 读取时回退默认样式并照常可选可改；
 过滤掉它们会让存量标签变成「看不见但还挂在事项上」。
 
-**完成标志** `goal_checks_json`：`[{"t": str, "done": bool}]`。与 `description`（核心目标）
-同权限 —— **只有 `actor.kind == user` 能写**，Agent 只能建议。勾满只提示可以推进到「已完成」，
+**完成标志** `goal_checks_json`：`[{"t": str, "done": bool}]`。权限与 `description`（核心目标）
+完全同形（D7，0813 轮 3 微调）：**create 时 agent 可写**（gateway `matter_create` / REST create
+都收 `goal_checks` —— agent 建事项时就该把「怎样算做完」一起立起来），**创建之后仍 user-only**
+（`patch_matter` 对这两个字段的 actor 闸不动，agent patch → `E_INVALID_ARG`；gateway
+`matter_update` 的 patch schema 也不含它们），Agent 只能建议。两者都进 `context_snapshot`
+投影（跟进 run 与事项对话都看得见「怎样算做完」）。勾满只提示可以推进到「已完成」，
 **不自动改状态**：状态推进恒是用户的动作。
 
 ### 2.1 写并发：matter 级严格 CAS，子实体 bounded auto-rebase
@@ -184,6 +203,15 @@ reconcile 观察到判据翻转才落 `cleared_at`，之后同一事实再成立
 🔴 **`run_failed` / `context_gap` 豁免**（单源 `attention.py::EVENT_DRIVEN_ATTENTION_KINDS`）：
 它们是事件驱动型、没有清账循环，resolved 也豁免会把「同一 run 再次失败」永久静默。
 
+🔴 **抑制期内 severity 升级同样静默**（有意的衍生行为，不是漏洞）：抑制期里该 subject_key
+没有 open/snoozed 行，于是 reconcile 那条「新事实 severity 更高 → 提级 + 清
+`last_notified_at` 重新通知」的分支（只遍历 open/snoozed 行）根本够不着它，
+`_open_episode_in_conn` 也在建行之前就返回了 —— 即 owner 点过「解决」之后，同一判据从
+warn 恶化到 critical 也不会重新冒头，要等判据翻转（`cleared_at` 落）后再成立才开新
+episode（那时按新 severity 开）。这是「判据翻转前不再报」的**直接推论**：既然承诺了不再报，
+就不能留一条"变严重了就破例"的旁路 —— 否则逾期天数一跨阈值，被解决掉的信号就自己回来了。
+要立刻重新看见，路径是 owner 侧的重开（或让判据先翻转），不是让系统自作主张。
+
 ### 2.4 全局干系人库 `matter_contact`（v52）
 
 - **身份 = 归一 email**。无 email 的干系人**不入全局库**（`contact_id` 恒 NULL）：没有可靠
@@ -195,7 +223,14 @@ reconcile 观察到判据翻转才落 `cleared_at`，之后同一事实再成立
   **写穿**到该联系人的其它事项行 + 刷其搜索投影，🔴 不 bump 那些事项的 version、不发事件 ——
   这是联系人层的事实，不是那些事项的业务动作，撞别人的乐观锁才是 bug（有测试钉住）。
   已知取舍：patch 显式传 `display_name: null` 只清本行不清全局；「已在事项中」的重复 create
-  早退，不触发 contact 更新。
+  早退，不触发 contact 更新。update 改 email 时若没同时改名，用**本行既有**姓名 / 组织兜底
+  建新 contact（否则库里多出裸邮箱条目）；🔴 兜底只填**新建**那条的空位，不进 ON CONFLICT
+  分支 —— 改到别人已在库里的邮箱不许把那个人改名（`_upsert_contact` 的 `fallback_*` 参数）。
+- 🔴 **写穿是静默的**（有意）：`_propagate_contact_identity` 改其它事项的 stakeholder 行时
+  **不发事件、不 bump 那些事项的 version、时间线上不留痕**（只刷搜索投影）。代价写实：其它
+  事项的前端缓存**不会**被动失效，那边要等下一次 refetch 才看到新名字；且「谁把这人改名的」
+  在那些事项的时间线上查不到，只在改名发生的那个事项里有记录。这是为「不撞别人乐观锁」付的
+  价 —— 发事件就得 bump version，等于一次改名把所有相关事项的在途编辑全打成冲突。
 - 🔴 **关联索引有意不进 `MATTER_INDEX_DDLS`**：那组索引会在 v44–v50 各迁移块对老库整组重放，
   而 `contact_id` 要到 v52 ALTER 才存在 —— 放进组里会把老库的升级梯子当场炸掉
   （"no such column"）。改为独立常量 `MATTER_STAKEHOLDER_CONTACT_INDEX_DDL`，只在 v52 块
@@ -264,6 +299,40 @@ reconcile 观察到判据翻转才落 `cleared_at`，之后同一事实再成立
 每轮 task prompt 的拼装顺序（`run_spec.py`）：任务契约 → 本轮可做的动作（由 `schedule_json` 推）
 → 上下文快照 → 变更清单（watermark diff）→【补充指引】（profile persona + 事项级指引，套
 `PERSONA_PREFIX` 围栏）。
+
+### 4.0 事项级模型覆盖（model / effort / fallback）
+
+三项跟着 `schedule_json` 的 v2 envelope 走 —— 新增 `agent` 块，**零 DB 迁移**（与 `actions`
+同一条纪律：它们和触发方式同属「跟进规则」那一张卡、同一次 PATCH）。归一化单源 =
+`src/matters/triggers.py::normalize_agent_overrides`（写侧值域外**入库即拒**）/
+`parse_agent_overrides`（读侧宽容，认不出的字段丢掉、剩下的照用）。前端镜像
+`matterSchedule.ts`，形状由 `tests/fixtures/matter_trigger_envelope.json` 跨语言钉死。
+
+```json
+{"v":2,"triggers":[…],"actions":[…],
+ "agent":{"model":"default:claude-x","effort":"medium","fallback_models":["default:claude-y"]}}
+```
+
+- 三项都是**覆盖**：键缺席 = 跟随现状（model/fallback 跟绑定 profile、再跟全局默认）。
+  🔴 唯一例外 `fallback_models: []` = **显式不设兜底**，与「没配过」不是一回事，必须能表达
+  （否则绑定 profile 的兜底链会偷偷跑回来）。
+- 🔴 **`normalize_trigger_json` 的空折叠判据随之改**：「一条 trigger 都没有」不再无条件写
+  NULL，只有**模型覆盖也空**才写。否则把触发方式全删掉（改成纯手动跟进）会把刚配好的三项
+  一起抹掉，而界面上看不出任何异常。
+- 🔴 覆盖只碰 `spec` 的 model / effort / fallbackModels **三个键**；D2「profile 只贡献
+  model/persona」与工具面红线（`allowedTools` 恒 `[]`、`grantExec` 永不写、budget 恒 1800s）
+  一个字节不动。
+- **effort 只在选定模型后可选**，且该模型要有 reasoning 能力：档位阶梯按模型家族给
+  （`effortOptionsForModel`），而对无 reasoning 能力的模型下发 effort 参数，openai/deepseek
+  协议会往 wire 上塞一个多余参数（16b 契约）。「跟随默认」时根本不知道最终跑哪个模型，也就
+  无从判断 —— 与其发一个可能让整个 run 400 的参数，不如把「先选模型」说出来。
+- 消费端：gateway `runHeadlessAgent` 把 `spec.effort` 投成 `body.effort`（`prepareChatRun`
+  既有通道，`effortTierFromBody` 对未知档位 fail-closed），并按 `spec.fallbackModels` 走模型链。
+  🔴 **重试只在「这次尝试什么都没产出」时允许**（没吐字 / 没完成 step / 没停在待确认 / 没被
+  预算或停止打断）—— 已经产出的 turn 重跑就是双计费 + 双落库 + 可能重复调用工具。
+  🔴 `fallbackModels` 在此之前是**投了但没人读**的死键（链只活在 Python 的
+  `llm_agent/client.py`，而 gateway 驱动的 headless run 根本不走那条路）；加配置面必须同时
+  加消费端，「保存了但不生效」比没有更糟。
 
 ### 4.1 全局配置面呈现什么
 
@@ -394,6 +463,7 @@ sqlite3 "$DB" "SELECT key, value FROM sync_state WHERE key LIKE 'matter.%last_fi
 | `frontend/tests/ai-gateway/matter_tool_face_leaf.test.ts` | **工具面说明书 ↔ 真实 ToolSet 双向**：(a) 表里每个名字都真的在工具面里（无幽灵条目）；(b) 工具面里每个名字都落在某个分组里（无藏起来的能力）；(c) 关掉一个 skill 后真实消失的那批 == 叶子里标了该 skill 的那批。跑的是真实 `runHeadlessAgent` + `buildGatewayTools`，不是另一份手抄名单 |
 | `tests/config/test_matter_web_face_parity.py` | 网页三档词表 + 缺省值的**三份手抄**（Python 端点 / gateway policy.ts / renderer hook）。🔴 renderer 那份漂了 **typecheck 不会红**（`readonly MatterRunWebFace[]` 装子集合法），只能靠这道闸 |
 | `frontend/tests/shared/matterEventLocale.test.ts` | 两份 locale 覆盖 `MATTER_EVENT_KINDS` 全集。kind 数量会随功能增长，所以判据是**从 events.py 抽全集**，不是写死的数字；闸自身也断言「抽不到就红」 |
-| `tests/matters/test_matter_trigger_envelope_parity.py` | trigger v2 envelope 的跨语言形状 |
+| `tests/matters/test_matter_trigger_envelope_parity.py` | trigger v2 envelope 的跨语言形状（含 §4.0 的 `agent` 覆盖块）|
+| `tests/matters/test_matters_contract_parity.py::test_effort_tier_value_set_matches_the_typescript_canonical_ladder` | effort 档位值域**与顺序**（canonical = TS `effortTiers.ts::EFFORT_TIERS`，Python 手抄在 `triggers.MATTER_AGENT_EFFORT_TIERS`）。顺序也算：档位是有序阶梯，漂了「向下取最近可选档」就选错档 |
 | `tests/api/test_context_mode_consistency.py` | `deriveContextMode` 的源码形状（正则闸，见 §1.4）|
 | `frontend/tests/components/matters/matterSchedule.test.ts` | 排程解析两种形状都认 |

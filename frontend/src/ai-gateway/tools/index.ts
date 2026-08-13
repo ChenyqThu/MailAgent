@@ -551,17 +551,24 @@ export function buildGatewayTools(
       })
     )
   }
-  // Matters MVP P3 (D6) + P4 (D8) — the Matter family behind MAILAGENT_MATTERS_ENABLED. Mixed set
-  // (2 silent reads + 9 edit-tier writes) → all-or-nothing on flag + guard (calendar 先例: a write
-  // tool cannot exist without its guard, and registering only the reads would advertise a half
+  // Matters MVP P3 (D6) + P4 (D8) + 0813 批 R — the Matter family behind MAILAGENT_MATTERS_ENABLED.
+  // Mixed set (silent reads + edit-tier writes) → all-or-nothing on flag + guard (calendar 先例: a
+  // write tool cannot exist without its guard, and registering only the reads would advertise a half
   // capability). CORE_UNGATED (no skill ownership) so applySkillGating never drops them; class
   // read/domain_write (policy.ts), so the LAST assembly step keeps the writes in owner-present and
-  // headless venues alike — and strips ALL NINE inside a matter_followup run (D5). No
+  // headless venues alike — and strips EVERY write inside a matter_followup run (D5). No
   // agentRunContext is threaded into the write factory: no per-agent whitelist may 免卡 a Matter
   // write, and matter_review_update's own policyEvaluate is a SERVER-fact seam, not a grant.
   // flag-off (default) → not added → byte-identical to the pre-P3 set.
   if (opts.matterToolsEnabled && opts.approvalGuard) {
-    Object.assign(tools, createMatterReadTools(opts.domain, collector))
+    // 0813 批 R — the read factory now takes the matter-agent flag: matter_runs_list mirrors the
+    // run REST face, which that flag gates server-side (flag off → the tool could only ever error).
+    Object.assign(
+      tools,
+      createMatterReadTools(opts.domain, collector, {
+        matterAgentEnabled: opts.matterAgentEnabled
+      })
+    )
     Object.assign(
       tools,
       createMatterWriteTools(opts.domain, collector, opts.approvalGuard, {

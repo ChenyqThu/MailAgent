@@ -6,12 +6,18 @@ from runner import loader, rules
 from runner.models import TraceRecord
 
 MATTER_TASK_IDS = [f"AGT-MATTER-{i:03d}" for i in range(1, 12)]
-MATTER_READ_TOOLS = ["matter_find", "matter_get"]
+MATTER_READ_TOOLS = [
+    "matter_find", "matter_get",
+    # 0813 轮 3 批 R — attention / run history / tag vocabulary reads.
+    "matter_attention_list", "matter_runs_list", "matter_tags_list",
+]
 MATTER_WRITE_TOOLS = [
     "matter_create", "matter_update", "matter_item_mutate", "matter_resource_mutate",
     "matter_stakeholder_mutate", "matter_relation_mutate", "matter_add_note",
     # P4 D8 — the two review-side writes.
     "matter_run_control", "matter_review_update",
+    # 0813 轮 3 批 R — the two disposal writes.
+    "matter_attention_triage", "matter_suggestion_resolve",
 ]
 #: P4 D8 —— 出厂档不是 auto 的 Matter 写工具（catalog 无 default_approval ⇒ R5 恒要求审批卡）。
 #: matter_review_update 的免卡是 gateway 侧的**动态** policyEvaluate（非 manual 恒卡 / manual 拒绝

@@ -211,7 +211,10 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
       'matter_add_note',
       // P4 (D8) — the review-side pair.
       'matter_run_control',
-      'matter_review_update'
+      'matter_review_update',
+      // 0813 轮 3 批 R — the two disposal writes.
+      'matter_attention_triage',
+      'matter_suggestion_resolve'
     ],
     render: MatterWriteCard
   }

@@ -9,7 +9,7 @@ import { Layers } from 'lucide-react'
  * 也不知道模型每轮其实拿到了什么。
  *
  * 🔴 权威 = `src/matters/run_spec.py::assemble_matter_spec` 的 `sections` 列表（按序）：
- *   `_task_contract()` → `_run_actions_section()` → `_snapshot_section()` →
+ *   `_task_contract()` → `_RUN_METHODOLOGY` → `_run_actions_section()` → `_snapshot_section()` →
  *   `_manifest_section()` →（可选）`【补充指引】`。
  * 下面的 `STEPS` 是那份列表的一一对应投影，**改一边必须改另一边**（run_spec.py 顶部 docstring
  * 也钉了这条反向指引）—— 少一段/顺序错，这块披露就在向 owner 说明一个不存在的 prompt。
@@ -25,6 +25,7 @@ interface AssemblyStep {
 /** 顺序 = prompt 里的真实拼接顺序。 */
 const STEPS: readonly AssemblyStep[] = [
   { id: 'contract', origin: 'editable' },
+  { id: 'method', origin: 'runtime' },
   { id: 'actions', origin: 'perMatter' },
   { id: 'snapshot', origin: 'runtime' },
   { id: 'manifest', origin: 'runtime' },

@@ -235,7 +235,9 @@ describe('P4 renderer surfaces', () => {
     expect(screen.getByText('上次')).toBeTruthy()
     fireEvent.click(screen.getByRole('switch'))
     fireEvent.click(screen.getByText('高级 · 在全局配置之上追加'))
-    fireEvent.click(screen.getByRole('combobox'))
+    // 0813 #10 起「高级」里有四个 select（执行的 Agent / 模型 / 思考强度 / 备用模型），
+    // 按 id 取要改的那个 —— `getByRole('combobox')` 会因为多个匹配直接炸。
+    fireEvent.click(document.getElementById('matter-agent-profile') as HTMLElement)
     fireEvent.click(screen.getByRole('option', { name: profile.title }))
     fireEvent.click(screen.getByText('保存规则'))
     // 第二个实参 = 打开模态时冻结的版本号（乐观锁的判据）。
@@ -311,6 +313,112 @@ describe('P4 renderer surfaces', () => {
       minute: 0
     })
     expect(schedule.timezone).toBeTruthy()
+  })
+
+  // ── 0813 dogfood 轮 3 #10：模型 / 思考强度 / 备用模型三项覆盖 ──────────────────
+  //
+  // owner 原话：「跟进规则页面，matter agent 配置，仍然没有模型配置、effort 配置、fallback
+  // 配置。高级里面也没有模型覆盖配置和 effort 配置」。三项都写进同一个 envelope 的 `agent` 块。
+  test('agent config modal writes the model override into the envelope', async () => {
+    const patch = vi.fn().mockResolvedValue(undefined)
+    renderModal(
+      <MatterAgentConfigModal
+        matter={{ ...matter, agent_enabled: true }}
+        runs={[]}
+        profiles={[]}
+        onPatch={patch}
+        onClose={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByText('高级 · 在全局配置之上追加'))
+    // 模型清单来自 /chat/config（这里 stub 成没有 enabledModels ⇒ 回落到 FALLBACK_MODELS）。
+    await waitFor(() => expect(screen.getByText('跟随默认（执行的 Agent → 全局配置 → 系统模型）')).toBeTruthy())
+    fireEvent.click(document.getElementById('matter-agent-model') as HTMLElement)
+    fireEvent.click(screen.getByRole('option', { name: 'claude-sonnet-4-6' }))
+    fireEvent.click(screen.getByText('保存规则'))
+    expect(patch.mock.calls[0]?.[0].schedule_json.agent).toEqual({
+      model: 'claude-sonnet-4-6'
+    })
+  })
+
+  // 🔴 灰掉的控件必须把「为什么」说出来 —— 档位阶梯按模型能力给，没选模型就判不了。
+  test('effort stays disabled with a stated reason until a model is picked', async () => {
+    renderModal(
+      <MatterAgentConfigModal
+        matter={{ ...matter, agent_enabled: true }}
+        runs={[]}
+        profiles={[]}
+        onPatch={vi.fn().mockResolvedValue(undefined)}
+        onClose={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByText('高级 · 在全局配置之上追加'))
+    const effort = document.getElementById('matter-agent-effort') as HTMLButtonElement
+    expect(effort.disabled).toBe(true)
+    expect(screen.getByText(/先在上面选定模型/)).toBeTruthy()
+
+    await waitFor(() => expect(screen.getByText('跟随默认（执行的 Agent → 全局配置 → 系统模型）')).toBeTruthy())
+    fireEvent.click(document.getElementById('matter-agent-model') as HTMLElement)
+    fireEvent.click(screen.getByRole('option', { name: 'claude-sonnet-4-6' }))
+    await waitFor(() =>
+      expect((document.getElementById('matter-agent-effort') as HTMLButtonElement).disabled).toBe(
+        false
+      )
+    )
+  })
+
+  // 🔴 「不设兜底」≠「跟随」：前者要压过绑定 Agent 的兜底链，所以必须落成显式空数组。
+  test('“no backup” saves an explicit empty fallback list', async () => {
+    const patch = vi.fn().mockResolvedValue(undefined)
+    renderModal(
+      <MatterAgentConfigModal
+        matter={{ ...matter, agent_enabled: true }}
+        runs={[]}
+        profiles={[]}
+        onPatch={patch}
+        onClose={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByText('高级 · 在全局配置之上追加'))
+    fireEvent.click(document.getElementById('matter-agent-fallback') as HTMLElement)
+    fireEvent.click(screen.getByRole('option', { name: '不设兜底' }))
+    fireEvent.click(screen.getByText('保存规则'))
+    expect(patch.mock.calls[0]?.[0].schedule_json.agent).toEqual({ fallback_models: [] })
+  })
+
+  // 打开一个已经配过的事项：三个 select 回显库里的值（不回显 = 用户以为没配过，再点一次保存
+  // 就把它抹了）。
+  test('a saved override round-trips back into the three selects', async () => {
+    const patch = vi.fn().mockResolvedValue(undefined)
+    renderModal(
+      <MatterAgentConfigModal
+        matter={{
+          ...matter,
+          agent_enabled: true,
+          schedule_json: JSON.stringify({
+            v: 2,
+            triggers: [],
+            agent: {
+              model: 'claude-opus-4-8',
+              effort: 'high',
+              fallback_models: ['claude-sonnet-4-6']
+            }
+          })
+        }}
+        runs={[]}
+        profiles={[]}
+        onPatch={patch}
+        onClose={vi.fn()}
+      />
+    )
+    fireEvent.click(screen.getByText('高级 · 在全局配置之上追加'))
+    await waitFor(() => expect(screen.getByText('高')).toBeTruthy())
+    fireEvent.click(screen.getByText('保存规则'))
+    expect(patch.mock.calls[0]?.[0].schedule_json.agent).toEqual({
+      model: 'claude-opus-4-8',
+      effort: 'high',
+      fallback_models: ['claude-sonnet-4-6']
+    })
   })
 
   // 0812 dogfood：「留空使用默认」写在界面上，那个默认却从不显示 ⇒ owner 读成「完全没预设」。

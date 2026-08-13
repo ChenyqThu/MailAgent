@@ -6,6 +6,7 @@
 // 弹层的三档 · 单条启停/删除 · 底部「N 条触发生效」。上一版那个 2×2 档位卡片网格（本仓自造）
 // 一并在这里防止回潮 —— 它正是 owner 说「没有遵循设计」的那块。
 
+import { useState } from 'react'
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react'
 
@@ -85,6 +86,32 @@ describe('MatterTriggerEditor — 设计稿形态', () => {
 
     fireEvent.click(screen.getByRole('button', { name: '删除这条触发' }))
     expect(onChange.mock.calls[1][0]).toEqual([])
+  })
+
+  test('add → delete → add 之后新条目 id 不与列表里仍在的那条相撞', () => {
+    // 受控组件：要复现「长度回退」必须让 entries 真的跟着 onChange 走一遍。
+    let latest: MatterTriggerEntry[] = []
+    function Harness(): React.ReactElement {
+      const [entries, setEntries] = useState<MatterTriggerEntry[]>([])
+      latest = entries
+      return <MatterTriggerEditor entries={entries} onChange={setEntries} />
+    }
+    render(<Harness />)
+
+    const addEvent = (): void => {
+      fireEvent.click(screen.getByRole('button', { name: '添加触发' }))
+      const menu = screen.getByRole('menu', { name: '添加触发' })
+      fireEvent.click(within(menu).getByRole('menuitem', { name: /事件驱动/ }))
+    }
+
+    addEvent()
+    addEvent()
+    // 删掉第一条 —— 长度从 2 回到 1，旧写法下次铸的 id 正是留下那条的 id。
+    fireEvent.click(screen.getAllByRole('button', { name: '删除这条触发' })[0])
+    addEvent()
+
+    expect(latest).toHaveLength(2)
+    expect(new Set(latest.map((entry) => entry.id)).size).toBe(2)
   })
 
   test('存量的 manual entry 不单独占一行，但**留在草稿里**跟着保存回去', () => {

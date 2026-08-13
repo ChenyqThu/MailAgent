@@ -14,12 +14,14 @@ import type { Tool } from 'ai'
 
 import { buildGatewayTools } from '../../../src/ai-gateway/tools'
 import {
+  createMatterReadTools,
   createMatterRunTools,
   createMatterSuggestionTools,
   createMatterWriteTools
 } from '../../../src/ai-gateway/tools/matters'
 import { createEmailReadTools } from '../../../src/ai-gateway/tools/email'
 import {
+  matterGetSchema,
   matterReviewUpdateSchema,
   matterRunControlSchema,
   matterUpdateProposeSchema
@@ -531,5 +533,47 @@ describe('email read tools — 0812: no Matter narrowing left in EITHER venue', 
     await runTool(tools.email_get, { internal_id: 51201 })
     expect(calls[0].url).not.toContain('matter_id')
     expect(calls[1].url).not.toContain('matter_scope')
+  })
+})
+
+describe('matter_get include=updates — the review loop had no way to learn an update_id', () => {
+  // 0813 dogfood 轮 3: MATTER_GET_INCLUDES omitted 'updates' while the REST endpoint served it,
+  // so matter_review_update (update_id REQUIRED) was structurally uncallable — the model could
+  // never obtain a proposal number. Both sides' unit tests stayed green throughout.
+  test('the schema admits "updates" and matter_get forwards it verbatim to REST', async () => {
+    const { domain, calls } = recordingDomain({ matter: { public_id: 'MAT-000042' }, updates: [] })
+    const parsed = matterGetSchema.parse({ public_id: 'MAT-000042', include: ['updates'] })
+    expect(parsed.include).toEqual(['updates'])
+    await runTool(createMatterReadTools(domain).matter_get, parsed)
+    expect(calls).toHaveLength(1)
+    expect(calls[0].url).toContain('include=updates')
+  })
+
+  test('the update_id reaches the model and satisfies matter_review_update', async () => {
+    const { domain } = recordingDomain({
+      matter: { public_id: 'MAT-000042', version: 4 },
+      updates: [{ id: 5, review_status: 'pending', changes: [{ id: 'chg_01', kind: 'field' }] }]
+    })
+    // 🔴 parse first: execute() does not re-validate, so feeding it a raw object would keep this
+    // test green even with 'updates' missing from the enum — i.e. it would assert nothing.
+    const out = (await runTool(
+      createMatterReadTools(domain).matter_get,
+      matterGetSchema.parse({ public_id: 'MAT-000042', include: ['updates'] })
+    )) as { updates: Array<{ id: number }> }
+    expect(out.updates[0].id).toBe(5)
+    // The whole point of the fix: that number is exactly what the review tool demands.
+    expect(
+      matterReviewUpdateSchema.parse({
+        public_id: 'MAT-000042',
+        update_id: out.updates[0].id,
+        decision: 'accept',
+        selected_change_ids: ['chg_01'],
+        expected_version: 4
+      }).update_id
+    ).toBe(5)
+  })
+
+  test('an unknown include value is still rejected (the enum is a whitelist, not a passthrough)', () => {
+    expect(() => matterGetSchema.parse({ public_id: 'MAT-000042', include: ['secrets'] })).toThrow()
   })
 })

@@ -197,6 +197,51 @@ async def set_matter_notify_level(request: Request, body: dict[str, Any] | None 
     return success_envelope({"level": level}, request=request, source="sqlite")
 
 
+@router.get("/agent-defaults")
+async def get_matter_agent_defaults(request: Request):
+    """读全局跟进 Agent 的模型默认（model / effort / fallback_models）。
+
+    没配过 → `{}`（= 三项全跟随下游）。读侧宽容：坏行降级成「没配过」而不是 500 ——
+    一个读不出来的可选默认值不该让整个配置弹窗打不开。
+    """
+    from src.matters.agent_defaults import load_agent_defaults
+
+    return success_envelope(
+        {"defaults": load_agent_defaults()}, request=request, source="sqlite"
+    )
+
+
+@router.put("/agent-defaults")
+async def set_matter_agent_defaults(request: Request, body: dict[str, Any] | None = None):
+    """写全局跟进 Agent 的模型默认。body = `{defaults: {model?, effort?, fallback_models?}}`。
+
+    🔴 值域校验复用事项级那一份（`normalize_agent_overrides`），越域**一律 400、绝不静默
+    回落** —— 存下一个跑不起来的档位 = UI 显示的与真跑的劈叉，而这正是本批要收的病根。
+    🔴 返回的是**归一化后真正落库的那份**，不是请求原样回显（前端据此写缓存）。
+    """
+    from src.agent_config.store import get_agent_config_store
+    from src.matters.agent_defaults import (
+        MATTER_AGENT_DEFAULTS_KEY,
+        dump_agent_defaults,
+        load_agent_defaults,
+    )
+    from src.matters.triggers import TriggerError, normalize_agent_overrides
+
+    payload = (body or {}).get("defaults")
+    if payload is None:
+        payload = {}
+    try:
+        normalized = normalize_agent_overrides(payload)
+    except TriggerError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), source="sqlite") from exc
+    get_agent_config_store().set_owner_setting(
+        MATTER_AGENT_DEFAULTS_KEY, dump_agent_defaults(normalized)
+    )
+    return success_envelope(
+        {"defaults": load_agent_defaults()}, request=request, source="sqlite"
+    )
+
+
 @router.get("")
 async def list_matters(
     request: Request,

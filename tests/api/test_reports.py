@@ -896,6 +896,47 @@ def test_wire_agent_avatar_round_trip_and_validation() -> None:
         wire.config_patch_to_db({"avatar": {"shape": "triangle", "palette": "rose-milk"}})
 
 
+def test_wire_agent_avatar_bot_round_trip_and_validation() -> None:
+    """第三种 kind（type='bot'，08-12 灵动头像）：合法往返 + 越域/多余键/缺键逐条拒。
+
+    判别边界：显式 type 逐个判（image → bot），无 type 落 legacy oreo 兜底。bot 形状名
+    不在 oreo 词表里 —— 若判别漂了（bot dict 落进 legacy 支）这里的往返例会立刻红。
+    """
+    from src.reports import wire
+
+    avatar = {"type": "bot", "shape": "sphere", "color": "orange"}
+    patch = wire.config_patch_to_db({"avatar": avatar})
+    assert json.loads(patch["avatar_json"]) == avatar
+    assert wire.resolve_agent({"id": "x", "avatar_json": patch["avatar_json"]})["avatar"] == avatar
+    # 全词表（8×11）都能过保存闸 —— 词表本体的跨语言对账在
+    # tests/config/test_bot_avatar_vocab_parity.py，这里只保证白名单与校验用的是同一份。
+    for shape in wire.BOT_AVATAR_SHAPES:
+        for color in wire.BOT_AVATAR_COLORS:
+            assert wire.config_patch_to_db(
+                {"avatar": {"type": "bot", "shape": shape, "color": color}}
+            )["avatar_json"]
+
+    # 越域 shape：oreo 的 'bloom' 不在 bot 词表（两套词表不互认）。
+    with pytest.raises(ValueError, match="avatar.shape"):
+        wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "bloom", "color": "orange"}})
+    # 越域 color。
+    with pytest.raises(ValueError, match="avatar.color"):
+        wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "sphere", "color": "magenta"}})
+    # 多余键 → 拒（bot 支不做 image 支那种静默剥键，见 wire.py 注释）。
+    with pytest.raises(ValueError, match="only keys"):
+        wire.config_patch_to_db(
+            {"avatar": {"type": "bot", "shape": "sphere", "color": "orange", "variant_id": "x"}}
+        )
+    # 缺键（shape/color 各缺一例）。
+    with pytest.raises(ValueError, match="avatar.color"):
+        wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "sphere"}})
+    with pytest.raises(ValueError, match="avatar.shape"):
+        wire.config_patch_to_db({"avatar": {"type": "bot", "color": "orange"}})
+    # 无 type 键 + bot 形状名 → 走 legacy oreo 支并被拒（判别只看 type，不看词表命中）。
+    with pytest.raises(ValueError, match="avatar.shape"):
+        wire.config_patch_to_db({"avatar": {"shape": "sphere", "palette": "rose"}})
+
+
 def _avatar_image_data_uri(nbytes: int, mime: str = "image/webp") -> str:
     """长度精确可控的合法 data URI（内容不必是真图片 —— wire 层只管 mime/base64/字节数）。"""
     import base64 as _b64

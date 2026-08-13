@@ -721,6 +721,75 @@ def test_invoke_destructive_write_allowed_headless_within_grant(
     assert _InvokeStubClient.last_call[:2] == ("notion", "create_page")
 
 
+_MATTER = {"context_mode": "matter_followup", "agent_id": "matter:MAT-000001"}
+
+
+def test_invoke_matter_followup_read_allowed_write_denied(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """0812/0813：matter caller 的天花板由 venue 钉死 'read'（不读任何 agent 行 ——
+    ``matter:<public_id>`` 是哨兵、无 report_agent 行）：读放行、写 403。"""
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = _invoke(flag_on_client, "search", caller=_MATTER)
+    assert r.status_code == 200
+    assert _InvokeStubClient.last_call[:2] == ("notion", "search")
+    _InvokeStubClient.last_call = None
+    r = _invoke(flag_on_client, "create_page", caller=_MATTER)
+    assert r.status_code == 403
+    assert r.json()["error"]["code"] == "E_CONNECTOR_GRANT_DENIED"
+    assert _InvokeStubClient.last_call is None
+
+
+def test_invoke_matter_followup_ask_tier_read_409(flag_on_client, fresh_agent_cfg, monkeypatch):
+    """0813 批 P：matter 场地无审批链宿主 —— ask 档 ≙ 不可用（409，不到远端；
+    router 给 matter caller 传 deny_ask_mode=True 的判定与执行同侧第二道）。
+    同一工具对 headless custom agent（grant read）照常放行 —— 既有语义字节不变。"""
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    fresh_agent_cfg.set_connector_tool_mode("notion", "search", "ask")
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = _invoke(flag_on_client, "search", caller=_MATTER)
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_CONNECTOR_TOOL_DISABLED"
+    assert _InvokeStubClient.last_call is None
+    # headless custom agent：ask/auto 无差别（grant 内免卡是既有语义）→ 200。
+    _grant_agent(monkeypatch, {"notion": "read"})
+    assert _invoke(flag_on_client, "search", caller=_HEADLESS).status_code == 200
+
+
+def test_invoke_matter_followup_destructive_read_409(
+    flag_on_client, fresh_agent_cfg, monkeypatch
+):
+    """0813 批 P：destructive 行对 matter caller 恒拒（手改 DB 才能造出 read+destructive ——
+    derive_crud_type 裁决③ 在 sync 期就把它推成 write；这里是不依赖那个不变量的同侧闸）。
+    manual caller 照常（destructive 只是红警告位）。"""
+    import src.connectors.client as client_mod
+
+    _seed_tools(fresh_agent_cfg)
+    fresh_agent_cfg.sync_connector_tools(
+        "notion",
+        [
+            {"name": "search", "description": "", "input_schema": None,
+             "output_schema": None, "crud_type": "read"},
+            {"name": "purge_cache", "description": "", "input_schema": None,
+             "output_schema": None, "crud_type": "read", "destructive": True},
+        ],
+    )
+    _InvokeStubClient.last_call = None
+    monkeypatch.setattr(client_mod, "ConnectorClient", _InvokeStubClient)
+    r = _invoke(flag_on_client, "purge_cache", caller=_MATTER)
+    assert r.status_code == 409
+    assert r.json()["error"]["code"] == "E_CONNECTOR_TOOL_DISABLED"
+    assert _InvokeStubClient.last_call is None
+    assert _invoke(flag_on_client, "purge_cache").status_code == 200  # manual/无 caller 不受影响
+
+
 def test_invoke_im_chat_behaves_like_manual(flag_on_client, fresh_agent_cfg, monkeypatch):
     """阶段 2 PR-1（08-04 拍板「全开放」）：im_chat caller 与 manual 同档 —— 读免天花板放行，
     写类工具（owner 已启用的）同样放行（写的恒 HITL 在 gateway 审批卡侧，不在本端点）。

@@ -78,6 +78,16 @@ export interface AgentRunSpec {
   }
   /** Agent model override; null/absent → the gateway default model. */
   model?: string | null
+  /** Reasoning-effort tier for THIS run (0813 dogfood r3 #10 — Matter-level model overrides).
+   *
+   *  Typed as a bare string on purpose: like every other spec field this arrives as JSON from
+   *  Python, and `runHeadlessAgent` re-derives it through `effortTierFromBody` (thinking.ts),
+   *  which fail-closes an unknown tier to "no effort key at all" (the pre-override wire shape).
+   *  Absent → byte-identical to before the override existed.
+   *
+   *  🔴 Only the Matter follow-up assembler emits it today (`src/matters/run_spec.py`); the
+   *  custom-agent projection has no such column and keeps omitting it. */
+  effort?: string
   /** Per-agent tool narrowing. 🔴 **Fail-closed, never widening** — absent does NOT mean
    *  "no narrowing".
    *
@@ -120,6 +130,15 @@ export interface AgentRunSpec {
     grantConnectors?: Record<string, 'read' | 'write' | 'update'>
   }
   budget: { maxRunSeconds: number }
+  /** Ordered backup models. `runHeadlessAgent` retries the whole turn on the next entry ONLY when
+   *  the attempt failed having produced nothing (see its `producedNothing` note) — so a run that
+   *  streamed text, ran a tool, paused at an approval gate or hit the budget is NEVER re-run.
+   *  Absent / empty → exactly one attempt, byte-identical to the pre-fallback path.
+   *
+   *  🔴 Until 0813 this key was projected by Python (`agent_runs.py`, `matters/run_spec.py`) and
+   *  read by NOBODY — the chain lived only in the Python LLM client (`llm_agent/client.py`), which
+   *  a gateway-driven headless run never goes through. Adding the config surface required adding
+   *  the consumer; a saved-but-inert setting is worse than no setting. */
   fallbackModels?: string[]
   sessionTitle: string
   sessionId?: number
@@ -603,6 +622,14 @@ export interface CompileUserMdResult {
  *  一键预设（POST /agent/tool-prefs/preset）；服务端把存量/脏值折算成 'manual'。 */
 export type GlobalApprovalMode = 'manual' | 'bypass'
 
+/** 0813 主 agent 身份（owner_settings `assistant_identity`）：名字进「{{name}} 思考中…」
+ *  文案与面板标题；avatar 与 report agent 的 avatar_json 同款 bot/image 形状
+ *  （null = 官方形象 sphere/orange），渲染侧经 agentAvatarIdentity 的判别函数消费。 */
+export interface AssistantIdentity {
+  name: string | null
+  avatar: import('./report').AgentAvatarConfig | null
+}
+
 /** 08-05 WP-11 — per-tool approval tier of a built-in write tool（值域镜像 Python
  *  tool_prefs.TOOL_APPROVAL_TIERS；这里只是 wire 类型，注册表本体不手抄——行数据全部来自
  *  GET /api/agent/tool-prefs）。'deny' 只作显式覆盖（出厂默认恒 ask|auto）。 */
@@ -835,6 +862,14 @@ export interface ChatApi {
   getAutoCompact(): Promise<'on' | 'off'>
   /** P4 owner-only write face. No gateway tool can reach this endpoint. */
   setAutoCompact(mode: 'on' | 'off'): Promise<'on' | 'off'>
+  /**
+   * 0813 主 agent 身份 — read the owner-configured main-assistant identity
+   * (GET /api/agent/assistant-identity; owner_settings row). Missing/corrupt row is the
+   * server-canonical default { name: null, avatar: null } (= "AI 助手" + official bot face).
+   */
+  getAssistantIdentity(): Promise<AssistantIdentity>
+  /** 0813 — full-replace write (PUT /api/agent/assistant-identity). Owner UI ONLY. */
+  setAssistantIdentity(identity: AssistantIdentity): Promise<AssistantIdentity>
   /**
    * 08-05 WP-11 — read the per-tool approval tiers of every built-in write tool + the send
    * recipient whitelist + the acceptEdits preset membership (GET /api/agent/tool-prefs).

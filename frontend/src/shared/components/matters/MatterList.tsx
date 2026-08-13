@@ -11,7 +11,6 @@ import {
   ListChecks,
   Search,
   Sparkles,
-  Tag,
   Trash2,
   type LucideIcon
 } from 'lucide-react'
@@ -23,7 +22,6 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import {
   formatMatterAgo,
   formatMatterDueRelative,
-  matterTagViewName,
   nextAction,
   trashDaysRemaining
 } from '@shared/lib/matterDerive'
@@ -76,12 +74,6 @@ const EMPTY_VIEW_ICONS: Partial<Record<MatterView, LucideIcon>> = {
   trash: Trash2
 }
 
-/** 视图 key → 展示名。标签视图的名字是**用户内容**（标签名，永不翻译）；其余走词表。 */
-function useMatterViewLabel(view: MatterView): string {
-  const { t } = useTranslation()
-  return matterTagViewName(view) ?? t(`matters.views.${view}`)
-}
-
 interface MatterListProps {
   matters: readonly Matter[]
   view: MatterView
@@ -119,7 +111,7 @@ export function MatterList({
     [attention, matters, search]
   )
   const locale = i18n.language || 'zh-CN'
-  const viewLabel = useMatterViewLabel(view)
+  const viewLabel = t(`matters.views.${view}`)
 
   useEffect(() => {
     const pane = paneRef.current
@@ -134,9 +126,7 @@ export function MatterList({
     return () => observer.disconnect()
   }, [])
 
-  const EmptyIcon =
-    EMPTY_VIEW_ICONS[view] ??
-    (search.trim() ? Search : matterTagViewName(view) !== null ? Tag : Layers)
+  const EmptyIcon = EMPTY_VIEW_ICONS[view] ?? (search.trim() ? Search : Layers)
 
   return (
     <section
@@ -232,12 +222,16 @@ interface MatterRowProps {
 
 /**
  * 清单行（设计 `list.jsx::MatterRow`）：三行结构 —— 行 1 标题与身份 + 右端状态、
- * 行 2 下一步 / 到期 / 更新时间 / 头像组、行 3 关注信号与事项类型。
+ * 行 2 下一步 / 到期 / 更新时间 / 头像组、行 3 事项类型与关注信号。
  *
  * E16（dogfood 轮 2 #16，owner 拍板偏离设计稿）—— 行 3 右下角原是最多 3 个标签 chip
  * + `+N` 溢出徽标：标签名长度不可控，行窄时一样会挤爆。改成显示单一的事项类型
  * （`matter.matter_type`，本就是个短字符串，天然没有这个溢出面）；标签仍在详情页 /
  * 左轨标签视图可见，只是清单行不再是它的展示面。
+ *
+ * R3-#7（dogfood 轮 3 #7）—— 行 3 左右对调：类型（`matter.matter_type`）恒在，挪到左端
+ * 撑住这一行；关注信号（`signals`）不是每个事项都有，挪到右端——没有异常状态时右侧空着，
+ * 不会像原先「左边空着」那样显得突兀。只动布局位置，不改数据来源与显示判据。
  *
  * E12（dogfood 轮 2 #12，改判前一版）—— 选中态左条改回**通高**（`top-0 bottom-0`，与
  * `EmailRow.is-selected::before` 同一套「通高直角条」几何，ARCHITECTURE §7.3）、常态临界
@@ -395,6 +389,15 @@ function MatterRow({
 
       {signals.length > 0 || matter.matter_type !== null ? (
         <span className={cn('mt-1.5 flex min-w-0 items-center gap-2', narrow && 'flex-wrap')}>
+          {/* E16 —— 单一事项类型徽标取代原来的标签 chip 列表（本就不设上限的用户内容 =
+              最容易在窄行溢出的一项，owner 拍板换成天然定长的类型）。
+              R3-#7 —— 类型恒在，靠左撑住这一行；无异常状态时右侧留空即可。 */}
+          {matter.matter_type !== null ? (
+            <span className="max-w-[8.5rem] shrink-0 truncate rounded-full border border-ink-border-soft bg-ink-2/65 px-2 py-0.5 font-mono text-meta text-ink-fg-2">
+              {matter.matter_type}
+            </span>
+          ) : null}
+          <span className="flex-1" />
           <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
             {signals.map((signal) => {
               const SignalIcon = ATTENTION_META[signal.kind].icon
@@ -405,14 +408,6 @@ function MatterRow({
               )
             })}
           </span>
-          <span className="flex-1" />
-          {/* E16 —— 单一事项类型徽标取代原来的标签 chip 列表（本就不设上限的用户内容 =
-              最容易在窄行溢出的一项，owner 拍板换成天然定长的类型）。 */}
-          {matter.matter_type !== null ? (
-            <span className="max-w-[8.5rem] shrink-0 truncate rounded-full border border-ink-border-soft bg-ink-2/65 px-2 py-0.5 font-mono text-meta text-ink-fg-2">
-              {matter.matter_type}
-            </span>
-          ) : null}
         </span>
       ) : null}
     </button>

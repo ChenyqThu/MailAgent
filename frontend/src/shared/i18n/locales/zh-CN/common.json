@@ -166,7 +166,7 @@
     "matters": "事项",
     "mattersLinked": "已在事项中",
     "matterMenuHint": "创建事项、加入已有事项，或交给 AI 调研",
-    "createMatterPrompt": "把上面引用的这封邮件变成一件「事项」来跟进。先用 matter_find 按这封邮件的主题、发件人和线程检索，看有没有重复的或本来就该归到里面的既有事项：有就告诉我是哪一件、并把这封邮件关联进去；确实没有再新建，填好标题、类型、干系人和已经能看出来的行动项。写入前把你要做的事说清楚，我会在审批卡上确认。",
+    "createMatterPrompt": "把上面引用的这封邮件变成一件「事项」来跟进。先用 matter_find 按这封邮件的主题、发件人和线程检索，看有没有重复的或本来就该归到里面的既有事项：有就告诉我是哪一件、并把这封邮件关联进去。再动手把背景查清楚，别只看这一封：用你当前工具面里真实有的检索能力找相关材料 —— 相关邮件、知识库文档，特别是（若你的工具列表提供）Notion / Confluence / JIRA 一类外部服务的只读检索工具：这类事的背景与结论往往沉淀在那些系统里，只查邮件会漏（有哪些以你自己的工具列表为准；某个来源你没有对应工具就直说没查，不要假装查过）。确实没有既有事项再新建，填好标题、类型、干系人和已经能看出来的行动项，并把查到的关键材料关联成这件事项的资料。最后告诉我你查了哪些来源、查到什么、哪里没查到。写入前把你要做的事说清楚，我会在审批卡上确认。",
     "prev": "上一封",
     "next": "下一封",
     "more": "更多",
@@ -1068,6 +1068,11 @@
       "matter_run_control": "控制跟进运行",
       "matter_review_update": "评审更新提案",
       "matter_update_propose": "提交更新提案",
+      "matter_attention_list": "查看关注信号",
+      "matter_attention_triage": "处置关注信号",
+      "matter_runs_list": "查看跟进记录",
+      "matter_tags_list": "查看事项标签",
+      "matter_suggestion_resolve": "处置资料建议",
       "notion_agent_chat": "咨询 Notion Agent",
       "plan_update": "更新计划",
       "suggest_followups": "准备追问建议"
@@ -1614,7 +1619,7 @@
       }
     },
     "status": {
-      "thinking": "AI 思考中…",
+      "thinking": "{name} 思考中…",
       "streaming": "回复中…",
       "complete": "完成",
       "aborted": "已取消",
@@ -4349,18 +4354,32 @@
       "hint": "未设置时按 Agent id 稳定派生；选择后保存为显式身份",
       "change": "更换",
       "collapse": "收起",
+      "tabBot": "Bot",
+      "tabUpload": "上传",
+      "reset": "重置",
       "shuffle": "换一换",
       "shape": "形状",
-      "palette": "配色",
+      "color": "颜色",
       "upload": "上传图片",
       "uploading": "处理中…",
-      "uploaded": "已上传图片（点下方任意形状或配色换回生成头像）",
+      "uploaded": "已上传图片（切到 Bot 标签选形状或颜色可换回生成头像）",
+      "uploadHint": "上传后将替换生成头像（≤10MB，自动裁方压缩）",
       "uploadErr": {
         "not_image": "请选择图片文件（PNG / JPG / WebP 等）。",
         "source_too_large": "原图超过 10MB，请先压缩或换一张。",
         "decode_failed": "这张图片读不出来，换一张试试。",
         "too_large": "压到最低画质仍超过 150KB，请换一张更简单的图片。"
       }
+    },
+    "mainAgent": {
+      "title": "主 Agent",
+      "badge": "默认助手",
+      "hint": "全局对话的名字与头像；名字会出现在「思考中」文案和面板标题里",
+      "configure": "配置",
+      "collapse": "收起",
+      "nameLabel": "名字",
+      "namePlaceholder": "AI 助手（比如 Jarvis）",
+      "docsHint": "系统提示词（SOUL / AGENT / RULES / USER 身份文档）在 设置 → AI → 身份文档 里编辑"
     },
     "custom": {
       "import": "导入 Agent",
@@ -4685,6 +4704,7 @@
     "cancel": "取消",
     "close": "关闭",
     "save": "保存",
+    "loading": "加载中…",
     "imageLoadFailed": "图片加载失败"
   },
   "matters": {
@@ -4829,6 +4849,8 @@
       "more": "更多",
       "priority": "事项优先级",
       "status": "事项状态",
+      "statusModalTitle": "更改业务状态",
+      "statusModalSub": "状态变更会写入时间线，并成为 Agent 的上下文",
       "health": "事项健康度",
       "trashedBanner": "已移到回收站 · {count} 天后永久清除；关联的邮件与外部文档不受影响",
       "archivedBanner": "已归档于{time} · 归档不改变业务状态，也不停掉历史记录",
@@ -4845,6 +4867,8 @@
       "create": "创建标签「{name}」",
       "manage": "管理全部标签…",
       "empty": "没有匹配标签",
+      "emptyCreateHint": "还没有标签，输入名称创建第一个",
+      "styleToggle": "样式",
       "usageCount": "{count} 次",
       "managerTitle": "管理标签",
       "managerDescription": "点左侧标记改形状与颜色；重命名同步到全部事项，删除只移除标签本身。",
@@ -5005,6 +5029,7 @@
       "matter_updated_plain": "更新了事项",
       "agent_binding_changed": "调整了跟进 Agent 的配置",
       "item_created": "新增{kind}{title}",
+      "item_created_kind": "新增{kind}",
       "item_created_plain": "新增了一个条目",
       "item_updated": "{kind}{title}：{changes}",
       "item_updated_untitled": "条目{changes}",
@@ -5080,7 +5105,12 @@
         "attention_opened": "出现了 {count} 个关注信号"
       },
       "expand": "展开 {count} 条明细",
-      "collapse": "收起明细"
+      "collapse": "收起明细",
+      "body": {
+        "expand": "展开全文",
+        "collapse": "收起",
+        "truncated": "此处只是摘录，完整内容见事项本身"
+      }
     },
     "eventField": {
       "title": "标题",
@@ -5347,7 +5377,6 @@
       "newSession": "新会话",
       "injectedContext": "已注入的上下文",
       "contextUnresolved": "这场对话锚在某个事项上，但暂时读不到它的编号，上下文未就绪。为避免在错误的范围里操作，已暂停发送 —— 请稍后重试或从事项页重新打开。",
-      "sessionsLoadFailed": "读取该事项的历史会话失败，已保留当前对话（未新建）",
       "chips": {
         "acceptedState": "当前已接受状态",
         "openItems": "{count} 个开放项",
@@ -5363,7 +5392,8 @@
         "status": "总结当前状态",
         "nextStep": "补一个下一步",
         "draftFollowup": "起草跟进邮件",
-        "updateSummary": "更新摘要"
+        "updateSummary": "更新摘要",
+        "updateSummaryPrompt": "把这件事的「当前状态」摘要更新一下。先读现有摘要、未完成条目和最近动态，然后写给读的人看：第一句说现在卡在哪或最重要的结论，第二句写下一步（谁在什么时候做什么）。不要写成操作记录（「我把状态改成了…、加了两个行动项」这种不要），也不要复述核心目标。动手改之前先把你准备写的摘要给我看。"
       },
       "empty": {
         "title": "从这里推进这件事",
@@ -5378,7 +5408,9 @@
         "matter_relation_mutate": "事项关联已更新",
         "matter_add_note": "已添加备注",
         "matter_run_control": "跟进运行已更新",
-        "matter_review_update": "提案评审已更新"
+        "matter_review_update": "提案评审已更新",
+        "matter_attention_triage": "关注信号已处置",
+        "matter_suggestion_resolve": "资料建议已处置"
       },
       "receipt": {
         "written": "已写入",
@@ -5479,6 +5511,10 @@
               "name": "任务契约",
               "body": "就是下面这个框：能力边界、查证顺序、提案标准。留空 = 用内置默认。"
             },
+            "method": {
+              "name": "工作方法",
+              "body": "运行时注入：判断进展的纪律——先读证据再下判断、区分证据与推断、缺证据写明缺什么、建议保持最小变更；并如实声明 run 没有写工具、一切经提案落地。"
+            },
             "actions": {
               "name": "本次跟进要做的事",
               "body": "由每个事项的「跟进时执行」勾选生成，默认是「更新摘要 + 检查行动项」。"
@@ -5501,7 +5537,7 @@
           "title": "工具面：只读全库 + 一个提案通道",
           "intro": "它能查的东西很全，但没有任何写工具——发不了信、存不了草稿、改不了事项字段、动不了外部文档；所有改动只能写进提案，等你接受后才生效。下面这些默认全部启用，事项级只能收窄、不能提权。",
           "groups": {
-            "matter": { "label": "事项", "desc": "读本事项、检索事项；提案是它唯一的产出通道" },
+            "matter": { "label": "事项", "desc": "读本事项、检索事项、看关注信号与历次跟进记录、看已有标签；提案是它唯一的产出通道" },
             "email": { "label": "邮件", "desc": "列表、正文全文、线程与附件文本" },
             "search": { "label": "全文检索", "desc": "按关键词检索邮件正文与附件内容" },
             "calendar": { "label": "日历", "desc": "查日程与单个事件详情" },
@@ -5537,6 +5573,17 @@
           "loadFailed": "当前档位读取失败，下面显示的可能不是实际生效的值。",
           "saveFailed": "网页检索档保存失败"
         },
+        "modelDefaults": {
+          "title": "默认模型",
+          "intro": "所有事项的跟进都用这里的模型，除非某个事项在「跟进规则 → 高级」里单独覆盖，或者它绑了一个自己写了模型的 Agent。改一项存一项，不用点下面的保存。",
+          "modelFollow": "不设默认（用系统全局模型）",
+          "effortFollow": "不设默认",
+          "fallbackFollow": "不设默认（用系统全局兜底链）",
+          "effortScopeHint": "这一档是为上面这个模型选的：某个事项换了模型又没单独设强度时，不会把它带过去。",
+          "fallbackHint": "主模型还没产出任何内容就失败时（模型不可用、凭证缺失、上游直接拒绝），本次跟进自动改用它重跑一次。已经开始输出、已调用工具或已停在待确认上的跟进不会重跑。",
+          "loadFailed": "当前默认读取失败，下面显示的可能不是实际生效的值。",
+          "saveFailed": "默认模型保存失败"
+        },
         "restoreDefault": "恢复默认",
         "open": "全局配置",
         "saved": "配置已保存",
@@ -5552,6 +5599,14 @@
         "triggerLabel": "触发方式",
         "advanced": "高级 · 在全局配置之上追加",
         "profileLabel": "执行的 Agent",
+        "modelLabel": "模型",
+        "modelFollow": "跟随默认（执行的 Agent → 全局配置 → 系统模型）",
+        "effortFollow": "跟随默认（全局配置里为它的默认模型设的档）",
+        "effortNeedsModel": "先在上面选定模型 —— 可选档位按该模型的能力给。",
+        "fallbackLabel": "备用模型",
+        "fallbackFollow": "跟随默认（执行的 Agent → 全局配置的兜底链）",
+        "fallbackNone": "不设兜底",
+        "fallbackHint": "主模型还没产出任何内容就失败时（模型不可用、凭证缺失、上游直接拒绝），本次跟进自动改用它重跑一次。已经开始输出、已调用工具或已停在待确认上的跟进不会重跑。",
         "instructionsLabel": "事项专属指令（追加）",
         "instructionsHint": "这段会追加在全局任务契约之后、从属于它，不会替换它。留空 = 只按全局任务契约跟进。",
         "instructionsPlaceholder": "例：只盯 Acme 采购部的回复，其他抄送方的邮件不用单独总结。每次跟进先点名列出还没回复的人，再把当前卡点写成一句话。对方一旦给出报价，就把金额和有效期单独列出来。",
@@ -5644,9 +5699,6 @@
     },
     "undo": { "action": "撤销" },
     "shell": {
-      "tagsTitle": "标签",
-      "footnoteLocal": "本地 SQLite · 单人单机",
-      "footnoteRemote": "Remote Web 共用同一份数据",
       "backToList": "返回事项清单"
     },
     "datePicker": {

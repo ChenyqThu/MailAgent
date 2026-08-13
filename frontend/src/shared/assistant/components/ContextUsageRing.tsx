@@ -32,6 +32,16 @@
 //     · 已经在拉的会话消息行（`listMessages`，环本体的同一次请求，零新增读）。
 //   零 wire 改动的取舍与「为什么不让 gateway 落库各段」写在 contextUsage.lib.ts 的 WP-22 段。
 
+// ── 0813 dogfood 轮 3 #3：浮窗 / 抽屉场地下**只画环、不写数值** ────────────────────
+//   owner 原话「在已有对话的页面，浮窗/抽屉下，context 环就不显示具体数值如 177k 这种了，
+//   节省空间」——「177k」那串数字是 32rem 浮窗里工具行最后那几十像素的来源之一（左组三颗 chip
+//   不可压缩，右组只有模型 chip 能 truncate）。
+//   开关走 `controls.denseControls`，即**场地传入**（AssistantChatModal → AgentConversation →
+//   controls），不是组件自己按宽度猜：同一个 AgentComposer 也长在 /sessions 全页里。
+//   🔴 只砍 `ring` 档：`pill` 档（上限未知，见文件头②）根本没有环，数值是它**唯一**的信号，
+//   砍掉整个控件就只剩一个「~」；且 `~91K` 与 `177k` 宽度相当，砍它省不出什么。
+//   数值没有丢：aria-label 一字未动，hover / 点击出的明细里 Total Used 照旧是权威值。
+
 // ── 08-06 owner dogfood ①：**hover 直接出明细，短提示整个删掉** ────────────────────
 //   owner 原话「不需要那个 hover tips，把点击的那个直接改为 hover 效果」。于是：
 //     · 原来的 `HoverTip`（一句话短提示）删除 —— 它与弹层是同一件事的两种详略，留着就是
@@ -381,6 +391,8 @@ export function ContextUsageRing(): React.JSX.Element | null {
   if (!view) return null
 
   const usedText = formatTokens(view.used)
+  // 紧凑档（浮窗 / 抽屉）：环本身就是信号，数值让位给横向空间（见文件头 0813 段）。
+  const hideUsedText = controls?.denseControls === true && view.variant === 'ring'
   const breakdown = buildContextBreakdown(
     view,
     promptTokens ? { ...promptTokens, messages: messageTokens } : null
@@ -423,7 +435,7 @@ export function ContextUsageRing(): React.JSX.Element | null {
         )}
       >
         {view.variant === 'ring' ? <Ring view={view} /> : <span aria-hidden="true">~</span>}
-        <span>{usedText}</span>
+        {!hideUsedText && <span>{usedText}</span>}
       </button>
       {shouldRender && (
         <div

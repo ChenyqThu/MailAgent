@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
-import { History, Maximize2, Plus, Settings, Sparkles, X } from 'lucide-react'
+import { History, Maximize2, Plus, Settings, X } from 'lucide-react'
 
 import type { ChatBackendKind, ReportAgentConfig, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
@@ -51,10 +51,12 @@ import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
 import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
 import { makeSessionSettledHandler } from './runtime/threadRunningGuard'
 import { useBackgroundChatRun } from './runtime/useBackgroundChatRun'
+import { useAssistantIdentity } from './assistantIdentity'
 import { useApprovalDecideBusy } from './useApprovalDecideBusy'
 import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
+import { AssistantPanelBotAvatar } from './components/TurnPresence'
 import { ThreadRunStatusBar } from './components/ThreadRunStatusBar'
 import { QueuedInputBar } from './components/QueuedInputBar'
 import { ChatComposerControlsProvider } from './components/composerControls'
@@ -485,7 +487,9 @@ export function AIChatPanel({
   const pendingApprovalTruth = useQuery({
     queryKey: qk.agentApprovalPending(chat.activeSessionId),
     queryFn: () =>
-      chat.activeSessionId == null ? Promise.resolve(null) : fetchPendingApproval(chat.activeSessionId),
+      chat.activeSessionId == null
+        ? Promise.resolve(null)
+        : fetchPendingApproval(chat.activeSessionId),
     enabled: queuedInputEnabled && chat.activeSessionId != null,
     staleTime: 3_000,
     refetchOnWindowFocus: true
@@ -510,7 +514,9 @@ export function AIChatPanel({
             queryKey: qk.chat.queuedInput(chat.activeSessionId)
           })
         })
-        .catch((error: unknown) => toastError(t('chat.queuedInput.enqueueFailed'), errorMessage(error)))
+        .catch((error: unknown) =>
+          toastError(t('chat.queuedInput.enqueueFailed'), errorMessage(error))
+        )
     },
     [chat.activeSessionId, gatewayBaseUrl, queryClientForRead, t]
   )
@@ -642,6 +648,9 @@ export function AIChatPanel({
 
   const retryActionKlass = useCjkMonoSwap('text-meta font-mono')
 
+  // 0813 主 agent 身份：标题用 owner 起的名（Jarvis），未配置回 i18n 'chat.title'。
+  const assistantIdentity = useAssistantIdentity()
+
   // "+New" — a fresh conversation is always ai-sdk; a legacy read-only re-scope
   // returns to the default kind here (D6).
   const handleNewSession = useCallback(() => {
@@ -689,8 +698,13 @@ export function AIChatPanel({
         style={fullScreen ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
       >
         <div className="flex items-center gap-1.5 text-aux font-medium text-ink-fg">
-          <Sparkles size={13} strokeWidth={0} className="fill-coral text-coral" />
-          {t('chat.title')}
+          {/* living-bot-avatar WP5 — the 13px Sparkles gave way to the official assistant bot:
+              idle micro-motion when quiet, `working` while a BACKGROUND run is active (own-run
+              is already masked inside useBackgroundChatRun, so a foreground stream stays idle
+              here — the in-flow TurnPresence narrates that one). */}
+          <AssistantPanelBotAvatar working={backgroundActive} />
+          {/* 0813 主 agent 身份：起了名（如 Jarvis）标题即名字；未配置回 i18n 默认 */}
+          {assistantIdentity.name ?? t('chat.title')}
         </div>
         <div
           className="ml-auto flex items-center gap-1"

@@ -341,24 +341,32 @@ def _add_stakeholder(
         current["display_name"] = _optional_text(name)
 
 
+#: 「目的与背景」草稿里来信要点的长度上限。这是用户可见编辑框的预填，不是 prompt 注入面：
+#: 400 字够交代来龙去脉，再长就是把邮件正文整段搬进目标字段。
+_DESCRIPTION_EXCERPT_LIMIT = 400
+
+
 def _description(source: EmailFull, emails: Sequence[EmailFull]) -> str:
-    lines = [f"源邮件：{source.metadata.subject}"]
-    if source.metadata.date_received:
-        lines.append(f"收件时间：{source.metadata.date_received}")
+    """「目的与背景」（详情页「核心目标」）的草稿：干净的业务文本。
+
+    🔴 这段字符串会原样落进创建对话框的编辑框、再存进 ``matter.description`` —— 它是
+    **用户可见的业务字段**，不是 prompt 注入面（0813 轮 3 O6）：
+    ① 不放 ``UNTRUSTED_*`` 围栏字面量 —— 旧版把 ``fence_matter_excerpt`` 的产出直接拼进来，
+       owner 在「核心目标」框里看见的是 ``UNTRUSTED_MATTER_EXCERPT_START id=…`` 这样的
+       机器标记；围栏只属于 prompt 注入面（资源摘录仍照旧套围栏，见 ``_email_resource``）。
+    ② 不堆机械元数据行（收件时间 / 同线程 N 封的模板行）—— 那是资料列表的职责，不是目标。
+    这条链路没有 LLM，写不出真正的「目标」，所以草稿只给一段干净的背景 + 有界的来信要点，
+    目标本身留给用户写（UI hint 也明说「你写的这段，Agent 不会改写」）。
+    """
+    title = _suggested_title(source.metadata.subject)
+    context = f"背景：围绕邮件「{title}」"
     if len(emails) > 1:
-        lines.append(f"同线程邮件：{len(emails)} 封")
-    excerpt = _body_excerpt(source)
+        context += f"（同线程 {len(emails)} 封往来）"
+    context += "推进此事。"
+    lines = [context]
+    excerpt = _body_excerpt(source)[:_DESCRIPTION_EXCERPT_LIMIT]
     if excerpt:
-        lines.extend(
-            [
-                "背景摘录：",
-                fence_matter_excerpt(
-                    resource_id=f"email:{source.internal_id}",
-                    provider="mailagent",
-                    excerpt=excerpt,
-                ),
-            ]
-        )
+        lines.append(f"来信要点：{excerpt}")
     return "\n".join(lines)
 
 

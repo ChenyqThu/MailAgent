@@ -53,6 +53,9 @@ EXPECTED_DEFAULT_AUTO = {
     # Matters MVP P4 D8：启动/取消一轮跟进 run —— 本地可逆（取消不回滚已观察到的事实，
     # 但它本身不落任何 Matter 状态），与 custom_agent_run_now 同档。
     "matter_run_control",
+    # 0813 轮 3 批 R：关注信号处置 / 资料建议整批处置 —— 同为本地派生态写，同档。
+    "matter_attention_triage",
+    "matter_suggestion_resolve",
 }
 # configurable=False（固定形状）：send=收件人白名单 / run_command=policy_rules /
 # 供应链两卡 / custom-agent CRUD（run_now 除外）。

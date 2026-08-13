@@ -5,6 +5,30 @@ report 路径一字不动）。spec 形状 = ADR D2 基础上加两键：``runKi
 + ``matter: {id, publicId, title, runId}``（🔴 runId = matter_run.id —— gateway propose
 工具从语境盖章的来源；四字段 gateway 侧逐个运行时校验，任一不合法整个 anchor 作废）。
 
+模型三键（0813 dogfood 轮 3 反馈 #10 + B10）：``model`` / ``effort`` / ``fallbackModels``
+解析链**四层，从具体到宽泛**：
+
+1. **事项级覆盖** —— ``schedule_json`` envelope 的 ``agent`` 块（解析单源 ``triggers.py``）；
+2. **绑定 profile** 的 ``model`` / ``fallback_models_json``（profile 没有 effort 这一列）；
+3. **全局跟进 Agent 默认** —— ``owner_settings`` 的 ``matter_agent_defaults``
+   （单源 ``agent_defaults.py``，B10 新增：此前这一层对模型没有任何意见）；
+4. gateway 全局默认（本函数不写这个键 / 不投 ``effort``）。
+
+🔴 第 2 层排在第 3 层**之前**（不是反过来），三条依据：① D2 白纸黑字「profile 只贡献
+model/persona」—— 全局默认若压过它，profile 的 model 列对事项就成了永不生效的死配置，而
+「改用 Custom Agent 以更换模型」正是那个下拉的产品承诺；② 绑定 profile 是 **per-matter** 的
+显式选择（还计进「N 项覆盖」的计数），比一个对所有事项生效的默认更具体；③ 这样是**纯加层**：
+已绑 profile 的事项行为一字不变，全局默认只对「没有 profile 或 profile 没写模型」的事项起作用
+—— 反过来则会在 owner 第一次设全局默认的瞬间，静默改掉所有已绑定事项实际跑的模型。
+
+🔴 ``effort`` 另有一道**同模型闸**：全局那一档只在「最终跑的模型 == 全局默认模型」时才下发。
+档位阶梯是按模型家族给的，对没有 reasoning 能力的模型下发 effort，openai/deepseek 协议会往
+wire 上塞一个多余参数（16b 契约）；事项级 UI 为此禁止「没选模型就配档位」，跨层若不守同一条，
+「事项换了模型 + 全局配过档位」就会绕过那道 UI 闸。
+
+🔴 三项只碰这三个键 —— 工具面、grant、budget 的红线一个字节不动（``allowedTools`` 恒 ``[]``、
+``grantExec`` 永不写、budget 恒 1800s 常量）。
+
 安全内核（D5，0812 owner 拍板改版）：边界原则 = **能力按 CLASS 全给只读、红线是一个写工具
 都不给**。工具面不再手抄名单 —— gateway 侧从单源 ``GATEWAY_TOOL_CLASSES`` 推导（matter_followup
 矩阵行只放行 read/artifact/web-with-grant + ``wrapCfgForAgentRun`` 的 read-face 豁免第二道），
@@ -13,19 +37,21 @@ grantConnectors: {已连接 connector: 'read'}}``。🔴 ``grantExec`` **依然�
 读工具；矩阵行在 exec 判定之前就 return，服务端 ``resolve_caller_ceiling`` 还把 matter venue
 的 connector 天花板钉死 'read'）；``budget`` 恒 1800s 常量（profile budget 不咨询）。
 
-prompt **五段**（服务端唯一 prompt 权威，模型侧无 body 控制面）—— 顺序 = 下面
+prompt **六段**（服务端唯一 prompt 权威，模型侧无 body 控制面）—— 顺序 = 下面
 ``assemble_matter_spec`` 里 ``sections`` 列表的顺序，**改段数/顺序必须同步改前端**
 ``frontend/src/shared/components/matters/MatterPromptAssembly.tsx`` 的 ``STEPS``
 （那块只读披露就是照这份清单向 owner 说明「你改的是哪一段」）：
   1. 任务契约（``_task_contract``：owner 在全局配置面写过就整份换成他的，否则回落代码内置的
      ``_TASK_CONTRACT``）；
-  2. 本次跟进要做的事（0812：``_run_actions_section`` 把事项级「跟进时执行」四项勾选翻成条款；
+  2. 工作方法（0813 轮 3 O4：``_RUN_METHODOLOGY`` —— manual-only skill fragment 的 headless
+     适用子集，判断进展的纪律；恒注入、不随 owner 契约替换而消失）；
+  3. 本次跟进要做的事（0812：``_run_actions_section`` 把事项级「跟进时执行」四项勾选翻成条款；
      一项都没勾 → 返回空串 → 该段整体消失。🔴 只影响**产出要求**，不发工具不改权限）；
-  3. matter 快照（``context_snapshot`` 投影；资源摘录逐份套 ``UNTRUSTED_MATTER_EXCERPT``
+  4. matter 快照（``context_snapshot`` 投影；资源摘录逐份套 ``UNTRUSTED_MATTER_EXCERPT``
      围栏 —— 围栏词与 TS contextSerializer.ts ``fenceUntrusted('MATTER_EXCERPT', …)`` 一致，
      attrs 同为 ``{id, provider}``）；
-  4. 变化清单（D4 manifest：资源 rev 差异 + 新事件数 + 上次接受更新 + 末行的检索时间窗）；
-  5. persona（可选：profile.prompt + matter_instructions，前缀声明从属于任务契约）。
+  5. 变化清单（D4 manifest：资源 rev 差异 + 新事件数 + 上次接受更新 + 末行的检索时间窗）；
+  6. persona（可选：profile.prompt + matter_instructions，前缀声明从属于任务契约）。
 """
 
 from __future__ import annotations
@@ -39,10 +65,12 @@ from loguru import logger
 
 from src.agents.fence import fence_untrusted
 
+from .agent_defaults import load_agent_defaults
 from .repository import MatterRepository
 from .resource_proposal import connected_connector_ids
 from .run_service import MatterRunService, watermark_diff
 from .service import MatterError
+from .triggers import parse_agent_overrides
 
 # 0812 owner 拍板：工具面 = 所有 read class + matter_update_propose，由 gateway 从
 # GATEWAY_TOOL_CLASSES 单源按 class 推导（新增读工具零改动进面；类缺失 fail-close 成 exec
@@ -102,7 +130,7 @@ _TASK_CONTRACT = """【任务契约】
 
 【查证顺序】
 - 先只用下面三段（本次跟进要做的事 / 事项快照 / 变化清单）判断已知信息里有没有实质变化，这一步**不调工具**。
-- 检索优先级分三档：① 本事项**已关联**的资源——快照有摘录就用摘录，不够再用 matter_get 拿该资源的 external_key（形如 email:<internal_id>）后用邮件工具补齐；② 全库邮件——按干系人、主题关键词，并带上【变化清单】最后一行给出的检索时间窗（`after:YYYY-MM-DD`，原样抄进查询）找**新**往来；③ 其他已连接渠道（外部服务只读工具、网页检索）——找与本事项相关的新文档或进展；某档没有对应工具就跳过该档，不要报错也不要空转。
+- 检索优先级分三档：① 本事项**已关联**的资源——快照有摘录就用摘录，不够再用 matter_get 拿该资源的 external_key（形如 email:<internal_id>）后用邮件工具补齐；② 全库邮件——按干系人、主题关键词，并带上【变化清单】最后一行给出的检索时间窗（`after:YYYY-MM-DD`，原样抄进查询）找**新**往来；③ 其他已连接渠道——若你的工具列表提供外部服务的只读检索工具（Notion / Confluence / JIRA 一类）或网页检索，务必用它们找与本事项相关的新文档或进展：这类事的背景、结论与排期常沉淀在那些系统里，只查邮件会漏；某档没有对应工具就跳过该档，不要报错也不要空转。
 - 非首轮、且变化清单没点名资源也没有新事件时：不做全量翻库，只按 ②③ 做**一轮有界的新证据检查**（限定干系人/关键词，并带上【变化清单】给出的检索时间窗，几次查询以内）；查无新证据就直接结束本轮，不要为「确认一下」重读已关联资源，也不要为凑满【本次跟进要做的事】而提交空转提案。
 - 首轮、清单点了名、或清单写着「变化明细不可用」：正常检索，优先补齐被点名的部分，再按需扩档。
 
@@ -112,7 +140,7 @@ _TASK_CONTRACT = """【任务契约】
 - kind=field 只改 status/health/priority/due_at/waiting_context 并写依据；kind=action 无 target=新建行动项、带 target.id=改既有条目（id 来自 matter_get）；kind=resource 有两个形态：带 target.id=确认快照里已列出但未确认的资料，带 resource=新建一条关联。
 - 在②③档发现的**新**邮件/文档/页面（尚未关联进本事项的），写成 kind=resource 并带 resource={provider, kind, external_key, title, canonical_url}，由 owner 接受时正式关联：provider 只能是 mailagent（邮件，external_key 形如 email:<internal_id>）、web（网页，external_key 就是那个 http(s) 链接）或你**确实用到过**的已连接外部服务（如 notion，external_key 形如 page:<id>）；编造来源或不合形状的一律被服务端丢弃。🔴 只挂**你要在提案里引用、能让 owner 改判断或采取行动**的那几份，不要把检索到的东西一股脑全挂上来；拿不准要不要关联的写进 open_questions 让 owner 定。
 - 拿不准、需要 owner 定夺的写进 open_questions（≤5 条），不要编造。
-- 摘要不超过 3 句：先写当前卡点，再写下一步。"""
+- 摘要写的是**事情本身**的进展、给 owner 读的叙述，不是你本轮的操作记录：不超过 3 句，先写当前卡点或结论，再写下一步（谁在何时做什么）；不要罗列「检索了什么、改了哪个字段」。"""
 
 
 def default_task_contract() -> str:
@@ -123,6 +151,21 @@ def default_task_contract() -> str:
     "跟随默认"，这样以后改这里的文案，没自定义过的用户能跟着升级。
     """
     return _TASK_CONTRACT
+
+
+#: O4（0813 轮 3）——「事项方法论」的 headless 适用子集。manual 对话里这份方法论由
+#: ``src/skills/builtin/matters.py`` 的 prompt_fragment 注入，而 gateway 的
+#: ``systemPrompt.ts`` 用 ``!headlessAgentRun`` 门有意把 skill fragment 挡在 headless 之外
+#: —— 跟进 run 结构上拿不到唯一一份「怎么判断进展」的纪律。修法 = 在 spec 里下发一份
+#: **按场地改写**的子集（方案 a：服务端单源、pytest 可测、零 gateway 改动），而不是解除
+#: manual-only 门（方案 b 会把 fragment 里「写工具走审批卡 / 最小写入」这类 manual 专属
+#: 措辞原样喂给一个没有任何写工具的 run —— 教它声称做不到的事）。
+#: 🔴 两份文本**有意不同**（工具面不同、语言不同），不是手抄镜像，不建 parity 闸；
+#: 改判断纪律时两处都过一眼。措辞必须对 headless 如实：run 没有写工具，一切经提案落地。
+_RUN_METHODOLOGY = """【工作方法】
+- 判断进展先读证据，不凭标题或旧摘要推断：把未完成条目、干系人、最近事项事件与已接受的摘要对照，分清「证据表明的」与「你推断的」；证据缺位就写明缺什么，不要用合理想象补位。
+- 建议保持最小变更：一条行动项或事实能说清的，不要整段改写摘要；只有证据支撑事项状态确实变了，才建议更新摘要或字段。
+- 你没有任何写工具：起草的跟进邮件只是提案里的文本、不会被发送，所有变更都要 owner 审阅接受后才落地——接受之前不要把它们说成已发生。"""
 
 
 #: 「跟进时执行」四项各自要求 run 产出什么（设计 §5.2 ACTIONS）。
@@ -255,6 +298,17 @@ def _snapshot_section(snapshot: Mapping[str, Any]) -> str:
         value = core.get(key)
         if value not in (None, ""):
             lines.append(f"{key}: {value}")
+    # 完成标志（0813 轮 3 O2）：run 判断「有没有实质进展 / 能不能建议完结」的唯一完成判据，
+    # 逐条渲染成可读清单（core 里的原始形状是 [{"t","done"}] 字典列表，直接 f-string 会
+    # 打出 Python repr）。
+    goal_checks = core.get("goal_checks") or []
+    if goal_checks:
+        lines.append("完成标志（owner 定义的「怎样算做完」，全部勾满才算可完结）:")
+        for check in goal_checks:
+            if not isinstance(check, Mapping):
+                continue
+            mark = "x" if check.get("done") else " "
+            lines.append(f"- [{mark}] {check.get('t')}")
     items = snapshot.get("items") or []
     if items:
         lines.append("")
@@ -404,6 +458,7 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
 
     sections = [
         _task_contract(),
+        _RUN_METHODOLOGY,
         _run_actions_section(matter.get("schedule_json")),
         _snapshot_section(snapshot),
         _manifest_section(diff, snapshot, baseline),
@@ -417,6 +472,17 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
     if persona_parts:
         sections.append("【补充指引】\n" + PERSONA_PREFIX + "\n" + "\n\n".join(persona_parts))
     task_prompt = "\n\n".join(section for section in sections if section)
+
+    # 模型三键的解析链（模块 docstring 有完整依据）：事项级覆盖 → 绑定 profile →
+    # 全局跟进 Agent 默认 → gateway 全局默认。三项都是**覆盖**语义：某一层没写这个键就
+    # 落到下一层，不是"存了一个等于默认值的快照" —— 这样以后换默认，没配过的能跟着走。
+    #
+    # 🔴 只碰 model/effort/fallbackModels 三个键 —— D2「profile 只贡献 model/persona」
+    # 与工具面/授权的红线一个字节都不动（grantExec 永不写、allowedTools 恒 []）。
+    overrides = parse_agent_overrides(matter.get("schedule_json"))
+    defaults = load_agent_defaults()
+    profile_model = ((profile.get("model") or "").strip() or None) if profile else None
+    resolved_model = overrides.get("model") or profile_model or defaults.get("model")
 
     fired_at = datetime.fromtimestamp(job.created_at, tz=timezone.utc).isoformat()
     tool_policy: dict[str, Any] = {
@@ -445,7 +511,7 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         ),
         "trigger": {"id": None, "kind": "manual", "firedAt": fired_at},
         "prompt": {"taskPrompt": task_prompt},
-        "model": ((profile.get("model") or "").strip() or None) if profile else None,
+        "model": resolved_model,
         # 0812 owner 拍板 —— 工具面按 CLASS 由 gateway 单源推导（matter_followup 矩阵行 +
         # wrapCfgForAgentRun 的 read-face 豁免两道），Python 不再手抄工具名清单：
         # · allowedTools 恒 []：对 matter run 名单交集已被 read-face 豁免取代；[] 同时把
@@ -459,8 +525,30 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         "budget": {"maxRunSeconds": MATTER_FOLLOWUP_MAX_RUN_SECONDS},
         "sessionTitle": f"跟进 · {matter['title']}",
     }
-    if profile:
-        fallback = _parse_fallback_models(profile.get("fallback_models_json"))
+    # effort 两个来源：事项级覆盖 → 全局默认（profile 没有这一列）。gateway 侧
+    # `runHeadlessAgent` 把它投成 `body.effort`，由 `prepareChatRun` 既有的
+    # `effortTierFromBody` 消费 —— 认不出的档位在那里 fail-closed 成"不带这个键"。
+    #
+    # 🔴 全局那一档另有**同模型闸**：它是 owner 在全局面上**为全局默认模型**选的，只有最终
+    # 跑的就是那个模型时才下发。档位阶梯按模型家族给（`effortOptionsForModel`），对没有
+    # reasoning 能力的模型下发 effort，openai/deepseek 协议会往 wire 上塞一个多余参数
+    # （16b 契约）；事项级 UI 为此禁止「没选模型就配档位」，这里守的是同一条纪律的跨层版本
+    # —— 少了它，「事项换了个不支持思考的模型 + 全局配过档位」就绕过了那道 UI 闸。
+    default_model = defaults.get("model")
+    if overrides.get("effort"):
+        spec["effort"] = overrides["effort"]
+    elif defaults.get("effort") and default_model and resolved_model == default_model:
+        spec["effort"] = defaults["effort"]
+    # fallback：事项级覆盖 → 绑定 profile 的行级链 → 全局默认。🔴 每一层的 `[]` 都是
+    # **显式不设兜底**，与"这一层没配过"不是一回事 —— 所以判的一直是键在不在，不是列表真不真。
+    if "fallback_models" in overrides:
+        spec["fallbackModels"] = list(overrides["fallback_models"])
+    else:
+        fallback = (
+            _parse_fallback_models(profile.get("fallback_models_json")) if profile else None
+        )
         if fallback is not None:
             spec["fallbackModels"] = fallback
+        elif "fallback_models" in defaults:
+            spec["fallbackModels"] = list(defaults["fallback_models"])
     return spec

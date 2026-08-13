@@ -360,6 +360,32 @@ export function admissibleConnectorCrud(entry: ConnectorToolManifestEntry): Conn
   return crud === 'read' || crud === 'write' || crud === 'update' ? crud : null
 }
 
+/** 0813 batch P — the matter_followup venue's PER-ENTRY admission, layered on the base admission
+ *  above: only a crud-'read', per-tool-'auto', NON-destructive entry may register in a Matter
+ *  follow-up run. Three narrowings, each deliberate:
+ *   - crud 'read' hard-pinned HERE (not only via the spec's read ceilings): a tampered spec can
+ *    author 'update' ceilings and parseConnectorGrants accepts them, so the venue itself must
+ *    not lean on the grants for its read-only promise (the matrix row + Python's venue-pinned
+ *    ceiling remain the belts behind this);
+ *   - mode 'auto' ONLY — the unattended-venue mirror of the preprocess only_auto_tools precedent
+ *    (08-05 场地一): 'ask' has no approval host here, so its faithful meaning is UNAVAILABLE —
+ *    never a card, and never the generic-headless "tiers are meaningless" silent pass. 🔴 The
+ *    generic headless venues (untrusted_trigger/cron_headless) keep that older semantic
+ *    byte-identical — this predicate is matter-only;
+ *   - destructive excluded even on a read: derive_crud_type (裁决③) makes read+destructive
+ *    structurally impossible at sync time, but a hand-edited row bypasses the derivation and
+ *    this venue must not depend on a远处 invariant.
+ *  Shared by createConnectorTools (registration) AND projectConnectorCatalog (the
+ *  matterReadToolCount) so the prompt catalog can never advertise a tool the matter registration
+ *  skips. */
+export function matterVenueAdmitsEntry(entry: ConnectorToolManifestEntry): boolean {
+  return (
+    admissibleConnectorCrud(entry) === 'read' &&
+    entry.mode === 'auto' &&
+    entry.destructive !== true
+  )
+}
+
 /**
  * D1 — project the manifest into the per-connector prompt catalog (ConnectorCatalogEntry[]):
  * admitted tools only (admissibleConnectorCrud + a representable, non-duplicate gateway name —
@@ -388,13 +414,18 @@ export function projectConnectorCatalog(
         displayName: entry.connectorName,
         readToolCount: 0,
         writeToolCount: 0,
-        updateToolCount: 0
+        updateToolCount: 0,
+        matterReadToolCount: 0
       }
       byConnector.set(entry.connectorId, row)
     }
     if (crud === 'read') row.readToolCount += 1
     else if (crud === 'write') row.writeToolCount += 1
     else row.updateToolCount += 1
+    // 0813 batch P — the matter venue's narrower read count (auto-tier, non-destructive), so
+    // connectorCatalogForRun can keep the "never advertise wider than the ToolSet" invariant for
+    // a follow-up run without re-touching the manifest (the catalog rows are all it receives).
+    if (matterVenueAdmitsEntry(entry)) row.matterReadToolCount = (row.matterReadToolCount ?? 0) + 1
   }
   const out = [...byConnector.values()]
   return out.length > 0 ? out : null
@@ -425,6 +456,22 @@ export function connectorCatalogForRun(
   if (contextMode === 'manual_chat' || contextMode === 'im_chat') return [...catalog]
   const grants = parseConnectorGrants(connectorGrants)
   if (grants === undefined) return null // unreachable after the seam — belt only
+  // 0813 batch P — matter venue: the advertised read count is the NARROWER matterReadToolCount
+  // (auto-tier, non-destructive — what createConnectorTools actually registers there), and the
+  // write/update counts are zeroed unconditionally (the venue never registers a write regardless
+  // of what the — possibly tampered — ceilings claim). A row whose narrowed face is empty drops
+  // out entirely; absent count (a hand-built catalog row) fail-closes to 0, never to the wider
+  // readToolCount.
+  if (contextMode === 'matter_followup') {
+    const matterOut: ConnectorCatalogEntry[] = []
+    for (const row of catalog) {
+      if (grants[row.connectorId] === undefined) continue
+      const reads = row.matterReadToolCount ?? 0
+      if (reads <= 0) continue
+      matterOut.push({ ...row, readToolCount: reads, writeToolCount: 0, updateToolCount: 0 })
+    }
+    return matterOut.length > 0 ? matterOut : null
+  }
   const out: ConnectorCatalogEntry[] = []
   for (const row of catalog) {
     const ceiling = grants[row.connectorId]
@@ -638,6 +685,10 @@ export function createConnectorTools(
     // (policy.ts) — the ToolSet a headless run assembles can only ever contain grant-covered
     // connector tools.
     if (headlessAgent) {
+      // 0813 batch P — matter venue narrowing (matterVenueAdmitsEntry): read-only + per-tool
+      // 'auto' only + never destructive. Sits BEFORE the ceiling filter on purpose: the venue's
+      // admission must hold even when a tampered spec authored write-capable ceilings.
+      if (contextMode === 'matter_followup' && !matterVenueAdmitsEntry(entry)) continue
       const ceiling = headlessGrants?.[entry.connectorId]
       if (ceiling === undefined) continue
       if (CONNECTOR_CRUD_RANK[crud] > CONNECTOR_CRUD_RANK[ceiling]) {

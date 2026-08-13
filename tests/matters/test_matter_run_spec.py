@@ -224,6 +224,56 @@ def test_task_contract_is_honest_about_the_new_boundary(env):
     assert "不要把检索到的东西一股脑全挂上来" in prompt
 
 
+def test_methodology_section_reaches_the_headless_run(env):
+    """0813 轮 3 O4：manual-only 的 `matters` skill fragment（systemPrompt.ts 的
+    `!headlessAgentRun` 门）让跟进 run 结构上拿不到「事项方法论」—— 修法 (a) = 服务端在
+    spec 里下发 headless 适用子集（`_RUN_METHODOLOGY`），且措辞对 headless 如实
+    （没有写工具、一切经提案）。"""
+    settings, _, _, _, job = env
+    prompt = assemble_matter_spec(job, settings=settings)["prompt"]["taskPrompt"]
+    assert "【工作方法】" in prompt
+    # 判断纪律的三根柱子：先读证据 / 区分证据与推断 / 最小变更。
+    assert "先读证据" in prompt
+    assert "你推断的" in prompt
+    assert "最小变更" in prompt
+    # headless 如实措辞：没有写工具，接受前不许声称已发生。
+    assert "你没有任何写工具" in prompt
+    assert "接受之前不要把它们说成已发生" in prompt
+
+
+def test_prompt_names_no_dynamic_tool_literals_and_keeps_retrieval_conditional(env):
+    """0813 轮 3 O5：外部检索指引点名的是**类别**（Notion / Confluence / JIRA 一类）且恒
+    条件式（「若你的工具列表提供…」）——批 J 反向测试（builtin fragment 不得点名动态工具）
+    的同款纪律，扩展到本批新加/改写的 run prompt 段落：connector 工具是动态注册的，恒注入面
+    写死工具名 = 教模型调不存在的工具。"""
+    settings, _, _, _, job = env
+    prompt = assemble_matter_spec(job, settings=settings)["prompt"]["taskPrompt"]
+    assert "若你的工具列表提供" in prompt
+    assert "Notion / Confluence / JIRA" in prompt
+    for dynamic_tool in ("notion_agent_chat", "mcp__notion__", "notion-search"):
+        assert dynamic_tool not in prompt
+    # 摘要文体口径（O3）与三入口统一：进展是叙述，不是操作记录。
+    assert "不是你本轮的操作记录" in prompt
+
+
+def test_snapshot_projects_goal_checks_for_the_run(env):
+    """0813 轮 3 O2 可见面：run 的快照段渲染「完成标志」清单（勾选态可读，不是 dict repr）。"""
+    settings, service, pid, run, job = env
+    version = service.get_matter(pid)["matter"]["version"]
+    service.patch_matter(
+        pid,
+        {"goal_checks": [{"t": "合同已签署"}, {"t": "款项已到账", "done": True}]},
+        expected_version=version,
+        idempotency_key="gc",
+        source="desktop_ui",
+    )
+    prompt = assemble_matter_spec(job, settings=settings)["prompt"]["taskPrompt"]
+    assert "完成标志" in prompt
+    assert "- [ ] 合同已签署" in prompt
+    assert "- [x] 款项已到账" in prompt
+    # 未设置时该小节整体缺席（env 基线没配 goal_checks 的另一半在 shape snapshot 用例覆盖）。
+
+
 def test_search_time_window_is_projected_not_assumed(env):
     """🔴 契约里的每一句都必须是模型真能做到的。
 

@@ -11,6 +11,8 @@ import type { ApprovalGuard } from '../security/approval'
 import type { AgentContextMode } from './policy'
 import {
   matterAddNoteSchema,
+  matterAttentionListSchema,
+  matterAttentionTriageSchema,
   matterCreateSchema,
   matterFindSchema,
   matterGetSchema,
@@ -19,7 +21,10 @@ import {
   matterResourceMutateSchema,
   matterReviewUpdateSchema,
   matterRunControlSchema,
+  matterRunsListSchema,
   matterStakeholderMutateSchema,
+  matterSuggestionResolveSchema,
+  matterTagsListSchema,
   matterUpdateProposeSchema,
   matterUpdateSchema,
   type MatterReviewUpdateInput
@@ -32,7 +37,16 @@ import {
   type GatewayToolAuditCollector
 } from './types'
 
-export const GATEWAY_MATTER_READ_TOOL_NAMES = ['matter_find', 'matter_get'] as const
+export const GATEWAY_MATTER_READ_TOOL_NAMES = [
+  'matter_find',
+  'matter_get',
+  // 0813 轮 3 批 R — three reads that had REST but no tool. Class `read`, so the matter_followup
+  // matrix row admits them by derivation: a follow-up run can now see its own attention signals
+  // and what the previous runs concluded, instead of re-deriving both from scratch every round.
+  'matter_attention_list',
+  'matter_runs_list',
+  'matter_tags_list'
+] as const
 export const GATEWAY_MATTER_SUGGESTION_TOOL_NAMES = ['matter_suggest_related_resources'] as const
 export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
   'matter_create',
@@ -46,7 +60,12 @@ export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
   // NOT in a follow-up run: the matter_followup matrix row denies domain_write outright, so a run
   // can never start another run or accept its own proposal.
   'matter_run_control',
-  'matter_review_update'
+  'matter_review_update',
+  // 0813 轮 3 批 R — the two disposal writes. Same venue story as the pair above (domain_write ⇒
+  // owner-present only): a follow-up run may DISCOVER attention or suggestions, never dispose of
+  // them. Factory tier `auto` follows the family (local, audited, reversible).
+  'matter_attention_triage',
+  'matter_suggestion_resolve'
 ] as const
 
 /** P4 (D6) — the follow-up run's own tool, registered ONLY inside a matter-run context. Kept in
@@ -105,9 +124,38 @@ function mutation(input: {
   }
 }
 
+/** 0813 轮 3 批 R — the run row fields a model may see. 🔴 `trigger_payload` is deliberately
+ *  absent: it is fenced UNTRUSTED content lifted from an email / calendar event, and a run-history
+ *  read must not become a second, unfenced delivery route for it. Everything kept here is
+ *  machinery the run itself produced. */
+const MATTER_RUN_PROJECTION = [
+  'id',
+  'lifecycle_state',
+  'status',
+  'trigger_kind',
+  'created_at',
+  'started_at',
+  'completed_at',
+  'canceled_at',
+  'duration_ms',
+  'update_id',
+  'model',
+  'error'
+] as const
+
+function projectRun(run: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const key of MATTER_RUN_PROJECTION) if (run[key] !== undefined) out[key] = run[key]
+  return out
+}
+
 export function createMatterReadTools(
   domain: MailAgentDomainClient,
-  collector: GatewayToolAuditCollector = []
+  collector: GatewayToolAuditCollector = [],
+  /** 0813 批 R — `matter_runs_list` mirrors the run REST face, which the matter-agent flag gates
+   *  server-side. Registering it with the flag off would advertise a tool that can only ever
+   *  return an error, so it follows the same `!== false` condition as matter_update_propose. */
+  opts: { matterAgentEnabled?: boolean } = {}
 ): Record<string, Tool> {
   const matter_find = auditedReadTool(
     {
@@ -146,14 +194,85 @@ export function createMatterReadTools(
     {
       name: 'matter_get',
       description:
-        'Read one Matter and a bounded subset of items, resources, stakeholders, timeline, or relations. Resource bodies are not returned.',
+        'Read one Matter and a bounded subset of items, resources, stakeholders, timeline, relations, or updates (pending review proposals — include "updates" to get the update_id that matter_review_update needs). Resource bodies are not returned.',
       inputSchema: matterGetSchema,
       run: (input, signal) => domain.getMatter(input.public_id, input.include, signal)
     },
     collector
   )
 
-  return { matter_find, matter_get }
+  const matter_attention_list = auditedReadTool(
+    {
+      name: 'matter_attention_list',
+      description:
+        'List the attention signals Matters are raising — overdue waits, overdue actions, ' +
+        'approaching deadlines, health drops, proposals awaiting review, failed follow-up runs, ' +
+        'context gaps. Omit public_id to sweep every Matter; that is how to answer "what needs ' +
+        'attention right now". Each signal carries the Matter it belongs to, why it opened, and ' +
+        'the id that matter_attention_triage needs.',
+      inputSchema: matterAttentionListSchema,
+      run: async (input, signal) => {
+        const result = await domain.listMatterAttention(
+          { publicId: input.public_id, state: input.state },
+          signal
+        )
+        const items = result.items ?? []
+        return {
+          count: Math.min(items.length, input.limit),
+          truncated: items.length > input.limit,
+          items: items.slice(0, input.limit)
+        }
+      }
+    },
+    collector
+  )
+
+  const matter_tags_list = auditedReadTool(
+    {
+      name: 'matter_tags_list',
+      description:
+        'List the Matter tags that already exist, with how many Matters use each one. Read this ' +
+        'before putting tags on a Matter: reuse an existing name instead of coining a synonym ' +
+        '(「客户交付」 vs 「交付」) — nothing merges them afterwards. Renaming, recoloring and ' +
+        'deleting tags stays with the owner in 设置 → 事项 → 标签.',
+      inputSchema: matterTagsListSchema,
+      run: (_input, signal) => domain.listMatterTags(signal)
+    },
+    collector
+  )
+
+  const reads: Record<string, Tool> = {
+    matter_find,
+    matter_get,
+    matter_attention_list,
+    matter_tags_list
+  }
+
+  if (opts.matterAgentEnabled !== false) {
+    reads.matter_runs_list = auditedReadTool(
+      {
+        name: 'matter_runs_list',
+        description:
+          "Read a Matter's follow-up run history: when each round ran, how it ended, and whether " +
+          'it produced a proposal (`update_id` — feed it to matter_get include:["updates"] to see ' +
+          'what was proposed). Use it to answer "did the follow-up run / why did it come back ' +
+          'empty" instead of starting another round. Run inputs are not returned.',
+        inputSchema: matterRunsListSchema,
+        run: async (input, signal) => {
+          const result = await domain.listMatterRuns(
+            input.public_id,
+            { limit: input.limit },
+            signal
+          )
+          const items = result.items ?? []
+          return { count: items.length, items: items.map(projectRun) }
+        }
+      },
+      collector
+    )
+  }
+
+  return reads
 }
 
 export function createMatterSuggestionTools(
@@ -242,7 +361,11 @@ export function createMatterWriteTools(
     {
       ...shared,
       name: 'matter_create',
-      description: 'Create a Matter and return the committed state plus an undo descriptor.',
+      description:
+        'Create a Matter and return the committed state plus an undo descriptor. Fill ' +
+        '`description` (the goal and background: why this is pursued and what success looks ' +
+        'like) with real substance, and set `goal_checks` when the user can state what done ' +
+        'means — both are owner-owned after creation and cannot be patched by agents later.',
       inputSchema: matterCreateSchema,
       risk: 'edit',
       run: async (input, { signal }) => {
@@ -263,7 +386,10 @@ export function createMatterWriteTools(
       ...shared,
       name: 'matter_update',
       description:
-        'Patch, archive, reopen, trash, or restore a Matter with optimistic concurrency. Arbitrary JSON and automation bindings are forbidden.',
+        'Patch, archive, reopen, trash, or restore a Matter with optimistic concurrency. ' +
+        'Arbitrary JSON and automation bindings are forbidden. The owner-written core goal ' +
+        '(description) and goal_checks are NOT patchable — suggest wording for the owner to ' +
+        'apply instead of attempting the write.',
       inputSchema: matterUpdateSchema,
       risk: 'edit',
       run: async (input, { signal }) => {
@@ -281,7 +407,9 @@ export function createMatterWriteTools(
     {
       ...shared,
       name: 'matter_item_mutate',
-      description: 'Create, update, soft-delete, or restore one typed Matter item.',
+      description:
+        'Create, update, soft-delete, or restore one typed Matter item (action / milestone / ' +
+        'decision / blocker / question / note — the kind field explains when to use which).',
       inputSchema: matterItemMutateSchema,
       risk: 'edit',
       run: (input, { signal }) =>
@@ -375,7 +503,10 @@ export function createMatterWriteTools(
       ...shared,
       name: 'matter_add_note',
       description:
-        'Append a Matter note. The undo path soft-deletes the note item; history remains auditable.',
+        'Append a Matter note — the lightest way to record progress or a learning without ' +
+        'rewriting the summary. Write the note for a future reader (blocker/conclusion first, ' +
+        'then next step), not as a log of your own edits. The undo path soft-deletes the note ' +
+        'item; history remains auditable.',
       inputSchema: matterAddNoteSchema,
       risk: 'edit',
       run: (input, { signal }) =>
@@ -451,6 +582,57 @@ export function createMatterWriteTools(
     guard
   )
 
+  const matter_attention_triage = auditedWriteTool(
+    {
+      ...shared,
+      name: 'matter_attention_triage',
+      description:
+        'Resolve, snooze, or dismiss ONE attention signal (ids come from matter_attention_list). ' +
+        'Resolving records that the situation behind the signal is handled — the same signal ' +
+        'reopens on its own if the condition returns, so resolve is the normal choice. Snooze ' +
+        'needs an `until` timestamp. Dismiss stops it being raised at all and is for signals the ' +
+        'owner says are simply wrong. This changes only the signal; the Matter itself is untouched.',
+      inputSchema: matterAttentionTriageSchema,
+      risk: 'edit',
+      run: (input, { signal }) =>
+        domain.triageMatterAttention(
+          input.public_id,
+          input.signal_id,
+          input.action,
+          { until: input.until },
+          mutation(input),
+          signal
+        )
+    },
+    collector,
+    guard
+  )
+
+  const matter_suggestion_resolve = auditedWriteTool(
+    {
+      ...shared,
+      name: 'matter_suggestion_resolve',
+      description:
+        'Confirm or reject unconfirmed resource suggestions on a Matter, in one batch. This is ' +
+        'the disposal half of matter_suggest_related_resources, which only ever discovers. ' +
+        'Confirming links the resources as real evidence; rejecting records that they do not ' +
+        'belong, which also stops them being suggested again. Ids already handled elsewhere come ' +
+        'back in `skipped` with a reason — the batch is not rejected for them.',
+      inputSchema: matterSuggestionResolveSchema,
+      risk: 'edit',
+      run: (input, { signal }) =>
+        domain.resolveMatterSuggestions(
+          input.public_id,
+          input.resource_ids,
+          input.action,
+          mutation(input),
+          signal
+        )
+    },
+    collector,
+    guard
+  )
+
   return {
     matter_create,
     matter_update,
@@ -460,7 +642,9 @@ export function createMatterWriteTools(
     matter_relation_mutate,
     matter_add_note,
     matter_run_control,
-    matter_review_update
+    matter_review_update,
+    matter_attention_triage,
+    matter_suggestion_resolve
   }
 }
 

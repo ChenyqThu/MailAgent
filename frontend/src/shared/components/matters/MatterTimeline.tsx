@@ -29,6 +29,7 @@ import type { LucideIcon } from 'lucide-react'
 
 import type { MatterActorKind, MatterEvent } from '@shared/api/types/matter'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { CollapseChevron } from '@shared/components/ui/collapsible'
 import {
   Dialog,
   DialogContent,
@@ -40,6 +41,7 @@ import { SegmentedControl } from '@shared/components/ui/segmented'
 import { cn } from '@shared/lib/cn'
 
 import {
+  ELLIPSIS,
   groupTimelineEvents,
   matterEventTier,
   narrateEvent,
@@ -47,6 +49,7 @@ import {
   readChanges,
   readFields,
   type TimelineGroup,
+  type TimelineNarrative,
   type TimelineSentence,
   type Translate
 } from './matterTimelineModel'
@@ -341,6 +344,79 @@ export function MatterTimeline({ events }: { events: readonly MatterEvent[] }): 
   )
 }
 
+/**
+ * 正文块要不要给「展开全文」的字数门槛。
+ *
+ * 🔴 **判据是「有没有可能被 3 行 clamp 切掉」，不是「文本长不长」**，所以规则必须是
+ * 「过门槛才 clamp」而不是「一律 clamp、过门槛才给按钮」：后者在窄容器下会把 80 字的
+ * 正文切掉一截却不给任何展开入口 —— 那是**藏内容**。取 140 是因为详情列宽下 3 行
+ * ≈ 90-130 个中文字符，留一档余量后误报（按钮点开没多出内容）远少于漏报。
+ * 不用 `scrollHeight > clientHeight` 实测：happy-dom 不做布局，那条判据在单测里恒 false，
+ * 等于这段逻辑没有回归网。
+ */
+export const NARRATIVE_CLAMP_CHARS = 140
+
+/**
+ * 事件正文 —— 时间线上「事情本身写了什么」的那一块（对位设计 progress.jsx
+ * `ProgressEntry` 的 quote 块，样式换成本仓 v3 词汇，见下面 className 处的说明）。
+ *
+ * 这是 0813 轮 3 的核心：在此之前时间线上**只有**「谁改了哪个字段」，事情本身写了
+ * 什么一个字都看不到（owner：「进展仍然像操作日志」）。
+ */
+function TimelineBody({
+  body,
+  t,
+  compact = false
+}: {
+  body: TimelineNarrative
+  t: Translate
+  compact?: boolean
+}): React.ReactElement {
+  const [open, setOpen] = useState(false)
+  const clampable = body.text.length > NARRATIVE_CLAMP_CHARS
+  return (
+    <div
+      data-testid="matter-timeline-body"
+      // 设计稿的 quote 块是「左侧 2px 彩色竖条」，这里换成本仓 v3 的发丝描边卡：
+      // ① 设计里那条竖条承担的是「引文/摘自某份资料」的语气，而这块是**主内容**；
+      // ② 单侧粗边在 v3「原生材质」里没有对应物，同一屏上方的降级说明条用的正是
+      //    `border-ink-border-soft + bg-ink-1`，跟着它走才是这一屏的既有词汇。
+      className={cn(
+        'mt-1.5 rounded-[var(--r-row)] border border-ink-border-soft bg-ink-1 px-2.5 py-1.5',
+        compact && 'mt-1'
+      )}
+    >
+      <p
+        className={cn(
+          'whitespace-pre-wrap text-ink-fg-1',
+          compact ? 'text-meta leading-[1.6]' : 'text-aux leading-[1.7]',
+          clampable && !open && 'line-clamp-3'
+        )}
+      >
+        {/* 截断的省略号只在**真被后端截**时加 —— clamp 是渲染裁剪，展开就能看全，
+            给它加省略号会谎称"后面还有你永远看不到的内容"。 */}
+        {body.truncated ? `${body.text}${ELLIPSIS}` : body.text}
+      </p>
+      {clampable ? (
+        <button
+          type="button"
+          onClick={() => setOpen((value) => !value)}
+          aria-expanded={open}
+          className="mt-0.5 inline-flex items-center gap-1 rounded-[var(--r-ctl)] py-0.5 text-micro text-ink-fg-3 transition-colors duration-fast ease-standard hover:text-ink-fg-2 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+        >
+          <CollapseChevron expanded={open} size={10} />
+          {t(open ? 'matters.narrative.body.collapse' : 'matters.narrative.body.expand')}
+        </button>
+      ) : null}
+      {body.truncated && (open || !clampable) ? (
+        <p className="mt-0.5 text-micro text-ink-fg-3">
+          {t('matters.narrative.body.truncated')}
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
 function TimelineRow({
   group,
   t,
@@ -378,6 +454,8 @@ function TimelineRow({
         {sentence.detail ? (
           <div className="mt-0.5 text-meta leading-[1.55] text-ink-fg-3">{sentence.detail}</div>
         ) : null}
+        {/* 正文紧跟主句、排在时间/来源那行**之前** —— 内容是第一等的，元信息才是脚注。 */}
+        {sentence.body ? <TimelineBody body={sentence.body} t={t} /> : null}
         <div className="mt-[3px] flex flex-wrap items-center gap-[7px]">
           <time className="font-mono text-micro text-ink-fg-3">
             {new Date(head.happened_at).toLocaleString()}
@@ -431,6 +509,9 @@ function MergedEntry({ event, t }: { event: MatterEvent; t: Translate }): React.
       <span className="text-ink-fg-2">{sentence.text}</span>
       {sentence.detail ? <span> · {sentence.detail}</span> : null}
       <time className="ml-1.5 font-mono">{new Date(event.happened_at).toLocaleTimeString()}</time>
+      {/* 合并组的计数句不挂正文（那等于替用户挑一条当"进展"），所以正文只能在这儿露面
+          —— 少了它，「新增了 3 条备注」展开后仍然一个字都读不到。 */}
+      {sentence.body ? <TimelineBody body={sentence.body} t={t} compact /> : null}
     </li>
   )
 }

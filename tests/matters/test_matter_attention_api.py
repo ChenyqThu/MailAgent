@@ -107,6 +107,50 @@ def test_attention_rest_triage_ack_and_no_version_bump(env):
     assert ack.json()["data"]["last_notified_at"] == NOW
 
 
+def test_attention_snooze_accepts_an_explicit_until(env):
+    """0813 轮 3 批 R —— gateway 的 ``matter_attention_triage`` 走的是 **explicit ``until``**，
+    不是界面那个 ``preset='3d'``。上面那条用例只覆盖了 preset 分支，于是 router 里
+    ``until = body.get("until")`` 这一支到本批为止一次都没被端到端跑过。
+
+    顺带钉住服务端的时间闸：``until`` 落在过去 ⇒ 400 E_INVALID_ARG（不是静默按 now 处理）。
+    """
+    client, path, _, attention = env
+    matter = client.post(
+        "/api/matters", json={"title": "Snooze until", "mutation": _mutation("until-create")}
+    ).json()["data"]["matter"]
+    signal = attention.open_signal(
+        matter_id=matter["id"], kind="wait_overdue", subject_key="wait:1",
+        severity="warn", why="对方 5 天没回",
+    )
+    assert signal is not None
+
+    future = NOW + 86_400_000
+    ok = client.post(
+        f"/api/matters/{matter['public_id']}/attention/{signal['id']}/snooze",
+        json={
+            "until": future,
+            "mutation": {"source": "ai_gateway", "idempotency_key": "until-1"},
+        },
+    )
+    assert ok.status_code == 200
+    with sqlite3.connect(path) as conn:
+        row = conn.execute(
+            "SELECT state, snoozed_until FROM matter_attention WHERE id=?", (signal["id"],)
+        ).fetchone()
+    assert row[0] == "snoozed"
+    assert row[1] == future
+
+    past = client.post(
+        f"/api/matters/{matter['public_id']}/attention/{signal['id']}/snooze",
+        json={
+            "until": NOW - 1,
+            "mutation": {"source": "ai_gateway", "idempotency_key": "until-2"},
+        },
+    )
+    assert past.status_code == 400
+    assert past.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def test_notified_endpoint_uses_local_token_without_cf_dependency():
     route = next(
         route

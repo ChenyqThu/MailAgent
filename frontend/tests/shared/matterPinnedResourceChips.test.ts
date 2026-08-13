@@ -1,15 +1,15 @@
-// G-21 —— composer 上每份置顶资料一颗可移除 chip；移除 = 把那份摘录从**本轮上下文快照**里
-// 剔掉（不是解除关联）。
+// composer 上「已注入的上下文」里那个置顶资料计数的**同源**闸：屏幕上说带了几份，与真正
+// 塞进 prompt 的那份摘录列表，必须来自同一个 payload。历史上这类「UI 层单独藏一个元素、
+// payload 照发」的写法就是界面在撒谎——用户以为自己拿掉了那份资料，模型手里其实还有。
 //
-// 🔴 这个文件盯的是**同源**：屏幕上说带了几份、chip 行摆了几颗、真正塞进 prompt 的有几份，
-// 必须来自同一份 payload。历史上这类「UI 层单独藏一个元素、payload 照发」的写法就是界面在
-// 撒谎——用户以为自己拿掉了那份资料，模型手里其实还有。
+// 🔴 G-21 的「每份置顶资料一颗可移除 chip」已随 D15（0813 dogfood）退役：唯一的移除入口
+// 没了，剔除参数 `excludedResourceIds` / `applyResourceExclusions` 随之成为死代码并已删除。
+// 这里只剩仍然活着的两个投影 —— 它们的同源关系才是这个文件真正要钉的东西。
 
 import { describe, expect, test } from 'vitest'
 
 import type { MatterContextSnapshotPayload } from '../../src/shared/api/matters'
 import {
-  applyResourceExclusions,
   toActiveMatterContext,
   toChipCounts
 } from '../../src/shared/components/matters/useMatterContextSnapshot'
@@ -54,29 +54,22 @@ function payload(): MatterContextSnapshotPayload {
   } as MatterContextSnapshotPayload
 }
 
-describe('applyResourceExclusions', () => {
-  test('drops exactly the removed chips and leaves the rest untouched', () => {
-    const filtered = applyResourceExclusions(payload(), new Set([12]))
-    expect(filtered.resources.map((item) => item.id)).toEqual([11, 13])
-  })
-
-  test('an empty / missing exclusion set returns the very same object (no needless re-render)', () => {
+describe('matter context snapshot projections', () => {
+  test('chip counts and the injected excerpts come from the same payload', () => {
     const source = payload()
-    expect(applyResourceExclusions(source, undefined)).toBe(source)
-    expect(applyResourceExclusions(source, new Set())).toBe(source)
-  })
-
-  test('chip counts and the injected excerpts move together', () => {
-    const filtered = applyResourceExclusions(payload(), new Set([11, 13]))
     // 屏幕上的数字…
-    expect(toChipCounts(payload()).pinnedResources).toBe(3)
-    expect(toChipCounts(filtered).pinnedResources).toBe(1)
-    // …与真正进 prompt 的那份摘录列表，来自同一个 payload。
-    expect(toActiveMatterContext(filtered).resources.map((item) => item.excerpt)).toEqual(['摘录 12'])
+    expect(toChipCounts(source).pinnedResources).toBe(3)
+    // …与真正进 prompt 的那份摘录列表，逐条对齐。
+    expect(toActiveMatterContext(source).resources.map((item) => item.excerpt)).toEqual([
+      '摘录 11',
+      '摘录 12',
+      '摘录 13'
+    ])
   })
 
-  test('unknown ids are inert (a stale removal cannot empty the context)', () => {
-    const filtered = applyResourceExclusions(payload(), new Set([999]))
-    expect(filtered.resources).toHaveLength(3)
+  test('an empty payload projects zeros, not a placeholder count', () => {
+    const source = { ...payload(), resources: [] } as MatterContextSnapshotPayload
+    expect(toChipCounts(source).pinnedResources).toBe(0)
+    expect(toActiveMatterContext(source).resources).toEqual([])
   })
 })

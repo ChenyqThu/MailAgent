@@ -8,7 +8,10 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 
 import i18n from '@shared/i18n'
 import type { MatterActorKind, MatterEvent } from '@shared/api/types/matter'
-import { MatterTimeline } from '@shared/components/matters/MatterTimeline'
+import {
+  MatterTimeline,
+  NARRATIVE_CLAMP_CHARS
+} from '@shared/components/matters/MatterTimeline'
 
 const T0 = Date.UTC(2026, 7, 12, 17, 30, 0)
 
@@ -215,5 +218,114 @@ describe('MatterTimeline', () => {
   it('空列表仍显示既有空态', () => {
     render(<MatterTimeline events={[]} />)
     expect(screen.getByText('这个筛选下还没有进展。')).toBeTruthy()
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 事件正文（0813 轮 3）—— owner：「进展仍然像操作日志」。
+// 判定层在 matterTimelineModel.test.ts；这里只管「正文真的进了 DOM」与 clamp 行为。
+// ---------------------------------------------------------------------------
+describe('MatterTimeline —— 事件正文', () => {
+  const PROSE = '对方法务已回签补充协议，卡在我方财务开票；下一步 8/15 前把发票寄出。'
+  // 🔴 两侧都锚在**同一个常量**上，别写死字数：门槛调一档时，写死的 fixture 会静默
+  // 落到门槛的另一侧，于是「短正文不 clamp」和「长正文有展开钮」两条同时变成空转。
+  const LONG = '进'.repeat(NARRATIVE_CLAMP_CHARS + 1)
+
+  function summaryEvent(narrative: Record<string, unknown>): MatterEvent {
+    return ev({
+      kind: 'matter_updated',
+      payload: {
+        fields: ['current_summary'],
+        changes: [{ field: 'current_summary', from: '旧摘要', to: '新摘要' }],
+        narrative
+      }
+    })
+  }
+
+  it('摘要正文落到 DOM —— 时间线第一次有「事情本身写了什么」', () => {
+    render(<MatterTimeline events={[summaryEvent({ text: PROSE })]} />)
+    expect(screen.getByText('改写了当前状态摘要')).toBeTruthy()
+    expect(screen.getByTestId('matter-timeline-body').textContent).toContain(PROSE)
+  })
+
+  it('🔴 存量老行（无 narrative）不渲染正文块，也不崩', () => {
+    render(
+      <MatterTimeline
+        events={[
+          ev({
+            kind: 'matter_updated',
+            payload: {
+              fields: ['current_summary'],
+              changes: [{ field: 'current_summary', from: '旧', to: '新' }]
+            }
+          })
+        ]}
+      />
+    )
+    expect(screen.getByText('改写了当前状态摘要')).toBeTruthy()
+    expect(screen.queryByTestId('matter-timeline-body')).toBeNull()
+  })
+
+  it('短正文不 clamp、不给展开钮（否则按钮点开什么也没多）', () => {
+    // 🔴 规则是「过门槛才 clamp」而不是「一律 clamp、过门槛才给按钮」—— 后者会在窄
+    // 容器下切掉短正文却不给展开入口（藏内容）。这条断言就是那条规则的看门人。
+    expect(PROSE.length).toBeLessThanOrEqual(NARRATIVE_CLAMP_CHARS)
+    render(<MatterTimeline events={[summaryEvent({ text: PROSE })]} />)
+    expect(screen.queryByRole('button', { name: '展开全文' })).toBeNull()
+    expect(screen.getByTestId('matter-timeline-body').querySelector('p')?.className).not.toContain(
+      'line-clamp-3'
+    )
+  })
+
+  it('长正文 clamp 到 3 行 + 展开全文可逆', () => {
+    render(<MatterTimeline events={[summaryEvent({ text: LONG })]} />)
+    const paragraph = (): Element | null =>
+      screen.getByTestId('matter-timeline-body').querySelector('p')
+    expect(paragraph()?.className).toContain('line-clamp-3')
+
+    const toggle = screen.getByRole('button', { name: '展开全文' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    expect(paragraph()?.className).not.toContain('line-clamp-3')
+    expect(screen.getByRole('button', { name: '收起' }).getAttribute('aria-expanded')).toBe('true')
+    fireEvent.click(screen.getByRole('button', { name: '收起' }))
+    expect(paragraph()?.className).toContain('line-clamp-3')
+  })
+
+  it('后端截断过才加省略号 + 「只是摘录」提示；clamp 不加（展开就能看全）', () => {
+    const { unmount } = render(<MatterTimeline events={[summaryEvent({ text: PROSE })]} />)
+    expect(screen.getByTestId('matter-timeline-body').textContent).not.toContain(`${PROSE}…`)
+    expect(screen.queryByText(/只是摘录/)).toBeNull()
+    unmount()
+
+    render(<MatterTimeline events={[summaryEvent({ text: PROSE, truncated: true })]} />)
+    expect(screen.getByTestId('matter-timeline-body').textContent).toContain(`${PROSE}…`)
+    expect(screen.getByText(/只是摘录/)).toBeTruthy()
+  })
+
+  it('合并组的正文在展开的明细里一条不丢', () => {
+    render(
+      <MatterTimeline
+        events={[
+          ev({
+            kind: 'item_created',
+            happened_at: T0,
+            payload: { kind: 'note', title: '甲', narrative: { text: '备注甲的正文' } }
+          }),
+          ev({
+            kind: 'item_created',
+            happened_at: T0 - 3_000,
+            payload: { kind: 'note', title: '乙', narrative: { text: '备注乙的正文' } }
+          })
+        ]}
+      />
+    )
+    // 计数句本身不挂正文（挑一条当"进展"是撒谎）。
+    expect(screen.getByText('新增了 2 个条目')).toBeTruthy()
+    expect(screen.queryByTestId('matter-timeline-body')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: /展开 2 条明细/ }))
+    const bodies = screen.getAllByTestId('matter-timeline-body')
+    expect(bodies.map((node) => node.textContent)).toEqual(['备注甲的正文', '备注乙的正文'])
   })
 })

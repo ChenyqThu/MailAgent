@@ -4,7 +4,7 @@
     "frontend/tests/components/matters/matterTriggerEnvelopeParity.test.ts",
     "tests/matters/test_matter_trigger_envelope_parity.py"
   ],
-  "case": "每个工作日 09:00 + 非默认 actions（勾上 draft）",
+  "case": "每个工作日 09:00 + 非默认 actions（勾上 draft）+ 事项级模型覆盖三项（0813 轮 3 #10）",
   "input": {
     "entries": [
       {
@@ -28,7 +28,12 @@
         "enabled": true
       }
     ],
-    "actions": ["summary", "items", "draft"]
+    "actions": ["summary", "items", "draft"],
+    "agent": {
+      "model": "default:claude-sonnet-4-6",
+      "effort": "medium",
+      "fallback_models": ["default:claude-haiku-4-5"]
+    }
   },
   "envelope": {
     "v": 2,
@@ -54,6 +59,11 @@
         "enabled": true
       }
     ],
-    "actions": ["summary", "items", "draft"]
+    "actions": ["summary", "items", "draft"],
+    "agent": {
+      "model": "default:claude-sonnet-4-6",
+      "effort": "medium",
+      "fallback_models": ["default:claude-haiku-4-5"]
+    }
   }
 }

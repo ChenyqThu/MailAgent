@@ -99,6 +99,139 @@ class TriggerError(ValueError):
     """trigger 配置非法。调用侧转成 `E_INVALID_ARG`。"""
 
 
+# ── 事项级模型覆盖（0813 dogfood 轮 3 反馈 #10）────────────────────────────────────
+#
+# owner 原话：「跟进规则页面，matter agent 配置，仍然没有模型配置、effort 配置、fallback 配置」。
+#
+# 🔴 **跟着 envelope 走、不新开一列**（与 `actions` 同一条纪律，零 DB 迁移）：这三项和触发方式
+# 同属「跟进规则」那一张卡，用户改的是同一个模态、存的是同一次 PATCH。
+#
+# 🔴 三项都是**覆盖**语义：键缺席 = 跟随现状（绑定 profile 的 model/fallback、全局默认），
+# 不是"存了一个等于默认值的快照"—— 这样以后换默认，没覆盖过的事项能跟着走。
+# 唯一的例外是 `fallback_models: []`：它是**显式的「不设兜底」**，与"没配过"不是一回事，
+# 所以空列表必须原样保留，不许当成空值折掉。
+#
+# 🔴 值域外**入库即拒**（不静默丢）：模型/档位配错了却存下来，UI 显示的与真跑的就劈叉了。
+# 读侧（`parse_agent_overrides`）相反，取的是宽容路径 —— 跟进 run 不该因为一段可选覆盖
+# 认不出来就跑不起来（同 `parse_run_actions` 的取舍）。
+
+#: effort 档位的 canonical 值域。🔴 **跨语言手抄**：canonical 源是
+#: `frontend/src/shared/modelCatalog/effortTiers.ts` 的 `EFFORT_TIERS`（wire 形状由 gateway
+#: `thinking.ts::effortCallOptions` 按协议产出，Python 只负责把 owner 选的档位原样投进 spec）。
+#: 闸 = `tests/matters/test_matters_contract_parity.py`。
+MATTER_AGENT_EFFORT_TIERS: tuple[str, ...] = (
+    "none", "low", "medium", "high", "xhigh", "max",
+)
+
+#: 模型引用（`providerId:modelId`）的长度上限。护栏而非语义：真实 ref 几十字符，
+#: 这里只挡住把整段文本塞进配置的形状。
+MATTER_AGENT_MODEL_MAX_CHARS = 200
+
+#: 备用模型链的长度上限。UI 是单选（同预处理行的先例），留一点余量给将来的多选。
+MATTER_AGENT_MAX_FALLBACK_MODELS = 4
+
+
+def _model_ref(value: Any, *, field: str, strict: bool) -> str | None:
+    if not isinstance(value, str):
+        if strict:
+            raise TriggerError(f"{field} must be a string")
+        return None
+    text = value.strip()
+    if not text:
+        if strict:
+            raise TriggerError(f"{field} must not be empty")
+        return None
+    if len(text) > MATTER_AGENT_MODEL_MAX_CHARS:
+        if strict:
+            raise TriggerError(
+                f"{field} exceeds {MATTER_AGENT_MODEL_MAX_CHARS} characters"
+            )
+        return None
+    return text
+
+
+def _coerce_agent_overrides(raw: Any, *, strict: bool) -> dict[str, Any] | None:
+    """`{model?, effort?, fallback_models?}` → 归一化后的 dict（全空 → None）。
+
+    `strict=True` 是写侧（值域外抛 `TriggerError`）；`strict=False` 是读侧（认不出的字段
+    整个丢掉，剩下的照用）。
+    """
+    if raw is None:
+        return None
+    if not isinstance(raw, Mapping):
+        if strict:
+            raise TriggerError("agent overrides must be an object")
+        return None
+
+    result: dict[str, Any] = {}
+
+    if raw.get("model") is not None:
+        model = _model_ref(raw.get("model"), field="agent.model", strict=strict)
+        if model is not None:
+            result["model"] = model
+
+    if raw.get("effort") is not None:
+        effort = raw.get("effort")
+        if isinstance(effort, str) and effort.strip() in MATTER_AGENT_EFFORT_TIERS:
+            result["effort"] = effort.strip()
+        elif strict:
+            raise TriggerError(f"unsupported agent.effort: {effort!r}")
+
+    # 🔴 `[]` 必须能表达（= 显式不设兜底），所以判的是"键在不在"而不是"值真不真"。
+    if "fallback_models" in raw and raw.get("fallback_models") is not None:
+        models = raw.get("fallback_models")
+        if not isinstance(models, (list, tuple)):
+            if strict:
+                raise TriggerError("agent.fallback_models must be a list")
+        else:
+            if strict and len(models) > MATTER_AGENT_MAX_FALLBACK_MODELS:
+                raise TriggerError(
+                    f"at most {MATTER_AGENT_MAX_FALLBACK_MODELS} fallback models are allowed"
+                )
+            picked: list[str] = []
+            for value in models[:MATTER_AGENT_MAX_FALLBACK_MODELS]:
+                ref = _model_ref(value, field="agent.fallback_models[]", strict=strict)
+                if ref is not None and ref not in picked:
+                    picked.append(ref)
+            result["fallback_models"] = picked
+
+    return result or None
+
+
+def normalize_agent_overrides(raw: Any) -> dict[str, Any] | None:
+    """写侧归一化（值域外抛 `TriggerError` → 调用侧转 `E_INVALID_ARG`）。"""
+    return _coerce_agent_overrides(raw, strict=True)
+
+
+def coerce_agent_overrides(raw: Any) -> dict[str, Any]:
+    """读侧宽容归一，输入是**裸的** `{model?, effort?, fallback_models?}` 块。
+
+    与 `parse_agent_overrides` 同一条纪律（认不出的字段丢掉、剩下的照用），区别只在输入
+    形状：那个吃的是整个 `schedule_json` envelope，这个吃的是块本身 —— 全局默认存在
+    `owner_settings` 里，没有 envelope 可言，但值域必须与事项级**逐字同一份**
+    （`agent_defaults.py` 是唯一调用方）。
+    """
+    return _coerce_agent_overrides(raw, strict=False) or {}
+
+
+def parse_agent_overrides(raw: Any) -> dict[str, Any]:
+    """从 `schedule_json` 的内容里取模型覆盖。无该键 / v1 行 / 形状不对 → `{}`（= 全跟随）。"""
+    envelope = _envelope_mapping(raw)
+    if envelope is None or "agent" not in envelope:
+        return {}
+    return _coerce_agent_overrides(envelope.get("agent"), strict=False) or {}
+
+
+def _envelope_mapping(raw: Any) -> Mapping[str, Any] | None:
+    """DB 列字符串 / 已解析对象 → Mapping；解析不了返回 None（读侧不抛）。"""
+    if isinstance(raw, (str, bytes)):
+        try:
+            raw = json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+    return raw if isinstance(raw, Mapping) else None
+
+
 @dataclass(frozen=True)
 class TriggerEntry:
     id: str
@@ -266,7 +399,10 @@ def parse_trigger_set(raw: Any, *, seed: str = "") -> tuple[TriggerEntry, ...]:
 
 
 def dump_trigger_set(
-    entries: Iterable[TriggerEntry], *, actions: Iterable[str] | None = None
+    entries: Iterable[TriggerEntry],
+    *,
+    actions: Iterable[str] | None = None,
+    agent: Mapping[str, Any] | None = None,
 ) -> dict[str, Any]:
     envelope: dict[str, Any] = {
         "v": TRIGGER_ENVELOPE_VERSION,
@@ -277,6 +413,9 @@ def dump_trigger_set(
     normalized = normalize_run_actions(list(actions) if actions is not None else None)
     if normalized != DEFAULT_RUN_ACTIONS:
         envelope["actions"] = list(normalized)
+    # 模型覆盖同一条纪律：一项都没覆盖就不写这个键（= 全跟随）。
+    if agent:
+        envelope["agent"] = dict(agent)
     return envelope
 
 
@@ -285,11 +424,16 @@ def normalize_trigger_json(raw: Any, *, seed: str = "") -> dict[str, Any] | None
 
     🔴 「跟进时执行」跟着 envelope 一起过一遍，否则前端刚存的勾选会在下一次保存排程时
     被静默丢掉（旧实现只保留 triggers）。
+
+    🔴 「一条 trigger 都没有」不再无条件折成 NULL —— 只有**模型覆盖也是空的**才折。否则
+    把触发方式全删掉（改成纯手动跟进）会把刚配好的模型/effort/fallback 一起抹掉，而 UI 上
+    看不出任何异常：那正是"保存了但不生效"这类最难查的 bug。
     """
     entries = parse_trigger_set(raw, seed=seed)
-    if not entries:
+    agent = normalize_agent_overrides((_envelope_mapping(raw) or {}).get("agent"))
+    if not entries and not agent:
         return None
-    return dump_trigger_set(entries, actions=parse_run_actions(raw))
+    return dump_trigger_set(entries, actions=parse_run_actions(raw), agent=agent)
 
 
 def is_legacy_shape(raw: Any) -> bool:

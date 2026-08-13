@@ -67,6 +67,22 @@ const KIND_ICONS: Record<MatterTriggerKind, typeof Clock> = {
 /** 可新增的档位 —— 手动不在其中（它是那行固定说明，不是一条可加可删的规则）。 */
 const ADDABLE_KINDS: readonly MatterTriggerKind[] = ['schedule', 'event', 'condition']
 
+/** 草稿里新条目的 id。
+ *
+ * 🔴 **不能**只拿 `entries.length` 当序号：add→delete→add 交错后长度会回退，再铸出的 id
+ * 与仍留在列表里的那条**相撞** —— 近处是 React 重复 key，远处是保存时被服务端
+ * `parse_trigger_set` 的 duplicate id 检查硬拒（用户看到的是「保存失败」，跟触发规则本身
+ * 毫无关系）。这里直接拿**当前草稿里已用的 id** 当判据往后找空位：既与长度解耦，也不依赖
+ * 任何计数器的存活周期（组件重挂 / 草稿由父组件持有时，计数器归零一样会撞），且是纯函数、
+ * 可确定性断言。
+ */
+function mintEntryId(kind: MatterTriggerKind, entries: readonly MatterTriggerEntry[]): string {
+  const used = new Set(entries.map((entry) => entry.id))
+  let seq = entries.length + 1
+  while (used.has(`mtr_new_${seq}_${kind}`)) seq += 1
+  return `mtr_new_${seq}_${kind}`
+}
+
 export function MatterTriggerEditor({
   entries,
   onChange
@@ -84,7 +100,7 @@ export function MatterTriggerEditor({
   }
 
   const add = (kind: MatterTriggerKind): void => {
-    const id = `mtr_new_${entries.length}_${kind}`
+    const id = mintEntryId(kind, entries)
     const base = { id, kind, enabled: true }
     const seeded: MatterTriggerEntry =
       kind === 'schedule'

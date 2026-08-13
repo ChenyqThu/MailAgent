@@ -38,7 +38,7 @@ from src.api.routers.matters import MatterPatchWithScheduleRequest, get_matter_s
 from src.mail.sync_store import SyncStore
 from src.matters.repository import MatterRepository
 from src.matters.service import MatterService
-from src.matters.triggers import normalize_trigger_json
+from src.matters.triggers import normalize_trigger_json, parse_agent_overrides
 
 FIXTURE_PATH = Path(__file__).resolve().parents[1] / "fixtures" / "matter_trigger_envelope.json"
 
@@ -51,6 +51,7 @@ def fixture_doc() -> dict:
     doc = json.loads(FIXTURE_PATH.read_text(encoding="utf-8"))
     assert isinstance(doc.get("envelope"), dict), "fixture 的 envelope 必须是对象"
     assert doc["envelope"].get("triggers"), "fixture 的 envelope 必须带至少一条 trigger"
+    assert doc["envelope"].get("agent"), "fixture 的 envelope 必须带模型覆盖块（0813 轮 3 #10）"
     return doc
 
 
@@ -105,6 +106,9 @@ def test_envelope_survives_normalization(fixture_doc):
     assert normalized["triggers"][0]["kind"] == envelope["triggers"][0]["kind"]
     # fixture 的 actions 刻意选成非出厂默认，所以它必须原样保留（默认值才不写这个键）。
     assert normalized["actions"] == envelope["actions"]
+    # 0813 轮 3 #10 —— 模型覆盖三项同样必须原样活过归一化（丢了就是"保存了但不生效"）。
+    assert normalized["agent"] == envelope["agent"]
+    assert parse_agent_overrides(normalized) == envelope["agent"]
 
 
 def test_schedule_entry_passes_the_evaluator(fixture_doc):

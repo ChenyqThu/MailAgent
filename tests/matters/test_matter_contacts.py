@@ -144,6 +144,54 @@ def test_update_adding_email_links_contact(service):
     assert patched["stakeholder"]["contact_id"] == contacts["late@x.com"]["id"]
 
 
+def test_changing_email_carries_the_row_identity_into_the_new_contact(service):
+    """换邮箱、没同时改名 → 新联系人沿用本行姓名/组织，不是一条裸邮箱。
+
+    create 路径本来就把姓名写进全局库，update 路径漏了 ⇒ 库里多出「只有邮箱」的人，
+    在选人面板里就是一行光秃秃的地址。"""
+    created = _create_matter(service, "m1")
+    result = service.create_stakeholder(
+        created["matter"]["public_id"],
+        {"display_name": "Alice", "email": "alice@x.com", "organization": "ACME"},
+        **_mutation(created["version"], "sh-a"),
+    )
+    patched = service.update_stakeholder(
+        created["matter"]["public_id"],
+        result["stakeholder"]["id"],
+        {"email": "alice@new.com"},
+        **_mutation(result["version"], "sh-a-newmail"),
+    )
+    contacts = _contact_rows(service)
+    assert patched["stakeholder"]["contact_id"] == contacts["alice@new.com"]["id"]
+    assert contacts["alice@new.com"]["display_name"] == "Alice"
+    assert contacts["alice@new.com"]["organization"] == "ACME"
+
+
+def test_changing_email_onto_an_existing_contact_does_not_rename_them(service):
+    """兜底只填新建的空位：改到**别人**已在库里的邮箱，不许把那个人改名。"""
+    first = _create_matter(service, "m1")
+    second = _create_matter(service, "m2")
+    a = service.create_stakeholder(
+        first["matter"]["public_id"],
+        {"display_name": "Alice", "email": "alice@x.com", "organization": "ACME"},
+        **_mutation(first["version"], "sh-a"),
+    )
+    service.create_stakeholder(
+        second["matter"]["public_id"],
+        {"display_name": "Bob", "email": "bob@y.com", "organization": "BCorp"},
+        **_mutation(second["version"], "sh-b"),
+    )
+    service.update_stakeholder(
+        first["matter"]["public_id"],
+        a["stakeholder"]["id"],
+        {"email": "bob@y.com"},
+        **_mutation(a["version"], "sh-a-tobob"),
+    )
+    contacts = _contact_rows(service)
+    assert contacts["bob@y.com"]["display_name"] == "Bob"
+    assert contacts["bob@y.com"]["organization"] == "BCorp"
+
+
 def test_list_contacts_aggregates_and_search(service):
     first = _create_matter(service, "m1")
     second = _create_matter(service, "m2")

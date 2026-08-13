@@ -12,7 +12,15 @@ import { ThreadPrimitive } from '@assistant-ui/react'
 
 import { useChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 
-const QUICK_PROMPT_KEYS = ['status', 'nextStep', 'draftFollowup', 'updateSummary'] as const
+// O3（0813 轮 3）：「更新摘要」的**发送体**带完整文体要求（label 仍是四个字）——否则模型
+// 手里关于「进展长什么样」的全部指令就只有字段名 current_summary，写出来的必然是操作日志。
+// promptKey 缺省 = label 与发送体同文案（其余三条维持现状）。
+const QUICK_PROMPTS = [
+  { id: 'status' },
+  { id: 'nextStep' },
+  { id: 'draftFollowup' },
+  { id: 'updateSummary', promptKey: 'updateSummaryPrompt' }
+] as const
 
 /** 事项快捷 prompt —— 位置与全局面板的快捷动作一致（AgentThread 的 quickActions 槽），
  *  只是换成事项这一组。autoSend 走 thread（绕过 composer form），因此与全局快捷动作一样
@@ -24,11 +32,14 @@ export function MatterQuickPrompts(): React.JSX.Element {
   return (
     <div className="flex w-full flex-col items-center gap-2">
       <div className="flex flex-wrap justify-center gap-1.5" data-testid="matter-chat-prompts">
-        {QUICK_PROMPT_KEYS.map((key) => {
-          const prompt = t(`matters.chat.prompts.${key}`)
+        {QUICK_PROMPTS.map((entry) => {
+          const label = t(`matters.chat.prompts.${entry.id}`)
+          const prompt = t(
+            `matters.chat.prompts.${'promptKey' in entry ? entry.promptKey : entry.id}`
+          )
           return (
             <ThreadPrimitive.Suggestion
-              key={key}
+              key={entry.id}
               prompt={prompt}
               autoSend
               disabled={sendDisabled}
@@ -37,7 +48,7 @@ export function MatterQuickPrompts(): React.JSX.Element {
                 (sendDisabled ? ' cursor-not-allowed opacity-50' : '')
               }
             >
-              {prompt}
+              {label}
             </ThreadPrimitive.Suggestion>
           )
         })}

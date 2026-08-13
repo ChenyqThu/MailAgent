@@ -1,7 +1,12 @@
 import { MATTER_DEFAULT_RUN_ACTIONS, MATTER_RUN_ACTIONS } from '@shared/api/types/matter'
-import type { MatterRunAction, MatterTriggerEnvelope } from '@shared/api/types/matter'
+import type {
+  MatterAgentOverrides,
+  MatterRunAction,
+  MatterTriggerEnvelope
+} from '@shared/api/types/matter'
 import { isScheduleValue } from '@shared/components/agents/schedule/types'
 import type { ScheduleValue } from '@shared/components/agents/schedule/types'
+import { isEffortTier } from '@shared/modelCatalog/effortTiers'
 
 /**
  * `matter.schedule_json` 的解析单源。
@@ -119,6 +124,44 @@ function sameActions(a: readonly MatterRunAction[], b: readonly MatterRunAction[
   return a.length === b.length && a.every((value, index) => value === b[index])
 }
 
+/** 事项级模型覆盖：从库里的内容取。无该键 / v1 行 / 形状不对 → `{}`（= 三项全跟随）。
+ *
+ *  归一化规则与 Python `triggers.parse_agent_overrides` 同源（读侧宽容：认不出的字段整个丢掉，
+ *  剩下的照用 —— 跟进 run 不该因为一段可选覆盖认不出来就跑不起来）。🔴 `fallback_models: []`
+ *  是**显式不设兜底**，与"没配过"不是一回事，所以判的是键在不在。 */
+export function parseAgentOverrides(raw: string | null | undefined): MatterAgentOverrides {
+  return parseAgentOverridesValue(decodeColumn(raw))
+}
+
+export function parseAgentOverridesValue(value: unknown): MatterAgentOverrides {
+  const agent = (value as { agent?: unknown } | null)?.agent
+  if (typeof agent !== 'object' || agent === null) return {}
+  const raw = agent as { model?: unknown; effort?: unknown; fallback_models?: unknown }
+  const picked: MatterAgentOverrides = {}
+  if (typeof raw.model === 'string' && raw.model.trim()) picked.model = raw.model.trim()
+  if (typeof raw.effort === 'string' && isEffortTier(raw.effort.trim())) {
+    picked.effort = raw.effort.trim()
+  }
+  if (Array.isArray(raw.fallback_models)) {
+    picked.fallback_models = raw.fallback_models
+      .filter((entry): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+      .map((entry) => entry.trim())
+  }
+  return picked
+}
+
+/** 三项都没覆盖 ⇒ 不写 `agent` 键（同 actions 的纪律：让"没配过"和"配成默认"长得一样）。 */
+function agentOverridesForEnvelope(
+  overrides: MatterAgentOverrides | undefined
+): MatterAgentOverrides | null {
+  if (!overrides) return null
+  const payload: MatterAgentOverrides = {}
+  if (overrides.model) payload.model = overrides.model
+  if (overrides.effort) payload.effort = overrides.effort
+  if (overrides.fallback_models) payload.fallback_models = [...overrides.fallback_models]
+  return Object.keys(payload).length > 0 ? payload : null
+}
+
 /** PATCH body 里 `schedule_json` 的值。空列表写 null（后端据此清空排程）。
  *
  *  🔴 返回**对象**，不是 JSON 字符串：pydantic `MatterPatchWithScheduleRequest.schedule_json`
@@ -131,12 +174,18 @@ function sameActions(a: readonly MatterRunAction[], b: readonly MatterRunAction[
  *  将来改默认能跟着走（同 Python `dump_trigger_set` 的纪律）。 */
 export function buildTriggerEnvelope(
   entries: readonly MatterTriggerEntry[],
-  actions?: readonly MatterRunAction[]
+  actions?: readonly MatterRunAction[],
+  agent?: MatterAgentOverrides
 ): MatterTriggerEnvelope | null {
-  if (entries.length === 0) return null
+  const agentPayload = agentOverridesForEnvelope(agent)
+  // 🔴 「一条 trigger 都没有」不再无条件写 null —— 只有模型覆盖也空才写。否则把触发方式全删掉
+  // （改成纯手动跟进）会把刚配好的模型/effort/fallback 一起抹掉，而界面上看不出任何异常。
+  // Python `normalize_trigger_json` 同款判据。
+  if (entries.length === 0 && agentPayload === null) return null
   const envelope: MatterTriggerEnvelope = { v: 2, triggers: [...entries] }
   if (actions && !sameActions(actions, MATTER_DEFAULT_RUN_ACTIONS)) {
     envelope.actions = [...actions]
   }
+  if (agentPayload) envelope.agent = agentPayload
   return envelope
 }
