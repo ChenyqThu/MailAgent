@@ -71,8 +71,9 @@ export const matterAttentionKey = (matterId: string) =>
 export const notifyLevelKey = () => [...qk.matters.config(), 'notify-level'] as const
 
 /** 匹配任意 matter 的 detail attention 缓存（matterId 未知时按形状判）。`matter.attention`
- *  SSE 到达时要失效**所有**已打开事项的信号缓存，而事件不带 matterId —— 判定放在 key 工厂
- *  旁边，别让消费方（useEventBridge）手抄 `['matters','detail',id,'attention',…]` 的下标。 */
+ *  SSE 到达时要失效**所有**已打开事项的信号缓存 —— 事件其实带 `matter_ids`，但那是内部数字
+ *  主键、而这些键用 `publicId` 字符串，对不上（详见 useEventBridge 该分支的注释）。判定放在
+ *  key 工厂旁边，别让消费方手抄 `['matters','detail',id,'attention',…]` 的下标。 */
 export function isMatterAttentionDetailKey(key: readonly unknown[]): boolean {
   const probe = matterAttentionKey('*')
   return (

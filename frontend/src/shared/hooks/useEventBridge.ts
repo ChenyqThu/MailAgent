@@ -161,7 +161,11 @@ export function useEventBridge(): void {
         debounceInvalidate('matters:global-attention', () =>
           queryClient.invalidateQueries({ queryKey: globalAttentionKey() })
         )
-        // 事件不带 matterId（聚合失效）→ 已打开的每个事项详情信号缓存都要失效，按形状判。
+        // 🔴 事件**带** matter_ids（`worker.py` 的 `safe_publish("matter.attention", …)`），这里
+        // 仍做按形状的全量失效，是因为**两侧 id space 不同**：payload 里是内部数字主键
+        // `matter.id`，而这些缓存键用的是 `publicId` 字符串（`MAT-0001`）。要定向失效，得让
+        // 后端改发 public_id 或前端维护 id→publicId 映射 —— 那是契约改动，不是这里能就地决定的。
+        // 在那之前，全量失效是唯一不会漏刷的选择（漏刷 = 信号角标停在旧值）。
         debounceInvalidate('matters:detail-attention', () =>
           queryClient.invalidateQueries({
             predicate: (query) => isMatterAttentionDetailKey(query.queryKey)

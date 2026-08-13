@@ -184,13 +184,25 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     toolNames: ['calendar_event_reschedule', 'calendar_event_rsvp', 'calendar_event_delete'],
     render: CalendarApprovalCard
   },
-  // Matters MVP P3 — the 7 matter write tools (behind MAILAGENT_MATTERS_ENABLED; a registration
-  // for a tool the gateway never emits is inert). One card, two jobs: an approval-paused part gets
+  // Matters MVP P3 — the matter write tools (behind MAILAGENT_MATTERS_ENABLED; a registration for
+  // a tool the gateway never emits is inert). One card, two jobs: an approval-paused part gets
   // real approve/reject buttons (matter_resource_mutate can force a card at any time, and per-tool
-  // prefs let an owner set any of the 7 to `ask` — without this they hit the buttonless
+  // prefs let an owner set any of them to `ask` — without this they hit the buttonless
   // ToolTraceCard spinner, the v1.5.0 deadlock), and a COMPLETED part renders the write receipt +
   // undo — but only inside the Matter Chat panel (MatterChatSurfaceContext); everywhere else it
   // falls through to ToolTraceCard byte-identically.
+  //
+  // 🔴 KNOWN GAP — the list below is SEVEN, but there are NINE matter write tools: P4's
+  // matter_run_control / matter_review_update were added to MatterWriteCard's WRITE_LABELLED_TOOLS
+  // and to matters.chat.writeLabels (both locales) but never here, so the card never mounts for
+  // them. That is the v1.5.0 / 阶段 0.5-① G9 bug a third time, and matter_review_update is the
+  // load-bearing one: tool_prefs.py ships it `ask` with configurable=False (a floor an owner
+  // cannot lower), so a manual-chat accept that touches a `field` ALWAYS pauses — and with no
+  // card it pauses onto the buttonless ToolTraceCard (permanent spinner, island-only approve),
+  // against the standing 「审批以无岛方案优先」 position. matter_run_control ships `auto` so it
+  // only bites once an owner sets it to `ask`. Adding the two names here is a behaviour change
+  // (new cards start rendering), so it is deliberately NOT bundled with the comment-only pass
+  // that wrote this note — it is tracked as its own task.
   {
     component: A2UI_COMPONENTS.MatterWriteCard,
     toolNames: [

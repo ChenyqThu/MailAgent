@@ -1,13 +1,19 @@
 // Matters MVP P3 (lane ③) — 上下文缺口卡 (design 附录 C, 消息区 warn card).
 //
-// 🔴 Deliberately NOT rendered in P3. The card and its action exist; what does not exist yet is a
-// TRIGGER — deciding "the answer needed evidence this matter does not reach" is the P6 context-gap
-// work (D10: 「组件与「扩大到全库」action 写好但 P3 无触发路径；不造假触发」). Wiring a fake
-// trigger now would teach the user to distrust the signal, so the only consumer today is its unit
-// test.
+// P6-A 起**真的会渲染**（P3 时它只有单测一个消费者 —— D10 写好了组件却刻意不接假触发路径）。
+// 触发点是 `useMatterConversation`：`chipTarget !== null && hasContextGap` 时挂在 composer 上方
+// 那一格里。判据 `hasContextGap`（`useMatterContextSnapshot.ts`）是两条**或**关系：
+//   · `matter.waiting_context !== null` —— 事项显式声明「在等外部输入」，与资料多少正交；
+//   · `resource_counts.linked_resources === 0` —— 后端另发的计数（旧后端不发时 fail-soft
+//     退回旧投影判据 `resources.length === 0`）。
+// 🔴 判据看的是 `resource_counts` 而**不是** `payload.resources.length`：后者只含 pinned 或
+// 未确认的建议，用它会构成自噬循环（用户把建议逐条确认 → 可见数归零 → 弹「缺上下文」→
+// 外扩灌垃圾），越配合越被灌。
 //
-// `onExpand` is the SAME scope-switch action the panel's Segmented drives (audit first, flip
-// second) — the gap card must never be a second, unaudited way to widen the search reach.
+// `onExpand` 现在是一次**显式声明**的外扩检索（`discoverResourceSuggestions` 带
+// `expandReason: 'context_gap'`），不再是旧检索范围 Segmented 的那个 scope-switch —— 那个控件
+// 已下线。语义不变的部分：扩大搜索触达面这件事必须是用户按下去的、且在服务端留痕，
+// 这张卡不许成为第二条不留痕的放宽路径。
 
 import { useTranslation } from 'react-i18next'
 import { HelpCircle } from 'lucide-react'
@@ -35,7 +41,9 @@ export function MatterContextGapCard({
         {suggestedCount === null ? null : (
           <span className="mt-0.5 block text-meta text-ink-fg-3">
             {t('matters.chat.gap.result', { count: suggestedCount })}
-            {suppressedCount > 0 ? ` · ${t('matters.chat.gap.suppressed', { count: suppressedCount })}` : null}
+            {suppressedCount > 0
+              ? ` · ${t('matters.chat.gap.suppressed', { count: suppressedCount })}`
+              : null}
           </span>
         )}
       </span>

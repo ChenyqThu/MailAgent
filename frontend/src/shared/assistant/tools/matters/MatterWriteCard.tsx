@@ -1,16 +1,22 @@
 // Matters MVP P3 (lane ③) — the matter write tools' message-part card.
 //
-// ONE component registered for all 7 matter write tools, routing by phase — deliberately, because
-// the same tool part passes through both surfaces of this feature:
+// ONE component for all 9 matter write tools, routing by phase — deliberately, because the same
+// tool part passes through both surfaces of this feature:
 //
 //   pending / rejected / expired → SimpleApprovalCard (D7: identity-level approval is enough).
 //       🔴 Without a registered card these edit-tier writes fall through to the BUTTONLESS
 //       ToolTraceCard, which renders approval-paused as a permanent spinner — the v1.5.0 / G9
 //       islandless deadlock. matter_resource_mutate can force a card at any time (access_policy →
-//       allowed, adjudication #1), and per-tool prefs let an owner set any of the 7 to `ask`.
+//       allowed, adjudication #1), and per-tool prefs let an owner set any of the 9 to `ask`.
 //   done + inside a Matter Chat panel → the write receipt (「已写入 · {写入描述}」 + 撤销), design 附录 C.
 //   everything else (done in普通 chat, authorized, error) → the generic ToolTraceCard, byte-identical
 //       to what these tools rendered before this card existed.
+//
+// 🔴 9 is THIS CARD's vocabulary (WRITE_LABELLED_TOOLS below + the 9 matters.chat.writeLabels keys
+// in both locales). ComponentRegistry registers it for only SEVEN — matter_run_control /
+// matter_review_update (P4) were never added there, so this card never mounts for those two and
+// they still take the buttonless fall-through described above. See the 🔴 note at the registration
+// entry; fixing it is a behaviour change, tracked separately.
 //
 // 🔴 The receipt's headline describes THE WRITE, keyed off the tool name (matters.chat.writeLabels).
 // It deliberately does NOT use `undo.label`: the service builds that label to name the REVERSE
@@ -35,7 +41,7 @@ import { deriveCardPhase } from '../_cardShell.lib'
 import { SimpleApprovalCard } from '../generic/SimpleApprovalCard'
 import { ToolTraceCard } from '../generic/ToolTraceCard'
 
-/** The 7 matter write tools that have a `matters.chat.writeLabels.<tool>` headline. Membership is
+/** The 9 matter write tools that have a `matters.chat.writeLabels.<tool>` headline. Membership is
  *  checked (rather than blindly interpolating the tool name into the key) so an unregistered /
  *  renamed tool degrades to the undo label → generic 「已写入」, never to a raw i18n key on screen. */
 const WRITE_LABELLED_TOOLS = new Set([
