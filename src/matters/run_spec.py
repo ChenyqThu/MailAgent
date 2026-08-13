@@ -18,19 +18,21 @@ grantConnectors: {已连接 connector: 'read'}}``。🔴 ``grantExec`` **依然�
 读工具；矩阵行在 exec 判定之前就 return，服务端 ``resolve_caller_ceiling`` 还把 matter venue
 的 connector 天花板钉死 'read'）；``budget`` 恒 1800s 常量（profile budget 不咨询）。
 
-prompt **五段**（服务端唯一 prompt 权威，模型侧无 body 控制面）—— 顺序 = 下面
+prompt **六段**（服务端唯一 prompt 权威，模型侧无 body 控制面）—— 顺序 = 下面
 ``assemble_matter_spec`` 里 ``sections`` 列表的顺序，**改段数/顺序必须同步改前端**
 ``frontend/src/shared/components/matters/MatterPromptAssembly.tsx`` 的 ``STEPS``
 （那块只读披露就是照这份清单向 owner 说明「你改的是哪一段」）：
   1. 任务契约（``_task_contract``：owner 在全局配置面写过就整份换成他的，否则回落代码内置的
      ``_TASK_CONTRACT``）；
-  2. 本次跟进要做的事（0812：``_run_actions_section`` 把事项级「跟进时执行」四项勾选翻成条款；
+  2. 工作方法（0813 轮 3 O4：``_RUN_METHODOLOGY`` —— manual-only skill fragment 的 headless
+     适用子集，判断进展的纪律；恒注入、不随 owner 契约替换而消失）；
+  3. 本次跟进要做的事（0812：``_run_actions_section`` 把事项级「跟进时执行」四项勾选翻成条款；
      一项都没勾 → 返回空串 → 该段整体消失。🔴 只影响**产出要求**，不发工具不改权限）；
-  3. matter 快照（``context_snapshot`` 投影；资源摘录逐份套 ``UNTRUSTED_MATTER_EXCERPT``
+  4. matter 快照（``context_snapshot`` 投影；资源摘录逐份套 ``UNTRUSTED_MATTER_EXCERPT``
      围栏 —— 围栏词与 TS contextSerializer.ts ``fenceUntrusted('MATTER_EXCERPT', …)`` 一致，
      attrs 同为 ``{id, provider}``）；
-  4. 变化清单（D4 manifest：资源 rev 差异 + 新事件数 + 上次接受更新 + 末行的检索时间窗）；
-  5. persona（可选：profile.prompt + matter_instructions，前缀声明从属于任务契约）。
+  5. 变化清单（D4 manifest：资源 rev 差异 + 新事件数 + 上次接受更新 + 末行的检索时间窗）；
+  6. persona（可选：profile.prompt + matter_instructions，前缀声明从属于任务契约）。
 """
 
 from __future__ import annotations
@@ -108,7 +110,7 @@ _TASK_CONTRACT = """【任务契约】
 
 【查证顺序】
 - 先只用下面三段（本次跟进要做的事 / 事项快照 / 变化清单）判断已知信息里有没有实质变化，这一步**不调工具**。
-- 检索优先级分三档：① 本事项**已关联**的资源——快照有摘录就用摘录，不够再用 matter_get 拿该资源的 external_key（形如 email:<internal_id>）后用邮件工具补齐；② 全库邮件——按干系人、主题关键词，并带上【变化清单】最后一行给出的检索时间窗（`after:YYYY-MM-DD`，原样抄进查询）找**新**往来；③ 其他已连接渠道（外部服务只读工具、网页检索）——找与本事项相关的新文档或进展；某档没有对应工具就跳过该档，不要报错也不要空转。
+- 检索优先级分三档：① 本事项**已关联**的资源——快照有摘录就用摘录，不够再用 matter_get 拿该资源的 external_key（形如 email:<internal_id>）后用邮件工具补齐；② 全库邮件——按干系人、主题关键词，并带上【变化清单】最后一行给出的检索时间窗（`after:YYYY-MM-DD`，原样抄进查询）找**新**往来；③ 其他已连接渠道——若你的工具列表提供外部服务的只读检索工具（Notion / Confluence / JIRA 一类）或网页检索，务必用它们找与本事项相关的新文档或进展：这类事的背景、结论与排期常沉淀在那些系统里，只查邮件会漏；某档没有对应工具就跳过该档，不要报错也不要空转。
 - 非首轮、且变化清单没点名资源也没有新事件时：不做全量翻库，只按 ②③ 做**一轮有界的新证据检查**（限定干系人/关键词，并带上【变化清单】给出的检索时间窗，几次查询以内）；查无新证据就直接结束本轮，不要为「确认一下」重读已关联资源，也不要为凑满【本次跟进要做的事】而提交空转提案。
 - 首轮、清单点了名、或清单写着「变化明细不可用」：正常检索，优先补齐被点名的部分，再按需扩档。
 
@@ -118,7 +120,7 @@ _TASK_CONTRACT = """【任务契约】
 - kind=field 只改 status/health/priority/due_at/waiting_context 并写依据；kind=action 无 target=新建行动项、带 target.id=改既有条目（id 来自 matter_get）；kind=resource 有两个形态：带 target.id=确认快照里已列出但未确认的资料，带 resource=新建一条关联。
 - 在②③档发现的**新**邮件/文档/页面（尚未关联进本事项的），写成 kind=resource 并带 resource={provider, kind, external_key, title, canonical_url}，由 owner 接受时正式关联：provider 只能是 mailagent（邮件，external_key 形如 email:<internal_id>）、web（网页，external_key 就是那个 http(s) 链接）或你**确实用到过**的已连接外部服务（如 notion，external_key 形如 page:<id>）；编造来源或不合形状的一律被服务端丢弃。🔴 只挂**你要在提案里引用、能让 owner 改判断或采取行动**的那几份，不要把检索到的东西一股脑全挂上来；拿不准要不要关联的写进 open_questions 让 owner 定。
 - 拿不准、需要 owner 定夺的写进 open_questions（≤5 条），不要编造。
-- 摘要不超过 3 句：先写当前卡点，再写下一步。"""
+- 摘要写的是**事情本身**的进展、给 owner 读的叙述，不是你本轮的操作记录：不超过 3 句，先写当前卡点或结论，再写下一步（谁在何时做什么）；不要罗列「检索了什么、改了哪个字段」。"""
 
 
 def default_task_contract() -> str:
@@ -129,6 +131,21 @@ def default_task_contract() -> str:
     "跟随默认"，这样以后改这里的文案，没自定义过的用户能跟着升级。
     """
     return _TASK_CONTRACT
+
+
+#: O4（0813 轮 3）——「事项方法论」的 headless 适用子集。manual 对话里这份方法论由
+#: ``src/skills/builtin/matters.py`` 的 prompt_fragment 注入，而 gateway 的
+#: ``systemPrompt.ts`` 用 ``!headlessAgentRun`` 门有意把 skill fragment 挡在 headless 之外
+#: —— 跟进 run 结构上拿不到唯一一份「怎么判断进展」的纪律。修法 = 在 spec 里下发一份
+#: **按场地改写**的子集（方案 a：服务端单源、pytest 可测、零 gateway 改动），而不是解除
+#: manual-only 门（方案 b 会把 fragment 里「写工具走审批卡 / 最小写入」这类 manual 专属
+#: 措辞原样喂给一个没有任何写工具的 run —— 教它声称做不到的事）。
+#: 🔴 两份文本**有意不同**（工具面不同、语言不同），不是手抄镜像，不建 parity 闸；
+#: 改判断纪律时两处都过一眼。措辞必须对 headless 如实：run 没有写工具，一切经提案落地。
+_RUN_METHODOLOGY = """【工作方法】
+- 判断进展先读证据，不凭标题或旧摘要推断：把未完成条目、干系人、最近事项事件与已接受的摘要对照，分清「证据表明的」与「你推断的」；证据缺位就写明缺什么，不要用合理想象补位。
+- 建议保持最小变更：一条行动项或事实能说清的，不要整段改写摘要；只有证据支撑事项状态确实变了，才建议更新摘要或字段。
+- 你没有任何写工具：起草的跟进邮件只是提案里的文本、不会被发送，所有变更都要 owner 审阅接受后才落地——接受之前不要把它们说成已发生。"""
 
 
 #: 「跟进时执行」四项各自要求 run 产出什么（设计 §5.2 ACTIONS）。
@@ -261,6 +278,17 @@ def _snapshot_section(snapshot: Mapping[str, Any]) -> str:
         value = core.get(key)
         if value not in (None, ""):
             lines.append(f"{key}: {value}")
+    # 完成标志（0813 轮 3 O2）：run 判断「有没有实质进展 / 能不能建议完结」的唯一完成判据，
+    # 逐条渲染成可读清单（core 里的原始形状是 [{"t","done"}] 字典列表，直接 f-string 会
+    # 打出 Python repr）。
+    goal_checks = core.get("goal_checks") or []
+    if goal_checks:
+        lines.append("完成标志（owner 定义的「怎样算做完」，全部勾满才算可完结）:")
+        for check in goal_checks:
+            if not isinstance(check, Mapping):
+                continue
+            mark = "x" if check.get("done") else " "
+            lines.append(f"- [{mark}] {check.get('t')}")
     items = snapshot.get("items") or []
     if items:
         lines.append("")
@@ -410,6 +438,7 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
 
     sections = [
         _task_contract(),
+        _RUN_METHODOLOGY,
         _run_actions_section(matter.get("schedule_json")),
         _snapshot_section(snapshot),
         _manifest_section(diff, snapshot, baseline),

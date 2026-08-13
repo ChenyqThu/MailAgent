@@ -238,6 +238,13 @@ class MatterService:
         self._require_value("health", health, MATTER_HEALTH_VALUES)
         self._require_value("priority", priority, MATTER_PRIORITIES)
         tags = normalize_tags(data.get("tags"))
+        # 完成标志（0813 轮 3 O2）：创建面开放 —— D7 的 user-only 只钉 **update** 路径
+        # （patch_matter 的 actor 闸不动），create 时 agent 把「怎样算做完」一起立起来
+        # 与 description 同权限同语义。
+        try:
+            goal_checks = normalize_goal_checks(data.get("goal_checks"))
+        except ValueError as exc:
+            raise MatterError("E_INVALID_ARG", str(exc)) from exc
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         with self.repository.transaction() as conn:
@@ -260,6 +267,7 @@ class MatterService:
                     "description": str(data.get("description") or ""),
                     "matter_type": self._optional_text(data.get("matter_type")),
                     "tags_json": self._dump(tags),
+                    "goal_checks_json": self._dump(list(goal_checks)),
                     "status": status,
                     "health": health,
                     "priority": priority,
@@ -503,6 +511,9 @@ class MatterService:
                 "due_at",
                 "waiting_context",
                 "description",
+                # goal_checks（0813 轮 3 O2）：跟进 run 与事项对话必须看得见「怎样算做完」——
+                # 没有它，「判断有没有实质进展」缺了唯一的完成判据。只读投影，不触碰 D7。
+                "goal_checks",
                 "current_summary",
                 "version",
             )

@@ -93,6 +93,7 @@ export function toActiveMatterContext(payload: MatterContextSnapshotPayload): Ac
     dueAt: matter.due_at ?? null,
     waitingContext: matter.waiting_context ?? null,
     description: matter.description ?? '',
+    goalChecks: Array.isArray(matter.goal_checks) ? matter.goal_checks : [],
     currentSummary: matter.current_summary ?? null,
     version: matter.version,
     summaryAcceptedAt: matter.summary_accepted_at ?? null,

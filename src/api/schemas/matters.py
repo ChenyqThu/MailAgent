@@ -53,6 +53,10 @@ class MatterCreateRequest(StrictModel):
     priority: str = "p1"
     due_at: int | None = None
     waiting_context: dict[str, Any] | None = None
+    # 完成标志（0813 轮 3 O2）：**创建面**开放 —— 与 description 同一 D7 语义（create 时
+    # agent 可写、之后只有 user 能改；patch 面见 MatterPatchRequest 上方注释）。值域
+    # （文本长度/条数/形状）仍由 service 的 `normalize_goal_checks` 单判（400 E_INVALID_ARG）。
+    goal_checks: list[dict[str, Any]] | None = None
     source_resource: MatterSourceResource | None = None
     mutation: MutationEnvelope
 

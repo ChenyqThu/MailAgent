@@ -11,6 +11,11 @@ skill→tool 门控 —— 它们的开关权在 ``MAILAGENT_MATTERS_ENABLED`` +
 ``default_enabled`` 跟随 ``MAILAGENT_MATTERS_ENABLED``：事项功能没开时注入一段「怎么用事项工具」的
 方法论 = 教模型去调一组根本没注册的工具（capability hallucination）。flag 与本 skill 一样是重启语义
 （``code_builtin_skills()`` 是 ``lru_cache``），两者一致。
+
+⚠️ 本 fragment 是 **manual-only**（gateway ``systemPrompt.ts`` 的 ``!headlessAgentRun`` 门）；
+跟进 run 的对应物 = ``src/matters/run_spec.py`` 的 ``_RUN_METHODOLOGY``（0813 轮 3 O4，按
+headless 场地改写的子集，**有意不同文** —— 那边没有任何写工具，措辞必须如实）。改判断纪律时
+两处都过一眼。
 """
 
 from __future__ import annotations

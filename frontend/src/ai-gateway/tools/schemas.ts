@@ -104,8 +104,23 @@ const epochMillis = (label: string): z.ZodType<number> =>
     .int()
     .describe(`${label} as epoch MILLISECONDS (UTC), e.g. 1786690800000. Never epoch seconds.`)
 
+/** O3 (0813 轮 3) — the ONE shared voice for every progress-bearing field (current_summary /
+ *  note text / proposal summary). Owner complaint「进展像操作日志」: the model kept writing
+ *  "I changed the status / added two items" because no field ever said what a progress update IS.
+ *  The Python follow-up-run contract (src/matters/run_spec.py 提案标准 last clause) states the
+ *  same discipline in Chinese — intentionally two venue-worded texts, not a mirrored constant. */
+export const MATTER_PROGRESS_STYLE =
+  'Write it as a reader-facing narrative of the WORK itself, never a log of your own edits: ' +
+  'lead with the current blocker or conclusion, then the concrete next step (who does what, ' +
+  'by when). Never write "changed status to active / added two action items" — the timeline ' +
+  'already records those operations.'
+
 export const matterFindSchema = z.object({
-  q: z.string().trim().optional(),
+  q: z
+    .string()
+    .trim()
+    .optional()
+    .describe('Free text matched over title / goal / summary / tags — use the user\'s own words.'),
   status: z
     .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
     .optional(),
@@ -138,18 +153,79 @@ export const matterGetSchema = z.object({
 })
 export type MatterGetInput = z.infer<typeof matterGetSchema>
 
+/** O2 (0813 轮 3) — one goal check entry. Element shape mirrors the server's
+ *  `normalize_goal_checks` consumption ({t, done}); text limit 200 / at most 20 entries are the
+ *  same server guardrails (MAX_GOAL_CHECK_LENGTH / MAX_GOAL_CHECKS). */
+const matterGoalCheckSchema = z.object({
+  t: z.string().trim().min(1).max(200).describe('One verifiable completion criterion.'),
+  done: z.boolean().default(false).describe('Whether this criterion is already met.')
+})
+
 export const matterCreateSchema = z.object({
-  title: z.string().trim().min(1).max(500),
-  description: z.string().default(''),
-  type: z.string().trim().min(1).max(128).optional(),
-  tags: z.array(z.string()).default([]),
+  title: z
+    .string()
+    .trim()
+    .min(1)
+    .max(500)
+    .describe(
+      'Short, action-oriented name of the piece of work being pushed forward — not the source ' +
+        'email subject copied verbatim.'
+    ),
+  description: z
+    .string()
+    .default('')
+    .describe(
+      "The Matter's goal and background (shown to the owner as 「核心目标 / 目的与背景」): why " +
+        'this is being pursued, what success looks like, and the minimum context needed to judge ' +
+        'progress later. Write real substance from the conversation — NOT a summary or copy of ' +
+        'the source email (evidence belongs in linked resources). Owner-owned after creation: ' +
+        'agents cannot patch it later, so fill it in properly now.'
+    ),
+  type: z
+    .string()
+    .trim()
+    .min(1)
+    .max(128)
+    .optional()
+    .describe(
+      'Business category, e.g. 客户交付 / 商务 / 售前 / 问题 / 产品 / 内部. Reuse an existing ' +
+        'type from matter_find results when one fits.'
+    ),
+  tags: z
+    .array(z.string())
+    .default([])
+    .describe('Existing tag names when they clearly apply; do not invent a new taxonomy uninvited.'),
   status: z
     .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
-    .default('inbox'),
-  health: z.enum(['unknown', 'on_track', 'at_risk', 'off_track']).default('unknown'),
-  priority: z.enum(['p0', 'p1', 'p2', 'p3']).default('p1'),
+    .default('inbox')
+    .describe(
+      'Lifecycle stage. Default inbox = captured but not yet planned; use active only when the ' +
+        'work is actually underway.'
+    ),
+  health: z
+    .enum(['unknown', 'on_track', 'at_risk', 'off_track'])
+    .default('unknown')
+    .describe('Progress signal independent of status; keep unknown unless evidence says otherwise.'),
+  priority: z
+    .enum(['p0', 'p1', 'p2', 'p3'])
+    .default('p1')
+    .describe('p0 = drop-everything urgent, p3 = backlog. Default p1 unless the user says otherwise.'),
   due_at: epochMillis('Matter due date').nullable().optional(),
-  waiting_context: z.record(z.string(), z.unknown()).nullable().optional(),
+  waiting_context: z
+    .record(z.string(), z.unknown())
+    .nullable()
+    .optional()
+    .describe('Only meaningful with status=waiting: who/what is being waited on and since when.'),
+  goal_checks: z
+    .array(matterGoalCheckSchema)
+    .max(20)
+    .optional()
+    .describe(
+      'Definition of done（完成标志）: a short checklist of how the owner will know this Matter ' +
+        'is complete, e.g. [{"t":"合同已签署"},{"t":"款项已到账"}]. Set it at creation when the ' +
+        'user has stated or implied what done means; like description it is owner-owned ' +
+        'afterwards — agents cannot update it later.'
+    ),
   ...matterIdempotencyFields
 })
 export type MatterCreateInput = z.infer<typeof matterCreateSchema>
@@ -166,7 +242,15 @@ const matterPatchSchema = z
       .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
       .optional(),
     health: z.enum(['unknown', 'on_track', 'at_risk', 'off_track']).optional(),
-    current_summary: z.string().nullable().optional()
+    current_summary: z
+      .string()
+      .nullable()
+      .optional()
+      .describe(
+        'The「当前状态」progress narrative at the top of the Matter detail page. ' +
+          MATTER_PROGRESS_STYLE +
+          ' null clears it.'
+      )
   })
   .strict()
 
@@ -201,7 +285,15 @@ const matterChecklistEntrySchema = z.object({
   done: z.boolean().default(false)
 })
 const matterItemFields = {
-  kind: z.enum(['action', 'milestone', 'decision', 'blocker', 'question', 'note']).optional(),
+  kind: z
+    .enum(['action', 'milestone', 'decision', 'blocker', 'question', 'note'])
+    .optional()
+    .describe(
+      'action = a trackable to-do (the ONLY kind that carries status/priority/owner/due/' +
+        'checklist); milestone = a dated marker; decision = a decision made and why; blocker = ' +
+        'what is blocking progress; question = an open question needing an answer; note = a ' +
+        'free-form remark (the same record matter_add_note creates).'
+    ),
   title: z.string().trim().min(1).max(500).optional(),
   description: z.string().nullable().optional(),
   position: z.number().int().optional(),
@@ -395,7 +487,11 @@ export type MatterRelationMutateInput = z.infer<typeof matterRelationMutateSchem
 export const matterAddNoteSchema = z.object({
   public_id: z.string().trim().min(1),
   title: z.string().trim().min(1).max(500).optional(),
-  text: z.string().trim().min(1),
+  text: z
+    .string()
+    .trim()
+    .min(1)
+    .describe('What happened or what was learned, written for a future reader. ' + MATTER_PROGRESS_STYLE),
   ...matterVersionedFields
 })
 export type MatterAddNoteInput = z.infer<typeof matterAddNoteSchema>
@@ -514,7 +610,12 @@ const matterProposalChangeSchema = z
  *  another Matter, another run, or a different event watermark. */
 export const matterUpdateProposeSchema = z
   .object({
-    summary: z.string().trim().min(1).max(2000),
+    summary: z
+      .string()
+      .trim()
+      .min(1)
+      .max(2000)
+      .describe('At most 3 sentences. ' + MATTER_PROGRESS_STYLE),
     changes: z.array(matterProposalChangeSchema).max(20).default([]),
     open_questions: z.array(z.string().trim().min(1).max(500)).max(5).optional(),
     confidence: z.number().min(0).max(1).optional()

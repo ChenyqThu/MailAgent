@@ -8,6 +8,7 @@ import pytest
 
 from src.api.routers import chat
 from src.api.routers.matters import MatterPatchWithScheduleRequest
+from src.api.schemas.matters import MatterCreateRequest
 from src.mail import sync_store
 from src.matters import models, service, triggers
 
@@ -206,6 +207,34 @@ def test_service_patch_guard_is_still_the_union_of_those_three_sets():
         "set(patch) - DIRECT_PATCH_FIELDS - MANUAL_UPDATE_FIELDS - BINDING_PATCH_FIELDS"
         in source
     ), "patch_matter 的 unknown 判据变了，PATCH 白名单闸的取并方式需要同步"
+
+
+# ── CREATE 白名单一致性闸（0813 轮 3 O2，照 PATCH 闸的样式）────────────────────────
+# create 面加 goal_checks 时的同款风险：DTO（extra=forbid）漏一个字段，gateway matter_create
+# 带上它就 422，而 TS/单侧测试恒绿。两条腿同样从真实对象抽取，不手抄第三份清单。
+
+
+def matter_create_dto_fields() -> set[str]:
+    """REST create 真正收下的字段 = body 模型减信封。"""
+    return set(MatterCreateRequest.model_fields) - PATCH_ENVELOPE_FIELDS
+
+
+def matter_create_service_reads() -> set[str]:
+    """service.create_matter 从 data 里读的键（`data.get("x")` / `data["x"]` 两种写法都抽）。"""
+    source = inspect.getsource(service.MatterService.create_matter)
+    reads = set(re.findall(r'data(?:\.get\(|\[)\s*"(\w+)"', source))
+    assert reads, "create_matter 的 data 读取抽取结果为空（判据写法变了？）"
+    return reads
+
+
+def test_matter_create_dto_accepts_exactly_the_fields_the_service_reads():
+    dto = matter_create_dto_fields()
+    consumed = matter_create_service_reads()
+    assert dto == consumed, (
+        "CREATE 白名单劈叉："
+        f"DTO 缺 {sorted(consumed - dto)}（前端/gateway 发这些字段必 422 extra_forbidden）；"
+        f"DTO 多 {sorted(dto - consumed)}（收下了但 service 静默丢弃 —— 假接口）"
+    )
 
 
 def test_typescript_matter_patch_input_mirrors_the_rest_dto():

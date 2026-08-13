@@ -464,6 +464,45 @@ def test_patch_accepts_priority_and_goal_checks_over_the_wire(client):
     assert [row["t"] for row in reread["goal_checks"]] == ["合同已签署", "款项已到账"]
 
 
+def test_create_accepts_goal_checks_over_the_wire(client):
+    """0813 轮 3 O2：goal_checks 进创建面 —— gateway matter_create 与 REST create 都能带
+    「完成标志」落库（D7 微调：create 时 agent 可写，update 面仍 user-only 不动）。"""
+    http, _ = client
+    created = http.post(
+        "/api/matters",
+        json={
+            "title": "Wire create",
+            "description": "把 Apollo 一期交付推进到验收通过",
+            "goal_checks": [
+                {"t": "验收报告签字", "done": False},
+                {"t": "尾款到账"},
+            ],
+            "mutation": _mutation("wc-create"),
+        },
+    )
+    assert created.status_code == 201, created.text
+    matter = created.json()["data"]["matter"]
+    assert matter["goal_checks"] == [
+        {"t": "验收报告签字", "done": False},
+        {"t": "尾款到账", "done": False},
+    ]
+
+    # 真落库（不是只在响应里回声）。
+    reread = http.get(f"/api/matters/{matter['public_id']}").json()["data"]["matter"]
+    assert reread["goal_checks"] == matter["goal_checks"]
+
+    # 值域仍归 service 的 normalize_goal_checks（400 E_INVALID_ARG），DTO 不抄第二份。
+    bad = http.post(
+        "/api/matters",
+        json={
+            "title": "Wire create bad",
+            "goal_checks": [{"t": "x" * 500}],
+            "mutation": _mutation("wc-create-bad"),
+        },
+    )
+    assert bad.status_code == 400, bad.text
+
+
 def test_patch_still_rejects_fields_the_service_does_not_consume(client):
     """白名单放宽两个字段 ≠ 变成自由字典：DTO 仍 extra=forbid（422），值域仍归 service（400）。"""
     http, _ = client

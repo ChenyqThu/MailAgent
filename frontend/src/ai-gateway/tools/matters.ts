@@ -242,7 +242,11 @@ export function createMatterWriteTools(
     {
       ...shared,
       name: 'matter_create',
-      description: 'Create a Matter and return the committed state plus an undo descriptor.',
+      description:
+        'Create a Matter and return the committed state plus an undo descriptor. Fill ' +
+        '`description` (the goal and background: why this is pursued and what success looks ' +
+        'like) with real substance, and set `goal_checks` when the user can state what done ' +
+        'means — both are owner-owned after creation and cannot be patched by agents later.',
       inputSchema: matterCreateSchema,
       risk: 'edit',
       run: async (input, { signal }) => {
@@ -263,7 +267,10 @@ export function createMatterWriteTools(
       ...shared,
       name: 'matter_update',
       description:
-        'Patch, archive, reopen, trash, or restore a Matter with optimistic concurrency. Arbitrary JSON and automation bindings are forbidden.',
+        'Patch, archive, reopen, trash, or restore a Matter with optimistic concurrency. ' +
+        'Arbitrary JSON and automation bindings are forbidden. The owner-written core goal ' +
+        '(description) and goal_checks are NOT patchable — suggest wording for the owner to ' +
+        'apply instead of attempting the write.',
       inputSchema: matterUpdateSchema,
       risk: 'edit',
       run: async (input, { signal }) => {
@@ -281,7 +288,9 @@ export function createMatterWriteTools(
     {
       ...shared,
       name: 'matter_item_mutate',
-      description: 'Create, update, soft-delete, or restore one typed Matter item.',
+      description:
+        'Create, update, soft-delete, or restore one typed Matter item (action / milestone / ' +
+        'decision / blocker / question / note — the kind field explains when to use which).',
       inputSchema: matterItemMutateSchema,
       risk: 'edit',
       run: (input, { signal }) =>
@@ -375,7 +384,10 @@ export function createMatterWriteTools(
       ...shared,
       name: 'matter_add_note',
       description:
-        'Append a Matter note. The undo path soft-deletes the note item; history remains auditable.',
+        'Append a Matter note — the lightest way to record progress or a learning without ' +
+        'rewriting the summary. Write the note for a future reader (blocker/conclusion first, ' +
+        'then next step), not as a log of your own edits. The undo path soft-deletes the note ' +
+        'item; history remains auditable.',
       inputSchema: matterAddNoteSchema,
       risk: 'edit',
       run: (input, { signal }) =>

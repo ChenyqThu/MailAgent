@@ -151,8 +151,12 @@ v52 全局干系人库；v51 是邮件域的 `ingest_reason`，与事项无关�
 `tags_json` 里出现、但定义表没有的名字**不是孤儿** —— 读取时回退默认样式并照常可选可改；
 过滤掉它们会让存量标签变成「看不见但还挂在事项上」。
 
-**完成标志** `goal_checks_json`：`[{"t": str, "done": bool}]`。与 `description`（核心目标）
-同权限 —— **只有 `actor.kind == user` 能写**，Agent 只能建议。勾满只提示可以推进到「已完成」，
+**完成标志** `goal_checks_json`：`[{"t": str, "done": bool}]`。权限与 `description`（核心目标）
+完全同形（D7，0813 轮 3 微调）：**create 时 agent 可写**（gateway `matter_create` / REST create
+都收 `goal_checks` —— agent 建事项时就该把「怎样算做完」一起立起来），**创建之后仍 user-only**
+（`patch_matter` 对这两个字段的 actor 闸不动，agent patch → `E_INVALID_ARG`；gateway
+`matter_update` 的 patch schema 也不含它们），Agent 只能建议。两者都进 `context_snapshot`
+投影（跟进 run 与事项对话都看得见「怎样算做完」）。勾满只提示可以推进到「已完成」，
 **不自动改状态**：状态推进恒是用户的动作。
 
 ### 2.1 写并发：matter 级严格 CAS，子实体 bounded auto-rebase

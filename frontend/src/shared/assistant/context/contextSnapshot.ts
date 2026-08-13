@@ -88,6 +88,8 @@ export interface ActiveMatterContext {
   dueAt: number | null
   waitingContext: Record<string, unknown> | null
   description: string
+  /** 完成标志（0813 轮 3 O2）——「怎样算做完」必须进模型可见面，判断进展才有完成判据。 */
+  goalChecks: Array<{ t: string; done: boolean }>
   currentSummary: string | null
   version: number
   summaryAcceptedAt: number | null
