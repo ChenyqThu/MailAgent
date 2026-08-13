@@ -1,5 +1,9 @@
 // MailAgent agent-view composer — demo-fidelity (chat-panel demo parity), Phase 8 lexical.
 //
+// 0813: 框内堆栈（附件 chips → 输入 → 工具条）与 dropzone 收进共享的 ComposerFrame
+// （@shared/assistant/components/composer）——本面此前那份 AgentAttachmentChips wrapper 已删，
+// 两个 composer 的 chip 行/长高逻辑自此一份。本面只补 rounded-2xl 与两个对齐值。
+//
 // Demo composer: a rounded shell on bg-ink-2 with a LexicalComposerInput on top (in-field @ mentions +
 // / commands via ComposerTriggerPopover, inline directive chips) and an inline action row below (left:
 // the "+" menu → the SHARED ModelPicker chip; right: send / cancel as round buttons). 08-04 WP6: the
@@ -35,7 +39,7 @@ import { LexicalComposerInput } from '@assistant-ui/react-lexical'
 import { BorderGlow } from '@shared/components/effects/BorderGlow'
 import type { SearchHit, SearchResult } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
-import { ComposerAttachmentChips } from '@shared/assistant/components/composer'
+import { ComposerFrame } from '@shared/assistant/components/composer'
 import {
   useChatComposerControls,
   type ChatComposerControls
@@ -256,21 +260,6 @@ const SLASH_ICONS: Record<string, Unstable_IconComponent> = {
   todo: (props) => <ListTodo {...props} />
 }
 
-// ── attachment chip stack (mentions now live in-field as directive chips) ────────────────────────
-// issue #61 Lane 3 (A2): chips render from the assistant-ui COMPOSER state (the adapter's pending
-// attachments), so "+", paste and drop all get the same visible feedback. The chip itself is the
-// SHARED ComposerAttachmentChips (email panel + this one) — this surface only keeps its own wrapper
-// (px-1 pt-1) and the wider chip cap; the previous byte-for-byte copy is exactly how the two drifted.
-function AgentAttachmentChips(): React.JSX.Element | null {
-  const attachmentCount = useAuiState((s) => s.composer.attachments.length)
-  if (attachmentCount === 0) return null
-  return (
-    <div className="flex flex-wrap gap-1.5 px-1 pt-1">
-      <ComposerAttachmentChips chipMaxWidthClass="max-w-[220px]" />
-    </div>
-  )
-}
-
 export function AgentComposer(): React.JSX.Element {
   const { t } = useTranslation()
   const aui = useAui()
@@ -375,13 +364,19 @@ export function AgentComposer(): React.JSX.Element {
         <BorderGlow borderRadius={16} glowRadius={20} className="w-full">
           {/* issue #61 Lane 3 (A2) — one wrapper carries BOTH file entry points: the Dropzone
               primitive owns drag&drop (handlers + data-dragging highlight), onPaste rides its
-              ...rest spread for the Lexical paste wiring above. */}
-          <ComposerPrimitive.AttachmentDropzone
+              ...rest spread for the Lexical paste wiring above.
+              0813 — 这一层现在是共享的 ComposerFrame（chips 行 + 竖排堆栈 + dropzone 同源，
+              见 composer.tsx）：本面只补一个 `rounded-2xl`（= BorderGlow 的 borderRadius 16，
+              让 data-dragging 的底色洗跟着卡的圆角），皮肤仍在外面那张 BorderGlow 卡上。
+              `mentions` 不传 —— 本面的 @ 提及是正文里的 Lexical directive chip，不走 chip 行。 */}
+          <ComposerFrame
+            controls={controls}
             disabled={sendDisabled}
             onPaste={onComposerPaste}
-            className="flex w-full flex-col gap-1.5 rounded-2xl p-2 transition-colors duration-fast data-[dragging=true]:bg-coral/5"
+            chipMaxWidthClass="max-w-[220px]"
+            chipRowClassName="px-2.5"
+            className="rounded-2xl"
           >
-            <AgentAttachmentChips />
             <LexicalComposerInput
               directiveChip={AgentDirectiveChip}
               placeholder={isEmptyThread ? t('agentView.composer.placeholder') : ''}
@@ -437,7 +432,7 @@ export function AgentComposer(): React.JSX.Element {
                 </ThreadPrimitive.If>
               </div>
             </div>
-          </ComposerPrimitive.AttachmentDropzone>
+          </ComposerFrame>
         </BorderGlow>
 
         {/* @ email mention — async FTS search → inline directive chip + controls.mentions for send context. */}

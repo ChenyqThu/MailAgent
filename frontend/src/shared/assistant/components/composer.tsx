@@ -1,9 +1,13 @@
 // chat-panel P4 Phase 01 + composer-parity — thread composer (assistant-ui ComposerPrimitive).
 //
-// MailAgent-token composer: a vertical strip — the text input on top, a toolbar row
-// below (entry menus on the left, model / effort / send on the right). While the thread is
+// MailAgent-token composer: 一个圆角框（ComposerFrame）里竖排三层 —— 附件/引用 chips 在最上、
+// 文本输入居中、工具条在最下（左边入口菜单，右边 模型 / effort / 发送）。While the thread is
 // running the Send swaps to a Cancel (stop generating) via ThreadPrimitive.If.
 // ComposerPrimitive.Send is auto-disabled on empty input.
+//
+// 0813（owner 参照 Notion 输入框）：chips 从「悬在框外」搬进框内，框随 chips 行数长高 ——
+// border/bg/圆角从 textarea 搬到 ComposerFrame 那一层，见该组件的注释。ComposerFrame 与
+// chip 行是**两个 composer 共用的一份**（AgentComposer 的那份 wrapper 已删）。
 //
 // composer-parity: the model picker + @mention + attachment chips all read panel-owned state via
 // useChatComposerControls(). When no provider is mounted (controls === null — the read-only
@@ -112,11 +116,10 @@ function ComposerAttachmentChip({
  *  Styling is the former controls-driven chip, verbatim; the hand-rolled X becomes
  *  AttachmentPrimitive.Remove → composer.removeAttachment → adapter.remove → panel-state sync.
  *
- *  🔴 Exported because there are TWO composers: this one (email panel) and AgentComposer (general
- *  chat / Cmd+O), which shipped a byte-for-byte copy of this chip apart from its max-width. One
- *  component, both surfaces — mirroring UserMessageAttachments — so a chip change can't land on
- *  only one of them. The lightbox lives here so a chip thumbnail zooms on either surface. */
-export function ComposerAttachmentChips({
+ *  Internal since 0813: the two composers no longer mount this directly — they mount ComposerFrame,
+ *  which owns the row (wrapper + empty gating) as well. The lightbox lives here so a chip thumbnail
+ *  zooms on either surface. */
+function ComposerAttachmentChips({
   chipMaxWidthClass = 'max-w-[200px]'
 }: {
   chipMaxWidthClass?: string
@@ -143,19 +146,33 @@ export function ComposerAttachmentChips({
 /** C2 chip stack — referenced-email chips (panel state) + attachment chips (composer state) above
  *  the input. Nothing renders when both are empty (byte-identical to no chips). Mention chips stay
  *  controls-driven (their send-time excerpt resolution lives in the panel); attachment chips render
- *  even without controls so a pasted image is never an invisible send (issue #61's观感 root). */
-function ComposerChips({
-  controls
+ *  even without controls so a pasted image is never an invisible send (issue #61's观感 root).
+ *
+ *  0813 — 这一层从「两处各一份 wrapper」收成一处（AgentComposer 的 AgentAttachmentChips 已删）：
+ *  wrapper 的 flex/wrap/gap、空态门（全空 → 不渲染任何节点）、chip 上限，全在这儿一份。 */
+function ComposerChipRow({
+  controls,
+  mentions = false,
+  chipMaxWidthClass,
+  className
 }: {
   controls: ChatComposerControls | null
+  /** 渲染「引用邮件」chips。通用面（AgentComposer）的 @ 提及是**正文里的 Lexical directive
+   *  chip**，不走这条 chip 行 —— 故默认 false，只有邮件面显式打开。 */
+  mentions?: boolean
+  chipMaxWidthClass?: string
+  /** 🔴 唯一的正当用途：把 chips 的左缘对齐到**本场地输入区**的文字内缩。两个输入组件
+   *  （textarea vs Lexical contenteditable）的水平 padding 本来就不同，这一个值是它俩剩下的
+   *  全部差异 —— 别拿它塞别的样式，否则两面又会漂开。 */
+  className?: string
 }): React.JSX.Element | null {
   const attachmentCount = useAuiState((s) => s.composer.attachments.length)
-  const mentions = controls?.mentions ?? []
-  if (mentions.length === 0 && attachmentCount === 0) return null
+  const mentionList = mentions ? (controls?.mentions ?? []) : []
+  if (mentionList.length === 0 && attachmentCount === 0) return null
   return (
-    <div className="flex flex-wrap gap-1.5">
+    <div className={cn('flex flex-wrap gap-1.5', className)}>
       {controls &&
-        controls.mentions.map((m) => (
+        mentionList.map((m) => (
           <span
             key={`m-${m.internal_id}`}
             className="inline-flex max-w-[200px] items-center gap-1 rounded-md border border-ink-border bg-ink-3 px-2 py-1 text-meta text-ink-fg-1"
@@ -172,8 +189,62 @@ function ComposerChips({
             </button>
           </span>
         ))}
-      <ComposerAttachmentChips />
+      <ComposerAttachmentChips chipMaxWidthClass={chipMaxWidthClass} />
     </div>
+  )
+}
+
+/** 0813 owner（参照 Notion 输入框）：附件 chips 要在**对话框的边框之内**、位于输入区上方，
+ *  而且框的高度随 chips 行数长高。这一层就是那个「框的内胆」，两个 composer 共用：
+ *
+ *      ┌─ 皮肤（border / bg / 圆角）由调用方给 ─────────┐
+ *      │  chips（换行、可多行）                        │  ← ComposerChipRow
+ *      │  输入区                                       │  ← children
+ *      │  工具条                                       │  ← children
+ *      └──────────────────────────────────────────────┘
+ *
+ *  三层是**同一个 flex-col 的兄弟节点**且容器不设任何 `h-*` —— 所以 chips 多一行框就高一行，
+ *  而不是在固定高度里挤压输入区；chips 区也**不单独滚动**（不设 max-h / overflow：附件条数的
+ *  真实上限来自 gateway 的 8MiB body 与 adapter 的逐份护栏，界面这层再加一个数字只会是猜的）。
+ *  输入区自己的 `max-h-32` 是文本溢出的老行为，与本层无关、原样保留。
+ *
+ *  这一层同时是**文件入口**：AttachmentDropzone 拥有 drag handlers + `data-dragging` 高亮属性
+ *  （粘贴另有两条既有通路：邮件面在 ComposerPrimitive.Input 内置、通用面把 onPaste 挂在这个
+ *  dropzone 上经 rest 透传 —— 两条都不经过本层的布局，改框不动数据路径）。
+ *
+ *  🔴 皮肤留给调用方而不是收进来：通用面外面套的是 reactbits BorderGlow（彩虹边框卡，皮肤在
+ *  那张卡上，这里只出内边距），邮件面自己画一张 v3 token 卡。把 BorderGlow 收进本层 == 给邮件
+ *  面强加彩虹边框，那是另一件事。 */
+export function ComposerFrame({
+  className,
+  controls,
+  mentions,
+  chipMaxWidthClass,
+  chipRowClassName,
+  children,
+  ...dropzone
+}: React.ComponentPropsWithoutRef<typeof ComposerPrimitive.AttachmentDropzone> & {
+  controls: ChatComposerControls | null
+  mentions?: boolean
+  chipMaxWidthClass?: string
+  chipRowClassName?: string
+}): React.JSX.Element {
+  return (
+    <ComposerPrimitive.AttachmentDropzone
+      {...dropzone}
+      className={cn(
+        'flex w-full flex-col gap-1.5 p-2 transition-colors duration-fast data-[dragging=true]:bg-coral/5',
+        className
+      )}
+    >
+      <ComposerChipRow
+        controls={controls}
+        mentions={mentions}
+        chipMaxWidthClass={chipMaxWidthClass}
+        className={chipRowClassName}
+      />
+      {children}
+    </ComposerPrimitive.AttachmentDropzone>
   )
 }
 
@@ -209,27 +280,42 @@ export function ThreadComposer(): React.JSX.Element {
           aui.composer().setText('')
         }
       }}
-      className="border-t border-[var(--hairline)] bg-ink-2"
+      // 0813 — 底色从 ink-2 降到 ink-1（= 消息区 ThreadPrimitive.Root 的底色）：ink-2 让给了
+      // 里面那张 ComposerFrame 卡，于是「卡浮在对话底色上」与通用面（BorderGlow 卡 = ink-2
+      // 浮在 glass-3 上）同构；顶部 hairline 保留，窄侧栏里仍需要这条结构线。
+      className="border-t border-[var(--hairline)] bg-ink-1 px-3 py-2.5"
     >
       {/* issue #61 Lane 3 (A2) — drag&drop lands files on the same adapter pipeline as paste /
           the "+" menu's attachment item. The primitive owns the drag handlers + a data-dragging
           attribute for the highlight wash; the document-level fileDropGuard only blocks the
           file:// navigation default and doesn't consume the drop. Layout classes moved off Root
-          so the wash paints. */}
-      <ComposerPrimitive.AttachmentDropzone
+          so the wash paints.
+          0813 — 它同时是**可见的那个对话框**：border/bg/圆角从 textarea 搬到这一层，于是
+          chips 与工具条都进了框内（此前 textarea 自带 border，chips 悬在框外）。框不设高度，
+          chips 换行即整框长高；焦点态用 `has-[textarea:focus]` 精确复刻旧的
+          `focus-visible:border-accent`（换 focus-within 会让点一下工具条按钮也整框变色）。 */}
+      <ComposerFrame
+        controls={controls}
+        mentions
         disabled={sendDisabled || queueModeActive}
         aria-disabled={sendDisabled || queueModeActive}
-        className="flex flex-col gap-2 px-3 py-2.5 transition-colors duration-fast data-[dragging=true]:bg-coral/5"
+        chipRowClassName="px-1.5"
+        className={cn(
+          // 🔴 底色必须是 ink-2 而不是原 textarea 的 ink-3：chip 自己就是 `bg-ink-3`，卡也用
+          // ink-3 的话 chip 在卡上没有填充差（亮色下双双是纯白），只剩一圈描边 —— 而通用面的
+          // chip 是浮在 ink-2 卡上的实心块。两面同一个 chip 组件，底色也必须同一档。
+          // 圆角走 v3 --r-card(12)：本面是 320px 侧栏，比通用面 44rem 卡的 16px 小一档。
+          'rounded-[var(--r-card)] border border-[rgb(var(--ink-border))] bg-ink-2',
+          'has-[textarea:focus]:border-[rgb(var(--c-accent))]'
+        )}
       >
-        <ComposerChips controls={controls} />
         <ComposerPrimitive.Input
           placeholder={t('chat.composer.placeholder')}
           aria-label={t('chat.composer.placeholder')}
           disabled={sendDisabled}
           className={cn(
-            'scrollbar-thin max-h-32 w-full resize-none rounded-lg border bg-ink-3 px-3 py-2',
+            'scrollbar-thin max-h-32 w-full resize-none border-0 bg-transparent px-1.5 py-1',
             'text-body leading-snug text-ink-fg outline-none placeholder:text-ink-fg-3',
-            'border-[rgb(var(--ink-border))] focus-visible:border-[rgb(var(--c-accent))]',
             sendDisabled && 'opacity-60'
           )}
           rows={1}
@@ -288,7 +374,7 @@ export function ThreadComposer(): React.JSX.Element {
             </ThreadPrimitive.If>
           </div>
         </div>
-      </ComposerPrimitive.AttachmentDropzone>
+      </ComposerFrame>
     </ComposerPrimitive.Root>
   )
 }
