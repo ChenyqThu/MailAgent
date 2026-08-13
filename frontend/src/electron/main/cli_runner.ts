@@ -33,10 +33,14 @@ import { resolveDataRoot, resolveDbPath } from './db'
 // <Resources>/python/。bin/mailagent 是自定位 sh wrapper (python3.11 -P -c …), 直接
 // execa(bin, args) 即可, 无需前端拼解释器路径 (wrapper 内部处理 shebang + cwd 遮蔽)。
 const PACKAGED_BIN_REL = ['python', 'bin', 'mailagent']
+// 08-12 win-port — Windows PBS 布局是 python/python.exe (无 bin/, 无 sh wrapper),
+// 打包态直接 spawn `python.exe -B -P -c <PY_CLI_BOOTSTRAP>` (见 getMailagentCommand)。
+const PACKAGED_WIN_PY_REL = ['python', 'python.exe']
 
 import { Semaphore } from './sem'
 import { getCliApiKey } from './keychain'
 import { whichSync } from './bin_resolver'
+import { PY_CLI_BOOTSTRAP } from './py_cli_bootstrap'
 
 // Resolved lazily on first call. The CLI is shipped by `pip install -e .[cli]`
 // (project CLAUDE.md "CLI" section). Electron's GUI process inherits launchd
@@ -52,14 +56,25 @@ function projectVenvBin(): string {
   // Mirror db.ts's project-root default; users following the README clone
   // into ~/Documents/MailAgent and `pip install -e .[cli]` lands the CLI
   // under venv/bin. Override via MAILAGENT_BIN for any non-default layout.
+  // win dev: pip 在 Windows venv 的 console_scripts 落 Scripts\mailagent.exe。
+  if (process.platform === 'win32') {
+    return join(homedir(), 'Documents', 'MailAgent', 'venv', 'Scripts', 'mailagent.exe')
+  }
   return join(homedir(), 'Documents', 'MailAgent', 'venv', 'bin', 'mailagent')
 }
 
 /** Packaging P1-3 — 打包模式 (`app.isPackaged`) 下 CLI 的默认路径:
  *  `<Resources>/python/bin/mailagent` (嵌入式 python, electron-builder
  *  extraResources 注入)。仅在打包模式调用; dev 模式始终走 projectVenvBin()
- *  以保证现有开发行为零变更。 */
+ *  以保证现有开发行为零变更。
+ *  win 打包态返回 Scripts\mailagent.cmd —— 🔴 仅作存在性探针 (onboarding
+ *  pythonRuntime 体检) 与人工调试入口, **不可直接 spawn**: Node CVE-2024-27980
+ *  修复后 spawn .cmd/.bat 需 shell:true 会 EINVAL。真实 exec 恒走
+ *  getMailagentCommand() (直接 python.exe, 不经 cmd shell)。 */
 function packagedResourcesBin(): string {
+  if (process.platform === 'win32') {
+    return join(process.resourcesPath, 'python', 'Scripts', 'mailagent.cmd')
+  }
   return join(process.resourcesPath, ...PACKAGED_BIN_REL)
 }
 
@@ -125,6 +140,46 @@ export function getMailagentBin(): string {
   }
   _binCache = found
   return _binCache
+}
+
+/** 08-12 win-port — CLI 调用形态 (可执行文件 + 前置参数)。
+ *  非 win 打包态恒 `{exe: getMailagentBin(), argsPrefix: []}` (mac/dev 行为零变更)。 */
+export interface MailagentCommand {
+  exe: string
+  /** 业务 args 之前的解释器参数; 调用方以 `[...argsPrefix, ...args]` 拼接。 */
+  argsPrefix: string[]
+}
+
+/** 解析 CLI 的完整调用形态。cli_runner._exec 与 backend_lifecycle.spawnService 的
+ *  唯一 exec 入口 (getMailagentBin 仅剩存在性探针语义, 见 packagedResourcesBin 注释)。
+ *
+ *  win 打包态: PBS 布局无 sh wrapper → `python.exe -B -P -c <PY_CLI_BOOTSTRAP>`
+ *  (-B 禁写 .pyc / -P 禁 cwd 进 sys.path, 与 mac wrapper 逐字对齐; bootstrap 串含
+ *  STALE_CMD_MARKER, 残留清扫判据结构性成立, 见 py_cli_bootstrap.ts)。
+ *  `python -c code <argv...>` 下 typer 从 sys.argv[1:] 读参数, 与 wrapper 形态等价。 */
+export function getMailagentCommand(): MailagentCommand {
+  // ① $MAILAGENT_BIN 显式覆盖恒最高优先 (与 getMailagentBin 同序)
+  const fromEnv = process.env['MAILAGENT_BIN']
+  if (fromEnv && fromEnv.length > 0) return { exe: fromEnv, argsPrefix: [] }
+  let packaged = false
+  try {
+    packaged = app.isPackaged === true
+  } catch {
+    /* 单测 mock app 可能无 isPackaged → 按 dev 处理 */
+  }
+  if (process.platform === 'win32' && packaged) {
+    const pyExe = join(process.resourcesPath, ...PACKAGED_WIN_PY_REL)
+    if (!existsSync(pyExe)) {
+      throw new CliError(
+        'E_NO_BIN',
+        -1,
+        `embedded python not found at ${pyExe}. ` +
+          'Package is broken (build-python-venv.ps1 not run before electron-builder?).'
+      )
+    }
+    return { exe: pyExe, argsPrefix: ['-B', '-P', '-c', PY_CLI_BOOTSTRAP] }
+  }
+  return { exe: getMailagentBin(), argsPrefix: [] }
 }
 
 // exit code → code NAME; consumed below as `E_${name}`. Canonical source is
@@ -208,14 +263,16 @@ class CliQueue {
   private async _exec(args: string[], opts: RunOpts): Promise<unknown> {
     // Lazy bin resolution — throws CliError('E_NO_BIN') if the CLI is missing,
     // which propagates to the IPC caller exactly like any other CLI error.
-    const bin = getMailagentBin()
+    // 08-12 win-port: 经 getMailagentCommand 拿 exe+argsPrefix (win 打包态 =
+    // python.exe -B -P -c bootstrap; 其余平台 argsPrefix=[] 行为零变更)。
+    const { exe, argsPrefix } = getMailagentCommand()
     const ac = new AbortController()
     const onParentAbort = (): void => ac.abort()
     opts.signal?.addEventListener('abort', onParentAbort, { once: true })
 
     const timeoutMs = opts.timeoutMs ?? 60_000
 
-    const sub = execa(bin, args, {
+    const sub = execa(exe, [...argsPrefix, ...args], {
       cancelSignal: ac.signal,
       reject: false, // disable default throw-on-nonzero; we dispatch by exit code
       timeout: timeoutMs,

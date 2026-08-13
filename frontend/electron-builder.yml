@@ -112,6 +112,34 @@ dmg:
     - x: 140
       y: 200
       type: file
+# ── Windows (08-12 win-port; 07-08 拍板: x64 only / 无 Authenticode 签名 / 首版无自更新) ──
+# 纯加法段: mac 逻辑零变化。extraResources 顶层定义对 win 同样生效
+# (resources/python → <app>/resources/python, PBS win 布局 = python.exe + Lib/site-packages,
+#  由 build-python-venv.ps1 产出; cli_runner.getMailagentCommand() win 分支解析 python.exe;
+#  create_reply_draft.sh 等 mac 胶水脚本会带进 win 包但无消费点, 体积可忽略)。
+# 原生模块 (better-sqlite3/keytar): electron-builder smart unpack 自动落
+# app.asar.unpacked, 无需 win 侧 asarUnpack 增项。
+# 🔴 win 构建前置 (Electron ABI 纪律, mac 头号坑② 的 win 等价):
+#   rebuild:node / rebuild:electron 两个 script 硬编码 --arch=arm64 + codesign, Windows
+#   不可用; win 侧保证 Electron ABI 的命令 = `pnpm exec electron-builder install-app-deps`
+#   (postinstall 已含)。npmRebuild:false 同 mac —— builder 自身不重编, 跑过 vitest
+#   (pnpm test 含 rebuild:node) 后必须重跑 install-app-deps 再 build。
+win:
+  target:
+    - target: nsis
+      arch:
+        - x64
+  # 仓内无 icon.ico (mac 只有 icns + png 系列); electron-builder 对 win.icon 接受 ≥256px
+  # png 并自动转 ico (路径相对 buildResources=build/)。缺此行会落 Electron 默认图标。
+  icon: icons/512.png
+  # 首版无自更新 (07-08 拍板): 不产 latest.yml feed, 不上传 release —— CI (build-win.yml)
+  # 仅 artifact upload。publish:null 结构性关掉 win 侧 feed 生成, 顶层 publish 仅对 mac 生效。
+  publish: null
+nsis:
+  # 非 one-click: 无签名安装包过 SmartScreen 后, 给用户可见的安装目录确认步骤
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+  artifactName: ${name}-${version}-win-${arch}.${ext}
 npmRebuild: false
 # auto-updater 通过 GitHub Releases 走 publish；上传产物（dmg + zip + blockmap +
 # latest-mac.yml）到 release，electron-updater 起来后 checkForUpdates() 读

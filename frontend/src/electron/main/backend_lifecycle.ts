@@ -19,7 +19,8 @@
 // 不变)。registerBackendLifecycle() 在 dev 模式是 no-op。
 //
 // spawn 契约 (P1-4a, C-1): 长驻服务是 `mailagent serve` → src.service.EmailNotionSyncApp
-// (Python 侧已落地), **不是** spawn `main.py`。bin 解析复用 cli_runner.getMailagentBin()。
+// (Python 侧已落地), **不是** spawn `main.py`。bin 解析复用 cli_runner.getMailagentCommand()
+// (08-12 win-port: win 打包态 = python.exe -B -P -c bootstrap, 其余平台等价旧 getMailagentBin)。
 //
 // 真机 spawn / waitReady / SIGTERM 验证留给后续真机 dogfood; 本文件是可单测骨架。
 //
@@ -52,7 +53,8 @@ import Database from 'better-sqlite3'
 
 import { resolveAiGatewayPort } from '../../ai-gateway/config'
 import { DEFAULT_API_PORT, DEFAULT_SSE_PORT } from '@shared/lib/ports'
-import { getMailagentBin } from './cli_runner'
+import { getMailagentCommand } from './cli_runner'
+import { STALE_CMD_MARKER } from './py_cli_bootstrap'
 import { resolveDataRoot, resolveDbPath } from './db'
 import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
 
@@ -70,8 +72,8 @@ import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
  *  >= 此值即放行, 后端再 bump schema 也不会卡旧前端 (一体化 app 迁移单向前进 + 向后兼容
  *  加列加表, 不删不改语义)。bump 后端 schema 时**仍建议**同步抬高此下限保持语义清晰,
  *  但漏改不再致命 (admin.py 用 `= _SyncStore.DB_VERSION` 动态引用, 无此问题)。 */
-// v48: Matters resource identity normalization migration.
-export const EXPECTED_DB_VERSION = 52
+// v53: outlook_com backend entry_id cache column (task 08-12 Win backend).
+export const EXPECTED_DB_VERSION = 53
 
 /** 就绪判据的关键表子集 (02-landing-plan.md P1-6)。admin.py REQUIRED_TABLES 更全,
  *  但开窗门控只需保证「邮件读写主路径」已建: 元数据 / 正文 SSoT / outbox +
@@ -402,9 +404,12 @@ export function resolveSsePort(): number {
  *  (frontend/scripts/build-python-venv.sh:85 生成), 此串只出现在打包态后端进程的命令行里。
  *  dev 侧 venv/bin/mailagent 是 pip console_scripts shim (`sys.exit(app())`, 无 prog_name),
  *  pm2 后端是 `python3 main.py` —— 都不含此 marker → pnpm dev 蹭 8200 时不会被误杀。
- *  🔴 与 build-python-venv.sh 的 wrapper 强耦合: 改 wrapper 必同步此 marker (有单测断言
- *  wrapper 脚本文本含此串, 改了忘同步会红灯而非静默失效)。 */
-export const STALE_CMD_MARKER = "prog_name='mailagent'"
+ *  🔴 与打包 wrapper 强耦合: 改 wrapper 必同步此 marker (有单测断言 sh + ps1 两份
+ *  wrapper 脚本文本含此串, 改了忘同步会红灯而非静默失效)。
+ *  08-12 win-port 起定义下沉零依赖叶子 py_cli_bootstrap.ts (win 打包态 spawn 的
+ *  PY_CLI_BOOTSTRAP 用模板字面量嵌入它, marker ⊆ 命令行结构性成立); 此处 re-export
+ *  保持既有 import 面不变。 */
+export { STALE_CMD_MARKER }
 
 /** 探活轮询间隔 (ms)。 */
 const STALE_POLL_MS = 100
@@ -452,6 +457,13 @@ export function killStaleBackendListeners(
   io: StaleSweepIO = {},
   excludePids: ReadonlySet<number> = new Set()
 ): number[] {
+  // 08-12 win-port: lsof/ps 是 POSIX 工具, Windows 上不存在 —— 整段跳过 (fail-open,
+  // 与「lsof 不可用只跳过不阻断启动」同语义)。Windows 的孤儿回收走 Job Object 方案
+  // (07-08 prd R6, 独立工作块), 不在本清扫路径重写。
+  if (process.platform === 'win32') {
+    console.warn('[backend_lifecycle] win32: 跳过 POSIX 残留监听清扫 (孤儿回收由 Job Object 承接)')
+    return []
+  }
   const run =
     io.run ??
     ((cmd: string, args: string[]) =>
@@ -748,10 +760,19 @@ export class BackendLifecycleManager {
    */
   private spawnService(svc: ManagedService, baseEnv: NodeJS.ProcessEnv, dataRoot: string): void {
     if (svc.child && !svc.child.killed) return // 幂等: 该 service 已在跑
-    const bin = getMailagentBin()
+    // 08-12 win-port: getMailagentCommand 返回 exe + argsPrefix (win 打包态 =
+    // python.exe -B -P -c <PY_CLI_BOOTSTRAP>; mac/dev argsPrefix=[] 与原 getMailagentBin
+    // 行为逐字节一致)。windowsHide: 防 Windows 上 GUI 进程 spawn console 可执行文件时
+    // 闪黑窗 (mac 上该选项被忽略, 零影响)。
+    const { exe, argsPrefix } = getMailagentCommand()
     const env: NodeJS.ProcessEnv = svc.name === 'serve-api' ? this.serveApiEnv(baseEnv) : baseEnv
     svc.state = 'starting'
-    const child = spawn(bin, svc.args, { cwd: dataRoot, env, stdio: ['ignore', 'pipe', 'pipe'] })
+    const child = spawn(exe, [...argsPrefix, ...svc.args], {
+      cwd: dataRoot,
+      env,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      windowsHide: true
+    })
     svc.child = child
     // 🔴 spawn 后**立刻** (任何 await 之前) 抽干 stdout/stderr —— 不消费 pipe 会背压
     // 死锁把进程整个拖死 (详见 attachLogDrain)。serve 与 serve-api 各落独立文件。

@@ -1,0 +1,134 @@
+# MailAgent Windows 打包 CI (08-12 win-port; 基线 = build-mac.yml 结构镜像)
+#
+# 07-08 / 08-12 拍板边界:
+#   - x64 only / NSIS / 无 Authenticode 签名 (SmartScreen 警告可接受) / 首版无自更新
+#     (electron-builder.yml win.publish=null 结构性关掉 feed) → 产物**只走 artifact
+#     upload, 不进 GitHub Release** —— win 是实验轨, tag 触发时与 mac 并行但完全独立,
+#     win 失败不阻塞 mac 发布 (独立 workflow, 无跨 job 依赖)。
+#   - macOS 零回归红线: 本文件不触碰 build-mac.yml / ci-test.yml。
+#
+# generate_lock 模式 (workflow_dispatch 输入):
+#   requirements.lock.win.txt 无法在 macOS 上生成 (依赖解析是平台相关的; mac lock 含
+#   uvloop/pyobjc 在 win 装不上)。首次/更新流程 = Run workflow → generate_lock=true →
+#   ps1 -GenerateLock 从声明源全新解析 + pip freeze → 下载 requirements-lock-win
+#   artifact → review diff 后覆盖仓内文件提交 (CI 不回推 commit)。该模式跳过打包
+#   (lock 尚未进仓, 打出的包不可再现, 没有保留价值)。
+#
+# ⚠️ 本 workflow 未经 Windows runner 真机验证 (在 macOS 上编写); 首跑按下面 checklist
+#   核对: ps1 全流程 / install-app-deps 原生模块 ABI / NSIS 产物 / artifact 路径。
+
+name: Build Windows app
+
+on:
+  workflow_dispatch:
+    inputs:
+      generate_lock:
+        description: '只生成 requirements.lock.win.txt (跳过打包, 产 artifact 供 review 提交)'
+        type: boolean
+        default: false
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: read # 只 artifact upload, 不发布 Release (mac 侧才 publish)
+
+concurrency:
+  group: build-win-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    # 与 build-mac.yml 同一道测试闸 (workflow_call 复用 ci-test.yml; 测试跑在 macos-14,
+    # 闸的是代码质量不是平台行为 —— win 平台行为靠真机 dogfood checklist)。
+    uses: ./.github/workflows/ci-test.yml
+
+  build:
+    needs: test
+    runs-on: windows-latest # x64
+    timeout-minutes: 45
+    defaults:
+      run:
+        working-directory: frontend
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10 # 对齐 pnpm-lock (pnpm 10.x), 同 build-mac.yml
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend/pnpm-lock.yaml
+
+      - name: Cache python-build-standalone tarball
+        uses: actions/cache@v4
+        with:
+          path: frontend/.cache/pbs
+          # key 跟随 build-python-venv.ps1 里的 PBS_TAG; 脚本改版本号时同步改这里
+          key: pbs-20260510-win-x64
+
+      - name: Install deps (postinstall install-app-deps 重建 better-sqlite3/keytar 到 Electron ABI)
+        # 🔴 win 侧 Electron ABI 纪律: rebuild:node/rebuild:electron 两 script 硬编码
+        # arm64+codesign 不可用; postinstall 的 `electron-builder install-app-deps` 即
+        # win 的 ABI 保证 (VS Build Tools 由 windows-latest runner 自带)。本 job 不跑
+        # vitest → ABI 不会被翻回 Node (mac 头号坑② 在 CI 的规避方式与 build-mac 相同:
+        # test 与 build 分 runner)。
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate requirements.lock.win.txt (generate_lock 模式)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.generate_lock }}
+        run: pwsh scripts/build-python-venv.ps1 -GenerateLock
+
+      - name: Upload lock artifact (generate_lock 模式)
+        if: ${{ github.event_name == 'workflow_dispatch' && inputs.generate_lock }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: requirements-lock-win
+          path: requirements.lock.win.txt
+          if-no-files-found: error
+
+      # ---- 以下为正常打包 lane (generate_lock 模式全部跳过) ----
+
+      - name: Build embedded CPython runtime (win x64)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.generate_lock) }}
+        # 产出 frontend/resources/python/ (PBS 可重定位 CPython + 后端 site-packages +
+        # pywin32 dll 落位 + Scripts/mailagent.cmd)。锁定模式: requirements.lock.win.txt
+        # 0 pin 会 fail loud → 先跑一次 generate_lock 模式把 lock 提交进仓。
+        run: pwsh scripts/build-python-venv.ps1
+
+      - name: Typecheck + build renderer/main
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.generate_lock) }}
+        run: pnpm run build
+
+      - name: Build web SPA (远程 /app)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.generate_lock) }}
+        # package.json 的 build:web 用 POSIX 内联 env (`BUILD_SW=1 vite build`), pwsh 下
+        # 不可用 → 拆成两条显式调用, 语义与 build:web 逐字对齐 (先无 SW 再带 SW)。
+        # out/web 缺失会让 electron-builder extraResources `from: out/web` 直接报错
+        # (mac 侧 2026-06-29 历史 bug 的既有防线, win 同样受益)。
+        run: |
+          pnpm exec vite build --config vite.web.config.ts
+          $env:BUILD_SW = '1'
+          pnpm exec vite build --config vite.web.config.ts
+
+      - name: Package NSIS installer (不发布)
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.generate_lock) }}
+        # afterPack.cjs win 分支: 跳过 codesign, 但嵌入式 python 缺失 → 硬 fail
+        # (mac 头号坑①「python 缺失静默跳签出坏包」的 win 等价防线)。
+        # --publish never 双保险 (win.publish 已是 null)。
+        run: pnpm exec electron-builder --win --x64 --publish never
+
+      - name: Upload installer artifact
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.generate_lock) }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: MailAgent-win-x64
+          path: |
+            frontend/dist/*.exe
+          if-no-files-found: error
