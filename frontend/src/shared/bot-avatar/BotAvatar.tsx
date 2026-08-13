@@ -19,7 +19,9 @@ import { useReducedMotion } from '../hooks/useReducedMotion'
 import { COLORS } from './colors'
 import { BotFaceEngine, staticFrame } from './engine'
 import { BACK_PATH_COUNT, BOT_VIEW_BOX, SHAPES } from './shapes'
-import { POOLS } from './states'
+import { BLINK, POOLS } from './states'
+import { registerStaticBlink, unregisterStaticBlink } from './staticBlink'
+import type { StaticBlinkClient } from './staticBlink'
 import { registerTicker, unregisterTicker } from './ticker'
 import type { BotColor, BotShape, BotState, EngineFrame } from './types'
 import { useBotAvatarTheme } from './useBotAvatarTheme'
@@ -100,6 +102,23 @@ export function BotAvatar({
     engine.setState(state)
     writeFrame(refs.current, engine.snapshot())
   })
+
+  // 静态档眨眼（0813）：不建引擎不进共享 rAF ticker —— 挂模块级 blink registry
+  // （单例低频调度 + 并发上限，见 staticBlink.ts 纪律注释），仅眨眼窗口内有帧
+  // 活动，间隙真 idle。reduced-motion 不注册；BLINK=null 的闭眼/机械态不注册。
+  // layout 时机：state 变更时 React 同一 commit 已重写基线帧，注销须在 paint 前
+  // 生效，晚到的眨眼帧才不会盖掉新表情。
+  useLayoutEffect(() => {
+    if (isAnimated || reducedMotion || BLINK[state] === null) return
+    const client: StaticBlinkClient = {
+      state,
+      surface,
+      expressionIndex: POOLS[state][0],
+      eyes: () => refs.current.eyes
+    }
+    registerStaticBlink(client)
+    return () => unregisterStaticBlink(client)
+  }, [isAnimated, reducedMotion, state, surface])
 
   useEffect(() => {
     if (!isAnimated) return

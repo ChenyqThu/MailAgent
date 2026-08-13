@@ -14,7 +14,8 @@ import { cleanup, fireEvent, render } from '@testing-library/react'
 import { BotAvatar } from '../../../src/shared/bot-avatar/BotAvatar'
 import { staticFrame } from '../../../src/shared/bot-avatar/engine'
 import { SHAPES } from '../../../src/shared/bot-avatar/shapes'
-import { POOLS } from '../../../src/shared/bot-avatar/states'
+import { BLINK, POOLS } from '../../../src/shared/bot-avatar/states'
+import { __staticBlinkClientCount } from '../../../src/shared/bot-avatar/staticBlink'
 import { __instanceCount } from '../../../src/shared/bot-avatar/ticker'
 
 function stubNoReduceMatchMedia(): void {
@@ -188,6 +189,52 @@ describe('BotAvatar 动画档', () => {
     expect(__instanceCount()).toBe(2)
     unmount()
     expect(__instanceCount()).toBe(0)
+  })
+})
+
+describe('BotAvatar 静态档眨眼（blink registry 挂载纪律）', () => {
+  test('reduced-motion（全局 setup 默认）下静态档不注册 blink registry', () => {
+    const { unmount } = render(<BotAvatar state="idle" />)
+    expect(__staticBlinkClientCount()).toBe(0)
+    unmount()
+  })
+
+  test('非 reduce 静态档 + 可眨状态：注册 registry，卸载即注销', () => {
+    stubNoReduceMatchMedia()
+    const { unmount } = render(<BotAvatar state="idle" />)
+    expect(__staticBlinkClientCount()).toBe(1)
+    expect(__instanceCount()).toBe(0) // 仍是静态档：不碰共享 rAF ticker
+    unmount()
+    expect(__staticBlinkClientCount()).toBe(0)
+  })
+
+  test('BLINK=null 状态（sleeping 闭眼态）不注册', () => {
+    stubNoReduceMatchMedia()
+    expect(BLINK.sleeping).toBeNull()
+    const { unmount } = render(<BotAvatar state="sleeping" />)
+    expect(__staticBlinkClientCount()).toBe(0)
+    unmount()
+  })
+
+  test('animated 档不走 blink registry（引擎自带眨眼排程）', () => {
+    stubNoReduceMatchMedia()
+    stubIntersectionObserver(true)
+    const { unmount } = render(<BotAvatar animated state="idle" />)
+    expect(__staticBlinkClientCount()).toBe(0)
+    expect(__instanceCount()).toBe(1)
+    unmount()
+  })
+
+  test('state 切到不可眨状态 = 注销；切回可眨状态 = 重新注册', () => {
+    stubNoReduceMatchMedia()
+    const { rerender, unmount } = render(<BotAvatar state="idle" />)
+    expect(__staticBlinkClientCount()).toBe(1)
+    rerender(<BotAvatar state="sleeping" />)
+    expect(__staticBlinkClientCount()).toBe(0)
+    rerender(<BotAvatar state="thinking" />)
+    expect(__staticBlinkClientCount()).toBe(1)
+    unmount()
+    expect(__staticBlinkClientCount()).toBe(0)
   })
 })
 

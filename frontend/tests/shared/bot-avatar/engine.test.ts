@@ -286,19 +286,140 @@ describe('调度器', () => {
     expect(engine.expression).toBe(POOLS.waking[0])
   })
 
-  test('setState 立即向目标池首过渡并重排；同态 setState 是 no-op', () => {
-    const engine = quietEngine()
+  test('setState（驻留已满）立即向目标池首过渡并重排；同态 setState 是 no-op', () => {
+    let clock = 0
+    const engine = new BotFaceEngine({
+      surface: SPHERE,
+      initialState: 'powering-down',
+      random: () => 0,
+      now: () => clock
+    })
     engine.tick(0)
     expect(engine.tick(16)).toBeNull() // 已静止
 
     engine.setState('powering-down') // 同态：不得触发任何新帧
     expect(engine.tick(32)).toBeNull()
 
+    clock = 700 // 驻留（600ms）已满 → 走立即路径
     engine.setState('surprised')
     expect(engine.state).toBe('surprised')
     expect(engine.expression).toBe(POOLS.surprised[0])
     // 池首 ≠ powering-down 池首 → 过渡启动，出帧
-    expect(engine.tick(48)).not.toBeNull()
+    expect(engine.tick(748)).not.toBeNull()
+  })
+})
+
+describe('状态驻留闸（min-dwell 去抖，0813）', () => {
+  // 全部用可变假时钟（now: () => clock）+ 显式 tick(now)，零真实计时。
+  // 状态选型：powering-down（无眨眼/无 ambient）保证驻留期内 tick 恒 null，
+  // 「无新帧」断言干净；目标态 surprised(池首 3) / thinking(池首 8) 池首互异，
+  // 「中间态从未上脸」可由 expression 直接判。
+  const dwellEngine = (): { engine: BotFaceEngine; setClock: (t: number) => void } => {
+    let clock = 0
+    const engine = new BotFaceEngine({
+      surface: SPHERE,
+      initialState: 'powering-down',
+      random: () => 0,
+      now: () => clock
+    })
+    return {
+      engine,
+      setClock: (t: number) => {
+        clock = t
+      }
+    }
+  }
+
+  test('抖动序列 A→B→A→C：驻留期内不切换，期满一次性切到 C（不播中间态 B）', () => {
+    const { engine, setClock } = dwellEngine()
+    engine.tick(0)
+    const poolHeadA = POOLS['powering-down'][0]
+
+    setClock(100)
+    engine.setState('surprised') // B：驻留未满 → 排队
+    expect(engine.state).toBe('powering-down')
+    expect(engine.expression).toBe(poolHeadA)
+
+    setClock(150)
+    engine.setState('powering-down') // 折回 A → 撤销排队
+
+    setClock(200)
+    engine.setState('thinking') // C：替换队列目标（只保留最新）
+    expect(engine.state).toBe('powering-down')
+
+    // 驻留期内：B/C 都没开始播，无过渡无新帧
+    expect(engine.tick(300)).toBeNull()
+    expect(engine.expression).toBe(poolHeadA)
+    expect(engine.tick(599)).toBeNull()
+
+    // 期满：一次性切到 C（B 从未上脸）
+    setClock(620)
+    const frame = engine.tick(620)
+    expect(frame).not.toBeNull()
+    expect(engine.state).toBe('thinking')
+    expect(engine.expression).toBe(POOLS.thinking[0])
+  })
+
+  test('最终状态不丢：排队目标期满必达，且提交后驻留重新起算', () => {
+    const { engine, setClock } = dwellEngine()
+    engine.tick(0)
+
+    setClock(50)
+    engine.setState('surprised')
+    engine.tick(400)
+    expect(engine.state).toBe('powering-down') // 期满前仍是旧状态
+
+    setClock(600)
+    engine.tick(600) // 600 - 0 ≥ 600 → 提交
+    expect(engine.state).toBe('surprised')
+    expect(engine.expression).toBe(POOLS.surprised[0])
+
+    // 提交后驻留重臂：紧跟着的新目标再次排队而非立即切
+    setClock(700)
+    engine.setState('thinking')
+    expect(engine.state).toBe('surprised')
+    engine.tick(1100) // 1100 - 600 = 500 < 600 → 未到期
+    expect(engine.state).toBe('surprised')
+    engine.tick(1200) // 1200 - 600 = 600 → 提交
+    expect(engine.state).toBe('thinking')
+  })
+
+  test('驻留期内重复 setState 同一目标幂等：提交时刻仍按状态进入时刻起算', () => {
+    const { engine, setClock } = dwellEngine()
+    engine.tick(0)
+
+    setClock(100)
+    engine.setState('surprised')
+    setClock(550)
+    engine.setState('surprised') // 重复排队不得推迟提交（React 重渲染逐次灌入的形态）
+    setClock(610)
+    engine.tick(610) // 610 - 0 ≥ 600 → 提交（若重复排队重置了基点，此刻不会切）
+    expect(engine.state).toBe('surprised')
+  })
+
+  test('A→B→A 折返：撤销排队，期满后零过渡零新帧', () => {
+    const { engine, setClock } = dwellEngine()
+    engine.tick(0)
+
+    setClock(100)
+    engine.setState('surprised')
+    setClock(200)
+    engine.setState('powering-down') // 折回当前态 → 队列清空
+    expect(engine.tick(650)).toBeNull() // 期满也无事发生
+    expect(engine.state).toBe('powering-down')
+    expect(engine.tick(700)).toBeNull()
+  })
+
+  test('期满后 pending 尚未被 tick 消费时，新 setState 直接提交最新目标', () => {
+    const { engine, setClock } = dwellEngine()
+    engine.tick(0)
+
+    setClock(100)
+    engine.setState('surprised') // 排队
+    setClock(700) // 驻留已满，但两次 tick 之间（pending 还没被消费）
+    engine.setState('thinking') // 立即路径：提交最新目标，作废排队的 surprised
+    expect(engine.state).toBe('thinking')
+    expect(engine.expression).toBe(POOLS.thinking[0])
   })
 })
 

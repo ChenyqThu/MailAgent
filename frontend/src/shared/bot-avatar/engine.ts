@@ -34,6 +34,17 @@ const STATE_SWITCH_EASE: TransitionEase = 'spring'
 /** 池内表情轮换的过渡（闲适感：smooth） */
 const POOL_ROTATE_TRANSITION_MS = 500
 const POOL_ROTATE_EASE: TransitionEase = 'smooth'
+/**
+ * 状态最短驻留（去抖闸，0813 owner 反馈「刚切换中状态又变了就跳」）：
+ * 驻留未满时到达的新状态只**排队**（队列仅保留最新目标，不播中间状态），
+ * 期满由 tick 一次性切到最新目标；目标折回当前状态则撤销排队（净零切换）。
+ * 取 600ms 的依据：≥ 状态切换过渡 420ms（spring 在 p=1 处 exp(-6)≈0.25% 已收敛）
+ * + ~180ms 观感余量 —— 保证上一次转头至少完整播完才允许下一次重定向；同时
+ * < 最短表情轮换节奏（searching 1000ms）与 showcase 巡演 2400ms，不会系统性
+ * 顶掉池内轮换/巡演节拍。状态展示滞后上限即 600ms（驻留是产品拍板的可接受代价）。
+ * 模块内常量，勿 env 化 / 勿做成配置项。
+ */
+const STATE_MIN_DWELL_MS = 600
 /** 手动 blink()（无状态眨眼档时）的时长兜底 */
 const DEFAULT_BLINK_DURATION_MS = 280
 /** ambient 活跃时的重绘上限（30fps —— avatar-lab runtime 同款节流） */
@@ -163,6 +174,10 @@ export class BotFaceEngine {
   private dirty = true
   private nextExpressionAt: number | null = null
   private nextBlinkAt: number | null = null
+  /** 当前状态的进入时刻 —— 驻留闸基点（构造/每次提交切换时重置） */
+  private stateEnteredAt: number
+  /** 驻留期内到达的最新目标状态；只保留最新（去抖，不是补偿），期满由 tick 提交 */
+  private pendingState: BotState | null = null
   /** ambient 噪声的时间基点（ambient 配置变化时重置，防状态切换瞬间跳变） */
   private ambientStartedAt: number
   private lastAmbientRenderAt = 0
@@ -179,6 +194,7 @@ export class BotFaceEngine {
     this.displayed = { ...EXPRESSIONS[head] }
     const t = this.now()
     this.ambientStartedAt = t
+    this.stateEnteredAt = t
     // 排程顺序：先眨眼后表情（随机源消费顺序是测试契约的一部分，镜像 v1）
     this.scheduleBlink(t)
     this.scheduleExpression(t)
@@ -192,14 +208,35 @@ export class BotFaceEngine {
     return this.expressionValue
   }
 
-  /** 状态切换：立即向池首表情过渡（spring）+ 重排两类定时 */
+  /**
+   * 状态切换（经驻留闸）：当前状态驻留满 STATE_MIN_DWELL_MS 才立即向池首过渡
+   * （spring）+ 重排两类定时；驻留未满则排队（只保留最新目标），期满由 tick 提交
+   * —— 快速抖动（thinking↔calling-tool↔writing）不再逐次重定向甩头。
+   */
   setState(next: BotState): void {
-    // 同态重设是 no-op —— React 重渲染/effect 重跑不得重启过渡或重排定时
-    if (next === this.stateValue) return
+    // 同态重设是 no-op —— React 重渲染/effect 重跑不得重启过渡或重排定时；
+    // 驻留期内对同一排队目标重设同样 no-op（不得推迟提交时刻）
+    if (this.pendingState !== null ? next === this.pendingState : next === this.stateValue) return
+    // 目标折回当前已显示状态：撤销排队即可，净零切换（不播被跳过的中间态）
+    if (next === this.stateValue) {
+      this.pendingState = null
+      return
+    }
+    const t = this.now()
+    if (t - this.stateEnteredAt < STATE_MIN_DWELL_MS) {
+      this.pendingState = next
+      return
+    }
+    this.pendingState = null
+    this.commitState(next, t)
+  }
+
+  /** 真正执行状态切换（setState 立即路径与 tick 驻留到期路径共用）；t = 提交时刻 */
+  private commitState(next: BotState, t: number): void {
     const prevAmbient = AMBIENT[this.stateValue]
     this.stateValue = next
-    this.beginTransition(POOLS[next][0], STATE_SWITCH_TRANSITION_MS, STATE_SWITCH_EASE)
-    const t = this.now()
+    this.stateEnteredAt = t
+    this.beginTransition(POOLS[next][0], STATE_SWITCH_TRANSITION_MS, STATE_SWITCH_EASE, t)
     const nextAmbient = AMBIENT[next]
     if (prevAmbient.eyes !== nextAmbient.eyes || prevAmbient.body !== nextAmbient.body) {
       this.ambientStartedAt = t
@@ -239,6 +276,14 @@ export class BotFaceEngine {
   tick(now: number): EngineFrame | null {
     // 到期定时（v1 纪律：tick 检查 nextAt，不用 setTimeout）
     let timerFired = false
+    // 驻留闸到期：一次性切到排队的最新目标（提交在过期定时检查之前 ——
+    // commitState 会重排两类定时，新排的 nextAt 必在未来，本 tick 不会连环触发）
+    if (this.pendingState !== null && now - this.stateEnteredAt >= STATE_MIN_DWELL_MS) {
+      const next = this.pendingState
+      this.pendingState = null
+      this.commitState(next, now)
+      timerFired = true
+    }
     if (this.nextExpressionAt !== null && now >= this.nextExpressionAt) {
       const pool = POOLS[this.stateValue]
       const alternatives = pool.filter((i) => i !== this.expressionValue)
@@ -361,14 +406,19 @@ export class BotFaceEngine {
     return blinkScaleAt(clamp(t, 0, 1))
   }
 
-  /** 从「当前显示帧」起向目标表情过渡（角度就近解析） */
-  private beginTransition(index: number, durationMs: number, ease: TransitionEase): void {
-    const now = this.now()
-    const from = this.displayedExpressionAt(now)
+  /** 从「当前显示帧」起向目标表情过渡（角度就近解析）；
+   *  startedAt 可显式传入（tick 驻留到期路径用 tick 的 now，保持时基一致） */
+  private beginTransition(
+    index: number,
+    durationMs: number,
+    ease: TransitionEase,
+    startedAt: number = this.now()
+  ): void {
+    const from = this.displayedExpressionAt(startedAt)
     const to = resolveTargetExpression(EXPRESSIONS[index], from)
     this.expressionValue = index
     this.displayed = to
-    this.transition = { from, to, startedAt: now, durationMs, ease }
+    this.transition = { from, to, startedAt, durationMs, ease }
   }
 
   private scheduleExpression(now: number): void {

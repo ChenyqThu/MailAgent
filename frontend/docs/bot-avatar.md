@@ -16,6 +16,11 @@
   眼睛是圆角矩形**贴合在曲面上**（`surfaceFrontSampleAt`），转头时随曲面弯曲、转到背面（法线和 ≤0）隐藏。
 - **过渡 = 逐字段插值**：spring（状态切换 420ms，有过冲回弹）/ smooth（池内轮换 500ms）；
   头/眼角度族过渡前做 nearest-angle 折叠（不绕远路）。v1 的临界阻尼弹簧 morph 退役。
+- **状态驻留闸（0813 净新增）**：`setState` 带 600ms min-dwell 去抖 —— 驻留未满时新状态只排队
+  （仅保留最新目标，不播中间态；折回当前态即撤销排队），期满由 tick 一次性切到最新目标。
+  收「快速 stage 抖动（thinking↔calling-tool↔writing）逐次 spring 重定向 = 持续甩头」；
+  600ms = 420ms spring 播完 + 观感余量，且 < 最短表情轮换节奏（searching 1000ms）。
+  `STATE_MIN_DWELL_MS` 是引擎模块内常量，勿 env 化。
 - **眨眼 = 高度插值**（5px 下限，闭 42% 二次加速 / 睁 58% 二次减速）——眨眼中眼形保持圆角（v1 是 scaleY 压缩）；
   时长按状态分档（BLINK 表第三元：calm 420ms / reactive 220ms…）。
 - **ambient 空闲微动（v2 净新增）**：`AMBIENT` 表按状态配 eyes（microSaccades/shake）× body（slowDrift/shake），
@@ -35,6 +40,7 @@
 | `colors.ts` | 11 色双主题值（light/dark 各一）；浅色身体（white/yellow/gray）有 per-color eye 覆写（背景色眼睛在浅色主题会隐形）；`BOT_AVATAR_COLORS` 同为闸锚点 |
 | `engine.ts` | 零 React/GSAP 纯 TS 引擎：参数化过渡 + 按态池随机调度 + 眨眼排程 + ambient + gaze（`{random, now}` 可注入）；`tick()` 空闲返回 null = settle 后零重绘（**ambient 态例外**：30fps 限频出帧）；`staticFrame(exprIndex, surface)` 带模块级缓存（列表同款实例零重复计算） |
 | `ticker.ts` | 模块级共享 rAF 单例（全仓首个）：注册制启停、`visibilitychange` 暂停、SSR 安全、测试用 `__instanceCount()` |
+| `staticBlink.ts` | **静态档眨眼 registry**（0813 净新增，模块级单例镜像 ticker 形状）：静态位点也眨眼但不建引擎不进共享 ticker —— 单枚 setTimeout 臂向「下一次最早眨眼」，rAF 只在 220-420ms 眨眼窗口内存活；窗口内用 `blinkScaleAt`+`renderAvatar` 高度插值重算眼 path（与 animated 档同保真度，**不是** CSS scaleY 近似），走完严格回写 `staticFrame` 缓存帧；并发上限 2（成本与实例数解耦）；节奏 = `BLINK` 表逐字；reduced-motion / `BLINK=null` 态在组件层不注册 |
 | `BotAvatar.tsx` | React 组件双档：**静态档是默认**（零 ticker 零定时器，state 变化=离散换帧）；`animated` 显式声明才动（引擎 + ticker + IntersectionObserver 可见性裁剪）；`mouseInteractive` 头/眼跟全局指针（仅 animated）；`useReducedMotion()` JS 层短路恒走静态；clipPath id 经 `useId` 每实例唯一；头 path 每帧变（3D 转头）→ head 与 clipPath 都由 writeFrame 直写 |
 | `random.ts` | `deriveBotAvatar`（agent_id 确定性派生，NULL 行默认外观）/ `mapLegacyGeneratedToBot`（oreo 行确定性映射）/ `randomBotAvatar` / `shuffleBotAvatar`（确定性递进 ≠ 当前）——golden 测试钉死，防重构静默换脸；v2 换词表是一次**有意的**全量换脸（索引算法未动，golden 随双射重钉） |
 | `useBotAvatarTheme.ts` | 主题 hook（`data-theme` MutationObserver + useSyncExternalStore） |
@@ -62,7 +68,8 @@
 - animated 位点现存 3 处常驻：chat 回合头像 `TurnPresence`（28px）、面板头 `AssistantPanelBotAvatar`（20px）、编辑器预览（48px，+mouseInteractive +showcase 巡演）；另有 **hover 瞬时位点**（0813）：Agents 页六张卡（主 Agent + 5 类 agent 卡）hover 时经 `useAvatarHoverShowcase` 转 animated + 随机换动作，离开即回静态——鼠标只有一个，同屏至多一张卡在动，性能评估随 hook 注释记录。
 - **showcase 巡演**（`useShowcaseState`）：从 12 态表现力池每 2.4s 随机换动作（不连续重复）；reduced-motion 恒 'idle'（巡演不得绕过静态纪律）。消费点 = 编辑器预览（Bot tab 常开）+ hover 卡。
 - 🔴 **v2 新边界**：ambient 活跃状态（多数状态 body slowDrift）的 animated 实例**常驻 30fps 重绘**（不 settle）——这是「空闲也活着」的有意代价，仅限上述 3 位点；改 `AMBIENT` 表 = 改动画位点常驻功耗。
-- reduced-motion：JS 层短路（CSS media 对 JS 动画无效），animated 自动退化静态；测试环境全局 reduce（`tests/setup.ts`），测真动画路径需 stub matchMedia。
+- **静态档眨眼（0813）不破静态地板**：静态位点经 `staticBlink.ts` registry 低频眨眼——间隙真 idle（无周期唤醒无 rAF 无样式计算，只有一枚臂向下次眨眼的 timeout）、并发上限 2 把最坏帧成本钉成常数（同屏数百实例 = 每个眨得更稀的优雅降级）、眨眼帧走引擎同款高度插值（两档观感一致）。静态档的**表情轮换**仍有意不做（离散换帧无过渡 = glitch 观感，加过渡 = 开动画通道破纪律）。
+- reduced-motion：JS 层短路（CSS media 对 JS 动画无效），animated 自动退化静态、**静态档眨眼同样不注册**；测试环境全局 reduce（`tests/setup.ts`），测真动画路径需 stub matchMedia。
 - 机器验收：8 形 × 代表表情的头/眼几何 sanity + 双眼不重叠 + 25 表情全量无 NaN（`tests/shared/bot-avatar/shapes.test.tsx`）。
 
 ## chat 嵌入（TurnPresence）
