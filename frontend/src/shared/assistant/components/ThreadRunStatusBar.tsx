@@ -17,8 +17,8 @@
 //   - detached run 的「正在干什么」**动态**文案：`/run/active` 只给 `{active, runId, ageMs}`，要还原
 //     动态阶段得让 gateway 在 registry 里随流更新一份 stage 快照并扩端点 = 新状态通道（S 级后续）。
 //     这里**降级为静态文案 + 已运行时长**，绝不猜。
-//   - 消息流里的 `TurnStatusLine` 一个字节没动（owner 08-05 拍板：运行条上线后先并存，dogfood
-//     一轮再议是否收窄）。
+//   - 消息流里的回合状态面（现 `TurnPresence`，living-bot-avatar WP5 前是状态行）一个字节没动
+//     （owner 08-05 拍板：运行条上线后先并存，dogfood 一轮再议是否收窄）。
 //
 // 一份组件双面挂载（遵守本仓「两个 composer 一份组件」纪律）：通用面 `AgentThread` 的
 // ViewportFooter、邮件面 `AssistantThread` 的 Viewport 与 composer 之间。两处的排版留白差异由
@@ -36,7 +36,7 @@ import type { TurnStage } from '@shared/assistant/runtime/useTurnStage'
 
 /** 运行条会渲染的形态。前四个来自本地（附着）回合的阶段，`background` 是 detached run。
  *  阶段机的另外三态**不出现**：`idle`（没在跑）、`error`（终态，消息流里的错误 footer 才是那条
- *  线的归宿）、`awaiting-approval`（审批卡自己就是状态 —— 与 `TurnStatusLine` 同一条纪律；顺带
+ *  线的归宿）、`awaiting-approval`（审批卡自己就是状态 —— 与消息流内 `TurnPresence` 同一条纪律；顺带
  *  避免历史会话里被重放的旧审批卡在这里挂一个从打开会话才起算的假秒表）。 */
 type RunStatusVariant = 'connecting' | 'thinking' | 'calling-tool' | 'writing' | 'background'
 

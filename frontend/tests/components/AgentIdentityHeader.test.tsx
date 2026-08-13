@@ -1,22 +1,21 @@
 // @vitest-environment happy-dom
 //
-// 0804 dogfood 头像批（WP3）——「头像 + 名称」抽屉统一头部：
-//   • 3a 四角白边：@oreo-design/avatar 生成的 SVG 自带一层**不透明方形底 rect**（浅色
-//     #ffffff / 深色 #0b0b0d），画在圆形 mask 之外。顶层列表的 AgentAvatar 靠
-//     overflow-hidden+rounded-full 裁掉了它，编辑器两张网格没有那层裁剪 → 露白。
-//     修法 = 网格项传 background={null}。断言直接查 SVG 里那张满幅 rect 在不在
-//     （明暗两主题走同一段代码：库只是把 fill 换个色，rect 在不在由 background 决定，
-//     故一个断言即钉死两主题；有意不去驱动 appearance —— 本 App 从不传该参数）。
-//   • 3b 默认折叠：只渲染「头像 + 名称」一行，点「更换」才展开编辑器。
+// 「头像 + 名称」抽屉统一头部（0804 dogfood 3b/3e）+ 08-12 living-bot-avatar 编辑器接线：
+//   • 3b 默认折叠：只渲染「头像 + 名称」一行，点「更换」才展开编辑器（Bot/上传 tab）。
 //   • 3e 两种名称语义：可编辑（custom/search）与只读（三个预设单例行）。
+//   • WP7 上传：图片形态渲染成图片元素、失败出人话文案、Bot tab 点候选隐式切回 bot 身份。
 //   • i18n zh/en agents.avatar key 对齐。
-//   • WP7 上传：图片形态渲染成图片元素、失败出人话文案、点候选隐式切回生成式。
+// （oreo 头像库时代的「四角白边」探针已随该依赖退役：BotAvatar 是透明底 SVG，
+//   没有那层库自带的满幅方形 rect。）
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
 import { AgentIdentityHeader } from '../../src/shared/components/agents/AgentAvatar'
+import { resolveAgentAvatar } from '../../src/shared/components/agents/agentAvatarIdentity'
 import { fileToAvatarImage } from '../../src/shared/components/agents/avatarImage'
+import { BOT_AVATAR_COLORS } from '../../src/shared/bot-avatar/colors'
+import { BOT_AVATAR_SHAPES } from '../../src/shared/bot-avatar/shapes'
 import zhCommon from '../../src/shared/i18n/locales/zh-CN/common.json'
 import enCommon from '../../src/shared/i18n/locales/en-US/common.json'
 
@@ -31,24 +30,19 @@ await i18n.changeLanguage('zh-CN')
 
 afterEach(cleanup)
 
-/** 库自带的方形底 rect（`<rect width="100%" height="100%" fill="…"/>`）张数。 */
-function backgroundRects(root: HTMLElement): number {
-  return root.querySelectorAll('rect[width="100%"][height="100%"]').length
-}
-
 describe('AgentIdentityHeader — 折叠 / 名称两态（3b / 3e）', () => {
-  test('默认折叠：形状与配色网格都不在场，点「更换」才展开、再点「收起」收回', () => {
+  test('默认折叠：形状与颜色网格都不在场，点「更换」才展开、再点「收起」收回', () => {
     render(<AgentIdentityHeader agentId="daily" value={null} onChange={vi.fn()} name="日报" />)
     expect(screen.queryByTestId('avatar-shape-grid')).toBeNull()
-    expect(screen.queryByTestId('avatar-palette-grid')).toBeNull()
+    expect(screen.queryByTestId('avatar-color-grid')).toBeNull()
 
     const toggle = screen.getByRole('button', { name: '更换' })
     expect(toggle.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(toggle)
     expect(toggle.getAttribute('aria-expanded')).toBe('true')
+    // value 非上传图 → 默认落 Bot tab：8 形网格 + 11 色 swatch + 随机骰子。
     expect(screen.getByTestId('avatar-shape-grid')).toBeTruthy()
-    expect(screen.getByTestId('avatar-palette-grid')).toBeTruthy()
-    // 「换一换」（随机）在展开面板里，不是新需求（3c 的前提有误，它一直都在）。
+    expect(screen.getByTestId('avatar-color-grid')).toBeTruthy()
     expect(screen.getByRole('button', { name: '换一换' })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('button', { name: '收起' }))
@@ -83,44 +77,33 @@ describe('AgentIdentityHeader — 折叠 / 名称两态（3b / 3e）', () => {
     expect(screen.getByText('AI 邮件预处理')).toBeTruthy()
   })
 
-  test('选形状 / 选配色 → onChange 携带完整身份（含派生 palette / shape）', () => {
+  test('选形状 / 选颜色 → onChange 携带完整 bot 身份（另一维取派生基底）', () => {
     const onChange = vi.fn()
     render(<AgentIdentityHeader agentId="daily" value={null} onChange={onChange} name="日报" />)
     fireEvent.click(screen.getByRole('button', { name: '更换' }))
 
-    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Jade'))
-    expect(onChange.mock.calls[0][0]).toMatchObject({ shape: 'jade' })
-
-    fireEvent.click(within(screen.getByTestId('avatar-palette-grid')).getByLabelText('Aurora Pink'))
-    expect(onChange.mock.calls[1][0]).toMatchObject({ palette: 'aurora-pink' })
-  })
-})
-
-describe('AgentAvatarEditor 网格四角白边（3a）', () => {
-  test('两张网格的候选项都不带库自带方形底 rect —— 而头像预览带（证明探针有效）', () => {
-    const { container } = render(
-      <AgentIdentityHeader agentId="daily" value={null} onChange={vi.fn()} name="日报" />
+    const base = resolveAgentAvatar('daily')
+    const otherShape = BOT_AVATAR_SHAPES.find((shape) => shape !== base.shape)
+    fireEvent.click(
+      within(screen.getByTestId('avatar-shape-grid')).getByLabelText(otherShape ?? '')
     )
-    // 控制组：头部预览走 AgentAvatar 包装（rounded-full + overflow-hidden 裁掉底 rect），
-    // 底 rect 仍在 SVG 里 —— 探针查得到它，说明下面两条「查不到」不是假阴性。
-    expect(backgroundRects(container)).toBeGreaterThan(0)
+    expect(onChange.mock.calls[0][0]).toEqual({ type: 'bot', shape: otherShape, color: base.color })
 
-    fireEvent.click(screen.getByRole('button', { name: '更换' }))
-    const shapeGrid = screen.getByTestId('avatar-shape-grid')
-    const paletteGrid = screen.getByTestId('avatar-palette-grid')
-    // 网格确实渲染了头像（不是「没渲染所以查不到 rect」的空断言）。
-    expect(shapeGrid.querySelectorAll('svg').length).toBe(6)
-    expect(paletteGrid.querySelectorAll('svg').length).toBeGreaterThan(10)
-    expect(backgroundRects(shapeGrid)).toBe(0)
-    expect(backgroundRects(paletteGrid)).toBe(0)
+    const otherColor = BOT_AVATAR_COLORS.find((color) => color !== base.color)
+    fireEvent.click(
+      within(screen.getByTestId('avatar-color-grid')).getByLabelText(otherColor ?? '')
+    )
+    expect(onChange.mock.calls[1][0]).toEqual({ type: 'bot', shape: base.shape, color: otherColor })
   })
 })
 
-describe('头像上传（WP7）', () => {
+describe('头像上传（WP7，编辑器 tab 化后走上传 tab）', () => {
   const DATA_URI = `data:image/webp;base64,${'A'.repeat(40)}`
 
-  function expand(): HTMLInputElement {
+  /** 展开编辑器并切到上传 tab，返回文件输入。 */
+  function expandToUpload(): HTMLInputElement {
     fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    fireEvent.click(screen.getByTestId('avatar-tab-upload'))
     return screen.getByTestId('avatar-upload-input') as HTMLInputElement
   }
 
@@ -138,10 +121,10 @@ describe('头像上传（WP7）', () => {
     const { rerender, container } = render(
       <AgentIdentityHeader agentId="daily" value={null} onChange={onChange} name="日报" />
     )
-    pick(expand())
+    pick(expandToUpload())
     await waitFor(() => expect(onChange).toHaveBeenCalledWith({ type: 'image', data: DATA_URI }))
 
-    // 父层回填后：头部预览是 <img src=dataURI>，生成式 SVG 不再渲染。
+    // 父层回填后：头部预览是 <img src=dataURI>，bot SVG 不再渲染在头部外壳里。
     rerender(
       <AgentIdentityHeader
         agentId="daily"
@@ -152,9 +135,22 @@ describe('头像上传（WP7）', () => {
     )
     const img = container.querySelector('img')
     expect(img?.getAttribute('src')).toBe(DATA_URI)
-    // 展开面板里的候选网格仍在（它们是「切回生成式」的入口），但头部预览不再有 SVG。
     const header = img?.closest('span')
     expect(header?.querySelector('svg')).toBeNull()
+  })
+
+  test('图片身份展开 → 编辑器初始落上传 tab（不闪回 Bot tab）', () => {
+    render(
+      <AgentIdentityHeader
+        agentId="daily"
+        value={{ type: 'image', data: DATA_URI }}
+        onChange={vi.fn()}
+        name="日报"
+      />
+    )
+    fireEvent.click(screen.getByRole('button', { name: '更换' }))
+    expect(screen.getByTestId('avatar-upload-input')).toBeTruthy()
+    expect(screen.queryByTestId('avatar-shape-grid')).toBeNull()
   })
 
   test('处理失败 → 展示对应人话文案，且不落任何值', async () => {
@@ -169,14 +165,14 @@ describe('头像上传（WP7）', () => {
       const { unmount } = render(
         <AgentIdentityHeader agentId="daily" value={null} onChange={onChange} name="日报" />
       )
-      pick(expand())
+      pick(expandToUpload())
       expect((await screen.findByRole('alert')).textContent).toBe(text)
       unmount()
     }
     expect(onChange).not.toHaveBeenCalled()
   })
 
-  test('上传态下点任一形状 → 隐式切回生成式（携带 id 派生的 palette/variant，不留 image 残留）', () => {
+  test('上传态切到 Bot tab → 网格高亮派生基底；点任一形状 → 隐式切回 bot 身份（不留 image 残留）', () => {
     const onChange = vi.fn()
     render(
       <AgentIdentityHeader
@@ -187,29 +183,34 @@ describe('头像上传（WP7）', () => {
       />
     )
     fireEvent.click(screen.getByRole('button', { name: '更换' }))
-    // 上传态下 shape/palette 都不生效 → 网格不该高亮任何一项（高亮一个看不见的配色是谎）。
-    const grid = screen.getByTestId('avatar-palette-grid')
-    expect(grid.querySelectorAll('[aria-pressed="true"]').length).toBe(0)
+    fireEvent.click(screen.getByTestId('avatar-tab-bot'))
 
-    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('Jade'))
+    // 上传态 resolve 落 id 派生基底 —— 网格高亮它（prd §6.2：切到 Bot tab 显示派生基底）。
+    const base = resolveAgentAvatar('daily')
+    const shapeGrid = screen.getByTestId('avatar-shape-grid')
+    expect(within(shapeGrid).getByLabelText(base.shape).getAttribute('aria-pressed')).toBe('true')
+
+    const otherShape = BOT_AVATAR_SHAPES.find((shape) => shape !== base.shape)
+    fireEvent.click(within(shapeGrid).getByLabelText(otherShape ?? ''))
     const next = onChange.mock.calls[0][0]
-    expect(next).toMatchObject({ shape: 'jade' })
-    expect(next.type).toBeUndefined()
+    expect(next).toEqual({ type: 'bot', shape: otherShape, color: base.color })
     expect(next.data).toBeUndefined()
-    expect(typeof next.palette).toBe('string')
   })
 
-  test('上传失败后再点候选 → 头像换掉的同时报错行消失（不留下"这次也失败了"的假象）', async () => {
+  test('上传失败后再点候选 → 头像换掉的同时报错不再出现（不留下"这次也失败了"的假象）', async () => {
     mockedProcess.mockResolvedValue({ ok: false, reason: 'too_large' })
     const onChange = vi.fn()
     render(<AgentIdentityHeader agentId="daily" value={null} onChange={onChange} name="日报" />)
-    pick(expand())
+    pick(expandToUpload())
     expect((await screen.findByRole('alert')).textContent).toBe(
       zhCommon.agents.avatar.uploadErr.too_large
     )
 
+    fireEvent.click(screen.getByTestId('avatar-tab-bot'))
     fireEvent.click(screen.getByRole('button', { name: '换一换' }))
     expect(onChange).toHaveBeenCalledTimes(1)
+    // 回到上传 tab：报错已被这次成功落值清掉，不残留。
+    fireEvent.click(screen.getByTestId('avatar-tab-upload'))
     expect(screen.queryByRole('alert')).toBeNull()
   })
 })

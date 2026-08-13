@@ -21,7 +21,7 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
-import { History, Maximize2, Plus, Settings, Sparkles, X } from 'lucide-react'
+import { History, Maximize2, Plus, Settings, X } from 'lucide-react'
 
 import type { ChatBackendKind, ReportAgentConfig, SearchHit } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
@@ -55,6 +55,7 @@ import { useApprovalDecideBusy } from './useApprovalDecideBusy'
 import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
+import { AssistantPanelBotAvatar } from './components/TurnPresence'
 import { ThreadRunStatusBar } from './components/ThreadRunStatusBar'
 import { QueuedInputBar } from './components/QueuedInputBar'
 import { ChatComposerControlsProvider } from './components/composerControls'
@@ -689,7 +690,11 @@ export function AIChatPanel({
         style={fullScreen ? ({ WebkitAppRegion: 'drag' } as React.CSSProperties) : undefined}
       >
         <div className="flex items-center gap-1.5 text-aux font-medium text-ink-fg">
-          <Sparkles size={13} strokeWidth={0} className="fill-coral text-coral" />
+          {/* living-bot-avatar WP5 — the 13px Sparkles gave way to the official assistant bot:
+              idle micro-motion when quiet, `working` while a BACKGROUND run is active (own-run
+              is already masked inside useBackgroundChatRun, so a foreground stream stays idle
+              here — the in-flow TurnPresence narrates that one). */}
+          <AssistantPanelBotAvatar working={backgroundActive} />
           {t('chat.title')}
         </div>
         <div

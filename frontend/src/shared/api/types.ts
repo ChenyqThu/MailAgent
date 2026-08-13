@@ -254,6 +254,7 @@ export type {
   AgentAvatarConfig,
   AgentAvatarGenerated,
   AgentAvatarImage,
+  AgentAvatarBot,
   ReportConfigPatch,
   ReportAgentCreateInput,
   AgentRunState,
