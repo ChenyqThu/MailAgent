@@ -59,10 +59,11 @@ describe('Matter tags UI and API', () => {
     })
   })
 
-  test('searches matter tags and renders tags with markers in rows', () => {
+  test('searches matter tags by name (E16 dogfood 轮 2：清单行本身不再渲染标签 chip)', () => {
     const tagged = matter({ tags: ['launch'] })
     const other = matter({ public_id: 'MAT-0002', title: 'Unrelated', tags: [] })
 
+    // 搜索仍按标签名匹配（getOrderedVisibleMatters 不消费 tagDefinitions，行为不变）。
     expect(getOrderedVisibleMatters([other, tagged], 'launch')).toEqual([tagged])
 
     render(
@@ -71,22 +72,15 @@ describe('Matter tags UI and API', () => {
         view="all"
         selectedId={null}
         search=""
-        tagDefinitions={[
-          {
-            name: 'launch',
-            color: '--c-info',
-            shape: 'diamond',
-            created_at: null,
-            usage_count: 1
-          }
-        ]}
         onSearchChange={vi.fn()}
         onSelect={vi.fn()}
         onCreate={vi.fn()}
       />
     )
 
-    expect(screen.getByText('launch')).toBeTruthy()
+    // E16 —— 行 3 右下角已换成事项类型徽标，标签名不再是清单行的展示面（该矩阵没设
+    // matter_type，故整块不渲染）；旧断言「标签名会出现在行里」已随设计变更过期。
+    expect(screen.queryByText('launch')).toBeNull()
     expect(screen.queryByText('#launch')).toBeNull()
   })
 })

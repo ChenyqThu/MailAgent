@@ -28,12 +28,12 @@ afterEach(() => {
 })
 
 describe('MatterList row', () => {
-  test('renders the three-row density: identity, next step + people, signals + tags', () => {
+  test('renders the three-row density: identity, next step + people, signals + type', () => {
     renderList(
       matter({
         due_at: NOW + 2 * DAY,
         updated_at: NOW - 3 * 60 * 60 * 1000,
-        tags: ['交付'],
+        matter_type: '客户交付',
         items: [
           {
             id: 1,
@@ -68,9 +68,9 @@ describe('MatterList row', () => {
     expect(screen.getByTitle('张三')).toBeTruthy()
     expect(screen.getByText('+3')).toBeTruthy()
 
-    // 行 3 —— 关注信号 + 标签
+    // 行 3 —— 关注信号 + 事项类型（E16 dogfood 轮 2：标签列表换成单一类型徽标）
     expect(screen.getByText('临近截止')).toBeTruthy()
-    expect(screen.getByText('交付')).toBeTruthy()
+    expect(screen.getByText('客户交付')).toBeTruthy()
   })
 
   test('falls back to the localized missing-next-step copy and omits the avatar stack', () => {
@@ -106,7 +106,6 @@ function renderList(
       attention={new Map(options.signals ? [[value.public_id, options.signals]] : [])}
       updates={new Map(options.pending ? [[value.public_id, options.pending]] : [])}
       search=""
-      tagDefinitions={[]}
       onSearchChange={vi.fn()}
       onSelect={vi.fn()}
       onCreate={vi.fn()}

@@ -365,16 +365,17 @@ describe('MattersWorkspace — resizable matter list', () => {
       capturedPointer = null
     })
 
+    // E10①（dogfood 轮 2）—— 拖拽上限从 480 提到 560（见 MattersWorkspace.MAX_MATTER_LIST_WIDTH）。
     fireEvent.pointerDown(separator, { button: 0, clientX: 400, pointerId: 7 })
     fireEvent.pointerMove(separator, { clientX: 900, pointerId: 7 })
-    expect(grid.style.getPropertyValue('--matter-list-width')).toBe('480px')
+    expect(grid.style.getPropertyValue('--matter-list-width')).toBe('560px')
     expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('400')
     expect(document.body.style.cursor).toBe('col-resize')
     expect(document.body.style.userSelect).toBe('none')
 
     fireEvent.pointerUp(separator, { pointerId: 7 })
-    await waitFor(() => expect(separator.getAttribute('aria-valuenow')).toBe('480'))
-    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('480')
+    await waitFor(() => expect(separator.getAttribute('aria-valuenow')).toBe('560'))
+    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('560')
     expect(document.body.style.cursor).toBe('')
     expect(document.body.style.userSelect).toBe('')
   })
@@ -393,7 +394,29 @@ describe('MattersWorkspace — resizable matter list', () => {
     const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
     fireEvent.keyDown(separator, { key: 'ArrowLeft' })
 
-    expect(separator.getAttribute('aria-valuenow')).toBe('304')
-    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('304')
+    // E10①—— 无持久化宽度时的起点镜像 design `listWidthFor`：happy-dom 默认视口 1024px
+    // < 1440 → 336（窄档），ArrowLeft 一步 -16 → 320。
+    expect(separator.getAttribute('aria-valuenow')).toBe('320')
+    expect(window.localStorage.getItem('mailagent.matters.listWidth')).toBe('320')
+  })
+
+  test('E10①：窗口 ≥1440px 时首次进入的默认宽度是 380（design listWidthFor 宽档）', async () => {
+    const originalWidth = window.innerWidth
+    Object.defineProperty(window, 'innerWidth', { value: 1600, configurable: true })
+    try {
+      const client = new QueryClient({
+        defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
+      })
+      render(
+        <QueryClientProvider client={client}>
+          <MattersWorkspace />
+        </QueryClientProvider>
+      )
+      fireEvent.click(await screen.findByRole('button', { name: '全部' }))
+      const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
+      expect(separator.getAttribute('aria-valuenow')).toBe('380')
+    } finally {
+      Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })
+    }
   })
 })

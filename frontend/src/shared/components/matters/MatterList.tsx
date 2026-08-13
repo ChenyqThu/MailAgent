@@ -17,7 +17,7 @@ import {
 } from 'lucide-react'
 
 import type { Matter } from '@shared/api/types/matter'
-import type { MatterStakeholderSummary, MatterTagDefinition } from '@shared/api/types/matter'
+import type { MatterStakeholderSummary } from '@shared/api/types/matter'
 import { RecipientAvatar } from '@shared/components/email/compose/recipient-avatar'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import {
@@ -38,9 +38,7 @@ import { cn } from '@shared/lib/cn'
 
 import { ATTENTION_META, attentionTone } from './attentionMeta'
 import { MatterPip } from './MatterPip'
-import { MatterTagChip } from './MatterTagMarker'
 import { getOrderedVisibleMatters } from './matterListOrder'
-import { matterTagMap, resolveMatterTag } from './matterTags'
 import {
   MATTER_HEALTH_ICONS,
   MATTER_HEALTH_TEXT_CLASS,
@@ -55,6 +53,10 @@ import {
 /** 设计 `list.jsx::ListPane` 用 ResizeObserver 在 360px 处切窄列变体（不是窗口断点：
  *  清单列本身可被用户拖宽拖窄，看窗口就会在拖到 300px 时仍按宽列排）。 */
 const NARROW_LIST_WIDTH = 360
+/** E10②（dogfood 轮 2）—— 在真正跌进 `NARROW_LIST_WIDTH` 的整段折叠之前，先单独让出
+ *  事项编号（`MAT-xxxx`）这一项：它是行 1 里信息密度最低、最不影响一眼判断的一项，比一次性
+ *  砍掉优先级/状态整段更省得体。同一个 ResizeObserver 出两档，不另起监听。 */
+const ID_HIDE_WIDTH = 440
 /** 设计 `list.jsx:170` `AvatarStack size={19} max={3}`。 */
 const AVATAR_STACK_MAX = 3
 
@@ -88,7 +90,6 @@ interface MatterListProps {
   /** 待审阅徽标的口径 —— 复用工作台既有的 pendingUpdates 查询，清单不自己发请求。 */
   updates?: MatterUpdateIndex
   search: string
-  tagDefinitions?: readonly MatterTagDefinition[]
   onSearchChange(value: string): void
   onSelect(matter: Matter): void
   onCreate(): void
@@ -101,7 +102,6 @@ export function MatterList({
   attention,
   updates,
   search,
-  tagDefinitions = [],
   onSearchChange,
   onSelect,
   onCreate
@@ -109,6 +109,8 @@ export function MatterList({
   const { t, i18n } = useTranslation()
   const paneRef = useRef<HTMLElement>(null)
   const [narrow, setNarrow] = useState(false)
+  // E10②：与 `narrow` 同一个 ResizeObserver 出两档（宽 → 隐编号 → 整段折叠），不另起监听。
+  const [hideId, setHideId] = useState(false)
   // 到期色 / 更新时间的基准时刻在挂载时冻结（react-hooks/purity：render 期间不许调
   // Date.now()）。与 MatterDetail / MatterFocus 同一模式。
   const [now] = useState(() => Date.now())
@@ -116,7 +118,6 @@ export function MatterList({
     () => getOrderedVisibleMatters(matters, search, attention),
     [attention, matters, search]
   )
-  const tagsByName = useMemo(() => matterTagMap(tagDefinitions), [tagDefinitions])
   const locale = i18n.language || 'zh-CN'
   const viewLabel = useMatterViewLabel(view)
 
@@ -124,7 +125,10 @@ export function MatterList({
     const pane = paneRef.current
     if (!pane || typeof ResizeObserver === 'undefined') return
     const observer = new ResizeObserver(([entry]) => {
-      if (entry) setNarrow(entry.contentRect.width < NARROW_LIST_WIDTH)
+      if (!entry) return
+      const width = entry.contentRect.width
+      setNarrow(width < NARROW_LIST_WIDTH)
+      setHideId(width < ID_HIDE_WIDTH)
     })
     observer.observe(pane)
     return () => observer.disconnect()
@@ -137,7 +141,11 @@ export function MatterList({
   return (
     <section
       ref={paneRef}
-      className="flex h-full min-w-0 flex-col border-r border-ink-border bg-ink-1/55"
+      // E19（dogfood 轮 2 #19）—— 不在这里再画一条分界线：MattersWorkspace 的可拖拽
+      // 分隔条（`role="separator"`）已经在列表/详情之间画了唯一一条竖线（design app.jsx
+      // 只在 `sel` 存在时给 ListPane 外层套 `borderRight`，即那唯一一条线）；这里再加
+      // `border-r` 会与分隔条的线并排出现，变成肉眼可见的双线。
+      className="flex h-full min-w-0 flex-col bg-ink-1/55"
     >
       <div className="border-b border-ink-border p-3">
         <label className="flex items-center gap-2 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 py-2">
@@ -162,8 +170,8 @@ export function MatterList({
               updates?.get(matter.public_id)?.filter((update) => update.review_status === 'pending')
                 .length ?? 0
             }
-            tagsByName={tagsByName}
             narrow={narrow}
+            hideId={hideId}
             now={now}
             locale={locale}
             onSelect={() => onSelect(matter)}
@@ -214,8 +222,9 @@ interface MatterRowProps {
   selected: boolean
   signals: ReturnType<typeof openAttentionFor>
   pendingCount: number
-  tagsByName: ReadonlyMap<string, MatterTagDefinition>
   narrow: boolean
+  /** E10②—— 比 `narrow` 早一档触发：只让出事项编号，优先级/状态/健康度仍留在行 1。 */
+  hideId: boolean
   now: number
   locale: string
   onSelect(): void
@@ -223,19 +232,31 @@ interface MatterRowProps {
 
 /**
  * 清单行（设计 `list.jsx::MatterRow`）：三行结构 —— 行 1 标题与身份 + 右端状态、
- * 行 2 下一步 / 到期 / 更新时间 / 头像组、行 3 关注信号与标签。
+ * 行 2 下一步 / 到期 / 更新时间 / 头像组、行 3 关注信号与事项类型。
  *
- * 🔴 选中态**维持仓库 v3 药丸签名**（`row-selected acc-select`），不照抄设计的
- * `accent/0.07` 底 + 3px 左条：主题 v3 的选中签名是全仓统一的，列表行破例就会与
- * 邮件列表、导航面各说各话（HANDOFF §0「样式接仓库 token」）。
+ * E16（dogfood 轮 2 #16，owner 拍板偏离设计稿）—— 行 3 右下角原是最多 3 个标签 chip
+ * + `+N` 溢出徽标：标签名长度不可控，行窄时一样会挤爆。改成显示单一的事项类型
+ * （`matter.matter_type`，本就是个短字符串，天然没有这个溢出面）；标签仍在详情页 /
+ * 左轨标签视图可见，只是清单行不再是它的展示面。
+ *
+ * E12（dogfood 轮 2 #12，改判前一版）—— 选中态左条改回**通高**（`top-0 bottom-0`，与
+ * `EmailRow.is-selected::before` 同一套「通高直角条」几何，ARCHITECTURE §7.3）、常态临界
+ * 信号左条维持**胶囊**（`top-2 bottom-2` + 圆角，design `list.jsx::MatterRow` 的
+ * `top:8/bottom:8/borderRadius:2` 原样映射）。🔴 覆盖前一批 G-04 的「维持仓库药丸签名，不照抄
+ * 设计」这条裁决：`row-selected acc-select` 是**导航面**（sidebar/settings-rail/会话行）专属的
+ * 胶囊签名；DESIGN.md §18.1 C4 + 2026-07-12 owner 二次 dogfood 已把 EmailRow 的选中签名改回
+ * 「整行 wash + 通高左条」，本行是与 EmailRow 同构的编辑区列表行（`border-b` 逐行分割线、非导航
+ * 卡片），沿用 C4 而不是 C5 才是与仓库现状一致——上一版的比对对象本身已经过期。整行 wash 走
+ * `--sel-wash`（`AgentThreadList` 同款 `[background-image:var(--sel-wash)]` 写法，非虚拟化列表
+ * 不用担心 EmailRow 那套 divider-in-background-image 的合并问题，`border-b` 是独立层）。
  */
 function MatterRow({
   matter,
   selected,
   signals,
   pendingCount,
-  tagsByName,
   narrow,
+  hideId,
   now,
   locale,
   onSelect
@@ -258,7 +279,10 @@ function MatterRow({
   const priorityTag = (
     <span
       className={cn(
-        'shrink-0 rounded-[var(--r-ctl)] border px-1.5 py-px font-mono text-[10.5px] font-semibold uppercase tracking-[0.02em]',
+        // E10①（dogfood 轮 2）—— 补 whitespace-nowrap：这颗 chip 是 shrink-0，挤压的行里
+        // 浏览器不会缩小它，但没有 nowrap 时文字本身会在 chip 内部折成两行（不是"消失"而是
+        // "长高"），看起来就是 owner 说的「优先级 chip 换行错乱」。
+        'shrink-0 whitespace-nowrap rounded-[var(--r-ctl)] border px-1.5 py-px font-mono text-[10.5px] font-semibold uppercase tracking-[0.02em]',
         MATTER_TONE_CHIP_CLASS[MATTER_PRIORITY_TONES[matter.priority]]
       )}
     >
@@ -278,22 +302,26 @@ function MatterRow({
       onClick={onSelect}
       className={cn(
         'relative block w-full border-b border-ink-border px-4 py-2.5 text-left transition-colors duration-fast',
-        // Theme v3 mapping: prototype tone colors map to repository semantic tokens;
-        // selection keeps the canonical wash + left-bar signature instead of inline colors.
-        selected ? 'row-selected acc-select' : 'hover:bg-ink-3',
-        !selected && critical && 'border-l-[3px] border-l-fail'
+        // E12 —— 选中态整行 wash（AgentThreadList 同款 `--sel-wash` 写法）；未选中保留 hover。
+        selected ? '[background-image:var(--sel-wash)]' : 'hover:bg-ink-3'
       )}
     >
+      {selected ? (
+        // 通高直角条（同 EmailRow.is-selected::before 的几何：top-0/bottom-0，方角）。
+        <span aria-hidden className="absolute inset-y-0 left-0 w-[3px] bg-coral/100" />
+      ) : critical ? (
+        // 胶囊左条（设计 `list.jsx::MatterRow` 的 `top:8/bottom:8/borderRadius:2`）。
+        <span aria-hidden className="absolute left-0 top-2 bottom-2 w-[3px] rounded-sm bg-fail" />
+      ) : null}
       <span className="flex min-w-0 items-center gap-2">
         <span className="truncate text-body font-medium text-ink-fg">{matter.title}</span>
-        {!narrow ? (
-          <>
-            <span className="shrink-0 font-mono text-micro tracking-[0.02em] text-ink-fg-3">
-              {matter.public_id}
-            </span>
-            {priorityTag}
-          </>
+        {/* E10②—— 编号先让位（`hideId`），优先级 chip 撑到真正的窄变体（`narrow`）才让位。 */}
+        {!hideId ? (
+          <span className="shrink-0 font-mono text-micro tracking-[0.02em] text-ink-fg-3">
+            {matter.public_id}
+          </span>
         ) : null}
+        {!narrow ? priorityTag : null}
         {/* 设计 ui.jsx:29 `HealthChip bare` —— 只留 icon，同色无底无边。 */}
         <span
           title={t(`matters.health.${matter.health}`)}
@@ -365,7 +393,7 @@ function MatterRow({
         </span>
       ) : null}
 
-      {signals.length > 0 || matter.tags.length > 0 ? (
+      {signals.length > 0 || matter.matter_type !== null ? (
         <span className={cn('mt-1.5 flex min-w-0 items-center gap-2', narrow && 'flex-wrap')}>
           <span className="flex min-w-0 items-center gap-1.5 overflow-hidden">
             {signals.map((signal) => {
@@ -378,20 +406,13 @@ function MatterRow({
             })}
           </span>
           <span className="flex-1" />
-          <span className="flex shrink-0 items-center gap-1">
-            {matter.tags.slice(0, 3).map((tag) => (
-              <MatterTagChip
-                key={tag}
-                tag={resolveMatterTag(tagsByName, tag)}
-                className="max-w-[8.5rem] py-0.5"
-              />
-            ))}
-            {matter.tags.length > 3 ? (
-              <span className="rounded-[var(--r-pill)] border border-ink-border-soft bg-ink-2/65 px-2 py-0.5 font-mono text-meta text-ink-fg-2">
-                +{matter.tags.length - 3}
-              </span>
-            ) : null}
-          </span>
+          {/* E16 —— 单一事项类型徽标取代原来的标签 chip 列表（本就不设上限的用户内容 =
+              最容易在窄行溢出的一项，owner 拍板换成天然定长的类型）。 */}
+          {matter.matter_type !== null ? (
+            <span className="max-w-[8.5rem] shrink-0 truncate rounded-[var(--r-pill)] border border-ink-border-soft bg-ink-2/65 px-2 py-0.5 font-mono text-meta text-ink-fg-2">
+              {matter.matter_type}
+            </span>
+          ) : null}
         </span>
       ) : null}
     </button>

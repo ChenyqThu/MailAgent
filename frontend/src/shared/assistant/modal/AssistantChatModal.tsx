@@ -296,7 +296,9 @@ function AssistantChatModalInner(): React.JSX.Element {
         'relative flex h-full min-h-0 shrink-0 flex-col border-l border-[var(--hairline)] glass-panel'
       : cn(
           // dogfood：bottom-8 对齐 FAB（bottom-8 right-5）—— 浮窗右下角锚点跟 FAB 一致，展开/收起视觉连续。
-          'fixed bottom-8 right-5 z-40 flex h-[min(40rem,calc(100vh-7.5rem))] w-[min(28rem,calc(100vw-2.5rem))] flex-col',
+          // dogfood 轮 2 #1：28rem 在模型名较长时挤不下 AgentComposer 工具条右组（环/effort/
+          // 模型 chip/发送），32rem 留出的余量配合 ModelPicker chip 的 min-w-0 收缩才够用。
+          'fixed bottom-8 right-5 z-40 flex h-[min(40rem,calc(100vh-7.5rem))] w-[min(32rem,calc(100vw-2.5rem))] flex-col',
           // 浮窗态：用 glass-pop（浮层材质，与 popover/menu 同档；2026-08-05 起该配方是不透明
           // 实色，不再自带 blur —— 见 index.css .glass-pop / DESIGN.md §18.1 C10），保留圆角。
           // 投影由 `.glass-pop` 的 --pop-shadow 提供 —— authored 规则排在 `@tailwind utilities`

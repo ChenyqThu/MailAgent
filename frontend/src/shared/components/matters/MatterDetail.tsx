@@ -1219,13 +1219,16 @@ function MatterPrevNext({
 }: MatterPrevNextProps): React.ReactElement {
   return (
     <div className="inline-flex shrink-0 items-center overflow-hidden rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 text-ink-fg-1">
+      {/* E10④（dogfood 轮 2）—— 高度改 `h-8`（32px）对齐相邻的「事项对话」/「立即跟进」按钮
+          （两者 `py-1.5` + `text-aux` 20px 行高 = 32px）：这三颗按钮共处 header 的
+          `items-start` 一行，原来的 `size-7`（28px）比邻居矮 4px，顶边对齐、底边错位。 */}
       <button
         type="button"
         title={previousLabel}
         aria-label={previousLabel}
         disabled={!canPrevious}
         onClick={onPrevious}
-        className="grid size-7 place-items-center transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:pointer-events-none disabled:opacity-40"
+        className="grid h-8 w-7 place-items-center transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:pointer-events-none disabled:opacity-40"
       >
         <ChevronUp size={14} />
       </button>
@@ -1238,7 +1241,7 @@ function MatterPrevNext({
         aria-label={nextLabel}
         disabled={!canNext}
         onClick={onNext}
-        className="grid size-7 place-items-center transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:pointer-events-none disabled:opacity-40"
+        className="grid h-8 w-7 place-items-center transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:pointer-events-none disabled:opacity-40"
       >
         <ChevronDown size={14} />
       </button>

@@ -24,6 +24,7 @@ import type {
   MatterTagDefinition,
   MatterUpdate
 } from '@shared/api/types/matter'
+import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import {
@@ -49,24 +50,44 @@ import { listMatterTagsSafely, MATTER_TAGS_QUERY_KEY } from './matterTags'
 import { useMatterNavigation } from './navigation'
 
 const MATTER_LIST_WIDTH_STORAGE_KEY = 'mailagent.matters.listWidth'
-const DEFAULT_MATTER_LIST_WIDTH = 320
 const MIN_MATTER_LIST_WIDTH = 280
-const MAX_MATTER_LIST_WIDTH = 480
+// E10①（dogfood 轮 2）—— 拖拽上限从 480 提到 560：容器（窗口）宽度足够时，用户要能把清单
+// 拖得比原来更宽，行 1 的编号/优先级/状态才有稳定余量、不用总卡在窄变体的挤压边缘。
+// 560 + 6px 分隔条 + 详情列 minmax(420) 下限 = 986，仍在 <1180px 单列折叠断点内，结构上
+// 不会把详情列挤没。
+const MAX_MATTER_LIST_WIDTH = 560
 const MATTER_LIST_WIDTH_STEP = 16
+// E10①—— 首次进入（还没有持久化宽度）时按窗口宽度给一个更宽的起点：镜像设计源码
+// app.jsx `listWidthFor = width >= 1440 ? 380 : 336`。原来固定 320（低于 MatterList 自己
+// 360px 的窄变体阈值）等于「刚打开就已经处在挤压状态」——这正是①要修的问题本体，不只是
+// 抬高手动拖拽的天花板。用户一旦手动拖过，走持久化值，这个函数不再生效。
+const WIDE_DESKTOP_BREAKPOINT = 1440
+const DEFAULT_MATTER_LIST_WIDTH_WIDE = 380
+const DEFAULT_MATTER_LIST_WIDTH_NARROW = 336
+// E10③—— 镜像下方 grid 的 `max-[1180px]:grid-cols-1` 断点（清单/详情单列折叠 = 同一时刻只
+// 露一个面）。用它判定「清单与详情是否并排可见」，不是猜一个新数字：数字漂了两处会各说各话。
+const WORKSPACE_STACKED_QUERY = '(max-width: 1180px)'
 
 function clampMatterListWidth(width: number): number {
   return Math.min(MAX_MATTER_LIST_WIDTH, Math.max(MIN_MATTER_LIST_WIDTH, width))
 }
 
+function defaultMatterListWidth(): number {
+  if (typeof window === 'undefined') return DEFAULT_MATTER_LIST_WIDTH_NARROW
+  return window.innerWidth >= WIDE_DESKTOP_BREAKPOINT
+    ? DEFAULT_MATTER_LIST_WIDTH_WIDE
+    : DEFAULT_MATTER_LIST_WIDTH_NARROW
+}
+
 function readMatterListWidth(): number {
   try {
-    if (typeof localStorage === 'undefined') return DEFAULT_MATTER_LIST_WIDTH
+    if (typeof localStorage === 'undefined') return defaultMatterListWidth()
     const raw = localStorage.getItem(MATTER_LIST_WIDTH_STORAGE_KEY)
-    if (raw === null) return DEFAULT_MATTER_LIST_WIDTH
+    if (raw === null) return defaultMatterListWidth()
     const persisted = Number(raw)
-    return Number.isFinite(persisted) ? clampMatterListWidth(persisted) : DEFAULT_MATTER_LIST_WIDTH
+    return Number.isFinite(persisted) ? clampMatterListWidth(persisted) : defaultMatterListWidth()
   } catch {
-    return DEFAULT_MATTER_LIST_WIDTH
+    return defaultMatterListWidth()
   }
 }
 
@@ -113,6 +134,10 @@ export function MattersWorkspace(): React.ReactElement | null {
   )
   const navigationTarget = useMatterNavigation((state) => state.targetPublicId)
   const clearNavigationTarget = useMatterNavigation((state) => state.clear)
+  // E10③—— 清单与详情并排可见（≥1181px）时详情页的上/下切换钮不再需要：用户可以直接点清单里
+  // 的另一行。只在窄屏折叠成单列、详情独占视口时才露出（design detail.jsx:174 `narrow &&
+  // <PrevNext.../>` 同一判据）。
+  const stackedLayout = useMediaQuery(WORKSPACE_STACKED_QUERY)
   const workspaceGridRef = useRef<HTMLDivElement>(null)
   const resizeDragRef = useRef<{
     pointerId: number
@@ -430,7 +455,6 @@ export function MattersWorkspace(): React.ReactElement | null {
                   attention={attentionIndex}
                   updates={updateIndex}
                   search={search}
-                  tagDefinitions={tagItems}
                   onSearchChange={setSearch}
                   onSelect={(matter: Matter) => selectMatter(matter.public_id)}
                   onCreate={() => setCreateOpen(true)}
@@ -504,7 +528,11 @@ export function MattersWorkspace(): React.ReactElement | null {
                     onBack={() => selectMatter(null)}
                     onRemoved={() => selectMatter(null)}
                     navigationMatterIds={orderedVisibleIds}
-                    onNavigateMatter={selectMatter}
+                    // E10③—— 并排可见时不传 onNavigateMatter：MatterDetail 的
+                    // `showNavigation` 判据里 `Boolean(onNavigateMatter)` 是硬门槛，undefined
+                    // 就等于「没有导航能力」，上/下切换钮整体不渲染（MatterDetail 内部逻辑一字
+                    // 不动，从调用方把控制权收掉）。
+                    onNavigateMatter={stackedLayout ? selectMatter : undefined}
                     attentionSignals={openAttentionFor(selected, attentionIndex)}
                     onAttentionAction={handleAttentionAction}
                     initialReviewId={

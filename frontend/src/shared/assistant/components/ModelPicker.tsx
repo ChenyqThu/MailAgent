@@ -303,7 +303,11 @@ export function ModelPicker({
         aria-haspopup="menu"
         aria-expanded={open}
         className={cn(
-          'flex h-7 items-center gap-1.5 rounded-full px-2 text-meta font-medium transition-colors duration-fast',
+          // dogfood 轮 2 #1（AI chat 浮窗，AgentComposer 的 chip variant）—— 触发器自身也要
+          // 能在工具条里收缩，光靠内部 `<span>` 的 `truncate` 不够：没有 `min-w-0`，flex 布局
+          // 会让按钮保留 max-content 宽度不收缩，模型名较长时叠上行内其余控件（+/滑块/授权/
+          // 环/effort/发送）能撑爆浮窗（见 AssistantChatModal 同批把浮窗宽度 28rem→32rem）。
+          'flex h-7 min-w-0 items-center gap-1.5 rounded-full px-2 text-meta font-medium transition-colors duration-fast',
           disabled
             ? 'cursor-not-allowed text-ink-fg-3 opacity-50'
             : open
@@ -316,7 +320,7 @@ export function ModelPicker({
           providerId={activeOption?.providerId ?? (current ? refProviderId(current) : null)}
           protocol={activeOption?.protocol}
         />
-        <span className="max-w-[140px] truncate">{activeText}</span>
+        <span className="min-w-0 max-w-[140px] truncate">{activeText}</span>
         <ChevronDown size={13} strokeWidth={2} className="shrink-0 opacity-60" />
       </button>
     )

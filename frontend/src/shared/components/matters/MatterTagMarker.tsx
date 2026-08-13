@@ -103,7 +103,8 @@ export function MatterTagChip({
     </>
   )
   const classes = cn(
-    'inline-flex max-w-full items-center gap-1.5 rounded-[var(--r-pill)] border px-2 py-1 text-meta',
+    // E18（dogfood 轮 2 #18）—— icon（marker）与文本间距原 gap-1.5(6px) 偏宽，收到 gap-1(4px)。
+    'inline-flex max-w-full items-center gap-1 rounded-[var(--r-pill)] border px-2 py-1 text-meta',
     'border-ink-border-soft bg-ink-2/65 text-ink-fg-1',
     selected && 'border-coral/35 bg-coral/10 text-ink-fg',
     className

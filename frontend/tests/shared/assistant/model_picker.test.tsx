@@ -179,6 +179,31 @@ describe('ModelPicker — 双 variant 一份实现', () => {
     const { container } = render(<ModelPicker controls={controlsFor([], null)} variant="icon" />)
     expect(container.innerHTML).toBe('')
   })
+
+  // dogfood 轮 2 #1 —— AI chat 浮窗最窄 32rem，模型名长时底部工具/信息行会被撑出去。
+  // happy-dom 不排版（getBoundingClientRect 恒 0），验不了真实溢出，机械化验两件事：
+  // ①触发器有 `min-w-0`（没有它，flex 布局按钮会保留 max-content 宽度不跟着收缩）
+  // ②内部文字仍是 `truncate` + 有界 `max-w`（省略号靠这个生效，不是靠字符串截断）。
+  test('chip variant 触发器：长模型名下 min-w-0 + truncate 齐全（防撑爆浮窗工具条）', () => {
+    const LONG_NAME = 'Claude Opus 4.8 Extended Thinking Preview (2026-08-13 build)'
+    render(
+      <ModelPicker
+        controls={controlsFor(
+          [option({ ref: 'anthropic:x', displayName: LONG_NAME })],
+          'anthropic:x'
+        )}
+        variant="chip"
+      />
+    )
+    const trigger = screen.getByLabelText(i18n.t('chat.composer.model'))
+    expect(trigger.className).toContain('min-w-0')
+    const textSpan = trigger.querySelector('span')
+    expect(textSpan?.className).toContain('min-w-0')
+    expect(textSpan?.className).toContain('truncate')
+    expect(textSpan?.className).toMatch(/max-w-\[\d+px\]/)
+    // 文案本身不截断（截断是 CSS ellipsis 的活，不是把字符串砍短）。
+    expect(trigger.textContent).toContain(LONG_NAME)
+  })
 })
 
 describe('ModelPicker — 选中值仍是完整 providerRef', () => {
