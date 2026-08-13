@@ -66,9 +66,12 @@ def _normalize_avatar_image(avatar: Dict[str, Any]) -> Dict[str, Any]:
 # 无 type 键 = legacy oreo 生成式）。词表以这里为跨语言 canonical —— 前端
 # frontend/src/shared/bot-avatar/{shapes,colors}.ts 手抄同一份驱动编辑器网格与渲染，
 # 闸 = tests/config/test_bot_avatar_vocab_parity.py（任一侧漂移/改名/重排必红）。
-# v2（avatar-lab 引擎换代）：8 种 3D 参数曲面原语。v1 8 形（blob/squircle/egg/wedge/
-# hex/cloud/teardrop/capsule）由前端 shapes.ts LEGACY_BOT_SHAPE_MAP 读侧双射换脸，
-# 写侧（本白名单 + 编辑器）只认 v2 词表，存量行不迁移。
+# 0813 成品目录化（owner 拍板照搬 avatar-lab 成品库）：13 个成品形状 = 原 8 原语名
+# （cube/cone 几何在 TS 侧换成 lab studio 调参值，名字不变）+ 5 个组合身体成品
+# （freddy/sunee/kirby/cloudee/onee）。组合身体是形状名在 TS 侧的派生数据
+# （shapes.ts SHAPES[shape].nodes），wire 结构不变仍是 {type,shape,color}。
+# v1 8 形（blob/squircle/egg/wedge/hex/cloud/teardrop/capsule）由前端 shapes.ts
+# LEGACY_BOT_SHAPE_MAP 读侧双射换脸，写侧（本白名单 + 编辑器）只认现词表，存量行不迁移。
 BOT_AVATAR_SHAPES = (
     "sphere",
     "capsule",
@@ -78,6 +81,11 @@ BOT_AVATAR_SHAPES = (
     "diamond",
     "mickey",
     "cursor",
+    "freddy",
+    "sunee",
+    "kirby",
+    "cloudee",
+    "onee",
 )
 BOT_AVATAR_COLORS = (
     "white",

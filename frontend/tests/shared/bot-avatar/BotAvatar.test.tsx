@@ -151,6 +151,27 @@ describe('BotAvatar 静态档（默认）', () => {
     const sphere = render(<BotAvatar config={{ shape: 'sphere' }} />)
     expect(sphere.container.querySelectorAll('[data-bot-back]')).toHaveLength(0)
   })
+
+  test('组合身体槽位（0813 成品目录化）：freddy 背 3 前 3，DOM 序 = 背 → 头 → 眼 → 前', () => {
+    const { container } = render(<BotAvatar config={{ shape: 'freddy' }} />)
+    expect(container.querySelectorAll('[data-bot-back]')).toHaveLength(3)
+    expect(container.querySelectorAll('[data-bot-front]')).toHaveLength(3)
+    // 层序纪律（镜像 lab AvatarCanvas）：背层在头之前、前层在眼组之后
+    const motion = container.querySelector('[data-bot-motion]')
+    const children = Array.from(motion?.children ?? []).map((node) =>
+      node.hasAttribute('data-bot-back')
+        ? 'back'
+        : node.hasAttribute('data-bot-head')
+          ? 'head'
+          : node.hasAttribute('data-bot-front')
+            ? 'front'
+            : 'eyes'
+    )
+    expect(children).toEqual(['back', 'back', 'back', 'head', 'eyes', 'front', 'front', 'front'])
+    // 静态帧里空的前层槽写 ''（附属曲面全在头后时前层不画东西）
+    const frame = staticFrame(0, SHAPES.freddy)
+    expect(frame.back.length + frame.front.length).toBe(3)
+  })
 })
 
 describe('BotAvatar 动画档', () => {

@@ -1,9 +1,11 @@
 // 灵动 bot 头像 v2 —— 3D 姿态与投影渲染层。
 // 移植自 avatar-lab `src/features/avatar/geometry.ts`（AGPL-3.0 上游，出处注记见
 // frontend/docs/bot-avatar.md）。裁剪面：去掉 Studio 编辑器专属（eye/body 编辑器
-// 几何、arcball、gizmo、平移/旋转操纵）、body accessories（次级原语）与 wireframe。
+// 几何、arcball、gizmo、平移/旋转操纵）与 wireframe。
 // 保留：四元数姿态、透视投影、眼睛贴合曲面（含眨眼高度插值）、8 原语头部轮廓路径、
-// mickey 耳朵 / cursor 锥体两个内建复合背层。
+// mickey 耳朵 / cursor 锥体两个内建复合背层、body accessories（附属曲面：成品
+// avatar 的天线/云朵/太阳芒等，逐帧按相机深度分背/前两层并 z 排序 —— 与 lab
+// accessoryLayers 同款算法）。
 // 本文件 framework-agnostic：纯数学，零 React / 零 DOM。
 //
 // 坐标系：画布中心 (0,0)，viewBox `-150 -150 300 300`（shapes.ts BOT_VIEW_BOX）。
@@ -69,12 +71,25 @@ export interface AvatarPose {
   orientation: Quaternion
 }
 
+/**
+ * 附属曲面（组合身体单元）：成品 avatar 的天线/云朵/太阳芒。
+ * 数据来自 avatar-lab studio 文档的 body.nodes（裁掉编辑器专属的 id/name）；
+ * position/rotation 是头部本地坐标系（跟随头部姿态整体转动）。
+ */
+export interface BodyNodeDef {
+  surface: SurfaceConfig
+  position: Point3
+  rotation: Point3
+}
+
 /** renderAvatar 的一帧几何产物（全部是可直接进 <path d> 的字符串） */
 export interface AvatarGeometry {
   /** 头部轮廓（同一串同时用作眼睛 clipPath） */
   headPath: string
-  /** 头后背层（mickey 耳朵 ×2 / cursor 锥体 ×1 / 其余空） */
+  /** 头后背层（mickey 耳朵 / cursor 锥体 + 判定在头后的附属曲面，按深度升序） */
   backPaths: string[]
+  /** 判定转到头前的附属曲面（渲染在眼睛之上；多数帧为空） */
+  frontPaths: string[]
   leftPath: string
   rightPath: string
   leftVisible: boolean
@@ -626,6 +641,99 @@ const compositeBackPaths = (pose: AvatarPose, surface: SurfaceConfig): string[] 
   return []
 }
 
+// ── 附属曲面（body accessories）：lab accessoryPath/accessoryLayers 同款 ─────────
+
+/** 附属曲面采样密度低于头部（17×49 vs 33×73）——小体量原语，lab 同款取舍 */
+const ACCESSORY_LATITUDE_SAMPLES = 17
+const ACCESSORY_LONGITUDE_SAMPLES = 49
+const accessorySamplesCache = new Map<string, Point3[]>()
+
+const accessoryPath = (pose: AvatarPose, node: BodyNodeDef): string => {
+  const key = surfaceCacheKey(node.surface)
+  let localSamples = accessorySamplesCache.get(key)
+  if (!localSamples) {
+    localSamples = Array.from({ length: ACCESSORY_LATITUDE_SAMPLES }, (_, latitudeIndex) => {
+      const latitude = -Math.PI / 2 + (latitudeIndex / (ACCESSORY_LATITUDE_SAMPLES - 1)) * Math.PI
+      return Array.from({ length: ACCESSORY_LONGITUDE_SAMPLES }, (_, longitudeIndex) => {
+        const longitude =
+          -Math.PI + (longitudeIndex / (ACCESSORY_LONGITUDE_SAMPLES - 1)) * Math.PI * 2
+        return surfacePointAt(node.surface, longitude, latitude)
+      })
+    }).flat()
+    cacheSurfaceValue(accessorySamplesCache, key, localSamples)
+  }
+
+  const localOrientation = quaternionFromEuler(
+    radians(node.rotation[0]),
+    radians(node.rotation[1]),
+    radians(node.rotation[2])
+  )
+  const projected = localSamples.map((point) => {
+    const locallyRotated = rotateWithQuaternion(localOrientation, point)
+    const positioned: Point3 = [
+      locallyRotated[0] + node.position[0],
+      locallyRotated[1] + node.position[1],
+      locallyRotated[2] + node.position[2]
+    ]
+    return project(rotateWithQuaternion(pose.orientation, positioned), pose.expression.perspective)
+  })
+  const hull = convexHull(projected)
+  if (
+    (node.surface.type === 'cube' || node.surface.type === 'diamond') &&
+    node.surface.roundness <= 0
+  ) {
+    return path(hull)
+  }
+  return smoothClosedPath(densifyClosedPoints(hull))
+}
+
+/** 附属曲面从「头后」跨到「头前」的深度阈值系数（lab 同款：超过自身相机深度半径的 10%） */
+const ACCESSORY_FRONT_CROSSING_RATIO = 0.1
+
+const accessoryCameraDepthRadius = (pose: AvatarPose, node: BodyNodeDef): number => {
+  const localOrientation = quaternionFromEuler(
+    radians(node.rotation[0]),
+    radians(node.rotation[1]),
+    radians(node.rotation[2])
+  )
+  const cameraDepthByAxis = (
+    [
+      [1, 0, 0],
+      [0, 1, 0],
+      [0, 0, 1]
+    ] as Point3[]
+  ).map(
+    (axis) => rotateWithQuaternion(pose.orientation, rotateWithQuaternion(localOrientation, axis))[2]
+  )
+  return Math.hypot(
+    cameraDepthByAxis[0] * (node.surface.width / 2),
+    cameraDepthByAxis[1] * (node.surface.height / 2),
+    cameraDepthByAxis[2] * (node.surface.depth / 2)
+  )
+}
+
+/** 附属曲面逐帧分层：按相机深度升序，跨过阈值的划入前层（渲染在头/眼之上） */
+const accessoryLayers = (
+  pose: AvatarPose,
+  nodes: readonly BodyNodeDef[]
+): { backPaths: string[]; frontPaths: string[] } => {
+  if (!nodes.length) return { backPaths: [], frontPaths: [] }
+  const layers = nodes
+    .map((node) => {
+      const depth = rotateWithQuaternion(pose.orientation, node.position)[2]
+      return {
+        path: accessoryPath(pose, node),
+        depth,
+        front: depth > accessoryCameraDepthRadius(pose, node) * ACCESSORY_FRONT_CROSSING_RATIO
+      }
+    })
+    .sort((left, right) => left.depth - right.depth)
+  return {
+    backPaths: layers.filter((layer) => !layer.front).map((layer) => layer.path),
+    frontPaths: layers.filter((layer) => layer.front).map((layer) => layer.path)
+  }
+}
+
 const ellipsePoints = (ellipse: ProjectedEllipse): Point3[] =>
   Array.from({ length: PRIMITIVE_RING_SAMPLES }, (_, index) => {
     const angle = (index / PRIMITIVE_RING_SAMPLES) * Math.PI * 2
@@ -711,15 +819,22 @@ const headPath = (pose: AvatarPose, surface: SurfaceConfig): string => {
 }
 
 /**
- * 一帧完整几何：头部轮廓 + 背层复合形 + 双眼（含眨眼与背面隐藏判定）。
- * blink ∈ [0,1]（1 = 全睁）。
+ * 一帧完整几何：头部轮廓 + 背/前层复合形与附属曲面 + 双眼（含眨眼与背面隐藏判定）。
+ * blink ∈ [0,1]（1 = 全睁）；bodyNodes = 组合身体（shapes.ts SHAPES[shape].nodes）。
  */
-export const renderAvatar = (pose: AvatarPose, surface: SurfaceConfig, blink = 1): AvatarGeometry => {
+export const renderAvatar = (
+  pose: AvatarPose,
+  surface: SurfaceConfig,
+  blink = 1,
+  bodyNodes: readonly BodyNodeDef[] = []
+): AvatarGeometry => {
   const leftSamples = eyePoints(pose, surface, -1, blink)
   const rightSamples = eyePoints(pose, surface, 1, blink)
+  const accessories = accessoryLayers(pose, bodyNodes)
   return {
     headPath: headPath(pose, surface),
-    backPaths: compositeBackPaths(pose, surface),
+    backPaths: [...compositeBackPaths(pose, surface), ...accessories.backPaths],
+    frontPaths: accessories.frontPaths,
     leftPath: path(leftSamples.map((sample) => sample.point)),
     rightPath: path(rightSamples.map((sample) => sample.point)),
     // 眼睛整体法线朝后（转到脑后）即隐藏——逐点求和判定，边缘半可见时仍画（被 clip 裁）

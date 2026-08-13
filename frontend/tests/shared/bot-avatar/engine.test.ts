@@ -424,7 +424,7 @@ describe('状态驻留闸（min-dwell 去抖，0813）', () => {
 })
 
 describe('EXPRESSIONS 数据挂载', () => {
-  test('引擎侧看到 25 个参数化表情（与 expressions.test.ts 互为印证）', () => {
-    expect(EXPRESSIONS).toHaveLength(25)
+  test('引擎侧看到 27 个参数化表情（与 expressions.test.ts 互为印证）', () => {
+    expect(EXPRESSIONS).toHaveLength(27)
   })
 })

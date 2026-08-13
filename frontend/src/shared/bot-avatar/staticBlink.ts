@@ -25,12 +25,12 @@ import { EXPRESSIONS } from './expressions'
 import { poseFromExpression, renderAvatar } from './geometry'
 import { BLINK } from './states'
 import type { BlinkCadence, BotState } from './states'
-import type { SurfaceConfig } from './surfaces'
+import type { BotShapeDef } from './shapes'
 
 export interface StaticBlinkClient {
   /** 静态档当前显示的表情（池首）；眨眼帧按它重算几何 */
   expressionIndex: number
-  surface: SurfaceConfig
+  surface: BotShapeDef
   state: BotState
   /** 眨眼帧写入目标（BotAvatar 的 refs.eyes —— 访问器身份稳定，节点可能为 null） */
   eyes: () => ReadonlyArray<SVGPathElement | null>
@@ -79,9 +79,12 @@ function writeEyes(client: StaticBlinkClient, eyes: ReadonlyArray<{ d: string }>
 
 /** 眨眼中的一帧眼几何 —— 与 animated 档同一条管线（保真度一致的关键） */
 function blinkEyes(client: StaticBlinkClient, blinkValue: number): Array<{ d: string }> {
+  // 🔴 只传 `primary`，**不传** `nodes`：眨眼只重写眼 path，而眼几何不依赖附属曲面
+  // （组合身体是天线/云朵那类挂件）。传 nodes 会让每个眨眼帧白付一遍附属凸包投影，
+  // 也违背本文件「窗口内只算眼、间隙真 idle」的成本纪律。
   const geometry = renderAvatar(
     poseFromExpression(EXPRESSIONS[client.expressionIndex]),
-    client.surface,
+    client.surface.primary,
     blinkValue
   )
   return [{ d: geometry.leftPath }, { d: geometry.rightPath }]

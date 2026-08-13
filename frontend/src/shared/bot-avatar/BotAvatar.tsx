@@ -10,15 +10,19 @@
 // 恒回静态档：身份/状态仍可读，动画整个不出现。
 // v2 渲染结构（镜像 avatar-lab standalone runtime）：
 //   defs/clipPath(head) → g[flip] → g[motion: ambient 平移] →
-//     back×N(mickey 耳/cursor 锥) → head path → g[clip] → eye×2
+//     back×N(mickey 耳/cursor 锥/头后附属曲面) → head path → g[clip] → eye×2 →
+//     front×M(转到头前的附属曲面)
 // 头部 path 每帧都会变（3D 转头），所以 head 与 clipPath 都由 writeFrame 直写。
+// svg overflow: visible 镜像 lab（studio 画布与 standalone 导出都设了）——组合身体
+// 的附属曲面（Sunee 太阳芒等）会略超出 viewBox，不设则被 SVG 自身裁掉；外层是否再
+// 套裁剪壳（圆/方）由消费点决定（AgentAvatar 的外壳归它自己管）。
 
 import { useEffect, useId, useLayoutEffect, useMemo, useRef } from 'react'
 
 import { useReducedMotion } from '../hooks/useReducedMotion'
 import { COLORS } from './colors'
 import { BotFaceEngine, staticFrame } from './engine'
-import { BACK_PATH_COUNT, BOT_VIEW_BOX, SHAPES } from './shapes'
+import { BACK_PATH_COUNT, BOT_VIEW_BOX, FRONT_PATH_COUNT, SHAPES } from './shapes'
 import { BLINK, POOLS } from './states'
 import { registerStaticBlink, unregisterStaticBlink } from './staticBlink'
 import type { StaticBlinkClient } from './staticBlink'
@@ -58,6 +62,7 @@ interface FrameRefs {
   clip: SVGPathElement | null
   head: SVGPathElement | null
   back: Array<SVGPathElement | null>
+  front: Array<SVGPathElement | null>
   eyes: Array<SVGPathElement | null>
 }
 
@@ -78,9 +83,10 @@ export function BotAvatar({
 
   const shape: BotShape = config?.shape ?? 'sphere'
   const color: BotColor = config?.color ?? 'orange'
-  const surface = SHAPES[shape]
+  const shapeDef = SHAPES[shape]
   const palette = COLORS[color][theme]
   const backCount = BACK_PATH_COUNT[shape]
+  const frontCount = FRONT_PATH_COUNT[shape]
 
   // clipPath id 每实例唯一：多实例同屏时 url(#…) 按文档序解析到第一个同名节点，
   // 共享 id 会让所有实例吃同一个（可能已卸载的）裁剪形状。useId 的冒号在
@@ -90,12 +96,19 @@ export function BotAvatar({
 
   // 静态档的那一帧（模块级缓存）；动画档也用它作 SSR/首帧基线（= 引擎初始快照：池首）
   const frame = useMemo(
-    () => staticFrame(expressionIndex ?? POOLS[state][0], surface),
-    [expressionIndex, state, surface]
+    () => staticFrame(expressionIndex ?? POOLS[state][0], shapeDef),
+    [expressionIndex, state, shapeDef]
   )
 
   const svgRef = useRef<SVGSVGElement | null>(null)
-  const refs = useRef<FrameRefs>({ motion: null, clip: null, head: null, back: [], eyes: [] })
+  const refs = useRef<FrameRefs>({
+    motion: null,
+    clip: null,
+    head: null,
+    back: [],
+    front: [],
+    eyes: []
+  })
   const engineRef = useRef<BotFaceEngine | null>(null)
   // 引擎创建 effect 不依赖 state（换状态不得重建引擎），经 ref 取创建时刻的最新值
   const stateRef = useRef(state)
@@ -120,17 +133,20 @@ export function BotAvatar({
     if (isAnimated || reducedMotion || BLINK[state] === null) return
     const client: StaticBlinkClient = {
       state,
-      surface,
-      expressionIndex: POOLS[state][0],
+      surface: shapeDef,
+      // 🔴 必须与上面 `frame` 用的是同一个索引：眨眼窗口内 registry 会按这个索引重算
+      // 眼 path，取池首就会在 FAB（批 X 用 expressionIndex 低频换脸）眨眼的那一刻把脸
+      // 跳回池首。合并 W(眨眼) × X(expressionIndex) 时发现，两批各自都对。
+      expressionIndex: expressionIndex ?? POOLS[state][0],
       eyes: () => refs.current.eyes
     }
     registerStaticBlink(client)
     return () => unregisterStaticBlink(client)
-  }, [isAnimated, reducedMotion, state, surface])
+  }, [isAnimated, reducedMotion, state, shapeDef, expressionIndex])
 
   useEffect(() => {
     if (!isAnimated) return
-    const engine = new BotFaceEngine({ surface, initialState: stateRef.current })
+    const engine = new BotFaceEngine({ surface: shapeDef, initialState: stateRef.current })
     engineRef.current = engine
     const client = (now: number): void => {
       const next = engine.tick(now)
@@ -179,7 +195,7 @@ export function BotAvatar({
       setRegistered(false)
       engineRef.current = null
     }
-  }, [isAnimated, surface, mouseInteractive])
+  }, [isAnimated, shapeDef, mouseInteractive])
 
   return (
     <svg
@@ -188,6 +204,7 @@ export function BotAvatar({
       width={size}
       height={size}
       className={className}
+      style={{ overflow: 'visible' }}
       role="img"
       aria-label={title}
       aria-hidden={title ? undefined : true}
@@ -244,6 +261,17 @@ export function BotAvatar({
               />
             ))}
           </g>
+          {Array.from({ length: frontCount }, (_, i) => (
+            <path
+              key={`front-${i}`}
+              ref={(node) => {
+                refs.current.front[i] = node
+              }}
+              data-bot-front={i}
+              d={frame.front[i] ?? ''}
+              fill={palette.body}
+            />
+          ))}
         </g>
       </g>
     </svg>
@@ -259,6 +287,9 @@ function writeFrame(refs: FrameRefs, frame: EngineFrame): void {
   refs.head?.setAttribute('d', frame.head)
   refs.back.forEach((node, i) => {
     node?.setAttribute('d', frame.back[i] ?? '')
+  })
+  refs.front.forEach((node, i) => {
+    node?.setAttribute('d', frame.front[i] ?? '')
   })
   frame.eyes.forEach((eye, i) => {
     const node = refs.eyes[i]

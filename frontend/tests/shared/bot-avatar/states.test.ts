@@ -50,6 +50,15 @@ describe('bot-avatar states 五张表', () => {
     }
   })
 
+  test('studio 新增两表情（25/26）已归池且可达（0813 拍板：25→angry / 26→scared）', () => {
+    // 27 表全量搬进后 25/26 不许成孤儿数据 —— 归池即「加上」的产品语义落点。
+    expect(POOLS.angry).toContain(25)
+    expect(POOLS.scared).toContain(26)
+    const referenced = new Set(BOT_STATES.flatMap((state) => [...POOLS[state]]))
+    expect(referenced.has(25)).toBe(true)
+    expect(referenced.has(26)).toBe(true)
+  })
+
   test('节奏区间合法：0 < min ≤ max；眨眼时长档 ∈ [180, 500]ms（v2 分档）', () => {
     for (const state of BOT_STATES) {
       const cadence = EXPR_CADENCE[state]

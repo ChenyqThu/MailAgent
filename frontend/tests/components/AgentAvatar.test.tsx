@@ -73,12 +73,13 @@ describe('AgentAvatar identity（bot 语义）', () => {
     ).toEqual(resolveAgentAvatar('custom'))
   })
 
-  test('legacy oreo 生成式行 → 确定性换脸（golden：bloom/rose → diamond/white）', () => {
+  test('legacy oreo 生成式行 → 确定性换脸（golden：bloom/rose → kirby/orange）', () => {
+    // 0813 成品目录化（8→13 形）重钉 golden：索引算法未动，词表取模结果变
     const legacy = { shape: 'bloom' as const, palette: 'rose', variant_id: 'v1' }
     expect(resolveAgentAvatar('custom', legacy)).toEqual({
       type: 'bot',
-      shape: 'diamond',
-      color: 'white'
+      shape: 'kirby',
+      color: 'orange'
     })
     // 同 shape+palette 恒同脸（variant_id 有意不进 hash），与 agentId 无关。
     expect(resolveAgentAvatar('another_agent', { shape: 'bloom', palette: 'rose' })).toEqual(

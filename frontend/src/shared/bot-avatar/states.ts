@@ -1,7 +1,8 @@
 // 灵动 bot 头像 —— 状态表 + MailAgent 状态映射。
-// GROUPS/POOLS/EXPR_CADENCE 移植自原型（v2 换代核实：avatar-lab statePools 与此
-// 逐条同源——25 表情索引语义跨代不变）；BLINK 第三元（眨眼时长分档）与 AMBIENT
-// （空闲微动）取自 avatar-lab 每态 blink profile / ambient motion 语义。
+// GROUPS/POOLS/EXPR_CADENCE 移植自原型（0813 studio 表情换代再核实：avatar-lab
+// studio sequences 的 steps 与 statePools 逐条同源——表情索引语义跨代不变，27 表
+// 的 25/26 两条是净新增，归池见 POOLS 注释）；BLINK 第三元（眨眼时长分档）与
+// AMBIENT（空闲微动）取自 avatar-lab 每态 blink profile / ambient motion 语义。
 // 本文件 framework-agnostic：只允许 type-only import，不得引入任何运行时依赖。
 
 import type { AgentCallProjectedState } from '../lib/agentCallState'
@@ -54,7 +55,11 @@ export const BOT_STATES: readonly BotState[] = Object.values(GROUPS).flat()
 /** [minMs, maxMs] —— 调度器在区间内均匀随机取下一次触发延迟 */
 export type CadenceRange = readonly [number, number]
 
-/** 状态 → 表情索引池；池首是 setState 立即切换的帧，其余由调度器随机轮换 */
+/** 状态 → 表情索引池；池首是 setState 立即切换的帧，其余由调度器随机轮换。
+ *  索引 0-24 与 lab studio sequences 逐状态同源；25/26 是 studio 新增的两条表情
+ *  （lab 里没有 sequence 引用它们），按其作者态动效标注归池：25（怒目斜眼 +
+ *  bodyMotion shake 标注）入 angry，26（8 号脸的颤抖变体，eyeMotion shake 标注）
+ *  入 scared —— 与本仓 AMBIENT 对应状态的 shake 语义正好对齐。 */
 export const POOLS: Record<BotState, readonly number[]> = {
   sleeping: [13, 22, 4],
   waking: [13],
@@ -66,7 +71,7 @@ export const POOLS: Record<BotState, readonly number[]> = {
   excited: [2, 17, 21, 3, 11],
   surprised: [3, 21],
   suspicious: [14, 5, 23],
-  angry: [7, 16],
+  angry: [7, 16, 25],
   drowsy: [4, 22, 13],
   happy: [2, 11, 17, 19],
   curious: [3, 21, 0, 15],
@@ -76,7 +81,7 @@ export const POOLS: Record<BotState, readonly number[]> = {
   shy: [0, 24, 13],
   sad: [4, 13, 22],
   laughing: [2, 11, 17],
-  scared: [3, 21],
+  scared: [3, 21, 26],
   playful: [2, 17, 11, 8],
   celebrate: [2, 8, 17],
   orbit: [0, 8],

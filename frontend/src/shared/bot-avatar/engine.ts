@@ -22,7 +22,7 @@ import {
 import type { Expression } from './geometry'
 import { AMBIENT, BLINK, EXPR_CADENCE, POOLS } from './states'
 import type { BotState } from './states'
-import type { SurfaceConfig } from './surfaces'
+import type { BotShapeDef } from './shapes'
 import type { EngineFrame } from './types'
 
 export { EXPRESSIONS } from './expressions'
@@ -105,25 +105,33 @@ function lerpExpression(from: Expression, to: Expression, eased: number): Expres
 
 // ── 静态档 ──────────────────────────────────────────────────────────────────
 
-/** 静态帧缓存：列表位点数百个同款 22px 实例只算一次几何（key = 曲面身份 × 表情） */
-const staticFrameCache = new WeakMap<SurfaceConfig, Map<number, EngineFrame>>()
+/** 静态帧缓存：列表位点数百个同款 22px 实例只算一次几何（key = 形状定义身份 × 表情）。
+ *  组合身体的附属曲面也在缓存帧内（SHAPES 的 def 是模块级单例，WeakMap 键稳定），
+ *  静态位点对复合形状仍是「同 shape×表情只算一次几何」。 */
+const staticFrameCache = new WeakMap<BotShapeDef, Map<number, EngineFrame>>()
 
 /**
  * 静态档一帧：表情原样、无过渡/gaze/眨眼/ambient。
  * 列表位点与 reduced-motion 回退都走这里 —— 不建引擎实例、零定时器。
  */
-export function staticFrame(expressionIndex: number, surface: SurfaceConfig): EngineFrame {
-  let perSurface = staticFrameCache.get(surface)
-  if (!perSurface) {
-    perSurface = new Map()
-    staticFrameCache.set(surface, perSurface)
+export function staticFrame(expressionIndex: number, shapeDef: BotShapeDef): EngineFrame {
+  let perShape = staticFrameCache.get(shapeDef)
+  if (!perShape) {
+    perShape = new Map()
+    staticFrameCache.set(shapeDef, perShape)
   }
-  const cached = perSurface.get(expressionIndex)
+  const cached = perShape.get(expressionIndex)
   if (cached) return cached
-  const geometry = renderAvatar(poseFromExpression(EXPRESSIONS[expressionIndex]), surface, 1)
+  const geometry = renderAvatar(
+    poseFromExpression(EXPRESSIONS[expressionIndex]),
+    shapeDef.primary,
+    1,
+    shapeDef.nodes
+  )
   const frame: EngineFrame = {
     head: geometry.headPath,
     back: geometry.backPaths,
+    front: geometry.frontPaths,
     eyes: [
       { d: geometry.leftPath, visible: geometry.leftVisible },
       { d: geometry.rightPath, visible: geometry.rightVisible }
@@ -132,15 +140,15 @@ export function staticFrame(expressionIndex: number, surface: SurfaceConfig): En
     offsetY: 0,
     settled: true
   }
-  perSurface.set(expressionIndex, frame)
+  perShape.set(expressionIndex, frame)
   return frame
 }
 
 // ── 引擎 ────────────────────────────────────────────────────────────────────
 
 export interface BotEngineOptions {
-  /** 形状曲面（shapes.ts SHAPES[shape]） */
-  surface: SurfaceConfig
+  /** 形状定义（shapes.ts SHAPES[shape]：主曲面 + 组合身体） */
+  surface: BotShapeDef
   initialState?: BotState
   /** 随机源注入口 —— 测试确定性；默认 Math.random */
   random?: () => number
@@ -157,7 +165,7 @@ interface TransitionState {
 }
 
 export class BotFaceEngine {
-  private readonly surface: SurfaceConfig
+  private readonly surface: BotShapeDef
   private readonly random: () => number
   private readonly now: () => number
 
@@ -371,7 +379,12 @@ export class BotFaceEngine {
     }
 
     const blink = this.blinkValueAt(now)
-    const geometry = renderAvatar(poseFromExpression(expr), this.surface, blink)
+    const geometry = renderAvatar(
+      poseFromExpression(expr),
+      this.surface.primary,
+      blink,
+      this.surface.nodes
+    )
     const offset = ambientActive
       ? ambientBodyOffset(seedExpression, ambient.body, ambientElapsed)
       : { x: 0, y: 0 }
@@ -380,6 +393,7 @@ export class BotFaceEngine {
     return {
       head: geometry.headPath,
       back: geometry.backPaths,
+      front: geometry.frontPaths,
       eyes: [
         { d: geometry.leftPath, visible: geometry.leftVisible },
         { d: geometry.rightPath, visible: geometry.rightVisible }

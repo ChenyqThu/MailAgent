@@ -7,15 +7,16 @@ import type { BotColor } from './colors'
 import type { BotShape } from './shapes'
 
 export type { BotColor } from './colors'
-export type { BotShape } from './shapes'
+export type { BotShape, BotShapeDef } from './shapes'
 export type { BotState } from './states'
-export type { Expression, EyeMotion, BodyMotion } from './geometry'
+export type { BodyNodeDef, Expression, EyeMotion, BodyMotion } from './geometry'
 export type { SurfaceConfig, SurfaceType } from './surfaces'
 
 /**
- * avatar_json 的第三种 kind。v2 换代后 shape 词表为 8 种 3D 原语
- * （wire.py 白名单 + parity 闸同源）；v1 8 形经 shapes.ts LEGACY_BOT_SHAPE_MAP
- * 读侧换脸，schema 形状不变。
+ * avatar_json 的第三种 kind。0813 成品目录化后 shape 词表为 13 个成品形状
+ * （wire.py 白名单 + parity 闸同源）；组合身体是形状名在 TS 侧的派生数据
+ * （SHAPES[shape].nodes），wire 结构不变仍是 {type,shape,color}。v1 8 形经
+ * shapes.ts LEGACY_BOT_SHAPE_MAP 读侧换脸。
  */
 export interface BotAvatarBotConfig {
   type: 'bot'
@@ -34,8 +35,10 @@ export interface EyeFrame {
 export interface EngineFrame {
   /** 头部轮廓 path（同一串同时写进眼睛的 clipPath） */
   head: string
-  /** 背层复合 path（mickey 双耳 / cursor 锥体；多数形状为空数组） */
+  /** 背层 path（mickey 双耳 / cursor 锥体 + 头后附属曲面；多数形状为空数组） */
   back: readonly string[]
+  /** 前层 path（转到头前的附属曲面，渲染在眼睛之上；多数帧为空） */
+  front: readonly string[]
   eyes: readonly EyeFrame[]
   /** ambient 身体漂移的整体平移（作用在 motion 层 transform 上） */
   offsetX: number
