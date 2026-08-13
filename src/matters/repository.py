@@ -280,6 +280,46 @@ class MatterRepository:
                 self._add_search_match(result, query_text)
         return results, next_cursor, total
 
+    def list_stakeholder_summaries(
+        self,
+        conn: sqlite3.Connection,
+        matter_ids: list[int],
+        *,
+        preview_limit: int = 6,
+    ) -> dict[int, tuple[list[dict[str, Any]], int]]:
+        """清单行头像组（design `list.jsx::MatterRow` 的 `AvatarStack`）的**批量**投影。
+
+        🔴 一次查询覆盖整页事项，绝不按行发请求 —— 清单是随事项数线性增长的面，逐行取
+        干系人会把一次列表加载放大成 N 次往返（`frontend/ARCHITECTURE.md` §7.1-7.2 的
+        列表性能铁律）。排序与 `MatterService.context_snapshot` 的干系人段同口径
+        （等待中优先、其次入库序），头像组截断后仍给出总数好让 UI 显示 `+N`。
+        """
+        if not matter_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in matter_ids)
+        rows = conn.execute(
+            "SELECT matter_id,display_name,email_normalized,is_waiting_on "
+            f"FROM matter_stakeholder WHERE matter_id IN ({placeholders}) "
+            "AND deleted_at IS NULL "
+            "ORDER BY matter_id, is_waiting_on DESC, id",
+            tuple(matter_ids),
+        ).fetchall()
+        summaries: dict[int, tuple[list[dict[str, Any]], int]] = {
+            matter_id: ([], 0) for matter_id in matter_ids
+        }
+        for row in rows:
+            preview, count = summaries[int(row["matter_id"])]
+            if len(preview) < preview_limit:
+                preview.append(
+                    {
+                        "display_name": row["display_name"],
+                        "email_normalized": row["email_normalized"],
+                        "is_waiting_on": bool(row["is_waiting_on"]),
+                    }
+                )
+            summaries[int(row["matter_id"])] = (preview, count + 1)
+        return summaries
+
     def list_tags(self, conn: sqlite3.Connection) -> list[dict[str, Any]]:
         rows = conn.execute(
             """

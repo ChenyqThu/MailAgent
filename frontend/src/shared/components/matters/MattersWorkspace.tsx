@@ -331,6 +331,7 @@ export function MattersWorkspace(): React.ReactElement | null {
                   view={view}
                   selectedId={selectedId}
                   attention={attentionIndex}
+                  updates={updateIndex}
                   search={search}
                   tagDefinitions={tagItems}
                   onSearchChange={setSearch}

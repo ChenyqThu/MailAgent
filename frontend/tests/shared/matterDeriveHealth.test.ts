@@ -85,13 +85,13 @@ describe('hasNextAction', () => {
     expect(hasNextAction(matter(), [item({ status: 'done' })])).toBe(false)
   })
 
-  it('agrees with the copy nextAction produces', () => {
+  it('agrees with the descriptor nextAction produces', () => {
     // 两者必须同向 —— 这是把它们分开之后唯一还需要保持的关系。
     const withAction = matter()
     const withoutAction = matter()
     expect(hasNextAction(withAction, [item({ status: 'open' })])).toBe(true)
-    expect(nextAction(withAction, [item({ status: 'open' })])).toBe('do it')
+    expect(nextAction(withAction, [item({ status: 'open' })]).title).toBe('do it')
     expect(hasNextAction(withoutAction, [])).toBe(false)
-    expect(nextAction(withoutAction, [])).toContain('缺少下一步')
+    expect(nextAction(withoutAction, []).kind).toBe('missing')
   })
 })

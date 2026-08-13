@@ -4687,15 +4687,29 @@
       "trash": "回收站"
     },
     "list": {
-      "search": "搜索标题、编号、描述或摘要",
+      "searchInView": "在{view}中搜索…",
       "archived": "已归档",
       "trashDays": "回收站 · {count} 天后清除",
+      "dueRelative": "{value}到期",
       "resize": "调整事项清单宽度"
     },
+    "nextAction": {
+      "action": "{title}",
+      "waiting": "等 {title}",
+      "blocker": "阻塞 · {title}",
+      "monitoring": "持续监控，等待新变化",
+      "done": "事项已完成",
+      "missing": "缺少下一步——需要你补一个行动或等待原因"
+    },
     "empty": {
-      "default": "这个视图里还没有事项。",
-      "archived": "归档的事项会留在这里，可随时恢复。",
-      "trash": "删除的事项在这里保留 30 天，可随时恢复。删除事项不会删除邮件、日历或外部文档。"
+      "default": "{view}中没有事项",
+      "archived": "归档区为空",
+      "trash": "回收站为空",
+      "search": "没有匹配「{query}」的事项",
+      "hintDefault": "换个视图，或从收件箱里把一封邮件变成事项。",
+      "hintArchived": "归档与业务状态是两回事：已完成的事项不会自动归档。",
+      "hintTrash": "删除的事项在这里保留 30 天，可随时恢复。删除事项不会删除邮件、日历或外部文档。",
+      "hintSearch": "换个关键词，或切到「全部」再搜一次。"
     },
     "focus": {
       "title": "今天需要你的判断",
@@ -4795,7 +4809,9 @@
       "typeCustomPlaceholder": "输入自定义类型",
       "priority": "事项优先级",
       "status": "事项状态",
-      "health": "事项健康度"
+      "health": "事项健康度",
+      "trashedBanner": "已移到回收站 · {count} 天后永久清除；关联的邮件与外部文档不受影响",
+      "archivedBanner": "已归档于{time} · 归档不改变业务状态，也不停掉历史记录"
     },
     "tags": {
       "pickerLabel": "标签",
@@ -4863,7 +4879,8 @@
       "goalChecksCount": "{done}/{total}",
       "goalCheckAdd": "+ 加一条可判定的完成标志，勾满即可推进到「已完成」",
       "goalCheckPlaceholder": "例：合同双方已签署",
-      "goalChecksAllDone": "完成标志已全部满足，可以把这件事推进到「已完成」"
+      "goalChecksAllDone": "完成标志已全部满足，可以把这件事推进到「已完成」",
+      "pendingProposals": "有 {count} 条新提案"
     },
     "item": {
       "addTitle": "添加事项条目",
@@ -5225,7 +5242,7 @@
       "status": { "queued": "排队中", "running": "运行中", "ok": "完成", "noop": "无变化", "warn": "部分降级", "fail": "失败", "canceled": "已取消" }
     },
     "runOverlay": { "runningTitle": "跟进运行中", "doneTitle": "跟进运行", "capability": "手动触发 · 观察+建议", "proposal": "已产出提案 · {count} 项变化", "warn": "已产出提案 · 部分降级", "failed": "运行失败", "review": "审阅" },
-    "review": { "changeKind": { "fact": { "label": "事实", "hint": "有来源支撑，可直接记录" }, "inference": { "label": "推断", "hint": "Agent 的解释，需你判断" }, "field": { "label": "字段变更", "hint": "会改写正式业务状态" }, "action": { "label": "行动项", "hint": "会新增或修改行动项" }, "resource": { "label": "关联资料", "hint": "会把资料正式关联到事项" } }, "title": "更新提案审阅", "heading": "更新提案 · {title}", "run": "运行 #{id}", "confidence": "置信 {value}%", "stale": "基线已变", "watermark": "事件范围 {from} → {to}", "proposedSummary": "提议的当前状态", "finishEdit": "完成编辑", "editAccept": "编辑后接受", "compare": "对比当前已接受状态", "changes": "逐项变化 · 已选 {selected}/{total}", "clearAll": "全部取消", "selectAll": "全部勾选", "questions": "Agent 提出的待解问题", "staleHint": "这份提案依据的事项内容已经变了，它要改的地方后来被改过。让 Agent 按最新情况重新跑一轮。", "staleRerun": "重新跑一轮", "staleReload": "这份提案依据的事项内容已经变了，事项数据已刷新。让 Agent 按最新情况重新跑一轮。", "versionReload": "事项已被更新，已刷新最新版本。请重载后重试。", "openCitation": "打开证据 #{id}", "pendingCitation": "本提案新建的资料", "newResource": { "badge": "将新建关联", "untitled": "（无标题）", "hint": "接受后这份资料才会关联进本事项" }, "rejectReason": "拒绝原因", "confirmReject": "确认拒绝", "editedArchive": "Agent 原始提案与你编辑后的版本都会留档", "rejectArchive": "拒绝也会留档，并成为 Agent 后续的上下文", "reject": "拒绝", "later": "稍后", "acceptAll": "全部接受", "acceptSelected": "接受所选 {count} 项", "attention": "跟进 Agent 提出了 {count} 项变化，等待你审阅" },
+    "review": { "noDirectSource": "无直接来源", "changeReason": "理由：{reason}", "changeKind": { "fact": { "label": "事实", "hint": "有来源支撑，可直接记录" }, "inference": { "label": "推断", "hint": "Agent 的解释，需你判断" }, "field": { "label": "字段变更", "hint": "会改写正式业务状态" }, "action": { "label": "行动项", "hint": "会新增或修改行动项" }, "resource": { "label": "关联资料", "hint": "会把资料正式关联到事项" } }, "title": "更新提案审阅", "heading": "更新提案 · {title}", "run": "运行 #{id}", "confidence": "置信 {value}%", "stale": "基线已变", "watermark": "事件范围 {from} → {to}", "proposedSummary": "提议的当前状态", "finishEdit": "完成编辑", "editAccept": "编辑后接受", "compare": "对比当前已接受状态", "changes": "逐项变化 · 已选 {selected}/{total}", "clearAll": "全部取消", "selectAll": "全部勾选", "questions": "Agent 提出的待解问题", "staleHint": "这份提案依据的事项内容已经变了，它要改的地方后来被改过。让 Agent 按最新情况重新跑一轮。", "staleRerun": "重新跑一轮", "staleReload": "这份提案依据的事项内容已经变了，事项数据已刷新。让 Agent 按最新情况重新跑一轮。", "versionReload": "事项已被更新，已刷新最新版本。请重载后重试。", "openCitation": "打开证据 #{id}", "pendingCitation": "本提案新建的资料", "newResource": { "badge": "将新建关联", "untitled": "（无标题）", "hint": "接受后这份资料才会关联进本事项" }, "rejectReason": "拒绝原因", "confirmReject": "确认拒绝", "editedArchive": "Agent 原始提案与你编辑后的版本都会留档", "rejectArchive": "拒绝也会留档，并成为 Agent 后续的上下文", "reject": "拒绝", "later": "稍后", "acceptAll": "全部接受", "acceptSelected": "接受所选 {count} 项", "attention": "跟进 Agent 提出了 {count} 项变化，等待你审阅" },
       "trigger": {
         "kind": {
           "schedule": "定时",

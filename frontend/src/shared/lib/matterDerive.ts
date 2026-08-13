@@ -116,25 +116,71 @@ export function hasNextAction(
   return matter.status === 'monitoring' || matter.status === 'done'
 }
 
+export type MatterNextActionKind =
+  | 'action'
+  | 'waiting'
+  | 'blocker'
+  | 'monitoring'
+  | 'done'
+  | 'missing'
+
+/** 「下一步」的**结构化**结果：文案交给 i18n，色调照设计 `list.jsx::nextAction` 的 tone。
+ *
+ * 🔴 返回描述符而不是成品字符串 —— 四句中文原本硬编码在这里直接上屏（G-34），而 tone 又
+ * 是设计要的第二个维度；把两者塞进一个字符串就等于逼调用方再解析一次。tone 的值域刻意写
+ * 成 `MatterTone` 的子集字面量：`matterVocab` 住在 components/ 下，lib 不反向依赖它。 */
+export interface MatterNextActionDescriptor {
+  kind: MatterNextActionKind
+  /** 条目标题（用户内容，永不翻译）；派生句式时为 null。 */
+  title: string | null
+  tone: 'neutral' | 'warn' | 'critical'
+}
+
 export function nextAction(
   matter: Matter,
   items: readonly MatterItem[] = matter.items ?? []
-): string {
+): MatterNextActionDescriptor {
   const actions = items.filter((item) => item.kind === 'action' && item.deleted_at === null)
   const ready = actions.find((item) => item.status === 'open' || item.status === 'in_progress')
-  if (ready) return ready.title
+  if (ready) return { kind: 'action', title: ready.title, tone: 'neutral' }
 
   const waiting = actions.find((item) => item.status === 'waiting')
-  if (waiting) return `等 ${waiting.title}`
+  if (waiting) return { kind: 'waiting', title: waiting.title, tone: 'warn' }
 
   const blocker = items.find(
     (item) => item.kind === 'blocker' && item.deleted_at === null && item.status !== 'done'
   )
-  if (blocker) return blocker.title
+  if (blocker) return { kind: 'blocker', title: blocker.title, tone: 'critical' }
 
-  if (matter.status === 'monitoring') return '持续监控，等待新变化'
-  if (matter.status === 'done') return '事项已完成'
-  return '缺少下一步——需要你补一个行动或等待原因'
+  if (matter.status === 'monitoring') return { kind: 'monitoring', title: null, tone: 'neutral' }
+  if (matter.status === 'done') return { kind: 'done', title: null, tone: 'neutral' }
+  return { kind: 'missing', title: null, tone: 'warn' }
+}
+
+/** 相对时间（设计 `helpers.jsx::fmtAgo`）。走 Intl 而不是手写中文串 —— 组件里不硬编码文案。
+ *
+ * 住在 lib 而非 MatterDetail.tsx：清单行的「更新时间」与详情头的「创建于」要的是同一份
+ * 口径，抄第二份就会漂（CLAUDE.md「跨边界手抄常量」同理，这里能消灭镜像就不建闸）。 */
+export function formatMatterAgo(at: number, now: number, locale: string): string {
+  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
+  const minutes = Math.round((at - now) / 60_000)
+  if (Math.abs(minutes) < 60) return rtf.format(minutes, 'minute')
+  const hours = Math.round(minutes / 60)
+  if (Math.abs(hours) < 24) return rtf.format(hours, 'hour')
+  const days = Math.round(hours / 24)
+  if (Math.abs(days) < 30) return rtf.format(days, 'day')
+  return rtf.format(Math.round(days / 30), 'month')
+}
+
+/** 到期日的相对说法（设计 `helpers.jsx::fmtDue` 的短文案位）。整天粒度，与 `matterDueTone`
+ *  的判据同一个「按自然日取整」口径，免得色和字对不上。 */
+export function formatMatterDueRelative(dueAt: number, now: number, locale: string): string {
+  const startOfDay = (value: number): number => {
+    const date = new Date(value)
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+  }
+  const days = Math.round((startOfDay(dueAt) - startOfDay(now)) / DAY)
+  return new Intl.RelativeTimeFormat(locale, { numeric: 'auto' }).format(days, 'day')
 }
 
 export function trashDaysRemaining(matter: Matter, now = Date.now()): number | null {
@@ -168,9 +214,7 @@ export function deriveFocusStats(
   ).length
   const healthy = open.filter(
     (matter) =>
-      matter.summary_at != null &&
-      matter.summary_at >= now - 8 * DAY &&
-      hasNextAction(matter)
+      matter.summary_at != null && matter.summary_at >= now - 8 * DAY && hasNextAction(matter)
   ).length
   return {
     openCount: open.length,

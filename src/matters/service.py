@@ -622,6 +622,16 @@ class MatterService:
             items, next_cursor, total = self.repository.list_matters(
                 conn, filters=filters, cursor=cursor, limit=limit, sort=sort
             )
+            # 清单行的头像组投影（design `list.jsx` 行 2 的 AvatarStack）。additive：
+            # 老消费方看不见这两个键也照常工作；新键只在**列表**端点产出，详情端点仍走
+            # `/stakeholders` 全量列。
+            summaries = self.repository.list_stakeholder_summaries(
+                conn, [int(item["id"]) for item in items]
+            )
+        for item in items:
+            preview, count = summaries.get(int(item["id"]), ([], 0))
+            item["stakeholder_summary"] = preview
+            item["stakeholder_count"] = count
         return {"items": items, "next_cursor": next_cursor, "total": total}
 
     def list_tags(self) -> list[dict[str, Any]]:

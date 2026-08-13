@@ -243,3 +243,54 @@ def test_bulk_resource_suggestion_endpoint(client):
         },
     )
     assert empty.status_code == 422
+
+
+def test_list_projects_bounded_stakeholder_summary_in_one_batch(client):
+    """清单端点的头像组投影（design `list.jsx` 行 2 的 AvatarStack）。
+
+    钉三件事：① 等待中的干系人排在前（与 context_snapshot 同口径）② 预览有界、
+    `stakeholder_count` 仍是**总数**，UI 才能显示 `+N` ③ 没有干系人的事项也带这两个键
+    （缺键与「零干系人」在前端是两种渲染，不能靠 undefined 兜）。
+    """
+    http, _ = client
+    created = http.post(
+        "/api/matters", json={"title": "Avatars", "mutation": _mutation("stk-create")}
+    ).json()["data"]
+    public_id = created["matter"]["public_id"]
+    version = created["version"]
+    empty = http.post(
+        "/api/matters", json={"title": "No people", "mutation": _mutation("stk-empty")}
+    ).json()["data"]
+
+    # 8 个 > preview_limit(6)，其中最后一个才是「正在等他」——它必须被排到预览首位。
+    for index in range(8):
+        response = http.post(
+            f"/api/matters/{public_id}/stakeholders",
+            json={
+                "display_name": f"Person {index}",
+                "email": f"person{index}@example.com",
+                "is_waiting_on": index == 7,
+                "mutation": _mutation(f"stk-{index}", version),
+            },
+        )
+        assert response.status_code == 201
+        version = response.json()["data"]["version"]
+
+    items = http.get("/api/matters").json()["data"]["items"]
+    by_id = {item["public_id"]: item for item in items}
+
+    row = by_id[public_id]
+    assert row["stakeholder_count"] == 8
+    assert len(row["stakeholder_summary"]) == 6
+    assert row["stakeholder_summary"][0] == {
+        "display_name": "Person 7",
+        "email_normalized": "person7@example.com",
+        "is_waiting_on": True,
+    }
+    assert [person["display_name"] for person in row["stakeholder_summary"][1:]] == [
+        f"Person {index}" for index in range(5)
+    ]
+
+    blank = by_id[empty["matter"]["public_id"]]
+    assert blank["stakeholder_summary"] == []
+    assert blank["stakeholder_count"] == 0

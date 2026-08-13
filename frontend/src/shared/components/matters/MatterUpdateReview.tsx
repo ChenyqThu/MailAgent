@@ -374,7 +374,7 @@ function ChangeRow({
             ) : null}
             {(change.sources?.length ?? 0) === 0 && change.kind !== 'field' ? (
               <span className="rounded-full bg-warn/10 px-2 py-1 text-aux text-warn">
-                无直接来源
+                {t('matters.review.noDirectSource')}
               </span>
             ) : null}
           </div>
@@ -410,7 +410,9 @@ function ChangeRow({
           {change.resource ? <NewResourceCard resource={change.resource} /> : null}
 
           {change.reason ? (
-            <p className="mt-2 text-aux text-ink-fg-2">理由：{change.reason}</p>
+            <p className="mt-2 text-aux text-ink-fg-2">
+              {t('matters.review.changeReason', { reason: change.reason })}
+            </p>
           ) : null}
           <div className="mt-2 flex flex-wrap gap-1">
             {change.sources?.map((source) =>
@@ -420,10 +422,7 @@ function ChangeRow({
                   key={`res-${source.resource_id}`}
                   onClick={() => onOpenResource?.(source.resource_id as number)}
                   className="inline-flex items-center gap-1 rounded-full bg-ink-3 px-2 py-1 text-aux text-ai"
-                  aria-label={t('matters.review.openCitation', {
-                    id: source.resource_id,
-                    defaultValue: `打开证据 #${source.resource_id}`
-                  })}
+                  aria-label={t('matters.review.openCitation', { id: source.resource_id })}
                 >
                   <Link size={10} />#{source.resource_id}
                 </button>

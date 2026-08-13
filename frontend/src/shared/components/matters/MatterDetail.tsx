@@ -50,9 +50,9 @@ import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
-import { SegmentedControl } from '@shared/components/ui/segmented'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/components/ui/select'
 import { cn } from '@shared/lib/cn'
+import { formatMatterAgo, trashDaysRemaining } from '@shared/lib/matterDerive'
 import { asWriteError, errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useShortcut } from '@shared/hooks/useShortcut'
@@ -275,7 +275,7 @@ export function MatterDetail({
     (run) => run.lifecycle_state === 'queued' || run.lifecycle_state === 'running'
   )
   const overlayRun = runs.find((run) => run.id === overlayRunId)
-  const detailTabOptions = useMemo(
+  const detailTabs = useMemo(
     () =>
       (
         [
@@ -284,54 +284,23 @@ export function MatterDetail({
           'timeline',
           ...(matterAgentEnabled ? (['runs'] as const) : [])
         ] as const
-      ).map((value) => {
-        const count =
+      ).map((value) => ({
+        value,
+        count:
           value === 'context'
             ? resourceItems.length + stakeholderItems.length
             : value === 'runs'
               ? runs.length
-              : null
-        // 设计 detail.jsx:578 `DETAIL_TABS` 每档带一个 icon（target/layers/history/activity），
-        // 实现此前四个 tab 一个 icon 都没有。
-        const TabIcon = MATTER_DETAIL_TAB_ICONS[value]
-        return {
-          value,
-          ariaLabel: t(`matters.tabs.${value}`),
-          label: (
-            <span className="inline-flex items-center gap-1.5">
-              <TabIcon size={13} />
-              {t(`matters.tabs.${value}`)}
-              {count !== null ? (
-                <span
-                  className={cn(
-                    'min-w-5 rounded-[var(--r-pill)] border px-1.5 font-mono text-[11px] leading-4',
-                    tab === value
-                      ? 'border-ink-border bg-ink-fg/[0.08] text-ink-fg-1'
-                      : 'border-ink-border-soft bg-ink-2/70 text-ink-fg-2'
-                  )}
-                >
-                  {count}
-                </span>
-              ) : null}
-              {/* 设计 detail.jsx:602 —— 有未确认的 AI 建议资料时，上下文 tab 挂一个 6px 红点。 */}
-              {value === 'context' && hasSuggestedResources ? (
-                <span
-                  aria-label={t('matters.resource.suggested')}
-                  className="size-1.5 rounded-full bg-ai"
-                />
-              ) : null}
-            </span>
-          )
-        }
-      }),
+              : null,
+        // 设计 detail.jsx:653 —— 有未确认的 AI 建议资料时，上下文 tab 挂一个 6px `--c-ai` 圆点。
+        dot: value === 'context' && hasSuggestedResources
+      })),
     [
       hasSuggestedResources,
       matterAgentEnabled,
       resourceItems.length,
       runs.length,
-      stakeholderItems.length,
-      t,
-      tab
+      stakeholderItems.length
     ]
   )
   const selectedUpdate = useQuery({
@@ -504,12 +473,8 @@ export function MatterDetail({
       if (isMatterStaleError(error)) {
         setReviewError(
           writeError.code === 'E_UPDATE_STALE'
-            ? t('matters.review.staleReload', {
-                defaultValue: '提案已过期，已刷新事项数据。请重载后让 Agent 重新跑一轮。'
-              })
-            : t('matters.review.versionReload', {
-                defaultValue: '事项已被更新，已刷新最新版本。请重载后重试。'
-              })
+            ? t('matters.review.staleReload')
+            : t('matters.review.versionReload')
         )
         return
       }
@@ -537,14 +502,9 @@ export function MatterDetail({
         onSuccess: (result) => {
           setOverlayRunId(result.run.id)
           onStarted?.()
-          if (result.coalesced)
-            toastInfo(t('matters.runs.coalesced', { defaultValue: '已有一轮跟进在进行' }))
+          if (result.coalesced) toastInfo(t('matters.runs.coalesced'))
         },
-        onError: (error) =>
-          toastError(
-            t('matters.runs.startFailed', { defaultValue: '请刷新后重试' }),
-            errorMessage(error)
-          )
+        onError: (error) => toastError(t('matters.runs.startFailed'), errorMessage(error))
       }
     )
   }
@@ -760,16 +720,21 @@ export function MatterDetail({
                 type="button"
                 disabled={Boolean(activeRun) || startRun.isPending}
                 onClick={() => startFollowUpRun()}
-                className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux disabled:opacity-50"
+                className={cn(
+                  'inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux disabled:opacity-50',
+                  // 设计 detail.jsx:176-177 —— 运行中的按钮换成 `--c-urg` 前景，
+                  // 让「正在跑」在头部一眼可辨，而不是只靠一个转圈。
+                  (activeRun || startRun.isPending) && 'text-urg'
+                )}
               >
                 {activeRun || startRun.isPending ? (
                   <Loader2 size={13} className="animate-spin" />
                 ) : (
                   <Play size={13} />
                 )}{' '}
-                {activeRun
-                  ? t('matters.runs.runningButton', { defaultValue: '运行中…' })
-                  : t('matters.runs.runNow', { defaultValue: '立即跟进' })}
+                {activeRun || startRun.isPending
+                  ? t('matters.runs.runningButton')
+                  : t('matters.runs.runNow')}
               </button>
             ) : null}
             <div className="relative">
@@ -824,17 +789,61 @@ export function MatterDetail({
           </div>
         </header>
 
-        <div className="border-b border-ink-border px-5 py-2">
-          <SegmentedControl<DetailTab>
-            value={tab}
-            onChange={setTab}
-            options={detailTabOptions}
-            ariaLabel={t('matters.tabs.label')}
-            size="md"
-          />
+        {/* 设计 detail.jsx:641-657 —— 40px 高的下划线 tab 条（选中 = accent 前景 + 600 字重
+            + 底部 2px accent 下划线），不是 SegmentedControl 的胶囊轨。 */}
+        <div
+          role="tablist"
+          aria-label={t('matters.tabs.label')}
+          className="flex h-10 shrink-0 items-center gap-0.5 border-b border-ink-border px-4"
+        >
+          {detailTabs.map(({ value, count, dot }) => {
+            const TabIcon = MATTER_DETAIL_TAB_ICONS[value]
+            const active = tab === value
+            return (
+              <button
+                key={value}
+                type="button"
+                role="tab"
+                aria-selected={active}
+                onClick={() => setTab(value)}
+                className={cn(
+                  'relative inline-flex h-full items-center gap-1.5 px-3 text-body transition-colors duration-fast ease-standard',
+                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
+                  active ? 'font-semibold text-coral' : 'text-ink-fg-2 hover:text-ink-fg'
+                )}
+              >
+                <TabIcon size={13} />
+                {t(`matters.tabs.${value}`)}
+                {count !== null ? (
+                  <span className="font-mono text-micro tabular-nums text-ink-fg-3">{count}</span>
+                ) : null}
+                {dot ? (
+                  <span
+                    aria-label={t('matters.resource.suggested')}
+                    className="size-1.5 rounded-full bg-ai"
+                  />
+                ) : null}
+                {active ? (
+                  <span
+                    aria-hidden
+                    className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-coral/100"
+                  />
+                ) : null}
+              </button>
+            )
+          })}
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin">
+          {/* 设计 detail.jsx:230-244 —— 归档 / 回收站的状态条，带就地出口。原先「恢复」与
+              「取消归档」只藏在「更多」菜单里，翻到一个已删除的事项时正文毫无提示。 */}
+          <MatterLifecycleBanner
+            matter={matter}
+            busy={transition.isPending}
+            now={now}
+            locale={i18n.language || 'zh-CN'}
+            onRestore={() => transition.mutate(matter.deleted_at !== null ? 'restore' : 'reopen')}
+          />
           {updates.length > 0 ? (
             <div className="mb-5 flex items-center gap-3 rounded-[var(--r-card)] border border-ai/25 bg-ai/[0.06] p-4">
               <span className="grid size-8 place-items-center rounded-lg bg-ai/12 text-ai">
@@ -842,10 +851,7 @@ export function MatterDetail({
               </span>
               <div className="min-w-0 flex-1">
                 <p className="text-body font-medium">
-                  {t('matters.review.attention', {
-                    count: updates[0].change_count,
-                    defaultValue: `跟进 Agent 提出了 ${updates[0].change_count} 项变化，等待你审阅`
-                  })}
+                  {t('matters.review.attention', { count: updates[0].change_count })}
                 </p>
                 <p className="mt-1 text-meta text-ink-fg-2">
                   {new Date(updates[0].created_at).toLocaleString()} · #
@@ -857,7 +863,7 @@ export function MatterDetail({
                 onClick={() => setReviewId(updates[0].id)}
                 className="rounded-lg bg-ai px-3 py-2 text-aux text-white"
               >
-                {t('matters.runs.review', { defaultValue: '审阅' })}
+                {t('matters.runs.review')}
               </button>
             </div>
           ) : null}
@@ -871,19 +877,25 @@ export function MatterDetail({
           </div>
           {tab === 'state' ? (
             <div className="space-y-5">
+              {/* 设计 detail.jsx:663-667 —— 「背景与目标」独立成卡、排在「当前状态」之前
+                  （补充规格 §5.1）。这两张卡此前挤在同一张 StateCard 里，且顺序相反。 */}
+              <GoalCard
+                matter={matter}
+                saving={patch.isPending}
+                onDescriptionSave={(description, onSaved) =>
+                  patch.mutate({ description }, { onSuccess: onSaved })
+                }
+                onGoalChecksSave={(goal_checks, onSaved) =>
+                  patch.mutate({ goal_checks }, { onSuccess: onSaved })
+                }
+              />
               <StateCard
                 matter={matter}
                 pendingCount={updates.length}
                 onReview={() => setReviewId(updates[0]?.id ?? null)}
                 saving={patch.isPending}
-                onDescriptionSave={(description, onSaved) =>
-                  patch.mutate({ description }, { onSuccess: onSaved })
-                }
                 onSummarySave={(current_summary, onSaved) =>
                   patch.mutate({ current_summary }, { onSuccess: onSaved })
-                }
-                onGoalChecksSave={(goal_checks, onSaved) =>
-                  patch.mutate({ goal_checks }, { onSuccess: onSaved })
                 }
               />
               <ItemGroups
@@ -1256,18 +1268,6 @@ function AgentPill({
   )
 }
 
-/** 相对时间（设计 `helpers.jsx::fmtAgo`）。走 Intl 而不是手写中文串 —— 组件里不硬编码文案。 */
-function formatMatterAgo(at: number, now: number, locale: string): string {
-  const rtf = new Intl.RelativeTimeFormat(locale, { numeric: 'auto' })
-  const minutes = Math.round((at - now) / 60_000)
-  if (Math.abs(minutes) < 60) return rtf.format(minutes, 'minute')
-  const hours = Math.round(minutes / 60)
-  if (Math.abs(hours) < 24) return rtf.format(hours, 'hour')
-  const days = Math.round(hours / 24)
-  if (Math.abs(days) < 30) return rtf.format(days, 'day')
-  return rtf.format(Math.round(days / 30), 'month')
-}
-
 /**
  * 类型切换（设计 detail.jsx:111-122 → 元信息行里的**裸文本按钮** + 8px chevron，只在
  * hover/打开时才浮出一层 6% 底；负 margin 抵掉 padding，让它在文字流里不额外占宽）。
@@ -1458,69 +1458,38 @@ function DueDateControl({
   )
 }
 
+/**
+ * 「当前状态 · 已接受」卡（设计 detail.jsx:339-362）。
+ *
+ * 🔴 只管**已接受的摘要**：背景与目标、完成标志已拆到 `GoalCard` 并排在它之前
+ * （G-06 / 补充规格 §5.1）。别再往这里加目标相关的东西 —— 两者的写入语义不同，
+ * 摘要走「Agent 提案 → 你接受」，目标是用户自己写的（HANDOFF §3 硬约束①）。
+ */
 function StateCard({
   matter,
   pendingCount,
   onReview,
   saving,
-  onDescriptionSave,
-  onSummarySave,
-  onGoalChecksSave
+  onSummarySave
 }: {
   matter: Matter
   pendingCount: number
   onReview(): void
   saving: boolean
-  onDescriptionSave(description: string, onSaved: () => void): void
   onSummarySave(summary: string | null, onSaved: () => void): void
-  onGoalChecksSave(goalChecks: MatterGoalCheck[], onSaved?: () => void): void
 }): React.ReactElement {
   const { t } = useTranslation()
   const [summaryEditing, setSummaryEditing] = useState(false)
   const [summaryDraft, setSummaryDraft] = useState(matter.current_summary ?? '')
-  const [descriptionEditing, setDescriptionEditing] = useState(false)
-  const [descriptionDraft, setDescriptionDraft] = useState(matter.description)
-  const [addingGoalCheck, setAddingGoalCheck] = useState(false)
-  const [goalCheckDraft, setGoalCheckDraft] = useState('')
-  const goalChecks = matter.goal_checks ?? []
-  const doneGoalChecks = goalChecks.filter((check) => check.done).length
   const summaryValue = matter.current_summary ?? ''
   const normalizedSummaryDraft = summaryDraft.trim() ? summaryDraft : null
 
   useEffect(() => {
     if (!summaryEditing) setSummaryDraft(matter.current_summary ?? '')
   }, [matter.current_summary, summaryEditing])
-  useEffect(() => {
-    if (!descriptionEditing) setDescriptionDraft(matter.description)
-  }, [descriptionEditing, matter.description])
 
   const saveSummary = (): void => {
     onSummarySave(normalizedSummaryDraft, () => setSummaryEditing(false))
-  }
-
-  const saveGoalCheck = (): void => {
-    const text = goalCheckDraft.trim()
-    if (!text) {
-      setGoalCheckDraft('')
-      setAddingGoalCheck(false)
-      return
-    }
-    onGoalChecksSave([...goalChecks, { t: text, done: false }], () => {
-      setGoalCheckDraft('')
-      setAddingGoalCheck(false)
-    })
-  }
-
-  const setGoalCheckDone = (index: number, done: boolean): void => {
-    onGoalChecksSave(
-      goalChecks.map((check, candidateIndex) =>
-        candidateIndex === index ? { ...check, done } : check
-      )
-    )
-  }
-
-  const removeGoalCheck = (index: number): void => {
-    onGoalChecksSave(goalChecks.filter((_, candidateIndex) => candidateIndex !== index))
   }
 
   return (
@@ -1594,11 +1563,83 @@ function StateCard({
       <p className="mt-3 border-t border-ink-border pt-3 text-meta text-ink-fg-2">
         {t('matters.state.summaryGuard')}
       </p>
-      <div className="mt-4 rounded-[var(--r-ctl)] border border-dashed border-ink-border p-3">
+      {pendingCount > 0 ? (
+        <button
+          type="button"
+          onClick={onReview}
+          className="mt-4 inline-flex items-center gap-1 rounded-lg bg-ai/10 px-3 py-2 text-aux text-ai"
+        >
+          <Sparkles size={12} />
+          {t('matters.state.pendingProposals', { count: pendingCount })}
+        </button>
+      ) : null}
+    </section>
+  )
+}
+
+/**
+ * 「背景与目标」卡（设计 matter-agent.jsx:266-332 `GoalCard`）：上半是用户自己写的
+ * 核心目标，下半是同一张卡里的「完成标志」分区（底色略深 + 上分隔线）。
+ *
+ * 🔴 **不做**「让 Agent 改写」按钮：设计稿底部那条 ghost 按钮与 HANDOFF §3 硬约束①
+ * 「description 用户写的，Agent 永远不能写」直接冲突，`PROPOSAL_FIELD_WHITELIST` 里
+ * 也从来没有 description（gap-list G-13 C(a)）。
+ *
+ * 命名维持「核心目标」（裁决 D5：只改展示文案不改字段），不跟设计稿的「背景与目标」。
+ */
+function GoalCard({
+  matter,
+  saving,
+  onDescriptionSave,
+  onGoalChecksSave
+}: {
+  matter: Matter
+  saving: boolean
+  onDescriptionSave(description: string, onSaved: () => void): void
+  onGoalChecksSave(goalChecks: MatterGoalCheck[], onSaved?: () => void): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [descriptionEditing, setDescriptionEditing] = useState(false)
+  const [descriptionDraft, setDescriptionDraft] = useState(matter.description)
+  const [addingGoalCheck, setAddingGoalCheck] = useState(false)
+  const [goalCheckDraft, setGoalCheckDraft] = useState('')
+  const goalChecks = matter.goal_checks ?? []
+  const doneGoalChecks = goalChecks.filter((check) => check.done).length
+
+  useEffect(() => {
+    if (!descriptionEditing) setDescriptionDraft(matter.description)
+  }, [descriptionEditing, matter.description])
+
+  const saveGoalCheck = (): void => {
+    const text = goalCheckDraft.trim()
+    if (!text) {
+      setGoalCheckDraft('')
+      setAddingGoalCheck(false)
+      return
+    }
+    onGoalChecksSave([...goalChecks, { t: text, done: false }], () => {
+      setGoalCheckDraft('')
+      setAddingGoalCheck(false)
+    })
+  }
+
+  const setGoalCheckDone = (index: number, done: boolean): void => {
+    onGoalChecksSave(
+      goalChecks.map((check, candidateIndex) =>
+        candidateIndex === index ? { ...check, done } : check
+      )
+    )
+  }
+
+  const removeGoalCheck = (index: number): void => {
+    onGoalChecksSave(goalChecks.filter((_, candidateIndex) => candidateIndex !== index))
+  }
+
+  return (
+    <section className="overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1/75">
+      <div className="p-4">
         <div className="flex items-center justify-between gap-3">
-          <div className="text-meta font-medium text-ink-fg-2">
-            {t('matters.state.descriptionLabel')}
-          </div>
+          <h2 className="text-lead font-semibold">{t('matters.state.descriptionLabel')}</h2>
           {!descriptionEditing ? (
             <button
               type="button"
@@ -1653,7 +1694,9 @@ function StateCard({
           <p className="mt-2 text-body text-ink-fg-2">{t('matters.state.noDescription')}</p>
         )}
       </div>
-      <div className="mt-4 rounded-[var(--r-ctl)] border border-dashed border-ink-border p-3">
+      {/* 设计 matter-agent.jsx:290 —— 完成标志是同一张卡的下半分区（`fg/0.022` 底 +
+          上分隔线），不是卡里再套一个虚线框。 */}
+      <div className="border-t border-ink-border-soft bg-ink-fg/[0.02] p-4">
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-meta font-medium text-ink-fg-2">{t('matters.state.goalChecks')}</h3>
           <span className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 font-mono text-[11px] leading-4 text-ink-fg-2">
@@ -1757,16 +1800,57 @@ function StateCard({
           </div>
         ) : null}
       </div>
-      {pendingCount > 0 ? (
-        <button
-          type="button"
-          onClick={onReview}
-          className="mt-4 inline-flex items-center gap-1 rounded-lg bg-ai/10 px-3 py-2 text-aux text-ai"
-        >
-          <Sparkles size={12} />有 {pendingCount} 条新提案
-        </button>
-      ) : null}
     </section>
+  )
+}
+
+/**
+ * 归档 / 回收站状态条（设计 detail.jsx:230-244）。删除态用 crit 色调并写明保留期与
+ * 「关联的邮件与外部文档不受影响」；归档态是中性条 + 「归档不改变业务状态」。
+ * 两个动作与「更多」菜单里的同名项**共用同一个 mutation**，不另起一条写路径。
+ */
+function MatterLifecycleBanner({
+  matter,
+  busy,
+  now,
+  locale,
+  onRestore
+}: {
+  matter: Matter
+  busy: boolean
+  now: number
+  locale: string
+  onRestore(): void
+}): React.ReactElement | null {
+  const { t } = useTranslation()
+  const trashed = matter.deleted_at !== null
+  if (!trashed && matter.archived_at === null) return null
+  const BannerIcon = trashed ? Trash2 : Archive
+  return (
+    <div
+      className={cn(
+        'mb-5 flex items-center gap-3 rounded-[var(--r-card)] border px-4 py-3',
+        trashed ? 'border-crit/25 bg-crit/[0.07]' : 'border-ink-border bg-ink-fg/[0.04]'
+      )}
+    >
+      <BannerIcon size={14} className={cn('shrink-0', trashed ? 'text-crit' : 'text-ink-fg-2')} />
+      <p className="min-w-0 flex-1 text-body text-ink-fg-1">
+        {trashed
+          ? t('matters.detail.trashedBanner', { count: trashDaysRemaining(matter, now) ?? 0 })
+          : t('matters.detail.archivedBanner', {
+              time: formatMatterAgo(matter.archived_at as number, now, locale)
+            })}
+      </p>
+      <button
+        type="button"
+        disabled={busy}
+        onClick={onRestore}
+        className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+      >
+        <RotateCcw size={13} />
+        {t(trashed ? 'matters.actions.restore' : 'matters.actions.restoreArchive')}
+      </button>
+    </div>
   )
 }
 

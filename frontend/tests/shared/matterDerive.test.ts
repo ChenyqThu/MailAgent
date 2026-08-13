@@ -1,7 +1,13 @@
 import { describe, expect, test } from 'vitest'
 
 import type { Matter, MatterItem } from '../../src/shared/api/types/matter'
-import { filterView, MATTER_VIEWS, nextAction, rankOf, trashDaysRemaining } from '../../src/shared/lib/matterDerive'
+import {
+  filterView,
+  MATTER_VIEWS,
+  nextAction,
+  rankOf,
+  trashDaysRemaining
+} from '../../src/shared/lib/matterDerive'
 
 function matter(overrides: Partial<Matter> = {}): Matter {
   return {
@@ -91,8 +97,22 @@ describe('filterView', () => {
   })
 
   test('attention and review consume optional indexes without changing legacy callers', () => {
-    const attention = new Map([[live.public_id, [{ id: 7, kind: 'run_failed' as const, state: 'open' as const, severity: 'critical' as const }]]])
-    const updates = new Map([[live.public_id, [{ id: 8, review_status: 'pending' as const } as never]]])
+    const attention = new Map([
+      [
+        live.public_id,
+        [
+          {
+            id: 7,
+            kind: 'run_failed' as const,
+            state: 'open' as const,
+            severity: 'critical' as const
+          }
+        ]
+      ]
+    ])
+    const updates = new Map([
+      [live.public_id, [{ id: 8, review_status: 'pending' as const } as never]]
+    ])
     expect(filterView(values, 'attention', attention)).toEqual([live])
     expect(filterView(values, 'review', undefined, updates)).toEqual([live])
     expect(filterView(values, 'attention')).toEqual([])
@@ -100,18 +120,47 @@ describe('filterView', () => {
 })
 
 test('MATTER_VIEWS pins P5 ordering while preserving completed', () => {
-  expect(MATTER_VIEWS).toEqual(['focus', 'attention', 'review', 'active', 'waiting', 'blocked', 'planned', 'monitoring', 'all', 'completed', 'archived', 'trash'])
+  expect(MATTER_VIEWS).toEqual([
+    'focus',
+    'attention',
+    'review',
+    'active',
+    'waiting',
+    'blocked',
+    'planned',
+    'monitoring',
+    'all',
+    'completed',
+    'archived',
+    'trash'
+  ])
 })
 
 describe('rankOf', () => {
   test('critical signal outranks signal-free priority and due date', () => {
-    expect(rankOf(matter({ priority: 'p3', due_at: 999, attention_signals: [{ kind: 'run_failed', state: 'open', severity: 'critical' }] }))).toEqual([0, 3, 999])
+    expect(
+      rankOf(
+        matter({
+          priority: 'p3',
+          due_at: 999,
+          attention_signals: [{ kind: 'run_failed', state: 'open', severity: 'critical' }]
+        })
+      )
+    ).toEqual([0, 3, 999])
     expect(rankOf(matter({ priority: 'p0', due_at: 1 }))).toEqual([2, 0, 1])
   })
 
   test('non-critical open signal ranks one and closed signals do not count', () => {
-    expect(rankOf(matter({ attention_signals: [{ kind: 'deadline_near', state: 'open' }] }))[0]).toBe(1)
-    expect(rankOf(matter({ attention_signals: [{ kind: 'deadline_near', state: 'resolved', severity: 'critical' }] }))[0]).toBe(2)
+    expect(
+      rankOf(matter({ attention_signals: [{ kind: 'deadline_near', state: 'open' }] }))[0]
+    ).toBe(1)
+    expect(
+      rankOf(
+        matter({
+          attention_signals: [{ kind: 'deadline_near', state: 'resolved', severity: 'critical' }]
+        })
+      )[0]
+    ).toBe(2)
   })
 
   test('missing due date sorts last', () => {
@@ -120,26 +169,56 @@ describe('rankOf', () => {
 
   test('optional attention index overrides embedded fallback', () => {
     const value = matter({ attention_signals: [] })
-    const attention = new Map([[value.public_id, [{ kind: 'deadline_near' as const, state: 'open' as const, severity: 'warn' as const }]]])
+    const attention = new Map([
+      [
+        value.public_id,
+        [{ kind: 'deadline_near' as const, state: 'open' as const, severity: 'warn' as const }]
+      ]
+    ])
     expect(rankOf(value, attention)[0]).toBe(1)
   })
 })
 
+// G-34 起 nextAction 返回**描述符**（kind + 用户内容 title + tone），文案交给 i18n ——
+// 这里断言的是判定与色调，不再断言中文串（那正是本条要修的硬编码）。
 describe('nextAction', () => {
   test('prefers open/in-progress action, then waiting action, then blocker', () => {
-    expect(nextAction(matter(), [item({ status: 'waiting', title: 'Legal' }), item({ id: 2, status: 'open', title: 'Send draft' })])).toBe('Send draft')
-    expect(nextAction(matter(), [item({ status: 'waiting', title: 'Legal' })])).toBe('等 Legal')
-    expect(nextAction(matter(), [item({ kind: 'blocker', status: null, title: 'Budget approval' })])).toBe('Budget approval')
+    expect(
+      nextAction(matter(), [
+        item({ status: 'waiting', title: 'Legal' }),
+        item({ id: 2, status: 'open', title: 'Send draft' })
+      ])
+    ).toEqual({ kind: 'action', title: 'Send draft', tone: 'neutral' })
+    expect(nextAction(matter(), [item({ status: 'waiting', title: 'Legal' })])).toEqual({
+      kind: 'waiting',
+      title: 'Legal',
+      tone: 'warn'
+    })
+    expect(
+      nextAction(matter(), [item({ kind: 'blocker', status: null, title: 'Budget approval' })])
+    ).toEqual({ kind: 'blocker', title: 'Budget approval', tone: 'critical' })
   })
 
-  test('uses monitoring/done messages and the missing-next-step fallback', () => {
-    expect(nextAction(matter({ status: 'monitoring' }), [])).toBe('持续监控，等待新变化')
-    expect(nextAction(matter({ status: 'done' }), [])).toBe('事项已完成')
-    expect(nextAction(matter({ status: 'planned' }), [])).toBe('缺少下一步——需要你补一个行动或等待原因')
+  test('uses monitoring/done kinds and the missing-next-step fallback', () => {
+    expect(nextAction(matter({ status: 'monitoring' }), [])).toEqual({
+      kind: 'monitoring',
+      title: null,
+      tone: 'neutral'
+    })
+    expect(nextAction(matter({ status: 'done' }), [])).toEqual({
+      kind: 'done',
+      title: null,
+      tone: 'neutral'
+    })
+    expect(nextAction(matter({ status: 'planned' }), [])).toEqual({
+      kind: 'missing',
+      title: null,
+      tone: 'warn'
+    })
   })
 
   test('ignores deleted action items and computes trash countdown', () => {
-    expect(nextAction(matter(), [item({ deleted_at: 10 })])).toContain('缺少下一步')
+    expect(nextAction(matter(), [item({ deleted_at: 10 })]).kind).toBe('missing')
     expect(trashDaysRemaining(matter({ deleted_at: 0, purge_after: 3 * 86_400_000 }), 0)).toBe(3)
   })
 })

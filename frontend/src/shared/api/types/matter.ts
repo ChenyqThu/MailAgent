@@ -292,6 +292,17 @@ export interface Matter {
   items?: MatterItem[]
   matched_fields?: MatterSearchField[]
   snippets?: Partial<Record<MatterSearchField, string>>
+  /** 清单行头像组用的有界预览，**仅 `GET /matters` 产出**（详情走 `/stakeholders` 全量列）。 */
+  stakeholder_summary?: MatterStakeholderSummary[]
+  /** 上面那份预览截断前的总数 —— 头像组的 `+N` 靠它，别拿 `stakeholder_summary.length` 当总数。 */
+  stakeholder_count?: number
+}
+
+/** 清单端点的批量干系人投影（canonical: `src/matters/repository.py::list_stakeholder_summaries`）。 */
+export interface MatterStakeholderSummary {
+  display_name: string | null
+  email_normalized: string | null
+  is_waiting_on: boolean
 }
 
 export interface MatterSourceResourceInput {

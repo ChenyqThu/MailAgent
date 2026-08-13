@@ -1,0 +1,167 @@
+// @vitest-environment happy-dom
+//
+// G-04 清单行信息密度：设计 `list.jsx::MatterRow` 的三行结构。这道测试盯的是**信息在不在**
+// （状态 / 优先级 / 编号 / 下一步 / 到期 / 更新时间 / 头像组 / 待审阅 / 关注信号 / 标签），
+// 不盯像素 —— 改动前这一行只有健康色点 + 标题 + 优先级 + 下一步 + 标签 + 编号。
+
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
+import { cleanup, render, screen } from '@testing-library/react'
+
+import type { Matter, MatterAttentionSignal, MatterUpdateSummary } from '@shared/api/types/matter'
+import i18n from '@shared/i18n'
+
+const { MatterList } = await import('@shared/components/matters/MatterList')
+
+await i18n.changeLanguage('zh-CN')
+
+const NOW = new Date(2026, 7, 12, 10, 0).getTime()
+const DAY = 86_400_000
+
+beforeEach(() => {
+  vi.useFakeTimers()
+  vi.setSystemTime(NOW)
+})
+
+afterEach(() => {
+  vi.useRealTimers()
+  cleanup()
+})
+
+describe('MatterList row', () => {
+  test('renders the three-row density: identity, next step + people, signals + tags', () => {
+    renderList(
+      matter({
+        due_at: NOW + 2 * DAY,
+        updated_at: NOW - 3 * 60 * 60 * 1000,
+        tags: ['交付'],
+        items: [
+          {
+            id: 1,
+            kind: 'action',
+            title: '给客户回签署版本',
+            status: 'open',
+            deleted_at: null
+          } as never
+        ],
+        stakeholder_summary: [
+          { display_name: '张三', email_normalized: 'z@example.com', is_waiting_on: true },
+          { display_name: '李四', email_normalized: 'l@example.com', is_waiting_on: false }
+        ],
+        stakeholder_count: 5
+      }),
+      {
+        signals: [{ id: 7, kind: 'deadline_near', state: 'open', severity: 'warn' }],
+        pending: [update(1)]
+      }
+    )
+
+    // 行 1 —— 身份与状态
+    expect(screen.getByText('Vendor launch')).toBeTruthy()
+    expect(screen.getByText('MAT-0042')).toBeTruthy()
+    expect(screen.getByText('P1')).toBeTruthy()
+    expect(screen.getByText('进行中')).toBeTruthy()
+    expect(screen.getByText('待审阅')).toBeTruthy()
+
+    // 行 2 —— 下一步（走 i18n 键，不是硬编码串）、到期、更新时间、头像组
+    expect(screen.getByText('给客户回签署版本')).toBeTruthy()
+    expect(screen.getByText(/到期$/)).toBeTruthy()
+    expect(screen.getByTitle('张三')).toBeTruthy()
+    expect(screen.getByText('+3')).toBeTruthy()
+
+    // 行 3 —— 关注信号 + 标签
+    expect(screen.getByText('临近截止')).toBeTruthy()
+    expect(screen.getByText('交付')).toBeTruthy()
+  })
+
+  test('falls back to the localized missing-next-step copy and omits the avatar stack', () => {
+    renderList(matter({ items: [], stakeholder_summary: [], stakeholder_count: 0 }))
+
+    expect(screen.getByText(/缺少下一步/)).toBeTruthy()
+    expect(screen.queryByText(/^\+/)).toBeNull()
+  })
+
+  test('search placeholder and empty state follow the current view', () => {
+    renderList(matter(), { view: 'archived', matters: [] })
+
+    expect(screen.getByPlaceholderText('在已归档中搜索…')).toBeTruthy()
+    expect(screen.getByText('归档区为空')).toBeTruthy()
+  })
+})
+
+function renderList(
+  value: Matter,
+  options: {
+    signals?: MatterAttentionSignal[]
+    pending?: MatterUpdateSummary[]
+    view?: 'all' | 'archived'
+    matters?: Matter[]
+  } = {}
+): ReturnType<typeof render> {
+  const matters = options.matters ?? [value]
+  return render(
+    <MatterList
+      matters={matters}
+      view={options.view ?? 'all'}
+      selectedId={null}
+      attention={new Map(options.signals ? [[value.public_id, options.signals]] : [])}
+      updates={new Map(options.pending ? [[value.public_id, options.pending]] : [])}
+      search=""
+      tagDefinitions={[]}
+      onSearchChange={vi.fn()}
+      onSelect={vi.fn()}
+      onCreate={vi.fn()}
+    />
+  )
+}
+
+function update(id: number): MatterUpdateSummary {
+  return {
+    id,
+    review_status: 'pending',
+    summary: null,
+    created_at: NOW,
+    change_count: 2,
+    is_stale: false,
+    agent_run_id: 9,
+    confidence: null,
+    anchored_matter_version: 3,
+    created_by_kind: 'agent'
+  }
+}
+
+function matter(overrides: Partial<Matter> = {}): Matter {
+  return {
+    id: 42,
+    public_id: 'MAT-0042',
+    title: 'Vendor launch',
+    description: '',
+    matter_type: null,
+    tags: [],
+    status: 'active',
+    health: 'on_track',
+    priority: 'p1',
+    owner_id: null,
+    source: 'desktop_ui',
+    due_at: null,
+    waiting_context: null,
+    next_attention_at: null,
+    attention_reason: null,
+    last_activity_at: null,
+    latest_accepted_update_id: null,
+    current_summary: null,
+    summary_at: null,
+    summary_by_kind: null,
+    summary_by_id: null,
+    version: 3,
+    archived_at: null,
+    archived_by_kind: null,
+    archived_by_id: null,
+    deleted_at: null,
+    deleted_by_kind: null,
+    deleted_by_id: null,
+    purge_after: null,
+    created_at: NOW - 30 * DAY,
+    updated_at: NOW - DAY,
+    ...overrides
+  }
+}
