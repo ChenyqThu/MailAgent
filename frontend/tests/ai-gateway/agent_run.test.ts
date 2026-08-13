@@ -2048,6 +2048,32 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
       destructive: true,
       mode: 'auto',
       orphan: false
+    },
+    // 0813 batch P — the two READ shapes the matter venue must skip: an ask-tier read (no
+    // approval host in an unattended run ⇒ ask ≙ 不注册, the preprocess only_auto_tools mirror)
+    // and a destructive read (a hand-edited row shape — derive_crud_type 裁决③ makes it
+    // impossible at sync time, and the venue must not lean on that far-away invariant).
+    {
+      connectorId: 'notion',
+      connectorName: 'Notion',
+      toolName: 'notion-search-drafts',
+      description: 'Search drafts',
+      inputSchemaJson: null,
+      crudType: 'read',
+      destructive: false,
+      mode: 'ask',
+      orphan: false
+    },
+    {
+      connectorId: 'notion',
+      connectorName: 'Notion',
+      toolName: 'notion-purge-cache',
+      description: 'Purge a cache',
+      inputSchemaJson: null,
+      crudType: 'read',
+      destructive: true,
+      mode: 'auto',
+      orphan: false
     }
   ]
 
@@ -2114,6 +2140,9 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
     // allowedTools:[] must NOT strip them (the coordinator-flagged误杀).
     expect(names).toContain('mcp__notion__notion_search')
     expect(names).not.toContain('mcp__notion__notion_update_page') // above the read ceiling
+    // 0813 batch P — the matter venue's per-entry narrowing (matterVenueAdmitsEntry):
+    expect(names).not.toContain('mcp__notion__notion_search_drafts') // ask ≙ 不注册 (unattended)
+    expect(names).not.toContain('mcp__notion__notion_purge_cache') // destructive read → never
     expect(names).toContain('matter_update_propose') // the rest of the face is intact
   })
 
@@ -2135,6 +2164,9 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
     // class connector_write outright — and Python resolve_caller_ceiling pins 'read' server-side
     // as the third belt even if both TS belts were bypassed.
     expect(seenTools[0]).not.toContain('mcp__notion__notion_update_page')
+    // 0813 batch P — the venue narrowing holds under the tampered ceiling too:
+    expect(seenTools[0]).not.toContain('mcp__notion__notion_search_drafts')
+    expect(seenTools[0]).not.toContain('mcp__notion__notion_purge_cache')
   })
 
   test('no grantConnectors → zero connector work for a follow-up run (the seam refuses)', async () => {

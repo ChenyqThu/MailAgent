@@ -36,7 +36,7 @@
 
 | class | 跟进 run | 说明 |
 |---|---|---|
-| `read` | ✅ **全部放行** | run 的全部意义就是发现**新**证据，所以它读整个库，不受事项已关联的资料范围限制 |
+| `read` | ✅ **全部放行** | run 的全部意义就是发现**新**证据，所以它读整个库，不受事项已关联的资料范围限制。connector 只读工具（运行时注册、class 同为 `read`）也走这条，但注册期另有场地档：per-tool `auto` 且非 destructive 才进（0813 批 P，见下方 connector 段） |
 | `artifact` | ⚠️ **只放行一个名字** | `MATTER_RUN_PROPOSE_TOOL`（`matter_update_propose`）。🔴 按名不按类 —— `report_write` 同属 artifact 但它是本地写，整类放行是个洞 |
 | `web` | ⚠️ 由 spec 的 `grantWeb` + owner 的三档共同决定 | 见 §1.2 |
 | `domain_write` / `connector_write` / `exec` / `capability_change` / `outbound` | ❌ 一律拒 | 🔴 **grant 与场地开关一概不查**：把事项绑到一个授了 `grant_exec` / connector 写权的 Agent Profile 上，也**永远**放不宽这张脸 —— profile 只贡献 model / persona（D2）|
@@ -59,6 +59,21 @@
 **实际拿得到的工具面 = 31 件**（说明书单源 `frontend/src/shared/lib/matterToolFace.ts`，
 按分组渲染在全局配置弹窗里）：28 件只读 + 1 件提案 artifact + 2 件网页（受三档约束），
 另加 connector 只读工具（`mcp__*`，运行时按已连接的家动态注册，不在任何静态清单里）。
+
+🔴 **connector 面的进入档（0813 批 P）= crud-read × per-tool `auto` × 非 destructive**
+（判据单源 `matterVenueAdmitsEntry`，`frontend/src/ai-gateway/tools/connector.ts` —— 注册与
+prompt catalog 的 `matterReadToolCount` 共用，防「宣传比工具面宽」）：`ask` 在这个无审批
+宿主的无人值守场地 ≙ **不注册**（镜像邮件预处理 `only_auto_tools` 先例，不是弹卡；普通
+headless custom agent 的「ask/auto 无差别、grant 内免卡」语义**字节不动**）、`off` 恒不注册、
+`destructive` 恒排除（`derive_crud_type` 裁决③ 已让 read+destructive 在 sync 期结构性不可能，
+场地不依赖那个远处不变量）。写类共三道：spec 只授 `'read'` 天花板（注册期 rank 过滤）→
+矩阵行拒 `connector_write` → 服务端 `resolve_caller_ceiling` 对该 venue **钉死 `'read'`**
+（不读任何 agent 行）；invoke 端点还给 matter caller 传 `deny_ask_mode` + `deny_destructive`
+（判定与执行同侧，单源 `is_matter_followup_caller`，`src/connectors/service.py`）。
+needs_reauth（status ≠ connected）与 orphan 工具行天然进不来（spec 的
+`connected_connector_ids` 与 manifest 拉取都只认 connected+enabled）；off-track
+（`row_is_off_track`）**有意不排除** —— 它只是换轨迁移提示、连接与授权仍健康，任何场地都
+不按它裁工具，排除它等于砍掉 owner 点名要的 Notion/Jira/Confluence 检索。
 
 🔴 read class 共 31 件，但有 **3 件结构上到不了**跟进 run，说明书**有意不列**（列了闸就红）：
 `suggest_followups`（另有 manual_chat 场地门）、`agent_catalog_list` / `agent_catalog_get`

@@ -288,6 +288,50 @@ def test_deny_ask_mode_blocks_ask_tier_for_unattended_callers(store, monkeypatch
     assert out["is_error"] is False and _OkClient.calls == [(CID, "search", None)]
 
 
+def test_is_matter_followup_caller_truth_table():
+    """0813 批 P：HTTP invoke 路径据此给 matter 场地传 deny_ask_mode + deny_destructive。
+    只有 matter_followup 命中；owner-present / headless custom agent / 缺席 / 坏形状恒 False
+    （非法形状由 resolve_caller_ceiling 先行 400，这里宽容不重复校验）。"""
+    assert svc.is_matter_followup_caller({"context_mode": "matter_followup"}) is True
+    assert svc.is_matter_followup_caller(
+        {"context_mode": "matter_followup", "agent_id": "matter:MAT-000001"}
+    ) is True
+    for other in ("manual_chat", "im_chat", "untrusted_trigger", "cron_headless", "junk"):
+        assert svc.is_matter_followup_caller({"context_mode": other}) is False, other
+    assert svc.is_matter_followup_caller(None) is False
+    assert svc.is_matter_followup_caller("matter_followup") is False  # 非 Mapping
+    assert svc.is_matter_followup_caller({}) is False
+
+
+def test_deny_destructive_blocks_destructive_row_for_matter_caller(store, monkeypatch):
+    """0813 批 P：``deny_destructive=True``（matter 场地）时 destructive 行不到远端 ——
+    ``derive_crud_type`` 裁决③ 已让 read+destructive 在 sync 期结构性不可能，这里模拟的是
+    手改 DB 行；默认 False（preprocess / owner-present / headless custom agent）字节不变。"""
+    import src.connectors.client as client_mod
+
+    manifest = _manifest(("purge_cache", "read"))
+    manifest[0]["destructive"] = True
+    store.sync_connector_tools(CID, _manifest(("search", "read")) + manifest)
+
+    monkeypatch.setattr(client_mod, "ConnectorClient", _NeverCalledClient)
+    with pytest.raises(svc.ConnectorInvokeDenied) as e:
+        _invoke(
+            connector_id=CID, tool_name="purge_cache", ceiling="read", deny_destructive=True
+        )
+    assert e.value.code == "E_CONNECTOR_TOOL_DISABLED"
+    assert e.value.http_status == 409
+
+    # 默认 False：同一行照常过闸（destructive 只是红警告位，不是全局禁令 —— 08-03 拍板不动）。
+    _OkClient.calls = []
+    monkeypatch.setattr(client_mod, "ConnectorClient", _OkClient)
+    out = _invoke(connector_id=CID, tool_name="purge_cache", ceiling="read")
+    assert out["is_error"] is False and _OkClient.calls == [(CID, "purge_cache", None)]
+    # 非 destructive 行在 deny_destructive=True 下也照常（闸只认 destructive 位）。
+    _OkClient.calls = []
+    out = _invoke(connector_id=CID, tool_name="search", ceiling="read", deny_destructive=True)
+    assert out["is_error"] is False and _OkClient.calls == [(CID, "search", None)]
+
+
 def test_oauth_failure_marks_connector_needs_reauth(store, monkeypatch):
     """PR5：授权失效落 ``needs_reauth``（可行动），并把技术原文换成可行动文案。"""
     import src.connectors.client as client_mod

@@ -26,6 +26,8 @@ import {
   normalizeContextMode,
   parseConnectorGrants,
   parseWebGrant,
+  registerRuntimeToolClass,
+  resetRuntimeToolClasses,
   type AgentContextMode,
   type AgentModeGrants,
   type GatewayToolClass
@@ -563,6 +565,36 @@ describe('matter_followup — behavior belt across every tool class (0812)', () 
       ...CLASSES_OF('outbound')
     ]) {
       expect(tools[name], `${name} must be stripped in matter_followup`).toBeUndefined()
+    }
+  })
+
+  test('runtime connector tools (0813 batch P): the read class rides the row, connector_write is stripped even under tampered write ceilings', () => {
+    // Connector tools resolve their class through the RUNTIME registry (classOfTool), not the
+    // static map — pin that the matter row governs them through the same applyContextModePolicy
+    // path the factory's ToolSet takes. A tampered grants object (write-capable ceilings) must
+    // lift nothing: the row denies connector_write before the grant ladder.
+    try {
+      registerRuntimeToolClass('mcp__notion__notion_search', 'read')
+      registerRuntimeToolClass('mcp__notion__notion_update_page', 'connector_write')
+      const donor = { description: 'x', inputSchema: undefined, execute: async () => ({}) }
+      const filtered = applyContextModePolicy(
+        {
+          mcp__notion__notion_search: donor,
+          mcp__notion__notion_update_page: donor
+        } as unknown as Parameters<typeof applyContextModePolicy>[0],
+        'matter_followup',
+        { exec: true, web: 'open', connectors: { notion: 'update' } }
+      )
+      expect(Object.keys(filtered)).toEqual(['mcp__notion__notion_search'])
+      // an UNREGISTERED dynamic name fail-closes to 'exec' → stripped too
+      const unregistered = applyContextModePolicy(
+        { mcp__ghost__tool: donor } as unknown as Parameters<typeof applyContextModePolicy>[0],
+        'matter_followup',
+        { connectors: { ghost: 'read' } }
+      )
+      expect(Object.keys(unregistered)).toEqual([])
+    } finally {
+      resetRuntimeToolClasses()
     }
   })
 })

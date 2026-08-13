@@ -41,6 +41,7 @@ import {
   connectorCatalogForRun,
   createConnectorTools,
   fetchConnectorManifest,
+  matterVenueAdmitsEntry,
   projectConnectorCatalog,
   shouldLoadConnectorTools,
   truncateAtSentence,
@@ -467,6 +468,71 @@ describe('createConnectorTools — headless per-connector grant filter', () => {
       'mcp__notion__notion_fetch',
       'mcp__notion__notion_move_pages'
     ])
+  })
+})
+
+// ── 4b. matter_followup venue narrowing (0813 batch P) ─────────────────────────
+
+describe('createConnectorTools — matter_followup venue narrowing (0813 batch P)', () => {
+  // Every excluded shape in ONE manifest so the admitted set is a single exact assertion.
+  const MANIFEST = [
+    entry(), // read + auto + non-destructive → the ONE admissible entry
+    entry({ toolName: 'notion-search-ask', mode: 'ask' }), // ask ≙ 不注册 (no approval host)
+    entry({ toolName: 'notion-search-off', mode: 'off' }), // off → never (base admission)
+    entry({ toolName: 'notion-read-destr', destructive: true }), // hand-edited row shape → never
+    entry({ toolName: 'notion-create-pages', crudType: 'write' }), // write → never
+    entry({ toolName: 'notion-move-pages', crudType: 'update' }), // update → never
+    entry({ toolName: 'notion-orphan', orphan: true }) // orphan → never
+  ]
+
+  function matterBuild(grants: Record<string, 'read' | 'write' | 'update'>) {
+    const domain = mockDomain(() => okEnvelope({}))
+    return createConnectorTools(domain, [], new ApprovalGuard(), MANIFEST, {
+      contextMode: 'matter_followup',
+      connectorGrants: grants,
+      agentId: 'matter:MAT-000042'
+    })
+  }
+
+  test('only the crud-read × auto × non-destructive entry registers', () => {
+    expect(Object.keys(matterBuild({ notion: 'read' }))).toEqual(['mcp__notion__notion_fetch'])
+  })
+
+  test('a tampered write-capable ceiling widens NOTHING — read-only is venue-pinned, not grant-derived', () => {
+    expect(Object.keys(matterBuild({ notion: 'update' }))).toEqual(['mcp__notion__notion_fetch'])
+    expect(Object.keys(matterBuild({ notion: 'write' }))).toEqual(['mcp__notion__notion_fetch'])
+  })
+
+  test('generic headless venues keep the OLD tier semantics byte-identical (the narrowing is matter-only)', () => {
+    // cron_headless / untrusted_trigger: per-tool tiers stay meaningless (an ask read registers
+    // silent) and a destructive read is not the venue's business — the 0813 narrowing must not
+    // leak into the custom-agent venues (their semantics are the owner's per-agent grant).
+    for (const mode of ['cron_headless', 'untrusted_trigger'] as const) {
+      resetRuntimeToolClasses()
+      const domain = mockDomain(() => okEnvelope({}))
+      const tools = createConnectorTools(domain, [], new ApprovalGuard(), MANIFEST, {
+        contextMode: mode,
+        connectorGrants: { notion: 'read' },
+        agentId: 'cust_a'
+      })
+      expect(Object.keys(tools).sort(), mode).toEqual([
+        'mcp__notion__notion_fetch',
+        'mcp__notion__notion_read_destr',
+        'mcp__notion__notion_search_ask'
+      ])
+    }
+  })
+
+  test('matterVenueAdmitsEntry — the shared predicate truth table', () => {
+    expect(matterVenueAdmitsEntry(entry())).toBe(true)
+    expect(matterVenueAdmitsEntry(entry({ mode: 'ask' }))).toBe(false)
+    expect(matterVenueAdmitsEntry(entry({ mode: 'off' }))).toBe(false)
+    expect(matterVenueAdmitsEntry(entry({ mode: 'enabled' }))).toBe(false) // junk tier
+    expect(matterVenueAdmitsEntry(entry({ destructive: true }))).toBe(false)
+    expect(matterVenueAdmitsEntry(entry({ orphan: true }))).toBe(false)
+    expect(matterVenueAdmitsEntry(entry({ crudType: 'write' }))).toBe(false)
+    expect(matterVenueAdmitsEntry(entry({ crudType: 'update' }))).toBe(false)
+    expect(matterVenueAdmitsEntry(entry({ crudType: 'delete' }))).toBe(false) // legacy value
   })
 })
 
@@ -1053,14 +1119,35 @@ describe('projectConnectorCatalog — same admission rules as registration', () 
         displayName: 'Notion',
         readToolCount: 1,
         writeToolCount: 1,
-        updateToolCount: 1
+        updateToolCount: 1,
+        // 0813 batch P — the matter venue's narrower read count (auto + non-destructive).
+        matterReadToolCount: 1
       },
       {
         connectorId: 'atlassian',
         displayName: 'Jira',
         readToolCount: 1,
         writeToolCount: 0,
-        updateToolCount: 0
+        updateToolCount: 0,
+        matterReadToolCount: 1
+      }
+    ])
+  })
+
+  test('matterReadToolCount counts ONLY auto-tier non-destructive reads (ask/destructive stay in readToolCount but out of the matter count)', () => {
+    const catalog = projectConnectorCatalog([
+      entry(), // read + auto + non-destructive → both counts
+      entry({ toolName: 'notion-search-ask', mode: 'ask' }), // read count only (ask ≙ 不注册 in the matter venue)
+      entry({ toolName: 'notion-read-destr', destructive: true }) // read count only (hand-edited row shape)
+    ])
+    expect(catalog).toEqual([
+      {
+        connectorId: 'notion',
+        displayName: 'Notion',
+        readToolCount: 3,
+        writeToolCount: 0,
+        updateToolCount: 0,
+        matterReadToolCount: 1
       }
     ])
   })
@@ -1079,14 +1166,17 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
       displayName: 'Notion',
       readToolCount: 2,
       writeToolCount: 1,
-      updateToolCount: 1
+      updateToolCount: 1,
+      // 0813 batch P — one of the two reads is ask-tier/destructive, so the matter venue sees 1.
+      matterReadToolCount: 1
     },
     {
       connectorId: 'atlassian',
       displayName: 'Jira',
       readToolCount: 0,
       writeToolCount: 1,
-      updateToolCount: 0
+      updateToolCount: 0,
+      matterReadToolCount: 0
     }
   ]
 
@@ -1113,7 +1203,8 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
         displayName: 'Notion',
         readToolCount: 2,
         writeToolCount: 0,
-        updateToolCount: 0
+        updateToolCount: 0,
+        matterReadToolCount: 1
       }
     ])
     expect(connectorCatalogForRun(CATALOG, 'untrusted_trigger', true, { notion: 'write' })).toEqual(
@@ -1123,7 +1214,8 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
           displayName: 'Notion',
           readToolCount: 2,
           writeToolCount: 1,
-          updateToolCount: 0
+          updateToolCount: 0,
+          matterReadToolCount: 1
         }
       ]
     )
@@ -1133,24 +1225,46 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
         displayName: 'Notion',
         readToolCount: 2,
         writeToolCount: 1,
-        updateToolCount: 1
+        updateToolCount: 1,
+        matterReadToolCount: 1
       }
     ])
   })
 
-  test('matter_followup (0812): the read-ceiling grants narrow the catalog to reads only', () => {
-    // The follow-up spec only ever authors 'read' ceilings, so the prompt catalog a matter run
-    // sees can never advertise a connector write — the arithmetic mirror of the matrix row's
-    // connector_write denial.
+  test('matter_followup (0813 batch P): the advertised reads are the NARROWER matter count; writes always zero', () => {
+    // The venue registers only auto-tier non-destructive reads (matterVenueAdmitsEntry), so the
+    // prompt catalog must advertise matterReadToolCount — advertising the wider readToolCount
+    // would break "never advertise wider than the ToolSet" for the ask/destructive reads.
     expect(connectorCatalogForRun(CATALOG, 'matter_followup', true, { notion: 'read' })).toEqual([
       {
         connectorId: 'notion',
         displayName: 'Notion',
-        readToolCount: 2,
+        readToolCount: 1,
         writeToolCount: 0,
-        updateToolCount: 0
+        updateToolCount: 0,
+        matterReadToolCount: 1
       }
     ])
+    // a tampered write-capable ceiling widens nothing — the venue branch never reads the rank
+    expect(connectorCatalogForRun(CATALOG, 'matter_followup', true, { notion: 'update' })).toEqual([
+      {
+        connectorId: 'notion',
+        displayName: 'Notion',
+        readToolCount: 1,
+        writeToolCount: 0,
+        updateToolCount: 0,
+        matterReadToolCount: 1
+      }
+    ])
+    // a granted connector with ZERO matter-admissible reads drops off entirely (atlassian)
+    expect(
+      connectorCatalogForRun(CATALOG, 'matter_followup', true, { atlassian: 'read' })
+    ).toBeNull()
+    // absent matterReadToolCount (a hand-built row) fail-closes to 0 → dropped, never widened
+    const legacyRow = [
+      { connectorId: 'notion', displayName: 'Notion', readToolCount: 2, writeToolCount: 0, updateToolCount: 0 }
+    ]
+    expect(connectorCatalogForRun(legacyRow, 'matter_followup', true, { notion: 'read' })).toBeNull()
     expect(connectorCatalogForRun(CATALOG, 'matter_followup', true)).toBeNull() // no grants → null
   })
 
@@ -1164,6 +1278,9 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
     const MANIFEST = [
       entry(), // notion read
       entry({ toolName: 'notion-search' }), // notion read
+      // 0813 batch P — the two reads the matter venue skips (parity must hold there too).
+      entry({ toolName: 'notion-search-ask', mode: 'ask' }),
+      entry({ toolName: 'notion-read-destr', destructive: true }),
       entry({ toolName: 'notion-create-pages', crudType: 'write' }),
       entry({ toolName: 'notion-move-pages', crudType: 'update' }),
       entry({ toolName: 'notion-stale-delete', crudType: 'delete' }),
@@ -1176,7 +1293,7 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
     ]
     const domain = mockDomain(() => okEnvelope({}))
     const shapes: Array<{
-      contextMode: 'manual_chat' | 'im_chat' | 'cron_headless' | 'untrusted_trigger'
+      contextMode: 'manual_chat' | 'im_chat' | 'cron_headless' | 'untrusted_trigger' | 'matter_followup'
       grants?: Record<string, 'read' | 'write' | 'update'>
     }> = [
       { contextMode: 'manual_chat' },
@@ -1186,7 +1303,11 @@ describe('connectorCatalogForRun — the prompt can never advertise wider than t
       { contextMode: 'cron_headless', grants: { notion: 'write' } },
       { contextMode: 'untrusted_trigger', grants: { notion: 'update' } },
       { contextMode: 'cron_headless', grants: { atlassian: 'update' } },
-      { contextMode: 'cron_headless', grants: { notion: 'update', atlassian: 'write' } }
+      { contextMode: 'cron_headless', grants: { notion: 'update', atlassian: 'write' } },
+      // 0813 batch P — the matter venue: parity between the narrowed factory and the
+      // matterReadToolCount-based catalog, incl. under a tampered write-capable ceiling.
+      { contextMode: 'matter_followup', grants: { notion: 'read' } },
+      { contextMode: 'matter_followup', grants: { notion: 'update', atlassian: 'write' } }
     ]
     for (const shape of shapes) {
       resetRuntimeToolClasses()
