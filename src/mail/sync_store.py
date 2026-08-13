@@ -993,7 +993,16 @@ class SyncStore:
     #                不入库** (没有可靠身份键, 按名字合并必然误并同名人), contact_id 恒
     #                NULL。回滚 (回退 v52): DROP INDEX + DROP COLUMN contact_id + DROP
     #                TABLE matter_contact; 列/表留着也无害 (旧代码零消费点)。
-    DB_VERSION = 52
+    # v53 (Win outlook_com backend, task 08-12): email_metadata +entry_id TEXT ——
+    #                Outlook COM EntryID 缓存列 (镜像 imap_uid 的角色)。🔴 EntryID 会
+    #                漂移 (邮件移动文件夹后变), 只当**快路径缓存**不当锚; 稳定锚仍是
+    #                message_id UNIQUE, miss 时 Table API 按 PR_INTERNET_MESSAGE_ID
+    #                (DASL 0x1035001F) 反查 + 回写自愈 (与 davmail imap_uid 双路同构)。
+    #                NULL = 非 outlook_com 行 / 尚未回填, 无需回填 (缺省即语义)。
+    #                ⚠️ 本列在 feat/win-outlook-com worktree 分配; main 分支若并发
+    #                bump v53, merge 时需重编号本迁移块。
+    #                回滚 (回退 v53): 列留着无害 (旧代码零消费点)。
+    DB_VERSION = 53
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1144,7 +1153,8 @@ class SyncStore:
                 draft_in_reply_to TEXT,
                 draft_references TEXT,
                 in_reply_to TEXT,
-                ingest_reason TEXT
+                ingest_reason TEXT,
+                entry_id TEXT
             )
         """)
 
@@ -3220,6 +3230,27 @@ class SyncStore:
                 ") WHERE contact_id IS NULL AND email_normalized IS NOT NULL"
             )
 
+        # === v53: outlook_com backend EntryID 缓存列 (task 08-12 Win backend) ===
+        # entry_id = Outlook COM EntryID (十六进制串), 只当快路径缓存不当锚 —— EntryID
+        # 在邮件移动文件夹后会变 (MAPI 语义), 稳定锚仍是 message_id UNIQUE, miss 时
+        # 按 PR_INTERNET_MESSAGE_ID 反查 + 回写自愈 (与 davmail imap_uid 双路同构)。
+        # NULL 即语义 (非 outlook_com 行), 有意不回填。
+        # ⚠️ merge 注意: main 分支可能并发 bump v53, merge 时需重编号本迁移块。
+        if current_version < 53:
+            try:
+                cursor.execute("PRAGMA table_info(email_metadata)")
+                _em_cols_v53 = {row[1] for row in cursor.fetchall()}
+                if "entry_id" not in _em_cols_v53:
+                    cursor.execute(
+                        "ALTER TABLE email_metadata ADD COLUMN entry_id TEXT"
+                    )
+                    logger.info("v53 migration: email_metadata +entry_id")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                # 只有"列已存在"这一种并发/重入形态才允许被 guard 吞
+                _migration_guard_columns(
+                    cursor, "email_metadata", {"entry_id"}, "v53 migration", e,
+                )
+
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
@@ -4246,6 +4277,7 @@ class SyncStore:
                             f"""UPDATE email_metadata
                                SET imap_uid = COALESCE(?, imap_uid),
                                    imap_uidvalidity = COALESCE(?, imap_uidvalidity),
+                                   entry_id = COALESCE(?, entry_id),
                                    thread_id = COALESCE(thread_id, ?),
                                    sender_name = COALESCE(NULLIF(sender_name, ''), ?),
                                    to_addr = COALESCE(NULLIF(to_addr, ''), ?),
@@ -4255,6 +4287,9 @@ class SyncStore:
                             (
                                 email.get('imap_uid'),
                                 email.get('imap_uidvalidity'),
+                                # v53: outlook_com 的 EntryID 缓存, 跨 backend 合并时
+                                # 同样回写老行 (COALESCE 语义: 新值优先, 无则保留)。
+                                email.get('entry_id'),
                                 email.get('thread_id'),
                                 email.get('sender_name', ''),
                                 email.get('to_addr', ''),
@@ -4275,12 +4310,12 @@ class SyncStore:
                      notion_thread_id, sync_error, retry_count, next_retry_at,
                      imap_uidvalidity, imap_uid, backend_origin,
                      draft_source_internal_id, draft_in_reply_to, draft_references,
-                     in_reply_to, ingest_reason,
+                     in_reply_to, ingest_reason, entry_id,
                      created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                             ?, ?, ?,
                             ?, ?, ?,
-                            ?, ?,
+                            ?, ?, ?,
                             COALESCE((SELECT created_at FROM email_metadata WHERE internal_id = ?), ?),
                             ?)
                 """, (
@@ -4312,6 +4347,8 @@ class SyncStore:
                     # v51 provenance: 邮件怎么进库的 (飞书通知门控判据)。
                     # NULL = 存量/未知, 语义等同 realtime (照常通知)。
                     email.get('ingest_reason'),
+                    # v53: outlook_com EntryID 缓存 (非 outlook_com 行恒 None)。
+                    email.get('entry_id'),
                     internal_id,
                     now,
                     now

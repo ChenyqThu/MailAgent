@@ -57,18 +57,19 @@ class LlmService:
         self._ctx = ctx
 
     def _maybe_davmail_backend(self):
-        """davmail 模式返回 DavMailBackend (probe ok) 让 LLMRunner 走 IMAP fetch;
-        applescript 模式返回 None (LLMRunner lazy-init AppleScriptArm)。
+        """非 applescript 模式 (davmail / outlook_com, task 08-12 判据泛化) 返回
+        probe ok 的 backend 实例让 LLMRunner 走协议 fetch; applescript 模式返回
+        None (LLMRunner lazy-init AppleScriptArm)。
 
         复刻 CLI ``src/cli/commands/llm.py::_maybe_create_davmail_backend``, 但经
         ``ctx.config`` / ``ctx.sync_store`` 而非全局 cfg。
 
-        E1 §3.1 Step 3: davmail 模式下 probe 失败**不再吞掉** — 直接冒泡给 run()
-        的 try/except 转 ServiceLLMFailedError, 而不是静默回退到会用错 id 空间
-        查询 (`whose id`) 的 AppleScriptArm。
+        E1 §3.1 Step 3: 非 applescript 模式下 probe 失败**不再吞掉** — 直接冒泡给
+        run() 的 try/except 转 ServiceLLMFailedError, 而不是静默回退到会用错 id
+        空间查询 (`whose id`) 的 AppleScriptArm。
         """
         cfg = self._ctx.config
-        if getattr(cfg, "mailagent_backend", "applescript") != "davmail":
+        if getattr(cfg, "mailagent_backend", "applescript") == "applescript":
             return None
         from src.mail.backend.factory import create_backend
 
