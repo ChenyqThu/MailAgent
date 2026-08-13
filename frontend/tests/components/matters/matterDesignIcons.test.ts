@@ -203,20 +203,30 @@ describe('时间轴节点 = 设计原型 detail.jsx 的 TL_ICON / TL_TONE', () =
     expect(source, '兜底必须是设计稿的 dot').toContain('return Circle')
   })
 
-  it('TL_TONE 三档 actor 配色', () => {
-    // TIMELINE_TONE 的值是 class 字符串（不是组件名），所以不走 extractMap，直接钉内容。
-    const start = source.indexOf('const TIMELINE_TONE')
-    expect(start, '找不到 TIMELINE_TONE —— 表被改名或挪走了，闸失效').toBeGreaterThan(-1)
+  it('进展节点按 PROG_KIND 定色（G-18 两层复刻后，主视图节点色来自 kind 不来自 actor）', () => {
+    // PROGRESS_TONE 的值是 class 字符串（不是组件名），所以不走 extractMap，直接钉内容。
+    // 设计 progress.jsx `PROG_KIND[*].color`：--c-ai / --c-ok / --c-warn / --c-crit，
+    // 圆节点边框取 40% alpha。
+    const start = source.indexOf('const PROGRESS_TONE')
+    expect(start, '找不到 PROGRESS_TONE —— 表被改名或挪走了，闸失效').toBeGreaterThan(-1)
     const body = source.slice(start, start + 400)
-    // 设计：agent=--c-ai / me(=user)=--c-accent / system=--ink-fg-3，边框取 40% alpha。
-    expect(body).toMatch(/agent:\s*'border-ai\/40/)
-    expect(body).toMatch(/user:\s*'border-coral\/40/)
-    expect(body).toMatch(/system:\s*'border-ink-border/)
+    expect(body).toMatch(/ai:\s*'border-ai\/40/)
+    expect(body).toMatch(/ok:\s*'border-ok\/40/)
+    expect(body).toMatch(/warn:\s*'border-warn\/40/)
+    expect(body).toMatch(/crit:\s*'border-crit\/40/)
+    // 操作日志弹窗的 actor 配色沿设计 AuditLogModal：agent=--c-ai / me=--c-accent / system=fg-3。
+    const auditStart = source.indexOf('const AUDIT_ACTOR_TONE')
+    expect(auditStart, '找不到 AUDIT_ACTOR_TONE —— 表被改名或挪走了，闸失效').toBeGreaterThan(-1)
+    const auditBody = source.slice(auditStart, auditStart + 300)
+    expect(auditBody).toMatch(/agent:\s*'text-ai'/)
+    expect(auditBody).toMatch(/user:\s*'text-coral'/)
+    expect(auditBody).toMatch(/system:\s*'text-ink-fg-3'/)
   })
 
   it('时间轴有贯穿竖线（此前是一堆独立卡片，没有任何时间轴形态）', () => {
-    expect(source).toContain('left-[15px]')
-    expect(source).toContain('size-[23px]')
+    // 设计 progress.jsx ProgressEntry：25px 圆节点；竖线 left 16px = 半径 12.5 + pl-1 的 4px。
+    expect(source).toContain('left-4')
+    expect(source).toContain('size-[25px]')
   })
 })
 

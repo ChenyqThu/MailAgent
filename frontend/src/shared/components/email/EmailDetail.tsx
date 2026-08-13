@@ -48,6 +48,10 @@ import {
   mergeMatterResourceLinkHits
 } from '../matters/matterResource'
 import { useMattersApi, useMattersEnabled } from '../matters/hooks'
+import { MatterBelongsCard } from '../matters/MatterBelongsCard'
+import { MatterLinkPopover } from '../matters/MatterLinkPopover'
+import { CustomAgentDrawer } from '../agents/CustomAgentDrawer'
+import { useTriggerV2Enabled } from '../agents/hooks'
 import { ComposePanel, ComposePanelInner } from './compose/ComposePanel'
 import type { ComposeGuardHandle } from './compose/useComposeGuard'
 import { closeCompose, useComposeStore } from '@shared/state/compose'
@@ -209,7 +213,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const mattersApi = useMattersApi()
   const mattersEnabled = useMattersEnabled()
   const queryClient = useQueryClient()
+  const triggerV2Enabled = useTriggerV2Enabled()
   const [showTranslation, setShowTranslation] = useState(false)
+  // G-25 —— 「事项」按钮的捕获浮层与「为此线程建立跟进 Agent」抽屉。
+  const [matterMenuOpen, setMatterMenuOpen] = useState(false)
+  const [followupOpen, setFollowupOpen] = useState(false)
+  const matterAnchorRef = useRef<HTMLDivElement | null>(null)
   const [pending, setPending] = useState<PendingMap>(NO_PENDING)
   const [propsExpanded, setPropsExpanded] = useState(false)
   const morePropsId = useId()
@@ -344,6 +353,14 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     [matterLookupKeys, matterLookupQ.data]
   )
   const matterLinkState = deriveMatterLinkButtonState(linkedMatters.length)
+  // G-25 —— 捕获浮层的线程封数。key 与 ThreadAttachmentBar 完全相同（react-query 去重），
+  // 不产生新请求；无 thread_id 时不发。
+  const matterThreadQ = useQuery({
+    queryKey: qk.email.thread(detailQ.data?.thread_id ?? null),
+    queryFn: () => mailApi.email.listByThread(detailQ.data?.thread_id ?? null),
+    enabled: mattersEnabled && Boolean(detailQ.data?.thread_id),
+    staleTime: 30_000
+  })
   const translateMut = useMutation({
     mutationFn: async () => {
       if (internalId === null) throw new Error('no email selected')
@@ -677,15 +694,22 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     }
   }, [internalId, mailApi, queryClient, t])
 
-  // 0812 —— 「创建事项」：唤起右下角 AI chat，带上这封邮件的引用 + 一条指令，由主 agent 处理。
+  // G-25 浮层的「AI 调研创建」行：唤起右下角 AI chat，带上这封邮件的引用 + 一条指令，
+  // 由主 agent 处理（0812 起的既有通路，本批只是从工具栏一级位挪进浮层）。
   // 🔴 走既有注入面：邮件引用是 AgentConversation 的 email context chip（→ injectedContext），
   //    指令是一条普通用户消息 —— 不新造第五条注入路径，也因此扛得住审批 resume 剥 injectedContext。
-  // 🔴 指令文案（locale）明确要求 agent 先查重、再决定新建还是加入既有事项：这是把
-  //    MatterLinkPopover 的「重复候选 / 加入已有」交接给 agent 的那一句，删了能力就真的消失了。
-  const handleCreateMatter = useCallback((): void => {
+  // 🔴 指令文案（locale）明确要求 agent 先查重、再决定新建还是加入既有事项。
+  const handleAiResearchMatter = useCallback((): void => {
     if (internalId === null) return
+    setMatterMenuOpen(false)
     startChatWithPrompt(t('toolbar.createMatterPrompt'), internalId)
   }, [internalId, t])
+
+  // 切邮件时收起捕获浮层与跟进 Agent 抽屉（它们锚定/预填的都是上一封）。
+  useEffect(() => {
+    setMatterMenuOpen(false)
+    setFollowupOpen(false)
+  }, [internalId])
 
   // Sprint 15 D 块 — Optimistic UI for read/flag toggle. 直接 setQueryData
   // 让 detail panel 瞬时翻, 避免 CLI fork 500ms + invalidate 双重 await 卡顿;
@@ -889,12 +913,41 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         onResync={handleResync}
         resyncState={{ pending: pending.resync }}
         onLlmRun={handleLlmRun}
-        createMatter={
+        matter={
           mattersEnabled
             ? {
                 count: linkedMatters.length,
                 state: matterLinkState,
-                onClick: handleCreateMatter
+                open: matterMenuOpen,
+                onToggle: () => setMatterMenuOpen((value) => !value),
+                anchorRef: matterAnchorRef,
+                popover: (
+                  <MatterLinkPopover
+                    open={matterMenuOpen}
+                    anchorRef={matterAnchorRef}
+                    source={{
+                      internalId: email.internal_id,
+                      threadId: email.thread_id ?? null,
+                      subject: email.subject,
+                      sender: email.sender_name || email.sender,
+                      receivedAt: email.date_received ?? null,
+                      threadCount: Math.max(1, matterThreadQ.data?.length ?? 1)
+                    }}
+                    onAiResearch={handleAiResearchMatter}
+                    // ④ 次级入口：仅 trigger v2 开且线程键可派生（email_filter.thread_ids
+                    // 用 thread_id ?? 去尖括号的 message_id，线程首封也能建）。
+                    onCreateFollowupAgent={
+                      triggerV2Enabled &&
+                      (email.thread_id || email.message_id?.replace(/^<|>$/g, ''))
+                        ? () => {
+                            setMatterMenuOpen(false)
+                            setFollowupOpen(true)
+                          }
+                        : undefined
+                    }
+                    onClose={() => setMatterMenuOpen(false)}
+                  />
+                )
               }
             : undefined
         }
@@ -917,6 +970,22 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
         deleteState={{ pending: pending.delete }}
         onPrev={onPrev}
         onNext={onNext}
+      />
+      {/* G-25 ④ —— 「为此线程建立跟进 Agent」：复用 CustomAgentDrawer 既有创建流
+          （trigger=email_filter + thread_ids 预填，默认 enabled=false 先手动测试）。 */}
+      <CustomAgentDrawer
+        cfg={null}
+        open={followupOpen}
+        create
+        initial={{
+          title: `${t('toolbar.followupAgent')}: ${(email.subject || '').slice(0, 48)}`,
+          trigger: {
+            enabled: false,
+            kind: 'email_filter',
+            thread_ids: [email.thread_id || email.message_id?.replace(/^<|>$/g, '') || '']
+          }
+        }}
+        onClose={() => setFollowupOpen(false)}
       />
 
       <div ref={bodyScopeRef} className="flex-1 overflow-y-auto scrollbar-thin">
@@ -1205,6 +1274,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
           {/* 阶段 2.2 (UX-P0①) — 会议邀请卡片: emailCalendarLink (2.1 数据桥)
               命中才渲染; 非会议/加载中/错误在卡内自查全静默, 不占位 (margin
               在 .cal-invite 自身, 无空 wrapper 残留)。 */}
+          {/* G-25 —— 已归属邮件的归属 info 卡（设计 create.jsx:321-333）：数据复用上面的
+              matterLookupQ 归属反查（性能铁律：不为它多发一条请求），点击跳事项。 */}
+          {mattersEnabled && linkedMatters.length > 0 ? (
+            <MatterBelongsCard entries={linkedMatters} />
+          ) : null}
+
           <MeetingInviteCard internalId={email.internal_id} />
 
           {/* AI Fields — 草稿不渲染: 未发出的邮件不会被 AI 处理 (gate 在

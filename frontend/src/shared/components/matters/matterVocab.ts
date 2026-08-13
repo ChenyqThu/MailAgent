@@ -18,7 +18,12 @@ import {
   type LucideIcon
 } from 'lucide-react'
 
-import type { MatterHealth, MatterPriority, MatterStatus } from '@shared/api/types/matter'
+import type {
+  MatterHealth,
+  MatterItemStatus,
+  MatterPriority,
+  MatterStatus
+} from '@shared/api/types/matter'
 
 /**
  * 事项词表的**外观**单源：status / health / priority / 详情 tab 各自的 icon 与 tone。
@@ -72,6 +77,16 @@ export const MATTER_HEALTH_TEXT_CLASS: Record<MatterHealth, string> = {
   on_track: 'text-ok',
   at_risk: 'text-warn',
   off_track: 'text-crit'
+}
+
+/** 设计 `detail.jsx` 的 `ITEM_STATUS[*].tone`（done/canceled 在行内不出 Pip，仍给全值域）。 */
+export const MATTER_ITEM_STATUS_TONES: Record<MatterItemStatus, MatterTone> = {
+  open: 'neutral',
+  in_progress: 'info',
+  waiting: 'warn',
+  blocked: 'critical',
+  done: 'success',
+  canceled: 'neutral'
 }
 
 export const MATTER_PRIORITY_TONES: Record<MatterPriority, MatterTone> = {

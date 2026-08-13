@@ -6,20 +6,25 @@ import {
   Archive,
   ArrowLeft,
   Check,
+  CheckCircle2,
   ChevronDown,
   ChevronUp,
   ChevronRight,
   Clock,
+  Hourglass,
+  Link2,
   MessageSquare,
   MoreHorizontal,
   Loader2,
   Pencil,
   Play,
   Plus,
+  RefreshCw,
   RotateCcw,
   Save,
   Trash2,
   Sparkles,
+  TriangleAlert,
   X
 } from 'lucide-react'
 
@@ -38,9 +43,11 @@ import type {
   MatterItem,
   MatterItemCreateInput,
   MatterItemKind,
+  MatterItemStatus,
   MatterPatchInput,
   MatterPriority,
   MatterResourceListItem,
+  MatterStakeholder,
   MatterStatus,
   MatterTagDefinition
 } from '@shared/api/types/matter'
@@ -52,7 +59,11 @@ import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/components/ui/select'
 import { cn } from '@shared/lib/cn'
-import { formatMatterAgo, trashDaysRemaining } from '@shared/lib/matterDerive'
+import {
+  formatMatterAgo,
+  formatMatterDueRelative,
+  trashDaysRemaining
+} from '@shared/lib/matterDerive'
 import { asWriteError, errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useShortcut } from '@shared/hooks/useShortcut'
@@ -76,6 +87,7 @@ import {
   MATTER_DETAIL_TAB_ICONS,
   MATTER_HEALTH_ICONS,
   MATTER_HEALTH_TEXT_CLASS,
+  MATTER_ITEM_STATUS_TONES,
   MATTER_PRIORITY_TONES,
   MATTER_STATUS_ICONS,
   MATTER_STATUS_TONES,
@@ -400,6 +412,28 @@ export function MatterDetail({
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
+  // G-11 —— 行内改标题 / 删除条目。与勾选完成同一条用户直接操作路径（patchItem/deleteItem +
+  // 乐观锁），不是 Agent 提案；删除是软删（后端留 restoreItem 反向通道），不弹二次确认。
+  const renameItem = useMatterMutation({
+    matterId,
+    mutationFn: ({ item, title }: { item: MatterItem; title: string }) => {
+      if (!matter) return Promise.reject(new Error('Matter is not loaded'))
+      return api.patchItem(matterId, item.id, { title }, { expectedVersion: matter.version })
+    },
+    onSuccess: () => void refresh(),
+    onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
+  })
+
+  const removeItem = useMatterMutation({
+    matterId,
+    mutationFn: (item: MatterItem) => {
+      if (!matter) return Promise.reject(new Error('Matter is not loaded'))
+      return api.deleteItem(matterId, item.id, { expectedVersion: matter.version })
+    },
+    onSuccess: () => void refresh(),
+    onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
+  })
+
   const permanentDelete = useMatterMutation({
     matterId,
     mutationFn: async () => {
@@ -652,6 +686,14 @@ export function MatterDetail({
                   saving={patch.isPending}
                   onChange={(due_at) => patch.mutate({ due_at })}
                 />
+                {/* G-08 等待条（设计 detail.jsx:205-209）：waiting_context / 等待中干系人
+                    非空时的 warn 色一行，点击就地编辑或清除（DIRECT_PATCH_FIELDS 通道）。 */}
+                <MatterWaitingBar
+                  waitingContext={matter.waiting_context}
+                  stakeholders={stakeholderItems}
+                  saving={patch.isPending}
+                  onSave={(waiting_context) => patch.mutate({ waiting_context })}
+                />
                 {/* 设计 detail.jsx:162 —— 一个 flex spacer 把跟进 Agent 推到行尾。 */}
                 <span className="flex-1" />
                 {/* 🔴 pill 必须是**按钮**（设计 detail.jsx:163 `onClick={ctx.onOpenAgent}`）：
@@ -894,12 +936,22 @@ export function MatterDetail({
                 pendingCount={updates.length}
                 onReview={() => setReviewId(updates[0]?.id ?? null)}
                 saving={patch.isPending}
+                now={now}
+                locale={i18n.language || 'zh-CN'}
                 onSummarySave={(current_summary, onSaved) =>
                   patch.mutate({ current_summary }, { onSuccess: onSaved })
                 }
+                // G-10 —— 「重新生成摘要」实质 = 触发一次跟进 run；flag 关时只留新鲜度指示。
+                onRegenerate={matterAgentEnabled ? () => startFollowUpRun() : undefined}
+                regenerating={Boolean(activeRun) || startRun.isPending}
               />
               <ItemGroups
                 items={items}
+                stakeholders={stakeholderItems}
+                resources={resourceItems}
+                now={now}
+                locale={i18n.language || 'zh-CN'}
+                busy={renameItem.isPending || removeItem.isPending || updateItem.isPending}
                 onToggle={(item) =>
                   updateItem.mutate({ item, status: item.status === 'done' ? 'open' : 'done' })
                 }
@@ -907,6 +959,9 @@ export function MatterDetail({
                   setAddKind(kind)
                   setAddOpen(true)
                 }}
+                onRename={(item, title) => renameItem.mutate({ item, title })}
+                onDelete={(item) => removeItem.mutate(item)}
+                onOpenResource={setDrawerItem}
               />
             </div>
           ) : tab === 'context' ? (
@@ -1470,19 +1525,33 @@ function StateCard({
   pendingCount,
   onReview,
   saving,
-  onSummarySave
+  now,
+  locale,
+  onSummarySave,
+  onRegenerate,
+  regenerating = false
 }: {
   matter: Matter
   pendingCount: number
   onReview(): void
   saving: boolean
+  now: number
+  locale: string
   onSummarySave(summary: string | null, onSaved: () => void): void
+  /** G-10 —— 「重新生成摘要」= 触发一次跟进 run；agent flag 关时不传，只留新鲜度指示。 */
+  onRegenerate?: () => void
+  regenerating?: boolean
 }): React.ReactElement {
   const { t } = useTranslation()
   const [summaryEditing, setSummaryEditing] = useState(false)
   const [summaryDraft, setSummaryDraft] = useState(matter.current_summary ?? '')
   const summaryValue = matter.current_summary ?? ''
   const normalizedSummaryDraft = summaryDraft.trim() ? summaryDraft : null
+  // G-10 新鲜度（设计 detail.jsx:340-350）：>14 天 warn「已 N 天未更新」，否则「{ago}由你接受」
+  // （直接编辑走的也是隐藏 accepted Manual Update 路径，「由你接受」对两种来源都成立）。
+  const staleDays =
+    matter.summary_at != null ? Math.floor((now - matter.summary_at) / 86_400_000) : null
+  const stale = staleDays !== null && staleDays > 14
 
   useEffect(() => {
     if (!summaryEditing) setSummaryDraft(matter.current_summary ?? '')
@@ -1495,17 +1564,54 @@ function StateCard({
   return (
     <section className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/75 p-4">
       <div className="flex items-center justify-between gap-3">
-        <h2 className="text-lead font-semibold">{t('matters.state.title')}</h2>
-        {!summaryEditing ? (
-          <button
-            type="button"
-            onClick={() => setSummaryEditing(true)}
-            aria-label={`${t('matters.state.title')} ${t('matters.actions.edit')}`}
-            className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-          >
-            <Pencil size={12} />
-          </button>
-        ) : null}
+        {/* 微调项：视觉标题带「· 已接受」后缀，但 `matters.state.title` 键保持原值 ——
+            它参与下面编辑按钮的 aria-label 组合（MatterStateCard.test 断言），后缀只进视觉层。 */}
+        <h2 className="text-lead font-semibold">
+          {t('matters.state.title')}
+          <span aria-hidden className="font-normal text-ink-fg-3">
+            {' '}
+            · {t('matters.state.titleAccepted')}
+          </span>
+        </h2>
+        <span className="flex items-center gap-1.5">
+          {staleDays !== null ? (
+            <span
+              className={cn(
+                'inline-flex items-center gap-1 text-micro',
+                stale ? 'text-warn' : 'text-ink-fg-3'
+              )}
+            >
+              {stale ? <TriangleAlert size={11} /> : <CheckCircle2 size={11} />}
+              {stale
+                ? t('matters.state.freshnessStale', { count: staleDays })
+                : t('matters.state.freshnessFresh', {
+                    time: formatMatterAgo(matter.summary_at as number, now, locale)
+                  })}
+            </span>
+          ) : null}
+          {onRegenerate ? (
+            <button
+              type="button"
+              disabled={regenerating}
+              onClick={onRegenerate}
+              title={t('matters.state.regenerate')}
+              aria-label={t('matters.state.regenerate')}
+              className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+            >
+              <RefreshCw size={12} className={regenerating ? 'animate-spin' : undefined} />
+            </button>
+          ) : null}
+          {!summaryEditing ? (
+            <button
+              type="button"
+              onClick={() => setSummaryEditing(true)}
+              aria-label={`${t('matters.state.title')} ${t('matters.actions.edit')}`}
+              className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+            >
+              <Pencil size={12} />
+            </button>
+          ) : null}
+        </span>
       </div>
       {summaryEditing ? (
         <div className="mt-3">
@@ -1854,21 +1960,48 @@ function MatterLifecycleBanner({
   )
 }
 
+interface ItemRowCallbacks {
+  onToggle(item: MatterItem): void
+  onRename(item: MatterItem, title: string): void
+  onDelete(item: MatterItem): void
+  onOpenResource(item: MatterResourceListItem): void
+}
+
 function ItemGroups({
   items,
+  stakeholders,
+  resources,
+  now,
+  locale,
+  busy,
   onToggle,
-  onAdd
+  onAdd,
+  onRename,
+  onDelete,
+  onOpenResource
 }: {
   items: readonly MatterItem[]
-  onToggle(item: MatterItem): void
+  stakeholders: readonly MatterStakeholder[]
+  resources: readonly MatterResourceListItem[]
+  now: number
+  locale: string
+  busy: boolean
   onAdd(kind: MatterItemKind): void
-}): React.ReactElement {
+} & ItemRowCallbacks): React.ReactElement {
   const { t } = useTranslation()
   const activeItems = items.filter((item) => item.deleted_at === null)
   const groups = MATTER_ITEM_KINDS.map((kind) => ({
     kind,
     items: activeItems.filter((item) => item.kind === kind)
   })).filter((group) => group.items.length > 0)
+  const stakeholdersById = useMemo(
+    () => new Map(stakeholders.map((stakeholder) => [stakeholder.id, stakeholder])),
+    [stakeholders]
+  )
+  const resourcesById = useMemo(
+    () => new Map(resources.map((item) => [item.resource.id, item])),
+    [resources]
+  )
   if (groups.length === 0) {
     const starterKinds: MatterItemKind[] = [
       'action',
@@ -1905,8 +2038,16 @@ function ItemGroups({
           key={group.kind}
           kind={group.kind}
           items={group.items}
+          stakeholdersById={stakeholdersById}
+          resourcesById={resourcesById}
+          now={now}
+          locale={locale}
+          busy={busy}
           onToggle={onToggle}
           onAdd={onAdd}
+          onRename={onRename}
+          onDelete={onDelete}
+          onOpenResource={onOpenResource}
         />
       ))}
     </section>
@@ -1916,16 +2057,42 @@ function ItemGroups({
 function ItemGroup({
   kind,
   items,
+  stakeholdersById,
+  resourcesById,
+  now,
+  locale,
+  busy,
   onToggle,
-  onAdd
+  onAdd,
+  onRename,
+  onDelete,
+  onOpenResource
 }: {
   kind: MatterItemKind
   items: readonly MatterItem[]
-  onToggle(item: MatterItem): void
+  stakeholdersById: ReadonlyMap<number, MatterStakeholder>
+  resourcesById: ReadonlyMap<number, MatterResourceListItem>
+  now: number
+  locale: string
+  busy: boolean
   onAdd(kind: MatterItemKind): void
-}): React.ReactElement {
+} & ItemRowCallbacks): React.ReactElement {
   const { t } = useTranslation()
   const [expanded, setExpanded] = useState<Set<number>>(new Set())
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [titleDraft, setTitleDraft] = useState('')
+
+  const startEdit = (item: MatterItem): void => {
+    setEditingId(item.id)
+    setTitleDraft(item.title)
+  }
+  const saveEdit = (item: MatterItem): void => {
+    const title = titleDraft.trim()
+    setEditingId(null)
+    if (!title || title === item.title) return
+    onRename(item, title)
+  }
+
   return (
     <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-1/65">
       <div className="flex items-center justify-between border-b border-ink-border px-4 py-3">
@@ -1943,8 +2110,31 @@ function ItemGroup({
       <div className="divide-y divide-ink-border">
         {items.map((item) => {
           const isExpanded = expanded.has(item.id)
+          const done = item.status === 'done'
+          const editing = editingId === item.id
+          // G-11 meta 行的数据面：状态 Pip（action 未完成）· 等 {人} · 到期 · 完成时间 ·
+          // 来源链接。设计里的 `已阻塞 {时长}`（it.since）与 owner 头像是 mock-only 字段，
+          // 数据里没有，不渲染。
+          const waitingOn =
+            item.waiting_on_stakeholder_id != null
+              ? stakeholdersById.get(item.waiting_on_stakeholder_id)
+              : undefined
+          const sourceResource =
+            item.source_resource_id != null ? resourcesById.get(item.source_resource_id) : undefined
+          const dueTone = matterDueTone(item.due_at, now)
+          const showStatusPip =
+            item.kind === 'action' &&
+            item.status !== null &&
+            item.status !== 'done' &&
+            item.status !== 'canceled'
+          const hasMeta =
+            showStatusPip ||
+            waitingOn !== undefined ||
+            (item.due_at != null && !done) ||
+            (done && item.completed_at != null) ||
+            sourceResource !== undefined
           return (
-            <div key={item.id} className="px-4 py-3">
+            <div key={item.id} className="group/item px-4 py-3">
               <div className="flex items-start gap-2.5">
                 {item.kind === 'action' ? (
                   <button
@@ -1952,26 +2142,135 @@ function ItemGroup({
                     onClick={() => onToggle(item)}
                     className={cn(
                       'mt-0.5 grid h-4 w-4 place-items-center rounded border',
-                      item.status === 'done'
-                        ? 'border-ok bg-ok text-accent-fg'
-                        : 'border-ink-border'
+                      done ? 'border-ok bg-ok text-accent-fg' : 'border-ink-border'
                     )}
                   >
-                    {item.status === 'done' ? <Check size={11} /> : null}
+                    {done ? <Check size={11} /> : null}
                   </button>
                 ) : null}
                 <div className="min-w-0 flex-1">
-                  <div
-                    className={cn(
-                      'text-body',
-                      item.status === 'done' && 'text-ink-fg-2 line-through'
-                    )}
-                  >
-                    {item.title}
-                  </div>
+                  {editing ? (
+                    <div className="flex items-center gap-1.5">
+                      <Input
+                        autoFocus
+                        value={titleDraft}
+                        onChange={(event) => setTitleDraft(event.target.value)}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') saveEdit(item)
+                          if (event.key === 'Escape') setEditingId(null)
+                        }}
+                        aria-label={t('matters.item.editTitle')}
+                        className="h-7 min-w-0 flex-1 px-2 text-body"
+                      />
+                      <button
+                        type="button"
+                        disabled={!titleDraft.trim() || busy}
+                        onClick={() => saveEdit(item)}
+                        aria-label={t('matters.actions.save')}
+                        className="rounded-[var(--r-ctl)] p-1.5 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+                      >
+                        <Save size={13} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditingId(null)}
+                        aria-label={t('matters.actions.cancel')}
+                        className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+                      >
+                        <X size={13} />
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="flex items-start gap-1.5">
+                      <div
+                        className={cn(
+                          'min-w-0 flex-1 text-body',
+                          done && 'text-ink-fg-2 line-through'
+                        )}
+                      >
+                        {item.title}
+                      </div>
+                      {/* hover 出 ✎/🗑（设计 detail.jsx:296-298 的 rowact 形态）。 */}
+                      <span className="inline-flex shrink-0 items-center gap-0.5 opacity-0 transition-opacity duration-fast group-focus-within/item:opacity-100 group-hover/item:opacity-100">
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => startEdit(item)}
+                          aria-label={t('matters.item.editTitle')}
+                          className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40"
+                        >
+                          <Pencil size={12} />
+                        </button>
+                        <button
+                          type="button"
+                          disabled={busy}
+                          onClick={() => onDelete(item)}
+                          aria-label={t('matters.item.deleteItem')}
+                          className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40"
+                        >
+                          <Trash2 size={12} />
+                        </button>
+                      </span>
+                    </div>
+                  )}
                   {item.description ? (
                     <div className="mt-1 [&_.mail-body]:text-aux [&_.mail-body]:leading-relaxed [&_.mail-body_p]:mb-2 [&_.mail-body_p:last-child]:mb-0">
                       <TranslatedBody text={item.description} />
+                    </div>
+                  ) : null}
+                  {hasMeta ? (
+                    <div className="mt-1.5 flex flex-wrap items-center gap-2">
+                      {showStatusPip ? (
+                        <span
+                          className={cn(
+                            'inline-flex items-center rounded-[var(--r-pill)] border px-1.5 py-0.5 text-micro',
+                            MATTER_TONE_CHIP_CLASS[
+                              MATTER_ITEM_STATUS_TONES[item.status as MatterItemStatus]
+                            ]
+                          )}
+                        >
+                          {t(`matters.item.status.${item.status}`)}
+                        </span>
+                      ) : null}
+                      {waitingOn ? (
+                        <span className="inline-flex items-center gap-1 text-micro text-warn">
+                          <Hourglass size={10} />
+                          {t('matters.item.waitingOn', {
+                            name: waitingOn.display_name ?? waitingOn.email_normalized ?? '—'
+                          })}
+                        </span>
+                      ) : null}
+                      {item.due_at != null && !done ? (
+                        <span
+                          className={cn(
+                            'text-micro',
+                            dueTone === null || dueTone === 'neutral'
+                              ? 'text-ink-fg-3'
+                              : MATTER_TONE_TEXT_CLASS[dueTone]
+                          )}
+                        >
+                          {t('matters.item.dueRelative', {
+                            time: formatMatterDueRelative(item.due_at, now, locale)
+                          })}
+                        </span>
+                      ) : null}
+                      {done && item.completed_at != null ? (
+                        <span className="text-micro text-ink-fg-3">
+                          {t('matters.item.completedAt', {
+                            time: formatMatterAgo(item.completed_at, now, locale)
+                          })}
+                        </span>
+                      ) : null}
+                      {sourceResource ? (
+                        <button
+                          type="button"
+                          onClick={() => onOpenResource(sourceResource)}
+                          className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] text-micro text-ink-fg-3 transition-colors duration-fast ease-standard hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+                        >
+                          <Link2 size={10} />
+                          {t('matters.item.source')}
+                        </button>
+                      ) : null}
                     </div>
                   ) : null}
                   {item.checklist.length > 0 ? (
@@ -2010,6 +2309,131 @@ function ItemGroup({
         })}
       </div>
     </div>
+  )
+}
+
+/**
+ * `waiting_context` 是无 schema 的 JSON 对象（wire 契约 `Record<string, unknown> | null`；
+ * 提案通道与测试里的既有形状是 `{who: …}` 一类的 ad-hoc dict）→ 展示时投影成一行文本：
+ * 取原始值键的 `k: v`（约定键 `note` 直接出值，是本组件自己写入的形状），投不出来就整段
+ * JSON 兜底 —— 宁可难看也不隐藏「它在等」这个事实。
+ */
+function waitingContextText(value: Record<string, unknown> | null): string | null {
+  if (value === null) return null
+  const parts: string[] = []
+  for (const [key, raw] of Object.entries(value)) {
+    if (raw == null) continue
+    if (typeof raw === 'string' || typeof raw === 'number' || typeof raw === 'boolean') {
+      parts.push(key === 'note' ? String(raw) : `${key}: ${String(raw)}`)
+    }
+  }
+  if (parts.length > 0) return parts.join(' · ')
+  return Object.keys(value).length > 0 ? JSON.stringify(value) : null
+}
+
+/**
+ * G-08 等待条（设计 detail.jsx:205-209 的 `m.waiting` 行，按真实数据微调）：真实数据是
+ * 无 schema 的 `waiting_context` dict + `stakeholder.is_waiting_on`，不是设计的结构化
+ * `{who,what,since}` —— 显示投影文本 + 等待中干系人名；「等了多久」没有起始时间戳可依据，
+ * 不渲染。点击就地编辑（保存为 `{note: 文本}`）/ 清除（DIRECT_PATCH_FIELDS 既有通道）。
+ */
+function MatterWaitingBar({
+  waitingContext,
+  stakeholders,
+  saving,
+  onSave
+}: {
+  waitingContext: Record<string, unknown> | null
+  stakeholders: readonly MatterStakeholder[]
+  saving: boolean
+  onSave(waitingContext: Record<string, unknown> | null): void
+}): React.ReactElement | null {
+  const { t } = useTranslation()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const waitingNames = stakeholders
+    .filter((stakeholder) => stakeholder.is_waiting_on && stakeholder.deleted_at === null)
+    .map((stakeholder) => stakeholder.display_name ?? stakeholder.email_normalized ?? '—')
+  const contextText = waitingContextText(waitingContext)
+  if (!editing && contextText === null && waitingNames.length === 0) return null
+
+  const label =
+    contextText !== null && waitingNames.length > 0
+      ? t('matters.detail.waitingBoth', { names: waitingNames.join('、'), context: contextText })
+      : contextText !== null
+        ? t('matters.detail.waitingContext', { context: contextText })
+        : t('matters.detail.waitingNames', { names: waitingNames.join('、') })
+
+  if (editing) {
+    return (
+      <span className="inline-flex items-center gap-1">
+        <Hourglass size={11} className="shrink-0 text-warn" />
+        <Input
+          autoFocus
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              onSave(draft.trim() ? { note: draft.trim() } : null)
+              setEditing(false)
+            }
+            if (event.key === 'Escape') setEditing(false)
+          }}
+          placeholder={t('matters.detail.waitingPlaceholder')}
+          aria-label={t('matters.detail.waitingEdit')}
+          className="h-7 w-52 px-2 text-meta"
+        />
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => {
+            onSave(draft.trim() ? { note: draft.trim() } : null)
+            setEditing(false)
+          }}
+          aria-label={t('matters.actions.save')}
+          className="rounded-[var(--r-ctl)] p-1 text-ok transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+        >
+          <Save size={12} />
+        </button>
+        <button
+          type="button"
+          onClick={() => setEditing(false)}
+          aria-label={t('matters.actions.cancel')}
+          className="rounded-[var(--r-ctl)] p-1 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+        >
+          <X size={12} />
+        </button>
+      </span>
+    )
+  }
+
+  return (
+    <span className="inline-flex items-center gap-0.5">
+      <button
+        type="button"
+        disabled={saving}
+        onClick={() => {
+          setDraft(contextText ?? '')
+          setEditing(true)
+        }}
+        title={t('matters.detail.waitingEdit')}
+        className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-1 py-0.5 text-meta text-warn transition-colors duration-fast ease-standard hover:bg-warn/10 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+      >
+        <Hourglass size={11} className="shrink-0" />
+        <span className="max-w-72 truncate">{label}</span>
+      </button>
+      {waitingContext !== null ? (
+        <button
+          type="button"
+          disabled={saving}
+          onClick={() => onSave(null)}
+          aria-label={t('matters.detail.waitingClear')}
+          className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-50"
+        >
+          <X size={11} />
+        </button>
+      ) : null}
+    </span>
   )
 }
 

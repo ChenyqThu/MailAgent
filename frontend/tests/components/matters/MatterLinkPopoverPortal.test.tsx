@@ -142,3 +142,72 @@ describe('MatterLinkPopover — 键盘可退出 + 焦点归位（codex #8）', (
     expect(document.activeElement).toBe(trigger)
   })
 })
+
+/** G-25 (Q2=c)：工具栏捕获形态 —— AI 调研创建 / 快速新建 / 跟进 Agent 次级入口。 */
+function CaptureHost({
+  onAiResearch,
+  onCreateFollowupAgent
+}: {
+  onAiResearch?: () => void
+  onCreateFollowupAgent?: () => void
+}): React.ReactElement {
+  const anchorRef = useRef<HTMLDivElement>(null)
+  return (
+    <div ref={anchorRef} className="relative">
+      <MatterLinkPopover
+        open
+        anchorRef={anchorRef}
+        source={{
+          internalId: 42,
+          threadId: 'thread-1',
+          subject: 'Vendor launch',
+          sender: 'a@b.test',
+          receivedAt: null,
+          threadCount: 3
+        }}
+        onAiResearch={onAiResearch}
+        onCreateFollowupAgent={onCreateFollowupAgent}
+        onClose={vi.fn()}
+      />
+    </div>
+  )
+}
+
+describe('MatterLinkPopover — 捕获浮层的三个新行（G-25）', () => {
+  test('传了 onAiResearch → 「AI 调研创建」行在最上、创建行改标「快速新建」，点击各自触发', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
+    })
+    const onAiResearch = vi.fn()
+    const onCreateFollowupAgent = vi.fn()
+    render(
+      <QueryClientProvider client={client}>
+        <CaptureHost onAiResearch={onAiResearch} onCreateFollowupAgent={onCreateFollowupAgent} />
+      </QueryClientProvider>
+    )
+    await screen.findByRole('dialog', { name: '事项' })
+
+    fireEvent.click(screen.getByRole('button', { name: 'AI 调研创建' }))
+    expect(onAiResearch).toHaveBeenCalledTimes(1)
+    expect(screen.getByRole('button', { name: '快速新建' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '创建新事项' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '为此线程建立跟进 Agent' }))
+    expect(onCreateFollowupAgent).toHaveBeenCalledTimes(1)
+  })
+
+  test('不传两个新入口（⌘K 消费方）→ 形态与既有版本一致', async () => {
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <CaptureHost />
+      </QueryClientProvider>
+    )
+    await screen.findByRole('dialog', { name: '事项' })
+    expect(screen.getByRole('button', { name: '创建新事项' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'AI 调研创建' })).toBeNull()
+    expect(screen.queryByRole('button', { name: '为此线程建立跟进 Agent' })).toBeNull()
+  })
+})

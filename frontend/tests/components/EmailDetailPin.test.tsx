@@ -142,12 +142,11 @@ describe('入口 3 — EmailDetail / EmailToolbar 的置顶按钮', () => {
   })
 })
 
-// 🔴 0812：「为此线程建立跟进 Agent」入口整个移除 —— 它建的是 Custom Agent，而**事项**
-// 本身就是这条线程的跟进载体且更完整（有状态/行动项/干系人/时间线，产出恒走人工审阅），
-// 左邻的「事项」按钮早已提供"为此线程建立事项"。P6 的三条用例随功能一起删。
-// 保留一条反向断言：这个入口确实不该再出现，免得日后被无意重新接线。
-describe('邮件工具栏 — 线程跟进 Agent 入口已退役', () => {
-  test('即使 triggerV2 开着也不再渲染该入口', async () => {
+// 🔴 0812：「为此线程建立跟进 Agent」从工具栏一级位移除；G-25 (Q2=c) 起它作为**次级行**
+// 收进「事项」捕获浮层（MatterLinkPopover 末位，弱化配色）。本用例钉的是工具栏一级位
+// 恒不回来 —— 浮层内的次级入口由 MatterLinkPopoverPortal.test 覆盖。
+describe('邮件工具栏 — 线程跟进 Agent 一级入口已退役', () => {
+  test('即使 triggerV2 开着，工具栏也不再渲染该一级按钮', async () => {
     const container = renderDetail(201)
     await waitForToolbar(container)
     expect(

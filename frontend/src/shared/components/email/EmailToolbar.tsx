@@ -94,15 +94,18 @@ interface ToolbarProps {
   onLlmRun?: () => void
   llmRunState?: WriteActionState
 
-  /** 0812 —— 「创建事项」：不再开 MatterLinkPopover（新建 / 加入已有 / 重复候选），而是唤起右下角
-   *  AI chat，带上这封邮件的引用 + 一条指令，由主 agent 去查重、决定新建还是关联。
-   *  🔴 去重能力没有消失、换了承载：指令文案（locale `toolbar.createMatterPrompt`）明确要求先查
-   *  既有事项，恒注入的 `matters` skill 方法论也写着 find-before-create。
+  /** G-25 (Q2=c) —— 工具栏收敛为一个「事项」按钮 → 捕获浮层（MatterLinkPopover：AI 调研创建 /
+   *  快速新建 / 加入已有候选 / 跟进 Agent 次级入口 / 已归属态）。浮层由 EmailDetail 拥有并经
+   *  `popover` 槽下发（portal 到 body，锚在 `anchorRef` 这只包裹容器上 —— 工具栏 header 是
+   *  `overflow-x-auto` 裁剪容器，弹层留在子树里会被整块裁掉）。
    *  `count`/`state` 仍在：徽标把「这封邮件已挂在 N 件事上」当场摆出来，正是查重的第一手信号。 */
-  createMatter?: {
+  matter?: {
     count: number
     state: 'unlinked' | 'single' | 'multiple'
-    onClick(): void
+    open: boolean
+    onToggle(): void
+    anchorRef: React.RefObject<HTMLDivElement | null>
+    popover?: React.ReactNode
   }
 
   onToggleRead?: () => void
@@ -723,7 +726,7 @@ export function EmailToolbar({
   resyncState,
   onLlmRun,
   llmRunState,
-  createMatter,
+  matter,
   onToggleRead,
   isRead,
   readState,
@@ -934,31 +937,33 @@ export function EmailToolbar({
         pending={llmRunState?.pending}
         onClick={onLlmRun}
       />
-      {/* 「为此线程建立跟进 Agent」已移除（0812 dogfood）：它建的是一个 Custom Agent
-          （trigger=email_filter + thread_id），而**事项**本身就是这条线程的跟进载体，且更完整
-          ——有状态/行动项/干系人/时间线，跟进产出恒走人工审阅。Custom Agent 仍可在 Agents 页手建，
-          能力未减。「创建事项」接了它的位置（AI 重跑右侧）。 */}
-      {createMatter ? (
-        <GhostBtn
-          icon={
-            <span className="relative">
-              <BriefcaseBusiness size={13} strokeWidth={1.75} />
-              {createMatter.state === 'multiple' ? (
-                <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-coral/100 px-0.5 text-center text-[8px] leading-3.5 text-accent-fg">
-                  {createMatter.count}
-                </span>
-              ) : null}
-            </span>
-          }
-          label={t('toolbar.createMatter')}
-          showLabel={wantsLabels}
-          // active/pressed = 「这封邮件已挂在事项上」—— 点下去仍是"交给 agent 处理"，
-          // 它会看见同样的事实并建议加入而不是重复新建。
-          active={createMatter.state !== 'unlinked'}
-          pressed={createMatter.state !== 'unlinked'}
-          hoverHint={t('toolbar.createMatterHint')}
-          onClick={createMatter.onClick}
-        />
+      {/* G-25 (Q2=c) —— 「创建事项」「跟进 Agent」两按钮收敛为一个「事项」按钮（0812 D4
+          的两按钮问题就此裁掉）：点开捕获浮层（AI 调研创建 / 快速新建 / 加入已有 / 跟进
+          Agent 次级入口），已归属时按钮转按下态 + 标「已在事项中」。 */}
+      {matter ? (
+        <div ref={matter.anchorRef} className="relative">
+          <GhostBtn
+            icon={
+              <span className="relative">
+                <BriefcaseBusiness size={13} strokeWidth={1.75} />
+                {matter.state === 'multiple' ? (
+                  <span className="absolute -right-2 -top-2 min-w-3.5 rounded-full bg-coral/100 px-0.5 text-center text-[8px] leading-3.5 text-accent-fg">
+                    {matter.count}
+                  </span>
+                ) : null}
+              </span>
+            }
+            label={t(matter.state === 'unlinked' ? 'toolbar.matters' : 'toolbar.mattersLinked')}
+            showLabel={wantsLabels}
+            // active/pressed = 「这封邮件已挂在事项上」（设计 create.jsx:302 的 linked 态）。
+            active={matter.state !== 'unlinked'}
+            pressed={matter.state !== 'unlinked'}
+            expanded={matter.open}
+            hoverHint={t('toolbar.matterMenuHint')}
+            onClick={matter.onToggle}
+          />
+          {matter.popover}
+        </div>
       ) : null}
 
       {/* Right cluster: Open Notion · Divider · Prev · Next · Divider · AIPanelToggle.

@@ -137,7 +137,7 @@ describe('MatterTimeline', () => {
     expect(screen.queryByRole('button', { name: /展开/ })).toBeNull()
   })
 
-  it('审计事件默认收起、可被显式打开（收起 ≠ 删掉）', () => {
+  it('审计事件不进主视图，在「操作日志」弹窗里逐条可达（收进弹窗 ≠ 删掉）', () => {
     render(
       <MatterTimeline
         events={[
@@ -151,22 +151,22 @@ describe('MatterTimeline', () => {
     expect(screen.getByText('创建了事项')).toBeTruthy()
     expect(screen.queryByText('扩大了事项对话的检索范围')).toBeNull()
 
-    const toggle = screen.getByRole('button', { name: /显示操作记录（2）/ })
-    fireEvent.click(toggle)
-    expect(rows()).toHaveLength(3)
+    // 脚注计数说的是全部事件（弹窗就是完整时间线）。
+    expect(screen.getByText(/都在操作日志里（3 条）/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '查看操作日志' }))
+    expect(screen.getAllByTestId('matter-audit-entry')).toHaveLength(3)
     expect(screen.getByText('扩大了事项对话的检索范围')).toBeTruthy()
-    expect(screen.getAllByText('操作记录').length).toBe(2)
-
-    fireEvent.click(screen.getByRole('button', { name: /隐藏操作记录/ }))
+    // 主视图不受弹窗影响。
     expect(rows()).toHaveLength(1)
   })
 
-  it('没有审计事件时不渲染那个开关', () => {
+  it('没有审计事件时操作日志入口仍在（它是完整时间线，不是审计专属）', () => {
     render(<MatterTimeline events={[ev({ kind: 'matter_created' })]} />)
-    expect(screen.queryByRole('button', { name: /操作记录/ })).toBeNull()
+    expect(screen.getByRole('button', { name: '操作日志' })).toBeTruthy()
+    expect(screen.getByText(/都在操作日志里（1 条）/)).toBeTruthy()
   })
 
-  it('actor 四档筛选仍然工作，且与审计档是两个独立维度', () => {
+  it('actor 四档筛选仍然工作，弹窗有自己独立的筛选', () => {
     render(
       <MatterTimeline
         events={[
@@ -181,22 +181,39 @@ describe('MatterTimeline', () => {
         ]}
       />
     )
-    expect(rows()).toHaveLength(2) // agent_binding_changed 是审计档，默认不显示
+    expect(rows()).toHaveLength(2) // agent_binding_changed 是审计档，不进主视图
 
     fireEvent.click(screen.getByRole('tab', { name: 'Agent' }))
     expect(rows()).toHaveLength(1)
     expect(screen.getByText('跟进运行完成 · 检出 2 项变化，生成 1 条更新提案')).toBeTruthy()
-    // 审计计数跟着 actor 筛选走 —— 两个维度各自成立。
-    expect(screen.getByRole('button', { name: /显示操作记录（1）/ })).toBeTruthy()
 
     fireEvent.click(screen.getByRole('tab', { name: '我' }))
     expect(rows()).toHaveLength(1)
     expect(screen.getByText('创建了事项')).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /操作记录/ })).toBeNull()
+
+    // 弹窗清单不吃主视图的筛选（自带四档），全量 3 条都在。
+    fireEvent.click(screen.getByRole('button', { name: '查看操作日志' }))
+    expect(screen.getAllByTestId('matter-audit-entry')).toHaveLength(3)
+    const dialog = screen.getByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('tab', { name: 'Agent' }))
+    expect(screen.getAllByTestId('matter-audit-entry')).toHaveLength(2)
+  })
+
+  it('业务事件按天分组（跨天的两条各有一个天头）', () => {
+    render(
+      <MatterTimeline
+        events={[
+          ev({ kind: 'matter_created', happened_at: T0 - 3 * 86_400_000 }),
+          ev({ kind: 'item_created', happened_at: T0, payload: { kind: 'action', title: '跟进' } })
+        ]}
+      />
+    )
+    expect(screen.getAllByTestId('matter-timeline-day')).toHaveLength(2)
+    expect(rows()).toHaveLength(2)
   })
 
   it('空列表仍显示既有空态', () => {
     render(<MatterTimeline events={[]} />)
-    expect(screen.getByText('这个筛选下还没有事件。')).toBeTruthy()
+    expect(screen.getByText('这个筛选下还没有进展。')).toBeTruthy()
   })
 })

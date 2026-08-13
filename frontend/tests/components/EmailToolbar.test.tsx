@@ -133,35 +133,59 @@ describe('EmailToolbar — write button wiring', () => {
   })
 })
 
-describe('EmailToolbar — 创建事项 (0812)', () => {
-  test('点击「创建事项」把动作交出去（不再自己开弹层）', () => {
-    const onClick = vi.fn()
-    render(<EmailToolbar createMatter={{ count: 0, state: 'unlinked', onClick }} />)
-    fireEvent.click(screen.getByRole('button', { name: /^创建事项$/ }))
-    expect(onClick).toHaveBeenCalledTimes(1)
+describe('EmailToolbar — 「事项」捕获入口 (G-25 Q2=c)', () => {
+  const matterProps = (
+    overrides: Partial<{
+      count: number
+      state: 'unlinked' | 'single' | 'multiple'
+      open: boolean
+      onToggle(): void
+      popover: React.ReactNode
+    }> = {}
+  ) =>
+    ({
+      count: 0,
+      state: 'unlinked' as const,
+      open: false,
+      onToggle: vi.fn(),
+      anchorRef: { current: null },
+      ...overrides
+    }) as const
+
+  test('点击「事项」开合浮层（onToggle 交给 EmailDetail）', () => {
+    const onToggle = vi.fn()
+    render(<EmailToolbar matter={matterProps({ onToggle })} />)
+    const btn = screen.getByRole('button', { name: /^事项$/ })
+    expect(btn.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(btn)
+    expect(onToggle).toHaveBeenCalledTimes(1)
   })
 
-  test('它坐在「AI 重跑」右边（owner 指定的位置）', () => {
+  test('它坐在「AI 重跑」右边（owner 指定的位置），popover 槽随钮渲染', () => {
     render(
       <EmailToolbar
         onLlmRun={vi.fn()}
-        createMatter={{ count: 0, state: 'unlinked', onClick: vi.fn() }}
+        matter={matterProps({ open: true, popover: <div data-testid="capture-popover" /> })}
       />
     )
     const buttons = screen.getAllByRole('button')
     const llm = buttons.findIndex((b) => /^AI 重跑$/.test(b.getAttribute('aria-label') ?? ''))
-    const create = buttons.findIndex((b) => /^创建事项$/.test(b.getAttribute('aria-label') ?? ''))
+    const matterBtn = buttons.findIndex((b) => /^事项$/.test(b.getAttribute('aria-label') ?? ''))
     expect(llm).toBeGreaterThanOrEqual(0)
-    expect(create).toBe(llm + 1)
+    expect(matterBtn).toBe(llm + 1)
+    expect(screen.getByTestId('capture-popover')).toBeTruthy()
+    expect(buttons[matterBtn].getAttribute('aria-expanded')).toBe('true')
   })
 
-  test('已关联多件事时把数量摆出来 —— 这是用户侧的第一手查重信号', () => {
-    render(<EmailToolbar createMatter={{ count: 3, state: 'multiple', onClick: vi.fn() }} />)
+  test('已关联时标「已在事项中」+ 多件时数量徽标 —— 用户侧的第一手查重信号', () => {
+    render(<EmailToolbar matter={matterProps({ count: 3, state: 'multiple' })} />)
+    const btn = screen.getByRole('button', { name: /^已在事项中$/ })
+    expect(btn.getAttribute('aria-pressed')).toBe('true')
     expect(screen.getByText('3')).toBeTruthy()
   })
 
-  test('matters 未启用（不传 createMatter）→ 按钮根本不渲染', () => {
+  test('matters 未启用（不传 matter）→ 按钮根本不渲染', () => {
     render(<EmailToolbar onLlmRun={vi.fn()} />)
-    expect(screen.queryByRole('button', { name: /^创建事项$/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /^事项$/ })).toBeNull()
   })
 })

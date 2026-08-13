@@ -155,6 +155,29 @@ describe('MatterDetail state card', () => {
     expect(await screen.findByText('完成标志已全部满足，可以把这件事推进到「已完成」')).toBeTruthy()
   })
 
+  // G-10 —— 新鲜度指示 + 「重新生成摘要」入口（agent flag 关时只留指示）。
+  test('summary freshness: >14 天 warn 态；agent flag 开时出现重新生成入口', async () => {
+    matterAgentEnabled.value = true
+    renderDetail({
+      current_summary: '等待客户签署合同',
+      summary_at: Date.now() - 30 * 86_400_000,
+      summary_by_kind: 'agent'
+    })
+
+    expect(await screen.findByText(/已 \d+ 天未更新/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: '重新生成摘要' })).toBeTruthy()
+
+    cleanup()
+    matterAgentEnabled.value = false
+    renderDetail({
+      current_summary: '等待客户签署合同',
+      summary_at: Date.now() - 2 * 3_600_000,
+      summary_by_kind: 'user'
+    })
+    expect(await screen.findByText(/由你接受/)).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '重新生成摘要' })).toBeNull()
+  })
+
   test('patches due_at from a date input and can clear it', async () => {
     renderDetail({ due_at: null })
 

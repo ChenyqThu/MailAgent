@@ -3,13 +3,13 @@ import { createPortal } from 'react-dom'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { ExternalLink, Pause, Play, Plus, Search, Trash2, X } from 'lucide-react'
+import { Bot, ExternalLink, Pause, Play, Plus, Search, Sparkles, Trash2, X } from 'lucide-react'
 
 import type { Matter, MatterLinkScope } from '@shared/api/types/matter'
 import { useAnchoredPosition } from '@shared/hooks/useAnchoredPosition'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
-import { toastError, toastSuccess } from '@shared/state/toast'
+import { toastError, toastSuccess, useToastStore } from '@shared/state/toast'
 
 import { MatterCreateDialog } from './MatterCreateDialog'
 import type { MatterCreateSource } from './MatterCreateDialog'
@@ -30,13 +30,21 @@ interface MatterLinkPopoverProps {
    *  0812 dogfood：祖先 `overflow-x-auto` 会把 `absolute` 面板整块裁掉，见 useAnchoredPosition。 */
   anchorRef: React.RefObject<HTMLElement | null>
   onClose(): void
+  /** G-25 (Q2=c) —— 「AI 调研创建」行：唤起主 chat 带创建 prompt（关闭浮层由调用方做）。
+   *  给了它，「创建新事项」行改标「快速新建」与之相区分；⌘K 消费方不传，形态不变。 */
+  onAiResearch?: () => void
+  /** G-25 ④ —— 次级一行「为此线程建立跟进 Agent」（复用 CustomAgentDrawer 既有流程）。
+   *  仅在 trigger v2 开且线程键可派生时由调用方提供。 */
+  onCreateFollowupAgent?: () => void
 }
 
 export function MatterLinkPopover({
   open,
   source,
   anchorRef,
-  onClose
+  onClose,
+  onAiResearch,
+  onCreateFollowupAgent
 }: MatterLinkPopoverProps): React.ReactElement | null {
   const { t } = useTranslation()
   const api = useMattersApi()
@@ -299,13 +307,23 @@ export function MatterLinkPopover({
                     </section>
                   ) : null}
 
+                  {onAiResearch ? (
+                    <button
+                      type="button"
+                      onClick={onAiResearch}
+                      className="flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-aux text-ink-fg hover:bg-ink-3"
+                    >
+                      <Sparkles size={14} className="text-ai" />
+                      {t('matters.capture.aiResearch')}
+                    </button>
+                  ) : null}
                   <button
                     type="button"
                     onClick={() => setCreateOpen(true)}
                     className="flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-aux text-ink-fg hover:bg-ink-3"
                   >
                     <Plus size={14} className="text-coral" />
-                    {t('matters.capture.create')}
+                    {t(onAiResearch ? 'matters.capture.quickCreate' : 'matters.capture.create')}
                   </button>
                   <div className="mx-2 my-2 h-px bg-ink-border" />
                   <section>
@@ -345,6 +363,21 @@ export function MatterLinkPopover({
                       </p>
                     ) : null}
                   </section>
+                  {onCreateFollowupAgent ? (
+                    <>
+                      <div className="mx-2 my-2 h-px bg-ink-border" />
+                      {/* 次级入口：事项本身就是这条线程的跟进载体，Custom Agent 是另一种
+                          形态（0812 从工具栏一级位撤下），故收进菜单末位、弱化配色。 */}
+                      <button
+                        type="button"
+                        onClick={onCreateFollowupAgent}
+                        className="flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-meta text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg"
+                      >
+                        <Bot size={13} />
+                        {t('toolbar.followupAgent')}
+                      </button>
+                    </>
+                  ) : null}
                 </div>
               </div>
             </>,
@@ -376,8 +409,16 @@ export function MatterLinkPopover({
           )
           setCreateOpen(false)
           await refresh()
-          openMatter(candidate.matter.public_id)
-          void navigate({ to: '/matters' })
+          // G-24 —— 「加入该事项」：关联 + 关弹窗 + toast 带跳转。不再强制离开当前邮件
+          // （用户多半还要继续读信），要去看事项点 toast 上的按钮。
+          useToastStore.getState().push({
+            variant: 'success',
+            title: t('matters.capture.addedToast', { title: candidate.matter.title }),
+            action: {
+              label: t('matters.capture.open'),
+              onClick: () => goToMatter(candidate.matter.public_id)
+            }
+          })
           onClose()
         }}
       />
