@@ -1,12 +1,16 @@
-// 灵动 bot 头像 v2 —— 形状词表：13 个成品形状（avatar-lab studio 成品目录化）。
-// 0813 owner 拍板「直接照搬库」后：形状不再是「原语 = 出厂 preset 恒等引用」，而是
-// avatar-lab `defaultStudioDocument.json` 里 10 个成品 avatar 的调参几何 + 组合身体
-// （多 primitive 附属曲面），并保留 4 个没有 lab 成品对应物的原语（cylinder/diamond/
-// mickey/cursor，仍用出厂 preset）。lab 成品 → 本仓词表的映射：
-//   Strobi / Grok bot → sphere（二者几何 = 出厂 sphere preset）
-//   Nova → capsule（= 出厂 capsule preset）
+// 灵动 bot 头像 v2 —— 形状词表：10 个成品形状（avatar-lab studio 成品目录，全量）。
+// 0813 owner 拍板「直接照搬库、不要自己做的形状」：词表 = avatar-lab
+// `defaultStudioDocument.json` 里 10 个成品 avatar 的调参几何 + 组合身体
+// （多 primitive 附属曲面），**没有 lab 成品对应物的自编形状全部退役**
+// （cylinder/diamond/mickey/cursor —— 存量 avatar_json 经 LEGACY_BOT_SHAPE_MAP
+// 读侧换脸，不迁移不回写）。lab 成品 → 本仓词表的映射（slug 沿用几何家族名，
+// owner 明示不在乎名字 —— 改名会让全部存量行走 legacy 映射、徒增一次换脸）：
+//   Grok bot → sphere（= 出厂 sphere preset 逐字）
+//   Strobi → strobi（sphere 240×240×240.03671875 —— 与 Grok bot 仅 depth 差
+//     0.0367，视觉不可分但 lab 数据确实不同，按「成品一个不少」纪律单列）
+//   Nova → capsule（= 出厂 capsule preset 逐字）
 //   Cubee → cube · Citrus → cone（原 raw preset 尺寸会溢出 viewBox，成品调参值根治）
-//   Freddy / Sunee / Kirby / Cloudee / Onee → 同名新形状（前四者带组合身体）
+//   Freddy / Sunee / Kirby / Cloudee / Onee → 同名形状（前四者带组合身体）
 // 颜色**不**随 lab（owner：按现有色板），身体/眼睛 fill 仍走 colors.ts。
 // 本文件是跨语言 parity 闸（TS ↔ src/reports/wire.py 白名单，
 // tests/config/test_bot_avatar_vocab_parity.py）的抽取源，
@@ -18,13 +22,10 @@ import type { BodyNodeDef } from './geometry'
 
 export const BOT_AVATAR_SHAPES = [
   'sphere',
+  'strobi',
   'capsule',
-  'cylinder',
   'cone',
   'cube',
-  'diamond',
-  'mickey',
-  'cursor',
   'freddy',
   'sunee',
   'kirby',
@@ -51,11 +52,12 @@ const solo = (primary: SurfaceConfig): BotShapeDef => ({ primary, nodes: [] })
  * 先回 lab studio 调完回抄）。
  */
 export const SHAPES: Record<BotShape, BotShapeDef> = {
-  // Strobi / Grok bot（lab 成品几何 = 出厂 sphere preset）
+  // Grok bot（lab 成品几何 = 出厂 sphere preset 逐字）
   sphere: solo(surfacePresets.sphere),
-  // Nova（= 出厂 capsule preset）
+  // Strobi（与 Grok bot 仅 depth 差 0.0367 —— lab 数据如此，勿「顺手归一」）
+  strobi: solo({ type: 'sphere', width: 240, height: 240, depth: 240.03671875, roundness: 1 }),
+  // Nova（= 出厂 capsule preset 逐字）
   capsule: solo(surfacePresets.capsule),
-  cylinder: solo(surfacePresets.cylinder),
   // Citrus
   cone: solo({
     type: 'cone',
@@ -75,9 +77,6 @@ export const SHAPES: Record<BotShape, BotShapeDef> = {
     depth: 171.95848214285726,
     roundness: 0.73265625
   }),
-  diamond: solo(surfacePresets.diamond),
-  mickey: solo(surfacePresets.mickey),
-  cursor: solo(surfacePresets.cursor),
   // Freddy（圆角方脑袋 + 头顶双球与天线柱）
   freddy: {
     primary: {
@@ -316,37 +315,45 @@ export const SHAPES: Record<BotShape, BotShapeDef> = {
 }
 
 /**
- * v1 8 形 → 现词表的读侧双射（agentAvatarIdentity.ts 消费）。
- * 存量 avatar_json 里的 v1 形状名渲染期换脸、不迁移不回写；写侧（wire.py 白名单
- * 与编辑器）只认现词表。双射保证 v1 时代两个不同形状的 agent 换代后仍不同脸。
- * 13 形词表换代注记：8 个 v2 原语名全部仍在词表内（cube/cone 的几何换成 lab 成品
- * 调参值，名字不变），故本表不需要新增条目。
+ * 退役形状名 → 现词表的读侧换脸（agentAvatarIdentity.ts 消费）。
+ * 存量 avatar_json 里的旧形状名渲染期换脸、不迁移不回写；写侧（wire.py 白名单
+ * 与编辑器）只认现词表。两组键：
+ *   - v1 8 形（2D path 时代）：保持**双射** —— v1 时代两个不同形状的 agent
+ *     换代后仍不同脸（sphere/strobi 视觉上几乎同脸是 lab 目录自身的局限，
+ *     名义双射仍成立）；
+ *   - v2 退役 4 形（0813 自编原语退役）：按几何相似度就近入座，与 v1 键可共享
+ *     目标（12 键 > 10 形，结构上无法整体双射）——
+ *       cylinder→capsule（同为竖直圆润柱体家族）
+ *       diamond→sunee（同为带尖角的放射剪影；与 v1 hex 系谱一致）
+ *       mickey→cloudee（同为圆主体+圆瓣多球剪影；与 v1 cloud 系谱一致）
+ *       cursor→onee（同为尖头软锥；与 v1 teardrop 系谱一致）
  */
 export const LEGACY_BOT_SHAPE_MAP: Record<string, BotShape> = {
+  // v1 8 形（双射）
   blob: 'sphere',
   capsule: 'capsule',
   squircle: 'cube',
-  egg: 'cylinder',
+  egg: 'strobi',
   wedge: 'cone',
-  hex: 'diamond',
-  cloud: 'mickey',
-  teardrop: 'cursor'
+  hex: 'sunee',
+  cloud: 'cloudee',
+  teardrop: 'onee',
+  // v2 退役 4 形（自编原语，0813「只留 lab 成品」拍板后退役）
+  cylinder: 'capsule',
+  diamond: 'sunee',
+  mickey: 'cloudee',
+  cursor: 'onee'
 }
-
-/** 主曲面内建的背层复合 path 数（mickey 双耳 / cursor 锥体） */
-const BUILTIN_BACK_COUNT = (def: BotShapeDef): number =>
-  def.primary.type === 'mickey' ? 2 : def.primary.type === 'cursor' ? 1 : 0
 
 const countRecord = (count: (def: BotShapeDef) => number): Record<BotShape, number> =>
   Object.fromEntries(
     BOT_AVATAR_SHAPES.map((shape) => [shape, count(SHAPES[shape])])
   ) as Record<BotShape, number>
 
-/** 每形状的背层 path 槽位数（内建复合 + 全部附属曲面；组件据此渲染固定槽位）。
- *  附属曲面逐帧在背/前层间迁移（z 排序），槽位按「全在背层」的最大值开，空槽写 ''。 */
-export const BACK_PATH_COUNT: Record<BotShape, number> = countRecord(
-  (def) => BUILTIN_BACK_COUNT(def) + def.nodes.length
-)
+/** 每形状的背层 path 槽位数（= 附属曲面数；组件据此渲染固定槽位）。
+ *  附属曲面逐帧在背/前层间迁移（z 排序），槽位按「全在背层」的最大值开，空槽写 ''。
+ *  （0813 自编形状退役后不再有内建复合背层 —— mickey 双耳/cursor 锥体已随词表退役。） */
+export const BACK_PATH_COUNT: Record<BotShape, number> = countRecord((def) => def.nodes.length)
 
 /** 每形状的前层 path 槽位数（= 附属曲面数；多数形状为 0，多数帧为空槽） */
 export const FRONT_PATH_COUNT: Record<BotShape, number> = countRecord((def) => def.nodes.length)

@@ -154,12 +154,12 @@ describe('PreprocessConfigDrawer 头像身份（0804 dogfood 3d）', () => {
     renderDrawer()
     expect(screen.queryByTestId('avatar-shape-grid')).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: '更换' }))
-    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('mickey'))
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('kirby'))
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() => {
       expect(mockSave).toHaveBeenCalledWith(
         'email_preprocess_agent',
-        expect.objectContaining({ avatar: expect.objectContaining({ type: 'bot', shape: 'mickey' }) })
+        expect.objectContaining({ avatar: expect.objectContaining({ type: 'bot', shape: 'kirby' }) })
       )
     })
   })

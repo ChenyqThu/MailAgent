@@ -10,7 +10,7 @@
 // 恒回静态档：身份/状态仍可读，动画整个不出现。
 // v2 渲染结构（镜像 avatar-lab standalone runtime）：
 //   defs/clipPath(head) → g[flip] → g[motion: ambient 平移] →
-//     back×N(mickey 耳/cursor 锥/头后附属曲面) → head path → g[clip] → eye×2 →
+//     back×N(头后附属曲面) → head path → g[clip] → eye×2 →
 //     front×M(转到头前的附属曲面)
 // 头部 path 每帧都会变（3D 转头），所以 head 与 clipPath 都由 writeFrame 直写。
 // svg overflow: visible 镜像 lab（studio 画布与 standalone 导出都设了）——组合身体

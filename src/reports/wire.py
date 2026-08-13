@@ -66,21 +66,20 @@ def _normalize_avatar_image(avatar: Dict[str, Any]) -> Dict[str, Any]:
 # 无 type 键 = legacy oreo 生成式）。词表以这里为跨语言 canonical —— 前端
 # frontend/src/shared/bot-avatar/{shapes,colors}.ts 手抄同一份驱动编辑器网格与渲染，
 # 闸 = tests/config/test_bot_avatar_vocab_parity.py（任一侧漂移/改名/重排必红）。
-# 0813 成品目录化（owner 拍板照搬 avatar-lab 成品库）：13 个成品形状 = 原 8 原语名
-# （cube/cone 几何在 TS 侧换成 lab studio 调参值，名字不变）+ 5 个组合身体成品
-# （freddy/sunee/kirby/cloudee/onee）。组合身体是形状名在 TS 侧的派生数据
+# 0813 成品目录化（owner 拍板照搬 avatar-lab 成品库、自编形状全退役）：10 个成品形状
+# = lab defaultStudioDocument 的 10 个 avatar（Grok bot→sphere / Strobi→strobi /
+# Nova→capsule / Citrus→cone / Cubee→cube + freddy/sunee/kirby/cloudee/onee，
+# 后五者除 onee 外带组合身体）。组合身体是形状名在 TS 侧的派生数据
 # （shapes.ts SHAPES[shape].nodes），wire 结构不变仍是 {type,shape,color}。
-# v1 8 形（blob/squircle/egg/wedge/hex/cloud/teardrop/capsule）由前端 shapes.ts
-# LEGACY_BOT_SHAPE_MAP 读侧双射换脸，写侧（本白名单 + 编辑器）只认现词表，存量行不迁移。
+# v1 8 形（blob/squircle/egg/wedge/hex/cloud/teardrop/capsule）与 v2 退役 4 形
+# （cylinder/diamond/mickey/cursor —— 无 lab 成品对应物的自编原语）由前端 shapes.ts
+# LEGACY_BOT_SHAPE_MAP 读侧换脸，写侧（本白名单 + 编辑器）只认现词表，存量行不迁移。
 BOT_AVATAR_SHAPES = (
     "sphere",
+    "strobi",
     "capsule",
-    "cylinder",
     "cone",
     "cube",
-    "diamond",
-    "mickey",
-    "cursor",
     "freddy",
     "sunee",
     "kirby",

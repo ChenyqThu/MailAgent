@@ -141,13 +141,10 @@ describe('BotAvatar 静态档（默认）', () => {
     expect(anonymous.container.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
   })
 
-  test('复合形背层槽位：mickey 双耳 / cursor 锥体 / sphere 无', () => {
-    const mickey = render(<BotAvatar config={{ shape: 'mickey' }} />)
-    expect(mickey.container.querySelectorAll('[data-bot-back]')).toHaveLength(2)
-    mickey.unmount()
-    const cursor = render(<BotAvatar config={{ shape: 'cursor' }} />)
-    expect(cursor.container.querySelectorAll('[data-bot-back]')).toHaveLength(1)
-    cursor.unmount()
+  test('背层槽位跟随组合身体：kirby 双手 2 槽 / sphere 无（自编复合背层 0813 已退役）', () => {
+    const kirby = render(<BotAvatar config={{ shape: 'kirby' }} />)
+    expect(kirby.container.querySelectorAll('[data-bot-back]')).toHaveLength(2)
+    kirby.unmount()
     const sphere = render(<BotAvatar config={{ shape: 'sphere' }} />)
     expect(sphere.container.querySelectorAll('[data-bot-back]')).toHaveLength(0)
   })

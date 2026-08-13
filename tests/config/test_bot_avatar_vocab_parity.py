@@ -2,7 +2,8 @@
 
 三对手抄常量，Python 侧（``src/reports/wire.py``）是 canonical：
 
-- ``BOT_AVATAR_SHAPES``（13 形，0813 成品目录化）↔ ``frontend/src/shared/bot-avatar/shapes.ts`` 同名导出
+- ``BOT_AVATAR_SHAPES``（10 形，0813 成品目录化 —— lab 成品全量、自编形状退役）↔
+  ``frontend/src/shared/bot-avatar/shapes.ts`` 同名导出
 - ``BOT_AVATAR_COLORS``（11 色）↔ ``frontend/src/shared/bot-avatar/colors.ts`` 同名导出
 - ``AVATAR_IMAGE_MAX_BYTES``（150KB，上传头像服务端复核）↔
   ``frontend/src/shared/components/agents/avatarImage.ts`` 同名导出
@@ -142,13 +143,13 @@ def ts_int_value(path: Path, name: str, src: Optional[str] = None) -> int:
     return value
 
 
-# ── ① 8 形词表 ───────────────────────────────────────────────────────────────
+# ── ① 10 形词表 ──────────────────────────────────────────────────────────────
 
 
 def test_bot_shape_vocabulary_matches_across_languages():
     canonical = py_str_tuple(_WIRE_PY, "BOT_AVATAR_SHAPES")
     assert canonical == (
-        "sphere", "capsule", "cylinder", "cone", "cube", "diamond", "mickey", "cursor",
+        "sphere", "strobi", "capsule", "cone", "cube",
         "freddy", "sunee", "kirby", "cloudee", "onee",
     ), (
         f"bot shape 词表变成 {canonical!r} —— 这是词表本体的改动，必须同步 TS shapes.ts、"

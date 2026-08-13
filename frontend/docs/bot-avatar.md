@@ -36,11 +36,11 @@
 | 文件 | 职责 |
 |---|---|
 | `surfaces.ts` | 8 种曲面原语的采样层（superellipsoid 家族 + capsule/cone/cylinder 剖面）：`surfacePointAt`（经纬→点，头轮廓用）/ `surfaceFrontSampleAt`（脸面坐标→正面点+法线，眼睛贴合用）/ `surfacePresets` 出厂尺寸 |
-| `geometry.ts` | 3D 姿态与投影渲染：四元数、`poseFromExpression`、`renderAvatar(pose, surface, blink, bodyNodes)` → 头/背层/前层/双眼 path；sphere/mickey/capsule 走椭球解析投影，cube/diamond 顶点凸包，cylinder/cone 采样凸包（模块级 cache）；附属曲面 = lab accessoryLayers 同款（17×49 采样凸包 + 逐帧按相机深度 z 排序分背/前层，阈值 = 自身深度半径 ×0.1）；`Expression`/`BodyNodeDef` 类型 + `expressionFields` + `nearestEquivalentAngle` |
+| `geometry.ts` | 3D 姿态与投影渲染：四元数、`poseFromExpression`、`renderAvatar(pose, surface, blink, bodyNodes)` → 头/背层/前层/双眼 path；sphere/capsule 走椭球解析投影，cube/diamond 顶点凸包，cylinder/cone 采样凸包（模块级 cache；mickey 耳/cursor 锥内建复合背层已随自编形状退役删除）；附属曲面 = lab accessoryLayers 同款（17×49 采样凸包 + 逐帧按相机深度 z 排序分背/前层，阈值 = 自身深度半径 ×0.1）；`Expression`/`BodyNodeDef` 类型 + `expressionFields` + `nearestEquivalentAngle` |
 | `expressions.ts` | 27 表情参数表（studio 精修版，索引语义不变）+ `NEUTRAL_EXPRESSION`；**改一行 = 改所有引用该索引的状态的脸** |
 | `ambient.ts` | 空闲微动纯函数：`applyAmbientMotion`（眼抖/头漂进表情参数）+ `ambientBodyOffset`（身体平移）；确定性噪声，同 (expression, elapsed) 恒同输出 |
 | `states.ts` | 39 态五张表（GROUPS/POOLS/EXPR_CADENCE/BLINK[+时长档]/**AMBIENT**）+ **MailAgent 状态映射单源**：`turnStageToBotState`（TurnStage 8 值）/ `runStateToBotState`（headless run 6 值投影），Record 全射——上游加态漏映射 = typecheck 红 |
-| `shapes.ts` | 形状词表 = **13 个成品形状**（0813 成品目录化：8 原语名保留，其中 cube/cone 几何换成 lab 成品 Cubee/Citrus 调参值——根治 raw preset 的 viewBox 溢出实测 204/176→126/150；+5 个成品 freddy/sunee/kirby/cloudee/onee，前四者带**组合身体**）→ `BotShapeDef {primary, nodes}`；`LEGACY_BOT_SHAPE_MAP`（v1 8 形双射换代）；`BACK_PATH_COUNT`/`FRONT_PATH_COUNT`（内建复合 + 附属曲面槽位，逐帧 z 排序在背/前层间迁移）；`BOT_AVATAR_SHAPES` 是 parity 闸抽取锚点；viewBox `-150 -150 300 300`（组合身体按 lab 语义可少量出界，BotAvatar svg overflow:visible 镜像 lab） |
+| `shapes.ts` | 形状词表 = **10 个 lab 成品形状**（0813 成品目录化 + 自编形状退役：Grok bot→sphere / Strobi→strobi[与 Grok bot 仅 depth 差 0.0367，lab 数据如此] / Nova→capsule / Citrus→cone / Cubee→cube——后二者调参值根治 raw preset 的 viewBox 溢出实测 204/176→126/150；+5 个成品 freddy/sunee/kirby/cloudee/onee，前四者带**组合身体**；自编 cylinder/diamond/mickey/cursor 已退役）→ `BotShapeDef {primary, nodes}`；`LEGACY_BOT_SHAPE_MAP`（v1 8 形双射 + v2 退役 4 形就近入座）；`BACK_PATH_COUNT`/`FRONT_PATH_COUNT`（附属曲面槽位，逐帧 z 排序在背/前层间迁移）；`BOT_AVATAR_SHAPES` 是 parity 闸抽取锚点；viewBox `-150 -150 300 300`（组合身体按 lab 语义可少量出界，BotAvatar svg overflow:visible 镜像 lab） |
 | `colors.ts` | 11 色双主题值（light/dark 各一）；浅色身体（white/yellow/gray）有 per-color eye 覆写（背景色眼睛在浅色主题会隐形）；`BOT_AVATAR_COLORS` 同为闸锚点 |
 | `engine.ts` | 零 React/GSAP 纯 TS 引擎：参数化过渡 + 按态池随机调度 + 眨眼排程 + ambient + gaze（`{random, now}` 可注入）；`tick()` 空闲返回 null = settle 后零重绘（**ambient 态例外**：30fps 限频出帧）；`staticFrame(exprIndex, shapeDef)` 带模块级缓存（键 = SHAPES 的 `BotShapeDef` 单例 × 表情索引，列表同款实例零重复计算，组合身体同享缓存） |
 | `ticker.ts` | 模块级共享 rAF 单例（全仓首个）：注册制启停、`visibilitychange` 暂停、SSR 安全、测试用 `__instanceCount()` |
@@ -53,7 +53,7 @@
 
 | kind | 形状 | 语义 |
 |---|---|---|
-| `{type:'bot', shape, color}` | canonical | 编辑器保存的选择；shape 词表 = 13 成品形状（组合身体是形状名在 TS 侧的派生数据，wire 结构不变），v1 8 形名经 `LEGACY_BOT_SHAPE_MAP` 读侧换脸（blob→sphere / squircle→cube / egg→cylinder / wedge→cone / hex→diamond / cloud→mickey / teardrop→cursor / capsule→capsule），存量行不迁移不回写 |
+| `{type:'bot', shape, color}` | canonical | 编辑器保存的选择；shape 词表 = 10 个 lab 成品形状（组合身体是形状名在 TS 侧的派生数据，wire 结构不变），v1 8 形名（blob→sphere / squircle→cube / egg→strobi / wedge→cone / hex→sunee / cloud→cloudee / teardrop→onee / capsule→capsule，保持双射）与 v2 退役 4 形（cylinder→capsule / diamond→sunee / mickey→cloudee / cursor→onee）经 `LEGACY_BOT_SHAPE_MAP` 读侧换脸，存量行不迁移不回写 |
 | `{type:'image', data:'data:image/…;base64,…'}` | 上传（不变） | ≤150KB webp/png/jpeg，服务端 `_normalize_avatar_image` 复核，禁外链 |
 | 无 `type` 键 `{shape, palette, …}` | legacy oreo（只读） | 存量行零迁移，渲染时经 `mapLegacyGeneratedToBot` 确定性映射 |
 | `NULL` | 派生态 | 前端按 agent_id `deriveBotAvatar`（内置 agent 全靠它）；编辑器「重置」写回 NULL |
@@ -74,8 +74,9 @@
 - 🔴 **v2 新边界**：ambient 活跃状态（多数状态 body slowDrift）的 animated 实例**常驻 30fps 重绘**（不 settle）——这是「空闲也活着」的有意代价，仅限上述 3 位点；改 `AMBIENT` 表 = 改动画位点常驻功耗。
 - **静态档眨眼（0813）不破静态地板**：静态位点经 `staticBlink.ts` registry 低频眨眼——间隙真 idle（无周期唤醒无 rAF 无样式计算，只有一枚臂向下次眨眼的 timeout）、并发上限 2 把最坏帧成本钉成常数（同屏数百实例 = 每个眨得更稀的优雅降级）、眨眼帧走引擎同款高度插值（两档观感一致）。眨眼只重算眼 path，**只传 `primary` 不传 `nodes`**（眼几何不依赖附属曲面，传了等于每个眨眼帧白付一遍凸包）。静态档的**表情轮换**仍有意不做（离散换帧无过渡 = glitch 观感，加过渡 = 开动画通道破纪律）——但 `expressionIndex` prop 允许消费点**指定**静态表情（FAB 低频换脸即用它），此时眨眼基线必须跟随同一索引，否则眨眼那一刻脸会跳回池首。
 - reduced-motion：JS 层短路（CSS media 对 JS 动画无效），animated 自动退化静态、**静态档眨眼同样不注册**；测试环境全局 reduce（`tests/setup.ts`），测真动画路径需 stub matchMedia。
-- 机器验收：13 形 × 代表表情的头/眼/背/前几何 sanity + 双眼不重叠 + 27 表情全量无 NaN + **viewBox 溢出闸**
-  （单曲面成品 ≤150 / 组合身体 ≤200 / cylinder 仍溢出如实钉住，`tests/shared/bot-avatar/shapes.test.tsx`）。
+- 机器验收：10 形 × 代表表情的头/眼/背/前几何 sanity + 双眼不重叠 + 27 表情全量无 NaN + **viewBox 溢出闸**
+  （单曲面成品 ≤150 / 组合身体 ≤200；自编形状退役后曾经的 cylinder/mickey 遗留溢出不复存在，
+  `tests/shared/bot-avatar/shapes.test.tsx`）。
 - 组合身体的代价：附属曲面每帧 17×49 采样 + 凸包（模块级 cache 只免采样、不免投影）——静态档进 `staticFrame`
   模块缓存零增量；animated 档最重的 sunee（8 节）每帧 ≈ 2.7× 一个圆角 cylinder 头的投影量，仅限 3 个 animated 位点。
 

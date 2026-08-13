@@ -13,10 +13,11 @@ export type { BodyNodeDef, Expression, EyeMotion, BodyMotion } from './geometry'
 export type { SurfaceConfig, SurfaceType } from './surfaces'
 
 /**
- * avatar_json 的第三种 kind。0813 成品目录化后 shape 词表为 13 个成品形状
+ * avatar_json 的第三种 kind。0813 成品目录化后 shape 词表为 10 个 lab 成品形状
  * （wire.py 白名单 + parity 闸同源）；组合身体是形状名在 TS 侧的派生数据
- * （SHAPES[shape].nodes），wire 结构不变仍是 {type,shape,color}。v1 8 形经
- * shapes.ts LEGACY_BOT_SHAPE_MAP 读侧换脸。
+ * （SHAPES[shape].nodes），wire 结构不变仍是 {type,shape,color}。v1 8 形与
+ * v2 退役 4 形（cylinder/diamond/mickey/cursor）经 shapes.ts
+ * LEGACY_BOT_SHAPE_MAP 读侧换脸。
  */
 export interface BotAvatarBotConfig {
   type: 'bot'
@@ -35,7 +36,7 @@ export interface EyeFrame {
 export interface EngineFrame {
   /** 头部轮廓 path（同一串同时写进眼睛的 clipPath） */
   head: string
-  /** 背层 path（mickey 双耳 / cursor 锥体 + 头后附属曲面；多数形状为空数组） */
+  /** 背层 path（头后附属曲面；无组合身体的形状为空数组） */
   back: readonly string[]
   /** 前层 path（转到头前的附属曲面，渲染在眼睛之上；多数帧为空） */
   front: readonly string[]

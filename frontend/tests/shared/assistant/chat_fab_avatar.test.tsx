@@ -105,16 +105,20 @@ describe('ChatFabAvatar — 光环与头像同源', () => {
     expect(haloPath('arc')).not.toMatch(/ A /)
   })
 
-  test('mickey：底环把背层（耳朵）也描上，条数与 BotAvatar 实际画的背层一致；亮弧只跑主轮廓', () => {
+  test('freddy：底环把背层（组合身体）也描上，条数与 BotAvatar 实际画的背层一致；亮弧只跑主轮廓', () => {
     primeAssistantIdentity({
       name: null,
-      avatar: { type: 'bot', shape: 'mickey', color: 'orange' }
+      avatar: { type: 'bot', shape: 'freddy', color: 'orange' }
     })
     render(<ChatFabAvatar />)
+    // freddy 3 个附属曲面在 idle 池首帧分层为背 2 前 1（探针实测）：
+    // DOM 槽位恒 3 条（空槽 d=''），底环只描非空那几条。
     const back = botBackPaths()
-    expect(back.length).toBe(2)
-    // 底环 = head + 每条背层，且逐条与 BotAvatar 画的那条逐字节相等
-    expect(haloPaths('rim')).toEqual([headPath(), ...back])
+    expect(back.length).toBe(3)
+    const drawn = back.filter(Boolean)
+    expect(drawn.length).toBe(2)
+    // 底环 = head + 每条实画背层，且逐条与 BotAvatar 画的那条逐字节相等
+    expect(haloPaths('rim')).toEqual([headPath(), ...drawn])
     // 亮弧恒只有一条（三盏灯各转各的太吵）
     expect(haloPaths('arc')).toEqual([headPath()])
   })

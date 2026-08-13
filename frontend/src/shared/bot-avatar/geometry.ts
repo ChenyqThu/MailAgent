@@ -1,16 +1,16 @@
 // 灵动 bot 头像 v2 —— 3D 姿态与投影渲染层。
 // 移植自 avatar-lab `src/features/avatar/geometry.ts`（AGPL-3.0 上游，出处注记见
 // frontend/docs/bot-avatar.md）。裁剪面：去掉 Studio 编辑器专属（eye/body 编辑器
-// 几何、arcball、gizmo、平移/旋转操纵）与 wireframe。
-// 保留：四元数姿态、透视投影、眼睛贴合曲面（含眨眼高度插值）、8 原语头部轮廓路径、
-// mickey 耳朵 / cursor 锥体两个内建复合背层、body accessories（附属曲面：成品
-// avatar 的天线/云朵/太阳芒等，逐帧按相机深度分背/前两层并 z 排序 —— 与 lab
-// accessoryLayers 同款算法）。
+// 几何、arcball、gizmo、平移/旋转操纵）与 wireframe；0813 自编形状退役后
+// mickey 耳朵 / cursor 锥体两个内建复合背层已删（词表只剩 lab 成品，无消费点）。
+// 保留：四元数姿态、透视投影、眼睛贴合曲面（含眨眼高度插值）、原语头部轮廓路径、
+// body accessories（附属曲面：成品 avatar 的天线/云朵/太阳芒等，逐帧按相机深度
+// 分背/前两层并 z 排序 —— 与 lab accessoryLayers 同款算法）。
 // 本文件 framework-agnostic：纯数学，零 React / 零 DOM。
 //
 // 坐标系：画布中心 (0,0)，viewBox `-150 -150 300 300`（shapes.ts BOT_VIEW_BOX）。
 
-import { cursorLayout, surfaceFrontSampleAt, surfacePointAt } from './surfaces'
+import { surfaceFrontSampleAt, surfacePointAt } from './surfaces'
 import type { Point3, SurfaceConfig } from './surfaces'
 
 export type Quaternion = readonly [number, number, number, number]
@@ -86,7 +86,7 @@ export interface BodyNodeDef {
 export interface AvatarGeometry {
   /** 头部轮廓（同一串同时用作眼睛 clipPath） */
   headPath: string
-  /** 头后背层（mickey 耳朵 / cursor 锥体 + 判定在头后的附属曲面，按深度升序） */
+  /** 头后背层（判定在头后的附属曲面，按深度升序） */
   backPaths: string[]
   /** 判定转到头前的附属曲面（渲染在眼睛之上；多数帧为空） */
   frontPaths: string[]
@@ -407,25 +407,6 @@ const projectedCylinderPath = (pose: AvatarPose, surface: SurfaceConfig): string
   return smoothClosedPath(densifyClosedPoints(convexHull(projected)))
 }
 
-const projectedCursorBodyPath = (pose: AvatarPose, surface: SurfaceConfig): string => {
-  const layout = cursorLayout(surface)
-  const halfHeight = layout.bodyHeight / 2
-  const projected = [
-    ...ringPoints(layout.bodyWidth, layout.bodyDepth, layout.bodyCenterY - halfHeight),
-    ...ringPoints(layout.bodyWidth, layout.bodyDepth, layout.bodyCenterY + halfHeight)
-  ].map((point) => projectLocalPoint(pose, point))
-  return smoothClosedPath(densifyClosedPoints(convexHull(projected)))
-}
-
-const projectedCursorConePath = (pose: AvatarPose, surface: SurfaceConfig): string => {
-  const layout = cursorLayout(surface)
-  const apex = projectLocalPoint(pose, [0, layout.coneApexY, 0])
-  const base = ringPoints(surface.width, surface.depth, layout.coneBaseY).map((point) =>
-    projectLocalPoint(pose, point)
-  )
-  return smoothClosedPath(densifyClosedPoints(convexHull([...base, apex])))
-}
-
 const projectedConePath = (pose: AvatarPose, surface: SurfaceConfig): string => {
   if (
     (surface.morphRoundness ?? 0) > 0 ||
@@ -478,7 +459,7 @@ const projectedDiamondPath = (pose: AvatarPose, surface: SurfaceConfig): string 
   return path(convexHull(vertices.map((point) => projectLocalPoint(pose, point))))
 }
 
-// ── 椭球精确投影（sphere/mickey/capsule 的头部轮廓走解析解，比采样凸包又快又准）──
+// ── 椭球精确投影（sphere/capsule 的头部轮廓走解析解，比采样凸包又快又准）──────────
 
 interface ProjectedEllipse {
   centerX: number
@@ -619,26 +600,6 @@ const projectedEllipsoidPath = (pose: AvatarPose, surface: SurfaceConfig): strin
     return ellipsePath({ centerX: 0, centerY: 0, majorRadius: radius, minorRadius: radius, rotation: 0 })
   }
   return ellipse ? ellipsePath(ellipse) : null
-}
-
-const mickeyEarPaths = (pose: AvatarPose, surface: SurfaceConfig): string[] => {
-  if (surface.type !== 'mickey') return []
-  const radius = Math.min(surface.width, surface.height) * 0.23
-  const depthRadius = Math.min(radius, surface.depth * 0.29)
-  const centerX = surface.width * 0.37
-  const centerY = -surface.height * 0.39
-  const centerZ = -surface.depth * 0.12
-  const axes: Point3 = [radius, radius, depthRadius]
-  return [-1, 1]
-    .map((side) => projectedEllipsoid(pose, axes, [side * centerX, centerY, centerZ]))
-    .filter((ear): ear is ProjectedEllipse => ear !== null)
-    .map(ellipsePath)
-}
-
-const compositeBackPaths = (pose: AvatarPose, surface: SurfaceConfig): string[] => {
-  if (surface.type === 'mickey') return mickeyEarPaths(pose, surface)
-  if (surface.type === 'cursor') return [projectedCursorConePath(pose, surface)]
-  return []
 }
 
 // ── 附属曲面（body accessories）：lab accessoryPath/accessoryLayers 同款 ─────────
@@ -788,7 +749,7 @@ const projectedCapsulePath = (pose: AvatarPose, surface: SurfaceConfig): string 
 }
 
 const headPath = (pose: AvatarPose, surface: SurfaceConfig): string => {
-  if (surface.type === 'sphere' || surface.type === 'mickey') {
+  if (surface.type === 'sphere') {
     const exactPath = projectedEllipsoidPath(pose, surface)
     if (exactPath) return exactPath
   }
@@ -797,7 +758,6 @@ const headPath = (pose: AvatarPose, surface: SurfaceConfig): string => {
     if (exactPath) return exactPath
   }
   if (surface.type === 'cylinder') return projectedCylinderPath(pose, surface)
-  if (surface.type === 'cursor') return projectedCursorBodyPath(pose, surface)
   if (surface.type === 'cone') return projectedConePath(pose, surface)
   if (surface.type === 'cube') return projectedCubePath(pose, surface)
   if (surface.type === 'diamond') return projectedDiamondPath(pose, surface)
@@ -833,7 +793,7 @@ export const renderAvatar = (
   const accessories = accessoryLayers(pose, bodyNodes)
   return {
     headPath: headPath(pose, surface),
-    backPaths: [...compositeBackPaths(pose, surface), ...accessories.backPaths],
+    backPaths: accessories.backPaths,
     frontPaths: accessories.frontPaths,
     leftPath: path(leftSamples.map((sample) => sample.point)),
     rightPath: path(rightSamples.map((sample) => sample.point)),
