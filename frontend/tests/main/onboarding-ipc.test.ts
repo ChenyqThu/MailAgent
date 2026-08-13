@@ -210,6 +210,68 @@ describe('buildCompletePatch — davmail branch', () => {
   })
 })
 
+// task 08-12: backend 平台收敛（值域/平台合法性单源 @shared/lib/mailBackend）。
+// 病根回归锁: 老二值钳制曾把 win 上选的 outlook_com 静默改写成 applescript。
+describe('buildCompletePatch — platform-aware backend coercion (task 08-12)', () => {
+  const core: OnboardingCompleteCfg = { USER_EMAIL: 'a@b.com' }
+
+  it('win32: outlook_com 原样保留（不被改写成 applescript —— 修 pre-08-12 钳制病根）', () => {
+    const { patch } = buildCompletePatch({ ...core, MAILAGENT_BACKEND: 'outlook_com' }, 'win32')
+    expect(patch['MAILAGENT_BACKEND']).toBe('outlook_com')
+  })
+
+  it('win32: unset / 脏值 → 平台首选 outlook_com', () => {
+    expect(buildCompletePatch(core, 'win32').patch['MAILAGENT_BACKEND']).toBe('outlook_com')
+    expect(
+      buildCompletePatch({ ...core, MAILAGENT_BACKEND: 'bogus' as 'davmail' }, 'win32').patch[
+        'MAILAGENT_BACKEND'
+      ]
+    ).toBe('outlook_com')
+  })
+
+  it('win32: 平台外值 applescript（Mail.app 不存在）收敛为 outlook_com', () => {
+    const { patch } = buildCompletePatch({ ...core, MAILAGENT_BACKEND: 'applescript' }, 'win32')
+    expect(patch['MAILAGENT_BACKEND']).toBe('outlook_com')
+  })
+
+  it('win32: davmail 平台内合法, 保留且 davmail 分支照常生效', () => {
+    const { patch, missing } = buildCompletePatch(
+      { ...core, MAILAGENT_BACKEND: 'davmail', DAVMAIL_POC_MODE: 'true' },
+      'win32'
+    )
+    expect(patch['MAILAGENT_BACKEND']).toBe('davmail')
+    expect(patch['DAVMAIL_POC_MODE']).toBe('true')
+    expect(missing).toEqual([])
+  })
+
+  it('darwin: 平台外值 outlook_com（COM 是 Windows 专属）收敛为 applescript', () => {
+    const { patch } = buildCompletePatch({ ...core, MAILAGENT_BACKEND: 'outlook_com' }, 'darwin')
+    expect(patch['MAILAGENT_BACKEND']).toBe('applescript')
+  })
+
+  it('darwin/other: davmail 保留; other 平台按 mac 侧规则处理（保守不误砍）', () => {
+    expect(
+      buildCompletePatch({ ...core, MAILAGENT_BACKEND: 'davmail' }, 'darwin').patch[
+        'MAILAGENT_BACKEND'
+      ]
+    ).toBe('davmail')
+    expect(
+      buildCompletePatch({ ...core, MAILAGENT_BACKEND: 'outlook_com' }, 'other').patch[
+        'MAILAGENT_BACKEND'
+      ]
+    ).toBe('applescript')
+  })
+
+  it('平台外值收敛后不带出该 backend 的连接配置（win 提交 applescript+davmail 字段 → outlook_com, 不写 DAVMAIL_*）', () => {
+    const { patch } = buildCompletePatch(
+      { ...core, MAILAGENT_BACKEND: 'applescript', DAVMAIL_HOST: '127.0.0.1' },
+      'win32'
+    )
+    expect(patch['MAILAGENT_BACKEND']).toBe('outlook_com')
+    expect(patch['DAVMAIL_HOST']).toBeUndefined()
+  })
+})
+
 describe('isLikelyDoubleWriter', () => {
   const now = 1_000_000_000_000
 

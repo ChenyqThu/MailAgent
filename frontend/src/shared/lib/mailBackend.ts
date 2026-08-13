@@ -26,16 +26,21 @@ export const MAIL_BACKEND_KINDS: readonly MailBackendKind[] = [
  *  保守方向：宁多显示不误砍）。 */
 export type UiPlatform = 'darwin' | 'win32' | 'other'
 
+/** Node/preload 的 platform 字符串 → UiPlatform 归一。main 进程直接喂
+ *  `process.platform`；renderer 走下面的 detectUiPlatform（读 preload 投影）。 */
+export function toUiPlatform(p: string | undefined | null): UiPlatform {
+  if (p === 'darwin') return 'darwin'
+  if (p === 'win32') return 'win32'
+  return 'other'
+}
+
 /** 读 preload (@electron-toolkit) 暴露的 `window.electron.process.platform`。
  *  preload 缺席（纯浏览器/node 测试环境）→ 'other'（按非 win 处理，mac 行为零回归）。 */
 export function detectUiPlatform(): UiPlatform {
   const w = (typeof window === 'undefined' ? undefined : window) as
     | { electron?: { process?: { platform?: string } } }
     | undefined
-  const p = w?.electron?.process?.platform
-  if (p === 'darwin') return 'darwin'
-  if (p === 'win32') return 'win32'
-  return 'other'
+  return toUiPlatform(w?.electron?.process?.platform)
 }
 
 /** 平台可选 backend 列表（顺序即 UI 展示顺序：首项为主推/默认）。
