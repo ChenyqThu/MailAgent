@@ -121,6 +121,11 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     # default_tier 保持 'ask'（run_command / custom_agent_call 先例：固定形状行恒 ask，
     # 免卡走各自的专属通道）。
     BuiltinToolPolicy("matter_review_update", "matters", "ask", configurable=False),
+    # 0813 轮 3 批 R：关注信号处置 / 资料建议整批处置。两件都只动**本地派生态**——signal 的
+    # state（判据翻转仍会自己重开）与 link 的 confirmed 位（restore 可回），与上面七写同档
+    # auto 可配；owner 想让它们弹卡就在设置里调。
+    BuiltinToolPolicy("matter_attention_triage", "matters", "auto"),
+    BuiltinToolPolicy("matter_suggestion_resolve", "matters", "auto"),
     # ── B 组：能力/身份面（全部有 history/rollback 补偿）─────────────────────────
     BuiltinToolPolicy("set_skill_enabled", "capability", "ask"),
     BuiltinToolPolicy("update_system_md", "capability", "ask"),

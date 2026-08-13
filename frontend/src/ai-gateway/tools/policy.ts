@@ -135,6 +135,13 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   email_search_fulltext: 'read',
   matter_find: 'read',
   matter_get: 'read',
+  // 0813 轮 3 批 R — attention signals / run history / tag vocabulary. Class `read` is not a
+  // convenience label here: it is what puts them inside a follow-up run's face (the
+  // matter_followup row admits reads wholesale), which is the point — a run that cannot see its
+  // own past conclusions re-derives them every round.
+  matter_attention_list: 'read',
+  matter_runs_list: 'read',
+  matter_tags_list: 'read',
   email_get: 'read',
   email_body: 'read',
   email_list_thread: 'read',
@@ -212,6 +219,11 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // a `field` change asks.
   matter_run_control: 'domain_write',
   matter_review_update: 'domain_write',
+  // 0813 轮 3 批 R — the disposal half of the two read surfaces above. domain_write on purpose:
+  // it keeps them out of a follow-up run (the matrix row denies the class outright), so a run can
+  // surface an attention signal or a resource suggestion but never quietly clear it.
+  matter_attention_triage: 'domain_write',
+  matter_suggestion_resolve: 'domain_write',
   // capability_change — changes the agent's own capability/identity surface. NEVER auto-approved
   // by the auto-reversible path, manual_chat-only, in every future mode permanently denied
   // (ADR-001 §9 red line).

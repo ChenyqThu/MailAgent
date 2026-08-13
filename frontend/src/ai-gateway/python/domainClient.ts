@@ -924,6 +924,73 @@ export class MailAgentDomainClient {
     })
   }
 
+  // ── 0813 轮 3 批 R — the four surfaces that had REST but no tool ─────────────────────────────
+
+  /** GET /matters/attention (all Matters) or /matters/{id}/attention (one). Same service call
+   *  behind both; the path is what scopes it. */
+  listMatterAttention(
+    opts: { publicId?: string; state?: string },
+    signal?: AbortSignal
+  ): Promise<{ items: Array<Record<string, unknown>> }> {
+    const path =
+      opts.publicId != null
+        ? `/matters/${encodeURIComponent(opts.publicId)}/attention`
+        : '/matters/attention'
+    return this._req('GET', path, { query: { state: opts.state }, signal })
+  }
+
+  /** POST /matters/{id}/attention/{signal_id}/{resolve|snooze|dismiss}.
+   *  🔴 The action is a PATH segment, so it is encoded here rather than posted as data — a
+   *  mis-spelled action 404s at the router instead of silently taking a default branch. */
+  triageMatterAttention(
+    publicId: string,
+    signalId: number,
+    action: 'resolve' | 'snooze' | 'dismiss',
+    payload: { until?: number },
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<Record<string, unknown>> {
+    return this._req(
+      'POST',
+      `/matters/${encodeURIComponent(publicId)}/attention/${signalId}/${action}`,
+      { body: { ...payload, mutation }, signal }
+    )
+  }
+
+  /** GET /matters/{id}/runs — the follow-up run ledger. Gated server-side by the matter-agent
+   *  flag (409/403 when it is off), which is why the tool is only registered when that flag is on. */
+  listMatterRuns(
+    publicId: string,
+    opts: { limit?: number },
+    signal?: AbortSignal
+  ): Promise<{ items: Array<Record<string, unknown>>; next_cursor?: number | null }> {
+    return this._req('GET', `/matters/${encodeURIComponent(publicId)}/runs`, {
+      query: { limit: opts.limit },
+      signal
+    })
+  }
+
+  /** GET /matters/tags — the tag vocabulary (name + color/shape + usage_count). */
+  listMatterTags(signal?: AbortSignal): Promise<{ items: Array<Record<string, unknown>> }> {
+    return this._req('GET', '/matters/tags', { signal })
+  }
+
+  /** POST /matters/{id}/resource-suggestions/bulk — confirm or reject unconfirmed suggestions in
+   *  ONE version check + ONE version bump. Always 200: ids that were already handled elsewhere
+   *  come back per-row in `skipped`, they do not fail the batch. */
+  resolveMatterSuggestions(
+    publicId: string,
+    resourceIds: readonly number[],
+    action: 'confirm' | 'reject',
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    return this._req('POST', `/matters/${encodeURIComponent(publicId)}/resource-suggestions/bulk`, {
+      body: { resource_ids: resourceIds, action, mutation },
+      signal
+    })
+  }
+
   // ── Matters MVP P4 — follow-up runs, proposals, review (contracts §3.8/§3.9) ───────────────
   //
   // 🔴 `proposeMatterUpdate` targets the INTERNAL proposal endpoint (verify_local_token + the

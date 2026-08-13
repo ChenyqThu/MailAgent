@@ -162,7 +162,14 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'matter_add_note',
   'matter_run_control',
   'matter_review_update',
-  'matter_update_propose'
+  'matter_update_propose',
+  // 0813 轮 3 批 R —— 三读 + 两处置写，同一族同一条纪律（开关权在 MAILAGENT_MATTERS_ENABLED，
+  // 无 skill 归属，永不 skill-gated）。
+  'matter_attention_list',
+  'matter_runs_list',
+  'matter_tags_list',
+  'matter_attention_triage',
+  'matter_suggestion_resolve'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

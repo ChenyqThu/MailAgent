@@ -1068,6 +1068,11 @@
       "matter_run_control": "控制跟进运行",
       "matter_review_update": "评审更新提案",
       "matter_update_propose": "提交更新提案",
+      "matter_attention_list": "查看关注信号",
+      "matter_attention_triage": "处置关注信号",
+      "matter_runs_list": "查看跟进记录",
+      "matter_tags_list": "查看事项标签",
+      "matter_suggestion_resolve": "处置资料建议",
       "notion_agent_chat": "咨询 Notion Agent",
       "plan_update": "更新计划",
       "suggest_followups": "准备追问建议"
@@ -5392,7 +5397,9 @@
         "matter_relation_mutate": "事项关联已更新",
         "matter_add_note": "已添加备注",
         "matter_run_control": "跟进运行已更新",
-        "matter_review_update": "提案评审已更新"
+        "matter_review_update": "提案评审已更新",
+        "matter_attention_triage": "关注信号已处置",
+        "matter_suggestion_resolve": "资料建议已处置"
       },
       "receipt": {
         "written": "已写入",
@@ -5519,7 +5526,7 @@
           "title": "工具面：只读全库 + 一个提案通道",
           "intro": "它能查的东西很全，但没有任何写工具——发不了信、存不了草稿、改不了事项字段、动不了外部文档；所有改动只能写进提案，等你接受后才生效。下面这些默认全部启用，事项级只能收窄、不能提权。",
           "groups": {
-            "matter": { "label": "事项", "desc": "读本事项、检索事项；提案是它唯一的产出通道" },
+            "matter": { "label": "事项", "desc": "读本事项、检索事项、看关注信号与历次跟进记录、看已有标签；提案是它唯一的产出通道" },
             "email": { "label": "邮件", "desc": "列表、正文全文、线程与附件文本" },
             "search": { "label": "全文检索", "desc": "按关键词检索邮件正文与附件内容" },
             "calendar": { "label": "日历", "desc": "查日程与单个事件详情" },

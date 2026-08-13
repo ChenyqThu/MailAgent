@@ -194,7 +194,10 @@ export const matterCreateSchema = z.object({
   tags: z
     .array(z.string())
     .default([])
-    .describe('Existing tag names when they clearly apply; do not invent a new taxonomy uninvited.'),
+    .describe(
+      'Existing tag names when they clearly apply; do not invent a new taxonomy uninvited — ' +
+        'matter_tags_list shows what already exists.'
+    ),
   status: z
     .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
     .default('inbox')
@@ -699,6 +702,129 @@ export const matterReviewUpdateSchema = z
     }
   })
 export type MatterReviewUpdateInput = z.infer<typeof matterReviewUpdateSchema>
+
+// ── 0813 轮 3 批 R — the four action surfaces that had REST but no tool ────────────────────────
+//
+// Owner complaint「工具提供的不全」. Each of these wraps an endpoint that already exists; nothing
+// new is authored server-side. Deliberately NOT mirrored here: the `kind` / `status` /
+// `trigger_kind` filter enums. They are Python vocabularies (MatterAttentionKind,
+// MATTER_RUN_LIFECYCLE_STATES, MatterRunTrigger) and every returned row already carries the
+// value, so the model can filter what it got back — copying three more enums across the language
+// boundary would buy a filter shortcut and cost three un-gated hand-copies.
+
+/** matter_attention_list — the「有哪些事项在告警」read. `state` is copied from Python's
+ *  MatterAttentionState (4 values); the server re-validates it (E_INVALID_ARG on drift). */
+export const matterAttentionListSchema = z.object({
+  public_id: z
+    .string()
+    .trim()
+    .min(1)
+    .optional()
+    .describe(
+      'Limit to one Matter. OMIT it to sweep every Matter — that is the "what needs attention ' +
+        'right now" question, and the only way to answer it.'
+    ),
+  state: z
+    .enum(['open', 'snoozed', 'resolved', 'dismissed'])
+    .default('open')
+    .describe(
+      'open = still asking for attention (the default, and almost always what you want). The ' +
+        'other three answer "what did I already triage".'
+    ),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(100)
+    .default(50)
+    .describe('Newest first. The reply reports whether it truncated.')
+})
+export type MatterAttentionListInput = z.infer<typeof matterAttentionListSchema>
+
+/** matter_attention_triage — resolve / snooze / dismiss ONE signal.
+ *  🔴 No expected_version: an attention signal is not part of the Matter's versioned state (the
+ *  REST face takes the mutation envelope with require_version=False). */
+export const matterAttentionTriageSchema = z
+  .object({
+    public_id: z.string().trim().min(1),
+    signal_id: z
+      .number()
+      .int()
+      .positive()
+      .describe('The signal `id` from matter_attention_list — not the Matter id.'),
+    action: z
+      .enum(['resolve', 'snooze', 'dismiss'])
+      .describe(
+        'resolve = the situation behind it is handled; the signal reopens by itself if the ' +
+          'condition comes back. snooze = not now, ask again after `until`. dismiss = stop ' +
+          'raising this one at all. Prefer resolve; only dismiss when the owner says the signal ' +
+          'itself is wrong.'
+      ),
+    until: epochMillis(
+      'Snooze expiry (required for action=snooze, must be in the future)'
+    ).optional(),
+    ...matterReviewIdempotencyFields
+  })
+  .superRefine((value, ctx) => {
+    if (value.action === 'snooze' && value.until == null)
+      ctx.addIssue({ code: 'custom', message: 'snooze requires until', path: ['until'] })
+    if (value.action !== 'snooze' && value.until != null)
+      ctx.addIssue({
+        code: 'custom',
+        message: 'until only applies to snooze',
+        path: ['until']
+      })
+  })
+export type MatterAttentionTriageInput = z.infer<typeof matterAttentionTriageSchema>
+
+/** matter_runs_list — what the follow-up runs actually did.
+ *  🔴 Bounded projection on the tool side (matters.ts): the raw run row carries
+ *  `trigger_payload`, which is fenced UNTRUSTED content copied from an email / calendar event.
+ *  A run history read is not a smuggling route for it. */
+export const matterRunsListSchema = z.object({
+  public_id: z.string().trim().min(1),
+  limit: z
+    .number()
+    .int()
+    .min(1)
+    .max(50)
+    .default(10)
+    .describe('Most recent first. Each row says whether it produced a proposal (`update_id`).')
+})
+export type MatterRunsListInput = z.infer<typeof matterRunsListSchema>
+
+/** matter_tags_list — the tag vocabulary that already exists.
+ *  Zero parameters: the whole point is「先看看有哪些标签」before matter_create/matter_update
+ *  invents a near-duplicate one. */
+export const matterTagsListSchema = z.object({})
+export type MatterTagsListInput = z.infer<typeof matterTagsListSchema>
+
+/** matter_suggestion_resolve — the disposal half of resource suggestions.
+ *  matter_suggest_related_resources only DISCOVERS; until now the only way to act on what it
+ *  found was matter_resource_mutate patch confirmed:true per row, and rejecting was impossible.
+ *  One call, one version check, one version bump — mixed-in ids that were already handled come
+ *  back in `skipped` with a reason instead of failing the batch. */
+export const matterSuggestionResolveSchema = z.object({
+  public_id: z.string().trim().min(1),
+  resource_ids: z
+    .array(z.number().int().positive())
+    // 200 = the server's MATTER_SUGGESTION_BULK_MAX; it re-checks and 400s past it.
+    .min(1)
+    .max(200)
+    .describe(
+      'Unconfirmed resource ids, from matter_suggest_related_resources or ' +
+        'matter_get(include:["resources"]). Ids that are already confirmed / unlinked / not on ' +
+        'this Matter are reported in `skipped`, not rejected.'
+    ),
+  action: z
+    .enum(['confirm', 'reject'])
+    .describe(
+      'confirm = link them for real (the Matter now treats them as evidence). reject = record ' +
+        'that they do not belong here, which also teaches the suggester not to raise them again.'
+    ),
+  ...matterVersionedFields
+})
+export type MatterSuggestionResolveInput = z.infer<typeof matterSuggestionResolveSchema>
 
 /** email_get — single email metadata. */
 export const emailGetSchema = z.object({

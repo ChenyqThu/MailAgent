@@ -61,8 +61,18 @@ export const MATTER_TOOL_FACE_GROUPS: readonly MatterToolGroup[] = [
   {
     id: 'matter',
     tier: 'fixed',
-    // 读两件 + 唯一产出通道（提案）。少了它跟进 run 连自己这条事项都读不到，故恒启用。
-    tools: ['matter_find', 'matter_get', 'matter_update_propose']
+    // 读五件 + 唯一产出通道（提案）。少了它跟进 run 连自己这条事项都读不到，故恒启用。
+    // 🔴 `matter_runs_list` 只在 `MAILAGENT_MATTER_AGENT_ENABLED` 不为 false 时注册（run REST
+    // 面本身被那个 flag 门着）—— 而本面板是**跟进 Agent** 的配置弹窗，flag 关掉时它压根不
+    // 渲染，故这里不做第二档条件：面板在场 ⇒ 该 flag 必然开着。
+    tools: [
+      'matter_find',
+      'matter_get',
+      'matter_attention_list',
+      'matter_runs_list',
+      'matter_tags_list',
+      'matter_update_propose'
+    ]
   },
   {
     id: 'email',
