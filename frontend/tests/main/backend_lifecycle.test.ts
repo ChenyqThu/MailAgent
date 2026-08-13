@@ -180,7 +180,13 @@ vi.mock('http', () => ({
 // ---- cli_runner / db mocks (bin + 路径解析) --------------------------------
 
 vi.mock('../../src/electron/main/cli_runner', () => ({
-  getMailagentBin: () => '/fake/Resources/python/bin/mailagent'
+  getMailagentBin: () => '/fake/Resources/python/bin/mailagent',
+  // 08-12 win-port: spawnService 改经 getMailagentCommand (非 win 打包态语义 =
+  // {exe: getMailagentBin(), argsPrefix: []}), mock 保持既有 call.bin 断言不变。
+  getMailagentCommand: () => ({
+    exe: '/fake/Resources/python/bin/mailagent',
+    argsPrefix: [] as string[]
+  })
 }))
 
 vi.mock('../../src/electron/main/db', () => ({
@@ -1593,5 +1599,40 @@ describe('STALE_CMD_MARKER ↔ 打包 wrapper 一致性', () => {
       'utf8'
     )
     expect(script).toContain(STALE_CMD_MARKER)
+  })
+
+  test('build-python-venv.ps1 生成的 win wrapper 含 marker (08-12 win-port 同款闸)', () => {
+    // ps1 的 mailagent.cmd wrapper 用单引号 here-string 保存字面量 → 脚本文本里就有
+    // 逐字 prog_name='mailagent'。改 wrapper 忘同步 marker 同样红灯。
+    const script = readFileSync(
+      fileURLToPath(new URL('../../scripts/build-python-venv.ps1', import.meta.url)),
+      'utf8'
+    )
+    expect(script).toContain(STALE_CMD_MARKER)
+  })
+
+  test('PY_CLI_BOOTSTRAP (win 打包态 spawn 的 -c 代码) 含 marker', async () => {
+    // 结构上由模板字面量保证 (bootstrap 嵌 marker), 此断言防未来重构改回手抄字符串
+    // 后漂移 —— win 打包态进程命令行必须能被 sweep/诊断按 marker 识别。
+    const { PY_CLI_BOOTSTRAP } = await import('../../src/electron/main/py_cli_bootstrap')
+    expect(PY_CLI_BOOTSTRAP).toContain(STALE_CMD_MARKER)
+  })
+})
+
+describe('killStaleBackendListeners — win32 平台门 (08-12 win-port)', () => {
+  test('win32 上整段跳过: 不跑 lsof/ps 不 kill, 返回 []', () => {
+    // lsof/ps 是 POSIX 工具, Windows 不存在; 门在函数入口, io 一次都不该被碰。
+    const orig = Object.getOwnPropertyDescriptor(process, 'platform')!
+    Object.defineProperty(process, 'platform', { value: 'win32' })
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    try {
+      const io = { run: vi.fn(), kill: vi.fn(), sleep: vi.fn() }
+      expect(killStaleBackendListeners([9200, 8200], io)).toEqual([])
+      expect(io.run).not.toHaveBeenCalled()
+      expect(io.kill).not.toHaveBeenCalled()
+    } finally {
+      Object.defineProperty(process, 'platform', orig)
+      warnSpy.mockRestore()
+    }
   })
 })

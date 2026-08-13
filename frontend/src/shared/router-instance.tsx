@@ -48,6 +48,7 @@ import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
 import { useMatterNavigation } from './components/matters/navigation'
 import type { DeeplinkTarget } from './lib/deeplink_target'
+import { calendarUiEnabled, detectUiPlatform } from './lib/mailBackend'
 
 // F6 — mailagent:// deeplink target。形状单源自 @shared/lib/deeplink_target（issue #68：
 // 此前这里 inline 抄一份，理由是"renderer 不能 import main 模块" —— 属实，但正解是把类型
@@ -84,6 +85,9 @@ function useDeeplinkRouter(): void {
           }
           break
         case 'calendar': {
+          // Windows 日历整体出范围（2026-08-13 拍板）—— 深链静默忽略,
+          // 防外部 mailagent:// 链接把用户带进已隐藏的日历面。
+          if (!calendarUiEnabled(detectUiPlatform())) break
           const v = (CALENDAR_VIEWS as readonly string[]).includes(target.view ?? '')
             ? (target.view as CalendarView)
             : 'week'

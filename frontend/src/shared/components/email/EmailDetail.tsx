@@ -25,6 +25,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
 import { parseSender } from '@shared/lib/mail_parse'
 import { isDraftsMailbox } from '@shared/lib/mailboxSemantics'
+import { calendarUiEnabled, detectUiPlatform } from '@shared/lib/mailBackend'
 import { asWriteError } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { mapLanguage } from '@shared/lib/ai_mapping'
@@ -1280,7 +1281,11 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             <MatterBelongsCard entries={linkedMatters} />
           ) : null}
 
-          <MeetingInviteCard internalId={email.internal_id} />
+          {/* Windows 日历整体出范围（2026-08-13 拍板）→ 邀请卡（含「在日历中查看」
+              导航）平台门挂在挂载点, 组件内部 hooks 顺序不受影响。 */}
+          {calendarUiEnabled(detectUiPlatform()) && (
+            <MeetingInviteCard internalId={email.internal_id} />
+          )}
 
           {/* AI Fields — 草稿不渲染: 未发出的邮件不会被 AI 处理 (gate 在
               watcher 草稿分支), `ai` 对存在的行恒非 null (LEFT JOIN 投影),

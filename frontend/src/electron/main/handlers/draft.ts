@@ -1,8 +1,9 @@
 // Reply-draft IPC handler (`email:createDraft` — 正文 Craft 按钮).
 //
-// 主路径 (MAILAGENT_BACKEND==='davmail', 生产默认): 转发本机 serve-api
-// `POST /email/draft`，传纯回复正文 + quoteOriginal、不传 to/cc → 服务端按原邮件
-// 推导 **reply-all** 收件人 + 在正文下方拼引用原文，davmail IMAP APPEND 写进 Drafts。
+// 主路径 (MAILAGENT_BACKEND!=='applescript'，即 davmail / outlook_com): 转发本机
+// serve-api `POST /email/draft`，传纯回复正文 + quoteOriginal、不传 to/cc → 服务端
+// 按原邮件推导 **reply-all** 收件人 + 在正文下方拼引用原文，经 backend 协议
+// append_draft 写进 Drafts (davmail=IMAP APPEND / outlook_com=COM CreateItem+Save)。
 // 与 chat `email_draft_reply` 工具同契约 (gateway ai-gateway/tools/write.ts)。
 //
 // Emergency fallback (MAILAGENT_BACKEND==='applescript'): `createDraftViaAppleScript`
@@ -205,10 +206,16 @@ export function classifyScriptError(payload: { stderr: string; scriptError: stri
 }
 
 /** Backend selector — mirrors the Python `MAILAGENT_BACKEND` switch (default
- *  applescript; production = davmail post Sprint 16 cutover). davmail 主路径走
- *  serve-api `/email/draft`；applescript 模式才回退到 Mail.app GUI 注入。 */
-function isDavmailBackend(): boolean {
-  return (process.env['MAILAGENT_BACKEND'] ?? 'applescript').toLowerCase() === 'davmail'
+ *  applescript; 值域三值 applescript | davmail | outlook_com, 单源
+ *  @shared/lib/mailBackend)。判据 = 「非 applescript 都走 serve-api 通用 backend
+ *  路径」(镜像 Python 侧 `== "davmail"` → `!= "applescript"` 的修正模式):
+ *  serve-api `/email/draft` → MailWriteService.compose_draft → 协议 append_draft,
+ *  davmail 与 outlook_com 同路; applescript 模式才回退到 Mail.app GUI 注入。
+ *  空白值（unset / `MAILAGENT_BACKEND=` 空行）按默认 applescript 处理 —— 与改判据
+ *  前 `=== 'davmail'` 时代的空值走向逐字节一致, 不让脏 env 把草稿悄悄改道。 */
+function usesServeApiDraftPath(): boolean {
+  const backend = (process.env['MAILAGENT_BACKEND'] ?? '').trim().toLowerCase()
+  return backend !== '' && backend !== 'applescript'
 }
 
 /** POST /email/draft 返回的 DraftResult data 块的相关字段（createDraft 投影为
@@ -221,9 +228,10 @@ interface DraftEndpointData {
 
 /** 正文 Craft 按钮的草稿创建（`email:createDraft` IPC）。
  *
- *  davmail 主路径：转发本机 serve-api `POST /email/draft`，传纯回复正文 + quoteOriginal、
- *  不传 to/cc → 服务端按原邮件推导 reply-all 收件人 + 在正文下方拼引用原文（davmail IMAP
- *  APPEND）。等效于点顶部「回复所有 + 带原文引用」，与 chat email_draft_reply 工具同契约。
+ *  通用 backend 主路径（davmail / outlook_com）：转发本机 serve-api `POST /email/draft`，
+ *  传纯回复正文 + quoteOriginal、不传 to/cc → 服务端按原邮件推导 reply-all 收件人 +
+ *  在正文下方拼引用原文（协议 append_draft）。等效于点顶部「回复所有 + 带原文引用」，
+ *  与 chat email_draft_reply 工具同契约。
  *
  *  applescript 模式（emergency fallback）：保留旧 `create_reply_draft.sh` GUI 注入路径。 */
 export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftResult> {
@@ -242,8 +250,9 @@ export async function createDraft(opts: CreateDraftOpts): Promise<CreateDraftRes
     })
   }
 
-  // davmail 主路径 — 转发 serve-api（不传 to/cc → 服务端推导 reply-all + 拼引用原文）。
-  if (isDavmailBackend()) {
+  // 通用 backend 主路径 (davmail / outlook_com) — 转发 serve-api（不传 to/cc →
+  // 服务端推导 reply-all + 拼引用原文）。
+  if (usesServeApiDraftPath()) {
     const data = (await runComposeDraft({
       internalId: opts.internalId,
       mode: 'reply-all',
@@ -556,6 +565,7 @@ export const __testing = {
   classifyScriptError,
   lookupMailbox,
   parseScriptOutput,
+  usesServeApiDraftPath,
   validateComposeOpts,
   runComposeDraft,
   runComposeSend,

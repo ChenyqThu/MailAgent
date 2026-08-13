@@ -58,10 +58,35 @@ def create_backend(
         from src.mail.backend.davmail_backend import DavMailBackend
 
         backend = DavMailBackend(cfg, sync_store=sync_store)
+    elif backend_name == "outlook_com":
+        # task 08-12: Windows classic Outlook COM (pywin32)。平台闸在 import 前 ——
+        # mac/linux 上 pywin32 不存在, 提前给出清晰错误而非 ImportError 噪音。
+        import sys
+
+        if sys.platform != "win32":
+            raise BackendStartupError(
+                backend=backend_name,
+                reason=(
+                    f"outlook_com backend 仅支持 Windows (当前 sys.platform={sys.platform!r}); "
+                    "它驱动本机 classic Outlook 的 COM 对象模型"
+                ),
+                fallback_hint=(
+                    "macOS 请用 MAILAGENT_BACKEND=applescript 或 davmail"
+                ),
+            )
+        if sync_store is None:
+            raise BackendStartupError(
+                backend=backend_name,
+                reason="OutlookComBackend requires sync_store (for entry_id/internal_id)",
+                fallback_hint="Pass sync_store kwarg to create_backend()",
+            )
+        from src.mail.backend.outlook_com_backend import OutlookComBackend
+
+        backend = OutlookComBackend(cfg, sync_store=sync_store)
     else:
         raise ValueError(
             f"unknown MAILAGENT_BACKEND={backend_name!r}, "
-            f"expected 'applescript' or 'davmail'"
+            f"expected 'applescript', 'davmail' or 'outlook_com'"
         )
 
     ok, detail = backend.probe_readiness()
@@ -72,6 +97,11 @@ def create_backend(
                 "回退到 AppleScript: "
                 "sed -i.bak 's/^MAILAGENT_BACKEND=.*/MAILAGENT_BACKEND=applescript/' .env "
                 "&& pm2 restart mail-sync"
+            )
+        elif backend_name == "outlook_com":
+            fallback = (
+                "确认本机安装并登录 classic Outlook (New Outlook/olk.exe 无 COM 接口), "
+                "且 pywin32 已安装; 或切换 MAILAGENT_BACKEND=davmail"
             )
         else:
             fallback = (

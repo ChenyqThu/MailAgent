@@ -958,20 +958,28 @@ class MailWriteService:
     # ------------------------------------------------------------
 
     def _folder_imap_reader(self):
-        """构造 FolderImapReader (归档走 IMAP); 要求 davmail backend, 否则
-        ``ServiceInvalidArgError``。搬自 CLI ``_folder_imap_reader`` (与 folder.py 同 gate:
-        folder 级 IMAP 操作 applescript 模式不支持)。"""
+        """构造 folder 级写面 reader (归档/移动/文件夹 CRUD)。
+
+        能力判定闸 (task 08-12: 原 isinstance(DavMailBackend) 硬闸改造):
+        davmail → ``FolderImapReader`` (IMAP, 原路径行为字节级不变);
+        ``supports_folder_ops`` 能力标 (outlook_com) → ``FolderComReader``
+        (COM Move / Folders CRUD 等价物); 其余 (applescript) → 原样
+        ``ServiceInvalidArgError``。搬自 CLI ``_folder_imap_reader``。"""
         from src.mail.backend.imap_folder_reader import FolderImapReader
         from src.mail.backend.davmail_backend import DavMailBackend
 
         backend = self._ctx.backend
-        if not isinstance(backend, DavMailBackend):
-            raise ServiceInvalidArgError(
-                "归档需要 MAILAGENT_BACKEND=davmail (IMAP MOVE); "
-                f"当前 backend={getattr(backend, 'backend_origin', '?')!r} 不支持.",
-                hint="在 .env 设 MAILAGENT_BACKEND=davmail 并确认 DavMail JVM 在跑.",
-            )
-        return FolderImapReader(backend)
+        if isinstance(backend, DavMailBackend):
+            return FolderImapReader(backend)
+        if getattr(backend, "supports_folder_ops", False):
+            from src.mail.backend.com_folder_reader import FolderComReader
+
+            return FolderComReader(backend)
+        raise ServiceInvalidArgError(
+            "归档需要 MAILAGENT_BACKEND=davmail (IMAP MOVE) 或 outlook_com (COM Move); "
+            f"当前 backend={getattr(backend, 'backend_origin', '?')!r} 不支持.",
+            hint="在 .env 设 MAILAGENT_BACKEND=davmail 并确认 DavMail JVM 在跑.",
+        )
 
     async def _update_notion_mailbox(self, page_id: str, mailbox: str) -> None:
         """把 Notion 邮件页的 Mailbox (Select) 属性改成目标值 (归档 = 存档)。"""
@@ -2087,11 +2095,14 @@ class MailWriteService:
         reconcile 兜底 Outlook/OWA 端的增删; message_id merge protection 防止
         davmail 缓存追上后 reconcile 把同一封再 to_add 成重复行。
 
-        仅 davmail 路径 (appended_uid 非空) + DRAFTS_SYNC_ENABLED。任何失败仅
-        warning — 草稿已成功 APPEND 到 Exchange, 本地镜像晚到由 reconcile 补。
+        davmail 路径 (appended_uid 非空) 或 outlook_com 路径 (entry_id 非空,
+        task 08-12 — COM 无 UID, 且 reconcile_drafts 有意缺席, 本地镜像是唯一
+        入库路径) + DRAFTS_SYNC_ENABLED。任何失败仅 warning — 草稿已成功落
+        Exchange/Outlook, 本地镜像晚到由 reconcile 补 (davmail) 或重开补 (COM)。
         """
         try:
-            if not result.appended_uid:
+            com_entry_id = getattr(result, "entry_id", None)
+            if not result.appended_uid and not com_entry_id:
                 return  # AppleScript 路径 / APPENDUID 缺失 → 交给 reconcile
             cfg = self._ctx.config
             if not bool(getattr(cfg, "drafts_sync_enabled", True)):
@@ -2127,9 +2138,11 @@ class MailWriteService:
                 "is_flagged": False,
                 "thread_id": thread_id,
                 "sync_status": "pending",
-                "backend_origin": "davmail",
+                "backend_origin": "outlook_com" if com_entry_id else "davmail",
                 "imap_uid": result.appended_uid,
             }
+            if com_entry_id:
+                payload["entry_id"] = str(com_entry_id)
             if in_reply_to_mid:
                 payload["draft_in_reply_to"] = in_reply_to_mid
                 payload["draft_references"] = references_chain
@@ -2139,7 +2152,7 @@ class MailWriteService:
             store.save_email(payload)
             logger.info(
                 f"[compose] draft mirrored locally internal_id={internal_id} "
-                f"uid={result.appended_uid}"
+                f"uid={result.appended_uid} entry_id={com_entry_id!r}"
             )
             # 正文立即落 email_body SSoT —— 正文是本地撰写的 (draft.reply_html, 前端
             # getSanitizedHtml 已含引用), 直接写本地, 草稿保存后秒开即可读。否则要等
@@ -2196,8 +2209,21 @@ class MailWriteService:
                 f"邮件 {internal_id} 不是草稿 (mailbox={meta.get('mailbox')!r}); "
                 "删除草稿仅适用于草稿箱"
             )
+        # 定位锚按**行级** backend_origin 分派 (task 08-12): outlook_com 行用
+        # entry_id/message_id (COM 无 UID 概念); 其余 (davmail) 维持 imap_uid
+        # 硬闸字节级不变。行级判据而非 self._ctx.backend —— 避免在 raise 路径
+        # 提前触发 lazy backend 创建 (davmail 会连 IMAP)。
+        row_is_com = meta.get("backend_origin") == "outlook_com"
         imap_uid = meta.get("imap_uid")
-        if not imap_uid:
+        entry_id = meta.get("entry_id")
+        message_id = meta.get("message_id")
+        if row_is_com:
+            if not entry_id and not message_id:
+                raise ServiceInvalidArgError(
+                    f"草稿 {internal_id} 缺 entry_id/message_id 定位锚, "
+                    "无法定位 Outlook 草稿"
+                )
+        elif not imap_uid:
             raise ServiceInvalidArgError(
                 f"草稿 {internal_id} 缺 imap_uid (AppleScript 存量行?), 无法定位 Exchange 草稿"
             )
@@ -2224,10 +2250,43 @@ class MailWriteService:
         except Exception:
             pass
 
-        # ── IMAP 后置 (慢链): 失败不抛 — 本地已删, 抛错会让前端报失败但行已
-        # 消失 (语义混乱); Exchange 残留由下次 reconcile to_add 拉回行重现。 ──
+        # ── 远端后置 (慢链): 失败不抛 — 本地已删, 抛错会让前端报失败但行已
+        # 消失 (语义混乱); Exchange 残留由下次 reconcile to_add 拉回行重现。
+        # 🔴 跨模式护栏 (task 08-12): win 双 backend 可切换 (prd §7 拍板 1) ⇒
+        # 行的 backend_origin 可能与当前 backend 不符 (COM 行 × FolderImapReader /
+        # davmail 行 × FolderComReader), 两个 reader 的删除方法面不同 —— 缺对应
+        # 方法时按 getattr 判定跳过远端删 (本地已删语义已达成, 远端残留由对侧
+        # 模式的 reconcile / 用户手动清), 绝不让 AttributeError 抛给前端。 ──
         reader = self._folder_imap_reader()
-        if not reader.delete_message("drafts", int(imap_uid)):
+        if row_is_com:
+            com_delete = getattr(reader, "delete_draft_by_anchor", None)
+            if com_delete is None:
+                logger.warning(
+                    f"[delete-draft] COM 行 {internal_id} 但当前 backend 无 "
+                    f"delete_draft_by_anchor (跨模式, reader={type(reader).__name__}); "
+                    "跳过远端删 (本地已删; Outlook 残留切回 outlook_com 后重删)"
+                )
+            elif not com_delete(entry_id=entry_id, message_id=message_id):
+                logger.warning(
+                    f"[delete-draft] COM delete failed entry_id={entry_id!r} "
+                    "(本地已删; Outlook 残留可手动清理, 重删即可)"
+                )
+            logger.info(
+                f"[delete-draft] internal_id={internal_id} entry_id={entry_id!r} done"
+            )
+            return DeleteDraftResult(
+                internal_id=internal_id,
+                imap_uid=int(imap_uid or 0),
+                local_deleted=local_deleted,
+            )
+        imap_delete = getattr(reader, "delete_message", None)
+        if imap_delete is None:
+            logger.warning(
+                f"[delete-draft] IMAP 行 {internal_id} 但当前 backend 无 "
+                f"delete_message (跨模式, reader={type(reader).__name__}); "
+                "跳过远端删 (本地已删; Exchange 残留切回 davmail 后由 reconcile 收敛)"
+            )
+        elif not imap_delete("drafts", int(imap_uid)):
             logger.warning(
                 f"[delete-draft] IMAP delete failed uid={imap_uid} "
                 "(本地已删; Exchange 残留由 reconcile 拉回, 重删即可)"

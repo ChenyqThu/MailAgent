@@ -997,11 +997,14 @@ class Config(BaseSettings):
     mailagent_backend: str = Field(
         default="applescript", env="MAILAGENT_BACKEND",
         description=(
-            "邮件后端选择: 'applescript' (默认, Mail.app + AppleScript v3 路径) | "
-            "'davmail' (DavMail IMAP/SMTP, PRIMARY when 切换). 启动时 backend factory "
+            "邮件后端选择: 'applescript' (默认, Mail.app + AppleScript v3 路径, mac-only) | "
+            "'davmail' (DavMail IMAP/SMTP, PRIMARY when 切换) | "
+            "'outlook_com' (task 08-12, Windows-only: 本机 classic Outlook COM 自动化, "
+            "非 win32 平台 factory 直接 raise). 启动时 backend factory "
             "probe 失败 → BackendStartupError + print 切换提示 + exit(1) (PM2 autorestart=false). "
             "切换是手动 single-driver, 没有自动 fallback. davmail 模式启动前确认 "
-            "`pm2 ls | grep davmail-poc` online."
+            "`pm2 ls | grep davmail-poc` online. "
+            "🔴 值域被前端手抄 (onboarding/ipc.ts BackendKind), 改值域两边同步."
         ),
     )
     mailagent_marker_backend_guard: bool = Field(

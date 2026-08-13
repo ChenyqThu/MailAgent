@@ -997,3 +997,59 @@ def test_delete_draft_idempotent_missing_row(tmp_path):
     svc._folder_imap_reader.assert_not_called()
     svc._ctx.email_repo.delete_email_full.assert_not_called()
     assert result.imap_uid == 0 and result.local_deleted is False
+
+
+def test_delete_draft_com_row_uses_entry_id_anchor(tmp_path):
+    """outlook_com 行 (task 08-12): 定位锚 = entry_id/message_id, 不再硬要 imap_uid。"""
+    svc = _delete_service(tmp_path)
+    svc._ctx.sync_store.save_email({
+        "internal_id": 8, "subject": "d", "sender": "me@x", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "outlook_com",
+        "message_id": "com-d8@x", "entry_id": "EID-8",
+    })
+    reader = MagicMock(spec=["delete_draft_by_anchor"])
+    reader.delete_draft_by_anchor.return_value = True
+    svc._folder_imap_reader = MagicMock(return_value=reader)
+
+    result = svc.delete_draft(8, actor=_actor())
+    reader.delete_draft_by_anchor.assert_called_once_with(
+        entry_id="EID-8", message_id="com-d8@x"
+    )
+    svc._ctx.email_repo.delete_email_full.assert_called_once_with(8)
+    assert result.local_deleted is True and result.imap_uid == 0
+
+
+def test_delete_draft_com_row_cross_mode_imap_reader_no_raise(tmp_path):
+    """🔴 跨模式护栏 (win 双 backend 可切换): COM 行 × FolderImapReader
+    (无 delete_draft_by_anchor) → 跳过远端删, 绝不 AttributeError 抛给前端
+    (本地已删, 抛错 = 行已消失但前端报失败的语义混乱)。"""
+    svc = _delete_service(tmp_path)
+    svc._ctx.sync_store.save_email({
+        "internal_id": 9, "subject": "d", "sender": "me@x", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "outlook_com",
+        "message_id": "com-d9@x",
+    })
+    reader = MagicMock(spec=["delete_message"])  # IMAP reader 的方法面
+    svc._folder_imap_reader = MagicMock(return_value=reader)
+
+    result = svc.delete_draft(9, actor=_actor())  # 不抛
+    reader.delete_message.assert_not_called()
+    svc._ctx.email_repo.delete_email_full.assert_called_once_with(9)
+    assert result.local_deleted is True
+
+
+def test_delete_draft_imap_row_cross_mode_com_reader_no_raise(tmp_path):
+    """🔴 跨模式护栏反向: davmail 行 (imap_uid 锚) × FolderComReader
+    (无 delete_message) → 同样跳过远端删不抛。"""
+    svc = _delete_service(tmp_path)
+    svc._ctx.sync_store.save_email({
+        "internal_id": 10, "subject": "d", "sender": "me@x", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "davmail", "imap_uid": 77,
+    })
+    reader = MagicMock(spec=["delete_draft_by_anchor"])  # COM reader 的方法面
+    svc._folder_imap_reader = MagicMock(return_value=reader)
+
+    result = svc.delete_draft(10, actor=_actor())  # 不抛
+    reader.delete_draft_by_anchor.assert_not_called()
+    svc._ctx.email_repo.delete_email_full.assert_called_once_with(10)
+    assert result.local_deleted is True and result.imap_uid == 77

@@ -7,11 +7,48 @@
 //   - parseScriptOutput     → tolerates trailing whitespace + interleaved logs
 //   - classifyScriptError   → stderr / script-error keywords → E_* codes
 
-import { describe, expect, test } from 'vitest'
+import { afterEach, describe, expect, test, vi } from 'vitest'
 
 import { __testing } from '../../src/electron/main/handlers/draft'
 
-const { buildDraftCommand, parseScriptOutput, classifyScriptError, validateComposeOpts } = __testing
+const {
+  buildDraftCommand,
+  parseScriptOutput,
+  classifyScriptError,
+  validateComposeOpts,
+  usesServeApiDraftPath
+} = __testing
+
+describe('usesServeApiDraftPath (task 08-12: != applescript 都走 serve-api 通用 backend 路径)', () => {
+  afterEach(() => {
+    vi.unstubAllEnvs()
+  })
+
+  test('unset → applescript 默认 → Mail.app GUI 注入路径', () => {
+    vi.stubEnv('MAILAGENT_BACKEND', '')
+    expect(usesServeApiDraftPath()).toBe(false)
+  })
+
+  test('applescript → false', () => {
+    vi.stubEnv('MAILAGENT_BACKEND', 'applescript')
+    expect(usesServeApiDraftPath()).toBe(false)
+  })
+
+  test('davmail → true（原主路径不变）', () => {
+    vi.stubEnv('MAILAGENT_BACKEND', 'davmail')
+    expect(usesServeApiDraftPath()).toBe(true)
+  })
+
+  test('outlook_com → true（修 pre-08-12 误落 AppleScript 路径）', () => {
+    vi.stubEnv('MAILAGENT_BACKEND', 'outlook_com')
+    expect(usesServeApiDraftPath()).toBe(true)
+  })
+
+  test('大小写不敏感（镜像原 isDavmailBackend 的 toLowerCase 语义）', () => {
+    vi.stubEnv('MAILAGENT_BACKEND', 'AppleScript')
+    expect(usesServeApiDraftPath()).toBe(false)
+  })
+})
 
 describe('buildDraftCommand', () => {
   test('without account → no --account flag', () => {

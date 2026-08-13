@@ -58,6 +58,29 @@ function collectMachO(dir, acc) {
 }
 
 exports.default = async function afterPack(context) {
+  // ── Windows (08-12 win-port): 无 Authenticode 签名 (07-08 拍板不做), 但保留嵌入式
+  // python 存在性硬校验。mac 头号坑① 是 python 缺失 → 静默跳签 → 出无后端坏包;
+  // win 没有签名步可跳, 等价灾难是「NSIS 包装好了但里面没后端」→ 这里直接 fail loud。
+  // (mac 分支下面的软跳过行为保持原样 —— 零回归红线, 不顺手改。)
+  if (context.electronPlatformName === 'win32') {
+    // win-unpacked 布局: <appOutDir>/resources/ = process.resourcesPath (小写, 无 Contents/)
+    const pyExe = path.join(context.appOutDir, 'resources', 'python', 'python.exe')
+    const sitePackages = path.join(context.appOutDir, 'resources', 'python', 'Lib', 'site-packages', 'src')
+    if (!fs.existsSync(pyExe)) {
+      throw new Error(
+        `[afterPack] win: 嵌入式 python 缺失 (${pyExe}) — ` +
+          '先跑 pwsh frontend/scripts/build-python-venv.ps1 产出 resources/python 再打包'
+      )
+    }
+    if (!fs.existsSync(sitePackages)) {
+      throw new Error(
+        `[afterPack] win: python 在但后端包缺失 (${sitePackages}) — ` +
+          'build-python-venv.ps1 未完成 pip install 阶段? 重跑 provision'
+      )
+    }
+    console.log('[afterPack] win: 嵌入式 python + 后端包校验通过 (Authenticode 签名按拍板不做)')
+    return
+  }
   if (context.electronPlatformName !== 'darwin') return
 
   // P6 Developer ID 构建门控 (CSC_LINK = CI 注入了 .p12 证书): electron-builder 在 sign

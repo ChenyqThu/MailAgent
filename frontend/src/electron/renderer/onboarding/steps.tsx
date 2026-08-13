@@ -33,6 +33,7 @@ import type {
 } from './ipc'
 import type { FolderInfo, FolderTreeNode } from '@shared/api/types'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { calendarUiEnabled, detectUiPlatform } from '@shared/lib/mailBackend'
 import {
   findOnboardingLlmTemplate,
   invalidCustomBaseUrlReason,
@@ -382,6 +383,9 @@ export interface StepBackendProps {
   setBackend: (b: BackendKind) => void
   davAck: boolean
   setDavAck: (v: boolean) => void
+  /** outlook_com (Windows) 前提确认勾选 — 镜像 davAck 的角色。 */
+  comAck: boolean
+  setComAck: (v: boolean) => void
   onNext: () => void
   onBack: () => void
 }
@@ -391,75 +395,157 @@ export function StepBackend({
   setBackend,
   davAck,
   setDavAck,
+  comAck,
+  setComAck,
   onNext,
   onBack
 }: StepBackendProps): React.JSX.Element {
   const [advOpen, setAdvOpen] = useState(false)
-  const canNext = backend === 'applescript' || (backend === 'davmail' && davAck)
+  // 平台双卡 (owner 2026-08-13 拍板, 单源 @shared/lib/mailBackend):
+  //   mac = AppleScript(推荐) + DavMail; win = Outlook 本机(推荐) + DavMail。
+  const isWin = detectUiPlatform() === 'win32'
+  const canNext =
+    backend === 'applescript' ||
+    (backend === 'davmail' && davAck) ||
+    (backend === 'outlook_com' && comAck)
+
+  // DavMail 卡两平台共用同一 JSX (mac 渲染树零变化)。
+  const davmailCard = (
+    <button
+      type="button"
+      className={`opt-card ${backend === 'davmail' ? 'on' : ''}`}
+      onClick={() => {
+        setBackend('davmail')
+        setAdvOpen(true)
+      }}
+    >
+      <div className="flex items-start gap-3">
+        <span className="opt-radio mt-0.5" />
+        <span
+          className="text-ink-fg-1 mt-0.5"
+          style={{ color: backend === 'davmail' ? 'rgb(var(--c-accent))' : undefined }}
+        >
+          <Icon name="server" size={18} />
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="flex items-center gap-2">
+            <span className="text-[15px] font-semibold text-ink-fg">DavMail</span>
+            <span className="pill pill-info">企业 · Outlook/EWS</span>
+            <span className="pill pill-warn">Beta</span>
+          </div>
+          <div className="text-[13px] text-ink-fg-1 mt-1 leading-snug">
+            用于 Outlook / Exchange 企业邮箱。需系统 Java + 引导式配置，有合规前提。
+          </div>
+        </div>
+      </div>
+    </button>
+  )
+
   return (
     <>
       <div className="wiz-body scrollbar-thin step-enter">
         <div className="eyebrow">Step 2 — 后端选择</div>
         <h1 className="wiz-h1">选择邮件后端</h1>
         <p className="wiz-lede">
-          决定 MailAgent 如何读写你的邮件。个人用户推荐 AppleScript —— 零配置、零合规风险。
+          {isWin
+            ? '决定 MailAgent 如何读写你的邮件。推荐使用本机 Outlook —— 零外部依赖。'
+            : '决定 MailAgent 如何读写你的邮件。个人用户推荐 AppleScript —— 零配置、零合规风险。'}
         </p>
 
         <div className="flex flex-col gap-3 mt-6">
-          <button
-            type="button"
-            className={`opt-card ${backend === 'applescript' ? 'on' : ''}`}
-            onClick={() => setBackend('applescript')}
-          >
-            <div className="flex items-start gap-3">
-              <span className="opt-radio mt-0.5" />
-              <span
-                className="text-ink-fg-1 mt-0.5"
-                style={{ color: backend === 'applescript' ? 'rgb(var(--c-accent))' : undefined }}
-              >
-                <Icon name="mail" size={18} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[15px] font-semibold text-ink-fg">AppleScript</span>
-                  <span className="pill pill-ok">推荐</span>
-                </div>
-                <div className="text-[13px] text-ink-fg-1 mt-1 leading-snug">
-                  使用你 Mail.app 里已登录的账户读写邮件。零配置，需要上一步授予完全磁盘访问。
+          {isWin ? (
+            <button
+              type="button"
+              className={`opt-card ${backend === 'outlook_com' ? 'on' : ''}`}
+              onClick={() => setBackend('outlook_com')}
+            >
+              <div className="flex items-start gap-3">
+                <span className="opt-radio mt-0.5" />
+                <span
+                  className="text-ink-fg-1 mt-0.5"
+                  style={{
+                    color: backend === 'outlook_com' ? 'rgb(var(--c-accent))' : undefined
+                  }}
+                >
+                  <Icon name="mail" size={18} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[15px] font-semibold text-ink-fg">Outlook（本机）</span>
+                    <span className="pill pill-ok">推荐</span>
+                  </div>
+                  <div className="text-[13px] text-ink-fg-1 mt-1 leading-snug">
+                    使用本机 Outlook 里已登录的账户读写邮件。零外部依赖，需已安装并登录 classic
+                    Outlook。
+                  </div>
                 </div>
               </div>
-            </div>
-          </button>
+            </button>
+          ) : (
+            <button
+              type="button"
+              className={`opt-card ${backend === 'applescript' ? 'on' : ''}`}
+              onClick={() => setBackend('applescript')}
+            >
+              <div className="flex items-start gap-3">
+                <span className="opt-radio mt-0.5" />
+                <span
+                  className="text-ink-fg-1 mt-0.5"
+                  style={{
+                    color: backend === 'applescript' ? 'rgb(var(--c-accent))' : undefined
+                  }}
+                >
+                  <Icon name="mail" size={18} />
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[15px] font-semibold text-ink-fg">AppleScript</span>
+                    <span className="pill pill-ok">推荐</span>
+                  </div>
+                  <div className="text-[13px] text-ink-fg-1 mt-1 leading-snug">
+                    使用你 Mail.app 里已登录的账户读写邮件。零配置，需要上一步授予完全磁盘访问。
+                  </div>
+                </div>
+              </div>
+            </button>
+          )}
 
-          <button
-            type="button"
-            className={`opt-card ${backend === 'davmail' ? 'on' : ''}`}
-            onClick={() => {
-              setBackend('davmail')
-              setAdvOpen(true)
-            }}
-          >
-            <div className="flex items-start gap-3">
-              <span className="opt-radio mt-0.5" />
-              <span
-                className="text-ink-fg-1 mt-0.5"
-                style={{ color: backend === 'davmail' ? 'rgb(var(--c-accent))' : undefined }}
-              >
-                <Icon name="server" size={18} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <div className="flex items-center gap-2">
-                  <span className="text-[15px] font-semibold text-ink-fg">DavMail</span>
-                  <span className="pill pill-info">企业 · Outlook/EWS</span>
-                  <span className="pill pill-warn">Beta</span>
-                </div>
-                <div className="text-[13px] text-ink-fg-1 mt-1 leading-snug">
-                  用于 Outlook / Exchange 企业邮箱。需系统 Java + 引导式配置，有合规前提。
-                </div>
-              </div>
-            </div>
-          </button>
+          {davmailCard}
         </div>
+
+        {backend === 'outlook_com' && (
+          <div className="mt-3 step-enter">
+            <Banner kind="info">
+              <div className="font-semibold text-[13px] mb-1.5">使用前请确认</div>
+              <ul
+                className="text-[12.5px] text-ink-fg-1 leading-relaxed space-y-1.5"
+                style={{ listStyle: 'disc', paddingLeft: 16 }}
+              >
+                <li>
+                  需要 <span className="text-ink-fg">classic Outlook</span>（经典版）——
+                  新版「New Outlook」已移除自动化接口，不受支持。
+                </li>
+                <li>同步期间请保持 Outlook 运行并已登录邮箱账户。</li>
+                <li>
+                  首次运行时 Outlook 会弹出「有程序正尝试访问」授权提示（Programmatic
+                  Access），请点「允许访问」并选择最长时长。
+                </li>
+              </ul>
+              {/* 整行单 button — 镜像 davmail 合规勾选的可点性修复 (方块+文字都可点)。 */}
+              <button
+                type="button"
+                className="flex w-full items-center gap-2.5 mt-3 cursor-pointer select-none text-left"
+                onClick={() => setComAck(!comAck)}
+                aria-pressed={comAck}
+              >
+                <span className={`cb ${comAck ? 'cb-on' : ''}`} />
+                <span className="text-[13px] text-ink-fg">
+                  我已确认本机安装的是 classic Outlook，并了解上述运行前提
+                </span>
+              </button>
+            </Banner>
+          </div>
+        )}
 
         {backend === 'davmail' && (
           <div className="mt-3 step-enter">
@@ -690,6 +776,9 @@ export function StepConfig({
   setCommitError
 }: StepConfigProps): React.JSX.Element {
   const isDavmail = backend === 'davmail'
+  const isOutlookCom = backend === 'outlook_com'
+  // 日历 Notion 库字段: win 恒隐藏 (日历整体出范围, owner 2026-08-13 拍板)。
+  const calendarFieldVisible = calendarUiEnabled(detectUiPlatform())
   const [accounts, setAccounts] = useState<string[] | null>(null) // null = loading
   const [mailboxes, setMailboxes] = useState<string[]>(DEFAULT_MAILBOXES)
   const [touched, setTouched] = useState<Record<string, boolean>>({})
@@ -709,10 +798,10 @@ export function StepConfig({
 
   useEffect(() => {
     alive.current = true
-    // davmail 后端不枚举 Mail.app 账户 (debug mail-structure 是 AppleScript-only,
-    // davmail 无账户枚举, USER_EMAIL 即登录名)。不调 listMailAccounts —— davmail 分支
-    // 的账户 UI (accounts 消费方) 全在 !isDavmail 后渲染, 这里直接跳过即可。
-    if (isDavmail) {
+    // davmail / outlook_com 后端不枚举 Mail.app 账户 (debug mail-structure 是
+    // AppleScript-only; davmail/COM 无账户枚举, USER_EMAIL 即登录名)。不调
+    // listMailAccounts —— 账户 UI (accounts 消费方) 只在 applescript 分支渲染。
+    if (isDavmail || isOutlookCom) {
       return () => {
         alive.current = false
       }
@@ -754,7 +843,7 @@ export function StepConfig({
       alive.current = false
       clearDetectTimer()
     }
-  }, [isDavmail])
+  }, [isDavmail, isOutlookCom])
 
   // davmail 桥探测 (davmail 分支专属)。~6s hang 兜底: detect 永不返回时降级为
   // bridgeUp=false 的占位结果, 让 banner 显示"未检测到桥"而不是永久转圈。
@@ -909,6 +998,8 @@ export function StepConfig({
     if (!pocMode && !(form.DAVMAIL_POC_CIPHER_KEY ?? '').trim()) {
       errs.DAVMAIL_POC_CIPHER_KEY = '请填写密钥或改用 PoC 默认密钥'
     }
+  } else if (isOutlookCom) {
+    // outlook_com 只要 USER_EMAIL —— 账户/认证都在本机 Outlook 里, 无账户名/密钥概念。
   } else if (!form.MAIL_ACCOUNT_NAME) {
     errs.MAIL_ACCOUNT_NAME = '请选择账户'
   }
@@ -970,6 +1061,23 @@ export function StepConfig({
               pocMode={pocMode}
               davDetect={davDetect}
             />
+          ) : isOutlookCom ? (
+            /* outlook_com: 账户在本机 Outlook 里, 只收 USER_EMAIL。 */
+            <Field
+              label="用户邮箱 (USER_EMAIL)"
+              icon="mail"
+              required
+              error={showErr('USER_EMAIL')}
+              hint="本机 Outlook 中已登录的邮箱地址"
+            >
+              <input
+                className={`fld ${showErr('USER_EMAIL') ? 'err' : ''}`}
+                placeholder="you@company.com"
+                value={form.USER_EMAIL ?? ''}
+                onChange={(e) => set('USER_EMAIL', e.target.value)}
+                onBlur={() => blur('USER_EMAIL')}
+              />
+            </Field>
           ) : (
             <>
               <Field
@@ -1086,19 +1194,21 @@ export function StepConfig({
             />
           </Field>
 
-          <Field
-            label="日历数据库 ID"
-            icon="calendar"
-            warn={warns.CALENDAR_DATABASE_ID}
-            hint="选填 · 如需同步会议到日历再填，可稍后在设置补"
-          >
-            <input
-              className="fld mono"
-              placeholder="选填"
-              value={form.CALENDAR_DATABASE_ID ?? ''}
-              onChange={(e) => set('CALENDAR_DATABASE_ID', e.target.value)}
-            />
-          </Field>
+          {calendarFieldVisible && (
+            <Field
+              label="日历数据库 ID"
+              icon="calendar"
+              warn={warns.CALENDAR_DATABASE_ID}
+              hint="选填 · 如需同步会议到日历再填，可稍后在设置补"
+            >
+              <input
+                className="fld mono"
+                placeholder="选填"
+                value={form.CALENDAR_DATABASE_ID ?? ''}
+                onChange={(e) => set('CALENDAR_DATABASE_ID', e.target.value)}
+              />
+            </Field>
+          )}
         </div>
       </div>
       <WizFooter
@@ -1106,9 +1216,9 @@ export function StepConfig({
         onNext={() => {
           setTouched({
             USER_EMAIL: true,
-            // davmail 不要求账户名, 但要求 cipher (非 PoC 模式时); applescript 反之。
-            // Notion 两键已改选填 (07-12 P3b), 不再进 touched/errs。
-            MAIL_ACCOUNT_NAME: !isDavmail,
+            // 账户名只有 applescript 要求; davmail 要求 cipher (非 PoC 模式时);
+            // outlook_com 两者都不要。Notion 两键已改选填 (07-12 P3b), 不进 touched/errs。
+            MAIL_ACCOUNT_NAME: backend === 'applescript',
             DAVMAIL_POC_CIPHER_KEY: isDavmail
           })
           // "开始同步" 现在提交核心配置 + 起后端 (commitConfig), 成功才进 StepSync。
@@ -1723,6 +1833,10 @@ export function StepPlugins({
   onBack
 }: StepPluginsProps): React.JSX.Element {
   const toggle = (k: string): void => setPlugins((p) => ({ ...p, [k]: !p[k] }))
+  // win 恒隐藏日历插件卡 (日历整体出范围, owner 2026-08-13 拍板; 不是置灰是不渲染)。
+  const visiblePlugins = calendarUiEnabled(detectUiPlatform())
+    ? PLUGINS
+    : PLUGINS.filter((pl) => pl.key !== 'calendar')
   // 依赖是否满足: core plugin (如 'notion') 恒视为已开启 —— 它从不出现在
   // plugins[] 勾选 map 里 (用户从不勾它, 它是核心)。旧实现把 needs:'notion' 当
   // 普通 plugins.notion 判断 → 永远 false → 依赖它的插件永久置灰。
@@ -1752,7 +1866,7 @@ export function StepPlugins({
         </p>
 
         <div className="flex flex-col gap-2.5 mt-6">
-          {PLUGINS.map((pl) => {
+          {visiblePlugins.map((pl) => {
             const on = pl.core || plugins[pl.key]
             const grayed = isGrayed(pl)
             const unconfigured = Boolean(on && !pl.core && pl.needCred)

@@ -8,6 +8,7 @@
 // white-screen when a single channel errors or the preload is absent).
 
 import type { FolderDiscoverResult, FolderSetWhitelistResult } from '@shared/api/types'
+import type { MailBackendKind } from '@shared/lib/mailBackend'
 import type { LlmProviderTestResult } from '@shared/onboarding/llmProviderTemplates'
 
 export type Status = 'pass' | 'fail' | 'warn'
@@ -101,8 +102,9 @@ export interface IpcError {
   message: string
 }
 
-/** Backend selection — mirrors config.py MAILAGENT_BACKEND value domain. */
-export type BackendKind = 'applescript' | 'davmail'
+/** Backend selection — 单源在 @shared/lib/mailBackend（mirrors config.py
+ *  MAILAGENT_BACKEND value domain）；这里 re-export 保住既有 import 路径。 */
+export type BackendKind = MailBackendKind
 
 /** Plugin keys the wizard collects (core 'notion' is always on, not sent). */
 export interface PluginFlags {

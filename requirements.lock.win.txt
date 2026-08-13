@@ -1,0 +1,22 @@
+# requirements.lock.win.txt — Windows x64 嵌入式 CPython 运行时的全量依赖锁
+#   (E0 WP5 打包再现性的 Windows 分叉; mac 侧 = requirements.lock.txt, 两文件互不适用:
+#    mac lock 基于 macOS arm64 解析、无环境 marker, 含 uvloop [win 无 wheel, 装即失败]
+#    与 pyobjc 系 [mac-only]。)
+#
+# ⚠️ 占位状态: 尚未在 Windows 真机/CI 上生成过, 本文件目前 0 个 pin。
+#    build-python-venv.ps1 默认 (锁定) 模式检测到 0 pin 会 fail loud, 不会静默
+#    回退到全新解析 —— 首次 Windows 构建前必须先生成本文件。
+#
+# 生成方式 (二选一):
+#   a. Windows x64 真机:  pwsh frontend/scripts/build-python-venv.ps1 -GenerateLock
+#   b. CI:  Actions → Build Windows app → Run workflow → generate_lock=true,
+#      下载 requirements-lock-win artifact, 覆盖本文件提交进仓 (CI 不回推 commit)。
+#
+# 覆盖范围 (生成后): requirements.txt (滤 pyobjc 行) + pyproject [cli,api,memory]
+#   extras + pywin32 (outlook_com backend) 的全部传递闭包, 全 == pin;
+#   不含项目本体 mailagent (ps1 单独以 --no-deps 安装), 不含 uvloop (uvicorn[standard]
+#   的 sys_platform != 'win32' marker 在 Windows 解析时天然排除)。
+#
+# 更新方法: 改 requirements.txt / pyproject 依赖后重跑 -GenerateLock 并 review diff 提交。
+#   🔴 只改声明源不重新生成本文件 = 改动不进 Windows 包 (provision 只认本文件,
+#   镜像 mac 侧 requirements.lock.txt 纪律)。

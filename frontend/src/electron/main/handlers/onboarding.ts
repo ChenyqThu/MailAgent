@@ -52,6 +52,12 @@ import {
   registerBackendQuitHook,
   resolveApiPort
 } from '../backend_lifecycle'
+import {
+  coerceMailBackendForPlatform,
+  type MailBackendKind,
+  toUiPlatform,
+  type UiPlatform
+} from '../../../shared/lib/mailBackend'
 import { callCli, getMailagentBin } from '../cli_runner'
 import { daemonRequest } from '../daemon_api'
 import { getDb, resolveDataRoot, resolveDbPath } from '../db'
@@ -156,7 +162,8 @@ export interface OnboardingCompleteCfg {
   USER_EMAIL?: string
   CALENDAR_DATABASE_ID?: string
   MAIL_ACCOUNT_NAME?: string
-  MAILAGENT_BACKEND?: 'applescript' | 'davmail'
+  /** 值域单源 = @shared/lib/mailBackend (applescript | davmail | outlook_com)。 */
+  MAILAGENT_BACKEND?: MailBackendKind
   SYNC_MAILBOXES?: string
   plugins?: Partial<Record<PluginKey, boolean>>
   // — DavMail 连接配置 (仅 MAILAGENT_BACKEND==='davmail' 时落 patch)。host/port 非空
@@ -220,7 +227,10 @@ export const PLUGIN_FLAG_MAP: Record<PluginKey, string> = {
  *
  * 返回 { patch, missing }: missing 是缺失的必填 key 列表 (调用方据此短路)。
  */
-export function buildCompletePatch(cfg: OnboardingCompleteCfg): {
+export function buildCompletePatch(
+  cfg: OnboardingCompleteCfg,
+  platform: UiPlatform = toUiPlatform(process.platform)
+): {
   patch: Record<string, string>
   missing: string[]
 } {
@@ -232,10 +242,12 @@ export function buildCompletePatch(cfg: OnboardingCompleteCfg): {
     if (typeof v === 'string' && v.trim() !== '') patch[key] = v.trim()
   }
 
-  // 2) backend (默认 applescript; 只接受白名单两值, 否则回落默认避免写脏值)。
-  const backend = cfg.MAILAGENT_BACKEND
+  // 2) backend — 值域/平台合法性单源 @shared/lib/mailBackend: 脏值或平台外值
+  //    (mac 收到 outlook_com / win 收到 applescript) 收敛为该平台首选, 绝不写脏值;
+  //    win 上选 outlook_com 原样保留 (曾被老二值钳制静默改写成 applescript)。
+  const backend = coerceMailBackendForPlatform(cfg.MAILAGENT_BACKEND, platform)
   const isDavmail = backend === 'davmail'
-  patch['MAILAGENT_BACKEND'] = isDavmail ? 'davmail' : 'applescript'
+  patch['MAILAGENT_BACKEND'] = backend
 
   // 3) SYNC_MAILBOXES (逗号拼接的字符串, 直接透传 trim)。
   if (typeof cfg.SYNC_MAILBOXES === 'string' && cfg.SYNC_MAILBOXES.trim() !== '') {

@@ -8,11 +8,14 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Literal, Optional
 
-BackendOrigin = Literal["applescript", "davmail"]
+BackendOrigin = Literal["applescript", "davmail", "outlook_com"]
 """标记 SyncStore 里某行 internal_id 是谁生成的.
 
 - 'applescript': internal_id = Mail.app SQLite ROWID (< 1_000_000_000)
 - 'davmail': internal_id = SQLite AUTOINCREMENT 起点 1_000_000_000 (DavMail 时代生成)
+- 'outlook_com': internal_id 与 davmail 共用同一 allocate_davmail_internal_id 序列
+  (语义只是「本地合成 id, >= 10^9」); 定位元数据 = email_metadata.entry_id 缓存
+  (EntryID 会漂移, 稳定锚仍是 message_id — 见 task 08-12 prd §2.2-2)
 
 详见 plan §"主键 / 邮件标识策略" 方案 D.
 """

@@ -104,8 +104,9 @@ export const MANAGED_ENV_KEYS = [
   // per-folder 两个勾 (通知 / 跑 AI), 排后续版本。
 
   // — Backend selection (Onboarding 向导 backend 选择)。config.py 的 Field,
-  // 值域 'applescript' | 'davmail' (Sprint 16 dual-backend cutover)。向导写入,
-  // 默认 applescript (零依赖)。
+  // 值域 'applescript' | 'davmail' | 'outlook_com' (Sprint 16 dual-backend cutover;
+  // task 08-12 加第三值 outlook_com, win-only, 平台过滤单源 @shared/lib/mailBackend)。
+  // 向导写入, 默认 applescript (零依赖)。
   'MAILAGENT_BACKEND',
 
   // — Daily digest (Ping Island Phase 3 每日巡检)。config.py Field, boolean toggle,

@@ -42,17 +42,17 @@ app = typer.Typer(
 
 
 def _maybe_create_davmail_backend(cli: "CliContext"):
-    """Sprint 16 dual-backend: cfg.mailagent_backend='davmail' 时返回 DavMailBackend
-    实例 (probe ok), 让 LLM runner 走 IMAP fetch 而非 AppleScript ``whose id`` (后者
-    对 davmail-origin internal_id >= 10^9 无法定位).
+    """Sprint 16 dual-backend: 非 applescript 模式 (davmail / outlook_com, task
+    08-12 判据泛化) 时返回 probe ok 的 backend 实例, 让 LLM runner 走协议 fetch
+    而非 AppleScript ``whose id`` (后者对合成 internal_id >= 10^9 无法定位).
 
     applescript mode 返回 None (runner lazy-init AppleScriptArm, 老路径不变).
-    davmail probe 失败**不吞** —— 冒泡给调用方 (E1 §3.1 Step 3: 防止静默回退到
+    probe 失败**不吞** —— 冒泡给调用方 (E1 §3.1 Step 3: 防止静默回退到
     错 id 空间的 AppleScriptArm); 调用方 (llm_retry_failed) 负责转 CLI 错误。
     """
     from src.config import config as global_cfg
     backend_name = getattr(global_cfg, "mailagent_backend", "applescript")
-    if backend_name != "davmail":
+    if backend_name == "applescript":
         return None
     from src.mail.backend.factory import create_backend
     return create_backend(global_cfg, sync_store=cli.sync_store)
