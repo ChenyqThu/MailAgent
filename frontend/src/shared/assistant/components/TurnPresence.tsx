@@ -44,14 +44,26 @@ import {
 } from '@shared/assistant/runtime/useTurnStage'
 import { useThreadReadOnly } from '@shared/assistant/components/threadReadOnlyContext'
 import { formatToolDuration, useToolElapsed } from '@shared/assistant/tools/generic/useToolElapsed'
+import {
+  isAgentAvatarImage,
+  OFFICIAL_ASSISTANT_AVATAR
+} from '@shared/components/agents/agentAvatarIdentity'
+import { useAssistantIdentity } from '@shared/assistant/assistantIdentity'
 
-/** 官方助手形象（prd §6.3 Q4）：interactive 会话（无绑定 agent）与一切非 bot 头像配置的回落。
- *  WP3 的统一 resolve 链落地前不做 legacy oreo 映射、也不 import agents 域 —— 这里只有这一个
- *  内联常量（与 BotAvatar 的缺省一致，显式写出是为了让消费点自我说明）。模块私有：对象常量
- *  导出会触发 react-refresh/only-export-components（allowConstantExport 只放行字面量）。 */
-const OFFICIAL_ASSISTANT_BOT_CONFIG: NonNullable<BotAvatarProps['config']> = {
-  shape: 'sphere',
-  color: 'orange'
+/** 主 agent 身份（0813）→ 本行的头像/名字投影：owner 配置的 bot 头像直接用；上传图走
+ *  imageSrc（静态 img —— 状态表情对图片无意义）；未配置/legacy = 官方形象 sphere/orange。 */
+function useAssistantPresenceIdentity(): {
+  name: string | undefined
+  config: NonNullable<BotAvatarProps['config']>
+  imageSrc: string | undefined
+} {
+  const identity = useAssistantIdentity()
+  const avatar = identity.avatar
+  return {
+    name: identity.name ?? undefined,
+    config: avatar?.type === 'bot' ? avatar : OFFICIAL_ASSISTANT_AVATAR,
+    imageSrc: isAgentAvatarImage(avatar) ? avatar.data : undefined
+  }
 }
 
 /** celebrate 保持时长（prd §6.3 ≈2.5s），之后进入淡出。 */
@@ -80,6 +92,10 @@ interface TurnPresenceRowProps {
   /** message status === 'complete'（celebrate 只庆祝真完成；abort/incomplete 不庆祝）。 */
   completed: boolean
   config?: BotAvatarProps['config']
+  /** 主 agent 上传图头像（0813）：设了就渲染静态 img 替代 BotAvatar（表情对图片无意义）。 */
+  imageSrc?: string
+  /** 主 agent 名字（0813）：进「{{name}} 思考中…」文案；缺省 'AI'（= 改动前文案逐字）。 */
+  assistantName?: string
   className?: string
 }
 
@@ -90,6 +106,8 @@ export function TurnPresenceRow({
   stallLevel,
   completed,
   config,
+  imageSrc,
+  assistantName,
   className
 }: TurnPresenceRowProps): React.JSX.Element | null {
   const { t } = useTranslation()
@@ -152,7 +170,9 @@ export function TurnPresenceRow({
   // 三个分支全不命中 → 只剩头像在庆祝。
   let text: React.ReactNode = null
   if (stage === 'connecting' || stage === 'thinking') {
-    text = <ShimmerText shiny text={t('chat.status.thinking')} />
+    // {{name}} 插值：主 agent 起了名（如 Jarvis）就是「Jarvis 思考中…」；缺省 'AI'
+    // 两语言字面与改名前逐字一致。
+    text = <ShimmerText shiny text={t('chat.status.thinking', { name: assistantName ?? 'AI' })} />
   } else if (stage === 'stalled') {
     text = (
       <span className="text-aux">
@@ -174,12 +194,23 @@ export function TurnPresenceRow({
         className
       )}
     >
-      <BotAvatar
-        animated
-        size={28}
-        state={botState}
-        config={config ?? OFFICIAL_ASSISTANT_BOT_CONFIG}
-      />
+      {imageSrc ? (
+        <img
+          src={imageSrc}
+          alt=""
+          width={28}
+          height={28}
+          draggable={false}
+          className="h-7 w-7 shrink-0 rounded-full object-cover"
+        />
+      ) : (
+        <BotAvatar
+          animated
+          size={28}
+          state={botState}
+          config={config ?? OFFICIAL_ASSISTANT_AVATAR}
+        />
+      )}
       {text}
       {stopwatch}
     </div>
@@ -199,13 +230,16 @@ export function TurnPresence({ config, className }: TurnPresenceProps): React.JS
   const readOnly = useThreadReadOnly()
   const { stage, stallLevel } = useTurnStage()
   const completed = useAuiState((s) => s.message.status?.type === 'complete')
+  const identity = useAssistantPresenceIdentity()
   if (!isLast || readOnly) return null
   return (
     <TurnPresenceRow
       stage={stage}
       stallLevel={stallLevel}
       completed={completed}
-      config={config}
+      config={config ?? identity.config}
+      imageSrc={config ? undefined : identity.imageSrc}
+      assistantName={identity.name}
       className={className}
     />
   )
@@ -217,9 +251,21 @@ export function TurnPresence({ config, className }: TurnPresenceProps): React.JS
  *  已做掩蔽）。 */
 export function AssistantPanelBotAvatar({ working }: { working: boolean }): React.JSX.Element {
   const state: BotState = working ? 'working' : 'idle'
+  const identity = useAssistantPresenceIdentity()
   return (
     <span className="inline-flex shrink-0" data-testid="panel-bot-avatar" data-bot-state={state}>
-      <BotAvatar animated size={20} state={state} config={OFFICIAL_ASSISTANT_BOT_CONFIG} />
+      {identity.imageSrc ? (
+        <img
+          src={identity.imageSrc}
+          alt=""
+          width={20}
+          height={20}
+          draggable={false}
+          className="h-5 w-5 rounded-full object-cover"
+        />
+      ) : (
+        <BotAvatar animated size={20} state={state} config={identity.config} />
+      )}
     </span>
   )
 }

@@ -349,6 +349,111 @@ async def set_auto_compact(request: Request, body: Optional[dict[str, Any]] = No
     return success_envelope({"mode": mode}, request=request, source="sqlite")
 
 
+# ── 主 agent 身份（0813）：名字 + 头像 ──────────────────────────────────────────────
+#
+# owner 级全局设置：默认助手（interactive chat）的显示名与头像。
+#   name   —— 进「{{name}} 思考中…」文案与 AiChatPanel 标题（如 Jarvis）；null = 默认 "AI 助手"
+#   avatar —— 与 report_agent.avatar_json 同款 bot/image 形状；null = 官方形象 sphere/orange
+# 持久真源 = agent_config.db owner_settings 行（JSON）。纯显示型配置（不进任何 prompt /
+# 权限面）；系统提示词的配置面是 Standing Docs 编辑器（/api/agent/profile/docs），这里不重复。
+# 校验单源：bot 词表 import 自 src/reports/wire.py（跨语言 parity 闸的 Python canonical），
+# image 复用同处的 _normalize_avatar_image —— 不手抄第二份规则。
+
+_ASSISTANT_IDENTITY_KEY = "assistant_identity"
+ASSISTANT_NAME_MAX_CHARS = 40
+
+
+def _normalize_assistant_avatar(avatar: Any) -> Optional[dict[str, Any]]:
+    """assistant 头像校验：None / bot / image 三态（legacy oreo 不适用——主 agent 无存量行）。
+    越域一律 ValueError（调用方折 400）。"""
+    from src.reports.wire import (
+        BOT_AVATAR_COLORS,
+        BOT_AVATAR_SHAPES,
+        _normalize_avatar_image,
+    )
+
+    if avatar is None:
+        return None
+    if not isinstance(avatar, dict):
+        raise ValueError("avatar must be an object or null")
+    if avatar.get("type") == "image":
+        return _normalize_avatar_image(avatar)
+    if avatar.get("type") == "bot":
+        shape = avatar.get("shape")
+        color = avatar.get("color")
+        if shape not in BOT_AVATAR_SHAPES:
+            raise ValueError("avatar.shape must be a supported bot shape")
+        if color not in BOT_AVATAR_COLORS:
+            raise ValueError("avatar.color must be a supported bot color")
+        if set(avatar) != {"type", "shape", "color"}:
+            raise ValueError("avatar with type=bot accepts only keys: type, shape, color")
+        return {"type": "bot", "shape": shape, "color": color}
+    raise ValueError("avatar.type must be 'bot' or 'image'")
+
+
+def _read_assistant_identity() -> dict[str, Any]:
+    """缺行/坏 JSON/坏形状 → 默认 {name: None, avatar: None}（显示型数据 fail-open 到默认脸）。"""
+    raw = get_agent_config_store().get_owner_setting(_ASSISTANT_IDENTITY_KEY)
+    default: dict[str, Any] = {"name": None, "avatar": None}
+    if not raw:
+        return default
+    try:
+        parsed = json.loads(raw)
+    except (ValueError, TypeError):
+        return default
+    if not isinstance(parsed, dict):
+        return default
+    name = parsed.get("name")
+    avatar = parsed.get("avatar")
+    return {
+        "name": name if isinstance(name, str) and name.strip() else None,
+        "avatar": avatar if isinstance(avatar, dict) else None,
+    }
+
+
+@router.get("/assistant-identity", dependencies=[Depends(verify_cf_access)])
+async def get_assistant_identity(request: Request):
+    """读主 agent 身份（名字 + 头像）。"""
+    return success_envelope(_read_assistant_identity(), request=request, source="sqlite")
+
+
+@router.put("/assistant-identity", dependencies=[Depends(verify_cf_access)])
+async def set_assistant_identity(request: Request, body: Optional[dict[str, Any]] = None):
+    """写主 agent 身份（全量替换）。body = {name: str|null, avatar: dict|null}；
+    name 去首尾空白、空串折 null、超长 400；avatar 越域 400（校验同 report agent）。"""
+    payload = body or {}
+    name = payload.get("name")
+    if name is not None and not isinstance(name, str):
+        raise APIError(
+            "E_INVALID_ARG", "name must be a string or null", http_status=400, source="sqlite"
+        )
+    normalized_name: Optional[str] = None
+    if isinstance(name, str):
+        stripped = name.strip()
+        if len(stripped) > ASSISTANT_NAME_MAX_CHARS:
+            raise APIError(
+                "E_INVALID_ARG",
+                f"name must be <= {ASSISTANT_NAME_MAX_CHARS} chars",
+                http_status=400,
+                source="sqlite",
+            )
+        normalized_name = stripped or None
+    try:
+        normalized_avatar = _normalize_assistant_avatar(payload.get("avatar"))
+    except ValueError as exc:
+        raise APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite") from exc
+
+    identity = {"name": normalized_name, "avatar": normalized_avatar}
+    get_agent_config_store().set_owner_setting(
+        _ASSISTANT_IDENTITY_KEY, json.dumps(identity, ensure_ascii=False)
+    )
+    logger.info(
+        f"assistant identity updated: name={normalized_name!r} "
+        f"avatar={'set' if normalized_avatar else 'default'} (owner UI)"
+    )
+    return success_envelope(identity, request=request, source="sqlite")
+
+
 @router.get("/matter-web-face", dependencies=[Depends(verify_cf_access)])
 async def get_matter_web_face(request: Request):
     """读跟进 run 的网页检索档。缺行/脏值 → 'keep'（= gateway 侧同一个默认值）。"""

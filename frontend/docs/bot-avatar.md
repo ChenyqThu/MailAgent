@@ -59,7 +59,8 @@
 ## 渲染档位纪律（性能红线）
 
 - **静态是默认档**：8 个既有渲染位点（Agents 卡/会话列表行/报告卡/run 历史/@mention/审批卡…）全部经 `AgentAvatar` 静态渲染，列表恒静态——**新增 animated 位点须过性能评估**。静态帧有模块级缓存（shape×表情），列表数百实例只算一次几何。
-- animated 位点现存 3 处：chat 回合头像 `TurnPresence`（28px）、面板头 `AssistantPanelBotAvatar`（20px）、编辑器预览（48px，+mouseInteractive）。
+- animated 位点现存 3 处常驻：chat 回合头像 `TurnPresence`（28px）、面板头 `AssistantPanelBotAvatar`（20px）、编辑器预览（48px，+mouseInteractive +showcase 巡演）；另有 **hover 瞬时位点**（0813）：Agents 页六张卡（主 Agent + 5 类 agent 卡）hover 时经 `useAvatarHoverShowcase` 转 animated + 随机换动作，离开即回静态——鼠标只有一个，同屏至多一张卡在动，性能评估随 hook 注释记录。
+- **showcase 巡演**（`useShowcaseState`）：从 12 态表现力池每 2.4s 随机换动作（不连续重复）；reduced-motion 恒 'idle'（巡演不得绕过静态纪律）。消费点 = 编辑器预览（Bot tab 常开）+ hover 卡。
 - 🔴 **v2 新边界**：ambient 活跃状态（多数状态 body slowDrift）的 animated 实例**常驻 30fps 重绘**（不 settle）——这是「空闲也活着」的有意代价，仅限上述 3 位点；改 `AMBIENT` 表 = 改动画位点常驻功耗。
 - reduced-motion：JS 层短路（CSS media 对 JS 动画无效），animated 自动退化静态；测试环境全局 reduce（`tests/setup.ts`），测真动画路径需 stub matchMedia。
 - 机器验收：8 形 × 代表表情的头/眼几何 sanity + 双眼不重叠 + 25 表情全量无 NaN（`tests/shared/bot-avatar/shapes.test.tsx`）。
@@ -69,7 +70,21 @@
 - 挂载：进行中回合的**最新 assistant 消息**内容上方（`message.tsx` + `AgentMessage.tsx` 两面同款），run 全程常驻；历史消息/只读回放零头像。**不能放 assistant-ui Empty slot**（parts 非空即卸载，头像要跨 writing/tool 阶段存活）。
 - 文字区沿用 TurnStatusLine 三代 shimmer 治理的显隐纪律（connecting/thinking shimmer、stalled/error 静态、writing/calling-tool/awaiting-approval 只留头像不出字）；**DotMatrix 已从消息流退役**（头像即动效载体），`ThreadRunStatusBar`（composer 药丸）与 DotMatrix 本体不动、两条并存。
 - celebrate 时序：下降沿到 idle 且消息 status='complete'（abort 不庆祝）→ celebrate 2.5s → 380ms 淡出卸载；边沿经 prev ref 去重，重渲染不重播；reduced-motion 直接消失。
-- 会话头像：agent 会话经 `resolveAgentAvatar`；interactive 默认会话 = 官方助手形象 `{shape:'sphere', color:'orange'}`（`OFFICIAL_ASSISTANT_BOT_CONFIG`）。
+- 会话头像：agent 会话经 `resolveAgentAvatar`；interactive 默认会话 = **主 agent 身份**（见下），未配置回官方形象 `OFFICIAL_ASSISTANT_AVATAR`（sphere/orange，`agentAvatarIdentity.ts` 导出）。
+
+## 主 agent 身份（0813）
+
+- 持久层 = `agent_config.db` owner_settings `assistant_identity`（JSON `{name, avatar}`），端点
+  `GET/PUT /api/agent/assistant-identity`（owner-only，校验复用 wire.py 的 bot 词表 + image 规则——不手抄第二份）。
+- renderer 投影 = `shared/assistant/assistantIdentity.ts`（模块级 store + useSyncExternalStore，
+  **不走 react-query**——TurnPresence 挂在多种宿主里，不能假设树上有 QueryClientProvider；
+  显示型数据读失败静默用默认值，60s TTL；设置页写完 `primeAssistantIdentity` 即时广播）。
+- 消费点：`TurnPresence`（名字进「{name} 思考中…」ICU 插值 + 回合头像）、`AssistantPanelBotAvatar`、
+  `AiChatPanel` 标题（名字压过 i18n `chat.title`）。avatar 为上传图时 chat 两位点渲染静态 img
+  （表情对图片无意义）；bot 配置照常动画。
+- 配置面 = Agents 页顶部「主 Agent」卡（`MainAssistantCard.tsx`）：名字（≤40 字符，trim，空折 null）
+  + `AgentAvatarEditor` 复用（value 恒喂官方形象兜底，重置 = 回官方脸）；系统提示词指路到
+  设置 → AI → 身份文档（不重复可写面）。
 
 ## 改动指南
 

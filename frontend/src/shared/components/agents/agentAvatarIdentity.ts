@@ -1,10 +1,27 @@
-import type { AgentAvatarBot, AgentAvatarConfig, AgentAvatarGenerated, AgentAvatarImage } from '@shared/api/types'
-import { deriveBotAvatar, mapLegacyGeneratedToBot, shuffleBotAvatar } from '@shared/bot-avatar/random'
+import type {
+  AgentAvatarBot,
+  AgentAvatarConfig,
+  AgentAvatarGenerated,
+  AgentAvatarImage
+} from '@shared/api/types'
+import {
+  deriveBotAvatar,
+  mapLegacyGeneratedToBot,
+  shuffleBotAvatar
+} from '@shared/bot-avatar/random'
 import { BOT_AVATAR_COLORS } from '@shared/bot-avatar/colors'
 import { BOT_AVATAR_SHAPES, LEGACY_BOT_SHAPE_MAP } from '@shared/bot-avatar/shapes'
 
 const BOT_SHAPE_IDS = new Set<string>(BOT_AVATAR_SHAPES)
 const BOT_COLOR_IDS = new Set<string>(BOT_AVATAR_COLORS)
+
+/** 官方助手形象（prd §6.3 Q4）：主 agent 未配置头像时的全局回落（chat 回合头像 /
+ *  面板头 / 设置主 Agent 卡）。与 BotAvatar 的缺省一致，显式常量让消费点自我说明。 */
+export const OFFICIAL_ASSISTANT_AVATAR: AgentAvatarBot = {
+  type: 'bot',
+  shape: 'sphere',
+  color: 'orange'
+}
 
 /** legacy oreo 生成式行的 shape 词表（wire.py 生成式分支的六值白名单，已冻结——
  *  oreo 渲染链退役后仅存量行判别用，不是 bot 词表的手抄）。 */

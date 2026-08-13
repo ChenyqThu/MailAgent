@@ -499,3 +499,30 @@ describe('useStallLevel — escalation + reset', () => {
     }
   })
 })
+
+// ── 0813 主 agent 身份（Row 层投影）──────────────────────────────────────────────
+
+describe('主 agent 身份（assistantName / imageSrc）', () => {
+  test('assistantName 进 thinking 文案：Jarvis 思考中…', () => {
+    render(
+      <TurnPresenceRow stage="thinking" stallLevel={0} completed={false} assistantName="Jarvis" />
+    )
+    expect(screen.getByText('Jarvis 思考中…')).toBeTruthy()
+    expect(screen.queryByText('AI 思考中…')).toBeNull()
+  })
+
+  test('缺省 assistantName：文案与改名前逐字一致（AI 思考中…）', () => {
+    render(<TurnPresenceRow stage="thinking" stallLevel={0} completed={false} />)
+    expect(screen.getByText('AI 思考中…')).toBeTruthy()
+  })
+
+  test('imageSrc（上传图主头像）：渲染静态 img，替代 BotAvatar', () => {
+    const src = `data:image/webp;base64,${'A'.repeat(24)}`
+    const { container } = render(
+      <TurnPresenceRow stage="thinking" stallLevel={0} completed={false} imageSrc={src} />
+    )
+    const img = container.querySelector('img')
+    expect(img?.getAttribute('src')).toBe(src)
+    expect(container.querySelector('[data-bot-eye]')).toBeNull()
+  })
+})

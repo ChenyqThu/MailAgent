@@ -27,6 +27,7 @@ import type {
   CompileUserMdResult,
   CreatePolicyRuleInput,
   ExecPolicyRule,
+  AssistantIdentity,
   GlobalApprovalMode,
   KosDoctorCheck,
   ListAllSessionsOptions,
@@ -368,6 +369,26 @@ export function createChatRuntime(deps: ChatRuntimeDeps): ChatApi {
         throw new Error(`unexpected auto-compact response: ${String(data.mode)}`)
       }
       return data.mode
+    },
+
+    // ── 0813 主 agent 身份（名字 + 头像；owner_settings，owner UI 专属写面）──────────────
+
+    async getAssistantIdentity(): Promise<AssistantIdentity> {
+      const data = await request<AssistantIdentity>(baseUrl, 'GET', '/agent/assistant-identity')
+      return {
+        name: typeof data.name === 'string' && data.name ? data.name : null,
+        avatar: data.avatar && typeof data.avatar === 'object' ? data.avatar : null
+      }
+    },
+
+    async setAssistantIdentity(identity: AssistantIdentity): Promise<AssistantIdentity> {
+      const data = await request<AssistantIdentity>(baseUrl, 'PUT', '/agent/assistant-identity', {
+        body: { name: identity.name, avatar: identity.avatar }
+      })
+      return {
+        name: typeof data.name === 'string' && data.name ? data.name : null,
+        avatar: data.avatar && typeof data.avatar === 'object' ? data.avatar : null
+      }
     },
 
     // ── 08-05 WP-11 — built-in 写工具的 per-tool 审批档（owner UI 专属写面）──────────────
