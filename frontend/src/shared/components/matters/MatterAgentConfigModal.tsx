@@ -3,15 +3,9 @@ import { useTranslation } from 'react-i18next'
 import { Loader2, Settings, Shield, Sparkles, X } from 'lucide-react'
 
 import type { ReportAgentConfig } from '@shared/api/types'
-import type {
-  Matter,
-  MatterAgentOverrides,
-  MatterPatchInput,
-  MatterRun
-} from '@shared/api/types/matter'
+import type { Matter, MatterPatchInput, MatterRun } from '@shared/api/types/matter'
 import type { MatterRunAction } from '@shared/api/types/matter'
 import { MATTER_RUN_ACTIONS } from '@shared/api/types/matter'
-import { ModelSelectItems } from '@shared/components/agents/drawers/ModelSelectItems'
 import { newScheduleValue } from '@shared/components/agents/schedule/migrate'
 import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
@@ -26,16 +20,19 @@ import {
   SelectValue
 } from '@shared/components/ui/select'
 import { Switch } from '@shared/components/ui/switch'
-import { useComposerModels } from '@shared/hooks/useComposerModels'
-import { stripProviderPrefix } from '@shared/hooks/useLlmProviders'
 import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 import { useFocusTrap } from '@shared/hooks/useFocusTrap'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { effortOptionsForModel } from '@shared/modelCatalog/effort'
 import { toastSuccess } from '@shared/state/toast'
 
 import { MatterGlobalAgentModal } from './MatterGlobalAgentModal'
+import { MatterModelFields } from './MatterModelFields'
+import {
+  matterModelDraftFrom,
+  useMatterModelFields,
+  type MatterModelDraft
+} from './matterModelDraft'
 import { MatterTriggerEditor } from './MatterTriggerEditor'
 import {
   buildTriggerEnvelope,
@@ -63,37 +60,24 @@ import { effectiveContract, useMatterGlobalAgentDoc } from './useMatterGlobalAge
  *   · **授权级别** —— 仍然**不做**：授权是服务端按工具 class 强制的（读全放行、一个写工具
  *     都不给），per-matter 调不动，画出来就是假开关（同 `MatterGlobalAgentModal` 的判断）。
  *
+ * 🔴 「跟随」这三档跟随的是什么，措辞必须与服务端解析链**逐层对得上**（权威 =
+ * `src/matters/run_spec.py`）：事项级覆盖 → 绑定的执行 Agent → 全局配置里的默认 → 系统全局
+ * 默认。0813 B10 之前中间那一层不存在，所以文案只写了「执行的 Agent / 全局模型」；补上那一层
+ * 之后文案也一并改 —— 配置面说的和消费端做的不一致，就是一张永不生效的合格证。
+ *
  * 🔴 「思考强度」只在**选定了模型**之后可选，且该模型要有 reasoning 能力。不是保守，是
  * 结构性的：档位阶梯按模型家族给（`effortOptionsForModel`），而对没有 reasoning 能力的模型
  * 下发 effort 参数，openai / deepseek 协议会往 wire 上塞一个多余参数（16b 契约里写着这条）。
  * 「跟随默认」时我们根本不知道最终跑的是哪个模型，也就无从判断 —— 与其发一个可能让整个 run
- * 400 的参数，不如把「先选模型」这句话说出来。
+ * 400 的参数，不如把「先选模型」这句话说出来。（同一条纪律的跨层版本在 Python 侧：全局那一档
+ * 只在最终跑的模型就是全局默认模型时才下发。）
  */
 
 const BUILTIN_PROFILE_VALUE = '__builtin__'
-/** 三项覆盖共用的「跟随」哨兵（= envelope 里不写该键）。 */
-const FOLLOW_VALUE = '__follow__'
-/** 备用模型专属：**显式不设兜底**（= envelope 里写 `fallback_models: []`），与「跟随」不是
- *  一回事 —— 前者会压过绑定 profile 的兜底链，后者跟着它走。 */
-const NO_FALLBACK_VALUE = '__no_fallback__'
 
 /** 库里的 envelope → 三个 select 的草稿值（哨兵化）。打开模态与「重新载入」共用一份。 */
-function agentDraftFrom(scheduleJson: string | null | undefined): {
-  model: string
-  effort: string
-  fallback: string
-} {
-  const saved = parseAgentOverrides(scheduleJson)
-  return {
-    model: saved.model ?? FOLLOW_VALUE,
-    effort: saved.effort ?? FOLLOW_VALUE,
-    fallback:
-      saved.fallback_models === undefined
-        ? FOLLOW_VALUE
-        : saved.fallback_models.length === 0
-          ? NO_FALLBACK_VALUE
-          : saved.fallback_models[0]
-  }
+function agentDraftFrom(scheduleJson: string | null | undefined): MatterModelDraft {
+  return matterModelDraftFrom(parseAgentOverrides(scheduleJson))
 }
 
 interface MatterAgentConfigModalProps {
@@ -172,31 +156,11 @@ export function MatterAgentConfigModal({
   const profile = profiles.find((item) => item.id === matter.agent_profile_id)
   const dangling = Boolean(matter.agent_profile_id) && !profile
 
-  // 模型清单与 chat 的模型选择器同源（`useComposerModels` = enabledModels × provider 元数据 ×
-  // models.dev 目录）。这里要的不只是 ref 列表 —— 下面的 effort 档位得按选中模型的 protocol 与
-  // reasoning 能力来给。
-  const composerModels = useComposerModels()
-  const modelRefs = composerModels.map((option) => option.ref)
-  const modelOverride = agentDraft.model === FOLLOW_VALUE ? null : agentDraft.model
-  const selectedModel = composerModels.find((option) => option.ref === modelOverride) ?? null
-  // 「行权威、目录兜底」与 composer 同一叠加方向：provider 行标注过就用行的，没标注传 null
-  // 交给目录三态（🔴 unknown ≠ false，不许把没标注的模型当不支持灰死）。
-  const effortInfo = modelOverride
-    ? effortOptionsForModel(
-        // 存的是完整 providerRef；孤儿值（模型被从启用列表里去掉了）在 composerModels 里查不到，
-        // 所以退回同一个 canonical 去前缀函数，而不是就地再写一遍切分。
-        selectedModel?.modelId ?? stripProviderPrefix(modelOverride),
-        selectedModel?.protocol ?? null,
-        {
-          reasoningCapable:
-            selectedModel?.capabilities == null ? null : selectedModel.capabilities.reasoning === true
-        }
-      )
-    : null
-  const effortApplicable = effortInfo?.applicable === true
-  // 不适用时**显示**成「跟随默认」而不是留着上一个模型的档位：保存时同样不写这个键，
-  // 两边一致，界面上不会出现一个存不下去的选中值。
-  const effortValue = effortApplicable ? agentDraft.effort : FOLLOW_VALUE
+  // 模型三项的控件与派生判定都在共用的 `MatterModelFields` 里 —— 全局配置面用的是同一份
+  // （那里是「默认」、这里是「覆盖」，差别只在文案）。🔴 尤其是 effort 那道「不适用就不写
+  // 这个键」的门：两个面各写一遍，早晚有一边漏掉，而症状是整轮 run 400。
+  const modelFields = useMatterModelFields(agentDraft)
+  const agentOverrides = modelFields.block
 
   // 设计 `matter-agent.jsx:365` 的 `ovCount`：折叠起来时也要看得见「这件事有几处覆盖了全局」。
   // 覆盖面 = 换执行 Agent / 追加专属指令 / 模型三项（0813 #10）。授权级别仍不做（服务端按
@@ -204,21 +168,8 @@ export function MatterAgentConfigModal({
   const overrideCount =
     (profileId === BUILTIN_PROFILE_VALUE ? 0 : 1) +
     (instructions.trim() ? 1 : 0) +
-    (modelOverride ? 1 : 0) +
-    (effortApplicable && agentDraft.effort !== FOLLOW_VALUE ? 1 : 0) +
-    (agentDraft.fallback !== FOLLOW_VALUE ? 1 : 0)
+    modelFields.configuredCount
   const latest = runs.find((run) => run.completed_at != null)
-
-  /** 三个 select → envelope 的 `agent` 块。全是「跟随」⇒ 空对象 ⇒ builder 不写这个键。 */
-  const agentOverrides = ((): MatterAgentOverrides => {
-    const payload: MatterAgentOverrides = {}
-    if (modelOverride) payload.model = modelOverride
-    // 🔴 只在真能生效时才写：不适用的模型上存一个档位 = 保存了但不生效（还可能让 run 400）。
-    if (effortApplicable && agentDraft.effort !== FOLLOW_VALUE) payload.effort = agentDraft.effort
-    if (agentDraft.fallback === NO_FALLBACK_VALUE) payload.fallback_models = []
-    else if (agentDraft.fallback !== FOLLOW_VALUE) payload.fallback_models = [agentDraft.fallback]
-    return payload
-  })()
 
   // 「计划」跟着草稿走（改一下就能看到句子变），「下次」只认已保存的排程 —— 还没保存的
   // 草稿算不出一个真会发生的时刻，写出来就是承诺一件没安排的事。
@@ -449,110 +400,20 @@ export function MatterAgentConfigModal({
                 </p>
               ) : null}
 
-              {/* 模型三项（0813 dogfood 轮 3 #10）。清单与 chat 模型选择器同源，控件沿用各
-                  Agent 抽屉共用的 `ModelSelectItems`（分组 + 孤儿标注 + registry flag 都在里面）
-                  —— composer 那个图标钮表达不了「跟随」这一档，而覆盖面必须能说"没配过"。 */}
-              <label
-                className="mt-3 block text-meta font-medium text-ink-fg-1"
-                htmlFor="matter-agent-model"
-              >
-                {t('matters.agentConfig.modelLabel')}
-              </label>
-              <Select
-                value={agentDraft.model}
-                onValueChange={(value) =>
-                  setAgentDraft((draft) => ({ ...draft, model: value }))
-                }
-              >
-                <SelectTrigger id="matter-agent-model" className="mt-1.5 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={FOLLOW_VALUE}>
-                    {t('matters.agentConfig.modelFollow')}
-                  </SelectItem>
-                  <ModelSelectItems models={modelRefs} current={modelOverride} />
-                </SelectContent>
-              </Select>
-
-              <label
-                className="mt-3 block text-meta font-medium text-ink-fg-1"
-                htmlFor="matter-agent-effort"
-              >
-                {t('chat.effort.label')}
-              </label>
-              <Select
-                value={effortValue}
-                disabled={!effortApplicable}
-                onValueChange={(value) =>
-                  setAgentDraft((draft) => ({ ...draft, effort: value }))
-                }
-              >
-                <SelectTrigger id="matter-agent-effort" className="mt-1.5 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={FOLLOW_VALUE}>
-                    {t('matters.agentConfig.effortFollow')}
-                  </SelectItem>
-                  {(effortInfo?.options ?? []).map((tier) => (
-                    <SelectItem key={tier} value={tier}>
-                      {t(`chat.effort.tier.${tier}`)}
-                      {tier === effortInfo?.defaultTier ? (
-                        <span className="ml-1.5 text-ink-fg-3">{t('chat.effort.default')}</span>
-                      ) : null}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {/* 🔴 灰掉必须把「为什么」说出来 —— 一个点不动又不解释的控件正是 owner 这批
-                  反馈的病根。两种成因文案不同：还没选模型 / 这个模型不支持。 */}
-              {!effortApplicable ? (
-                <p className="mt-1.5 text-meta leading-5 text-ink-fg-3">
-                  {modelOverride
-                    ? t('chat.effort.unsupported')
-                    : t('matters.agentConfig.effortNeedsModel')}
-                </p>
-              ) : effortInfo?.passthroughUnknown ? (
-                <p className="mt-1.5 text-meta leading-5 text-ink-fg-3">{t('chat.effort.hedge')}</p>
-              ) : null}
-
-              <label
-                className="mt-3 block text-meta font-medium text-ink-fg-1"
-                htmlFor="matter-agent-fallback"
-              >
-                {t('matters.agentConfig.fallbackLabel')}
-              </label>
-              <Select
-                value={agentDraft.fallback}
-                onValueChange={(value) =>
-                  setAgentDraft((draft) => ({ ...draft, fallback: value }))
-                }
-              >
-                <SelectTrigger id="matter-agent-fallback" className="mt-1.5 w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={FOLLOW_VALUE}>
-                    {t('matters.agentConfig.fallbackFollow')}
-                  </SelectItem>
-                  <SelectItem value={NO_FALLBACK_VALUE}>
-                    {t('matters.agentConfig.fallbackNone')}
-                  </SelectItem>
-                  <ModelSelectItems
-                    models={modelRefs}
-                    current={
-                      agentDraft.fallback === FOLLOW_VALUE ||
-                      agentDraft.fallback === NO_FALLBACK_VALUE
-                        ? null
-                        : agentDraft.fallback
-                    }
-                  />
-                </SelectContent>
-              </Select>
-              <p className="mt-1.5 text-meta leading-5 text-ink-fg-3">
-                {t('matters.agentConfig.fallbackHint')}
-              </p>
+              {/* 模型三项（0813 dogfood 轮 3 #10）。控件与全局配置面共用 `MatterModelFields`
+                  —— 那边配的是**默认**、这里配的是**覆盖**，跟随时落到那一层。「跟随」这一档
+                  必须存在：覆盖面得能说"没配过"（composer 那个图标钮表达不了）。 */}
+              <MatterModelFields
+                idPrefix="matter-agent"
+                draft={agentDraft}
+                onDraftChange={setAgentDraft}
+                followKeys={{
+                  model: 'matters.agentConfig.modelFollow',
+                  effort: 'matters.agentConfig.effortFollow',
+                  fallback: 'matters.agentConfig.fallbackFollow'
+                }}
+                fallbackHintKey="matters.agentConfig.fallbackHint"
+              />
 
               <label
                 className="mt-3 block text-meta font-medium text-ink-fg-1"

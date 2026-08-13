@@ -203,6 +203,17 @@ def normalize_agent_overrides(raw: Any) -> dict[str, Any] | None:
     return _coerce_agent_overrides(raw, strict=True)
 
 
+def coerce_agent_overrides(raw: Any) -> dict[str, Any]:
+    """读侧宽容归一，输入是**裸的** `{model?, effort?, fallback_models?}` 块。
+
+    与 `parse_agent_overrides` 同一条纪律（认不出的字段丢掉、剩下的照用），区别只在输入
+    形状：那个吃的是整个 `schedule_json` envelope，这个吃的是块本身 —— 全局默认存在
+    `owner_settings` 里，没有 envelope 可言，但值域必须与事项级**逐字同一份**
+    （`agent_defaults.py` 是唯一调用方）。
+    """
+    return _coerce_agent_overrides(raw, strict=False) or {}
+
+
 def parse_agent_overrides(raw: Any) -> dict[str, Any]:
     """从 `schedule_json` 的内容里取模型覆盖。无该键 / v1 行 / 形状不对 → `{}`（= 全跟随）。"""
     envelope = _envelope_mapping(raw)

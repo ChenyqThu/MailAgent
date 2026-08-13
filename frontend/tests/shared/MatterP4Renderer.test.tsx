@@ -332,7 +332,7 @@ describe('P4 renderer surfaces', () => {
     )
     fireEvent.click(screen.getByText('高级 · 在全局配置之上追加'))
     // 模型清单来自 /chat/config（这里 stub 成没有 enabledModels ⇒ 回落到 FALLBACK_MODELS）。
-    await waitFor(() => expect(screen.getByText('跟随默认（执行的 Agent / 全局模型）')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('跟随默认（执行的 Agent → 全局配置 → 系统模型）')).toBeTruthy())
     fireEvent.click(document.getElementById('matter-agent-model') as HTMLElement)
     fireEvent.click(screen.getByRole('option', { name: 'claude-sonnet-4-6' }))
     fireEvent.click(screen.getByText('保存规则'))
@@ -357,7 +357,7 @@ describe('P4 renderer surfaces', () => {
     expect(effort.disabled).toBe(true)
     expect(screen.getByText(/先在上面选定模型/)).toBeTruthy()
 
-    await waitFor(() => expect(screen.getByText('跟随默认（执行的 Agent / 全局模型）')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('跟随默认（执行的 Agent → 全局配置 → 系统模型）')).toBeTruthy())
     fireEvent.click(document.getElementById('matter-agent-model') as HTMLElement)
     fireEvent.click(screen.getByRole('option', { name: 'claude-sonnet-4-6' }))
     await waitFor(() =>

@@ -8,6 +8,7 @@ import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
+import { MatterModelDefaultsPanel } from './MatterModelDefaultsPanel'
 import { MatterPromptAssembly } from './MatterPromptAssembly'
 import { MatterToolFacePanel } from './MatterToolFacePanel'
 import { MATTER_GLOBAL_AGENT_DOC_KEY, useMatterGlobalAgentDoc } from './useMatterGlobalAgentDoc'
@@ -162,6 +163,11 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
               {t('matters.globalAgent.restoreDefault')}
             </button>
           </div>
+
+          {/* 0813 轮 3 B10：模型 / 思考强度 / 备用模型的**全局默认**。事项级的同三项是
+              「覆盖」，这里是它们跟随的那一层（解析链 = 事项级覆盖 → 绑定 Agent →
+              这里 → 系统全局默认，权威在 Python `run_spec.py`）。 */}
+          <MatterModelDefaultsPanel />
 
           {/* 0812 dogfood：工具面从一段散文换成**逐项列出**的清单（含唯一可改的网页三档）。
               清单本身在零依赖叶子 `@shared/lib/matterToolFace`，与 gateway 真实 ToolSet

@@ -86,6 +86,15 @@ beforeEach(() => {
         }
         return envelope({ mode: 'keep' })
       }
+      // 0813 B10 —— 模型默认区（它自己的行为闸在 MatterModelDefaultsPanel.test.tsx；
+      // 这里只需要它不落进「读失败」态，否则本文件其余用例都在一个降级界面上断言）。
+      if (url.includes('/matters/agent-defaults')) {
+        return envelope({ defaults: {} })
+      }
+      // 模型清单：模型默认区的三个 select 经 useComposerModels 拉 provider 元数据。
+      if (url.includes('/llm/providers')) {
+        return envelope([])
+      }
       throw new Error(`unexpected fetch: ${url}`)
     })
   )
@@ -118,6 +127,14 @@ describe('MatterGlobalAgentModal —— 提示词分段 + 工具面清单 + 网�
     expect(screen.getAllByText('可改').length).toBeGreaterThan(0)
     expect(screen.getAllByText('运行时注入').length).toBeGreaterThan(0)
     expect(screen.getAllByText('事项级').length).toBeGreaterThan(0)
+  })
+
+  test('🔴 模型默认区在弹窗里（0813 B10：owner 报「全局配置仍然没有模型配置」）', async () => {
+    renderModal()
+    expect(await screen.findByText('默认模型')).toBeTruthy()
+    // 三个 select 真的挂上了 —— 只渲染标题不渲染控件正是这条反馈的原始形态。
+    await waitFor(() => expect(screen.getByRole('combobox', { name: '模型' })).toBeTruthy())
+    expect(screen.getByRole('combobox', { name: '备用模型' })).toBeTruthy()
   })
 
   test('工具面清单默认展开、逐个工具名都在（不是折叠起来让人点）', async () => {

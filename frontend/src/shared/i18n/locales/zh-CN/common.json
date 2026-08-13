@@ -4694,6 +4694,7 @@
     "cancel": "取消",
     "close": "关闭",
     "save": "保存",
+    "loading": "加载中…",
     "imageLoadFailed": "图片加载失败"
   },
   "matters": {
@@ -5562,6 +5563,17 @@
           "loadFailed": "当前档位读取失败，下面显示的可能不是实际生效的值。",
           "saveFailed": "网页检索档保存失败"
         },
+        "modelDefaults": {
+          "title": "默认模型",
+          "intro": "所有事项的跟进都用这里的模型，除非某个事项在「跟进规则 → 高级」里单独覆盖，或者它绑了一个自己写了模型的 Agent。改一项存一项，不用点下面的保存。",
+          "modelFollow": "不设默认（用系统全局模型）",
+          "effortFollow": "不设默认",
+          "fallbackFollow": "不设默认（用系统全局兜底链）",
+          "effortScopeHint": "这一档是为上面这个模型选的：某个事项换了模型又没单独设强度时，不会把它带过去。",
+          "fallbackHint": "主模型还没产出任何内容就失败时（模型不可用、凭证缺失、上游直接拒绝），本次跟进自动改用它重跑一次。已经开始输出、已调用工具或已停在待确认上的跟进不会重跑。",
+          "loadFailed": "当前默认读取失败，下面显示的可能不是实际生效的值。",
+          "saveFailed": "默认模型保存失败"
+        },
         "restoreDefault": "恢复默认",
         "open": "全局配置",
         "saved": "配置已保存",
@@ -5578,11 +5590,11 @@
         "advanced": "高级 · 在全局配置之上追加",
         "profileLabel": "执行的 Agent",
         "modelLabel": "模型",
-        "modelFollow": "跟随默认（执行的 Agent / 全局模型）",
-        "effortFollow": "跟随默认",
+        "modelFollow": "跟随默认（执行的 Agent → 全局配置 → 系统模型）",
+        "effortFollow": "跟随默认（全局配置里为它的默认模型设的档）",
         "effortNeedsModel": "先在上面选定模型 —— 可选档位按该模型的能力给。",
         "fallbackLabel": "备用模型",
-        "fallbackFollow": "跟随默认（执行的 Agent 的兜底链）",
+        "fallbackFollow": "跟随默认（执行的 Agent → 全局配置的兜底链）",
         "fallbackNone": "不设兜底",
         "fallbackHint": "主模型还没产出任何内容就失败时（模型不可用、凭证缺失、上游直接拒绝），本次跟进自动改用它重跑一次。已经开始输出、已调用工具或已停在待确认上的跟进不会重跑。",
         "instructionsLabel": "事项专属指令（追加）",

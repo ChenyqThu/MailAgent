@@ -5,10 +5,29 @@ report 路径一字不动）。spec 形状 = ADR D2 基础上加两键：``runKi
 + ``matter: {id, publicId, title, runId}``（🔴 runId = matter_run.id —— gateway propose
 工具从语境盖章的来源；四字段 gateway 侧逐个运行时校验，任一不合法整个 anchor 作废）。
 
-模型三键（0813 dogfood 轮 3 反馈 #10）：``model`` / ``effort`` / ``fallbackModels`` 支持
-**事项级覆盖**（存 ``schedule_json`` envelope 的 ``agent`` 块，解析单源 ``triggers.py``），
-没覆盖就跟随绑定 profile / 全局默认。🔴 覆盖只碰这三个键 —— 工具面、grant、budget 的红线
-一个字节不动（``allowedTools`` 恒 ``[]``、``grantExec`` 永不写、budget 恒 1800s 常量）。
+模型三键（0813 dogfood 轮 3 反馈 #10 + B10）：``model`` / ``effort`` / ``fallbackModels``
+解析链**四层，从具体到宽泛**：
+
+1. **事项级覆盖** —— ``schedule_json`` envelope 的 ``agent`` 块（解析单源 ``triggers.py``）；
+2. **绑定 profile** 的 ``model`` / ``fallback_models_json``（profile 没有 effort 这一列）；
+3. **全局跟进 Agent 默认** —— ``owner_settings`` 的 ``matter_agent_defaults``
+   （单源 ``agent_defaults.py``，B10 新增：此前这一层对模型没有任何意见）；
+4. gateway 全局默认（本函数不写这个键 / 不投 ``effort``）。
+
+🔴 第 2 层排在第 3 层**之前**（不是反过来），三条依据：① D2 白纸黑字「profile 只贡献
+model/persona」—— 全局默认若压过它，profile 的 model 列对事项就成了永不生效的死配置，而
+「改用 Custom Agent 以更换模型」正是那个下拉的产品承诺；② 绑定 profile 是 **per-matter** 的
+显式选择（还计进「N 项覆盖」的计数），比一个对所有事项生效的默认更具体；③ 这样是**纯加层**：
+已绑 profile 的事项行为一字不变，全局默认只对「没有 profile 或 profile 没写模型」的事项起作用
+—— 反过来则会在 owner 第一次设全局默认的瞬间，静默改掉所有已绑定事项实际跑的模型。
+
+🔴 ``effort`` 另有一道**同模型闸**：全局那一档只在「最终跑的模型 == 全局默认模型」时才下发。
+档位阶梯是按模型家族给的，对没有 reasoning 能力的模型下发 effort，openai/deepseek 协议会往
+wire 上塞一个多余参数（16b 契约）；事项级 UI 为此禁止「没选模型就配档位」，跨层若不守同一条，
+「事项换了模型 + 全局配过档位」就会绕过那道 UI 闸。
+
+🔴 三项只碰这三个键 —— 工具面、grant、budget 的红线一个字节不动（``allowedTools`` 恒 ``[]``、
+``grantExec`` 永不写、budget 恒 1800s 常量）。
 
 安全内核（D5，0812 owner 拍板改版）：边界原则 = **能力按 CLASS 全给只读、红线是一个写工具
 都不给**。工具面不再手抄名单 —— gateway 侧从单源 ``GATEWAY_TOOL_CLASSES`` 推导（matter_followup
@@ -46,6 +65,7 @@ from loguru import logger
 
 from src.agents.fence import fence_untrusted
 
+from .agent_defaults import load_agent_defaults
 from .repository import MatterRepository
 from .resource_proposal import connected_connector_ids
 from .run_service import MatterRunService, watermark_diff
@@ -453,13 +473,16 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         sections.append("【补充指引】\n" + PERSONA_PREFIX + "\n" + "\n\n".join(persona_parts))
     task_prompt = "\n\n".join(section for section in sections if section)
 
-    # 事项级模型覆盖（0813 dogfood 轮 3 反馈 #10）。三项都是**覆盖**：没配 = 跟随现状
-    # （model/fallback 跟绑定 profile，profile 也没有就跟 gateway 全局默认；effort 跟
-    # composer 那条链路的默认）。存储单源 = `schedule_json` envelope 的 `agent` 块。
+    # 模型三键的解析链（模块 docstring 有完整依据）：事项级覆盖 → 绑定 profile →
+    # 全局跟进 Agent 默认 → gateway 全局默认。三项都是**覆盖**语义：某一层没写这个键就
+    # 落到下一层，不是"存了一个等于默认值的快照" —— 这样以后换默认，没配过的能跟着走。
     #
-    # 🔴 覆盖只碰 model/effort/fallbackModels 三个键 —— D2「profile 只贡献 model/persona」
+    # 🔴 只碰 model/effort/fallbackModels 三个键 —— D2「profile 只贡献 model/persona」
     # 与工具面/授权的红线一个字节都不动（grantExec 永不写、allowedTools 恒 []）。
     overrides = parse_agent_overrides(matter.get("schedule_json"))
+    defaults = load_agent_defaults()
+    profile_model = ((profile.get("model") or "").strip() or None) if profile else None
+    resolved_model = overrides.get("model") or profile_model or defaults.get("model")
 
     fired_at = datetime.fromtimestamp(job.created_at, tz=timezone.utc).isoformat()
     tool_policy: dict[str, Any] = {
@@ -488,10 +511,7 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         ),
         "trigger": {"id": None, "kind": "manual", "firedAt": fired_at},
         "prompt": {"taskPrompt": task_prompt},
-        "model": (
-            overrides.get("model")
-            or (((profile.get("model") or "").strip() or None) if profile else None)
-        ),
+        "model": resolved_model,
         # 0812 owner 拍板 —— 工具面按 CLASS 由 gateway 单源推导（matter_followup 矩阵行 +
         # wrapCfgForAgentRun 的 read-face 豁免两道），Python 不再手抄工具名清单：
         # · allowedTools 恒 []：对 matter run 名单交集已被 read-face 豁免取代；[] 同时把
@@ -505,17 +525,30 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         "budget": {"maxRunSeconds": MATTER_FOLLOWUP_MAX_RUN_SECONDS},
         "sessionTitle": f"跟进 · {matter['title']}",
     }
-    # effort 只有事项级这一个来源（report_agent 行没有这一列）。gateway 侧
+    # effort 两个来源：事项级覆盖 → 全局默认（profile 没有这一列）。gateway 侧
     # `runHeadlessAgent` 把它投成 `body.effort`，由 `prepareChatRun` 既有的
     # `effortTierFromBody` 消费 —— 认不出的档位在那里 fail-closed 成"不带这个键"。
+    #
+    # 🔴 全局那一档另有**同模型闸**：它是 owner 在全局面上**为全局默认模型**选的，只有最终
+    # 跑的就是那个模型时才下发。档位阶梯按模型家族给（`effortOptionsForModel`），对没有
+    # reasoning 能力的模型下发 effort，openai/deepseek 协议会往 wire 上塞一个多余参数
+    # （16b 契约）；事项级 UI 为此禁止「没选模型就配档位」，这里守的是同一条纪律的跨层版本
+    # —— 少了它，「事项换了个不支持思考的模型 + 全局配过档位」就绕过了那道 UI 闸。
+    default_model = defaults.get("model")
     if overrides.get("effort"):
         spec["effort"] = overrides["effort"]
-    # fallback：事项级覆盖优先，其次绑定 profile 的行级链。🔴 覆盖里的 `[]` 是**显式不设兜底**，
-    # 与"没覆盖过"不是一回事 —— 所以判的是键在不在，不是列表真不真。
+    elif defaults.get("effort") and default_model and resolved_model == default_model:
+        spec["effort"] = defaults["effort"]
+    # fallback：事项级覆盖 → 绑定 profile 的行级链 → 全局默认。🔴 每一层的 `[]` 都是
+    # **显式不设兜底**，与"这一层没配过"不是一回事 —— 所以判的一直是键在不在，不是列表真不真。
     if "fallback_models" in overrides:
         spec["fallbackModels"] = list(overrides["fallback_models"])
-    elif profile:
-        fallback = _parse_fallback_models(profile.get("fallback_models_json"))
+    else:
+        fallback = (
+            _parse_fallback_models(profile.get("fallback_models_json")) if profile else None
+        )
         if fallback is not None:
             spec["fallbackModels"] = fallback
+        elif "fallback_models" in defaults:
+            spec["fallbackModels"] = list(defaults["fallback_models"])
     return spec
