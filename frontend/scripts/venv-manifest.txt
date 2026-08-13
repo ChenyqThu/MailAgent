@@ -1,9 +1,9 @@
 # venv-manifest.txt — 嵌入式 CPython 运行时体积审计快照 (每次 provision 覆写, 由 build-python-venv.sh 生成)
-generated_at: 2026-08-13T19:45:39Z
+generated_at: 2026-08-13T21:09:30Z
 arch: arm64
 pbs_tag: 20260510
 pyver: 3.11.15
-total_size: 445M
+total_size: 446M
 
 ## site-packages 包体积 top20 (du -sk, 降序)
      48936K  lark_oapi
@@ -24,7 +24,7 @@ total_size: 445M
       7604K  hf_xet
       6832K  anydoc
       6824K  tokenizers
-      6660K  src
+      6672K  src
       6040K  anthropic
 
 ## site-packages tests/test 残量 (预期 ≈0, 不含 testing/)
