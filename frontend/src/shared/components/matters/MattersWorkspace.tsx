@@ -17,22 +17,11 @@ import {
   Trash2
 } from 'lucide-react'
 
-import type {
-  Matter,
-  MatterCreateInput,
-  MatterTagDefinition,
-  MatterUpdate
-} from '@shared/api/types/matter'
+import type { Matter, MatterCreateInput, MatterUpdate } from '@shared/api/types/matter'
 import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import {
-  filterView,
-  MATTER_VIEWS,
-  matterTagView,
-  matterTagViewName,
-  openAttentionFor
-} from '@shared/lib/matterDerive'
+import { filterView, MATTER_VIEWS, openAttentionFor } from '@shared/lib/matterDerive'
 import type { MatterBuiltinView, MatterView } from '@shared/lib/matterDerive'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -41,10 +30,8 @@ import { MatterCreateDialog } from './MatterCreateDialog'
 import { MatterDetail } from './MatterDetail'
 import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
-import { MatterTagMarker } from './MatterTagMarker'
 import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
 import { getOrderedVisibleMatters } from './matterListOrder'
-import { listMatterTagsSafely, MATTER_TAGS_QUERY_KEY } from './matterTags'
 import { useMatterNavigation } from './navigation'
 
 const MATTER_LIST_WIDTH_STORAGE_KEY = 'mailagent.matters.listWidth'
@@ -176,14 +163,7 @@ export function MattersWorkspace(): React.ReactElement | null {
     enabled,
     staleTime: 30_000
   })
-  const tagsQuery = useQuery<{ items: MatterTagDefinition[] }>({
-    queryKey: MATTER_TAGS_QUERY_KEY,
-    queryFn: () => listMatterTagsSafely(api),
-    enabled,
-    staleTime: 30_000
-  })
   const allMatters = list.data?.items ?? []
-  const tagItems = tagsQuery.data?.items ?? []
   const attentionQuery = useGlobalAttention(enabled)
   const attentionItems = attentionQuery.data?.items ?? []
   const attentionIndex = useMemo(() => {
@@ -229,17 +209,6 @@ export function MattersWorkspace(): React.ReactElement | null {
     () => orderedVisible.map((matter) => matter.public_id),
     [orderedVisible]
   )
-  const tagViews = useMemo(
-    () =>
-      tagItems
-        .map((tag) => ({
-          tag,
-          key: matterTagView(tag.name),
-          count: filterView(allMatters, matterTagView(tag.name)).length
-        }))
-        .filter((entry) => entry.count > 0),
-    [allMatters, tagItems]
-  )
   const attentionAction = useAttentionAction()
 
   const handleAttentionAction = (
@@ -259,19 +228,6 @@ export function MattersWorkspace(): React.ReactElement | null {
   useEffect(() => {
     if (selectedId && !visible.some((matter) => matter.public_id === selectedId)) selectMatter(null)
   }, [selectMatter, selectedId, visible])
-
-  // 🔴 幽灵标签视图：`tagViews` 只留 `count > 0` 的标签，而当前 view 是 `tag:x` 时它不受这个
-  // 过滤约束 —— 最后一条带该标签的事项被改标签 / 归档 / 删除后，左轨那一行消失了，列表却还
-  // 停在一个选不回来的空视图上（没有任何 UI 能把它切走，只能刷整页）。这里兜回 'all'。
-  // 判据用 `tagViews`（左轨真实渲染的那份）而不是 `tagItems`，否则「标签还在库里但本视图为空」
-  // 这一格仍然是幽灵。
-  useEffect(() => {
-    // 首屏还没拿到列表时 `tagViews` 必然为空 —— 那时候不算「标签消失了」。
-    if (list.isPending) return
-    if (matterTagViewName(view) === null) return
-    if (tagViews.some((entry) => entry.key === view)) return
-    setView('all')
-  }, [list.isPending, tagViews, view])
 
   useEffect(() => {
     if (!navigationTarget) return
@@ -360,49 +316,6 @@ export function MattersWorkspace(): React.ReactElement | null {
                 )
               })}
             </nav>
-
-            {/* 设计 `list.jsx::ViewRail` 第三段：有**使用中**标签才出现。计数与清单同口径
-                —— 用的是清单自己那支 `filterView`（live 且含该标签），不是 tags 端点的
-                `usage_count`（那个把归档事项也算进去，会与点进去看到的行数对不上）。
-                逐标签发请求是明令禁止的（列表性能铁律），这里全程零请求：`allMatters`
-                与 tag 定义都是工作台已有的两支查询。 */}
-            {tagViews.length > 0 ? (
-              <div className="mt-2 border-t border-ink-border pt-2">
-                {/* R3-#1 —— 齿轮入口（标签管理弹窗）整个移除：MatterDetail 侧的
-                    「管理全部标签…」入口（MatterTagPicker）保留，同一份数据仍有可写面。 */}
-                <div className="px-2.5 pb-1 max-[900px]:hidden">
-                  <span className="font-mono text-micro uppercase tracking-[0.08em] text-ink-fg-3">
-                    {t('matters.shell.tagsTitle')}
-                  </span>
-                </div>
-                <nav className="space-y-1 max-[900px]:flex max-[900px]:min-w-max max-[900px]:space-x-1 max-[900px]:space-y-0">
-                  {tagViews.map(({ tag, key, count }) => (
-                    <button
-                      key={tag.name}
-                      type="button"
-                      onClick={() => {
-                        setView(key)
-                        selectMatter(null)
-                      }}
-                      className={cn(
-                        'relative flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-body max-[900px]:w-auto',
-                        view === key
-                          ? 'row-selected acc-select font-medium text-ink-fg'
-                          : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
-                      )}
-                    >
-                      <MatterTagMarker
-                        color={tag.color}
-                        shape={tag.shape}
-                        className="h-3.5 w-3.5"
-                      />
-                      <span className="min-w-0 flex-1 truncate">{tag.name}</span>
-                      <span className="font-mono text-meta tabular-nums">{count}</span>
-                    </button>
-                  ))}
-                </nav>
-              </div>
-            ) : null}
           </div>
         </aside>
 

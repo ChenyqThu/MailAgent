@@ -5,8 +5,6 @@ import {
   filterView,
   hasNextAction,
   MATTER_VIEWS,
-  matterTagView,
-  matterTagViewName,
   nextAction,
   rankOf,
   trashDaysRemaining
@@ -251,36 +249,5 @@ describe('nextAction', () => {
     expect(nextAction(matter()).kind).toBe('missing')
     expect(nextAction(matter({ next_action: null })).kind).toBe('missing')
     expect(hasNextAction(matter({ next_action: null }))).toBe(false)
-  })
-})
-
-// G-01 —— 左轨标签分组。视图 key 是 `tag:<标签名>`（标签的身份就是名字）。
-describe('tag views', () => {
-  test('round-trips names that themselves contain a colon', () => {
-    expect(matterTagView('合规')).toBe('tag:合规')
-    expect(matterTagViewName(matterTagView('a:b'))).toBe('a:b')
-    expect(matterTagViewName('all')).toBeNull()
-    expect(matterTagViewName('attention')).toBeNull()
-  })
-
-  test('filters live matters by tag and never leaks archived/trashed rows', () => {
-    const tagged = matter({ public_id: 'MAT-0001', tags: ['合规', '预算'] })
-    const other = matter({ public_id: 'MAT-0002', tags: ['预算'] })
-    const archivedTagged = matter({ public_id: 'MAT-0003', tags: ['合规'], archived_at: 10 })
-    const trashedTagged = matter({ public_id: 'MAT-0004', tags: ['合规'], deleted_at: 20 })
-    const values = [tagged, other, archivedTagged, trashedTagged]
-    expect(filterView(values, matterTagView('合规'))).toEqual([tagged])
-    expect(filterView(values, matterTagView('预算')).map((value) => value.public_id)).toEqual([
-      'MAT-0001',
-      'MAT-0002'
-    ])
-    expect(filterView(values, matterTagView('不存在'))).toEqual([])
-  })
-
-  test('tag view keeps done/canceled matters (unlike `all`)', () => {
-    // 「全部」按业务状态收窄，标签筛选**不**——按标签找东西时把已完成的藏起来会让人以为丢了。
-    const done = matter({ public_id: 'MAT-0005', status: 'done', tags: ['合规'] })
-    expect(filterView([done], matterTagView('合规'))).toEqual([done])
-    expect(filterView([done], 'all')).toEqual([])
   })
 })

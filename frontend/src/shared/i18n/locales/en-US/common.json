@@ -5310,7 +5310,6 @@
     },
     "undo": { "action": "Undo" },
     "shell": {
-      "tagsTitle": "Tags",
       "backToList": "Back to matter list"
     },
     "datePicker": {

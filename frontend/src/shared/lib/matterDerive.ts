@@ -21,23 +21,14 @@ export const MATTER_VIEWS = [
   'archived',
   'trash'
 ] as const
-/** 左轨那 12 档固定视图。 */
+/** 左轨那 12 档固定视图。
+ *
+ * 🔴 「按标签筛选」曾是第 13 种 view（`tag:<name>`，design `list.jsx::ViewRail` 第三段）——
+ * dogfood 轮 3 起该筛选入口（左轨「使用中标签」整段）已整体退役，`MatterView` 收窄回只剩
+ * builtin（两者现在是同一个类型）：标签仍是一等数据（`matterTags.ts` / `MatterTagPicker` /
+ * `MatterTagManagerModal` 详情页写面照旧），只是不再是一种「视图」。 */
 export type MatterBuiltinView = (typeof MATTER_VIEWS)[number]
-/** 标签筛选视图（design `list.jsx::ViewRail` 第三段的 `tag:x`）。标签的身份就是它的名字
- *  （`matter_tag.name` 是主键，没有独立 id），所以 key 里带的也是名字。 */
-export type MatterTagView = `tag:${string}`
-export type MatterView = MatterBuiltinView | MatterTagView
-
-const TAG_VIEW_PREFIX = 'tag:'
-
-export function matterTagView(name: string): MatterTagView {
-  return `${TAG_VIEW_PREFIX}${name}`
-}
-
-/** 视图 key → 标签名；非标签视图给 null。名字里可以再有冒号，所以只切前缀不 split。 */
-export function matterTagViewName(view: MatterView): string | null {
-  return view.startsWith(TAG_VIEW_PREFIX) ? view.slice(TAG_VIEW_PREFIX.length) : null
-}
+export type MatterView = MatterBuiltinView
 
 const PRIORITY_RANK: Record<MatterPriority, number> = { p0: 0, p1: 1, p2: 2, p3: 3 }
 
@@ -69,9 +60,6 @@ export function filterView(
   }
 
   const live = matters.filter(isLiveMatter)
-  // design `list.jsx::filterView`：`tag:x` = live 且含该标签（归档/回收站里的不算）。
-  const tagName = matterTagViewName(view)
-  if (tagName !== null) return live.filter((matter) => matter.tags.includes(tagName))
   if (view === 'attention')
     return live.filter((matter) => openAttentionFor(matter, attention).length > 0)
   if (view === 'review')

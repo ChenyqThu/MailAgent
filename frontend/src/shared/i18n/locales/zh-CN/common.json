@@ -5677,7 +5677,6 @@
     },
     "undo": { "action": "撤销" },
     "shell": {
-      "tagsTitle": "标签",
       "backToList": "返回事项清单"
     },
     "datePicker": {

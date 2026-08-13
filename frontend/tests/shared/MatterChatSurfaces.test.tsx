@@ -36,7 +36,11 @@ const { mattersApi, chatApi, mailApi, mattersEnabled, matterAgentEnabled } = vi.
     listUpdates: vi.fn(async () => ({ items: [] })),
     getUpdate: vi.fn(),
     listResources: vi.fn(async () => []),
-    listStakeholders: vi.fn(async () => [])
+    listStakeholders: vi.fn(async () => []),
+    // R3-#2（dogfood 轮 3）—— 左轨「使用中标签」整段筛选行删除后，工作台不该再发这个请求；
+    // 保留 mock 是为了让下面那条回归测试能证明「就算标签数据存在也不再渲染/不再请求」，
+    // 而不是巧合地因为 mock 缺失才通过。
+    listTags: vi.fn(async () => ({ items: [] }))
   },
   chatApi: {
     contextSnapshot: vi.fn(async () => {
@@ -178,6 +182,7 @@ beforeEach(() => {
   mattersApi.patch.mockResolvedValue({ matter: matter() })
   mattersApi.listResources.mockResolvedValue([])
   mattersApi.listStakeholders.mockResolvedValue([])
+  mattersApi.listTags.mockResolvedValue({ items: [] })
   stubWideViewport()
 })
 
@@ -420,5 +425,34 @@ describe('MattersWorkspace — resizable matter list', () => {
     } finally {
       Object.defineProperty(window, 'innerWidth', { value: originalWidth, configurable: true })
     }
+  })
+})
+
+// R3-#2（dogfood 轮 3 反馈：「把标签也全给我删了，留标签在这里干嘛」）—— 左轨「使用中标签」
+// 整段筛选行（含齿轮入口已在上一批 R3-#1 移除）整体删除。这里故意让 `listTags` 返回一个真
+// 会被匹配到的标签（清单里那个事项也带同名 tag），证明缺失不是 mock 巧合而是渲染路径已经不
+// 再存在 —— 改回引用会让这条测试真的红。
+describe('MattersWorkspace — tag rail removed (dogfood 轮 3 #2)', () => {
+  test('renders no tag filter rail and never requests tag definitions, even when tags exist', async () => {
+    mattersApi.list.mockResolvedValue({ items: [{ ...matter(), tags: ['合规'] }] })
+    mattersApi.listTags.mockResolvedValue({
+      items: [
+        { name: '合规', color: '--c-accent', shape: 'circle', created_at: null, usage_count: 1 }
+      ]
+    })
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false }, mutations: { retry: false } }
+    })
+    render(
+      <QueryClientProvider client={client}>
+        <MattersWorkspace />
+      </QueryClientProvider>
+    )
+
+    fireEvent.click(await screen.findByRole('button', { name: '全部' }))
+    expect(await screen.findByText('Vendor launch')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: '合规' })).toBeNull()
+    expect(screen.queryByText('标签')).toBeNull()
+    expect(mattersApi.listTags).not.toHaveBeenCalled()
   })
 })

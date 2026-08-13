@@ -11,7 +11,6 @@ import {
   ListChecks,
   Search,
   Sparkles,
-  Tag,
   Trash2,
   type LucideIcon
 } from 'lucide-react'
@@ -23,7 +22,6 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import {
   formatMatterAgo,
   formatMatterDueRelative,
-  matterTagViewName,
   nextAction,
   trashDaysRemaining
 } from '@shared/lib/matterDerive'
@@ -76,12 +74,6 @@ const EMPTY_VIEW_ICONS: Partial<Record<MatterView, LucideIcon>> = {
   trash: Trash2
 }
 
-/** 视图 key → 展示名。标签视图的名字是**用户内容**（标签名，永不翻译）；其余走词表。 */
-function useMatterViewLabel(view: MatterView): string {
-  const { t } = useTranslation()
-  return matterTagViewName(view) ?? t(`matters.views.${view}`)
-}
-
 interface MatterListProps {
   matters: readonly Matter[]
   view: MatterView
@@ -119,7 +111,7 @@ export function MatterList({
     [attention, matters, search]
   )
   const locale = i18n.language || 'zh-CN'
-  const viewLabel = useMatterViewLabel(view)
+  const viewLabel = t(`matters.views.${view}`)
 
   useEffect(() => {
     const pane = paneRef.current
@@ -134,9 +126,7 @@ export function MatterList({
     return () => observer.disconnect()
   }, [])
 
-  const EmptyIcon =
-    EMPTY_VIEW_ICONS[view] ??
-    (search.trim() ? Search : matterTagViewName(view) !== null ? Tag : Layers)
+  const EmptyIcon = EMPTY_VIEW_ICONS[view] ?? (search.trim() ? Search : Layers)
 
   return (
     <section
