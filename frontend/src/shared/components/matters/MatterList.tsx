@@ -409,7 +409,7 @@ function MatterRow({
           {/* E16 —— 单一事项类型徽标取代原来的标签 chip 列表（本就不设上限的用户内容 =
               最容易在窄行溢出的一项，owner 拍板换成天然定长的类型）。 */}
           {matter.matter_type !== null ? (
-            <span className="max-w-[8.5rem] shrink-0 truncate rounded-[var(--r-pill)] border border-ink-border-soft bg-ink-2/65 px-2 py-0.5 font-mono text-meta text-ink-fg-2">
+            <span className="max-w-[8.5rem] shrink-0 truncate rounded-full border border-ink-border-soft bg-ink-2/65 px-2 py-0.5 font-mono text-meta text-ink-fg-2">
               {matter.matter_type}
             </span>
           ) : null}

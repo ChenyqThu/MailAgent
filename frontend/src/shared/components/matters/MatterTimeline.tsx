@@ -383,7 +383,7 @@ function TimelineRow({
             {new Date(head.happened_at).toLocaleString()}
           </time>
           {head.actor_kind === 'agent' ? (
-            <span className="inline-flex items-center gap-1 rounded-[var(--r-pill)] bg-ai/10 px-1.5 py-0.5 text-micro text-ai">
+            <span className="inline-flex items-center gap-1 rounded-full bg-ai/10 px-1.5 py-0.5 text-micro text-ai">
               <Sparkles size={9} />
               {t('matters.timeline.agent')}
             </span>

@@ -447,7 +447,7 @@ export function MatterLinkPopover({
 function StatusPip({ status }: { status: Matter['status'] }): React.ReactElement {
   const { t } = useTranslation()
   return (
-    <span className="shrink-0 rounded-[var(--r-pill)] bg-ink-4 px-1.5 py-0.5 text-[10px] text-ink-fg-2">
+    <span className="shrink-0 rounded-full bg-ink-4 px-1.5 py-0.5 text-[10px] text-ink-fg-2">
       {t(`matters.status.${status}`)}
     </span>
   )

@@ -515,7 +515,7 @@ function FieldValue({
 export function MatterStatusChip({ value }: { value: MatterStatus }): React.ReactElement {
   const { t } = useTranslation()
   return (
-    <span className={`rounded-[var(--r-pill)] px-2 py-1 text-aux ${statusTone[value]}`}>
+    <span className={`rounded-full px-2 py-1 text-aux ${statusTone[value]}`}>
       {t(`matters.status.${value}`)}
     </span>
   )
@@ -524,7 +524,7 @@ export function MatterStatusChip({ value }: { value: MatterStatus }): React.Reac
 export function MatterHealthChip({ value }: { value: MatterHealth }): React.ReactElement {
   const { t } = useTranslation()
   return (
-    <span className={`rounded-[var(--r-pill)] px-2 py-1 text-aux ${healthTone[value]}`}>
+    <span className={`rounded-full px-2 py-1 text-aux ${healthTone[value]}`}>
       {t(`matters.health.${value}`)}
     </span>
   )

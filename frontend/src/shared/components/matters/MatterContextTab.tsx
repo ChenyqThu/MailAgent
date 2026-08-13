@@ -600,7 +600,7 @@ function Pip({
   }
   return (
     <span
-      className={`inline-flex items-center gap-1 rounded-[var(--r-pill)] px-2 py-1 text-meta ${tones[tone]}`}
+      className={`inline-flex items-center gap-1 rounded-full px-2 py-1 text-meta ${tones[tone]}`}
     >
       {children}
     </span>

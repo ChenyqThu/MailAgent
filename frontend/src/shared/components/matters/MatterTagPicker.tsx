@@ -68,7 +68,7 @@ export function MatterTagPicker({
           disabled={disabled}
           aria-label={t('matters.tags.pickerLabel')}
           className={cn(
-            'inline-flex items-center gap-1.5 rounded-[var(--r-pill)] border border-dashed',
+            'inline-flex items-center gap-1.5 rounded-full border border-dashed',
             'border-ink-border px-2 py-1 text-meta text-ink-fg-2',
             'transition-[color,background-color,border-color,transform] duration-fast ease-standard',
             'hover:border-coral/40 hover:bg-ink-2 hover:text-ink-fg',

@@ -15,7 +15,7 @@ export function AttentionPip({ signal }: { signal: MatterAttentionSignal }): Rea
   return (
     <span
       className={cn(
-        'inline-flex items-center gap-1 rounded-[var(--r-pill)] px-2 py-0.5 text-meta',
+        'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-meta',
         tone === 'critical'
           ? 'bg-fail/10 text-fail'
           : tone === 'warn'

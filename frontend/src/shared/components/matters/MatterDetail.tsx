@@ -1398,7 +1398,7 @@ function AgentPill({
   // `--c-ai/0.06` 底 + ai 前景），不是灰色。「还没设置自动跟进」是个邀请，灰掉它等于
   // 把这个入口藏起来；sparkles 两态恒 ai 色同理。
   const skin = cn(
-    'ml-auto inline-flex items-center gap-1.5 rounded-[var(--r-pill)] border px-2.5 py-1 text-meta',
+    'ml-auto inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-meta',
     bound
       ? 'border-ai/20 bg-ai/[0.08] text-ink-fg-1'
       : 'border-dashed border-ai/45 bg-ai/[0.06] text-ai'
@@ -1983,7 +1983,7 @@ function GoalCard({
         <div className="border-t border-ink-border-soft bg-ink-fg/[0.02] p-4">
           <div className="flex items-center justify-between gap-3">
             <h3 className="text-meta font-medium text-ink-fg-2">{t('matters.state.goalChecks')}</h3>
-            <span className="rounded-[var(--r-pill)] bg-ink-3 px-2 py-1 font-mono text-[11px] leading-4 text-ink-fg-2">
+            <span className="rounded-full bg-ink-3 px-2 py-1 font-mono text-[11px] leading-4 text-ink-fg-2">
               {t('matters.state.goalChecksCount', {
                 done: doneGoalChecks,
                 total: goalChecks.length
@@ -2425,7 +2425,7 @@ function ItemGroup({
                         {showStatusPip ? (
                           <span
                             className={cn(
-                              'inline-flex items-center rounded-[var(--r-pill)] border px-1.5 py-0.5 text-micro',
+                              'inline-flex items-center rounded-full border px-1.5 py-0.5 text-micro',
                               MATTER_TONE_CHIP_CLASS[
                                 MATTER_ITEM_STATUS_TONES[item.status as MatterItemStatus]
                               ]

@@ -672,7 +672,7 @@ function LinkTab({
                     <span className="min-w-0 truncate text-body font-medium text-ink-fg">
                       {card.title}
                     </span>
-                    <span className="rounded-[var(--r-pill)] bg-ink-4 px-2 py-0.5 text-meta text-ink-fg-2">
+                    <span className="rounded-full bg-ink-4 px-2 py-0.5 text-meta text-ink-fg-2">
                       {providerName}
                     </span>
                   </div>

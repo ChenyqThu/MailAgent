@@ -124,7 +124,7 @@ export function MatterRelationsSection({
               >
                 <span
                   className={cn(
-                    'shrink-0 rounded-[var(--r-pill)] px-2 py-1 text-meta',
+                    'shrink-0 rounded-full px-2 py-1 text-meta',
                     RELATION_TONE[type]
                   )}
                 >
@@ -324,7 +324,7 @@ function MatterRelationAddDialog({
                     aria-pressed={on}
                     onClick={() => setType(entry)}
                     className={cn(
-                      'rounded-[var(--r-pill)] border px-2.5 py-1 text-meta',
+                      'rounded-full border px-2.5 py-1 text-meta',
                       'transition-colors duration-fast ease-standard',
                       on
                         ? 'border-coral/40 bg-coral/[0.14] text-coral'

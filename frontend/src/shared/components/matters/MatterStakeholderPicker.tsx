@@ -430,7 +430,7 @@ export function MatterStakeholderPicker({
                             aria-pressed={on}
                             onClick={() => patchRow(key, { role: on ? '' : label })}
                             className={cn(
-                              'rounded-[var(--r-pill)] border px-2.5 py-1 text-meta',
+                              'rounded-full border px-2.5 py-1 text-meta',
                               'transition-colors duration-fast ease-standard',
                               on
                                 ? 'border-coral/40 bg-coral/[0.14] text-coral'

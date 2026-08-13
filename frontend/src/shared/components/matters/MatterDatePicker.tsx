@@ -123,9 +123,7 @@ function MatterCalendar({
     const target = new Date(next)
     setViewMonth(new Date(target.getFullYear(), target.getMonth(), 1).getTime())
     requestAnimationFrame(() => {
-      gridRef.current
-        ?.querySelector<HTMLButtonElement>(`[data-day="${next}"]`)
-        ?.focus()
+      gridRef.current?.querySelector<HTMLButtonElement>(`[data-day="${next}"]`)?.focus()
     })
   }, [])
 
@@ -262,9 +260,8 @@ function MatterCalendar({
               type="button"
               title={new Date(resolved).toLocaleDateString(locale)}
               onClick={() => onSelect(resolved)}
-              // 🔴 圆角走 `--r-ctl`（index.css 里「按钮/输入」那一档）。事项域另有十几处写
-              // `var(--r-pill)`，但那个变量**全仓没有定义** —— 解析失败 = 直角，是预存缺陷；
-              // 这里不跟着抄，也不在本批顺手改那十几处（见终报「预存问题」）。
+              // 圆角走 `--r-ctl`（index.css「按钮/输入」档）。胶囊形按词表用 `rounded-full`
+              // （index.css 注释明确胶囊 999 是特例不进 token，勿再发明 `--r-pill` 之类变量）。
               className="rounded-[var(--r-ctl)] border border-ink-border px-2 py-1 text-micro text-ink-fg-2 transition-colors duration-fast ease-standard hover:border-coral/60 hover:text-coral focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
             >
               {t(`matters.datePicker.presets.${preset}`)}
