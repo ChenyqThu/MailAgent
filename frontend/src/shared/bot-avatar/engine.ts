@@ -69,6 +69,9 @@ interface EyeProjection {
   turn: number
   blink: number
   eyeScale: number
+  /** 形状层眼组平移（shapes.ts eyeAnchor，228.541 坐标系）——纯平移，叠加在投影结果之后 */
+  offsetX: number
+  offsetY: number
 }
 
 /** 球面投影 + 眨眼/gaze 合成（§4.3/§4.4，原型 render() 逐行对应） */
@@ -82,8 +85,9 @@ function projectEyes(rings: ReadonlyArray<Ring>, p: EyeProjection): EyeFrame[] {
     // 近侧眼变宽 / 远侧眼压缩；分子分母都垫 0.02 下限，比值永不爆炸（§4.4）
     const perspective =
       Math.max(depth, DEPTH_VISIBLE_MIN) / Math.max(Math.cos(baseLongitude), DEPTH_VISIBLE_MIN)
-    const x = HEAD_CX + SPHERE_RADIUS * Math.sin(longitude) + p.gazeX
-    const y = cy + p.gazeY
+    // offsetX 加在投影之后（不进 longitude 基准）：平移眼组不改变球面滑动语义
+    const x = HEAD_CX + SPHERE_RADIUS * Math.sin(longitude) + p.gazeX + p.offsetX
+    const y = cy + p.gazeY + p.offsetY
     const sx = clamp(perspective * p.eyeScale, SCALE_MIN, SCALE_MAX)
     const sy = clamp(p.blink * p.eyeScale, SCALE_MIN, SCALE_MAX)
     return {
@@ -99,10 +103,15 @@ function projectEyes(rings: ReadonlyArray<Ring>, p: EyeProjection): EyeFrame[] {
  * 静态档一帧：表情原样（morph=1）、无 gaze/转头/眨眼。
  * 列表位点与 reduced-motion 回退都走这里 —— 不建引擎实例、零定时器。
  */
-export function staticFrame(expressionIndex: number, eyeScale = 1): EngineFrame {
+export function staticFrame(
+  expressionIndex: number,
+  eyeScale = 1,
+  offsetX = 0,
+  offsetY = 0
+): EngineFrame {
   const rings = EXPRESSIONS[expressionIndex]
   return {
-    eyes: projectEyes(rings, { gazeX: 0, gazeY: 0, turn: 0, blink: 1, eyeScale }),
+    eyes: projectEyes(rings, { gazeX: 0, gazeY: 0, turn: 0, blink: 1, eyeScale, offsetX, offsetY }),
     settled: true
   }
 }
@@ -113,6 +122,9 @@ export interface BotEngineOptions {
   frequency?: number
   /** 形状层的眼睛整体缩放（shapes.ts eyeAnchor.eyeScale） */
   eyeScale?: number
+  /** 形状层眼组平移（shapes.ts eyeAnchor.offsetX/offsetY，228.541 坐标系） */
+  offsetX?: number
+  offsetY?: number
   /** 随机源注入口 —— 测试确定性；默认 Math.random */
   random?: () => number
   /** 时钟注入口（毫秒，performance.now 时基）；只用于构造期/手动 blink 的排程基点 */
@@ -124,6 +136,8 @@ export class BotFaceEngine {
   private readonly now: () => number
   private readonly frequency: number
   private readonly eyeScale: number
+  private readonly offsetX: number
+  private readonly offsetY: number
 
   private stateValue: BotState
   private expressionValue: number
@@ -148,6 +162,8 @@ export class BotFaceEngine {
       opts.now ?? (() => (typeof performance !== 'undefined' ? performance.now() : Date.now()))
     this.frequency = opts.frequency ?? DEFAULT_SPRING_FREQUENCY
     this.eyeScale = opts.eyeScale ?? 1
+    this.offsetX = opts.offsetX ?? 0
+    this.offsetY = opts.offsetY ?? 0
     this.stateValue = opts.initialState ?? 'idle'
     // 直接以池首表情落定（morph=1）：原型 boot 会对同一帧空跑一次弹簧，纯视觉 no-op
     const head = POOLS[this.stateValue][0]
@@ -283,7 +299,9 @@ export class BotFaceEngine {
       gazeY: this.gazeYValue * GAZE_Y_UNITS,
       turn: this.turnValue,
       blink,
-      eyeScale: this.eyeScale
+      eyeScale: this.eyeScale,
+      offsetX: this.offsetX,
+      offsetY: this.offsetY
     })
     const settled = this.morph === 1 && this.velocity === 0 && this.blinkStart === null
     return { eyes, settled }

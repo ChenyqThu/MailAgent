@@ -13,7 +13,7 @@ import { useReducedMotion } from '../hooks/useReducedMotion'
 import { COLORS } from './colors'
 import { BotFaceEngine } from './engine'
 import { staticFrame } from './engine'
-import { BOT_BODY_SPAN, BOT_VIEW_BOX, SHAPES } from './shapes'
+import { BOT_BODY_SPAN, BOT_VIEW_BOX, SHAPES, bodyScaleTransform } from './shapes'
 import { POOLS } from './states'
 import { registerTicker, unregisterTicker } from './ticker'
 import type { BotColor, BotShape, BotState, EngineFrame } from './types'
@@ -71,9 +71,20 @@ export function BotAvatar({
   const rawId = useId()
   const clipId = useMemo(() => `bot-clip-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`, [rawId])
 
+  // 形状胖瘦（eyeAnchor.bodyScaleX/Y）：body 与 clipPath 共用同一串绕中心缩放。
+  // clipPath 内容按引用方坐标系（userSpaceOnUse）解析，不吃 defs 外的 <g> 变换，
+  // 所以必须写在 clip 内的 <path> 上；恒等缩放时为 undefined，blob DOM 与 WP1 一致。
+  const bodyTransform = bodyScaleTransform(shapeDef.eyeAnchor)
+
   // 静态档的那一帧；动画档也用它作 SSR/首帧基线（= 引擎初始快照：池首、morph=1）
   const frame = useMemo(
-    () => staticFrame(POOLS[state][0], shapeDef.eyeAnchor.eyeScale),
+    () =>
+      staticFrame(
+        POOLS[state][0],
+        shapeDef.eyeAnchor.eyeScale,
+        shapeDef.eyeAnchor.offsetX,
+        shapeDef.eyeAnchor.offsetY
+      ),
     [state, shapeDef]
   )
 
@@ -98,7 +109,9 @@ export function BotAvatar({
     if (!isAnimated) return
     const engine = new BotFaceEngine({
       initialState: stateRef.current,
-      eyeScale: shapeDef.eyeAnchor.eyeScale
+      eyeScale: shapeDef.eyeAnchor.eyeScale,
+      offsetX: shapeDef.eyeAnchor.offsetX,
+      offsetY: shapeDef.eyeAnchor.offsetY
     })
     engineRef.current = engine
     const client = (now: number): void => {
@@ -147,12 +160,12 @@ export function BotAvatar({
       {title ? <title>{title}</title> : null}
       <defs>
         <clipPath id={clipId}>
-          <path d={shapeDef.path} />
+          <path d={shapeDef.path} transform={bodyTransform} />
         </clipPath>
       </defs>
       {/* flipX = 原型的整体镜像串 translate(228.541 0) scale(-1 1)（analysis §4.4 配套） */}
       <g transform={flipX ? `translate(${BOT_BODY_SPAN} 0) scale(-1 1)` : undefined}>
-        <path d={shapeDef.path} fill={palette.body} />
+        <path d={shapeDef.path} transform={bodyTransform} fill={palette.body} />
         <g clipPath={`url(#${clipId})`}>
           {frame.eyes.map((eye, i) => (
             <path
