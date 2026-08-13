@@ -124,10 +124,26 @@ export const MATTER_DEFAULT_RUN_ACTIONS = ['summary', 'items'] as const
  * 跨语言闸：`tests/fixtures/matter_trigger_envelope.json`
  * （vitest `matterTriggerEnvelopeParity.test.ts` + pytest `test_matter_trigger_envelope_parity.py`）。
  */
+/** 事项级模型覆盖（0813 dogfood 轮 3 反馈 #10），跟着同一个 envelope 走 —— 三项和触发方式
+ *  同属「跟进规则」那张卡，零 DB 迁移。归一化单源 = Python `src/matters/triggers.py`。
+ *
+ *  🔴 三项都是**覆盖**：键缺席 = 跟随现状（绑定 profile 的 model / fallback、全局默认），
+ *  不是"存一份等于默认值的快照"。唯一例外 `fallback_models: []` = **显式不设兜底**，
+ *  与"没配过"不是一回事，必须能表达。
+ *
+ *  🔴 键名是 snake_case（与 wire 的其余部分一致），不是 TS 习惯的 camelCase。 */
+export interface MatterAgentOverrides {
+  model?: string
+  /** `@shared/modelCatalog/effortTiers` 的 `EffortTier`；Python 侧值域有 parity 闸。 */
+  effort?: string
+  fallback_models?: string[]
+}
+
 export interface MatterTriggerEnvelope {
   v: number
   triggers: Record<string, unknown>[]
   actions?: MatterRunAction[]
+  agent?: MatterAgentOverrides
 }
 
 /** 标签色 —— 值是既有主题 token 名，不新增颜色（P6-B D4）。 */

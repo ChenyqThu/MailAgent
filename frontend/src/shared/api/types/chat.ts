@@ -78,6 +78,16 @@ export interface AgentRunSpec {
   }
   /** Agent model override; null/absent → the gateway default model. */
   model?: string | null
+  /** Reasoning-effort tier for THIS run (0813 dogfood r3 #10 — Matter-level model overrides).
+   *
+   *  Typed as a bare string on purpose: like every other spec field this arrives as JSON from
+   *  Python, and `runHeadlessAgent` re-derives it through `effortTierFromBody` (thinking.ts),
+   *  which fail-closes an unknown tier to "no effort key at all" (the pre-override wire shape).
+   *  Absent → byte-identical to before the override existed.
+   *
+   *  🔴 Only the Matter follow-up assembler emits it today (`src/matters/run_spec.py`); the
+   *  custom-agent projection has no such column and keeps omitting it. */
+  effort?: string
   /** Per-agent tool narrowing. 🔴 **Fail-closed, never widening** — absent does NOT mean
    *  "no narrowing".
    *
@@ -120,6 +130,15 @@ export interface AgentRunSpec {
     grantConnectors?: Record<string, 'read' | 'write' | 'update'>
   }
   budget: { maxRunSeconds: number }
+  /** Ordered backup models. `runHeadlessAgent` retries the whole turn on the next entry ONLY when
+   *  the attempt failed having produced nothing (see its `producedNothing` note) — so a run that
+   *  streamed text, ran a tool, paused at an approval gate or hit the budget is NEVER re-run.
+   *  Absent / empty → exactly one attempt, byte-identical to the pre-fallback path.
+   *
+   *  🔴 Until 0813 this key was projected by Python (`agent_runs.py`, `matters/run_spec.py`) and
+   *  read by NOBODY — the chain lived only in the Python LLM client (`llm_agent/client.py`), which
+   *  a gateway-driven headless run never goes through. Adding the config surface required adding
+   *  the consumer; a saved-but-inert setting is worse than no setting. */
   fallbackModels?: string[]
   sessionTitle: string
   sessionId?: number

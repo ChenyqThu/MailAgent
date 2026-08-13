@@ -2351,3 +2351,226 @@ describe('POST /api/ai/agent-run — matter_followup gating + Matter-anchored se
     expect(arg.triggerKind).toBe('cron')
   })
 })
+
+// ── 0813 dogfood 轮 3 #10：事项级模型覆盖的**消费端** ──────────────────────────────
+//
+// Python 侧把 model / effort / fallbackModels 投进 spec（tests/matters/test_matter_agent_overrides.py
+// 断言了投影），这里断言 gateway **真的用了它们**。两头都测才算闭环：只测"存进去了"就是在给
+// 一个可能永远不生效的配置发合格证 —— `fallbackModels` 在本批之前就是这样，Python 投了两年、
+// gateway 一行都没读。
+describe('runHeadlessAgent — model / effort / fallback overrides', () => {
+  /** 记下每次被要求创建的 modelId，并按名字决定这次是成功还是立刻炸。 */
+  function chainModel(failing: Set<string>): {
+    createModel: (modelId: string) => MockLanguageModelV3
+    asked: string[]
+    providerOptions: Record<string, unknown>[]
+  } {
+    const asked: string[] = []
+    const providerOptions: Record<string, unknown>[] = []
+    return {
+      asked,
+      providerOptions,
+      createModel: (modelId: string) => {
+        asked.push(modelId)
+        if (failing.has(modelId)) {
+          return new MockLanguageModelV3({
+            doStream: async () => {
+              // 🔴 `isRetryable: false` —— streamText 自己会对可重试错误退避重试，测试会因此
+              // 跑进秒级等待。这里要验的是**模型链**换模型，不是 SDK 的同模型重试。
+              throw new APICallError({
+                message: 'upstream refused',
+                url: 'https://crs.example/api',
+                requestBodyValues: {},
+                statusCode: 401,
+                isRetryable: false
+              })
+            }
+          })
+        }
+        return new MockLanguageModelV3({
+          doStream: async (options: { providerOptions?: Record<string, unknown> }) => {
+            providerOptions.push(options.providerOptions ?? {})
+            return {
+              stream: simulateReadableStream({
+                chunks: [
+                  { type: 'stream-start' as const, warnings: [] },
+                  { type: 'text-start' as const, id: '1' },
+                  { type: 'text-delta' as const, id: '1', delta: 'ok' },
+                  { type: 'text-end' as const, id: '1' },
+                  { type: 'finish' as const, finishReason: 'stop' as const, usage: USAGE }
+                ]
+              })
+            }
+          }
+        })
+      }
+    }
+  }
+
+  function chainCfg(createModel: (modelId: string) => MockLanguageModelV3): AiGatewayConfig {
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'gateway-default',
+      createModel,
+      buildTools: () => ({}),
+      persistTurn: () => {}
+    }
+  }
+
+  test('spec.effort reaches streamText as provider options (the composer body.effort channel)', async () => {
+    const chain = chainModel(new Set())
+    const result = await runHeadlessAgent(
+      chainCfg(chain.createModel),
+      // claude-sonnet 是 manual-thinking 家族 → anthropic providerOptions 走 budgetTokens。
+      { jobId: 7, spec: makeSpec({ model: 'claude-sonnet-4-6', effort: 'high' }), sessionId: null },
+      new AbortController().signal
+    )
+    expect(result.outcome).toBe('completed')
+    expect(chain.providerOptions[0]).toMatchObject({
+      anthropic: { thinking: { type: 'enabled' } }
+    })
+  })
+
+  test('an unknown effort tier fail-closes to no effort at all (never a raw passthrough)', async () => {
+    const chain = chainModel(new Set())
+    await runHeadlessAgent(
+      chainCfg(chain.createModel),
+      { jobId: 7, spec: makeSpec({ model: 'claude-sonnet-4-6', effort: 'turbo' }), sessionId: null },
+      new AbortController().signal
+    )
+    expect(chain.providerOptions[0]?.anthropic).toBeUndefined()
+  })
+
+  test('no effort in the spec → provider options untouched (byte-identical to pre-override)', async () => {
+    const chain = chainModel(new Set())
+    await runHeadlessAgent(
+      chainCfg(chain.createModel),
+      { jobId: 7, spec: makeSpec({ model: 'claude-sonnet-4-6' }), sessionId: null },
+      new AbortController().signal
+    )
+    expect(chain.providerOptions[0]?.anthropic).toBeUndefined()
+  })
+
+  test('a primary that fails before producing anything falls back to the next model', async () => {
+    const chain = chainModel(new Set(['primary-model']))
+    const result = await runHeadlessAgent(
+      chainCfg(chain.createModel),
+      {
+        jobId: 7,
+        spec: makeSpec({ model: 'primary-model', fallbackModels: ['backup-model'] }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    expect(chain.asked).toEqual(['primary-model', 'backup-model'])
+    expect(result.ok).toBe(true)
+    expect(result.outcome).toBe('completed')
+  })
+
+  test('every model failing returns the LAST error, not a silent success', async () => {
+    const chain = chainModel(new Set(['primary-model', 'backup-model']))
+    const result = await runHeadlessAgent(
+      chainCfg(chain.createModel),
+      {
+        jobId: 7,
+        spec: makeSpec({ model: 'primary-model', fallbackModels: ['backup-model'] }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    expect(chain.asked).toEqual(['primary-model', 'backup-model'])
+    expect(result.ok).toBe(false)
+    expect(result.outcome).toBe('error')
+  })
+
+  test('no fallbacks configured → exactly one attempt (the default path is untouched)', async () => {
+    const chain = chainModel(new Set(['primary-model']))
+    const result = await runHeadlessAgent(
+      chainCfg(chain.createModel),
+      { jobId: 7, spec: makeSpec({ model: 'primary-model' }), sessionId: null },
+      new AbortController().signal
+    )
+    expect(chain.asked).toEqual(['primary-model'])
+    expect(result.ok).toBe(false)
+  })
+
+  test('a fallback equal to the primary is not re-tried', async () => {
+    const chain = chainModel(new Set(['primary-model']))
+    await runHeadlessAgent(
+      chainCfg(chain.createModel),
+      {
+        jobId: 7,
+        spec: makeSpec({ model: 'primary-model', fallbackModels: ['primary-model'] }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    expect(chain.asked).toEqual(['primary-model'])
+  })
+
+  test('🔴 a turn that already produced output is NEVER re-run on the backup', async () => {
+    const asked: string[] = []
+    // 先吐一段文字再炸：steps 还是 0（没有一个 step 完成），但用户已经看到东西了。
+    const cfg: AiGatewayConfig = chainCfg((modelId: string) => {
+      asked.push(modelId)
+      return new MockLanguageModelV3({
+        doStream: async () => ({
+          stream: simulateReadableStream({
+            chunks: [
+              { type: 'stream-start' as const, warnings: [] },
+              { type: 'text-start' as const, id: '1' },
+              { type: 'text-delta' as const, id: '1', delta: '已经写了一半' },
+              { type: 'error' as const, error: new Error('upstream dropped') }
+            ]
+          })
+        })
+      })
+    })
+    const result = await runHeadlessAgent(
+      cfg,
+      {
+        jobId: 7,
+        spec: makeSpec({ model: 'primary-model', fallbackModels: ['backup-model'] }),
+        sessionId: null
+      },
+      new AbortController().signal
+    )
+    expect(asked).toEqual(['primary-model'])
+    expect(result.ok).toBe(false)
+    // 实测：ai@7 把「吐了字再炸」记成 steps=1，所以这条场景里**步数闸已经够了**。
+    // `onOutput` 是第二道，管的是 `resolveSteps` 自己声明的兜底（steps promise 取不到 → 0）：
+    // 那时一个已经吐完整段回答的 turn 会长得像"什么都没产出"，重跑就是双计费 + 双落库。
+    expect(result.steps).toBe(1)
+  })
+
+  test('🔴 an aborted run (budget / stop) is never re-tried on the backup', async () => {
+    const asked: string[] = []
+    const controller = new AbortController()
+    const cfg: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'gateway-default',
+      createModel: (modelId: string) => {
+        asked.push(modelId)
+        controller.abort()
+        return mockTextModel(['never'])
+      },
+      buildTools: () => ({}),
+      persistTurn: () => {}
+    }
+    const result = await runHeadlessAgent(
+      cfg,
+      {
+        jobId: 7,
+        spec: makeSpec({ model: 'primary-model', fallbackModels: ['backup-model'] }),
+        sessionId: null
+      },
+      controller.signal
+    )
+    expect(asked).toEqual(['primary-model'])
+    expect(result.error?.code).toBe('E_BUDGET_TIME')
+  })
+})

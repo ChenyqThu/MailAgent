@@ -26,6 +26,8 @@ ENUMS = (
 
 ROOT = Path(__file__).resolve().parents[2]
 MATTER_TS = ROOT / "frontend/src/shared/api/types/matter.ts"
+#: effort 档位的 canonical 源（不在 matter.ts —— 它是 chat/gateway 共用的零依赖叶子）。
+EFFORT_TIERS_TS = ROOT / "frontend/src/shared/modelCatalog/effortTiers.ts"
 
 TS_ARRAYS = {
     "MATTER_STATUSES": models.MATTER_STATUSES,
@@ -102,6 +104,19 @@ def test_typescript_enum_mirrors_equal_python_canonical_values():
             f"{name} 成员数漂移: TS={len(extracted)} Python={len(canonical)}"
         )
         assert extracted == canonical, f"{name} 漂移: TS={extracted!r} Python={canonical!r}"
+
+
+def test_effort_tier_value_set_matches_the_typescript_canonical_ladder():
+    """事项级 effort 覆盖的值域（0813 轮 3 #10）。
+
+    canonical 源是 TS 的 `EFFORT_TIERS`（wire 形状由 gateway `thinking.ts::effortCallOptions`
+    按协议产出，Python 只把 owner 选的档位原样投进 spec）。两边都手抄一份**顺序也要一致** ——
+    档位是有序阶梯，顺序漂了「向下取最近可选档」就选错档。
+    """
+    extracted = ts_const_string_array(EFFORT_TIERS_TS, "EFFORT_TIERS")
+    assert extracted == triggers.MATTER_AGENT_EFFORT_TIERS, (
+        f"effort 档位漂移: TS={extracted!r} Python={triggers.MATTER_AGENT_EFFORT_TIERS!r}"
+    )
 
 
 def test_typescript_extractor_failure_and_partial_extraction_are_red():

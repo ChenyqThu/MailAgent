@@ -281,6 +281,40 @@ episode（那时按新 severity 开）。这是「判据翻转前不再报」的
 → 上下文快照 → 变更清单（watermark diff）→【补充指引】（profile persona + 事项级指引，套
 `PERSONA_PREFIX` 围栏）。
 
+### 4.0 事项级模型覆盖（model / effort / fallback）
+
+三项跟着 `schedule_json` 的 v2 envelope 走 —— 新增 `agent` 块，**零 DB 迁移**（与 `actions`
+同一条纪律：它们和触发方式同属「跟进规则」那一张卡、同一次 PATCH）。归一化单源 =
+`src/matters/triggers.py::normalize_agent_overrides`（写侧值域外**入库即拒**）/
+`parse_agent_overrides`（读侧宽容，认不出的字段丢掉、剩下的照用）。前端镜像
+`matterSchedule.ts`，形状由 `tests/fixtures/matter_trigger_envelope.json` 跨语言钉死。
+
+```json
+{"v":2,"triggers":[…],"actions":[…],
+ "agent":{"model":"default:claude-x","effort":"medium","fallback_models":["default:claude-y"]}}
+```
+
+- 三项都是**覆盖**：键缺席 = 跟随现状（model/fallback 跟绑定 profile、再跟全局默认）。
+  🔴 唯一例外 `fallback_models: []` = **显式不设兜底**，与「没配过」不是一回事，必须能表达
+  （否则绑定 profile 的兜底链会偷偷跑回来）。
+- 🔴 **`normalize_trigger_json` 的空折叠判据随之改**：「一条 trigger 都没有」不再无条件写
+  NULL，只有**模型覆盖也空**才写。否则把触发方式全删掉（改成纯手动跟进）会把刚配好的三项
+  一起抹掉，而界面上看不出任何异常。
+- 🔴 覆盖只碰 `spec` 的 model / effort / fallbackModels **三个键**；D2「profile 只贡献
+  model/persona」与工具面红线（`allowedTools` 恒 `[]`、`grantExec` 永不写、budget 恒 1800s）
+  一个字节不动。
+- **effort 只在选定模型后可选**，且该模型要有 reasoning 能力：档位阶梯按模型家族给
+  （`effortOptionsForModel`），而对无 reasoning 能力的模型下发 effort 参数，openai/deepseek
+  协议会往 wire 上塞一个多余参数（16b 契约）。「跟随默认」时根本不知道最终跑哪个模型，也就
+  无从判断 —— 与其发一个可能让整个 run 400 的参数，不如把「先选模型」说出来。
+- 消费端：gateway `runHeadlessAgent` 把 `spec.effort` 投成 `body.effort`（`prepareChatRun`
+  既有通道，`effortTierFromBody` 对未知档位 fail-closed），并按 `spec.fallbackModels` 走模型链。
+  🔴 **重试只在「这次尝试什么都没产出」时允许**（没吐字 / 没完成 step / 没停在待确认 / 没被
+  预算或停止打断）—— 已经产出的 turn 重跑就是双计费 + 双落库 + 可能重复调用工具。
+  🔴 `fallbackModels` 在此之前是**投了但没人读**的死键（链只活在 Python 的
+  `llm_agent/client.py`，而 gateway 驱动的 headless run 根本不走那条路）；加配置面必须同时
+  加消费端，「保存了但不生效」比没有更糟。
+
 ### 4.1 全局配置面呈现什么
 
 入口有两个，指向**同一个弹窗**（`MatterGlobalAgentModal`）：设置 → 事项（深链）、
@@ -410,6 +444,7 @@ sqlite3 "$DB" "SELECT key, value FROM sync_state WHERE key LIKE 'matter.%last_fi
 | `frontend/tests/ai-gateway/matter_tool_face_leaf.test.ts` | **工具面说明书 ↔ 真实 ToolSet 双向**：(a) 表里每个名字都真的在工具面里（无幽灵条目）；(b) 工具面里每个名字都落在某个分组里（无藏起来的能力）；(c) 关掉一个 skill 后真实消失的那批 == 叶子里标了该 skill 的那批。跑的是真实 `runHeadlessAgent` + `buildGatewayTools`，不是另一份手抄名单 |
 | `tests/config/test_matter_web_face_parity.py` | 网页三档词表 + 缺省值的**三份手抄**（Python 端点 / gateway policy.ts / renderer hook）。🔴 renderer 那份漂了 **typecheck 不会红**（`readonly MatterRunWebFace[]` 装子集合法），只能靠这道闸 |
 | `frontend/tests/shared/matterEventLocale.test.ts` | 两份 locale 覆盖 `MATTER_EVENT_KINDS` 全集。kind 数量会随功能增长，所以判据是**从 events.py 抽全集**，不是写死的数字；闸自身也断言「抽不到就红」 |
-| `tests/matters/test_matter_trigger_envelope_parity.py` | trigger v2 envelope 的跨语言形状 |
+| `tests/matters/test_matter_trigger_envelope_parity.py` | trigger v2 envelope 的跨语言形状（含 §4.0 的 `agent` 覆盖块）|
+| `tests/matters/test_matters_contract_parity.py::test_effort_tier_value_set_matches_the_typescript_canonical_ladder` | effort 档位值域**与顺序**（canonical = TS `effortTiers.ts::EFFORT_TIERS`，Python 手抄在 `triggers.MATTER_AGENT_EFFORT_TIERS`）。顺序也算：档位是有序阶梯，漂了「向下取最近可选档」就选错档 |
 | `tests/api/test_context_mode_consistency.py` | `deriveContextMode` 的源码形状（正则闸，见 §1.4）|
 | `frontend/tests/components/matters/matterSchedule.test.ts` | 排程解析两种形状都认 |

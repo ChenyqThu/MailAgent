@@ -5,6 +5,11 @@ report 路径一字不动）。spec 形状 = ADR D2 基础上加两键：``runKi
 + ``matter: {id, publicId, title, runId}``（🔴 runId = matter_run.id —— gateway propose
 工具从语境盖章的来源；四字段 gateway 侧逐个运行时校验，任一不合法整个 anchor 作废）。
 
+模型三键（0813 dogfood 轮 3 反馈 #10）：``model`` / ``effort`` / ``fallbackModels`` 支持
+**事项级覆盖**（存 ``schedule_json`` envelope 的 ``agent`` 块，解析单源 ``triggers.py``），
+没覆盖就跟随绑定 profile / 全局默认。🔴 覆盖只碰这三个键 —— 工具面、grant、budget 的红线
+一个字节不动（``allowedTools`` 恒 ``[]``、``grantExec`` 永不写、budget 恒 1800s 常量）。
+
 安全内核（D5，0812 owner 拍板改版）：边界原则 = **能力按 CLASS 全给只读、红线是一个写工具
 都不给**。工具面不再手抄名单 —— gateway 侧从单源 ``GATEWAY_TOOL_CLASSES`` 推导（matter_followup
 矩阵行只放行 read/artifact/web-with-grant + ``wrapCfgForAgentRun`` 的 read-face 豁免第二道），
@@ -43,6 +48,7 @@ from .repository import MatterRepository
 from .resource_proposal import connected_connector_ids
 from .run_service import MatterRunService, watermark_diff
 from .service import MatterError
+from .triggers import parse_agent_overrides
 
 # 0812 owner 拍板：工具面 = 所有 read class + matter_update_propose，由 gateway 从
 # GATEWAY_TOOL_CLASSES 单源按 class 推导（新增读工具零改动进面；类缺失 fail-close 成 exec
@@ -418,6 +424,14 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         sections.append("【补充指引】\n" + PERSONA_PREFIX + "\n" + "\n\n".join(persona_parts))
     task_prompt = "\n\n".join(section for section in sections if section)
 
+    # 事项级模型覆盖（0813 dogfood 轮 3 反馈 #10）。三项都是**覆盖**：没配 = 跟随现状
+    # （model/fallback 跟绑定 profile，profile 也没有就跟 gateway 全局默认；effort 跟
+    # composer 那条链路的默认）。存储单源 = `schedule_json` envelope 的 `agent` 块。
+    #
+    # 🔴 覆盖只碰 model/effort/fallbackModels 三个键 —— D2「profile 只贡献 model/persona」
+    # 与工具面/授权的红线一个字节都不动（grantExec 永不写、allowedTools 恒 []）。
+    overrides = parse_agent_overrides(matter.get("schedule_json"))
+
     fired_at = datetime.fromtimestamp(job.created_at, tz=timezone.utc).isoformat()
     tool_policy: dict[str, Any] = {
         "allowedTools": [],
@@ -445,7 +459,10 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         ),
         "trigger": {"id": None, "kind": "manual", "firedAt": fired_at},
         "prompt": {"taskPrompt": task_prompt},
-        "model": ((profile.get("model") or "").strip() or None) if profile else None,
+        "model": (
+            overrides.get("model")
+            or (((profile.get("model") or "").strip() or None) if profile else None)
+        ),
         # 0812 owner 拍板 —— 工具面按 CLASS 由 gateway 单源推导（matter_followup 矩阵行 +
         # wrapCfgForAgentRun 的 read-face 豁免两道），Python 不再手抄工具名清单：
         # · allowedTools 恒 []：对 matter run 名单交集已被 read-face 豁免取代；[] 同时把
@@ -459,7 +476,16 @@ def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
         "budget": {"maxRunSeconds": MATTER_FOLLOWUP_MAX_RUN_SECONDS},
         "sessionTitle": f"跟进 · {matter['title']}",
     }
-    if profile:
+    # effort 只有事项级这一个来源（report_agent 行没有这一列）。gateway 侧
+    # `runHeadlessAgent` 把它投成 `body.effort`，由 `prepareChatRun` 既有的
+    # `effortTierFromBody` 消费 —— 认不出的档位在那里 fail-closed 成"不带这个键"。
+    if overrides.get("effort"):
+        spec["effort"] = overrides["effort"]
+    # fallback：事项级覆盖优先，其次绑定 profile 的行级链。🔴 覆盖里的 `[]` 是**显式不设兜底**，
+    # 与"没覆盖过"不是一回事 —— 所以判的是键在不在，不是列表真不真。
+    if "fallback_models" in overrides:
+        spec["fallbackModels"] = list(overrides["fallback_models"])
+    elif profile:
         fallback = _parse_fallback_models(profile.get("fallback_models_json"))
         if fallback is not None:
             spec["fallbackModels"] = fallback
