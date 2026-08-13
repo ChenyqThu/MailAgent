@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { Loader2, RotateCcw, Sparkles, X } from 'lucide-react'
+import { Loader2, RotateCcw, Shield, Sparkles, X } from 'lucide-react'
 
 import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 import { resolveApiBaseUrl } from '@shared/lib/apiBaseUrl'
@@ -108,7 +108,7 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
           <MatterPromptAssembly />
 
           <div className="mt-4 flex items-center justify-between gap-2">
-            <label className="text-meta font-medium text-ink-fg-2" htmlFor="matter-global-prompt">
+            <label className="text-meta font-medium text-ink-fg-1" htmlFor="matter-global-prompt">
               {t('matters.globalAgent.promptLabel')}
             </label>
             {!doc.isLoading && defaultContent ? (
@@ -147,7 +147,21 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
               className="mt-2 w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-0/40 p-3 font-mono text-meta leading-relaxed text-ink-fg-1 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
             />
           )}
-          <p className="mt-2 text-meta text-ink-fg-2">{t('matters.globalAgent.promptHint')}</p>
+          <div className="mt-2 flex items-start justify-between gap-3">
+            <p className="min-w-0 text-meta leading-5 text-ink-fg-2">
+              {t('matters.globalAgent.promptHint')}
+            </p>
+            {/* 设计 `matter-agent.jsx:563-565` —— 「恢复默认」贴着它作用的那个框（原来在页脚
+                最左边，与「取消/保存」并排，读起来像第三个提交动作）。 */}
+            <button
+              type="button"
+              onClick={() => setDraft(defaultContent)}
+              className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] px-2 py-1 text-meta text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg"
+            >
+              <RotateCcw size={12} />
+              {t('matters.globalAgent.restoreDefault')}
+            </button>
+          </div>
 
           {/* 0812 dogfood：工具面从一段散文换成**逐项列出**的清单（含唯一可改的网页三档）。
               清单本身在零依赖叶子 `@shared/lib/matterToolFace`，与 gateway 真实 ToolSet
@@ -155,16 +169,13 @@ export function MatterGlobalAgentModal({ onClose }: { onClose(): void }): React.
           <MatterToolFacePanel />
         </div>
 
-        <footer className="flex items-center justify-between gap-3 border-t border-ink-border px-5 py-3">
-          <button
-            type="button"
-            onClick={() => setDraft(defaultContent)}
-            className="inline-flex items-center gap-1.5 text-meta text-ink-fg-2 hover:text-ink-fg"
-          >
-            <RotateCcw size={13} />
-            {t('matters.globalAgent.restoreDefault')}
-          </button>
-          <div className="flex items-center gap-2">
+        {/* 设计 `matter-agent.jsx:620-625` 的页脚：shield + 「改动的影响范围」+ 取消/保存。 */}
+        <footer className="flex items-center gap-2.5 border-t border-ink-border px-5 py-3">
+          <Shield size={12} className="shrink-0 text-ink-fg-3" />
+          <span className="min-w-0 flex-1 text-meta leading-5 text-ink-fg-3">
+            {t('matters.globalAgent.footerNote')}
+          </span>
+          <div className="flex shrink-0 items-center gap-2">
             <button
               type="button"
               onClick={onClose}

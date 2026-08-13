@@ -1119,7 +1119,14 @@ async function handleSearchAgent(
 
 /** S4 W3 — map a HeadlessAgentResult to the wire JSON the AgentRunWorker consumes. The worker reads
  *  a STRING `error` code (AgentRunResult._map_response str()s it into last_error), so we flatten
- *  error.code; sessionId/steps/summary/usage pass through into the worker's result_json. */
+ *  error.code; sessionId/steps/summary/usage pass through into the worker's result_json.
+ *
+ *  0813 dogfood #17 — `errorMessage` is ADDITIVE alongside that string code. The code alone (the
+ *  only thing that ever reached the worker) is undiagnosable in the field: `E_AGENT` is the catch-all
+ *  for every non-APICallError drain failure, and the real cause only went to console.error, which
+ *  goes NOWHERE in a packaged app (see ai_gateway_lifecycle's on-disk log rationale). Loopback-only
+ *  audience (Python worker → local DB → the owner's own run row), same trust boundary as that log
+ *  line. Existing readers are untouched: `_map_response` / `_map_matter_response` still read `error`. */
 function toAgentRunWire(result: HeadlessAgentResult): Record<string, unknown> {
   const wire: Record<string, unknown> = {
     ok: result.ok,
@@ -1129,7 +1136,10 @@ function toAgentRunWire(result: HeadlessAgentResult): Record<string, unknown> {
   }
   if (result.summary) wire.summary = result.summary
   if (result.usage) wire.usage = result.usage
-  if (result.error) wire.error = result.error.code
+  if (result.error) {
+    wire.error = result.error.code
+    if (result.error.message) wire.errorMessage = result.error.message
+  }
   return wire
 }
 

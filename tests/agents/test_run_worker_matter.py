@@ -210,6 +210,80 @@ def test_gateway_error_maps_fail(env, monkeypatch):
     assert "E_BUDGET_TIME" in (row["error_json"] or "")
 
 
+def test_stream_error_after_proposal_maps_warn_not_fail(env, monkeypatch):
+    """0813 dogfood #17 —— 提案已交出、drain 收尾报错 ⇒ warn（降级完成），不是 fail。
+
+    活库实证：run 4 交出 update 6（owner 事后还接受了）之后 17s 才报 E_AGENT，旧映射把它
+    记成「运行失败」，agenda worker 顺带开一条 critical 信号。
+    """
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+
+    def propose():
+        service.propose_update(pid, run["id"], {"summary": "有发现", "changes": []})
+
+    _patch_client(
+        monkeypatch,
+        resp=_FakeResp(200, {
+            "ok": False, "outcome": "error", "error": "E_AGENT",
+            "errorMessage": "stream closed unexpectedly", "sessionId": 149, "steps": 12,
+        }),
+        on_poke=propose,
+    )
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    row = service.get_run(run["id"])
+    assert row["status"] == "warn"
+    assert row["completed_at"] is not None
+    assert row["chat_session_id"] == 149
+    # 提案覆盖的就是这个指纹 → 下一轮便宜比对从这里起算（同 completed 分支）。
+    assert row["output_watermark_json"] is not None
+    # 病因留在 run 上：码 + gateway 透传的原文（此前只进 console.error，打包 app 里哪儿都不去）。
+    assert "E_AGENT" in (row["error_json"] or "")
+    assert "stream closed unexpectedly" in (row["error_json"] or "")
+    # async job 记的是「这次 gateway 调用出错了」，与「这轮产出了什么」是两件事，各自如实。
+    job_row = repo.get(job.job_id)
+    assert job_row.status == "failed"
+    assert job_row.last_error == "E_AGENT"
+    assert job_row.result["matterRunStatus"] == "warn"
+    assert job_row.result["updateId"] is not None
+
+
+def test_transport_failure_after_proposal_maps_warn_without_watermark(env, monkeypatch):
+    """poke 侧异常（超时/非 2xx）同判：有提案 → warn。但**不写 output_watermark** ——
+    连响应都没拿到，无从断言这轮已看完当前指纹，留给下一轮重新比对。"""
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+
+    def propose():
+        service.propose_update(pid, run["id"], {"summary": "有发现", "changes": []})
+
+    class _Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            propose()
+            raise run_worker.httpx.TimeoutException("boom")
+
+    monkeypatch.setattr(run_worker.httpx, "AsyncClient", _Boom)
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    row = service.get_run(run["id"])
+    assert row["status"] == "warn"
+    assert row["output_watermark_json"] is None
+    assert "E_RUN_TIMEOUT" in (row["error_json"] or "")
+    assert repo.get(job.job_id).status == "failed"
+
+
 def test_cancel_requested_converges_canceled(env, monkeypatch):
     repo, service, pid, version = env
     run, job = _enqueue_and_claim(service, repo, pid, version)

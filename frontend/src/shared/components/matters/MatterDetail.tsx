@@ -15,7 +15,6 @@ import {
   Link2,
   MessageSquare,
   MoreHorizontal,
-  Loader2,
   Pencil,
   Play,
   Plus,
@@ -70,7 +69,11 @@ import { asWriteError, errorMessage } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { useShortcut } from '@shared/hooks/useShortcut'
 import { useActiveEmail } from '@shared/state/active-email'
-import { openMatterChat, useAIChatPanel } from '@shared/state/ai-chat-panel'
+import {
+  openMatterChat,
+  startMatterChatWithPrompt,
+  useAIChatPanel
+} from '@shared/state/ai-chat-panel'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 
 import { AddItemModal } from './AddItemModal'
@@ -553,9 +556,25 @@ export function MatterDetail({
   }
 
   /**
-   * 「立即跟进」与失效提案上的「重新跑一轮」发起的是同一次跟进，只差后者要顺手关掉审阅面
-   * （否则用户盯着一张已经作废的提案等新结果）。共用一个函数，省得两处的 coalesced /
-   * 失败提示各写一份、日后漂开。
+   * 0813 dogfood #17b —— 详情头的「立即跟进」改成**开一场对话**（owner：「类似邮件详情页的
+   * 创建事项，直接进入 AI Chat 浮窗，输入指令直接进行对话，也好有个记录」）。
+   *
+   * 唤出 dock 时带上这件事的身份 chip，并把一条跟进指令作为普通用户消息递进去 —— 与邮件工具栏
+   * 「AI 调研创建」同一条注入面，不新造第五条路径。
+   *
+   * 🔴 与它相邻的 `startFollowUpRun`（无人值守 headless run）**有意留着**：定时触发走它，失效
+   * 提案上的「重新跑一轮」也走它 —— 那颗按钮要的正是一份**新提案**，换成对话就把审阅闭环断了。
+   */
+  const startFollowUpChat = (): void => {
+    startMatterChatWithPrompt(
+      { id: matter.id, publicId: matter.public_id, title: matter.title },
+      t('matters.runs.runNowPrompt', { title: matter.title, publicId: matter.public_id })
+    )
+  }
+
+  /**
+   * 失效提案上的「重新跑一轮」发起一次无人值守跟进 run，并顺手关掉审阅面（否则用户盯着一张
+   * 已经作废的提案等新结果）。
    */
   const startFollowUpRun = (onStarted?: () => void): void => {
     startRun.mutate(
@@ -792,23 +811,11 @@ export function MatterDetail({
             {matterAgentEnabled ? (
               <button
                 type="button"
-                disabled={Boolean(activeRun) || startRun.isPending}
-                onClick={() => startFollowUpRun()}
-                className={cn(
-                  'inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux disabled:opacity-50',
-                  // 设计 detail.jsx:176-177 —— 运行中的按钮换成 `--c-urg` 前景，
-                  // 让「正在跑」在头部一眼可辨，而不是只靠一个转圈。
-                  (activeRun || startRun.isPending) && 'text-urg'
-                )}
+                onClick={startFollowUpChat}
+                title={t('matters.runs.runNowChatHint')}
+                className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux hover:bg-ink-3"
               >
-                {activeRun || startRun.isPending ? (
-                  <Loader2 size={13} className="animate-spin" />
-                ) : (
-                  <Play size={13} />
-                )}{' '}
-                {activeRun || startRun.isPending
-                  ? t('matters.runs.runningButton')
-                  : t('matters.runs.runNow')}
+                <Play size={13} /> {t('matters.runs.runNow')}
               </button>
             ) : null}
             <div className="relative">

@@ -5400,7 +5400,7 @@
     "runs": {
       "title": "跟进运行",
       "emptyTitle": "还没有跟进运行",
-      "emptyHint": "绑定一个跟进 Agent，或点右上角「立即跟进」跑一次。",
+      "emptyHint": "配置跟进规则让它按时间或事件自己跑；也可以在事项对话里让它当场跑一轮。",
       "traceHint": "无变化的运行不会产生更新，但仍然留痕",
       "manual": "手动",
       "schedule": "定时",
@@ -5411,9 +5411,10 @@
       "canceled": "已取消",
       "changed": "检出 {count} 项变化",
       "runNow": "立即跟进",
-      "runningButton": "运行中…",
       "coalesced": "已有一轮跟进在进行",
       "startFailed": "请刷新后重试",
+      "runNowChatHint": "在 AI 对话里跟进这件事，过程留在会话记录里",
+      "runNowPrompt": "帮我跟进这件事（{publicId} · {title}）。先读它当前的状态、开放项、干系人与已关联的邮件/文档，再检索最近有没有新证据；然后告诉我：有什么新进展、卡在哪、下一步该做什么。需要改事项本身（状态、行动项、摘要等）时，先说清楚要改什么再动手，我会在审批卡上确认。",
       "status": { "queued": "排队中", "running": "运行中", "ok": "完成", "noop": "无变化", "warn": "部分降级", "fail": "失败", "canceled": "已取消" }
     },
     "runOverlay": { "runningTitle": "跟进运行中", "doneTitle": "跟进运行", "capability": "手动触发 · 观察+建议", "proposal": "已产出提案 · {count} 项变化", "warn": "已产出提案 · 部分降级", "failed": "运行失败", "review": "审阅" },
@@ -5438,12 +5439,15 @@
           "schedule": "按固定节奏检查一次",
           "event": "有新证据到达时才跑",
           "condition": "满足条件时才跑",
-          "manual": "只在你点「立即跟进」时跑"
+          "manual": "只在你要求时跑一轮"
         },
         "toggle": "启用这条触发",
         "remove": "删除这条触发",
-        "manualHint": "不会自动运行，只在你点右上角「立即跟进」时执行一次。",
-        "independentHint": "多条可以并存，任意一条命中就跑一次。事项级触发独立于其它 Agent，不会互相覆盖。"
+        "add": "添加触发",
+        "manualAlways": "你随时可以在事项对话里让它跑一轮",
+        "whenEvent": "当{event}时",
+        "activeHint": "{count} 条触发生效，命中任意一条就跑一次；同一时间窗内只跑一次，不会重复触发。",
+        "manualOnlyHint": "当前只有手动运行，Agent 不会自己跟进。"
       },
       "runActions": {
         "title": "跟进时执行",
@@ -5534,7 +5538,8 @@
         "restoreDefault": "恢复默认",
         "open": "全局配置",
         "saved": "配置已保存",
-        "saveFailed": "配置保存失败"
+        "saveFailed": "配置保存失败",
+        "footerNote": "改动对所有事项生效，已排期的跟进按新配置执行"
       },
       "agentConfig": {
         "title": "跟进规则",
@@ -5556,7 +5561,9 @@
         "open": "配置跟进规则",
         "stale": "这个事项在别处已被改动。直接保存会覆盖那次改动。",
         "reload": "重新载入",
-        "saving": "保存中…"
+        "saving": "保存中…",
+        "save": "保存规则",
+        "overrideCount": "{count} 项覆盖"
       },
     "agentBinding": { "title": "跟进 Agent", "builtin": "内置", "builtinOption": "内置（默认模型）", "useCustomAgent": "改用 Custom Agent", "empty": "可在 Custom AI 创建 Agent，以更换模型或添加人设", "dangling": "绑定的 Agent 已不存在", "plan": "计划", "next": "下次", "last": "上次", "capability": "能力上限 观察 + 建议，不能对外发信或改写外部文档", "unbind": "解绑", "recommended": "推荐：每个工作日 09:00", "addSchedule": "添加排程", "scheduleEdit": "编辑排程" },
     "events": {

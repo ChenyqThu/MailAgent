@@ -237,7 +237,7 @@ describe('P4 renderer surfaces', () => {
     fireEvent.click(screen.getByText('高级 · 在全局配置之上追加'))
     fireEvent.click(screen.getByRole('combobox'))
     fireEvent.click(screen.getByRole('option', { name: profile.title }))
-    fireEvent.click(screen.getByText('保存'))
+    fireEvent.click(screen.getByText('保存规则'))
     // 第二个实参 = 打开模态时冻结的版本号（乐观锁的判据）。
     expect(patch).toHaveBeenCalledWith(
       {
@@ -273,7 +273,7 @@ describe('P4 renderer surfaces', () => {
     expect(toggle.getAttribute('aria-checked')).toBe('true')
     fireEvent.click(toggle)
     expect(screen.getByText('已停用 · 不会自动运行')).toBeTruthy()
-    fireEvent.click(screen.getByText('保存'))
+    fireEvent.click(screen.getByText('保存规则'))
     expect(patch).toHaveBeenCalledWith(
       expect.objectContaining({ agent_enabled: false }),
       matter.version
@@ -293,7 +293,7 @@ describe('P4 renderer surfaces', () => {
     )
     expect(screen.getByText('Matter Agent · 系统内置')).toBeTruthy()
     fireEvent.click(screen.getByText('推荐：每个工作日 09:00'))
-    fireEvent.click(screen.getByText('保存'))
+    fireEvent.click(screen.getByText('保存规则'))
     const payload = patch.mock.calls[0]?.[0]
     // P6-B：保存写的是 v2 envelope（多条触发并存），排程只是其中一条 entry。
     // 🔴 envelope 是**对象**：pydantic 写侧要 dict，发字符串会在 FastAPI 校验层 422 把整条
@@ -362,7 +362,7 @@ describe('P4 renderer surfaces', () => {
       />
     )
     expect(screen.getByText('这个事项在别处已被改动。直接保存会覆盖那次改动。')).toBeTruthy()
-    fireEvent.click(screen.getByText('保存'))
+    fireEvent.click(screen.getByText('保存规则'))
     expect(patch.mock.calls[0]?.[1]).toBe(3)
   })
 
@@ -381,12 +381,12 @@ describe('P4 renderer surfaces', () => {
       />
     )
     fireEvent.click(screen.getByText('推荐：每个工作日 09:00'))
-    fireEvent.click(screen.getByText('保存'))
+    fireEvent.click(screen.getByText('保存规则'))
     await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy())
     expect(close).not.toHaveBeenCalled()
     expect(screen.getByRole('alert').textContent).toContain('version conflict')
     // 草稿还在：重试一次发出去的排程与第一次逐字相同（不是被重置回 matter 的空排程）。
-    fireEvent.click(screen.getByText('保存'))
+    fireEvent.click(screen.getByText('保存规则'))
     expect(patch).toHaveBeenCalledTimes(2)
     const first = patch.mock.calls[0]?.[0] as { schedule_json: { triggers: { kind: string }[] } }
     const second = patch.mock.calls[1]?.[0] as { schedule_json: { triggers: { kind: string }[] } }

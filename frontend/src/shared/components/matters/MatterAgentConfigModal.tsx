@@ -126,6 +126,11 @@ export function MatterAgentConfigModal({
 
   const profile = profiles.find((item) => item.id === matter.agent_profile_id)
   const dangling = Boolean(matter.agent_profile_id) && !profile
+  // 设计 `matter-agent.jsx:365` 的 `ovCount`：折叠起来时也要看得见「这件事有几处覆盖了全局」。
+  // 本仓的覆盖面只有两处真实存在（换执行 Agent / 追加专属指令）——设计画的模型与授权级别两个
+  // select 仍不做（模型跟着 profile 走，授权是服务端按 class 强制的，做成开关就是假 UI）。
+  const overrideCount =
+    (profileId === BUILTIN_PROFILE_VALUE ? 0 : 1) + (instructions.trim() ? 1 : 0)
   const latest = runs.find((run) => run.completed_at != null)
   // 「计划」跟着草稿走（改一下就能看到句子变），「下次」只认已保存的排程 —— 还没保存的
   // 草稿算不出一个真会发生的时刻，写出来就是承诺一件没安排的事。
@@ -309,59 +314,22 @@ export function MatterAgentConfigModal({
             className={cn('mt-4', !agentOn && 'pointer-events-none opacity-[0.42]')}
             inert={!agentOn || undefined}
           >
-            <div className="flex items-center justify-between gap-2">
-              <span className="text-meta font-medium text-ink-fg-1">
-                {t('matters.agentConfig.triggerLabel')}
-              </span>
-              <button
-                type="button"
-                onClick={applyRecommended}
-                className="rounded-[var(--r-ctl)] bg-ai/10 px-2 py-1 text-meta text-ai hover:bg-ai/[0.16]"
-              >
-                {t('matters.agentBinding.recommended')}
-              </button>
-            </div>
-            {/* 设计的 Field hint（「事项级触发独立于全局 Agent」）与编辑器自己那句
-                `trigger.independentHint` 是同一个意思，只保留后者 —— 后者还多说了「多条可
-                并存」，正是本仓与设计单选模型的差别所在。 */}
-            <div className="mt-2">
-              <MatterTriggerEditor entries={triggerDraft} onChange={setTriggerDraft} />
-            </div>
-
-            {/* 「跟进时执行」（设计 §5.2 ACTIONS）。🔴 勾选定的是**产出什么**，不是能调用
-                什么 —— 工具 allowlist 与「只观察与建议」的上限由服务端强制，勾 draft 也不会
-                多一个发信工具。 */}
-            <div className="mt-4">
-              <span className="text-meta font-medium text-ink-fg-1">
-                {t('matters.runActions.title')}
-              </span>
-              <div className="mt-1.5 space-y-0.5">
-                {MATTER_RUN_ACTIONS.map((action) => (
-                  <label
-                    key={action}
-                    className="flex cursor-pointer items-center gap-2.5 rounded-[var(--r-ctl)] px-1.5 py-1.5 hover:bg-ink-fg/[0.04]"
-                  >
-                    <Checkbox
-                      checked={actionsDraft.includes(action)}
-                      onCheckedChange={() => toggleAction(action)}
-                    />
-                    <span className="min-w-0 text-aux leading-5 text-ink-fg">
-                      {t(`matters.runActions.${action}`)}
-                    </span>
-                  </label>
-                ))}
-              </div>
-            </div>
-
+            {/* 设计 `matter-agent.jsx:394-426` 的顺序：**高级折叠在触发列表之前**（收起时
+                只有一行字 + 覆盖计数，展开才是那个虚线框）。 */}
             <button
               type="button"
               onClick={() => setAdvancedOpen((value) => !value)}
               aria-expanded={advancedOpen}
               aria-controls="matter-agent-advanced"
-              className="mt-4 flex items-center gap-1.5 text-meta text-ink-fg-2 hover:text-ink-fg"
+              className="flex items-center gap-1.5 text-meta text-ink-fg-2 hover:text-ink-fg"
             >
               <CollapseChevron expanded={advancedOpen} size={11} />
               {t('matters.agentConfig.advanced')}
+              {!advancedOpen && overrideCount > 0 ? (
+                <span className="rounded-full bg-warn/[0.14] px-1.5 py-px text-micro text-warn">
+                  {t('matters.agentConfig.overrideCount', { count: overrideCount })}
+                </span>
+              ) : null}
             </button>
             <CollapsibleRegion
               expanded={advancedOpen}
@@ -458,6 +426,49 @@ export function MatterAgentConfigModal({
               ) : null}
             </CollapsibleRegion>
 
+            {/* 设计 `triggers.jsx:274-282` 的小标题行：左「触发方式」+ 右侧 ai 色推荐药丸。 */}
+            <div className="mt-4 flex items-center justify-between gap-2">
+              <span className="text-meta font-medium text-ink-fg-1">
+                {t('matters.agentConfig.triggerLabel')}
+              </span>
+              <button
+                type="button"
+                onClick={applyRecommended}
+                className="inline-flex items-center gap-1.5 rounded-full border border-ai/25 bg-ai/[0.08] px-2.5 py-1 text-meta text-ai hover:bg-ai/[0.16]"
+              >
+                <Sparkles size={10} />
+                {t('matters.agentBinding.recommended')}
+              </button>
+            </div>
+            <div className="mt-1.5">
+              <MatterTriggerEditor entries={triggerDraft} onChange={setTriggerDraft} />
+            </div>
+
+            {/* 「跟进时执行」（设计 §5.2 ACTIONS）。🔴 勾选定的是**产出什么**，不是能调用
+                什么 —— 工具 allowlist 与「只观察与建议」的上限由服务端强制，勾 draft 也不会
+                多一个发信工具。 */}
+            <div className="mt-4">
+              <span className="text-meta font-medium text-ink-fg-1">
+                {t('matters.runActions.title')}
+              </span>
+              <div className="mt-1.5 space-y-0.5">
+                {MATTER_RUN_ACTIONS.map((action) => (
+                  <label
+                    key={action}
+                    className="flex cursor-pointer items-center gap-2.5 rounded-[var(--r-ctl)] px-1.5 py-1.5 hover:bg-ink-fg/[0.04]"
+                  >
+                    <Checkbox
+                      checked={actionsDraft.includes(action)}
+                      onCheckedChange={() => toggleAction(action)}
+                    />
+                    <span className="min-w-0 text-aux leading-5 text-ink-fg">
+                      {t(`matters.runActions.${action}`)}
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
             <dl className="mt-4 space-y-1.5 border-t border-ink-border pt-3 text-meta">
               <div className="flex justify-between gap-3">
                 <dt className="text-ink-fg-3">{t('matters.agentBinding.plan')}</dt>
@@ -509,7 +520,7 @@ export function MatterAgentConfigModal({
               disabled={saving}
               className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-body font-medium text-accent-fg disabled:opacity-50"
             >
-              {saving ? t('matters.agentConfig.saving') : t('common.save')}
+              {saving ? t('matters.agentConfig.saving') : t('matters.agentConfig.save')}
             </button>
           </div>
         </footer>

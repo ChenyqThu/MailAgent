@@ -251,3 +251,13 @@ export function startChatWithPrompt(text: string, emailId: number | null): void 
   state.openChatModal()
   state.requestChatPrompt(text, emailId)
 }
+
+/** 0813 dogfood #17b —— 事项详情的「立即跟进」：唤出 dock **带着这件事的身份**，再把一条跟进
+ *  指令递给主 agent。与 `startChatWithPrompt` 的差别只有一处、也正是要点：**不** clearMatterChat
+ *  —— 事项 chip 就是这轮对话的上下文。指令本身走既有 `pendingPrompt` 面（一条普通用户消息），
+ *  `emailId=null` ⇒ AgentConversation 不必等任何邮件 chip 就位。 */
+export function startMatterChatWithPrompt(target: MatterChatTarget, text: string): void {
+  const state = useAIChatPanel.getState()
+  state.openMatterChat(target)
+  state.requestChatPrompt(text, null)
+}

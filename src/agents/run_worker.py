@@ -280,8 +280,29 @@ class AgentRunWorker:
                 result={"outcome": "stopped", "reason": "user_cancelled"},
             )
             return
+        # 同 `_map_matter_response` 的判据：提案已交出 ⇒ 降级完成而不是失败（0813 dogfood #17）。
+        # 🔴 与那条路径的唯一差别是**不写 output_watermark** —— 连响应都没拿到，无从断言这轮
+        # 已经把当前指纹看完了；留空基线让下一轮重新比对（宁可多跑一轮，不要静默漏掉变化）。
+        if svc.update_id_for_run(run_id) is not None:
+            svc.finish_run(run_id, "warn", error={"code": code})
+            self._mark(job_id, "failed", last_error=code)
+            return
         svc.finish_run(run_id, "fail", error={"code": code})
         self._mark(job_id, "failed", last_error=code)
+
+    @staticmethod
+    def _matter_error_payload(code: str, resp: dict) -> dict[str, Any]:
+        """run.error_json 的载荷：错误码 + gateway 透传的人读原因（0813 dogfood #17）。
+
+        码本身是分不清病因的（``E_AGENT`` 是 gateway 侧一切非 APICallError 的兜底），而原文
+        此前只进 console.error —— 打包 app 里它哪儿都不去。截断 500 字符：这是给人看的一行
+        提示，不是日志载体。
+        """
+        payload: dict[str, Any] = {"code": code}
+        message = resp.get("errorMessage")
+        if isinstance(message, str) and message.strip():
+            payload["message"] = message.strip()[:500]
+        return payload
 
     def _map_matter_response(
         self,
@@ -298,6 +319,15 @@ class AgentRunWorker:
         succeeded + 有提案 → ok；无提案 → noop；校验剔除过 change（error_json.dropped，
         propose 端点暂存）或变更集仅 metadata_only 资源 → warn；transport failed/aborted
         → fail（cancel_requested_at 在场 → canceled，status 留 NULL）。
+
+        🔴 0813 dogfood #17「手动跟进明明成功了，界面还是提示失败」——**提案已交出的 run 不是
+        失败**。实测活库：run 4 于 23:49:49 交出提案（update 6，owner 后来还接受了），23:50:06
+        drain 报错收尾 ⇒ 旧映射把它记成 ``fail`` + ``E_AGENT``，UI 说「运行失败」、agenda worker
+        还开一条 critical「手动跟进运行失败」信号。提案是这条 run 的**唯一**产出通道且每 run 至多
+        一个（``E_PROPOSAL_EXISTS``），交出之后剩下的只是收尾叙述，所以此处按 ``warn`` 记
+        （既有语义正是「已产出提案 · 部分降级」）并把错误码/原文留在 error_json 里。没有提案时
+        一字不变仍是 ``fail``。async job 侧照旧记 failed —— 那条记的是「gateway 这次调用出错了」，
+        与「这轮跟进产出了什么」是两件事，各自如实。
         """
         session_id = resp.get("sessionId") if isinstance(resp.get("sessionId"), int) else None
         ok = bool(resp.get("ok"))
@@ -335,8 +365,30 @@ class AgentRunWorker:
             )
             return
         err = str(resp.get("error") or "E_RUN_ERROR")
+        error_payload = self._matter_error_payload(err, resp)
+        update_id = svc.update_id_for_run(run_id)
+        if update_id is not None:
+            # 已交出提案 → 降级完成（warn），不是失败。output_watermark 与 completed 分支同写：
+            # 那份提案覆盖的就是这个指纹，下一轮的便宜比对该从这里起算。
+            usage = {
+                key: resp[key] for key in ("usage", "steps") if resp.get(key) is not None
+            }
+            svc.finish_run(
+                run_id,
+                "warn",
+                output_watermark=output_watermark,
+                usage=usage or None,
+                model=resp.get("model"),
+                error=error_payload,
+                chat_session_id=session_id,
+            )
+            result = self._result_json(resp)
+            result["matterRunStatus"] = "warn"
+            result["updateId"] = update_id
+            self._mark(job_id, "failed", result=result, last_error=err)
+            return
         svc.finish_run(
-            run_id, "fail", error={"code": err}, chat_session_id=session_id
+            run_id, "fail", error=error_payload, chat_session_id=session_id
         )
         self._mark(job_id, "failed", last_error=err)
 
