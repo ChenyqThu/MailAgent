@@ -11,7 +11,6 @@ import {
   Layers,
   Play,
   Plus,
-  Settings,
   Sparkles,
   Target,
   TriangleAlert,
@@ -42,7 +41,6 @@ import { MatterCreateDialog } from './MatterCreateDialog'
 import { MatterDetail } from './MatterDetail'
 import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
-import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { MatterTagMarker } from './MatterTagMarker'
 import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
 import { getOrderedVisibleMatters } from './matterListOrder'
@@ -128,7 +126,6 @@ export function MattersWorkspace(): React.ReactElement | null {
   const [search, setSearch] = useState('')
   const [matterListWidth, setMatterListWidth] = useState(readMatterListWidth)
   const [createOpen, setCreateOpen] = useState(false)
-  const [tagManagerOpen, setTagManagerOpen] = useState(false)
   const [reviewTarget, setReviewTarget] = useState<{ matterId: string; updateId: number } | null>(
     null
   )
@@ -371,19 +368,12 @@ export function MattersWorkspace(): React.ReactElement | null {
                 与 tag 定义都是工作台已有的两支查询。 */}
             {tagViews.length > 0 ? (
               <div className="mt-2 border-t border-ink-border pt-2">
-                <div className="flex items-center gap-1 px-2.5 pb-1 max-[900px]:hidden">
-                  <span className="flex-1 font-mono text-micro uppercase tracking-[0.08em] text-ink-fg-3">
+                {/* R3-#1 —— 齿轮入口（标签管理弹窗）整个移除：MatterDetail 侧的
+                    「管理全部标签…」入口（MatterTagPicker）保留，同一份数据仍有可写面。 */}
+                <div className="px-2.5 pb-1 max-[900px]:hidden">
+                  <span className="font-mono text-micro uppercase tracking-[0.08em] text-ink-fg-3">
                     {t('matters.shell.tagsTitle')}
                   </span>
-                  <button
-                    type="button"
-                    onClick={() => setTagManagerOpen(true)}
-                    aria-label={t('matters.tags.manage')}
-                    title={t('matters.tags.manage')}
-                    className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
-                  >
-                    <Settings size={13} />
-                  </button>
                 </div>
                 <nav className="space-y-1 max-[900px]:flex max-[900px]:min-w-max max-[900px]:space-x-1 max-[900px]:space-y-0">
                   {tagViews.map(({ tag, key, count }) => (
@@ -413,13 +403,6 @@ export function MattersWorkspace(): React.ReactElement | null {
                 </nav>
               </div>
             ) : null}
-          </div>
-
-          {/* 设计 `list.jsx:117-121` 的底部注脚：1px 上边线 + mono 两行。<900px 转横向条时
-              不渲染（两行说明塞进一条横带只会挤掉视图本身）。 */}
-          <div className="-mx-2 mt-auto shrink-0 border-t border-ink-border-soft px-3 pt-2 font-mono text-micro leading-[1.7] text-ink-fg-3 max-[900px]:hidden">
-            <div>{t('matters.shell.footnoteLocal')}</div>
-            <div>{t('matters.shell.footnoteRemote')}</div>
           </div>
         </aside>
 
@@ -564,14 +547,6 @@ export function MattersWorkspace(): React.ReactElement | null {
           setView('all')
           selectMatter(candidate.matter.public_id)
         }}
-      />
-
-      {/* 左轨标签分组的齿轮（design `list.jsx:92`）开的就是详情页那一个标签管理弹窗 —— 同
-          一份数据只有一个可写面。 */}
-      <MatterTagManagerModal
-        open={tagManagerOpen}
-        tags={tagItems}
-        onOpenChange={setTagManagerOpen}
       />
     </div>
   )

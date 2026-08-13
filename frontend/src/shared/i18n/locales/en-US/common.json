@@ -5294,8 +5294,6 @@
     "undo": { "action": "Undo" },
     "shell": {
       "tagsTitle": "Tags",
-      "footnoteLocal": "Local SQLite · single user, single machine",
-      "footnoteRemote": "Remote Web shares the same data",
       "backToList": "Back to matter list"
     },
     "datePicker": {

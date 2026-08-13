@@ -5645,8 +5645,6 @@
     "undo": { "action": "撤销" },
     "shell": {
       "tagsTitle": "标签",
-      "footnoteLocal": "本地 SQLite · 单人单机",
-      "footnoteRemote": "Remote Web 共用同一份数据",
       "backToList": "返回事项清单"
     },
     "datePicker": {
