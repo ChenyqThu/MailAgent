@@ -51,8 +51,8 @@ def test_export_whitelist_and_avatar_shapes(plugin_client):
     # type='bot'（08-12 第三种 kind）对齐生成式规则**原样导出** —— 只是词表引用，无体积/隐私
     # 负担；这里钉住 plugin_compat 的判别只收窄 image 一侧，防未来有人把收窄写成白名单。
     store.create_agent("custom-bot", type="custom", title="Bot")
-    store.update_agent("custom-bot", wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "cursor", "color": "teal"}}))
-    assert client.get("/api/report-agents/custom-bot/export").json()["data"]["agent"]["avatar"] == {"type": "bot", "shape": "cursor", "color": "teal"}
+    store.update_agent("custom-bot", wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "kirby", "color": "teal"}}))
+    assert client.get("/api/report-agents/custom-bot/export").json()["data"]["agent"]["avatar"] == {"type": "bot", "shape": "kirby", "color": "teal"}
     store.create_agent("report-only", type="report", title="Report")
     assert client.get("/api/report-agents/report-only/export").status_code == 404
 
