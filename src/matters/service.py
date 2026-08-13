@@ -133,6 +133,16 @@ DIRECT_PATCH_FIELDS = {
     "next_attention_at",
     "attention_reason",
 }
+# 「撤销事项更新」的前像要快照哪些字段（patch_matter 的 undo descriptor）。
+# 🔴 **从写面派生，不再手抄**：这里曾是同一份白名单的第四份手抄，且漏了 priority 与
+# goal_checks —— 于是只改优先级时前像是 `{}`，撤销发出一个空 patch：不报错、版本照 bump、
+# 值一动不动，用户看到的是「撤销成功」而实际什么都没还原。前像的每个字段都会经
+# `PATCH /api/matters/{id}` 原样回放（renderer 直连 REST、user actor），所以取值范围必须
+# 恰好是写面本身。
+# BINDING_PATCH_FIELDS **有意**不在内（维持现状，本批不扩面）：纯 binding 的 patch 只写
+# agent_binding_changed 一条事件，不产生 matter_updated，「撤销事项更新」这颗按钮不代表它；
+# 混合 patch 里的 binding 部分同样不进前像。要不要让撤销覆盖 agent 绑定是独立决策。
+UNDOABLE_PATCH_FIELDS = DIRECT_PATCH_FIELDS | MANUAL_UPDATE_FIELDS
 # D5 bounded projection: context_snapshot resource entries only pass through the
 # short structured metadata keys the MailAgent write side actually produces
 # (_resolve_source_resource: email -> internal_id/message_id/date_received,
@@ -1065,20 +1075,7 @@ class MatterService:
             before_patch = {
                 field: matter.get(field)
                 for field in patch
-                if field
-                in {
-                    "title",
-                    "description",
-                    "matter_type",
-                    "tags",
-                    "status",
-                    "health",
-                    "current_summary",
-                    "due_at",
-                    "waiting_context",
-                    "next_attention_at",
-                    "attention_reason",
-                }
+                if field in UNDOABLE_PATCH_FIELDS
             }
             result = self._mutation(
                 after,

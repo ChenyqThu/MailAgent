@@ -144,6 +144,57 @@ def test_patch_undo_carries_before_values_and_restores_them(service):
     assert reverse_event["reverses_event_id"] == patched["event_ids"][0]
 
 
+def test_priority_only_patch_undo_restores_the_old_priority(service):
+    """0813 轮 3：`priority` 进 PATCH 白名单的直接下游。
+
+    前像字段集曾是手抄的、且漏了 priority ⇒ 只改优先级时 `before_patch == {}`，撤销发出一个
+    空 patch：不报错、版本照 bump、优先级一动不动 = 撤销静默失效。所以这里断言的是**还原后
+    的值**，不是描述符非空。"""
+    created = service.create_matter(
+        {"title": "Priority", "priority": "p2"},
+        idempotency_key="create",
+        source="desktop_ui",
+    )
+    public_id = created["matter"]["public_id"]
+    assert created["matter"]["priority"] == "p2"
+
+    patched = service.patch_matter(public_id, {"priority": "p0"}, **mutation(1, "patch"))
+    assert patched["matter"]["priority"] == "p0"
+    undo = assert_undo_envelope(patched, tool="matter_update", operation="patch")
+    assert undo["input"]["patch"] == {"priority": "p2"}
+
+    undone = execute_undo(service, undo, "undo-priority")
+    assert undone["matter"]["priority"] == "p2"
+    reverse_event = _event_row(service, undone["event_ids"][0])
+    assert reverse_event["reverses_event_id"] == patched["event_ids"][0]
+
+
+def test_goal_checks_only_patch_undo_restores_the_old_checklist(service):
+    """同上，goal_checks 侧。前像必须是**解析后的列表**（_matter_row 投影），因为它会被原样
+    当成 PATCH body 回放 —— 存 `goal_checks_json` 字符串的话撤销会 422/400。"""
+    created = service.create_matter(
+        {"title": "Goals"}, idempotency_key="create", source="desktop_ui"
+    )
+    public_id = created["matter"]["public_id"]
+    seeded = service.patch_matter(
+        public_id,
+        {"goal_checks": [{"t": "合同已签署", "done": False}]},
+        **mutation(1, "seed"),
+    )
+    assert seeded["matter"]["goal_checks"] == [{"t": "合同已签署", "done": False}]
+
+    patched = service.patch_matter(
+        public_id,
+        {"goal_checks": [{"t": "款项已到账", "done": True}]},
+        **mutation(2, "patch"),
+    )
+    undo = assert_undo_envelope(patched, tool="matter_update", operation="patch")
+    assert undo["input"]["patch"] == {"goal_checks": [{"t": "合同已签署", "done": False}]}
+
+    undone = execute_undo(service, undo, "undo-goals")
+    assert undone["matter"]["goal_checks"] == [{"t": "合同已签署", "done": False}]
+
+
 def test_item_delete_undo_restores_item(service):
     created = service.create_matter(
         {"title": "Items"}, idempotency_key="create", source="desktop_ui"

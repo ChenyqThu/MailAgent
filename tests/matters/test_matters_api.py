@@ -424,3 +424,83 @@ def test_next_action_falls_back_to_blocker_and_skips_deleted(client):
         "title": "Legal review",
         "due_at": None,
     }
+
+
+def test_patch_accepts_priority_and_goal_checks_over_the_wire(client):
+    """0813 轮 3：详情页改优先级 / 存完成标志走的是 REST，而 DTO 白名单漏了这两个字段
+    ⇒ 422 extra_forbidden。goal_checks 的既有用例全在 service 层直调（见
+    test_matter_goal_checks.py），一条都碰不到 wire —— 这正是漏抄能瞒过整套测试的原因。"""
+    http, _ = client
+    created = http.post(
+        "/api/matters",
+        json={"title": "Wire patch", "mutation": _mutation("wp-create")},
+    )
+    assert created.status_code == 201
+    matter = created.json()["data"]["matter"]
+    public_id = matter["public_id"]
+
+    patched = http.patch(
+        f"/api/matters/{public_id}",
+        json={
+            "priority": "p0",
+            "goal_checks": [
+                {"t": "合同已签署", "done": False},
+                {"t": "款项已到账", "done": True},
+            ],
+            "mutation": _mutation("wp-patch", matter["version"]),
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    after = patched.json()["data"]["matter"]
+    assert after["priority"] == "p0"
+    assert after["goal_checks"] == [
+        {"t": "合同已签署", "done": False},
+        {"t": "款项已到账", "done": True},
+    ]
+
+    # 真落库（不是只在响应里回声）。
+    reread = http.get(f"/api/matters/{public_id}").json()["data"]["matter"]
+    assert reread["priority"] == "p0"
+    assert [row["t"] for row in reread["goal_checks"]] == ["合同已签署", "款项已到账"]
+
+
+def test_patch_still_rejects_fields_the_service_does_not_consume(client):
+    """白名单放宽两个字段 ≠ 变成自由字典：DTO 仍 extra=forbid（422），值域仍归 service（400）。"""
+    http, _ = client
+    matter = http.post(
+        "/api/matters",
+        json={"title": "Wire patch guard", "mutation": _mutation("wpg-create")},
+    ).json()["data"]["matter"]
+
+    unknown = http.patch(
+        f"/api/matters/{matter['public_id']}",
+        json={"totally_unknown": 1, "mutation": _mutation("wpg-unknown", matter["version"])},
+    )
+    assert unknown.status_code == 422
+    assert "Extra inputs are not permitted" in unknown.json()["error"]["message"]
+
+    bad_priority = http.patch(
+        f"/api/matters/{matter['public_id']}",
+        json={"priority": "p9", "mutation": _mutation("wpg-prio", matter["version"])},
+    )
+    assert bad_priority.status_code == 400, bad_priority.text
+    assert bad_priority.json()["error"]["code"] == "E_INVALID_ARG"
+
+    # goal_checks 的两层分工（有意，不是漏）：元素形状由 DTO 判（422），值域/条数由
+    # normalize_goal_checks 单判（400）—— 两侧 code 都是 E_INVALID_ARG，DTO 只是更窄。
+    bad_goal_shape = http.patch(
+        f"/api/matters/{matter['public_id']}",
+        json={"goal_checks": ["not an object"], "mutation": _mutation("wpg-goal", matter["version"])},
+    )
+    assert bad_goal_shape.status_code == 422, bad_goal_shape.text
+    assert bad_goal_shape.json()["error"]["code"] == "E_INVALID_ARG"
+
+    bad_goal_value = http.patch(
+        f"/api/matters/{matter['public_id']}",
+        json={
+            "goal_checks": [{"t": "x" * 500, "done": False}],
+            "mutation": _mutation("wpg-goal-len", matter["version"]),
+        },
+    )
+    assert bad_goal_value.status_code == 400, bad_goal_value.text
+    assert bad_goal_value.json()["error"]["code"] == "E_INVALID_ARG"

@@ -146,7 +146,7 @@ export function createMatterReadTools(
     {
       name: 'matter_get',
       description:
-        'Read one Matter and a bounded subset of items, resources, stakeholders, timeline, or relations. Resource bodies are not returned.',
+        'Read one Matter and a bounded subset of items, resources, stakeholders, timeline, relations, or updates (pending review proposals — include "updates" to get the update_id that matter_review_update needs). Resource bodies are not returned.',
       inputSchema: matterGetSchema,
       run: (input, signal) => domain.getMatter(input.public_id, input.include, signal)
     },

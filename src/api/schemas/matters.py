@@ -61,7 +61,13 @@ class MatterPatchRequest(StrictModel):
     title: str | None = Field(default=None, max_length=500)
     description: str | None = None
     matter_type: str | None = Field(default=None, max_length=128)
+    # 这里只声明**线上形状**；值域（合法 priority / goal check 文本长度与条数）仍由 service
+    # 的 `_require_value` / `normalize_goal_checks` 单判（400 E_INVALID_ARG），与
+    # MatterCreateRequest 的 `priority: str` 同形 —— 在 DTO 里再抄一份枚举 = 又一份会漂的
+    # 手抄清单，正是本 bug（DTO 漏了这两个字段导致改优先级/存完成标志恒 422）的病根。
+    priority: str | None = None
     tags: list[str] | None = None
+    goal_checks: list[dict[str, Any]] | None = None
     status: str | None = None
     health: str | None = None
     current_summary: str | None = None

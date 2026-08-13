@@ -120,12 +120,17 @@ export const matterFindSchema = z.object({
 })
 export type MatterFindInput = z.infer<typeof matterFindSchema>
 
+/** Mirrors what `GET /api/matters/{id}` actually branches on (src/matters/service.py::get_matter).
+ *  🔴 `updates` is not optional garnish: matter_review_update REQUIRES an `update_id`, and this is
+ *  the only read face that hands one out — without it the review tool is structurally uncallable
+ *  (0813 dogfood 轮 3). */
 export const MATTER_GET_INCLUDES = [
   'items',
   'resources',
   'stakeholders',
   'timeline',
-  'relations'
+  'relations',
+  'updates'
 ] as const
 export const matterGetSchema = z.object({
   public_id: z.string().trim().min(1),
