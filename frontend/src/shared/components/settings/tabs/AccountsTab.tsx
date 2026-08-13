@@ -186,8 +186,10 @@ function MailSourceSection(): React.ReactElement {
 
   // 空值/平台不可用值 → 平台首选项 (mac=applescript 同 config.py 默认; win=outlook_com)。
   // 平台过滤单源 @shared/lib/mailBackend —— 防「win 上 .env 残留 applescript →
-  // SegmentedControl 选中一个不存在的段」。
-  const platform = detectUiPlatform()
+  // SegmentedControl 选中一个不存在的段」。useMemo 固定 platform (app 生命周期内
+  // 不变的 window 全局读) —— 裸调会让 React Compiler 视 backend 为非纯派生, 拒绝
+  // 保留下方 onSourceChange 的手写 memoization (react-hooks/preserve-manual-memoization)。
+  const platform = React.useMemo(() => detectUiPlatform(), [])
   const rawBackend = useEnvValue('MAILAGENT_BACKEND')
   const backend: MailBackend = coerceMailBackendForPlatform(rawBackend, platform)
 

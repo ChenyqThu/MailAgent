@@ -2251,12 +2251,22 @@ class MailWriteService:
             pass
 
         # ── 远端后置 (慢链): 失败不抛 — 本地已删, 抛错会让前端报失败但行已
-        # 消失 (语义混乱); Exchange 残留由下次 reconcile to_add 拉回行重现。 ──
+        # 消失 (语义混乱); Exchange 残留由下次 reconcile to_add 拉回行重现。
+        # 🔴 跨模式护栏 (task 08-12): win 双 backend 可切换 (prd §7 拍板 1) ⇒
+        # 行的 backend_origin 可能与当前 backend 不符 (COM 行 × FolderImapReader /
+        # davmail 行 × FolderComReader), 两个 reader 的删除方法面不同 —— 缺对应
+        # 方法时按 getattr 判定跳过远端删 (本地已删语义已达成, 远端残留由对侧
+        # 模式的 reconcile / 用户手动清), 绝不让 AttributeError 抛给前端。 ──
         reader = self._folder_imap_reader()
         if row_is_com:
-            if not reader.delete_draft_by_anchor(
-                entry_id=entry_id, message_id=message_id
-            ):
+            com_delete = getattr(reader, "delete_draft_by_anchor", None)
+            if com_delete is None:
+                logger.warning(
+                    f"[delete-draft] COM 行 {internal_id} 但当前 backend 无 "
+                    f"delete_draft_by_anchor (跨模式, reader={type(reader).__name__}); "
+                    "跳过远端删 (本地已删; Outlook 残留切回 outlook_com 后重删)"
+                )
+            elif not com_delete(entry_id=entry_id, message_id=message_id):
                 logger.warning(
                     f"[delete-draft] COM delete failed entry_id={entry_id!r} "
                     "(本地已删; Outlook 残留可手动清理, 重删即可)"
@@ -2269,7 +2279,14 @@ class MailWriteService:
                 imap_uid=int(imap_uid or 0),
                 local_deleted=local_deleted,
             )
-        if not reader.delete_message("drafts", int(imap_uid)):
+        imap_delete = getattr(reader, "delete_message", None)
+        if imap_delete is None:
+            logger.warning(
+                f"[delete-draft] IMAP 行 {internal_id} 但当前 backend 无 "
+                f"delete_message (跨模式, reader={type(reader).__name__}); "
+                "跳过远端删 (本地已删; Exchange 残留切回 davmail 后由 reconcile 收敛)"
+            )
+        elif not imap_delete("drafts", int(imap_uid)):
             logger.warning(
                 f"[delete-draft] IMAP delete failed uid={imap_uid} "
                 "(本地已删; Exchange 残留由 reconcile 拉回, 重删即可)"

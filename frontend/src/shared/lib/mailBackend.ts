@@ -1,7 +1,8 @@
 // 邮件 backend 值域 + 平台过滤单源（renderer 侧）。
 //
 // 值域手抄 config.py `MAILAGENT_BACKEND`（applescript | davmail | outlook_com）。
-// 🔴 跨语言一致性闸由后续统一批建（config.py 由并发 agent 在改，本文件先做前端单源）；
+// 🔴 跨语言一致性闸 = tests/config/test_mail_backend_parity.py（四方：config.py /
+// factory.py / types.py / 本文件，含平台矩阵抽取）——改值域两侧同步，闸会红。
 // onboarding/ipc.ts 的 `BackendKind` 与 AccountsTab 的 SegmentedControl 都从这里取
 // 定义与过滤逻辑，禁止再各写一份字面量表。
 //
