@@ -18,8 +18,9 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { ClipboardList } from 'lucide-react'
+import { ClipboardList, Link as LinkIcon } from 'lucide-react'
 
+import type { MatterResourceKind } from '@shared/api/types/matter'
 import type {
   AgentContextSnapshot,
   CapabilityContext,
@@ -35,6 +36,7 @@ import { useMattersApi } from './hooks'
 import { MatterContextGapCard } from './MatterContextGapCard'
 import { MatterQuickPrompts } from './MatterQuickPrompts'
 import type { MatterChatSurface } from './matterChatContext'
+import { RESOURCE_KIND_ICONS } from './matterResource'
 import { useMatterContextSnapshot } from './useMatterContextSnapshot'
 import { useMatterUndoRunner } from './useMatterUndoRunner'
 
@@ -110,12 +112,17 @@ export interface MatterConversationBinding {
   snapshot: AgentContextSnapshot | null
   /** 写入回执 + 撤销的 surface；null = 事项写入卡按通用工具卡渲染。 */
   surface: MatterChatSurface | null
-  /** composer 上方的可移除 chip。 */
+  /** composer 上方的可移除 chip（事项 chip + 每份置顶资料各一颗）。 */
   chip: React.ReactNode
   /** chip 之上的一组事项控件（上下文缺口卡）。 */
   controls: React.ReactNode
   /** 空态快捷 prompt（换一组，不是删掉 —— 设计稿位置同全局面板）。 */
   quickPrompts: React.ReactNode
+  /** G-20 空态标题/副标题（设计稿："the empty state names the matter"）；非事项对话为 null，
+   *  调用方据此回落通用 welcome。 */
+  welcome: { title: string; hint: string } | null
+  /** G-20 输入区下脚注（对话历史不沉淀）；非事项对话为 null。 */
+  footnote: React.ReactNode
 }
 
 export function useMatterConversation(
@@ -188,17 +195,30 @@ export function useMatterConversation(
     }),
     [thinkingEnabled]
   )
+  // G-21 —— 用户 × 掉的置顶资料 chip。按事项 public_id 记（换一件事重新给全套 chip，与
+  // 事项 chip 的 `removedRef` 同一条心智），移除只影响**本轮上下文快照**，不解除关联。
+  const [removedResourceIds, setRemovedResourceIds] = useState<ReadonlySet<number>>(
+    () => new Set<number>()
+  )
+  const chipPublicId = chipTarget?.publicId ?? null
+  useEffect(() => {
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setRemovedResourceIds(new Set<number>())
+  }, [chipPublicId, sessionId])
+
   const snapshotEnabled = enabled && chipTarget !== null
   const {
     snapshot,
     chips,
+    pinnedResources,
     hasContextGap,
     isError: snapshotFailed
   } = useMatterContextSnapshot({
     publicId: chipTarget?.publicId ?? '',
     scope: contextScope,
     capabilities,
-    enabled: snapshotEnabled
+    enabled: snapshotEnabled,
+    excludedResourceIds: removedResourceIds
   })
 
   const contextCount = chips
@@ -253,12 +273,31 @@ export function useMatterConversation(
   )
 
   const chip = chipTarget ? (
-    <ConversationContextChip
-      icon={<ClipboardList size={12} strokeWidth={2} className="shrink-0 text-coral" />}
-      label={`${chipTarget.publicId} ${chipTarget.title}`}
-      removeLabel={t('matters.chat.removeContext')}
-      onRemove={onRemoveChip}
-    />
+    <>
+      <ConversationContextChip
+        icon={<ClipboardList size={12} strokeWidth={2} className="shrink-0 text-coral" />}
+        label={`${chipTarget.publicId} ${chipTarget.title}`}
+        removeLabel={t('matters.chat.removeContext')}
+        onRemove={onRemoveChip}
+      />
+      {/* 设计 `chat.jsx:161`：每份**置顶**资料一颗可移除 chip。有意**不做**「N 份关联资料」
+          展开钮 —— 快照本来就只带置顶那几份摘录，把其余关联资料也摆成 chip 会让人以为它们
+          也进了这轮上下文。 */}
+      {pinnedResources.map((resource) => {
+        const Icon = RESOURCE_KIND_ICONS[resource.kind as MatterResourceKind] ?? LinkIcon
+        return (
+          <ConversationContextChip
+            key={resource.id}
+            icon={<Icon size={12} strokeWidth={2} className="shrink-0 text-ai" />}
+            label={resource.title?.trim() || t('matters.chatContext.pinnedUntitled')}
+            removeLabel={t('matters.chatContext.removePinned')}
+            onRemove={() =>
+              setRemovedResourceIds((current) => new Set([...current, resource.id]))
+            }
+          />
+        )
+      })}
+    </>
   ) : null
 
   // 检索范围控件下线后这一格只剩「快照读不到」与「上下文缺口卡」两件事；两件都没有就整块不渲染
@@ -280,7 +319,18 @@ export function useMatterConversation(
       </div>
     ) : null
 
-  const quickPrompts = anchor ? <MatterQuickPrompts contextCount={contextCount} /> : null
+  const quickPrompts = anchor ? <MatterQuickPrompts /> : null
+
+  // G-20 —— 设计稿文件头三件事之三：「the empty state names the matter」。标题就是事项标题
+  // （用户内容，不翻译），副标题给出这轮带了多少条上下文 + 还能用 @ 补别的资料。
+  const welcome = anchor
+    ? { title: anchor.title, hint: t('matters.chat.empty.hint', { count: contextCount }) }
+    : null
+  const footnote = anchor ? (
+    <p className="px-1 text-center text-meta leading-[1.6] text-ink-fg-3">
+      {t('matters.chat.footnote')}
+    </p>
+  ) : null
 
   // 🔴 未就绪 = 整个绑定惰性。半个事项 UI（chip 在、编号不在）比没有更危险：它会让用户以为
   // 上下文已经就位。调用方另外摆「上下文未就绪」并禁发（见 AgentConversation）。
@@ -291,8 +341,10 @@ export function useMatterConversation(
       surface: null,
       chip: null,
       controls: null,
-      quickPrompts: null
+      quickPrompts: null,
+      welcome: null,
+      footnote: null
     }
   }
-  return { anchor, snapshot, surface, chip, controls, quickPrompts }
+  return { anchor, snapshot, surface, chip, controls, quickPrompts, welcome, footnote }
 }

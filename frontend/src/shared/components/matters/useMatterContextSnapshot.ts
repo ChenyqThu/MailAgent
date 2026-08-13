@@ -38,11 +38,25 @@ export interface UseMatterContextSnapshotInput {
   capabilities: CapabilityContext
   /** false → no query runs and the snapshot is null (flag off / panel closed). */
   enabled: boolean
+  /** G-21 —— 用户在 composer 上 × 掉的置顶资料 chip（resource id）。**在快照构建之前**从
+   *  payload 里剔除，所以 chip 计数、chip 行本身、真正注入模型的那份摘录三者恒同源；
+   *  在 UI 层单独藏一颗 chip 而 payload 照发 = 界面在撒谎。 */
+  excludedResourceIds?: ReadonlySet<number>
+}
+
+/** composer chip 行要渲染的置顶资料（design `chat.jsx:161` 每份置顶资料一颗可移除 chip）。 */
+export interface MatterPinnedResourceChip {
+  id: number
+  /** wire 上就是自由字符串（`MatterContextSnapshotPayload`），图标解析处按值域兜底。 */
+  kind: string
+  title: string | null
 }
 
 export interface UseMatterContextSnapshotResult {
   snapshot: AgentContextSnapshot | null
   chips: MatterContextChipCounts | null
+  /** 本轮**实际注入**的置顶资料（已剔除被移除的那些）。 */
+  pinnedResources: MatterPinnedResourceChip[]
   hasContextGap: boolean
   isLoading: boolean
   isError: boolean
@@ -140,10 +154,24 @@ export function hasContextGap(payload: MatterContextSnapshotPayload): boolean {
   return counts.linked_resources === 0
 }
 
+/** G-21 —— 把用户 × 掉的置顶资料从 payload 里剔掉。**唯一**的剔除点：snapshot（真正注入
+ *  模型的那份）、chip 计数、chip 行三条路都从它的返回值派生，所以「屏幕上说带了 3 份」与
+ *  「prompt 里真的有 3 份」结构上无法劈叉。 */
+export function applyResourceExclusions(
+  payload: MatterContextSnapshotPayload,
+  excluded: ReadonlySet<number> | undefined
+): MatterContextSnapshotPayload {
+  if (excluded === undefined || excluded.size === 0) return payload
+  return {
+    ...payload,
+    resources: (payload.resources ?? []).filter((resource) => !excluded.has(resource.id))
+  }
+}
+
 export function useMatterContextSnapshot(
   input: UseMatterContextSnapshotInput
 ): UseMatterContextSnapshotResult {
-  const { publicId, scope, capabilities, enabled } = input
+  const { publicId, scope, capabilities, enabled, excludedResourceIds } = input
   const api = useMatterChatApi()
 
   const query = useQuery({
@@ -154,7 +182,14 @@ export function useMatterContextSnapshot(
     retry: false
   })
 
-  const payload = query.data ?? null
+  const rawPayload = query.data ?? null
+  // 🔴 剔除发生在**这里**（payload 层），下面 snapshot / chips / chip 行三条路都从它派生 ——
+  // 别在任何一条下游单独过滤，那就是三份真相。
+  const payload = useMemo<MatterContextSnapshotPayload | null>(
+    () => (rawPayload === null ? null : applyResourceExclusions(rawPayload, excludedResourceIds)),
+    [excludedResourceIds, rawPayload]
+  )
+
   const snapshot = useMemo<AgentContextSnapshot | null>(() => {
     if (!enabled || payload === null) return null
     return buildMatterContextSnapshot({
@@ -171,10 +206,23 @@ export function useMatterContextSnapshot(
     [payload]
   )
 
+  const pinnedResources = useMemo<MatterPinnedResourceChip[]>(
+    () =>
+      (payload?.resources ?? []).map((resource) => ({
+        id: resource.id,
+        kind: resource.kind,
+        title: resource.title ?? null
+      })),
+    [payload]
+  )
+
   return {
     snapshot,
     chips,
-    hasContextGap: enabled && payload !== null && hasContextGap(payload),
+    pinnedResources,
+    // 缺口判据看的是事项**真实**的关联数，与「这一轮我手动少带了几份」正交 —— 所以读原始
+    // payload：移除两颗 chip 不该让「上下文缺口」卡凭空冒出来。
+    hasContextGap: enabled && rawPayload !== null && hasContextGap(rawPayload),
     isLoading: enabled && query.isLoading,
     isError: enabled && query.isError
   }

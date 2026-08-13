@@ -628,10 +628,16 @@ class MatterService:
             summaries = self.repository.list_stakeholder_summaries(
                 conn, [int(item["id"]) for item in items]
             )
+            # 清单行「下一步」的投影（design `list.jsx` 行 2）。同样 additive、同样批量：
+            # 列表不返回 items，没有它前端只能落到「缺少下一步」兜底。
+            next_actions = self.repository.list_next_action_summaries(
+                conn, [int(item["id"]) for item in items]
+            )
         for item in items:
             preview, count = summaries.get(int(item["id"]), ([], 0))
             item["stakeholder_summary"] = preview
             item["stakeholder_count"] = count
+            item["next_action"] = next_actions.get(int(item["id"]))
         return {"items": items, "next_cursor": next_cursor, "total": total}
 
     def list_tags(self) -> list[dict[str, Any]]:

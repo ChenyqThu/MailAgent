@@ -3,7 +3,10 @@ import { describe, expect, test } from 'vitest'
 import type { Matter, MatterItem } from '../../src/shared/api/types/matter'
 import {
   filterView,
+  hasNextAction,
   MATTER_VIEWS,
+  matterTagView,
+  matterTagViewName,
   nextAction,
   rankOf,
   trashDaysRemaining
@@ -220,5 +223,64 @@ describe('nextAction', () => {
   test('ignores deleted action items and computes trash countdown', () => {
     expect(nextAction(matter(), [item({ deleted_at: 10 })]).kind).toBe('missing')
     expect(trashDaysRemaining(matter({ deleted_at: 0, purge_after: 3 * 86_400_000 }), 0)).toBe(3)
+  })
+
+  // 补充项（批次 3）—— 清单端点不返回 items，所以清单行吃服务端的 `next_action` 投影。
+  // 少了这一路，一屏事项全会显示「缺少下一步」，而详情页打开就有（Focus 的健康活跃率
+  // 同源，会一起失真）。canonical = `src/matters/repository.py::list_next_action_summaries`，
+  // 那边的 pytest 钉的是同一张优先级表。
+  test('list rows without items consume the server next_action projection', () => {
+    const row = matter({
+      next_action: { kind: 'waiting', title: 'Ping Bob', due_at: null }
+    })
+    expect(nextAction(row)).toEqual({ kind: 'waiting', title: 'Ping Bob', tone: 'warn' })
+    expect(hasNextAction(row)).toBe(true)
+  })
+
+  test('explicit items win over the projection; an empty array still means "no items"', () => {
+    const row = matter({
+      next_action: { kind: 'blocker', title: 'Stale projection', due_at: null }
+    })
+    // 详情页手里有真条目 ⇒ 就地算，不看投影（投影可能比这一屏旧）。
+    expect(nextAction(row, [item({ status: 'open', title: 'Send draft' })]).title).toBe('Send draft')
+    // `[]` 是「确实一条都没有」，不是「这一层没有数据」—— 不许回退去读投影。
+    expect(nextAction(row, []).kind).toBe('missing')
+  })
+
+  test('old backends without the projection fail soft to the status fallback', () => {
+    expect(nextAction(matter()).kind).toBe('missing')
+    expect(nextAction(matter({ next_action: null })).kind).toBe('missing')
+    expect(hasNextAction(matter({ next_action: null }))).toBe(false)
+  })
+})
+
+// G-01 —— 左轨标签分组。视图 key 是 `tag:<标签名>`（标签的身份就是名字）。
+describe('tag views', () => {
+  test('round-trips names that themselves contain a colon', () => {
+    expect(matterTagView('合规')).toBe('tag:合规')
+    expect(matterTagViewName(matterTagView('a:b'))).toBe('a:b')
+    expect(matterTagViewName('all')).toBeNull()
+    expect(matterTagViewName('attention')).toBeNull()
+  })
+
+  test('filters live matters by tag and never leaks archived/trashed rows', () => {
+    const tagged = matter({ public_id: 'MAT-0001', tags: ['合规', '预算'] })
+    const other = matter({ public_id: 'MAT-0002', tags: ['预算'] })
+    const archivedTagged = matter({ public_id: 'MAT-0003', tags: ['合规'], archived_at: 10 })
+    const trashedTagged = matter({ public_id: 'MAT-0004', tags: ['合规'], deleted_at: 20 })
+    const values = [tagged, other, archivedTagged, trashedTagged]
+    expect(filterView(values, matterTagView('合规'))).toEqual([tagged])
+    expect(filterView(values, matterTagView('预算')).map((value) => value.public_id)).toEqual([
+      'MAT-0001',
+      'MAT-0002'
+    ])
+    expect(filterView(values, matterTagView('不存在'))).toEqual([])
+  })
+
+  test('tag view keeps done/canceled matters (unlike `all`)', () => {
+    // 「全部」按业务状态收窄，标签筛选**不**——按标签找东西时把已完成的藏起来会让人以为丢了。
+    const done = matter({ public_id: 'MAT-0005', status: 'done', tags: ['合规'] })
+    expect(filterView([done], matterTagView('合规'))).toEqual([done])
+    expect(filterView([done], 'all')).toEqual([])
   })
 })

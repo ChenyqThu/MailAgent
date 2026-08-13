@@ -2858,6 +2858,7 @@
       "sync": "同步",
       "ai": "AI",
       "connectors": "连接器",
+      "matters": "事项",
       "notifications": "通知",
       "integrations": "集成",
       "realtime": "实时与存储",
@@ -3861,6 +3862,24 @@
           "cleanupFail": "清理本地副本失败",
           "cleanupBusy": "清理中…"
         }
+      }
+    },
+    "matters": {
+      "title": "事项",
+      "description": "事项模块的全局设置。每件事自己的跟进规则、标签仍在事项详情页里改。",
+      "section": "全局配置",
+      "helper": "这两项对所有事项生效，全局各只有一份。",
+      "tags": {
+        "label": "标签管理",
+        "helper": "共 {total} 个标签，{count} 个正在被事项使用；可改名、改色、删除。",
+        "loadFailed": "标签读取失败，打开后可重试。",
+        "open": "管理标签"
+      },
+      "agent": {
+        "label": "跟进 Agent",
+        "helper": "系统内置、全局一份：任务契约、工具面与网页检索档。",
+        "disabled": "跟进 Agent 当前未启用（灰度开关在「实验室」）。",
+        "open": "打开配置"
       }
     }
   },
@@ -5189,7 +5208,7 @@
       },
       "empty": {
         "title": "从这里推进这件事",
-        "hint": "基于本事项的 {count} 条上下文回答"
+        "hint": "基于本事项的 {count} 条上下文回答，或用 @ 带上别的资料"
       },
       "footnote": "对话历史不是正式事项知识；只有工具写入、已接受的更新和确定性事件会沉淀。",
       "writeLabels": {
@@ -5448,6 +5467,16 @@
       "saveFailed": "事项更新失败",
       "createFailed": "事项创建失败",
       "deleteFailed": "事项删除失败"
+    },
+    "shell": {
+      "tagsTitle": "标签",
+      "footnoteLocal": "本地 SQLite · 单人单机",
+      "footnoteRemote": "Remote Web 共用同一份数据",
+      "backToList": "返回事项清单"
+    },
+    "chatContext": {
+      "pinnedUntitled": "未命名资料",
+      "removePinned": "从本轮上下文移除这份资料"
     }
   }
 }

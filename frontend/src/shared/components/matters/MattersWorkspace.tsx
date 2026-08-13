@@ -11,6 +11,7 @@ import {
   Layers,
   Play,
   Plus,
+  Settings,
   Sparkles,
   Target,
   TriangleAlert,
@@ -25,8 +26,13 @@ import type {
 } from '@shared/api/types/matter'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { filterView, MATTER_VIEWS, openAttentionFor } from '@shared/lib/matterDerive'
-import type { MatterView } from '@shared/lib/matterDerive'
+import {
+  filterView,
+  MATTER_VIEWS,
+  matterTagView,
+  openAttentionFor
+} from '@shared/lib/matterDerive'
+import type { MatterBuiltinView, MatterView } from '@shared/lib/matterDerive'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -34,6 +40,8 @@ import { MatterCreateDialog } from './MatterCreateDialog'
 import { MatterDetail } from './MatterDetail'
 import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
+import { MatterTagManagerModal } from './MatterTagManagerModal'
+import { MatterTagMarker } from './MatterTagMarker'
 import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
 import { getOrderedVisibleMatters } from './matterListOrder'
 import { listMatterTagsSafely, MATTER_TAGS_QUERY_KEY } from './matterTags'
@@ -73,7 +81,7 @@ function writeMatterListWidth(width: number): void {
 // 🔴 逐项对照设计原型 `list.jsx` 的 VIEWS 表（设计 §7.6「icon 全部对照原型替换」）。
 // 右侧注释是原型里写的语义名 —— 改动前 12 项里有 7 项与它不符，其中 monitoring 用了
 // Monitor（显示器）是望文生义，原型要的是 eye（盯着看）。
-const VIEW_ICONS: Record<MatterView, React.ReactNode> = {
+const VIEW_ICONS: Record<MatterBuiltinView, React.ReactNode> = {
   focus: <Target size={14} />, // target
   attention: <TriangleAlert size={14} />, // alert
   review: <Sparkles size={14} />, // sparkles
@@ -98,6 +106,7 @@ export function MattersWorkspace(): React.ReactElement | null {
   const [search, setSearch] = useState('')
   const [matterListWidth, setMatterListWidth] = useState(readMatterListWidth)
   const [createOpen, setCreateOpen] = useState(false)
+  const [tagManagerOpen, setTagManagerOpen] = useState(false)
   const [reviewTarget, setReviewTarget] = useState<{ matterId: string; updateId: number } | null>(
     null
   )
@@ -197,6 +206,17 @@ export function MattersWorkspace(): React.ReactElement | null {
     () => orderedVisible.map((matter) => matter.public_id),
     [orderedVisible]
   )
+  const tagViews = useMemo(
+    () =>
+      tagItems
+        .map((tag) => ({
+          tag,
+          key: matterTagView(tag.name),
+          count: filterView(allMatters, matterTagView(tag.name)).length
+        }))
+        .filter((entry) => entry.count > 0),
+    [allMatters, tagItems]
+  )
   const attentionAction = useAttentionAction()
 
   const handleAttentionAction = (
@@ -247,7 +267,7 @@ export function MattersWorkspace(): React.ReactElement | null {
       {/* 设计 §7.4：去掉「事项工作台」通栏页头，「+ 新建事项」下沉到状态栏顶部 ——
           一级导航已经告诉用户身在何处，通栏标题只是在重复它并吃掉一整条竖直空间。 */}
       <div className="flex min-h-0 flex-1 max-[900px]:flex-col">
-        <aside className="w-44 shrink-0 border-r border-ink-border bg-ink-1/45 p-2 max-[900px]:w-full max-[900px]:overflow-x-auto max-[900px]:border-b max-[900px]:border-r-0">
+        <aside className="flex w-44 shrink-0 flex-col border-r border-ink-border bg-ink-1/45 p-2 max-[900px]:block max-[900px]:w-full max-[900px]:overflow-x-auto max-[900px]:border-b max-[900px]:border-r-0">
           <button
             type="button"
             onClick={() => setCreateOpen(true)}
@@ -256,49 +276,104 @@ export function MattersWorkspace(): React.ReactElement | null {
             <Plus size={15} />
             {t('matters.create.submit')}
           </button>
-          <nav className="space-y-1 max-[900px]:flex max-[900px]:min-w-max max-[900px]:space-x-1 max-[900px]:space-y-0">
-            {MATTER_VIEWS.map((value) => {
-              const count =
-                value === 'focus'
-                  ? 0
-                  : filterView(allMatters, value, attentionIndex, updateIndex).length
-              const critical =
-                value === 'attention' &&
-                attentionItems.some(
-                  (signal) => signal.state === 'open' && signal.severity === 'critical'
+          <div className="min-h-0 flex-1 overflow-y-auto scrollbar-none max-[900px]:overflow-visible">
+            <nav className="space-y-1 max-[900px]:flex max-[900px]:min-w-max max-[900px]:space-x-1 max-[900px]:space-y-0">
+              {MATTER_VIEWS.map((value) => {
+                const count =
+                  value === 'focus'
+                    ? 0
+                    : filterView(allMatters, value, attentionIndex, updateIndex).length
+                const critical =
+                  value === 'attention' &&
+                  attentionItems.some(
+                    (signal) => signal.state === 'open' && signal.severity === 'critical'
+                  )
+                return (
+                  <button
+                    key={value}
+                    type="button"
+                    onClick={() => {
+                      setView(value)
+                      selectMatter(null)
+                    }}
+                    className={cn(
+                      'relative flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-body max-[900px]:w-auto',
+                      (value === 'active' || value === 'all') &&
+                        'mt-2 border-t border-ink-border pt-3',
+                      view === value
+                        ? 'row-selected acc-select font-medium text-ink-fg'
+                        : critical
+                          ? 'text-fail hover:bg-fail/10'
+                          : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
+                    )}
+                  >
+                    {VIEW_ICONS[value]}
+                    <span className="min-w-0 flex-1">{t(`matters.views.${value}`)}</span>
+                    {count > 0 ? (
+                      <span
+                        className={cn('font-mono text-meta tabular-nums', critical && 'text-fail')}
+                      >
+                        {count}
+                      </span>
+                    ) : null}
+                  </button>
                 )
-              return (
-                <button
-                  key={value}
-                  type="button"
-                  onClick={() => {
-                    setView(value)
-                    selectMatter(null)
-                  }}
-                  className={cn(
-                    'relative flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-body max-[900px]:w-auto',
-                    (value === 'active' || value === 'all') &&
-                      'mt-2 border-t border-ink-border pt-3',
-                    view === value
-                      ? 'row-selected acc-select font-medium text-ink-fg'
-                      : critical
-                        ? 'text-fail hover:bg-fail/10'
-                        : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
-                  )}
-                >
-                  {VIEW_ICONS[value]}
-                  <span className="min-w-0 flex-1">{t(`matters.views.${value}`)}</span>
-                  {count > 0 ? (
-                    <span
-                      className={cn('font-mono text-meta tabular-nums', critical && 'text-fail')}
+              })}
+            </nav>
+
+            {/* 设计 `list.jsx::ViewRail` 第三段：有**使用中**标签才出现。计数与清单同口径
+                —— 用的是清单自己那支 `filterView`（live 且含该标签），不是 tags 端点的
+                `usage_count`（那个把归档事项也算进去，会与点进去看到的行数对不上）。
+                逐标签发请求是明令禁止的（列表性能铁律），这里全程零请求：`allMatters`
+                与 tag 定义都是工作台已有的两支查询。 */}
+            {tagViews.length > 0 ? (
+              <div className="mt-2 border-t border-ink-border pt-2">
+                <div className="flex items-center gap-1 px-2.5 pb-1 max-[900px]:hidden">
+                  <span className="flex-1 font-mono text-micro uppercase tracking-[0.08em] text-ink-fg-3">
+                    {t('matters.shell.tagsTitle')}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setTagManagerOpen(true)}
+                    aria-label={t('matters.tags.manage')}
+                    title={t('matters.tags.manage')}
+                    className="rounded-[var(--r-ctl)] p-1 text-ink-fg-3 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+                  >
+                    <Settings size={13} />
+                  </button>
+                </div>
+                <nav className="space-y-1 max-[900px]:flex max-[900px]:min-w-max max-[900px]:space-x-1 max-[900px]:space-y-0">
+                  {tagViews.map(({ tag, key, count }) => (
+                    <button
+                      key={tag.name}
+                      type="button"
+                      onClick={() => {
+                        setView(key)
+                        selectMatter(null)
+                      }}
+                      className={cn(
+                        'relative flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-2.5 py-2 text-left text-body max-[900px]:w-auto',
+                        view === key
+                          ? 'row-selected acc-select font-medium text-ink-fg'
+                          : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg'
+                      )}
                     >
-                      {count}
-                    </span>
-                  ) : null}
-                </button>
-              )
-            })}
-          </nav>
+                      <MatterTagMarker color={tag.color} shape={tag.shape} className="h-3.5 w-3.5" />
+                      <span className="min-w-0 flex-1 truncate">{tag.name}</span>
+                      <span className="font-mono text-meta tabular-nums">{count}</span>
+                    </button>
+                  ))}
+                </nav>
+              </div>
+            ) : null}
+          </div>
+
+          {/* 设计 `list.jsx:117-121` 的底部注脚：1px 上边线 + mono 两行。<900px 转横向条时
+              不渲染（两行说明塞进一条横带只会挤掉视图本身）。 */}
+          <div className="-mx-2 mt-auto shrink-0 border-t border-ink-border-soft px-3 pt-2 font-mono text-micro leading-[1.7] text-ink-fg-3 max-[900px]:hidden">
+            <div>{t('matters.shell.footnoteLocal')}</div>
+            <div>{t('matters.shell.footnoteRemote')}</div>
+          </div>
         </aside>
 
         <div className="min-w-0 flex-1">
@@ -439,6 +514,14 @@ export function MattersWorkspace(): React.ReactElement | null {
           setView('all')
           selectMatter(candidate.matter.public_id)
         }}
+      />
+
+      {/* 左轨标签分组的齿轮（design `list.jsx:92`）开的就是详情页那一个标签管理弹窗 —— 同
+          一份数据只有一个可写面。 */}
+      <MatterTagManagerModal
+        open={tagManagerOpen}
+        tags={tagItems}
+        onOpenChange={setTagManagerOpen}
       />
     </div>
   )

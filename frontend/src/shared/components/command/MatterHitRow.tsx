@@ -4,8 +4,15 @@ import DOMPurify, { type Config as DOMPurifyConfig } from 'dompurify'
 import { Briefcase } from 'lucide-react'
 
 import type { Matter } from '@shared/api/types/matter'
+import { MatterPip } from '@shared/components/matters/MatterPip'
+import {
+  MATTER_STATUS_ICONS,
+  MATTER_STATUS_TONES,
+  MATTER_TONE_TEXT_CLASS
+} from '@shared/components/matters/matterVocab'
 import { cn } from '@shared/lib/cn'
 import { highlightTerms } from '@shared/lib/highlight_terms'
+import { nextAction } from '@shared/lib/matterDerive'
 
 import { getMatterMatchDetails } from './paletteMatters'
 
@@ -34,6 +41,10 @@ export function MatterHitRow({
     [matter.title, queryTerms]
   )
   const { details, overflow } = getMatterMatchDetails(matter)
+  // G-26/G-35：命中行也给「这件事现在卡在哪」。清单端点的 `next_action` 投影随搜索结果
+  // 一起回来（⌘K 走的就是 `GET /matters?q=`），所以这里零额外请求。
+  const action = nextAction(matter)
+  const StatusIcon = MATTER_STATUS_ICONS[matter.status]
 
   return (
     <li
@@ -55,9 +66,20 @@ export function MatterHitRow({
             dangerouslySetInnerHTML={{ __html: titleHtml || matter.title }}
           />
           <span className="shrink-0 font-mono text-[10px] text-ink-fg-3">{matter.public_id}</span>
-          <span className="shrink-0 rounded-[var(--r-pill)] bg-ink-4 px-1.5 py-0.5 text-[10px] text-ink-fg-2">
+          {/* 中性灰药丸 → 与清单行 / 聚焦页同一颗语义 StatusChip（同状态三处同长相）。 */}
+          <MatterPip tone={MATTER_STATUS_TONES[matter.status]} icon={StatusIcon}>
             {t(`matters.status.${matter.status}`)}
-          </span>
+          </MatterPip>
+        </div>
+        <div
+          className={cn(
+            'mt-1 truncate text-meta',
+            action.tone === 'neutral' ? 'text-ink-fg-2' : MATTER_TONE_TEXT_CLASS[action.tone]
+          )}
+        >
+          {action.title !== null
+            ? t(`matters.nextAction.${action.kind}`, { title: action.title })
+            : t(`matters.nextAction.${action.kind}`)}
         </div>
         {details.length > 0 ? (
           <div className="mt-1.5 space-y-1">

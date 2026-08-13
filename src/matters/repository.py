@@ -15,6 +15,27 @@ from .models import (
 )
 from .resource_identity import parse_resource_key
 
+#: 「下一步」的档位表（越小越优先）。值域与前端 `matterDerive.MatterNextActionKind` 的
+#: 条目那三档同名 —— 状态派生的 monitoring / done / missing 三档不在这里（见
+#: `MatterRepository.list_next_action_summaries` 的说明）。
+#: 🔴 blocker 在 schema 上恒 `status IS NULL`（`matter_item` 的 CHECK 约束只允许 action
+#: 带 status），所以这里不判 blocker 的 status —— 判了也永远为真，只会让人以为它有状态机。
+_NEXT_ACTION_RANKS: tuple[tuple[int, str, str, frozenset[str] | None], ...] = (
+    (0, "action", "action", frozenset({"open", "in_progress"})),
+    (1, "waiting", "action", frozenset({"waiting"})),
+    (2, "blocker", "blocker", None),
+)
+
+
+def _next_action_rank(kind: str, status: Any) -> tuple[int, str] | None:
+    for rank, next_kind, item_kind, statuses in _NEXT_ACTION_RANKS:
+        if kind != item_kind:
+            continue
+        if statuses is not None and str(status or "") not in statuses:
+            continue
+        return rank, next_kind
+    return None
+
 
 class MatterRepository:
     def __init__(self, db_path: str | Path):
@@ -319,6 +340,57 @@ class MatterRepository:
                 )
             summaries[int(row["matter_id"])] = (preview, count + 1)
         return summaries
+
+    def list_next_action_summaries(
+        self,
+        conn: sqlite3.Connection,
+        matter_ids: list[int],
+    ) -> dict[int, dict[str, Any]]:
+        """清单行「下一步」的**批量**投影（design `list.jsx::nextAction` 的条目那一段）。
+
+        🔴 存在的理由：列表端点不返回 `items`，于是前端的 `nextAction()` 在清单里恒落到
+        「缺少下一步」兜底 —— 一屏事项全在喊自己没有下一步，而详情页打开就有。Focus 页的
+        「健康活跃率」同源（`hasNextAction`），跟着一起失真。
+
+        🔴 优先级与前端 `matterDerive.nextAction` **逐条对齐**（同一份语义在两处实现，改一处
+        必改另一处）：可执行 action（open/in_progress）> 等待中 action（waiting）> 未完成
+        blocker；同级取 `position, id` 靠前的那条 —— 与详情端点列条目的排序同口径，免得
+        清单说的下一步和详情列表第一条对不上。三档都没有 ⇒ 不产出这个键，前端按事项**状态**
+        自己派生（监控中 / 已完成 / 缺少下一步），那部分留在前端单源。
+
+        🔴 一次查询覆盖整页事项，绝不按行发请求（`list_stakeholder_summaries` 同一条列表
+        性能铁律，`frontend/ARCHITECTURE.md` §7.1-7.2）。
+        """
+        if not matter_ids:
+            return {}
+        placeholders = ", ".join("?" for _ in matter_ids)
+        rows = conn.execute(
+            "SELECT matter_id,kind,status,title,due_at FROM matter_item "
+            f"WHERE matter_id IN ({placeholders}) AND deleted_at IS NULL "
+            "AND kind IN ('action','blocker') "
+            "ORDER BY matter_id, position, id",
+            tuple(matter_ids),
+        ).fetchall()
+        best: dict[int, tuple[int, dict[str, Any]]] = {}
+        for row in rows:
+            ranked = _next_action_rank(str(row["kind"]), row["status"])
+            if ranked is None:
+                continue
+            rank, kind = ranked
+            matter_id = int(row["matter_id"])
+            current = best.get(matter_id)
+            # `<=` ⇒ 同档保留先遇到的那条（rows 已按 position,id 排序）。
+            if current is not None and current[0] <= rank:
+                continue
+            best[matter_id] = (
+                rank,
+                {
+                    "kind": kind,
+                    "title": row["title"],
+                    "due_at": row["due_at"],
+                },
+            )
+        return {matter_id: value for matter_id, (_, value) in best.items()}
 
     def list_tags(self, conn: sqlite3.Connection) -> list[dict[str, Any]]:
         rows = conn.execute(

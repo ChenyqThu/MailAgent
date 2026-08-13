@@ -17,7 +17,7 @@ const QUICK_PROMPT_KEYS = ['status', 'nextStep', 'draftFollowup', 'updateSummary
 /** 事项快捷 prompt —— 位置与全局面板的快捷动作一致（AgentThread 的 quickActions 槽），
  *  只是换成事项这一组。autoSend 走 thread（绕过 composer form），因此与全局快捷动作一样
  *  遵守同一条 sendDisabled 闸。 */
-export function MatterQuickPrompts({ contextCount }: { contextCount: number }): React.JSX.Element {
+export function MatterQuickPrompts(): React.JSX.Element {
   const { t } = useTranslation()
   const controls = useChatComposerControls()
   const sendDisabled = controls?.sendDisabled === true
@@ -42,9 +42,6 @@ export function MatterQuickPrompts({ contextCount }: { contextCount: number }): 
           )
         })}
       </div>
-      <p className="text-meta text-ink-fg-3">
-        {t('matters.chat.empty.hint', { count: contextCount })}
-      </p>
     </div>
   )
 }

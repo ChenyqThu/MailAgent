@@ -296,6 +296,17 @@ export interface Matter {
   stakeholder_summary?: MatterStakeholderSummary[]
   /** 上面那份预览截断前的总数 —— 头像组的 `+N` 靠它，别拿 `stakeholder_summary.length` 当总数。 */
   stakeholder_count?: number
+  /** 清单行「下一步」的条目投影，**仅 `GET /matters` 产出**（详情有 `items` 可就地算）。
+   *  `null` = 三档条目都没有；缺键 = 老后端没这个投影（两者在 `nextAction` 里同样 fail-soft）。 */
+  next_action?: MatterNextActionItem | null
+}
+
+/** 清单端点的「下一步」投影（canonical: `src/matters/repository.py::list_next_action_summaries`；
+ *  消费与优先级同表在 `shared/lib/matterDerive.ts::itemNextAction`）。 */
+export interface MatterNextActionItem {
+  kind: 'action' | 'waiting' | 'blocker'
+  title: string
+  due_at: number | null
 }
 
 /** 清单端点的批量干系人投影（canonical: `src/matters/repository.py::list_stakeholder_summaries`）。 */

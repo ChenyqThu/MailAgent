@@ -37,6 +37,7 @@ import { GeneralTab } from './tabs/GeneralTab'
 import { IntegrationsTab } from './tabs/IntegrationsTab'
 import { IslandUpdatesTab } from './tabs/IslandUpdatesTab'
 import { LabsTab } from './tabs/LabsTab'
+import { MattersTab } from './tabs/MattersTab'
 import { NotificationsTab } from './tabs/NotificationsTab'
 import { RealtimeStorageTab } from './tabs/RealtimeStorageTab'
 import { RemoteAccessTab } from './tabs/RemoteAccessTab'
@@ -156,6 +157,9 @@ export function SettingsShell(): React.ReactElement {
             </TabsContent>
             <TabsContent value="connectors" className="h-full min-h-0">
               <ConnectorsTab />
+            </TabsContent>
+            <TabsContent value="matters">
+              <MattersTab />
             </TabsContent>
             <TabsContent value="notifications">
               <NotificationsTab />

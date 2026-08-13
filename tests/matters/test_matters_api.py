@@ -294,3 +294,133 @@ def test_list_projects_bounded_stakeholder_summary_in_one_batch(client):
     blank = by_id[empty["matter"]["public_id"]]
     assert blank["stakeholder_summary"] == []
     assert blank["stakeholder_count"] == 0
+
+
+def test_list_projects_next_action_in_one_batch(client):
+    """清单端点的「下一步」投影（design `list.jsx` 行 2）。
+
+    钉四件事：① 优先级 action(open/in_progress) > action(waiting) > blocker
+    ② 同档取 `position, id` 靠前的那条 ③ 三档都没有 ⇒ `next_action` 为 None（状态派生
+    的 monitoring/done/missing 留给前端单源）④ 一次列表调用就把整页算完（不按行发请求）。
+    """
+    http, _ = client
+
+    def make(title: str, key: str) -> tuple[str, int]:
+        payload = http.post(
+            "/api/matters", json={"title": title, "mutation": _mutation(key)}
+        ).json()["data"]
+        return payload["matter"]["public_id"], payload["version"]
+
+    def add_item(public_id: str, version: int, key: str, **item: object) -> int:
+        response = http.post(
+            f"/api/matters/{public_id}/items",
+            json={**item, "mutation": _mutation(key, version)},
+        )
+        assert response.status_code == 201, response.text
+        return int(response.json()["data"]["version"])
+
+    # ① 三档同时在场 —— 必须挑出可执行的那条，而不是排在更前面的 blocker。
+    mixed, version = make("Mixed", "na-mixed")
+    version = add_item(mixed, version, "na-mixed-blk", kind="blocker", title="Blocked", position=0)
+    version = add_item(
+        mixed, version, "na-mixed-wait", kind="action", title="Waiting", status="waiting", position=1
+    )
+    version = add_item(
+        mixed,
+        version,
+        "na-mixed-ready",
+        kind="action",
+        title="Ready",
+        status="in_progress",
+        position=2,
+        due_at=1_800_000_000_000,
+    )
+
+    # ② 同档两条 —— 取 position 靠前的。
+    ordered, version = make("Ordered", "na-ordered")
+    version = add_item(
+        ordered, version, "na-ordered-b", kind="action", title="Second", status="open", position=5
+    )
+    version = add_item(
+        ordered, version, "na-ordered-a", kind="action", title="First", status="open", position=1
+    )
+
+    # 等待档只在没有可执行 action 时才出头。
+    waiting, version = make("Waiting", "na-waiting")
+    version = add_item(
+        waiting, version, "na-waiting-done", kind="action", title="Done", status="done", position=0
+    )
+    version = add_item(
+        waiting, version, "na-waiting-w", kind="action", title="Ping Bob", status="waiting", position=1
+    )
+
+    # ③ 只有 note ⇒ 三档都不命中。
+    barren, version = make("Barren", "na-barren")
+    version = add_item(barren, version, "na-barren-note", kind="note", title="FYI")
+
+    by_id = {item["public_id"]: item for item in http.get("/api/matters").json()["data"]["items"]}
+    assert by_id[mixed]["next_action"] == {
+        "kind": "action",
+        "title": "Ready",
+        "due_at": 1_800_000_000_000,
+    }
+    assert by_id[ordered]["next_action"]["title"] == "First"
+    assert by_id[waiting]["next_action"] == {
+        "kind": "waiting",
+        "title": "Ping Bob",
+        "due_at": None,
+    }
+    assert by_id[barren]["next_action"] is None
+
+
+def test_next_action_falls_back_to_blocker_and_skips_deleted(client):
+    """blocker 是最后一档；软删的条目不参与（清单不能拿删掉的行当下一步）。"""
+    http, _ = client
+    created = http.post(
+        "/api/matters", json={"title": "Blocked", "mutation": _mutation("na-blk")}
+    ).json()["data"]
+    public_id = created["matter"]["public_id"]
+    version = created["version"]
+
+    action = http.post(
+        f"/api/matters/{public_id}/items",
+        json={
+            "kind": "action",
+            "title": "Doomed",
+            "status": "open",
+            "position": 0,
+            "mutation": _mutation("na-blk-act", version),
+        },
+    ).json()["data"]
+    version = action["version"]
+    blocker = http.post(
+        f"/api/matters/{public_id}/items",
+        json={
+            "kind": "blocker",
+            "title": "Legal review",
+            "position": 1,
+            "mutation": _mutation("na-blk-blk", version),
+        },
+    )
+    assert blocker.status_code == 201
+    version = blocker.json()["data"]["version"]
+
+    listed = http.get("/api/matters").json()["data"]["items"]
+    assert next(row for row in listed if row["public_id"] == public_id)["next_action"]["kind"] == (
+        "action"
+    )
+
+    item_id = action["item"]["id"]
+    removed = http.request(
+        "DELETE",
+        f"/api/matters/{public_id}/items/{item_id}",
+        json={"mutation": _mutation("na-blk-del", version)},
+    )
+    assert removed.status_code == 200, removed.text
+
+    listed = http.get("/api/matters").json()["data"]["items"]
+    assert next(row for row in listed if row["public_id"] == public_id)["next_action"] == {
+        "kind": "blocker",
+        "title": "Legal review",
+        "due_at": None,
+    }

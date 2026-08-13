@@ -2,6 +2,7 @@ import type {
   Matter,
   MatterAttentionSignal,
   MatterItem,
+  MatterNextActionItem,
   MatterPriority,
   MatterUpdateSummary
 } from '@shared/api/types/matter'
@@ -20,7 +21,23 @@ export const MATTER_VIEWS = [
   'archived',
   'trash'
 ] as const
-export type MatterView = (typeof MATTER_VIEWS)[number]
+/** 左轨那 12 档固定视图。 */
+export type MatterBuiltinView = (typeof MATTER_VIEWS)[number]
+/** 标签筛选视图（design `list.jsx::ViewRail` 第三段的 `tag:x`）。标签的身份就是它的名字
+ *  （`matter_tag.name` 是主键，没有独立 id），所以 key 里带的也是名字。 */
+export type MatterTagView = `tag:${string}`
+export type MatterView = MatterBuiltinView | MatterTagView
+
+const TAG_VIEW_PREFIX = 'tag:'
+
+export function matterTagView(name: string): MatterTagView {
+  return `${TAG_VIEW_PREFIX}${name}`
+}
+
+/** 视图 key → 标签名；非标签视图给 null。名字里可以再有冒号，所以只切前缀不 split。 */
+export function matterTagViewName(view: MatterView): string | null {
+  return view.startsWith(TAG_VIEW_PREFIX) ? view.slice(TAG_VIEW_PREFIX.length) : null
+}
 
 const PRIORITY_RANK: Record<MatterPriority, number> = { p0: 0, p1: 1, p2: 2, p3: 3 }
 
@@ -52,6 +69,9 @@ export function filterView(
   }
 
   const live = matters.filter(isLiveMatter)
+  // design `list.jsx::filterView`：`tag:x` = live 且含该标签（归档/回收站里的不算）。
+  const tagName = matterTagViewName(view)
+  if (tagName !== null) return live.filter((matter) => matter.tags.includes(tagName))
   if (view === 'attention')
     return live.filter((matter) => openAttentionFor(matter, attention).length > 0)
   if (view === 'review')
@@ -102,24 +122,16 @@ export function compareMatterRank(
  * 而且没有任何测试会红。语义单源放这里，文案只负责展示。 */
 export function hasNextAction(
   matter: Matter,
-  items: readonly MatterItem[] = matter.items ?? []
+  items: readonly MatterItem[] | null = matter.items ?? null
 ): boolean {
-  const actions = items.filter((item) => item.kind === 'action' && item.deleted_at === null)
-  if (actions.some((item) => item.status === 'open' || item.status === 'in_progress')) return true
-  if (actions.some((item) => item.status === 'waiting')) return true
-  if (
-    items.some(
-      (item) => item.kind === 'blocker' && item.deleted_at === null && item.status !== 'done'
-    )
-  )
-    return true
+  if (itemNextAction(matter, items) !== null) return true
   return matter.status === 'monitoring' || matter.status === 'done'
 }
 
+/** 条目那三档直接取 wire 契约（`MatterNextActionItem['kind']`），不再手抄一份字面量；
+ *  后三档是**纯前端**的状态派生，服务端不产出。 */
 export type MatterNextActionKind =
-  | 'action'
-  | 'waiting'
-  | 'blocker'
+  | MatterNextActionItem['kind']
   | 'monitoring'
   | 'done'
   | 'missing'
@@ -136,22 +148,48 @@ export interface MatterNextActionDescriptor {
   tone: 'neutral' | 'warn' | 'critical'
 }
 
-export function nextAction(
+const NEXT_ACTION_ITEM_TONES: Record<
+  MatterNextActionItem['kind'],
+  MatterNextActionDescriptor['tone']
+> = { action: 'neutral', waiting: 'warn', blocker: 'critical' }
+
+/** 「下一步」里由**条目**决定的那三档。
+ *
+ * 🔴 两个数据形态：详情页手里有 `items` ⇒ 就地算；清单行没有（`GET /matters` 不返回
+ * items）⇒ 吃服务端投影 `matter.next_action`（canonical =
+ * `src/matters/repository.py::list_next_action_summaries`，优先级与下面这段**逐条同表**，
+ * 改一处必须改另一处）。少了投影这一路，清单里每一行都会落到「缺少下一步」兜底，Focus
+ * 的健康活跃率也跟着一起失真（它与本函数同源）。
+ *
+ * `items === null` 才代表「这一层没有条目数据」；显式传 `[]` 是「确实一条都没有」，仍就地算。
+ * 老后端不发这个键 ⇒ `undefined` ⇒ 与投影前行为一致（fail-soft，不猜）。 */
+function itemNextAction(
   matter: Matter,
-  items: readonly MatterItem[] = matter.items ?? []
-): MatterNextActionDescriptor {
+  items: readonly MatterItem[] | null
+): MatterNextActionItem | null {
+  if (items === null) return matter.next_action ?? null
   const actions = items.filter((item) => item.kind === 'action' && item.deleted_at === null)
   const ready = actions.find((item) => item.status === 'open' || item.status === 'in_progress')
-  if (ready) return { kind: 'action', title: ready.title, tone: 'neutral' }
+  if (ready) return { kind: 'action', title: ready.title, due_at: ready.due_at ?? null }
 
   const waiting = actions.find((item) => item.status === 'waiting')
-  if (waiting) return { kind: 'waiting', title: waiting.title, tone: 'warn' }
+  if (waiting) return { kind: 'waiting', title: waiting.title, due_at: waiting.due_at ?? null }
 
   const blocker = items.find(
     (item) => item.kind === 'blocker' && item.deleted_at === null && item.status !== 'done'
   )
-  if (blocker) return { kind: 'blocker', title: blocker.title, tone: 'critical' }
+  if (blocker) return { kind: 'blocker', title: blocker.title, due_at: blocker.due_at ?? null }
+  return null
+}
 
+export function nextAction(
+  matter: Matter,
+  items: readonly MatterItem[] | null = matter.items ?? null
+): MatterNextActionDescriptor {
+  const item = itemNextAction(matter, items)
+  if (item !== null) {
+    return { kind: item.kind, title: item.title, tone: NEXT_ACTION_ITEM_TONES[item.kind] }
+  }
   if (matter.status === 'monitoring') return { kind: 'monitoring', title: null, tone: 'neutral' }
   if (matter.status === 'done') return { kind: 'done', title: null, tone: 'neutral' }
   return { kind: 'missing', title: null, tone: 'warn' }

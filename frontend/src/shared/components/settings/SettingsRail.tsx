@@ -19,6 +19,7 @@ import {
   BellIcon,
   BlocksIcon,
   BotMessageSquareIcon,
+  BriefcaseBusinessIcon,
   ConnectIcon,
   FlaskConicalIcon,
   RadioIcon,
@@ -28,6 +29,7 @@ import {
   UserIcon,
   WifiIcon
 } from '@shared/components/icons'
+import { useMattersEnabled } from '@shared/components/matters/hooks'
 import { useUpdaterStore } from '@shared/state/updater'
 
 interface TabEntry {
@@ -44,6 +46,9 @@ const TAB_ORDER: TabEntry[] = [
   { value: 'sync', Icon: RefreshCwIcon, labelKey: 'settings.tabs.sync' },
   { value: 'ai', Icon: BotMessageSquareIcon, labelKey: 'settings.tabs.ai' },
   { value: 'connectors', Icon: SlidersHorizontalIcon, labelKey: 'settings.tabs.connectors' },
+  // 设计补充规格 §4/§5「设置 → 事项」。事项模块自己有灰度开关，关掉时整个 tab 不渲染 ——
+  // 一个只会告诉你「功能没开」的设置页不值得占一格 nav。
+  { value: 'matters', Icon: BriefcaseBusinessIcon, labelKey: 'settings.tabs.matters' },
   { value: 'notifications', Icon: BellIcon, labelKey: 'settings.tabs.notifications' },
   { value: 'integrations', Icon: ConnectIcon, labelKey: 'settings.tabs.integrations' },
   { value: 'realtime', Icon: WifiIcon, labelKey: 'settings.tabs.realtime' },
@@ -86,6 +91,11 @@ function SettingsTabTrigger({
 export function SettingsRail(): React.ReactElement {
   const { t } = useTranslation()
   const version = useUpdaterStore((s) => s.status.currentVersion)
+  const mattersEnabled = useMattersEnabled()
+  const tabs = React.useMemo(
+    () => TAB_ORDER.filter((tab) => tab.value !== 'matters' || mattersEnabled),
+    [mattersEnabled]
+  )
 
   return (
     <aside
@@ -108,7 +118,7 @@ export function SettingsRail(): React.ReactElement {
             到最长 tab 文字, 选中/hover bg 因此窄于 rail). review round 10 —
             修复 rail +20px 后 active bg 仍贴左半边的视觉. */}
         <TabsList className="flex flex-row md:flex-col items-stretch gap-px bg-transparent p-0 w-full">
-          {TAB_ORDER.map(({ value, Icon, labelKey }) => (
+          {tabs.map(({ value, Icon, labelKey }) => (
             <SettingsTabTrigger
               key={value}
               value={value}
