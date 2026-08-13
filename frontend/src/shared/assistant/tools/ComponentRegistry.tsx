@@ -192,17 +192,13 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
   // undo — but only inside the Matter Chat panel (MatterChatSurfaceContext); everywhere else it
   // falls through to ToolTraceCard byte-identically.
   //
-  // 🔴 KNOWN GAP — the list below is SEVEN, but there are NINE matter write tools: P4's
-  // matter_run_control / matter_review_update were added to MatterWriteCard's WRITE_LABELLED_TOOLS
-  // and to matters.chat.writeLabels (both locales) but never here, so the card never mounts for
-  // them. That is the v1.5.0 / 阶段 0.5-① G9 bug a third time, and matter_review_update is the
-  // load-bearing one: tool_prefs.py ships it `ask` with configurable=False (a floor an owner
-  // cannot lower), so a manual-chat accept that touches a `field` ALWAYS pauses — and with no
-  // card it pauses onto the buttonless ToolTraceCard (permanent spinner, island-only approve),
-  // against the standing 「审批以无岛方案优先」 position. matter_run_control ships `auto` so it
-  // only bites once an owner sets it to `ask`. Adding the two names here is a behaviour change
-  // (new cards start rendering), so it is deliberately NOT bundled with the comment-only pass
-  // that wrote this note — it is tracked as its own task.
+  // 🔴 This list must stay equal to GATEWAY_MATTER_WRITE_TOOL_NAMES (ai-gateway/tools/matters.ts),
+  // the gateway's own definition of the write family — pinned by ComponentRegistry.test.tsx. It
+  // drifted once: P4's matter_run_control / matter_review_update were added there (and to
+  // WRITE_LABELLED_TOOLS + both locales) but not here, so the card never mounted for them and
+  // matter_review_update — which tool_prefs.py ships `ask` with configurable=False, a floor an
+  // owner cannot lower — paused onto the buttonless ToolTraceCard. That was the v1.5.0 / 阶段
+  // 0.5-① G9 bug a third time; the gate exists so there is no fourth.
   {
     component: A2UI_COMPONENTS.MatterWriteCard,
     toolNames: [
@@ -212,7 +208,10 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
       'matter_resource_mutate',
       'matter_stakeholder_mutate',
       'matter_relation_mutate',
-      'matter_add_note'
+      'matter_add_note',
+      // P4 (D8) — the review-side pair.
+      'matter_run_control',
+      'matter_review_update'
     ],
     render: MatterWriteCard
   }

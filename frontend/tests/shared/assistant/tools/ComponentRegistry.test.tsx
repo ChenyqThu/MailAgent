@@ -21,6 +21,7 @@ import { ToolTraceCard } from '@shared/assistant/tools/generic/ToolTraceCard'
 import { McpToolFallback } from '@shared/assistant/tools/generic/McpApprovalCard'
 import { SuggestFollowupsHiddenPart } from '@shared/assistant/components/FollowupSuggestions'
 import { SUGGEST_FOLLOWUPS_TOOL_NAME } from '@shared/assistant/followups'
+import { GATEWAY_MATTER_WRITE_TOOL_NAMES } from '../../../../src/ai-gateway/tools/matters'
 
 afterEach(() => {
   vi.unstubAllEnvs()
@@ -84,13 +85,15 @@ describe('componentRegistry — resolution', () => {
       'email_resync',
       'file_read',
       'file_write',
-      // Matters MVP P3 — the 7 matter write tools share MatterWriteCard (approval → real
+      // Matters MVP P3 + P4 — the 9 matter write tools share MatterWriteCard (approval → real
       // approve/reject; completed → the write receipt, but only inside the Matter Chat panel).
       'matter_add_note',
       'matter_create',
       'matter_item_mutate',
       'matter_relation_mutate',
       'matter_resource_mutate',
+      'matter_review_update',
+      'matter_run_control',
       'matter_stakeholder_mutate',
       'matter_update',
       'notion_agent_chat',
@@ -123,6 +126,26 @@ describe('componentRegistry — resolution', () => {
       'SkillUninstallCard',
       'SystemDocApprovalCard'
     ])
+  })
+
+  // 🔴 Anti-regression gate for the bug this file's matter list carried from P4 to 2026-08-12:
+  // matter_run_control / matter_review_update existed in the gateway's write family but were never
+  // registered here, so their approval-paused parts fell onto the BUTTONLESS ToolTraceCard —
+  // permanent spinner, island-only approve. Third occurrence of the v1.5.0 / 阶段 0.5-① G9 class.
+  //
+  // The judge is GATEWAY_MATTER_WRITE_TOOL_NAMES — the gateway's OWN definition of the family —
+  // deliberately not MatterWriteCard's WRITE_LABELLED_TOOLS and not a hardcoded count: the card's
+  // set is itself a mirror, so a tenth tool that misses BOTH mirrors would keep a set-based gate
+  // green, which is exactly the shape that produced this bug. Adding a write tool to the gateway
+  // now turns this red until it has a card.
+  test('every gateway matter write tool resolves to the one MatterWriteCard instance', () => {
+    expect(GATEWAY_MATTER_WRITE_TOOL_NAMES.length).toBeGreaterThan(0)
+    const card = componentRegistry.resolve(GATEWAY_MATTER_WRITE_TOOL_NAMES[0])
+    expect(card).toBeTypeOf('function')
+    expect(card).not.toBe(ToolTraceCard)
+    for (const name of GATEWAY_MATTER_WRITE_TOOL_NAMES) {
+      expect(componentRegistry.resolve(name), `${name} has no registered card`).toBe(card)
+    }
   })
 
   test('the three calendar write tools share one component instance (CalendarApprovalCard)', () => {

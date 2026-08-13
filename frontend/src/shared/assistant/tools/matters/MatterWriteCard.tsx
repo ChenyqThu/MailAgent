@@ -12,11 +12,11 @@
 //   everything else (done in普通 chat, authorized, error) → the generic ToolTraceCard, byte-identical
 //       to what these tools rendered before this card existed.
 //
-// 🔴 9 is THIS CARD's vocabulary (WRITE_LABELLED_TOOLS below + the 9 matters.chat.writeLabels keys
-// in both locales). ComponentRegistry registers it for only SEVEN — matter_run_control /
-// matter_review_update (P4) were never added there, so this card never mounts for those two and
-// they still take the buttonless fall-through described above. See the 🔴 note at the registration
-// entry; fixing it is a behaviour change, tracked separately.
+// 🔴 The 9 are GATEWAY_MATTER_WRITE_TOOL_NAMES (ai-gateway/tools/matters.ts) — the gateway's own
+// write family. Three places mirror it: ComponentRegistry's toolNames (pinned by
+// ComponentRegistry.test.tsx), WRITE_LABELLED_TOOLS below, and matters.chat.writeLabels in both
+// locales. Adding a write tool means touching all three; missing the registry one is what left
+// matter_run_control / matter_review_update card-less from P4 until 2026-08-12.
 //
 // 🔴 The receipt's headline describes THE WRITE, keyed off the tool name (matters.chat.writeLabels).
 // It deliberately does NOT use `undo.label`: the service builds that label to name the REVERSE
