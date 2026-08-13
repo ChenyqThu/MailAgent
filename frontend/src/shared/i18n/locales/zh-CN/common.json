@@ -5013,6 +5013,7 @@
       "matter_updated_plain": "更新了事项",
       "agent_binding_changed": "调整了跟进 Agent 的配置",
       "item_created": "新增{kind}{title}",
+      "item_created_kind": "新增{kind}",
       "item_created_plain": "新增了一个条目",
       "item_updated": "{kind}{title}：{changes}",
       "item_updated_untitled": "条目{changes}",
@@ -5088,7 +5089,12 @@
         "attention_opened": "出现了 {count} 个关注信号"
       },
       "expand": "展开 {count} 条明细",
-      "collapse": "收起明细"
+      "collapse": "收起明细",
+      "body": {
+        "expand": "展开全文",
+        "collapse": "收起",
+        "truncated": "此处只是摘录，完整内容见事项本身"
+      }
     },
     "eventField": {
       "title": "标题",

@@ -84,6 +84,7 @@ from .event_changes import (
     MATTER_CHANGE_FIELDS,
     STAKEHOLDER_CHANGE_FIELDS,
     build_changes,
+    build_narrative,
     truncated_text,
 )
 from .events import (
@@ -1031,6 +1032,15 @@ class MatterService:
                 )
                 event_ids.append(event_id)
             else:
+                plain_changes = build_changes(
+                    plain_fields, matter, after, allowed=MATTER_CHANGE_FIELDS
+                )
+                # 叙述正文只跟着 `current_summary` 走，判据是**它真的变了**（`changes`
+                # 里有这一条）——「摘要原样重写一遍」不产出 change，也就不该在时间线上
+                # 多出一段正文。
+                summary_rewritten = any(
+                    entry["field"] == "current_summary" for entry in plain_changes
+                )
                 event_id = self._append_event(
                     conn,
                     matter_id=matter["id"],
@@ -1040,12 +1050,12 @@ class MatterService:
                     dedupe_key=dedupe_key,
                     reason=reason,
                     update_id=update_id,
-                    payload={
-                        "fields": plain_fields,
-                        "changes": build_changes(
-                            plain_fields, matter, after, allowed=MATTER_CHANGE_FIELDS
-                        ),
-                    },
+                    payload=self._with_narrative(
+                        {"fields": plain_fields, "changes": plain_changes},
+                        (after or {}).get("current_summary")
+                        if summary_rewritten
+                        else None,
+                    ),
                     happened_at=now,
                     reverses_event_id=reverses_event_id,
                 )
@@ -1187,13 +1197,14 @@ class MatterService:
                 # stale base 也不构成冲突（auto-rebase）。
                 scope=SCOPE_NOTHING,
             )
+            description = self._optional_text(data.get("description"))
             item_id = self.repository.insert_item(
                 conn,
                 {
                     "matter_id": matter["id"],
                     "kind": kind,
                     "title": title,
-                    "description": self._optional_text(data.get("description")),
+                    "description": description,
                     "position": int(data.get("position") or 0),
                     **normalized,
                     "created_by_kind": actor.kind,
@@ -1213,7 +1224,17 @@ class MatterService:
                 reason=reason,
                 item_id=item_id,
                 # title = 句子必需的标识（"新增待解问题「…」"）；光有 item_id 写不出来。
-                payload={"kind": kind, "title": truncated_text(title)},
+                payload=self._with_narrative(
+                    {"kind": kind, "title": truncated_text(title)},
+                    # 🔴 只有**备注**是叙述类：它的全部意义就是那段正文。行动项/待解问题的
+                    # description 是背景说明，进时间线只会把「新增了什么」这句话淹掉。
+                    # 取 description 优先、退回 title：`POST /notes` 在没给标题时把正文
+                    # 同时写进两处（`title = body.title or body.text`），两边都得能取到全文
+                    # —— payload 里的 title 已经被截到 120 字，它当不了正文。
+                    (description or title)
+                    if kind == MatterItemKind.NOTE.value
+                    else None,
+                ),
                 happened_at=now,
                 reverses_event_id=reverses_event_id,
             )
@@ -3078,10 +3099,17 @@ class MatterService:
                     dedupe_key=dedupe_key,
                     reason=reason,
                     update_id=update_id,
-                    payload={
-                        "update_id": update_id,
-                        "accepted_change_ids": selected,
-                    },
+                    payload=self._with_narrative(
+                        {
+                            "update_id": update_id,
+                            "accepted_change_ids": selected,
+                        },
+                        # 接受提案是**跟进的成果落地**，最该有正文的一条。落库的是
+                        # `resolved_summary`（owner 编辑过就用编辑后的），与写进
+                        # `current_summary` 的完全是同一段 —— 这段不进时间线时，
+                        # 用户只看得到「采纳 3 项」这个数字。
+                        resolved_summary,
+                    ),
                     happened_at=now,
                     reverses_event_id=reverses_event_id,
                 )
@@ -4424,6 +4452,19 @@ class MatterService:
             "usage_count": 0,
             "inferred": True,
         }
+
+    @staticmethod
+    def _with_narrative(payload: dict[str, Any], text: Any) -> dict[str, Any]:
+        """给**叙述类**事件的 payload 挂上正文摘录（`narrative` 键；见 event_changes 模块）。
+
+        写不出正文（None / 空串 / 非字符串）时原样返回 —— 键**不出现**，前端按存量老行
+        的路径退化成原来的短句。三个调用点就是全部的叙述类事件，别在别处顺手调它：
+        「不是所有事件都要长文」是这次改动的判据，不是省下来的工作量。
+        """
+        narrative = build_narrative(text)
+        if narrative is not None:
+            payload["narrative"] = narrative
+        return payload
 
     def _append_event(
         self,

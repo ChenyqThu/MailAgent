@@ -14,8 +14,10 @@ import {
   groupTimelineEvents,
   matterEventTier,
   narrateEvent,
+  narrateGroupEntries,
   narrateTimelineGroup,
   readChanges,
+  readNarrative,
   type Translate
 } from '@shared/components/matters/matterTimelineModel'
 import zh from '../../src/shared/i18n/locales/zh-CN/common.json'
@@ -266,6 +268,174 @@ describe('叙述句的具体形态', () => {
     )
     expect(sentence.text).toBe('拒绝了更新提案')
     expect(sentence.detail).toBe('证据不足，等合规回执再说')
+  })
+})
+
+// ---------------------------------------------------------------------------
+// 事件正文（0813 轮 3）
+//
+// owner：「进展仍然像操作日志」。此前时间线上**只有**「谁改了哪个字段」——longText
+// 形态有意只出「改写了当前状态摘要」，正文一个字都不上时间线。这一组钉死：叙述类
+// 事件带正文、技术类不带、存量老行优雅退化。
+// ---------------------------------------------------------------------------
+describe('事件正文（narrative）', () => {
+  const PROSE = '对方法务已回签补充协议，卡在我方财务开票；下一步 8/15 前把发票寄出。'
+
+  it('摘要改写带正文 —— 主句仍是「改写了…」，正文在 body 上', () => {
+    const sentence = narrateEvent(
+      ev({
+        kind: 'matter_updated',
+        payload: {
+          fields: ['current_summary'],
+          changes: [{ field: 'current_summary', from: '旧摘要', to: PROSE }],
+          narrative: { text: PROSE }
+        }
+      }),
+      t
+    )
+    expect(sentence.text).toBe('改写了当前状态摘要')
+    expect(sentence.body).toEqual({ text: PROSE, truncated: false })
+  })
+
+  it('提案采纳带被采纳的正文 —— 不再只有「采纳 N 项」这个数字', () => {
+    const sentence = narrateEvent(
+      ev({
+        kind: 'update_accepted',
+        actor_kind: 'agent' as MatterActorKind,
+        payload: {
+          update_id: 7,
+          accepted_change_ids: ['c1', 'c2'],
+          narrative: { text: PROSE }
+        }
+      }),
+      t
+    )
+    expect(sentence.text).toBe('接受了更新提案 · 采纳 2 项')
+    expect(sentence.body?.text).toBe(PROSE)
+  })
+
+  it('备注：标题是正文的前缀时不引用两遍，只说「新增备注」', () => {
+    // `POST /notes` 不给标题时 title = 正文的前 120 字（两次不同截断、同一个源串）。
+    const sentence = narrateEvent(
+      ev({
+        kind: 'item_created',
+        payload: { kind: 'note', title: PROSE.slice(0, 12), narrative: { text: PROSE } }
+      }),
+      t
+    )
+    expect(sentence.text).toBe('新增备注')
+    expect(sentence.body?.text).toBe(PROSE)
+  })
+
+  it('备注有独立标题时标题照旧进句子，正文另起一块', () => {
+    const sentence = narrateEvent(
+      ev({
+        kind: 'item_created',
+        payload: { kind: 'note', title: '8/12 电话纪要', narrative: { text: PROSE } }
+      }),
+      t
+    )
+    expect(sentence.text).toBe('新增备注「8/12 电话纪要」')
+    expect(sentence.body?.text).toBe(PROSE)
+  })
+
+  it('后端截断标记如实透传（渲染层据此才敢加省略号）', () => {
+    const sentence = narrateEvent(
+      ev({ kind: 'matter_updated', payload: { narrative: { text: '摘', truncated: true } } }),
+      t
+    )
+    expect(sentence.body).toEqual({ text: '摘', truncated: true })
+  })
+
+  it('🔴 存量老行没有 narrative 键 ⇒ 退化回原句，不多出空块也不出 undefined', () => {
+    const sentence = narrateEvent(
+      ev({
+        kind: 'matter_updated',
+        payload: {
+          fields: ['current_summary'],
+          changes: [{ field: 'current_summary', from: '旧', to: '新' }]
+        }
+      }),
+      t
+    )
+    expect(sentence.text).toBe('改写了当前状态摘要')
+    expect('body' in sentence).toBe(false)
+  })
+
+  it.each([
+    ['键是 null', null],
+    ['键是数组', [{ text: 'x' }]],
+    ['键是裸字符串', 'x'],
+    ['text 不是字符串', { text: 42 }],
+    ['text 是空白串', { text: '   ' }],
+    ['只有 truncated 没有 text', { truncated: true }]
+  ])('脏 payload（%s）一律当没有正文，不炸', (_label, narrative) => {
+    const event = ev({ kind: 'matter_updated', payload: { narrative } })
+    expect(readNarrative(event)).toBeNull()
+    expect(narrateEvent(event, t).body).toBeUndefined()
+  })
+
+  it.each([
+    [
+      'matter_updated',
+      { fields: ['status'], changes: [{ field: 'status', from: 'active', to: 'waiting' }] }
+    ],
+    ['resource_linked', { title: '技术方案', resource_kind: 'doc' }],
+    ['stakeholder_added', { display_name: '陈立', changes: [] }],
+    ['relation_added', { relation_id: 2, target_title: '一期收尾' }],
+    ['agent_binding_changed', { fields: ['agent_enabled'] }]
+  ])('技术类事件（%s）没有正文块 —— 不是所有事件都要长文', (kind, payload) => {
+    expect(narrateEvent(ev({ kind, payload }), t).body).toBeUndefined()
+  })
+
+  it('合并组：净变化句取最新那条的正文（不是随便挑一条）', () => {
+    // 一分钟内改了两遍摘要 ⇒ 合并成一条，正文必须是**最后**那一版。
+    const group = groupTimelineEvents([
+      ev({
+        kind: 'matter_updated',
+        happened_at: T0,
+        payload: {
+          fields: ['current_summary'],
+          changes: [{ field: 'current_summary', from: '第一版', to: '第二版' }],
+          narrative: { text: '第二版' }
+        }
+      }),
+      ev({
+        kind: 'matter_updated',
+        happened_at: T0 - 5_000,
+        payload: {
+          fields: ['current_summary'],
+          changes: [{ field: 'current_summary', from: '初稿', to: '第一版' }],
+          narrative: { text: '第一版' }
+        }
+      })
+    ])[0]
+    expect(group.events).toHaveLength(2)
+    expect(narrateTimelineGroup(group, t).body?.text).toBe('第二版')
+  })
+
+  it('计数句不挂正文，但展开的每条明细各带各的', () => {
+    const events = [
+      ev({
+        kind: 'item_created',
+        happened_at: T0,
+        payload: { kind: 'note', title: '甲', narrative: { text: '备注甲的正文' } }
+      }),
+      ev({
+        kind: 'item_created',
+        happened_at: T0 - 3_000,
+        payload: { kind: 'note', title: '乙', narrative: { text: '备注乙的正文' } }
+      })
+    ]
+    const group = groupTimelineEvents(events)[0]
+    const merged = narrateTimelineGroup(group, t)
+    expect(merged.text).toBe('新增了 2 个条目')
+    // 替用户挑一条当"进展"是撒谎；正文全在明细里。
+    expect(merged.body).toBeUndefined()
+    expect(narrateGroupEntries(group, t).map((entry) => entry.sentence.body?.text)).toEqual([
+      '备注甲的正文',
+      '备注乙的正文'
+    ])
   })
 })
 

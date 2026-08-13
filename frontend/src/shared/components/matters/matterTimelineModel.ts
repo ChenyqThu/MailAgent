@@ -47,11 +47,28 @@ export interface MatterEventChange {
   toTruncated?: boolean
 }
 
+/**
+ * 叙述类事件的**正文**（后端 payload 的 `narrative` 键，见 `src/matters/event_changes.py`
+ * 模块 docstring 下半段）。
+ *
+ * 🔴 只有三类事件有：摘要改写 / 备注 / 提案被采纳。技术性事件（版本、关联、字段 flip）
+ * 一律没有 —— 「不是所有事件都要长文」是这次改动的判据。
+ * 🔴 **存量事件行没有这个键**：读不到就退化回原来的短句（"改写了当前状态摘要"），
+ * 绝不渲染空块或 `undefined`。
+ */
+export interface TimelineNarrative {
+  text: string
+  /** 后端 excerpt 有上限；这一侧被截时才为 true（与 `changes` 的分侧标记不是同一套语义）。 */
+  truncated: boolean
+}
+
 export interface TimelineSentence {
   /** 主句：「发生了什么」。 */
   text: string
   /** 次级说明（第二行小字）：老行降级的字段名清单、拒绝理由、Agent 给的关联理由。 */
   detail?: string
+  /** 正文（「事情本身写了什么」）。渲染层负责 clamp/展开。 */
+  body?: TimelineNarrative
 }
 
 export interface TimelineGroup {
@@ -94,6 +111,24 @@ function readCount(payload: Record<string, unknown>, key: string): number | null
   if (typeof value === 'number' && Number.isFinite(value)) return Math.trunc(value)
   if (Array.isArray(value)) return value.length
   return null
+}
+
+/**
+ * 事件正文（`narrative`）。**任何读不出正文的形状一律 `null`** —— 键不在（存量老行）、
+ * 不是对象、`text` 不是非空字符串，都走同一条降级路径：句子照旧、不多出正文块。
+ *
+ * 🔴 判据是**这条事件有没有正文**，不是一张 kind 白名单：分类（谁算叙述类）由写侧
+ * 单点决定（`MatterService._with_narrative` 的三个调用点），读侧再抄一份就成了第二
+ * 真源 —— 两边不同步时要么正文写了不显示、要么显示了写侧根本不发。
+ */
+export function readNarrative(event: MatterEvent): TimelineNarrative | null {
+  const raw: unknown = payloadOf(event).narrative
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const record = raw as Record<string, unknown>
+  if (typeof record.text !== 'string') return null
+  const text = record.text.trim()
+  if (text.length === 0) return null
+  return { text, truncated: record.truncated === true }
 }
 
 /** 本次 patch 触及的字段名。老行与新行都有，是降级渲染的唯一依据。 */
@@ -378,7 +413,8 @@ function fieldLabel(field: string, t: Translate): string {
   return t(`matters.eventField.${field}`, { defaultValue: field })
 }
 
-const ELLIPSIS = '…'
+/** 「后端截断过」的省略号。渲染层也要用（正文块），从这里导出保持单份。 */
+export const ELLIPSIS = '…'
 
 /** 变更子句渲染的是哪一侧的值。截断标记是**分侧**的，两侧不能共用一个判据。 */
 type ChangeSide = 'from' | 'to'
@@ -592,7 +628,23 @@ function quoted(
   return text === null ? null : t(template, { text })
 }
 
+/**
+ * 单条事件 → 句子 + 正文。
+ *
+ * 正文在这里**统一挂**（而不是每个 kind 分支各挂各的）：写侧只给叙述类事件发
+ * `narrative`，读侧就只需要「有就显示」这一条规则，新增叙述类事件时读侧零改动。
+ */
 export function narrateEvent(event: MatterEvent, t: Translate): TimelineSentence {
+  const narrative = readNarrative(event)
+  const sentence = narrateEventText(event, t, narrative)
+  return narrative ? { ...sentence, body: narrative } : sentence
+}
+
+function narrateEventText(
+  event: MatterEvent,
+  t: Translate,
+  narrative: TimelineNarrative | null
+): TimelineSentence {
   const payload = payloadOf(event)
   const say = (suffix: string, values?: Record<string, unknown>): TimelineSentence => ({
     text: t(`matters.narrative.${suffix}`, values)
@@ -625,6 +677,16 @@ export function narrateEvent(event: MatterEvent, t: Translate): TimelineSentence
     case 'item_created':
     case 'item_deleted':
     case 'item_restored': {
+      // 备注的正文块把标题整段包含了（`POST /notes` 不给标题时 title 就是正文的前
+      // 120 字）⇒ 再引用一遍标题就是同一句话说两次。判据是**字面前缀**，不是猜：
+      // 两个串来自同一个 payload、同一个源字符串的两次不同截断。
+      // 只判 `item_created`：delete/restore 走 `_mutate_item`，那条路径不写 narrative。
+      if (narrative !== null && event.kind === 'item_created') {
+        const plain = readText(payload, 'title')
+        if (plain !== null && narrative.text.startsWith(plain)) {
+          return say('item_created_kind', { kind: itemKindLabel(payload, t) })
+        }
+      }
       const title = quoted(payload, 'title', 'matters.narrative.quoteTitle', t)
       if (title === null) return say(`${event.kind}_plain`)
       return say(event.kind, { kind: itemKindLabel(payload, t), title })
@@ -855,11 +917,23 @@ export function narrateTimelineGroup(group: TimelineGroup, t: Translate): Timeli
       if (clauses.length > 0) {
         // 分组键带了目标对象身份（`groupTarget`）⇒ 组内必定是同一个条目 / 同一位干系人，
         // 于是可以照单条的句式把标识带上（此前合并句把条目标题整个丢了）。
-        return wrapClauses(group.head, clauses.join(t('matters.narrative.clauseSep')), t)
+        const sentence = wrapClauses(
+          group.head,
+          clauses.join(t('matters.narrative.clauseSep')),
+          t
+        )
+        // 净变化的 to 侧取的就是**最新**那条（`netChanges` 的 tail），所以正文同样取
+        // head（组内最新）的 —— 一分钟内把摘要改了三遍，显示的是最后那一版，与净变化
+        // 说的是同一件事，不是随便挑了组里的某一条。
+        const narrative = readNarrative(group.head)
+        return narrative ? { ...sentence, body: narrative } : sentence
       }
     }
   }
 
+  // 🔴 计数句**不挂正文**：「新增了 3 条备注」底下摆其中一条的正文，等于替用户挑了
+  // 一条说"这就是进展"。三条正文都在展开的明细里（`narrateGroupEntries` 逐条走
+  // `narrateEvent`，各自带各自的 body），一条不丢。
   const count = group.events.length
   const template = groupedTemplateKind(group.head)
   if (GROUPED_TEMPLATE_KINDS.has(template)) {
