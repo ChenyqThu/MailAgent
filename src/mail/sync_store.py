@@ -293,6 +293,19 @@ MATTER_TABLE_DDLS = (
         reason TEXT NULL,
         UNIQUE (matter_id, resource_key)
     )""",
+    # v52 (dogfood 轮 2 W-C): 全局干系人库。身份 = 归一 email（lower+trim, UNIQUE）——
+    # 没有 email 的干系人**不入全局库**（没有可靠身份键, 按名字合并必然误并同名人）,
+    # 只作 per-matter 行存在（matter_stakeholder.contact_id 保持 NULL）。
+    # display_name / organization 是「全局一份」的基本信息; 角色/等待/备注仍归各事项行。
+    """CREATE TABLE IF NOT EXISTS matter_contact (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        email_normalized TEXT NOT NULL UNIQUE
+            CHECK (email_normalized = lower(trim(email_normalized)) AND length(email_normalized) > 0),
+        display_name TEXT NULL,
+        organization TEXT NULL,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL
+    )""",
     """CREATE TABLE IF NOT EXISTS matter_stakeholder (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
@@ -305,6 +318,7 @@ MATTER_TABLE_DDLS = (
         is_waiting_on INTEGER NOT NULL DEFAULT 0 CHECK (is_waiting_on IN (0, 1)),
         last_contact_at INTEGER NULL,
         source_resource_id INTEGER NULL REFERENCES resource(id) ON DELETE SET NULL,
+        contact_id INTEGER NULL REFERENCES matter_contact(id) ON DELETE SET NULL,
         deleted_at INTEGER NULL,
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -426,6 +440,15 @@ MATTER_INDEX_DDLS = (
     "CREATE INDEX IF NOT EXISTS idx_matter_run_async_job ON matter_run(async_job_id) WHERE async_job_id IS NOT NULL",
     "CREATE UNIQUE INDEX IF NOT EXISTS uq_matter_attention_active ON matter_attention(matter_id, kind, subject_key) WHERE state IN ('open','snoozed')",
     "CREATE INDEX IF NOT EXISTS idx_matter_attention_state ON matter_attention(state, matter_id)",
+)
+
+# v52 (dogfood 轮 2 W-C): stakeholder→contact 关联索引。🔴 有意**不进** MATTER_INDEX_DDLS ——
+# v44-v50 各迁移块会对老库整组重放 MATTER_INDEX_DDLS, 而 contact_id 列要到 v52 的 ALTER
+# 才存在, 放进组里会把 v45..v51 老库的升级梯子当场炸掉 ("no such column"); 只能在 v52 块
+# (ALTER 之后) 建。新库同样走满迁移梯子 (current_version=0), 所以也会经 v52 块拿到它。
+MATTER_STAKEHOLDER_CONTACT_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_matter_stakeholder_contact "
+    "ON matter_stakeholder(contact_id) WHERE contact_id IS NOT NULL"
 )
 
 
@@ -960,7 +983,17 @@ class SyncStore:
     # v48 (Matters dogfood batch 2): mailagent email/thread external_key 归一；碰撞时
     #                合并活跃 matter_resource、重指历史链接与资源外键，并回填邮件元数据。
     # v49 (Matters P6-A): persistent resource-suggestion rejection memory.
-    DB_VERSION = 51
+    # v52 (Matters dogfood 轮 2 W-C, 2026-08): 全局干系人库 matter_contact (身份 = 归一
+    #                email lower+trim UNIQUE) + matter_stakeholder +contact_id (additive
+    #                ALTER, ON DELETE SET NULL) + 关联索引 (🔴 不进 MATTER_INDEX_DDLS,
+    #                理由见 MATTER_STAKEHOLDER_CONTACT_INDEX_DDL)。seed 回填: 存量
+    #                stakeholder 行先归一 email (trim+lower, 空串→NULL), 再按 email 聚合
+    #                去重入 contact 表 (display_name/organization 取最近更新的非空行),
+    #                最后 UPDATE … WHERE contact_id IS NULL 回写关联。无 email 的行**有意
+    #                不入库** (没有可靠身份键, 按名字合并必然误并同名人), contact_id 恒
+    #                NULL。回滚 (回退 v52): DROP INDEX + DROP COLUMN contact_id + DROP
+    #                TABLE matter_contact; 列/表留着也无害 (旧代码零消费点)。
+    DB_VERSION = 52
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -3118,6 +3151,74 @@ class SyncStore:
                 _migration_guard_columns(
                     cursor, "email_metadata", {"ingest_reason"}, "v51 migration", e,
                 )
+
+        # === v52: 全局干系人库 (Matters dogfood 轮 2 W-C) ===
+        # matter_contact 表 + matter_stakeholder.contact_id + seed 回填。
+        # 🔴 关联索引只能在这里建 (ALTER 之后), 不进 MATTER_INDEX_DDLS —— 理由见
+        # MATTER_STAKEHOLDER_CONTACT_INDEX_DDL 的注释。
+        if current_version < 52:
+            try:
+                for ddl in MATTER_TABLE_DDLS:
+                    cursor.execute(ddl)
+                cursor.execute("PRAGMA table_info(matter_stakeholder)")
+                _sh_cols = {row[1] for row in cursor.fetchall()}
+                if "contact_id" not in _sh_cols:
+                    cursor.execute(
+                        "ALTER TABLE matter_stakeholder ADD COLUMN contact_id INTEGER "
+                        "NULL REFERENCES matter_contact(id) ON DELETE SET NULL"
+                    )
+                    logger.info("v52 migration: matter_stakeholder +contact_id")
+                cursor.execute(MATTER_STAKEHOLDER_CONTACT_INDEX_DDL)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "matter_stakeholder", {"contact_id"}, "v52 migration", e,
+                )
+
+            # seed 回填 —— DML 与上面被 guard 的 DDL **分开**（v51 教训: 混在一个 try 里,
+            # DML 失败会被"列已存在"guard 吞掉后永久跳过）。DML 失败必须无条件 raise。
+            # ① 存量 email 归一 (写入侧早已 lower, 这里兜历史脏数据): 空串→NULL, 其余
+            #    trim+lower。归一只动 email_normalized, 不碰 person_key (稳定键不重算)。
+            cursor.execute(
+                "UPDATE matter_stakeholder SET email_normalized = NULL "
+                "WHERE email_normalized IS NOT NULL AND trim(email_normalized) = ''"
+            )
+            cursor.execute(
+                "UPDATE matter_stakeholder "
+                "SET email_normalized = lower(trim(email_normalized)) "
+                "WHERE email_normalized IS NOT NULL "
+                "AND email_normalized <> lower(trim(email_normalized))"
+            )
+            # ② 按归一 email 聚合入全局库 (含软删行 —— 删的是"某事项的干系人关系",
+            #    人本身仍是真实存在过的联系人)。display_name/organization 各取最近
+            #    更新的非空行; INSERT OR IGNORE 幂等 (重跑/半程重试不重复)。
+            cursor.execute(
+                "INSERT OR IGNORE INTO matter_contact "
+                "(email_normalized, display_name, organization, created_at, updated_at) "
+                "SELECT s.email_normalized, "
+                "  (SELECT s2.display_name FROM matter_stakeholder s2 "
+                "   WHERE s2.email_normalized = s.email_normalized "
+                "   AND s2.display_name IS NOT NULL AND trim(s2.display_name) <> '' "
+                "   ORDER BY s2.updated_at DESC, s2.id DESC LIMIT 1), "
+                "  (SELECT s3.organization FROM matter_stakeholder s3 "
+                "   WHERE s3.email_normalized = s.email_normalized "
+                "   AND s3.organization IS NOT NULL AND trim(s3.organization) <> '' "
+                "   ORDER BY s3.updated_at DESC, s3.id DESC LIMIT 1), "
+                "  MIN(s.created_at), MAX(s.updated_at) "
+                "FROM matter_stakeholder s "
+                "WHERE s.email_normalized IS NOT NULL "
+                "GROUP BY s.email_normalized"
+            )
+            if cursor.rowcount:
+                logger.info(
+                    f"v52 migration: seeded {cursor.rowcount} matter_contact row(s)"
+                )
+            # ③ 回写关联 (ALTER 加列 + seed 必配 WHERE col IS NULL 回填)。
+            cursor.execute(
+                "UPDATE matter_stakeholder SET contact_id = ("
+                "  SELECT c.id FROM matter_contact c "
+                "  WHERE c.email_normalized = matter_stakeholder.email_normalized"
+                ") WHERE contact_id IS NULL AND email_normalized IS NOT NULL"
+            )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

@@ -22,8 +22,10 @@ import type {
   MatterResourceListItem,
   MatterStakeholder
 } from '@shared/api/types/matter'
+import { RecipientAvatar } from '@shared/components/email/compose/recipient-avatar'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { CollapseChevron } from '@shared/components/ui/collapsible'
+import { formatRelativeTime } from '@shared/format'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useActiveEmail } from '@shared/state/active-email'
 import { toastError } from '@shared/state/toast'
@@ -129,52 +131,24 @@ export function MatterContextTab({
           </button>
         </SectionHeader>
         {stakeholders.length > 0 ? (
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-3">
+          // 设计 §「干系人 · N」：`minmax(240px,1fr)` 网格 gap 8、卡 pad 12、等待中卡走
+          // warn tone、头像 hue 哈希（复用 `.avatar` 调色板，同一人跨面同色）+ 等待中
+          // warn 环、hover 才出现的 edit/trash、第二行 = 角色 Pip + 弹性 + 最近联系。
+          <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2">
             {stakeholders.map((stakeholder) => (
               <article
                 key={stakeholder.id}
-                className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-4"
+                className={`group/card relative rounded-[var(--r-card)] border p-3 ${
+                  stakeholder.is_waiting_on
+                    ? 'border-warn/25 bg-warn/[0.06]'
+                    : 'border-ink-border bg-ink-2'
+                }`}
               >
-                <div className="flex items-start gap-3">
-                  <span className="grid size-9 shrink-0 place-items-center rounded-full bg-ink-4 text-body font-semibold text-ink-fg">
-                    {(stakeholder.display_name || stakeholder.email_normalized || '?')
-                      .slice(0, 1)
-                      .toUpperCase()}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <h3 className="truncate text-body font-semibold text-ink-fg">
-                        {stakeholder.display_name ||
-                          stakeholder.email_normalized ||
-                          t('matters.context.unnamedStakeholder')}
-                      </h3>
-                      {stakeholder.is_waiting_on ? (
-                        <Pip tone="warn">{t('matters.context.waiting')}</Pip>
-                      ) : null}
-                      {stakeholder.role ? <Pip>{stakeholder.role}</Pip> : null}
-                    </div>
-                    <p className="mt-1 truncate text-meta text-ink-fg-3">
-                      {[stakeholder.role, stakeholder.organization].filter(Boolean).join(' · ') ||
-                        t('matters.context.noRole')}
-                    </p>
-                  </div>
-                </div>
-                {stakeholder.relationship ? (
-                  <p className="mt-2 border-t border-ink-border pt-2 text-meta leading-5 text-ink-fg-2">
-                    {stakeholder.relationship}
-                  </p>
-                ) : null}
-                <StakeholderLastContact
-                  stakeholder={stakeholder}
-                  emailId={
-                    stakeholder.source_resource_id === null
-                      ? null
-                      : (emailByResourceId.get(stakeholder.source_resource_id) ?? null)
-                  }
-                />
-                <div className="mt-3 flex justify-end gap-1 border-t border-ink-border pt-2">
+                <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity duration-fast ease-standard focus-within:opacity-100 group-hover/card:opacity-100">
                   <button
                     type="button"
+                    title={t('matters.context.editStakeholder')}
+                    aria-label={t('matters.context.editStakeholder')}
                     onClick={() => setEditor(stakeholder)}
                     className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 hover:bg-ink-3"
                   >
@@ -182,12 +156,64 @@ export function MatterContextTab({
                   </button>
                   <button
                     type="button"
+                    title={t('matters.context.removeStakeholder')}
+                    aria-label={t('matters.context.removeStakeholder')}
                     onClick={() => remove.mutate(stakeholder.id)}
-                    className="rounded-[var(--r-ctl)] p-1.5 text-fail hover:bg-fail/10"
+                    className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 hover:bg-fail/10 hover:text-fail"
                   >
                     <Trash2 size={13} />
                   </button>
                 </div>
+                <div className="flex items-start gap-2.5">
+                  <span
+                    className={`flex shrink-0 rounded-full ${
+                      stakeholder.is_waiting_on ? 'ring-2 ring-warn/40 ring-offset-1 ring-offset-ink-1' : ''
+                    }`}
+                  >
+                    <RecipientAvatar
+                      name={stakeholder.display_name ?? ''}
+                      email={stakeholder.email_normalized ?? ''}
+                      size={30}
+                    />
+                  </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <h3 className="truncate text-body font-medium text-ink-fg">
+                        {stakeholder.display_name ||
+                          stakeholder.email_normalized ||
+                          t('matters.context.unnamedStakeholder')}
+                      </h3>
+                      {stakeholder.is_waiting_on ? (
+                        <Pip tone="warn">{t('matters.context.waiting')}</Pip>
+                      ) : null}
+                    </div>
+                    {/* 名字行下 = 库侧信息（组织，退而求其次邮箱）；角色只出现在下面的
+                        药丸行 —— 设计里「职位·公司」与角色 Pip 是两回事，别重复画角色。 */}
+                    <p className="mt-0.5 truncate text-meta text-ink-fg-3">
+                      {stakeholder.organization ||
+                        stakeholder.email_normalized ||
+                        t('matters.context.noRole')}
+                    </p>
+                  </div>
+                </div>
+                <div className="mt-2.5 flex items-center gap-1.5">
+                  {stakeholder.role ? <Pip>{stakeholder.role}</Pip> : null}
+                  <span className="ml-auto">
+                    <StakeholderLastContact
+                      stakeholder={stakeholder}
+                      emailId={
+                        stakeholder.source_resource_id === null
+                          ? null
+                          : (emailByResourceId.get(stakeholder.source_resource_id) ?? null)
+                      }
+                    />
+                  </span>
+                </div>
+                {stakeholder.relationship ? (
+                  <p className="mt-2 border-t border-ink-border pt-2 text-meta leading-5 text-ink-fg-2">
+                    {stakeholder.relationship}
+                  </p>
+                ) : null}
               </article>
             ))}
           </div>
@@ -400,10 +426,13 @@ function StakeholderLastContact({
   const { t } = useTranslation()
   const navigate = useNavigate()
   const setActiveEmail = useActiveEmail((state) => state.setActive)
+  // 设计用 fmtAgo（相对时间）而非绝对日期；没有记录时诚实地画 '—'。
   const label = `${t('matters.context.lastContact')} ${
-    stakeholder.last_contact_at ? new Date(stakeholder.last_contact_at).toLocaleDateString() : '—'
+    stakeholder.last_contact_at
+      ? formatRelativeTime(new Date(stakeholder.last_contact_at).toISOString())
+      : '—'
   }`
-  if (emailId === null) return <div className="mt-3 text-meta text-ink-fg-3">{label}</div>
+  if (emailId === null) return <span className="text-meta text-ink-fg-3">{label}</span>
   return (
     <button
       type="button"
@@ -412,7 +441,7 @@ function StakeholderLastContact({
         void navigate({ to: '/' })
       }}
       title={t('matters.context.openLastContact')}
-      className="mt-3 inline-flex items-center gap-1 rounded-[var(--r-ctl)] text-meta text-ink-fg-2 underline-offset-2 transition-colors duration-fast ease-standard hover:text-ink-fg hover:underline"
+      className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] text-meta text-ink-fg-2 underline-offset-2 transition-colors duration-fast ease-standard hover:text-ink-fg hover:underline"
     >
       {label}
       <Link2 size={11} />

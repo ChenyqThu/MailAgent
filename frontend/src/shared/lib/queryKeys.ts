@@ -229,6 +229,9 @@ export const qk = {
     detail: (publicId: string) => ['matters', 'detail', publicId] as const,
     resources: (publicId: string) => ['matters', 'detail', publicId, 'resources'] as const,
     stakeholders: (publicId: string) => ['matters', 'detail', publicId, 'stakeholders'] as const,
+    // W-C —— 全局干系人库（跨事项一份，不挂 detail 前缀）+ 一键邮件提取候选。
+    contacts: () => ['matters', 'contacts'] as const,
+    contactEmailCandidates: () => ['matters', 'contact-email-candidates'] as const,
     // G-15 / G-14 —— 全部挂在 detail 前缀下：一次事项写入 invalidate `detail(id)` 就连带刷新
     // 关系、候选与附件（候选依赖 link 集合，关系依赖两端事项）。
     relations: (publicId: string) => ['matters', 'detail', publicId, 'relations'] as const,

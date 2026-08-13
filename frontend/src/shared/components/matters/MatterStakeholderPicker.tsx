@@ -1,18 +1,18 @@
-// G-16 —— 干系人两步 Picker 的**可行子集**（设计 §2.21 的 640px 两步弹窗）。
+// G-16 + W-C（dogfood 轮 2）—— 干系人两步 Picker（设计 §2.21 的 640px 两步弹窗）。
 //
-// 设计原型里第一步有三组候选：「本事项往来里出现过」/「联系人库」/「按邮箱新建」。中间那组
-// 连同「组织通讯录 + 同步状态」是 mock（裁决 #21：不建 person 表），所以**不做** —— 摆一个
-// 永远空的「联系人库」分组比没有更糟。可行子集 = ① 从本事项已关联邮件资源的收发件人推导出
-// 候选列（勾选批量加）② 角色预设药丸 + 「正在等他」+ 备注 ③ 保留「按邮箱新建」手输入口。
+// v52 起「联系人库」是真表（matter_contact，全局一份），第一步照设计给满三组：
+// ① 本事项往来里出现过（已关联资料 metadata 推导，零新请求）②「联系人库」（全局池，
+// 一次批量取，含其它事项的干系人）③「从邮件提取」一键 —— 确定性扫 email_metadata 的
+// 收发件人按频次汇总（服务端做，不走 LLM），选中入库并关联本事项。手输邮箱新建仍是兜底，
+// 保存即写回联系人库。设计里的「组织通讯录 + 立即同步」仍是 mock，不做假开关。
 //
-// 🔴 候选推导**不打任何新请求**：`MatterResourceListItem.resource.metadata` 里已经有邮件的
-// 发件人/收件人（`_resolve_source_resource` / 候选引擎写进去的），ContextTab 本来就持有这份
-// 资料列表，扇出去逐封查邮件才是列表性能铁律禁止的那种写法。
-// 代价（有意接受）：metadata 里没有地址的老资料行推不出人来，此时列为空，用手输入口兜底。
+// 🔴 列表性能铁律：三组数据都是**整组批量**到手（分别 0 / 1 / 1 个请求），
+// 绝不逐行发请求（`frontend/ARCHITECTURE.md` §7.1-7.2）。
 
-import { useMemo, useState } from 'react'
+import { useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { ChevronLeft, Mail, UserPlus, Users } from 'lucide-react'
+import { ChevronLeft, ChevronRight, Loader2, ScanSearch, UserPlus, Users, X } from 'lucide-react'
 
 import type {
   Matter,
@@ -20,6 +20,7 @@ import type {
   MatterStakeholder,
   MatterStakeholderCreateInput
 } from '@shared/api/types/matter'
+import { RecipientAvatar } from '@shared/components/email/compose/recipient-avatar'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import {
@@ -33,6 +34,8 @@ import {
 import { Input } from '@shared/components/ui/input'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { formatRelativeTime } from '@shared/format'
+import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { useMattersApi } from './hooks'
@@ -40,16 +43,18 @@ import { useMatterMutation } from './matterMutation'
 import {
   MATTER_STAKEHOLDER_EMAIL_RE,
   MATTER_STAKEHOLDER_ROLE_PRESETS,
-  deriveStakeholderCandidates
+  buildStakeholderPickerPools,
+  deriveStakeholderCandidates,
+  filterStakeholderPool
 } from './matterStakeholderCandidates'
-import type { MatterStakeholderCandidate } from './matterStakeholderCandidates'
+import type { MatterStakeholderPoolPerson } from './matterStakeholderCandidates'
 
 interface DraftRow {
   email: string
   displayName: string | null
   role: string
-  /** 保留旧 `StakeholderModal` 的组织字段 —— 设计原型把它交给（mock 的）联系人库自动带出，
-   *  本仓没有那张表，去掉输入口就等于**丢掉一项既有能力**（卡片上还在显示它）。 */
+  /** 组织字段：从库/提取候选带出时预填，仍可改 —— 保存后经服务端 upsert 写回全局
+   *  联系人库（v52 起「随联系人库自动带出」是真的）。 */
   organization: string
   waiting: boolean
   note: string
@@ -77,15 +82,33 @@ export function MatterStakeholderPicker({
 }: MatterStakeholderPickerProps): React.ReactElement {
   const { t } = useTranslation()
   const api = useMattersApi()
-  const candidates = useMemo(
-    () => deriveStakeholderCandidates(resources, stakeholders),
-    [resources, stakeholders]
-  )
 
   const [step, setStep] = useState<0 | 1>(0)
   const [search, setSearch] = useState('')
   const [picked, setPicked] = useState<string[]>([])
   const [rows, setRows] = useState<Record<string, DraftRow>>({})
+  // 「从邮件提取」是一键显式动作 —— 扫描不便宜，不在每次开弹窗时白跑。
+  const [extractRequested, setExtractRequested] = useState(false)
+
+  // 联系人库整池一次批量取（编辑单人时用不上，不发）。
+  const contactsQuery = useQuery({
+    queryKey: qk.matters.contacts(),
+    queryFn: () => api.listContacts(),
+    enabled: open && !editing,
+    staleTime: 30_000
+  })
+  const extractQuery = useQuery({
+    queryKey: qk.matters.contactEmailCandidates(),
+    queryFn: () => api.listContactEmailCandidates(),
+    enabled: open && !editing && extractRequested,
+    staleTime: 30_000
+  })
+  const pools = buildStakeholderPickerPools(
+    deriveStakeholderCandidates(resources, stakeholders),
+    contactsQuery.data ?? [],
+    extractRequested ? (extractQuery.data ?? []) : [],
+    stakeholders
+  )
 
   // 打开 / 切换编辑对象时重置。编辑态直接落在第二步。
   const identity = `${open ? 'open' : 'closed'}:${editing?.id ?? 'new'}`
@@ -94,6 +117,7 @@ export function MatterStakeholderPicker({
     setIdentityFor(identity)
     if (open) {
       setSearch('')
+      setExtractRequested(false)
       if (editing) {
         const key = editing.email_normalized ?? `id:${editing.id}`
         setStep(1)
@@ -116,19 +140,22 @@ export function MatterStakeholderPicker({
     }
   }
 
-  const normalised = search.trim().toLowerCase()
-  const visible = candidates.filter(
-    (person) =>
-      !normalised ||
-      person.email.includes(normalised) ||
-      (person.displayName ?? '').toLowerCase().includes(normalised)
-  )
+  const visibleFromMatter = filterStakeholderPool(pools.fromMatter, search)
+  const visibleLibrary = filterStakeholderPool(pools.library, search)
+  const visibleExtracted = filterStakeholderPool(pools.extracted, search)
+  const anyVisible =
+    visibleFromMatter.length + visibleLibrary.length + visibleExtracted.length > 0
   const manualEmail = MATTER_STAKEHOLDER_EMAIL_RE.test(search.trim())
     ? search.trim().toLowerCase()
     : null
-  const manualIsNew = manualEmail !== null && !candidates.some((p) => p.email === manualEmail)
+  const knownEmails = new Set(
+    [...pools.fromMatter, ...pools.library, ...pools.extracted].map((p) => p.email)
+  )
+  const manualIsNew = manualEmail !== null && !knownEmails.has(manualEmail)
 
-  const toggle = (person: MatterStakeholderCandidate): void => {
+  const toggle = (person: Pick<MatterStakeholderPoolPerson, 'email' | 'displayName'> & {
+    organization?: string | null
+  }): void => {
     setPicked((current) =>
       current.includes(person.email)
         ? current.filter((value) => value !== person.email)
@@ -143,7 +170,7 @@ export function MatterStakeholderPicker({
               email: person.email,
               displayName: person.displayName,
               role: '',
-              organization: '',
+              organization: person.organization ?? '',
               waiting: false,
               note: ''
             }
@@ -230,70 +257,125 @@ export function MatterStakeholderPicker({
                 placeholder={t('matters.stakeholderPicker.searchPlaceholder')}
                 aria-label={t('matters.stakeholderPicker.searchPlaceholder')}
               />
-              {visible.length > 0 ? (
-                <section>
-                  <div className="mb-1.5 flex items-center gap-2">
-                    <span className="text-[10px] font-semibold uppercase tracking-[0.07em] text-ink-fg-3">
-                      {t('matters.stakeholderPicker.fromMatter')}
+
+              {visibleFromMatter.length > 0 ? (
+                <PoolGroup
+                  label={t('matters.stakeholderPicker.fromMatter')}
+                  count={visibleFromMatter.length}
+                >
+                  {visibleFromMatter.map((person) => (
+                    <PoolRow
+                      key={person.email}
+                      person={person}
+                      picked={picked.includes(person.email)}
+                      onToggle={() => toggle(person)}
+                    />
+                  ))}
+                </PoolGroup>
+              ) : null}
+
+              {visibleLibrary.length > 0 ? (
+                <PoolGroup
+                  label={t('matters.stakeholderPicker.library')}
+                  count={visibleLibrary.length}
+                  hint={t('matters.stakeholderPicker.libraryHint')}
+                >
+                  {visibleLibrary.map((person) => (
+                    <PoolRow
+                      key={person.email}
+                      person={person}
+                      picked={picked.includes(person.email)}
+                      onToggle={() => toggle(person)}
+                    />
+                  ))}
+                </PoolGroup>
+              ) : null}
+
+              {/* W-C —— 一键从邮件往来提取（确定性扫描，服务端聚合，不走 LLM）。 */}
+              <section>
+                <div className="mb-1.5 flex items-center gap-2">
+                  <span className="text-[10px] font-semibold uppercase tracking-[0.07em] text-ink-fg-3">
+                    {t('matters.stakeholderPicker.extractTitle')}
+                  </span>
+                  {extractRequested && visibleExtracted.length > 0 ? (
+                    <span className="font-mono text-meta text-ink-fg-3">
+                      {visibleExtracted.length}
                     </span>
-                    <span className="font-mono text-meta text-ink-fg-3">{visible.length}</span>
+                  ) : null}
+                </div>
+                {!extractRequested ? (
+                  <button
+                    type="button"
+                    onClick={() => setExtractRequested(true)}
+                    className="flex w-full items-center gap-2.5 rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-2/50 px-3 py-2.5 text-left transition-colors duration-fast ease-standard hover:bg-ink-3/60"
+                  >
+                    <ScanSearch size={15} className="shrink-0 text-ink-fg-3" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-aux text-ink-fg">
+                        {t('matters.stakeholderPicker.extractAction')}
+                      </span>
+                      <span className="block text-meta text-ink-fg-3">
+                        {t('matters.stakeholderPicker.extractHint')}
+                      </span>
+                    </span>
+                    <ChevronRight size={13} className="shrink-0 text-ink-fg-3" />
+                  </button>
+                ) : extractQuery.isPending ? (
+                  <div className="flex items-center gap-2 rounded-[var(--r-card)] border border-ink-border bg-ink-2/50 px-3 py-2.5 text-meta text-ink-fg-3">
+                    <Loader2 size={13} className="animate-spin" />
+                    {t('matters.stakeholderPicker.extractLoading')}
                   </div>
+                ) : visibleExtracted.length > 0 ? (
                   <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border">
-                    {visible.map((person) => (
-                      <label
+                    {visibleExtracted.map((person) => (
+                      <PoolRow
                         key={person.email}
-                        className={cn(
-                          'flex cursor-pointer items-center gap-2.5 border-t border-ink-border px-3 py-2 first:border-t-0',
-                          'transition-colors duration-fast ease-standard',
-                          picked.includes(person.email) ? 'bg-coral/[0.07]' : 'hover:bg-ink-3/60'
-                        )}
-                      >
-                        <Checkbox
-                          checked={picked.includes(person.email)}
-                          onCheckedChange={() => toggle(person)}
-                        />
-                        <Mail size={13} className="shrink-0 text-ink-fg-3" />
-                        <span className="min-w-0 flex-1">
-                          <span className="block truncate text-body text-ink-fg">
-                            {person.displayName || person.email}
-                          </span>
-                          {person.displayName ? (
-                            <span className="block truncate font-mono text-meta text-ink-fg-3">
-                              {person.email}
-                            </span>
-                          ) : null}
-                        </span>
-                      </label>
+                        person={person}
+                        picked={picked.includes(person.email)}
+                        onToggle={() => toggle(person)}
+                      />
                     ))}
                   </div>
-                </section>
-              ) : (
+                ) : (
+                  <p className="rounded-[var(--r-card)] border border-ink-border bg-ink-2/50 px-3 py-2.5 text-meta text-ink-fg-3">
+                    {t('matters.stakeholderPicker.extractEmpty')}
+                  </p>
+                )}
+              </section>
+
+              {!anyVisible && !manualEmail ? (
                 <EmptyState
                   icon={<Users size={22} />}
                   title={t('matters.stakeholderPicker.emptyTitle')}
                   hint={t('matters.stakeholderPicker.emptyHint')}
                 />
-              )}
+              ) : null}
 
               {manualIsNew && manualEmail ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    toggle({ email: manualEmail, displayName: null })
-                    setSearch('')
-                  }}
-                  className="flex w-full items-center gap-2.5 rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-2/50 px-3 py-2.5 text-left hover:bg-ink-3/60"
-                >
-                  <UserPlus size={14} className="shrink-0 text-ink-fg-3" />
-                  <span className="min-w-0 flex-1">
-                    <span className="block text-aux text-ink-fg">
-                      {t('matters.stakeholderPicker.manualAdd')}
+                <div className="rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-2/50 px-3 py-2.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      toggle({ email: manualEmail, displayName: null })
+                      setSearch('')
+                    }}
+                    className="flex w-full items-center gap-2.5 text-left"
+                  >
+                    <UserPlus size={14} className="shrink-0 text-ink-fg-3" />
+                    <span className="min-w-0 flex-1">
+                      <span className="block text-aux text-ink-fg">
+                        {t('matters.stakeholderPicker.manualAdd')}
+                      </span>
+                      <span className="block truncate font-mono text-meta text-ink-fg-3">
+                        {manualEmail}
+                      </span>
                     </span>
-                    <span className="block truncate font-mono text-meta text-ink-fg-3">
-                      {manualEmail}
-                    </span>
-                  </span>
-                </button>
+                  </button>
+                  {/* v52 起为真：保存即 upsert 进全局库（服务端隐式维护）。 */}
+                  <p className="mt-1.5 text-meta leading-5 text-ink-fg-3">
+                    {t('matters.stakeholderPicker.manualAddHint')}
+                  </p>
+                </div>
               ) : null}
             </>
           ) : (
@@ -306,10 +388,12 @@ export function MatterStakeholderPicker({
                     key={key}
                     className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-3"
                   >
-                    <div className="flex items-center gap-2">
-                      <span className="grid size-8 shrink-0 place-items-center rounded-full bg-ink-4 text-aux font-semibold text-ink-fg">
-                        {(row.displayName || row.email || '?').slice(0, 1).toUpperCase()}
-                      </span>
+                    <div className="flex items-center gap-2.5">
+                      <RecipientAvatar
+                        name={row.displayName ?? ''}
+                        email={row.email}
+                        size={30}
+                      />
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-body font-medium text-ink-fg">
                           {row.displayName || row.email}
@@ -320,6 +404,19 @@ export function MatterStakeholderPicker({
                           </span>
                         ) : null}
                       </span>
+                      {!editing ? (
+                        <button
+                          type="button"
+                          title={t('matters.stakeholderPicker.removeFromPicked')}
+                          aria-label={t('matters.stakeholderPicker.removeFromPicked')}
+                          onClick={() =>
+                            setPicked((current) => current.filter((value) => value !== key))
+                          }
+                          className="shrink-0 rounded-[var(--r-ctl)] p-1.5 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg"
+                        >
+                          <X size={13} />
+                        </button>
+                      ) : null}
                     </div>
 
                     <div className="mt-2.5 flex flex-wrap gap-1.5">
@@ -399,7 +496,24 @@ export function MatterStakeholderPicker({
               {t('matters.stakeholderPicker.back')}
             </button>
           ) : null}
-          <span className="ml-auto text-aux text-ink-fg-3">
+          <span className="ml-auto inline-flex items-center gap-2 text-aux text-ink-fg-3">
+            {/* 设计 §2.21 底栏的 AvatarStack —— 复用 `.avatar` 调色板（同一人同色）。 */}
+            {picked.length > 0 ? (
+              <span className="inline-flex items-center">
+                {picked.slice(0, 5).map((key, index) => (
+                  <span
+                    key={key}
+                    className={cn('flex rounded-full ring-[1.5px] ring-ink-1', index > 0 && '-ml-1.5')}
+                  >
+                    <RecipientAvatar
+                      name={rows[key]?.displayName ?? ''}
+                      email={rows[key]?.email ?? key}
+                      size={20}
+                    />
+                  </span>
+                ))}
+              </span>
+            ) : null}
             {t('matters.stakeholderPicker.selected', { count: picked.length })}
           </span>
           <button
@@ -433,5 +547,90 @@ export function MatterStakeholderPicker({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+/** 设计 `pickers.jsx::PkGroup`：小写间距 label + 计数 + 可选说明。 */
+function PoolGroup({
+  label,
+  count,
+  hint,
+  children
+}: {
+  label: string
+  count: number
+  hint?: string
+  children: React.ReactNode
+}): React.ReactElement {
+  return (
+    <section>
+      <div className="mb-1.5 flex items-center gap-2">
+        <span className="text-[10px] font-semibold uppercase tracking-[0.07em] text-ink-fg-3">
+          {label}
+        </span>
+        <span className="font-mono text-meta text-ink-fg-3">{count}</span>
+        {hint ? <span className="text-meta text-ink-fg-3">{hint}</span> : null}
+      </div>
+      <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border">
+        {children}
+      </div>
+    </section>
+  )
+}
+
+/** 设计 `pickers.jsx::PkRow` + personLine：Check + 28px 头像 + 姓名/组织 + mono 邮箱 +
+ *  右侧往来密度。选中 = accent/0.07 底 + inset 2px accent 左条（token 走 --c-accent）。 */
+function PoolRow({
+  person,
+  picked,
+  onToggle
+}: {
+  person: MatterStakeholderPoolPerson
+  picked: boolean
+  onToggle(): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const meta =
+    person.source === 'email_scan'
+      ? t('matters.stakeholderPicker.mailCountMeta', { count: person.mailCount ?? 0 })
+      : person.matterCount
+        ? t('matters.stakeholderPicker.matterCountMeta', { count: person.matterCount })
+        : null
+  return (
+    <label
+      className={cn(
+        'flex cursor-pointer items-center gap-2.5 border-t border-ink-border px-3 py-2 first:border-t-0',
+        'transition-colors duration-fast ease-standard',
+        picked
+          ? 'bg-coral/[0.07] shadow-[inset_2px_0_0_0_rgb(var(--c-accent))]'
+          : 'hover:bg-ink-3/60'
+      )}
+    >
+      <Checkbox checked={picked} onCheckedChange={onToggle} />
+      <RecipientAvatar name={person.displayName ?? ''} email={person.email} size={28} />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-baseline gap-2">
+          <span className="truncate text-body font-medium text-ink-fg">
+            {person.displayName || person.email}
+          </span>
+          {person.organization ? (
+            <span className="truncate text-meta text-ink-fg-2">{person.organization}</span>
+          ) : null}
+        </span>
+        {person.displayName ? (
+          <span className="block truncate font-mono text-meta text-ink-fg-3">{person.email}</span>
+        ) : null}
+      </span>
+      {meta || person.lastSeenAt ? (
+        <span className="shrink-0 text-right">
+          {meta ? <span className="block text-meta text-ink-fg-2">{meta}</span> : null}
+          {person.lastSeenAt ? (
+            <span className="block text-meta text-ink-fg-3">
+              {formatRelativeTime(new Date(person.lastSeenAt).toISOString())}
+            </span>
+          ) : null}
+        </span>
+      ) : null}
+    </label>
   )
 }

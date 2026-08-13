@@ -4953,7 +4953,8 @@
         "description": "Linked resource bodies are not inserted into every prompt. By default, agents receive structured state and excerpts from pinned resources; everything else is retrieved on demand. External systems remain authoritative, while MailAgent stores stable references, versions, and freshness.",
         "shield": "Each resource can be set to Read allowed / Metadata only / Excluded; resource bodies are treated as untrusted data"
       },
-      "openLastContact": "Open this email"
+      "openLastContact": "Open this email",
+      "removeStakeholder": "Remove stakeholder"
     },
     "linkResource": {
       "open": "Link resources",
@@ -5036,12 +5037,12 @@
       "updated": "Stakeholder updated",
       "stepPick": "Add stakeholders",
       "stepRole": "Set roles",
-      "pickDescription": "Stakeholders are who owns what here, not a recipient list. Candidates come from people seen in this matter's linked mail.",
-      "roleDescription": "The role and note you set here belong to this matter only.",
-      "searchPlaceholder": "Search candidates, or type a full email address to add someone new",
+      "pickDescription": "Stakeholders are who owns what here, not a recipient list. Name and email live once in the contact library; role and note belong to this matter only.",
+      "roleDescription": "Name and organisation stay in sync with the contact library; the role and note you set here belong to this matter only.",
+      "searchPlaceholder": "Search the contact library: name / email / company, or type a full email to add someone new",
       "fromMatter": "Seen in this matter's mail",
       "emptyTitle": "No candidates yet",
-      "emptyHint": "Once a few emails are linked, the people involved show up here; you can also type a full email address.",
+      "emptyHint": "Link some mail or run \"Extract from mail\" and the people involved show up here; you can also type a full email address.",
       "manualAdd": "Add a stakeholder with this email address",
       "roles": {
         "decisionMaker": "Decision maker",
@@ -5060,7 +5061,18 @@
       "back": "Change selection",
       "next": "Next · set roles",
       "confirmAdd": "Add {count}",
-      "selected": "{count} selected"
+      "selected": "{count} selected",
+      "library": "Contact library",
+      "libraryHint": "Sorted by matters involved",
+      "extractTitle": "Extract from mail",
+      "extractAction": "Extract contacts from correspondence",
+      "extractHint": "Scans senders and recipients of recent mail, grouped by frequency",
+      "extractLoading": "Scanning mail correspondence…",
+      "extractEmpty": "No new candidates extracted (existing ones are in the groups above)",
+      "matterCountMeta": "{count} matters",
+      "mailCountMeta": "{count} messages",
+      "manualAddHint": "Saved into the contact library, so other matters can pick them directly.",
+      "removeFromPicked": "Don't add this person"
     },
     "resource": {
       "type": "Type",

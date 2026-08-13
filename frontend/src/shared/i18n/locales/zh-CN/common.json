@@ -5157,7 +5157,8 @@
         "description": "关联资料的正文不会整体塞进每一轮提示。默认只带结构化状态与置顶资料的摘录，其余按需检索。外部系统仍是内容权威，本地只存稳定引用、版本与新鲜度。",
         "shield": "每份资料可设为「允许读取 / 仅元数据 / 排除」；资料正文按不可信数据处理"
       },
-      "openLastContact": "打开这封邮件"
+      "openLastContact": "打开这封邮件",
+      "removeStakeholder": "移除干系人"
     },
     "linkResource": {
       "open": "关联资料",
@@ -5240,12 +5241,12 @@
       "updated": "干系人已更新",
       "stepPick": "添加干系人",
       "stepRole": "定角色",
-      "pickDescription": "干系人是这件事的责任归属，不是收件人列表。候选来自本事项已关联邮件里出现过的人。",
-      "roleDescription": "这里填的角色与备注只属于本事项。",
-      "searchPlaceholder": "搜索候选，或直接输入完整邮箱地址新建",
+      "pickDescription": "干系人是这件事的责任归属，不是收件人列表。姓名与邮箱在联系人库全局一份，角色与备注只属于本事项。",
+      "roleDescription": "姓名、组织随联系人库自动更新；这里填的角色与备注只属于本事项。",
+      "searchPlaceholder": "搜索联系人库：姓名 / 邮箱 / 公司，或输入完整邮箱新建",
       "fromMatter": "本事项往来里出现过",
       "emptyTitle": "还没有可选候选",
-      "emptyHint": "关联几封邮件之后，往来里出现过的人会自动列在这里；也可以直接输入完整邮箱地址新建。",
+      "emptyHint": "关联邮件或点「一键提取」之后，往来里出现过的人会列在这里；也可以直接输入完整邮箱地址新建。",
       "manualAdd": "用这个邮箱地址新建干系人",
       "roles": {
         "decisionMaker": "决策人",
@@ -5264,7 +5265,18 @@
       "back": "改选人",
       "next": "下一步 · 定角色",
       "confirmAdd": "添加 {count} 人",
-      "selected": "已选 {count} 人"
+      "selected": "已选 {count} 人",
+      "library": "联系人库",
+      "libraryHint": "按参与事项数排序",
+      "extractTitle": "从邮件提取",
+      "extractAction": "一键提取往来联系人",
+      "extractHint": "扫描最近往来邮件的收发件人，按往来频次汇总",
+      "extractLoading": "正在扫描邮件往来…",
+      "extractEmpty": "没有提取到新的候选（已有的都在上面的分组里）",
+      "matterCountMeta": "{count} 个事项",
+      "mailCountMeta": "往来 {count} 封",
+      "manualAddHint": "保存后会写入联系人库，其它事项也能直接选到。",
+      "removeFromPicked": "不加这个人"
     },
     "resource": {
       "type": "类型",

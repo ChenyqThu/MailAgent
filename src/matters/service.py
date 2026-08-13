@@ -7,6 +7,8 @@ import re
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import datetime
+from email.utils import getaddresses
 from typing import Any, Mapping, Sequence
 
 from loguru import logger
@@ -95,6 +97,9 @@ from .events import (
 )
 
 TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
+#: 邮件提取候选的地址形状闸（TS 侧镜像 `matterStakeholderCandidates.ts` 的
+#: MATTER_STAKEHOLDER_EMAIL_RE，同一形状：非空 local@域.tld）。
+_CONTACT_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 ACTION_ONLY_ITEM_FIELDS = {
     "status",
     "priority",
@@ -190,7 +195,6 @@ class MatterService:
         `agent_enabled` 的建表默认在 v50 翻成 1，但开关开着而没有排程 = 永远不跑 =
         一个说谎的开关，所以两者必须一起给。
         """
-        from datetime import datetime
 
         from .triggers import default_schedule_entry, dump_trigger_set, parse_trigger_set
 
@@ -2303,6 +2307,178 @@ class MatterService:
                 f"SELECT * FROM matter_stakeholder WHERE {' AND '.join(clauses)} ORDER BY id", params
             )]
 
+    # ---- W-C 全局干系人库（dogfood 轮 2）----------------------------------
+    # 基本信息（姓名/邮箱/组织）全局一份（matter_contact，身份 = 归一 email）；
+    # 角色/等待/备注仍归各事项的 matter_stakeholder 行。库是**隐式维护**的：
+    # 添加/编辑干系人与邮件提取入池时 upsert，没有独立 CRUD 控制台（backlog）。
+
+    #: 一键邮件提取的扫描窗口（最近 N 封）。提取语义是「近期往来的人」，
+    #: 全库扫描既慢又会把几年前的一次性地址灌进候选。
+    CONTACT_SCAN_WINDOW = 3000
+
+    def list_contacts(self, *, query: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
+        """全局干系人库 + 聚合列（关联事项数 / 最近联系）。
+
+        🔴 聚合一次 LEFT JOIN 算完，绝不逐 contact 查（列表性能铁律，
+        `frontend/ARCHITECTURE.md` §7.1-7.2 的后端镜像）。排序 = 关联事项数
+        降序（近似"往来密度"，真实往来封数只在邮件提取端点里算——那份要扫
+        email_metadata，不该为每次开 Picker 都付一遍）。"""
+        sql = (
+            "SELECT c.id, c.email_normalized, c.display_name, c.organization, "
+            "c.created_at, c.updated_at, "
+            "COUNT(DISTINCT CASE WHEN ms.deleted_at IS NULL THEN ms.matter_id END) AS matter_count, "
+            "MAX(CASE WHEN ms.deleted_at IS NULL THEN ms.last_contact_at END) AS last_contact_at "
+            "FROM matter_contact c "
+            "LEFT JOIN matter_stakeholder ms ON ms.contact_id = c.id "
+        )
+        params: list[Any] = []
+        needle = str(query or "").strip().lower()
+        if needle:
+            like = f"%{needle}%"
+            sql += (
+                "WHERE (c.email_normalized LIKE ? "
+                "OR lower(COALESCE(c.display_name, '')) LIKE ? "
+                "OR lower(COALESCE(c.organization, '')) LIKE ?) "
+            )
+            params += [like, like, like]
+        sql += "GROUP BY c.id ORDER BY matter_count DESC, c.updated_at DESC, c.id DESC LIMIT ?"
+        params.append(max(1, min(int(limit), 500)))
+        with self.repository.connect() as conn:
+            return [dict(row) for row in conn.execute(sql, params)]
+
+    def extract_contact_candidates(
+        self, *, query: str | None = None, limit: int = 120,
+        exclude_emails: Sequence[str] = (),
+    ) -> list[dict[str, Any]]:
+        """一键从邮件往来提取干系人候选（确定性扫描，🔴 不走 LLM）。
+
+        扫 `email_metadata` 最近 `CONTACT_SCAN_WINDOW` 封的
+        sender/sender_name/to_addr/cc_addr（🔴 列名以该表实际 DDL 为准 ——
+        是 `sender_name` 不是 `from_name`），按归一 email 聚合：往来封数、
+        最近出现时间、显示名取最近一次非空。已在全局库的带 `contact_id`。
+        `exclude_emails` 给 owner 自己的地址用（自己不是自己的干系人，且
+        它会以近乎全量的频次霸榜）。"""
+        needle = str(query or "").strip().lower()
+        excluded = {str(value).strip().lower() for value in exclude_emails if value}
+        with self.repository.connect() as conn:
+            rows = conn.execute(
+                "SELECT sender, sender_name, to_addr, cc_addr, date_received "
+                "FROM email_metadata "
+                "WHERE sender IS NOT NULL OR to_addr IS NOT NULL OR cc_addr IS NOT NULL "
+                "ORDER BY date_received DESC LIMIT ?",
+                (self.CONTACT_SCAN_WINDOW,),
+            ).fetchall()
+            contact_ids = {
+                row["email_normalized"]: int(row["id"])
+                for row in conn.execute("SELECT id, email_normalized FROM matter_contact")
+            }
+        stats: dict[str, dict[str, Any]] = {}
+        for row in rows:
+            seen_at = self._parse_email_timestamp(row["date_received"])
+            people: list[tuple[str, str]] = [(row["sender_name"] or "", row["sender"] or "")]
+            for column in ("to_addr", "cc_addr"):
+                raw = row[column]
+                if raw:
+                    people.extend(getaddresses([str(raw)]))
+            for name, address in people:
+                email = str(address or "").strip().lower()
+                if not _CONTACT_EMAIL_RE.match(email) or email in excluded:
+                    continue
+                entry = stats.setdefault(email, {
+                    "email": email, "display_name": None,
+                    "mail_count": 0, "last_seen_at": None,
+                })
+                entry["mail_count"] += 1
+                # 行按 date_received 降序扫 ⇒ 第一个非空名字就是最近用的那个。
+                if name and not entry["display_name"]:
+                    entry["display_name"] = str(name).strip() or None
+                if seen_at is not None and (
+                    entry["last_seen_at"] is None or seen_at > entry["last_seen_at"]
+                ):
+                    entry["last_seen_at"] = seen_at
+        candidates = [
+            {**entry, "contact_id": contact_ids.get(entry["email"])}
+            for entry in stats.values()
+            if not needle
+            or needle in entry["email"]
+            or needle in str(entry["display_name"] or "").lower()
+        ]
+        candidates.sort(
+            key=lambda entry: (-entry["mail_count"], -(entry["last_seen_at"] or 0), entry["email"])
+        )
+        return candidates[: max(1, min(int(limit), 300))]
+
+    @staticmethod
+    def _parse_email_timestamp(raw: Any) -> int | None:
+        """`email_metadata.date_received`（ISO TEXT）→ epoch ms；解析不动就 None。"""
+        if not raw:
+            return None
+        try:
+            return int(datetime.fromisoformat(str(raw)).timestamp() * 1000)
+        except (TypeError, ValueError):
+            return None
+
+    def _upsert_contact(
+        self, conn: sqlite3.Connection, *, email: str,
+        display_name: str | None = None, organization: str | None = None, now: int,
+    ) -> int:
+        """按归一 email upsert 全局联系人，返回 contact_id。
+
+        提供的非空姓名/组织 = 最后写者赢（全局一份的语义：改名就是全局改名）；
+        传 None = 不动既有值。"""
+        conn.execute(
+            "INSERT INTO matter_contact "
+            "(email_normalized, display_name, organization, created_at, updated_at) "
+            "VALUES (?, ?, ?, ?, ?) "
+            "ON CONFLICT(email_normalized) DO UPDATE SET "
+            "display_name = COALESCE(excluded.display_name, matter_contact.display_name), "
+            "organization = COALESCE(excluded.organization, matter_contact.organization), "
+            "updated_at = excluded.updated_at",
+            (email, display_name, organization, now, now),
+        )
+        row = conn.execute(
+            "SELECT id FROM matter_contact WHERE email_normalized=?", (email,)
+        ).fetchone()
+        return int(row["id"])
+
+    def _propagate_contact_identity(
+        self, conn: sqlite3.Connection, contact_id: int, *, now: int,
+        exclude_stakeholder_id: int,
+        display_name: str | None = None, organization: str | None = None,
+    ) -> None:
+        """把姓名/组织写穿到该联系人的其它事项行（denormalized 镜像随全局一份走）。
+
+        🔴 只动 stakeholder 行 + 受影响事项的搜索投影；**不** bump 那些事项的
+        aggregate version、不发事件 —— 这是联系人层面的事实变更，不是那些事项
+        自己的业务动作，把别的事项的乐观锁撞掉才是 bug。"""
+        sets: list[str] = []
+        params: list[Any] = []
+        if display_name is not None:
+            sets.append("display_name=?")
+            params.append(display_name)
+        if organization is not None:
+            sets.append("organization=?")
+            params.append(organization)
+        if not sets:
+            return
+        affected = [
+            int(row["matter_id"])
+            for row in conn.execute(
+                "SELECT DISTINCT matter_id FROM matter_stakeholder "
+                "WHERE contact_id=? AND id<>?",
+                (contact_id, exclude_stakeholder_id),
+            )
+        ]
+        if not affected:
+            return
+        conn.execute(
+            f"UPDATE matter_stakeholder SET {', '.join(sets)}, updated_at=? "
+            "WHERE contact_id=? AND id<>?",
+            (*params, now, contact_id, exclude_stakeholder_id),
+        )
+        for matter_id in affected:
+            self.refresh_search_projection(conn, matter_id)
+
     def create_stakeholder(self, public_id: str, data: Mapping[str, Any], **mutation: Any) -> dict[str, Any]:
         return self._mutate_stakeholder(public_id, None, data, "stakeholder_added", **mutation)
 
@@ -2354,17 +2530,57 @@ class MatterService:
                     "last_contact_at": data.get("last_contact_at"), "source_resource_id": data.get("source_resource_id"),
                     "created_at": now, "updated_at": now,
                 }
+                # W-C 全局干系人库：有 email 才有全局身份。upsert 后把库里已知的
+                # 姓名/组织回填进本行空位（从库里挑人时前端只需给 email），并把本次
+                # 显式提供的姓名/组织写穿到该联系人的其它事项行（基本信息全局一份）。
+                contact_id = None
+                if email:
+                    contact_id = self._upsert_contact(
+                        conn, email=email,
+                        display_name=values["display_name"],
+                        organization=values["organization"], now=now,
+                    )
+                    contact = conn.execute(
+                        "SELECT display_name, organization FROM matter_contact WHERE id=?",
+                        (contact_id,),
+                    ).fetchone()
+                    values["display_name"] = values["display_name"] or contact["display_name"]
+                    values["organization"] = values["organization"] or contact["organization"]
+                values["contact_id"] = contact_id
                 columns = tuple(values)
                 cursor = conn.execute(f"INSERT INTO matter_stakeholder ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})", tuple(values[c] for c in columns))
                 stakeholder_id = int(cursor.lastrowid)
+                if contact_id is not None:
+                    self._propagate_contact_identity(
+                        conn, contact_id, now=now, exclude_stakeholder_id=stakeholder_id,
+                        display_name=self._optional_text(data.get("display_name")),
+                        organization=self._optional_text(data.get("organization")),
+                    )
             else:
                 allowed = {"display_name", "organization", "role", "relationship", "is_waiting_on", "last_contact_at", "source_resource_id", "deleted_at"}
                 changes = {key: value for key, value in data.items() if key in allowed}
                 if email is not None:
                     changes["email_normalized"] = email
                 changes["updated_at"] = now
+                # W-C：email 变更 → 重挂全局联系人；姓名/组织的显式修改写穿到全局
+                # 一份 + 该联系人的其它事项行。角色/等待/备注仍只落本行。
+                contact_id = existing.get("contact_id") if existing else None
+                contact_email = email or (existing or {}).get("email_normalized")
+                touched_name = self._optional_text(data.get("display_name")) if "display_name" in data else None
+                touched_org = self._optional_text(data.get("organization")) if "organization" in data else None
+                if contact_email and (email is not None or contact_id is None or touched_name or touched_org):
+                    contact_id = self._upsert_contact(
+                        conn, email=contact_email,
+                        display_name=touched_name, organization=touched_org, now=now,
+                    )
+                    changes["contact_id"] = contact_id
                 assignments = ", ".join(f"{key}=?" for key in changes)
                 conn.execute(f"UPDATE matter_stakeholder SET {assignments} WHERE id=?", (*changes.values(), stakeholder_id))
+                if contact_id is not None:
+                    self._propagate_contact_identity(
+                        conn, contact_id, now=now, exclude_stakeholder_id=stakeholder_id,
+                        display_name=touched_name, organization=touched_org,
+                    )
                 if event_kind == "stakeholder_removed":
                     conn.execute(
                         "UPDATE matter_item SET waiting_on_stakeholder_id=NULL, updated_at=?, version=version+1 "
