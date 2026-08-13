@@ -663,7 +663,8 @@ export interface MatterUndoRequest {
 export interface MatterChatApi {
   contextSnapshot(matterId: string): Promise<MatterContextSnapshotPayload>
   /** Execute one undo descriptor (renderer-direct REST, no LLM). Resolves to the mutation result;
-   *  rejects with `Error & {code}` — `E_VERSION_CONFLICT` when the matter moved on. */
+   *  rejects with `Error & {code}` — `E_VERSION_CONFLICT` on a real conflict (matter-level writes
+   *  are strict CAS; child-entity paths auto-rebase merely-stale versions server-side since 0813). */
   applyUndo(
     descriptor: MatterUndoDescriptor,
     options?: MatterMutationOptions

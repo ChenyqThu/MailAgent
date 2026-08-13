@@ -16,10 +16,18 @@
 | 入口 | 运行形态 | owner 在环 | 天花板 |
 |---|---|---|---|
 | 创建带调研 | **纯读端点**（`POST /api/matters/create-draft`，`create_research.py`）| ✅ 在（产的是草案，用户按下创建才落库）| 无 LLM run：确定性推导 + 邮件/Notion 检索，**一个字不写库** |
-| 定时 / 立即跟进 | **headless run**（`runKind='matter_followup'`）| ❌ 不在 | 服务端按 **class** 强制 Observe+Assist：只读工具面 + 唯一提案通道，产出必过人工评审 |
-| 事项对话 | **交互式** | ✅ 在 | 与普通 chat 同级 |
+| 定时跟进 / 手动重跑 | **headless run**（`runKind='matter_followup'`）| ❌ 不在 | 服务端按 **class** 强制 Observe+Assist：只读工具面 + 唯一提案通道，产出必过人工评审 |
+| 事项对话（含详情头「立即跟进」）| **交互式** | ✅ 在 | 与普通 chat 同级 |
 
 合并的结果只有两种：要么对话被无谓砍成只读，要么无人值守的 run 拿到本不该有的写能力。
+
+🔴 **「立即跟进」是对话入口，不是 run 入口**（0813 起）：详情头按钮走
+`startMatterChatWithPrompt`（唤出 dock 并带本事项身份 chip，指令走既有 `pendingPrompt` 面，
+不新造注入路径）。发起 headless run 的入口只剩定时触发与失效提案上的「重新跑一轮」
+（`POST /api/matters/{id}/runs`）—— 那颗按钮要的是一份**新提案**，换成对话会把审阅闭环断掉。
+事项对话的 composer 只挂一颗 `MAT-xxxx · 标题` chip；随单 chip 化，「本轮临时排除某份置顶
+资料」的入口（G-21）已移除 —— `excludedResourceIds` 恒空集，注入模型的快照仍是置顶资料
+全量；若要找回排除能力，落点是事项页的置顶开关（backlog），不是 composer。
 
 ### 1.1 跟进 run 的天花板：**按 class，不按名单**
 
@@ -105,19 +113,21 @@ run 起始解析一次并冻进 run context，pause / resume 复用同值。
 ## 2. 数据模型
 
 主表 `matter`（`src/mail/sync_store.py` 的 `MATTER_TABLE_DDLS`），围绕它的从表。
-迁移占用 `DB_VERSION` **v44–v50**（v44/v45 基表与资源域 · v46 run 账本 · v47 attention ·
-v48 email/thread external_key 归一 · v49 拒绝记忆 · v50 标签定义表 + 完成标志）：
+迁移占用 `DB_VERSION` **v44–v50 与 v52**（v44/v45 基表与资源域 · v46 run 账本 · v47 attention ·
+v48 email/thread external_key 归一 · v49 拒绝记忆 · v50 标签定义表 + 完成标志 ·
+v52 全局干系人库；v51 是邮件域的 `ingest_reason`，与事项无关）：
 
 | 表 | 作用 | 关键约束 |
 |---|---|---|
-| `matter` | 事项本体 | `public_id` 形如 `MAT-0001`；`version` 用于 CAS |
+| `matter` | 事项本体 | `public_id` 形如 `MAT-0001`；`version` 是乐观锁基准（写并发语义见 §2.1）|
 | `matter_item` | 行动项 / 决策 / 问题 / 里程碑 / 阻塞 / 笔记 | `checklist_json` 只允许 `kind='action'` 非空 |
 | `matter_resource` | 事项 ↔ 资料的多对多 | 身份归一走 `resource_identity.normalize_resource_key`（**唯一写侧** `_upsert_resource`）|
-| `matter_stakeholder` | 干系人 | `is_waiting_on` 会产生等待信号 |
+| `matter_stakeholder` | 干系人（per-matter 行）| `is_waiting_on` 会产生等待信号；`contact_id` 关联全局库（v52，`ON DELETE SET NULL`，写穿语义见 §2.4）|
+| `matter_contact` | 全局干系人库（v52）| 身份 = 归一 email（`email_normalized` NOT NULL UNIQUE + CHECK 强制 lower+trim）；**无 email 的干系人不入库** |
 | `matter_relation` | 事项之间的关系 | |
 | `matter_event` | 时间线 / 审计 | 🔴 `ON DELETE CASCADE` —— 事项被永久删除时事件**一起没**，所以永久删除的审计落**日志**不落事件 |
 | `matter_update` | Agent 的更新提案 | `review_status` 四态 |
-| `matter_attention` | 关注信号（episode 语义）| 判据单源 `attention.py::_collect_facts` |
+| `matter_attention` | 关注信号（episode 语义）| 判据单源 `attention.py::_collect_facts`；「解决」语义见 §2.3 |
 | `matter_tag` | 标签定义（名 / 颜色 / 形状）| `matter.tags_json` 仍是**字符串数组**引用 name |
 | `matter_resource_rejection` | 资料建议的拒绝记忆 | 见 §5 |
 | `matter_search_document` | 搜索投影 | `matter` 表本身**没有** `search_` 前缀列 |
@@ -129,6 +139,73 @@ v48 email/thread external_key 归一 · v49 拒绝记忆 · v50 标签定义表 
 **完成标志** `goal_checks_json`：`[{"t": str, "done": bool}]`。与 `description`（核心目标）
 同权限 —— **只有 `actor.kind == user` 能写**，Agent 只能建议。勾满只提示可以推进到「已完成」，
 **不自动改状态**：状态推进恒是用户的动作。
+
+### 2.1 写并发：matter 级严格 CAS，子实体 bounded auto-rebase
+
+所有写操作都带 `expected_version`（乐观锁），但两类路径的冲突判定**不同**（0813 A2）：
+
+- **matter 级字段写**（patch / 归档 / accept / reject / permanently_delete）—— **严格 CAS**：
+  `expected ≠ current` 即 `E_VERSION_CONFLICT`。「两处同时改 state / goal 必须被挡」是拍板过的语义。
+- **子实体路径**（item / stakeholder / resource / relation 等 8 条 mutate）—— 服务层
+  **bounded auto-rebase**：stale 时查版本账本，`(expected, current]` 区间内每一笔 bump 的
+  scope 都与本次写不重叠才放行；账本盖不住整个 gap、或任一笔 scope 重叠（含 wildcard）→
+  仍 `E_VERSION_CONFLICT`。根因是追加与独立行编辑没有「可失去的更新」，matter 级 CAS 对它们
+  是钝化代理（9 连写 8 失败被迫串行）。scope 词表 / 序列化单源 `src/matters/proposal_scope.py`；
+  附带修正：干系人 / 关系写的 scope 曾缺省 wildcard（一次加人作废全部待审提案的预存钝化），
+  现在追加 = `SCOPE_NOTHING`、行编辑 = 行级 scope。
+
+**版本账本** = `sync_state` 键 `matter_version_scopes:{matter_id}`（每事项保留最近
+`VERSION_SCOPE_RETENTION=64` 笔 bump 的 scope；沿用 `alert.*` / `davmail.*` 先例，
+**不 bump DB_VERSION**）。🔴 账本是**可丢**的簿记：丢失 / 损坏 / 形状不对 = 回严格 CAS
+（fail closed，绝不放过真冲突），写账失败只降级不阻断业务写。
+
+前端侧：`matterMutation.ts` 仍是带乐观锁写操作的唯一出口（冲突 ⇒ 强制刷新焊在包装里）——
+auto-rebase 之后它收到的 `E_VERSION_CONFLICT` 都是**真冲突**，处置不变。
+回归：`tests/matters/test_matter_version_rebase.py`。
+
+### 2.2 时间戳单位：matter 域全部 epoch **毫秒**
+
+所有时间戳字段（`due_at` / `completed_at` / `last_contact_at` / snooze…）一律 epoch 毫秒。
+服务端 `service._require_epoch_ms`（合法区间 `[10^12, 10^15)`）在**三道门**上强制：
+直写 mutate / propose（越界字段 fail-closed 剔除，不落进提案）/ accept backstop。
+
+🔴 **有意拒绝、不静默 ×1000**：秒值静默换算会把上游单位错（0813 A3 实证：agent 经工具写
+epoch 秒 ⇒ UI 恒显示 1970）永久藏住。工具 schema 各时间字段已标注 "epoch MILLISECONDS (UTC)"。
+回归：`tests/matters/test_matter_timestamp_units.py`。
+
+### 2.3 关注信号的「解决」：判据翻转前不再报
+
+判据型信号（逾期 / 等待超期…）上 owner 点「解决」或「忽略」= **直到判据翻转前不再报**
+（与 alert episode 语义对称；临时静默归 snooze）。实现在 `attention._open_episode_in_conn`：
+`cleared_at IS NULL`（判据自上次人工处置后从未消失）时，resolved 与 dismissed 都抑制重开；
+reconcile 观察到判据翻转才落 `cleared_at`，之后同一事实再成立才是新 episode（`recurrence_no`+1）。
+此前只抑制 dismissed，「解决」在判据仍为真时下一个 tick 就被 60s 重算原样打开 —— 按不灭。
+
+🔴 **`run_failed` / `context_gap` 豁免**（单源 `attention.py::EVENT_DRIVEN_ATTENTION_KINDS`）：
+它们是事件驱动型、没有清账循环，resolved 也豁免会把「同一 run 再次失败」永久静默。
+
+### 2.4 全局干系人库 `matter_contact`（v52）
+
+- **身份 = 归一 email**。无 email 的干系人**不入全局库**（`contact_id` 恒 NULL）：没有可靠
+  身份键，按名字合并必然误并同名人。有意不加 `note` 列（per-matter 备注已有
+  `matter_stakeholder.relationship`，不造死列）。
+- **写侧**（`service._mutate_stakeholder`，唯一写面）：create/update 带 email →
+  `_upsert_contact`（提供的非空姓名 / 组织 = 最后写者赢，None 不动既有值）；create 只给
+  email 时从库回填姓名 / 组织。姓名 / 组织显式修改 → `_propagate_contact_identity`
+  **写穿**到该联系人的其它事项行 + 刷其搜索投影，🔴 不 bump 那些事项的 version、不发事件 ——
+  这是联系人层的事实，不是那些事项的业务动作，撞别人的乐观锁才是 bug（有测试钉住）。
+  已知取舍：patch 显式传 `display_name: null` 只清本行不清全局；「已在事项中」的重复 create
+  早退，不触发 contact 更新。
+- 🔴 **关联索引有意不进 `MATTER_INDEX_DDLS`**：那组索引会在 v44–v50 各迁移块对老库整组重放，
+  而 `contact_id` 要到 v52 ALTER 才存在 —— 放进组里会把老库的升级梯子当场炸掉
+  （"no such column"）。改为独立常量 `MATTER_STAKEHOLDER_CONTACT_INDEX_DDL`，只在 v52 块
+  （ALTER 之后）建；新库走满梯子（current_version=1）同样拿得到。
+- **Picker 池两个只读端点**：`GET /api/matters/contacts`（全局池 + matter_count /
+  last_contact_at 聚合，一次 LEFT JOIN 不逐 contact 查）+ `GET /api/matters/contacts/email-candidates`
+  （确定性扫 `email_metadata` 最近 3000 封的 `sender` / `sender_name` / `to_addr` / `cc_addr`，
+  **不走 LLM**；owner 自己的地址服务端排除，否则以近乎全量频次霸榜）。🔴 两条字面路径必须
+  声明在 `/{matter_id}` 之前，否则 "contacts" 被当 public_id 吞。
+  回归：`tests/matters/test_matter_contacts.py` + `test_matter_v52_migration.py`。
 
 ---
 
@@ -147,7 +224,7 @@ v48 email/thread external_key 归一 · v49 拒绝记忆 · v50 标签定义表 
 | `schedule` | 复用 `src/agents/schedule_rule` 求值器（该模块**零改动**）| occurrence 时间 |
 | `event` | 新增的 `matter_event` 行（新证据到达）| 触发它的 event id |
 | `condition` | **open 状态**的 `matter_attention` 信号 | 信号 id + subject_key |
-| `manual` | 不自动触发，只由「立即跟进」驱动 | — |
+| `manual` | 不自动触发；由失效提案上的「重新跑一轮」等手动 run 入口（`POST /{id}/runs`）驱动 —— 详情头「立即跟进」已是**对话**入口，不产生 run（§1）| — |
 
 🔴 **两条硬约束**：
 
@@ -172,7 +249,7 @@ v48 email/thread external_key 归一 · v49 拒绝记忆 · v50 标签定义表 
 
 ---
 
-## 4. 跟进 run 的任务契约
+## 4. 跟进 run：任务契约与终态
 
 `run_spec._task_contract()`：owner 在全局配置面写过就用他的，否则**逐字回落**代码里的
 `_TASK_CONTRACT`。是**替换不是拼接**（拼接会让同一份准则出现两遍）。
@@ -209,6 +286,27 @@ owner 在 设置 → Custom AI → Skills 关掉某个 skill，跟进 run 真的
 「**事项级**不可改」，不是「全局关不掉」。界面必须按 `advertisedSkills` 把关掉的那组标出来，
 否则又是一句谎；🔴 投影没回来时 **fail-open 判可用** —— 把「不知道」说成「关了」同样是撒谎。
 
+### 4.2 run 终态：已交出提案的 run 不记 `fail`
+
+matter run 终态四值 `ok / noop / warn / fail`（+ `canceled`），映射单点
+`src/agents/run_worker.py::_map_matter_response`。0813 #17 起的判据：
+
+- gateway outcome ≠ completed 但**提案已交出**（propose 端点暂存成功）→ 记 **`warn`** 不记
+  `fail`。提案是这条 run 的唯一产出通道、每 run 至多一个（`E_PROPOSAL_EXISTS`），交出之后
+  剩下的只是收尾叙述；错误码与原文照旧留在 `error_json`。**没有提案时一字未动，仍是 `fail`**
+  （真失败判据没有放宽）。假 fail 的害处不止 UI 显示「失败」：`matters/worker.py::_retry_tick`
+  会对 manual fail 开一条 **critical** 关注信号，假失败还污染提醒面。
+- transport failure（poke 超时 / 非 2xx）同判据记 `warn`，但 🔴 **不写 `output_watermark`** ——
+  连响应都没拿到，无从断言这轮看完了当前指纹，留给下一轮重新比对；stream-error 分支的
+  watermark 与 completed 分支同写（那份提案覆盖的就是这个指纹）。
+- **async job 侧仍记 `failed`** —— 它记的是「这次 gateway 调用出错了」，与「这轮产出了什么」
+  是两件事，各自如实。
+- 配套可诊断性：`toAgentRunWire` 额外发 `errorMessage`（additive，`error` 字符串码原样不动），
+  Python `_matter_error_payload` 落 `{"code","message"}`（截 500 字符）—— RunOverlay 的
+  `run.error?.message` 此前是永远取不到值的死读法，就此接通。gateway 的 `console.error` 在
+  打包 app 里仍然哪儿都不去，错误原文进 run 行是目前唯一的落点。
+  回归：`tests/agents/test_run_worker_matter.py`。
+
 ---
 
 ## 5. 智能关联
@@ -231,7 +329,10 @@ owner 在 设置 → Custom AI → Skills 关掉某个 skill，跟进 run 真的
   （`frontend/ARCHITECTURE.md` §7.1 列表性能铁律）。`is_inline=0`：正文里的 cid 图片不是「资料」。
 - 🔴 **干系人「往来候选」依赖 email resource 的 `sender` / `to_addr` / `cc_addr` metadata**，
   这三个键 0812 起才在两条生产路径上产出 —— **存量 `matter_resource` 行结构性为空**，
-  那些事项的往来候选是空的（靠手输兜底），不回填。
+  那些事项的往来候选是空的，不回填。0813 起 Picker 第一步是三组池（纯函数
+  `buildStakeholderPickerPools`）：**本事项往来**（即上述 metadata 推导，零请求）→
+  **联系人库** → **从邮件提取**（一键显式触发，不在每次开弹窗白跑）——存量空洞由后两组
+  与手输兜底。
 
 ---
 

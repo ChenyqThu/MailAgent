@@ -24,7 +24,9 @@ import { qk } from '@shared/lib/queryKeys'
 
 /**
  * 「手里这份事项已经过期」的两个后端错误码。
- * - `E_VERSION_CONFLICT` — `mutation.expected_version` 与库里的当前版本不符（乐观锁）。
+ * - `E_VERSION_CONFLICT` — 乐观锁**真冲突**：matter 级字段（patch/归档/评审…）恒严格 CAS；
+ *   子实体路径（item/干系人/资料/关系）0813 起服务端先做 bounded auto-rebase（版本账本
+ *   盖住 gap 且 scope 不重叠即放行），仍抛 = 救不回来，不再是「仅仅 stale」。
  * - `E_UPDATE_STALE` — 提案在评审期间被别的写入作废（accept 对 stale 行硬拒）。
  * 两者的处置相同：重新拉取事项，下一次操作才有最新版本可用。
  */
