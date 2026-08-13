@@ -61,6 +61,11 @@ interface AgentThreadProps {
    *  ViewportFooter so it rides with the composer instead of scrolling away with the stream.
    *  Self-gating (renders null when nothing is running) → omitting it is a byte-identical thread. */
   runStatusSlot?: React.ReactNode
+  /** Matters G-20 — 事项对话的空态标题/副标题（设计稿："the empty state names the matter"）。
+   *  省略 → 通用 greetings 一字不变。 */
+  welcomeOverride?: { title: string; hint: string }
+  /** Matters G-20 — 输入区下的常驻脚注（事项对话说明「对话历史不沉淀」）。省略 → 不渲染。 */
+  composerFootnote?: React.ReactNode
 }
 
 export function AgentThread({
@@ -69,7 +74,9 @@ export function AgentThread({
   pendingSlot,
   onTurnComplete,
   contextChip,
-  runStatusSlot
+  runStatusSlot,
+  welcomeOverride,
+  composerFootnote
 }: AgentThreadProps): React.JSX.Element {
   const isEmpty = useAuiState(isNewChatView)
   return (
@@ -98,7 +105,7 @@ export function AgentThread({
           )}
         >
           <AuiIf condition={isNewChatView}>
-            <AgentWelcome />
+            <AgentWelcome override={welcomeOverride} />
           </AuiIf>
 
           {/* 空态显式 hidden（不靠 :empty —— assistant-ui 可能渲染空节点使 :empty 失效，残留 mb-10
@@ -133,6 +140,9 @@ export function AgentThread({
                 <div className="min-h-[4.5rem]">{quickActions}</div>
               </AuiIf>
             </AuiIf>
+            {/* G-20 —— 事项对话的脚注：常驻在输入区**下方**（不是只在空态），因为它说的是这场
+                对话的性质，不是引导语。非事项对话 undefined → 什么都不渲染。 */}
+            {!readOnly && composerFootnote}
           </ThreadPrimitive.ViewportFooter>
         </ThreadPrimitive.Viewport>
       </ThreadPrimitive.Root>
@@ -140,7 +150,12 @@ export function AgentThread({
   )
 }
 
-function AgentWelcome(): React.JSX.Element {
+function AgentWelcome({
+  override
+}: {
+  /** 事项对话把标题换成事项标题（用户内容，不进 i18n）。省略 → 通用 greetings。 */
+  override?: { title: string; hint: string }
+}): React.JSX.Element {
   const { t } = useTranslation()
   return (
     <div className="relative mx-auto mb-6 flex min-h-[16rem] w-full max-w-[var(--thread-max-width)] flex-col items-center justify-end px-4 pb-4 text-center">
@@ -158,10 +173,12 @@ function AgentWelcome(): React.JSX.Element {
       {/* #1 dogfood: z-10 已移到 .agent-strands-banner { z-index:-1 }，由
           负 z-index 把丝线沉到底层，文案无需再持 z-10 stacking context。
           保留 relative 供 animate-in transform 用。 */}
-      <h1 className="relative animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-2xl font-semibold text-ink-fg duration-200">
-        {t('agentView.welcome')}
+      <h1 className="relative animate-in fade-in slide-in-from-bottom-1 fill-mode-both text-balance text-2xl font-semibold text-ink-fg duration-200">
+        {override?.title ?? t('agentView.welcome')}
       </h1>
-      <p className="relative mt-2 text-aux text-ink-fg-3">{t('agentView.emptyHint')}</p>
+      <p className="relative mt-2 text-aux text-ink-fg-3">
+        {override?.hint ?? t('agentView.emptyHint')}
+      </p>
     </div>
   )
 }

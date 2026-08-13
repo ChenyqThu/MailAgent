@@ -9,6 +9,13 @@ import { ScheduleBuilder } from '@shared/components/agents/schedule/ScheduleBuil
 import { newScheduleValue } from '@shared/components/agents/schedule/migrate'
 import { DEFAULT_RULE } from '@shared/components/agents/schedule/types'
 import type { ScheduleValue } from '@shared/components/agents/schedule/types'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue
+} from '@shared/components/ui/select'
 import { cn } from '@shared/lib/cn'
 
 import type { MatterTriggerEntry, MatterTriggerKind } from './matterSchedule'
@@ -155,34 +162,43 @@ export function MatterTriggerEditor({
               </div>
             ) : null}
 
+            {/* 0811 D2：原生 `<select>` 一律映射 Radix Select（本仓唯一的下拉基座；原生控件
+                在暗色主题下由系统绘制，与 token 体系完全脱节）。`z-[70]` 与 custom-agent 侧
+                同值 —— 这两个下拉都活在模态里，低于它的层会被遮罩吃掉。 */}
             {entry.kind === 'event' ? (
-              <select
+              <Select
                 value={entry.event_type ?? MATTER_EVENT_TRIGGER_TYPES[0]}
-                onChange={(event) => update(index, { event_type: event.target.value })}
-                aria-label={t('matters.trigger.kind.event')}
-                className="mt-2 w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 px-2 py-1.5 text-meta"
+                onValueChange={(value) => update(index, { event_type: value })}
               >
-                {MATTER_EVENT_TRIGGER_TYPES.map((value) => (
-                  <option key={value} value={value}>
-                    {t(`matters.trigger.event.${value}`)}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="mt-2" aria-label={t('matters.trigger.kind.event')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[70]">
+                  {MATTER_EVENT_TRIGGER_TYPES.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {t(`matters.trigger.event.${value}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             ) : null}
 
             {entry.kind === 'condition' ? (
-              <select
+              <Select
                 value={entry.condition ?? MATTER_CONDITION_TRIGGER_TYPES[0]}
-                onChange={(event) => update(index, { condition: event.target.value })}
-                aria-label={t('matters.trigger.kind.condition')}
-                className="mt-2 w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 px-2 py-1.5 text-meta"
+                onValueChange={(value) => update(index, { condition: value })}
               >
-                {MATTER_CONDITION_TRIGGER_TYPES.map((value) => (
-                  <option key={value} value={value}>
-                    {t(`matters.trigger.condition.${value}`)}
-                  </option>
-                ))}
-              </select>
+                <SelectTrigger className="mt-2" aria-label={t('matters.trigger.kind.condition')}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent className="z-[70]">
+                  {MATTER_CONDITION_TRIGGER_TYPES.map((value) => (
+                    <SelectItem key={value} value={value}>
+                      {t(`matters.trigger.condition.${value}`)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             ) : null}
 
             {entry.kind === 'manual' ? (

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ComponentType } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Archive,
@@ -11,6 +11,7 @@ import {
   ListChecks,
   Search,
   Sparkles,
+  Tag,
   Trash2,
   type LucideIcon
 } from 'lucide-react'
@@ -22,6 +23,7 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import {
   formatMatterAgo,
   formatMatterDueRelative,
+  matterTagViewName,
   nextAction,
   trashDaysRemaining
 } from '@shared/lib/matterDerive'
@@ -35,6 +37,7 @@ import type {
 import { cn } from '@shared/lib/cn'
 
 import { ATTENTION_META, attentionTone } from './attentionMeta'
+import { MatterPip } from './MatterPip'
 import { MatterTagChip } from './MatterTagMarker'
 import { getOrderedVisibleMatters } from './matterListOrder'
 import { matterTagMap, resolveMatterTag } from './matterTags'
@@ -48,7 +51,6 @@ import {
   MATTER_TONE_TEXT_CLASS,
   matterDueTone
 } from './matterVocab'
-import type { MatterTone } from './matterVocab'
 
 /** 设计 `list.jsx::ListPane` 用 ResizeObserver 在 360px 处切窄列变体（不是窗口断点：
  *  清单列本身可被用户拖宽拖窄，看窗口就会在拖到 300px 时仍按宽列排）。 */
@@ -70,6 +72,12 @@ const NEXT_ACTION_ICONS: Record<MatterNextActionKind, LucideIcon> = {
 const EMPTY_VIEW_ICONS: Partial<Record<MatterView, LucideIcon>> = {
   archived: Archive,
   trash: Trash2
+}
+
+/** 视图 key → 展示名。标签视图的名字是**用户内容**（标签名，永不翻译）；其余走词表。 */
+function useMatterViewLabel(view: MatterView): string {
+  const { t } = useTranslation()
+  return matterTagViewName(view) ?? t(`matters.views.${view}`)
 }
 
 interface MatterListProps {
@@ -110,6 +118,7 @@ export function MatterList({
   )
   const tagsByName = useMemo(() => matterTagMap(tagDefinitions), [tagDefinitions])
   const locale = i18n.language || 'zh-CN'
+  const viewLabel = useMatterViewLabel(view)
 
   useEffect(() => {
     const pane = paneRef.current
@@ -121,7 +130,9 @@ export function MatterList({
     return () => observer.disconnect()
   }, [])
 
-  const EmptyIcon = EMPTY_VIEW_ICONS[view] ?? (search.trim() ? Search : Layers)
+  const EmptyIcon =
+    EMPTY_VIEW_ICONS[view] ??
+    (search.trim() ? Search : matterTagViewName(view) !== null ? Tag : Layers)
 
   return (
     <section
@@ -135,7 +146,7 @@ export function MatterList({
             value={search}
             onChange={(event) => onSearchChange(event.target.value)}
             // 设计 list.jsx:364 —— placeholder 跟随当前视图名，而不是一句放之四海的通用提示。
-            placeholder={t('matters.list.searchInView', { view: t(`matters.views.${view}`) })}
+            placeholder={t('matters.list.searchInView', { view: viewLabel })}
             className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-ink-fg-2"
           />
         </label>
@@ -168,7 +179,7 @@ export function MatterList({
                   ? t('matters.empty.trash')
                   : view === 'archived'
                     ? t('matters.empty.archived')
-                    : t('matters.empty.default', { view: t(`matters.views.${view}`) })
+                    : t('matters.empty.default', { view: viewLabel })
             }
             hint={
               search.trim()
@@ -384,32 +395,6 @@ function MatterRow({
         </span>
       ) : null}
     </button>
-  )
-}
-
-/** 设计 `ui.jsx::Pip`（sm 档）：tone 色 12% 底 + 25% 边 + 同色前景。底与边一律取
- *  `MATTER_TONE_CHIP_CLASS` 单源，不在这里另写一套 alpha。 */
-function MatterPip({
-  tone,
-  icon: Icon,
-  children
-}: {
-  tone: MatterTone
-  // 收得比 `LucideIcon` 宽一档：attention 词表里的 icon 是 `ComponentType<{size,className}>`，
-  // 与 lucide 的 ForwardRefExoticComponent 不互相赋值，取两者的公共调用形状。
-  icon: ComponentType<{ size?: number; className?: string }>
-  children: React.ReactNode
-}): React.ReactElement {
-  return (
-    <span
-      className={cn(
-        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-[var(--r-ctl)] border px-1.5 py-px text-[10.5px] leading-4',
-        MATTER_TONE_CHIP_CLASS[tone]
-      )}
-    >
-      <Icon size={10} className="shrink-0" />
-      {children}
-    </span>
   )
 }
 

@@ -358,6 +358,7 @@ export const SETTINGS_TABS = [
   'sync',
   'ai',
   'connectors',
+  'matters',
   'notifications',
   'integrations',
   'realtime',

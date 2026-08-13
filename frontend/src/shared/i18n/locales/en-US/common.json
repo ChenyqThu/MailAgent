@@ -2858,6 +2858,7 @@
       "sync": "Sync",
       "ai": "AI",
       "connectors": "Connectors",
+      "matters": "Matters",
       "notifications": "Notifications",
       "integrations": "Integrations",
       "realtime": "Realtime & Storage",
@@ -3861,6 +3862,24 @@
           "cleanupFail": "Failed to clean up local copies",
           "cleanupBusy": "Cleaning…"
         }
+      }
+    },
+    "matters": {
+      "title": "Matters",
+      "description": "Global settings for the Matters module. Per-matter follow-up rules and tags stay on the matter page.",
+      "section": "Global configuration",
+      "helper": "Both apply to every matter — there is exactly one of each.",
+      "tags": {
+        "label": "Tag management",
+        "helper": "{total} tags, {count} currently in use; rename, recolor or delete them.",
+        "loadFailed": "Could not load tags — open the manager to retry.",
+        "open": "Manage tags"
+      },
+      "agent": {
+        "label": "Follow-up agent",
+        "helper": "Built in, one instance: task contract, tool face and web-search tier.",
+        "disabled": "The follow-up agent is not enabled (its flag lives in Labs).",
+        "open": "Open configuration"
       }
     }
   },
@@ -5016,7 +5035,7 @@
       },
       "empty": {
         "title": "Move this forward from here",
-        "hint": "Answering from {count} context items in this matter"
+        "hint": "Answering from {count} context items in this matter, or @-mention other material"
       },
       "footnote": "Chat history is not official matter knowledge; only tool writes, accepted updates and deterministic events are kept.",
       "writeLabels": {
@@ -5134,6 +5153,16 @@
       "matter_agenda": "Attention sweep",
       "matter_retry": "Retry"
     },
-    "toast": { "saved": "Matter updated", "saveFailed": "Could not update matter", "createFailed": "Could not create matter", "deleteFailed": "Could not delete matter" }
+    "toast": { "saved": "Matter updated", "saveFailed": "Could not update matter", "createFailed": "Could not create matter", "deleteFailed": "Could not delete matter" },
+    "shell": {
+      "tagsTitle": "Tags",
+      "footnoteLocal": "Local SQLite · single user, single machine",
+      "footnoteRemote": "Remote Web shares the same data",
+      "backToList": "Back to matter list"
+    },
+    "chatContext": {
+      "pinnedUntitled": "Untitled resource",
+      "removePinned": "Drop this resource from the current context"
+    }
   }
 }

@@ -15,11 +15,22 @@ import {
 import type { Matter, MatterAttentionSignal, MatterUpdate } from '@shared/api/types/matter'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import type { MatterView } from '@shared/lib/matterDerive'
-import { deriveFocusStats, isLiveMatter } from '@shared/lib/matterDerive'
+import {
+  deriveFocusStats,
+  formatMatterDueRelative,
+  isLiveMatter
+} from '@shared/lib/matterDerive'
 import { cn } from '@shared/lib/cn'
 
 import { AttentionActions } from './attention'
 import { ATTENTION_META, attentionTone } from './attentionMeta'
+import { MatterPip } from './MatterPip'
+import {
+  MATTER_STATUS_ICONS,
+  MATTER_STATUS_TONES,
+  MATTER_TONE_TEXT_CLASS,
+  matterDueTone
+} from './matterVocab'
 
 const DAY = 86_400_000
 
@@ -42,8 +53,9 @@ export function MatterFocus({
   onSignal,
   onView
 }: MatterFocusProps): React.ReactElement {
-  const { t } = useTranslation()
+  const { t, i18n } = useTranslation()
   const [now] = useState(() => Date.now())
+  const locale = i18n.language || 'zh-CN'
   const live = matters.filter(isLiveMatter)
   const stats = deriveFocusStats(live, signals, updates, now)
   const matterById = new Map(live.map((matter) => [matter.public_id, matter]))
@@ -110,6 +122,9 @@ export function MatterFocus({
             value={stats.healthyRate == null ? '—' : `${stats.healthyRate}%`}
             icon={Activity}
             tone="success"
+            // 设计 §2.5：四张 KPI 卡**全部**可点跳视图；健康活跃率的分母是「未完成事项」，
+            // 所以它跳 all（与 14 天内到期同一个落点）。
+            onClick={() => onView('all')}
           />
         </div>
 
@@ -237,23 +252,38 @@ export function MatterFocus({
           <SectionTitle>{t('matters.focus.dueSection')}</SectionTitle>
           {dueSoon.length > 0 ? (
             <div className="divide-y divide-ink-border rounded-[var(--r-card)] border border-ink-border bg-ink-1/75">
-              {dueSoon.map((matter) => (
-                <button
-                  key={matter.public_id}
-                  type="button"
-                  onClick={() => onSelect(matter)}
-                  className="flex w-full items-center gap-3 px-3 py-3 text-left hover:bg-ink-3"
-                >
-                  <span className="w-[52px] shrink-0 text-meta font-mono text-warn">
-                    {new Date(matter.due_at as number).toLocaleDateString()}
-                  </span>
-                  <span className="min-w-0 flex-1 truncate text-body">{matter.title}</span>
-                  <span className="rounded-full bg-ink-3 px-2 py-0.5 text-meta">
-                    {t(`matters.status.${matter.status}`)}
-                  </span>
-                  <span className="font-mono text-meta text-ink-fg-2">{matter.public_id}</span>
-                </button>
-              ))}
+              {dueSoon.map((matter) => {
+                // 设计 §2.5：52px 的 mono **短**文案（相对天数，不带「到期」二字 —— 整段
+                // 标题已经写着「临近到期」了），tone 走与清单行同一支 `matterDueTone`，
+                // neutral 档染 info（这一段里“还早”不是灰噪音，是可以先放一放的信息）。
+                const tone = matterDueTone(matter.due_at, now)
+                const StatusIcon = MATTER_STATUS_ICONS[matter.status]
+                return (
+                  <button
+                    key={matter.public_id}
+                    type="button"
+                    onClick={() => onSelect(matter)}
+                    className="flex w-full items-center gap-3 px-3 py-3 text-left hover:bg-ink-3"
+                  >
+                    <span
+                      title={new Date(matter.due_at as number).toLocaleDateString()}
+                      className={cn(
+                        'w-[52px] shrink-0 font-mono text-meta tabular-nums',
+                        tone === null || tone === 'neutral'
+                          ? 'text-ai'
+                          : MATTER_TONE_TEXT_CLASS[tone]
+                      )}
+                    >
+                      {formatMatterDueRelative(matter.due_at as number, now, locale)}
+                    </span>
+                    <span className="min-w-0 flex-1 truncate text-body">{matter.title}</span>
+                    <MatterPip tone={MATTER_STATUS_TONES[matter.status]} icon={StatusIcon}>
+                      {t(`matters.status.${matter.status}`)}
+                    </MatterPip>
+                    <span className="font-mono text-meta text-ink-fg-2">{matter.public_id}</span>
+                  </button>
+                )
+              })}
             </div>
           ) : (
             <EmptyState icon={<Calendar size={22} className="text-ok" />} title={t('matters.focus.dueEmpty')} />

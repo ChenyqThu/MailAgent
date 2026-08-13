@@ -592,10 +592,14 @@ export function MatterDetail({
       <article className="flex h-full min-w-0 flex-1 flex-col">
         <header className="border-b border-ink-border px-5 py-4">
           <div className="flex items-start gap-3">
+            {/* G-03：窄布局（<1180px 单列）下清单列被藏起，这个箭头是回列表的唯一出口 ——
+                所以它必须有名字（图标按钮无 aria-label 对读屏 = 一个叫 "button" 的东西）。 */}
             <button
               type="button"
               onClick={onBack}
-              className="mt-0.5 hidden rounded-[var(--r-ctl)] p-1.5 hover:bg-ink-3 max-[1180px]:block"
+              aria-label={t('matters.shell.backToList')}
+              title={t('matters.shell.backToList')}
+              className="mt-0.5 hidden rounded-[var(--r-ctl)] p-1.5 text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg max-[1180px]:block"
             >
               <ArrowLeft size={16} />
             </button>
