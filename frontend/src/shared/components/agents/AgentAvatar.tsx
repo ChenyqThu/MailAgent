@@ -6,6 +6,7 @@ import type { AgentAvatarConfig } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { BotAvatar } from '@shared/bot-avatar/BotAvatar'
 import { useBotAvatarTheme } from '@shared/bot-avatar/useBotAvatarTheme'
+import { useShowcaseState } from '@shared/bot-avatar/useShowcaseState'
 import { BOT_AVATAR_COLORS, COLORS } from '@shared/bot-avatar/colors'
 import { BOT_AVATAR_SHAPES } from '@shared/bot-avatar/shapes'
 import type { BotColor, BotShape, BotState } from '@shared/bot-avatar/types'
@@ -79,6 +80,8 @@ export function AgentAvatarEditor({
   const uploaded = isAgentAvatarImage(value)
   // 初始 tab 跟当前身份走：上传图落上传 tab，其余（bot/legacy/null）落 Bot tab。
   const [tab, setTab] = useState<'bot' | 'upload'>(uploaded ? 'upload' : 'bot')
+  // 0813 dogfood：预览随机换动作巡演（Bot tab 可见时常开）——「设置的时候能看到效果」。
+  const previewState = useShowcaseState(tab === 'bot')
 
   // 上传态下 resolve 落到 id 派生基底（prd §6.1）—— 切到 Bot tab 显示派生基底，
   // 点任一候选 = 隐式切回 bot 身份并丢弃图片，故不单设「移除图片」钮。
@@ -147,9 +150,16 @@ export function AgentAvatarEditor({
       {tab === 'bot' ? (
         <>
           <div className="flex items-center gap-3">
-            {/* 编辑预览是动画位点（prd §6.2）：眼睛跟指针 —— 编辑时的「活」感展示。 */}
+            {/* 编辑预览是动画位点（prd §6.2）：眼睛跟指针 + showcase 随机动作巡演 ——
+                编辑时的「活」感展示（0813 dogfood）。 */}
             <span className="inline-flex shrink-0 overflow-hidden rounded-full">
-              <BotAvatar config={resolved} state="idle" size={48} animated mouseInteractive />
+              <BotAvatar
+                config={resolved}
+                state={previewState}
+                size={48}
+                animated
+                mouseInteractive
+              />
             </span>
             <div className="min-w-0 flex-1" />
             <button

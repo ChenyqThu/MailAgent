@@ -51,6 +51,7 @@ import { AiSdkRuntimeProvider } from './runtime/AiSdkRuntimeProvider'
 import { ThreadRunningBridge } from './runtime/ThreadRunningBridge'
 import { makeSessionSettledHandler } from './runtime/threadRunningGuard'
 import { useBackgroundChatRun } from './runtime/useBackgroundChatRun'
+import { useAssistantIdentity } from './assistantIdentity'
 import { useApprovalDecideBusy } from './useApprovalDecideBusy'
 import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
@@ -486,7 +487,9 @@ export function AIChatPanel({
   const pendingApprovalTruth = useQuery({
     queryKey: qk.agentApprovalPending(chat.activeSessionId),
     queryFn: () =>
-      chat.activeSessionId == null ? Promise.resolve(null) : fetchPendingApproval(chat.activeSessionId),
+      chat.activeSessionId == null
+        ? Promise.resolve(null)
+        : fetchPendingApproval(chat.activeSessionId),
     enabled: queuedInputEnabled && chat.activeSessionId != null,
     staleTime: 3_000,
     refetchOnWindowFocus: true
@@ -511,7 +514,9 @@ export function AIChatPanel({
             queryKey: qk.chat.queuedInput(chat.activeSessionId)
           })
         })
-        .catch((error: unknown) => toastError(t('chat.queuedInput.enqueueFailed'), errorMessage(error)))
+        .catch((error: unknown) =>
+          toastError(t('chat.queuedInput.enqueueFailed'), errorMessage(error))
+        )
     },
     [chat.activeSessionId, gatewayBaseUrl, queryClientForRead, t]
   )
@@ -643,6 +648,9 @@ export function AIChatPanel({
 
   const retryActionKlass = useCjkMonoSwap('text-meta font-mono')
 
+  // 0813 主 agent 身份：标题用 owner 起的名（Jarvis），未配置回 i18n 'chat.title'。
+  const assistantIdentity = useAssistantIdentity()
+
   // "+New" — a fresh conversation is always ai-sdk; a legacy read-only re-scope
   // returns to the default kind here (D6).
   const handleNewSession = useCallback(() => {
@@ -695,7 +703,8 @@ export function AIChatPanel({
               is already masked inside useBackgroundChatRun, so a foreground stream stays idle
               here — the in-flow TurnPresence narrates that one). */}
           <AssistantPanelBotAvatar working={backgroundActive} />
-          {t('chat.title')}
+          {/* 0813 主 agent 身份：起了名（如 Jarvis）标题即名字；未配置回 i18n 默认 */}
+          {assistantIdentity.name ?? t('chat.title')}
         </div>
         <div
           className="ml-auto flex items-center gap-1"

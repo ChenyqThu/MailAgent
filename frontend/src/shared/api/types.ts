@@ -162,6 +162,7 @@ export type {
   SkillUninstallResult,
   SkillSecretMeta,
   CompileUserMdResult,
+  AssistantIdentity,
   GlobalApprovalMode,
   ToolApprovalTierValue,
   ToolApprovalPrefRow,

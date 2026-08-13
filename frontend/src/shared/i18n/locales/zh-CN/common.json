@@ -1619,7 +1619,7 @@
       }
     },
     "status": {
-      "thinking": "AI 思考中…",
+      "thinking": "{name} 思考中…",
       "streaming": "回复中…",
       "complete": "完成",
       "aborted": "已取消",
@@ -4370,6 +4370,16 @@
         "decode_failed": "这张图片读不出来，换一张试试。",
         "too_large": "压到最低画质仍超过 150KB，请换一张更简单的图片。"
       }
+    },
+    "mainAgent": {
+      "title": "主 Agent",
+      "badge": "默认助手",
+      "hint": "全局对话的名字与头像；名字会出现在「思考中」文案和面板标题里",
+      "configure": "配置",
+      "collapse": "收起",
+      "nameLabel": "名字",
+      "namePlaceholder": "AI 助手（比如 Jarvis）",
+      "docsHint": "系统提示词（SOUL / AGENT / RULES / USER 身份文档）在 设置 → AI → 身份文档 里编辑"
     },
     "custom": {
       "import": "导入 Agent",

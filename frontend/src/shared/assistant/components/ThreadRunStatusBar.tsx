@@ -26,6 +26,8 @@
 
 import { useTranslation } from 'react-i18next'
 
+import { useAssistantIdentity } from '@shared/assistant/assistantIdentity'
+
 import { cn } from '@shared/lib/cn'
 import { DotMatrix, type DotMatrixState } from '@shared/components/ui/DotMatrix'
 import { ShimmerText } from '@shared/components/ShimmerText'
@@ -182,15 +184,18 @@ function RunElapsed({
  *  绝不返回缺翻译占位符。 */
 function useRunStatusLabel(variant: RunStatusVariant, toolName?: string): string {
   const { t } = useTranslation()
+  // 0813 主 agent 身份：药丸的「思考中」与 TurnPresence 同款 ICU {name} 插值（Jarvis 思考中…）。
+  const identity = useAssistantIdentity()
+  const name = identity.name ?? 'AI'
   if (variant === 'calling-tool') {
     const key = toolName == null ? null : toolTitleKey(toolName)
     const tool = key === null ? (toolName ?? '') : t(key)
     // 工具名拿不到（理论上不会：calling-tool 必带 toolName）→ 退回通用「思考中」，不拼半句话。
-    if (tool === '') return t('chat.status.thinking')
+    if (tool === '') return t('chat.status.thinking', { name })
     return t('chat.runStatus.callingTool', { tool })
   }
   if (variant === 'background') return t('chat.runStatus.background')
   if (variant === 'writing') return t('chat.runStatus.writing')
   if (variant === 'connecting') return t('chat.runStatus.connecting')
-  return t('chat.status.thinking')
+  return t('chat.status.thinking', { name })
 }
