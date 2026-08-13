@@ -63,33 +63,47 @@ afterEach(() => {
 })
 
 describe('BotAvatar 静态档（默认）', () => {
-  test('渲染 body path + 两条眼 path，且不注册 ticker', () => {
+  test('渲染头 path + 两条眼 path，且不注册 ticker', () => {
     const { container } = render(<BotAvatar title="bot" size={24} />)
     const svg = container.querySelector('svg')
-    expect(svg?.getAttribute('viewBox')).toBe('-15 -15 259 259')
+    expect(svg?.getAttribute('viewBox')).toBe('-150 -150 300 300')
     expect(svg?.getAttribute('width')).toBe('24')
 
-    const body = container.querySelector(`path[d="${SHAPES.blob.path}"]`)
-    expect(body).not.toBeNull()
+    const expected = staticFrame(POOLS.idle[0], SHAPES.sphere)
+    const head = container.querySelector<SVGPathElement>('[data-bot-head]')
+    expect(head?.getAttribute('d')).toBe(expected.head)
+    // 眼睛 clip 在头形内是 3D 错觉关键：clipPath 内容与头 path 共用同一串
+    const clipContent = container.querySelector<SVGPathElement>('clipPath path')
+    expect(clipContent?.getAttribute('d')).toBe(expected.head)
 
     const eyes = eyePaths(container)
     expect(eyes).toHaveLength(2)
-    const expected = staticFrame(POOLS.idle[0])
     expect(eyes[0].getAttribute('d')).toBe(expected.eyes[0].d)
     expect(eyes[1].getAttribute('d')).toBe(expected.eyes[1].d)
 
     expect(__instanceCount()).toBe(0)
   })
 
-  test('state 变化 = 离散换帧（池首表情）', () => {
+  test('state 变化 = 离散换帧（池首表情；非球形连头轮廓一起变）', () => {
     const { container, rerender } = render(<BotAvatar state="idle" />)
-    const idleD = eyePaths(container)[0].getAttribute('d')
-    expect(idleD).toBe(staticFrame(POOLS.idle[0]).eyes[0].d)
+    const idleFrame = staticFrame(POOLS.idle[0], SHAPES.sphere)
+    expect(eyePaths(container)[0].getAttribute('d')).toBe(idleFrame.eyes[0].d)
 
     rerender(<BotAvatar state="thinking" />)
-    const thinkingD = eyePaths(container)[0].getAttribute('d')
-    expect(thinkingD).toBe(staticFrame(POOLS.thinking[0]).eyes[0].d)
-    expect(thinkingD).not.toBe(idleD)
+    const thinkingFrame = staticFrame(POOLS.thinking[0], SHAPES.sphere)
+    expect(eyePaths(container)[0].getAttribute('d')).toBe(thinkingFrame.eyes[0].d)
+    expect(thinkingFrame.eyes[0].d).not.toBe(idleFrame.eyes[0].d)
+
+    // 3D 转头进头轮廓：sphere 姿态不变是几何事实，用 cube 验证
+    const cube = render(<BotAvatar config={{ shape: 'cube' }} state="idle" />)
+    const cubeIdleHead = cube.container
+      .querySelector<SVGPathElement>('[data-bot-head]')
+      ?.getAttribute('d')
+    cube.rerender(<BotAvatar config={{ shape: 'cube' }} state="thinking" />)
+    expect(
+      cube.container.querySelector<SVGPathElement>('[data-bot-head]')?.getAttribute('d')
+    ).not.toBe(cubeIdleHead)
+    cube.unmount()
   })
 
   test('clipPath id 每实例唯一，眼组各自引用自家 id', () => {
@@ -110,10 +124,10 @@ describe('BotAvatar 静态档（默认）', () => {
     expect(groups).toEqual([`url(#${ids[0]})`, `url(#${ids[1]})`])
   })
 
-  test('flipX 输出原型镜像串（translate(228.541 0) scale(-1 1)）', () => {
+  test('flipX = 绕原点镜像（v2 中心坐标系）', () => {
     const { container } = render(<BotAvatar flipX />)
     const g = container.querySelector('g[transform]')
-    expect(g?.getAttribute('transform')).toBe('translate(228.541 0) scale(-1 1)')
+    expect(g?.getAttribute('transform')).toBe('scale(-1 1)')
   })
 
   test('title 走可访问名；无 title 时对 a11y 树隐藏', () => {
@@ -124,6 +138,17 @@ describe('BotAvatar 静态档（默认）', () => {
 
     const anonymous = render(<BotAvatar />)
     expect(anonymous.container.querySelector('svg')?.getAttribute('aria-hidden')).toBe('true')
+  })
+
+  test('复合形背层槽位：mickey 双耳 / cursor 锥体 / sphere 无', () => {
+    const mickey = render(<BotAvatar config={{ shape: 'mickey' }} />)
+    expect(mickey.container.querySelectorAll('[data-bot-back]')).toHaveLength(2)
+    mickey.unmount()
+    const cursor = render(<BotAvatar config={{ shape: 'cursor' }} />)
+    expect(cursor.container.querySelectorAll('[data-bot-back]')).toHaveLength(1)
+    cursor.unmount()
+    const sphere = render(<BotAvatar config={{ shape: 'sphere' }} />)
+    expect(sphere.container.querySelectorAll('[data-bot-back]')).toHaveLength(0)
   })
 })
 
@@ -166,7 +191,7 @@ describe('BotAvatar 动画档', () => {
   })
 })
 
-describe('BotAvatar mouseInteractive（WP3 编辑器预览）', () => {
+describe('BotAvatar mouseInteractive（编辑器预览）', () => {
   function pointermoveListenerDelta(run: () => () => void): { added: number; removed: number } {
     const addSpy = vi.spyOn(window, 'addEventListener')
     const removeSpy = vi.spyOn(window, 'removeEventListener')
@@ -219,7 +244,7 @@ describe('BotAvatar mouseInteractive（WP3 编辑器预览）', () => {
     expect(delta.added).toBe(0)
   })
 
-  test('pointermove → 引擎收到 gaze（下一帧眼 transform 随指针偏转）', () => {
+  test('pointermove → 引擎收到 gaze（下一帧眼/头 path 随指针偏转）', () => {
     stubNoReduceMatchMedia()
     stubIntersectionObserver(true)
     // 受控 rAF：手动推帧，避免真异步
@@ -232,16 +257,14 @@ describe('BotAvatar mouseInteractive（WP3 编辑器预览）', () => {
 
     const { container, unmount } = render(<BotAvatar animated mouseInteractive size={40} />)
     const eye = container.querySelector<SVGPathElement>('[data-bot-eye="0"]')
-    // 基线：推两帧让弹簧/眨眼进入稳态输出
+    // 基线：推一帧（首帧 dirty）
     frameCb?.(0)
-    frameCb?.(16)
-    const before = eye?.getAttribute('transform')
+    const before = eye?.getAttribute('d')
 
-    // 指针打到视窗最右缘 —— gazeX 应饱和为正值，眼睛 translate 右移
+    // 指针打到视窗最右缘 —— gazeX 应饱和为正值，眼睛/头部 path 偏转
     fireEvent.pointerMove(window, { clientX: window.innerWidth, clientY: 0 })
-    frameCb?.(32)
-    frameCb?.(48)
-    const after = eye?.getAttribute('transform')
+    frameCb?.(16)
+    const after = eye?.getAttribute('d')
     expect(after).not.toBe(before)
     unmount()
   })

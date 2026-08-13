@@ -1,11 +1,12 @@
-// 状态表一致性闸：四张表（GROUPS/POOLS/EXPR_CADENCE/BLINK）键集合互等 +
-// 池索引不越界 + MailAgent 映射穷尽。表是 1:1 移植的手抄数据 —— 加/删状态时
-// 漏改任何一张表，运行时是 undefined cadence 静默炸，这里编译期/测试期就红。
+// 状态表一致性闸：五张表（GROUPS/POOLS/EXPR_CADENCE/BLINK/AMBIENT）键集合互等 +
+// 池索引不越界 + MailAgent 映射穷尽。表是手抄数据 —— 加/删状态时漏改任何一张表，
+// 运行时是 undefined cadence 静默炸，这里编译期/测试期就红。
 
 import { describe, expect, test } from 'vitest'
 
-import EXPRESSIONS from '../../../src/shared/bot-avatar/expressions.json'
+import { EXPRESSIONS } from '../../../src/shared/bot-avatar/expressions'
 import {
+  AMBIENT,
   BLINK,
   BOT_STATES,
   EXPR_CADENCE,
@@ -18,19 +19,19 @@ import type { BotState } from '../../../src/shared/bot-avatar/states'
 
 const stateSet = new Set<string>(BOT_STATES)
 
-describe('bot-avatar states 四张表', () => {
+describe('bot-avatar states 五张表', () => {
   test('GROUPS 展平 = 39 个不重复状态', () => {
     expect(BOT_STATES).toHaveLength(39)
     expect(stateSet.size).toBe(39)
-    // 组规模钉死原型：生命周期 7 / 反应 16 / agent 形态 3 / 产品周期 13
+    // 组规模钉死：生命周期 7 / 反应 16 / agent 形态 3 / 产品周期 13
     expect(GROUPS.lifecycle).toHaveLength(7)
     expect(GROUPS.reactions).toHaveLength(16)
     expect(GROUPS.agentMorphs).toHaveLength(3)
     expect(GROUPS.productCycle).toHaveLength(13)
   })
 
-  test('POOLS / EXPR_CADENCE / BLINK 键集合 = GROUPS 展平集', () => {
-    for (const table of [POOLS, EXPR_CADENCE, BLINK]) {
+  test('POOLS / EXPR_CADENCE / BLINK / AMBIENT 键集合 = GROUPS 展平集', () => {
+    for (const table of [POOLS, EXPR_CADENCE, BLINK, AMBIENT]) {
       const keys = Object.keys(table)
       expect(keys).toHaveLength(39)
       for (const key of keys) expect(stateSet.has(key)).toBe(true)
@@ -49,7 +50,7 @@ describe('bot-avatar states 四张表', () => {
     }
   })
 
-  test('节奏区间合法：0 < min ≤ max（含 BLINK 非 null 项）', () => {
+  test('节奏区间合法：0 < min ≤ max；眨眼时长档 ∈ [180, 500]ms（v2 分档）', () => {
     for (const state of BOT_STATES) {
       const cadence = EXPR_CADENCE[state]
       expect(cadence[0]).toBeGreaterThan(0)
@@ -58,8 +59,25 @@ describe('bot-avatar states 四张表', () => {
       if (blink !== null) {
         expect(blink[0]).toBeGreaterThan(0)
         expect(blink[1]).toBeGreaterThanOrEqual(blink[0])
+        // 第三元 = 眨眼时长（calm 慢 / reactive 快），越出这个带 = 大概率手滑
+        expect(blink[2]).toBeGreaterThanOrEqual(180)
+        expect(blink[2]).toBeLessThanOrEqual(500)
       }
     }
+  })
+
+  test('AMBIENT 值域合法；抽查产品语义（idle 缓漂 / thinking 微扫视 / scared 抖）', () => {
+    for (const state of BOT_STATES) {
+      const ambient = AMBIENT[state]
+      expect(['none', 'microSaccades', 'shake']).toContain(ambient.eyes)
+      expect(['none', 'slowDrift', 'shake']).toContain(ambient.body)
+    }
+    expect(AMBIENT.idle).toEqual({ eyes: 'none', body: 'slowDrift' })
+    expect(AMBIENT.thinking.eyes).toBe('microSaccades')
+    expect(AMBIENT.scared).toEqual({ eyes: 'shake', body: 'shake' })
+    // 完全静止态存在（waking/spawning/powering-down）——引擎 settle 语义依赖它
+    expect(AMBIENT.waking).toEqual({ eyes: 'none', body: 'none' })
+    expect(AMBIENT['powering-down']).toEqual({ eyes: 'none', body: 'none' })
   })
 })
 

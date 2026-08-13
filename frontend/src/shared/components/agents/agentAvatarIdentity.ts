@@ -1,7 +1,7 @@
 import type { AgentAvatarBot, AgentAvatarConfig, AgentAvatarGenerated, AgentAvatarImage } from '@shared/api/types'
 import { deriveBotAvatar, mapLegacyGeneratedToBot, shuffleBotAvatar } from '@shared/bot-avatar/random'
 import { BOT_AVATAR_COLORS } from '@shared/bot-avatar/colors'
-import { BOT_AVATAR_SHAPES } from '@shared/bot-avatar/shapes'
+import { BOT_AVATAR_SHAPES, LEGACY_BOT_SHAPE_MAP } from '@shared/bot-avatar/shapes'
 
 const BOT_SHAPE_IDS = new Set<string>(BOT_AVATAR_SHAPES)
 const BOT_COLOR_IDS = new Set<string>(BOT_AVATAR_COLORS)
@@ -35,7 +35,8 @@ function isLegacyGenerated(config: AgentAvatarConfig): config is AgentAvatarGene
 }
 
 /** 身份解析：**恒返回 bot config**（08-12 living-bot-avatar 起 oreo 渲染链退役）。
- *  - `type:'bot'` 合法原样返回；词表越域回落 id 派生；
+ *  - `type:'bot'` 合法原样返回；v1 8 形词表经 LEGACY_BOT_SHAPE_MAP 双射换代
+ *    （blob→sphere 等，存量行不迁移不回写）；词表越域回落 id 派生；
  *  - legacy oreo 生成式行 → `mapLegacyGeneratedToBot` 确定性换脸（同 shape+palette 恒同脸）；
  *  - `type:'image'` / 坏值 / null → `deriveBotAvatar(agentId)`。上传态没有 shape/color 可言，
  *    编辑器的形状/配色网格与「换一换」需要一个可高亮、可递进的基底，从 id 派生最符合直觉；
@@ -46,6 +47,10 @@ export function resolveAgentAvatar(
 ): AgentAvatarBot {
   if (config && config.type === 'bot') {
     if (BOT_SHAPE_IDS.has(config.shape) && BOT_COLOR_IDS.has(config.color)) return config
+    const remapped = LEGACY_BOT_SHAPE_MAP[config.shape]
+    if (remapped && BOT_COLOR_IDS.has(config.color)) {
+      return { type: 'bot', shape: remapped, color: config.color }
+    }
     return deriveBotAvatar(agentId)
   }
   if (config && config.type !== 'image' && isLegacyGenerated(config)) {

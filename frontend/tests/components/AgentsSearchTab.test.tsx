@@ -278,10 +278,10 @@ describe('SearchConfigDrawer — 头像身份（0804 dogfood 3d）', () => {
     expect(mockSetConfig.mock.calls[0][1]).not.toHaveProperty('avatar')
 
     fireEvent.click(screen.getByRole('button', { name: '更换' }))
-    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('egg'))
+    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText('cylinder'))
     fireEvent.click(screen.getByText('保存'))
     await vi.waitFor(() => expect(mockSetConfig).toHaveBeenCalledTimes(2))
-    expect(mockSetConfig.mock.calls[1][1].avatar).toMatchObject({ type: 'bot', shape: 'egg' })
+    expect(mockSetConfig.mock.calls[1][1].avatar).toMatchObject({ type: 'bot', shape: 'cylinder' })
   })
 
   test('新建：未挑头像 → 只有 createAgent（不多发 setConfig）', async () => {

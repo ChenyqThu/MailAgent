@@ -904,7 +904,7 @@ def test_wire_agent_avatar_bot_round_trip_and_validation() -> None:
     """
     from src.reports import wire
 
-    avatar = {"type": "bot", "shape": "blob", "color": "orange"}
+    avatar = {"type": "bot", "shape": "sphere", "color": "orange"}
     patch = wire.config_patch_to_db({"avatar": avatar})
     assert json.loads(patch["avatar_json"]) == avatar
     assert wire.resolve_agent({"id": "x", "avatar_json": patch["avatar_json"]})["avatar"] == avatar
@@ -921,20 +921,20 @@ def test_wire_agent_avatar_bot_round_trip_and_validation() -> None:
         wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "bloom", "color": "orange"}})
     # 越域 color。
     with pytest.raises(ValueError, match="avatar.color"):
-        wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "blob", "color": "magenta"}})
+        wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "sphere", "color": "magenta"}})
     # 多余键 → 拒（bot 支不做 image 支那种静默剥键，见 wire.py 注释）。
     with pytest.raises(ValueError, match="only keys"):
         wire.config_patch_to_db(
-            {"avatar": {"type": "bot", "shape": "blob", "color": "orange", "variant_id": "x"}}
+            {"avatar": {"type": "bot", "shape": "sphere", "color": "orange", "variant_id": "x"}}
         )
     # 缺键（shape/color 各缺一例）。
     with pytest.raises(ValueError, match="avatar.color"):
-        wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "blob"}})
+        wire.config_patch_to_db({"avatar": {"type": "bot", "shape": "sphere"}})
     with pytest.raises(ValueError, match="avatar.shape"):
         wire.config_patch_to_db({"avatar": {"type": "bot", "color": "orange"}})
     # 无 type 键 + bot 形状名 → 走 legacy oreo 支并被拒（判别只看 type，不看词表命中）。
     with pytest.raises(ValueError, match="avatar.shape"):
-        wire.config_patch_to_db({"avatar": {"shape": "blob", "palette": "rose"}})
+        wire.config_patch_to_db({"avatar": {"shape": "sphere", "palette": "rose"}})
 
 
 def _avatar_image_data_uri(nbytes: int, mime: str = "image/webp") -> str:

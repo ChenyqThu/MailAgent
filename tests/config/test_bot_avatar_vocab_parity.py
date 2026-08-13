@@ -148,7 +148,7 @@ def ts_int_value(path: Path, name: str, src: Optional[str] = None) -> int:
 def test_bot_shape_vocabulary_matches_across_languages():
     canonical = py_str_tuple(_WIRE_PY, "BOT_AVATAR_SHAPES")
     assert canonical == (
-        "blob", "capsule", "squircle", "egg", "wedge", "hex", "cloud", "teardrop",
+        "sphere", "capsule", "cylinder", "cone", "cube", "diamond", "mickey", "cursor",
     ), (
         f"bot shape 词表变成 {canonical!r} —— 这是词表本体的改动，必须同步 TS shapes.ts、"
         f"编辑器网格与本断言（三处一起动才是有意的演进而非漂移）"
