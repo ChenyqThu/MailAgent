@@ -1,18 +1,20 @@
-// assistant-modal P1 — 正文右下角圆形 FAB 浮窗入口（取代邮件工具栏的 AI 按钮）。hover 向左展开
+// assistant-modal P1 — 正文右下角 FAB 浮窗入口（取代邮件工具栏的 AI 按钮）。hover 向左展开
 // "chat about this page" 文案 + ⌘J 角标；点击 openChatModal() 展开 modal（FAB 随 visible 隐藏）。
 // 仅在「有邮件正文(activeInternalId) + modal 未展开(!visible)」时显示，避免与 modal 重叠。createPortal
 // 到 document.body 逃 InboxLayout 的 overflow-hidden + GSAP width tween（同 BatchActionBar 范式）。
 // InboxLayout 无条件挂载（S3: ASSISTANT_MODAL flag 已 GA 移除）。
 //
-// 视觉（dogfood 反馈）：reactbits StarBorder 常驻彩色旋转边框环（.rb-star-border，三色 conic 旋转
-// + 外发光）+ sparkles 动态图标（整钮 hover 经 AnimatedIconActiveProvider 驱动）；位置 bottom-8 避开 footer。
+// 视觉（0813 换代）：钮面 = **主 agent 头像** + 沿其真实轮廓旋转的光环（`ChatFabAvatar`）。
+// 取代了原先的 accent 实心圆钮 + sparkles 图标 + reactbits StarBorder conic 环 —— 那套环是
+// 「conic 圆盘 + 圆形内盖露 2px 边」，结构上绑死圆形，异形头像下没法保留（`.rb-star-border`
+// 与 `rb-star-spin` 已随之从 index.css 删除，全仓无第二处消费点）。位置 bottom-8 避开 footer。
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { createPortal } from 'react-dom'
 
 import { cn } from '@shared/lib/cn'
-import { AnimatedIconActiveProvider, SparklesIcon } from '@shared/components/icons'
+import { ChatFabAvatar } from '@shared/assistant/modal/ChatFabAvatar'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useAIChatPanel, openChatModal } from '@shared/state/ai-chat-panel'
 
@@ -46,26 +48,8 @@ export function ChatModalFab(): React.JSX.Element | null {
           ⌘J
         </kbd>
       </span>
-      {/* 圆钮：StarBorder 常驻彩色旋转边框环（.rb-star-border ::before 三色 conic 旋转 + ::after 外
-          发光）+ 内圈 accent 实心（inset 2px 盖中心、露边缘彩色环）+ sparkles 动态图标（z 在环之上）。 */}
-      <span
-        className={cn(
-          'rb-star-border relative grid size-12 shrink-0 place-items-center rounded-full shadow-md',
-          'transition-transform duration-fast group-hover:scale-105 motion-reduce:transition-none'
-        )}
-      >
-        <span
-          className="absolute inset-[2px] rounded-full bg-[rgb(var(--c-accent))]"
-          aria-hidden="true"
-        />
-        <AnimatedIconActiveProvider active={hovered}>
-          <SparklesIcon
-            size={20}
-            strokeWidth={2}
-            className="relative z-[1] text-[rgb(var(--c-accent-fg))]"
-          />
-        </AnimatedIconActiveProvider>
-      </span>
+      {/* 钮面：主 agent 头像 + 轮廓光环（同源 / 性能 / 上传图回落全在 ChatFabAvatar 内说明）。 */}
+      <ChatFabAvatar hovered={hovered} />
     </button>,
     document.body
   )

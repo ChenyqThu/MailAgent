@@ -30,6 +30,10 @@ export interface BotAvatarProps {
   /** 缺省 sphere / orange（官方助手形象） */
   config?: { shape?: BotShape; color?: BotColor }
   state?: BotState
+  /** 静态档指定表情索引（缺省 = `POOLS[state]` 池首）。索引语义单源是 `states.POOLS` /
+   *  `expressions.ts`，越域 = 调用方 bug（与 `POOLS[state][0]` 同样不做防御）。animated 档
+   *  忽略它 —— 那一档的表情由引擎按 cadence 调度。 */
+  expressionIndex?: number
   size?: number
   title?: string
   className?: string
@@ -60,6 +64,7 @@ interface FrameRefs {
 export function BotAvatar({
   config,
   state = 'idle',
+  expressionIndex,
   size = 40,
   title,
   className,
@@ -84,7 +89,10 @@ export function BotAvatar({
   const clipId = useMemo(() => `bot-clip-${rawId.replace(/[^a-zA-Z0-9_-]/g, '')}`, [rawId])
 
   // 静态档的那一帧（模块级缓存）；动画档也用它作 SSR/首帧基线（= 引擎初始快照：池首）
-  const frame = useMemo(() => staticFrame(POOLS[state][0], surface), [state, surface])
+  const frame = useMemo(
+    () => staticFrame(expressionIndex ?? POOLS[state][0], surface),
+    [expressionIndex, state, surface]
+  )
 
   const svgRef = useRef<SVGSVGElement | null>(null)
   const refs = useRef<FrameRefs>({ motion: null, clip: null, head: null, back: [], eyes: [] })

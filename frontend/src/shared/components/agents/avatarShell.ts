@@ -27,6 +27,18 @@
 const RADIUS_CTL = 'rounded-[min(var(--r-ctl),22%)]'
 const RADIUS_CARD = 'rounded-[min(var(--r-card),22%)]'
 
+/** 同一个比例的**数值**形态，给交不出 CSS 圆角的位点用（FAB 的光环要沿同一条边界描 path，
+ *  纯 CSS 圆角描不出来 —— 见 `assistant/modal/ChatFabAvatar.tsx`）。
+ *
+ *  🔴 它与上面两个 class 串里的 `22%` 是**同一个值的两种载体**，且这处镜像**消灭不掉**：
+ *  tailwind JIT 只扫源码里出现的完整 class 串，`rounded-[min(var(--r-ctl),${x}%)]` 拼不出样式。
+ *  故按本仓「跨边界手抄必建闸」纪律配一致性断言（`tests/components/AgentAvatar.test.tsx`），
+ *  改任一处而不改另一处必红。 */
+export const AVATAR_SHELL_RADIUS_RATIO = 0.22
+
+/** 闸用：把两个 class 串交出去，让测试从**真串**里抠百分数，而不是再抄一遍。 */
+export const AVATAR_SHELL_RADIUS_CLASSES = [RADIUS_CTL, RADIUS_CARD] as const
+
 /** 卡片档起点（px）：48px 的抽屉身份头部 / 编辑器预览走 --r-card，其余走控件档。 */
 export const AVATAR_SHELL_CARD_SIZE = 44
 

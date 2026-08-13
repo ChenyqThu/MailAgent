@@ -5395,49 +5395,29 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   pointer-events: none;
 }
 
-/* reactbits StarBorder（圆形 FAB）— dogfood：accent 主体环 + 一段「固定白」高光绕圈。内圈是 accent 实心、
-   图标也是 accent 系 → 高光必须用白（非 accent 系）才与内圈拉开对比、看得出旋转（dogfood：提亮 accent 高光
-   与 accent 内圈太接近，看不出）。白用 CSS 字面 white（固定，不随主题翻转 —— 区别于会翻黑/白的 --c-accent-fg）。
-   内圈 accent 实心（inset 2px）盖中心、露 ~2px 环；::after accent 柔光外发光。常驻匀速旋转 8s（常驻故放慢；
-   同 .shimmer 范式非 spring）；reduce 停转留静态环。 */
-.rb-star-border {
-  position: relative;
-  border-radius: 9999px;
+/* AI FAB 的轮廓光环（0813）— 取代绑死圆形的 reactbits StarBorder（`.rb-star-border`：conic 圆盘旋转 +
+   圆形内盖露 2px 边 + box-shadow 外发光。那三样都只对圆成立 —— conic 盘靠 border-radius 露边、box-shadow
+   只跟随盒形，贴不了任意轮廓 —— 故 FAB 换成异形头像后是**重做**不是保留，该类已随本次改动整体删除）。
+   现在发光沿主 agent 头像的**真实 head path** 走：同一条 path 描两层（底环 + 亮弧），几何由
+   `ChatFabAvatar` 与 `BotAvatar` 共用同一次 `staticFrame()`（同源见该组件文件头）。
+   🔴 匀速：亮弧的 `pathLength=100` 把周长归一 ⇒ dasharray/dashoffset 的单位是「百分点」，换形状换表情
+   （周长不同）绕圈速度也恒定，不必 `getTotalLength()`。
+   🔴 档位：这是**纯 CSS 动画**，不进 bot-avatar 的共享 rAF ticker、不新增 animated 位点（渲染档位纪律，
+   见 frontend/docs/bot-avatar.md）；旋转周期沿用旧环的 8s（常驻故放慢，同 .shimmer 范式非 spring）。
+   reduce：JS 层就不挂 `.chat-fab-halo-arc`（可测），这里的 media 只是兜底 —— 两条都留静态环（同旧行为）。 */
+.chat-fab-halo-glow {
+  filter: drop-shadow(0 0 2px rgb(var(--c-accent) / 0.55));
 }
-.rb-star-border::before {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: 0;
-  background: conic-gradient(
-    from 0deg,
-    rgb(var(--c-accent)),
-    rgb(var(--c-accent)) 200deg,
-    white 280deg,
-    rgb(var(--c-accent)) 360deg
-  );
-  animation: rb-star-spin 8s linear infinite;
+.chat-fab-halo-arc {
+  animation: chat-fab-halo-travel 8s linear infinite;
 }
-.rb-star-border::after {
-  content: '';
-  position: absolute;
-  inset: 0;
-  border-radius: inherit;
-  pointer-events: none;
-  z-index: -1;
-  box-shadow:
-    0 0 10px 0 rgb(var(--c-accent) / 0.5),
-    0 0 22px 4px rgb(var(--c-accent) / 0.32);
-}
-@keyframes rb-star-spin {
+@keyframes chat-fab-halo-travel {
   to {
-    transform: rotate(360deg);
+    stroke-dashoffset: -100;
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .rb-star-border::before {
+  .chat-fab-halo-arc {
     animation: none;
   }
 }

@@ -21,7 +21,9 @@ import {
 import {
   AVATAR_SHELL_CARD_SIZE,
   avatarShellClass,
-  avatarShellRadiusClass
+  avatarShellRadiusClass,
+  AVATAR_SHELL_RADIUS_CLASSES,
+  AVATAR_SHELL_RADIUS_RATIO
 } from '../../src/shared/components/agents/avatarShell'
 
 await i18n.changeLanguage('zh-CN')
@@ -51,12 +53,16 @@ describe('AgentAvatar identity（bot 语义）', () => {
   })
 
   test('v1 bot 形状名经 LEGACY_BOT_SHAPE_MAP 读侧换代（存量行不迁移仍有脸）', () => {
-    expect(resolveAgentAvatar('custom', { type: 'bot', shape: 'hex' as never, color: 'teal' })).toEqual({
+    expect(
+      resolveAgentAvatar('custom', { type: 'bot', shape: 'hex' as never, color: 'teal' })
+    ).toEqual({
       type: 'bot',
       shape: 'diamond',
       color: 'teal'
     })
-    expect(resolveAgentAvatar('custom', { type: 'bot', shape: 'blob' as never, color: 'orange' })).toEqual({
+    expect(
+      resolveAgentAvatar('custom', { type: 'bot', shape: 'blob' as never, color: 'orange' })
+    ).toEqual({
       type: 'bot',
       shape: 'sphere',
       color: 'orange'
@@ -81,9 +87,9 @@ describe('AgentAvatar identity（bot 语义）', () => {
   })
 
   test('legacy 坏值（越域 shape / 空 palette）回落 id 派生', () => {
-    expect(
-      resolveAgentAvatar('custom', { shape: 'sunrise' as never, palette: 'rose' })
-    ).toEqual(resolveAgentAvatar('custom'))
+    expect(resolveAgentAvatar('custom', { shape: 'sunrise' as never, palette: 'rose' })).toEqual(
+      resolveAgentAvatar('custom')
+    )
     expect(resolveAgentAvatar('custom', { shape: 'nova', palette: '' })).toEqual(
       resolveAgentAvatar('custom')
     )
@@ -129,12 +135,12 @@ describe('AgentAvatar 上传态判别（WP7 语义回归，一个字节不变）
 describe('AgentAvatarEditor（Grok 化：tab / 网格 / 骰子 / 重置）', () => {
   test('默认落 Bot tab：8 形网格 + 11 色 swatch 在场，上传输入不在场；切 tab 互换', () => {
     render(<AgentAvatarEditor agentId="daily" value={null} onChange={vi.fn()} />)
-    expect(
-      within(screen.getByTestId('avatar-shape-grid')).getAllByRole('button')
-    ).toHaveLength(BOT_AVATAR_SHAPES.length)
-    expect(
-      within(screen.getByTestId('avatar-color-grid')).getAllByRole('button')
-    ).toHaveLength(BOT_AVATAR_COLORS.length)
+    expect(within(screen.getByTestId('avatar-shape-grid')).getAllByRole('button')).toHaveLength(
+      BOT_AVATAR_SHAPES.length
+    )
+    expect(within(screen.getByTestId('avatar-color-grid')).getAllByRole('button')).toHaveLength(
+      BOT_AVATAR_COLORS.length
+    )
     expect(screen.queryByTestId('avatar-upload-input')).toBeNull()
 
     fireEvent.click(screen.getByTestId('avatar-tab-upload'))
@@ -164,28 +170,30 @@ describe('AgentAvatarEditor（Grok 化：tab / 网格 / 骰子 / 重置）', () 
     const base = resolveAgentAvatar('daily')
 
     const otherShape = BOT_AVATAR_SHAPES.find((shape) => shape !== base.shape)
-    fireEvent.click(within(screen.getByTestId('avatar-shape-grid')).getByLabelText(otherShape ?? ''))
+    fireEvent.click(
+      within(screen.getByTestId('avatar-shape-grid')).getByLabelText(otherShape ?? '')
+    )
     expect(onChange.mock.calls[0][0]).toEqual({ type: 'bot', shape: otherShape, color: base.color })
 
     const otherColor = BOT_AVATAR_COLORS.find((color) => color !== base.color)
-    fireEvent.click(within(screen.getByTestId('avatar-color-grid')).getByLabelText(otherColor ?? ''))
+    fireEvent.click(
+      within(screen.getByTestId('avatar-color-grid')).getByLabelText(otherColor ?? '')
+    )
     expect(onChange.mock.calls[1][0]).toEqual({ type: 'bot', shape: base.shape, color: otherColor })
   })
 
   test('当前身份在网格上高亮（aria-pressed）；上传图身份切到 Bot tab 高亮派生基底', () => {
     const explicit = { type: 'bot' as const, shape: 'diamond' as const, color: 'teal' as const }
-    const first = render(
-      <AgentAvatarEditor agentId="daily" value={explicit} onChange={vi.fn()} />
-    )
+    const first = render(<AgentAvatarEditor agentId="daily" value={explicit} onChange={vi.fn()} />)
     expect(
-      within(screen.getByTestId('avatar-shape-grid')).getByLabelText('diamond').getAttribute(
-        'aria-pressed'
-      )
+      within(screen.getByTestId('avatar-shape-grid'))
+        .getByLabelText('diamond')
+        .getAttribute('aria-pressed')
     ).toBe('true')
     expect(
-      within(screen.getByTestId('avatar-color-grid')).getByLabelText('teal').getAttribute(
-        'aria-pressed'
-      )
+      within(screen.getByTestId('avatar-color-grid'))
+        .getByLabelText('teal')
+        .getAttribute('aria-pressed')
     ).toBe('true')
     first.unmount()
 
@@ -253,6 +261,20 @@ describe('头像容器口径（avatarShell：圆角方形）', () => {
   test('外壳恒裁切（否则圆角不生效）', () => {
     expect(avatarShellClass(40)).toContain('overflow-hidden')
     expect(avatarShellClass(40)).toContain('shrink-0')
+  })
+
+  // 🔴 一致性闸：`22%` 有两个载体 —— tailwind class 字面量（JIT 只认完整串，拼接的不生成
+  // 样式）与数值常量 `AVATAR_SHELL_RADIUS_RATIO`（给交不出 CSS 圆角的位点用，如 FAB 的光环
+  // 要沿同一条边界描 path）。这处镜像消灭不掉，故按本仓「跨边界手抄必建闸」纪律锁住：
+  // 百分数从**真的 class 串**里抠出来比，不再抄第三遍。改任一处而不改另一处，这里必红。
+  test('class 串里的百分数 === AVATAR_SHELL_RADIUS_RATIO（两个载体不许漂）', () => {
+    expect(AVATAR_SHELL_RADIUS_CLASSES.length).toBeGreaterThan(0)
+    for (const cls of AVATAR_SHELL_RADIUS_CLASSES) {
+      const matched = cls.match(/,\s*(\d+(?:\.\d+)?)%\)/)
+      // 抽取失败必须红：串的写法变了而闸悄悄不比了，比没有闸更危险。
+      expect(matched, `无法从 class 串里抠出百分数：${cls}`).not.toBeNull()
+      expect(Number(matched![1]) / 100).toBe(AVATAR_SHELL_RADIUS_RATIO)
+    }
   })
 
   test('bot 头像：外壳是圆角方形，不再有 rounded-full', () => {

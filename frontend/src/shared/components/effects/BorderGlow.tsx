@@ -4,7 +4,8 @@
 // 官方一致；样式在 index.css（.rb-border-glow-card / .rb-edge-light / .rb-border-glow-inner）。
 //
 // 仅 6 处适配（守项目红线，不改视觉）：
-//  ① CSS 变量 / 类名加 rb- 前缀（防与全局 CSS 撞，且与 FAB .rb-star-border 同前缀）；
+//  ① CSS 变量 / 类名加 rb- 前缀（防与全局 CSS 撞。同前缀的 FAB `.rb-star-border` 已于 0813
+//     随 FAB 换主 agent 头像退役 —— 那套 conic 环绑死圆形，异形头像下改成了沿轮廓描边）；
 //  ② 去 `import './BorderGlow.css'` —— 样式合进三端共享的 index.css；
 //  ③ backgroundColor 默认 #120F17 → app token rgb(var(--ink-2))（跟随明暗主题）；
 //  ④ reduce 下不挂 pointer / 不播 intro（CSS 也隐藏辉光层）；
