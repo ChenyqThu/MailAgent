@@ -166,7 +166,7 @@
     "matters": "Matters",
     "mattersLinked": "In matters",
     "matterMenuHint": "Create a matter, add to an existing one, or hand it to AI research",
-    "createMatterPrompt": "Turn the email quoted above into a Matter I can follow up on. First use matter_find on its subject, sender and thread to see whether a duplicate or an obviously related Matter already exists: if one does, tell me which and link this email to it; only create a new Matter when nothing matches, filling in the title, type, stakeholders and any action items already visible. Say what you are about to write before you write it — I will confirm on the approval card.",
+    "createMatterPrompt": "Turn the email quoted above into a Matter I can follow up on. First use matter_find on its subject, sender and thread to see whether a duplicate or an obviously related Matter already exists: if one does, tell me which and link this email to it. Then actually research the background instead of reading this one email: use the retrieval tools you really have in this conversation — related mail, documents in Notion or a knowledge base, pages in any connected external service (your own tool list decides which of these exist; if you have no tool for a source, say you did not search it rather than implying you did). Only create a new Matter when nothing matches, filling in the title, type, stakeholders and any action items already visible, and link the material you found as resources on the Matter. Finish by telling me which sources you searched, what you found, and where you came up empty. Say what you are about to write before you write it — I will confirm on the approval card.",
     "prev": "Previous",
     "next": "Next",
     "more": "More",

@@ -72,3 +72,26 @@ def test_matters_fragment_teaches_find_before_create_and_draft_only(monkeypatch,
     # 起草不发送 + 结果以工具返回为准（两条安全地板）。
     assert "never sent by you" in fragment
     assert "until the tool result confirms it" in fragment
+
+
+def test_matters_fragment_tells_the_model_to_research_before_creating(monkeypatch, _rebuild_builtins):
+    """0813 dogfood #4（owner：「创建事项…好像不会去检索 notion」）。
+
+    「AI 调研创建」那条链根本不经过 ``create_research``（那是创建对话框的纯读端点）：它开的是
+    一场普通 manual chat，模型做什么完全取决于 prompt。原方法论只写了「先查重再建」，一个字
+    没提要去查资料 —— 于是模型读完这一封就建。这条断言钉住「建之前先调研」这个动作。
+
+    🔴 同时钉住**不许点名工具**：Notion 的检索能力在 owner 机器上来自 MCP connector /
+    notion_agent skill，两者都是动态注册的；恒注入的方法论里写死一个工具名 = 工具面里没有它
+    时就是在教模型调不存在的工具（回归网 R 系列的老失败模式）。故只许指「你自己的工具列表」。
+    """
+    monkeypatch.setattr("src.api.deps.get_settings", lambda: SimpleNamespace(matters_enabled=True))
+    fragment = _matters_skill().prompt_fragment
+    assert "Creating a Matter is a research step" in fragment
+    assert "Notion" in fragment
+    assert "your own tool list" in fragment
+    # 没有对应工具的来源必须如实说没查，而不是含糊带过（否则「查过 Notion」是幻觉）。
+    assert "Never imply you searched a source you have no tool for" in fragment
+    # 恒注入面里不得出现具体的 Notion 工具名 —— 它们是动态注册的，写死即断言不存在的能力。
+    for dynamic_tool in ("notion_agent_chat", "mcp__notion__", "notion-search"):
+        assert dynamic_tool not in fragment
