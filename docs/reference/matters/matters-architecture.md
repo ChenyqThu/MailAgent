@@ -184,6 +184,15 @@ reconcile 观察到判据翻转才落 `cleared_at`，之后同一事实再成立
 🔴 **`run_failed` / `context_gap` 豁免**（单源 `attention.py::EVENT_DRIVEN_ATTENTION_KINDS`）：
 它们是事件驱动型、没有清账循环，resolved 也豁免会把「同一 run 再次失败」永久静默。
 
+🔴 **抑制期内 severity 升级同样静默**（有意的衍生行为，不是漏洞）：抑制期里该 subject_key
+没有 open/snoozed 行，于是 reconcile 那条「新事实 severity 更高 → 提级 + 清
+`last_notified_at` 重新通知」的分支（只遍历 open/snoozed 行）根本够不着它，
+`_open_episode_in_conn` 也在建行之前就返回了 —— 即 owner 点过「解决」之后，同一判据从
+warn 恶化到 critical 也不会重新冒头，要等判据翻转（`cleared_at` 落）后再成立才开新
+episode（那时按新 severity 开）。这是「判据翻转前不再报」的**直接推论**：既然承诺了不再报，
+就不能留一条"变严重了就破例"的旁路 —— 否则逾期天数一跨阈值，被解决掉的信号就自己回来了。
+要立刻重新看见，路径是 owner 侧的重开（或让判据先翻转），不是让系统自作主张。
+
 ### 2.4 全局干系人库 `matter_contact`（v52）
 
 - **身份 = 归一 email**。无 email 的干系人**不入全局库**（`contact_id` 恒 NULL）：没有可靠
@@ -195,7 +204,14 @@ reconcile 观察到判据翻转才落 `cleared_at`，之后同一事实再成立
   **写穿**到该联系人的其它事项行 + 刷其搜索投影，🔴 不 bump 那些事项的 version、不发事件 ——
   这是联系人层的事实，不是那些事项的业务动作，撞别人的乐观锁才是 bug（有测试钉住）。
   已知取舍：patch 显式传 `display_name: null` 只清本行不清全局；「已在事项中」的重复 create
-  早退，不触发 contact 更新。
+  早退，不触发 contact 更新。update 改 email 时若没同时改名，用**本行既有**姓名 / 组织兜底
+  建新 contact（否则库里多出裸邮箱条目）；🔴 兜底只填**新建**那条的空位，不进 ON CONFLICT
+  分支 —— 改到别人已在库里的邮箱不许把那个人改名（`_upsert_contact` 的 `fallback_*` 参数）。
+- 🔴 **写穿是静默的**（有意）：`_propagate_contact_identity` 改其它事项的 stakeholder 行时
+  **不发事件、不 bump 那些事项的 version、时间线上不留痕**（只刷搜索投影）。代价写实：其它
+  事项的前端缓存**不会**被动失效，那边要等下一次 refetch 才看到新名字；且「谁把这人改名的」
+  在那些事项的时间线上查不到，只在改名发生的那个事项里有记录。这是为「不撞别人乐观锁」付的
+  价 —— 发事件就得 bump version，等于一次改名把所有相关事项的在途编辑全打成冲突。
 - 🔴 **关联索引有意不进 `MATTER_INDEX_DDLS`**：那组索引会在 v44–v50 各迁移块对老库整组重放，
   而 `contact_id` 要到 v52 ALTER 才存在 —— 放进组里会把老库的升级梯子当场炸掉
   （"no such column"）。改为独立常量 `MATTER_STAKEHOLDER_CONTACT_INDEX_DDL`，只在 v52 块

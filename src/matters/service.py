@@ -2431,20 +2431,31 @@ class MatterService:
     def _upsert_contact(
         self, conn: sqlite3.Connection, *, email: str,
         display_name: str | None = None, organization: str | None = None, now: int,
+        fallback_display_name: str | None = None, fallback_organization: str | None = None,
     ) -> int:
         """按归一 email upsert 全局联系人，返回 contact_id。
 
         提供的非空姓名/组织 = 最后写者赢（全局一份的语义：改名就是全局改名）；
-        传 None = 不动既有值。"""
+        传 None = 不动既有值。
+
+        `fallback_*` = **只在新建这条联系人时**顶上的值（调用方手里有、但用户本次并没有
+        显式改的姓名/组织）。🔴 它有意**不**进 ON CONFLICT 分支：目标邮箱可能已经是
+        另一个人的全局联系人，拿本行的名字盖上去 = 悄悄把别人改名了。"""
         conn.execute(
             "INSERT INTO matter_contact "
             "(email_normalized, display_name, organization, created_at, updated_at) "
             "VALUES (?, ?, ?, ?, ?) "
             "ON CONFLICT(email_normalized) DO UPDATE SET "
-            "display_name = COALESCE(excluded.display_name, matter_contact.display_name), "
-            "organization = COALESCE(excluded.organization, matter_contact.organization), "
+            "display_name = COALESCE(?, matter_contact.display_name), "
+            "organization = COALESCE(?, matter_contact.organization), "
             "updated_at = excluded.updated_at",
-            (email, display_name, organization, now, now),
+            (
+                email,
+                display_name or fallback_display_name,
+                organization or fallback_organization,
+                now, now,
+                display_name, organization,
+            ),
         )
         row = conn.execute(
             "SELECT id FROM matter_contact WHERE email_normalized=?", (email,)
@@ -2584,9 +2595,18 @@ class MatterService:
                 touched_name = self._optional_text(data.get("display_name")) if "display_name" in data else None
                 touched_org = self._optional_text(data.get("organization")) if "organization" in data else None
                 if contact_email and (email is not None or contact_id is None or touched_name or touched_org):
+                    # 只改邮箱、没同时改名时用本行现有的姓名/组织兜底 —— 否则库里会凭空
+                    # 多出一条裸邮箱联系人（create 路径本来就回填，两条路不该不对称）。
+                    # 兜底只在**新建**那条联系人时生效，见 `_upsert_contact` 的红字。
                     contact_id = self._upsert_contact(
                         conn, email=contact_email,
                         display_name=touched_name, organization=touched_org, now=now,
+                        fallback_display_name=self._optional_text(
+                            (existing or {}).get("display_name")
+                        ),
+                        fallback_organization=self._optional_text(
+                            (existing or {}).get("organization")
+                        ),
                     )
                     changes["contact_id"] = contact_id
                 assignments = ", ".join(f"{key}=?" for key in changes)

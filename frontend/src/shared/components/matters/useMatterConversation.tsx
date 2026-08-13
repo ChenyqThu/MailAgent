@@ -192,8 +192,8 @@ export function useMatterConversation(
     [thinkingEnabled]
   )
   const snapshotEnabled = enabled && chipTarget !== null
-  // D15 —— `excludedResourceIds` 不再传：composer 上的置顶资料 chip（G-21）连同它唯一的
-  // 移除入口一起退役，恒空集 = 快照照旧带上全部置顶摘录（注入面零变化）。
+  // D15 —— composer 上的置顶资料 chip（G-21）连同它唯一的移除入口一起退役，快照于是照旧
+  // 带上全部置顶摘录（注入面零变化；hook 侧那个恒空的剔除参数也已一并删除）。
   const {
     snapshot,
     chips,
@@ -263,8 +263,8 @@ export function useMatterConversation(
   // owner 判「把全部上下文显示成一堆附件，加载感很差」：置顶资料多的事项一进对话就是一排
   // 长得像附件的方块，且它们要等 context-snapshot 回来才逐个冒出来。
   //
-  // 🔴 只收**显示层**：注入模型的那份快照一个字节没变（`excludedResourceIds` 随移除入口
-  // 一起退役 ⇒ 恒空集 ⇒ 置顶摘录照旧全带）。代价是「本轮临时排除某份置顶资料」这个能力
+  // 🔴 只收**显示层**：注入模型的那份快照一个字节没变（剔除入口没了 ⇒ 置顶摘录照旧
+  // 全带，hook 侧那个恒空的剔除参数也已删掉）。代价是「本轮临时排除某份置顶资料」这个能力
   // 没有了 —— owner 明确要单 chip，排除入口若要回来该走事项页的置顶开关，不是 composer。
   const chip = chipTarget ? (
     <ConversationContextChip

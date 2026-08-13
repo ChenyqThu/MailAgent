@@ -12,7 +12,9 @@ from __future__ import annotations
 
 import sqlite3
 
-from src.mail.sync_store import SyncStore
+import pytest
+
+from src.mail.sync_store import SyncStore, SyncStoreMigrationError
 
 CONTACT_COLUMNS = {
     "id", "email_normalized", "display_name", "organization",
@@ -164,6 +166,25 @@ def test_v52_upgrade_normalizes_emails_seeds_contacts_and_backfills(tmp_path):
         assert stakeholders["pk-empty"]["contact_id"] is None
 
     assert _version(path) == str(SyncStore.DB_VERSION)
+
+
+def test_v52_index_failure_is_not_swallowed_by_the_column_guard(tmp_path):
+    """contact_id 已在 + 索引建不出来 ⇒ 迁移必须中断，不许悄悄把 version 推到 52。
+
+    失败注入不用 mock：拿一张同名表占掉索引名，`CREATE INDEX IF NOT EXISTS` 就必然
+    报「already another table or index with this name」，而 contact_id 列仍在 —— 正是
+    列 guard 会判「已迁移」放过去的那个形状。少了索引 guard，索引就此永不重建。"""
+    path = tmp_path / "guard.db"
+    SyncStore(str(path))
+    with sqlite3.connect(path) as conn:
+        conn.execute("DROP INDEX idx_matter_stakeholder_contact")
+        conn.execute("CREATE TABLE idx_matter_stakeholder_contact (x)")
+        conn.execute("UPDATE sync_state SET value='51' WHERE key='db_version'")
+        conn.commit()
+
+    with pytest.raises(SyncStoreMigrationError):
+        SyncStore(str(path))
+    assert _version(path) == "51"
 
 
 def test_v52_migration_is_idempotent_on_reentry(tmp_path):

@@ -3173,6 +3173,12 @@ class SyncStore:
                 _migration_guard_columns(
                     cursor, "matter_stakeholder", {"contact_id"}, "v52 migration", e,
                 )
+                # 🔴 列 guard 一个人挡不住这一块: contact_id 已存在 (重入/并发) 而**索引**
+                # 建失败时, 列 guard 会判"已迁移"吞掉错误、version 照样落 52 ⇒ 索引永不重
+                # 建。索引复查必须跟在后面 (v46/v47 同款成对写法)。
+                _migration_guard_index(
+                    cursor, "idx_matter_stakeholder_contact", "v52 migration", e
+                )
 
             # seed 回填 —— DML 与上面被 guard 的 DDL **分开**（v51 教训: 混在一个 try 里,
             # DML 失败会被"列已存在"guard 吞掉后永久跳过）。DML 失败必须无条件 raise。
