@@ -357,3 +357,42 @@ def test_relation_rows_expose_parsed_provenance(client):
     assert http.get(f"/api/matters/{source['public_id']}/relations").json()["data"][
         "items"
     ] == []
+
+
+# ── 0812 owner 拍板：创始邮件也是手动确认 ────────────────────────────────────
+
+
+def test_matter_created_from_email_confirms_source_resource(client):
+    """从邮件创建事项 → 创始邮件（含线程）落**已确认**，不是待审建议。
+
+    UI 判据单源 = `ResourceRow` 的 `link.confirmed_at === null`；此前 `_link_source_snapshot`
+    硬编码 None，于是新建事项一打开，用户刚亲手拿来建事项的那封信就带着「确认 / 忽略」两颗钮
+    躺在资料列表里。
+    """
+    http, path = client
+    _insert_email(path, 1, thread_id="t-1", subject="Kickoff")
+
+    created = http.post(
+        "/api/matters",
+        json={
+            "title": "From email",
+            "source_resource": {
+                "provider": "mailagent",
+                "kind": "email",
+                "internal_id": 1,
+                "link_scope": "thread",
+            },
+            "mutation": _mutation("create:from-email"),
+        },
+    )
+    assert created.status_code == 201, created.text
+    public_id = created.json()["data"]["matter"]["public_id"]
+
+    items = http.get(f"/api/matters/{public_id}/resources").json()["data"]["items"]
+    assert {item["resource"]["kind"] for item in items} == {"email", "thread"}
+    for item in items:
+        # 非空 = UI 判据下不再是建议态。
+        assert item["link"]["confirmed_at"] is not None, item["resource"]["kind"]
+        assert item["link"]["added_by_kind"] == "user"
+    # 建议态的批量条按 confirmed_at is null 计数 —— 这里必须一条都不算。
+    assert [item for item in items if item["link"]["confirmed_at"] is None] == []

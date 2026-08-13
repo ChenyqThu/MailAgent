@@ -3510,7 +3510,13 @@ class MatterService:
                 link_id = self.repository.insert_resource_link(conn, {
                     "matter_id": matter_id, "resource_id": resource["id"], "relation_type": None,
                     "pinned": 0, "added_by_kind": actor.kind, "added_by_id": actor.actor_id,
-                    "confidence": None, "provenance_json": "{}", "confirmed_at": None,
+                    # 🔴 创始邮件是**用户亲手**从这封信建的事项 —— 与手动关联同语义，直接落
+                    # 确认态（0812 owner 拍板）。此前硬编码 `None`，于是 `ResourceRow` 以
+                    # `confirmed_at is null` 判「Agent 建议」，新建事项一打开，那封创始邮件就
+                    # 带着「确认 / 忽略」两颗钮躺在资料列表里等用户确认自己刚做过的事。
+                    # 时间戳取 `now`（与 link 的 created_at/updated_at 同一刻），镜像
+                    # `add_resource` 里 `now if spec.get("confirmed") else None` 的写法。
+                    "confidence": None, "provenance_json": "{}", "confirmed_at": now,
                     "sub_state": spec.get("sub_state", "none"), "created_at": now, "updated_at": now,
                 })
                 event_ids.append(self._append_event(
