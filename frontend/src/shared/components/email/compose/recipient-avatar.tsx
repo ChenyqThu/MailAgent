@@ -4,7 +4,9 @@
 // index.css (§Avatar) — no new hex, no new CSS. `--avatar-size` is set inline
 // so the same class scales from the 18px chip dot to the 38px detail header.
 // Initials follow the compose design spec (design/data.jsx): Chinese names take
-// the last two glyphs, Latin names take the first letter of the first two words.
+// the last two glyphs (single glyph below `INITIALS_SINGLE_GLYPH_MAX_SIZE` — the
+// 2-glyph rendering overflows an 18px chip dot), Latin names take the first
+// letter of the first two words.
 
 import { cn } from '@shared/lib/cn'
 import { contactInitials } from '@shared/lib/personName'
@@ -32,7 +34,7 @@ interface Props {
 }
 
 export function RecipientAvatar({ name, email, size = 18 }: Props): React.ReactElement {
-  const initials = contactInitials(name, email)
+  const initials = contactInitials(name, email, size)
   const slot = avatarSlot(email || name || initials)
   return (
     <span

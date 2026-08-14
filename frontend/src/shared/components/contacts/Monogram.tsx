@@ -2,7 +2,8 @@
 // 人 = 圆形 `hsl(h 62% 42% / .16)` 底 + 同色 1px 内描边 + 同色字；色相 =
 // hueOf(主邮箱) 8 档哈希（主邮箱做锚点 → 合并/改名不跳色）。
 // 机器人 / 群发列表 = 虚线圆角方块 + 图标、无色相（“不担人格”的形状区分）。
-// initials 复用 recipient-avatar 的 contactInitials（中文取后 2 字）；裸邮箱取
+// initials 复用 recipient-avatar 的 contactInitials（中文取后 2 字，小尺寸下收窄
+// 成单字——见 personName.ts 的 INITIALS_SINGLE_GLYPH_MAX_SIZE）；裸邮箱取
 // local-part 前 2 字符（D8）。⚠️ 不复用 `.avatar-1..6` 色板（规格不同）。
 
 import { Bot, Megaphone } from 'lucide-react'
@@ -57,7 +58,7 @@ export function Monogram({
   }
   const hue = hueOf(primaryEmail ?? displayName ?? '?')
   const tone = `hsl(${hue} 62% 42%)`
-  const initials = contactInitials(displayName ?? '', primaryEmail ?? '')
+  const initials = contactInitials(displayName ?? '', primaryEmail ?? '', size)
   return (
     <span
       aria-hidden
