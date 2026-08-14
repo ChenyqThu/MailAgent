@@ -233,14 +233,33 @@ export function MatterToolFacePanel(): React.ReactElement {
                     if (!active) webFace.save(face)
                   }}
                   className={cn(
-                    'flex w-full items-start gap-2 rounded-[var(--r-ctl)] px-1.5 py-1.5 text-left',
+                    /* M9 —— 旧写法 `items-start` + 圆点 `mt-1`（4px）把行盒高度当成了
+                       `text-meta` 自己的 16px 算 `(16-9)/2≈3.5px`，但承载文字的
+                       `<span className="min-w-0">` 自己没有任何字号 class —— 它是
+                       flex item，被 blockify 后参与行盒计算的是**它自己继承到的**
+                       字号/行高，不是内部子 span 的 `text-meta`。这条继承链一路查到
+                       `html`（Tailwind preflight 只在这里设 `line-height:1.5`，全程无
+                       人设 `font-size`）都没人重置，故它拿到浏览器默认字号 16px ×
+                       1.5 = **24px 行盒**，比 `text-meta` 的 16px 高 8px。
+                       Playwright 真实渲染量证（真实 DOM，非推算）：新旧两种写法在同一
+                       个 `<span className="min-w-0">`（`getComputedStyle` 读到
+                       font-size:16px / line-height:24px）上对比——
+                         旧（`items-start`+`mt-1`）：圆点中心比该 span 中心高 **3.5px**
+                         （owner 肉眼可见的偏移，与 `(24-9)/2=7.5px` 应有偏移和实际
+                         4px 之间差 3.5px 精确吻合）；
+                         新（`items-center`，无偏移）：圆点中心与 span 中心**差 0px**。
+                       三档文案单行不折行（同一渲染量证，最长英文档位 "Full access
+                       (default) Can search…" 单行宽 ~390px，面板可用宽 ~525px），
+                       故正确解法是让 flex 沿这个 24px 行盒整体居中，而不是去猜一个
+                       随字号漂移的手填偏移量。 */
+                    'flex w-full items-center gap-2 rounded-[var(--r-ctl)] px-1.5 py-1.5 text-left',
                     'hover:bg-ink-fg/[0.04] disabled:opacity-60',
                     active && 'bg-ink-fg/[0.06]'
                   )}
                 >
                   <span
                     className={cn(
-                      'mt-1 size-[9px] shrink-0 rounded-full border',
+                      'size-[9px] shrink-0 rounded-full border',
                       active ? 'border-coral bg-coral/100' : 'border-ink-fg-3'
                     )}
                   />
