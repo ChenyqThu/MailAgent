@@ -46,7 +46,11 @@ export function AgentUserMessage(): React.JSX.Element {
     <MessagePrimitive.Root className="group mx-auto flex w-full max-w-[var(--thread-max-width)] flex-col items-end pt-2.5 -mt-2.5">
       <div className="relative max-w-[80%]">
         {hasBubbleContent && (
-          <div className="rounded-2xl rounded-br-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg">
+          // 长 URL / 无空格长串必须能在词内断行, 否则撑破 max-w-[80%] 溢出聊天框(dogfood 08-14
+          // owner 报: 粘一条 reddit 链接直接横向出界)。用 overflow-wrap:anywhere 而非 break-words:
+          // 后者(break-word)不参与 min-content 计算, 在被 flex/max-w 约束的盒子里对单个超长 token
+          // 仍会溢出; anywhere 会, 这正是这里需要的。break-all 不可用——它对中英文正文一律逐字断。
+          <div className="rounded-2xl rounded-br-md border border-[var(--hairline)] bg-ink-3 px-3.5 py-2 text-body leading-relaxed text-ink-fg [overflow-wrap:anywhere]">
             <MessagePrimitive.Parts />
           </div>
         )}

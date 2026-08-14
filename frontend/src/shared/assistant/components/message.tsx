@@ -119,7 +119,10 @@ export function UserMessage(): React.JSX.Element {
   return (
     <MessagePrimitive.Root className="group mb-4 flex w-full flex-col items-end">
       {hasBubbleContent && (
-        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[rgb(var(--c-accent))] px-3.5 py-2 text-body leading-relaxed text-[rgb(var(--c-accent-fg))] shadow-sm">
+        // overflow-wrap:anywhere — 与 AgentMessage.tsx 的用户气泡同规: 长 URL 是单个无空格
+        // token, 不给断点就会撑破 max-w-[80%] 横向溢出。两处气泡是同一缺陷的两份副本, 改一处
+        // 必改另一处(该文件顶部注释已记过这两个 surface 容易分叉)。
+        <div className="max-w-[80%] rounded-2xl rounded-br-md bg-[rgb(var(--c-accent))] px-3.5 py-2 text-body leading-relaxed text-[rgb(var(--c-accent-fg))] shadow-sm [overflow-wrap:anywhere]">
           {queuedEnvelope ? (
             <div className="space-y-1.5">
               <div className="text-micro font-medium opacity-75">
