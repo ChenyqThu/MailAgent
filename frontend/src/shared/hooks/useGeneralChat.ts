@@ -18,6 +18,27 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import type { ChatMessage, ChatSession } from '../api/types'
 import type { ChatError } from './useEmailChat'
 
+/** 0813 dogfood 轮 4（立即跟进「运行完回到默认首页」的病根）—— 用服务端列表替换本地 sessions 时，
+ *  **绝不驱逐当前活跃会话的那一行**。
+ *
+ *  `listGeneralSessions` 只返回 `anchor_type='general'`，而「立即跟进 / 事项对话」经 adoptSession
+ *  收进来的是 **matter-anchored** 行 —— 它在这份服务端列表里**结构性缺席**。run 结束的
+ *  `chat:turn-persisted` 广播会触发 refreshSessions，若在这里整表覆盖，活跃 matter 会话的行
+ *  就地蒸发 → AgentConversation 的 `knownKind`（activeItem ?? chat.sessions 兜底）瞬间读不到 →
+ *  `metadataPending` 翻真 → **runtime provider 被卸载**（正在收尾的线程连 UI 带
+ *  TurnCompleteWatcher 一起消失：对话画面清空 = 「回到默认 ai chat 首页」，标题生成的
+ *  running→idle 边沿也永远不会到来）。保留活跃行（服务端已含则以服务端为准）即从根上拆掉
+ *  这个竞态；非活跃的 matter 行照旧不进 general 列表（它们的宿主是历史下拉/事项页）。 */
+function mergeKeepingActive(
+  current: ChatSession[],
+  fresh: ChatSession[],
+  activeId: number | null
+): ChatSession[] {
+  if (activeId == null || fresh.some((s) => s.id === activeId)) return fresh
+  const active = current.find((s) => s.id === activeId)
+  return active ? [active, ...fresh] : fresh
+}
+
 export interface UseGeneralChatReturn {
   messages: ChatMessage[]
   error: ChatError | null
@@ -96,7 +117,9 @@ export function useGeneralChat(): UseGeneralChatReturn {
     try {
       const fresh = await mailApi.chat.listGeneralSessions()
       if (!mountedRef.current || gen !== navGenerationRef.current) return
-      setSessions(fresh)
+      // 轮 4 —— 活跃会话的行必须存活（见 mergeKeepingActive 的注释：general-only 服务端列表
+      // 会驱逐 adopt 进来的 matter 行，正是「跟进 run 结束回到默认首页」的病根）。
+      setSessions((cur) => mergeKeepingActive(cur, fresh, activeSessionRef.current))
     } catch {
       // History list is non-critical — swallow.
     }
@@ -114,7 +137,10 @@ export function useGeneralChat(): UseGeneralChatReturn {
       try {
         const fetched = await mailApi.chat.listGeneralSessions()
         if (cancelled || !mountedRef.current) return
-        setSessions(fetched)
+        // 轮 4 —— 首次加载与 refreshSessions 同一条纪律：dock 一唤出就自动发送（立即跟进）时，
+        // adoptSession 可能抢在这次异步落地之前，整表覆盖会驱逐刚 adopt 的 matter 行（流中途
+        // 卸载 runtime，同款竞态的开场版）。
+        setSessions((cur) => mergeKeepingActive(cur, fetched, activeSessionRef.current))
         if (activeSessionRef.current === null) {
           setActiveSessionId(null)
           setMessages([])

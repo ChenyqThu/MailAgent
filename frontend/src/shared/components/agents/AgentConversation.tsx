@@ -523,6 +523,44 @@ export function AgentConversation({
   const [aiSdkRunning, setAiSdkRunning] = useState(false)
   const chatReloadActiveSession = chat.reloadActiveSession
   const chatRefreshGeneralSessions = chat.refreshSessions
+  // 0813 轮 4（自动触发的对话不生成标题）—— 自动标题的唯一入口，从 handleTurnComplete 抽出：
+  // ① AgentThread 的 running→idle 边沿（附着流正常收尾）仍是主触发；②③ 下面两条 settle 路
+  // （detached run 收尾广播 / 服务端 resume 的 'chat:session-updated'）也要进标题路径 —— 那两条
+  // 路根本没有客户端边沿，此前经它们收尾的第一轮永远不会发 /api/ai/title。
+  // 🔴 失败不再永久闩死 sid：旧实现只在 fetch **网络层**拒绝时解闩，HTTP 非 2xx（persist 竞态的
+  // 404 / 上游 502）会把 sid 永久留在 posted 集合里 —— 一次瞬时失败 = 这条会话永远没有标题。
+  // 现在只有「拿到标题」或「服务端说已有标题」（两者都带非空 title）才算数；其余一律解闩，
+  // 下一个触发点幂等重试（gateway 对已命名会话跳过，绝不覆盖手动改名）。
+  const autoTitlePostedRef = useRef<Set<number>>(new Set())
+  const maybeAutoTitle = useCallback(
+    (sid: number): void => {
+      if (gatewayBaseUrl == null) return
+      const { mode, model: titleModel } = readAutoTitleSettings()
+      if (mode !== 'llm') return
+      if (autoTitlePostedRef.current.has(sid)) return
+      autoTitlePostedRef.current.add(sid)
+      void fetch(`${gatewayBaseUrl}/api/ai/title`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ sessionId: sid, model: titleModel })
+      })
+        .then((r) => (r.ok ? (r.json() as Promise<{ title?: string | null }>) : null))
+        .then((data) => {
+          if (data && data.title) {
+            void queryClient.invalidateQueries({ queryKey: qk.chat.allSessions() })
+          } else {
+            // non-2xx (data=null) or the model produced nothing usable — unlatch so the next
+            // trigger retries (idempotent server-side).
+            autoTitlePostedRef.current.delete(sid)
+          }
+        })
+        .catch(() => {
+          // network / gateway hiccup — allow a retry on the next trigger.
+          autoTitlePostedRef.current.delete(sid)
+        })
+    },
+    [gatewayBaseUrl, queryClient]
+  )
   // Island/server-resume settles ('chat:session-updated') — this MANUAL surface never subscribed
   // before (research gap): an island-approved HITL turn resumed server-side left the open modal
   // stale. Same guard decision as AiChatPanel (skip other sessions / skip mid-stream).
@@ -533,11 +571,24 @@ export function AgentConversation({
         runningRef: aiSdkRunningRef,
         activeSessionId: chatActiveSessionId,
         reload: chatReloadActiveSession,
-        onReloaded: () => setRefreshNonce((n) => n + 1)
+        onReloaded: () => {
+          setRefreshNonce((n) => n + 1)
+          // 轮 4 —— 服务端 resume 收尾没有客户端 running→idle 边沿；在这里补进标题路径。
+          // headless agent 记录（origin='agent'）按现状不动：它们建行即有标题，且不属于
+          // 「用户可见的对话要有标题」这条边界（见任务裁决）。
+          if (chatActiveSessionId != null && !isAgentRecord) maybeAutoTitle(chatActiveSessionId)
+        }
       })
     )
     return dispose
-  }, [useAiSdkRuntime, mailApi, chatActiveSessionId, chatReloadActiveSession])
+  }, [
+    useAiSdkRuntime,
+    mailApi,
+    chatActiveSessionId,
+    chatReloadActiveSession,
+    isAgentRecord,
+    maybeAutoTitle
+  ])
   // B1/B2/B4 — detached-run probe + placeholder + settle reload + unread-badge broadcast glue.
   const { backgroundActive, backgroundStartedAt } = useBackgroundChatRun({
     gatewayBaseUrl,
@@ -547,6 +598,8 @@ export function AgentConversation({
     localRunning: aiSdkRunning,
     onSettled: () => {
       void chatReloadActiveSession().then(() => setRefreshNonce((n) => n + 1))
+      // 轮 4 —— detached 收尾（后台跑完的 run）同样没有客户端边沿，补进标题路径（同上）。
+      if (chatActiveSessionId != null && !isAgentRecord) maybeAutoTitle(chatActiveSessionId)
     },
     onSessionsTouched: () => {
       void chatRefreshGeneralSessions()
@@ -639,7 +692,6 @@ export function AgentConversation({
   //      then refresh again so the title shows live. The gateway is idempotent (skips an already-titled
   //      session → a manual rename is never overwritten). Off mode (default) → no title call.
   const turnCompleteSeenRef = useRef<Set<number>>(new Set())
-  const autoTitlePostedRef = useRef<Set<number>>(new Set())
   const handleTurnComplete = useCallback((): void => {
     const sid = chat.activeSessionId
     if (sid == null) return
@@ -647,29 +699,11 @@ export function AgentConversation({
       turnCompleteSeenRef.current.add(sid)
       void queryClient.invalidateQueries({ queryKey: qk.chat.allSessions() })
     }
-    if (gatewayBaseUrl == null) return
     // (W6 — follow-up chips no longer fetch here: they come from the turn's own suggest_followups
     // tool part, extracted inside the assistant message that carries it — see FollowupSuggestions.)
-    const { mode, model: titleModel } = readAutoTitleSettings()
-    if (mode !== 'llm') return
-    if (autoTitlePostedRef.current.has(sid)) return
-    autoTitlePostedRef.current.add(sid)
-    void fetch(`${gatewayBaseUrl}/api/ai/title`, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ sessionId: sid, model: titleModel })
-    })
-      .then((r) => (r.ok ? (r.json() as Promise<{ title?: string | null }>) : null))
-      .then((data) => {
-        if (data && data.title) {
-          void queryClient.invalidateQueries({ queryKey: qk.chat.allSessions() })
-        }
-      })
-      .catch(() => {
-        // network / gateway hiccup — allow a retry on the next turn-complete edge.
-        autoTitlePostedRef.current.delete(sid)
-      })
-  }, [chat.activeSessionId, gatewayBaseUrl, queryClient])
+    // 轮 4 —— 标题生成收敛进 maybeAutoTitle（settle 路共用 + 失败不永久闩死，见其注释）。
+    maybeAutoTitle(sid)
+  }, [chat.activeSessionId, queryClient, maybeAutoTitle])
 
   // Readiness = keychain llmApiKey present (the gateway reads the same slot in main).
   const secretsQ = useQuery({
