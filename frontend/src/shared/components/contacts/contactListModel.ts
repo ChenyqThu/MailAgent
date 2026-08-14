@@ -9,7 +9,7 @@
 
 import type { ContactRowDto, ContactView } from '@shared/api/types/contact'
 
-export type ContactGroupBy = 'none' | 'company' | 'dept' | 'fn' | 'level'
+export type ContactGroupBy = 'none' | 'company' | 'dept' | 'fn' | 'level' | 'manager'
 export type ContactDensity = 'compact' | 'comfortable'
 export type ContactKindBucket = 'person' | 'robot' | 'list' | 'hidden'
 
@@ -53,11 +53,16 @@ interface BuildOptions {
   /** 「全部」视图的筛选 chips（人/机器人/群发列表/已隐藏）。 */
   kindFilter: ReadonlySet<ContactKindBucket>
   collapsed: Readonly<Record<string, boolean>>
-  /** i18n 标签解析（组件侧闭包 t；模型层不 import i18n）。 */
+  /** i18n 标签解析（组件侧闭包 t；模型层不 import i18n）。
+   *  `ungrouped` 由调用方按 groupBy 分支注入（manager 档 = 「未设上级」
+   *  `contacts.group.noManager`，其余 = `contacts.groupBy.ungrouped`）。 */
   labels: {
     kindGroup: (bucket: ContactKindBucket) => string
     fn: (value: string) => string
     level: (value: string) => string
+    /** 按汇报线的组 label（`contacts.group.reportsOf` 插值行上的
+     *  manager_display_name；无名上级照原型 `m.name || m.id` 用 id 兜底）。 */
+    manager: (item: ContactRowDto) => string
     ungrouped: string
   }
 }
@@ -83,6 +88,12 @@ function attributeGroupOf(
     case 'level':
       return item.seniority
         ? { key: `level:${item.seniority}`, label: labels.level(item.seniority) }
+        : null
+    case 'manager':
+      // 按汇报线（WP5）：组 key = 上级 id；未设上级走 ungrouped 通道（恒末尾，
+      // label 由调用方特判成「未设上级」）。
+      return item.manager_contact_id != null
+        ? { key: `mgr:${item.manager_contact_id}`, label: labels.manager(item) }
         : null
     default:
       return null

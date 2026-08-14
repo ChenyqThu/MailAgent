@@ -52,6 +52,9 @@ export interface ContactsApi {
   hide(contactId: number, hidden: boolean): Promise<{ hidden: boolean }>
   setKind(contactId: number, kind: ContactKind): Promise<{ kind: ContactKind }>
   setSelf(contactId: number, isSelf: boolean): Promise<{ is_self: boolean }>
+  /** WP5 组织关系: 指定/解除上级 (null = 解除)。🔒 只存一侧 —— 「添加下级」=
+   *  对下级那行调本方法。src 恒 'manual' (服务端钉死)。成功返回本人详情。 */
+  setManager(contactId: number, managerContactId: number | null): Promise<ContactDetailDto>
   setPrimaryEmail(contactId: number, email: string): Promise<{ primary_email: string }>
   setEmailFormer(
     contactId: number,
@@ -116,6 +119,11 @@ export function createContactsApi(baseUrl: string): ContactsApi {
     setSelf(contactId, isSelf) {
       return request(baseUrl, 'POST', `/contacts/${segment(contactId)}/self`, {
         body: { is_self: isSelf }
+      })
+    },
+    setManager(contactId, managerContactId) {
+      return request(baseUrl, 'POST', `/contacts/${segment(contactId)}/manager`, {
+        body: { manager_contact_id: managerContactId }
       })
     },
     setPrimaryEmail(contactId, email) {

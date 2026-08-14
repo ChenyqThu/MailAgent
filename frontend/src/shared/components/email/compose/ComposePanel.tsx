@@ -190,6 +190,9 @@ interface Props {
   /** mode='new' 专用：预填收件人（通讯录「写邮件」入口）。走 isNew 预填分支
    *  （planApplied 之前），与其他预填一样不标脏。其余 mode 忽略。 */
   initialTo?: readonly string[]
+  /** mode='new' 专用：预填抄送（WP5「写邮件并抄送上级」）。非空时顺带展开
+   *  cc 行；同 initialTo 走 planApplied 之前的预填闸，不标脏。其余 mode 忽略。 */
+  initialCc?: readonly string[]
 }
 
 /** Inner panel — keyed on (internalId, mode) by the caller so a mode switch
@@ -201,7 +204,8 @@ export function ComposePanelInner({
   variant = 'column',
   guardRef,
   onDirtyChange,
-  initialTo
+  initialTo,
+  initialCc
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
@@ -431,11 +435,16 @@ export function ComposePanelInner({
       return
     }
     if (isNew) {
-      // 写新邮件: 空表单（或调用方给的预填收件人 —— 通讯录「写邮件」入口）。
-      // 预填发生在 planApplied 翻 true 之前 ⇒ 不标脏（与 draft/plan 预填同一闸）。
+      // 写新邮件: 空表单（或调用方给的预填收件人/抄送 —— 通讯录「写邮件」/
+      // WP5「写邮件并抄送上级」入口）。预填发生在 planApplied 翻 true 之前 ⇒
+      // 不标脏（与 draft/plan 预填同一闸）。
       // (放在 isDraftEdit 之后: 规则只报 effect 内首个 setState, 由上面的 disable
       //  覆盖; 这里的 setState 是后续调用, 不触发规则、无需额外 disable。)
       if (initialTo && initialTo.length > 0) setTo([...initialTo])
+      if (initialCc && initialCc.length > 0) {
+        setCc([...initialCc])
+        setCcVisible(true)
+      }
       setPlanApplied(true)
       return
     }
@@ -453,7 +462,7 @@ export function ComposePanelInner({
     if (editorHtml) editor.commands.setContent(editorHtml)
     setQuoteHtml(plan.quote_html || plan.forward_intro_html || '')
     setPlanApplied(true)
-  }, [planApplied, isDraftEdit, isNew, initialTo, draftQ.data, planQ.data, editor, mode])
+  }, [planApplied, isDraftEdit, isNew, initialTo, initialCc, draftQ.data, planQ.data, editor, mode])
 
   // 预填完成 → 开放 dirty 判定 (字段 setter 的 baseline 闸)。
   useEffect(() => {

@@ -15,6 +15,7 @@ await i18n.changeLanguage('zh-CN')
 const actions: ContactRowActions = {
   onOpen: vi.fn(),
   onCompose: vi.fn(),
+  onComposeCc: vi.fn(),
   onSetKind: vi.fn(),
   onToggleSelf: vi.fn(),
   onToggleHidden: vi.fn(),

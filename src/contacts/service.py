@@ -26,6 +26,7 @@ from src.contacts.taxonomy import (
     CONTACT_FUNCTION_VALUES,
     CONTACT_KIND_VALUES,
     CONTACT_LOCKABLE_FIELDS,
+    CONTACT_MANAGER_SRC_VALUES,
     CONTACT_SENIORITY_VALUES,
     derive_function,
     derive_seniority,
@@ -435,6 +436,82 @@ def unmark_email_former(
     conn: sqlite3.Connection, contact_id: int, email: str, *, now: int,
 ) -> None:
     _email_status_guard(conn, contact_id, email, "unmark_former", now)
+
+
+# ==================== 组织关系 (WP5: manager 一侧存储) ====================
+
+#: 环检测上溯步数上限 —— 正常链远小于此; 脏数据成环时防死循环 (防御的是库内
+#: 既有坏数据, 不是本函数自己的写入)。
+MANAGER_CHAIN_HOP_CAP = 1000
+
+
+def set_manager(
+    conn: sqlite3.Connection,
+    contact_id: int,
+    manager_contact_id: Optional[int],
+    *,
+    src: str,
+    now_ms: int,
+) -> None:
+    """设置/解除上级 (设计 §2.2.1: 🔒 只存一侧, 下级用 WHERE manager_contact_id=?
+    反查, 不双写、不建中间表)。「添加下级」= 对下级那行调本函数。
+
+    - ``manager_contact_id=None`` = 解除 (``manager_src`` 一并清 NULL)。
+    - 守卫: ① 自指拒绝; ② **完整链路环检测** —— 沿新上级的 manager 链上溯,
+      撞到 contact_id 即拒 (hop 上限防脏数据死循环); ③ 两侧都必须是在册
+      非墓碑联系人; ④ src ∈ CONTACT_MANAGER_SRC_VALUES。
+    - manager 不进锁词表: ``manager_src='manual'`` 即锁语义 (WP6 的 auto 建议
+      对 manual 行不覆写)。不走 update_identity_fields。
+    """
+    if src not in CONTACT_MANAGER_SRC_VALUES:
+        raise ContactError(
+            "E_INVALID_ARG",
+            f"manager src must be one of {CONTACT_MANAGER_SRC_VALUES}",
+        )
+    _require_live_contact(conn, contact_id)
+    if manager_contact_id is None:
+        conn.execute(
+            "UPDATE contact SET manager_contact_id=NULL, manager_src=NULL, "
+            "updated_at=? WHERE id=?",
+            (now_ms, contact_id),
+        )
+        return
+    if manager_contact_id == contact_id:
+        raise ContactError(
+            "E_MANAGER_SELF", "a contact cannot be their own manager"
+        )
+    _require_live_contact(conn, manager_contact_id)
+    # 环检测: 从新上级沿 manager 链上溯, 撞到 contact_id = 成环。
+    cursor: Optional[int] = manager_contact_id
+    for _ in range(MANAGER_CHAIN_HOP_CAP):
+        if cursor is None:
+            break
+        if cursor == contact_id:
+            raise ContactError(
+                "E_MANAGER_CYCLE",
+                f"setting manager {manager_contact_id} on contact "
+                f"{contact_id} would create a reporting cycle",
+            )
+        row = conn.execute(
+            "SELECT manager_contact_id FROM contact WHERE id=?", (cursor,)
+        ).fetchone()
+        cursor = (
+            int(row["manager_contact_id"])
+            if row is not None and row["manager_contact_id"] is not None
+            else None
+        )
+    else:
+        # 上限内没走到链头 = 库里已有环/超深脏链, 保守拒绝 (不写入新边)。
+        raise ContactError(
+            "E_MANAGER_CYCLE",
+            f"manager chain of {manager_contact_id} exceeds "
+            f"{MANAGER_CHAIN_HOP_CAP} hops (existing bad data?)",
+        )
+    conn.execute(
+        "UPDATE contact SET manager_contact_id=?, manager_src=?, updated_at=? "
+        "WHERE id=?",
+        (manager_contact_id, src, now_ms, contact_id),
+    )
 
 
 def merge_contacts(

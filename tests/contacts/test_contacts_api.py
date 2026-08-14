@@ -94,6 +94,7 @@ def test_flag_off_every_endpoint_is_disabled(client):
         ("POST", "/api/contacts/1/hide"),
         ("POST", "/api/contacts/1/kind"),
         ("POST", "/api/contacts/1/self"),
+        ("POST", "/api/contacts/1/manager"),
         ("POST", "/api/contacts/1/locks"),
         ("POST", "/api/contacts/1/emails/primary"),
         ("POST", "/api/contacts/1/emails/former"),
@@ -291,6 +292,11 @@ def test_detail_shape(client):
     assert [e["address"] for e in data["emails"]] == ["alice@x.com", "alice@old.com"]
     assert data["emails"][0]["is_primary"] is True
     assert data["profile"] is None
+    # WP5 组织关系投影恒在 (未设 = null/空数组)
+    assert data["manager"] is None
+    assert data["manager_src"] is None
+    assert data["reports"] == []
+    assert data["peers"] == []
     assert http.get("/api/contacts/999").status_code == 404
 
 
@@ -637,3 +643,72 @@ def test_merge_endpoint_error_envelopes(client):
     )
     assert resp.status_code == 409
     assert resp.json()["error"]["code"] == "E_CONTACT_MERGED"
+
+
+# ---- 组织关系 (WP5: POST /{id}/manager + 投影) ----
+
+
+def test_manager_endpoint_sets_unsets_and_returns_detail(client):
+    http, _, path = client
+    _seed_contact(path, cid=1, name="Alice", org="ACME", emails=(("alice@x.com", 1),))
+    _seed_contact(
+        path, cid=2, name="Boss", org="ACME", mail=9, emails=(("boss@x.com", 1),),
+    )
+
+    data = _data(http.post("/api/contacts/1/manager", json={"manager_contact_id": 2}))
+    # REST 面恒写 manual (auto 是 WP6/WP7 的事; 结构位已投影)
+    assert data["manager_src"] == "manual"
+    assert data["manager"]["id"] == 2
+    assert data["manager"]["display_name"] == "Boss"
+    assert data["manager"]["primary_email"] == "boss@x.com"
+    # 只存一侧: 反查在上级那行的 detail 里
+    boss = _data(http.get("/api/contacts/2"))
+    assert [r["id"] for r in boss["reports"]] == [1]
+    assert boss["manager"] is None
+
+    # 解除 = null (manager_src 一并清)
+    data = _data(http.post("/api/contacts/1/manager", json={"manager_contact_id": None}))
+    assert data["manager"] is None
+    assert data["manager_src"] is None
+    assert _data(http.get("/api/contacts/2"))["reports"] == []
+
+
+def test_manager_endpoint_error_envelopes(client):
+    http, _, path = client
+    _seed_contact(path, cid=1, name="Alice", emails=(("alice@x.com", 1),))
+    _seed_contact(path, cid=2, name="Boss", emails=(("boss@x.com", 1),))
+
+    resp = http.post("/api/contacts/1/manager", json={"manager_contact_id": 1})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_MANAGER_SELF"
+
+    assert (
+        http.post(
+            "/api/contacts/1/manager", json={"manager_contact_id": 2}
+        ).status_code
+        == 200
+    )
+    resp = http.post("/api/contacts/2/manager", json={"manager_contact_id": 1})
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "E_MANAGER_CYCLE"
+
+    resp = http.post("/api/contacts/1/manager", json={"manager_contact_id": 999})
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "E_CONTACT_NOT_FOUND"
+
+
+def test_list_carries_manager_fields(client):
+    http, _, path = client
+    _seed_contact(
+        path, cid=1, name="Alice", sent=5, mail=20, emails=(("alice@x.com", 1),),
+    )
+    _seed_contact(
+        path, cid=2, name="Boss", sent=3, mail=9, emails=(("boss@x.com", 1),),
+    )
+    _data(http.post("/api/contacts/1/manager", json={"manager_contact_id": 2}))
+
+    rows = {row["id"]: row for row in _data(http.get("/api/contacts"))["items"]}
+    assert rows[1]["manager_contact_id"] == 2
+    assert rows[1]["manager_display_name"] == "Boss"
+    assert rows[2]["manager_contact_id"] is None
+    assert rows[2]["manager_display_name"] is None

@@ -135,7 +135,17 @@ export function ContactsWorkspace(): React.ReactElement | null {
           kindGroup: (bucket) => t(`contacts.group.${bucket}`),
           fn: (value) => t(`contacts.fn.${value}`),
           level: (value) => t(`contacts.level.${value}`),
-          ungrouped: t('contacts.groupBy.ungrouped')
+          // 按汇报线（WP5）：组 label 用行上的 manager_display_name 插值；无名
+          // 上级照原型 `m.name || m.id` 用 id 兜底。ungrouped 通道该档特判成
+          // 「未设上级」（`contacts.group.noManager`），天然置底。
+          manager: (item) =>
+            t('contacts.group.reportsOf', {
+              name: item.manager_display_name ?? String(item.manager_contact_id)
+            }),
+          ungrouped:
+            groupBy === 'manager'
+              ? t('contacts.group.noManager')
+              : t('contacts.groupBy.ungrouped')
         }
       }),
     [collapsedGroups, groupBy, items, kindFilter, t, view]
@@ -225,6 +235,27 @@ export function ContactsWorkspace(): React.ReactElement | null {
           toastSuccess(t('contacts.toast.composePrefill', { email: item.primary_email }))
         }
       },
+      // WP5「写邮件并抄送上级」：收件人 = TA、抄送 = TA 的上级。列表行只带上级
+      // id（裁决 5），主邮箱点击时按 id 取详情解析；取不到（异常兜底）降级为
+      // 仅预填收件人。
+      onComposeCc: (item, managerContactId) => {
+        void (async () => {
+          let managerEmail: string | undefined
+          try {
+            const managerDetail = await api.get(managerContactId)
+            managerEmail =
+              managerDetail.emails.find((email) => email.is_primary)?.address ??
+              managerDetail.emails[0]?.address ??
+              undefined
+          } catch {
+            managerEmail = undefined
+          }
+          openNewCompose(item.primary_email ?? undefined, managerEmail ? [managerEmail] : undefined)
+          if (item.primary_email) {
+            toastSuccess(t('contacts.toast.composePrefill', { email: item.primary_email }))
+          }
+        })()
+      },
       onSetKind: (item, kind) => kindMutation.mutate({ id: item.id, kind }),
       onToggleSelf: (item) => selfMutation.mutate({ id: item.id, isSelf: !item.is_self }),
       onToggleHidden: (item) =>
@@ -236,7 +267,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
       onEnterSelection: enterSelection,
       onToggleCheck: toggleCheck
     }),
-    [enterSelection, hideMutation, kindMutation, selectContact, selfMutation, t, toggleCheck]
+    [api, enterSelection, hideMutation, kindMutation, selectContact, selfMutation, t, toggleCheck]
   )
 
   const finishListResize = useCallback((target: HTMLDivElement, pointerId: number): void => {

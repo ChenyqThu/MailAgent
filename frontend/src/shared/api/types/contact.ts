@@ -59,6 +59,9 @@ export interface ContactRowDto {
   last_seen_at: number | null
   email_count: number
   primary_email: string | null
+  /** WP5 汇报线: 上级 id + 显示名 (分组 label / 行菜单「写邮件并抄送上级」可用性). */
+  manager_contact_id: number | null
+  manager_display_name: string | null
   /** WP6 画像期接真值; WP2 恒 null 占位. */
   profile_summary: string | null
 }
@@ -75,6 +78,19 @@ export interface ContactEmailDto {
   mail_count: number
   first_seen_at: number | null
   last_seen_at: number | null
+}
+
+/** 组织关系投影的人物行 (裁决 4 最小集 + primary_email/kind —— Monogram 色相
+ *  锚点 = 主邮箱 (D10), 分区头「写邮件并抄送上级」需要上级主邮箱)。 */
+export interface ContactRelPersonDto {
+  id: number
+  display_name: string | null
+  name_en: string | null
+  organization: string | null
+  role_title: string | null
+  kind: ContactKind
+  mail_count: number
+  primary_email: string | null
 }
 
 export interface ContactDetailDto {
@@ -103,6 +119,13 @@ export interface ContactDetailDto {
   created_at: number
   updated_at: number
   emails: ContactEmailDto[]
+  /** WP5 组织关系 (设计 §2.2.1, 🔒 只存一侧): manager 单行 / reports 反查 /
+   *  peers 同组织派生前 6。manager_src='auto' 是 WP6 的 AI 标记结构位 ——
+   *  WP5 REST 面恒写 'manual'. */
+  manager: ContactRelPersonDto | null
+  manager_src: 'manual' | 'auto' | null
+  reports: ContactRelPersonDto[]
+  peers: ContactRelPersonDto[]
   /** WP6 画像期接真值; WP2 恒 null. */
   profile: null
 }

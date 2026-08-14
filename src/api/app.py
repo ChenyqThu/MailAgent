@@ -210,6 +210,9 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_INVALID_EMAIL": 400,
     "E_INVALID_FIELD": 400,
     "E_MERGE_SELF": 400,
+    # Contact Directory WP5 (组织关系, set_manager 守卫)
+    "E_MANAGER_SELF": 400,
+    "E_MANAGER_CYCLE": 409,
 }
 
 

@@ -13,8 +13,11 @@ interface ComposeNewStore {
   /** 预填收件人（通讯录「写邮件」等入口；null = 空表单）。仅在打开那一刻消费，
    *  关闭即清 —— 下一次 ⌘N 不带上一次的人。 */
   prefillTo: string | null
-  /** 打开写新邮件模态（可选预填收件人）。 */
-  openCompose(prefillTo?: string): void
+  /** 预填抄送（WP5「写邮件并抄送上级」：收件人 = TA、抄送 = TA 的上级）。
+   *  与 prefillTo 同生命周期：打开那一刻消费、关闭即清。 */
+  prefillCc: string[] | null
+  /** 打开写新邮件模态（可选预填收件人 / 抄送）。 */
+  openCompose(prefillTo?: string, prefillCc?: string[]): void
   /** 关闭 (发送成功 / 放弃 / ESC)。 */
   close(): void
 }
@@ -22,17 +25,22 @@ interface ComposeNewStore {
 export const useComposeNewStore = create<ComposeNewStore>((set) => ({
   open: false,
   prefillTo: null,
-  openCompose(prefillTo?: string) {
-    set({ open: true, prefillTo: prefillTo ?? null })
+  prefillCc: null,
+  openCompose(prefillTo?: string, prefillCc?: string[]) {
+    set({
+      open: true,
+      prefillTo: prefillTo ?? null,
+      prefillCc: prefillCc && prefillCc.length > 0 ? prefillCc : null
+    })
   },
   close() {
-    set({ open: false, prefillTo: null })
+    set({ open: false, prefillTo: null, prefillCc: null })
   }
 }))
 
 /** 模块级 helper for 非 React 调用方 (keymap / sidebar 按钮 / 通讯录)。 */
-export function openNewCompose(prefillTo?: string): void {
-  useComposeNewStore.getState().openCompose(prefillTo)
+export function openNewCompose(prefillTo?: string, prefillCc?: string[]): void {
+  useComposeNewStore.getState().openCompose(prefillTo, prefillCc)
 }
 
 export function closeNewCompose(): void {

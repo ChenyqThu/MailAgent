@@ -140,8 +140,8 @@ v57 资料版本轨迹表 `resource_version`，两者详见 §2.5；v51/v53–v5
 | `matter_item` | 行动项 / 决策 / 问题 / 里程碑 / 阻塞 / 笔记 | `checklist_json` 只允许 `kind='action'` 非空 |
 | `matter_resource` | 事项 ↔ 资料的多对多 | 身份归一走 `resource_identity.normalize_resource_key`（**唯一写侧** `_upsert_resource`）|
 | `resource_version` | 资料版本轨迹（v57）| 挂全局 `resource` 而非 per-matter，故无 `matter_` 前缀；**只存历史**，当前版本就是 `resource` 行自己，见 §2.5 |
-| `matter_stakeholder` | 干系人（per-matter 行）| `is_waiting_on` 会产生等待信号；`contact_id` 关联全局库（v52，`ON DELETE SET NULL`，写穿语义见 §2.4）|
-| `matter_contact` | 全局干系人库（v52）| 身份 = 归一 email（`email_normalized` NOT NULL UNIQUE + CHECK 强制 lower+trim）；**无 email 的干系人不入库** |
+| `matter_stakeholder` | 干系人（per-matter 行）| `is_waiting_on` 会产生等待信号；`contact_id` 关联全局通讯录 `contact`（v54 起，`ON DELETE SET NULL`，写穿语义见 §2.4）|
+| ~~`matter_contact`~~ | 全局干系人库（v52）——**v54 已整体迁入通讯录 `contact` 三表后 DROP**（id 保持，见 §2.4）| 身份 = 归一 email 纪律由 `contact_email` 锚点继承；**无 email 的干系人不入库** 不变 |
 | `matter_relation` | 事项之间的关系 | |
 | `matter_event` | 时间线 / 审计 | 🔴 `ON DELETE CASCADE` —— 事项被永久删除时事件**一起没**，所以永久删除的审计落**日志**不落事件 |
 | `matter_update` | Agent 的更新提案 | `review_status` 四态 |
@@ -215,35 +215,43 @@ episode（那时按新 severity 开）。这是「判据翻转前不再报」的
 就不能留一条"变严重了就破例"的旁路 —— 否则逾期天数一跨阈值，被解决掉的信号就自己回来了。
 要立刻重新看见，路径是 owner 侧的重开（或让判据先翻转），不是让系统自作主张。
 
-### 2.4 全局干系人库 `matter_contact`（v52）
+### 2.4 干系人与全局通讯录（v52 `matter_contact` → **v54 起已并入通讯录 `contact` 三表**）
 
-- **身份 = 归一 email**。无 email 的干系人**不入全局库**（`contact_id` 恒 NULL）：没有可靠
-  身份键，按名字合并必然误并同名人。有意不加 `note` 列（per-matter 备注已有
-  `matter_stakeholder.relationship`，不造死列）。
-- **写侧**（`service._mutate_stakeholder`，唯一写面）：create/update 带 email →
-  `_upsert_contact`（提供的非空姓名 / 组织 = 最后写者赢，None 不动既有值）；create 只给
-  email 时从库回填姓名 / 组织。姓名 / 组织显式修改 → `_propagate_contact_identity`
-  **写穿**到该联系人的其它事项行 + 刷其搜索投影，🔴 不 bump 那些事项的 version、不发事件 ——
-  这是联系人层的事实，不是那些事项的业务动作，撞别人的乐观锁才是 bug（有测试钉住）。
-  已知取舍：patch 显式传 `display_name: null` 只清本行不清全局；「已在事项中」的重复 create
-  早退，不触发 contact 更新。update 改 email 时若没同时改名，用**本行既有**姓名 / 组织兜底
-  建新 contact（否则库里多出裸邮箱条目）；🔴 兜底只填**新建**那条的空位，不进 ON CONFLICT
-  分支 —— 改到别人已在库里的邮箱不许把那个人改名（`_upsert_contact` 的 `fallback_*` 参数）。
-- 🔴 **写穿是静默的**（有意）：`_propagate_contact_identity` 改其它事项的 stakeholder 行时
-  **不发事件、不 bump 那些事项的 version、时间线上不留痕**（只刷搜索投影）。代价写实：其它
-  事项的前端缓存**不会**被动失效，那边要等下一次 refetch 才看到新名字；且「谁把这人改名的」
-  在那些事项的时间线上查不到，只在改名发生的那个事项里有记录。这是为「不撞别人乐观锁」付的
-  价 —— 发事件就得 bump version，等于一次改名把所有相关事项的在途编辑全打成冲突。
-- 🔴 **关联索引有意不进 `MATTER_INDEX_DDLS`**：那组索引会在 v44–v50 各迁移块对老库整组重放，
-  而 `contact_id` 要到 v52 ALTER 才存在 —— 放进组里会把老库的升级梯子当场炸掉
-  （"no such column"）。改为独立常量 `MATTER_STAKEHOLDER_CONTACT_INDEX_DDL`，只在 v52 块
-  （ALTER 之后）建；新库走满梯子（current_version=1）同样拿得到。
-- **Picker 池两个只读端点**：`GET /api/matters/contacts`（全局池 + matter_count /
-  last_contact_at 聚合，一次 LEFT JOIN 不逐 contact 查）+ `GET /api/matters/contacts/email-candidates`
-  （确定性扫 `email_metadata` 最近 3000 封的 `sender` / `sender_name` / `to_addr` / `cc_addr`，
-  **不走 LLM**；owner 自己的地址服务端排除，否则以近乎全量频次霸榜）。🔴 两条字面路径必须
-  声明在 `/{matter_id}` 之前，否则 "contacts" 被当 public_id 吞。
-  回归：`tests/matters/test_matter_contacts.py` + `test_matter_v52_migration.py`。
+- **演进**：v52 建全局干系人库 `matter_contact`（身份 = 归一 email）；通讯录 epic
+  （task 08-13，方案 A）的 **v54 迁移把它整体升级成通讯录三表**
+  `contact` / `contact_email` / `contact_email_link` —— 迁移动作序：迁行 **id 保持**
+  （`matter_stakeholder.contact_id` 的值因此不用改写）+ 每行生成主邮箱锚点 →
+  rebuild `matter_stakeholder` 把 FK 目标从 `matter_contact(id)` 换成 `contact(id)`
+  （SQLite 改不了 FK 目标，整表重建镜像 v45 先例）→ `DROP matter_contact`。
+  🔴 **梯子冻结**：`MATTER_TABLE_DDLS` 里 `matter_contact` / `matter_stakeholder`
+  的旧形状 CREATE **原样保留**（append-only）—— v52 块靠它们建表 + seed，新库满
+  梯子先建旧形状再在 v54 换形；多做一次 rebuild 是幂等成本，换来梯子对 v44..v53
+  全部中间版本成立。
+- **身份纪律不变**：身份判据只有归一 email；无 email 的干系人**不入全局库**
+  （`contact_id` 恒 NULL）——没有可靠身份键，按名字合并必然误并同名人。
+- **写侧**（`service._mutate_stakeholder`，matters 域唯一写面）：create/update 带
+  email → `_upsert_contact` —— v54 起它是**薄包装**，底层调通讯录写面单源
+  `src/contacts/service.py::upsert_contact_for_email`（升级点：按 `contact_email`
+  锚点找人 ⇒ 一人多邮箱下也命中同一人）。语义逐条继承 v52：非空姓名/组织 =
+  最后写者赢、None 不动既有值、🔴 `fallback_*` 只填**新建**行的空位（改到别人已在
+  库里的邮箱不许把那个人改名）。姓名/组织显式修改 → `_propagate_contact_identity`
+  **写穿**到该联系人的其它事项行 + 刷搜索投影，🔴 不 bump 那些事项的 version、
+  不发事件（联系人层的事实不是那些事项的业务动作，撞别人乐观锁才是 bug，有测试
+  钉住）。代价写实不变：其它事项前端缓存不被动失效、写穿在那些事项时间线上无痕。
+- **读侧已退役（通讯录 WP3）**：`GET /api/matters/contacts` +
+  `/api/matters/contacts/email-candidates` 两端点、matters service 的
+  `list_contacts` / `extract_contact_candidates` / `CONTACT_SCAN_WINDOW` 全部删除
+  —— 干系人 picker（`MatterStakeholderPicker` 单页化）直接读 `/api/contacts`
+  （服务端 q + 往来密度排序），库外邮箱经「以这个邮箱新建联系人并添加」入库；
+  「从邮件提取」tab 退役（联系人由通讯录扫描器后台建成，无需事项侧现场扫）。
+  通讯录本体（列表/档案/合并/组织关系/flag 语义）见
+  [`../contacts/contact-directory.md`](../contacts/contact-directory.md)。
+- 🔴 **关联索引红字照旧**：`MATTER_STAKEHOLDER_CONTACT_INDEX_DDL` 独立常量不进
+  `MATTER_INDEX_DDLS`（那组会在 v44–v50 各迁移块对老库整组重放，而 `contact_id`
+  到 v52 才存在，放进组里炸梯子）；同理通讯录三表 DDL 是独立常量组
+  `CONTACT_TABLE_DDLS` / `CONTACT_INDEX_DDLS`，只从 v54 块执行。
+  回归：`tests/matters/test_matter_contacts.py`（WP3 按新径等价改写）+
+  `test_matter_v52_migration.py` + `test_contact_v54_migration.py`。
 
 ### 2.5 资料摘要与版本轨迹（v56 / v57）
 

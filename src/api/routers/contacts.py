@@ -22,6 +22,7 @@ from src.api.schemas.contacts import (
     ContactHideRequest,
     ContactKindRequest,
     ContactLockRequest,
+    ContactManagerRequest,
     ContactMergeRequest,
     ContactPatchRequest,
     ContactPrimaryEmailRequest,
@@ -251,10 +252,14 @@ async def list_contacts(
         "SELECT c.id, c.display_name, c.name_en, c.organization, c.department, "
         "  c.role_title, c.function, c.seniority, c.kind, c.hidden_at, c.is_self, "
         "  c.mail_count, c.sent_to_count, c.first_seen_at, c.last_seen_at, "
+        # WP5 汇报线: manager id + self-join 显示名 (分组 label / 行菜单可用性;
+        # m 对 c 是 1:1, GROUP BY c.id 下裸列取值恒定)。
+        "  c.manager_contact_id, m.display_name AS manager_display_name, "
         "  COUNT(ce.id) AS email_count, "
         "  COALESCE(MAX(CASE WHEN ce.is_primary = 1 THEN ce.email_normalized END), "
         "    MIN(ce.email_normalized)) AS primary_email "
         "FROM contact c "
+        "LEFT JOIN contact m ON m.id = c.manager_contact_id "
         "LEFT JOIN contact_email ce ON ce.contact_id = c.id "
         f"WHERE {' AND '.join(where)} "
         "GROUP BY c.id "
@@ -284,6 +289,80 @@ async def list_contacts(
 
 # ---- 详情 ----
 
+#: 联系人主邮箱 (无显式主时退化最小地址) —— resolve 端点同款相关子查询。
+_PRIMARY_EMAIL_SQL = (
+    "(SELECT COALESCE(MAX(CASE WHEN pe.is_primary = 1 "
+    "    THEN pe.email_normalized END), MIN(pe.email_normalized)) "
+    " FROM contact_email pe WHERE pe.contact_id = {alias}.id)"
+)
+
+#: 组织关系投影的行字段 (裁决 4 最小集 + primary_email/kind —— Monogram 色相
+#: 锚点 = 主邮箱 (D10), 分区头「写邮件并抄送上级」需要上级主邮箱)。
+_REL_FIELDS = (
+    "id", "display_name", "name_en", "organization", "role_title",
+    "kind", "mail_count", "primary_email",
+)
+
+
+def _rel_person(row: sqlite3.Row) -> dict:
+    return {key: row[key] for key in _REL_FIELDS}
+
+
+def _load_org_relations(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
+    """WP5 组织关系投影: manager / reports / peers (设计 §2.2.1)。
+
+    - manager: 单行 (墓碑/隐藏也如实返回 —— 人物页对隐藏行也能打开)。
+    - reports: WHERE manager_contact_id=? 反查 (🔒 只存一侧), 排除墓碑/隐藏,
+      按 mail_count 降序。
+    - peers: 同 organization; 双方都有 department 时才要求相同 (原型
+      cdata.jsx:314-317 的 `!c.dept || !x.dept || x.dept===c.dept`); 排除
+      自己/非 person/self/hidden/墓碑; mail_count 降序前 6。无组织 = 空。
+    """
+    contact_id = int(row["id"])
+    primary_sql = _PRIMARY_EMAIL_SQL.format(alias="r")
+    manager = None
+    if row["manager_contact_id"] is not None:
+        manager_row = conn.execute(
+            "SELECT r.id, r.display_name, r.name_en, r.organization, "
+            f"  r.role_title, r.kind, r.mail_count, {primary_sql} AS primary_email "
+            "FROM contact r WHERE r.id = ?",
+            (row["manager_contact_id"],),
+        ).fetchone()
+        if manager_row is not None:
+            manager = _rel_person(manager_row)
+    reports = [
+        _rel_person(r)
+        for r in conn.execute(
+            "SELECT r.id, r.display_name, r.name_en, r.organization, "
+            f"  r.role_title, r.kind, r.mail_count, {primary_sql} AS primary_email "
+            "FROM contact r "
+            "WHERE r.manager_contact_id = ? AND r.merged_into IS NULL "
+            "  AND r.hidden_at IS NULL "
+            "ORDER BY r.mail_count DESC, r.id ASC",
+            (contact_id,),
+        )
+    ]
+    peers: list = []
+    if row["organization"]:
+        peers = [
+            _rel_person(r)
+            for r in conn.execute(
+                "SELECT r.id, r.display_name, r.name_en, r.organization, "
+                f"  r.role_title, r.kind, r.mail_count, {primary_sql} AS primary_email "
+                "FROM contact r "
+                "WHERE r.id <> ? AND r.merged_into IS NULL "
+                "  AND r.kind = 'person' AND r.is_self = 0 "
+                "  AND r.hidden_at IS NULL AND r.organization = ? "
+                "  AND (? IS NULL OR r.department IS NULL OR r.department = ?) "
+                "ORDER BY r.mail_count DESC, r.id ASC LIMIT 6",
+                (
+                    contact_id, row["organization"],
+                    row["department"], row["department"],
+                ),
+            )
+        ]
+    return {"manager": manager, "reports": reports, "peers": peers}
+
 
 def _load_detail(conn: sqlite3.Connection, contact_id: int) -> dict:
     row = conn.execute(
@@ -307,6 +386,7 @@ def _load_detail(conn: sqlite3.Connection, contact_id: int) -> dict:
         )
     ]
     contact_info = _json_dict(row["contact_info_json"])
+    relations = _load_org_relations(conn, row)
     return {
         "id": row["id"],
         "display_name": row["display_name"],
@@ -335,6 +415,11 @@ def _load_detail(conn: sqlite3.Connection, contact_id: int) -> dict:
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "emails": emails,
+        # WP5 组织关系 (manager_src 在 UI 是 auto 标记结构位; WP5 REST 恒 manual)。
+        "manager": relations["manager"],
+        "manager_src": row["manager_src"],
+        "reports": relations["reports"],
+        "peers": relations["peers"],
         # WP6 画像期接真值; WP2 恒 null (画像卡只有「未开启」引导态)。
         "profile": None,
     }
@@ -578,6 +663,26 @@ async def set_contact_self(
             conn, contact_id, is_self=body.is_self, now=_now_ms(),
         )
     return success_envelope({"is_self": body.is_self}, request=request)
+
+
+@router.post("/{contact_id}/manager")
+async def set_contact_manager(
+    request: Request,
+    contact_id: int,
+    body: ContactManagerRequest,
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    """组织关系 (WP5): 指定/解除上级。🔒 只存一侧 —— 「添加下级」= 前端对下级
+    那行调本端点。src 恒 'manual' (auto 是 WP6/WP7 建议采纳链路, 本面不暴露)。
+    成功返回本人详情 (manager/reports/peers 投影就地刷新)。"""
+    now = _now_ms()
+    with repo.transaction() as conn:
+        _call(
+            contact_service.set_manager,
+            conn, contact_id, body.manager_contact_id, src="manual", now_ms=now,
+        )
+        detail = _call(_load_detail, conn, contact_id)
+    return success_envelope(detail, request=request)
 
 
 @router.post("/{contact_id}/merge")

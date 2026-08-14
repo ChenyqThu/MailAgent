@@ -34,6 +34,9 @@ export interface ContactGovernanceTarget {
 export interface ContactRowActions {
   onOpen(item: ContactGovernanceTarget): void
   onCompose(item: ContactGovernanceTarget): void
+  /** WP5「写邮件并抄送上级」（收件人 = TA、抄送 = TA 的上级）。行菜单仅在
+   *  行有 manager 时渲染此项；上级主邮箱由 handler 侧解析。 */
+  onComposeCc(item: ContactGovernanceTarget, managerContactId: number): void
   onSetKind(item: ContactGovernanceTarget, kind: 'person' | 'robot' | 'list'): void
   onToggleSelf(item: ContactGovernanceTarget): void
   onToggleHidden(item: ContactGovernanceTarget): void
@@ -62,6 +65,8 @@ function rowMenuItems(
   t: (key: string) => string,
   actions: ContactRowActions
 ): PopmenuItem[] {
+  // 提前取值：闭包里保住 narrowing（spread 条件里的判空进不了 onSelect）。
+  const managerId = item.manager_contact_id
   const kindActions = (['robot', 'list', 'person'] as const)
     .filter((kind) => kind !== item.kind)
     .map(
@@ -91,6 +96,17 @@ function rowMenuItems(
       label: t('contacts.action.compose'),
       onSelect: () => actions.onCompose(item)
     },
+    // WP5 邮件场景（设计 §2.2.1）：行有上级才出现（可用性判据 = manager_contact_id）。
+    ...(managerId != null
+      ? ([
+          {
+            kind: 'action',
+            id: 'compose-cc',
+            label: t('contacts.org.composeCc'),
+            onSelect: () => actions.onComposeCc(item, managerId)
+          }
+        ] satisfies PopmenuItem[])
+      : []),
     { kind: 'separator', id: 'sep-kind' },
     ...kindActions,
     {

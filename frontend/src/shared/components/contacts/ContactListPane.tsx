@@ -23,6 +23,7 @@ import {
   Layers,
   ListChecks,
   Search,
+  Users,
   UsersRound,
   X,
   type LucideIcon
@@ -47,15 +48,17 @@ import {
 
 const KIND_BUCKETS: readonly ContactKindBucket[] = ['person', 'robot', 'list', 'hidden']
 const SORTS: readonly ContactSort[] = ['density', 'recent', 'name']
-const GROUP_BYS: readonly ContactGroupBy[] = ['none', 'company', 'dept', 'fn', 'level']
+const GROUP_BYS: readonly ContactGroupBy[] = ['none', 'company', 'dept', 'fn', 'level', 'manager']
 
-/** 分组钮的图标随当前分组变化（原型 `GROUP_BY[group].icon`）。 */
+/** 分组钮的图标随当前分组变化（原型 `GROUP_BY[group].icon`；manager 档 =
+ *  原型 'users'，其 path 即 lucide `Users` 双人形）。 */
 const GROUP_ICONS: Record<ContactGroupBy, LucideIcon> = {
   none: ListChecks,
   company: Building2,
   dept: Folder,
   fn: Briefcase,
-  level: Layers
+  level: Layers,
+  manager: Users
 }
 
 const TOOL_BUTTON_CLASS =
@@ -98,6 +101,11 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
   const sortTriggerRef = useRef<HTMLButtonElement>(null)
   const groupTriggerRef = useRef<HTMLButtonElement>(null)
 
+  // manager 档的菜单 label 是特例映射（裁决 7：不动 §5 key 表，
+  // `contacts.group.byManager` 已在两 locale），其余保持 groupBy 模板。
+  const groupByLabel = (groupBy: ContactGroupBy): string =>
+    groupBy === 'manager' ? t('contacts.group.byManager') : t(`contacts.groupBy.${groupBy}`)
+
   const sortItems: PopmenuItem[] = [
     { kind: 'label', id: 'sort-label', label: t('contacts.sort.label') },
     ...SORTS.map(
@@ -116,7 +124,7 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
       (groupBy): PopmenuItem => ({
         kind: 'radio',
         id: `group-${groupBy}`,
-        label: t(`contacts.groupBy.${groupBy}`),
+        label: groupByLabel(groupBy),
         checked: props.groupBy === groupBy,
         onSelect: () => props.onGroupByChange(groupBy)
       })
@@ -199,7 +207,7 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
               aria-haspopup="menu"
               aria-expanded={groupMenuOpen}
               aria-label={t('contacts.groupBy.label')}
-              title={`${t('contacts.groupBy.label')}：${t(`contacts.groupBy.${props.groupBy}`)}`}
+              title={`${t('contacts.groupBy.label')}：${groupByLabel(props.groupBy)}`}
               onClick={() => setGroupMenuOpen((open) => !open)}
               className={cn(
                 TOOL_BUTTON_CLASS,

@@ -64,6 +64,14 @@ class ContactMergeRequest(BaseModel):
     former_emails: list[str] = Field(default_factory=list)
 
 
+class ContactManagerRequest(BaseModel):
+    """组织关系 (WP5): 指定/解除上级。null = 解除 (manager_src 一并清)。
+    src **不在 wire 形状里** —— REST 面恒写 'manual' (auto 是 WP6/WP7 的
+    建议采纳链路, 不从这里进)。"""
+
+    manager_contact_id: Optional[int] = None
+
+
 class ContactPrimaryEmailRequest(BaseModel):
     email: str = Field(min_length=3)
 

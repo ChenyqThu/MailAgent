@@ -46,6 +46,7 @@ import { openNewCompose } from '@shared/state/compose-new'
 import { useActiveEmail } from '@shared/state/active-email'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
+import { ContactOrgSection } from './ContactOrgSection'
 import { Monogram } from './Monogram'
 import { ContactPip, HiddenPip, KindPip, LockPill, SecHead, SelfPip, TwoWayBar } from './parts'
 import { useContactDetail, useContactMatters, useContactsApi, useInvalidateContact } from './hooks'
@@ -970,6 +971,11 @@ export function ContactDetail({
               </div>
             ) : null}
           </section>
+
+          {/* ── 组织关系（WP5，原型挂载序 Identity→Org→Mail；person 且非 self）── */}
+          {detail.kind === 'person' && !detail.is_self ? (
+            <ContactOrgSection detail={detail} />
+          ) : null}
 
           {/* ── 关联邮件 / 关联事项 ── */}
           <ContactMailList contactId={contactId} />
