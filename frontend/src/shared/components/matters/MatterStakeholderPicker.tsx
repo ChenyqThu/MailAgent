@@ -1,27 +1,33 @@
-// G-16 + W-C（dogfood 轮 2）—— 干系人两步 Picker（设计 §2.21 的 640px 两步弹窗）。
+// 干系人 picker（通讯录 WP3 · 设计 S3 单页改版，task 08-13）。
 //
-// v52 起「联系人库」是真表（matter_contact，全局一份），第一步照设计给满三组：
-// ① 本事项往来里出现过（已关联资料 metadata 推导，零新请求）②「联系人库」（全局池，
-// 一次批量取，含其它事项的干系人）③「从邮件提取」一键 —— 确定性扫 email_metadata 的
-// 收发件人按频次汇总（服务端做，不走 LLM），选中入库并关联本事项。手输邮箱新建仍是兜底，
-// 保存即写回联系人库。设计里的「组织通讯录 + 立即同步」仍是 mock，不做假开关。
+// 单页（无步骤切换）：搜索框（可粘贴邮箱）→ 通讯录池列表（PersonPicker，按往来
+// 密度排序、任一锚点邮箱可搜；hidden / 自己的地址 / 墓碑恒不出现）→ 已在事项中
+// 的行置灰打勾禁选 → 输入库外邮箱时首行虚线「以这个邮箱新建联系人并添加」→
+// 底部角色 chips（作用于本次要添加的所有人）+「添加 {n}」。次要开关「也显示
+// 邮件组 / 机器人」只做客户端 kind 过滤。原三池组装（本事项推导 / 联系人库 /
+// 「从邮件提取」tab）已退役，数据来源用一行说明交代（contacts.picker.source）。
 //
-// 🔴 列表性能铁律：三组数据都是**整组批量**到手（分别 0 / 1 / 1 个请求），
-// 绝不逐行发请求（`frontend/ARCHITECTURE.md` §7.1-7.2）。
+// `editing` 模式（编辑既有干系人的角色）收敛成 dialog 内的精简编辑态：角色
+// chips + 自由文本 + 等待/备注（等价功能保留）；姓名与组织不再在这里编辑 ——
+// 始终读通讯录，不在事项里另存一份（contacts.picker.syncHint）。
+//
+// 🔴 写面不动：`createStakeholder` 继续吃 email（选中联系人 = 传其主邮箱；库外
+// 邮箱 = 直接传输入值，后端 `_upsert_contact` 写穿兜底），串行 + 逐条推进
+// expectedVersion 的 CAS 链一字不变。
 
-import { useState } from 'react'
-import { useQuery } from '@tanstack/react-query'
+import { useEffect, useMemo, useState } from 'react'
+import { useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { ChevronLeft, ChevronRight, Loader2, ScanSearch, UserPlus, Users, X } from 'lucide-react'
+import { UserPlus, Users } from 'lucide-react'
 
 import type {
   Matter,
-  MatterResourceListItem,
   MatterStakeholder,
   MatterStakeholderCreateInput
 } from '@shared/api/types/matter'
-import { RecipientAvatar } from '@shared/components/email/compose/recipient-avatar'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { PersonPicker } from '@shared/components/contacts/PersonPicker'
+import { useContactList } from '@shared/components/contacts/hooks'
 import { Checkbox } from '@shared/components/ui/checkbox'
 import {
   Dialog,
@@ -34,37 +40,34 @@ import {
 import { Input } from '@shared/components/ui/input'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { formatRelativeTime } from '@shared/format'
 import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { useMattersApi } from './hooks'
 import { useMatterMutation } from './matterMutation'
 import {
-  MATTER_STAKEHOLDER_EMAIL_RE,
   MATTER_STAKEHOLDER_ROLE_PRESETS,
-  buildStakeholderPickerPools,
-  deriveStakeholderCandidates,
-  filterStakeholderPool
+  PICKER_POOL_CAP,
+  buildStakeholderTakenIndex,
+  filterPickerRows,
+  isPickerRowTaken,
+  pickerManualEmail
 } from './matterStakeholderCandidates'
-import type { MatterStakeholderPoolPerson } from './matterStakeholderCandidates'
 
-interface DraftRow {
-  email: string
+const SEARCH_DEBOUNCE_MS = 250
+
+/** 本次要添加的人：来自通讯录（contactId + 主邮箱）或库外邮箱手输（contactId=null）。 */
+interface PickedEntry {
+  key: string
+  contactId: number | null
+  email: string | null
   displayName: string | null
-  role: string
-  /** 组织字段：从库/提取候选带出时预填，仍可改 —— 保存后经服务端 upsert 写回全局
-   *  联系人库（v52 起「随联系人库自动带出」是真的）。 */
-  organization: string
-  waiting: boolean
-  note: string
 }
 
 interface MatterStakeholderPickerProps {
   matter: Matter
-  resources: readonly MatterResourceListItem[]
   stakeholders: readonly MatterStakeholder[]
-  /** 非空 = 编辑既有干系人（直接进第二步，只有一行）。 */
+  /** 非空 = 编辑既有干系人（精简角色编辑态）。 */
   editing: MatterStakeholder | null
   open: boolean
   onOpenChange(open: boolean): void
@@ -73,7 +76,6 @@ interface MatterStakeholderPickerProps {
 
 export function MatterStakeholderPicker({
   matter,
-  resources,
   stakeholders,
   editing,
   open,
@@ -82,440 +84,277 @@ export function MatterStakeholderPicker({
 }: MatterStakeholderPickerProps): React.ReactElement {
   const { t } = useTranslation()
   const api = useMattersApi()
+  const queryClient = useQueryClient()
 
-  const [step, setStep] = useState<0 | 1>(0)
+  const [searchInput, setSearchInput] = useState('')
   const [search, setSearch] = useState('')
-  const [picked, setPicked] = useState<string[]>([])
-  const [rows, setRows] = useState<Record<string, DraftRow>>({})
-  // 「从邮件提取」是一键显式动作 —— 扫描不便宜，不在每次开弹窗时白跑。
-  const [extractRequested, setExtractRequested] = useState(false)
+  const [showAll, setShowAll] = useState(false)
+  const [picked, setPicked] = useState<PickedEntry[]>([])
+  const [role, setRole] = useState('')
+  const [waiting, setWaiting] = useState(false)
+  const [note, setNote] = useState('')
 
-  // 联系人库整池一次批量取（编辑单人时用不上，不发）。
-  const contactsQuery = useQuery({
-    queryKey: qk.matters.contacts(),
-    queryFn: () => api.listContacts(),
-    enabled: open && !editing,
-    staleTime: 30_000
-  })
-  const extractQuery = useQuery({
-    queryKey: qk.matters.contactEmailCandidates(),
-    queryFn: () => api.listContactEmailCandidates(),
-    enabled: open && !editing && extractRequested,
-    staleTime: 30_000
-  })
-  const pools = buildStakeholderPickerPools(
-    deriveStakeholderCandidates(resources, stakeholders),
-    contactsQuery.data ?? [],
-    extractRequested ? (extractQuery.data ?? []) : [],
-    stakeholders
-  )
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSearch(searchInput.trim()), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [searchInput])
 
-  // 打开 / 切换编辑对象时重置。编辑态直接落在第二步。
+  // 打开 / 切换编辑对象时重置（identity-key 模式）。
   const identity = `${open ? 'open' : 'closed'}:${editing?.id ?? 'new'}`
   const [identityFor, setIdentityFor] = useState(identity)
   if (identityFor !== identity) {
     setIdentityFor(identity)
     if (open) {
+      setSearchInput('')
       setSearch('')
-      setExtractRequested(false)
-      if (editing) {
-        const key = editing.email_normalized ?? `id:${editing.id}`
-        setStep(1)
-        setPicked([key])
-        setRows({
-          [key]: {
-            email: editing.email_normalized ?? '',
-            displayName: editing.display_name,
-            role: editing.role ?? '',
-            organization: editing.organization ?? '',
-            waiting: editing.is_waiting_on,
-            note: editing.relationship ?? ''
-          }
-        })
-      } else {
-        setStep(0)
-        setPicked([])
-        setRows({})
-      }
+      setShowAll(false)
+      setPicked([])
+      setRole(editing?.role ?? '')
+      setWaiting(editing?.is_waiting_on ?? false)
+      setNote(editing?.relationship ?? '')
     }
   }
 
-  const visibleFromMatter = filterStakeholderPool(pools.fromMatter, search)
-  const visibleLibrary = filterStakeholderPool(pools.library, search)
-  const visibleExtracted = filterStakeholderPool(pools.extracted, search)
-  const anyVisible =
-    visibleFromMatter.length + visibleLibrary.length + visibleExtracted.length > 0
-  const manualEmail = MATTER_STAKEHOLDER_EMAIL_RE.test(search.trim())
-    ? search.trim().toLowerCase()
-    : null
-  const knownEmails = new Set(
-    [...pools.fromMatter, ...pools.library, ...pools.extracted].map((p) => p.email)
+  // 通讯录池：一次批量 + 服务端 q（与通讯录工作台共享缓存 key）。
+  const listQuery = useContactList({
+    view: 'all',
+    q: search,
+    sort: 'density',
+    enabled: open && !editing
+  })
+  const takenIndex = useMemo(() => buildStakeholderTakenIndex(stakeholders), [stakeholders])
+  const rows = useMemo(
+    () =>
+      filterPickerRows(listQuery.data?.items ?? [], { onlyPeople: !showAll }).slice(
+        0,
+        PICKER_POOL_CAP
+      ),
+    [listQuery.data, showAll]
   )
-  const manualIsNew = manualEmail !== null && !knownEmails.has(manualEmail)
+  const manualEmail = pickerManualEmail(search, rows)
+  const manualPicked = manualEmail !== null && picked.some((entry) => entry.key === `e:${manualEmail}`)
 
-  const toggle = (person: Pick<MatterStakeholderPoolPerson, 'email' | 'displayName'> & {
-    organization?: string | null
-  }): void => {
+  const selectedIds = useMemo(
+    () =>
+      new Set(
+        picked
+          .map((entry) => entry.contactId)
+          .filter((value): value is number => value !== null)
+      ),
+    [picked]
+  )
+
+  const toggleEntry = (entry: PickedEntry): void =>
     setPicked((current) =>
-      current.includes(person.email)
-        ? current.filter((value) => value !== person.email)
-        : [...current, person.email]
+      current.some((existing) => existing.key === entry.key)
+        ? current.filter((existing) => existing.key !== entry.key)
+        : [...current, entry]
     )
-    setRows((current) =>
-      current[person.email]
-        ? current
-        : {
-            ...current,
-            [person.email]: {
-              email: person.email,
-              displayName: person.displayName,
-              role: '',
-              organization: person.organization ?? '',
-              waiting: false,
-              note: ''
-            }
-          }
-    )
-  }
-
-  const patchRow = (key: string, patch: Partial<DraftRow>): void =>
-    setRows((current) => ({ ...current, [key]: { ...current[key], ...patch } }))
 
   const save = useMatterMutation({
     matterId: matter.public_id,
     mutationFn: async () => {
       // 🔴 串行 + 逐条推进版本：`createStakeholder` 带 CAS，一批并发必然自撞乐观锁。
       let version = matter.version
-      for (const key of picked) {
-        const row = rows[key]
-        if (!row) continue
+      if (editing) {
+        const result = await api.patchStakeholder(
+          matter.public_id,
+          editing.id,
+          {
+            role: role.trim() || null,
+            is_waiting_on: waiting,
+            // 备注复用既有 `relationship` 列（语义是「和这件事的关系」）。
+            relationship: note.trim() || null
+          },
+          { expectedVersion: version }
+        )
+        version = result.matter?.version ?? version + 1
+        return { version }
+      }
+      for (const entry of picked) {
         const input: MatterStakeholderCreateInput = {
-          display_name: row.displayName || null,
-          email: row.email || null,
-          role: row.role.trim() || null,
-          organization: row.organization.trim() || null,
-          is_waiting_on: row.waiting,
-          // 备注复用既有的 `relationship` 列（干系人表本来就有它，语义是「和这件事的关系」）。
-          relationship: row.note.trim() || null
+          display_name: entry.displayName || null,
+          email: entry.email || null,
+          role: role.trim() || null
         }
-        const result = editing
-          ? await api.patchStakeholder(matter.public_id, editing.id, input, {
-              expectedVersion: version
-            })
-          : await api.createStakeholder(matter.public_id, input, { expectedVersion: version })
+        const result = await api.createStakeholder(matter.public_id, input, {
+          expectedVersion: version
+        })
         version = result.matter?.version ?? version + 1
       }
       return { version }
     },
-    // G-33 —— 设计 §2.23「已添加 N 位干系人 · 姓名与职位随联系人库同步」。编辑既有干系人走
-    // 同一条 mutation，那种情况说「已更新」而不是「已添加 1 位」。
-    // 🔴 不带撤销：这里是 N 次串行写入（同 `MatterLinkResourceModal` 的理由），且服务端只为
-    // 最后一条产出 descriptor。
     onSuccess: () => {
-      toastSuccess(
-        editing
-          ? t('matters.stakeholderPicker.updated')
-          : t('matters.stakeholderPicker.added', { count: picked.length })
-      )
+      if (editing) {
+        toastSuccess(t('matters.stakeholderPicker.updated'))
+      } else {
+        const manualEntries = picked.filter((entry) => entry.contactId === null)
+        if (manualEntries.length > 0 && picked.length === 1) {
+          // 单独用库外邮箱建入 → 建档 toast（同时写进通讯录 + 挂到事项）。
+          toastSuccess(t('contacts.toast.pickerCreated', { email: manualEntries[0]!.email }))
+        } else {
+          toastSuccess(t('contacts.toast.pickerAdded', { n: picked.length }))
+        }
+        // 库外邮箱会经写穿新建联系人 → 通讯录列表随之失效。
+        void queryClient.invalidateQueries({ queryKey: qk.contacts.all() })
+      }
       onOpenChange(false)
       onChanged()
     },
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
-  const canSave =
-    picked.length > 0 && picked.every((key) => rows[key]?.email || rows[key]?.displayName)
+  const canSave = editing ? true : picked.length > 0
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-h-[84vh] w-[640px] max-w-[calc(100vw-2rem)] grid-rows-[auto_1fr_auto]">
         <DialogHeader>
           <DialogTitle>
-            {t(
-              editing
-                ? 'matters.context.editStakeholder'
-                : step === 0
-                  ? 'matters.stakeholderPicker.stepPick'
-                  : 'matters.stakeholderPicker.stepRole'
-            )}
+            {t(editing ? 'matters.context.editStakeholder' : 'contacts.picker.title')}
           </DialogTitle>
           <DialogDescription>
-            {t(
-              step === 0
-                ? 'matters.stakeholderPicker.pickDescription'
-                : 'matters.stakeholderPicker.roleDescription'
-            )}
+            {editing
+              ? t('contacts.picker.syncHint')
+              : t('contacts.picker.sub', { pub: matter.public_id, title: matter.title })}
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 space-y-3 overflow-y-auto pr-1 scrollbar-thin">
-          {step === 0 ? (
-            <>
-              <Input
-                value={search}
-                onChange={(event) => setSearch(event.target.value)}
-                placeholder={t('matters.stakeholderPicker.searchPlaceholder')}
-                aria-label={t('matters.stakeholderPicker.searchPlaceholder')}
-              />
-
-              {visibleFromMatter.length > 0 ? (
-                <PoolGroup
-                  label={t('matters.stakeholderPicker.fromMatter')}
-                  count={visibleFromMatter.length}
-                >
-                  {visibleFromMatter.map((person) => (
-                    <PoolRow
-                      key={person.email}
-                      person={person}
-                      picked={picked.includes(person.email)}
-                      onToggle={() => toggle(person)}
-                    />
-                  ))}
-                </PoolGroup>
-              ) : null}
-
-              {visibleLibrary.length > 0 ? (
-                <PoolGroup
-                  label={t('matters.stakeholderPicker.library')}
-                  count={visibleLibrary.length}
-                  hint={t('matters.stakeholderPicker.libraryHint')}
-                >
-                  {visibleLibrary.map((person) => (
-                    <PoolRow
-                      key={person.email}
-                      person={person}
-                      picked={picked.includes(person.email)}
-                      onToggle={() => toggle(person)}
-                    />
-                  ))}
-                </PoolGroup>
-              ) : null}
-
-              {/* W-C —— 一键从邮件往来提取（确定性扫描，服务端聚合，不走 LLM）。 */}
-              <section>
-                <div className="mb-1.5 flex items-center gap-2">
-                  <span className="text-[10px] font-semibold uppercase tracking-[0.07em] text-ink-fg-3">
-                    {t('matters.stakeholderPicker.extractTitle')}
-                  </span>
-                  {extractRequested && visibleExtracted.length > 0 ? (
-                    <span className="font-mono text-meta text-ink-fg-3">
-                      {visibleExtracted.length}
-                    </span>
-                  ) : null}
+        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1 scrollbar-thin">
+          {editing ? (
+            <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-3">
+              <div className="min-w-0">
+                <div className="truncate text-body font-medium text-ink-fg">
+                  {editing.display_name || editing.email_normalized || '—'}
                 </div>
-                {!extractRequested ? (
-                  <button
-                    type="button"
-                    onClick={() => setExtractRequested(true)}
-                    className="flex w-full items-center gap-2.5 rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-2/50 px-3 py-2.5 text-left transition-colors duration-fast ease-standard hover:bg-ink-3/60"
-                  >
-                    <ScanSearch size={15} className="shrink-0 text-ink-fg-3" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-aux text-ink-fg">
-                        {t('matters.stakeholderPicker.extractAction')}
-                      </span>
-                      <span className="block text-meta text-ink-fg-3">
-                        {t('matters.stakeholderPicker.extractHint')}
-                      </span>
-                    </span>
-                    <ChevronRight size={13} className="shrink-0 text-ink-fg-3" />
-                  </button>
-                ) : extractQuery.isPending ? (
-                  <div className="flex items-center gap-2 rounded-[var(--r-card)] border border-ink-border bg-ink-2/50 px-3 py-2.5 text-meta text-ink-fg-3">
-                    <Loader2 size={13} className="animate-spin" />
-                    {t('matters.stakeholderPicker.extractLoading')}
+                {editing.email_normalized ? (
+                  <div className="truncate font-mono text-meta text-ink-fg-3">
+                    {editing.email_normalized}
                   </div>
-                ) : visibleExtracted.length > 0 ? (
-                  <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border">
-                    {visibleExtracted.map((person) => (
-                      <PoolRow
-                        key={person.email}
-                        person={person}
-                        picked={picked.includes(person.email)}
-                        onToggle={() => toggle(person)}
-                      />
-                    ))}
-                  </div>
-                ) : (
-                  <p className="rounded-[var(--r-card)] border border-ink-border bg-ink-2/50 px-3 py-2.5 text-meta text-ink-fg-3">
-                    {t('matters.stakeholderPicker.extractEmpty')}
-                  </p>
-                )}
-              </section>
-
-              {!anyVisible && !manualEmail ? (
-                <EmptyState
-                  icon={<Users size={22} />}
-                  title={t('matters.stakeholderPicker.emptyTitle')}
-                  hint={t('matters.stakeholderPicker.emptyHint')}
+                ) : null}
+              </div>
+              <RoleChips role={role} onRoleChange={setRole} />
+              <div className="mt-2.5 flex items-center gap-2.5">
+                <Input
+                  value={role}
+                  onChange={(event) => setRole(event.target.value)}
+                  placeholder={t('matters.stakeholderPicker.rolePlaceholder')}
+                  aria-label={t('matters.context.fields.role')}
+                  className="min-w-0 flex-1"
                 />
-              ) : null}
-
-              {manualIsNew && manualEmail ? (
-                <div className="rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-2/50 px-3 py-2.5">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      toggle({ email: manualEmail, displayName: null })
-                      setSearch('')
-                    }}
-                    className="flex w-full items-center gap-2.5 text-left"
-                  >
-                    <UserPlus size={14} className="shrink-0 text-ink-fg-3" />
-                    <span className="min-w-0 flex-1">
-                      <span className="block text-aux text-ink-fg">
-                        {t('matters.stakeholderPicker.manualAdd')}
-                      </span>
-                      <span className="block truncate font-mono text-meta text-ink-fg-3">
-                        {manualEmail}
-                      </span>
-                    </span>
-                  </button>
-                  {/* v52 起为真：保存即 upsert 进全局库（服务端隐式维护）。 */}
-                  <p className="mt-1.5 text-meta leading-5 text-ink-fg-3">
-                    {t('matters.stakeholderPicker.manualAddHint')}
-                  </p>
-                </div>
-              ) : null}
-            </>
-          ) : (
-            <div className="space-y-3">
-              {picked.map((key) => {
-                const row = rows[key]
-                if (!row) return null
-                return (
-                  <div
-                    key={key}
-                    className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-3"
-                  >
-                    <div className="flex items-center gap-2.5">
-                      <RecipientAvatar
-                        name={row.displayName ?? ''}
-                        email={row.email}
-                        size={30}
-                      />
-                      <span className="min-w-0 flex-1">
-                        <span className="block truncate text-body font-medium text-ink-fg">
-                          {row.displayName || row.email}
-                        </span>
-                        {row.displayName ? (
-                          <span className="block truncate font-mono text-meta text-ink-fg-3">
-                            {row.email}
-                          </span>
-                        ) : null}
-                      </span>
-                      {!editing ? (
-                        <button
-                          type="button"
-                          title={t('matters.stakeholderPicker.removeFromPicked')}
-                          aria-label={t('matters.stakeholderPicker.removeFromPicked')}
-                          onClick={() =>
-                            setPicked((current) => current.filter((value) => value !== key))
-                          }
-                          className="shrink-0 rounded-[var(--r-ctl)] p-1.5 text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg"
-                        >
-                          <X size={13} />
-                        </button>
-                      ) : null}
-                    </div>
-
-                    <div className="mt-2.5 flex flex-wrap gap-1.5">
-                      {MATTER_STAKEHOLDER_ROLE_PRESETS.map((preset) => {
-                        const label = t(`matters.stakeholderPicker.roles.${preset}`)
-                        const on = row.role === label
-                        return (
-                          <button
-                            key={preset}
-                            type="button"
-                            aria-pressed={on}
-                            onClick={() => patchRow(key, { role: on ? '' : label })}
-                            className={cn(
-                              'rounded-full border px-2.5 py-1 text-meta',
-                              'transition-colors duration-fast ease-standard',
-                              on
-                                ? 'border-coral/40 bg-coral/[0.14] text-coral'
-                                : 'border-ink-border bg-ink-1 text-ink-fg-2 hover:bg-ink-3'
-                            )}
-                          >
-                            {label}
-                          </button>
-                        )
-                      })}
-                    </div>
-
-                    <div className="mt-2.5 flex items-center gap-2.5">
-                      <Input
-                        value={row.role}
-                        onChange={(event) => patchRow(key, { role: event.target.value })}
-                        placeholder={t('matters.stakeholderPicker.rolePlaceholder')}
-                        aria-label={t('matters.context.fields.role')}
-                        className="min-w-0 flex-1"
-                      />
-                      <label className="flex shrink-0 cursor-pointer items-center gap-2 text-aux text-ink-fg-2">
-                        <Checkbox
-                          checked={row.waiting}
-                          onCheckedChange={(value) => patchRow(key, { waiting: value })}
-                        />
-                        {t('matters.stakeholderPicker.waiting')}
-                      </label>
-                    </div>
-
-                    <Input
-                      value={row.organization}
-                      onChange={(event) => patchRow(key, { organization: event.target.value })}
-                      placeholder={t('matters.stakeholderPicker.organizationPlaceholder')}
-                      aria-label={t('matters.context.fields.organization')}
-                      className="mt-2"
-                    />
-
-                    <Input
-                      value={row.note}
-                      onChange={(event) => patchRow(key, { note: event.target.value })}
-                      placeholder={t('matters.stakeholderPicker.notePlaceholder')}
-                      aria-label={t('matters.stakeholderPicker.noteLabel')}
-                      className="mt-2"
-                    />
-                  </div>
-                )
-              })}
-              <p className="text-meta leading-5 text-ink-fg-3">
+                <label className="flex shrink-0 cursor-pointer items-center gap-2 text-aux text-ink-fg-2">
+                  <Checkbox checked={waiting} onCheckedChange={(value) => setWaiting(value)} />
+                  {t('matters.stakeholderPicker.waiting')}
+                </label>
+              </div>
+              <Input
+                value={note}
+                onChange={(event) => setNote(event.target.value)}
+                placeholder={t('matters.stakeholderPicker.notePlaceholder')}
+                aria-label={t('matters.stakeholderPicker.noteLabel')}
+                className="mt-2"
+              />
+              <p className="mt-2 text-meta leading-5 text-ink-fg-3">
                 {t('matters.stakeholderPicker.waitingHint')}
               </p>
             </div>
+          ) : (
+            <>
+              <PersonPicker
+                items={rows}
+                loading={listQuery.isPending}
+                search={searchInput}
+                onSearchChange={setSearchInput}
+                searchPlaceholder={t('contacts.picker.searchPlaceholder')}
+                mode="multi"
+                selectedIds={selectedIds}
+                onToggle={(row) =>
+                  toggleEntry({
+                    key: `c:${row.id}`,
+                    contactId: row.id,
+                    email: row.primary_email,
+                    displayName: row.display_name
+                  })
+                }
+                takenIds={
+                  new Set(rows.filter((row) => isPickerRowTaken(row, takenIndex)).map((r) => r.id))
+                }
+                takenLabel={t('contacts.picker.taken')}
+                aboveList={
+                  <div className="flex items-center gap-2">
+                    <span className="min-w-0 flex-1 truncate text-meta text-ink-fg-3">
+                      {t('contacts.picker.source')}
+                    </span>
+                    <label className="flex shrink-0 cursor-pointer items-center gap-1.5 text-meta text-ink-fg-2">
+                      <Checkbox checked={showAll} onCheckedChange={(value) => setShowAll(value)} />
+                      {t('contacts.picker.showAll')}
+                    </label>
+                  </div>
+                }
+                belowList={
+                  <>
+                    {manualEmail ? (
+                      <button
+                        type="button"
+                        aria-pressed={manualPicked}
+                        onClick={() =>
+                          toggleEntry({
+                            key: `e:${manualEmail}`,
+                            contactId: null,
+                            email: manualEmail,
+                            displayName: null
+                          })
+                        }
+                        className={cn(
+                          'flex w-full items-center gap-2.5 rounded-[var(--r-card)] border border-dashed px-3 py-2.5 text-left',
+                          'transition-colors duration-fast ease-standard',
+                          manualPicked
+                            ? 'border-coral/50 bg-coral/[0.07]'
+                            : 'border-ink-border bg-ink-2/50 hover:bg-ink-3/60'
+                        )}
+                      >
+                        <UserPlus size={14} className="shrink-0 text-ink-fg-3" />
+                        <span className="min-w-0 flex-1">
+                          <span className="block text-aux text-ink-fg">
+                            {t('contacts.picker.createByEmail')}
+                          </span>
+                          <span className="block truncate font-mono text-meta text-ink-fg-3">
+                            {manualEmail}
+                          </span>
+                        </span>
+                      </button>
+                    ) : null}
+                    <p className="text-meta leading-5 text-ink-fg-3">
+                      {t('contacts.picker.syncHint')}
+                    </p>
+                  </>
+                }
+                empty={
+                  manualEmail ? null : (
+                    <EmptyState
+                      icon={<Users size={22} />}
+                      title={t('contacts.picker.empty')}
+                      hint={t('contacts.picker.emptyHint')}
+                    />
+                  )
+                }
+              />
+              <div>
+                <div className="mb-1.5 text-meta text-ink-fg-2">{t('contacts.picker.role')}</div>
+                <RoleChips role={role} onRoleChange={setRole} />
+              </div>
+            </>
           )}
         </div>
 
-        <DialogFooter className="items-center justify-start gap-2">
-          {step === 1 && !editing ? (
-            <button
-              type="button"
-              onClick={() => setStep(0)}
-              className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] px-3 py-2 text-aux text-ink-fg-2 hover:bg-ink-3"
-            >
-              <ChevronLeft size={13} />
-              {t('matters.stakeholderPicker.back')}
-            </button>
-          ) : null}
-          <span className="ml-auto inline-flex items-center gap-2 text-aux text-ink-fg-3">
-            {/* 设计 §2.21 底栏的 AvatarStack —— 复用 `.avatar` 调色板（同一人同色）。 */}
-            {picked.length > 0 ? (
-              <span className="inline-flex items-center">
-                {picked.slice(0, 5).map((key, index) => (
-                  <span
-                    key={key}
-                    className={cn('flex rounded-full ring-[1.5px] ring-ink-1', index > 0 && '-ml-1.5')}
-                  >
-                    <RecipientAvatar
-                      name={rows[key]?.displayName ?? ''}
-                      email={rows[key]?.email ?? key}
-                      size={20}
-                    />
-                  </span>
-                ))}
-              </span>
-            ) : null}
-            {t('matters.stakeholderPicker.selected', { count: picked.length })}
-          </span>
+        <DialogFooter className="items-center gap-2">
+          {!editing && picked.length > 0 ? (
+            <span className="mr-auto text-aux text-ink-fg-3">
+              {t('matters.stakeholderPicker.selected', { count: picked.length })}
+            </span>
+          ) : (
+            <span className="mr-auto" />
+          )}
           <button
             type="button"
             onClick={() => onOpenChange(false)}
@@ -523,114 +362,52 @@ export function MatterStakeholderPicker({
           >
             {t('common.cancel')}
           </button>
-          {step === 0 ? (
-            <button
-              type="button"
-              disabled={picked.length === 0}
-              onClick={() => setStep(1)}
-              className="rounded-[var(--r-ctl)] bg-coral/100 px-4 py-2 text-aux font-medium text-accent-fg disabled:opacity-50"
-            >
-              {t('matters.stakeholderPicker.next')}
-            </button>
-          ) : (
-            <button
-              type="button"
-              disabled={!canSave || save.isPending}
-              onClick={() => save.mutate()}
-              className="rounded-[var(--r-ctl)] bg-coral/100 px-4 py-2 text-aux font-medium text-accent-fg disabled:opacity-50"
-            >
-              {t(editing ? 'common.save' : 'matters.stakeholderPicker.confirmAdd', {
-                count: picked.length
-              })}
-            </button>
-          )}
+          <button
+            type="button"
+            disabled={!canSave || save.isPending}
+            onClick={() => save.mutate()}
+            className="rounded-[var(--r-ctl)] bg-coral/100 px-4 py-2 text-aux font-medium text-accent-fg disabled:opacity-50"
+          >
+            {editing ? t('common.save') : t('contacts.picker.add', { n: picked.length })}
+          </button>
         </DialogFooter>
       </DialogContent>
     </Dialog>
   )
 }
 
-/** 设计 `pickers.jsx::PkGroup`：小写间距 label + 计数 + 可选说明。 */
-function PoolGroup({
-  label,
-  count,
-  hint,
-  children
+/** 角色预设 chips（6 档；作用于本次要添加的所有人；落库存译文，`role` 是自由文本列）。 */
+function RoleChips({
+  role,
+  onRoleChange
 }: {
-  label: string
-  count: number
-  hint?: string
-  children: React.ReactNode
-}): React.ReactElement {
-  return (
-    <section>
-      <div className="mb-1.5 flex items-center gap-2">
-        <span className="text-[10px] font-semibold uppercase tracking-[0.07em] text-ink-fg-3">
-          {label}
-        </span>
-        <span className="font-mono text-meta text-ink-fg-3">{count}</span>
-        {hint ? <span className="text-meta text-ink-fg-3">{hint}</span> : null}
-      </div>
-      <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border">
-        {children}
-      </div>
-    </section>
-  )
-}
-
-/** 设计 `pickers.jsx::PkRow` + personLine：Check + 28px 头像 + 姓名/组织 + mono 邮箱 +
- *  右侧往来密度。选中 = accent/0.07 底 + inset 2px accent 左条（token 走 --c-accent）。 */
-function PoolRow({
-  person,
-  picked,
-  onToggle
-}: {
-  person: MatterStakeholderPoolPerson
-  picked: boolean
-  onToggle(): void
+  role: string
+  onRoleChange(next: string): void
 }): React.ReactElement {
   const { t } = useTranslation()
-  const meta =
-    person.source === 'email_scan'
-      ? t('matters.stakeholderPicker.mailCountMeta', { count: person.mailCount ?? 0 })
-      : person.matterCount
-        ? t('matters.stakeholderPicker.matterCountMeta', { count: person.matterCount })
-        : null
   return (
-    <label
-      className={cn(
-        'flex cursor-pointer items-center gap-2.5 border-t border-ink-border px-3 py-2 first:border-t-0',
-        'transition-colors duration-fast ease-standard',
-        picked
-          ? 'bg-coral/[0.07] shadow-[inset_2px_0_0_0_rgb(var(--c-accent))]'
-          : 'hover:bg-ink-3/60'
-      )}
-    >
-      <Checkbox checked={picked} onCheckedChange={onToggle} />
-      <RecipientAvatar name={person.displayName ?? ''} email={person.email} size={28} />
-      <span className="min-w-0 flex-1">
-        <span className="flex items-baseline gap-2">
-          <span className="truncate text-body font-medium text-ink-fg">
-            {person.displayName || person.email}
-          </span>
-          {person.organization ? (
-            <span className="truncate text-meta text-ink-fg-2">{person.organization}</span>
-          ) : null}
-        </span>
-        {person.displayName ? (
-          <span className="block truncate font-mono text-meta text-ink-fg-3">{person.email}</span>
-        ) : null}
-      </span>
-      {meta || person.lastSeenAt ? (
-        <span className="shrink-0 text-right">
-          {meta ? <span className="block text-meta text-ink-fg-2">{meta}</span> : null}
-          {person.lastSeenAt ? (
-            <span className="block text-meta text-ink-fg-3">
-              {formatRelativeTime(new Date(person.lastSeenAt).toISOString())}
-            </span>
-          ) : null}
-        </span>
-      ) : null}
-    </label>
+    <div className="mt-2.5 flex flex-wrap gap-1.5">
+      {MATTER_STAKEHOLDER_ROLE_PRESETS.map((preset) => {
+        const label = t(`matters.stakeholderPicker.roles.${preset}`)
+        const on = role === label
+        return (
+          <button
+            key={preset}
+            type="button"
+            aria-pressed={on}
+            onClick={() => onRoleChange(on ? '' : label)}
+            className={cn(
+              'rounded-full border px-2.5 py-1 text-meta',
+              'transition-colors duration-fast ease-standard',
+              on
+                ? 'border-coral/40 bg-coral/[0.14] text-coral'
+                : 'border-ink-border bg-ink-1 text-ink-fg-2 hover:bg-ink-3'
+            )}
+          >
+            {label}
+          </button>
+        )
+      })}
+    </div>
   )
 }

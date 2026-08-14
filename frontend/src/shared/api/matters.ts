@@ -5,8 +5,6 @@ import type {
   MatterAttentionSignal,
   MatterCreateDraftRequest,
   MatterCreateDraftResponse,
-  MatterContact,
-  MatterContactCandidate,
   MatterNotifyLevel,
   MatterNotifyLevelResponse,
   MatterItem,
@@ -449,25 +447,7 @@ export function createMattersApi(baseUrl: string): MattersApi {
       )
     },
 
-    async listContacts(options = {}): Promise<MatterContact[]> {
-      const result = await request<{ items: MatterContact[] }>(
-        baseUrl,
-        'GET',
-        '/matters/contacts',
-        { query: { query: options.query, limit: options.limit } }
-      )
-      return result.items
-    },
-
-    async listContactEmailCandidates(options = {}): Promise<MatterContactCandidate[]> {
-      const result = await request<{ items: MatterContactCandidate[] }>(
-        baseUrl,
-        'GET',
-        '/matters/contacts/email-candidates',
-        { query: { query: options.query, limit: options.limit } }
-      )
-      return result.items
-    },
+    // W-C 全局干系人库两个只读端点已随通讯录 WP3 退役（picker 改读 contactsApi.list）。
 
     lookupResourceLinks(provider, keys): Promise<MatterResourceLookupResponse> {
       return request(baseUrl, 'GET', '/matters/links/by-resource', {

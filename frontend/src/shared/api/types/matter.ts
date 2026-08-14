@@ -607,30 +607,8 @@ export interface MatterStakeholder {
   updated_at: number
 }
 
-/** 全局干系人库一行（`GET /matters/contacts`，canonical:
- *  `src/matters/service.py::list_contacts`）。基本信息全局一份；
- *  `matter_count`/`last_contact_at` 是服务端一次 JOIN 出的聚合列。 */
-export interface MatterContact {
-  id: number
-  email_normalized: string
-  display_name: string | null
-  organization: string | null
-  created_at: number
-  updated_at: number
-  matter_count: number
-  last_contact_at: number | null
-}
-
-/** 一键邮件提取候选（`GET /matters/contacts/email-candidates`，canonical:
- *  `src/matters/service.py::extract_contact_candidates`）。确定性扫描，不走 LLM。 */
-export interface MatterContactCandidate {
-  email: string
-  display_name: string | null
-  mail_count: number
-  last_seen_at: number | null
-  /** 非 null = 这个地址已在全局干系人库。 */
-  contact_id: number | null
-}
+// `MatterContact` / `MatterContactCandidate`（W-C 全局干系人库两个只读端点的行形状）
+// 已随通讯录 WP3 退役 —— picker 改读 `@shared/api/types/contact` 的 ContactRowDto。
 
 export interface MatterResourceLinkHit {
   public_id: string
@@ -950,11 +928,6 @@ export interface MatterStakeholderListOptions {
   includeDeleted?: boolean
 }
 
-export interface MatterContactListOptions {
-  query?: string
-  limit?: number
-}
-
 export interface MatterStakeholderCreateInput {
   person_key?: string
   display_name?: string | null
@@ -1117,10 +1090,6 @@ export interface MattersApi {
     stakeholderId: number,
     options: MatterMutationOptions
   ): Promise<MatterMutationResult>
-  listContacts(options?: MatterContactListOptions): Promise<MatterContact[]>
-  listContactEmailCandidates(
-    options?: MatterContactListOptions
-  ): Promise<MatterContactCandidate[]>
   lookupResourceLinks(provider: string, keys: string[]): Promise<MatterResourceLookupResponse>
   timeline(matterId: string, cursor?: number, limit?: number): Promise<MatterTimelineResponse>
   addNote(

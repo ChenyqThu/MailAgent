@@ -8,7 +8,6 @@ import sqlite3
 import time
 from dataclasses import dataclass
 from datetime import datetime
-from email.utils import getaddresses
 from typing import Any, Mapping, Sequence
 
 from loguru import logger
@@ -104,9 +103,6 @@ from .events import (
 )
 
 TRASH_RETENTION_MS = 30 * 24 * 60 * 60 * 1000
-#: 邮件提取候选的地址形状闸（TS 侧镜像 `matterStakeholderCandidates.ts` 的
-#: MATTER_STAKEHOLDER_EMAIL_RE，同一形状：非空 local@域.tld）。
-_CONTACT_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
 ACTION_ONLY_ITEM_FIELDS = {
     "status",
     "priority",
@@ -2352,127 +2348,9 @@ class MatterService:
     # 基本信息（姓名/邮箱/组织）全局一份（v54 起 = 通讯录 contact/contact_email，
     # task 08-13；身份 = 归一 email 锚点）；
     # 角色/等待/备注仍归各事项的 matter_stakeholder 行。库是**隐式维护**的：
-    # 添加/编辑干系人与邮件提取入池时 upsert，没有独立 CRUD 控制台（backlog）。
-
-    #: 一键邮件提取的扫描窗口（最近 N 封）。提取语义是「近期往来的人」，
-    #: 全库扫描既慢又会把几年前的一次性地址灌进候选。
-    CONTACT_SCAN_WINDOW = 3000
-
-    def list_contacts(self, *, query: str | None = None, limit: int = 200) -> list[dict[str, Any]]:
-        """全局干系人库 + 聚合列（关联事项数 / 最近联系）。
-
-        🔴 聚合一次 LEFT JOIN 算完，绝不逐 contact 查（列表性能铁律，
-        `frontend/ARCHITECTURE.md` §7.1-7.2 的后端镜像）。排序 = 关联事项数
-        降序（近似"往来密度"，真实往来封数只在邮件提取端点里算——那份要扫
-        email_metadata，不该为每次开 Picker 都付一遍）。
-
-        v54 起读通讯录三表（task 08-13；本端点 WP3 退役、切 `/api/contacts`）。
-        行为与 v52 等价：`email_normalized` 交出主邮箱（一人多邮箱取
-        is_primary），搜索命中**任一**锚点邮箱/姓名/组织；合并墓碑
-        （merged_into 非空）过滤 —— 那是同一个人的旧壳，不该在池里出现两次。"""
-        sql = (
-            "SELECT c.id, "
-            "  (SELECT ce.email_normalized FROM contact_email ce "
-            "   WHERE ce.contact_id = c.id "
-            "   ORDER BY ce.is_primary DESC, ce.id ASC LIMIT 1) AS email_normalized, "
-            "c.display_name, c.organization, "
-            "c.created_at, c.updated_at, "
-            "COUNT(DISTINCT CASE WHEN ms.deleted_at IS NULL THEN ms.matter_id END) AS matter_count, "
-            "MAX(CASE WHEN ms.deleted_at IS NULL THEN ms.last_contact_at END) AS last_contact_at "
-            "FROM contact c "
-            "LEFT JOIN matter_stakeholder ms ON ms.contact_id = c.id "
-            "WHERE c.merged_into IS NULL "
-        )
-        params: list[Any] = []
-        needle = str(query or "").strip().lower()
-        if needle:
-            like = f"%{needle}%"
-            sql += (
-                "AND (EXISTS (SELECT 1 FROM contact_email ce2 "
-                "     WHERE ce2.contact_id = c.id AND ce2.email_normalized LIKE ?) "
-                "OR lower(COALESCE(c.display_name, '')) LIKE ? "
-                "OR lower(COALESCE(c.organization, '')) LIKE ?) "
-            )
-            params += [like, like, like]
-        sql += "GROUP BY c.id ORDER BY matter_count DESC, c.updated_at DESC, c.id DESC LIMIT ?"
-        params.append(max(1, min(int(limit), 500)))
-        with self.repository.connect() as conn:
-            return [dict(row) for row in conn.execute(sql, params)]
-
-    def extract_contact_candidates(
-        self, *, query: str | None = None, limit: int = 120,
-        exclude_emails: Sequence[str] = (),
-    ) -> list[dict[str, Any]]:
-        """一键从邮件往来提取干系人候选（确定性扫描，🔴 不走 LLM）。
-
-        扫 `email_metadata` 最近 `CONTACT_SCAN_WINDOW` 封的
-        sender/sender_name/to_addr/cc_addr（🔴 列名以该表实际 DDL 为准 ——
-        是 `sender_name` 不是 `from_name`），按归一 email 聚合：往来封数、
-        最近出现时间、显示名取最近一次非空。已在全局库的带 `contact_id`。
-        `exclude_emails` 给 owner 自己的地址用（自己不是自己的干系人，且
-        它会以近乎全量的频次霸榜）。"""
-        needle = str(query or "").strip().lower()
-        excluded = {str(value).strip().lower() for value in exclude_emails if value}
-        with self.repository.connect() as conn:
-            rows = conn.execute(
-                "SELECT sender, sender_name, to_addr, cc_addr, date_received "
-                "FROM email_metadata "
-                "WHERE sender IS NOT NULL OR to_addr IS NOT NULL OR cc_addr IS NOT NULL "
-                "ORDER BY date_received DESC LIMIT ?",
-                (self.CONTACT_SCAN_WINDOW,),
-            ).fetchall()
-            # v54: 库内成员按 contact_email 锚点标注 (contact_id = 人级 id)。
-            contact_ids = {
-                row["email_normalized"]: int(row["contact_id"])
-                for row in conn.execute(
-                    "SELECT contact_id, email_normalized FROM contact_email"
-                )
-            }
-        stats: dict[str, dict[str, Any]] = {}
-        for row in rows:
-            seen_at = self._parse_email_timestamp(row["date_received"])
-            people: list[tuple[str, str]] = [(row["sender_name"] or "", row["sender"] or "")]
-            for column in ("to_addr", "cc_addr"):
-                raw = row[column]
-                if raw:
-                    people.extend(getaddresses([str(raw)]))
-            for name, address in people:
-                email = str(address or "").strip().lower()
-                if not _CONTACT_EMAIL_RE.match(email) or email in excluded:
-                    continue
-                entry = stats.setdefault(email, {
-                    "email": email, "display_name": None,
-                    "mail_count": 0, "last_seen_at": None,
-                })
-                entry["mail_count"] += 1
-                # 行按 date_received 降序扫 ⇒ 第一个非空名字就是最近用的那个。
-                if name and not entry["display_name"]:
-                    entry["display_name"] = str(name).strip() or None
-                if seen_at is not None and (
-                    entry["last_seen_at"] is None or seen_at > entry["last_seen_at"]
-                ):
-                    entry["last_seen_at"] = seen_at
-        candidates = [
-            {**entry, "contact_id": contact_ids.get(entry["email"])}
-            for entry in stats.values()
-            if not needle
-            or needle in entry["email"]
-            or needle in str(entry["display_name"] or "").lower()
-        ]
-        candidates.sort(
-            key=lambda entry: (-entry["mail_count"], -(entry["last_seen_at"] or 0), entry["email"])
-        )
-        return candidates[: max(1, min(int(limit), 300))]
-
-    @staticmethod
-    def _parse_email_timestamp(raw: Any) -> int | None:
-        """`email_metadata.date_received`（ISO TEXT）→ epoch ms；解析不动就 None。"""
-        if not raw:
-            return None
-        try:
-            return int(datetime.fromisoformat(str(raw)).timestamp() * 1000)
-        except (TypeError, ValueError):
-            return None
+    # 添加/编辑干系人时 upsert 写穿（写侧单源在 `src/contacts/service.py`）。
+    # 读侧（池查询 `list_contacts` / 一键邮件提取 `extract_contact_candidates`）
+    # 已随通讯录 WP3 退役 —— picker 直接读 `/api/contacts`。
 
     def _upsert_contact(
         self, conn: sqlite3.Connection, *, email: str,

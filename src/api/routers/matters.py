@@ -424,43 +424,8 @@ async def delete_matter_tag(
     return success_envelope(result, request=request)
 
 
-# ---- W-C 全局干系人库（dogfood 轮 2）。🔴 字面路径必须排在 `/{matter_id}` 之前，
-# 否则 "contacts" 会被当成 public_id 吞掉。两个都是纯读端点，无 mutation。
-@router.get("/contacts")
-async def list_matter_contacts(
-    request: Request,
-    query: str | None = None,
-    limit: int = Query(200, ge=1, le=500),
-    service: MatterService = Depends(get_matter_service),
-):
-    """全局干系人库（跨事项一份）。Picker 的「联系人库」分组一次批量取。"""
-    return success_envelope(
-        {"items": _call(service.list_contacts, query=query, limit=limit)},
-        request=request,
-    )
-
-
-@router.get("/contacts/email-candidates")
-async def list_matter_contact_email_candidates(
-    request: Request,
-    query: str | None = None,
-    limit: int = Query(120, ge=1, le=300),
-    service: MatterService = Depends(get_matter_service),
-    settings=Depends(get_settings),
-):
-    """一键从邮件往来提取候选（确定性扫描 sender/to/cc，不走 LLM）。
-    owner 自己的地址被排除 —— 它会以近乎全量的频次霸榜。"""
-    return success_envelope(
-        {
-            "items": _call(
-                service.extract_contact_candidates,
-                query=query,
-                limit=limit,
-                exclude_emails=(settings.user_email,),
-            )
-        },
-        request=request,
-    )
+# W-C 全局干系人库的两个只读端点（`GET /contacts` + `/contacts/email-candidates`）
+# 已随通讯录 WP3 退役 —— picker 改读 `/api/contacts`（task 08-13 PRD §3.6 直切）。
 
 
 @router.get("/{matter_id}")

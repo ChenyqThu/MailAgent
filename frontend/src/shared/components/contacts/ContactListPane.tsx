@@ -12,6 +12,7 @@ import { cn } from '@shared/lib/cn'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 import { SegmentedControl } from '@shared/components/ui/segmented'
+import { toastInfo } from '@shared/state/toast'
 
 import { BackfillBar } from './BackfillBar'
 import { ContactVirtualRow, type ContactRowActions, type ContactRowsProps } from './ContactRow'
@@ -49,6 +50,8 @@ export interface ContactListPaneProps {
   selectionMode: boolean
   checkedIds: ReadonlySet<number>
   onExitSelection(): void
+  /** WP3 入口 ②：多选恰 2 条 →「合并这两条」直入合并预览（dialog 挂在 Workspace）。 */
+  onMergePair(pair: [number, number]): void
   menuOpenId: number | null
   onMenuOpenChange(id: number | null): void
   onToggleGroup(groupKey: string): void
@@ -261,12 +264,33 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
         )}
       </div>
 
-      {/* 多选底部条（🔒「合并这两条」不渲染 —— 随 WP3 整块进场）。 */}
+      {/* 多选底部条（WP3：「合并这两条」恒渲染、仅恰 2 条可用；点不可用位给提示）。 */}
       {props.selectionMode ? (
         <div className="flex shrink-0 items-center gap-2 border-t border-ink-border px-3 py-2">
           <span className="min-w-0 flex-1 truncate text-meta text-ink-fg-1">
             {t('contacts.select.n', { n: props.checkedIds.size })}
           </span>
+          <button
+            type="button"
+            aria-disabled={props.checkedIds.size !== 2}
+            title={props.checkedIds.size !== 2 ? t('contacts.select.mergeHint') : undefined}
+            onClick={() => {
+              const ids = [...props.checkedIds]
+              if (ids.length !== 2) {
+                toastInfo(t('contacts.select.mergeHint'))
+                return
+              }
+              props.onMergePair([ids[0]!, ids[1]!])
+            }}
+            className={cn(
+              'rounded-[var(--r-ctl)] px-2.5 py-1 text-meta font-medium transition-colors duration-fast ease-standard',
+              props.checkedIds.size === 2
+                ? 'bg-coral/100 text-accent-fg hover:bg-coral-hover'
+                : 'border border-ink-border text-ink-fg-3 opacity-70 hover:bg-ink-3'
+            )}
+          >
+            {t('contacts.select.merge')}
+          </button>
           <button
             type="button"
             onClick={props.onExitSelection}

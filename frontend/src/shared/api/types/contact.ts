@@ -162,3 +162,11 @@ export interface ContactPatchResponse {
   locks: Partial<Record<ContactLockableField, number>>
   contact: ContactDetailDto
 }
+
+/** POST /api/contacts/{winner}/merge body (WP3)。主邮箱/曾用 = 预览页勾选结果
+ *  (默认值推导在前端 `mergeModel.ts`, 服务端只按入参落库)。 */
+export interface ContactMergeBody {
+  loser_id: number
+  primary_email: string
+  former_emails: string[]
+}

@@ -5951,6 +5951,7 @@
       "composePrefill": "已打开 compose · 收件人预填 {email}",
       "pickerAdded": "已添加 {n} 位干系人 · 姓名与职位随通讯录同步",
       "pickerCreated": "已用邮箱建入通讯录并挂到事项 · {email}",
+      "mergeFailed": "合并未完成 · 两条记录都未改动",
       "saveFailed": "保存失败"
     }
   }

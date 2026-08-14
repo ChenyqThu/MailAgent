@@ -383,10 +383,9 @@ export function MatterContextTab({
         </div>
       </section>
 
-      {/* G-16 —— 两步 Picker 取代原来的单人平铺表单。 */}
+      {/* 通讯录 WP3（S3）—— 单页 Picker：通讯录池 + 库外邮箱建入。 */}
       <MatterStakeholderPicker
         matter={matter}
-        resources={resources}
         stakeholders={stakeholders}
         editing={editor === 'new' ? null : editor}
         open={editor !== null}

@@ -22,6 +22,7 @@ from src.api.schemas.contacts import (
     ContactHideRequest,
     ContactKindRequest,
     ContactLockRequest,
+    ContactMergeRequest,
     ContactPatchRequest,
     ContactPrimaryEmailRequest,
     ContactSelfRequest,
@@ -503,6 +504,28 @@ async def set_contact_self(
             conn, contact_id, is_self=body.is_self, now=_now_ms(),
         )
     return success_envelope({"is_self": body.is_self}, request=request)
+
+
+@router.post("/{contact_id}/merge")
+async def merge_contact(
+    request: Request,
+    contact_id: int,
+    body: ContactMergeRequest,
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    """人级合并 (WP3): contact_id = winner。邮箱锚点/stakeholder/manager 引用
+    改指保留方、账本零搬、loser 落墓碑, 全在 service 一个事务里 (失败 = 两条
+    记录都未改动)。成功返回 winner 详情 (前端 toast 用 emails 数)。"""
+    now = _now_ms()
+    with repo.transaction() as conn:
+        _call(
+            contact_service.merge_contacts,
+            conn, contact_id, body.loser_id, now=now,
+            primary_email=body.primary_email,
+            former_emails=body.former_emails,
+        )
+        detail = _call(_load_detail, conn, contact_id)
+    return success_envelope(detail, request=request)
 
 
 @router.post("/{contact_id}/emails/primary")

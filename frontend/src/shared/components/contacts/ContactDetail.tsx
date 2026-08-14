@@ -465,13 +465,16 @@ export interface ContactDetailProps {
   /** 治理动作与列表行共用一份（改判/隐藏/self —— 同一套 toast 与失效）。 */
   actions: Pick<ContactRowActions, 'onSetKind' | 'onToggleSelf' | 'onToggleHidden'>
   showBack: boolean
+  /** WP3 入口 ①：头部「更多操作 → 合并到另一条记录…」（dialog 挂在 Workspace）。 */
+  onMergeRequest?: () => void
 }
 
 export function ContactDetail({
   contactId,
   onBack,
   actions,
-  showBack
+  showBack,
+  onMergeRequest
 }: ContactDetailProps): React.ReactElement {
   const { t, i18n } = useTranslation()
   const locale = i18n.language || 'zh-CN'
@@ -595,7 +598,18 @@ export function ContactDetail({
       id: 'hide',
       label: t(detail.hidden_at != null ? 'contacts.action.unhide' : 'contacts.action.hide'),
       onSelect: () => actions.onToggleHidden(rowLike)
-    }
+    },
+    ...(onMergeRequest
+      ? ([
+          { kind: 'separator', id: 'sep-merge' },
+          {
+            kind: 'action',
+            id: 'merge',
+            label: t('contacts.action.merge'),
+            onSelect: () => onMergeRequest()
+          }
+        ] satisfies PopmenuItem[])
+      : [])
   ]
 
   const compose = (): void => {

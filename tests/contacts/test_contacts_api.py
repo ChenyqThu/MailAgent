@@ -468,3 +468,82 @@ def test_contact_matters_reverse_lookup(client):
     assert item["title"] == "POC 验收"
     assert item["role"] == "决策人"
     assert item["status"] == "active"
+
+
+# ---- 合并 (WP3) ----
+
+
+def test_merge_endpoint_lands_choices_and_returns_winner_detail(client):
+    """POST /{winner}/merge: 主邮箱/曾用按入参 (预览页勾选) 落库，返回 winner
+    详情 (toast 的 {n} = emails 数)；loser 成墓碑但数据保留。"""
+    http, _, path = client
+    _seed_contact(
+        path, cid=1, name="Alice", mail=4, sent=1, last=100,
+        emails=(("alice@old.com", 1),),
+    )
+    _seed_contact(
+        path, cid=2, name="Alice Chen", mail=1, sent=0, last=200,
+        emails=(("alice@new.com", 1),),
+    )
+    detail = _data(
+        http.post(
+            "/api/contacts/1/merge",
+            json={
+                "loser_id": 2,
+                "primary_email": "alice@new.com",
+                "former_emails": ["alice@old.com"],
+            },
+        )
+    )
+    assert detail["id"] == 1
+    by_addr = {entry["address"]: entry for entry in detail["emails"]}
+    assert set(by_addr) == {"alice@old.com", "alice@new.com"}
+    assert by_addr["alice@new.com"]["is_primary"] is True
+    assert by_addr["alice@new.com"]["former_at"] is None
+    assert by_addr["alice@old.com"]["is_primary"] is False
+    assert by_addr["alice@old.com"]["former_at"] is not None
+    # loser 墓碑：行保留、merged_into 指 winner (详情端点仍可读，审计视角)
+    loser = _data(http.get("/api/contacts/2"))
+    assert loser["merged_into"] == 1
+
+
+def test_merge_endpoint_error_envelopes(client):
+    http, _, path = client
+    _seed_contact(path, cid=1, name="Alice", emails=(("alice@x.com", 1),))
+    _seed_contact(path, cid=2, name="Bob", emails=(("bob@y.com", 1),))
+
+    # 自并 → 400 E_MERGE_SELF；两条记录都未改动
+    resp = http.post(
+        "/api/contacts/1/merge",
+        json={"loser_id": 1, "primary_email": "alice@x.com"},
+    )
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_MERGE_SELF"
+
+    # loser 不存在 → 404；同样零改动
+    resp = http.post(
+        "/api/contacts/1/merge",
+        json={"loser_id": 99, "primary_email": "alice@x.com"},
+    )
+    assert resp.status_code == 404
+    assert resp.json()["error"]["code"] == "E_CONTACT_NOT_FOUND"
+
+    # 失败分支的「两条记录都未改动」不是文案是事实：无墓碑、锚点未动
+    detail = _data(http.get("/api/contacts/2"))
+    assert detail["merged_into"] is None
+    assert [entry["address"] for entry in detail["emails"]] == ["bob@y.com"]
+
+    # 已成墓碑的不能再当被并方 → 409 E_CONTACT_MERGED
+    assert (
+        http.post(
+            "/api/contacts/1/merge",
+            json={"loser_id": 2, "primary_email": "alice@x.com"},
+        ).status_code
+        == 200
+    )
+    resp = http.post(
+        "/api/contacts/1/merge",
+        json={"loser_id": 2, "primary_email": "alice@x.com"},
+    )
+    assert resp.status_code == 409
+    assert resp.json()["error"]["code"] == "E_CONTACT_MERGED"

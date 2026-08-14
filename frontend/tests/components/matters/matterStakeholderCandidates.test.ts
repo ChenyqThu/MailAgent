@@ -1,196 +1,112 @@
-// G-16 —— 干系人候选推导。设计原型那份候选来自 mock 的联系人库；这里的可行子集只认
-// **已关联资料 metadata 里真实出现过的地址**，推不出就诚实地空着（由手输入口兜底）。
+// 通讯录 WP3 —— S3 单页 picker 的纯判据：taken 置灰（人级 contact_id 判据 +
+// 老行 email 兜底）/ onlyPeople 过滤（hidden / 自己的地址恒不出现）/ 库外邮箱
+// 可建入条件。原三池组装（deriveStakeholderCandidates 等）已随改版退役。
 
 import { describe, expect, test } from 'vitest'
 
-import type {
-  MatterContact,
-  MatterContactCandidate,
-  MatterResourceListItem,
-  MatterStakeholder
-} from '@shared/api/types/matter'
+import type { ContactRowDto } from '@shared/api/types/contact'
+import type { MatterStakeholder } from '@shared/api/types/matter'
 import {
-  buildStakeholderPickerPools,
-  deriveStakeholderCandidates,
-  filterStakeholderPool,
-  parseAddressList
+  MATTER_STAKEHOLDER_EMAIL_RE,
+  buildStakeholderTakenIndex,
+  filterPickerRows,
+  isPickerRowTaken,
+  pickerManualEmail
 } from '@shared/components/matters/matterStakeholderCandidates'
 
-function resource(id: number, metadata: Record<string, unknown>): MatterResourceListItem {
+function row(overrides: Partial<ContactRowDto> & { id: number }): ContactRowDto {
   return {
-    resource: {
-      id,
-      kind: 'email',
-      provider: 'mailagent',
-      external_key: `email:${id}`,
-      canonical_url: null,
-      title: `Mail ${id}`,
-      metadata,
-      revision: null,
-      content_hash: null,
-      permission_state: null,
-      sync_state: null,
-      access_policy: 'allowed',
-      last_checked_at: null,
-      created_at: 0,
-      updated_at: 0,
-      available: true
-    },
-    link: {
-      id,
-      matter_id: 1,
-      resource_id: id,
-      relation_type: null,
-      pinned: false,
-      added_by_kind: 'user',
-      added_by_id: null,
-      confidence: null,
-      provenance: {},
-      confirmed_at: 1,
-      sub_state: 'none',
-      deleted_at: null,
-      created_at: 0,
-      updated_at: 0
-    }
-  } as unknown as MatterResourceListItem
-}
-
-function stakeholder(email: string): MatterStakeholder {
-  return { id: 1, email_normalized: email } as unknown as MatterStakeholder
-}
-
-describe('parseAddressList', () => {
-  test('挖出地址与显示名；不是地址的片段丢掉', () => {
-    expect(parseAddressList('Foo Bar <A@B.com>, c@d.com, 无地址')).toEqual([
-      { email: 'a@b.com', displayName: 'Foo Bar' },
-      { email: 'c@d.com', displayName: null }
-    ])
-  })
-})
-
-describe('deriveStakeholderCandidates', () => {
-  test('从 sender / to_addr / cc_addr 汇总，去重并补显示名', () => {
-    const rows = deriveStakeholderCandidates(
-      [
-        resource(1, { sender: 'peer@vendor.com', to_addr: 'me@ourco.com, ally@ourco.com' }),
-        resource(2, { sender: 'Peer Name <peer@vendor.com>', cc_addr: 'legal@ourco.com' })
-      ],
-      []
-    )
-    expect(rows.map((row) => row.email)).toEqual([
-      'ally@ourco.com',
-      'legal@ourco.com',
-      'me@ourco.com',
-      'peer@vendor.com'
-    ])
-    // 第一条出现时没有显示名，第二条补上了。
-    expect(rows.find((row) => row.email === 'peer@vendor.com')?.displayName).toBe('Peer Name')
-  })
-
-  test('已经是干系人的剔掉（大小写不敏感）', () => {
-    const rows = deriveStakeholderCandidates(
-      [resource(1, { sender: 'Peer@Vendor.com', to_addr: 'me@ourco.com' })],
-      [stakeholder('peer@vendor.com')]
-    )
-    expect(rows.map((row) => row.email)).toEqual(['me@ourco.com'])
-  })
-
-  test('metadata 里没有地址 → 空列（不编造候选）', () => {
-    expect(deriveStakeholderCandidates([resource(1, { thread_id: 't-1' })], [])).toEqual([])
-    expect(deriveStakeholderCandidates([], [])).toEqual([])
-  })
-})
-
-// ---- W-C 三分组池 ----------------------------------------------------------
-
-function contact(email: string, patch: Partial<MatterContact> = {}): MatterContact {
-  return {
-    id: 1,
-    email_normalized: email,
     display_name: null,
+    name_en: null,
     organization: null,
-    created_at: 0,
-    updated_at: 0,
-    matter_count: 0,
-    last_contact_at: null,
-    ...patch
-  }
-}
-
-function candidate(email: string, patch: Partial<MatterContactCandidate> = {}): MatterContactCandidate {
-  return {
-    email,
-    display_name: null,
-    mail_count: 1,
+    department: null,
+    role_title: null,
+    function: null,
+    seniority: null,
+    kind: 'person',
+    hidden_at: null,
+    is_self: false,
+    mail_count: 0,
+    sent_to_count: 0,
+    first_seen_at: null,
     last_seen_at: null,
-    contact_id: null,
-    ...patch
+    email_count: 1,
+    primary_email: null,
+    profile_summary: null,
+    ...overrides
   }
 }
 
-describe('buildStakeholderPickerPools', () => {
-  test('三组互斥：本事项往来 > 联系人库 > 邮件提取；已是干系人的全部剔掉', () => {
-    const pools = buildStakeholderPickerPools(
-      [{ email: 'peer@vendor.com', displayName: null }],
-      [
-        contact('peer@vendor.com', { id: 1, display_name: 'Peer', matter_count: 2 }),
-        contact('lib@ourco.com', { id: 2, display_name: 'Lib Person', matter_count: 1 }),
-        contact('taken@ourco.com', { id: 3 })
-      ],
-      [
-        candidate('peer@vendor.com', { mail_count: 9 }),
-        candidate('lib@ourco.com', { mail_count: 5 }),
-        candidate('fresh@vendor.com', { mail_count: 3, display_name: 'Fresh' })
-      ],
-      [stakeholder('taken@ourco.com')]
-    )
-    expect(pools.fromMatter.map((p) => p.email)).toEqual(['peer@vendor.com'])
-    expect(pools.library.map((p) => p.email)).toEqual(['lib@ourco.com'])
-    expect(pools.extracted.map((p) => p.email)).toEqual(['fresh@vendor.com'])
-    // 往来组条目被库信息补全（全局一份的名字优先于邮件头解析名）
-    expect(pools.fromMatter[0]).toMatchObject({
-      displayName: 'Peer',
-      matterCount: 2,
-      source: 'matter'
-    })
-    expect(pools.extracted[0]).toMatchObject({ mailCount: 3, source: 'email_scan' })
+function stakeholder(
+  overrides: Partial<MatterStakeholder> & { id: number }
+): MatterStakeholder {
+  return {
+    email_normalized: null,
+    contact_id: null,
+    deleted_at: null,
+    ...overrides
+  } as unknown as MatterStakeholder
+}
+
+describe('buildStakeholderTakenIndex / isPickerRowTaken', () => {
+  test('contact_id 是人级判据：任一邮箱（含曾用）加过的人整个置灰', () => {
+    const index = buildStakeholderTakenIndex([
+      // 经曾用邮箱加入 —— email_normalized 是旧地址，但 contact_id 归一到同一个人
+      stakeholder({ id: 1, contact_id: 7, email_normalized: 'alice@old.com' })
+    ])
+    const alice = row({ id: 7, primary_email: 'alice@new.com' })
+    expect(isPickerRowTaken(alice, index)).toBe(true)
+    expect(isPickerRowTaken(row({ id: 8, primary_email: 'bob@y.com' }), index)).toBe(false)
   })
 
-  test('全空输入 → 三组皆空（不编造）', () => {
-    const pools = buildStakeholderPickerPools([], [], [], [])
-    expect(pools).toEqual({ fromMatter: [], library: [], extracted: [] })
+  test('contact_id 为 null 的老行退化到 email 兜底（主邮箱判等，大小写不敏感）', () => {
+    const index = buildStakeholderTakenIndex([
+      stakeholder({ id: 1, contact_id: null, email_normalized: 'legacy@x.com' })
+    ])
+    expect(isPickerRowTaken(row({ id: 9, primary_email: 'Legacy@X.com' }), index)).toBe(true)
+    expect(isPickerRowTaken(row({ id: 9, primary_email: 'other@x.com' }), index)).toBe(false)
+  })
+
+  test('软删的干系人行不算「已在事项中」', () => {
+    const index = buildStakeholderTakenIndex([
+      stakeholder({ id: 1, contact_id: 7, deleted_at: 123 })
+    ])
+    expect(index.contactIds.size).toBe(0)
   })
 })
 
-describe('filterStakeholderPool', () => {
+describe('filterPickerRows', () => {
   const pool = [
-    {
-      email: 'alice@x.com',
-      displayName: 'Alice',
-      organization: 'ACME',
-      source: 'library' as const,
-      matterCount: 1,
-      mailCount: null,
-      lastSeenAt: null
-    },
-    {
-      email: 'bob@y.com',
-      displayName: null,
-      organization: null,
-      source: 'library' as const,
-      matterCount: 1,
-      mailCount: null,
-      lastSeenAt: null
-    }
+    row({ id: 1, kind: 'person', primary_email: 'a@x.com' }),
+    row({ id: 2, kind: 'robot', primary_email: 'noreply@x.com' }),
+    row({ id: 3, kind: 'list', primary_email: 'all@x.com' }),
+    row({ id: 4, kind: 'person', primary_email: 'me@x.com', is_self: true }),
+    row({ id: 5, kind: 'person', primary_email: 'hidden@x.com', hidden_at: 9 })
   ]
 
-  test('命中邮箱 / 姓名 / 组织（大小写不敏感）；空搜索原样返回', () => {
-    expect(filterStakeholderPool(pool, '').map((p) => p.email)).toEqual([
-      'alice@x.com',
-      'bob@y.com'
-    ])
-    expect(filterStakeholderPool(pool, 'ACME').map((p) => p.email)).toEqual(['alice@x.com'])
-    expect(filterStakeholderPool(pool, 'bob@').map((p) => p.email)).toEqual(['bob@y.com'])
-    expect(filterStakeholderPool(pool, 'nobody')).toEqual([])
+  test('onlyPeople（默认）只留 kind=person；hidden / 自己的地址恒不出现', () => {
+    expect(filterPickerRows(pool, { onlyPeople: true }).map((r) => r.id)).toEqual([1])
+  })
+
+  test('「也显示邮件组 / 机器人」放进 robot/list，但 hidden / self 仍不出现', () => {
+    expect(filterPickerRows(pool, { onlyPeople: false }).map((r) => r.id)).toEqual([1, 2, 3])
+  })
+})
+
+describe('pickerManualEmail', () => {
+  const pool = [row({ id: 1, primary_email: 'alice@x.com' })]
+
+  test('输入库外邮箱 → 归一地址（虚线「以这个邮箱新建」行出现）', () => {
+    expect(pickerManualEmail('  New.Person@X.com ', pool)).toBe('new.person@x.com')
+  })
+
+  test('与返回行主邮箱同址 → 不出现（那个人就在列表里）', () => {
+    expect(pickerManualEmail('Alice@X.com', pool)).toBeNull()
+  })
+
+  test('不是邮箱形状 → 不出现', () => {
+    expect(pickerManualEmail('alice', pool)).toBeNull()
+    expect(pickerManualEmail('a@b', pool)).toBeNull()
+    expect(MATTER_STAKEHOLDER_EMAIL_RE.test('a@b.com')).toBe(true)
   })
 })

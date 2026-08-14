@@ -44,6 +44,18 @@ class ContactSelfRequest(BaseModel):
     is_self: bool
 
 
+class ContactMergeRequest(BaseModel):
+    """人级合并 (WP3, D6)。URL 里的 contact_id = winner (保留方)。
+
+    主邮箱/曾用是**预览页勾选结果** —— 默认值推导 (last_seen 最新者做主 +
+    60 天条款) 是前端纯函数职责 (`mergeModel.ts`), 服务端只按入参落库
+    (service docstring 钉死)。跟随本文件头惯例: 无 CAS / 无幂等信封。"""
+
+    loser_id: int
+    primary_email: str = Field(min_length=3)
+    former_emails: list[str] = Field(default_factory=list)
+
+
 class ContactPrimaryEmailRequest(BaseModel):
     email: str = Field(min_length=3)
 

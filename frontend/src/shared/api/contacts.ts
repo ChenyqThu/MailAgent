@@ -14,6 +14,7 @@ import type {
   ContactMailsResponse,
   ContactMattersResponse,
   ContactLockableField,
+  ContactMergeBody,
   ContactPatchBody,
   ContactPatchResponse,
   ContactSeniority,
@@ -52,6 +53,8 @@ export interface ContactsApi {
     email: string,
     former: boolean
   ): Promise<{ email: string; former: boolean }>
+  /** 人级合并 (WP3)：contactId = winner (保留方)。成功返回 winner 详情。 */
+  merge(contactId: number, body: ContactMergeBody): Promise<ContactDetailDto>
   backfillProgress(): Promise<ContactBackfillProgress>
 }
 
@@ -116,6 +119,9 @@ export function createContactsApi(baseUrl: string): ContactsApi {
       return request(baseUrl, 'POST', `/contacts/${segment(contactId)}/emails/former`, {
         body: { email, former }
       })
+    },
+    merge(contactId, body) {
+      return request(baseUrl, 'POST', `/contacts/${segment(contactId)}/merge`, { body })
     },
     backfillProgress() {
       return request(baseUrl, 'GET', '/contacts/backfill/progress')

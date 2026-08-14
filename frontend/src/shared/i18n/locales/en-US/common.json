@@ -5573,6 +5573,7 @@
       "composePrefill": "Compose opened with {email} prefilled",
       "pickerAdded": "{n} stakeholders added · names and titles sync from contacts",
       "pickerCreated": "Contact created from {email} and added to the matter",
+      "mergeFailed": "Merge didn't complete · both records unchanged",
       "saveFailed": "Save failed"
     }
   }

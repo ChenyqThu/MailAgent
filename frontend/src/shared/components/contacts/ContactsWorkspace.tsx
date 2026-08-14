@@ -20,6 +20,7 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { ContactDetail } from './ContactDetail'
 import { ContactListPane } from './ContactListPane'
+import { MergeContactsDialog } from './MergeContactsDialog'
 import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
 import {
   buildContactRows,
@@ -95,6 +96,10 @@ export function ContactsWorkspace(): React.ReactElement | null {
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<number>>(() => new Set())
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
   const [listWidth, setListWidth] = useState(readListWidth)
+  /** WP3 合并入口状态：入口 ①（详情页发起，sourceId）或入口 ②（多选恰 2 条，pair）。 */
+  const [mergeState, setMergeState] = useState<
+    { sourceId: number; pair: null } | { sourceId: null; pair: [number, number] } | null
+  >(null)
 
   const stacked = useMediaQuery(WORKSPACE_STACKED_QUERY)
   const workspaceGridRef = useRef<HTMLDivElement>(null)
@@ -289,6 +294,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
           selectionMode={selectionMode}
           checkedIds={checkedIds}
           onExitSelection={exitSelection}
+          onMergePair={(pair) => setMergeState({ sourceId: null, pair })}
           menuOpenId={menuOpenId}
           onMenuOpenChange={setMenuOpenId}
           onToggleGroup={(groupKey) =>
@@ -355,6 +361,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
             onBack={() => selectContact(null)}
             actions={actions}
             showBack={stacked}
+            onMergeRequest={() => setMergeState({ sourceId: selectedId, pair: null })}
           />
         ) : (
           <EmptyState
@@ -364,6 +371,20 @@ export function ContactsWorkspace(): React.ReactElement | null {
           />
         )}
       </div>
+      <MergeContactsDialog
+        open={mergeState !== null}
+        onOpenChange={(next) => {
+          if (!next) setMergeState(null)
+        }}
+        sourceId={mergeState?.sourceId ?? null}
+        pairIds={mergeState?.pair ?? null}
+        onMerged={(winnerId) => {
+          // 成功：列表/详情切到保留方 + 退出多选（失效在 dialog 内做完）。
+          setMergeState(null)
+          exitSelection()
+          selectContact(winnerId)
+        }}
+      />
     </div>
   )
 }

@@ -229,9 +229,8 @@ export const qk = {
     detail: (publicId: string) => ['matters', 'detail', publicId] as const,
     resources: (publicId: string) => ['matters', 'detail', publicId, 'resources'] as const,
     stakeholders: (publicId: string) => ['matters', 'detail', publicId, 'stakeholders'] as const,
-    // W-C —— 全局干系人库（跨事项一份，不挂 detail 前缀）+ 一键邮件提取候选。
-    contacts: () => ['matters', 'contacts'] as const,
-    contactEmailCandidates: () => ['matters', 'contact-email-candidates'] as const,
+    // W-C 全局干系人库两个 key（contacts / contactEmailCandidates）已随通讯录 WP3 退役
+    // —— 干系人 picker 改用顶层 `qk.contacts.list(…)`（与通讯录工作台共享缓存）。
     // G-15 / G-14 —— 全部挂在 detail 前缀下：一次事项写入 invalidate `detail(id)` 就连带刷新
     // 关系、候选与附件（候选依赖 link 集合，关系依赖两端事项）。
     relations: (publicId: string) => ['matters', 'detail', publicId, 'relations'] as const,
@@ -259,9 +258,10 @@ export const qk = {
     config: () => ['matters', 'config'] as const
   },
 
-  // 通讯录（Contact Directory WP2）。🔴 顶层 `contacts` 段 —— `qk.matters.contacts()`
-  // 是 matters 域的全局干系人库（WP3 退役），别混用。子资源挂 ['contacts','detail',id,…]
-  // 前缀：一次联系人写入 invalidate detail(id) 连带刷新关联邮件/事项。
+  // 通讯录（Contact Directory WP2）。顶层 `contacts` 段是人物库的唯一 key 域
+  // （matters 域的旧 `qk.matters.contacts()` 已随 WP3 退役）。子资源挂
+  // ['contacts','detail',id,…] 前缀：一次联系人写入 invalidate detail(id) 连带刷新
+  // 关联邮件/事项。
   contacts: {
     all: () => ['contacts'] as const,
     list: (view: string, q: string, sort: string) =>
