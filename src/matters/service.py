@@ -29,12 +29,15 @@ from .models import (
     MATTER_RESOURCE_KINDS,
     MATTER_RESOURCE_EXPANSION_REASONS,
     MATTER_RESOURCE_SUBSCRIPTION_STATES,
+    MATTER_RESOURCE_SUMMARY_MAX_CHARS,
+    MATTER_RESOURCE_SUMMARY_SOURCES,
     MATTER_STATUSES,
     MATTER_SUGGESTION_BULK_ACTIONS,
     MATTER_SUGGESTION_BULK_MAX,
     MATTER_UPDATE_REVIEW_STATUSES,
     MatterActorKind,
     MatterItemKind,
+    MatterResourceSummarySource,
     MatterSuggestionBulkAction,
     MatterSuggestionBulkSkipReason,
     format_public_id,
@@ -3873,14 +3876,100 @@ class MatterService:
         existing = conn.execute("SELECT * FROM resource WHERE provider=? AND external_key=?", (provider, external_key)).fetchone()
         if existing and existing["kind"] != kind:
             raise MatterError("E_RESOURCE_IDENTITY_CONFLICT", "resource identity already exists with another kind")
+        summary = self._resource_summary_fields(conn, provider, kind, external_key, data, now)
         return self.repository.upsert_resource(conn, {
             "kind": kind, "provider": provider, "external_key": external_key,
             "canonical_url": self._optional_text(data.get("canonical_url")), "title": self._optional_text(data.get("title")),
-            "metadata_json": self._dump(data.get("metadata") or {}), "revision": data.get("revision"),
+            "metadata_json": self._dump(data.get("metadata") or {}),
+            "sum": summary["sum"], "sum_src": summary["sum_src"], "sum_at": summary["sum_at"],
+            "revision": data.get("revision"),
             "content_hash": data.get("content_hash"), "permission_state": data.get("permission_state"),
             "sync_state": data.get("sync_state"), "access_policy": data.get("access_policy") or "allowed",
             "last_checked_at": data.get("last_checked_at"), "created_at": now, "updated_at": now,
         })
+
+    def _resource_summary_fields(
+        self,
+        conn: sqlite3.Connection,
+        provider: str,
+        kind: str,
+        external_key: str,
+        data: Mapping[str, Any],
+        now: int,
+    ) -> dict[str, Any]:
+        """产出 upsert 值集里的 ``sum`` / ``sum_src`` / ``sum_at`` 三键（v56，H3§6 三类来源）。
+
+        - **mailagent 的 email/thread：恒从邮件侧已有摘要带入**（``sum_src='mail'``，零模型
+          调用；调用方带的 ``sum`` 一律忽略 —— 设计红线「邮件类不重新生成」在唯一身份写侧
+          强制）。email 取该封的 ``ai_summary``；thread 取线程内**最新一封**带摘要邮件的
+          （= 最新一次会话摘要）。``ai_summary`` 为空（LLM 未开 / 失败 / 积压）→ 三键 NULL
+          走空态，**不合成、不回退主题+正文**（owner 拍板 + H3 自己的「不得编造」）。
+          🔴 邮件类资料没有 excerpt（`cached_excerpt` 只有 URL 抓取路径写），所以在 H3
+          「摘要只允许来自缓存摘录与元数据」的约束下，复用邮件自带摘要不是优化，是邮件
+          摘要**唯一可行来源** —— 后人别试图退回「从正文生成」。
+        - **其余 provider**：吃调用方显式给的 ``sum``（Agent 发现资料的落库通道；批 M6 把
+          提案 schema 的 ``summary`` 接到这里）。``sum_src`` 必须在值域内、缺省 'agent'；
+          ``sum_at`` 缺省取本次写入时刻。手动关联的外部文档不带 ``sum`` → 空态，等下次
+          跟进 run 生成（H3§6.3）。
+        - **「仅元数据」不生成**：incoming ``access_policy='metadata_only'`` → 三键 NULL
+          （既有行已是 metadata_only 的情形由 repository 更新面同判据挡）。
+
+        邮件侧推导失败只降级不阻断 —— 摘要是增强信息，绝不让关联事务因它掀掉。
+        """
+        empty = {"sum": None, "sum_src": None, "sum_at": None}
+        if (data.get("access_policy") or "allowed") == "metadata_only":
+            return empty
+        if provider == EMAIL_PROVIDER and kind in ("email", "thread"):
+            try:
+                return self._mail_summary_fields(conn, kind, external_key, now) or empty
+            except (sqlite3.OperationalError, ValueError) as exc:
+                logger.warning(
+                    f"[matters] mail summary lookup failed for {external_key}: {exc}"
+                )
+                return empty
+        raw = data.get("sum")
+        text = str(raw).strip()[:MATTER_RESOURCE_SUMMARY_MAX_CHARS] if raw is not None else ""
+        if not text:
+            return empty
+        src = str(data.get("sum_src") or MatterResourceSummarySource.AGENT.value)
+        self._require_value("sum_src", src, MATTER_RESOURCE_SUMMARY_SOURCES)
+        sum_at = self._require_epoch_ms("sum_at", data.get("sum_at")) or now
+        return {"sum": text, "sum_src": src, "sum_at": sum_at}
+
+    def _mail_summary_fields(
+        self, conn: sqlite3.Connection, kind: str, external_key: str, now: int
+    ) -> dict[str, Any] | None:
+        """从 ``llm_processing.labels_json.$.ai_summary`` 取邮件自带摘要（同库查询）。
+
+        ``external_key`` 进来时已经 ``normalize_resource_key`` 归一（``email:<id>`` /
+        ``thread:<tid>``），直接按前缀拆。``sum_at`` 取 llm 行的 ``updated_at``（REAL 秒
+        → epoch ms，= 摘要真实生成时刻，不是关联时刻）。
+        """
+        identifier = external_key.partition(":")[2]
+        if kind == "email":
+            row = conn.execute(
+                "SELECT json_extract(labels_json,'$.ai_summary') AS ai_summary, updated_at "
+                "FROM llm_processing WHERE internal_id=?",
+                (int(identifier),),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT json_extract(lp.labels_json,'$.ai_summary') AS ai_summary, "
+                "lp.updated_at FROM email_metadata em "
+                "JOIN llm_processing lp ON lp.internal_id=em.internal_id "
+                "WHERE em.thread_id=? AND json_extract(lp.labels_json,'$.ai_summary') <> '' "
+                "ORDER BY em.date_received DESC, em.internal_id DESC LIMIT 1",
+                (identifier,),
+            ).fetchone()
+        summary = str(row["ai_summary"]).strip() if row and row["ai_summary"] else ""
+        if not summary:
+            return None
+        sum_at = int(float(row["updated_at"]) * 1000) if row["updated_at"] else now
+        return {
+            "sum": summary[:MATTER_RESOURCE_SUMMARY_MAX_CHARS],
+            "sum_src": MatterResourceSummarySource.MAIL.value,
+            "sum_at": sum_at,
+        }
 
     def _normalize_item(self, kind: str, data: Mapping[str, Any]) -> dict[str, Any]:
         if kind != MatterItemKind.ACTION.value:

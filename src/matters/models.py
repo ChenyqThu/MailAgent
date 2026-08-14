@@ -158,6 +158,20 @@ class MatterResourceSubscriptionState(StrEnum):
     PAUSED = "paused"
 
 
+class MatterResourceSummarySource(StrEnum):
+    """资料摘要（`resource.sum`）的来源（v56，设计稿 H3§6）。
+
+    - ``mail``：沿用邮件侧已有的 AI 摘要（`llm_processing.labels_json.$.ai_summary`），
+      **不重新调用模型** —— 邮件类资料没有 excerpt（只有 URL 类写 `cached_excerpt`），
+      在「摘要只允许来自缓存摘录与元数据、不得编造」的约束下这是邮件摘要唯一可行来源。
+    - ``agent``：跟进 Agent 生成（发现资料的提案阶段带入，批 M6 接线）。
+    - 无摘要 = 三列全 NULL（空态），不存在第三个来源值。
+    """
+
+    MAIL = "mail"
+    AGENT = "agent"
+
+
 class MatterResourceExpansionReason(StrEnum):
     CONTEXT_GAP = "context_gap"
     VERIFICATION = "verification"
@@ -209,6 +223,11 @@ MATTER_ACCESS_POLICIES = _values(MatterAccessPolicy)
 MATTER_UPDATE_REVIEW_STATUSES = _values(MatterUpdateReviewStatus)
 MATTER_ACTOR_KINDS = _values(MatterActorKind)
 MATTER_RESOURCE_SUBSCRIPTION_STATES = _values(MatterResourceSubscriptionState)
+MATTER_RESOURCE_SUMMARY_SOURCES = _values(MatterResourceSummarySource)
+#: `resource.sum` 的长度护栏。邮件侧 ai_summary 单字段截 3500（llm store `_truncate_long_fields`），
+#: 设计语义是「一到三句」—— 2000 足够容纳并留出多语言余量；超长一律尾截不报错（摘要是
+#: 增强信息，不该因为长了一截把关联事务掀掉）。
+MATTER_RESOURCE_SUMMARY_MAX_CHARS = 2000
 MATTER_RESOURCE_EXPANSION_REASONS = _values(MatterResourceExpansionReason)
 MATTER_SUGGESTION_BULK_ACTIONS = _values(MatterSuggestionBulkAction)
 MATTER_SUGGESTION_BULK_SKIP_REASONS = _values(MatterSuggestionBulkSkipReason)

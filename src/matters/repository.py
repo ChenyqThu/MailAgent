@@ -598,11 +598,38 @@ class MatterRepository:
     def upsert_resource(
         self, conn: sqlite3.Connection, values: Mapping[str, Any]
     ) -> tuple[dict[str, Any], bool]:
+        """按 (provider, external_key) upsert 一份资料身份行。
+
+        v56 前这里是 INSERT-ONLY（命中既有行原样返回、一个字段都不更新）——后果是
+        后算出来的摘要（`sum` 三列）对**存量资料永远写不进去**。现在命中既有行走一个
+        **显式白名单**的增量更新（`_resource_update_assignments`），其余列恒不覆盖：
+
+          - ``kind`` / ``provider`` / ``external_key``：身份，永不改（kind 冲突在
+            service `_upsert_resource` 已 raise `E_RESOURCE_IDENTITY_CONFLICT`）；
+          - ``revision`` / ``content_hash`` / ``permission_state`` / ``sync_state`` /
+            ``last_checked_at``：全仓唯一写者是 URL 抓取路径（service
+            ``fetch_url_resource`` 直 UPDATE），upsert 调用方对它们一律传 None ——
+            收进更新面 = 每次 re-link 都用 None 冲掉抓取结果；
+          - ``access_policy``：owner 经 ``patch_resource`` 设的可见性档；upsert 调用方
+            带的是默认 'allowed'，收进来会把「仅元数据」静默翻回放行；
+          - ``created_at``：恒不改（``updated_at`` 只在真有增量时跟着 bump）。
+        """
         existing = conn.execute(
             "SELECT * FROM resource WHERE provider=? AND external_key=?",
             (values["provider"], values["external_key"]),
         ).fetchone()
         if existing:
+            updates = self._resource_update_assignments(existing, values)
+            if updates:
+                assignments = ", ".join(f'"{column}"=?' for column in updates)
+                conn.execute(
+                    f"UPDATE resource SET {assignments} WHERE id=?",
+                    (*updates.values(), existing["id"]),
+                )
+                row = conn.execute(
+                    "SELECT * FROM resource WHERE id=?", (existing["id"],)
+                ).fetchone()
+                return self._resource_row(row), False
             return self._resource_row(existing), False
         columns = tuple(values)
         cursor = conn.execute(
@@ -611,6 +638,48 @@ class MatterRepository:
         )
         row = conn.execute("SELECT * FROM resource WHERE id=?", (cursor.lastrowid,)).fetchone()
         return self._resource_row(row), True
+
+    @classmethod
+    def _resource_update_assignments(
+        cls, existing: sqlite3.Row, values: Mapping[str, Any]
+    ) -> dict[str, Any]:
+        """命中既有行时允许更新的字段增量（🔴 白名单；恒不覆盖清单见 upsert_resource）。
+
+        三类语义各不相同：
+
+          - ``title`` / ``canonical_url``：**只补空** —— 既有值可能来自更权威的源
+            （URL 抓取回的页面标题 / 已被用户看到过的原文地址），re-link 不 churn；
+          - ``metadata_json``：**浅合并，调用方非 None 键胜出，绝不丢既有键** ——
+            URL 缓存（cached_excerpt / cache_meta）只由抓取路径写、合并天然保留；
+            调用方带来的身份元数据（sender/to_addr/cc_addr 等）借此补进老行
+            （干系人候选正是从这几个键推的，v56 前对存量行结构性恒缺）；
+          - ``sum`` / ``sum_src`` / ``sum_at``：调用方给出**非空 sum** 才三列一起写
+            （新摘要胜出——邮件摘要重跑 / Agent 重新概括都以最新为准，版本轨迹留档是
+            批 7 的事）；没给 = 一列都不碰（re-link 不许把已有摘要冲成 NULL）。
+            既有行 ``access_policy='metadata_only'`` 时整组跳过 —— 「仅元数据」的资料
+            停止更新摘要（H3§5.3），policy 翻回 allowed 后下次触到再恢复。
+        """
+        updates: dict[str, Any] = {}
+        for column in ("title", "canonical_url"):
+            if existing[column] is None and values.get(column) is not None:
+                updates[column] = values[column]
+        existing_meta = cls._json(existing["metadata_json"], {})
+        incoming_meta = cls._json(values.get("metadata_json"), {})
+        merged_meta = dict(existing_meta)
+        for key, value in incoming_meta.items():
+            if value is not None:
+                merged_meta[key] = value
+        if merged_meta != existing_meta:
+            updates["metadata_json"] = cls._dump(merged_meta)
+        new_sum = values.get("sum")
+        if new_sum and existing["access_policy"] != "metadata_only":
+            if (existing["sum"], existing["sum_src"]) != (new_sum, values.get("sum_src")):
+                updates["sum"] = new_sum
+                updates["sum_src"] = values.get("sum_src")
+                updates["sum_at"] = values.get("sum_at")
+        if updates:
+            updates["updated_at"] = values.get("updated_at", existing["updated_at"])
+        return updates
 
     def get_resource(self, conn: sqlite3.Connection, resource_id: int) -> dict[str, Any] | None:
         row = conn.execute("SELECT * FROM resource WHERE id=?", (resource_id,)).fetchone()
@@ -883,6 +952,7 @@ class MatterRepository:
         raw = dict(row)
         resource = {key: raw[key] for key in (
             "id", "kind", "provider", "external_key", "canonical_url", "title", "metadata_json",
+            "sum", "sum_src", "sum_at",
             "revision", "content_hash", "permission_state", "sync_state", "access_policy", "last_checked_at",
             "created_at", "updated_at",
         )}

@@ -205,6 +205,13 @@ export type MatterActorKind = (typeof MATTER_ACTOR_KINDS)[number]
 export const MATTER_RESOURCE_SUBSCRIPTION_STATES = ['none', 'active', 'paused'] as const
 export type MatterResourceSubscriptionState = (typeof MATTER_RESOURCE_SUBSCRIPTION_STATES)[number]
 
+/** 资料摘要来源（v56，H3§6）。canonical: `src/matters/models.MatterResourceSummarySource`；
+ *  跨语言闸 `tests/matters/test_matters_contract_parity.py` TS_ARRAYS。
+ *  `mail` = 沿用邮件侧 AI 摘要（不重新生成）· `agent` = 跟进 Agent 生成；
+ *  无摘要 = `sum/sum_src/sum_at` 三键全 null（空态，「下次跟进运行时生成」）。 */
+export const MATTER_RESOURCE_SUMMARY_SOURCES = ['mail', 'agent'] as const
+export type MatterResourceSummarySource = (typeof MATTER_RESOURCE_SUMMARY_SOURCES)[number]
+
 export const MATTER_SEARCH_FIELDS = [
   'title',
   'description',
@@ -347,6 +354,11 @@ export interface MatterResource {
   canonical_url: string | null
   title: string | null
   metadata: Record<string, unknown>
+  /** 资料内容摘要三键（v56，H3§6）。wire 上恒在（后端 `dict(row)` 投影），标成可选是
+   *  给存量测试 fixture 留后向兼容 —— 消费端一律按 `?? null` 读，空态 = 三键全 null。 */
+  sum?: string | null
+  sum_src?: MatterResourceSummarySource | null
+  sum_at?: number | null
   revision: string | null
   content_hash: string | null
   permission_state: string | null

@@ -62,6 +62,7 @@ from src.matters.models import (
     MatterRelationType,
     MatterResourceKind,
     MatterResourceSubscriptionState,
+    MatterResourceSummarySource,
     MatterRunStatus,
     MatterRunTrigger,
     MatterStatus,
@@ -257,6 +258,9 @@ MATTER_TABLE_DDLS = (
         canonical_url TEXT NULL,
         title TEXT NULL,
         metadata_json TEXT NOT NULL DEFAULT '{{}}' CHECK (json_valid(metadata_json)),
+        sum TEXT NULL,
+        sum_src TEXT NULL CHECK (sum_src IS NULL OR sum_src {sql_check_clause(MatterResourceSummarySource)}),
+        sum_at INTEGER NULL,
         revision TEXT NULL,
         content_hash TEXT NULL,
         permission_state TEXT NULL,
@@ -1106,7 +1110,20 @@ class SyncStore:
     #                {"display_name": identity_locked_at} —— WP1 期的锁全部来自
     #                matters 写穿改名, 语义就是 display_name 锁。
     #                回滚 (回退 v55): 列留着无害 (旧代码零消费点)。
-    DB_VERSION = 55
+    # v56 (Matters 资料摘要, task 08-12 design-alignment 批 M4, 2026-08): resource
+    #                +sum / +sum_src / +sum_at 三列 (设计稿 H3§6 的资料摘要数据层)。
+    #                sum = 资料内容概括 (1-3 句); sum_src ∈ mail|agent|NULL (CHECK 单源
+    #                src/matters/models.MatterResourceSummarySource); sum_at = 摘要生成
+    #                时刻 epoch ms (判过期用)。三列全 NULL = 「还没有摘要」空态。
+    #                存量行**有意不回填** (镜像 ingest_reason 先例): 邮件类摘要由
+    #                service._upsert_resource 在下次触到该资料时从 llm_processing 惰性
+    #                带入, migration 不做万行级 JOIN 卡首启 waitReady。无新索引 ——
+    #                读面都是按 id / (provider,external_key) 的行级取数, sum_src 筛选
+    #                等有真实查询面再建 (且 🔴 届时必须放 v-块内, 不进 MATTER_INDEX_DDLS,
+    #                v52 教训)。设计稿的 link{app,url} 两半 = 既有列 provider /
+    #                canonical_url, 零新增。
+    #                回滚 (回退 v56): 列留着无害 (旧代码零消费点)。
+    DB_VERSION = 56
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -3547,6 +3564,39 @@ class SyncStore:
                 raise SyncStoreMigrationError(
                     f"v55 migration (identity_locks seed): {e}"
                 ) from e
+
+        # === v56: Matters 资料摘要三列 (task 08-12 design-alignment 批 M4) ===
+        # additive ALTER ×3 (探列幂等, 镜像 v53/v55 形状)。fresh 库满梯子在 v44/v45 块
+        # 建 resource 时已带三列 (MATTER_TABLE_DDLS 最新形), 探列后跳过 ALTER; 老库
+        # (v44..v55) 三列追加在表尾 —— 与 fresh 库列序不同, 但资料读面全部按列名取数
+        # (`dict(row)` / `_joined_resource_row` 显式键), 无 `SELECT *` 位置消费。
+        # 🔴 无 DML seed: 存量行三列 NULL = 「还没有摘要」空态 (有意不回填, 理由见
+        # DB_VERSION 注记); 无新索引 (同注记 —— 真要加必须放本块内, 不进
+        # MATTER_INDEX_DDLS, v52 教训)。sum_src 的 CHECK 与 CREATE 同一单源
+        # (`sql_check_clause(MatterResourceSummarySource)`), 不手抄第二份值域。
+        if current_version < 56:
+            _resource_sum_cols = {
+                "sum": "ALTER TABLE resource ADD COLUMN sum TEXT",
+                "sum_src": (
+                    "ALTER TABLE resource ADD COLUMN sum_src TEXT "
+                    "CHECK (sum_src IS NULL OR sum_src "
+                    f"{sql_check_clause(MatterResourceSummarySource)})"
+                ),
+                "sum_at": "ALTER TABLE resource ADD COLUMN sum_at INTEGER",
+            }
+            try:
+                cursor.execute("PRAGMA table_info(resource)")
+                _resource_cols_v56 = {row[1] for row in cursor.fetchall()}
+                for _col, _ddl in _resource_sum_cols.items():
+                    if _col not in _resource_cols_v56:
+                        cursor.execute(_ddl)
+                        logger.info(f"v56 migration: resource +{_col}")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                # 只有「列已存在」这一种并发/重入形态才允许被 guard 吞 —— 三列必须
+                # 全部在场才算已迁移 (半程重入时缺的列会在下轮重试补齐)。
+                _migration_guard_columns(
+                    cursor, "resource", set(_resource_sum_cols), "v56 migration", e,
+                )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
