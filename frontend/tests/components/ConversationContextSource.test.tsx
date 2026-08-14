@@ -121,7 +121,6 @@ vi.mock('@shared/assistant/runtime/ThreadRunningBridge', () => ({ ThreadRunningB
 vi.mock('@shared/assistant/runtime/useBackgroundChatRun', () => ({
   useBackgroundChatRun: () => ({ backgroundActive: false, backgroundStartedAt: null })
 }))
-vi.mock('@shared/assistant/components/ThreadRunStatusBar', () => ({ ThreadRunStatusBar: () => null }))
 vi.mock('@shared/components/agents/AgentThread', () => ({
   AgentThread: ({ contextChip }: { contextChip?: React.ReactNode }) => (
     <div data-testid="thread">

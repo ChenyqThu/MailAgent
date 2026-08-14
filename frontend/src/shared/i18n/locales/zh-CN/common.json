@@ -1636,7 +1636,6 @@
       "callingTool": "正在{tool}…",
       "writing": "正在回复…",
       "background": "AI 正在后台继续回复",
-      "safeToLeave": "可以切走，不会中断",
       "backgroundHint": "完成后自动刷新",
       "elapsed": "本回合已运行"
     },

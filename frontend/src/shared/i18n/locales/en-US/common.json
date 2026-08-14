@@ -1636,7 +1636,6 @@
       "callingTool": "{tool}…",
       "writing": "Writing the reply…",
       "background": "Still responding in the background",
-      "safeToLeave": "Safe to leave — this keeps running",
       "backgroundHint": "Refreshes when it finishes",
       "elapsed": "Elapsed this turn"
     },

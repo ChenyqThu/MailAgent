@@ -20,7 +20,8 @@
 //    数值取 DESIGN.md §4.3 level-1「raised」既有档，理由与明暗两档的实测见 index.css 那段注释。
 //
 // 🔴 性能（渲染档位纪律，`frontend/docs/bot-avatar.md`）：头像恒静态档（零引擎零 ticker），
-//    唯一的定时器是 45s 换脸的单个 interval；投影是静态 CSS filter，不进 bot-avatar 的共享 rAF。
+//    唯一的定时器是换脸的那一个 timeout（自排下一次）；投影是静态 CSS filter，不进 bot-avatar
+//    的共享 rAF。
 //
 // 🔴 上传图圆角跟批 Z 的头像容器口径（`AVATAR_SHELL_RADIUS_RATIO`），别处是圆角方、这里也是。
 
@@ -28,7 +29,7 @@ import { useEffect, useState } from 'react'
 
 import { useAssistantIdentity } from '@shared/assistant/assistantIdentity'
 import { BotAvatar } from '@shared/bot-avatar/BotAvatar'
-import { POOLS, type BotState } from '@shared/bot-avatar/states'
+import { EXPR_CADENCE, POOLS, type BotState } from '@shared/bot-avatar/states'
 import {
   isAgentAvatarImage,
   OFFICIAL_ASSISTANT_AVATAR
@@ -56,29 +57,41 @@ const FAB_FACES: readonly number[] = Array.from(
 /** 首帧 = idle 池首（与不传 expressionIndex 时 BotAvatar 的默认完全一致，挂载不跳脸）。 */
 const FAB_FACE_DEFAULT = POOLS.idle[0]
 
-/** 换脸节拍。依据：引擎自己的池内轮换 idle 档是 9–16s（`EXPR_CADENCE.idle`，且只在 animated
- *  档发生）、showcase 巡演是 2.4s —— 那两个都有人正盯着看。FAB 是常驻元素、没人盯着它，取
- *  45s ≈ idle cadence 的 3–5 倍：读一封邮件大概换 1 次脸（够「活着」），远低于会分心的频率。 */
-export const FAB_FACE_INTERVAL_MS = 45_000
+/** 换脸节拍 = **引擎自己的 idle 档**（`EXPR_CADENCE.idle`，9–16s）。
+ *
+ *  0813 dogfood（owner：「切换时间也太长了，感觉很久才会动一下」）把原来的固定 45s 撤了。45s
+ *  当初正是从这个区间推出来的（「idle cadence 的 3–5 倍」），既然那个推导被实测否掉，就回到源头
+ *  的区间本身，而不是再拍一个新魔数 —— 顺带消灭一处手抄：FAB 与引擎共用同一份节拍词表，改一处
+ *  即两处。
+ *
+ *  🔴 是**区间**不是固定间隔：每次在 [min, max] 内均匀随机取下一次延迟（与 engine.ts 的
+ *  `scheduleExpression` 逐字同款取法），所以它是「活的」而不是节拍器。故实现用自排的 timeout，
+ *  不是 setInterval。 */
+export const FAB_FACE_CADENCE_MS = EXPR_CADENCE.idle
 
 /** 低频随机换脸（静态档离散换帧，零引擎）。`enabled=false`（reduced-motion / 上传图）时
- *  连 interval 都不挂，恒返回首帧。 */
+ *  连 timer 都不排，恒返回首帧。 */
 function useFabFace(enabled: boolean): number {
   const [face, setFace] = useState(FAB_FACE_DEFAULT)
 
   useEffect(() => {
     if (!enabled) return
     let current = FAB_FACE_DEFAULT
-    const advance = (): void => {
-      // 永不连续重复（同 useShowcaseState 的取法）
-      const pool = FAB_FACES.filter((candidate) => candidate !== current)
-      current = pool[Math.floor(Math.random() * pool.length)]
-      setFace(current)
+    let timer = 0
+    const [min, max] = FAB_FACE_CADENCE_MS
+    const arm = (): void => {
+      timer = window.setTimeout(() => {
+        // 永不连续重复（同 useShowcaseState 的取法）
+        const pool = FAB_FACES.filter((candidate) => candidate !== current)
+        current = pool[Math.floor(Math.random() * pool.length)]
+        setFace(current)
+        arm()
+      }, min + Math.random() * (max - min))
     }
     // 有意**不**做 0ms kickoff（那是 showcase 巡演的语义）：FAB 从默认脸起步，挂载不跳。
-    const timer = window.setInterval(advance, FAB_FACE_INTERVAL_MS)
+    arm()
     return (): void => {
-      window.clearInterval(timer)
+      window.clearTimeout(timer)
     }
   }, [enabled])
 

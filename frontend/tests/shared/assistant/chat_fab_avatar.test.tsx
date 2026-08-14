@@ -27,9 +27,10 @@ import {
 import {
   ChatFabAvatar,
   FAB_AVATAR_PX,
-  FAB_FACE_INTERVAL_MS,
+  FAB_FACE_CADENCE_MS,
   FAB_IMAGE_RADIUS_PX
 } from '@shared/assistant/modal/ChatFabAvatar'
+import { EXPR_CADENCE } from '@shared/bot-avatar/states'
 import { ChatModalFab } from '@shared/assistant/modal/ChatModalFab'
 import { AVATAR_SHELL_RADIUS_RATIO } from '@shared/components/agents/avatarShell'
 import { useActiveEmail } from '@shared/state/active-email'
@@ -66,6 +67,18 @@ function allowMotion(): void {
         onchange: null
       }) as unknown as MediaQueryList
   )
+}
+
+/** 只数「延迟落在换脸节拍区间内」的 setTimeout 调用 —— 把 React 调度器 / 测试工具自己排的
+ *  timeout 排除在判据之外（0813 轮 5 起换脸从 setInterval 改成自排 timeout，裸计数会被它们污染）。 */
+function cadenceTimers(spy: { mock: { calls: unknown[][] } }): number {
+  return spy.mock.calls.filter(([, delay]) => {
+    return (
+      typeof delay === 'number' &&
+      delay >= FAB_FACE_CADENCE_MS[0] &&
+      delay <= FAB_FACE_CADENCE_MS[1]
+    )
+  }).length
 }
 
 function headPath(): string {
@@ -213,43 +226,54 @@ describe('ChatFabAvatar — 上传图回落', () => {
     expect(Number.parseFloat(img.style.width)).toBeLessThan(FAB_AVATAR_PX)
   })
 
-  test('上传图身份不挂换脸 interval（图片没有表情可换）', () => {
+  test('上传图身份不挂换脸 timer（图片没有表情可换）', () => {
     allowMotion()
     // 判据是「根本没排这个 timer」而非「画面没变」—— 图片本来就与表情无关，
-    // 只断言画面不变会在 interval 真的挂着时也通过（假绿）。同一个 spy 先跑 bot 身份
+    // 只断言画面不变会在 timer 真的挂着时也通过（假绿）。同一个 spy 先跑 bot 身份
     // 当正对照，证明 spy 确实盯得住这条排程。
-    const setInterval = vi.spyOn(window, 'setInterval')
+    // 🔴 只数**延迟落在换脸节拍区间内**的那些调用：React 调度器/测试工具自己也会排 timeout，
+    //    裸 `not.toHaveBeenCalled()` 会被它们打成假红。顺带这也把「延迟真在区间内」一并钉住。
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
     const bot = render(<ChatFabAvatar />)
-    expect(setInterval).toHaveBeenCalled()
+    expect(cadenceTimers(timeoutSpy)).toBeGreaterThan(0)
     bot.unmount()
 
-    setInterval.mockClear()
+    timeoutSpy.mockClear()
     primeAssistantIdentity(image)
     render(<ChatFabAvatar />)
-    expect(setInterval).not.toHaveBeenCalled()
+    expect(cadenceTimers(timeoutSpy)).toBe(0)
   })
 })
 
+// 0813 dogfood 轮 5（A）—— owner：「切换时间也太长了，感觉很久才会动一下」。固定 45s 撤了，
+// 节拍改成**引擎自己的 idle 档区间**（`EXPR_CADENCE.idle` = 9–16s），每次在区间内均匀随机取
+// 下一次延迟（与 engine.ts 的 scheduleExpression 同款取法）。
 describe('ChatFabAvatar — reduced-motion 与低频换脸', () => {
-  test('reduce 下换脸 interval 不挂：既没排 timer，推进 3 个周期脸也不变', () => {
-    // 🔴 先装假时钟再 spy —— 反过来的话 useFakeTimers 会把（被 spy 的）window.setInterval
-    //    整个换掉，spy 从此看不到任何调用，`not.toHaveBeenCalled()` 变成必过的假绿。
+  test('🔴 节拍单源 = EXPR_CADENCE.idle（不再手抄第二个魔数）', () => {
+    expect(FAB_FACE_CADENCE_MS).toBe(EXPR_CADENCE.idle)
+    // 顺带钉住「比原来的 45s 快一档」这个诉求本身：整个区间都必须显著短于 45s。
+    expect(FAB_FACE_CADENCE_MS[1]).toBeLessThan(45_000)
+  })
+
+  test('reduce 下换脸 timer 不挂：既没排 timer，推进 3 个周期脸也不变', () => {
+    // 🔴 先装假时钟再 spy —— 反过来的话 useFakeTimers 会把（被 spy 的）window.setTimeout
+    //    整个换掉，spy 从此看不到任何调用，判据变成必过的假绿。
     vi.useFakeTimers()
-    const setInterval = vi.spyOn(window, 'setInterval')
+    const timeoutSpy = vi.spyOn(window, 'setTimeout')
     render(<ChatFabAvatar />)
     const before = eyePath()
     expect(before.length).toBeGreaterThan(0)
-    expect(setInterval).not.toHaveBeenCalled()
+    expect(cadenceTimers(timeoutSpy)).toBe(0)
     act(() => {
-      vi.advanceTimersByTime(FAB_FACE_INTERVAL_MS * 3)
+      vi.advanceTimersByTime(FAB_FACE_CADENCE_MS[1] * 3)
     })
     expect(eyePath()).toBe(before)
   })
 
-  test('到点才换：差 1ms 不换，满一个周期换（45s 低频换脸这条需求保留）', () => {
+  test('到点才换：差 1ms 不换，满一个周期换（Math.random=0 → 取区间下界）', () => {
     allowMotion()
     vi.useFakeTimers()
-    // 池里剔掉当前脸之后取第一个 → 确定性
+    // 池里剔掉当前脸之后取第一个 + 延迟取区间下界 → 确定性
     vi.spyOn(Math, 'random').mockReturnValue(0)
     // cube 的 head path 随表情变（sphere 的轮廓是姿态无关的，换脸只动眼睛）
     primeAssistantIdentity({ name: null, avatar: { type: 'bot', shape: 'cube', color: 'blue' } })
@@ -257,10 +281,45 @@ describe('ChatFabAvatar — reduced-motion 与低频换脸', () => {
 
     const first = headPath()
     act(() => {
-      vi.advanceTimersByTime(FAB_FACE_INTERVAL_MS - 1)
+      vi.advanceTimersByTime(FAB_FACE_CADENCE_MS[0] - 1)
     })
     expect(headPath()).toBe(first)
 
+    act(() => {
+      vi.advanceTimersByTime(1)
+    })
+    const second = headPath()
+    expect(second).not.toBe(first)
+
+    // 🔴 自排下一次：换完脸还得继续换（setInterval → 自排 timeout 的回归位；只排一次的实现
+    //    会在这里停住）。random=0 时下一次也是下界。
+    act(() => {
+      vi.advanceTimersByTime(FAB_FACE_CADENCE_MS[0])
+    })
+    expect(headPath()).not.toBe(second)
+  })
+
+  // 🔴 判据取「延迟 = min + r×(max−min)」的中间值：random=0.5 → 12500ms。它既不是区间下界
+  //    （9000，上一条已覆盖）也不是任何固定间隔，所以这一条真正咬住的是**区间随机**这个形状。
+  //    有意**不**用 random=1：① `pool[Math.floor(1 × len)]` 越界成 undefined，脸根本不变，
+  //    「没到点」与「选脸取空」在判据上分不开；② mockReturnValueOnce 依赖调用顺序，而渲染路径上
+  //    还有别的 Math.random 消费者（实测第一发被别人吃掉了）。
+  test('🔴 延迟 = min + r×(max−min)（random=0.5 → 区间中点，证明不是固定间隔）', () => {
+    allowMotion()
+    vi.useFakeTimers()
+    vi.spyOn(Math, 'random').mockReturnValue(0.5)
+    primeAssistantIdentity({ name: null, avatar: { type: 'bot', shape: 'cube', color: 'blue' } })
+    render(<ChatFabAvatar />)
+
+    const [min, max] = FAB_FACE_CADENCE_MS
+    const expected = min + 0.5 * (max - min)
+    expect(expected).toBeGreaterThan(min) // 中点真的不是下界，否则这条闸恒真
+
+    const first = headPath()
+    act(() => {
+      vi.advanceTimersByTime(expected - 1)
+    })
+    expect(headPath()).toBe(first)
     act(() => {
       vi.advanceTimersByTime(1)
     })

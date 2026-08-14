@@ -19,10 +19,9 @@ interface AssistantThreadProps {
   pendingSlot?: React.ReactNode
   /** Shown by ThreadPrimitive.Empty when the thread has no messages. */
   emptyState?: React.ReactNode
-  /** WP-14 — the composer-anchored run status bar (ThreadRunStatusBar). Rendered between the
-   *  viewport and the composer, i.e. OUTSIDE the scroll area, so it stays put while the user
-   *  scrolls the history. Self-gating (renders null when nothing is running) → omitting it is a
-   *  byte-identical thread. */
+  /** composer 上方的常驻带：渲染在 viewport 与 composer 之间，即 OUTSIDE 滚动区，滚历史时它不动。
+   *  WP-14 时它装的是运行条；0813 轮 5 运行条整条退役（实时叙述搬进消息流的回合头像行），这里
+   *  现在只剩输入队列条这类「贴着输入框」的东西。各自门控，省略即字节级现状。 */
   runStatusSlot?: React.ReactNode
   /** Phase 06a (cutover) — read-only mode for a retired-backend (notion-agent) session opened
    *  from history: render the prior messages but suppress the composer (no new turns on a

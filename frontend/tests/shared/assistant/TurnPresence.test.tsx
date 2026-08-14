@@ -3,10 +3,15 @@
 // living-bot-avatar WP5 — TurnPresence（消息流回合在场行：动效头像 + 状态文字）的纪律网。
 //
 // 迁移自已退役的状态行测试（harness-chat lane B）：render-gating（shimmer 永动 fix）与
-// W3-② 回合级秒表两套契约在新载体上原样存活 —— 判据从「整行不渲染」改为「文字区沉默但
-// 头像在场」（G7 的本意是别双重叙述工具进度，头像是表情不是叙述，纪律不冲突）。
+// W3-② 回合级秒表两套契约在新载体上原样存活。
 // 新增：TurnPresenceRow 阶段矩阵（直驱展示层）+ celebrate 时序（假时钟）+ 接线纪律
 // （isLast / readOnly）。
+//
+// 🔴 0813 dogfood 轮 5（C）——「运行条整条退役，实时叙述搬到这里」。本文件相应改判两处：
+//   · calling-tool / writing 从「文字沉默」改为**出文字**（接管退役运行条那份 label 集，
+//     含工具人话名）；awaiting-approval 仍沉默（审批卡即状态，这条没被推翻）。
+//   · 秒表覆盖到所有进行中的阶段（含 calling-tool / writing），且跨阶段不清零；title 换成
+//     `chat.runStatus.elapsed`（「本回合已运行」—— 它答的是整回合，不是单次工具调用）。
 //
 // 组件测试驱动 REAL ai-sdk runtime 管线（useAISDKRuntime → AISDKMessageConverter →
 // external store），与 thread_running_guard.test.tsx 同一套 harness，故 stage 机读到的
@@ -74,21 +79,24 @@ function allowMotion(): void {
 
 // --- TurnPresenceRow — 阶段纪律矩阵（直驱展示层，无 runtime） -------------------------------
 //
-// 文字区显隐纪律（文件头规格）：connecting/thinking 出 shimmer；stalled 静态两档文案；
-// error 静态红字；writing/calling-tool/awaiting-approval 沉默（正文/工具卡/审批卡自述）——
-// 但头像全程在场，data-bot-state 按 §6.4 映射换表情。
+// 文字区显隐纪律（文件头规格，0813 轮 5 改判后）：connecting/thinking/calling-tool/writing 各出
+// 各的 shimmer 短语；stalled 静态两档文案；error 静态红字；awaiting-approval 沉默（审批卡即状态）
+// —— 头像全程在场，data-bot-state 按 §6.4 映射换表情。
 
 describe('TurnPresenceRow — 阶段纪律矩阵', () => {
   const silence = (): void => {
     expect(screen.queryByText('AI 思考中…')).toBeNull()
+    expect(screen.queryByText('正在连接…')).toBeNull()
+    expect(screen.queryByText('正在回复…')).toBeNull()
+    expect(screen.queryByText(/^正在.+…$/)).toBeNull()
     expect(screen.queryByText(/仍在等待响应/)).toBeNull()
     expect(screen.queryByText('响应出错')).toBeNull()
   }
 
-  test('connecting → waking + shimmer 文案', () => {
+  test('connecting → waking + 「正在连接…」（0813 轮 5 起接管运行条的 connecting 短语）', () => {
     render(<TurnPresenceRow stage="connecting" stallLevel={0} completed={false} />)
     expect(screen.getByTestId('turn-presence').dataset.botState).toBe('waking')
-    expect(screen.getByText('AI 思考中…')).toBeTruthy()
+    expect(screen.getByText('正在连接…')).toBeTruthy()
   })
 
   test('thinking → thinking + shimmer 文案', () => {
@@ -97,19 +105,46 @@ describe('TurnPresenceRow — 阶段纪律矩阵', () => {
     expect(screen.getByText('AI 思考中…')).toBeTruthy()
   })
 
-  test('calling-tool → searching，文字沉默（工具卡自述，G7）', () => {
-    render(<TurnPresenceRow stage="calling-tool" stallLevel={0} completed={false} />)
+  // 🔴 轮 5 C-① 的核心：工具阶段出「正在<工具人话名>…」，人话名走 `toolTitleKey`（工具卡那份表）。
+  test('calling-tool → searching + 「正在<工具人话名>…」（复用 toolTitleKey）', () => {
+    render(
+      <TurnPresenceRow
+        stage="calling-tool"
+        stallLevel={0}
+        completed={false}
+        toolName="web_search"
+      />
+    )
     expect(screen.getByTestId('turn-presence').dataset.botState).toBe('searching')
-    silence()
+    // chat.toolTitle.web_search = 「联网搜索」→「正在联网搜索…」
+    expect(screen.getByText('正在联网搜索…')).toBeTruthy()
   })
 
-  test('writing → writing，文字沉默（正文自述）', () => {
+  test('calling-tool + 词表外的裸工具名 → 原样落回，绝不出缺翻译占位符', () => {
+    render(
+      <TurnPresenceRow
+        stage="calling-tool"
+        stallLevel={0}
+        completed={false}
+        toolName="mcp__notion__search"
+      />
+    )
+    expect(screen.getByText('正在mcp__notion__search…')).toBeTruthy()
+    expect(screen.queryByText(/chat\.toolTitle/)).toBeNull()
+  })
+
+  test('calling-tool 但拿不到工具名 → 退回通用「思考中」，不拼半句话', () => {
+    render(<TurnPresenceRow stage="calling-tool" stallLevel={0} completed={false} />)
+    expect(screen.getByText('AI 思考中…')).toBeTruthy()
+  })
+
+  test('writing → writing + 「正在回复…」', () => {
     render(<TurnPresenceRow stage="writing" stallLevel={0} completed={false} />)
     expect(screen.getByTestId('turn-presence').dataset.botState).toBe('writing')
-    silence()
+    expect(screen.getByText('正在回复…')).toBeTruthy()
   })
 
-  test('awaiting-approval → notifying，文字沉默（审批卡即状态）', () => {
+  test('awaiting-approval → notifying，文字沉默（审批卡即状态 —— 这条没被轮 5 推翻）', () => {
     render(<TurnPresenceRow stage="awaiting-approval" stallLevel={0} completed={false} />)
     expect(screen.getByTestId('turn-presence').dataset.botState).toBe('notifying')
     silence()
@@ -128,7 +163,7 @@ describe('TurnPresenceRow — 阶段纪律矩阵', () => {
     expect(screen.getByTestId('turn-presence').dataset.botState).toBe('sad')
     const text = screen.getByText('响应出错')
     expect(text.className).toContain('text-fail')
-    expect(screen.queryByTitle('耗时')).toBeNull()
+    expect(screen.queryByTitle('本回合已运行')).toBeNull()
   })
 
   test('idle 挂载帧 → 整行不渲染（挂载不是下降沿，无幽灵 celebrate）', () => {
@@ -287,13 +322,13 @@ describe('TurnPresence — render gating（永动 fix 迁移 + 接线纪律）',
     render(
       <Harness status="streaming" messages={[USER, { id: 'a1', role: 'assistant', parts: [] }]} />
     )
-    await waitFor(() => expect(screen.getByText('AI 思考中…')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('正在连接…')).toBeTruthy())
     expect(screen.getByTestId('turn-presence').dataset.botState).toBe('waking')
   })
 
-  // 阶段 0.5-① G7 的纪律在新载体上的形态：工具执行中**文字区**沉默（工具卡自己报进度/耗时，
-  // 不双重叙述），但头像在场换 searching 表情 —— 表情不是叙述，不与工具卡竞争。
-  test('running + tool executing → 文字沉默，头像 searching 在场', async () => {
+  // 🔴 0813 轮 5（C）改判：工具执行中**出文字**（owner 要的正是这份「更多更及时」的叙述，
+  // 而它的原载体运行条已退役）。工具名从生产同源的 parts 派生，经 toolTitleKey 落人话名。
+  test('running + tool executing → 头像 searching + 「正在<工具人话名>…」', async () => {
     render(
       <Harness
         status="streaming"
@@ -304,7 +339,7 @@ describe('TurnPresence — render gating（永动 fix 迁移 + 接线纪律）',
             role: 'assistant',
             parts: [
               {
-                type: 'tool-email_search',
+                type: 'tool-web_search',
                 toolCallId: 't1',
                 state: 'input-available',
                 input: { q: 'x' }
@@ -316,6 +351,7 @@ describe('TurnPresence — render gating（永动 fix 迁移 + 接线纪律）',
     )
     await waitFor(() => expect(screen.getByTestId('tool')).toBeTruthy())
     expect(screen.getByTestId('turn-presence').dataset.botState).toBe('searching')
+    expect(screen.getByText('正在联网搜索…')).toBeTruthy()
     expect(screen.queryByText('AI 思考中…')).toBeNull()
     expect(screen.queryByText(/仍在等待响应/)).toBeNull()
   })
@@ -345,6 +381,7 @@ describe('TurnPresence — render gating（永动 fix 迁移 + 接线纪律）',
     await waitFor(() => expect(screen.getByTestId('tool')).toBeTruthy())
     expect(screen.getByTestId('turn-presence').dataset.botState).toBe('notifying')
     expect(screen.queryByText('AI 思考中…')).toBeNull()
+    expect(screen.queryByText(/^正在.+…$/)).toBeNull()
     expect(screen.queryByText(/仍在等待响应/)).toBeNull()
   })
 
@@ -402,34 +439,37 @@ describe('TurnPresence — render gating（永动 fix 迁移 + 接线纪律）',
     // 等一个渲染周期，确认从未出现。
     await new Promise((resolve) => setTimeout(resolve, 50))
     expect(screen.queryByTestId('turn-presence')).toBeNull()
-    expect(screen.queryByText('AI 思考中…')).toBeNull()
+    expect(screen.queryByText('正在连接…')).toBeNull()
   })
 })
 
-// --- W3-② 回合级秒表（迁移） ------------------------------------------------------------------
+// --- W3-② 回合级秒表（迁移 + 0813 轮 5 C-② 扩面） ---------------------------------------------
 //
 // 同一口渲染器时钟（useToolElapsed），三条契约照旧：没起点不编数、reduced-motion 不 tick
 // （于是整条秒表不出现，而不是冻在一个骗人的 0.0s）、终态不挂读数。
+// 轮 5 扩面：覆盖到**所有进行中的**阶段（含 calling-tool / writing），且跨阶段**不清零** ——
+// `useToolElapsed` 在 live 翻假时是冻结（cleanup 取终值）而非清零，起点存在实例 ref 里。
 
 describe('TurnPresence — W3-② 回合级秒表', () => {
   const running = [USER, { id: 'a1', role: 'assistant', parts: [] }]
+  const CLOCK = '本回合已运行'
 
   test('reduced-motion（套件默认）→ 不 tick，也就没有秒表', async () => {
     render(<Harness status="streaming" messages={running} />)
-    await waitFor(() => expect(screen.getByText('AI 思考中…')).toBeTruthy())
+    await waitFor(() => expect(screen.getByText('正在连接…')).toBeTruthy())
     await new Promise((resolve) => setTimeout(resolve, 400))
-    expect(screen.queryByTitle('耗时')).toBeNull()
+    expect(screen.queryByTitle(CLOCK)).toBeNull()
   })
 
   test('motion allowed → connecting/thinking 阶段秒表在走', async () => {
     allowMotion()
     try {
       render(<Harness status="streaming" messages={running} />)
-      await waitFor(() => expect(screen.getByTitle('耗时')).toBeTruthy())
-      const first = screen.getByTitle('耗时').textContent ?? ''
+      await waitFor(() => expect(screen.getByTitle(CLOCK)).toBeTruthy())
+      const first = screen.getByTitle(CLOCK).textContent ?? ''
       expect(first).toMatch(/^\d+(\.\d)?[sm]/)
       // 自己在长 —— 这是「秒表」，不是挂载那一刻冻住的数。
-      await waitFor(() => expect(screen.getByTitle('耗时').textContent).not.toBe(first), {
+      await waitFor(() => expect(screen.getByTitle(CLOCK).textContent).not.toBe(first), {
         timeout: 2000
       })
     } finally {
@@ -437,7 +477,9 @@ describe('TurnPresence — W3-② 回合级秒表', () => {
     }
   })
 
-  test('工具执行中 → 秒表不挂（G7：工具卡自己报时），头像仍在场', async () => {
+  // 🔴 轮 5 C-② 的改判：工具执行中**也走表**（回合表答的是「这一整回合跑了多久」，与工具卡
+  // 自己那口「这一次调用多久」并存，owner 明确要前者）。
+  test('工具执行中 → 秒表照走（0813 轮 5 改判：不再让位给工具卡）', async () => {
     allowMotion()
     try {
       render(
@@ -457,7 +499,70 @@ describe('TurnPresence — W3-② 回合级秒表', () => {
       )
       await waitFor(() => expect(screen.getByTestId('tool')).toBeTruthy())
       expect(screen.getByTestId('turn-presence')).toBeTruthy()
-      expect(screen.queryByTitle('耗时')).toBeNull()
+      await waitFor(() => expect(screen.getByTitle(CLOCK)).toBeTruthy(), { timeout: 2000 })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  test('正文流式中 → 秒表照走', async () => {
+    allowMotion()
+    try {
+      render(
+        <Harness
+          status="streaming"
+          messages={[
+            USER,
+            { id: 'a1', role: 'assistant', parts: [{ type: 'text', text: '半句' }] }
+          ]}
+        />
+      )
+      // getAllByText：motion allowed 下 ShimmerText 是 base + hi 双层，同一句话有两个节点。
+      await waitFor(() => expect(screen.getAllByText('正在回复…').length).toBeGreaterThan(0))
+      await waitFor(() => expect(screen.getByTitle(CLOCK)).toBeTruthy(), { timeout: 2000 })
+    } finally {
+      vi.unstubAllGlobals()
+    }
+  })
+
+  // 🔴 跨阶段不清零：审批门（唯一「进行中但不走表」的阶段）前后，读数必须**接着**原起点走，
+  // 而不是批准后从 0.0s 重新开始。判据是「批准后的读数 ≥ 进审批门之前那一格」。
+  test('🔴 审批门前后不清零：批准后的读数接着原起点走', async () => {
+    allowMotion()
+    try {
+      const view = render(<TurnPresenceRow stage="thinking" stallLevel={0} completed={false} />)
+      await waitFor(() => expect(screen.getByTitle(CLOCK)).toBeTruthy(), { timeout: 2000 })
+      // 等到读数长起来，取一个非零的基准。
+      await waitFor(
+        () =>
+          expect(Number.parseFloat(screen.getByTitle(CLOCK).textContent ?? '0')).toBeGreaterThan(
+            0.2
+          ),
+        { timeout: 2000 }
+      )
+      const before = Number.parseFloat(screen.getByTitle(CLOCK).textContent ?? '0')
+
+      // 进审批门：秒表整块不渲染（审批卡即状态）。
+      view.rerender(<TurnPresenceRow stage="awaiting-approval" stallLevel={0} completed={false} />)
+      expect(screen.queryByTitle(CLOCK)).toBeNull()
+
+      // 批准 → 回到工具执行：读数接着走，绝不回到 0.x。
+      view.rerender(
+        <TurnPresenceRow
+          stage="calling-tool"
+          stallLevel={0}
+          completed={false}
+          toolName="web_search"
+        />
+      )
+      await waitFor(() => expect(screen.getByTitle(CLOCK)).toBeTruthy(), { timeout: 2000 })
+      await waitFor(
+        () =>
+          expect(
+            Number.parseFloat(screen.getByTitle(CLOCK).textContent ?? '0')
+          ).toBeGreaterThanOrEqual(before),
+        { timeout: 2000 }
+      )
     } finally {
       vi.unstubAllGlobals()
     }

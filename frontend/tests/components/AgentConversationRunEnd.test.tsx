@@ -81,9 +81,6 @@ vi.mock('@shared/assistant/runtime/useBackgroundChatRun', () => ({
     return { backgroundActive: false, backgroundStartedAt: null }
   }
 }))
-vi.mock('@shared/assistant/components/ThreadRunStatusBar', () => ({
-  ThreadRunStatusBar: () => null
-}))
 vi.mock('@shared/components/agents/AgentRecordView', () => ({
   AgentRecordConversation: () => <div data-testid="agent-record" />
 }))

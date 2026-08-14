@@ -59,9 +59,9 @@ interface AgentThreadProps {
    *  抽屉侧栏会给（它们把 activeEmailId 传进 AgentConversation）；事项 chip 在 /sessions 也可能
    *  出现（历史里选中一个事项会话）。都没有 → 宿主传 null → chip 行整个不渲染。 */
   contextChip?: React.ReactNode
-  /** WP-14 — the composer-anchored run status bar (ThreadRunStatusBar), mounted inside the sticky
-   *  ViewportFooter so it rides with the composer instead of scrolling away with the stream.
-   *  Self-gating (renders null when nothing is running) → omitting it is a byte-identical thread. */
+  /** composer 上方的常驻带（sticky ViewportFooter 内，跟着 composer 走、不随消息流滚走）。
+   *  WP-14 时它装的是运行条；0813 轮 5 运行条整条退役（实时叙述搬进消息流的回合头像行），这里
+   *  现在只剩事项控件 / 输入队列条这类「贴着输入框」的东西。各自门控，省略即字节级现状。 */
   runStatusSlot?: React.ReactNode
   /** Matters G-20 — 事项对话的空态标题/副标题（设计稿："the empty state names the matter"）。
    *  省略 → 通用 greetings 一字不变。 */
@@ -128,7 +128,7 @@ export function AgentThread({
             )}
           >
             <AgentScrollToBottom />
-            {/* WP-14 — 回合级运行条（进行中才渲染），在 context chip / composer 之上。 */}
+            {/* composer 上方的常驻带（事项控件等），各自门控。 */}
             {runStatusSlot}
             {/* assistant-modal P5 — removable context chips（当前邮件 / 当前事项）。
               0813 轮4批AE：它们**不再**渲染在这里 —— owner 参照 Notion 要求上下文 chip 与附件

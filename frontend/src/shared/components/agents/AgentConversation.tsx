@@ -44,7 +44,7 @@ import { useApprovalDecideBusy } from '@shared/assistant/useApprovalDecideBusy'
 import { PendingApprovalPanel } from '@shared/assistant/PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from '@shared/assistant/runtime/flags'
 import { ChatComposerControlsProvider } from '@shared/assistant/components/composerControls'
-import { ThreadRunStatusBar } from '@shared/assistant/components/ThreadRunStatusBar'
+import { BackgroundRunPresence } from '@shared/assistant/components/TurnPresence'
 import { type ChatComposerControls } from '@shared/assistant/components/composerControlsContext'
 import { useAgentContextSnapshot } from '@shared/assistant/context/useAgentContextSnapshot'
 import type { CapabilityContext, ContextScope } from '@shared/assistant/context/contextSnapshot'
@@ -652,7 +652,7 @@ export function AgentConversation({
 
   // B3 (07-15, 无灵动岛方案优先) — the actionable in-panel approval card for a reloaded MANUAL
   // session whose paused approval is still live in the gateway stash. Rides AgentThread's
-  // pendingSlot. (B1 的「AI 仍在后台输出」提示 WP-14 起收编进 composer 上方的运行条，见下。)
+  // pendingSlot.
   const pendingApprovalCard =
     useAiSdkRuntime &&
     gatewayBaseUrl != null &&
@@ -668,20 +668,23 @@ export function AgentConversation({
         onDecideBusyChange={onDecideBusyChange}
       />
     ) : undefined
-  const pendingSlotContent = pendingApprovalCard
-  // WP-14 — 回合级运行条（阶段短语 / 当前工具名 / 回合秒表 + detached run 的 ageMs 接续）。
-  // 住在 AgentThread 的 sticky ViewportFooter 里，跟着 composer 走、不随消息流滚走。
-  // 事项控件（缺口卡 + 检索范围）与运行条同住这个槽：它们都属于 composer 上方的常驻带，
-  // 跟着 composer 走、不随消息流滚走。非事项对话时 matter.controls 为 null → 字节级现状。
-  const runStatusSlot = (
+  // 0813 轮 5（D）—— 后台 run 的在场行也走 pendingSlot（它 WP-14 之前的老家），呈现与回合头像行
+  // 同一套「头像 + 状态 + 秒表」。🔴 不能挂 TurnPresence：那个必须在 message scope 里
+  // （`message.isLast`），而切回来时后台 run 可能还没产出任何 part —— 宿主消息根本不存在。
+  // 对齐类跟 AgentAssistantMessage 的消息列（同一个 max-width 列 + px-1）。
+  const pendingSlotContent = (
     <>
-      {matter.controls}
-      <ThreadRunStatusBar
-        backgroundActive={backgroundActive}
-        backgroundStartedAt={backgroundStartedAt}
+      {pendingApprovalCard}
+      <BackgroundRunPresence
+        active={backgroundActive}
+        startedAt={backgroundStartedAt}
+        className="mx-auto mb-4 w-full max-w-[var(--thread-max-width)] px-1"
       />
     </>
   )
+  // 事项控件（缺口卡 + 检索范围）住 composer 上方的常驻带，跟着 composer 走、不随消息流滚走。
+  // 非事项对话时 matter.controls 为 null → 该槽整个不出内容。
+  const runStatusSlot = matter.controls
 
   // Phase 10b — turn-complete handler (AgentThread's running→idle edge). Two jobs:
   //  (1) refresh the unified history on a session's FIRST completed turn so a brand-new conversation

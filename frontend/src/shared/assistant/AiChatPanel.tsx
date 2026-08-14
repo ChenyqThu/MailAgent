@@ -56,8 +56,7 @@ import { useApprovalDecideBusy } from './useApprovalDecideBusy'
 import { PendingApprovalPanel } from './PendingApprovalPanel'
 import { resolveAiGatewayBaseUrl } from './runtime/flags'
 import { AssistantThread } from './components/thread'
-import { AssistantPanelBotAvatar } from './components/TurnPresence'
-import { ThreadRunStatusBar } from './components/ThreadRunStatusBar'
+import { AssistantPanelBotAvatar, BackgroundRunPresence } from './components/TurnPresence'
 import { QueuedInputBar } from './components/QueuedInputBar'
 import { ChatComposerControlsProvider } from './components/composerControls'
 import type { ChatComposerControls } from './components/composerControlsContext'
@@ -585,26 +584,28 @@ export function AIChatPanel({
       />
     ) : undefined
   // B1 — "AI 仍在后台输出" while a detached run streams for this session (truth = /api/ai/run/active);
-  // the settle transition reloads + re-seeds automatically. WP-14 收编：这块提示原先是 pendingSlot 里
-  // 一张随消息流滚动的卡，现在长在 composer 上方的运行条里（ThreadRunStatusBar，下面挂载）——
-  // 旧位置不再渲染，不留双份。
-  const pendingSlotContent = pendingApprovalCard
-  // WP-14 — 回合级运行条：阶段/工具名/秒表自取 thread 作用域，detached run 的秒表用 ageMs 接续。
-  // mx-3 对齐 composer 的 px-3 内距（它住在 Viewport 之外、composer 之上）。
-  const runStatusSlot = (
+  // the settle transition reloads + re-seeds automatically. 0813 轮 5（D）：这块提示**回到**
+  // pendingSlot（它 WP-14 之前的老家），只是呈现换成了与回合头像行同一套「头像 + 状态 + 秒表」。
+  // 🔴 为什么不能挂 TurnPresence：那个必须在 message scope 里（`message.isLast`），而切回来时后台
+  // run 可能还没产出任何 part —— 那条 assistant 消息根本不存在，没有宿主。pendingSlot 在消息流内、
+  // 消息之外，不受这条约束。
+  const pendingSlotContent = (
     <>
-      <QueuedInputBar
-        enabled={queuedInputEnabled}
-        gatewayBaseUrl={gatewayBaseUrl}
-        sessionId={chat.activeSessionId}
-        approvalPendingExists={approvalPendingExists}
-      />
-      <ThreadRunStatusBar
-        backgroundActive={backgroundActive}
-        backgroundStartedAt={backgroundStartedAt}
-        className="mx-3 mb-2"
+      {pendingApprovalCard}
+      <BackgroundRunPresence
+        active={backgroundActive}
+        startedAt={backgroundStartedAt}
+        className="mb-4"
       />
     </>
+  )
+  const runStatusSlot = (
+    <QueuedInputBar
+      enabled={queuedInputEnabled}
+      gatewayBaseUrl={gatewayBaseUrl}
+      sessionId={chat.activeSessionId}
+      approvalPendingExists={approvalPendingExists}
+    />
   )
 
   // Sidebar session preview cache (lazy on open).
@@ -922,9 +923,8 @@ export function AIChatPanel({
                         runningRef={aiSdkRunningRef}
                         onRunningChange={setAiSdkRunning}
                       />
-                      {/* pendingSlot — B3 in-panel approval card (undefined when it doesn't apply →
-                          byte-identical thread); runStatusSlot — WP-14 的 composer 上方运行条
-                          （不在跑时自己渲染 null）。 */}
+                      {/* pendingSlot — B3 in-panel approval card + 后台 run 在场行（两者都自门控，
+                          不适用时渲染 null）；runStatusSlot — composer 上方的输入队列条。 */}
                       <AssistantThread
                         pendingSlot={pendingSlotContent}
                         runStatusSlot={runStatusSlot}
