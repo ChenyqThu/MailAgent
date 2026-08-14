@@ -85,6 +85,10 @@ CROSS_LANGUAGE_FLAGS = {
     # 🔴 双侧默认必须同为 false（灰度未 cutover）；翻默认两边一起翻，否则会出现「run 起得来但
     # 提案端点 403（唯一产出通道没了、白烧一轮 LLM）」或反过来「端点开着却没有 run 能到达」。
     "MAILAGENT_MATTER_AGENT_ENABLED": [_LIFECYCLE, _CONFIG],
+    # 通讯录总闸（Contact Directory WP1/WP2）：Python pydantic 单载体（serve-api
+    # /api/contacts 门 + /chat/config contactsEnabled 投影 + 扫描器 run_tick 门都读
+    # 同一冻结单例）。登记防改名漏侧；WP7 gateway 工具注入真变双载体时在此加 _LIFECYCLE。
+    "MAILAGENT_CONTACTS_ENABLED": [_CONFIG],
 }
 
 # cutover 5 openness flag：Node envBool 默认 vs Python _hot_bool 字面量，须逐字相等。
@@ -175,6 +179,37 @@ def test_cutover_flag_defaults_consistent():
 # (tests/config/test_flag_cross_language.py)" 是句空话（映射表只断言 env 键**出现**，不看默认值）。
 # 🔴 期望值显式登记而不是「两侧相等即可」：cutover 是要人拍板的动作，写死期望值能让「谁把默认
 # 悄悄翻了」也变成红，而不只是拦住「只翻一侧」。
+# pydantic **单载体** flag 的默认值登记（与上面双载体表同理：期望值显式写死，
+# 「谁把默认悄悄翻了」= 红，cutover 是要人拍板的动作）。单载体没有 Node envBool
+# 可比对，所以不进 NODE_PYDANTIC_DUAL_CARRIER_FLAGS（那张表的 canary 会因
+# lifecycle 缺键而误红）。
+PYDANTIC_SINGLE_CARRIER_FLAGS = {
+    # env 键 → (pydantic 字段名, 期望默认)
+    # 通讯录总闸（Contact Directory）：灰度默认关（ship-off → dogfood → cutover 另拍）。
+    "MAILAGENT_CONTACTS_ENABLED": ("contacts_enabled", False),
+}
+
+
+def test_pydantic_single_carrier_defaults_match_expected():
+    """pydantic 单载体 flag：config.py 默认值等于登记的期望值。"""
+    config_fields = p.parse_config_fields()
+    drift = []
+    for env_key, (field_name, expected) in PYDANTIC_SINGLE_CARRIER_FLAGS.items():
+        py_default = p.config_bool_default(field_name, config_fields)
+        assert py_default is not None, (
+            f"canary miss: config.py {field_name} 默认不是 bool 常量（改名了？漏 "
+            f"validation_alias={env_key}？）"
+        )
+        if py_default is not expected:
+            drift.append(
+                f"{env_key}: config.py {field_name} 默认={py_default} —— 期望 {expected}"
+            )
+    assert not drift, (
+        "pydantic 单载体 flag 默认值漂移（cutover 需人拍板，不许悄悄翻）：\n"
+        + "\n".join(f"  {d}" for d in drift)
+    )
+
+
 NODE_PYDANTIC_DUAL_CARRIER_FLAGS = {
     # env 键 → (pydantic 字段名, 两侧期望默认)
     # MCP connector 总闸：灰度未 cutover（ship-off → dogfood → cutover 另拍）。

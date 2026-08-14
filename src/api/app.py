@@ -201,6 +201,15 @@ ERROR_CODE_TO_HTTP: dict[str, int] = {
     "E_DEPENDENCY_EXISTS": 409,
     "E_PROPOSAL_EXISTS": 409,  # Matters P4: 每 run 至多一个提案
     "E_MATTER_SCOPE": 403,  # Matters P4: email 读越出 matter 关联域（headless 守卫）
+    # Contact Directory (task 08-13 WP2, src/contacts/service.py ContactError 值域)
+    "E_CONTACT_NOT_FOUND": 404,
+    "E_CONTACT_EMAIL_NOT_FOUND": 404,
+    "E_CONTACT_MERGED": 409,
+    "E_PRIMARY_EMAIL_CANNOT_BE_FORMER": 409,  # 曾用守卫: 先换主邮箱
+    "E_INVALID_KIND": 400,
+    "E_INVALID_EMAIL": 400,
+    "E_INVALID_FIELD": 400,
+    "E_MERGE_SELF": 400,
 }
 
 
@@ -398,6 +407,7 @@ from src.api.routers import (  # noqa: E402
     calendar,
     chat,
     connector,
+    contacts,
     email,
     email_views,
     exec as exec_router,  # 'exec' 是内建名，别名避免遮蔽
@@ -434,6 +444,9 @@ app.include_router(email_views.router)
 app.include_router(jobs.router)
 app.include_router(reports.router)
 app.include_router(matters.router)
+# Contact Directory WP2 (task 08-13) — /api/contacts* 列表聚合/详情/关联/治理写面；
+# verify_cf_access + require_contacts_enabled (flag off 全 E_DISABLED)。
+app.include_router(contacts.router)
 # Matters P4 (D6) — matter run 提案内部端点 /api/matters/{id}/runs/{rid}/proposal。
 # verify_local_token（不接受 CF JWT，Remote Web 不可调）+ matters/matter_agent 双 flag 门；
 # 唯一调用方 = embedded gateway 的 matter_update_propose 工具。

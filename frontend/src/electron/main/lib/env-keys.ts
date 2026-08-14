@@ -191,6 +191,9 @@ export const MANAGED_ENV_KEYS = [
   'MAILAGENT_MATTERS_ENABLED',
   // 事项跟进 Agent（定时 + 手动 run + 提案评审）：同为双载体，且只在上面那个开着时有意义。
   'MAILAGENT_MATTER_AGENT_ENABLED',
+  // 通讯录（Contact Directory WP1/WP2）：Python pydantic 单载体（导航 /chat/config
+  // 投影 + /api/contacts REST + 扫描器）；默认 OFF；需重启后端。
+  'MAILAGENT_CONTACTS_ENABLED',
 
   // — Notifications (PR D NotificationsTab)
   'FEISHU_NOTIFY_ENABLED',

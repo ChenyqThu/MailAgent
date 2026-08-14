@@ -10,25 +10,29 @@ import { create } from 'zustand'
 
 interface ComposeNewStore {
   open: boolean
-  /** 打开写新邮件模态。 */
-  openCompose(): void
+  /** 预填收件人（通讯录「写邮件」等入口；null = 空表单）。仅在打开那一刻消费，
+   *  关闭即清 —— 下一次 ⌘N 不带上一次的人。 */
+  prefillTo: string | null
+  /** 打开写新邮件模态（可选预填收件人）。 */
+  openCompose(prefillTo?: string): void
   /** 关闭 (发送成功 / 放弃 / ESC)。 */
   close(): void
 }
 
 export const useComposeNewStore = create<ComposeNewStore>((set) => ({
   open: false,
-  openCompose() {
-    set({ open: true })
+  prefillTo: null,
+  openCompose(prefillTo?: string) {
+    set({ open: true, prefillTo: prefillTo ?? null })
   },
   close() {
-    set({ open: false })
+    set({ open: false, prefillTo: null })
   }
 }))
 
-/** 模块级 helper for 非 React 调用方 (keymap / sidebar 按钮)。 */
-export function openNewCompose(): void {
-  useComposeNewStore.getState().openCompose()
+/** 模块级 helper for 非 React 调用方 (keymap / sidebar 按钮 / 通讯录)。 */
+export function openNewCompose(prefillTo?: string): void {
+  useComposeNewStore.getState().openCompose(prefillTo)
 }
 
 export function closeNewCompose(): void {

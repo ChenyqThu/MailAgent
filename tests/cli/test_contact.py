@@ -123,11 +123,15 @@ def test_backfill_dry_run_migrates_old_db_first(
     payload = extract_last_json_object(result.output)
     assert payload["status"] == "success"
     assert payload["data"]["dry_run"] is True
-    # SyncStore init 已把库迁到 v54: 三表在场 + matter_contact 数据迁入 (id 保持)
+    # SyncStore init 已把库迁到当前版本: 三表在场 + matter_contact 数据迁入 (id 保持)。
+    # 版本号引用 SyncStore.DB_VERSION 而非手抄字面量 —— 本测试盯的是「迁移发生过」，
+    # 不是某个具体版本号（v55 起字面量 pin 每次 bump 都要来改这里）。
+    from src.mail.sync_store import SyncStore as _SyncStore
+
     with sqlite3.connect(old_version_db) as conn:
         assert conn.execute(
             "SELECT value FROM sync_state WHERE key='db_version'"
-        ).fetchone()[0] == "54"
+        ).fetchone()[0] == str(_SyncStore.DB_VERSION)
         assert conn.execute(
             "SELECT display_name FROM contact WHERE id=42"
         ).fetchone()[0] == "Legacy"

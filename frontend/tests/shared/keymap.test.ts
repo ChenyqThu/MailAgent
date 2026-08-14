@@ -23,7 +23,7 @@ describe('SHORTCUTS catalog', () => {
       expect(def.id).toBeTruthy()
       expect(def.spec).toBeTruthy()
       expect(def.display).toBeTruthy()
-      expect(['global', 'inbox', 'row', 'chat', 'calendar']).toContain(def.scope)
+      expect(['global', 'inbox', 'row', 'chat', 'calendar', 'contacts']).toContain(def.scope)
       expect(def.labelKey).toMatch(/^shortcutHelp\.binding\./)
       expect(typeof def.wired).toBe('boolean')
     }
@@ -55,6 +55,7 @@ describe('SHORTCUTS catalog', () => {
 
   test('SCOPE_ORDER is exhaustive', () => {
     // 阶段2·2.7 — calendar scope 收编进统一登记面 (ux-benchmark §五-5)
-    expect(SCOPE_ORDER).toEqual(['global', 'inbox', 'row', 'chat', 'calendar'])
+    // WP2 — contacts scope（通讯录 j/k 导航）随 08-13 通讯录批收编。
+    expect(SCOPE_ORDER).toEqual(['global', 'inbox', 'row', 'chat', 'calendar', 'contacts'])
   })
 })

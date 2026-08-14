@@ -490,6 +490,7 @@ CONTACT_TABLE_DDLS = (
         is_self INTEGER NOT NULL DEFAULT 0 CHECK (is_self IN (0, 1)),
         hidden_at INTEGER NULL,
         identity_locked_at INTEGER NULL,
+        identity_locks_json TEXT NULL CHECK (identity_locks_json IS NULL OR json_valid(identity_locks_json)),
         profile_json TEXT NULL CHECK (profile_json IS NULL OR json_valid(profile_json)),
         profile_updated_at INTEGER NULL,
         profile_mail_count INTEGER NULL,
@@ -1096,7 +1097,16 @@ class SyncStore:
     #                回滚 (回退 v54): 新三表可留 (旧代码零消费点); 但 matter_contact
     #                已 DROP、stakeholder FK 已改指 contact —— 回退版本的 matters 写面
     #                会因缺表失败, 真要回退需从 backups/ 恢复库。
-    DB_VERSION = 54
+    # v55 (Contact Directory WP2, task 08-13, 2026-08): contact +identity_locks_json
+    #                (字段级锁定 {field: epoch_ms}, 键域单源 src/contacts/taxonomy.py
+    #                CONTACT_LOCKABLE_FIELDS)。🔴 它是锁的**唯一真源**;
+    #                identity_locked_at 降级为聚合派生 (= 锁映射 MAX, 无锁 NULL),
+    #                由 src/contacts/service.py 单一写径维护, 供老读侧兼容。seed:
+    #                存量 identity_locked_at 非 NULL 的行折成
+    #                {"display_name": identity_locked_at} —— WP1 期的锁全部来自
+    #                matters 写穿改名, 语义就是 display_name 锁。
+    #                回滚 (回退 v55): 列留着无害 (旧代码零消费点)。
+    DB_VERSION = 55
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -3497,6 +3507,45 @@ class SyncStore:
             except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
                 raise SyncStoreMigrationError(
                     f"v54 migration (stakeholder rebuild): {e}"
+                ) from e
+
+        # === v55: contact 字段级锁定列 (task 08-13 WP2) ===
+        # additive ALTER (探列幂等, 镜像 v53 形状) + seed: 老锁 (identity_locked_at
+        # 非 NULL) 全部来自 matters 写穿改名 ⇒ 折成 display_name 字段锁, seed 后
+        # scanner 的 display_name 锁判据与老库行为等价。fresh 库满梯子在 v54 块
+        # 建表时已带该列 (CONTACT_TABLE_DDLS 最新形), 探列后跳过 ALTER。
+        if current_version < 55:
+            try:
+                cursor.execute("PRAGMA table_info(contact)")
+                _contact_cols_v55 = {row[1] for row in cursor.fetchall()}
+                if "identity_locks_json" not in _contact_cols_v55:
+                    cursor.execute(
+                        "ALTER TABLE contact ADD COLUMN identity_locks_json TEXT "
+                        "CHECK (identity_locks_json IS NULL "
+                        "OR json_valid(identity_locks_json))"
+                    )
+                    logger.info("v55 migration: contact +identity_locks_json")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "contact", {"identity_locks_json"}, "v55 migration", e,
+                )
+            # seed 是 DML, 与 DDL 分 try, 真失败必须 raise (v51/v52 教训)。幂等:
+            # WHERE identity_locks_json IS NULL 只补空位, 重入不覆盖。
+            try:
+                cursor.execute(
+                    "UPDATE contact SET identity_locks_json = "
+                    "json_object('display_name', identity_locked_at) "
+                    "WHERE identity_locked_at IS NOT NULL "
+                    "AND identity_locks_json IS NULL"
+                )
+                if cursor.rowcount:
+                    logger.info(
+                        f"v55 migration: seeded display_name lock on "
+                        f"{cursor.rowcount} contact row(s)"
+                    )
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(
+                    f"v55 migration (identity_locks seed): {e}"
                 ) from e
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块

@@ -73,7 +73,7 @@ import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
  *  加列加表, 不删不改语义)。bump 后端 schema 时**仍建议**同步抬高此下限保持语义清晰,
  *  但漏改不再致命 (admin.py 用 `= _SyncStore.DB_VERSION` 动态引用, 无此问题)。 */
 // v54: Contact Directory 三表 + matter_contact 迁移退役 (task 08-13 WP1).
-export const EXPECTED_DB_VERSION = 54
+export const EXPECTED_DB_VERSION = 55
 
 /** 就绪判据的关键表子集 (02-landing-plan.md P1-6)。admin.py REQUIRED_TABLES 更全,
  *  但开窗门控只需保证「邮件读写主路径」已建: 元数据 / 正文 SSoT / outbox +

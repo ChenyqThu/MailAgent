@@ -30,6 +30,9 @@ export type ShortcutScope =
    *  useCalendarShortcuts window listener; CalendarShortcutModal derives
    *  its rows from this scope). */
   | 'calendar'
+  /** Active when the contacts page is mounted (useContactKeyboardNav's
+   *  document listener — j/k + ↑/↓ list navigation). */
+  | 'contacts'
 
 export interface ShortcutDef {
   /** Stable id used by tests + telemetry. */
@@ -377,6 +380,24 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
     scope: 'calendar',
     labelKey: 'shortcutHelp.binding.calHelp',
     wired: true
+  },
+
+  // ── Contacts（通讯录 WP2）— registration lives in useContactKeyboardNav ──
+  {
+    id: 'contactsNavDown',
+    spec: 'j',
+    display: 'J / ↓',
+    scope: 'contacts',
+    labelKey: 'shortcutHelp.binding.contactsNavDown',
+    wired: true
+  },
+  {
+    id: 'contactsNavUp',
+    spec: 'k',
+    display: 'K / ↑',
+    scope: 'contacts',
+    labelKey: 'shortcutHelp.binding.contactsNavUp',
+    wired: true
   }
 ] as const
 
@@ -393,7 +414,8 @@ export function groupByScope(): Record<ShortcutScope, ShortcutDef[]> {
     inbox: [],
     row: [],
     chat: [],
-    calendar: []
+    calendar: [],
+    contacts: []
   }
   for (const s of SHORTCUTS) out[s.scope].push(s)
   return out
@@ -405,5 +427,6 @@ export const SCOPE_ORDER: ReadonlyArray<ShortcutScope> = [
   'inbox',
   'row',
   'chat',
-  'calendar'
+  'calendar',
+  'contacts'
 ]

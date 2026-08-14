@@ -1,0 +1,943 @@
+// 人物档案页（设计 §2.2，WP2 无画像）：档案头（含裸邮箱降级 D8 + 就地改名落锁）
+// → 画像卡「未开启」引导态（唯二例外之一；robot/list/is_self 换一行说明）→ 身份
+// 信息（邮箱锚点主/曾用 + 字段行点击即编辑 + 枚举 chips + 锁 pill + 手记 + 名字
+// 变体）→ 关联邮件（角色过滤 + 加载更多）→ 关联事项。
+// 危险操作全收进「更多操作」菜单（🔒 不放行内悬浮危险钮）；「合并」不渲染（WP3）。
+
+import { useEffect, useMemo, useRef, useState } from 'react'
+import { useInfiniteQuery, useMutation } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
+import { useTranslation } from 'react-i18next'
+import {
+  ArrowDownLeft,
+  ArrowLeft,
+  ArrowUpRight,
+  ChevronRight,
+  Copy,
+  MoreHorizontal,
+  PenLine,
+  Sparkles
+} from 'lucide-react'
+
+import type {
+  ContactEmailDto,
+  ContactLockableField,
+  ContactMailRole,
+  ContactPatchBody
+} from '@shared/api/types/contact'
+import {
+  CONTACT_FUNCTION_VALUES,
+  CONTACT_SENIORITY_VALUES
+} from '@shared/api/types/contact'
+import { MatterPip } from '@shared/components/matters/MatterPip'
+import {
+  MATTER_STATUS_ICONS,
+  MATTER_STATUS_TONES
+} from '@shared/components/matters/matterVocab'
+import type { MatterStatus } from '@shared/api/types/matter'
+import { useMatterNavigation } from '@shared/components/matters/navigation'
+import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
+import { SegmentedControl } from '@shared/components/ui/segmented'
+import { cn } from '@shared/lib/cn'
+import { errorMessage } from '@shared/lib/ipcErrors'
+import { formatMatterAgo } from '@shared/lib/matterDerive'
+import { qk } from '@shared/lib/queryKeys'
+import { openNewCompose } from '@shared/state/compose-new'
+import { useActiveEmail } from '@shared/state/active-email'
+import { toastError, toastSuccess } from '@shared/state/toast'
+
+import { Monogram } from './Monogram'
+import { HiddenPip, KindPip, LockPill, SelfPip, TwoWayBar } from './parts'
+import { useContactDetail, useContactMatters, useContactsApi, useInvalidateContact } from './hooks'
+import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
+
+const MAIL_PAGE_SIZE = 6
+const MAIL_ROLES: readonly ContactMailRole[] = ['all', 'from', 'to', 'cc']
+
+/** field → i18n 标签键（toast「{field} 已保存并锁定」与字段行共用一份）。 */
+const FIELD_LABEL_KEY: Record<ContactLockableField, string> = {
+  display_name: 'contacts.field.name',
+  name_en: 'contacts.field.nameEn',
+  organization: 'contacts.field.org',
+  department: 'contacts.field.dept',
+  role_title: 'contacts.field.role',
+  phone: 'contacts.field.phone',
+  function: 'contacts.field.fn',
+  seniority: 'contacts.field.level'
+}
+
+function fmtMonth(ms: number, locale: string): string {
+  return new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short' }).format(ms)
+}
+
+// ── 字段行（点击即编辑 → PATCH 落锁；行尾锁 pill 可切换）──────────────────────
+
+function FieldRow({
+  field,
+  value,
+  locked,
+  onSave,
+  onToggleLock
+}: {
+  field: ContactLockableField
+  value: string | null
+  locked: boolean
+  onSave(next: string): void
+  onToggleLock(): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [editing, setEditing] = useState(false)
+  const [draft, setDraft] = useState('')
+  const commit = (): void => {
+    setEditing(false)
+    if (draft.trim() !== (value ?? '')) onSave(draft.trim())
+  }
+  return (
+    <div className="flex items-center gap-2 py-1">
+      <span className="w-20 shrink-0 text-meta text-ink-fg-3">{t(FIELD_LABEL_KEY[field])}</span>
+      {editing ? (
+        <input
+          autoFocus
+          value={draft}
+          onChange={(event) => setDraft(event.target.value)}
+          onBlur={commit}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') commit()
+            if (event.key === 'Escape') setEditing(false)
+          }}
+          className="h-7 min-w-0 flex-1 rounded-[var(--r-ctl)] border border-coral/50 bg-ink-1 px-2 text-body text-ink-fg outline-none"
+        />
+      ) : (
+        <button
+          type="button"
+          title={t('contacts.detail.editHint')}
+          onClick={() => {
+            setDraft(value ?? '')
+            setEditing(true)
+          }}
+          className="min-w-0 flex-1 truncate rounded-[var(--r-ctl)] px-1 py-0.5 text-left text-body text-ink-fg hover:bg-ink-3"
+        >
+          {value || <span className="text-ink-fg-3">—</span>}
+        </button>
+      )}
+      <LockPill locked={locked} onToggle={onToggleLock} />
+    </div>
+  )
+}
+
+// ── 枚举行（职能 / 职级 = chips 选择）─────────────────────────────────────────
+
+function EnumRow({
+  field,
+  value,
+  values,
+  locked,
+  labelOf,
+  onSave,
+  onToggleLock
+}: {
+  field: ContactLockableField
+  value: string | null
+  values: readonly string[]
+  locked: boolean
+  labelOf(value: string): string
+  onSave(next: string | null): void
+  onToggleLock(): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
+  return (
+    <div className="py-1">
+      <div className="flex items-center gap-2">
+        <span className="w-20 shrink-0 text-meta text-ink-fg-3">{t(FIELD_LABEL_KEY[field])}</span>
+        <button
+          type="button"
+          onClick={() => setOpen((next) => !next)}
+          className="min-w-0 flex-1 truncate rounded-[var(--r-ctl)] px-1 py-0.5 text-left text-body text-ink-fg hover:bg-ink-3"
+        >
+          {value ? labelOf(value) : <span className="text-ink-fg-3">—</span>}
+        </button>
+        <LockPill locked={locked} onToggle={onToggleLock} />
+      </div>
+      {open ? (
+        <div className="ml-[88px] mt-1 flex flex-wrap gap-1">
+          {values.map((candidate) => (
+            <button
+              key={candidate}
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                if (candidate !== value) onSave(candidate)
+              }}
+              className={cn(
+                'rounded-full border px-2 py-0.5 text-micro leading-4',
+                candidate === value
+                  ? 'border-coral/40 bg-coral/10 text-coral'
+                  : 'border-ink-border text-ink-fg-2 hover:bg-ink-3'
+              )}
+            >
+              {labelOf(candidate)}
+            </button>
+          ))}
+          {value ? (
+            <button
+              type="button"
+              onClick={() => {
+                setOpen(false)
+                onSave(null)
+              }}
+              className="rounded-full border border-ink-border px-2 py-0.5 text-micro leading-4 text-ink-fg-3 hover:bg-ink-3"
+            >
+              {t('contacts.enum.clear')}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+    </div>
+  )
+}
+
+// ── 邮箱锚点行 ────────────────────────────────────────────────────────────────
+
+function EmailAnchorRow({
+  email,
+  locale,
+  onSetPrimary,
+  onSetFormer
+}: {
+  email: ContactEmailDto
+  locale: string
+  onSetPrimary(address: string): void
+  onSetFormer(address: string, former: boolean): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [menuOpen, setMenuOpen] = useState(false)
+  const triggerRef = useRef<HTMLButtonElement>(null)
+  const former = email.former_at != null
+  const range =
+    email.first_seen_at != null && email.last_seen_at != null
+      ? t('contacts.email.meta', {
+          n: email.mail_count,
+          from: fmtMonth(email.first_seen_at, locale),
+          to: fmtMonth(email.last_seen_at, locale)
+        })
+      : undefined
+  const items: PopmenuItem[] = [
+    {
+      kind: 'action',
+      id: 'primary',
+      label: t(former ? 'contacts.email.setPrimaryRestore' : 'contacts.email.setPrimary'),
+      onSelect: () => onSetPrimary(email.address)
+    },
+    {
+      kind: 'action',
+      id: 'former',
+      label: t(former ? 'contacts.email.unformer' : 'contacts.email.former'),
+      onSelect: () => onSetFormer(email.address, !former)
+    },
+    {
+      kind: 'action',
+      id: 'copy',
+      icon: <Copy size={12} />,
+      label: t('contacts.email.copy'),
+      onSelect: () => {
+        void navigator.clipboard?.writeText(email.address)
+        toastSuccess(t('contacts.email.copied', { email: email.address }))
+      }
+    }
+  ]
+  return (
+    <div
+      className={cn(
+        'relative flex items-center gap-2 rounded-[var(--r-card)] border px-2.5 py-2',
+        email.is_primary
+          ? 'border-coral/40 bg-coral/5'
+          : former
+            ? 'border-dashed border-ink-border'
+            : 'border-ink-border'
+      )}
+      title={range}
+    >
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-center gap-1.5">
+          <span
+            className={cn(
+              'truncate font-mono text-meta text-ink-fg',
+              former && 'text-ink-fg-2 line-through'
+            )}
+          >
+            {email.address}
+          </span>
+          {email.is_primary ? (
+            <span className="shrink-0 rounded-full border border-coral/40 bg-coral/10 px-1.5 py-px text-micro leading-4 text-coral">
+              {t('contacts.email.primary')}
+            </span>
+          ) : null}
+          {former ? (
+            <span className="shrink-0 rounded-full border border-ink-border bg-ink-2 px-1.5 py-px text-micro leading-4 text-ink-fg-3">
+              {t('contacts.email.formerPip')}
+            </span>
+          ) : null}
+        </div>
+        <div className="font-mono text-micro tabular-nums text-ink-fg-3">{email.mail_count}</div>
+      </div>
+      {!email.is_primary ? (
+        <>
+          <button
+            ref={triggerRef}
+            type="button"
+            aria-label={t('contacts.row.more')}
+            onClick={() => setMenuOpen((open) => !open)}
+            className="shrink-0 rounded-[var(--r-ctl)] p-1 text-ink-fg-3 hover:bg-ink-3 hover:text-ink-fg-1"
+          >
+            <MoreHorizontal size={14} />
+          </button>
+          <Popmenu
+            open={menuOpen}
+            onClose={() => setMenuOpen(false)}
+            ariaLabel={t('contacts.row.more')}
+            items={items}
+            triggerRef={triggerRef}
+            align="end"
+            width={240}
+          />
+        </>
+      ) : null}
+    </div>
+  )
+}
+
+// ── 关联邮件 ──────────────────────────────────────────────────────────────────
+
+function ContactMailList({ contactId }: { contactId: number }): React.ReactElement {
+  const { t, i18n } = useTranslation()
+  const api = useContactsApi()
+  const navigate = useNavigate()
+  const setActiveEmail = useActiveEmail((state) => state.setActive)
+  const [role, setRole] = useState<ContactMailRole>('all')
+  // render 期不许调 Date.now()（react-hooks/purity）—— 挂载时取一次快照。
+  const [now] = useState(() => Date.now())
+  const query = useInfiniteQuery({
+    queryKey: qk.contacts.mails(contactId, role),
+    queryFn: ({ pageParam }) =>
+      api.listMails(contactId, { role, cursor: pageParam, limit: MAIL_PAGE_SIZE }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    staleTime: 30_000
+  })
+  const items = useMemo(
+    () => (query.data?.pages ?? []).flatMap((page) => page.items),
+    [query.data]
+  )
+  const total = query.data?.pages[0]?.total ?? 0
+  const remaining = Math.max(0, total - items.length)
+  return (
+    <section>
+      <div className="mb-2 flex items-center justify-between gap-2">
+        <h3 className="text-meta font-medium uppercase tracking-wide text-ink-fg-3">
+          {t('contacts.section.mails')}
+        </h3>
+        <SegmentedControl<ContactMailRole>
+          size="sm"
+          ariaLabel={t('contacts.section.mails')}
+          value={role}
+          onChange={(next) => setRole(next)}
+          options={MAIL_ROLES.map((value) => ({
+            value,
+            label: t(`contacts.mail.filter.${value}`)
+          }))}
+        />
+      </div>
+      {items.length === 0 && !query.isPending ? (
+        <div className="py-3 text-meta text-ink-fg-3">{t('contacts.mail.empty')}</div>
+      ) : (
+        <div className="space-y-px">
+          {items.map((mail) => {
+            const fromThem = mail.roles.includes('sender')
+            return (
+              <button
+                key={mail.internal_id}
+                type="button"
+                onClick={() => {
+                  setActiveEmail(mail.internal_id)
+                  void navigate({ to: '/' })
+                }}
+                className="flex w-full items-center gap-2 rounded-[var(--r-row)] px-2 py-1.5 text-left hover:bg-ink-3"
+              >
+                {fromThem ? (
+                  <ArrowDownLeft size={13} className="shrink-0 text-ink-fg-3" />
+                ) : (
+                  <ArrowUpRight size={13} className="shrink-0 text-ink-fg-3" />
+                )}
+                <span className="min-w-0 flex-1 truncate text-body text-ink-fg">
+                  {mail.subject || '—'}
+                </span>
+                <span className="shrink-0 rounded-full border border-ink-border px-1.5 py-px text-micro leading-4 text-ink-fg-3">
+                  {t(
+                    fromThem
+                      ? 'contacts.mail.filter.from'
+                      : mail.roles.includes('cc') && !mail.roles.includes('to')
+                        ? 'contacts.mail.filter.cc'
+                        : 'contacts.mail.filter.to'
+                  )}
+                </span>
+                <span className="shrink-0 font-mono text-micro tabular-nums text-ink-fg-3">
+                  {mail.seen_at != null
+                    ? formatMatterAgo(mail.seen_at, now, i18n.language || 'zh-CN')
+                    : ''}
+                </span>
+              </button>
+            )
+          })}
+        </div>
+      )}
+      {query.hasNextPage ? (
+        <button
+          type="button"
+          disabled={query.isFetchingNextPage}
+          onClick={() => void query.fetchNextPage()}
+          className="mt-2 w-full rounded-[var(--r-ctl)] border border-ink-border px-2 py-1.5 text-meta text-ink-fg-1 hover:bg-ink-3 disabled:opacity-50"
+        >
+          {t('contacts.mail.more', { n: remaining })}
+        </button>
+      ) : null}
+    </section>
+  )
+}
+
+// ── 关联事项 ──────────────────────────────────────────────────────────────────
+
+function ContactMatterList({ contactId }: { contactId: number }): React.ReactElement {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const openMatter = useMatterNavigation((state) => state.open)
+  const query = useContactMatters(contactId, true)
+  const items = query.data?.items ?? []
+  return (
+    <section>
+      <h3 className="mb-2 text-meta font-medium uppercase tracking-wide text-ink-fg-3">
+        {t('contacts.section.matters')}
+      </h3>
+      {items.length === 0 ? (
+        <div className="py-2 text-meta text-ink-fg-3">{t('contacts.matters.empty')}</div>
+      ) : (
+        <div className="space-y-px">
+          {items.map((matter) => {
+            const status = matter.status as MatterStatus
+            const StatusIcon = MATTER_STATUS_ICONS[status]
+            return (
+              <button
+                key={matter.matter_id}
+                type="button"
+                onClick={() => {
+                  openMatter(matter.public_id)
+                  void navigate({ to: '/matters' })
+                }}
+                className="flex w-full items-center gap-2 rounded-[var(--r-row)] px-2 py-1.5 text-left hover:bg-ink-3"
+              >
+                {StatusIcon ? (
+                  <MatterPip tone={MATTER_STATUS_TONES[status] ?? 'neutral'} icon={StatusIcon}>
+                    {t(`matters.status.${matter.status}`, { defaultValue: matter.status })}
+                  </MatterPip>
+                ) : null}
+                <span className="min-w-0 flex-1 truncate text-body text-ink-fg">
+                  {matter.title}
+                </span>
+                {matter.role ? (
+                  <span className="shrink-0 truncate text-meta text-ink-fg-3">{matter.role}</span>
+                ) : null}
+                <ChevronRight size={13} className="shrink-0 text-ink-fg-3" />
+              </button>
+            )
+          })}
+        </div>
+      )}
+    </section>
+  )
+}
+
+// ── 档案页 ────────────────────────────────────────────────────────────────────
+
+export interface ContactDetailProps {
+  contactId: number
+  /** <860px 单列态返回列表。 */
+  onBack?: () => void
+  /** 治理动作与列表行共用一份（改判/隐藏/self —— 同一套 toast 与失效）。 */
+  actions: Pick<ContactRowActions, 'onSetKind' | 'onToggleSelf' | 'onToggleHidden'>
+  showBack: boolean
+}
+
+export function ContactDetail({
+  contactId,
+  onBack,
+  actions,
+  showBack
+}: ContactDetailProps): React.ReactElement {
+  const { t, i18n } = useTranslation()
+  const locale = i18n.language || 'zh-CN'
+  const navigate = useNavigate()
+  const api = useContactsApi()
+  const invalidate = useInvalidateContact()
+  const detailQuery = useContactDetail(contactId, true)
+  const detail = detailQuery.data
+  // render 期不许调 Date.now()（react-hooks/purity）—— MatterDetail 同款快照模式。
+  const [now] = useState(() => Date.now())
+
+  const [nameEditing, setNameEditing] = useState(false)
+  const [nameDraft, setNameDraft] = useState('')
+  const [notesDraft, setNotesDraft] = useState<string | null>(null)
+  const [headMenuOpen, setHeadMenuOpen] = useState(false)
+  const headMenuRef = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    setNameEditing(false)
+    setNotesDraft(null)
+    setHeadMenuOpen(false)
+  }, [contactId])
+
+  const patch = useMutation({
+    mutationFn: (body: ContactPatchBody) => api.patch(contactId, body),
+    onSuccess: async (result, body) => {
+      await invalidate(contactId)
+      const lockedFields = Object.keys(body).filter(
+        (field) => field !== 'notes'
+      ) as ContactLockableField[]
+      if (lockedFields.length > 0) {
+        toastSuccess(
+          t('contacts.toast.locked', { field: t(FIELD_LABEL_KEY[lockedFields[0]!]) })
+        )
+      }
+      void result
+    },
+    onError: (error) => toastError(t('contacts.toast.saveFailed'), errorMessage(error))
+  })
+  const setLock = useMutation({
+    mutationFn: (input: { field: ContactLockableField; locked: boolean }) =>
+      api.setLock(contactId, input.field, input.locked),
+    onSuccess: async (_result, input) => {
+      await invalidate(contactId)
+      if (input.locked) {
+        toastSuccess(t('contacts.toast.locked', { field: t(FIELD_LABEL_KEY[input.field]) }))
+      } else {
+        toastSuccess(t('contacts.toast.unlocked'))
+      }
+    },
+    onError: (error) => toastError(t('contacts.toast.saveFailed'), errorMessage(error))
+  })
+  const setPrimary = useMutation({
+    mutationFn: (email: string) => api.setPrimaryEmail(contactId, email),
+    onSuccess: async (_result, email) => {
+      await invalidate(contactId)
+      toastSuccess(t('contacts.toast.primary', { email }))
+    },
+    onError: (error) => toastError(t('contacts.toast.saveFailed'), errorMessage(error))
+  })
+  const setFormer = useMutation({
+    mutationFn: (input: { email: string; former: boolean }) =>
+      api.setEmailFormer(contactId, input.email, input.former),
+    onSuccess: async (_result, input) => {
+      await invalidate(contactId)
+      toastSuccess(t(input.former ? 'contacts.toast.former' : 'contacts.toast.unformer'))
+    },
+    onError: (error) => toastError(t('contacts.toast.saveFailed'), errorMessage(error))
+  })
+
+  if (!detail) {
+    return <div className="h-full min-h-0 overflow-y-auto scrollbar-none" />
+  }
+
+  const locks = detail.identity_locks
+  const primaryEmail =
+    detail.emails.find((email) => email.is_primary)?.address ?? detail.emails[0]?.address ?? null
+  const bare = !detail.display_name
+  const localPart = primaryEmail?.split('@')[0] ?? '—'
+  const subtitleParts = [detail.organization, detail.department, detail.role_title].filter(Boolean)
+  const rowLike: ContactGovernanceTarget = {
+    id: detail.id,
+    display_name: detail.display_name,
+    kind: detail.kind,
+    is_self: detail.is_self,
+    hidden_at: detail.hidden_at,
+    primary_email: primaryEmail
+  }
+
+  const commitName = (): void => {
+    setNameEditing(false)
+    const next = nameDraft.trim()
+    if (next !== (detail.display_name ?? '')) patch.mutate({ display_name: next })
+  }
+
+  const headMenuItems: PopmenuItem[] = [
+    ...(['robot', 'list', 'person'] as const)
+      .filter((kind) => kind !== detail.kind)
+      .map(
+        (kind): PopmenuItem => ({
+          kind: 'action',
+          id: `kind-${kind}`,
+          label: t(
+            kind === 'robot'
+              ? 'contacts.action.kindRobot'
+              : kind === 'list'
+                ? 'contacts.action.kindList'
+                : 'contacts.action.kindPerson'
+          ),
+          onSelect: () => actions.onSetKind(rowLike, kind)
+        })
+      ),
+    {
+      kind: 'action',
+      id: 'self',
+      label: t(detail.is_self ? 'contacts.action.unmarkSelf' : 'contacts.action.markSelf'),
+      onSelect: () => actions.onToggleSelf(rowLike)
+    },
+    {
+      kind: 'action',
+      id: 'hide',
+      label: t(detail.hidden_at != null ? 'contacts.action.unhide' : 'contacts.action.hide'),
+      onSelect: () => actions.onToggleHidden(rowLike)
+    }
+  ]
+
+  const compose = (): void => {
+    openNewCompose(primaryEmail ?? undefined)
+    if (primaryEmail) toastSuccess(t('contacts.toast.composePrefill', { email: primaryEmail }))
+  }
+
+  return (
+    <div className="h-full min-h-0 overflow-y-auto scrollbar-none">
+      <div className="mx-auto max-w-[720px] px-4 pb-10 pt-4">
+        {/* 已隐藏横条 */}
+        {detail.hidden_at != null ? (
+          <div className="mb-3 flex items-center gap-2 rounded-[var(--r-card)] border border-ink-border bg-ink-2 px-3 py-2">
+            <HiddenPip />
+            <span className="min-w-0 flex-1 text-meta text-ink-fg-2">
+              {t('contacts.toast.hidden', { name: detail.display_name ?? primaryEmail ?? '' })}
+            </span>
+            <button
+              type="button"
+              onClick={() => actions.onToggleHidden(rowLike)}
+              className="shrink-0 rounded-[var(--r-ctl)] border border-ink-border px-2 py-1 text-meta text-ink-fg-1 hover:bg-ink-3"
+            >
+              {t('contacts.action.unhide')}
+            </button>
+          </div>
+        ) : null}
+
+        {/* ── 档案头 ── */}
+        <div className="flex items-start gap-3">
+          {showBack ? (
+            <button
+              type="button"
+              onClick={onBack}
+              aria-label={t('contacts.nav.title')}
+              className="mt-2 shrink-0 rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 hover:bg-ink-3"
+            >
+              <ArrowLeft size={16} />
+            </button>
+          ) : null}
+          <Monogram
+            displayName={detail.display_name}
+            primaryEmail={primaryEmail}
+            kind={detail.kind}
+            size={48}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+              {nameEditing ? (
+                <input
+                  autoFocus
+                  value={nameDraft}
+                  onChange={(event) => setNameDraft(event.target.value)}
+                  onBlur={commitName}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') commitName()
+                    if (event.key === 'Escape') setNameEditing(false)
+                  }}
+                  className="h-8 min-w-0 flex-1 rounded-[var(--r-ctl)] border border-coral/50 bg-ink-1 px-2 text-[18px] font-semibold text-ink-fg outline-none"
+                />
+              ) : (
+                <button
+                  type="button"
+                  title={t('contacts.detail.editHint')}
+                  onClick={() => {
+                    setNameDraft(detail.display_name ?? '')
+                    setNameEditing(true)
+                  }}
+                  className={cn(
+                    'min-w-0 truncate rounded-[var(--r-ctl)] text-left text-[22px] font-semibold leading-tight text-ink-fg hover:bg-ink-3',
+                    bare && 'italic text-ink-fg-1'
+                  )}
+                >
+                  {bare ? localPart : detail.display_name}
+                </button>
+              )}
+              {locks.display_name != null ? (
+                <span className="rounded-full border border-coral/40 bg-coral/10 px-1.5 py-px text-micro leading-4 text-coral">
+                  {t('contacts.detail.locked')}
+                </span>
+              ) : null}
+              {detail.is_self ? <SelfPip /> : null}
+              <KindPip kind={detail.kind} />
+              {detail.hidden_at != null ? <HiddenPip /> : null}
+            </div>
+            {bare ? (
+              <div className="mt-0.5 flex min-w-0 flex-wrap items-center gap-1.5 text-meta text-ink-fg-2">
+                <span className="truncate font-mono">{primaryEmail}</span>
+                <span className="rounded-full border border-ink-border bg-ink-2 px-1.5 py-px text-micro leading-4 text-ink-fg-3">
+                  {t('contacts.detail.bareOnly')}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setNameDraft('')
+                    setNameEditing(true)
+                  }}
+                  className="inline-flex items-center gap-1 text-micro text-coral hover:underline"
+                >
+                  <PenLine size={10} />
+                  {t('contacts.detail.addName')}
+                </button>
+              </div>
+            ) : (
+              <>
+                {detail.name_en ? (
+                  <div className="mt-0.5 truncate text-meta text-ink-fg-2">{detail.name_en}</div>
+                ) : null}
+                <div className="mt-0.5 truncate text-meta text-ink-fg-2">
+                  {subtitleParts.length > 0
+                    ? subtitleParts.join(' · ')
+                    : (primaryEmail ?? '')}
+                </div>
+              </>
+            )}
+            <div className="mt-2 max-w-[320px]">
+              <div className="text-micro font-mono tabular-nums text-ink-fg-3">
+                {t('contacts.stat.exchange', {
+                  n: detail.mail_count,
+                  sent: detail.sent_to_count
+                })}
+              </div>
+              <TwoWayBar
+                sent={detail.sent_to_count}
+                total={detail.mail_count}
+                className="mt-1"
+              />
+              {detail.first_seen_at != null && detail.last_seen_at != null ? (
+                <div className="mt-1 text-micro font-mono tabular-nums text-ink-fg-3">
+                  {t('contacts.stat.since', {
+                    date: fmtMonth(detail.first_seen_at, locale),
+                    ago: formatMatterAgo(detail.last_seen_at, now, locale)
+                  })}
+                </div>
+              ) : null}
+            </div>
+          </div>
+          <div className="flex shrink-0 items-center gap-1.5">
+            <button
+              type="button"
+              onClick={compose}
+              className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-meta font-medium text-accent-fg hover:bg-coral-hover"
+            >
+              {t('contacts.action.compose')}
+            </button>
+            <div className="relative">
+              <button
+                ref={headMenuRef}
+                type="button"
+                aria-label={t('contacts.row.more')}
+                onClick={() => setHeadMenuOpen((open) => !open)}
+                className="rounded-[var(--r-ctl)] border border-ink-border p-1.5 text-ink-fg-2 hover:bg-ink-3"
+              >
+                <MoreHorizontal size={14} />
+              </button>
+              <Popmenu
+                open={headMenuOpen}
+                onClose={() => setHeadMenuOpen(false)}
+                ariaLabel={t('contacts.row.more')}
+                items={headMenuItems}
+                triggerRef={headMenuRef}
+                align="end"
+                width={220}
+              />
+            </div>
+          </div>
+        </div>
+
+        {/* ── 画像卡位（WP2：仅「未开启」引导态；非人/自己换一行说明）── */}
+        <div className="mt-5">
+          {detail.kind !== 'person' ? (
+            <div className="flex items-center gap-2 rounded-[var(--r-card)] border border-ink-border bg-ink-1 px-3 py-2.5 text-meta text-ink-fg-2">
+              <span className="min-w-0 flex-1">
+                {t('contacts.profile.notPerson', { kind: t(`contacts.kind.${detail.kind}`) })}
+              </span>
+              <button
+                type="button"
+                onClick={() => actions.onSetKind(rowLike, 'person')}
+                className="shrink-0 rounded-[var(--r-ctl)] border border-ink-border px-2 py-1 text-meta text-ink-fg-1 hover:bg-ink-3"
+              >
+                {t('contacts.action.kindPerson')}
+              </button>
+            </div>
+          ) : detail.is_self ? (
+            <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-1 px-3 py-2.5 text-meta text-ink-fg-2">
+              {t('contacts.profile.selfNote')}
+            </div>
+          ) : (
+            <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-1 px-3.5 py-3">
+              <div className="flex items-center gap-1.5 text-meta font-medium text-ink-fg-1">
+                <Sparkles size={13} className="text-ink-fg-3" />
+                {t('contacts.profile.title')}
+                <span className="text-ink-fg-3">· {t('contacts.profile.off')}</span>
+              </div>
+              <p className="mt-1.5 text-meta leading-relaxed text-ink-fg-2">
+                {t('contacts.profile.offHint')}
+              </p>
+              <button
+                type="button"
+                onClick={() => void navigate({ to: '/agents', search: { tab: 'agents' } })}
+                className="mt-2 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1 text-meta text-ink-fg-1 hover:bg-ink-3"
+              >
+                {t('contacts.profile.offCta')}
+              </button>
+            </div>
+          )}
+        </div>
+
+        {/* ── 身份信息 ── */}
+        <section className="mt-6">
+          <h3 className="mb-2 text-meta font-medium uppercase tracking-wide text-ink-fg-3">
+            {t('contacts.section.emails')}
+          </h3>
+          <div className="space-y-1.5">
+            {detail.emails.map((email) => (
+              <EmailAnchorRow
+                key={email.address}
+                email={email}
+                locale={locale}
+                onSetPrimary={(address) => setPrimary.mutate(address)}
+                onSetFormer={(address, former) => setFormer.mutate({ email: address, former })}
+              />
+            ))}
+          </div>
+
+          <h3 className="mb-1 mt-5 text-meta font-medium uppercase tracking-wide text-ink-fg-3">
+            {t('contacts.section.identity')}
+          </h3>
+          <p className="mb-1 text-micro text-ink-fg-3">{t('contacts.detail.editHint')}</p>
+          <div className="divide-y divide-ink-border-soft">
+            <FieldRow
+              field="display_name"
+              value={detail.display_name}
+              locked={locks.display_name != null}
+              onSave={(next) => patch.mutate({ display_name: next })}
+              onToggleLock={() =>
+                setLock.mutate({ field: 'display_name', locked: locks.display_name == null })
+              }
+            />
+            <FieldRow
+              field="name_en"
+              value={detail.name_en}
+              locked={locks.name_en != null}
+              onSave={(next) => patch.mutate({ name_en: next })}
+              onToggleLock={() =>
+                setLock.mutate({ field: 'name_en', locked: locks.name_en == null })
+              }
+            />
+            <FieldRow
+              field="organization"
+              value={detail.organization}
+              locked={locks.organization != null}
+              onSave={(next) => patch.mutate({ organization: next })}
+              onToggleLock={() =>
+                setLock.mutate({ field: 'organization', locked: locks.organization == null })
+              }
+            />
+            <FieldRow
+              field="department"
+              value={detail.department}
+              locked={locks.department != null}
+              onSave={(next) => patch.mutate({ department: next })}
+              onToggleLock={() =>
+                setLock.mutate({ field: 'department', locked: locks.department == null })
+              }
+            />
+            <FieldRow
+              field="role_title"
+              value={detail.role_title}
+              locked={locks.role_title != null}
+              onSave={(next) => patch.mutate({ role_title: next })}
+              onToggleLock={() =>
+                setLock.mutate({ field: 'role_title', locked: locks.role_title == null })
+              }
+            />
+            <FieldRow
+              field="phone"
+              value={detail.phone}
+              locked={locks.phone != null}
+              onSave={(next) => patch.mutate({ phone: next })}
+              onToggleLock={() => setLock.mutate({ field: 'phone', locked: locks.phone == null })}
+            />
+            <EnumRow
+              field="function"
+              value={detail.function}
+              values={CONTACT_FUNCTION_VALUES}
+              locked={locks.function != null}
+              labelOf={(value) => t(`contacts.fn.${value}`)}
+              onSave={(next) => patch.mutate({ function: next as never })}
+              onToggleLock={() =>
+                setLock.mutate({ field: 'function', locked: locks.function == null })
+              }
+            />
+            <EnumRow
+              field="seniority"
+              value={detail.seniority}
+              values={CONTACT_SENIORITY_VALUES}
+              locked={locks.seniority != null}
+              labelOf={(value) => t(`contacts.level.${value}`)}
+              onSave={(next) => patch.mutate({ seniority: next as never })}
+              onToggleLock={() =>
+                setLock.mutate({ field: 'seniority', locked: locks.seniority == null })
+              }
+            />
+          </div>
+
+          <h3 className="mb-1 mt-5 flex items-baseline gap-2 text-meta font-medium uppercase tracking-wide text-ink-fg-3">
+            {t('contacts.section.notes')}
+            <span className="text-micro font-normal normal-case tracking-normal">
+              {t('contacts.section.notesHint')}
+            </span>
+          </h3>
+          <textarea
+            value={notesDraft ?? detail.notes ?? ''}
+            onChange={(event) => setNotesDraft(event.target.value)}
+            onBlur={() => {
+              if (notesDraft !== null && notesDraft !== (detail.notes ?? '')) {
+                patch.mutate({ notes: notesDraft })
+              }
+              setNotesDraft(null)
+            }}
+            rows={3}
+            className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 px-2.5 py-2 text-body text-ink-fg outline-none placeholder:text-ink-fg-3 focus:border-coral/50"
+          />
+
+          {detail.name_variants.length > 0 ? (
+            <div className="mt-3 text-micro text-ink-fg-3">
+              <span className="mr-1.5">{t('contacts.field.variants')}</span>
+              <span title={t('contacts.field.variantsHint')}>
+                {detail.name_variants.join(' · ')}
+              </span>
+            </div>
+          ) : null}
+        </section>
+
+        {/* ── 关联邮件 / 关联事项 ── */}
+        <div className="mt-6">
+          <ContactMailList contactId={contactId} />
+        </div>
+        <div className="mt-6">
+          <ContactMatterList contactId={contactId} />
+        </div>
+      </div>
+    </div>
+  )
+}

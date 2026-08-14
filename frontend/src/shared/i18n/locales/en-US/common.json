@@ -461,7 +461,8 @@
       "inbox": "Inbox",
       "row": "Row",
       "chat": "AI chat",
-      "calendar": "Calendar"
+      "calendar": "Calendar",
+      "contacts": "Contacts"
     },
     "binding": {
       "commandPalette": "Command palette",
@@ -501,7 +502,9 @@
       "calHelp": "Open / close shortcut help",
       "filterUnread": "Filter: unread",
       "filterFlagged": "Filter: flagged",
-      "filterHasAttach": "Filter: has attachments"
+      "filterHasAttach": "Filter: has attachments",
+      "contactsNavDown": "Next contact",
+      "contactsNavUp": "Previous contact"
     }
   },
   "palette": {
@@ -2920,6 +2923,11 @@
       "matterAgent": {
         "helper": "Bind a follow-up agent to a matter: run it manually or on a schedule to diff changes read-only and propose an update you review item by item before anything is written. Adds attention signals and macOS notifications.",
         "restartHint": "Requires Matters. Takes effect after a backend restart; native notifications need an App restart."
+      },
+      "contacts": {
+        "label": "Contacts",
+        "helper": "Build people dossiers from your mail history automatically: a two-way-exchange-first list, identity fields with per-field locks, linked mail and matters. Zero manual entry; all data stays local.",
+        "restartHint": "Restart the backend and Contacts appears in the sidebar; the first run scans your mail history in the background."
       }
     },
     "accounts": {
@@ -5336,6 +5344,236 @@
         "nextWeek": "Next week",
         "thisMonth": "This month"
       }
+    }
+  },
+  "contacts": {
+    "nav": { "title": "Contacts" },
+    "list": { "count": "{count} people", "resize": "Drag to resize the list" },
+    "view": { "known": "People you email", "all": "All" },
+    "search": { "placeholder": "Search name, alias, email or org", "clear": "Clear search" },
+    "sort": { "label": "Sort", "density": "Exchange volume", "recent": "Most recent", "name": "Name" },
+    "density": { "label": "Density", "compact": "Compact", "comfortable": "Comfortable (with profile line)" },
+    "groupBy": {
+      "label": "Group by",
+      "none": "No grouping",
+      "company": "By company",
+      "dept": "By department",
+      "fn": "By function",
+      "level": "By seniority",
+      "ungrouped": "Ungrouped"
+    },
+    "group": {
+      "person": "People",
+      "robot": "Robots / noreply",
+      "list": "Lists / broadcasts",
+      "hidden": "Hidden",
+      "byManager": "By reporting line",
+      "reportsOf": "Reports to {name}",
+      "noManager": "No manager"
+    },
+    "kind": { "person": "Person", "robot": "Robot", "list": "List" },
+    "badge": { "self": "My address", "hidden": "Hidden", "dup": "Possible duplicate", "emails": "{n} addresses" },
+    "stat": { "exchange": "{n} messages · {sent} sent by me", "since": "Since {date} · last {ago}" },
+    "row": { "more": "More actions" },
+    "action": {
+      "open": "Open profile",
+      "compose": "New email",
+      "merge": "Merge with another record…",
+      "kindRobot": "Reclassify as robot",
+      "kindList": "Reclassify as list",
+      "kindPerson": "Reclassify as person",
+      "markSelf": "Mark as my address",
+      "unmarkSelf": "Unmark my address",
+      "hide": "Hide",
+      "unhide": "Unhide",
+      "select": "Select this (start multi-select)"
+    },
+    "select": {
+      "n": "{n} selected",
+      "merge": "Merge these two",
+      "mergeHint": "Merging needs exactly two records",
+      "exit": "Exit multi-select"
+    },
+    "backfill": {
+      "progress": "Building contacts from your mail · {scanned}/{total} scanned",
+      "dismiss": "Dismiss"
+    },
+    "empty": {
+      "library": "Building your contacts from mail…",
+      "libraryHint": "No manual entry needed. We scan your mail history on first run; people appear as the scan progresses.",
+      "search": "No contacts match “{q}”",
+      "searchHint": "Try the address prefix, or look in All for robots, lists and hidden addresses.",
+      "detail": "Pick someone to open their profile",
+      "filters": "No contacts match the current filters",
+      "filtersHint": "Try a different filter combination."
+    },
+    "disabled": {
+      "title": "Page not found or not enabled",
+      "hint": "Contacts is not enabled. Turn it on in Settings → Labs, then restart the backend."
+    },
+    "detail": {
+      "bareOnly": "Address only",
+      "addName": "Add a name",
+      "locked": "Locked",
+      "unlocked": "Unlocked",
+      "lockHint": "Locked: auto-extraction won’t overwrite this. Click to unlock",
+      "editHint": "Click a field to edit; edited fields get locked"
+    },
+    "section": {
+      "emails": "Email anchors",
+      "identity": "Identity",
+      "notes": "Notes",
+      "notesHint": "Only you can see this",
+      "mails": "Messages",
+      "matters": "Matters they’re in"
+    },
+    "field": {
+      "name": "Display name",
+      "nameEn": "English name",
+      "org": "Organization",
+      "dept": "Department",
+      "phone": "Phone",
+      "variants": "Name variants",
+      "fn": "Function",
+      "level": "Seniority",
+      "role": "Title (as signed)",
+      "variantsHint": "Collected automatically; searchable"
+    },
+    "enum": { "clear": "Clear" },
+    "fn": {
+      "tech": "Engineering",
+      "product": "Product",
+      "delivery": "Delivery",
+      "legal": "Legal",
+      "compliance": "Compliance",
+      "procurement": "Procurement",
+      "data": "Data",
+      "security": "Security",
+      "pm": "Program mgmt",
+      "maillist": "Mailing list",
+      "system": "System"
+    },
+    "level": {
+      "vp": "VP / Exec",
+      "director": "Director",
+      "lead": "Lead",
+      "manager": "Manager",
+      "staff": "Staff"
+    },
+    "org": {
+      "section": "Reporting",
+      "manager": "Manager",
+      "reports": "Reports",
+      "peers": "Colleagues (derived, not curated)",
+      "setManager": "Set manager",
+      "addReport": "Add report",
+      "noManager": "No manager yet · set one to CC in one click and group by reporting line",
+      "noReports": "Nobody reports to them yet",
+      "autoSrc": "Inferred from mail",
+      "suggestManager": "Manager (inferred from signatures and CC patterns)",
+      "composeCc": "Email them, CC their manager",
+      "unlink": "Unlink"
+    },
+    "email": {
+      "primary": "Primary",
+      "setPrimary": "Make primary",
+      "setPrimaryRestore": "Make primary (and restore in use)",
+      "meta": "{n} messages · {from}–{to}",
+      "formerPip": "Former",
+      "former": "Mark as former",
+      "unformer": "Restore in use",
+      "copy": "Copy address",
+      "copied": "Copied {email}"
+    },
+    "mail": {
+      "filter": { "all": "All", "from": "From them", "to": "From me", "cc": "CC’d" },
+      "more": "Load more ({n} left)",
+      "empty": "No messages yet"
+    },
+    "matters": { "empty": "No matters reference them yet" },
+    "profile": {
+      "title": "AI profile",
+      "topics": "Recurring topics",
+      "projects": "Shared projects",
+      "evolution": "Trajectory",
+      "evidence": "Evidence {ref}",
+      "contradiction": "Unresolved · {text}",
+      "provenance": "From {n} messages, {from}–{to} · {model} · {ago}",
+      "refresh": "Refresh profile",
+      "refreshing": "Generating…",
+      "aiRole": "Role inferred by AI",
+      "suggest": "Suggestions",
+      "adopt": "Adopt",
+      "ignore": "Ignore",
+      "adoptAll": "Adopt all",
+      "suggestHint": "Adopting writes the value into the identity field and locks it; ignoring only dismisses it this round. AI never edits identity fields directly.",
+      "off": "AI profiles are off",
+      "offHint": "Once on, the profile agent batch-reads your exchanges to write a profile and propose values from signatures. It only reads mail; it never edits identity fields.",
+      "offCta": "Enable the profile agent in Agents",
+      "threshold": "Not enough exchange yet",
+      "thresholdHint": "Generated automatically after {min} messages ({n} so far, {need} to go). You can also generate one now.",
+      "queued": "Threshold met · waiting for the next batch",
+      "queuedHint": "{n} messages, past the {min} threshold. The profile agent runs in low-frequency batches and will write it next round — or generate it now.",
+      "thresholdCta": "Generate now",
+      "insufficient": "Not enough substance for a profile",
+      "insufficientHint": "We read {n} messages, but they’re mostly forwards and one-line confirmations, so the model declined to write a profile this round. It will retry.",
+      "retry": "Try again",
+      "failed": "Last refresh failed",
+      "notPerson": "Marked as {kind}; no profile is generated. Reclassify as a person if that’s wrong.",
+      "selfNote": "This is your own address; no profile."
+    },
+    "merge": {
+      "title": "Merge contacts",
+      "sub": "Merge “{name}” with another record (usually a changed address)",
+      "previewTitle": "Review the merge",
+      "previewSub": "One record with both addresses. History and matters move to the surviving record.",
+      "searchPlaceholder": "Search name, alias or email",
+      "keepThis": "Keep this record’s name and identity",
+      "result": "After merge",
+      "pickPrimary": "Both addresses kept · pick the primary",
+      "loser": "{name} → tombstone (data kept, hidden from lists)",
+      "conflict": "Both records are stakeholders on “{matter}”. You’ll pick one role after merging — we won’t merge roles silently.",
+      "danger": "There’s no one-click undo. The data is recoverable, but only at the data layer — possible, yet painful. Check the result above first.",
+      "futureSuggest": "Automatic duplicate suggestions ship later (Phase 3) and will appear on this row, ranked by evidence.",
+      "back": "Pick another",
+      "confirm": "Merge",
+      "done": "Merged into one record with {n} addresses · the other is a tombstone"
+    },
+    "picker": {
+      "title": "Add stakeholders",
+      "sub": "{pub} · {title} — pick from contacts, or add by email",
+      "searchPlaceholder": "Search name, email or org — or paste an address",
+      "source": "Sorted by exchange volume · from your contacts",
+      "showAll": "Include lists and robots",
+      "onlyPeople": "People only",
+      "taken": "Already added",
+      "createByEmail": "Create a contact from this address",
+      "empty": "No contacts match",
+      "emptyHint": "Contacts only holds addresses you’ve exchanged mail with. To add someone new, type their address.",
+      "role": "Role on this matter",
+      "syncHint": "Names and titles always read from contacts; matters store no copy",
+      "add": "Add {n}"
+    },
+    "toast": {
+      "hidden": "“{name}” hidden · nothing deleted; find it under All",
+      "unhidden": "Unhidden",
+      "kind": "Reclassified as {kind} · sorting and default view follow",
+      "markSelf": "Marked as your address · removed from People you email",
+      "unmarkSelf": "Unmarked as your address",
+      "primary": "Primary address is now {email}",
+      "former": "Marked former · history kept; no longer a default recipient",
+      "unformer": "Back in use",
+      "locked": "{field} saved and locked · auto-extraction won’t overwrite",
+      "unlocked": "Unlocked · auto-extraction may overwrite",
+      "adopted": "Adopted · {field} “{value}” written and locked",
+      "ignored": "{field} suggestion dismissed · may return next round",
+      "profileRunning": "Generating the profile · takes minutes; feel free to leave",
+      "profileDone": "Profile updated",
+      "profileFailed": "Profile refresh failed · model timed out; previous version kept",
+      "composePrefill": "Compose opened with {email} prefilled",
+      "pickerAdded": "{n} stakeholders added · names and titles sync from contacts",
+      "pickerCreated": "Contact created from {email} and added to the matter",
+      "saveFailed": "Save failed"
     }
   }
 }

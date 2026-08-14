@@ -7,6 +7,7 @@
 // the last two glyphs, Latin names take the first letter of the first two words.
 
 import { cn } from '@shared/lib/cn'
+import { contactInitials } from '@shared/lib/personName'
 
 const AVATAR_SLOTS = 6
 
@@ -18,15 +19,10 @@ function avatarSlot(seed: string): number {
   return ((hash >>> 0) % AVATAR_SLOTS) + 1
 }
 
-/** Chinese → last 2 chars; Latin → first-letter of first two words; else first 2. */
-function contactInitials(name: string, email: string): string {
-  const src = (name || email.split('@')[0] || '').trim()
-  if (!src) return '?'
-  if (/[一-鿿]/.test(src)) return src.slice(-2)
-  const parts = src.split(/[\s.]+/).filter(Boolean)
-  if (parts.length >= 2) return (parts[0]![0]! + parts[1]![0]!).toUpperCase()
-  return src.slice(0, 2).toUpperCase()
-}
+// initials（Chinese → last 2 chars; Latin → first two word initials）口径下沉
+// @shared/lib/personName —— 通讯录 Monogram（WP2）复用同一份，react-refresh 规则
+// 不许组件文件兼职导出工具函数。⚠️ 色板 `.avatar-1..6` 不外借 —— 通讯录 D10 是
+// 8 档 hue 环 + 固定亮饱和，规格不同。
 
 interface Props {
   name: string

@@ -36,6 +36,8 @@ export function ComposeNewModal(): React.ReactElement | null {
   const { t } = useTranslation()
   const open = useComposeNewStore((s) => s.open)
   const close = useComposeNewStore((s) => s.close)
+  // 通讯录「写邮件」等入口的预填收件人（打开那一刻的快照；store 关闭即清）。
+  const prefillTo = useComposeNewStore((s) => s.prefillTo)
   // T6 离开守卫: scrim / 标题栏 × 关闭前先问 ComposePanelInner (经 guardRef) 有没有
   // 未保存更改 —— 有则弹确认 (保存草稿/丢弃/取消), 无则直接关。ComposePanelInner 内部
   // ESC/丢弃走 onClose=close (自身已守卫), 不经此 ref, 故两侧不会双重弹窗。
@@ -171,6 +173,7 @@ export function ComposeNewModal(): React.ReactElement | null {
             variant="modal"
             onClose={close}
             guardRef={guardRef}
+            initialTo={prefillTo ? [prefillTo] : undefined}
           />
         </div>
       </div>

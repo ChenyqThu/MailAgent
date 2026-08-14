@@ -70,3 +70,6 @@ export { BoxIcon } from './animated/box'
 
 // 第七批（用户点名）：主菜单「事项」→ briefcase-business，接上动画体系。
 export { BriefcaseBusinessIcon } from './animated/briefcase-business'
+
+// 第八批（通讯录 WP2）：主菜单「通讯录」→ users-round（右侧人物为动画段）。
+export { UsersRoundIcon } from './animated/users-round'

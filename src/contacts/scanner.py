@@ -37,7 +37,11 @@ from typing import Any, Dict, FrozenSet, Optional, Set
 from loguru import logger
 
 from src.contacts.repository import ContactRepository
-from src.contacts.service import normalize_email, resolve_self_addresses
+from src.contacts.service import (
+    normalize_email,
+    parse_identity_locks,
+    resolve_self_addresses,
+)
 from src.mail.mailbox_semantics import DRAFT_MAILBOX_LABELS
 
 WATERMARK_KEY = "contact_extract.watermark"
@@ -108,7 +112,8 @@ def _upsert_from_scan(
     anchor = conn.execute(
         "SELECT ce.id AS email_id, ce.contact_id, ce.first_seen_at AS a_first, "
         "  ce.last_seen_at AS a_last, "
-        "  c.display_name, c.identity_locked_at, c.kind, c.kind_locked_at, "
+        "  c.display_name, c.identity_locked_at, c.identity_locks_json, "
+        "  c.kind, c.kind_locked_at, "
         "  c.name_variants_json, c.first_seen_at AS c_first, c.last_seen_at AS c_last "
         "FROM contact_email ce JOIN contact c ON c.id = ce.contact_id "
         "WHERE ce.email_normalized = ?",
@@ -136,7 +141,7 @@ def _upsert_from_scan(
         email_id = int(cursor.lastrowid)
         stats["contacts_created"] += 1
         display_name = seed_name
-        identity_locked = None
+        display_name_locked = False
         kind_locked = None
         variants_raw = None
         a_first = a_last = c_first = c_last = None
@@ -145,7 +150,16 @@ def _upsert_from_scan(
         email_id = int(anchor["email_id"])
         contact_id = int(anchor["contact_id"])
         display_name = anchor["display_name"]
-        identity_locked = anchor["identity_locked_at"]
+        # v55 起判据 = display_name **字段锁** (identity_locks_json 真源); 防御性
+        # fallback: 锁映射缺席但老聚合列非空 → 仍按锁处理 (与 v55 seed 前行为等价,
+        # 兜未知旁路写)。
+        display_name_locked = (
+            "display_name" in parse_identity_locks(anchor["identity_locks_json"])
+            or (
+                anchor["identity_locks_json"] is None
+                and anchor["identity_locked_at"] is not None
+            )
+        )
         kind_locked = anchor["kind_locked_at"]
         variants_raw = anchor["name_variants_json"]
         a_first, a_last = anchor["a_first"], anchor["a_last"]
@@ -200,7 +214,7 @@ def _upsert_from_scan(
             sets.append("last_seen_at = ?")
             params.append(seen_at)
 
-    if identity_locked is None:
+    if not display_name_locked:
         # 刷新规则 (PRD §4.2): 最近一封非空 sender_name; 单调闸 seen_at >=
         # last_seen_at 让「重跑旧区间」不会拿旧名字盖新名字。to/cc 的 header
         # display name 只做空位种子, 不覆盖。

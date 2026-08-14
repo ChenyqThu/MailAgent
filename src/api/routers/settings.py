@@ -162,6 +162,9 @@ _MANAGED_ENV_KEYS: List[str] = [
     "MAILAGENT_MATTERS_ENABLED",
     # 事项跟进 Agent：同双载体，且只在上面那个开着时有意义。
     "MAILAGENT_MATTER_AGENT_ENABLED",
+    # 通讯录（Contact Directory WP1/WP2）：Python pydantic 单载体（导航/REST/扫描器
+    # 均读 serve-api 冻结单例与 /chat/config 投影）；默认 OFF；需重启后端。
+    "MAILAGENT_CONTACTS_ENABLED",
     # — Notifications
     "FEISHU_NOTIFY_ENABLED",
     "FEISHU_APP_ID",

@@ -75,7 +75,7 @@ export function GlobalShortcuts(): null {
   // ⌘N — 写新邮件 (居中模态, ComposeNewModal 挂 RootLayout)。global scope: 任意
   // 页面可开, 与全局侧边栏「写邮件」按钮一致。editable context 默认 short-circuit,
   // chat / 主题输入框打字不误触。
-  useShortcut('cmd+n', openNewCompose)
+  useShortcut('cmd+n', () => openNewCompose())
   useShortcut('alt+b', toggleNav)
   useShortcut('alt+g', toggleLocale)
 

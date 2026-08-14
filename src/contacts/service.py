@@ -17,11 +17,19 @@ matters 侧 (`src/matters/service.py::_upsert_contact`) 保留薄包装、底层
 
 from __future__ import annotations
 
+import json
 import re
 import sqlite3
-from typing import Any, FrozenSet, Iterable, Optional
+from typing import Any, Dict, FrozenSet, Iterable, Mapping, Optional
 
-from src.contacts.taxonomy import CONTACT_KIND_VALUES
+from src.contacts.taxonomy import (
+    CONTACT_FUNCTION_VALUES,
+    CONTACT_KIND_VALUES,
+    CONTACT_LOCKABLE_FIELDS,
+    CONTACT_SENIORITY_VALUES,
+    derive_function,
+    derive_seniority,
+)
 
 # 与 matters `_CONTACT_EMAIL_RE` 同判据 (那份随 WP3 退役后本处成为唯一)。
 CONTACT_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
@@ -183,6 +191,178 @@ def set_is_self(
         "UPDATE contact SET is_self=?, updated_at=? WHERE id=?",
         (1 if is_self else 0, now, contact_id),
     )
+
+
+# ==================== 字段级锁定 + 身份字段编辑 (WP2, v55) ====================
+
+#: 直落 contact 表列的可锁字段 (phone 落 contact_info_json.phone, 单独处理)。
+_IDENTITY_COLUMN_FIELDS = (
+    "display_name", "name_en", "organization", "department", "role_title",
+)
+
+
+def parse_identity_locks(raw: Any) -> Dict[str, int]:
+    """``contact.identity_locks_json`` → {field: epoch_ms}。容错解析: 非法形状 /
+    词表外键 / 非整数值全部丢弃 (锁是便利语义, 坏数据按无锁, 不炸读路径)。"""
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw) if isinstance(raw, str) else dict(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    out: Dict[str, int] = {}
+    for key, value in data.items():
+        if key in CONTACT_LOCKABLE_FIELDS:
+            try:
+                out[str(key)] = int(value)
+            except (TypeError, ValueError):
+                continue
+    return out
+
+
+def _write_identity_locks(
+    conn: sqlite3.Connection, contact_id: int, locks: Dict[str, int], *, now: int,
+) -> None:
+    """锁映射的**唯一写径** (v55): ``identity_locks_json`` 是真源;
+    ``identity_locked_at`` 降级为聚合派生 (= 锁映射 MAX, 无锁 NULL), 只供老读侧
+    (scanner fallback / 历史查询) 兼容, 不许旁路 UPDATE。"""
+    payload = (
+        json.dumps({k: int(v) for k, v in sorted(locks.items())})
+        if locks else None
+    )
+    aggregate = max(locks.values()) if locks else None
+    conn.execute(
+        "UPDATE contact SET identity_locks_json=?, identity_locked_at=?, "
+        "updated_at=? WHERE id=?",
+        (payload, aggregate, now, contact_id),
+    )
+
+
+def set_field_lock(
+    conn: sqlite3.Connection, contact_id: int, field: str, *,
+    locked: bool, now: int,
+) -> Dict[str, int]:
+    """显式加锁/解锁一个字段 (档案页锁 pill 的写面)。解锁 = 删映射键。"""
+    if field not in CONTACT_LOCKABLE_FIELDS:
+        raise ContactError(
+            "E_INVALID_FIELD", f"field must be one of {CONTACT_LOCKABLE_FIELDS}",
+        )
+    row = _require_live_contact(conn, contact_id)
+    locks = parse_identity_locks(row["identity_locks_json"])
+    if locked:
+        locks[field] = now
+    else:
+        locks.pop(field, None)
+    _write_identity_locks(conn, contact_id, locks, now=now)
+    return locks
+
+
+def _normalize_field_value(value: Any) -> Optional[str]:
+    text = str(value).strip() if value is not None else ""
+    return text or None
+
+
+def update_identity_fields(
+    conn: sqlite3.Connection, contact_id: int, fields: Mapping[str, Any], *,
+    now: int,
+) -> Dict[str, Any]:
+    """身份字段编辑 (REST PATCH 的写面, 设计 §2.2「点击即改, 改后锁定」)。
+
+    - 除 ``notes`` 外, 本次提供的字段**保存即落锁** (含清空 —— 清空 + 锁 =
+      「别再自动填回来」)。
+    - ``function`` / ``seniority`` 校验枚举 (None/空 = 清空)。
+    - ``phone`` 物理落 ``contact_info_json.phone``。
+    - ``role_title`` 变更时对**未锁且本次未显式提供**的 function/seniority 做
+      词表派生 (派生是自动来源: 不落锁, 锁着的不碰 —— 主 session 裁决项 4)。
+    """
+    unknown = set(fields) - set(CONTACT_LOCKABLE_FIELDS) - {"notes"}
+    if unknown:
+        raise ContactError(
+            "E_INVALID_FIELD", f"unknown fields: {sorted(unknown)}",
+        )
+    row = _require_live_contact(conn, contact_id)
+    locks = parse_identity_locks(row["identity_locks_json"])
+
+    sets: list = []
+    params: list = []
+    changed: Dict[str, Any] = {}
+
+    for field in _IDENTITY_COLUMN_FIELDS:
+        if field in fields:
+            value = _normalize_field_value(fields[field])
+            sets.append(f"{field} = ?")
+            params.append(value)
+            changed[field] = value
+            locks[field] = now
+
+    for field, values in (
+        ("function", CONTACT_FUNCTION_VALUES),
+        ("seniority", CONTACT_SENIORITY_VALUES),
+    ):
+        if field in fields:
+            value = _normalize_field_value(fields[field])
+            if value is not None and value not in values:
+                raise ContactError(
+                    "E_INVALID_ARG", f"{field} must be one of {values}",
+                )
+            sets.append(f"{field} = ?")
+            params.append(value)
+            changed[field] = value
+            locks[field] = now
+
+    if "phone" in fields:
+        value = _normalize_field_value(fields["phone"])
+        try:
+            info = (
+                json.loads(row["contact_info_json"])
+                if row["contact_info_json"] else {}
+            )
+        except (TypeError, ValueError):
+            info = {}
+        if not isinstance(info, dict):
+            info = {}
+        if value is None:
+            info.pop("phone", None)
+        else:
+            info["phone"] = value
+        sets.append("contact_info_json = ?")
+        params.append(json.dumps(info, ensure_ascii=False) if info else None)
+        changed["phone"] = value
+        locks["phone"] = now
+
+    if "notes" in fields:
+        raw_notes = fields["notes"]
+        notes = str(raw_notes) if raw_notes is not None else None
+        if notes is not None and not notes.strip():
+            notes = None
+        sets.append("notes = ?")
+        params.append(notes)
+        changed["notes"] = notes  # 手记无锁 (词表外, 自动提取从不写它)
+
+    if "role_title" in fields:
+        title = changed.get("role_title")
+        if "function" not in fields and "function" not in locks:
+            derived = derive_function(title)
+            sets.append("function = ?")
+            params.append(derived)
+            changed["function"] = derived
+        if "seniority" not in fields and "seniority" not in locks:
+            derived = derive_seniority(title)
+            sets.append("seniority = ?")
+            params.append(derived)
+            changed["seniority"] = derived
+
+    if sets:
+        sets.append("updated_at = ?")
+        params.append(now)
+        conn.execute(
+            f"UPDATE contact SET {', '.join(sets)} WHERE id = ?",
+            (*params, contact_id),
+        )
+    _write_identity_locks(conn, contact_id, locks, now=now)
+    return {"fields": changed, "locks": locks}
 
 
 def _email_status_guard(

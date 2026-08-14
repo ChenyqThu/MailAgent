@@ -273,6 +273,17 @@ const mattersRoute = createRoute({
   component: lazyRouteComponent(() => import('./components/layout/MattersLayout'), 'MattersLayout')
 })
 
+// /contacts — 通讯录（Contact Directory WP2）。flag off 时导航不渲染，路由直达由
+// ContactsWorkspace 渲染 404 空态（设计 §7：不是空页）。
+const contactsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/contacts',
+  component: lazyRouteComponent(
+    () => import('./components/layout/ContactsLayout'),
+    'ContactsLayout'
+  )
+})
+
 // /connectors — 旧独立配置台入口保留为 redirect。`?item=` 深链到 Settings Connectors tab
 // 的具体条目（builtin:<group> / connector:<id> / catalog:<id> / composio / external）。
 const connectorsRoute = createRoute({
@@ -421,6 +432,7 @@ export const router = createRouter({
     sessionsRoute,
     agentsRoute,
     mattersRoute,
+    contactsRoute,
     connectorsRoute,
     adminRoute.addChildren([adminIndexRoute, adminLlmRoute, adminKanbanRoute, adminCalendarRoute]),
     settingsRoute

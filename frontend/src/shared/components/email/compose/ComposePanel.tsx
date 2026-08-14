@@ -196,6 +196,9 @@ interface Props {
   /** T6 —— 把 dirty 态上报给父级 (overlay: EmailDetail 切邮件时据此在渲染期同步决定
    *  是否钉住 overlay + 弹守卫; 不用 guardRef.isDirty 是因为 render 期不能读 ref)。 */
   onDirtyChange?: (dirty: boolean) => void
+  /** mode='new' 专用：预填收件人（通讯录「写邮件」入口）。走 isNew 预填分支
+   *  （planApplied 之前），与其他预填一样不标脏。其余 mode 忽略。 */
+  initialTo?: readonly string[]
 }
 
 /** Inner panel — keyed on (internalId, mode) by the caller so a mode switch
@@ -206,7 +209,8 @@ export function ComposePanelInner({
   onClose,
   variant = 'column',
   guardRef,
-  onDirtyChange
+  onDirtyChange,
+  initialTo
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
@@ -436,9 +440,11 @@ export function ComposePanelInner({
       return
     }
     if (isNew) {
-      // 写新邮件: 空表单, 无预填数据源 — 标记完成避免 effect 每次空跑。
+      // 写新邮件: 空表单（或调用方给的预填收件人 —— 通讯录「写邮件」入口）。
+      // 预填发生在 planApplied 翻 true 之前 ⇒ 不标脏（与 draft/plan 预填同一闸）。
       // (放在 isDraftEdit 之后: 规则只报 effect 内首个 setState, 由上面的 disable
-      //  覆盖; 这里 setPlanApplied 是后续调用, 不触发规则、无需额外 disable。)
+      //  覆盖; 这里的 setState 是后续调用, 不触发规则、无需额外 disable。)
+      if (initialTo && initialTo.length > 0) setTo([...initialTo])
       setPlanApplied(true)
       return
     }
@@ -456,7 +462,7 @@ export function ComposePanelInner({
     if (editorHtml) editor.commands.setContent(editorHtml)
     setQuoteHtml(plan.quote_html || plan.forward_intro_html || '')
     setPlanApplied(true)
-  }, [planApplied, isDraftEdit, isNew, draftQ.data, planQ.data, editor, mode])
+  }, [planApplied, isDraftEdit, isNew, initialTo, draftQ.data, planQ.data, editor, mode])
 
   // 预填完成 → 开放 dirty 判定 (字段 setter 的 baseline 闸)。
   useEffect(() => {

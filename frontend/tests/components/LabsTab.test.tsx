@@ -36,7 +36,8 @@ function renderTab(overrides: Record<string, string | undefined> = {}): void {
     MAILAGENT_MEMORY_LAYERS: 'false',
     MAILAGENT_AG_UI_MIRROR: 'false',
     MAILAGENT_MATTERS_ENABLED: 'false',
-    MAILAGENT_MATTER_AGENT_ENABLED: 'false'
+    MAILAGENT_MATTER_AGENT_ENABLED: 'false',
+    MAILAGENT_CONTACTS_ENABLED: 'false'
   }
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete values[key]
@@ -55,7 +56,8 @@ function renderTab(overrides: Record<string, string | undefined> = {}): void {
           'MAILAGENT_MEMORY_LAYERS',
           'MAILAGENT_AG_UI_MIRROR',
           'MAILAGENT_MATTERS_ENABLED',
-          'MAILAGENT_MATTER_AGENT_ENABLED'
+          'MAILAGENT_MATTER_AGENT_ENABLED',
+          'MAILAGENT_CONTACTS_ENABLED'
         ],
         secretKeys: []
       }
@@ -80,7 +82,7 @@ function switchFor(envKey: string): HTMLElement {
 }
 
 describe('LabsTab', () => {
-  test('渲染 warn 条、六个实验开关与页尾高级折叠区', () => {
+  test('渲染 warn 条、七个实验开关与页尾高级折叠区', () => {
     renderTab()
 
     expect(screen.getByText(/实验性功能可能不稳定/)).toBeTruthy()
@@ -90,13 +92,14 @@ describe('LabsTab', () => {
     expect(screen.getByText('五层记忆整理')).toBeTruthy()
     expect(screen.getByText('AG-UI 协议镜像')).toBeTruthy()
     expect(screen.getByText('事项')).toBeTruthy()
+    expect(screen.getByText('通讯录')).toBeTruthy()
 
-    expect(screen.getAllByRole('switch')).toHaveLength(6)
+    expect(screen.getAllByRole('switch')).toHaveLength(7)
     const disclosure = screen.getByRole('button', { name: /高级实验/ })
     expect(disclosure.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(disclosure)
     expect(disclosure.getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getAllByRole('switch')).toHaveLength(6)
+    expect(screen.getAllByRole('switch')).toHaveLength(7)
   })
 
   // 跟进 Agent 依赖「事项」：两者的后端 gate 是 AND，所以关着事项时它开了也毫无作用。
@@ -118,5 +121,16 @@ describe('LabsTab', () => {
 
     expect(switchFor('MAILAGENT_MATTERS_ENABLED').getAttribute('aria-checked')).toBe('true')
     expect(switchFor('MAILAGENT_MATTER_AGENT_ENABLED').getAttribute('disabled')).toBeNull()
+  })
+
+  // 通讯录（WP2）：默认 OFF 灰度 flag —— 缺键 ⇒ off（与 pydantic contacts_enabled=False 一致），
+  // 显式 true 才渲染成开。
+  test('通讯录开关：缺键按默认 off 渲染，显式 true 才开', () => {
+    renderTab({ MAILAGENT_CONTACTS_ENABLED: undefined })
+    expect(switchFor('MAILAGENT_CONTACTS_ENABLED').getAttribute('aria-checked')).toBe('false')
+
+    cleanup()
+    renderTab({ MAILAGENT_CONTACTS_ENABLED: 'true' })
+    expect(switchFor('MAILAGENT_CONTACTS_ENABLED').getAttribute('aria-checked')).toBe('true')
   })
 })

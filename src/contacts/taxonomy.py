@@ -37,6 +37,14 @@ CONTACT_KIND_VALUES: Tuple[str, ...] = ("person", "robot", "list")
 #: 上级来源 (manual=owner 指定; auto=AI 建议采纳)。
 CONTACT_MANAGER_SRC_VALUES: Tuple[str, ...] = ("manual", "auto")
 
+#: 可锁字段词表 (WP2 字段级锁定, v55 `contact.identity_locks_json` 的键域唯一
+#: 权威)。phone 物理落 ``contact_info_json.phone`` (无独立列); notes **有意不在**
+#: 词表里 —— 手记是 owner 私有文本, 自动提取从不写它, 无锁可言。
+CONTACT_LOCKABLE_FIELDS: Tuple[str, ...] = (
+    "display_name", "name_en", "organization", "department",
+    "role_title", "phone", "function", "seniority",
+)
+
 
 # ==================== 词表匹配 ====================
 

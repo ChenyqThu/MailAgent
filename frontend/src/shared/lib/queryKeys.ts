@@ -259,6 +259,21 @@ export const qk = {
     config: () => ['matters', 'config'] as const
   },
 
+  // 通讯录（Contact Directory WP2）。🔴 顶层 `contacts` 段 —— `qk.matters.contacts()`
+  // 是 matters 域的全局干系人库（WP3 退役），别混用。子资源挂 ['contacts','detail',id,…]
+  // 前缀：一次联系人写入 invalidate detail(id) 连带刷新关联邮件/事项。
+  contacts: {
+    all: () => ['contacts'] as const,
+    list: (view: string, q: string, sort: string) =>
+      ['contacts', 'list', view, q, sort] as const,
+    detail: (contactId: number) => ['contacts', 'detail', contactId] as const,
+    mails: (contactId: number, role: string) =>
+      ['contacts', 'detail', contactId, 'mails', role] as const,
+    matters: (contactId: number) => ['contacts', 'detail', contactId, 'matters'] as const,
+    progress: () => ['contacts', 'backfill-progress'] as const,
+    config: () => ['contacts', 'config'] as const
+  },
+
   contactSuggest: (debounced: string, exclude: readonly string[]) =>
     ['contactSuggest', debounced, exclude] as const,
 

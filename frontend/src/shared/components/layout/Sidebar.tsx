@@ -36,6 +36,7 @@ import {
   SettingsIcon,
   SparklesIcon,
   SquarePenIcon,
+  UsersRoundIcon,
   ZapIcon
 } from '@shared/components/icons'
 import { HoverTip } from '@shared/components/ui/HoverTip'
@@ -50,6 +51,7 @@ import { openNewCompose } from '@shared/state/compose-new'
 import { deriveAccount } from '@shared/lib/account'
 import { useAgentUnreadCount, useSessionProvenanceEnabled } from '@shared/components/agents/hooks'
 import { useGlobalAttention, useMattersEnabled } from '@shared/components/matters/hooks'
+import { useContactsEnabled } from '@shared/components/contacts/hooks'
 
 import { AccountSwitcherPopover } from './AccountSwitcherPopover'
 import { SidebarFolderTree } from './SidebarFolderTree'
@@ -281,6 +283,7 @@ export function Sidebar(): React.ReactElement {
   const toggleCollapsed = useNavCollapsed((s) => s.toggle)
   const sessionProvenanceEnabled = useSessionProvenanceEnabled()
   const mattersEnabled = useMattersEnabled()
+  const { enabled: contactsEnabled } = useContactsEnabled()
   const matterAttention = useGlobalAttention(mattersEnabled)
   const matterAttentionCount = matterAttention.data?.items.length ?? 0
   const agentUnreadTotal = useAgentUnreadCount(sessionProvenanceEnabled).total
@@ -484,7 +487,7 @@ export function Sidebar(): React.ReactElement {
       <div className="app-nav-compose px-2 pt-2.5 pb-0.5 shrink-0">
         <button
           type="button"
-          onClick={openNewCompose}
+          onClick={() => openNewCompose()}
           className="app-nav-compose-btn w-full flex items-center gap-2 rounded-lg px-3 py-2 text-body font-medium transition-[filter] duration-fast"
           title={collapsed ? t('nav.composeNew') : undefined}
           aria-label={t('nav.composeNew')}
@@ -668,6 +671,18 @@ export function Sidebar(): React.ReactElement {
               onClick={() => navigate({ to: '/admin/calendar', search: { view: 'week' } })}
             />
           )}
+          {/* 通讯录（Contact Directory WP2）——「日历」之后（主 session 裁决项 2：设计
+              D1 的 IA 图假设事项在 VIEW，与现实不符；三行既有顺序不动）。flag off
+              不渲染（三段铁律：不新增 section header）。 */}
+          {contactsEnabled ? (
+            <NavRow
+              icon={<UsersRoundIcon size={15} strokeWidth={1.75} trigger="parent" />}
+              label={t('contacts.nav.title')}
+              title={collapsed ? t('contacts.nav.title') : undefined}
+              selected={pathname === '/contacts'}
+              onClick={() => navigate({ to: '/contacts' })}
+            />
+          ) : null}
         </nav>
       </div>
 

@@ -461,7 +461,8 @@
       "inbox": "收件箱",
       "row": "邮件行",
       "chat": "AI 对话",
-      "calendar": "日历"
+      "calendar": "日历",
+      "contacts": "通讯录"
     },
     "binding": {
       "commandPalette": "命令面板",
@@ -501,7 +502,9 @@
       "calHelp": "打开 / 关闭快捷键帮助",
       "filterUnread": "筛选：未读",
       "filterFlagged": "筛选：已标记",
-      "filterHasAttach": "筛选：具有附件"
+      "filterHasAttach": "筛选：具有附件",
+      "contactsNavDown": "下一个联系人",
+      "contactsNavUp": "上一个联系人"
     }
   },
   "palette": {
@@ -2920,6 +2923,11 @@
       "matterAgent": {
         "helper": "给事项绑定跟进 Agent：手动或定时跑一次，只读地比对变化并提出更新提案，由你逐项审阅后才写入。附带需关注信号与 macOS 通知。",
         "restartHint": "需先开启「事项」。重启后端后生效；原生通知要退出重开 App。"
+      },
+      "contacts": {
+        "label": "通讯录",
+        "helper": "从历史邮件自动建立人物档案：双向往来优先的列表、身份字段与逐字段锁定、关联邮件与事项。零手工录入，数据全在本地。",
+        "restartHint": "重启后端后侧边栏出现「通讯录」，首次会后台扫描历史邮件。"
       }
     },
     "accounts": {
@@ -5714,6 +5722,236 @@
         "nextWeek": "下周",
         "thisMonth": "本月"
       }
+    }
+  },
+  "contacts": {
+    "nav": { "title": "通讯录" },
+    "list": { "count": "{count} 人", "resize": "拖动调整列表宽度" },
+    "view": { "known": "往来的人", "all": "全部" },
+    "search": { "placeholder": "搜索姓名 / 名字变体 / 邮箱 / 组织", "clear": "清空搜索" },
+    "sort": { "label": "排序", "density": "往来密度", "recent": "最近往来", "name": "姓名" },
+    "density": { "label": "密度", "compact": "紧凑", "comfortable": "宽松（显示画像摘要）" },
+    "groupBy": {
+      "label": "分组",
+      "none": "不分组",
+      "company": "按公司",
+      "dept": "按部门",
+      "fn": "按职能",
+      "level": "按职级",
+      "ungrouped": "未分组"
+    },
+    "group": {
+      "person": "人",
+      "robot": "机器人 / noreply",
+      "list": "群发列表 / 单向广播",
+      "hidden": "已隐藏",
+      "byManager": "按汇报线",
+      "reportsOf": "{name} 的下级",
+      "noManager": "未设上级"
+    },
+    "kind": { "person": "人", "robot": "机器人", "list": "群发列表" },
+    "badge": { "self": "我的地址", "hidden": "已隐藏", "dup": "疑似重复", "emails": "{n} 个邮箱" },
+    "stat": { "exchange": "往来 {n} 封 · 我发出 {sent}", "since": "{date} 起 · 最近 {ago}" },
+    "row": { "more": "更多操作" },
+    "action": {
+      "open": "打开人物页",
+      "compose": "写邮件",
+      "merge": "合并到另一条记录…",
+      "kindRobot": "改判为机器人",
+      "kindList": "改判为群发列表",
+      "kindPerson": "改判为人",
+      "markSelf": "标为我的地址",
+      "unmarkSelf": "取消「我的地址」",
+      "hide": "隐藏",
+      "unhide": "取消隐藏",
+      "select": "选中此条（进入多选）"
+    },
+    "select": {
+      "n": "已选 {n} 条",
+      "merge": "合并这两条",
+      "mergeHint": "合并需要正好选中两条记录",
+      "exit": "退出多选"
+    },
+    "backfill": {
+      "progress": "正在从历史邮件建立通讯录 · 已扫描 {scanned}/{total}",
+      "dismiss": "关闭"
+    },
+    "empty": {
+      "library": "正在从邮件往来建立通讯录…",
+      "libraryHint": "通讯录不需要手工录入。首次启用时会扫描历史邮件，人物会随扫描逐步出现在这里。",
+      "search": "没有匹配「{q}」的联系人",
+      "searchHint": "试试只搜邮箱前缀，或到「全部」视图里找机器人、群发列表与已隐藏的地址。",
+      "detail": "选一个人打开 TA 的档案",
+      "filters": "当前筛选没有匹配的联系人",
+      "filtersHint": "换一组筛选条件试试。"
+    },
+    "disabled": {
+      "title": "页面不存在或未启用",
+      "hint": "通讯录功能未开启。可在 设置 → 实验室 打开后重启后端。"
+    },
+    "detail": {
+      "bareOnly": "仅邮箱记录",
+      "addName": "补充姓名",
+      "locked": "已锁定",
+      "unlocked": "未锁定",
+      "lockHint": "已锁定：自动提取不再覆盖此字段。点击解锁",
+      "editHint": "点击字段即可改，改后锁定"
+    },
+    "section": {
+      "emails": "邮箱锚点",
+      "identity": "身份信息",
+      "notes": "手记",
+      "notesHint": "只有你能看到",
+      "mails": "关联邮件",
+      "matters": "TA 参与的事项"
+    },
+    "field": {
+      "name": "常用名",
+      "nameEn": "英文名",
+      "org": "组织",
+      "dept": "部门",
+      "phone": "电话",
+      "variants": "名字变体",
+      "fn": "职能",
+      "level": "职级",
+      "role": "职位署名",
+      "variantsHint": "自动收集，搜索时也会命中"
+    },
+    "enum": { "clear": "清除" },
+    "fn": {
+      "tech": "技术",
+      "product": "产品",
+      "delivery": "交付",
+      "legal": "法务",
+      "compliance": "合规",
+      "procurement": "采购",
+      "data": "数据",
+      "security": "安全",
+      "pm": "项目管理",
+      "maillist": "邮件组",
+      "system": "系统"
+    },
+    "level": {
+      "vp": "VP·高管",
+      "director": "总监",
+      "lead": "负责人",
+      "manager": "经理",
+      "staff": "专员"
+    },
+    "org": {
+      "section": "组织关系",
+      "manager": "上级",
+      "reports": "下级",
+      "peers": "同组织同事（自动归类，不是手工关系）",
+      "setManager": "指定上级",
+      "addReport": "添加下级",
+      "noManager": "未设上级 · 指定后可以一键抄送，列表也能按汇报线分组",
+      "noReports": "还没有人把 TA 设为上级",
+      "autoSrc": "从邮件推断",
+      "suggestManager": "上级（从签名档与抄送模式推断）",
+      "composeCc": "写邮件并抄送上级",
+      "unlink": "解除关系"
+    },
+    "email": {
+      "primary": "主邮箱",
+      "setPrimary": "设为主邮箱",
+      "setPrimaryRestore": "设为主邮箱（并恢复在用）",
+      "meta": "{n} 封 · {from}–{to}",
+      "formerPip": "曾用",
+      "former": "标为曾用",
+      "unformer": "恢复在用",
+      "copy": "复制地址",
+      "copied": "已复制 {email}"
+    },
+    "mail": {
+      "filter": { "all": "全部", "from": "TA 发的", "to": "我发的", "cc": "抄送" },
+      "more": "加载更多（还有 {n} 封）",
+      "empty": "没有关联邮件"
+    },
+    "matters": { "empty": "还没有事项挂到 TA 身上" },
+    "profile": {
+      "title": "AI 画像",
+      "topics": "常聊议题",
+      "projects": "共同项目",
+      "evolution": "人物轨迹",
+      "evidence": "证据 {ref}",
+      "contradiction": "待澄清 · {text}",
+      "provenance": "基于 {from}~{to} 的 {n} 封邮件 · {model} · {ago}",
+      "refresh": "立即更新画像",
+      "refreshing": "生成中…",
+      "aiRole": "职务由画像推断",
+      "suggest": "建议值",
+      "adopt": "采纳",
+      "ignore": "忽略",
+      "adoptAll": "全部采纳",
+      "suggestHint": "采纳会写入身份字段并锁定该字段；忽略只让它在本轮消失，下轮画像可能再提。AI 不会直接改身份字段。",
+      "off": "AI 画像未开启",
+      "offHint": "开启后，画像 Agent 会低频批量读取你与 TA 的往来邮件，生成人物画像，并从签名档提出可采纳的建议值。画像只读邮件，不改身份字段。",
+      "offCta": "到 Agents 页开启画像 Agent",
+      "threshold": "还没到画像阈值",
+      "thresholdHint": "往来满 {min} 封后自动生成（当前 {n} 封，还差 {need} 封）。也可以现在手动生成一次。",
+      "queued": "已达阈值 · 等下一轮批处理",
+      "queuedHint": "往来 {n} 封，已过 {min} 封阈值。画像 Agent 低频跑批处理，下一轮会写入；不想等可以现在手动生成。",
+      "thresholdCta": "立即生成",
+      "insufficient": "往来内容尚不足以生成画像",
+      "insufficientHint": "已读过 {n} 封往来，但多为转发、单句确认一类内容，AI 判断证据不足，本轮没有写入画像。下轮批处理会再试。",
+      "retry": "再试一次",
+      "failed": "上次更新失败",
+      "notPerson": "已标为「{kind}」，不生成画像。如果判断错了，可以改判为「人」。",
+      "selfNote": "这是你自己的地址，不生成画像。"
+    },
+    "merge": {
+      "title": "合并联系人",
+      "sub": "把「{name}」与另一条记录合并成同一个人（换过邮箱的常见情况）",
+      "previewTitle": "预览合并结果",
+      "previewSub": "确认后落地为一条记录、两个邮箱。往来账本与事项关系都会挂到保留方。",
+      "searchPlaceholder": "搜索姓名 / 名字变体 / 邮箱",
+      "keepThis": "保留这一条的姓名与身份字段",
+      "result": "合并后",
+      "pickPrimary": "两个邮箱并列 · 选一个做主邮箱",
+      "loser": "{name} → 墓碑记录（数据保留，列表不再显示）",
+      "conflict": "两条记录都是「{matter}」的干系人。合并后角色会重复，确认后需要你二选一（不会静默合并角色）。",
+      "danger": "合并没有一键撤销。数据是可逆的，但需要到数据层处理——可找回，但麻烦。确认前请先看清上面的结果。",
+      "futureSuggest": "「疑似同人」自动建议是后续能力（Phase 3）。上线后会出现在这一行，按证据排序。",
+      "back": "换一条",
+      "confirm": "确认合并",
+      "done": "已合并为一条记录、{n} 个邮箱 · 被并方留作墓碑"
+    },
+    "picker": {
+      "title": "添加干系人",
+      "sub": "{pub} · {title} —— 从通讯录选人；库里没有的人可以直接用邮箱建入",
+      "searchPlaceholder": "搜姓名 / 邮箱 / 组织，或粘贴一个邮箱地址",
+      "source": "按往来密度排序 · 数据来自通讯录",
+      "showAll": "也显示邮件组 / 机器人",
+      "onlyPeople": "只看人",
+      "taken": "已在事项中",
+      "createByEmail": "以这个邮箱新建联系人并添加",
+      "empty": "通讯录里没有匹配的人",
+      "emptyHint": "通讯录只收有邮件往来的地址。要加一个还没往来过的人，直接输入 TA 的邮箱地址。",
+      "role": "在本事项中的角色",
+      "syncHint": "姓名与职位始终读通讯录，不在事项里另存一份",
+      "add": "添加 {n}"
+    },
+    "toast": {
+      "hidden": "已隐藏「{name}」· 数据没删，在「全部」视图可以找回",
+      "unhidden": "已取消隐藏",
+      "kind": "已改判为「{kind}」· 排序与默认视图随之变化",
+      "markSelf": "已标为我的地址 · 不再出现在「往来的人」",
+      "unmarkSelf": "已取消「我的地址」",
+      "primary": "主邮箱已改为 {email}",
+      "former": "已标为曾用 · 历史往来保留，不再作为默认收件地址",
+      "unformer": "已恢复在用",
+      "locked": "{field} 已保存并锁定 · 自动提取不再覆盖",
+      "unlocked": "已解锁 · 后续自动提取可能覆盖",
+      "adopted": "已采纳 · {field}「{value}」已写入并锁定",
+      "ignored": "已忽略 {field} 建议 · 下轮画像可能再提",
+      "profileRunning": "画像生成中 · 分钟级，可以先去做别的",
+      "profileDone": "画像已更新",
+      "profileFailed": "画像更新失败 · 模型返回超时，已保留上一版画像",
+      "composePrefill": "已打开 compose · 收件人预填 {email}",
+      "pickerAdded": "已添加 {n} 位干系人 · 姓名与职位随通讯录同步",
+      "pickerCreated": "已用邮箱建入通讯录并挂到事项 · {email}",
+      "saveFailed": "保存失败"
     }
   }
 }

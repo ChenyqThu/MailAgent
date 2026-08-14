@@ -31,6 +31,7 @@ type LabFlag =
   | 'MAILAGENT_AG_UI_MIRROR'
   | 'MAILAGENT_MATTERS_ENABLED'
   | 'MAILAGENT_MATTER_AGENT_ENABLED'
+  | 'MAILAGENT_CONTACTS_ENABLED'
 
 interface ExperimentalFlagRowProps {
   envKey: LabFlag
@@ -136,6 +137,8 @@ export function LabsTab(): React.ReactElement {
   // 渲染成关 —— 连带把下面的跟进 Agent 行也误锁成 dependencyUnmet。缺省值必须跟着 pydantic 走。
   const matters = isEnabled(values['MAILAGENT_MATTERS_ENABLED'] ?? 'true')
   const matterAgent = isEnabled(values['MAILAGENT_MATTER_AGENT_ENABLED'] ?? '')
+  // 通讯录（WP2）：默认 OFF 灰度 flag（Labs 收编纪律），缺键 ⇒ off 与 pydantic 一致。
+  const contacts = isEnabled(values['MAILAGENT_CONTACTS_ENABLED'] ?? '')
   const connectorRuntime = runtimeFlags.connectorToolsEnabled
   // 跟进 Agent 只在「事项」开着时有意义（后端 worker 的 schedule 段与 gateway venue 都叠这两个
   // 条件）。关掉事项时把它一并关掉并禁用开关，免得留一个开着却毫无作用的行。
@@ -300,6 +303,25 @@ export function LabsTab(): React.ReactElement {
             })
           }
           onRestartBackend={() => void restartBackend('MAILAGENT_MATTER_AGENT_ENABLED')}
+        />
+      </Section>
+
+      <Section title={t('settings.labs.contacts.label')}>
+        <ExperimentalFlagRow
+          envKey="MAILAGENT_CONTACTS_ENABLED"
+          checked={contacts}
+          ready={ready}
+          saving={savingKey === 'MAILAGENT_CONTACTS_ENABLED'}
+          restarting={restartingKey === 'MAILAGENT_CONTACTS_ENABLED'}
+          label="MAILAGENT_CONTACTS_ENABLED"
+          helper={t('settings.labs.contacts.helper')}
+          restartHint={t('settings.labs.contacts.restartHint')}
+          onToggle={(checked) =>
+            void saveFlag('MAILAGENT_CONTACTS_ENABLED', {
+              MAILAGENT_CONTACTS_ENABLED: checked ? 'true' : 'false'
+            })
+          }
+          onRestartBackend={() => void restartBackend('MAILAGENT_CONTACTS_ENABLED')}
         />
       </Section>
 

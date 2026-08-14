@@ -511,6 +511,10 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # （P1 commit a4c2ee1c 加进 /chat/config 时漏了本 pin，P2 session 补账。）
         "mattersEnabled": False,
         "matterAgentEnabled": False,
+        # Contact Directory WP2 — 通讯录入口门控（MAILAGENT_CONTACTS_ENABLED，pydantic 默认
+        # off 灰度中）；同上 getattr 兜底：stub 无该字段 → False（默认值本身由
+        # tests/config/test_flag_cross_language.py 的单载体登记 pin）。
+        "contactsEnabled": False,
         # 08-01 PR4 — MCP 连接区门控（MAILAGENT_MCP_CONNECTORS，pydantic 默认 off 灰度中）；
         # 同 providerRegistryEnabled 走 getattr 兜底：stub 无该字段 → False。
         "connectorToolsEnabled": False,
