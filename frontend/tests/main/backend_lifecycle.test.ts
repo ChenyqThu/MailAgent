@@ -1636,3 +1636,48 @@ describe('killStaleBackendListeners — win32 平台门 (08-12 win-port)', () =>
     }
   })
 })
+
+describe('spawn env — Python stdio 编码 (08-12 win-port)', () => {
+  // 长驻后端 (serve / serve-api) 的中文日志在 Windows cp1252 stdio 下会 UnicodeEncodeError
+  // 把进程打崩; buildBaseEnv 经 pythonStdioEnv() 注入 UTF-8 两键。注入点在 baseEnv,
+  // serve-api 的 serveApiEnv 展开 baseEnv → 两个 service 都覆盖。
+  const withPlatform = (value: string, fn: () => void): void => {
+    const orig = Object.getOwnPropertyDescriptor(process, 'platform')!
+    // 宿主 shell 若带着这两个键会污染 `...process.env` → darwin 断言假红, 先摘掉。
+    const savedUtf8 = process.env.PYTHONUTF8
+    const savedIoEnc = process.env.PYTHONIOENCODING
+    delete process.env.PYTHONUTF8
+    delete process.env.PYTHONIOENCODING
+    Object.defineProperty(process, 'platform', { value })
+    try {
+      fn()
+    } finally {
+      Object.defineProperty(process, 'platform', orig)
+      if (savedUtf8 === undefined) delete process.env.PYTHONUTF8
+      else process.env.PYTHONUTF8 = savedUtf8
+      if (savedIoEnc === undefined) delete process.env.PYTHONIOENCODING
+      else process.env.PYTHONIOENCODING = savedIoEnc
+    }
+  }
+
+  test('win32: spawn 的 env 含 PYTHONUTF8=1 + PYTHONIOENCODING=utf-8', () => {
+    appMock.isPackaged = true
+    withPlatform('win32', () => {
+      // staleSweep 注入 no-op: win32 真实实现只 console.warn 后返回 [], 与本用例无关。
+      new BackendLifecycleManager({ staleSweep: () => [] }).start()
+      const env = spawnCalls[0].opts.env as NodeJS.ProcessEnv
+      expect(env.PYTHONUTF8).toBe('1')
+      expect(env.PYTHONIOENCODING).toBe('utf-8')
+    })
+  })
+
+  test('🔴 darwin: 两个键都不注入 (mac 零回归红线)', () => {
+    appMock.isPackaged = true
+    withPlatform('darwin', () => {
+      new BackendLifecycleManager({ staleSweep: () => [] }).start()
+      const env = spawnCalls[0].opts.env as NodeJS.ProcessEnv
+      expect(env.PYTHONUTF8).toBeUndefined()
+      expect(env.PYTHONIOENCODING).toBeUndefined()
+    })
+  })
+})

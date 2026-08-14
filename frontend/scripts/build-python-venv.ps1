@@ -71,6 +71,14 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue' # Invoke-WebRequest 进度条会拖慢大文件下载
 
+# 本进程内所有 python.exe 子进程恒 UTF-8 stdio。Windows 上 CPython 的 stdout 默认跟随
+# 控制台 code page (GitHub runner = cp1252), 而本仓 CLI 帮助文本/日志大量是中文 ——
+# §5 自检跑 `mailagent --help` 时实测 UnicodeEncodeError('charmap' codec) 直接把构建打红。
+# 🔴 与运行时侧 src/electron/main/python_stdio_env.ts 的 PYTHON_UTF8_ENV 是同一份事实的
+#    手抄镜像 (ps1 不能 import TS), 改任一处必同步 —— 闸见 tests/main/python_stdio_env.test.ts。
+$env:PYTHONUTF8 = '1'
+$env:PYTHONIOENCODING = 'utf-8'
+
 # 与 build-python-venv.sh 保持同版本 (改任一侧必同步另一侧 + 两个 CI cache key)
 $PBS_TAG = '20260510'
 $PYVER = '3.11.15'
@@ -225,6 +233,12 @@ rem -P (Python 3.11+): 禁止把 cwd 加入 sys.path — 防 cwd 下 src/ 遮蔽
 rem   后端包 (mac 侧实测过 serve 子命令消失, 同款防御)。
 rem 打包态前端不经此文件: cli_runner.getMailagentCommand() 直接 spawn python.exe
 rem   -B -P -c <PY_CLI_BOOTSTRAP> (免 cmd shell 一跳)。本 wrapper 供本地调试/构建自检。
+rem UTF-8 stdio: 控制台 code page (cp936/cp1252) 下 CLI 打中文会 UnicodeEncodeError;
+rem   setlocal 使其只作用于本次调用, 不污染调用者的 shell。运行时侧同源见
+rem   src/electron/main/python_stdio_env.ts。
+setlocal
+set PYTHONUTF8=1
+set PYTHONIOENCODING=utf-8
 "%~dp0..\python.exe" -B -P -c "from src.cli.main import app; app(prog_name='mailagent')" %*
 '@
 Set-Content -Path (Join-Path $ScriptsDir 'mailagent.cmd') -Value $wrapperBody -Encoding ASCII

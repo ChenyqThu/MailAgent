@@ -374,3 +374,47 @@ describe('AbortController + killAll', () => {
     await expect(c2).rejects.toMatchObject({ errorCode: 'E_ABORTED' })
   })
 })
+
+// ---- (f) Python stdio 编码 env (08-12 win-port) ------------------------------
+
+describe('_exec env — Python stdio 编码', () => {
+  // win 打包态这条路 spawn 的就是 python.exe (getMailagentCommand); 不钉 UTF-8 则 CLI
+  // 打任何中文 (帮助文本 / 错误 hint) 在 cp1252 控制台上当场 UnicodeEncodeError。
+  async function envOfNextCall(platform: string): Promise<NodeJS.ProcessEnv> {
+    const orig = Object.getOwnPropertyDescriptor(process, 'platform')!
+    // 宿主 shell 若带着这两个键会经 `...process.env` 混进来 → darwin 断言假红。
+    const saved = { u: process.env.PYTHONUTF8, i: process.env.PYTHONIOENCODING }
+    delete process.env.PYTHONUTF8
+    delete process.env.PYTHONIOENCODING
+    Object.defineProperty(process, 'platform', { value: platform })
+    try {
+      scriptedResults.push({
+        stdout: makeWrapper({ status: 'success', data: {} }),
+        stderr: '',
+        exitCode: 0
+      })
+      await cliRunner.callCli(['email', 'list'])
+      const calls = (vi.mocked(execa) as unknown as { mock: { calls: unknown[][] } }).mock.calls
+      const opts = calls[calls.length - 1][2] as { env: NodeJS.ProcessEnv }
+      return opts.env
+    } finally {
+      Object.defineProperty(process, 'platform', orig)
+      if (saved.u === undefined) delete process.env.PYTHONUTF8
+      else process.env.PYTHONUTF8 = saved.u
+      if (saved.i === undefined) delete process.env.PYTHONIOENCODING
+      else process.env.PYTHONIOENCODING = saved.i
+    }
+  }
+
+  test('win32: env 含 PYTHONUTF8=1 + PYTHONIOENCODING=utf-8', async () => {
+    const env = await envOfNextCall('win32')
+    expect(env.PYTHONUTF8).toBe('1')
+    expect(env.PYTHONIOENCODING).toBe('utf-8')
+  })
+
+  test('🔴 darwin: 两个键都不注入 (mac 零回归红线)', async () => {
+    const env = await envOfNextCall('darwin')
+    expect(env.PYTHONUTF8).toBeUndefined()
+    expect(env.PYTHONIOENCODING).toBeUndefined()
+  })
+})

@@ -55,6 +55,7 @@ import { resolveAiGatewayPort } from '../../ai-gateway/config'
 import { DEFAULT_API_PORT, DEFAULT_SSE_PORT } from '@shared/lib/ports'
 import { getMailagentCommand } from './cli_runner'
 import { STALE_CMD_MARKER } from './py_cli_bootstrap'
+import { pythonStdioEnv } from './python_stdio_env'
 import { resolveDataRoot, resolveDbPath } from './db'
 import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
 
@@ -751,7 +752,11 @@ export class BackendLifecycleManager {
       //     dump 诊断 + graceful exit (配合下方 maybeRestartAfterCrash 自拉起回收内存)。
       //     用户可在 app .env 覆盖 (bootstrapDotenv 已注入 process.env, `||` 透传非空值)。
       MAILAGENT_PARENT_WATCHDOG: '1',
-      MAILAGENT_MEM_LIMIT_MB: process.env.MAILAGENT_MEM_LIMIT_MB || '4096'
+      MAILAGENT_MEM_LIMIT_MB: process.env.MAILAGENT_MEM_LIMIT_MB || '4096',
+      // 08-12 win-port — Windows 上 python.exe 的 stdio 默认跟随控制台 code page
+      // (cp1252), 后端的中文日志/异常一输出就 UnicodeEncodeError 把进程打崩。
+      // 非 win32 返回空对象 → darwin 的 env 逐字节不变 (见 python_stdio_env.ts)。
+      ...pythonStdioEnv()
     }
   }
 

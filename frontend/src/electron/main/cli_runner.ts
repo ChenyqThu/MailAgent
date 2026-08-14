@@ -41,6 +41,7 @@ import { Semaphore } from './sem'
 import { getCliApiKey } from './keychain'
 import { whichSync } from './bin_resolver'
 import { PY_CLI_BOOTSTRAP } from './py_cli_bootstrap'
+import { pythonStdioEnv } from './python_stdio_env'
 
 // Resolved lazily on first call. The CLI is shipped by `pip install -e .[cli]`
 // (project CLAUDE.md "CLI" section). Electron's GUI process inherits launchd
@@ -298,7 +299,12 @@ class CliQueue {
         ...process.env,
         MAILAGENT_DATA_ROOT: resolveDataRoot(),
         MAILAGENT_ENV_FILE: join(resolveDataRoot(), '.env'),
-        SYNC_STORE_DB_PATH: resolveDbPath()
+        SYNC_STORE_DB_PATH: resolveDbPath(),
+        // 08-12 win-port — win 打包态这里 spawn 的就是 python.exe (getMailagentCommand),
+        // 不钉 UTF-8 则 CLI 打任何中文 (帮助文本 / 错误 hint) 当场 UnicodeEncodeError;
+        // 且 execa 恒按 utf8 解码 stdout, 与子进程 cp1252 输出对不上。
+        // 非 win32 返回空对象 → darwin 的 env 逐字节不变 (见 python_stdio_env.ts)。
+        ...pythonStdioEnv()
       }
     })
     this.inFlight.add(sub)
