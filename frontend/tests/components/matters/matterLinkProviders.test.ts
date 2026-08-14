@@ -4,12 +4,21 @@
 // 设计原型那份 `PROVIDERS` 表把 conn 写死成常量，照抄过来就会在闸关 / 没连 / 数据还没回来时
 // 渲染出一句假的「已连接 Notion」。
 
+import { FileText, GitBranch, Globe } from 'lucide-react'
 import { describe, expect, test } from 'vitest'
 
+import {
+  ConfluenceLogo,
+  FigmaLogo,
+  GoogleDriveLogo,
+  JiraLogo,
+  NotionLogo
+} from '@shared/components/icons/apps/appLogos'
 import {
   detectMatterLinkProvider,
   deriveMatterLinkTitle,
   isMatterLinkUrlish,
+  MATTER_LINK_PROVIDERS,
   matterLinkConnectionState,
   normalizeMatterLinkUrl
 } from '@shared/components/matters/matterLinkProviders'
@@ -99,5 +108,32 @@ describe('matterLinkConnectionState', () => {
     ).toBe('disconnected')
     // 一行都没有 = 从来没连过，这个否定是确定的。
     expect(matterLinkConnectionState({ ...base, rows: [] })).toBe('disconnected')
+  })
+})
+
+// 批 8（V3-19）—— canonical provider 词表的 logo 回落纪律：5 家有真实品牌 logo，其余 3 家
+// （feishu/github/web）设计交付没有对应资产，维持中性 lucide 图标，不是漏做。
+describe('MATTER_LINK_PROVIDERS — 来源 logo 回落纪律', () => {
+  function iconOf(key: string): unknown {
+    return MATTER_LINK_PROVIDERS.find((entry) => entry.key === key)?.icon
+  }
+
+  test('5 家有品牌 logo 的 provider 取到对应 logo 组件', () => {
+    expect(iconOf('notion')).toBe(NotionLogo)
+    expect(iconOf('confluence')).toBe(ConfluenceLogo)
+    expect(iconOf('jira')).toBe(JiraLogo)
+    expect(iconOf('figma')).toBe(FigmaLogo)
+    expect(iconOf('googleDocs')).toBe(GoogleDriveLogo)
+  })
+
+  test('无设计 logo 资产的 3 家明确回落到既有 lucide 中性图标，不是空白方块', () => {
+    expect(iconOf('feishu')).toBe(FileText)
+    expect(iconOf('github')).toBe(GitBranch)
+    expect(iconOf('web')).toBe(Globe)
+  })
+
+  test('确认与 Confluence 同枚 logo：atlassian 连接器同时覆盖 Confluence/Jira，Jira 单独用自己的标', () => {
+    expect(iconOf('confluence')).not.toBe(iconOf('jira'))
+    expect(iconOf('jira')).toBe(JiraLogo)
   })
 })

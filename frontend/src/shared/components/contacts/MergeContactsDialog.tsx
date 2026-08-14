@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { TriangleAlert } from 'lucide-react'
+import { CircleAlert, TriangleAlert } from 'lucide-react'
 
 import type { ContactDetailDto, ContactEmailDto } from '@shared/api/types/contact'
 import { Checkbox } from '@shared/components/ui/checkbox'
@@ -32,6 +32,7 @@ import { qk } from '@shared/lib/queryKeys'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { Monogram } from './Monogram'
+import { SecHead } from './parts'
 import { PersonPicker } from './PersonPicker'
 import { useContactDetail, useContactList, useContactMatters, useContactsApi } from './hooks'
 import {
@@ -310,12 +311,10 @@ export function MergeContactsDialog({
                 ))}
               </div>
 
-              {/* ── 合并后结果卡 ── */}
-              <div className="rounded-[var(--r-card)] border border-coral/30 bg-coral/[0.04] p-3">
-                <div className="text-meta font-medium uppercase tracking-wide text-ink-fg-3">
-                  {t('contacts.merge.result')}
-                </div>
-                <div className="mt-2 flex items-center gap-2.5">
+              {/* ── 合并后结果卡（原型：中性 Card + 上方 SecHead，不抢 accent 语义）── */}
+              <SecHead title={t('contacts.merge.result')} className="mb-0" />
+              <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-3.5">
+                <div className="flex items-center gap-2.5">
                   <Monogram
                     displayName={winner.display_name}
                     primaryEmail={primary}
@@ -419,8 +418,8 @@ export function MergeContactsDialog({
                         <div key={matter.matter_id}>
                           <div className="truncate text-meta text-ink-fg-1">{matter.title}</div>
                           {conflictIds.has(matter.matter_id) ? (
-                            <div className="mt-0.5 flex items-start gap-1.5 rounded-[var(--r-row)] border border-warn/40 bg-warn/10 px-2 py-1.5 text-micro leading-4 text-warn">
-                              <TriangleAlert size={11} className="mt-px shrink-0" />
+                            <div className="mt-0.5 flex items-start gap-1.5 rounded-[var(--r-row)] border border-warn/30 bg-warn/[0.07] px-2 py-1.5 text-micro leading-4 text-ink-fg-1">
+                              <TriangleAlert size={11} className="mt-px shrink-0 text-warn" />
                               <span>{t('contacts.merge.conflict', { matter: matter.title })}</span>
                             </div>
                           ) : null}
@@ -435,10 +434,13 @@ export function MergeContactsDialog({
                 </div>
               </div>
 
-              {/* ── 危险提示（克制的红）── */}
-              <p className="rounded-[var(--r-card)] border border-fail/30 bg-fail/5 px-3 py-2 text-meta leading-5 text-fail">
-                {t('contacts.merge.danger')}
-              </p>
+              {/* ── 危险提示（克制的红：底/边是红，正文仍是常规前景色）── */}
+              <div className="flex gap-2.5 rounded-[var(--r-row)] border border-crit/25 bg-crit/[0.06] px-3 py-2.5">
+                <CircleAlert size={13} aria-hidden className="mt-0.5 shrink-0 text-crit" />
+                <p className="min-w-0 text-meta leading-relaxed text-ink-fg-1">
+                  {t('contacts.merge.danger')}
+                </p>
+              </div>
             </div>
           )}
         </div>

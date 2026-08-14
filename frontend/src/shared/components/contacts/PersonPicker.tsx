@@ -11,9 +11,9 @@ import { useTranslation } from 'react-i18next'
 
 import type { ContactRowDto } from '@shared/api/types/contact'
 import { cn } from '@shared/lib/cn'
-import { formatRelativeTime } from '@shared/format'
 
 import { Monogram } from './Monogram'
+import { ContactPip } from './parts'
 
 export interface PersonPickerProps {
   items: readonly ContactRowDto[]
@@ -51,7 +51,6 @@ export function PersonPicker({
   belowList,
   empty
 }: PersonPickerProps): React.ReactElement {
-  const { i18n } = useTranslation()
   return (
     <div className="flex min-h-0 flex-col gap-2.5">
       <div className="relative shrink-0">
@@ -88,7 +87,6 @@ export function PersonPicker({
                 picked={picked}
                 taken={taken}
                 takenLabel={takenLabel}
-                locale={i18n.language || 'zh-CN'}
                 onSelect={() => {
                   if (taken) return
                   if (mode === 'single') onPick?.(row)
@@ -110,7 +108,6 @@ function PersonPickerRow({
   picked,
   taken,
   takenLabel,
-  locale,
   onSelect
 }: {
   row: ContactRowDto
@@ -118,13 +115,17 @@ function PersonPickerRow({
   picked: boolean
   taken: boolean
   takenLabel?: string
-  locale: string
   onSelect(): void
 }): React.ReactElement {
+  const { t } = useTranslation()
   const bare = !row.display_name
   const localPart = row.primary_email?.split('@')[0] ?? '—'
   const orgLine = [row.organization, row.role_title].filter(Boolean).join(' · ')
   const extraEmails = Math.max(0, row.email_count - 1)
+  const exchange =
+    row.sent_to_count > 0
+      ? `${row.sent_to_count}↑ ${row.mail_count.toLocaleString()}`
+      : row.mail_count.toLocaleString()
   return (
     <button
       type="button"
@@ -141,41 +142,45 @@ function PersonPickerRow({
             : 'hover:bg-ink-3/60'
       )}
     >
-      {mode === 'multi' ? (
-        <span
-          aria-hidden
-          className={cn(
-            'flex size-4 shrink-0 items-center justify-center rounded-[4px] border',
-            picked || taken
-              ? 'border-coral/60 bg-coral/90 text-accent-fg'
-              : 'border-ink-border bg-ink-1'
-          )}
-        >
-          {picked || taken ? <Check size={11} strokeWidth={3} /> : null}
-        </span>
-      ) : null}
-      <Monogram
-        displayName={row.display_name}
-        primaryEmail={row.primary_email}
-        kind={row.kind}
-        size={28}
-      />
+      {/* 首位是一个 30px 固定槽（原型 `cpicker.jsx::PickerRow`）：
+          已在事项中 → 勾 · 已选 → checkbox · 其余 → Monogram。三态换控件不位移。 */}
+      <span className="grid w-[30px] shrink-0 place-items-center">
+        {taken ? (
+          <Check size={14} strokeWidth={2.5} aria-hidden className="text-ok" />
+        ) : picked ? (
+          <span
+            aria-hidden
+            className="flex size-4 items-center justify-center rounded-[4px] border-[1.5px] border-coral bg-coral/100 text-accent-fg"
+          >
+            <Check size={11} strokeWidth={3} />
+          </span>
+        ) : (
+          <Monogram
+            displayName={row.display_name}
+            primaryEmail={row.primary_email}
+            kind={row.kind}
+            size={28}
+          />
+        )}
+      </span>
       <span className="min-w-0 flex-1">
-        <span className="flex min-w-0 items-baseline gap-2">
+        <span className="flex min-w-0 items-center gap-1.5">
           <span
             className={cn(
               'truncate text-body font-medium text-ink-fg',
-              bare && 'italic font-normal text-ink-fg-1'
+              bare && 'font-normal italic text-ink-fg-1'
             )}
           >
             {row.display_name ?? localPart}
           </span>
-          {orgLine ? (
-            <span className="truncate text-meta text-ink-fg-2">{orgLine}</span>
+          {orgLine ? <span className="truncate text-meta text-ink-fg-2">{orgLine}</span> : null}
+          {row.email_count > 1 ? (
+            <ContactPip>{t('contacts.badge.emails', { n: row.email_count })}</ContactPip>
           ) : null}
+          {taken && takenLabel ? <ContactPip tone="ok">{takenLabel}</ContactPip> : null}
         </span>
         <span className="flex min-w-0 items-baseline gap-1.5">
-          <span className="truncate font-mono text-meta text-ink-fg-3">
+          <span className="truncate font-mono text-micro text-ink-fg-3">
             {row.primary_email ?? '—'}
           </span>
           {extraEmails > 0 ? (
@@ -183,23 +188,12 @@ function PersonPickerRow({
           ) : null}
         </span>
         {row.profile_summary ? (
-          <span className="block truncate text-meta text-ink-fg-3">{row.profile_summary}</span>
+          <span className="block truncate text-meta text-ink-fg-2">{row.profile_summary}</span>
         ) : null}
       </span>
-      {taken && takenLabel ? (
-        <span className="shrink-0 text-meta text-ink-fg-3">{takenLabel}</span>
-      ) : (
-        <span className="shrink-0 text-right">
-          <span className="block font-mono text-meta tabular-nums text-ink-fg-2">
-            {row.mail_count}
-          </span>
-          {row.last_seen_at != null ? (
-            <span className="block text-micro text-ink-fg-3">
-              {formatRelativeTime(new Date(row.last_seen_at).toISOString(), locale)}
-            </span>
-          ) : null}
-        </span>
-      )}
+      {!taken ? (
+        <span className="shrink-0 font-mono text-micro tabular-nums text-ink-fg-3">{exchange}</span>
+      ) : null}
     </button>
   )
 }

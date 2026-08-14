@@ -1,7 +1,7 @@
 import {
-  BookOpen,
   Calendar,
   FileText,
+  GitBranch,
   Link,
   Mail,
   MessageSquare,
@@ -9,6 +9,13 @@ import {
   type LucideIcon
 } from 'lucide-react'
 
+import {
+  ConfluenceLogo,
+  FigmaLogo,
+  GoogleDriveLogo,
+  NotionLogo,
+  type AppLogoIcon
+} from '@shared/components/icons/apps/appLogos'
 import type {
   MatterResourceKind,
   MatterResourceLinkHit,
@@ -70,12 +77,34 @@ export const RESOURCE_KIND_ICONS: Record<MatterResourceKind, LucideIcon> = {
   url: Link // link
 }
 
-// doc 再按 provider 细分，Notion 与 Confluence 一眼可辨。
-// 🔴 有意用 lucide 中性图标而非品牌 logo —— 仓库的 brandIcons 只收了 LLM 厂商（逐字取自
-// @lobehub/icons-static-svg，见 providers/NOTICE.md），自绘品牌 SVG 会引入无授权来源的资产。
-export const DOC_PROVIDER_ICONS: Record<string, LucideIcon> = {
-  confluence: BookOpen,
-  atlassian: BookOpen
+// doc 再按 provider 细分，用真实品牌 logo（批 8 / V3-19，反转此前「有意用 lucide 中性图标」
+// 的决定 —— owner 拍板照设计稿做，条件是按 `brandIcons.tsx` 的既有先例落地并补商标声明，
+// 见 `icons/apps/appLogos.tsx` + 同目录 NOTICE.md）。
+//
+// key 是 `resource.provider.toLowerCase()` 的**落库值**，不是展示层的识别 key —— 与
+// `matterLinkProviders.ts` 的 8 家（`MATTER_LINK_PROVIDERS`，那是「粘贴链接时按域名识别出
+// 哪一家」的展示层 key，如 camelCase 的 `googleDocs`）是两套不同用途的词表，命名风格也不同，
+// 不要混用。这里的 key 集合 = 「跟进 Agent 提案会真的用到的 provider 值」（`resource_
+// proposal.py::apply_allowed_providers` = builtin + `src/connectors/catalog.py` 的连接器
+// 目录全集，即 `notion`/`atlassian`/`googledrive`/`figma`/`github`/… 这些**小写连字符**
+// 连接器 id，不是 URL 域名识别出的那套 camelCase key）：
+//   · `notion` / `figma` —— 连接器 id 与展示层 key 恰好同名，直接对应设计给的 logo。
+//   · `atlassian` —— Atlassian 单个连接器同时覆盖 Confluence 与 Jira，`resource.provider`
+//     只会是这一个值，落不到 `confluence`/`jira` 两个更精确的字面量；两者共用 Confluence 标
+//     是近似选择（Atlassian 官方也没有一枚代表"两者都是"的通用图形），不是精确判定。
+//     `confluence` 这个 key 仍留着（同一枚图）——万一未来某处显式产出这个更精确的字符串，
+//     不必再改这张表。
+//   · `googledrive` —— 连接器 id；Google 官方没有单独的「Google 文档」logo，落地用 Drive 标
+//     （见 `appLogos.tsx` 的 `GoogleDriveLogo` 注释）。
+//   · `github` —— 设计交付没有这家的 logo 资产，复用既有 lucide `GitBranch`（零新增成本，
+//     与 `matterLinkProviders.ts` 里 github 的展示保持一致）。
+export const DOC_PROVIDER_ICONS: Record<string, LucideIcon | AppLogoIcon> = {
+  notion: NotionLogo,
+  confluence: ConfluenceLogo,
+  atlassian: ConfluenceLogo,
+  googledrive: GoogleDriveLogo,
+  figma: FigmaLogo,
+  github: GitBranch
 }
 
 // 🔴 有意导出「表」而不是「查表函数」：eslint 的 react-hooks/static-components 不接受

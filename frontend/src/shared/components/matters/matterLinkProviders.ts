@@ -1,17 +1,33 @@
 // G-14 tab ②「链接粘贴」的 provider 识别 + 连接态判定单源。
 //
-// 🔴 与设计原型 `pickers.jsx` 的 `PROVIDERS` 表的两处**有意偏离**：
+// 🔴 与设计原型 `pickers.jsx` 的 `PROVIDERS` 表的**有意偏离**：
 //   ① 原型每家写死 `conn: true/false`（mock 常量）。这里的连接态**只来自** MCP connector
 //      真实状态（`useConnectorQuickRows`）；拿不到就说中性话，绝不渲染假的「已连接」。
-//   ② 原型给每家画品牌 logo。本仓政策是中性 lucide 图标 —— 自绘品牌 SVG 会引入无授权资产
-//      （见 matterResource.ts `DOC_PROVIDER_ICONS` 上方的注释）。
+//
+// 🔴 品牌 logo（批 8 / V3-19 反转）：此前这里写着「本仓政策是中性 lucide 图标 —— 自绘品牌
+// SVG 会引入无授权来源的资产」，owner 已拍板照设计稿做 —— 5 家（notion/confluence/jira/
+// figma/googleDocs）换成 `icons/apps/appLogos.tsx` 里手拷的官方 logo（出处/授权声明见同目录
+// NOTICE.md，落地形状照抄 `providers/brandIcons.tsx` 先例）；`feishu`/`github` 两家设计交付
+// 没有对应 logo 资产，维持原来的 lucide 中性图标（`web` 兜底同理，本就该是中性符号，不是
+// 「缺 logo」）。**canonical provider 词表见下方 `MATTER_LINK_PROVIDERS`**：与
+// `matterResource.ts` 的 `DOC_PROVIDER_ICONS` 是两套不同用途、不同命名风格的表，
+// 那边的注释解释了为什么不能合并成一张。
 //
 // 🔴 落库形状与识别结果**解耦**：不管识别成哪家，粘贴进来的链接一律存成既有的
 // `provider='web'` + `kind='url'`（`resource_proposal.py` 的 WEB_PROVIDER 约定）。识别只用于
 // 显示「这看起来是一份 Notion 文档」，不是「这条资料归 Notion connector 管」—— 后者需要真实的
 // 实体 id（`page:<uuid>` 那种形状），从 URL 猜出来的 id 会造出一条永远验不了的资料。
 
-import { BookOpen, FileText, GitBranch, Globe, Layers, type LucideIcon } from 'lucide-react'
+import { FileText, GitBranch, Globe, type LucideIcon } from 'lucide-react'
+
+import {
+  ConfluenceLogo,
+  FigmaLogo,
+  GoogleDriveLogo,
+  JiraLogo,
+  NotionLogo,
+  type AppLogoIcon
+} from '@shared/components/icons/apps/appLogos'
 
 export type MatterLinkProviderKey =
   | 'notion'
@@ -25,7 +41,9 @@ export type MatterLinkProviderKey =
 
 export interface MatterLinkProvider {
   key: MatterLinkProviderKey
-  icon: LucideIcon
+  /** 5 家有真实品牌 logo（`icons/apps/appLogos.tsx`），其余 3 家（feishu/github/web）
+   *  维持中性 lucide 图标（前两家无设计资产，web 本就该是中性符号）。 */
+  icon: LucideIcon | AppLogoIcon
   /** 对应的 MCP connector 行 id（`src/connectors/catalog.py` 的键）。
    *  null = 本仓的 connector 目录里没有这家 —— 连接态无从谈起，只说中性话。 */
   connectorId: string | null
@@ -34,19 +52,24 @@ export interface MatterLinkProvider {
 
 /** 顺序即优先级；最后一条 `web` 是兜底（`test` 恒真）。 */
 export const MATTER_LINK_PROVIDERS: readonly MatterLinkProvider[] = [
-  { key: 'notion', icon: FileText, connectorId: 'notion', test: /(^|\.)notion\.(so|site)$/i },
-  { key: 'confluence', icon: BookOpen, connectorId: 'atlassian', test: /(^|\.)atlassian\.net$/i },
+  { key: 'notion', icon: NotionLogo, connectorId: 'notion', test: /(^|\.)notion\.(so|site)$/i },
+  {
+    key: 'confluence',
+    icon: ConfluenceLogo,
+    connectorId: 'atlassian',
+    test: /(^|\.)atlassian\.net$/i
+  },
   // Jira 与 Confluence 同域（`*.atlassian.net`），靠路径分。故 Jira 这条必须排在前面判路径，
   // 见 `detectMatterLinkProvider`：它先按 host 找候选，再对 atlassian 家按路径细分。
-  { key: 'jira', icon: Layers, connectorId: 'atlassian', test: /(^|\.)atlassian\.net$/i },
+  { key: 'jira', icon: JiraLogo, connectorId: 'atlassian', test: /(^|\.)atlassian\.net$/i },
   { key: 'feishu', icon: FileText, connectorId: null, test: /(^|\.)(feishu\.cn|larksuite\.com)$/i },
   {
     key: 'googleDocs',
-    icon: FileText,
+    icon: GoogleDriveLogo,
     connectorId: 'googledrive',
     test: /(^|\.)docs\.google\.com$/i
   },
-  { key: 'figma', icon: Layers, connectorId: 'figma', test: /(^|\.)figma\.com$/i },
+  { key: 'figma', icon: FigmaLogo, connectorId: 'figma', test: /(^|\.)figma\.com$/i },
   { key: 'github', icon: GitBranch, connectorId: 'github', test: /(^|\.)github\.com$/i },
   { key: 'web', icon: Globe, connectorId: null, test: /./ }
 ]

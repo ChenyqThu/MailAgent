@@ -141,6 +141,9 @@ export function ContactsWorkspace(): React.ReactElement | null {
     [collapsedGroups, groupBy, items, kindFilter, t, view]
   )
   const orderedIds = useMemo(() => orderedContactIds(rows), [rows])
+  // 头部计数 = 当前视图**实际列出**的人数（原型 `clist.jsx` 的 `total` 同口径）。
+  // 用 `items.length` 会在「全部」视图关掉 chips 时报出一个列表里根本不存在的数。
+  const visibleCount = orderedIds.length
 
   const selectContact = useCallback((id: number | null): void => {
     setSelectedId(id)
@@ -301,7 +304,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
             })
           }
           rows={rows}
-          total={items.length}
+          total={visibleCount}
           loading={list.isPending}
           progress={progress.data}
           selectedId={selectedId}

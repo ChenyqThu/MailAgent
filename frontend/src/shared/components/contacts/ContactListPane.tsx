@@ -1,11 +1,32 @@
-// 通讯录列表列（设计 §2.1）：头部（标题+计数 · 视图分段 · 排序/分组菜单 · 密度
-// 切换）→ 搜索 → 「全部」视图筛选 chips → BackfillBar → 虚拟滚动行（react-window
-// v2，定高行 + O(1) 行高，§7.1 铁律）→ 多选底部条（无「合并」钮，随 WP3）。
+// 通讯录列表列（设计 §2.1 / 原型 `clist.jsx::ListPane`）。
+//
+// 头部三行，逐行照原型：
+//   ① [users icon] 通讯录 [计数] ————— [视图分段]
+//   ② [搜索 flex-1] [分组] [排序] [密度]        ← 三个工具钮各自独立，各开各的菜单
+//   ③ 「全部」视图的 kind 筛选 chips
+// 之后：BackfillBar（通栏）→ 虚拟滚动行（react-window v2，定高 O(1)，§7.1 铁律）
+// → 多选底部条。
+//
+// 🔴 面：列间竖线由 `ContactsWorkspace` 的拖拽分隔条唯一负责，本组件**不画
+// `border-r`**（会与分隔条并排成双线，matters E19 同款缺陷）。
+// 🔴 图标：`sortdesc` 在原型的 ICON_PATHS 里没有 path、渲染成空按钮，故排序钮
+// 沿用 lucide `ArrowUpDown`；密度钮按原型用 `Layers` / `ListChecks`。
 
 import { useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { List } from 'react-window'
-import { ArrowUpDown, Rows2, Rows3, Search, UsersRound, X } from 'lucide-react'
+import {
+  ArrowUpDown,
+  Briefcase,
+  Building2,
+  Folder,
+  Layers,
+  ListChecks,
+  Search,
+  UsersRound,
+  X,
+  type LucideIcon
+} from 'lucide-react'
 
 import type { ContactBackfillProgress, ContactSort, ContactView } from '@shared/api/types/contact'
 import { cn } from '@shared/lib/cn'
@@ -28,6 +49,18 @@ const KIND_BUCKETS: readonly ContactKindBucket[] = ['person', 'robot', 'list', '
 const SORTS: readonly ContactSort[] = ['density', 'recent', 'name']
 const GROUP_BYS: readonly ContactGroupBy[] = ['none', 'company', 'dept', 'fn', 'level']
 
+/** 分组钮的图标随当前分组变化（原型 `GROUP_BY[group].icon`）。 */
+const GROUP_ICONS: Record<ContactGroupBy, LucideIcon> = {
+  none: ListChecks,
+  company: Building2,
+  dept: Folder,
+  fn: Briefcase,
+  level: Layers
+}
+
+const TOOL_BUTTON_CLASS =
+  'grid size-[26px] shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.08] hover:text-ink-fg'
+
 export interface ContactListPaneProps {
   view: ContactView
   onViewChange(view: ContactView): void
@@ -42,7 +75,7 @@ export interface ContactListPaneProps {
   kindFilter: ReadonlySet<ContactKindBucket>
   onKindFilterToggle(bucket: ContactKindBucket): void
   rows: ContactListRow[]
-  /** 当前视图（含搜索）返回的联系人数 —— 头部计数。 */
+  /** 当前视图（含搜索与 chips 过滤）实际列出的联系人数 —— 头部计数。 */
   total: number
   loading: boolean
   progress: ContactBackfillProgress | undefined
@@ -60,10 +93,12 @@ export interface ContactListPaneProps {
 
 export function ContactListPane(props: ContactListPaneProps): React.ReactElement {
   const { t } = useTranslation()
-  const [menuOpen, setMenuOpen] = useState(false)
-  const menuTriggerRef = useRef<HTMLButtonElement>(null)
+  const [sortMenuOpen, setSortMenuOpen] = useState(false)
+  const [groupMenuOpen, setGroupMenuOpen] = useState(false)
+  const sortTriggerRef = useRef<HTMLButtonElement>(null)
+  const groupTriggerRef = useRef<HTMLButtonElement>(null)
 
-  const sortGroupItems: PopmenuItem[] = [
+  const sortItems: PopmenuItem[] = [
     { kind: 'label', id: 'sort-label', label: t('contacts.sort.label') },
     ...SORTS.map(
       (sort): PopmenuItem => ({
@@ -73,8 +108,9 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
         checked: props.sort === sort,
         onSelect: () => props.onSortChange(sort)
       })
-    ),
-    { kind: 'separator', id: 'sep-group' },
+    )
+  ]
+  const groupItems: PopmenuItem[] = [
     { kind: 'label', id: 'group-label', label: t('contacts.groupBy.label') },
     ...GROUP_BYS.map(
       (groupBy): PopmenuItem => ({
@@ -92,6 +128,9 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
   const libraryEmpty =
     !props.loading && props.rows.length === 0 && props.q.trim() === '' && !filtersAllOff
 
+  const GroupIcon = GROUP_ICONS[props.groupBy]
+  const DensityIcon = props.density === 'compact' ? Layers : ListChecks
+
   const rowProps: ContactRowsProps = {
     rows: props.rows,
     density: props.density,
@@ -107,17 +146,103 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
   return (
     <section
       aria-label={t('contacts.nav.title')}
-      className="flex h-full min-h-0 flex-col border-r border-ink-border"
+      className="flex h-full min-h-0 flex-col bg-ink-1/55"
     >
       {/* 头部 */}
-      <div className="shrink-0 px-3 pb-2 pt-3">
-        <div className="flex items-center gap-1.5">
-          <h1 className="min-w-0 flex-1 truncate text-aux font-semibold text-ink-fg">
+      <div className="shrink-0 border-b border-ink-border px-3 pb-2 pt-2.5">
+        <div className="flex items-center gap-2">
+          <UsersRound size={15} aria-hidden className="shrink-0 text-coral" />
+          <h1 className="shrink-0 whitespace-nowrap text-aux font-semibold tracking-[-0.01em] text-ink-fg">
             {t('contacts.nav.title')}
-            <span className="ml-1.5 font-mono text-micro font-normal tabular-nums text-ink-fg-3">
-              {t('contacts.list.count', { count: props.total })}
-            </span>
           </h1>
+          <span className="shrink-0 font-mono text-micro tabular-nums text-ink-fg-3">
+            {t('contacts.list.count', { count: props.total })}
+          </span>
+          <span className="flex-1" />
+          <SegmentedControl
+            ariaLabel={t('contacts.nav.title')}
+            value={props.view}
+            onChange={props.onViewChange}
+            options={[
+              { value: 'known', label: t('contacts.view.known') },
+              { value: 'all', label: t('contacts.view.all') }
+            ]}
+          />
+        </div>
+
+        <div className="mt-2 flex items-center gap-1.5">
+          <label className="flex h-7 min-w-0 flex-1 items-center gap-[7px] rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5">
+            <Search size={13} aria-hidden className="shrink-0 text-ink-fg-3" />
+            <input
+              value={props.q}
+              onChange={(event) => props.onQChange(event.target.value)}
+              placeholder={t('contacts.search.placeholder')}
+              aria-label={t('contacts.search.placeholder')}
+              className="min-w-0 flex-1 bg-transparent text-body text-ink-fg outline-none placeholder:text-ink-fg-3"
+            />
+            {props.q !== '' ? (
+              <button
+                type="button"
+                aria-label={t('contacts.search.clear')}
+                onClick={() => props.onQChange('')}
+                className="grid size-5 shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.08] hover:text-ink-fg-1"
+              >
+                <X size={11} />
+              </button>
+            ) : null}
+          </label>
+
+          <div className="relative">
+            <button
+              ref={groupTriggerRef}
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={groupMenuOpen}
+              aria-label={t('contacts.groupBy.label')}
+              title={`${t('contacts.groupBy.label')}：${t(`contacts.groupBy.${props.groupBy}`)}`}
+              onClick={() => setGroupMenuOpen((open) => !open)}
+              className={cn(
+                TOOL_BUTTON_CLASS,
+                (groupMenuOpen || props.groupBy !== 'none') && 'bg-ink-fg/[0.08] text-ink-fg'
+              )}
+            >
+              <GroupIcon size={14} />
+            </button>
+            <Popmenu
+              open={groupMenuOpen}
+              onClose={() => setGroupMenuOpen(false)}
+              ariaLabel={t('contacts.groupBy.label')}
+              items={groupItems}
+              triggerRef={groupTriggerRef}
+              align="end"
+              width={200}
+            />
+          </div>
+
+          <div className="relative">
+            <button
+              ref={sortTriggerRef}
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={sortMenuOpen}
+              aria-label={t('contacts.sort.label')}
+              title={`${t('contacts.sort.label')}：${t(`contacts.sort.${props.sort}`)}`}
+              onClick={() => setSortMenuOpen((open) => !open)}
+              className={cn(TOOL_BUTTON_CLASS, sortMenuOpen && 'bg-ink-fg/[0.08] text-ink-fg')}
+            >
+              <ArrowUpDown size={14} />
+            </button>
+            <Popmenu
+              open={sortMenuOpen}
+              onClose={() => setSortMenuOpen(false)}
+              ariaLabel={t('contacts.sort.label')}
+              items={sortItems}
+              triggerRef={sortTriggerRef}
+              align="end"
+              width={200}
+            />
+          </div>
+
           <button
             type="button"
             aria-label={t('contacts.density.label')}
@@ -129,72 +254,17 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
             onClick={() =>
               props.onDensityChange(props.density === 'compact' ? 'comfortable' : 'compact')
             }
-            className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg"
+            className={cn(
+              TOOL_BUTTON_CLASS,
+              props.density === 'comfortable' && 'bg-ink-fg/[0.08] text-ink-fg'
+            )}
           >
-            {props.density === 'compact' ? <Rows3 size={14} /> : <Rows2 size={14} />}
+            <DensityIcon size={14} />
           </button>
-          <div className="relative">
-            <button
-              ref={menuTriggerRef}
-              type="button"
-              aria-label={t('contacts.sort.label')}
-              onClick={() => setMenuOpen((open) => !open)}
-              className={cn(
-                'rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg',
-                menuOpen && 'bg-ink-3 text-ink-fg'
-              )}
-            >
-              <ArrowUpDown size={14} />
-            </button>
-            <Popmenu
-              open={menuOpen}
-              onClose={() => setMenuOpen(false)}
-              ariaLabel={t('contacts.sort.label')}
-              items={sortGroupItems}
-              triggerRef={menuTriggerRef}
-              align="end"
-              width={200}
-            />
-          </div>
-        </div>
-
-        <SegmentedControl
-          className="mt-2"
-          fluid
-          ariaLabel={t('contacts.nav.title')}
-          value={props.view}
-          onChange={props.onViewChange}
-          options={[
-            { value: 'known', label: t('contacts.view.known') },
-            { value: 'all', label: t('contacts.view.all') }
-          ]}
-        />
-
-        <div className="relative mt-2">
-          <Search
-            size={13}
-            className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-ink-fg-3"
-          />
-          <input
-            value={props.q}
-            onChange={(event) => props.onQChange(event.target.value)}
-            placeholder={t('contacts.search.placeholder')}
-            className="h-8 w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 pl-7 pr-7 text-body text-ink-fg outline-none placeholder:text-ink-fg-3 focus:border-coral/50"
-          />
-          {props.q !== '' ? (
-            <button
-              type="button"
-              aria-label={t('contacts.search.clear')}
-              onClick={() => props.onQChange('')}
-              className="absolute right-1.5 top-1/2 -translate-y-1/2 rounded-[var(--r-ctl)] p-1 text-ink-fg-3 hover:bg-ink-3 hover:text-ink-fg-1"
-            >
-              <X size={12} />
-            </button>
-          ) : null}
         </div>
 
         {props.view === 'all' ? (
-          <div className="mt-2 flex flex-wrap gap-1">
+          <div className="mt-2 flex flex-wrap gap-1.5">
             {KIND_BUCKETS.map((bucket) => {
               const on = props.kindFilter.has(bucket)
               return (
@@ -204,10 +274,10 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
                   aria-pressed={on}
                   onClick={() => props.onKindFilterToggle(bucket)}
                   className={cn(
-                    'rounded-full border px-2 py-0.5 text-micro leading-4 transition-colors',
+                    'rounded-full border px-[9px] py-[3px] text-meta leading-4 transition-colors duration-fast ease-standard',
                     on
-                      ? 'border-coral/40 bg-coral/10 text-coral'
-                      : 'border-ink-border text-ink-fg-3 hover:bg-ink-3 hover:text-ink-fg-1'
+                      ? 'border-coral/30 bg-coral/10 text-coral'
+                      : 'border-ink-border text-ink-fg-2 hover:bg-ink-fg/[0.06] hover:text-ink-fg-1'
                   )}
                 >
                   {t(`contacts.group.${bucket}`)}
@@ -239,7 +309,7 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
               <button
                 type="button"
                 onClick={() => props.onQChange('')}
-                className="rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1 text-meta text-ink-fg-1 hover:bg-ink-3"
+                className="rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1 text-meta text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3"
               >
                 {t('contacts.search.clear')}
               </button>
@@ -266,10 +336,18 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
 
       {/* 多选底部条（WP3：「合并这两条」恒渲染、仅恰 2 条可用；点不可用位给提示）。 */}
       {props.selectionMode ? (
-        <div className="flex shrink-0 items-center gap-2 border-t border-ink-border px-3 py-2">
+        <div className="flex shrink-0 items-center gap-2 border-t border-ink-border bg-ink-2 px-3 py-2">
+          <ListChecks size={13} aria-hidden className="shrink-0 text-ink-fg-2" />
           <span className="min-w-0 flex-1 truncate text-meta text-ink-fg-1">
             {t('contacts.select.n', { n: props.checkedIds.size })}
           </span>
+          <button
+            type="button"
+            onClick={props.onExitSelection}
+            className="shrink-0 rounded-[var(--r-ctl)] px-2.5 py-1 text-meta text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.06]"
+          >
+            {t('contacts.select.exit')}
+          </button>
           <button
             type="button"
             aria-disabled={props.checkedIds.size !== 2}
@@ -283,20 +361,13 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
               props.onMergePair([ids[0]!, ids[1]!])
             }}
             className={cn(
-              'rounded-[var(--r-ctl)] px-2.5 py-1 text-meta font-medium transition-colors duration-fast ease-standard',
+              'shrink-0 rounded-[var(--r-ctl)] border px-2.5 py-1 text-meta font-medium transition-colors duration-fast ease-standard',
               props.checkedIds.size === 2
-                ? 'bg-coral/100 text-accent-fg hover:bg-coral-hover'
-                : 'border border-ink-border text-ink-fg-3 opacity-70 hover:bg-ink-3'
+                ? 'border-coral/30 bg-coral/10 text-coral hover:bg-coral/[0.17]'
+                : 'border-ink-border text-ink-fg-3 opacity-70 hover:bg-ink-3'
             )}
           >
             {t('contacts.select.merge')}
-          </button>
-          <button
-            type="button"
-            onClick={props.onExitSelection}
-            className="rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1 text-meta text-ink-fg-1 hover:bg-ink-3"
-          >
-            {t('contacts.select.exit')}
           </button>
         </div>
       ) : null}

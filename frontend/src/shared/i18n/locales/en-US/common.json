@@ -5207,7 +5207,13 @@
       "source": "Source",
       "providerNames": {
         "mailagent": "Local mail library",
-        "web": "External web page"
+        "web": "External web page",
+        "notion": "Notion",
+        "confluence": "Confluence",
+        "atlassian": "Atlassian (Jira / Confluence)",
+        "googledrive": "Google Drive",
+        "figma": "Figma",
+        "github": "GitHub"
       },
       "canonicalUrl": "Source URL",
       "openInSource": "Open in {name}",

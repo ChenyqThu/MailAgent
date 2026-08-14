@@ -5443,7 +5443,13 @@
       "source": "来源",
       "providerNames": {
         "mailagent": "本地邮件库",
-        "web": "外部网页"
+        "web": "外部网页",
+        "notion": "Notion",
+        "confluence": "Confluence",
+        "atlassian": "Atlassian（Jira / Confluence）",
+        "googledrive": "Google Drive",
+        "figma": "Figma",
+        "github": "GitHub"
       },
       "canonicalUrl": "原文地址",
       "openInSource": "在 {name} 中打开",

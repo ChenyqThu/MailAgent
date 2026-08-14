@@ -20,6 +20,8 @@ interface MonogramProps {
   kind: ContactKind
   /** px 直径。 */
   size?: number
+  /** 已隐藏的记录整体压暗（原型 `cui.jsx::Monogram` 的 `dim` → opacity .6）。 */
+  dim?: boolean
   className?: string
 }
 
@@ -28,21 +30,28 @@ export function Monogram({
   primaryEmail,
   kind,
   size = 32,
+  dim,
   className
 }: MonogramProps): React.ReactElement {
-  const iconSize = Math.max(12, Math.round(size * 0.48))
   if (kind !== 'person') {
+    // 原型：虚线圆角方块 + `ink-fg/0.04` 底 + `ink-fg-2` 字色 + 图标 0.5×size；
+    // 圆角 size≥30 走行档(9)、更小走控件档(8)。
     return (
       <span
         aria-hidden
         className={cn(
-          'inline-flex shrink-0 items-center justify-center rounded-[var(--r-ctl)]',
-          'border border-dashed border-ink-border text-ink-fg-3',
+          'inline-flex shrink-0 items-center justify-center border border-dashed',
+          'border-ink-border bg-ink-fg/[0.04] text-ink-fg-2',
+          size >= 30 ? 'rounded-[var(--r-row)]' : 'rounded-[var(--r-ctl)]',
           className
         )}
-        style={{ width: size, height: size }}
+        style={{ width: size, height: size, opacity: dim ? 0.6 : undefined }}
       >
-        {kind === 'robot' ? <Bot size={iconSize} /> : <Megaphone size={iconSize} />}
+        {kind === 'robot' ? (
+          <Bot size={Math.round(size * 0.5)} />
+        ) : (
+          <Megaphone size={Math.round(size * 0.5)} />
+        )}
       </span>
     )
   }
@@ -53,7 +62,7 @@ export function Monogram({
     <span
       aria-hidden
       className={cn(
-        'inline-flex shrink-0 select-none items-center justify-center rounded-full font-medium',
+        'inline-flex shrink-0 select-none items-center justify-center rounded-full font-semibold',
         className
       )}
       style={{
@@ -61,8 +70,10 @@ export function Monogram({
         height: size,
         color: tone,
         background: `hsl(${hue} 62% 42% / 0.16)`,
-        boxShadow: `inset 0 0 0 1px hsl(${hue} 62% 42% / 0.35)`,
-        fontSize: Math.max(10, Math.round(size * 0.38))
+        boxShadow: `inset 0 0 0 1px hsl(${hue} 62% 42% / 0.28)`,
+        fontSize: Math.max(10, Math.round(size * 0.4)),
+        letterSpacing: '-0.02em',
+        opacity: dim ? 0.6 : undefined
       }}
     >
       {initials}

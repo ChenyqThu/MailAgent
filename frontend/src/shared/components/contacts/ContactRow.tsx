@@ -2,6 +2,9 @@
 // 行操作：hover 只出一个「更多」IconBtn + 右键同一菜单（🔒 不放行内悬浮危险钮）；
 // 多选态行首 monogram 位换 checkbox（🔒 hover 不出现任何选择控件，进入多选只有
 // 行菜单「选中此条」与 ⌘/Ctrl 点行两个显式入口）。
+//
+// 🔴 图标纪律见 `parts.tsx` 文件头：原型里 path 缺失、实际渲染为空 svg 的图标
+// （组头的 bot/megaphone/building 等）**不补** —— 那不是 owner 看过的样子。
 
 import { useState } from 'react'
 import { Check, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
@@ -14,7 +17,7 @@ import { formatMatterAgo } from '@shared/lib/matterDerive'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 
 import { Monogram } from './Monogram'
-import { HiddenPip, KindPip, SelfPip, TwoWayBar } from './parts'
+import { ContactPip, HiddenPip, KindPip, SelfPip, TwoWayBar } from './parts'
 import type { ContactDensity, ContactListRow } from './contactListModel'
 
 /** 治理动作的最小目标形状 —— ContactRowDto 与档案页的 detail 投影都满足它，
@@ -133,16 +136,27 @@ export function ContactVirtualRow({
   if (!row) return <div style={style} />
 
   if (row.type === 'header') {
+    // 原型 `clist.jsx::GroupHead`：chevron + mono 大写字距标签 + mono 计数 +
+    // 一根填满余宽的细线（图标见文件头「图标纪律」：原型里一半是空 svg，整组不补）。
     return (
       <div style={style} className="px-2">
         <button
           type="button"
           onClick={() => onToggleGroup(row.key)}
-          className="flex h-full w-full items-center gap-1.5 px-2 text-left text-meta font-medium text-ink-fg-2 hover:text-ink-fg-1"
+          className="flex h-full w-full items-center gap-[7px] px-2 text-left text-ink-fg-2 transition-colors duration-fast ease-standard hover:text-ink-fg-1"
         >
-          {row.collapsed ? <ChevronRight size={12} /> : <ChevronDown size={12} />}
-          <span className="min-w-0 flex-1 truncate">{row.label}</span>
-          <span className="font-mono text-micro tabular-nums text-ink-fg-3">{row.count}</span>
+          {row.collapsed ? (
+            <ChevronRight size={11} className="shrink-0 text-ink-fg-3" />
+          ) : (
+            <ChevronDown size={11} className="shrink-0 text-ink-fg-3" />
+          )}
+          <span className="min-w-0 truncate font-mono text-[10.5px] uppercase tracking-[0.08em]">
+            {row.label}
+          </span>
+          <span className="shrink-0 font-mono text-[10.5px] tabular-nums text-ink-fg-3">
+            {row.count}
+          </span>
+          <span aria-hidden className="h-px min-w-4 flex-1 bg-ink-border-soft" />
         </button>
       </div>
     )
@@ -151,6 +165,7 @@ export function ContactVirtualRow({
   const item = row.item
   const selected = selectedId === item.id
   const checked = checkedIds.has(item.id)
+  const hidden = item.hidden_at != null
   const subtitle =
     [item.organization, item.role_title].filter(Boolean).join(' · ') ||
     emailDomain(item.primary_email) ||
@@ -159,7 +174,14 @@ export function ContactVirtualRow({
     item.last_seen_at != null
       ? formatMatterAgo(item.last_seen_at, now, i18n.language || 'zh-CN')
       : ''
+  // 原型 `clist.jsx`：我发出过 → `{sent}↑ {总数}`；从未发出 → 只报总数
+  // （恒显示 `↑0` 会把「单向收到」误读成「有来往」）。
+  const exchange =
+    item.sent_to_count > 0
+      ? `${item.sent_to_count}↑ ${item.mail_count.toLocaleString()}`
+      : item.mail_count.toLocaleString()
   const menuOpen = menuOpenId === item.id
+  const monogramSlot = density === 'comfortable' ? 34 : 30
 
   return (
     <div style={style} className="px-2">
@@ -190,28 +212,41 @@ export function ContactVirtualRow({
           onMenuOpenChange(item.id)
         }}
         className={cn(
-          'group relative flex h-full cursor-default items-center gap-2.5 rounded-[var(--r-row)] px-2',
+          'group relative flex h-full cursor-pointer items-center gap-2.5 rounded-[var(--r-row)]',
+          'pl-[13px] pr-3 transition-colors duration-fast ease-standard',
+          hidden && 'opacity-[0.55]',
           selected ? 'row-selected acc-select' : 'hover:bg-ink-3'
         )}
       >
+        {/* 多选态 checkbox 占 monogram 的同宽槽 —— 换控件时行内容不左右位移。 */}
         {selectionMode ? (
           <span
-            aria-hidden
-            className={cn(
-              'inline-flex size-[18px] shrink-0 items-center justify-center rounded-[5px] border',
-              checked
-                ? 'border-coral bg-coral/100 text-accent-fg'
-                : 'border-ink-border bg-transparent text-transparent'
-            )}
+            className="flex shrink-0 justify-center"
+            style={{ width: monogramSlot }}
+            onClick={(event) => {
+              event.stopPropagation()
+              actions.onToggleCheck(item)
+            }}
           >
-            <Check size={12} strokeWidth={3} />
+            <span
+              aria-hidden
+              className={cn(
+                'inline-flex size-4 items-center justify-center rounded-[4px] border-[1.5px]',
+                checked
+                  ? 'border-coral bg-coral/100 text-accent-fg'
+                  : 'border-ink-fg-3 bg-transparent text-transparent'
+              )}
+            >
+              <Check size={11} strokeWidth={3} />
+            </span>
           </span>
         ) : (
           <Monogram
             displayName={item.display_name}
             primaryEmail={item.primary_email}
             kind={item.kind}
-            size={density === 'comfortable' ? 34 : 30}
+            size={monogramSlot}
+            dim={hidden}
           />
         )}
 
@@ -219,51 +254,54 @@ export function ContactVirtualRow({
           <div className="flex min-w-0 items-center gap-1.5">
             <span
               className={cn(
-                'truncate text-body text-ink-fg',
-                item.display_name == null && 'italic text-ink-fg-1'
+                'truncate text-body font-medium text-ink-fg',
+                item.display_name == null && 'italic'
               )}
             >
               {item.display_name ?? item.primary_email?.split('@')[0] ?? '—'}
             </span>
             {item.is_self ? <SelfPip /> : null}
             <KindPip kind={item.kind} />
-            {item.hidden_at != null ? <HiddenPip /> : null}
+            {hidden ? <HiddenPip /> : null}
           </div>
-          <div className="truncate text-meta text-ink-fg-2">{subtitle}</div>
+          <div className="mt-px flex min-w-0 items-center gap-1.5">
+            <span className="truncate text-meta text-ink-fg-2">{subtitle}</span>
+            {item.email_count > 1 ? (
+              <ContactPip>{t('contacts.badge.emails', { n: item.email_count })}</ContactPip>
+            ) : null}
+          </div>
           {density === 'comfortable' && item.profile_summary ? (
-            <div className="truncate text-meta text-ink-fg-3">{item.profile_summary}</div>
+            <div className="mt-0.5 truncate text-micro text-ink-fg-3">{item.profile_summary}</div>
           ) : null}
         </div>
 
-        <div className="flex shrink-0 flex-col items-end gap-1">
-          <span className="font-mono text-micro tabular-nums text-ink-fg-2 group-hover:opacity-0">
-            ↑{item.sent_to_count} <span className="text-ink-fg-3">{item.mail_count}</span>
-          </span>
-          <TwoWayBar
-            sent={item.sent_to_count}
-            total={item.mail_count}
-            className="w-14 group-hover:opacity-0"
-          />
-          <span className="font-mono text-micro tabular-nums text-ink-fg-3 group-hover:opacity-0">
-            {ago}
-          </span>
+        {/* 🔴 右列恒显示：原型没有 hover 抹掉行数据这回事。 */}
+        <div className="flex shrink-0 flex-col items-end gap-[3px]">
+          <span className="font-mono text-micro tabular-nums text-ink-fg-2">{exchange}</span>
+          <TwoWayBar sent={item.sent_to_count} total={item.mail_count} className="w-[34px]" />
+          <span className="text-micro text-ink-fg-3">{ago}</span>
         </div>
 
-        {/* hover 唯一动作钮：更多（右键同一菜单）。 */}
-        <button
-          type="button"
-          aria-label={t('contacts.row.more')}
-          onClick={(event) => {
-            event.stopPropagation()
-            onMenuOpenChange(menuOpen ? null : item.id)
-          }}
-          className={cn(
-            'absolute right-2 top-1/2 -translate-y-1/2 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 p-1 text-ink-fg-2 opacity-0 transition-opacity hover:text-ink-fg focus-visible:opacity-100 group-hover:opacity-100',
-            menuOpen && 'opacity-100'
-          )}
-        >
-          <MoreHorizontal size={14} />
-        </button>
+        {/* hover 唯一动作钮：更多（右键同一菜单）。占位恒在、只淡入淡出 ——
+            绝对定位浮在行上会盖住右列数据。 */}
+        <span className="-mr-1.5 shrink-0">
+          <button
+            type="button"
+            aria-label={t('contacts.row.more')}
+            onClick={(event) => {
+              event.stopPropagation()
+              onMenuOpenChange(menuOpen ? null : item.id)
+            }}
+            className={cn(
+              'grid size-6 place-items-center rounded-[var(--r-ctl)] text-ink-fg-2 opacity-0',
+              'transition-opacity duration-fast ease-standard',
+              'hover:bg-ink-fg/[0.08] hover:text-ink-fg focus-visible:opacity-100 group-hover:opacity-100',
+              menuOpen && 'opacity-100'
+            )}
+          >
+            <MoreHorizontal size={13} />
+          </button>
+        </span>
         {menuOpen ? (
           <Popmenu
             open
