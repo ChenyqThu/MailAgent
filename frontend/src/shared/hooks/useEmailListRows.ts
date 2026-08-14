@@ -304,13 +304,14 @@ export function useEmailListRows(): UseEmailListRowsReturn {
     [customMailbox, pinnedSupp]
   )
 
-  // Focused/Other tab 是收件箱分流概念 (按 AI 优先级把进站邮件拆 重点/其他)。
+  // Focused/Other tab 是收件箱分流概念 (按「是不是噪音」把进站邮件拆 重点/其他,
+  // 判据见 applyTab —— 2026-08-14 起是 系统通知分类 + 机器人发件人, 不再是优先级)。
   // 对「已标旗 / 发件箱 / 全部」这些跨邮箱视图无意义 — 标旗视图本应显示我标的
-  // 全部邮件, 套 focused tab 会把 ai_priority='low' 的标旗邮件藏进 Other, 导致
-  // 列表 < sidebar badge (badge 是纯 SQL is_flagged=1 计数)。故仅收件箱视图应用
-  // tab 过滤; 其余视图直接用 all (tab bar 在下方 header 也只对收件箱渲染)。
+  // 全部邮件, 套 focused tab 会把被判噪音的标旗邮件藏进 Other, 导致列表 <
+  // sidebar badge (badge 是纯 SQL is_flagged=1 计数)。故仅收件箱视图应用 tab
+  // 过滤; 其余视图直接用 all (tab bar 在下方 header 也只对收件箱渲染)。
   // 多文件夹同步 (P3) — 自定义文件夹无 Focused/Other 分流 (header 也不渲染 tab),
-  // 故 customMailbox 激活时不套 tab 过滤 (否则 low 优先级邮件被藏进 Other)。
+  // 故 customMailbox 激活时不套 tab 过滤 (否则噪音类邮件被藏进 Other)。
   const tabFiltered = useMemo(
     () => (view === 'inbox' && !customMailbox ? applyTab(tab, all) : all),
     [view, tab, all, customMailbox]
@@ -369,9 +370,10 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   // was an outbox reply ("有的是我最新回的邮件...这种现在好像点击不了").
 
   // counts 跟当前 tab (Focused/Other) 联动. 之前用 `all` 全集导致 meta line
-  // 显示 "5 封未读" 但点 unread filter 过滤出空——5 封 unread 都是 ai_priority
-  // ='low' 落在 Other tab, 在 Focused tab 被 applyTab 提前过滤掉了. 现在数字
-  // 严格跟 filter 看到的视图一致.
+  // 显示 "5 封未读" 但点 unread filter 过滤出空——那 5 封未读都落在 Other tab,
+  // 在 Focused tab 被 applyTab 提前过滤掉了. 现在数字严格跟 filter 看到的视图
+  // 一致 (口径锚在 tabFiltered 这个中间量上, 与 applyTab 用什么判据无关 ——
+  // 2026-08-14 判据从 ai_priority 换成噪音轴, 这条不变量原样成立).
   // 口径与筛选菜单的每一行一一对应 (菜单行右侧显示这些数)：每个数都是「只开
   // 这一条轴时会剩下多少」，所以它们互相独立、不叠加。
   const counts = useMemo(() => {

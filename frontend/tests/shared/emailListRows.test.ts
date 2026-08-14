@@ -27,6 +27,7 @@ import {
   flattenGroups,
   groupBySentAnchor,
   groupByThread,
+  isBotSender,
   partitionByDate,
   partitionFlat,
   recipientIsMe,
@@ -184,23 +185,136 @@ describe('recipientIsMe', () => {
 
 // ─── applyTab ─────────────────────────────────────────────────────────
 
-describe('applyTab', () => {
-  const rows = [
-    em({ internal_id: 1, ai_priority: 'low' }),
-    em({ internal_id: 2, ai_priority: 'urgent' }),
-    em({ internal_id: 3, ai_priority: null })
-  ]
-
-  test("'other' keeps only ai_priority === 'low'", () => {
-    expect(applyTab('other', rows).map((r) => r.internal_id)).toEqual([1])
+describe('applyTab（2026-08-14 判据重设计 · WP-4）', () => {
+  test('🔴 同事真人邮件被判 low → 仍留「重点」（ai_priority 完全退出 tab 判据）', () => {
+    // 活库实测：旧判据把 345 封划进「其他」，其中 183 封是这个形状 —— 同事发的
+    // 业务邮件只是被 LLM 判了低优先级（owner 报的 Gary W 那封即在其中）。
+    const human = em({
+      internal_id: 1,
+      sender: 'gary.w@omadanetworks.test',
+      ai_priority: 'low',
+      ai_category: '🛠️ 技术讨论'
+    })
+    expect(applyTab('focused', [human]).map((r) => r.internal_id)).toEqual([1])
+    expect(applyTab('other', [human])).toHaveLength(0)
   })
 
-  test("'focused' keeps everything that is not low", () => {
-    expect(applyTab('focused', rows).map((r) => r.internal_id)).toEqual([2, 3])
+  test('🔴 系统通知被判 normal → 仍进「其他」（分类是主判据，不是优先级）', () => {
+    const noise = em({
+      internal_id: 2,
+      sender: 'someone@example.test',
+      ai_priority: 'normal',
+      ai_category: '🔔 系统通知'
+    })
+    expect(applyTab('other', [noise]).map((r) => r.internal_id)).toEqual([2])
+    expect(applyTab('focused', [noise])).toHaveLength(0)
   })
 
-  test("'focused' keeps unclassified rows (ai_priority null) so new mail never lands in Other", () => {
-    expect(applyTab('focused', [em({ internal_id: 9, ai_priority: null })])).toHaveLength(1)
+  test('机器人发件人进「其他」，哪怕分类是业务类（不依赖 LLM 的兜底）', () => {
+    const rows = [
+      em({ internal_id: 1, sender: 'jira@tp-link-global.atlassian.test' }),
+      em({ internal_id: 2, sender: 'confluence@tp-link-global.atlassian.test' }),
+      em({ internal_id: 3, sender: 'notify.jira@email.tp-link.test' })
+    ].map((r) => ({ ...r, ai_category: '🛠️ 技术讨论', ai_priority: 'important' as const }))
+    expect(applyTab('other', rows).map((r) => r.internal_id)).toEqual([1, 2, 3])
+    expect(applyTab('focused', rows)).toHaveLength(0)
+  })
+
+  test('未跑 LLM（ai_category 为空）且发件人不像机器人 → 留「重点」', () => {
+    expect(
+      applyTab('focused', [
+        em({ internal_id: 9, sender: 'alice@omadanetworks.test', ai_category: null })
+      ])
+    ).toHaveLength(1)
+  })
+
+  test('两个 tab 互补：并集 = 全集，交集为空', () => {
+    const rows = [
+      em({ internal_id: 1, sender: 'alice@x.test' }),
+      em({ internal_id: 2, sender: 'noreply@x.test' }),
+      em({ internal_id: 3, sender: 'bob@x.test', ai_category: '🔔 系统通知' }),
+      em({ internal_id: 4, sender: 'carol@x.test', ai_priority: 'low' })
+    ]
+    const focused = applyTab('focused', rows).map((r) => r.internal_id)
+    const other = applyTab('other', rows).map((r) => r.internal_id)
+    expect(focused).toEqual([1, 4])
+    expect(other).toEqual([2, 3])
+    expect([...focused, ...other].sort()).toEqual([1, 2, 3, 4])
+  })
+})
+
+describe('isBotSender', () => {
+  test('折叠 local part 后子串命中 —— 一个 token 盖住全部分隔符写法', () => {
+    for (const s of [
+      'noreply@x.test',
+      'no-reply@x.test',
+      'no.reply@x.test',
+      'no_reply@x.test',
+      'sc-noreply@google.test',
+      'noreply+a659685@id.atlassian.test',
+      'noreply.rsemail@mc2.adp.test',
+      'donotreply@x.test',
+      'do-not-reply@x.test',
+      'notification.usa@tp-link.test',
+      'cloud.ops.notify@tp-link.test',
+      'newsletter@omadanetworks.test',
+      'mailer-daemon@x.test'
+    ]) {
+      expect(isBotSender(s), s).toBe(true)
+    }
+  })
+
+  test('🔴 短词按「整段相等」匹配 —— 真人 local part 含它的子串不误伤', () => {
+    expect(isBotSender('jira@tp-link-global.atlassian.test')).toBe(true)
+    expect(isBotSender('jira-notifications@x.test')).toBe(true)
+    // `talbot` / `abbot` 含 bot、`jirasmith` 含 jira —— 段相等判据下都不命中。
+    expect(isBotSender('talbot@x.test')).toBe(false)
+    expect(isBotSender('abbot.lee@x.test')).toBe(false)
+    expect(isBotSender('jirasmith@x.test')).toBe(false)
+    expect(isBotSender('build-bot@x.test')).toBe(true)
+  })
+
+  test('🔴 只看 local part，不看域名（同事可能挂在通知类子域下）', () => {
+    expect(isBotSender('alice@notifications.company.test')).toBe(false)
+    expect(isBotSender('bob@jira.company.test')).toBe(false)
+  })
+
+  test('🔴 support / service / info / admin 共享信箱有意不收（真人技术支持要留在重点）', () => {
+    for (const s of [
+      'psi.support@tp-link.test',
+      'service@x.test',
+      'info@e.atlassian.test',
+      'admin.usa@tp-link.test'
+    ]) {
+      expect(isBotSender(s), s).toBe(false)
+    }
+  })
+
+  test('🔴 sender 带显示名时只判尖括号里的地址（活库 68% 的行是这个形状）', () => {
+    // email_metadata.sender 不保证是裸地址: AppleScript 路径写整个 From 头
+    // (活库 13011 行里 8850 行, 全部 backend_origin='applescript')。不剥显示名的话
+    // 判据会去读**发件人自己填的字符串** —— 活库实测 `"徐静雅 (Jira)" <itjsm.gm@…>`
+    // 是真人邮件, 却靠显示名里的 "(Jira)" 命中 bot 判据。
+    expect(isBotSender('"徐静雅 (Jira)" <itjsm.gm@tp-link.test>')).toBe(false)
+    expect(isBotSender('Alert Center <alice@tp-link.test>')).toBe(false)
+    expect(isBotSender('Bot Framework Team <carol@ms.test>')).toBe(false)
+    expect(isBotSender('Gary W <gary.w@tp-link.test>')).toBe(false)
+    // 地址本身是机器人 → 显示名写什么都照样命中。
+    expect(isBotSender('Atlassian <noreply+65ff4a9@id.atlassian.test>')).toBe(true)
+    expect(isBotSender('TPS IT Service Desk <notify.jira@email.tp-link.test>')).toBe(true)
+    expect(isBotSender('"AutoNotification@x.test" <AutoNotification@x.test>')).toBe(true)
+  })
+
+  test('普通同事地址 / 空值 → false', () => {
+    expect(isBotSender('lucien.chen@omadanetworks.test')).toBe(false)
+    expect(isBotSender(null)).toBe(false)
+    expect(isBotSender(undefined)).toBe(false)
+    expect(isBotSender('')).toBe(false)
+    expect(isBotSender('@x.test')).toBe(false)
+  })
+
+  test('大小写无关', () => {
+    expect(isBotSender('NoReply@X.TEST')).toBe(true)
   })
 })
 
@@ -313,9 +427,11 @@ describe('groupByThread', () => {
     expect(ids).toEqual([1, 2])
   })
 
-  test('supplement merges cross-mailbox siblings; a newer supplement message becomes head but anchorDate stays newest VISIBLE', () => {
-    // #10 dogfood semantics: my sent reply (today, from supplement) may lead
-    // the bundle, but sort/bucket anchor comes from the visible inbox set.
+  test('🔴 supplement 只供折叠内的子邮件 —— 更新的 supplement 邮件不再抢 head（08-14 WP-1 方案 A）', () => {
+    // 改之前: head = 9 (supplement 里 07-10 的已发回复), 而 anchorDate = 07-08
+    // (可见集合最新) —— 显示的那封与排序/分桶的依据来自两个不同集合, 正是
+    // 「今天的邮件出现在昨天组 + 组内乱序」的病根。
+    // 现在: head 恒取可见集合最新 (1 @07-08), 9 退到 children (DESC 里仍在最前)。
     const supplement = new Map([
       [
         't1',
@@ -338,9 +454,30 @@ describe('groupByThread', () => {
       supplement
     )
     expect(groups).toHaveLength(1)
-    expect(groups[0]!.head.internal_id).toBe(9) // supplement sent reply leads
-    expect(groups[0]!.children.map((c) => c.internal_id)).toEqual([1, 2])
-    expect(groups[0]!.anchorDate).toBe('2026-07-08T10:00:00') // newest visible, not 07-10
+    expect(groups[0]!.head.internal_id).toBe(1) // 可见集合最新, 不是全体最新
+    expect(groups[0]!.children.map((c) => c.internal_id)).toEqual([9, 2])
+    expect(groups[0]!.anchorDate).toBe('2026-07-08T10:00:00')
+    // 🔴 同源不变量: 显示时间 === 排序/分桶依据。
+    expect(groups[0]!.anchorDate).toBe(groups[0]!.head.date_received)
+  })
+
+  test('🔴 anchorDate 恒等于 head.date_received（不再是第二个独立来源）', () => {
+    const supplement = new Map([
+      ['tA', [em({ internal_id: 11, thread_id: 'tA', date_received: '2026-07-10T09:00:00' })]],
+      ['tB', [em({ internal_id: 12, thread_id: 'tB', date_received: '2026-07-11T09:00:00' })]]
+    ])
+    const groups = groupByThread(
+      [
+        em({ internal_id: 1, thread_id: 'tA', date_received: '2026-07-08T10:00:00' }),
+        em({ internal_id: 2, thread_id: 'tA', date_received: '2026-07-07T10:00:00' }),
+        em({ internal_id: 3, thread_id: 'tB', date_received: '2026-07-09T10:00:00' }),
+        em({ internal_id: 4, date_received: '2026-07-06T10:00:00' }) // solitary
+      ],
+      supplement
+    )
+    for (const g of groups) {
+      expect(g.anchorDate, `group head=${g.head.internal_id}`).toBe(g.head.date_received)
+    }
   })
 
   test('supplement-only rows retain metadata snippets for preview height', () => {
@@ -387,6 +524,158 @@ describe('groupByThread', () => {
     // tB (visible anchor 07-09) outranks tA (visible anchor 07-08) even though
     // tA's absolute newest message (supplement, 07-10) is fresher.
     expect(groups.map((g) => g.threadId)).toEqual(['tB', 'tA'])
+  })
+})
+
+// ─── WP-1 端到端回归：head 与分桶/排序同源（task 08-14） ──────────────
+//
+// owner 2026-08-14 dogfood：「我在当前 emaillist 的昨天看到了很多邮件，但他们都是
+// 今天的（按照 PST 时间算）」「排序感觉也有问题，时间顺序都是乱的」。两个症状同源 ——
+// head 取自「可见集合 + supplement」的全体最新，anchorDate（分桶 + 组排序的唯一依据）
+// 只取自可见集合。下面两条是实证过的落进该分支的路径，各跑一遍完整链路
+// （filter → groupByThread → partitionByDate）而不是手搓一个「假设已被过滤」的入参。
+
+describe('groupByThread × partitionByDate — head 与分桶/排序同源（WP-1）', () => {
+  // 与 partitionByDate 那组同款冻结时钟：Friday 2026-07-10 12:00 本地
+  // （vitest TZ 钉 America/Los_Angeles）→ today: 07-10T00:00, yesterday: 07-09。
+  beforeEach(() => {
+    vi.useFakeTimers()
+    vi.setSystemTime(new Date('2026-07-10T12:00:00'))
+  })
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  const NO_PINS: ReadonlySet<number> = new Set()
+  const fullPri = new Set(ALL_PRIORITIES)
+  const fullCat = new Set(ALL_CATEGORIES)
+
+  test('🔴 路径①：线程最新那封被 tab 判据排除 → head 退回可见集合最新，分桶跟着走', () => {
+    // 活库原型 internal_id=1000012705：线程里最新那封今天 09:28 到，但它是噪音，
+    // Focused 视图看不到它；线程里可见的最新是昨天 20:45。改之前 head=今天那封 /
+    // anchorDate=昨天那封 → 行上写着「2 小时前」却排在「昨天」组里。
+    const noisyNewest = em({
+      internal_id: 705,
+      thread_id: 't-gary',
+      date_received: '2026-07-10T09:28:00',
+      sender: 'notify.jira@email.tp-link.test',
+      ai_category: '🔔 系统通知'
+    })
+    const visibleOlder = em({
+      internal_id: 659,
+      thread_id: 't-gary',
+      date_received: '2026-07-09T20:45:00',
+      sender: 'gary.w@omadanetworks.test'
+    })
+    const inbox = [noisyNewest, visibleOlder]
+    const focused = applyTab('focused', inbox)
+    // 前提坐实：最新那封确实不在可见集合里。
+    expect(focused.map((r) => r.internal_id)).toEqual([659])
+    // supplement = 跨邮箱全线程（listByThreads 不带 mailbox / tab 过滤）。
+    const groups = groupByThread(focused, new Map([['t-gary', inbox]]))
+    expect(groups).toHaveLength(1)
+    const g = groups[0]!
+    expect(g.head.internal_id).toBe(659)
+    expect(g.children.map((c) => c.internal_id)).toEqual([705])
+    expect(g.anchorDate).toBe(g.head.date_received)
+    const buckets = partitionByDate(groups, NO_PINS)
+    expect(buckets.today).toHaveLength(0)
+    expect(buckets.yesterday.map((x) => x.head.internal_id)).toEqual([659])
+  })
+
+  test('🔴 路径①b：优先级筛选排除掉线程最新那封（与 tab 判据无关的同一形态）', () => {
+    const filteredOutNewest = em({
+      internal_id: 705,
+      thread_id: 't-p',
+      date_received: '2026-07-10T09:28:00',
+      ai_priority: 'low'
+    })
+    const visibleOlder = em({
+      internal_id: 659,
+      thread_id: 't-p',
+      date_received: '2026-07-09T20:45:00',
+      ai_priority: 'important'
+    })
+    const inbox = [filteredOutNewest, visibleOlder]
+    const visible = applyMultiFilter(inbox, new Set(['important']), fullCat)
+    expect(visible.map((r) => r.internal_id)).toEqual([659])
+    const groups = groupByThread(visible, new Map([['t-p', inbox]]))
+    expect(groups[0]!.head.internal_id).toBe(659)
+    expect(groups[0]!.anchorDate).toBe(groups[0]!.head.date_received)
+    expect(partitionByDate(groups, NO_PINS).yesterday).toHaveLength(1)
+  })
+
+  test('🔴 路径②：线程最新那封在发件箱（收件箱视图下天然不可见）', () => {
+    // 活库原型 internal_id=1000012714：owner 自己今天 10:54 回的那封在发件箱，
+    // 收件箱的可见集合里没有它；线程可见最新是昨天 20:00。
+    const myReply = em({
+      internal_id: 714,
+      thread_id: 't-x',
+      date_received: '2026-07-10T10:54:00',
+      mailbox: '发件箱'
+    })
+    const visible = em({
+      internal_id: 649,
+      thread_id: 't-x',
+      date_received: '2026-07-09T20:00:00'
+    })
+    // 收件箱可见集合只有 649；supplement 跨邮箱补全整条线程。
+    const groups = groupByThread([visible], new Map([['t-x', [myReply, visible]]]))
+    expect(groups).toHaveLength(1)
+    const g = groups[0]!
+    expect(g.head.internal_id).toBe(649)
+    expect(g.children.map((c) => c.internal_id)).toEqual([714])
+    expect(g.anchorDate).toBe(g.head.date_received)
+    const buckets = partitionByDate(groups, NO_PINS)
+    expect(buckets.today).toHaveLength(0)
+    expect(buckets.yesterday.map((x) => x.head.internal_id)).toEqual([649])
+  })
+
+  test('🔴 组内按 head 的显示时间严格递减（owner 报的「时间顺序都是乱的」）', () => {
+    // 三条线程的绝对最新分别在发件箱 / 被 tab 排除 / 就在可见集合里 —— 混合形态。
+    const inbox = [
+      em({ internal_id: 659, thread_id: 't1', date_received: '2026-07-09T20:45:00' }),
+      em({ internal_id: 649, thread_id: 't2', date_received: '2026-07-09T20:00:00' }),
+      em({ internal_id: 600, thread_id: 't3', date_received: '2026-07-09T17:30:00' }),
+      em({ internal_id: 590, date_received: '2026-07-09T09:00:00' }) // solitary
+    ]
+    const supplement = new Map([
+      [
+        't1',
+        [
+          ...inbox.filter((e) => e.thread_id === 't1'),
+          em({
+            internal_id: 705,
+            thread_id: 't1',
+            date_received: '2026-07-10T09:28:00',
+            mailbox: '发件箱'
+          })
+        ]
+      ],
+      [
+        't2',
+        [
+          ...inbox.filter((e) => e.thread_id === 't2'),
+          em({
+            internal_id: 714,
+            thread_id: 't2',
+            date_received: '2026-07-10T10:54:00',
+            mailbox: '发件箱'
+          })
+        ]
+      ],
+      ['t3', inbox.filter((e) => e.thread_id === 't3')]
+    ])
+    const groups = groupByThread(applyMultiFilter(inbox, fullPri, fullCat), supplement)
+    const buckets = partitionByDate(groups, NO_PINS)
+    // 全部落「昨天」组（没有一条被 supplement 的今日时间戳推进「今天」）。
+    expect(buckets.today).toHaveLength(0)
+    const bucket = buckets.yesterday
+    expect(bucket.map((g) => g.head.internal_id)).toEqual([659, 649, 600, 590])
+    // 🔴 行上真正显示的时间（head.date_received）严格递减 —— 改之前这里会是
+    // 09:28 / 10:54 / 17:30 / 09:00 那种乱序。
+    const shown = bucket.map((g) => g.head.date_received ?? '')
+    expect(shown).toEqual([...shown].sort().reverse())
   })
 })
 

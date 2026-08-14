@@ -20,9 +20,11 @@ import type { AIPriority, EnrichedEmailMeta } from '@shared/api/types'
 //
 // Sprint 14 round 9 — Outlook-style thread bundling.  Rows of type
 // 'email' carry an optional `thread` block:
-//   • isHead = true  → row is the most-recent message of a thread that
-//     has ≥ 1 sibling; chevron prepended (rotates with expanded state),
-//     clicking toggles the bundle.  childCount drives the "+N" hint.
+//   • isHead = true  → row stands for a thread that has ≥ 1 sibling;
+//     chevron prepended (rotates with expanded state), clicking toggles
+//     the bundle.  childCount drives the "+N" hint.  🔴 08-14 WP-1 起它
+//     是「**可见集合**里最新那封」而**不再是**线程绝对最新（后者可能被
+//     tab/筛选排除、或在另一个邮箱）—— 见 groupByThread。
 //   • isHead = false → row is an older sibling.  Indented to the right.
 // Rows without a `thread` block are solitary messages, rendered exactly
 // like before round 9.
@@ -44,9 +46,10 @@ export type ThreadRowInfo =
   | { isHead: false; threadId: string; childIndex: number }
 
 export interface ThreadHeadAgg {
-  /** 线程全部成员 internal_id (含最新一封, DESC 序) —— 聚合显示 + 级联写的乐观
-   *  翻转集。展开时同一 id 会出现两行 (虚拟头 + 首个子行), 所以这里是**成员集**
-   *  而不是「子行集」。 */
+  /** 线程全部成员 internal_id —— 聚合显示 + 级联写的乐观翻转集。展开时同一 id 会
+   *  出现两行 (虚拟头 + 首个子行), 所以这里是**成员集**而不是「子行集」。
+   *  🔴 消费侧一律按**集合**用 (includes / filter / 级联写); 08-14 WP-1 之后
+   *  `[head, ...children]` 里 head 未必是绝对最新, 顺序已不保证 DESC。 */
   memberIds: number[]
   /** 任一成员 is_flagged —— 虚拟头的旗标聚合显示 (折叠时代表整条线程)。 */
   aggFlagged: boolean
@@ -270,16 +273,112 @@ export function applyAxisFilters(
   })
 }
 
-// Focused / Other split is purely priority-driven now — LLM CATEGORY_ENUM
-// has no "low-signal" bucket, so we use `ai_priority === 'low'` as the
-// authoritative signal. Rows without an LLM run (ai_priority === null) stay
-// in Focused so newly-arrived mail never silently lands in Other.
+// ─── Focused / Other split（2026-08-14 owner 拍板重设计，task 08-14 WP-4） ──
+//
+// 判据从 `ai_priority === 'low'` 换成「是不是噪音」。「重要程度」与「是不是噪音」
+// 是**正交**两轴：优先级已经有独立的筛选菜单，借它做 tab 分流 = 两个 UI 表达同一
+// 个维度，而噪音那一轴无人负责。
+//
+// 上一版注释自陈的动机（「CATEGORY_ENUM 没有 low-signal 桶」）是**错的** ——
+// `🔔 系统通知` 就是那个桶。活库近 30 天收件箱 1285 封实测：旧判据把 345 封划进
+// 「其他」，其中只有 156 封（45%）真是系统通知，**183 封是同事发的业务邮件**；
+// 同时 33 封系统通知因为没被判 low 漏在「重点」—— 双向错配。换判据后「其他」
+// 345 → 195（183 封真人邮件回「重点」，33 封漏网噪音被收进「其他」）。
+//
+//   进「其他」⟺ ai_category === '🔔 系统通知'  OR  发件人是机器人地址
+//   未跑 LLM（ai_category 为空）且发件人不像机器人 → 留「重点」
+//     （沿用旧策略：新到的邮件不该在 LLM 追上之前静默消失）
+//
+// `ai_priority` 完全退出本判据。
+// List-Unsubscribe(RFC 2369) 是判「群发」最硬的信号，但库里没存邮件头，留二期。
+
+/** CATEGORY_ENUM 里唯一的低信号（噪音）桶 —— 「其他」的主判据。 */
+export const LOW_SIGNAL_CATEGORY: EmailCategory = '🔔 系统通知'
+
+/** 折叠 local part（去掉全部非字母数字 + 小写）里**出现即命中**的子串。
+ *  只收人类 local part 里不可能出现的词：`no-reply` / `no.reply` / `noreply` /
+ *  `sc-noreply` / `noreply+a659685` 折叠后都含 `noreply`，一个 token 盖住全部写法。
+ *
+ *  ⚠️ 与 `src/contacts/scanner.py::ROBOT_ADDRESS_PATTERNS` **不是**镜像，别去建
+ *  一致性闸、也别去合并：那份回答「这个联系人的 kind 是不是 robot」（通讯录档案
+ *  字段，按整个地址含域名做子串），这份回答「这封邮件是不是噪音」（列表分流，只看
+ *  local part）。词表重叠是巧合，两边各自该收什么由各自的场景定。 */
+export const BOT_SENDER_LOCAL_SUBSTRINGS: readonly string[] = [
+  'noreply',
+  'donotreply',
+  'notification',
+  'notify',
+  'newsletter',
+  'autoreply',
+  'mailerdaemon',
+  'bounce'
+]
+
+/** local part 按非字母数字切段后**整段相等**才命中的词。这些词太短、或可能是真人
+ *  local part 的一部分（`talbot` / `abbot` 都含 `bot`），按子串匹配会误伤真人。 */
+export const BOT_SENDER_LOCAL_SEGMENTS: readonly string[] = [
+  'bot',
+  'jira',
+  'confluence',
+  'bugzilla',
+  'jenkins',
+  'gerrit',
+  'alert',
+  'alerts',
+  'daemon',
+  'mailer'
+]
+
+/**
+ * 「这个发件人是机器人吗」—— 不依赖 LLM 的兜底：Jira / Confluence 通知即便被分类
+ * 成「🛠️ 技术讨论」/「📊 项目管理」也照样进「其他」（活库实测这条多抓 6 封）。
+ *
+ * 🔴 只看 local part，**不看域名**：域名匹配的误伤面大得多（同事的地址完全可能挂在
+ * `notifications.company.com` 这类子域下），而实测里域名规则能多抓的那几封
+ * （`info@e.atlassian.com` / `team@mail.notion.so`）全都已经被 `🔔 系统通知` 盖住 ——
+ * 净收益为零、净风险为正。
+ *
+ * 🔴 `support` / `service` / `info` / `admin` 一类共享信箱**有意不收**：实测它们命中
+ * 的邮件要么本来就是系统通知（收不到新东西），要么是真人技术支持（`psi.support@…`
+ * 判「🛠️ 技术讨论」）—— 那正是该留在「重点」的邮件。
+ *
+ * 🔴 参数 `email_metadata.sender` **不保证是裸地址**：davmail 路径写纯地址（显示名
+ * 另存 `sender_name`），但 AppleScript 路径写的是整个 From 头 —— 活库 13011 行里
+ * 8850 行（68%，全部 `backend_origin='applescript'`）长这样 `Gary W <gary.w@…>`。
+ * 所以先剥掉显示名再取 local part：不剥的话判据会去读**发件人自己填的显示名**，
+ * 活库实测 `"徐静雅 (Jira)" <itjsm.gm@…>` 这类**真人**邮件就是靠显示名里的
+ * "(Jira)" 命中的（那两封恰好也被 `🔔 系统通知` 盖住，所以今天看不出差别 —— 但
+ * 「真人因为显示名被丢进其他」正是 WP-4 要消灭的失败形态）。PRD 拍板的模式表也
+ * 全是 `noreply@` / `jira@` 这样的**地址**模式，不含显示名。
+ *
+ * 剥法只认结尾的 `<...>`（RFC 5322 addr-spec 的位置），仍**不**写完整地址解析器：
+ * 取不到尖括号就把整串当地址往下走，与 recipientIsMe 同样的保守取舍。
+ */
+export function isBotSender(sender: string | null | undefined): boolean {
+  if (!sender) return false
+  // `"Doe, John" <addr>` → addr；没有尖括号 = 裸地址（或垃圾串），原样往下走。
+  const addr = /<([^<>]*)>\s*$/.exec(sender)?.[1] ?? sender
+  const at = addr.lastIndexOf('@')
+  const local = (at === -1 ? addr : addr.slice(0, at)).toLowerCase()
+  if (local === '') return false
+  const collapsed = local.replace(/[^a-z0-9]/g, '')
+  if (BOT_SENDER_LOCAL_SUBSTRINGS.some((token) => collapsed.includes(token))) return true
+  return local
+    .split(/[^a-z0-9]+/)
+    .some((seg) => seg !== '' && BOT_SENDER_LOCAL_SEGMENTS.includes(seg))
+}
+
+/** 一封邮件是否属于「其他」（噪音）。applyTab 的两侧共用它，正好互补。 */
+export function isLowSignal(e: EnrichedEmailMeta): boolean {
+  return e.ai_category === LOW_SIGNAL_CATEGORY || isBotSender(e.sender)
+}
+
 export function applyTab(
   tab: 'focused' | 'other',
   rows: ReadonlyArray<EnrichedEmailMeta>
 ): EnrichedEmailMeta[] {
-  if (tab === 'other') return rows.filter((r) => r.ai_priority === 'low')
-  return rows.filter((r) => r.ai_priority !== 'low')
+  if (tab === 'other') return rows.filter((r) => isLowSignal(r))
+  return rows.filter((r) => !isLowSignal(r))
 }
 
 /** Strict literal match against LLM CATEGORY_ENUM — `email.ai_category`
@@ -332,11 +431,18 @@ export function startOfDay(d: Date): Date {
 // only has one email in the current list) are treated as solitary.
 export interface ThreadGroup {
   threadId: string | null
+  /** 折叠行上显示的那封。🔴 groupByThread 只从**可见集合**里挑它（task 08-14 WP-1
+   *  方案 A），所以它显示的时间恒等于下方 anchorDate —— 排序/分桶的依据。 */
   head: EnrichedEmailMeta
   children: EnrichedEmailMeta[]
   /** #10 dogfood: 排序/分桶用的锚点日期 = 可见集合（listEnriched 结果，不含 supplement）
-   *  里最新邮件的 date_received。发件箱视图 (groupBySentAnchor) 直接用 head.date_received。
-   *  避免 supplement 里的已发回复（今日时间戳）把旧线程推入「今天」分组。 */
+   *  里最新邮件的 date_received。避免 supplement 里的已发回复（今日时间戳）把旧线程
+   *  推入「今天」分组。
+   *
+   *  🔴 08-14 WP-1 起它**恒等于 `head.date_received`**（两个 groupBy* 都如此），不再是
+   *  与 head 各取一边的第二来源 —— 那正是「今天的邮件出现在昨天组、组内顺序全乱」的
+   *  病根。partitionByDate 仍优先读本字段（防御性冗余，且构造 ThreadGroup 的测试
+   *  fixture 可以把两者拆开）。 */
   anchorDate: string | null
   /** 发件箱锚点分组 (groupBySentAnchor 产出)：head 是**我发出的那封**，children 是它
    *  之前的上下文（严格早于 head，head 不在其中）。
@@ -363,22 +469,17 @@ export function groupByThread(
   // surface twice.  User feedback: "同一封邮件不应该出现两次, 如果被
   // 折叠到线程里, 就不应该出现在主线程里".
   const seen = new Set<number>()
-  // #10 dogfood: 每个线程里「可见集合」（listEnriched 结果）中最新邮件的日期，
-  // 用于 anchorDate。supplement 中的已发回复（今日时间戳）不计入，避免将旧线程
-  // 误推进「今天」分组。
-  const visibleAnchorByTid = new Map<string, string>()
+  // task 08-14 WP-1: 可见集合（listEnriched 结果，不含 supplement）里的成员 id ——
+  // 挑 head 的唯一依据，见下方分组循环。
+  const visibleIds = new Set<number>()
   for (const e of emails) {
     if (seen.has(e.internal_id)) continue
     seen.add(e.internal_id)
     if (e.thread_id) {
+      visibleIds.add(e.internal_id)
       const arr = byTid.get(e.thread_id) ?? []
       arr.push(e)
       byTid.set(e.thread_id, arr)
-      // Track newest visible date per thread
-      const prev = visibleAnchorByTid.get(e.thread_id)
-      if (!prev || (e.date_received ?? '') > prev) {
-        visibleAnchorByTid.set(e.thread_id, e.date_received ?? '')
-      }
     } else {
       solo.push({ threadId: null, head: e, children: [], anchorDate: e.date_received ?? null })
     }
@@ -399,19 +500,35 @@ export function groupByThread(
   const groups: ThreadGroup[] = []
   for (const [tid, arr] of byTid) {
     arr.sort((a, b) => (b.date_received ?? '').localeCompare(a.date_received ?? ''))
-    // anchorDate from visible emails only; fallback to absolute head if missing
-    // (shouldn't happen: every byTid thread was seeded from the visible set).
-    const anchorDate = visibleAnchorByTid.get(tid) ?? arr[0]?.date_received ?? null
-    if (arr.length === 1) {
+    // 🔴 task 08-14 WP-1 方案 A (owner 拍板): head 只从**可见集合**里挑 —— DESC 序里
+    // 第一个可见成员, 即可见集合里最新那封; supplement 只供折叠内的子邮件。
+    //
+    // 改之前 head 取 arr[0] (含 supplement 的**全体**最新), 而 anchorDate 取可见集合
+    // 最新 —— 两个值来自不同集合。线程最新那封不在可见集合时 (被 Focused/Other tab
+    // 或优先级筛选排除 / 在另一个邮箱), UI 显示 A 却按 B 排序分桶: 今天的邮件出现在
+    // 「昨天」组, 组内时间顺序全乱 (owner 2026-08-14 dogfood 实证)。
+    //
+    // 代价 (方案 A 明码标价): 折叠头不再展示线程绝对最新那封, 它退到折叠内; 于是
+    // children 可能含比 head 更新的成员, 展开后的子行不再恒为严格递减。取舍是
+    // 「显示时间与分组/排序恒一致」> 「折叠头展示线程绝对最新」, 同时保住 #10
+    // dogfood 当初的取舍 (supplement 里的已发回复不该把旧线程推进「今天」分组)。
+    const headIndex = arr.findIndex((m) => visibleIds.has(m.internal_id))
+    // byTid 的每条线程都由可见集合播种 → findIndex 必命中。-1 只可能来自将来的调用方
+    // 改动; 兜底回全体最新 (旧行为) —— 宁可 head 口径不一致, 也不要整条线程消失。
+    const head = headIndex === -1 ? arr[0]! : arr[headIndex]!
+    const children = arr.filter((m) => m.internal_id !== head.internal_id)
+    // 🔴 anchorDate 恒 = head.date_received: 排序/分桶与显示同源, 结构上不可能再劈叉。
+    const anchorDate = head.date_received ?? null
+    if (children.length === 0) {
       // Single-message thread is functionally solitary — no chevron.
-      groups.push({ threadId: null, head: arr[0]!, children: [], anchorDate })
+      groups.push({ threadId: null, head, children: [], anchorDate })
     } else {
-      groups.push({ threadId: tid, head: arr[0]!, children: arr.slice(1), anchorDate })
+      groups.push({ threadId: tid, head, children, anchorDate })
     }
   }
   groups.push(...solo)
-  // Stable ordering by anchorDate (newest visible email) DESC — supplement
-  // messages (e.g. sent replies) do not bump threads in sort or bucket order.
+  // Stable ordering by anchorDate (= head 的显示时间) DESC — supplement messages
+  // (e.g. sent replies) do not bump threads in sort or bucket order.
   groups.sort((a, b) => (b.anchorDate ?? '').localeCompare(a.anchorDate ?? ''))
   return groups
 }
@@ -424,6 +541,12 @@ export function groupByThread(
 //   - 排序 + 日期分桶都按 head(发件)时间 (partitionByDate 用 head.date)
 // 多次回复同一线程时, 每封发件各自成行; 其它发件锚点不会被当作子邮件
 // (anchorIds 排除), 避免同一封发件既当母又当子重复出现。
+//
+// 🔴 task 08-14 WP-1 (head 只从可见集合挑) **不适用**于这里, 也不需要适用: head 恒
+// 取自入参 sentEmails (= 调用方传进来的可见集合本身), 且下面三个分支的 anchorDate
+// 一律 := 该 head 的 date_received, supplement 只用来筛 children。「显示的那封」与
+// 「排序/分桶的依据」结构上就是同一封, 从来不会劈叉 —— 这也是为什么 owner 报的
+// 乱序只出现在收件箱, 发件箱没有。
 export function groupBySentAnchor(
   sentEmails: ReadonlyArray<EnrichedEmailMeta>,
   threadSupplement: ReadonlyMap<string, ReadonlyArray<EnrichedEmailMeta>>
@@ -585,8 +708,11 @@ export function partitionByDate(
       buckets.pinned.push(g)
       continue
     }
-    // #10 dogfood: 用 anchorDate（可见集合里最新邮件的日期）分桶，而非 head.date_received。
-    // head 可能是 supplement 里的已发回复（今日），anchorDate 则是收件邮件日期（真实分桶依据）。
+    // 用 anchorDate（可见集合里最新邮件的日期）分桶。08-14 WP-1 之后两个 groupBy* 都
+    // 保证 anchorDate === head.date_received（head 也只从可见集合挑），所以这里的
+    // `?? head.date_received` 只是防御性兜底 + 让直接构造 ThreadGroup 的测试 fixture
+    // 能把两者拆开；WP-1 之前 head 可能是 supplement 里的已发回复（今日时间戳），
+    // 那时这两个值真的会劈叉 —— 正是「今天的邮件出现在昨天组」的病根。
     const bucketDate = g.anchorDate ?? g.head.date_received
     if (!bucketDate) {
       buckets.older.push(g)
@@ -688,10 +814,16 @@ export function flattenGroups(
           : undefined
       })
       if (isThreadHead && expanded) {
-        // 🔴 虚拟头展开的子行 = 线程**全部**成员 (含最新一封, DESC 序最新在最上) ——
-        // 虚拟头是「这条线程」而不是「这封邮件」, 所以最新一封必须能作为一封
+        // 🔴 虚拟头展开的子行 = 线程**全部**成员 (含 head 自己, 排在最上) ——
+        // 虚拟头是「这条线程」而不是「这封邮件」, 所以 head 那封必须能作为一封
         // 独立邮件被点开/操作, 否则展开后它只以聚合形态存在, 单封语义没有落点。
         // sent-anchor 仍只展开上下文 (head 是锚点, 本来就单独占一行)。
+        //
+        // ⚠️ 08-14 WP-1 之后**不再保证按时间递减**: head 是「可见集合里最新」,
+        // children 里可能有比它更新的成员 (跨邮箱的已发回复 / 被 tab 排除的那封),
+        // 于是这里是 [head, ...children DESC] = 时间上先跳后降。已知取舍, 见
+        // groupByThread 里方案 A 的代价段; 要改成整体 DESC 是独立的产品决定
+        // (会让「首个子行 === 虚拟头同一封」这条既有性质失效)。
         members.forEach((child, childIndex) => {
           out.push({
             type: 'email',
