@@ -29,10 +29,74 @@ interface ContactAggregate {
   nameSeenMs: number
 }
 
-const CACHE_TTL_MS = 10 * 60 * 1000
-const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
+/**
+ * 通讯录 (contact / contact_email, DB v54) 的一行「人 × 地址」。
+ *
+ * 🔴 判据只能是「表在不在 / 查出来有没有行」—— 绝不在 main 里再读一份
+ * `MAILAGENT_CONTACTS_ENABLED`：那个 flag 已有四个载体，加第五个是本仓明令
+ * 禁止的形状；且两表与 flag **解耦恒在**（关着只是没有行）。
+ */
+interface DirectoryRow {
+  display_name: string | null
+  name_en: string | null
+  organization: string | null
+  name_variants_json: string | null
+  email_normalized: string
+  former_at: number | null
+  excluded: number
+}
 
-let cache: { expiresAt: number; items: ContactSuggestion[] } | null = null
+/**
+ * 补全候选（内部形状）。`fields` = 子串匹配面，`tokens` = 前缀匹配面 —— 两者
+ * 都在建候选时算好，排序里不再做字符串切分。
+ */
+interface Candidate {
+  email: string
+  name?: string
+  score: number
+  last_seen?: string
+  lastSeenMs: number
+  /** 通讯录里标了「曾用邮箱」(contact_email.former_at)。恒排在主邮箱之后。 */
+  former: boolean
+  fields: string[]
+  tokens: string[]
+}
+
+const CACHE_TTL_MS = 10 * 60 * 1000
+/**
+ * 合流结果的短 TTL（沿用 `/chat/config` 快照那档 15s）。通讯录是小表、改名要
+ * 「几乎立刻」在 compose 里生效，所以不能跟着邮件头聚合那份 10 分钟缓存走；
+ * 但每次敲键都重做一遍 O(全部候选) 的合流也不必要。
+ */
+const DIRECTORY_TTL_MS = 15 * 1000
+const EMAIL_RE = /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i
+const NAME_TOKEN_RE = /[\s,.;:()"'<>]+/
+const LOCAL_TOKEN_RE = /[._%+-]+/
+
+/**
+ * 通讯录 lane 的取数（🔴 与 Python 侧 `_CONTACT_DIRECTORY_SQL` 逐字同款 ——
+ * 远程 web 走 `GET /api/email/contacts`，两份实现必须同步改，否则桌面与远程
+ * web 的补全语义会劈叉）。
+ *
+ * 三类排除（merged_into / hidden_at / is_self）不在 WHERE 里直接筛掉，而是
+ * 带回 `excluded` 标位：它们同时还要把**邮件头聚合出来的同一地址**压下去
+ * （合并走的旧身份 / owner 隐藏掉的噪音 / 自己的历史别名都不该再进候选）。
+ */
+const DIRECTORY_SQL = `SELECT c.display_name AS display_name,
+       c.name_en AS name_en,
+       c.organization AS organization,
+       c.name_variants_json AS name_variants_json,
+       ce.email_normalized AS email_normalized,
+       ce.former_at AS former_at,
+       CASE WHEN c.merged_into IS NOT NULL OR c.hidden_at IS NOT NULL
+                 OR c.is_self = 1 THEN 1 ELSE 0 END AS excluded
+  FROM contact c
+  JOIN contact_email ce ON ce.contact_id = c.id`
+
+let cache: { expiresAt: number; items: Candidate[] } | null = null
+// `source` = 建这份合流用的历史 lane 数组本体；历史缓存一被清（测试 / TTL 到期
+// 重建）身份就变，合流缓存随之失效，两份缓存不会各自过期到互相矛盾。
+let mergedCache: { expiresAt: number; items: Candidate[]; source: Candidate[] } | null = null
 
 function normalizeLimit(limit: number | undefined): number {
   const raw = limit ?? NaN
@@ -120,13 +184,36 @@ function excludeSet(exclude: string | string[] | undefined): Set<string> {
   )
 }
 
-function isPrefixMatch(item: ContactSuggestion, q: string): boolean {
+function isPrefixMatch(item: Candidate, q: string): boolean {
   if (!q) return false
-  const localPart = item.email.split('@')[0] ?? ''
-  if (localPart.startsWith(q)) return true
-  if (localPart.split(/[._%+-]+/).some((part) => part.startsWith(q))) return true
-  const name = item.name?.toLowerCase() ?? ''
-  return name.split(/[\s,.;:()"'<>]+/).some((part) => part.startsWith(q))
+  return item.tokens.some((token) => token.startsWith(q))
+}
+
+function emailTokens(email: string): string[] {
+  const localPart = email.split('@')[0] ?? ''
+  return [localPart, ...localPart.split(LOCAL_TOKEN_RE)].filter(Boolean)
+}
+
+function nameTokens(value: string | null | undefined): string[] {
+  const lowered = (value ?? '').toLowerCase()
+  if (!lowered) return []
+  return lowered.split(NAME_TOKEN_RE).filter(Boolean)
+}
+
+function pushField(fields: string[], value: string | null | undefined): void {
+  const lowered = (value ?? '').trim().toLowerCase()
+  if (lowered) fields.push(lowered)
+}
+
+function parseNameVariants(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed: unknown = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return []
+    return parsed.filter((v): v is string => typeof v === 'string')
+  } catch {
+    return []
+  }
 }
 
 export function aggregateContactSuggestions(db: Database): ContactSuggestion[] {
@@ -164,11 +251,28 @@ export function aggregateContactSuggestions(db: Database): ContactSuggestion[] {
   }))
 }
 
-function contactCorpus(db: Database): ContactSuggestion[] {
+function historyCandidate(item: ContactSuggestion): Candidate {
+  const fields: string[] = []
+  pushField(fields, item.email)
+  pushField(fields, item.name)
+  return {
+    email: item.email,
+    ...(item.name ? { name: item.name } : {}),
+    score: item.score,
+    ...(item.last_seen ? { last_seen: item.last_seen } : {}),
+    lastSeenMs: dateMs(item.last_seen),
+    former: false,
+    fields,
+    tokens: [...emailTokens(item.email), ...nameTokens(item.name)]
+  }
+}
+
+/** 邮件头聚合（全表扫 email_metadata，贵）→ 10 分钟缓存。 */
+function historyCorpus(db: Database): Candidate[] {
   const now = Date.now()
   if (cache && cache.expiresAt > now) return cache.items
   try {
-    const items = aggregateContactSuggestions(db)
+    const items = aggregateContactSuggestions(db).map(historyCandidate)
     cache = { expiresAt: now + CACHE_TTL_MS, items }
     return items
   } catch (err) {
@@ -177,33 +281,135 @@ function contactCorpus(db: Database): ContactSuggestion[] {
   }
 }
 
+/**
+ * 通讯录 lane 取数 —— 走的是 15s 那档短 TTL（`DIRECTORY_TTL_MS`），不跟邮件头
+ * 聚合那份 10 分钟缓存：contact 是小表，而刚在通讯录里改完名的人应当马上在
+ * compose 里显示新名字。
+ *
+ * 表不存在（老库升上来 / 精简 schema 的测试库）或查询异常 → 返回 []，历史 lane
+ * 一个字节不受影响。
+ */
+function directoryRows(db: Database): DirectoryRow[] {
+  try {
+    const present = db
+      .prepare(
+        `SELECT COUNT(*) AS n FROM sqlite_master
+          WHERE type = 'table' AND name IN ('contact', 'contact_email')`
+      )
+      .get() as { n: number } | undefined
+    if ((present?.n ?? 0) < 2) return []
+    return db.prepare(DIRECTORY_SQL).all() as DirectoryRow[]
+  } catch (err) {
+    console.warn('[email:contactSuggest] directory lookup failed', err)
+    return []
+  }
+}
+
+/**
+ * 两条 lane 合流（按归一 email 去重）：通讯录侧的 display_name / 组织 /
+ * 曾用地址覆盖邮件头猜出来的名字，往来频度 score 仍由历史 lane 提供。
+ */
+function buildCandidates(history: Candidate[], rows: DirectoryRow[]): Candidate[] {
+  const suppressed = new Set<string>()
+  const directory: DirectoryRow[] = []
+  for (const row of rows) {
+    const email = (row.email_normalized ?? '').trim().toLowerCase()
+    if (!email) continue
+    if (row.excluded) suppressed.add(email)
+    else directory.push(row)
+  }
+
+  const byEmail = new Map<string, Candidate>()
+  for (const item of history) {
+    if (suppressed.has(item.email)) continue
+    byEmail.set(item.email, item)
+  }
+
+  for (const row of directory) {
+    const email = row.email_normalized.trim().toLowerCase()
+    const prev = byEmail.get(email)
+    // 通讯录的名字优先；display_name 空则退 name_en，再退邮件头学到的名字。
+    const name = normalizeName(row.display_name) ?? normalizeName(row.name_en) ?? prev?.name
+    const variants = parseNameVariants(row.name_variants_json)
+
+    // 可搜面 = 邮件头名字（保留：改名前的老叫法仍能搜到）+ 通讯录四字段，与
+    // `GET /api/contacts?q=` 的口径一致（display_name / name_en / organization /
+    // name_variants / email）。
+    const fields: string[] = []
+    pushField(fields, email)
+    pushField(fields, prev?.name)
+    pushField(fields, row.display_name)
+    pushField(fields, row.name_en)
+    pushField(fields, row.organization)
+    for (const variant of variants) pushField(fields, variant)
+
+    const tokens = [
+      ...emailTokens(email),
+      ...nameTokens(prev?.name),
+      ...nameTokens(row.display_name),
+      ...nameTokens(row.name_en),
+      ...nameTokens(row.organization),
+      ...variants.flatMap((variant) => nameTokens(variant))
+    ]
+
+    byEmail.set(email, {
+      email,
+      ...(name ? { name } : {}),
+      score: prev?.score ?? 0,
+      ...(prev?.last_seen ? { last_seen: prev.last_seen } : {}),
+      lastSeenMs: prev?.lastSeenMs ?? 0,
+      former: row.former_at != null,
+      fields,
+      tokens
+    })
+  }
+
+  return [...byEmail.values()]
+}
+
+function candidateCorpus(db: Database): Candidate[] {
+  const history = historyCorpus(db)
+  const now = Date.now()
+  if (mergedCache && mergedCache.expiresAt > now && mergedCache.source === history) {
+    return mergedCache.items
+  }
+  const items = buildCandidates(history, directoryRows(db))
+  mergedCache = { expiresAt: now + DIRECTORY_TTL_MS, items, source: history }
+  return items
+}
+
 export function contactSuggest(opts: ContactSuggestOpts = {}): ContactSuggestion[] {
   const q = (opts.q ?? '').trim().toLowerCase()
   const limit = normalizeLimit(opts.limit)
   const excluded = excludeSet(opts.exclude)
-  const items = contactCorpus(getDb()).filter((item) => !excluded.has(item.email))
-  const matched = q
-    ? items.filter(
-        (item) =>
-          item.email.toLowerCase().includes(q) || (item.name ?? '').toLowerCase().includes(q)
-      )
-    : items
+  const items = candidateCorpus(getDb()).filter((item) => !excluded.has(item.email))
+  const matched = q ? items.filter((item) => item.fields.some((f) => f.includes(q))) : items
 
   return [...matched]
     .sort((a, b) => {
+      // ① 强命中（任一身份 token 前缀命中）优先 —— 通讯录的名字/组织进了 token
+      //    面，所以「零往来但名字对得上」的人能排上来；
+      // ② 曾用邮箱恒沉到主邮箱之后；
+      // ③ 同档内仍按往来频度 score 排 —— 高频联系人不会被通讯录条目挤下去。
       const prefixDelta = Number(isPrefixMatch(b, q)) - Number(isPrefixMatch(a, q))
       if (prefixDelta !== 0) return prefixDelta
+      if (a.former !== b.former) return a.former ? 1 : -1
       if (b.score !== a.score) return b.score - a.score
-      const bDate = dateMs(b.last_seen)
-      const aDate = dateMs(a.last_seen)
-      if (bDate !== aDate) return bDate - aDate
+      if (b.lastSeenMs !== a.lastSeenMs) return b.lastSeenMs - a.lastSeenMs
       return a.email.localeCompare(b.email)
     })
     .slice(0, limit)
+    .map((item) => ({
+      email: item.email,
+      ...(item.name ? { name: item.name } : {}),
+      score: item.score,
+      ...(item.last_seen ? { last_seen: item.last_seen } : {})
+    }))
 }
 
 export function resetContactSuggestCache(): void {
   cache = null
+  mergedCache = null
 }
 
 export function registerContactHandlers(): void {
