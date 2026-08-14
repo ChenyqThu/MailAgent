@@ -266,7 +266,10 @@ export function MergeContactsDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="min-h-0 overflow-y-auto pr-1 scrollbar-thin">
+        {/* p-1（非 pr-1）—— PersonPicker 搜索框的 focus-visible ring-2 是 2px box-shadow，
+            此容器 overflow-y-auto 会裁掉紧贴边缘的 shadow；四边留 4px 呼吸空间防止 ring 被裁
+            （同 MatterStakeholderPicker 的修法，dogfood 轮 5 反馈①波及的第二处挂载点）。 */}
+        <div className="min-h-0 overflow-y-auto p-1 scrollbar-thin">
           {step === 'pick' ? (
             <PersonPicker
               items={candidates}

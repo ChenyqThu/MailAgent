@@ -64,7 +64,7 @@ export function PersonPicker({
           onChange={(event) => onSearchChange(event.target.value)}
           placeholder={searchPlaceholder}
           aria-label={searchPlaceholder}
-          className="h-8 w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 pl-7 pr-2 text-body text-ink-fg outline-none placeholder:text-ink-fg-3 focus:border-coral/50"
+          className="h-8 w-full rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 pl-7 pr-2 text-body text-ink-fg placeholder:text-ink-fg-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 focus-visible:border-coral/60"
         />
       </div>
       {aboveList}

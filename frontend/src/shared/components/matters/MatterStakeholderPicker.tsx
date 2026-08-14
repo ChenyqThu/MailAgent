@@ -220,7 +220,10 @@ export function MatterStakeholderPicker({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto pr-1 scrollbar-thin">
+        {/* p-1（非 pr-1）—— 搜索框的 focus-visible ring-2 是 2px box-shadow，此容器
+            overflow-y-auto 会裁掉紧贴边缘的 shadow；四边留 4px 呼吸空间防止 ring
+            在上/左被裁成不规则形状（dogfood 轮 5 反馈①，量测见 harness）。 */}
+        <div className="flex min-h-0 flex-col gap-3 overflow-y-auto p-1 scrollbar-thin">
           {editing ? (
             <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-3">
               <div className="min-w-0">

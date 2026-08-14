@@ -64,8 +64,9 @@ import { Popmenu } from '@shared/components/ui/Popmenu'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/components/ui/select'
 import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
+import { useReducedMotion } from '@shared/hooks/useReducedMotion'
 import { cn } from '@shared/lib/cn'
-import { DUR } from '@shared/lib/gsap'
+import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
 import {
   formatMatterAgo,
   formatMatterDueRelative,
@@ -149,6 +150,22 @@ interface MatterDetailProps {
 }
 
 type DetailTab = 'state' | 'context' | 'timeline' | 'runs'
+
+/** tab 条滑动 indicator 的测量（8px 内缩复刻原每按钮下划线的 `inset-x-2`，见渲染处注释）。
+ *  `list.clientLeft` 扣掉容器边框 —— indicator 是 absolute(left:0) 挂在 border-box 内，
+ *  rect 差值的参照系却是 border-box 外缘，不扣会整体右偏（同 EmailListHeader 的先例）。 */
+function measureTabIndicator(
+  list: HTMLElement,
+  activeEl: HTMLElement
+): { left: number; width: number } {
+  const listRect = list.getBoundingClientRect()
+  const activeRect = activeEl.getBoundingClientRect()
+  const INSET = 8
+  return {
+    left: activeRect.left - listRect.left - list.clientLeft + INSET,
+    width: Math.max(0, activeRect.width - INSET * 2)
+  }
+}
 
 export function MatterDetail({
   matterId,
@@ -340,6 +357,53 @@ export function MatterDetail({
       stakeholderItems.length
     ]
   )
+  // 轮 5 dogfood 反馈② —— tab 条选中态改测量式滑动 indicator（同 EmailListHeader
+  // `.inbox-tab-indicator` 的 GSAP x/width 滑动技法，motion-gsap.md「已落地」清单已登记
+  // 这套手法）：共享的一条 `<span>` 量出目标 tab 的位置再 tween 过去，取代此前每个按钮
+  // 各自渲染一条静态下划线（切换时旧的直接消失、新的直接出现，结构上不可能有平移）。
+  // `fresh` 判据抄同一处的注释：不能用 ref 标志，React StrictMode 的模拟卸载会跑
+  // useGSAP cleanup（revert 掉 gsap.set 写的 inline transform）但保留 ref 值。
+  // 依赖含 detailTabs（计数 / AI 圆点出现会改变按钮宽度）与 i18n.language（译文换行宽）。
+  const tabListRef = useRef<HTMLDivElement | null>(null)
+  const tabIndicatorRef = useRef<HTMLSpanElement | null>(null)
+  // ResizeObserver 回调只在 mount 时订阅一次（`deps:[]`），闭包会拿到订阅那一刻的 `tab`；
+  // 之后每次 tab 切换都把最新值写进这个 ref，回调读 ref 而不是闭包变量（同 EmailListHeader
+  // 的 `valueRef` 先例）。
+  const tabRef = useRef(tab)
+  const reduceTabMotion = useReducedMotion()
+  useGSAP(
+    () => {
+      tabRef.current = tab
+      const list = tabListRef.current
+      const indicator = tabIndicatorRef.current
+      if (!list || !indicator) return
+      const activeEl = list.querySelector<HTMLElement>(`[data-tab="${tab}"]`)
+      if (!activeEl) return
+      const { left, width } = measureTabIndicator(list, activeEl)
+      const fresh = !indicator.style.transform
+      if (fresh || reduceTabMotion) {
+        gsap.set(indicator, { x: left, width, autoAlpha: 1 })
+        return
+      }
+      gsap.to(indicator, { x: left, width, autoAlpha: 1, duration: DUR.fast, overwrite: 'auto' })
+    },
+    { dependencies: [tab, detailTabs, reduceTabMotion, i18n.language], scope: tabListRef }
+  )
+  // 窗口尺寸变化会移动/改变按钮宽度（fluid 布局），需重量指示器。happy-dom 无
+  // ResizeObserver → guarded，测试只断言 DOM 存在，不断言几何。
+  useEffect(() => {
+    const list = tabListRef.current
+    if (!list || typeof ResizeObserver === 'undefined') return undefined
+    const ro = new ResizeObserver(() => {
+      const indicator = tabIndicatorRef.current
+      const activeEl = list.querySelector<HTMLElement>(`[data-tab="${tabRef.current}"]`)
+      if (!indicator || !activeEl) return
+      const { left, width } = measureTabIndicator(list, activeEl)
+      gsap.set(indicator, { x: left, width, autoAlpha: 1 })
+    })
+    ro.observe(list)
+    return () => ro.disconnect()
+  }, [])
   const selectedUpdate = useQuery({
     queryKey: [...qk.matters.detail(matterId), 'update', reviewId],
     queryFn: () => api.getUpdate(matterId, reviewId as number),
@@ -934,12 +998,21 @@ export function MatterDetail({
         </header>
 
         {/* 设计 detail.jsx:641-657 —— 40px 高的下划线 tab 条（选中 = accent 前景 + 600 字重
-            + 底部 2px accent 下划线），不是 SegmentedControl 的胶囊轨。 */}
+            + 底部 2px accent 下划线），不是 SegmentedControl 的胶囊轨。设计本身没画滑块，
+            下划线改共享 indicator 平移 + 按下轻缩，按 DESIGN.md §9.3 与本仓已有的
+            role=tab 同类控件（`ui/segmented.tsx` 的 `.seg button`，同样是 tablist 里的
+            测量式滑动 indicator + `active:scale-[0.96]`）推导（轮 5 dogfood 反馈②）。 */}
         <div
+          ref={tabListRef}
           role="tablist"
           aria-label={t('matters.tabs.label')}
-          className="flex h-10 shrink-0 items-center gap-0.5 border-b border-ink-border px-4"
+          className="relative flex h-10 shrink-0 items-center gap-0.5 border-b border-ink-border px-4"
         >
+          <span
+            ref={tabIndicatorRef}
+            aria-hidden
+            className="invisible absolute -bottom-px left-0 h-0.5 rounded-full bg-coral/100"
+          />
           {detailTabs.map(({ value, count, dot }) => {
             const TabIcon = MATTER_DETAIL_TAB_ICONS[value]
             const active = tab === value
@@ -949,10 +1022,12 @@ export function MatterDetail({
                 type="button"
                 role="tab"
                 aria-selected={active}
+                data-tab={value}
                 onClick={() => setTab(value)}
                 className={cn(
                   'relative inline-flex h-full items-center gap-1.5 px-3 text-body transition-colors duration-fast ease-standard',
                   'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70',
+                  'active:scale-[0.96]',
                   active ? 'font-semibold text-coral' : 'text-ink-fg-2 hover:text-ink-fg'
                 )}
               >
@@ -965,12 +1040,6 @@ export function MatterDetail({
                   <span
                     aria-label={t('matters.resource.suggested')}
                     className="size-1.5 rounded-full bg-ai"
-                  />
-                ) : null}
-                {active ? (
-                  <span
-                    aria-hidden
-                    className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-coral/100"
                   />
                 ) : null}
               </button>
