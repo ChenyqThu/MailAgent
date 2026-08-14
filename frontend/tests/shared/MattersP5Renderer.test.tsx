@@ -35,7 +35,8 @@ describe('P5 renderer surfaces', () => {
     const done = { ...matter, id: 2, public_id: 'MAT-0002', status: 'done' as const, due_at: now + 1_000 }
     const updates = new Map([[active.public_id, [update]]])
     // V3-13 起多出 missingNextCount（第四 tile「缺少下一步」）：active 有开放行动项 ⇒ 0。
-    expect(deriveFocusStats([active, done], [signal()], updates, now)).toEqual({ openCount: 1, attentionCount: 1, reviewCount: 1, dueSoonCount: 1, healthyRate: 100, missingNextCount: 0 })
+    // V3-14 —— healthyRate 字段随第四 tile 一起退役，已从返回形状里删除。
+    expect(deriveFocusStats([active, done], [signal()], updates, now)).toEqual({ openCount: 1, attentionCount: 1, reviewCount: 1, dueSoonCount: 1, missingNextCount: 0 })
   })
 
   test('Sidebar matter badge renders only for N > 0', () => {

@@ -17,6 +17,7 @@ import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
 import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
+import { readLastSelectedMatterId, writeLastSelectedMatterId } from './matterLastSelected'
 import {
   applyMatterListQuery,
   DEFAULT_MATTER_LIST_QUERY,
@@ -96,12 +97,16 @@ export function MattersWorkspace(): React.ReactElement | null {
   const { mattersEnabled: enabled, matterAgentEnabled } = useMatterFlags()
   const queryClient = useQueryClient()
   // V3-01 —— 左侧 176px 视图列删除，12 档 view 收敛成「事项 / 看板」两 tab + 查询模型
-  // （matterListQuery.ts）。默认落看板（≙ 旧默认 view 'focus'）；V3-11（记住上次选中 →
-  // 冷启动落事项 tab）是后续批。
+  // （matterListQuery.ts）。默认落看板（≙ 旧默认 view 'focus'）；有有效的「记住上次选中」
+  // 记录时 V3-11 的冷启动 effect（见下方 `initialSelectionApplied`）会把它改成 'list'。
   const [tab, setTab] = useState<MatterTab>('board')
   const [query, setQuery] = useState<MatterListQuery>(DEFAULT_MATTER_LIST_QUERY)
   const [selectedId, setSelectedId] = useState<string | null>(null)
   const [search, setSearch] = useState('')
+  // V3-11 —— 冷启动的「记住上次选中 / 选第一条」只做一次：数据首次就绪后跑一遍下方 effect
+  // 就把这个翻 true，之后 `visible`/`liveMatters` 再怎么变都不再重新挑选（否则用户手动选了
+  // 别的事项后，任何一次列表刷新都会把选中悄悄冲回「第一条」）。
+  const [initialSelectionApplied, setInitialSelectionApplied] = useState(false)
   // 快捷筛选「有到期 / 逾期」的基准时刻，挂载时冻结（react-hooks/purity），与 MatterList 同模式。
   const [now] = useState(() => Date.now())
   const [matterListWidth, setMatterListWidth] = useState(readMatterListWidth)
@@ -126,8 +131,12 @@ export function MattersWorkspace(): React.ReactElement | null {
     previousUserSelect: string
   } | null>(null)
 
+  // V3-11 —— 「选中事项时写入」（设计 H3§1）：只在选中一条真实事项时持久化，取消选中
+  // （`publicId === null`，例如下方「选中项掉出可见集就丢选中」守卫）不清空记录 —— 记录仍
+  // 留着，下次冷启动按「当前 scope 可见集里找不找得到」重新判定，找不到自然退化成选第一条。
   const selectMatter = useCallback((publicId: string | null): void => {
     setSelectedId(publicId)
+    if (publicId) writeLastSelectedMatterId(publicId)
   }, [])
 
   const finishMatterListResize = useCallback((target: HTMLDivElement, pointerId: number): void => {
@@ -298,6 +307,38 @@ export function MattersWorkspace(): React.ReactElement | null {
     setTab('list')
   }, [])
 
+  // V3-11 —— 冷启动「记住上次选中 / 选第一条」（设计 H3§1），只跑一次（见
+  // `initialSelectionApplied` 声明处的理由）。
+  //
+  // 深链跳转（下面的 `navigationTarget` effect）优先级更高：命中时只把自己标记为「已处理」
+  // 就直接让路，不跟它抢 `selectedId`/`tab` —— 两个 effect 都跑、谁的 setState 后执行谁赢，
+  // 行为会随时序抖动，不如显式判断谁该让谁。
+  //
+  // 恢复的判据只认「当前 scope（冷启动 = 默认 open）的可见集」，直接用
+  // `DEFAULT_MATTER_LIST_QUERY` 现算一遍（不读 `visible`/`query` 这两个可能已被用户改动的
+  // 活变量）——owner 拍板：不为了凑一个恢复结果去偷偷切用户的 scope/筛选；存的那条如果已被
+  // 归档/删除/推进到 done，就在这份候选集里缺席，自然退化成「无记录 → 选第一条」。
+  useEffect(() => {
+    if (initialSelectionApplied || !liveList.isSuccess) return
+    setInitialSelectionApplied(true)
+    if (navigationTarget) return
+    const candidates = applyMatterListQuery(liveMatters, DEFAULT_MATTER_LIST_QUERY, '', queryContext)
+    const stored = readLastSelectedMatterId()
+    if (stored && candidates.some((matter) => matter.public_id === stored)) {
+      selectMatter(stored)
+      setTab('list')
+    } else if (candidates.length > 0) {
+      selectMatter(candidates[0].public_id)
+    }
+  }, [
+    initialSelectionApplied,
+    liveList.isSuccess,
+    liveMatters,
+    navigationTarget,
+    queryContext,
+    selectMatter
+  ])
+
   // 「选中项掉出可见集就丢选中」守卫（旧左轨语义的等价保留）。scope 数据未就绪（archived/
   // trash 切入的首次请求在途）时不判 —— 瞬时空集不该吞掉刚设好的选中。
   useEffect(() => {
@@ -305,6 +346,8 @@ export function MattersWorkspace(): React.ReactElement | null {
     if (!visible.some((matter) => matter.public_id === selectedId)) selectMatter(null)
   }, [scopeReady, selectMatter, selectedId, visible])
 
+  // 深链跳转（`useMatterNavigation`）：一次性目标，命中后立即清空——切到「事项」tab、展开该
+  // 事项详情，并压过上面的冷启动初选（见上方注释）。
   useEffect(() => {
     if (!navigationTarget) return
     const target = liveMatters.find((matter) => matter.public_id === navigationTarget)

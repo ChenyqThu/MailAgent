@@ -4,7 +4,7 @@
 
 import { describe, expect, test } from 'vitest'
 
-import type { Matter } from '../../../src/shared/api/types/matter'
+import type { Matter, MatterAttentionSignal, MatterUpdateSummary } from '../../../src/shared/api/types/matter'
 import {
   activeMatterFilterCount,
   applyMatterListQuery,
@@ -14,6 +14,7 @@ import {
   matterScopeParams
 } from '../../../src/shared/components/matters/matterListQuery'
 import type { MatterListQuery } from '../../../src/shared/components/matters/matterListQuery'
+import { deriveFocusStats, isMatterDueSoon } from '../../../src/shared/lib/matterDerive'
 
 const NOW = new Date(2026, 7, 13, 10, 0).getTime()
 const DAY = 86_400_000
@@ -132,6 +133,34 @@ describe('快捷条件', () => {
         (value) => value.public_id
       )
     ).toEqual(['MAT-0001', 'MAT-0002'])
+  })
+
+  test('V3-15 —— tile 计数 / tile 下的列表 / due 快捷筛选三者命中集完全一致', () => {
+    // 恰好逾期 1 天、6 天后、8 天后：8 天后那条是唯一该被排除的边界用例。
+    const overdue = matter({ public_id: 'MAT-0001', due_at: NOW - 1 * DAY })
+    const soon = matter({ public_id: 'MAT-0002', due_at: NOW + 6 * DAY })
+    const far = matter({ public_id: 'MAT-0003', due_at: NOW + 8 * DAY })
+    const rows = [overdue, soon, far]
+
+    // ① 看板 tile 计数（deriveFocusStats.dueSoonCount）。
+    const stats = deriveFocusStats(rows, [] as MatterAttentionSignal[], new Map<string, MatterUpdateSummary[]>(), NOW)
+    expect(stats.dueSoonCount).toBe(2)
+
+    // ② 看板「临近到期」列表命中集（MatterFocus.tsx 现在直接吃 isMatterDueSoon）。
+    const dueSoonList = rows.filter(
+      (row) => row.status !== 'done' && row.status !== 'canceled' && isMatterDueSoon(row, NOW)
+    )
+    expect(dueSoonList.map((row) => row.public_id)).toEqual(['MAT-0001', 'MAT-0002'])
+
+    // ③ 清单 `due` 快捷筛选命中集。
+    const quickFiltered = applyMatterListQuery(rows, query({ quick: ['due'] }), '', ctx).map(
+      (row) => row.public_id
+    )
+    expect(quickFiltered).toEqual(['MAT-0001', 'MAT-0002'])
+
+    // 三者命中集完全一致（数量与成员两道断言合起来即恒等）。
+    expect(dueSoonList.length).toBe(stats.dueSoonCount)
+    expect(quickFiltered).toEqual(dueSoonList.map((row) => row.public_id))
   })
 
   test('nonext 按 kind 判（有 next_action 投影 = 有下一步；monitoring/done 也不算缺）', () => {

@@ -1,7 +1,14 @@
 import { describe, expect, test } from 'vitest'
 
 import type { Matter, MatterItem } from '../../src/shared/api/types/matter'
-import { hasNextAction, nextAction, rankOf, trashDaysRemaining } from '../../src/shared/lib/matterDerive'
+import {
+  hasNextAction,
+  isMatterDueSoon,
+  matterDueDayDiff,
+  nextAction,
+  rankOf,
+  trashDaysRemaining
+} from '../../src/shared/lib/matterDerive'
 
 function matter(overrides: Partial<Matter> = {}): Matter {
   return {
@@ -181,5 +188,25 @@ describe('nextAction', () => {
     expect(nextAction(matter()).kind).toBe('missing')
     expect(nextAction(matter({ next_action: null })).kind).toBe('missing')
     expect(hasNextAction(matter({ next_action: null }))).toBe(false)
+  })
+})
+
+// V3-15 —— 单源判据：matterListQuery.ts 的 `due` 快捷条件与 MatterFocus 的看板 tile / 列表
+// 都吃这一个函数，不各自算窗口。
+describe('isMatterDueSoon / matterDueDayDiff', () => {
+  const NOW = new Date(2026, 7, 13, 10, 0).getTime()
+  const DAY = 86_400_000
+
+  test('7 天内到期含逾期；第 8 天起排除；无 due_at 恒 false', () => {
+    expect(isMatterDueSoon(matter({ due_at: NOW - DAY }), NOW)).toBe(true)
+    expect(isMatterDueSoon(matter({ due_at: NOW + 6 * DAY }), NOW)).toBe(true)
+    expect(isMatterDueSoon(matter({ due_at: NOW + 7 * DAY }), NOW)).toBe(true)
+    expect(isMatterDueSoon(matter({ due_at: NOW + 8 * DAY }), NOW)).toBe(false)
+    expect(isMatterDueSoon(matter({ due_at: null }), NOW)).toBe(false)
+  })
+
+  test('matterDueDayDiff 按自然日取整（同一天差值为 0）', () => {
+    expect(matterDueDayDiff(NOW, NOW)).toBe(0)
+    expect(matterDueDayDiff(NOW - DAY, NOW)).toBe(-1)
   })
 })

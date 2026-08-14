@@ -7,7 +7,7 @@
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
 import type { Matter, MatterItem } from '@shared/api/types/matter'
@@ -459,9 +459,25 @@ describe('MattersWorkspace — tags are a filter facet, not a nav rail (V3-04)',
     fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
     expect(await screen.findByText('Vendor launch')).toBeTruthy()
     await waitFor(() => expect(mattersApi.listTags).toHaveBeenCalled())
-    // 菜单未打开时页面上没有任何标签控件（没有导航轨）。
-    expect(screen.queryByRole('button', { name: '合规' })).toBeNull()
-    expect(screen.queryByText('标签')).toBeNull()
+    // 菜单未打开时**列表面**里没有任何标签控件（没有导航轨）。
+    //
+    // 🔴 取景范围收窄到列表面本身（分隔条 `role="separator"` 的前一个兄弟节点，即
+    // `<MatterList>` 的挂载点），不是整个 render：V3-11 起冷启动「无记录 → 选第一条」会
+    // 自动选中这里唯一的事项，详情栏随之渲染真实的 `MatterDetail` —— 它在标签区（轮 3
+    // 保留下来的「标签只在详情页与设置里」结论）合法地渲染标签 chip + 添加标签按钮，
+    // 若断言查询整个页面会被这段合法 UI 误伤。这条闸本身要测的是「标签不许以导航面/
+    // 常驻轨的形态回到**列表**」，`MatterDetail` 里的标签编辑从来不在它的管辖范围。
+    const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
+    const listPane = separator.previousElementSibling as HTMLElement
+    // 🔴 锚点自证：`previousElementSibling` 是基于 DOM 相邻位置的定位——如果将来有人在
+    // 列表与分隔条之间插进任何一个元素（wrapper / 提示条 / portal 容器），它会静默指向
+    // 别的节点，下面两条 `queryByText`/`queryByRole` 断言会在**错误的空节点**里查不到东西、
+    // 照样通过，闸从「守卫」退化成「恒绿」且没人发现。用 `MatterList` 自己独有、必然已挂载
+    // 的搜索框（`matters.list.searchInView` 占位符，含固定的「搜索」二字，不随 scope 名变）
+    // 做前置断言：指错了就在这里先红，不会带着错误锚点往下跑出一个假绿。
+    expect(within(listPane).getByPlaceholderText(/搜索/)).toBeTruthy()
+    expect(within(listPane).queryByRole('button', { name: '合规' })).toBeNull()
+    expect(within(listPane).queryByText('标签')).toBeNull()
 
     // 打开筛选菜单 → 下钻「标签」二级面板 → 勾选 → 生成可删条件 chip。
     fireEvent.click(screen.getByRole('button', { name: /筛选/ }))

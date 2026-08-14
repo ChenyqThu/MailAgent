@@ -4853,8 +4853,7 @@
       "summary": "{openCount} 个未完成事项 · {attentionCount} 条待关注信号 · {reviewCount} 条更新提案待审阅",
       "attention": "需关注",
       "review": "待审阅提案",
-      "due14": "14 天内到期",
-      "healthyRate": "健康活跃率",
+      "dueSoon": "7 天内到期 / 逾期",
       "nonext": "缺少下一步",
       "reviewSection": "待审阅 · Agent 更新提案",
       "changeCount": "{count} 项变化",
@@ -4865,7 +4864,7 @@
       "attentionEmpty": "没有待关注信号",
       "attentionEmptyDetail": "所有未完成事项都有可信的当前状态，以及明确的下一步或等待原因。",
       "dueSection": "临近到期",
-      "dueEmpty": "14 天内没有到期项"
+      "dueEmpty": "7 天内没有到期项"
     },
     "attention": {
       "resolve": "解决",

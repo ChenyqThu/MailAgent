@@ -24,7 +24,13 @@ import type {
   MatterPriority,
   MatterStatus
 } from '@shared/api/types/matter'
-import { compareMatterRank, nextAction, openAttentionFor } from '@shared/lib/matterDerive'
+import {
+  compareMatterRank,
+  isMatterDueSoon,
+  matterDueDayDiff,
+  nextAction,
+  openAttentionFor
+} from '@shared/lib/matterDerive'
 import type { MatterAttentionIndex, MatterUpdateIndex } from '@shared/lib/matterDerive'
 
 import type { MatterTone } from './matterVocab'
@@ -249,20 +255,6 @@ export interface MatterQueryContext {
   now: number
 }
 
-const DAY = 86_400_000
-/** 设计 H3§3：「有到期 / 逾期」= dueAt 存在且整日差 ≤ 7（**含**逾期的负值）。 */
-const QUICK_DUE_WINDOW_DAYS = 7
-
-function startOfDay(value: number): number {
-  const date = new Date(value)
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
-}
-
-/** 按自然日取整的到期差（与 `matterVocab.matterDueTone` 同口径）。 */
-export function matterDueDayDiff(dueAt: number, now: number): number {
-  return Math.round((startOfDay(dueAt) - startOfDay(now)) / DAY)
-}
-
 export function matterQuickFilterTest(
   matter: Matter,
   key: MatterQuickFilter,
@@ -276,10 +268,9 @@ export function matterQuickFilterTest(
       // 清单行没有 items，条目那一半吃服务端 `next_action` 投影（nextAction 的既有回退链）。
       return matter.status === 'waiting' || nextAction(matter).kind === 'waiting'
     case 'due':
-      return (
-        matter.due_at != null &&
-        matterDueDayDiff(matter.due_at, context.now) <= QUICK_DUE_WINDOW_DAYS
-      )
+      // V3-15 —— 单源判据在 `matterDerive.ts::isMatterDueSoon`（7 天内到期含逾期），看板
+      // tile 计数与「临近到期」列表走同一个函数，不在这里另算一份窗口。
+      return isMatterDueSoon(matter, context.now)
     case 'p01':
       return matter.priority === 'p0' || matter.priority === 'p1'
     case 'proposal':
@@ -377,9 +368,9 @@ export function applyMatterListQuery(
 
 // ── 行内分组（设计 `list.jsx::groupsFor`，规格 H3§2）──────────────────────────
 
-/** 「本周内」的上界（设计 `groupsFor('due')` 的 `d <= 7`）。与快捷条件的
- *  `QUICK_DUE_WINDOW_DAYS` 数值相同但语义不同（那个是**含逾期**的筛选窗口，这个是分档上界），
- *  故不共用一个常量：改其中一个不该悄悄改另一个。 */
+/** 「本周内」的上界（设计 `groupsFor('due')` 的 `d <= 7`）。与快捷条件吃的
+ *  `matterDerive.MATTER_DUE_SOON_WINDOW_DAYS` 数值相同但语义不同（那个是**含逾期**的筛选
+ *  窗口，这个是分档上界），故不共用一个常量：改其中一个不该悄悄改另一个。 */
 const GROUP_DUE_WEEK_DAYS = 7
 
 /** 设计 `groupsFor('due')::bucket`：无 dueAt → none；<0 逾期；≤1 今天/明天；≤7 本周内；其余更晚。 */

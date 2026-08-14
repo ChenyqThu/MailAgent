@@ -168,21 +168,46 @@ export function trashDaysRemaining(matter: Matter, now = Date.now()): number | n
 
 const DAY = 86_400_000
 
+/** 按自然日取整的到期差（设计 H3§3 同款口径）。
+ *
+ * 🔴 单源住这里而不是 `matterListQuery.ts`：那个文件已经 `import` 这个文件里的
+ * `compareMatterRank`/`nextAction`/`openAttentionFor`，谓词若反向导入会成环 —— 层次上
+ * lib 在下、components 在上，「7 天内到期含逾期」这个判据只能钉在下层。
+ * （`matterVocab.matterDueTone` 有一份独立实现同一段 startOfDay 算法，语义相同但那是
+ * 「到期色阶」的判据、不在 V3-15 收口范围内，未改。） */
+export function matterDueDayDiff(dueAt: number, now: number): number {
+  const startOfDay = (value: number): number => {
+    const date = new Date(value)
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime()
+  }
+  return Math.round((startOfDay(dueAt) - startOfDay(now)) / DAY)
+}
+
+/** 「7 天内到期，含已逾期」的窗口（设计 H3§3）。V3-15 收口：看板 tile 计数 /
+ *  看板「临近到期」列表 / 清单 `due` 快捷条件此前各自独立算过一遍窗口（14 天不含逾期 ×2 +
+ *  7 天含逾期 ×1），三处必须是同一个谓词的三种消费方式,不是三份实现。 */
+export const MATTER_DUE_SOON_WINDOW_DAYS = 7
+
+export function isMatterDueSoon(matter: Matter, now: number): boolean {
+  return (
+    matter.due_at != null && matterDueDayDiff(matter.due_at, now) <= MATTER_DUE_SOON_WINDOW_DAYS
+  )
+}
+
 export interface FocusStats {
   openCount: number
   attentionCount: number
   reviewCount: number
   dueSoonCount: number
-  healthyRate: number | null
   /** V3-13：看板第四 tile「缺少下一步」= 未完成事项里 `nextAction().kind==='missing'` 的数量。
    *  🔴 按 kind 判、不按 icon/文案（上方 hasNextAction 的红旗同款理由）。 */
   missingNextCount: number
 }
 
-/** Focus 页指标（design-handoff 附录 E + v3 看板 V3-13）：到期窗 14 天、健康活跃 = 8 天内有
- *  已接受状态且有明确下一步。住在 lib 而非 MatterFocus.tsx —— 组件文件只能导出组件
- *  （react-refresh）。`healthyRate` 的 tile 已被「缺少下一步」换掉（V3-13 拍板的四 tile
- *  预设 attn/proposal/due/nonext），字段暂留 —— 连同 i18n 一起清理归 V3-14。 */
+/** Focus 页指标（design-handoff 附录 E + v3 看板 V3-13）：到期窗 = `isMatterDueSoon` 的单源
+ *  判据（V3-15 起 7 天含逾期，替代原先的 14 天不含逾期）。住在 lib 而非 MatterFocus.tsx ——
+ *  组件文件只能导出组件（react-refresh）。`healthyRate` 字段（V3-13 已被「缺少下一步」tile
+ *  换掉、成了纯遗留计算）随 i18n key 一并在 V3-14 删除。 */
 export function deriveFocusStats(
   matters: readonly Matter[],
   signals: readonly MatterAttentionSignal[],
@@ -191,13 +216,7 @@ export function deriveFocusStats(
 ): FocusStats {
   const live = matters.filter(isLiveMatter)
   const open = live.filter((matter) => matter.status !== 'done' && matter.status !== 'canceled')
-  const dueSoonCount = open.filter(
-    (matter) => matter.due_at != null && matter.due_at >= now && matter.due_at <= now + 14 * DAY
-  ).length
-  const healthy = open.filter(
-    (matter) =>
-      matter.summary_at != null && matter.summary_at >= now - 8 * DAY && hasNextAction(matter)
-  ).length
+  const dueSoonCount = open.filter((matter) => isMatterDueSoon(matter, now)).length
   return {
     openCount: open.length,
     attentionCount: signals.filter((signal) => signal.state === 'open').length,
@@ -206,7 +225,6 @@ export function deriveFocusStats(
       0
     ),
     dueSoonCount,
-    healthyRate: open.length === 0 ? null : Math.round((healthy / open.length) * 100),
     missingNextCount: open.filter((matter) => nextAction(matter).kind === 'missing').length
   }
 }

@@ -18,7 +18,8 @@ import { EmptyState } from '@shared/components/feedback/EmptyState'
 import {
   deriveFocusStats,
   formatMatterDueRelative,
-  isLiveMatter
+  isLiveMatter,
+  isMatterDueSoon
 } from '@shared/lib/matterDerive'
 import { cn } from '@shared/lib/cn'
 
@@ -32,8 +33,6 @@ import {
   MATTER_TONE_TEXT_CLASS,
   matterDueTone
 } from './matterVocab'
-
-const DAY = 86_400_000
 
 interface MatterFocusProps {
   matters: readonly Matter[]
@@ -80,14 +79,12 @@ export function MatterFocus({
         .map((update) => ({ matter: matterById.get(matterId), update }))
     )
     .filter((item): item is { matter: Matter; update: MatterUpdate } => item.matter != null)
+  // V3-15 —— 与 tile 计数（deriveFocusStats.dueSoonCount）、清单 `due` 快捷条件共用同一个
+  // 判据（`isMatterDueSoon`：7 天内到期、含已逾期），不再各自算一遍窗口。
   const dueSoon = live
     .filter(
       (matter) =>
-        matter.status !== 'done' &&
-        matter.status !== 'canceled' &&
-        matter.due_at != null &&
-        matter.due_at >= now &&
-        matter.due_at <= now + 14 * DAY
+        matter.status !== 'done' && matter.status !== 'canceled' && isMatterDueSoon(matter, now)
     )
     .sort((a, b) => (a.due_at ?? 0) - (b.due_at ?? 0))
 
@@ -114,14 +111,12 @@ export function MatterFocus({
             onClick={() => onJump('proposal')}
           />
           <StatTile
-            label={t('matters.focus.due14')}
+            // V3-15 —— 与「临近到期」区、清单 `due` 快捷条件三处同一口径（7 天内到期含逾期，
+            // `matterDerive.isMatterDueSoon` 单源），不再各自算一遍窗口。
+            label={t('matters.focus.dueSoon')}
             value={stats.dueSoonCount}
             icon={Clock3}
             tone="warn"
-            // ⚠️ 已知的窗口错位（留给 V3-15 收口）：tile 计数仍是既有的「14 天内到期、不含
-            // 逾期」，而落点的 `due` 快捷筛选按设计是「≤7 天、含逾期」。V3-15 会把 tile 与
-            // 下方「临近到期」区一起改成 7 天含逾期口径，两处必须同改（计数与列表劈叉的
-            // 风险在 gap-list V3-15 有记档），不在本批顺手动。
             onClick={() => onJump('due')}
           />
           <StatTile
