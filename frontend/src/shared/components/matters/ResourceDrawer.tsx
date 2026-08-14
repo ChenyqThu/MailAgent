@@ -1,7 +1,19 @@
 import { useRef } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { ExternalLink, Pin, RefreshCcw, Shield, X } from 'lucide-react'
+import {
+  Clock,
+  Copy,
+  ExternalLink,
+  Eye,
+  Info,
+  Layers,
+  Link2,
+  Pin,
+  RefreshCcw,
+  Shield,
+  X
+} from 'lucide-react'
 
 import { MATTER_ACCESS_POLICIES } from '@shared/api/types/matter'
 import type {
@@ -38,7 +50,12 @@ interface ResourceDrawerProps {
  *
  *  🔴 这一段此前写的是 `resource.excerpt` —— 而 `resource` 表根本没有这一列，后端也从不
  *  在 list 投影里产出它，所以「概要」一直是空的：那次 dogfood 修复从未真正生效，只是
- *  类型检查没照到（根 tsconfig 是 `files: []` + references，裸跑 tsc 什么都不查）。 */
+ *  类型检查没照到（根 tsconfig 是 `files: []` + references，裸跑 tsc 什么都不查）。
+ *
+ *  🔴 M5 起「缓存摘录」与「资料摘要」是**两个概念**（H3§5.1）：摘要 = `resource.sum` 的
+ *  一到三句概括（v56 真列），摘录 = 这里的原始缓存文本。设计原型的面板只画了摘要；摘录
+ *  保留成独立小节且只在真有值时渲染 —— 删掉它会把 0811 dogfood「这里看不到内容」的缺口
+ *  在 `sum` 为空、摘录非空的资料上还回去。 */
 const EXCERPT_KEYS = ['cached_excerpt', 'excerpt', 'text_excerpt', 'snippet'] as const
 
 function resourceExcerpt(metadata: Record<string, unknown> | null | undefined): string | null {
@@ -47,6 +64,15 @@ function resourceExcerpt(metadata: Record<string, unknown> | null | undefined): 
     if (typeof value === 'string' && value.trim()) return value.slice(0, 2000)
   }
   return null
+}
+
+/** 来源名的兜底：`notion` → `Notion`。i18n 只收了本仓自己产出的两个 provider
+ *  （`mailagent` / `web`，见 `resource_identity.py` 与 `resource_proposal.py`），
+ *  外部 provider 直接把落库值首字母大写交出去 —— 不编译不出来的中文名。
+ *  批 8（V3-19）定下 canonical 词表后，这一处换成查表即可。 */
+function providerFallbackLabel(provider: string): string {
+  const value = provider.trim()
+  return value ? value.charAt(0).toUpperCase() + value.slice(1) : '—'
 }
 
 export function ResourceDrawer({
@@ -126,19 +152,39 @@ export function ResourceDrawer({
     resource.kind === 'email' && resource.external_key.startsWith('email:')
       ? Number(resource.external_key.slice('email:'.length))
       : null
-  const ResourceIcon =
+  // 🔴 logo 接缝（V3-19 / 批 8）：整个面板**只有这一个**取图标的派生式，头部方块与
+  // 「来源」属性行共用它。批 8 把它换成 appLogos 表的成员索引即可，调用点不用再找。
+  // 成员索引而非查表函数：eslint react-hooks/static-components 只认前者（见 matterResource.ts）。
+  const SourceIcon =
     (resource.kind === 'doc' && DOC_PROVIDER_ICONS[resource.provider.toLowerCase()]) ||
     RESOURCE_KIND_ICONS[resource.kind]
-  const canOpenSource =
-    Boolean(resource.canonical_url) || (mailId !== null && Number.isFinite(mailId))
+  const KindIcon = RESOURCE_KIND_ICONS[resource.kind]
+  const canonicalUrl = resource.canonical_url
+  const canOpenSource = Boolean(canonicalUrl) || (mailId !== null && Number.isFinite(mailId))
   const metadata = resource.metadata ?? {}
   const excerpt = resourceExcerpt(metadata)
+  // V3-16 —— 摘要是 v56 真列（批 M4），不是 metadata 里的缓存摘录。三键可能整组缺失
+  // （老 fixture / 老后端），一律按 `?? null` 读；空白串也算空态。
+  const summary = resource.sum?.trim() ? resource.sum : null
+  const summarySource = resource.sum_src ?? null
+  const sourceName = t(`matters.resource.providerNames.${resource.provider.toLowerCase()}`, {
+    defaultValue: providerFallbackLabel(resource.provider)
+  })
+  const openInSourceLabel = t('matters.resource.openInSource', { name: sourceName })
   const metaLabel =
     typeof metadata.sender === 'string'
       ? metadata.sender
       : typeof metadata.organizer === 'string'
         ? metadata.organizer
         : resource.provider
+  // V3-21 —— 非默认可见性档要说清后果。设计只画了「仅元数据」一档；本仓 access_policy 是
+  // 三值契约，第三档不解释后果就是个哑开关，故一并补。
+  const visibilityConsequence =
+    resource.access_policy === 'metadata_only'
+      ? t('matters.resource.metadataOnlyConsequence')
+      : resource.access_policy === 'excluded'
+        ? t('matters.resource.excludedConsequence')
+        : null
 
   const openSource = (): void => {
     if (mailId !== null && Number.isFinite(mailId)) {
@@ -147,7 +193,21 @@ export function ResourceDrawer({
       onClose()
       return
     }
-    if (resource.canonical_url) window.open(resource.canonical_url, '_blank', 'noopener,noreferrer')
+    if (canonicalUrl) window.open(canonicalUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  const openCanonicalUrl = (): void => {
+    if (canonicalUrl) window.open(canonicalUrl, '_blank', 'noopener,noreferrer')
+  }
+
+  const copyCanonicalUrl = async (): Promise<void> => {
+    if (!canonicalUrl) return
+    try {
+      await navigator.clipboard.writeText(canonicalUrl)
+      toastSuccess(t('matters.resource.linkCopied'))
+    } catch (error) {
+      toastError(t('matters.resource.copyLinkFailed'), errorMessage(error))
+    }
   }
 
   return (
@@ -166,45 +226,41 @@ export function ResourceDrawer({
         aria-labelledby="matter-resource-drawer-title"
         className="absolute inset-y-0 right-0 flex w-[440px] max-w-[92vw] flex-col border-l border-ink-border bg-ink-1 shadow-md"
       >
-        <header className="flex items-start gap-3 border-b border-ink-border px-5 py-4">
+        {/* 头部照设计 §5.2：来源方块 + 标题/副行 + 右上跳转 + 关闭。
+            标题此前是整块跳转按钮（0811 dogfood），那次改动的内核是「不要恒 disabled 又
+            不解释原因的死控件」—— 这里用**条件渲染**守住同一条：不可跳时右上按钮根本不出现，
+            副行照旧写明「未提供来源链接」。 */}
+        <header className="flex items-start gap-3 border-b border-ink-border-soft px-5 py-4">
+          <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-[var(--r-ctl)] bg-ink-4 text-ink-fg-2">
+            <SourceIcon size={14} />
+          </span>
           <div className="min-w-0 flex-1">
-            {/* 标题即跳转入口（0811 dogfood）：原本跳转是右上角一个纯图标按钮，邮件资源上
-                它恒为 disabled 且不解释原因，读起来就是「点不了」。改成 provider 图标前缀 +
-                标题 + 跳转图标后缀的整体链接；不可跳时退化为纯文本，不做假链接。 */}
-            {canOpenSource ? (
-              <button
-                type="button"
-                onClick={openSource}
-                title={resource.title || resource.external_key}
-                className="group flex w-full min-w-0 items-center gap-1.5 rounded-[var(--r-ctl)] text-left transition-colors duration-fast ease-standard hover:text-coral focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-              >
-                <ResourceIcon size={15} className="shrink-0 text-ink-fg-2 group-hover:text-coral" />
-                <h2
-                  id="matter-resource-drawer-title"
-                  className="min-w-0 flex-1 truncate text-lead font-semibold"
-                >
-                  {resource.title || resource.external_key}
-                </h2>
-                <ExternalLink size={13} className="shrink-0 text-ink-fg-3 group-hover:text-coral" />
-              </button>
-            ) : (
-              <div className="flex min-w-0 items-center gap-1.5">
-                <ResourceIcon size={15} className="shrink-0 text-ink-fg-2" />
-                <h2
-                  id="matter-resource-drawer-title"
-                  className="min-w-0 flex-1 truncate text-lead font-semibold text-ink-fg"
-                >
-                  {resource.title || resource.external_key}
-                </h2>
-              </div>
-            )}
+            <h2
+              id="matter-resource-drawer-title"
+              title={resource.title || resource.external_key}
+              className="truncate text-body font-semibold text-ink-fg"
+            >
+              {resource.title || resource.external_key}
+            </h2>
             <p className="mt-1 truncate text-meta text-ink-fg-3">
               {t(`matters.context.kind.${resource.kind}`)} · {metaLabel}
               {canOpenSource ? null : ` · ${t('matters.resource.noSourceLink')}`}
             </p>
           </div>
+          {canOpenSource ? (
+            <button
+              type="button"
+              onClick={openSource}
+              title={openInSourceLabel}
+              aria-label={openInSourceLabel}
+              className="rounded-[var(--r-ctl)] p-2 text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg"
+            >
+              <ExternalLink size={15} />
+            </button>
+          ) : null}
           <button
             type="button"
+            aria-label={t('common.close')}
             onClick={onClose}
             className="rounded-[var(--r-ctl)] p-2 hover:bg-ink-3"
           >
@@ -219,89 +275,143 @@ export function ResourceDrawer({
             </div>
           ) : null}
 
+          {/* V3-18 —— 属性行：类型 / 来源 / 原文地址 / 最近活动 / 关联方式 / 内容可见性，每行带 icon。 */}
           <section className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-4">
-            <dl className="grid grid-cols-[110px_1fr] gap-x-3 gap-y-3 text-aux">
-              <Meta
-                label={t('matters.resource.type')}
-                value={t(`matters.context.kind.${resource.kind}`)}
-              />
-              <Meta
-                label={t('matters.resource.lastActivity')}
-                value={
-                  resource.last_checked_at
+            <dl className="grid grid-cols-[auto_1fr] items-center gap-x-3.5 gap-y-2.5 text-meta">
+              <Meta icon={<KindIcon size={12} />} label={t('matters.resource.type')}>
+                {t(`matters.context.kind.${resource.kind}`)}
+              </Meta>
+              <Meta icon={<Layers size={12} />} label={t('matters.resource.source')}>
+                <SourceIcon size={13} className="shrink-0 text-ink-fg-2" />
+                <span className="truncate">
+                  {sourceName}
+                  {resource.revision ? ` · ${resource.revision}` : ''}
+                </span>
+              </Meta>
+              {canonicalUrl ? (
+                <Meta icon={<Link2 size={12} />} label={t('matters.resource.canonicalUrl')}>
+                  {/* 设计是 `<a href="#" onClick={preventDefault}>` —— renderer 里一律用 button
+                      开外链（`window.open` + noopener），避免任何形式的窗口内导航。 */}
+                  <button
+                    type="button"
+                    onClick={openCanonicalUrl}
+                    title={canonicalUrl}
+                    className="min-w-0 flex-1 truncate text-left font-mono text-micro text-ink-fg-1 transition-colors duration-fast ease-standard hover:text-coral"
+                  >
+                    {canonicalUrl}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={openCanonicalUrl}
+                    title={openInSourceLabel}
+                    aria-label={openInSourceLabel}
+                    className="shrink-0 rounded-[var(--r-ctl)] p-1 text-ink-fg-3 hover:bg-ink-3 hover:text-ink-fg"
+                  >
+                    <ExternalLink size={12} />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void copyCanonicalUrl()}
+                    title={t('matters.resource.copyLink')}
+                    aria-label={t('matters.resource.copyLink')}
+                    className="shrink-0 rounded-[var(--r-ctl)] p-1 text-ink-fg-3 hover:bg-ink-3 hover:text-ink-fg"
+                  >
+                    <Copy size={12} />
+                  </button>
+                </Meta>
+              ) : null}
+              <Meta icon={<Clock size={12} />} label={t('matters.resource.lastActivity')}>
+                <span className="font-mono">
+                  {resource.last_checked_at
                     ? new Date(resource.last_checked_at).toLocaleString()
-                    : '—'
-                }
-              />
-              {resource.revision ? (
-                <Meta label={t('matters.resource.revision')} value={resource.revision} />
-              ) : null}
-              <Meta
-                label={t('matters.resource.linkMethod')}
-                value={t('matters.resource.manualConfirmed')}
-              />
-              <Meta
-                label={t('matters.resource.visibility')}
-                value={t(`matters.resource.access.${resource.access_policy}`)}
-              />
+                    : '—'}
+                </span>
+              </Meta>
+              {/* 设计稿这一行写死「手动关联 · 已确认」（原型 mock）。建议态资料上那是谎报，
+                  判据与 `MatterContextTab::ResourceRow` 同源：`link.confirmed_at`。 */}
+              <Meta icon={<Link2 size={12} />} label={t('matters.resource.linkMethod')}>
+                {t(
+                  link.confirmed_at !== null
+                    ? 'matters.resource.manualConfirmed'
+                    : 'matters.resource.agentSuggested'
+                )}
+              </Meta>
+              {/* V3-21 —— 可见性从独立 section 收进属性行。三档不是两档：`access_policy` 是
+                  后端三值契约，砍成两档会让「排除」态既进不去也退不出。 */}
+              <Meta icon={<Eye size={12} />} label={t('matters.resource.visibility')}>
+                <SegmentedControl<MatterAccessPolicy>
+                  value={resource.access_policy}
+                  onChange={(accessPolicy) =>
+                    patch.mutate({ access_policy: accessPolicy, scope: 'resource' })
+                  }
+                  options={MATTER_ACCESS_POLICIES.map((value) => ({
+                    value,
+                    label: t(`matters.resource.access.${value}`)
+                  }))}
+                  ariaLabel={t('matters.resource.visibility')}
+                />
+              </Meta>
             </dl>
-          </section>
-
-          <section>
-            <h3 className="mb-2 text-aux font-semibold text-ink-fg">
-              {t('matters.resource.visibility')}
-            </h3>
-            <SegmentedControl<MatterAccessPolicy>
-              value={resource.access_policy}
-              onChange={(accessPolicy) =>
-                patch.mutate({ access_policy: accessPolicy, scope: 'resource' })
-              }
-              options={MATTER_ACCESS_POLICIES.map((value) => ({
-                value,
-                label: t(`matters.resource.access.${value}`)
-              }))}
-              ariaLabel={t('matters.resource.visibility')}
-            />
-            <p className="mt-2 text-meta leading-5 text-ink-fg-3">
-              {t('matters.resource.visibilityGlobalHint')}
-            </p>
-          </section>
-
-          <section>
-            <h3 className="mb-2 text-aux font-semibold text-ink-fg">
-              {t('matters.resource.cachedExcerpt')}
-            </h3>
-            <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-4">
-              {resource.provider === 'mailagent' && resource.kind === 'email' ? (
-                <button
-                  type="button"
-                  onClick={openSource}
-                  className="mb-3 inline-flex items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1.5 text-aux hover:bg-ink-3"
-                >
-                  <ExternalLink size={13} />
-                  {t('matters.resource.openEmail')}
-                </button>
-              ) : null}
-              {/* 0811 dogfood：这一节此前只渲染样板说明，resource.excerpt 一次都没用到，
-                  所以「概要」永远是空的。excerpt 是外部内容（邮件正文 / Notion 摘录），
-                  按不可信数据渲染 —— 纯文本 + 保留换行，不跑 markdown/HTML 管线。 */}
-              {excerpt ? (
-                <p className="mb-3 whitespace-pre-wrap break-words text-aux leading-5 text-ink-fg">
-                  {excerpt}
-                </p>
-              ) : null}
-              <p className="text-aux leading-5 text-ink-fg-2">
-                {t('matters.resource.authoritativeSource')}
-              </p>
-              <div className="mt-3 flex items-start gap-2 border-t border-ink-border pt-3 text-meta leading-5 text-ink-fg-2">
-                <Shield size={13} className="mt-0.5 shrink-0 text-ok" />
-                <span>{t('matters.resource.untrusted')}</span>
-              </div>
+            <div className="mt-3 space-y-1.5 border-t border-ink-border-soft pt-3 text-micro leading-[1.65] text-ink-fg-3">
+              {visibilityConsequence ? <p>{visibilityConsequence}</p> : null}
+              <p>{t('matters.resource.visibilityGlobalHint')}</p>
             </div>
           </section>
+
+          {/* V3-16 —— 资料摘要：这份资料**在说什么**的一到三句概括（`resource.sum`），
+              标题右侧标注它的出处。与下面的「缓存摘录」是两个概念。 */}
+          <section>
+            <div className="mb-2 flex items-center gap-2">
+              <h3 className="text-meta font-semibold uppercase tracking-[0.08em] text-ink-fg-2">
+                {t('matters.resource.summary')}
+              </h3>
+              {summary ? (
+                <span className="ml-auto shrink-0 text-micro text-ink-fg-3">
+                  {t(
+                    summarySource === 'mail'
+                      ? 'matters.resource.summaryFromMail'
+                      : 'matters.resource.summaryFromAgent'
+                  )}
+                </span>
+              ) : null}
+            </div>
+            {summary ? (
+              // 摘要来自外部内容/模型输出，按不可信数据渲染：纯文本 + 保留换行，不跑
+              // markdown/HTML 管线。
+              <p className="whitespace-pre-wrap break-words rounded-[var(--r-card)] border border-ink-border-soft bg-ink-2 p-3.5 text-body leading-[1.75] text-ink-fg-1">
+                {summary}
+              </p>
+            ) : (
+              <p className="rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-2 p-3.5 text-meta leading-[1.7] text-ink-fg-3">
+                {t('matters.resource.summaryEmpty')}
+              </p>
+            )}
+            {/* V3-17 —— 原来卡内的两段固定说明降级为框外小字。 */}
+            <div className="mt-2.5 space-y-1.5 text-micro leading-[1.65] text-ink-fg-3">
+              <p className="flex gap-1.5">
+                <Info size={12} className="mt-0.5 shrink-0" />
+                <span>{t('matters.resource.authoritativeSource')}</span>
+              </p>
+              <p className="flex gap-1.5">
+                <Shield size={12} className="mt-0.5 shrink-0" />
+                <span>{t('matters.resource.untrusted')}</span>
+              </p>
+            </div>
+          </section>
+
+          {excerpt ? (
+            <section>
+              <h3 className="mb-2 text-meta font-semibold uppercase tracking-[0.08em] text-ink-fg-2">
+                {t('matters.resource.cachedExcerpt')}
+              </h3>
+              <p className="whitespace-pre-wrap break-words rounded-[var(--r-card)] border border-ink-border-soft bg-ink-2 p-3.5 text-meta leading-[1.7] text-ink-fg-2">
+                {excerpt}
+              </p>
+            </section>
+          ) : null}
         </div>
 
-        <footer className="flex flex-wrap items-center gap-2 border-t border-ink-border bg-ink-2 px-5 py-4">
+        <footer className="flex flex-wrap items-center gap-2 border-t border-ink-border-soft bg-ink-2 px-5 py-4">
           <button
             type="button"
             onClick={() => patch.mutate({ pinned: !link.pinned })}
@@ -310,6 +420,7 @@ export function ResourceDrawer({
             <Pin size={13} />
             {t(link.pinned ? 'matters.context.unpin' : 'matters.context.pin')}
           </button>
+          {/* 🔴 thread 专属的订阅开关：设计原型里没有这个功能，「设计没画」≠「要删」。 */}
           {resource.kind === 'thread' ? (
             <button
               type="button"
@@ -340,11 +451,24 @@ export function ResourceDrawer({
   )
 }
 
-function Meta({ label, value }: { label: string; value: React.ReactNode }): React.ReactElement {
+/** 一条属性行。`icon` 收的是**已经渲染好的节点**而不是组件类型 —— 后者会让调用点写成
+ *  `<Meta icon={Clock} …>` 再在内部 `<Icon/>`，踩 eslint react-hooks/static-components。 */
+function Meta({
+  icon,
+  label,
+  children
+}: {
+  icon: React.ReactNode
+  label: string
+  children: React.ReactNode
+}): React.ReactElement {
   return (
     <>
-      <dt className="text-ink-fg-3">{label}</dt>
-      <dd className="min-w-0 break-words text-ink-fg-1">{value}</dd>
+      <dt className="inline-flex items-center gap-1.5 whitespace-nowrap text-ink-fg-3">
+        {icon}
+        {label}
+      </dt>
+      <dd className="flex min-w-0 items-center gap-1.5 break-words text-ink-fg-1">{children}</dd>
     </>
   )
 }
