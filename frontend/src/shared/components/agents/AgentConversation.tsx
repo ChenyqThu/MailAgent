@@ -62,6 +62,10 @@ import {
 import { useAIChatPanel, type MatterChatTarget } from '@shared/state/ai-chat-panel'
 
 import { AgentThread } from './AgentThread'
+import {
+  resolveConversationContextSource,
+  seededEmailIdOf
+} from './conversationContextSource'
 import { createEnsureSession } from './ensureSession'
 import { AgentQuickActions } from './AgentQuickActions'
 import { AgentRecordConversation } from './AgentRecordView'
@@ -86,7 +90,12 @@ export interface AgentConversationProps {
   welcomeAlign?: 'center' | 'left'
   /** assistant-modal P5 — the modal opens carrying THIS email as a removable context chip (general
    *  session + the email body injected at send). Resolved once on mount; the user can × remove it (then
-   *  it won't re-add). /sessions omits it → no chip, no injection (byte-identical). */
+   *  it won't re-add). /sessions omits it → no chip, no injection (byte-identical).
+   *
+   *  🔴 0813 轮4批AG —— 它是**候选**不是结论：真正种不种 chip 由 `resolveConversationContextSource`
+   *  单值判定（见 ./conversationContextSource）。这枚来自 `useActiveEmail.activeInternalId`，是
+   *  persist 在 localStorage、切邮箱不复位的**环境态**（「最后点过的那一行」），所以对话上下文是
+   *  一件事项时它必须让位 —— 否则进事项页点对话会同时带出上一封邮件的 chip。 */
   initialMentionEmailId?: number
   /** 0812 —— dock 以「事项对话」唤出时带的那件事。与 initialMentionEmailId 同性质：空会话上作为
    *  一枚可移除的 context chip 提供，×掉就不再自动重新 seed。/sessions 不传 → 无 chip、无注入。
@@ -162,6 +171,24 @@ export function AgentConversation({
   const sessionMatter: MatterChatTarget | null =
     sessionMatterIdentity.state === 'resolved' ? sessionMatterIdentity.target : null
   const matterContextUnresolved = sessionMatterIdentity.state === 'unresolved'
+
+  // 0813 轮4批AG —— 「这场对话当前所在的是什么」的单值判定（判据与理由见
+  // ./conversationContextSource）。owner：进事项页点对话，不该把**进事项前那封邮件**也带进来。
+  // 🔴 修的是判据不是 `useActiveEmail` 那份全局态：它 persist 在 localStorage、有意不随导航复位
+  // （见其文件头），十余个消费者（EmailDetail 恢复 / J-K / EmailList reset）都靠它。
+  const contextSource = useMemo(
+    () =>
+      resolveConversationContextSource({
+        sessionMatter,
+        sessionMatterUnresolved: matterContextUnresolved,
+        matterSeed: initialMatterTarget ?? null,
+        activeEmailId: initialMentionEmailId ?? null
+      }),
+    [sessionMatter, matterContextUnresolved, initialMatterTarget, initialMentionEmailId]
+  )
+  // 本宿主到底会不会产出邮件 chip —— 下面两处（种 chip 的 effect、待发指令的「给不出引用」闸）
+  // 必须共用这一个值，理由见 seededEmailIdOf 的注释。
+  const seededEmailId = seededEmailIdOf(contextSource)
 
   // ── composer controls (model / thinking / @mention / attachments) ──────────
   // W8 — per-session model. `sessionModel` is THREE-valued on purpose: undefined while the row is
@@ -280,32 +307,31 @@ export function AgentConversation({
   // (removedEmailContextId). /sessions passes no initialMentionEmailId → chip cleared, no injection.
   const chatIsEmpty = chat.activeSessionId === null && chat.messages.length === 0
   useEffect(() => {
-    if (initialMentionEmailId == null) {
-      // No active email (/sessions, or email deselected) → clear any stale chip so its body isn't injected.
+    if (seededEmailId == null) {
+      // 没有活动邮件（/sessions、邮件被取消选中），**或者**这场对话的上下文是一件事项（轮4批AG：
+      // 进事项页点对话不该把进事项前那封邮件也带进来）→ 清掉残留 chip，正文也就不会被注入。
       // eslint-disable-next-line react-hooks/set-state-in-effect
       setEmailContext(null)
       return undefined
     }
     if (!chatIsEmpty) return undefined
-    if (removedEmailContextId === initialMentionEmailId) return undefined
+    if (removedEmailContextId === seededEmailId) return undefined
     // 0812 —— 先同步立起 chip（只带 id，标题随后补）。原来「等 email.get 回来才立 chip」有两个
     // 后果：唤出瞬间 chip 闪一下才出现；以及取标题失败时**根本没有 chip**，于是「带着这封邮件
     // 提问」静默退化成一次没有引用的提问。注入用的是 internalId（正文在 send 时另取），标题只是
     // 显示，拿不到就退回「未命名」文案。外部指令（ChatPromptDispatcher）也据此判「引用就位了没」。
     // eslint-disable-next-line react-hooks/set-state-in-effect
     setEmailContext((cur) =>
-      cur && cur.internalId === initialMentionEmailId
-        ? cur
-        : { internalId: initialMentionEmailId, subject: '' }
+      cur && cur.internalId === seededEmailId ? cur : { internalId: seededEmailId, subject: '' }
     )
     let cancelled = false
     void (async () => {
       try {
-        const email = await mailApi.email.get(initialMentionEmailId)
+        const email = await mailApi.email.get(seededEmailId)
         if (cancelled || !email) return
         setEmailContext((cur) =>
-          cur && cur.internalId === initialMentionEmailId
-            ? { internalId: initialMentionEmailId, subject: email.subject ?? '' }
+          cur && cur.internalId === seededEmailId
+            ? { internalId: seededEmailId, subject: email.subject ?? '' }
             : cur
         )
       } catch {
@@ -315,7 +341,7 @@ export function AgentConversation({
     return (): void => {
       cancelled = true
     }
-  }, [initialMentionEmailId, chatIsEmpty, mailApi, removedEmailContextId])
+  }, [seededEmailId, chatIsEmpty, mailApi, removedEmailContextId])
 
   // P1-2 (07-15 codex r1) — an in-panel approval decide runs the server-side resume synchronously
   // and holds that session's run lease; disable the composer for its duration (a send would 409).
@@ -727,12 +753,15 @@ export function AgentConversation({
       return { nonce: pendingPrompt.nonce, text: pendingPrompt.text, prefillOnly: false }
     }
     // (b) 这个宿主不是那封邮件的宿主 → 引用永远不会就位。消费成"只预填"，用户看得见、可自己决定。
-    if (initialMentionEmailId !== pendingPrompt.emailId) {
+    // 🔴 判据必须是 `seededEmailId` 而不是原始 prop（轮4批AG）：上下文是事项时本宿主**不会**种
+    // 邮件 chip，拿原始 prop 判会得出「宿主就是那封邮件」→ 落到下面 return null → 永远等一枚再也
+    // 不会出现的 chip，指令就此悬着（codex #3 明令禁止的形态）。
+    if (seededEmailId !== pendingPrompt.emailId) {
       return { nonce: pendingPrompt.nonce, text: pendingPrompt.text, prefillOnly: true }
     }
     // 宿主就是那封邮件、chip 正在同一轮里建立 → 下一帧就位（seed effect 是同步立 chip 的）。
     return null
-  }, [pendingPrompt, chatIsEmptyForMatter, matterSeedPending, emailContext, initialMentionEmailId])
+  }, [pendingPrompt, chatIsEmptyForMatter, matterSeedPending, emailContext, seededEmailId])
   const onPromptDispatched = useCallback(
     (nonce: number): void => consumeChatPrompt(nonce),
     [consumeChatPrompt]
