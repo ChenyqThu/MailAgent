@@ -43,19 +43,32 @@ describe('palette matter helpers', () => {
   })
 
   test('filters provider groups by scope', () => {
+    // 通讯录 WP4：既有三档（all/email/matter）语义不变，contact 组随 all 可见。
     expect(paletteScopeVisibility('all')).toEqual({
       showEmail: true,
       showMatter: true,
+      showContact: true,
       showNonProviderGroups: true
     })
     expect(paletteScopeVisibility('email')).toEqual({
       showEmail: true,
       showMatter: false,
+      showContact: false,
       showNonProviderGroups: true
     })
     expect(paletteScopeVisibility('matter')).toEqual({
       showEmail: false,
       showMatter: true,
+      showContact: false,
+      showNonProviderGroups: false
+    })
+  })
+
+  test("scope 'contact' shows only the contact group (WP4, mirrors 'matter' semantics)", () => {
+    expect(paletteScopeVisibility('contact')).toEqual({
+      showEmail: false,
+      showMatter: false,
+      showContact: true,
       showNonProviderGroups: false
     })
   })

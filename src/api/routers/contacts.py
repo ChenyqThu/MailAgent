@@ -25,6 +25,7 @@ from src.api.schemas.contacts import (
     ContactMergeRequest,
     ContactPatchRequest,
     ContactPrimaryEmailRequest,
+    ContactResolveRequest,
     ContactSelfRequest,
 )
 from src.contacts import service as contact_service
@@ -128,6 +129,69 @@ async def backfill_progress(
     )
 
 
+# ---- 批量精确解析 (WP4 互链: 邮件详情头 → PersonChip) ----
+
+#: 单次 resolve 的地址数上限 (邮件详情头一封邮件的 from/to/cc 集合远小于此)。
+RESOLVE_MAX_EMAILS = 100
+
+
+@router.post("/resolve")
+async def resolve_contacts(
+    request: Request,
+    body: ContactResolveRequest,
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    """按归一 email **精确**匹配 contact_email 锚点, 批量返回 chip 最小集。
+
+    - 键 = 调用方的**原输入串** (未命中/非法形状 = null); 归一走
+      `contact_service.normalize_email` 单源 (禁自写 lower/strip)。
+    - 不过滤 hidden/self/robot —— 「在库」判据就是 contact_email 有行
+      (人物页对隐藏行也能打开, chip 跳转同理)。
+    - 之所以不用 `GET /contacts?q=`: LIKE 两端通配假阳 (a@x.com 命中
+      a@x.com.cn) + N 地址 N 请求 + ContactRowDto 无 emails 数组无法判等。
+    """
+    if len(body.emails) > RESOLVE_MAX_EMAILS:
+        raise APIError(
+            "E_INVALID_ARG",
+            f"emails must contain at most {RESOLVE_MAX_EMAILS} entries",
+            source="sqlite",
+        )
+    normalized_by_input = {
+        raw: contact_service.normalize_email(raw) for raw in body.emails
+    }
+    wanted = sorted({n for n in normalized_by_input.values() if n is not None})
+    chip_by_email: dict[str, dict] = {}
+    if wanted:
+        placeholders = ",".join("?" * len(wanted))
+        sql = (
+            "SELECT ce.email_normalized AS q_email, c.id, c.display_name, "
+            "  c.name_en, c.kind, "
+            "  (SELECT COALESCE(MAX(CASE WHEN pe.is_primary = 1 "
+            "      THEN pe.email_normalized END), MIN(pe.email_normalized)) "
+            "   FROM contact_email pe WHERE pe.contact_id = c.id) AS primary_email "
+            "FROM contact_email ce "
+            "JOIN contact c ON c.id = ce.contact_id "
+            f"WHERE ce.email_normalized IN ({placeholders})"
+        )
+        conn = repo.connect()
+        try:
+            for row in conn.execute(sql, wanted):
+                chip_by_email[row["q_email"]] = {
+                    "id": row["id"],
+                    "display_name": row["display_name"],
+                    "name_en": row["name_en"],
+                    "kind": row["kind"],
+                    "primary_email": row["primary_email"],
+                }
+        finally:
+            conn.close()
+    items = {
+        raw: (chip_by_email.get(norm) if norm else None)
+        for raw, norm in normalized_by_input.items()
+    }
+    return success_envelope({"items": items}, request=request)
+
+
 # ---- 列表 (一条聚合 SQL) ----
 
 
@@ -137,6 +201,7 @@ async def list_contacts(
     view: str = Query("known"),
     q: Optional[str] = Query(None),
     sort: str = Query("density"),
+    limit: Optional[int] = Query(None),
     repo: ContactRepository = Depends(get_contact_repository),
 ):
     if view not in VIEW_VALUES:
@@ -146,6 +211,12 @@ async def list_contacts(
     if sort not in SORT_VALUES:
         raise APIError(
             "E_INVALID_ARG", f"sort must be one of {SORT_VALUES}", source="sqlite"
+        )
+    # WP4 (⌘K 「人」组): 排序后截断 items; total 仍为全量命中数 (供「+n more」)。
+    # 缺省不传 = 现行为字节级不变 (有测试断言)。
+    if limit is not None and limit <= 0:
+        raise APIError(
+            "E_INVALID_ARG", "limit must be a positive integer", source="sqlite"
         )
 
     where = ["c.merged_into IS NULL"]
@@ -194,6 +265,9 @@ async def list_contacts(
         rows = conn.execute(sql, params).fetchall()
     finally:
         conn.close()
+    total = len(rows)
+    if limit is not None:
+        rows = rows[:limit]
     items = [
         {
             **{key: row[key] for key in row.keys()},
@@ -204,7 +278,7 @@ async def list_contacts(
         for row in rows
     ]
     return success_envelope(
-        {"items": items, "total": len(items)}, request=request
+        {"items": items, "total": total}, request=request
     )
 
 

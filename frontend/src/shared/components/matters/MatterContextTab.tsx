@@ -23,6 +23,8 @@ import type {
   MatterStakeholder
 } from '@shared/api/types/matter'
 import { RecipientAvatar } from '@shared/components/email/compose/recipient-avatar'
+import { useContactsEnabled } from '@shared/components/contacts/hooks'
+import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { CollapseChevron } from '@shared/components/ui/collapsible'
 import { formatRelativeTime } from '@shared/format'
@@ -80,6 +82,10 @@ export function MatterContextTab({
 }: MatterContextTabProps): React.ReactElement {
   const { t } = useTranslation()
   const api = useMattersApi()
+  // 通讯录 WP4 —— 干系人卡（contact_id 非空时）「头像+姓名+副行」块可点跳人物页。
+  // flag off 不可点（现状字节级不变）。跳转 hooks 收在 StakeholderIdentity 里
+  // （镜像 StakeholderLastContact：useNavigate 只在渲染干系人卡时才被调用）。
+  const { enabled: contactsEnabled } = useContactsEnabled()
   const groups = useMemo(() => groupMatterResources(resources), [resources])
   const pinned = resources.filter((item) => item.link.pinned)
   const [editor, setEditor] = useState<MatterStakeholder | 'new' | null>(null)
@@ -164,38 +170,7 @@ export function MatterContextTab({
                     <Trash2 size={13} />
                   </button>
                 </div>
-                <div className="flex items-start gap-2.5">
-                  <span
-                    className={`flex shrink-0 rounded-full ${
-                      stakeholder.is_waiting_on ? 'ring-2 ring-warn/40 ring-offset-1 ring-offset-ink-1' : ''
-                    }`}
-                  >
-                    <RecipientAvatar
-                      name={stakeholder.display_name ?? ''}
-                      email={stakeholder.email_normalized ?? ''}
-                      size={30}
-                    />
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      <h3 className="truncate text-body font-medium text-ink-fg">
-                        {stakeholder.display_name ||
-                          stakeholder.email_normalized ||
-                          t('matters.context.unnamedStakeholder')}
-                      </h3>
-                      {stakeholder.is_waiting_on ? (
-                        <Pip tone="warn">{t('matters.context.waiting')}</Pip>
-                      ) : null}
-                    </div>
-                    {/* 名字行下 = 库侧信息（组织，退而求其次邮箱）；角色只出现在下面的
-                        药丸行 —— 设计里「职位·公司」与角色 Pip 是两回事，别重复画角色。 */}
-                    <p className="mt-0.5 truncate text-meta text-ink-fg-3">
-                      {stakeholder.organization ||
-                        stakeholder.email_normalized ||
-                        t('matters.context.noRole')}
-                    </p>
-                  </div>
-                </div>
+                <StakeholderIdentity stakeholder={stakeholder} contactsEnabled={contactsEnabled} />
                 <div className="mt-2.5 flex items-center gap-1.5">
                   {stakeholder.role ? <Pip>{stakeholder.role}</Pip> : null}
                   <span className="ml-auto">
@@ -410,6 +385,84 @@ export function MatterContextTab({
       />
     </div>
   )
+}
+
+/** 通讯录 WP4 —— 干系人卡的「头像+姓名+副行」身份块。`contact_id` 非空且通讯录
+ *  开启时整块可点（跳人物页：store intent + navigate('/contacts')，title 复用
+ *  contacts.chip.open）；否则渲染与改动前逐字相同的静态块（含 className ——
+ *  hover accent 类只出现在可点分支）。🔴 不把整卡做成 button：卡内已有
+ *  edit/delete 钮与「最近联系」按钮，嵌套 button 非法；设计 mock 的整行按钮在
+ *  现有卡片结构上以「点头像/名字区跳转」等价落地。 */
+function StakeholderIdentity({
+  stakeholder,
+  contactsEnabled
+}: {
+  stakeholder: MatterStakeholder
+  contactsEnabled: boolean
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const navigate = useNavigate()
+  const openContact = useContactNavigation((state) => state.open)
+  const name =
+    stakeholder.display_name ||
+    stakeholder.email_normalized ||
+    t('matters.context.unnamedStakeholder')
+  const interactive = contactsEnabled && stakeholder.contact_id !== null
+  const body = (
+    <>
+      <span
+        className={`flex shrink-0 rounded-full ${
+          stakeholder.is_waiting_on ? 'ring-2 ring-warn/40 ring-offset-1 ring-offset-ink-1' : ''
+        }`}
+      >
+        <RecipientAvatar
+          name={stakeholder.display_name ?? ''}
+          email={stakeholder.email_normalized ?? ''}
+          size={30}
+        />
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex flex-wrap items-center gap-1.5">
+          <h3
+            className={
+              interactive
+                ? 'truncate text-body font-medium text-ink-fg transition-colors duration-fast group-hover/open:text-coral'
+                : 'truncate text-body font-medium text-ink-fg'
+            }
+          >
+            {name}
+          </h3>
+          {stakeholder.is_waiting_on ? (
+            <Pip tone="warn">{t('matters.context.waiting')}</Pip>
+          ) : null}
+        </div>
+        {/* 名字行下 = 库侧信息（组织，退而求其次邮箱）；角色只出现在下面的
+            药丸行 —— 设计里「职位·公司」与角色 Pip 是两回事，别重复画角色。 */}
+        <p className="mt-0.5 truncate text-meta text-ink-fg-3">
+          {stakeholder.organization ||
+            stakeholder.email_normalized ||
+            t('matters.context.noRole')}
+        </p>
+      </div>
+    </>
+  )
+  if (interactive) {
+    const contactId = stakeholder.contact_id as number
+    return (
+      <button
+        type="button"
+        onClick={() => {
+          openContact(contactId)
+          void navigate({ to: '/contacts' })
+        }}
+        title={t('contacts.chip.open', { name })}
+        className="group/open flex w-full items-start gap-2.5 text-left"
+      >
+        {body}
+      </button>
+    )
+  }
+  return <div className="flex items-start gap-2.5">{body}</div>
 }
 
 /** G-17 ① —— 「最近联系」：能定位到那封邮件时是一颗按钮，定位不到就还是一行静态文字。

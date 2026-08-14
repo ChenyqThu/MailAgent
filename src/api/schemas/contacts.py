@@ -12,6 +12,14 @@ from typing import Optional
 from pydantic import BaseModel, Field
 
 
+class ContactResolveRequest(BaseModel):
+    """批量精确解析 (WP4 互链): 邮件详情头一封一次把地址集换成 chip 数据。
+    上限 100 在 router 校验 (400 E_INVALID_ARG, 跟随本面 view/sort 的错误形状,
+    不用 pydantic 422)。"""
+
+    emails: list[str] = Field(default_factory=list)
+
+
 class ContactPatchRequest(BaseModel):
     """身份字段编辑。🔴 「未提供」≠「置空」—— router 用 ``model_dump(
     exclude_unset=True)`` 区分, 只把显式出现的键交给 service (保存即落锁)。"""

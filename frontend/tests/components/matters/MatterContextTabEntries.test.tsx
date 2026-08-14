@@ -13,6 +13,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
 import type { Matter, MatterResourceListItem, MatterStakeholder } from '@shared/api/types/matter'
+import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { useActiveEmail } from '@shared/state/active-email'
 
 const { navigate, listRelations, deleteStakeholder, unlinkResource, list } = vi.hoisted(() => ({
@@ -24,6 +25,14 @@ const { navigate, listRelations, deleteStakeholder, unlinkResource, list } = vi.
 }))
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
+// 通讯录 WP4 —— 干系人卡互链入口的 flag 投影（真 hook 会 fetch /chat/config；
+// 测试里钉 enabled=true 让可点分支可断言）。🔴 partial mock：本 tab 还渲染
+// MatterStakeholderPicker，它 import 同模块的 useContactList 等 hooks——整模块
+// 替换会把它们炸成 undefined。navigation store 用真实现。
+vi.mock('@shared/components/contacts/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shared/components/contacts/hooks')>()
+  return { ...actual, useContactsEnabled: () => ({ enabled: true, loading: false }) }
+})
 vi.mock('@shared/components/matters/hooks', () => ({
   // G-33 —— `useMatterUndoToast` 经这条通道执行撤销；本用例不点撤销，给个哑实现即可。
   useMatterChatApi: () => ({ contextSnapshot: vi.fn(), applyUndo: vi.fn() }),
@@ -77,7 +86,10 @@ function emailResource(id: number): MatterResourceListItem {
   } as unknown as MatterResourceListItem
 }
 
-function stakeholder(sourceResourceId: number | null): MatterStakeholder {
+function stakeholder(
+  sourceResourceId: number | null,
+  contactId: number | null = null
+): MatterStakeholder {
   return {
     id: 1,
     matter_id: 1,
@@ -90,6 +102,7 @@ function stakeholder(sourceResourceId: number | null): MatterStakeholder {
     is_waiting_on: false,
     last_contact_at: 1_700_000_000_000,
     source_resource_id: sourceResourceId,
+    contact_id: contactId,
     deleted_at: null,
     created_at: 0,
     updated_at: 0
@@ -118,6 +131,7 @@ beforeEach(() => {
   listRelations.mockResolvedValue([])
   list.mockResolvedValue({ items: [] })
   useActiveEmail.setState({ activeInternalId: null })
+  useContactNavigation.setState({ targetContactId: null })
 })
 
 afterEach(cleanup)
@@ -146,5 +160,21 @@ describe('MatterContextTab —— G-14 / G-17 入口', () => {
     renderTab([stakeholder(null)])
     expect(screen.queryByRole('button', { name: /最近联系/ })).toBeNull()
     expect(screen.getByText(/最近联系/)).toBeTruthy()
+  })
+
+  // 通讯录 WP4 —— 干系人卡「头像+姓名」块的人物页互链入口。
+  test('WP4：contact_id 非空 → 身份块是按钮，点击落 navigation store + 跳 /contacts', () => {
+    renderTab([stakeholder(5, 42)])
+    const button = screen.getByRole('button', { name: /Peer Name/ })
+    expect(button.getAttribute('title')).toBe('打开 Peer Name 的人物页')
+    button.click()
+    expect(useContactNavigation.getState().targetContactId).toBe(42)
+    expect(navigate).toHaveBeenCalledWith({ to: '/contacts' })
+  })
+
+  test('WP4：contact_id 为空（纯本事项行）→ 身份块不是按钮（不做假入口）', () => {
+    renderTab([stakeholder(5, null)])
+    expect(screen.queryByRole('button', { name: /Peer Name/ })).toBeNull()
+    expect(screen.getByText('Peer Name')).toBeTruthy()
   })
 })

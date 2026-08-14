@@ -87,10 +87,15 @@ import { extractTerms } from '@shared/lib/highlight_terms'
 import { hasDslToken, toggleDslToken } from '@shared/lib/dsl_token'
 import type { MailboxSummary, SearchAgentPhase, SearchHit, SearchResult } from '@shared/api/types'
 import type { Matter } from '@shared/api/types/matter'
+import type { ContactRowDto } from '@shared/api/types/contact'
 import { useMattersApi, useMattersEnabled } from '@shared/components/matters/hooks'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
+import { useContactsApi, useContactsEnabled } from '@shared/components/contacts/hooks'
+import { useContactNavigation } from '@shared/components/contacts/navigation'
+import { UsersRoundIcon } from '@shared/components/icons'
 import { EmailHitRow } from './EmailHitRow'
 import { MatterHitRow } from './MatterHitRow'
+import { PersonHitRow } from './PersonHitRow'
 import { PaletteThinkingPhrases } from './PaletteThinkingPhrases'
 import {
   buildPaletteMatterLookupKeys,
@@ -123,6 +128,10 @@ const IS_WEB = resolveBuildTarget() === 'web'
 // 展示的单一截断点 (searchEmails clamp 上限 200, 50 在范围内), 不设无界。
 const MAX_EMAIL_HITS = 50
 const MAX_JUMP_MAILBOXES = 3
+// 通讯录 WP4「人」组：面板展示 8 条；服务端 limit 取 16 留出客户端滤 hidden 的
+// 余量（total 仍是全量命中数，供「另有 n 人」提示）。
+const MAX_CONTACT_HITS = 8
+const CONTACT_FETCH_LIMIT = 16
 const DEBOUNCE_MS = 250
 const CJK_RATIO_THRESHOLD = 0.4
 const CJK_RE = /[一-鿿㐀-䶿豈-﫿぀-ヿ]/g
@@ -147,7 +156,7 @@ const FIXED_FACETS: ReadonlyArray<{ token: string; labelKey: string }> = [
   { token: 'has:attachment', labelKey: 'palette.facet.hasAttachment' }
 ]
 
-type Group = 'jump' | 'matter' | 'ai' | 'email' | 'actions'
+type Group = 'jump' | 'matter' | 'contact' | 'ai' | 'email' | 'actions'
 
 // ─── Tiny helpers ──────────────────────────────────────────────────────
 
@@ -219,9 +228,12 @@ export function CommandPalette(): React.ReactElement | null {
   const mailApi = useMailApi()
   const mattersApi = useMattersApi()
   const mattersEnabled = useMattersEnabled()
+  const contactsApi = useContactsApi()
+  const { enabled: contactsEnabled } = useContactsEnabled()
   const navigate = useNavigate()
   const queryClient = useQueryClient()
   const openMatter = useMatterNavigation((state) => state.open)
+  const openContact = useContactNavigation((state) => state.open)
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const setActiveEmail = useActiveEmail((s) => s.setActive)
   const setView = useEmailFilter((s) => s.setView)
@@ -259,6 +271,16 @@ export function CommandPalette(): React.ReactElement | null {
       void navigate({ to: '/matters' })
     },
     [navigate, openMatter]
+  )
+
+  // 通讯录 WP4 —— 「人」命中直达人物页（store intent + navigate，镜像 matter）。
+  const activateContact = useCallback(
+    (contact: ContactRowDto): void => {
+      closeCommandPalette()
+      openContact(contact.id)
+      void navigate({ to: '/contacts' })
+    },
+    [navigate, openContact]
   )
 
   const [query, setQuery] = useState('')
@@ -421,6 +443,36 @@ export function CommandPalette(): React.ReactElement | null {
   const matterHits: Matter[] = useMemo(() => mattersQ.data?.items ?? [], [mattersQ.data?.items])
   const visibleMatterHits = mattersEnabled ? matterHits : []
   const isSearchingMatters = mattersQ.isFetching && hasQuery
+
+  // 通讯录 WP4 —— 「人」组（useQuery 形状逐字镜像上面的 mattersQ 先例）。
+  // view='all'（known 视图要求 sent>0，会漏掉机器人/单向广播/隐藏行之外的搜索
+  // 目标）+ 客户端滤 hidden（self/robot 保留 —— 搜自己名字也该能跳到人物页）。
+  const contactsQ = useQuery({
+    queryKey: qk.contacts.paletteSearch(normalised),
+    queryFn: () =>
+      contactsApi.list({
+        view: 'all',
+        q: normalised,
+        sort: 'density',
+        limit: CONTACT_FETCH_LIMIT
+      }),
+    staleTime: 30_000,
+    placeholderData: keepPreviousData,
+    enabled: open && contactsEnabled && hasQuery
+  })
+  const contactHits: ContactRowDto[] = useMemo(
+    () =>
+      (contactsQ.data?.items ?? [])
+        .filter((row) => row.hidden_at === null)
+        .slice(0, MAX_CONTACT_HITS),
+    [contactsQ.data?.items]
+  )
+  const visibleContactHits = contactsEnabled ? contactHits : []
+  // 「另有 n 人」= 服务端全量命中数 - 面板已展示数（limit 截断 items 但 total
+  // 仍全量，正是 list limit 参数存在的原因）。hidden 行被客户端滤掉时也计入
+  // overflow —— 它们在通讯录页里可以搜到。
+  const contactOverflow = Math.max(0, (contactsQ.data?.total ?? 0) - visibleContactHits.length)
+  const isSearchingContacts = contactsQ.isFetching && hasQuery
 
   // G-B3 — record history on a *settled* successful search (not every keystroke):
   // debounce → normalised → searchQ resolves (non-placeholder) → push once. This
@@ -721,6 +773,25 @@ export function CommandPalette(): React.ReactElement | null {
         void navigate({ to: '/admin/kanban' })
       }
     })
+    // 通讯录 WP4 —— 「打开通讯录」导航命令（位置对齐侧栏 VIEW 组顺序：看板之后）。
+    // flag off 不渲染（与侧栏条目同一 gate）。icon = 侧栏通讯录同款图标组件。
+    if (contactsEnabled) {
+      out.push({
+        id: 'jump:contacts',
+        icon: <UsersRoundIcon size={14} strokeWidth={1.75} />,
+        label: (
+          <span className="text-body flex-1 truncate">
+            <span className="text-ink-fg font-medium">{t('palette.jump.contacts')}</span>
+            <span className="text-ink-fg-3 mx-1">·</span>
+            <span className="text-ink-fg-2">{t('palette.jump.contactsMeta')}</span>
+          </span>
+        ),
+        run: () => {
+          closeCommandPalette()
+          void navigate({ to: '/contacts' })
+        }
+      })
+    }
     return out
   }, [
     debouncedRaw,
@@ -731,6 +802,7 @@ export function CommandPalette(): React.ReactElement | null {
     mailboxes,
     navigate,
     setActiveMailbox,
+    contactsEnabled,
     t
   ])
 
@@ -898,6 +970,12 @@ export function CommandPalette(): React.ReactElement | null {
         out.push({ group: 'matter', indexInGroup: i, run: () => activateMatter(matter) })
       )
     }
+    // 通讯录 WP4 —— 「人」组紧跟事项组（jump → matter → contact → ai → email → actions）。
+    if (scopeVisibility.showContact) {
+      visibleContactHits.forEach((contact, i) =>
+        out.push({ group: 'contact', indexInGroup: i, run: () => activateContact(contact) })
+      )
+    }
     // AI agentic hits: same activate closure as EMAIL hits; the AI summary row
     // and the in-flight phrase row are NOT entries (non-interactive).
     if (scopeVisibility.showEmail) {
@@ -928,11 +1006,13 @@ export function CommandPalette(): React.ReactElement | null {
   }, [
     jumpItems,
     visibleMatterHits,
+    visibleContactHits,
     aiHits,
     dedupedHits,
     actionItems,
     scopeVisibility,
     activateMatter,
+    activateContact,
     activateHit
   ])
 
@@ -950,7 +1030,7 @@ export function CommandPalette(): React.ReactElement | null {
   const jumpToGroupBoundary = useCallback(
     (forward: boolean) => {
       if (flat.length === 0) return
-      const order: Group[] = ['jump', 'matter', 'ai', 'email', 'actions']
+      const order: Group[] = ['jump', 'matter', 'contact', 'ai', 'email', 'actions']
       const present = order.filter((g) => flat.some((f) => f.group === g))
       if (present.length <= 1) return
       const curGroup = flat[highlight]?.group ?? present[0]
@@ -1038,20 +1118,33 @@ export function CommandPalette(): React.ReactElement | null {
     totalIndexed === null
       ? `${dedupedHits.length}`
       : t('palette.email.countLabel', { n: dedupedHits.length, total: totalIndexed })
+  // scope chips：matter/contact 各自跟 flag 走（off 不出 chip）；'all' 计数 =
+  // 可见 provider 组之和。chips 行本身的渲染 gate 见下方（matters 或 contacts
+  // 任一开启即渲染 —— contacts-only 时 contact scope 也要可达）。
   const scopeItems: ReadonlyArray<{ id: PaletteScope; count: number }> = [
-    { id: 'all', count: emailProviderCount + visibleMatterHits.length },
+    {
+      id: 'all',
+      count: emailProviderCount + visibleMatterHits.length + visibleContactHits.length
+    },
     { id: 'email', count: emailProviderCount },
-    { id: 'matter', count: visibleMatterHits.length }
+    ...(mattersEnabled
+      ? [{ id: 'matter', count: visibleMatterHits.length } as const]
+      : []),
+    ...(contactsEnabled
+      ? [{ id: 'contact', count: visibleContactHits.length } as const]
+      : [])
   ]
 
   // Pre-compute flat index offsets for each group so renderer can stamp
   // data-flat-idx without recomputing during the map. Order matches the flat
-  // index builder: jump → matter → ai → email → actions.
+  // index builder: jump → matter → contact → ai → email → actions.
   let cursor = 0
   const jumpStartIdx = cursor
   cursor += scopeVisibility.showNonProviderGroups ? jumpItems.length : 0
   const matterStartIdx = cursor
   cursor += scopeVisibility.showMatter ? visibleMatterHits.length : 0
+  const contactStartIdx = cursor
+  cursor += scopeVisibility.showContact ? visibleContactHits.length : 0
   const aiStartIdx = cursor
   cursor += scopeVisibility.showEmail ? aiHits.length : 0
   const emailStartIdx = cursor
@@ -1202,7 +1295,7 @@ export function CommandPalette(): React.ReactElement | null {
           </div>
         )}
 
-        {mattersEnabled && hasQuery ? (
+        {(mattersEnabled || contactsEnabled) && hasQuery ? (
           <div className="flex shrink-0 items-center gap-1.5 border-b border-ink-border-soft px-4 py-1.5">
             {scopeItems.map((item) => (
               <button
@@ -1337,6 +1430,88 @@ export function CommandPalette(): React.ReactElement | null {
                     {!isSearchingMatters ? (
                       <div className="text-center text-meta text-ink-fg-3">
                         {t('palette.matters.emptyHint')}
+                      </div>
+                    ) : null}
+                  </div>
+                </div>
+              )}
+            </>
+          ) : null}
+
+          {/* 通讯录 WP4 —— 「人」组（形状照上面的事项组：组头 + 行 + scope 专属空态 +
+              「另有 n 人」overflow 提示）。 */}
+          {contactsEnabled &&
+          scopeVisibility.showContact &&
+          hasQuery &&
+          (visibleContactHits.length > 0 || scope === 'contact') ? (
+            <>
+              <GroupHeader
+                title={t('palette.contacts.title')}
+                countLabel={String(visibleContactHits.length)}
+                aside={
+                  isSearchingContacts ? (
+                    <>
+                      <Loader2
+                        size={12}
+                        strokeWidth={2}
+                        className="animate-spin text-ink-fg-2 motion-reduce:animate-none"
+                        aria-hidden
+                      />
+                      <span>{t('palette.searching')}</span>
+                    </>
+                  ) : undefined
+                }
+              />
+              {visibleContactHits.length > 0 ? (
+                <>
+                  <div className="space-y-px px-3">
+                    {visibleContactHits.map((contact, index) => {
+                      const idx = contactStartIdx + index
+                      return (
+                        <PersonHitRow
+                          key={contact.id}
+                          contact={contact}
+                          flatIdx={idx}
+                          selected={idx === highlight}
+                          setHighlight={setHighlight}
+                          queryTerms={queryTerms}
+                          onActivate={() => activateContact(contact)}
+                        />
+                      )
+                    })}
+                  </div>
+                  {contactOverflow > 0 ? (
+                    <div className="px-5 pb-1 pt-0.5 text-[10px] text-ink-fg-3">
+                      {t('palette.contacts.moreMatches', { n: contactOverflow })}
+                    </div>
+                  ) : null}
+                </>
+              ) : (
+                <div className="px-5">
+                  <div className="empty-tile">
+                    {isSearchingContacts ? (
+                      <Loader2
+                        size={18}
+                        strokeWidth={1.75}
+                        className="animate-spin text-ink-fg-3 motion-reduce:animate-none"
+                        aria-hidden
+                      />
+                    ) : (
+                      <SearchIcon
+                        size={18}
+                        strokeWidth={1.75}
+                        className="text-ink-fg-3"
+                        aria-hidden
+                      />
+                    )}
+                    <div className="text-aux text-ink-fg-1">
+                      {isSearchingContacts
+                        ? t('palette.searching')
+                        : t('palette.contacts.emptyTitle')}
+                    </div>
+                    {!isSearchingContacts ? (
+                      <div className="text-center text-meta text-ink-fg-3">
+                        {t('palette.contacts.emptyHint')}
                       </div>
                     ) : null}
                   </div>

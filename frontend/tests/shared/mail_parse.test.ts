@@ -5,7 +5,7 @@
 
 import { describe, expect, test } from 'vitest'
 
-import { parseSender, cleanSnippet } from '../../src/shared/lib/mail_parse'
+import { parseAddressList, parseSender, cleanSnippet } from '../../src/shared/lib/mail_parse'
 
 describe('parseSender', () => {
   test('RFC 822 quoted-name + angle-addr', () => {
@@ -131,5 +131,47 @@ Welcome to MailAgent.`
     const out = cleanSnippet(md, 80)!
     expect(out).toContain('这是一封正文双写测试邮件')
     expect(out).toContain('附上了一个测试附件')
+  })
+})
+
+// 通讯录 WP4 —— shared 地址切分器（EmailDetail chip 流 + ComposePanel 草稿回填共用）。
+describe('parseAddressList', () => {
+  test('mixed comma/semicolon list with names, bare addr and angle-addr', () => {
+    expect(parseAddressList('"Justin Ma" <justin.ma@tp-link.com>, bob@y.com; Carol <carol@z.com>')).toEqual([
+      { name: 'Justin Ma', email: 'justin.ma@tp-link.com' },
+      { name: '', email: 'bob@y.com' },
+      { name: 'Carol', email: 'carol@z.com' }
+    ])
+  })
+
+  test('quoted display name containing a comma stays ONE entry', () => {
+    expect(parseAddressList('"Doe, John" <john.doe@x.com>, a@y.com')).toEqual([
+      { name: 'Doe, John', email: 'john.doe@x.com' },
+      { name: '', email: 'a@y.com' }
+    ])
+  })
+
+  test('single bare address', () => {
+    expect(parseAddressList('solo@x.com')).toEqual([{ name: '', email: 'solo@x.com' }])
+  })
+
+  test('empty / null / undefined → []', () => {
+    expect(parseAddressList('')).toEqual([])
+    expect(parseAddressList(null)).toEqual([])
+    expect(parseAddressList(undefined)).toEqual([])
+    expect(parseAddressList('  ,  ;  ')).toEqual([])
+  })
+
+  test('de-dupes case-insensitively, keeps first casing', () => {
+    expect(parseAddressList('A@X.com, a@x.com, b@y.com')).toEqual([
+      { name: '', email: 'A@X.com' },
+      { name: '', email: 'b@y.com' }
+    ])
+  })
+
+  test('unparseable token surfaces raw as email with empty name (old parseAddrList parity)', () => {
+    expect(parseAddressList('Undisclosed recipients')).toEqual([
+      { name: '', email: 'Undisclosed recipients' }
+    ])
   })
 })

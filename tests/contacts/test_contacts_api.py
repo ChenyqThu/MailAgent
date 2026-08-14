@@ -97,6 +97,7 @@ def test_flag_off_every_endpoint_is_disabled(client):
         ("POST", "/api/contacts/1/locks"),
         ("POST", "/api/contacts/1/emails/primary"),
         ("POST", "/api/contacts/1/emails/former"),
+        ("POST", "/api/contacts/resolve"),
     ):
         resp = http.request(method, url, json={} if method != "GET" else None)
         assert resp.status_code == 403, (method, url, resp.status_code)
@@ -186,6 +187,95 @@ def test_list_rejects_bad_params(client):
     http, _, path = client
     assert http.get("/api/contacts", params={"view": "bogus"}).status_code == 400
     assert http.get("/api/contacts", params={"sort": "bogus"}).status_code == 400
+    assert http.get("/api/contacts", params={"limit": 0}).status_code == 400
+    assert http.get("/api/contacts", params={"limit": -3}).status_code == 400
+
+
+# ---- 列表 limit (WP4: ⌘K 「人」组截断; total 仍全量) ----
+
+
+def test_list_limit_truncates_but_total_stays_full(client):
+    http, _, path = client
+    _seed_list_fixture(path)
+    data = _data(http.get("/api/contacts", params={"limit": 2}))
+    # density 排序全量是 [2, 1, 7] —— 截断只留前 2, total 仍报 3 (供「+n more」)。
+    assert [i["id"] for i in data["items"]] == [2, 1]
+    assert data["total"] == 3
+
+
+def test_list_without_limit_is_unchanged(client):
+    http, _, path = client
+    _seed_list_fixture(path)
+    data = _data(http.get("/api/contacts"))
+    assert len(data["items"]) == data["total"] == 3
+
+
+# ---- 批量精确解析 (WP4: POST /resolve) ----
+
+
+def test_resolve_mixed_hits_and_misses_keyed_by_original_input(client):
+    http, _, path = client
+    _seed_list_fixture(path)
+    payload = {
+        "emails": [
+            "alice@x.com",       # 主锚点命中
+            "alice@old.com",     # 非主锚点也命中同一人 (LIKE 面做不到的判等)
+            "nobody@none.com",   # 不在库 → null
+            "not-an-email",      # 非法形状 → null
+        ]
+    }
+    data = _data(http.post("/api/contacts/resolve", json=payload))
+    items = data["items"]
+    # 键 = 原输入串, 一条不多一条不少。
+    assert set(items.keys()) == set(payload["emails"])
+    assert items["alice@x.com"]["id"] == 1
+    assert items["alice@x.com"]["display_name"] == "Alice"
+    assert items["alice@x.com"]["kind"] == "person"
+    assert items["alice@x.com"]["primary_email"] == "alice@x.com"
+    # 非主锚点命中同一人, chip 的 primary_email 仍是主邮箱 (Monogram 色相锚)。
+    assert items["alice@old.com"]["id"] == 1
+    assert items["alice@old.com"]["primary_email"] == "alice@x.com"
+    assert items["nobody@none.com"] is None
+    assert items["not-an-email"] is None
+
+
+def test_resolve_normalizes_case_and_whitespace(client):
+    http, _, path = client
+    _seed_list_fixture(path)
+    raw = "  Alice@X.COM  "
+    data = _data(http.post("/api/contacts/resolve", json={"emails": [raw]}))
+    # 归一 (trim+lower) 后命中; 响应键保持原输入串逐字。
+    assert data["items"][raw]["id"] == 1
+
+
+def test_resolve_does_not_filter_hidden_self_robot(client):
+    http, _, path = client
+    _seed_list_fixture(path)
+    data = _data(
+        http.post(
+            "/api/contacts/resolve",
+            json={"emails": ["noreply@z.com", "hu@z.com", "me@corp.com"]},
+        )
+    )
+    # 「在库」判据就是 contact_email 有行 —— robot/hidden/self 一样给 chip。
+    assert data["items"]["noreply@z.com"]["id"] == 4
+    assert data["items"]["noreply@z.com"]["kind"] == "robot"
+    assert data["items"]["hu@z.com"]["id"] == 5
+    assert data["items"]["me@corp.com"]["id"] == 6
+
+
+def test_resolve_rejects_more_than_100_emails(client):
+    http, _, path = client
+    emails = [f"user{i}@x.com" for i in range(101)]
+    resp = http.post("/api/contacts/resolve", json={"emails": emails})
+    assert resp.status_code == 400
+    assert resp.json()["error"]["code"] == "E_INVALID_ARG"
+
+
+def test_resolve_empty_list_returns_empty_map(client):
+    http, _, path = client
+    data = _data(http.post("/api/contacts/resolve", json={"emails": []}))
+    assert data["items"] == {}
 
 
 # ---- 详情 ----

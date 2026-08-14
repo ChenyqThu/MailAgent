@@ -40,6 +40,7 @@ import { useComposeStore } from '@shared/state/compose'
 import { asWriteError } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 import { sanitizeEmailHtml } from '@shared/lib/emailSanitize'
+import { parseAddressList } from '@shared/lib/mail_parse'
 import { assessDraftHtml } from '@shared/lib/draftHtmlGate'
 import {
   serializeEmailComposerHtml,
@@ -68,21 +69,11 @@ import { AttachmentTray, kindFromName } from './AttachmentTray'
 /** Panel mode = UI ComposeMode + 草稿编辑态 + 写新邮件态。 */
 export type PanelMode = ComposeMode | 'draft-edit' | 'new'
 
-/** "name" <a@x>, b@y; c@z → ['a@x','b@y','c@z'] —— 草稿回填 to_addr/cc_addr 提纯。 */
+/** "name" <a@x>, b@y; c@z → ['a@x','b@y','c@z'] —— 草稿回填 to_addr/cc_addr 提纯。
+ *  通讯录 WP4 起收敛到 shared 单源 `parseAddressList`（行为等价 + 引号名内的
+ *  逗号不再被误切成两条）；这里只要地址半边。 */
 function parseAddrList(raw?: string | null): string[] {
-  if (!raw) return []
-  const out: string[] = []
-  const seen = new Set<string>()
-  for (const part of raw.split(/[,;]/)) {
-    const m = part.match(/<([^>]+)>/)
-    const addr = (m ? m[1] : part).trim()
-    if (!addr) continue
-    const lower = addr.toLowerCase()
-    if (seen.has(lower)) continue
-    seen.add(lower)
-    out.push(addr)
-  }
-  return out
+  return parseAddressList(raw).map((entry) => entry.email)
 }
 
 const IMPORTANCE_OPTS: ReadonlyArray<{ value: ComposeImportance; key: string }> = [

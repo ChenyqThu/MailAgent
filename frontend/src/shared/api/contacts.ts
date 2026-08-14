@@ -17,6 +17,7 @@ import type {
   ContactMergeBody,
   ContactPatchBody,
   ContactPatchResponse,
+  ContactResolveResponse,
   ContactSeniority,
   ContactSort,
   ContactView
@@ -31,8 +32,12 @@ export interface ContactsApi {
     view?: ContactView
     q?: string
     sort?: ContactSort
+    /** WP4 (⌘K「人」组): 排序后截断 items; total 仍为全量命中数（「+n more」）。 */
+    limit?: number
   }): Promise<ContactListResponse>
   get(contactId: number): Promise<ContactDetailDto>
+  /** WP4 互链: 批量精确解析（键 = 原输入串, null = 不在库）。上限 100。 */
+  resolve(emails: string[]): Promise<ContactResolveResponse>
   listMails(
     contactId: number,
     options?: { role?: ContactMailRole; cursor?: string; limit?: number }
@@ -73,11 +78,14 @@ export function createContactsApi(baseUrl: string): ContactsApi {
   return {
     list(options = {}) {
       return request(baseUrl, 'GET', '/contacts', {
-        query: { view: options.view, q: options.q, sort: options.sort }
+        query: { view: options.view, q: options.q, sort: options.sort, limit: options.limit }
       })
     },
     get(contactId) {
       return request(baseUrl, 'GET', `/contacts/${segment(contactId)}`)
+    },
+    resolve(emails) {
+      return request(baseUrl, 'POST', '/contacts/resolve', { body: { emails } })
     },
     listMails(contactId, options = {}) {
       return request(baseUrl, 'GET', `/contacts/${segment(contactId)}/mails`, {

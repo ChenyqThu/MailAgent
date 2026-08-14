@@ -538,7 +538,9 @@
       "aiHistory": "AI conversations",
       "aiHistoryMeta": "Open AI panel",
       "admin": "Admin kanban",
-      "adminMeta": "{n, plural, =0 {no dead letters} other {# dead-letter}} · queue health"
+      "adminMeta": "{n, plural, =0 {no dead letters} other {# dead-letter}} · queue health",
+      "contacts": "Open Contacts",
+      "contactsMeta": "People profiles"
     },
     "email": {
       "countLabel": "{n} / {total}",
@@ -606,7 +608,8 @@
       "scope": {
         "all": "All",
         "email": "Email",
-        "matter": "Matters"
+        "matter": "Matters",
+        "contact": "Contacts"
       },
       "fields": {
         "title": "Title",
@@ -617,6 +620,12 @@
         "stakeholders": "Stakeholders",
         "notes": "Notes"
       }
+    },
+    "contacts": {
+      "title": "Contacts",
+      "emptyTitle": "No matching contacts",
+      "emptyHint": "Contact search covers names, aliases, emails and organizations.",
+      "moreMatches": "{n} more people"
     },
     "history": {
       "title": "Recent searches",
@@ -5419,6 +5428,10 @@
     },
     "kind": { "person": "Person", "robot": "Robot", "list": "List" },
     "badge": { "self": "My address", "hidden": "Hidden", "dup": "Possible duplicate", "emails": "{n} addresses" },
+    "chip": {
+      "open": "Open {name}'s page",
+      "notInDirectory": "This address isn't in Contacts (no stub will be created)"
+    },
     "stat": { "exchange": "{n} messages · {sent} sent by me", "since": "Since {date} · last {ago}" },
     "row": { "more": "More actions" },
     "action": {

@@ -107,6 +107,20 @@ export interface ContactDetailDto {
   profile: null
 }
 
+/** POST /api/contacts/resolve 的 chip 最小集 (WP4 互链: Monogram+姓名所需)。 */
+export interface ContactChipDto {
+  id: number
+  display_name: string | null
+  name_en: string | null
+  kind: ContactKind
+  primary_email: string | null
+}
+
+/** 键 = 请求里的原输入串; null = 不在库 (或非法形状)。 */
+export interface ContactResolveResponse {
+  items: Record<string, ContactChipDto | null>
+}
+
 export interface ContactMailDto {
   internal_id: number
   subject: string | null

@@ -38,6 +38,7 @@ import {
   useInvalidateContact
 } from './hooks'
 import { useContactKeyboardNav } from './useContactKeyboardNav'
+import { useContactNavigation } from './navigation'
 
 const CONTACT_LIST_WIDTH_STORAGE_KEY = 'mailagent.contacts.listWidth'
 const MIN_CONTACT_LIST_WIDTH = 280
@@ -145,6 +146,19 @@ export function ContactsWorkspace(): React.ReactElement | null {
     setSelectedId(id)
   }, [])
   useContactKeyboardNav(orderedIds, selectedId, selectContact)
+
+  // WP4 人物页直达通道（PersonChip / ⌘K「人」组 → useContactNavigation.open(id) →
+  // navigate('/contacts') → 这里消费即清）。🔴 有意不等列表包含该行（对比
+  // MattersWorkspace 的 `allMatters.some(...)` 闸）：detail 按 id 独立拉
+  // （GET /contacts/{id}），hidden/robot 的人物页也要能打开，而它们在 known
+  // 视图的列表里根本不存在。
+  const navigationTarget = useContactNavigation((state) => state.targetContactId)
+  const clearNavigationTarget = useContactNavigation((state) => state.clear)
+  useEffect(() => {
+    if (navigationTarget === null) return
+    setSelectedId(navigationTarget)
+    clearNavigationTarget()
+  }, [clearNavigationTarget, navigationTarget])
 
   // ── 治理写面（行菜单与档案头共用同一套 handler + toast + 失效）──────────────
   const hideMutation = useMutation({

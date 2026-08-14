@@ -538,7 +538,9 @@
       "aiHistory": "AI 会话",
       "aiHistoryMeta": "打开 AI 面板",
       "admin": "看板 Admin",
-      "adminMeta": "dead-letter {n, plural, =0 {0} other {#}} · 队列健康"
+      "adminMeta": "dead-letter {n, plural, =0 {0} other {#}} · 队列健康",
+      "contacts": "打开通讯录",
+      "contactsMeta": "人物档案"
     },
     "email": {
       "countLabel": "{n} / {total}",
@@ -606,7 +608,8 @@
       "scope": {
         "all": "全部",
         "email": "邮件",
-        "matter": "事项"
+        "matter": "事项",
+        "contact": "联系人"
       },
       "fields": {
         "title": "标题",
@@ -617,6 +620,12 @@
         "stakeholders": "干系人",
         "notes": "备注"
       }
+    },
+    "contacts": {
+      "title": "联系人",
+      "emptyTitle": "没有匹配的联系人",
+      "emptyHint": "联系人搜索覆盖姓名、名字变体、邮箱与组织。",
+      "moreMatches": "另有 {n} 人命中"
     },
     "history": {
       "title": "最近搜索",
@@ -5820,6 +5829,10 @@
     },
     "kind": { "person": "人", "robot": "机器人", "list": "群发列表" },
     "badge": { "self": "我的地址", "hidden": "已隐藏", "dup": "疑似重复", "emails": "{n} 个邮箱" },
+    "chip": {
+      "open": "打开 {name} 的人物页",
+      "notInDirectory": "这个地址不在通讯录里（不为它建占位记录）"
+    },
     "stat": { "exchange": "往来 {n} 封 · 我发出 {sent}", "since": "{date} 起 · 最近 {ago}" },
     "row": { "more": "更多操作" },
     "action": {

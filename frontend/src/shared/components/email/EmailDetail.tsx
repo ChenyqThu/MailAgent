@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient, keepPreviousData } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { ArrowLeft, ChevronDown, ExternalLink, Languages, Mail, RotateCcw } from 'lucide-react'
 
 import { gsap, useGSAP, DUR } from '@shared/lib/gsap'
@@ -23,7 +24,7 @@ import { CollapsibleRegion } from '@shared/components/ui/collapsible'
 import { ShimmerText } from '@shared/components/ShimmerText'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { formatDate, formatRelativeTime } from '@shared/format'
-import { parseSender } from '@shared/lib/mail_parse'
+import { parseAddressList, parseSender } from '@shared/lib/mail_parse'
 import { isDraftsMailbox } from '@shared/lib/mailboxSemantics'
 import { calendarUiEnabled, detectUiPlatform } from '@shared/lib/mailBackend'
 import { asWriteError } from '@shared/lib/ipcErrors'
@@ -49,6 +50,10 @@ import {
   mergeMatterResourceLinkHits
 } from '../matters/matterResource'
 import { useMattersApi, useMattersEnabled } from '../matters/hooks'
+import { PersonChip } from '../contacts/PersonChip'
+import { useContactsApi, useContactsEnabled } from '../contacts/hooks'
+import { useContactNavigation } from '../contacts/navigation'
+import type { ContactChipDto } from '@shared/api/types/contact'
 import { MatterBelongsCard } from '../matters/MatterBelongsCard'
 import { MatterLinkPopover } from '../matters/MatterLinkPopover'
 import { CustomAgentDrawer } from '../agents/CustomAgentDrawer'
@@ -96,6 +101,93 @@ function ExpandableValue({ text, max = 100 }: { text: string; max?: number }): R
       >
         {shown ? t('emailDetail.less') : t('emailDetail.more')}
       </button>
+    </span>
+  )
+}
+
+// ---- 通讯录 WP4：To/Cc chip 流 ----------------------------------------------
+
+/** 收件人折叠上限（>12 折叠为前 12 + 「+n」展开钮，复用 emailDetail.more/less 词）。 */
+const RECIPIENT_FOLD_LIMIT = 12
+
+/** chip 查表：resolve 响应键 = 归一（trim+lower）地址。undefined（未请求/键外）
+ *  与 null（服务端明说不在库）都渲染虚线不可点态。 */
+function chipContactOf(
+  resolved: Record<string, ContactChipDto | null> | undefined,
+  addr: string
+): { id: number; displayName: string | null; nameEn: string | null; primaryEmail: string | null; kind: ContactChipDto['kind'] } | null {
+  const hit = resolved?.[addr.trim().toLowerCase()]
+  if (!hit) return null
+  return {
+    id: hit.id,
+    displayName: hit.display_name,
+    nameEn: hit.name_en,
+    primaryEmail: hit.primary_email,
+    kind: hit.kind
+  }
+}
+
+/** PersonChip + 默认跳转接线（人物页 store intent + navigate('/contacts')）。
+ *  🔴 useNavigate 依赖 router context，故收在这个**仅 chips 激活时才挂载**的
+ *  包装组件里，不进 EmailDetail 顶层 hooks（既有单测在无 RouterProvider 下
+ *  渲染 EmailDetail，顶层 useNavigate 会炸）。 */
+function NavPersonChip({
+  contact,
+  addr,
+  big
+}: {
+  contact: ReturnType<typeof chipContactOf>
+  addr: string
+  big?: boolean
+}): React.ReactElement {
+  const navigate = useNavigate()
+  const openContact = useContactNavigation((state) => state.open)
+  return (
+    <PersonChip
+      contact={contact}
+      addr={addr}
+      big={big}
+      onOpen={(id) => {
+        openContact(id)
+        void navigate({ to: '/contacts' })
+      }}
+    />
+  )
+}
+
+function RecipientChipsValue({
+  entries,
+  resolved
+}: {
+  entries: ReadonlyArray<{ name: string; email: string }>
+  resolved: Record<string, ContactChipDto | null> | undefined
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [expanded, setExpanded] = useState(false)
+  const shown = expanded ? entries : entries.slice(0, RECIPIENT_FOLD_LIMIT)
+  const hiddenCount = entries.length - RECIPIENT_FOLD_LIMIT
+  return (
+    <span className="flex flex-wrap items-center gap-1.5">
+      {shown.map((entry) => (
+        <NavPersonChip
+          key={entry.email.toLowerCase()}
+          contact={chipContactOf(resolved, entry.email)}
+          addr={entry.email}
+        />
+      ))}
+      {hiddenCount > 0 && (
+        <button
+          type="button"
+          onClick={() => setExpanded((value) => !value)}
+          className={cn(
+            'text-meta text-coral hover:text-coral-hover',
+            'transition-colors duration-fast align-baseline',
+            'focus:outline-none focus-visible:underline'
+          )}
+        >
+          {expanded ? t('emailDetail.less') : `+${hiddenCount} ${t('emailDetail.more')}`}
+        </button>
+      )}
     </span>
   )
 }
@@ -362,6 +454,37 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     enabled: mattersEnabled && Boolean(detailQ.data?.thread_id),
     staleTime: 30_000
   })
+  // ---- 通讯录 WP4：邮件详情头 PersonChip 的批量精确解析 --------------------
+  // 解析集 = parseSender(sender) + parseAddressList(to/cc)，归一（trim+lower）
+  // 去重 + 排序（queryKey 稳定）后**一封邮件一次** POST /contacts/resolve。
+  // flag off / loading / 失败 → 下方 meta grid 维持现渲染字节级不变（仅在
+  // resolve 数据就绪后切 chips，不闪烁）。跳转接线在 NavPersonChip（useNavigate
+  // 依赖 router context，不上提进本组件顶层 —— 无 router 的既有单测会炸）。
+  const { enabled: contactsEnabled } = useContactsEnabled()
+  const contactsApi = useContactsApi()
+  const resolveAddresses = useMemo(() => {
+    const data = detailQ.data
+    if (!data) return [] as string[]
+    const out = new Set<string>()
+    const senderEmail = parseSender(data.sender).email
+    if (senderEmail.includes('@')) out.add(senderEmail.trim().toLowerCase())
+    for (const entry of [
+      ...parseAddressList(data.to_addr),
+      ...parseAddressList(data.cc_addr ?? null)
+    ]) {
+      // 无 @ 的碎 token 不值一次网络传输 —— 服务端 normalize 也会拒掉它们。
+      if (entry.email.includes('@')) out.add(entry.email.trim().toLowerCase())
+    }
+    return [...out].sort()
+  }, [detailQ.data])
+  const contactResolveQ = useQuery({
+    queryKey: qk.contacts.resolve(resolveAddresses),
+    queryFn: () => contactsApi.resolve(resolveAddresses),
+    enabled: contactsEnabled && resolveAddresses.length > 0,
+    staleTime: 30_000
+  })
+  const resolvedContacts = contactResolveQ.data?.items
+
   const translateMut = useMutation({
     mutationFn: async () => {
       if (internalId === null) throw new Error('no email selected')
@@ -866,6 +989,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
   const fromParsed = parseSender(email.sender)
   const fromName = email.sender_name || fromParsed.name
   const fromAddr = fromParsed.email || email.sender
+  // WP4 —— chips 激活判据：flag on 且 resolve 数据就绪。loading / 失败 / off →
+  // 下方 From/To/Cc 维持既有渲染字节级不变（不闪烁）。
+  const chipsActive = contactsEnabled && resolvedContacts !== undefined
+  const toEntries = chipsActive ? parseAddressList(email.to_addr) : []
+  const ccEntries = chipsActive ? parseAddressList(email.cc_addr ?? null) : []
+  const fromChip = chipsActive ? chipContactOf(resolvedContacts, fromAddr) : null
   // Sprint 13 — AttachmentList now owns the inline / derived filter so it
   // can surface derived-from children inline as "→ pdf · 142 KB" chips
   // instead of cluttering the grid with sibling tiles. We just hand it
@@ -1187,20 +1316,43 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
             return (
               <>
                 <dl className="mt-1 grid grid-cols-[96px_1fr] gap-y-1.5 gap-x-3 text-aux">
+                  {/* WP4 —— chips 就绪后 From = PersonChip(big) + mono 地址并列
+                      （cdemo MailScreen 形态）；发件人不在库时保留既有姓名派生 +
+                      虚线不可点 chip（名字信息不丢）。resolve 未就绪/off = 原渲染。 */}
                   <MetaRow
                     label="From"
                     value={
-                      <>
-                        {fromName && <span className="font-medium text-ink-fg">{fromName}</span>}
-                        {fromName && fromAddr && <span className="text-ink-fg-2"> · </span>}
-                        <span className="text-ink-fg-2">{fromAddr}</span>
-                      </>
+                      chipsActive && fromChip !== null ? (
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          <NavPersonChip big contact={fromChip} addr={fromAddr} />
+                          <span className="font-mono text-ink-fg-2">{fromAddr}</span>
+                        </span>
+                      ) : chipsActive && fromAddr.includes('@') ? (
+                        <span className="flex flex-wrap items-center gap-1.5">
+                          {fromName && (
+                            <span className="font-medium text-ink-fg">{fromName}</span>
+                          )}
+                          <PersonChip contact={null} addr={fromAddr} />
+                        </span>
+                      ) : (
+                        <>
+                          {fromName && <span className="font-medium text-ink-fg">{fromName}</span>}
+                          {fromName && fromAddr && <span className="text-ink-fg-2"> · </span>}
+                          <span className="text-ink-fg-2">{fromAddr}</span>
+                        </>
+                      )
                     }
                   />
                   <MetaRow
                     label="To"
                     value={
-                      email.to_addr && email.to_addr.length > 0 ? (
+                      chipsActive && toEntries.length > 0 ? (
+                        <RecipientChipsValue
+                          key={`to-${email.internal_id}`}
+                          entries={toEntries}
+                          resolved={resolvedContacts}
+                        />
+                      ) : email.to_addr && email.to_addr.length > 0 ? (
                         <ExpandableValue text={email.to_addr} />
                       ) : (
                         <span className="text-ink-fg-3">—</span>
@@ -1208,7 +1360,20 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                     }
                   />
                   {email.cc_addr && email.cc_addr.length > 0 && (
-                    <MetaRow label="Cc" value={<ExpandableValue text={email.cc_addr} />} />
+                    <MetaRow
+                      label="Cc"
+                      value={
+                        chipsActive && ccEntries.length > 0 ? (
+                          <RecipientChipsValue
+                            key={`cc-${email.internal_id}`}
+                            entries={ccEntries}
+                            resolved={resolvedContacts}
+                          />
+                        ) : (
+                          <ExpandableValue text={email.cc_addr} />
+                        )
+                      }
+                    />
                   )}
                   {email.date_received && (
                     <MetaRow

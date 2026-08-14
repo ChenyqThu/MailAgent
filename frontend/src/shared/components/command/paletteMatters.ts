@@ -5,11 +5,13 @@ import type {
 } from '@shared/api/types/matter'
 import type { SearchHit } from '@shared/api/types'
 
-export type PaletteScope = 'all' | 'email' | 'matter'
+export type PaletteScope = 'all' | 'email' | 'matter' | 'contact'
 
 export interface PaletteScopeVisibility {
   showEmail: boolean
   showMatter: boolean
+  /** 通讯录 WP4「人」组：scope 'all' 与 'contact' 下可见。 */
+  showContact: boolean
   showNonProviderGroups: boolean
 }
 
@@ -47,10 +49,13 @@ export function getMatterMatchDetails(
 }
 
 export function paletteScopeVisibility(scope: PaletteScope): PaletteScopeVisibility {
+  // 既有三档（all/email/matter）的可见性逐字不变；'contact' 档 = 只看「人」组
+  // （镜像 'matter' 档只看事项组的语义：email/jump/actions 全藏）。
   return {
-    showEmail: scope !== 'matter',
-    showMatter: scope !== 'email',
-    showNonProviderGroups: scope !== 'matter'
+    showEmail: scope !== 'matter' && scope !== 'contact',
+    showMatter: scope !== 'email' && scope !== 'contact',
+    showContact: scope === 'all' || scope === 'contact',
+    showNonProviderGroups: scope !== 'matter' && scope !== 'contact'
   }
 }
 

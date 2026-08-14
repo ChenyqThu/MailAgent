@@ -271,7 +271,12 @@ export const qk = {
       ['contacts', 'detail', contactId, 'mails', role] as const,
     matters: (contactId: number) => ['contacts', 'detail', contactId, 'matters'] as const,
     progress: () => ['contacts', 'backfill-progress'] as const,
-    config: () => ['contacts', 'config'] as const
+    config: () => ['contacts', 'config'] as const,
+    // WP4 互链: 邮件详情头批量精确解析。key 吃**排序后**的地址集（调用方负责
+    // 归一去重 + sort，保证同一封邮件的地址集合稳定命中缓存）。
+    resolve: (emails: readonly string[]) => ['contacts', 'resolve', ...emails] as const,
+    // WP4 ⌘K「人」组（镜像 qk.matters.paletteSearch 的形状）。
+    paletteSearch: (normalised: string) => ['contacts', 'palette-search', normalised] as const
   },
 
   contactSuggest: (debounced: string, exclude: readonly string[]) =>
