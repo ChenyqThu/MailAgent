@@ -673,7 +673,10 @@ export function createMatterRunTools(
         'reviews and decides. If there is no meaningful change, do not call this tool at all. ' +
         'To bring in NEW evidence you found (an email, a Notion/Jira page, a web page not yet ' +
         'attached to this Matter), add a kind="resource" change carrying `resource` ' +
-        '{provider, kind, external_key, title, canonical_url}; the owner links it by accepting. ' +
+        '{provider, kind, external_key, title, canonical_url, summary}; the owner links it by ' +
+        'accepting. `summary` says what the resource ITSELF states in at most 3 sentences — not ' +
+        'why it is relevant, no filler; leave it empty rather than guessing from metadata alone, ' +
+        'and omit it for mail/threads (those reuse the email’s own summary server-side). ' +
         'A fact may cite such a pending resource with sources[].change_id instead of resource_id.',
       inputSchema: matterUpdateProposeSchema,
       run: (input, signal) =>

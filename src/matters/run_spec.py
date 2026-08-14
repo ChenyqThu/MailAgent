@@ -138,7 +138,9 @@ _TASK_CONTRACT = """【任务契约】
 - 只写会让 owner 改判断或要采取行动的 change，快照已有的信息不要重复。
 - kind=fact 必须带 sources：sources[].resource_id 取自本事项已关联资源，或 sources[].change_id 引用你在本次提案里新建关联的那条 resource change（二选一，都不满足整条被丢弃）；推断一律 kind=inference 并显式标注。
 - kind=field 只改 status/health/priority/due_at/waiting_context 并写依据；kind=action 无 target=新建行动项、带 target.id=改既有条目（id 来自 matter_get）；kind=resource 有两个形态：带 target.id=确认快照里已列出但未确认的资料，带 resource=新建一条关联。
-- 在②③档发现的**新**邮件/文档/页面（尚未关联进本事项的），写成 kind=resource 并带 resource={provider, kind, external_key, title, canonical_url}，由 owner 接受时正式关联：provider 只能是 mailagent（邮件，external_key 形如 email:<internal_id>）、web（网页，external_key 就是那个 http(s) 链接）或你**确实用到过**的已连接外部服务（如 notion，external_key 形如 page:<id>）；编造来源或不合形状的一律被服务端丢弃。🔴 只挂**你要在提案里引用、能让 owner 改判断或采取行动**的那几份，不要把检索到的东西一股脑全挂上来；拿不准要不要关联的写进 open_questions 让 owner 定。
+- 在②③档发现的**新**邮件/文档/页面（尚未关联进本事项的），写成 kind=resource 并带 resource={provider, kind, external_key, title, canonical_url, summary}，由 owner 接受时正式关联：provider 只能是 mailagent（邮件，external_key 形如 email:<internal_id>）、web（网页，external_key 就是那个 http(s) 链接）或你**确实用到过**的已连接外部服务（如 notion，external_key 形如 page:<id>）；编造来源或不合形状的一律被服务端丢弃。🔴 只挂**你要在提案里引用、能让 owner 改判断或采取行动**的那几份，不要把检索到的东西一股脑全挂上来；拿不准要不要关联的写进 open_questions 让 owner 定。
+- resource.summary = 这份资料**本身在说什么**：一到三句，只写内容（结论、数字、状态、时间点），**不写**你为什么要关联它（那写在同一条 change 的 text/reason 里），也不写「本文档介绍了…」这类套话。摘要只能来自你真正读到的正文或摘录；只看得到标题、链接、文件名一类元数据时**留空**，不要凭标题推测内容。
+- 邮件与会话（provider=mailagent，kind=email/thread）**不要**自己写 summary：系统会直接沿用那封邮件已有的摘要（来源标注成「沿用邮件自带」），你写了也不会生效。
 - 拿不准、需要 owner 定夺的写进 open_questions（≤5 条），不要编造。
 - 摘要写的是**事情本身**的进展、给 owner 读的叙述，不是你本轮的操作记录：不超过 3 句，先写当前卡点或结论，再写下一步（谁在何时做什么）；不要罗列「检索了什么、改了哪个字段」。"""
 

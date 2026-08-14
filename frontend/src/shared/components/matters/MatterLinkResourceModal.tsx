@@ -352,6 +352,11 @@ export function MatterLinkResourceModal({
         <DialogHeader>
           <DialogTitle>{t('matters.linkResource.title')}</DialogTitle>
           <DialogDescription>{t('matters.linkResource.subtitle')}</DialogDescription>
+          {/* V3-25（H3§6.4）—— 摘要按来源分三档，规则说在关联前而不是让人事后猜为什么有的
+              资料有摘要、有的没有。DialogDescription 已经是一个 <p>，故另起一行而不是塞进去。 */}
+          <p className="text-meta leading-5 text-ink-fg-3">
+            {t('matters.linkResource.summaryRule')}
+          </p>
         </DialogHeader>
 
         <div className="flex gap-1">

@@ -454,13 +454,21 @@ function ChangeRow({
 }
 
 /** 「将新建关联」的资料卡。owner 是在这个界面上按下接受的 —— 看不清 provider / 标题 /
- *  链接就等于盲签，所以这三样必须在场，且明说"接受后才会关联进来"。 */
+ *  链接就等于盲签，所以这三样必须在场，且明说"接受后才会关联进来"。
+ *
+ *  V3-26：再加一段**内容摘要**（H3§6.2「建议卡片上要显示这段摘要，并标注它是『沿用邮件
+ *  自带』还是『Agent 已生成』」）。🔴 来源标注按 provider/kind 判，不另立字段：邮件与会话的
+ *  摘要由服务端从那封信自己的 ai_summary 带入（模型写的在归一层就丢了，`summary` 恒 null），
+ *  其余 provider 的 `summary` 就是 Agent 写的。两者都没有 = 空态，说实话说"还没有摘要"。 */
 function NewResourceCard({
   resource
 }: {
   resource: NonNullable<MatterProposalChange['resource']>
 }): React.ReactElement {
   const { t } = useTranslation()
+  const fromMail =
+    resource.provider === 'mailagent' && (resource.kind === 'email' || resource.kind === 'thread')
+  const summary = resource.summary?.trim() || ''
   // 🔴 成员索引而非查表函数：react-hooks/static-components 不接受 `const C = fn(...)`
   //（见 matterResource.ts 文末的说明）。与抽屉 / 上下文 tab 同一套图标单源。
   const Icon =
@@ -484,6 +492,16 @@ function NewResourceCard({
           {resource.canonical_url ? (
             <p className="mt-0.5 truncate text-meta text-ink-fg-2">{resource.canonical_url}</p>
           ) : null}
+          {summary ? <p className="mt-1.5 text-aux leading-5 text-ink-fg-2">{summary}</p> : null}
+          <p className="mt-1 text-meta text-ink-fg-3">
+            {t(
+              summary
+                ? 'matters.review.newResource.summaryByAgent'
+                : fromMail
+                  ? 'matters.review.newResource.summaryFromMail'
+                  : 'matters.review.newResource.summaryPending'
+            )}
+          </p>
         </div>
       </div>
       <p className="mt-1.5 text-meta text-ink-fg-3">{t('matters.review.newResource.hint')}</p>

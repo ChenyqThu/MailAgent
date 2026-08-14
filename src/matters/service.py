@@ -3413,7 +3413,18 @@ class MatterService:
         except ResourceProposalError as exc:
             warnings.append(f"resource_link_rejected:{change_id}:{exc.reason}")
             return
-        resource, _ = self._upsert_resource(conn, normalized, now)
+        # 提案侧的 `summary` → 资料行的 `sum`（批 M6，H3§6.2「建议阶段就带 sum，用户确认
+        # 关联时一并写入，不再等下一次跟进运行」）。🔴 两套键名有意不合并：`summary` 是提案
+        # wire 契约（zod / DTO / changes_json 四份手抄，有 parity 闸），`sum` 是 resource 表的
+        # 列名；这里是唯一的翻译点。`sum_src` 固定 'agent' —— 邮件类的 'mail' 由
+        # `_resource_summary_fields` 从邮件侧推导，模型无从伪造（normalize 已把邮件类的
+        # summary 丢成 None）。
+        spec_values = dict(normalized)
+        summary = spec_values.pop("summary", None)
+        if summary:
+            spec_values["sum"] = summary
+            spec_values["sum_src"] = MatterResourceSummarySource.AGENT.value
+        resource, _ = self._upsert_resource(conn, spec_values, now)
         resource_id = int(resource["id"])
         live = self.repository.get_resource_link(
             conn, matter["id"], resource_id, live_only=True

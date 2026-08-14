@@ -19,6 +19,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.mail.sync_store import SyncStore
+from src.matters.models import MATTER_RESOURCE_SUMMARY_MAX_CHARS
 from src.matters.repository import MatterRepository
 from src.matters.run_service import MatterRunService
 
@@ -191,6 +192,101 @@ def test_accept_replay_and_already_linked_do_not_duplicate(env):
             (NOTION_SPEC["external_key"],),
         ).fetchone()
     assert rows[0] == 1
+
+
+# ── 摘要随提案落库（批 M6 / V3-26·V3-27）──────────────────────────────────────
+
+
+def test_proposed_summary_lands_in_the_resource_row_as_agent_source(env):
+    """H3§6.2：建议阶段就带 sum，owner 接受时一并写入 —— 不再等下一次跟进运行。
+
+    少了 accept 侧那一步映射（`summary` → `sum`/`sum_src`），schema 加完字段、审阅卡也
+    显示了摘要，库里却永远是空 —— 这条端到端断言就是那一步的看门人。
+    """
+    service, pid, _, path, _ = env
+    proposed, _ = _propose(
+        service,
+        pid,
+        [
+            {
+                "id": "chg_res",
+                "kind": "resource",
+                "resource": {**NOTION_SPEC, "summary": "  排期定在 9/15，验收由客户侧负责。  "},
+                "sources": [],
+            }
+        ],
+    )
+    assert proposed["dropped"] == []
+    _accept(service, pid, proposed["update_id"])
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            'SELECT "sum", sum_src, sum_at FROM resource WHERE external_key=?',
+            (NOTION_SPEC["external_key"],),
+        ).fetchone()
+    assert row["sum"] == "排期定在 9/15，验收由客户侧负责。"
+    assert row["sum_src"] == "agent"
+    assert row["sum_at"] is not None
+
+
+def test_model_written_summary_never_wins_for_mail_kinds(env):
+    """邮件/会话恒沿用邮件自带摘要（H3§6.1）。模型写的那句在**归一层**就被丢掉 ——
+    否则审阅卡会显示一段「Agent 已生成」，接受后库里却是另一段（或空），卡片在撒谎。"""
+    service, pid, _, path, _ = env
+    proposed, _ = _propose(
+        service,
+        pid,
+        [
+            {
+                "id": "chg_mail",
+                "kind": "resource",
+                "resource": {
+                    "provider": "mailagent",
+                    "kind": "email",
+                    "external_key": "email:7001",
+                    "title": "新的客户来信",
+                    "summary": "模型自己编的一句摘要",
+                },
+                "sources": [],
+            }
+        ],
+    )
+    assert proposed["dropped"] == []
+    detail = service.get_update_detail(pid, proposed["update_id"])["update"]
+    assert detail["changes"][0]["resource"]["summary"] is None
+    _accept(service, pid, proposed["update_id"])
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        row = conn.execute(
+            'SELECT "sum", sum_src FROM resource WHERE external_key=?', ("email:7001",)
+        ).fetchone()
+    # 这封 fixture 邮件没有 llm_processing 行 → 邮件侧无摘要 → 空态（不合成、不编造）。
+    assert (row["sum"], row["sum_src"]) == (None, None)
+
+
+def test_overlong_summary_is_truncated_not_rejected(env):
+    """摘要超长只截断 —— 增强信息不该把整条 change 剔掉（与 title 同一姿态）。"""
+    service, pid, _, path, _ = env
+    proposed, _ = _propose(
+        service,
+        pid,
+        [
+            {
+                "id": "chg_res",
+                "kind": "resource",
+                "resource": {**NOTION_SPEC, "summary": "长" * 4000},
+                "sources": [],
+            }
+        ],
+    )
+    assert proposed["dropped"] == []
+    _accept(service, pid, proposed["update_id"])
+    with sqlite3.connect(path) as conn:
+        stored = conn.execute(
+            'SELECT "sum" FROM resource WHERE external_key=?',
+            (NOTION_SPEC["external_key"],),
+        ).fetchone()[0]
+    assert len(stored) == MATTER_RESOURCE_SUMMARY_MAX_CHARS
 
 
 # ── provider 白名单（变异验证靶点①）────────────────────────────────────────────

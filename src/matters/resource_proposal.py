@@ -25,7 +25,7 @@ from urllib.parse import urlparse
 
 from loguru import logger
 
-from .models import MATTER_RESOURCE_KINDS
+from .models import MATTER_RESOURCE_KINDS, MATTER_RESOURCE_SUMMARY_MAX_CHARS
 from .resource_identity import EMAIL_PROVIDER, MatterError, normalize_resource_key
 
 #: 不经 connector、结构上恒可达的两个来源。
@@ -142,6 +142,11 @@ def normalize_new_resource(
 
     ``exists(provider, kind, external_key)`` = 可选存在性回调（mailagent 侧由
     ``repository.resource_available`` 提供）；返回 False → ``resource_not_found``。
+
+    🔴 输出键集 = 提案 wire 契约的键集（``summary`` 也在内），且**输入输出同名** ——
+    propose 侧把这份产物回写进 ``changes_json``、accept 侧再拿它跑一遍本函数，键名一
+    换就会在第二趟静默丢字段。跨语言一致性闸见
+    ``tests/matters/test_matters_contract_parity.py``。
     """
     if not isinstance(spec, Mapping):
         raise ResourceProposalError(REASON_SPEC_INVALID, "resource must be an object")
@@ -181,7 +186,26 @@ def normalize_new_resource(
         "external_key": external_key,
         "title": title or None,
         "canonical_url": canonical_url,
+        "summary": _optional_summary(spec.get("summary"), provider=provider, kind=kind),
     }
+
+
+def _optional_summary(value: Any, *, provider: str, kind: str) -> Optional[str]:
+    """资料**内容**摘要（H3§6 的提案侧入口，落库进 ``resource.sum``）。
+
+    🔴 mailagent 的 email/thread 恒返回 None —— 邮件类摘要复用邮件自带的 ``ai_summary``
+    （``MatterService._resource_summary_fields`` 是那条推导的唯一写侧，``sum_src='mail'``），
+    模型写的那句在库里根本不会生效。这里把它**在提案层就丢掉**，否则审阅卡会显示一段
+    「Agent 已生成」的文字、接受后库里却是另一段（或空）—— 卡片对 owner 撒谎。
+
+    超长截断而不是拒绝：与上面 ``title`` 同一姿态，摘要是增强信息，不该因为多写了几个字
+    就把整条 change 剔掉。
+    """
+    if provider == EMAIL_PROVIDER and kind in ("email", "thread"):
+        return None
+    if value is None:
+        return None
+    return str(value).strip()[:MATTER_RESOURCE_SUMMARY_MAX_CHARS] or None
 
 
 def _normalize_external_key(provider: str, kind: str, value: str) -> str:

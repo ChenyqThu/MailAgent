@@ -6,7 +6,11 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from src.matters.models import MATTER_SUGGESTION_BULK_MAX, MatterSuggestionBulkAction
+from src.matters.models import (
+    MATTER_RESOURCE_SUMMARY_MAX_CHARS,
+    MATTER_SUGGESTION_BULK_MAX,
+    MatterSuggestionBulkAction,
+)
 
 
 class StrictModel(BaseModel):
@@ -256,6 +260,10 @@ class MatterProposalNewResource(StrictModel):
     不另造命名。值域裁决全在服务端 ``src/matters/resource_proposal.py``（provider 白名单
     = builtin + 已连接 connector，external_key 按 provider 既有约定，mailagent 侧还验存在
     性）；这里只做长度与非空。
+
+    🔴 ``StrictModel`` = ``extra="forbid"``：gateway zod 加了字段而这里没加 → 每一条带该
+    字段的提案在 REST 边界 **422**，而两侧单测与 typecheck 全绿。四份手抄的一致性闸见
+    ``tests/matters/test_matters_contract_parity.py``。
     """
 
     provider: str = Field(min_length=1, max_length=64)
@@ -263,6 +271,9 @@ class MatterProposalNewResource(StrictModel):
     external_key: str = Field(min_length=1, max_length=512)
     title: str | None = Field(default=None, max_length=500)
     canonical_url: str | None = Field(default=None, max_length=2000)
+    #: 这份资料**在说什么**（1-3 句，H3§6）。落库进 ``resource.sum``；邮件/会话类模型写了
+    #: 也不生效（``resource_proposal._optional_summary`` 丢弃 → 邮件侧 ai_summary 权威）。
+    summary: str | None = Field(default=None, max_length=MATTER_RESOURCE_SUMMARY_MAX_CHARS)
 
 
 class MatterProposalChange(StrictModel):

@@ -212,6 +212,10 @@ export type MatterResourceSubscriptionState = (typeof MATTER_RESOURCE_SUBSCRIPTI
 export const MATTER_RESOURCE_SUMMARY_SOURCES = ['mail', 'agent'] as const
 export type MatterResourceSummarySource = (typeof MATTER_RESOURCE_SUMMARY_SOURCES)[number]
 
+/** 摘要文本上限。canonical: `src/matters/models.MATTER_RESOURCE_SUMMARY_MAX_CHARS`（服务端
+ *  截断而非拒绝）；gateway 的 `matterProposalNewResourceSchema.summary` 用它当 zod max，闸同上。 */
+export const MATTER_RESOURCE_SUMMARY_MAX_CHARS = 2000
+
 export const MATTER_SEARCH_FIELDS = [
   'title',
   'description',
@@ -737,6 +741,9 @@ export interface MatterProposalNewResource {
   external_key: string
   title?: string | null
   canonical_url?: string | null
+  /** 这份资料在说什么（≤3 句，H3§6）。接受时落进 `resource.sum`（`sum_src='agent'`）。
+   *  邮件/会话恒为 null —— 那类沿用邮件自带摘要，服务端在归一层就把模型写的丢掉了。 */
+  summary?: string | null
 }
 export interface MatterProposalChange {
   id: string

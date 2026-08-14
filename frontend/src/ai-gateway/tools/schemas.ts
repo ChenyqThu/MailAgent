@@ -12,6 +12,7 @@
 
 import { z } from 'zod'
 import { REPORT_CADENCES, reportBlockInputSchema } from '../../shared/api/reportBlocks'
+import { MATTER_RESOURCE_SUMMARY_MAX_CHARS } from '../../shared/api/types/matter'
 
 export const PLAN_STEP_STATUSES = [
   'pending',
@@ -540,7 +541,12 @@ const matterProposalSourceSchema = z
  *  vocabulary. 🔴 `provider` is a SERVER-side whitelist (built-ins plus the connectors that are
  *  actually connected); the regex here only rejects free-form strings, it does not decide
  *  membership. `external_key` conventions per provider (`email:<id>` / an http(s) URL /
- *  `<entity>:<id>`) are likewise re-derived server-side and fail closed. */
+ *  `<entity>:<id>`) are likewise re-derived server-side and fail closed.
+ *
+ *  🔴 This shape is hand-copied FOUR times (this zod, the tool description below, the REST DTO
+ *  `MatterProposalNewResource`, the `normalize_new_resource` key set) and the REST DTO forbids
+ *  extras — adding a field here alone turns every discovery proposal into a silent 422. The
+ *  parity gate is `tests/matters/test_matters_contract_parity.py`. */
 const matterProposalNewResourceSchema = z
   .object({
     provider: z
@@ -550,7 +556,12 @@ const matterProposalNewResourceSchema = z
     kind: z.enum(['email', 'thread', 'event', 'doc', 'file', 'url']),
     external_key: z.string().trim().min(1).max(512),
     title: z.string().trim().max(500).optional(),
-    canonical_url: z.string().trim().max(2000).optional()
+    canonical_url: z.string().trim().max(2000).optional(),
+    /** What this resource SAYS, in at most 3 sentences — never why it is relevant (that belongs
+     *  in the change text/reason), never filler like "this document introduces…". Leave it out
+     *  when only metadata is visible: an invented summary is worse than an empty one. Mail and
+     *  threads reuse the email's own AI summary server-side, so a model-written one is dropped. */
+    summary: z.string().trim().max(MATTER_RESOURCE_SUMMARY_MAX_CHARS).optional()
   })
   .strict()
 
