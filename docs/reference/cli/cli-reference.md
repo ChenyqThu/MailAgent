@@ -64,6 +64,7 @@ mailagent --help                 # 列 15 个 group (email/admin/attachment/llm/
 | `admin cleanup-syncstore [--no-dry-run --yes]` | dry-run → show_stats; --no-dry-run --yes → reset_sync_status (PR-5 inline) |
 | `admin cleanup-duplicates [--no-dry-run --yes]` | 扫 message_id 重复的 Notion page → archive 重复 (PR-5 inline) |
 | `admin repair-parents [--thread-id ID --no-dry-run --yes]` | 修复 Notion Parent Item 断链 (PR-5 inline NotionDBCleaner.run parent_only=true) |
+| `admin repair-date-tz [--sample N --no-dry-run --yes]` | 把 `email_metadata.date_received` 存量收敛成 **UTC 偏移** ISO 8601（全表扫描，非点名 internal_id → 活库 / 仓库 `data/` 通用）。排序全链路是**词法字符串比较**，混合偏移下词法序 ≠ 时间序（`10:54-07:00` 绝对 17:54Z 会被 `16:28+00:00` 在字典序上压过去 → 线程选错 head、列表排错序）。写入侧三条边界已归一（`_save_email_v3` / `save_emails_batch` / `update_after_fetch`），本命令只收**老版本写进来的存量行**。幂等（已 UTC 的行逐字节相同，重跑 `changed=0`）；🔴 只改偏移表示不改绝对时刻；🔴 空 / NULL / 解析不出来的行一律不碰（只计数，空 `date_received` 的落桶语义是独立议题）。逻辑在 `src/cleanup/date_received.py` |
 | `im pair [--rebind]` | 生成飞书对话 bot 的**一次性绑定码**（6 位数字，TTL 10min，落 `sync_state` 故跨重启存活）。用法：跑本命令 → 在飞书**私聊**里把这 6 位数字单独发给 bot → bot 校验后把发送者 `open_id` 落库，此后只有它进指令通道。已绑定时**拒绝出码**（码对已绑定的 bot 无效；否则拿到码的人能顶掉 owner），换人/换设备用 `--rebind`（先解绑再出新码）。🔴 **本组写命令刻意不做 PM2 冲突检测** —— 那道闸防的是 batch 写命令与长驻服务并发写 SyncStore，而飞书 bot **只在长驻服务跑着时才收得到消息**，要求 `pm2 stop mail-sync` 等于要求「先把要配对的东西关掉」 |
 
 ## PR-4 长任务退出码体系（RFC §5.2 / `email resync` batch / `backfill` / `init`）

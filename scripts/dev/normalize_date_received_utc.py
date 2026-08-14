@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """一次性 backfill: email_metadata.date_received 全部归一成 UTC 偏移 ISO 8601.
 
+🔴 **已被取代, 别再跑这个** (2026-08-14, task 08-14 WP-2)。同一个 op 已经产品化成
+``mailagent admin repair-date-tz`` (逻辑在 ``src/cleanup/date_received.py``,
+测试在 ``tests/cleanup/test_date_received_repair.py``), 那份多了鉴权 / PM2 冲突
+检测 / ``--yes`` 闸 / 分批提交 / ``-o json`` 契约, 且**有测试**。本文件保留只作
+历史记录: 它与产品化那份是两份会各自漂移的实现, 改动一律只改产品化那份。
+
 排序 tz 归一修复 (07-07 triage) 的存量侧: `_normalize_date_iso` 此前保留原始时区
 偏移 (内部系统邮件 +08:00 vs 普通 +00:00), 而排序全链路是词法字符串比较
 (SQL TEXT ORDER BY + 前端 localeCompare) → ``10:54+08:00`` 字典序压过

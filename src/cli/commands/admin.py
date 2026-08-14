@@ -1004,6 +1004,72 @@ def admin_repair_parents(
         raise typer.Exit(code=1)
 
 
+@app.command("repair-date-tz")
+def admin_repair_date_tz(
+    ctx: typer.Context,
+    dry_run: bool = typer.Option(True, "--dry-run/--no-dry-run"),
+    yes: bool = typer.Option(False, "--yes", help="真跑确认 (配合 --no-dry-run)"),
+    sample: int = typer.Option(10, "--sample", help="报告里带几条改写样本"),
+    allow_concurrent: bool = typer.Option(
+        False, "--allow-concurrent",
+        help="跳过 PM2 mail-sync 冲突检测 (写命令默认拒并行)",
+    ),
+    output: Optional[str] = typer.Option(None, "-o", "--output"),
+) -> None:
+    """把 ``email_metadata.date_received`` 存量收敛成 UTC 偏移 ISO 8601, 默认 dry-run.
+
+    排序全链路是词法字符串比较, 混合偏移下词法序 ≠ 时间序 —— ``10:54-07:00``
+    (绝对 17:54Z) 会被 ``16:28+00:00`` 在字典序上压过去 → 线程选错 head、列表排错序。
+    写入侧三条边界已全部归一 (见 ``_normalize_date_received_iso``); 本命令只收
+    **老版本写进来的存量行**。
+
+    幂等: 已是 UTC 的行归一后逐字节相同, 重跑 ``changed=0``。
+    空 / NULL / 解析不出来的行一律不碰 (只计数)。
+    """
+    from src.cleanup.date_received import normalize_date_received_utc
+
+    cli: "CliContext" = ctx.obj
+    apply_local_output(ctx, output)
+    if not dry_run and not yes:
+        raise emit_cli_error(cli, CliInvalidArgError(
+            "Non-dry-run repair-date-tz requires --yes"
+        ))
+    _common_cleanup_auth(cli, dry_run=dry_run, allow_concurrent=allow_concurrent)
+
+    db_path = cli.cli_config.sync_store_db_path
+    t0 = time.monotonic()
+    try:
+        report = normalize_date_received_utc(
+            db_path, dry_run=dry_run, sample_limit=sample,
+        )
+    except sqlite3.Error as exc:
+        raise emit_cli_error(cli, CliSchemaError(
+            f"repair-date-tz failed: {exc}"
+        ))
+
+    data = {
+        "action": "repair-date-tz",
+        "duration_ms": int((time.monotonic() - t0) * 1000),
+        **report.as_dict(),
+    }
+    if cli.output.lower() == "text":
+        verb = "would update" if dry_run else "updated"
+        print(
+            f"[repair-date-tz] scanned={report.scanned} {verb}={report.changed} "
+            f"unchanged={report.unchanged} unparseable={report.unparseable}",
+            file=sys.stderr,
+        )
+        for s in report.samples:
+            print(
+                f"  iid={s['internal_id']:>10}  {s['before']!r} → {s['after']!r}",
+                file=sys.stderr,
+            )
+        if dry_run and report.changed:
+            print("  (dry-run — 加 --no-dry-run --yes 真跑)", file=sys.stderr)
+    else:
+        emit(cli, data)
+
+
 # ============================================================
 # Sprint 15 Stage 3: admin config show / get / set
 # ============================================================

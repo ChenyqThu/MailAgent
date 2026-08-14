@@ -728,8 +728,18 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
 
     07-07 排序 tz 归一: 统一 ``astimezone(utc)`` — 排序全链路是词法字符串比较
     (SQL TEXT ORDER BY + localeCompare), 保留原始/本地偏移会让 ``10:54+08:00``
-    字典序压过 ``05:58+00:00``。davmail 侧 ``_normalize_date_iso`` 同口径; 本函数
-    是 AppleScript fallback 写入路径, 不同改会在应急回切时重新混入非 UTC 偏移行。
+    字典序压过 ``05:58+00:00``。davmail 侧 ``_normalize_date_iso`` 同口径;
+    不同改会在应急回切 AppleScript 时重新混入非 UTC 偏移行。
+
+    ⚠️ 归一放在**持久化边界**而非各产出点 (同 ``_storage_message_id`` 纪律)。
+    ``email_metadata.date_received`` 只有三条写入边界, 三条都过本函数::
+
+        _save_email_v3      — 单封 INSERT OR REPLACE (正向 sync / 草稿镜像 / 对账)
+        save_emails_batch   — initial_sync 的 executemany 批量写
+        update_after_fetch  — 动态 SET (date_received 在 allowed_fields 里)
+
+    存量收敛 (老版本写进来的非 UTC 行) 走
+    ``mailagent admin repair-date-tz`` / ``src.cleanup.date_received``。
     """
     if not value:
         return value
@@ -4000,6 +4010,13 @@ class SyncStore:
                     # 走 _resolve_message_id_conflict / FAILED → 重试 → 死信。
                     # 见 _storage_message_id docstring。
                     values.append(_storage_message_id(value))
+                elif key == 'date_received':
+                    # 🔴 第三条**写 date_received** 的持久化边界 (另两条:
+                    # _save_email_v3 / save_emails_batch)。当前无调用方传这个键,
+                    # 但它一直在 allowed_fields 里 —— 归一放在边界而非各产出点,
+                    # 未来任意新调用方自动被覆盖 (见 _normalize_date_received_iso)。
+                    # `or ''` 与 _save_email_v3 同口径: 空值统一落空串不落 NULL。
+                    values.append(_normalize_date_received_iso(value) or '')
                 else:
                     values.append(value)
 
@@ -4874,7 +4891,9 @@ class SyncStore:
                 email.get('sender_name', ''),
                 email.get('to_addr', ''),
                 email.get('cc_addr', ''),
-                email.get('date_received', ''),
+                # 归一同 _save_email_v3: 排序全链路是词法字符串比较, 混入非 UTC
+                # 偏移的行会让绝对时间更晚的排到前面 (见 _normalize_date_received_iso)。
+                _normalize_date_received_iso(email.get('date_received', '')) or '',
                 email.get('mailbox', '收件箱'),
                 1 if email.get('is_read') else 0,
                 1 if email.get('is_flagged') else 0,

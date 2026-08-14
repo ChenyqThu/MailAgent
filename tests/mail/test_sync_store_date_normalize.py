@@ -59,8 +59,35 @@ def test_malformed_returns_original():
     assert _normalize_date_received_iso(None) is None
 
 
+def test_negative_offset_converts_to_utc():
+    """PT 本地偏移 (-07:00) 同样归一 —— 生产实测的那一行就长这样.
+
+    ``2026-08-14T10:54:15-07:00`` 绝对是 17:54Z, 却在字典序上被
+    ``2026-08-14T16:28:16+00:00`` (绝对 16:28Z) 压到后面 → 线程 head 选错。
+    """
+    out = _normalize_date_received_iso("2026-08-14T10:54:15-07:00")
+    assert out == "2026-08-14T17:54:15+00:00"
+
+
+# ============================================================
+# 三条持久化边界 —— 归一在边界收口, 未来新调用方自动被覆盖
+# ============================================================
+
+
+def _base_email(internal_id: int, date_received: str) -> dict:
+    return {
+        "internal_id": internal_id,
+        "message_id": f"m{internal_id}@x",
+        "subject": "s",
+        "sender": "a@x.com",
+        "mailbox": "收件箱",
+        "sync_status": "pending",
+        "date_received": date_received,
+    }
+
+
 def test_save_email_persists_utc_offset(tmp_path):
-    """端到端: save_email 写入路径落库即 UTC 偏移."""
+    """边界 1/3: ``_save_email_v3`` (单封 INSERT OR REPLACE)."""
     store = SyncStore(str(tmp_path / "t.db"))
     store.save_email({
         "internal_id": 1,
@@ -72,3 +99,56 @@ def test_save_email_persists_utc_offset(tmp_path):
     })
     row = store.get(1)
     assert row["date_received"] == "2026-07-07T02:54:00+00:00"
+
+
+def test_save_emails_batch_persists_utc_offset(tmp_path):
+    """边界 2/3: ``save_emails_batch`` (initial_sync 的 executemany).
+
+    这条曾经**没有**归一 —— 首次全量同步写进来的行会带原始偏移, 与增量路径
+    (已归一) 混在同一张表里, 正是词法排序错乱的成因。
+    """
+    store = SyncStore(str(tmp_path / "t.db"))
+    saved = store.save_emails_batch([
+        _base_email(1, "2026-08-14T10:54:15-07:00"),
+        _base_email(2, "2026-08-14T16:28:16+00:00"),
+        _base_email(3, "Fri, 22 May 2026 14:30:00 +0800"),
+    ])
+    assert saved == 3
+    assert store.get(1)["date_received"] == "2026-08-14T17:54:15+00:00"
+    assert store.get(2)["date_received"] == "2026-08-14T16:28:16+00:00"
+    assert store.get(3)["date_received"] == "2026-05-22T06:30:00+00:00"
+
+
+def test_save_emails_batch_preserves_absolute_ordering(tmp_path):
+    """归一后**词法序 == 时间序** —— 这才是修复要保住的性质.
+
+    未归一时 ``10:54-07:00`` (绝对更晚) 的字典序比 ``16:28+00:00`` 小。
+    """
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_emails_batch([
+        _base_email(1, "2026-08-14T10:54:15-07:00"),   # 绝对 17:54Z, 更晚
+        _base_email(2, "2026-08-14T16:28:16+00:00"),   # 绝对 16:28Z, 更早
+    ])
+    later = store.get(1)["date_received"]
+    earlier = store.get(2)["date_received"]
+    assert later > earlier  # 纯字符串比较, 与 SQL ORDER BY / localeCompare 同口径
+
+
+def test_update_after_fetch_normalizes_date_received(tmp_path):
+    """边界 3/3: ``update_after_fetch`` 的动态 SET.
+
+    当前无调用方传这个键, 但它一直在 ``allowed_fields`` 里 —— 归一在边界,
+    未来任意新调用方自动被覆盖 (与 message_id 的 ``_storage_message_id`` 同纪律)。
+    """
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email(_base_email(1, "2026-08-14T16:28:16+00:00"))
+    store.update_after_fetch(1, {"date_received": "2026-08-14T10:54:15-07:00"})
+    assert store.get(1)["date_received"] == "2026-08-14T17:54:15+00:00"
+
+
+def test_update_after_fetch_empty_date_stays_empty(tmp_path):
+    """空值不被"归一"成猜出来的时刻 —— 与 ``_save_email_v3`` 同口径落空串."""
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email(_base_email(1, "2026-08-14T16:28:16+00:00"))
+    store.update_after_fetch(1, {"date_received": ""})
+    assert store.get(1)["date_received"] == ""
