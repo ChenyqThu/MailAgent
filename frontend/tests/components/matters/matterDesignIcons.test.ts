@@ -34,37 +34,51 @@ function extractMap(
   return out
 }
 
-describe('视图轨图标 = 设计原型 list.jsx 的 VIEWS 表', () => {
-  it('12 项逐位对应', () => {
-    const source = read('src/shared/components/matters/MattersWorkspace.tsx')
-    const actual = extractMap(source, 'const VIEW_ICONS', [
-      'focus',
-      'attention',
-      'review',
-      'active',
-      'waiting',
-      'blocked',
-      'planned',
-      'monitoring',
-      'all',
-      'completed',
+// V3-01/V3-12 —— 左轨 12 档 `VIEW_ICONS` 已随视图列退役（v3 信息架构：两 tab + 查询模型）。
+// 闸随之改盯新结构 `matterListQuery.ts` 的三张表（tab / scope / 快捷筛选），性质不变：
+// 表被改名/挪走 → `extractMap` 的 indexOf 断言炸；少一项 → 逐 key 断言炸 —— 「抽取失败必须红」。
+describe('tab / 范围 / 快捷筛选图标 = 设计原型 list.jsx 的 ModuleTabs / MATTER_SCOPES / QUICK 表', () => {
+  const source = read('src/shared/components/matters/matterListQuery.ts')
+
+  it('模块 tab 2 项逐位对应', () => {
+    const actual = extractMap(source, 'export const MATTER_TAB_ICONS', ['list', 'board'])
+    expect(actual).toEqual({
+      list: 'Briefcase', // briefcase
+      board: 'BarChart3' // barchart
+    })
+  })
+
+  it('范围 4 项逐位对应', () => {
+    const actual = extractMap(source, 'export const MATTER_SCOPE_ICONS', [
+      'open',
+      'done',
       'archived',
       'trash'
     ])
-    // 右侧是原型 VIEWS 里写的语义名 → lucide 组件名。
     expect(actual).toEqual({
-      focus: 'Target', // target
-      attention: 'TriangleAlert', // alert
-      review: 'Sparkles', // sparkles
-      active: 'Play', // play
-      waiting: 'Hourglass', // hourglass
-      blocked: 'Ban', // ban
-      planned: 'Calendar', // calendar
-      monitoring: 'Eye', // eye —— 不是 Monitor
-      all: 'Layers', // layers
-      completed: 'CheckCircle2', // checkcircle
+      open: 'Briefcase', // briefcase
+      done: 'CheckCircle2', // checkcircle
       archived: 'Archive', // archive
       trash: 'Trash2' // trash
+    })
+  })
+
+  it('快捷筛选 6 项逐位对应', () => {
+    const actual = extractMap(source, 'export const MATTER_QUICK_FILTER_ICONS', [
+      'attn',
+      'waiting',
+      'due',
+      'p01',
+      'proposal',
+      'nonext'
+    ])
+    expect(actual).toEqual({
+      attn: 'TriangleAlert', // alert
+      waiting: 'Hourglass', // hourglass
+      due: 'Clock3', // clock
+      p01: 'Flag', // flag
+      proposal: 'Sparkles', // sparkles
+      nonext: 'CircleHelp' // helpcircle
     })
   })
 })

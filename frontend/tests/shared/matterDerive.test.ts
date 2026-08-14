@@ -1,14 +1,7 @@
 import { describe, expect, test } from 'vitest'
 
 import type { Matter, MatterItem } from '../../src/shared/api/types/matter'
-import {
-  filterView,
-  hasNextAction,
-  MATTER_VIEWS,
-  nextAction,
-  rankOf,
-  trashDaysRemaining
-} from '../../src/shared/lib/matterDerive'
+import { hasNextAction, nextAction, rankOf, trashDaysRemaining } from '../../src/shared/lib/matterDerive'
 
 function matter(overrides: Partial<Matter> = {}): Matter {
   return {
@@ -72,70 +65,9 @@ function item(overrides: Partial<MatterItem> = {}): MatterItem {
   }
 }
 
-describe('filterView', () => {
-  const live = matter({ public_id: 'MAT-0001', status: 'active' })
-  const done = matter({ public_id: 'MAT-0002', status: 'done' })
-  const canceled = matter({ public_id: 'MAT-0003', status: 'canceled' })
-  const archived = matter({ public_id: 'MAT-0004', archived_at: 10 })
-  const trashed = matter({ public_id: 'MAT-0005', archived_at: 10, deleted_at: 20 })
-  const values = [live, done, canceled, archived, trashed]
-
-  test('all/status/completed operate only on live matters', () => {
-    expect(filterView(values, 'all').map((value) => value.public_id)).toEqual(['MAT-0001'])
-    expect(filterView(values, 'active')).toEqual([live])
-    expect(filterView(values, 'completed')).toEqual([done, canceled])
-  })
-
-  test('archived excludes trash and trash wins over archive', () => {
-    expect(filterView(values, 'archived')).toEqual([archived])
-    expect(filterView(values, 'trash')).toEqual([trashed])
-  })
-
-  test('focus only considers live due/attention matters', () => {
-    const focused = matter({ public_id: 'MAT-0006', due_at: 100 })
-    const archivedFocused = matter({ public_id: 'MAT-0007', due_at: 100, archived_at: 10 })
-    expect(filterView([focused, archivedFocused], 'focus')).toEqual([focused])
-  })
-
-  test('attention and review consume optional indexes without changing legacy callers', () => {
-    const attention = new Map([
-      [
-        live.public_id,
-        [
-          {
-            id: 7,
-            kind: 'run_failed' as const,
-            state: 'open' as const,
-            severity: 'critical' as const
-          }
-        ]
-      ]
-    ])
-    const updates = new Map([
-      [live.public_id, [{ id: 8, review_status: 'pending' as const } as never]]
-    ])
-    expect(filterView(values, 'attention', attention)).toEqual([live])
-    expect(filterView(values, 'review', undefined, updates)).toEqual([live])
-    expect(filterView(values, 'attention')).toEqual([])
-  })
-})
-
-test('MATTER_VIEWS pins P5 ordering while preserving completed', () => {
-  expect(MATTER_VIEWS).toEqual([
-    'focus',
-    'attention',
-    'review',
-    'active',
-    'waiting',
-    'blocked',
-    'planned',
-    'monitoring',
-    'all',
-    'completed',
-    'archived',
-    'trash'
-  ])
-})
+// `filterView` / `MATTER_VIEWS`（左轨 12 档视图模型）已随 v3 信息架构退役 —— scope 语义
+// （trash 压过 archive、archived 排除 deleted、open/done 按 status 分割）的等价断言迁到
+// `tests/components/matters/matterListQuery.test.ts`（新模型 `matterScopeOf`/`applyMatterListQuery`）。
 
 describe('rankOf', () => {
   test('critical signal outranks signal-free priority and due date', () => {

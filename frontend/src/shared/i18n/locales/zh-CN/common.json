@@ -4733,6 +4733,72 @@
       "archived": "已归档",
       "trash": "回收站"
     },
+    "moduleTabs": {
+      "list": "事项",
+      "board": "看板"
+    },
+    "scope": {
+      "open": "进行中",
+      "done": "已完成",
+      "archived": "已归档",
+      "trash": "回收站"
+    },
+    "quick": {
+      "attn": "仅需关注",
+      "waiting": "我在等对方",
+      "due": "有到期 / 逾期",
+      "p01": "P0–P1",
+      "proposal": "有待审阅提案",
+      "nonext": "缺少下一步"
+    },
+    "statusGroup": {
+      "needyou": "需要你推进",
+      "waiting": "等待对方",
+      "blocked": "受阻",
+      "monitoring": "监控中",
+      "planned": "计划中",
+      "closed": "已完成 / 已取消"
+    },
+    "group": {
+      "status": "语义状态",
+      "due": "到期",
+      "priority": "优先级",
+      "tag": "标签",
+      "none": "不分组"
+    },
+    "sort": {
+      "rank": "关注度",
+      "updated": "最近更新",
+      "due": "到期时间",
+      "priority": "优先级"
+    },
+    "dir": {
+      "default": "最需要处理在前",
+      "reverse": "反向"
+    },
+    "filter": {
+      "trigger": "筛选",
+      "title": "筛选与排序",
+      "filterBy": "筛选依据",
+      "status": "状态",
+      "statusSection": "按语义状态",
+      "priority": "优先级",
+      "prioritySection": "按优先级",
+      "tags": "标签",
+      "tagSection": "按标签",
+      "manageTags": "管理标签…",
+      "scopeSubmenu": "范围 · {scope}",
+      "scopeSection": "范围",
+      "groupBy": "分组依据",
+      "sortBy": "排序依据",
+      "defaultSuffix": "（默认）",
+      "direction": "方向",
+      "clearAll": "清除全部筛选",
+      "clear": "清除",
+      "removeChip": "移除该筛选",
+      "summaryGroup": "分组 {group}",
+      "summarySort": "排序 {sort}"
+    },
     "list": {
       "searchInView": "在{view}中搜索…",
       "archived": "已归档",
@@ -4750,10 +4816,13 @@
     },
     "empty": {
       "default": "{view}中没有事项",
+      "filtered": "当前筛选下没有事项",
       "archived": "归档区为空",
       "trash": "回收站为空",
       "search": "没有匹配「{query}」的事项",
-      "hintDefault": "换个视图，或从收件箱里把一封邮件变成事项。",
+      "hintDefault": "从收件箱里把一封邮件变成事项，或直接新建。",
+      "hintFiltered": "筛选是可叠加的临时状态，清除后回到完整列表。",
+      "clearFilters": "清除筛选",
       "hintArchived": "归档与业务状态是两回事：已完成的事项不会自动归档。",
       "hintTrash": "删除的事项在这里保留 30 天，可随时恢复。删除事项不会删除邮件、日历或外部文档。",
       "hintSearch": "换个关键词，或切到「全部」再搜一次。"
@@ -4765,6 +4834,7 @@
       "review": "待审阅提案",
       "due14": "14 天内到期",
       "healthyRate": "健康活跃率",
+      "nonext": "缺少下一步",
       "reviewSection": "待审阅 · Agent 更新提案",
       "changeCount": "{count} 项变化",
       "hasField": "含状态字段变更",

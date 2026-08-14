@@ -9,6 +9,7 @@ import { cleanup, render, screen } from '@testing-library/react'
 
 import type { Matter, MatterAttentionSignal, MatterUpdateSummary } from '@shared/api/types/matter'
 import i18n from '@shared/i18n'
+import { DEFAULT_MATTER_LIST_QUERY } from '@shared/components/matters/matterListQuery'
 
 const { MatterList } = await import('@shared/components/matters/MatterList')
 
@@ -80,8 +81,8 @@ describe('MatterList row', () => {
     expect(screen.queryByText(/^\+/)).toBeNull()
   })
 
-  test('search placeholder and empty state follow the current view', () => {
-    renderList(matter(), { view: 'archived', matters: [] })
+  test('search placeholder and empty state follow the current scope', () => {
+    renderList(matter(), { scope: 'archived', matters: [] })
 
     expect(screen.getByPlaceholderText('在已归档中搜索…')).toBeTruthy()
     expect(screen.getByText('归档区为空')).toBeTruthy()
@@ -93,7 +94,7 @@ function renderList(
   options: {
     signals?: MatterAttentionSignal[]
     pending?: MatterUpdateSummary[]
-    view?: 'all' | 'archived'
+    scope?: 'open' | 'archived'
     matters?: Matter[]
   } = {}
 ): ReturnType<typeof render> {
@@ -101,7 +102,10 @@ function renderList(
   return render(
     <MatterList
       matters={matters}
-      view={options.view ?? 'all'}
+      query={{ ...DEFAULT_MATTER_LIST_QUERY, scope: options.scope ?? 'open' }}
+      onQueryChange={vi.fn()}
+      scopeTotal={matters.length}
+      tags={[]}
       selectedId={null}
       attention={new Map(options.signals ? [[value.public_id, options.signals]] : [])}
       updates={new Map(options.pending ? [[value.public_id, options.pending]] : [])}
@@ -109,6 +113,7 @@ function renderList(
       onSearchChange={vi.fn()}
       onSelect={vi.fn()}
       onCreate={vi.fn()}
+      onManageTags={vi.fn()}
     />
   )
 }

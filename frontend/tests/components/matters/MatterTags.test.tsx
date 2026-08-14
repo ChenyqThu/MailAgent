@@ -7,7 +7,10 @@ import { createMattersApi } from '@shared/api/matters'
 import type { Matter } from '@shared/api/types/matter'
 import i18n from '@shared/i18n'
 import { MatterList } from '@shared/components/matters/MatterList'
-import { getOrderedVisibleMatters } from '@shared/components/matters/matterListOrder'
+import {
+  applyMatterListQuery,
+  DEFAULT_MATTER_LIST_QUERY
+} from '@shared/components/matters/matterListQuery'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -63,18 +66,27 @@ describe('Matter tags UI and API', () => {
     const tagged = matter({ tags: ['launch'] })
     const other = matter({ public_id: 'MAT-0002', title: 'Unrelated', tags: [] })
 
-    // 搜索仍按标签名匹配（getOrderedVisibleMatters 不消费 tagDefinitions，行为不变）。
-    expect(getOrderedVisibleMatters([other, tagged], 'launch')).toEqual([tagged])
+    // 搜索仍按标签名匹配（applyMatterListQuery 不消费 tagDefinitions，行为不变；
+    // getOrderedVisibleMatters 已随 v3 查询模型并入 applyMatterListQuery）。
+    expect(
+      applyMatterListQuery([other, tagged], DEFAULT_MATTER_LIST_QUERY, 'launch', {
+        now: Date.now()
+      })
+    ).toEqual([tagged])
 
     render(
       <MatterList
         matters={[tagged]}
-        view="all"
+        query={DEFAULT_MATTER_LIST_QUERY}
+        onQueryChange={vi.fn()}
+        scopeTotal={1}
+        tags={[]}
         selectedId={null}
         search=""
         onSearchChange={vi.fn()}
         onSelect={vi.fn()}
         onCreate={vi.fn()}
+        onManageTags={vi.fn()}
       />
     )
 

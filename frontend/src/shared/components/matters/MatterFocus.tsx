@@ -1,20 +1,20 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
-  Activity,
   ArrowDown,
   Calendar,
   CheckCircle2,
   ChevronRight,
+  CircleHelp,
   Clock3,
   Quote,
   Sparkles,
-  TriangleAlert
+  TriangleAlert,
+  type LucideIcon
 } from 'lucide-react'
 
 import type { Matter, MatterAttentionSignal, MatterUpdate } from '@shared/api/types/matter'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
-import type { MatterView } from '@shared/lib/matterDerive'
 import {
   deriveFocusStats,
   formatMatterDueRelative,
@@ -24,6 +24,7 @@ import { cn } from '@shared/lib/cn'
 
 import { AttentionActions } from './attention'
 import { ATTENTION_META, attentionTone } from './attentionMeta'
+import type { MatterQuickFilter } from './matterListQuery'
 import { MatterPip } from './MatterPip'
 import {
   MATTER_STATUS_ICONS,
@@ -41,7 +42,9 @@ interface MatterFocusProps {
   onSelect(matter: Matter): void
   onReview(matter: Matter, updateId: number): void
   onSignal(matterId: string, signalId: number, action: 'resolved' | 'snoozed' | 'dismissed'): void
-  onView(view: MatterView): void
+  /** V3-13 —— 看板定位改成分诊台：每个 tile 都是带筛选预设的列表入口（切到「事项」tab
+   *  并套用对应快捷筛选），不再落到已退役的左轨 view。 */
+  onJump(filter: MatterQuickFilter): void
 }
 
 export function MatterFocus({
@@ -51,7 +54,7 @@ export function MatterFocus({
   onSelect,
   onReview,
   onSignal,
-  onView
+  onJump
 }: MatterFocusProps): React.ReactElement {
   const { t, i18n } = useTranslation()
   const [now] = useState(() => Date.now())
@@ -101,30 +104,35 @@ export function MatterFocus({
             value={stats.attentionCount}
             icon={TriangleAlert}
             tone="critical"
-            onClick={() => onView('attention')}
+            onClick={() => onJump('attn')}
           />
           <StatTile
             label={t('matters.focus.review')}
             value={stats.reviewCount}
             icon={Sparkles}
             tone="info"
-            onClick={() => onView('review')}
+            onClick={() => onJump('proposal')}
           />
           <StatTile
             label={t('matters.focus.due14')}
             value={stats.dueSoonCount}
             icon={Clock3}
             tone="warn"
-            onClick={() => onView('all')}
+            // ⚠️ 已知的窗口错位（留给 V3-15 收口）：tile 计数仍是既有的「14 天内到期、不含
+            // 逾期」，而落点的 `due` 快捷筛选按设计是「≤7 天、含逾期」。V3-15 会把 tile 与
+            // 下方「临近到期」区一起改成 7 天含逾期口径，两处必须同改（计数与列表劈叉的
+            // 风险在 gap-list V3-15 有记档），不在本批顺手动。
+            onClick={() => onJump('due')}
           />
           <StatTile
-            label={t('matters.focus.healthyRate')}
-            value={stats.healthyRate == null ? '—' : `${stats.healthyRate}%`}
-            icon={Activity}
-            tone="success"
-            // 设计 §2.5：四张 KPI 卡**全部**可点跳视图；健康活跃率的分母是「未完成事项」，
-            // 所以它跳 all（与 14 天内到期同一个落点）。
-            onClick={() => onView('all')}
+            // V3-13 —— 第四 tile 从「健康活跃率」（看了不产生动作）换成「缺少下一步」计数：
+            // 四个 tile 的预设钉死为 attn / proposal / due / nonext。判据 = nextAction().kind
+            // === 'missing'（deriveFocusStats.missingNextCount，按 kind 不按文案）。
+            label={t('matters.focus.nonext')}
+            value={stats.missingNextCount}
+            icon={CircleHelp}
+            tone="warn"
+            onClick={() => onJump('nonext')}
           />
         </div>
 
@@ -303,7 +311,7 @@ function StatTile({
 }: {
   label: string
   value: number | string
-  icon: typeof Activity
+  icon: LucideIcon
   tone: 'critical' | 'info' | 'warn' | 'success'
   onClick?: () => void
 }): React.ReactElement {

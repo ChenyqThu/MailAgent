@@ -800,6 +800,10 @@ export interface MatterUpdateAcceptInput {
 export interface MatterListResponse {
   items: Matter[]
   next_cursor: string | null
+  /** 服务端当前 where 子句下的总行数（wire 上在 envelope 的 `meta.total`，不在 data 块 ——
+   *  由 `api/matters.ts::list` 抬进返回值）。V3-07 列表头「范围总数」的唯一可信来源：
+   *  列表分页截断在 100，客户端数出来的总数在超一页时是错的。老 mock / 无 meta 时缺省。 */
+  total?: number | null
 }
 
 export interface MatterDetailResponse {

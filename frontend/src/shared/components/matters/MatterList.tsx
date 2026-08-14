@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Archive,
@@ -6,19 +6,25 @@ import {
   CheckCircle2,
   CircleHelp,
   Eye,
+  Flag,
   Hourglass,
   Layers,
   ListChecks,
   Search,
+  SlidersHorizontal,
   Sparkles,
+  Tag,
   Trash2,
+  X,
   type LucideIcon
 } from 'lucide-react'
 
-import type { Matter } from '@shared/api/types/matter'
+import type { Matter, MatterTagDefinition } from '@shared/api/types/matter'
 import type { MatterStakeholderSummary } from '@shared/api/types/matter'
 import { RecipientAvatar } from '@shared/components/email/compose/recipient-avatar'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
+import { Popmenu } from '@shared/components/ui/Popmenu'
+import type { PopmenuItem } from '@shared/components/ui/Popmenu'
 import {
   formatMatterAgo,
   formatMatterDueRelative,
@@ -29,14 +35,32 @@ import { openAttentionFor } from '@shared/lib/matterDerive'
 import type {
   MatterAttentionIndex,
   MatterNextActionKind,
-  MatterUpdateIndex,
-  MatterView
+  MatterUpdateIndex
 } from '@shared/lib/matterDerive'
 import { cn } from '@shared/lib/cn'
 
 import { ATTENTION_META, attentionTone } from './attentionMeta'
 import { MatterPip } from './MatterPip'
-import { getOrderedVisibleMatters } from './matterListOrder'
+import {
+  activeMatterFilterCount,
+  MATTER_GROUP_MODES,
+  MATTER_QUICK_FILTER_ICONS,
+  MATTER_QUICK_FILTER_TONES,
+  MATTER_QUICK_FILTERS,
+  MATTER_SCOPE_ICONS,
+  MATTER_SCOPES,
+  MATTER_SORTS,
+  MATTER_STATUS_GROUPS
+} from './matterListQuery'
+import type {
+  MatterGroupMode,
+  MatterListQuery,
+  MatterQuickFilter,
+  MatterSortDir,
+  MatterSortKey,
+  MatterStatusGroup
+} from './matterListQuery'
+import { MatterTagMarker } from './MatterTagMarker'
 import {
   MATTER_HEALTH_ICONS,
   MATTER_HEALTH_TEXT_CLASS,
@@ -44,9 +68,11 @@ import {
   MATTER_STATUS_ICONS,
   MATTER_STATUS_TONES,
   MATTER_TONE_CHIP_CLASS,
+  MATTER_TONE_DOT_CLASS,
   MATTER_TONE_TEXT_CLASS,
   matterDueTone
 } from './matterVocab'
+import type { MatterTone } from './matterVocab'
 
 /** 设计 `list.jsx::ListPane` 用 ResizeObserver 在 360px 处切窄列变体（不是窗口断点：
  *  清单列本身可被用户拖宽拖窄，看窗口就会在拖到 300px 时仍按宽列排）。 */
@@ -57,6 +83,9 @@ const NARROW_LIST_WIDTH = 360
 const ID_HIDE_WIDTH = 440
 /** 设计 `list.jsx:170` `AvatarStack size={19} max={3}`。 */
 const AVATAR_STACK_MAX = 3
+/** 收件箱同款：筛选+分组+排序 20+ 行比基座默认的 288 高一截；Popmenu 仍按视口可用空间
+ *  二次夹取，窗口矮时退化成面板内滚动（EmailListHeader 的先例注释同款理由）。 */
+const FILTER_MENU_MAX_HEIGHT = 640
 
 /** 设计 `list.jsx::nextAction` 每档配的 icon（listcheck / hourglass / ban / eye /
  *  checkcircle / helpcircle）。文案与 tone 由 `matterDerive.nextAction` 给。 */
@@ -69,14 +98,17 @@ const NEXT_ACTION_ICONS: Record<MatterNextActionKind, LucideIcon> = {
   missing: CircleHelp
 }
 
-const EMPTY_VIEW_ICONS: Partial<Record<MatterView, LucideIcon>> = {
-  archived: Archive,
-  trash: Trash2
-}
-
 interface MatterListProps {
+  /** 已经过 `applyMatterListQuery` 的最终可见有序集 —— 由工作台单点计算（与详情上下条
+   *  导航共用同一份），清单不再自己算第二遍。 */
   matters: readonly Matter[]
-  view: MatterView
+  query: MatterListQuery
+  onQueryChange(query: MatterListQuery): void
+  /** 当前范围分页截断前的总行数；null = 不可知（open/done 在活跃行超一页时算不准，
+   *  宁缺毋错）。见 MattersWorkspace 的 scopeTotal 注释。 */
+  scopeTotal: number | null
+  /** 标签定义（筛选菜单「标签」二级面板的数据源）。 */
+  tags: readonly MatterTagDefinition[]
   selectedId: string | null
   attention?: MatterAttentionIndex
   /** 待审阅徽标的口径 —— 复用工作台既有的 pendingUpdates 查询，清单不自己发请求。 */
@@ -85,33 +117,37 @@ interface MatterListProps {
   onSearchChange(value: string): void
   onSelect(matter: Matter): void
   onCreate(): void
+  onManageTags(): void
 }
 
 export function MatterList({
   matters,
-  view,
+  query,
+  onQueryChange,
+  scopeTotal,
+  tags,
   selectedId,
   attention,
   updates,
   search,
   onSearchChange,
   onSelect,
-  onCreate
+  onCreate,
+  onManageTags
 }: MatterListProps): React.ReactElement {
   const { t, i18n } = useTranslation()
   const paneRef = useRef<HTMLElement>(null)
+  const filterTriggerRef = useRef<HTMLButtonElement>(null)
+  const [filterOpen, setFilterOpen] = useState(false)
   const [narrow, setNarrow] = useState(false)
   // E10②：与 `narrow` 同一个 ResizeObserver 出两档（宽 → 隐编号 → 整段折叠），不另起监听。
   const [hideId, setHideId] = useState(false)
   // 到期色 / 更新时间的基准时刻在挂载时冻结（react-hooks/purity：render 期间不许调
   // Date.now()）。与 MatterDetail / MatterFocus 同一模式。
   const [now] = useState(() => Date.now())
-  const visible = useMemo(
-    () => getOrderedVisibleMatters(matters, search, attention),
-    [attention, matters, search]
-  )
   const locale = i18n.language || 'zh-CN'
-  const viewLabel = t(`matters.views.${view}`)
+  const scopeLabel = t(`matters.scope.${query.scope}`)
+  const activeN = activeMatterFilterCount(query)
 
   useEffect(() => {
     const pane = paneRef.current
@@ -126,31 +162,328 @@ export function MatterList({
     return () => observer.disconnect()
   }, [])
 
-  const EmptyIcon = EMPTY_VIEW_ICONS[view] ?? (search.trim() ? Search : Layers)
+  const patch = (partial: Partial<MatterListQuery>): void => onQueryChange({ ...query, ...partial })
+  const toggleQuick = (key: MatterQuickFilter): void =>
+    patch({
+      quick: query.quick.includes(key)
+        ? query.quick.filter((value) => value !== key)
+        : [...query.quick, key]
+    })
+  const toggleStatusGroup = (group: MatterStatusGroup): void =>
+    patch({
+      statusGroups: query.statusGroups.includes(group)
+        ? query.statusGroups.filter((value) => value !== group)
+        : [...query.statusGroups, group]
+    })
+  const togglePriority = (priority: Matter['priority']): void =>
+    patch({
+      priorities: query.priorities.includes(priority)
+        ? query.priorities.filter((value) => value !== priority)
+        : [...query.priorities, priority]
+    })
+  const toggleTag = (name: string): void =>
+    patch({
+      tags: query.tags.includes(name)
+        ? query.tags.filter((value) => value !== name)
+        : [...query.tags, name]
+    })
+  const clearFilters = (): void => patch({ quick: [], statusGroups: [], priorities: [], tags: [] })
+
+  // 有事项在用的标签才进面板（设计 `liveTags = tags.filter(t => t.n > 0)`）；已被勾选的
+  // 保底保留 —— 否则最后一个使用者被移除后 chip 无处可解除。
+  const liveTags = tags.filter((tag) => tag.usage_count > 0 || query.tags.includes(tag.name))
+  const ScopeIcon = MATTER_SCOPE_ICONS[query.scope]
+
+  // ⚠️ V3-06 —— item 树**必须每次 render 重建**，绝不 useMemo：Popmenu 的子面板按 id 路径
+  // 沿「当前 items」重解析（Popmenu.tsx:120-128 修过的真 bug —— memo 出陈旧快照会让已打开
+  // 的子面板吃不到新的 checked 态，「点了没反应，关掉重开才对」）。
+  const menuItems: PopmenuItem[] = [
+    { kind: 'label', id: 'filter-head', label: t('matters.filter.filterBy') },
+    ...MATTER_QUICK_FILTERS.map((key): PopmenuItem => {
+      const Icon = MATTER_QUICK_FILTER_ICONS[key]
+      return {
+        kind: 'checkbox',
+        id: `quick-${key}`,
+        label: t(`matters.quick.${key}`),
+        icon: <Icon size={13} />,
+        checked: query.quick.includes(key),
+        onToggle: () => toggleQuick(key)
+      }
+    }),
+    {
+      kind: 'submenu',
+      id: 'status',
+      icon: <Layers size={13} />,
+      label: t('matters.filter.status'),
+      items: [
+        { kind: 'label', id: 'status-head', label: t('matters.filter.statusSection') },
+        ...MATTER_STATUS_GROUPS.map(
+          (group): PopmenuItem => ({
+            kind: 'checkbox',
+            id: `status-${group}`,
+            label: t(`matters.statusGroup.${group}`),
+            checked: query.statusGroups.includes(group),
+            onToggle: () => toggleStatusGroup(group)
+          })
+        )
+      ]
+    },
+    {
+      kind: 'submenu',
+      id: 'priority',
+      icon: <Flag size={13} />,
+      label: t('matters.filter.priority'),
+      items: [
+        { kind: 'label', id: 'priority-head', label: t('matters.filter.prioritySection') },
+        ...(['p0', 'p1', 'p2', 'p3'] as const).map(
+          (priority): PopmenuItem => ({
+            kind: 'checkbox',
+            id: `priority-${priority}`,
+            label: priority.toUpperCase(),
+            dotClassName: MATTER_TONE_DOT_CLASS[MATTER_PRIORITY_TONES[priority]],
+            checked: query.priorities.includes(priority),
+            onToggle: () => togglePriority(priority)
+          })
+        )
+      ]
+    },
+    // V3-04 —— 标签作为**临时筛选条件**回归（轮 3 删的是「标签作为导航入口」；owner 拍板
+    // 有意反转）。没有在用标签时整个面板不出现，避免一个恒空的二级面板。
+    ...(liveTags.length > 0
+      ? [
+          {
+            kind: 'submenu',
+            id: 'tags',
+            icon: <Tag size={13} />,
+            label: t('matters.filter.tags'),
+            items: [
+              { kind: 'label', id: 'tag-head', label: t('matters.filter.tagSection') },
+              ...liveTags.map(
+                (tag): PopmenuItem => ({
+                  kind: 'checkbox',
+                  id: `tag-${tag.name}`,
+                  label: tag.name,
+                  icon: <MatterTagMarker color={tag.color} shape={tag.shape} size="sm" />,
+                  checked: query.tags.includes(tag.name),
+                  onToggle: () => toggleTag(tag.name)
+                })
+              ),
+              { kind: 'separator', id: 'tag-sep' },
+              {
+                kind: 'action',
+                id: 'tag-manage',
+                label: t('matters.filter.manageTags'),
+                onSelect: onManageTags
+              }
+            ]
+          } satisfies PopmenuItem
+        ]
+      : []),
+    {
+      kind: 'submenu',
+      id: 'scope',
+      icon: <ScopeIcon size={13} />,
+      label: t('matters.filter.scopeSubmenu', { scope: scopeLabel }),
+      items: [
+        { kind: 'label', id: 'scope-head', label: t('matters.filter.scopeSection') },
+        ...MATTER_SCOPES.map((scope): PopmenuItem => {
+          const Icon = MATTER_SCOPE_ICONS[scope]
+          return {
+            kind: 'radio',
+            id: `scope-${scope}`,
+            label: t(`matters.scope.${scope}`),
+            icon: <Icon size={13} />,
+            checked: query.scope === scope,
+            onSelect: () => patch({ scope })
+          }
+        })
+      ]
+    },
+    { kind: 'separator', id: 'sep-group' },
+    { kind: 'label', id: 'group-head', label: t('matters.filter.groupBy') },
+    ...MATTER_GROUP_MODES.map(
+      (mode: MatterGroupMode): PopmenuItem => ({
+        kind: 'radio',
+        id: `group-${mode}`,
+        label: t(`matters.group.${mode}`),
+        checked: query.group === mode,
+        onSelect: () => patch({ group: mode })
+      })
+    ),
+    { kind: 'separator', id: 'sep-sort' },
+    { kind: 'label', id: 'sort-head', label: t('matters.filter.sortBy') },
+    ...MATTER_SORTS.map(
+      (sort: MatterSortKey): PopmenuItem => ({
+        kind: 'radio',
+        id: `sort-${sort}`,
+        label:
+          sort === 'rank'
+            ? `${t(`matters.sort.${sort}`)}${t('matters.filter.defaultSuffix')}`
+            : t(`matters.sort.${sort}`),
+        checked: query.sort === sort,
+        onSelect: () => patch({ sort })
+      })
+    ),
+    { kind: 'separator', id: 'sep-dir' },
+    { kind: 'label', id: 'dir-head', label: t('matters.filter.direction') },
+    ...(['default', 'reverse'] as const).map(
+      (dir: MatterSortDir): PopmenuItem => ({
+        kind: 'radio',
+        id: `dir-${dir}`,
+        label: t(`matters.dir.${dir}`),
+        checked: query.dir === dir,
+        onSelect: () => patch({ dir })
+      })
+    ),
+    ...(activeN > 0
+      ? ([
+          { kind: 'separator', id: 'sep-clear' },
+          {
+            kind: 'action',
+            id: 'clear-all',
+            label: t('matters.filter.clearAll'),
+            tone: 'accent',
+            onSelect: clearFilters
+          }
+        ] as PopmenuItem[])
+      : [])
+  ]
+
+  // V3-09 —— 第二行：可删 chip（范围非默认时也出一个）+ 右侧 mono「分组 X · 排序 Y」摘要。
+  const showChips =
+    activeN > 0 ||
+    query.scope !== 'open' ||
+    query.group !== 'status' ||
+    query.sort !== 'rank' ||
+    query.dir !== 'default'
+  const summary = [
+    t('matters.filter.summaryGroup', { group: t(`matters.group.${query.group}`) }),
+    t('matters.filter.summarySort', { sort: t(`matters.sort.${query.sort}`) }),
+    ...(query.dir === 'reverse' ? [t('matters.dir.reverse')] : [])
+  ].join(' · ')
+
+  const searchActive = search.trim().length > 0
+  const EmptyIcon = searchActive ? Search : activeN > 0 ? SlidersHorizontal : ScopeIcon
 
   return (
     <section
       ref={paneRef}
       // E19（dogfood 轮 2 #19）—— 不在这里再画一条分界线：MattersWorkspace 的可拖拽
-      // 分隔条（`role="separator"`）已经在列表/详情之间画了唯一一条竖线（design app.jsx
-      // 只在 `sel` 存在时给 ListPane 外层套 `borderRight`，即那唯一一条线）；这里再加
+      // 分隔条（`role="separator"`）已经在列表/详情之间画了唯一一条竖线；这里再加
       // `border-r` 会与分隔条的线并排出现，变成肉眼可见的双线。
       className="flex h-full min-w-0 flex-col bg-ink-1/55"
     >
-      <div className="border-b border-ink-border p-3">
-        <label className="flex items-center gap-2 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 py-2">
-          <Search size={14} className="text-ink-fg-2" />
-          <input
-            value={search}
-            onChange={(event) => onSearchChange(event.target.value)}
-            // 设计 list.jsx:364 —— placeholder 跟随当前视图名，而不是一句放之四海的通用提示。
-            placeholder={t('matters.list.searchInView', { view: viewLabel })}
-            className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-ink-fg-2"
-          />
-        </label>
+      {/* Popmenu 定位锚：面板 absolute 于本容器（收件箱 EmailListHeader 同款挂法）。 */}
+      <div className="relative border-b border-ink-border p-3">
+        <div className="flex items-center gap-2">
+          <label className="flex min-w-0 flex-1 items-center gap-2 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 py-2">
+            <Search size={14} className="text-ink-fg-2" />
+            <input
+              value={search}
+              onChange={(event) => onSearchChange(event.target.value)}
+              // 设计 H3§3 —— placeholder 跟随当前范围名，而不是一句放之四海的通用提示。
+              placeholder={t('matters.list.searchInView', { view: scopeLabel })}
+              className="min-w-0 flex-1 bg-transparent text-body outline-none placeholder:text-ink-fg-2"
+            />
+          </label>
+          {/* V3-07（缩减版）—— 命中数 / 范围总数。范围总数不可知（open/done 超一页）时只显
+              示命中数：错的数字比没有数字更糟（owner 拍板）。 */}
+          <span className="shrink-0 font-mono text-meta tabular-nums text-ink-fg-3">
+            {scopeTotal !== null && scopeTotal !== matters.length
+              ? `${matters.length} / ${scopeTotal}`
+              : `${matters.length}`}
+          </span>
+          <button
+            ref={filterTriggerRef}
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded={filterOpen}
+            aria-controls="matter-filter-pop"
+            onClick={() => setFilterOpen((open) => !open)}
+            className="flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2 py-1.5 text-meta text-ink-fg-1 transition-colors duration-fast hover:bg-ink-3 hover:text-ink-fg"
+          >
+            <SlidersHorizontal size={12} />
+            {t('matters.filter.trigger')}
+            {activeN > 0 ? (
+              <span className="rounded-full bg-coral/100 px-1.5 font-mono text-[10px] font-semibold leading-4 text-accent-fg">
+                {activeN}
+              </span>
+            ) : null}
+          </button>
+        </div>
+        {showChips ? (
+          <div className="mt-2 flex flex-wrap items-center gap-1.5">
+            {query.scope !== 'open' ? (
+              <FilterChip
+                label={scopeLabel}
+                tone="warn"
+                title={t('matters.filter.removeChip')}
+                onRemove={() => patch({ scope: 'open' })}
+              />
+            ) : null}
+            {query.quick.map((key) => (
+              <FilterChip
+                key={`quick-${key}`}
+                label={t(`matters.quick.${key}`)}
+                tone={MATTER_QUICK_FILTER_TONES[key]}
+                title={t('matters.filter.removeChip')}
+                onRemove={() => toggleQuick(key)}
+              />
+            ))}
+            {query.statusGroups.map((group) => (
+              <FilterChip
+                key={`status-${group}`}
+                label={t(`matters.statusGroup.${group}`)}
+                title={t('matters.filter.removeChip')}
+                onRemove={() => toggleStatusGroup(group)}
+              />
+            ))}
+            {query.priorities.map((priority) => (
+              <FilterChip
+                key={`priority-${priority}`}
+                label={priority.toUpperCase()}
+                title={t('matters.filter.removeChip')}
+                onRemove={() => togglePriority(priority)}
+              />
+            ))}
+            {query.tags.map((name) => (
+              <FilterChip
+                key={`tag-${name}`}
+                label={`#${name}`}
+                title={t('matters.filter.removeChip')}
+                onRemove={() => toggleTag(name)}
+              />
+            ))}
+            <span className="flex-1" />
+            <span className="shrink-0 whitespace-nowrap font-mono text-[10.5px] text-ink-fg-3">
+              {summary}
+            </span>
+            {activeN > 1 ? (
+              <button
+                type="button"
+                onClick={clearFilters}
+                className="inline-flex shrink-0 items-center gap-0.5 text-meta text-ink-fg-2 transition-colors duration-fast hover:text-ink-fg"
+              >
+                <X size={11} />
+                {t('matters.filter.clear')}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+        <Popmenu
+          id="matter-filter-pop"
+          open={filterOpen}
+          onClose={() => setFilterOpen(false)}
+          items={menuItems}
+          title={t('matters.filter.title')}
+          ariaLabel={t('matters.filter.title')}
+          triggerRef={filterTriggerRef}
+          anchorClassName="right-2 top-[calc(100%+0.375rem)]"
+          maxHeight={FILTER_MENU_MAX_HEIGHT}
+        />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        {visible.map((matter) => (
+        {matters.map((matter) => (
           <MatterRow
             key={matter.public_id}
             matter={matter}
@@ -167,30 +500,42 @@ export function MatterList({
             onSelect={() => onSelect(matter)}
           />
         ))}
-        {visible.length === 0 ? (
+        {matters.length === 0 ? (
           <EmptyState
             icon={<EmptyIcon size={22} />}
             title={
-              search.trim()
+              searchActive
                 ? t('matters.empty.search', { query: search.trim() })
-                : view === 'trash'
-                  ? t('matters.empty.trash')
-                  : view === 'archived'
-                    ? t('matters.empty.archived')
-                    : t('matters.empty.default', { view: viewLabel })
+                : activeN > 0
+                  ? t('matters.empty.filtered')
+                  : query.scope === 'trash'
+                    ? t('matters.empty.trash')
+                    : query.scope === 'archived'
+                      ? t('matters.empty.archived')
+                      : t('matters.empty.default', { view: scopeLabel })
             }
             hint={
-              search.trim()
+              searchActive
                 ? t('matters.empty.hintSearch')
-                : view === 'trash'
-                  ? t('matters.empty.hintTrash')
-                  : view === 'archived'
-                    ? t('matters.empty.hintArchived')
-                    : t('matters.empty.hintDefault')
+                : activeN > 0
+                  ? t('matters.empty.hintFiltered')
+                  : query.scope === 'trash'
+                    ? t('matters.empty.hintTrash')
+                    : query.scope === 'archived'
+                      ? t('matters.empty.hintArchived')
+                      : t('matters.empty.hintDefault')
             }
             className="px-5 py-12"
             action={
-              view !== 'trash' && view !== 'archived' ? (
+              !searchActive && activeN > 0 ? (
+                <button
+                  type="button"
+                  onClick={clearFilters}
+                  className="rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg-1 hover:bg-ink-3"
+                >
+                  {t('matters.empty.clearFilters')}
+                </button>
+              ) : query.scope !== 'trash' && query.scope !== 'archived' ? (
                 <button
                   type="button"
                   onClick={onCreate}
@@ -204,6 +549,34 @@ export function MatterList({
         ) : null}
       </div>
     </section>
+  )
+}
+
+/** V3-09 可删条件 chip（设计 `list.jsx::chip`：tone 色 11% 底 + 30% 边，无 tone 走 accent）。 */
+function FilterChip({
+  label,
+  tone,
+  title,
+  onRemove
+}: {
+  label: string
+  tone?: MatterTone
+  title: string
+  onRemove(): void
+}): React.ReactElement {
+  return (
+    <button
+      type="button"
+      onClick={onRemove}
+      title={title}
+      className={cn(
+        'inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-full border py-0.5 pl-2 pr-1.5 text-micro',
+        tone ? MATTER_TONE_CHIP_CLASS[tone] : 'border-coral/30 bg-coral/10 text-coral'
+      )}
+    >
+      {label}
+      <X size={10} />
+    </button>
   )
 }
 
@@ -227,7 +600,7 @@ interface MatterRowProps {
  * E16（dogfood 轮 2 #16，owner 拍板偏离设计稿）—— 行 3 右下角原是最多 3 个标签 chip
  * + `+N` 溢出徽标：标签名长度不可控，行窄时一样会挤爆。改成显示单一的事项类型
  * （`matter.matter_type`，本就是个短字符串，天然没有这个溢出面）；标签仍在详情页 /
- * 左轨标签视图可见，只是清单行不再是它的展示面。
+ * 筛选菜单可见，只是清单行不再是它的展示面。
  *
  * R3-#7（dogfood 轮 3 #7）—— 行 3 左右对调：类型（`matter.matter_type`）恒在，挪到左端
  * 撑住这一行；关注信号（`signals`）不是每个事项都有，挪到右端——没有异常状态时右侧空着，

@@ -648,14 +648,16 @@ export function MatterDetail({
       <article className="flex h-full min-w-0 flex-1 flex-col">
         <header className="border-b border-ink-border px-5 py-4">
           <div className="flex items-start gap-3">
-            {/* G-03：窄布局（<1180px 单列）下清单列被藏起，这个箭头是回列表的唯一出口 ——
-                所以它必须有名字（图标按钮无 aria-label 对读屏 = 一个叫 "button" 的东西）。 */}
+            {/* G-03：窄布局（≤880px 单列，V3-10 起断点跟随 MattersWorkspace 的
+                `WORKSPACE_STACKED_QUERY`，两处必须同数）下清单列被藏起，这个箭头是回列表的
+                唯一出口 —— 所以它必须有名字（图标按钮无 aria-label 对读屏 = 一个叫 "button"
+                的东西）。 */}
             <button
               type="button"
               onClick={onBack}
               aria-label={t('matters.shell.backToList')}
               title={t('matters.shell.backToList')}
-              className="mt-0.5 hidden rounded-[var(--r-ctl)] p-1.5 text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg max-[1180px]:block"
+              className="mt-0.5 hidden rounded-[var(--r-ctl)] p-1.5 text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg max-[880px]:block"
             >
               <ArrowLeft size={16} />
             </button>

@@ -358,7 +358,8 @@ describe('MattersWorkspace — resizable matter list', () => {
       </QueryClientProvider>
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '全部' }))
+    // M1（v3 信息架构）：左轨视图列已退役，进列表 = 点「事项」tab（默认落看板）。
+    fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
     const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
     const grid = separator.parentElement as HTMLDivElement
     expect(grid.style.getPropertyValue('--matter-list-width')).toBe('400px')
@@ -397,7 +398,8 @@ describe('MattersWorkspace — resizable matter list', () => {
       </QueryClientProvider>
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '全部' }))
+    // M1（v3 信息架构）：左轨视图列已退役，进列表 = 点「事项」tab（默认落看板）。
+    fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
     const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
     fireEvent.keyDown(separator, { key: 'ArrowLeft' })
 
@@ -419,7 +421,8 @@ describe('MattersWorkspace — resizable matter list', () => {
           <MattersWorkspace />
         </QueryClientProvider>
       )
-      fireEvent.click(await screen.findByRole('button', { name: '全部' }))
+      // M1（v3 信息架构）：左轨视图列已退役，进列表 = 点「事项」tab（默认落看板）。
+    fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
       const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
       expect(separator.getAttribute('aria-valuenow')).toBe('380')
     } finally {
@@ -428,12 +431,13 @@ describe('MattersWorkspace — resizable matter list', () => {
   })
 })
 
-// R3-#2（dogfood 轮 3 反馈：「把标签也全给我删了，留标签在这里干嘛」）—— 左轨「使用中标签」
-// 整段筛选行（含齿轮入口已在上一批 R3-#1 移除）整体删除。这里故意让 `listTags` 返回一个真
-// 会被匹配到的标签（清单里那个事项也带同名 tag），证明缺失不是 mock 巧合而是渲染路径已经不
-// 再存在 —— 改回引用会让这条测试真的红。
-describe('MattersWorkspace — tag rail removed (dogfood 轮 3 #2)', () => {
-  test('renders no tag filter rail and never requests tag definitions, even when tags exist', async () => {
+// V3-04（v3 信息架构，改判 R3-#2）—— 轮 3 删的是「标签作为**导航入口**」（左轨「使用中标签」
+// 整段），owner 拍板本轮把标签作为**临时筛选条件**放回筛选菜单：这是有意反转，不是回滚。
+// 原来那条「listTags 永不被调用」的反向闸随之重写成正向语义：标签数据只喂筛选菜单的二级
+// 面板（打开列表面才请求），列表旁**不再有**任何标签导航轨；在面板里勾选一个标签会生成
+// 可删的条件 chip。改回「标签轨」渲染路径、或把面板拆掉，这条都会红。
+describe('MattersWorkspace — tags are a filter facet, not a nav rail (V3-04)', () => {
+  test('tag definitions feed the filter menu; no tag rail exists outside it', async () => {
     mattersApi.list.mockResolvedValue({ items: [{ ...matter(), tags: ['合规'] }] })
     mattersApi.listTags.mockResolvedValue({
       items: [
@@ -449,10 +453,20 @@ describe('MattersWorkspace — tag rail removed (dogfood 轮 3 #2)', () => {
       </QueryClientProvider>
     )
 
-    fireEvent.click(await screen.findByRole('button', { name: '全部' }))
+    // 看板 tab（默认落点）不请求标签 —— 标签数据是列表筛选面的私有依赖。
+    expect(mattersApi.listTags).not.toHaveBeenCalled()
+
+    fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
     expect(await screen.findByText('Vendor launch')).toBeTruthy()
+    await waitFor(() => expect(mattersApi.listTags).toHaveBeenCalled())
+    // 菜单未打开时页面上没有任何标签控件（没有导航轨）。
     expect(screen.queryByRole('button', { name: '合规' })).toBeNull()
     expect(screen.queryByText('标签')).toBeNull()
-    expect(mattersApi.listTags).not.toHaveBeenCalled()
+
+    // 打开筛选菜单 → 下钻「标签」二级面板 → 勾选 → 生成可删条件 chip。
+    fireEvent.click(screen.getByRole('button', { name: /筛选/ }))
+    fireEvent.click(await screen.findByRole('menuitem', { name: '标签' }))
+    fireEvent.click(await screen.findByRole('menuitemcheckbox', { name: /合规/ }))
+    expect(await screen.findByRole('button', { name: /#合规/ })).toBeTruthy()
   })
 })

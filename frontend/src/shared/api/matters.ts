@@ -1,4 +1,4 @@
-import { request } from './http_client'
+import { request, requestWithMeta } from './http_client'
 import type {
   MatterDetailResponse,
   MatterAttentionListResponse,
@@ -87,8 +87,11 @@ function mutationRequest(
 
 export function createMattersApi(baseUrl: string): MattersApi {
   return {
-    list(options: MatterListOptions = {}): Promise<MatterListResponse> {
-      return request(baseUrl, 'GET', '/matters', {
+    async list(options: MatterListOptions = {}): Promise<MatterListResponse> {
+      // `meta.total`（分页截断前的总行数）随 envelope 走，`request()` 会剥掉 —— 这里用
+      // requestWithMeta 抬进返回值（V3-07 列表头「范围总数」）。meta 缺失（老服务端 /
+      // 测试桩）落 null，读侧按「未知」处理，不硬造数字。
+      const { data, meta } = await requestWithMeta<MatterListResponse>(baseUrl, 'GET', '/matters', {
         query: {
           q: options.q,
           status: options.status,
@@ -104,6 +107,7 @@ export function createMattersApi(baseUrl: string): MattersApi {
           sort: options.sort
         }
       })
+      return { ...data, total: typeof meta.total === 'number' ? meta.total : null }
     },
 
     create(input, options = {}): Promise<MatterMutationResult> {

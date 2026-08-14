@@ -7,28 +7,11 @@ import type {
   MatterUpdateSummary
 } from '@shared/api/types/matter'
 
-export const MATTER_VIEWS = [
-  'focus',
-  'attention',
-  'review',
-  'active',
-  'waiting',
-  'blocked',
-  'planned',
-  'monitoring',
-  'all',
-  'completed',
-  'archived',
-  'trash'
-] as const
-/** 左轨那 12 档固定视图。
- *
- * 🔴 「按标签筛选」曾是第 13 种 view（`tag:<name>`，design `list.jsx::ViewRail` 第三段）——
- * dogfood 轮 3 起该筛选入口（左轨「使用中标签」整段）已整体退役，`MatterView` 收窄回只剩
- * builtin（两者现在是同一个类型）：标签仍是一等数据（`matterTags.ts` / `MatterTagPicker` /
- * `MatterTagManagerModal` 详情页写面照旧），只是不再是一种「视图」。 */
-export type MatterBuiltinView = (typeof MATTER_VIEWS)[number]
-export type MatterView = MatterBuiltinView
+// 🔴 `MATTER_VIEWS` / `MatterView` / `filterView`（左轨 12 档视图模型）已随 v3 信息架构
+// （V3-01/V3-03）整体退役：视图列收敛成「事项 / 看板」两 tab + 查询模型
+// `matterListQuery.ts`（scope + 快捷条件 + 多选筛选）。archived/trash 不再是客户端谓词 ——
+// 那两类行从未被默认请求取回（服务端默认子句 `deleted_at IS NULL AND archived_at IS NULL`），
+// 现在由 `matterScopeParams` 映射成服务端 `view` 参数。
 
 const PRIORITY_RANK: Record<MatterPriority, number> = { p0: 0, p1: 1, p2: 2, p3: 3 }
 
@@ -46,38 +29,6 @@ export function openAttentionFor(
   return [...(attention?.get(matter.public_id) ?? matter.attention_signals ?? [])].filter(
     (signal) => signal.state === 'open'
   )
-}
-
-export function filterView(
-  matters: readonly Matter[],
-  view: MatterView,
-  attention?: MatterAttentionIndex,
-  updates?: MatterUpdateIndex
-): Matter[] {
-  if (view === 'trash') return matters.filter((matter) => matter.deleted_at !== null)
-  if (view === 'archived') {
-    return matters.filter((matter) => matter.archived_at !== null && matter.deleted_at === null)
-  }
-
-  const live = matters.filter(isLiveMatter)
-  if (view === 'attention')
-    return live.filter((matter) => openAttentionFor(matter, attention).length > 0)
-  if (view === 'review')
-    return live.filter(
-      (matter) =>
-        updates?.get(matter.public_id)?.some((update) => update.review_status === 'pending') ??
-        false
-    )
-  if (view === 'all') {
-    return live.filter((matter) => matter.status !== 'done' && matter.status !== 'canceled')
-  }
-  if (view === 'completed') {
-    return live.filter((matter) => matter.status === 'done' || matter.status === 'canceled')
-  }
-  if (view === 'focus') {
-    return live
-  }
-  return live.filter((matter) => matter.status === view)
 }
 
 export function rankOf(
@@ -223,10 +174,15 @@ export interface FocusStats {
   reviewCount: number
   dueSoonCount: number
   healthyRate: number | null
+  /** V3-13：看板第四 tile「缺少下一步」= 未完成事项里 `nextAction().kind==='missing'` 的数量。
+   *  🔴 按 kind 判、不按 icon/文案（上方 hasNextAction 的红旗同款理由）。 */
+  missingNextCount: number
 }
 
-/** Focus 页四指标（design-handoff 附录 E）：到期窗 14 天、健康活跃 = 8 天内有已接受状态
- *  且有明确下一步。住在 lib 而非 MatterFocus.tsx —— 组件文件只能导出组件（react-refresh）。 */
+/** Focus 页指标（design-handoff 附录 E + v3 看板 V3-13）：到期窗 14 天、健康活跃 = 8 天内有
+ *  已接受状态且有明确下一步。住在 lib 而非 MatterFocus.tsx —— 组件文件只能导出组件
+ *  （react-refresh）。`healthyRate` 的 tile 已被「缺少下一步」换掉（V3-13 拍板的四 tile
+ *  预设 attn/proposal/due/nonext），字段暂留 —— 连同 i18n 一起清理归 V3-14。 */
 export function deriveFocusStats(
   matters: readonly Matter[],
   signals: readonly MatterAttentionSignal[],
@@ -250,6 +206,7 @@ export function deriveFocusStats(
       0
     ),
     dueSoonCount,
-    healthyRate: open.length === 0 ? null : Math.round((healthy / open.length) * 100)
+    healthyRate: open.length === 0 ? null : Math.round((healthy / open.length) * 100),
+    missingNextCount: open.filter((matter) => nextAction(matter).kind === 'missing').length
   }
 }

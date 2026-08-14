@@ -9,6 +9,7 @@ import type { Matter, MatterAttentionListResponse, MatterAttentionSignal, Matter
 import { MatterAttentionBadge } from '@shared/components/layout/Sidebar'
 import { AttnBand } from '@shared/components/matters/attention'
 import { MatterList } from '@shared/components/matters/MatterList'
+import { DEFAULT_MATTER_LIST_QUERY } from '@shared/components/matters/matterListQuery'
 import { deriveFocusStats } from '@shared/lib/matterDerive'
 import { globalAttentionKey, matterAttentionKey, useAttentionAction } from '@shared/components/matters/hooks'
 
@@ -33,7 +34,8 @@ describe('P5 renderer surfaces', () => {
     const active = { ...matter, due_at: now + 2 * 86_400_000, summary_at: now - 2 * 86_400_000, items: [{ id: 1, matter_id: 1, kind: 'action' as const, title: 'Send plan', description: null, position: 0, status: 'open' as const, priority: null, owner_kind: null, owner_id: null, waiting_on_stakeholder_id: null, due_at: null, completed_at: null, checklist: [], source_resource_id: null, source_locator: null, created_at: 1, updated_at: 1, deleted_at: null }] }
     const done = { ...matter, id: 2, public_id: 'MAT-0002', status: 'done' as const, due_at: now + 1_000 }
     const updates = new Map([[active.public_id, [update]]])
-    expect(deriveFocusStats([active, done], [signal()], updates, now)).toEqual({ openCount: 1, attentionCount: 1, reviewCount: 1, dueSoonCount: 1, healthyRate: 100 })
+    // V3-13 起多出 missingNextCount（第四 tile「缺少下一步」）：active 有开放行动项 ⇒ 0。
+    expect(deriveFocusStats([active, done], [signal()], updates, now)).toEqual({ openCount: 1, attentionCount: 1, reviewCount: 1, dueSoonCount: 1, healthyRate: 100, missingNextCount: 0 })
   })
 
   test('Sidebar matter badge renders only for N > 0', () => {
@@ -45,13 +47,17 @@ describe('P5 renderer surfaces', () => {
     render(
       <MatterList
         matters={[{ ...matter, tags: ['launch'] }]}
-        view="all"
+        query={DEFAULT_MATTER_LIST_QUERY}
+        onQueryChange={vi.fn()}
+        scopeTotal={1}
+        tags={[]}
         selectedId={null}
         attention={new Map([[matter.public_id, [signal()]]])}
         search=""
         onSearchChange={vi.fn()}
         onSelect={vi.fn()}
         onCreate={vi.fn()}
+        onManageTags={vi.fn()}
       />
     )
 
