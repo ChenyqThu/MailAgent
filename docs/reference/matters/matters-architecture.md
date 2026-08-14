@@ -128,15 +128,18 @@ run 起始解析一次并冻进 run context，pause / resume 复用同值。
 ## 2. 数据模型
 
 主表 `matter`（`src/mail/sync_store.py` 的 `MATTER_TABLE_DDLS`），围绕它的从表。
-迁移占用 `DB_VERSION` **v44–v50 与 v52**（v44/v45 基表与资源域 · v46 run 账本 · v47 attention ·
-v48 email/thread external_key 归一 · v49 拒绝记忆 · v50 标签定义表 + 完成标志 ·
-v52 全局干系人库；v51 是邮件域的 `ingest_reason`，与事项无关）：
+迁移占用 `DB_VERSION` **v44–v50、v52 与 v56–v57**（v44/v45 基表与资源域 · v46 run 账本 ·
+v47 attention · v48 email/thread external_key 归一 · v49 拒绝记忆 · v50 标签定义表 + 完成标志 ·
+v52 全局干系人库 · v56 资料摘要三列（`resource.sum`/`sum_src`/`sum_at`）·
+v57 资料版本轨迹表 `resource_version`，两者详见 §2.5；v51/v53–v55 是其它域的迁移
+（邮件 `ingest_reason` / outlook_com backend / 通讯录 Contact Directory），与事项无关）：
 
 | 表 | 作用 | 关键约束 |
 |---|---|---|
 | `matter` | 事项本体 | `public_id` 形如 `MAT-0001`；`version` 是乐观锁基准（写并发语义见 §2.1）|
 | `matter_item` | 行动项 / 决策 / 问题 / 里程碑 / 阻塞 / 笔记 | `checklist_json` 只允许 `kind='action'` 非空 |
 | `matter_resource` | 事项 ↔ 资料的多对多 | 身份归一走 `resource_identity.normalize_resource_key`（**唯一写侧** `_upsert_resource`）|
+| `resource_version` | 资料版本轨迹（v57）| 挂全局 `resource` 而非 per-matter，故无 `matter_` 前缀；**只存历史**，当前版本就是 `resource` 行自己，见 §2.5 |
 | `matter_stakeholder` | 干系人（per-matter 行）| `is_waiting_on` 会产生等待信号；`contact_id` 关联全局库（v52，`ON DELETE SET NULL`，写穿语义见 §2.4）|
 | `matter_contact` | 全局干系人库（v52）| 身份 = 归一 email（`email_normalized` NOT NULL UNIQUE + CHECK 强制 lower+trim）；**无 email 的干系人不入库** |
 | `matter_relation` | 事项之间的关系 | |
@@ -241,6 +244,50 @@ episode（那时按新 severity 开）。这是「判据翻转前不再报」的
   **不走 LLM**；owner 自己的地址服务端排除，否则以近乎全量频次霸榜）。🔴 两条字面路径必须
   声明在 `/{matter_id}` 之前，否则 "contacts" 被当 public_id 吞。
   回归：`tests/matters/test_matter_contacts.py` + `test_matter_v52_migration.py`。
+
+### 2.5 资料摘要与版本轨迹（v56 / v57）
+
+`resource` 表 v56 起带 `sum` / `sum_src` / `sum_at` 三**真列**（不塞 `metadata_json`——`sum_at`
+要判过期、`sum_src` 要参与筛选，两者都得靠 `json_extract` 反而更贵）。唯一写侧仍是
+`_upsert_resource`（service.py）→ `_resource_summary_fields`，三类来源：
+
+- **邮件类**（`kind` 为 `email` / `thread`）：`sum_src='mail'`，恒复用邮件自己的摘要
+  （`_mail_summary_fields` 读 `llm_processing.labels_json.$.ai_summary`；thread 取线程内
+  最新一封带摘要的邮件），**不重新生成**——调用方传入的 `sum` 一律忽略，提示词不守规矩也
+  编不进去。`ai_summary` 取不到（LLM 未开 / 失败 / 积压）→ 三列 `NULL`，**留空不合成**
+  （不拿主题+正文拼一句充数）。
+- **其余 provider**：吃调用方显式给出的 `sum`（Agent 发现资料的提案通道，字段契约见 §8
+  跨语言一致性闸表 `matterProposalNewResource` 那一行）；`sum_src` 缺省 `'agent'`；手动关联
+  不带 `sum` → 空态，等下次跟进 run 生成。
+- `access_policy='metadata_only'` 一律不生成三列（无论来源）。
+- `repository.upsert_resource` 命中已有 `(provider, external_key)` 行时是**白名单增量更新**、
+  不是整行覆写（v56 前是 INSERT-ONLY，摘要对存量资料永远写不进去）：`title` / `canonical_url`
+  只补空；`metadata_json` 浅合并、既有键绝不丢；三摘要列只在给出非空 `sum` 时一起写；身份三列、
+  抓取产物（`revision` / `content_hash` / `last_checked_at`）、`access_policy`、`created_at`
+  恒不覆盖——收进更新面等于用 `None` 冲掉抓取结果，或把「仅元数据」静默翻回 `allowed`。
+
+`resource_version`（v57）记录**已被取代**的资料版本快照——挂全局 `resource` 而非
+per-matter，故无 `matter_` 前缀。两条「不撒谎」的设计，改这块前必须记住：
+
+- **当前版本有意不入表**：它就是 `resource` 行自己（`revision` / `content_hash` / `sum` 三组
+  列）。写进 `resource_version` = 同一事实两处存，必然漂移；读侧把「`resource` 行 + 轨迹行」
+  拼成完整轨迹，UI 给 `resource` 行标「当前」（有测试钉住 `current.content_hash ∉ trail`）。
+- **老库升级后轨迹是空的，不拿现值回填**：那份资料确实检出过一次，但那一次不是「历史版本」，
+  回填 = 把「只检出过一版」谎报成「有过一版历史」（v57 迁移纯 DDL，无 DML）。
+
+唯一写者是 `MatterService.fetch_url_resource`（全仓也只有它写 `revision` / `content_hash` /
+`last_checked_at`），归档点在它那条 `UPDATE resource ...` **之前**——写在之后轨迹里全是当前值
+的复读，且只数行数的测试看不出来。首次检出（`content_hash` 此前为 `None`）与 hash 未变（重抓
+同一份内容）都不留档：是「没有上一版」不是偷懒。`diff_text`（这一版被取代时变了什么，一句话）
+由跟进 Agent 在提案里给、接受时经 `repository.fill_latest_version_diff` 回填进**最新那条轨迹
+行**；`diff_text IS NULL` 是幂等闸，不覆盖已经给 owner 看过的那句；轨迹为空（没有上一版）就
+静默丢弃，不新建行；没人给就留 `NULL`（不按字数差之类的机械指标编一句充数）。
+
+空态判据单源在服务端 `_resource_tracks_versions`（`resource.kind == 'url'`——`revision` /
+`content_hash` / `last_checked_at` 全仓唯一写者就是 URL 抓取路径），经 `tracks_versions` 字段
+交给前端；前端**不按 `kind` 自己推**，那会是第二处真源。三档空态：不跟踪版本的资料类型（邮件 /
+会话 / 文档 / 附件）说清「这一类没有」；跟踪但还没检出过，说「抓取之后才会开始记录」；服务端
+没答上来（loading / 出错）整区不渲染，宁可少说不猜。
 
 ---
 
@@ -465,5 +512,52 @@ sqlite3 "$DB" "SELECT key, value FROM sync_state WHERE key LIKE 'matter.%last_fi
 | `frontend/tests/shared/matterEventLocale.test.ts` | 两份 locale 覆盖 `MATTER_EVENT_KINDS` 全集。kind 数量会随功能增长，所以判据是**从 events.py 抽全集**，不是写死的数字；闸自身也断言「抽不到就红」 |
 | `tests/matters/test_matter_trigger_envelope_parity.py` | trigger v2 envelope 的跨语言形状（含 §4.0 的 `agent` 覆盖块）|
 | `tests/matters/test_matters_contract_parity.py::test_effort_tier_value_set_matches_the_typescript_canonical_ladder` | effort 档位值域**与顺序**（canonical = TS `effortTiers.ts::EFFORT_TIERS`，Python 手抄在 `triggers.MATTER_AGENT_EFFORT_TIERS`）。顺序也算：档位是有序阶梯，漂了「向下取最近可选档」就选错档 |
+| `tests/matters/test_matters_contract_parity.py::test_new_resource_proposal_shape_agrees_across_every_hand_copy` | `matterProposalNewResource` 提案契约的**五份手抄**（zod schema / 工具描述 / pydantic DTO / `normalize_new_resource` 返回键 / TS 读类型）互相一致。抽取器 `ts_zod_object_field_names()` 定位源码里的 `const <name> = z.object({...})` 前先把字符串 / 模板串 / 正则字面量与两种注释（`//` 与 `/* */`）整段抹成空格——不做的话，把字段**注释掉**闸依然绿。抽取失败（锚点找不到 / 花括号未配平 / 抽出空集 / 丢了 `.strict()`）必须红，不许静默放行当通过 |
 | `tests/api/test_context_mode_consistency.py` | `deriveContextMode` 的源码形状（正则闸，见 §1.4）|
 | `frontend/tests/components/matters/matterSchedule.test.ts` | 排程解析两种形状都认 |
+
+---
+
+## 9. 列表信息架构
+
+清单页只有两个 42px tab（`list` / `board`）；176px 的「视图列」（12 档 + 标签区）与
+`MatterView` / `MATTER_VIEWS` / `filterView` 一整套已退役。查询模型单源 =
+`frontend/src/shared/components/matters/matterListQuery.ts`：tab / **四范围**
+（`open` / `done` / `archived` / `trash`，`MATTER_SCOPES`）/ 可叠加的快捷筛选
+（`MATTER_QUICK_FILTERS`：关注中 / 等待 / 到期 / P0-P1 / 有提案 / 缺下一步）/ 状态组
+（六个语义组，`MATTER_STATUS_GROUP_MEMBERS`）/ 优先级 / 标签多选（类别间 AND、标签间 OR）/
+分组维度（`MATTER_GROUP_MODES`：`status` / `due` / `priority` / `tag` / `none`）/ 排序四档
+（`MATTER_SORTS`：关注度 / 最近更新 / 到期 / 优先级）全部从这里取，组件里不再各自现算。
+筛选面收成一个 `Popmenu`（本仓既有原语，未移植设计原型 `nested-menu.jsx`——两者同上游）；
+🔴 **标签已回到筛选菜单**（`MatterList` 的筛选下拉），这是对轮 3「标签作为导航入口」退役
+决定的**有意反转**（owner 拍板）——两条决定不矛盾，反向闸已重写而非删除，现在钉的是
+「标签只在筛选菜单里、不在左轨」。
+
+四个范围映射服务端 `view` 查询参数（`matterScopeParams`）：🔴 顺带修了一个既存 bug——
+「已归档」「回收站」两个范围此前恒为空（客户端按 `archived_at` / `deleted_at` 过滤，但请求
+从不带 `view` 参数，服务端默认子句 `deleted_at IS NULL AND archived_at IS NULL` 早把这两类
+行排除，两个 pip 从来没有机会显示）。
+
+列表主体按分组维度渲染 29px 粘性组头（chevron + 维度符号 + 组名 + 计数；点击折叠；空组不
+渲染；`none` 维度不出组头）；分组产物 `groupMatters()` 同时驱动详情页的上/下条导航序
+（`orderedMatterIds()`）——分组重排视觉序后若仍用旧的扁平序，「下一条」会跳到屏幕上别处，
+两个调用点共享同一份三入参（含 `now`，从工作台统一传下，避免 `MatterList` 自己挂载时冻结
+一份、跨零点或 tab 切换重挂时与工作台劈叉）。冷启动记住选中：`matters:lastSelId`
+（localStorage，独立模块 `matterLastSelected.ts`）存 `public_id`；有记录且在默认 `open`
+范围内可见 → 落 list tab 并选中，否则退化为选第一条；恢复只在默认范围里找，不为了恢复选中
+擅自改用户的范围/筛选。
+
+🔴 **能力边界**（改分组 / 筛选 / 排序前先读，判据单源住在 `matterListQuery.ts` 文件头注释）：
+清单是**服务端游标分页**（`GET /matters`，`limit` 硬上限 100，前端只取一页）；筛选 / 状态组 /
+优先级 / 标签多选 / 分组 / 派生排序（关注度 / 到期 / 优先级三档；「最近更新」是唯一有服务端
+等价物的排序）全部在**当前一页（≤100 行）**上运算，服务端没有对应参数。事项量超过一页时，
+被筛掉的行可能根本没被取回来——这是已知边界，不是 bug。头部「命中数 / 范围总数」中的范围
+总数只在 `open` / `done` 的活跃行 ≤100 时精确（服务端 `meta.total` 是「全部活跃行」而非该
+scope 总数）；截断时返回 `null`，头部只显示命中数，不显示可能算错的范围总数。
+
+**到期口径**统一为「7 天内到期，含已逾期」，单源 `frontend/src/shared/lib/matterDerive.ts`
+的 `isMatterDueSoon` / `matterDueDayDiff` / `MATTER_DUE_SOON_WINDOW_DAYS`（= 7）——看板 tile
+计数、看板「临近到期」列表、清单 `due` 快捷筛选三处直接调用同一个判据（此前各自独立算，两处
+14 天不含逾期 + 一处 7 天含逾期，三者互不一致）。看板第四 tile 是「缺少下一步」
+（`nextAction(matter).kind === 'missing'`，按 kind 判、不按文案），`healthyRate` 字段与其
+i18n key 已删除（零消费的遗留计算）。
