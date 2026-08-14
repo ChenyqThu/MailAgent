@@ -5395,31 +5395,23 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   pointer-events: none;
 }
 
-/* AI FAB 的轮廓光环（0813）— 取代绑死圆形的 reactbits StarBorder（`.rb-star-border`：conic 圆盘旋转 +
-   圆形内盖露 2px 边 + box-shadow 外发光。那三样都只对圆成立 —— conic 盘靠 border-radius 露边、box-shadow
-   只跟随盒形，贴不了任意轮廓 —— 故 FAB 换成异形头像后是**重做**不是保留，该类已随本次改动整体删除）。
-   现在发光沿主 agent 头像的**真实 head path** 走：同一条 path 描两层（底环 + 亮弧），几何由
-   `ChatFabAvatar` 与 `BotAvatar` 共用同一次 `staticFrame()`（同源见该组件文件头）。
-   🔴 匀速：亮弧的 `pathLength=100` 把周长归一 ⇒ dasharray/dashoffset 的单位是「百分点」，换形状换表情
-   （周长不同）绕圈速度也恒定，不必 `getTotalLength()`。
-   🔴 档位：这是**纯 CSS 动画**，不进 bot-avatar 的共享 rAF ticker、不新增 animated 位点（渲染档位纪律，
-   见 frontend/docs/bot-avatar.md）；旋转周期沿用旧环的 8s（常驻故放慢，同 .shimmer 范式非 spring）。
-   reduce：JS 层就不挂 `.chat-fab-halo-arc`（可测），这里的 media 只是兜底 —— 两条都留静态环（同旧行为）。 */
-.chat-fab-halo-glow {
-  filter: drop-shadow(0 0 2px rgb(var(--c-accent) / 0.55));
-}
-.chat-fab-halo-arc {
-  animation: chat-fab-halo-travel 8s linear infinite;
-}
-@keyframes chat-fab-halo-travel {
-  to {
-    stroke-dashoffset: -100;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .chat-fab-halo-arc {
-    animation: none;
-  }
+/* AI FAB 头像的外投影（0813 dogfood，owner：「默认加点外阴影，不然看不出来区分」）。
+   本类取代了此前那套轮廓光环（`.chat-fab-halo-glow` / `.chat-fab-halo-arc` / `@keyframes
+   chat-fab-halo-travel`，两层一起删的理由见 ChatFabAvatar.tsx 文件头），更早的
+   `.rb-star-border` conic 环则在换头像那一版就已删除。全仓无残留消费点。
+   🔴 为什么是 filter 不是 box-shadow：钮面是**异形剪影**（bot 轮廓 / 上传图的圆角方），
+   box-shadow 画的是那个 56px 方盒的影子，与形状对不上；`drop-shadow` 跟随 alpha 通道，
+   两种身份共用一条声明（也是本文件 GeneralTab 色卡对号已在用的同一条路子）。
+   🔴 数值不新造：`0 8px 24px rgba(0,0,0,0.35)` = DESIGN.md §4.3 shadow level-1「raised」，
+   本仓给「脱离页面的浮层」的既有档（FAB 正是 createPortal 出去的浮层），`UpdateReadyBanner`
+   与 `ChatModalHistoryDropdown` 用的是同一组数、也同样不分主题。
+   🔴 明暗两档实测（playwright 渲染 ink-0 / ink-1 / 纯白正文三种底色）：暗色下 0.35 黑影把
+   ink-1 压到约 ink-0 一档，即设计体系自己用来区分表面层级的那个差值 —— 边界看得出；亮色下
+   是一圈干净的近影，不是 Material 那种厚重投影（DESIGN.md §1 明确不要）。层级更重的
+   `--pop-shadow` 有意没用：它按大面板标定（偏移 18–24px / 模糊 50–60px），落到 56px 的钮上
+   影子整团掉到钮下方、读成一块糊斑（同一次实测比过）。 */
+.chat-fab-avatar {
+  filter: drop-shadow(0 8px 24px rgba(0, 0, 0, 0.35));
 }
 
 /* reactbits Strands — motion-gsap §10 decorative backdrop (non-loading WebGL silk strands).

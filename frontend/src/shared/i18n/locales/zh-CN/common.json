@@ -876,7 +876,8 @@
     "historyHint": "切换历史会话 · ⇧⌥H",
     "closePanel": "收起面板 · ⌘L",
     "fab": {
-      "label": "聊聊这封邮件"
+      "label": "聊聊这封邮件",
+      "hint": "聊聊这封邮件 · ⌘J"
     },
     "modal": {
       "title": "AI 对话",

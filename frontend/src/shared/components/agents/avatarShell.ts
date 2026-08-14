@@ -27,8 +27,9 @@
 const RADIUS_CTL = 'rounded-[min(var(--r-ctl),22%)]'
 const RADIUS_CARD = 'rounded-[min(var(--r-card),22%)]'
 
-/** 同一个比例的**数值**形态，给交不出 CSS 圆角的位点用（FAB 的光环要沿同一条边界描 path，
- *  纯 CSS 圆角描不出来 —— 见 `assistant/modal/ChatFabAvatar.tsx`）。
+/** 同一个比例的**数值**形态，给按 px 内联下发圆角的位点用（FAB 的上传图边长本身就是内联的
+ *  `FAB_IMAGE_PX`，圆角跟着走同一条内联通道 —— 见 `assistant/modal/ChatFabAvatar.tsx`。
+ *  0813 之前这里还有第二个消费理由「光环要沿同一条边界描 path」，那层光环已整层删除）。
  *
  *  🔴 它与上面两个 class 串里的 `22%` 是**同一个值的两种载体**，且这处镜像**消灭不掉**：
  *  tailwind JIT 只扫源码里出现的完整 class 串，`rounded-[min(var(--r-ctl),${x}%)]` 拼不出样式。

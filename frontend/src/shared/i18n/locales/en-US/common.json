@@ -876,7 +876,8 @@
     "historyHint": "Toggle session history · ⇧⌥H",
     "closePanel": "Hide panel · ⌘L",
     "fab": {
-      "label": "Chat about this page"
+      "label": "Chat about this page",
+      "hint": "Chat about this page · ⌘J"
     },
     "modal": {
       "title": "AI chat",
