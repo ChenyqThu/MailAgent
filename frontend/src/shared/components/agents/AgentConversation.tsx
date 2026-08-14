@@ -662,12 +662,16 @@ export function AgentConversation({
       onRemove={onRemoveEmailContext}
     />
   ) : null
+  // 0813 轮4批AE —— 平铺成 fragment 而不是再包一个 flex 容器：这一组 chip 现在落进 composer 框内
+  // 的 chip 行（ComposerChipRow），与附件 chips 是**同一条 flex-wrap 的兄弟**。包一层的话上下文
+  // chips 会自成一个换行上下文、与附件各换各的行，就不是 owner 要的 Notion 形态了。
+  // 空态仍由这里把关（都没有 → null），chip 行据此整个不渲染。
   const contextChips =
     emailContextChip || matter.chip ? (
-      <div className="flex flex-wrap items-center gap-1.5">
+      <>
         {matter.chip}
         {emailContextChip}
-      </div>
+      </>
     ) : null
 
   // 0812 —— 外部入口（邮件工具栏「创建事项」）递进来的指令。三道门：

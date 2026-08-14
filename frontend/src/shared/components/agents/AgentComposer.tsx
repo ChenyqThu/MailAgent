@@ -4,6 +4,12 @@
 // （@shared/assistant/components/composer）——本面此前那份 AgentAttachmentChips wrapper 已删，
 // 两个 composer 的 chip 行/长高逻辑自此一份。本面只补 rounded-2xl 与两个对齐值。
 //
+// 0813 轮4批AE: 会话上下文 chip（当前邮件 / 当前事项）也进框 —— 它此前是整个 composer form 的
+// **兄弟**（AgentThread 的 ViewportFooter 里），实测 `frame.contains(chip) === false`。现在由
+// AgentThread 经 `contextChip` prop 递进来，透传成 ComposerFrame 的 leadingChips，与附件 chips
+// 同处一条 flex-wrap。🔴 只改位置与容器：chip 的产地（AgentConversation 的 emailContext /
+// matter 状态）、× 的语义、送出时的 injectedContext 一个字节没动。
+//
 // Demo composer: a rounded shell on bg-ink-2 with a LexicalComposerInput on top (in-field @ mentions +
 // / commands via ComposerTriggerPopover, inline directive chips) and an inline action row below (left:
 // the "+" menu → the SHARED ModelPicker chip; right: send / cancel as round buttons). 08-04 WP6: the
@@ -260,7 +266,14 @@ const SLASH_ICONS: Record<string, Unstable_IconComponent> = {
   todo: (props) => <ListTodo {...props} />
 }
 
-export function AgentComposer(): React.JSX.Element {
+export function AgentComposer({
+  contextChip
+}: {
+  /** 0813 轮4批AE —— 会话上下文 chips（当前邮件 / 当前事项）。此前由 AgentThread 渲染在
+   *  composer **之外**（ViewportFooter 里与 form 平级），owner 参照 Notion 要求进框；故改由
+   *  本组件透传进 ComposerFrame 的 chip 行，与附件 chips 同区同换行。省略 → 与引入前逐字一致。 */
+  contextChip?: React.ReactNode
+} = {}): React.JSX.Element {
   const { t } = useTranslation()
   const aui = useAui()
   const controls = useChatComposerControls()
@@ -371,6 +384,7 @@ export function AgentComposer(): React.JSX.Element {
               `mentions` 不传 —— 本面的 @ 提及是正文里的 Lexical directive chip，不走 chip 行。 */}
           <ComposerFrame
             controls={controls}
+            leadingChips={contextChip}
             disabled={sendDisabled}
             onPaste={onComposerPaste}
             chipMaxWidthClass="max-w-[220px]"

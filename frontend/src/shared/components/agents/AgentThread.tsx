@@ -54,8 +54,10 @@ interface AgentThreadProps {
   /** @deprecated dogfood：greetings 现一律居中（浮窗 / 侧栏 / agent 视图一致），此 prop 不再生效；
    *  保留以免改动上游 AgentConversation / AssistantChatModal 的传参链。 */
   welcomeAlign?: 'center' | 'left'
-  /** assistant-modal P5 — a removable context chip (the current email) rendered just above the composer.
-   *  The modal passes the email chip; /sessions omits it → nothing rendered. */
+  /** assistant-modal P5 — removable context chips（当前邮件 / 当前事项）。0813 轮4批AE 起它们
+   *  渲染在 **composer 框内**（本组件只透传给 AgentComposer，见下方注释）。邮件 chip 只有浮窗/
+   *  抽屉侧栏会给（它们把 activeEmailId 传进 AgentConversation）；事项 chip 在 /sessions 也可能
+   *  出现（历史里选中一个事项会话）。都没有 → 宿主传 null → chip 行整个不渲染。 */
   contextChip?: React.ReactNode
   /** WP-14 — the composer-anchored run status bar (ThreadRunStatusBar), mounted inside the sticky
    *  ViewportFooter so it rides with the composer instead of scrolling away with the stream.
@@ -128,10 +130,12 @@ export function AgentThread({
             <AgentScrollToBottom />
             {/* WP-14 — 回合级运行条（进行中才渲染），在 context chip / composer 之上。 */}
             {runStatusSlot}
-            {/* assistant-modal P5 — removable email-context chip directly above the composer (modal only;
-              /sessions omits contextChip → nothing here). */}
-            {!readOnly && contextChip}
-            {!readOnly && <AgentComposer />}
+            {/* assistant-modal P5 — removable context chips（当前邮件 / 当前事项）。
+              0813 轮4批AE：它们**不再**渲染在这里 —— owner 参照 Notion 要求上下文 chip 与附件
+              chip 同处对话框内，故整块下沉给 AgentComposer → ComposerFrame 的 chip 行。这里只
+              负责把宿主给的节点传下去；`readOnly` 时 composer 整个不渲染，chip 也随之消失，
+              与下沉前同义。 */}
+            {!readOnly && <AgentComposer contextChip={contextChip} />}
             <AuiIf condition={isNewChatView}>
               <AuiIf condition={(s) => s.composer.isEmpty}>
                 <div className="min-h-[4.5rem]">{quickActions}</div>

@@ -149,10 +149,17 @@ function ComposerAttachmentChips({
  *  even without controls so a pasted image is never an invisible send (issue #61's观感 root).
  *
  *  0813 — 这一层从「两处各一份 wrapper」收成一处（AgentComposer 的 AgentAttachmentChips 已删）：
- *  wrapper 的 flex/wrap/gap、空态门（全空 → 不渲染任何节点）、chip 上限，全在这儿一份。 */
+ *  wrapper 的 flex/wrap/gap、空态门（全空 → 不渲染任何节点）、chip 上限，全在这儿一份。
+ *
+ *  0813 轮4批AE —— 第三类 chip 进场（`leadingChips`）：会话级的**上下文** chip（当前邮件 /
+ *  当前事项，`ConversationContextChip`）。它此前是整个 composer 的**兄弟**、挂在框外，owner
+ *  参照 Notion 要求它与附件同框同区。三类的数据路径**各不相同**（附件=composer 状态、引用
+ *  邮件=controls 面板状态、上下文=宿主传下来的 ReactNode），但对本行而言只是「同一条 flex-wrap
+ *  里的三种 chip」—— 故这里只收位置与换行，不碰任何一条数据路径。 */
 function ComposerChipRow({
   controls,
   mentions = false,
+  leadingChips,
   chipMaxWidthClass,
   className
 }: {
@@ -160,6 +167,10 @@ function ComposerChipRow({
   /** 渲染「引用邮件」chips。通用面（AgentComposer）的 @ 提及是**正文里的 Lexical directive
    *  chip**，不走这条 chip 行 —— 故默认 false，只有邮件面显式打开。 */
   mentions?: boolean
+  /** 宿主给的会话上下文 chips（邮件 / 事项），排在最前。🔴 必须是**直接子节点**而不是再包一层
+   *  div：包一层的话它们会自成一个换行上下文，与附件 chips 各自换各自的行；平铺才是 owner 要的
+   *  「多个时一起换行、框跟着长高」。空态由宿主保证（没 chip 时传 null，不是传空容器）。 */
+  leadingChips?: React.ReactNode
   chipMaxWidthClass?: string
   /** 🔴 唯一的正当用途：把 chips 的左缘对齐到**本场地输入区**的文字内缩。两个输入组件
    *  （textarea vs Lexical contenteditable）的水平 padding 本来就不同，这一个值是它俩剩下的
@@ -168,9 +179,10 @@ function ComposerChipRow({
 }): React.JSX.Element | null {
   const attachmentCount = useAuiState((s) => s.composer.attachments.length)
   const mentionList = mentions ? (controls?.mentions ?? []) : []
-  if (mentionList.length === 0 && attachmentCount === 0) return null
+  if (leadingChips == null && mentionList.length === 0 && attachmentCount === 0) return null
   return (
-    <div className={cn('flex flex-wrap gap-1.5', className)}>
+    <div className={cn('flex flex-wrap items-center gap-1.5', className)}>
+      {leadingChips}
       {controls &&
         mentionList.map((m) => (
           <span
@@ -198,7 +210,7 @@ function ComposerChipRow({
  *  而且框的高度随 chips 行数长高。这一层就是那个「框的内胆」，两个 composer 共用：
  *
  *      ┌─ 皮肤（border / bg / 圆角）由调用方给 ─────────┐
- *      │  chips（换行、可多行）                        │  ← ComposerChipRow
+ *      │  chips（上下文 → 引用邮件 → 附件；换行、可多行）│  ← ComposerChipRow
  *      │  输入区                                       │  ← children
  *      │  工具条                                       │  ← children
  *      └──────────────────────────────────────────────┘
@@ -219,6 +231,7 @@ export function ComposerFrame({
   className,
   controls,
   mentions,
+  leadingChips,
   chipMaxWidthClass,
   chipRowClassName,
   children,
@@ -226,6 +239,7 @@ export function ComposerFrame({
 }: React.ComponentPropsWithoutRef<typeof ComposerPrimitive.AttachmentDropzone> & {
   controls: ChatComposerControls | null
   mentions?: boolean
+  leadingChips?: React.ReactNode
   chipMaxWidthClass?: string
   chipRowClassName?: string
 }): React.JSX.Element {
@@ -240,6 +254,7 @@ export function ComposerFrame({
       <ComposerChipRow
         controls={controls}
         mentions={mentions}
+        leadingChips={leadingChips}
         chipMaxWidthClass={chipMaxWidthClass}
         className={chipRowClassName}
       />
