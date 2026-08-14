@@ -1,22 +1,144 @@
 # requirements.lock.win.txt — Windows x64 嵌入式 CPython 运行时的全量依赖锁
-#   (E0 WP5 打包再现性的 Windows 分叉; mac 侧 = requirements.lock.txt, 两文件互不适用:
-#    mac lock 基于 macOS arm64 解析、无环境 marker, 含 uvloop [win 无 wheel, 装即失败]
-#    与 pyobjc 系 [mac-only]。)
+#   (E0 WP5 打包再现性的 Windows 分叉; mac 侧 = requirements.lock.txt, 两文件互不适用)
 #
-# ⚠️ 占位状态: 尚未在 Windows 真机/CI 上生成过, 本文件目前 0 个 pin。
-#    build-python-venv.ps1 默认 (锁定) 模式检测到 0 pin 会 fail loud, 不会静默
-#    回退到全新解析 —— 首次 Windows 构建前必须先生成本文件。
+# 覆盖范围: build-python-venv.ps1 的完整安装集
+#   = requirements.txt (滤 pyobjc 行, mac-only) + pyproject [cli,api,memory] extras
+#     + pywin32 (outlook_com backend) 的全部传递闭包, 全 == pin。
+#   不含项目本体 mailagent (脚本单独以 --no-deps 安装);
+#   不含 uvloop (uvicorn[standard] 的 sys_platform marker 在 Windows 解析时排除)。
 #
-# 生成方式 (二选一):
-#   a. Windows x64 真机:  pwsh frontend/scripts/build-python-venv.ps1 -GenerateLock
-#   b. CI:  Actions → Build Windows app → Run workflow → generate_lock=true,
-#      下载 requirements-lock-win artifact, 覆盖本文件提交进仓 (CI 不回推 commit)。
+# 生成方式: Windows x64 / CPython 3.11.15 上 pwsh frontend/scripts/build-python-venv.ps1 -GenerateLock
+#   (CI: Actions → Build Windows app → generate_lock=true, 下载 artifact 提交进仓)。
+# 更新方法: 改 requirements.txt / pyproject 后重跑 -GenerateLock 并 review diff 提交。
+#   🔴 只改声明源不重新生成本文件 = 改动不进 Windows 包 (provision 只认本文件)。
 #
-# 覆盖范围 (生成后): requirements.txt (滤 pyobjc 行) + pyproject [cli,api,memory]
-#   extras + pywin32 (outlook_com backend) 的全部传递闭包, 全 == pin;
-#   不含项目本体 mailagent (ps1 单独以 --no-deps 安装), 不含 uvloop (uvicorn[standard]
-#   的 sys_platform != 'win32' marker 在 Windows 解析时天然排除)。
-#
-# 更新方法: 改 requirements.txt / pyproject 依赖后重跑 -GenerateLock 并 review diff 提交。
-#   🔴 只改声明源不重新生成本文件 = 改动不进 Windows 包 (provision 只认本文件,
-#   镜像 mac 侧 requirements.lock.txt 纪律)。
+# generated_at: 2026-08-14T07:52:04Z (win-x64, CPython 3.11.15, PBS 20260510)
+
+aiofiles==25.1.0
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.3
+aiosignal==1.4.0
+annotated-types==0.8.0
+anthropic==0.122.0
+anyio==4.14.2
+attrs==26.1.0
+backoff==2.2.1
+beautifulsoup4==4.15.0
+caldav==3.2.1
+certifi==2026.7.22
+cffi==2.1.1
+charset-normalizer==3.5.0
+click==8.1.8
+colorama==0.4.6
+croniter==6.2.4
+cryptography==50.0.0
+distro==1.9.0
+dnspython==2.8.0
+docstring_parser==0.18.0
+et_xmlfile==2.0.0
+faiss-cpu==1.14.3
+fastapi==0.115.14
+fastembed==0.8.0
+filelock==3.32.3
+firecrawl-anydoc==0.1.9
+flatbuffers==25.12.19
+frozenlist==1.8.0
+fsspec==2026.7.0
+greenlet==3.5.5
+grpcio==1.83.0
+h11==0.16.0
+h2==4.4.1
+hf-xet==1.6.0
+hpack==4.2.0
+html2text==2025.4.15
+httpcore==1.0.9
+httpcore2==2.10.0
+httptools==0.8.0
+httpx==0.28.1
+httpx2==2.10.0
+huggingface_hub==1.13.0
+hyperframe==6.1.0
+icalendar==7.2.2
+icalendar-searcher==1.0.6
+idna==3.18
+jh2==5.0.13
+jiter==0.16.0
+jsonschema==4.26.0
+jsonschema-specifications==2025.9.1
+lark-oapi==1.7.2
+loguru==0.7.3
+lxml==6.1.1
+markdown-it-py==4.2.0
+markdownify==1.2.3
+mcp==2.0.0
+mcp-types==2.0.0
+mdurl==0.1.2
+mem0ai==2.0.10
+mmh3==5.2.1
+multidict==6.7.1
+niquests==3.21.0
+notion-client==3.1.0
+numpy==2.4.6
+onnxruntime==1.27.0
+openai==3.0.0
+openpyxl==3.1.5
+opentelemetry-api==1.44.0
+packaging==26.3
+pandas==3.0.5
+pillow==12.3.0
+portalocker==3.2.0
+posthog==7.39.0
+propcache==0.5.2
+protobuf==6.33.6
+py_rust_stemmers==0.1.8
+pycparser==3.0
+pycryptodome==3.23.0
+pydantic==2.13.4
+pydantic-settings==2.15.0
+pydantic_core==2.46.4
+Pygments==2.20.0
+PyJWT==2.13.0
+pypdf==6.16.0
+python-calamine==0.8.2
+python-dateutil==2.9.0.post0
+python-docx==1.2.0
+python-dotenv==1.2.2
+python-multipart==0.0.32
+python-pptx==1.0.2
+pytz==2026.3.post1
+pywin32==312
+PyYAML==6.0.3
+qdrant-client==1.19.0
+qh3==1.9.4
+recurring-ical-events==3.8.2
+redis==8.1.0
+referencing==0.37.0
+requests==2.34.2
+requests-toolbelt==1.0.0
+rich==14.3.4
+rpds-py==2026.6.3
+shellingham==1.5.4
+six==1.17.0
+sniffio==1.3.1
+soupsieve==2.9.2
+SQLAlchemy==2.0.52
+sse-starlette==3.0.3
+starlette==0.46.2
+tokenizers==0.23.1
+tqdm==4.70.0
+truststore==0.10.4
+typer==0.13.1
+typing-inspection==0.4.4
+typing_extensions==4.16.0
+tzdata==2026.3
+urllib3==2.7.0
+urllib3-future==2.24.900
+uvicorn==0.34.3
+vobject==0.9.9
+wassima==2.1.3
+watchfiles==1.2.0
+websockets==15.0.1
+win32_setctime==1.2.0
+x-wr-timezone==2.0.1
+xlsxwriter==3.2.9
+yarl==1.24.5
