@@ -108,9 +108,7 @@ function RelChip({
           <span className="block truncate text-body font-medium text-ink-fg">
             {person.display_name ?? person.primary_email?.split('@')[0] ?? '—'}
           </span>
-          {sub ? (
-            <span className="mt-px block truncate text-meta text-ink-fg-2">{sub}</span>
-          ) : null}
+          {sub ? <span className="mt-px block truncate text-meta text-ink-fg-2">{sub}</span> : null}
         </span>
       </button>
       <button
@@ -186,8 +184,11 @@ function PersonPickDialog({
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
         </DialogHeader>
-        {/* 滚动形态照 MergeContactsDialog：外层整体滚，min-h 兜住空列表时的塌缩。 */}
-        <div className="min-h-[280px] overflow-y-auto pr-1 scrollbar-thin">
+        {/* 滚动形态照 MergeContactsDialog：外层整体滚，min-h 兜住空列表时的塌缩。
+            🔴 四边都要 padding（不能只 `pr-1`）—— PersonPicker 的搜索框焦点态是
+            `ring-2`，而 ring 是 box-shadow：净空 < 2px 的那几边会被 overflow 裁掉，
+            视觉上变成「只有右下两边的不规则阴影」。三个消费者同一几何，同一处置。 */}
+        <div className="min-h-[280px] overflow-y-auto p-1 scrollbar-thin">
           <PersonPicker
             items={items}
             loading={listQuery.isPending}
@@ -369,7 +370,11 @@ export function ContactOrgSection({ detail }: { detail: ContactDetailDto }): Rea
             setManager.mutate({ contactId: detail.id, managerContactId: pickedId, other: pickedId })
           } else if (pickFor === 'report') {
             // 「添加下级」= 写对方的 manager 字段（无双写）。
-            setManager.mutate({ contactId: pickedId, managerContactId: detail.id, other: detail.id })
+            setManager.mutate({
+              contactId: pickedId,
+              managerContactId: detail.id,
+              other: detail.id
+            })
           }
           setPickFor(null)
         }}
