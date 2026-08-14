@@ -4761,6 +4761,18 @@
       "closed": "Done / canceled"
     },
     "group": { "status": "Semantic status", "due": "Due date", "priority": "Priority", "tag": "Tag", "none": "No grouping" },
+    "groupHead": {
+      "due": {
+        "overdue": "Overdue",
+        "soon": "Today / tomorrow",
+        "week": "This week",
+        "later": "Later",
+        "none": "No due date"
+      },
+      "untagged": "Untagged",
+      "collapsed": "Collapsed",
+      "toggle": "Collapse or expand this group"
+    },
     "sort": { "rank": "Attention rank", "updated": "Last updated", "due": "Due date", "priority": "Priority" },
     "dir": { "default": "Most urgent first", "reverse": "Reversed" },
     "filter": {

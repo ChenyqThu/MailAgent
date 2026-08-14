@@ -1,12 +1,17 @@
 import {
   Archive,
+  Ban,
   BarChart3,
   Briefcase,
+  Calendar,
   CheckCircle2,
   CircleHelp,
   Clock3,
+  Eye,
   Flag,
   Hourglass,
+  Minus,
+  Play,
   Sparkles,
   Trash2,
   TriangleAlert,
@@ -80,6 +85,16 @@ export const MATTER_STATUS_GROUP_MEMBERS: Record<MatterStatusGroup, readonly Mat
 export const MATTER_GROUP_MODES = ['status', 'due', 'priority', 'tag', 'none'] as const
 export type MatterGroupMode = (typeof MATTER_GROUP_MODES)[number]
 
+/** 设计 `list.jsx::groupsFor` 的到期档（over / now / week / later / none 的等价物，
+ *  `now` 改叫 `soon` —— 这里的语义是「今天 / 明天」，`now` 会和「此刻」混淆）。 */
+export const MATTER_DUE_BUCKETS = ['overdue', 'soon', 'week', 'later', 'none'] as const
+export type MatterDueBucket = (typeof MATTER_DUE_BUCKETS)[number]
+
+/** 优先级全档（设计 `groupsFor('priority')` 的 `['p0','p1','p2','p3']`）。设计还给了「未设
+ *  优先级」一档，本仓 `Matter.priority` 是**非空**的 `MatterPriority` —— 那一档在类型层就
+ *  取不到值，故不造一个恒空的组。 */
+export const MATTER_PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const
+
 export const MATTER_SORTS = ['rank', 'updated', 'due', 'priority'] as const
 export type MatterSortKey = (typeof MATTER_SORTS)[number]
 export type MatterSortDir = 'default' | 'reverse'
@@ -142,6 +157,48 @@ export const MATTER_QUICK_FILTER_TONES: Record<MatterQuickFilter, MatterTone> = 
   p01: 'critical',
   proposal: 'info',
   nonext: 'warn'
+}
+
+/** 设计 `list.jsx::STATUS_GROUPS[*].icon`（组头图标，与 8 档原始状态的 `MATTER_STATUS_ICONS`
+ *  是两张表：这里是六个**语义组**）。 */
+export const MATTER_STATUS_GROUP_ICONS: Record<MatterStatusGroup, LucideIcon> = {
+  needyou: Play, // play
+  waiting: Hourglass, // hourglass
+  blocked: Ban, // ban
+  monitoring: Eye, // eye
+  planned: Calendar, // calendar
+  closed: CheckCircle2 // checkcircle
+}
+
+/** 组头的语气色。`accent` 是 `MatterTone` 之外的第六档（设计 H3§2 表里「需要你推进」那一行
+ *  写的就是 accent），只在组头用得到，故不去污染共用的 `MatterTone` 值域。 */
+export type MatterGroupTone = MatterTone | 'accent'
+
+/** 设计 `list.jsx::STATUS_GROUPS[*].tone` / H3§2 的「语气色」列。 */
+export const MATTER_STATUS_GROUP_TONES: Record<MatterStatusGroup, MatterGroupTone> = {
+  needyou: 'accent',
+  waiting: 'warn',
+  blocked: 'critical',
+  monitoring: 'info',
+  planned: 'info',
+  closed: 'neutral'
+}
+
+/** 设计 `list.jsx::groupsFor` 到期档的 icon（alert / clock / calendar / calendar / minus）。 */
+export const MATTER_DUE_BUCKET_ICONS: Record<MatterDueBucket, LucideIcon> = {
+  overdue: TriangleAlert, // alert
+  soon: Clock3, // clock
+  week: Calendar, // calendar
+  later: Calendar, // calendar
+  none: Minus // minus
+}
+
+export const MATTER_DUE_BUCKET_TONES: Record<MatterDueBucket, MatterGroupTone> = {
+  overdue: 'critical',
+  soon: 'warn',
+  week: 'info',
+  later: 'neutral',
+  none: 'neutral'
 }
 
 // ── scope：服务端参数映射 + 客户端谓词 ──────────────────────────────────────
@@ -316,4 +373,121 @@ export function applyMatterListQuery(
   const normalized = search.trim().toLocaleLowerCase()
   if (normalized) rows = rows.filter((matter) => matchesSearch(matter, normalized))
   return [...rows].sort(sortComparator(query, context))
+}
+
+// ── 行内分组（设计 `list.jsx::groupsFor`，规格 H3§2）──────────────────────────
+
+/** 「本周内」的上界（设计 `groupsFor('due')` 的 `d <= 7`）。与快捷条件的
+ *  `QUICK_DUE_WINDOW_DAYS` 数值相同但语义不同（那个是**含逾期**的筛选窗口，这个是分档上界），
+ *  故不共用一个常量：改其中一个不该悄悄改另一个。 */
+const GROUP_DUE_WEEK_DAYS = 7
+
+/** 设计 `groupsFor('due')::bucket`：无 dueAt → none；<0 逾期；≤1 今天/明天；≤7 本周内；其余更晚。 */
+export function matterDueBucket(matter: Matter, now: number): MatterDueBucket {
+  if (matter.due_at == null) return 'none'
+  const days = matterDueDayDiff(matter.due_at, now)
+  if (days < 0) return 'overdue'
+  if (days <= 1) return 'soon'
+  if (days <= GROUP_DUE_WEEK_DAYS) return 'week'
+  return 'later'
+}
+
+/**
+ * 一个分组。`key` 同时是 React key 与折叠态的键，各维度带前缀命名空间 —— 标签名可以叫
+ * 「waiting」，不带前缀就会和语义状态组的 key 撞。
+ */
+export type MatterGroup =
+  | { key: 'all'; kind: 'all'; matters: readonly Matter[] }
+  | { key: string; kind: 'status'; statusGroup: MatterStatusGroup; matters: readonly Matter[] }
+  | { key: string; kind: 'due'; bucket: MatterDueBucket; matters: readonly Matter[] }
+  | { key: string; kind: 'priority'; priority: MatterPriority; matters: readonly Matter[] }
+  | { key: string; kind: 'tag'; tagName: string; matters: readonly Matter[] }
+  | { key: 'untagged'; kind: 'untagged'; matters: readonly Matter[] }
+
+/**
+ * 行内分组（设计 `list.jsx::groupsFor`）—— 输入必须是 `applyMatterListQuery` 的产物：
+ * 组内顺序原样沿用传入的序，分组只重排「哪些行挨在一起」。**空组不产出**（H3§2）。
+ *
+ * 🔴 标签维度下同一事项会出现在**多个组**里（H3§2 明写「一个事项可出现在多组」），
+ * 于是「组数之和 ≠ 命中数」、且 `public_id` 在整个视觉序里会重复 —— 渲染侧的 React key
+ * 必须带组前缀，导航序必须去重（`orderedMatterIds`）。
+ *
+ * 不吃 `MatterTagDefinition`：分组只需要事项自己带的标签名，定义表（颜色/形状）是渲染侧
+ * 的事。少一个入参 = 清单与详情导航两处调用不可能因为标签定义加载时机不同而算出两种序。
+ */
+export function groupMatters(
+  matters: readonly Matter[],
+  mode: MatterGroupMode,
+  now: number
+): MatterGroup[] {
+  if (mode === 'none') {
+    return matters.length > 0 ? [{ key: 'all', kind: 'all', matters }] : []
+  }
+  if (mode === 'status') {
+    return MATTER_STATUS_GROUPS.map(
+      (statusGroup): MatterGroup => ({
+        key: `status:${statusGroup}`,
+        kind: 'status',
+        statusGroup,
+        matters: matters.filter((matter) =>
+          MATTER_STATUS_GROUP_MEMBERS[statusGroup].includes(matter.status)
+        )
+      })
+    ).filter((group) => group.matters.length > 0)
+  }
+  if (mode === 'due') {
+    return MATTER_DUE_BUCKETS.map(
+      (bucket): MatterGroup => ({
+        key: `due:${bucket}`,
+        kind: 'due',
+        bucket,
+        matters: matters.filter((matter) => matterDueBucket(matter, now) === bucket)
+      })
+    ).filter((group) => group.matters.length > 0)
+  }
+  if (mode === 'priority') {
+    return MATTER_PRIORITIES.map(
+      (priority): MatterGroup => ({
+        key: `priority:${priority}`,
+        kind: 'priority',
+        priority,
+        matters: matters.filter((matter) => matter.priority === priority)
+      })
+    ).filter((group) => group.matters.length > 0)
+  }
+  // tag —— 组的顺序 = 标签名在（已排好序的）列表里首次出现的顺序，「无标签」殿后。
+  const names: string[] = []
+  for (const matter of matters) {
+    for (const name of matter.tags) if (!names.includes(name)) names.push(name)
+  }
+  const groups: MatterGroup[] = names.map((tagName) => ({
+    key: `tag:${tagName}`,
+    kind: 'tag',
+    tagName,
+    matters: matters.filter((matter) => matter.tags.includes(tagName))
+  }))
+  const untagged = matters.filter((matter) => matter.tags.length === 0)
+  if (untagged.length > 0) groups.push({ key: 'untagged', kind: 'untagged', matters: untagged })
+  return groups
+}
+
+/**
+ * 分组后的视觉顺序（详情页上/下条导航吃这一份 —— 分组会重排视觉序，导航还按扁平序走的话
+ * 「下一条」会跳到屏幕上别处）。
+ *
+ * 🔴 按首次出现**去重**：标签维度下同一事项在多个组里各出现一次，而 `MatterDetail` 用
+ * `navigationMatterIds.indexOf(matterId)` 定位当前条 —— 重复 id 会让 indexOf 恒返回第一份，
+ * 「第 n / N 条」计数虚高、从第二份往下翻会原地跳回第一份的下一条。
+ */
+export function orderedMatterIds(groups: readonly MatterGroup[]): string[] {
+  const seen = new Set<string>()
+  const ids: string[] = []
+  for (const group of groups) {
+    for (const matter of group.matters) {
+      if (seen.has(matter.public_id)) continue
+      seen.add(matter.public_id)
+      ids.push(matter.public_id)
+    }
+  }
+  return ids
 }

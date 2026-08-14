@@ -1,15 +1,18 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import {
   Archive,
   Ban,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
   CircleHelp,
   Eye,
   Flag,
   Hourglass,
   Layers,
   ListChecks,
+  Minus,
   Search,
   SlidersHorizontal,
   Sparkles,
@@ -19,6 +22,9 @@ import {
   type LucideIcon
 } from 'lucide-react'
 
+import type { TFunction } from 'i18next'
+
+import { MATTER_TAG_DEFAULT_COLOR, MATTER_TAG_DEFAULT_SHAPE } from '@shared/api/types/matter'
 import type { Matter, MatterTagDefinition } from '@shared/api/types/matter'
 import type { MatterStakeholderSummary } from '@shared/api/types/matter'
 import { RecipientAvatar } from '@shared/components/email/compose/recipient-avatar'
@@ -43,6 +49,9 @@ import { ATTENTION_META, attentionTone } from './attentionMeta'
 import { MatterPip } from './MatterPip'
 import {
   activeMatterFilterCount,
+  groupMatters,
+  MATTER_DUE_BUCKET_ICONS,
+  MATTER_DUE_BUCKET_TONES,
   MATTER_GROUP_MODES,
   MATTER_QUICK_FILTER_ICONS,
   MATTER_QUICK_FILTER_TONES,
@@ -50,10 +59,14 @@ import {
   MATTER_SCOPE_ICONS,
   MATTER_SCOPES,
   MATTER_SORTS,
+  MATTER_STATUS_GROUP_ICONS,
+  MATTER_STATUS_GROUP_TONES,
   MATTER_STATUS_GROUPS
 } from './matterListQuery'
 import type {
+  MatterGroup,
   MatterGroupMode,
+  MatterGroupTone,
   MatterListQuery,
   MatterQuickFilter,
   MatterSortDir,
@@ -87,6 +100,13 @@ const AVATAR_STACK_MAX = 3
  *  二次夹取，窗口矮时退化成面板内滚动（EmailListHeader 的先例注释同款理由）。 */
 const FILTER_MENU_MAX_HEIGHT = 640
 
+/** V3-05 组头的语气色 —— `MatterTone` 五档 + 组头专属的第六档 accent（设计 H3§2 里
+ *  「需要你推进」那一行）。neutral 走 `--ink-fg-2`，与设计 `GroupHead` 的 `c` 同口径。 */
+const MATTER_GROUP_TONE_TEXT_CLASS: Record<MatterGroupTone, string> = {
+  ...MATTER_TONE_TEXT_CLASS,
+  accent: 'text-coral'
+}
+
 /** 设计 `list.jsx::nextAction` 每档配的 icon（listcheck / hourglass / ban / eye /
  *  checkcircle / helpcircle）。文案与 tone 由 `matterDerive.nextAction` 给。 */
 const NEXT_ACTION_ICONS: Record<MatterNextActionKind, LucideIcon> = {
@@ -109,6 +129,12 @@ interface MatterListProps {
   scopeTotal: number | null
   /** 标签定义（筛选菜单「标签」二级面板的数据源）。 */
   tags: readonly MatterTagDefinition[]
+  /**
+   * 「此刻」的基准（到期分档 / 到期色 / 更新时间）。工作台传的是它**自己**那份冻结值 ——
+   * 筛选、排序、上下条导航序都用同一份，分组才不会与它们错档。不传则退回本组件挂载时冻结的
+   * 值（测试与独立渲染用；MatterList 会随 tab 切换卸载重挂，自持的话跨零点会与工作台劈叉）。
+   */
+  now?: number
   selectedId: string | null
   attention?: MatterAttentionIndex
   /** 待审阅徽标的口径 —— 复用工作台既有的 pendingUpdates 查询，清单不自己发请求。 */
@@ -126,6 +152,7 @@ export function MatterList({
   onQueryChange,
   scopeTotal,
   tags,
+  now: nowProp,
   selectedId,
   attention,
   updates,
@@ -143,8 +170,11 @@ export function MatterList({
   // E10②：与 `narrow` 同一个 ResizeObserver 出两档（宽 → 隐编号 → 整段折叠），不另起监听。
   const [hideId, setHideId] = useState(false)
   // 到期色 / 更新时间的基准时刻在挂载时冻结（react-hooks/purity：render 期间不许调
-  // Date.now()）。与 MatterDetail / MatterFocus 同一模式。
-  const [now] = useState(() => Date.now())
+  // Date.now()）。与 MatterDetail / MatterFocus 同一模式；工作台传下来时以它为准（见 props）。
+  const [mountedNow] = useState(() => Date.now())
+  const now = nowProp ?? mountedNow
+  // V3-05 —— 折叠态按组 key 存（key 自带维度前缀，见 matterListQuery::MatterGroup）。
+  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
   const locale = i18n.language || 'zh-CN'
   const scopeLabel = t(`matters.scope.${query.scope}`)
   const activeN = activeMatterFilterCount(query)
@@ -161,6 +191,47 @@ export function MatterList({
     observer.observe(pane)
     return () => observer.disconnect()
   }, [])
+
+  // V3-05 —— 分组是 `matterListQuery` 的单源函数算的（工作台的上/下条导航序吃的是同一个
+  // 函数的产物，见 MattersWorkspace::visibleIds），这里不现算第二套。
+  const groups = useMemo(() => groupMatters(matters, query.group, now), [matters, now, query.group])
+  const groupsRef = useRef(groups)
+  useEffect(() => {
+    groupsRef.current = groups
+  }, [groups])
+
+  // 维度切换 = 组的命名空间整个换了，旧折叠态不再有意义（H3§2「组切换时重置」）。
+  useEffect(() => {
+    setCollapsed((previous) => (previous.size === 0 ? previous : new Set<string>()))
+  }, [query.group])
+
+  // 🔴 选中项落进折叠组时自动展开该组（reveal-on-navigate）：详情页的上/下条导航按分组后的
+  // 视觉序走，不展开的话「下一条」会选中一个屏幕上根本看不见的行。只在**选中项变化**时触发
+  // （依赖只有 selectedId，组数据从 ref 取）—— 挂在 groups 上会让任何一次列表刷新都撤销用户
+  // 刚做的手动折叠。折叠本身永远不动选中（本模块「掉出可见集才丢选中」的守卫读的是查询结果，
+  // 与折叠态无关，见 MattersWorkspace 的 effect）。
+  useEffect(() => {
+    if (!selectedId) return
+    setCollapsed((previous) => {
+      if (previous.size === 0) return previous
+      const next = new Set(previous)
+      let changed = false
+      for (const group of groupsRef.current) {
+        if (!next.has(group.key)) continue
+        if (!group.matters.some((matter) => matter.public_id === selectedId)) continue
+        next.delete(group.key)
+        changed = true
+      }
+      return changed ? next : previous
+    })
+  }, [selectedId])
+
+  const toggleGroup = (key: string): void =>
+    setCollapsed((previous) => {
+      const next = new Set(previous)
+      if (!next.delete(key)) next.add(key)
+      return next
+    })
 
   const patch = (partial: Partial<MatterListQuery>): void => onQueryChange({ ...query, ...partial })
   const toggleQuick = (key: MatterQuickFilter): void =>
@@ -483,23 +554,48 @@ export function MatterList({
         />
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        {matters.map((matter) => (
-          <MatterRow
-            key={matter.public_id}
-            matter={matter}
-            selected={selectedId === matter.public_id}
-            signals={openAttentionFor(matter, attention)}
-            pendingCount={
-              updates?.get(matter.public_id)?.filter((update) => update.review_status === 'pending')
-                .length ?? 0
-            }
-            narrow={narrow}
-            hideId={hideId}
-            now={now}
-            locale={locale}
-            onSelect={() => onSelect(matter)}
-          />
-        ))}
+        {/* V3-05 行内分组 —— 空组不渲染（groupMatters 已过滤），`none` 维度只出一个无头的组。 */}
+        {groups.map((group) => {
+          const groupCollapsed = collapsed.has(group.key)
+          return (
+            <div key={group.key}>
+              {group.kind === 'all' ? null : (
+                <MatterGroupHead
+                  group={group}
+                  tag={
+                    group.kind === 'tag'
+                      ? tags.find((definition) => definition.name === group.tagName)
+                      : undefined
+                  }
+                  collapsed={groupCollapsed}
+                  onToggle={() => toggleGroup(group.key)}
+                />
+              )}
+              {groupCollapsed
+                ? null
+                : group.matters.map((matter) => (
+                    // 🔴 key 带组前缀：标签维度下同一事项会出现在多个组里（H3§2），
+                    // 只用 public_id 会撞 React key。
+                    <MatterRow
+                      key={`${group.key}/${matter.public_id}`}
+                      matter={matter}
+                      selected={selectedId === matter.public_id}
+                      signals={openAttentionFor(matter, attention)}
+                      pendingCount={
+                        updates
+                          ?.get(matter.public_id)
+                          ?.filter((update) => update.review_status === 'pending').length ?? 0
+                      }
+                      narrow={narrow}
+                      hideId={hideId}
+                      now={now}
+                      locale={locale}
+                      onSelect={() => onSelect(matter)}
+                    />
+                  ))}
+            </div>
+          )
+        })}
         {matters.length === 0 ? (
           <EmptyState
             icon={<EmptyIcon size={22} />}
@@ -578,6 +674,109 @@ function FilterChip({
       <X size={10} />
     </button>
   )
+}
+
+/**
+ * V3-05 行内分组头（设计 `list.jsx::GroupHead`）：29px 粘性条 —— chevron + 维度符号 +
+ * 组名 + 计数，点击整条折叠。
+ *
+ * 密度：清单默认 336px 宽（已是 `narrow` 变体、行本身就三行），故组头**只有一层**内边距、
+ * 不叠 padding，且不吃行的水平内边距（`px-3` vs 行的 `px-4`，chevron 恰好挂在标题左侧）。
+ *
+ * 遮挡：粘住时要挡住从下面滚过去的行，但**不叠一层不透明底**（清单面本身是 `bg-ink-1/55` 的
+ * 玻璃，压一块实心 ink-1 会变成突兀的色块 —— EmailDetail 的 sticky 标题栏踩过并记了这一条）。
+ * 改成「比面板密一档的同色 + backdrop 磨砂」：设计 `GroupHead` 的 `backdropFilter: saturate`
+ * 同一路子，穿过其下的行被磨成毛玻璃而不是靠不透明度硬盖。
+ */
+function MatterGroupHead({
+  group,
+  tag,
+  collapsed,
+  onToggle
+}: {
+  group: MatterGroup
+  tag?: MatterTagDefinition
+  collapsed: boolean
+  onToggle(): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const Chevron = collapsed ? ChevronRight : ChevronDown
+  return (
+    <button
+      type="button"
+      onClick={onToggle}
+      aria-expanded={!collapsed}
+      title={t('matters.groupHead.toggle')}
+      className="sticky top-0 z-10 flex h-[29px] w-full items-center gap-1.5 border-b border-ink-border bg-ink-1/80 px-3 text-left backdrop-blur-xl backdrop-saturate-150 transition-colors duration-fast hover:bg-ink-3/70"
+    >
+      <Chevron size={11} className="shrink-0 text-ink-fg-3" />
+      {group.kind === 'tag' ? (
+        <MatterTagMarker
+          color={tag?.color ?? MATTER_TAG_DEFAULT_COLOR}
+          shape={tag?.shape ?? MATTER_TAG_DEFAULT_SHAPE}
+          size="sm"
+        />
+      ) : (
+        <MatterGroupIcon group={group} />
+      )}
+      <span className="truncate text-[11.5px] font-semibold tracking-[0.01em] text-ink-fg-1">
+        {matterGroupLabel(group, t)}
+      </span>
+      <span className="shrink-0 font-mono text-micro tabular-nums text-ink-fg-3">
+        {group.matters.length}
+      </span>
+      <span className="flex-1" />
+      {collapsed ? (
+        <span className="shrink-0 text-micro text-ink-fg-3">
+          {t('matters.groupHead.collapsed')}
+        </span>
+      ) : null}
+    </button>
+  )
+}
+
+/** 组头的维度符号（标签维度用 `MatterTagMarker`，不走这里）。 */
+function MatterGroupIcon({ group }: { group: MatterGroup }): React.ReactElement | null {
+  if (group.kind === 'status') {
+    const Icon = MATTER_STATUS_GROUP_ICONS[group.statusGroup]
+    const tone = MATTER_STATUS_GROUP_TONES[group.statusGroup]
+    return <Icon size={11.5} className={cn('shrink-0', MATTER_GROUP_TONE_TEXT_CLASS[tone])} />
+  }
+  if (group.kind === 'due') {
+    const Icon = MATTER_DUE_BUCKET_ICONS[group.bucket]
+    const tone = MATTER_DUE_BUCKET_TONES[group.bucket]
+    return <Icon size={11.5} className={cn('shrink-0', MATTER_GROUP_TONE_TEXT_CLASS[tone])} />
+  }
+  if (group.kind === 'priority') {
+    return (
+      <Flag
+        size={11.5}
+        className={cn('shrink-0', MATTER_TONE_TEXT_CLASS[MATTER_PRIORITY_TONES[group.priority]])}
+      />
+    )
+  }
+  if (group.kind === 'untagged') {
+    return <Minus size={11.5} className="shrink-0 text-ink-fg-3" />
+  }
+  return null
+}
+
+/** 组名（i18n；优先级组直接用 P0–P3 这个既有的短标签，不另起一套文案）。 */
+function matterGroupLabel(group: MatterGroup, t: TFunction): string {
+  switch (group.kind) {
+    case 'status':
+      return t(`matters.statusGroup.${group.statusGroup}`)
+    case 'due':
+      return t(`matters.groupHead.due.${group.bucket}`)
+    case 'priority':
+      return group.priority.toUpperCase()
+    case 'tag':
+      return `#${group.tagName}`
+    case 'untagged':
+      return t('matters.groupHead.untagged')
+    case 'all':
+      return ''
+  }
 }
 
 interface MatterRowProps {

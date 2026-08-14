@@ -20,11 +20,13 @@ import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi }
 import {
   applyMatterListQuery,
   DEFAULT_MATTER_LIST_QUERY,
+  groupMatters,
   MATTER_TAB_ICONS,
   MATTER_TABS,
   matterInScope,
   matterScopeOf,
-  matterScopeParams
+  matterScopeParams,
+  orderedMatterIds
 } from './matterListQuery'
 import type {
   MatterListQuery,
@@ -226,7 +228,14 @@ export function MattersWorkspace(): React.ReactElement | null {
     () => applyMatterListQuery(scopeRows, query, search, queryContext),
     [query, queryContext, scopeRows, search]
   )
-  const visibleIds = useMemo(() => visible.map((matter) => matter.public_id), [visible])
+  // V3-05 —— 详情页上/下条导航按**分组后的视觉顺序**走：分组会重排行的先后（标签维度还会让
+  // 同一行出现在多个组里），仍按扁平序导航的话「下一条」会跳到屏幕上别处。两处都过
+  // `groupMatters` 这一个函数，序不可能劈叉；`orderedMatterIds` 顺带把标签维度的重复 id 去掉
+  // （MatterDetail 用 indexOf 定位当前条，重复 id 会让计数虚高、翻页原地打转）。
+  const visibleIds = useMemo(
+    () => orderedMatterIds(groupMatters(visible, query.group, now)),
+    [now, query.group, visible]
+  )
 
   // V3-07（缩减版，owner 拍板）—— 头部只显示「命中数 / 范围总数」，菜单内不做逐项计数。
   // archived/trash 的范围总数 = 服务端 meta.total（该 scope 请求 where 子句下的总行数，恒准）。
@@ -403,6 +412,9 @@ export function MattersWorkspace(): React.ReactElement | null {
                 onQueryChange={setQuery}
                 scopeTotal={scopeTotal}
                 tags={tagDefinitions}
+                // V3-05 —— 清单的分组与工作台的筛选/排序/导航序必须同一个「此刻」：
+                // MatterList 随 tab 切换卸载重挂，自持一份的话跨零点会与 visibleIds 劈叉。
+                now={now}
                 selectedId={selectedId}
                 attention={attentionIndex}
                 updates={updateIndex}

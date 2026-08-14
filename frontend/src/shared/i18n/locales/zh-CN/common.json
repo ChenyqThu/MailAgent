@@ -4775,6 +4775,18 @@
       "tag": "标签",
       "none": "不分组"
     },
+    "groupHead": {
+      "due": {
+        "overdue": "已逾期",
+        "soon": "今天 / 明天",
+        "week": "本周内",
+        "later": "更晚",
+        "none": "无期限"
+      },
+      "untagged": "无标签",
+      "collapsed": "已折叠",
+      "toggle": "折叠或展开该分组"
+    },
     "sort": {
       "rank": "关注度",
       "updated": "最近更新",
