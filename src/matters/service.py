@@ -1512,6 +1512,29 @@ class MatterService:
                 for item in self.repository.list_resources(conn, matter["id"], filters)
             ]
 
+    def list_resource_versions(
+        self, public_id: str, resource_id: int, *, limit: int = 50
+    ) -> dict[str, Any]:
+        """资料的版本轨迹（v57，H3§5.4）：**只有历史**，当前版本是 resource 行自己。
+
+        `tracks_versions` 由服务端给而不是让前端按 kind 自己推 —— 判据单源在
+        `_resource_tracks_versions`，前端手抄一份 `kind === 'url'` 就是第二处真源。
+        """
+        with self.repository.connect() as conn:
+            matter = self._require_matter(conn, public_id)
+            resource = self.repository.get_resource(conn, resource_id)
+            link = self.repository.get_resource_link(
+                conn, matter["id"], resource_id, live_only=True
+            )
+            if resource is None or link is None:
+                raise MatterError("E_CHILD_NOT_FOUND", "linked resource not found")
+            return {
+                "tracks_versions": self._resource_tracks_versions(resource),
+                "items": self.repository.list_resource_versions(
+                    conn, resource_id, limit=limit
+                ),
+            }
+
     def fetch_url_resource(
         self, public_id: str, resource_id: int, *, force: bool = False
     ) -> dict[str, Any]:
@@ -1554,6 +1577,18 @@ class MatterService:
                 "truncated": bool(fetched.get("truncated")),
             }
             title = current.get("title") or self._optional_text(fetched.get("title"))
+            # 版本轨迹留档（v57，H3§5.4）。🔴 必须在下面那条 UPDATE **之前**，收的是
+            # 被覆盖前的那份 revision/content_hash 与摘要 —— 摘要是可覆盖的单值，
+            # 覆盖即永久丢失，这正是轨迹存在的理由。
+            #
+            # 两个不留档的情形都是「没有上一版可存」而不是「懒得存」：
+            #   · content_hash 为 None —— 这份资料从没检出过，本次是**首次**，首次不是
+            #     变化（留一条空壳会把"只检出过一次"谎报成"有过一版"）；
+            #   · hash 未变 —— 同一份内容重抓（force / 缓存过期复验），版本没动。
+            # last_checked_at 照旧无条件刷新：它是「最后确认于」，不是版本变化。
+            previous_hash = current.get("content_hash")
+            if previous_hash is not None and previous_hash != fetched_hash:
+                self.repository.archive_resource_version(conn, current, fetched_at)
             conn.execute(
                 "UPDATE resource SET title=?, metadata_json=?, revision=?, content_hash=?, "
                 "last_checked_at=?, updated_at=? WHERE id=?",
@@ -3421,11 +3456,21 @@ class MatterService:
         # summary 丢成 None）。
         spec_values = dict(normalized)
         summary = spec_values.pop("summary", None)
+        # `diff`（批 M7，H3§5.4）与 `summary` 一样是提案 wire 契约上的键、不是 resource
+        # 的列 —— 它落的是**版本轨迹**，不是资料行，所以在进 `_upsert_resource` 之前摘掉。
+        diff = spec_values.pop("diff", None)
         if summary:
             spec_values["sum"] = summary
             spec_values["sum_src"] = MatterResourceSummarySource.AGENT.value
         resource, _ = self._upsert_resource(conn, spec_values, now)
         resource_id = int(resource["id"])
+        # 🔴 顺序：必须在 `_upsert_resource` **之后**（要 resource_id），而 upsert 可能刚把
+        # `sum` 覆盖成新版本的摘要 —— 上一版的那份早在 `fetch_url_resource` 检出新 hash
+        # 时就已留档，所以这里只补那一行缺的「变了什么」，不再动摘要。
+        # 写不进去（这份资料还没有过版本变化 ⇒ 轨迹为空）就静默丢弃：没有"上一版"就没有
+        # 差异可言，凭空造一行会把首次关联谎报成一次版本变更。
+        if diff:
+            self.repository.fill_latest_version_diff(conn, resource_id, diff)
         live = self.repository.get_resource_link(
             conn, matter["id"], resource_id, live_only=True
         )
@@ -4556,12 +4601,25 @@ class MatterService:
         return result
 
     @staticmethod
+    def _resource_tracks_versions(resource: Mapping[str, Any]) -> bool:
+        """这份资料**会不会**有版本轨迹（v57，H3§5.4）。
+
+        判据 = 它是不是 URL 抓取路径够得着的那一类 —— `resource.revision` /
+        `content_hash` / `last_checked_at` 全仓唯一写者就是 `fetch_url_resource`，而它
+        只服务 `kind='url'`。email / thread / doc / file 那三列结构上恒 NULL。
+
+        🔴 这是「还没有版本记录」与「这类资料压根不跟踪版本」的分界，前端据此选空态
+        文案 —— 两种空态用同一句含糊的「暂无记录」，会让人以为文档类资料只是还没检出过。
+        """
+        return resource.get("kind") == "url"
+
+    @staticmethod
     def _validate_url_fetch_resource(
         resource: Mapping[str, Any] | None, link: Mapping[str, Any] | None
     ) -> None:
         if resource is None or link is None:
             raise MatterError("E_CHILD_NOT_FOUND", "linked resource not found")
-        if resource.get("kind") != "url":
+        if not MatterService._resource_tracks_versions(resource):
             raise MatterError("E_INVALID_STATE", "readable fetch is only supported for URL resources")
         if resource.get("access_policy") != "allowed":
             raise MatterError("E_INVALID_STATE", "URL resource content access is not allowed")

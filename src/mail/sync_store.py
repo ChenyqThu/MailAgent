@@ -132,6 +132,34 @@ LLM_PROCESSING_INDEX_DDLS = (
 
 
 # ==================== Matters DDL single source (v45) ====================
+# v57 (设计稿 H3§5.4 资料版本轨迹): 一行 = 一份**已被取代的**资料版本快照。
+#
+# 🔴 为什么只存历史、不存当前版本: 当前版本就是 `resource` 行自己 (revision /
+# content_hash / sum 三组列)。把它也写进本表 = 同一事实两处存, 必然漂移; 读侧把
+# 「resource 行 + 本表」拼成完整轨迹, 当前行由 UI 标「当前」。
+#
+# 🔴 为什么存不了历史正文: 原文在外部系统, 本地只有有限缓存。能留档的就是这几样 ——
+# 当时读到的是哪一版 (revision/content_hash)、什么时候被取代 (superseded_at)、
+# 以及**当时我们自己写的那份摘要** (sum/sum_src/sum_at 三件套照 v56 原样搬)。摘要是
+# 可被覆盖的单值, 覆盖即永久丢失, 留档它正是本表存在的理由。
+#
+# 唯一写者 = `MatterService.fetch_url_resource` 检出到新 content_hash 的那一刻
+# (resource 的 revision/content_hash/last_checked_at 全仓也只有它写)。
+# `diff_text` = 这一版**被取代时**变了什么的一句话, 由跟进 Agent 写在提案的
+# `resource.diff` 里、接受时回填 (service `_apply_new_resource_link`); 没人给就留
+# NULL —— 服务端不按字数差之类的机械指标编一句出来充数。
+RESOURCE_VERSION_TABLE_DDL = f"""CREATE TABLE IF NOT EXISTS resource_version (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        resource_id INTEGER NOT NULL REFERENCES resource(id) ON DELETE CASCADE,
+        revision TEXT NULL,
+        content_hash TEXT NULL,
+        superseded_at INTEGER NOT NULL,
+        diff_text TEXT NULL,
+        sum TEXT NULL,
+        sum_src TEXT NULL CHECK (sum_src IS NULL OR sum_src {sql_check_clause(MatterResourceSummarySource)}),
+        sum_at INTEGER NULL
+    )"""
+
 MATTER_TABLE_DDLS = (
     """CREATE TABLE IF NOT EXISTS matter_seq (
         seq INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -407,6 +435,9 @@ MATTER_TABLE_DDLS = (
         last_notified_at INTEGER NULL,
         payload_json TEXT NULL CHECK (payload_json IS NULL OR json_valid(payload_json))
     )""",
+    # 🔴 追加在**末尾**: v45 迁移块按下标取用本元组 (`MATTER_TABLE_DDLS[2]` / `[3]`),
+    # 往中间插一条会把那两处静默指到别的表上。
+    RESOURCE_VERSION_TABLE_DDL,
 )
 
 MATTER_INDEX_DDLS = (
@@ -459,6 +490,15 @@ MATTER_INDEX_DDLS = (
 MATTER_STAKEHOLDER_CONTACT_INDEX_DDL = (
     "CREATE INDEX IF NOT EXISTS idx_matter_stakeholder_contact "
     "ON matter_stakeholder(contact_id) WHERE contact_id IS NOT NULL"
+)
+
+# v57 (资料版本轨迹): 轨迹表的读面只有一种 —— 「某份资料的历史版本, 新的在前」。
+# 🔴 同 v52 的理由**不进** MATTER_INDEX_DDLS: v44/v45/v46/v49/v50 各块会对老库整组
+# 重放 MATTER_INDEX_DDLS, 而 resource_version 表要到那些块里的 MATTER_TABLE_DDLS 才
+# 建 —— 组内顺序碰巧成立不等于安全 (v52 就是这样炸的), 只在 v57 块 (建表之后) 建。
+RESOURCE_VERSION_INDEX_DDL = (
+    "CREATE INDEX IF NOT EXISTS idx_resource_version_trail "
+    "ON resource_version(resource_id, superseded_at DESC, id DESC)"
 )
 
 
@@ -1123,7 +1163,20 @@ class SyncStore:
     #                v52 教训)。设计稿的 link{app,url} 两半 = 既有列 provider /
     #                canonical_url, 零新增。
     #                回滚 (回退 v56): 列留着无害 (旧代码零消费点)。
-    DB_VERSION = 56
+    # v57 (Matters 资料版本轨迹, task 08-12 design-alignment 批 M7, 2026-08): 新表
+    #                resource_version (DDL 单源 RESOURCE_VERSION_TABLE_DDL, 已并进
+    #                MATTER_TABLE_DDLS **末尾**) + 1 索引 RESOURCE_VERSION_INDEX_DDL
+    #                (🔴 不进 MATTER_INDEX_DDLS, 理由见该常量注释 —— v52 教训)。
+    #                一行 = 一份被取代的资料版本快照 (revision/content_hash +
+    #                superseded_at + 当时的 sum/sum_src/sum_at + Agent 写的 diff_text)。
+    #                当前版本**有意不入表** (就是 resource 行自己)。
+    #                🔴 存量数据零回填、零 DML: 老库升上来时轨迹是空的, 因为历史版本
+    #                **从来没被记录过** —— 不能靠 resource 现值伪造一条"历史"出来
+    #                (那会把「唯一一次检出」谎报成「有过一版」)。第一条轨迹行由下一次
+    #                真的检出到新版本时产生。
+    #                回滚 (回退 v57): 表/索引留着无害 (旧代码零消费点); 真要清
+    #                DROP TABLE resource_version 即可, 不牵动 resource 行。
+    DB_VERSION = 57
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -3597,6 +3650,20 @@ class SyncStore:
                 _migration_guard_columns(
                     cursor, "resource", set(_resource_sum_cols), "v56 migration", e,
                 )
+
+        # === v57: 资料版本轨迹表 (task 08-12 design-alignment 批 M7) ===
+        # 纯 DDL, 无 DML —— 存量库升上来轨迹为空是**正确**的 (历史版本从来没记过, 见
+        # DB_VERSION 注记)。表 DDL 与索引都必须在本块显式执行: v56 老库不会经过
+        # v44/v45/v49/v50 那几个重放 MATTER_TABLE_DDLS 的块。
+        # 两条 IF NOT EXISTS 幂等; 真失败无条件 raise (半程重入下轮重试)。
+        if current_version < 57:
+            try:
+                cursor.execute(RESOURCE_VERSION_TABLE_DDL)
+                cursor.execute(RESOURCE_VERSION_INDEX_DDL)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(
+                    f"v57 migration (resource_version): {e}"
+                ) from e
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

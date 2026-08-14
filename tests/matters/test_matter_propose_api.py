@@ -248,6 +248,7 @@ def test_propose_carries_a_new_resource_link_over_the_wire(env):
                         "external_key": "https://status.example.test/incident/42",
                         "title": "故障通告",
                         "summary": "状态页登记了一次 API 网关故障，14:20 已恢复。",
+                        "diff": "影响面从 3 个区域改成 5 个，恢复时间由 14:05 更正为 14:20。",
                     },
                     "text": "供应商状态页登记了本次故障",
                     "sources": [],
@@ -267,8 +268,9 @@ def test_propose_carries_a_new_resource_link_over_the_wire(env):
     detail = service.get_update_detail(pid, data["update_id"])["update"]
     kept = {c["id"]: c for c in detail["changes"]}
     # 服务端归一后的身份（canonical_url 由 external_key 兜底），不是模型原话。
-    # 🔴 逐字相等而不是子集：`summary`（批 M6）就是靠这条断言证明它**穿过了 pydantic**——
-    # DTO 是 extra=forbid，漏加字段时上面的 200 会先变 422，而这里锁住它没有被静默丢掉。
+    # 🔴 逐字相等而不是子集：`summary`（批 M6）/ `diff`（批 M7）就是靠这条断言证明它们
+    # **穿过了 pydantic**—— DTO 是 extra=forbid，漏加字段时上面的 200 会先变 422，而这里
+    # 锁住它没有被归一层静默丢掉。
     assert kept["chg_res"]["resource"] == {
         "provider": "web",
         "kind": "url",
@@ -276,6 +278,7 @@ def test_propose_carries_a_new_resource_link_over_the_wire(env):
         "title": "故障通告",
         "canonical_url": "https://status.example.test/incident/42",
         "summary": "状态页登记了一次 API 网关故障，14:20 已恢复。",
+        "diff": "影响面从 3 个区域改成 5 个，恢复时间由 14:05 更正为 14:20。",
     }
     assert kept["chg_fact"]["sources"] == [
         {"change_id": "chg_res", "evidence": "状态页时间线"}

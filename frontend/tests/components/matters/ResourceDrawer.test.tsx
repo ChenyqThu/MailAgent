@@ -24,20 +24,27 @@ import type {
   MatterResourceSummarySource
 } from '@shared/api/types/matter'
 
-const { navigate, patchResource, unlinkResource, toastSuccess, toastError, writeText } = vi.hoisted(
-  () => ({
-    navigate: vi.fn(),
-    patchResource: vi.fn(),
-    unlinkResource: vi.fn(),
-    toastSuccess: vi.fn(),
-    toastError: vi.fn(),
-    writeText: vi.fn()
-  })
-)
+const {
+  navigate,
+  patchResource,
+  unlinkResource,
+  listResourceVersions,
+  toastSuccess,
+  toastError,
+  writeText
+} = vi.hoisted(() => ({
+  navigate: vi.fn(),
+  patchResource: vi.fn(),
+  unlinkResource: vi.fn(),
+  listResourceVersions: vi.fn(),
+  toastSuccess: vi.fn(),
+  toastError: vi.fn(),
+  writeText: vi.fn()
+}))
 
 vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
 vi.mock('@shared/components/matters/hooks', () => ({
-  useMattersApi: () => ({ patchResource, unlinkResource }),
+  useMattersApi: () => ({ patchResource, unlinkResource, listResourceVersions }),
   useMatterChatApi: () => ({ applyUndo: vi.fn() })
 }))
 vi.mock('@shared/state/toast', async (importOriginal) => {
@@ -58,6 +65,7 @@ interface ResourceOverrides {
   sum?: string | null
   sumSrc?: MatterResourceSummarySource | null
   metadata?: Record<string, unknown>
+  revision?: string | null
 }
 
 function resourceItem(overrides: ResourceOverrides = {}): MatterResourceListItem {
@@ -73,7 +81,7 @@ function resourceItem(overrides: ResourceOverrides = {}): MatterResourceListItem
       sum: overrides.sum ?? null,
       sum_src: overrides.sumSrc ?? null,
       sum_at: overrides.sum ? 1_700_000_000_000 : null,
-      revision: null,
+      revision: overrides.revision === undefined ? null : overrides.revision,
       content_hash: null,
       permission_state: null,
       sync_state: null,
@@ -122,6 +130,8 @@ beforeEach(() => {
   vi.clearAllMocks()
   patchResource.mockResolvedValue({})
   unlinkResource.mockResolvedValue({})
+  // 默认「这类资料不跟踪版本」—— 上面那些用例的 doc / email 资料本来就是这一档。
+  listResourceVersions.mockResolvedValue({ tracks_versions: false, items: [] })
   writeText.mockResolvedValue(undefined)
   Object.defineProperty(navigator, 'clipboard', {
     value: { writeText },
@@ -258,5 +268,99 @@ describe('ResourceDrawer —— V3-18 属性行与边界', () => {
     // 边界 2：底部只有 置顶 / 订阅 / 解除关联，本批不新增也不误删别的按钮。
     expect(screen.getByRole('button', { name: /置顶/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /解除关联/ })).toBeTruthy()
+  })
+})
+
+// ── 批 M7 —— V3-22 版本轨迹 ──────────────────────────────────────────────────
+//
+// 🔴 这里最要紧的是**两种空态不能合成一句**：设计稿假设所有资料都有版本轨迹，而本仓
+// 只有 URL 抓取路径会写 revision/hash（email/thread/doc/file 那三列结构上恒 NULL）。
+// 一句含糊的「暂无记录」会让 owner 以为一份 Notion 文档只是"还没检出过"，等下去也
+// 等不到 —— 判据来自服务端 `tracks_versions`，前端不按 kind 自己推。
+
+const trailUrlItem = (): MatterResourceListItem =>
+  resourceItem({
+    kind: 'url',
+    provider: 'web',
+    externalKey: 'https://example.test/spec',
+    canonicalUrl: 'https://example.test/spec',
+    revision: 'abcdef0123456789'
+  })
+
+describe('ResourceDrawer —— V3-22 版本轨迹', () => {
+  test('这类资料不跟踪版本 → 说清是"这一类没有"，不是"还没检出过"', async () => {
+    renderDrawer(resourceItem())
+    expect(await screen.findByText(/这类资料不跟踪版本/)).toBeTruthy()
+    expect(screen.getByText('版本轨迹')).toBeTruthy()
+    expect(screen.queryByText(/还没有检出过/)).toBeNull()
+    expect(screen.queryByText('当前')).toBeNull()
+  })
+
+  test('会跟踪但一次都没抓过 → 「还没有检出过」，与上一档是两句话', async () => {
+    listResourceVersions.mockResolvedValue({ tracks_versions: true, items: [] })
+    renderDrawer(
+      resourceItem({
+        kind: 'url',
+        provider: 'web',
+        externalKey: 'https://example.test/spec',
+        canonicalUrl: 'https://example.test/spec',
+        revision: null
+      })
+    )
+    expect(await screen.findByText(/还没有检出过/)).toBeTruthy()
+    expect(screen.queryByText(/这类资料不跟踪版本/)).toBeNull()
+  })
+
+  test('只检出过一版 → 渲染「当前」行 + 一句说明，不当空态处理', async () => {
+    listResourceVersions.mockResolvedValue({ tracks_versions: true, items: [] })
+    renderDrawer(trailUrlItem())
+    expect(await screen.findByText('当前')).toBeTruthy()
+    // 版本号是内容 sha256，只显示前 8 位；全量在 title 里，并说明这串是「版本」。
+    const chip = screen.getByTitle('版本: abcdef0123456789')
+    expect(chip.textContent).toBe('abcdef01')
+    expect(screen.getByText(/只检出过这一版/)).toBeTruthy()
+    expect(screen.queryByText(/这类资料不跟踪版本/)).toBeNull()
+  })
+
+  test('有历史版本 → 当前行在最前，历史行带 diff，展开才显示当时的摘要', async () => {
+    listResourceVersions.mockResolvedValue({
+      tracks_versions: true,
+      items: [
+        {
+          id: 31,
+          resource_id: 7,
+          revision: '9999aaaabbbb',
+          content_hash: '9999aaaabbbb',
+          superseded_at: 1_700_000_500_000,
+          diff_text: '回调重试 3 → 5 次，交付窗口 9 月 → 10 月。',
+          sum: '第一版说交付在 9 月第二周。',
+          sum_src: 'agent',
+          sum_at: 1_700_000_000_000
+        }
+      ]
+    })
+    renderDrawer(trailUrlItem())
+
+    expect(await screen.findByText('1 个历史版本')).toBeTruthy()
+    expect(screen.getByText('回调重试 3 → 5 次，交付窗口 9 月 → 10 月。')).toBeTruthy()
+    // 「当时的摘要」默认收起 —— 轨迹是概览，不是把所有历史摘要摊开。
+    expect(screen.queryByText('第一版说交付在 9 月第二周。')).toBeNull()
+
+    const toggle = screen.getByRole('button', { name: /当时的摘要/ })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    fireEvent.click(toggle)
+    await waitFor(() => expect(screen.getByText('第一版说交付在 9 月第二周。')).toBeTruthy())
+    expect(toggle.getAttribute('aria-expanded')).toBe('true')
+
+    // 「当前」只标在 resource 行上；历史行不许也顶着「当前」。
+    expect(screen.getAllByText('当前').length).toBe(1)
+    // 脚注说清能提供什么、不能提供什么（原文历史要回来源系统看）。
+    expect(screen.getByText(/没有原文的历史版本/)).toBeTruthy()
+  })
+
+  test('服务端还没答上来 → 整区不渲染（宁可少说也不猜）', () => {
+    listResourceVersions.mockReturnValue(new Promise(() => {}))
+    renderDrawer(trailUrlItem())
+    expect(screen.queryByText('版本轨迹')).toBeNull()
   })
 })

@@ -561,7 +561,13 @@ const matterProposalNewResourceSchema = z
      *  in the change text/reason), never filler like "this document introduces…". Leave it out
      *  when only metadata is visible: an invented summary is worse than an empty one. Mail and
      *  threads reuse the email's own AI summary server-side, so a model-written one is dropped. */
-    summary: z.string().trim().max(MATTER_RESOURCE_SUMMARY_MAX_CHARS).optional()
+    summary: z.string().trim().max(MATTER_RESOURCE_SUMMARY_MAX_CHARS).optional(),
+    /** Only when this resource was ALREADY attached and you just read a NEWER version: one
+     *  checkable sentence on what changed versus the previous one (fields added/removed,
+     *  numbers, status/date moves). It is filed into the version trail against the version that
+     *  was superseded. Omit it for a first-time link and for mail/threads — neither has a
+     *  previous version, so there is nothing for the sentence to be about. */
+    diff: z.string().trim().max(MATTER_RESOURCE_SUMMARY_MAX_CHARS).optional()
   })
   .strict()
 

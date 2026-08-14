@@ -74,7 +74,8 @@ import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
  *  但漏改不再致命 (admin.py 用 `= _SyncStore.DB_VERSION` 动态引用, 无此问题)。 */
 // v54: Contact Directory 三表 + matter_contact 迁移退役 (task 08-13 WP1).
 // v56: Matters 资料摘要三列 resource.sum/sum_src/sum_at (task 08-12 批 M4).
-export const EXPECTED_DB_VERSION = 56
+// v57: Matters 资料版本轨迹表 resource_version (task 08-12 批 M7).
+export const EXPECTED_DB_VERSION = 57
 
 /** 就绪判据的关键表子集 (02-landing-plan.md P1-6)。admin.py REQUIRED_TABLES 更全,
  *  但开窗门控只需保证「邮件读写主路径」已建: 元数据 / 正文 SSoT / outbox +

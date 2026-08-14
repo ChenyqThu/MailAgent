@@ -743,6 +743,19 @@ async def create_resource(
     return success_envelope(result, request=request, status_code=201)
 
 
+@router.get("/{matter_id}/resources/{resource_id}/versions")
+async def list_resource_versions(
+    matter_id: str, resource_id: int, request: Request,
+    limit: int = Query(default=50, ge=1, le=200),
+    service: MatterService = Depends(get_matter_service),
+):
+    """资料版本轨迹（V3-22）：只读历史版本快照，当前版本在 resource 行上。"""
+    return success_envelope(
+        _call(service.list_resource_versions, matter_id, resource_id, limit=limit),
+        request=request,
+    )
+
+
 @router.post("/{matter_id}/resources/{resource_id}/fetch")
 async def fetch_url_resource(
     matter_id: str,

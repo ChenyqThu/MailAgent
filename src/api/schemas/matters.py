@@ -274,6 +274,10 @@ class MatterProposalNewResource(StrictModel):
     #: 这份资料**在说什么**（1-3 句，H3§6）。落库进 ``resource.sum``；邮件/会话类模型写了
     #: 也不生效（``resource_proposal._optional_summary`` 丢弃 → 邮件侧 ai_summary 权威）。
     summary: str | None = Field(default=None, max_length=MATTER_RESOURCE_SUMMARY_MAX_CHARS)
+    #: 检出到新版本时「这一版相对上一版变了什么」的一句话（H3§5.4）。落进版本轨迹最新
+    #: 一行的 ``diff_text``；这份资料还没有过版本变化时无处可落，静默丢弃（不新建行 ——
+    #: 没有"上一版"就没有差异）。邮件/会话类在归一层就丢（邮件不会有新版本）。
+    diff: str | None = Field(default=None, max_length=MATTER_RESOURCE_SUMMARY_MAX_CHARS)
 
 
 class MatterProposalChange(StrictModel):

@@ -187,6 +187,7 @@ def normalize_new_resource(
         "title": title or None,
         "canonical_url": canonical_url,
         "summary": _optional_summary(spec.get("summary"), provider=provider, kind=kind),
+        "diff": _optional_diff(spec.get("diff"), provider=provider, kind=kind),
     }
 
 
@@ -200,6 +201,24 @@ def _optional_summary(value: Any, *, provider: str, kind: str) -> Optional[str]:
 
     超长截断而不是拒绝：与上面 ``title`` 同一姿态，摘要是增强信息，不该因为多写了几个字
     就把整条 change 剔掉。
+    """
+    if provider == EMAIL_PROVIDER and kind in ("email", "thread"):
+        return None
+    if value is None:
+        return None
+    return str(value).strip()[:MATTER_RESOURCE_SUMMARY_MAX_CHARS] or None
+
+
+def _optional_diff(value: Any, *, provider: str, kind: str) -> Optional[str]:
+    """检出到**新版本**时「这一版相对上一版变了什么」的一句话（H3§5.4 / §6）。
+
+    接受时落进版本轨迹最新一行的 ``diff_text``（``MatterService``
+    ``_apply_new_resource_link`` → ``repository.fill_latest_version_diff``）；那一行留
+    档的正是被当前版本取代的上一版，所以模型描述的差异正好落在它身上。
+
+    🔴 邮件类恒返回 None，理由与 ``_optional_summary`` 同源但更硬：邮件不会有"新版本"
+    （一封邮件的内容是不变的），轨迹表里也永远不会有它的行 —— 收下来只会变成一句
+    没有落点的话。截断而非拒绝，同上。
     """
     if provider == EMAIL_PROVIDER and kind in ("email", "thread"):
         return None

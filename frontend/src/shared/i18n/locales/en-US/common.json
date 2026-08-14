@@ -5235,7 +5235,19 @@
       "unlink": "Unlink",
       "unlinkedNoDelete": "Unlinked · the original resource is not deleted",
       "suggestionConfirmed": "Officially linked · unlinking never deletes the original resource",
-      "noSourceLink": "No source link"
+      "noSourceLink": "No source link",
+      "versionTrail": {
+        "title": "Version trail",
+        "historyCount": "{count, plural, =1 {1 earlier version} other {# earlier versions}}",
+        "current": "Current",
+        "checkedAt": "Last checked",
+        "supersededAt": "Superseded",
+        "archivedSummary": "Summary at the time",
+        "emptyNotTracked": "This kind of resource does not track versions — only web resources record a version and hash, and only when their content is fetched.",
+        "emptyNeverChecked": "Nothing checked out yet — this web resource has never been fetched, so version tracking has not started.",
+        "emptyNoHistory": "Only one version has ever been checked out; there is no history yet.",
+        "footnote": "No historical copies of the original — the body does not live here. We only record the version/hash seen at each check, when it was seen, and the summary and diff we had at the time. For historical content, go to the version history in {name}."
+      }
     },
     "capture": {
       "title": "Matters",

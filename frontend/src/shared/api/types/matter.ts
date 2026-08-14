@@ -414,6 +414,34 @@ export interface MatterResourceListItem {
   available?: boolean
 }
 
+/** 一份**已被取代的**资料版本快照（v57 `resource_version` 行，H3§5.4）。
+ *
+ *  🔴 当前版本不在这个列表里 —— 它就是 `MatterResource` 自己（`revision` /
+ *  `content_hash` / `sum`），面板把两者拼成完整轨迹。`sum` 是这一版当时那份摘要，
+ *  留档的理由就是当前值可被覆盖、覆盖即永久丢失。 */
+export interface MatterResourceVersion {
+  id: number
+  resource_id: number
+  revision: string | null
+  content_hash: string | null
+  /** 这一版停止成为「当前」的时刻（= 检出到下一版那一刻）。epoch ms。 */
+  superseded_at: number
+  /** 被取代时「变了什么」的一句话，由跟进 Agent 在提案里写；没人写过就是 null，
+   *  服务端不编。 */
+  diff_text: string | null
+  sum: string | null
+  sum_src: MatterResourceSummarySource | null
+  sum_at: number | null
+}
+
+export interface MatterResourceVersionTrail {
+  /** 这类资料**会不会**有版本轨迹（服务端判据单源 `_resource_tracks_versions`）。
+   *  false = 结构上不跟踪（邮件 / 会话 / 文档 / 附件），不是「还没检出过」—— 两种空态
+   *  的文案不同，前端不自己按 kind 推。 */
+  tracks_versions: boolean
+  items: MatterResourceVersion[]
+}
+
 export type MatterResourceExpansionReason = 'context_gap' | 'verification' | 'matter_instructions'
 
 export interface MatterCandidateReason {
@@ -744,6 +772,9 @@ export interface MatterProposalNewResource {
   /** 这份资料在说什么（≤3 句，H3§6）。接受时落进 `resource.sum`（`sum_src='agent'`）。
    *  邮件/会话恒为 null —— 那类沿用邮件自带摘要，服务端在归一层就把模型写的丢掉了。 */
   summary?: string | null
+  /** 这一版相对上一版变了什么（一句，H3§5.4）。接受时落进版本轨迹里被取代那一版的
+   *  `diff_text`；首次关联与邮件/会话恒为 null（没有上一版，无处可落）。 */
+  diff?: string | null
 }
 export interface MatterProposalChange {
   id: string
@@ -1026,6 +1057,13 @@ export interface MattersApi {
     matterId: string,
     options?: MatterResourceListOptions
   ): Promise<MatterResourceListItem[]>
+  /** V3-22 资料版本轨迹：**只读历史**（当前版本在 `listResources` 给的 resource 行上）。
+   *  抽屉打开时才拉 —— 列表行不需要它，挂在 listResources 上就是每份资料一次扇出。 */
+  listResourceVersions(
+    matterId: string,
+    resourceId: number,
+    options?: { limit?: number }
+  ): Promise<MatterResourceVersionTrail>
   linkResource(
     matterId: string,
     input: MatterResourceLinkInput,

@@ -24,6 +24,7 @@ import type {
   MatterResourceDiscoveryResult,
   MatterResourceListItem,
   MatterResourceLookupResponse,
+  MatterResourceVersionTrail,
   MatterStakeholder,
   MatterSuggestionBulkResult,
   MatterTimelineResponse,
@@ -285,6 +286,15 @@ export function createMattersApi(baseUrl: string): MattersApi {
         }
       )
       return result.items
+    },
+
+    listResourceVersions(matterId, resourceId, options = {}): Promise<MatterResourceVersionTrail> {
+      return request(
+        baseUrl,
+        'GET',
+        `/matters/${segment(matterId)}/resources/${resourceId}/versions`,
+        { query: { limit: options.limit } }
+      )
     },
 
     linkResource(matterId, input, options): Promise<MatterMutationResult> {

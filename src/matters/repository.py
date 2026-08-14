@@ -654,8 +654,10 @@ class MatterRepository:
             调用方带来的身份元数据（sender/to_addr/cc_addr 等）借此补进老行
             （干系人候选正是从这几个键推的，v56 前对存量行结构性恒缺）；
           - ``sum`` / ``sum_src`` / ``sum_at``：调用方给出**非空 sum** 才三列一起写
-            （新摘要胜出——邮件摘要重跑 / Agent 重新概括都以最新为准，版本轨迹留档是
-            批 7 的事）；没给 = 一列都不碰（re-link 不许把已有摘要冲成 NULL）。
+            （新摘要胜出——邮件摘要重跑 / Agent 重新概括都以最新为准；被冲掉的那份**不**
+            在这里留档 —— v57 版本轨迹只在**版本真的变了**的那一刻归档，落点是
+            ``service.fetch_url_resource``，同一版本内换个说法不是历史）；没给 = 一列
+            都不碰（re-link 不许把已有摘要冲成 NULL）。
             既有行 ``access_policy='metadata_only'`` 时整组跳过 —— 「仅元数据」的资料
             停止更新摘要（H3§5.3），policy 翻回 allowed 后下次触到再恢复。
         """
@@ -694,6 +696,65 @@ class MatterRepository:
         sql += " ORDER BY id DESC LIMIT 1"
         row = conn.execute(sql, (matter_id, resource_id)).fetchone()
         return self._resource_link_row(row) if row else None
+
+    # ── 资料版本轨迹 (v57, 设计稿 H3§5.4) ──────────────────────────────────────
+    # 三个方法就是本表的全部写读面。表里**只有历史**: 当前版本是 `resource` 行自己。
+
+    def archive_resource_version(
+        self, conn: sqlite3.Connection, resource: Mapping[str, Any], superseded_at: int
+    ) -> int:
+        """把 ``resource`` 当前的版本身份 + 当时那份摘要留档成一条轨迹行。
+
+        入参是**被取代前**的资料行快照 —— 调用方必须在 UPDATE 之前把它读出来，
+        否则留下的是新版本的副本（轨迹全变成当前值的复读）。
+        """
+        cursor = conn.execute(
+            "INSERT INTO resource_version "
+            '(resource_id, revision, content_hash, superseded_at, diff_text, '
+            '"sum", sum_src, sum_at) '
+            "VALUES (?, ?, ?, ?, NULL, ?, ?, ?)",
+            (
+                int(resource["id"]),
+                resource.get("revision"),
+                resource.get("content_hash"),
+                superseded_at,
+                resource.get("sum"),
+                resource.get("sum_src"),
+                resource.get("sum_at"),
+            ),
+        )
+        return int(cursor.lastrowid)
+
+    def list_resource_versions(
+        self, conn: sqlite3.Connection, resource_id: int, *, limit: int = 50
+    ) -> list[dict[str, Any]]:
+        """该资料的历史版本，新的在前（索引 idx_resource_version_trail 同序）。"""
+        rows = conn.execute(
+            "SELECT * FROM resource_version WHERE resource_id=? "
+            "ORDER BY superseded_at DESC, id DESC LIMIT ?",
+            (resource_id, limit),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def fill_latest_version_diff(
+        self, conn: sqlite3.Connection, resource_id: int, diff_text: str
+    ) -> bool:
+        """把「变了什么」一句补进**最新**那条轨迹行的空位，返回是否真写了。
+
+        为什么是「最新一条」: 那一行留档的正是被当前版本取代的上一版，而 Agent 手上
+        读到的就是当前版本 —— 它给的差异说明描述的正是这一次取代。
+
+        ``diff_text IS NULL`` 是幂等闸: 已经写过的不覆盖（同一份提案被重放、或后一轮
+        run 又提了一次 diff，都不该改写已经给 owner 看过的那句）。轨迹为空（这份资料
+        还没检出过新版本）时一行都不匹配，返回 False —— 不新建行，因为没有"上一版"。
+        """
+        cursor = conn.execute(
+            "UPDATE resource_version SET diff_text=? WHERE id = ("
+            "SELECT id FROM resource_version WHERE resource_id=? AND diff_text IS NULL "
+            "ORDER BY superseded_at DESC, id DESC LIMIT 1)",
+            (diff_text, resource_id),
+        )
+        return cursor.rowcount > 0
 
     def insert_resource_link(self, conn: sqlite3.Connection, values: Mapping[str, Any]) -> int:
         columns = tuple(values)

@@ -5471,7 +5471,19 @@
       "unlink": "解除关联",
       "unlinkedNoDelete": "已取消关联 · 原始资料未删除",
       "suggestionConfirmed": "已正式关联 · 解除关联不会删除原始资料",
-      "noSourceLink": "未提供来源链接"
+      "noSourceLink": "未提供来源链接",
+      "versionTrail": {
+        "title": "版本轨迹",
+        "historyCount": "{count} 个历史版本",
+        "current": "当前",
+        "checkedAt": "最近检出",
+        "supersededAt": "被取代于",
+        "archivedSummary": "当时的摘要",
+        "emptyNotTracked": "这类资料不跟踪版本 —— 只有网页类资料在抓取内容时才会记下版本与哈希。",
+        "emptyNeverChecked": "还没有检出过 —— 这份网页资料还没抓取过内容，抓取之后才会开始记录版本。",
+        "emptyNoHistory": "只检出过这一版，还没有历史版本。",
+        "footnote": "没有原文的历史版本 —— 正文不在本地，只记录每次检出到的版本/哈希、时间，以及当时的摘要与差异。要看历史正文，回 {name} 的版本记录。"
+      }
     },
     "capture": {
       "title": "事项",

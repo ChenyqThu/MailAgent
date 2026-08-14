@@ -1,7 +1,10 @@
-import { useRef } from 'react'
+import { useRef, useState } from 'react'
+import { useQuery } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
+  ChevronDown,
+  ChevronRight,
   Clock,
   Copy,
   ExternalLink,
@@ -19,11 +22,13 @@ import { MATTER_ACCESS_POLICIES } from '@shared/api/types/matter'
 import type {
   MatterAccessPolicy,
   MatterResourceListItem,
-  MatterResourceSubscriptionState
+  MatterResourceSubscriptionState,
+  MatterResourceVersion
 } from '@shared/api/types/matter'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { qk } from '@shared/lib/queryKeys'
 import { useActiveEmail } from '@shared/state/active-email'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -143,6 +148,17 @@ export function ResourceDrawer({
   if (item) lastItemRef.current = item
   const shown = item ?? lastItemRef.current
 
+  // V3-22 —— 版本轨迹只在抽屉打开时拉。挂在 `listResources` 上会变成每份资料一次扇出
+  // （ARCHITECTURE §7.1 列表性能铁律）；而列表行本来也不显示它。
+  const trailResourceId = shown?.resource.id ?? null
+  const versionTrail = useQuery({
+    queryKey: [...qk.matters.detail(matterId), 'resource-versions', trailResourceId] as const,
+    queryFn: () => api.listResourceVersions(matterId, trailResourceId as number),
+    enabled: open && trailResourceId !== null,
+    staleTime: 30_000
+  })
+  const [expandedVersions, setExpandedVersions] = useState<readonly number[]>([])
+
   if (!shouldRender || !shown) return null
 
   const resource = shown.resource
@@ -170,6 +186,20 @@ export function ResourceDrawer({
   const sourceName = t(`matters.resource.providerNames.${resource.provider.toLowerCase()}`, {
     defaultValue: providerFallbackLabel(resource.provider)
   })
+  // V3-22 —— 空态分三种，🔴 有意不合成一句「暂无记录」：
+  //   · emptyNotTracked   这类资料结构上不跟踪版本（判据来自服务端 `tracks_versions`，
+  //                       不在前端按 kind 推 —— 那会是第二处真源）。合成一句会让人以为
+  //                       文档 / 邮件只是"还没检出过"，等下去也等不到；
+  //   · emptyNeverChecked 会跟踪，但一次都没抓取过（`revision` 为 null）—— 抓一次就有；
+  //   · 有当前版本但没有历史行 → 不是空态：照常渲染「当前」行，另附一句说明。
+  // 服务端还没答上来时（loading / 出错）整区不渲染，宁可少说也不猜。
+  const trail = versionTrail.data ?? null
+  const history: MatterResourceVersion[] = trail?.items ?? []
+  const trailEmptyReason: 'emptyNotTracked' | 'emptyNeverChecked' | null = !trail?.tracks_versions
+    ? 'emptyNotTracked'
+    : resource.revision === null
+      ? 'emptyNeverChecked'
+      : null
   const openInSourceLabel = t('matters.resource.openInSource', { name: sourceName })
   const metaLabel =
     typeof metadata.sender === 'string'
@@ -409,6 +439,81 @@ export function ResourceDrawer({
               </p>
             </section>
           ) : null}
+
+          {/* V3-22 —— 版本轨迹。原文不在本地 ⇒ 没有历史正文，能留的只有「当时读到的是哪
+              一版 + 当时我们自己写的那份摘要」。
+              🔴 当前版本**不来自轨迹表**：它就是 `resource` 行自己（同一事实只有一处真源），
+              历史行才来自 v57 的 `resource_version`。 */}
+          {trail === null ? null : (
+            <section>
+              <div className="mb-2 flex items-center gap-2">
+                <h3 className="text-meta font-semibold uppercase tracking-[0.08em] text-ink-fg-2">
+                  {t('matters.resource.versionTrail.title')}
+                </h3>
+                {history.length ? (
+                  <span className="ml-auto shrink-0 text-micro text-ink-fg-3">
+                    {t('matters.resource.versionTrail.historyCount', { count: history.length })}
+                  </span>
+                ) : null}
+              </div>
+              {trailEmptyReason ? (
+                <p className="rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-2 p-3.5 text-meta leading-[1.7] text-ink-fg-3">
+                  {t(`matters.resource.versionTrail.${trailEmptyReason}`)}
+                </p>
+              ) : (
+                <>
+                  <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border-soft bg-ink-2">
+                    <TrailRow
+                      revision={resource.revision}
+                      timestamp={resource.last_checked_at}
+                      timestampLabel={t('matters.resource.versionTrail.checkedAt')}
+                      isCurrent
+                      currentLabel={t('matters.resource.versionTrail.current')}
+                      revisionLabel={t('matters.resource.revision')}
+                    />
+                    {history.map((version) => (
+                      <TrailRow
+                        key={version.id}
+                        revision={version.revision}
+                        timestamp={version.superseded_at}
+                        timestampLabel={t('matters.resource.versionTrail.supersededAt')}
+                        revisionLabel={t('matters.resource.revision')}
+                        diffText={version.diff_text}
+                        archivedSummary={version.sum}
+                        archivedSummaryLabel={t('matters.resource.versionTrail.archivedSummary')}
+                        archivedSummarySourceLabel={
+                          version.sum_src
+                            ? t(
+                                version.sum_src === 'mail'
+                                  ? 'matters.resource.summaryFromMail'
+                                  : 'matters.resource.summaryFromAgent'
+                              )
+                            : null
+                        }
+                        expanded={expandedVersions.includes(version.id)}
+                        onToggle={() =>
+                          setExpandedVersions((ids) =>
+                            ids.includes(version.id)
+                              ? ids.filter((id) => id !== version.id)
+                              : [...ids, version.id]
+                          )
+                        }
+                      />
+                    ))}
+                  </div>
+                  {history.length ? null : (
+                    <p className="mt-2 text-micro leading-[1.65] text-ink-fg-3">
+                      {t('matters.resource.versionTrail.emptyNoHistory')}
+                    </p>
+                  )}
+                  <p className="mt-2.5 flex gap-1.5 text-micro leading-[1.65] text-ink-fg-3">
+                    <Info size={12} className="mt-0.5 shrink-0" />
+                    <span>{t('matters.resource.versionTrail.footnote', { name: sourceName })}</span>
+                  </p>
+                </>
+              )}
+            </section>
+          )}
         </div>
 
         <footer className="flex flex-wrap items-center gap-2 border-t border-ink-border-soft bg-ink-2 px-5 py-4">
@@ -447,6 +552,94 @@ export function ResourceDrawer({
           </button>
         </footer>
       </aside>
+    </div>
+  )
+}
+
+/** 版本轨迹的一行。当前版本与历史版本共用它 —— 两者的差别只是「有没有可展开的当时摘要」
+ *  与时间戳的含义，不值得两套 markup。
+ *
+ *  `revision` 是内容 sha256（`fetch_url_resource` 把 hash 同时写进 revision 与
+ *  content_hash），64 位全写出来只会挤爆行 —— 截前 8 位，`title` 给全量，并借
+ *  `matters.resource.revision`（「版本」）说明这串东西是什么。 */
+function TrailRow({
+  revision,
+  timestamp,
+  timestampLabel,
+  revisionLabel,
+  isCurrent = false,
+  currentLabel,
+  diffText,
+  archivedSummary,
+  archivedSummaryLabel,
+  archivedSummarySourceLabel,
+  expanded = false,
+  onToggle
+}: {
+  revision: string | null
+  timestamp: number | null
+  timestampLabel: string
+  revisionLabel: string
+  isCurrent?: boolean
+  currentLabel?: string
+  diffText?: string | null
+  archivedSummary?: string | null
+  archivedSummaryLabel?: string
+  archivedSummarySourceLabel?: string | null
+  expanded?: boolean
+  onToggle?: () => void
+}): React.ReactElement {
+  const Chevron = expanded ? ChevronDown : ChevronRight
+  return (
+    <div className="flex gap-2.5 border-t border-ink-border-soft px-3 py-2.5 first:border-t-0">
+      <span
+        title={revision ? `${revisionLabel}: ${revision}` : revisionLabel}
+        className={`w-[4.5rem] shrink-0 truncate font-mono text-micro ${
+          isCurrent ? 'text-coral' : 'text-ink-fg-2'
+        }`}
+      >
+        {revision ? revision.slice(0, 8) : '—'}
+      </span>
+      <div className="min-w-0 flex-1">
+        <div className="flex items-center gap-2">
+          <span className="font-mono text-micro text-ink-fg-3">
+            {timestampLabel}
+            {timestamp ? ` ${new Date(timestamp).toLocaleString()}` : ' —'}
+          </span>
+          {isCurrent && currentLabel ? (
+            <span className="rounded-[var(--r-ctl)] bg-coral/12 px-1.5 py-0.5 text-micro text-coral">
+              {currentLabel}
+            </span>
+          ) : null}
+        </div>
+        {diffText ? (
+          <p className="mt-1 whitespace-pre-wrap break-words text-meta leading-[1.6] text-ink-fg-1">
+            {diffText}
+          </p>
+        ) : null}
+        {archivedSummary && onToggle && archivedSummaryLabel ? (
+          <>
+            <button
+              type="button"
+              onClick={onToggle}
+              aria-expanded={expanded}
+              className="mt-1 inline-flex items-center gap-1 text-micro text-ink-fg-3 transition-colors duration-fast ease-standard hover:text-ink-fg"
+            >
+              <Chevron size={11} />
+              {archivedSummaryLabel}
+              {archivedSummarySourceLabel ? (
+                <span className="text-ink-fg-3">· {archivedSummarySourceLabel}</span>
+              ) : null}
+            </button>
+            {expanded ? (
+              // 归档摘要同样是模型/外部内容，按不可信数据渲染：纯文本 + 保留换行。
+              <p className="mt-1 whitespace-pre-wrap break-words border-l-2 border-ink-border pl-2 text-micro leading-[1.6] text-ink-fg-2">
+                {archivedSummary}
+              </p>
+            ) : null}
+          </>
+        ) : null}
+      </div>
     </div>
   )
 }
