@@ -121,7 +121,7 @@ export const matterFindSchema = z.object({
     .string()
     .trim()
     .optional()
-    .describe('Free text matched over title / goal / summary / tags — use the user\'s own words.'),
+    .describe("Free text matched over title / goal / summary / tags — use the user's own words."),
   status: z
     .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
     .optional(),
@@ -209,11 +209,15 @@ export const matterCreateSchema = z.object({
   health: z
     .enum(['unknown', 'on_track', 'at_risk', 'off_track'])
     .default('unknown')
-    .describe('Progress signal independent of status; keep unknown unless evidence says otherwise.'),
+    .describe(
+      'Progress signal independent of status; keep unknown unless evidence says otherwise.'
+    ),
   priority: z
     .enum(['p0', 'p1', 'p2', 'p3'])
     .default('p1')
-    .describe('p0 = drop-everything urgent, p3 = backlog. Default p1 unless the user says otherwise.'),
+    .describe(
+      'p0 = drop-everything urgent, p3 = backlog. Default p1 unless the user says otherwise.'
+    ),
   due_at: epochMillis('Matter due date').nullable().optional(),
   waiting_context: z
     .record(z.string(), z.unknown())
@@ -495,7 +499,9 @@ export const matterAddNoteSchema = z.object({
     .string()
     .trim()
     .min(1)
-    .describe('What happened or what was learned, written for a future reader. ' + MATTER_PROGRESS_STYLE),
+    .describe(
+      'What happened or what was learned, written for a future reader. ' + MATTER_PROGRESS_STYLE
+    ),
   ...matterVersionedFields
 })
 export type MatterAddNoteInput = z.infer<typeof matterAddNoteSchema>
