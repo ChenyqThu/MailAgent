@@ -224,6 +224,10 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // surface an attention signal or a resource suggestion but never quietly clear it.
   matter_attention_triage: 'domain_write',
   matter_suggestion_resolve: 'domain_write',
+  // task 08-14 — 跟进配置的逐条编辑。🔴 有意**不是** domain_write：改的是一个无人值守、有网络
+  // 出口的 run 的触发条件，与 internal_agent_update 同待遇（PRD D8）。代价是 im_chat 里改不了
+  // 跟进节奏 —— owner 知情接受。两种 class 都挡住「跟进 run 改自己的跟进配置」。
+  matter_followup_mutate: 'capability_change',
   // capability_change — changes the agent's own capability/identity surface. NEVER auto-approved
   // by the auto-reversible path, manual_chat-only, in every future mode permanently denied
   // (ADR-001 §9 red line).

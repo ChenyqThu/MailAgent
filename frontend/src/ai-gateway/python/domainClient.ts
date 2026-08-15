@@ -837,6 +837,22 @@ export class MailAgentDomainClient {
     return this._req('POST', `${path}/${operation}`, { body: { mutation }, signal })
   }
 
+  /** task 08-14 — 跟进配置的逐条编辑。`payload` 按 operation 各吃各的键，语义权威在 Python
+   *  （src/matters/followup_config.py → triggers.py 归一）；这里只做透传，不在 TS 侧复刻一份
+   *  envelope 逻辑。 */
+  mutateMatterFollowup(
+    publicId: string,
+    operation: string,
+    payload: Record<string, unknown>,
+    mutation: DomainMatterMutation,
+    signal?: AbortSignal
+  ): Promise<DomainMatterResult> {
+    return this._req('PATCH', `/matters/${encodeURIComponent(publicId)}/followup`, {
+      body: { operation, payload, mutation },
+      signal
+    })
+  }
+
   mutateMatterItem(
     publicId: string,
     operation: 'create' | 'update' | 'delete' | 'restore',

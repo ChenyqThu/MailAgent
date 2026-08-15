@@ -149,6 +149,8 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     #    agent 的排程·模型·prompt，与 custom_agent_update 同待遇 —— 恒 ask 且不可配 auto。
     #    设 auto 意味着邮件正文里的一句注入就能改掉每日报告的 prompt 或排程。
     BuiltinToolPolicy("internal_agent_update", "agents", "ask", configurable=False),
+    # 同一条理由：事项跟进的触发条件同样是「无人值守 + 有网络出口」的 run 的开关面。
+    BuiltinToolPolicy("matter_followup_mutate", "agents", "ask", configurable=False),
     # ── exec：file 两写可配；run_command 的可配面 = policy_rules（不给 raw auto）───
     BuiltinToolPolicy("file_read", "exec", "ask"),
     BuiltinToolPolicy("file_write", "exec", "ask"),

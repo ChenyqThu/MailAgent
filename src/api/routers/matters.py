@@ -471,6 +471,39 @@ async def patch_matter(
     return success_envelope(result, request=request)
 
 
+class MatterFollowupMutateRequest(BaseModel):
+    """跟进配置的逐条编辑（task 08-14）。
+
+    🔴 `payload` 有意是自由 dict：每个 operation 各吃各的键，语义与校验的**唯一**权威是
+    `src/matters/followup_config.py`（它再把 envelope 交给 `triggers.py` 归一）。在这里
+    复刻一遍 per-operation 的 pydantic 形状 = 第二份契约，改一处漏一处。
+    """
+
+    operation: str
+    payload: dict[str, Any] = Field(default_factory=dict)
+    mutation: MutationEnvelope
+
+
+@router.patch(
+    "/{matter_id}/followup", dependencies=[Depends(require_matter_agent_enabled)]
+)
+async def mutate_matter_followup(
+    matter_id: str,
+    body: MatterFollowupMutateRequest,
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    result = _call(
+        service.mutate_followup,
+        matter_id,
+        body.operation,
+        body.payload,
+        **_mutation_args(body.mutation, idempotency_key),
+    )
+    return success_envelope(result, request=request)
+
+
 async def _transition(
     operation: str,
     matter_id: str,

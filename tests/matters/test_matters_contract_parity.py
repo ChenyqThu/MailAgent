@@ -556,3 +556,35 @@ def test_tool_description_field_list_extractor_failure_is_red():
     assert matters_tool_description_resource_fields(
         src="carrying `resource` ' +\n'{provider, kind}; the owner links it"
     ) == ("provider", "kind")
+
+
+def test_followup_operation_enum_matches_python(  # task 08-14
+):
+    """`matter_followup_mutate` 的 operation 值域是 TS 手抄 Python 的一份镜像。
+
+    canonical = `src/matters/followup_config.py::FOLLOWUP_OPERATIONS`（服务端按它分派；
+    未知 operation 直接拒）。少一个值 = 那个操作在 gateway 侧结构性调不出来；多一个值 =
+    模型能发出一个服务端必拒的调用。两边都要求**相等**。
+    """
+    from src.matters.followup_config import FOLLOWUP_OPERATIONS
+
+    exposed = set(ts_const_string_array(GATEWAY_SCHEMAS_TS, "MATTER_FOLLOWUP_OPERATIONS"))
+    assert exposed == set(FOLLOWUP_OPERATIONS), (
+        "matter_followup_mutate 的 operation 值域漂了："
+        f"仅 Python={set(FOLLOWUP_OPERATIONS) - exposed}，仅 TS={exposed - set(FOLLOWUP_OPERATIONS)}"
+    )
+
+
+def test_followup_mutate_has_no_wholesale_trigger_replacement():  # task 08-14 (PRD D2)
+    """🔴 逐条口的结构性保证：没有任何 operation 能整份替换 triggers。
+
+    整份替换意味着模型一次调用就能把 owner 配好的 event / condition trigger 静默删掉。删除
+    必须显式带 `trigger_id`，少一个 id 就少删一条。这条断言盯的是「将来有人图省事加一个
+    `set_triggers`」——那会绕过整个设计。
+    """
+    from src.matters.followup_config import FOLLOWUP_OPERATIONS
+
+    banned = {"set_triggers", "replace_triggers", "set_trigger_set"}
+    assert not (banned & set(FOLLOWUP_OPERATIONS)), (
+        "跟进配置新增了整份替换 triggers 的口子——逐条删除的保证就此失效（PRD D2）"
+    )

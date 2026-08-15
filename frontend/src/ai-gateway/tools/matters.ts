@@ -15,6 +15,7 @@ import {
   matterAttentionTriageSchema,
   matterCreateSchema,
   matterFindSchema,
+  matterFollowupMutateSchema,
   matterGetSchema,
   matterItemMutateSchema,
   matterRelationMutateSchema,
@@ -72,6 +73,12 @@ export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
  *  its own array (not the write family) because it is class `artifact`, silent, and guard-free —
  *  the same shape as report_write. */
 export const GATEWAY_MATTER_RUN_TOOL_NAMES = ['matter_update_propose'] as const
+
+/** task 08-14 — 跟进配置的逐条编辑。单列成组而不是并进写家族：它的 class 是
+ *  `capability_change`（改的是无人值守 run 的触发条件），与那一族的 `domain_write` 不同 ——
+ *  混进去会让「写家族 = domain_write」这条读得懂的规律失效。装配上仍随 matter 家族一起
+ *  all-or-nothing 注册。 */
+export const GATEWAY_MATTER_FOLLOWUP_TOOL_NAMES = ['matter_followup_mutate'] as const
 
 const matterSuggestRelatedResourcesSchema = z
   .object({
@@ -194,7 +201,12 @@ export function createMatterReadTools(
     {
       name: 'matter_get',
       description:
-        'Read one Matter and a bounded subset of items, resources, stakeholders, timeline, relations, or updates (pending review proposals — include "updates" to get the update_id that matter_review_update needs). Resource bodies are not returned.',
+        'Read one Matter and a bounded subset of items, resources, stakeholders, timeline, ' +
+        'relations, updates (pending review proposals — include "updates" to get the update_id ' +
+        'that matter_review_update needs), or followup (the follow-up configuration: triggers ' +
+        'with their ids, run actions, bound agent profile, instructions and model overrides — ' +
+        'include it to get the trigger_id that matter_followup_mutate needs). Resource bodies ' +
+        'are not returned.',
       inputSchema: matterGetSchema,
       run: (input, signal) => domain.getMatter(input.public_id, input.include, signal)
     },
@@ -521,6 +533,49 @@ export function createMatterWriteTools(
     guard
   )
 
+  // task 08-14 — 跟进配置的逐条编辑。class capability_change（不是 domain_write）：改的是一个
+  // **无人值守、有网络出口**的 run 的触发条件，与 internal_agent_update 同待遇；代价是 im_chat
+  // （飞书）里改不了跟进节奏，owner 知情接受（PRD D8）。两种 class 都不影响「跟进 run 自己改不了
+  // 自己的跟进配置」—— matter_followup 矩阵行对二者一并拒绝。
+  const matter_followup_mutate = auditedWriteTool(
+    {
+      ...shared,
+      name: 'matter_followup_mutate',
+      description:
+        "Change ONE thing about a Matter's follow-up configuration, after reading it with " +
+        'matter_get include=["followup"] (that is where trigger ids come from). Operations: ' +
+        'add_trigger / update_trigger / remove_trigger / set_trigger_enabled (one entry, by ' +
+        'trigger_id) · set_actions · set_enabled (the whole follow-up switch) · set_profile · ' +
+        'set_instructions · set_model_override. ' +
+        '🔴 There is no way to replace the trigger list wholesale — removing one requires naming ' +
+        'its trigger_id, so a schedule edit can never silently drop the event/condition triggers ' +
+        'sitting next to it. Note that a Matter whose status is done/canceled stops firing ' +
+        'scheduled follow-ups regardless of this configuration.',
+      inputSchema: matterFollowupMutateSchema,
+      risk: 'edit',
+      run: (input, { signal }) => {
+        // payload 逐字段组装：每个 operation 只带它自己那几个键，语义与校验的权威在 Python。
+        const payload: Record<string, unknown> = {}
+        if (input.trigger_id !== undefined) payload.trigger_id = input.trigger_id
+        if (input.trigger !== undefined) payload.trigger = input.trigger
+        if (input.enabled !== undefined) payload.enabled = input.enabled
+        if (input.actions !== undefined) payload.actions = input.actions
+        if (input.profile_id !== undefined) payload.profile_id = input.profile_id
+        if (input.instructions !== undefined) payload.instructions = input.instructions
+        if (input.agent !== undefined) payload.agent = input.agent
+        return domain.mutateMatterFollowup(
+          input.public_id,
+          input.operation,
+          payload,
+          mutation(input),
+          signal
+        )
+      }
+    },
+    collector,
+    guard
+  )
+
   const matter_run_control = auditedWriteTool(
     {
       ...shared,
@@ -641,6 +696,7 @@ export function createMatterWriteTools(
     matter_stakeholder_mutate,
     matter_relation_mutate,
     matter_add_note,
+    matter_followup_mutate,
     matter_run_control,
     matter_review_update,
     matter_attention_triage,

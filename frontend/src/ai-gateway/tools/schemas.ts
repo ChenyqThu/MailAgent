@@ -139,20 +139,96 @@ export type MatterFindInput = z.infer<typeof matterFindSchema>
 /** Mirrors what `GET /api/matters/{id}` actually branches on (src/matters/service.py::get_matter).
  *  🔴 `updates` is not optional garnish: matter_review_update REQUIRES an `update_id`, and this is
  *  the only read face that hands one out — without it the review tool is structurally uncallable
- *  (0813 dogfood 轮 3). */
+ *  (0813 dogfood 轮 3). `followup` (task 08-14) is the same story for matter_followup_mutate:
+ *  every per-entry operation needs a `trigger_id`, and this is the only face that hands those out.
+ *  🔴 数组体里只许有字符串字面量 —— Python 侧抽取器（tests/matters/test_matters_contract_parity.py）
+ *  见到注释/表达式会判为「部分抽取」并直接红，注释一律写在数组外。 */
 export const MATTER_GET_INCLUDES = [
   'items',
   'resources',
   'stakeholders',
   'timeline',
   'relations',
-  'updates'
+  'updates',
+  'followup'
 ] as const
 export const matterGetSchema = z.object({
   public_id: z.string().trim().min(1),
   include: z.array(z.enum(MATTER_GET_INCLUDES)).default(['items', 'stakeholders'])
 })
 export type MatterGetInput = z.infer<typeof matterGetSchema>
+
+/** task 08-14 — 跟进配置的逐条 operation。🔴 值域跨语言手抄自
+ *  `src/matters/followup_config.py::FOLLOWUP_OPERATIONS`，闸见
+ *  `tests/matters/test_matters_contract_parity.py::test_followup_operation_enum_matches_python`。
+ *  🔴 数组体里只许有字符串字面量（抽取器会把注释判成「部分抽取」）。 */
+export const MATTER_FOLLOWUP_OPERATIONS = [
+  'add_trigger',
+  'update_trigger',
+  'remove_trigger',
+  'set_trigger_enabled',
+  'set_actions',
+  'set_enabled',
+  'set_profile',
+  'set_instructions',
+  'set_model_override'
+] as const
+
+/** matter_followup_mutate —— 事项跟进配置的**逐条**编辑。
+ *
+ * 🔴 结构上没有「整份替换 triggers」的入口：删一条必须显式给它的 `trigger_id`。否则模型一次
+ * update 就能把 owner 配好的 event / condition trigger 静默抹掉（PRD D2）。
+ *
+ * `trigger` 是有界自由对象而不是判别式 schema：事项的 kind 集（schedule / event / condition）
+ * 与 custom agent 的（cron / email_filter / calendar_*）根本不是一套，在这里再写一份等于本仓
+ * 第三份 trigger 契约。深校验的唯一真源是 Python（`followup_config.py` → `triggers.py`），
+ * 坏 rule / 未知 kind / 超量在服务端一律拒。 */
+export const matterFollowupMutateSchema = z.object({
+  public_id: z.string().trim().min(1),
+  operation: z.enum(MATTER_FOLLOWUP_OPERATIONS),
+  trigger_id: z
+    .string()
+    .trim()
+    .min(1)
+    .max(64)
+    .optional()
+    .describe(
+      'Required by update_trigger / remove_trigger / set_trigger_enabled (from matter_get include=followup).'
+    ),
+  trigger: z
+    .record(z.string(), z.unknown())
+    .optional()
+    .describe(
+      'For add_trigger / update_trigger. Shapes: {kind:"schedule", rule:{freq,interval,weekdays,' +
+        'monthMode,monthDay,ordinal,weekday,hour,minute,clamp}, anchor:"YYYY-MM-DD", timezone:IANA} ' +
+        '| {kind:"event", event_type} | {kind:"condition", condition}. A trigger kind cannot be ' +
+        'changed in place — remove it and add a new one.'
+    ),
+  enabled: z
+    .boolean()
+    .optional()
+    .describe('For set_enabled (the whole follow-up switch) or set_trigger_enabled (one entry).'),
+  actions: z.array(z.string().trim().min(1).max(32)).max(16).optional(),
+  profile_id: z
+    .string()
+    .trim()
+    .max(128)
+    .nullable()
+    .optional()
+    .describe(
+      'For set_profile: the custom agent whose persona/model this follow-up borrows; null unbinds.'
+    ),
+  instructions: z.string().max(4000).nullable().optional(),
+  agent: z
+    .record(z.string(), z.unknown())
+    .nullable()
+    .optional()
+    .describe(
+      'For set_model_override: {model, effort, fallbackModels}; null/{} clears the override.'
+    ),
+  ...matterVersionedFields
+})
+export type MatterFollowupMutateInput = z.infer<typeof matterFollowupMutateSchema>
 
 /** O2 (0813 轮 3) — one goal check entry. Element shape mirrors the server's
  *  `normalize_goal_checks` consumption ({t, done}); text limit 200 / at most 20 entries are the

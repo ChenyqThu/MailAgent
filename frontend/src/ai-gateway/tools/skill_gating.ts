@@ -174,7 +174,10 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'matter_runs_list',
   'matter_tags_list',
   'matter_attention_triage',
-  'matter_suggestion_resolve'
+  'matter_suggestion_resolve',
+  // task 08-14 —— 跟进配置的逐条编辑。同族同纪律（开关权在 MAILAGENT_MATTERS_ENABLED +
+  // MAILAGENT_INTERNAL_AGENT_TOOLS，无 skill 归属，永不 skill-gated）。
+  'matter_followup_mutate'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

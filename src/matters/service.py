@@ -356,7 +356,54 @@ class MatterService:
                 ]
             if "relations" in include_set:
                 result["relations"] = self.list_relations(public_id)
+            if "followup" in include_set:
+                # task 08-14：跟进配置的**结构化**读面。此前只能从 matter 行里读到
+                # `schedule_json` 的原始字符串 —— 能看但对模型不友好，也无从逐条引用 id。
+                from .followup_config import followup_view
+
+                result["followup"] = followup_view(matter)
             return result
+
+    def mutate_followup(
+        self,
+        public_id: str,
+        operation: str,
+        payload: Mapping[str, Any],
+        *,
+        expected_version: int,
+        idempotency_key: str,
+        source: str,
+        actor: Actor = Actor(),
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """跟进配置的**逐条**编辑（task 08-14）→ 折成 binding patch 走 `patch_matter`。
+
+        🔴 读-改-写的原子性靠调用方给的 `expected_version`：先核对「我读到的这一版就是你看到
+        的那一版」，不符直接冲突退回。少了这一步，模型基于旧快照算出的 triggers 列表会覆盖掉
+        中间别人加的那条 —— 而这正是逐条口要避免的那种静默丢失。
+        """
+        from .followup_config import apply_followup_operation
+        from .triggers import TriggerError
+
+        with self.repository.connect() as conn:
+            matter = self.repository.get_matter(conn, public_id)
+            if not matter:
+                raise MatterError("E_MATTER_NOT_FOUND", f"matter {public_id} not found")
+        if int(matter["version"]) != int(expected_version):
+            raise self._version_conflict()
+        try:
+            patch = apply_followup_operation(matter, operation, payload)
+        except TriggerError as exc:
+            raise MatterError("E_INVALID_ARG", str(exc)) from exc
+        return self.patch_matter(
+            public_id,
+            patch,
+            expected_version=expected_version,
+            idempotency_key=idempotency_key,
+            source=source,
+            actor=actor,
+            reason=reason,
+        )
 
     def duplicate_candidates(self, data: Mapping[str, Any]) -> list[dict[str, Any]]:
         """Return explainable possible duplicates without mutating any Matter."""
