@@ -1342,3 +1342,64 @@ Run active（含审批等待）时 Enter 入队不发请求；Run 真正 onFinis
 安全边界保持不变：Plugin Skill 只进入 P8 `.draft` 隔离区，仍须验证、发布与逐版本信任；`mcp.json` 只检测展示，不连接不授权；ZIP 复用 traversal/symlink/100 MiB 解压护栏并增加 15 MiB 上传原包上限；导出重算 package hash，排除 Secret、config、会话、审批规则和绝对路径，同时保留 License/NOTICE。Agent 导入统一经过 `normalize_agent_config_patch`，强制 `enabled=false`，依赖缺失只报告、不安装不授权。
 
 验收基线：plugin manifest、bomb/traversal/symlink、组件独立失败、MCP 只展示、二进制草稿、License/NOTICE、hash mismatch、Agent 白名单/强制关闭/依赖检查/模板、flag-off 五端点与双语 UI 均由 pytest/vitest/typecheck/agent_eval 覆盖。
+
+## 13.25 内建 agent 工具面与事项跟进逐条读写（task 08-14，`MAILAGENT_INTERNAL_AGENT_TOOLS`，默认 ON）
+
+### 13.25.1 起因：主 agent 对自己的 agent 全盲
+
+`custom_agent_list` / `custom_agent_get` / `agent_catalog_*` 三处都硬过滤 `type === 'custom'`。一个从没建过 custom agent 的库里那份清单**恒为空**，而 `report_agent` 表里五个内建 agent（日报 / 周报 / 搜索 / 预处理 / 项目周报同步）真实存在、正在跑 —— 主 agent 一个都看不见，更改不了。事项跟进配置则是另一种形态的「读得到、改不了」：它是 `matter` 表的四个字段（`agent_enabled` / `agent_profile_id` / `schedule_json` / `matter_instructions`），`matter_get` 会把 `schedule_json` 原样交出，而 `matter_update` 的 patch schema 是 `.strict()` 白名单、四键结构性不在其中。
+
+后端 REST 早已就位（`GET/PUT /api/report-agents[/{id}]` 不分 type；`PATCH /matters/{id}` 的 body 含 `schedule_json`），缺的纯粹是工具层。
+
+### 13.25.2 工具面
+
+新开 `internal_agent_*` 三件套，`custom_agent_*` 一字不改（不动 agent_eval baseline），两个 list 在各自 description 里互指「你自建的」vs「内建的」：
+
+| 工具 | tier | class | 说明 |
+|---|---|---|---|
+| `internal_agent_list` | silent | capability_change | 四类内建行的 id/type/title/enabled/激活方式 |
+| `internal_agent_get` | silent | capability_change | 单行**有效**配置，per-type 投影 |
+| `internal_agent_update` | edit | capability_change | per-type 白名单，恒 ask 不可配 auto |
+| `matter_followup_mutate` | edit | capability_change | 事项跟进的逐条编辑（9 个 operation） |
+
+配套读面：`matter_get` 新增 `include='followup'`，返回结构化跟进配置（triggers 带 id / actions / 绑定 profile / instructions / 模型覆盖）—— 它是唯一发放 `trigger_id` 的读面，没有它 `matter_followup_mutate` 在结构上没法调用（同 `updates` ↔ `matter_review_update` 的关系）。
+
+`matter_followup_mutate` 的 class 是 `capability_change` 而非 matter 写家族的 `domain_write`：改的是一个**无人值守、有网络出口**的 run 的触发条件（这正是 `MAILAGENT_MATTER_AGENT_ENABLED` 至今默认关的理由）。代价是 im_chat（飞书）里改不了跟进节奏，owner 知情接受。两种 class 都挡住「跟进 run 改自己的跟进配置」。
+
+### 13.25.3 🔴 死键：本任务的核心发现
+
+同一张 `report_agent` 表上撞到**四个**「配置面写了、审批卡弹了、行为一个字节不变」的字段：
+
+| 死键 | 判据 | 发现方式 |
+|---|---|---|
+| `preprocess.prompt` | v1.1.0 起 persona 层移除，运行时「一律忽略」（`preprocess_config.py` 模块注释） | 人肉 grep |
+| `preprocess.enabled` | 运行时 SELECT 不含该列；设置页开关绑的是 env `LLM_AGENT_ENABLED` | 人肉 grep |
+| `report` 顶层 `cadence`/`hours`/`weekday` | 新形状下 `cadence_of` 以 `rule.freq` 为权威，顶层是降级镜像（`store.py`） | 人肉 grep |
+| `report.kos_enrich` | 全仓只有存取链（wire 读写 / store 列 / ConfigDrawer 开关），报告生成流程无任何一处读它 | **死列闸自动抓到** |
+
+死键比有风险更糟：它不报错，只让 owner 以为自己改了某个纹丝不动的东西。因此：
+
+- **写侧**：`internal_agent_update` 是 zod `discriminatedUnion('type')` + `.strict()`，每支只列该 type 真有消费者的字段 ⇒ 死键**结构性**拒绝（那一支根本没有这个字段），不是运行时才报错。
+- **读侧**：`internal_agent_get` 的 per-type 投影同样不返回死键；preprocess 的 `enabled` 报 `null` + note 说明真开关在 env（有意**不去猜** env 值 —— 把猜测当事实报给模型比明说「我读不到」更糟）。
+- **必须挡掉的失败模式**：owner 说「帮我开启 AI 邮件预处理」→ 模型改行 `enabled=1` → 卡弹了 → owner 同意 → **预处理照样不跑**。工具拒绝该字段并把人指向 设置 → AI。
+
+### 13.25.4 死列闸（`tests/config/test_internal_agent_dead_columns.py`）
+
+把「白名单里的字段必须指向真实消费点」变成红测试，两档：
+
+- **硬闸**（preprocess）：直接从 `get_preprocess_config` 那条 SELECT 抽列名，与 TS 白名单对账。
+- **软闸**（其余三支）：字段 → 消费点声明表，断言该文件确实读了那一列；新增字段而不登记 ⇒ 红。
+
+🔴 抽取器自带**自检**用例：喂一段含 `prompt` 的合成 preprocess 分支，抽取器必须抓到；分支不存在时必须 fail loudly。少了自检，一个抽不到东西的抽取器会永远是绿的 —— 那是本仓踩过的「部分抽取比抽不到更毒」。
+
+### 13.25.5 逐条纪律与单源复用
+
+- `matter_followup_mutate` **结构上没有整份替换 triggers 的入口**：删一条必须显式带 `trigger_id`。owner 的 MAT-0001 正是 event+condition+schedule 三条并存，整份替换意味着模型改个排程就能把另外两条静默抹掉。两道闸盯着：值域不许出现 `set_triggers` 类操作 + 一组「改一条之后另外两条还在」的用例。
+- 逐条语义放 Python（`src/matters/followup_config.py`），不在 TS 侧读-改-写：`triggers.py` 是 envelope 的唯一真源，TS 重做一遍就是第二份实现，且读-改-写还要自己处理 CAS。服务端 `mutate_followup` 先核对「我读到的这一版就是你看到的那一版」再走 `patch_matter`。
+- report 排程只收 `rule` + `anchor` + `timezone`，`cadence` 镜像由 `writeReportSchedule` 统一产出（恒写 `rule.freq`）。为此把它与 `ruleWeekdayToPy` 从 `components/agents/schedule/migrate.ts` 下沉到 `@shared/lib/scheduleWire.ts`（零运行时依赖叶子）：migrate.ts 顶层拉着 `rrule`，gateway 在 main 进程 import 不动它，而抄第二份会让「cadence 同步」与「0=周日↔0=周一」两条最易错的规则有两个真源。migrate.ts 原样 re-export，renderer 调用点一行未改。
+- 排程 `rule` 的 10 个键**取用** `customAgentTriggerSchema` 的 schedule 分支，不抄第二份 —— 那 10 个键被 `tests/api/test_trigger_kind_parity.py` 锁在 `schemas.ts` 那一处，抄一份闸就看不见了。
+- rule 的**值域**深校验在 `followup_config` 出口补上：`triggers.py` 有意只管结构，于是 `freq:"hourly"` 这类值原本能一路存进库、直到 worker 求值才失败（对 owner 表现为「保存成功了但它再也没跑过」）。UI 有构建器控件挡着，模型没有。
+
+### 13.25.6 flag 与回退
+
+`MAILAGENT_INTERNAL_AGENT_TOOLS` **双载体默认 ON**（Python pydantic `internal_agent_tools_enabled` + Node `envBool`，两侧默认必须同为 true）。有意偏离 ship-off 惯例：它修的是「主 agent 对自己的 agent 全盲」，off = 痛点依旧；manual-only（class capability_change）+ 写工具恒 ask 已是安全地板，同 P0 `plan_tool` 先例。显式 false = 三件套与 `matter_followup_mutate` 都不注册，ToolSet 字节级回 08-14 前。注册是 flag + guard 的 all-or-nothing（只注册读面 = 广告半个能力）。

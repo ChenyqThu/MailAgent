@@ -14,6 +14,9 @@
 //      env `LLM_AGENT_ENABLED`。
 //   3. `report` 顶层 `cadence` / `hours` / `weekday` —— 新形状下 `cadence_of` 以 `rule.freq`
 //      为权威，顶层是「降级镜像、运行时死数据」（src/reports/store.py）。
+//   4. `report.kos_enrich` —— 由 PR4 的死列闸**自动**抓到（前三个是人肉 grep 找的）：全仓只有
+//      存取链（wire 读写 / store 列 / ConfigDrawer 开关），报告生成流程里没有任何一处读它改变
+//      行为。既有的 UI 开关是预存 dead code，本任务只是不把它加进模型的写面（指出不删）。
 // 把死键当有效配置呈现，会让模型（进而让 owner）以为改得动某个其实纹丝不动的东西 —— 审批卡
 // 照弹、行为零变化。所以它们在这里既不返回、也（PR2 起）不可写。
 //
@@ -117,7 +120,6 @@ const internalAgentUpdateSchema = z.discriminatedUnion('type', [
         .optional(),
       trigger_mode: z.enum(['rolling_24h', 'natural_day']).optional(),
       body_full_priorities: z.array(z.string().min(1).max(32)).max(8).optional(),
-      kos_enrich: z.boolean().optional(),
       context_docs: docsField
     })
     .strict(),
@@ -269,7 +271,6 @@ function effectiveConfig(agent: ReportAgentConfig): Record<string, unknown> {
         trigger_mode: agent.trigger_mode,
         timezone: agent.timezone,
         body_full_priorities: agent.body_full_priorities,
-        kos_enrich: agent.kos_enrich,
         context_docs: agent.context_docs ?? null,
         cadence_note:
           'The report cadence (daily/weekly/monthly) is derived from schedule.rule.freq, which ' +
@@ -354,7 +355,6 @@ function toConfigPatch(
       if (input.body_full_priorities !== undefined) {
         patch.body_full_priorities = input.body_full_priorities
       }
-      if (input.kos_enrich !== undefined) patch.kos_enrich = input.kos_enrich
       if (input.context_docs !== undefined) patch.context_docs = input.context_docs
       return patch
     case 'search':
