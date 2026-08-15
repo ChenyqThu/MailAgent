@@ -57,6 +57,9 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // S5 W3 — custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED), all classified
     // capability_change (2 silent reads + 4 edit writes).
     customAgentToolsEnabled: true,
+    // task 08-14 — built-in agent read face (MAILAGENT_INTERNAL_AGENT_TOOLS), both silent reads
+    // classified capability_change (the whole family stays a manual-session capability face).
+    internalAgentToolsEnabled: true,
     // P8 R1 — Skill Creator draft tools (MAILAGENT_SKILL_CREATOR), all capability_change.
     skillCreatorToolsEnabled: true,
     customAgentCallEnabled: true,

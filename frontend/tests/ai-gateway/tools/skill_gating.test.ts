@@ -51,6 +51,8 @@ function buildAllTools() {
     skillInstallToolsEnabled: true,
     // S5 W3 — custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED), same rationale (CORE_UNGATED).
     customAgentToolsEnabled: true,
+    // task 08-14 — built-in agent read face (MAILAGENT_INTERNAL_AGENT_TOOLS), same rationale.
+    internalAgentToolsEnabled: true,
     // P8 R1 — Skill Creator draft tools (MAILAGENT_SKILL_CREATOR), manual-only CORE_UNGATED.
     skillCreatorToolsEnabled: true,
     customAgentCallEnabled: true,
@@ -275,6 +277,7 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       execToolsEnabled: true,
       skillInstallToolsEnabled: true,
       customAgentToolsEnabled: true,
+      internalAgentToolsEnabled: true,
       skillCreatorToolsEnabled: true,
       customAgentCallEnabled: true,
       parentSessionId: 1,

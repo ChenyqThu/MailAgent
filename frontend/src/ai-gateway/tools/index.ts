@@ -30,6 +30,7 @@ import { createSkillSupplyTools } from './skill_supply'
 import { createSkillCreatorTools } from './skill_creator'
 import { createCustomAgentTools } from './agents'
 import { createAgentCatalogTools } from './agent_catalog'
+import { createInternalAgentTools } from './internal_agents'
 import { createAgentCallTools } from './agent_call'
 import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
 import {
@@ -158,6 +159,12 @@ export interface BuildGatewayToolsOpts {
    *  The SAME flag gates the S4 headless kernel, so off (default) → not added → ToolSet byte-identical
    *  to the S4 set. */
   customAgentToolsEnabled?: boolean
+  /** task 08-14 (MAILAGENT_INTERNAL_AGENT_TOOLS, default ON) — the BUILT-IN agent tool family:
+   *  internal_agent_list / internal_agent_get (silent reads, class capability_change). It fixes
+   *  "the main agent is blind to its own agents": custom_agent_list filters type==='custom', so a
+   *  library with zero custom rows gets an empty list while five built-in agents really exist.
+   *  Explicit false → not added → ToolSet byte-identical to the pre-08-14 set. */
+  internalAgentToolsEnabled?: boolean
   customAgentCallEnabled?: boolean
   parentSessionId?: number | null
   findSessionByParentToolCall?: (parentSessionId: number, parentToolCallId: string) => number | null
@@ -505,6 +512,13 @@ export function buildGatewayTools(
         contextMode
       })
     )
+  }
+  // task 08-14 — 内建 agent 面（MAILAGENT_INTERNAL_AGENT_TOOLS，默认开）。PR1 只有两个 silent
+  // read，故**不要**求 approvalGuard（写工具在 PR2 才加，届时按 custom_agent_* 的 all-or-nothing
+  // 收紧）。class capability_change ⇒ applyContextModePolicy（最后一步）在非 manual run 里把整面
+  // 剔除，无需额外场地门。显式 false → 不注册 → ToolSet 字节级回 08-14 前。
+  if (opts.internalAgentToolsEnabled) {
+    Object.assign(tools, createInternalAgentTools(opts.domain, collector))
   }
   if (
     contextMode === 'manual_chat' &&

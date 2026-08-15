@@ -451,6 +451,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // endpoint + job settle below; default ON since E3 cutover, env explicit false = kill-switch.)
   const customAgentsEnabled = envBool('MAILAGENT_CUSTOM_AGENTS_ENABLED', true)
   const customAgentCallEnabled = envBool('MAILAGENT_CUSTOM_AGENT_CALL', true)
+  // task 08-14 — 内建 agent 工具面。🔴 双载体：这里与 Python `internal_agent_tools_enabled`
+  // （src/config.py）默认必须同为 true，回退也一起翻。main-env-only，不加 vite define。
+  const internalAgentToolsEnabled = envBool('MAILAGENT_INTERNAL_AGENT_TOOLS', true)
   const serverResumeEnabled = true
   // The guard record must outlive the stash window so a verify()/consume() on the eventual in-app (or
   // island) approve doesn't expire first — extended TTL whenever server-side resume is live (always).
@@ -1250,6 +1253,9 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
           // flag that gates the S4 headless kernel; default off → byte-identical to the S4 set).
           customAgentToolsEnabled: customAgentsEnabled,
+          // task 08-14 — 内建 agent 只读面（默认开）。与上一行是两件事：那个管「自建 agent」，
+          // 这个管「内建 agent」——零 custom 行的库里前者恒返回空列表。
+          internalAgentToolsEnabled,
           customAgentCallEnabled,
           parentSessionId,
           findSessionByParentToolCall,

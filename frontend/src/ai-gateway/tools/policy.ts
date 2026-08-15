@@ -257,6 +257,11 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   custom_agent_delete: 'capability_change',
   custom_agent_run_now: 'capability_change',
   custom_agent_call: 'capability_change',
+  // task 08-14 — 内建 agent（report/search/preprocess/project_progress）的工具面。与
+  // custom_agent_* 同 class：改一个自动运行的 agent 的排程 / 模型 / prompt 同样是对助手能力面的
+  // 改动。list/get 是 silent read，同样归入本 class，让整个 CRUD 面（含读）留在 manual 会话里。
+  internal_agent_list: 'capability_change',
+  internal_agent_get: 'capability_change',
   // S2 W4 — skill_read is a silent read (its third-party content is SKILL_DOC-fenced at the tool).
   skill_read: 'read',
   // calendar epic 4.1 — calendar reads (event text is CALENDAR_EVENT-fenced at the tool).

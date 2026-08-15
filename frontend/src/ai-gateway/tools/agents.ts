@@ -95,7 +95,12 @@ function isoOrNull(v: number | null | undefined): string | null {
 }
 
 /** A compact human-readable summary of a custom-agent trigger (for the list/get output). */
-function triggerSummary(trigger: CustomAgentTrigger | TriggerSetV2 | null | undefined): string {
+/** Exported for `internal_agents.ts` (task 08-14): `project_progress` stores its email_filter in
+ *  the same `trigger` shape, so its list summary must read identically — a second hand-copied
+ *  formatter would drift the moment a trigger kind is added. */
+export function triggerSummary(
+  trigger: CustomAgentTrigger | TriggerSetV2 | null | undefined
+): string {
   if (!trigger) return 'disabled (no trigger)'
   if (trigger.v === 2) {
     return trigger.triggers.length === 0

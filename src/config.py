@@ -966,6 +966,23 @@ class Config(BaseSettings):
             "才真正激活某个 agent（on 但不配 grant/规则 = 恒 HITL，per-agent opt-in 是天然开关）。"
         ),
     )
+    # 🔴 字段名 internal_agent_tools_enabled ≠ env MAILAGENT_INTERNAL_AGENT_TOOLS → 必须 validation_alias
+    internal_agent_tools_enabled: bool = Field(
+        default=True,
+        validation_alias="MAILAGENT_INTERNAL_AGENT_TOOLS",
+        description=(
+            "内建 agent 工具面（task 08-14）：主 agent 可 list/get/update `report_agent` 表里"
+            "**非 custom** 的四类内建 agent（report / search / preprocess / project_progress），"
+            "外加事项跟进配置的逐条读写。**默认开**（有意偏离 ship-off 惯例：它修的是「主 agent "
+            "对自己的 agent 全盲」—— owner 库里零 custom 行，custom_agent_list 恒返回空列表；"
+            "off = 痛点依旧。manual-only（class capability_change）+ 写工具恒 ask 已是安全地板，"
+            "同 P0 plan_tool 先例）。env 显式 false = 应急回退 → 三件套与 matter_followup_mutate "
+            "都不注册，ToolSet 字节级回 08-14 前。"
+            "🔴 双载体：本 pydantic 字段（serve-api，翻需重启后端）+ Node envBool"
+            "（ai_gateway_lifecycle.ts，main-env-only 不加 vite define，翻需重启 app）——"
+            "两侧默认必须同为 true，回退也一起翻。"
+        ),
+    )
     matters_enabled: bool = Field(
         default=True,
         validation_alias="MAILAGENT_MATTERS_ENABLED",
