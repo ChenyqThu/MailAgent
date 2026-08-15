@@ -145,6 +145,10 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("custom_agent_delete", "agents", "ask", configurable=False),
     BuiltinToolPolicy("custom_agent_run_now", "agents", "auto"),
     BuiltinToolPolicy("custom_agent_call", "agents", "ask", configurable=False),
+    # ── 内建 agent（task 08-14）：改的是日报 / 搜索 / 预处理 / 周报同步这些**已经在跑**的
+    #    agent 的排程·模型·prompt，与 custom_agent_update 同待遇 —— 恒 ask 且不可配 auto。
+    #    设 auto 意味着邮件正文里的一句注入就能改掉每日报告的 prompt 或排程。
+    BuiltinToolPolicy("internal_agent_update", "agents", "ask", configurable=False),
     # ── exec：file 两写可配；run_command 的可配面 = policy_rules（不给 raw auto）───
     BuiltinToolPolicy("file_read", "exec", "ask"),
     BuiltinToolPolicy("file_write", "exec", "ask"),

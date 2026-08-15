@@ -103,6 +103,7 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   // 开关权在独立 flag，永不 skill-gated（同 custom_agent_* 先例）。
   'internal_agent_list',
   'internal_agent_get',
+  'internal_agent_update',
   // S1 R2 profile-config 工具（behind MAILAGENT_OPENNESS_CONFIG_TOOLS）—— agent 自配置面，
   // 无 skill 归属，开关权在独立 flag，永不 skill-gated。
   'agent_profile_read',

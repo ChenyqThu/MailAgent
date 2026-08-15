@@ -27,10 +27,10 @@ export function pyWeekdayToRule(w: number): number {
   return (Math.trunc(w) + 1 + 7) % 7
 }
 
-/** 契约口径（0=周日）→ Python weekday（0=周一）。 */
-export function ruleWeekdayToPy(w: number): number {
-  return (Math.trunc(w) + 6 + 7) % 7
-}
+// `ruleWeekdayToPy` / `writeReportSchedule` 已下沉到 `@shared/lib/scheduleWire`（零运行时依赖的
+// 叶子），供 gateway 与 renderer 共用 —— 本模块顶层拉着 rrule，main 进程 import 不动它。
+// 这里原样 re-export，既有调用点（ConfigDrawer / index.ts / 测试）一行不改。
+export { ruleWeekdayToPy, writeReportSchedule } from '@shared/lib/scheduleWire'
 
 /** 新建规则的默认值（抽屉初始化用）：今天为 anchor、宿主机时区。 */
 export function newScheduleValue(rule: ScheduleRule, tz = hostTimezone()): ScheduleValue {
@@ -113,37 +113,6 @@ export function readReportSchedule(
     anchor: LEGACY_ANCHOR,
     timezone: tz
   }
-}
-
-/**
- * ScheduleValue → 报告 agent 的 `schedule` patch。
- *
- * 🔴 `cadence` 必须保留：它在报告侧**不只是节奏，还是报告内容种类** —— `reports/worker.py`
- * 用它决定聚合窗（`_period_bounds`）、去重主键（`_report_id`）与周/月的层级聚合路径。
- * 丢了它 = 周报/月报静默退化成日报。故 `cadence` 恒同步为 `rule.freq`。
- *
- * `hours` / `weekday` / `day_of_month` 是 **legacy 镜像，只为降级安全**（用户回滚到旧版 app
- * 时老 worker 还读得懂）。`kind:'schedule'` 在场时 **`rule` 是唯一权威**，新 worker 不回头
- * 读这些镜像。多 weekday 时镜像只写排序后的第一个（有损，仅影响降级路径）。
- */
-export function writeReportSchedule(value: ScheduleValue): ReportSchedule {
-  const { rule } = value
-  const out: ReportSchedule = {
-    cadence: rule.freq,
-    hours: [rule.hour],
-    v: 1,
-    kind: 'schedule',
-    rule,
-    anchor: value.anchor,
-    timezone: value.timezone
-  }
-  if (rule.freq === 'weekly') {
-    out.weekday = ruleWeekdayToPy([...rule.weekdays].sort((a, b) => a - b)[0] ?? 1)
-  }
-  if (rule.freq === 'monthly' && rule.monthMode === 'date') {
-    out.day_of_month = rule.monthDay
-  }
-  return out
 }
 
 /**

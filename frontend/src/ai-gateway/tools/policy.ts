@@ -262,6 +262,7 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // 改动。list/get 是 silent read，同样归入本 class，让整个 CRUD 面（含读）留在 manual 会话里。
   internal_agent_list: 'capability_change',
   internal_agent_get: 'capability_change',
+  internal_agent_update: 'capability_change',
   // S2 W4 — skill_read is a silent read (its third-party content is SKILL_DOC-fenced at the tool).
   skill_read: 'read',
   // calendar epic 4.1 — calendar reads (event text is CALENDAR_EVENT-fenced at the tool).

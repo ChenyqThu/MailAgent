@@ -513,12 +513,21 @@ export function buildGatewayTools(
       })
     )
   }
-  // task 08-14 — 内建 agent 面（MAILAGENT_INTERNAL_AGENT_TOOLS，默认开）。PR1 只有两个 silent
-  // read，故**不要**求 approvalGuard（写工具在 PR2 才加，届时按 custom_agent_* 的 all-or-nothing
-  // 收紧）。class capability_change ⇒ applyContextModePolicy（最后一步）在非 manual run 里把整面
-  // 剔除，无需额外场地门。显式 false → 不注册 → ToolSet 字节级回 08-14 前。
-  if (opts.internalAgentToolsEnabled) {
-    Object.assign(tools, createInternalAgentTools(opts.domain, collector))
+  // task 08-14 — 内建 agent 面（MAILAGENT_INTERNAL_AGENT_TOOLS，默认开）。混合集（2 silent read
+  // + 1 edit-tier capability_change write）→ flag + guard 上 all-or-nothing（custom_agent_* 先例：
+  // 只注册读面等于广告半个能力）。class capability_change ⇒ applyContextModePolicy（最后一步）在
+  // 非 manual run 里把整面剔除，无需额外场地门。显式 false → 不注册 → 字节级回 08-14 前。
+  if (opts.internalAgentToolsEnabled && opts.approvalGuard) {
+    Object.assign(
+      tools,
+      createInternalAgentTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        toolApprovalPrefs: prefTiers,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
   }
   if (
     contextMode === 'manual_chat' &&
