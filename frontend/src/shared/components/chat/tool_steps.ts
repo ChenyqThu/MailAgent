@@ -119,6 +119,11 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'custom_agent_delete',
   'custom_agent_run_now',
   'custom_agent_call',
+  // task 08-14 — 内建 agent 工具面 + 事项跟进的逐条编辑。
+  'internal_agent_list',
+  'internal_agent_get',
+  'internal_agent_update',
+  'matter_followup_mutate',
   // web
   'web_fetch',
   'web_search',

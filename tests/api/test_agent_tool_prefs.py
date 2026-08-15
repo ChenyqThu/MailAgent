@@ -73,6 +73,11 @@ EXPECTED_FIXED_ASK = {
     # 恒卡 / manual 拒绝免卡 / manual 接受且选中含 field change 弹卡），不是一个静态档 ——
     # 故不可配置且出厂 ask：owner 把它调成无条件 auto 就会绕过 field-accept 那张卡。
     "matter_review_update",
+    # task 08-14：内建 agent 的写面与事项跟进的触发条件。两者都是「已经在跑 / 无人值守 +
+    # 有网络出口」的 agent 的开关面 —— 设 auto 意味着邮件正文里一句注入就能改掉每日报告的
+    # prompt 或某个事项的跟进排程（同 custom_agent_update 的论证）。
+    "internal_agent_update",
+    "matter_followup_mutate",
 }
 # D2=a：设 auto 需红警告 + 一次性确认。
 EXPECTED_DANGER_AUTO = {"calendar_event_delete", "notion_agent_chat"}
