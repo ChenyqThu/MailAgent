@@ -22,13 +22,17 @@ import { cleanup, render } from '@testing-library/react'
 
 import { BotAvatar } from '../../../src/shared/bot-avatar/BotAvatar'
 import { BOT_AVATAR_COLORS, COLORS } from '../../../src/shared/bot-avatar/colors'
-import { EXPRESSIONS, staticFrame } from '../../../src/shared/bot-avatar/engine'
+import { applyGaze, EXPRESSIONS, staticFrame } from '../../../src/shared/bot-avatar/engine'
+import { poseFromExpression, renderAvatar } from '../../../src/shared/bot-avatar/geometry'
 import {
   BACK_PATH_COUNT,
   BOT_AVATAR_SHAPES,
+  BOT_VIEW_BOX,
   FRONT_PATH_COUNT,
   LEGACY_BOT_SHAPE_MAP,
-  SHAPES
+  SHAPE_VIEW_RADIUS,
+  SHAPES,
+  shapeViewBox
 } from '../../../src/shared/bot-avatar/shapes'
 import type { BotShape } from '../../../src/shared/bot-avatar/shapes'
 
@@ -64,7 +68,12 @@ describe('lab 成品数值 pin（搬运保真）', () => {
   })
 
   test('sphere = Grok bot（= 出厂 preset；Strobi 仅 depth 差 0.0367，owner 拍板并入本条目）', () => {
-    expect(SHAPES.sphere.primary).toMatchObject({ width: 240, height: 240, depth: 240, roundness: 1 })
+    expect(SHAPES.sphere.primary).toMatchObject({
+      width: 240,
+      height: 240,
+      depth: 240,
+      roundness: 1
+    })
   })
 
   test('cube = Cubee 调参值 / cone = Citrus 调参值（raw preset 溢出治理的载体）', () => {
@@ -164,10 +173,7 @@ function pathMaxAbs(d: string): number {
       }
     } else if (m[1] === 'C') {
       for (let i = 0; i + 5 < nums.length; i += 6) {
-        max = Math.max(
-          max,
-          ...nums.slice(i, i + 6).map((value) => Math.abs(value))
-        )
+        max = Math.max(max, ...nums.slice(i, i + 6).map((value) => Math.abs(value)))
         cur = [nums[i + 4], nums[i + 5]]
       }
     } else {
@@ -274,23 +280,67 @@ describe('几何 sanity：9 形 × 代表表情', () => {
   })
 })
 
-describe('viewBox 溢出治理（0813 换 lab 成品调参值的核心动机）', () => {
-  test('单曲面成品（sphere/capsule/cube/cone/onee）全表情收在 ±150 内', () => {
-    // raw preset 时代 cube/cone 实测 |max| 204/176（circular+方框双层裁切事故源）；
-    // Cubee/Citrus 调参值必须把它们收回 viewBox。自编形状退役后曾经的遗留溢出
-    // （cylinder 167.6 / mickey 156.5）不复存在，单曲面组即全量 ≤150。
-    for (const shape of ['sphere', 'capsule', 'cube', 'cone', 'onee'] as const) {
-      expect(worstMaxAbs(shape), shape).toBeLessThanOrEqual(150)
+describe('per-shape viewBox（0814：owner「外框仍是方形，特殊形状比例调小，确保不会碰到」）', () => {
+  /** gaze 四角 + 正视 —— 0814 起 FAB 也开了 `mouseInteractive`，取景窗必须把 gaze
+   *  带来的头部朝向一起算进去。gaze 数学复用引擎导出的 `applyGaze`，不在测试里手抄常量。 */
+  const GAZE_CORNERS = [
+    [0, 0],
+    [1, 1],
+    [1, -1],
+    [-1, 1],
+    [-1, -1]
+  ] as const
+
+  /** 与 `worstMaxAbs` 同判据，但把 gaze 也扫进去（`staticFrame` 不接 gaze，故走 renderAvatar） */
+  function worstMaxAbsWithGaze(shape: BotShape): number {
+    const def = SHAPES[shape]
+    let worst = 0
+    for (const expression of EXPRESSIONS) {
+      for (const [gazeX, gazeY] of GAZE_CORNERS) {
+        const geometry = renderAvatar(
+          poseFromExpression(applyGaze(expression, gazeX, gazeY)),
+          def.primary,
+          1,
+          def.nodes
+        )
+        worst = Math.max(
+          worst,
+          pathMaxAbs(geometry.headPath),
+          ...geometry.backPaths.map(pathMaxAbs),
+          ...geometry.frontPaths.map(pathMaxAbs)
+        )
+      }
+    }
+    return worst
+  }
+
+  /** 取景窗留边比例：内容不得占满取景窗，否则圆角方外壳的角上仍会削到。 */
+  const FILL_LIMIT = 0.95
+
+  for (const shape of BOT_AVATAR_SHAPES) {
+    test(`${shape}：全表情 × gaze 四角的保守上界 ≤ 取景窗半径 × ${FILL_LIMIT}`, () => {
+      // 这一条同时钉死两个方向：
+      //   ① 改形状几何 / 改 gaze 幅度而不同步 SHAPE_VIEW_RADIUS → 红（取景窗不够用，会被外壳裁）；
+      //   ② 把某个形状的取景窗调得过大 → 不红，但下面那条「不许无谓放大」会红。
+      expect(worstMaxAbsWithGaze(shape), shape).toBeLessThanOrEqual(
+        SHAPE_VIEW_RADIUS[shape] * FILL_LIMIT
+      )
+    })
+  }
+
+  test('只有真的装不下的形状才放大取景窗 —— 其余恒 150（sphere 观感一个像素都不许变）', () => {
+    // 🔴 sphere 是官方形象与默认值，且 ChatFabAvatar 的 56px 尺寸推导正建立在
+    //    「sphere 轮廓 122 / 半宽 150 ≈ 81%」上；这条断言防的是「顺手把所有形状一起放大」。
+    for (const shape of BOT_AVATAR_SHAPES) {
+      const fitsInBase = worstMaxAbsWithGaze(shape) <= 150 * FILL_LIMIT
+      if (fitsInBase) expect(SHAPE_VIEW_RADIUS[shape], shape).toBe(150)
+      else expect(SHAPE_VIEW_RADIUS[shape], shape).toBeGreaterThan(150)
     }
   })
 
-  test('组合身体成品允许按 lab 语义少量出界（overflow:visible），但钉上限防回归', () => {
-    // lab studio 画布同为 ±150 且 svg overflow:visible —— Sunee 太阳芒等本就
-    // 设计为略超出 viewBox。上限取实测最坏值 + 余量：显著超出 = 数据/投影回归
-    //（0813 实测 worst：freddy 144.3 / sunee 183.1 / kirby 166.3 / cloudee 123.4）。
-    for (const shape of ['freddy', 'sunee', 'kirby', 'cloudee'] as const) {
-      expect(worstMaxAbs(shape), shape).toBeLessThanOrEqual(200)
-    }
+  test('shapeViewBox 串形态：以原点为心的正方形，半径取自表', () => {
+    expect(shapeViewBox('sphere')).toBe(BOT_VIEW_BOX)
+    expect(shapeViewBox('sunee')).toBe('-200 -200 400 400')
   })
 })
 

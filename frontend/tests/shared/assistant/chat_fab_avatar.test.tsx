@@ -31,6 +31,7 @@ import {
   FAB_IMAGE_RADIUS_PX
 } from '@shared/assistant/modal/ChatFabAvatar'
 import { EXPR_CADENCE } from '@shared/bot-avatar/states'
+import { __instanceCount } from '@shared/bot-avatar/ticker'
 import { ChatModalFab } from '@shared/assistant/modal/ChatModalFab'
 import { AVATAR_SHELL_RADIUS_RATIO } from '@shared/components/agents/avatarShell'
 import { useActiveEmail } from '@shared/state/active-email'
@@ -67,6 +68,28 @@ function allowMotion(): void {
         onchange: null
       }) as unknown as MediaQueryList
   )
+}
+
+/** animated 档要真的挂上共享 ticker，得有个会触发回调的 IntersectionObserver ——
+ *  happy-dom 的 IO 是**不触发回调**的哑实现，而真浏览器 observe 后必发首次回调，
+ *  不 stub 的话可见性裁剪永远停在「不可见」，ticker 一个客户端都不会注册。
+ *  实现逐字沿用先例 `tests/shared/bot-avatar/BotAvatar.test.tsx`。 */
+function stubIntersectionObserver(): void {
+  class ImmediateIO {
+    private readonly cb: IntersectionObserverCallback
+    constructor(cb: IntersectionObserverCallback) {
+      this.cb = cb
+    }
+    observe(target: Element): void {
+      this.cb(
+        [{ isIntersecting: true, target } as IntersectionObserverEntry],
+        this as unknown as IntersectionObserver
+      )
+    }
+    unobserve(): void {}
+    disconnect(): void {}
+  }
+  vi.stubGlobal('IntersectionObserver', ImmediateIO)
 }
 
 /** 只数「延迟落在换脸节拍区间内」的 setTimeout 调用 —— 把 React 调度器 / 测试工具自己排的
@@ -179,6 +202,35 @@ describe('ChatModalFab — hover 只放大 + tips，不换表情', () => {
     expect(eyePath()).toBe(before)
   })
 
+  test('🔴 gaze：指针移动会动眼睛，但**不换表情**（0814 加 mouseInteractive 后 ③ 的新口径）', () => {
+    // 0813 那条 owner 决定是「hover 不要改表情」，0814 加的是「眼睛跟着鼠标」——
+    // 两者不冲突：gaze 动的是头部朝向与眼睛偏移，表情（状态与索引）不受指针影响。
+    // 故这里的判据不能再是「eye path 逐字节不变」（gaze 本来就会动它），而是「表情没变」。
+    allowMotion()
+    stubIntersectionObserver()
+    // cube 的头轮廓随姿态变 —— 换表情必然改 head path，gaze 改的也是姿态，
+    // 所以用 sphere：它的轮廓姿态无关（解析椭圆），head path 只有换形状才变。
+    primeAssistantIdentity({ name: null, avatar: { type: 'bot', shape: 'sphere', color: 'blue' } })
+    render(<ChatModalFab />)
+
+    const headBefore = headPath()
+    expect(headBefore.length).toBeGreaterThan(0)
+
+    act(() => {
+      window.dispatchEvent(
+        new window.PointerEvent('pointermove', { clientX: 10, clientY: 10, bubbles: true })
+      )
+    })
+    act(() => {
+      window.dispatchEvent(
+        new window.PointerEvent('pointermove', { clientX: 900, clientY: 700, bubbles: true })
+      )
+    })
+
+    // sphere 的头轮廓与姿态无关 → gaze 不改它；表情若被指针换掉，这里会红。
+    expect(headPath()).toBe(headBefore)
+  })
+
   test('放大走 group-hover 类（无 JS hover 态，故 hover 不可能驱动第二条表情路径）', () => {
     render(<ChatModalFab />)
     const shell = document.querySelector('.chat-fab-avatar')
@@ -217,10 +269,7 @@ describe('ChatFabAvatar — 上传图回落', () => {
     // 🔴 圆角不是自己拍的数：它由 `AVATAR_SHELL_RADIUS_RATIO` 派生，换尺寸不会各调各的。
     const radius = Number.parseFloat(img.style.borderRadius)
     expect(radius).toBeCloseTo(FAB_IMAGE_RADIUS_PX, 6)
-    expect(radius).toBeCloseTo(
-      Number.parseFloat(img.style.width) * AVATAR_SHELL_RADIUS_RATIO,
-      6
-    )
+    expect(radius).toBeCloseTo(Number.parseFloat(img.style.width) * AVATAR_SHELL_RADIUS_RATIO, 6)
     // 不是正圆（rounded-full 会是 9999px / 50%），也没胀出头像盒。
     expect(radius).toBeLessThan(Number.parseFloat(img.style.width) / 2)
     expect(Number.parseFloat(img.style.width)).toBeLessThan(FAB_AVATAR_PX)
@@ -249,6 +298,36 @@ describe('ChatFabAvatar — 上传图回落', () => {
 // 节拍改成**引擎自己的 idle 档区间**（`EXPR_CADENCE.idle` = 9–16s），每次在区间内均匀随机取
 // 下一次延迟（与 engine.ts 的 scheduleExpression 同款取法）。
 describe('ChatFabAvatar — reduced-motion 与低频换脸', () => {
+  test('🔴 0814：本位点已升 animated 档（换脸有过渡 + 拿得到 gaze）', () => {
+    // 判据 = **共享 rAF ticker 上真的多了一个客户端**。这条防的是「悄悄退回静态档」——
+    // 退回去换脸就又是硬跳帧、gaze 也一并失效，正是 0814 反馈的病根。
+    // ⚠️ 不能拿 `data-bot-motion` 的 transform 当判据（第一版就这么写、红了）：引擎建在
+    //    `useEffect` 里、比同一次 commit 的 layout effect 晚，挂载那一帧 writeFrame 还没跑过，
+    //    transform 恒为 null —— 那是「静态基线帧」的正常形态，不代表没升档。
+    expect(__instanceCount()).toBe(0)
+    allowMotion()
+    stubIntersectionObserver()
+    render(<ChatFabAvatar />)
+    expect(__instanceCount()).toBe(1)
+  })
+
+  test('reduce 下退回静态档（animated 不得绕过 reduced-motion）', () => {
+    stubIntersectionObserver()
+    render(<ChatFabAvatar />) // 套件默认 reduce
+    expect(__instanceCount()).toBe(0)
+  })
+
+  test('上传图身份不进 ticker（表情对图片无意义，别白烧一个 rAF 客户端）', () => {
+    allowMotion()
+    stubIntersectionObserver()
+    primeAssistantIdentity({
+      name: null,
+      avatar: { type: 'image', data: 'data:image/png;base64,iVBORw0KGgo=' }
+    })
+    render(<ChatFabAvatar />)
+    expect(__instanceCount()).toBe(0)
+  })
+
   test('🔴 节拍单源 = EXPR_CADENCE.idle（不再手抄第二个魔数）', () => {
     expect(FAB_FACE_CADENCE_MS).toBe(EXPR_CADENCE.idle)
     // 顺带钉住「比原来的 45s 快一档」这个诉求本身：整个区间都必须显著短于 45s。

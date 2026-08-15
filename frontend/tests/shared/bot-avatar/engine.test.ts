@@ -10,19 +10,26 @@ import { describe, expect, test } from 'vitest'
 import {
   BotFaceEngine,
   EXPRESSIONS,
+  STATE_MIN_DWELL_MS,
+  STATE_SWITCH_TRANSITION_MS,
   blinkScaleAt,
   easeProgress,
   staticFrame
 } from '../../../src/shared/bot-avatar/engine'
 import { SHAPES } from '../../../src/shared/bot-avatar/shapes'
-import { AMBIENT, POOLS } from '../../../src/shared/bot-avatar/states'
+import { AMBIENT, EXPR_CADENCE, POOLS } from '../../../src/shared/bot-avatar/states'
 import type { EngineFrame } from '../../../src/shared/bot-avatar/types'
 
 const SPHERE = SHAPES.sphere
 
 /** 完全静止的引擎：无眨眼排程、无 ambient、表情定时最早 6000ms */
 const quietEngine = (): BotFaceEngine =>
-  new BotFaceEngine({ surface: SPHERE, initialState: 'powering-down', random: () => 0, now: () => 0 })
+  new BotFaceEngine({
+    surface: SPHERE,
+    initialState: 'powering-down',
+    random: () => 0,
+    now: () => 0
+  })
 
 /** 以 16ms 步长推进引擎到 endMs，返回最后一个非 null 帧 */
 function advance(engine: BotFaceEngine, fromMs: number, endMs: number): EngineFrame | null {
@@ -300,12 +307,12 @@ describe('调度器', () => {
     engine.setState('powering-down') // 同态：不得触发任何新帧
     expect(engine.tick(32)).toBeNull()
 
-    clock = 700 // 驻留（600ms）已满 → 走立即路径
+    clock = STATE_MIN_DWELL_MS + 100 // 驻留已满 → 走立即路径
     engine.setState('surprised')
     expect(engine.state).toBe('surprised')
     expect(engine.expression).toBe(POOLS.surprised[0])
     // 池首 ≠ powering-down 池首 → 过渡启动，出帧
-    expect(engine.tick(748)).not.toBeNull()
+    expect(engine.tick(clock + 48)).not.toBeNull()
   })
 })
 
@@ -350,11 +357,11 @@ describe('状态驻留闸（min-dwell 去抖，0813）', () => {
     // 驻留期内：B/C 都没开始播，无过渡无新帧
     expect(engine.tick(300)).toBeNull()
     expect(engine.expression).toBe(poolHeadA)
-    expect(engine.tick(599)).toBeNull()
+    expect(engine.tick(STATE_MIN_DWELL_MS - 1)).toBeNull()
 
     // 期满：一次性切到 C（B 从未上脸）
-    setClock(620)
-    const frame = engine.tick(620)
+    setClock(STATE_MIN_DWELL_MS + 20)
+    const frame = engine.tick(STATE_MIN_DWELL_MS + 20)
     expect(frame).not.toBeNull()
     expect(engine.state).toBe('thinking')
     expect(engine.expression).toBe(POOLS.thinking[0])
@@ -366,21 +373,21 @@ describe('状态驻留闸（min-dwell 去抖，0813）', () => {
 
     setClock(50)
     engine.setState('surprised')
-    engine.tick(400)
+    engine.tick(Math.floor(STATE_MIN_DWELL_MS / 2))
     expect(engine.state).toBe('powering-down') // 期满前仍是旧状态
 
-    setClock(600)
-    engine.tick(600) // 600 - 0 ≥ 600 → 提交
+    setClock(STATE_MIN_DWELL_MS)
+    engine.tick(STATE_MIN_DWELL_MS) // 驻留满 → 提交
     expect(engine.state).toBe('surprised')
     expect(engine.expression).toBe(POOLS.surprised[0])
 
-    // 提交后驻留重臂：紧跟着的新目标再次排队而非立即切
-    setClock(700)
+    // 提交后驻留重臂：紧跟着的新目标再次排队而非立即切（基点 = 上次提交时刻）
+    setClock(STATE_MIN_DWELL_MS + 100)
     engine.setState('thinking')
     expect(engine.state).toBe('surprised')
-    engine.tick(1100) // 1100 - 600 = 500 < 600 → 未到期
+    engine.tick(STATE_MIN_DWELL_MS + 500) // 距上次提交 500ms < 驻留 → 未到期
     expect(engine.state).toBe('surprised')
-    engine.tick(1200) // 1200 - 600 = 600 → 提交
+    engine.tick(STATE_MIN_DWELL_MS * 2) // 距上次提交恰好一个驻留 → 提交
     expect(engine.state).toBe('thinking')
   })
 
@@ -390,10 +397,10 @@ describe('状态驻留闸（min-dwell 去抖，0813）', () => {
 
     setClock(100)
     engine.setState('surprised')
-    setClock(550)
+    setClock(STATE_MIN_DWELL_MS - 50)
     engine.setState('surprised') // 重复排队不得推迟提交（React 重渲染逐次灌入的形态）
-    setClock(610)
-    engine.tick(610) // 610 - 0 ≥ 600 → 提交（若重复排队重置了基点，此刻不会切）
+    setClock(STATE_MIN_DWELL_MS + 10)
+    engine.tick(STATE_MIN_DWELL_MS + 10) // 驻留满 → 提交（若重复排队重置了基点，此刻不会切）
     expect(engine.state).toBe('surprised')
   })
 
@@ -405,9 +412,9 @@ describe('状态驻留闸（min-dwell 去抖，0813）', () => {
     engine.setState('surprised')
     setClock(200)
     engine.setState('powering-down') // 折回当前态 → 队列清空
-    expect(engine.tick(650)).toBeNull() // 期满也无事发生
+    expect(engine.tick(STATE_MIN_DWELL_MS + 50)).toBeNull() // 期满也无事发生
     expect(engine.state).toBe('powering-down')
-    expect(engine.tick(700)).toBeNull()
+    expect(engine.tick(STATE_MIN_DWELL_MS + 100)).toBeNull()
   })
 
   test('期满后 pending 尚未被 tick 消费时，新 setState 直接提交最新目标', () => {
@@ -416,10 +423,31 @@ describe('状态驻留闸（min-dwell 去抖，0813）', () => {
 
     setClock(100)
     engine.setState('surprised') // 排队
-    setClock(700) // 驻留已满，但两次 tick 之间（pending 还没被消费）
+    setClock(STATE_MIN_DWELL_MS + 100) // 驻留已满，但两次 tick 之间（pending 还没被消费）
     engine.setState('thinking') // 立即路径：提交最新目标，作废排队的 surprised
     expect(engine.state).toBe('thinking')
     expect(engine.expression).toBe(POOLS.thinking[0])
+  })
+})
+
+describe('时序常量的两条不等式（0814 过渡 420→600 时明文写进 engine.ts 的取值依据）', () => {
+  test('驻留 ≥ 过渡 + 观感余量：上一次转头必须播完才允许下一次重定向', () => {
+    expect(STATE_MIN_DWELL_MS).toBeGreaterThanOrEqual(STATE_SWITCH_TRANSITION_MS + 150)
+  })
+
+  test('驻留 < 最短「可轮换」表情节奏：否则会系统性顶掉池内轮换节拍', () => {
+    // 🔴 判据取的是**池长 > 1** 的状态。裸取全表最小值会得到 waking 的 800ms，但 waking 的池是
+    //    单元素 `[13]` —— 引擎在它到期时只能重选池首（同帧过渡、视觉静止），根本没有「轮换」
+    //    可被顶掉。engine.ts 那句「< 最短表情轮换节奏（searching 1000ms）」说的正是这个口径，
+    //    这里把它变成可执行判据（首次写这条闸时按裸最小值断言，红了才发现这个区别）。
+    const rotatable = Object.entries(EXPR_CADENCE).filter(
+      ([state]) => POOLS[state as keyof typeof POOLS].length > 1
+    )
+    const fastest = Math.min(...rotatable.map(([, [min]]) => min))
+    // 🔴 是 scared 的 900ms，不是 engine.ts 老注释写的「searching 1000ms」——
+    //    这条闸第一次跑就抓到了那处不准确，注释已同步改掉。变了就要重新推导下面这条不等式。
+    expect(fastest).toBe(900)
+    expect(STATE_MIN_DWELL_MS).toBeLessThan(fastest)
   })
 })
 

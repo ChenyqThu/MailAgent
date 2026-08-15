@@ -5,10 +5,12 @@
 // 圆角取仓内既有 v3 token（DESIGN.md v3：--r-ctl 8 控件档 / --r-card 12 卡片档），
 // 不做直角、不自绘 squircle。
 //
-// 🔴 换容器**只**解决圆裁这一层。cube/cylinder/cone 的投影轮廓本身就冲出 viewBox
-// （`BOT_VIEW_BOX = '-150 -150 300 300'`，实测 cube |max|=204、cone 176、cylinder 167），
-// SVG 视口自己那层硬裁照旧存在 —— 那要靠形状几何调参根治（另一批），本模块**不**用缩放
-// 头像内容的办法去掩盖它。
+// 🔴 换容器**只**解决圆裁这一层；形状轮廓冲出 viewBox 被 SVG 视口硬裁是另一层，本模块不管。
+// （那一层 0814 已根治，落点是 `bot-avatar/shapes.ts::SHAPE_VIEW_RADIUS` —— **per-shape 取景窗**：
+//  几何一个字不动，只给装不下的形状放大 viewBox，内容随之在同样的 px 盒子里渲得小一点。
+//  本行原先写的「实测 cube |max|=204、cone 176、cylinder 167」是 **raw preset 时代**的数，
+//  0813 换 lab 成品调参值后 cube/cone 早已收回 ±150、cylinder 随自编形状退役 —— 别再拿它当现状。
+//  0814 实测真正装不下的是 sunee 188.9 / kirby 167.9，二者的取景窗已相应放大。）
 //
 // 为什么是一个模块而不是各处照抄一份 class 串：此前口径本来就是分裂的 ——
 // `AgentAvatar`（列表/卡片/抽屉全部位点）一律 `rounded-full` 圆裁，而 chat 侧

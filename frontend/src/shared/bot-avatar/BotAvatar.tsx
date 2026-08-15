@@ -22,7 +22,7 @@ import { useEffect, useId, useLayoutEffect, useMemo, useRef } from 'react'
 import { useReducedMotion } from '../hooks/useReducedMotion'
 import { COLORS } from './colors'
 import { BotFaceEngine, staticFrame } from './engine'
-import { BACK_PATH_COUNT, BOT_VIEW_BOX, FRONT_PATH_COUNT, SHAPES } from './shapes'
+import { BACK_PATH_COUNT, FRONT_PATH_COUNT, SHAPES, shapeViewBox } from './shapes'
 import { BLINK, POOLS } from './states'
 import { registerStaticBlink, unregisterStaticBlink } from './staticBlink'
 import type { StaticBlinkClient } from './staticBlink'
@@ -200,7 +200,7 @@ export function BotAvatar({
   return (
     <svg
       ref={svgRef}
-      viewBox={BOT_VIEW_BOX}
+      viewBox={shapeViewBox(shape)}
       width={size}
       height={size}
       className={className}

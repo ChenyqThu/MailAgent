@@ -28,8 +28,20 @@ import type { EngineFrame } from './types'
 export { EXPRESSIONS } from './expressions'
 
 // ── 时序常量 ────────────────────────────────────────────────────────────────
-/** 状态切换的过渡（应激感：短 + spring 回弹） */
-const STATE_SWITCH_TRANSITION_MS = 420
+/**
+ * 状态切换的过渡（应激感：spring 回弹）。
+ *
+ * 0814 dogfood（owner：「AI chat 对话那个，在 LLM 状态切换时也会很突然，过渡得还不够好」）
+ * 把 420ms 提到 600ms。量化依据：按真实 `turnStageToBotState` 映射跑一次典型 run
+ * （idle → connecting → thinking → calling-tool → writing → …），最坏一跳要走的
+ * 头部角度是 **56.9°**；420ms 下峰值 14.3°/帧 ≈ 858°/秒，600ms 下降到 10.2°/帧。
+ * thinking↔calling-tool、writing↔thinking 都是这个量级，一次 run 里反复出现。
+ *
+ * 🔴 **上界是 780ms，不是随便拉**：本值 + ~180ms 观感余量 = `STATE_MIN_DWELL_MS`，
+ * 而驻留必须 < 最短表情轮换节奏（searching 1000ms，见下）。800ms 过渡推出的 980ms
+ * 驻留会顶到那条下限，故被否掉 —— 改本值必须同时复核下面那个常量的两条不等式。
+ */
+export const STATE_SWITCH_TRANSITION_MS = 600
 const STATE_SWITCH_EASE: TransitionEase = 'spring'
 /** 池内表情轮换的过渡（闲适感：smooth） */
 const POOL_ROTATE_TRANSITION_MS = 500
@@ -38,13 +50,19 @@ const POOL_ROTATE_EASE: TransitionEase = 'smooth'
  * 状态最短驻留（去抖闸，0813 owner 反馈「刚切换中状态又变了就跳」）：
  * 驻留未满时到达的新状态只**排队**（队列仅保留最新目标，不播中间状态），
  * 期满由 tick 一次性切到最新目标；目标折回当前状态则撤销排队（净零切换）。
- * 取 600ms 的依据：≥ 状态切换过渡 420ms（spring 在 p=1 处 exp(-6)≈0.25% 已收敛）
- * + ~180ms 观感余量 —— 保证上一次转头至少完整播完才允许下一次重定向；同时
- * < 最短表情轮换节奏（searching 1000ms）与 showcase 巡演 2400ms，不会系统性
- * 顶掉池内轮换/巡演节拍。状态展示滞后上限即 600ms（驻留是产品拍板的可接受代价）。
+ *
+ * 取值恒 = `STATE_SWITCH_TRANSITION_MS` + 180ms 观感余量（0814 随过渡 420→600 一起
+ * 从 600 提到 780）—— 保证上一次转头至少完整播完才允许下一次重定向
+ * （spring 在 p=1 处 exp(-6)≈0.25% 已收敛）；同时必须 < 最短**可轮换**表情节奏
+ * （**scared 900ms**）与 showcase 巡演 2400ms，否则会系统性顶掉池内轮换/巡演节拍。
+ * ⚠️ 0813 版这句写的是「searching 1000ms」，两处不准：`EXPR_CADENCE` 的裸最小值其实是
+ * waking 的 800ms（但 waking 池是单元素 `[13]`，到期只能重选池首、视觉静止，没有轮换可被
+ * 顶掉，故不计入），而「可轮换」里的最小值是 scared 的 900ms 而非 searching。0814 把这两条
+ * 不等式做成了闸（`engine.test.ts`「时序常量的两条不等式」），是它跑红才发现这处描述偏差。
+ * 状态展示滞后上限即本值（驻留是产品拍板的可接受代价）。
  * 模块内常量，勿 env 化 / 勿做成配置项。
  */
-const STATE_MIN_DWELL_MS = 600
+export const STATE_MIN_DWELL_MS = STATE_SWITCH_TRANSITION_MS + 180
 /** 手动 blink()（无状态眨眼档时）的时长兜底 */
 const DEFAULT_BLINK_DURATION_MS = 280
 /** ambient 活跃时的重绘上限（30fps —— avatar-lab runtime 同款节流） */
@@ -58,6 +76,30 @@ const GAZE_HEAD_PITCH_DEG = 7
 /** gaze → 眼睛在脸面坐标内的平移 */
 const GAZE_EYE_X_UNITS = 5
 const GAZE_EYE_Y_UNITS = 3.5
+
+/**
+ * 把 gaze 叠进表情参数（additive，不与表情/ambient 冲突）：头部朝向 + 眼睛偏移。
+ * `gazeX/gazeY ∈ [-1,1]`（越界由调用方 clamp）。
+ *
+ * 抽成导出的纯函数是为了**消灭一处将来必然出现的手抄**：
+ * `shapes.ts::SHAPE_VIEW_RADIUS`（每形状取景窗）的取值依据是「27 表情 × gaze 四角」的
+ * 投影包络，它的闸（`tests/shared/bot-avatar/shapes.test.tsx`）必须用**同一套** gaze
+ * 数学来复算，否则改了这里的四个常量、取景窗会静默不够用。
+ */
+export function applyGaze(expression: Expression, gazeX: number, gazeY: number): Expression {
+  if (gazeX === 0 && gazeY === 0) return expression
+  const eyeX = gazeX * GAZE_EYE_X_UNITS
+  const eyeY = gazeY * GAZE_EYE_Y_UNITS
+  return {
+    ...expression,
+    headY: expression.headY + gazeX * GAZE_HEAD_YAW_DEG,
+    headX: expression.headX - gazeY * GAZE_HEAD_PITCH_DEG,
+    positionXLeft: expression.positionXLeft + eyeX,
+    positionXRight: expression.positionXRight + eyeX,
+    positionYLeft: expression.positionYLeft + eyeY,
+    positionYRight: expression.positionYRight + eyeY
+  }
+}
 
 export type TransitionEase = 'spring' | 'smooth' | 'snappy'
 
@@ -362,21 +404,26 @@ export class BotFaceEngine {
     // ambient 相位以「落定表情」为种子（相位稳定），叠加作用在显示帧上
     const seedExpression = this.displayed
     if (ambientActive) {
-      expr = applyAmbientMotion(expr, ambient.eyes, ambient.body, ambientElapsed)
+      // 🔴 种子必须是**落定表情**，不能是插值中的显示帧（0814 修，owner dogfood
+      // 「状态切换会抖」的根因）：`ambient.ts` 的 `expressionSeed` 取自表情的头部角度，
+      // 而 hash 是 `sin(v*127.1)*43758` —— 过渡期间 headY 可能扫过 30°、种子每帧变约
+      // 1.6，hash 自变量每帧变 200 弧度，输出**完全混沌**。实测过渡期间逐帧最大跳变
+      // headY 2.18° / 眼睛 X 2.85 单位，锁定后 0.002° / 0.069（头部角度差 1000 倍）。
+      // 20-28px 下是亚像素故长期没被发现，300px 的编辑器/预览位点一眼可见。
+      // 故：用落定表情算出微动**增量**，再叠到插值帧上 —— 相位稳定，且过渡本身照常插值。
+      // （身体平移那半本来就取 `seedExpression`，是稳的；这里补的是眼/头那半。）
+      const drift = applyAmbientMotion(seedExpression, ambient.eyes, ambient.body, ambientElapsed)
+      // 遍历全字段而不是手抄「ambient 会写哪几个字段」的名单：没被 ambient 碰过的字段
+      // 增量恒为 0（精确的 0，不是近似），加上去是 no-op —— 换来的是 ambient.ts 将来
+      // 多写一个字段时这里不会静默漏掉。
+      expr = { ...expr }
+      for (const field of expressionFields) {
+        expr[field] += drift[field] - seedExpression[field]
+      }
     }
 
     // gaze：头部朝向 + 眼睛偏移叠加（additive，不与表情/ambient 冲突）
-    if (this.gazeXValue !== 0 || this.gazeYValue !== 0) {
-      expr = { ...expr }
-      expr.headY += this.gazeXValue * GAZE_HEAD_YAW_DEG
-      expr.headX -= this.gazeYValue * GAZE_HEAD_PITCH_DEG
-      const eyeX = this.gazeXValue * GAZE_EYE_X_UNITS
-      const eyeY = this.gazeYValue * GAZE_EYE_Y_UNITS
-      expr.positionXLeft += eyeX
-      expr.positionXRight += eyeX
-      expr.positionYLeft += eyeY
-      expr.positionYRight += eyeY
-    }
+    expr = applyGaze(expr, this.gazeXValue, this.gazeYValue)
 
     const blink = this.blinkValueAt(now)
     const geometry = renderAvatar(

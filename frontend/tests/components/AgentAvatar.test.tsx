@@ -251,7 +251,10 @@ describe('AgentAvatarEditor（Grok 化：tab / 网格 / 骰子 / 重置）', () 
 // ── 0813 dogfood：容器 = 圆角方形（不是圆）──────────────────────────────────────
 // owner「头像要变成方的，圆的会截断一些地方」→ 承载容器换圆角方形，口径由 avatarShell
 // 单源供给（此前 AgentAvatar 圆裁 / TurnPresence bot 无壳 / 上传图 rounded-full 三方分裂）。
-// 🔴 本批**不**声称根治截断：cube/cylinder/cone 冲出 viewBox 的那一层归形状几何调参。
+// 🔴 本批**不**声称根治截断：形状冲出 viewBox 的那一层不归本模块。
+//    （0814 已由另一条路根治 —— 不是「形状几何调参」而是 **per-shape 取景窗**
+//    `shapes.ts::SHAPE_VIEW_RADIUS`：几何一个字不动，只给装不下的形状放大 viewBox，
+//    内容随之在同样的 px 盒子里渲得小一点。闸在 `tests/shared/bot-avatar/shapes.test.tsx`。）
 
 describe('头像容器口径（avatarShell：圆角方形）', () => {
   test('圆角恒带 22% 上限、按尺寸分两档，且永远不是正圆', () => {

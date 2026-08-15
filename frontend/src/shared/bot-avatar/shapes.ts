@@ -34,8 +34,45 @@ export const BOT_AVATAR_SHAPES = [
 
 export type BotShape = (typeof BOT_AVATAR_SHAPES)[number]
 
-/** SVG viewBox（v2 坐标系：画布中心 (0,0)，几何层全部以此为基） */
+/** 几何坐标系的基准半径（画布中心 (0,0)，几何层全部以此为基）。
+ *  🔴 这是**坐标系**，不是取景窗：所有投影仍然在 ±150 空间里算，改它 = 改几何。 */
 export const BOT_VIEW_BOX = '-150 -150 300 300'
+
+/**
+ * 每形状的 **viewBox（取景窗）半径**。0814 dogfood：owner「外框仍然是方形，对特殊形状
+ * 会被裁切的，稍微比例调小，确保不会碰到」。
+ *
+ * 放大取景窗 = 同样大小的 px 盒子里内容渲得小一点，正是「比例调小」；**几何一个字不动**
+ * （形状数值仍是 lab 成品逐字，勿手调 —— 见本文件头）。
+ *
+ * 🔴 只有几何本身溢出的形状才放大，其余恒 150 —— **sphere 是默认且最常用的形象，
+ * 它的观感一个像素都不许变**（`ChatFabAvatar` 的 56px 尺寸推导正是建立在
+ * 「sphere 轮廓 122 / 半宽 150 ≈ 81%」上的）。
+ *
+ * 取值 = 该形状「27 表情 × gaze 四角（±10° yaw / ±7° pitch）」的保守 |坐标| 上界
+ * ÷ 0.95（留 5% 不贴边）后向上取偶。实测上界：
+ *   sphere 122.3 · capsule 138.2 · cube 129.7 · cloudee 124.8 · onee 111.3（均安全）
+ *   cone 150.6 · freddy 146.0 · kirby 167.9 · sunee 188.9（前二贴边、后二显著溢出）
+ * 判据与 `tests/shared/bot-avatar/shapes.test.tsx` 的 `pathMaxAbs` 同源，
+ * 那里会复算并断言「上界 ≤ 本表 × 0.95」—— 改几何或改本表而不同步必红。
+ */
+export const SHAPE_VIEW_RADIUS: Record<BotShape, number> = {
+  sphere: 150,
+  capsule: 150,
+  cone: 160,
+  cube: 150,
+  freddy: 154,
+  sunee: 200,
+  kirby: 178,
+  cloudee: 150,
+  onee: 150
+}
+
+/** 形状 → svg viewBox 串（`BotAvatar` 的渲染入口；基准形状恒等于 `BOT_VIEW_BOX`） */
+export const shapeViewBox = (shape: BotShape): string => {
+  const radius = SHAPE_VIEW_RADIUS[shape]
+  return `${-radius} ${-radius} ${radius * 2} ${radius * 2}`
+}
 
 /** 形状定义 = 主曲面 + 组合身体（附属曲面，各带独立位姿；渲染语义见 geometry.ts） */
 export interface BotShapeDef {
@@ -348,9 +385,10 @@ export const LEGACY_BOT_SHAPE_MAP: Record<string, BotShape> = {
 }
 
 const countRecord = (count: (def: BotShapeDef) => number): Record<BotShape, number> =>
-  Object.fromEntries(
-    BOT_AVATAR_SHAPES.map((shape) => [shape, count(SHAPES[shape])])
-  ) as Record<BotShape, number>
+  Object.fromEntries(BOT_AVATAR_SHAPES.map((shape) => [shape, count(SHAPES[shape])])) as Record<
+    BotShape,
+    number
+  >
 
 /** 每形状的背层 path 槽位数（= 附属曲面数；组件据此渲染固定槽位）。
  *  附属曲面逐帧在背/前层间迁移（z 排序），槽位按「全在背层」的最大值开，空槽写 ''。

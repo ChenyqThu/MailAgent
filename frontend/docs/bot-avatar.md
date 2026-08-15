@@ -20,17 +20,27 @@
   v1 的 `expressions.json`（烘焙 48 点轮廓）已删除。
 - **真 3D 转头**：表情的 headX/Y/Z 经四元数 → 透视投影（focal 620），头部轮廓随姿态实时重投影；
   眼睛是圆角矩形**贴合在曲面上**（`surfaceFrontSampleAt`），转头时随曲面弯曲、转到背面（法线和 ≤0）隐藏。
-- **过渡 = 逐字段插值**：spring（状态切换 420ms，有过冲回弹）/ smooth（池内轮换 500ms）；
+- **过渡 = 逐字段插值**：spring（状态切换 **600ms**，有过冲回弹）/ smooth（池内轮换 500ms）；
   头/眼角度族过渡前做 nearest-angle 折叠（不绕远路）。v1 的临界阻尼弹簧 morph 退役。
-- **状态驻留闸（0813 净新增）**：`setState` 带 600ms min-dwell 去抖 —— 驻留未满时新状态只排队
+  🔴 0814 从 420 提到 600（owner：「LLM 状态切换时很突然」）：按真实 `turnStageToBotState`
+  跑一次典型 run，最坏一跳要走 **56.9°** 头部角度，420ms 下峰值 14.3°/帧 ≈ 858°/秒。
+- **状态驻留闸（0813 净新增）**：`setState` 带 min-dwell 去抖 —— 驻留未满时新状态只排队
   （仅保留最新目标，不播中间态；折回当前态即撤销排队），期满由 tick 一次性切到最新目标。
-  收「快速 stage 抖动（thinking↔calling-tool↔writing）逐次 spring 重定向 = 持续甩头」；
-  600ms = 420ms spring 播完 + 观感余量，且 < 最短表情轮换节奏（searching 1000ms）。
-  `STATE_MIN_DWELL_MS` 是引擎模块内常量，勿 env 化。
+  收「快速 stage 抖动（thinking↔calling-tool↔writing）逐次 spring 重定向 = 持续甩头」。
+  取值恒 = 过渡时长 + 180ms 观感余量（0814 随过渡 420→600 一起从 600 提到 **780**），
+  且必须 < 最短**可轮换**表情节奏（**scared 900ms** —— 裸最小值 waking 800ms 的池是单元素、
+  没有轮换可被顶掉，故不计入；0813 版注释误写作 searching 1000ms）。
+  两条不等式有闸（`engine.test.ts`「时序常量的两条不等式」），**800ms 过渡正是被第二条否掉的**。
+  `STATE_SWITCH_TRANSITION_MS` / `STATE_MIN_DWELL_MS` 是引擎模块常量（为闸而 export），勿 env 化。
 - **眨眼 = 高度插值**（5px 下限，闭 42% 二次加速 / 睁 58% 二次减速）——眨眼中眼形保持圆角（v1 是 scaleY 压缩）；
   时长按状态分档（BLINK 表第三元：calm 420ms / reactive 220ms…）。
 - **ambient 空闲微动（v2 净新增）**：`AMBIENT` 表按状态配 eyes（microSaccades/shake）× body（slowDrift/shake），
   确定性 sin-hash 噪声（可回放）。ambient 活跃的 animated 实例**永不 settle**，引擎内部 30fps 限频兜功耗。
+  🔴 **噪声相位的种子必须取「落定表情」**（`buildFrame` 用 `this.displayed` 算出微动增量再叠到插值帧上）：
+  `expressionSeed` 取自表情的头部角度，而 hash 是 `sin(v*127.1)*43758` —— 若把**插值中**的表情喂进去，
+  过渡期间种子逐帧变化会让输出完全混沌。实测逐帧最大跳变 headY 2.18°/眼 X 2.85 单位 → 锁定后 0.002°/0.069。
+  这是 0814 修掉的一个长期 bug（引擎原先只有身体平移那半取了落定表情，眼/头那半没取；20-28px 下是
+  亚像素故没人发现，300px 预览一眼可见）。
 - **gaze**（v1 特性保留、v2 重实现）：指针 → 头部朝向（yaw ±10° / pitch ±7°）+ 眼睛偏移叠加。
 
 ## 模块地图（`frontend/src/shared/bot-avatar/`，零外部依赖，桌面 + 远程 web 通用）
@@ -42,7 +52,7 @@
 | `expressions.ts` | 27 表情参数表（studio 精修版，索引语义不变）+ `NEUTRAL_EXPRESSION`；**改一行 = 改所有引用该索引的状态的脸** |
 | `ambient.ts` | 空闲微动纯函数：`applyAmbientMotion`（眼抖/头漂进表情参数）+ `ambientBodyOffset`（身体平移）；确定性噪声，同 (expression, elapsed) 恒同输出 |
 | `states.ts` | 39 态五张表（GROUPS/POOLS/EXPR_CADENCE/BLINK[+时长档]/**AMBIENT**）+ **MailAgent 状态映射单源**：`turnStageToBotState`（TurnStage 8 值）/ `runStateToBotState`（headless run 6 值投影），Record 全射——上游加态漏映射 = typecheck 红 |
-| `shapes.ts` | 形状词表 = **9 个成品形状，对应 lab 10 成品**（0813 成品目录化 + 自编形状退役：Grok bot **与 Strobi 合并**→sphere —— 🔴 lab 源数据里二者仅 depth 差 0.0367（240 vs 240.03671875）、视觉不可分辨，owner 拍板合并为一个条目，**对着 lab 目录数数少一个不是漏搬**；Nova→capsule / Citrus→cone / Cubee→cube——后二者调参值根治 raw preset 的 viewBox 溢出实测 204/176→126/150；+5 个成品 freddy/sunee/kirby/cloudee/onee，前四者带**组合身体**；自编 cylinder/diamond/mickey/cursor 已退役）→ `BotShapeDef {primary, nodes}`；`LEGACY_BOT_SHAPE_MAP`（v1 8 形双射 + v2 退役 4 形就近入座 + strobi→sphere）；`BACK_PATH_COUNT`/`FRONT_PATH_COUNT`（附属曲面槽位，逐帧 z 排序在背/前层间迁移）；`BOT_AVATAR_SHAPES` 是 parity 闸抽取锚点；viewBox `-150 -150 300 300`（组合身体按 lab 语义可少量出界，BotAvatar svg overflow:visible 镜像 lab） |
+| `shapes.ts` | 另有 **`SHAPE_VIEW_RADIUS` / `shapeViewBox()`（0814）**：per-shape **取景窗**半径。owner「外框仍是方形，对特殊形状比例调小，确保不会碰到」→ 只给几何装不下的形状放大 viewBox（内容随之在同样 px 盒子里渲得小一点），**几何一个字不动**、其余形状恒 150（🔴 sphere 是默认形象，观感一个像素都不许变）。取值 = 该形状「27 表情 × gaze 四角」保守上界 ÷ 0.95：`cone 160 / freddy 154 / kirby 178 / sunee 200`。闸在 shapes.test.tsx（改几何或改表而不同步必红，且禁止无谓放大）。以下是原有内容 —— 形状词表 = **9 个成品形状，对应 lab 10 成品**（0813 成品目录化 + 自编形状退役：Grok bot **与 Strobi 合并**→sphere —— 🔴 lab 源数据里二者仅 depth 差 0.0367（240 vs 240.03671875）、视觉不可分辨，owner 拍板合并为一个条目，**对着 lab 目录数数少一个不是漏搬**；Nova→capsule / Citrus→cone / Cubee→cube——后二者调参值根治 raw preset 的 viewBox 溢出实测 204/176→126/150；+5 个成品 freddy/sunee/kirby/cloudee/onee，前四者带**组合身体**；自编 cylinder/diamond/mickey/cursor 已退役）→ `BotShapeDef {primary, nodes}`；`LEGACY_BOT_SHAPE_MAP`（v1 8 形双射 + v2 退役 4 形就近入座 + strobi→sphere）；`BACK_PATH_COUNT`/`FRONT_PATH_COUNT`（附属曲面槽位，逐帧 z 排序在背/前层间迁移）；`BOT_AVATAR_SHAPES` 是 parity 闸抽取锚点；viewBox `-150 -150 300 300`（组合身体按 lab 语义可少量出界，BotAvatar svg overflow:visible 镜像 lab） |
 | `colors.ts` | 11 色双主题值（light/dark 各一）；浅色身体（white/yellow/gray）有 per-color eye 覆写（背景色眼睛在浅色主题会隐形）；`BOT_AVATAR_COLORS` 同为闸锚点 |
 | `engine.ts` | 零 React/GSAP 纯 TS 引擎：参数化过渡 + 按态池随机调度 + 眨眼排程 + ambient + gaze（`{random, now}` 可注入）；`tick()` 空闲返回 null = settle 后零重绘（**ambient 态例外**：30fps 限频出帧）；`staticFrame(exprIndex, shapeDef)` 带模块级缓存（键 = SHAPES 的 `BotShapeDef` 单例 × 表情索引，列表同款实例零重复计算，组合身体同享缓存） |
 | `ticker.ts` | 模块级共享 rAF 单例（全仓首个）：注册制启停、`visibilitychange` 暂停、SSR 安全、测试用 `__instanceCount()` |
@@ -71,7 +81,8 @@
 ## 渲染档位纪律（性能红线）
 
 - **静态是默认档**：8 个既有渲染位点（Agents 卡/会话列表行/报告卡/run 历史/@mention/审批卡…）全部经 `AgentAvatar` 静态渲染，列表恒静态——**新增 animated 位点须过性能评估**。静态帧有模块级缓存（shape×表情），列表数百实例只算一次几何。
-- animated 位点现存 3 处常驻：chat 回合头像 `TurnPresence`（28px）、面板头 `AssistantPanelBotAvatar`（20px）、编辑器预览（48px，+mouseInteractive +showcase 巡演）；另有 **hover 瞬时位点**（0813）：Agents 页六张卡（主 Agent + 5 类 agent 卡）hover 时经 `useAvatarHoverShowcase` 转 animated + 随机换动作，离开即回静态——鼠标只有一个，同屏至多一张卡在动，性能评估随 hook 注释记录。
+- animated 位点现存 **4 处**常驻：chat 回合头像 `TurnPresence`（28px）、面板头 `AssistantPanelBotAvatar`（20px）、编辑器预览（48px，+mouseInteractive +showcase 巡演）、**AI FAB `ChatFabAvatar`（56px，+mouseInteractive，0814 从静态档升上来）**；另有 **hover 瞬时位点**（0813）：Agents 页六张卡（主 Agent + 5 类 agent 卡）hover 时经 `useAvatarHoverShowcase` 转 animated + 随机换动作，离开即回静态——鼠标只有一个，同屏至多一张卡在动，性能评估随 hook 注释记录。
+- **FAB 升档的性能评估（0814，owner 拍板）**：官方形象 sphere 实测 `renderAvatar` **0.077ms/帧 → 30fps 常驻 0.2% 单核**，且 FAB **只挂在邮件页**（其他页没有这个钮），不构成全局常驻。⚠️ 结论跟着**用户选的形状**走：组合身体最重的 sunee 是 **2.26ms/帧 → 6.8% 单核**，形状之间差 **29 倍**（实测全表：capsule 0.22 / cube 0.59 / kirby 0.63 / onee 0.80 / cloudee 1.19 / cone 1.28 / freddy 1.41 / sunee 2.26 ms）。若将来把 FAB 铺到更多页面、或加重 `AMBIENT` 表，须重新评估。升档的动因是静态档**结构上做不到**这两件事：换脸零过渡（`staticFrame` 离散换帧）+ 拿不到 gaze。
 - **showcase 巡演**（`useShowcaseState`）：从 12 态表现力池每 2.4s 随机换动作（不连续重复）；reduced-motion 恒 'idle'（巡演不得绕过静态纪律）。消费点 = 编辑器预览（Bot tab 常开）+ hover 卡。
 - 🔴 **v2 新边界**：ambient 活跃状态（多数状态 body slowDrift）的 animated 实例**常驻 30fps 重绘**（不 settle）——这是「空闲也活着」的有意代价，仅限上述 3 位点；改 `AMBIENT` 表 = 改动画位点常驻功耗。
 - **静态档眨眼（0813）不破静态地板**：静态位点经 `staticBlink.ts` registry 低频眨眼——间隙真 idle（无周期唤醒无 rAF 无样式计算，只有一枚臂向下次眨眼的 timeout）、并发上限 2 把最坏帧成本钉成常数（同屏数百实例 = 每个眨得更稀的优雅降级）、眨眼帧走引擎同款高度插值（两档观感一致）。眨眼只重算眼 path，**只传 `primary` 不传 `nodes`**（眼几何不依赖附属曲面，传了等于每个眨眼帧白付一遍凸包）。静态档的**表情轮换**仍有意不做（离散换帧无过渡 = glitch 观感，加过渡 = 开动画通道破纪律）——但 `expressionIndex` prop 允许消费点**指定**静态表情（FAB 低频换脸即用它），此时眨眼基线必须跟随同一索引，否则眨眼那一刻脸会跳回池首。
