@@ -3259,9 +3259,10 @@
           "draft": "Drafts",
           "web": "Web",
           "calendar": "Calendar",
+          "matters": "Matters",
           "capability": "Identity & skills",
           "supply": "Skill supply chain",
-          "agents": "Custom agents",
+          "agents": "Agent config",
           "exec": "Local files & commands",
           "outbound": "Outbound"
         },

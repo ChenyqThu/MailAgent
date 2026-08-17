@@ -3259,9 +3259,10 @@
           "draft": "草稿",
           "web": "联网",
           "calendar": "日历",
+          "matters": "事项",
           "capability": "身份与技能",
           "supply": "Skill 供应链",
-          "agents": "Custom Agent",
+          "agents": "Agent 配置",
           "exec": "本地文件与命令",
           "outbound": "外发与外呼"
         },

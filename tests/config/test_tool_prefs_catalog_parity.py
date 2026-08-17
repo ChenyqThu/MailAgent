@@ -98,3 +98,26 @@ def test_non_configurable_tools_never_default_auto():
     for policy in BUILTIN_TOOL_POLICIES:
         if not policy.configurable:
             assert policy.default_tier == "ask", policy.tool_name
+
+
+def test_every_tool_pref_group_has_a_bilingual_label():
+    """设置页的分组标题是 `settings.ai.toolPrefs.group.<group>` —— 缺词条时 i18n 不会报错，
+    只会把**原始 key** 原样渲染在页面上。
+
+    这正是 0814 owner 报的那个：`matters` 组自 Matters P3 落地起就没有词条，于是 matter 家族
+    十几个工具的分组标题一直显示 `settings.ai.toolPrefs.group.matters`。缺一条翻译不会红任何
+    既有测试，所以把它变成红测试。
+    """
+    from src.agent_config.tool_prefs import TOOL_PREF_GROUPS
+
+    for locale in ("zh-CN", "en-US"):
+        path = REPO / f"frontend/src/shared/i18n/locales/{locale}/common.json"
+        labels = json.loads(path.read_text(encoding="utf-8"))["settings"]["ai"]["toolPrefs"]["group"]
+        missing = [group for group in TOOL_PREF_GROUPS if not labels.get(group)]
+        assert not missing, (
+            f"{locale} 缺 settings.ai.toolPrefs.group 词条：{missing} —— "
+            "设置页会把原始 key 当标题显示给用户"
+        )
+        # 反向：留着一个不再存在的分组标签，说明 TOOL_PREF_GROUPS 改过而这里没跟。
+        stale = sorted(set(labels) - set(TOOL_PREF_GROUPS))
+        assert not stale, f"{locale} 有多余的分组词条（TOOL_PREF_GROUPS 里已无此组）：{stale}"
