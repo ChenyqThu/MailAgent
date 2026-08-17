@@ -64,14 +64,56 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Setup Python 3.11
-        uses: actions/setup-python@v5
+      # 🔴 用与**打包 runtime 同源**的 python-build-standalone，不用 actions/setup-python。
+      #
+      # 起因（v2.15.0 发版实测）: setup-python 的 '3.11' 在 macOS arm64 上最新只解析到
+      # **3.11.9**（versions-manifest 无更高 3.11.x），而 build-python-venv.sh 装进 .app 的是
+      # **3.11.15**。于是 CI 与生产跑的不是同一个解释器 —— `email.utils.getaddresses` 对嵌套
+      # 尖括号的处理正好在这两个补丁版之间收紧过（CVE-2023-27043），同一份代码本地全绿、发版
+      # 当天 CI 红。旧注释写着「对齐本地 venv 与嵌入式打包 runtime」，但那句对齐从未成立。
+      #
+      # 版本号**从 build-python-venv.sh grep 单源读**，绝不在本文件手抄 —— 手抄的那一刻就又
+      # 造出一处会漂移的跨文件常量（本仓一贯纪律）。
+      - name: Setup Python (python-build-standalone, 与打包 runtime 同源)
+        id: pbs
+        run: |
+          set -euo pipefail
+          SCRIPT=frontend/scripts/build-python-venv.sh
+          PBS_TAG=$(grep -E '^PBS_TAG=' "$SCRIPT" | head -1 | cut -d'"' -f2)
+          PYVER=$(grep -E '^PYVER=' "$SCRIPT" | head -1 | cut -d'"' -f2)
+          # 抽取失败必须当场炸，不能静默退化成「随便一个 python」——那正是本次要消灭的病根。
+          [ -n "$PBS_TAG" ] && [ -n "$PYVER" ] || {
+            echo "::error::从 $SCRIPT 抽取 PBS_TAG/PYVER 失败（脚本改写法了？）"; exit 1; }
+          echo "pbs_tag=$PBS_TAG" >> "$GITHUB_OUTPUT"
+          echo "pyver=$PYVER" >> "$GITHUB_OUTPUT"
+          # ci-test.yml 固定 runs-on: macos-14 ⇒ triple 恒 aarch64-apple-darwin。
+          TARBALL="cpython-${PYVER}+${PBS_TAG}-aarch64-apple-darwin-install_only.tar.gz"
+          URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_TAG}/${TARBALL}"
+          echo "downloading $TARBALL"
+          curl -fsSL --retry 3 --retry-delay 2 "$URL" -o /tmp/pbs.tar.gz
+          mkdir -p /tmp/pbs && tar -xzf /tmp/pbs.tar.gz -C /tmp/pbs
+          # PBS 的 bin 里只有 python3 / python3.11；后续步骤按惯例调 `python`，补个 symlink。
+          ln -sf /tmp/pbs/python/bin/python3 /tmp/pbs/python/bin/python
+          echo "/tmp/pbs/python/bin" >> "$GITHUB_PATH"
+
+      # 把「对齐」从注释变成闸：不一致就红在这里，而不是等某个 stdlib 行为差异在发版当天炸。
+      - name: Verify interpreter == packaging runtime
+        run: |
+          set -euo pipefail
+          ACTUAL=$(python -c 'import platform; print(platform.python_version())')
+          EXPECTED='${{ steps.pbs.outputs.pyver }}'
+          echo "CI python=$ACTUAL  packaging runtime=$EXPECTED"
+          [ "$ACTUAL" = "$EXPECTED" ] || {
+            echo "::error::CI 解释器 $ACTUAL ≠ 打包 runtime $EXPECTED — 两者必须同版本"; exit 1; }
+
+      # setup-python 走后它的 `cache: pip` 也没了；自建 pip 缓存，避免每次全量装依赖。
+      - name: Cache pip
+        uses: actions/cache@v4
         with:
-          python-version: '3.11' # 对齐本地 venv (3.11.14) 与嵌入式打包 runtime
-          cache: pip
-          cache-dependency-path: |
-            requirements.txt
-            pyproject.toml
+          path: ~/Library/Caches/pip
+          key: pip-${{ runner.os }}-py${{ steps.pbs.outputs.pyver }}-${{ hashFiles('requirements.txt', 'pyproject.toml') }}
+          restore-keys: |
+            pip-${{ runner.os }}-py${{ steps.pbs.outputs.pyver }}-
 
       - name: Install backend deps
         # 运行时依赖在 requirements.txt (pyproject [project] 无 dependencies 键);
