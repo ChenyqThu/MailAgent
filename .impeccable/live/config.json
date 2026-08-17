@@ -1,0 +1,9 @@
+{
+  "files": [
+    "frontend/src/electron/renderer/index.html",
+    "frontend/src/web/index.html"
+  ],
+  "insertBefore": "</body>",
+  "commentSyntax": "html",
+  "cspChecked": true
+}

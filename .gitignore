@@ -129,3 +129,8 @@ tests/agent_eval/baselines/*.report.*
 /.design-sync/learnings/
 scripts/backfill_thread_id_rfc2047.journal.json
 scripts/backfill_message_id_normalize.journal.json
+
+# impeccable 插件：项目级设置（live/config.json）入库，本机态与缓存不入库
+# —— hook.cache.json 含 session UUID 与绝对路径，config.local.json 是本机同意状态。
+.impeccable/hook.cache.json
+.impeccable/config.local.json
