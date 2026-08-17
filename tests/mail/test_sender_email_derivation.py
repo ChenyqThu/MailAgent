@@ -50,7 +50,6 @@ from src.mail.sync_store import SyncStore, UpdateAfterFetchResult
         ("Gary W", None),
         ("@x.com", None),
         ("a@localhost", None),   # 无点域名: 与 normalize_email 同判据
-        ("weird <<a@x.com>>", None),
     ],
 )
 def test_derive_sender_email_shapes(raw, expected):
@@ -299,3 +298,24 @@ def test_backfill_handles_more_rows_than_one_chunk(tmp_path, monkeypatch):
             "SELECT internal_id, sender_email FROM email_metadata"
         ).fetchall())
     assert got == expected
+
+
+def test_nested_angle_brackets_do_not_raise(  # 0817 发版闸：CI 与生产的 stdlib 版本不同
+):
+    """`'weird <<a@x.com>>'` 这一形状**有意不断言具体返回值**。
+
+    `getaddresses` 对嵌套尖括号的处理在 3.11 补丁线中间变过（CVE-2023-27043 那条收紧，
+    畸形项开始返回 `('', '')`）：
+
+      · 生产（嵌入式打包 runtime 3.11.15）与本地 venv（3.11.14）→ None
+      · CI runner（`setup-python` 在 macOS arm64 上最新只有 **3.11.9**）→ 'a@x.com'
+
+    两种都不算错——「尽力解析」与「拒绝畸形」都说得通，而原用例把一个 stdlib 实现细节钉成了
+    契约，于是同一份代码本地全绿、发版时 CI 红。这里退回到该函数真正承诺的东西（见其
+    docstring 的 ⚠️ 段）：畸形输入**不抛**，且要么给出合法地址、要么给 None。
+
+    🔴 想恢复成精确断言，前提是 CI 能拿到与嵌入式 runtime 同版本的 Python；在那之前精确断言
+    只会周期性地在发版当天变红。
+    """
+    result = derive_sender_email("weird <<a@x.com>>")
+    assert result is None or result == "a@x.com"
