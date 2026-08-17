@@ -14,6 +14,7 @@ canonical = ``src/contacts/taxonomy.py``（contact 表 CHECK 值域经 sql_check
 from __future__ import annotations
 
 import ast
+import json
 import re
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -26,6 +27,11 @@ TAXONOMY_PY = p.REPO_ROOT / "src" / "contacts" / "taxonomy.py"
 CONTACT_TS = (
     p.REPO_ROOT / "frontend" / "src" / "shared" / "api" / "types" / "contact.ts"
 )
+#: 关联邮件方向轴的 canonical（task 08-14 WP-5；它不在 taxonomy.py —— 那份是 contact
+#: 表的 CHECK 值域，方向是 API 查询参数的值域，两者没有共同上游可下沉）。
+CONTACTS_ROUTER_PY = p.REPO_ROOT / "src" / "api" / "routers" / "contacts.py"
+LOCALE_DIR = p.REPO_ROOT / "frontend" / "src" / "shared" / "i18n" / "locales"
+LOCALES = ("zh-CN", "en-US")
 
 #: canonical 常量名 → TS 声明锚点（两侧同名，方便 grep）。
 PAIRS = (
@@ -97,6 +103,44 @@ def test_contact_vocabulary_identical_across_languages(name):
         f"改词表必须两侧同步（TS 侧多档 = 能选却 PATCH 400；少档 = 服务端真值在"
         f"前端投影里没有落点）"
     )
+
+
+# ── 关联邮件方向轴（task 08-14 WP-5）─────────────────────────────────────────────
+#
+# 又一处消灭不掉的镜像：canonical 是 `src/api/routers/contacts.py` 的
+# `MAIL_DIRECTION_VALUES`（`GET /contacts/{id}/mails?direction=` 的服务端值域，越域
+# 400 `E_INVALID_ARG`），renderer 的 SegmentedControl 只能自带一份
+# `CONTACT_MAIL_DIRECTIONS`。漂了会怎样：TS 多一档 → tab 点下去恒 400；TS 少一档 →
+# 服务端仍会给那个 `direction` 值，`ContactMailDirectionValue` 收窄不到它。
+
+
+def test_mail_direction_vocabulary_identical_across_languages():
+    canonical = py_str_tuple(CONTACTS_ROUTER_PY, "MAIL_DIRECTION_VALUES")
+    ts = ts_array_literals(CONTACT_TS, "CONTACT_MAIL_DIRECTIONS")
+    assert ts == canonical, (
+        f"方向轴: TS 手抄 {ts!r} 与 contacts.py canonical {canonical!r} 不一致 —— "
+        f"TS 多一档 = tab 能点却 400；少一档 = 服务端的 direction 值在前端没有落点"
+    )
+
+
+def test_every_mail_direction_has_a_label_in_every_locale():
+    """🔴 `roleKey` 是模板字面量 `contacts.mail.filter.${direction}` —— TS 类型系统
+    盯不住它，少一个 key 就在 UI 上渲染出裸 key（上游刚修过同型 bug: 工具审批档的
+    「事项」分组一直显示原始 i18n key）。两 locale 的 key 集合一致由
+    `contactsLocaleParity` 管，但**两边一起缺**它照样绿，故这里对着值域逐档验。
+    """
+    canonical = set(py_str_tuple(CONTACTS_ROUTER_PY, "MAIL_DIRECTION_VALUES"))
+    for locale in LOCALES:
+        path = LOCALE_DIR / locale / "common.json"
+        data = json.loads(path.read_text(encoding="utf-8"))
+        node = data.get("contacts", {}).get("mail", {}).get("filter")
+        assert isinstance(node, dict) and node, (
+            f"{locale}: 找不到 `contacts.mail.filter` 块 —— 搬家/改名了，本闸需同步更新"
+        )
+        assert set(node) == canonical, (
+            f"{locale}: `contacts.mail.filter` 的 key 集合 {sorted(node)} 与方向值域 "
+            f"{sorted(canonical)} 不符 —— 缺 = 渲染裸 key；多 = 老 role 轴的残留翻译"
+        )
 
 
 # ── canary：抽取器失效必须红 ───────────────────────────────────────────────────

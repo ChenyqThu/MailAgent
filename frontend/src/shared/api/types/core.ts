@@ -29,6 +29,19 @@ export type EmailMeta = EmailList_EmailListItem & {
    * `cli.gen.ts` 是 gitignored 的 postinstall 产物，本地陈旧副本会静默丢字段。
    */
   to_addr?: string | null
+  /**
+   * v58 派生列 —— `sender` 的归一裸小写地址（`email_metadata.sender_email`，
+   * Python `derive_sender_email` 在持久化边界算，前端不再自己解析）。
+   *
+   * 🔴 `sender` **不保证是裸地址**：AppleScript 路径写的是整个 From 头
+   * `Gary W <gary.w@…>`（活库 13014 行里 8850 行 = 68%）。任何「判发件人地址」
+   * 的判据（`isBotSender` 等）必须读这个字段，读 `sender` 就是在读发件人
+   * 自己填的显示名。取不到地址的行为 null。
+   *
+   * optional 同 `to_addr`：schema 里是 optional（CLI `email list` 不发），且
+   * `cli.gen.ts` 是 gitignored 的 postinstall 产物，本地陈旧副本会静默丢字段。
+   */
+  sender_email?: string | null
 }
 /**
  * EmailDetail = schema-typed EmailGet_EmailRecord (+ historically, fields the

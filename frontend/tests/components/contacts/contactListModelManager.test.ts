@@ -4,10 +4,7 @@
 import { describe, expect, test } from 'vitest'
 
 import type { ContactRowDto } from '@shared/api/types/contact'
-import {
-  buildContactRows,
-  type ContactListRow
-} from '@shared/components/contacts/contactListModel'
+import { buildContactRows, type ContactListRow } from '@shared/components/contacts/contactListModel'
 
 function row(
   id: number,
@@ -42,15 +39,13 @@ const labels = {
   kindGroup: (bucket: string) => `kind:${bucket}`,
   fn: (value: string) => value,
   level: (value: string) => value,
+  self: '我',
   manager: (item: ContactRowDto) =>
     `${item.manager_display_name ?? String(item.manager_contact_id)} 的下级`,
   ungrouped: '未设上级'
 }
 
-function build(
-  items: ContactRowDto[],
-  collapsed: Record<string, boolean> = {}
-): ContactListRow[] {
+function build(items: ContactRowDto[], collapsed: Record<string, boolean> = {}): ContactListRow[] {
   return buildContactRows({
     items,
     view: 'known',

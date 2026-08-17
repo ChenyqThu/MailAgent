@@ -135,6 +135,8 @@ export function ContactsWorkspace(): React.ReactElement | null {
           kindGroup: (bucket) => t(`contacts.group.${bucket}`),
           fn: (value) => t(`contacts.fn.${value}`),
           level: (value) => t(`contacts.level.${value}`),
+          // 「我」恒置顶单独一组（WP-3）。
+          self: t('contacts.group.self'),
           // 按汇报线（WP5）：组 label 用行上的 manager_display_name 插值；无名
           // 上级照原型 `m.name || m.id` 用 id 兜底。ungrouped 通道该档特判成
           // 「未设上级」（`contacts.group.noManager`），天然置底。
@@ -143,9 +145,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
               name: item.manager_display_name ?? String(item.manager_contact_id)
             }),
           ungrouped:
-            groupBy === 'manager'
-              ? t('contacts.group.noManager')
-              : t('contacts.groupBy.ungrouped')
+            groupBy === 'manager' ? t('contacts.group.noManager') : t('contacts.groupBy.ungrouped')
         }
       }),
     [collapsedGroups, groupBy, items, kindFilter, t, view]

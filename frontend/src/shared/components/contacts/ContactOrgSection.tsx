@@ -158,17 +158,13 @@ function PersonPickDialog({
   }, [searchInput])
 
   const listQuery = useContactList({ view: 'all', q: search, sort: 'density', enabled: open })
-  // 池过滤照原型：person 且非 self / 非隐藏；exclude 不渲染（自己）。
+  // 池过滤照原型：person / 非隐藏；exclude 不渲染（本人）。
+  // 🔴 task 08-14 WP-3 起不再排除 is_self —— owner「上下级也无法关联我」：
+  // 「我」得能被选成别人的上级、也得能出现在候选里。
   const items = useMemo(
     () =>
       (listQuery.data?.items ?? [])
-        .filter(
-          (row) =>
-            row.kind === 'person' &&
-            !row.is_self &&
-            row.hidden_at == null &&
-            !excludeIds.has(row.id)
-        )
+        .filter((row) => row.kind === 'person' && row.hidden_at == null && !excludeIds.has(row.id))
         .slice(0, PICK_CANDIDATE_CAP),
     [excludeIds, listQuery.data]
   )

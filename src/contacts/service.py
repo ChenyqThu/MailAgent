@@ -18,8 +18,8 @@ matters 侧 (`src/matters/service.py::_upsert_contact`) 保留薄包装、底层
 from __future__ import annotations
 
 import json
-import re
 import sqlite3
+import time
 from typing import Any, Dict, FrozenSet, Iterable, Mapping, Optional
 
 from src.contacts.taxonomy import (
@@ -31,9 +31,14 @@ from src.contacts.taxonomy import (
     derive_function,
     derive_seniority,
 )
-
-# 与 matters `_CONTACT_EMAIL_RE` 同判据 (那份随 WP3 退役后本处成为唯一)。
-CONTACT_EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+# 🔴 判据与实现下沉到零依赖叶子 `src/mail/email_address.py` (task 08-14 WP-5):
+# `sync_store` 的持久化边界要用同一份归一算 `sender_email` 列, 而 sync_store 依赖
+# contacts 域是层级倒置 —— 故下沉后本处**再导出**, 全仓仍只有一份正则/一份归一。
+# 老 import 路径 (`from src.contacts.service import normalize_email`) 保持可用。
+from src.mail.email_address import (  # noqa: F401  (re-export, 见上)
+    EMAIL_SHAPE_RE as CONTACT_EMAIL_RE,
+    normalize_email,
+)
 
 
 class ContactError(Exception):
@@ -43,14 +48,6 @@ class ContactError(Exception):
         super().__init__(message)
         self.code = code
         self.message = message
-
-
-def normalize_email(raw: Any) -> Optional[str]:
-    """trim+lower 归一; 非法形状返回 None (与 matters 提取同判据)。"""
-    email = str(raw or "").strip().lower()
-    if not email or not CONTACT_EMAIL_RE.match(email):
-        return None
-    return email
 
 
 def parse_self_emails(raw: Any) -> FrozenSet[str]:
@@ -68,7 +65,13 @@ def resolve_self_addresses(
     user_email: Optional[str] = None, extra_raw: Optional[str] = None,
 ) -> FrozenSet[str]:
     """owner 自有地址集 = USER_EMAIL + MAILAGENT_SELF_EMAILS + 库内 is_self=1
-    联系人的全部锚点。参数不传时才读全局 settings (测试可注入)。"""
+    联系人的全部锚点。参数不传时才读全局 settings (测试可注入)。
+
+    🔴 task 08-14 WP-3 起第三源是**权威源**: owner 拍板「引导之后一切以『我』那条
+    资料为准」—— 往「我」里合并进来的旧邮箱自动成为「我的地址」, 无需另配。
+    ``MAILAGENT_SELF_EMAILS`` 保留但降级: 仍计入本集合 (不想手动合并的用户的兜底),
+    但**不参与** :func:`ensure_self_bootstrap` 的自动标记 —— 否则会标出第二个「我」。
+    """
     if user_email is None or extra_raw is None:
         from src.config import config as _settings
 
@@ -184,14 +187,90 @@ def set_kind(conn: sqlite3.Connection, contact_id: int, kind: str, *, now: int) 
 def set_is_self(
     conn: sqlite3.Connection, contact_id: int, *, is_self: bool, now: int,
 ) -> None:
-    """标/去标 owner 自有地址。is_self=1 的联系人从列表与画像队列排除 (§3.4),
-    其锚点进 ``resolve_self_addresses`` 的自有地址集 (后续扫描按 self 处理);
-    既有账本行保留 (数据不删), 聚合口径由下次校准收敛。"""
+    """标/去标「我」(task 08-14 WP-3 起是**身份标签**, 不再是排除开关)。
+
+    - 标上之后这个人**照常**出现在列表 (置顶 + 「这是我」徽章) / 同事推荐 / 画像
+      队列; 唯一仍排除它的地方是 compose 收件人补全 (不该把自己补给自己)。
+    - 其锚点即 ``resolve_self_addresses`` 的权威源 (出向判据 / 方向三分都读它)。
+    - 🔴 **单选** (owner 拍板): 「我」只能有一个 —— 设新的自动清掉旧的, 于是
+      「切换」是唯一的改法, 不会出现两个「我」把自有地址集撑大。
+    """
     _require_live_contact(conn, contact_id)
+    if is_self:
+        conn.execute(
+            "UPDATE contact SET is_self=0, updated_at=? WHERE is_self=1 AND id<>?",
+            (now, contact_id),
+        )
     conn.execute(
         "UPDATE contact SET is_self=?, updated_at=? WHERE id=?",
         (1 if is_self else 0, now, contact_id),
     )
+
+
+# ==================== 「我」的引导 (task 08-14 WP-3, 只跑一次) ====================
+
+#: 引导标记的 sync_state 键。sync_state 是 KV 表 —— 镜像 ``contact_extract.watermark``
+#: 与 ``davmail.*`` 的既有键形状, **不 bump DB_VERSION**。
+SELF_BOOTSTRAP_KEY = "contact_self.bootstrap_at"
+
+
+def _sync_state_get(conn: sqlite3.Connection, key: str) -> Optional[str]:
+    row = conn.execute("SELECT value FROM sync_state WHERE key=?", (key,)).fetchone()
+    return None if row is None else str(row[0])
+
+
+def _sync_state_set(conn: sqlite3.Connection, key: str, value: Any) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO sync_state (key, value, updated_at) VALUES (?, ?, ?)",
+        (key, str(value), time.time()),
+    )
+
+
+def ensure_self_bootstrap(
+    conn: sqlite3.Connection, *,
+    user_email: Optional[str] = None, now: Optional[int] = None,
+) -> Optional[int]:
+    """按 ``USER_EMAIL`` 精确匹配把「我」标出来。返回被标的 contact_id (没标 = None)。
+
+    owner 拍板的两段式里的第 ①段 (task 08-14 WP-3):
+
+    - 🔴 判据**只有账号邮箱这一个**。绝不用名字, 也绝不拿 ``MAILAGENT_SELF_EMAILS``
+      去自动标别的联系人 —— owner 明确点出「同名会被误标」。判据确定且唯一 ⇒ 单例
+      天然成立, 也不与 :func:`resolve_self_addresses` 构成互相喂给的回路 (本函数
+      不读自有地址集)。
+    - 「只跑一次」= ``sync_state[SELF_BOOTSTRAP_KEY]`` 记号式。⚠️ **只在真的落定
+      之后才写记号**: 引导跑在扫描之前, 全新库里 ``USER_EMAIL`` 那条联系人还没被
+      建出来, 此时写记号就等于「永远标不上我」。所以找不到人就什么也不做, 下个
+      tick 再试。
+    - 库里已经有 ``is_self=1`` 的行 → 记号照写、**不动那行**: owner 已经做过决定
+      (手动标的, 或上一次引导标的), 自动逻辑不覆盖人的决定。同理 owner 事后手动
+      取消「我」也不会被标回来 —— 恢复路径是手动 UI。
+    """
+    if _sync_state_get(conn, SELF_BOOTSTRAP_KEY) is not None:
+        return None
+    if now is None:
+        now = int(time.time() * 1000)
+    if conn.execute("SELECT 1 FROM contact WHERE is_self=1 LIMIT 1").fetchone():
+        _sync_state_set(conn, SELF_BOOTSTRAP_KEY, now)
+        return None
+    if user_email is None:
+        from src.config import config as _settings
+
+        user_email = getattr(_settings, "user_email", "")
+    own = normalize_email(user_email)
+    if own is None:
+        return None  # 没配 / 配错 —— 不写记号, 配好之后下个 tick 还能引导
+    row = conn.execute(
+        "SELECT c.id FROM contact_email ce JOIN contact c ON c.id = ce.contact_id "
+        "WHERE ce.email_normalized = ? AND c.merged_into IS NULL",
+        (own,),
+    ).fetchone()
+    if row is None:
+        return None  # 还没扫到自己那条 —— 同上, 不写记号
+    contact_id = int(row[0])
+    set_is_self(conn, contact_id, is_self=True, now=now)
+    _sync_state_set(conn, SELF_BOOTSTRAP_KEY, now)
+    return contact_id
 
 
 # ==================== 字段级锁定 + 身份字段编辑 (WP2, v55) ====================
@@ -554,6 +633,18 @@ def merge_contacts(
         "UPDATE contact SET manager_contact_id=NULL WHERE id=? AND manager_contact_id=?",
         (winner_id, winner_id),
     )
+    # ③.5 「我」跟着人走 (task 08-14 WP-3): 被并掉的那条如果是「我」, 身份标签转给
+    #     winner。🔴 不做会**静默丢掉「我」**: 锚点已在 ① 搬到 winner, 墓碑上那面
+    #     is_self=1 的旗子名下再无锚点 ⇒ resolve_self_addresses 的第三源 (WP-3 起的
+    #     权威源) 直接塌成空集 —— 出向判据 / 方向三分 / 置顶徽章一起失效, 而引导记号
+    #     已烧掉不会重标, 只能手动补。合并方向由 UI 的 winner/loser 决定, owner 完全
+    #     可能把「我」选成被并方 (「换邮箱」正是这个功能的主场景)。
+    #     走 set_is_self 而不是裸 UPDATE: 单选语义 (清掉其它所有 is_self, 含这块墓碑)
+    #     只有那一个实现, 不在这里抄第二份。
+    if conn.execute(
+        "SELECT is_self FROM contact WHERE id=?", (loser_id,)
+    ).fetchone()[0]:
+        set_is_self(conn, winner_id, is_self=True, now=now)
     # ④ loser 墓碑 (数据保留; 聚合快照留作审计, 读侧按 merged_into 过滤)。
     conn.execute(
         "UPDATE contact SET merged_into=?, updated_at=? WHERE id=?",
@@ -573,12 +664,22 @@ def merge_contacts(
 # ==================== 聚合缓存校准 (账本恒可重算) ====================
 
 def _sent_predicate(self_addresses: FrozenSet[str]) -> tuple[str, list]:
-    """出向判据: 邮件 sender (裸地址, 归一后) ∈ 自有地址集。"""
+    """出向判据: 邮件的 ``sender_email`` (v58 派生列) ∈ 自有地址集。
+
+    🔴 v58 前判据是 ``lower(trim(COALESCE(m.sender,''))) IN (…)`` —— 精确匹配一个
+    **不保证是裸地址**的列: 活库 13014 行里 8850 行 (68%) 存的是整个 From 头
+    ``Gary W <gary.w@…>``, 全都匹配不上 ⇒ 真实出向 1471 条只认出 188 条 (漏 87%,
+    活库实测)。现在读归一后的派生列, 顺带吃 ``idx_email_sender_email``
+    (原写法的 ``lower(trim(...))`` 是函数表达式, 索引用不上)。
+
+    ``sender_email IS NULL`` (取不到地址的行) 在 SQL 三值逻辑下 ``NULL IN (…)`` 为
+    NULL ⇒ 不计入, 与 v58 前 ``COALESCE(…,'')`` 不命中任何自有地址等价。
+    """
     if not self_addresses:
         return "0", []
     placeholders = ", ".join("?" for _ in self_addresses)
     return (
-        f"lower(trim(COALESCE(m.sender, ''))) IN ({placeholders})",
+        f"m.sender_email IN ({placeholders})",
         sorted(self_addresses),
     )
 

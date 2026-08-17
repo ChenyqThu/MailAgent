@@ -16,6 +16,7 @@ from src.contacts.service import (
     mark_email_former,
     merge_contacts,
     parse_self_emails,
+    recalc_all_aggregates,
     resolve_self_addresses,
     set_is_self,
     set_kind,
@@ -23,6 +24,7 @@ from src.contacts.service import (
     unmark_email_former,
     upsert_contact_for_email,
 )
+from src.mail.email_address import derive_sender_email
 from src.mail.sync_store import SyncStore
 
 SELF = frozenset({"me@corp.com"})
@@ -37,12 +39,15 @@ def db(tmp_path):
 
 
 def _seed_emails(db, rows):
+    """裸 SQL 插行 —— 顺带算 v58 派生列 `sender_email` (生产由三条写入边界算);
+    出向判据 `_sent_predicate` 读的就是它。"""
     with sqlite3.connect(db) as conn:
         for row in rows:
             conn.execute(
-                "INSERT INTO email_metadata (internal_id, sender, sender_name, "
-                "to_addr, cc_addr, date_received, mailbox) VALUES (?,?,?,?,?,?,?)",
-                row,
+                "INSERT INTO email_metadata (internal_id, sender, sender_email, "
+                "sender_name, to_addr, cc_addr, date_received, mailbox) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (row[0], row[1], derive_sender_email(row[1]), *row[2:]),
             )
         conn.commit()
 
@@ -301,3 +306,68 @@ def test_upsert_semantics_match_v52(db):
         ).fetchone()
         assert anchor["contact_id"] == fresh
         assert anchor["is_primary"] == 1
+
+
+# ---- task 08-14 WP-5: 出向判据读派生列 ----------------------------------------
+
+SENT_ROWS = (
+    # 我发出的 —— sender 是**完整 From 头** (活库 68% 的形状)。
+    (1, "Lucien Chen <me@corp.com>", "Lucien Chen", "Gary W <gary.w@x.com>", None,
+     "2026-08-01T08:00:00+00:00", "发件箱"),
+    # 我发出的 —— sender 是裸地址 (另 32%)。
+    (2, "me@corp.com", "Me", "gary.w@x.com", None,
+     "2026-08-02T08:00:00+00:00", "发件箱"),
+    # 别人发给我的 —— 不算出向。
+    (3, "Gary W <gary.w@x.com>", "Gary W", "me@corp.com", None,
+     "2026-08-03T08:00:00+00:00", "收件箱"),
+)
+
+
+def test_sent_predicate_counts_full_from_header_outgoing(db):
+    """🔴 WP-5 根因回归: `_sent_predicate` 读 v58 派生列。
+
+    改前是 `lower(trim(COALESCE(m.sender,''))) IN (…)` —— 精确匹配一个不保证是裸
+    地址的列, 完整 From 头一封都匹配不上 (活库实测真实出向 1471 条只认出 188 条,
+    漏 87%)。这里两种形状各一封, 都必须计入。
+    """
+    _seed_emails(db, SENT_ROWS)
+    run_scan(db, self_addresses=SELF, now_ms=NOW_MS)
+
+    row = _rows(
+        db,
+        "SELECT c.mail_count, c.sent_to_count FROM contact c "
+        "JOIN contact_email ce ON ce.contact_id = c.id "
+        "WHERE ce.email_normalized='gary.w@x.com'",
+    )[0]
+    assert row["mail_count"] == 3
+    assert row["sent_to_count"] == 2, "完整 From 头 + 裸地址两种出向都要计入"
+
+    # 全量重算走同一判据 —— 与增量结果一致 (聚合缓存不是第二真源)。
+    repo = ContactRepository(db)
+    with repo.transaction() as conn:
+        recalc_all_aggregates(conn, self_addresses=SELF, now=NOW_MS)
+    again = _rows(
+        db,
+        "SELECT c.sent_to_count FROM contact c "
+        "JOIN contact_email ce ON ce.contact_id = c.id "
+        "WHERE ce.email_normalized='gary.w@x.com'",
+    )[0]
+    assert again["sent_to_count"] == 2
+
+
+def test_sent_predicate_ignores_null_sender_email(db):
+    """派生失败的行 (`sender_email IS NULL`) 不计出向 —— SQL 三值逻辑下
+    `NULL IN (…)` 为 NULL, 与改前 `COALESCE(…,'')` 不命中等价。"""
+    _seed_emails(db, (
+        (1, "garbage-no-address", "??", "Gary W <gary.w@x.com>", None,
+         "2026-08-01T08:00:00+00:00", "发件箱"),
+    ))
+    run_scan(db, self_addresses=SELF, now_ms=NOW_MS)
+    row = _rows(
+        db,
+        "SELECT c.mail_count, c.sent_to_count FROM contact c "
+        "JOIN contact_email ce ON ce.contact_id = c.id "
+        "WHERE ce.email_normalized='gary.w@x.com'",
+    )[0]
+    assert row["mail_count"] == 1
+    assert row["sent_to_count"] == 0

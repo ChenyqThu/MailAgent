@@ -38,6 +38,7 @@ from loguru import logger
 
 from src.contacts.repository import ContactRepository
 from src.contacts.service import (
+    ensure_self_bootstrap,
     normalize_email,
     parse_identity_locks,
     resolve_self_addresses,
@@ -267,7 +268,7 @@ def scan_batch(
         now_ms = int(time.time() * 1000)
     watermark = _get_watermark(conn)
     rows = conn.execute(
-        "SELECT internal_id, sender, sender_name, to_addr, cc_addr, "
+        "SELECT internal_id, sender_email, sender_name, to_addr, cc_addr, "
         "date_received, mailbox FROM email_metadata "
         "WHERE internal_id > ? ORDER BY internal_id LIMIT ?",
         (watermark, batch_size),
@@ -287,7 +288,11 @@ def scan_batch(
             continue
         internal_id = int(row["internal_id"])
         seen_at = _parse_seen_at(row["date_received"])
-        sender_email = normalize_email(row["sender"])
+        # 🔴 v58 起读派生列 `sender_email`, **不再**自己 normalize `sender`:
+        # 后者不保证是裸地址 (活库 68% 的行是整个 From 头 `Gary W <…>`),
+        # normalize_email 对它一律返 None ⇒ 那 8850 封的发件人在账本里从来没记过。
+        # 解析收口在持久化边界 (src/mail/email_address.py::derive_sender_email)。
+        sender_email = row["sender_email"]
         outgoing = sender_email is not None and sender_email in self_addresses
 
         participants: Dict[str, Dict[str, Any]] = {}
@@ -306,7 +311,7 @@ def scan_batch(
                 if entry[key] is None:
                     entry[key] = cleaned
 
-        _add(row["sender"], row["sender_name"], "sender")
+        _add(sender_email, row["sender_name"], "sender")
         for column, role in (("to_addr", "to"), ("cc_addr", "cc")):
             raw = row[column]
             if raw:
@@ -314,10 +319,11 @@ def scan_batch(
                     _add(addr, name, role)
 
         for email, entry in participants.items():
-            if email in self_addresses:
-                # 自有地址不建 contact 行; 发件行的**收件人**照常入账
-                # (sent_to_count 靠出向判据算, 见 service._sent_predicate)。
-                continue
+            # 🔴 task 08-14 WP-3: 自有地址**照常建档记账**。此前这里 `continue`,
+            # 于是 owner 换邮箱后新地址一封关联都没有 (活库实测 mail_count=0 /
+            # link 0 条) —— 而 owner 要的是「标成自己也要正常记账, 我还可以给自己
+            # 建立画像」。`is_self` 从排除开关降级为身份标签, 排除只剩 compose
+            # 收件人补全一处 (见 repository/email_repository.py 的 excluded 位)。
             _upsert_from_scan(
                 conn, email=email, roles=entry["roles"],
                 sender_name=entry["sender_name"], header_name=entry["header_name"],
@@ -354,6 +360,11 @@ def run_scan(
                 if reset_watermark:
                     _set_watermark(conn, 0)
                 if self_addresses is None:
+                    # 🔴 引导排在 resolve **之前** (task 08-14 WP-3 ②「引导之后一切
+                    # 以『我』那条资料为准」): 先把「我」标出来, 本轮的自有集才吃得到
+                    # 「我」名下合并进来的旧邮箱。显式注入 self_addresses 时不引导
+                    # (调用方自己负责口径 —— CLI 在解析前自己调, 测试注入固定集)。
+                    ensure_self_bootstrap(conn, now=now_ms)
                     self_addresses = resolve_self_addresses(conn)
                 first = False
             stats = scan_batch(

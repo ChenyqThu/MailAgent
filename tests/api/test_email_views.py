@@ -337,6 +337,10 @@ def test_list_by_thread(client):
     assert data[0]["to_addr"] == "bob@example.com"
     assert "notion_url" in data[0]
     assert data[0]["snippet"].startswith("Hello **redis**")
+    # v58 sender_email（task 08-14 WP-5）：本 conftest 的裸库**没有**这一列 ——
+    # 键必须仍在 wire 上（前端 isBotSender 读它），值降级 None，靠 _probe_schema
+    # 的 `NULL AS sender_email` 兜住。缺列时整条 query 报错才是真事故。
+    assert data[0]["sender_email"] is None
 
 
 def test_list_by_thread_unknown_empty(client):
@@ -459,3 +463,24 @@ def test_threads_dedupe_under_cap_ok(client):
     r = client.post("/api/email/threads", json={"threadIds": raw})
     assert r.status_code == 200
     assert set(r.json()["data"].keys()) == {"thread-A"}
+
+
+# ---------------------------------------------------------------------------
+# v58 sender_email 列的两条分支（task 08-14 WP-5）
+# ---------------------------------------------------------------------------
+
+
+def test_list_item_meta_cols_emits_sender_email_either_way():
+    """键**恒在** wire 上：有列取列、无列取 NULL（本模块 conftest 的裸库走后者）。
+
+    前端 `isBotSender` 读它；键缺席会让判据静默失效（`undefined` → 恒 false →
+    机器人邮件全留在「重点」），而这正是本 WP 要消灭的失败形态。
+    """
+    from src.api.routers.email_views import _list_item_meta_cols
+
+    with_col = _list_item_meta_cols({"sender_email", "snippet"})
+    assert "sender_email AS sender_email" in with_col
+    assert "NULL AS sender_email" not in with_col
+
+    without_col = _list_item_meta_cols({"snippet"})
+    assert "NULL AS sender_email" in without_col

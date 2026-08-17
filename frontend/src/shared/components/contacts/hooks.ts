@@ -11,7 +11,7 @@ import type {
   ContactBackfillProgress,
   ContactDetailDto,
   ContactListResponse,
-  ContactMailRole,
+  ContactMailDirection,
   ContactMattersResponse,
   ContactSort,
   ContactView
@@ -53,8 +53,7 @@ export function useContactList(options: {
   const api = useContactsApi()
   return useQuery({
     queryKey: qk.contacts.list(options.view, options.q, options.sort),
-    queryFn: () =>
-      api.list({ view: options.view, q: options.q || undefined, sort: options.sort }),
+    queryFn: () => api.list({ view: options.view, q: options.q || undefined, sort: options.sort }),
     enabled: options.enabled,
     staleTime: 15_000,
     placeholderData: (previous) => previous
@@ -114,4 +113,4 @@ export function useInvalidateContact(): (contactId?: number) => Promise<void> {
   }
 }
 
-export type { ContactMailRole }
+export type { ContactMailDirection }

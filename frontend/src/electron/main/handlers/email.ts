@@ -77,6 +77,10 @@ interface EmailMetadataRow {
   thread_id: string | null
   subject: string | null
   sender: string | null
+  /** v58 派生列 — `sender` 的归一裸小写地址（`email_metadata.sender_email`）。
+   *  `sender` 本身**不保证是裸地址**：AppleScript 路径写的是整个 From 头
+   *  `Gary W <gary.w@…>`（活库 68% 的行）。判发件人地址一律读这个列。 */
+  sender_email: string | null
   sender_name: string | null
   to_addr: string | null
   cc_addr: string | null
@@ -161,6 +165,9 @@ function shapeListItem(row: EmailMetadataRow): EmailMeta {
     thread_id: row.thread_id,
     subject: row.subject ?? '',
     sender: row.sender ?? '',
+    // v58 派生列 (task 08-14 WP-5) —— 前端唯一该拿来「判发件人地址」的字段。
+    // `sender` 保留原样是因为 parseSender / EmailHitRow 靠它取显示名。
+    sender_email: row.sender_email ?? null,
     sender_name: row.sender_name,
     // to_addr 早就在 LIST_COLS 里 SELECT 了，只是从没投影出来 —— 列表面的
     // 「收件人是我」筛选轴要它 (email_views.py::_shape_list_item 同步镜像)。
@@ -298,7 +305,7 @@ function buildListWhere(opts: ListOpts): WhereBuild {
 }
 
 const LIST_COLS = `
-    internal_id, message_id, thread_id, subject, sender, sender_name,
+    internal_id, message_id, thread_id, subject, sender, sender_email, sender_name,
     to_addr, cc_addr, date_received, mailbox, is_read, is_flagged,
     is_important,
     sync_status, notion_page_id, notion_thread_id, sync_error, retry_count,
@@ -491,7 +498,8 @@ interface AIFieldsRow extends EmailMetadataRow {
 // honest — cid: inline images shouldn't bump the paperclip counter;
 // derived docx→pdf siblings are user-visible so they stay in.
 const ENRICHED_LIST_COLS = `
-    m.internal_id, m.message_id, m.thread_id, m.subject, m.sender, m.sender_name,
+    m.internal_id, m.message_id, m.thread_id, m.subject, m.sender, m.sender_email,
+    m.sender_name,
     m.to_addr, m.cc_addr, m.date_received, m.mailbox, m.is_read, m.is_flagged,
     m.is_important,
     m.sync_status, m.notion_page_id, m.notion_thread_id, m.sync_error, m.retry_count,

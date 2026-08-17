@@ -29,11 +29,13 @@ def db(tmp_path):
 
 
 def _seed_email(db, internal_id, sender_name, when):
+    # sender_email = v58 派生列 (生产由三条写入边界算)，扫描器读的就是它。
     with sqlite3.connect(db) as conn:
         conn.execute(
-            "INSERT INTO email_metadata (internal_id, sender, sender_name, "
-            "to_addr, cc_addr, date_received, mailbox) "
-            "VALUES (?, 'alice@x.com', ?, 'me@corp.com', NULL, ?, '收件箱')",
+            "INSERT INTO email_metadata (internal_id, sender, sender_email, "
+            "sender_name, to_addr, cc_addr, date_received, mailbox) "
+            "VALUES (?, 'alice@x.com', 'alice@x.com', ?, 'me@corp.com', NULL, "
+            "?, '收件箱')",
             (internal_id, sender_name, when),
         )
         conn.commit()

@@ -10,7 +10,7 @@ import type {
   ContactFunction,
   ContactKind,
   ContactListResponse,
-  ContactMailRole,
+  ContactMailDirection,
   ContactMailsResponse,
   ContactMattersResponse,
   ContactLockableField,
@@ -40,7 +40,7 @@ export interface ContactsApi {
   resolve(emails: string[]): Promise<ContactResolveResponse>
   listMails(
     contactId: number,
-    options?: { role?: ContactMailRole; cursor?: string; limit?: number }
+    options?: { direction?: ContactMailDirection; cursor?: string; limit?: number }
   ): Promise<ContactMailsResponse>
   listMatters(contactId: number): Promise<ContactMattersResponse>
   patch(contactId: number, body: ContactPatchBody): Promise<ContactPatchResponse>
@@ -73,7 +73,7 @@ export type {
   ContactSeniority,
   ContactSort,
   ContactView,
-  ContactMailRole,
+  ContactMailDirection,
   ContactLockableField
 }
 
@@ -92,7 +92,7 @@ export function createContactsApi(baseUrl: string): ContactsApi {
     },
     listMails(contactId, options = {}) {
       return request(baseUrl, 'GET', `/contacts/${segment(contactId)}/mails`, {
-        query: { role: options.role, cursor: options.cursor, limit: options.limit }
+        query: { direction: options.direction, cursor: options.cursor, limit: options.limit }
       })
     },
     listMatters(contactId) {

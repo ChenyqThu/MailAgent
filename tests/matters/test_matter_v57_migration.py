@@ -88,7 +88,10 @@ def test_v57_fresh_db_has_trail_table_index_and_check(tmp_path):
 
     assert _has_table(path, TRAIL_TABLE)
     assert _index_count(path, TRAIL_INDEX) == 1
-    assert _version(path) == str(SyncStore.DB_VERSION) == "57"
+    # 只钉「fresh 库落在当前 DB_VERSION」——不再手抄字面量 "57"：本文件其余用例与
+    # v45/v50/v54/v55/v56 的同款断言都是这个形状，写死版本号会让**下一次任何**
+    # bump 在一个与它无关的测试上变红（v58 = task 08-14 WP-5 时实际发生）。
+    assert _version(path) == str(SyncStore.DB_VERSION)
 
     resource_id = _seed_resource(path)
     # sum_src 值域与 resource 同一份 sql_check_clause（不手抄第二份词表）。

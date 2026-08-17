@@ -47,6 +47,9 @@ export function buildFixtureDb(): Database.Database {
       -- (see d0a8086). fixture 之前漏 sync → searchEmails 测试全 fail.
       ai_priority TEXT,
       ai_action TEXT,
+      -- v58 (task 08-14 WP-5): sender 的归一裸小写地址 (派生列)。LIST_COLS /
+      -- ENRICHED_LIST_COLS 都 SELECT 它, fixture 缺列 = handler 读全部 OperationalError。
+      sender_email TEXT,
       snippet TEXT
     );
     CREATE INDEX idx_email_date ON email_metadata(date_received DESC);

@@ -238,6 +238,11 @@ def _shape_list_item(row: sqlite3.Row) -> dict[str, Any]:
         # to_addr 早就在 _LIST_ITEM_META_COLS 里 SELECT 了，只是从没投影出来 ——
         # 列表面的「收件人是我」筛选轴要它 (handlers/email.ts::shapeListItem 同步镜像)。
         "to_addr": row["to_addr"],
+        # v58 派生列 (task 08-14 WP-5): sender 的归一裸小写地址。前端列表的
+        # isBotSender 读它 —— sender 不保证是裸地址 (68% 的行是整个 From 头),
+        # 拿 sender 判会去读发件人自己填的显示名。旧库无此列时降级 NULL
+        # (见 _list_item_meta_cols 的 schema 探测)。
+        "sender_email": row["sender_email"],
         "date_received": row["date_received"],
         "mailbox": row["mailbox"],
         "is_read": _as_bool(row["is_read"]),
@@ -251,7 +256,12 @@ def _shape_list_item(row: sqlite3.Row) -> dict[str, Any]:
 
 def _list_item_meta_cols(meta_cols: set[str]) -> str:
     snippet_expr = "snippet" if "snippet" in meta_cols else "NULL"
-    return f"{_LIST_ITEM_META_COLS}, {snippet_expr} AS snippet"
+    # sender_email 与 snippet 同款探测 (v58 迁移列, 裸/旧/测试库可能没有)。
+    sender_email_expr = "sender_email" if "sender_email" in meta_cols else "NULL"
+    return (
+        f"{_LIST_ITEM_META_COLS}, {sender_email_expr} AS sender_email, "
+        f"{snippet_expr} AS snippet"
+    )
 
 
 def _build_enriched_where(opts: dict[str, Any]) -> tuple[list[str], list[Any]]:
@@ -464,6 +474,7 @@ async def list_enriched(
     has_ai_priority = "ai_priority" in meta_cols
     has_ai_action = "ai_action" in meta_cols
     has_snippet = "snippet" in meta_cols
+    has_sender_email = "sender_email" in meta_cols
 
     clauses, params = _build_enriched_where(opts)
 
@@ -481,6 +492,11 @@ async def list_enriched(
         "m.is_read, m.is_flagged, m.is_important, m.sync_status, "
         "m.notion_page_id, m.notion_thread_id, m.sync_error, m.retry_count"
     )
+    # sender_email: 缺列时给 NULL 占位 (v58 迁移列，裸/旧/测试库可能无)。
+    if has_sender_email:
+        enriched_meta_cols += ", m.sender_email"
+    else:
+        enriched_meta_cols += ", NULL AS sender_email"
     # processing_status: 缺列时给 NULL 占位 (Sprint15 D 块，旧库可能无)。
     if has_processing:
         enriched_meta_cols += ", m.processing_status"

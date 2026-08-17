@@ -1035,8 +1035,11 @@ class Config(BaseSettings):
         validation_alias="MAILAGENT_SELF_EMAILS",
         description=(
             "owner 历史自有地址集（逗号分隔，Q8 拍板 env 起步）。与 USER_EMAIL 一起"
-            "构成 is_self 排除集：自有地址不建通讯录行、发出的邮件按出向计 "
-            "sent_to_count（双向性判据）。改动后建议 `mailagent contact backfill "
+            "构成自有地址集：发出的邮件按出向计 sent_to_count（双向性判据）、compose "
+            "收件人补全里排除自己。🔴 task 08-14 WP-3 起**降级为兜底** —— 自有地址"
+            "照常建通讯录行，权威源是库里 is_self=1 那条联系人名下的全部锚点（往「我」"
+            "里合并旧邮箱即可，无需在此配置）；本键也**不参与**「我」的自动引导（引导"
+            "只认 USER_EMAIL，防同名误标）。改动后建议 `mailagent contact backfill "
             "--rescan` 重扫收敛历史口径。"
         ),
     )

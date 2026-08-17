@@ -1,7 +1,9 @@
 """L0+L1 扫描器 (task 08-13 WP1): 幂等 / 排除集 / display_name 刷新与锁 /
 kind 启发式 / watermark / 增量聚合与账本重算一致。
 
-🔴 fixture 列名/值形状对齐 `email_metadata` 真实产出 (仓内教训): `sender` 裸地址、
+🔴 fixture 列名/值形状对齐 `email_metadata` 真实产出 (仓内教训): `sender` **不保证
+裸地址** (活库 68% 是整个 From 头 ``Name <addr>``, 见 task 08-14 WP-5)、扫描器读的
+是 v58 派生列 `sender_email` (由 `_seed_emails` 用生产同一个 derive_sender_email 算)、
 `sender_name` 显示名、`to_addr`/`cc_addr` 逗号分隔 ``Name <email>``、
 `date_received` ISO TEXT、`mailbox` 中文 canonical。
 """
@@ -22,6 +24,7 @@ from src.contacts.service import (
     recalc_all_aggregates,
     set_kind,
 )
+from src.mail.email_address import derive_sender_email
 from src.mail.sync_store import SyncStore
 
 SELF = frozenset({"me@corp.com"})
@@ -36,12 +39,16 @@ def db(tmp_path):
 
 
 def _seed_emails(db, rows):
+    """裸 SQL 插行 —— 顺带把 v58 派生列 `sender_email` 算出来, 因为生产的三条写入
+    边界都会算 (src/mail/sync_store.py, 派生器 derive_sender_email)。扫描器读的是
+    这个列, 不写 = fixture 与生产形状不符。"""
     with sqlite3.connect(db) as conn:
         for row in rows:
             conn.execute(
-                "INSERT INTO email_metadata (internal_id, sender, sender_name, "
-                "to_addr, cc_addr, date_received, mailbox) VALUES (?,?,?,?,?,?,?)",
-                row,
+                "INSERT INTO email_metadata (internal_id, sender, sender_email, "
+                "sender_name, to_addr, cc_addr, date_received, mailbox) "
+                "VALUES (?,?,?,?,?,?,?,?)",
+                (row[0], row[1], derive_sender_email(row[1]), *row[2:]),
             )
         conn.commit()
 
@@ -91,9 +98,13 @@ def test_scan_extracts_contacts_ledger_and_aggregates(db):
     alice = _contact_by_email(db, "alice@x.com")
     bob = _contact_by_email(db, "bob@y.com")
     carol = _contact_by_email(db, "carol@z.com")
-    # 草稿收件人与自有地址不建行
+    # 草稿收件人不建行
     assert _contact_by_email(db, "dave@w.com") is None
-    assert _contact_by_email(db, "me@corp.com") is None
+    # 🔴 task 08-14 WP-3: 自有地址**照常**建档记账 (此前 scanner 直接 continue,
+    # owner 换邮箱后新地址一封关联都没有)。
+    me = _contact_by_email(db, "me@corp.com")
+    assert me is not None
+    assert me["mail_count"] == 3  # 1/2 收到 (to) + 3 自己发的 (sender); 草稿不算
 
     # 往来封数 (distinct 邮件): alice 1/2/3 三封; bob 1 封; carol 1 封
     assert alice["mail_count"] == 3
@@ -114,7 +125,7 @@ def test_scan_extracts_contacts_ledger_and_aggregates(db):
     assert alice["first_seen_at"] == alice["anchor_first"]
     assert alice["last_seen_at"] > alice["first_seen_at"]
 
-    # 账本: alice = sender(1)+sender(2)+cc(3) 三行; me 一行不记
+    # 账本: alice = sender(1)+sender(2)+cc(3) 三行; me 也照常入账 (WP-3)
     links = _rows(
         db,
         "SELECT ce.email_normalized AS email, l.internal_id, l.role "
@@ -127,6 +138,9 @@ def test_scan_extracts_contacts_ledger_and_aggregates(db):
         ("alice@x.com", 3, "cc"),
         ("bob@y.com", 3, "to"),
         ("carol@z.com", 1, "cc"),
+        ("me@corp.com", 1, "to"),
+        ("me@corp.com", 2, "to"),
+        ("me@corp.com", 3, "sender"),
     ]
     # watermark 推进到最大 internal_id
     with sqlite3.connect(db) as conn:
@@ -267,3 +281,67 @@ def test_flag_on_run_tick_scans(db, monkeypatch):
     stats = run_tick(db)
     assert stats is not None and stats["processed"] == 2
     assert _contact_by_email(db, "alice@x.com") is not None
+
+
+# ---- task 08-14 WP-5: sender 形态 --------------------------------------------
+
+FULL_HEADER_ROWS = (
+    # 🔴 活库 68% 的形状 (backend_origin='applescript' 写整个 From 头)。
+    (1, "Gary W <GARY.W@tp-link.com>", "Gary W", "Me <me@corp.com>", None,
+     "2026-08-01T08:00:00+00:00", "收件箱"),
+    # 出向: 自己的地址也带显示名 —— 出向判据同样吃派生列。
+    (2, "Lucien Chen <me@corp.com>", "Lucien Chen", "Gary W <gary.w@tp-link.com>",
+     None, "2026-08-02T08:00:00+00:00", "发件箱"),
+)
+
+
+def test_full_from_header_sender_is_extracted(db):
+    """🔴 WP-5 根因回归: 扫描器读 v58 派生列, 完整 From 头的发件人必须入账。
+
+    改前判据是 `normalize_email(row['sender'])` —— 对 `Gary W <…>` 一律返 None,
+    于是活库 8850 封 (68%) 的发件人在 contact_email_link 里**一条都没有**
+    (实测 13014 封只记了 4020 条 role='sender')。
+    """
+    _seed_emails(db, FULL_HEADER_ROWS)
+    run_scan(db, self_addresses=SELF, now_ms=NOW_MS)
+
+    gary = _contact_by_email(db, "gary.w@tp-link.com")
+    assert gary is not None, "完整 From 头的发件人必须建档"
+    # 显示名大小写归一后仍是同一个人 (锚点 = 归一 email)。
+    assert gary["display_name"] == "Gary W"
+    # 两封: ① 他发的 (sender) ② 我发给他的 (to)
+    assert gary["mail_count"] == 2
+    # 出向判据同样吃派生列: 第 2 封 sender='Lucien Chen <me@corp.com>' ∈ 自有集
+    assert gary["sent_to_count"] == 1
+    # 自有地址照常建行 (WP-3), 且完整 From 头里的自己也认得出来
+    assert _contact_by_email(db, "me@corp.com") is not None
+
+    links = _rows(
+        db,
+        "SELECT ce.email_normalized AS email, l.internal_id, l.role "
+        "FROM contact_email_link l JOIN contact_email ce ON ce.id = l.email_id "
+        "ORDER BY l.internal_id, l.role",
+    )
+    assert [(r["email"], r["internal_id"], r["role"]) for r in links] == [
+        ("gary.w@tp-link.com", 1, "sender"),
+        ("me@corp.com", 1, "to"),
+        ("me@corp.com", 2, "sender"),
+        ("gary.w@tp-link.com", 2, "to"),
+    ]
+
+
+def test_null_sender_email_produces_no_sender_participation(db):
+    """派生失败 (sender_email IS NULL) → 不建发件人档, 与本 WP 之前一致。
+
+    收件人 (`Me <me@corp.com>`) 照常入账 —— WP-3 起自有地址也建档, 所以这里只断言
+    「没有 role='sender' 的账本行」, 不再断言整张 contact 表为空。
+    """
+    _seed_emails(db, (
+        (1, "not-an-email", "Broken", "Me <me@corp.com>", None,
+         "2026-08-01T08:00:00+00:00", "收件箱"),
+    ))
+    run_scan(db, self_addresses=SELF, now_ms=NOW_MS)
+    assert _rows(db, "SELECT * FROM contact_email_link WHERE role='sender'") == []
+    assert [r["email_normalized"] for r in _rows(db, "SELECT * FROM contact_email")] == [
+        "me@corp.com"
+    ]

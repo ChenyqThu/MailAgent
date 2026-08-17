@@ -6,6 +6,8 @@
 //   `未分组` 恒末尾；组头可折叠。
 // - 「全部」：kind 分组折叠段（人 / 机器人·noreply / 群发列表 / 已隐藏，默认只展开
 //   「人」）+ 顶部筛选 chips；开启属性分组后取代 kind 分组，chips 仍生效。
+// - 「我」（task 08-14 WP-3，owner 拍板）：单独成一组恒置顶，两个视图、任何分组档
+//   都先摘出去，剩下的走上面的原有逻辑 —— 没有 self 行时输出与该改动前逐字相同。
 
 import type { ContactRowDto, ContactView } from '@shared/api/types/contact'
 
@@ -34,6 +36,9 @@ export function kindBucketOf(item: ContactRowDto): ContactKindBucket {
   return 'person'
 }
 
+/** 置顶「我」组的组 key（不与 `kind:` / `org:` 等前缀撞车）。 */
+export const SELF_GROUP_KEY = 'self'
+
 /** kind 分组段的默认折叠态：打开「全部」通常是找回被判错的地址，噪音段先折起。 */
 function defaultCollapsed(groupKey: string): boolean {
   return groupKey === 'kind:robot' || groupKey === 'kind:list' || groupKey === 'kind:hidden'
@@ -60,6 +65,8 @@ interface BuildOptions {
     kindGroup: (bucket: ContactKindBucket) => string
     fn: (value: string) => string
     level: (value: string) => string
+    /** 置顶的「我」组标签（`contacts.group.self`）。 */
+    self: string
     /** 按汇报线的组 label（`contacts.group.reportsOf` 插值行上的
      *  manager_display_name；无名上级照原型 `m.name || m.id` 用 id 兜底）。 */
     manager: (item: ContactRowDto) => string
@@ -78,13 +85,9 @@ function attributeGroupOf(
         ? { key: `org:${item.organization}`, label: item.organization }
         : null
     case 'dept':
-      return item.department
-        ? { key: `dept:${item.department}`, label: item.department }
-        : null
+      return item.department ? { key: `dept:${item.department}`, label: item.department } : null
     case 'fn':
-      return item.function
-        ? { key: `fn:${item.function}`, label: labels.fn(item.function) }
-        : null
+      return item.function ? { key: `fn:${item.function}`, label: labels.fn(item.function) } : null
     case 'level':
       return item.seniority
         ? { key: `level:${item.seniority}`, label: labels.level(item.seniority) }
@@ -135,17 +138,40 @@ function groupedRows(
 
 export function buildContactRows(options: BuildOptions): ContactListRow[] {
   const { items, view, groupBy, kindFilter, collapsed, labels } = options
+  // 「全部」视图的 chips 先过滤（「我」也照 chips 走：它落在 person / hidden 桶里，
+  // 关掉那个 chip 就该一起消失）。
+  const base = view === 'known' ? items : items.filter((item) => kindFilter.has(kindBucketOf(item)))
+  const selfItems = base.filter((item) => item.is_self)
+  const rest = selfItems.length > 0 ? base.filter((item) => !item.is_self) : base
+  const pinned: ContactListRow[] = []
+  if (selfItems.length > 0) {
+    const isCollapsed = isGroupCollapsed(collapsed, SELF_GROUP_KEY)
+    pinned.push({
+      type: 'header',
+      key: SELF_GROUP_KEY,
+      label: labels.self,
+      count: selfItems.length,
+      collapsed: isCollapsed
+    })
+    if (!isCollapsed) {
+      for (const item of selfItems) pinned.push({ type: 'contact', key: `c:${item.id}`, item })
+    }
+  }
   if (view === 'known') {
     if (groupBy === 'none') {
-      return items.map((item) => ({ type: 'contact', key: `c:${item.id}`, item }))
+      const flat: ContactListRow[] = rest.map((item) => ({
+        type: 'contact',
+        key: `c:${item.id}`,
+        item
+      }))
+      return [...pinned, ...flat]
     }
-    return groupedRows(items, groupBy, collapsed, labels)
+    return [...pinned, ...groupedRows(rest, groupBy, collapsed, labels)]
   }
-  // 「全部」：chips 先过滤。
-  const filtered = items.filter((item) => kindFilter.has(kindBucketOf(item)))
-  if (groupBy !== 'none') return groupedRows(filtered, groupBy, collapsed, labels)
+  const filtered = rest
+  if (groupBy !== 'none') return [...pinned, ...groupedRows(filtered, groupBy, collapsed, labels)]
   const buckets: ContactKindBucket[] = ['person', 'robot', 'list', 'hidden']
-  const rows: ContactListRow[] = []
+  const rows: ContactListRow[] = [...pinned]
   for (const bucket of buckets) {
     if (!kindFilter.has(bucket)) continue
     const members = filtered.filter((item) => kindBucketOf(item) === bucket)

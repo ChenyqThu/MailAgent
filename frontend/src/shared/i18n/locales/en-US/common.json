@@ -4748,7 +4748,7 @@
       "trash": "Trash"
     },
     "moduleTabs": { "list": "Matters", "board": "Board" },
-    "scope": { "open": "In progress", "done": "Completed", "archived": "Archived", "trash": "Trash" },
+    "scope": { "all": "All", "open": "In progress", "done": "Completed", "archived": "Archived", "trash": "Trash" },
     "quick": {
       "attn": "Needs attention",
       "waiting": "Waiting on others",
@@ -5469,6 +5469,7 @@
       "ungrouped": "Ungrouped"
     },
     "group": {
+      "self": "Me",
       "person": "People",
       "robot": "Robots / noreply",
       "list": "Lists / broadcasts",
@@ -5478,7 +5479,7 @@
       "noManager": "No manager"
     },
     "kind": { "person": "Person", "robot": "Robot", "list": "List" },
-    "badge": { "self": "My address", "hidden": "Hidden", "dup": "Possible duplicate", "emails": "{n} addresses" },
+    "badge": { "self": "This is me", "hidden": "Hidden", "dup": "Possible duplicate", "emails": "{n} addresses" },
     "chip": {
       "open": "Open {name}'s page",
       "notInDirectory": "This address isn't in Contacts (no stub will be created)"
@@ -5492,8 +5493,8 @@
       "kindRobot": "Reclassify as robot",
       "kindList": "Reclassify as list",
       "kindPerson": "Reclassify as person",
-      "markSelf": "Mark as my address",
-      "unmarkSelf": "Unmark my address",
+      "markSelf": "Mark as me",
+      "unmarkSelf": "Unmark as me",
       "hide": "Hide",
       "unhide": "Unhide",
       "select": "Select this (start multi-select)"
@@ -5596,7 +5597,8 @@
       "copied": "Copied {email}"
     },
     "mail": {
-      "filter": { "all": "All", "from": "From them", "to": "From me", "cc": "CC’d" },
+      "filter": { "all": "All", "from_them": "From them", "from_me": "From me", "from_third": "From others" },
+      "ccMark": "CC",
       "more": "Load more ({n} left)",
       "empty": "No messages yet"
     },
@@ -5629,8 +5631,7 @@
       "insufficientHint": "We read {n} messages, but they’re mostly forwards and one-line confirmations, so the model declined to write a profile this round. It will retry.",
       "retry": "Try again",
       "failed": "Last refresh failed",
-      "notPerson": "Marked as {kind}; no profile is generated. Reclassify as a person if that’s wrong.",
-      "selfNote": "This is your own address; no profile."
+      "notPerson": "Marked as {kind}; no profile is generated. Reclassify as a person if that’s wrong."
     },
     "merge": {
       "title": "Merge contacts",
@@ -5668,8 +5669,8 @@
       "hidden": "“{name}” hidden · nothing deleted; find it under All",
       "unhidden": "Unhidden",
       "kind": "Reclassified as {kind} · sorting and default view follow",
-      "markSelf": "Marked as your address · removed from People you email",
-      "unmarkSelf": "Unmarked as your address",
+      "markSelf": "Marked as you · pinned to the top; there can be only one “me”, the previous one was cleared",
+      "unmarkSelf": "No longer marked as you",
       "primary": "Primary address is now {email}",
       "former": "Marked former · history kept; no longer a default recipient",
       "unformer": "Back in use",

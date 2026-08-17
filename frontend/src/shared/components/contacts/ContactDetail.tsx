@@ -11,29 +11,27 @@ import { useTranslation } from 'react-i18next'
 import {
   ChevronLeft,
   ChevronRight,
-  Copy,
   EyeOff,
   Inbox,
   MoreHorizontal,
   Send,
-  Sparkles
+  Sparkles,
+  UsersRound
 } from 'lucide-react'
 
 import type {
   ContactEmailDto,
   ContactLockableField,
-  ContactMailRole,
+  ContactMailDirection,
   ContactPatchBody
 } from '@shared/api/types/contact'
 import {
   CONTACT_FUNCTION_VALUES,
+  CONTACT_MAIL_DIRECTIONS,
   CONTACT_SENIORITY_VALUES
 } from '@shared/api/types/contact'
 import { MatterPip } from '@shared/components/matters/MatterPip'
-import {
-  MATTER_STATUS_ICONS,
-  MATTER_STATUS_TONES
-} from '@shared/components/matters/matterVocab'
+import { MATTER_STATUS_ICONS, MATTER_STATUS_TONES } from '@shared/components/matters/matterVocab'
 import type { MatterStatus } from '@shared/api/types/matter'
 import { useMatterNavigation } from '@shared/components/matters/navigation'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
@@ -53,7 +51,6 @@ import { useContactDetail, useContactMatters, useContactsApi, useInvalidateConta
 import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
 
 const MAIL_PAGE_SIZE = 6
-const MAIL_ROLES: readonly ContactMailRole[] = ['all', 'from', 'to', 'cc']
 
 /** field → i18n 标签键（toast「{field} 已保存并锁定」与字段行共用一份）。 */
 const FIELD_LABEL_KEY: Record<ContactLockableField, string> = {
@@ -303,21 +300,18 @@ function ContactMailList({ contactId }: { contactId: number }): React.ReactEleme
   const api = useContactsApi()
   const navigate = useNavigate()
   const setActiveEmail = useActiveEmail((state) => state.setActive)
-  const [role, setRole] = useState<ContactMailRole>('all')
+  const [direction, setDirection] = useState<ContactMailDirection>('all')
   // render 期不许调 Date.now()（react-hooks/purity）—— 挂载时取一次快照。
   const [now] = useState(() => Date.now())
   const query = useInfiniteQuery({
-    queryKey: qk.contacts.mails(contactId, role),
+    queryKey: qk.contacts.mails(contactId, direction),
     queryFn: ({ pageParam }) =>
-      api.listMails(contactId, { role, cursor: pageParam, limit: MAIL_PAGE_SIZE }),
+      api.listMails(contactId, { direction, cursor: pageParam, limit: MAIL_PAGE_SIZE }),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
     staleTime: 30_000
   })
-  const items = useMemo(
-    () => (query.data?.pages ?? []).flatMap((page) => page.items),
-    [query.data]
-  )
+  const items = useMemo(() => (query.data?.pages ?? []).flatMap((page) => page.items), [query.data])
   const total = query.data?.pages[0]?.total ?? 0
   const remaining = Math.max(0, total - items.length)
   return (
@@ -326,12 +320,12 @@ function ContactMailList({ contactId }: { contactId: number }): React.ReactEleme
         title={t('contacts.section.mails')}
         count={total}
         right={
-          <SegmentedControl<ContactMailRole>
+          <SegmentedControl<ContactMailDirection>
             size="sm"
             ariaLabel={t('contacts.section.mails')}
-            value={role}
-            onChange={(next) => setRole(next)}
-            options={MAIL_ROLES.map((value) => ({
+            value={direction}
+            onChange={(next) => setDirection(next)}
+            options={CONTACT_MAIL_DIRECTIONS.map((value) => ({
               value,
               label: t(`contacts.mail.filter.${value}`)
             }))}
@@ -343,14 +337,19 @@ function ContactMailList({ contactId }: { contactId: number }): React.ReactEleme
       ) : (
         <div className="flex flex-col">
           {items.map((mail) => {
-            const fromThem = mail.roles.includes('sender')
-            const ccOnly = !fromThem && mail.roles.includes('cc') && !mail.roles.includes('to')
-            const RoleIcon = fromThem ? Inbox : ccOnly ? Copy : Send
-            const roleKey = fromThem
-              ? 'contacts.mail.filter.from'
-              : ccOnly
-                ? 'contacts.mail.filter.cc'
-                : 'contacts.mail.filter.to'
+            // 方向由后端给（自有地址集的权威在 resolve_self_addresses，前端再算
+            // 一遍就是第二个真源）；cc 只作行内次要标记，不参与方向判定。
+            const ccOnly =
+              mail.direction !== 'from_them' &&
+              mail.roles.includes('cc') &&
+              !mail.roles.includes('to')
+            const RoleIcon =
+              mail.direction === 'from_them'
+                ? Inbox
+                : mail.direction === 'from_me'
+                  ? Send
+                  : UsersRound
+            const roleKey = `contacts.mail.filter.${mail.direction}`
             return (
               <button
                 key={mail.internal_id}
@@ -381,7 +380,9 @@ function ContactMailList({ contactId }: { contactId: number }): React.ReactEleme
                       ? formatMatterAgo(mail.seen_at, now, i18n.language || 'zh-CN')
                       : ''}
                   </span>
-                  <span className="text-[10.5px] leading-none text-ink-fg-3">{t(roleKey)}</span>
+                  <span className="text-[10.5px] leading-none text-ink-fg-3">
+                    {ccOnly ? `${t(roleKey)} · ${t('contacts.mail.ccMark')}` : t(roleKey)}
+                  </span>
                 </span>
               </button>
             )
@@ -501,9 +502,7 @@ export function ContactDetail({
         (field) => field !== 'notes'
       ) as ContactLockableField[]
       if (lockedFields.length > 0) {
-        toastSuccess(
-          t('contacts.toast.locked', { field: t(FIELD_LABEL_KEY[lockedFields[0]!]) })
-        )
+        toastSuccess(t('contacts.toast.locked', { field: t(FIELD_LABEL_KEY[lockedFields[0]!]) }))
       }
       void result
     },
@@ -721,11 +720,7 @@ export function ContactDetail({
                     sent: detail.sent_to_count
                   })}
                 </span>
-                <TwoWayBar
-                  sent={detail.sent_to_count}
-                  total={detail.mail_count}
-                  className="w-11"
-                />
+                <TwoWayBar sent={detail.sent_to_count} total={detail.mail_count} className="w-11" />
               </span>
               {detail.first_seen_at != null && detail.last_seen_at != null ? (
                 <span className="text-meta text-ink-fg-3">
@@ -802,10 +797,6 @@ export function ContactDetail({
               >
                 {t('contacts.action.kindPerson')}
               </button>
-            </div>
-          ) : detail.is_self ? (
-            <div className="rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-fg/[0.02] px-3.5 py-3 text-meta text-ink-fg-1">
-              {t('contacts.profile.selfNote')}
             </div>
           ) : (
             <div className="flex gap-2.5 rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-fg/[0.02] px-3.5 py-3.5">
@@ -903,9 +894,7 @@ export function ContactDetail({
                 value={detail.phone}
                 locked={locks.phone != null}
                 onSave={(next) => patch.mutate({ phone: next })}
-                onToggleLock={() =>
-                  setLock.mutate({ field: 'phone', locked: locks.phone == null })
-                }
+                onToggleLock={() => setLock.mutate({ field: 'phone', locked: locks.phone == null })}
               />
               <EnumRow
                 field="function"
@@ -972,10 +961,10 @@ export function ContactDetail({
             ) : null}
           </section>
 
-          {/* ── 组织关系（WP5，原型挂载序 Identity→Org→Mail；person 且非 self）── */}
-          {detail.kind === 'person' && !detail.is_self ? (
-            <ContactOrgSection detail={detail} />
-          ) : null}
+          {/* ── 组织关系（WP5，原型挂载序 Identity→Org→Mail）──
+              🔴 task 08-14 WP-3 起 self 也渲染：owner「上下级也无法关联我」——
+              「我」得能挂进汇报线，画像同理（上面那张卡不再对 self 特判）。 */}
+          {detail.kind === 'person' ? <ContactOrgSection detail={detail} /> : null}
 
           {/* ── 关联邮件 / 关联事项 ── */}
           <ContactMailList contactId={contactId} />

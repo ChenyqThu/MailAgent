@@ -28,6 +28,7 @@ import {
   groupBySentAnchor,
   groupByThread,
   isBotSender,
+  isLowSignal,
   partitionByDate,
   partitionFlat,
   recipientIsMe,
@@ -50,7 +51,11 @@ import type { EnrichedEmailMeta } from '@shared/api/types'
 // ─── Fixtures ─────────────────────────────────────────────────────────
 
 /** Minimal EnrichedEmailMeta builder — every field the helpers read is
- *  overridable; the rest are inert defaults. */
+ *  overridable; the rest are inert defaults.
+ *
+ *  `sender_email`（v58 派生列）默认跟随 `sender` —— 多数 fixture 的 sender 本来就是
+ *  裸地址，这样写测试不用每次两处都填。要模拟活库里「sender 是整个 From 头」的真实
+ *  形态（68% 的行）或「取不到地址」，显式传 `sender_email`（含显式 `null`）。 */
 function em(over: Partial<EnrichedEmailMeta> & { internal_id: number }): EnrichedEmailMeta {
   return {
     subject: `subject-${over.internal_id}`,
@@ -68,7 +73,10 @@ function em(over: Partial<EnrichedEmailMeta> & { internal_id: number }): Enriche
     attach_count: 0,
     is_important: false,
     processing_status: null,
-    ...over
+    ...over,
+    // 显式传了就用（含 null）；没传则跟随 sender。放在展开之后才盖得住。
+    sender_email:
+      'sender_email' in over ? over.sender_email : (over.sender ?? 'someone@example.test')
   }
 }
 
@@ -290,19 +298,43 @@ describe('isBotSender', () => {
     }
   })
 
-  test('🔴 sender 带显示名时只判尖括号里的地址（活库 68% 的行是这个形状）', () => {
+  test('🔴 判据读 sender_email（裸地址）不读 sender —— 显示名不再污染判据', () => {
     // email_metadata.sender 不保证是裸地址: AppleScript 路径写整个 From 头
-    // (活库 13011 行里 8850 行, 全部 backend_origin='applescript')。不剥显示名的话
-    // 判据会去读**发件人自己填的字符串** —— 活库实测 `"徐静雅 (Jira)" <itjsm.gm@…>`
+    // (活库 13014 行里 8850 行 = 68%, 全部 backend_origin='applescript')。拿 sender
+    // 判就是在读**发件人自己填的显示名** —— 活库实测 `"徐静雅 (Jira)" <itjsm.gm@…>`
     // 是真人邮件, 却靠显示名里的 "(Jira)" 命中 bot 判据。
-    expect(isBotSender('"徐静雅 (Jira)" <itjsm.gm@tp-link.test>')).toBe(false)
-    expect(isBotSender('Alert Center <alice@tp-link.test>')).toBe(false)
-    expect(isBotSender('Bot Framework Team <carol@ms.test>')).toBe(false)
-    expect(isBotSender('Gary W <gary.w@tp-link.test>')).toBe(false)
+    // WP-5 起解析收口到 Python 持久化边界 (derive_sender_email → sender_email 列),
+    // 前端只读那一列, 这里钉的就是「读对了列」。
+    const human = em({
+      internal_id: 1,
+      sender: '"徐静雅 (Jira)" <itjsm.gm@tp-link.test>',
+      sender_email: 'itjsm.gm@tp-link.test'
+    })
+    expect(isLowSignal(human)).toBe(false)
+    expect(applyTab('focused', [human])).toHaveLength(1)
+
+    const alertCenter = em({
+      internal_id: 2,
+      sender: 'Alert Center <alice@tp-link.test>',
+      sender_email: 'alice@tp-link.test'
+    })
+    expect(isLowSignal(alertCenter)).toBe(false)
+
     // 地址本身是机器人 → 显示名写什么都照样命中。
-    expect(isBotSender('Atlassian <noreply+65ff4a9@id.atlassian.test>')).toBe(true)
-    expect(isBotSender('TPS IT Service Desk <notify.jira@email.tp-link.test>')).toBe(true)
-    expect(isBotSender('"AutoNotification@x.test" <AutoNotification@x.test>')).toBe(true)
+    const bot = em({
+      internal_id: 3,
+      sender: 'Atlassian <noreply+65ff4a9@id.atlassian.test>',
+      sender_email: 'noreply+65ff4a9@id.atlassian.test'
+    })
+    expect(isLowSignal(bot)).toBe(true)
+    expect(applyTab('other', [bot])).toHaveLength(1)
+  })
+
+  test('🔴 sender_email 取不到地址（null）→ 不判机器人，留「重点」', () => {
+    // 活库 2 行 sender='' ⇒ derive_sender_email 返 None ⇒ 列为 NULL。
+    const noAddr = em({ internal_id: 1, sender: 'noreply-ish garbage', sender_email: null })
+    expect(isLowSignal(noAddr)).toBe(false)
+    expect(applyTab('focused', [noAddr])).toHaveLength(1)
   })
 
   test('普通同事地址 / 空值 → false', () => {

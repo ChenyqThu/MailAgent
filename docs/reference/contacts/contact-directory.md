@@ -19,10 +19,11 @@
 - off = 字节级 inert：`run_tick` 第一行返回（零 SQL）、端点全 403
   `E_DISABLED`、CLI `mailagent contact backfill` 拒绝、导航不渲染且路由直达 =
   404 空态（非空页）。**v54/v55 表结构与 flag 解耦恒在**。
-- 配套 env：`MAILAGENT_SELF_EMAILS`（逗号分隔 owner 历史自有地址，与
-  `USER_EMAIL` + 库内 `is_self=1` 联系人锚点共同构成自有地址集
-  `resolve_self_addresses` —— 既是列表排除集也是出向 `sent_to_count` 判据；改后
-  `mailagent contact backfill --rescan` 收敛）。
+- 配套 env：`MAILAGENT_SELF_EMAILS`（逗号分隔 owner 历史自有地址，**兜底级**）。
+  自有地址集 `resolve_self_addresses` = `USER_EMAIL` + 本键 + 库内 `is_self=1`
+  联系人名下**全部锚点**（task 08-14 WP-3 起第三源是权威源，见 §4.1）；它决定
+  出向 `sent_to_count`、关联邮件方向三分、compose 收件人补全的排除。改后
+  `mailagent contact backfill --rescan` 收敛。
 
 ## 2. 数据模型（SyncStore v54 + v55）
 
@@ -62,6 +63,11 @@ v44–v50 各块整组重放，新表混进去炸梯子）。
   L1 = kind 启发式打标（robot pattern 集 / list 弱前缀，保守、owner 可改判且
   `kind_locked_at` 后不再翻转）。草稿箱行不入账本（`DRAFT_MAILBOX_LABELS`）。
 - 已锁字段自动提取**绕开**（`identity_locks_json`；scanner 读锁映射）。
+- 🔴 **自有地址照常建档记账**（task 08-14 WP-3）：此前 scanner 对自有地址直接
+  `continue`，于是 owner 换邮箱后新地址一封关联都没有（活库实测 `mail_count=0`、
+  账本 0 条）。现在它和别人一样进 `contact` / `contact_email_link`。
+- 引导：`run_scan` 自解析自有集时，先 `service.ensure_self_bootstrap` 再
+  `resolve_self_addresses`（顺序不可换，见 §4.1）。
 
 ## 4. 治理写面（`src/contacts/service.py`，唯一写侧）
 
@@ -71,6 +77,45 @@ REST / 未来 agent 工具全走同一组函数，**不许各写一份 UPDATE**�
 
 - `upsert_contact_for_email`：按锚点找人→写人；非空 = 最后写者赢、None 不动、
   `fallback_*` 只填新建行（不许悄悄把别人改名）。
+
+### 4.1 「我」的身份语义（task 08-14 WP-3，owner 拍板）
+
+`is_self` 从**排除开关**降级为**身份标签**。此前它一次关掉四件事，其中三件是误伤
+（owner：「我其实不希望自己从通讯录消失」「标成自己也要正常记账」「上下级也无法
+关联我」）。现状：
+
+| 面 | 现在 |
+|---|---|
+| 扫描建档记账 | 照常（§3） |
+| 默认 known 视图 | **收**，且不受 `kind='person' AND sent_to_count>0` 约束（自己给自己发信的出向天然是 0，只去掉 `is_self=0` 照样进不来）；`hidden_at` 仍生效 |
+| 同事推荐 / 指定上级的选人池 | 不过滤（「我」能挂进汇报线、也能被选成别人的上级） |
+| 画像卡 / 组织关系区 | 照常渲染（不再对 self 特判） |
+| compose 收件人补全 | 🔒 **仍排除** —— 唯一该排除的一处（`email_repository._CONTACT_DIRECTORY_SQL` 的 `excluded` 标位 + Electron main `handlers/contacts.ts` 的镜像 SQL，两侧同步改） |
+
+**两段式认定**（`service.ensure_self_bootstrap`）：
+
+1. **引导，只跑一次** —— 按 `USER_EMAIL` **精确匹配**锚点，命中哪条就标
+   `is_self=1`。🔴 判据只有账号邮箱这一个：不用名字、也不用
+   `MAILAGENT_SELF_EMAILS`（owner：「不然同名就会被误标」）。记号
+   `sync_state['contact_self.bootstrap_at']`（KV 表，**不 bump `DB_VERSION`**）。
+   ⚠️ **只在真的落定后才写记号** —— 引导跑在扫描之前，全新库里那条联系人还没建
+   出来，此时写记号 = 永远标不上「我」（有回归测试钉死）。库里已有 `is_self=1`
+   则只写记号不动行；owner 事后手动取消也**不会**被标回来（恢复走手动 UI）。
+2. **之后一切以「我」那条为准** —— 自有地址集 = 它名下**全部锚点**，合并进来的
+   旧邮箱自动算「我的地址」。`set_is_self` 是**单选**（标新的自动清旧的），所以
+   库里恒最多一条，自有集不会被第二个「我」撑大。
+   🔴 **合并时身份跟着人走**：`merge_contacts` 里若被并方（loser）是「我」，标签
+   转给 winner（复用 `set_is_self`，单选语义不抄第二份）。不转移会**静默丢掉
+   「我」** —— 锚点已搬到 winner，墓碑上那面旗子名下再无锚点 ⇒ 自有地址集塌成空
+   集、出向判据/方向三分/置顶徽章一起失效，而引导记号已烧掉不会重标；而「换邮箱」
+   正是合并功能的主场景，owner 完全可能把「我」选成被并方。
+
+该规则同时消掉了「`resolve_self_addresses` 与自动置位互相喂给需收敛循环」的隐患：
+引导只读 `USER_EMAIL` 一个确定值、不读自有地址集，两者不构成回路。
+
+调用点：`scanner.run_scan` 第一个事务（自解析自有集时）+ `mailagent contact
+backfill`（扫描前后各一次 —— 全新库里「我」那条是本次扫描才建出来的，跑一次
+backfill 就收敛，不必等下个 tick）。
 - 字段级锁：`update_identity_fields` 保存即落锁（含清空）；`role_title` 变更对
   未锁且未显式提供的 `function` / `seniority` 做词表派生（派生是自动来源不落锁）。
 - 🔒 曾用邮箱不变量收在**一个守卫** `_email_status_guard`：`set_primary` 顺带清
@@ -96,9 +141,32 @@ REST / 未来 agent 工具全走同一组函数，**不许各写一份 UPDATE**�
 | `GET ""` | 列表（view `known`/`all` + q + sort 三值 + limit 截断[⌘K 用，total 仍全量]）|
 | `GET /backfill/progress` | watermark 覆盖行数 / 总行数 |
 | `POST /resolve` | 批量精确解析（WP4 互链 chip；键 = 原输入串，null = 不在库；上限 100）|
-| `GET /{id}` · `GET /{id}/mails` · `GET /{id}/matters` | 详情（含 §6 组织关系投影）· 人-邮件账本分页 · 关联事项反查 |
+| `GET /{id}` · `GET /{id}/mails` · `GET /{id}/matters` | 详情（含 §6 组织关系投影）· 人-邮件账本分页（§5.1 方向三分）· 关联事项反查 |
 | `PATCH /{id}` · `POST /{id}/locks` | 身份字段编辑（保存即落锁）· 显式锁切换 |
 | `POST /{id}/hide` / `kind` / `self` / `manager` / `merge` / `emails/primary` / `emails/former` | 治理写（全部薄端点进 service 守卫）|
+
+### 5.1 关联邮件的方向三分（task 08-14 WP-5）
+
+`GET /{id}/mails` 的 tab 轴从 `role`（`all|from|to|cc`）换成 `direction`
+（`all|from_them|from_me|from_third`）。**breaking change**，前端同步改
+（`MAIL_ROLE_MAP` 已删）。
+
+```
+对方 role 含 'sender'            → from_them   （🔴 sender 优先：自己抄送自己也算它）
+否则 sender_email ∈ 自有地址集    → from_me
+否则                             → from_third  （含 sender_email IS NULL）
+```
+
+- 收的是「对方是 to/cc ⇒ 我发出的」这个错判：活库实测 **178,046** 条第三方邮件被
+  打上「发至」，而真正 owner 发的只有 3,667 条 ⇒ 老「发至」里 98% 是错的。
+- 三类**互斥**（一封邮件对一个联系人只有一个方向），比老 role 轴下同一封邮件同时
+  出现在 to 与 cc 两个 tab 更干净。
+- 🔴 判据在**后端**算（`_direction_expr`）：自有地址集的权威是
+  `resolve_self_addresses`，前端复制一份就是第二个真源。
+- **cc 退出 tab 轴**（owner 拍板 A 方案：方向与 to/cc 是正交两维），降级为行内次要
+  标记 —— 响应仍带 `roles`，前端只在「非 TA 发的且只在 cc 里」时加一个「抄送」尾注。
+- SQL 形状：分组子查询产出 `direction` 派生列，过滤与分页在**外层 WHERE**（不塞
+  HAVING 重复整段表达式），`total` 直接 `COUNT(*)` 同一个子查询。
 
 ## 6. 组织关系（WP5，设计 §2.2.1）
 
@@ -115,8 +183,8 @@ REST / 未来 agent 工具全走同一组函数，**不许各写一份 UPDATE**�
   REST 面不暴露；detail 投影带 `manager_src` 让 UI 的「从邮件推断」标记结构就位）。
 - detail 投影：`manager`（单行）/ `reports[]`（反查，排墓碑/隐藏，`mail_count`
   降序）/ `peers[]`（同 organization；**双方都有 department 才要求相同**——原型
-  `cdata.jsx` 语义；排自己/非 person/self/hidden/墓碑；`mail_count` 降序前 6；无
-  组织恒空）。行集 = id/姓名/组织/职务/kind/mail_count/**primary_email**
+  `cdata.jsx` 语义；排本人/非 person/hidden/墓碑，🔴 08-14 WP-3 起**不再排
+  `is_self`**；`mail_count` 降序前 6；无组织恒空）。行集 = id/姓名/组织/职务/kind/mail_count/**primary_email**
   （Monogram 色相锚点 = 主邮箱 D10 + 「写邮件并抄送上级」要上级主邮箱）。
 - list 面：`manager_contact_id` + self-join `manager_display_name`（汇报线分组
   label 与行菜单可用性）。
@@ -130,9 +198,12 @@ REST / 未来 agent 工具全走同一组函数，**不许各写一份 UPDATE**�
 - **工作台**：`ContactsWorkspace`（双栏 280–560 可拖宽，860px 单列折叠推拉）→
   `ContactListPane`（视图/搜索/分组/排序/密度 + 虚拟滚动 react-window 定高 +
   多选条）→ `ContactDetail`（档案头 / 画像卡引导态 / 身份信息与锁 / **组织关系
-  `ContactOrgSection`**[person 且非 self] / 关联邮件 / 关联事项）。
+  `ContactOrgSection`**[person，08-14 起 self 也渲染] / 关联邮件[方向四 tab，
+  §5.1] / 关联事项）。
 - **分组**：`contactListModel.ts` 纯模型（组 = 成员数降序、`未分组` 恒末尾、组头
-  可折叠；模型层不 import i18n，label 全由调用方闭包注入）。`'manager'` 档 =
+  可折叠；模型层不 import i18n，label 全由调用方闭包注入）。**「我」恒置顶单独一
+  组**（`SELF_GROUP_KEY`，两视图任意分组档都先摘出去；没有 self 行时输出与 08-14
+  前逐字相同，有回归闸）+ 行上「这是我」徽章 `SelfPip`。`'manager'` 档 =
   按汇报线：组 key `mgr:{id}`，label `contacts.group.reportsOf` 插值行上的
   `manager_display_name`（无名上级照原型 `m.name || m.id` 用 id 兜底）；未设上级
   走 ungrouped 通道置底、label 特判 `contacts.group.noManager`。菜单 label 对
@@ -159,12 +230,12 @@ REST / 未来 agent 工具全走同一组函数，**不许各写一份 UPDATE**�
 ## 8. 测试与闸
 
 - Python：`tests/contacts/`（taxonomy / scanner / service / identity locks /
-  org relations / REST 面）+ 迁移 `tests/matters/test_contact_v54_migration.py`、
-  `test_contact_v55_locks.py`。
+  org relations / **self identity** / REST 面）+ 迁移
+  `tests/matters/test_contact_v54_migration.py`、`test_contact_v55_locks.py`。
 - 跨语言闸：`tests/config/test_contact_enum_parity.py`（taxonomy 枚举/可锁字段 ↔
   TS `types/contact.ts`）。
 - 前端：`frontend/tests/components/contacts/`（列表多选条 / merge 模型 /
-  manager 分组 / 组织关系区 / PersonChip / PersonHitRow）+
+  manager 分组 / **「我」置顶组** / 组织关系区 / PersonChip / PersonHitRow）+
   `contactsLocaleParity` + `contactsNavigation` + compose 预填回归
   `ComposePanelNewPrefill`。
 

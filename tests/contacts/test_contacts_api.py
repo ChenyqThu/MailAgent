@@ -130,7 +130,7 @@ def _seed_list_fixture(path):
         path, cid=5, name="Hidden Hu", hidden_at=1, sent=4, mail=4, last=50,
         emails=(("hu@z.com", 1),),
     )
-    _seed_contact(  # 我自己 → known 不收
+    _seed_contact(  # 我自己 → WP-3 起 known **照收** (置顶那一组)
         path, cid=6, name="Me", is_self=1, sent=2, mail=2, last=40,
         emails=(("me@corp.com", 1),),
     )
@@ -139,19 +139,50 @@ def _seed_list_fixture(path):
     )
 
 
-def test_list_known_view_is_two_way_people_only(client):
+def test_list_known_view_is_two_way_people_plus_me(client):
     http, _, path = client
     _seed_list_fixture(path)
     data = _data(http.get("/api/contacts"))
     ids = [item["id"] for item in data["items"]]
-    assert set(ids) == {1, 2, 7}
-    # density: sent DESC (9 > 5 > 1)
-    assert ids == [2, 1, 7]
-    assert data["total"] == 3
+    # 6 = 「我」(WP-3: 不再排除); 3 单向广播 / 4 robot / 5 隐藏仍不收。
+    assert set(ids) == {1, 2, 6, 7}
+    # density: sent DESC (9 > 5 > 2 > 1) —— 置顶由前端 contactListModel 做, 不动排序。
+    assert ids == [2, 1, 6, 7]
+    assert data["total"] == 4
     alice = next(i for i in data["items"] if i["id"] == 1)
     assert alice["email_count"] == 2
     assert alice["primary_email"] == "alice@x.com"
     assert alice["profile_summary"] is None
+    assert next(i for i in data["items"] if i["id"] == 6)["is_self"] is True
+
+
+def test_list_known_view_keeps_me_even_without_two_way_traffic(client):
+    """🔴 只去掉 `is_self = 0` 是不够的: 自己给自己发信的 sent_to_count 天然是 0,
+    known 视图的双向判据照样会把「我」挡在外面 (owner 报的「我从通讯录消失」)。"""
+    http, _, path = client
+    _seed_contact(
+        path, cid=1, name="Me", is_self=1, sent=0, mail=0,
+        emails=(("me@corp.com", 1),),
+    )
+    _seed_contact(  # 对照: 非 self 的零往来行仍不收
+        path, cid=2, name="Silent", sent=0, mail=3,
+        emails=(("s@x.com", 1),),
+    )
+    data = _data(http.get("/api/contacts"))
+    assert [i["id"] for i in data["items"]] == [1]
+
+
+def test_list_known_view_still_respects_hidden_for_me(client):
+    """隐藏是显式的人的决定 —— 「我」被隐藏时照样不出现 (owner 可自己找回)。"""
+    http, _, path = client
+    _seed_contact(
+        path, cid=1, name="Me", is_self=1, hidden_at=1, sent=0, mail=0,
+        emails=(("me@corp.com", 1),),
+    )
+    assert _data(http.get("/api/contacts"))["items"] == []
+    assert [
+        i["id"] for i in _data(http.get("/api/contacts", params={"view": "all"}))["items"]
+    ] == [1]
 
 
 def test_list_all_view_includes_everything(client):
@@ -165,10 +196,11 @@ def test_list_sorts(client):
     http, _, path = client
     _seed_list_fixture(path)
     recent = _data(http.get("/api/contacts", params={"sort": "recent"}))
-    assert [i["id"] for i in recent["items"]] == [7, 1, 2]  # last 400 > 300 > 200
+    # last 400 > 300 > 200 > 40(「我」)
+    assert [i["id"] for i in recent["items"]] == [7, 1, 2, 6]
     name = _data(http.get("/api/contacts", params={"sort": "name"}))
-    # Alice < Bob < zz@last.com (裸邮箱按主邮箱兜底比较)
-    assert [i["id"] for i in name["items"]] == [1, 2, 7]
+    # Alice < Bob < Me < zz@last.com (裸邮箱按主邮箱兜底比较)
+    assert [i["id"] for i in name["items"]] == [1, 2, 6, 7]
 
 
 def test_list_search_hits_variants_and_secondary_email(client):
@@ -199,16 +231,16 @@ def test_list_limit_truncates_but_total_stays_full(client):
     http, _, path = client
     _seed_list_fixture(path)
     data = _data(http.get("/api/contacts", params={"limit": 2}))
-    # density 排序全量是 [2, 1, 7] —— 截断只留前 2, total 仍报 3 (供「+n more」)。
+    # density 排序全量是 [2, 1, 6, 7] —— 截断只留前 2, total 仍报 4 (供「+n more」)。
     assert [i["id"] for i in data["items"]] == [2, 1]
-    assert data["total"] == 3
+    assert data["total"] == 4
 
 
 def test_list_without_limit_is_unchanged(client):
     http, _, path = client
     _seed_list_fixture(path)
     data = _data(http.get("/api/contacts"))
-    assert len(data["items"]) == data["total"] == 3
+    assert len(data["items"]) == data["total"] == 4
 
 
 # ---- 批量精确解析 (WP4: POST /resolve) ----
@@ -478,17 +510,27 @@ def test_backfill_progress_numbers(client):
 # ---- 关联邮件 ----
 
 
-def _seed_mail_links(path):
+def _seed_mail_links(path, *, senders=None):
+    """三封邮件挂到 alice: 101 她发的 / 102 我发的 / 103 第三方发的 (WP-5 三分)。
+
+    `sender_email` 是 v58 派生列 —— 方向判据读它, 不读 `sender`。
+    """
+    senders = senders or {
+        101: ("Alice <alice@x.com>", "alice@x.com"),
+        102: ("Lucien Chen <me@corp.com>", "me@corp.com"),
+        103: ("Third Party <third@z.com>", "third@z.com"),
+    }
     with _conn(path) as conn:
         for internal_id, subject, ts in (
             (101, "Kickoff", "2026-08-01T08:00:00+00:00"),
             (102, "Re: Kickoff", "2026-08-02T08:00:00+00:00"),
             (103, "FYI", "2026-08-03T08:00:00+00:00"),
         ):
+            sender, sender_email = senders[internal_id]
             conn.execute(
                 "INSERT INTO email_metadata (internal_id, subject, sender, "
-                "date_received, mailbox) VALUES (?,?, 'x@y.com', ?, '收件箱')",
-                (internal_id, subject, ts),
+                "sender_email, date_received, mailbox) VALUES (?,?,?,?,?, '收件箱')",
+                (internal_id, subject, sender, sender_email, ts),
             )
         email_id = conn.execute(
             "SELECT id FROM contact_email WHERE email_normalized='alice@x.com'"
@@ -507,8 +549,15 @@ def _seed_mail_links(path):
         conn.commit()
 
 
-def test_contact_mails_role_filter_and_pagination(client):
-    http, _, path = client
+def _with_self(settings, *, user_email="me@corp.com", extra=""):
+    settings.user_email = user_email
+    settings.self_emails = extra
+    return settings
+
+
+def test_contact_mails_direction_split_and_pagination(client):
+    http, settings, path = client
+    _with_self(settings)
     _seed_list_fixture(path)
     _seed_mail_links(path)
 
@@ -516,12 +565,20 @@ def test_contact_mails_role_filter_and_pagination(client):
     assert [i["internal_id"] for i in data["items"]] == [103, 102, 101]
     assert data["total"] == 3
     assert data["next_cursor"] is None
+    # roles 仍在 (cc 降级为行内次要标记, 不再占 tab 轴)
     assert data["items"][1]["roles"] == ["cc", "to"]
+    assert {i["internal_id"]: i["direction"] for i in data["items"]} == {
+        101: "from_them", 102: "from_me", 103: "from_third",
+    }
 
-    from_them = _data(http.get("/api/contacts/1/mails", params={"role": "from"}))
-    assert [i["internal_id"] for i in from_them["items"]] == [101]
-    cc = _data(http.get("/api/contacts/1/mails", params={"role": "cc"}))
-    assert [i["internal_id"] for i in cc["items"]] == [103, 102]
+    for direction, expected in (
+        ("from_them", [101]), ("from_me", [102]), ("from_third", [103]),
+    ):
+        page = _data(
+            http.get("/api/contacts/1/mails", params={"direction": direction})
+        )
+        assert [i["internal_id"] for i in page["items"]] == expected, direction
+        assert page["total"] == len(expected), direction
 
     page1 = _data(http.get("/api/contacts/1/mails", params={"limit": 2}))
     assert [i["internal_id"] for i in page1["items"]] == [103, 102]
@@ -536,8 +593,134 @@ def test_contact_mails_role_filter_and_pagination(client):
     assert page2["next_cursor"] is None
 
     assert http.get(
-        "/api/contacts/1/mails", params={"role": "bogus"}
+        "/api/contacts/1/mails", params={"direction": "bogus"}
     ).status_code == 400
+    # 老 role 轴已退役: 传 role 只是被忽略 (不再有 to/cc 两个 tab)
+    assert http.get(
+        "/api/contacts/1/mails", params={"role": "cc"}
+    ).status_code == 200
+
+
+def test_contact_mails_directions_are_mutually_exclusive(client):
+    """三类互斥: 三档条数之和 == 不过滤时的总数 (一封邮件对一个联系人只有一个方向,
+    不像老 role 轴那样能同时出现在 to 与 cc 两个 tab)。"""
+    http, settings, path = client
+    _with_self(settings)
+    _seed_list_fixture(path)
+    _seed_mail_links(path)
+    with _conn(path) as conn:
+        email_id = conn.execute(
+            "SELECT id FROM contact_email WHERE email_normalized='alice@x.com'"
+        ).fetchone()[0]
+        # 102 已是 to+cc 双角色 —— 老 role 轴下它在两个 tab 里各出现一次。
+        conn.execute(
+            "INSERT INTO contact_email_link (email_id, internal_id, role, seen_at) "
+            "VALUES (?, 101, 'cc', 1000)",
+            (email_id,),
+        )
+        conn.commit()
+
+    total = _data(http.get("/api/contacts/1/mails"))["total"]
+    counts = {
+        d: _data(http.get("/api/contacts/1/mails", params={"direction": d}))["total"]
+        for d in ("from_them", "from_me", "from_third")
+    }
+    assert sum(counts.values()) == total == 3
+    assert counts == {"from_them": 1, "from_me": 1, "from_third": 1}
+
+
+def test_contact_mails_direction_sender_role_wins_over_my_own_address(client):
+    """🔴 优先级: 对方既是 sender 又在 to/cc 时 **sender 优先**。
+
+    唯一能同时命中两条分支的形状 = 看「我」自己的人物页上那封「我发的、又抄送了
+    自己」的邮件 (sender_email ∈ 自有集 **且** 该联系人的 role 含 sender)。判据顺序
+    反过来的话它会被判成 from_me。
+    """
+    http, settings, path = client
+    _with_self(settings)
+    _seed_list_fixture(path)  # cid=6 = 「我」, 锚点 me@corp.com
+    with _conn(path) as conn:
+        conn.execute(
+            "INSERT INTO email_metadata (internal_id, subject, sender, sender_email, "
+            "date_received, mailbox) VALUES (201, '自抄送', 'Me <me@corp.com>', "
+            "'me@corp.com', '2026-08-05T08:00:00+00:00', '发件箱')"
+        )
+        email_id = conn.execute(
+            "SELECT id FROM contact_email WHERE email_normalized='me@corp.com'"
+        ).fetchone()[0]
+        for role in ("sender", "cc"):
+            conn.execute(
+                "INSERT INTO contact_email_link (email_id, internal_id, role, "
+                "seen_at) VALUES (?, 201, ?, 5000)",
+                (email_id, role),
+            )
+        conn.commit()
+
+    data = _data(http.get("/api/contacts/6/mails"))
+    assert [i["internal_id"] for i in data["items"]] == [201]
+    assert sorted(data["items"][0]["roles"]) == ["cc", "sender"]
+    assert data["items"][0]["direction"] == "from_them"
+    assert _data(
+        http.get("/api/contacts/6/mails", params={"direction": "from_me"})
+    )["total"] == 0
+
+
+def test_contact_mails_direction_handles_null_sender_email(client):
+    """`sender_email IS NULL` (v58 派生不出地址) → from_third, 不炸也不算成我发的。"""
+    http, settings, path = client
+    _with_self(settings)
+    _seed_list_fixture(path)
+    _seed_mail_links(path, senders={
+        101: ("Alice <alice@x.com>", "alice@x.com"),
+        102: ("garbage-no-address", None),
+        103: ("Third Party <third@z.com>", "third@z.com"),
+    })
+    data = _data(http.get("/api/contacts/1/mails"))
+    assert {i["internal_id"]: i["direction"] for i in data["items"]}[102] == "from_third"
+
+
+def test_contact_mails_direction_without_any_self_address(client):
+    """自有地址集为空 (USER_EMAIL 没配、库里也没有「我」) → 没有 from_me, 但
+    `IN ()` 那条 SQL 不能炸。"""
+    http, settings, path = client
+    _with_self(settings, user_email="", extra="")
+    # 🔴 不用 _seed_list_fixture: 它带一条 is_self=1 的行, 自有地址集就不空了。
+    _seed_contact(
+        path, cid=1, name="Alice", sent=5, mail=20, emails=(("alice@x.com", 1),),
+    )
+    _seed_mail_links(path)
+    data = _data(http.get("/api/contacts/1/mails"))
+    assert {i["internal_id"]: i["direction"] for i in data["items"]} == {
+        101: "from_them", 102: "from_third", 103: "from_third",
+    }
+    assert _data(
+        http.get("/api/contacts/1/mails", params={"direction": "from_me"})
+    )["total"] == 0
+
+
+def test_contact_mails_direction_follows_is_self_anchors(client):
+    """🔴 自有地址集的权威是「我」那条联系人的**全部锚点** —— 合并进来的旧邮箱
+    不用另配, 用它发出的历史邮件照样算「我发的」。"""
+    http, settings, path = client
+    _with_self(settings, user_email="me@corp.com")
+    _seed_list_fixture(path)
+    _seed_mail_links(path, senders={
+        101: ("Alice <alice@x.com>", "alice@x.com"),
+        102: ("Lucien Chen <old-me@tp-link.com>", "old-me@tp-link.com"),
+        103: ("Third Party <third@z.com>", "third@z.com"),
+    })
+    # 未挂到「我」名下时: 旧地址只是普通第三方
+    before = _data(http.get("/api/contacts/1/mails"))
+    assert {i["internal_id"]: i["direction"] for i in before["items"]}[102] == "from_third"
+    # 把旧地址挂进「我」(cid=6 是 is_self=1 那条)
+    with _conn(path) as conn:
+        conn.execute(
+            "INSERT INTO contact_email (contact_id, email_normalized, is_primary, "
+            "created_at) VALUES (6, 'old-me@tp-link.com', 0, 1)"
+        )
+        conn.commit()
+    after = _data(http.get("/api/contacts/1/mails"))
+    assert {i["internal_id"]: i["direction"] for i in after["items"]}[102] == "from_me"
 
 
 # ---- 关联事项 ----

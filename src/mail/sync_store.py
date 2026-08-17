@@ -78,6 +78,7 @@ from src.contacts.taxonomy import (
     CONTACT_MANAGER_SRC_VALUES,
     CONTACT_SENIORITY_VALUES,
 )
+from src.mail.email_address import derive_sender_email
 
 
 # Draft→Sent 提升判定用的 mailbox label 集合（见 _save_email_v3 cross-backend merge）。
@@ -787,6 +788,54 @@ def _normalize_date_received_iso(value: Optional[str]) -> Optional[str]:
         return value
 
 
+#: v58 回填的分块大小 (keyset 分页 + executemany)。
+SENDER_EMAIL_BACKFILL_CHUNK = 2000
+
+
+def _backfill_sender_email(cursor) -> int:
+    """v58: 给存量行补 ``sender_email``。返回真正写了值的行数。
+
+    幂等: 判据是 ``sender_email IS NULL``, 已回填的行不再进候选; 重入接着上次没做完
+    的部分做, 结果与一次跑完一致。派生失败 (返回 None) 的行**不写**, 于是它们每次
+    重入都会被重新扫一遍 —— 代价是纯 CPU (无 UPDATE), 换来"以后修好派生器再跑一次
+    就能补上"的性质。
+
+    🔴 **keyset 分页 (``internal_id > ?``) 而不是 ``WHERE sender_email IS NULL LIMIT``**:
+    后者对「派生结果为 None 的行」永远不推进 → 死循环。
+
+    🔴 分块是为了**有界内存 + 批量 UPDATE** (executemany), **不**在块间 commit:
+    整条迁移梯子是单事务 (半程失败随连接回收 ROLLBACK、db_version 停在旧值下次重跑),
+    中途 commit 会把前面几块尚未落 version 的 DDL 一并提交。启动耗时的大头是逐行
+    Python 解析 + 逐行 UPDATE, executemany 分块已经把它压掉 (活库 13014 行秒级)。
+    """
+    written = 0
+    last_id = -1
+    while True:
+        rows = cursor.execute(
+            "SELECT internal_id, sender FROM email_metadata "
+            "WHERE internal_id > ? AND sender_email IS NULL "
+            "ORDER BY internal_id LIMIT ?",
+            (last_id, SENDER_EMAIL_BACKFILL_CHUNK),
+        ).fetchall()
+        if not rows:
+            break
+        last_id = rows[-1][0]
+        updates = [
+            (email, row[0])
+            for row in rows
+            if (email := derive_sender_email(row[1])) is not None
+        ]
+        if updates:
+            cursor.executemany(
+                "UPDATE email_metadata SET sender_email = ? WHERE internal_id = ?",
+                updates,
+            )
+            written += len(updates)
+        if len(rows) < SENDER_EMAIL_BACKFILL_CHUNK:
+            break
+    return written
+
+
 class SyncStoreMigrationError(RuntimeError):
     """数据库迁移真失败 / 版本不兼容 (E0-WP3 迁移守卫)。
 
@@ -1186,7 +1235,20 @@ class SyncStore:
     #                真的检出到新版本时产生。
     #                回滚 (回退 v57): 表/索引留着无害 (旧代码零消费点); 真要清
     #                DROP TABLE resource_version 即可, 不牵动 resource 行。
-    DB_VERSION = 57
+    # v58 (sender 形态归一, task 08-14 WP-5 阶段 1, 2026-08): email_metadata
+    #                +sender_email (归一裸小写地址) + idx_email_sender_email。
+    #                🔴 与前面几条「有意不回填」的加列**不同**: 本列是纯派生值,
+    #                NULL 不是有意义的空态而是缺口 —— 老行不回填 = 三个消费者对
+    #                存量行继续瞎 (contacts 账本缺 68% 的发件人、出向漏 87%), 故
+    #                migration **必须**回填 (见 _backfill_sender_email)。
+    #                派生器单源 src/mail/email_address.py::derive_sender_email
+    #                (email.utils.getaddresses); 🔴 禁止在 SQL 里 substr/instr
+    #                再写一套 —— 那正是本 WP 要消灭的「第 N 个真源」。
+    #                sender 列**一字不改** (77 处后端引用 + 前端 parseSender 靠它
+    #                取显示名, 原地改写会让 ⌘K 结果里的发件人退化成 local part)。
+    #                回滚 (回退 v58): 列/索引留着无害 (旧代码零消费点); 列随时可由
+    #                sender 重算, 不是第二真源。
+    DB_VERSION = 58
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -1300,6 +1362,7 @@ class SyncStore:
         # v8: is_pinned / pinned_at —— 前端置顶 / pin 持久化
         # v9: is_important —— 邮件原生重要性（Importance / X-Priority header）
         # v51: ingest_reason —— 入库来源 provenance（飞书通知门控判据）
+        # v58: sender_email —— sender 的归一裸小写地址（派生列，见 email_address.py）
         #
         # 🔴 message_id 是 TEXT UNIQUE 且写入走 INSERT OR REPLACE ⇒ **绝不能存空字符串**
         # （空串撞 UNIQUE 会静默删掉冲突的老行）。无 Message-ID 一律存 NULL，
@@ -1338,7 +1401,8 @@ class SyncStore:
                 draft_references TEXT,
                 in_reply_to TEXT,
                 ingest_reason TEXT,
-                entry_id TEXT
+                entry_id TEXT,
+                sender_email TEXT
             )
         """)
 
@@ -3675,6 +3739,50 @@ class SyncStore:
                     f"v57 migration (resource_version): {e}"
                 ) from e
 
+        # === v58: email_metadata.sender_email 派生列 + 回填 (task 08-14 WP-5) ===
+        # 🔴 **必须回填**, 与 ingest_reason / entry_id / v56 三列那几条「有意不回填」
+        # 相反: 那些列的 NULL 本身有语义 (「未知 ≙ 默认」), 而本列是纯派生值 —— 不填
+        # 就等于让三个消费者对全部存量行继续瞎 (contacts 账本缺 68% 的发件人、出向
+        # 判据漏 87%), 而回填不编造任何历史 (值 100% 由同一行的 sender 算出)。
+        # 顺序: ALTER (探列幂等) → 回填 DML → 建索引。
+        # 🔴 DDL 与 DML 分 try (v51/v52 教训): 回填失败必须无条件 raise, 绝不被
+        # 「列已存在」guard 吞掉后永久跳过 —— 迁移只跑一次。
+        # 索引复查跟在列 guard 后面 (v52 同款成对写法): 列已存在而索引建失败时,
+        # 只有列 guard 会判「已迁移」→ version 照落 → 索引永不重建。
+        if current_version < 58:
+            try:
+                cursor.execute("PRAGMA table_info(email_metadata)")
+                _em_cols_v58 = {row[1] for row in cursor.fetchall()}
+                if "sender_email" not in _em_cols_v58:
+                    cursor.execute(
+                        "ALTER TABLE email_metadata ADD COLUMN sender_email TEXT"
+                    )
+                    logger.info("v58 migration: email_metadata +sender_email")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "email_metadata", {"sender_email"}, "v58 migration", e,
+                )
+            try:
+                _filled = _backfill_sender_email(cursor)
+                if _filled:
+                    logger.info(
+                        f"v58 migration: backfilled sender_email on {_filled} row(s)"
+                    )
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(
+                    f"v58 migration (sender_email backfill): {e}"
+                ) from e
+            try:
+                # _sent_predicate 的 `m.sender_email IN (...)` 吃这条索引。
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_email_sender_email "
+                    "ON email_metadata(sender_email)"
+                )
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_index(
+                    cursor, "idx_email_sender_email", "v58 migration", e
+                )
+
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
@@ -4019,6 +4127,14 @@ class SyncStore:
                     values.append(_normalize_date_received_iso(value) or '')
                 else:
                     values.append(value)
+
+        # 🔴 第三条**写 sender_email** 的持久化边界。`sender_email` 不在
+        # allowed_fields 里 (它不是调用方能传的字段, 是 sender 的派生值) ——
+        # 只要这次 UPDATE 动了 sender, 派生列必须跟着动, 否则两列会长期不一致
+        # (davmail 主链路: 先 pending 落一次 sender, fetch MIME 后经本函数刷新)。
+        if 'sender' in data:
+            set_parts.append("sender_email = ?")
+            values.append(derive_sender_email(data.get('sender')))
 
         if not set_parts:
             return UpdateAfterFetchResult.OK
@@ -4735,7 +4851,8 @@ class SyncStore:
                 # === 正常路径: 全新 row 或 internal_id 已存在 (同 backend 内重复触发) ===
                 cursor.execute("""
                     INSERT OR REPLACE INTO email_metadata
-                    (internal_id, message_id, thread_id, subject, sender, sender_name,
+                    (internal_id, message_id, thread_id, subject, sender, sender_email,
+                     sender_name,
                      to_addr, cc_addr, date_received, mailbox,
                      is_read, is_flagged, sync_status, notion_page_id,
                      notion_thread_id, sync_error, retry_count, next_retry_at,
@@ -4747,6 +4864,7 @@ class SyncStore:
                             ?, ?, ?,
                             ?, ?, ?,
                             ?, ?, ?,
+                            ?,
                             COALESCE((SELECT created_at FROM email_metadata WHERE internal_id = ?), ?),
                             ?)
                 """, (
@@ -4755,6 +4873,11 @@ class SyncStore:
                     email.get('thread_id'),
                     email.get('subject', ''),
                     email.get('sender', ''),
+                    # v58 第一条**写 sender_email** 的持久化边界 (另两条:
+                    # save_emails_batch / update_after_fetch)。派生器单源
+                    # derive_sender_email —— sender 列一字不改, 显示名留给
+                    # 前端 parseSender / ⌘K 结果用。
+                    derive_sender_email(email.get('sender', '')),
                     email.get('sender_name', ''),
                     email.get('to_addr', ''),
                     email.get('cc_addr', ''),
@@ -4888,6 +5011,8 @@ class SyncStore:
                 email.get('thread_id'),
                 email.get('subject', ''),
                 email.get('sender', ''),
+                # v58 派生列, 同 _save_email_v3 (见 derive_sender_email)。
+                derive_sender_email(email.get('sender', '')),
                 email.get('sender_name', ''),
                 email.get('to_addr', ''),
                 email.get('cc_addr', ''),
@@ -4917,12 +5042,14 @@ class SyncStore:
             try:
                 cursor.executemany("""
                     INSERT OR REPLACE INTO email_metadata
-                    (internal_id, message_id, thread_id, subject, sender, sender_name,
+                    (internal_id, message_id, thread_id, subject, sender, sender_email,
+                     sender_name,
                      to_addr, cc_addr, date_received, mailbox,
                      is_read, is_flagged, sync_status, notion_page_id,
                      notion_thread_id, sync_error, retry_count, next_retry_at,
                      created_at, updated_at)
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                            ?,
                             COALESCE((SELECT created_at FROM email_metadata WHERE internal_id = ?), ?),
                             ?)
                 """, batch_data)

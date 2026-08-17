@@ -38,7 +38,14 @@ export type ContactLockableField = (typeof CONTACT_LOCKABLE_FIELDS)[number]
 
 export type ContactView = 'known' | 'all'
 export type ContactSort = 'density' | 'recent' | 'name'
-export type ContactMailRole = 'all' | 'from' | 'to' | 'cc'
+
+/** 关联邮件的 tab 轴（task 08-14 WP-5，取代老 role 轴）。判据在后端算，见
+ *  `src/api/routers/contacts.py::_direction_expr`。`cc` 不再占 tab 轴 ——
+ *  「谁发的」与「to/cc」是正交两维，后者降级为行内次要标记。 */
+export const CONTACT_MAIL_DIRECTIONS = ['all', 'from_them', 'from_me', 'from_third'] as const
+export type ContactMailDirection = (typeof CONTACT_MAIL_DIRECTIONS)[number]
+/** 单封邮件的实际方向（三类互斥；`all` 只是「不过滤」，不是一封邮件的取值）。 */
+export type ContactMailDirectionValue = Exclude<ContactMailDirection, 'all'>
 
 /** GET /api/contacts 的行 (一条聚合 SQL 给齐, 禁逐行取数). */
 export interface ContactRowDto {
@@ -153,7 +160,9 @@ export interface ContactMailDto {
   date_received: string | null
   is_read: boolean
   seen_at: number | null
+  /** 账本角色（sender / to / cc）。方向轴之外只用来出「抄送」次要标记。 */
   roles: string[]
+  direction: ContactMailDirectionValue
 }
 
 export interface ContactMailsResponse {

@@ -36,6 +36,7 @@
         "subject": {"type": "string"},
         "sender": {"type": "string"},
         "sender_name": {"type": ["string", "null"]},
+        "sender_email": {"type": ["string", "null"]},
         "to_addr": {"type": ["string", "null"]},
         "date_received": {"$ref": "_common.schema.json#/$defs/iso_datetime_or_date"},
         "mailbox": {"type": ["string", "null"]},

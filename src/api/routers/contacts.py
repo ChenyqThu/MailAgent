@@ -36,8 +36,11 @@ from src.contacts.service import ContactError
 
 VIEW_VALUES = ("known", "all")
 SORT_VALUES = ("density", "recent", "name")
-#: 关联邮件角色过滤 (API 契约) → 账本 role 值。
-MAIL_ROLE_MAP = {"from": "sender", "to": "to", "cc": "cc"}
+#: 关联邮件的方向三分 (task 08-14 WP-5, API 契约; 取代 v58 前的 role 过滤)。
+#: 一封邮件对一个联系人**只有一个**方向, 三类互斥 —— 老 role 轴下同一封邮件可能
+#: 同时出现在 to 与 cc 两个 tab, 且「对方是 to/cc」被当成「我发出的」(活库实测
+#: 178,046 条第三方邮件被误标, 详情页「发至」里 98% 是错的)。
+MAIL_DIRECTION_VALUES = ("all", "from_them", "from_me", "from_third")
 
 
 def require_contacts_enabled(settings=Depends(get_settings)) -> None:
@@ -223,10 +226,14 @@ async def list_contacts(
     where = ["c.merged_into IS NULL"]
     params: list[Any] = []
     if view == "known":
-        # 设计 §2.1 默认视图: 双向往来的人 (机器人/单向广播/自己/隐藏全排除)。
+        # 设计 §2.1 默认视图: 双向往来的人 (机器人/单向广播/隐藏排除)。
+        # 🔴 task 08-14 WP-3: 「我」不再被排除, 且**不受 person/sent_to_count 判据
+        # 约束** —— owner 「我其实不希望自己从通讯录消失」, 而自己给自己发信的
+        # sent_to_count 天然是 0, 只去掉 `is_self = 0` 那一条它照样进不来。
+        # 前端把它摘成置顶的单独一组 (contactListModel)。
         where.append(
-            "c.kind = 'person' AND c.hidden_at IS NULL "
-            "AND c.is_self = 0 AND c.sent_to_count > 0"
+            "c.hidden_at IS NULL AND (c.is_self = 1 OR "
+            "(c.kind = 'person' AND c.sent_to_count > 0))"
         )
     term = (q or "").strip()
     if term:
@@ -316,7 +323,9 @@ def _load_org_relations(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
       按 mail_count 降序。
     - peers: 同 organization; 双方都有 department 时才要求相同 (原型
       cdata.jsx:314-317 的 `!c.dept || !x.dept || x.dept===c.dept`); 排除
-      自己/非 person/self/hidden/墓碑; mail_count 降序前 6。无组织 = 空。
+      本人/非 person/hidden/墓碑; mail_count 降序前 6。无组织 = 空。
+      🔴 task 08-14 WP-3 起**不再排除 is_self** —— owner 要能把自己挂进汇报线
+      («上下级也无法关联我»), 同事推荐里也就得能选到自己。
     """
     contact_id = int(row["id"])
     primary_sql = _PRIMARY_EMAIL_SQL.format(alias="r")
@@ -351,7 +360,7 @@ def _load_org_relations(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
                 f"  r.role_title, r.kind, r.mail_count, {primary_sql} AS primary_email "
                 "FROM contact r "
                 "WHERE r.id <> ? AND r.merged_into IS NULL "
-                "  AND r.kind = 'person' AND r.is_self = 0 "
+                "  AND r.kind = 'person' "
                 "  AND r.hidden_at IS NULL AND r.organization = ? "
                 "  AND (? IS NULL OR r.department IS NULL OR r.department = ?) "
                 "ORDER BY r.mail_count DESC, r.id ASC LIMIT 6",
@@ -442,19 +451,47 @@ async def get_contact(
 # ---- 关联邮件 ----
 
 
+def _direction_expr(self_addresses: frozenset) -> tuple[str, list]:
+    """方向三分的 SQL 片段 + 参数 (task 08-14 WP-5, owner 拍板的判据逐字)::
+
+        对方 role 含 'sender'            → from_them
+        否则 sender_email ∈ 自有地址集    → from_me
+        否则                             → from_third
+
+    - 🔴 **sender 优先**: 对方既是发件人又在 to/cc 时 (自己抄送自己) 算 from_them。
+    - 🔴 判据在**后端**算: 自有地址集的权威是 ``resolve_self_addresses``, 前端
+      复制一份就是第二个真源。
+    - ``sender_email IS NULL`` (v58 派生不出地址的行) 落 from_third —— SQL 三值
+      逻辑下 ``NULL IN (…)`` 为 NULL, 不为真。
+    """
+    if self_addresses:
+        placeholders = ", ".join("?" for _ in self_addresses)
+        mine_sql, params = f"m.sender_email IN ({placeholders})", sorted(self_addresses)
+    else:
+        mine_sql, params = "0", []
+    return (
+        "CASE WHEN MAX(CASE WHEN l.role = 'sender' THEN 1 ELSE 0 END) = 1 "
+        "       THEN 'from_them' "
+        f"     WHEN {mine_sql} THEN 'from_me' "
+        "     ELSE 'from_third' END",
+        params,
+    )
+
+
 @router.get("/{contact_id}/mails")
 async def list_contact_mails(
     request: Request,
     contact_id: int,
-    role: str = Query("all"),
+    direction: str = Query("all"),
     cursor: Optional[str] = Query(None),
     limit: int = Query(20, ge=1, le=100),
     repo: ContactRepository = Depends(get_contact_repository),
+    settings=Depends(get_settings),
 ):
-    if role != "all" and role not in MAIL_ROLE_MAP:
+    if direction not in MAIL_DIRECTION_VALUES:
         raise APIError(
             "E_INVALID_ARG",
-            f"role must be 'all' or one of {tuple(MAIL_ROLE_MAP)}",
+            f"direction must be one of {MAIL_DIRECTION_VALUES}",
             source="sqlite",
         )
     cursor_pair: Optional[tuple[int, int]] = None
@@ -467,47 +504,55 @@ async def list_contact_mails(
                 "E_INVALID_ARG", "cursor must be '<timestamp>:<id>'", source="sqlite"
             ) from exc
 
-    role_sql = ""
-    params: list[Any] = [contact_id]
-    if role != "all":
-        role_sql = "AND l.role = ? "
-        params.append(MAIL_ROLE_MAP[role])
-    base = (
-        "FROM contact_email_link l "
-        "JOIN contact_email ce ON ce.id = l.email_id "
-        "JOIN email_metadata m ON m.internal_id = l.internal_id "
-        f"WHERE ce.contact_id = ? {role_sql}"
-    )
-    having = ""
-    item_params = list(params)
-    if cursor_pair:
-        having = (
-            "HAVING (COALESCE(MAX(l.seen_at), 0) < ? "
-            "OR (COALESCE(MAX(l.seen_at), 0) = ? AND m.internal_id < ?)) "
-        )
-        item_params.extend([cursor_pair[0], cursor_pair[0], cursor_pair[1]])
-    sql = (
-        "SELECT m.internal_id, m.subject, m.sender, m.sender_name, m.mailbox, "
-        "  m.date_received, m.is_read, "
-        "  COALESCE(MAX(l.seen_at), 0) AS seen_at, "
-        "  GROUP_CONCAT(DISTINCT l.role) AS roles "
-        f"{base}"
-        "GROUP BY m.internal_id "
-        f"{having}"
-        "ORDER BY seen_at DESC, m.internal_id DESC "
-        "LIMIT ?"
-    )
-    item_params.append(limit + 1)
     conn = repo.connect()
     try:
         # 联系人必须存在 (404 语义, 不给空列表装没事)。
         _call(contact_service._require_contact, conn, contact_id)
-        rows = conn.execute(sql, item_params).fetchall()
-        total = int(
-            conn.execute(
-                f"SELECT COUNT(DISTINCT m.internal_id) {base}", params
-            ).fetchone()[0]
+        self_addresses = contact_service.resolve_self_addresses(
+            conn,
+            user_email=getattr(settings, "user_email", ""),
+            extra_raw=getattr(settings, "self_emails", ""),
         )
+        direction_sql, direction_params = _direction_expr(self_addresses)
+        # 分组子查询 + 外层过滤: direction 是聚合派生列, 放外层 WHERE 比 HAVING
+        # 重复整段表达式干净, total 也能直接 COUNT(*) 同一个子查询。
+        inner = (
+            "SELECT m.internal_id AS internal_id, m.subject AS subject, "
+            "  m.sender AS sender, m.sender_name AS sender_name, "
+            "  m.mailbox AS mailbox, m.date_received AS date_received, "
+            "  m.is_read AS is_read, "
+            "  COALESCE(MAX(l.seen_at), 0) AS seen_at, "
+            "  GROUP_CONCAT(DISTINCT l.role) AS roles, "
+            f"  {direction_sql} AS direction "
+            "FROM contact_email_link l "
+            "JOIN contact_email ce ON ce.id = l.email_id "
+            "JOIN email_metadata m ON m.internal_id = l.internal_id "
+            "WHERE ce.contact_id = ? "
+            "GROUP BY m.internal_id"
+        )
+        inner_params: list[Any] = [*direction_params, contact_id]
+        filter_sql, filter_params = "", []
+        if direction != "all":
+            filter_sql, filter_params = "direction = ?", [direction]
+
+        total_sql = f"SELECT COUNT(*) FROM ({inner}) t"
+        if filter_sql:
+            total_sql += f" WHERE {filter_sql}"
+        total = int(
+            conn.execute(total_sql, [*inner_params, *filter_params]).fetchone()[0]
+        )
+
+        item_where = [filter_sql] if filter_sql else []
+        item_params: list[Any] = [*inner_params, *filter_params]
+        if cursor_pair:
+            item_where.append("(seen_at < ? OR (seen_at = ? AND internal_id < ?))")
+            item_params.extend([cursor_pair[0], cursor_pair[0], cursor_pair[1]])
+        items_sql = f"SELECT * FROM ({inner}) t"
+        if item_where:
+            items_sql += f" WHERE {' AND '.join(item_where)}"
+        items_sql += " ORDER BY seen_at DESC, internal_id DESC LIMIT ?"
+        item_params.append(limit + 1)
+        rows = conn.execute(items_sql, item_params).fetchall()
     finally:
         conn.close()
 
@@ -523,7 +568,10 @@ async def list_contact_mails(
             "date_received": row["date_received"],
             "is_read": bool(row["is_read"]),
             "seen_at": row["seen_at"] or None,
+            # roles 保留: 方向轴之外, cc 降级为行内次要标记 (owner 拍板 A 方案 ——
+            # 「谁发的」与「to/cc」是正交两维, cc 不再占 tab 轴)。
             "roles": sorted((row["roles"] or "").split(",")) if row["roles"] else [],
+            "direction": row["direction"],
         }
         for row in rows
     ]
@@ -657,6 +705,8 @@ async def set_contact_self(
     body: ContactSelfRequest,
     repo: ContactRepository = Depends(get_contact_repository),
 ):
+    """标/取消「我」。🔴 单选 (task 08-14 WP-3): 标新的自动清掉旧的, 库里恒最多
+    一条 is_self=1 —— 引导只按 USER_EMAIL 标一次, 之后一切以「我」那条为准。"""
     with repo.transaction() as conn:
         _call(
             contact_service.set_is_self,

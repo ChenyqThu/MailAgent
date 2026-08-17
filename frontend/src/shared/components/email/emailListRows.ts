@@ -342,24 +342,23 @@ export const BOT_SENDER_LOCAL_SEGMENTS: readonly string[] = [
  * 的邮件要么本来就是系统通知（收不到新东西），要么是真人技术支持（`psi.support@…`
  * 判「🛠️ 技术讨论」）—— 那正是该留在「重点」的邮件。
  *
- * 🔴 参数 `email_metadata.sender` **不保证是裸地址**：davmail 路径写纯地址（显示名
- * 另存 `sender_name`），但 AppleScript 路径写的是整个 From 头 —— 活库 13011 行里
- * 8850 行（68%，全部 `backend_origin='applescript'`）长这样 `Gary W <gary.w@…>`。
- * 所以先剥掉显示名再取 local part：不剥的话判据会去读**发件人自己填的显示名**，
- * 活库实测 `"徐静雅 (Jira)" <itjsm.gm@…>` 这类**真人**邮件就是靠显示名里的
- * "(Jira)" 命中的（那两封恰好也被 `🔔 系统通知` 盖住，所以今天看不出差别 —— 但
- * 「真人因为显示名被丢进其他」正是 WP-4 要消灭的失败形态）。PRD 拍板的模式表也
- * 全是 `noreply@` / `jira@` 这样的**地址**模式，不含显示名。
+ * 🔴 参数是 **`sender_email`（裸地址）不是 `sender`**（task 08-14 WP-5 阶段 1）。
+ * `email_metadata.sender` 不保证是裸地址：davmail 路径写纯地址（显示名另存
+ * `sender_name`），AppleScript 路径写的是整个 From 头 —— 活库 13014 行里 8850 行
+ * （68%，全部 `backend_origin='applescript'`）长这样 `Gary W <gary.w@…>`。拿它当
+ * 判据 = 去读**发件人自己填的显示名**（活库实测 `"徐静雅 (Jira)" <itjsm.gm@…>` 这类
+ * **真人**邮件靠显示名里的 "(Jira)" 命中）。
  *
- * 剥法只认结尾的 `<...>`（RFC 5322 addr-spec 的位置），仍**不**写完整地址解析器：
- * 取不到尖括号就把整串当地址往下走，与 recipientIsMe 同样的保守取舍。
+ * 地址解析已**收口到 Python 持久化边界**（`src/mail/email_address.py::derive_sender_email`
+ * → `email_metadata.sender_email` 派生列），前端不再有第二份 —— 本函数只做它自己那
+ * 件事：取 local part 判模式。传整个 From 头是契约外用法，行为不作保证。
+ *
+ * `sender_email` 为 null（取不到地址）→ false：不判机器人，留「重点」。
  */
-export function isBotSender(sender: string | null | undefined): boolean {
-  if (!sender) return false
-  // `"Doe, John" <addr>` → addr；没有尖括号 = 裸地址（或垃圾串），原样往下走。
-  const addr = /<([^<>]*)>\s*$/.exec(sender)?.[1] ?? sender
-  const at = addr.lastIndexOf('@')
-  const local = (at === -1 ? addr : addr.slice(0, at)).toLowerCase()
+export function isBotSender(senderEmail: string | null | undefined): boolean {
+  if (!senderEmail) return false
+  const at = senderEmail.lastIndexOf('@')
+  const local = (at === -1 ? senderEmail : senderEmail.slice(0, at)).toLowerCase()
   if (local === '') return false
   const collapsed = local.replace(/[^a-z0-9]/g, '')
   if (BOT_SENDER_LOCAL_SUBSTRINGS.some((token) => collapsed.includes(token))) return true
@@ -370,7 +369,7 @@ export function isBotSender(sender: string | null | undefined): boolean {
 
 /** 一封邮件是否属于「其他」（噪音）。applyTab 的两侧共用它，正好互补。 */
 export function isLowSignal(e: EnrichedEmailMeta): boolean {
-  return e.ai_category === LOW_SIGNAL_CATEGORY || isBotSender(e.sender)
+  return e.ai_category === LOW_SIGNAL_CATEGORY || isBotSender(e.sender_email)
 }
 
 export function applyTab(

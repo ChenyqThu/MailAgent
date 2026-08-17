@@ -83,6 +83,45 @@ def test_backfill_scans_and_calibrates(
         assert conn.execute(count_sql).fetchone()[0] == first_pass[0]
 
 
+def test_backfill_bootstraps_me_in_a_single_run(
+    cli_runner, cli_env, seeded_db, contacts_on, monkeypatch,
+):
+    """🔴 「我」的引导在**一次** backfill 里就收敛 —— 这正是 `contact_backfill` 在
+    扫描前后各引导一次的唯一理由 (全新库里 USER_EMAIL 那条联系人是本次扫描才建出来
+    的, 扫描前那次必然扑空)。少了扫描后那次就得再跑一遍命令 / 等下个 tick。
+
+    单选不破: 库里恒最多一条 is_self=1 (两次调用都幂等, 记号只在真标上时才写)。
+    """
+    monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
+    # cli_env 的 USER_EMAIL = test@example.com —— 给它一封往来, 扫描才会建出那条人。
+    with sqlite3.connect(seeded_db) as conn:
+        conn.execute(
+            "INSERT INTO email_metadata (internal_id, sender, sender_email, "
+            "sender_name, to_addr, date_received, mailbox) VALUES "
+            "(987654, 'Alice <alice@example.com>', 'alice@example.com', 'Alice', "
+            "'Me <test@example.com>', '2026-08-01T08:00:00+00:00', '收件箱')"
+        )
+        conn.commit()
+
+    result = _invoke(cli_runner, seeded_db, ["--rescan"])
+    assert result.exit_code == 0, result.output
+    data = extract_last_json_object(result.output)["data"]
+
+    with sqlite3.connect(seeded_db) as conn:
+        selves = conn.execute("SELECT id FROM contact WHERE is_self=1").fetchall()
+        marker = conn.execute(
+            "SELECT value FROM sync_state WHERE key='contact_self.bootstrap_at'"
+        ).fetchone()
+        own = conn.execute(
+            "SELECT contact_id FROM contact_email "
+            "WHERE email_normalized='test@example.com'"
+        ).fetchone()
+    assert own is not None, "USER_EMAIL 那条联系人应由本次扫描建出"
+    assert [row[0] for row in selves] == [own[0]]
+    assert data["self_bootstrapped"] == own[0]
+    assert marker is not None
+
+
 # ---- 老库 (未迁移到 v54) 经 CLI 入口: 必须先走完整迁移, 不许 no such table ----
 # (活库冒烟真 bug: ContactRepository 轻量连接不触发 migration → OperationalError
 #  裸 traceback / E_INTERNAL。修法 = 惯例对齐, 命令先过 cli.sync_store 完整 init。)

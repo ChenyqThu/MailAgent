@@ -89,7 +89,11 @@ def contact_backfill(
 
     from src.contacts.repository import ContactRepository
     from src.contacts.scanner import WATERMARK_KEY, run_scan
-    from src.contacts.service import recalc_all_aggregates, resolve_self_addresses
+    from src.contacts.service import (
+        ensure_self_bootstrap,
+        recalc_all_aggregates,
+        resolve_self_addresses,
+    )
 
     if dry_run:
         try:
@@ -126,13 +130,27 @@ def contact_backfill(
     }
     try:
         repository = ContactRepository(db_path)
-        # self 集从 CLI-scoped cfg 解析 (不隐式读全局 settings)。
-        with repository.connect() as conn:
-            self_addresses = resolve_self_addresses(
+
+        def _bootstrap_and_resolve(conn) -> frozenset:
+            """「我」的引导 → 自有地址集 (顺序不可换, task 08-14 WP-3 ②: 先标出
+            「我」, 解析出来的自有集才吃得到「我」名下合并进来的旧邮箱)。self 集
+            从 CLI-scoped cfg 解析, 不隐式读全局 settings。"""
+            landed = ensure_self_bootstrap(
+                conn,
+                user_email=getattr(cfg, "user_email", ""),
+                now=int(time.time() * 1000),
+            )
+            if landed is not None:
+                data["self_bootstrapped"] = landed
+            return resolve_self_addresses(
                 conn,
                 user_email=getattr(cfg, "user_email", ""),
                 extra_raw=getattr(cfg, "self_emails", ""),
             )
+
+        data["self_bootstrapped"] = None
+        with repository.transaction() as conn:
+            self_addresses = _bootstrap_and_resolve(conn)
         if not calibrate_only:
             scan = run_scan(
                 db_path, batch_size=batch_size, budget_sec=None,
@@ -140,6 +158,10 @@ def contact_backfill(
             )
             data["scan"] = scan
         with repository.transaction() as conn:
+            # 🔴 扫描后再引导一次: 全新库里「我」那条联系人是**这次扫描**才建出来的,
+            # 第一次引导必然扑空。两次都幂等 (记号只在真标上时才写), 于是单跑一次
+            # backfill 就能收敛, 不必等下个 tick。
+            self_addresses = _bootstrap_and_resolve(conn)
             data["calibrated_contacts"] = recalc_all_aggregates(
                 conn, self_addresses=self_addresses, now=int(time.time() * 1000),
             )

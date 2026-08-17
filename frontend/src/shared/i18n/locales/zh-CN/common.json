@@ -4752,6 +4752,7 @@
       "board": "看板"
     },
     "scope": {
+      "all": "全部",
       "open": "进行中",
       "done": "已完成",
       "archived": "已归档",
@@ -5869,6 +5870,7 @@
       "ungrouped": "未分组"
     },
     "group": {
+      "self": "我",
       "person": "人",
       "robot": "机器人 / noreply",
       "list": "群发列表 / 单向广播",
@@ -5878,7 +5880,7 @@
       "noManager": "未设上级"
     },
     "kind": { "person": "人", "robot": "机器人", "list": "群发列表" },
-    "badge": { "self": "我的地址", "hidden": "已隐藏", "dup": "疑似重复", "emails": "{n} 个邮箱" },
+    "badge": { "self": "这是我", "hidden": "已隐藏", "dup": "疑似重复", "emails": "{n} 个邮箱" },
     "chip": {
       "open": "打开 {name} 的人物页",
       "notInDirectory": "这个地址不在通讯录里（不为它建占位记录）"
@@ -5892,8 +5894,8 @@
       "kindRobot": "改判为机器人",
       "kindList": "改判为群发列表",
       "kindPerson": "改判为人",
-      "markSelf": "标为我的地址",
-      "unmarkSelf": "取消「我的地址」",
+      "markSelf": "标记为「我」",
+      "unmarkSelf": "取消「我」标记",
       "hide": "隐藏",
       "unhide": "取消隐藏",
       "select": "选中此条（进入多选）"
@@ -5996,7 +5998,8 @@
       "copied": "已复制 {email}"
     },
     "mail": {
-      "filter": { "all": "全部", "from": "TA 发的", "to": "我发的", "cc": "抄送" },
+      "filter": { "all": "全部", "from_them": "TA 发的", "from_me": "我发的", "from_third": "第三方发的" },
+      "ccMark": "抄送",
       "more": "加载更多（还有 {n} 封）",
       "empty": "没有关联邮件"
     },
@@ -6029,8 +6032,7 @@
       "insufficientHint": "已读过 {n} 封往来，但多为转发、单句确认一类内容，AI 判断证据不足，本轮没有写入画像。下轮批处理会再试。",
       "retry": "再试一次",
       "failed": "上次更新失败",
-      "notPerson": "已标为「{kind}」，不生成画像。如果判断错了，可以改判为「人」。",
-      "selfNote": "这是你自己的地址，不生成画像。"
+      "notPerson": "已标为「{kind}」，不生成画像。如果判断错了，可以改判为「人」。"
     },
     "merge": {
       "title": "合并联系人",
@@ -6068,8 +6070,8 @@
       "hidden": "已隐藏「{name}」· 数据没删，在「全部」视图可以找回",
       "unhidden": "已取消隐藏",
       "kind": "已改判为「{kind}」· 排序与默认视图随之变化",
-      "markSelf": "已标为我的地址 · 不再出现在「往来的人」",
-      "unmarkSelf": "已取消「我的地址」",
+      "markSelf": "已标记为「我」· 会置顶显示；「我」只能有一个，原先那条已取消",
+      "unmarkSelf": "已取消「我」标记",
       "primary": "主邮箱已改为 {email}",
       "former": "已标为曾用 · 历史往来保留，不再作为默认收件地址",
       "unformer": "已恢复在用",

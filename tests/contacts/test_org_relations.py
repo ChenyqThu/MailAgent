@@ -226,19 +226,21 @@ def test_peers_derivation(db):
         other_org = _mk(conn, "p4@x.com", name="P4", org="EvilCorp", mail=99)
         robot = _mk(conn, "bot@x.com", org="ACME", kind="robot", mail=99)
         hidden = _mk(conn, "h@x.com", org="ACME", hidden_at=NOW_MS, mail=99)
+        # 🔴 task 08-14 WP-3: 「我」不再从同事推荐里排除 (owner「上下级也无法关联
+        # 我」) —— mail=99 让它排在最前, 位置本身就是「不再被筛掉」的判据。
         selfy = _mk(conn, "me2@x.com", org="ACME", is_self=1, mail=99)
-        del other_org, robot, hidden, selfy
+        del other_org, robot, hidden
 
         detail = _load_detail(conn, subject)
         # 同 org; 双方都有 dept 才要求相同 (无 dept 的同事仍收) —— cdata.jsx:314-317
-        assert [p["id"] for p in detail["peers"]] == [same_dept, no_dept]
+        assert [p["id"] for p in detail["peers"]] == [selfy, same_dept, no_dept]
         assert other_dept not in [p["id"] for p in detail["peers"]]
 
         # subject 无 dept → 同 org 全收 (mail_count 降序)
         no_dept_subject = _mk(conn, "s2@x.com", org="ACME", mail=1)
         detail2 = _load_detail(conn, no_dept_subject)
         assert [p["id"] for p in detail2["peers"]] == [
-            other_dept, same_dept, no_dept, subject,
+            other_dept, selfy, same_dept, no_dept, subject,
         ]
 
         # 无组织 → 恒空
