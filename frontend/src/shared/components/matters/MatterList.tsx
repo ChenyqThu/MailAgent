@@ -423,7 +423,7 @@ export function MatterList({
   // V3-09 —— 第二行：可删 chip（范围非默认时也出一个）+ 右侧 mono「分组 X · 排序 Y」摘要。
   const showChips =
     activeN > 0 ||
-    query.scope !== 'open' ||
+    query.scope !== 'all' ||
     query.group !== 'status' ||
     query.sort !== 'rank' ||
     query.dir !== 'default'
@@ -484,12 +484,12 @@ export function MatterList({
         </div>
         {showChips ? (
           <div className="mt-2 flex flex-wrap items-center gap-1.5">
-            {query.scope !== 'open' ? (
+            {query.scope !== 'all' ? (
               <FilterChip
                 label={scopeLabel}
                 tone="warn"
                 title={t('matters.filter.removeChip')}
-                onRemove={() => patch({ scope: 'open' })}
+                onRemove={() => patch({ scope: 'all' })}
               />
             ) : null}
             {query.quick.map((key) => (

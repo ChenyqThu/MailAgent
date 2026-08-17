@@ -5,7 +5,7 @@
 // 不盯像素 —— 改动前这一行只有健康色点 + 标题 + 优先级 + 下一步 + 标签 + 编号。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import type { Matter, MatterAttentionSignal, MatterUpdateSummary } from '@shared/api/types/matter'
 import i18n from '@shared/i18n'
@@ -89,6 +89,39 @@ describe('MatterList row', () => {
   })
 })
 
+// task 08-14 —— 默认范围改 all 后，筛选条 chip 的显隐基线要跟着从 'open' 换成 'all'，
+// 否则默认态会常驻一枚多余的「范围」chip，且点「移除」会把范围退回已废弃的默认值 'open'
+// （PRD 改动清单第五条：MatterList.tsx 三处硬编码 `scope !== 'open'`）。
+describe('scope chip baseline follows the default scope (task 08-14)', () => {
+  test('默认 all 范围下不出现范围 chip', () => {
+    renderList(matter())
+    expect(screen.queryByTitle('移除该筛选')).toBeNull()
+  })
+
+  test('切到非 all 的范围出现 chip，点击移除复位到 all（不是旧默认值 open）', () => {
+    const onQueryChange = vi.fn()
+    render(
+      <MatterList
+        matters={[matter()]}
+        query={{ ...DEFAULT_MATTER_LIST_QUERY, scope: 'done' }}
+        onQueryChange={onQueryChange}
+        scopeTotal={1}
+        tags={[]}
+        selectedId={null}
+        search=""
+        onSearchChange={vi.fn()}
+        onSelect={vi.fn()}
+        onCreate={vi.fn()}
+        onManageTags={vi.fn()}
+      />
+    )
+
+    const chip = screen.getByRole('button', { name: '已完成' })
+    fireEvent.click(chip)
+    expect(onQueryChange).toHaveBeenCalledWith(expect.objectContaining({ scope: 'all' }))
+  })
+})
+
 function renderList(
   value: Matter,
   options: {
@@ -102,7 +135,13 @@ function renderList(
   return render(
     <MatterList
       matters={matters}
-      query={{ ...DEFAULT_MATTER_LIST_QUERY, scope: options.scope ?? 'open' }}
+      // 不传 scope 时走查询模型自己的默认值（task 08-14 起是 'all'），不要在这里另手抄一份
+      // 「默认 scope」的假设 —— 之前手抄的 'open' 与真实默认值分道扬镳后，默认态多出一枚
+      // 「范围」筛选 chip，把这条本来测「三行密度」的用例带崩（与 scope 无关的假红）。
+      query={{
+        ...DEFAULT_MATTER_LIST_QUERY,
+        scope: options.scope ?? DEFAULT_MATTER_LIST_QUERY.scope
+      }}
       onQueryChange={vi.fn()}
       scopeTotal={matters.length}
       tags={[]}

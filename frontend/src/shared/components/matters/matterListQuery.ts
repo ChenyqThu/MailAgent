@@ -10,6 +10,7 @@ import {
   Eye,
   Flag,
   Hourglass,
+  List,
   Minus,
   Play,
   Sparkles,
@@ -60,8 +61,12 @@ import type { MatterTone } from './matterVocab'
 export const MATTER_TABS = ['list', 'board'] as const
 export type MatterTab = (typeof MATTER_TABS)[number]
 
-/** 设计 `list.jsx::MATTER_SCOPES`：把「已完成 / 已归档 / 回收站」从左轨视图降级为范围。 */
-export const MATTER_SCOPES = ['open', 'done', 'archived', 'trash'] as const
+/** 设计 `list.jsx::MATTER_SCOPES`：把「已完成 / 已归档 / 回收站」从左轨视图降级为范围。
+ *  `all`（task 08-14）不在原型里 —— owner dogfood 反馈默认 `open` 与「状态」筛选是 AND，
+ *  标完成的事项在两个维度上都会消失且状态筛选救不回来（改到「已完成」时范围仍挡着）；
+ *  `all` = 进行中 + 已完结（含已取消），不含已归档 / 回收站（那两档的语义就是「移出主列表」）。
+ *  置于首位并设为默认，见 `DEFAULT_MATTER_LIST_QUERY`。 */
+export const MATTER_SCOPES = ['all', 'open', 'done', 'archived', 'trash'] as const
 export type MatterScope = (typeof MATTER_SCOPES)[number]
 
 /** 设计 `list.jsx::QUICK`：可叠加的临时筛选，不是导航入口。 */
@@ -119,7 +124,7 @@ export interface MatterListQuery {
 }
 
 export const DEFAULT_MATTER_LIST_QUERY: MatterListQuery = {
-  scope: 'open',
+  scope: 'all',
   quick: [],
   statusGroups: [],
   priorities: [],
@@ -137,8 +142,9 @@ export const MATTER_TAB_ICONS: Record<MatterTab, LucideIcon> = {
   board: BarChart3 // barchart
 }
 
-/** 设计 `list.jsx::MATTER_SCOPES[*].icon`。 */
+/** 设计 `list.jsx::MATTER_SCOPES[*].icon`。`all` 无原型对照（task 08-14 新增）。 */
 export const MATTER_SCOPE_ICONS: Record<MatterScope, LucideIcon> = {
+  all: List, // list
   open: Briefcase, // briefcase
   done: CheckCircle2, // checkcircle
   archived: Archive, // archive
@@ -213,13 +219,13 @@ export const MATTER_DUE_BUCKET_TONES: Record<MatterDueBucket, MatterGroupTone> =
  * scope → `GET /matters` 请求参数（V3-03 的核心：archived/trash **必须**来自服务端）。
  *
  * 服务端语义（`src/matters/repository.py::list_matters:230-240`，已读实现核对）：
- * - 无参数（open/done 共用）→ `deleted_at IS NULL AND archived_at IS NULL`（活跃行）；
+ * - 无参数（all/open/done 共用）→ `deleted_at IS NULL AND archived_at IS NULL`（活跃行）；
  * - `view='archived'` → `deleted_at IS NULL AND archived_at IS NOT NULL`；
  * - `view='trash'` → `deleted_at IS NOT NULL`（**不再**排除 archived —— 回收站压过归档）；
  * - `archived`/`deleted` 两个布尔参数与 `view` 是同一组子句的两种拼法（`deleted=true` ≙
  *   `view='trash'`、`archived=true` ≙ `view='archived'`；`false` 与缺省同义），这里
  *   统一走 `view` 一个口，避免两种拼法混用。
- * open/done 之间的 status 分割只能客户端做（见文件头「能力边界」）。
+ * open/done 之间的 status 分割、all 的「不分割」都只能客户端做（见文件头「能力边界」）。
  */
 export function matterScopeParams(scope: MatterScope): Pick<MatterListOptions, 'view'> {
   if (scope === 'archived') return { view: 'archived' }
@@ -244,6 +250,8 @@ export function matterScopeOf(matter: MatterScopeFields): MatterScope {
 }
 
 export function matterInScope(matter: MatterScopeFields, scope: MatterScope): boolean {
+  // `all` 不是一种归属（`matterScopeOf` 从不返回它），是「不按归属过滤」——恒真。
+  if (scope === 'all') return true
   return matterScopeOf(matter) === scope
 }
 
@@ -330,7 +338,9 @@ function matchesSearch(matter: Matter, query: string): boolean {
 }
 
 export function activeMatterFilterCount(query: MatterListQuery): number {
-  return query.quick.length + query.statusGroups.length + query.priorities.length + query.tags.length
+  return (
+    query.quick.length + query.statusGroups.length + query.priorities.length + query.tags.length
+  )
 }
 
 /**

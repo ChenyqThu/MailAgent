@@ -61,10 +61,12 @@ const { A, B, C, TEST_MATTERS, lastSelectedStore } = vi.hoisted(() => {
   }
   // B 的优先级（p0）压过 A（p2），是默认排序（rank）下「无记录 → 选第一条」的自然落点；
   // A 不是自然第一名，专门用来证明「有记录」时读的确实是持久化记录、不是巧合命中第一条。
-  // C 是 done（scope='open' 的默认候选集里缺席），用来钉「有记录但已不可见」的退化路径。
+  // C 已归档（task 08-14 起默认 scope='all' 含 done/canceled，「已完成」不再是「已不可见」
+  // 的落点 —— 只有 archived/trash 才是；下面的 mock `list()` 照真实服务端「无参数 → 只回
+  // 活跃行」语义把它挡在 liveMatters 之外，用来钉「有记录但已不可见」的退化路径）。
   const a = matter({ public_id: 'MAT-0001', priority: 'p2' })
   const b = matter({ public_id: 'MAT-0002', priority: 'p0' })
-  const c = matter({ public_id: 'MAT-0003', priority: 'p3', status: 'done' })
+  const c = matter({ public_id: 'MAT-0003', priority: 'p3', archived_at: 10 })
   return {
     A: a,
     B: b,
@@ -83,7 +85,14 @@ vi.mock('@shared/components/matters/matterLastSelected', () => ({
 
 vi.mock('@shared/components/matters/hooks', () => ({
   useMattersApi: () => ({
-    list: async () => ({ items: TEST_MATTERS, total: TEST_MATTERS.length })
+    // MattersWorkspace 冷启动只发一个无参数的 `list()`（liveMatters）——照真实服务端
+    // 默认子句 `deleted_at IS NULL AND archived_at IS NULL` 过滤，C（已归档）不进活跃集。
+    list: async () => {
+      const items = TEST_MATTERS.filter(
+        (matter) => matter.archived_at == null && matter.deleted_at == null
+      )
+      return { items, total: items.length }
+    }
   }),
   useMatterFlags: () => ({ mattersEnabled: true, matterAgentEnabled: false }),
   useGlobalAttention: () => ({ data: { items: [] } }),
@@ -94,8 +103,12 @@ vi.mock('@shared/components/matters/MatterFocus', () => ({
   MatterFocus: () => <div data-testid="matter-focus" />
 }))
 vi.mock('@shared/components/matters/MatterList', () => ({
-  MatterList: (props: { selectedId: string | null }) => (
-    <div data-testid="matter-list" data-selected-id={props.selectedId ?? ''} />
+  MatterList: (props: { selectedId: string | null; matters: readonly unknown[] }) => (
+    <div
+      data-testid="matter-list"
+      data-selected-id={props.selectedId ?? ''}
+      data-matter-count={props.matters.length}
+    />
   )
 }))
 vi.mock('@shared/components/matters/MatterDetail', () => ({
@@ -136,7 +149,7 @@ describe('MattersWorkspace — V3-11 记住上次选中', () => {
     expect(screen.getByRole('tab', { name: '事项' }).getAttribute('aria-selected')).toBe('true')
   })
 
-  test('有记录但已不可见（已推进到 done）→ 退化成选第一条，且不强制切 tab', async () => {
+  test('有记录但已不可见（已归档）→ 退化成选第一条，且不强制切 tab', async () => {
     lastSelectedStore.value = C.public_id
     renderWorkspace()
 
@@ -182,5 +195,18 @@ describe('MattersWorkspace — V3-11 记住上次选中', () => {
     const detail = await screen.findByTestId('matter-detail')
     await waitFor(() => expect(detail.getAttribute('data-matter-id')).toBe(B.public_id))
     expect(useMatterNavigation.getState().targetPublicId).toBeNull()
+  })
+})
+
+// task 08-14 —— PRD §5 验收第三条：范围默认 all，已归档/回收站的事项不出现。这里不是靠
+// matterInScope 挡（scope='all' 对它恒真），而是靠 liveMatters 本身就是服务端「无参数只回
+// 活跃行」的结果集 —— C（已归档）从未进入这份数据，「全部」自然只剩 A、B 两条。
+describe('MattersWorkspace — scope 默认 all（task 08-14）', () => {
+  test('已归档事项不出现在默认「全部」范围下的清单里', async () => {
+    renderWorkspace()
+    fireEvent.click(screen.getByRole('tab', { name: '事项' }))
+
+    const list = await screen.findByTestId('matter-list')
+    await waitFor(() => expect(list.getAttribute('data-matter-count')).toBe('2'))
   })
 })

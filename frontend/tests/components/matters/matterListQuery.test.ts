@@ -4,11 +4,16 @@
 
 import { describe, expect, test } from 'vitest'
 
-import type { Matter, MatterAttentionSignal, MatterUpdateSummary } from '../../../src/shared/api/types/matter'
+import type {
+  Matter,
+  MatterAttentionSignal,
+  MatterUpdateSummary
+} from '../../../src/shared/api/types/matter'
 import {
   activeMatterFilterCount,
   applyMatterListQuery,
   DEFAULT_MATTER_LIST_QUERY,
+  MATTER_SCOPES,
   matterInScope,
   matterScopeOf,
   matterScopeParams
@@ -95,11 +100,55 @@ describe('matterScopeOf / matterInScope（老 filterView 语义的等价迁移�
 })
 
 describe('matterScopeParams（scope → 服务端请求参数）', () => {
-  test('archived/trash 走服务端 view 参数（修「恒为空」bug 的落点），open/done 无参数', () => {
+  test('archived/trash 走服务端 view 参数（修「恒为空」bug 的落点），all/open/done 无参数', () => {
     expect(matterScopeParams('archived')).toEqual({ view: 'archived' })
     expect(matterScopeParams('trash')).toEqual({ view: 'trash' })
+    expect(matterScopeParams('all')).toEqual({})
     expect(matterScopeParams('open')).toEqual({})
     expect(matterScopeParams('done')).toEqual({})
+  })
+})
+
+// task 08-14 —— 范围增加 `all` 并设为默认（修「标完成就从列表消失、切到已完成筛选也救不回来」：
+// 默认 scope='open' 与状态筛选是 AND，标完成的事项落进 done 范围就被默认范围挡死，交集恒空）。
+describe('scope: all（task 08-14 默认范围）', () => {
+  test('默认查询的 scope 是 all，且 all 置于 MATTER_SCOPES 首位', () => {
+    expect(DEFAULT_MATTER_LIST_QUERY.scope).toBe('all')
+    expect(MATTER_SCOPES[0]).toBe('all')
+  })
+
+  test('matterInScope(_, "all") 恒真 —— 不按归属过滤，`matterScopeOf` 本身不变', () => {
+    const live = matter({ public_id: 'MAT-0001', status: 'active' })
+    const done = matter({ public_id: 'MAT-0002', status: 'done' })
+    const canceled = matter({ public_id: 'MAT-0003', status: 'canceled' })
+    expect(matterScopeOf(done)).toBe('done') // 归属判定不受 all 影响
+    for (const value of [live, done, canceled]) {
+      expect(matterInScope(value, 'all')).toBe(true)
+    }
+  })
+
+  test('applyMatterListQuery scope=all：进行中 + 已完成 + 已取消同时可见（验收 §5 第一条）', () => {
+    const live = matter({ public_id: 'MAT-0001', status: 'active' })
+    const done = matter({ public_id: 'MAT-0002', status: 'done' })
+    const canceled = matter({ public_id: 'MAT-0003', status: 'canceled' })
+    const ids = applyMatterListQuery([live, done, canceled], query({ scope: 'all' }), '', ctx).map(
+      (value) => value.public_id
+    )
+    expect(ids.sort()).toEqual(['MAT-0001', 'MAT-0002', 'MAT-0003'])
+  })
+
+  test('切到「进行中」（open）：已完结的事项消失（旧行为不回退，验收 §5 第二条）', () => {
+    const live = matter({ public_id: 'MAT-0001', status: 'active' })
+    const done = matter({ public_id: 'MAT-0002', status: 'done' })
+    expect(
+      applyMatterListQuery([live, done], query({ scope: 'open' }), '', ctx).map(
+        (value) => value.public_id
+      )
+    ).toEqual(['MAT-0001'])
+  })
+
+  test('matterScopeParams("all") 返回 {}，与 open/done 同路走默认 live 数据集', () => {
+    expect(matterScopeParams('all')).toEqual({})
   })
 })
 
@@ -143,7 +192,12 @@ describe('快捷条件', () => {
     const rows = [overdue, soon, far]
 
     // ① 看板 tile 计数（deriveFocusStats.dueSoonCount）。
-    const stats = deriveFocusStats(rows, [] as MatterAttentionSignal[], new Map<string, MatterUpdateSummary[]>(), NOW)
+    const stats = deriveFocusStats(
+      rows,
+      [] as MatterAttentionSignal[],
+      new Map<string, MatterUpdateSummary[]>(),
+      NOW
+    )
     expect(stats.dueSoonCount).toBe(2)
 
     // ② 看板「临近到期」列表命中集（MatterFocus.tsx 现在直接吃 isMatterDueSoon）。
@@ -227,7 +281,12 @@ describe('多选筛选：类别间 AND、同类内 OR', () => {
 
 describe('排序四档与方向', () => {
   const early = matter({ public_id: 'MAT-0001', due_at: NOW + DAY, priority: 'p2', updated_at: 5 })
-  const late = matter({ public_id: 'MAT-0002', due_at: NOW + 9 * DAY, priority: 'p0', updated_at: 9 })
+  const late = matter({
+    public_id: 'MAT-0002',
+    due_at: NOW + 9 * DAY,
+    priority: 'p0',
+    updated_at: 9
+  })
   const noDue = matter({ public_id: 'MAT-0003', priority: 'p1', updated_at: 7 })
 
   const ids = (q: Partial<MatterListQuery>): string[] =>
