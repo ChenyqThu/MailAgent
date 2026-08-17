@@ -132,9 +132,14 @@ win:
   # 仓内无 icon.ico (mac 只有 icns + png 系列); electron-builder 对 win.icon 接受 ≥256px
   # png 并自动转 ico (路径相对 buildResources=build/)。缺此行会落 Electron 默认图标。
   icon: icons/512.png
-  # 首版无自更新 (07-08 拍板): 不产 latest.yml feed, 不上传 release —— CI (build-win.yml)
-  # 仅 artifact upload。publish:null 结构性关掉 win 侧 feed 生成, 顶层 publish 仅对 mac 生效。
-  publish: null
+  # 08-17 owner 验收 Windows 版通过 → 转正式发布轨, 原 `publish: null` (07-08「首版无自更新」)
+  # 退役: 继承顶层 publish ⇒ electron-builder 产出 `latest.yml` feed + 包内 `app-update.yml`,
+  # Windows 端自更新链路即可用 (handlers/updater.ts 全文无平台判定, electron-updater 原生支持
+  # NSIS 更新)。
+  #
+  # 🔴 生成 ≠ 上传: build-win.yml 仍是 `--publish never`, 产物走 artifact, 由 promote-release.yml
+  # 在转正式那一步统一 `gh release upload`。这样 win 与 mac 对同一个 tag 的写入**结构性串行**,
+  # 不存在两个 workflow 同时「发现 release 不存在 → 创建」的竞态。
 nsis:
   # 非 one-click: 无签名安装包过 SmartScreen 后, 给用户可见的安装目录确认步骤
   oneClick: false

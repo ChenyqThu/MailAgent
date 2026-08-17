@@ -129,6 +129,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: MailAgent-win-x64
+          # 08-17: 除安装包外还要收 `latest.yml` 与 blockmap —— electron-updater 靠 feed 判断
+          # 有没有新版, 只传 .exe 等于「有新包但没人知道」。promote-release.yml 会把这个 artifact
+          # 整个上传到 Release。
           path: |
             frontend/dist/*.exe
+            frontend/dist/*.exe.blockmap
+            frontend/dist/latest.yml
           if-no-files-found: error

@@ -31,6 +31,36 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       TAG: ${{ inputs.tag }}
     steps:
+      # 08-17 owner 拍板 Windows 转正式发布轨 ⇒ 每个正式 Release 都必须带 win 包。
+      #
+      # 为什么放在 promote 而不是让 build-win.yml 自己 publish: mac 与 win 是两个并行 workflow,
+      # 各自 publish 同一个 tag 时可能同时走到「release 不存在 → 创建」而互相踩。promote 是本来
+      # 就串行的人工步骤 (tag 后留验包窗口), 在这里收产物结构上不可能有竞态。
+      #
+      # 🔴 找不到 win 产物即 fail —— 宁可红在这里, 也不要发出一个「说好带 Windows 包却没带」的
+      # 正式 Release; 那种缺失只有用户会发现。
+      - name: Attach Windows installer + update feed
+        run: |
+          set -euo pipefail
+          run_id=$(gh run list --repo "$GITHUB_REPOSITORY" \
+            --workflow=build-win.yml --branch "$TAG" --limit 1 \
+            --json databaseId,conclusion --jq '.[0] | select(.conclusion=="success") | .databaseId')
+          if [ -z "${run_id:-}" ]; then
+            echo "::error::找不到 tag $TAG 上成功的 build-win.yml run — 先确认它跑过且 success (gh run list --workflow=build-win.yml --branch $TAG)"
+            exit 1
+          fi
+          echo "win build run = $run_id"
+          dir=$(mktemp -d)
+          gh run download "$run_id" --repo "$GITHUB_REPOSITORY" -n MailAgent-win-x64 -D "$dir"
+          # artifact 里应有 .exe + .exe.blockmap + latest.yml (build-win.yml 的 upload path)。
+          # 缺 latest.yml = Windows 端拿不到自更新 feed, 与 mac 体验不对等 → 当场 fail。
+          test -f "$dir/latest.yml" || {
+            echo "::error::win artifact 缺 latest.yml — 检查 electron-builder.yml 的 win.publish 是否仍为 null"; exit 1; }
+          ls -la "$dir"
+          gh release upload "$TAG" --repo "$GITHUB_REPOSITORY" --clobber \
+            "$dir"/*.exe "$dir"/*.exe.blockmap "$dir"/latest.yml
+          echo "✓ Windows 产物已附加到 $TAG"
+
       - name: Promote draft release to published + latest
         # tag 不存在 / 无对应 release → gh 非零退出, job 直接红。
         # --title 对齐现行手动流程格式 "MailAgent vX.Y.Z" (见 CLAUDE.md 打包/发布节)。
