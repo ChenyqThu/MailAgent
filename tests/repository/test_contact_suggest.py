@@ -2,7 +2,7 @@
 
 远程 web 的 `GET /api/email/contacts` 与桌面 Electron main 的 `email:contactSuggest`
 是同一产品行为的两份实现 —— 本文件与 `frontend/tests/main/contact_suggest.test.ts`
-覆盖同一批判据（改过名的人显示通讯录名字 / 中文名·name_en·organization·曾用邮箱
+覆盖同一批判据（改过名的人显示通讯录名字 / 中文名·formal_name·organization·曾用邮箱
 可搜 / 零往来的人也能搜到 / 三类排除 / 主邮箱先于曾用 / 通讯录空或表不存在时
 逐字节回到今天的行为）。
 """
@@ -117,7 +117,7 @@ def _seed_contact(
     conn: sqlite3.Connection,
     *,
     display_name=None,
-    name_en=None,
+    formal_name=None,
     organization=None,
     name_variants=None,
     is_self=0,
@@ -128,12 +128,12 @@ def _seed_contact(
     now = int(time.time() * 1000)
     cur = conn.execute(
         """INSERT INTO contact
-           (display_name, name_en, organization, name_variants_json, kind, is_self,
+           (display_name, formal_name, organization, name_variants_json, kind, is_self,
             hidden_at, merged_into, created_at, updated_at)
            VALUES (?,?,?,?,'person',?,?,?,?,?)""",
         (
             display_name,
-            name_en,
+            formal_name,
             organization,
             json.dumps(name_variants) if name_variants else None,
             is_self,
@@ -161,7 +161,7 @@ def _seed_directory(db: Path) -> None:
         _seed_contact(
             conn,
             display_name="张三",
-            name_en="Alice Zhang",
+            formal_name="Alice Zhang",
             organization="Acme Networks",
             name_variants=["Alice Old"],
             emails=[
@@ -172,7 +172,7 @@ def _seed_directory(db: Path) -> None:
         _seed_contact(
             conn,
             display_name="李四",
-            name_en="Lisi Li",
+            formal_name="Lisi Li",
             organization="Acme Networks",
             emails=[("lisi@example.com", 1, None)],
         )

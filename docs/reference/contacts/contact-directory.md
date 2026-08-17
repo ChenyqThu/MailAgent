@@ -25,7 +25,7 @@
   出向 `sent_to_count`、关联邮件方向三分、compose 收件人补全的排除。改后
   `mailagent contact backfill --rescan` 收敛。
 
-## 2. 数据模型（SyncStore v54 + v55）
+## 2. 数据模型（SyncStore v54 + v55 + v59）
 
 DDL 单源 = `src/mail/sync_store.py::CONTACT_TABLE_DDLS` / `CONTACT_INDEX_DDLS`
 （🔴 独立常量组只从 v54 块执行，**不进 `MATTER_*_DDLS`** —— 那组会对老库在
@@ -44,11 +44,40 @@ v44–v50 各块整组重放，新表混进去炸梯子）。
 - **v55**（WP2）：`contact` + `identity_locks_json`（**字段级**锁真源，键域 =
   `CONTACT_LOCKABLE_FIELDS` 8 字段；`identity_locked_at` 降级为聚合派生 = 锁映射
   MAX，唯一写径 `_write_identity_locks`）。
+- **v59**（WP-6 A）：`contact.name_en` → `contact.formal_name`
+  （`ALTER … RENAME COLUMN`），语义见 §2.1。🔴 **两段迁移缺一不可**：列改名之外
+  还必须把 `identity_locks_json` 里的**键** `name_en` → `formal_name` ——
+  锁映射是 `{字段名: epoch_ms}`，列改名不动 JSON 键，而 `parse_identity_locks`
+  对词表外的键是**静默丢弃**（不报错）⇒ 少了这段 = owner 锁住的正式名无声解锁、
+  下一轮扫描就可能被自动提取覆盖。回退代价见 `DB_VERSION` 注记（不能只降版本号，
+  旧代码读 `c.name_en` 会 `no such column`）。
 - 组织关系两列（`manager_contact_id` FK `ON DELETE SET NULL` + `manager_src`
   CHECK `manual|auto`）随 v54 一次建齐；**无 manager 索引**（有意取舍：联系人千行
   量级全表扫可接受，不为它 bump DB_VERSION）。
 - 迁移回归：`tests/matters/test_contact_v54_migration.py` +
-  `test_contact_v55_locks.py`。
+  `test_contact_v55_locks.py` + `test_contact_v59_formal_name.py`。
+
+### 2.1 三个「名字」字段的分工（WP-6 A 厘清）
+
+owner 的二分是**正式名**（系统 / 合同上的那个，中文或英文皆可）与**常用名**
+（同事口头怎么叫 —— 可能是英文名，也可能是「x 工」「x 哥」）。现有三字段与它的
+对应关系如下：
+
+| 列 | 是什么 | 谁写 | 消费面 |
+|---|---|---|---|
+| `display_name` | **常用名**（UI 标签早就叫「常用名」） | scanner 自动刷（最近一封的 sender display name，带单调闸）；owner 一改即落锁 | 列表主名 / chip / 搜索 |
+| `formal_name` | **正式名**（不限语言） | **纯手填** —— 自动提取从不写它 | 档案页副标题（与 display_name 不同才显示）/ 搜索 / 姓名兜底 |
+| `name_variants_json` | 邮件头里见过的历史显示名集合（有上限） | scanner 自动收集 | **只喂搜索**，不展示为身份字段 |
+
+⇒ 二分**对得上**：`display_name`=常用名、`formal_name`=正式名；
+`name_variants_json` 不属这个二分，它是搜索召回的辅助集，故也**不在**
+`CONTACT_LOCKABLE_FIELDS` 里（没有「人的决定」需要保护）。
+
+🔴 曾名 `name_en` 是**不诚实的命名**：这个字段与「英语」无关，叫它 `name_en` 会
+诱导后来者写出「非 ASCII 就跳过 / 只在英文界面显示」之类的逻辑 —— 与 v58
+`sender` 那条线（同一列被不同消费者按不同假设读）是同一个病，所以连列名一起改，
+不只改 UI 文案。i18n 键同步 `contacts.field.nameEn` → `contacts.field.formalName`
+（zh「正式名」/ en「Formal name」）。
 
 ## 3. 扫描器（`src/contacts/scanner.py`，L0+L1 确定性，零 LLM 零网络）
 
@@ -78,16 +107,16 @@ REST / 未来 agent 工具全走同一组函数，**不许各写一份 UPDATE**�
 - `upsert_contact_for_email`：按锚点找人→写人；非空 = 最后写者赢、None 不动、
   `fallback_*` 只填新建行（不许悄悄把别人改名）。
 
-### 4.1 「我」的身份语义（task 08-14 WP-3，owner 拍板）
+### 4.1 「我」的身份语义（task 08-14 WP-3 引入，WP-6 B 收窄）
 
 `is_self` 从**排除开关**降级为**身份标签**。此前它一次关掉四件事，其中三件是误伤
-（owner：「我其实不希望自己从通讯录消失」「标成自己也要正常记账」「上下级也无法
-关联我」）。现状：
+（owner：「标成自己也要正常记账」「上下级也无法关联我」）。现状：
 
 | 面 | 现在 |
 |---|---|
 | 扫描建档记账 | 照常（§3） |
-| 默认 known 视图 | **收**，且不受 `kind='person' AND sent_to_count>0` 约束（自己给自己发信的出向天然是 0，只去掉 `is_self=0` 照样进不来）；`hidden_at` 仍生效 |
+| 默认 known 视图（「往来的人」） | 🔒 **排除**（`is_self = 0` 与 `kind='person' AND sent_to_count>0` 并列）。WP-3 曾给它开 carve-out，是把 owner 的「我不希望自己从通讯录消失」误读成「每个视图都要能看到自己」；WP-6 B 撤回 —— 这个 tab 叫「往来的人」，自己不是往来对象 |
+| 「全部」视图 | **收**（只过滤 `merged_into IS NULL`）—— owner 找自己去这边，前端把它摘成置顶的单独一组 |
 | 同事推荐 / 指定上级的选人池 | 不过滤（「我」能挂进汇报线、也能被选成别人的上级） |
 | 画像卡 / 组织关系区 | 照常渲染（不再对 self 特判） |
 | compose 收件人补全 | 🔒 **仍排除** —— 唯一该排除的一处（`email_repository._CONTACT_DIRECTORY_SQL` 的 `excluded` 标位 + Electron main `handlers/contacts.ts` 的镜像 SQL，两侧同步改） |
@@ -138,7 +167,7 @@ backfill 就收敛，不必等下个 tick）。
 
 | 端点 | 语义 |
 |---|---|
-| `GET ""` | 列表（view `known`/`all` + q + sort 三值 + limit 截断[⌘K 用，total 仍全量]）|
+| `GET ""` | 列表（view `known`[= 双向往来的人，排 robot/单向/hidden/**「我」**] / `all`[只排墓碑] + q + sort 三值 + limit 截断[⌘K 用，total 仍全量]）|
 | `GET /backfill/progress` | watermark 覆盖行数 / 总行数 |
 | `POST /resolve` | 批量精确解析（WP4 互链 chip；键 = 原输入串，null = 不在库；上限 100）|
 | `GET /{id}` · `GET /{id}/mails` · `GET /{id}/matters` | 详情（含 §6 组织关系投影）· 人-邮件账本分页（§5.1 方向三分）· 关联事项反查 |
@@ -201,9 +230,10 @@ backfill 就收敛，不必等下个 tick）。
   `ContactOrgSection`**[person，08-14 起 self 也渲染] / 关联邮件[方向四 tab，
   §5.1] / 关联事项）。
 - **分组**：`contactListModel.ts` 纯模型（组 = 成员数降序、`未分组` 恒末尾、组头
-  可折叠；模型层不 import i18n，label 全由调用方闭包注入）。**「我」恒置顶单独一
-  组**（`SELF_GROUP_KEY`，两视图任意分组档都先摘出去；没有 self 行时输出与 08-14
-  前逐字相同，有回归闸）+ 行上「这是我」徽章 `SelfPip`。`'manager'` 档 =
+  可折叠；模型层不 import i18n，label 全由调用方闭包注入）。**「我」置顶单独一
+  组**（`SELF_GROUP_KEY`，🔴 **只在「全部」视图**[WP-6 B]，该视图任意分组档都先摘
+  出去；known 分支输出与 WP-3 之前逐字相同，两侧都有回归闸）+ 行上「这是我」徽章
+  `SelfPip`（徽章不分视图）。`'manager'` 档 =
   按汇报线：组 key `mgr:{id}`，label `contacts.group.reportsOf` 插值行上的
   `manager_display_name`（无名上级照原型 `m.name || m.id` 用 id 兜底）；未设上级
   走 ungrouped 通道置底、label 特判 `contacts.group.noManager`。菜单 label 对

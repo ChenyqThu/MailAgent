@@ -55,7 +55,7 @@ const MAIL_PAGE_SIZE = 6
 /** field → i18n 标签键（toast「{field} 已保存并锁定」与字段行共用一份）。 */
 const FIELD_LABEL_KEY: Record<ContactLockableField, string> = {
   display_name: 'contacts.field.name',
-  name_en: 'contacts.field.nameEn',
+  formal_name: 'contacts.field.formalName',
   organization: 'contacts.field.org',
   department: 'contacts.field.dept',
   role_title: 'contacts.field.role',
@@ -666,8 +666,8 @@ export function ContactDetail({
                 </button>
               )}
               {/* 英文名与姓名同一行（原型 `DossierHead`），且与常用名不同时才出。 */}
-              {!bare && detail.name_en && detail.name_en !== detail.display_name ? (
-                <span className="shrink-0 text-aux text-ink-fg-2">{detail.name_en}</span>
+              {!bare && detail.formal_name && detail.formal_name !== detail.display_name ? (
+                <span className="shrink-0 text-aux text-ink-fg-2">{detail.formal_name}</span>
               ) : null}
               {locks.display_name != null ? (
                 <LockPill
@@ -854,12 +854,12 @@ export function ContactDetail({
                 }
               />
               <FieldRow
-                field="name_en"
-                value={detail.name_en}
-                locked={locks.name_en != null}
-                onSave={(next) => patch.mutate({ name_en: next })}
+                field="formal_name"
+                value={detail.formal_name}
+                locked={locks.formal_name != null}
+                onSave={(next) => patch.mutate({ formal_name: next })}
                 onToggleLock={() =>
-                  setLock.mutate({ field: 'name_en', locked: locks.name_en == null })
+                  setLock.mutate({ field: 'formal_name', locked: locks.formal_name == null })
                 }
               />
               <FieldRow

@@ -25,7 +25,7 @@ class ContactPatchRequest(BaseModel):
     exclude_unset=True)`` 区分, 只把显式出现的键交给 service (保存即落锁)。"""
 
     display_name: Optional[str] = None
-    name_en: Optional[str] = None
+    formal_name: Optional[str] = None
     organization: Optional[str] = None
     department: Optional[str] = None
     role_title: Optional[str] = None

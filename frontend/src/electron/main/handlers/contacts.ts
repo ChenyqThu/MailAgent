@@ -38,7 +38,7 @@ interface ContactAggregate {
  */
 interface DirectoryRow {
   display_name: string | null
-  name_en: string | null
+  formal_name: string | null
   organization: string | null
   name_variants_json: string | null
   email_normalized: string
@@ -83,7 +83,7 @@ const LOCAL_TOKEN_RE = /[._%+-]+/
  * （合并走的旧身份 / owner 隐藏掉的噪音 / 自己的历史别名都不该再进候选）。
  */
 const DIRECTORY_SQL = `SELECT c.display_name AS display_name,
-       c.name_en AS name_en,
+       c.formal_name AS formal_name,
        c.organization AS organization,
        c.name_variants_json AS name_variants_json,
        ce.email_normalized AS email_normalized,
@@ -328,18 +328,18 @@ function buildCandidates(history: Candidate[], rows: DirectoryRow[]): Candidate[
   for (const row of directory) {
     const email = row.email_normalized.trim().toLowerCase()
     const prev = byEmail.get(email)
-    // 通讯录的名字优先；display_name 空则退 name_en，再退邮件头学到的名字。
-    const name = normalizeName(row.display_name) ?? normalizeName(row.name_en) ?? prev?.name
+    // 通讯录的名字优先；display_name 空则退 formal_name，再退邮件头学到的名字。
+    const name = normalizeName(row.display_name) ?? normalizeName(row.formal_name) ?? prev?.name
     const variants = parseNameVariants(row.name_variants_json)
 
     // 可搜面 = 邮件头名字（保留：改名前的老叫法仍能搜到）+ 通讯录四字段，与
-    // `GET /api/contacts?q=` 的口径一致（display_name / name_en / organization /
+    // `GET /api/contacts?q=` 的口径一致（display_name / formal_name / organization /
     // name_variants / email）。
     const fields: string[] = []
     pushField(fields, email)
     pushField(fields, prev?.name)
     pushField(fields, row.display_name)
-    pushField(fields, row.name_en)
+    pushField(fields, row.formal_name)
     pushField(fields, row.organization)
     for (const variant of variants) pushField(fields, variant)
 
@@ -347,7 +347,7 @@ function buildCandidates(history: Candidate[], rows: DirectoryRow[]): Candidate[
       ...emailTokens(email),
       ...nameTokens(prev?.name),
       ...nameTokens(row.display_name),
-      ...nameTokens(row.name_en),
+      ...nameTokens(row.formal_name),
       ...nameTokens(row.organization),
       ...variants.flatMap((variant) => nameTokens(variant))
     ]

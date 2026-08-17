@@ -31,7 +31,7 @@ export function PersonHitRow({
   onActivate
 }: PersonHitRowProps): React.ReactElement {
   const { t } = useTranslation()
-  const name = contact.display_name || contact.name_en || contact.primary_email || '?'
+  const name = contact.display_name || contact.formal_name || contact.primary_email || '?'
   const nameHtml = useMemo(
     () => DOMPurify.sanitize(highlightTerms(name, queryTerms), HIGHLIGHT_PURIFY),
     [name, queryTerms]

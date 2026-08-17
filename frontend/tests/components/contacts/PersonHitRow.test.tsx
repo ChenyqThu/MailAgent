@@ -18,7 +18,7 @@ function row(overrides: Partial<ContactRowDto> = {}): ContactRowDto {
   return {
     id: 3,
     display_name: 'Alice Chen',
-    name_en: 'Alice',
+    formal_name: 'Alice',
     organization: 'ACME',
     department: null,
     role_title: null,
@@ -69,7 +69,7 @@ describe('PersonHitRow', () => {
   })
 
   test('bare-email contact: name falls back to primary_email, secondary drops the duplicate', () => {
-    renderRow(row({ display_name: null, name_en: null, organization: null }))
+    renderRow(row({ display_name: null, formal_name: null, organization: null }))
     // 名字位 = 主邮箱兜底；副行没有内容时不再重复画同一个地址。
     expect(screen.getByText('alice@x.com')).toBeTruthy()
     expect(screen.queryByText('ACME · alice@x.com')).toBeNull()

@@ -169,7 +169,7 @@ async def resolve_contacts(
         placeholders = ",".join("?" * len(wanted))
         sql = (
             "SELECT ce.email_normalized AS q_email, c.id, c.display_name, "
-            "  c.name_en, c.kind, "
+            "  c.formal_name, c.kind, "
             "  (SELECT COALESCE(MAX(CASE WHEN pe.is_primary = 1 "
             "      THEN pe.email_normalized END), MIN(pe.email_normalized)) "
             "   FROM contact_email pe WHERE pe.contact_id = c.id) AS primary_email "
@@ -183,7 +183,7 @@ async def resolve_contacts(
                 chip_by_email[row["q_email"]] = {
                     "id": row["id"],
                     "display_name": row["display_name"],
-                    "name_en": row["name_en"],
+                    "formal_name": row["formal_name"],
                     "kind": row["kind"],
                     "primary_email": row["primary_email"],
                 }
@@ -226,21 +226,21 @@ async def list_contacts(
     where = ["c.merged_into IS NULL"]
     params: list[Any] = []
     if view == "known":
-        # 设计 §2.1 默认视图: 双向往来的人 (机器人/单向广播/隐藏排除)。
-        # 🔴 task 08-14 WP-3: 「我」不再被排除, 且**不受 person/sent_to_count 判据
-        # 约束** —— owner 「我其实不希望自己从通讯录消失」, 而自己给自己发信的
-        # sent_to_count 天然是 0, 只去掉 `is_self = 0` 那一条它照样进不来。
-        # 前端把它摘成置顶的单独一组 (contactListModel)。
+        # 设计 §2.1 默认视图: 双向往来的人 (机器人/单向广播/隐藏/「我」排除)。
+        # 🔴 task 08-14 WP-6 B: 「我」重新排除 —— WP-3 曾给它开 carve-out
+        # (`is_self = 1 OR …`), 那是把 owner 的「我不希望自己从通讯录消失」误读成
+        # 「每个视图都要能看到自己」。owner 复核: 这个 tab 叫「往来的人」, 自己不是
+        # 往来对象; 「全部」视图天然含「我」(只过滤 merged_into), 找自己去那边。
         where.append(
-            "c.hidden_at IS NULL AND (c.is_self = 1 OR "
-            "(c.kind = 'person' AND c.sent_to_count > 0))"
+            "c.hidden_at IS NULL AND c.is_self = 0 "
+            "AND c.kind = 'person' AND c.sent_to_count > 0"
         )
     term = (q or "").strip()
     if term:
         pattern = _like_pattern(term)
         where.append(
             "(c.display_name LIKE ? ESCAPE '\\' "
-            "OR c.name_en LIKE ? ESCAPE '\\' "
+            "OR c.formal_name LIKE ? ESCAPE '\\' "
             "OR c.organization LIKE ? ESCAPE '\\' "
             "OR c.name_variants_json LIKE ? ESCAPE '\\' "
             "OR EXISTS (SELECT 1 FROM contact_email qe "
@@ -256,7 +256,7 @@ async def list_contacts(
     }[sort]
 
     sql = (
-        "SELECT c.id, c.display_name, c.name_en, c.organization, c.department, "
+        "SELECT c.id, c.display_name, c.formal_name, c.organization, c.department, "
         "  c.role_title, c.function, c.seniority, c.kind, c.hidden_at, c.is_self, "
         "  c.mail_count, c.sent_to_count, c.first_seen_at, c.last_seen_at, "
         # WP5 汇报线: manager id + self-join 显示名 (分组 label / 行菜单可用性;
@@ -306,7 +306,7 @@ _PRIMARY_EMAIL_SQL = (
 #: 组织关系投影的行字段 (裁决 4 最小集 + primary_email/kind —— Monogram 色相
 #: 锚点 = 主邮箱 (D10), 分区头「写邮件并抄送上级」需要上级主邮箱)。
 _REL_FIELDS = (
-    "id", "display_name", "name_en", "organization", "role_title",
+    "id", "display_name", "formal_name", "organization", "role_title",
     "kind", "mail_count", "primary_email",
 )
 
@@ -332,7 +332,7 @@ def _load_org_relations(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     manager = None
     if row["manager_contact_id"] is not None:
         manager_row = conn.execute(
-            "SELECT r.id, r.display_name, r.name_en, r.organization, "
+            "SELECT r.id, r.display_name, r.formal_name, r.organization, "
             f"  r.role_title, r.kind, r.mail_count, {primary_sql} AS primary_email "
             "FROM contact r WHERE r.id = ?",
             (row["manager_contact_id"],),
@@ -342,7 +342,7 @@ def _load_org_relations(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     reports = [
         _rel_person(r)
         for r in conn.execute(
-            "SELECT r.id, r.display_name, r.name_en, r.organization, "
+            "SELECT r.id, r.display_name, r.formal_name, r.organization, "
             f"  r.role_title, r.kind, r.mail_count, {primary_sql} AS primary_email "
             "FROM contact r "
             "WHERE r.manager_contact_id = ? AND r.merged_into IS NULL "
@@ -356,7 +356,7 @@ def _load_org_relations(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
         peers = [
             _rel_person(r)
             for r in conn.execute(
-                "SELECT r.id, r.display_name, r.name_en, r.organization, "
+                "SELECT r.id, r.display_name, r.formal_name, r.organization, "
                 f"  r.role_title, r.kind, r.mail_count, {primary_sql} AS primary_email "
                 "FROM contact r "
                 "WHERE r.id <> ? AND r.merged_into IS NULL "
@@ -399,7 +399,7 @@ def _load_detail(conn: sqlite3.Connection, contact_id: int) -> dict:
     return {
         "id": row["id"],
         "display_name": row["display_name"],
-        "name_en": row["name_en"],
+        "formal_name": row["formal_name"],
         "organization": row["organization"],
         "department": row["department"],
         "role_title": row["role_title"],

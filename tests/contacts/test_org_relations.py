@@ -196,7 +196,7 @@ def test_detail_projection_manager_reports_peers(db):
 
         detail = _load_detail(conn, alice)
         assert detail["manager"] == {
-            "id": boss, "display_name": "Boss", "name_en": None,
+            "id": boss, "display_name": "Boss", "formal_name": None,
             "organization": "ACME", "role_title": "Director", "kind": "person",
             "mail_count": 9, "primary_email": "boss@x.com",
         }

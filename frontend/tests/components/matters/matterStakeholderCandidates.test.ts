@@ -17,7 +17,7 @@ import {
 function row(overrides: Partial<ContactRowDto> & { id: number }): ContactRowDto {
   return {
     display_name: null,
-    name_en: null,
+    formal_name: null,
     organization: null,
     department: null,
     role_title: null,

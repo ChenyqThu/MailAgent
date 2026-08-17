@@ -1,4 +1,5 @@
-// WP-3（task 08-14）——「我」置顶成单独一组：两个视图、任意分组档都先摘出去；
+// WP-3（task 08-14）——「我」置顶成单独一组；WP-6 B 收窄成**只在「全部」视图**
+//（「往来的人」里自己不是往来对象，后端已把 is_self 排除）。
 // 没有 self 行时输出与该改动前逐字相同（回归闸：这条错了 = 所有既有列表形状被动过）。
 
 import { describe, expect, test } from 'vitest'
@@ -16,7 +17,7 @@ function row(id: number, patch: Partial<ContactRowDto> = {}): ContactRowDto {
   return {
     id,
     display_name: `P${id}`,
-    name_en: null,
+    formal_name: null,
     organization: 'ACME',
     department: null,
     role_title: null,
@@ -83,15 +84,23 @@ describe('contactListModel —「我」置顶组', () => {
     expect(headerKeys(build(plain, { view: 'all' }))).toEqual(['kind:person'])
   })
 
-  test('known + 不分组：「我」成组恒排最前，其余保持原序', () => {
-    const rows = build([row(1), me, row(2)])
+  test('all + 不分组：「我」成组恒排最前，其余保持原序', () => {
+    const rows = build([row(1), me, row(2)], { view: 'all' })
     expect(rows[0]).toMatchObject({ type: 'header', key: SELF_GROUP_KEY, label: '我', count: 1 })
     expect(ids(rows)).toEqual([9, 1, 2])
-    expect(headerKeys(rows)).toEqual([SELF_GROUP_KEY])
+  })
+
+  test('🔴 known 视图不摘置顶组（WP-6 B）—— 混进来的 self 行也只当普通行', () => {
+    // 后端 known 视图已排除 is_self；这里钉的是「即便混进来也不多出组头」，
+    // 判据回退（`view === 'all'` 条件被去掉）时本测必红。
+    const rows = build([row(1), me, row(2)])
+    expect(headerKeys(rows)).toEqual([])
+    expect(ids(rows)).toEqual([1, 9, 2])
   })
 
   test('属性分组档下「我」仍在最前，且不混进业务分组', () => {
     const rows = build([row(1), me, row(2, { organization: 'Initech' })], {
+      view: 'all',
       groupBy: 'company'
     })
     expect(headerKeys(rows)).toEqual([SELF_GROUP_KEY, 'org:ACME', 'org:Initech'])
@@ -99,6 +108,15 @@ describe('contactListModel —「我」置顶组', () => {
     // 组计数不把「我」算进公司组
     const acme = rows.find((r) => r.type === 'header' && r.key === 'org:ACME')
     expect(acme && acme.type === 'header' ? acme.count : -1).toBe(1)
+  })
+
+  test('known 的属性分组档下「我」照常落进业务分组（不再单摘）', () => {
+    const rows = build([row(1), me, row(2, { organization: 'Initech' })], {
+      groupBy: 'company'
+    })
+    expect(headerKeys(rows)).toEqual(['org:ACME', 'org:Initech'])
+    const acme = rows.find((r) => r.type === 'header' && r.key === 'org:ACME')
+    expect(acme && acme.type === 'header' ? acme.count : -1).toBe(2)
   })
 
   test('「全部」视图的 kind 分段里也不再出现「我」（它在置顶组）', () => {
@@ -114,9 +132,9 @@ describe('contactListModel —「我」置顶组', () => {
   })
 
   test('置顶组默认展开，可折叠', () => {
-    const rows = build([row(1), me], { collapsed: { [SELF_GROUP_KEY]: true } })
+    const rows = build([row(1), me], { view: 'all', collapsed: { [SELF_GROUP_KEY]: true } })
     expect(ids(rows)).toEqual([1])
-    const header = rows.find((r) => r.type === 'header')
+    const header = rows.find((r) => r.type === 'header' && r.key === SELF_GROUP_KEY)
     expect(header && header.type === 'header' ? header.collapsed : false).toBe(true)
   })
 })

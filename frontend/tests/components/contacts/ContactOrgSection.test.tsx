@@ -32,7 +32,7 @@ function relPerson(id: number, name: string, email: string): ContactRelPersonDto
   return {
     id,
     display_name: name,
-    name_en: null,
+    formal_name: null,
     organization: 'ACME',
     role_title: null,
     kind: 'person',
@@ -45,7 +45,7 @@ function detailOf(overrides: Partial<ContactDetailDto> = {}): ContactDetailDto {
   return {
     id: 1,
     display_name: 'Alice',
-    name_en: null,
+    formal_name: null,
     organization: 'ACME',
     department: null,
     role_title: null,

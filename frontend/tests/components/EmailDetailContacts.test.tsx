@@ -106,7 +106,7 @@ beforeEach(() => {
       'alice@x.com': {
         id: 7,
         display_name: 'Alice Chen',
-        name_en: null,
+        formal_name: null,
         kind: 'person',
         primary_email: 'alice@x.com'
       },

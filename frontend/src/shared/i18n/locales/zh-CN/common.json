@@ -5941,7 +5941,7 @@
     },
     "field": {
       "name": "常用名",
-      "nameEn": "英文名",
+      "formalName": "正式名",
       "org": "组织",
       "dept": "部门",
       "phone": "电话",

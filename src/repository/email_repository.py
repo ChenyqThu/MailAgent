@@ -500,7 +500,7 @@ _CONTACT_MERGED_CACHE: dict[
 # excluded 标位: 它们同时还要把**邮件头聚合出来的同一地址**压下去 (合并走的旧身份 /
 # owner 隐藏掉的噪音 / 自己的历史别名都不该再进候选)。
 _CONTACT_DIRECTORY_SQL = """SELECT c.display_name AS display_name,
-       c.name_en AS name_en,
+       c.formal_name AS formal_name,
        c.organization AS organization,
        c.name_variants_json AS name_variants_json,
        ce.email_normalized AS email_normalized,
@@ -830,22 +830,22 @@ def _build_contact_candidates(
         email = (row["email_normalized"] or "").strip().lower()
         prev = by_email.get(email)
         prev_name = prev.name if prev else None
-        # 通讯录的名字优先; display_name 空则退 name_en, 再退邮件头学到的名字。
+        # 通讯录的名字优先; display_name 空则退 formal_name, 再退邮件头学到的名字。
         name = (
             _normalize_contact_name(row.get("display_name"))
-            or _normalize_contact_name(row.get("name_en"))
+            or _normalize_contact_name(row.get("formal_name"))
             or prev_name
         )
         variants = _parse_name_variants(row.get("name_variants_json"))
 
         # 可搜面 = 邮件头名字 (保留: 改名前的老叫法仍能搜到) + 通讯录四字段, 与
-        # GET /api/contacts?q= 的口径一致 (display_name / name_en / organization /
+        # GET /api/contacts?q= 的口径一致 (display_name / formal_name / organization /
         # name_variants / email)。
         fields: list[str] = []
         _push_contact_field(fields, email)
         _push_contact_field(fields, prev_name)
         _push_contact_field(fields, row.get("display_name"))
-        _push_contact_field(fields, row.get("name_en"))
+        _push_contact_field(fields, row.get("formal_name"))
         _push_contact_field(fields, row.get("organization"))
         for variant in variants:
             _push_contact_field(fields, variant)
@@ -854,7 +854,7 @@ def _build_contact_candidates(
             *_contact_email_tokens(email),
             *_contact_name_tokens(prev_name),
             *_contact_name_tokens(row.get("display_name")),
-            *_contact_name_tokens(row.get("name_en")),
+            *_contact_name_tokens(row.get("formal_name")),
             *_contact_name_tokens(row.get("organization")),
         ]
         for variant in variants:

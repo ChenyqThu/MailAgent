@@ -40,8 +40,16 @@ CONTACT_MANAGER_SRC_VALUES: Tuple[str, ...] = ("manual", "auto")
 #: 可锁字段词表 (WP2 字段级锁定, v55 `contact.identity_locks_json` 的键域唯一
 #: 权威)。phone 物理落 ``contact_info_json.phone`` (无独立列); notes **有意不在**
 #: 词表里 —— 手记是 owner 私有文本, 自动提取从不写它, 无锁可言。
+#: 🔴 三个「名字」字段各管一件事 (task 08-14 WP-6 A, 详见
+#: docs/reference/contacts/contact-directory.md §2.1):
+#:   - ``display_name``  = **常用名** (同事口头怎么叫: 英文名 / 「x 工」「x 哥」)。
+#:     scanner 自动刷 (最近一封的 sender display name), owner 一改即落锁。
+#:   - ``formal_name``   = **正式名** (系统/合同上的那个, 中文或英文皆可)。
+#:     **纯手填** —— 自动提取从不写它。曾名 ``name_en``, v59 正名。
+#:   - ``name_variants_json`` = 自动收集的历史显示名集合, 只喂搜索, 不属上面的
+#:     「正式/常用」二分, 故不可锁 (没有「人的决定」可保护)。
 CONTACT_LOCKABLE_FIELDS: Tuple[str, ...] = (
-    "display_name", "name_en", "organization", "department",
+    "display_name", "formal_name", "organization", "department",
     "role_title", "phone", "function", "seniority",
 )
 

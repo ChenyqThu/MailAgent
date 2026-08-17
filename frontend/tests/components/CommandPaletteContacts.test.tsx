@@ -95,7 +95,7 @@ function contactRow(id: number, name: string, overrides: Record<string, unknown>
   return {
     id,
     display_name: name,
-    name_en: null,
+    formal_name: null,
     organization: 'ACME',
     department: null,
     role_title: null,

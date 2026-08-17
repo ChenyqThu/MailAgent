@@ -48,18 +48,18 @@ def _conn(path):
 
 
 def _seed_contact(
-    path, *, cid, name=None, name_en=None, org=None, kind="person",
+    path, *, cid, name=None, formal_name=None, org=None, kind="person",
     hidden_at=None, is_self=0, mail=0, sent=0, first=None, last=None,
     variants=None, emails=(),
 ):
     with _conn(path) as conn:
         conn.execute(
-            "INSERT INTO contact (id, display_name, name_en, organization, kind, "
+            "INSERT INTO contact (id, display_name, formal_name, organization, kind, "
             "hidden_at, is_self, mail_count, sent_to_count, first_seen_at, "
             "last_seen_at, name_variants_json, created_at, updated_at) "
             "VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 1, 1)",
             (
-                cid, name, name_en, org, kind, hidden_at, is_self, mail, sent,
+                cid, name, formal_name, org, kind, hidden_at, is_self, mail, sent,
                 first, last,
                 json.dumps(variants, ensure_ascii=False) if variants else None,
             ),
@@ -130,7 +130,7 @@ def _seed_list_fixture(path):
         path, cid=5, name="Hidden Hu", hidden_at=1, sent=4, mail=4, last=50,
         emails=(("hu@z.com", 1),),
     )
-    _seed_contact(  # 我自己 → WP-3 起 known **照收** (置顶那一组)
+    _seed_contact(  # 我自己 → known 不收 (WP-3 曾开 carve-out, WP-6 B 撤回)
         path, cid=6, name="Me", is_self=1, sent=2, mail=2, last=40,
         emails=(("me@corp.com", 1),),
     )
@@ -139,41 +139,49 @@ def _seed_list_fixture(path):
     )
 
 
-def test_list_known_view_is_two_way_people_plus_me(client):
+def test_list_known_view_is_two_way_people_without_me(client):
     http, _, path = client
     _seed_list_fixture(path)
     data = _data(http.get("/api/contacts"))
     ids = [item["id"] for item in data["items"]]
-    # 6 = 「我」(WP-3: 不再排除); 3 单向广播 / 4 robot / 5 隐藏仍不收。
-    assert set(ids) == {1, 2, 6, 7}
-    # density: sent DESC (9 > 5 > 2 > 1) —— 置顶由前端 contactListModel 做, 不动排序。
-    assert ids == [2, 1, 6, 7]
-    assert data["total"] == 4
+    # 6 =「我」(WP-6 B: 重新排除); 3 单向广播 / 4 robot / 5 隐藏同样不收。
+    assert set(ids) == {1, 2, 7}
+    # density: sent DESC (9 > 5 > 1)
+    assert ids == [2, 1, 7]
+    assert data["total"] == 3
     alice = next(i for i in data["items"] if i["id"] == 1)
     assert alice["email_count"] == 2
     assert alice["primary_email"] == "alice@x.com"
     assert alice["profile_summary"] is None
-    assert next(i for i in data["items"] if i["id"] == 6)["is_self"] is True
 
 
-def test_list_known_view_keeps_me_even_without_two_way_traffic(client):
-    """🔴 只去掉 `is_self = 0` 是不够的: 自己给自己发信的 sent_to_count 天然是 0,
-    known 视图的双向判据照样会把「我」挡在外面 (owner 报的「我从通讯录消失」)。"""
+def test_list_known_view_excludes_me_even_with_two_way_traffic(client):
+    """WP-6 B 撤回 WP-3 的 carve-out: 这个 tab 叫「往来的人」, 自己不是往来对象。
+
+    🔴 fixture 里的「我」**有**双向往来 (sent>0 且 kind='person') ⇒ 唯一能把它挡
+    在外面的只有 `is_self = 0` 那一条, 判据回退时本测必红 (不是被 sent=0 顺带
+    挡住的假绿)。对照: 同样有双向往来的非 self 行照常在。"""
     http, _, path = client
     _seed_contact(
-        path, cid=1, name="Me", is_self=1, sent=0, mail=0,
+        path, cid=1, name="Me", is_self=1, sent=4, mail=9,
         emails=(("me@corp.com", 1),),
     )
-    _seed_contact(  # 对照: 非 self 的零往来行仍不收
-        path, cid=2, name="Silent", sent=0, mail=3,
-        emails=(("s@x.com", 1),),
+    _seed_contact(
+        path, cid=2, name="Peer", sent=4, mail=9,
+        emails=(("peer@x.com", 1),),
     )
-    data = _data(http.get("/api/contacts"))
-    assert [i["id"] for i in data["items"]] == [1]
+    assert [i["id"] for i in _data(http.get("/api/contacts"))["items"]] == [2]
+    # 「全部」视图天然含「我」—— owner 要找自己去那边 (只过滤 merged_into)。
+    assert sorted(
+        i["id"] for i in _data(http.get("/api/contacts", params={"view": "all"}))["items"]
+    ) == [1, 2]
 
 
-def test_list_known_view_still_respects_hidden_for_me(client):
-    """隐藏是显式的人的决定 —— 「我」被隐藏时照样不出现 (owner 可自己找回)。"""
+def test_list_all_view_still_shows_me_when_hidden(client):
+    """隐藏的「我」在「全部」里仍找得回来 (隐藏只从 known 消失, 不是删除)。
+
+    注: known 侧的空结果自 WP-6 B 起是**过定**的 (is_self 与 hidden 各自都足以
+    排除), 真正只有这里能钉的是 all 侧那条。"""
     http, _, path = client
     _seed_contact(
         path, cid=1, name="Me", is_self=1, hidden_at=1, sent=0, mail=0,
@@ -196,11 +204,11 @@ def test_list_sorts(client):
     http, _, path = client
     _seed_list_fixture(path)
     recent = _data(http.get("/api/contacts", params={"sort": "recent"}))
-    # last 400 > 300 > 200 > 40(「我」)
-    assert [i["id"] for i in recent["items"]] == [7, 1, 2, 6]
+    # last 400 > 300 > 200 (id=6「我」不在 known 视图里)
+    assert [i["id"] for i in recent["items"]] == [7, 1, 2]
     name = _data(http.get("/api/contacts", params={"sort": "name"}))
-    # Alice < Bob < Me < zz@last.com (裸邮箱按主邮箱兜底比较)
-    assert [i["id"] for i in name["items"]] == [1, 2, 6, 7]
+    # Alice < Bob < zz@last.com (裸邮箱按主邮箱兜底比较)
+    assert [i["id"] for i in name["items"]] == [1, 2, 7]
 
 
 def test_list_search_hits_variants_and_secondary_email(client):
@@ -231,16 +239,16 @@ def test_list_limit_truncates_but_total_stays_full(client):
     http, _, path = client
     _seed_list_fixture(path)
     data = _data(http.get("/api/contacts", params={"limit": 2}))
-    # density 排序全量是 [2, 1, 6, 7] —— 截断只留前 2, total 仍报 4 (供「+n more」)。
+    # density 排序全量是 [2, 1, 7] —— 截断只留前 2, total 仍报 3 (供「+n more」)。
     assert [i["id"] for i in data["items"]] == [2, 1]
-    assert data["total"] == 4
+    assert data["total"] == 3
 
 
 def test_list_without_limit_is_unchanged(client):
     http, _, path = client
     _seed_list_fixture(path)
     data = _data(http.get("/api/contacts"))
-    assert len(data["items"]) == data["total"] == 4
+    assert len(data["items"]) == data["total"] == 3
 
 
 # ---- 批量精确解析 (WP4: POST /resolve) ----

@@ -6,8 +6,9 @@
 //   `未分组` 恒末尾；组头可折叠。
 // - 「全部」：kind 分组折叠段（人 / 机器人·noreply / 群发列表 / 已隐藏，默认只展开
 //   「人」）+ 顶部筛选 chips；开启属性分组后取代 kind 分组，chips 仍生效。
-// - 「我」（task 08-14 WP-3，owner 拍板）：单独成一组恒置顶，两个视图、任何分组档
-//   都先摘出去，剩下的走上面的原有逻辑 —— 没有 self 行时输出与该改动前逐字相同。
+// - 「我」（task 08-14 WP-3 引入，WP-6 B 收窄）：单独成一组恒置顶，**只在「全部」
+//   视图**（「往来的人」里自己不是往来对象，后端已排除）。任何分组档都先摘出去，
+//   剩下的走上面的原有逻辑 —— 没有 self 行时输出与该改动前逐字相同。
 
 import type { ContactRowDto, ContactView } from '@shared/api/types/contact'
 
@@ -141,7 +142,9 @@ export function buildContactRows(options: BuildOptions): ContactListRow[] {
   // 「全部」视图的 chips 先过滤（「我」也照 chips 走：它落在 person / hidden 桶里，
   // 关掉那个 chip 就该一起消失）。
   const base = view === 'known' ? items : items.filter((item) => kindFilter.has(kindBucketOf(item)))
-  const selfItems = base.filter((item) => item.is_self)
+  // 置顶「我」组只在「全部」视图（WP-6 B）：「往来的人」里自己不是往来对象，后端
+  // 已把 is_self 排除；这里不摘组 ⇒ known 分支输出与 WP-3 之前逐字相同。
+  const selfItems = view === 'all' ? base.filter((item) => item.is_self) : []
   const rest = selfItems.length > 0 ? base.filter((item) => !item.is_self) : base
   const pinned: ContactListRow[] = []
   if (selfItems.length > 0) {

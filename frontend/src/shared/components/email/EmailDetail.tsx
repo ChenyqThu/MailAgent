@@ -115,13 +115,13 @@ const RECIPIENT_FOLD_LIMIT = 12
 function chipContactOf(
   resolved: Record<string, ContactChipDto | null> | undefined,
   addr: string
-): { id: number; displayName: string | null; nameEn: string | null; primaryEmail: string | null; kind: ContactChipDto['kind'] } | null {
+): { id: number; displayName: string | null; formalName: string | null; primaryEmail: string | null; kind: ContactChipDto['kind'] } | null {
   const hit = resolved?.[addr.trim().toLowerCase()]
   if (!hit) return null
   return {
     id: hit.id,
     displayName: hit.display_name,
-    nameEn: hit.name_en,
+    formalName: hit.formal_name,
     primaryEmail: hit.primary_email,
     kind: hit.kind
   }

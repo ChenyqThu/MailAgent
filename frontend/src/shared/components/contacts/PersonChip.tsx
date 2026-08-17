@@ -18,7 +18,7 @@ import { Monogram } from './Monogram'
 interface PersonChipContact {
   id: number
   displayName: string | null
-  nameEn: string | null
+  formalName: string | null
   primaryEmail: string | null
   kind: ContactKind
 }
@@ -47,7 +47,7 @@ export function PersonChip({ contact, addr, big, onOpen }: PersonChipProps): Rea
       </span>
     )
   }
-  const name = contact.displayName || contact.nameEn || contact.primaryEmail || addr
+  const name = contact.displayName || contact.formalName || contact.primaryEmail || addr
   return (
     <button
       type="button"

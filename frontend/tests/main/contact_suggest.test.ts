@@ -90,7 +90,7 @@ function addDirectory(db: Database.Database): void {
     CREATE TABLE contact (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       display_name TEXT,
-      name_en TEXT,
+      formal_name TEXT,
       organization TEXT,
       name_variants_json TEXT,
       is_self INTEGER NOT NULL DEFAULT 0,
@@ -109,7 +109,7 @@ function addDirectory(db: Database.Database): void {
 
 interface SeedContact {
   display_name?: string | null
-  name_en?: string | null
+  formal_name?: string | null
   organization?: string | null
   name_variants_json?: string | null
   is_self?: number
@@ -122,12 +122,12 @@ function seedContact(db: Database.Database, c: SeedContact): number {
   const info = db
     .prepare(
       `INSERT INTO contact
-         (display_name, name_en, organization, name_variants_json, is_self, hidden_at, merged_into)
+         (display_name, formal_name, organization, name_variants_json, is_self, hidden_at, merged_into)
        VALUES (?, ?, ?, ?, ?, ?, ?)`
     )
     .run(
       c.display_name ?? null,
-      c.name_en ?? null,
+      c.formal_name ?? null,
       c.organization ?? null,
       c.name_variants_json ?? null,
       c.is_self ?? 0,
@@ -151,7 +151,7 @@ function seedDirectory(db: Database.Database): void {
   // 邮件头里叫 "Alice Old"，通讯录里已改名；另有一个曾用邮箱。
   seedContact(db, {
     display_name: '张三',
-    name_en: 'Alice Zhang',
+    formal_name: 'Alice Zhang',
     organization: 'Acme Networks',
     name_variants_json: JSON.stringify(['Alice Old']),
     emails: [
@@ -162,7 +162,7 @@ function seedDirectory(db: Database.Database): void {
   // 零往来（组织关系补出来的人），邮件头里根本没有这个地址。
   seedContact(db, {
     display_name: '李四',
-    name_en: 'Lisi Li',
+    formal_name: 'Lisi Li',
     organization: 'Acme Networks',
     emails: [{ email: 'lisi@example.com', is_primary: 1 }]
   })
@@ -230,7 +230,7 @@ describe('contact directory lane', () => {
     expect(hit).toMatchObject({ email: 'alice@example.com', name: '张三', score: 4 })
   })
 
-  test('searchable by chinese name / name_en / organization / former email', () => {
+  test('searchable by chinese name / formal_name / organization / former email', () => {
     seedDirectory(fixtureDb!)
     const emails = (q: string) =>
       contacts.contactSuggest({ q, limit: 10, exclude: 'me@example.com' }).map((i) => i.email)

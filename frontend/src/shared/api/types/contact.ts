@@ -24,7 +24,7 @@ export type ContactSeniority = (typeof CONTACT_SENIORITY_VALUES)[number]
 
 export const CONTACT_LOCKABLE_FIELDS = [
   'display_name',
-  'name_en',
+  'formal_name',
   'organization',
   'department',
   'role_title',
@@ -51,7 +51,7 @@ export type ContactMailDirectionValue = Exclude<ContactMailDirection, 'all'>
 export interface ContactRowDto {
   id: number
   display_name: string | null
-  name_en: string | null
+  formal_name: string | null
   organization: string | null
   department: string | null
   role_title: string | null
@@ -92,7 +92,7 @@ export interface ContactEmailDto {
 export interface ContactRelPersonDto {
   id: number
   display_name: string | null
-  name_en: string | null
+  formal_name: string | null
   organization: string | null
   role_title: string | null
   kind: ContactKind
@@ -103,7 +103,7 @@ export interface ContactRelPersonDto {
 export interface ContactDetailDto {
   id: number
   display_name: string | null
-  name_en: string | null
+  formal_name: string | null
   organization: string | null
   department: string | null
   role_title: string | null
@@ -141,7 +141,7 @@ export interface ContactDetailDto {
 export interface ContactChipDto {
   id: number
   display_name: string | null
-  name_en: string | null
+  formal_name: string | null
   kind: ContactKind
   primary_email: string | null
 }
@@ -193,7 +193,7 @@ export interface ContactBackfillProgress {
 /** PATCH /api/contacts/{id} body (显式出现的键才会被写入并落锁; notes 无锁). */
 export interface ContactPatchBody {
   display_name?: string | null
-  name_en?: string | null
+  formal_name?: string | null
   organization?: string | null
   department?: string | null
   role_title?: string | null

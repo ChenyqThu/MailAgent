@@ -14,7 +14,7 @@ function row(
   return {
     id,
     display_name: `P${id}`,
-    name_en: null,
+    formal_name: null,
     organization: null,
     department: null,
     role_title: null,

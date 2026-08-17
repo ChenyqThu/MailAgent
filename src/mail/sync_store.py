@@ -519,7 +519,7 @@ CONTACT_TABLE_DDLS = (
     f"""CREATE TABLE IF NOT EXISTS contact (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         display_name TEXT NULL,
-        name_en TEXT NULL,
+        formal_name TEXT NULL,
         organization TEXT NULL,
         department TEXT NULL,
         contact_info_json TEXT NULL CHECK (contact_info_json IS NULL OR json_valid(contact_info_json)),
@@ -1248,7 +1248,27 @@ class SyncStore:
     #                取显示名, 原地改写会让 ⌘K 结果里的发件人退化成 local part)。
     #                回滚 (回退 v58): 列/索引留着无害 (旧代码零消费点); 列随时可由
     #                sender 重算, 不是第二真源。
-    DB_VERSION = 58
+    # v59 (通讯录「正式名」正名, task 08-14 WP-6 A, 2026-08): contact.name_en
+    #                → contact.formal_name (ALTER … RENAME COLUMN, SQLite ≥3.25)。
+    #                owner 拍板: 该字段的语义是**正式名 (不限语言)** —— 研发的正式名
+    #                是中文、外国同事的正式名是英文, 而常用名 (`display_name`, UI 已
+    #                叫「常用名」) 可能是英文名, 也可能是「x 工」「x 哥」。`name_en`
+    #                是**不诚实的命名**, 会诱导后来者写出「非 ASCII 就跳过」之类的
+    #                逻辑 —— 与本 task 的核心教训 (v58 `sender` 那条线: 同一列被不同
+    #                消费者按不同假设读) 同源, 故连列名一起改而不是只改 UI 文案。
+    #                🔴 两段迁移**都**必须做, 缺第二段 = 静默丢锁:
+    #                  ① 列改名 (探列幂等: 只在「有 name_en 且无 formal_name」时执行;
+    #                     fresh 库满梯子在 v54 块已按最新 DDL 建成 formal_name)。
+    #                  ② `identity_locks_json` 的**键**跟着改 —— 锁映射是 {字段名:
+    #                     epoch_ms}, 列改名不会自动改 JSON 键, 而
+    #                     `parse_identity_locks` 对词表外的键是**静默丢弃**, 不迁的话
+    #                     owner 早先锁住的正式名会无声解锁, 下一轮扫描就可能被自动
+    #                     提取覆盖。
+    #                回滚 (回退 v59): 🔴 **不能只降版本号** —— 旧代码读 `c.name_en`
+    #                会 OperationalError (no such column)。真要回退需手工
+    #                `ALTER TABLE contact RENAME COLUMN formal_name TO name_en` +
+    #                把锁键改回去, 或从 backups/ 恢复库。
+    DB_VERSION = 59
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -3782,6 +3802,50 @@ class SyncStore:
                 _migration_guard_index(
                     cursor, "idx_email_sender_email", "v58 migration", e
                 )
+
+        # === v59: contact.name_en → formal_name (task 08-14 WP-6 A) ===
+        # 语义与回滚代价见 DB_VERSION 注记。两段分 try (v51/v52 教训: DDL 的
+        # 「已存在」guard 绝不许把 DML 失败一起吞掉 —— 迁移只跑一次)。
+        if current_version < 59:
+            try:
+                cursor.execute("PRAGMA table_info(contact)")
+                _contact_cols_v59 = {row[1] for row in cursor.fetchall()}
+                # 只有「老形状」才改名; fresh 库 (v54 块按最新 DDL 建表) 与重入
+                # 都落在这个 if 之外 = 幂等。
+                if (
+                    "formal_name" not in _contact_cols_v59
+                    and "name_en" in _contact_cols_v59
+                ):
+                    cursor.execute(
+                        "ALTER TABLE contact RENAME COLUMN name_en TO formal_name"
+                    )
+                    logger.info("v59 migration: contact.name_en → formal_name")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "contact", {"formal_name"}, "v59 migration", e,
+                )
+            # 🔴 锁映射的键跟着列一起改 —— 不迁 = 静默解锁 (见 DB_VERSION 注记 ②)。
+            # json_set/json_remove 组合是原子的单条 UPDATE; WHERE 挑出真的带老键的
+            # 行 ⇒ 重入时匹配 0 行 = 幂等。
+            try:
+                _relocked = cursor.execute(
+                    "UPDATE contact SET identity_locks_json = json_remove("
+                    "  json_set(identity_locks_json, '$.formal_name',"
+                    "    json_extract(identity_locks_json, '$.name_en')),"
+                    "  '$.name_en') "
+                    "WHERE identity_locks_json IS NOT NULL "
+                    "  AND json_valid(identity_locks_json) "
+                    "  AND json_extract(identity_locks_json, '$.name_en') IS NOT NULL"
+                ).rowcount
+                if _relocked:
+                    logger.info(
+                        f"v59 migration: moved name_en lock → formal_name on "
+                        f"{_relocked} row(s)"
+                    )
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(
+                    f"v59 migration (identity_locks rekey): {e}"
+                ) from e
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

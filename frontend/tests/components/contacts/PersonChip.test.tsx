@@ -17,7 +17,7 @@ afterEach(cleanup)
 const contact = {
   id: 7,
   displayName: 'Alice Chen',
-  nameEn: 'Alice',
+  formalName: 'Alice',
   primaryEmail: 'alice@x.com',
   kind: 'person' as const
 }
@@ -33,10 +33,10 @@ describe('PersonChip', () => {
     expect(onOpen).toHaveBeenCalledWith(7)
   })
 
-  test('在库但无 display_name：姓名兜底 name_en → primary_email → addr', () => {
+  test('在库但无 display_name：姓名兜底 formal_name → primary_email → addr', () => {
     render(
       <PersonChip
-        contact={{ ...contact, displayName: null, nameEn: null }}
+        contact={{ ...contact, displayName: null, formalName: null }}
         addr="alice@x.com"
         onOpen={vi.fn()}
       />

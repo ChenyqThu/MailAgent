@@ -277,7 +277,7 @@ def ensure_self_bootstrap(
 
 #: 直落 contact 表列的可锁字段 (phone 落 contact_info_json.phone, 单独处理)。
 _IDENTITY_COLUMN_FIELDS = (
-    "display_name", "name_en", "organization", "department", "role_title",
+    "display_name", "formal_name", "organization", "department", "role_title",
 )
 
 

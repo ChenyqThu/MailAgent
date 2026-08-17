@@ -5540,7 +5540,7 @@
     },
     "field": {
       "name": "Display name",
-      "nameEn": "English name",
+      "formalName": "Formal name",
       "org": "Organization",
       "dept": "Department",
       "phone": "Phone",
