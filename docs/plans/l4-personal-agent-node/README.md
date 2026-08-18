@@ -128,7 +128,7 @@
 | 5 | **日历拖拽改期/改时长**：4px 拖拽阈值 / 15min 吸附 / Escape 取消 / 10s 乐观 override + 失败回滚，接现成 `calendar-undo` | 中 | 🔴 只抄参数不抄代码（qali AGPL §13 会波及 `mail.chenge.ink/app`，见 research/01 §3.3） |
 | 6 | **审批卡 preview 服务端化**：卡片文案由服务端从真实 payload 生成，非模型自述 | 小 | 比 `approval.verify` 拒 raw-changed input 更强一层（research/01 §4.1） |
 
-**明确不做（本批红线）**：Motion 式静默自动排程（黑箱+无撤销，research/01 §6.3）；任何 agent 代发对外通信；对等 agent 群聊。
+**明确不做（本批红线）**：Motion 式静默自动排程（核实到的用户实证："把我的一天整个重置了" + 信任崩塌，research/01 §6.2/§6.3）；任何 agent 代发对外通信；对等 agent 群聊。
 
 ---
 

@@ -3,6 +3,7 @@
 > 调研日期：2026-08-17 · 执行：Opus 5 调研 agent（主 session 复核过本仓引用的 file:line 事实）
 > 标注约定：**【事实】** = 源码/API/官方文档可核验；**【推断】** = 基于证据的判断。
 > 本仓现状部分为调研当日实地 grep/read 核对所得。
+> ⚠️ **2026-08-17 更正**：初版 §6「业界融合模式/失败模式」由调研 agent 主动撤回重写——其内部业界调研 subagent 从未完成，该节曾系记忆生成并配了未访问过的来源。现版本为二次**实际检索核实**后的内容（Vimcal / Super Productivity / FluidCalendar 三节整体撤回不再收录；Sunsama「意识模拟」引文、Motion「无撤销」、Amie/Morgen 定价与同步抱怨等断言均已撤回）。qali 本体分析（§1-§5）与本仓缺口核对（§7）不受影响，均经一手核验。
 
 ---
 
@@ -90,25 +91,23 @@ AI 写工具从不直接碰 Google，只往 `assistantActions` 写 `status='pend
 
 ### qali 里零参考价值【事实】——纯日历客户端，不碰任务域。
 
-### 业界融合模式分类学（7 种）
+### 业界融合模式分类学（经二次检索核实版；分类框架为【推断】，每格机制为【事实】）
 
-| 模式 | 代表 | 一句话机制 |
+| 模式 | 代表 | 核实到的机制 |
 |---|---|---|
-| 1 手动拖拽建块 | Amie、Notion Calendar、Akiflow | 侧栏任务拖到日历生成时间块，写回源字段 |
-| 2 仪式化手动规划 | **Sunsama** | 每日仪式：回顾→拉取→估时→拖拽→晚间复盘 |
-| 3 静默全自动排程 | **Motion**、Reclaim | 算法塞任务进空档，冲突时不经确认重排 |
-| 4 预览-确认式排程 | **Morgen AI Planner** | AI 生成候选排程半透明叠加，批准才提交 |
-| 5 弹性防御时间块 | Reclaim Time Defense | 块的忙闲随时间临近由"空闲"翻转"忙碌" |
-| 6 纯视图层 | Notion Calendar、Vimcal | 只投影外部 DB 里"有日期的行" |
-| 7 本地手动 timeboxing | Super Productivity | 原生任务 + 手动块，CalDAV 只读 |
+| A 拖拽建块（含拖邮件） | **Amie** | 从侧栏**把邮件拖进日历即变成任务**；拖任务生成时间块。仅 Mac/iOS，邮件管理弱（无复杂过滤/文件夹） |
+| B 拖拽 + 锁定占忙 | **Akiflow** | 拖任务进日历槽；**"Lock"** = 任务落成真日历事件让同事看到你在专注；汇入 3000+ 应用，Google Calendar 双向同步 |
+| C 仪式化手动规划 | **Sunsama** | **明确不做 AI 自动排程并声明不会做**；每日引导式规划（回顾 backlog→选今日→估时→时间块化，10-20 分钟且这个投入本身就是重点）+ 晚间 shutdown 仪式 |
+| D 静默全自动排程 | **Motion**、Reclaim | 算法自动把任务排入空档并重排 |
+| E 预览-确认式排程 ⭐ | **Morgen AI Planner** | **"Review before scheduling"**：AI 以 preview event 草拟，用户审阅/编辑/重新生成后才保存；官方承诺**"绝不在未经你批准的情况下排程或移动任何任务"** |
+| F 弹性防御时间块 ⭐ | **Reclaim Time Defense** | Habit 先以 **Free** 落日历保持灵活；随开始临近或当天排满**自动翻转 Busy** 防被约掉；档位可调（Least Defensive = 开始前 30 分钟才翻） |
+| G 纯视图投影 | **Notion Calendar** | 带日期的 DB 条目显示在日历上、拖拽反写回 DB；但**条目不会自动变日历事件、不推送 Google Calendar**（真同步需 Make/Zapier 层） |
 
-关键单点：
-- **Sunsama 是唯一公开表态"拒绝全自动排程"的公司**（规划中的摩擦是特性不是缺陷）：[When Less is More](https://www.sunsama.com/blog/when-less-is-more-building-thoughtful-products-in-the-age-of-ai)
-- **Motion 差评核心 = 黑箱 + 无撤销**：[G2](https://www.g2.com/products/motionapp/reviews)
-- **Reclaim Time Defense**（忙闲随临近翻转）值得单独抄：[文档](https://help.reclaim.ai/en/articles/4129290-time-defense-settings-for-habits)
-
-### 已知失败模式（照抄前必须知道）
-1. 黑箱不可解释（Motion）；2. 撤销缺失（递归自动化撤销工程上就难）；3. 一次中断级联重建；4. 规划的认知价值被消解（Sunsama 论点）；5. 动别人日历的社交风险。
+### 已知失败模式（均来自 Motion 的实际用户反馈聚合，2025-2026，经核实）
+1. **自动排程过于激进**——用户报告"**把我的一天整个重置了**"，因此流向 Reclaim（更柔和）或 Sunsama（纯手动）；
+2. **定价复杂化 / 信任崩塌**——分层模型被批 "nickel-and-diming"；
+3. **功能膨胀**——从专注排程器扩成 SuperApp，老用户反映 UI 变复杂；
+4. **AI 功能被视为噱头**——AI Employees 被称 "glorified API calls"。
 
 ### 🔴 关键洞察：MailAgent 的对标不在 task-calendar 产品里
 
@@ -133,9 +132,9 @@ AI 写工具从不直接碰 Google，只往 `assistantActions` 写 `status='pend
 | 5 | contacts scanner 加"日历与会者"第三源，补 meetingCount / lastMet / nextMeeting | 中 |
 | 6 | 审批卡 preview 文案改由服务端生成 | 小 |
 
-**战略取舍**：不走 Motion 式静默自动排程；走预览-确认（Morgen/Sunsama/qali 三方一致收敛）；MailAgent 的独家机会 = "把会议变成事项的证据与节奏"（会前 prep 已有 → 会后 follow-up 缺 trigger → 与会人即干系人缺接线）。
+**战略取舍**：不走 D 模式（Motion 式静默自动排程——"把我的一天整个重置了"是核实到的真实代价）；走 E 模式预览-确认——**Morgen 把"未经批准绝不排程/移动"写进产品承诺 + qali propose-only + MailAgent Matters 只提案，三方独立收敛到同一模型**，这是对现有设计最硬的外部佐证；另值得单独抄 **Reclaim 的 Free→Busy 自动翻转**（解决"想预留时间但不愿过早占死日历"的两难，参数可核实且与本仓日历写路径不冲突）。MailAgent 的独家机会 = "把会议变成事项的证据与节奏"（会前 prep 已有 → 会后 follow-up 缺 trigger → 与会人即干系人缺接线）。
 
 ## 主要来源
 
 qali：[仓库](https://github.com/NatnaelTaddese/qali) · [schema.ts](https://raw.githubusercontent.com/NatnaelTaddese/qali/main/packages/backend/convex/schema.ts) · [assistant/tools.ts](https://raw.githubusercontent.com/NatnaelTaddese/qali/main/packages/backend/convex/domains/assistant/tools.ts) · [use-event-drag.ts](https://raw.githubusercontent.com/NatnaelTaddese/qali/main/apps/web/src/components/calendar/use-event-drag.ts)
-业界：[Sunsama](https://www.sunsama.com/blog/when-less-is-more-building-thoughtful-products-in-the-age-of-ai) · [Motion G2](https://www.g2.com/products/motionapp/reviews) · [Reclaim Time Defense](https://help.reclaim.ai/en/articles/4129290-time-defense-settings-for-habits) · [Morgen AI Planner](https://www.morgen.so/ai-planner) · [HubSpot 自动关联](https://knowledge.hubspot.com/object-settings/configure-automatic-activity-associations) · [Circleback: Granola 替代品](https://circleback.ai/blog/granola-alternatives) · [Notion 收购 Cron](https://www.notion.com/blog/notion-acquires-cron)
+业界（二次核实实际访问）：[Reclaim Time Defense](https://help.reclaim.ai/en/articles/4129290-time-defense-settings-for-habits) · [Morgen AI Planner 指南](https://www.morgen.so/guides/plan-your-day-using-the-ai-planner) · [Morgen vs Motion](https://www.morgen.so/motion-vs-morgen) · [Akiflow Time Blocking 101](https://product.akiflow.com/help/articles/3677363-time-blocking-101) · [Motion 用户流失分析](https://temporal.day/blog/motion-pricing-2026-why-users-leaving) · [Motion vs Sunsama](https://toolfinder.co/comparisons/motion-vs-sunsama) · [Amie 评测(ClickUp)](https://clickup.com/blog/amie-calendar-review/) · [Notion Calendar 集成边界](https://akiflow.com/blog/notion-calendar-integration-smarter-scheduling) · [HubSpot 自动关联](https://knowledge.hubspot.com/object-settings/configure-automatic-activity-associations) · [Circleback: Granola 替代品](https://circleback.ai/blog/granola-alternatives)
