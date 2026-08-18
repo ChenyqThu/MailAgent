@@ -93,7 +93,7 @@ agent-first（先找 agent、开对话、派任务）是 chat 形态的延续，
 | # | 内容 | 蓝本 |
 |---|---|---|
 | A1 | **接线批（=批次 1，先行）**：详见 §4 | 档案 01 §8 |
-| A2 | **行动项执行契约（=批次 3，架构中心）**：matter_item 升格有状态机的一等对象（D4）；契约 = 派发/接单 ack/过程 activity（thought/action）/反问 elicitation/交付 result；**委派 ≠ 转移责任**（owner 恒为负责人，agent 是 delegate）；elicitation 进例外面；执行器可以是 agent 或人。Notion database+agent 调研（档案 07，进行中）到货后补充状态流转与可观测性设计 | Linear AgentSession（04 §2）· AAMP intents（04 §5）· agent-inbox 契约（06 §3） |
+| A2 | **行动项执行契约（=批次 3，架构中心）**：matter_item 升格有状态机的一等对象（D4）；契约 = 派发/接单 ack/过程 activity（thought/action）/反问 elicitation/交付 result；**委派 ≠ 转移责任**（owner=人恒为负责人，executor=人或 agent，两列分开）；elicitation 进例外面。**档案 07 五条设计约束**：① 执行契约状态由服务端 CAS 强制、业务语义标签可自定义，**两者不合成一列**（Notion 手搓状态机的教训 = agent 忘改状态即静默卡死）② claim = 带 lease 的 CAS（复用 async_jobs fire_key + expect_status 先例 + `lease_expires_at`，到期回 open）③ `awaiting_input` 一等状态（复用 paused_handoff/审批 stash/TTL，「等人」与「死了」在 UI 上必须长得不一样）④ 过程可见性挂行动项不挂会话（`ai_chat_sessions` 加 `item_id` 反查 + 行内 live badge）⑤ propose-only 做成 **per-行动项执行档** `propose_only\|edit_with_approval\|autonomous`（挂行动项不挂 agent，同一 agent 不同行动项可不同档） | Linear AgentSession（04 §2）· AAMP intents（04 §5）· agent-inbox 契约（06 §3）· **Notion 软硬对照（07 §8b）** |
 | A3 | **事项编排者**：跟进 agent 升格为本事项的 orchestrator（管理行动项队列）；`custom_agent_call` 放开 headless，配小脑 triage 闸（判据取 DB 事实非措辞，底压确定性地板）+ hold-token 律（任何免卡旁路必须是对服务端已展示状态的确认，绑 seq/短 TTL/turn 死）+ 形状对偶回归基准 | cumora 协调纪律（02 §5）· Anthropic orchestrator-worker（02 §6） |
 | A4 | **SOP-as-skill**：事项类别 ↔ SOP skill 绑定；run 后 agent 可提议 SOP 修订（走 P8 trust + 人审 + 可回滚；⚠️ memory/SOP 文件会自我投毒，恒人审） | cumora T6（02 §2.8）· P8 trust-by-hash |
 | A5 | **预约链接**：照抄 Inbox Zero 四表极简 schema（weekday+分钟整数避 DST / cancelTokenHash 无账号取消 / idempotencyToken 防重），不看 cal.diy（官方自认非生产用） | 档案 06 §1 机制④ |
@@ -113,7 +113,7 @@ agent-first（先找 agent、开对话、派任务）是 chat 形态的延续，
 | D1 | **Notion 页面作为 matter 资料**：资源 kind 扩展，跟进 agent 经既有 Notion 直连 connector 读取（per-tool 档准入语义不动） |
 | D2 | **交付物出海**：报告/matter 摘要一键发布 Notion（经审批，outbound 语义） |
 | D3 | Notion 知识库作为 agent 参考上下文一等来源（`context_source` 机制推广） |
-| D4' | （待档案 07）「MailAgent 行动项 ↔ Notion database 任务」对接形态评估（镜像/单向投影/互链） |
+| D4' | **行动项 ↔ Notion database：单向投影 + 回执互链，不做双向镜像**（档案 07 §8c）：业务态（标题/干系人/截止/粗粒度状态）走 outbox+fanout 单向写 Notion；执行契约细节不投影；互链双向、数据流单向；Notion 侧人工改动不自动回写、变 attention 关注信号走提案；反向唯一例外 = Notion `property updated` webhook 可作行动项 trigger kind（比照 P7 calendar_event_change 形状；**触发 ≠ 状态同步**）。Sprint 15 死循环教训是这条设计的底线 |
 
 ### WS-E 协议押注（低成本、显式 gate）
 
@@ -187,4 +187,4 @@ matter_item 状态机一等对象 + 五段契约 + delegate-not-assignee；设�
 | [04 团队平台赛道 + 联邦形态](./research/04-team-agent-platforms-and-federation.md) | Claude Tag/Linear/aily/Buzz/AAMP、「个人节点」定位论证 | D1-D3、WS-C/E |
 | [05 LobeHub/lobe-chat](./research/05-lobehub-lobe-chat.md) | fork 零 delta；license 禁衍生分发；pathScopeAudit/状态分组/Expertise/IM 矩阵/gatekeeper | B1/B3/B4、C1、搭车批 |
 | [06 邻接开源版图](./research/06-oss-adjacent-landscape.md) | 11 项目三选一；Inbox Zero 学费与竞品警觉；Letta MemFS；booking 四表；agent-inbox 契约 | D5、B3、A5、E0 |
-| 07 Notion database+agent（进行中） | db 任务 + agent 认领/状态流转/权限/SOP/可观测性 | A2、WS-D4' |
+| [07 Notion database+agent](./research/07-notion-database-agent.md) | 三套 agent 身份模型；🔴 状态机是「手搓」的（数据约定软 vs Linear 协议硬）；session 挂任务行；无 claim/propose 原语；A2 五条设计约束 + 单向投影对接形态 | A2、WS-D4'、批次 3 |
