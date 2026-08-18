@@ -152,3 +152,7 @@
 | [02 cumora + 编排原语横评](./research/02-cumora-and-multiagent-orchestration.md) | cumora 协调机制/踩坑实录、11 家编排方案对照、多 agent 何时不值得的实证 | WS-A3、决策 3、红线 |
 | [03 AI as the System 产品地图](./research/03-ai-as-the-system-l4-product-map.md) | Notion Mail 死法、信任阶梯、审批疲劳数据、例外队列形态、翻车案例与兜底 | WS-B 全部、北极星指标 |
 | [04 团队平台赛道 + 联邦形态](./research/04-team-agent-platforms-and-federation.md) | Claude Tag/Linear/飞书 aily/Buzz/AAMP 全景、「个人节点」定位论证 | §1 全部战略决策、WS-C/E |
+| [05 LobeHub/lobe-chat](./research/05-lobehub-lobe-chat.md) | fork 零 delta；🔴 license 禁衍生分发（只抄设计）；pathScopeAudit 动态审批 / waitingForHuman 状态分组 / Expertise 信任账本 / IM 权限矩阵 / 记忆 gatekeeper | WS-B 具体机制、WS-C1、记忆演进 |
+| [06 邻接开源版图](./research/06-oss-adjacent-landscape.md) | 11 项目三选一判断；🔴 Inbox Zero 废弃 per-email 审批的学费 + 正面竞品警觉；Letta MemFS/dreaming；booking 四表；agent-inbox 例外契约；AAMP 真空白需证伪实验 | WS-B 设计修正与升优先级、WS-A booking、WS-E gate |
+
+> **规划修订待办（2026-08-18 讨论中）**：owner 提出 **work-first 架构原则**（工作对象为第一对象，agent 与人同为执行者；工作侧契约统一、执行侧可插拔）+ 研究档案 05/06 的机制修正，SSoT 正文将出 v2（例外队列改「回顾面」定位、WS-B 上调、信任绑定改「事项类别 × 动作类」等）。待拍板：执行契约挂 matter 层还是行动项/run 层。
