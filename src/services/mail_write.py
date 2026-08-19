@@ -1224,11 +1224,14 @@ class MailWriteService:
         reader = self._folder_imap_reader()
         if not reader.rename_folder(imap_name, new_imap):
             raise ServiceError(f"重命名失败 (IMAP RENAME {imap_name!r}→{new_imap!r})")
-        # 一致性: 本地 email_metadata.mailbox (旧显示名→新显示名) + 白名单。
+        # 一致性: 本地 email_metadata.mailbox (旧显示名→新显示名) + 白名单 + pref 行。
         old_label = decode_imap_utf7(imap_name)
         new_label = decode_imap_utf7(new_imap)
         affected = self._rename_local_mailbox(old_label, new_label)
         wl_changed = self._rename_whitelist_entry(imap_name, new_imap)
+        # 🔴 folder_pref 的 PK 是 imap 路径 —— 不跟着搬, 那一行当场变孤儿, 图标和
+        # 两个开关静默丢失且没有任何报错 (下次 gate 读不到行 → 悄悄回落默认)。
+        self._ctx.sync_store.rename_folder_pref(imap_name, new_imap)
         return FolderMutationResult(
             action="rename", imap_name=imap_name, new_imap_name=new_imap,
             affected_local_rows=affected, restart_required=wl_changed,
@@ -1248,6 +1251,9 @@ class MailWriteService:
         label = decode_imap_utf7(imap_name)
         affected = self._delete_local_mailbox_rows(label)
         wl_changed = self._remove_whitelist_entry(imap_name)
+        # 文件夹在 Exchange 上没了 → pref 行再无对应物, 清掉 (对称于 cleanup_local_folder
+        # **保留** pref: 那只是取消同步, 文件夹还在, 重新勾选时该拿回自己设的图标/开关)。
+        self._ctx.sync_store.delete_folder_pref(imap_name)
         return FolderMutationResult(
             action="delete", imap_name=imap_name, affected_local_rows=affected,
             restart_required=wl_changed,
@@ -1342,7 +1348,29 @@ class MailWriteService:
             return False
 
     def _rename_whitelist_entry(self, old_imap: str, new_imap: str) -> bool:
-        return self._rewrite_whitelist(lambda lst: [new_imap if x == old_imap else x for x in lst])
+        """白名单里把 old_imap 改成 new_imap —— 精确 + **子文件夹前缀**替换。
+
+        🔴 子前缀不是锦上添花: IMAP RENAME 一个父文件夹时, 子文件夹的路径**也跟着变**
+        (`Proj/Sub` → `Project/Sub`)。只做精确匹配的话子条目会留在旧路径上, 而
+        `_effective_custom_folders` 是按名字 SELECT 的 → 那些子文件夹**静默停止同步**:
+        不报错、日志无异常、UI 上勾选状态看着还在, 只是再也拉不到新邮件。
+        `rename_folder` 里另外两处一致性处理 (`_rename_local_mailbox` /
+        `SyncStore.rename_folder_pref`) 一直是这么做的, 这里是唯一漏的那处。
+
+        判据是 `old_imap + "/"` 而**不是**裸 ``startswith(old_imap)``: `Proj` 与
+        `Project` 是两个独立文件夹, 裸前缀会把 `Project` 一起改坏 (改成 `Renamedect`)。
+        分隔符取 "/" 与 `rename_folder` 拆父路径的写法一致。
+        """
+        prefix = old_imap + "/"
+
+        def _renamed(name: str) -> str:
+            if name == old_imap:
+                return new_imap
+            if name.startswith(prefix):
+                return new_imap + name[len(old_imap):]
+            return name
+
+        return self._rewrite_whitelist(lambda lst: [_renamed(x) for x in lst])
 
     def _remove_whitelist_entry(self, imap_name: str) -> bool:
         return self._rewrite_whitelist(lambda lst: [x for x in lst if x != imap_name])

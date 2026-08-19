@@ -77,6 +77,9 @@ import type {
   FolderCleanupResult,
   FolderDiscoverResult,
   FolderManageResult,
+  FolderPref,
+  FolderPrefPatch,
+  FolderPrefsResult,
   FolderSetWhitelistResult,
   FolderWhitelistResult,
   JobEnqueueResult,
@@ -476,6 +479,16 @@ export class HttpApi implements MailApi {
     cleanup: (imapName: string): Promise<FolderCleanupResult> =>
       this.req<FolderCleanupResult>('POST', '/folder/cleanup', {
         body: { imap_name: imapName }
+      }),
+
+    // per-folder 配置 (v62) — 纯本地 SQLite, 不 davmail-gated。
+    getPrefs: (): Promise<FolderPrefsResult> => this.req<FolderPrefsResult>('GET', '/folder/prefs'),
+
+    // 🔴 patch 原样透传: 省略的字段后端保持原值, `icon: null` 是**清除图标**。
+    // 不要在这里补默认值 —— 补了就把"没改的项"变成"改成默认值"。
+    setPref: (imapName: string, patch: FolderPrefPatch): Promise<FolderPref> =>
+      this.req<FolderPref>('PUT', '/folder/prefs', {
+        body: { imap_name: imapName, ...patch }
       })
   }
 

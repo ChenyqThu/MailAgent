@@ -7,6 +7,8 @@
   POST /api/folder/manage      — 新建子文件夹 (IMAP CREATE)
   PATCH /api/folder/manage     — 重命名文件夹 (IMAP RENAME + 本地一致性)
   DELETE /api/folder/manage    — 删除文件夹 (IMAP DELETE + 本地清理 + 白名单移除)
+  GET  /api/folder/prefs       — 读 per-folder 配置 (图标 + 通知开关 + AI 开关, 纯本地)
+  PUT  /api/folder/prefs       — 部分更新一个文件夹的配置 (纯本地, 改完立即生效)
   POST /api/folder/cleanup     — 取消同步某文件夹时清理本地副本 (纯本地, 不碰 Exchange)
 
 实现纪律:
@@ -18,7 +20,7 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
 
@@ -309,6 +311,77 @@ async def folder_manage_delete(body: _FolderDeleteBody, request: Request, cfg: "
         )
     except ServiceError as exc:
         _svc_error_to_api(exc)
+
+
+class _FolderPrefBody(BaseModel):
+    """PUT /api/folder/prefs 请求体 —— **部分更新**, 省略的字段保持原值。
+
+    ``icon`` 是三态: 字段缺省 = 不改 / 传 ``null`` = 清除图标 (回前端兜底) / 传字符串
+    = 设为该值。"没传"与"传了 null" 靠 pydantic v2 的 ``model_fields_set`` 区分,
+    **不要**改成哨兵默认值 —— 那会让某个合法字符串永远存不进去。
+    """
+
+    imap_name: str
+    icon: Optional[str] = None
+    notify_enabled: Optional[bool] = None
+    llm_disabled: Optional[bool] = None
+
+
+@router.get("/prefs", dependencies=[Depends(verify_cf_access)])
+async def folder_get_prefs(request: Request):
+    """读全部 per-folder 配置 (图标 + 通知开关 + AI 开关)。
+
+    🔴 **不带顺序** —— 显示顺序的权威是 SYNC_FOLDERS 数组序 (`GET /whitelist`),
+    folder_pref 只管 icon + 两个开关 (理由见 sync_store.FOLDER_PREF_TABLE_DDLS 头注)。
+    前端按白名单顺序遍历, 用 imap_name 到这里取配置。
+
+    非 davmail 也可 (纯本地 SQLite 读, 同 /cleanup 的口径): 配置读不该被后端探活挡住。
+    """
+    from src.api.deps import get_service_ctx
+
+    prefs = await _asyncio.to_thread(get_service_ctx().sync_store.list_folder_prefs)
+    return success_envelope({"prefs": prefs}, request=request, source="sqlite")
+
+
+@router.put("/prefs", dependencies=[Depends(verify_cf_access)])
+async def folder_set_pref(body: _FolderPrefBody, request: Request):
+    """部分更新一个文件夹的配置; 行不存在则按默认值建行。返回落库后的整行。
+
+    🔴 ``llm_disabled`` 与 UI 的「AI 分类」开关**反向** (UI 开 = llm_disabled false),
+    极性对齐 env ``FOLDER_LLM_DISABLED`` 的黑名单语义 —— 翻译在前端做, 本端点收的
+    就是列的原义。``notify_enabled`` 与 UI 同向 (白名单语义)。
+
+    改完**立即生效**, 不需要重启 mail-sync: watcher 的两个 gate 每封邮件现读 folder_pref
+    (见 NewWatcher._skip_llm_for_folder), 两个进程共享同一个 WAL 库。故本端点不返回
+    ``restart_required`` —— 它恒为 false, 返回它只会让前端以为有这种可能。
+
+    ``icon`` 当**不透明短串**存 (lucide kebab 名), 后端不做枚举校验: 可选集是纯前端
+    词汇, 抄到 Python 就多一处跨语言镜像、按仓规还得再建一道一致性闸; 认不出的值
+    前端已有兜底。只做长度上限防呆。
+    """
+    from src.api.deps import get_service_ctx
+
+    imap_name = (body.imap_name or "").strip()
+    if not imap_name:
+        raise APIError("E_INVALID_ARG", "imap_name 不能为空", source="sqlite")
+    kwargs: dict = {
+        "notify_enabled": body.notify_enabled,
+        "llm_disabled": body.llm_disabled,
+    }
+    if "icon" in body.model_fields_set:      # 传了才动 icon (含显式 null = 清除)
+        icon = (body.icon or "").strip()
+        if len(icon) > 64:
+            raise APIError(
+                "E_INVALID_ARG", "icon 过长 (上限 64 字符)",
+                hint="icon 存 lucide kebab 名, 如 folder-check", source="sqlite",
+            )
+        kwargs["icon"] = icon or None        # 空串与 null 同义: 清除图标
+    row = await _asyncio.to_thread(
+        lambda: get_service_ctx().sync_store.upsert_folder_pref(imap_name, **kwargs)
+    )
+    if row is None:
+        raise APIError("E_GENERIC", f"folder_pref 写入失败 ({imap_name!r})", source="sqlite")
+    return success_envelope(row, request=request, source="sqlite")
 
 
 class _FolderCleanupBody(BaseModel):

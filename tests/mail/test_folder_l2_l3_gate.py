@@ -21,7 +21,7 @@ from src.mail.new_watcher import (
     should_skip_feishu_for_folder,
     should_skip_llm_for_folder,
 )
-from src.mail.sync_store import SyncStore
+from src.mail.sync_store import FolderGates, SyncStore
 
 
 # ============================================================
@@ -103,7 +103,17 @@ class _FakeEmail:
         self.mailbox = mailbox
 
 
-def _make_watcher(llm_disabled=frozenset(), notify_enabled=frozenset(), ready_rows=None, mailbox_map=None):
+def _make_watcher(
+    llm_disabled=frozenset(),
+    notify_enabled=frozenset(),
+    ready_rows=None,
+    mailbox_map=None,
+    prefs=None,
+):
+    """``prefs``: {mailbox_label: (notify_enabled, llm_disabled)} —— folder_pref 行 (v62)。
+
+    行在 → 行是权威; 行不在 → 回退 ``llm_disabled`` / ``notify_enabled`` 两个 env frozenset。
+    """
     w = NewWatcher.__new__(NewWatcher)
     w._llm_runner = _StubRunner(ready_rows)
     w._folder_llm_disabled = llm_disabled
@@ -114,6 +124,15 @@ def _make_watcher(llm_disabled=frozenset(), notify_enabled=frozenset(), ready_ro
     class _Store:
         def get(self, iid):
             return {"mailbox": (mailbox_map or {}).get(iid, "")}
+
+        def get_folder_gates(self, mailbox_label):
+            row = (prefs or {}).get(mailbox_label)
+            if row is None:
+                return FolderGates()
+            return FolderGates(row_exists=True, notify_enabled=row[0], llm_disabled=row[1])
+
+        def has_any_llm_disabled(self):
+            return any(row[1] for row in (prefs or {}).values())
 
     w.sync_store = _Store()
     return w
@@ -172,6 +191,115 @@ def test_l2_retry_queue_missing_meta_does_not_skip():
     w.sync_store = _NoneStore()
     asyncio.run(w._process_llm_retry_queue())
     assert 20 in w._llm_runner.calls   # 查不到 folder → 安全默认: 照常处理 (不静默吞)
+
+
+# ============================================================
+# v62 — folder_pref 行是运行时权威, env frozenset 降级为回退
+# ============================================================
+#
+# 判定顺序恒为: 标准邮箱直接放行 → folder_pref 行 → env frozenset。
+# 下面每个 case 都让行与 env **给出相反的答案**, 只有"行赢了"才通得过 —— 否则
+# 换成任何一种"env 赢"或"两者取并/交"的实现都能蒙混过关。
+
+def test_l2_pref_row_beats_env_blacklist():
+    """行说「跑」+ env 黑名单说「不跑」→ 跑 (行赢)。"""
+    w = _make_watcher(llm_disabled=frozenset({"Jira"}), prefs={"Jira": (False, False)})
+    assert w._skip_llm_for_folder("Jira") is False
+
+
+def test_l2_pref_row_disables_without_env():
+    """行说「不跑」+ env 黑名单为空 → 不跑 (行赢, 且不需要任何 env 配置)。"""
+    w = _make_watcher(llm_disabled=frozenset(), prefs={"Jira": (False, True)})
+    assert w._skip_llm_for_folder("Jira") is True
+
+
+def test_l3_pref_row_beats_env_whitelist():
+    """行说「不推」+ env 白名单说「推」→ 不推 (行赢)。"""
+    w = _make_watcher(notify_enabled=frozenset({"Jira"}), prefs={"Jira": (False, False)})
+    assert w._skip_feishu_for_folder("Jira") is True
+
+
+def test_l3_pref_row_enables_without_env():
+    """行说「推」+ env 白名单为空 → 推 (行赢)。"""
+    w = _make_watcher(notify_enabled=frozenset(), prefs={"Jira": (True, False)})
+    assert w._skip_feishu_for_folder("Jira") is False
+
+
+def test_gates_fall_back_to_env_when_row_missing():
+    """别的文件夹有行、本文件夹没有 → 本文件夹仍吃 env (回退没被行的存在整体关掉)。"""
+    w = _make_watcher(
+        llm_disabled=frozenset({"Notion"}),
+        notify_enabled=frozenset({"Notion"}),
+        prefs={"Jira": (True, True)},
+    )
+    assert w._skip_llm_for_folder("Notion") is True       # env 黑名单
+    assert w._skip_feishu_for_folder("Notion") is False   # env 白名单
+
+
+def test_standard_mailbox_never_reads_folder_pref():
+    """标准邮箱在**读库之前**就短路 —— 收件箱每封都走这里, 不该白读一次库。"""
+    w = _make_watcher()
+
+    class _Exploding:
+        def get_folder_gates(self, mailbox_label):
+            raise AssertionError(f"标准邮箱 {mailbox_label!r} 不该读 folder_pref")
+
+        def has_any_llm_disabled(self):
+            raise AssertionError("标准邮箱不该读 folder_pref")
+
+    w.sync_store = _Exploding()
+    assert w._skip_llm_for_folder("收件箱") is False
+    assert w._skip_feishu_for_folder("收件箱") is False
+
+
+def test_l2_retry_queue_honours_pref_row():
+    """retry 队列走同一条解析: 行说「不跑」→ 该行跳过, 其余照常 (env 全空)。"""
+    w = _make_watcher(
+        llm_disabled=frozenset(),
+        prefs={"Jira": (False, True)},
+        ready_rows=[{"internal_id": 30}, {"internal_id": 31}],
+        mailbox_map={30: "Jira", 31: "Notion"},
+    )
+    asyncio.run(w._process_llm_retry_queue())
+    assert 30 not in w._llm_runner.calls
+    assert 31 in w._llm_runner.calls
+
+
+def test_retry_queue_short_circuit_needs_no_mailbox_lookup():
+    """两侧都没关 LLM → 整段短路, 不为每行多查一次 mailbox (逐字保住旧行为)。"""
+    looked_up = []
+    w = _make_watcher(
+        llm_disabled=frozenset(),
+        prefs={"Jira": (True, False)},   # 有行但没关 LLM
+        ready_rows=[{"internal_id": 40}],
+    )
+    real_get = w.sync_store.get
+    w.sync_store.get = lambda iid: (looked_up.append(iid), real_get(iid))[1]
+    asyncio.run(w._process_llm_retry_queue())
+    assert looked_up == []
+    assert 40 in w._llm_runner.calls
+
+
+def test_gate_change_takes_effect_without_restart(tmp_path):
+    """🔴 本批的核心诉求: 改开关**不重启** mail-sync 就生效。
+
+    同一个 watcher 实例 (模拟长跑的 mail-sync 进程) + 真 SyncStore: 先读到默认,
+    写一次 folder_pref (模拟 serve-api 的 PUT /api/folder/prefs), 再读立刻是新值。
+    旧实现两个 frozenset 在 ``__init__`` 冻结, 这个断言必然失败。
+    """
+    store = SyncStore(str(tmp_path / "hot.db"))
+    w = NewWatcher.__new__(NewWatcher)
+    w.sync_store = store
+    w._folder_llm_disabled = frozenset()
+    w._folder_notify_enabled = frozenset()
+
+    assert w._skip_llm_for_folder("DMS固件发布") is False      # 默认: 跑 LLM
+    assert w._skip_feishu_for_folder("DMS固件发布") is True    # 默认: 不推飞书
+
+    store.upsert_folder_pref("DMS&VvpO9lPRXgM-", llm_disabled=True, notify_enabled=True)
+
+    assert w._skip_llm_for_folder("DMS固件发布") is True       # 无需重建 watcher
+    assert w._skip_feishu_for_folder("DMS固件发布") is False
 
 
 # ============================================================

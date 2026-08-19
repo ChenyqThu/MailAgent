@@ -75,7 +75,9 @@ export const qk = {
   folder: {
     all: () => ['folder'] as const,
     discover: () => ['folder', 'discover'] as const,
-    whitelist: () => ['folder', 'whitelist'] as const
+    whitelist: () => ['folder', 'whitelist'] as const,
+    // per-folder 配置 (v62, folder_pref)。设置页与侧边栏文件夹树共读同一份缓存。
+    prefs: () => ['folder', 'prefs'] as const
   },
 
   calendar: {

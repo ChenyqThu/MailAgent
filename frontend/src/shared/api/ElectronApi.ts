@@ -78,6 +78,9 @@ import type {
   FolderCleanupResult,
   FolderDiscoverResult,
   FolderManageResult,
+  FolderPref,
+  FolderPrefPatch,
+  FolderPrefsResult,
   FolderSetWhitelistResult,
   FolderWhitelistResult,
   EnvApi,
@@ -419,6 +422,15 @@ class ElectronFolderApi implements FolderApi {
   }
   async cleanup(imapName: string): Promise<FolderCleanupResult> {
     const env = (await invoker()('folder:cleanup', imapName)) as WriteEnvelope<FolderCleanupResult>
+    return unwrap(env)
+  }
+  // per-folder 配置 (v62) — 图标 + 通知开关 + AI 开关 (纯本地, 非 davmail 也可)。
+  async getPrefs(): Promise<FolderPrefsResult> {
+    const env = (await invoker()('folder:getPrefs')) as WriteEnvelope<FolderPrefsResult>
+    return unwrap(env)
+  }
+  async setPref(imapName: string, patch: FolderPrefPatch): Promise<FolderPref> {
+    const env = (await invoker()('folder:setPref', imapName, patch)) as WriteEnvelope<FolderPref>
     return unwrap(env)
   }
 }

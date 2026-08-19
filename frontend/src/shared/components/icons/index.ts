@@ -73,3 +73,20 @@ export { BriefcaseBusinessIcon } from './animated/briefcase-business'
 
 // 第八批（通讯录 WP2）：主菜单「通讯录」→ users-round（右侧人物为动画段）。
 export { UsersRoundIcon } from './animated/users-round'
+
+// 第九批（per-folder 图标）：lucide folder 家族 24 个候选，用户逐个文件夹挑一个。
+// 单个图标不逐一 re-export —— 消费方一律经 `folderIcon(key)` 拿组件（key 才是落库值，
+// 逐个 import 会把「哪些 key 存在」这件事散到调用点）。
+export {
+  FOLDER_ICON_KEYS,
+  DEFAULT_FOLDER_ICON,
+  folderIcon,
+  type FolderIconKey,
+  type FolderIconComponent
+} from './folderIcons'
+// 渲染入口：调用方一律用 `<FolderGlyph iconKey={…} />`，不要自己查表再当组件名用。
+export { FolderGlyph, type FolderGlyphProps } from './FolderGlyph'
+
+// 内建 5 邮箱（收件箱/发件箱/草稿箱/已标旗/所有邮件）的图标单源 —— 侧边栏与设置页
+// 内建邮箱行共读，**不开放自定义**。
+export { MAILBOX_ICON_COMPONENT, type MailboxIconComponent } from './mailboxIcons'

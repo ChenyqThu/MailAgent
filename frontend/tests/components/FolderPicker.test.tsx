@@ -21,7 +21,10 @@ import i18n from '../../src/shared/i18n'
 import type {
   FolderCleanupResult,
   FolderDiscoverResult,
-  FolderManageResult
+  FolderManageResult,
+  FolderPref,
+  FolderPrefPatch,
+  FolderPrefsResult
 } from '../../src/shared/api/types'
 
 await i18n.changeLanguage('zh-CN')
@@ -37,6 +40,10 @@ const mockCreateFolder = vi.fn<[string | null, string], Promise<FolderManageResu
 const mockRenameFolder = vi.fn<[string, string], Promise<FolderManageResult>>()
 const mockDeleteFolder = vi.fn<[string], Promise<FolderManageResult>>()
 const mockCleanup = vi.fn<[string], Promise<FolderCleanupResult>>()
+// per-folder 配置 (v62). getPrefs 默认返回空 prefs — 白名单成员取不到行 = 全默认
+// (兜底图标 / 通知关 / AI 开), **不是错误**, 这正是真实首次进页面的形状。
+const mockGetPrefs = vi.fn<[], Promise<FolderPrefsResult>>()
+const mockSetPref = vi.fn<[string, FolderPrefPatch], Promise<FolderPref>>()
 const stableApi = {
   folder: {
     discover: mockDiscover,
@@ -44,7 +51,9 @@ const stableApi = {
     createFolder: mockCreateFolder,
     renameFolder: mockRenameFolder,
     deleteFolder: mockDeleteFolder,
-    cleanup: mockCleanup
+    cleanup: mockCleanup,
+    getPrefs: mockGetPrefs,
+    setPref: mockSetPref
   }
 }
 
@@ -161,6 +170,9 @@ beforeEach(() => {
   mockRenameFolder.mockReset()
   mockDeleteFolder.mockReset()
   mockCleanup.mockReset()
+  mockGetPrefs.mockReset()
+  mockGetPrefs.mockResolvedValue({ prefs: [] })
+  mockSetPref.mockReset()
   toastSuccess.mockReset()
   toastError.mockReset()
   useRestartStore.setState({ required: false, changedKeys: [] })
@@ -190,11 +202,13 @@ describe('FolderPicker — 多文件夹选择器', () => {
     renderPicker()
     await waitFor(() => expect(mockDiscover).toHaveBeenCalled())
     expect(await screen.findByText('Jira')).toBeTruthy()
-    expect(screen.getByText('DMS固件发布')).toBeTruthy()
+    // 🔴 getAllByText: 已勾选的文件夹在树里出现一次、在下方「已同步文件夹」配置段
+    // 再出现一次 (v62 per-folder 配置行), 两处都是真行。
+    expect(screen.getAllByText('DMS固件发布').length).toBeGreaterThanOrEqual(1)
     // 计数 (mono, en-US 千分位)。
     expect(screen.getByText('3,458')).toBeTruthy()
-    // 系统文件夹展示「系统 · 始终同步」状态。
-    expect(screen.getByText('收件箱')).toBeTruthy()
+    // 系统文件夹展示「系统 · 始终同步」状态 (「收件箱」同时也是只读内建邮箱段的一行)。
+    expect(screen.getAllByText('收件箱').length).toBeGreaterThanOrEqual(1)
   })
 
   test('共享 QueryClient: 重进设置页命中缓存 → 不再发 discover (零请求)', async () => {
@@ -254,7 +268,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
   test('系统文件夹不可勾选 (无 checkbox, 只有 lock)', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
     renderPicker()
-    await screen.findByText('收件箱')
+    await screen.findAllByText('收件箱')
     // 系统文件夹 (收件箱) 不应有 role=checkbox; 只有自定义文件夹 (Jira) 有。
     const checkboxes = screen.getAllByRole('checkbox')
     const labels = checkboxes.map((c) => c.getAttribute('aria-label'))
@@ -278,16 +292,18 @@ describe('FolderPicker — 多文件夹选择器', () => {
     expect(mockSetWhitelist.mock.calls[0][0]).toEqual(['DMS&VvpO9lPRXgM-', 'Jira'])
   })
 
-  test('顺序列表: ≥2 项已勾选才渲染 (1 项无重排意义)', async () => {
-    mockDiscover.mockResolvedValue(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-'] }))
+  // v62 起这一段不只是「顺序」: 单个文件夹也要能换图标 / 配两个开关, 所以判据从
+  // 「≥2 项才渲染」放宽到「≥1 项就渲染」; 一个都没勾才整段不出现。
+  test('已同步文件夹段: 白名单空 → 不渲染; 1 项 → 渲染 (单项也要配图标/开关)', async () => {
+    mockDiscover.mockResolvedValue(discoverResult({ whitelist: [] }))
     const { unmount } = renderPicker()
     await screen.findByText('Jira')
-    expect(screen.queryByText('已同步文件夹顺序')).toBeNull()
+    expect(screen.queryByText('已同步文件夹')).toBeNull()
     unmount()
 
-    mockDiscover.mockResolvedValue(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-', 'Jira'] }))
+    mockDiscover.mockResolvedValue(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-'] }))
     renderPicker(makeQc())
-    expect(await screen.findByText('已同步文件夹顺序')).toBeTruthy()
+    expect(await screen.findByText('已同步文件夹')).toBeTruthy()
   })
 
   test('键盘重排 (仅顺序变) → 保存钮亮 + 提示"立即生效" + 入参为新序', async () => {
@@ -297,7 +313,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
       restart_required: false
     })
     renderPicker()
-    await screen.findByText('已同步文件夹顺序')
+    await screen.findByText('已同步文件夹')
 
     // 无改动时保存禁用。
     const saveBtn = screen.getByRole('button', { name: '保存' })
@@ -354,7 +370,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
       .mockResolvedValueOnce(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-', 'Jira'] }))
       .mockResolvedValue(second)
     renderPicker()
-    await screen.findByText('已同步文件夹顺序')
+    await screen.findByText('已同步文件夹')
     expect(orderShown()).toEqual(['DMS&VvpO9lPRXgM-', 'Jira'])
 
     reorderDown(0)
@@ -381,7 +397,7 @@ describe('FolderPicker — 多文件夹选择器', () => {
       restart_required: false
     })
     renderPicker()
-    await screen.findByText('已同步文件夹顺序')
+    await screen.findByText('已同步文件夹')
 
     reorderDown(0)
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
@@ -458,7 +474,7 @@ describe('FolderPicker — P4 管理操作', () => {
   test('系统文件夹 ⋯ 按钮 disabled (不可管理)', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
     renderPicker()
-    await screen.findByText('收件箱')
+    await screen.findAllByText('收件箱')
 
     const menuBtns = screen.getAllByRole('button', { name: '管理文件夹' })
     // 系统文件夹 (收件箱) 排在第一位 (树中第一行), 其 ⋯ 按钮应 disabled。
@@ -638,7 +654,7 @@ describe('FolderPicker — P4 管理操作', () => {
     })
 
     renderPicker()
-    await screen.findByText('DMS固件发布')
+    await screen.findAllByText('DMS固件发布')
 
     // DMS固件发布 初始已选中 (在 whitelist) — 取消勾选。
     const dmsCheckbox = screen.getByRole('checkbox', { name: 'DMS固件发布' })
@@ -662,7 +678,7 @@ describe('FolderPicker — P4 管理操作', () => {
     mockDiscover.mockResolvedValue(discoverResult())
 
     renderPicker()
-    await screen.findByText('DMS固件发布')
+    await screen.findAllByText('DMS固件发布')
 
     // 取消勾选 DMS固件发布 (在 whitelist, 应出现清理提示)。
     const dmsCheckbox = screen.getByRole('checkbox', { name: 'DMS固件发布' })
@@ -676,5 +692,102 @@ describe('FolderPicker — P4 管理操作', () => {
     await waitFor(() => expect(screen.queryByRole('button', { name: '保留' })).toBeNull())
     // cleanup 未被调用。
     expect(mockCleanup).not.toHaveBeenCalled()
+  })
+})
+
+// ── per-folder 配置 (v62, folder_pref) —— 图标 + 两个开关 ────────────────────
+//
+// 🔴 本段的核心是**极性**: 「AI 分类」开关与落库列 `llm_disabled` 反向 (黑名单语义),
+// 「通知」与 `notify_enabled` 同向 (白名单语义)。写反了界面看着对、行为全反 ——
+// 所以断言看的是 setPref 的**入参**, 不是开关的视觉态。
+describe('FolderPicker — per-folder 配置 (v62)', () => {
+  beforeEach(() => {
+    mockDiscover.mockResolvedValue(discoverResult())
+    mockSetPref.mockResolvedValue({
+      imap_name: 'DMS&VvpO9lPRXgM-',
+      mailbox_label: 'DMS固件发布',
+      icon: null,
+      notify_enabled: false,
+      llm_disabled: false,
+      updated_at: 0
+    })
+  })
+
+  test('「通知」开关 (白名单语义, 与 notify_enabled 同向): 开 → notify_enabled=true', async () => {
+    renderPicker()
+    await screen.findByText('已同步文件夹')
+    fireEvent.click(screen.getByRole('switch', { name: 'DMS固件发布 通知' }))
+    await waitFor(() =>
+      expect(mockSetPref).toHaveBeenCalledWith('DMS&VvpO9lPRXgM-', { notify_enabled: true })
+    )
+  })
+
+  // 🔴 同步断言 (click 之后不 await 任何东西): 开关必须**当场**翻, 而不是等 PUT 回来 +
+  // invalidate 重拉。少了乐观更新, 远程 web 上点下去有一个来回的空窗, 用户会以为没生效
+  // 而连点。用 waitFor 写这条会被随后的 refetch 蒙混过去, 变成恒绿装饰。
+  test('点开关当场翻 (乐观更新), 不等 PUT 往返', async () => {
+    renderPicker()
+    await screen.findByText('已同步文件夹')
+    const notify = screen.getByRole('switch', { name: 'DMS固件发布 通知' })
+    expect(notify.getAttribute('aria-checked')).toBe('false')
+    fireEvent.click(notify)
+    expect(
+      screen.getByRole('switch', { name: 'DMS固件发布 通知' }).getAttribute('aria-checked')
+    ).toBe('true')
+  })
+
+  test('🔴「AI 分类」开关与 llm_disabled **反向**: 关掉 AI → llm_disabled=true', async () => {
+    renderPicker()
+    await screen.findByText('已同步文件夹')
+    // 缺省 = 跑 LLM (llm_disabled 缺省 false) ⇒ 开关初始就是开的, 这一下是「关掉」。
+    const ai = screen.getByRole('switch', { name: 'DMS固件发布 AI' })
+    expect(ai.getAttribute('aria-checked')).toBe('true')
+    fireEvent.click(ai)
+    await waitFor(() =>
+      expect(mockSetPref).toHaveBeenCalledWith('DMS&VvpO9lPRXgM-', { llm_disabled: true })
+    )
+  })
+
+  test('内建 5 行不给开关: 只有自定义文件夹有 switch, 内建位是 10 个「不适用」', async () => {
+    renderPicker()
+    await screen.findByText('已同步文件夹')
+    // 白名单里只有 1 个自定义文件夹 ⇒ 全页只有它那 2 个开关。
+    expect(screen.getAllByRole('switch')).toHaveLength(2)
+    // 内建 5 行 × 2 列 = 10 个「—」位 (不是「关」: 后端 gate 对标准邮箱直接短路)。
+    expect(screen.getAllByLabelText('不适用')).toHaveLength(10)
+  })
+
+  test('图标选择器: 选一个 → setPref({icon: key}); 「默认」→ setPref({icon: null})', async () => {
+    renderPicker()
+    await screen.findByText('已同步文件夹')
+
+    fireEvent.click(screen.getByRole('button', { name: '更换「DMS固件发布」的图标' }))
+    const dialog = await screen.findByRole('dialog', { name: '为「DMS固件发布」选择图标' })
+    // 24 个候选全在。
+    expect(screen.getAllByRole('option')).toHaveLength(24)
+
+    fireEvent.click(screen.getByRole('option', { name: /^folder-check/ }))
+    await waitFor(() =>
+      expect(mockSetPref).toHaveBeenCalledWith('DMS&VvpO9lPRXgM-', { icon: 'folder-check' })
+    )
+    // 选完弹层收起。
+    await waitFor(() => expect(dialog.isConnected).toBe(false))
+
+    // 「恢复默认」= 清空 icon 列 → 走 patch 的 icon: null (不是省略该字段, 那是「保持不变」)。
+    mockSetPref.mockClear()
+    fireEvent.click(screen.getByRole('button', { name: '更换「DMS固件发布」的图标' }))
+    await screen.findByRole('dialog', { name: '为「DMS固件发布」选择图标' })
+    fireEvent.click(screen.getByRole('button', { name: '默认' }))
+    await waitFor(() =>
+      expect(mockSetPref).toHaveBeenCalledWith('DMS&VvpO9lPRXgM-', { icon: null })
+    )
+  })
+
+  test('setPref 失败 → toast 报错, 不静默吞', async () => {
+    mockSetPref.mockRejectedValue(new Error('boom'))
+    renderPicker()
+    await screen.findByText('已同步文件夹')
+    fireEvent.click(screen.getByRole('switch', { name: 'DMS固件发布 通知' }))
+    await waitFor(() => expect(toastError).toHaveBeenCalled())
   })
 })

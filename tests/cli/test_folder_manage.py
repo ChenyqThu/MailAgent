@@ -161,6 +161,71 @@ def test_folder_delete_cli(cli_runner, davmail_env, seeded_db, monkeypatch):
     assert reader.deleted == ["Jira"]
 
 
+# ============================================================
+# v62 — folder_pref 行跟着重命名 / 删除走 (不做就是静默丢配置)
+# ============================================================
+
+def test_folder_rename_migrates_pref_row(cli_runner, davmail_env, seeded_db, monkeypatch):
+    """🔴 改名后 pref 行必须跟到新 imap 名下。
+
+    folder_pref 的 PK 是 imap 路径, IMAP RENAME 换掉路径后原行就成孤儿 —— 图标和
+    两个开关静默丢失, 而且**没有任何报错** (下次 gate 读不到行, 悄悄回落默认)。
+    """
+    from src.mail.sync_store import SyncStore
+
+    store = SyncStore(str(seeded_db))
+    store.upsert_folder_pref("Jira", icon="folder-check", notify_enabled=True, llm_disabled=True)
+
+    reader = _FakeReader()
+    _patch_reader(monkeypatch, reader)
+    _patch_no_system(monkeypatch)
+    _patch_whitelist_noop(monkeypatch)
+    r = _invoke(cli_runner, "folder", "rename", "Jira", "项目", "-o", "json", db_path=seeded_db)
+    assert r.exit_code == 0, r.output
+    new_imap = _last_json(r.output)["data"]["new_imap_name"]
+
+    rows = SyncStore(str(seeded_db)).list_folder_prefs()
+    assert [row["imap_name"] for row in rows] == [new_imap]
+    assert rows[0]["mailbox_label"] == "项目"      # 派生列按新名重算
+    assert rows[0]["icon"] == "folder-check"
+    assert rows[0]["notify_enabled"] is True
+    assert rows[0]["llm_disabled"] is True
+
+
+def test_folder_delete_removes_pref_row(cli_runner, davmail_env, seeded_db, monkeypatch):
+    """文件夹在 Exchange 上删掉 → pref 行再无对应物, 清掉 (不留孤儿)。"""
+    from src.mail.sync_store import SyncStore
+
+    SyncStore(str(seeded_db)).upsert_folder_pref("Jira", icon="folder-check")
+
+    reader = _FakeReader()
+    _patch_reader(monkeypatch, reader)
+    _patch_no_system(monkeypatch)
+    _patch_whitelist_noop(monkeypatch)
+    r = _invoke(cli_runner, "folder", "delete-folder", "Jira", "-o", "json", db_path=seeded_db)
+    assert r.exit_code == 0, r.output
+    assert SyncStore(str(seeded_db)).list_folder_prefs() == []
+
+
+def test_folder_cleanup_keeps_pref_row(cli_runner, davmail_env, seeded_db, monkeypatch):
+    """取消同步 ≠ 删除: 文件夹还在服务器上, 重新勾选时该拿回自己设的图标与开关。
+
+    这条与上一条是**成对**的 —— 两个操作都会清本地邮件行, 只有 delete 该连配置一起清。
+    """
+    from src.mail.sync_store import SyncStore
+
+    SyncStore(str(seeded_db)).upsert_folder_pref("Jira", icon="folder-check", llm_disabled=True)
+
+    _patch_whitelist_noop(monkeypatch)
+    r = _invoke(cli_runner, "folder", "cleanup", "Jira", "-o", "json", db_path=seeded_db)
+    assert r.exit_code == 0, r.output
+
+    rows = SyncStore(str(seeded_db)).list_folder_prefs()
+    assert [row["imap_name"] for row in rows] == ["Jira"]
+    assert rows[0]["icon"] == "folder-check"
+    assert rows[0]["llm_disabled"] is True
+
+
 def test_folder_create_gated_on_applescript(cli_runner, cli_env, seeded_db, monkeypatch):
     monkeypatch.setenv("MAILAGENT_BACKEND", "applescript")
     monkeypatch.setattr("src.cli.context.CliContext.require_auth", lambda self: None)
@@ -408,3 +473,87 @@ def test_delete_local_rows_includes_subfolders(seeded_db, monkeypatch):
         assert conn.execute("SELECT COUNT(*) FROM email_metadata WHERE internal_id=1000400003").fetchone()[0] == 1  # 非子保留
     finally:
         conn.close()
+
+
+# ============================================================
+# 🔴 重命名父文件夹: SYNC_FOLDERS 里的子条目也必须跟着改
+# ============================================================
+
+def _patch_whitelist_to_tmp_env(monkeypatch, tmp_path, initial: str):
+    """让 _rewrite_whitelist **真跑** —— 读 cfg.sync_folders, 写 tmp .env。
+
+    🔴 与本文件其它 rename 测试的 `_patch_whitelist_noop` 相反: 那个把整条白名单
+    写路径 mock 掉了, 所以看不见这里要测的东西。
+    """
+    env_file = tmp_path / "wl.env"
+    # 初值同时写进 env 变量 (读侧 = cfg.sync_folders) 和 .env 文件 —— 白名单没变动时
+    # `_rewrite_whitelist` 提前 return 不落盘, 只靠 env 变量的话回读会是空。
+    env_file.write_text(f"MAILAGENT_BACKEND=davmail\nSYNC_FOLDERS='{initial}'\n")
+    monkeypatch.setenv("SYNC_FOLDERS", initial)
+    monkeypatch.setattr("src.config._resolve_env_file", lambda: str(env_file))
+    return env_file
+
+
+def _read_whitelist(env_file):
+    from dotenv import dotenv_values
+
+    from src.mail.backend.imap_client import parse_folder_csv_or_json
+
+    return parse_folder_csv_or_json(dotenv_values(env_file).get("SYNC_FOLDERS") or "")
+
+
+def test_rename_parent_rewrites_child_whitelist_entries(
+    cli_runner, davmail_env, seeded_db, monkeypatch, tmp_path
+):
+    """🔴 IMAP RENAME 父文件夹 → 子文件夹的 imap 路径也变了, 白名单条目必须跟着改。
+
+    漏掉的后果是**静默停止同步**: `_effective_custom_folders` 按名字 SELECT, 白名单里
+    还留着 `Proj/Sub` 而服务器上已经是 `Project/Sub` → 那个文件夹再也拉不到新邮件,
+    且不报错、UI 上勾选状态看着还在。
+
+    同一个 `rename_folder` 里另外两处一致性处理 (`_rename_local_mailbox` /
+    `SyncStore.rename_folder_pref`) 都做了子前缀替换, 白名单是唯一漏的那处。
+    """
+    env_file = _patch_whitelist_to_tmp_env(monkeypatch, tmp_path, '["Proj","Proj/Sub","Other"]')
+    _patch_reader(monkeypatch, _FakeReader())
+    _patch_no_system(monkeypatch)
+
+    r = _invoke(cli_runner, "folder", "rename", "Proj", "Project", "-o", "json", db_path=seeded_db)
+    assert r.exit_code == 0, r.output
+
+    assert _read_whitelist(env_file) == ["Project", "Project/Sub", "Other"]
+    # 白名单**集合**变了 → 需要重启 mail-sync (不是"只挪了个位置"那种纯显示改动)。
+    assert _last_json(r.output)["data"]["restart_required"] is True
+
+
+def test_rename_leaf_does_not_touch_similarly_prefixed_siblings(
+    cli_runner, davmail_env, seeded_db, monkeypatch, tmp_path
+):
+    """前缀替换只认真正的子文件夹 (`old/`), 不能误伤名字碰巧同前缀的兄弟。
+
+    `Proj` 与 `Project` 是两个独立文件夹 —— 裸字符串 startswith/replace 会把
+    `Project` 也改掉 (改成 `Renamedect`), 这是前缀替换最典型的写法错误。
+    """
+    env_file = _patch_whitelist_to_tmp_env(monkeypatch, tmp_path, '["Proj","Project","Proj/Sub"]')
+    _patch_reader(monkeypatch, _FakeReader())
+    _patch_no_system(monkeypatch)
+
+    r = _invoke(cli_runner, "folder", "rename", "Proj", "Renamed", "-o", "json", db_path=seeded_db)
+    assert r.exit_code == 0, r.output
+
+    assert _read_whitelist(env_file) == ["Renamed", "Project", "Renamed/Sub"]
+
+
+def test_rename_folder_absent_from_whitelist_needs_no_restart(
+    cli_runner, davmail_env, seeded_db, monkeypatch, tmp_path
+):
+    """改的文件夹压根不在白名单 → 不写 .env, restart_required=False (回归保护)。"""
+    env_file = _patch_whitelist_to_tmp_env(monkeypatch, tmp_path, '["Other"]')
+    _patch_reader(monkeypatch, _FakeReader())
+    _patch_no_system(monkeypatch)
+
+    r = _invoke(cli_runner, "folder", "rename", "Proj", "Project", "-o", "json", db_path=seeded_db)
+    assert r.exit_code == 0, r.output
+
+    assert _read_whitelist(env_file) == ["Other"]
+    assert _last_json(r.output)["data"]["restart_required"] is False

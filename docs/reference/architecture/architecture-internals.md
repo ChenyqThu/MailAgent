@@ -490,7 +490,20 @@ log4j.logger.davmail=INFO
   - **已知边界**：per-folder 增量 marker 按**解码后的 display label** 查（`MAX(imap_uid) WHERE mailbox=label`），若两个不同的 IMAP 文件夹解码出**相同显示名**（病态命名场景），它们会共享同一个 marker → 增量游标互相干扰。属已知限制（正常命名不触发）。
 - **取数循环**：`get_new_emails` INBOX 段后追加白名单循环（`_fetch_custom_folder` → `_fetch_new_in_folder` 双模式）+ 每文件夹独立 try（单文件夹失败隔离）+ 窗口（`FOLDER_SYNC_PAST_DAYS`=90）+ 上限（`FOLDER_SYNC_MAX_MESSAGES`=2000，取最新 N 截断防极端大邮箱）。
 - **🔒 隔离不变量**：`SYNC_FOLDERS` 空 → `_custom_folders=[]` → `get_new_emails`/`check_for_changes` 循环整段跳过（零 STATUS 探测，只 SELECT INBOX）= 逐字节同现状。
-- **L2/L3 gate（降噪）**：自定义文件夹默认 **L2-on**（跑 LLM；`FOLDER_LLM_DISABLED` JSON 黑名单可关 `should_skip_llm_for_folder`）/ **L3-off**（默认不推飞书 `should_skip_feishu_for_folder`；`FOLDER_NOTIFY_ENABLED` JSON 白名单 opt-in）。下游 Notion/FTS/线程零改动（mailbox 字段透传，Select 自动建 option，FTS 触发器 mailbox-agnostic）。
+- **L2/L3 gate（降噪）**：自定义文件夹默认 **L2-on**（跑 LLM）/ **L3-off**（不推飞书）。下游 Notion/FTS/线程零改动（mailbox 字段透传，Select 自动建 option，FTS 触发器 mailbox-agnostic）。
+  - **权威在 DB 行（v62, 2026-08-19）**：`folder_pref` 表（PK = **IMAP 原始名**，不是显示名 —— 显示名会撞，不同父目录下可以各有一个 `Archive`）存 `icon` / `notify_enabled` / `llm_disabled`。`NewWatcher._skip_llm_for_folder` / `_skip_feishu_for_folder` **每封邮件现读一行**（写侧是 serve-api 进程，读侧是 mail-sync，共享同一 WAL 库）⇒ **改开关不必重启 mail-sync**。模式同 v31 项目周报的行内热读。
+  - 判定顺序恒为：**标准邮箱直接放行 →（读库前短路）folder_pref 行 → env frozenset 回退**。`should_skip_*_for_folder` 两个纯函数保留，降级为回退路径。
+  - 🔴 **两键极性相反**：`FOLDER_NOTIFY_ENABLED` 是**白名单 opt-in**（缺省关），`FOLDER_LLM_DISABLED` 是**黑名单 opt-out**（缺省开）；落到列上 `notify_enabled` 与 UI 同向、`llm_disabled` 与 UI 的「AI 分类」**反向**。v62 迁移按这个极性从两键播种一次（显示名 → SYNC_FOLDERS 里 `decode_imap_utf7` 相等的那个 imap_name，**不连 IMAP**），之后 env 只作「行缺失时的回退」。
+  - 🔴 **顺序不在 `folder_pref`**：显示顺序的权威仍是 `SYNC_FOLDERS` 数组序（该数组同时是成员表，且被 Electron 与远程 web 共读同一份 `.env`）。再存一列 `sort_order` = 同一事实两处、两个 writer 迟早对不上。
+  - 🔴 **重命名/删除必须搬行**：PK 是 imap 路径，`MailWriteService.rename_folder` 后不搬 = 孤儿行 + 配置静默丢失（无报错）。`rename_folder_pref` 做精确 + 子文件夹前缀；`delete_folder` 清行，**`cleanup_local_folder` 有意保留**（取消同步 ≠ 删除，重新勾选该拿回图标/开关）。
+- **重命名父文件夹：三处一致性缺一不可**（`MailWriteService.rename_folder`）。IMAP RENAME 一个父文件夹时**子文件夹的路径也跟着变**（`Proj/Sub` → `Project/Sub`），三处都必须做「精确 + `old/` 子前缀」替换：
+  | 处 | 载体 | 漏掉的后果 |
+  |---|---|---|
+  | `_rename_local_mailbox` | `email_metadata.mailbox` | 子文件夹的历史邮件挂在旧标签下，列表/搜索按新名过滤不到 |
+  | `_rename_whitelist_entry` | `.env` 的 `SYNC_FOLDERS` | 🔴 子文件夹**静默停止同步**（`_effective_custom_folders` 按名字 SELECT，旧名已不存在）—— 不报错、日志无异常、UI 勾选状态看着还在（2026-08-19 修，此前只做精确匹配） |
+  | `SyncStore.rename_folder_pref` | `folder_pref` | 子文件夹的图标 + 两个开关变孤儿行，悄悄回落默认 |
+
+  🔴 判据一律是 `old + "/"`，**不是**裸 `startswith(old)` —— `Proj` 与 `Project` 是两个独立文件夹，裸前缀会把 `Project` 改成 `Renamedect`。
 - **写操作泛化**：归档 `archive_inbox_message` 加 `src_imap`（解析邮件当前文件夹，修自定义文件夹归档）+ 新 `move_to_folder(internal_id, dst_imap)`（trash 守卫）+ 文件夹管理 CRUD（`create/rename/delete_folder`，IMAP + `quote_mailbox` + 系统文件夹保护 `_assert_not_system_folder`；delete 走 `delete_email_full` 级联清 body/attachment/FTS + 附件目录；rename UPDATE mailbox 含子前缀）。
 - **取消勾选清理**：`cleanup_local_folder`（删本地 `email_metadata` 级联 + 移白名单，**不碰 Exchange** —— 不调任何 reader）；默认保留，前端 opt-in。
 

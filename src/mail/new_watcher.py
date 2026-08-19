@@ -116,6 +116,10 @@ def should_skip_feishu_for_folder(mailbox: str, notify_enabled: frozenset) -> bo
     """L3 通知降噪: 自定义文件夹**默认不通知**, 仅 notify_enabled 内的才通知。
 
     标准邮箱 (收件箱等) 不受影响 (返回 False = 不 skip)。
+
+    ⚠️ v62 起这是**回退路径** —— 运行时权威是 folder_pref 行 (见
+    ``NewWatcher._skip_feishu_for_folder``), 本函数只在该文件夹没有 pref 行时接管,
+    吃的是 env ``FOLDER_NOTIFY_ENABLED`` 冻结出来的集合。
     """
     if not is_custom_folder_mailbox(mailbox):
         return False
@@ -126,6 +130,9 @@ def should_skip_llm_for_folder(mailbox: str, llm_disabled: frozenset) -> bool:
     """L2 LLM gate: 自定义文件夹**默认跑 LLM**, 仅 llm_disabled 内的才跳过。
 
     标准邮箱不受影响 (返回 False = 不 skip)。
+
+    ⚠️ v62 起这是**回退路径** —— 运行时权威是 folder_pref 行 (见
+    ``NewWatcher._skip_llm_for_folder``), 本函数只在该文件夹没有 pref 行时接管。
     """
     if not is_custom_folder_mailbox(mailbox):
         return False
@@ -251,6 +258,12 @@ class NewWatcher:
 
         # 多文件夹同步 L2/L3 per-folder gate（按 mailbox 显示名匹配，PRD §2.3）。
         # 自定义文件夹默认: L2 LLM 开 / L3 通知关。空配置 = 默认行为。
+        #
+        # 🔴 v62 起这两个 frozenset 是**回退路径**，不再是运行时权威。权威是
+        # folder_pref 行，由 _skip_llm_for_folder / _skip_feishu_for_folder 每封邮件
+        # 现读（Settings 里点一下开关，下一封邮件即生效，不必重启 mail-sync）——
+        # 这两个 frozenset 在 __init__ 冻结正是"改开关要重启"的根因。env 键降级为
+        # 首次 seed（v62 迁移）+ 没有 pref 行时的回退，仍照 .env.example 的语义生效。
         self._folder_notify_enabled = frozenset(
             parse_folder_csv_or_json(getattr(settings, "folder_notify_enabled", "") or "")
         )
@@ -1980,6 +1993,42 @@ class NewWatcher:
         except Exception as e:
             logger.warning(f"[pp-hook] dispatch failed: {e}")
 
+    # ---- per-folder L2/L3 gate 的行内热读解析 (v62) --------------------------
+    #
+    # 判定顺序恒为: 标准邮箱直接放行 → folder_pref 行 (权威) → env frozenset (回退)。
+    # 每封邮件现读一行, 不缓存 —— 这正是"改开关不用重启 mail-sync"的实现方式
+    # (写侧是 serve-api 进程, 两进程共享同一个 WAL 库)。模式与 v31 项目周报的
+    # 行内热读同构: 行在 → 行说了算; 行不在 → 回退 env 构造 (行为等价窗口)。
+    #
+    # 🔴 标准邮箱的短路必须在**读库之前**: 收件箱/发件箱/草稿箱每封都会走到这里,
+    # 让它们白读一次库纯属浪费; 且这三个 mailbox 本来就不在 folder_pref 里。
+
+    def _skip_feishu_for_folder(self, mailbox: str) -> bool:
+        """L3: 这封邮件该不该跳过飞书通知 (True = 跳过)。"""
+        if not is_custom_folder_mailbox(mailbox):
+            return False
+        gates = self.sync_store.get_folder_gates(mailbox)
+        if gates.row_exists:
+            return not gates.notify_enabled       # 白名单语义: 没 opt-in 就跳过
+        return should_skip_feishu_for_folder(mailbox, self._folder_notify_enabled)
+
+    def _skip_llm_for_folder(self, mailbox: str) -> bool:
+        """L2: 这封邮件该不该跳过 LLM 分类 (True = 跳过)。"""
+        if not is_custom_folder_mailbox(mailbox):
+            return False
+        gates = self.sync_store.get_folder_gates(mailbox)
+        if gates.row_exists:
+            return gates.llm_disabled             # 黑名单语义: opt-out 了才跳过
+        return should_skip_llm_for_folder(mailbox, self._folder_llm_disabled)
+
+    def _any_llm_gate_active(self) -> bool:
+        """有没有任何文件夹关掉了 LLM —— 重试队列的短路探针。
+
+        保住升级前的行为: 旧代码用 ``if llm_disabled:`` (env frozenset 非空) 决定要
+        不要为每个重试行多查一次 mailbox。两侧都空时这一整段依然零额外查询。
+        """
+        return bool(self._folder_llm_disabled) or self.sync_store.has_any_llm_disabled()
+
     def _maybe_trigger_llm_hook(
         self, email_obj: Email, internal_id: int, notion_page_id: str
     ) -> None:
@@ -1990,13 +2039,13 @@ class NewWatcher:
         """
         if self._llm_runner is None:
             return
-        # L2 gate: 自定义文件夹默认跑 LLM, FOLDER_LLM_DISABLED 内的跳过 (省成本去噪)。
-        # getattr 兜底: 最小 NewWatcher.__new__ 构造 (部分测试) 不走 __init__ 无此属性。
+        # L2 gate: 自定义文件夹默认跑 LLM, 关掉的跳过 (省成本去噪)。权威是 folder_pref
+        # 行, 无行时回退 FOLDER_LLM_DISABLED (见 _skip_llm_for_folder)。
         mailbox = getattr(email_obj, "mailbox", "") or ""
-        if should_skip_llm_for_folder(mailbox, getattr(self, "_folder_llm_disabled", frozenset())):
+        if self._skip_llm_for_folder(mailbox):
             logger.debug(
                 f"[llm-hook] skip internal_id={internal_id} mailbox={mailbox!r} "
-                f"(FOLDER_LLM_DISABLED)"
+                f"(folder AI 分类已关)"
             )
             return
         try:
@@ -2342,12 +2391,12 @@ class NewWatcher:
                 return
             if is_sent_mailbox(mailbox):
                 return
-            # L3 降噪: 自定义文件夹默认不通知 (PRD §2.3); FOLDER_NOTIFY_ENABLED 内的才通知。
-            # getattr 兜底: 最小 NewWatcher.__new__ 构造 (部分测试) 不走 __init__ 无此属性。
-            if should_skip_feishu_for_folder(mailbox, getattr(self, "_folder_notify_enabled", frozenset())):
+            # L3 降噪: 自定义文件夹默认不通知 (PRD §2.3); 开了通知的才推。权威是
+            # folder_pref 行, 无行时回退 FOLDER_NOTIFY_ENABLED (见 _skip_feishu_for_folder)。
+            if self._skip_feishu_for_folder(mailbox):
                 logger.debug(
                     f"[feishu] skip custom folder internal_id={internal_id} "
-                    f"mailbox={mailbox!r} (L3 降噪; 加 FOLDER_NOTIFY_ENABLED 可开)"
+                    f"mailbox={mailbox!r} (L3 降噪; 设置里打开该文件夹的通知即可)"
                 )
                 return
 
@@ -2411,18 +2460,20 @@ class NewWatcher:
         if not ready:
             return
         logger.info(f"[llm-retry] retrying {len(ready)} failed email(s)")
-        llm_disabled = getattr(self, "_folder_llm_disabled", frozenset())
+        # 短路探针: 一个文件夹都没关 LLM 时整段跳过, 不为每行多查一次 mailbox
+        # (逐字保住旧的 `if llm_disabled:` 语义, 只是判据从 env 集合扩到 env + 行)。
+        any_llm_gate = self._any_llm_gate_active()
         for row in ready:
             internal_id = row.get("internal_id")
-            # L2 gate: 黑名单文件夹的 retry 也跳过 (与新邮件 dispatch 一致，省成本去噪)。
+            # L2 gate: 关了 AI 的文件夹, retry 也跳过 (与新邮件 dispatch 一致，省成本去噪)。
             # mailbox 不在 llm_processing 表 → 从 sync_store 按 internal_id 查。
-            if llm_disabled:
+            if any_llm_gate:
                 meta = self.sync_store.get(internal_id)
                 mailbox = (meta or {}).get("mailbox", "") if meta else ""
-                if should_skip_llm_for_folder(mailbox or "", llm_disabled):
+                if self._skip_llm_for_folder(mailbox or ""):
                     logger.debug(
                         f"[llm-retry] skip internal_id={internal_id} "
-                        f"mailbox={mailbox!r} (FOLDER_LLM_DISABLED)"
+                        f"mailbox={mailbox!r} (folder AI 分类已关)"
                     )
                     continue
             try:

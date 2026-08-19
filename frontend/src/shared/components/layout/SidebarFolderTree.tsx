@@ -19,13 +19,14 @@ import { useNavigate, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronRight } from 'lucide-react'
 
+import { useFolderPrefMap } from '@shared/hooks/useFolderPrefs'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { useEmailFilter } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
 import { useNavCollapsed } from '@shared/state/nav-shell'
 import { cn } from '@shared/lib/cn'
-import { AnimatedIconActiveProvider, FolderPlusIcon } from '@shared/components/icons'
+import { AnimatedIconActiveProvider, FolderGlyph } from '@shared/components/icons'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 
 import { buildSidebarFolderTree, type SidebarFolderNode } from './sidebarFolderTree.helpers'
@@ -56,6 +57,9 @@ interface SidebarFolderRowProps {
   activeMailbox: string | null
   collapsed: boolean
   expanded: ReadonlySet<string>
+  /** imap_name → `folder_pref.icon`（lucide kebab 名）。取不到 = 没设过 → 兜底 folder。
+   *  🔴 收起态 56px rail 上只剩这个图标，是它区分各文件夹的唯一线索。 */
+  iconKeys: ReadonlyMap<string, string | null>
   onSelect: (node: SidebarFolderNode) => void
   onToggleExpand: (imapName: string) => void
 }
@@ -67,11 +71,12 @@ function SidebarFolderRow({
   activeMailbox,
   collapsed,
   expanded,
+  iconKeys,
   onSelect,
   onToggleExpand
 }: SidebarFolderRowProps): React.ReactElement {
   const { t } = useTranslation()
-  // 整行 hover/focus 经 AnimatedIconActiveProvider 驱动 folder-plus 动画（同 NavRow 范式）。
+  // 整行 hover/focus 经 AnimatedIconActiveProvider 驱动图标动画（同 NavRow 范式）。
   const [iconActive, setIconActive] = React.useState(false)
   const hasChildren = node.children.length > 0
   const isOpen = expanded.has(node.imapName)
@@ -156,8 +161,16 @@ function SidebarFolderRow({
             <span className="shrink-0 w-4 h-4" aria-hidden="true" />
           ) : null}
 
+          {/* 用户在设置页挑的图标；没设过 / key 不认识 → FolderGlyph 兜底回默认 folder。
+              🔴 svg 必须是 button 的直接子节点（FolderGlyph 与 Provider 都不加 DOM）——
+              收起态 56px rail 的图标放大规则选的就是 `button > svg`。 */}
           <AnimatedIconActiveProvider active={iconActive}>
-            <FolderPlusIcon size={15} strokeWidth={1.75} className="shrink-0" />
+            <FolderGlyph
+              iconKey={iconKeys.get(node.imapName)}
+              size={15}
+              strokeWidth={1.75}
+              className="shrink-0"
+            />
           </AnimatedIconActiveProvider>
           <span className="flex-1 truncate">{node.displayName}</span>
           {count > 0 ? (
@@ -183,6 +196,7 @@ function SidebarFolderRow({
               activeMailbox={activeMailbox}
               collapsed={collapsed}
               expanded={expanded}
+              iconKeys={iconKeys}
               onSelect={onSelect}
               onToggleExpand={onToggleExpand}
             />
@@ -252,6 +266,15 @@ export function SidebarFolderTree(): React.ReactElement | null {
     }))
   }, [hasWhitelist, discoverData, whitelist])
 
+  // per-folder 图标 (v62 folder_pref) — 与设置页共用 ['folder','prefs'] 缓存。仅在有白名单
+  // 时拉；失败/缺行静默退回兜底图标 (图标是观感, 不该让整棵树跟着挂)。
+  const prefMap = useFolderPrefMap(hasWhitelist)
+  const iconKeys = React.useMemo<ReadonlyMap<string, string | null>>(() => {
+    const m = new Map<string, string | null>()
+    for (const [imapName, pref] of prefMap) m.set(imapName, pref.icon)
+    return m
+  }, [prefMap])
+
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(new Set())
   const [showAll, setShowAll] = React.useState(false)
 
@@ -299,6 +322,7 @@ export function SidebarFolderTree(): React.ReactElement | null {
           activeMailbox={activeMailbox}
           collapsed={collapsed}
           expanded={expanded}
+          iconKeys={iconKeys}
           onSelect={handleSelect}
           onToggleExpand={toggleExpand}
         />

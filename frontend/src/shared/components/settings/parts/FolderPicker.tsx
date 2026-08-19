@@ -35,12 +35,35 @@ import {
   X
 } from 'lucide-react'
 
-import type { FolderCleanupResult, FolderInfo, FolderTreeNode } from '@shared/api/types'
+import type {
+  FolderCleanupResult,
+  FolderInfo,
+  FolderPrefPatch,
+  FolderPrefsResult,
+  FolderTreeNode
+} from '@shared/api/types'
 import {
   DragReorderList,
   type ReorderItem,
   type ReorderMessages
 } from '@shared/components/ui/DragReorderList'
+import { envFlagOn } from '@shared/components/agents/shared'
+import type { FolderIconKey } from '@shared/components/icons'
+import {
+  BuiltinPrefRows,
+  FolderIconButton,
+  FolderIconPicker,
+  PrefColumnHeader,
+  PrefRowIndex,
+  PrefRowName,
+  PrefToggle,
+  type IconPickerAnchor
+} from './FolderPrefRows'
+import {
+  folderPrefValue,
+  useFolderPrefMap,
+  type FolderPrefValue
+} from '@shared/hooks/useFolderPrefs'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useEnvStore } from '@shared/state/env'
@@ -904,6 +927,79 @@ export function FolderPicker(): React.ReactElement {
     setOrder(list.map((item) => item.id))
   }, [])
 
+  // ── per-folder 配置 (v62, folder_pref) — 图标 + 通知 + AI 分类 ────────────────
+  // 🔴 与白名单/顺序**不共用**「保存」按钮: PUT /folder/prefs 改完立即生效 (watcher 每封
+  // 邮件现读 folder_pref, 不需要重启同步服务), 所以点开关/换图标当场落盘 + 乐观更新缓存。
+  // 失败 → toast + 把缓存打回后端真实值 (invalidate)。
+  const prefMap = useFolderPrefMap()
+  const [prefBusy, setPrefBusy] = React.useState<string | null>(null)
+  const [iconAnchor, setIconAnchor] = React.useState<IconPickerAnchor | null>(null)
+
+  /** 白名单成员的当前配置 —— 取不到行 = 全默认 (不是错误)。
+   *  🔴 llm_disabled → ai 的极性翻转在 folderPrefValue 里, 这里不再翻一次。 */
+  const prefOf = React.useCallback(
+    (imapName: string): FolderPrefValue => folderPrefValue(prefMap.get(imapName)),
+    [prefMap]
+  )
+
+  const savePref = React.useCallback(
+    async (imapName: string, patch: FolderPrefPatch): Promise<void> => {
+      // 乐观更新: 开关/图标当场变, 不等 PUT 回来 —— 否则远程 web 上一个来回肉眼可见,
+      // 点下去像是没反应。patch 的三个键与 folder_pref 三列同名, 直接 merge。
+      // 缓存还没落地时不编数据 (下面 invalidate 会把真实值带回来)。
+      qc.setQueryData<FolderPrefsResult>(qk.folder.prefs(), (cur) => {
+        if (!cur) return cur
+        const i = cur.prefs.findIndex((r) => r.imap_name === imapName)
+        if (i >= 0) {
+          const next = cur.prefs.slice()
+          next[i] = { ...cur.prefs[i]!, ...patch }
+          return { prefs: next }
+        }
+        // 没有行 = 没设过 → 这次写入会新建一行, 本地先按缺省 + patch 拼一行。
+        return {
+          prefs: [
+            ...cur.prefs,
+            {
+              imap_name: imapName,
+              mailbox_label: displayNameByImap.get(imapName) ?? imapName,
+              icon: null,
+              notify_enabled: false,
+              llm_disabled: false,
+              updated_at: 0,
+              ...patch
+            }
+          ]
+        }
+      })
+      setPrefBusy(imapName)
+      try {
+        await mailApi.folder.setPref(imapName, patch)
+      } catch (e) {
+        toastError(
+          t('settings.folder.picker.pref.saveFail', { defaultValue: '保存文件夹配置失败' }),
+          toErrorMessage(e)
+        )
+      } finally {
+        setPrefBusy(null)
+        // 成功也刷: 后端返回的是落库后的整行, 让缓存回到真实值 (含并发写)。
+        void qc.invalidateQueries({ queryKey: qk.folder.prefs() })
+      }
+    },
+    [mailApi, qc, t, displayNameByImap]
+  )
+
+  const openIconPicker = React.useCallback(
+    (e: React.MouseEvent<HTMLButtonElement>, key: string, displayName: string): void => {
+      const rect = e.currentTarget.getBoundingClientRect()
+      setIconAnchor((cur) => (cur?.key === key ? null : { key, displayName, rect }))
+    },
+    []
+  )
+
+  // 两个上游总闸 —— 关着时对应那一列整体划掉变灰 (per-folder 开关此时不生效)。
+  const globalNotify = envFlagOn(useEnvValue('FEISHU_NOTIFY_ENABLED'))
+  const globalAi = envFlagOn(useEnvValue('LLM_AGENT_ENABLED'))
+
   const reorderMessages = React.useMemo<ReorderMessages>(
     () => ({
       listLabel: t('settings.folder.picker.order.listLabel', {
@@ -1053,27 +1149,118 @@ export function FolderPicker(): React.ReactElement {
               />
             ))}
           </div>
-          {/* 顺序列表 (排序 task) — ≥2 项才有重排意义; 数组序 = 侧边栏显示顺序 */}
-          {orderItems.length > 1 ? (
+          {/* 内建邮箱 (只读参照) — 位置固定、不可移除、图标不可换、两个 per-folder
+              开关对它们**不生效** (后端 gate 先判 is_custom_folder_mailbox)。列在这里
+              是为了看清自定义文件夹接在它们后面。 */}
+          {orderItems.length > 0 ? (
             <div className="px-3 py-2.5 border-t border-ink-border-soft">
-              <div className="flex items-baseline gap-2 mb-2">
+              <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
+                <span className="text-aux font-medium text-ink-fg">
+                  {t('settings.folder.picker.pref.builtinTitle', { defaultValue: '内建邮箱' })}
+                </span>
+                <span className="rounded-[3px] border border-ink-border px-1 py-px text-micro text-ink-fg-2">
+                  {t('settings.folder.picker.pref.builtinReadonly', { defaultValue: '只读' })}
+                </span>
+                <span className="text-meta text-ink-fg-2">
+                  {t('settings.folder.picker.pref.builtinHint', {
+                    defaultValue: '顺序固定、不能移除、图标不可换'
+                  })}
+                </span>
+              </div>
+              <PrefColumnHeader globalNotify={globalNotify} globalAi={globalAi} />
+              <BuiltinPrefRows />
+              <p className="mt-1.5 text-meta leading-relaxed text-ink-fg-3">
+                {t('settings.folder.picker.pref.builtinNote', {
+                  defaultValue:
+                    '两个开关这里画的是「—」而不是「关」：后端两个 gate 都先判标准邮箱并直接跳过，内建行不受 per-folder 开关约束。'
+                })}
+              </p>
+            </div>
+          ) : null}
+
+          {/* 已同步文件夹 (排序 task + per-folder 配置) — 数组序 = 侧边栏显示顺序 */}
+          {orderItems.length > 0 ? (
+            <div className="px-3 py-2.5 border-t border-ink-border-soft">
+              <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
                 <span className="text-aux font-medium text-ink-fg">
                   {t('settings.folder.picker.order.title', {
-                    defaultValue: '已同步文件夹顺序'
+                    defaultValue: '已同步文件夹'
                   })}
                 </span>
                 <span className="text-meta text-ink-fg-2">
                   {t('settings.folder.picker.order.hint', {
-                    defaultValue: '拖拽调整，侧边栏按此顺序显示'
+                    defaultValue: '拖拽调顺序，点图标换图标，两个开关逐个文件夹配'
                   })}
                 </span>
               </div>
+              <p className="mb-2 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 py-2 text-meta leading-relaxed text-ink-fg-2">
+                {t('settings.folder.picker.pref.archiveNote', {
+                  defaultValue:
+                    '「存档」若在名单里也归这一段：后端 STANDARD_MAILBOXES 有意不含它，两个 per-folder 开关对它逐字生效，所以它拿的是真开关而不是「—」。'
+                })}
+              </p>
+              <PrefColumnHeader globalNotify={globalNotify} globalAi={globalAi} />
               <DragReorderList
                 items={orderItems}
                 onReorder={handleReorder}
                 messages={reorderMessages}
+                rowClassName="py-2 pr-3"
+                renderItem={(item, index) => {
+                  const pref = prefOf(item.id)
+                  return (
+                    <span className="group/row flex min-w-0 items-center gap-2.5">
+                      <FolderIconButton
+                        icon={pref.icon}
+                        name={item.label}
+                        open={iconAnchor?.key === item.id}
+                        onOpen={(e) => openIconPicker(e, item.id, item.label)}
+                      />
+                      <PrefRowName label={item.label} imapName={item.id} />
+                      <PrefToggle
+                        kind="notify"
+                        on={pref.notify}
+                        folderName={item.label}
+                        globalOff={!globalNotify}
+                        disabled={prefBusy === item.id}
+                        onChange={(v) => void savePref(item.id, { notify_enabled: v })}
+                      />
+                      <PrefToggle
+                        kind="ai"
+                        on={pref.ai}
+                        folderName={item.label}
+                        globalOff={!globalAi}
+                        disabled={prefBusy === item.id}
+                        // 🔴 UI 的「AI 分类」与落库列 llm_disabled 反向。
+                        onChange={(v) => void savePref(item.id, { llm_disabled: !v })}
+                      />
+                      <PrefRowIndex index={index} />
+                    </span>
+                  )
+                }}
               />
+              <p className="mt-1.5 text-meta leading-relaxed text-ink-fg-3">
+                {t('settings.folder.picker.pref.defaultsHint', {
+                  defaultValue:
+                    '图标与两个开关改完立即生效，不需要重启同步服务；新加入的文件夹缺省是「通知 关 · AI 开」。'
+                })}
+              </p>
             </div>
+          ) : null}
+          {iconAnchor ? (
+            <FolderIconPicker
+              anchor={iconAnchor}
+              value={prefOf(iconAnchor.key).icon}
+              onPick={(key: FolderIconKey) => {
+                void savePref(iconAnchor.key, { icon: key })
+                setIconAnchor(null)
+              }}
+              // 「恢复默认」= 清空 icon 列 → 走 patch 的 `icon: null`。
+              onReset={() => {
+                void savePref(iconAnchor.key, { icon: null })
+                setIconAnchor(null)
+              }}
+              onClose={() => setIconAnchor(null)}
+            />
           ) : null}
           {/* save row */}
           <div className="flex items-center justify-end gap-2.5 px-3 py-2.5 border-t border-ink-border-soft">

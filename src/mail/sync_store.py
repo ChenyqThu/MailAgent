@@ -46,7 +46,7 @@ from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
 from enum import Enum
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Any, Iterator, TypedDict
+from typing import Dict, List, NamedTuple, Optional, Set, Any, Iterator, TypedDict
 from loguru import logger
 
 from src.matters.models import (
@@ -584,6 +584,74 @@ CONTACT_INDEX_DDLS = (
 )
 
 
+# ==================== folder_pref DDL single source (v62) ====================
+# 已同步文件夹的 per-folder 配置 (图标 + 通知开关 + AI 开关)。🔴 独立成组, **不进**
+# MATTER_*_DDLS / CONTACT_*_DDLS —— 理由同 CONTACT_TABLE_DDLS 头注: 那两组会被各自
+# 域的多个迁移块对老库整组重放, 混进去就等于给 v44..v61 每一个中间版本加一个新的
+# 炸点。本组只从 v62 块执行一次 (新库走满梯子同样经 v62 拿到)。
+#
+# 🔴 **顺序不进这张表** (owner 2026-08-19 拍板)。`SYNC_FOLDERS` 的**数组序**刚在
+# commit 7ec4b554 升格为「用户自定义显示顺序」, 而它同时是「哪些文件夹要同步」的
+# 成员表 —— 一个数组同时承载成员与顺序, 且被 Electron 主进程与远程 web 共读同一份
+# `.env`。folder_pref 再存一列 sort_order 就是同一个事实存两处, 两个 writer
+# (PUT /folder/whitelist 写 .env vs 本表写 DB) 迟早对不上, 且没有哪一侧能当权威。
+# 边界因此划死: **成员 + 顺序归 SYNC_FOLDERS 数组; 本表只管 icon + 两个开关**。
+# 想统一的话正确方向是「顺序整个搬进 DB、SYNC_FOLDERS 退回纯白名单」——那是另一个
+# 决定, 需要同时改 .env 消费侧与远程 web, 不是在这里加一列。
+#
+# 列语义 (🔴 两个开关的极性与缺省**相反**, 抄自 new_watcher 的两个 gate):
+#   imap_name      PK = IMAP 原始名 (modified-UTF7, 如 `DMS&VvpO9lPRXgM-`)。**不是**
+#                  显示名 —— 显示名会撞 (不同父目录下可以各有一个 `Archive`), 且与
+#                  SYNC_FOLDERS 白名单同一把钥匙。
+#   mailbox_label  = decode_imap_utf7(imap_name), 即 `email_metadata.mailbox` 的值。
+#                  **派生列**, 唯一写入点是 _folder_pref_label() —— 存它是因为运行时
+#                  gate 手里只有 mailbox 显示名, 反向 encode 回 imap_name 要赌
+#                  encode(decode(x)) == x (非规范编码下不成立)。带索引供热读。
+#   icon           lucide kebab 短串 (如 `folder-check`)。**后端当不透明短串存**,
+#                  不做枚举校验 —— 可选集是纯前端词汇, 抄到 Python 就多一处跨语言
+#                  镜像、按仓规还得再建一道一致性闸; 认不出的值前端已有兜底。
+#                  NULL = 没设过 (与「设成某个值」区分)。
+#   notify_enabled 白名单 opt-in, 缺省 **0 = 不推飞书** (对齐 FOLDER_NOTIFY_ENABLED)。
+#   llm_disabled   黑名单 opt-out, 缺省 **0 = 跑 LLM** (对齐 FOLDER_LLM_DISABLED)。
+#                  🔴 与 UI 的「AI 分类」开关**反向**: UI 开 = llm_disabled 0。
+FOLDER_PREF_TABLE_DDLS = (
+    """CREATE TABLE IF NOT EXISTS folder_pref (
+        imap_name TEXT PRIMARY KEY,
+        mailbox_label TEXT NOT NULL,
+        icon TEXT NULL,
+        notify_enabled INTEGER NOT NULL DEFAULT 0,
+        llm_disabled INTEGER NOT NULL DEFAULT 0,
+        updated_at REAL NOT NULL DEFAULT 0
+    )""",
+)
+
+FOLDER_PREF_INDEX_DDLS = (
+    # 热读入口: gate 手里只有 mailbox 显示名 (见 mailbox_label 列注)。
+    "CREATE INDEX IF NOT EXISTS idx_folder_pref_label ON folder_pref(mailbox_label)",
+)
+
+#: ``upsert_folder_pref`` 的"这个字段不改"哨兵。不能用 ``None`` —— ``icon=None`` 是
+#: **合法值** (清除图标, 回到前端兜底), 与"不改"必须分得开。
+_UNSET: Any = object()
+
+
+class FolderGates(NamedTuple):
+    """一个文件夹的两个运行时开关 (``SyncStore.get_folder_gates`` 的返回)。
+
+    ``row_exists=False`` = folder_pref 里没有这个文件夹的行 → caller **回退 env
+    frozenset** (`FOLDER_NOTIFY_ENABLED` / `FOLDER_LLM_DISABLED`), 与 v31
+    project_progress 行热读的 ``row_exists`` 回退语义同构。
+
+    🔴 这两个字段的缺省值不是"关掉两个功能", 而是各自 gate 的**原有缺省**:
+    notify_enabled=False → 自定义文件夹不推飞书 (白名单未 opt-in);
+    llm_disabled=False → 自定义文件夹照跑 LLM (黑名单未 opt-out)。
+    """
+
+    row_exists: bool = False
+    notify_enabled: bool = False
+    llm_disabled: bool = False
+
+
 # ==================== kos_ingest_log DDL 单源 (v41, issue #59) ====================
 # 🔴 唯一权威 DDL —— 三个消费方共用, 改列/索引只动这里:
 #   ① SyncStore._init_database_impl (v41 起版本化建表, 无条件幂等 —— 主路径;
@@ -894,6 +962,58 @@ class SyncStoreMigrationError(RuntimeError):
        拒绝启动防旧代码静默降级新库。
     调用方 (src/service.py EmailNotionSyncApp.__init__) 捕获后 fail-fast 退出。
     """
+
+
+def _folder_pref_seed_rows() -> list:
+    """v62 播种源: 两个 env 键 (mailbox **显示名**) → folder_pref 行 (imap **原始名** PK)。
+
+    返回 ``[(imap_name, mailbox_label, notify_enabled:int, llm_disabled:int), ...]``，
+    **只含配置非默认的文件夹** —— 全默认的不占行, "行缺失 = 默认" 与 gate 的回退语义
+    自洽 (见 SyncStore.get_folder_gates)。
+
+    🔴 跨名字空间的那一步: `FOLDER_NOTIFY_ENABLED` / `FOLDER_LLM_DISABLED` 存的是
+    `email_metadata.mailbox` 里的显示名, 而本表 PK 是 IMAP 原始名。映射**不连 IMAP**
+    (迁移里发 LIST 是死路: 阻塞、要网络、davmail 没起就炸), 而是拿 `SYNC_FOLDERS` 里
+    每个 imap_name 过一遍 ``decode_imap_utf7`` —— 这正是 davmail 抓完邮件写
+    `email_metadata.mailbox` 时走的同一条路径 (davmail_backend `_fetch_custom_folder`
+    的 ``label = decode_imap_utf7(imap_name)``), 所以映射结果与两个 gate 的匹配口径
+    逐字一致, 不引入第三种名字。
+
+    env 里有、SYNC_FOLDERS 里没有的名字**无法播种** (没有 imap_name 可当 PK), 打
+    warning 列出来 —— 那些文件夹本来就没在同步, 两个 gate 也永远碰不到它们。
+
+    🔴 极性相反, 别抄反: notify 是**白名单** (在名单里 → notify_enabled=1),
+    llm 是**黑名单** (在名单里 → llm_disabled=1)。
+    """
+    from src.config import config as _settings
+    from src.mail.backend.imap_client import parse_folder_csv_or_json
+    from src.mail.backend.imap_utf7 import decode_imap_utf7
+
+    notify_names = set(parse_folder_csv_or_json(getattr(_settings, "folder_notify_enabled", "") or ""))
+    llm_names = set(parse_folder_csv_or_json(getattr(_settings, "folder_llm_disabled", "") or ""))
+    if not notify_names and not llm_names:
+        return []
+
+    rows = []
+    matched: set = set()
+    for imap_name in parse_folder_csv_or_json(getattr(_settings, "sync_folders", "") or ""):
+        if imap_name.upper() == "INBOX":
+            continue  # 收件箱走主路径, 不是自定义文件夹 (两个 gate 也不管它)
+        label = decode_imap_utf7(imap_name)
+        notify = 1 if label in notify_names else 0
+        llm_disabled = 1 if label in llm_names else 0
+        matched.update({label} & (notify_names | llm_names))
+        if notify or llm_disabled:
+            rows.append((imap_name, label, notify, llm_disabled))
+
+    unmapped = sorted((notify_names | llm_names) - matched)
+    if unmapped:
+        logger.warning(
+            f"v62 migration: {unmapped} 出现在 FOLDER_NOTIFY_ENABLED / FOLDER_LLM_DISABLED "
+            f"但不在 SYNC_FOLDERS 里 —— 无 imap_name 可作主键, 不播种 "
+            f"(这些文件夹本来就没在同步, 两个 gate 也碰不到)"
+        )
+    return rows
 
 
 def _migration_guard_columns(cursor, table: str, required_cols, label: str, err: Exception) -> None:
@@ -1349,7 +1469,31 @@ class SyncStore:
     #                `ALTER TABLE matter RENAME COLUMN background TO description`
     #                (goal 列里的内容会就此失联, 需先手工并回 description), 或从
     #                backups/ 恢复库。
-    DB_VERSION = 61
+    # v62 (2026-08-19): 新表 folder_pref —— 已同步文件夹的 per-folder 配置 (图标 +
+    #                通知开关 + AI 开关)。DDL 单源 FOLDER_PREF_TABLE_DDLS /
+    #                FOLDER_PREF_INDEX_DDLS (🔴 不进 MATTER_*/CONTACT_* 两组, 理由见
+    #                该常量头注), 列语义与「顺序为什么不进这张表」也在那里。
+    #                数据规则: 从 `FOLDER_NOTIFY_ENABLED` / `FOLDER_LLM_DISABLED` 两个
+    #                env 键**播种一次** (v31 project_progress_sync 的同一手法), 之后
+    #                行是运行时权威 —— 两个 gate 改走行内热读, 改开关不再需要重启
+    #                mail-sync。env 键保留为「首次 seed + 行缺失时的回退」, 不退役
+    #                (裸 CLI / 未迁移库仍靠它)。
+    #                🔴 播种要跨一次**名字空间**: 两个 env 键存的是 mailbox **显示名**,
+    #                本表 PK 是 IMAP **原始名**。映射不连 IMAP (迁移里做 LIST 是死路),
+    #                而是拿 SYNC_FOLDERS 里的 imap_name 逐个 decode_imap_utf7 —— 这
+    #                正是 davmail 写 email_metadata.mailbox 时用的同一条路径, 所以
+    #                映射与 gate 的匹配口径逐字一致。env 里有、SYNC_FOLDERS 里没有的
+    #                名字**播不了种** (没有 imap_name 可做 PK), 打 warning 列出来。
+    #                🔴 两个键极性相反, 播种时别搞混: notify 是**白名单**
+    #                (在名单里 → notify_enabled=1), llm 是**黑名单** (在名单里 →
+    #                llm_disabled=1)。缺省两列都是 0, 但 0 的含义一个是「不推」一个
+    #                是「跑 LLM」。
+    #                幂等: 建表 IF NOT EXISTS; 播种 INSERT OR IGNORE (老库重放不覆盖
+    #                用户在 UI 改过的值)。重放结果不变。
+    #                回滚 (回退 v62): 旧代码完全不认识 folder_pref, **只降版本号是
+    #                安全的** (表留着不碍事, 两个 gate 回落 env frozenset = 升级前
+    #                行为); 要清干净再 `DROP TABLE folder_pref`。
+    DB_VERSION = 62
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -4029,6 +4173,43 @@ class SyncStore:
                     f"v61 migration (background/goal split): {e}"
                 ) from e
 
+        # === v62: folder_pref 建表 + 从两个 env 键播种一次 (08-19) ===
+        # 语义 / 名字空间跨越 / 极性 / 回滚代价见 DB_VERSION 注记与 FOLDER_PREF_TABLE_DDLS
+        # 头注。DDL 与播种分两个 try (v51/v52/v59 教训: DDL 的「已存在」guard 绝不许把
+        # 播种的 DML 失败一起吞掉 —— 迁移只跑一次)。
+        if current_version < 62:
+            # ① 建表 + 索引 (纯 DDL, IF NOT EXISTS 幂等; 真失败必须 raise —— 同 v54)。
+            try:
+                for ddl in FOLDER_PREF_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in FOLDER_PREF_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(f"v62 migration (folder_pref table): {e}") from e
+            # 播种: 显示名 (env) → imap_name (SYNC_FOLDERS) 的映射只能靠 decode。
+            # settings 不可得 (裸测试环境) / 三个键全空 → 什么都不播 = 表空 = 全默认,
+            # 与升级前逐字等价 (gate 行缺失时回退 env frozenset)。
+            try:
+                _fp_seed = _folder_pref_seed_rows()
+            except Exception as e:  # noqa: BLE001 — config 不可得 → 不播种 (安全默认)
+                logger.debug(f"v62 migration: settings unavailable, skip seed: {e}")
+                _fp_seed = []
+            if _fp_seed:
+                try:
+                    cursor.executemany(
+                        "INSERT OR IGNORE INTO folder_pref "
+                        "(imap_name, mailbox_label, icon, notify_enabled, llm_disabled, updated_at) "
+                        "VALUES (?, ?, NULL, ?, ?, ?)",
+                        [(r[0], r[1], r[2], r[3], time.time()) for r in _fp_seed],
+                    )
+                    logger.info(
+                        f"v62 migration: folder_pref seeded {len(_fp_seed)} row(s) from "
+                        f"FOLDER_NOTIFY_ENABLED / FOLDER_LLM_DISABLED "
+                        f"({[(r[1], r[2], r[3]) for r in _fp_seed]})"
+                    )
+                except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                    raise SyncStoreMigrationError(f"v62 migration (folder_pref seed): {e}") from e
+
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
@@ -4653,6 +4834,222 @@ class SyncStore:
                 logger.error(f"Failed to mark skipped: {e}")
                 conn.rollback()
                 return False
+
+    # ==================== v62: folder_pref (per-folder 图标 + 两个开关) ====================
+    #
+    # 表结构 / 列语义 / 「顺序为什么不在这张表」→ FOLDER_PREF_TABLE_DDLS 头注。
+    #
+    # 🔴 **行内热读**: get_folder_gates 每次调用现读一行, 不缓存。这是有意的 ——
+    # 写侧是 serve-api 进程 (PUT /api/folder/prefs), 读侧是 mail-sync 进程的两个
+    # gate; 两个进程共享同一个 WAL 库, 现读才能让「Settings 里点一下开关」下一封
+    # 邮件就生效, 而不是像旧的 `NewWatcher.__init__` frozenset 那样要重启 mail-sync。
+    # 模式抄自 v31 project_progress 的行内热读 (src/project_progress/agent_config.py),
+    # 只是那边为了不 import src.reports 走裸 sqlite3, 这里表就在 SyncStore 自己的
+    # schema 里、调用方 (NewWatcher) 手上本来就有 SyncStore 实例, 所以直接走
+    # _connection() —— 顺带拿到 WAL + 30s timeout, 不必自己配。
+
+    def get_folder_gates(self, mailbox_label: str) -> "FolderGates":
+        """按 mailbox 显示名热读 per-folder 开关。行不存在 → ``row_exists=False``。
+
+        🔴 查的是 ``mailbox_label`` 而**不是** PK: 两个 gate 手里只有
+        ``email_metadata.mailbox`` 的显示名 (见 FOLDER_PREF_TABLE_DDLS 的列注 ——
+        反向 encode 回 imap_name 要赌 ``encode(decode(x)) == x``, 非规范 modified-UTF7
+        编码下不成立)。
+
+        理论上两个不同 imap_name 可以 decode 出同一个 label (非规范编码), 那种情况下
+        按 imap_name 升序取第一行 —— 确定性优先于"猜哪个对"; 实践中 Exchange 只发
+        规范编码, 全库零命中。
+        """
+        with self._connection() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT notify_enabled, llm_disabled FROM folder_pref "
+                    "WHERE mailbox_label = ? ORDER BY imap_name LIMIT 1",
+                    (mailbox_label,),
+                ).fetchone()
+            except sqlite3.Error as e:
+                # 表缺失 (未迁移库) / 锁 → 当作行不存在, caller 回退 env frozenset。
+                logger.debug(f"[folder-pref] gate read skipped ({mailbox_label!r}): {e}")
+                return FolderGates()
+        if row is None:
+            return FolderGates()
+        return FolderGates(
+            row_exists=True,
+            notify_enabled=bool(row["notify_enabled"]),
+            llm_disabled=bool(row["llm_disabled"]),
+        )
+
+    def has_any_llm_disabled(self) -> bool:
+        """有没有任何文件夹关掉了 LLM —— LLM 重试队列的短路探针。
+
+        保住升级前的行为: 旧代码用 ``if llm_disabled:`` (env frozenset 非空) 决定要不要
+        为每个重试行多查一次 mailbox。没有任何黑名单时这一整段依然零额外查询。
+        """
+        with self._connection() as conn:
+            try:
+                row = conn.execute(
+                    "SELECT 1 FROM folder_pref WHERE llm_disabled = 1 LIMIT 1"
+                ).fetchone()
+            except sqlite3.Error as e:
+                logger.debug(f"[folder-pref] llm_disabled probe skipped: {e}")
+                return False
+        return row is not None
+
+    def list_folder_prefs(self) -> List[Dict[str, Any]]:
+        """全部 folder_pref 行 (imap_name 升序)。**没有顺序语义** —— 显示顺序的权威是
+        SYNC_FOLDERS 数组序 (见 FOLDER_PREF_TABLE_DDLS 头注), 前端按白名单顺序取用。"""
+        with self._connection() as conn:
+            try:
+                rows = conn.execute(
+                    "SELECT imap_name, mailbox_label, icon, notify_enabled, llm_disabled, "
+                    "updated_at FROM folder_pref ORDER BY imap_name"
+                ).fetchall()
+            except sqlite3.Error as e:
+                logger.warning(f"[folder-pref] list failed: {e}")
+                return []
+        return [
+            {
+                "imap_name": r["imap_name"],
+                "mailbox_label": r["mailbox_label"],
+                "icon": r["icon"],
+                "notify_enabled": bool(r["notify_enabled"]),
+                "llm_disabled": bool(r["llm_disabled"]),
+                "updated_at": r["updated_at"],
+            }
+            for r in rows
+        ]
+
+    def upsert_folder_pref(
+        self,
+        imap_name: str,
+        *,
+        icon: Optional[str] = _UNSET,
+        notify_enabled: Optional[bool] = None,
+        llm_disabled: Optional[bool] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """部分更新一行 (缺省的字段保持原值; 行不存在则按列默认建行)。
+
+        ``icon`` 用 ``_UNSET`` 而不是 ``None`` 作"不改"的哨兵 —— ``None`` 是 icon 的
+        **合法值** (= 清除图标, 回到前端兜底), 两者必须分得开。
+        ``mailbox_label`` 是派生列, 由 imap_name 唯一决定, 调用方给不了也改不了。
+        """
+        from src.mail.backend.imap_utf7 import decode_imap_utf7
+
+        imap_name = (imap_name or "").strip()
+        if not imap_name:
+            return None
+        label = decode_imap_utf7(imap_name)
+        with self._connection() as conn:
+            try:
+                # 先保证行在 (列默认 = 全默认配置), 再逐字段 COALESCE 式更新。
+                conn.execute(
+                    "INSERT OR IGNORE INTO folder_pref "
+                    "(imap_name, mailbox_label, updated_at) VALUES (?, ?, ?)",
+                    (imap_name, label, time.time()),
+                )
+                sets = ["mailbox_label = ?", "updated_at = ?"]
+                args: List[Any] = [label, time.time()]
+                if icon is not _UNSET:
+                    sets.insert(0, "icon = ?")
+                    args.insert(0, icon or None)
+                if notify_enabled is not None:
+                    sets.insert(0, "notify_enabled = ?")
+                    args.insert(0, 1 if notify_enabled else 0)
+                if llm_disabled is not None:
+                    sets.insert(0, "llm_disabled = ?")
+                    args.insert(0, 1 if llm_disabled else 0)
+                args.append(imap_name)
+                conn.execute(
+                    f"UPDATE folder_pref SET {', '.join(sets)} WHERE imap_name = ?", args
+                )
+                conn.commit()
+                row = conn.execute(
+                    "SELECT imap_name, mailbox_label, icon, notify_enabled, llm_disabled, "
+                    "updated_at FROM folder_pref WHERE imap_name = ?",
+                    (imap_name,),
+                ).fetchone()
+            except sqlite3.Error as e:
+                logger.error(f"[folder-pref] upsert {imap_name!r} failed: {e}")
+                return None
+        if row is None:
+            return None
+        return {
+            "imap_name": row["imap_name"],
+            "mailbox_label": row["mailbox_label"],
+            "icon": row["icon"],
+            "notify_enabled": bool(row["notify_enabled"]),
+            "llm_disabled": bool(row["llm_disabled"]),
+            "updated_at": row["updated_at"],
+        }
+
+    def rename_folder_pref(self, old_imap: str, new_imap: str) -> int:
+        """文件夹改名后把 pref 行跟着搬走 (精确 + **子文件夹前缀**)。返回搬动的行数。
+
+        🔴 为什么必须有: PK 是 imap 路径, IMAP RENAME 换掉路径后原行就成孤儿 —— 图标
+        和两个开关静默丢失, 而且没有任何报错。子文件夹前缀替换的理由与
+        ``MailWriteService._rename_local_mailbox`` 逐字相同: 重命名父文件夹时
+        ``old/子`` 的路径也跟着变, 只做精确匹配会漏掉每一个子文件夹。
+
+        ``UPDATE OR REPLACE`` 兜住目标名已存在的情况 (先前删掉又建回同名文件夹时可能
+        撞 PK): 新名那行被搬来的旧配置覆盖 —— 与 email_metadata 侧"旧行搬到新名下"的
+        方向一致。
+        """
+        old_imap = (old_imap or "").strip()
+        new_imap = (new_imap or "").strip()
+        if not old_imap or not new_imap or old_imap == new_imap:
+            return 0
+        from src.mail.backend.imap_utf7 import decode_imap_utf7
+
+        with self._connection() as conn:
+            try:
+                cur1 = conn.execute(
+                    "UPDATE OR REPLACE folder_pref SET imap_name = ?, mailbox_label = ? "
+                    "WHERE imap_name = ?",
+                    (new_imap, decode_imap_utf7(new_imap), old_imap),
+                )
+                # 子文件夹: `old/...` → `new/...` (SUBSTR 1-indexed, 截 old 之后的 `/...`)。
+                # mailbox_label 只能逐行重算 —— 它是 decode 的结果, 不是字符串拼接
+                # (前缀是 ASCII 时看着一样, 前缀含中文时 base64 段边界会变)。
+                children = conn.execute(
+                    "SELECT imap_name FROM folder_pref WHERE imap_name LIKE ?",
+                    (old_imap + "/%",),
+                ).fetchall()
+                for child in children:
+                    child_new = new_imap + child["imap_name"][len(old_imap):]
+                    conn.execute(
+                        "UPDATE OR REPLACE folder_pref SET imap_name = ?, mailbox_label = ? "
+                        "WHERE imap_name = ?",
+                        (child_new, decode_imap_utf7(child_new), child["imap_name"]),
+                    )
+                conn.commit()
+                return (cur1.rowcount or 0) + len(children)
+            except sqlite3.Error as e:
+                logger.warning(
+                    f"[folder-pref] rename {old_imap!r}→{new_imap!r} failed: {e}"
+                )
+                return 0
+
+    def delete_folder_pref(self, imap_name: str) -> int:
+        """文件夹被真删除后清掉 pref 行 (精确 + 子文件夹前缀)。返回删除行数。
+
+        只给 ``delete_folder`` 用 (Exchange 上的文件夹没了)。**取消同步
+        (cleanup_local_folder) 不调用** —— 那只是不再同步, 文件夹还在服务器上, 重新
+        勾选时用户理当拿回自己设的图标和开关。
+        """
+        imap_name = (imap_name or "").strip()
+        if not imap_name:
+            return 0
+        with self._connection() as conn:
+            try:
+                cur = conn.execute(
+                    "DELETE FROM folder_pref WHERE imap_name = ? OR imap_name LIKE ?",
+                    (imap_name, imap_name + "/%"),
+                )
+                conn.commit()
+                return cur.rowcount or 0
+            except sqlite3.Error as e:
+                logger.warning(f"[folder-pref] delete {imap_name!r} failed: {e}")
+                return 0
 
     # ==================== v8: 置顶 / pin ====================
 

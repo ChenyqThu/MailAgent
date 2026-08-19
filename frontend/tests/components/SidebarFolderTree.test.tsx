@@ -131,7 +131,11 @@ describe('buildSidebarFolderTree — 纯函数', () => {
 // useMailApi 稳定单例 (避免 useCallback 重建); 注入 whitelist + discover。
 const mockGetWhitelist = vi.fn()
 const mockDiscover = vi.fn()
-const stableApi = { folder: { getWhitelist: mockGetWhitelist, discover: mockDiscover } }
+// per-folder 配置 (v62) — 侧边栏只读 icon 列; 缺行 = 没设过 → 兜底 folder 图标。
+const mockGetPrefs = vi.fn()
+const stableApi = {
+  folder: { getWhitelist: mockGetWhitelist, discover: mockDiscover, getPrefs: mockGetPrefs }
+}
 
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => stableApi
@@ -188,6 +192,8 @@ describe('SidebarFolderTree — 渲染 + 过滤', () => {
   beforeEach(() => {
     mockGetWhitelist.mockReset()
     mockDiscover.mockReset()
+    mockGetPrefs.mockReset()
+    mockGetPrefs.mockResolvedValue({ prefs: [] })
     // 每个 case 前重置 customMailbox。
     useEmailFilter.getState().setView('inbox')
   })
@@ -237,5 +243,128 @@ describe('SidebarFolderTree — 渲染 + 过滤', () => {
     await waitFor(() => {
       expect(container.querySelector('.row-selected')).toBeTruthy()
     })
+  })
+})
+
+// ── per-folder 图标 (v62) ──────────────────────────────────────────────────
+//
+// 🔴 这是本批最实的收益: 收起态 56px rail 上文字全隐, **图标是区分各文件夹的唯一线索**。
+// 断言看渲染出的 svg 里有没有那个图标的特征 path, 不看类名/组件名 (换实现不该红)。
+
+/** 某个文件夹行的 svg 里所有 path 的 d 值。 */
+function iconPathsOf(container: HTMLElement, label: string): string[] {
+  const row = Array.from(container.querySelectorAll('button.row')).find(
+    (b) => b.textContent?.includes(label) === true
+  )
+  if (!row) throw new Error(`row not found: ${label}`)
+  return Array.from(row.querySelectorAll('svg path')).map((p) => p.getAttribute('d') ?? '')
+}
+
+/** folder-check 的勾 (lucide 1.16.0 __iconNode)。 */
+const CHECK_D = 'm9 13 2 2 4-4'
+/** 兜底 folder 的主体 (lucide 1.16.0 __iconNode)。 */
+const FOLDER_BODY_D =
+  'M20 20a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2h-7.9a2 2 0 0 1-1.69-.9L9.6 3.9A2 2 0 0 0 7.93 3H4a2 2 0 0 0-2 2v13a2 2 0 0 0 2 2Z'
+
+describe('SidebarFolderTree — per-folder 图标 (v62 folder_pref.icon)', () => {
+  beforeEach(() => {
+    mockGetWhitelist.mockReset()
+    mockDiscover.mockReset()
+    mockGetPrefs.mockReset()
+    useEmailFilter.getState().setView('inbox')
+  })
+  afterEach(() => cleanup())
+
+  function twoFolders(): void {
+    mockGetWhitelist.mockResolvedValue({ folders: ['Jira', 'Notion'] })
+    mockDiscover.mockResolvedValue(
+      discoverData(
+        [fi('Jira', 'Jira', null, 11), fi('Notion', 'Notion', null, 22)],
+        ['Jira', 'Notion']
+      )
+    )
+  }
+
+  test('设过 icon 的文件夹渲染那个图标; 没设过的退回兜底 folder', async () => {
+    twoFolders()
+    mockGetPrefs.mockResolvedValue({
+      prefs: [
+        {
+          imap_name: 'Jira',
+          mailbox_label: 'Jira',
+          icon: 'folder-check',
+          notify_enabled: false,
+          llm_disabled: false,
+          updated_at: 0
+        }
+      ]
+    })
+    const { container } = renderTree()
+    await screen.findByText('22')
+
+    await waitFor(() => expect(iconPathsOf(container, 'Jira')).toContain(CHECK_D))
+    // Notion 没有 folder_pref 行 —— 缺行不是错误, 走兜底 folder。
+    expect(iconPathsOf(container, 'Notion')).toContain(FOLDER_BODY_D)
+    expect(iconPathsOf(container, 'Notion')).not.toContain(CHECK_D)
+  })
+
+  test('存的 icon key 不认识 (lucide 改名 / 手改 DB) → 兜底 folder, 不炸', async () => {
+    twoFolders()
+    mockGetPrefs.mockResolvedValue({
+      prefs: [
+        {
+          imap_name: 'Jira',
+          mailbox_label: 'Jira',
+          icon: 'folder-does-not-exist',
+          notify_enabled: false,
+          llm_disabled: false,
+          updated_at: 0
+        }
+      ]
+    })
+    const { container } = renderTree()
+    await screen.findByText('22')
+
+    await waitFor(() => expect(iconPathsOf(container, 'Jira')).toContain(FOLDER_BODY_D))
+  })
+
+  // 🔴 收起态 (56px rail) 的收益全押在这条结构契约上: index.css §2.11 的放大规则选的是
+  // `nav button > svg`, 隐藏文字的规则选的是 `button > span:not(.app-nav-keep)`。
+  // 图标外面多包一层 (哪怕是 <span>) → 收起态图标不放大; 名称若挂上 app-nav-keep →
+  // 收起态还留着文字。两条都不报错、不影响展开态, 只有真收起才看得见。
+  test('图标是 button 的直接子节点 + 名称在会被收起态隐掉的普通 span 里', async () => {
+    twoFolders()
+    mockGetPrefs.mockResolvedValue({
+      prefs: [
+        {
+          imap_name: 'Jira',
+          mailbox_label: 'Jira',
+          icon: 'folder-check',
+          notify_enabled: false,
+          llm_disabled: false,
+          updated_at: 0
+        }
+      ]
+    })
+    const { container } = renderTree()
+    await screen.findByText('22')
+
+    const row = Array.from(container.querySelectorAll('button.row')).find(
+      (b) => b.textContent?.includes('Jira') === true
+    )!
+    const kids = Array.from(row.children)
+    expect(kids.some((c) => c.tagName.toLowerCase() === 'svg')).toBe(true)
+    const label = kids.find((c) => c.textContent === 'Jira')!
+    expect(label.tagName.toLowerCase()).toBe('span')
+    expect(label.classList.contains('app-nav-keep')).toBe(false)
+  })
+
+  test('getPrefs 失败 → 整棵树照常渲染, 图标退回兜底 (图标不该拖垮列表)', async () => {
+    twoFolders()
+    mockGetPrefs.mockRejectedValue(new Error('boom'))
+    const { container } = renderTree()
+    await screen.findByText('22')
+
+    expect(iconPathsOf(container, 'Jira')).toContain(FOLDER_BODY_D)
   })
 })

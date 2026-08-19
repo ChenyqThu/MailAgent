@@ -60,6 +60,9 @@ export type {
   FolderSetWhitelistResult,
   FolderManageResult,
   FolderCleanupResult,
+  FolderPref,
+  FolderPrefsResult,
+  FolderPrefPatch,
   FolderApi
 } from './types/folder'
 export type { LlmStatsData, LlmSelfTestData, LlmUpstreamModelsData, LlmApi } from './types/llm'

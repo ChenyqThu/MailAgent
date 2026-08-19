@@ -99,7 +99,10 @@ def migrated(tmp_path):
 
 def test_plain_prose_moves_into_background_verbatim(migrated):
     path, _ = migrated
-    assert _version(path) == "61"
+    # 迁移跑完 = 版本追平代码 (不钉死 "61" —— 那会让**下一次** bump 无端变红;
+    # 仓里其余迁移测试用的都是 `== SyncStore.DB_VERSION` + `>= N` 这一对)。
+    assert _version(path) == str(SyncStore.DB_VERSION)
+    assert SyncStore.DB_VERSION >= 61
     assert _rows(path)["MAT-9001"] == (PLAIN, "")
 
 

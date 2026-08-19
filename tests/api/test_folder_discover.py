@@ -329,3 +329,82 @@ class TestFolderManage:
         data = r.json()["data"]
         assert data["action"] == "cleanup" and data["affected_local_rows"] == 7
         assert data["restart_required"] is True
+
+
+class TestPrefs:
+    """v62 per-folder 配置端点 (GET/PUT /api/folder/prefs)。"""
+
+    @pytest.fixture()
+    def prefs_client(self, folder_client, monkeypatch, tmp_path):
+        """把端点用的 ServiceContext 指到一条真 SQLite —— prefs 是纯本地读写, 不 mock 存储层。"""
+        from src.mail.sync_store import SyncStore
+
+        store = SyncStore(str(tmp_path / "prefs.db"))
+
+        class _Ctx:
+            sync_store = store
+
+        monkeypatch.setattr("src.api.deps.get_service_ctx", lambda: _Ctx())
+        folder_client._store = store  # type: ignore[attr-defined]
+        return folder_client
+
+    def test_get_prefs_empty(self, prefs_client):
+        r = prefs_client.get("/api/folder/prefs")
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["prefs"] == []
+
+    def test_put_creates_then_partially_updates(self, prefs_client):
+        r = prefs_client.put(
+            "/api/folder/prefs",
+            json={"imap_name": "DMS&VvpO9lPRXgM-", "icon": "folder-check", "notify_enabled": True},
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()["data"]
+        assert data["imap_name"] == "DMS&VvpO9lPRXgM-"
+        assert data["mailbox_label"] == "DMS固件发布"   # 派生列由后端算, 不收前端的
+        assert data["icon"] == "folder-check"
+        assert data["notify_enabled"] is True
+        assert data["llm_disabled"] is False
+
+        # 只传 llm_disabled → icon / notify 保持原值 (部分更新)。
+        r = prefs_client.put(
+            "/api/folder/prefs", json={"imap_name": "DMS&VvpO9lPRXgM-", "llm_disabled": True}
+        )
+        data = r.json()["data"]
+        assert data["icon"] == "folder-check"
+        assert data["notify_enabled"] is True
+        assert data["llm_disabled"] is True
+
+    def test_put_icon_null_clears_but_omitted_keeps(self, prefs_client):
+        """🔴 "传了 null" 与 "没传" 必须分得开: 前者清除图标, 后者保持不变。"""
+        prefs_client.put("/api/folder/prefs", json={"imap_name": "Teams", "icon": "folder-sync"})
+
+        prefs_client.put("/api/folder/prefs", json={"imap_name": "Teams", "notify_enabled": True})
+        assert prefs_client.get("/api/folder/prefs").json()["data"]["prefs"][0]["icon"] == "folder-sync"
+
+        prefs_client.put("/api/folder/prefs", json={"imap_name": "Teams", "icon": None})
+        assert prefs_client.get("/api/folder/prefs").json()["data"]["prefs"][0]["icon"] is None
+
+    def test_put_accepts_unknown_icon_string(self, prefs_client):
+        """icon 是**不透明短串**: 后端不做枚举校验 (可选集是纯前端词汇, 抄过来就多一处镜像)。"""
+        r = prefs_client.put(
+            "/api/folder/prefs", json={"imap_name": "Teams", "icon": "not-a-real-lucide-name"}
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["icon"] == "not-a-real-lucide-name"
+
+    def test_put_rejects_empty_imap_name_and_overlong_icon(self, prefs_client):
+        r = prefs_client.put("/api/folder/prefs", json={"imap_name": "  "})
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+        r = prefs_client.put("/api/folder/prefs", json={"imap_name": "Teams", "icon": "x" * 65})
+        assert r.status_code == 400
+        assert r.json()["error"]["code"] == "E_INVALID_ARG"
+
+    def test_prefs_not_gated_on_davmail(self, prefs_client):
+        """纯本地 SQLite 读写 (同 /cleanup 的口径) —— 配置读写不该被后端探活挡住。"""
+        prefs_client._cfg.mailagent_backend = "applescript"
+        assert prefs_client.get("/api/folder/prefs").status_code == 200
+        r = prefs_client.put("/api/folder/prefs", json={"imap_name": "Teams", "notify_enabled": True})
+        assert r.status_code == 200, r.text

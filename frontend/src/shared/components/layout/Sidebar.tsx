@@ -28,16 +28,12 @@ import {
   CalendarCheckIcon,
   ChartLineIcon,
   ChartPieIcon,
-  FeatherIcon,
-  FolderInputIcon,
-  FoldersIcon,
   GripIcon,
-  SendIcon,
+  MAILBOX_ICON_COMPONENT,
   SettingsIcon,
   SparklesIcon,
   SquarePenIcon,
-  UsersRoundIcon,
-  ZapIcon
+  UsersRoundIcon
 } from '@shared/components/icons'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 import { useMailApi } from '@shared/hooks/useMailApi'
@@ -262,17 +258,27 @@ function TotalCount({ count }: { count: number }): React.ReactElement | null {
 
 export function MatterAttentionBadge({ count }: { count: number }): React.ReactElement | null {
   if (count <= 0) return null
-  return <span className="min-w-[18px] rounded-full bg-fail px-1.5 py-0.5 text-center text-[10px] font-semibold font-mono tabular-nums text-white">{count}</span>
+  return (
+    <span className="min-w-[18px] rounded-full bg-fail px-1.5 py-0.5 text-center text-[10px] font-semibold font-mono tabular-nums text-white">
+      {count}
+    </span>
+  )
 }
 
 // 全部走 AnimatedIcon（mailbox/feather/square-pen/zap/folders）；整行 hover/focus 经 NavRow 的
 // AnimatedIconActiveProvider 驱动（trigger='parent' 仅保留标注语义）。已标旗用 zap（用户点名）。
+// 🔴 view→图标组件的对应关系单源在 `icons/mailboxIcons.ts` —— 设置页「已同步文件夹配置」
+// 的内建邮箱行读同一份，别在这里改成字面量。
+function mailboxIconNode(view: EmailView): React.ReactNode {
+  const Icon = MAILBOX_ICON_COMPONENT[view]
+  return <Icon size={15} strokeWidth={1.75} trigger="parent" />
+}
 const MAILBOX_ICON: Record<EmailView, React.ReactNode> = {
-  inbox: <FolderInputIcon size={15} strokeWidth={1.75} trigger="parent" />,
-  outbox: <SendIcon size={15} strokeWidth={1.75} trigger="parent" />,
-  drafts: <FeatherIcon size={15} strokeWidth={1.75} trigger="parent" />,
-  flagged: <ZapIcon size={15} strokeWidth={1.75} trigger="parent" />,
-  all: <FoldersIcon size={15} strokeWidth={1.75} trigger="parent" />
+  inbox: mailboxIconNode('inbox'),
+  outbox: mailboxIconNode('outbox'),
+  drafts: mailboxIconNode('drafts'),
+  flagged: mailboxIconNode('flagged'),
+  all: mailboxIconNode('all')
 }
 
 export function Sidebar(): React.ReactElement {

@@ -73,6 +73,44 @@ export interface FolderCleanupResult {
   restart_required: boolean
 }
 
+// per-folder 配置 (v62, folder_pref 表) — serve-api `GET|PUT /api/folder/prefs`。
+// 纯本地 SQLite 读写, **不** davmail-gated (同 /cleanup 的口径)。
+//
+// 🔴 这里**没有顺序**。显示顺序的权威是 `SYNC_FOLDERS` 数组序 (= `getWhitelist()`
+// 返回的数组序), 那个数组同时也是「哪些文件夹要同步」的成员表, 且被 Electron 主进程
+// 与远程 web 共读同一份 .env。folder_pref 再存一列 sort_order 就是同一个事实存两处、
+// 两个 writer 迟早对不上。消费方式: 按 whitelist 的顺序遍历, 用 imap_name 到 prefs
+// 里取这一行的配置。
+export interface FolderPref {
+  /** = SYNC_FOLDERS 白名单里的 imap 原始名 (modified-UTF7)。前端的关联键。 */
+  imap_name: string
+  /** `decode_imap_utf7(imap_name)`, 即 `email_metadata.mailbox` 的值。后端派生, 只读。 */
+  mailbox_label: string
+  /** lucide kebab 名 (如 `folder-check`)。null = 没设过 → 用前端兜底图标。
+   *  后端当**不透明短串**存、不做枚举校验 (可选集是纯前端词汇), 认不出的值前端兜底。 */
+  icon: string | null
+  /** 新邮件推不推飞书。**白名单**语义, 缺省 false = 不推 (与 UI 开关同向)。 */
+  notify_enabled: boolean
+  /** 🔴 与 UI 的「AI 分类」开关**反向**: UI 开 = `llm_disabled: false`。
+   *  **黑名单**语义 (对齐 env FOLDER_LLM_DISABLED), 缺省 false = 照跑 LLM。
+   *  翻译在前端做, 端点收发的都是列的原义。 */
+  llm_disabled: boolean
+  updated_at: number
+}
+
+export interface FolderPrefsResult {
+  /** 只有**设过配置**的文件夹才有行 —— 白名单里取不到行的用全默认
+   *  (icon 兜底 / 不推飞书 / 跑 LLM), 不是错误。 */
+  prefs: FolderPref[]
+}
+
+/** `setPref` 的可选字段。省略 = 不改该项; `icon: null` = 清除图标。 */
+export interface FolderPrefPatch {
+  icon?: string | null
+  notify_enabled?: boolean
+  llm_disabled?: boolean
+}
+
 export interface FolderApi {
   // 多文件夹同步 (P3, davmail-only). discover 走 serve-api (IMAP LIST); 本地经
   // daemon 转发, 远程 HttpApi 直连。非 davmail 后端 serve-api 返回 400
@@ -94,4 +132,10 @@ export interface FolderApi {
   // 本地副本清理 (P5) — 仅删本地已同步邮件, 不碰 Exchange (非 davmail 也可)。
   /** 清理 imapName 对应的本地已同步邮件副本 + 从白名单移除; **不操作 Exchange**。 */
   cleanup(imapName: string): Promise<FolderCleanupResult>
+  // per-folder 配置 (v62) — 纯本地, 非 davmail 也可。
+  /** 读全部 per-folder 配置。**不带顺序** —— 顺序看 `getWhitelist()` 的数组序。 */
+  getPrefs(): Promise<FolderPrefsResult>
+  /** 部分更新一个文件夹的配置, 返回落库后的整行。省略的字段保持原值。
+   *  改完**立即生效**, 不需要重启同步服务 (watcher 每封邮件现读 folder_pref)。 */
+  setPref(imapName: string, patch: FolderPrefPatch): Promise<FolderPref>
 }

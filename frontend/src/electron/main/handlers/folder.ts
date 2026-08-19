@@ -15,6 +15,9 @@ import type {
   FolderCleanupResult,
   FolderDiscoverResult,
   FolderManageResult,
+  FolderPref,
+  FolderPrefPatch,
+  FolderPrefsResult,
   FolderSetWhitelistResult,
   FolderWhitelistResult
 } from '@shared/api/types'
@@ -180,6 +183,45 @@ export function registerFolderHandlers(): void {
       return envelopeFromCli<FolderCleanupResult>(runFolderCleanup(imapName))
     }
   )
+
+  // per-folder 配置 (v62) — 图标 + 通知开关 + AI 开关。纯本地, 非 davmail 也可。
+  ipcMain.handle(
+    'folder:getPrefs',
+    async (): Promise<WriteEnvelope<FolderPrefsResult>> =>
+      envelopeFromCli<FolderPrefsResult>(runFolderGetPrefs())
+  )
+  ipcMain.handle(
+    'folder:setPref',
+    async (_evt, imapName: unknown, patch: unknown): Promise<WriteEnvelope<FolderPref>> => {
+      if (typeof imapName !== 'string' || imapName.trim() === '') {
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'folder:setPref requires a non-empty imapName'
+        }
+      }
+      if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
+        return { ok: false, code: 'E_INVALID_ARG', message: 'folder:setPref requires a patch object' }
+      }
+      return envelopeFromCli<FolderPref>(runFolderSetPref(imapName, patch as FolderPrefPatch))
+    }
+  )
+}
+
+// per-folder 配置 (v62) — GET|PUT /folder/prefs。纯本地 SQLite 读写, 不 davmail-gated
+// (同 cleanup 的口径), 但仍走 daemon → serve-api: 配置的唯一写面在后端 service, 主进程
+// 不直连 SQLite 写它 (否则与 mail-sync 的热读之间多一个 writer)。
+
+export function runFolderGetPrefs(): Promise<FolderPrefsResult> {
+  return daemonRequest<FolderPrefsResult>('GET', '/folder/prefs')
+}
+
+export function runFolderSetPref(imapName: string, patch: FolderPrefPatch): Promise<FolderPref> {
+  // 🔴 patch 原样透传: 省略的字段后端保持原值, `icon: null` 是**清除图标**。
+  // 不要在这里补默认值 —— 补了就把"没改的项"变成"改成默认值"。
+  return daemonRequest<FolderPref>('PUT', '/folder/prefs', {
+    body: { imap_name: imapName, ...patch }
+  })
 }
 
 // Test escape hatch (mirrors handlers/calendar.ts __testing).
@@ -190,7 +232,9 @@ export const __testing = {
   runFolderCreate,
   runFolderRename,
   runFolderManageDelete,
-  runFolderCleanup
+  runFolderCleanup,
+  runFolderGetPrefs,
+  runFolderSetPref
 }
 
 // Re-export the renderer-facing type so test / other modules can import from
