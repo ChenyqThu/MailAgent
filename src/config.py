@@ -1021,6 +1021,14 @@ class Config(BaseSettings):
             "Restart required after changing it."
         ),
     )
+    contact_profile_enabled: bool = Field(
+        default=False,
+        validation_alias="MAILAGENT_CONTACT_PROFILE_ENABLED",
+        description=(
+            "联系人 AI 画像总闸，默认关闭。与 report_agent 的 contact_profile_agent "
+            "enabled 行开关按 AND 生效；关闭时不启动画像 worker，手动 refresh 返回 E_DISABLED。"
+        ),
+    )
     contact_extract_interval_sec: int = Field(
         default=120,
         validation_alias="MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC",

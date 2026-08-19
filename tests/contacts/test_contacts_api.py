@@ -22,6 +22,7 @@ os.environ.setdefault("MAILAGENT_API_HOST", "127.0.0.1")
 from src.api.app import app
 from src.api.auth import verify_cf_access
 from src.api.deps import get_settings
+from src.api.routers import contacts as contacts_router
 from src.api.routers.contacts import get_contact_repository
 from src.contacts.repository import ContactRepository
 from src.contacts.scanner import WATERMARK_KEY
@@ -32,7 +33,13 @@ from src.mail.sync_store import SyncStore
 def client(tmp_path):
     path = tmp_path / "sync.db"
     SyncStore(str(path))
-    settings = SimpleNamespace(contacts_enabled=True, sync_store_db_path=str(path))
+    settings = SimpleNamespace(
+        contacts_enabled=True,
+        contact_profile_enabled=False,
+        sync_store_db_path=str(path),
+        user_email="",
+        self_emails="",
+    )
     app.dependency_overrides[verify_cf_access] = lambda: None
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_contact_repository] = lambda: ContactRepository(path)
@@ -331,7 +338,8 @@ def test_detail_shape(client):
     assert data["name_variants"] == ["Alice", "爱丽丝"]
     assert [e["address"] for e in data["emails"]] == ["alice@x.com", "alice@old.com"]
     assert data["emails"][0]["is_primary"] is True
-    assert data["profile"] is None
+    assert data["profile"]["status"] == "unconfigured"
+    assert data["profile"]["profile_min"] == 50
     # WP5 组织关系投影恒在 (未设 = null/空数组)
     assert data["manager"] is None
     assert data["manager_src"] is None
@@ -903,3 +911,142 @@ def test_list_carries_manager_fields(client):
     assert rows[1]["manager_display_name"] == "Boss"
     assert rows[2]["manager_contact_id"] is None
     assert rows[2]["manager_display_name"] is None
+
+
+# ---- WP6 contact profile ----
+
+
+def _enable_profile(path, settings):
+    settings.contact_profile_enabled = True
+    with _conn(path) as conn:
+        conn.execute(
+            "UPDATE report_agent SET enabled=1 WHERE id='contact_profile_agent'"
+        )
+        conn.commit()
+
+
+def test_profile_refresh_below_threshold_merged_and_duplicate(client, monkeypatch):
+    http, settings, path = client
+    _enable_profile(path, settings)
+    _seed_contact(path, cid=1, name="Tiny", mail=1, emails=(("tiny@x.com", 1),))
+    monkeypatch.setattr(
+        contacts_router, "_schedule_profile_task", lambda coro: coro.close()
+    )
+    response = http.post("/api/contacts/1/profile/refresh")
+    assert response.status_code == 202
+    assert response.json()["data"] == {
+        "contact_id": 1,
+        "status": "running",
+        "started": True,
+    }
+    duplicate = http.post("/api/contacts/1/profile/refresh")
+    assert duplicate.status_code == 202
+    assert duplicate.json()["data"]["started"] is False
+
+    _seed_contact(path, cid=2, name="Winner", emails=(("winner@x.com", 1),))
+    _seed_contact(path, cid=3, name="Loser", emails=(("loser@x.com", 1),))
+    with _conn(path) as conn:
+        conn.execute("UPDATE contact SET merged_into=2 WHERE id=3")
+        conn.commit()
+    rejected = http.post("/api/contacts/3/profile/refresh")
+    assert rejected.status_code == 403
+    assert rejected.json()["error"]["code"] == "E_CONTACT_MERGED"
+
+
+def test_profile_refresh_env_flag_off(client):
+    http, _, path = client
+    _seed_contact(path, cid=1, name="Alice", emails=(("alice@x.com", 1),))
+    response = http.post("/api/contacts/1/profile/refresh")
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "E_DISABLED"
+
+
+def test_profile_adopt_locks_and_ignore_only_current_round(client):
+    http, settings, path = client
+    _enable_profile(path, settings)
+    _seed_contact(path, cid=1, name="Alice", emails=(("alice@x.com", 1),))
+    document = {
+        "summary": "Profile",
+        "formal_name": "Alice Zhang",
+        "department": "PMO",
+        "contact_info": {"phone": "+1 555"},
+    }
+    with _conn(path) as conn:
+        conn.execute(
+            "UPDATE contact SET profile_json=?, profile_status='ok' WHERE id=1",
+            (json.dumps(document),),
+        )
+        conn.commit()
+
+    detail = _data(http.get("/api/contacts/1"))
+    assert {item["field"] for item in detail["profile"]["suggestions"]} == {
+        "formal_name", "department", "phone",
+    }
+    adopted = _data(
+        http.post(
+            "/api/contacts/1/profile/suggestions/adopt",
+            json={"field": "formal_name", "value": "Alice Zhang"},
+        )
+    )
+    assert adopted["formal_name"] == "Alice Zhang"
+    assert "formal_name" in adopted["identity_locks"]
+    assert "formal_name" not in {
+        item["field"] for item in adopted["profile"]["suggestions"]
+    }
+
+    ignored = _data(
+        http.post(
+            "/api/contacts/1/profile/suggestions/ignore",
+            json={"field": "department"},
+        )
+    )
+    assert "department" not in {
+        item["field"] for item in ignored["profile"]["suggestions"]
+    }
+    with _conn(path) as conn:
+        document.pop("ignored_suggestions", None)
+        conn.execute(
+            "UPDATE contact SET profile_json=? WHERE id=1", (json.dumps(document),)
+        )
+        conn.commit()
+    next_round = _data(http.get("/api/contacts/1"))
+    assert "department" in {
+        item["field"] for item in next_round["profile"]["suggestions"]
+    }
+
+
+def test_profile_detail_states_and_list_summary(client):
+    http, settings, path = client
+    _seed_contact(path, cid=1, name="Alice", mail=49, sent=1, emails=(("alice@x.com", 1),))
+    assert _data(http.get("/api/contacts/1"))["profile"]["status"] == "unconfigured"
+    _enable_profile(path, settings)
+    detail = _data(http.get("/api/contacts/1"))
+    assert detail["profile"]["status"] == "below_threshold"
+    assert detail["profile"]["needed_mail_count"] == 1
+
+    with _conn(path) as conn:
+        conn.execute("UPDATE contact SET mail_count=50 WHERE id=1")
+        conn.commit()
+    assert _data(http.get("/api/contacts/1"))["profile"]["status"] == "pending_batch"
+    for raw, expected in (
+        ("running", "running"),
+        ("failed", "failed"),
+        ("skipped", "skipped"),
+    ):
+        with _conn(path) as conn:
+            conn.execute("UPDATE contact SET profile_status=? WHERE id=1", (raw,))
+            conn.commit()
+        assert _data(http.get("/api/contacts/1"))["profile"]["status"] == expected
+
+    summary = "Line one\n" + "x" * 200
+    with _conn(path) as conn:
+        conn.execute(
+            "UPDATE contact SET profile_json=?, profile_status='ok' WHERE id=1",
+            (json.dumps({"summary": summary}),),
+        )
+        conn.commit()
+    assert _data(http.get("/api/contacts/1"))["profile"]["status"] == "ok"
+    item = _data(http.get("/api/contacts"))["items"][0]
+    assert "\n" not in item["profile_summary"]
+    assert len(item["profile_summary"]) <= 120
+    assert item["profile_min"] == 50

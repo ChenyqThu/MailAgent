@@ -194,6 +194,7 @@ export const MANAGED_ENV_KEYS = [
   // 通讯录（Contact Directory WP1/WP2）：Python pydantic 单载体（导航 /chat/config
   // 投影 + /api/contacts REST + 扫描器）；默认 OFF；需重启后端。
   'MAILAGENT_CONTACTS_ENABLED',
+  'MAILAGENT_CONTACT_PROFILE_ENABLED',
 
   // — Notifications (PR D NotificationsTab)
   'FEISHU_NOTIFY_ENABLED',

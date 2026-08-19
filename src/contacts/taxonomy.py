@@ -33,6 +33,7 @@ CONTACT_SENIORITY_VALUES: Tuple[str, ...] = (
 
 #: 联系人类别 (§3.4 噪音治理)。
 CONTACT_KIND_VALUES: Tuple[str, ...] = ("person", "robot", "list")
+CONTACT_KIND_PERSON = CONTACT_KIND_VALUES[0]
 
 #: 上级来源 (manual=owner 指定; auto=AI 建议采纳)。
 CONTACT_MANAGER_SRC_VALUES: Tuple[str, ...] = ("manual", "auto")

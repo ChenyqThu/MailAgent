@@ -544,6 +544,11 @@ CONTACT_TABLE_DDLS = (
         profile_updated_at INTEGER NULL,
         profile_mail_count INTEGER NULL,
         profile_model TEXT NULL,
+        profile_status TEXT NULL CHECK (
+            profile_status IS NULL OR profile_status IN ('ok','skipped','failed','running')
+        ),
+        profile_attempted_at INTEGER NULL,
+        profile_error TEXT NULL,
         mail_count INTEGER NOT NULL DEFAULT 0,
         sent_to_count INTEGER NOT NULL DEFAULT 0,
         first_seen_at INTEGER NULL,
@@ -1493,8 +1498,15 @@ class SyncStore:
     #                回滚 (回退 v62): 旧代码完全不认识 folder_pref, **只降版本号是
     #                安全的** (表留着不碍事, 两个 gate 回落 env frozenset = 升级前
     #                行为); 要清干净再 `DROP TABLE folder_pref`。
-    DB_VERSION = 62
-
+    # v63 (Contact Profile WP6, 2026-08-19): contact 增加 profile_status /
+    #                profile_attempted_at / profile_error 三列，承载 running/ok/skipped/failed
+    #                四态与最近尝试摘要；report_agent 播种 contact_profile_agent 专型行，
+    #                trigger_json 保存 fire_hour=4 / daily_limit=50，默认 disabled，model/prompt
+    #                空串表示跟随全局/使用内置 prompt。幂等: ALTER 前 PRAGMA 探列 +
+    #                INSERT OR IGNORE。回滚: DELETE FROM report_agent WHERE
+    #                id='contact_profile_agent'; 三列可留给旧代码忽略，或 SQLite 重建 contact
+    #                表移除后再手工降 db_version。
+    DB_VERSION = 63
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -4210,6 +4222,53 @@ class SyncStore:
                 except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
                     raise SyncStoreMigrationError(f"v62 migration (folder_pref seed): {e}") from e
 
+        # === v63: Contact Profile WP6 状态列 + report_agent seed ===
+        # 不依赖 v62 块的具体内容 (PRAGMA 探列 + INSERT OR IGNORE 全幂等), 允许 <=62 老库直接升级。
+        if current_version < 63:
+            try:
+                _contact_cols_v63 = {
+                    row[1] for row in cursor.execute("PRAGMA table_info(contact)").fetchall()
+                }
+                _profile_cols_v63 = (
+                    (
+                        "profile_status",
+                        "TEXT NULL CHECK (profile_status IS NULL OR "
+                        "profile_status IN ('ok','skipped','failed','running'))",
+                    ),
+                    ("profile_attempted_at", "INTEGER NULL"),
+                    ("profile_error", "TEXT NULL"),
+                )
+                _added_v63: list[str] = []
+                for _col, _ddl in _profile_cols_v63:
+                    if _col not in _contact_cols_v63:
+                        cursor.execute(f"ALTER TABLE contact ADD COLUMN {_col} {_ddl}")
+                        _added_v63.append(_col)
+                if _added_v63:
+                    logger.info(f"v63 migration: contact +{'+'.join(_added_v63)}")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor,
+                    "contact",
+                    {"profile_status", "profile_attempted_at", "profile_error"},
+                    "v63 migration",
+                    e,
+                )
+            try:
+                _profile_trigger = json.dumps(
+                    {"fire_hour": 4, "daily_limit": 50}, ensure_ascii=False
+                )
+                cursor.execute(
+                    "INSERT OR IGNORE INTO report_agent "
+                    "(id, type, enabled, title, model, prompt, trigger_json, updated_at) "
+                    "VALUES ('contact_profile_agent', 'contact_profile', 0, "
+                    "'联系人画像', '', '', ?, ?)",
+                    (_profile_trigger, time.time()),
+                )
+                logger.info("v63 migration: contact_profile_agent seeded (enabled=0)")
+            except sqlite3.Error as e:
+                raise SyncStoreMigrationError(
+                    f"v63 migration (contact_profile_agent seed): {e}"
+                ) from e
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →

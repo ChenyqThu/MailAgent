@@ -739,6 +739,9 @@ async def chat_config(request: Request):
             # require_contacts_enabled 同源), 不做 hot-read, 避免 UI 显示入口但
             # 端点仍按旧值返回 E_DISABLED。
             "contactsEnabled": bool(getattr(cfg, "contacts_enabled", False)),
+            "contactProfileEnabled": bool(
+                getattr(cfg, "contact_profile_enabled", False)
+            ),
             "triggerV2Enabled": _hot_bool(env_vals, "MAILAGENT_TRIGGER_V2", True),
             "calendarTriggerEnabled": _hot_bool(
                 env_vals, "MAILAGENT_CALENDAR_TRIGGER", True

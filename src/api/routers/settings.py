@@ -165,6 +165,7 @@ _MANAGED_ENV_KEYS: List[str] = [
     # 通讯录（Contact Directory WP1/WP2）：Python pydantic 单载体（导航/REST/扫描器
     # 均读 serve-api 冻结单例与 /chat/config 投影）；默认 OFF；需重启后端。
     "MAILAGENT_CONTACTS_ENABLED",
+    "MAILAGENT_CONTACT_PROFILE_ENABLED",
     # — Notifications
     "FEISHU_NOTIFY_ENABLED",
     "FEISHU_APP_ID",

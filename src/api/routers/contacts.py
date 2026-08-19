@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import time
@@ -26,13 +27,18 @@ from src.api.schemas.contacts import (
     ContactMergeRequest,
     ContactPatchRequest,
     ContactPrimaryEmailRequest,
+    ContactProfileSuggestionAdoptRequest,
+    ContactProfileSuggestionIgnoreRequest,
     ContactResolveRequest,
     ContactSelfRequest,
 )
 from src.contacts import service as contact_service
+from src.contacts import profile as contact_profile
+from src.contacts.profile_config import get_contact_profile_agent_config
 from src.contacts.repository import ContactRepository
 from src.contacts.scanner import WATERMARK_KEY
 from src.contacts.service import ContactError
+from src.contacts.taxonomy import CONTACT_KIND_PERSON
 
 VIEW_VALUES = ("known", "all")
 SORT_VALUES = ("density", "recent", "name")
@@ -41,6 +47,14 @@ SORT_VALUES = ("density", "recent", "name")
 #: 同时出现在 to 与 cc 两个 tab, 且「对方是 to/cc」被当成「我发出的」(活库实测
 #: 178,046 条第三方邮件被误标, 详情页「发至」里 98% 是错的)。
 MAIL_DIRECTION_VALUES = ("all", "from_them", "from_me", "from_third")
+PROFILE_SUGGESTION_FIELDS = ("formal_name", "department", "phone")
+_profile_tasks: set = set()
+
+
+def _schedule_profile_task(coro) -> None:
+    task = asyncio.create_task(coro)
+    _profile_tasks.add(task)
+    task.add_done_callback(_profile_tasks.discard)
 
 
 def require_contacts_enabled(settings=Depends(get_settings)) -> None:
@@ -207,6 +221,7 @@ async def list_contacts(
     sort: str = Query("density"),
     limit: Optional[int] = Query(None),
     repo: ContactRepository = Depends(get_contact_repository),
+    settings=Depends(get_settings),
 ):
     if view not in VIEW_VALUES:
         raise APIError(
@@ -261,7 +276,7 @@ async def list_contacts(
         "  c.mail_count, c.sent_to_count, c.first_seen_at, c.last_seen_at, "
         # WP5 汇报线: manager id + self-join 显示名 (分组 label / 行菜单可用性;
         # m 对 c 是 1:1, GROUP BY c.id 下裸列取值恒定)。
-        "  c.manager_contact_id, m.display_name AS manager_display_name, "
+        "  c.manager_contact_id, m.display_name AS manager_display_name, c.profile_json, "
         "  COUNT(ce.id) AS email_count, "
         "  COALESCE(MAX(CASE WHEN ce.is_primary = 1 THEN ce.email_normalized END), "
         "    MIN(ce.email_normalized)) AS primary_email "
@@ -282,10 +297,18 @@ async def list_contacts(
         rows = rows[:limit]
     items = [
         {
-            **{key: row[key] for key in row.keys()},
+            **{key: row[key] for key in row.keys() if key != "profile_json"},
             "is_self": bool(row["is_self"]),
-            # WP6 画像期接真值; WP2 恒 null 占位 (行契约先钉住)。
-            "profile_summary": None,
+            "profile_summary": contact_profile.profile_summary_for_list(
+                row["profile_json"]
+            ),
+            "profile_min": contact_profile.PROFILE_MIN,
+            "profile_eligible": (
+                row["hidden_at"] is None
+                and row["kind"] == CONTACT_KIND_PERSON
+                and int(row["mail_count"] or 0) >= contact_profile.PROFILE_MIN
+                and int(row["sent_to_count"] or 0) >= 1
+            ),
         }
         for row in rows
     ]
@@ -373,7 +396,9 @@ def _load_org_relations(conn: sqlite3.Connection, row: sqlite3.Row) -> dict:
     return {"manager": manager, "reports": reports, "peers": peers}
 
 
-def _load_detail(conn: sqlite3.Connection, contact_id: int) -> dict:
+def _load_detail(
+    conn: sqlite3.Connection, contact_id: int, *, profile_enabled: bool = True
+) -> dict:
     row = conn.execute(
         "SELECT * FROM contact WHERE id=?", (contact_id,)
     ).fetchone()
@@ -396,6 +421,9 @@ def _load_detail(conn: sqlite3.Connection, contact_id: int) -> dict:
     ]
     contact_info = _json_dict(row["contact_info_json"])
     relations = _load_org_relations(conn, row)
+    configured = contact_profile.profile_feature_configured(
+        conn, env_enabled=profile_enabled
+    )
     return {
         "id": row["id"],
         "display_name": row["display_name"],
@@ -429,8 +457,7 @@ def _load_detail(conn: sqlite3.Connection, contact_id: int) -> dict:
         "manager_src": row["manager_src"],
         "reports": relations["reports"],
         "peers": relations["peers"],
-        # WP6 画像期接真值; WP2 恒 null (画像卡只有「未开启」引导态)。
-        "profile": None,
+        "profile": contact_profile.profile_projection(row, configured=configured),
     }
 
 
@@ -439,43 +466,118 @@ async def get_contact(
     request: Request,
     contact_id: int,
     repo: ContactRepository = Depends(get_contact_repository),
+    settings=Depends(get_settings),
 ):
     conn = repo.connect()
     try:
-        detail = _call(_load_detail, conn, contact_id)
+        detail = _call(
+            _load_detail,
+            conn,
+            contact_id,
+            profile_enabled=bool(getattr(settings, "contact_profile_enabled", False)),
+        )
     finally:
         conn.close()
     return success_envelope(detail, request=request)
 
 
-# ---- 关联邮件 ----
-
-
-def _direction_expr(self_addresses: frozenset) -> tuple[str, list]:
-    """方向三分的 SQL 片段 + 参数 (task 08-14 WP-5, owner 拍板的判据逐字)::
-
-        对方 role 含 'sender'            → from_them
-        否则 sender_email ∈ 自有地址集    → from_me
-        否则                             → from_third
-
-    - 🔴 **sender 优先**: 对方既是发件人又在 to/cc 时 (自己抄送自己) 算 from_them。
-    - 🔴 判据在**后端**算: 自有地址集的权威是 ``resolve_self_addresses``, 前端
-      复制一份就是第二个真源。
-    - ``sender_email IS NULL`` (v58 派生不出地址的行) 落 from_third —— SQL 三值
-      逻辑下 ``NULL IN (…)`` 为 NULL, 不为真。
-    """
-    if self_addresses:
-        placeholders = ", ".join("?" for _ in self_addresses)
-        mine_sql, params = f"m.sender_email IN ({placeholders})", sorted(self_addresses)
-    else:
-        mine_sql, params = "0", []
-    return (
-        "CASE WHEN MAX(CASE WHEN l.role = 'sender' THEN 1 ELSE 0 END) = 1 "
-        "       THEN 'from_them' "
-        f"     WHEN {mine_sql} THEN 'from_me' "
-        "     ELSE 'from_third' END",
-        params,
+@router.post("/{contact_id}/profile/refresh", status_code=202)
+async def refresh_contact_profile(
+    request: Request,
+    contact_id: int,
+    repo: ContactRepository = Depends(get_contact_repository),
+    settings=Depends(get_settings),
+):
+    if not bool(getattr(settings, "contact_profile_enabled", False)):
+        raise APIError(
+            "E_DISABLED", "Contact profile feature is disabled", source="sqlite"
+        )
+    try:
+        claimed = contact_profile.claim_profile_run(str(repo.db_path), contact_id)
+    except ContactError as exc:
+        if exc.code == "E_CONTACT_MERGED":
+            raise APIError(
+                exc.code, exc.message, source="sqlite", http_status=403
+            ) from exc
+        raise APIError(exc.code, exc.message, source="sqlite") from exc
+    if claimed:
+        cfg = get_contact_profile_agent_config(str(repo.db_path))
+        _schedule_profile_task(
+            contact_profile.generate_contact_profile(
+                str(repo.db_path),
+                contact_id,
+                cfg=cfg,
+                user_email=getattr(settings, "user_email", ""),
+                self_emails=getattr(settings, "self_emails", ""),
+            )
+        )
+    return success_envelope(
+        {"contact_id": contact_id, "status": "running", "started": claimed},
+        request=request,
+        status_code=202,
     )
+
+
+@router.post("/{contact_id}/profile/suggestions/adopt")
+async def adopt_contact_profile_suggestion(
+    request: Request,
+    contact_id: int,
+    body: ContactProfileSuggestionAdoptRequest,
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    if body.field not in PROFILE_SUGGESTION_FIELDS:
+        raise APIError(
+            "E_INVALID_FIELD",
+            f"field must be one of {PROFILE_SUGGESTION_FIELDS}",
+            source="sqlite",
+        )
+    now = _now_ms()
+    with repo.transaction() as conn:
+        _call(
+            contact_service.update_identity_fields,
+            conn,
+            contact_id,
+            {body.field: body.value},
+            now=now,
+        )
+        _call(
+            contact_service.set_field_lock,
+            conn,
+            contact_id,
+            body.field,
+            locked=True,
+            now=now,
+        )
+        detail = _call(_load_detail, conn, contact_id)
+    return success_envelope(detail, request=request)
+
+
+@router.post("/{contact_id}/profile/suggestions/ignore")
+async def ignore_contact_profile_suggestion(
+    request: Request,
+    contact_id: int,
+    body: ContactProfileSuggestionIgnoreRequest,
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    if body.field not in PROFILE_SUGGESTION_FIELDS:
+        raise APIError(
+            "E_INVALID_FIELD",
+            f"field must be one of {PROFILE_SUGGESTION_FIELDS}",
+            source="sqlite",
+        )
+    with repo.transaction() as conn:
+        _call(
+            contact_profile.ignore_profile_suggestion,
+            conn,
+            contact_id,
+            field=body.field,
+            now_ms=_now_ms(),
+        )
+        detail = _call(_load_detail, conn, contact_id)
+    return success_envelope(detail, request=request)
+
+
+# ---- 关联邮件 ----
 
 
 @router.get("/{contact_id}/mails")
@@ -506,58 +608,24 @@ async def list_contact_mails(
 
     conn = repo.connect()
     try:
-        # 联系人必须存在 (404 语义, 不给空列表装没事)。
-        _call(contact_service._require_contact, conn, contact_id)
         self_addresses = contact_service.resolve_self_addresses(
             conn,
             user_email=getattr(settings, "user_email", ""),
             extra_raw=getattr(settings, "self_emails", ""),
         )
-        direction_sql, direction_params = _direction_expr(self_addresses)
-        # 分组子查询 + 外层过滤: direction 是聚合派生列, 放外层 WHERE 比 HAVING
-        # 重复整段表达式干净, total 也能直接 COUNT(*) 同一个子查询。
-        inner = (
-            "SELECT m.internal_id AS internal_id, m.subject AS subject, "
-            "  m.sender AS sender, m.sender_name AS sender_name, "
-            "  m.mailbox AS mailbox, m.date_received AS date_received, "
-            "  m.is_read AS is_read, "
-            "  COALESCE(MAX(l.seen_at), 0) AS seen_at, "
-            "  GROUP_CONCAT(DISTINCT l.role) AS roles, "
-            f"  {direction_sql} AS direction "
-            "FROM contact_email_link l "
-            "JOIN contact_email ce ON ce.id = l.email_id "
-            "JOIN email_metadata m ON m.internal_id = l.internal_id "
-            "WHERE ce.contact_id = ? "
-            "GROUP BY m.internal_id"
+        page = _call(
+            contact_service.list_contact_mail_rows,
+            conn,
+            contact_id,
+            self_addresses=self_addresses,
+            direction=direction,
+            cursor_pair=cursor_pair,
+            limit=limit,
         )
-        inner_params: list[Any] = [*direction_params, contact_id]
-        filter_sql, filter_params = "", []
-        if direction != "all":
-            filter_sql, filter_params = "direction = ?", [direction]
-
-        total_sql = f"SELECT COUNT(*) FROM ({inner}) t"
-        if filter_sql:
-            total_sql += f" WHERE {filter_sql}"
-        total = int(
-            conn.execute(total_sql, [*inner_params, *filter_params]).fetchone()[0]
-        )
-
-        item_where = [filter_sql] if filter_sql else []
-        item_params: list[Any] = [*inner_params, *filter_params]
-        if cursor_pair:
-            item_where.append("(seen_at < ? OR (seen_at = ? AND internal_id < ?))")
-            item_params.extend([cursor_pair[0], cursor_pair[0], cursor_pair[1]])
-        items_sql = f"SELECT * FROM ({inner}) t"
-        if item_where:
-            items_sql += f" WHERE {' AND '.join(item_where)}"
-        items_sql += " ORDER BY seen_at DESC, internal_id DESC LIMIT ?"
-        item_params.append(limit + 1)
-        rows = conn.execute(items_sql, item_params).fetchall()
     finally:
         conn.close()
 
-    has_more = len(rows) > limit
-    rows = rows[:limit]
+    rows = page["rows"]
     items = [
         {
             "internal_id": row["internal_id"],
@@ -575,12 +643,8 @@ async def list_contact_mails(
         }
         for row in rows
     ]
-    next_cursor = (
-        f"{rows[-1]['seen_at'] or 0}:{rows[-1]['internal_id']}"
-        if has_more and rows else None
-    )
     return success_envelope(
-        {"items": items, "next_cursor": next_cursor, "total": total},
+        {"items": items, "next_cursor": page["next_cursor"], "total": page["total"]},
         request=request,
     )
 

@@ -7,7 +7,7 @@
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Any, Optional
 
 from pydantic import BaseModel, Field
 
@@ -79,3 +79,12 @@ class ContactPrimaryEmailRequest(BaseModel):
 class ContactFormerEmailRequest(BaseModel):
     email: str = Field(min_length=3)
     former: bool
+
+
+class ContactProfileSuggestionAdoptRequest(BaseModel):
+    field: str = Field(min_length=1)
+    value: Any
+
+
+class ContactProfileSuggestionIgnoreRequest(BaseModel):
+    field: str = Field(min_length=1)

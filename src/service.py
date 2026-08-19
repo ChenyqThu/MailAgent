@@ -765,6 +765,19 @@ class EmailNotionSyncApp:
                     f"enabled_agent={has_enabled_report_agent})"
                 )
 
+            contact_profile_worker_task = None
+            if config.contact_profile_enabled:
+                from src.contacts import profile as contact_profile
+                contact_profile_worker_task = self._spawn_supervised(
+                    lambda: contact_profile.tick_loop(
+                        sync_store=self.watcher.sync_store,
+                        db_path=report_db_path,
+                        shutdown_event=self._shutdown_event,
+                    ),
+                    "contact_profile_worker",
+                )
+                logger.info("[contact-profile] worker enabled by env flag")
+
             # 附件文本抽取 worker（PR0：修复 email_attachment_text 队列停摆）。登记侧
             # (commit_email_with_body enqueue pending) 一直正常, 但长驻服务从未实现
             # 消费者 —— 唯一消费者是手动 CLI `mailagent attachment extract`, 导致 pending
@@ -943,6 +956,8 @@ class EmailNotionSyncApp:
                 tasks.append(daily_digest_task)
             if report_worker_task:
                 tasks.append(report_worker_task)
+            if contact_profile_worker_task:
+                tasks.append(contact_profile_worker_task)
             if attachment_text_task:
                 tasks.append(attachment_text_task)
             if agent_trigger_task:

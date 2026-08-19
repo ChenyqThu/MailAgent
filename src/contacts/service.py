@@ -91,6 +91,89 @@ def resolve_self_addresses(
     return frozenset(out)
 
 
+def contact_mail_direction_expr(
+    self_addresses: FrozenSet[str],
+) -> tuple[str, list]:
+    """联系人账本方向三分 SQL；REST 与画像证据检索共用。"""
+    if self_addresses:
+        placeholders = ", ".join("?" for _ in self_addresses)
+        mine_sql, params = (
+            f"m.sender_email IN ({placeholders})",
+            sorted(self_addresses),
+        )
+    else:
+        mine_sql, params = "0", []
+    return (
+        "CASE WHEN MAX(CASE WHEN l.role = 'sender' THEN 1 ELSE 0 END) = 1 "
+        "       THEN 'from_them' "
+        f"     WHEN {mine_sql} THEN 'from_me' "
+        "     ELSE 'from_third' END",
+        params,
+    )
+
+
+def list_contact_mail_rows(
+    conn: sqlite3.Connection,
+    contact_id: int,
+    *,
+    self_addresses: FrozenSet[str],
+    direction: str = "all",
+    cursor_pair: Optional[tuple[int, int]] = None,
+    limit: int = 20,
+    min_internal_id: Optional[int] = None,
+) -> Dict[str, Any]:
+    """从 contact_email_link 账本分页取邮件；画像与 REST 的 SQL 单源。"""
+    _require_contact(conn, contact_id)
+    direction_sql, direction_params = contact_mail_direction_expr(self_addresses)
+    inner = (
+        "SELECT m.internal_id AS internal_id, m.subject AS subject, "
+        "  m.sender AS sender, m.sender_name AS sender_name, "
+        "  m.mailbox AS mailbox, m.date_received AS date_received, "
+        "  m.is_read AS is_read, "
+        "  COALESCE(MAX(l.seen_at), 0) AS seen_at, "
+        "  GROUP_CONCAT(DISTINCT l.role) AS roles, "
+        f"  {direction_sql} AS direction "
+        "FROM contact_email_link l "
+        "JOIN contact_email ce ON ce.id = l.email_id "
+        "JOIN email_metadata m ON m.internal_id = l.internal_id "
+        "WHERE ce.contact_id = ? "
+        "GROUP BY m.internal_id"
+    )
+    inner_params: list[Any] = [*direction_params, contact_id]
+    filters: list[str] = []
+    filter_params: list[Any] = []
+    if direction != "all":
+        filters.append("direction = ?")
+        filter_params.append(direction)
+    if min_internal_id is not None:
+        filters.append("internal_id > ?")
+        filter_params.append(int(min_internal_id))
+
+    total_sql = f"SELECT COUNT(*) FROM ({inner}) t"
+    if filters:
+        total_sql += f" WHERE {' AND '.join(filters)}"
+    total = int(conn.execute(total_sql, [*inner_params, *filter_params]).fetchone()[0])
+
+    item_filters = list(filters)
+    item_params: list[Any] = [*inner_params, *filter_params]
+    if cursor_pair:
+        item_filters.append("(seen_at < ? OR (seen_at = ? AND internal_id < ?))")
+        item_params.extend([cursor_pair[0], cursor_pair[0], cursor_pair[1]])
+    items_sql = f"SELECT * FROM ({inner}) t"
+    if item_filters:
+        items_sql += f" WHERE {' AND '.join(item_filters)}"
+    items_sql += " ORDER BY seen_at DESC, internal_id DESC LIMIT ?"
+    item_params.append(limit + 1)
+    rows = conn.execute(items_sql, item_params).fetchall()
+    has_more = len(rows) > limit
+    rows = rows[:limit]
+    next_cursor = (
+        f"{rows[-1]['seen_at'] or 0}:{rows[-1]['internal_id']}"
+        if has_more and rows else None
+    )
+    return {"rows": rows, "total": total, "next_cursor": next_cursor}
+
+
 # ==================== upsert (matters 写穿的底座) ====================
 
 def get_contact_id_for_email(conn: sqlite3.Connection, email: str) -> Optional[int]:
