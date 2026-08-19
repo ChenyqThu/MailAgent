@@ -472,7 +472,8 @@ def test_create_accepts_goal_checks_over_the_wire(client):
         "/api/matters",
         json={
             "title": "Wire create",
-            "description": "把 Apollo 一期交付推进到验收通过",
+            "background": "Apollo 一期已过评审，进入交付",
+            "goal": "把 Apollo 一期交付推进到验收通过",
             "goal_checks": [
                 {"t": "验收报告签字", "done": False},
                 {"t": "尾款到账"},
@@ -501,6 +502,47 @@ def test_create_accepts_goal_checks_over_the_wire(client):
         },
     )
     assert bad.status_code == 400, bad.text
+
+
+def test_background_and_goal_are_two_independent_columns_over_the_wire(client):
+    """v61 —— 线上契约就是两个字段：各自能单独 PATCH，改一个不动另一个。
+
+    🔴 这条钉的是**破坏性变更本身**：老的 `description` 键必须被 DTO 拒（422），
+    否则升级后的老客户端会以为自己写成功了、实际什么都没落库。
+    """
+    http, _ = client
+    created = http.post(
+        "/api/matters",
+        json={
+            "title": "Two columns",
+            "background": "原来的背景",
+            "goal": "原来的目标",
+            "mutation": _mutation("two-col"),
+        },
+    )
+    assert created.status_code == 201, created.text
+    matter = created.json()["data"]["matter"]
+    public_id = matter["public_id"]
+    assert (matter["background"], matter["goal"]) == ("原来的背景", "原来的目标")
+
+    patched = http.patch(
+        f"/api/matters/{public_id}",
+        json={"goal": "改过的目标", "mutation": _mutation("two-col-p", matter["version"])},
+    )
+    assert patched.status_code == 200, patched.text
+    after = http.get(f"/api/matters/{public_id}").json()["data"]["matter"]
+    assert after["goal"] == "改过的目标"
+    assert after["background"] == "原来的背景"
+
+    # 退役的老键：DTO extra=forbid ⇒ 422，不是「收下了但没人读」。
+    stale = http.patch(
+        f"/api/matters/{public_id}",
+        json={
+            "description": "老客户端",
+            "mutation": _mutation("two-col-legacy", after["version"]),
+        },
+    )
+    assert stale.status_code == 422, stale.text
 
 
 def test_patch_still_rejects_fields_the_service_does_not_consume(client):

@@ -73,9 +73,11 @@ export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
  *  its own array (not the write family) because it is class `artifact`, silent, and guard-free —
  *  the same shape as report_write. */
 /** matter_update 里「owner 自己的话」——带到它们的 patch 恒弹审批卡（见该工具的 forceApproval）。
- *  🔴 与 Python `run_service.PROPOSAL_FIELD_WHITELIST` 里这两项是同一组字段的两个面：
- *  owner 在场 = 直写 + 卡；无人值守的跟进 run = 只能提案。改一边先想清另一边。 */
-const MATTER_OWNER_VOICE_FIELDS = ['description', 'goal_checks'] as const
+ *  🔴 与 Python `run_service.PROPOSAL_FIELD_WHITELIST` 里这三项是同一组字段的两个面：
+ *  owner 在场 = 直写 + 卡；无人值守的跟进 run = 只能提案。改一边先想清另一边。
+ *  🔴 v61 起 `background` 与 `goal` 是两个独立字段，**两个都要在这里** —— 少一个 = 那一半
+ *  被 agent 静默改掉，owner 一张卡都看不到。 */
+const MATTER_OWNER_VOICE_FIELDS = ['background', 'goal', 'goal_checks'] as const
 
 export const GATEWAY_MATTER_RUN_TOOL_NAMES = ['matter_update_propose'] as const
 
@@ -380,10 +382,11 @@ export function createMatterWriteTools(
       name: 'matter_create',
       description:
         'Create a Matter and return the committed state plus an undo descriptor. Fill ' +
-        '`description`（背景与目标）with two parts — 背景: how this came about and what ' +
-        'constrains it; 目标: what must be true when it is done — and set `goal_checks`' +
-        '（完成标志）when the user can state how done is judged. Both are owner-owned after ' +
-        'creation and cannot be patched by agents later.',
+        '`background`（背景: how this came about, who is involved, what constrains it）and ' +
+        '`goal`（目标: what must be true when it is done）— they are two independent fields, ' +
+        'so leave `goal` empty rather than restating the background in it. Set `goal_checks`' +
+        '（完成标志）when the user can state how done is judged. All three are owner-owned ' +
+        'after creation and cannot be patched by agents later.',
       inputSchema: matterCreateSchema,
       risk: 'edit',
       run: async (input, { signal }) => {
@@ -405,11 +408,11 @@ export function createMatterWriteTools(
       name: 'matter_update',
       description:
         'Patch, archive, reopen, trash, or restore a Matter with optimistic concurrency. ' +
-        "Arbitrary JSON and automation bindings are forbidden. Two fields are the owner's own " +
+        "Arbitrary JSON and automation bindings are forbidden. Three fields are the owner's own " +
         'words and ALWAYS raise an approval card no matter how the approval tiers are set: ' +
-        '`description`（背景与目标）and `goal_checks`（完成标志）— change them only when the ' +
-        'user has just said the background, the goal, or the finish line moved, never to polish ' +
-        'wording.',
+        '`background`（背景）, `goal`（目标）and `goal_checks`（完成标志）— change them only ' +
+        'when the user has just said the background, the goal, or the finish line moved, never ' +
+        'to polish wording, and send only the one that actually moved.',
       inputSchema: matterUpdateSchema,
       risk: 'edit',
       // S3 (08-18) — per-FIELD always-ask. 🔴 Deliberately not "raise matter_update's tier to
@@ -758,12 +761,13 @@ export function createMatterRunTools(
         'applies when the resource was already attached and you just read a newer version of it; ' +
         'omit it otherwise. ' +
         'A fact may cite such a pending resource with sources[].change_id instead of resource_id. ' +
-        'Two field changes carry extra weight and the owner reads them closely: ' +
-        'field="description" rewrites the 背景与目标 (background and goal, kept as two ' +
-        '`## 背景` / `## 目标` Markdown sections) — propose it only when the evidence shows the ' +
-        'background or the goal itself moved, never to reword; field="goal_checks" replaces the whole ' +
+        'Three field changes carry extra weight and the owner reads them closely: ' +
+        'field="background" rewrites 背景 (how this came about and what constrains it) and ' +
+        'field="goal" rewrites 目标 (what must be true when it is done) — they are independent ' +
+        'fields, so propose only the one the evidence shows actually moved, and never to reword; ' +
+        'field="goal_checks" replaces the whole ' +
         'definition-of-done checklist (send the full list including existing entries and their ' +
-        "done flags, or the ones you omit are dropped). Both are the owner's own words, so a " +
+        "done flags, or the ones you omit are dropped). All three are the owner's own words, so a " +
         'run may only PROPOSE them — it can never write them directly.',
       inputSchema: matterUpdateProposeSchema,
       run: (input, signal) =>

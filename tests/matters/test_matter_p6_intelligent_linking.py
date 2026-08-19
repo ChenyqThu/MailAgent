@@ -271,7 +271,7 @@ def test_context_snapshot_never_writes_and_never_self_signs_a_context_gap(env):
         sender="noreply@example.com", snippet="this message has been recalled",
     )
     created = service.create_matter(
-        {"title": "Follow up evidence", "description": "delivery follow up evidence"},
+        {"title": "Follow up evidence", "background": "delivery follow up evidence"},
         idempotency_key="create-readonly",
         source="desktop_ui",
     )
@@ -297,7 +297,7 @@ def test_context_snapshot_never_writes_and_never_self_signs_a_context_gap(env):
 def test_duplicate_candidates_use_multiple_explainable_signals_not_prefix(env):
     service, _ = env
     existing = service.create_matter(
-        {"title": "Renew Acme enterprise agreement", "description": "legal review"},
+        {"title": "Renew Acme enterprise agreement", "background": "legal review"},
         idempotency_key="existing",
         source="desktop_ui",
     )
@@ -316,7 +316,7 @@ def test_duplicate_candidates_use_multiple_explainable_signals_not_prefix(env):
     candidates = service.duplicate_candidates(
         {
             "title": "Contract approval for strategic customer",
-            "description": "Acme legal review",
+            "background": "Acme legal review",
             "stakeholders": ["buyer@acme.example"],
             "resources": [
                 {"provider": "x", "kind": "doc", "external_key": "contract:2026"}

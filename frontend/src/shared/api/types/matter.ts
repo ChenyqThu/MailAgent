@@ -223,6 +223,9 @@ export type MatterResourceSummarySource = (typeof MATTER_RESOURCE_SUMMARY_SOURCE
  *  截断而非拒绝）；gateway 的 `matterProposalNewResourceSchema.summary` 用它当 zod max，闸同上。 */
 export const MATTER_RESOURCE_SUMMARY_MAX_CHARS = 2000
 
+/** FTS 投影的字段名（`matched_fields` 的值域）。canonical: `src/matters/models.MATTER_SEARCH_FIELDS`。
+ *  🔴 这里的 `description` **不是** matter 行的字段（v61 已拆成 background + goal），而是检索
+ *  投影里「背景 + 目标」合成的那个文本桶 —— 有意不改名（改名要重建 fts5 虚表）。 */
 export const MATTER_SEARCH_FIELDS = [
   'title',
   'description',
@@ -289,7 +292,10 @@ export interface Matter {
   id: number
   public_id: string
   title: string
-  description: string
+  /** v61：背景（这件事怎么来的）与目标（做完时什么成立）是**两个独立字段**。
+   *  合存单字段 + `## 背景` / `## 目标` 小标题分段的老形状已下线，别再写解析器。 */
+  background: string
+  goal: string
   matter_type: string | null
   tags: string[]
   goal_checks?: MatterGoalCheck[]
@@ -467,7 +473,8 @@ export interface MatterDuplicateCandidate {
 export interface MatterDuplicateCandidateInput {
   matter_id?: string
   title?: string
-  description?: string
+  background?: string
+  goal?: string
   current_summary?: string
   stakeholders?: Array<{ email?: string | null } | string>
   resources?: Array<{ provider: string; kind: string; external_key: string }>
@@ -480,7 +487,8 @@ export interface MatterCreateDraftRequest {
   link_scope?: MatterLinkScope | null
   title?: string | null
   matter_type?: BuiltinMatterType | null
-  description?: string | null
+  background?: string | null
+  goal?: string | null
 }
 
 export type MatterCreateDraftResourceReasonKind =
@@ -520,7 +528,9 @@ export interface MatterCreateDraftResponse {
   draft: {
     title: string
     matter_type: BuiltinMatterType | null
-    description: string
+    /** 调研链路没有 LLM，写不出目标 —— `goal` 恒为空串，由 owner 自己补。 */
+    background: string
+    goal: string
     resources: MatterCreateDraftResource[]
     stakeholders: MatterCreateDraftStakeholder[]
     duplicate_candidates: MatterDuplicateCandidate[]
@@ -888,7 +898,8 @@ export interface MatterListOptions {
 
 export interface MatterCreateInput {
   title: string
-  description?: string
+  background?: string
+  goal?: string
   matter_type?: string | null
   tags?: string[]
   status?: MatterStatus
@@ -904,7 +915,8 @@ export interface MatterCreateInput {
 // 0811 dogfood 反馈「创建后优先级不能改」时把后端白名单补齐，此处同步。
 export interface MatterPatchInput {
   title?: string
-  description?: string
+  background?: string
+  goal?: string
   matter_type?: string | null
   priority?: MatterPriority
   tags?: string[]

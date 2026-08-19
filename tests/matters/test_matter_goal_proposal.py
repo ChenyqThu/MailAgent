@@ -35,7 +35,9 @@ def _services(tmp_path):
 
 def _matter(service):
     return service.create_matter(
-        {"title": "t", "description": "老的目标"}, idempotency_key="c", source="test"
+        {"title": "t", "background": "老的背景", "goal": "老的目标"},
+        idempotency_key="c",
+        source="test",
     )["matter"]
 
 
@@ -89,26 +91,35 @@ def test_goal_checks_column_is_mapped_to_its_canonical_name():
     assert "goal_checks" in scope.fields
 
 
-def test_description_needs_no_mapping_but_is_still_derived():
-    scope = scope_from_matter_columns({"description": "x"})
-    assert "description" in scope.fields
+@pytest.mark.parametrize("field", ["background", "goal"])
+def test_background_and_goal_need_no_mapping_but_are_still_derived(field):
+    """v61：两列都与 canonical 字段名同名，所以走「列名即字段名」的兜底分支 ——
+    但两者都必须真的推得出来，否则 stale 判据漏掉那一半。"""
+    scope = scope_from_matter_columns({field: "x"})
+    assert field in scope.fields
 
 
 # ============================================================
 # 2 — accept 落库 + 护栏
 # ============================================================
 
-def test_accept_applies_description(tmp_path):
+@pytest.mark.parametrize("field", ["background", "goal"])
+def test_accept_applies_background_and_goal(tmp_path, field):
+    """v61：两个字段各自能被 accept 落库 —— 只测一个会放过「另一半没接上 accept 分支」。"""
     service, run_service = _services(tmp_path)
     matter = _matter(service)
-    proposal = _propose(service, run_service, matter, [_field_change("c1", "description", "新的目标")])
+    proposal = _propose(service, run_service, matter, [_field_change("c1", field, "新的文本")])
     service.accept_update(
         matter["public_id"], proposal["update_id"],
         idempotency_key="a1", source="test",
         expected_version=service.get_matter(matter["public_id"])["matter"]["version"],
         actor=Actor(kind="user", actor_id="me"),
     )
-    assert service.get_matter(matter["public_id"])["matter"]["description"] == "新的目标"
+    after = service.get_matter(matter["public_id"])["matter"]
+    assert after[field] == "新的文本"
+    # 🔴 另一半必须**没被动过** —— 拆两列的全部意义就在这里。
+    other = "goal" if field == "background" else "background"
+    assert after[other] == ("老的背景" if other == "background" else "老的目标")
 
 
 def test_accept_applies_goal_checks(tmp_path):
@@ -160,9 +171,9 @@ def test_owner_editing_the_same_field_makes_the_proposal_stale(tmp_path):
     """
     service, run_service = _services(tmp_path)
     matter = _matter(service)
-    proposal = _propose(service, run_service, matter, [_field_change("c1", "description", "Agent 写的目标")])
+    proposal = _propose(service, run_service, matter, [_field_change("c1", "goal", "Agent 写的目标")])
     service.patch_matter(
-        matter["public_id"], {"description": "owner 亲手写的目标"},
+        matter["public_id"], {"goal": "owner 亲手写的目标"},
         idempotency_key="p-owner", source="test",
         expected_version=service.get_matter(matter["public_id"])["matter"]["version"],
         actor=Actor(kind="user", actor_id="me"),
@@ -175,7 +186,7 @@ def test_owner_editing_the_same_field_makes_the_proposal_stale(tmp_path):
             actor=Actor(kind="user", actor_id="me"),
         )
     assert exc.value.code == "E_UPDATE_STALE"
-    assert service.get_matter(matter["public_id"])["matter"]["description"] == "owner 亲手写的目标"
+    assert service.get_matter(matter["public_id"])["matter"]["goal"] == "owner 亲手写的目标"
 
 
 def test_goal_checks_edit_also_makes_the_proposal_stale(tmp_path):
@@ -209,7 +220,7 @@ def test_unrelated_edit_does_not_invalidate_the_proposal(tmp_path):
     """
     service, run_service = _services(tmp_path)
     matter = _matter(service)
-    proposal = _propose(service, run_service, matter, [_field_change("c1", "description", "新目标")])
+    proposal = _propose(service, run_service, matter, [_field_change("c1", "goal", "新目标")])
     service.patch_matter(
         matter["public_id"], {"tags": ["销售"]},
         idempotency_key="p-tag", source="test",
@@ -222,7 +233,7 @@ def test_unrelated_edit_does_not_invalidate_the_proposal(tmp_path):
         expected_version=service.get_matter(matter["public_id"])["matter"]["version"],
         actor=Actor(kind="user", actor_id="me"),
     )
-    assert service.get_matter(matter["public_id"])["matter"]["description"] == "新目标"
+    assert service.get_matter(matter["public_id"])["matter"]["goal"] == "新目标"
 
 
 # ============================================================
@@ -234,7 +245,11 @@ def test_agent_actor_still_cannot_patch_directly(tmp_path):
     这条守卫是它与「改掉 owner 的目标陈述」之间唯一的东西。"""
     service, _ = _services(tmp_path)
     matter = _matter(service)
-    for field, value in (("description", "agent 直写"), ("goal_checks", [{"t": "x", "done": False}])):
+    for field, value in (
+        ("background", "agent 直写背景"),
+        ("goal", "agent 直写目标"),
+        ("goal_checks", [{"t": "x", "done": False}]),
+    ):
         with pytest.raises(MatterError) as exc:
             service.patch_matter(
                 matter["public_id"], {field: value},

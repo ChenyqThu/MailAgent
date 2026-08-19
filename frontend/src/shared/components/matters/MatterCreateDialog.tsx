@@ -79,7 +79,10 @@ export function MatterCreateDialog({
   const [matterTypeSelection, setMatterTypeSelection] = useState<MatterTypeSelection>(TYPE_UNSET)
   const [customMatterType, setCustomMatterType] = useState('')
   const [priority, setPriority] = useState<MatterPriority>('p1')
-  const [description, setDescription] = useState('')
+  // v61：背景与目标是两个独立字段，创建面也照拆 —— 详情页能分开写、创建页只能合着写
+  // 的话，第一版内容永远落在错误的那一列。
+  const [background, setBackground] = useState('')
+  const [goal, setGoal] = useState('')
   const [linkScope, setLinkScope] = useState<MatterLinkScope>(
     source?.threadId ? 'thread' : 'single'
   )
@@ -113,7 +116,8 @@ export function MatterCreateDialog({
     setMatterTypeSelection(TYPE_UNSET)
     setCustomMatterType('')
     setPriority('p1')
-    setDescription('')
+    setBackground('')
+    setGoal('')
     setLinkScope(source?.threadId ? 'thread' : 'single')
     setDuplicateCandidates([])
     setDuplicatesLoading(false)
@@ -166,7 +170,8 @@ export function MatterCreateDialog({
       void api
         .duplicateCandidates({
           title: trimmedTitle,
-          description,
+          background,
+          goal,
           resources: sourceResource ? [sourceResource] : undefined
         })
         .then((items) => {
@@ -184,7 +189,7 @@ export function MatterCreateDialog({
       active = false
       window.clearTimeout(timer)
     }
-  }, [api, description, linkScope, open, source, title])
+  }, [api, background, goal, linkScope, open, source, title])
 
   // G-32 —— 入场遮罩 fadeIn + 卡片 popIn，走仓库统一动效通道（reduced-motion 内置短路）。
   // 关闭期间表单字段不会被清（上面那个 effect 的 `!open` 分支只中止调研请求），退场动画
@@ -208,7 +213,8 @@ export function MatterCreateDialog({
       title: trimmedTitle,
       matter_type: matterType,
       priority,
-      description,
+      background,
+      goal,
       source_resource: source
         ? {
             provider: 'mailagent',
@@ -257,7 +263,8 @@ export function MatterCreateDialog({
             matterTypeSelection !== TYPE_UNSET && matterTypeSelection !== TYPE_CUSTOM
               ? matterTypeSelection
               : undefined,
-          description: description.trim() || undefined
+          background: background.trim() || undefined,
+          goal: goal.trim() || undefined
         },
         controller.signal
       )
@@ -265,7 +272,8 @@ export function MatterCreateDialog({
       setTitle(result.draft.title)
       setMatterTypeSelection(result.draft.matter_type ?? TYPE_UNSET)
       setCustomMatterType('')
-      setDescription(result.draft.description)
+      setBackground(result.draft.background)
+      setGoal(result.draft.goal)
       setLinkScope(result.source.link_scope)
       setSuggestedResources(result.draft.resources)
       setSuggestedStakeholders(result.draft.stakeholders)
@@ -652,15 +660,28 @@ export function MatterCreateDialog({
             </div>
           ) : null}
           <label className="block space-y-1.5">
-            <span className="text-aux text-ink-fg-1">{t('matters.create.description')}</span>
+            <span className="text-aux text-ink-fg-1">{t('matters.state.backgroundLabel')}</span>
             <textarea
-              rows={5}
-              value={description}
-              onChange={(event) => setDescription(event.target.value)}
-              className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body outline-none focus:border-coral/60"
+              rows={4}
+              value={background}
+              onChange={(event) => setBackground(event.target.value)}
+              placeholder={t('matters.state.backgroundPlaceholder')}
+              className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body outline-none placeholder:text-ink-fg-3 focus:border-coral/60"
             />
-            <span className="text-meta text-ink-fg-2">{t('matters.create.descriptionHint')}</span>
           </label>
+          <label className="block space-y-1.5">
+            <span className="text-aux text-ink-fg-1">{t('matters.state.goalLabel')}</span>
+            <textarea
+              rows={3}
+              value={goal}
+              onChange={(event) => setGoal(event.target.value)}
+              placeholder={t('matters.state.goalPlaceholder')}
+              className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body outline-none placeholder:text-ink-fg-3 focus:border-coral/60"
+            />
+          </label>
+          {/* 提示对两个框都成立，所以放在 label **外面** —— 塞进 label 会被算进
+            textarea 的 accessible name（「目标 你写的这两段…」），按名字取控件就废了。 */}
+          <p className="text-meta text-ink-fg-2">{t('matters.create.descriptionHint')}</p>
         </div>
         <footer className="flex shrink-0 justify-end gap-2 border-t border-ink-border px-5 py-4">
           <button

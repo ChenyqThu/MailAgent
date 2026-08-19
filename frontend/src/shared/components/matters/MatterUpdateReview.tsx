@@ -398,10 +398,13 @@ function ChangeRow({
             // 这条 change 不提供行内编辑（整表编辑在事项详情的 GoalCard 里，
             // 这里只做「接受 / 不接受」的判断）。
             <GoalChecksDiff before={change.before} after={change.after} />
-          ) : change.kind === 'field' && field === 'description' ? (
+          ) : change.kind === 'field' && (field === 'background' || field === 'goal') ? (
             // S3 —— 背景与目标是长文本：挤进一行读不了，单行 input 也编辑不了。
+            // v61 起两者是两个独立字段，各自单独提案、单独评审。
             <div className="mt-2 space-y-2 text-body">
-              <div className="text-aux text-ink-fg-3">{t('matters.eventField.description')}</div>
+              <div className="text-aux text-ink-fg-3">
+                {t(`matters.eventField.${field}`)}
+              </div>
               <p className="whitespace-pre-wrap rounded bg-ink-3 p-2 text-ink-fg-2">
                 {String(change.before ?? '—')}
               </p>

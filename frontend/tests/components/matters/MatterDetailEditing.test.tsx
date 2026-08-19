@@ -99,6 +99,30 @@ describe('G-11 — 条目行 meta 与行内编辑', () => {
     )
   })
 
+  // 0818 —— 勾选钮换成 `MatterCheckRow` 的 `CircleCheckBig` 形态（与「完成标志」同一
+  // 单源）。原来那颗方块钮**一个可及名都没有**，只有 action 条目出勾选钮这一点不变。
+  test('action 条目的勾选钮是带可及名的 aria-pressed 切换钮，点它写 done + completed_at', async () => {
+    renderDetail({ items: [item({ id: 7, status: 'open' })] })
+    await screen.findByText('推进联调')
+
+    fireEvent.click(screen.getByRole('button', { name: '推进联调', pressed: false }))
+    await waitFor(() =>
+      expect(mattersApi.patchItem).toHaveBeenCalledWith(
+        'MAT-0042',
+        7,
+        { status: 'done', completed_at: expect.any(Number) },
+        { expectedVersion: 3 }
+      )
+    )
+  })
+
+  test('note 条目不出勾选钮（那一类没有「完成」语义）', async () => {
+    renderDetail({ items: [item({ id: 8, kind: 'note', title: '会议纪要' })] })
+    await screen.findByText('会议纪要')
+
+    expect(screen.queryByRole('button', { name: '会议纪要' })).toBeNull()
+  })
+
   test('删除条目走 deleteItem（软删，后端留恢复通道）', async () => {
     renderDetail({ items: [item({ id: 7 })] })
     await screen.findByText('推进联调')
@@ -220,7 +244,8 @@ function matter(overrides: Partial<Matter> = {}): Matter {
     id: 42,
     public_id: 'MAT-0042',
     title: 'Vendor launch',
-    description: '',
+    background: '',
+    goal: '',
     matter_type: null,
     tags: [],
     status: 'active',

@@ -16,7 +16,9 @@ from typing import Any, Mapping
 
 from .service import MatterService
 
-EXPORT_VERSION = 1
+#: v2（2026-08-19）：`matter.goal` 由「背景与目标合体」变成只有目标，另起
+#: `matter.background`。消费方按 export_version 分流，别对 v1 的 `goal` 按新语义解读。
+EXPORT_VERSION = 2
 
 
 def _iso(value: Any) -> str | None:
@@ -56,7 +58,8 @@ def export_matter(service: MatterService, public_id: str) -> dict[str, Any]:
         "matter": {
             "public_id": matter["public_id"],
             "title": matter["title"],
-            "goal": matter["description"],
+            "background": matter["background"],
+            "goal": matter["goal"],
             "goal_checks": matter.get("goal_checks", []),
             "type": matter["matter_type"],
             "tags": matter.get("tags", []),
@@ -120,8 +123,12 @@ def export_matter_markdown(service: MatterService, public_id: str) -> str:
         stamp = f"（{matter['summary_at'][:16]}）" if matter["summary_at"] else ""
         lines += [f"## 当前状态{stamp}", "", matter["current_summary"], ""]
 
+    # v61：背景与目标是两个独立字段，各占一个平级小节。老方案（合存一段，外面再套
+    # 一层「## 背景与目标」）会让正文里的同级小标题与外层标题平起平坐，层级是塌的。
+    if matter["background"]:
+        lines += ["## 背景", "", matter["background"], ""]
     if matter["goal"]:
-        lines += ["## 背景与目标", "", matter["goal"], ""]
+        lines += ["## 目标", "", matter["goal"], ""]
     checks = matter["goal_checks"] or []
     if checks:
         lines += ["### 完成标志", ""]

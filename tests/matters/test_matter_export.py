@@ -25,7 +25,12 @@ def service(tmp_path):
 @pytest.fixture
 def matter(service):
     created = service.create_matter(
-        {"title": "Atlas 上线", "description": "把 Atlas 推上生产", "tags": ["交付"]},
+        {
+            "title": "Atlas 上线",
+            "background": "Atlas 一期已验收，二期要上生产",
+            "goal": "把 Atlas 推上生产",
+            "tags": ["交付"],
+        },
         idempotency_key="create",
         source="test",
     )["matter"]
@@ -42,8 +47,10 @@ def matter(service):
 
 def test_json_export_carries_the_core_shape(service, matter):
     data = export_matter(service, matter["public_id"])
-    assert data["export_version"] == 1
+    # v61 拆列：`goal` 的语义窄成「只有目标」，另起 `background`，故 export_version 也跟着走。
+    assert data["export_version"] == 2
     assert data["matter"]["public_id"] == matter["public_id"]
+    assert data["matter"]["background"] == "Atlas 一期已验收，二期要上生产"
     assert data["matter"]["goal"] == "把 Atlas 推上生产"
     assert data["matter"]["tags"] == ["交付"]
     assert data["matter"]["goal_checks"] == [
@@ -59,8 +66,11 @@ def test_markdown_export_is_readable_and_marks_check_state(service, matter):
     text = export_matter_markdown(service, matter["public_id"])
     assert text.startswith("# Atlas 上线")
     assert matter["public_id"] in text
-    # 08-18 owner 推翻裁决 D5：导出的小节名跟详情页、创建页、Agent 说明用同一个词。
-    assert "## 背景与目标" in text
+    # v61：背景与目标各占一个**平级**小节。老形状（「## 背景与目标」外层标题 + 正文里
+    # 再嵌同级小标题）层级是塌的，拆列后不该再出现。
+    assert "## 背景\n\nAtlas 一期已验收，二期要上生产" in text
+    assert "## 目标\n\n把 Atlas 推上生产" in text
+    assert "## 背景与目标" not in text
     assert "## 核心目标" not in text
     assert "- [x] 合同签署" in text
     assert "- [ ] 验收通过" in text

@@ -51,7 +51,10 @@ class MatterSourceResource(StrictModel):
 
 class MatterCreateRequest(StrictModel):
     title: str | None = Field(default=None, max_length=500)
-    description: str = ""
+    # v61：背景与目标是**两个独立字段**（DB 同名两列）。合存单字段 + `## 背景` /
+    # `## 目标` 小标题分段的老形状已下线 —— 这是一次**破坏性**的线上契约变更。
+    background: str = ""
+    goal: str = ""
     matter_type: str | None = Field(default=None, max_length=128)
     tags: list[str] = Field(default_factory=list)
     status: str = "inbox"
@@ -59,7 +62,7 @@ class MatterCreateRequest(StrictModel):
     priority: str = "p1"
     due_at: int | None = None
     waiting_context: dict[str, Any] | None = None
-    # 完成标志（0813 轮 3 O2）：**创建面**开放 —— 与 description 同一 D7 语义（create 时
+    # 完成标志（0813 轮 3 O2）：**创建面**开放 —— 与 background / goal 同一 D7 语义（create 时
     # agent 可写、之后只有 user 能改；patch 面见 MatterPatchRequest 上方注释）。值域
     # （文本长度/条数/形状）仍由 service 的 `normalize_goal_checks` 单判（400 E_INVALID_ARG）。
     goal_checks: list[dict[str, Any]] | None = None
@@ -69,7 +72,8 @@ class MatterCreateRequest(StrictModel):
 
 class MatterPatchRequest(StrictModel):
     title: str | None = Field(default=None, max_length=500)
-    description: str | None = None
+    background: str | None = None
+    goal: str | None = None
     matter_type: str | None = Field(default=None, max_length=128)
     # 这里只声明**线上形状**；值域（合法 priority / goal check 文本长度与条数）仍由 service
     # 的 `_require_value` / `normalize_goal_checks` 单判（400 E_INVALID_ARG），与

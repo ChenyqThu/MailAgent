@@ -171,7 +171,8 @@ MATTER_TABLE_DDLS = (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         public_id TEXT NOT NULL UNIQUE CHECK (public_id LIKE 'MAT-%'),
         title TEXT NOT NULL CHECK (length(trim(title)) > 0),
-        description TEXT NOT NULL DEFAULT '',
+        background TEXT NOT NULL DEFAULT '',
+        goal TEXT NOT NULL DEFAULT '',
         matter_type TEXT NULL CHECK (matter_type IS NULL OR length(trim(matter_type)) > 0),
         tags_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(tags_json)),
         goal_checks_json TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(goal_checks_json)),
@@ -839,6 +840,50 @@ def _backfill_sender_email(cursor) -> int:
     return written
 
 
+#: v61 迁移认得的两个段落小标题 (行首整行, 允许行尾空白)。
+#: 只有 2026-08-18 那一版 UI (存活约两小时, 见 DB_VERSION v61 注记) 写出过这种形状。
+_V61_HEADINGS = {"## 背景": "background", "## 目标": "goal"}
+
+
+def split_legacy_matter_description(text: str) -> tuple[str, str]:
+    """v61: 老 ``matter.description`` 整串 → ``(background, goal)``。
+
+    规则 (owner 裁决): **默认全部算背景**, 目标留空。唯一例外是那一版短命 UI 写出的
+    ``## 背景`` / ``## 目标`` 小标题形状 —— 那种行首整行小标题按段拆开, 否则会把两段
+    连着标题一起塞进背景。小标题之前的散文归背景 (它本来就是交代来龙去脉的)。
+
+    🔴 幂等: 拆完两侧都不再含小标题 ⇒ 再跑一次落进"无小标题"分支、
+    ``(background, '')`` 原样返回。调用侧另有 ``goal = ''`` 的前置条件兜底。
+    """
+    sections: dict[str, list[str]] = {"background": [], "goal": []}
+    current = "background"
+    buffer: list[str] = []
+    saw_heading = False
+
+    def flush() -> None:
+        nonlocal buffer
+        if buffer:
+            sections[current].append("\n".join(buffer))
+        buffer = []
+
+    for line in (text or "").split("\n"):
+        heading = _V61_HEADINGS.get(line.rstrip())
+        if heading is None:
+            buffer.append(line)
+            continue
+        flush()
+        saw_heading = True
+        current = heading
+    flush()
+
+    if not saw_heading:
+        return text or "", ""
+    return (
+        "\n\n".join(chunk.strip() for chunk in sections["background"] if chunk.strip()),
+        "\n\n".join(chunk.strip() for chunk in sections["goal"] if chunk.strip()),
+    )
+
+
 class SyncStoreMigrationError(RuntimeError):
     """数据库迁移真失败 / 版本不兼容 (E0-WP3 迁移守卫)。
 
@@ -1279,7 +1324,32 @@ class SyncStore:
     #                拖拽一个有意义的基线。
     #                回滚（回退 v60）: 旧代码不读这两列，**只降版本号是安全的**
     #                （新列有 DEFAULT，旧 INSERT 照常）；真要清掉再 DROP COLUMN。
-    DB_VERSION = 60
+    # v61 (2026-08-19): matter.description → matter.background + 新列 matter.goal ——
+    #                「背景」与「目标」拆成两个独立存储项。owner 推翻 08-18 那版
+    #                「合存单字段、靠 `## 背景` / `## 目标` 小标题分段」的方案, 理由是
+    #                避开解析的异常面: 一个字段两段语义, 读态 / 编辑态 / 保存 / 导出 /
+    #                Agent 写入五处都得同意同一套正则, 任何一处不同意就是静默串段。
+    #                🔴 为什么是 RENAME 而不是「加 background、留着 description」:
+    #                留着会得到一个名不副实的列, 漏改的引用点静默读到空背景; 改名让每一
+    #                处引用在运行期直接 OperationalError, 逼着全部跟改。
+    #                数据规则: 存量 `description` **原样搬进 background、goal 留空**;
+    #                唯一例外是那一版短命 UI (08-18 23:53 落地, 次日推翻) 写出的行首
+    #                整行小标题, 按段拆开落两列 (单源 split_legacy_matter_description,
+    #                本机活库实测 7 条事项 0 条带小标题, 别的安装可能有)。
+    #                幂等: 改名探列 (只在「有 description 且无 background」时执行);
+    #                拆段只挑 `goal = ''` 且真带小标题的行, 拆完两侧不再含小标题 ⇒ 重入
+    #                匹配 0 行。matter 表上没有涉及 description 的索引 / 触发器, RENAME
+    #                无冲突面 (MATTER_INDEX_DDLS 六条 matter 索引全是状态 / 时间列)。
+    #                🔴 `matter_search_document` / `matter_fts` 的 `description` 列
+    #                **有意不改名**: 它是检索文本桶不是 matter 行的镜像, 改名要重建
+    #                fts5 虚表 (fts5 不支持 RENAME COLUMN) 且会打断 `matched_fields`
+    #                这一层对外契约; 投影侧改喂 background + goal 两段。
+    #                回滚 (回退 v61): 🔴 **不能只降版本号** —— 旧代码读 `description`
+    #                会 OperationalError。真要回退需手工
+    #                `ALTER TABLE matter RENAME COLUMN background TO description`
+    #                (goal 列里的内容会就此失联, 需先手工并回 description), 或从
+    #                backups/ 恢复库。
+    DB_VERSION = 61
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -3904,6 +3974,60 @@ class SyncStore:
                 _migration_guard_columns(
                     cursor, "matter_stakeholder", {"tier", "sort_order"}, "v60 migration", e,
                 )
+
+        # === v61: matter.description → background + goal (08-19) ===
+        # 语义、数据规则与回滚代价见 DB_VERSION 注记。两段分 try (v51/v52/v59 教训:
+        # DDL 的「已存在」guard 绝不许把 DML 失败一起吞掉 —— 迁移只跑一次)。
+        if current_version < 61:
+            try:
+                cursor.execute("PRAGMA table_info(matter)")
+                _matter_cols_v61 = {row[1] for row in cursor.fetchall()}
+                # 只有「老形状」才改名; fresh 库 (v44 块按最新 DDL 建表) 与重入都落在
+                # 这个 if 之外 = 幂等。
+                if (
+                    "background" not in _matter_cols_v61
+                    and "description" in _matter_cols_v61
+                ):
+                    cursor.execute(
+                        "ALTER TABLE matter RENAME COLUMN description TO background"
+                    )
+                    logger.info("v61 migration: matter.description → background")
+                if "goal" not in _matter_cols_v61:
+                    cursor.execute(
+                        "ALTER TABLE matter ADD COLUMN goal TEXT NOT NULL DEFAULT ''"
+                    )
+                    logger.info("v61 migration: matter +goal")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "matter", {"background", "goal"}, "v61 migration", e,
+                )
+            # 拆段: 只碰那一版短命 UI 写出的「行首整行小标题」行。绝大多数库这里匹配
+            # 0 行 —— 那正是 owner 定的默认 (整串算背景, 已由上面的 RENAME 完成)。
+            # 🔴 `goal = ''` 是幂等的第二道闸: 已拆过的行 goal 非空就不再进候选,
+            # 于是 owner 升级后自己在背景里敲的 `## 背景` 不会被二次拆走。
+            try:
+                _v61_rows = cursor.execute(
+                    "SELECT id, background FROM matter "
+                    "WHERE goal = '' AND (background LIKE '%## 背景%' OR background LIKE '%## 目标%')"
+                ).fetchall()
+                _v61_updates = []
+                for _row in _v61_rows:
+                    _bg, _goal = split_legacy_matter_description(_row[1] or "")
+                    if (_bg, _goal) != ((_row[1] or ""), ""):
+                        _v61_updates.append((_bg, _goal, _row[0]))
+                if _v61_updates:
+                    cursor.executemany(
+                        "UPDATE matter SET background = ?, goal = ? WHERE id = ?",
+                        _v61_updates,
+                    )
+                    logger.info(
+                        f"v61 migration: split 背景/目标 headings on "
+                        f"{len(_v61_updates)} matter row(s)"
+                    )
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                raise SyncStoreMigrationError(
+                    f"v61 migration (background/goal split): {e}"
+                ) from e
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

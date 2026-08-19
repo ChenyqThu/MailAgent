@@ -62,7 +62,8 @@ def test_context_snapshot_core_fields_and_summary_accepted_at(service, clock):
     created = service.create_matter(
         {
             "title": "Snapshot Matter",
-            "description": "the description",
+            "background": "the background",
+            "goal": "the goal",
             "matter_type": "客户交付",
             "tags": ["vip", "q3"],
             "priority": "p0",
@@ -101,7 +102,9 @@ def test_context_snapshot_core_fields_and_summary_accepted_at(service, clock):
         "priority",
         "due_at",
         "waiting_context",
-        "description",
+        # v61：背景与目标是两个独立字段，快照两个都投（跟进 run 少任何一个都在瞎判断）。
+        "background",
+        "goal",
         "goal_checks",
         "current_summary",
         "version",

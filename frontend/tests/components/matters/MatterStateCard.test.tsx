@@ -104,9 +104,12 @@ describe('MatterDetail state card', () => {
     })
 
     expect(await screen.findByText('完成标志')).toBeTruthy()
-    expect(screen.getByText('1/2')).toBeTruthy()
+    expect(screen.getByText('已完成 1 / 2')).toBeTruthy()
 
-    fireEvent.click(screen.getByRole('checkbox', { name: '合同签署' }))
+    // 0818 起整行是一颗 `aria-pressed` 的切换钮（原来是 label 里的 shadcn Checkbox）：
+    // 已完成那条 pressed=true，未完成那条 pressed=false —— 点它翻成 done。
+    expect(screen.getByRole('button', { name: '开票完成', pressed: true })).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: '合同签署', pressed: false }))
     await waitFor(() =>
       expect(mattersApi.patch).toHaveBeenCalledWith(
         'MAT-0042',
@@ -133,12 +136,15 @@ describe('MatterDetail state card', () => {
         { expectedVersion: 3 }
       )
     )
+    // 删除钮是整行切换钮的**兄弟节点**，不是嵌在它里面（嵌套 button 非法，而且点删除
+    // 会顺带冒泡触发一次切换）—— 两次点击就该只有两次 patch。
+    expect(mattersApi.patch).toHaveBeenCalledTimes(2)
   })
 
   test('adds a completion criterion from the empty state and only prompts when all are done', async () => {
     renderDetail({ goal_checks: [] })
 
-    await screen.findByText('0/0')
+    await screen.findByText('已完成 0 / 0')
     fireEvent.click(screen.getByRole('button', { name: /加一条可判定的完成标志/ }))
     fireEvent.change(screen.getByPlaceholderText('例：合同双方已签署'), {
       target: { value: '客户书面确认上线' }
@@ -240,7 +246,8 @@ function matter(overrides: Partial<Matter> = {}): Matter {
     id: 42,
     public_id: 'MAT-0042',
     title: 'Vendor launch',
-    description: '',
+    background: '',
+    goal: '',
     matter_type: null,
     tags: [],
     status: 'active',

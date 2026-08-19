@@ -248,18 +248,29 @@ export const matterCreateSchema = z.object({
       'Short, action-oriented name of the piece of work being pushed forward — not the source ' +
         'email subject copied verbatim.'
     ),
-  description: z
+  // v61 —— 背景与目标是**两个独立字段**（此前是一个 `description` 里塞两个 Markdown
+  // 小标题）。两份 describe 各自说清自己那一半，别互相引用「另一段」。
+  background: z
     .string()
     .default('')
     .describe(
-      'Background and goal — the field the owner sees as 「背景与目标」. Write it as two ' +
-        'Markdown sections whose heading lines are exactly `## 背景` and `## 目标`: 背景 = how ' +
-        'this came about, who is involved, the constraints and decisions already made; 目标 = ' +
-        'what must be true when this is finished. Do NOT put the checklist here — that is ' +
-        'goal_checks（完成标志）. Write real substance from the conversation — NOT a summary or ' +
-        'copy of the source email (evidence belongs in linked resources). Editable later via ' +
-        'matter_update, but only when the user says the background or the goal moved — and that ' +
-        'always asks the owner to approve, so getting it right now is cheaper.'
+      'How this piece of work came about（背景）: who is involved, what triggered it, and the ' +
+        'constraints and decisions already settled. Write real substance from the conversation ' +
+        '— NOT a summary or copy of the source email (evidence belongs in linked resources). ' +
+        'Do NOT put the target outcome here — that is `goal` — and do NOT put the checklist ' +
+        'here — that is goal_checks（完成标志）. Editable later via matter_update, but only when ' +
+        'the user says the background moved — and that always asks the owner to approve, so ' +
+        'getting it right now is cheaper.'
+    ),
+  goal: z
+    .string()
+    .default('')
+    .describe(
+      'What must be true when this is finished（目标）: the outcome, stated as a state of the ' +
+        'world rather than a list of steps. Leave it empty rather than inventing one when the ' +
+        'user has not said what done looks like. Do NOT restate the background here, and do ' +
+        'NOT put the checkable criteria here — that is goal_checks（完成标志）. Same later-edit ' +
+        'and approval rules as `background`.'
     ),
   type: z
     .string()
@@ -309,7 +320,7 @@ export const matterCreateSchema = z.object({
     .optional()
     .describe(
       'Definition of done（完成标志）— the third block of the 「背景与目标」 card, kept separate ' +
-        'from the prose in `description`: a short checklist of how the owner will know this ' +
+        'from the prose in `background` / `goal`: a short checklist of how the owner will know this ' +
         'Matter is complete, e.g. [{"t":"合同已签署"},{"t":"款项已到账"}]. Set it at creation ' +
         'when the user has stated or implied what done means. Editable later via matter_update ' +
         '(owner-approved, and it replaces the whole list).'
@@ -333,17 +344,26 @@ const matterPatchSchema = z
     // S3（08-18）—— 背景与目标、完成标志对 agent 开放。🔴 两者都属于 MATTER_OWNER_FIELDS：
     // 带到它们的 patch **恒弹审批卡**（按字段判，不是把整个 matter_update 提到恒 ask ——
     // 那会让改状态、改优先级这些低风险写也开始弹卡）。
-    description: z
+    background: z
       .string()
       .optional()
       .describe(
-        "Rewrite the Matter's 背景与目标 (background and goal). This is the owner's own " +
-          'statement of intent — change it ONLY when the user has just told you the background ' +
-          'or the goal moved. Keep the two `## 背景` / `## 目标` Markdown sections, and send the ' +
-          'whole field, not just the half that changed. Never rewrite it to "improve" the ' +
-          'wording, and never fold status updates into it (that is current_summary). Always ' +
-          'sends the owner an approval card showing the full new text; a follow-up run cannot ' +
-          'call this at all and must propose instead.'
+        "Rewrite the Matter's 背景 (how this came about, who is involved, settled constraints " +
+          "and decisions). This is the owner's own words — change it ONLY when the user has " +
+          'just told you the background moved, and send the whole field, not just the sentence ' +
+          'that changed. Never rewrite it to "improve" the wording, and never fold status ' +
+          'updates into it (that is current_summary). Always sends the owner an approval card ' +
+          'showing the full new text; a follow-up run cannot call this at all and must propose ' +
+          'instead.'
+      ),
+    goal: z
+      .string()
+      .optional()
+      .describe(
+        "Rewrite the Matter's 目标 (what must be true when this is finished). Independent of " +
+          '`background` — send only the one that actually moved. Same owner-words rule, same ' +
+          'approval card, same follow-up-run restriction. The checkable criteria live in ' +
+          'goal_checks, not here.'
       ),
     goal_checks: z
       .array(matterGoalCheckSchema)
@@ -353,7 +373,7 @@ const matterPatchSchema = z
         'Replace the definition of done（完成标志）— the whole checklist, not a delta. Send the ' +
           'full desired list including entries that already exist and their done flags, or you ' +
           'will silently drop the ones you omit. Same approval + follow-up-run rules as ' +
-          '背景与目标（`description`）.'
+          '`background` / `goal`.'
       ),
     current_summary: z
       .string()

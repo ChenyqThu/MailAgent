@@ -101,7 +101,8 @@ function matter(): Matter {
     id: 42,
     public_id: 'MAT-0042',
     title: 'Vendor launch',
-    description: '',
+    background: '',
+    goal: '',
     matter_type: null,
     tags: [],
     status: 'active',
@@ -257,7 +258,7 @@ describe('MatterDetail — detail editing and rendering', () => {
     }
     matterAgentEnabled.value = true
     mattersApi.get.mockResolvedValue({
-      matter: { ...matter(), description: '**背景重点**' },
+      matter: { ...matter(), background: '**背景重点**' },
       items: [note],
       timeline: []
     })
@@ -314,8 +315,8 @@ describe('MatterDetail — detail editing and rendering', () => {
       )
     )
 
-    // 08-18 owner 推翻裁决 D5：「核心目标」统一改叫「背景与目标」，编辑态收成两个
-    // textarea，保存时序列化成 `## 背景` / `## 目标` 两段存回同一个 description 字段。
+    // v61：背景与目标是两个独立字段，两个 textarea 各自存进自己那一列 —— 🔴 patch 体里
+    // **没有任何拼接**，看见 `## 背景` 之类的分隔符就是分段方案又爬回来了。
     fireEvent.click(screen.getByRole('button', { name: '编辑' }))
     fireEvent.change(screen.getByRole('textbox', { name: '背景' }), {
       target: { value: '三方排期互相不认' }
@@ -327,7 +328,33 @@ describe('MatterDetail — detail editing and rendering', () => {
     await waitFor(() =>
       expect(mattersApi.patch).toHaveBeenCalledWith(
         'MAT-0042',
-        { description: '## 背景\n三方排期互相不认\n\n## 目标\n拿到一份都认的排期' },
+        { background: '三方排期互相不认', goal: '拿到一份都认的排期' },
+        { expectedVersion: 3 }
+      )
+    )
+  })
+
+  test('only the half that changed is sent, and the other column is untouched', async () => {
+    // 🔴 拆两列的全部意义：改目标不该把背景一起重写。老方案做不到这件事（整串是一个
+    // 字段，任何一次保存都是全量覆盖）。
+    mattersApi.get.mockResolvedValue({
+      matter: { ...matter(), background: '原来的背景', goal: '原来的目标' },
+      items: [],
+      timeline: []
+    })
+
+    renderDetail()
+    await screen.findByText('原来的背景')
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    fireEvent.change(screen.getByRole('textbox', { name: '目标' }), {
+      target: { value: '改过的目标' }
+    })
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() =>
+      expect(mattersApi.patch).toHaveBeenCalledWith(
+        'MAT-0042',
+        { background: '原来的背景', goal: '改过的目标' },
         { expectedVersion: 3 }
       )
     )
@@ -335,7 +362,7 @@ describe('MatterDetail — detail editing and rendering', () => {
 
   test('renders 背景 / 目标 as two labelled blocks', async () => {
     mattersApi.get.mockResolvedValue({
-      matter: { ...matter(), description: '## 背景\n三方排期互相不认\n\n## 目标\n拿到都认的排期' },
+      matter: { ...matter(), background: '三方排期互相不认', goal: '拿到都认的排期' },
       items: [],
       timeline: []
     })
@@ -344,33 +371,43 @@ describe('MatterDetail — detail editing and rendering', () => {
 
     expect(await screen.findByText('三方排期互相不认')).toBeTruthy()
     expect(screen.getByText('拿到都认的排期')).toBeTruthy()
-    // 小标题本身是分区标题，不该作为字面量正文漏出来
-    expect(screen.queryByText('## 背景')).toBeNull()
     expect(screen.getByRole('heading', { name: '背景' })).toBeTruthy()
     expect(screen.getByRole('heading', { name: '目标' })).toBeTruthy()
   })
 
-  test('legacy description (no headings) renders unlabelled and prefills 目标 on edit', async () => {
-    // 🔴 老数据没有小标题：读态按单段无标签正文渲染（不硬套两个分区标题），
-    // 编辑态整段预填进「目标」+ 一次性提示，绝不静默重新分类。
+  test('a matter with only 背景 renders one block, not an empty 目标 heading', async () => {
+    // v61 后半段留空是常态（创建调研只填得起背景），空段不许渲染出一个光秃秃的标题。
     mattersApi.get.mockResolvedValue({
-      matter: { ...matter(), description: '老的一句话核心目标' },
+      matter: { ...matter(), background: '只有背景', goal: '' },
       items: [],
       timeline: []
     })
 
     renderDetail()
 
-    expect(await screen.findByText('老的一句话核心目标')).toBeTruthy()
-    expect(screen.queryByRole('heading', { name: '背景' })).toBeNull()
+    expect(await screen.findByText('只有背景')).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '背景' })).toBeTruthy()
     expect(screen.queryByRole('heading', { name: '目标' })).toBeNull()
+  })
 
-    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
-    expect((screen.getByRole('textbox', { name: '目标' }) as HTMLTextAreaElement).value).toBe(
-      '老的一句话核心目标'
+  test('migrated legacy prose lands in 背景 verbatim — headings are never parsed', async () => {
+    // 🔴 v61 的数据规则：老 `description` 整串原样搬进 background（迁移单源
+    // `sync_store.split_legacy_matter_description`），前端**不再解析任何小标题**。
+    // 万一某行真的带着 `## 背景` 字面量（迁移拆过的行不会，但 owner 自己敲得出来），
+    // 它就只是 Markdown 正文里的一个标题，不是分段指令。
+    mattersApi.get.mockResolvedValue({
+      matter: { ...matter(), background: '## 背景\n老的一句话', goal: '' },
+      items: [],
+      timeline: []
+    })
+
+    renderDetail()
+
+    fireEvent.click(await screen.findByRole('button', { name: '编辑' }))
+    expect((screen.getByRole('textbox', { name: '背景' }) as HTMLTextAreaElement).value).toBe(
+      '## 背景\n老的一句话'
     )
-    expect((screen.getByRole('textbox', { name: '背景' }) as HTMLTextAreaElement).value).toBe('')
-    expect(screen.getByText('原有内容已放入「目标」，可按需把背景部分挪上去。')).toBeTruthy()
+    expect((screen.getByRole('textbox', { name: '目标' }) as HTMLTextAreaElement).value).toBe('')
   })
 })
 

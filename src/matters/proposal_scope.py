@@ -21,7 +21,8 @@ from dataclasses import dataclass
 from typing import Any, Callable, Mapping, Optional
 
 # 提案能触及的 matter 字段（canonical 名）。
-# 前五项 = `run_service.PROPOSAL_FIELD_WHITELIST`（kind='field' 的 target.field 值域）；
+# 除 `current_summary` 外 = `run_service.PROPOSAL_FIELD_WHITELIST`（kind='field' 的
+# target.field 值域）；
 # `current_summary` 不在那张白名单里但同样会被 accept 写（accept 把提案 summary 或
 # 调用方传来的 `edited_summary` 落成 matter.current_summary），所以它也是一个真实的冲突面。
 PROPOSAL_TOUCHABLE_FIELDS = frozenset(
@@ -32,10 +33,12 @@ PROPOSAL_TOUCHABLE_FIELDS = frozenset(
         "due_at",
         "waiting_context",
         "current_summary",
-        # S3（08-18）：背景与目标、完成标志进了提案面。🔴 它们**必须**在这里出现 ——
-        # 少一个就等于「owner 手改了背景与目标，而 Agent 那份带旧文案的提案不算 stale」，
-        # accept 时静默覆盖 owner 刚写的新值。这正是本文件头说的那种「放过一次真冲突」。
-        "description",
+        # S3（08-18）：背景与目标、完成标志进了提案面；v61（08-19）前者拆两项。
+        # 🔴 它们**必须**在这里出现 —— 少一个就等于「owner 手改了背景（或目标），而
+        # Agent 那份带旧文案的提案不算 stale」，accept 时静默覆盖 owner 刚写的新值。
+        # 这正是本文件头说的那种「放过一次真冲突」。
+        "background",
+        "goal",
         "goal_checks",
     }
 )
@@ -45,7 +48,7 @@ PROPOSAL_TOUCHABLE_FIELDS = frozenset(
 # 目标集 —— 提案结构上碰不到它们，碰不到就不可能冲突。
 #: 🔴 凡是「列名 ≠ canonical 字段名」的可提案字段都必须在这里映射，否则
 #: `scope_from_matter_columns` 推不出目标 ⇒ owner 手改了它、提案却不算 stale ⇒
-#: accept 时静默覆盖 owner 刚写的值。`description` 两侧同名，不需要条目。
+#: accept 时静默覆盖 owner 刚写的值。`background` / `goal` 两侧同名，不需要条目。
 _COLUMN_TO_FIELD = {
     "waiting_context_json": "waiting_context",
     "goal_checks_json": "goal_checks",

@@ -610,7 +610,9 @@ export interface MatterContextSnapshotPayload {
     priority: string
     due_at: number | null
     waiting_context: Record<string, unknown> | null
-    description: string
+    /** v61：背景与目标是两个独立字段。 */
+    background: string
+    goal: string
     /** 完成标志（0813 轮 3 O2）：owner 定义的「怎样算做完」。旧后端不发 ⇒ optional。 */
     goal_checks?: Array<{ t: string; done: boolean }>
     current_summary: string | null

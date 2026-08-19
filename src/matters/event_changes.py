@@ -86,7 +86,10 @@ MATTER_STRUCTURED_FIELDS = frozenset(
 MATTER_CHANGE_FIELDS = frozenset(
     {
         "title",
-        "description",
+        # v61：背景与目标拆两列。老事件行里 field='description' 仍要能渲染出标签
+        # （前端 `matters.eventField.description` 保留），但**新**事件只写这两个。
+        "background",
+        "goal",
         "current_summary",
         "status",
         "health",

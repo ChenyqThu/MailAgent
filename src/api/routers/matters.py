@@ -147,7 +147,9 @@ class MatterCreateDraftRequest(BaseModel):
     link_scope: str | None = None
     title: str | None = None
     matter_type: str | None = None
-    description: str | None = None
+    # v61：调研草稿的预填覆盖也拆两项（背景 / 目标各自独立）。
+    background: str | None = None
+    goal: str | None = None
 
 
 class MatterTagStyleRequest(BaseModel):

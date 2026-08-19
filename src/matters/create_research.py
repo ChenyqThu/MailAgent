@@ -126,15 +126,19 @@ class MatterCreateResearchService:
         suggested_type = requested_type or _suggested_type(
             " ".join(email.metadata.subject for email in emails)
         )
-        suggested_description = _optional_text(data.get("description")) or _description(
+        # v61：背景与目标是两个独立字段。这条链路**没有 LLM**，写不出真正的目标，
+        # 所以只起得了背景那半段；目标恒交白卷，由 owner 在创建对话框里补。
+        suggested_background = _optional_text(data.get("background")) or _background(
             source, emails
         )
+        suggested_goal = _optional_text(data.get("goal")) or ""
 
         duplicates = await asyncio.to_thread(
             self.matter_service.duplicate_candidates,
             {
                 "title": suggested_title,
-                "description": suggested_description,
+                "background": suggested_background,
+                "goal": suggested_goal,
                 "stakeholders": [item["email"] for item in stakeholders],
                 "resources": [
                     {
@@ -155,7 +159,8 @@ class MatterCreateResearchService:
             "draft": {
                 "title": suggested_title,
                 "matter_type": suggested_type,
-                "description": suggested_description,
+                "background": suggested_background,
+                "goal": suggested_goal,
                 "resources": resources,
                 "stakeholders": stakeholders,
                 "duplicate_candidates": duplicates,
@@ -341,36 +346,34 @@ def _add_stakeholder(
         current["display_name"] = _optional_text(name)
 
 
-#: 「背景与目标」草稿里来信要点的长度上限。这是用户可见编辑框的预填，不是 prompt 注入面：
-#: 400 字够交代来龙去脉，再长就是把邮件正文整段搬进目标字段。
-_DESCRIPTION_EXCERPT_LIMIT = 400
+#: 「背景」草稿里来信要点的长度上限。这是用户可见编辑框的预填，不是 prompt 注入面：
+#: 400 字够交代来龙去脉，再长就是把邮件正文整段搬进背景字段。
+_BACKGROUND_EXCERPT_LIMIT = 400
 
 
-def _description(source: EmailFull, emails: Sequence[EmailFull]) -> str:
-    """「背景与目标」（``matter.description``）的草稿：干净的业务文本。
+def _background(source: EmailFull, emails: Sequence[EmailFull]) -> str:
+    """「背景」（``matter.background``）的草稿：干净的业务文本。
 
-    🔴 这段字符串会原样落进创建对话框的编辑框、再存进 ``matter.description`` —— 它是
+    🔴 这段字符串会原样落进创建对话框的编辑框、再存进 ``matter.background`` —— 它是
     **用户可见的业务字段**，不是 prompt 注入面（0813 轮 3 O6）：
     ① 不放 ``UNTRUSTED_*`` 围栏字面量 —— 旧版把 ``fence_matter_excerpt`` 的产出直接拼进来，
-       owner 在「背景与目标」框里看见的是 ``UNTRUSTED_MATTER_EXCERPT_START id=…`` 这样的
-       机器标记；围栏只属于 prompt 注入面（资源摘录仍照旧套围栏，见 ``_email_resource``）。
-    ② 不堆机械元数据行（收件时间 / 同线程 N 封的模板行）—— 那是资料列表的职责，不是目标。
+       owner 在编辑框里看见的是 ``UNTRUSTED_MATTER_EXCERPT_START id=…`` 这样的机器标记；
+       围栏只属于 prompt 注入面（资源摘录仍照旧套围栏，见 ``_email_resource``）。
+    ② 不堆机械元数据行（收件时间 / 同线程 N 封的模板行）—— 那是资料列表的职责。
 
-    这条链路**没有 LLM**，写不出真正的「目标」，所以草稿只填得起「背景」那半段；``## 目标``
-    的小标题照样先摆好、正文留空，owner 只需补下半段（08-18 owner 推翻裁决 D5，
-    展示与存储统一成 ``## 背景`` / ``## 目标`` 两段）。UI hint 也明说「你写的这段，
-    Agent 不会改写」。
+    这条链路**没有 LLM**，写不出真正的「目标」，所以只填得起背景这一半，``matter.goal``
+    交白卷由 owner 自己补（v61 起两者是两个独立字段，不再有小标题占位这回事）。
+    UI hint 也明说「你写的这段，Agent 不会改写」。
     """
     title = _suggested_title(source.metadata.subject)
     context = f"围绕邮件「{title}」"
     if len(emails) > 1:
         context += f"（同线程 {len(emails)} 封往来）"
     context += "推进此事。"
-    lines = ["## 背景", context]
-    excerpt = _body_excerpt(source)[:_DESCRIPTION_EXCERPT_LIMIT]
+    lines = [context]
+    excerpt = _body_excerpt(source)[:_BACKGROUND_EXCERPT_LIMIT]
     if excerpt:
         lines.append(f"来信要点：{excerpt}")
-    lines += ["", "## 目标", ""]
     return "\n".join(lines)
 
 

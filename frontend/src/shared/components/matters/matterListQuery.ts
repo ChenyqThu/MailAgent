@@ -328,7 +328,8 @@ function matchesSearch(matter: Matter, query: string): boolean {
   return [
     matter.title,
     matter.public_id,
-    matter.description,
+    matter.background,
+    matter.goal,
     matter.current_summary ?? '',
     ...matter.tags
   ]

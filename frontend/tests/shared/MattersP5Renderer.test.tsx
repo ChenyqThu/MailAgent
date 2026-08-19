@@ -17,7 +17,7 @@ await i18n.changeLanguage('zh-CN')
 afterEach(() => { cleanup(); vi.restoreAllMocks() })
 
 const matter: Matter = {
-  id: 1, public_id: 'MAT-0001', title: 'Launch', description: '', matter_type: null, tags: [], status: 'active', health: 'on_track', priority: 'p1', owner_id: null, source: 'manual', due_at: null, waiting_context: null, next_attention_at: null, attention_reason: null, last_activity_at: null, latest_accepted_update_id: null, current_summary: 'Current', summary_at: 0, summary_by_kind: null, summary_by_id: null, version: 1, archived_at: null, archived_by_kind: null, archived_by_id: null, deleted_at: null, deleted_by_kind: null, deleted_by_id: null, purge_after: null, created_at: 1, updated_at: 1
+  id: 1, public_id: 'MAT-0001', title: 'Launch', background: '', goal: '', matter_type: null, tags: [], status: 'active', health: 'on_track', priority: 'p1', owner_id: null, source: 'manual', due_at: null, waiting_context: null, next_attention_at: null, attention_reason: null, last_activity_at: null, latest_accepted_update_id: null, current_summary: 'Current', summary_at: 0, summary_by_kind: null, summary_by_id: null, version: 1, archived_at: null, archived_by_kind: null, archived_by_id: null, deleted_at: null, deleted_by_kind: null, deleted_by_id: null, purge_after: null, created_at: 1, updated_at: 1
 }
 
 const signal = (overrides: Partial<MatterAttentionSignal> = {}): MatterAttentionSignal => ({

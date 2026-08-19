@@ -10,6 +10,7 @@ import {
   ChevronDown,
   ChevronUp,
   ChevronRight,
+  CircleCheckBig,
   Clock,
   FileCheck,
   Hourglass,
@@ -58,7 +59,6 @@ import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
 import { TranslatedBody } from '@shared/components/email/TranslatedBody'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
-import { Checkbox } from '@shared/components/ui/checkbox'
 import { Input } from '@shared/components/ui/input'
 import { Popmenu } from '@shared/components/ui/Popmenu'
 import { Select, SelectContent, SelectItem, SelectTrigger } from '@shared/components/ui/select'
@@ -85,6 +85,7 @@ import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 
 import { AddItemModal } from './AddItemModal'
 import { MatterAgentConfigModal } from './MatterAgentConfigModal'
+import { MatterCheckRow, MatterCheckToggle } from './MatterCheckRow'
 import { MatterContextTab } from './MatterContextTab'
 import { MatterDatePicker } from './MatterDatePicker'
 import { ResourceDrawer } from './ResourceDrawer'
@@ -94,7 +95,6 @@ import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { MatterTagPicker } from './MatterTagPicker'
 import { MatterTimeline } from './MatterTimeline'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
-import { parseMatterDescription, serializeMatterDescription } from './matterDescription'
 import { isMatterStaleError, refreshMatter, useMatterMutation } from './matterMutation'
 import { useMatterUndoToast } from './useMatterUndoToast'
 import { parseMatterSchedule } from './matterSchedule'
@@ -1097,9 +1097,7 @@ export function MatterDetail({
                 <GoalCard
                   matter={matter}
                   saving={patch.isPending}
-                  onDescriptionSave={(description, onSaved) =>
-                    patch.mutate({ description }, { onSuccess: onSaved })
-                  }
+                  onProseSave={(prose, onSaved) => patch.mutate(prose, { onSuccess: onSaved })}
                   onGoalChecksSave={(goal_checks, onSaved) =>
                     patch.mutate({ goal_checks }, { onSuccess: onSaved })
                   }
@@ -2073,44 +2071,43 @@ function StateCard({
 
 /**
  * 「背景与目标」卡（设计 matter-agent.jsx:266-332 `GoalCard`）：上半是用户自己写的
- * 背景与目标，下半是同一张卡里的「完成标志」分区（底色略深 + 上分隔线）。
+ * 背景与目标两段，下半是同一张卡里的「完成标志」分区（底色略深 + 上分隔线）。
  *
  * 🔴 **不做**「让 Agent 改写」按钮：设计稿底部那条 ghost 按钮与 HANDOFF §3 硬约束①
- * 「description 用户写的，Agent 永远不能写」直接冲突，`PROPOSAL_FIELD_WHITELIST` 里
- * 也从来没有 description（gap-list G-13 C(a)）。
+ * 「这两段是用户写的，Agent 永远不能直写」直接冲突。
  *
- * 命名：2026-08-18 owner **推翻裁决 D5**，展示统一为「背景与目标」（详情页、创建页、
- * Markdown 导出、Agent 工具说明四处同一个词）。字段名仍是 `description` —— 存储不变，
- * 两段靠 `## 背景` / `## 目标` 两个小标题分开，不加 DB 列、不做迁移。分段判据是
- * `matterDescription.ts` 那一处纯函数，读态 / 编辑态 / 保存三处都走它。
+ * 存储：2026-08-19（v61）owner 推翻「合存单字段 + `## 背景` / `## 目标` 小标题分段」的
+ * 方案，改成 `matter.background` / `matter.goal` 两个独立字段 —— 目的就是**没有解析这回事**。
+ * 🔴 不要再往这里加分段正则：一处正则就是五处（读态 / 编辑态 / 保存 / 导出 / Agent 写）
+ * 都得同意，任何一处不同意就是静默串段。
  */
 function GoalCard({
   matter,
   saving,
-  onDescriptionSave,
+  onProseSave,
   onGoalChecksSave
 }: {
   matter: Matter
   saving: boolean
-  onDescriptionSave(description: string, onSaved: () => void): void
+  onProseSave(prose: { background: string; goal: string }, onSaved: () => void): void
   onGoalChecksSave(goalChecks: MatterGoalCheck[], onSaved?: () => void): void
 }): React.ReactElement {
   const { t } = useTranslation()
   const fieldId = useId()
-  const [descriptionEditing, setDescriptionEditing] = useState(false)
-  const [descriptionDraft, setDescriptionDraft] = useState(() =>
-    parseMatterDescription(matter.description)
-  )
+  const [proseEditing, setProseEditing] = useState(false)
+  const [proseDraft, setProseDraft] = useState(() => ({
+    background: matter.background,
+    goal: matter.goal
+  }))
   const [addingGoalCheck, setAddingGoalCheck] = useState(false)
   const [goalCheckDraft, setGoalCheckDraft] = useState('')
   const goalChecks = matter.goal_checks ?? []
   const doneGoalChecks = goalChecks.filter((check) => check.done).length
-  const parsedDescription = parseMatterDescription(matter.description)
-  const nextDescription = serializeMatterDescription(descriptionDraft)
+  const proseDirty = proseDraft.background !== matter.background || proseDraft.goal !== matter.goal
 
   useEffect(() => {
-    if (!descriptionEditing) setDescriptionDraft(parseMatterDescription(matter.description))
-  }, [descriptionEditing, matter.description])
+    if (!proseEditing) setProseDraft({ background: matter.background, goal: matter.goal })
+  }, [proseEditing, matter.background, matter.goal])
 
   const saveGoalCheck = (): void => {
     const text = goalCheckDraft.trim()
@@ -2143,10 +2140,10 @@ function GoalCard({
       <MatterSectionLabel
         icon={<Target size={12} className="shrink-0 text-ink-fg-2" />}
         right={
-          !descriptionEditing ? (
+          !proseEditing ? (
             <button
               type="button"
-              onClick={() => setDescriptionEditing(true)}
+              onClick={() => setProseEditing(true)}
               className="inline-flex shrink-0 items-center gap-1 rounded-[var(--r-ctl)] px-2 py-1 text-meta text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 hover:text-ink-fg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
             >
               <Pencil size={12} />
@@ -2158,7 +2155,7 @@ function GoalCard({
         {t('matters.state.descriptionLabel')}
       </MatterSectionLabel>
       <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1/75">
-        {descriptionEditing ? (
+        {proseEditing ? (
           <div className="space-y-4 p-4">
             <div>
               <label
@@ -2171,9 +2168,9 @@ function GoalCard({
                 autoFocus
                 id={`${fieldId}-background`}
                 rows={4}
-                value={descriptionDraft.background}
+                value={proseDraft.background}
                 onChange={(event) =>
-                  setDescriptionDraft((draft) => ({ ...draft, background: event.target.value }))
+                  setProseDraft((draft) => ({ ...draft, background: event.target.value }))
                 }
                 placeholder={t('matters.state.backgroundPlaceholder')}
                 className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
@@ -2189,26 +2186,21 @@ function GoalCard({
               <textarea
                 id={`${fieldId}-goal`}
                 rows={3}
-                value={descriptionDraft.goal}
+                value={proseDraft.goal}
                 onChange={(event) =>
-                  setDescriptionDraft((draft) => ({ ...draft, goal: event.target.value }))
+                  setProseDraft((draft) => ({ ...draft, goal: event.target.value }))
                 }
                 placeholder={t('matters.state.goalPlaceholder')}
                 className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
               />
             </div>
-            {/* 老数据（没有小标题）打开编辑时的一次性提示 —— 原文整段预填进「目标」，
-              要不要把背景挪上去由 owner 自己判断，不做静默重新分类。 */}
-            {descriptionDraft.legacy ? (
-              <p className="text-meta text-ink-fg-2">{t('matters.state.descriptionLegacyHint')}</p>
-            ) : null}
             <p className="text-meta text-ink-fg-2">{t('matters.state.markdownHint')}</p>
             <div className="flex justify-end gap-2">
               <button
                 type="button"
                 onClick={() => {
-                  setDescriptionDraft(parseMatterDescription(matter.description))
-                  setDescriptionEditing(false)
+                  setProseDraft({ background: matter.background, goal: matter.goal })
+                  setProseEditing(false)
                 }}
                 className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
               >
@@ -2216,46 +2208,35 @@ function GoalCard({
               </button>
               <button
                 type="button"
-                disabled={saving || nextDescription === matter.description}
-                onClick={() =>
-                  onDescriptionSave(nextDescription, () => setDescriptionEditing(false))
-                }
+                disabled={saving || !proseDirty}
+                onClick={() => onProseSave(proseDraft, () => setProseEditing(false))}
                 className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
               >
                 {t('matters.actions.save')}
               </button>
             </div>
           </div>
-        ) : parsedDescription.legacy ? (
-          /* 老数据：整串没有小标题，按单段无标签正文渲染 —— 硬套两个分区标题会把
-            「这句到底是背景还是目标」替 owner 判了。 */
-          <div className="p-4 [&_.mail-body_p:last-child]:mb-0">
-            <TranslatedBody text={parsedDescription.goal} />
-          </div>
-        ) : parsedDescription.background || parsedDescription.goal ? (
+        ) : matter.background || matter.goal ? (
           <>
-            {parsedDescription.background ? (
+            {matter.background ? (
               <div className="p-4">
                 <h3 className="mb-1 text-meta font-medium text-ink-fg-3">
                   {t('matters.state.backgroundLabel')}
                 </h3>
                 <div className="[&_.mail-body_p:last-child]:mb-0">
-                  <TranslatedBody text={parsedDescription.background} />
+                  <TranslatedBody text={matter.background} />
                 </div>
               </div>
             ) : null}
-            {parsedDescription.goal ? (
+            {matter.goal ? (
               <div
-                className={cn(
-                  'p-4',
-                  parsedDescription.background ? 'border-t border-ink-border-soft' : null
-                )}
+                className={cn('p-4', matter.background ? 'border-t border-ink-border-soft' : null)}
               >
                 <h3 className="mb-1 text-meta font-medium text-ink-fg-3">
                   {t('matters.state.goalLabel')}
                 </h3>
                 <div className="[&_.mail-body_p:last-child]:mb-0">
-                  <TranslatedBody text={parsedDescription.goal} />
+                  <TranslatedBody text={matter.goal} />
                 </div>
               </div>
             ) : null}
@@ -2266,47 +2247,48 @@ function GoalCard({
         {/* 设计 matter-agent.jsx:290 —— 完成标志是同一张卡的下半分区（`fg/0.022` 底 +
           上分隔线），不是卡里再套一个虚线框。 */}
         <div className="border-t border-ink-border-soft bg-ink-fg/[0.02] p-4">
-          <div className="flex items-center justify-between gap-3">
+          <div className="flex flex-wrap items-center justify-between gap-3">
             <h3 className="text-meta font-medium text-ink-fg-2">{t('matters.state.goalChecks')}</h3>
-            <span className="rounded-full bg-ink-3 px-2 py-1 font-mono text-[11px] leading-4 text-ink-fg-2">
-              {t('matters.state.goalChecksCount', {
-                done: doneGoalChecks,
-                total: goalChecks.length
-              })}
-            </span>
+            {/* 0818 mockup 的 `Progress`：细条 + 「已完成 x / y」。原先是一颗 `x/y` 药丸
+              —— 同一个事实，条形更快读出「还差多少」。数字用 tabular-nums 免得跳字宽。 */}
+            <div className="flex items-center gap-2.5">
+              <span className="h-1 w-24 overflow-hidden rounded-full bg-ink-3">
+                <span
+                  className="block h-full rounded-full bg-ok transition-[width] duration-base ease-standard"
+                  style={{
+                    width: `${goalChecks.length === 0 ? 0 : Math.round((doneGoalChecks / goalChecks.length) * 100)}%`
+                  }}
+                />
+              </span>
+              <span className="shrink-0 text-meta tabular-nums text-ink-fg-2">
+                {t('matters.state.goalChecksCount', {
+                  done: doneGoalChecks,
+                  total: goalChecks.length
+                })}
+              </span>
+            </div>
           </div>
           {goalChecks.length > 0 ? (
-            <ul className="mt-3 space-y-1.5">
+            <ul className="mt-2 space-y-0.5">
               {goalChecks.map((check, index) => (
-                <li
+                <MatterCheckRow
                   key={`${index}-${check.t}`}
-                  className="group/check flex items-center gap-2 rounded-[var(--r-ctl)] px-2 py-1.5 transition-colors duration-fast ease-standard hover:bg-ink-2 focus-within:bg-ink-2"
-                >
-                  <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2">
-                    <Checkbox
-                      checked={check.done}
+                  done={check.done}
+                  text={check.t}
+                  disabled={saving}
+                  onToggle={() => setGoalCheckDone(index, !check.done)}
+                  action={
+                    <button
+                      type="button"
                       disabled={saving}
-                      onCheckedChange={(done) => setGoalCheckDone(index, done)}
-                    />
-                    <span
-                      className={cn(
-                        'min-w-0 flex-1 break-words text-body',
-                        check.done ? 'text-ink-fg-3 line-through' : 'text-ink-fg-1'
-                      )}
+                      onClick={() => removeGoalCheck(index)}
+                      aria-label={t('matters.actions.trash')}
+                      className="shrink-0 rounded-[var(--r-ctl)] p-1.5 text-ink-fg-3 opacity-0 transition-[color,background-color,opacity] duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40 group-hover/check:opacity-100 group-focus-within/check:opacity-100"
                     >
-                      {check.t}
-                    </span>
-                  </label>
-                  <button
-                    type="button"
-                    disabled={saving}
-                    onClick={() => removeGoalCheck(index)}
-                    aria-label={t('matters.actions.trash')}
-                    className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-3 opacity-0 transition-[color,background-color,opacity] duration-fast ease-standard hover:bg-ink-3 hover:text-fail focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 disabled:opacity-40 group-hover/check:opacity-100 group-focus-within/check:opacity-100"
-                  >
-                    <Trash2 size={12} />
-                  </button>
-                </li>
+                      <Trash2 size={12} />
+                    </button>
+                  }
+                />
               ))}
             </ul>
           ) : null}
@@ -2364,7 +2346,7 @@ function GoalCard({
           )}
           {goalChecks.length > 0 && doneGoalChecks === goalChecks.length ? (
             <div className="mt-3 flex items-start gap-2 rounded-[var(--r-ctl)] border border-ok/25 bg-ok/10 px-3 py-2 text-aux text-ok">
-              <Check size={13} className="mt-0.5 shrink-0" />
+              <CircleCheckBig size={13} className="mt-0.5 shrink-0" />
               <span>{t('matters.state.goalChecksAllDone')}</span>
             </div>
           ) : null}
@@ -2623,17 +2605,16 @@ function ItemGroup({
             return (
               <div key={item.id} className="group/item px-4 py-3">
                 <div className="flex items-start gap-2.5">
+                  {/* 勾选外观与「完成标志」同一个单源（`MatterCheckRow.tsx`）。这里只有图标
+                    可点：整行做成 button 会把下面的改标题 / 删除 / 来源 / 展开清单四个钮
+                    嵌进去（非法）。 */}
                   {item.kind === 'action' ? (
-                    <button
-                      type="button"
-                      onClick={() => onToggle(item)}
-                      className={cn(
-                        'mt-0.5 grid h-4 w-4 place-items-center rounded border',
-                        done ? 'border-ok bg-ok text-accent-fg' : 'border-ink-border'
-                      )}
-                    >
-                      {done ? <Check size={11} /> : null}
-                    </button>
+                    <MatterCheckToggle
+                      done={done}
+                      label={item.title}
+                      className="mt-0.5"
+                      onToggle={() => onToggle(item)}
+                    />
                   ) : null}
                   <div className="min-w-0 flex-1">
                     {editing ? (

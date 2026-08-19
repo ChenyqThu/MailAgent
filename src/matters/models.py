@@ -265,6 +265,10 @@ MATTER_SUGGESTION_BULK_MAX = 200
 MATTER_TAG_COLORS = _values(MatterTagColor)
 MATTER_TAG_SHAPES = _values(MatterTagShape)
 BUILTIN_MATTER_TYPES = ("客户交付", "商务", "售前", "问题", "内部", "产品")
+#: FTS 投影的字段名（`matched_fields` 的值域，前端 `MATTER_SEARCH_FIELDS` 手抄同一份）。
+#: 🔴 这里的 `description` **不是** matter 行的列名（v61 已拆成 background + goal），而是
+#: 检索投影里「背景 + 目标」合成的那个文本桶 —— 改名要重建 fts5 虚表并打断这层对外契约，
+#: 有意不改。投影单源 `repository.refresh_search_projection`。
 MATTER_SEARCH_FIELDS = (
     "title",
     "description",

@@ -927,8 +927,14 @@ class MatterRepository:
                 (matter_id,),
             ).fetchall()
         )
+        # 🔴 检索投影的 `description` 列**不是** matter 行的镜像, 是「背景 + 目标」合成的
+        # 一个文本桶 (v61 拆列时有意不给 fts5 虚表改名, 见 DB_VERSION v61 注记)。两段都得
+        # 进去 —— 只喂 background 会让「按目标里的词搜事项」当场失效。
+        description_text = "\n".join(
+            part for part in (row["background"] or "", row["goal"] or "") if part
+        )
         values = (
-            matter_id, title, row["description"] or "", row["current_summary"] or "",
+            matter_id, title, description_text, row["current_summary"] or "",
             row["status"] or "", items_text, stakeholders_text, notes_text, row["updated_at"],
         )
         conn.execute(

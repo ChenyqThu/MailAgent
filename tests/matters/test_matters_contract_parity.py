@@ -10,7 +10,7 @@ from src.api.routers import chat
 from src.api.routers.matters import MatterPatchWithScheduleRequest
 from src.api.schemas.matters import MatterCreateRequest, MatterProposalNewResource
 from src.mail import sync_store
-from src.matters import models, resource_proposal, service, triggers
+from src.matters import models, resource_proposal, run_service, service, triggers
 
 
 ENUMS = (
@@ -250,6 +250,61 @@ def test_typescript_matter_patch_input_mirrors_the_rest_dto():
         f"MatterPatchInput 与 REST DTO 漂移：TS 多 {sorted(ts_fields - dto)} / "
         f"TS 缺 {sorted(dto - ts_fields)}"
     )
+
+
+def gateway_owner_voice_fields(*, src: str | None = None) -> tuple[str, ...]:
+    """gateway 侧「owner 自己的话」字段集（`matter_update` 的 forceApproval 判据）。
+
+    第六份手抄：少一个字段 = agent 能**不弹审批卡**地改掉 owner 的原话；多一个 = 低风险
+    字段也开始弹卡，dogfood 被卡片淹掉。
+    """
+    source = (
+        GATEWAY_MATTER_TOOLS_TS.read_text(encoding="utf-8") if src is None else src
+    )
+    match = re.search(
+        r"const MATTER_OWNER_VOICE_FIELDS = \[([^\]]*)\] as const", source
+    )
+    assert match is not None, (
+        f"{GATEWAY_MATTER_TOOLS_TS}: 找不到 MATTER_OWNER_VOICE_FIELDS 数组字面量"
+    )
+    names = tuple(re.findall(r"'([a-z_]+)'", match.group(1)))
+    assert names, f"{GATEWAY_MATTER_TOOLS_TS}: MATTER_OWNER_VOICE_FIELDS 抽取结果为空"
+    return names
+
+
+#: owner 原声字段 = 「本人在场直写 + 恒弹卡」/「无人值守只能提案」的那一组。它是
+#: `PROPOSAL_FIELD_WHITELIST` 里**不属于**客观状态字段的那部分 —— 后者（状态 / 健康度 /
+#: 优先级 / 截止 / 等待原因）是事实记录，agent 直写不需要一张卡。
+OWNER_VOICE_EXPECTED = {"background", "goal", "goal_checks"}
+
+
+def test_gateway_owner_voice_fields_match_the_python_proposal_whitelist():
+    """🔴 v61 拆列的主要风险面：`background` / `goal` 少写一个，那一半就被 agent 静默改掉。
+
+    两侧是同一组字段的两个面（owner 在场 = 直写 + 卡；跟进 run = 只能提案），所以
+    gateway 的 forceApproval 集合必须**恰好**等于 Python 白名单里的 owner 原声那部分。
+    """
+    gateway = set(gateway_owner_voice_fields())
+    whitelist = set(run_service.PROPOSAL_FIELD_WHITELIST)
+    assert gateway == OWNER_VOICE_EXPECTED, (
+        f"gateway MATTER_OWNER_VOICE_FIELDS 漂移：多 {sorted(gateway - OWNER_VOICE_EXPECTED)} / "
+        f"缺 {sorted(OWNER_VOICE_EXPECTED - gateway)}"
+    )
+    assert gateway <= whitelist, (
+        f"这些字段恒弹卡却不在提案白名单里，跟进 run 连提案都提不了：{sorted(gateway - whitelist)}"
+    )
+    # patch schema 真的收得下它们 —— 收不下的话「恒弹卡」是一句永远不生效的空话。
+    patch_dto = matter_patch_dto_fields()
+    assert gateway <= patch_dto, (
+        f"这些字段恒弹卡却不在 PATCH DTO 里：{sorted(gateway - patch_dto)}"
+    )
+
+
+def test_owner_voice_extractor_failure_is_red():
+    with pytest.raises(AssertionError, match="找不到"):
+        gateway_owner_voice_fields(src="const SOMETHING_ELSE = ['a'] as const")
+    with pytest.raises(AssertionError, match="抽取结果为空"):
+        gateway_owner_voice_fields(src="const MATTER_OWNER_VOICE_FIELDS = [] as const")
 
 
 def test_typescript_interface_extractor_failure_and_partial_extraction_are_red():

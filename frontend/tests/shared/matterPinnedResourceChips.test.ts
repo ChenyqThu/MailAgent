@@ -42,7 +42,8 @@ function payload(): MatterContextSnapshotPayload {
       priority: 'p1',
       due_at: null,
       waiting_context: null,
-      description: '',
+      background: '',
+      goal: '',
       current_summary: null,
       version: 1,
       summary_accepted_at: null

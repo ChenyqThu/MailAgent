@@ -16,6 +16,7 @@ import en from '../../src/shared/i18n/locales/en-US/common.json'
 
 const ROOT = resolve(__dirname, '../../..')
 const EVENTS_PY = resolve(ROOT, 'src/matters/events.py')
+const EVENT_CHANGES_PY = resolve(ROOT, 'src/matters/event_changes.py')
 
 function pythonEventKinds(): string[] {
   const source = readFileSync(EVENTS_PY, 'utf-8')
@@ -32,6 +33,15 @@ function pythonEventKinds(): string[] {
     if (value) kinds.push(value)
   }
   return kinds
+}
+
+/** `matter_updated` 事件的 `fields` 值域（Python `event_changes.MATTER_CHANGE_FIELDS`）。
+ *  时间线与提案评审都拿它当 i18n key 查 `matters.eventField.*`，缺一条就直出裸标识符。 */
+function pythonMatterChangeFields(): string[] {
+  const source = readFileSync(EVENT_CHANGES_PY, 'utf-8')
+  const block = source.match(/MATTER_CHANGE_FIELDS\s*=\s*frozenset\(\s*\{([\s\S]*?)\}\s*\)/)
+  if (!block) throw new Error('MATTER_CHANGE_FIELDS frozenset not found in event_changes.py')
+  return [...block[1].matchAll(/"([a-z0-9_]+)"/g)].map(([, name]) => name)
 }
 
 describe('matter event locale coverage', () => {
@@ -63,6 +73,38 @@ describe('matter event locale coverage', () => {
     for (const kind of ['user', 'agent', 'system']) {
       expect(actors[kind]?.trim()).toBeTruthy()
     }
+  })
+
+  describe('matters.eventField covers every changeable field', () => {
+    const fields = pythonMatterChangeFields()
+
+    it('extractor actually found the canonical fields', () => {
+      // 🔴 抽不到就必须红：空集会让下面的断言全"通过"。
+      expect(fields.length).toBeGreaterThan(10)
+      expect(fields).toContain('background')
+      expect(fields).toContain('goal')
+      expect(new Set(fields).size).toBe(fields.length)
+    })
+
+    it.each([
+      ['zh-CN', zh],
+      ['en-US', en]
+    ])('%s labels every field', (_locale, bundle) => {
+      const labels = (bundle as { matters: { eventField: Record<string, string> } }).matters
+        .eventField
+      expect(fields.filter((field) => !labels[field]?.trim())).toEqual([])
+    })
+
+    it.each([
+      ['zh-CN', zh],
+      ['en-US', en]
+    ])('%s still labels the retired v61 `description` field', (_locale, bundle) => {
+      // 🔴 v61 把 matter.description 拆成 background + goal，但**升级前写下的事件行**
+      // 里 field 仍是 'description'。删掉这条 key = 老时间线那几行直出裸英文标识符。
+      const labels = (bundle as { matters: { eventField: Record<string, string> } }).matters
+        .eventField
+      expect(labels.description?.trim()).toBeTruthy()
+    })
   })
 
   it('both locales expose the same event keys', () => {

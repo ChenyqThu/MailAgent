@@ -159,10 +159,10 @@ def corpus(tmp_path):
     return MatterService(MatterRepository(path), clock_ms=lambda: 1_800_000_000_000), path
 
 
-def _matter(service, *, description: str = "") -> str:
-    """标题/描述有意用中文且与目标邮件零交集 —— 不给 boost 分留后门。"""
+def _matter(service, *, background: str = "") -> str:
+    """标题/背景有意用中文且与目标邮件零交集 —— 不给 boost 分留后门。"""
     created = service.create_matter(
-        {"title": "数值契约用例", "description": description},
+        {"title": "数值契约用例", "background": background},
         idempotency_key="create-constants",
         source="desktop_ui",
     )
@@ -222,7 +222,7 @@ def test_keyword_score_multiplier_and_cap(corpus, query, expected_confidence, wh
 
 
 @pytest.mark.parametrize(
-    ("description", "expected_confidence", "why"),
+    ("background", "expected_confidence", "why"),
     [
         # 1 个加分词：0.30 + 0.02 × 1。
         ("boostone", 0.32, "加分 = 0.02 × 非虚词命中数"),
@@ -230,10 +230,10 @@ def test_keyword_score_multiplier_and_cap(corpus, query, expected_confidence, wh
         ("boostone boosttwo boostthree boostfour", 0.36, "加分封顶 0.06"),
     ],
 )
-def test_boost_score_multiplier_and_cap(corpus, description, expected_confidence, why):
+def test_boost_score_multiplier_and_cap(corpus, background, expected_confidence, why):
     """boost 词来自**事项文档**，只加分、永远不能自己把一封邮件拉进来（召回仍靠 query）。"""
     service, _ = corpus
-    public_id = _matter(service, description=description)
+    public_id = _matter(service, background=background)
     hits = _recall(service, public_id, "distincttok")
     assert hits[f"email:{TARGET_ID}"] == expected_confidence, why
 

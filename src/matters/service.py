@@ -130,7 +130,11 @@ BINDING_PATCH_FIELDS = {
 MATTER_INSTRUCTIONS_MAX_CHARS = 4000
 DIRECT_PATCH_FIELDS = {
     "title",
-    "description",
+    # v61：背景与目标是**两个独立字段**（列同名）。合存单字段靠 `## 背景` / `## 目标`
+    # 小标题分段的老方案已推翻 —— 解析的异常面（读态 / 编辑态 / 保存 / 导出 / Agent 写
+    # 五处得同意同一套正则）比多一列贵。
+    "background",
+    "goal",
     "matter_type",
     "priority",
     "tags",
@@ -302,7 +306,7 @@ class MatterService:
         tags = normalize_tags(data.get("tags"))
         # 完成标志（0813 轮 3 O2）：创建面开放 —— D7 的 user-only 只钉 **update** 路径
         # （patch_matter 的 actor 闸不动），create 时 agent 把「怎样算做完」一起立起来
-        # 与 description 同权限同语义。
+        # 与背景 / 目标同权限同语义。
         try:
             goal_checks = normalize_goal_checks(data.get("goal_checks"))
         except ValueError as exc:
@@ -326,7 +330,8 @@ class MatterService:
                 {
                     "public_id": public_id,
                     "title": title,
-                    "description": str(data.get("description") or ""),
+                    "background": str(data.get("background") or ""),
+                    "goal": str(data.get("goal") or ""),
                     "matter_type": self._optional_text(data.get("matter_type")),
                     "tags_json": self._dump(tags),
                     "goal_checks_json": self._dump(list(goal_checks)),
@@ -508,7 +513,7 @@ class MatterService:
                 title = str(data.get("title") or "").strip()
                 text = " ".join(
                     str(data.get(key) or "")
-                    for key in ("title", "description", "current_summary")
+                    for key in ("title", "background", "goal", "current_summary")
                 )
                 stakeholder_emails = self._input_emails(data.get("stakeholders"))
                 resource_keys = self._input_resource_keys(data.get("resources"))
@@ -619,7 +624,8 @@ class MatterService:
                 "priority",
                 "due_at",
                 "waiting_context",
-                "description",
+                "background",
+                "goal",
                 # goal_checks（0813 轮 3 O2）：跟进 run 与事项对话必须看得见「怎样算做完」——
                 # 没有它，「判断有没有实质进展」缺了唯一的完成判据。只读投影，不触碰 D7。
                 "goal_checks",
@@ -996,9 +1002,9 @@ class MatterService:
             raise MatterError(
                 "E_INVALID_ARG", f"unsupported patch fields: {sorted(unknown)}"
             )
-        # D7：背景与目标、它的完成标志都是**用户写的**，Agent 只能建议不能落库。
+        # D7：背景、目标、它们的完成标志都是**用户写的**，Agent 只能建议不能落库。
         # 「让 Agent 改写」走的是"产出建议文本 → 落进用户的编辑框待确认"，不是直接写。
-        for user_only in ("description", "goal_checks"):
+        for user_only in ("background", "goal", "goal_checks"):
             if user_only in patch and actor.kind != MatterActorKind.USER.value:
                 raise MatterError(
                     "E_INVALID_ARG", f"{user_only} can only be changed by a user"
@@ -1044,7 +1050,7 @@ class MatterService:
                     field = "tags_json"
                     value = self._dump(normalize_tags(value))
                 elif field == "goal_checks":
-                    # D5 完成标志。与 description 同权限（`_require_user_actor` 在下面
+                    # D5 完成标志。与背景 / 目标同权限（`_require_user_actor` 在下面
                     # 统一判）：目标是用户写的，Agent 只能建议不能落库。
                     field = "goal_checks_json"
                     try:
@@ -1120,7 +1126,7 @@ class MatterService:
                 matter["id"],
                 expected_version,
                 direct_changes,
-                # 改 title/tags/description 这类提案碰不到的字段 → 不作废任何提案；
+                # 改 title/tags 这类提案碰不到的字段 → 不作废任何提案；
                 # 改 status/health/due_at/current_summary → 只作废也动这些字段的提案。
                 scope=scope_from_matter_columns(direct_changes),
             ):
@@ -3425,11 +3431,11 @@ class MatterService:
                 direct_changes["waiting_context_json"] = (
                     self._dump(value) if value is not None else None
                 )
-            elif field == "description":
-                # S3：背景与目标。owner 在评审界面看到全文 diff 后才会 accept ——
-                # 「Agent 只能提案、owner 拍板」这条约束在**评审**这一步兑现，
-                # 而不是靠让字段不可写。
-                direct_changes["description"] = str(value or "")
+            elif field in ("background", "goal"):
+                # S3：背景与目标（v61 起两个独立字段）。owner 在评审界面看到全文 diff 后
+                # 才会 accept ——「Agent 只能提案、owner 拍板」这条约束在**评审**这一步
+                # 兑现，而不是靠让字段不可写。
+                direct_changes[field] = str(value or "")
             elif field == "goal_checks":
                 # S3：完成标志。归一走与 patch 路径**同一个**函数 —— 提案里带非法形状
                 # （超 20 条 / 超 200 字 / 非对象）时在这里也必须炸，不能因为「是提案

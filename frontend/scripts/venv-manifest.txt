@@ -1,5 +1,5 @@
 # venv-manifest.txt — 嵌入式 CPython 运行时体积审计快照 (每次 provision 覆写, 由 build-python-venv.sh 生成)
-generated_at: 2026-08-19T05:21:46Z
+generated_at: 2026-08-19T06:54:57Z
 arch: arm64
 pbs_tag: 20260510
 pyver: 3.11.15
@@ -22,7 +22,7 @@ total_size: 446M
       9104K  sqlalchemy
       8692K  openai
       7604K  hf_xet
-      7072K  src
+      7076K  src
       6832K  anydoc
       6824K  tokenizers
       6040K  anthropic

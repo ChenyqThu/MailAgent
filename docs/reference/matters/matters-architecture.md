@@ -154,17 +154,25 @@ v57 资料版本轨迹表 `resource_version`，两者详见 §2.5；v51/v53–v5
 `tags_json` 里出现、但定义表没有的名字**不是孤儿** —— 读取时回退默认样式并照常可选可改；
 过滤掉它们会让存量标签变成「看不见但还挂在事项上」。
 
-**背景与目标** `description`：**单个字段**，两段靠 `## 背景` / `## 目标` 两个 Markdown 小标题
-分开（2026-08-18 owner 推翻裁决 D5，展示与说明口径统一成「背景与目标」；不加 DB 列、不做迁移）。
-分段判据的单源是前端 `frontend/src/shared/components/matters/matterDescription.ts`：空段整段省略；
-一个小标题都没有的老数据整串算「目标」，读态按单段无标签正文渲染、编辑时预填进「目标」并提示，
-不做静默重新分类。
+**背景与目标** `background` / `goal`：**两个独立字段**（DB v61，2026-08-19）。owner 推翻了
+08-18 那版「合存单个 `description`、靠 `## 背景` / `## 目标` 小标题分段」的方案，理由是避开解析
+的异常面 —— 一个字段两段语义，读态 / 编辑态 / 保存 / 导出 / Agent 写入五处都得同意同一套正则，
+任何一处不同意就是静默串段。🔴 **不要再往任何一侧加分段解析**：拆两列的全部意义就是没有解析
+这回事。UI 展示仍统称「背景与目标」（一张卡两个分区），导出写 `## 背景` / `## 目标` 两个平级小节。
 
-**完成标志** `goal_checks_json`：`[{"t": str, "done": bool}]`。权限与 `description`（背景与目标）
+- 迁移（v61）：存量 `description` 原样搬进 `background`、`goal` 留空；例外是那一版短命 UI
+  写出的行首整行小标题，按段拆开落两列（单源 `sync_store.split_legacy_matter_description`）。
+- 🔴 `matter_search_document` / `matter_fts` 的 `description` 列**有意不改名** —— 它是检索文本桶
+  不是 matter 行的镜像，改名要重建 fts5 虚表并打断 `matched_fields` 这层对外契约；投影侧
+  （`repository.refresh_search_projection`）改喂 background + goal 两段合成的文本。
+- 🔴 时间线里 v61 **之前**写下的事件行 `field='description'` 还在库里，`matters.eventField.description`
+  这条 i18n key 不能删（闸：`frontend/tests/shared/matterEventLocale.test.ts`）。
+
+**完成标志** `goal_checks_json`：`[{"t": str, "done": bool}]`。权限与 `background` / `goal`
 完全同形（D7，0813 轮 3 微调）：**create 时 agent 可写**（gateway `matter_create` / REST create
 都收 `goal_checks` —— agent 建事项时就该把「怎样算做完」一起立起来），**创建之后仍 user-only**
-（`patch_matter` 对这两个字段的 actor 闸不动，agent patch → `E_INVALID_ARG`；gateway
-`matter_update` 的 patch schema 也不含它们），Agent 只能建议。两者都进 `context_snapshot`
+（`patch_matter` 对这三个字段的 actor 闸不动，agent patch → `E_INVALID_ARG`；gateway
+`matter_update` 的 patch schema **含**它们但恒弹审批卡），三者都进 `context_snapshot`
 投影（跟进 run 与事项对话都看得见「怎样算做完」）。勾满只提示可以推进到「已完成」，
 **不自动改状态**：状态推进恒是用户的动作。
 

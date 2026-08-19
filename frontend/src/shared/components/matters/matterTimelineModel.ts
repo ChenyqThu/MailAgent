@@ -202,7 +202,8 @@ const AUDIT_KINDS: ReadonlySet<string> = new Set([
 /**
  * `matter_updated` 触及这些字段才算业务变化。
  *
- * 比 PRD 给的清单多三个：`description`（背景与目标）/ `waiting_context`（等待原因）/
+ * 比 PRD 给的清单多四个：`background` / `goal`（背景与目标，v61 前是一个 `description`，
+ * 老事件行仍带那个名字所以两个名字都得在）/ `waiting_context`（等待原因）/
  * `goal_checks`（完成标志）—— 它们和 status/priority 一样长在 StateCard 上、一样是
  * 「事项现在怎么回事」的一部分；把改背景与目标算成操作记录会把真业务变更藏起来。
  * 反过来 `tags` / `agent_*` / `schedule_json` / `next_attention_at` / `attention_reason`
@@ -210,6 +211,9 @@ const AUDIT_KINDS: ReadonlySet<string> = new Set([
  */
 const BUSINESS_MATTER_FIELDS: ReadonlySet<string> = new Set([
   'title',
+  'background',
+  'goal',
+  // 🔴 v61 之前写下的事件行 field='description'，留着它们才不会集体沉进折叠区。
   'description',
   'current_summary',
   'status',
@@ -403,7 +407,14 @@ function fieldShape(field: string, domain: ChangeDomain): FieldShape {
   if (field === 'due_at' || field === 'next_attention_at' || field === 'completed_at') return 'date'
   if (field === 'agent_enabled' || field === 'is_waiting_on') return 'bool'
   if (field === 'tags') return 'tags'
-  if (field === 'description' || field === 'current_summary' || field === 'matter_instructions') {
+  if (
+    field === 'background' ||
+    field === 'goal' ||
+    // v61 之前的老事件行。
+    field === 'description' ||
+    field === 'current_summary' ||
+    field === 'matter_instructions'
+  ) {
     return 'longText'
   }
   return 'text'

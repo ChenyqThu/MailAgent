@@ -613,7 +613,7 @@
       },
       "fields": {
         "title": "Title",
-        "description": "Purpose",
+        "description": "Background and goal",
         "currentSummary": "Current state",
         "status": "Status",
         "items": "Items",
@@ -4859,7 +4859,6 @@
       "typeCustom": "Custom…",
       "typeCustomPlaceholder": "Enter a custom type",
       "priority": "Priority",
-      "description": "Background and goal",
       "descriptionHint": "Agents will never rewrite what you enter here",
       "sourceMeta": "{sender} · {time} · {count} messages in thread",
       "linkScope": "Link scope",
@@ -4912,7 +4911,7 @@
     "health": { "unknown": "Unknown", "on_track": "On track", "at_risk": "At risk", "off_track": "Off track" },
     "actions": { "archive": "Archive", "restoreArchive": "Unarchive", "trash": "Move to trash", "restore": "Restore", "permanentDelete": "Delete permanently", "edit": "Edit", "save": "Save", "cancel": "Cancel", "removeTag": "Remove tag {tag}" },
     "delete": { "title": "Delete matter permanently", "hint": "Enter {id} to confirm. This cannot be undone, but it will not delete email, calendar, or external documents." },
-    "state": { "title": "Current state", "noSummary": "No current summary yet.", "summaryGuard": "The follow-up agent can only propose updates; they land here once you accept them. You can also edit this directly.", "summaryUpdatedAt": "Updated {time}", "summaryBy": { "user": "Updated by you", "agent": "Updated by the follow-up agent", "system": "Updated by the system" }, "summaryPlaceholder": "Where does this stand right now — what is blocking it, what is next?", "titleAccepted": "Accepted", "freshnessStale": "Not updated for {count} days", "freshnessFresh": "Accepted by you {time}", "regenerate": "Regenerate summary", "descriptionLabel": "Background and goal", "noDescription": "No background and goal have been entered yet.", "backgroundLabel": "Background", "goalLabel": "Goal", "backgroundPlaceholder": "How did this come about? What constraints and settled conclusions are there?", "goalPlaceholder": "What must be true when this is done? (How you judge it goes in the completion criteria below.)", "descriptionLegacyHint": "The existing text was placed under \"Goal\" — move the background part up if you want.", "markdownHint": "Markdown is supported.", "goalChecks": "Completion criteria", "goalChecksCount": "{done}/{total}", "goalCheckAdd": "+ Add a checkable completion criterion; tick them all to move this to Done", "goalCheckPlaceholder": "e.g. Contract signed by both parties", "goalChecksAllDone": "All completion criteria are met — you can move this to Done", "pendingProposals": "{count} new proposals" },
+    "state": { "title": "Current state", "noSummary": "No current summary yet.", "summaryGuard": "The follow-up agent can only propose updates; they land here once you accept them. You can also edit this directly.", "summaryUpdatedAt": "Updated {time}", "summaryBy": { "user": "Updated by you", "agent": "Updated by the follow-up agent", "system": "Updated by the system" }, "summaryPlaceholder": "Where does this stand right now — what is blocking it, what is next?", "titleAccepted": "Accepted", "freshnessStale": "Not updated for {count} days", "freshnessFresh": "Accepted by you {time}", "regenerate": "Regenerate summary", "descriptionLabel": "Background and goal", "noDescription": "No background and goal have been entered yet.", "backgroundLabel": "Background", "goalLabel": "Goal", "backgroundPlaceholder": "How did this come about? What constraints and settled conclusions are there?", "goalPlaceholder": "What must be true when this is done? (How you judge it goes in the completion criteria below.)", "markdownHint": "Markdown is supported.", "goalChecks": "Completion criteria", "goalChecksCount": "{done} of {total} done", "goalCheckAdd": "+ Add a checkable completion criterion; tick them all to move this to Done", "goalCheckPlaceholder": "e.g. Contract signed by both parties", "goalChecksAllDone": "All completion criteria are met — you can move this to Done", "pendingProposals": "{count} new proposals" },
     "item": {
       "addTitle": "Add matter item",
       "kind": "Type",
@@ -5050,7 +5049,7 @@
         "truncated": "Excerpt only — open the matter for the full text"
       }
     },
-    "eventField": { "title": "Title", "description": "Background and goal", "current_summary": "Current status summary", "status": "Status", "health": "Health", "priority": "Priority", "matter_type": "Type", "tags": "Tags", "goal_checks": "Done criteria", "due_at": "Due date", "waiting_context": "Waiting reason", "next_attention_at": "Next attention", "attention_reason": "Attention reason", "agent_profile_id": "Follow-up agent", "agent_enabled": "Follow-up toggle", "matter_instructions": "Matter instructions", "schedule_json": "Follow-up rules", "kind": "Item type", "completed_at": "Completed at", "display_name": "Name", "organization": "Organization", "role": "Role", "relationship": "Relationship", "is_waiting_on": "Waiting flag" },
+    "eventField": { "title": "Title", "background": "Background", "goal": "Goal", "description": "Background and goal (legacy)", "current_summary": "Current status summary", "status": "Status", "health": "Health", "priority": "Priority", "matter_type": "Type", "tags": "Tags", "goal_checks": "Done criteria", "due_at": "Due date", "waiting_context": "Waiting reason", "next_attention_at": "Next attention", "attention_reason": "Attention reason", "agent_profile_id": "Follow-up agent", "agent_enabled": "Follow-up toggle", "matter_instructions": "Matter instructions", "schedule_json": "Follow-up rules", "kind": "Item type", "completed_at": "Completed at", "display_name": "Name", "organization": "Organization", "role": "Role", "relationship": "Relationship", "is_waiting_on": "Waiting flag" },
     "context": {
       "stakeholders": "Stakeholders",
       "unnamedStakeholder": "Unnamed stakeholder",

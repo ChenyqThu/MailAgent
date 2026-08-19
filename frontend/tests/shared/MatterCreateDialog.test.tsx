@@ -112,7 +112,9 @@ describe('MatterCreateDialog create research', () => {
       draft: {
         title: 'Researched vendor launch',
         matter_type: '商务',
-        description: 'Coordinate the renewal and launch plan.',
+        // 调研链路没有 LLM，只填得起背景；目标恒空串由 owner 自己补（v61）。
+        background: 'Coordinate the renewal and launch plan.',
+        goal: '',
         resources: [
           {
             provider: 'mailagent',
@@ -173,6 +175,8 @@ describe('MatterCreateDialog create research', () => {
 
     expect(await view.findByDisplayValue('Researched vendor launch')).toBeTruthy()
     expect(view.getByDisplayValue('Coordinate the renewal and launch plan.')).toBeTruthy()
+    // 🔴 「目标」框必须存在且为空 —— 拆两列后草稿只填一半，另一半不能凭空补。
+    expect((view.getByRole('textbox', { name: '目标' }) as HTMLTextAreaElement).value).toBe('')
     expect(view.getByRole('combobox', { name: '类型' }).textContent).toContain('商务')
     expect(view.getByText('Vendor rollout plan')).toBeTruthy()
     expect(view.getByText('Alex · alex@example.com')).toBeTruthy()
@@ -193,7 +197,8 @@ describe('MatterCreateDialog create research', () => {
     expect(createInput).toMatchObject({
       title: 'User edited title',
       matter_type: '商务',
-      description: 'Coordinate the renewal and launch plan.',
+      background: 'Coordinate the renewal and launch plan.',
+      goal: '',
       source_resource: {
         provider: 'mailagent',
         kind: 'email',

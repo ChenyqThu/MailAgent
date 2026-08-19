@@ -87,7 +87,9 @@ export interface ActiveMatterContext {
   priority: string
   dueAt: number | null
   waitingContext: Record<string, unknown> | null
-  description: string
+  /** v61：背景与目标是两个独立字段（后端 `matter.background` / `matter.goal`）。 */
+  background: string
+  goal: string
   /** 完成标志（0813 轮 3 O2）——「怎样算做完」必须进模型可见面，判断进展才有完成判据。 */
   goalChecks: Array<{ t: string; done: boolean }>
   currentSummary: string | null
