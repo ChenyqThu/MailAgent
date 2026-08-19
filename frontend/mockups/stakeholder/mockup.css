@@ -1,0 +1,11 @@
+/* mockup 专用：tooltip 与拖起阴影。移植时 tooltip 换成主仓 ui/tooltip.tsx。 */
+.mk-tip { position: relative; display: inline-flex; }
+.mk-tip-bubble {
+  position: absolute; bottom: calc(100% + 6px); left: 50%; transform: translateX(-50%);
+  white-space: nowrap; padding: 3px 7px; border-radius: 6px; font-size: 11px; line-height: 15px;
+  background: rgb(var(--ink-fg) / 0.92); color: rgb(var(--ink-1));
+  opacity: 0; pointer-events: none; transition: opacity 90ms ease-out 220ms; z-index: 50;
+}
+.mk-tip:hover .mk-tip-bubble, .mk-tip:focus-within .mk-tip-bubble { opacity: 1; }
+/* 被拖起的卡：双主题都看得见的柔和抬升（对应主仓 .reorder-card-lifted）。 */
+.mk-lifted { box-shadow: 0 8px 22px -6px rgb(0 0 0 / 0.28), 0 0 0 1px rgb(var(--c-accent) / 0.35); }

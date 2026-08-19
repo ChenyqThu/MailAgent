@@ -28,6 +28,11 @@ export default defineConfig(
       'index-*.js',
       'archive/**',
       'mockup-*.html',
+      // 08-18 —— `mockups/<name>/` 是给 owner 验收交互与版式的原型页（独立 vite
+      // 入口，不进任何构建产物，也不被 src 引用）。它们**有意**不守渲染层的规矩：
+      // 内联常量、重复代码、非 token 字号都无所谓，价值在「能跑起来给人点」。
+      // 不排掉的话 CI 的 `eslint --quiet .` 会因为原型代码红掉。
+      'mockups/**',
       // ESLint plugin source uses CommonJS by design (loaded by ESLint runtime,
       // not bundled), and codegen scripts run under tsx — neither should be
       // linted as renderer/main TS.

@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "stakeholder-mockup",
+      "runtimeExecutable": "pnpm",
+      "runtimeArgs": ["-C", "frontend", "exec", "vite", "--config", "mockups/stakeholder/vite.config.ts"],
+      "port": 5199
+    }
+  ]
+}

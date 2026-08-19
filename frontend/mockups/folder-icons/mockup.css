@@ -1,0 +1,34 @@
+/* mockup 专用样式。移植时：popover 换主仓 ui/popover.tsx，tip 换 ui/HoverTip.tsx。 */
+
+.mk-tip {
+  position: relative;
+  display: inline-flex;
+}
+.mk-tip-bubble {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  padding: 3px 7px;
+  border-radius: 6px;
+  font-size: 11px;
+  line-height: 15px;
+  background: rgb(var(--ink-fg) / 0.92);
+  color: rgb(var(--ink-1));
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease-out 220ms;
+  z-index: 60;
+}
+.mk-tip:hover .mk-tip-bubble,
+.mk-tip:focus-within .mk-tip-bubble {
+  opacity: 1;
+}
+
+/* 图标选择器 —— 单层 hairline + 一层柔和抬升，不用重阴影（DESIGN 纪律）。 */
+.mk-popover {
+  box-shadow:
+    0 1px 0 rgb(var(--ink-border) / 0.6),
+    0 10px 26px -14px rgb(0 0 0 / 0.5);
+}
