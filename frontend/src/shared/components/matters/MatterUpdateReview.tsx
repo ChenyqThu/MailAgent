@@ -27,6 +27,7 @@ import type {
 } from '@shared/api/types/matter'
 import { useEnterAnimation } from '@shared/hooks/useEnterAnimation'
 
+import { diffGoalChecks } from './goalChecksDiff'
 import { DOC_PROVIDER_ICONS, RESOURCE_KIND_ICONS } from './matterResource'
 
 // 逐项照设计原型 review.jsx 的 `CHANGE_KIND` 词表（icon + tone + label + hint 四件）。
@@ -391,7 +392,34 @@ function ChangeRow({
             {t(`matters.review.changeKind.${change.kind}.hint`, { defaultValue: '' })}
           </p>
 
-          {change.kind === 'field' ? (
+          {change.kind === 'field' && field === 'goal_checks' ? (
+            // S3 —— 完成标志是**清单**：一行「旧 → 新」会渲染成 [object Object]，
+            // 而 owner 需要看到的是「加了哪几条 / 少了哪几条 / 勾掉了哪几条」。
+            // 这条 change 不提供行内编辑（整表编辑在事项详情的 GoalCard 里，
+            // 这里只做「接受 / 不接受」的判断）。
+            <GoalChecksDiff before={change.before} after={change.after} />
+          ) : change.kind === 'field' && field === 'description' ? (
+            // S3 —— 核心目标是长文本：挤进一行读不了，单行 input 也编辑不了。
+            <div className="mt-2 space-y-2 text-body">
+              <div className="text-aux text-ink-fg-3">
+                {t('matters.eventField.description')}
+              </div>
+              <p className="whitespace-pre-wrap rounded bg-ink-3 p-2 text-ink-fg-2">
+                {String(change.before ?? '—')}
+              </p>
+              {editing ? (
+                <textarea
+                  value={String(change.after ?? '')}
+                  onChange={(event) => onChange({ ...change, after: event.target.value })}
+                  className="min-h-[6rem] w-full rounded border border-ai/35 bg-ink-1 p-2"
+                />
+              ) : (
+                <p className="whitespace-pre-wrap rounded bg-ai/10 p-2 text-ai">
+                  {String(change.after ?? '—')}
+                </p>
+              )}
+            </div>
+          ) : change.kind === 'field' ? (
             <div className="mt-2 flex flex-wrap items-center gap-2 text-body">
               <strong>{field}</strong>
               <FieldValue field={field} value={change.before} />
@@ -505,6 +533,47 @@ function NewResourceCard({
         </div>
       </div>
       <p className="mt-1.5 text-meta text-ink-fg-3">{t('matters.review.newResource.hint')}</p>
+    </div>
+  )
+}
+
+/** S3 —— 完成标志提案的可读 diff（新增 / 删除 / 勾选翻转），判据是文本不是下标。 */
+function GoalChecksDiff({ before, after }: { before: unknown; after: unknown }): React.ReactElement {
+  const { t } = useTranslation()
+  const diff = diffGoalChecks(before, after)
+  const rows = [
+    ...diff.added.map((check) => ({ key: `a:${check.t}`, sign: '+', tone: 'text-ok', check })),
+    ...diff.removed.map((check) => ({ key: `r:${check.t}`, sign: '−', tone: 'text-fail', check })),
+    ...diff.toggled.map((check) => ({
+      key: `t:${check.t}`,
+      sign: check.done ? '✓' : '↺',
+      tone: 'text-ai',
+      check
+    }))
+  ]
+
+  return (
+    <div className="mt-2 space-y-1.5 text-body">
+      <div className="text-aux text-ink-fg-3">{t('matters.state.goalChecks')}</div>
+      {rows.length === 0 ? (
+        <p className="text-ink-fg-3">{t('matters.review.goalChecksNoChange')}</p>
+      ) : (
+        <ul className="space-y-1">
+          {rows.map((row) => (
+            <li key={row.key} className="flex items-start gap-2">
+              <span className={`font-mono ${row.tone}`}>{row.sign}</span>
+              <span className={row.sign === '−' ? 'text-ink-fg-3 line-through' : ''}>
+                {row.check.t}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {diff.unchanged > 0 ? (
+        <p className="text-aux text-ink-fg-3">
+          {t('matters.review.goalChecksUnchanged', { count: diff.unchanged })}
+        </p>
+      ) : null}
     </div>
   )
 }

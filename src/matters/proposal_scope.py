@@ -25,13 +25,31 @@ from typing import Any, Callable, Mapping, Optional
 # `current_summary` 不在那张白名单里但同样会被 accept 写（accept 把提案 summary 或
 # 调用方传来的 `edited_summary` 落成 matter.current_summary），所以它也是一个真实的冲突面。
 PROPOSAL_TOUCHABLE_FIELDS = frozenset(
-    {"status", "health", "priority", "due_at", "waiting_context", "current_summary"}
+    {
+        "status",
+        "health",
+        "priority",
+        "due_at",
+        "waiting_context",
+        "current_summary",
+        # S3（08-18）：核心目标与完成标志进了提案面。🔴 它们**必须**在这里出现 ——
+        # 少一个就等于「owner 手改了核心目标，而 Agent 那份带旧文案的提案不算 stale」，
+        # accept 时静默覆盖 owner 刚写的新值。这正是本文件头说的那种「放过一次真冲突」。
+        "description",
+        "goal_checks",
+    }
 )
 
 # matter 表列名 → 提案侧 canonical 字段名。未列出的列取自身名字；两侧归一后不在
 # PROPOSAL_TOUCHABLE_FIELDS 里的（title/tags_json/archived_at/updated_at…）一律不进
 # 目标集 —— 提案结构上碰不到它们，碰不到就不可能冲突。
-_COLUMN_TO_FIELD = {"waiting_context_json": "waiting_context"}
+#: 🔴 凡是「列名 ≠ canonical 字段名」的可提案字段都必须在这里映射，否则
+#: `scope_from_matter_columns` 推不出目标 ⇒ owner 手改了它、提案却不算 stale ⇒
+#: accept 时静默覆盖 owner 刚写的值。`description` 两侧同名，不需要条目。
+_COLUMN_TO_FIELD = {
+    "waiting_context_json": "waiting_context",
+    "goal_checks_json": "goal_checks",
+}
 
 
 @dataclass(frozen=True)

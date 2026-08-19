@@ -43,6 +43,8 @@ REPORT_BLOCK_TYPES = (
     "quote",
     "metric_delta",
     "image",
+    # 事项进展条目（S5）。新块**必须**同时落前端运行时 schema + 渲染器，否则块契约闸红。
+    "matter_item",
 )
 REPORT_BLOCK_TYPE_SET = frozenset(REPORT_BLOCK_TYPES)
 
@@ -64,6 +66,17 @@ def notion_url(page_id: Optional[str]) -> Optional[str]:
 def app_deeplink(internal_id: int) -> str:
     """app 内打开某封邮件的 deeplink 提示（前端可直接用 internal_id 路由）。"""
     return f"mailagent://email/{internal_id}"
+
+
+def matter_deeplink(public_id: str) -> str:
+    """事项的稳定标识形（与 app_deeplink 同款公式）。
+
+    ⚠️ ``mailagent://matter/…`` 目前**不在** electron main 的 deeplink 解析词表里
+    （`electron/main/deeplink.ts` 只认 email/calendar/kanban/llm/settings）——
+    报告页内点击走 router 导航（`useMatterNavigation`），本字段是给未来外部唤起 /
+    复制引用用的稳定形，不是当下的点击实现。
+    """
+    return f"mailagent://matter/{public_id}"
 
 
 # ──────────────────────────────────────────────────────────────────────────
@@ -147,6 +160,51 @@ def email_item(
     }
     if badges:
         b["badges"] = badges
+    return b
+
+
+def matter_item(
+    *,
+    public_id: str,
+    title: str,
+    status: str,
+    health: str,
+    priority: str,
+    due_at: Optional[int] = None,
+    summary: Optional[str] = None,
+    progress: Optional[Dict[str, int]] = None,
+    waiting_on: Optional[List[str]] = None,
+    next_action: Optional[str] = None,
+    signal_count: int = 0,
+) -> Dict[str, Any]:
+    """事项进展条目（S5）。
+
+    🔴 枚举字段存**原始值**（status/health/priority 的 domain 字面量），中文文案由前端
+    i18n 渲染 —— 后端塞中文会同时污染 en-US 与 API 契约（同 matter 事件 payload 纪律）。
+    ``due_at`` 同理存 epoch **毫秒**（matter 域的原始时间戳形态），不做本地化格式化。
+    """
+    b: Dict[str, Any] = {
+        "type": "matter_item",
+        "public_id": public_id,
+        "title": title or "(无标题)",
+        "status": status,
+        "health": health,
+        "priority": priority,
+        "deeplink": matter_deeplink(public_id),
+    }
+    if due_at is not None:
+        b["due_at"] = int(due_at)
+    if summary:
+        b["summary"] = summary
+    # 没有完成标志（total=0）时整段省略 —— 渲染一个 0/0 的进度条只是噪音。
+    if progress and int(progress.get("total", 0)) > 0:
+        b["progress"] = {"done": int(progress.get("done", 0)), "total": int(progress["total"])}
+    if waiting_on:
+        b["waiting_on"] = list(waiting_on)
+    if next_action:
+        b["next_action"] = next_action
+    if signal_count > 0:
+        b["signal_count"] = int(signal_count)
     return b
 
 

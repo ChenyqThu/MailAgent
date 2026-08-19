@@ -6,7 +6,7 @@
 // 🔴 图标纪律见 `parts.tsx` 文件头：原型里 path 缺失、实际渲染为空 svg 的图标
 // （组头的 bot/megaphone/building 等）**不补** —— 那不是 owner 看过的样子。
 
-import { useState } from 'react'
+import { useRef, useState } from 'react'
 import { Check, ChevronDown, ChevronRight, MoreHorizontal } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import type { RowComponentProps } from 'react-window'
@@ -119,6 +119,9 @@ function rowMenuItems(
       kind: 'action',
       id: 'hide',
       label: t(item.hidden_at != null ? 'contacts.action.unhide' : 'contacts.action.hide'),
+      // 原型 `capp.jsx::menuItems` 只给「隐藏」标 danger，「取消隐藏」不标
+      // （它是恢复动作，染红会把「撤销」读成「更危险」）。
+      ...(item.hidden_at != null ? {} : { tone: 'danger' as const }),
       onSelect: () => actions.onToggleHidden(item)
     },
     { kind: 'separator', id: 'sep-select' },
@@ -148,6 +151,8 @@ export function ContactVirtualRow({
   // render 期不许调 Date.now()（react-hooks/purity）——挂载时取一次快照，
   // 与 MatterList/MatterDetail 同一模式（相对时间不需要行内实时刷新）。
   const [now] = useState(() => Date.now())
+  // 行菜单是 portal 档（见下方），定位与 outside-click 都以这颗「更多」钮为基准。
+  const moreRef = useRef<HTMLButtonElement>(null)
   const row = rows[index]
   if (!row) return <div style={style} />
 
@@ -302,6 +307,7 @@ export function ContactVirtualRow({
             绝对定位浮在行上会盖住右列数据。 */}
         <span className="-mr-1.5 shrink-0">
           <button
+            ref={moreRef}
             type="button"
             aria-label={t('contacts.row.more')}
             onClick={(event) => {
@@ -318,15 +324,25 @@ export function ContactVirtualRow({
             <MoreHorizontal size={13} />
           </button>
         </span>
+        {/* 🔴 portal 档不是可选项：列表是 react-window 虚拟滚动，行是**无 z-index**
+            的绝对定位兄弟节点 —— 行内 absolute 的菜单会被它后面每一行按 DOM 顺序
+            画在上面（头像 / 姓名 / TwoWayBar 全糊在菜单上，读起来就是「半透明、
+            根本看不见」），贴底的行还会被滚动容器整块裁掉。原型 cui.jsx 的 Menu
+            从一开始就是 createPortal + fixed，本档即回到原型。 */}
         {menuOpen ? (
           <Popmenu
             open
             onClose={() => onMenuOpenChange(null)}
             ariaLabel={t('contacts.row.more')}
             items={rowMenuItems(item, t, actions)}
+            triggerRef={moreRef}
+            portal
             align="end"
-            anchorClassName="absolute right-2 top-full z-30"
-            width={220}
+            width={208}
+            // 这份菜单最多 10 行（8 项 + 2 分隔线）≈ 327px，基座默认的 288px 上限
+            // 正好把最后一项「选中此条」压进内滚区 —— 一屏放得下却要滚才看得到。
+            // 抬到 400 让它整块展开；真放不下时基座仍按「面板顶到视口底」二次夹取。
+            maxHeight={400}
           />
         ) : null}
       </div>

@@ -72,6 +72,11 @@ export const GATEWAY_MATTER_WRITE_TOOL_NAMES = [
 /** P4 (D6) — the follow-up run's own tool, registered ONLY inside a matter-run context. Kept in
  *  its own array (not the write family) because it is class `artifact`, silent, and guard-free —
  *  the same shape as report_write. */
+/** matter_update 里「owner 自己的话」——带到它们的 patch 恒弹审批卡（见该工具的 forceApproval）。
+ *  🔴 与 Python `run_service.PROPOSAL_FIELD_WHITELIST` 里这两项是同一组字段的两个面：
+ *  owner 在场 = 直写 + 卡；无人值守的跟进 run = 只能提案。改一边先想清另一边。 */
+const MATTER_OWNER_VOICE_FIELDS = ['description', 'goal_checks'] as const
+
 export const GATEWAY_MATTER_RUN_TOOL_NAMES = ['matter_update_propose'] as const
 
 /** task 08-14 — 跟进配置的逐条编辑。单列成组而不是并进写家族：它的 class 是
@@ -399,11 +404,20 @@ export function createMatterWriteTools(
       name: 'matter_update',
       description:
         'Patch, archive, reopen, trash, or restore a Matter with optimistic concurrency. ' +
-        'Arbitrary JSON and automation bindings are forbidden. The owner-written core goal ' +
-        '(description) and goal_checks are NOT patchable — suggest wording for the owner to ' +
-        'apply instead of attempting the write.',
+        'Arbitrary JSON and automation bindings are forbidden. Two fields are the owner\'s own ' +
+        'words and ALWAYS raise an approval card no matter how the approval tiers are set: ' +
+        '`description` (the core goal) and `goal_checks` (definition of done) — change them only ' +
+        'when the user has just said the goal or the finish line moved, never to polish wording.',
       inputSchema: matterUpdateSchema,
       risk: 'edit',
+      // S3 (08-18) — per-FIELD always-ask. 🔴 Deliberately not "raise matter_update's tier to
+      // ask": that would card every status/priority/tag tweak too, and dogfood would drown.
+      // These two fields are the owner's own statement of intent, so a card showing the full new
+      // text is the approval. A follow-up run never reaches here (matter_followup denies
+      // domain_write outright) — it must go through matter_update_propose instead.
+      forceApproval: (input) =>
+        input.patch != null &&
+        MATTER_OWNER_VOICE_FIELDS.some((field) => input.patch?.[field] !== undefined),
       run: async (input, { signal }) => {
         const patch = input.patch
           ? { ...input.patch, matter_type: input.patch.type, type: undefined }
@@ -741,7 +755,13 @@ export function createMatterRunTools(
         '`diff` is one checkable sentence on what changed versus the PREVIOUS version, and only ' +
         'applies when the resource was already attached and you just read a newer version of it; ' +
         'omit it otherwise. ' +
-        'A fact may cite such a pending resource with sources[].change_id instead of resource_id.',
+        'A fact may cite such a pending resource with sources[].change_id instead of resource_id. ' +
+        'Two field changes carry extra weight and the owner reads them closely: ' +
+        'field="description" rewrites the core goal — propose it only when the evidence shows ' +
+        'the goal or scope itself moved, never to reword; field="goal_checks" replaces the whole ' +
+        'definition-of-done checklist (send the full list including existing entries and their ' +
+        'done flags, or the ones you omit are dropped). Both are the owner\'s own words, so a ' +
+        'run may only PROPOSE them — it can never write them directly.',
       inputSchema: matterUpdateProposeSchema,
       run: (input, signal) =>
         domain.proposeMatterUpdate(matterRun.publicId, matterRun.runId, input, signal)

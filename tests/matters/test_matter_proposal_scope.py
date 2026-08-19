@@ -558,7 +558,9 @@ def test_proposal_scope_always_touches_current_summary():
         "not-json",
         '"a string is valid json but not a change list"',
         '[{"kind": "field", "target": "not-a-mapping"}]',
-        '[{"kind": "field", "target": {"field": "description"}}]',
+        # S3 起 `description` 进了提案白名单 —— 这条语料要的是「白名单**外**的字段」，
+        # 换成 `title`（提案结构上永远碰不到它）。
+        '[{"kind": "field", "target": {"field": "title"}}]',
         '[{"kind": "action", "target": {"id": "not-an-int"}}]',
         '[{"kind": "resource", "target": {}}]',
         '[{"kind": "brand_new_kind"}]',

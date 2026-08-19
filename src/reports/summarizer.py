@@ -25,6 +25,7 @@ from src.reports.data import (
     build_thread_groups,
     group_for_report,
 )
+from src.reports.matter_data import MatterBrief, fmt_due
 from src.reports.prompts import get_default_prompt
 
 _BEIJING = timezone(timedelta(hours=8))
@@ -110,6 +111,37 @@ REPORT_TOOL_SCHEMA: Dict[str, Any] = {
                 ),
                 "items": {"type": "string", "maxLength": 160},
             },
+            "matter_digest": {
+                "type": "object",
+                "additionalProperties": False,
+                "required": ["matter_refs"],
+                "description": (
+                    "「事项进展」区的策展（有事项档案时才填）。事项 = 用户脑子里的"
+                    "「一件件事」，邮件只是它的料 —— 报告会把这一区排在邮件分组之前。"
+                ),
+                "properties": {
+                    "summary": {
+                        "type": "string",
+                        "maxLength": 400,
+                        "description": (
+                            "事项区的整体汇总（1-3 句）：本窗口哪条主线推进了、哪件卡住了、"
+                            "球在谁那边。只讲档案里有的事实，不编进度。仅支持 **加粗** 与"
+                            " [文本](#email-<internal_id>) 两种标记。"
+                        ),
+                    },
+                    "matter_refs": {
+                        "type": "array",
+                        "maxItems": 12,
+                        "items": {"type": "string"},
+                        "description": (
+                            "要在事项区展开的事项 public_id（形如 MAT-0012），按你判断的"
+                            "重要度排序。**必须从给定事项档案里选，绝不能编造**；"
+                            "没有事项档案 / 无事可讲时给空数组。事项的状态、进度、在等谁、"
+                            "下一步由代码回填，你只负责挑哪几件、怎么讲。"
+                        ),
+                    },
+                },
+            },
             "highlights": {
                 "type": "array",
                 "maxItems": 3,
@@ -141,6 +173,9 @@ _FIXED_RULES = (
     "- 每封邮件最多归入一个 section。\n"
     "- 清单里标【发】的是用户自己发出的邮件，仅作「你已表态」的上下文 —— email_refs"
     "只能引收件（【收】或无方向标记）的 id，绝不引【发】的。\n"
+    "- 事项档案（若有）同样是**已知事实**：matter_digest.matter_refs 只能填档案里"
+    "出现过的 public_id（MAT-xxxx），**绝不能编造**；事项的状态 / 进度 / 在等谁由代码"
+    "回填，不要在文案里改写或杜撰这些字段。\n"
     "- 标了「已回复」的邮件用户已答复过 —— **不得列入需要亲自关注 / 紧急答复类"
     " section**，也不要在 overview / summary 里点名要求用户处理；对方在你回复后又有"
     "新来信、确需再表态时，引用对方**新来的那封**（它未标已回复）。\n"
@@ -157,6 +192,10 @@ class ReportDraft:
     sections: List[Dict[str, Any]] = field(default_factory=list)
     key_points: List[str] = field(default_factory=list)
     highlights: List[Dict[str, Any]] = field(default_factory=list)
+    # 事项策展（S5）：LLM 只给「讲哪几件 + 一句汇总」，事项的事实数据由 assembler
+    # 从 MatterBrief 回填；幻觉 public_id 在 assembler 丢弃（同 email_refs 纪律）。
+    matter_summary: str = ""
+    matter_refs: List[str] = field(default_factory=list)
     # meta
     input_tokens: int = 0
     output_tokens: int = 0
@@ -228,6 +267,50 @@ def _groups_hint_block(groups: Dict[str, List[ReportEmailBrief]]) -> str:
         f"- 已处理: {hint.get('handled', [])}\n"
         f"- FYI: {hint.get('fyi', [])}"
     )
+
+
+def _matters_block(briefs: Sequence[MatterBrief], now: datetime) -> str:
+    """事项档案段（结构化**可读文本**，不是 JSON dump —— 与邮件段同款形态）。
+
+    只描述事实（状态 / 进度 / 窗口内动静 / 待办 / 在等谁 / 信号 / 关联邮件），
+    策展留给模型。空列表 → 空串（整段不出现，prompt 里不留一个"（无）"的空壳）。
+    """
+    if not briefs:
+        return ""
+    lines = [
+        "\n## 事项档案（代码取自事项库的已知事实，勿改）",
+        "（状态：inbox 收件 / planned 计划中 / active 进行中 / waiting 等待中 / "
+        "blocked 受阻 / monitoring 监控中；健康：on_track 正常 / at_risk 有风险 / "
+        "off_track 偏离；优先级 p0 最高、p3 最低）",
+    ]
+    for b in briefs:
+        head = f"\n### {b.public_id} {b.title}（{b.status} / {b.health} / {b.priority}）"
+        due = fmt_due(b.due_at, now)
+        if due:
+            head += f"｜到期 {due}"
+        lines.append(head)
+        if b.current_summary:
+            lines.append(f"- 当前进展：{b.current_summary}")
+        if b.goal_total:
+            lines.append(f"- 完成标志：{b.goal_done}/{b.goal_total} 已达成")
+        lines.append(
+            f"- 本窗口动静：{'；'.join(b.event_lines)}" if b.event_lines else "- 本窗口动静：无"
+        )
+        if b.open_actions:
+            lines.append(f"- 未完成行动项：{'；'.join(b.open_actions)}")
+        if b.waiting_on:
+            lines.append(f"- 在等：{'、'.join(b.waiting_on)}")
+        if b.signals:
+            lines.append(f"- 关注信号（{b.signal_count} 条 open）：{'；'.join(b.signals)}")
+        if b.pending_updates:
+            lines.append(f"- 待你审阅的提案：{b.pending_updates} 条")
+        if b.email_ids:
+            # 事项↔邮件的连接点：模型据此写「X 事项本周 N 封往来，球在对方」。
+            lines.append(
+                "- 本窗口关联邮件 internal_id："
+                + "、".join(str(i) for i in b.email_ids)
+            )
+    return "\n".join(lines)
 
 
 def _email_line(
@@ -336,12 +419,17 @@ def _build_user(
     briefs: List[ReportEmailBrief],
     counts: Dict[str, Any],
     groups: Dict[str, List[ReportEmailBrief]],
+    matter_briefs: Sequence[MatterBrief] = (),
+    now: Optional[datetime] = None,
     ai_summary_max_chars: int = 100,
 ) -> str:
     """单次 classify 的 user prompt（全摘要，不带正文）。"""
     parts: List[str] = [f"把下面的邮件策展成报告，调用 {_TOOL_NAME}。"]
     parts.append(_counts_block(counts))
     parts.append(_groups_hint_block(groups))
+    matters = _matters_block(matter_briefs, now or datetime.now(_BEIJING))
+    if matters:
+        parts.append(matters)
     # 只枚举收件类邮件供 LLM 引用（email_refs）；发件箱仅参与「已发出」统计，不进清单。
     inbound = [b for b in briefs if not b.is_outbound]
     if inbound:
@@ -393,6 +481,8 @@ def _build_user_agentic(
     counts: Dict[str, Any],
     groups: Dict[str, List[ReportEmailBrief]],
     thread_groups: List[ThreadGroup],
+    matter_briefs: Sequence[MatterBrief] = (),
+    now: Optional[datetime] = None,
     ai_summary_max_chars: int = 120,
 ) -> str:
     """agentic 日报 user prompt：邮件清单**按线程分组**（同线程收发串成一个事件，
@@ -402,6 +492,9 @@ def _build_user_agentic(
     ]
     parts.append(_counts_block(counts))
     parts.append(_groups_hint_block(groups))
+    matters = _matters_block(matter_briefs, now or datetime.now(_BEIJING))
+    if matters:
+        parts.append(matters)
     if any(not b.is_outbound for b in briefs):
         lines = [
             "\n## 邮件清单（按线程分组 = 同一件事；组内按时刻升序；"
@@ -431,6 +524,7 @@ async def summarize_report(
     *,
     briefs: List[ReportEmailBrief],
     counts: Dict[str, Any],
+    matter_briefs: Sequence[MatterBrief] = (),
     cadence: str = "daily",
     now: Optional[datetime] = None,
     persona_prompt: Optional[str] = None,
@@ -453,7 +547,13 @@ async def summarize_report(
     try:
         result = await client.classify(
             system_blocks=_build_system(persona, now, context_docs=context_docs),
-            user_content=_build_user(briefs=briefs, counts=counts, groups=groups),
+            user_content=_build_user(
+                briefs=briefs,
+                counts=counts,
+                groups=groups,
+                matter_briefs=matter_briefs,
+                now=now,
+            ),
             tool_schema=REPORT_TOOL_SCHEMA,
             tool_name=_TOOL_NAME,
             model_chain=_model_chain(model),
@@ -469,6 +569,7 @@ async def summarize_report_agentic(
     briefs: List[ReportEmailBrief],
     counts: Dict[str, Any],
     db_path: str,
+    matter_briefs: Sequence[MatterBrief] = (),
     cadence: str = "daily",
     now: Optional[datetime] = None,
     persona_prompt: Optional[str] = None,
@@ -508,7 +609,12 @@ async def summarize_report_agentic(
         result = await client.run_tool_loop(
             system_blocks=_build_system_agentic(persona, now, kos_enabled, context_docs=context_docs),
             user_content=_build_user_agentic(
-                briefs=briefs, counts=counts, groups=groups, thread_groups=thread_groups
+                briefs=briefs,
+                counts=counts,
+                groups=groups,
+                thread_groups=thread_groups,
+                matter_briefs=matter_briefs,
+                now=now,
             ),
             tools=tools,
             tool_handlers=handlers,
@@ -573,12 +679,22 @@ def _parse_draft_fields(ti: Dict[str, Any]) -> Dict[str, Any]:
                 }
             )
 
+    # matter_digest：只留字符串型 ref（public_id）与汇总文案；命中校验在 assembler
+    # （它才拿得到真实 brief 集合），这里只做形状过滤。
+    digest = ti.get("matter_digest")
+    digest = digest if isinstance(digest, dict) else {}
+    matter_refs = [
+        r.strip() for r in (digest.get("matter_refs") or []) if isinstance(r, str) and r.strip()
+    ]
+
     return {
         "headline": (ti.get("headline") or "").strip()[:50],
         "overview": (ti.get("overview") or "").strip()[:400],
         "sections": sections,
         "key_points": key_points,
         "highlights": highlights,
+        "matter_summary": (digest.get("summary") or "").strip()[:400],
+        "matter_refs": matter_refs,
     }
 
 
@@ -616,7 +732,13 @@ def _extract_sub_summary(row: Dict[str, Any]) -> Dict[str, Any]:
     return out
 
 
-def _build_user_aggregate(subs: List[Dict[str, Any]], cadence: str, missing_note: str) -> str:
+def _build_user_aggregate(
+    subs: List[Dict[str, Any]],
+    cadence: str,
+    missing_note: str,
+    matter_briefs: Sequence[MatterBrief] = (),
+    now: Optional[datetime] = None,
+) -> str:
     # 方案 A：周报/月报都综合「日报」（月报不再综合周报，避免跨月周归属错位）。
     sub_unit = "日报"
     out_unit = "周报" if cadence == "weekly" else "月报"
@@ -626,6 +748,11 @@ def _build_user_aggregate(subs: List[Dict[str, Any]], cadence: str, missing_note
     ]
     if missing_note:
         parts.append(f"\n⚠️ {missing_note}（请在 overview 里如实提及覆盖不完整）")
+    # 🔴 事项档案**直接来自本周期的事项库**，不是从日报文本里重新归纳出来的 ——
+    # 二次转述会把「推进到哪、卡在哪」压成模糊印象，而库里本来就躺着结构化的主线。
+    matters = _matters_block(matter_briefs, now or datetime.now(_BEIJING))
+    if matters:
+        parts.append(matters)
     for s in subs:
         block = f"\n### {s['date']} {s['headline']}".rstrip()
         if s["overview"]:
@@ -640,6 +767,7 @@ async def summarize_aggregate(
     *,
     sub_reports: List[Dict[str, Any]],
     cadence: str,
+    matter_briefs: Sequence[MatterBrief] = (),
     now: Optional[datetime] = None,
     persona_prompt: Optional[str] = None,
     model: Optional[str] = None,
@@ -658,7 +786,9 @@ async def summarize_aggregate(
     try:
         result = await client.classify(
             system_blocks=_build_system(persona, now, context_docs=context_docs),
-            user_content=_build_user_aggregate(subs, cadence, missing_note),
+            user_content=_build_user_aggregate(
+                subs, cadence, missing_note, matter_briefs, now
+            ),
             tool_schema=REPORT_TOOL_SCHEMA,
             tool_name=_TOOL_NAME,
             model_chain=_model_chain(model),

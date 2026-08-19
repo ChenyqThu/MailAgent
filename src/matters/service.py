@@ -3425,6 +3425,25 @@ class MatterService:
                 direct_changes["waiting_context_json"] = (
                     self._dump(value) if value is not None else None
                 )
+            elif field == "description":
+                # S3：核心目标。owner 在评审界面看到全文 diff 后才会 accept ——
+                # 「Agent 只能提案、owner 拍板」这条约束在**评审**这一步兑现，
+                # 而不是靠让字段不可写。
+                direct_changes["description"] = str(value or "")
+            elif field == "goal_checks":
+                # S3：完成标志。归一走与 patch 路径**同一个**函数 —— 提案里带非法形状
+                # （超 20 条 / 超 200 字 / 非对象）时在这里也必须炸，不能因为「是提案
+                # 来的」就绕过护栏。propose 侧已先 drop 一轮，这里是 backstop。
+                # 🔴 ValueError → MatterError 与 patch 路径同款包装：不包的话 REST 的
+                # `_call` 只认 MatterError，护栏会以 500 而不是 400 的形态漏出去。
+                try:
+                    direct_changes["goal_checks_json"] = self._dump(
+                        list(normalize_goal_checks(value))
+                    )
+                except ValueError as exc:
+                    raise MatterError(
+                        "E_INVALID_ARG", f"change {change_id}: {exc}"
+                    ) from exc
             else:
                 raise MatterError(
                     "E_INVALID_ARG", f"change {change_id}: field not allowed: {field}"

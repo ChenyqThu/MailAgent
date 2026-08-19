@@ -21,6 +21,9 @@ MAILAGENT_API_PORT
 MAILAGENT_API_HOST
 MAILAGENT_AI_GATEWAY_PORT
 MAILAGENT_LOCAL_API_TOKEN
+# S1（08-18）events/loopback.py：serve 进程 SSE server 的端口，与 sse_server 自己
+# 读的同一个键、同一档「进程注入」语义（backend_lifecycle.ts 那侧也是它）。
+SSE_LOCAL_PORT
 
 # --- B. path / db override（部署路径覆盖，非行为 flag）------------------------------
 MAILAGENT_AGENT_CONFIG_DB_PATH

@@ -29,7 +29,17 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { ArrowUp, Bot, FileText, ListTodo, Mail, PenLine, Search, Square } from 'lucide-react'
+import {
+  ArrowUp,
+  Bot,
+  ClipboardList,
+  FileText,
+  ListTodo,
+  Mail,
+  PenLine,
+  Search,
+  Square
+} from 'lucide-react'
 import {
   ComposerPrimitive,
   ThreadPrimitive,
@@ -57,9 +67,14 @@ import { ContextUsageRing } from '@shared/assistant/components/ContextUsageRing'
 import { EffortPicker } from '@shared/assistant/components/EffortPicker'
 import { ModelPicker } from '@shared/assistant/components/ModelPicker'
 
-import { AGENT_MENTION_CATEGORY_ID, parseComposerMentionIds } from './agentMention'
+import {
+  AGENT_MENTION_CATEGORY_ID,
+  MATTER_MENTION_CATEGORY_ID,
+  parseComposerMentionIds
+} from './agentMention'
 import { AgentDirectiveChip, AgentTriggerPopover } from './AgentTriggerPopover'
 import { useAgentMentionAdapter } from './useAgentMentionAdapter'
+import { useMatterMentionAdapter } from './useMatterMentionAdapter'
 
 // ── @ email mention adapter (async FTS search bridged into a sync trigger adapter) ───────────────
 // The trigger popover takes a SYNCHRONOUS adapter (search(query) → items[]) plus a separate isLoading
@@ -182,50 +197,58 @@ function AgentMentionTrigger({
 }): React.JSX.Element {
   const { t } = useTranslation()
   const agentMention = useAgentMentionAdapter(controls)
+  // S4 (task 08-18) — 第三组「事项」。自门控：本面不供 onAddMatterMention（事项对话）或 Matters
+  // 总闸关着 → categories()/search() 恒空，`@` 与引入前逐字一致。
+  const matterMention = useMatterMentionAdapter(controls)
   const adapter = useMemo<TriggerAdapter>(
     () => ({
       categories: () => [
         { id: EMAIL_MENTION_CATEGORY_ID, label: t('agentView.mention.emails') },
-        ...agentMention.adapter.categories()
+        ...agentMention.adapter.categories(),
+        ...matterMention.adapter.categories()
       ],
       categoryItems: (categoryId: string) =>
         categoryId === EMAIL_MENTION_CATEGORY_ID
           ? emailMention.adapter.categoryItems(categoryId)
-          : agentMention.adapter.categoryItems(categoryId),
+          : categoryId === MATTER_MENTION_CATEGORY_ID
+            ? matterMention.adapter.categoryItems(categoryId)
+            : agentMention.adapter.categoryItems(categoryId),
       search: (query: string) => [
         ...emailMention.adapter.search(query),
-        ...agentMention.adapter.search(query)
+        ...agentMention.adapter.search(query),
+        ...matterMention.adapter.search(query)
       ]
     }),
-    [agentMention.adapter, emailMention.adapter, t]
+    [agentMention.adapter, emailMention.adapter, matterMention.adapter, t]
   )
   const onInserted = useCallback(
     (item: Unstable_TriggerItem): void => {
       if (item.type === 'agent') agentMention.onInserted(item)
+      else if (item.type === 'matter') matterMention.onInserted(item)
       else emailMention.onInserted(item)
     },
-    [agentMention, emailMention]
+    [agentMention, emailMention, matterMention]
   )
   return (
     <AgentTriggerPopover
       char="@"
       adapter={adapter}
-      isLoading={emailMention.isLoading || agentMention.isLoading}
+      isLoading={emailMention.isLoading || agentMention.isLoading || matterMention.isLoading}
       directive={{ onInserted }}
-      iconMap={{ email: Mail, agent: Bot }}
+      iconMap={{ email: Mail, agent: Bot, matter: ClipboardList }}
       fallbackIcon={(props) => <Mail {...props} />}
       loadingLabel={t('agentView.mention.loading')}
       emptyItemsLabel={(activeCategoryId) =>
         activeCategoryId === AGENT_MENTION_CATEGORY_ID
           ? t('agentView.mention.agentsEmpty')
-          : activeCategoryId === EMAIL_MENTION_CATEGORY_ID
-            ? t('agentView.mention.empty')
-            : t('agentView.mention.noMatches')
+          : activeCategoryId === MATTER_MENTION_CATEGORY_ID
+            ? t('agentView.mention.mattersEmpty')
+            : activeCategoryId === EMAIL_MENTION_CATEGORY_ID
+              ? t('agentView.mention.empty')
+              : t('agentView.mention.noMatches')
       }
       emptyCategoriesLabel={t('agentView.mention.empty')}
-      renderItemIcon={(item) =>
-        item.type === 'agent' ? agentMention.renderItemIcon(item) : null
-      }
+      renderItemIcon={(item) => (item.type === 'agent' ? agentMention.renderItemIcon(item) : null)}
     />
   )
 }
@@ -297,13 +320,27 @@ export function AgentComposer({
   useEffect(() => {
     if (!controls) return
     const agentMentions = controls.agentMentions ?? []
-    if (controls.mentions.length === 0 && agentMentions.length === 0) return
+    // S4 (task 08-18) — 事项 mention 接的是**同一条**对账：@ 一件事同样在 controls 里留了一条会
+    // 随发送注入的记录，chip 被删而记录还在 = 用户以为撤回了引用、模型却仍收到那件事的标识。
+    const matterMentions = controls.matterMentions ?? []
+    if (
+      controls.mentions.length === 0 &&
+      agentMentions.length === 0 &&
+      matterMentions.length === 0
+    ) {
+      return
+    }
     const present = parseComposerMentionIds(composerText)
     for (const mentioned of controls.mentions) {
-      if (!present.emailIds.has(mentioned.internal_id)) controls.onRemoveMention(mentioned.internal_id)
+      if (!present.emailIds.has(mentioned.internal_id))
+        controls.onRemoveMention(mentioned.internal_id)
     }
     for (const agent of agentMentions) {
       if (!present.agentIds.has(agent.id)) controls.onRemoveAgentMention?.(agent.id)
+    }
+    for (const matter of matterMentions) {
+      if (!present.matterIds.has(matter.public_id))
+        controls.onRemoveMatterMention?.(matter.public_id)
     }
   }, [composerText, controls])
 

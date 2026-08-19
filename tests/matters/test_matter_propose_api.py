@@ -125,7 +125,8 @@ def test_propose_validation_drops_each_rule(env):
                     "id": "chg_02", "kind": "fact", "text": "外源事实",
                     "sources": [{"resource_id": 99_999}],
                 },
-                # field=description 永不允许 → 剔
+                # S3 起 field=description **允许**（跟进 Agent 只能提案，owner 评审时
+                # 看到全文 diff 再决定）→ 保留。这条从「被剔」翻成「留下」是有意的。
                 {
                     "id": "chg_03", "kind": "field",
                     "target": {"entity": "matter", "field": "description"},
@@ -156,16 +157,18 @@ def test_propose_validation_drops_each_rule(env):
     assert response.status_code == 200
     data = response.json()["data"]
     dropped_ids = {entry["id"] for entry in data["dropped"]}
-    assert dropped_ids == {"chg_01", "chg_02", "chg_03", "chg_04", "chg_05"}
+    # S3（08-18）：chg_03（field=description）从「被剔」翻成「留下」—— 核心目标进了提案
+    # 白名单（跟进 Agent 只能提案，owner 评审时看全文 diff 再定）。chg_04（field=title）
+    # 仍被剔，这条语料因此仍在守「白名单外的字段进不来」。
+    assert dropped_ids == {"chg_01", "chg_02", "chg_04", "chg_05"}
     reasons = {entry["id"]: entry["reason"] for entry in data["dropped"]}
     assert reasons["chg_01"] == "fact_without_source"
     assert reasons["chg_02"] == "fact_without_source"
-    assert reasons["chg_03"] == "field_not_allowed"
     assert reasons["chg_04"] == "field_not_allowed"
     assert reasons["chg_05"] == "action_target_missing"
     detail = service.get_update_detail(pid, data["update_id"])["update"]
     kept = {c["id"]: c for c in detail["changes"]}
-    assert set(kept) == {"chg_06", "chg_07"}
+    assert set(kept) == {"chg_03", "chg_06", "chg_07"}
     assert kept["chg_06"]["is_inference"] is True
     # 剔除明细暂存进 run.error_json（worker 终态凭它判 warn）
     run = service.get_run(run_id)

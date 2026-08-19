@@ -15,7 +15,7 @@
 
 import { afterEach, beforeAll, beforeEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import type { ChatSession, ChatSessionListItem } from '@shared/api/types'
 import type { UseGeneralChatReturn } from '@shared/hooks/useGeneralChat'
@@ -47,6 +47,8 @@ const { stableMailApi, capture } = vi.hoisted(() => ({
   },
   capture: {
     composerControls: null as ChatComposerControls | null,
+    /** S4 —— 送出时真正拼给 gateway 的那段前缀（runtime provider 收到的那个函数本尊）。 */
+    buildInjectedContext: null as (() => Promise<string>) | null,
     promptRequest: null as ChatPromptRequest | null,
     snapshotEnabled: null as boolean | null,
     /** 每一次渲染的「这一帧派发了什么 / 这一帧 chip 在不在」配对样本（0813 #6 的判据）。
@@ -64,7 +66,16 @@ vi.mock('@shared/hooks/useLlmModels', () => ({
 // 只保留「AgentConversation 自己的决策」在被测面内：runtime / thread / 后台探针都换成占位，
 // thread 只把它拿到的槽位摊平渲染出来（context chip 就是这样进入 DOM 的）。
 vi.mock('@shared/assistant/runtime/AiSdkRuntimeProvider', () => ({
-  AiSdkRuntimeProvider: ({ children }: { children: React.ReactNode }) => <div>{children}</div>
+  AiSdkRuntimeProvider: ({
+    children,
+    buildInjectedContext
+  }: {
+    children: React.ReactNode
+    buildInjectedContext?: () => Promise<string>
+  }) => {
+    capture.buildInjectedContext = buildInjectedContext ?? null
+    return <div>{children}</div>
+  }
 }))
 vi.mock('@shared/assistant/runtime/ThreadRunningBridge', () => ({
   ThreadRunningBridge: () => null
@@ -191,6 +202,7 @@ function mount(
 beforeEach(() => {
   vi.clearAllMocks()
   capture.composerControls = null
+  capture.buildInjectedContext = null
   capture.promptRequest = null
   capture.snapshotEnabled = null
   capture.samples.length = 0
@@ -341,5 +353,110 @@ describe('🔴 #6 「立即跟进」的自动发送与锚点时序', () => {
     await waitFor(() => expect(capture.promptRequest).not.toBeNull())
     expect(capture.promptRequest).toMatchObject({ prefillOnly: false })
     expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy()
+  })
+})
+
+// S4 (task 08-18) —— 🔴 #S4「@ 事项」只在普通对话里给。
+//
+// 事项对话里的「当前事项」是固定的：chip / 上下文快照 / 写入回执 surface 全锚在它上面。再 @ 另
+// 一件事，用户与模型对「这件事」的所指就分裂了 —— 用户以为在说锚定的那件，模型手里却有两件。
+// 判据取 contextSource（同一处单值判定），所以三档 matter 语义都得关：会话行自带的 anchor、
+// dock 带的种子、以及**编号未就绪**那一档（那一档整个禁发，更不该开新入口）。
+describe('🔴 #S4 事项对话不给「@ 事项」这一组', () => {
+  const chat = (): UseGeneralChatReturn =>
+    fakeChat({ activeSessionId: 10, messagesSessionId: 10, messages: [] })
+
+  test('普通会话 → 供给整套（入口在）', async () => {
+    mount(
+      chat(),
+      matterItem({ anchor_type: 'general', anchor_id: null } as Partial<ChatSessionListItem>)
+    )
+    await waitFor(() => expect(capture.composerControls).not.toBeNull())
+    expect(capture.composerControls?.onAddMatterMention).toBeTypeOf('function')
+    expect(capture.composerControls?.matterMentions).toEqual([])
+  })
+
+  test('事项会话（编号已解析）→ 不供给 onAddMatterMention', async () => {
+    mount(chat(), matterItem({ matter_public_id: 'MAT-0042', matter_title: 'Vendor launch' }))
+    await waitFor(() => expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy())
+    expect(capture.composerControls?.onAddMatterMention).toBeUndefined()
+  })
+
+  test('事项会话（编号未就绪）→ 同样不供给', async () => {
+    mount(chat(), matterItem({ matter_public_id: null, matter_title: null }))
+    await waitFor(() =>
+      expect(document.querySelector('[data-matter-context-unresolved]')).toBeTruthy()
+    )
+    expect(capture.composerControls?.onAddMatterMention).toBeUndefined()
+  })
+
+  test('dock 以「事项对话」唤出（种子）→ 不供给', async () => {
+    mount(fakeChat(), null, {
+      initialMatterTarget: { id: 4242, publicId: 'MAT-0042', title: 'Vendor launch' }
+    })
+    await waitFor(() => expect(screen.getByText('MAT-0042 · Vendor launch')).toBeTruthy())
+    expect(capture.composerControls?.onAddMatterMention).toBeUndefined()
+  })
+})
+
+// S4 —— 入口关掉只是一半：真正发出去的是 buildInjectedContext。这一组盯的是**注入面**。
+describe('🔴 #S4 @ 事项的注入形状与失效', () => {
+  const target = { id: 4242, publicId: 'MAT-0042', title: 'Vendor launch' }
+  const mentioned = { public_id: 'MAT-0012', title: 'Vendor launch', status: 'active' }
+
+  /** 照 dock 的真实接线：`initialMatterTarget` 从 store 读 —— 这样「对话进行中切成事项对话」
+   *  才是真实可达的时序（也正是本闸要覆盖的那一幕）。 */
+  function DockHost(): React.JSX.Element {
+    const matterTarget = useAIChatPanel((s) => s.matterTarget)
+    return (
+      <AgentConversation
+        chat={fakeChat()}
+        activeItem={null}
+        initialMatterTarget={matterTarget ?? undefined}
+      />
+    )
+  }
+
+  function mountDock(): void {
+    const queryClient = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={queryClient}>
+        <DockHost />
+      </QueryClientProvider>
+    )
+  }
+
+  test('@ 一件事 → 注入 <mentioned_matters> 标识 + 取详情的指示，正文一个字都不带', async () => {
+    mountDock()
+    await waitFor(() => expect(capture.composerControls?.onAddMatterMention).toBeTypeOf('function'))
+    act(() => capture.composerControls!.onAddMatterMention!(mentioned))
+    await waitFor(() => expect(capture.composerControls?.matterMentions).toHaveLength(1))
+
+    const injected = await capture.buildInjectedContext!()
+    expect(injected).toContain('<mentioned_matters>')
+    expect(injected).toContain('<matter id="MAT-0012" title="Vendor launch" status="active" />')
+    expect(injected).toContain('Call matter_get with the EXACT')
+    // 只发标识：注入面里没有任何一段事项正文（它是邮件正文的衍生物，见 prd R2）。
+    expect(injected).not.toContain('current_summary')
+    expect(injected).not.toContain('description=')
+  })
+
+  test('🔴 对话中途切成事项对话 → 先前 @ 的那件事**不再**随注入发出去', async () => {
+    mountDock()
+    await waitFor(() => expect(capture.composerControls?.onAddMatterMention).toBeTypeOf('function'))
+    act(() => capture.composerControls!.onAddMatterMention!(mentioned))
+    await waitFor(() => expect(capture.composerControls?.matterMentions).toHaveLength(1))
+    expect(await capture.buildInjectedContext!()).toContain('MAT-0012')
+
+    // 用户从事项页点「对话」——这场对话自此锚在 MAT-0042 上。
+    act(() => {
+      useAIChatPanel.getState().openMatterChat(target)
+    })
+    await waitFor(() => expect(capture.composerControls?.onAddMatterMention).toBeUndefined())
+
+    // 🔴 只关入口而注入照旧，就会让「切进来之前 @ 过的那件事」跟着后面每一轮一起发出去。
+    const injected = await capture.buildInjectedContext!()
+    expect(injected).not.toContain('<mentioned_matters>')
+    expect(injected).not.toContain('MAT-0012')
   })
 })

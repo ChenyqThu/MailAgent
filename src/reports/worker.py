@@ -20,6 +20,7 @@ from src.config import config
 from src.reports import data as rdata
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.agent_tools import kos_is_available
+from src.reports.matter_data import fetch_matter_briefs
 from src.reports.store import ReportStore, cadence_of, schedule_of
 from src.reports.wire import connector_grants_of
 from src.reports.summarizer import (
@@ -188,7 +189,7 @@ async def run_report_once(
     # 周 / 月报走层级聚合（综合下层报告，不读原始邮件）。
     if cadence in ("weekly", "monthly"):
         return await _run_aggregate(
-            store=store, agent=agent, cadence=cadence, n=n, gen_now=n,
+            store=store, db_path=db_path, agent=agent, cadence=cadence, n=n, gen_now=n,
             aggregate_fn=aggregate_fn, client=client,
         )
 
@@ -223,9 +224,12 @@ async def run_report_once(
             logger.info(f"[report] {rid} empty (no emails in window)")
             return rid
 
+        # 事项取数放在 empty 早退之后：没邮件的那天报告整份都不生成，事项也无处可放。
+        matter_briefs = _safe_matter_briefs(db_path, win_start_dt, win_end_dt, rid)
         try:
             draft = await agentic_fn(
                 briefs=briefs, counts=counts, db_path=db_path,
+                matter_briefs=matter_briefs,
                 kos_enabled=kos_is_available(), cadence=cadence, now=n,
                 persona_prompt=agent.get("prompt"), model=agent.get("model"),
                 context_docs=_parse_context_docs(agent.get("context_docs_json")),
@@ -238,6 +242,7 @@ async def run_report_once(
                 draft=draft, briefs=briefs, counts=counts, agent_id=agent["id"],
                 cadence=cadence, report_date=report_date, window_start=win_start,
                 window_end=win_end, generated_at=n.isoformat(), model=draft.model, now=n,
+                matter_briefs=matter_briefs,
             )
             store.finish_report(
                 rid, status="ready", blocks_json=doc.to_json(), counts_json=counts_json,
@@ -254,6 +259,7 @@ async def run_report_once(
                 briefs=briefs, counts=counts, agent_id=agent["id"], cadence=cadence,
                 report_date=report_date, window_start=win_start, window_end=win_end,
                 generated_at=n.isoformat(), model="", now=n,
+                matter_briefs=matter_briefs,
             )
             store.finish_report(
                 rid, status="ready", blocks_json=doc.to_json(), counts_json=counts_json,
@@ -333,6 +339,32 @@ def _daily_window(agent: Dict[str, Any], n: datetime) -> Tuple[datetime, datetim
         start = today0 - timedelta(days=1)
         return start, today0, start.strftime("%Y-%m-%d")
     return n - timedelta(hours=24), n, n.strftime("%Y-%m-%d")
+
+
+def _period_window(start_date: str, end_date: str, n: datetime) -> Tuple[datetime, datetime]:
+    """周 / 月报的日期边界（'YYYY-MM-DD'，两端含）→ 事项取数窗口 [起始日 00:00, 末日次日 00:00)。
+
+    时区取 ``n``（agent 时区或本机），与 _period_bounds / fire 判定同口径。
+    """
+    tz = n.tzinfo
+    start = datetime.fromisoformat(start_date).replace(tzinfo=tz)
+    end = datetime.fromisoformat(end_date).replace(tzinfo=tz) + timedelta(days=1)
+    return start, end
+
+
+def _safe_matter_briefs(
+    db_path: str, window_start: datetime, window_end: datetime, rid: str
+) -> List[Any]:
+    """事项取数的守护壳：**任何**异常都降级为「本次没有事项」。
+
+    报告不能因为事项挂了而生不出来 —— 邮件才是这份报告的主体，事项是增益。
+    flag off / 窗口内无事项同样返回空列表，assembler 据此整段不渲染（不是空框）。
+    """
+    try:
+        return fetch_matter_briefs(db_path, window_start, window_end)
+    except Exception as e:  # noqa: BLE001 — 事项取数不得影响报告生成
+        logger.warning(f"[report] {rid} 事项取数失败 → 本次报告不含事项区: {e}")
+        return []
 
 
 def _period_bounds(cadence: str, n: datetime) -> Tuple[str, str, str, int]:
@@ -465,6 +497,7 @@ def _sum_counts(subs: List[Dict[str, Any]]) -> Dict[str, Any]:
 async def _run_aggregate(
     *,
     store: ReportStore,
+    db_path: str,
     agent: Dict[str, Any],
     cadence: str,
     n: datetime,
@@ -472,7 +505,12 @@ async def _run_aggregate(
     aggregate_fn: Callable[..., Awaitable[Any]],
     client: Any,
 ) -> str:
-    """周 / 月报层级聚合：读上一个完整周期的子报告 → LLM 综合 → ReportDoc。缺则跳过 + 标注。"""
+    """周 / 月报层级聚合：读上一个完整周期的子报告 → LLM 综合 → ReportDoc。缺则跳过 + 标注。
+
+    🔴 事项部分**不走**子报告转述：``db_path`` 就是为它而来 —— 事项数据直接按本周期
+    窗口从库里取（``_safe_matter_briefs``）。让模型从 7 份日报的文字里重新归纳「推进到
+    哪、卡在哪」，等于把库里已有的结构化主线降级成二手印象。
+    """
     start_date, end_date, report_date, expected = _period_bounds(cadence, n)
     # 方案 A：周报和月报都聚合「日报」—— 每份日报 report_date=当天、明确归月，无跨月周
     # 归属歧义；月报综合整月 ~30 份日报，context 充足（远低于 LLM 上限）。
@@ -527,9 +565,13 @@ async def _run_aggregate(
             if missing > 0
             else ""
         )
+        matter_briefs = _safe_matter_briefs(
+            db_path, *_period_window(start_date, end_date, n), rid
+        )
         try:
             draft = await aggregate_fn(
                 sub_reports=subs, cadence=cadence, now=gen_now,
+                matter_briefs=matter_briefs,
                 persona_prompt=agent.get("prompt"), model=agent.get("model"),
                 context_docs=_parse_context_docs(agent.get("context_docs_json")),
                 missing_note=missing_note, client=client,
@@ -547,6 +589,7 @@ async def _run_aggregate(
             draft=draft, briefs=[], counts=counts, agent_id=agent["id"],
             cadence=cadence, report_date=report_date, window_start=start_date,
             window_end=end_date, generated_at=gen_now.isoformat(), model=model_used, now=gen_now,
+            matter_briefs=matter_briefs,
         )
         store.finish_report(
             rid, status="ready", blocks_json=doc.to_json(), counts_json=counts_json,

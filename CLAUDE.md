@@ -231,7 +231,7 @@ sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_metadata WHERE sync_statu
 | `src/repository/` | v4 `EmailRepository` / `AttachmentStore` / FTS5 搜索 |
 | `src/llm_agent/` / `src/project_progress/` / `src/kos/` | 见对应下沉文档 |
 | `src/agent_config/` | Capability & Context 配置面（backend-owned `agent_config.db`）：统一 skill registry + Standing Context 文档 + history/rollback + 投影 + RULES 校验。配 `src/skills/installed.py` + `src/api/routers/agent.py` |
-| `src/reports/` | 报告 Agent 系统（日/周/月 + custom）：18 种 ReportDoc 块的 Python canonical vocabulary（TS 镜像有跨语言闸）+ 取数/摘要/装配 + worker + store |
+| `src/reports/` | 报告 Agent 系统（日/周/月 + custom）：19 种 ReportDoc 块的 Python canonical vocabulary（TS 镜像有跨语言闸）+ 取数/摘要/装配 + worker + store |
 | `src/agents/` | Custom agent 内核 + 产品化：trigger 解析 / 两项预算 / tool policy / 幂等 enqueue / run_state 9 值读态 / 六能力卡。🔴 **档位向上取整**——显示的档恒 ⊇ 实际启用工具（闸 `frontend/tests/shared/customAgentCapabilities.test.ts`）。🔴 **重复失败纪律恒注入 manual + headless**（08-02 F4 拍板） |
 | `src/matters/` | Matters/事项域（17 文件，`service.py` 独占 ~4600 行）：域服务单写面 / repository / run spec 与 worker / trigger envelope / 关注信号 / 资料身份归一 / 时间线。🔴 **三条入口安全姿态不同，不许合成一条路径**（创建带调研=纯读端点 / 定时跟进=headless run / 事项对话=交互式）。🔴 跟进 run 的 `allowedTools` 恒 `[]`、`grantExec` 永不写。🔴 v52 contact 索引独立常量**不进** `MATTER_INDEX_DDLS`（老库重放会炸）。🔴 时间线 `ON DELETE CASCADE`——永久删除的审计只能落日志 |
 | `src/contacts/` | 通讯录域：taxonomy 枚举单源（TS 镜像有闸）/ L0+L1 增量扫描 / service 治理写面单源 / repository。身份判据**只有归一 email**（名字永不作自动合并判据）。🔴 三表 DDL 单源 `sync_store.py::CONTACT_TABLE_DDLS`，**不进** `MATTER_*_DDLS` |

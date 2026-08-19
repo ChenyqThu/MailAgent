@@ -163,10 +163,14 @@ describe('MatterContextTab —— G-14 / G-17 入口', () => {
   })
 
   // 通讯录 WP4 —— 干系人卡「头像+姓名」块的人物页互链入口。
+  //
+  // 🔴 选择器用 title 而不是 `{ name: /Peer Name/ }`：S2（干系人拖拽）之后每行多了一个
+  // 拖拽 grip 按钮，它的 aria-label 按 a11y 要求含姓名（「拖动排序：Peer Name，第 1 位…」），
+  // 正则匹配会把它一并命中。收紧选择器，而不是把姓名从 grip 的 label 里拿掉。
   test('WP4：contact_id 非空 → 身份块是按钮，点击落 navigation store + 跳 /contacts', () => {
     renderTab([stakeholder(5, 42)])
-    const button = screen.getByRole('button', { name: /Peer Name/ })
-    expect(button.getAttribute('title')).toBe('打开 Peer Name 的人物页')
+    const button = screen.getByTitle('打开 Peer Name 的人物页')
+    expect(button.tagName).toBe('BUTTON')
     button.click()
     expect(useContactNavigation.getState().targetContactId).toBe(42)
     expect(navigate).toHaveBeenCalledWith({ to: '/contacts' })
@@ -174,7 +178,7 @@ describe('MatterContextTab —— G-14 / G-17 入口', () => {
 
   test('WP4：contact_id 为空（纯本事项行）→ 身份块不是按钮（不做假入口）', () => {
     renderTab([stakeholder(5, null)])
-    expect(screen.queryByRole('button', { name: /Peer Name/ })).toBeNull()
+    expect(screen.queryByTitle('打开 Peer Name 的人物页')).toBeNull()
     expect(screen.getByText('Peer Name')).toBeTruthy()
   })
 })

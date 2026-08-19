@@ -424,3 +424,57 @@ describe('Popmenu — 通用弹层形态（下游 showcase 的四种内容）', 
     expect(screen.queryByRole('menu')).toBeNull()
   })
 })
+
+describe('Popmenu — portal 档（虚拟列表里的行菜单）', () => {
+  // 背景：通讯录列表是 react-window 虚拟滚动，行是**无 z-index** 的绝对定位兄弟
+  // 节点，按 DOM 顺序绘制 —— 行内 absolute 的菜单会被它后面每一行画在上面，
+  // 视觉结果就是 owner 报的「半透明的背景，根本看不见」（0818 复现截图在
+  // .trellis/tasks/08-18-contacts-row-menu-align/shots/）。这里钉的是修法的三条
+  // 契约：挂载点、定位方式、以及**既有 absolute 路径一个字节都不许变**。
+  //
+  // happy-dom 的 getBoundingClientRect 恒返回 0，视口钳制的算术测不了（那部分靠
+  // 真实渲染截图取证）；能测且值得测的是上面这三条结构性事实。
+
+  test('默认档（不传 portal）：菜单留在调用点的 DOM 位置，absolute 定位', () => {
+    const { container } = render(
+      <div data-testid="anchor-host">
+        <Popmenu open onClose={() => {}} items={items()} ariaLabel="Filter mail" />
+      </div>
+    )
+    const root = container.querySelector('[role="menu"]')!.closest('[data-align]')!
+    expect(root.closest('[data-testid="anchor-host"]')).not.toBeNull()
+    expect(root.className).toContain('absolute')
+    expect(root.getAttribute('data-popmenu-portal')).toBeNull()
+  })
+
+  test('portal 档：整个栈挂到 document.body 直下，fixed 定位', () => {
+    const { container } = render(
+      <div data-testid="anchor-host">
+        <Popmenu open portal onClose={() => {}} items={items()} ariaLabel="Filter mail" />
+      </div>
+    )
+    const root = screen.getByRole('menu').closest('[data-align]')!
+    // 逃出了调用点的 DOM 子树 —— 这正是「不被后面的行盖住 / 不被滚动容器裁掉」的
+    // 全部机制。
+    expect(container.querySelector('[data-align]')).toBeNull()
+    expect(root.parentElement).toBe(document.body)
+    expect(root.getAttribute('data-popmenu-portal')).toBe('true')
+    expect(root.className).toContain('fixed')
+    expect(root.className).not.toContain('absolute')
+  })
+
+  test('portal 档开菜单即把焦点送进第一项（absolute 档不夺焦）', async () => {
+    // 🔴 portal 之后面板挂在 body 末尾，从触发器按 Tab 只会跳到列表下一行 ——
+    // 不主动送焦点的话键盘用户根本进不了这个菜单。absolute 档不做这件事：那里
+    // 面板本来就是触发器的下一个 tab stop，主动夺焦会改掉既有调用点的手感。
+    render(<Popmenu open portal onClose={() => {}} items={items()} ariaLabel="Filter mail" />)
+    await vi.waitFor(() => {
+      expect(document.activeElement?.textContent).toContain('Unread')
+    })
+
+    cleanup()
+    render(<Popmenu open onClose={() => {}} items={items()} ariaLabel="Filter mail" />)
+    await new Promise((r) => requestAnimationFrame(() => r(null)))
+    expect(document.activeElement).toBe(document.body)
+  })
+})

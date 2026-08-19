@@ -81,7 +81,10 @@ export function createReportTools(
         'destination report. Use concise blocks that improve comprehension, not decoration. ' +
         'Available blocks: header, overview, stat_row, section, email_item, key_points, callout, ' +
         'kos_context, action_suggestion, trend, divider, markdown, timeline, checklist, progress, ' +
-        'quote, metric_delta, image. Use trend only for a real trend with at least 4 meaningful ' +
+        'quote, metric_delta, image, matter_item. Use matter_item for one Matter\'s progress ' +
+        '(it renders status / health / done-criteria progress / who is being waited on, and ' +
+        'links to the Matter) — never hand-format that into markdown. ' +
+        'Use trend only for a real trend with at least 4 meaningful ' +
         'points; use markdown for free-form lists/tables/code; use timeline only for an ordered ' +
         'sequence. Images MUST use an internal /api, /assets, mailagent://, app://, or data:image ' +
         'source — arbitrary HTTP(S) images are rejected. The artifact is local, reversible, and ' +

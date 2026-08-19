@@ -20,6 +20,7 @@ import type {
   ReportChecklistBlock,
   ReportImageBlock,
   ReportMarkdownBlock,
+  ReportMatterItemBlock,
   ReportMetricDeltaBlock,
   ReportOverviewBlock,
   ReportProgressBlock,
@@ -32,6 +33,7 @@ import type {
 } from '@shared/api/types'
 import { validateReportBlocks } from '@shared/api/reportBlocks'
 import { ProgressiveImage } from '@shared/components/media/ProgressiveImage'
+import { MatterItemBlock } from '@shared/components/reports/MatterItemBlock'
 import {
   type RenderCtx,
   mdLite,
@@ -1441,6 +1443,10 @@ function renderLeaf(block: ReportBlock, key: number, ctx: RenderCtx): React.Reac
       return <MetricDeltaBlock key={key} block={block as ReportMetricDeltaBlock} />
     case 'image':
       return <ImageBlock key={key} block={block as ReportImageBlock} />
+    // S5 事项进展条目。渲染器住 components/reports/（事项条目不是 /agents 页的原子，
+    // 它跟着报告块契约走）；这里只做分发。
+    case 'matter_item':
+      return <MatterItemBlock key={key} block={block as ReportMatterItemBlock} ctx={ctx} />
     case 'divider':
       return <DividerBlock key={key} />
     default:

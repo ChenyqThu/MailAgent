@@ -8,6 +8,7 @@ import type { ReportAgentConfig, SearchHit } from '@shared/api/types'
 import type { ChatAttachment } from '@shared/lib/chat-attachments'
 import type { ComposerEffortControl } from '@shared/hooks/useComposerEffort'
 import type { ComposerModelOption } from '@shared/hooks/useComposerModels'
+import type { MatterMentionRef } from '@shared/lib/mention-context'
 
 export interface ChatComposerControls {
   /** WP-16b (task 08-05) — effort 档位控件的数据 + 选档回调（`useComposerEffort` 的产物）。
@@ -50,6 +51,17 @@ export interface ChatComposerControls {
   agentMentions: ReadonlyArray<ReportAgentConfig>
   onAddAgentMention: (agent: ReportAgentConfig) => void
   onRemoveAgentMention: (agentId: string) => void
+  /** S4 (task 08-18) — @ 事项提及。与 agentMentions 同类（可信本地元数据），但**只带标识**
+   *  （public_id / title / status）：事项摘要是邮件正文的衍生物，注入正文等于给不可信内容开一条
+   *  绕过邮件围栏的通路 —— 判据与代价写在 `mention-context.ts::MatterMentionRef`。
+   *
+   *  三件套**可选**：不供给 → 「事项」这一组整个不出现（`@` 仍是原来的邮件 + Agent 两组，与引入
+   *  前逐字一致）。🔴 **事项对话必须不供给** —— 那场对话的「当前事项」是固定的（chip / 上下文
+   *  快照 / 写入回执都锚在它上面），再 @ 另一件事会让「当前事项」语义分裂；判据在
+   *  AgentConversation（`contextSource.kind`），不在 composer 里猜。 */
+  matterMentions?: ReadonlyArray<MatterMentionRef>
+  onAddMatterMention?: (matter: MatterMentionRef) => void
+  onRemoveMatterMention?: (publicId: string) => void
   // C2-② attachments — local text/binary chips. Text content (≤5k chars) is prepended as an untrusted
   // block; binary chips are metadata-only (the model acknowledges but can't read them).
   attachments: ReadonlyArray<ChatAttachment>

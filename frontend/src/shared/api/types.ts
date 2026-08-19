@@ -237,6 +237,7 @@ export type {
   ReportQuoteBlock,
   ReportMetricDeltaBlock,
   ReportImageBlock,
+  ReportMatterItemBlock,
   ReportUnknownBlock,
   ReportBlock,
   ReportDoc,

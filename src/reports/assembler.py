@@ -4,16 +4,20 @@
 key_points/highlights）+ 分组（email_refs = internal_id）。**邮件的事实数据
 （主题/发件人/链接/时间）+ counts 统计卡，全部由代码从 brief 回填**；LLM 给的
 email_refs 必须命中真实 brief，否则丢弃。LLM 出错爆炸半径限定在文案。
+
+事项（S5）走**同一套**纪律：LLM 只给 matter_refs（public_id）+ 一句汇总，事项的事实
+（状态 / 进度 / 在等谁 / 下一步）由代码从 MatterBrief 回填；幻觉 public_id 直接丢弃。
 """
 
 from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Sequence, Set
 
 from src.reports import models as m
 from src.reports.data import ReportEmailBrief, group_for_report
+from src.reports.matter_data import MatterBrief, matter_stats
 from src.reports.summarizer import ReportDraft
 
 # section.summary 内的跳转标记：[锚文本](#email-<internal_id>)。
@@ -42,6 +46,10 @@ _SECTION_ICON_FALLBACK = {"attention": "alert", "handled": "check", "fyi": "inbo
 # fallback（LLM 不可用）模式每组明细上限，避免 FYI 刷屏。
 _FALLBACK_SECTION_CAP = 25
 
+# 事项区渲染条目上限。取数层给到 30 条是**喂 LLM 的候选池**；报告里铺 30 张事项卡片
+# 就把「先看事」变成又一份长清单，故渲染侧另设一道上限。
+_MATTER_SECTION_CAP = 12
+
 
 def _subtitle(report_date: str, cadence: str, now: datetime) -> tuple[str, str]:
     # weekday 从 report_date（覆盖日，通常是昨天）推导 —— 不用 now（生成日），
@@ -58,10 +66,20 @@ def _subtitle(report_date: str, cadence: str, now: datetime) -> tuple[str, str]:
     return subtitle, weekday
 
 
-def _stat_row(counts: Dict[str, Any]) -> Dict[str, Any]:
-    return m.stat_row(
-        [m.stat(key, label, int(counts.get(key, 0)), tone) for key, label, tone in _STAT_SPEC]
-    )
+def _stat_row(
+    counts: Dict[str, Any], matter_briefs: Sequence[MatterBrief] = ()
+) -> Dict[str, Any]:
+    """统计卡。事项在场时**追加**两格（PRD R3：不改 stat_row schema，只多两个 stat）。"""
+    stats = [
+        m.stat(key, label, int(counts.get(key, 0)), tone) for key, label, tone in _STAT_SPEC
+    ]
+    if matter_briefs:
+        mc = matter_stats(matter_briefs)
+        stats.append(m.stat("matters_active", "推进中", mc["matters_active"], m.TONE_INFO))
+        stats.append(
+            m.stat("matters_attention", "需你决策", mc["matters_attention"], m.TONE_WARN)
+        )
+    return m.stat_row(stats)
 
 
 def _sanitize_summary(summary: str, valid_ids: Set[int]) -> str:
@@ -126,6 +144,63 @@ def _email_item(b: ReportEmailBrief) -> Dict[str, Any]:
     )
 
 
+def _matter_item(b: MatterBrief) -> Dict[str, Any]:
+    return m.matter_item(
+        public_id=b.public_id,
+        title=b.title,
+        status=b.status,
+        health=b.health,
+        priority=b.priority,
+        due_at=b.due_at,
+        summary=b.current_summary or None,
+        progress={"done": b.goal_done, "total": b.goal_total},
+        waiting_on=b.waiting_on or None,
+        next_action=(b.open_actions[0] if b.open_actions else None),
+        signal_count=b.signal_count,
+    )
+
+
+def _matter_blocks(
+    briefs: Sequence[MatterBrief],
+    *,
+    refs: Sequence[str] = (),
+    summary: str = "",
+    valid_email_ids: Set[int] = frozenset(),
+) -> List[Dict[str, Any]]:
+    """「事项进展」区：section + matter_item 条目。
+
+    条目顺序 = LLM 的 ``matter_refs``（**幻觉 public_id 直接丢弃**，同 email_refs 纪律）；
+    LLM 没给（或全是幻觉）→ 退回取数层的重要度序。briefs 为空 → 返回空列表，
+    整段不出现（不是渲染一个空框）。
+    """
+    if not briefs:
+        return []
+    by_id = {b.public_id: b for b in briefs}
+    ordered: List[MatterBrief] = []
+    seen: Set[str] = set()
+    for ref in refs:
+        brief = by_id.get(str(ref).strip())
+        if brief is not None and brief.public_id not in seen:
+            ordered.append(brief)
+            seen.add(brief.public_id)
+    if not ordered:
+        ordered = list(briefs)
+    ordered = ordered[:_MATTER_SECTION_CAP]
+
+    text = _sanitize_summary(summary.strip(), valid_email_ids) if summary.strip() else ""
+    blocks: List[Dict[str, Any]] = [
+        m.section(
+            "matters",
+            "事项进展",
+            "star",
+            None if text else f"共 {len(ordered)} 件在推进 / 需推动的事项",
+            text or None,
+        )
+    ]
+    blocks.extend(_matter_item(b) for b in ordered)
+    return blocks
+
+
 def assemble_report_doc(
     *,
     draft: ReportDraft,
@@ -139,11 +214,14 @@ def assemble_report_doc(
     generated_at: str,
     model: str,
     now: datetime,
+    matter_briefs: Sequence[MatterBrief] = (),
 ) -> m.ReportDoc:
     """LLM draft → ReportDoc。email_refs 校验回真实 brief，每封最多出现一次。
 
     发件箱（outbound）排除出 brief_map —— 即便 LLM 误把已发出的 id 放进 email_refs，
     也不会渲染成条目（它只用于统计 + 上下文）。
+
+    ``matter_briefs`` 为空（flag off / 取数失败 / 窗口内无事项）→ 无事项区、无空框。
     """
     brief_map = {b.internal_id: b for b in briefs if not b.is_outbound}
     subtitle, weekday = _subtitle(report_date, cadence, now)
@@ -153,7 +231,7 @@ def assemble_report_doc(
     ]
     if draft.overview.strip():
         blocks.append(m.overview(draft.overview.strip()))
-    blocks.append(_stat_row(counts))
+    blocks.append(_stat_row(counts, matter_briefs))
 
     # ── 板块重排（按信息重要度，而非 LLM 自然产出顺序）──────────────────────
     # header → overview → stat_row → highlights(核心要点) → key_points(你必须知道的
@@ -229,10 +307,19 @@ def assemble_report_doc(
             rep_blocks.append(_email_item(brief_map[iid]))
         other_blocks.extend(rep_blocks)
 
-    # ③ 组装：key_points 紧跟 callout（顶部"必看信息区"）→ attention → other → fyi。
+    # ③ 组装：key_points 紧跟 callout（顶部"必看信息区"）→ 事项进展 → attention →
+    #    other → fyi。事项排在邮件分组之前 —— 事项是"事"，邮件是"料"，先看事再看料。
     kps = [k.strip() for k in (draft.key_points or []) if k and k.strip()]
     if kps:
         blocks.append(m.key_points(kps, "你必须知道的关键信息"))
+    blocks.extend(
+        _matter_blocks(
+            matter_briefs,
+            refs=draft.matter_refs,
+            summary=draft.matter_summary,
+            valid_email_ids=valid_ids,
+        )
+    )
     blocks.extend(attention_blocks)
     blocks.extend(other_blocks)
     blocks.extend(fyi_blocks)
@@ -261,6 +348,7 @@ def assemble_fallback_doc(
     generated_at: str,
     model: str,
     now: datetime,
+    matter_briefs: Sequence[MatterBrief] = (),
 ) -> m.ReportDoc:
     """LLM 不可用时的降级报告：纯代码分组（group_for_report）+ 模板文案，无 LLM prose。"""
     groups = group_for_report(briefs)
@@ -272,8 +360,10 @@ def assemble_fallback_doc(
             f"{counts.get('urgent', 0)} 封需关注，{counts.get('unread', 0)} 封未读。"
             f"（AI 摘要暂不可用，以下为按规则分组的明细。）"
         ),
-        _stat_row(counts),
+        _stat_row(counts, matter_briefs),
     ]
+    # 降级模式下事项区照出（取数是确定性的，与 LLM 是否可用无关），只是没有 LLM 汇总句。
+    blocks.extend(_matter_blocks(matter_briefs))
     section_spec = [
         ("attention", "需要你亲自关注", "alert"),
         ("handled", "已自动处理", "check"),

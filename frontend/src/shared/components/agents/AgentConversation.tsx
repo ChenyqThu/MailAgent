@@ -30,8 +30,10 @@ import { buildAttachmentBlock, type ChatAttachment } from '@shared/lib/chat-atta
 import {
   buildMentionContext,
   buildAgentMentionEnvelope,
+  buildMatterMentionEnvelope,
   renderEmailExcerptBlock,
-  wrapUntrustedEmailContext
+  wrapUntrustedEmailContext,
+  type MatterMentionRef
 } from '@shared/lib/mention-context'
 import { readAutoTitleSettings } from '@shared/lib/autoTitle'
 import { useApprovalMode } from '@shared/lib/approvalMode'
@@ -62,10 +64,7 @@ import {
 import { useAIChatPanel, type MatterChatTarget } from '@shared/state/ai-chat-panel'
 
 import { AgentThread } from './AgentThread'
-import {
-  resolveConversationContextSource,
-  seededEmailIdOf
-} from './conversationContextSource'
+import { resolveConversationContextSource, seededEmailIdOf } from './conversationContextSource'
 import { createEnsureSession } from './ensureSession'
 import { AgentQuickActions } from './AgentQuickActions'
 import { AgentRecordConversation } from './AgentRecordView'
@@ -224,6 +223,20 @@ export function AgentConversation({
 
   const [mentions, setMentions] = useState<SearchHit[]>([])
   const [agentMentions, setAgentMentions] = useState<ReportAgentConfig[]>([])
+  // S4 (task 08-18) — @ 提及的事项，**只存标识三件**（收窄在 useMatterMentionAdapter 的 fetch 处）。
+  const [matterMentions, setMatterMentions] = useState<MatterMentionRef[]>([])
+  // 🔴「@ 事项」只在**普通对话**里给。判据取自 contextSource（这场对话当前所在的是什么的单值判定，
+  // 见 ./conversationContextSource）而不是另起一套：事项对话里的「当前事项」是固定的 —— chip /
+  // 上下文快照 / 写入回执 surface 全锚在它上面 —— 再 @ 另一件事，用户与模型对「这件事」的所指就
+  // 分裂了。`matter-unresolved` 同样不给（那一档整个禁发）。
+  const matterMentionAllowed =
+    contextSource.kind !== 'matter' && contextSource.kind !== 'matter-unresolved'
+  // 🔴 闸必须同时管 UI 与**注入**：只关掉这一组的入口，而 buildInjectedContext 仍读原始 state，
+  // 会让「切进事项对话前 @ 过的那件事」继续随后续每一轮发出去。两处共用这一个值。
+  const activeMatterMentions = useMemo(
+    () => (matterMentionAllowed ? matterMentions : []),
+    [matterMentionAllowed, matterMentions]
+  )
   const [attachments, setAttachments] = useState<ChatAttachment[]>([])
   // assistant-modal P5 — the modal's removable email context (general session + the current email's body
   // injected at send). INDEPENDENT of `mentions` on purpose: a mention rides a lexical in-field directive
@@ -256,6 +269,14 @@ export function AgentConversation({
   const onRemoveAgentMention = useCallback((agentId: string): void => {
     setAgentMentions((cur) => cur.filter((agent) => agent.id !== agentId))
   }, [])
+  const onAddMatterMention = useCallback((matter: MatterMentionRef): void => {
+    setMatterMentions((cur) =>
+      cur.some((item) => item.public_id === matter.public_id) ? cur : [...cur, matter]
+    )
+  }, [])
+  const onRemoveMatterMention = useCallback((publicId: string): void => {
+    setMatterMentions((cur) => cur.filter((matter) => matter.public_id !== publicId))
+  }, [])
   const onAddAttachment = useCallback((attachment: ChatAttachment): void => {
     setAttachments((cur) => [...cur, attachment])
   }, [])
@@ -265,6 +286,7 @@ export function AgentConversation({
   const onConsumeInjected = useCallback((): void => {
     setMentions([])
     setAgentMentions([])
+    setMatterMentions([])
     setAttachments([])
   }, [])
   // issue #61 Lane 3 (A2) — chips now render from the assistant-ui composer state (fed by the
@@ -294,11 +316,13 @@ export function AgentConversation({
   }, [emailContext, mailApi])
   const buildInjectedContext = useCallback(async (): Promise<string> => {
     const agentContext = buildAgentMentionEnvelope(agentMentions)
+    // S4 —— 与 agent 信封同类（可信本地元数据），排在所有不可信围栏**之前**。
+    const matterContext = buildMatterMentionEnvelope(activeMatterMentions)
     const emailContextBlock = await buildEmailContextBlock()
     const mentionContext = await buildMentionContext(mentions, mailApi)
     const attachmentContext = buildAttachmentBlock(attachments)
-    return `${agentContext}${emailContextBlock}${attachmentContext}${mentionContext}`
-  }, [agentMentions, buildEmailContextBlock, mentions, mailApi, attachments])
+    return `${agentContext}${matterContext}${emailContextBlock}${attachmentContext}${mentionContext}`
+  }, [agentMentions, activeMatterMentions, buildEmailContextBlock, mentions, mailApi, attachments])
 
   // assistant-modal — keep the modal's default email context pointing at the CURRENTLY active email while
   // the chat is NEW/empty (user: 每次唤出默认带的是当前这封, not the previous one). Re-resolves whenever the
@@ -368,6 +392,11 @@ export function AgentConversation({
       agentMentions,
       onAddAgentMention,
       onRemoveAgentMention,
+      // 不允许时**不供 onAdd** → composer 的「事项」组整个不出现（判据在 composerControlsContext）；
+      // 列表同步收成空（= 不注入），摘除回调照常供给（对账只会摘已在场的那些）。
+      matterMentions: activeMatterMentions,
+      onAddMatterMention: matterMentionAllowed ? onAddMatterMention : undefined,
+      onRemoveMatterMention,
       attachments,
       onAddAttachment,
       onRemoveAttachment,
@@ -388,6 +417,10 @@ export function AgentConversation({
       agentMentions,
       onAddAgentMention,
       onRemoveAgentMention,
+      matterMentionAllowed,
+      activeMatterMentions,
+      onAddMatterMention,
+      onRemoveMatterMention,
       attachments,
       onAddAttachment,
       onRemoveAttachment,

@@ -50,7 +50,24 @@ MATTER_RUN_LIFECYCLE_STATES = (
 )
 
 # kind=field 提案的字段白名单（D6）：description **永不**允许。
-PROPOSAL_FIELD_WHITELIST = ("status", "health", "priority", "due_at", "waiting_context")
+#: 跟进 Agent 的提案能触及的 matter 字段（`kind='field'` 的 `target.field` 值域）。
+#:
+#: S3（08-18）加了 `description` / `goal_checks` —— 核心目标与完成标志。owner 的裁决是
+#: 「main agent（本人在场）直写 + 审批卡；跟进 Agent 只能提案」，所以这两个字段在这里
+#: 出现，但**不进** headless run 的直写路径（matter_followup 的矩阵行本来就拒 domain_write）。
+#:
+#: 🔴 改这个元组必须同步 `proposal_scope.PROPOSAL_TOUCHABLE_FIELDS` —— 那里是提案失效
+#: （stale）判据的目标集。漏加 = owner 一边手改核心目标、Agent 的旧提案一边还带着旧文案
+#: 等着 accept，accept 时**静默覆盖** owner 刚写的新值。有闸盯着两者一致。
+PROPOSAL_FIELD_WHITELIST = (
+    "status",
+    "health",
+    "priority",
+    "due_at",
+    "waiting_context",
+    "description",
+    "goal_checks",
+)
 
 
 def lifecycle_state(run: Mapping[str, Any]) -> str:

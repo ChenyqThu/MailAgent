@@ -150,6 +150,25 @@ export interface ReportImageBlock {
   caption?: string
   width?: number
 }
+/** S5 事项进展条目。`status` / `health` / `priority` 是 matter 域原始枚举字面量
+ *  （`MatterStatus` / `MatterHealth` / `MatterPriority` 的值域，用 string 承接以便后端
+ *  加值时优雅降级）；`due_at` 是 epoch **毫秒**；`deeplink` 是稳定标识形
+ *  （`mailagent://matter/<public_id>`，报告页内点击走 router 导航）。 */
+export interface ReportMatterItemBlock {
+  type: 'matter_item'
+  public_id: string
+  title: string
+  status: string
+  health: string
+  priority: string
+  deeplink: string
+  due_at?: number
+  summary?: string
+  progress?: { done: number; total: number }
+  waiting_on?: string[]
+  next_action?: string
+  signal_count?: number
+}
 /** 未知 block 优雅降级（BlockRenderer 渲染 UnknownBlock）。 */
 export interface ReportUnknownBlock {
   type: string
@@ -174,6 +193,7 @@ export type ReportBlock =
   | ReportQuoteBlock
   | ReportMetricDeltaBlock
   | ReportImageBlock
+  | ReportMatterItemBlock
   | ReportUnknownBlock
 
 export interface ReportDoc {

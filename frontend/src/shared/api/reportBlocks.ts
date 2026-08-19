@@ -29,7 +29,10 @@ export const REPORT_BLOCK_TYPES = [
   'progress',
   'quote',
   'metric_delta',
-  'image'
+  'image',
+  /** 事项进展条目（S5）。🔴 Mirrored in src/reports/models.py (REPORT_BLOCK_TYPES) —— 顺序
+   *  也要对齐，块契约闸按元组相等比较。 */
+  'matter_item'
 ] as const
 
 /** Upper bound for one image block's `src`, mirroring the markdown block's 50k text cap — the only
@@ -178,6 +181,24 @@ export const reportBlockSchemas = {
     deltaLabel: z.string().optional(),
     tone: toneSchema.optional()
   }),
+  /** 事项进展条目。status / health / priority 是 matter 域的**原始枚举字面量**（中文文案
+   *  由前端 i18n 渲染）；`due_at` 是 epoch **毫秒**。三个枚举有意用 z.string() 而非 z.enum：
+   *  后端加一个新状态值不该让整块降级成 invalid，渲染器对未知值退回原样显示。 */
+  matter_item: z.object({
+    type: z.literal('matter_item'),
+    public_id: z.string().min(1),
+    title: z.string().min(1),
+    status: z.string(),
+    health: z.string(),
+    priority: z.string(),
+    deeplink: z.string(),
+    due_at: z.number().int().optional(),
+    summary: z.string().optional(),
+    progress: z.object({ done: z.number().int(), total: z.number().int().positive() }).optional(),
+    waiting_on: z.array(z.string()).max(10).optional(),
+    next_action: z.string().optional(),
+    signal_count: z.number().int().optional()
+  }),
   image: z.object({
     type: z.literal('image'),
     src: internalImageSrcSchema,
@@ -206,7 +227,8 @@ export const reportBlockInputSchema = z.discriminatedUnion('type', [
   reportBlockSchemas.progress,
   reportBlockSchemas.quote,
   reportBlockSchemas.metric_delta,
-  reportBlockSchemas.image
+  reportBlockSchemas.image,
+  reportBlockSchemas.matter_item
 ])
 
 export function validateReportBlocks(value: unknown): ReportBlock[] {

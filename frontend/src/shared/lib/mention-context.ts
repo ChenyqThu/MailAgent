@@ -42,6 +42,47 @@ export function buildAgentMentionEnvelope(agents: ReadonlyArray<ReportAgentConfi
   ].join('\n')
 }
 
+/** The identity-only projection of a matter for an @ mention (S4, task 08-18).
+ *
+ *  🔴 **Deliberately three fields, not `Matter`.** The envelope below must never carry a matter's
+ *  `description` / `current_summary` / items — those are the agent's distillate of EMAIL BODIES,
+ *  i.e. a derivative of untrusted content. Injecting them as trusted metadata would open a bypass
+ *  around the `~~~email-excerpt` fence in this very file. Narrowing at the type keeps that
+ *  guarantee mechanical instead of relying on the builder remembering not to read a field.
+ *
+ *  Structural: a `Matter` row off the REST list satisfies it as-is (no adapter needed). */
+export interface MatterMentionRef {
+  public_id: string
+  title: string
+  status: string
+}
+
+/** Trusted local metadata for explicit @ matter references. Same class as
+ *  `buildAgentMentionEnvelope` (trusted, sits before the untrusted fences), and the same shape of
+ *  instruction: hand the model an EXACT id and tell it which tool resolves it.
+ *
+ *  Identity only — the model calls `matter_get` for the state. Beyond the injection-surface reason
+ *  on `MatterMentionRef`: a detail snapshot is easily 1k+ tokens per matter, and a snapshot taken
+ *  at SEND time can already be stale by the time the model reasons (matters change under live
+ *  sync). `matter_get` is a read-class tool — no approval card, local SQLite — so the extra call
+ *  is cheap. */
+export function buildMatterMentionEnvelope(matters: ReadonlyArray<MatterMentionRef>): string {
+  if (matters.length === 0) return ''
+  const rows = matters.map(
+    (matter) =>
+      `  <matter id="${escapeXml(matter.public_id)}" title="${escapeXml(matter.title)}" status="${escapeXml(matter.status)}" />`
+  )
+  return [
+    '<mentioned_matters>',
+    ...rows,
+    '</mentioned_matters>',
+    'The user explicitly @-mentioned the matter(s) above. Call matter_get with the EXACT',
+    'id attribute to read its current state before answering.',
+    '',
+    ''
+  ].join('\n')
+}
+
 /** Cap each mentioned email's body excerpt at this many characters before
  *  fencing it into the prompt. Matches the attachment content budget class:
  *  five mentions × 600 chars stays well under the per-turn context budget. */

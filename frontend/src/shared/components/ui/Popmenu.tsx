@@ -37,6 +37,14 @@
 //
 // a11y：role=menu + menuitem/menuitemcheckbox/menuitemradio，roving tabindex，
 // ↑↓ 循环、Home/End、→/Enter 进子面板、←/Backspace/Esc 回上一层（根面板 Esc = 关）。
+//
+// 定位有两档（`portal` prop，默认关）：
+//   absolute（默认）：挂在调用点的 DOM 位置，锚在触发器下方。普通布局里这是对的。
+//   portal（opt-in）：整个栈 createPortal 到 document.body、按触发器的实测视口矩形
+//     fixed 定位。给**虚拟列表 / overflow 容器**里的行菜单用 —— 那里行内 absolute
+//     会被后面的行盖住（react-window 的行是无 z-index 的绝对定位兄弟节点，按 DOM
+//     顺序绘制）、也会被滚动容器裁掉。两档只在最外层那一个 div 上分叉，面板栈以下
+//     的一切（几何 / morph / 键盘 / a11y）完全共用。
 
 import {
   useCallback,
@@ -49,6 +57,7 @@ import {
   type KeyboardEvent as ReactKeyboardEvent,
   type ReactNode
 } from 'react'
+import { createPortal } from 'react-dom'
 import {
   AnimatePresence,
   MotionConfig,
@@ -69,6 +78,8 @@ const EXIT_S = 0.15 // 退场比进场更快、更安静
 const CLIP_BLEED = 48
 const DEFAULT_WIDTH = 272 // 原实现 w-[17rem]
 const DEFAULT_MAX_HEIGHT = 288 // 原实现 max-h-[18rem]
+/** portal 档里触发器与面板之间的缝，等于 absolute 档 `top-[calc(100%+0.375rem)]`。 */
+const PORTAL_GAP = 6
 
 export type PopmenuTone = 'accent' | 'danger'
 
@@ -162,8 +173,19 @@ export interface PopmenuProps {
   triggerRef?: React.RefObject<HTMLElement | null>
   /** 默认锚点（`start` = 左对齐 / `end` = 右对齐），被 `anchorClassName` 覆盖。 */
   align?: 'start' | 'end'
-  /** 完全自定义定位类（默认锚在触发器下方）。调用方的定位父元素需 `relative`。 */
+  /** 完全自定义定位类（默认锚在触发器下方）。调用方的定位父元素需 `relative`。
+   *  `portal` 档下无效（那时定位由触发器的实测矩形算，不走 CSS 类）。 */
   anchorClassName?: string
+  /** 把整个栈 portal 到 `document.body`，按 `triggerRef` 的实测视口矩形 fixed 定位
+   *  （左右上下都对视口钳制）。**默认关** —— 普通布局里 absolute 锚在调用点是对的，
+   *  改默认等于给每个调用点重排一次定位。
+   *
+   *  只给**虚拟列表 / overflow 容器**里的行菜单开（见文件头「定位有两档」）。开了它：
+   *  ① 必须同时给 `triggerRef`（既是定位基准，也是 outside-click 的排除项）；
+   *  ② `anchorClassName` 失效；
+   *  ③ 外部滚动**关菜单** —— fixed 坐标不跟随滚动，虚拟列表里那一行还会被回收，
+   *     与其让菜单飘在错位的地方不如收掉（原型 cui.jsx 的菜单同样不跟随滚动）。 */
+  portal?: boolean
   /** 面板宽度，px。 */
   width?: number
   /** 列表区的高度上限，px（原实现是写死的 18rem=288）。**另外恒被「面板顶到视口
@@ -197,6 +219,7 @@ export function Popmenu({
   triggerRef,
   align = 'end',
   anchorClassName,
+  portal = false,
   width = DEFAULT_WIDTH,
   maxHeight = DEFAULT_MAX_HEIGHT,
   dim = true,
@@ -377,6 +400,23 @@ export function Popmenu({
     return () => document.removeEventListener('mousedown', onDown)
   }, [open, closeMenu, triggerRef])
 
+  // 🔴 portal 档必须**主动**把焦点送进菜单：absolute 档里面板就渲染在触发器后面，
+  // 「按 Tab 进菜单」是 DOM 顺序白送的；portal 之后面板挂在 body 末尾，从触发器 Tab
+  // 出去只会跳到列表的下一行，键盘用户根本进不来。这里补 WAI-ARIA menu button 模式
+  // 的「开菜单 → 焦点落第一项」。
+  // absolute 档不加：那里主动夺焦会改掉既有 7 个调用点的手感（筛选菜单一开就抢焦点）。
+  // preventScroll —— 面板已经被 place() 钳进视口，不需要滚动；真滚了会被下面那个
+  // 「外部滚动关菜单」的监听当成用户滚动，菜单开一帧就自己关掉。
+  useEffect(() => {
+    if (!open || !portal) return undefined
+    const raf = requestAnimationFrame(() => {
+      stackRef.current
+        ?.querySelector<HTMLElement>('[data-popmenu-row][tabindex="0"]')
+        ?.focus({ preventScroll: true })
+    })
+    return () => cancelAnimationFrame(raf)
+  }, [open, portal])
+
   // Esc 挂 document 而不是面板：逃生舱内容（自定义表单）里焦点可能不在任何
   // menuitem 上，挂面板会漏。子面板 Esc = 回上一层（下钻菜单里「返回」是最常用
   // 的动作，一路关掉会让用户丢失位置）。
@@ -402,7 +442,18 @@ export function Popmenu({
     let raf = 0
     const place = (): void => {
       raf = 0
+      // portal 档没有定位父元素 —— 每次都按触发器**实测**的视口矩形重新落点，于是
+      // resize / 布局变化后菜单仍贴着那颗钮。（滚动另有处理：直接关。）
+      if (portal) {
+        const trigger = triggerRef?.current
+        if (trigger) {
+          const r = trigger.getBoundingClientRect()
+          el.style.left = `${Math.round(align === 'start' ? r.left : r.right - width)}px`
+          el.style.top = `${Math.round(r.bottom + PORTAL_GAP)}px`
+        }
+      }
       el.style.setProperty('--popmenu-shift-x', '0px')
+      el.style.setProperty('--popmenu-shift-y', '0px')
       const rect = el.getBoundingClientRect()
       const vw = document.documentElement.clientWidth
       let shift = 0
@@ -413,9 +464,20 @@ export function Popmenu({
       // 纵向：从栈原点到视口底还剩多少。每个面板按自己的 anchor.top 再减一次，
       // 于是任何深度的面板都不会长到视口外面去（见 maxHeight 的注释）。
       const vh = document.documentElement.clientHeight
+      // portal 档还能**整体上移**（fixed，页面不参与）：贴着视口底的行因此不会把
+      // 菜单退化成一条几十像素高的滚动条，而是把整块顶上去 —— 原型 cui.jsx 的
+      // `top = min(y, innerHeight - 估算高度)` 同一意图，这里用实测高度代替估算。
+      // absolute 档不动：那里面板跟着文档流，整体位移会脱离触发器。
+      let shiftY = 0
+      if (portal) {
+        const overBottom = rect.bottom - (vh - GUTTER)
+        if (overBottom > 0) shiftY = -overBottom
+        if (rect.top + shiftY < GUTTER) shiftY = GUTTER - rect.top
+        el.style.setProperty('--popmenu-shift-y', `${Math.round(shiftY)}px`)
+      }
       el.style.setProperty(
         '--popmenu-avail-h',
-        `${Math.max(0, Math.round(vh - rect.top - GUTTER))}px`
+        `${Math.max(0, Math.round(vh - (rect.top + shiftY) - GUTTER))}px`
       )
     }
     const schedule = (): void => {
@@ -429,7 +491,20 @@ export function Popmenu({
       window.removeEventListener('resize', schedule)
       window.removeEventListener('scroll', schedule, true)
     }
-  }, [open, frames.length])
+  }, [open, frames.length, portal, triggerRef, align, width])
+
+  // portal 档：外部滚动 = 关菜单（理由见 `portal` prop 注释 ③）。菜单**自己**那层
+  // 列表的滚动不算 —— 长菜单在面板内部滚是正常操作，不能把自己滚没了。
+  useEffect(() => {
+    if (!open || !portal) return undefined
+    const onScroll = (e: Event): void => {
+      const target = e.target as Node | null
+      if (target && stackRef.current?.contains(target)) return
+      closeMenu(false)
+    }
+    document.addEventListener('scroll', onScroll, true)
+    return () => document.removeEventListener('scroll', onScroll, true)
+  }, [open, portal, closeMenu])
 
   function onKeyDown(e: ReactKeyboardEvent<HTMLDivElement>): void {
     const item = topItems[safeActive]
@@ -502,65 +577,82 @@ export function Popmenu({
 
   // 🔴 `open &&` 必须在 AnimatePresence **内部** —— 在它外面提前 return 会让整个
   // 栈在关闭时直接卸载，退场淡出一帧都跑不到（原实现的关闭手感就没了）。
+  const stackTree = (
+    <AnimatePresence>
+      {open && (
+        <motion.div
+          key="popup"
+          id={popupId}
+          ref={stackRef}
+          initial={false}
+          exit={{ opacity: 0, pointerEvents: 'none' }}
+          transition={{ duration: EXIT_S, ease: EASE }}
+          className={cn(
+            // 两个 shift 变量都不设时 `translate(0px, 0px)` ≡ 原来的
+            // `translateX(0px)`，absolute 档的渲染逐像素不变。
+            '[transform:translate(var(--popmenu-shift-x,0px),var(--popmenu-shift-y,0px))]',
+            portal
+              ? // z-[60]：高过所有内容层（本仓内容面最高 z-50），低于抽屉 / 模态档
+                // （z-[70]）—— 行菜单永远不该盖在模态之上。left/top 由上面的
+                // place() 在首帧绘制前写死，这两个 0 只是没有触发器时的兜底。
+                'fixed left-0 top-0 z-[60]'
+              : cn(
+                  'absolute z-40',
+                  anchorClassName ?? cn('top-[calc(100%+0.375rem)]', defaultAnchor)
+                ),
+            className
+          )}
+          style={{ width }}
+          data-align={align}
+          data-popmenu-portal={portal ? 'true' : undefined}
+        >
+          <AnimatePresence>
+            {frames.map((frame, d) => {
+              const isTop = d === frames.length - 1
+              const panelItems: readonly PopmenuItem[] = frame.node ? frame.node.items : items
+              return (
+                <Panel
+                  key={frame.key}
+                  depth={d}
+                  title={frame.node ? frame.node.label : title}
+                  ariaLabel={frame.node ? frame.node.label : (title ?? ariaLabel)}
+                  items={panelItems}
+                  body={frame.node ? undefined : children}
+                  anchor={frame.anchor}
+                  morphFrom={frame.morph}
+                  nodeIcon={frame.node?.icon}
+                  isTop={isTop}
+                  dim={dim}
+                  width={width}
+                  maxHeight={maxHeight}
+                  activeIndex={isTop ? safeActive : -1}
+                  registerRow={isTop ? registerRow : undefined}
+                  onItemEnter={
+                    isTop
+                      ? (i) => {
+                          const it = panelItems[i]
+                          if (it && isFocusable(it)) setActiveIndex(i)
+                        }
+                      : undefined
+                  }
+                  onItemActivate={isTop ? activate : undefined}
+                  onBehindClick={!isTop ? () => popTo(d) : undefined}
+                  onBack={isTop && d > 0 ? () => popTo(d - 1) : undefined}
+                  onKeyDown={isTop ? onKeyDown : undefined}
+                />
+              )
+            })}
+          </AnimatePresence>
+        </motion.div>
+      )}
+    </AnimatePresence>
+  )
+
+  // portal 只换挂载点，React 树（含 MotionConfig 的 context）照旧 —— AnimatePresence
+  // 的进退治理、面板栈、键盘全都在 `stackTree` 里，两档共用同一份。
   return (
     <MotionConfig reducedMotion="user">
-      <AnimatePresence>
-        {open && (
-          <motion.div
-            key="popup"
-            id={popupId}
-            ref={stackRef}
-            initial={false}
-            exit={{ opacity: 0, pointerEvents: 'none' }}
-            transition={{ duration: EXIT_S, ease: EASE }}
-            className={cn(
-              'absolute z-40 [transform:translateX(var(--popmenu-shift-x,0px))]',
-              anchorClassName ?? cn('top-[calc(100%+0.375rem)]', defaultAnchor),
-              className
-            )}
-            style={{ width }}
-            data-align={align}
-          >
-            <AnimatePresence>
-              {frames.map((frame, d) => {
-                const isTop = d === frames.length - 1
-                const panelItems: readonly PopmenuItem[] = frame.node ? frame.node.items : items
-                return (
-                  <Panel
-                    key={frame.key}
-                    depth={d}
-                    title={frame.node ? frame.node.label : title}
-                    ariaLabel={frame.node ? frame.node.label : (title ?? ariaLabel)}
-                    items={panelItems}
-                    body={frame.node ? undefined : children}
-                    anchor={frame.anchor}
-                    morphFrom={frame.morph}
-                    nodeIcon={frame.node?.icon}
-                    isTop={isTop}
-                    dim={dim}
-                    width={width}
-                    maxHeight={maxHeight}
-                    activeIndex={isTop ? safeActive : -1}
-                    registerRow={isTop ? registerRow : undefined}
-                    onItemEnter={
-                      isTop
-                        ? (i) => {
-                            const it = panelItems[i]
-                            if (it && isFocusable(it)) setActiveIndex(i)
-                          }
-                        : undefined
-                    }
-                    onItemActivate={isTop ? activate : undefined}
-                    onBehindClick={!isTop ? () => popTo(d) : undefined}
-                    onBack={isTop && d > 0 ? () => popTo(d - 1) : undefined}
-                    onKeyDown={isTop ? onKeyDown : undefined}
-                  />
-                )
-              })}
-            </AnimatePresence>
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {portal ? createPortal(stackTree, document.body) : stackTree}
     </MotionConfig>
   )
 }

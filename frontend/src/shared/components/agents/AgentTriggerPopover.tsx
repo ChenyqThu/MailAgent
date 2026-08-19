@@ -121,9 +121,7 @@ const Items: FC<{
                   className="flex w-full cursor-pointer flex-col items-start gap-0.5 px-3 py-1.5 text-start outline-none transition-colors duration-fast hover:bg-ink-4 data-[highlighted]:bg-ink-4"
                 >
                   <span className="flex w-full min-w-0 items-center gap-2 text-aux font-medium text-ink-fg">
-                    {renderItemIcon?.(item) ?? (
-                      <Icon className="size-3.5 shrink-0 text-coral" />
-                    )}
+                    {renderItemIcon?.(item) ?? <Icon className="size-3.5 shrink-0 text-coral" />}
                     <span className="truncate">{item.label}</span>
                   </span>
                   {item.description && (
@@ -213,7 +211,11 @@ export function AgentDirectiveChip({
     <span
       className="inline-flex items-baseline gap-1 rounded-md bg-coral/15 px-1.5 py-0.5 text-meta font-medium text-coral"
       title={t(
-        directiveType === 'agent' ? 'agentView.mention.agentChip' : 'agentView.mention.emailChip',
+        directiveType === 'agent'
+          ? 'agentView.mention.agentChip'
+          : directiveType === 'matter'
+            ? 'agentView.mention.matterChip'
+            : 'agentView.mention.emailChip',
         { label }
       )}
     >
