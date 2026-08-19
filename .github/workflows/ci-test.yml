@@ -38,9 +38,17 @@ on:
 permissions:
   contents: read
 
-# 仅对 push/PR 直接触发生效 (被 workflow_call 调用时以 caller 的 concurrency 为准)
+# 🔴 group 里必须带 `github.workflow`。
+# 被 workflow_call 调用时,本 workflow 自己声明的 concurrency **照样生效** —— 原注释写的
+# 「以 caller 的 concurrency 为准」是错的,而且这个错误认知让 v2.16.0 发版连踩三次:
+# build-mac 与 build-win 都 call 本 workflow,同一个 tag 下 `github.ref` 相同 ⇒ 两边的
+# test job 落进同一个 group ⇒ 带 cancel-in-progress 互相取消,一次 tag push 永远只能有
+# 一个平台活下来 (实测: 两条同秒进组双双取消; 重跑 win 后再重跑 mac,mac 又把 win 正在
+# 跑的测试取消)。旁证: 同时段独立触发的 CI tests 因 ref 是 refs/heads/main、group 不同
+# 而全程无事。
+# `github.workflow` 在被调用时解析为 **caller 的 workflow 名**,正好把三条路径分开。
 concurrency:
-  group: ci-test-${{ github.ref }}
+  group: ci-test-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
