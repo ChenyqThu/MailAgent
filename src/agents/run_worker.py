@@ -71,6 +71,17 @@ def _matter_agent_flags_on() -> bool:
         return False
 
 
+def _contact_governance_flags_on() -> bool:
+    try:
+        from src.config import config
+
+        return bool(config.contacts_enabled) and bool(
+            getattr(config, "contact_agent_enabled", False)
+        )
+    except Exception:
+        return False
+
+
 class AgentRunWorker:
     """agent_run / matter_followup 串行执行主循环（认领 → poke gateway → 写终态）。
 
@@ -141,6 +152,9 @@ class AgentRunWorker:
             await self._execute_matter(job)
             return
         job_id = job.job_id
+        if job.job_type == "contact_governance" and not _contact_governance_flags_on():
+            self._mark(job_id, "failed", last_error="E_DISABLED")
+            return
         status = "failed"
         result: Optional[dict] = None
         last_error: Optional[str] = None
@@ -589,6 +603,10 @@ class AgentRunWorker:
             from src.matters.run_spec import MATTER_FOLLOWUP_MAX_RUN_SECONDS
 
             return float(MATTER_FOLLOWUP_MAX_RUN_SECONDS)
+        if job.job_type == "contact_governance":
+            from src.contacts.governance import CONTACT_GOVERNANCE_MAX_RUN_SECONDS
+
+            return float(CONTACT_GOVERNANCE_MAX_RUN_SECONDS)
         budget = Budget()
         agent_id = (job.params or {}).get("agent_id")
         if agent_id and self.store is not None:

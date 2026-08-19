@@ -81,6 +81,7 @@ class AsyncJobRepository:
     AGENT_JOB_TYPES = frozenset({
         "agent_run",
         "matter_followup",
+        "contact_governance",
     })
     # 并集 = enqueue 合法性总闸 (向后兼容: 既有 job_type 全在 MAINTENANCE 里)。
     VALID_JOB_TYPES = MAINTENANCE_JOB_TYPES | AGENT_JOB_TYPES

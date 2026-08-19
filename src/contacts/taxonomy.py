@@ -38,6 +38,14 @@ CONTACT_KIND_PERSON = CONTACT_KIND_VALUES[0]
 #: 上级来源 (manual=owner 指定; auto=AI 建议采纳)。
 CONTACT_MANAGER_SRC_VALUES: Tuple[str, ...] = ("manual", "auto")
 
+#: WP7 治理建议类型 / 状态（contact_suggestion CHECK 值域唯一权威）。
+CONTACT_SUGGESTION_TYPE_VALUES: Tuple[str, ...] = (
+    "merge", "identity", "former_email", "relation", "kind",
+)
+CONTACT_SUGGESTION_STATUS_VALUES: Tuple[str, ...] = (
+    "pending", "adopted", "ignored", "blocked",
+)
+
 #: 可锁字段词表 (WP2 字段级锁定, v55 `contact.identity_locks_json` 的键域唯一
 #: 权威)。phone 物理落 ``contact_info_json.phone`` (无独立列); notes **有意不在**
 #: 词表里 —— 手记是 owner 私有文本, 自动提取从不写它, 无锁可言。

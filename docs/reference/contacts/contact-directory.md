@@ -157,7 +157,7 @@ backfill 就收敛，不必等下个 tick）。
   都未改动」。
 - `set_manager`（WP5）：见 §6。
 
-## 5. REST 面（`src/api/routers/contacts.py`，15 端点）
+## 5. REST 面（`src/api/routers/contacts.py`）
 
 门卫 `require_contacts_enabled`（off 全 403）+ `verify_cf_access`；错误经
 `ContactError` → `_call` → `APIError`（码表在 `src/api/app.py::ERROR_CODE_TO_HTTP`）。
@@ -173,6 +173,25 @@ backfill 就收敛，不必等下个 tick）。
 | `GET /{id}` · `GET /{id}/mails` · `GET /{id}/matters` | 详情（含 §6 组织关系投影）· 人-邮件账本分页（§5.1 方向三分）· 关联事项反查 |
 | `PATCH /{id}` · `POST /{id}/locks` | 身份字段编辑（保存即落锁）· 显式锁切换 |
 | `POST /{id}/hide` / `kind` / `self` / `manager` / `merge` / `emails/primary` / `emails/former` | 治理写（全部薄端点进 service 守卫）|
+| `GET /suggestions` · `POST /suggestions/{id}/adopt|ignore` | WP7 owner 待审队列；blocked 先落状态/原因再返回 4xx；merge adopt 只返预览 pair |
+| `POST /agent/run` · `GET /agent/status` | WP7 手动 enqueue（事务外、活跃 run 合并、幂等键）· flag/pending/最近扫描摘要 |
+
+### 5.2 WP7 治理 Agent
+
+- schema v64 独立建 `contact_suggestion`；type/status 值域来自
+  `src/contacts/taxonomy.py`，所有 JSON 列带 `json_valid`，证据指纹按排序后的
+  message_id 集合计算；同 type + 归一 contact ids + 指纹在 pending/ignored/blocked
+  已存在时不复现。
+- `src/contacts/governance.py` 是提示词、证据/锁守卫、队列 service 与
+  `contact_governance` run spec 单源。每条建议至少一条真实 `email_metadata.message_id`
+  证据；引文非空并截到 500 字。identity 锁只接受锁后更新且与现值矛盾的证据，
+  relation 的 `manager_src='manual'` 恒拒。
+- owner 面是 `verify_cf_access`；Agent 落库腿
+  `POST /api/contacts/agent/proposals` 单独挂 `verify_local_token`，不接受 CF JWT。
+  两腿都要求 `MAILAGENT_CONTACTS_ENABLED && MAILAGENT_CONTACT_AGENT_ENABLED`。
+- `new_watcher` 在联系人提取后做每日 due 判定，marker =
+  `contact_governance.last_fire_day`；只 enqueue 到现有 `AgentRunWorker`，不另起 worker。
+  spec 的 `toolPolicy` 恒为 `{"allowedTools": []}`，不下发任何 grant 键。
 
 ### 5.1 关联邮件的方向三分（task 08-14 WP-5）
 
@@ -271,8 +290,6 @@ backfill 就收敛，不必等下个 tick）。
 
 ## 9. 边界（现状之外，勿当既有能力引用）
 
-画像（`MAILAGENT_CONTACT_PROFILE_ENABLED`，WP6）与治理台 Agent
-（`MAILAGENT_CONTACT_AGENT_ENABLED`，WP7）未落地——detail 的 `profile` 恒
-null、列表 `profile_summary` 恒 null、`manager_src='auto'` 无产生方，均为已钉住
-的结构位。手动创建无 email 联系人 / KOS person 页 / compose 收件人补全切读通讯
-录等在 PRD §9 TODO 表登记，不在本文档范围。
+治理台的 gateway 9 工具/policy/catalog 与 UI/i18n 属 WP7 后续批，本批只交付 Python
+队列、扫描执行链、双腿 REST 和提示词配置面。手动创建无 email 联系人 / KOS person
+页 / compose 收件人补全切读通讯录等仍在 PRD §9 TODO 表登记。

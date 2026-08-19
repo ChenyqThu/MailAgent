@@ -55,10 +55,12 @@ MEMORY_DOC_NAME: str = "memory"
 # 所以「用户从没编辑过」== 「跟随代码默认」，以后改默认文案能自动惠及未自定义的用户；
 # 「恢复默认」也就等于把这行清空，而不是把当前默认文本写进库里冻住。
 MATTER_AGENT_DOC_NAME: str = "matter_agent"
+CONTACT_AGENT_DOC_NAME: str = "contact_agent"
 # 可存储（落表 + get/set/history/rollback）的全部 doc 名 = 4 份身份 + memory.md + 事项契约。
 STORABLE_DOC_NAMES: tuple[str, ...] = PROFILE_DOC_NAMES + (
     MEMORY_DOC_NAME,
     MATTER_AGENT_DOC_NAME,
+    CONTACT_AGENT_DOC_NAME,
 )
 # 投影文档（只读视图，SKILLS 来自 skill registry）—— 不存表。
 PROJECTION_DOC_NAMES: tuple[str, ...] = ("skills",)
@@ -788,7 +790,8 @@ class AgentConfigStore:
         ``updated_by`` ∈ {'user','agent_proposed'}。内容未变（hash 相同）则 no-op 不记 history。
         """
         name = self._validate_doc_name(doc_name)
-        if not isinstance(content, str) or content == "":
+        empty_allowed = name in {MATTER_AGENT_DOC_NAME, CONTACT_AGENT_DOC_NAME}
+        if not isinstance(content, str) or (content == "" and not empty_allowed):
             raise ValueError("profile doc content must be a non-empty string")
         new_hash = _hash(content)
         now = _now()

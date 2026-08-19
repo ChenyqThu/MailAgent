@@ -24,6 +24,7 @@ from src.agent_config.projections import (
     skills_doc_projection,
 )
 from src.agent_config.store import (
+    CONTACT_AGENT_DOC_NAME,
     INSTALLABLE_SOURCE_TYPES,
     MATTER_AGENT_DOC_NAME,
     MEMORY_DOC_NAME,
@@ -58,6 +59,19 @@ def _editable_doc_dict(doc: Any) -> dict[str, Any]:
         "updatedAt": doc.updated_at,
         "editable": True,
     }
+
+
+def _editable_doc_with_default(name: str, doc: Any) -> dict[str, Any]:
+    payload = _editable_doc_dict(doc)
+    if name == MATTER_AGENT_DOC_NAME:
+        from src.matters.run_spec import default_task_contract
+
+        payload["defaultContent"] = default_task_contract()
+    elif name == CONTACT_AGENT_DOC_NAME:
+        from src.contacts.governance import default_governance_prompt
+
+        payload["defaultContent"] = default_governance_prompt()
+    return payload
 
 
 def _projection_doc_dict(doc_name: str, content: str) -> dict[str, Any]:
@@ -135,15 +149,9 @@ async def get_profile_doc(name: str, request: Request):
     doc = get_agent_config_store().get_profile_doc(name)
     if name == MEMORY_DOC_NAME:
         return success_envelope(_memory_doc_dict(doc), request=request, source="sqlite")
-    payload = _editable_doc_dict(doc)
-    if name == MATTER_AGENT_DOC_NAME:
-        # 这份文档**有意不 seed**（库里空 = 跟随代码默认，将来默认文案升级能跟着走）。
-        # 但"不 seed"不等于"界面显示空白" —— 把当前生效的默认全文一并交出去，让配置面
-        # 如实呈现（0812 dogfood：空 textarea 被读成"预设完全没做"）。
-        from src.matters.run_spec import default_task_contract
-
-        payload["defaultContent"] = default_task_contract()
-    return success_envelope(payload, request=request, source="sqlite")
+    return success_envelope(
+        _editable_doc_with_default(name, doc), request=request, source="sqlite"
+    )
 
 
 @router.get("/profile/history", dependencies=[Depends(verify_cf_access)])
@@ -197,7 +205,10 @@ async def write_profile_doc(name: str, request: Request, body: Optional[dict[str
     # 身份文档为空会让恒注入的 prompt 缺一段，所以拒空；但 matter_agent 相反 ——
     # 空内容**就是**「恢复默认」的表示法（run_spec 回落代码里的任务契约），
     # 拒空等于把「恢复默认」这个动作从 API 上抹掉。
-    if not content.strip() and name != MATTER_AGENT_DOC_NAME:
+    if not content.strip() and name not in {
+        MATTER_AGENT_DOC_NAME,
+        CONTACT_AGENT_DOC_NAME,
+    }:
         raise APIError("E_INVALID_ARG", "body.content must be a non-empty string",
                        http_status=400, source="sqlite")
     updated_by = raw.get("updatedBy") if raw.get("updatedBy") in ("user", "agent_proposed") else "user"
@@ -227,7 +238,9 @@ async def write_profile_doc(name: str, request: Request, body: Optional[dict[str
     )
     if name == MEMORY_DOC_NAME:
         return success_envelope(_memory_doc_dict(doc), request=request, source="sqlite")
-    return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
+    return success_envelope(
+        _editable_doc_with_default(name, doc), request=request, source="sqlite"
+    )
 
 
 @router.post("/profile/docs/{name}/rollback", dependencies=[Depends(verify_cf_access)])
@@ -256,7 +269,9 @@ async def rollback_profile_doc(name: str, request: Request, body: Optional[dict[
         raise APIError("E_INVALID_ARG", str(exc), http_status=400, source="sqlite") from exc
     if name == MEMORY_DOC_NAME:
         return success_envelope(_memory_doc_dict(doc), request=request, source="sqlite")
-    return success_envelope(_editable_doc_dict(doc), request=request, source="sqlite")
+    return success_envelope(
+        _editable_doc_with_default(name, doc), request=request, source="sqlite"
+    )
 
 
 # ── chat 授权模式（07-16 approval-mode switcher；08-05 WP-11 二档化）───────────────────

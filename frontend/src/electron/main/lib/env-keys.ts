@@ -195,6 +195,7 @@ export const MANAGED_ENV_KEYS = [
   // 投影 + /api/contacts REST + 扫描器）；默认 OFF；需重启后端。
   'MAILAGENT_CONTACTS_ENABLED',
   'MAILAGENT_CONTACT_PROFILE_ENABLED',
+  'MAILAGENT_CONTACT_AGENT_ENABLED',
 
   // — Notifications (PR D NotificationsTab)
   'FEISHU_NOTIFY_ENABLED',

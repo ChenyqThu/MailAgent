@@ -13,7 +13,7 @@ import sqlite3
 import time
 from typing import Any, Callable, Optional
 
-from fastapi import APIRouter, Depends, Query, Request
+from fastapi import APIRouter, Depends, Header, Query, Request
 
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access
@@ -34,6 +34,7 @@ from src.api.schemas.contacts import (
 )
 from src.contacts import service as contact_service
 from src.contacts import profile as contact_profile
+from src.contacts import governance as contact_governance
 from src.contacts.profile_config import get_contact_profile_agent_config
 from src.contacts.repository import ContactRepository
 from src.contacts.scanner import WATERMARK_KEY
@@ -61,6 +62,13 @@ def require_contacts_enabled(settings=Depends(get_settings)) -> None:
     if not bool(getattr(settings, "contacts_enabled", False)):
         raise APIError(
             "E_DISABLED", "Contact directory feature is disabled", source="sqlite"
+        )
+
+
+def require_contact_agent_enabled(settings=Depends(get_settings)) -> None:
+    if not bool(getattr(settings, "contact_agent_enabled", False)):
+        raise APIError(
+            "E_DISABLED", "Contact governance agent is disabled", source="sqlite"
         )
 
 
@@ -113,6 +121,128 @@ def _json_dict(raw: Any) -> dict:
 
 
 # ---- backfill progress (🔴 必须排在 /{contact_id} 之前, 否则被 int 路径吃掉) ----
+
+
+@router.get("/suggestions", dependencies=[Depends(require_contact_agent_enabled)])
+async def list_governance_suggestions(
+    request: Request,
+    status: str = Query("pending"),
+    limit: int = Query(50, ge=1, le=100),
+    cursor: Optional[str] = Query(None),
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    cursor_pair = None
+    if cursor:
+        try:
+            created_at, suggestion_id = cursor.split(":", 1)
+            cursor_pair = (int(created_at), int(suggestion_id))
+        except (TypeError, ValueError) as exc:
+            raise APIError(
+                "E_INVALID_ARG", "cursor must be '<timestamp>:<id>'", source="sqlite"
+            ) from exc
+    conn = repo.connect()
+    try:
+        result = _call(
+            contact_governance.list_suggestions,
+            conn,
+            status=status,
+            limit=limit,
+            cursor=cursor_pair,
+        )
+    finally:
+        conn.close()
+    return success_envelope(result, request=request)
+
+
+@router.post(
+    "/suggestions/{suggestion_id}/adopt",
+    dependencies=[Depends(require_contact_agent_enabled)],
+)
+async def adopt_governance_suggestion(
+    suggestion_id: int,
+    request: Request,
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    with repo.transaction() as conn:
+        result = contact_governance.adopt_suggestion(
+            conn, suggestion_id, now_ms=_now_ms()
+        )
+    error = result.pop("error", None)
+    if error:
+        raise APIError(error["code"], error["message"], source="sqlite")
+    return success_envelope(result, request=request)
+
+
+@router.post(
+    "/suggestions/{suggestion_id}/ignore",
+    dependencies=[Depends(require_contact_agent_enabled)],
+)
+async def ignore_governance_suggestion(
+    suggestion_id: int,
+    request: Request,
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    with repo.transaction() as conn:
+        result = _call(
+            contact_governance.ignore_suggestion,
+            conn,
+            suggestion_id,
+            now_ms=_now_ms(),
+        )
+    return success_envelope(result, request=request)
+
+
+@router.post("/agent/run", dependencies=[Depends(require_contact_agent_enabled)])
+async def run_contact_governance(
+    request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    settings=Depends(get_settings),
+):
+    from src.sync.async_jobs import AsyncJobRepository
+
+    day = time.strftime("%Y-%m-%d", time.localtime())
+    key = idempotency_key or f"contact_governance:manual:{day}"
+    result = contact_governance.enqueue_governance_job(
+        AsyncJobRepository(settings.sync_store_db_path),
+        trigger_kind="manual",
+        idempotency_key=key,
+    )
+    return success_envelope(result, request=request)
+
+
+@router.get("/agent/status", dependencies=[Depends(require_contact_agent_enabled)])
+async def contact_governance_status(
+    request: Request,
+    repo: ContactRepository = Depends(get_contact_repository),
+    settings=Depends(get_settings),
+):
+    conn = repo.connect()
+    try:
+        pending = int(
+            conn.execute(
+                "SELECT COUNT(*) FROM contact_suggestion WHERE status='pending'"
+            ).fetchone()[0]
+        )
+        marker = conn.execute(
+            "SELECT value FROM sync_state WHERE key=?",
+            (contact_governance.CONTACT_GOVERNANCE_FIRE_KEY,),
+        ).fetchone()
+        latest = conn.execute(
+            "SELECT created_at FROM async_jobs WHERE job_type=? "
+            "ORDER BY job_id DESC LIMIT 1",
+            (contact_governance.CONTACT_GOVERNANCE_JOB_TYPE,),
+        ).fetchone()
+    finally:
+        conn.close()
+    return success_envelope(
+        {
+            "enabled": bool(settings.contacts_enabled and settings.contact_agent_enabled),
+            "pending_count": pending,
+            "last_fire_day": marker[0] if marker else None,
+            "last_scan_at": latest[0] if latest else None,
+        },
+        request=request,
+    )
 
 
 @router.get("/backfill/progress")

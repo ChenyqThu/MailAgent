@@ -88,3 +88,16 @@ class ContactProfileSuggestionAdoptRequest(BaseModel):
 
 class ContactProfileSuggestionIgnoreRequest(BaseModel):
     field: str = Field(min_length=1)
+
+
+class ContactGovernanceEvidence(BaseModel):
+    message_id: str = Field(min_length=1)
+    quote: str = Field(min_length=1, max_length=5000)
+
+
+class ContactGovernanceProposalRequest(BaseModel):
+    type: str = Field(min_length=1)
+    contact_ids: list[int] = Field(min_length=1)
+    payload: dict[str, Any]
+    evidence: list[ContactGovernanceEvidence] = Field(min_length=1)
+    confidence: Optional[float] = None

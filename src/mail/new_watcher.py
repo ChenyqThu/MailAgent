@@ -60,6 +60,40 @@ from src.mail.backend.serial_executor import run_backend_io
 from src.mail.ingest_provenance import should_suppress_reconcile_notify
 from src.mail.throttle_pause import is_uid_backfill_paused
 
+
+def _fire_contact_governance_if_due(db_path: str, day: str) -> bool:
+    """sync_state 判 due → 事务外 enqueue → 成功后写当天 marker。"""
+    from src.contacts.governance import (
+        CONTACT_GOVERNANCE_FIRE_KEY,
+        enqueue_governance_job,
+    )
+    from src.sync.async_jobs import AsyncJobRepository
+
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        row = conn.execute(
+            "SELECT value FROM sync_state WHERE key=?", (CONTACT_GOVERNANCE_FIRE_KEY,)
+        ).fetchone()
+        if row is not None and str(row[0]) == day:
+            return False
+    finally:
+        conn.close()
+    enqueue_governance_job(
+        AsyncJobRepository(db_path),
+        trigger_kind="schedule",
+        idempotency_key=f"contact_governance:daily:{day}",
+    )
+    conn = sqlite3.connect(db_path, timeout=30.0)
+    try:
+        conn.execute(
+            "INSERT OR REPLACE INTO sync_state (key, value, updated_at) VALUES (?,?,?)",
+            (CONTACT_GOVERNANCE_FIRE_KEY, day, time.time()),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+    return True
+
 # 标准邮箱 (非自定义文件夹) —— L2/L3 gate 不影响这些; 自定义文件夹 = mailbox 不在此集合。
 # issue #42 C 案起单源迁至 src/mail/mailbox_semantics.py (STANDARD_MAILBOXES,
 # 「存档」有意不进的语义注释随迁); is_custom_folder_mailbox 在原处 re-export 保兼容。
@@ -362,6 +396,7 @@ class NewWatcher:
         self._last_inbox_reconcile_at: Optional[float] = None
         # 通讯录 L0+L1 提取扫描 (task 08-13) 的独立低频节拍游标, 同上解耦 5s poll。
         self._last_contact_extract_at: Optional[float] = None
+        self._last_contact_governance_check_at: Optional[float] = None
         # KOS 失败重试 (issue #59, 第 6c 步) 的不健康冷却截止 (monotonic 秒):
         # 探活失败后到此刻之前整段跳过, 不必每个 5s tick 都对着倒掉的 KOS 探活。
         self._kos_unhealthy_until: Optional[float] = None
@@ -732,6 +767,29 @@ class NewWatcher:
         # 10. 通讯录 L0+L1 提取扫描 (task 08-13 WP1, 默认关) — 独立低频节拍,
         # 纯本地 SQLite (零 IMAP 命令), 消化 email_metadata → 通讯录三表。
         await self._extract_contacts()
+        await self._contact_governance_tick()
+
+    async def _contact_governance_tick(self):
+        """每日一次治理扫描 enqueue；双 flag off 时首行返回、零 SQL 零 import。"""
+        if not (
+            getattr(settings, "contacts_enabled", False)
+            and getattr(settings, "contact_agent_enabled", False)
+        ):
+            return
+        now = time.monotonic()
+        last = self._last_contact_governance_check_at
+        if last is not None and now - last < 300:
+            return
+        self._last_contact_governance_check_at = now
+        day = time.strftime("%Y-%m-%d", time.localtime())
+        try:
+            fired = await asyncio.to_thread(
+                _fire_contact_governance_if_due, str(self.sync_store.db_path), day
+            )
+            if fired:
+                logger.info(f"[contact-governance] daily scan queued day={day}")
+        except Exception as exc:
+            logger.warning(f"[contact-governance] daily tick failed: {exc}")
 
     async def _extract_contacts(self):
         """通讯录 L0+L1 增量扫描 (MAILAGENT_CONTACTS_ENABLED, 默认关)。

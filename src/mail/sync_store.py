@@ -78,6 +78,8 @@ from src.contacts.taxonomy import (
     CONTACT_KIND_VALUES,
     CONTACT_MANAGER_SRC_VALUES,
     CONTACT_SENIORITY_VALUES,
+    CONTACT_SUGGESTION_STATUS_VALUES,
+    CONTACT_SUGGESTION_TYPE_VALUES,
 )
 from src.mail.email_address import derive_sender_email
 
@@ -633,6 +635,32 @@ FOLDER_PREF_TABLE_DDLS = (
 FOLDER_PREF_INDEX_DDLS = (
     # 热读入口: gate 手里只有 mailbox 显示名 (见 mailbox_label 列注)。
     "CREATE INDEX IF NOT EXISTS idx_folder_pref_label ON folder_pref(mailbox_label)",
+)
+
+
+# ==================== Contact governance suggestion DDL (v64) ====================
+# 独立于 v54 CONTACT_TABLE_DDLS：v55-v63 老库必须在 v64 梯子拿到本表；塞进
+# v54 组会让表的版本归属错位，并让中间版本升级路径漏建。
+CONTACT_SUGGESTION_TABLE_DDLS = (
+    f"""CREATE TABLE IF NOT EXISTS contact_suggestion (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        type TEXT NOT NULL CHECK (type {sql_check_clause(CONTACT_SUGGESTION_TYPE_VALUES)}),
+        contact_ids_json TEXT NOT NULL CHECK (json_valid(contact_ids_json)),
+        payload_json TEXT NOT NULL CHECK (json_valid(payload_json)),
+        evidence_json TEXT NOT NULL CHECK (json_valid(evidence_json)),
+        evidence_fingerprint TEXT NOT NULL,
+        confidence REAL NULL CHECK (confidence IS NULL OR (confidence >= 0 AND confidence <= 1)),
+        status TEXT NOT NULL DEFAULT 'pending' CHECK (status {sql_check_clause(CONTACT_SUGGESTION_STATUS_VALUES)}),
+        block_reason TEXT NULL,
+        created_at INTEGER NOT NULL,
+        decided_at INTEGER NULL
+    )""",
+)
+CONTACT_SUGGESTION_INDEX_DDLS = (
+    "CREATE INDEX IF NOT EXISTS idx_contact_suggestion_status_created "
+    "ON contact_suggestion(status, created_at)",
+    "CREATE INDEX IF NOT EXISTS idx_contact_suggestion_evidence_fingerprint "
+    "ON contact_suggestion(evidence_fingerprint)",
 )
 
 #: ``upsert_folder_pref`` 的"这个字段不改"哨兵。不能用 ``None`` —— ``icon=None`` 是
@@ -1506,7 +1534,13 @@ class SyncStore:
     #                INSERT OR IGNORE。回滚: DELETE FROM report_agent WHERE
     #                id='contact_profile_agent'; 三列可留给旧代码忽略，或 SQLite 重建 contact
     #                表移除后再手工降 db_version。
-    DB_VERSION = 63
+    # v64 (2026-08-19): contact_suggestion 待审治理队列。
+    #                语义：Agent 只提带证据建议，owner 决定 adopt/ignore。
+    #                数据规则：JSON 全 json_valid；type/status 引 taxonomy 单源；
+    #                evidence_fingerprint 支撑同批证据去重。
+    #                幂等：CREATE TABLE/INDEX IF NOT EXISTS，重放结果不变。
+    #                回滚：旧代码忽略本表；彻底清理需 DROP TABLE 后手工降版本。
+    DB_VERSION = 64
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -4268,6 +4302,18 @@ class SyncStore:
             except sqlite3.Error as e:
                 raise SyncStoreMigrationError(
                     f"v63 migration (contact_profile_agent seed): {e}"
+                ) from e
+
+        # === v64: contact_suggestion 待审治理队列 ===
+        if current_version < 64:
+            try:
+                for ddl in CONTACT_SUGGESTION_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in CONTACT_SUGGESTION_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except sqlite3.Error as e:
+                raise SyncStoreMigrationError(
+                    f"v64 migration (contact_suggestion table): {e}"
                 ) from e
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

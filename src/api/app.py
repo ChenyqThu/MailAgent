@@ -410,6 +410,7 @@ from src.api.routers import (  # noqa: E402
     calendar,
     chat,
     connector,
+    contact_agent,
     contacts,
     email,
     email_views,
@@ -449,6 +450,8 @@ app.include_router(reports.router)
 app.include_router(matters.router)
 # Contact Directory WP2 (task 08-13) — /api/contacts* 列表聚合/详情/关联/治理写面；
 # verify_cf_access + require_contacts_enabled (flag off 全 E_DISABLED)。
+# WP7 治理建议落库腿：仅 verify_local_token + contacts/contact_agent 双 flag。
+app.include_router(contact_agent.router)
 app.include_router(contacts.router)
 # Matters P4 (D6) — matter run 提案内部端点 /api/matters/{id}/runs/{rid}/proposal。
 # verify_local_token（不接受 CF JWT，Remote Web 不可调）+ matters/matter_agent 双 flag 门；

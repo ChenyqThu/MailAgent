@@ -34,6 +34,9 @@ export const CONTACT_LOCKABLE_FIELDS = [
 ] as const
 export type ContactLockableField = (typeof CONTACT_LOCKABLE_FIELDS)[number]
 
+export const CONTACT_SUGGESTION_TYPE_VALUES = ['merge', 'identity', 'former_email', 'relation', 'kind'] as const
+export const CONTACT_SUGGESTION_STATUS_VALUES = ['pending', 'adopted', 'ignored', 'blocked'] as const
+
 // ---- REST payloads (src/api/routers/contacts.py) ----
 
 export type ContactView = 'known' | 'all'

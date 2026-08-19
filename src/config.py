@@ -1029,6 +1029,15 @@ class Config(BaseSettings):
             "enabled 行开关按 AND 生效；关闭时不启动画像 worker，手动 refresh 返回 E_DISABLED。"
         ),
     )
+    contact_agent_enabled: bool = Field(
+        default=False,
+        validation_alias="MAILAGENT_CONTACT_AGENT_ENABLED",
+        description=(
+            "通讯录治理 Agent 总闸，默认关闭。与 MAILAGENT_CONTACTS_ENABLED 按 AND "
+            "生效：控制每日治理扫描、治理建议双腿 REST 与 contact_governance 执行链；"
+            "关闭时表仍恒在，仅运行时字节级 inert。Restart required after changing it."
+        ),
+    )
     contact_extract_interval_sec: int = Field(
         default=120,
         validation_alias="MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC",

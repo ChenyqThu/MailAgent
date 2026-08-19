@@ -59,7 +59,8 @@ def _downgrade_contact_to_v54(path) -> None:
 def test_v63_fresh_database_has_columns_and_disabled_seed(tmp_path):
     path = tmp_path / "fresh.db"
     SyncStore(str(path))
-    assert _version(path) == 63
+    assert _version(path) == SyncStore.DB_VERSION
+    assert SyncStore.DB_VERSION >= 64
     assert PROFILE_COLUMNS <= _columns(path)
     row = _seed(path)
     assert row is not None
@@ -76,10 +77,15 @@ def test_v63_replays_from_v54_shape(tmp_path):
     _downgrade_contact_to_v54(path)
     assert PROFILE_COLUMNS.isdisjoint(_columns(path))
     SyncStore(str(path))
-    assert _version(path) == 63
+    assert _version(path) == SyncStore.DB_VERSION
+    assert SyncStore.DB_VERSION >= 64
     assert PROFILE_COLUMNS <= _columns(path)
     assert "formal_name" in _columns(path)
     assert _seed(path)["enabled"] == 0
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='contact_suggestion'"
+        ).fetchone() is not None
 
 
 def test_v63_idempotent_replay_preserves_agent_edits(tmp_path):
@@ -97,4 +103,3 @@ def test_v63_idempotent_replay_preserves_agent_edits(tmp_path):
     assert row["enabled"] == 1
     assert row["prompt"] == "custom"
     assert PROFILE_COLUMNS <= _columns(path)
-

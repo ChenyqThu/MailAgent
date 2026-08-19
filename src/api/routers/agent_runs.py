@@ -188,6 +188,18 @@ def _matter_agent_enabled() -> bool:
         return False
 
 
+def _contact_governance_enabled() -> bool:
+    from src.api.deps import get_settings
+
+    try:
+        settings = get_settings()
+        return bool(settings.contacts_enabled) and bool(
+            getattr(settings, "contact_agent_enabled", False)
+        )
+    except Exception:
+        return False
+
+
 def _require_flag() -> None:
     """flag off → 404（feature 不存在；对齐 aguiMirror off 形状）。挂在 verify_local_token 之后。"""
     if not _custom_agents_enabled():
@@ -204,7 +216,11 @@ def _require_run_pull_flag() -> None:
     开着即放行 —— matter_followup job 的 spec 也走本端点，custom flag 单独关掉不该把
     matter run 打成 404（matter 分支自身还有 assemble_matter_spec 的双 flag 409 防绕）。
     两族全关 → 维持 404。"""
-    if not (_custom_agents_enabled() or _matter_agent_enabled()):
+    if not (
+        _custom_agents_enabled()
+        or _matter_agent_enabled()
+        or _contact_governance_enabled()
+    ):
         raise APIError(
             "E_NOT_FOUND",
             "agent runs feature is disabled",
@@ -315,6 +331,17 @@ def _assemble_spec(job: AsyncJob) -> dict[str, Any]:
         try:
             return assemble_matter_spec(job)
         except MatterError as exc:
+            raise APIError(
+                "E_SPEC_AGENT_INVALID", exc.message,
+                http_status=409, source="agent-runs",
+            ) from exc
+    if job.job_type == "contact_governance":
+        from src.contacts.governance import assemble_contact_governance_spec
+        from src.contacts.service import ContactError
+
+        try:
+            return assemble_contact_governance_spec(job)
+        except ContactError as exc:
             raise APIError(
                 "E_SPEC_AGENT_INVALID", exc.message,
                 http_status=409, source="agent-runs",

@@ -742,6 +742,9 @@ async def chat_config(request: Request):
             "contactProfileEnabled": bool(
                 getattr(cfg, "contact_profile_enabled", False)
             ),
+            "contactAgentEnabled": bool(
+                getattr(cfg, "contact_agent_enabled", False)
+            ),
             "triggerV2Enabled": _hot_bool(env_vals, "MAILAGENT_TRIGGER_V2", True),
             "calendarTriggerEnabled": _hot_bool(
                 env_vals, "MAILAGENT_CALENDAR_TRIGGER", True

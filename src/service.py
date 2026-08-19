@@ -835,8 +835,10 @@ class EmailNotionSyncApp:
             # AgentRunWorker（Matters P4 起）：custom agents **或** matter 跟进 Agent
             # 任一开着都要起 —— matter_followup job 与 agent_run 同族同 worker（D3
             # 「不起第二个 poll worker」）；trigger worker 仍只归 custom agents。
-            if config.custom_agents_enabled or (
-                config.matters_enabled and config.matter_agent_enabled
+            if (
+                config.custom_agents_enabled
+                or (config.matters_enabled and config.matter_agent_enabled)
+                or (config.contacts_enabled and config.contact_agent_enabled)
             ):
                 from src.agents.run_worker import AgentRunWorker
                 from src.sync.async_jobs import AsyncJobRepository
@@ -849,8 +851,12 @@ class EmailNotionSyncApp:
                 )
                 logger.info(
                     "[agent] agent run worker enabled "
-                    "(custom_agents=%s matter_agent=%s)"
-                    % (config.custom_agents_enabled, config.matter_agent_enabled)
+                    "(custom_agents=%s matter_agent=%s contact_agent=%s)"
+                    % (
+                        config.custom_agents_enabled,
+                        config.matter_agent_enabled,
+                        config.contact_agent_enabled,
+                    )
                 )
             if config.matters_enabled:
                 from src.agent_config.store import AgentConfigStore, resolve_agent_config_db_path

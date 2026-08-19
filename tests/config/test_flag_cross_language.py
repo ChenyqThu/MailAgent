@@ -187,6 +187,7 @@ PYDANTIC_SINGLE_CARRIER_FLAGS = {
     # env 键 → (pydantic 字段名, 期望默认)
     # 通讯录总闸（Contact Directory）：灰度默认关（ship-off → dogfood → cutover 另拍）。
     "MAILAGENT_CONTACTS_ENABLED": ("contacts_enabled", False),
+    "MAILAGENT_CONTACT_AGENT_ENABLED": ("contact_agent_enabled", False),
 }
 
 

@@ -516,6 +516,7 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # tests/config/test_flag_cross_language.py 的单载体登记 pin）。
         "contactsEnabled": False,
         "contactProfileEnabled": False,
+        "contactAgentEnabled": False,
         # 08-01 PR4 — MCP 连接区门控（MAILAGENT_MCP_CONNECTORS，pydantic 默认 off 灰度中）；
         # 同 providerRegistryEnabled 走 getattr 兜底：stub 无该字段 → False。
         "connectorToolsEnabled": False,

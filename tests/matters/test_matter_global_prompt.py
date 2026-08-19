@@ -113,5 +113,15 @@ def test_profile_doc_endpoint_carries_default_content_for_matter_agent():
     # 🔴 抽取失败必须红：函数改名/挪走时这条闸要炸，而不是静默放行。
     assert match is not None, "src/api/routers/agent.py: 找不到 get_profile_doc 函数体"
     body = match.group(0)
-    assert "if name == MATTER_AGENT_DOC_NAME:" in body
-    assert 'payload["defaultContent"] = default_task_contract()' in body
+    # WP7 起 defaultContent 逻辑收进 _editable_doc_with_default（matter_agent + contact_agent
+    # 两份共用）；本闸跟随：GET 路径必须经过该辅助函数，且辅助函数里两个分支各交出默认值。
+    assert "_editable_doc_with_default(" in body
+    helper = re.search(
+        r"def _editable_doc_with_default\(.*?(?=\n@router|\nasync def |\ndef )", source, re.DOTALL
+    )
+    assert helper is not None, "src/api/routers/agent.py: 找不到 _editable_doc_with_default 函数体"
+    helper_body = helper.group(0)
+    assert "if name == MATTER_AGENT_DOC_NAME:" in helper_body
+    assert 'payload["defaultContent"] = default_task_contract()' in helper_body
+    assert "elif name == CONTACT_AGENT_DOC_NAME:" in helper_body
+    assert 'payload["defaultContent"] = default_governance_prompt()' in helper_body

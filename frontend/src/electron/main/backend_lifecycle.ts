@@ -82,7 +82,8 @@ import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
 // v61: matter.description → background + 新列 goal, 背景与目标拆两列 (08-19).
 // v62: folder_pref —— 已同步文件夹的 per-folder 配置 (图标 + 通知 + AI) (08-19).
 // v63: Contact Profile 状态列 + contact_profile_agent seed (WP6, 08-19).
-export const EXPECTED_DB_VERSION = 63
+// v64: contact_suggestion 治理待审队列 (WP7, 08-19).
+export const EXPECTED_DB_VERSION = 64 // WP7 contact_suggestion governance queue
 
 /** 就绪判据的关键表子集 (02-landing-plan.md P1-6)。admin.py REQUIRED_TABLES 更全,
  *  但开窗门控只需保证「邮件读写主路径」已建: 元数据 / 正文 SSoT / outbox +

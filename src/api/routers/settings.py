@@ -166,6 +166,7 @@ _MANAGED_ENV_KEYS: List[str] = [
     # 均读 serve-api 冻结单例与 /chat/config 投影）；默认 OFF；需重启后端。
     "MAILAGENT_CONTACTS_ENABLED",
     "MAILAGENT_CONTACT_PROFILE_ENABLED",
+    "MAILAGENT_CONTACT_AGENT_ENABLED",
     # — Notifications
     "FEISHU_NOTIFY_ENABLED",
     "FEISHU_APP_ID",
