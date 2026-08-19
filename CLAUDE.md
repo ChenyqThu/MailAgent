@@ -142,7 +142,9 @@
 | `MAILAGENT_MATTERS_ENABLED` | `true` | Matters / 事项总闸（2026-08-12 cutover）：一级导航 + 63 端点 + 13 件工具 |
 | `MAILAGENT_MATTER_AGENT_ENABLED` | `false` | 事项跟进 Agent。有意保持关：**无人值守 + 有网络出口**。工具天花板按 class 推导，不按名单 |
 | `MAILAGENT_INTERNAL_AGENT_TOOLS` | `true` | 主 agent 可读写四类**内建** agent 配置 + 事项跟进逐条配置。写工具恒 ask；白名单字段须有真实消费点 |
-| `MAILAGENT_CONTACTS_ENABLED` | `false` | 通讯录总闸（灰度关）：L0/L1 扫描 + 15 端点 + 一级导航。身份判据只有归一 email |
+| `MAILAGENT_CONTACTS_ENABLED` | `false` | 通讯录总闸（灰度关）：L0/L1 扫描 + 端点面 + 一级导航 + gateway 读/轻写工具。身份判据只有归一 email。0819 起双载体 |
+| `MAILAGENT_CONTACT_PROFILE_ENABLED` | `false` | 联系人 AI 画像 dream worker（WP6，DB v63）。AND 行 enabled；off 时读投影照常（unconfigured 态）；手动 refresh 只要求 env 开 |
+| `MAILAGENT_CONTACT_AGENT_ENABLED` | `false` | 通讯录治理台（WP7，DB v64）：每日扫描 + 待审队列 + propose 三工具注入。场地天花板=第六 mode `contact_governance`（无 web/exec）。🔴 无人值守 + 消费邮件正文 |
 | `FEISHU_NOTIFY_ENABLED` / `REDIS_EVENTS_ENABLED` / `ALERT_ENABLED` | `false` | 通知 / 事件消费 / 告警 |
 
 必填项：**硬必填仅 `USER_EMAIL`**；`MAIL_ACCOUNT_NAME` 有默认 `Exchange` 但需与实际账户名一致；Notion 三键（`NOTION_TOKEN` / `EMAIL_DATABASE_ID` / `CALENDAR_DATABASE_ID`）**可选**，空 = 本地-only 模式。全部可调项见 [`.env.example`](./.env.example)。

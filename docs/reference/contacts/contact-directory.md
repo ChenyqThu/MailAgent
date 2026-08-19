@@ -290,6 +290,12 @@ backfill 就收敛，不必等下个 tick）。
 
 ## 9. 边界（现状之外，勿当既有能力引用）
 
-治理台的 gateway 9 工具/policy/catalog 与 UI/i18n 属 WP7 后续批，本批只交付 Python
-队列、扫描执行链、双腿 REST 和提示词配置面。手动创建无 email 联系人 / KOS person
-页 / compose 收件人补全切读通讯录等仍在 PRD §9 TODO 表登记。
+治理台三批已全部落地（2026-08-19）：Python 队列/扫描执行链/双腿 REST/提示词配置面（批①）、
+gateway 9 工具 + 第六 context mode `contact_governance`（批②，工具定义 `frontend/src/ai-gateway/tools/contacts.ts`、
+三道 belt 与审批档见 `feature-flags-rationale.md` 的 `MAILAGENT_CONTACT_AGENT_ENABLED` 条目）、
+列表头 ✨Agent 胶囊 + 抽屉两 tab + LabsTab 开关（批③，工具清单走零依赖叶子
+`frontend/src/shared/lib/contactToolFace.ts`，三向闸 `contact_tool_face_leaf.test.ts`）。
+仍未做：手动创建无 email 联系人 / KOS person 页 / compose 收件人补全切读通讯录等，
+在 PRD §9 TODO 表登记。两个已知形态（有意保留，dogfood 后再议）：`contact_refresh_profile`
+在画像 flag off 时恒返 `E_DISABLED`；`contact_list_mails` 不返回 `message_id`（propose
+取证据要经 `email_get` 两跳，工具 description 已写明）。
