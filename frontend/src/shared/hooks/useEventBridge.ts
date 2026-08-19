@@ -34,7 +34,12 @@ import {
   collectMainListIds
 } from '@shared/lib/emailInvalidation'
 import type { SseEvent } from '@shared/api/types'
-import { globalAttentionKey, isMatterAttentionDetailKey } from '@shared/components/matters/hooks'
+import {
+  globalAttentionKey,
+  isMatterAttentionDetailKey,
+  matterChangedPublicId
+} from '@shared/components/matters/hooks'
+import { refreshMatter } from '@shared/components/matters/matterMutation'
 
 const DEBOUNCE_MS = 200
 
@@ -171,6 +176,20 @@ export function useEventBridge(): void {
             predicate: (query) => isMatterAttentionDetailKey(query.queryKey)
           })
         )
+        return
+      }
+      // S1 — 事项本体的变更（owner 在 UI 里改的 / agent 工具改的 / 跟进 run 落的提案）。
+      // 后端在**事务提交后**发, 且 payload 只带 public_id —— 与 `matter.attention` 不同,
+      // 这里能定向失效, 不必按形状全量刷 (那条的 payload 是内部数字 id, 对不上缓存键)。
+      // 失效清单复用 `refreshMatter`: SSE 路径与用户点击路径共用同一份, 不会漂开。
+      if (ev.event_type === 'matter.changed') {
+        const publicId = matterChangedPublicId(ev.data)
+        if (!publicId) return
+        // 按事项分桶 debounce: 一轮 agent run 会连发十几条 (每条 matter_event 一次),
+        // 同一事项只刷一次; 不同事项互不压制。
+        debounceInvalidate(`matters:changed:${publicId}`, () => {
+          void refreshMatter(queryClient, publicId)
+        })
         return
       }
       const directives = planInvalidation(ev.event_type, ev.internal_id, ev.data)

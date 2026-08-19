@@ -81,6 +81,21 @@ export function isMatterAttentionDetailKey(key: readonly unknown[]): boolean {
   )
 }
 
+/** `matter.changed` SSE 的 payload 判定（S1）——「这条事件该刷哪个事项」。
+ *
+ *  与 `isMatterAttentionDetailKey` 同款：判定放在 key 工厂旁边、纯函数可直测，
+ *  别让 `useEventBridge` 手写一段内联的 typeof 判断。
+ *
+ *  🔴 拿不到合法 public_id 一律返 null（调用方直接 return，不做任何失效）——
+ *  这条总线是 lossy 的，宁可漏刷一次，也不能因为一条畸形事件去全量刷缓存
+ *  （`matter.attention` 正是因为 payload 用了对不上的内部数字 id，才被迫退化成按形状全量失效）。
+ */
+export function matterChangedPublicId(data: unknown): string | null {
+  if (data == null || typeof data !== 'object') return null
+  const value = (data as { public_id?: unknown }).public_id
+  return typeof value === 'string' && value.length > 0 ? value : null
+}
+
 export function useMatterRuns(
   matterId: string,
   enabled = true

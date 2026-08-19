@@ -23,10 +23,10 @@ import { useTranslation } from 'react-i18next'
 
 import { readMatterUndoDescriptor } from '@shared/api/matters'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { qk } from '@shared/lib/queryKeys'
 import { toastError, useToastStore } from '@shared/state/toast'
 
 import { useMatterChatApi } from './hooks'
+import { refreshMatter } from './matterMutation'
 import { MATTER_UNDO_REASON } from './useMatterUndoRunner'
 
 /** 带撤销按钮的 toast 停留时长。默认 3s 对「读完一句话再决定要不要撤销」明显不够。 */
@@ -66,14 +66,7 @@ export function useMatterUndoToast(): MatterUndoToastPusher {
           onClick: () => {
             void chatApi
               .applyUndo(descriptor, { reason: MATTER_UNDO_REASON })
-              .then(() =>
-                Promise.all([
-                  queryClient.invalidateQueries({ queryKey: qk.matters.list() }),
-                  ...(matterId
-                    ? [queryClient.invalidateQueries({ queryKey: qk.matters.detail(matterId) })]
-                    : [])
-                ])
-              )
+              .then(() => refreshMatter(queryClient, matterId))
               .catch((error: unknown) => {
                 // 版本冲突 = 撤销之后事项又被改过 —— 这恰恰是"盲目回滚"最不该发生的时刻，
                 // 如实说，不重试（同 useMatterUndoRunner 的处置）。

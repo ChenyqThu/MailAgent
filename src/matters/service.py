@@ -6,13 +6,16 @@ import json
 import re
 import sqlite3
 import time
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, Mapping, Sequence
+from typing import Any, Iterator, Mapping, Sequence
 
 from loguru import logger
 
 from src.contacts.service import upsert_contact_for_email
+from src.events.publisher import safe_publish
 
 from .models import (
     MATTER_ACTOR_KINDS,
@@ -199,11 +202,67 @@ class Actor:
     actor_id: str | None = None
 
 
+#: 本次事务里被改动过的事项 public_id。**提交成功后**才由 `_transaction()` flush 成
+#: `matter.changed` SSE —— 在事务里发等于「事件先到、DB 后提交」, 前端 refetch 会读到旧值,
+#: 症状与修之前一模一样、只是更难查。
+#: 用 ContextVar 而不是实例属性: 同一个 MatterService 会被并发请求共用 (serve-api 是
+#: 多 worker 的), 实例属性会让两个请求互相把对方的待发集合冲掉。
+_pending_changed: ContextVar[set[str] | None] = ContextVar(
+    "matter_pending_changed", default=None
+)
+
+
 class MatterService:
     def __init__(self, repository: MatterRepository, *, clock_ms=None, url_fetcher=None):
         self.repository = repository
         self.clock_ms = clock_ms or (lambda: int(time.time() * 1000))
         self.url_fetcher = url_fetcher or fetch_readable_url
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        """事项域**唯一**的写事务出口 —— 提交后把本次改动的事项广播成 `matter.changed`。
+
+        🔴 `src/matters/` 里不许再直接用 `repository.transaction()`
+        (闸: `tests/matters/test_transaction_gate.py`)。漏一处 = 那条写路径静默不刷新,
+        而且不会有任何测试变红 —— 这正是 2026-08-18 那批 bug 的复发形态。
+
+        嵌套安全: 只有最外层负责 flush。当前没有嵌套调用, 但 run_service 的写会调
+        service 的方法, 未来出现嵌套时不会退化成「发两遍」或「内层提交就发、外层却回滚了」。
+        """
+        outer = _pending_changed.get()
+        token = _pending_changed.set(set()) if outer is None else None
+        try:
+            with self.repository.transaction() as conn:
+                yield conn
+            if token is not None:
+                self._flush_changed(_pending_changed.get() or set())
+        finally:
+            if token is not None:
+                _pending_changed.reset(token)
+
+    @staticmethod
+    def _flush_changed(public_ids: set[str]) -> None:
+        """把提交后的事项变更广播出去。绝不抛 —— 通知失败不该让已提交的写看起来失败了。
+
+        payload 只有 `public_id`, 不带 kind 也不带业务数据:
+        - 只发 public_id 是因为前端缓存键用的就是它。`matter.attention` 当年发内部数字
+          `matter.id`, 前端对不上, 只能退化成「按形状全量失效」
+          (`useEventBridge.ts` 那处注释就是这个妥协的墓志铭)。
+        - 不带业务数据是因为这条总线是 lossy 的: 事件只能当 invalidation hint,
+          真数据永远来自前端随后的 refetch。
+        - 不带 kind 是因为前端拿到 kind 也只会做同一件事 (失效该事项的全部子缓存);
+          带上只会诱使将来有人按 kind 做「精细失效」, 那正是漏刷的来源。
+
+        🔴 **不传 `source=`**: 跟随 `worker.py` 发 `matter.attention` 的既有形态 (那里也没传),
+        且 `src/matters/*.py` 里任何 `source="字面量"` 都会被时间线的 i18n 一致性闸
+        (`frontend/tests/shared/matterTimelineModel.test.ts`) 抽走、要求配一个事件来源标签
+        —— 那个闸抽的是 **matter_event 的 source**, 与 SSE 事件的 source 是两回事。
+        """
+        for public_id in sorted(public_ids):
+            try:
+                safe_publish("matter.changed", data={"public_id": public_id})
+            except Exception as e:  # pragma: no cover — safe_publish 自己已经 swallow
+                logger.debug(f"[matters] matter.changed publish swallowed: {e}")
 
     def _default_schedule_json(self, now: int) -> str:
         """新建事项的默认跟进排程（D2 方案 A：默认开 + 连排程一起给）。
@@ -248,7 +307,7 @@ class MatterService:
             raise MatterError("E_INVALID_ARG", str(exc)) from exc
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, "matter_created")
             if replay:
                 return replay
@@ -749,7 +808,7 @@ class MatterService:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         replay_payload = {"name": tag_name, "color": color, "shape": shape}
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._tag_replay(
                 conn, dedupe_key, "tag_style_upsert", replay_payload
             )
@@ -791,7 +850,7 @@ class MatterService:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         replay_payload = {"old_name": old_tag_name, "new_name": new_tag_name}
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._tag_replay(conn, dedupe_key, "tag_rename", replay_payload)
             if replay:
                 return replay
@@ -871,7 +930,7 @@ class MatterService:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         replay_payload = {"name": tag_name}
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._tag_replay(conn, dedupe_key, "tag_delete", replay_payload)
             if replay:
                 return replay
@@ -950,7 +1009,7 @@ class MatterService:
         binding_fields = sorted(set(patch) & BINDING_PATCH_FIELDS)
         plain_fields = sorted(set(patch) - BINDING_PATCH_FIELDS)
         binding_only = bool(binding_fields) and not plain_fields
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             # 主事件（持 dedupe_key 那条）的 kind 随上面的分家而变；replay 两种都认
             # —— 它们都只可能由 patch_matter 写出，"这把钥匙被另一种 mutation 用过"
             # 的判据不该被这次形状调整误伤（也顺带兼容升级前写下的老 dedupe_key）。
@@ -1190,7 +1249,7 @@ class MatterService:
         actor: Actor = Actor(),
         reason: str | None = None,
     ) -> dict[str, Any]:
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             matter = self._require_matter(conn, public_id)
             if matter["version"] != expected_version:
                 raise self._version_conflict()
@@ -1242,7 +1301,7 @@ class MatterService:
         normalized = self._normalize_item(kind, data)
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, "item_created", include_item=True)
             if replay:
                 return replay
@@ -1368,7 +1427,7 @@ class MatterService:
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, event_kind, include_item=True)
             if replay:
                 return replay
@@ -1496,7 +1555,7 @@ class MatterService:
             "trash": "matter_trashed",
             "restore": "matter_restored",
         }[operation]
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, event_kind)
             if replay:
                 return replay
@@ -1606,7 +1665,7 @@ class MatterService:
         text = str(fetched.get("text") or "")
         fetched_hash = content_hash(text)
         fetched_at = self.clock_ms()
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             matter = self._require_matter(conn, public_id)
             current = self.repository.get_resource(conn, resource_id)
             link = self.repository.get_resource_link(
@@ -1671,7 +1730,7 @@ class MatterService:
     ) -> dict[str, Any]:
         now = self.clock_ms()
         self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             matter = self._require_matter(conn, public_id)
             snapshot = self._resolve_source_resource(conn, data.get("source_resource")) if data.get("source_resource") else None
             if snapshot:
@@ -1780,7 +1839,7 @@ class MatterService:
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             if patch.get("confirmed") is True:
                 replay = self._replay(conn, dedupe_key, RESOURCE_SUGGESTION_ACCEPTED)
                 if replay:
@@ -1904,7 +1963,7 @@ class MatterService:
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, RESOURCE_SUGGESTION_REJECTED)
             if replay:
                 return replay
@@ -2006,7 +2065,7 @@ class MatterService:
         )
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             matter = self._require_matter(conn, public_id)
             pending: list[tuple[dict[str, Any], dict[str, Any], str]] = []
             skipped: list[dict[str, Any]] = []
@@ -2164,7 +2223,7 @@ class MatterService:
                 "expand_reason", expand_reason, MATTER_RESOURCE_EXPANSION_REASONS
             )
         now = self.clock_ms()
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             matter = self._require_matter(conn, public_id)
             # 积压守卫（0812 修法 6）：已经挂着一屏待审建议就别再堆了，先让用户处理完。
             backlog = int(
@@ -2371,7 +2430,7 @@ class MatterService:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
         event_kind = "resource_unlinked" if deleted else "resource_restored"
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, event_kind)
             if replay:
                 return replay
@@ -2515,7 +2574,7 @@ class MatterService:
     ) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, event_kind)
             if replay:
                 return replay
@@ -2739,7 +2798,7 @@ class MatterService:
         expected_version = mutation["expected_version"]
         dedupe_key = self._dedupe(mutation["idempotency_key"])
         actor = mutation.get("actor", Actor())
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, "relation_added")
             if replay:
                 return replay
@@ -2810,7 +2869,7 @@ class MatterService:
     def _mutate_relation(self, public_id: str, relation_id: int, patch: Mapping[str, Any], event_kind: str, *, expected_version: int, idempotency_key: str, source: str, actor: Actor = Actor(), reason: str | None = None, reverses_event_id: int | None = None) -> dict[str, Any]:
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, event_kind)
             if replay:
                 return replay
@@ -2943,7 +3002,7 @@ class MatterService:
         """接受提案（D9 单事务十步；version 恰 bump 一次；其余 pending 转 superseded）。"""
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, UPDATE_ACCEPTED)
             if replay:
                 return replay
@@ -3175,7 +3234,7 @@ class MatterService:
             raise MatterError("E_INVALID_ARG", "reject reason is required")
         now = self.clock_ms()
         dedupe_key = self._dedupe(idempotency_key)
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             replay = self._replay(conn, dedupe_key, UPDATE_REJECTED)
             if replay:
                 return replay
@@ -4576,6 +4635,14 @@ class MatterService:
                 "idempotency_key": dedupe_key[:16] + "…",
             }
         )
+        # 登记「这个事项变了」, 由 `_transaction()` 在**提交后**广播 (S1)。
+        # 判据是「真的落了一条 matter_event」而不是「调了一个写方法」—— 幂等重放
+        # (`_replay`) 不落新事件 ⇒ 不发事件 ⇒ 前端不做无谓 refetch。这个语义是免费送的。
+        pending = _pending_changed.get()
+        if pending is not None:
+            public_id = self.repository.public_id_of(conn, matter_id)
+            if public_id:
+                pending.add(public_id)
         return self.repository.insert_event(
             conn,
             {

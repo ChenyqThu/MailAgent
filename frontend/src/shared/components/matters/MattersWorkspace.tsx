@@ -17,6 +17,7 @@ import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
 import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
+import { refreshMatter } from './matterMutation'
 import { readLastSelectedMatterId, writeLastSelectedMatterId } from './matterLastSelected'
 import {
   applyMatterListQuery,
@@ -196,7 +197,7 @@ export function MattersWorkspace(): React.ReactElement | null {
     return index
   }, [attentionItems])
   const pendingUpdates = useQuery({
-    queryKey: [...qk.matters.all(), 'pending-updates'],
+    queryKey: qk.matters.pendingUpdates(),
     queryFn: async (): Promise<Array<{ matterId: string; updates: MatterUpdate[] }>> =>
       Promise.all(
         liveMatters
@@ -322,7 +323,12 @@ export function MattersWorkspace(): React.ReactElement | null {
     if (initialSelectionApplied || !liveList.isSuccess) return
     setInitialSelectionApplied(true)
     if (navigationTarget) return
-    const candidates = applyMatterListQuery(liveMatters, DEFAULT_MATTER_LIST_QUERY, '', queryContext)
+    const candidates = applyMatterListQuery(
+      liveMatters,
+      DEFAULT_MATTER_LIST_QUERY,
+      '',
+      queryContext
+    )
     const stored = readLastSelectedMatterId()
     if (stored && candidates.some((matter) => matter.public_id === stored)) {
       selectMatter(stored)
@@ -360,7 +366,7 @@ export function MattersWorkspace(): React.ReactElement | null {
     mutationFn: (input: MatterCreateInput) => api.create(input),
     onSuccess: async (result) => {
       setCreateOpen(false)
-      await queryClient.invalidateQueries({ queryKey: qk.matters.list() })
+      await refreshMatter(queryClient, result.matter?.public_id ?? null)
       if (result.matter) revealMatter(result.matter)
       // G-33 —— 设计 §2.23：创建后的这一句同时是「其余可以随后补齐」的教学位。
       // 🔴 不带撤销：后端确实给了「移入废纸篓」的 undo descriptor，但这里刚刚把用户**导航到
@@ -382,7 +388,11 @@ export function MattersWorkspace(): React.ReactElement | null {
           右侧常驻「新建事项」主按钮。它是唯一常驻的创建入口（无 ⌘N、无第二条路径），
           从旧左轨顶部移到这里，不可省。 */}
       <div className="flex h-[42px] shrink-0 items-center gap-0.5 border-b border-ink-border bg-ink-1/45 pl-2 pr-3">
-        <div role="tablist" aria-label={t('matters.nav')} className="flex h-full items-center gap-0.5">
+        <div
+          role="tablist"
+          aria-label={t('matters.nav')}
+          className="flex h-full items-center gap-0.5"
+        >
           {MATTER_TABS.map((value) => {
             const Icon = MATTER_TAB_ICONS[value]
             const active = tab === value
@@ -499,14 +509,9 @@ export function MattersWorkspace(): React.ReactElement | null {
                   drag.startWidth + event.clientX - drag.startX
                 )
                 drag.currentWidth = nextWidth
-                workspaceGridRef.current?.style.setProperty(
-                  '--matter-list-width',
-                  `${nextWidth}px`
-                )
+                workspaceGridRef.current?.style.setProperty('--matter-list-width', `${nextWidth}px`)
               }}
-              onPointerUp={(event) =>
-                finishMatterListResize(event.currentTarget, event.pointerId)
-              }
+              onPointerUp={(event) => finishMatterListResize(event.currentTarget, event.pointerId)}
               onPointerCancel={(event) =>
                 finishMatterListResize(event.currentTarget, event.pointerId)
               }
@@ -519,10 +524,7 @@ export function MattersWorkspace(): React.ReactElement | null {
                 const delta =
                   event.key === 'ArrowLeft' ? -MATTER_LIST_WIDTH_STEP : MATTER_LIST_WIDTH_STEP
                 const nextWidth = clampMatterListWidth(matterListWidth + delta)
-                workspaceGridRef.current?.style.setProperty(
-                  '--matter-list-width',
-                  `${nextWidth}px`
-                )
+                workspaceGridRef.current?.style.setProperty('--matter-list-width', `${nextWidth}px`)
                 setMatterListWidth(nextWidth)
                 writeMatterListWidth(nextWidth)
               }}

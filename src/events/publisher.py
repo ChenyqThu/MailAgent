@@ -165,11 +165,20 @@ def safe_publish(
     data: Optional[Dict[str, Any]] = None,
     source: str = "mailagent",
 ) -> None:
-    """便利函数: 按 redis_url 选传输, 任何异常 silent (主链路不被烧穿)。
+    """便利函数: 按 redis_url + 本进程有无 sse_server 选传输, 任何异常 silent。
+
+    三条路 (S1 起):
 
     - redis_url 在场 → Redis publish (远程 web + 旧用户外部 Redis, 字节级不变)
-    - redis_url 缺席 → 进程内总线 (一体化 app: serve 进程内 sse_server fanout 到前端;
-      serve-api 进程调到这里 → bus._loop=None → no-op, 由前端乐观 + 同步按钮(X) 兜底)
+    - redis_url 缺席 **且本进程有 sse_server** (serve) → 进程内总线, fanout 到前端
+    - redis_url 缺席 **且本进程没有 sse_server** (serve-api / CLI / 任何别的进程)
+      → loopback POST 给 serve 的内部 publish 端点, 由它转投进程内总线
+
+    第三条是 S1 新增的。在它之前这里落到 bus 上就是 ``_loop=None`` 的 no-op ——
+    连"丢弃"都算不上, 是从未投递 (``inprocess_bus`` 文件头把这条记为已知盲区)。
+    症状: serve-api 里的任何写 (事项 / flag / job / llm) 前端都收不到通知, 要切走
+    切回才看得见。🔴 改的是本函数内部而不是各调用方, 所以那份注记里列的全部
+    受影响调用点一次性复活。
 
     使用场景: caller 不关心 SSE 失败。
     例: outbox.mark_done() → safe_publish('outbox.done', internal_id=...).
@@ -183,13 +192,20 @@ def safe_publish(
             get_publisher().publish(
                 event_type, internal_id=internal_id, data=data, source=source
             )
-        else:
-            from src.events.inprocess_bus import get_inprocess_bus
+            return
 
-            payload = _build_payload(
-                event_type, internal_id=internal_id, data=data, source=source
-            )
-            frame = json.dumps(payload, ensure_ascii=False, default=str)
-            get_inprocess_bus().publish(frame)
+        from src.events.inprocess_bus import get_inprocess_bus
+
+        payload = _build_payload(
+            event_type, internal_id=internal_id, data=data, source=source
+        )
+        bus = get_inprocess_bus()
+        if bus.has_loop():
+            bus.publish(json.dumps(payload, ensure_ascii=False, default=str))
+            return
+
+        from src.events.loopback import publish_loopback
+
+        publish_loopback(payload)
     except Exception as e:
         logger.debug(f"[publisher] safe_publish swallowed: {event_type}: {e}")

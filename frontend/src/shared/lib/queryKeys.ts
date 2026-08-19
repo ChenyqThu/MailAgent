@@ -255,6 +255,14 @@ export const qk = {
     resourceLookup: (provider: string, keys: readonly string[]) =>
       ['matters', 'links', provider, ...keys] as const,
     captureCandidates: (q: string) => ['matters', 'capture-candidates', q] as const,
+    /** 焦点页「待审阅 · Agent 更新提案」的**跨事项**聚合。
+     *
+     *  🔴 它结构上**不可能**被 `detail(id)` 前缀覆盖（跨事项，没有 id 可挂）。0818 之前这个
+     *  键是在 `MattersWorkspace` 里内联拼的，而 `MatterDetail.refresh()` 只失效 detail 前缀
+     *  —— 于是在详情里接受一条提案，焦点页那份缓存永不失效，已接受的提案继续挂着
+     *  （staleTime 15s + 组件不重挂 ⇒ 不 refetch）。收进工厂 + 收进 `refreshMatter()`
+     *  的清单，两件事一起做才算修好；内联拼键 = 下一个没人失效得到的缓存。 */
+    pendingUpdates: () => ['matters', 'pending-updates'] as const,
     config: () => ['matters', 'config'] as const
   },
 
@@ -264,8 +272,7 @@ export const qk = {
   // 关联邮件/事项。
   contacts: {
     all: () => ['contacts'] as const,
-    list: (view: string, q: string, sort: string) =>
-      ['contacts', 'list', view, q, sort] as const,
+    list: (view: string, q: string, sort: string) => ['contacts', 'list', view, q, sort] as const,
     detail: (contactId: number) => ['contacts', 'detail', contactId] as const,
     mails: (contactId: number, role: string) =>
       ['contacts', 'detail', contactId, 'mails', role] as const,

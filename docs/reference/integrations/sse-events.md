@@ -96,12 +96,45 @@ es.addEventListener('mailagent', e => {
 |---|---|---|
 | `calendar.synced` | `CalendarSyncWorker` reconcile 落库有实际变化（upsert/软删 > 0；无变化不发） | `{calendar: str, upserted: int, soft_deleted: int}` |
 
-### Matter Attention
+### Matter
 
 | event_type | 触发 | data 字段 |
 |---|---|---|
+| `matter.changed` | `MatterService._transaction()` 在**事务提交后**，本次落了至少一条 `matter_event` 的每个事项各一条 | `{public_id: str}`（`MAT-0012`）|
 | `matter.attention` | `MatterAgendaWorker` 单次 tick 内有 episode 新开、关闭、升档或 snooze 到期 | `{matter_ids: number[]}`；每 tick 最多一条聚合失效事件 |
 | `matter.notify` | worker 判定 open episode 符合 owner 通知级别且尚未收到投递 ACK | `{matter_id, public_id, matter_title, signal_id, kind, severity, why}`；`last_notified_at` 只由 `/notified` ACK 写入 |
+
+🔴 **两种 matter 事件的 id space 不同，别混用**：`matter.changed` 发 **public_id**（前端
+缓存键用的就是它 ⇒ 可定向失效）；`matter.attention` 发**内部数字主键** `matter.id`
+（前端对不上 ⇒ 只能按形状全量失效，见 `useEventBridge.ts` 那处注释）。新增 matter 事件
+一律跟 `matter.changed` 走 public_id。
+
+`matter.changed` 的语义边界：
+- 判据是「真的落了一条 `matter_event`」 —— 幂等重放不落事件 ⇒ **不发**
+- 一次事务里改多次同一事项 ⇒ **只发一条**
+- 事务回滚 ⇒ **不发**（发布点在 commit 之后：事件先到、DB 后提交会让前端 refetch 读到旧值）
+- payload **只有 public_id**，不带 kind、不带业务数据 —— 它是 invalidation hint，
+  真数据来自前端随后的 refetch
+
+## 跨进程投递（loopback）
+
+前端 SSE 连的是 **`serve` 进程**的 9200，而所有 REST 写落在 **`serve-api` 进程**（8200）。
+serve-api 里没有 sse_server，其 `InProcessEventBus` 从未 `bind_loop()`。
+
+`safe_publish` 因此有三条路：
+
+| 条件 | 走哪 |
+|---|---|
+| `redis_url` 在场 | Redis publish（远程 web / 外部 Redis 部署，字节级不变）|
+| 无 Redis，且本进程有 sse_server（serve）| 进程内总线，直接 fanout |
+| 无 Redis，且本进程没有 sse_server（serve-api / CLI）| **loopback**：POST `127.0.0.1:9200/api/events/publish`，由 serve 侧重新 publish |
+
+`POST /api/events/publish`（`src/sse_server.py`）与 SSE 流同一道 `_local_token_ok` 鉴权，
+bind 127.0.0.1。投递端 `src/events/loopback.py` 是 fire-and-forget（单线程 executor +
+有界队列 256 + 1s 超时 + 绝不抛）—— **serve 没起时写操作照常成功，只是没有实时刷新**。
+
+> 2026-08-18 之前第三条路是 no-op（`inprocess_bus.py` 曾把它记为「已知盲区、未选型」），
+> 症状是 serve-api 里的任何写前端都要切走切回才看得到。
 
 ## 客户端断线 / 重连
 

@@ -17,7 +17,7 @@ import { MatterCreateDialog } from './MatterCreateDialog'
 import type { MatterCreateSource } from './MatterCreateDialog'
 import { buildMatterResourceLookupKeys, mergeMatterResourceLinkHits } from './matterResource'
 import { useMattersApi } from './hooks'
-import { useMatterMutation } from './matterMutation'
+import { refreshMatter, useMatterMutation } from './matterMutation'
 import { useMatterNavigation } from './navigation'
 
 /** 面板宽度 / 列表最大高度 —— 与旧 `w-[340px]` / `max-h-[540px]` 逐字一致，只是从 class
@@ -81,12 +81,13 @@ export function MatterLinkPopover({
     .filter((matter) => !linked.some((entry) => entry.publicId === matter.public_id))
     .slice(0, search.trim() ? 8 : 4)
 
-  const refresh = async (): Promise<void> => {
+  /** 事项侧的失效清单单源在 `refreshMatter`；这里只额外补本浮层自己的 lookup 缓存。 */
+  const refresh = async (publicId?: string): Promise<void> => {
     await Promise.all([
       queryClient.invalidateQueries({
         queryKey: qk.matters.resourceLookup('mailagent', lookupKeys)
       }),
-      queryClient.invalidateQueries({ queryKey: qk.matters.list() })
+      refreshMatter(queryClient, publicId ?? null)
     ])
   }
 
@@ -111,7 +112,7 @@ export function MatterLinkPopover({
         },
         { expectedVersion: matter.version }
       ),
-    onSuccess: () => void refresh(),
+    onSuccess: (_result, { matter }) => void refresh(matter.public_id),
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
@@ -128,9 +129,9 @@ export function MatterLinkPopover({
         version = result.matter?.version ?? version + 1
       }
     },
-    onSuccess: () => {
+    onSuccess: (_result, entry) => {
       toastSuccess(t('matters.resource.unlinkedNoDelete'))
-      void refresh()
+      void refresh(entry.publicId)
     },
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
@@ -147,7 +148,7 @@ export function MatterLinkPopover({
         { expectedVersion: detail.matter.version }
       )
     },
-    onSuccess: () => void refresh(),
+    onSuccess: (_result, entry) => void refresh(entry.publicId),
     onError: (error) => toastError(t('matters.toast.saveFailed'), errorMessage(error))
   })
 
@@ -158,7 +159,7 @@ export function MatterLinkPopover({
     mutationFn: (input: Parameters<typeof api.create>[0]) => api.create(input),
     onSuccess: async (result) => {
       setCreateOpen(false)
-      await refresh()
+      await refresh(result.matter?.public_id)
       if (result.matter) {
         openMatter(result.matter.public_id)
         void navigate({ to: '/matters' })
@@ -426,7 +427,7 @@ export function MatterLinkPopover({
             }
           )
           setCreateOpen(false)
-          await refresh()
+          await refresh(candidate.matter.public_id)
           // G-24 —— 「加入该事项」：关联 + 关弹窗 + toast 带跳转。不再强制离开当前邮件
           // （用户多半还要继续读信），要去看事项点 toast 上的按钮。
           useToastStore.getState().push({

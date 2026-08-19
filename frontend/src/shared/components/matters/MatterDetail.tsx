@@ -94,7 +94,7 @@ import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { MatterTagPicker } from './MatterTagPicker'
 import { MatterTimeline } from './MatterTimeline'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
-import { isMatterStaleError, useMatterMutation } from './matterMutation'
+import { isMatterStaleError, refreshMatter, useMatterMutation } from './matterMutation'
 import { useMatterUndoToast } from './useMatterUndoToast'
 import { parseMatterSchedule } from './matterSchedule'
 import {
@@ -422,17 +422,10 @@ export function MatterDetail({
 
   const pushUndoToast = useMatterUndoToast()
 
-  const refresh = async (): Promise<void> => {
-    await Promise.all([
-      queryClient.invalidateQueries({ queryKey: qk.matters.list() }),
-      queryClient.invalidateQueries({ queryKey: qk.matters.detail(matterId) }),
-      queryClient.invalidateQueries({ queryKey: qk.matters.resources(matterId) }),
-      queryClient.invalidateQueries({ queryKey: qk.matters.stakeholders(matterId) }),
-      queryClient.invalidateQueries({ queryKey: MATTER_TAGS_QUERY_KEY }),
-      queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'runs'] }),
-      queryClient.invalidateQueries({ queryKey: [...qk.matters.detail(matterId), 'updates'] })
-    ])
-  }
+  // 🔴 清单单源在 `matterMutation.refreshMatter` —— 这里曾经手抄过一份七行的失效清单，
+  // 漏了焦点页跨事项的 `pending-updates` 聚合键（0818「接受的提案还留在待审阅里」的病根）。
+  // resources / stakeholders / runs / updates 都挂在 `detail(id)` 前缀下，前缀一失效就连带刷新。
+  const refresh = (): Promise<void> => refreshMatter(queryClient, matterId)
 
   const patch = useMatterMutation({
     matterId,
@@ -537,7 +530,9 @@ export function MatterDetail({
       })
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: qk.matters.list() })
+      // 走 refreshMatter 而不是只刷 list：永久删除会 CASCADE 掉这个事项的 pending 提案，
+      // 焦点页那份跨事项聚合不失效就会留下指向已消失事项的幽灵条目。
+      await refresh()
       setDeleteOpen(false)
       onRemoved()
     },

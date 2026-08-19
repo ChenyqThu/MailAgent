@@ -297,6 +297,34 @@ per-matter，故无 `matter_` 前缀。两条「不撒谎」的设计，改这�
 会话 / 文档 / 附件）说清「这一类没有」；跟踪但还没检出过，说「抓取之后才会开始记录」；服务端
 没答上来（loading / 出错）整区不渲染，宁可少说不猜。
 
+### 2.6 事项变更如何到达前端（S1，2026-08-18）
+
+写完的事项**不会自己出现在屏幕上** —— 前端是 react-query 缓存，要么被显式失效，要么等
+staleTime 过 + 组件重挂。两条链路都必须在场：
+
+**后端 → 事件**。`MatterService._transaction()` 是事项域**唯一**的写事务出口
+（闸：`tests/matters/test_transaction_gate.py` —— `service.py` / `run_service.py` 里不许再直接
+用 `repository.transaction()`）。`_append_event()` 每落一条 `matter_event` 就登记该事项的
+public_id，**事务提交后**统一发 `matter.changed`。
+
+🔴 发布点在 commit 之后，不是之前。事件是 invalidation hint，前端收到就立刻 refetch，
+而 refetch 走另一个连接 —— 早发一步前端就读到旧值，症状与修之前一样、只是更难查。
+守这条的是 `test_publish_happens_after_commit`（在发事件的那一刻用独立连接读，必须已能看到新值）。
+
+**事件 → 前端**。REST 写落在 `serve-api` 进程，而 SSE 由 `serve` 进程的 9200 提供 ——
+`safe_publish` 在 serve-api 里曾经是 no-op。现在它会回落 loopback（POST 给 serve 的内部
+publish 端点）。完整三条路与鉴权见
+[`integrations/sse-events.md`](../integrations/sse-events.md) 的「跨进程投递」。
+
+**前端失效**。清单单源 `matterMutation.ts::refreshMatter(client, matterId)`，
+用户点击路径与 SSE 路径共用同一份（闸：`frontend/tests/components/matters/matterRefreshGate.test.ts`）。
+
+🔴 那份清单里**必须**有跨事项的 `qk.matters.pendingUpdates()`：焦点页「待审阅 · Agent
+更新提案」是跨事项聚合，结构上不可能被 `['matters','detail',id]` 前缀覆盖。0818 的
+「已接受的提案还留在待审阅里」就是它被漏在手抄清单外。
+
+---
+
 ---
 
 ## 3. 触发器（四种，`src/matters/triggers.py` 是解析单源）

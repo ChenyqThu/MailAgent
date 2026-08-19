@@ -256,7 +256,7 @@ class MatterRunService(MatterService):
             raise MatterError("E_INVALID_ARG", f"unsupported trigger_kind: {trigger_kind}")
         key = self._dedupe(idempotency_key)
         now = self.clock_ms()
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             matter = self._require_matter(conn, public_id)
             matter_id = int(matter["id"])
             run_key = (
@@ -339,7 +339,7 @@ class MatterRunService(MatterService):
             raise MatterError(
                 "E_INTERNAL", "failed to enqueue matter follow-up job"
             ) from exc
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             conn.execute(
                 "UPDATE matter_run SET async_job_id=? WHERE id=?", (job_id, run_id)
             )
@@ -391,7 +391,7 @@ class MatterRunService(MatterService):
                     logger.warning(f"[matter-run] cancel job CAS failed: {exc}")
                     cas_won = False
             if cas_won:
-                with self.repository.transaction() as conn:
+                with self._transaction() as conn:
                     cursor = conn.execute(
                         "UPDATE matter_run SET canceled_at=?, "
                         "cancel_requested_at=COALESCE(cancel_requested_at, ?) "
@@ -413,7 +413,7 @@ class MatterRunService(MatterService):
         # running → cancel_requested_at + best-effort gateway stop（sessionId 可能
         # 尚未知 —— chat_session_id 由 worker 终态回写；缺失时跳过 POST，worker 在
         # 终态看到 cancel_requested_at 仍会收敛 canceled）。
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             conn.execute(
                 "UPDATE matter_run SET cancel_requested_at="
                 "COALESCE(cancel_requested_at, ?) WHERE id=?",
@@ -538,7 +538,7 @@ class MatterRunService(MatterService):
         """started_at CAS。撞 ``uq_matter_run_one_active``（同 matter 另有活跃 run）→ False。"""
         now = self.clock_ms()
         try:
-            with self.repository.transaction() as conn:
+            with self._transaction() as conn:
                 cursor = conn.execute(
                     "UPDATE matter_run SET started_at=? WHERE id=? "
                     "AND started_at IS NULL AND completed_at IS NULL "
@@ -571,7 +571,7 @@ class MatterRunService(MatterService):
         if not canceled and status not in MATTER_RUN_STATUSES:
             raise ValueError(f"invalid matter_run status: {status!r}")
         now = self.clock_ms()
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             row = conn.execute(
                 "SELECT * FROM matter_run WHERE id=?", (run_id,)
             ).fetchone()
@@ -661,7 +661,7 @@ class MatterRunService(MatterService):
         服务端从 run 语境盖章（入参 schema 里根本没有这些字段）。
         """
         now = self.clock_ms()
-        with self.repository.transaction() as conn:
+        with self._transaction() as conn:
             matter = self._require_matter(conn, public_id)
             row = conn.execute(
                 "SELECT * FROM matter_run WHERE id=? AND matter_id=?",

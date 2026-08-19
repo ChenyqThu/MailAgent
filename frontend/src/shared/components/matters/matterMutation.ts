@@ -22,6 +22,8 @@ import type { QueryClient, UseMutationOptions, UseMutationResult } from '@tansta
 import { asWriteError } from '@shared/lib/ipcErrors'
 import { qk } from '@shared/lib/queryKeys'
 
+import { MATTER_TAGS_QUERY_KEY } from './matterTags'
+
 /**
  * 「手里这份事项已经过期」的两个后端错误码。
  * - `E_VERSION_CONFLICT` — 乐观锁**真冲突**：matter 级字段（patch/归档/评审…）恒严格 CAS；
@@ -46,8 +48,30 @@ export async function refetchMatterAfterStale(
   client: QueryClient,
   matterId: string | null | undefined
 ): Promise<void> {
+  await refreshMatter(client, matterId)
+}
+
+/**
+ * 事项写入成功后的刷新 —— **所有**事项面共用的唯一出口（详情 / 工作台 / 焦点 /
+ * 事项对话 / PiP，以及 SSE `matter.changed` 到达时）。
+ *
+ * 0818 dogfood：「在事项里已经接受的建议，在待审阅 · Agent 更新提案里不会立刻更新，
+ * 还会留着」。病根不是某处漏了一行，而是这张清单被**手抄在 `MatterDetail.refresh()` 里**，
+ * 而焦点页的提案聚合用的是跨事项的 `['matters','pending-updates']` —— 它结构上不在
+ * `detail(id)` 前缀下，那份手抄清单里也没列它。
+ *
+ * 🔴 `pendingUpdates()` 必须显式列在这里：它跨事项，没有任何前缀能连带覆盖它。
+ * 🔴 新增事项相关的顶层缓存键时，加进这里 —— 不要在调用点再抄一份
+ *    （闸：`frontend/tests/components/matters/matterRefreshGate.test.ts`）。
+ */
+export async function refreshMatter(
+  client: QueryClient,
+  matterId: string | null | undefined
+): Promise<void> {
   await Promise.all([
     client.invalidateQueries({ queryKey: qk.matters.list() }),
+    client.invalidateQueries({ queryKey: qk.matters.pendingUpdates() }),
+    client.invalidateQueries({ queryKey: MATTER_TAGS_QUERY_KEY }),
     ...(matterId ? [client.invalidateQueries({ queryKey: qk.matters.detail(matterId) })] : [])
   ])
 }

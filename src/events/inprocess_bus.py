@@ -17,26 +17,30 @@
   要么有查询/轮询兜底 (如 job 走 ``/jobs/{id}`` 轮询)。**新增状态类事件必须自带查询/轮询
   兜底**, 不能假设 bus 不丢。
 
-跨进程盲区 (E4 §6.4 注记, 2026-07-11 核实; 症状驱动选型, 暂不动):
+跨进程盲区 (E4 §6.4 注记 2026-07-11 记录 → **2026-08-18 S1 已消除**, 走候选①):
 - 投递前提是 publisher 与 sse_server 同进程同 loop (serve 进程)。**serve-api 进程**没有
-  sse_server, 其 InProcessEventBus 实例从未 ``bind_loop()`` —— serve-api 进程内代码调
-  ``publisher.safe_publish`` (无 Redis 的打包态) 落到本总线即 ``bus._loop=None → no-op``
-  (措辞见 ``src/events/publisher.py:safe_publish`` docstring, 与彼处保持术语一致):
-  连"丢弃"都算不上, 是从未真正投递, 由前端乐观回显 + 同步按钮(X) 兜底。
-- 当前受影响调用点 (2026-07-11 全量 grep ``safe_publish`` 逐点判定运行进程):
-  ① ``src/api/routers/jobs.py:87`` (job.enqueued, serve-api 原生 —— async_jobs 本就有
-  ``/jobs/{id}`` 轮询兜底, 符合上面的 lossy 纪律); ② ``src/services/mail_write.py``
-  set_flags / set_pin / delete_draft 三处 —— 服务层 in-process, 写经 serve-api HTTP
-  适配器时落 serve-api 进程 (CLI fork 适配器同理落 CLI 进程, 同样无 sse_server →
-  no-op); ③ ``src/sync/outbox.py`` enqueue (outbox.queued) —— 经 outbox_intents 被
-  ②的写路径同进程调到; ④ ``src/llm_agent/store.py`` mark_success / mark_failed ——
+  sse_server, 其 InProcessEventBus 实例从未 ``bind_loop()``。曾经的后果: serve-api
+  进程内代码调 ``publisher.safe_publish`` (无 Redis 的打包态) 落到本总线即
+  ``bus._loop=None`` → 连"丢弃"都算不上, 是从未真正投递。
+- **现在的行为**: ``safe_publish`` 先用 ``has_loop()`` 探本进程有没有 sse_server;
+  没有 → 回落 ``src/events/loopback.py`` 的 POST ``127.0.0.1:9200/api/events/publish``,
+  由 serve 侧重新 publish 进本总线。改的是 ``safe_publish`` 内部而非各调用方, 所以
+  下面列的**全部**受影响调用点一次性复活, 无需逐点改造。
+- 曾受影响、现已复活的调用点 (2026-07-11 全量 grep 逐点判定运行进程):
+  ① ``src/api/routers/jobs.py:87`` (job.enqueued, serve-api 原生); ②
+  ``src/services/mail_write.py`` set_flags / set_pin / delete_draft 三处 —— 服务层
+  in-process, 写经 serve-api HTTP 适配器时落 serve-api 进程 (CLI fork 适配器同理落
+  CLI 进程); ③ ``src/sync/outbox.py`` enqueue (outbox.queued) —— 经 outbox_intents
+  被②的写路径同进程调到; ④ ``src/llm_agent/store.py`` mark_success / mark_failed ——
   serve-api ``/api/llm/run`` 走 in-process LlmService 时同进程调到。其余调用面
   (new_watcher / sync_store mark_synced_* / mailapp_fanout / notion_fanout /
   outbox mark_done·mark_failed / job_worker —— JobWorker 只在 service.py 实例化)
-  全部只跑在 serve 进程, 不受影响。
-- 候选方案 (三选一, 均未选型): ① serve-api → serve 的 loopback 通知; ② SSE server 迁
-  serve-api 进程; ③ 正式化「乐观回显 + invalidate」为契约。与 #36 (面板 live-refresh
-  遗留) 关联 —— 等 #36 类症状出现再驱动选型。
+  本来就只跑在 serve 进程, 一直正常。
+- 🔴 **lossy 纪律不变**: loopback 是 fire-and-forget + 有界队列, serve 没起 / 队列满
+  都会静默丢。上面那条「新增状态类事件必须自带查询/轮询兜底」依然成立 —— 复活的是
+  「大多数时候能实时刷新」, 不是「保证送达」。
+- 未选的另外两个候选: ② SSE server 迁 serve-api 进程 (回归面太大); ③ 正式化
+  「乐观回显 + invalidate」为契约 (对事项这类有乐观锁的域会和 CAS 打架)。
 """
 from __future__ import annotations
 
@@ -71,6 +75,15 @@ class InProcessEventBus:
             )
             self._subscribers.clear()
         self._loop = loop
+
+    def has_loop(self) -> bool:
+        """本进程是否有 SSE server (loop 已 bind) —— ``publisher.safe_publish`` 据此决定
+        走进程内投递还是 loopback 回落 (S1)。
+
+        比让 publisher 摸 ``_loop`` 私有属性干净; 判据与 ``publish()`` 的第一道
+        early-return 同源, 不会漂开。
+        """
+        return self._loop is not None
 
     def subscribe(self) -> "asyncio.Queue[str]":
         """新 SSE 连接订阅 → 拿独立有界 queue; 调用方必须在 finally 里 unsubscribe。"""

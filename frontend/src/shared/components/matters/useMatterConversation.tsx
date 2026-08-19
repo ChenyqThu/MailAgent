@@ -27,11 +27,11 @@ import type {
 } from '@shared/assistant/context/contextSnapshot'
 import { ConversationContextChip } from '@shared/components/agents/ConversationContextChip'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { qk } from '@shared/lib/queryKeys'
 import type { MatterChatTarget } from '@shared/state/ai-chat-panel'
 import { toastError } from '@shared/state/toast'
 
 import { useMattersApi } from './hooks'
+import { refreshMatter } from './matterMutation'
 import { MatterContextGapCard } from './MatterContextGapCard'
 import { MatterQuickPrompts } from './MatterQuickPrompts'
 import type { MatterChatSurface } from './matterChatContext'
@@ -234,11 +234,8 @@ export function useMatterConversation(
     onSuccess: async () => {
       const publicId = chipTarget?.publicId
       if (!publicId) return
-      await Promise.all([
-        queryClient.invalidateQueries({ queryKey: qk.matters.detail(publicId) }),
-        queryClient.invalidateQueries({ queryKey: qk.matters.resources(publicId) }),
-        queryClient.invalidateQueries({ queryKey: qk.matters.contextSnapshot(publicId) })
-      ])
+      // resources / contextSnapshot 都挂在 detail 前缀下 —— 单源清单见 refreshMatter。
+      await refreshMatter(queryClient, publicId)
     },
     onError: (error) => toastError(t('matters.chat.gap.failed'), errorMessage(error))
   })

@@ -277,11 +277,50 @@ async def _health(request: web.Request) -> web.Response:
     )
 
 
+async def _publish_event(request: web.Request) -> web.Response:
+    """内部 publish 端点 (S1): 让**没有 sse_server 的进程**把事件送进本进程的总线。
+
+    背景: 前端 SSE 连的是 serve 进程 (本文件), 而所有 REST 写落在 serve-api 进程 ——
+    那里的 ``safe_publish`` 落到未绑 loop 的进程内总线上等于 no-op。serve-api 的
+    ``src/events/loopback.py`` POST 到这里, 由本端点在 serve 进程里重新 publish。
+
+    鉴权: 与 SSE 流同一道 ``_local_token_ok`` (未配 token → 门关, 向后兼容);
+    server 本身 bind 127.0.0.1, 不暴露公网。不新造第二套鉴权。
+
+    🔴 走 ``safe_publish`` 而不是直接 ``bus.publish``: 万一在配了 Redis 的部署里被调到,
+    它会正确地 publish 到 Redis 而不是投进一个没人订阅的 bus。少一个分歧点。
+    """
+    if not _local_token_ok(request):
+        return web.json_response({"error": "unauthorized"}, status=401)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "invalid json"}, status=400)
+    if not isinstance(body, dict):
+        return web.json_response({"error": "invalid json"}, status=400)
+    event_type = str(body.get("event_type") or "").strip()
+    if not event_type:
+        return web.json_response({"error": "event_type required"}, status=400)
+
+    from src.events.publisher import safe_publish
+
+    internal_id = body.get("internal_id")
+    data = body.get("data")
+    safe_publish(
+        event_type,
+        internal_id=internal_id if isinstance(internal_id, int) else None,
+        data=data if isinstance(data, dict) else None,
+        source=str(body.get("source") or "loopback"),
+    )
+    return web.json_response({"ok": True})
+
+
 def make_app() -> web.Application:
     """构造 aiohttp Application.  独立函数方便单测."""
     app = web.Application()
     app.router.add_get("/api/events/stream", _stream_events)
     app.router.add_get("/api/events/health", _health)
+    app.router.add_post("/api/events/publish", _publish_event)
     return app
 
 

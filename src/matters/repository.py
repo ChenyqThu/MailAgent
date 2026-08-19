@@ -77,6 +77,16 @@ class MatterRepository:
         row = conn.execute("SELECT * FROM matter WHERE id=?", (matter_id,)).fetchone()
         return self._matter_row(row) if row else None
 
+    def public_id_of(self, conn: sqlite3.Connection, matter_id: int) -> str | None:
+        """内部主键 → `MAT-0001`。只取一列, 给 `_append_event` 的事件登记用 (S1)。
+
+        走 `get_matter_by_id` 会把整行 + JSON 反序列化一遍, 而这里每条事件都要调一次。
+        """
+        row = conn.execute(
+            "SELECT public_id FROM matter WHERE id=?", (matter_id,)
+        ).fetchone()
+        return str(row["public_id"]) if row else None
+
     def find_event(
         self, conn: sqlite3.Connection, dedupe_key: str
     ) -> dict[str, Any] | None:

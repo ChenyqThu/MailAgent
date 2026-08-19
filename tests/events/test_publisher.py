@@ -158,11 +158,16 @@ class TestSafePublishAndSingleton:
             mock_bus.assert_not_called()
 
     def test_safe_publish_no_redis_routes_to_bus(self, monkeypatch):
-        """redis_url 空 → 投进程内总线 (合法 JSON frame), 不调 EventPublisher.publish."""
+        """redis_url 空 **且本进程有 sse_server** → 投进程内总线 (合法 JSON frame)。
+
+        S1 起 `has_loop()` 是这条分支的前置条件 —— 未绑 loop 走 loopback (下一个用例)。
+        """
         from src.config import config
         monkeypatch.setattr(config, "redis_url", "")
         with patch.object(EventPublisher, "publish", return_value=True) as mock_pub, \
-             patch.object(InProcessEventBus, "publish") as mock_bus:
+             patch.object(InProcessEventBus, "has_loop", return_value=True), \
+             patch.object(InProcessEventBus, "publish") as mock_bus, \
+             patch("src.events.loopback.publish_loopback") as mock_loopback:
             safe_publish("email.synced", internal_id=42, data={"x": 1}, source="cli")
             mock_bus.assert_called_once()
             frame = mock_bus.call_args.args[0]
@@ -173,6 +178,40 @@ class TestSafePublishAndSingleton:
             assert parsed["source"] == "cli"
             assert isinstance(parsed["ts"], (int, float))
             mock_pub.assert_not_called()
+            mock_loopback.assert_not_called()
+
+    def test_safe_publish_no_loop_routes_to_loopback(self, monkeypatch):
+        """S1 —— redis_url 空 **且本进程没有 sse_server** (serve-api) → loopback。
+
+        这是本次修复的核心分支: 在它之前这里落到未绑 loop 的 bus 上就是 no-op,
+        serve-api 里的任何写前端都收不到通知。
+        """
+        from src.config import config
+        monkeypatch.setattr(config, "redis_url", "")
+        with patch.object(EventPublisher, "publish", return_value=True) as mock_pub, \
+             patch.object(InProcessEventBus, "publish") as mock_bus, \
+             patch("src.events.loopback.publish_loopback") as mock_loopback:
+            # bus 未 bind_loop (reset 后的初始态) —— has_loop() 天然为 False, 不 mock。
+            safe_publish("matter.changed", data={"public_id": "MAT-0001"}, source="api")
+            mock_loopback.assert_called_once()
+            payload = mock_loopback.call_args.args[0]
+            assert payload["event_type"] == "matter.changed"
+            assert payload["data"] == {"public_id": "MAT-0001"}
+            assert payload["source"] == "api"
+            mock_bus.assert_not_called()
+            mock_pub.assert_not_called()
+
+    def test_safe_publish_loopback_failure_is_silent(self, monkeypatch):
+        """loopback 抛 → safe_publish 不传播。
+
+        🔴 这条是「主链路不被烧穿」的保证: serve 没起时写操作必须照常成功。
+        """
+        from src.config import config
+        monkeypatch.setattr(config, "redis_url", "")
+        with patch(
+            "src.events.loopback.publish_loopback", side_effect=RuntimeError("serve down")
+        ):
+            safe_publish("matter.changed", data={"public_id": "MAT-0001"})  # 不抛即通过
 
     def test_payload_schema_parity(self, monkeypatch):
         """bus frame schema 与 EventPublisher 序列化一致 (单源 _build_payload)."""
@@ -183,9 +222,10 @@ class TestSafePublishAndSingleton:
         p._client = MagicMock(publish=mock)
         p.publish("email.new", internal_id=7, data={"k": "v"}, source="s")
         redis_payload = json.loads(mock.call_args.args[1])
-        # 进程内总线分支序列化
+        # 进程内总线分支序列化 (S1: 该分支的前置是本进程有 sse_server)
         monkeypatch.setattr(config, "redis_url", "")
-        with patch.object(InProcessEventBus, "publish") as mock_bus:
+        with patch.object(InProcessEventBus, "has_loop", return_value=True), \
+             patch.object(InProcessEventBus, "publish") as mock_bus:
             safe_publish("email.new", internal_id=7, data={"k": "v"}, source="s")
         bus_payload = json.loads(mock_bus.call_args.args[0])
         redis_payload.pop("ts")
@@ -198,6 +238,7 @@ class TestSafePublishAndSingleton:
         from src.config import config
         monkeypatch.setattr(config, "redis_url", "   ")
         with patch.object(EventPublisher, "publish") as mock_pub, \
+             patch.object(InProcessEventBus, "has_loop", return_value=True), \
              patch.object(InProcessEventBus, "publish") as mock_bus:
             safe_publish("email.new", internal_id=1)
             mock_bus.assert_called_once()

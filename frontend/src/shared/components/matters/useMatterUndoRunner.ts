@@ -17,10 +17,10 @@ import { useTranslation } from 'react-i18next'
 
 import type { MatterUndoDescriptor } from '@shared/api/matters'
 import { errorMessage } from '@shared/lib/ipcErrors'
-import { qk } from '@shared/lib/queryKeys'
 import { toastError } from '@shared/state/toast'
 
 import { useMatterChatApi } from './hooks'
+import { refreshMatter } from './matterMutation'
 import type { MatterUndoState } from './matterChatContext'
 
 /** D9 — the audit `reason` recorded on the reversing mutation. Frozen wording, never rendered. */
@@ -84,10 +84,7 @@ export function useMatterUndoRunner(publicId: string): MatterUndoRunner {
             writeState(toolCallId, 'done')
           }
           // 服务端已应用撤销 —— 无论 UI 归谁，发起时捕获的事项的缓存都必须失效。
-          await Promise.all([
-            queryClient.invalidateQueries({ queryKey: qk.matters.list() }),
-            queryClient.invalidateQueries({ queryKey: qk.matters.detail(capturedPublicId) })
-          ])
+          await refreshMatter(queryClient, capturedPublicId)
         })
         .catch((error: unknown) => {
           // 过期 settle 连 toast 都不许发：那张卡片已经不在屏幕上，报错只会误导当前 surface。
