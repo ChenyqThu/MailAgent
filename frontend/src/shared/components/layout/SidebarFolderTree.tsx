@@ -214,8 +214,10 @@ export function SidebarFolderTree(): React.ReactElement | null {
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false
   })
-  const whitelist = React.useMemo(() => new Set(whitelistData?.folders ?? []), [whitelistData])
-  const hasWhitelist = whitelist.size > 0
+  // 🔴 保留数组序 —— SYNC_FOLDERS 数组序 = 用户自定义显示顺序 (排序 task)。
+  // Set 化会丢序, 只在需要成员判定的地方局部构造。
+  const whitelist = React.useMemo(() => whitelistData?.folders ?? [], [whitelistData])
+  const hasWhitelist = whitelist.length > 0
 
   // discover — 仅在有白名单时拉, 长缓存。失败/门控静默 (folder 名仍可从 whitelist
   // 兜底, 但无 display_name/count → 退化用 imap_name)。counts:false (issue #45) —
@@ -238,7 +240,8 @@ export function SidebarFolderTree(): React.ReactElement | null {
     }
     // discover 未就绪/失败 — 退化平铺显示 imap_name; display_name 未解码所以禁用
     // 点击 (用 imap_name 过滤永不匹配解码后 mailbox → 空列表, 比不响应更糟)。
-    return Array.from(whitelist).map((imapName) => ({
+    // 已是 whitelist 原序 (= 自定义显示顺序), 无需再排。
+    return whitelist.map((imapName) => ({
       imapName,
       displayName: imapName,
       fullDisplayName: imapName,

@@ -3850,6 +3850,18 @@
         "systemLockTip": "系统文件夹 · 始终同步",
         "systemState": "系统 · 始终同步",
         "dirtyHint": "保存后需重启同步服务生效",
+        "orderOnlyHint": "仅调整显示顺序，保存后立即生效",
+        "order": {
+          "title": "已同步文件夹顺序",
+          "hint": "拖拽调整，侧边栏按此顺序显示",
+          "listLabel": "已同步文件夹顺序，可重排",
+          "grip": "调整「{label}」的顺序，第 {pos} 位，共 {count} 项",
+          "gripGrabbed": "调整「{label}」的顺序，第 {pos} 位，共 {count} 项，已抓起",
+          "grabbed": "已抓起「{label}」，第 {pos} 位，共 {count} 项。方向键移动，空格放下，Esc 取消。",
+          "dropped": "「{label}」已放至第 {pos} 位，共 {count} 项。",
+          "moved": "「{label}」已移至第 {pos} 位，共 {count} 项。",
+          "cancelled": "已取消调序，「{label}」回到原位。"
+        },
         "saveOk": "文件夹白名单已保存",
         "saveFail": "保存失败",
         "errorTitle": "拉取文件夹失败",

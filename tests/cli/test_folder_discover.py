@@ -62,6 +62,16 @@ class TestDiscover:
         assert jira["is_synced"] is True
         assert payload["data"]["whitelist"] == ["Jira"]
 
+    def test_discover_whitelist_preserves_custom_order(
+        self, cli_runner, davmail_env, seeded_db, monkeypatch
+    ):
+        """排序 task: CLI discover 的 whitelist 与 serve-api 同名字段同语义 —— 保
+        SYNC_FOLDERS 原序 (数组序 = 自定义显示顺序), 不得 sorted() 成字母序。"""
+        monkeypatch.setenv("SYNC_FOLDERS", '["Jira","DMS&VvpO9lPRXgM-"]')
+        result = _invoke(cli_runner, ["discover", "-o", "json"], seeded_db)
+        payload = _extract(result.output)
+        assert payload["data"]["whitelist"] == ["Jira", "DMS&VvpO9lPRXgM-"]
+
     def test_discover_gated_on_applescript(self, cli_runner, cli_env, seeded_db, monkeypatch):
         monkeypatch.setenv("MAILAGENT_BACKEND", "applescript")
         result = _invoke(cli_runner, ["discover", "-o", "json"], seeded_db)

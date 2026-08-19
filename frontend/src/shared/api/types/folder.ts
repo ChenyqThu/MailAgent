@@ -29,16 +29,25 @@ export interface FolderTreeNode extends FolderInfo {
 export interface FolderDiscoverResult {
   folders: FolderInfo[]
   tree: FolderTreeNode[]
-  /** 当前已同步的 imap_name 列表 (= SYNC_FOLDERS 白名单, 已排序)。 */
+  /** 当前已同步的 imap_name 列表 (= SYNC_FOLDERS 白名单)。🔴 **保序** —— 数组序
+   *  即用户自定义显示顺序 (设置页顺序列表 seed / 侧边栏同层级排序的权威)，
+   *  后端不做字母排序，前端也不得 Set 化后再消费顺序。 */
   whitelist: string[]
 }
 
 export interface FolderWhitelistResult {
+  /** 🔴 **保序** —— 同 `FolderDiscoverResult.whitelist`: 数组序即用户自定义显示
+   *  顺序。侧边栏 `buildSidebarFolderTree` 直接吃这个数组的下标做同层级排序,
+   *  Set 化 / 重排都会静默丢掉用户的顺序。 */
   folders: string[]
 }
 
 export interface FolderSetWhitelistResult {
+  /** 后端去重**保序**后的实际落盘顺序 (数组序 = 自定义显示顺序)。 */
   folders: string[]
+  /** 🔴 按**集合**是否变化判定 (不是「保存过就 true」): 增/删文件夹 → true (watcher
+   *  消费 SYNC_FOLDERS 是集合语义, 需重启 mail-sync); **仅调整顺序 → false**
+   *  (只影响显示, 不必重启)。 */
   restart_required: boolean
 }
 
@@ -70,7 +79,8 @@ export interface FolderApi {
   // E_INVALID_ARG → 抛带 code 的 Error (前端据此 gate)。
   discover(opts?: { counts?: boolean }): Promise<FolderDiscoverResult>
   getWhitelist(): Promise<FolderWhitelistResult>
-  /** 覆盖式保存白名单 (imap 原始名)。返回去重排序后的列表 + restart_required。 */
+  /** 覆盖式保存白名单 (imap 原始名)。**入参数组序 = 权威显示顺序**; 返回去重
+   *  保序后的列表 + restart_required (集合变化才 true)。 */
   setWhitelist(imapNames: string[]): Promise<FolderSetWhitelistResult>
   // 文件夹管理 (P4, davmail-only). serve-api POST/PATCH/DELETE /api/folder/manage,
   // 回写真实 Exchange (新建 IMAP CREATE / 重命名 RENAME / 删除 DELETE + 清本地副本)。

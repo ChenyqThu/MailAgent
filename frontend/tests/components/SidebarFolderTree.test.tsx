@@ -49,7 +49,7 @@ function fi(
 describe('buildSidebarFolderTree — 纯函数', () => {
   test('whitelist 过滤: 只保留勾选的文件夹', () => {
     const folders = [fi('Jira', 'Jira', null, 10), fi('Notion', 'Notion', null, 20)]
-    const tree = buildSidebarFolderTree(folders, new Set(['Jira']))
+    const tree = buildSidebarFolderTree(folders, ['Jira'])
     expect(tree).toHaveLength(1)
     expect(tree[0].displayName).toBe('Jira')
   })
@@ -57,7 +57,7 @@ describe('buildSidebarFolderTree — 纯函数', () => {
   test('parent 链: 勾选的子挂在勾选的父下 — 叶子名切末段, 过滤用全路径', () => {
     // 后端真实返回: display_name 含完整路径 (含 delimiter)。
     const folders = [fi('Proj', '项目', null, null), fi('Proj/Q2', '项目/2026 Q2', 'Proj', 156)]
-    const tree = buildSidebarFolderTree(folders, new Set(['Proj', 'Proj/Q2']))
+    const tree = buildSidebarFolderTree(folders, ['Proj', 'Proj/Q2'])
     expect(tree).toHaveLength(1)
     // 父行叶子名 = "项目" (无斜线, 直接用末段)。
     expect(tree[0].displayName).toBe('项目')
@@ -73,7 +73,7 @@ describe('buildSidebarFolderTree — 纯函数', () => {
 
   test('父未勾、子勾 → 子升为顶层 (不丢)', () => {
     const folders = [fi('Proj', '项目', null, null), fi('Proj/Q2', '项目/2026 Q2', 'Proj', 156)]
-    const tree = buildSidebarFolderTree(folders, new Set(['Proj/Q2']))
+    const tree = buildSidebarFolderTree(folders, ['Proj/Q2'])
     expect(tree).toHaveLength(1)
     // 父未勾 → path 只含叶子段。
     expect(tree[0].displayName).toBe('2026 Q2')
@@ -82,10 +82,48 @@ describe('buildSidebarFolderTree — 纯函数', () => {
   })
 
   test('顶层路径 = 单段', () => {
-    const tree = buildSidebarFolderTree([fi('Jira', 'Jira', null, 10)], new Set(['Jira']))
+    const tree = buildSidebarFolderTree([fi('Jira', 'Jira', null, 10)], ['Jira'])
     expect(tree[0].path).toEqual(['Jira'])
     expect(tree[0].displayName).toBe('Jira')
     expect(tree[0].fullDisplayName).toBe('Jira')
+  })
+
+  // ── 排序 task: whitelist 数组序 = 自定义显示顺序 ─────────────────────────
+  test('顶层按 whitelist 数组序排, 不跟 discover 的服务端 LIST 序', () => {
+    // folders 是服务端 LIST 序 (A,B,C); whitelist 自定义序是 C,A,B。
+    const folders = [fi('A', 'Alpha', null, 1), fi('B', 'Beta', null, 2), fi('C', 'Gamma', null, 3)]
+    const tree = buildSidebarFolderTree(folders, ['C', 'A', 'B'])
+    expect(tree.map((n) => n.imapName)).toEqual(['C', 'A', 'B'])
+  })
+
+  test('子节点在同层级内也按 whitelist 序排', () => {
+    const folders = [
+      fi('Proj', '项目', null, null),
+      fi('Proj/X', '项目/X', 'Proj', 1),
+      fi('Proj/Y', '项目/Y', 'Proj', 2)
+    ]
+    // 服务端序 X,Y; 自定义序把 Y 排前面。
+    const tree = buildSidebarFolderTree(folders, ['Proj', 'Proj/Y', 'Proj/X'])
+    expect(tree).toHaveLength(1)
+    expect(tree[0].children.map((n) => n.imapName)).toEqual(['Proj/Y', 'Proj/X'])
+  })
+
+  test('父未勾升顶层的子, 与其它顶层混排时仍按 whitelist 序', () => {
+    const folders = [
+      fi('Proj', '项目', null, null),
+      fi('Proj/Q2', '项目/2026 Q2', 'Proj', 5),
+      fi('Jira', 'Jira', null, 9)
+    ]
+    // Proj 未勾 → Proj/Q2 升顶层。服务端 LIST 序里 Proj/Q2 在 Jira 之前, 自定义序
+    // 要求反过来 —— 断言必须能分辨"排过序"与"照抄服务端序"(否则测试恒绿)。
+    const tree = buildSidebarFolderTree(folders, ['Jira', 'Proj/Q2'])
+    expect(tree.map((n) => n.imapName)).toEqual(['Jira', 'Proj/Q2'])
+  })
+
+  test('whitelist 含已不存在的文件夹 → 跳过且不打乱其余顺序', () => {
+    const folders = [fi('A', 'Alpha', null, 1), fi('B', 'Beta', null, 2)]
+    const tree = buildSidebarFolderTree(folders, ['B', 'GONE', 'A'])
+    expect(tree.map((n) => n.imapName)).toEqual(['B', 'A'])
   })
 })
 

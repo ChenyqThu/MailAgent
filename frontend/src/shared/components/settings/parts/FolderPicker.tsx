@@ -36,6 +36,11 @@ import {
 } from 'lucide-react'
 
 import type { FolderCleanupResult, FolderInfo, FolderTreeNode } from '@shared/api/types'
+import {
+  DragReorderList,
+  type ReorderItem,
+  type ReorderMessages
+} from '@shared/components/ui/DragReorderList'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useEnvStore } from '@shared/state/env'
@@ -504,7 +509,10 @@ export function FolderPicker(): React.ReactElement {
   const customMailbox = useEmailFilter((s) => s.customMailbox)
   const setView = useEmailFilter((s) => s.setView)
 
-  const [selected, setSelected] = React.useState<ReadonlySet<string>>(new Set())
+  // 已勾选文件夹的**有序**列表 —— 数组序 = SYNC_FOLDERS 数组序 = 侧边栏显示顺序
+  // (排序 task)。树的勾选判定用派生 selected Set; 新勾选追加末尾, 重排只动顺序。
+  const [order, setOrder] = React.useState<readonly string[]>([])
+  const selected = React.useMemo<ReadonlySet<string>>(() => new Set(order), [order])
   const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(new Set())
   const [saving, setSaving] = React.useState(false)
 
@@ -565,7 +573,7 @@ export function FolderPicker(): React.ReactElement {
   if (discoverData && dataUpdatedAt !== seededAt) {
     setSeededAt(dataUpdatedAt)
     const wl = discoverData.whitelist
-    setSelected(new Set(wl))
+    setOrder(wl)
     setCleanupPrompts(new Set())
     const toExpand = new Set<string>()
     for (const f of discoverData.folders) {
@@ -578,12 +586,10 @@ export function FolderPicker(): React.ReactElement {
     (imapName: string): void => {
       // 是否当前已选中 (取消方向)。
       const isDeselecting = selected.has(imapName)
-      setSelected((prev) => {
-        const next = new Set(prev)
-        if (next.has(imapName)) next.delete(imapName)
-        else next.add(imapName)
-        return next
-      })
+      // 勾选 → 追加末尾 (顺序语义); 取消 → 移除, 其余项相对顺序不变。
+      setOrder((prev) =>
+        prev.includes(imapName) ? prev.filter((n) => n !== imapName) : [...prev, imapName]
+      )
       if (isDeselecting) {
         // 取消勾选 + 该文件夹在白名单 (有本地已同步副本) → 展示清理提示。
         if (isReady && whitelist.includes(imapName)) {
@@ -615,23 +621,33 @@ export function FolderPicker(): React.ReactElement {
     })
   }, [])
 
-  // dirty: 当前选中 ≠ 上次保存的白名单 (baseline = discover 的 whitelist)。保存后
-  // invalidate→refetch 会把 whitelist baseline 推进, dirty 收敛回 false。
+  // dirty: 当前有序选中 ≠ 上次保存的白名单 (baseline = discover 的原序 whitelist)。
+  // **有序比较** —— 仅调序也点亮保存钮 (排序 task)。保存后 invalidate→refetch 会把
+  // whitelist baseline 推进, dirty 收敛回 false。
   const dirty = React.useMemo(() => {
     if (!isReady) return false
-    const baseline = whitelist
-    if (selected.size !== baseline.length) return true
-    for (const n of baseline) if (!selected.has(n)) return true
+    if (order.length !== whitelist.length) return true
+    for (let i = 0; i < order.length; i++) if (order[i] !== whitelist[i]) return true
     return false
-  }, [selected, isReady, whitelist])
+  }, [order, isReady, whitelist])
+
+  // 集合是否变化 (增/删项) —— 决定 dirty 提示文案: 集合变 = 需重启; 仅顺序变 =
+  // 立即生效 (与后端 PUT 的 restart_required 判定同口径)。
+  const setChanged = React.useMemo(() => {
+    if (!isReady) return false
+    if (order.length !== whitelist.length) return true
+    const base = new Set(whitelist)
+    for (const n of order) if (!base.has(n)) return true
+    return false
+  }, [order, isReady, whitelist])
 
   async function handleSave(): Promise<void> {
     setSaving(true)
     try {
-      const res = await mailApi.folder.setWhitelist(Array.from(selected))
-      // 乐观推进选中态到后端去重排序结果 (baseline 由下方 invalidate→refetch 的
+      const res = await mailApi.folder.setWhitelist([...order])
+      // 乐观推进选中态到后端去重结果 (保序; baseline 由下方 invalidate→refetch 的
       // re-seed effect 落地)。
-      setSelected(new Set(res.folders))
+      setOrder(res.folders)
       if (res.restart_required) markRestartRequired(['SYNC_FOLDERS'])
       // customMailbox 若已被从白名单移除, 继续保留会导致列表永久空 → 重置到 inbox。
       // 判断：customMailbox 的 fullDisplayName 可能含路径; whitelist 存 imap_name。
@@ -850,6 +866,72 @@ export function FolderPicker(): React.ReactElement {
     onDismissCleanup: dismissCleanup
   }
 
+  // ── 顺序列表 (排序 task) — 已勾选文件夹的有序展示 + 拖拽重排 ────────────────
+  const displayNameByImap = React.useMemo(() => {
+    const m = new Map<string, string>()
+    for (const f of folders) m.set(f.imap_name, f.display_name)
+    return m
+  }, [folders])
+
+  const orderItems = React.useMemo<ReorderItem[]>(
+    () => order.map((n) => ({ id: n, label: displayNameByImap.get(n) ?? n })),
+    [order, displayNameByImap]
+  )
+
+  const handleReorder = React.useCallback((list: ReorderItem[]): void => {
+    setOrder(list.map((item) => item.id))
+  }, [])
+
+  const reorderMessages = React.useMemo<ReorderMessages>(
+    () => ({
+      listLabel: t('settings.folder.picker.order.listLabel', {
+        defaultValue: '已同步文件夹顺序，可重排'
+      }),
+      grip: (label, pos, count, grabbed) =>
+        grabbed
+          ? t('settings.folder.picker.order.gripGrabbed', {
+              defaultValue: '调整「{label}」的顺序，第 {pos} 位，共 {count} 项，已抓起',
+              label,
+              pos,
+              count
+            })
+          : t('settings.folder.picker.order.grip', {
+              defaultValue: '调整「{label}」的顺序，第 {pos} 位，共 {count} 项',
+              label,
+              pos,
+              count
+            }),
+      grabbed: (label, pos, count) =>
+        t('settings.folder.picker.order.grabbed', {
+          defaultValue:
+            '已抓起「{label}」，第 {pos} 位，共 {count} 项。方向键移动，空格放下，Esc 取消。',
+          label,
+          pos,
+          count
+        }),
+      dropped: (label, pos, count) =>
+        t('settings.folder.picker.order.dropped', {
+          defaultValue: '「{label}」已放至第 {pos} 位，共 {count} 项。',
+          label,
+          pos,
+          count
+        }),
+      moved: (label, pos, count) =>
+        t('settings.folder.picker.order.moved', {
+          defaultValue: '「{label}」已移至第 {pos} 位，共 {count} 项。',
+          label,
+          pos,
+          count
+        }),
+      cancelled: (label) =>
+        t('settings.folder.picker.order.cancelled', {
+          defaultValue: '已取消调序，「{label}」回到原位。',
+          label
+        })
+    }),
+    [t]
+  )
+
   // ── 门控态 ────────────────────────────────────────────────────────────
   // env 乐观门控 (本机 MAILAGENT_BACKEND≠davmail) 或 discover 返回 E_INVALID_ARG。
   if (envGated || gated) {
@@ -949,13 +1031,39 @@ export function FolderPicker(): React.ReactElement {
               />
             ))}
           </div>
+          {/* 顺序列表 (排序 task) — ≥2 项才有重排意义; 数组序 = 侧边栏显示顺序 */}
+          {orderItems.length > 1 ? (
+            <div className="px-3 py-2.5 border-t border-ink-border-soft">
+              <div className="flex items-baseline gap-2 mb-2">
+                <span className="text-aux font-medium text-ink-fg">
+                  {t('settings.folder.picker.order.title', {
+                    defaultValue: '已同步文件夹顺序'
+                  })}
+                </span>
+                <span className="text-meta text-ink-fg-2">
+                  {t('settings.folder.picker.order.hint', {
+                    defaultValue: '拖拽调整，侧边栏按此顺序显示'
+                  })}
+                </span>
+              </div>
+              <DragReorderList
+                items={orderItems}
+                onReorder={handleReorder}
+                messages={reorderMessages}
+              />
+            </div>
+          ) : null}
           {/* save row */}
           <div className="flex items-center justify-end gap-2.5 px-3 py-2.5 border-t border-ink-border-soft">
             {dirty ? (
               <span className="mr-auto text-meta text-ink-fg-2">
-                {t('settings.folder.picker.dirtyHint', {
-                  defaultValue: '保存后需重启同步服务生效'
-                })}
+                {setChanged
+                  ? t('settings.folder.picker.dirtyHint', {
+                      defaultValue: '保存后需重启同步服务生效'
+                    })
+                  : t('settings.folder.picker.orderOnlyHint', {
+                      defaultValue: '仅调整显示顺序，保存后立即生效'
+                    })}
               </span>
             ) : null}
             <button

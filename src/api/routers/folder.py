@@ -122,14 +122,17 @@ async def folder_discover(
         folders = await _asyncio.to_thread(list_folders, cfg, with_counts=counts)
     except Exception as e:  # noqa: BLE001 — IMAP/连接失败统一上报
         raise APIError("E_UPSTREAM", f"folder discover failed: {e}", source="imap")
-    whitelist = set(_current_whitelist(cfg))
+    # whitelist 返回 SYNC_FOLDERS 原序 —— 数组序 = 用户自定义显示顺序 (设置页顺序
+    # 列表 seed / 侧边栏排序都以它为权威), 不得 sorted() 重排。
+    whitelist = _current_whitelist(cfg)
+    whitelist_set = set(whitelist)
     flat = []
     for fi in folders:
         d = fi.to_dict()
-        d["is_synced"] = fi.imap_name in whitelist
+        d["is_synced"] = fi.imap_name in whitelist_set
         flat.append(d)
     return success_envelope(
-        {"folders": flat, "tree": build_folder_tree(folders), "whitelist": sorted(whitelist)},
+        {"folders": flat, "tree": build_folder_tree(folders), "whitelist": whitelist},
         request=request,
         source="imap",
     )
@@ -152,10 +155,12 @@ async def folder_set_whitelist(
     request: Request,
     cfg: "Config" = Depends(get_settings),
 ):
-    """覆盖式保存 SYNC_FOLDERS 白名单 (写 .env, JSON 数组)。需 restart mail-sync 生效。
+    """覆盖式保存 SYNC_FOLDERS 白名单 (写 .env, JSON 数组)。数组序 = 用户自定义显示顺序。
 
     排除空项 + INBOX (主路径单独管)，去重保序。系统文件夹由前端 gate (本端点不强校验,
     避免每次 PUT 都 IMAP LIST; 误存系统名也由 _effective_custom_folders 运行时兜底过滤)。
+    ``restart_required`` 按**集合**是否变化判定: watcher 消费 SYNC_FOLDERS 是集合语义
+    (决定同步哪些文件夹), 仅调整顺序只影响显示 → 不需要重启 mail-sync。
     """
     _require_davmail(cfg)
     import json as _json
@@ -172,6 +177,8 @@ async def folder_set_whitelist(
             continue
         seen.add(n)
         names.append(n)
+    # 写入前先读旧白名单 (热读 .env) 供 restart 判定 —— 集合变化才需重启。
+    restart_required = set(names) != set(_current_whitelist(cfg))
     new_raw = _json.dumps(names, ensure_ascii=False)
     try:
         env_file = _resolve_env_file()
@@ -191,7 +198,9 @@ async def folder_set_whitelist(
     except Exception:  # noqa: BLE001 — 单例更新 best-effort, 热读 .env 才是一致性主保证
         pass
     return success_envelope(
-        {"folders": names, "restart_required": True}, request=request, source="sqlite"
+        {"folders": names, "restart_required": restart_required},
+        request=request,
+        source="sqlite",
     )
 
 

@@ -303,6 +303,18 @@ def get_new_emails(self, since_row_id: int) -> list[dict]:
 - 勾父节点弹「仅本级 / 含子文件夹」。
 - Sidebar 自定义文件夹区同样树形（缩进 + 展开/收起），严守三段 header 铁律（挂 MAILBOXES 段内）。
 
+### 5.5b 自定义显示顺序（2026-08-18）
+
+**`SYNC_FOLDERS` 的数组序 = 用户自定义显示顺序**，不再是「服务端 IMAP LIST 返回什么就显示什么」。
+
+- **权威载体**：`.env` 的 `SYNC_FOLDERS` JSON 数组本身（写侧 `PUT /api/folder/whitelist` 一直「去重保序」，读侧 `_current_whitelist` 热读也保序）。**零新存储、零迁移、不 bump DB_VERSION** —— 旧 `.env` 的现有顺序即初始自定义序。
+- **接通的两处**（此前顺序在链路中间被丢掉）：
+  - `GET /discover` 返回的 `whitelist` **不再 `sorted()`**（原先重排成字母序）；
+  - `buildSidebarFolderTree(folders, whitelistOrder)` 第二参从 `Set` 改为**有序数组**，同层级内（roots 与每个节点的 children）按其下标排序。层级挂载（parent 链 / 父未勾子升顶层）逻辑不变。
+- **编辑入口**：设置页 `FolderPicker` 树下方的「已同步文件夹顺序」区（≥2 项才渲染），组件 = `ui/DragReorderList`（移植自 lab.moumen.dev，见其头注）。树本身仍按服务端序渲染 —— 树的职责是勾选与层级，不承担排序。
+- 🔴 **`restart_required` 按集合判定**：watcher 消费 `SYNC_FOLDERS` 是**集合语义**（决定同步哪些文件夹），仅调整顺序只影响显示。故 `PUT /whitelist` 改为 `set(new) != set(old)` 才 `True`；前端 dirty 提示相应二分（「需重启」/「立即生效」）。若沿用旧的恒 `True`，用户挪个位置就被要求重启后端。
+- **已知取舍**：顺序列表是扁平序、侧边栏是树，两者层级不同的相邻项在侧边栏不一定相邻（同层级内严格遵循自定义序）。**未勾选**的文件夹不参与排序（树的层级由 parent 链推导，任意排序会与之打架，且需为非白名单文件夹另建 order 存储）。
+
 ### 5.6 文件夹管理 UI
 
 - 配置页树每行 hover/右键出操作菜单（新建子文件夹 / 重命名 / 删除）。

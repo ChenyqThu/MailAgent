@@ -3850,6 +3850,18 @@
         "systemLockTip": "System folder · always synced",
         "systemState": "System · always synced",
         "dirtyHint": "Restart the sync service to apply",
+        "orderOnlyHint": "Display order only — applies immediately after saving",
+        "order": {
+          "title": "Synced folder order",
+          "hint": "Drag to reorder; the sidebar follows this order",
+          "listLabel": "Synced folder order, reorderable",
+          "grip": "Reorder {label}, position {pos} of {count}",
+          "gripGrabbed": "Reorder {label}, position {pos} of {count}, grabbed",
+          "grabbed": "{label} grabbed at position {pos} of {count}. Use arrow keys to move, Space to drop, Escape to cancel.",
+          "dropped": "{label} dropped at position {pos} of {count}.",
+          "moved": "{label} moved to position {pos} of {count}.",
+          "cancelled": "Reorder cancelled. {label} is back at its original position."
+        },
         "saveOk": "Folder whitelist saved",
         "saveFail": "Save failed",
         "errorTitle": "Failed to fetch folders",

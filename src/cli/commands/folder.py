@@ -89,11 +89,14 @@ def folder_discover(
         folders = list_folders(cli.cli_config, with_counts=counts)
     except Exception as e:
         raise emit_cli_error(cli, CliError(f"folder discover failed: {e}"))
-    whitelist = set(_current_whitelist(cli))
+    # whitelist 保 SYNC_FOLDERS 原序 —— 数组序 = 用户自定义显示顺序 (2026-08-18),
+    # 与 serve-api GET /api/folder/discover 的同名字段同语义, 不得 sorted() 重排。
+    whitelist = _current_whitelist(cli)
+    whitelist_set = set(whitelist)
     flat = []
     for fi in folders:
         d = fi.to_dict()
-        d["is_synced"] = fi.imap_name in whitelist
+        d["is_synced"] = fi.imap_name in whitelist_set
         flat.append(d)
     if cli.output.lower() == "text":
         print(f"=== {len(flat)} folders ===")
@@ -105,7 +108,7 @@ def folder_discover(
         emit(cli, {
             "folders": flat,
             "tree": build_folder_tree(folders),
-            "whitelist": sorted(whitelist),
+            "whitelist": whitelist,
         })
 
 

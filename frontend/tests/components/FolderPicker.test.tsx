@@ -262,6 +262,69 @@ describe('FolderPicker — 多文件夹选择器', () => {
     expect(labels).not.toContain('收件箱')
   })
 
+  // ── 排序 task: 数组序 = 自定义显示顺序 ──────────────────────────────────
+  test('新勾选的文件夹追加到顺序末尾', async () => {
+    mockDiscover.mockResolvedValue(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-'] }))
+    mockSetWhitelist.mockResolvedValue({
+      folders: ['DMS&VvpO9lPRXgM-', 'Jira'],
+      restart_required: true
+    })
+    renderPicker()
+    await screen.findByText('Jira')
+    fireEvent.click(screen.getByRole('checkbox', { name: 'Jira' }))
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(mockSetWhitelist).toHaveBeenCalledTimes(1))
+    // 顺序有语义: 原有项保持在前, 新勾选追加末尾。
+    expect(mockSetWhitelist.mock.calls[0][0]).toEqual(['DMS&VvpO9lPRXgM-', 'Jira'])
+  })
+
+  test('顺序列表: ≥2 项已勾选才渲染 (1 项无重排意义)', async () => {
+    mockDiscover.mockResolvedValue(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-'] }))
+    const { unmount } = renderPicker()
+    await screen.findByText('Jira')
+    expect(screen.queryByText('已同步文件夹顺序')).toBeNull()
+    unmount()
+
+    mockDiscover.mockResolvedValue(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-', 'Jira'] }))
+    renderPicker(makeQc())
+    expect(await screen.findByText('已同步文件夹顺序')).toBeTruthy()
+  })
+
+  test('键盘重排 (仅顺序变) → 保存钮亮 + 提示"立即生效" + 入参为新序', async () => {
+    mockDiscover.mockResolvedValue(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-', 'Jira'] }))
+    mockSetWhitelist.mockResolvedValue({
+      folders: ['Jira', 'DMS&VvpO9lPRXgM-'],
+      restart_required: false
+    })
+    renderPicker()
+    await screen.findByText('已同步文件夹顺序')
+
+    // 无改动时保存禁用。
+    const saveBtn = screen.getByRole('button', { name: '保存' })
+    expect((saveBtn as HTMLButtonElement).disabled).toBe(true)
+
+    // 走 a11y 键盘路径重排: 抓起第 1 项 → ↓ 移到第 2 位。
+    const grips = screen
+      .getAllByRole('button')
+      .filter((b) => (b.getAttribute('aria-label') ?? '').startsWith('调整'))
+    expect(grips.length).toBe(2)
+    fireEvent.keyDown(grips[0], { key: ' ' })
+    fireEvent.keyDown(grips[0], { key: 'ArrowDown' })
+
+    // dirty 是**有序**比较 → 仅调序也点亮保存。
+    await waitFor(() => expect((saveBtn as HTMLButtonElement).disabled).toBe(false))
+    // 集合未变 → 文案是「立即生效」而非「需重启」。
+    expect(screen.getByText('仅调整显示顺序，保存后立即生效')).toBeTruthy()
+    expect(screen.queryByText('保存后需重启同步服务生效')).toBeNull()
+
+    fireEvent.click(saveBtn)
+    await waitFor(() => expect(mockSetWhitelist).toHaveBeenCalledTimes(1))
+    expect(mockSetWhitelist.mock.calls[0][0]).toEqual(['Jira', 'DMS&VvpO9lPRXgM-'])
+    // restart_required=false → 不标记重启。
+    await waitFor(() => expect(toastSuccess).toHaveBeenCalled())
+    expect(useRestartStore.getState().required).toBe(false)
+  })
+
   test('保存按钮在无改动时禁用', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
     renderPicker()

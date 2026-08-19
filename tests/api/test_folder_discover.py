@@ -199,6 +199,51 @@ class TestWhitelist:
         r2 = folder_client.get("/api/folder/whitelist")
         assert r2.json()["data"]["folders"] == ["DMS&VvpO9lPRXgM-"]
 
+    def test_discover_whitelist_preserves_custom_order(self, folder_client):
+        """排序 task: discover 的 whitelist 保 SYNC_FOLDERS 原序 (= 用户自定义显示顺序),
+        不得 sorted() 重排成字母序。"""
+        # 故意用非字母序 ("Jira" < "DMS..." 为假; 字母序应为 DMS... 在前)
+        folder_client._cfg.sync_folders = '["Jira","DMS&VvpO9lPRXgM-"]'
+        r = folder_client.get("/api/folder/discover")
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["whitelist"] == ["Jira", "DMS&VvpO9lPRXgM-"]
+
+    def test_put_whitelist_order_only_change_no_restart(
+        self, folder_client, tmp_path, monkeypatch
+    ):
+        """排序 task: 仅顺序变化 (集合相等) → restart_required=False (watcher 消费是
+        集合语义, 调序只影响显示), 但新序照常写入 .env。"""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "MAILAGENT_BACKEND=davmail\nSYNC_FOLDERS='[\"Notion\",\"Jira\"]'\n"
+        )
+        monkeypatch.setattr("src.config._resolve_env_file", lambda: str(env_file))
+        r = folder_client.put(
+            "/api/folder/whitelist", json={"folders": ["Jira", "Notion"]}
+        )
+        assert r.status_code == 200, r.text
+        data = r.json()["data"]
+        assert data["folders"] == ["Jira", "Notion"]
+        assert data["restart_required"] is False
+        # 新序已落 .env (GET 热读反映)
+        r2 = folder_client.get("/api/folder/whitelist")
+        assert r2.json()["data"]["folders"] == ["Jira", "Notion"]
+
+    def test_put_whitelist_set_change_requires_restart(
+        self, folder_client, tmp_path, monkeypatch
+    ):
+        """排序 task: 集合变化 (增/删项) → restart_required=True (行为同现状)。"""
+        env_file = tmp_path / ".env"
+        env_file.write_text(
+            "MAILAGENT_BACKEND=davmail\nSYNC_FOLDERS='[\"Notion\"]'\n"
+        )
+        monkeypatch.setattr("src.config._resolve_env_file", lambda: str(env_file))
+        r = folder_client.put(
+            "/api/folder/whitelist", json={"folders": ["Notion", "Jira"]}
+        )
+        assert r.status_code == 200, r.text
+        assert r.json()["data"]["restart_required"] is True
+
     def test_put_whitelist_gated_on_applescript(self, folder_client, monkeypatch):
         folder_client._cfg.mailagent_backend = "applescript"
         r = folder_client.put("/api/folder/whitelist", json={"folders": ["Jira"]})

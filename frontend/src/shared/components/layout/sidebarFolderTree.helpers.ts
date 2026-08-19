@@ -3,6 +3,8 @@
 //
 // 把 discover 的 flat folders 按 whitelist 过滤 + parent 链还原成树, 供 Sidebar
 // 渲染。父不在 whitelist 但子在 → 子挂到最近的 synced 祖先 (无则升顶层, 不丢)。
+// 排序 task: whitelist 参数是**有序数组** (SYNC_FOLDERS 数组序 = 用户自定义显示
+// 顺序), 同层级内 (roots 与每个节点的 children) 按其下标排序; 层级挂载不受影响。
 
 import type { FolderInfo } from '@shared/api/types'
 
@@ -23,8 +25,11 @@ export interface SidebarFolderNode {
 
 export function buildSidebarFolderTree(
   folders: FolderInfo[],
-  whitelist: ReadonlySet<string>
+  whitelistOrder: readonly string[]
 ): SidebarFolderNode[] {
+  const whitelist = new Set(whitelistOrder)
+  const orderIndex = new Map<string, number>()
+  whitelistOrder.forEach((n, i) => orderIndex.set(n, i))
   const byName = new Map<string, FolderInfo>()
   for (const f of folders) byName.set(f.imap_name, f)
 
@@ -83,5 +88,14 @@ export function buildSidebarFolderTree(
     if (parentNode) parentNode.children.push(node)
     else roots.push(node)
   }
+
+  // 同层级内按 whitelist 下标排序 (数组序 = 自定义显示顺序)。节点 ⊆ whitelist
+  // (synced 过滤保证), 下标必存在; ?? 0 仅安抚类型。
+  const rank = (n: SidebarFolderNode): number => orderIndex.get(n.imapName) ?? 0
+  const sortLevel = (level: SidebarFolderNode[]): void => {
+    level.sort((a, b) => rank(a) - rank(b))
+    for (const n of level) sortLevel(n.children)
+  }
+  sortLevel(roots)
   return roots
 }
