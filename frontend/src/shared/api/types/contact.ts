@@ -305,3 +305,84 @@ export interface ContactMergeBody {
   primary_email: string
   former_emails: string[]
 }
+
+// ---- WP7 治理建议队列 (src/contacts/governance.py) ----
+
+export type ContactSuggestionType = (typeof CONTACT_SUGGESTION_TYPE_VALUES)[number]
+export type ContactSuggestionStatus = (typeof CONTACT_SUGGESTION_STATUS_VALUES)[number]
+
+/** 一条邮件证据。`message_id` 是 RFC Message-ID (服务端 `validate_evidence` 已确认它
+ *  真的落在 `email_metadata` 里); `quote` 是 LLM 摘的一句原文 (截断 500)。 */
+export interface ContactSuggestionEvidence {
+  message_id: string
+  quote: string
+}
+
+/** 🔴 类型名不叫 `ContactSuggestion` —— 那个名字已被 compose 收件人补全占用
+ *  (`electron/main/handlers/contacts.ts`)。Python 侧同名 TypedDict 也是
+ *  `ContactGovernanceSuggestion`。
+ *
+ *  `payload` 的形状按 `type` 分叉 (governance.py 的 propose 落库口):
+ *    identity     `{ field, value }`
+ *    former_email `{ email }`
+ *    relation     `{ manager_id: number | null }`
+ *    kind         `{ kind }`
+ *    merge        `{ winner_contact_id, loser_contact_id }`
+ *  外加一个跨类型可选键 `reason` —— 模型写的一句「为什么」(propose 三工具的
+ *  `reasonField`, ≤300 字)。🔴 **没有** `text` 键: 建议卡的**结论句**由前端按
+ *  type + payload 用 i18n 模板拼 (确定性), 只有 `reason` 是模型散文, 按 LLM 产物
+ *  纯文本渲染。 */
+export interface ContactGovernanceSuggestion {
+  id: number
+  type: ContactSuggestionType
+  contact_ids: number[]
+  payload: Record<string, unknown>
+  evidence: ContactSuggestionEvidence[]
+  confidence: number | null
+  status: ContactSuggestionStatus
+  /** blocked 行的原因, 形如 `"E_FIELD_LOCKED: identity field is locked: department"`。 */
+  block_reason: string | null
+  created_at: number
+  decided_at: number | null
+}
+
+/** GET /api/contacts/suggestions。keyset 游标 `"<created_at>:<id>"`。 */
+export interface ContactSuggestionListResponse {
+  items: ContactGovernanceSuggestion[]
+  next_cursor: string | null
+}
+
+/** POST /api/contacts/suggestions/{id}/adopt 的成功载荷。`merge_pair` 只在 merge 类
+ *  出现 —— 服务端**不**执行合并, 只把这条标 adopted 并把两个 id 交回来给合并预览
+ *  (升序归一, 不是 winner-first)。 */
+export interface ContactSuggestionAdoptResult {
+  id: number
+  status: 'adopted'
+  decided_at: number
+  merge_pair?: number[]
+}
+
+export interface ContactSuggestionIgnoreResult {
+  id: number
+  status: 'ignored'
+  decided_at: number
+}
+
+/** POST /api/contacts/agent/run —— 只入队, 不等结果。`coalesced` = 已有一轮
+ *  queued/running, 复用了它。 */
+export interface ContactAgentRunResult {
+  job_id: number
+  status: string
+  created: boolean
+  coalesced: boolean
+}
+
+/** GET /api/contacts/agent/status —— 胶囊徽标 + 抽屉脚的数据源 (一个端点拿全)。 */
+export interface ContactAgentStatus {
+  enabled: boolean
+  pending_count: number
+  /** 每日 due marker (`YYYY-MM-DD`), 从没跑过 → null。 */
+  last_fire_day: string | null
+  /** 最近一次治理 job 的入队时间 (epoch 秒), 从没跑过 → null。 */
+  last_scan_at: number | null
+}

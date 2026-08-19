@@ -50,7 +50,10 @@ function renderPane(checkedIds: ReadonlySet<number>, onMergePair: (pair: [number
     menuOpenId: null,
     onMenuOpenChange: vi.fn(),
     onToggleGroup: vi.fn(),
-    actions
+    actions,
+    agentEnabled: false,
+    pendingCount: 0,
+    onOpenAgent: vi.fn()
   }
   return render(<ContactListPane {...props} />)
 }

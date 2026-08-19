@@ -2956,6 +2956,10 @@
       "contactProfile": {
         "helper": "为往来较多的联系人生成 AI 画像（低频批处理，单人也可手动生成），并从签名档提出可采纳的建议值。画像只读邮件，不改身份字段。需先开启通讯录。",
         "restartHint": "需先开启「通讯录」。重启后端后生效；还要在 Agents 页启用「联系人画像」这个 Agent。"
+      },
+      "contactAgent": {
+        "helper": "通讯录治理 Agent：每天随增量扫描跑一次，找出同一个人被拆成多条、身份字段过时、地址已停用、分类错，只产出待审建议，不直接改任何字段。开启后通讯录列表头出现 ✨Agent 入口。需先开启通讯录。",
+        "restartHint": "需先开启「通讯录」。重启后端后生效；治理扫描要读邮件正文，采纳仍由你在待审队列里逐条确认。"
       }
     },
     "accounts": {
@@ -6233,7 +6237,96 @@
       "pickerCreated": "已用邮箱建入通讯录并挂到事项 · {email}",
       "mergeFailed": "合并未完成 · 两条记录都未改动",
       "adoptedAll": "已采纳 {n} 项建议值并锁定对应字段",
-      "saveFailed": "保存失败"
+      "saveFailed": "保存失败",
+      "suggestionAdopted": "已采纳这条建议",
+      "suggestionIgnored": "已忽略这条建议 · 下轮有新证据时可能再提",
+      "suggestionBlocked": "建议未采纳 · 已留在队列里，没有写入任何字段",
+      "scanQueued": "治理扫描已排入队列 · 跑完后新建议会出现在这里",
+      "scanCoalesced": "已有一轮治理扫描在跑 · 复用那一轮，没有重复排队",
+      "promptSaved": "系统提示词已保存 · 下一轮扫描生效",
+      "promptSaveFailed": "系统提示词保存失败"
+    },
+    "agent": {
+      "title": "通讯录 Agent",
+      "subtitle": "通讯录作为内置工具注入 · 它读、它提议，你确认",
+      "pill": "Agent",
+      "pillTitle": "通讯录 Agent · 待审治理建议",
+      "pendingBadge": "{count} 条待审建议",
+      "close": "关闭",
+      "tab": {
+        "queue": "待审建议 {count}",
+        "tools": "它能做什么"
+      },
+      "empty": {
+        "title": "没有待审建议",
+        "hint": "Agent 每天随邮件增量跑一次治理扫描；发现同人、缺字段、停用地址时会在这里排队。"
+      },
+      "blocked": {
+        "title": "被拦下的建议",
+        "hint": "采纳时被不变量守卫挡住，留在队列里，没有写入任何字段。"
+      },
+      "loadFailed": "待审建议读取失败 · 这里显示的可能不是全部",
+      "cadence": "每天随增量扫描自动跑一次",
+      "runNow": "现在跑一次治理扫描",
+      "running": "扫描中…",
+      "tools": {
+        "title": "注入的工具",
+        "footnote": "参数见实现侧工具签名；propose_ 开头的三件只写入待审队列，不动正式字段。",
+        "governanceOff": "标「写（轻）」的三件只在主对话里可用，每天那轮治理扫描一件写工具都拿不到。"
+      },
+      "perm": {
+        "read": "读",
+        "propose": "建议",
+        "write": "写（轻）"
+      },
+      "desc": {
+        "contact_search": "按姓名 / 变体 / 邮箱 / 组织搜人",
+        "contact_get": "拿到完整档案（多邮箱、往来统计、画像、上下级）",
+        "contact_list_mails": "翻这个人的邮件账本",
+        "contact_propose_update": "提字段 / 曾用邮箱 / 改判建议，进待审队列，不直写",
+        "contact_propose_merge": "提合并建议，采纳时打开预填的合并预览",
+        "contact_propose_relation": "提上级建议，进待审队列",
+        "contact_set_kind": "改判 person / robot / list，可直写，可撤销",
+        "contact_mark_former_email": "把一个地址标为曾用，不删数据",
+        "contact_refresh_profile": "触发一次画像生成"
+      },
+      "prompt": {
+        "title": "系统提示词",
+        "hint": "这是治理扫描每轮任务提示词里可改的那一段；身份文档与工具说明由系统另行拼接，不在这个框里。",
+        "label": "任务提示词",
+        "placeholder": "留空 = 跟随代码里的默认提示词",
+        "save": "保存",
+        "saving": "保存中…",
+        "restoreDefault": "恢复默认",
+        "usingDefault": "跟随默认",
+        "customized": "已自定义",
+        "loadFailed": "提示词读取失败 · 先别保存，那会用一份空草稿覆盖已有内容"
+      }
+    },
+    "suggestion": {
+      "type": {
+        "merge": "合并同人",
+        "identity": "补身份字段",
+        "former_email": "曾用邮箱",
+        "relation": "上下级",
+        "kind": "改判分类"
+      },
+      "text": {
+        "merge": "「{a}」与「{b}」应该是同一人",
+        "identity": "给 {name} 补上{field}「{value}」",
+        "former_email": "把 {email} 标为曾用邮箱",
+        "relation": "把 {manager} 设为 {name} 的上级",
+        "relationClear": "解除 {name} 的上级关系",
+        "kind": "把 {name} 改判为{kind}"
+      },
+      "confidence": "置信度 {percent}%",
+      "adopt": "采纳",
+      "openMerge": "打开合并预览",
+      "ignore": "忽略",
+      "blocked": "已拦下",
+      "blockReason": "原因 · {reason}",
+      "openPerson": "打开 {name}",
+      "evidenceTitle": "邮件证据 · {messageId}"
     }
   }
 }

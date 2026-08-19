@@ -23,6 +23,7 @@ import {
   Layers,
   ListChecks,
   Search,
+  Sparkles,
   Users,
   UsersRound,
   X,
@@ -92,6 +93,12 @@ export interface ContactListPaneProps {
   onMenuOpenChange(id: number | null): void
   onToggleGroup(groupKey: string): void
   actions: ContactRowActions
+  /** WP7 治理台入口。🔴 `MAILAGENT_CONTACT_AGENT_ENABLED` 关着时**整个胶囊不进 DOM**
+   *  （上游那条 status 查询也不发 —— 两层门，`AgentPendingBadge` 先例）。 */
+  agentEnabled: boolean
+  /** 待审建议数；`0` 只去掉徽标，胶囊照常在（原型 `sugCount>0 &&` 只门徽标）。 */
+  pendingCount: number
+  onOpenAgent(): void
 }
 
 export function ContactListPane(props: ContactListPaneProps): React.ReactElement {
@@ -167,6 +174,25 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
             {t('contacts.list.count', { count: props.total })}
           </span>
           <span className="flex-1" />
+          {props.agentEnabled ? (
+            <button
+              type="button"
+              onClick={props.onOpenAgent}
+              title={t('contacts.agent.pillTitle')}
+              className="relative inline-flex shrink-0 items-center gap-[5px] rounded-full border border-ai/25 bg-ai/[0.09] px-2 py-[3px] text-micro text-ai transition-colors duration-fast ease-standard hover:bg-ai/[0.16]"
+            >
+              <Sparkles size={11} aria-hidden />
+              {t('contacts.agent.pill')}
+              {props.pendingCount > 0 ? (
+                <span
+                  aria-label={t('contacts.agent.pendingBadge', { count: props.pendingCount })}
+                  className="rounded-full bg-ai px-1 font-mono text-micro font-semibold tabular-nums text-white"
+                >
+                  {props.pendingCount}
+                </span>
+              ) : null}
+            </button>
+          ) : null}
           <SegmentedControl
             ariaLabel={t('contacts.nav.title')}
             value={props.view}

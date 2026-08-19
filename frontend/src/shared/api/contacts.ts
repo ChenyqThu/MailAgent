@@ -5,6 +5,8 @@
 
 import { request } from './http_client'
 import type {
+  ContactAgentRunResult,
+  ContactAgentStatus,
   ContactBackfillProgress,
   ContactDetailDto,
   ContactFunction,
@@ -21,6 +23,10 @@ import type {
   ContactResolveResponse,
   ContactSeniority,
   ContactSort,
+  ContactSuggestionAdoptResult,
+  ContactSuggestionIgnoreResult,
+  ContactSuggestionListResponse,
+  ContactSuggestionStatus,
   ContactView
 } from './types/contact'
 
@@ -87,6 +93,22 @@ export interface ContactsApi {
     field: ContactProfileSuggestionField
   ): Promise<ContactDetailDto>
   backfillProgress(): Promise<ContactBackfillProgress>
+  /** WP7 治理队列。默认 `pending` 倒序 keyset；`blocked` 要单独取一次（服务端只收
+   *  单个 status，pending 与 blocked 拿不到一起）。 */
+  listSuggestions(options?: {
+    status?: ContactSuggestionStatus
+    limit?: number
+    cursor?: string
+  }): Promise<ContactSuggestionListResponse>
+  /** WP7 采纳。🔴 被不变量守卫拦下 = **错误信封**（那一行已提交成 `blocked`，见
+   *  `governance.adopt_suggestion` 的 except 分支 + router 的 `raise APIError`）——
+   *  调用方 catch 后失效队列，那条会从 `blocked` 列表里读回来。 */
+  adoptSuggestion(suggestionId: number): Promise<ContactSuggestionAdoptResult>
+  ignoreSuggestion(suggestionId: number): Promise<ContactSuggestionIgnoreResult>
+  /** WP7「现在跑一次」。只入队（幂等：当天同一个 Idempotency-Key + 已有 queued/running
+   *  则 `coalesced:true`），不等扫描结束。 */
+  runAgentScan(): Promise<ContactAgentRunResult>
+  agentStatus(): Promise<ContactAgentStatus>
 }
 
 // re-export 常用类型给消费方（列表/详情组件不必逐个去 types/contact 拿）。
@@ -177,6 +199,23 @@ export function createContactsApi(baseUrl: string): ContactsApi {
     },
     backfillProgress() {
       return request(baseUrl, 'GET', '/contacts/backfill/progress')
+    },
+    listSuggestions(options = {}) {
+      return request(baseUrl, 'GET', '/contacts/suggestions', {
+        query: { status: options.status, limit: options.limit, cursor: options.cursor }
+      })
+    },
+    adoptSuggestion(suggestionId) {
+      return request(baseUrl, 'POST', `/contacts/suggestions/${segment(suggestionId)}/adopt`)
+    },
+    ignoreSuggestion(suggestionId) {
+      return request(baseUrl, 'POST', `/contacts/suggestions/${segment(suggestionId)}/ignore`)
+    },
+    runAgentScan() {
+      return request(baseUrl, 'POST', '/contacts/agent/run')
+    },
+    agentStatus() {
+      return request(baseUrl, 'GET', '/contacts/agent/status')
     }
   }
 }

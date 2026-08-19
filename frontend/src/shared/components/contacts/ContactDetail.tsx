@@ -57,21 +57,10 @@ import {
   TwoWayBar
 } from './parts'
 import { useContactDetail, useContactMatters, useContactsApi, useInvalidateContact } from './hooks'
+import { FIELD_LABEL_KEY } from './contactFields'
 import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
 
 const MAIL_PAGE_SIZE = 6
-
-/** field → i18n 标签键（toast「{field} 已保存并锁定」与字段行共用一份）。 */
-const FIELD_LABEL_KEY: Record<ContactLockableField, string> = {
-  display_name: 'contacts.field.name',
-  formal_name: 'contacts.field.formalName',
-  organization: 'contacts.field.org',
-  department: 'contacts.field.dept',
-  role_title: 'contacts.field.role',
-  phone: 'contacts.field.phone',
-  function: 'contacts.field.fn',
-  seniority: 'contacts.field.level'
-}
 
 function fmtMonth(ms: number, locale: string): string {
   return new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short' }).format(ms)

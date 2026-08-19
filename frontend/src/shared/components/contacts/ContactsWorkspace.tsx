@@ -18,6 +18,7 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { openNewCompose } from '@shared/state/compose-new'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
+import { ContactAgentDrawer } from './ContactAgentDrawer'
 import { ContactDetail } from './ContactDetail'
 import { ContactListPane } from './ContactListPane'
 import { MergeContactsDialog } from './MergeContactsDialog'
@@ -32,9 +33,10 @@ import {
 } from './contactListModel'
 import {
   useBackfillProgress,
+  useContactAgentStatus,
+  useContactFlags,
   useContactList,
   useContactsApi,
-  useContactsEnabled,
   useInvalidateContact
 } from './hooks'
 import { useContactKeyboardNav } from './useContactKeyboardNav'
@@ -78,7 +80,7 @@ function writeListWidth(width: number): void {
 
 export function ContactsWorkspace(): React.ReactElement | null {
   const { t } = useTranslation()
-  const { enabled, loading } = useContactsEnabled()
+  const { contactsEnabled: enabled, contactAgentEnabled, loading } = useContactFlags()
   const api = useContactsApi()
   const invalidate = useInvalidateContact()
 
@@ -97,10 +99,12 @@ export function ContactsWorkspace(): React.ReactElement | null {
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<number>>(() => new Set())
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
   const [listWidth, setListWidth] = useState(readListWidth)
-  /** WP3 合并入口状态：入口 ①（详情页发起，sourceId）或入口 ②（多选恰 2 条，pair）。 */
+  /** WP3 合并入口状态：入口 ①（详情页发起，sourceId）或入口 ②（多选恰 2 条，pair）。
+   *  WP7 的 merge 类建议采纳复用入口 ②（服务端只交回 id 对，合并仍走这条唯一人工路径）。 */
   const [mergeState, setMergeState] = useState<
     { sourceId: number; pair: null } | { sourceId: null; pair: [number, number] } | null
   >(null)
+  const [agentOpen, setAgentOpen] = useState(false)
 
   const stacked = useMediaQuery(WORKSPACE_STACKED_QUERY)
   const workspaceGridRef = useRef<HTMLDivElement>(null)
@@ -122,6 +126,9 @@ export function ContactsWorkspace(): React.ReactElement | null {
   const list = useContactList({ view, q, sort, enabled })
   const items = useMemo(() => list.data?.items ?? [], [list.data])
   const progress = useBackfillProgress(enabled)
+  // 🔴 治理 flag 关 → `enabled:false`：不发请求、不起 60s 轮询，胶囊也不进 DOM
+  // （两层门，`AgentPendingBadge.tsx:70-79` 先例）。
+  const agentStatus = useContactAgentStatus(enabled && contactAgentEnabled)
 
   const rows = useMemo(
     () =>
@@ -352,6 +359,9 @@ export function ContactsWorkspace(): React.ReactElement | null {
             }))
           }
           actions={actions}
+          agentEnabled={contactAgentEnabled}
+          pendingCount={agentStatus.data?.pending_count ?? 0}
+          onOpenAgent={() => setAgentOpen(true)}
         />
       </div>
       <div
@@ -433,6 +443,15 @@ export function ContactsWorkspace(): React.ReactElement | null {
           selectContact(winnerId)
         }}
       />
+      {/* WP7 治理台。🔴 flag 关 → 连组件都不挂载（内部三条查询字节级不发）。 */}
+      {contactAgentEnabled ? (
+        <ContactAgentDrawer
+          open={agentOpen}
+          onOpenChange={setAgentOpen}
+          onOpenPerson={selectContact}
+          onMergePair={(pair) => setMergeState({ sourceId: null, pair })}
+        />
+      ) : null}
     </div>
   )
 }

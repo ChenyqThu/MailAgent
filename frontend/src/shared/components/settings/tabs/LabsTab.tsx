@@ -33,6 +33,7 @@ type LabFlag =
   | 'MAILAGENT_MATTER_AGENT_ENABLED'
   | 'MAILAGENT_CONTACTS_ENABLED'
   | 'MAILAGENT_CONTACT_PROFILE_ENABLED'
+  | 'MAILAGENT_CONTACT_AGENT_ENABLED'
 
 interface ExperimentalFlagRowProps {
   envKey: LabFlag
@@ -143,12 +144,17 @@ export function LabsTab(): React.ReactElement {
   // 联系人画像（WP6）：同为默认 OFF；它只在通讯录开着时有意义（后端 gate 是 AND ——
   // 画像端点挂在 /api/contacts 下，通讯录总闸关了整个路由就不通）。
   const contactProfile = isEnabled(values['MAILAGENT_CONTACT_PROFILE_ENABLED'] ?? '')
+  // 通讯录治理 Agent（WP7）：同为默认 OFF，同样只在通讯录开着时有意义（后端 gate 是
+  // AND —— router 级 require_contacts_enabled 之上再叠端点级 require_contact_agent_enabled）。
+  const contactAgent = isEnabled(values['MAILAGENT_CONTACT_AGENT_ENABLED'] ?? '')
   const connectorRuntime = runtimeFlags.connectorToolsEnabled
   // 跟进 Agent 只在「事项」开着时有意义（后端 worker 的 schedule 段与 gateway venue 都叠这两个
   // 条件）。关掉事项时把它一并关掉并禁用开关，免得留一个开着却毫无作用的行。
   const matterAgentDisabled = !matters
   // 画像依赖通讯录，同上（关掉通讯录时把画像一并关掉并禁用开关）。
   const contactProfileDisabled = !contacts
+  // 治理 Agent 同样依赖通讯录。
+  const contactAgentDisabled = !contacts
 
   async function saveFlag(flag: LabFlag, patch: Record<string, string>): Promise<void> {
     setSavingKey(flag)
@@ -331,7 +337,8 @@ export function LabsTab(): React.ReactElement {
                 ? { MAILAGENT_CONTACTS_ENABLED: 'true' }
                 : {
                     MAILAGENT_CONTACTS_ENABLED: 'false',
-                    MAILAGENT_CONTACT_PROFILE_ENABLED: 'false'
+                    MAILAGENT_CONTACT_PROFILE_ENABLED: 'false',
+                    MAILAGENT_CONTACT_AGENT_ENABLED: 'false'
                   }
             )
           }
@@ -353,6 +360,23 @@ export function LabsTab(): React.ReactElement {
             })
           }
           onRestartBackend={() => void restartBackend('MAILAGENT_CONTACT_PROFILE_ENABLED')}
+        />
+        <ExperimentalFlagRow
+          envKey="MAILAGENT_CONTACT_AGENT_ENABLED"
+          checked={contactAgent}
+          ready={ready}
+          saving={savingKey === 'MAILAGENT_CONTACT_AGENT_ENABLED'}
+          restarting={restartingKey === 'MAILAGENT_CONTACT_AGENT_ENABLED'}
+          label="MAILAGENT_CONTACT_AGENT_ENABLED"
+          helper={t('settings.labs.contactAgent.helper')}
+          restartHint={t('settings.labs.contactAgent.restartHint')}
+          dependencyUnmet={contactAgentDisabled}
+          onToggle={(checked) =>
+            void saveFlag('MAILAGENT_CONTACT_AGENT_ENABLED', {
+              MAILAGENT_CONTACT_AGENT_ENABLED: checked ? 'true' : 'false'
+            })
+          }
+          onRestartBackend={() => void restartBackend('MAILAGENT_CONTACT_AGENT_ENABLED')}
         />
       </Section>
 

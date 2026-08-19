@@ -144,6 +144,8 @@ const contactEvidenceSchema = z
 
 const evidenceField = z.array(contactEvidenceSchema).min(1).max(10)
 const confidenceField = z.number().min(0).max(1).optional()
+/** One plain sentence of WHY — shown to the owner on the review card; lands in payload.reason. */
+const reasonField = z.string().trim().min(1).max(300).optional()
 
 const contactProposeUpdateSchema = z
   .object({
@@ -164,6 +166,7 @@ const contactProposeUpdateSchema = z
         .strict(),
       z.object({ type: z.literal('kind'), kind: z.enum(CONTACT_KINDS) }).strict()
     ]),
+    reason: reasonField,
     evidence: evidenceField,
     confidence: confidenceField
   })
@@ -173,6 +176,7 @@ const contactProposeMergeSchema = z
   .object({
     winner_contact_id: contactIdField,
     loser_contact_id: contactIdField,
+    reason: reasonField,
     evidence: evidenceField,
     confidence: confidenceField
   })
@@ -183,6 +187,7 @@ const contactProposeRelationSchema = z
     contact_id: contactIdField,
     /** null = propose CLEARING the manager link. */
     manager_contact_id: contactIdField.nullable(),
+    reason: reasonField,
     evidence: evidenceField,
     confidence: confidenceField
   })
@@ -616,7 +621,7 @@ export function createContactProposeTools(
         'quote that shows it); a proposal without real evidence is rejected, and so is one ' +
         'touching a field the owner has locked (see identity_locks on contact_get) unless your ' +
         'evidence is newer than the lock and contradicts the current value. Do not propose ' +
-        'cosmetic rewording.',
+        'cosmetic rewording. Put one plain sentence of WHY into `reason` — the owner sees it on the review card.',
       inputSchema: contactProposeUpdateSchema,
       run: (input, signal) => {
         const change = input.change
@@ -630,7 +635,7 @@ export function createContactProposeTools(
           body: proposalBody({
             type,
             contactIds: [input.contact_id],
-            payload,
+            payload: input.reason ? { ...payload, reason: input.reason } : payload,
             evidence: input.evidence,
             confidence: input.confidence
           }),
@@ -651,7 +656,8 @@ export function createContactProposeTools(
         'which old addresses become former. Cite the email evidence that ties the two ' +
         'identities together (a handover sentence, a signature block matching both addresses, ' +
         'the same thread continuing under a new address). Identical names alone are not ' +
-        'evidence — the directory keys on email addresses, and two people can share a name.',
+        'evidence — the directory keys on email addresses, and two people can share a name. ' +
+        'Put one plain sentence of WHY into `reason` — the owner sees it on the review card.',
       inputSchema: contactProposeMergeSchema,
       run: (input, signal) =>
         domainRequest(domain, 'POST', '/contacts/agent/proposals', {
@@ -660,7 +666,8 @@ export function createContactProposeTools(
             contactIds: [input.winner_contact_id, input.loser_contact_id],
             payload: {
               winner_contact_id: input.winner_contact_id,
-              loser_contact_id: input.loser_contact_id
+              loser_contact_id: input.loser_contact_id,
+              ...(input.reason ? { reason: input.reason } : {})
             },
             evidence: input.evidence,
             confidence: input.confidence
@@ -679,14 +686,16 @@ export function createContactProposeTools(
         'passing null. Only one side is stored — to say "B reports to A", propose it on B. ' +
         'Cite the email evidence (an approval chain, an introduction, a signature line stating ' +
         'the reporting line). A link the owner set by hand is locked and the proposal is ' +
-        'refused; use contact_get to see manager_src first.',
+        'refused; use contact_get to see manager_src first. Put one plain sentence of WHY into `reason`.',
       inputSchema: contactProposeRelationSchema,
       run: (input, signal) =>
         domainRequest(domain, 'POST', '/contacts/agent/proposals', {
           body: proposalBody({
             type: 'relation',
             contactIds: [input.contact_id],
-            payload: { manager_id: input.manager_contact_id },
+            payload: input.reason
+              ? { manager_id: input.manager_contact_id, reason: input.reason }
+              : { manager_id: input.manager_contact_id },
             evidence: input.evidence,
             confidence: input.confidence
           }),

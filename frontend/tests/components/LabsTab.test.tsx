@@ -38,7 +38,8 @@ function renderTab(overrides: Record<string, string | undefined> = {}): void {
     MAILAGENT_MATTERS_ENABLED: 'false',
     MAILAGENT_MATTER_AGENT_ENABLED: 'false',
     MAILAGENT_CONTACTS_ENABLED: 'false',
-    MAILAGENT_CONTACT_PROFILE_ENABLED: 'false'
+    MAILAGENT_CONTACT_PROFILE_ENABLED: 'false',
+    MAILAGENT_CONTACT_AGENT_ENABLED: 'false'
   }
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete values[key]
@@ -59,7 +60,8 @@ function renderTab(overrides: Record<string, string | undefined> = {}): void {
           'MAILAGENT_MATTERS_ENABLED',
           'MAILAGENT_MATTER_AGENT_ENABLED',
           'MAILAGENT_CONTACTS_ENABLED',
-          'MAILAGENT_CONTACT_PROFILE_ENABLED'
+          'MAILAGENT_CONTACT_PROFILE_ENABLED',
+          'MAILAGENT_CONTACT_AGENT_ENABLED'
         ],
         secretKeys: []
       }
@@ -84,7 +86,7 @@ function switchFor(envKey: string): HTMLElement {
 }
 
 describe('LabsTab', () => {
-  test('渲染 warn 条、八个实验开关与页尾高级折叠区', () => {
+  test('渲染 warn 条、九个实验开关与页尾高级折叠区', () => {
     renderTab()
 
     expect(screen.getByText(/实验性功能可能不稳定/)).toBeTruthy()
@@ -95,16 +97,17 @@ describe('LabsTab', () => {
     expect(screen.getByText('AG-UI 协议镜像')).toBeTruthy()
     expect(screen.getByText('事项')).toBeTruthy()
     expect(screen.getByText('通讯录')).toBeTruthy()
-    // 画像行嵌在「通讯录」这一 Section 里（依赖关系，同事项 → 跟进 Agent），
-    // 没有自己的 Section 标题 —— 认它的 env 键即可。
+    // 画像行与治理 Agent 行都嵌在「通讯录」这一 Section 里（依赖关系，同事项 →
+    // 跟进 Agent），没有自己的 Section 标题 —— 认它们的 env 键即可。
     expect(switchFor('MAILAGENT_CONTACT_PROFILE_ENABLED')).toBeTruthy()
+    expect(switchFor('MAILAGENT_CONTACT_AGENT_ENABLED')).toBeTruthy()
 
-    expect(screen.getAllByRole('switch')).toHaveLength(8)
+    expect(screen.getAllByRole('switch')).toHaveLength(9)
     const disclosure = screen.getByRole('button', { name: /高级实验/ })
     expect(disclosure.getAttribute('aria-expanded')).toBe('false')
     fireEvent.click(disclosure)
     expect(disclosure.getAttribute('aria-expanded')).toBe('true')
-    expect(screen.getAllByRole('switch')).toHaveLength(8)
+    expect(screen.getAllByRole('switch')).toHaveLength(9)
   })
 
   // 跟进 Agent 依赖「事项」：两者的后端 gate 是 AND，所以关着事项时它开了也毫无作用。
@@ -157,5 +160,25 @@ describe('LabsTab', () => {
     cleanup()
     renderTab({ MAILAGENT_CONTACTS_ENABLED: 'true', MAILAGENT_CONTACT_PROFILE_ENABLED: 'true' })
     expect(switchFor('MAILAGENT_CONTACT_PROFILE_ENABLED').getAttribute('aria-checked')).toBe('true')
+  })
+
+  // 治理 Agent（WP7）同样依赖通讯录：后端两道 gate 是 AND（router 级
+  // require_contacts_enabled + 端点级 require_contact_agent_enabled）。
+  test('通讯录关闭时治理 Agent 开关不可点，开启后才放开', () => {
+    renderTab()
+    expect(switchFor('MAILAGENT_CONTACT_AGENT_ENABLED').getAttribute('disabled')).not.toBeNull()
+
+    cleanup()
+    renderTab({ MAILAGENT_CONTACTS_ENABLED: 'true' })
+    expect(switchFor('MAILAGENT_CONTACT_AGENT_ENABLED').getAttribute('disabled')).toBeNull()
+  })
+
+  test('治理 Agent 开关：缺键按默认 off 渲染，显式 true 才开', () => {
+    renderTab({ MAILAGENT_CONTACTS_ENABLED: 'true', MAILAGENT_CONTACT_AGENT_ENABLED: undefined })
+    expect(switchFor('MAILAGENT_CONTACT_AGENT_ENABLED').getAttribute('aria-checked')).toBe('false')
+
+    cleanup()
+    renderTab({ MAILAGENT_CONTACTS_ENABLED: 'true', MAILAGENT_CONTACT_AGENT_ENABLED: 'true' })
+    expect(switchFor('MAILAGENT_CONTACT_AGENT_ENABLED').getAttribute('aria-checked')).toBe('true')
   })
 })

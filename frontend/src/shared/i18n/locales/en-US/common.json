@@ -2956,6 +2956,10 @@
       "contactProfile": {
         "helper": "Write AI profiles for the contacts you exchange mail with (low-frequency batches, plus manual refresh for one person) and propose values read from signatures. It only reads mail; it never edits identity fields. Requires the contact directory.",
         "restartHint": "Requires Contacts. Restart the backend to apply, then enable the Contact profiles agent on the Agents page."
+      },
+      "contactAgent": {
+        "helper": "Contacts governance agent: one scan a day alongside the incremental sync, looking for one person split across rows, stale identity fields, dead addresses and wrong classifications. It only produces suggestions for review — it never edits a field directly. Turning it on adds the ✨Agent entry to the contacts list header. Requires the contact directory.",
+        "restartHint": "Requires Contacts. Restart the backend to apply. The scan reads mail bodies; adopting anything is still one confirmation per suggestion in the review queue."
       }
     },
     "accounts": {
@@ -5827,7 +5831,96 @@
       "pickerCreated": "Contact created from {email} and added to the matter",
       "mergeFailed": "Merge didn't complete · both records unchanged",
       "adoptedAll": "Adopted {n} suggestions and locked those fields",
-      "saveFailed": "Save failed"
+      "saveFailed": "Save failed",
+      "suggestionAdopted": "Suggestion adopted",
+      "suggestionIgnored": "Suggestion dismissed · may return with new evidence",
+      "suggestionBlocked": "Not adopted · it stays in the queue and nothing was written",
+      "scanQueued": "Governance scan queued · new suggestions land here when it finishes",
+      "scanCoalesced": "A governance scan is already running · reusing that one, nothing queued twice",
+      "promptSaved": "System prompt saved · takes effect on the next scan",
+      "promptSaveFailed": "Could not save the system prompt"
+    },
+    "agent": {
+      "title": "Contacts agent",
+      "subtitle": "Contacts injected as a built-in tool · it reads, it proposes, you confirm",
+      "pill": "Agent",
+      "pillTitle": "Contacts agent · governance suggestions to review",
+      "pendingBadge": "{count} suggestions awaiting review",
+      "close": "Close",
+      "tab": {
+        "queue": "To review {count}",
+        "tools": "What it can do"
+      },
+      "empty": {
+        "title": "Nothing to review",
+        "hint": "The agent runs one governance scan a day alongside the incremental mail sync; duplicates, missing fields and dead addresses queue up here."
+      },
+      "blocked": {
+        "title": "Blocked suggestions",
+        "hint": "An invariant guard stopped these on adoption. They stay in the queue and nothing was written."
+      },
+      "loadFailed": "Could not load the review queue · what you see may be incomplete",
+      "cadence": "Runs once a day with the incremental scan",
+      "runNow": "Run a governance scan now",
+      "running": "Scanning…",
+      "tools": {
+        "title": "Injected tools",
+        "footnote": "See the implementation for exact signatures; the three propose_ tools only write to the review queue, never to the record itself.",
+        "governanceOff": "The three light-write tools are available in the main chat only — the daily governance scan gets no write tool at all."
+      },
+      "perm": {
+        "read": "Read",
+        "propose": "Propose",
+        "write": "Write (light)"
+      },
+      "desc": {
+        "contact_search": "Find people by name, alias, address or org",
+        "contact_get": "Full dossier (addresses, traffic stats, profile, reporting line)",
+        "contact_list_mails": "Page through this person's mail ledger",
+        "contact_propose_update": "Propose a field, a former address or a reclassification — queued for review, never written",
+        "contact_propose_merge": "Propose a merge; adopting opens the prefilled merge preview",
+        "contact_propose_relation": "Propose a manager link, queued for review",
+        "contact_set_kind": "Reclassify person / robot / list — direct write, reversible",
+        "contact_mark_former_email": "Mark one address as former; no data deleted",
+        "contact_refresh_profile": "Trigger one profile generation"
+      },
+      "prompt": {
+        "title": "System prompt",
+        "hint": "This is the editable segment of the task prompt used by each governance scan; identity documents and tool descriptions are assembled separately, outside this box.",
+        "label": "Task prompt",
+        "placeholder": "Leave empty to follow the built-in default prompt",
+        "save": "Save",
+        "saving": "Saving…",
+        "restoreDefault": "Restore default",
+        "usingDefault": "Following the default",
+        "customized": "Customized",
+        "loadFailed": "Could not load the prompt · don't save yet, that would overwrite it with an empty draft"
+      }
+    },
+    "suggestion": {
+      "type": {
+        "merge": "Same person",
+        "identity": "Identity field",
+        "former_email": "Former address",
+        "relation": "Reporting line",
+        "kind": "Reclassify"
+      },
+      "text": {
+        "merge": "“{a}” and “{b}” look like the same person",
+        "identity": "Set {field} “{value}” on {name}",
+        "former_email": "Mark {email} as a former address",
+        "relation": "Set {manager} as {name}'s manager",
+        "relationClear": "Clear {name}'s manager link",
+        "kind": "Reclassify {name} as {kind}"
+      },
+      "confidence": "Confidence {percent}%",
+      "adopt": "Adopt",
+      "openMerge": "Open merge preview",
+      "ignore": "Dismiss",
+      "blocked": "Blocked",
+      "blockReason": "Reason · {reason}",
+      "openPerson": "Open {name}",
+      "evidenceTitle": "Email evidence · {messageId}"
     }
   }
 }

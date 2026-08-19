@@ -164,8 +164,11 @@ async def adopt_governance_suggestion(
     repo: ContactRepository = Depends(get_contact_repository),
 ):
     with repo.transaction() as conn:
-        result = contact_governance.adopt_suggestion(
-            conn, suggestion_id, now_ms=_now_ms()
+        # _call: E_NOT_FOUND / E_INVALID_STATE 这类 adopt 前置校验直抛 ContactError，
+        # 不包则落 app.py 兜底 500，错误码到不了界面（blocked 路径在 governance 内部
+        # catch，不经这里）。
+        result = _call(
+            contact_governance.adopt_suggestion, conn, suggestion_id, now_ms=_now_ms()
         )
     error = result.pop("error", None)
     if error:

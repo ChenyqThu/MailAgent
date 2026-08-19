@@ -37,7 +37,7 @@ export function TwoWayBar({
   )
 }
 
-type PipTone = 'neutral' | 'ok' | 'info' | 'critical'
+type PipTone = 'neutral' | 'ok' | 'info' | 'warn' | 'critical'
 
 /** 原型 `ui.jsx::Pip size="sm"`（10.5px / 2px 5px / 细描边）的仓库映射：
  *  圆角走仓库 pill 惯例（v3 四档圆角里没有 5px 档）。 */
@@ -61,11 +61,15 @@ export function ContactPip({
           ? 'border-ok/25 bg-ok/[0.12] text-ok'
           : tone === 'info'
             ? 'border-info/25 bg-info/[0.12] text-info'
-            : // WP6 provenance 的「上次更新失败」（原型 `Pip tone="critical"`）：同一
-              // 底 12% / 边 25% 配方换失败色。
-              tone === 'critical'
-              ? 'border-fail/25 bg-fail/[0.12] text-fail'
-              : 'border-ink-border bg-ink-fg/[0.05] text-ink-fg-1',
+            : // WP7 治理台的「合并同人」类型 pip 与工具面的「写（轻）」权限档
+              // （原型 `SUG_META.merge.tone` / `AGENT_TOOLS[].r` 都是 warn）：同一配方换警示色。
+              tone === 'warn'
+              ? 'border-warn/25 bg-warn/[0.12] text-warn'
+              : // WP6 provenance 的「上次更新失败」（原型 `Pip tone="critical"`）：同一
+                // 底 12% / 边 25% 配方换失败色。
+                tone === 'critical'
+                ? 'border-fail/25 bg-fail/[0.12] text-fail'
+                : 'border-ink-border bg-ink-fg/[0.05] text-ink-fg-1',
         className
       )}
     >

@@ -288,7 +288,15 @@ export const qk = {
     // 归一去重 + sort，保证同一封邮件的地址集合稳定命中缓存）。
     resolve: (emails: readonly string[]) => ['contacts', 'resolve', ...emails] as const,
     // WP4 ⌘K「人」组（镜像 qk.matters.paletteSearch 的形状）。
-    paletteSearch: (normalised: string) => ['contacts', 'palette-search', normalised] as const
+    paletteSearch: (normalised: string) => ['contacts', 'palette-search', normalised] as const,
+    // WP7 治理队列：status 进 key —— 抽屉同时开着 pending 与 blocked 两条查询
+    // （服务端 `list_suggestions` 只收单个 status）。前缀 ['contacts','suggestions']
+    // 一次失效两条。
+    suggestions: (status: string) => ['contacts', 'suggestions', status] as const,
+    // WP7 胶囊徽标 + 抽屉脚（待审数 / 最近扫描时间 / flag 态，一个端点拿全）。
+    agentStatus: () => ['contacts', 'agent-status'] as const,
+    // WP7 治理 agent 的系统提示词（agent_config.db 的 `contact_agent` 文档）。
+    agentPrompt: () => ['contacts', 'agent-prompt'] as const
   },
 
   contactSuggest: (debounced: string, exclude: readonly string[]) =>
