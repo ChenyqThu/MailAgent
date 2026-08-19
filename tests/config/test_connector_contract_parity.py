@@ -272,7 +272,14 @@ def test_rank_is_dense_and_monotonic_on_both_legs():
 #: connector_write 仍恒 false；服务端 ``resolve_caller_ceiling`` 对该 venue 不读 agent 行、
 #: 天花板钉死 'read'。**机制保留**：将来再出现「结构上够不着 connector 面」的新 mode，
 #: 往这里加即可（下面的值域闸仍是逐项有序相等 + canary 校验剔除项确为 TS mode）。
-CONNECTOR_UNREACHABLE_CONTEXT_MODES: Tuple[str, ...] = ()
+#: Contact Directory WP7 —— 第六 mode ``contact_governance`` **结构上够不着** connector 面：
+#: 加载缝 ``shouldLoadConnectorTools`` 的 headless 分支只认 untrusted_trigger / cron_headless /
+#: matter_followup，治理扫描的 spec 也从不写 ``grantConnectors``（governance.py 的 toolPolicy
+#: 只有 allowedTools + skills 两个键，有断言钉死）。两条各自独立：即便有人给 spec 加了 grant，
+#: 缝仍然不认这个 mode，一次 fetch 都不会发生。下面那条 seam 用例是这句话的可证伪面。
+#: 🔴 哪天要给治理 venue 开 connector：从本表删掉它 + 同批加进 CALLER_CONTEXT_MODES + 显式划进
+#: owner-present / headless 两张白名单之一（缺一即红）。
+CONNECTOR_UNREACHABLE_CONTEXT_MODES: Tuple[str, ...] = ("contact_governance",)
 
 
 def test_caller_context_modes_match_gateway_agent_context_modes():

@@ -1199,6 +1199,19 @@ async function handleAgentRun(
     return
   }
 
+  // Contact Directory WP7 — the governance venue's kill-switch, same shape and same rationale as
+  // the matter gate above: enforced on the SERVER-assembled spec (the poke body carries no
+  // runKind), fail-closed on the exact `true`, and BEFORE any session/run work — with the flag off
+  // the Python side refuses POST /api/contacts/agent/proposals, so the scan would run a full LLM
+  // turn only to find its single output channel closed.
+  if (spec.runKind === 'contact_governance' && cfg.contactAgentEnabled !== true) {
+    writeJson(res, 403, {
+      error: 'E_DISABLED',
+      hint: 'contact governance agent is disabled (MAILAGENT_CONTACT_AGENT_ENABLED)'
+    })
+    return
+  }
+
   // Pre-create the persist session (origin='agent'). A failure degrades to a non-persisted run
   // rather than aborting (the tool loop + approval still work; only the history row is missing).
   let sessionId: number | null = spec.sessionId ?? null

@@ -85,10 +85,14 @@ CROSS_LANGUAGE_FLAGS = {
     # 🔴 双侧默认必须同为 false（灰度未 cutover）；翻默认两边一起翻，否则会出现「run 起得来但
     # 提案端点 403（唯一产出通道没了、白烧一轮 LLM）」或反过来「端点开着却没有 run 能到达」。
     "MAILAGENT_MATTER_AGENT_ENABLED": [_LIFECYCLE, _CONFIG],
-    # 通讯录总闸（Contact Directory WP1/WP2）：Python pydantic 单载体（serve-api
-    # /api/contacts 门 + /chat/config contactsEnabled 投影 + 扫描器 run_tick 门都读
-    # 同一冻结单例）。登记防改名漏侧；WP7 gateway 工具注入真变双载体时在此加 _LIFECYCLE。
-    "MAILAGENT_CONTACTS_ENABLED": [_CONFIG],
+    # 通讯录总闸（Contact Directory WP1/WP2；WP7 批② 起**双载体**）：Python pydantic
+    # （serve-api /api/contacts 门 + /chat/config contactsEnabled 投影 + 扫描器 run_tick 门）
+    # ＋ Node envBool（gateway 九件 contact_* 工具的注册门）。
+    "MAILAGENT_CONTACTS_ENABLED": [_LIFECYCLE, _CONFIG],
+    # 通讯录治理 Agent 总闸（WP7）：Python pydantic（建议 / 提案双腿 REST 门 + 每日入队钩子）
+    # ＋ Node envBool（gateway POST /api/ai/agent-run 见 runKind='contact_governance' 的 spec
+    # 即按此 flag fail-closed 403）—— 与 MAILAGENT_MATTER_AGENT_ENABLED 同形态。
+    "MAILAGENT_CONTACT_AGENT_ENABLED": [_LIFECYCLE, _CONFIG],
 }
 
 # cutover 5 openness flag：Node envBool 默认 vs Python _hot_bool 字面量，须逐字相等。
@@ -185,9 +189,9 @@ def test_cutover_flag_defaults_consistent():
 # lifecycle 缺键而误红）。
 PYDANTIC_SINGLE_CARRIER_FLAGS = {
     # env 键 → (pydantic 字段名, 期望默认)
-    # 通讯录总闸（Contact Directory）：灰度默认关（ship-off → dogfood → cutover 另拍）。
-    "MAILAGENT_CONTACTS_ENABLED": ("contacts_enabled", False),
-    "MAILAGENT_CONTACT_AGENT_ENABLED": ("contact_agent_enabled", False),
+    # 通讯录画像（Contact Directory WP6）：灰度默认关。gateway 不读它（画像刷新走
+    # /api/contacts/{id}/profile/refresh，门在 Python 侧），故仍是单载体。
+    "MAILAGENT_CONTACT_PROFILE_ENABLED": ("contact_profile_enabled", False),
 }
 
 
@@ -223,6 +227,14 @@ NODE_PYDANTIC_DUAL_CARRIER_FLAGS = {
     # 飞书 IM 总闸（08-01 阶段 2）：**cutover 2026-08-04**（owner dogfood 通过）。翻默认漏一侧
     # = 「桥在跑但 gateway /api/ai/im-chat 404」或反过来「端点开着却没有桥来调」。
     "MAILAGENT_IM_FEISHU": ("im_feishu_enabled", True),
+    # 通讯录总闸（Contact Directory；WP7 批② 起双载体）：灰度未 cutover，两侧同为 false。
+    # 翻默认漏一侧 = 「gateway 注册了九件 contact_* 工具但每次调用都 E_DISABLED」或反过来
+    # 「/api/contacts/* 开着却没有工具能到达」。
+    "MAILAGENT_CONTACTS_ENABLED": ("contacts_enabled", False),
+    # 通讯录治理 Agent 总闸（WP7）：灰度未 cutover，两侧同为 false。漏一侧 =「扫描 run 起得来
+    # 但提案端点 E_DISABLED（唯一产出通道没了、白烧一轮 LLM）」或反过来「端点开着却没有 run
+    # 能到达」—— 与 MAILAGENT_MATTER_AGENT_ENABLED 同一失败形状。
+    "MAILAGENT_CONTACT_AGENT_ENABLED": ("contact_agent_enabled", False),
 }
 
 

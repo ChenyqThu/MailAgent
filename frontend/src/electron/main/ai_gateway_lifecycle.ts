@@ -589,6 +589,21 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // (tests/config/test_flag_cross_language.py), else a run would start with no place to submit its
   // proposal (or the endpoints would sit live with nothing able to reach them).
   const matterAgentEnabled = envBool('MAILAGENT_MATTER_AGENT_ENABLED', false)
+  // Contact Directory WP7 — MAILAGENT_CONTACTS_ENABLED gates the whole contact tool family (3
+  // reads + 3 proposals + 3 writes). Default OFF (灰度未 cutover). main-env-only, NO vite define
+  // (mirrors the other tool-family flags). 🔴 Double carrier: the Python serve-api reads the SAME
+  // env via pydantic (contacts_enabled — the /api/contacts/* gate + the /chat/config projection
+  // the nav reads); both defaults MUST stay false together
+  // (tests/config/test_flag_cross_language.py), else the gateway would register tools whose every
+  // call 403s (or the endpoints would sit live with no tools able to reach them).
+  const contactToolsEnabled = envBool('MAILAGENT_CONTACTS_ENABLED', false)
+  // WP7 — MAILAGENT_CONTACT_AGENT_ENABLED gates the governance RUN venue: with it off, POST
+  // /api/ai/agent-run rejects a spec stamped runKind='contact_governance' (403 E_DISABLED,
+  // fail-closed) so no scan ever starts. Default OFF. 🔴 Double carrier with the Python pydantic
+  // `contact_agent_enabled` (the suggestions / proposals REST gate + the daily enqueue hook); both
+  // defaults MUST stay false together, else a run would start with no place to submit its
+  // proposals — the same failure shape as MAILAGENT_MATTER_AGENT_ENABLED's.
+  const contactAgentEnabled = envBool('MAILAGENT_CONTACT_AGENT_ENABLED', false)
   // task 07-21 — MAILAGENT_NOTION_AGENT_TOOL gates the notion_agent_chat tool (edit-tier 恒 HITL —
   // delegates a Notion request to the notion-agent CLI via serve-api /api/skills/invoke). Unlike the
   // other tool families this one is SKILL-gated (skill_gating maps it to the notion_agent skill), so
@@ -1248,6 +1263,12 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           // P4 (D11) — the follow-up kill-switch's registration-side belt (the endpoint gate is
           // the authoritative one). ALWAYS threaded, so an explicit false really strips the tool.
           matterAgentEnabled,
+          // Contact Directory WP7 — the contact family (MAILAGENT_CONTACTS_ENABLED, default off).
+          contactToolsEnabled,
+          // WP7 — the governance kill-switch's registration-side belt (the endpoint gate is the
+          // authoritative one). ALWAYS threaded, so an explicit false really strips the proposal
+          // trio; the reads + direct writes stay.
+          contactAgentEnabled,
           // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL, default on; skill-gated).
           notionAgentToolsEnabled,
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
@@ -1355,8 +1376,11 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // 🔴 Matter follow-up runs are headless runs too, and they have their own flag: gating this on
     // customAgentsEnabled alone made every matter run 404 whenever custom agents were turned off
     // (the Python spec pull had already been widened; this side had not).
+    // WP7 — the contact governance scan is a headless run too, and it has its own flag: the Python
+    // spec-pull gate (`_require_run_pull_flag`) already admits it, so gating this side on the
+    // other two alone would 404 every governance run whenever both were off.
     fetchAgentRunSpec:
-      customAgentsEnabled || matterAgentEnabled
+      customAgentsEnabled || matterAgentEnabled || contactAgentEnabled
         ? (jobId: number, claimToken: string) => domain.fetchAgentRunSpec(jobId, claimToken)
         : undefined,
     // S4 W3 (ADR-003 D3) — pre-create the ai_chat.db session (origin='agent') a headless run persists
@@ -1364,8 +1388,10 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     // persists nothing) rather than throwing → the endpoint degrades gracefully.
     // P4 (D11) — the follow-up venue kill-switch consumed by handleAgentRun.
     matterAgentEnabled,
+    // WP7 — the governance venue kill-switch consumed by handleAgentRun (same shape).
+    contactAgentEnabled,
     createAgentSession:
-      customAgentsEnabled || matterAgentEnabled
+      customAgentsEnabled || matterAgentEnabled || contactAgentEnabled
         ? (input: {
             agentId: string
             jobId: number

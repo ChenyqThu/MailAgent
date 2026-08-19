@@ -22,6 +22,15 @@ CONTACT_GOVERNANCE_JOB_TYPE = "contact_governance"
 CONTACT_GOVERNANCE_MAX_RUN_SECONDS = 1800
 CONTACT_GOVERNANCE_FIRE_KEY = "contact_governance.last_fire_day"
 
+#: 治理 run 要 MOUNT 的 skill 族（工具面投影，WP7 批② gateway 侧接线时补齐）。
+#: 🔴 不是可选的润色：gateway 的 per-agent skill MOUNT 门（S6 W3-1b）对任何带 agentRunContext
+#: 的 run 都会跑一遍 `applySkillGating(gated, spec.toolPolicy.skills ?? [])`，缺这个键 = 零挂载
+#: = email / search 两族读工具**整族消失**。而每条治理建议都必须带一条能在 email_metadata 里
+#: 查到的邮件证据（``validate_evidence``），读不到邮件的 run 结构上产不出任何合法建议。
+#: report 族有意不挂：治理扫描不产报告（matter 跟进挂它是为了那边的报告能力卡）。
+#: 其余读工具（contact_* / kos / calendar / session / …）是 CORE_UNGATED，MOUNT 门管不到。
+CONTACT_GOVERNANCE_SKILLS = ("email", "search")
+
 _GOVERNANCE_PROMPT = """你是 MailAgent 的通讯录管理员。职责：阅读邮件与通讯录，找出同一个人被拆成多条、身份字段缺失或过时、地址已停用、组织关系或分类错误，并给出可执行建议。
 约束：
 1. 身份字段（姓名/英文名/组织/部门/职位/电话/上级）只能提出建议，绝不直写；合并必须由 owner 在预览页确认。
@@ -319,7 +328,14 @@ def assemble_contact_governance_spec(job: Any) -> dict[str, Any]:
             "firedAt": datetime.fromtimestamp(job.created_at, tz=timezone.utc).isoformat(),
         },
         "prompt": {"taskPrompt": _effective_prompt()},
-        "toolPolicy": {"allowedTools": []},
+        # 🔴 allowedTools 恒 []：治理 run 的工具面由 gateway 按 class 从 `contact_governance`
+        # 矩阵行 + wrapCfgForAgentRun 的读面 belt 推导（读全给、写一个不给、只留三个建议通道），
+        # 名单交集在这里没有合法用途；gateway 侧对 runKind='contact_governance' 也会强制 []。
+        # grantExec / grantWeb 一个都不写 —— 通讯录扫描既不执行也不出网。
+        "toolPolicy": {
+            "allowedTools": [],
+            "skills": list(CONTACT_GOVERNANCE_SKILLS),
+        },
         "budget": {"maxRunSeconds": CONTACT_GOVERNANCE_MAX_RUN_SECONDS},
         "sessionTitle": "通讯录治理扫描",
     }

@@ -158,6 +158,16 @@ export const TITLED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'matter_runs_list',
   'matter_tags_list',
   'matter_suggestion_resolve',
+  // contact directory (WP7 — 3 reads + 3 proposal channels + 3 direct writes)
+  'contact_search',
+  'contact_get',
+  'contact_list_mails',
+  'contact_propose_update',
+  'contact_propose_merge',
+  'contact_propose_relation',
+  'contact_set_kind',
+  'contact_mark_former_email',
+  'contact_refresh_profile',
   // notion
   'notion_agent_chat',
   // legacy (deleted engine, still present in persisted history)

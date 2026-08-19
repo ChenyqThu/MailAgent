@@ -240,3 +240,124 @@ def test_matter_followup_matrix_branch_precedes_the_generic_pass():
         "matter_followup 分支体必须以 `return false` 收尾 —— 少了它，未列出的 class 会落进"
         "下面的 grant 阶梯（grantExec 将能在这个 venue 抬起 exec）"
     )
+
+
+# ── Contact Directory WP7：第六 context mode `contact_governance` 的**独立**断言节 ───────────────
+#
+# 与上面 matter_followup 那一节同构、同理由：它也不是 trigger 的一种，而是服务端 spec 上的
+# `runKind` 盖章字段（`src/contacts/governance.py::assemble_contact_governance_spec`）。治理扫描的
+# trigger.kind 是 'schedule'（每日）或 'manual'，走 kind 阶梯会落到 cron_headless /
+# untrusted_trigger —— **两档都放行 domain_write**，而「身份字段只能建议、绝不直写」正是这个
+# venue 的全部意义。`deriveHeadlessMode`（抽屉展示镜像）同样不加这一支：治理扫描不是
+# custom-agent 规则场景。
+#
+# 🔴 分支体同样是花括号块（单行写法会被上面那张 kind 表的抽取器抓到却抽不出 kind → 误红）。
+# 本节的抽取器专抓块写法；抽取失败必须红，不许静默跳过。
+
+_CONTACTS_GOVERNANCE_PY = _REPO_ROOT / "src" / "contacts" / "governance.py"
+CONTACT_GOVERNANCE_MODE = "contact_governance"
+
+
+def test_contact_governance_run_kind_literal_matches_python():
+    """TS 的 runKind 字面量 == Python 的 job_type/runKind 常量（跨语言手抄，改一侧必红）。"""
+    from src.contacts.governance import CONTACT_GOVERNANCE_JOB_TYPE
+
+    assert CONTACT_GOVERNANCE_JOB_TYPE == CONTACT_GOVERNANCE_MODE
+    src = _read(_AGENT_RUN_TS)
+    const = re.search(r"CONTACT_GOVERNANCE_RUN_KIND\s*=\s*'([a-z_]+)'", src)
+    assert const, "agentRun.ts 的 CONTACT_GOVERNANCE_RUN_KIND 常量抽取失败 —— 更新本闸"
+    assert const.group(1) == CONTACT_GOVERNANCE_JOB_TYPE, (
+        f"runKind 字面量漂移：TS={const.group(1)!r} Python={CONTACT_GOVERNANCE_JOB_TYPE!r} —— "
+        "spec 盖的章与 gateway 认的章不一致 = 治理 run 落回 cron_headless（放行 domain_write）"
+    )
+    # spec 组装侧确实盖了这个章（防「常量还在、投影里被改掉」）。
+    assert '"runKind": CONTACT_GOVERNANCE_JOB_TYPE' in _read(_CONTACTS_GOVERNANCE_PY), (
+        "assemble_contact_governance_spec 不再用 CONTACT_GOVERNANCE_JOB_TYPE 盖 runKind —— 更新本闸"
+    )
+
+
+def test_contact_governance_run_kind_branch_precedes_the_whole_trigger_kind_ladder():
+    """agentRun.ts：contact_governance 的 runKind 分支存在、块写法、且在 kind 阶梯**之前**。"""
+    src = _read(_AGENT_RUN_TS)
+    match = re.search(r"function deriveContextMode\b.*?\n}", src, re.DOTALL)
+    assert match, "deriveContextMode 不见了 —— 镜像函数被移动/改名，更新本闸"
+    body = match.group(0)
+
+    branch = re.search(
+        rf"if\s*\(\s*spec\.runKind\s*===\s*'{CONTACT_GOVERNANCE_MODE}'\s*\)\s*\{{\s*"
+        rf"return\s*'(?P<mode>[a-z_]+)'",
+        body,
+    )
+    assert branch, (
+        "抽不到 contact_governance 的 runKind 分支（习语变了？）—— 期望块写法 "
+        "`if (spec.runKind === 'contact_governance') { return 'contact_governance' }`；"
+        "🔴 别改成单行，那会让上面的 trigger-kind 表抽取器误红"
+    )
+    assert branch.group("mode") == CONTACT_GOVERNANCE_MODE
+
+    ladder = re.search(r"const kind\s*=\s*spec\.trigger", body)
+    assert ladder, "kind 阶梯的起点（`const kind = spec.trigger…`）不见了 —— 更新本闸"
+    assert branch.start() < ladder.start(), (
+        "contact_governance 分支跑到 kind 阶梯后面去了：治理扫描的 trigger.kind='schedule' 会先被"
+        "阶梯判成 cron_headless（那一档放行 domain_write）—— 顺序就是语义"
+    )
+
+
+def test_policy_registers_the_sixth_mode():
+    src = _read(_POLICY_TS)
+    modes = re.search(r"AGENT_CONTEXT_MODES\s*=\s*\[(.*?)\]", src, re.DOTALL)
+    assert modes, "AGENT_CONTEXT_MODES 抽取失败 —— 习语变了，更新本闸"
+    names = re.findall(r"'([a-z_]+)'", modes.group(1))
+    assert CONTACT_GOVERNANCE_MODE in names, (
+        f"{CONTACT_GOVERNANCE_MODE} 不在 AGENT_CONTEXT_MODES 里 —— normalizeContextMode 会把它"
+        "fail-close 成 untrusted_trigger，整个治理 venue 形同虚设（且照样放行 domain_write）"
+    )
+
+
+def test_contact_governance_matrix_branch_precedes_the_generic_pass():
+    """policy.ts：contact_governance 分支必须在「read/domain_write/artifact 全放行」那行**之前**。
+
+    本闸钉：① 顺序 ② 分支体提到的 class 恰为 read/artifact（🔴 **没有 web** —— 比
+    matter_followup 更紧一档：通讯录扫描不出网）③ artifact 那行必须按**名字**放行
+    （`CONTACT_PROPOSE_TOOLS`，不许整类放行 —— 那会把 report_write / matter_update_propose
+    一并送进无人值守的扫描）④ 分支体以 `return false` 收尾。
+    """
+    src = _read(_POLICY_TS)
+    match = re.search(r"export function isToolClassAllowedInMode\b.*?\n}", src, re.DOTALL)
+    assert match, "isToolClassAllowedInMode 不见了 —— 更新本闸"
+    body = match.group(0)
+
+    branch = re.search(
+        rf"if\s*\(\s*mode\s*===\s*'{CONTACT_GOVERNANCE_MODE}'\s*\)\s*\{{(?P<block>.*?)\n  \}}",
+        body,
+        re.DOTALL,
+    )
+    assert branch, f"抽不到 {CONTACT_GOVERNANCE_MODE} 的矩阵分支块（习语变了？）—— 更新本闸"
+    generic = re.search(
+        r"if\s*\(\s*toolClass\s*===\s*'read'\s*\|\|\s*toolClass\s*===\s*'domain_write'"
+        r".*?\)\s*return true",
+        body,
+        re.DOTALL,
+    )
+    assert generic, "抽不到 read/domain_write/artifact 通用放行行 —— 更新本闸"
+    assert branch.start() < generic.start(), (
+        "contact_governance 分支排在通用放行行之后：domain_write 会在它之前被无条件放行，"
+        "治理扫描将拿到全部通讯录/邮件写工具"
+    )
+
+    block = branch.group("block")
+    allowed = set(re.findall(r"toolClass\s*===\s*'([a-z_]+)'", block))
+    assert allowed == {"read", "artifact"}, (
+        f"contact_governance 分支提到的 class 集合变了：{sorted(allowed)}"
+        "（期望恰为 read + artifact —— 多出成员 = 有 venue 放宽没过裁决，"
+        "尤其 'web' 属于「扫描出网」，少了 = 读面塌了）"
+    )
+    artifact_line = re.search(r"toolClass\s*===\s*'artifact'.*", block)
+    assert artifact_line and "CONTACT_PROPOSE_TOOLS" in artifact_line.group(0), (
+        "artifact 在 contact_governance 分支里必须**按名字**放行（CONTACT_PROPOSE_TOOLS）"
+        "—— 整类放行会把 report_write / matter_update_propose 一并交给无人值守的扫描"
+    )
+    assert re.search(r"return false\s*$", block.strip()), (
+        "contact_governance 分支体必须以 `return false` 收尾 —— 少了它，未列出的 class 会落进"
+        "下面的 grant 阶梯（grantExec / grantWeb 将能在这个 venue 抬起 exec / web）"
+    )

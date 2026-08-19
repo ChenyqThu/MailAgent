@@ -72,6 +72,10 @@ function buildAllTools() {
     // that they were also missing from CORE_UNGATED_GATEWAY_TOOLS: two holes cancelling out. P4
     // closes both (handoff 遗留 #4).
     matterToolsEnabled: true,
+    // Contact Directory WP7 — the nine contact tools (MAILAGENT_CONTACTS_ENABLED), CORE_UNGATED
+    // like the matter family. 🔴 Same red-letter rule: with the flag off here the FORWARD guard
+    // cannot see them, so a missing CORE_UNGATED entry would never turn red.
+    contactToolsEnabled: true,
     // S2 W0 — the drift guard reasons over the MANUAL-session universe (fail-closed default is
     // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
     contextMode: 'manual_chat'
@@ -286,6 +290,9 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       setAgentSessionJobId: () => undefined,
       calendarToolsEnabled: true,
       matterToolsEnabled: true,
+      // WP7 — the contact family is CORE_UNGATED, so this probe must build it too or the floor
+      // sweep below would assert nine tools it never asked for.
+      contactToolsEnabled: true,
       contextMode: 'manual_chat', // manual probe isolates the mount gate from the mode floor
       agentRunContext: { agentId: 'dms', skills: [] }
     })

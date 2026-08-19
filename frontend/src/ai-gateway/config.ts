@@ -467,6 +467,14 @@ export interface AiGatewayConfig {
    *  else about a matter run (the matrix row, the propose registration) keys on the spec, not on
    *  this flag — an off flag means "no run ever starts", not "a run starts with a wider face". */
   matterAgentEnabled?: boolean
+  /** Contact Directory WP7 — MAILAGENT_CONTACT_AGENT_ENABLED, read in Electron main only (no vite
+   *  define). Gates POST /api/ai/agent-run for a spec stamped runKind='contact_governance' (off →
+   *  403 E_DISABLED, fail-closed) — the governance venue's kill-switch on the gateway side. Exact
+   *  mirror of matterAgentEnabled and for the same reason: with the flag off the Python side
+   *  refuses the proposals endpoint, so a run would burn a full LLM turn only to lose its single
+   *  output channel. Double-carrier with the Python pydantic `contact_agent_enabled`; both env
+   *  defaults MUST stay false together (tests/config/test_flag_cross_language.py). */
+  contactAgentEnabled?: boolean
   // ── Stage 2 PR-1 (task 08-01 messenger, MAILAGENT_IM_FEISHU) — im_chat entrypoint ──────────────
   /** MAILAGENT_IM_FEISHU (env default ON — cutover 2026-08-04). When true the gateway registers
    *  POST /api/ai/im-chat — the ONLY entrypoint asserting 'im_chat' in trusted code. Off/absent →

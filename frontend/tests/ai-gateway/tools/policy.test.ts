@@ -20,6 +20,7 @@ import {
   GATEWAY_TOOL_CLASSES,
   applyContextModePolicy,
   classOfTool,
+  CONTACT_PROPOSE_TOOLS,
   isToolClassAllowedInMode,
   MATTER_RUN_PROPOSE_TOOL,
   mayAutoApprove,
@@ -79,6 +80,12 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // headless_excluded there) intersected in wrapCfgForAgentRun's allowedTools filter. The
     // twelfth, matter_update_propose, is run-context-only (see MATTER_RUN_ONLY_TOOLS).
     matterToolsEnabled: true,
+    // Contact Directory WP7 — the nine contact tools (MAILAGENT_CONTACTS_ENABLED), classified
+    // read (3) + artifact (3 proposals) + domain_write (3). 🔴 Turning the flag on HERE is
+    // load-bearing: with it off the FORWARD/REVERSE drift guards below never see the family, so a
+    // missing GATEWAY_TOOL_CLASSES entry would fail-close to 'exec' and stay green — the exact
+    // two-holes-cancelling-out shape P3 hit with the matter family.
+    contactToolsEnabled: true,
     ...(contextMode !== undefined ? { contextMode } : {})
   })
 }
@@ -105,6 +112,26 @@ function buildMatterRunTools() {
       allowedTools: [],
       skills: [],
       matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 }
+    }
+  })
+}
+
+/** WP7 — the assembly a contact-directory governance scan gets: the sixth context mode plus the
+ *  run context's governance stamp. This exercises the MATRIX belt only; wrapCfgForAgentRun's
+ *  second, independent belt is pinned in agent_run.test.ts. */
+function buildContactGovernanceTools() {
+  return buildGatewayTools({
+    domain: mockDomain(() => okEnvelope([])),
+    approvalGuard: new ApprovalGuard(),
+    writeToolsEnabled: true,
+    contactToolsEnabled: true,
+    matterToolsEnabled: true,
+    contextMode: 'contact_governance',
+    agentRunContext: {
+      agentId: 'contact_governance_agent',
+      allowedTools: [],
+      skills: ['email', 'search'],
+      contactGovernanceRun: true
     }
   })
 }
@@ -239,6 +266,23 @@ describe('matrix — isToolClassAllowedInMode (registration) × mayAutoApprove (
       web: false,
       outbound: false,
       connector_write: false
+    },
+    // Contact Directory WP7 — the governance scan's row: reads free (it has to read mail to cite
+    // evidence), artifact BY NAME (false here — this base table's class-only call carries no
+    // toolName; the CONTACT_PROPOSE_TOOLS lift is pinned in the behavior-belt describe below),
+    // and everything else false. 🔴 `web` is false under ANY grants too — one notch tighter than
+    // matter_followup, which does admit web under a spec-authored grant. That is not an
+    // oversight: a directory scan has no network job, and src/contacts/governance.py authors no
+    // web grant, so the row simply never reads one (pinned in the 3-axis sweep below).
+    contact_governance: {
+      read: true,
+      artifact: false,
+      domain_write: false,
+      capability_change: false,
+      exec: false,
+      web: false,
+      outbound: false,
+      connector_write: false
     }
   }
 
@@ -347,7 +391,14 @@ describe('matrix — 3-axis (class × mode × grants, ADR-004)', () => {
                 // under ANY grants — the exec grant and write-capable connector ceilings can lift
                 // NOTHING here.
                 cls === 'read' || (cls === 'web' && webGranted)
-              : cls === 'read' || cls === 'artifact' || cls === 'domain_write'
+              : mode === 'contact_governance'
+                ? // WP7 — evaluated BEFORE the generic line too, and TIGHTER than the matter row:
+                  // read always; artifact ONLY by name (this sweep passes no toolName → false);
+                  // and 'web' stays false under EVERY grant shape above, including
+                  // {web:'open'} — the row never reads the web grant at all, because the spec
+                  // assembler never authors one and a directory scan must not go outbound.
+                  cls === 'read'
+                : cls === 'read' || cls === 'artifact' || cls === 'domain_write'
                 ? true
                 : mode === 'im_chat'
                   ? // stage 2 PR-1 (08-04 拍板) — connector 全开放 in im_chat; every OTHER class
@@ -596,6 +647,137 @@ describe('matter_followup — behavior belt across every tool class (0812)', () 
         { connectors: { ghost: 'read' } }
       )
       expect(Object.keys(unregistered)).toEqual([])
+    } finally {
+      resetRuntimeToolClasses()
+    }
+  })
+})
+
+// ── Contact Directory WP7 — the governance row's safety facts, asserted by BEHAVIOR ─────────────
+// (tests/api/test_context_mode_consistency.py's regex gate only pins the branch shape + its
+// position; a decoy can satisfy a regex. This exhausts every GatewayToolClass against the real
+// control flow, exactly like the matter belt above.)
+describe('contact_governance — behavior belt across every tool class (WP7)', () => {
+  const MAX_GRANTS: AgentModeGrants = { exec: true, web: 'open', connectors: { notion: 'update' } }
+  const WRITE_CAPABLE: GatewayToolClass[] = [
+    'domain_write',
+    'capability_change',
+    'exec',
+    'outbound',
+    'connector_write'
+  ]
+
+  test('full sweep: read always; artifact only under a propose NAME; web NEVER; every write class false', () => {
+    for (const cls of GATEWAY_TOOL_CLASS_VALUES) {
+      expect(isToolClassAllowedInMode(cls, 'contact_governance'), `${cls} · bare`).toBe(
+        cls === 'read'
+      )
+      // 🔴 maximal (tampered) grants change NOTHING here — unlike matter_followup, this row does
+      // not even read the web grant: a directory scan has no outbound channel at all.
+      expect(isToolClassAllowedInMode(cls, 'contact_governance', MAX_GRANTS), `${cls} · max`).toBe(
+        cls === 'read'
+      )
+      // a propose NAME lifts ONLY the artifact class — a write-class tool wearing the name gains
+      // nothing (no name-based bypass across classes).
+      expect(
+        isToolClassAllowedInMode(
+          cls,
+          'contact_governance',
+          MAX_GRANTS,
+          undefined,
+          'contact_propose_update'
+        ),
+        `${cls} · named propose`
+      ).toBe(cls === 'read' || cls === 'artifact')
+    }
+    for (const cls of WRITE_CAPABLE) {
+      expect(isToolClassAllowedInMode(cls, 'contact_governance', MAX_GRANTS), cls).toBe(false)
+    }
+  })
+
+  test('artifact by name: exactly the three propose channels; the other artifacts stay out', () => {
+    const artifact = (name?: string) =>
+      isToolClassAllowedInMode('artifact', 'contact_governance', undefined, undefined, name)
+    for (const name of CONTACT_PROPOSE_TOOLS) expect(artifact(name), name).toBe(true)
+    // the OTHER artifact-class tools — a local Reports write and another domain's proposal
+    // channel — must not ride the class in.
+    expect(artifact('report_write')).toBe(false)
+    expect(artifact(MATTER_RUN_PROPOSE_TOOL)).toBe(false)
+    expect(artifact(undefined)).toBe(false)
+    expect(artifact('')).toBe(false)
+    expect(artifact('contact_propose_')).toBe(false)
+  })
+
+  test('web is denied under every grant shape (the row never consults grants.web)', () => {
+    for (const grants of [
+      undefined,
+      {},
+      { web: 'off' },
+      { web: 'gated' },
+      { web: 'open' },
+      { exec: true, web: 'open' },
+      { web: true } as unknown as AgentModeGrants
+    ]) {
+      expect(
+        isToolClassAllowedInMode('web', 'contact_governance', grants as AgentModeGrants | undefined),
+        JSON.stringify(grants)
+      ).toBe(false)
+    }
+  })
+
+  test('assembled end-to-end: a governance ToolSet holds ONLY read-class tools + the three propose channels', () => {
+    const tools = buildContactGovernanceTools()
+    for (const name of CONTACT_PROPOSE_TOOLS) expect(tools[name], name).toBeDefined()
+    // the read face is really there (the scan must be able to read mail to cite evidence)
+    expect(tools.contact_get).toBeDefined()
+    expect(tools.email_body).toBeDefined()
+    for (const name of Object.keys(tools)) {
+      const cls = classOfTool(name)
+      expect(
+        cls === 'read' || CONTACT_PROPOSE_TOOLS.has(name),
+        `${name} (class ${cls}) escaped the contact_governance matrix row`
+      ).toBe(true)
+    }
+    // the other artifact channels + every write class are gone
+    expect(tools.report_write).toBeUndefined()
+    expect(tools.matter_update_propose).toBeUndefined()
+    for (const name of [
+      ...CLASSES_OF('domain_write'),
+      ...CLASSES_OF('capability_change'),
+      ...CLASSES_OF('web'),
+      ...CLASSES_OF('outbound')
+    ]) {
+      expect(tools[name], `${name} must be stripped in contact_governance`).toBeUndefined()
+    }
+    // named explicitly: the three direct contact writes the scan must never reach
+    for (const name of [
+      'contact_set_kind',
+      'contact_mark_former_email',
+      'contact_refresh_profile'
+    ]) {
+      expect(tools[name], `${name} must be stripped in contact_governance`).toBeUndefined()
+    }
+  })
+
+  // 🔴 Layer note: today a governance run never LOADS connector tools at all — the seam
+  // (shouldLoadConnectorTools) does not admit this mode and the spec authors no grantConnectors
+  // (tests/config/test_connector_contract_parity.py pins both). This pins how the MATRIX would
+  // treat them if it ever did: a runtime-registered read rides the row, a connector write does
+  // not — the row must not depend on that far-away seam for its safety.
+  test('runtime connector tools: the read class rides the row, connector_write is stripped under tampered ceilings', () => {
+    try {
+      registerRuntimeToolClass('mcp__notion__notion_search', 'read')
+      registerRuntimeToolClass('mcp__notion__notion_update_page', 'connector_write')
+      const donor = { description: 'x', inputSchema: undefined, execute: async () => ({}) }
+      const filtered = applyContextModePolicy(
+        {
+          mcp__notion__notion_search: donor,
+          mcp__notion__notion_update_page: donor
+        } as unknown as Parameters<typeof applyContextModePolicy>[0],
+        'contact_governance',
+        { exec: true, web: 'open', connectors: { notion: 'update' } }
+      )
+      expect(Object.keys(filtered)).toEqual(['mcp__notion__notion_search'])
     } finally {
       resetRuntimeToolClasses()
     }

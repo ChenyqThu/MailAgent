@@ -34,6 +34,11 @@ import { createInternalAgentTools } from './internal_agents'
 import { createAgentCallTools } from './agent_call'
 import { createCalendarReadTools, createCalendarWriteTools } from './calendar'
 import {
+  createContactProposeTools,
+  createContactReadTools,
+  createContactWriteTools
+} from './contacts'
+import {
   createMatterReadTools,
   createMatterRunTools,
   createMatterSuggestionTools,
@@ -199,6 +204,28 @@ export interface BuildGatewayToolsOpts {
    *  先例): the lifecycle ALWAYS threads the value, so an explicit false really does strip the
    *  tool, while a harness cfg that omits it keeps the pre-P4 assembly semantics. */
   matterAgentEnabled?: boolean
+  /** MAILAGENT_CONTACTS_ENABLED (Contact Directory WP7) — the contact tool family is
+   *  all-or-nothing with approvalGuard (calendar/matter precedent: a write tool cannot exist
+   *  without its guard, and registering only the reads would advertise half a capability): three
+   *  silent reads + three silent `artifact` proposal tools + three domain_write tools. The
+   *  proposal trio is ALSO the only output channel of a `contact_governance` run — the matrix row
+   *  admits them BY NAME (policy.ts CONTACT_PROPOSE_TOOLS) and denies every write class, so the
+   *  scan can propose a kind change but never apply one. Off (default — the flag ships off) →
+   *  not added → ToolSet byte-identical to the pre-WP7 set. */
+  contactToolsEnabled?: boolean
+  /** MAILAGENT_CONTACT_AGENT_ENABLED (WP7) — the governance venue's kill-switch, threaded from the
+   *  lifecycle. The AUTHORITATIVE gate is the endpoint (a spec stamped runKind
+   *  'contact_governance' is refused 403 before any run starts); here it additionally gates the
+   *  three PROPOSAL tools, because the proposal chain as a whole belongs to the agent flag: the
+   *  landing leg (POST /api/contacts/agent/proposals) is double-flag-gated server-side and the
+   *  review queue UI sits in the same domain, so with the agent off those three tools could only
+   *  ever return E_DISABLED — the matter_runs_list precedent («registering it with the flag off
+   *  would advertise a tool that can only ever return an error»). The read/write families are NOT
+   *  affected: they answer perfectly well with the agent off.
+   *  Written `!== false` (planToolsEnabled / matterAgentEnabled 先例): the lifecycle ALWAYS
+   *  threads the value, so an explicit false really does strip the trio, while a harness cfg that
+   *  omits it keeps the whole family. */
+  contactAgentEnabled?: boolean
   /** task 07-21 (MAILAGENT_NOTION_AGENT_TOOL) — when true AND approvalGuard is supplied, the
    *  notion_agent_chat tool is added: an edit-tier write (恒 HITL — external AI call to the
    *  notion-agent CLI, side effects on the Notion side, no whitelist/免卡 channel). Unlike the
@@ -609,6 +636,35 @@ export function buildGatewayTools(
     if (matterRun && opts.matterAgentEnabled !== false) {
       Object.assign(tools, createMatterRunTools(opts.domain, collector, matterRun))
     }
+  }
+  // Contact Directory WP7 — the contact family behind MAILAGENT_CONTACTS_ENABLED. Mixed set
+  // (3 silent reads + 3 silent artifact proposals + 3 domain_write) → all-or-nothing on flag +
+  // guard (calendar/matter 先例). CORE_UNGATED (no skill ownership) so neither applySkillGating
+  // pass drops them; class read/artifact/domain_write (policy.ts), so the LAST assembly step keeps
+  // the reads + proposals inside a contact_governance run and strips EVERY write there. 🔴 No
+  // agentRunContext is threaded into the write factory: no per-agent whitelist may 免卡 a
+  // directory write (calendar 先例 — the factory wires no policyEvaluate at all).
+  // flag-off (default) → not added → byte-identical to the pre-WP7 set.
+  if (opts.contactToolsEnabled && opts.approvalGuard) {
+    Object.assign(tools, createContactReadTools(opts.domain, collector))
+    // 🔴 The proposal trio rides the AGENT flag, not the directory flag: the landing leg
+    // (POST /api/contacts/agent/proposals) is double-flag-gated server-side and the review queue
+    // lives in the same domain, so with the agent off these three could only ever return
+    // E_DISABLED (matter_runs_list 先例). The reads and the direct writes below are unaffected —
+    // they answer fine with the agent off.
+    if (opts.contactAgentEnabled !== false) {
+      Object.assign(tools, createContactProposeTools(opts.domain, collector))
+    }
+    Object.assign(
+      tools,
+      createContactWriteTools(opts.domain, collector, opts.approvalGuard, {
+        a2uiEnabled: opts.a2uiEnabled,
+        approvalMode: opts.approvalMode,
+        toolApprovalPrefs: prefTiers,
+        oneShot: opts.oneShotWrites,
+        contextMode
+      })
+    )
   }
   // task 07-21 — notion-agent tool behind MAILAGENT_NOTION_AGENT_TOOL. One edit-tier write (恒 HITL,
   // class 'outbound') → needs the approval guard (all-or-nothing on flag + guard). Registered here

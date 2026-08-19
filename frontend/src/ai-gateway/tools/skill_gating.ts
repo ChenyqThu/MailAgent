@@ -177,7 +177,23 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'matter_suggestion_resolve',
   // task 08-14 —— 跟进配置的逐条编辑。同族同纪律（开关权在 MAILAGENT_MATTERS_ENABLED +
   // MAILAGENT_INTERNAL_AGENT_TOOLS，无 skill 归属，永不 skill-gated）。
-  'matter_followup_mutate'
+  'matter_followup_mutate',
+  // Contact Directory WP7 —— 通讯录家族 9 件（behind MAILAGENT_CONTACTS_ENABLED）：3 读 +
+  // 3 提案（artifact）+ 3 写。开关权在独立 flag（calendar / matter 先例；Python 无 contacts
+  // builtin skill，GATEWAY_SKILL_TOOLS 无映射），永不 skill-gated。
+  // 🔴 这一段与 policy.ts 的 9 条 class、tool_catalog.json 的 9 行必须同批加：漏 CORE_UNGATED
+  // = skill_gating.test 的完整性守护红；漏 class = 静默 fail-close 成 exec（headless 全掉）。
+  // 治理 run 尤其依赖它 —— 那条 run 的 skills 挂载集不含通讯录（本来也没有这个 skill），
+  // 全靠 CORE_UNGATED 地板把这 9 件留在挂载门之外。
+  'contact_search',
+  'contact_get',
+  'contact_list_mails',
+  'contact_propose_update',
+  'contact_propose_merge',
+  'contact_propose_relation',
+  'contact_set_kind',
+  'contact_mark_former_email',
+  'contact_refresh_profile'
 ])
 
 /** 删掉「归属 skill ∉ advertisedSkills 且无任一 advertised skill 仍拥有它 且非 collision-exempt」的

@@ -35,6 +35,7 @@ import {
 } from './chatRun'
 import {
   classOfTool,
+  CONTACT_PROPOSE_TOOLS,
   MATTER_RUN_PROPOSE_TOOL,
   normalizeContextMode,
   parseConnectorGrants,
@@ -56,6 +57,15 @@ import type { AgentRunSpec, HeadlessAgentResult } from '../shared/api/types'
 
 export const DEFAULT_AGENT_RUN_SECONDS = 1800
 export const MAX_AGENT_RUN_SECONDS = 1800
+
+/** Contact Directory WP7 — the SERVER's run-kind stamp for the contact-directory governance scan.
+ *  🔴 Hand-copied from Python `src/contacts/governance.py::CONTACT_GOVERNANCE_JOB_TYPE` (the spec
+ *  assembler writes it as both the job_type and `runKind`); `tests/api/test_context_mode_consistency.py`
+ *  pins the literal on both sides. Consumed by the forced-empty allowedTools and the run-context
+ *  stamp below. 🔴 `deriveContextMode` deliberately spells the LITERAL instead of using this
+ *  constant: that gate's extractor regex matches `spec.runKind === '<kind>'` on the source text and
+ *  an identifier there would make it抽不到 → red. */
+export const CONTACT_GOVERNANCE_RUN_KIND = 'contact_governance'
 
 /** Mirror the backend Budget clamp at the gateway boundary so stale or malformed specs cannot
  * silently restore the retired five-minute timeout or bypass the 30-minute ceiling. */
@@ -94,10 +104,18 @@ export interface RunHeadlessAgentOpts {
  *  🔴 分支体**故意写成花括号块**：`tests/api/test_context_mode_consistency.py` 的 kind 表抽取器
  *  匹配 `if (…) return '…'` 单行习语并要求条件里有 `kind === '…'` 字面量；单行写法会被它抓到、
  *  却抽不出 kind → 那张（与本分支无关的）三镜像表闸会误红。块写法对它不可见，而本分支自己的
- *  漂移守护是同一文件里新增的独立断言节（习语 + 行序都钉死）。 */
+ *  漂移守护是同一文件里新增的独立断言节（习语 + 行序都钉死）。
+ *
+ *  🔴 Contact Directory WP7 — `spec.runKind === 'contact_governance'` 同理先于 kind 阶梯：治理扫描
+ *  的 trigger.kind 是 'schedule'（每日）或 'manual'，走阶梯会落到 cron_headless / untrusted_trigger
+ *  —— 两档**都放行 domain_write**，而「身份字段只能建议、绝不直写」正是这个 venue 的全部意义。
+ *  分支体同样是花括号块（理由见上一段）。 */
 export function deriveContextMode(spec: AgentRunSpec): AgentContextMode {
   if (spec.runKind === 'matter_followup') {
     return 'matter_followup'
+  }
+  if (spec.runKind === 'contact_governance') {
+    return 'contact_governance'
   }
   const kind = spec.trigger?.kind
   if (kind === 'email_filter') return 'untrusted_trigger'
@@ -145,7 +163,16 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // a list pull matrix-admitted tools (e.g. report_write, class artifact) back into an unattended
   // run. The stamp is the SAME field matterRunFromSpec keys on, checked before the anchor's shape
   // so even a malformed-anchor matter spec (matterRun undefined → generic belt) keeps [].
-  const allowedRaw: unknown = spec.runKind === 'matter_followup' ? [] : toolPolicy?.allowedTools
+  // 🔴 WP7 — a contact_governance spec's allowedTools is FORCED to [] for the SAME reason: the
+  // scan's tool face is fixed server-side (the matrix row + the wrap belt derive it BY CLASS), so a
+  // list on the spec has no legal use, and leaving one honoured would let it pull matrix-admitted
+  // artifact tools (report_write, matter_update_propose) into an unattended directory scan through
+  // the wrap belt's `keep.has(name)`. Today the assembler writes `{allowedTools: []}` already —
+  // this makes it structural rather than a promise.
+  const allowedRaw: unknown =
+    spec.runKind === 'matter_followup' || spec.runKind === CONTACT_GOVERNANCE_RUN_KIND
+      ? []
+      : toolPolicy?.allowedTools
   // S6 W3 (rev3.1 §5.1) — the mount list mirrors allowedTools' fail-closed shape: the Python
   // projection always emits the RESOLVED array (NULL → default mount set substituted server-side,
   // never re-derived here), so a spec missing/malforming it is a broken spec → [] (zero mounts),
@@ -180,7 +207,10 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     ...(jobId != null ? { jobId } : {}),
     // P4 — conditional include for the same reason: a non-matter run's context object keeps the
     // pre-P4 shape (the stash-freeze assertions depend on that).
-    ...(matterRun !== undefined ? { matterRun } : {})
+    ...(matterRun !== undefined ? { matterRun } : {}),
+    // WP7 — same conditional-include discipline: only a spec STAMPED contact_governance mints the
+    // flag, so every other run's context object is byte-identical to the pre-WP7 shape.
+    ...(spec.runKind === CONTACT_GOVERNANCE_RUN_KIND ? { contactGovernanceRun: true } : {})
   }
 }
 
@@ -330,9 +360,21 @@ export function wrapCfgForAgentRun(
     // “mutation #2” tests in agent_run.test.ts. A tool MISSING from the class map fail-closes to
     // 'exec' in classOfTool → EXCLUDED here, never silently admitted; new read tools flow in
     // with zero spec changes.
+    //
+    // 🔴 Contact Directory WP7 — a contact-directory GOVERNANCE run (ctx.contactGovernanceRun;
+    // only a spec stamped runKind='contact_governance' ever mints it) gets its own SELF-CONTAINED
+    // branch for exactly the same reason the matter one is self-contained: merged into the generic
+    // OR-chain, the unconditional exec/web/mcp passes would re-admit whatever the matrix let
+    // through. Its belt is one notch tighter than the matter belt — class 'read' plus the three
+    // propose channels BY NAME, and NO web at all (a directory scan has no network job). It never
+    // consults `keep` (allowedTools is forced [] above) and never exempts exec/web/mcp/plan_update
+    // by name. A tool MISSING from the class map fail-closes to 'exec' in classOfTool → EXCLUDED
+    // here, never silently admitted. The two belts' independence is pinned by the
+    // “mutation” tests in agent_run.test.ts.
     buildTools: (collector, approvalMode, mode) => {
       const built = cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}
       const matterReadFace = ctx.matterRun != null
+      const contactReadFace = ctx.contactGovernanceRun === true
       // The tier was resolved ONCE at run start and frozen onto the context (so a pause→resume
       // rebuild reads the same value the fresh spawn did). Absent → the default, which is what
       // every pre-dogfood context carries.
@@ -347,6 +389,10 @@ export function wrapCfgForAgentRun(
             matterRunAdmitsWeb(name, cls, webFace)
           )
             out[name] = t
+          continue
+        }
+        if (contactReadFace) {
+          if (cls === 'read' || CONTACT_PROPOSE_TOOLS.has(name)) out[name] = t
           continue
         }
         if (

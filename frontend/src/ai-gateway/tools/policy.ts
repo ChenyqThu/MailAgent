@@ -75,13 +75,30 @@ import type { ToolSet } from 'ai'
  *  wrapCfgForAgentRun read-face exemption (agentRun.ts) is the SECOND, independent belt — this
  *  matrix row is the first. Asserted in trusted code by POST /api/ai/agent-run when the
  *  SERVER-assembled spec carries runKind==='matter_followup' (agentRun.ts deriveContextMode),
- *  never from a request body. */
+ *  never from a request body.
+ *
+ *  'contact_governance' (Contact Directory WP7): the SIXTH venue — the nightly contact-directory
+ *  governance scan (读邮件与通讯录 → 提建议, never 直写). It is deliberately NOT cron_headless:
+ *  that row admits the WHOLE domain_write class, so a governance run would inherit every email /
+ *  matter / calendar write and lose the propose-only structural guarantee its whole design rests
+ *  on (identity fields may only ever be SUGGESTED — src/contacts/governance.py, guard rule 1).
+ *  The boundary is BY CLASS like matter_followup, but one notch TIGHTER: every 'read' registers
+ *  (the scan has to read mail to cite evidence), 'artifact' ONLY under the three propose NAMES
+ *  (CONTACT_PROPOSE_TOOLS — report_write / matter_update_propose share the class and are other
+ *  domains' write channels), and 'web' is NOT admitted at all — a directory scan has no business
+ *  on the network, and the spec assembler authors no web grant. Every write-capable class
+ *  (domain_write / connector_write / exec / capability_change / outbound) is denied, and the exec
+ *  grant + im venue switches are never consulted. Asserted in trusted code by POST
+ *  /api/ai/agent-run when the SERVER-assembled spec carries runKind==='contact_governance'
+ *  (agentRun.ts deriveContextMode), never from a request body; wrapCfgForAgentRun's contact
+ *  read-face belt is the SECOND, independent belt. */
 export const AGENT_CONTEXT_MODES = [
   'manual_chat',
   'untrusted_trigger',
   'cron_headless',
   'im_chat',
-  'matter_followup'
+  'matter_followup',
+  'contact_governance'
 ] as const
 export type AgentContextMode = (typeof AGENT_CONTEXT_MODES)[number]
 
@@ -142,6 +159,12 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   matter_attention_list: 'read',
   matter_runs_list: 'read',
   matter_tags_list: 'read',
+  // Contact Directory WP7 — the directory read face. Class `read` is what puts them inside a
+  // governance run (the contact_governance row admits reads wholesale) AND keeps them out of
+  // every approval ladder: none of the three touches a row.
+  contact_search: 'read',
+  contact_get: 'read',
+  contact_list_mails: 'read',
   email_get: 'read',
   email_body: 'read',
   email_list_thread: 'read',
@@ -183,6 +206,15 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // discardable artifact. It is the ONE class the matter_followup row admits besides 'read', and
   // it only ever REGISTERS inside a matter-run context (tools/index.ts).
   matter_update_propose: 'artifact',
+  // Contact Directory WP7 — the governance scan's ONLY output channel: each writes a PENDING
+  // `contact_suggestion` row (status='pending'), never the contact's own fields. Same artifact
+  // shape as matter_update_propose (silent, no guard, no card): the owner's later adopt/ignore on
+  // /api/contacts/suggestions is what commits anything, so the proposal itself is a local,
+  // reviewable, discardable artifact. They are the ONE class the contact_governance row admits
+  // besides 'read', and only under these exact NAMES (CONTACT_PROPOSE_TOOLS).
+  contact_propose_update: 'artifact',
+  contact_propose_merge: 'artifact',
+  contact_propose_relation: 'artifact',
   chat_session_list: 'read',
   chat_session_search: 'read',
   chat_session_get: 'read',
@@ -224,6 +256,14 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // surface an attention signal or a resource suggestion but never quietly clear it.
   matter_attention_triage: 'domain_write',
   matter_suggestion_resolve: 'domain_write',
+  // Contact Directory WP7 — the three直写 contact tools. domain_write on purpose: each one writes
+  // a single reversible column on the owner's own directory (kind can be set back; a former-email
+  // mark is undone by the same endpoint; a profile refresh only recomputes a derived document).
+  // The class is ALSO what keeps them out of a governance run — that row denies domain_write
+  // outright, so the scan can propose a kind change but never apply one.
+  contact_set_kind: 'domain_write',
+  contact_mark_former_email: 'domain_write',
+  contact_refresh_profile: 'domain_write',
   // task 08-14 — 跟进配置的逐条编辑。🔴 有意**不是** domain_write：改的是一个无人值守、有网络
   // 出口的 run 的触发条件，与 internal_agent_update 同待遇（PRD D8）。代价是 im_chat 里改不了
   // 跟进节奏 —— owner 知情接受。两种 class 都挡住「跟进 run 改自己的跟进配置」。
@@ -528,6 +568,16 @@ export interface AgentRunContext {
    *  agentRunContextFromSpec: absent means "use MATTER_RUN_WEB_FACE_DEFAULT", so every context
    *  built without a resolver (tests, manual entrypoints, non-matter runs) stays byte-identical. */
   matterWebFace?: MatterRunWebFace
+  /** Contact Directory WP7 — the SERVER's stamp that this run is the contact-directory governance
+   *  scan, built by agentRunContextFromSpec from `spec.runKind` (never a body). Present ONLY for a
+   *  contact_governance run; every manual / im / cron / matter context omits it, so every pre-WP7
+   *  assembly is byte-identical. Its ONE consumer is wrapCfgForAgentRun's contact read-face belt —
+   *  the SECOND, independent belt behind the matrix row above. 🔴 NOT a policy input: the matrix
+   *  row keys on the MODE alone, so a mis-threaded flag can never widen a tool face; and it is
+   *  deliberately a SECOND input (the spec's runKind stamp) rather than the derived mode, so a
+   *  broken deriveContextMode cannot take both belts down at once. Frozen into the approval stash
+   *  with the rest of the context, so a resume rebuilds the exact same face. */
+  contactGovernanceRun?: boolean
 }
 
 /** 0812 dogfood — the three tiers of a Matter follow-up run's web tool face. Declared as a
@@ -571,6 +621,21 @@ export interface ImVenueSwitches {
  *  cycle through types.ts. */
 export const MATTER_RUN_PROPOSE_TOOL = 'matter_update_propose'
 
+/** Contact Directory WP7 — the THREE artifact NAMES the contact_governance row admits. Same
+ *  by-name discipline as MATTER_RUN_PROPOSE_TOOL and for the same reason: the artifact class also
+ *  holds report_write (a local Reports write) and matter_update_propose (another domain's proposal
+ *  channel), so whole-class admission would hand an unattended directory scan two write channels
+ *  it has no business holding. Defined HERE (not imported from tools/contacts.ts) because policy.ts
+ *  is the class layer's zero-dependency root — importing the tool module would cycle through
+ *  types.ts. 🔴 The names are duplicated in tools/contacts.ts's
+ *  GATEWAY_CONTACT_PROPOSE_TOOL_NAMES (the catalog extractor's name universe only scans
+ *  `GATEWAY_*_TOOL_NAMES` arrays); contacts.test.ts pins the two lists equal. */
+export const CONTACT_PROPOSE_TOOLS: ReadonlySet<string> = new Set([
+  'contact_propose_update',
+  'contact_propose_merge',
+  'contact_propose_relation'
+])
+
 /** Registration-time matrix row (ADR-001 D3, exec row revised by ADR-004 D2, web row added by
  *  ADR-004 rev3.1 D2, im_chat row added by stage 0b — grill Q10=A — and opened by stage 2 PR-1
  *  — the 08-04 拍板): may a tool of this class exist in the ToolSet of a run in this mode?
@@ -593,10 +658,11 @@ export function isToolClassAllowedInMode(
   mode: AgentContextMode,
   grants?: AgentModeGrants,
   venue?: ImVenueSwitches,
-  /** 0812 codex修复批 — ONLY the matter_followup row reads it (artifact admission is BY NAME
-   *  there, see MATTER_RUN_PROPOSE_TOOL); every other mode ignores it, so an omitted argument
-   *  (types.ts's runtime modeDenied belt, every existing caller/test) is byte-identical outside
-   *  matter runs and FAIL-CLOSED inside them (no name → no artifact). */
+  /** 0812 codex修复批 — read ONLY by the two propose-only rows (matter_followup /
+   *  contact_governance), where artifact admission is BY NAME (MATTER_RUN_PROPOSE_TOOL /
+   *  CONTACT_PROPOSE_TOOLS); every other mode ignores it, so an omitted argument (types.ts's
+   *  runtime modeDenied belt, every existing caller/test) is byte-identical outside those runs and
+   *  FAIL-CLOSED inside them (no name → no artifact). */
   toolName?: string
 ): boolean {
   if (mode === 'manual_chat') return true
@@ -617,6 +683,22 @@ export function isToolClassAllowedInMode(
     if (toolClass === 'read') return true
     if (toolClass === 'artifact') return toolName === MATTER_RUN_PROPOSE_TOOL
     if (toolClass === 'web') return grants?.web === 'gated' || grants?.web === 'open'
+    return false
+  }
+  // Contact Directory WP7 — 🔴 this row MUST stay ABOVE the generic read/domain_write/artifact
+  // line below for the same reason the matter row does: that line admits domain writes in every
+  // non-manual mode, so a contact_governance branch placed after it could no longer deny them and
+  // the scan would inherit contact_set_kind / email_flag / every other reversible write. The scan
+  // observes and PROPOSES; the classes it may hold are 'read' + 'artifact' under the three propose
+  // NAMES. 'web' is deliberately NOT admitted (one notch tighter than matter_followup): a
+  // directory scan has no network job, and src/contacts/governance.py authors no web grant — so
+  // even a tampered grants object lifts nothing here. Everything write-capable (domain_write /
+  // connector_write / exec / capability_change / outbound) returns false BEFORE the grant ladder
+  // below, and venue switches are never consulted (connector READS are class 'read' and already
+  // admitted; connector WRITES stay denied under any tampered ceiling).
+  if (mode === 'contact_governance') {
+    if (toolClass === 'read') return true
+    if (toolClass === 'artifact') return toolName !== undefined && CONTACT_PROPOSE_TOOLS.has(toolName)
     return false
   }
   if (toolClass === 'read' || toolClass === 'domain_write' || toolClass === 'artifact') return true

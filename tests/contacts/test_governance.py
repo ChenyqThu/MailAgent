@@ -174,7 +174,18 @@ def test_spec_shape_and_flag_gate(monkeypatch):
     )
     spec = governance.assemble_contact_governance_spec(job)
     assert spec["runKind"] == "contact_governance"
-    assert spec["toolPolicy"] == {"allowedTools": []}
+    # 🔴 WP7 批② —— toolPolicy 恰好两个键，多一个少一个都是安全语义变化：
+    #   · allowedTools 恒 []（工具面由 gateway 按 class 推导，名单交集在这个 venue 没有合法用途）
+    #   · skills = 挂载集。**不是可选润色**：gateway 的 per-agent skill MOUNT 门对任何带
+    #     agentRunContext 的 run 恒跑一遍，缺这个键 = 零挂载 = email/search 两族读工具整族消失，
+    #     而每条建议都必须带一条查得到的邮件证据 → 扫描结构上产不出任何合法建议（run 照跑、
+    #     永远空手而归，且不报错）。
+    #   · 任何 grant* 键都不许出现（既不执行也不出网）。
+    assert spec["toolPolicy"] == {
+        "allowedTools": [],
+        "skills": list(governance.CONTACT_GOVERNANCE_SKILLS),
+    }
+    assert "email" in governance.CONTACT_GOVERNANCE_SKILLS
     assert not any(key.startswith("grant") for key in spec["toolPolicy"])
     config_module.config.contact_agent_enabled = False
     with pytest.raises(ContactError) as exc_info:

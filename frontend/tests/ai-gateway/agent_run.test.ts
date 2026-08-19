@@ -2609,3 +2609,291 @@ describe('runHeadlessAgent — model / effort / fallback overrides', () => {
     expect(result.error?.code).toBe('E_BUDGET_TIME')
   })
 })
+
+// ── Contact Directory WP7 — the sixth venue: contact_governance ─────────────────────────────────
+//
+// Same DoD shape as the matter venue above: a governance scan — even one whose spec is tampered
+// with maximal grants and a hostile allowedTools list — reaches streamText with ZERO write-capable
+// tools and exactly three output channels. Everything here drives the REAL chain
+// (runHeadlessAgent → agentRunContextFromSpec → wrapCfgForAgentRun → buildGatewayTools →
+// applyContextModePolicy), so it fails if ANY link forgets the mode.
+
+/** The spec toolPolicy `src/contacts/governance.py::assemble_contact_governance_spec` writes:
+ *  allowedTools:[] (the face is class-derived gateway-side) + the mount list covering the
+ *  skill-owned read families the scan needs to cite evidence. No grants of any kind. */
+const CONTACT_GOVERNANCE_TOOL_POLICY = {
+  allowedTools: [] as string[],
+  skills: ['email', 'search']
+}
+
+function makeContactSpec(over?: Partial<AgentRunSpec>): AgentRunSpec {
+  return makeSpec({
+    runKind: 'contact_governance',
+    agentId: 'contact_governance_agent',
+    // trigger.kind stays 'schedule' — exactly the value that would land on cron_headless (which
+    // ADMITS domain_write) if anything read the ladder instead of runKind.
+    trigger: { kind: 'schedule', firedAt: '2026-08-19T02:00:00Z' },
+    toolPolicy: { ...CONTACT_GOVERNANCE_TOOL_POLICY } as AgentRunSpec['toolPolicy'],
+    sessionTitle: '通讯录治理扫描',
+    ...over
+  })
+}
+
+describe('contact_governance — the governance venue (WP7)', () => {
+  /** A deliberately WIDE flag set (write + send + exec + web + contacts + custom agents): the
+   *  point is that every one of those families is stripped by the two belts, so building them is
+   *  what makes the assertion mean something. */
+  function contactCfg(seenTools: string[][]): AiGatewayConfig {
+    const guard = new ApprovalGuard()
+    return {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      createModel: () => captureToolsModel(seenTools),
+      buildTools: (collector, _am, mode, agentRunContext) =>
+        buildGatewayTools(
+          {
+            domain: minimalDomain(),
+            writeToolsEnabled: true,
+            approvalGuard: guard,
+            sendToolEnabled: true,
+            sendSigningSecret: 'secret',
+            execToolsEnabled: true,
+            webToolsEnabled: true,
+            calendarToolsEnabled: true,
+            customAgentToolsEnabled: true,
+            contactToolsEnabled: true,
+            // 🔴 explicit true, mirroring production: a governance run only exists when the
+            // endpoint gate passed, i.e. when this flag is on — and the proposal trio (the run's
+            // ONLY output channel) is registration-gated on it, so a cfg that omitted it would be
+            // testing a combination the product cannot reach.
+            contactAgentEnabled: true,
+            contextMode: mode,
+            agentRunContext
+          },
+          collector
+        ),
+      persistTurn: () => {}
+    }
+  }
+
+  /** The face this cfg's flag set assembles under the class derivation: every read tool of the
+   *  enabled families that survives the mount list, plan_update, and the three propose channels.
+   *  🔴 No web pair (unlike the matter face) — the row never reads a web grant. */
+  const EXPECTED_CONTACT_FACE = [
+    // calendar reads ride the class derivation like every other CORE_UNGATED read — new read
+    // tools join a governance scan with zero spec changes, which is the point of deriving the
+    // face BY CLASS instead of hand-copying a name list.
+    'calendar_event_get',
+    'calendar_events_list',
+    'contact_get',
+    'contact_list_mails',
+    'contact_propose_merge',
+    'contact_propose_relation',
+    'contact_propose_update',
+    'contact_search',
+    'email_attachment_text',
+    'email_body',
+    'email_get',
+    'email_list_filter',
+    'email_list_thread',
+    'email_search_attachments',
+    'email_search_fulltext',
+    'email_thread_attachments',
+    'kos_find_experts',
+    'kos_get_backlinks',
+    'kos_get_page',
+    'kos_list_pages',
+    'kos_query',
+    'kos_search',
+    'plan_update'
+  ]
+
+  test("runKind='contact_governance' wins over EVERY trigger kind", () => {
+    for (const kind of ['manual', 'schedule', 'cron', 'email_filter', 'im', 'junk']) {
+      expect(
+        deriveContextMode(makeContactSpec({ trigger: { kind, firedAt: '2026-08-19T02:00:00Z' } })),
+        kind
+      ).toBe('contact_governance')
+    }
+  })
+
+  test('the run context is STAMPED, allowedTools forced [], and non-contact specs are untouched', () => {
+    const ctx = agentRunContextFromSpec(
+      makeContactSpec({
+        toolPolicy: {
+          allowedTools: ['email_flag', 'report_write'],
+          skills: ['email']
+        } as AgentRunSpec['toolPolicy']
+      })
+    )
+    expect(ctx.contactGovernanceRun).toBe(true)
+    expect(ctx.allowedTools).toEqual([]) // the list has no legal use in this venue
+    expect(ctx.skills).toEqual(['email']) // the mount list IS honoured (it only ever narrows)
+    // a plain cron spec keeps the pre-WP7 object shape — the key is absent, not false.
+    expect('contactGovernanceRun' in agentRunContextFromSpec(makeSpec())).toBe(false)
+  })
+
+  test('DoD: the assembled face is reads + the three propose channels, nothing else', async () => {
+    const seenTools: string[][] = []
+    await runHeadlessAgent(
+      contactCfg(seenTools),
+      { jobId: 7, spec: makeContactSpec(), sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].sort()).toEqual(EXPECTED_CONTACT_FACE)
+  })
+
+  test('a tampered spec (max grants + hostile allowedTools) changes nothing', async () => {
+    const seenTools: string[][] = []
+    const spec = makeContactSpec({
+      toolPolicy: {
+        // every write-capable name a hostile/buggy assembler could smuggle …
+        allowedTools: [
+          'contact_set_kind',
+          'contact_refresh_profile',
+          'report_write',
+          'email_flag',
+          'email_prepare_send',
+          'run_command'
+        ],
+        skills: CONTACT_GOVERNANCE_TOOL_POLICY.skills,
+        // … plus grants the real assembler never authors.
+        grantExec: true,
+        grantWeb: 'open',
+        grantConnectors: { notion: 'update' }
+      } as unknown as AgentRunSpec['toolPolicy']
+    })
+    await runHeadlessAgent(
+      contactCfg(seenTools),
+      { jobId: 7, spec, sessionId: null },
+      new AbortController().signal
+    )
+    expect(seenTools[0].sort()).toEqual(EXPECTED_CONTACT_FACE)
+    // named explicitly so a future face change cannot quietly re-admit them
+    for (const leaked of [
+      'contact_set_kind',
+      'contact_mark_former_email',
+      'contact_refresh_profile',
+      'report_write',
+      'email_flag',
+      'email_prepare_send',
+      'run_command',
+      'web_fetch',
+      'web_search'
+    ]) {
+      expect(seenTools[0], leaked).not.toContain(leaked)
+    }
+  })
+
+  // 🔴 The wrap belt's INDEPENDENCE from the matrix row (the mutation-#2 shape the matter venue
+  // pins the same way): drive wrapCfgForAgentRun ALONE with a builder that returns write tools of
+  // EVERY write-capable class — simulating a first belt that mis-admitted everything — and pin
+  // that the contact branch still reduces the face to read + the three propose names. The live
+  // mutation (policy.ts contact row → `return true`) is run by hand during review; this test is
+  // what keeps the independence from rotting afterwards.
+  test('mutation shadow: the wrapper belt ALONE drops every write-capable tool of a governance run', () => {
+    const donor = tool({ description: 'd', inputSchema: z.object({}), execute: async () => ({}) })
+    resetRuntimeToolClasses()
+    registerRuntimeToolClass('mcp__notion__notion_search', 'read')
+    registerRuntimeToolClass('mcp__notion__notion_update_page', 'connector_write')
+    const base: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      buildTools: () => ({
+        // what a HEALTHY first belt would emit…
+        email_list_filter: donor,
+        contact_get: donor,
+        contact_propose_update: donor,
+        // (a connector read — today the seam never loads connector tools for this venue; it is
+        // here to prove the belt is CLASS-driven, not name-driven)
+        mcp__notion__notion_search: donor,
+        // …plus one leak from EVERY class a broken matrix row could pass:
+        report_write: donor, // artifact, but not a contact propose channel
+        matter_update_propose: donor, // another domain's proposal channel
+        contact_set_kind: donor, // domain_write
+        email_flag: donor, // domain_write
+        run_command: donor, // exec (the generic belt admits cls==='exec' unconditionally)
+        web_fetch: donor, // web (ditto — and the contact venue must not go outbound)
+        skill_install: donor, // capability_change
+        email_prepare_send: donor, // outbound
+        mcp__notion__notion_update_page: donor // connector_write (generic belt: isMcpToolName)
+      })
+    }
+    const wrapped = wrapCfgForAgentRun(base, {
+      agentId: 'contact_governance_agent',
+      // a hostile allowedTools listing every leaked name — the contact branch must not consult it
+      allowedTools: ['report_write', 'email_flag', 'run_command', 'web_fetch', 'contact_set_kind'],
+      modeGrants: { exec: true, web: 'open', connectors: { notion: 'update' } },
+      contactGovernanceRun: true
+    })
+    const built = wrapped.buildTools!([], undefined, 'contact_governance')
+    expect(Object.keys(built).sort()).toEqual([
+      'contact_get',
+      'contact_propose_update',
+      'email_list_filter',
+      'mcp__notion__notion_search'
+    ])
+    resetRuntimeToolClasses()
+  })
+
+  test('endpoint gate: contactAgentEnabled off → 403 E_DISABLED BEFORE any session/run work', async () => {
+    const createAgentSession = vi.fn(() => 55)
+    const base = await startWith({
+      fetchAgentRunSpec: async () => makeContactSpec(),
+      createAgentSession
+      // contactAgentEnabled omitted → off (the flag ships off)
+    })
+    const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
+    expect(res.status).toBe(403)
+    expect(((await res.json()) as { error: string }).error).toBe('E_DISABLED')
+    // 🔴 the gate is BEFORE the session pre-create: with the Python proposals endpoint refusing,
+    // a run would burn a full LLM turn only to lose its single output channel.
+    expect(createAgentSession).not.toHaveBeenCalled()
+  })
+
+  test('endpoint gate: contactAgentEnabled on → the run proceeds and the session is created', async () => {
+    const createAgentSession = vi.fn(() => 55)
+    const base = await startWith({
+      fetchAgentRunSpec: async () => makeContactSpec(),
+      createAgentSession,
+      contactAgentEnabled: true
+    })
+    const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
+    expect(res.status).toBe(200)
+    expect(createAgentSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentId: 'contact_governance_agent', triggerKind: 'schedule' })
+    )
+  })
+
+  test('the contact belt does not leak into a matter run, nor the matter belt into a governance run', () => {
+    const donor = tool({ description: 'd', inputSchema: z.object({}), execute: async () => ({}) })
+    const base: AiGatewayConfig = {
+      port: 0,
+      baseUrl: 'https://crs.example/api',
+      apiKey: 'sk-test',
+      model: 'claude-sonnet-4-6',
+      buildTools: () => ({
+        matter_update_propose: donor,
+        contact_propose_update: donor,
+        email_list_filter: donor
+      })
+    }
+    const contactRun = wrapCfgForAgentRun(base, {
+      agentId: 'contact_governance_agent',
+      allowedTools: [],
+      contactGovernanceRun: true
+    }).buildTools!([], undefined, 'contact_governance')
+    expect(Object.keys(contactRun).sort()).toEqual(['contact_propose_update', 'email_list_filter'])
+
+    const matterRun = wrapCfgForAgentRun(base, {
+      agentId: 'matter:MAT-000042',
+      allowedTools: [],
+      matterRun: { matterId: 42, publicId: 'MAT-000042', runId: 7 }
+    }).buildTools!([], undefined, 'matter_followup')
+    expect(Object.keys(matterRun).sort()).toEqual(['email_list_filter', 'matter_update_propose'])
+  })
+})
