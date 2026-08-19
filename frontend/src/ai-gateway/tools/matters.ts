@@ -472,7 +472,12 @@ export function createMatterWriteTools(
     {
       ...shared,
       name: 'matter_stakeholder_mutate',
-      description: 'Create, update, soft-delete, or restore one Matter stakeholder.',
+      description:
+        'Create, update, soft-delete, or restore one Matter stakeholder — a person who matters ' +
+        'to this specific matter (their role here, whether a reply is being waited on them, ' +
+        'and how central they are: see the `tier` field). Add someone when the conversation ' +
+        'shows they decide, own, or are blocking a piece of this matter — not for everyone who ' +
+        'appears on a thread. Display order is owner-controlled and NOT settable here.',
       inputSchema: matterStakeholderMutateSchema,
       risk: 'edit',
       run: (input, { signal }) =>

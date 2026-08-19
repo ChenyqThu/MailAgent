@@ -65,6 +65,7 @@ from src.matters.models import (
     MatterResourceSummarySource,
     MatterRunStatus,
     MatterRunTrigger,
+    MatterStakeholderTier,
     MatterStatus,
     MatterTagColor,
     MatterTagShape,
@@ -345,7 +346,7 @@ MATTER_TABLE_DDLS = (
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
     )""",
-    """CREATE TABLE IF NOT EXISTS matter_stakeholder (
+    f"""CREATE TABLE IF NOT EXISTS matter_stakeholder (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         matter_id INTEGER NOT NULL REFERENCES matter(id) ON DELETE CASCADE,
         person_key TEXT NOT NULL,
@@ -355,6 +356,8 @@ MATTER_TABLE_DDLS = (
         role TEXT NULL,
         relationship TEXT NULL,
         is_waiting_on INTEGER NOT NULL DEFAULT 0 CHECK (is_waiting_on IN (0, 1)),
+        tier TEXT NOT NULL DEFAULT 'normal' CHECK (tier {sql_check_clause(MatterStakeholderTier)}),
+        sort_order INTEGER NOT NULL DEFAULT 0,
         last_contact_at INTEGER NULL,
         source_resource_id INTEGER NULL REFERENCES resource(id) ON DELETE SET NULL,
         contact_id INTEGER NULL REFERENCES matter_contact(id) ON DELETE SET NULL,
@@ -1268,7 +1271,15 @@ class SyncStore:
     #                会 OperationalError (no such column)。真要回退需手工
     #                `ALTER TABLE contact RENAME COLUMN formal_name TO name_en` +
     #                把锁键改回去, 或从 backups/ 恢复库。
-    DB_VERSION = 59
+    # v60 (2026-08-18, S2): matter_stakeholder +tier +sort_order —— 干系人分层
+    #                （核心 / 非核心，非核心默认折叠）与用户自定义顺序。
+    #                🔴 `sort_order` 的语义是**用户拖出来的显示顺序**，读侧不得 `sorted()`
+    #                覆盖（同 `SYNC_FOLDERS` 数组序那条纪律）。回填按现有 id 序编号 ——
+    #                不是为了保顺序（全 0 时 id 兜底接管，顺序本来就不变），而是给第一次
+    #                拖拽一个有意义的基线。
+    #                回滚（回退 v60）: 旧代码不读这两列，**只降版本号是安全的**
+    #                （新列有 DEFAULT，旧 INSERT 照常）；真要清掉再 DROP COLUMN。
+    DB_VERSION = 60
 
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
@@ -3846,6 +3857,53 @@ class SyncStore:
                 raise SyncStoreMigrationError(
                     f"v59 migration (identity_locks rekey): {e}"
                 ) from e
+
+        # === v60: 干系人分层 + 自定义顺序 (S2, 08-18) ===
+        # tier ('core'|'normal') 决定分到哪一组 (非核心默认折叠), sort_order 决定组内先后。
+        # 🔴 两列是**两个独立维度**, 不许合成一个「优先级数字」——「把人拖进核心组」与
+        #    「在核心组里往上挪一位」是两个操作。
+        # sort_order 回填按现有 id 序 (0,1,2…)。
+        # ⚠️ 回填**不是**「保住升级前顺序」所必需 —— 新读侧
+        #    `ORDER BY (tier='core') DESC, sort_order, id` 在 sort_order 全 0 时由 id 兜底
+        #    接管, 顺序与老读侧 `ORDER BY id` 恰好一致 (实测确认)。回填的真正价值是给
+        #    **第一次拖拽**一个有意义的基线: 全 0 时前端算不出「插到 p0 和 p1 之间」该给
+        #    什么值, 只能整组重写一遍。
+        #    tier 无需回填 (新列 DEFAULT 'normal')。
+        if current_version < 60:
+            try:
+                cursor.execute("PRAGMA table_info(matter_stakeholder)")
+                _sh_cols_v60 = {row[1] for row in cursor.fetchall()}
+                _added: list[str] = []
+                if "tier" not in _sh_cols_v60:
+                    cursor.execute(
+                        "ALTER TABLE matter_stakeholder ADD COLUMN tier TEXT NOT NULL "
+                        f"DEFAULT 'normal' CHECK (tier {sql_check_clause(MatterStakeholderTier)})"
+                    )
+                    _added.append("tier")
+                if "sort_order" not in _sh_cols_v60:
+                    cursor.execute(
+                        "ALTER TABLE matter_stakeholder ADD COLUMN sort_order "
+                        "INTEGER NOT NULL DEFAULT 0"
+                    )
+                    _added.append("sort_order")
+                    # 回填: per-matter 按 id 升序编号 (0,1,2…), 保住升级前的显示顺序。
+                    cursor.execute(
+                        "UPDATE matter_stakeholder SET sort_order = ("
+                        "  SELECT COUNT(*) FROM matter_stakeholder AS earlier "
+                        "  WHERE earlier.matter_id = matter_stakeholder.matter_id "
+                        "    AND earlier.id < matter_stakeholder.id"
+                        ")"
+                    )
+                    logger.info(
+                        f"v60 migration: matter_stakeholder sort_order backfilled "
+                        f"({cursor.rowcount} row(s))"
+                    )
+                if _added:
+                    logger.info(f"v60 migration: matter_stakeholder +{'+'.join(_added)}")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "matter_stakeholder", {"tier", "sort_order"}, "v60 migration", e,
+                )
 
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),

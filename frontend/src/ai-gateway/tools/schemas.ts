@@ -503,10 +503,25 @@ const stakeholderFields = z
     role: z.string().nullable().optional(),
     relationship: z.string().nullable().optional(),
     is_waiting_on: z.boolean().optional(),
+    tier: z
+      .enum(['core', 'normal'])
+      .optional()
+      .describe(
+        'How central this person is TO THIS MATTER (not a global property — the same person ' +
+          'may be a bystander on another matter). `core`: drives or decides where this goes ' +
+          '(decision maker, counterpart owner, the person a reply is being waited on). ' +
+          '`normal`: kept in the loop, cc-ed, shows up occasionally. When unsure use `normal` — ' +
+          'the core group is a short list the owner scans at a glance, and padding it destroys ' +
+          'that. Defaults to `normal`.'
+      ),
     last_contact_at: epochMillis('Last contact time').nullable().optional(),
     source_resource_id: z.number().int().positive().nullable().optional()
   })
   .strict()
+// 🔴 `sort_order` **有意不给 agent**：那是 owner 拖出来的手感，模型排不出用户心里的顺序，
+//    给了只会制造无谓的写和审批卡。它也不在 REST 的逐条 patch 白名单里（整批走
+//    `PUT /stakeholders/order`，那个端点不对 agent 开放）。工具说明里明说这一点，
+//    免得模型试图用 patch 绕。
 export const matterStakeholderMutateSchema = z
   .object({
     public_id: z.string().trim().min(1),

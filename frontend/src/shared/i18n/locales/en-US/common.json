@@ -797,14 +797,17 @@
       "placeholder": "Message MailAgent... (@ to mention an email, / for commands)"
     },
     "mention": {
-      "loading": "Searching emails…",
+      "loading": "Searching…",
       "empty": "No matching emails",
       "emails": "Emails",
       "agents": "Agents",
       "agentsEmpty": "No enabled custom agents",
-      "noMatches": "No matching emails or agents",
+      "matters": "Matters",
+      "mattersEmpty": "No matching matters",
+      "noMatches": "No matching items",
       "emailChip": "Mentioned email: {label}",
-      "agentChip": "Mentioned agent: {label}"
+      "agentChip": "Mentioned agent: {label}",
+      "matterChip": "Mentioned matter: {label}"
     },
     "slash": {
       "empty": "No matching commands"
@@ -4167,7 +4170,15 @@
       "notExecutable": "Not executable in v1",
       "unknown": "Unknown block · {type}",
       "emailCount": "{total, plural, one {# email} other {# emails}}",
-      "flaggedCount": "{flagged, plural, one {# flagged} other {# flagged}}"
+      "flaggedCount": "{flagged, plural, one {# flagged} other {# flagged}}",
+      "matter": {
+        "open": "Open matter {id}",
+        "due": "Due {value}",
+        "progress": "Goals {done}/{total}",
+        "waitingOn": "Waiting on {names}",
+        "nextAction": "Next · {title}",
+        "signals": "{count, plural, one {# signal} other {# signals}}"
+      }
     },
     "card": {
       "enabled": "Enabled",
@@ -5050,6 +5061,13 @@
       "noStakeholdersHint": "Add them manually now; agents can suggest more later.",
       "addStakeholder": "Add stakeholder",
       "editStakeholder": "Edit stakeholder",
+      "tierCore": "Core stakeholders",
+      "tierOthers": "Other stakeholders",
+      "tierCoreEmpty": "No core stakeholders yet. Mark the people who decide where this goes; the rest stay collapsed.",
+      "promoteStakeholder": "Mark as core stakeholder",
+      "demoteStakeholder": "Remove from core stakeholders",
+      "unnamed": "Unnamed",
+      "reorder": {"grip": "Reorder {{label}}, position {{pos}} of {{count}}", "grabbed": "{{label}} grabbed at position {{pos}} of {{count}}. Use arrow keys to move, Space to drop, Escape to cancel.", "dropped": "{{label}} dropped at position {{pos}} of {{count}}.", "moved": "{{label}} moved to position {{pos}} of {{count}}.", "cancelled": "Reorder cancelled. {{label}} is back at its original position."},
       "lastContact": "Last contact",
       "pinnedResources": "Pinned resources",
       "linkedResources": "Linked resources",

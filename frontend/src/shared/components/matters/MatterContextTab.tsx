@@ -2,7 +2,6 @@ import { useMemo, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
-  Edit3,
   History,
   Link2,
   ListChecks,
@@ -11,7 +10,6 @@ import {
   RefreshCcw,
   Shield,
   Target,
-  Trash2,
   Users,
   X
 } from 'lucide-react'
@@ -45,6 +43,7 @@ import { MatterRelationsSection } from './MatterRelationsSection'
 import { useMatterMutation } from './matterMutation'
 import { useMatterUndoToast } from './useMatterUndoToast'
 import { MatterStakeholderPicker } from './MatterStakeholderPicker'
+import { MatterStakeholderSection } from './MatterStakeholderSection'
 import {
   MatterSuggestedResourceActions,
   MatterSuggestedResourceBulkActions
@@ -136,69 +135,44 @@ export function MatterContextTab({
             {t('matters.context.addStakeholder')}
           </button>
         </SectionHeader>
-        {stakeholders.length > 0 ? (
-          // 设计 §「干系人 · N」：`minmax(240px,1fr)` 网格 gap 8、卡 pad 12、等待中卡走
-          // warn tone、头像 hue 哈希（复用 `.avatar` 调色板，同一人跨面同色）+ 等待中
-          // warn 环、hover 才出现的 edit/trash、第二行 = 角色 Pip + 弹性 + 最近联系。
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(240px,1fr))] gap-2">
-            {stakeholders.map((stakeholder) => (
-              <article
-                key={stakeholder.id}
-                className={`group/card relative rounded-[var(--r-card)] border p-3 ${
-                  stakeholder.is_waiting_on
-                    ? 'border-warn/25 bg-warn/[0.06]'
-                    : 'border-ink-border bg-ink-2'
-                }`}
-              >
-                <div className="absolute right-2 top-2 flex gap-1 opacity-0 transition-opacity duration-fast ease-standard focus-within:opacity-100 group-hover/card:opacity-100">
-                  <button
-                    type="button"
-                    title={t('matters.context.editStakeholder')}
-                    aria-label={t('matters.context.editStakeholder')}
-                    onClick={() => setEditor(stakeholder)}
-                    className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 hover:bg-ink-3"
-                  >
-                    <Edit3 size={13} />
-                  </button>
-                  <button
-                    type="button"
-                    title={t('matters.context.removeStakeholder')}
-                    aria-label={t('matters.context.removeStakeholder')}
-                    onClick={() => remove.mutate(stakeholder.id)}
-                    className="rounded-[var(--r-ctl)] p-1.5 text-ink-fg-2 hover:bg-fail/10 hover:text-fail"
-                  >
-                    <Trash2 size={13} />
-                  </button>
-                </div>
-                <StakeholderIdentity stakeholder={stakeholder} contactsEnabled={contactsEnabled} />
-                <div className="mt-2.5 flex items-center gap-1.5">
-                  {stakeholder.role ? <Pip>{stakeholder.role}</Pip> : null}
-                  <span className="ml-auto">
-                    <StakeholderLastContact
-                      stakeholder={stakeholder}
-                      emailId={
-                        stakeholder.source_resource_id === null
-                          ? null
-                          : (emailByResourceId.get(stakeholder.source_resource_id) ?? null)
-                      }
-                    />
-                  </span>
-                </div>
-                {stakeholder.relationship ? (
-                  <p className="mt-2 border-t border-ink-border pt-2 text-meta leading-5 text-ink-fg-2">
-                    {stakeholder.relationship}
-                  </p>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        ) : (
-          <EmptyState
-            icon={<Users size={22} />}
-            title={t('matters.context.noStakeholdersTitle')}
-            hint={t('matters.context.noStakeholdersHint')}
-          />
-        )}
+        {/* S2 —— 核心 / 其他两组 + 组内拖拽重排 + 换组按钮（见 MatterStakeholderSection
+            的文件头：为什么从 grid 改单列、为什么换组不是跨组拖）。卡片内容仍由这里提供，
+            那几个子组件（StakeholderIdentity / StakeholderLastContact）长在本文件。 */}
+        <MatterStakeholderSection
+          matter={matter}
+          stakeholders={stakeholders}
+          resources={resources}
+          onEdit={setEditor}
+          onRemove={(stakeholderId) => remove.mutate(stakeholderId)}
+          onChanged={onChanged}
+          renderBody={(stakeholder) => (
+            <div
+              className={
+                stakeholder.is_waiting_on ? 'rounded-[var(--r-ctl)] bg-warn/[0.06] p-1.5' : ''
+              }
+            >
+              <StakeholderIdentity stakeholder={stakeholder} contactsEnabled={contactsEnabled} />
+              <div className="mt-2.5 flex items-center gap-1.5 pr-24">
+                {stakeholder.role ? <Pip>{stakeholder.role}</Pip> : null}
+                <span className="ml-auto">
+                  <StakeholderLastContact
+                    stakeholder={stakeholder}
+                    emailId={
+                      stakeholder.source_resource_id === null
+                        ? null
+                        : (emailByResourceId.get(stakeholder.source_resource_id) ?? null)
+                    }
+                  />
+                </span>
+              </div>
+              {stakeholder.relationship ? (
+                <p className="mt-2 border-t border-ink-border pt-2 text-meta leading-5 text-ink-fg-2">
+                  {stakeholder.relationship}
+                </p>
+              ) : null}
+            </div>
+          )}
+        />
       </section>
 
       {/* 「置顶资料」独立分区（原只存在于右侧上下文栏）。置顶决定 Agent 每轮带哪几份摘录，

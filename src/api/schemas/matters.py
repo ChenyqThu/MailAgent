@@ -8,7 +8,9 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from src.matters.models import (
     MATTER_RESOURCE_SUMMARY_MAX_CHARS,
+    MATTER_STAKEHOLDER_REORDER_MAX,
     MATTER_SUGGESTION_BULK_MAX,
+    MatterStakeholderTier,
     MatterSuggestionBulkAction,
 )
 
@@ -180,6 +182,9 @@ class MatterStakeholderCreateRequest(StrictModel):
     role: str | None = None
     relationship: str | None = None
     is_waiting_on: bool = False
+    #: v60 —— 在**这件事**里的重要度。缺省 `normal`（核心组是给 owner 一眼扫的短名单，
+    #: 默认进核心会让它当场失去意义）。`sort_order` **不接受逐条传**，见 reorder 端点。
+    tier: MatterStakeholderTier | None = None
     last_contact_at: int | None = None
     source_resource_id: int | None = None
     mutation: MutationEnvelope
@@ -192,8 +197,30 @@ class MatterStakeholderPatchRequest(StrictModel):
     role: str | None = None
     relationship: str | None = None
     is_waiting_on: bool | None = None
+    tier: MatterStakeholderTier | None = None
     last_contact_at: int | None = None
     source_resource_id: int | None = None
+    mutation: MutationEnvelope
+
+
+class MatterStakeholderReorderItem(StrictModel):
+    id: int = Field(ge=1)
+    sort_order: int = Field(ge=0)
+    #: 省略 = 不改档（纯组内重排）；给了 = 顺带换组（跨组拖拽）。
+    tier: MatterStakeholderTier | None = None
+
+
+class MatterStakeholderReorderRequest(StrictModel):
+    """整批重排 / 换组。
+
+    🔴 一次拖拽同时改多行（被拖的那行 + 让位的所有行）。逐条 PATCH 意味着一次拖拽发
+    N 个带 `expected_version` 的请求，第 2 个必定撞版本冲突 —— 那正是 0812 dogfood P0
+    「不管点哪个都是 matter version changed」的形状。整批一个事务、一次 CAS。
+    """
+
+    items: list[MatterStakeholderReorderItem] = Field(
+        min_length=1, max_length=MATTER_STAKEHOLDER_REORDER_MAX
+    )
     mutation: MutationEnvelope
 
 

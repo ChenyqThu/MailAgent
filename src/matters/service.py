@@ -35,6 +35,8 @@ from .models import (
     MATTER_RESOURCE_SUMMARY_MAX_CHARS,
     MATTER_RESOURCE_SUMMARY_SOURCES,
     MATTER_STATUSES,
+    MATTER_STAKEHOLDER_DEFAULT_TIER,
+    MATTER_STAKEHOLDER_TIERS,
     MATTER_SUGGESTION_BULK_ACTIONS,
     MATTER_SUGGESTION_BULK_MAX,
     MATTER_UPDATE_REVIEW_STATUSES,
@@ -2484,9 +2486,87 @@ class MatterService:
                 clauses.append("is_waiting_on=1")
             if not include_deleted:
                 clauses.append("deleted_at IS NULL")
+            # v60 排序：核心组在前，组内按用户拖出来的 sort_order，id 兜底保稳定。
+            # 🔴 `sort_order` 是**用户自定义显示顺序**，读侧不得再 `sorted()` 覆盖
+            #    （同 `SYNC_FOLDERS` 数组序那条纪律）。前端也不许自己重排。
             return [dict(row) for row in conn.execute(
-                f"SELECT * FROM matter_stakeholder WHERE {' AND '.join(clauses)} ORDER BY id", params
+                f"SELECT * FROM matter_stakeholder WHERE {' AND '.join(clauses)} "
+                "ORDER BY (tier='core') DESC, sort_order, id", params
             )]
+
+    def reorder_stakeholders(
+        self, public_id: str, items: Sequence[Mapping[str, Any]], *,
+        expected_version: int, idempotency_key: str, source: str,
+        actor: Actor = Actor(), reason: str | None = None,
+        reverses_event_id: int | None = None,
+    ) -> dict[str, Any]:
+        """整批重排 / 换组（v60）——**一次拖拽 = 一个事务 = 一次 CAS**。
+
+        🔴 为什么不是逐条 PATCH：一次拖拽同时改多行（被拖的那行 + 让位的所有行）。
+        逐条发请求意味着第 2 个必定撞版本冲突 —— 那正是 `matterMutation.ts` 文件头
+        描述的 0812 dogfood P0 的形状（「不管点哪个都是 matter version changed」）。
+
+        `items` 是**全量目标顺序**的一段，每项 `{id, tier?, sort_order}`。
+        没被列到的干系人不动（前端只发受影响的那些也成立）。
+        """
+        now = self.clock_ms()
+        dedupe_key = self._dedupe(idempotency_key)
+        with self._transaction() as conn:
+            replay = self._replay(conn, dedupe_key, "stakeholder_updated")
+            if replay:
+                return replay
+            matter = self._require_matter(conn, public_id)
+            rows = {
+                int(row["id"]): dict(row)
+                for row in conn.execute(
+                    "SELECT * FROM matter_stakeholder WHERE matter_id=? AND deleted_at IS NULL",
+                    (matter["id"],),
+                )
+            }
+            touched: list[int] = []
+            for entry in items:
+                if not isinstance(entry, Mapping):
+                    raise MatterError("E_INVALID_ARG", "each reorder item must be an object")
+                raw_id = entry.get("id")
+                if isinstance(raw_id, bool) or not isinstance(raw_id, int):
+                    raise MatterError("E_INVALID_ARG", "reorder item id must be an integer")
+                if raw_id not in rows:
+                    # 🔴 不属于本事项 / 已软删 → 硬拒整批。放过它等于让调用方以为整批成了，
+                    #    而实际顺序与它手里那份不一致 —— 下一次拖拽会基于错的基线再算一次。
+                    raise MatterError(
+                        "E_CHILD_NOT_FOUND", f"stakeholder {raw_id} not found in this matter"
+                    )
+                raw_order = entry.get("sort_order")
+                if isinstance(raw_order, bool) or not isinstance(raw_order, int):
+                    raise MatterError(
+                        "E_INVALID_ARG", "reorder item sort_order must be an integer"
+                    )
+                changes: dict[str, Any] = {"sort_order": int(raw_order), "updated_at": now}
+                if "tier" in entry:
+                    changes["tier"] = self._require_tier(entry.get("tier"))
+                assignments = ", ".join(f"{key}=?" for key in changes)
+                conn.execute(
+                    f"UPDATE matter_stakeholder SET {assignments} WHERE id=?",
+                    (*changes.values(), raw_id),
+                )
+                touched.append(raw_id)
+            self._cas_update_rebase(
+                conn,
+                matter,
+                expected_version,
+                {"updated_at": now, "last_activity_at": now},
+                # 重排只碰这些干系人行 —— 提案结构上碰不到干系人，故不作废任何提案；
+                # stale base 也只在**同一批行**被并发改过时才算真冲突（auto-rebase）。
+                scope=scope_from_stakeholders(touched),
+            )
+            self._append_event(
+                conn, matter_id=matter["id"], kind="stakeholder_updated", actor=actor,
+                source=source, dedupe_key=dedupe_key,
+                payload={"reordered_stakeholder_ids": touched},
+                happened_at=now, reason=reason, reverses_event_id=reverses_event_id,
+            )
+            refreshed = self.repository.get_matter_by_id(conn, matter["id"])
+            return {"matter": refreshed, "reordered": touched}
 
     # ---- W-C 全局干系人库（dogfood 轮 2）----------------------------------
     # 基本信息（姓名/邮箱/组织）全局一份（v54 起 = 通讯录 contact/contact_email，
@@ -2603,6 +2683,10 @@ class MatterService:
                     "display_name": self._optional_text(data.get("display_name")), "email_normalized": email,
                     "organization": self._optional_text(data.get("organization")), "role": self._optional_text(data.get("role")),
                     "relationship": self._optional_text(data.get("relationship")), "is_waiting_on": 1 if data.get("is_waiting_on") else 0,
+                    "tier": self._require_tier(data.get("tier")),
+                    # 新人排到**同组末尾**：拿本事项当前最大 sort_order + 1。跨组统一编号
+                    # （不 per-tier 重置）——「拖到另一组」只需改 tier 一列，不必重排整组。
+                    "sort_order": self._next_stakeholder_sort_order(conn, matter["id"]),
                     "last_contact_at": self._require_epoch_ms("last_contact_at", data.get("last_contact_at")),
                     "source_resource_id": data.get("source_resource_id"),
                     "created_at": now, "updated_at": now,
@@ -2634,8 +2718,13 @@ class MatterService:
                         organization=self._optional_text(data.get("organization")),
                     )
             else:
-                allowed = {"display_name", "organization", "role", "relationship", "is_waiting_on", "last_contact_at", "source_resource_id", "deleted_at"}
+                # 🔴 `sort_order` **有意不在**逐条白名单里：一次拖拽会同时改多行（被拖的那行
+                # + 让位的所有行），逐条 PATCH 意味着一次拖拽发 N 个带 expectedVersion 的
+                # 请求，第 2 个必定撞版本冲突。整批走 `reorder_stakeholders`。
+                allowed = {"display_name", "organization", "role", "relationship", "is_waiting_on", "tier", "last_contact_at", "source_resource_id", "deleted_at"}
                 changes = {key: value for key, value in data.items() if key in allowed}
+                if "tier" in changes:
+                    changes["tier"] = self._require_tier(changes["tier"])
                 if "last_contact_at" in changes:
                     changes["last_contact_at"] = self._require_epoch_ms(
                         "last_contact_at", changes["last_contact_at"]
@@ -4837,6 +4926,33 @@ class MatterService:
             return None
         text = str(value).strip()
         return text or None
+
+    @staticmethod
+    def _require_tier(value: Any) -> str:
+        """干系人档位校验（v60）。None / 缺省 → `normal`。
+
+        🔴 非法值**报错**而不是静默落 `normal`：这个字段决定「折不折叠」，
+        静默降档会让 owner 以为标了核心、结果那个人藏在折叠区里。
+        """
+        if value is None:
+            return str(MATTER_STAKEHOLDER_DEFAULT_TIER)
+        tier = str(value).strip()
+        if tier not in MATTER_STAKEHOLDER_TIERS:
+            raise MatterError(
+                "E_INVALID_ARG",
+                f"tier must be one of {', '.join(MATTER_STAKEHOLDER_TIERS)}",
+            )
+        return tier
+
+    @staticmethod
+    def _next_stakeholder_sort_order(conn: sqlite3.Connection, matter_id: int) -> int:
+        """本事项当前最大 sort_order + 1（空表 → 0）。含已软删的行，避免删一个再加一个时撞号。"""
+        row = conn.execute(
+            "SELECT MAX(sort_order) AS top FROM matter_stakeholder WHERE matter_id=?",
+            (matter_id,),
+        ).fetchone()
+        top = row["top"] if row and row["top"] is not None else None
+        return 0 if top is None else int(top) + 1
 
     @staticmethod
     def _dump(value: Any) -> str:

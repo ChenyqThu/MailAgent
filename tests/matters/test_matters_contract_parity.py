@@ -25,6 +25,7 @@ ENUMS = (
     models.MatterUpdateReviewStatus,
     models.MatterActorKind,
     models.MatterResourceSummarySource,
+    models.MatterStakeholderTier,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -38,6 +39,7 @@ TS_ARRAYS = {
     "MATTER_STATUSES": models.MATTER_STATUSES,
     "MATTER_HEALTH_VALUES": models.MATTER_HEALTH_VALUES,
     "MATTER_PRIORITIES": models.MATTER_PRIORITIES,
+    "MATTER_STAKEHOLDER_TIERS": models.MATTER_STAKEHOLDER_TIERS,
     "MATTER_ITEM_KINDS": models.MATTER_ITEM_KINDS,
     "MATTER_ITEM_STATUSES": models.MATTER_ITEM_STATUSES,
     "MATTER_RESOURCE_KINDS": models.MATTER_RESOURCE_KINDS,
@@ -91,6 +93,7 @@ def test_migration_ddl_uses_canonical_sql_check_helper():
     assert "sql_check_clause(MatterStatus)" in source
     assert "sql_check_clause(MatterItemKind)" in source
     assert "sql_check_clause(MatterUpdateReviewStatus)" in source
+    assert "sql_check_clause(MatterStakeholderTier)" in source
 
 
 def test_python_values_equal_sql_check_value_sets():

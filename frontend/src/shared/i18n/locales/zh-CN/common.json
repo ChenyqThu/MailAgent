@@ -797,14 +797,17 @@
       "placeholder": "给 MailAgent 发消息…（@ 引用邮件，/ 命令）"
     },
     "mention": {
-      "loading": "搜索邮件中…",
+      "loading": "搜索中…",
       "empty": "没有匹配的邮件",
       "emails": "邮件",
       "agents": "Agent",
       "agentsEmpty": "没有已启用的自定义 Agent",
-      "noMatches": "没有匹配的邮件或 Agent",
+      "matters": "事项",
+      "mattersEmpty": "没有匹配的事项",
+      "noMatches": "没有匹配的结果",
       "emailChip": "已引用邮件：{label}",
-      "agentChip": "已提及 Agent：{label}"
+      "agentChip": "已提及 Agent：{label}",
+      "matterChip": "已提及事项：{label}"
     },
     "slash": {
       "empty": "没有匹配的命令"
@@ -4167,7 +4170,15 @@
       "notExecutable": "v1 暂不可执行",
       "unknown": "未知块 · {type}",
       "emailCount": "{total} 封",
-      "flaggedCount": "{flagged} 重点"
+      "flaggedCount": "{flagged} 重点",
+      "matter": {
+        "open": "打开事项 {id}",
+        "due": "{value}到期",
+        "progress": "完成标志 {done}/{total}",
+        "waitingOn": "在等 {names}",
+        "nextAction": "下一步 · {title}",
+        "signals": "{count} 条关注信号"
+      }
     },
     "card": {
       "enabled": "已启用",
@@ -5264,6 +5275,13 @@
       "noStakeholdersHint": "手动添加，后续 Agent 可建议。",
       "addStakeholder": "添加干系人",
       "editStakeholder": "编辑干系人",
+      "tierCore": "核心干系人",
+      "tierOthers": "其他干系人",
+      "tierCoreEmpty": "还没标核心干系人。把决定这件事走向的人标为核心，其余默认收起。",
+      "promoteStakeholder": "设为核心干系人",
+      "demoteStakeholder": "移出核心干系人",
+      "unnamed": "未命名",
+      "reorder": {"grip": "拖动排序：{{label}}，第 {{pos}} 位（共 {{count}} 位）", "grabbed": "已抓起 {{label}}，第 {{pos}} 位（共 {{count}} 位）。用方向键移动，空格放下，Esc 取消。", "dropped": "{{label}} 已放到第 {{pos}} 位（共 {{count}} 位）。", "moved": "{{label}} 已移到第 {{pos}} 位（共 {{count}} 位）。", "cancelled": "已取消排序，{{label}} 回到原位。"},
       "lastContact": "最近联系",
       "pinnedResources": "置顶资料",
       "linkedResources": "关联资料",

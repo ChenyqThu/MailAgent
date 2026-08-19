@@ -461,6 +461,17 @@ export function createMattersApi(baseUrl: string): MattersApi {
       )
     },
 
+    reorderStakeholders(matterId, items, options): Promise<MatterMutationResult> {
+      // 🔴 一次拖拽 = 一个请求。逐条 patchStakeholder 的话第 2 个必撞 E_VERSION_CONFLICT
+      //    （拖一行会同时改被拖的那行 + 让位的所有行）。
+      return request(
+        baseUrl,
+        'PUT',
+        `/matters/${segment(matterId)}/stakeholders/order`,
+        mutationRequest(options, { items })
+      )
+    },
+
     // W-C 全局干系人库两个只读端点已随通讯录 WP3 退役（picker 改读 contactsApi.list）。
 
     lookupResourceLinks(provider, keys): Promise<MatterResourceLookupResponse> {

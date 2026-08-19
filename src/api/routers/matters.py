@@ -24,6 +24,7 @@ from src.api.schemas.matters import (
     MatterResourcePatchRequest,
     MatterStakeholderCreateRequest,
     MatterStakeholderPatchRequest,
+    MatterStakeholderReorderRequest,
     MatterSuggestionBulkRequest,
     MatterUpdateAcceptRequest,
     MatterUpdateRejectRequest,
@@ -917,6 +918,26 @@ async def patch_stakeholder(
     service: MatterService = Depends(get_matter_service),
 ):
     result = _call(service.update_stakeholder, matter_id, stakeholder_id, body.model_dump(exclude={"mutation"}, exclude_unset=True), **_mutation_args(body.mutation, idempotency_key))
+    return success_envelope(result, request=request)
+
+
+@router.put("/{matter_id}/stakeholders/order")
+async def reorder_stakeholders(
+    matter_id: str, body: MatterStakeholderReorderRequest, request: Request,
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
+    service: MatterService = Depends(get_matter_service),
+):
+    """整批重排 / 换组（v60）。🔴 一次拖拽 = 一个请求 = 一个事务 = 一次 CAS。
+
+    路由**放在** `/{stakeholder_id}` 那几条之前：今天靠 HTTP 方法区分（那几条是
+    PATCH/DELETE/POST，没有 PUT）所以撞不上，但哪天有人加一条 `PUT /{stakeholder_id}`，
+    先注册的这条会先匹配、`order` 就不会被当成 id 去解析（int 解析失败 → 422）。
+    """
+    result = _call(
+        service.reorder_stakeholders, matter_id,
+        [item.model_dump(exclude_none=True) for item in body.items],
+        **_mutation_args(body.mutation, idempotency_key),
+    )
     return success_envelope(result, request=request)
 
 

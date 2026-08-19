@@ -50,6 +50,24 @@ class MatterItemStatus(StrEnum):
     CANCELED = "canceled"
 
 
+class MatterStakeholderTier(StrEnum):
+    """干系人在**这件事**里的重要度（v60）。
+
+    只有两档，有意的：三档以上会让 owner 每次都要想「这算重要还是一般」，而这个字段
+    唯一的消费点是「非核心默认折叠」—— 折叠只需要一条线。
+
+    🔴 与 `sort_order` 是**两个独立维度**：tier 决定分到哪一组，`sort_order` 决定组内
+    先后。合成一个「优先级数字」会让「把人从核心拖到非核心」和「在核心组里往上挪一位」
+    变成同一个操作。
+
+    🔴 这是**在这件事里**的重要度，不是人的全局属性 —— 同一个人在别的事项里可能是路人，
+    所以它长在 `matter_stakeholder` 而不是通讯录 `contact`。
+    """
+
+    CORE = "core"
+    NORMAL = "normal"
+
+
 class MatterResourceKind(StrEnum):
     EMAIL = "email"
     THREAD = "thread"
@@ -211,6 +229,14 @@ MATTER_HEALTH_VALUES = _values(MatterHealth)
 MATTER_PRIORITIES = _values(MatterPriority)
 MATTER_ITEM_KINDS = _values(MatterItemKind)
 MATTER_ITEM_STATUSES = _values(MatterItemStatus)
+MATTER_STAKEHOLDER_TIERS = _values(MatterStakeholderTier)
+#: 一次批量重排最多带多少行。一个事项的干系人上百已经极端；上限存在的意义是挡住
+#: 构造出来的超长列表把单个事务撑爆（同 `MATTER_SUGGESTION_BULK_MAX` 的理由）。
+#: 🔴 单源：REST schema（`src/api/schemas/matters.py`）import 它，不要在那边再写一遍数字。
+MATTER_STAKEHOLDER_REORDER_MAX = 200
+#: 新建干系人的默认档。🔴 拿不准一律 `normal` —— 核心组是给 owner 一眼扫的短名单，
+#: 默认进核心会让它当场失去意义。
+MATTER_STAKEHOLDER_DEFAULT_TIER = MatterStakeholderTier.NORMAL
 MATTER_RESOURCE_KINDS = _values(MatterResourceKind)
 MATTER_RELATION_TYPES = _values(MatterRelationType)
 MATTER_ATTENTION_KINDS = _values(MatterAttentionKind)

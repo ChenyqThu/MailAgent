@@ -19,6 +19,13 @@ export type MatterHealth = (typeof MATTER_HEALTH_VALUES)[number]
 export const MATTER_PRIORITIES = ['p0', 'p1', 'p2', 'p3'] as const
 export type MatterPriority = (typeof MATTER_PRIORITIES)[number]
 
+/** 干系人在**这件事**里的重要度（v60）。两档是有意的 —— 折叠只需要一条线。 */
+export const MATTER_STAKEHOLDER_TIERS = ['core', 'normal'] as const
+export type MatterStakeholderTier = (typeof MATTER_STAKEHOLDER_TIERS)[number]
+/** 🔴 拿不准一律 `normal`：核心组是给 owner 一眼扫的短名单，默认进核心会让它当场失去意义。
+ *  也是**读侧兜底**——旧后端不发 tier 时按它渲染。 */
+export const MATTER_STAKEHOLDER_DEFAULT_TIER: MatterStakeholderTier = 'normal'
+
 export const MATTER_ITEM_KINDS = [
   'action',
   'milestone',
@@ -642,6 +649,12 @@ export interface MatterStakeholder {
   role: string | null
   relationship: string | null
   is_waiting_on: boolean
+  /** v60 —— 在**这件事**里的重要度。`core` 一组常展开，`normal` 一组默认折叠。
+   *  旧后端不发 ⇒ optional（读侧按 `normal` 兜底）。 */
+  tier?: MatterStakeholderTier
+  /** v60 —— 组内显示顺序（用户拖出来的）。
+   *  🔴 读侧**不得** `sorted()` 覆盖服务端顺序（同 `SYNC_FOLDERS` 数组序那条纪律）。 */
+  sort_order?: number
   last_contact_at: number | null
   source_resource_id: number | null
   /** W-C（v52）：全局干系人库关联。null = 无 email（没有全局身份，纯本事项行）。 */
@@ -990,11 +1003,19 @@ export interface MatterStakeholderCreateInput {
   role?: string | null
   relationship?: string | null
   is_waiting_on?: boolean
+  tier?: MatterStakeholderTier
   last_contact_at?: number | null
   source_resource_id?: number | null
 }
 
 export type MatterStakeholderPatchInput = Partial<MatterStakeholderCreateInput>
+
+/** 一次拖拽里被移动的一行。`tier` 省略 = 不换组（纯组内重排）。 */
+export interface MatterStakeholderReorderItem {
+  id: number
+  sort_order: number
+  tier?: MatterStakeholderTier
+}
 
 export interface MattersApi {
   list(options?: MatterListOptions): Promise<MatterListResponse>
@@ -1149,6 +1170,12 @@ export interface MattersApi {
   restoreStakeholder(
     matterId: string,
     stakeholderId: number,
+    options: MatterMutationOptions
+  ): Promise<MatterMutationResult>
+  /** 整批重排 / 换组。🔴 一次拖拽发**一个**请求 —— 逐条 patch 的话第 2 个必撞版本冲突。 */
+  reorderStakeholders(
+    matterId: string,
+    items: readonly MatterStakeholderReorderItem[],
     options: MatterMutationOptions
   ): Promise<MatterMutationResult>
   lookupResourceLinks(provider: string, keys: string[]): Promise<MatterResourceLookupResponse>

@@ -109,6 +109,8 @@ export function DragReorderList({
   flip = true,
   onStateChange,
   messages = DEFAULT_MESSAGES,
+  renderItem,
+  rowClassName,
   className
 }: {
   /** Controlled item order; pair with onReorder. Omit for uncontrolled. */
@@ -119,6 +121,14 @@ export function DragReorderList({
   flip?: boolean
   onStateChange?: (state: ReorderState) => void
   messages?: ReorderMessages
+  /** 行内容的逃生舱（默认渲染 label + meta + 序号）。
+   *
+   *  🔴 只换**内容**，不动 grip、不动 `<li>` 壳、不动交互内核（指针/FLIP/键盘全在壳上）。
+   *  给它是为了让富卡片（如事项干系人：头像 / 角色 / 等待态 / hover 动作）也能拖，
+   *  而不必把基座抄一份。不传 = 与移植版逐字节一致。 */
+  renderItem?: (item: ReorderItem, index: number) => React.ReactNode
+  /** 追加到每行卡片上的类（如富内容需要更大的行内边距）。 */
+  rowClassName?: string
   className?: string
 }): React.ReactElement {
   const [uncontrolled, setUncontrolled] = useState(controlledItems ?? defaultItems)
@@ -382,7 +392,8 @@ export function DragReorderList({
                 <motion.div
                   className={cn(
                     'reorder-card flex items-center gap-2.5 py-2.5 pl-2 pr-3.5 bg-card rounded-xl',
-                    lifted ? 'reorder-card-lifted cursor-grabbing' : 'cursor-grab'
+                    lifted ? 'reorder-card-lifted cursor-grabbing' : 'cursor-grab',
+                    rowClassName
                   )}
                   initial={false}
                   animate={lifted ? { scale: 1.02 } : { scale: 1 }}
@@ -406,20 +417,28 @@ export function DragReorderList({
                   >
                     <GripIcon />
                   </button>
-                  <span className="flex flex-col min-w-0 flex-1">
-                    <span className="text-sm font-medium text-foreground whitespace-nowrap overflow-hidden text-ellipsis">
-                      {item.label}
-                    </span>
-                    {item.meta && (
-                      <span className="text-[0.6875rem] text-muted-foreground/70">{item.meta}</span>
-                    )}
-                  </span>
-                  <span
-                    className="flex-none text-xs font-medium text-muted-foreground/70 tabular-nums"
-                    aria-hidden="true"
-                  >
-                    {index + 1}
-                  </span>
+                  {renderItem ? (
+                    <span className="min-w-0 flex-1">{renderItem(item, index)}</span>
+                  ) : (
+                    <>
+                      <span className="flex flex-col min-w-0 flex-1">
+                        <span className="text-sm font-medium text-foreground whitespace-nowrap overflow-hidden text-ellipsis">
+                          {item.label}
+                        </span>
+                        {item.meta && (
+                          <span className="text-[0.6875rem] text-muted-foreground/70">
+                            {item.meta}
+                          </span>
+                        )}
+                      </span>
+                      <span
+                        className="flex-none text-xs font-medium text-muted-foreground/70 tabular-nums"
+                        aria-hidden="true"
+                      >
+                        {index + 1}
+                      </span>
+                    </>
+                  )}
                 </motion.div>
               </motion.li>
             )
