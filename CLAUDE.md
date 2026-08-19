@@ -178,7 +178,7 @@ tail -f logs/sync.log
 
 一体化 Electron 前端 + 内嵌 CPython 后端 → 单个 macOS `.app`（Windows 侧 2026-08-17 owner 验收通过，已入正式发布轨）。**全部在 `main` 上做**（前端是 `frontend/` 子目录，非独立 repo）。完整 runbook（前置 / 构建 / 装机 / 自动更新 / 故障排查 / Windows 链）→ [`packaging/packaging-release.md`](./docs/reference/packaging/packaging-release.md)。
 
-- **版本 SSoT** = `frontend/package.json` 的 `version`（electron-builder 据此写 Info.plist + 产物名 + 自更新 feed）。已发至 **v2.15.0**。🔴 勿改 package.json 的 `name`（`mailagent-frontend`）——它决定 userData 目录。
+- **版本 SSoT** = `frontend/package.json` 的 `version`（electron-builder 据此写 Info.plist + 产物名 + 自更新 feed）。当前版本以该文件为准，本文**不再抄写**（抄一次就过时一次：2026-08-18 刚把 v1.2.1 更正为 v2.15.0，隔天就到了 2.16.0）。🔴 勿改 package.json 的 `name`（`mailagent-frontend`）——它决定 userData 目录。
 - **发布流程**：bump `version` → 提交 → `git push origin main` → `git tag -a vX.Y.Z` → `git push origin vX.Y.Z` → CI 过测试闸后自动 build 并上传到一个 **draft** release → 🔴 **CI 完成后仍是 draft，必须转正式**（Actions → Promote release，或 `gh release edit vX.Y.Z --draft=false --latest`）。**不要**手动 `gh release create`（会与 CI 撞车）。正式发版的 Release 由 promote-release 自动附加 Windows 安装包 + `latest.yml`。
 - 🔴 **头号坑①**：`frontend/resources/python` 缺失 → afterPack **跳过整个签名** → `.app` 无后端且 codesign FAIL。build 前必确认它在。
 - 🔴 **头号坑② ABI**：`pnpm test` 本身就是 `rebuild:node && vitest run`，**跑一次前端测试就把 ABI 翻回 Node** → 因此 build 前**每一次**都要重新 `pnpm rebuild:electron`（不是一次性动作）。⚠️ `require('better-sqlite3')` **是无效探针**（`.node` 懒加载，ABI 对错都通过）；有效探针是 `process.dlopen` 双向验证，见 runbook。
