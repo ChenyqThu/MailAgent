@@ -142,3 +142,47 @@ rm -f "<DATA_ROOT>/data/db_integrity_failure.json"
 ---
 
 **一句话流程**：`main` 上 bump `frontend/package.json` version → 确认 `resources/python` 在 → `pnpm run build && npx electron-builder --dir --arm64` → 验签 + 验版本 → `ditto` 装 `/Applications` → `git tag vX.Y.Z`。
+
+
+---
+
+## 补充：CLAUDE.md 2026-08-18 下沉的完整原文
+
+> 本节是 `CLAUDE.md`「打包 / 发布」节在 2026-08-18 瘦身时**原样搬入**的全文。
+> 与上文各节**可能有重叠**——重叠无害，遗漏才致命，故不做去重裁剪。
+> 上文未覆盖而本节独有的关键内容：ABI 坑的 `NODE_MODULE_VERSION` 判据与 `dlopen` 有效探针、
+> torn bundle（重叠 ditto+open）、`pnpm build:web`、`requirements.lock.txt`、
+> `promote-release.yml` 转正式流程、Windows `latest.yml` 自更新 feed、`app-update.yml`。
+
+
+一体化 Electron 前端 + 内嵌 CPython 后端 → 单个 macOS `.app`。**全部在 `main` 上做**（前端是 `frontend/` 子目录，非独立 repo/submodule；打包/onboarding/auto-update 已全合入 main，feature 分支已删）。完整 runbook → [`docs/reference/packaging/packaging-release.md`](./docs/reference/packaging/packaging-release.md)。**Windows 侧（2026-08-17 owner 验收通过 → 正式发布轨）**：`frontend/scripts/build-python-venv.ps1` + `.github/workflows/build-win.yml`，要点见 [`architecture/outlook-com-backend.md`](./docs/reference/architecture/outlook-com-backend.md)。🔴 **每次正式发版的 Release 都带 Windows 安装包 + `latest.yml` 自更新 feed**——由 **promote-release.yml 自动附加**（按 tag 找到成功的 build-win run → 下载 artifact → `gh release upload --clobber` → 再转正式）：build-win 自己仍 `--publish never`，与 mac 对同一 tag 的写入**结构性串行**，不存在两个 workflow 抢着创建 release 的竞态；找不到 win 产物或缺 `latest.yml` 即 fail，不会发出「说好带 Windows 包却没带」的 Release。应急手动补传（promote 之外的场合，改第一处版本号即可整行粘贴执行）：
+
+```bash
+TAG=v2.16.0 && RUN=$(gh run list --workflow=build-win.yml --branch "$TAG" --limit 1 --json databaseId --jq '.[0].databaseId') && D=$(mktemp -d) && gh run download "$RUN" -n MailAgent-win-x64 -D "$D" && gh release upload "$TAG" "$D"/*.exe "$D"/latest.yml --clobber && echo "done: $D"
+```
+
+
+- **版本 SSoT** = `frontend/package.json` 的 `version`（electron-builder 据此写 `Info.plist` + 产物名 + auto-update feed `latest-mac.yml`）。semver：`0.1.0`=首个 beta，bug 修复走 patch；功能性内容走 minor。已发至 **v1.2.1**（GitHub Releases published）。**🔴 对外发布流程（CI 驱动，实测 v0.6.3→v0.14.0 每次都这样）= bump `version` → 提交 → `git push origin main` → `git tag -a vX.Y.Z -m "…"` → `git push origin vX.Y.Z`**：CI `.github/workflows/build-mac.yml` 监听 `v*` tag **先过测试闸**（E0 起：`ci-test.yml` pytest 全量 + agent_eval 四道闸 + vitest，经 workflow_call 复用；测试红 = 不产 draft）再自动 build(macos-14 arm64) + `electron-builder --publish always` 把 5 件 feed（latest-mac.yml + zip/dmg + 各自 blockmap）**上传到一个 draft release**，`gh run watch <id> --exit-status` 盯完成（build ~3-4min + 测试闸 ~5min）。**🔴 CI 完成后 release 仍是 draft、`releases/latest` 不会更新 —— 必须转正式：推荐 Actions → Promote release（`promote-release.yml`，输入 tag，自动 edit 转正 + 置 latest + 校验 `releases/latest`==tag，E0 WP4）**；手动 fallback = `gh release edit vX.Y.Z --draft=false --latest --title "MailAgent vX.Y.Z" --notes-file <notes>`，再验 `gh api repos/ChenyqThu/MailAgent/releases/latest --jq .tag_name` == vX.Y.Z。本地 `pnpm build:mac` **仅用于 tag 前 dogfood**，CI 会从 tagged commit 重新构建发布字节。**不要手动 `gh release create`/上传产物**——push tag 已触发 CI 传 draft，手动 create 会与 CI 撞车。**🔴 装机三步 `quit→ditto→open` 必串行单线**——多个 ditto 覆盖 `/Applications/MailAgent.app` 期间被 open 拉起 = torn bundle → dyld `libffmpeg.dylib` missing → SIGABRT（易误判成「启动崩溃/DB 版本 bug」；判据=崩溃 .ips `termination.namespace=DYLD`「Library missing」+ `codesign --verify --deep --strict /Applications/MailAgent.app` 报「sealed resource is missing or invalid」，但 dist 源 app codesign OK ⇒ Release 产物干净、只 /Applications 副本 torn ⇒ `rm -rf`+单次 ditto 重装即修）。**🔴 勿改 package.json `name`（`mailagent-frontend`）**—— 它决定 userData 目录 `~/Library/Application Support/mailagent-frontend/`，改了已装用户数据/`.env` 易主。
+- **前置**（`frontend/` 下，均 gitignored 本地产物）：`node_modules`（`pnpm install`）+ `resources/python`（`bash scripts/build-python-venv.sh`，~425M 可重定位嵌入式 CPython——mem0 epic 引入 onnxruntime/faiss 等本地 embedding 栈后的基线；本机已 provision，换机/新 clone 必先跑）。
+- **构建**：本地装用 `pnpm run build && npx electron-builder --dir --arm64`（只出 `.app`，避开 flaky 的 dmg）；完整 feed 产物（dmg+zip+blockmap+latest-mac.yml）用 `pnpm build:mac`。**🔴 要含远程 web（`mail.chenge.ink/app`）必先 `pnpm build:web`**（出 `out/web` → electron-builder `from: out/web` 打进 `.app/Resources/web` → serve-api 经 `MAILAGENT_SPA_DIR` mount `/app`）；`pnpm run build` **不含** web SPA，漏跑则远程根 `/` 返 `{"detail":"Not Found"}`（`build:mac` 已含 `build:web`，仅 `--dir` 装机路径需手动补 `pnpm build:web &&`）。
+- **🔴 头号坑①（python）**：`resources/python` 缺失 → afterPack（`scripts/afterPack.cjs`）**跳过整个签名** → `.app` 无后端 + `codesign` FAIL。build 前必确认它在。
+- **🔴 头号坑②（ABI，0.2.3 踩过）**：build 前**绝不跑 `pnpm rebuild:node`**（把 better-sqlite3 编成 Node ABI）；electron-builder `npmRebuild:false` **不自动切回 Electron ABI** → 装进 app 的 `better_sqlite3.node` ABI 不匹配 → 所有 SQLite IPC（`email:listEnriched`）崩（renderer 报 `NODE_MODULE_VERSION`、界面全空）+ `probeDbReady` 失败致启动卡 120s。**跑过单测（`pnpm test` 含 rebuild:node）后 build 前必 `pnpm rebuild:electron`** —— 🔴 注意 `pnpm test` 本身就是 `pnpm rebuild:node && vitest run`，所以**任何一次跑完整前端测试都会把 ABI 翻回 Node**；「build 前重跑 rebuild:electron」不是一次性动作，是**每次 build 前都要确认**（2026-07-24 v1.19.0 dogfood 再次踩中：第一次 build 前做了，中途为验证另一条 lane 又跑了 `pnpm test`，第二次 build 前漏做）。
+
+🔴 **验证方法必须真的触发原生加载** —— 旧记的 `electron -e "require('better-sqlite3')"` **是无效探针**：better-sqlite3 的 `.node` 是**懒加载**的，`require()` 成功时 `require.cache` 里根本没有 `.node`（实测），故该命令**无论 ABI 对错都通过**，给的是虚假安全感（这正是本坑反复出现的原因）。有效探针二选一：
+
+```bash
+# ① 源树：真的实例化一个 Database（会触发 dlopen）
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "new (require('better-sqlite3'))(':memory:')"
+
+# ② 🔴 包内 / 装机副本（真正该验的那份 —— 源树对不代表打包带对）
+N="/Applications/MailAgent.app/Contents/Resources/app.asar.unpacked/node_modules/better-sqlite3/build/Release/better_sqlite3.node"
+ELECTRON_RUN_AS_NODE=1 ./node_modules/.bin/electron -e "process.dlopen({exports:{}}, '$N')"   # 成功 = Electron ABI
+node -e "process.dlopen({exports:{}}, '$N')"                                                   # 必须失败 = 不是 Node ABI
+```
+
+双向都验（electron 成功 **且** node 失败）才算数：只验一边分不清「ABI 对」与「探针没生效」。
+- **验证**（每次 build 后）：`codesign --verify --deep --strict <app>` 必 OK + `Info.plist` 版本号对 + `Resources/python/bin/python3.11` 在。
+- **装机/升级**：退出旧 app → `ditto dist/mac-arm64/MailAgent.app /Applications/` → open。userData 跨重装保留 → 升级**跳过 onboarding**（detect `'configured'`）+ 后端启动自动 DB 迁移。用 `.app` 时 pm2 `mail-sync` 必须停（防双写）；davmail 用户 `davmail-poc` 留 pm2（EWS 桥，不打进 app）。
+- **改 Python 后端**后：必先 `bash frontend/scripts/build-python-venv.sh` 重 provision 才进包；只改前端 TS/CSS 不用。**改 Python 依赖（requirements.txt / pyproject extras）必须重新生成 `requirements.lock.txt`**——E0 WP5 起 provision 只认 lock（108 包全 `==` pin，保打包再现性），漏生成 = 依赖改动不进包；生成方法见 lock 文件头注释。
+- **自动更新**自 v1.0.0（P6）上线：Developer ID 签名 + 公证 + `AUTO_UPDATE_ENABLED` **packaged 默认开**（`readMasterFlag()` = `!is.dev`；`=0` 应急回退，仍保留检测提醒）。CI 全量 build 产 `latest-mac.yml` feed，正式 release 装机后自动检测/下载/安装。**🔴 例外：本地 `electron-builder --dir` dogfood 包不含 `app-update.yml`（走 ENOENT → `markUpdaterUnavailable`）+ 通常未公证 → 无法自更新、需手动替换，且装了 --dir 包 = 暂时脱离自更新轨道，需再装一次正式 CI/`build:mac` 包才恢复**。P6 见 [`docs/reference/packaging/05-auto-update-handoff.md`](./docs/reference/packaging/05-auto-update-handoff.md)。
+
