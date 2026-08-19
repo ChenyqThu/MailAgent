@@ -2278,6 +2278,33 @@ body:not([data-batch-mode='true']) .email-row .cb {
   box-shadow: var(--popmenu-shadow-behind);
 }
 
+/* ============ DragReorderList (ui/DragReorderList.tsx) ============
+ * 移植自 lab.moumen.dev 的 drag-to-reorder-list (registry item 原源码)。
+ * 原实现把 rest/lifted 两档 boxShadow 写在 motion animate() 内联值里 (黑色
+ * rgba, 亮色调的值暗色下等于没有) —— 落到这里的变量档做双主题, 过渡时长/
+ * 曲线与组件内 LIFT 常量 (0.16s / [0.22,1,0.36,1]) 保持一致; scale 仍由
+ * motion animate()。阴影几何逐字取自原实现 (亮色档), 暗色沿用同一组
+ * offset/blur/spread 只抬 alpha (popmenu 同款手法)。 */
+:root {
+  --reorder-shadow-rest:
+    0 0 0 1px rgb(0 0 0 / 0.45), 0 1px 2px -1px rgb(0 0 0 / 0.4),
+    0 2px 4px 0 rgb(0 0 0 / 0.3);
+  --reorder-shadow-lift: 0 0 0 1px rgb(0 0 0 / 0.5), 0 12px 28px -10px rgb(0 0 0 / 0.6);
+}
+:root[data-theme='light'] {
+  --reorder-shadow-rest:
+    0 0 0 1px rgb(0 0 0 / 0.06), 0 1px 2px -1px rgb(0 0 0 / 0.06),
+    0 2px 4px 0 rgb(0 0 0 / 0.04);
+  --reorder-shadow-lift: 0 0 0 1px rgb(0 0 0 / 0.06), 0 12px 28px -10px rgb(0 0 0 / 0.28);
+}
+.reorder-card {
+  box-shadow: var(--reorder-shadow-rest);
+  transition: box-shadow 0.16s cubic-bezier(0.22, 1, 0.36, 1);
+}
+.reorder-card-lifted {
+  box-shadow: var(--reorder-shadow-lift);
+}
+
 /* Filter button — quiet by default, loud when a filter narrows the view.
  * Two-layer treatment: accent surface tint for the mode + red badge dot
  * for the alert (different roles, different colors). */
