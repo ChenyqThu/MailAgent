@@ -1,4 +1,7 @@
-// 干系人分组与重排 payload 的纯逻辑（S2，v60）。
+// 干系人的分组与重排 payload —— **业务映射**（S2，v60）。
+//
+// 通用的拖拽落位算法不在这里，在基座 `ui/sortableBoard.ts`（它只认 id 与分组，
+// 干系人的 core/normal 和未来看板的列共用同一套）。这里只负责 tier ⇄ 组的翻译。
 //
 // 与组件分家是为了让它可直测（`tests/components/matters/matterStakeholderTier.test.ts`），
 // 也让 `MatterStakeholderSection.tsx` 只导出组件（react-refresh 要求）。
@@ -10,13 +13,18 @@ import type {
 } from '@shared/api/types/matter'
 import { MATTER_STAKEHOLDER_DEFAULT_TIER } from '@shared/api/types/matter'
 
+/** 两个分组的当前顺序（服务端那份，或拖拽期间的乐观草稿）。 */
+export interface StakeholderGroups {
+  core: MatterStakeholder[]
+  normal: MatterStakeholder[]
+}
+
 /** 服务端已按 `(tier='core') DESC, sort_order, id` 排好。
  *  🔴 读侧**不得**再 `sorted()` 覆盖（同 `SYNC_FOLDERS` 数组序那条纪律）——
  *  这里只按 tier 分桶，桶内**保持服务端给的相对顺序**。 */
-export function splitStakeholdersByTier(stakeholders: readonly MatterStakeholder[]): {
-  core: MatterStakeholder[]
-  normal: MatterStakeholder[]
-} {
+export function splitStakeholdersByTier(
+  stakeholders: readonly MatterStakeholder[]
+): StakeholderGroups {
   const core: MatterStakeholder[] = []
   const normal: MatterStakeholder[] = []
   for (const stakeholder of stakeholders) {
