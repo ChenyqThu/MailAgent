@@ -12,19 +12,19 @@
 // 一坨屎」）。dnd-kit 是这块的事实标准。
 //
 // 本组件是 **headless-ish** 的：拖拽机制（sensors / 落位 / overlay / a11y 播报）在这里，
-// **卡片长什么样、组标题长什么样、grid 几列，全由调用方渲染**。落位算法单独在
-// `boardOrder.ts` 并直测。
+// **卡片长什么样、组标题长什么样、grid 几列，全由调用方渲染**。两块最容易出错、也最难
+// 靠渲染测试摸到的逻辑各自单独成文并直测：落位算法在 `boardOrder.ts`，命中判定在
+// `boardCollision.ts`（为什么不能用 closestCenter 见那里）。
 //
 // 折叠组：给某组传 `collapsed`，它的标题就成为一个 droppable —— 拖着卡悬上去会触发
 // `onRequestExpand`，调用方展开后即可拖进组内定位。数据不会因为悬停而变。
 
-import { useMemo, useRef, useState, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import {
   DndContext,
   DragOverlay,
   KeyboardSensor,
   PointerSensor,
-  closestCenter,
   useDroppable,
   useSensor,
   useSensors,
@@ -43,6 +43,7 @@ import { CSS } from '@dnd-kit/utilities'
 
 import { cn } from '@shared/lib/cn'
 
+import { boardCollisionDetection } from './boardCollision'
 import {
   applyBoardDrag,
   groupDroppableId,
@@ -68,8 +69,18 @@ export interface SortableBoardProps<T> {
   getItemId(item: T): string
   /** 拖拽**落下**时的最终顺序。与拖起前一致时不会调用（拖起又放回是常态）。 */
   onReorder(order: SortableBoardOrder): void
-  /** 拖拽**进行中**的乐观顺序 —— 给了它，跨组时卡会立刻出现在新组里。 */
+  /** 乐观顺序变了 —— 拖拽进行中每次落点变化都会调，落下后**继续持有**那份顺序
+   *  （见下方 `finish`），直到 props 追上或写入失败才回 null。 */
   onDraftChange?(order: SortableBoardOrder | null): void
+  /**
+   * 写入失败的信号：**每次** `onReorder` 提交失败就把这个数递增（值本身无意义，
+   * 只看「变没变」）。收到变化即丢弃乐观顺序、回落到 props。
+   *
+   * 🔴 必须接：落下后本组件持有乐观顺序等 props 追上来，而写失败时 props 永远追不上
+   * ⇒ 不给这个信号，UI 会一直显示一个后端并不存在的顺序（刷新才自愈）。
+   * 🔴 不要拿定时器兜底 —— 那只是把「一直错」变成「错几秒」，根因还在。
+   */
+  commitFailedAt?: number
   /** 悬停在某个折叠组的标题上（调用方负责展开）。 */
   onRequestExpand?(groupId: string): void
   /** `handleProps` 必须挂到一个起拖控件上（通常是一颗 grip 按钮）—— 不挂就拖不动。
@@ -100,6 +111,7 @@ export function SortableBoard<T>({
   getItemId,
   onReorder,
   onDraftChange,
+  commitFailedAt,
   onRequestExpand,
   renderItem,
   renderOverlay,
@@ -109,9 +121,10 @@ export function SortableBoard<T>({
   announcements
 }: SortableBoardProps<T>): React.ReactElement {
   const [activeId, setActiveId] = useState<string | null>(null)
-  /** 拖拽期间的乐观顺序；null = 用 props 那份。 */
+  /** 乐观顺序；null = 用 props 那份。落下后**不清空**（见 `finish`）。 */
   const [draft, setDraft] = useState<SortableBoardOrder | null>(null)
   const startedRef = useRef<SortableBoardOrder | null>(null)
+  const lastFailureRef = useRef(commitFailedAt)
 
   const itemById = useMemo(() => {
     const index = new Map<string, T>()
@@ -150,6 +163,27 @@ export function SortableBoard<T>({
     onDraftChange?.(next)
   }
 
+  // 交还控制权：props 追上乐观顺序了，draft 就没用了。
+  //
+  // 🔴 这个 effect 是「落下先弹回原位、几百毫秒后才跳到新位」的解药的**另一半**。
+  // 落下那一刻清 draft（原实现）⇒ 那一帧渲染的还是服务端旧顺序 ⇒ 卡片弹回去，等
+  // mutation 回来才跳到新位。所以 `finish` 保留 draft，由这里在 props 真的变成新
+  // 顺序之后才放手 —— 中间没有任何一帧是旧顺序。
+  useEffect(() => {
+    if (draft == null || activeId != null) return
+    if (!sameBoardOrder(propsOrder, draft)) return
+    setDraft(null)
+    onDraftChange?.(null)
+  }, [propsOrder, draft, activeId, onDraftChange])
+
+  // 写入失败 ⇒ 回滚。props 永远追不上时上面那个 effect 不会触发，只能靠调用方给信号。
+  useEffect(() => {
+    if (commitFailedAt === lastFailureRef.current) return
+    lastFailureRef.current = commitFailedAt
+    setDraft(null)
+    onDraftChange?.(null)
+  }, [commitFailedAt, onDraftChange])
+
   const onDragStart = (event: DragStartEvent): void => {
     startedRef.current = propsOrder
     setActiveId(String(event.active.id))
@@ -167,10 +201,18 @@ export function SortableBoard<T>({
 
   const finish = (next: SortableBoardOrder | null): void => {
     setActiveId(null)
-    pushDraft(null)
     const started = startedRef.current
     startedRef.current = null
-    if (next && started && !sameBoardOrder(next, started)) onReorder(next)
+    if (next && started && !sameBoardOrder(next, started)) {
+      // 🔴 **保留**乐观顺序，别在这里 `pushDraft(null)`：props 要等 mutation 回来才更新，
+      // 清掉的那一帧渲染的是服务端旧顺序 = 卡片当场弹回原位。交还控制权的时机在上面
+      // 那个 effect（props 追上）与失败回滚 effect（写挂了）。
+      pushDraft(next)
+      onReorder(next)
+    } else {
+      // 拖起又放回原位 / 取消：没有待落地的写入，直接还给 props。
+      pushDraft(null)
+    }
   }
 
   const activeItem = activeId == null ? null : (itemById.get(activeId) ?? null)
@@ -178,7 +220,7 @@ export function SortableBoard<T>({
   return (
     <DndContext
       sensors={sensors}
-      collisionDetection={closestCenter}
+      collisionDetection={boardCollisionDetection}
       onDragStart={onDragStart}
       onDragOver={onDragOver}
       onDragEnd={(event: DragEndEvent) => finish(applyBoardDrag(draft ?? propsOrder, event))}
@@ -197,7 +239,9 @@ export function SortableBoard<T>({
           gridClassName={gridClassName}
         />
       ))}
-      <DragOverlay>
+      {/* 落下的收尾动画。默认 250ms 偏拖沓；180ms + decelerate 曲线是 mockup 验收过的手感。
+          它把 overlay 收回**卡当前所在的格子** —— 乐观顺序保留住了，那个格子就是新位置。 */}
+      <DragOverlay dropAnimation={{ duration: 180, easing: 'cubic-bezier(0.2, 0, 0, 1)' }}>
         {activeItem
           ? (renderOverlay ?? ((item: T) => renderItem(item, { dragging: true, handleProps: {} })))(
               activeItem

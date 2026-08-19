@@ -32,8 +32,8 @@ PROPOSAL_TOUCHABLE_FIELDS = frozenset(
         "due_at",
         "waiting_context",
         "current_summary",
-        # S3（08-18）：核心目标与完成标志进了提案面。🔴 它们**必须**在这里出现 ——
-        # 少一个就等于「owner 手改了核心目标，而 Agent 那份带旧文案的提案不算 stale」，
+        # S3（08-18）：背景与目标、完成标志进了提案面。🔴 它们**必须**在这里出现 ——
+        # 少一个就等于「owner 手改了背景与目标，而 Agent 那份带旧文案的提案不算 stale」，
         # accept 时静默覆盖 owner 刚写的新值。这正是本文件头说的那种「放过一次真冲突」。
         "description",
         "goal_checks",

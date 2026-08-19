@@ -399,11 +399,9 @@ function ChangeRow({
             // 这里只做「接受 / 不接受」的判断）。
             <GoalChecksDiff before={change.before} after={change.after} />
           ) : change.kind === 'field' && field === 'description' ? (
-            // S3 —— 核心目标是长文本：挤进一行读不了，单行 input 也编辑不了。
+            // S3 —— 背景与目标是长文本：挤进一行读不了，单行 input 也编辑不了。
             <div className="mt-2 space-y-2 text-body">
-              <div className="text-aux text-ink-fg-3">
-                {t('matters.eventField.description')}
-              </div>
+              <div className="text-aux text-ink-fg-3">{t('matters.eventField.description')}</div>
               <p className="whitespace-pre-wrap rounded bg-ink-3 p-2 text-ink-fg-2">
                 {String(change.before ?? '—')}
               </p>
@@ -538,7 +536,13 @@ function NewResourceCard({
 }
 
 /** S3 —— 完成标志提案的可读 diff（新增 / 删除 / 勾选翻转），判据是文本不是下标。 */
-function GoalChecksDiff({ before, after }: { before: unknown; after: unknown }): React.ReactElement {
+function GoalChecksDiff({
+  before,
+  after
+}: {
+  before: unknown
+  after: unknown
+}): React.ReactElement {
   const { t } = useTranslation()
   const diff = diffGoalChecks(before, after)
   const rows = [

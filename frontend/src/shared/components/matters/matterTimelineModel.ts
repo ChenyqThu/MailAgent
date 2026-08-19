@@ -202,9 +202,9 @@ const AUDIT_KINDS: ReadonlySet<string> = new Set([
 /**
  * `matter_updated` 触及这些字段才算业务变化。
  *
- * 比 PRD 给的清单多三个：`description`（核心目标）/ `waiting_context`（等待原因）/
+ * 比 PRD 给的清单多三个：`description`（背景与目标）/ `waiting_context`（等待原因）/
  * `goal_checks`（完成标志）—— 它们和 status/priority 一样长在 StateCard 上、一样是
- * 「事项现在怎么回事」的一部分；把改核心目标算成操作记录会把真业务变更藏起来。
+ * 「事项现在怎么回事」的一部分；把改背景与目标算成操作记录会把真业务变更藏起来。
  * 反过来 `tags` / `agent_*` / `schedule_json` / `next_attention_at` / `attention_reason`
  * 是配置，留在审计档。
  */
@@ -917,11 +917,7 @@ export function narrateTimelineGroup(group: TimelineGroup, t: Translate): Timeli
       if (clauses.length > 0) {
         // 分组键带了目标对象身份（`groupTarget`）⇒ 组内必定是同一个条目 / 同一位干系人，
         // 于是可以照单条的句式把标识带上（此前合并句把条目标题整个丢了）。
-        const sentence = wrapClauses(
-          group.head,
-          clauses.join(t('matters.narrative.clauseSep')),
-          t
-        )
+        const sentence = wrapClauses(group.head, clauses.join(t('matters.narrative.clauseSep')), t)
         // 净变化的 to 侧取的就是**最新**那条（`netChanges` 的 tail），所以正文同样取
         // head（组内最新）的 —— 一分钟内把摘要改了三遍，显示的是最后那一版，与净变化
         // 说的是同一件事，不是随便挑了组里的某一条。

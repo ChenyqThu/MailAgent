@@ -314,18 +314,63 @@ describe('MatterDetail — detail editing and rendering', () => {
       )
     )
 
+    // 08-18 owner 推翻裁决 D5：「核心目标」统一改叫「背景与目标」，编辑态收成两个
+    // textarea，保存时序列化成 `## 背景` / `## 目标` 两段存回同一个 description 字段。
     fireEvent.click(screen.getByRole('button', { name: '编辑' }))
-    fireEvent.change(screen.getByRole('textbox', { name: /核心目标/ }), {
-      target: { value: '## 新背景' }
+    fireEvent.change(screen.getByRole('textbox', { name: '背景' }), {
+      target: { value: '三方排期互相不认' }
+    })
+    fireEvent.change(screen.getByRole('textbox', { name: '目标' }), {
+      target: { value: '拿到一份都认的排期' }
     })
     fireEvent.click(screen.getByRole('button', { name: '保存' }))
     await waitFor(() =>
       expect(mattersApi.patch).toHaveBeenCalledWith(
         'MAT-0042',
-        { description: '## 新背景' },
+        { description: '## 背景\n三方排期互相不认\n\n## 目标\n拿到一份都认的排期' },
         { expectedVersion: 3 }
       )
     )
+  })
+
+  test('renders 背景 / 目标 as two labelled blocks', async () => {
+    mattersApi.get.mockResolvedValue({
+      matter: { ...matter(), description: '## 背景\n三方排期互相不认\n\n## 目标\n拿到都认的排期' },
+      items: [],
+      timeline: []
+    })
+
+    renderDetail()
+
+    expect(await screen.findByText('三方排期互相不认')).toBeTruthy()
+    expect(screen.getByText('拿到都认的排期')).toBeTruthy()
+    // 小标题本身是分区标题，不该作为字面量正文漏出来
+    expect(screen.queryByText('## 背景')).toBeNull()
+    expect(screen.getByRole('heading', { name: '背景' })).toBeTruthy()
+    expect(screen.getByRole('heading', { name: '目标' })).toBeTruthy()
+  })
+
+  test('legacy description (no headings) renders unlabelled and prefills 目标 on edit', async () => {
+    // 🔴 老数据没有小标题：读态按单段无标签正文渲染（不硬套两个分区标题），
+    // 编辑态整段预填进「目标」+ 一次性提示，绝不静默重新分类。
+    mattersApi.get.mockResolvedValue({
+      matter: { ...matter(), description: '老的一句话核心目标' },
+      items: [],
+      timeline: []
+    })
+
+    renderDetail()
+
+    expect(await screen.findByText('老的一句话核心目标')).toBeTruthy()
+    expect(screen.queryByRole('heading', { name: '背景' })).toBeNull()
+    expect(screen.queryByRole('heading', { name: '目标' })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: '编辑' }))
+    expect((screen.getByRole('textbox', { name: '目标' }) as HTMLTextAreaElement).value).toBe(
+      '老的一句话核心目标'
+    )
+    expect((screen.getByRole('textbox', { name: '背景' }) as HTMLTextAreaElement).value).toBe('')
+    expect(screen.getByText('原有内容已放入「目标」，可按需把背景部分挪上去。')).toBeTruthy()
   })
 })
 
@@ -422,7 +467,7 @@ describe('MattersWorkspace — resizable matter list', () => {
         </QueryClientProvider>
       )
       // M1（v3 信息架构）：左轨视图列已退役，进列表 = 点「事项」tab（默认落看板）。
-    fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
+      fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
       const separator = screen.getByRole('separator', { name: '调整事项清单宽度' })
       expect(separator.getAttribute('aria-valuenow')).toBe('380')
     } finally {

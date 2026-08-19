@@ -121,7 +121,7 @@ def export_matter_markdown(service: MatterService, public_id: str) -> str:
         lines += [f"## 当前状态{stamp}", "", matter["current_summary"], ""]
 
     if matter["goal"]:
-        lines += ["## 核心目标", "", matter["goal"], ""]
+        lines += ["## 背景与目标", "", matter["goal"], ""]
     checks = matter["goal_checks"] or []
     if checks:
         lines += ["### 完成标志", ""]

@@ -380,9 +380,10 @@ export function createMatterWriteTools(
       name: 'matter_create',
       description:
         'Create a Matter and return the committed state plus an undo descriptor. Fill ' +
-        '`description` (the goal and background: why this is pursued and what success looks ' +
-        'like) with real substance, and set `goal_checks` when the user can state what done ' +
-        'means — both are owner-owned after creation and cannot be patched by agents later.',
+        '`description`（背景与目标）with two parts — 背景: how this came about and what ' +
+        'constrains it; 目标: what must be true when it is done — and set `goal_checks`' +
+        '（完成标志）when the user can state how done is judged. Both are owner-owned after ' +
+        'creation and cannot be patched by agents later.',
       inputSchema: matterCreateSchema,
       risk: 'edit',
       run: async (input, { signal }) => {
@@ -404,10 +405,11 @@ export function createMatterWriteTools(
       name: 'matter_update',
       description:
         'Patch, archive, reopen, trash, or restore a Matter with optimistic concurrency. ' +
-        'Arbitrary JSON and automation bindings are forbidden. Two fields are the owner\'s own ' +
+        "Arbitrary JSON and automation bindings are forbidden. Two fields are the owner's own " +
         'words and ALWAYS raise an approval card no matter how the approval tiers are set: ' +
-        '`description` (the core goal) and `goal_checks` (definition of done) — change them only ' +
-        'when the user has just said the goal or the finish line moved, never to polish wording.',
+        '`description`（背景与目标）and `goal_checks`（完成标志）— change them only when the ' +
+        'user has just said the background, the goal, or the finish line moved, never to polish ' +
+        'wording.',
       inputSchema: matterUpdateSchema,
       risk: 'edit',
       // S3 (08-18) — per-FIELD always-ask. 🔴 Deliberately not "raise matter_update's tier to
@@ -757,10 +759,11 @@ export function createMatterRunTools(
         'omit it otherwise. ' +
         'A fact may cite such a pending resource with sources[].change_id instead of resource_id. ' +
         'Two field changes carry extra weight and the owner reads them closely: ' +
-        'field="description" rewrites the core goal — propose it only when the evidence shows ' +
-        'the goal or scope itself moved, never to reword; field="goal_checks" replaces the whole ' +
+        'field="description" rewrites the 背景与目标 (background and goal, kept as two ' +
+        '`## 背景` / `## 目标` Markdown sections) — propose it only when the evidence shows the ' +
+        'background or the goal itself moved, never to reword; field="goal_checks" replaces the whole ' +
         'definition-of-done checklist (send the full list including existing entries and their ' +
-        'done flags, or the ones you omit are dropped). Both are the owner\'s own words, so a ' +
+        "done flags, or the ones you omit are dropped). Both are the owner's own words, so a " +
         'run may only PROPOSE them — it can never write them directly.',
       inputSchema: matterUpdateProposeSchema,
       run: (input, signal) =>

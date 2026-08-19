@@ -1,4 +1,4 @@
-"""S3 —— 核心目标 / 完成标志进提案面（08-18）。
+"""S3 —— 背景与目标 / 完成标志进提案面（08-18）。
 
 owner 裁决：main agent（本人在场）直写 + 恒 ask 审批卡；**跟进 Agent 只能提案**。
 
@@ -154,7 +154,7 @@ def test_accept_still_enforces_goal_check_guardrails(tmp_path, bad):
 # ============================================================
 
 def test_owner_editing_the_same_field_makes_the_proposal_stale(tmp_path):
-    """🔴 本子任务最要紧的一条：owner 手改核心目标 → Agent 那份旧提案作废。
+    """🔴 本子任务最要紧的一条：owner 手改背景与目标 → Agent 那份旧提案作废。
 
     没有它，accept 会把 Agent 基于**旧文案**写的版本盖回去。
     """

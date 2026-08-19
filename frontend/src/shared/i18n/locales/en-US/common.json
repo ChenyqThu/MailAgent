@@ -4859,7 +4859,7 @@
       "typeCustom": "Custom…",
       "typeCustomPlaceholder": "Enter a custom type",
       "priority": "Priority",
-      "description": "Purpose and background",
+      "description": "Background and goal",
       "descriptionHint": "Agents will never rewrite what you enter here",
       "sourceMeta": "{sender} · {time} · {count} messages in thread",
       "linkScope": "Link scope",
@@ -4912,7 +4912,7 @@
     "health": { "unknown": "Unknown", "on_track": "On track", "at_risk": "At risk", "off_track": "Off track" },
     "actions": { "archive": "Archive", "restoreArchive": "Unarchive", "trash": "Move to trash", "restore": "Restore", "permanentDelete": "Delete permanently", "edit": "Edit", "save": "Save", "cancel": "Cancel", "removeTag": "Remove tag {tag}" },
     "delete": { "title": "Delete matter permanently", "hint": "Enter {id} to confirm. This cannot be undone, but it will not delete email, calendar, or external documents." },
-    "state": { "title": "Current state", "noSummary": "No current summary yet.", "summaryGuard": "The follow-up agent can only propose updates; they land here once you accept them. You can also edit this directly.", "summaryUpdatedAt": "Updated {time}", "summaryBy": { "user": "Updated by you", "agent": "Updated by the follow-up agent", "system": "Updated by the system" }, "summaryPlaceholder": "Where does this stand right now — what is blocking it, what is next?", "titleAccepted": "Accepted", "freshnessStale": "Not updated for {count} days", "freshnessFresh": "Accepted by you {time}", "regenerate": "Regenerate summary", "descriptionLabel": "Core goal", "noDescription": "No core goal has been entered.", "descriptionPlaceholder": "What is the background here, and what needs to be achieved?", "markdownHint": "Markdown is supported.", "goalChecks": "Completion criteria", "goalChecksCount": "{done}/{total}", "goalCheckAdd": "+ Add a checkable completion criterion; tick them all to move this to Done", "goalCheckPlaceholder": "e.g. Contract signed by both parties", "goalChecksAllDone": "All completion criteria are met — you can move this to Done", "pendingProposals": "{count} new proposals" },
+    "state": { "title": "Current state", "noSummary": "No current summary yet.", "summaryGuard": "The follow-up agent can only propose updates; they land here once you accept them. You can also edit this directly.", "summaryUpdatedAt": "Updated {time}", "summaryBy": { "user": "Updated by you", "agent": "Updated by the follow-up agent", "system": "Updated by the system" }, "summaryPlaceholder": "Where does this stand right now — what is blocking it, what is next?", "titleAccepted": "Accepted", "freshnessStale": "Not updated for {count} days", "freshnessFresh": "Accepted by you {time}", "regenerate": "Regenerate summary", "descriptionLabel": "Background and goal", "noDescription": "No background and goal have been entered yet.", "backgroundLabel": "Background", "goalLabel": "Goal", "backgroundPlaceholder": "How did this come about? What constraints and settled conclusions are there?", "goalPlaceholder": "What must be true when this is done? (How you judge it goes in the completion criteria below.)", "descriptionLegacyHint": "The existing text was placed under \"Goal\" — move the background part up if you want.", "markdownHint": "Markdown is supported.", "goalChecks": "Completion criteria", "goalChecksCount": "{done}/{total}", "goalCheckAdd": "+ Add a checkable completion criterion; tick them all to move this to Done", "goalCheckPlaceholder": "e.g. Contract signed by both parties", "goalChecksAllDone": "All completion criteria are met — you can move this to Done", "pendingProposals": "{count} new proposals" },
     "item": {
       "addTitle": "Add matter item",
       "kind": "Type",
@@ -5050,12 +5050,12 @@
         "truncated": "Excerpt only — open the matter for the full text"
       }
     },
-    "eventField": { "title": "Title", "description": "Core goal", "current_summary": "Current status summary", "status": "Status", "health": "Health", "priority": "Priority", "matter_type": "Type", "tags": "Tags", "goal_checks": "Done criteria", "due_at": "Due date", "waiting_context": "Waiting reason", "next_attention_at": "Next attention", "attention_reason": "Attention reason", "agent_profile_id": "Follow-up agent", "agent_enabled": "Follow-up toggle", "matter_instructions": "Matter instructions", "schedule_json": "Follow-up rules", "kind": "Item type", "completed_at": "Completed at", "display_name": "Name", "organization": "Organization", "role": "Role", "relationship": "Relationship", "is_waiting_on": "Waiting flag" },
+    "eventField": { "title": "Title", "description": "Background and goal", "current_summary": "Current status summary", "status": "Status", "health": "Health", "priority": "Priority", "matter_type": "Type", "tags": "Tags", "goal_checks": "Done criteria", "due_at": "Due date", "waiting_context": "Waiting reason", "next_attention_at": "Next attention", "attention_reason": "Attention reason", "agent_profile_id": "Follow-up agent", "agent_enabled": "Follow-up toggle", "matter_instructions": "Matter instructions", "schedule_json": "Follow-up rules", "kind": "Item type", "completed_at": "Completed at", "display_name": "Name", "organization": "Organization", "role": "Role", "relationship": "Relationship", "is_waiting_on": "Waiting flag" },
     "context": {
       "stakeholders": "Stakeholders",
       "unnamedStakeholder": "Unnamed stakeholder",
       "noRole": "No role or organization",
-      "waiting": "Waiting",
+      "waiting": "Waiting on their reply",
       "noStakeholders": "No stakeholders yet.",
       "noStakeholdersTitle": "No stakeholders yet",
       "noStakeholdersHint": "Add them manually now; agents can suggest more later.",
@@ -5064,11 +5064,12 @@
       "tierCore": "Core stakeholders",
       "tierOthers": "Other stakeholders",
       "tierDropToExpand": "Hover to expand",
-      "tierCoreEmpty": "No core stakeholders yet. Mark the people who decide where this goes; the rest stay collapsed.",
+      "tierCoreEmpty": "No core stakeholders yet. Drag the people who decide where this goes here, or use the \u2606 on a card.",
+      "tierCoreDropHint": "Release to make core",
       "promoteStakeholder": "Mark as core stakeholder",
       "demoteStakeholder": "Remove from core stakeholders",
       "unnamed": "Unnamed",
-      "reorder": {"handle": "Drag to reorder", "grip": "Reorder {label}, position {pos} of {count}", "grabbed": "{label} grabbed at position {pos} of {count}. Use arrow keys to move, Space to drop, Escape to cancel.", "dropped": "{label} dropped at position {pos} of {count}.", "moved": "{label} moved to position {pos} of {count}.", "cancelled": "Reorder cancelled. {label} is back at its original position."},
+      "reorder": {"handle": "Drag to reorder or move group", "grip": "Reorder {label}, position {pos} of {count}", "grabbed": "{label} grabbed at position {pos} of {count}. Use arrow keys to move, Space to drop, Escape to cancel.", "dropped": "{label} dropped at position {pos} of {count}.", "moved": "{label} moved to position {pos} of {count}.", "cancelled": "Reorder cancelled. {label} is back at its original position."},
       "lastContact": "Last contact",
       "pinnedResources": "Pinned resources",
       "linkedResources": "Linked resources",
@@ -5326,7 +5327,7 @@
         "nextStep": "Add a next step",
         "draftFollowup": "Draft a follow-up email",
         "updateSummary": "Update the summary",
-        "updateSummaryPrompt": "Update this Matter's \"current state\" summary. Read the existing summary, the open items and the recent activity first, then write for a reader: lead with the current blocker or the most important conclusion, then the next step (who does what, by when). Do not write an operation log (no \"I changed the status / added two items\"), and do not restate the core goal. Show me the summary you plan to write before saving it."
+        "updateSummaryPrompt": "Update this Matter's \"current state\" summary. Read the existing summary, the open items and the recent activity first, then write for a reader: lead with the current blocker or the most important conclusion, then the next step (who does what, by when). Do not write an operation log (no \"I changed the status / added two items\"), and do not restate the background and goal. Show me the summary you plan to write before saving it."
       },
       "empty": {
         "title": "Move this forward from here",

@@ -157,7 +157,7 @@ def test_propose_validation_drops_each_rule(env):
     assert response.status_code == 200
     data = response.json()["data"]
     dropped_ids = {entry["id"] for entry in data["dropped"]}
-    # S3（08-18）：chg_03（field=description）从「被剔」翻成「留下」—— 核心目标进了提案
+    # S3（08-18）：chg_03（field=description）从「被剔」翻成「留下」—— 背景与目标进了提案
     # 白名单（跟进 Agent 只能提案，owner 评审时看全文 diff 再定）。chg_04（field=title）
     # 仍被剔，这条语料因此仍在守「白名单外的字段进不来」。
     assert dropped_ids == {"chg_01", "chg_02", "chg_04", "chg_05"}

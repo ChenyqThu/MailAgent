@@ -59,6 +59,9 @@ def test_markdown_export_is_readable_and_marks_check_state(service, matter):
     text = export_matter_markdown(service, matter["public_id"])
     assert text.startswith("# Atlas 上线")
     assert matter["public_id"] in text
+    # 08-18 owner 推翻裁决 D5：导出的小节名跟详情页、创建页、Agent 说明用同一个词。
+    assert "## 背景与目标" in text
+    assert "## 核心目标" not in text
     assert "- [x] 合同签署" in text
     assert "- [ ] 验收通过" in text
 

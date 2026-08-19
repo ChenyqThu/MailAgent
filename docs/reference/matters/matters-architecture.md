@@ -154,7 +154,13 @@ v57 资料版本轨迹表 `resource_version`，两者详见 §2.5；v51/v53–v5
 `tags_json` 里出现、但定义表没有的名字**不是孤儿** —— 读取时回退默认样式并照常可选可改；
 过滤掉它们会让存量标签变成「看不见但还挂在事项上」。
 
-**完成标志** `goal_checks_json`：`[{"t": str, "done": bool}]`。权限与 `description`（核心目标）
+**背景与目标** `description`：**单个字段**，两段靠 `## 背景` / `## 目标` 两个 Markdown 小标题
+分开（2026-08-18 owner 推翻裁决 D5，展示与说明口径统一成「背景与目标」；不加 DB 列、不做迁移）。
+分段判据的单源是前端 `frontend/src/shared/components/matters/matterDescription.ts`：空段整段省略；
+一个小标题都没有的老数据整串算「目标」，读态按单段无标签正文渲染、编辑时预填进「目标」并提示，
+不做静默重新分类。
+
+**完成标志** `goal_checks_json`：`[{"t": str, "done": bool}]`。权限与 `description`（背景与目标）
 完全同形（D7，0813 轮 3 微调）：**create 时 agent 可写**（gateway `matter_create` / REST create
 都收 `goal_checks` —— agent 建事项时就该把「怎样算做完」一起立起来），**创建之后仍 user-only**
 （`patch_matter` 对这两个字段的 actor 闸不动，agent patch → `E_INVALID_ARG`；gateway

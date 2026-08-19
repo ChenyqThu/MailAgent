@@ -179,7 +179,7 @@ def test_create_draft_endpoint_is_read_only_and_skips_unconfigured_notion(
         == CREATE_RESEARCH_RESOURCE_REASONS["full_text_match"]
         for item in resources
     )
-    # O6 (0813 轮 3)：「目的与背景」是用户可见的业务字段，不是 prompt 注入面 ——
+    # O6 (0813 轮 3)：「背景与目标」是用户可见的业务字段，不是 prompt 注入面 ——
     # 干净的背景 + 来信要点，绝不再出现 UNTRUSTED_* 围栏字面量或机械元数据行；
     # 围栏只留在资源摘录（prompt 注入面）上。
     description = data["draft"]["description"]
@@ -187,6 +187,11 @@ def test_create_draft_endpoint_is_read_only_and_skips_unconfigured_notion(
     assert "源邮件：" not in description and "收件时间：" not in description
     assert subject in description
     assert source_body in description
+    # 08-18：这条链路没有 LLM，写不出「目标」—— 但两段小标题先摆好，背景填满、目标留空，
+    # owner 只需补下半段（前端按同样的 `## 背景` / `## 目标` 判据分段）。
+    assert description.startswith("## 背景\n")
+    assert description.endswith("\n## 目标\n")
+    assert source_body in description.split("## 目标")[0]
     expected_fence = fence_matter_excerpt(
         resource_id="email:1",
         provider="mailagent",

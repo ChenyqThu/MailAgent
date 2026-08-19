@@ -996,7 +996,7 @@ class MatterService:
             raise MatterError(
                 "E_INVALID_ARG", f"unsupported patch fields: {sorted(unknown)}"
             )
-        # D7：核心目标与它的完成标志都是**用户写的**，Agent 只能建议不能落库。
+        # D7：背景与目标、它的完成标志都是**用户写的**，Agent 只能建议不能落库。
         # 「让 Agent 改写」走的是"产出建议文本 → 落进用户的编辑框待确认"，不是直接写。
         for user_only in ("description", "goal_checks"):
             if user_only in patch and actor.kind != MatterActorKind.USER.value:
@@ -3426,7 +3426,7 @@ class MatterService:
                     self._dump(value) if value is not None else None
                 )
             elif field == "description":
-                # S3：核心目标。owner 在评审界面看到全文 diff 后才会 accept ——
+                # S3：背景与目标。owner 在评审界面看到全文 diff 后才会 accept ——
                 # 「Agent 只能提案、owner 拍板」这条约束在**评审**这一步兑现，
                 # 而不是靠让字段不可写。
                 direct_changes["description"] = str(value or "")

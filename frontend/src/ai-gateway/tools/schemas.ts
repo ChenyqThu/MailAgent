@@ -252,12 +252,14 @@ export const matterCreateSchema = z.object({
     .string()
     .default('')
     .describe(
-      "The Matter's goal and background (shown to the owner as 「核心目标 / 目的与背景」): why " +
-        'this is being pursued, what success looks like, and the minimum context needed to judge ' +
-        'progress later. Write real substance from the conversation — NOT a summary or copy of ' +
-        'the source email (evidence belongs in linked resources). Editable later via ' +
-        'matter_update, but only when the user says the goal moved — and that always asks ' +
-        'the owner to approve, so getting it right now is cheaper.'
+      'Background and goal — the field the owner sees as 「背景与目标」. Write it as two ' +
+        'Markdown sections whose heading lines are exactly `## 背景` and `## 目标`: 背景 = how ' +
+        'this came about, who is involved, the constraints and decisions already made; 目标 = ' +
+        'what must be true when this is finished. Do NOT put the checklist here — that is ' +
+        'goal_checks（完成标志）. Write real substance from the conversation — NOT a summary or ' +
+        'copy of the source email (evidence belongs in linked resources). Editable later via ' +
+        'matter_update, but only when the user says the background or the goal moved — and that ' +
+        'always asks the owner to approve, so getting it right now is cheaper.'
     ),
   type: z
     .string()
@@ -306,9 +308,10 @@ export const matterCreateSchema = z.object({
     .max(20)
     .optional()
     .describe(
-      'Definition of done（完成标志）: a short checklist of how the owner will know this Matter ' +
-        'is complete, e.g. [{"t":"合同已签署"},{"t":"款项已到账"}]. Set it at creation when the ' +
-        'user has stated or implied what done means. Editable later via matter_update ' +
+      'Definition of done（完成标志）— the third block of the 「背景与目标」 card, kept separate ' +
+        'from the prose in `description`: a short checklist of how the owner will know this ' +
+        'Matter is complete, e.g. [{"t":"合同已签署"},{"t":"款项已到账"}]. Set it at creation ' +
+        'when the user has stated or implied what done means. Editable later via matter_update ' +
         '(owner-approved, and it replaces the whole list).'
     ),
   ...matterIdempotencyFields
@@ -327,18 +330,20 @@ const matterPatchSchema = z
       .enum(['inbox', 'planned', 'active', 'waiting', 'blocked', 'monitoring', 'done', 'canceled'])
       .optional(),
     health: z.enum(['unknown', 'on_track', 'at_risk', 'off_track']).optional(),
-    // S3（08-18）—— 核心目标与完成标志对 agent 开放。🔴 两者都属于 MATTER_OWNER_FIELDS：
+    // S3（08-18）—— 背景与目标、完成标志对 agent 开放。🔴 两者都属于 MATTER_OWNER_FIELDS：
     // 带到它们的 patch **恒弹审批卡**（按字段判，不是把整个 matter_update 提到恒 ask ——
     // 那会让改状态、改优先级这些低风险写也开始弹卡）。
     description: z
       .string()
       .optional()
       .describe(
-        "Rewrite the Matter's goal and background（核心目标）. This is the owner's own statement " +
-          'of intent — change it ONLY when the user has just told you the goal or scope moved. ' +
-          'Never rewrite it to "improve" the wording, and never fold status updates into it ' +
-          '(that is current_summary). Always sends the owner an approval card showing the full ' +
-          'new text; a follow-up run cannot call this at all and must propose instead.'
+        "Rewrite the Matter's 背景与目标 (background and goal). This is the owner's own " +
+          'statement of intent — change it ONLY when the user has just told you the background ' +
+          'or the goal moved. Keep the two `## 背景` / `## 目标` Markdown sections, and send the ' +
+          'whole field, not just the half that changed. Never rewrite it to "improve" the ' +
+          'wording, and never fold status updates into it (that is current_summary). Always ' +
+          'sends the owner an approval card showing the full new text; a follow-up run cannot ' +
+          'call this at all and must propose instead.'
       ),
     goal_checks: z
       .array(matterGoalCheckSchema)
@@ -348,7 +353,7 @@ const matterPatchSchema = z
         'Replace the definition of done（完成标志）— the whole checklist, not a delta. Send the ' +
           'full desired list including entries that already exist and their done flags, or you ' +
           'will silently drop the ones you omit. Same approval + follow-up-run rules as ' +
-          'description.'
+          '背景与目标（`description`）.'
       ),
     current_summary: z
       .string()

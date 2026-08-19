@@ -17,7 +17,11 @@
 //   路径（grip 聚焦 → Space/Enter 抓起 → ↑↓ 移动 → Esc 取消回原位）+ aria-live
 //   播报，`useReducedMotion` 时全部硬切（`flip=false` 同效）。
 //
-// 与原实现的差异仅四类（交互内核零改动）：
+// 与原实现的差异仅五类（交互内核零改动）：
+//   受控：原实现受控时**本地不留副本**（`setItems` 只回调 `onReorder`）——落下那一帧
+//         `items` 还是旧顺序，卡片先弹回原位；`items` 引用没变时 FLIP 的
+//         useLayoutEffect 也不会跑。改为受控也留一份乐观覆盖（`optimistic`），props
+//         追上或 `commitFailedAt` 变化时交还控制权。指针/glide/FLIP/键盘路径本身没动。
 //   结构：删 `"use client"`（Next 指令）/ demo 数据 DEFAULT_ITEMS（`defaultItems`
 //         默认 []）/ `inspect` 教学调试覆盖层（连带只有它消费的 slot 指示
 //         motion value 与 slotHeights 测量）/ demo 容器 `max-w-80`（宽度交给
@@ -91,6 +95,18 @@ const DEFAULT_MESSAGES: ReorderMessages = {
   cancelled: (label) => `Reorder cancelled. ${label} is back at its original position.`
 }
 
+/** 两份列表的 id **顺序**完全一致（label 变了不算变 —— 那不是重排）。 */
+function sameOrder(a: readonly ReorderItem[], b: readonly ReorderItem[]): boolean {
+  return a.length === b.length && a.every((item, index) => item.id === b[index]!.id)
+}
+
+/** 两份列表**装着同一批 id**（不问顺序）。false = props 换成了另一份集合。 */
+function sameMembers(a: readonly ReorderItem[], b: readonly ReorderItem[]): boolean {
+  if (a.length !== b.length) return false
+  const ids = new Set(a.map((item) => item.id))
+  return b.every((item) => ids.has(item.id))
+}
+
 interface DragData {
   row: HTMLLIElement
   pointerId: number
@@ -106,6 +122,7 @@ export function DragReorderList({
   items: controlledItems,
   defaultItems = [],
   onReorder,
+  commitFailedAt,
   flip = true,
   onStateChange,
   messages = DEFAULT_MESSAGES,
@@ -117,6 +134,15 @@ export function DragReorderList({
   items?: ReorderItem[]
   defaultItems?: ReorderItem[]
   onReorder?: (items: ReorderItem[]) => void
+  /**
+   * 受控模式的写入失败信号：**每次**提交失败就递增（值本身无意义，只看「变没变」）。
+   * 收到变化即丢弃乐观顺序、回落到 `items`。
+   *
+   * 🔴 只要 `onReorder` 是异步写（网络 / IPC）就必须接：落下后本组件持有乐观顺序等
+   * `items` 追上来，写挂了 props 永远追不上 ⇒ 列表会一直显示一个后端并不存在的顺序。
+   * 消费方在自己的 onError 里递增它。（同步改本地 state 的调用方不需要。）
+   */
+  commitFailedAt?: number
   /** false = hard snap, no glides/FLIP. */
   flip?: boolean
   onStateChange?: (state: ReorderState) => void
@@ -132,12 +158,40 @@ export function DragReorderList({
   className?: string
 }): React.ReactElement {
   const [uncontrolled, setUncontrolled] = useState(controlledItems ?? defaultItems)
-  const items = controlledItems ?? uncontrolled
+  /**
+   * 受控模式下落下瞬间的**乐观覆盖**；null = 直接用 props。
+   *
+   * 🔴 原实现受控时本地什么都不存（只 `onReorder(next)` 就完事）⇒ 那一帧 `items` 还是
+   * 旧的，卡片先弹回原位、等消费方把新顺序传回来才跳过去；而 `items` 引用没变时连
+   * FLIP 的 useLayoutEffect 都不会跑，落下的那段 glide 直接没了。留一份覆盖，落下即
+   * 是新顺序，props 追上（或写入失败）再交还控制权。
+   */
+  const [optimistic, setOptimistic] = useState<ReorderItem[] | null>(null)
+  const controlled = controlledItems !== undefined
+  const items = controlled ? (optimistic ?? controlledItems) : uncontrolled
+  const lastFailureRef = useRef(commitFailedAt)
   const setItems = (updater: (list: ReorderItem[]) => ReorderItem[]): void => {
     const next = updater(items)
-    if (controlledItems === undefined) setUncontrolled(next)
+    if (controlled) setOptimistic(next)
+    else setUncontrolled(next)
     onReorder?.(next)
   }
+
+  // 交还控制权：props 追上了（写入落地），或 props 换成了另一份集合（增删项 ——
+  // 此时乐观覆盖已经过期，继续拿着会让新增/删除的行看不见）。
+  useEffect(() => {
+    if (optimistic == null || controlledItems === undefined) return
+    if (sameOrder(controlledItems, optimistic) || !sameMembers(controlledItems, optimistic)) {
+      setOptimistic(null)
+    }
+  }, [controlledItems, optimistic])
+
+  // 写入失败 ⇒ 回滚到 props。props 永远追不上时上面那个 effect 不会触发。
+  useEffect(() => {
+    if (commitFailedAt === lastFailureRef.current) return
+    lastFailureRef.current = commitFailedAt
+    setOptimistic(null)
+  }, [commitFailedAt])
 
   const [dragging, setDragging] = useState<{ id: string; from: number } | null>(null)
   const [target, setTarget] = useState<number | null>(null)

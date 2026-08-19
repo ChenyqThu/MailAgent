@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -94,6 +94,7 @@ import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { MatterTagPicker } from './MatterTagPicker'
 import { MatterTimeline } from './MatterTimeline'
 import { MatterUpdateReview, type ReviewAcceptPayload } from './MatterUpdateReview'
+import { parseMatterDescription, serializeMatterDescription } from './matterDescription'
 import { isMatterStaleError, refreshMatter, useMatterMutation } from './matterMutation'
 import { useMatterUndoToast } from './useMatterUndoToast'
 import { parseMatterSchedule } from './matterSchedule'
@@ -2072,13 +2073,16 @@ function StateCard({
 
 /**
  * 「背景与目标」卡（设计 matter-agent.jsx:266-332 `GoalCard`）：上半是用户自己写的
- * 核心目标，下半是同一张卡里的「完成标志」分区（底色略深 + 上分隔线）。
+ * 背景与目标，下半是同一张卡里的「完成标志」分区（底色略深 + 上分隔线）。
  *
  * 🔴 **不做**「让 Agent 改写」按钮：设计稿底部那条 ghost 按钮与 HANDOFF §3 硬约束①
  * 「description 用户写的，Agent 永远不能写」直接冲突，`PROPOSAL_FIELD_WHITELIST` 里
  * 也从来没有 description（gap-list G-13 C(a)）。
  *
- * 命名维持「核心目标」（裁决 D5：只改展示文案不改字段），不跟设计稿的「背景与目标」。
+ * 命名：2026-08-18 owner **推翻裁决 D5**，展示统一为「背景与目标」（详情页、创建页、
+ * Markdown 导出、Agent 工具说明四处同一个词）。字段名仍是 `description` —— 存储不变，
+ * 两段靠 `## 背景` / `## 目标` 两个小标题分开，不加 DB 列、不做迁移。分段判据是
+ * `matterDescription.ts` 那一处纯函数，读态 / 编辑态 / 保存三处都走它。
  */
 function GoalCard({
   matter,
@@ -2092,15 +2096,20 @@ function GoalCard({
   onGoalChecksSave(goalChecks: MatterGoalCheck[], onSaved?: () => void): void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const fieldId = useId()
   const [descriptionEditing, setDescriptionEditing] = useState(false)
-  const [descriptionDraft, setDescriptionDraft] = useState(matter.description)
+  const [descriptionDraft, setDescriptionDraft] = useState(() =>
+    parseMatterDescription(matter.description)
+  )
   const [addingGoalCheck, setAddingGoalCheck] = useState(false)
   const [goalCheckDraft, setGoalCheckDraft] = useState('')
   const goalChecks = matter.goal_checks ?? []
   const doneGoalChecks = goalChecks.filter((check) => check.done).length
+  const parsedDescription = parseMatterDescription(matter.description)
+  const nextDescription = serializeMatterDescription(descriptionDraft)
 
   useEffect(() => {
-    if (!descriptionEditing) setDescriptionDraft(matter.description)
+    if (!descriptionEditing) setDescriptionDraft(parseMatterDescription(matter.description))
   }, [descriptionEditing, matter.description])
 
   const saveGoalCheck = (): void => {
@@ -2149,50 +2158,111 @@ function GoalCard({
         {t('matters.state.descriptionLabel')}
       </MatterSectionLabel>
       <div className="overflow-hidden rounded-[var(--r-card)] border border-ink-border bg-ink-1/75">
-        <div className="p-4">
-          {descriptionEditing ? (
+        {descriptionEditing ? (
+          <div className="space-y-4 p-4">
             <div>
+              <label
+                htmlFor={`${fieldId}-background`}
+                className="mb-1 block text-meta font-medium text-ink-fg-3"
+              >
+                {t('matters.state.backgroundLabel')}
+              </label>
               <textarea
                 autoFocus
-                rows={7}
-                value={descriptionDraft}
-                onChange={(event) => setDescriptionDraft(event.target.value)}
-                placeholder={t('matters.state.descriptionPlaceholder')}
-                aria-label={t('matters.state.descriptionLabel')}
+                id={`${fieldId}-background`}
+                rows={4}
+                value={descriptionDraft.background}
+                onChange={(event) =>
+                  setDescriptionDraft((draft) => ({ ...draft, background: event.target.value }))
+                }
+                placeholder={t('matters.state.backgroundPlaceholder')}
                 className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
               />
-              <p className="mt-1 text-meta text-ink-fg-2">{t('matters.state.markdownHint')}</p>
-              <div className="mt-2 flex justify-end gap-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setDescriptionDraft(matter.description)
-                    setDescriptionEditing(false)
-                  }}
-                  className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
-                >
-                  {t('matters.actions.cancel')}
-                </button>
-                <button
-                  type="button"
-                  disabled={saving || descriptionDraft === matter.description}
-                  onClick={() =>
-                    onDescriptionSave(descriptionDraft, () => setDescriptionEditing(false))
-                  }
-                  className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
-                >
-                  {t('matters.actions.save')}
-                </button>
+            </div>
+            <div>
+              <label
+                htmlFor={`${fieldId}-goal`}
+                className="mb-1 block text-meta font-medium text-ink-fg-3"
+              >
+                {t('matters.state.goalLabel')}
+              </label>
+              <textarea
+                id={`${fieldId}-goal`}
+                rows={3}
+                value={descriptionDraft.goal}
+                onChange={(event) =>
+                  setDescriptionDraft((draft) => ({ ...draft, goal: event.target.value }))
+                }
+                placeholder={t('matters.state.goalPlaceholder')}
+                className="w-full resize-y rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-3 py-2 text-body text-ink-fg outline-none transition-colors duration-fast ease-standard placeholder:text-ink-fg-3 focus-visible:border-coral/60 focus-visible:ring-2 focus-visible:ring-coral/70"
+              />
+            </div>
+            {/* 老数据（没有小标题）打开编辑时的一次性提示 —— 原文整段预填进「目标」，
+              要不要把背景挪上去由 owner 自己判断，不做静默重新分类。 */}
+            {descriptionDraft.legacy ? (
+              <p className="text-meta text-ink-fg-2">{t('matters.state.descriptionLegacyHint')}</p>
+            ) : null}
+            <p className="text-meta text-ink-fg-2">{t('matters.state.markdownHint')}</p>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => {
+                  setDescriptionDraft(parseMatterDescription(matter.description))
+                  setDescriptionEditing(false)
+                }}
+                className="rounded-[var(--r-ctl)] px-2.5 py-1.5 text-aux text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70"
+              >
+                {t('matters.actions.cancel')}
+              </button>
+              <button
+                type="button"
+                disabled={saving || nextDescription === matter.description}
+                onClick={() =>
+                  onDescriptionSave(nextDescription, () => setDescriptionEditing(false))
+                }
+                className="rounded-[var(--r-ctl)] bg-coral/100 px-3 py-1.5 text-aux font-medium text-accent-fg transition-[background-color,transform] duration-fast ease-standard hover:bg-coral-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-coral/70 active:scale-[0.96] disabled:opacity-50"
+              >
+                {t('matters.actions.save')}
+              </button>
+            </div>
+          </div>
+        ) : parsedDescription.legacy ? (
+          /* 老数据：整串没有小标题，按单段无标签正文渲染 —— 硬套两个分区标题会把
+            「这句到底是背景还是目标」替 owner 判了。 */
+          <div className="p-4 [&_.mail-body_p:last-child]:mb-0">
+            <TranslatedBody text={parsedDescription.goal} />
+          </div>
+        ) : parsedDescription.background || parsedDescription.goal ? (
+          <>
+            {parsedDescription.background ? (
+              <div className="p-4">
+                <h3 className="mb-1 text-meta font-medium text-ink-fg-3">
+                  {t('matters.state.backgroundLabel')}
+                </h3>
+                <div className="[&_.mail-body_p:last-child]:mb-0">
+                  <TranslatedBody text={parsedDescription.background} />
+                </div>
               </div>
-            </div>
-          ) : matter.description ? (
-            <div className="[&_.mail-body_p:last-child]:mb-0">
-              <TranslatedBody text={matter.description} />
-            </div>
-          ) : (
-            <p className="text-body text-ink-fg-2">{t('matters.state.noDescription')}</p>
-          )}
-        </div>
+            ) : null}
+            {parsedDescription.goal ? (
+              <div
+                className={cn(
+                  'p-4',
+                  parsedDescription.background ? 'border-t border-ink-border-soft' : null
+                )}
+              >
+                <h3 className="mb-1 text-meta font-medium text-ink-fg-3">
+                  {t('matters.state.goalLabel')}
+                </h3>
+                <div className="[&_.mail-body_p:last-child]:mb-0">
+                  <TranslatedBody text={parsedDescription.goal} />
+                </div>
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <p className="p-4 text-body text-ink-fg-2">{t('matters.state.noDescription')}</p>
+        )}
         {/* 设计 matter-agent.jsx:290 —— 完成标志是同一张卡的下半分区（`fg/0.022` 底 +
           上分隔线），不是卡里再套一个虚线框。 */}
         <div className="border-t border-ink-border-soft bg-ink-fg/[0.02] p-4">

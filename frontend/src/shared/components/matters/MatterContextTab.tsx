@@ -25,6 +25,7 @@ import { useContactsEnabled } from '@shared/components/contacts/hooks'
 import { useContactNavigation } from '@shared/components/contacts/navigation'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { CollapseChevron } from '@shared/components/ui/collapsible'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@shared/components/ui/tooltip'
 import { formatRelativeTime } from '@shared/format'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useActiveEmail } from '@shared/state/active-email'
@@ -145,16 +146,27 @@ export function MatterContextTab({
           onEdit={setEditor}
           onRemove={(stakeholderId) => remove.mutate(stakeholderId)}
           onChanged={onChanged}
-          renderBody={(stakeholder) => (
-            <div
-              className={
-                stakeholder.is_waiting_on ? 'rounded-[var(--r-ctl)] bg-warn/[0.06] p-1.5' : ''
-              }
-            >
+          renderBody={(stakeholder, { actions }) => (
+            // 卡壳（边框 / 底色 / h-full flex-col）在 MatterStakeholderSection；这里只排内容。
+            // 🔴 等待态**不再**套一层 `bg-warn/[0.06]` 的内层盒 —— 它与卡片自己的 warn 边框
+            // 底色叠在一起是同一件事说两遍（另两遍是头像 ring 与「等待中」badge，都已删）。
+            <>
               <StakeholderIdentity stakeholder={stakeholder} contactsEnabled={contactsEnabled} />
-              <div className="mt-2.5 flex items-center gap-1.5 pr-24">
-                {stakeholder.role ? <Pip>{stakeholder.role}</Pip> : null}
-                <span className="ml-auto">
+              {/* 角色是**正文文字**不是药丸：药丸装不下「Controller 平台整体负责人」这种
+                  长角色，会撑成两行还把右边的「最近联系」挤没。2 行封顶。 */}
+              {stakeholder.role ? (
+                <p className="line-clamp-2 text-meta leading-[18px] text-ink-fg-2">
+                  {stakeholder.role}
+                </p>
+              ) : null}
+              {stakeholder.relationship ? (
+                <p className="line-clamp-2 text-meta leading-[18px] text-ink-fg-3">
+                  {stakeholder.relationship}
+                </p>
+              ) : null}
+              {/* 底栏：左「最近联系」，右 hover 出的操作组。`mt-auto` 把它顶到卡底 ⇒ 同行等高。 */}
+              <footer className="mt-auto flex h-6 items-center justify-between gap-2 border-t border-ink-border pt-2">
+                <span className="min-w-0 truncate">
                   <StakeholderLastContact
                     stakeholder={stakeholder}
                     emailId={
@@ -164,13 +176,9 @@ export function MatterContextTab({
                     }
                   />
                 </span>
-              </div>
-              {stakeholder.relationship ? (
-                <p className="mt-2 border-t border-ink-border pt-2 text-meta leading-5 text-ink-fg-2">
-                  {stakeholder.relationship}
-                </p>
-              ) : null}
-            </div>
+                {actions}
+              </footer>
+            </>
           )}
         />
       </section>
@@ -384,11 +392,8 @@ function StakeholderIdentity({
   const interactive = contactsEnabled && stakeholder.contact_id !== null
   const body = (
     <>
-      <span
-        className={`flex shrink-0 rounded-full ${
-          stakeholder.is_waiting_on ? 'ring-2 ring-warn/40 ring-offset-1 ring-offset-ink-1' : ''
-        }`}
-      >
+      {/* 🔴 等待态**不**给头像加 ring：等待只用「名字后一颗点 + 卡片边框底色」两个信号。 */}
+      <span className="flex shrink-0 rounded-full">
         <RecipientAvatar
           name={stakeholder.display_name ?? ''}
           email={stakeholder.email_normalized ?? ''}
@@ -396,7 +401,8 @@ function StakeholderIdentity({
         />
       </span>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-1.5">
+        {/* 🔴 `flex-nowrap`：名字自己 truncate，不许被 wrap 挤到第二行。 */}
+        <div className="flex min-w-0 items-center gap-1.5">
           <h3
             className={
               interactive
@@ -407,15 +413,26 @@ function StakeholderIdentity({
             {name}
           </h3>
           {stakeholder.is_waiting_on ? (
-            <Pip tone="warn">{t('matters.context.waiting')}</Pip>
+            // 「等待中」原来是一颗文字 badge，和边框底色说的是同一件事，还占掉名字的宽度。
+            // 换成一颗琥珀点，文案挪进 tooltip。（TooltipProvider 在 MatterStakeholderSection。）
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span
+                  role="img"
+                  aria-label={t('matters.context.waiting')}
+                  className="block h-1.5 w-1.5 shrink-0 rounded-full bg-warn"
+                />
+              </TooltipTrigger>
+              <TooltipContent side="top" sideOffset={6}>
+                {t('matters.context.waiting')}
+              </TooltipContent>
+            </Tooltip>
           ) : null}
         </div>
-        {/* 名字行下 = 库侧信息（组织，退而求其次邮箱）；角色只出现在下面的
-            药丸行 —— 设计里「职位·公司」与角色 Pip 是两回事，别重复画角色。 */}
-        <p className="mt-0.5 truncate text-meta text-ink-fg-3">
-          {stakeholder.organization ||
-            stakeholder.email_normalized ||
-            t('matters.context.noRole')}
+        {/* 名字行下 = 库侧信息（组织，退而求其次邮箱）；角色是卡片上单独一行正文，
+            设计里「职位·公司」与角色是两回事，别重复画角色。 */}
+        <p className="truncate text-meta leading-[18px] text-ink-fg-3">
+          {stakeholder.organization || stakeholder.email_normalized || t('matters.context.noRole')}
         </p>
       </div>
     </>
