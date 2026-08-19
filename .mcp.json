@@ -10,18 +10,17 @@
     },
     "playwright": {
       "command": "npx",
-      "args": ["-y", "@playwright/mcp@latest"]
-    },
-    "notion": {
-      "command": "npx",
-      "args": ["-y", "@notionhq/notion-mcp-server"],
-      "env": {
-        "NOTION_TOKEN": "${NOTION_TOKEN}"
-      }
+      "args": [
+        "-y",
+        "@playwright/mcp@latest"
+      ]
     },
     "context7": {
       "command": "npx",
-      "args": ["-y", "@upstash/context7-mcp"]
+      "args": [
+        "-y",
+        "@upstash/context7-mcp"
+      ]
     }
   }
 }
