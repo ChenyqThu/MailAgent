@@ -325,6 +325,81 @@ describe('FolderPicker — 多文件夹选择器', () => {
     expect(useRestartStore.getState().required).toBe(false)
   })
 
+  // ── re-seed 与未保存编辑（owner dogfood: 「未保存时切出去切回来顺序变回去了」）──
+  //
+  // 顺序要点「保存」才落盘, 而 react-query 的 dataUpdatedAt **每次 fetch 成功都会变**,
+  // 哪怕数据一模一样 —— 于是拖完没保存这段时间里任何一次 discover 刷新 (窗口重新聚焦 /
+  // staleTime 过期 / 别处 invalidate) 都会把本地顺序打回旧序。
+
+  /** 顺序列表当前渲染出来的顺序 (DragReorderList 的行, data-id = imap_name)。 */
+  const orderShown = (): string[] =>
+    [...document.querySelectorAll('[data-reorder-item]')].map((r) => r.getAttribute('data-id')!)
+
+  /** 走 a11y 键盘路径把第 index 项往下移一格。 */
+  function reorderDown(index: number): void {
+    const grips = screen
+      .getAllByRole('button')
+      .filter((b) => (b.getAttribute('aria-label') ?? '').startsWith('调整'))
+    fireEvent.keyDown(grips[index], { key: ' ' })
+    fireEvent.keyDown(grips[index], { key: 'ArrowDown' })
+  }
+
+  test('🔴 未保存时 discover 刷新 (数据没变, 只有 dataUpdatedAt 变了) → 本地顺序不许被打回旧序', async () => {
+    // 第二次 discover 白名单一字不差, 只有 Jira 的计数变了 —— 拿它当「刷新确实落地并
+    // 重渲染了」的证据, 否则断言可能赶在 re-seed 之前跑完, 闸变成空转。
+    const second = discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-', 'Jira'] })
+    second.folders[1].message_count = 3459
+    second.tree[1].message_count = 3459
+    mockDiscover
+      .mockResolvedValueOnce(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-', 'Jira'] }))
+      .mockResolvedValue(second)
+    renderPicker()
+    await screen.findByText('已同步文件夹顺序')
+    expect(orderShown()).toEqual(['DMS&VvpO9lPRXgM-', 'Jira'])
+
+    reorderDown(0)
+    expect(orderShown()).toEqual(['Jira', 'DMS&VvpO9lPRXgM-'])
+
+    // 刷新 = 与「切出去切回来 / 窗口重新聚焦 / 别处 invalidate」同一条 re-seed 路径。
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+    expect(await screen.findByText('3,459')).toBeTruthy()
+
+    // 用户拖的顺序还在, 保存钮还亮着 (还没落盘)。
+    expect(orderShown()).toEqual(['Jira', 'DMS&VvpO9lPRXgM-'])
+    expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(false)
+  })
+
+  test('保存成功后 baseline 推进 → 之后后端再改白名单, 刷新仍能 seed 进来', async () => {
+    mockDiscover
+      .mockResolvedValueOnce(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-', 'Jira'] }))
+      // 保存后的 invalidate→refetch: 后端已是新序。
+      .mockResolvedValueOnce(discoverResult({ whitelist: ['Jira', 'DMS&VvpO9lPRXgM-'] }))
+      // 再之后别处 (另一端 / 手改 .env) 把顺序改回去了。
+      .mockResolvedValue(discoverResult({ whitelist: ['DMS&VvpO9lPRXgM-', 'Jira'] }))
+    mockSetWhitelist.mockResolvedValue({
+      folders: ['Jira', 'DMS&VvpO9lPRXgM-'],
+      restart_required: false
+    })
+    renderPicker()
+    await screen.findByText('已同步文件夹顺序')
+
+    reorderDown(0)
+    fireEvent.click(screen.getByRole('button', { name: '保存' }))
+    await waitFor(() => expect(mockSetWhitelist).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(mockDiscover).toHaveBeenCalledTimes(2))
+    await waitFor(() =>
+      expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(
+        true
+      )
+    )
+
+    // 保存已落盘 ⇒ 不再是「未保存的编辑」, 后端的新白名单必须能 seed 进来。
+    fireEvent.click(screen.getByRole('button', { name: '刷新' }))
+    await waitFor(() => expect(mockDiscover).toHaveBeenCalledTimes(3))
+    await waitFor(() => expect(orderShown()).toEqual(['DMS&VvpO9lPRXgM-', 'Jira']))
+    expect((screen.getByRole('button', { name: '保存' }) as HTMLButtonElement).disabled).toBe(true)
+  })
+
   test('保存按钮在无改动时禁用', async () => {
     mockDiscover.mockResolvedValue(discoverResult())
     renderPicker()

@@ -54,6 +54,11 @@ import { cn } from '@shared/lib/cn'
 // 大文件夹阈值 — 超过则展示「较大」徽标 + 首次同步较慢提示 (照 mockup ① · §4)。
 const LARGE_FOLDER_THRESHOLD = 1000
 
+/** 两份白名单逐位相同 —— **有序**比较, 仅调序也算变了 (数组序 = 侧边栏显示顺序)。 */
+function sameSeq(a: readonly string[], b: readonly string[]): boolean {
+  return a.length === b.length && a.every((v, i) => v === b[i])
+}
+
 /** 读单个 managed-env 值, 不订阅整个 store (仿 RemoteAccessTab.useEnvValue)。 */
 function useEnvValue(key: string): string {
   return useEnvStore((s) =>
@@ -562,19 +567,36 @@ export function FolderPicker(): React.ReactElement {
   const lastRefresh = isReady ? dataUpdatedAt : null
 
   // 本机选中态/展开态/清理提示从 discover 的 whitelist seed。每次 discover 数据更新
-  // (首拉 / 手动刷新 / CRUD 后 invalidate refetch) → 把用户编辑回归到后端真实白名单
-  // baseline (= 旧 refresh() 体的 setSelected/setExpanded/clear cleanupPrompts 语义)。
+  // (首拉 / 手动刷新 / CRUD 后 invalidate refetch) → 把本机态回归到后端真实白名单
+  // baseline (= 旧 refresh() 体的 setSelected/setExpanded/clear cleanupPrompts 语义);
+  // 未保存的本地编辑除外, 见下面那段 🔴。
   // 用 render 期对比 dataUpdatedAt (存 useState, 非 ref) 触发 set-state — React 文档
   // 「storing info from previous renders / adjusting state when data changes」官方模式,
-  // 收敛 (seededAt guard 保证每 dataUpdatedAt 仅 seed 一次), 比 effect 少一次 commit, 且
-  // React-Compiler 友好 (无 ref-during-render / set-state-in-effect)。无 refetchInterval,
-  // 仅上述显式时机数据会变。
-  const [seededAt, setSeededAt] = React.useState<number | null>(null)
-  if (discoverData && dataUpdatedAt !== seededAt) {
-    setSeededAt(dataUpdatedAt)
+  // 收敛 (seed.at guard 保证每 dataUpdatedAt 仅 seed 一次), 比 effect 少一次 commit, 且
+  // React-Compiler 友好 (无 ref-during-render / set-state-in-effect)。
+  //
+  // 🔴 但 seed **不许覆盖未保存的本地编辑**：勾选/顺序都要点「保存」才落盘，而
+  // react-query 的 dataUpdatedAt **每次 fetch 成功都会变**，哪怕数据一模一样 (结构共享
+  // 只保 data 引用、不保时间戳)。于是拖完没保存这段时间里，任何一次 discover 刷新
+  // (窗口重新聚焦 / staleTime 过期 / 别处 invalidate) 都会把本地顺序打回旧序 —— owner
+  // dogfood 实测的「切出去切回来顺序变回去了」。判据是「order 与**上次 seed 用的那份
+  // whitelist**不同」而不是与当前 whitelist 不同：后者在别处改了白名单时会误判成脏，
+  // 从此再也 seed 不进来。baseline 存在 seed 里跟 at 同进同出；保存成功后由 handleSave
+  // 推进到写入结果，让紧随其后的 invalidate→refetch 能正常 re-seed。
+  //
+  // 豁免只给「未保存的编辑」: order 是编辑本身; cleanupPrompts 是这次编辑派生的待决
+  // 提示 (只可能由取消勾选产生 ⇒ 非空必然处于编辑中)，被清掉等于提示行当场消失。
+  // expanded 不豁免 —— 它是从 whitelist 派生的展开视图，没有任何待保存的东西，
+  // refetch 发现新子文件夹时还得靠它把父节点展开。
+  const [seed, setSeed] = React.useState<{ at: number; whitelist: readonly string[] } | null>(null)
+  if (discoverData && dataUpdatedAt !== seed?.at) {
     const wl = discoverData.whitelist
-    setOrder(wl)
-    setCleanupPrompts(new Set())
+    const edited = seed !== null && !sameSeq(order, seed.whitelist)
+    setSeed({ at: dataUpdatedAt, whitelist: edited ? seed.whitelist : wl })
+    if (!edited) {
+      setOrder(wl)
+      setCleanupPrompts(new Set())
+    }
     const toExpand = new Set<string>()
     for (const f of discoverData.folders) {
       if (f.parent && wl.includes(f.imap_name)) toExpand.add(f.parent)
@@ -624,12 +646,10 @@ export function FolderPicker(): React.ReactElement {
   // dirty: 当前有序选中 ≠ 上次保存的白名单 (baseline = discover 的原序 whitelist)。
   // **有序比较** —— 仅调序也点亮保存钮 (排序 task)。保存后 invalidate→refetch 会把
   // whitelist baseline 推进, dirty 收敛回 false。
-  const dirty = React.useMemo(() => {
-    if (!isReady) return false
-    if (order.length !== whitelist.length) return true
-    for (let i = 0; i < order.length; i++) if (order[i] !== whitelist[i]) return true
-    return false
-  }, [order, isReady, whitelist])
+  const dirty = React.useMemo(
+    () => isReady && !sameSeq(order, whitelist),
+    [order, isReady, whitelist]
+  )
 
   // 集合是否变化 (增/删项) —— 决定 dirty 提示文案: 集合变 = 需重启; 仅顺序变 =
   // 立即生效 (与后端 PUT 的 restart_required 判定同口径)。
@@ -646,8 +666,10 @@ export function FolderPicker(): React.ReactElement {
     try {
       const res = await mailApi.folder.setWhitelist([...order])
       // 乐观推进选中态到后端去重结果 (保序; baseline 由下方 invalidate→refetch 的
-      // re-seed effect 落地)。
+      // re-seed effect 落地)。seed 的 baseline 同步推进 —— 否则 re-seed 会一直把这次
+      // 编辑当成「未保存」而永远跳过, 后端真实白名单再也进不来。
       setOrder(res.folders)
+      setSeed((s) => (s ? { ...s, whitelist: res.folders } : s))
       if (res.restart_required) markRestartRequired(['SYNC_FOLDERS'])
       // customMailbox 若已被从白名单移除, 继续保留会导致列表永久空 → 重置到 inbox。
       // 判断：customMailbox 的 fullDisplayName 可能含路径; whitelist 存 imap_name。

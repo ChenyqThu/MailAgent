@@ -1,3 +1,9 @@
+// ⛔️ 冻结副本 —— 这是 `src/shared/components/ui/DragReorderList.tsx` **修复前**的
+// 原样快照（git HEAD 版），只为让 owner 在同一页里 A/B 对照「落下先回弹」这个缺陷。
+//
+// 🔴 不要移植、不要照着改、不要从这里 import 到 src/。真组件在 @shared 那一份。
+// 与真组件的差异只有三处：本段说明、组件改名 LegacyDragReorderList、类型不再 export。
+//
 // DragReorderList —— 全 app 垂直列表拖拽重排基座（FLIP + 键盘 + a11y）。
 //
 // 来源：lab.moumen.dev 的 `drag-to-reorder-list`，源码取自它的 shadcn registry
@@ -17,12 +23,7 @@
 //   路径（grip 聚焦 → Space/Enter 抓起 → ↑↓ 移动 → Esc 取消回原位）+ aria-live
 //   播报，`useReducedMotion` 时全部硬切（`flip=false` 同效）。
 //
-// 与原实现的差异仅六类（交互内核零改动）：
-//   FLIP：原实现在 layout effect 里 `jump(0)` 后直接 `getBoundingClientRect()` 当
-//         「干净布局」用 —— 但 motion 的样式写是下一个 rAF 才落 DOM 的，那一量仍带着
-//         旧 transform，每行的 Invert 差掉一个旧 transform ⇒ 松手先硬跳回拖拽前的位置
-//         再动画过去。改量 `list 顶 + row.offsetTop`（纯布局量，transform 不参与）。
-//         闸：`tests/components/ui/DragReorderListFlip.test.tsx`。
+// 与原实现的差异仅五类（交互内核零改动）：
 //   受控：原实现受控时**本地不留副本**（`setItems` 只回调 `onReorder`）——落下那一帧
 //         `items` 还是旧顺序，卡片先弹回原位；`items` 引用没变时 FLIP 的
 //         useLayoutEffect 也不会跑。改为受控也留一份乐观覆盖（`optimistic`），props
@@ -62,13 +63,13 @@ const EASE = [0.22, 1, 0.36, 1] as const
 const MOVE = { duration: 0.2, ease: EASE } as const
 const LIFT = { duration: 0.16, ease: EASE } as const
 
-export interface ReorderItem {
+interface ReorderItem {
   id: string
   label: string
   meta?: string
 }
 
-export interface ReorderState {
+interface ReorderState {
   order: string[]
   dragging: string | null
   from: number | null
@@ -78,7 +79,7 @@ export interface ReorderState {
 }
 
 /** aria 标签 / aria-live 播报文案 —— 默认英文（原实现逐字），消费方用 t() 注入。 */
-export interface ReorderMessages {
+interface ReorderMessages {
   /** 列表 aria-label。 */
   listLabel: string
   /** grip 按钮 aria-label。 */
@@ -123,7 +124,7 @@ interface DragData {
   rows?: HTMLLIElement[]
 }
 
-export function DragReorderList({
+export function LegacyDragReorderList({
   items: controlledItems,
   defaultItems = [],
   onReorder,
@@ -233,17 +234,6 @@ export function DragReorderList({
 
   // FLIP: after any commit that captured First rects, zero everyone, measure the
   // clean layout, invert, then animate() home.
-  //
-  // 🔴 「量干净布局」不能用 `row.getBoundingClientRect()`：motion 写样式是**异步**的
-  // （MotionValue 变更 → VisualElement.scheduleRender → `frame.render`，落在下一个
-  // rAF 的 render 步），上一行的 `jump(0)` 当帧根本没进 DOM —— 那时量到的 rect 仍带
-  // 着刚才拖拽 / 让位留下的旧 transform，每行的 dy 会整整差掉一个旧 transform，Invert
-  // 变成「跳回拖拽前的位置」，然后再动画到新位置。这就是 owner dogfood 报的
-  // 「松手先回原位、再突然换位」（原实现自带，与受控那条无关）。
-  // 改量 `list 顶 + row.offsetTop`：offsetTop 是纯布局量，transform 不参与，拿到的
-  // 就是这一行在新顺序里的干净位置，与 motion 何时落 DOM 无关。（li 的 offsetParent
-  // 就是下面那个 `relative` 的 ul。）读 list 的 rect 同时也把 React 刚改完的 DOM
-  // 顺序 reflow 掉了，原来那句 `void list.offsetWidth` 就是干这个的，不再需要。
   useLayoutEffect(() => {
     const prev = flipRectsRef.current
     flipRectsRef.current = null
@@ -251,12 +241,12 @@ export function DragReorderList({
     if (!prev || !list) return
     const rows = rowNodes()
     for (const row of rows) yFor(row.dataset.id!).jump(0)
+    void list.offsetWidth
     if (flip && !reduced) {
-      const listTop = list.getBoundingClientRect().top
       for (const row of rows) {
         const before = prev.get(row.dataset.id!)
         if (!before) continue
-        const dy = before.top - (listTop + row.offsetTop)
+        const dy = before.top - row.getBoundingClientRect().top
         if (dy) {
           const mv = yFor(row.dataset.id!)
           mv.jump(dy) // Invert: hold the old pixels
