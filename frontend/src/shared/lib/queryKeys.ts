@@ -281,6 +281,9 @@ export const qk = {
     matters: (contactId: number) => ['contacts', 'detail', contactId, 'matters'] as const,
     progress: () => ['contacts', 'backfill-progress'] as const,
     config: () => ['contacts', 'config'] as const,
+    // WP6 画像总闸（同一个 /chat/config 端点的另一个字段）。挂 config 前缀，
+    // invalidate ['contacts','config'] 一次连带刷新两个 flag 投影。
+    profileConfig: () => ['contacts', 'config', 'profile'] as const,
     // WP4 互链: 邮件详情头批量精确解析。key 吃**排序后**的地址集（调用方负责
     // 归一去重 + sort，保证同一封邮件的地址集合稳定命中缓存）。
     resolve: (emails: readonly string[]) => ['contacts', 'resolve', ...emails] as const,

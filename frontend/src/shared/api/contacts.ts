@@ -17,6 +17,7 @@ import type {
   ContactMergeBody,
   ContactPatchBody,
   ContactPatchResponse,
+  ContactProfileSuggestionField,
   ContactResolveResponse,
   ContactSeniority,
   ContactSort,
@@ -25,6 +26,14 @@ import type {
 
 function segment(value: string | number): string {
   return encodeURIComponent(String(value))
+}
+
+/** `POST /contacts/{id}/profile/refresh` 的 202 载荷。`started=false` = 已有一轮在跑
+ *  （幂等，不重复排任务）。 */
+export interface ContactProfileRefreshResult {
+  contact_id: number
+  status: 'running'
+  started: boolean
 }
 
 export interface ContactsApi {
@@ -63,6 +72,20 @@ export interface ContactsApi {
   ): Promise<{ email: string; former: boolean }>
   /** 人级合并 (WP3)：contactId = winner (保留方)。成功返回 winner 详情。 */
   merge(contactId: number, body: ContactMergeBody): Promise<ContactDetailDto>
+  /** WP6 手动生成画像 → 202。重复点击幂等 (已 running 返回 started:false)；
+   *  画像 flag off → E_DISABLED；墓碑 → E_CONTACT_MERGED (403)。 */
+  refreshProfile(contactId: number): Promise<ContactProfileRefreshResult>
+  /** WP6 采纳建议值：写入身份字段 **并落锁**。成功返回完整详情。 */
+  adoptProfileSuggestion(
+    contactId: number,
+    field: ContactProfileSuggestionField,
+    value: string
+  ): Promise<ContactDetailDto>
+  /** WP6 忽略建议值：只写进 `ignored_suggestions`（本轮消失，下轮画像可能再提）。 */
+  ignoreProfileSuggestion(
+    contactId: number,
+    field: ContactProfileSuggestionField
+  ): Promise<ContactDetailDto>
   backfillProgress(): Promise<ContactBackfillProgress>
 }
 
@@ -138,6 +161,19 @@ export function createContactsApi(baseUrl: string): ContactsApi {
     },
     merge(contactId, body) {
       return request(baseUrl, 'POST', `/contacts/${segment(contactId)}/merge`, { body })
+    },
+    refreshProfile(contactId) {
+      return request(baseUrl, 'POST', `/contacts/${segment(contactId)}/profile/refresh`)
+    },
+    adoptProfileSuggestion(contactId, field, value) {
+      return request(baseUrl, 'POST', `/contacts/${segment(contactId)}/profile/suggestions/adopt`, {
+        body: { field, value }
+      })
+    },
+    ignoreProfileSuggestion(contactId, field) {
+      return request(baseUrl, 'POST', `/contacts/${segment(contactId)}/profile/suggestions/ignore`, {
+        body: { field }
+      })
     },
     backfillProgress() {
       return request(baseUrl, 'GET', '/contacts/backfill/progress')

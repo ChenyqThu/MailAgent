@@ -1,7 +1,7 @@
-// 人物档案页（设计 §2.2，WP2 无画像）：档案头（含裸邮箱降级 D8 + 就地改名落锁）
-// → 画像卡「未开启」引导态（唯二例外之一；robot/list/is_self 换一行说明）→ 身份
-// 信息（邮箱锚点主/曾用 + 字段行点击即编辑 + 枚举 chips + 锁 pill + 手记 + 名字
-// 变体）→ 关联邮件（角色过滤 + 加载更多）→ 关联事项。
+// 人物档案页（设计 §2.2）：档案头（含裸邮箱降级 D8 + 就地改名落锁 + WP6「职务由画像
+// 推断」旁路）→ 画像卡（WP6 `ContactProfileCard`：完整态 + 四空态；robot/list 换一行
+// 说明）→ 身份信息（邮箱锚点主/曾用 + 字段行点击即编辑 + 枚举 chips + 锁 pill + 手记 +
+// 名字变体）→ 关联邮件（角色过滤 + 加载更多）→ 关联事项。
 // 危险操作全收进「更多操作」菜单（🔒 不放行内悬浮危险钮）；「合并」不渲染（WP3）。
 
 import { useEffect, useMemo, useRef, useState } from 'react'
@@ -15,7 +15,6 @@ import {
   Inbox,
   MoreHorizontal,
   Send,
-  Sparkles,
   UsersRound
 } from 'lucide-react'
 
@@ -45,8 +44,18 @@ import { useActiveEmail } from '@shared/state/active-email'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { ContactOrgSection } from './ContactOrgSection'
+import { ContactProfileCard } from './ContactProfileCard'
 import { Monogram } from './Monogram'
-import { ContactPip, HiddenPip, KindPip, LockPill, SecHead, SelfPip, TwoWayBar } from './parts'
+import {
+  AiMark,
+  ContactPip,
+  HiddenPip,
+  KindPip,
+  LockPill,
+  SecHead,
+  SelfPip,
+  TwoWayBar
+} from './parts'
 import { useContactDetail, useContactMatters, useContactsApi, useInvalidateContact } from './hooks'
 import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
 
@@ -474,7 +483,6 @@ export function ContactDetail({
 }: ContactDetailProps): React.ReactElement {
   const { t, i18n } = useTranslation()
   const locale = i18n.language || 'zh-CN'
-  const navigate = useNavigate()
   const api = useContactsApi()
   const invalidate = useInvalidateContact()
   const detailQuery = useContactDetail(contactId, true)
@@ -548,9 +556,18 @@ export function ContactDetail({
     detail.emails.find((email) => email.is_primary)?.address ?? detail.emails[0]?.address ?? null
   const bare = !detail.display_name
   const localPart = primaryEmail?.split('@')[0] ?? '—'
+  // WP6 职务旁路（原型 `DossierHead` :12-13）：身份字段没有职务、而画像推断出一个时，
+  // 副行用推断值补位并挂 AI 标记 —— 🔒 只是**显示**旁路，不写身份字段（写入的唯一路径
+  // 是画像卡建议值区的「采纳」）。
+  const inferredRoleTitle =
+    detail.role_title == null ? (detail.profile.document?.role_title ?? null) : null
   // 原型 `DossierHead` 的 `[...new Set([...])]`：组织/部门/职务重复时只留一份。
   const subtitleParts = [
-    ...new Set([detail.organization, detail.department, detail.role_title].filter(Boolean))
+    ...new Set(
+      [detail.organization, detail.department, detail.role_title ?? inferredRoleTitle].filter(
+        Boolean
+      )
+    )
   ]
   const rowLike: ContactGovernanceTarget = {
     id: detail.id,
@@ -699,6 +716,7 @@ export function ContactDetail({
                 <span className="truncate text-body text-ink-fg-1">
                   {subtitleParts.length > 0 ? subtitleParts.join(' · ') : (primaryEmail ?? '')}
                 </span>
+                {inferredRoleTitle ? <AiMark>{t('contacts.profile.aiRole')}</AiMark> : null}
                 {detail.function || detail.seniority ? (
                   <ContactPip>
                     {[
@@ -784,7 +802,7 @@ export function ContactDetail({
             </div>
           ) : null}
 
-          {/* ── 画像卡位（WP2：仅「未开启」引导态；非人/自己换一行说明）── */}
+          {/* ── 画像卡（WP6：完整态 + 四空态；非人换一行说明）── */}
           {detail.kind !== 'person' ? (
             <div className="flex items-center gap-2.5 rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-fg/[0.02] px-3.5 py-3 text-meta text-ink-fg-1">
               <span className="min-w-0 flex-1">
@@ -799,24 +817,11 @@ export function ContactDetail({
               </button>
             </div>
           ) : (
-            <div className="flex gap-2.5 rounded-[var(--r-card)] border border-dashed border-ink-border bg-ink-fg/[0.02] px-3.5 py-3.5">
-              <Sparkles size={15} aria-hidden className="mt-0.5 shrink-0 text-ai" />
-              <div className="min-w-0">
-                <div className="text-body font-medium text-ink-fg-1">
-                  {t('contacts.profile.off')}
-                </div>
-                <p className="mt-1 text-meta leading-relaxed text-ink-fg-3">
-                  {t('contacts.profile.offHint')}
-                </p>
-                <button
-                  type="button"
-                  onClick={() => void navigate({ to: '/agents', search: { tab: 'agents' } })}
-                  className="mt-2.5 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 py-1 text-meta text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3"
-                >
-                  {t('contacts.profile.offCta')}
-                </button>
-              </div>
-            </div>
+            <ContactProfileCard
+              contactId={contactId}
+              profile={detail.profile}
+              mailCount={detail.mail_count}
+            />
           )}
 
           {/* ── 身份信息 ── */}

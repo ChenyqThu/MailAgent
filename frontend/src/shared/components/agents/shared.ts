@@ -32,6 +32,14 @@ export const PREPROCESS_DOCS = ['soul', 'agent', 'rules', 'user'] as const
 // （xlsx→Notion），不进 gateway。
 export const PROJECT_PROGRESS_AGENT_ID = 'project_progress_sync'
 
+// WP6「联系人画像」专型行 —— 后端 DB v63 播种单行（id 固定、type='contact_profile'）。
+// 与 project_progress 同款「单例行 + trigger_json 存字面配置」：这里存
+// {fire_hour, daily_limit}（每日批处理时刻 + 每轮人数上限），运行时由
+// `src/contacts/profile_config.py::get_contact_profile_agent_config` 行内热读。
+// 🔴 总闸不在 .env 面板而在 Labs（MAILAGENT_CONTACT_PROFILE_ENABLED），卡片/抽屉读
+// /chat/config 的 contactProfileEnabled —— 不走 useEnvStore（远程 web 端 env 只读）。
+export const CONTACT_PROFILE_AGENT_ID = 'contact_profile_agent'
+
 // 0813 主 Agent（默认助手）的编辑器派生/换一换种子 —— 主 agent 不走 id 派生外观（未配置时
 // 落 OFFICIAL_ASSISTANT_AVATAR），种子只喂 shuffle 递进。卡片与抽屉共用同一个值，否则同一个
 // 「换一换」在两处会走出两条不同的序列。

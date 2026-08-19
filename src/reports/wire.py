@@ -226,7 +226,9 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
     # v31: project_progress 单例行也用 trigger_json 存触发配置（email_filter 词汇，运行时走
     # ProjectProgressDetector 子串匹配）→ 投影 trigger 供 Settings 抽屉读 sender/subject。
     # tool_policy/budget 仍 custom-only（project_progress 执行不进 gateway，无工具/预算语义）。
-    _projects_trigger = agent_type in ("custom", "project_progress")
+    # v63: contact_profile 单例行同款——trigger_json 存 {fire_hour, daily_limit} 字面配置，
+    # 不投影则 owner PUT 后 GET 恒 null（抽屉存得进读不回，即下面 grant_connectors 点名的形态）。
+    _projects_trigger = agent_type in ("custom", "project_progress", "contact_profile")
     trigger = _parse_obj(agent.get("trigger_json")) if _projects_trigger else None
     if _is_custom:
         tool_policy = _parse_obj(agent.get("tool_policy_json"))

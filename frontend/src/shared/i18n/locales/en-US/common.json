@@ -2943,6 +2943,10 @@
         "label": "Contacts",
         "helper": "Build people dossiers from your mail history automatically: a two-way-exchange-first list, identity fields with per-field locks, linked mail and matters. Zero manual entry; all data stays local.",
         "restartHint": "Restart the backend and Contacts appears in the sidebar; the first run scans your mail history in the background."
+      },
+      "contactProfile": {
+        "helper": "Write AI profiles for the contacts you exchange mail with (low-frequency batches, plus manual refresh for one person) and propose values read from signatures. It only reads mail; it never edits identity fields. Requires the contact directory.",
+        "restartHint": "Requires Contacts. Restart the backend to apply, then enable the Contact profiles agent on the Agents page."
       }
     },
     "accounts": {
@@ -4414,6 +4418,34 @@
       "envSaveError": "Failed to save enable state",
       "rowSaveError": "Failed to save preprocessing config"
     },
+    "contactProfile": {
+      "section": "Contact profiles",
+      "sectionHint": "Batch-reads your exchanges with a person to write a profile (role, recurring topics, communication style, trajectory) and proposes values read from signatures. It only reads mail; it never edits identity fields.",
+      "subtitle": "Profiles written in low-frequency batches; any contact can be refreshed by hand",
+      "configTitle": "Contact profiles · {title}",
+      "masterOff": "Master switch off",
+      "masterOnNote": "The master switch is on (MAILAGENT_CONTACT_PROFILE_ENABLED in Labs). The enable switch and schedule below take effect on save.",
+      "masterOffNote": "The master switch is off, so no profile runs. Turn on MAILAGENT_CONTACT_PROFILE_ENABLED under Settings → Labs (restart required). The enable switch and schedule here still save.",
+      "enable": "Enable the profile agent",
+      "enableHint": "Runs the batch on the schedule below (subject to the Labs master switch).",
+      "schedule": "Schedule",
+      "scheduleHint": "One pass per day at a fixed hour, capped at this many people",
+      "dailyHour": "Daily run hour (0-23)",
+      "dailyCap": "People per pass",
+      "modelHint": "Row-level model; following the global default uses the chat model",
+      "modelFollowGlobal": "Follow the global default",
+      "fallback": "Fallback model",
+      "fallbackHint": "Used when the main model fails; following the global default uses LLM_FALLBACK_MODELS",
+      "fallbackFollowGlobal": "Follow the global default",
+      "fallbackNone": "No fallback",
+      "promptAppend": "Prompt addendum",
+      "promptAppendHint": "Appended after the built-in profile prompt; empty = built-in only",
+      "promptAppendPlaceholder": "e.g. Watch for shifts in how they word contract terms.",
+      "promptAppendNote": "The built-in prompt already pins the rule of citing only the supplied evidence and declining when it is thin; an addendum cannot override that.",
+      "errFireHour": "The daily run hour must be a whole number between 0 and 23",
+      "errDailyLimit": "The per-pass cap must be a whole number above 0",
+      "rowSaveError": "Could not save the profile agent configuration"
+    },
     "projectProgress": {
       "section": "Project Report Sync",
       "sectionHint": "Detect project report emails (xlsx attachment) → auto-parse and sync into the Notion progress database. Deterministic pipeline, no AI.",
@@ -5727,7 +5759,10 @@
       "insufficientHint": "We read {n} messages, but they’re mostly forwards and one-line confirmations, so the model declined to write a profile this round. It will retry.",
       "retry": "Try again",
       "failed": "Last refresh failed",
-      "notPerson": "Marked as {kind}; no profile is generated. Reclassify as a person if that’s wrong."
+      "notPerson": "Marked as {kind}; no profile is generated. Reclassify as a person if that’s wrong.",
+      "provenanceNoWindow": "From {n} messages · {model} · {ago}",
+      "modeFirst": "· first pass",
+      "modeIncremental": "· incremental"
     },
     "merge": {
       "title": "Merge contacts",
@@ -5781,6 +5816,7 @@
       "pickerAdded": "{n} stakeholders added · names and titles sync from contacts",
       "pickerCreated": "Contact created from {email} and added to the matter",
       "mergeFailed": "Merge didn't complete · both records unchanged",
+      "adoptedAll": "Adopted {n} suggestions and locked those fields",
       "saveFailed": "Save failed"
     }
   }

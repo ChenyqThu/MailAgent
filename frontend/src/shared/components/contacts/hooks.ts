@@ -3,16 +3,18 @@
 // 🔴 不直读 env，与 /api/contacts 的 require_contacts_enabled 读同一个冻结单例）。
 
 import { useMemo } from 'react'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import type { UseMutationResult } from '@tanstack/react-query'
 
 import { createContactsApi } from '@shared/api/contacts'
-import type { ContactsApi } from '@shared/api/contacts'
+import type { ContactProfileRefreshResult, ContactsApi } from '@shared/api/contacts'
 import type {
   ContactBackfillProgress,
   ContactDetailDto,
   ContactListResponse,
   ContactMailDirection,
   ContactMattersResponse,
+  ContactProfileSuggestionField,
   ContactSort,
   ContactView
 } from '@shared/api/types/contact'
@@ -69,7 +71,78 @@ export function useContactDetail(
     queryKey: qk.contacts.detail(contactId ?? -1),
     queryFn: () => api.get(contactId as number),
     enabled: enabled && contactId !== null,
+    // WP6 画像生成是分钟级后台任务（可离开页面）：running 时 3s 轮询同一份 detail，
+    // 落地态即停 —— 不另开 job 键（画像态本来就是 detail 投影的一部分，多一个键就多
+    // 一个会与 detail 打架的真源）。形态照 useBackfillProgress 的 refetchInterval。
+    refetchInterval: (query) => (query.state.data?.profile?.status === 'running' ? 3_000 : false),
     staleTime: 15_000
+  })
+}
+
+/** 画像总闸（`MAILAGENT_CONTACT_PROFILE_ENABLED` + agent 行 enabled 的合取，后端投影）。
+ *  ⚠️ 不读 useEnvStore —— 远程 web 端 env 面只读且拿不到 .env，与 useContactsEnabled 同源同形。 */
+export function useContactProfileEnabled(): { enabled: boolean; loading: boolean } {
+  const query = useQuery({
+    queryKey: qk.contacts.profileConfig(),
+    queryFn: async (): Promise<boolean> => {
+      try {
+        const response = await fetch(`${resolveApiBaseUrl()}/chat/config`, {
+          credentials: 'include'
+        })
+        if (!response.ok) return false
+        const body = (await response.json()) as { data?: { contactProfileEnabled?: unknown } }
+        return body.data?.contactProfileEnabled === true
+      } catch {
+        return false
+      }
+    },
+    staleTime: 30_000,
+    retry: false
+  })
+  return { enabled: query.data === true, loading: query.isPending }
+}
+
+/** 手动「立即更新画像」。202 即返回（生成在后端异步跑）；invalidate 让 detail 立刻
+ *  读到 `status:'running'`，随后由上面的 3s 轮询接管到落地态。 */
+export function useRefreshContactProfile(
+  contactId: number
+): UseMutationResult<ContactProfileRefreshResult, Error, void> {
+  const api = useContactsApi()
+  const invalidate = useInvalidateContact()
+  return useMutation({
+    mutationFn: () => api.refreshProfile(contactId),
+    onSuccess: async () => {
+      await invalidate(contactId)
+    }
+  })
+}
+
+/** 采纳建议值（写身份字段 + 落锁）。🔒 §4.2：**零乐观更新** —— 写入失败时建议项必须
+ *  留在原位，所以只在成功后 invalidate，不预先把行摘掉。 */
+export function useAdoptProfileSuggestion(
+  contactId: number
+): UseMutationResult<ContactDetailDto, Error, { field: ContactProfileSuggestionField; value: string }> {
+  const api = useContactsApi()
+  const invalidate = useInvalidateContact()
+  return useMutation({
+    mutationFn: (input) => api.adoptProfileSuggestion(contactId, input.field, input.value),
+    onSuccess: async () => {
+      await invalidate(contactId)
+    }
+  })
+}
+
+/** 忽略建议值（只本轮消失）。同样零乐观更新。 */
+export function useIgnoreProfileSuggestion(
+  contactId: number
+): UseMutationResult<ContactDetailDto, Error, ContactProfileSuggestionField> {
+  const api = useContactsApi()
+  const invalidate = useInvalidateContact()
+  return useMutation({
+    mutationFn: (field) => api.ignoreProfileSuggestion(contactId, field),
+    onSuccess: async () => {
+      await invalidate(contactId)
+    }
   })
 }
 

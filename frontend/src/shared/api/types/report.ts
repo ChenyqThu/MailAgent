@@ -321,6 +321,21 @@ export type CustomAgentTrigger =
       calendar_ids?: string[]
     }
 
+/** WP6「联系人画像」单例行的 trigger_json —— **不是** `CustomAgentTrigger` 判别式，
+ *  是与 project_progress 同类的「拿 trigger_json 当自由配置列」用法：字面存每日批处理
+ *  时刻与每轮人数上限，运行时由 `src/contacts/profile_config.py` 行内热读，不进
+ *  `parse_trigger`（PUT /report-agents 不深校验 trigger，见 routers/reports.py::set_config）。
+ *  🔴 整列覆写不是 merge：写的时候两个字段必须一起给。
+ *
+ *  只加进 `ReportConfigPatch`（写面）**不加进 `ReportAgentConfig`**（读面）：读面那个
+ *  union 有十来处消费方按 `.v` / `.kind` 判别式收窄，把一个没有判别字段的成员塞进去会
+ *  让每一处都失去收窄。读侧由 `ContactProfileConfigDrawer::readSchedule` 就地做运行时
+ *  形状检查 —— 那本来也是唯一知道这行是 contact_profile 的地方。 */
+export interface ContactProfileTrigger {
+  fire_hour: number
+  daily_limit: number
+}
+
 export type CustomAgentTriggerV2Entry = CustomAgentTrigger extends infer Trigger
   ? Trigger extends { v: 1 }
     ? Omit<Trigger, 'v'> & { id?: string; enabled: boolean }
@@ -454,8 +469,10 @@ export interface ReportConfigPatch {
    *  'standing_docs' | 'notion_context' 二选一；null = 重置回继承派生。保存即生效无需重启。 */
   context_source?: 'standing_docs' | 'notion_context' | null
   /** v30 Custom Agent：触发/工具/预算（wire.config_patch_to_db 写对应 *_json 列）。
-   *  null = 清空该配置；object = 覆写。仅 type='custom' 有意义。 */
-  trigger?: CustomAgentTrigger | TriggerSetV2 | null
+   *  null = 清空该配置；object = 覆写。仅 type='custom' 有意义
+   *  （project_progress 借 email_filter 词汇、contact_profile 借 ContactProfileTrigger
+   *  字面字段各存自己的单例配置，两者都不走 parse_trigger）。 */
+  trigger?: CustomAgentTrigger | TriggerSetV2 | ContactProfileTrigger | null
   tool_policy?: CustomAgentToolPolicy | null
   budget?: CustomAgentBudget | null
   avatar?: AgentAvatarConfig | null

@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
-import { ChevronRight, Pencil, Plus, Send, Sparkles, X, type LucideIcon } from 'lucide-react'
+import { ChevronRight, Pencil, Plus, Send, X, type LucideIcon } from 'lucide-react'
 
 import type { ContactDetailDto, ContactRelPersonDto } from '@shared/api/types/contact'
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from '@shared/components/ui/dialog'
@@ -23,7 +23,7 @@ import { openNewCompose } from '@shared/state/compose-new'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { Monogram } from './Monogram'
-import { SecHead } from './parts'
+import { AiMark, SecHead } from './parts'
 import { PersonPicker } from './PersonPicker'
 import { useContactList, useContactsApi, useInvalidateContact } from './hooks'
 import { useContactNavigation } from './navigation'
@@ -33,16 +33,11 @@ const SEARCH_DEBOUNCE_MS = 250
  *  （镜像 MergeContactsDialog 的 MERGE_CANDIDATE_CAP）。 */
 const PICK_CANDIDATE_CAP = 200
 
-/** 原型 `cui.jsx::AiMark`（sparkles + c-ai 字/10% 底/25% 边）；radius 跟随
- *  ContactPip 的既定映射（v3 无 4/5px 档 → pill）。WP5 恒 manual 不出现，结构位。 */
+/** 原型 `cui.jsx::AiMark`（sparkles + c-ai 字/10% 底/25% 边）。WP6 起签名本体上移到
+ *  `parts.tsx::AiMark`（档案头的「职务由画像推断」用同一个），这里只固定文案。 */
 function AutoSrcMark(): React.ReactElement {
   const { t } = useTranslation()
-  return (
-    <span className="inline-flex shrink-0 items-center gap-[3px] rounded-full border border-ai/25 bg-ai/10 px-[5px] py-px text-micro leading-4 text-ai">
-      <Sparkles size={9} aria-hidden />
-      {t('contacts.org.autoSrc')}
-    </span>
-  )
+  return <AiMark>{t('contacts.org.autoSrc')}</AiMark>
 }
 
 /** 子块标签行右侧的 ghost 小钮（原型 `Btn size="sm" kind="ghost" icon`）。 */

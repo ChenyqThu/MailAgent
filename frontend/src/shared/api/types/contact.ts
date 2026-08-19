@@ -69,8 +69,12 @@ export interface ContactRowDto {
   /** WP5 汇报线: 上级 id + 显示名 (分组 label / 行菜单「写邮件并抄送上级」可用性). */
   manager_contact_id: number | null
   manager_display_name: string | null
-  /** WP6 画像期接真值; WP2 恒 null 占位. */
+  /** WP6 画像摘要 (后端已单行截断)。 */
   profile_summary: string | null
+  /** WP6 画像阈值 (🔒 §4.4 单一来源: 文案禁写死 50)。 */
+  profile_min: number
+  /** WP6 该行是否够格生成画像 (未隐藏 + person + 达阈值 + 至少发出过 1 封)。 */
+  profile_eligible: boolean
 }
 
 export interface ContactListResponse {
@@ -133,8 +137,90 @@ export interface ContactDetailDto {
   manager_src: 'manual' | 'auto' | null
   reports: ContactRelPersonDto[]
   peers: ContactRelPersonDto[]
-  /** WP6 画像期接真值; WP2 恒 null. */
-  profile: null
+  /** WP6 画像投影 (`src/contacts/profile.py::profile_projection`)。 */
+  profile: ContactProfileDto
+}
+
+// ---- WP6 画像 (canonical: src/contacts/profile.py + profile_prompts.py::PROFILE_TOOL_SCHEMA) ----
+
+/** 画像文档里的一条轨迹 (D5)。`at` 后端保证 `^\d{4}-\d{2}$`;
+ *  `ev` = 证据邮件的 internal_id (可 null —— 模型没给出处时)。 */
+export interface ContactProfileEvolutionItem {
+  at: string
+  text: string
+  ev: number | null
+}
+
+/** 证据窗。🔴 `from`/`to` 是 **internal_id 整数**不是月份串 —— 与 `evolution[].ev`
+ *  同一坐标系 (原型 mock 里的 '2026-06' 是演示内容, 不作数)。0 封新证据的增量轮
+ *  两端都可能是 null。 */
+export interface ContactProfileEvidenceWindow {
+  from: number | null
+  to: number | null
+  mail_count: number
+  mode: 'first' | 'incremental'
+}
+
+/** 画像正文文档 (`profile_json` 列)。🔒 全部字段纯文本渲染, 不解析 markdown/HTML。 */
+export interface ContactProfileDocument {
+  summary: string
+  role_title: string | null
+  formal_name: string | null
+  department: string | null
+  topics: string[]
+  projects: string[]
+  communication_style: string | null
+  contact_info: { phone?: string | null }
+  evolution: ContactProfileEvolutionItem[]
+  /** 🔴 是 `string[]` 不是 `{text}[]` (schema: `array of string`)。 */
+  contradictions: string[]
+  evidence_window: ContactProfileEvidenceWindow
+}
+
+/** 可采纳的建议字段 —— 后端 `PROFILE_SUGGESTION_FIELDS`
+ *  (`src/api/routers/contacts.py`) 的三值, adopt/ignore 的 body 只收这三个。 */
+export const CONTACT_PROFILE_SUGGESTION_FIELDS = ['formal_name', 'department', 'phone'] as const
+export type ContactProfileSuggestionField = (typeof CONTACT_PROFILE_SUGGESTION_FIELDS)[number]
+
+export interface ContactProfileSuggestion {
+  field: ContactProfileSuggestionField
+  value: string
+}
+
+/** 画像派生态 (后端算, 前端只消费):
+ *  `unconfigured` = 总闸或 agent 行未开 / `below_threshold` = 往来不足
+ *  `pending_batch` = 够格但批处理没跑到 / `ok` / `skipped` = 模型判证据不足
+ *  `failed` / `running`。 */
+export type ContactProfileStatus =
+  | 'unconfigured'
+  | 'below_threshold'
+  | 'pending_batch'
+  | 'ok'
+  | 'skipped'
+  | 'failed'
+  | 'running'
+
+/** `profile_status` 列的原始值 (未派生; 无行时 null)。 */
+export type ContactProfileRawStatus = 'ok' | 'skipped' | 'failed' | 'running' | null
+
+export interface ContactProfileDto {
+  document: ContactProfileDocument | null
+  /** `document` 的同物别名 (后端两个键指同一个对象)。 */
+  profile_json: ContactProfileDocument | null
+  profile_updated_at: number | null
+  profile_mail_count: number | null
+  profile_model: string | null
+  profile_status: ContactProfileRawStatus
+  profile_attempted_at: number | null
+  profile_error: string | null
+  /** skipped 态「已读过 n 封」的取数口径。 */
+  attempted_mail_count: number | null
+  status: ContactProfileStatus
+  /** 🔒 §4.4 单一来源: 阈值文案读这里, 前端禁写死 50。 */
+  profile_min: number
+  eligible: boolean
+  needed_mail_count: number
+  suggestions: ContactProfileSuggestion[]
 }
 
 /** POST /api/contacts/resolve 的 chip 最小集 (WP4 互链: Monogram+姓名所需)。 */

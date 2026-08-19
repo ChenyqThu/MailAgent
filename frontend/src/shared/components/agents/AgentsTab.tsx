@@ -28,12 +28,21 @@ import { applyEnvPatch, useEnvStore } from '@shared/state/env'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError } from '@shared/state/toast'
-import { IS_WEB, PRESS_SCALE, PROJECT_PROGRESS_AGENT_ID, envFlagOn, pressHandlers } from './shared'
+import {
+  CONTACT_PROFILE_AGENT_ID,
+  IS_WEB,
+  PRESS_SCALE,
+  PROJECT_PROGRESS_AGENT_ID,
+  envFlagOn,
+  pressHandlers
+} from './shared'
+import { useContactProfileEnabled } from '@shared/components/contacts/hooks'
 import { ConfigDrawer } from './drawers/ConfigDrawer'
 import { SearchConfigDrawer } from './drawers/SearchConfigDrawer'
 import { MainAssistantDrawer } from './drawers/MainAssistantDrawer'
 import { PreprocessConfigDrawer } from './drawers/PreprocessConfigDrawer'
 import { ProjectProgressConfigDrawer } from './drawers/ProjectProgressConfigDrawer'
+import { ContactProfileConfigDrawer } from './drawers/ContactProfileConfigDrawer'
 import { AgentAvatar } from './AgentAvatar'
 import { useAvatarHoverShowcase } from './useAvatarHoverShowcase'
 import { MainAssistantCard } from './MainAssistantCard'
@@ -936,6 +945,125 @@ function ProjectProgressAgentCard({
   )
 }
 
+// ─── 联系人画像卡（type='contact_profile'，task 08-13 WP6）────────────────────
+// 与项目周报卡同型（后端 DB v63 播种单行，无新建 / 删除；启用态 = row.enabled，快捷开关
+// 与抽屉都改它，保存即生效），**唯一差别是总闸的数据源**：项目周报读 env
+// PROJECT_PROGRESS_SYNC_ENABLED，画像读 /chat/config 的 contactProfileEnabled ——
+// ⚠️ 不用 useEnvStore：那是本地 .env 面板，远程 web 端只读且拿不到值，而 contacts 域
+// 的既有 flag 投影（useContactsEnabled）本来就走 /chat/config，同源才不会两处打架。
+function ContactProfileAgentCard({
+  cfg,
+  masterEnabled,
+  onConfig,
+  onToggle
+}: {
+  cfg: ReportAgentConfig
+  /** /chat/config 的 contactProfileEnabled（Labs flag + agent 行的合取由后端算）。 */
+  masterEnabled: boolean
+  onConfig: () => void
+  /** 快捷开关：切 row.enabled（总闸未开 / web 时禁用不传）。 */
+  onToggle?: (v: boolean) => void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const showcase = useAvatarHoverShowcase()
+  const rowEnabled = cfg.enabled
+  // 徽标三态：总闸未开（中性）→ 总闸开且行启用（绿）→ 总闸开但行停用（灰）。
+  const badgeLabel = !masterEnabled
+    ? t('agents.contactProfile.masterOff')
+    : rowEnabled
+      ? t('agents.card.enabled')
+      : t('agents.card.disabled')
+  const badgeOn = masterEnabled && rowEnabled
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onConfig}
+      onKeyDown={(e) => {
+        // 只响应卡片本身的键盘激活；焦点在内嵌 Switch 上的 Enter/Space 由 Switch 处理。
+        if (e.target !== e.currentTarget) return
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault()
+          onConfig()
+        }
+      }}
+      className="flex items-center"
+      style={{
+        width: '100%',
+        textAlign: 'left',
+        cursor: 'pointer',
+        gap: 13,
+        padding: '18px 20px',
+        borderRadius: 14,
+        background: 'rgb(var(--ink-2) / 0.55)',
+        border: '1px solid rgb(var(--ink-border))',
+        transition: 'border-color 120ms'
+      }}
+      onMouseEnter={(e) => {
+        e.currentTarget.style.borderColor = 'rgb(var(--c-accent) / 0.5)'
+        showcase.hoverProps.onMouseEnter()
+      }}
+      onMouseLeave={(e) => {
+        e.currentTarget.style.borderColor = 'rgb(var(--ink-border))'
+        showcase.hoverProps.onMouseLeave()
+      }}
+    >
+      <AgentAvatar
+        agentId={cfg.id}
+        config={cfg.avatar}
+        size={42}
+        title={cfg.title}
+        state={showcase.state}
+        animated={showcase.animated}
+      />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div className="flex items-center" style={{ gap: 9 }}>
+          <h3 style={{ fontSize: 16, fontWeight: 600, color: 'rgb(var(--ink-fg))' }}>
+            {cfg.title}
+          </h3>
+          <span
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: 5,
+              fontSize: 11,
+              padding: '2px 8px',
+              borderRadius: 5,
+              color: badgeOn ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))',
+              background: badgeOn ? 'rgb(var(--c-ok) / 0.12)' : 'rgb(var(--ink-fg) / 0.05)',
+              border: `1px solid ${badgeOn ? 'rgb(var(--c-ok) / 0.25)' : 'rgb(var(--ink-border))'}`
+            }}
+          >
+            <span
+              style={{
+                width: 6,
+                height: 6,
+                borderRadius: '50%',
+                background: badgeOn ? 'rgb(var(--c-ok))' : 'rgb(var(--ink-fg-3))'
+              }}
+            />
+            {badgeLabel}
+          </span>
+        </div>
+        <div style={{ marginTop: 4, fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', lineHeight: 1.5 }}>
+          {t('agents.contactProfile.subtitle')}
+        </div>
+      </div>
+      {/* span stopPropagation 防止点开关连带触发卡片 onConfig（同其余专型卡）。 */}
+      <span
+        onClick={(e) => e.stopPropagation()}
+        style={
+          !masterEnabled || IS_WEB || !onToggle
+            ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
+            : { display: 'flex', flexShrink: 0 }
+        }
+      >
+        <Switch on={rowEnabled} onChange={onToggle ?? (() => {})} />
+      </span>
+    </div>
+  )
+}
+
 // ─── 报告生成服务总闸行（Lane 2 #10，env MAILAGENT_REPORT_AGENT_ENABLED）──────
 // 同型的 PROJECT_PROGRESS_SYNC_ENABLED 总闸早有 UI（周报抽屉），报告总闸此前只能改 .env。
 // 🔴 与项目周报「总闸未开=卡片禁用」不同，这里是 **OR 语义**（service.py:737）：worker
@@ -1061,6 +1189,10 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const [preprocessOpen, setPreprocessOpen] = useState(false)
   // S5 W5a — 项目周报同步配置抽屉开合（后端 v31 播种单行，只编辑、无新建）。
   const [projectProgressOpen, setProjectProgressOpen] = useState(false)
+  // WP6 — 联系人画像配置抽屉开合（后端 v63 播种单行，只编辑、无新建）。
+  const [contactProfileOpen, setContactProfileOpen] = useState(false)
+  // 画像卡总闸：/chat/config 的 contactProfileEnabled（不是 env —— 见卡片注释）。
+  const contactProfileMaster = useContactProfileEnabled().enabled
   // 项目周报卡的总闸绑 env PROJECT_PROGRESS_SYNC_ENABLED（响应式读，总闸未开 → 卡片显「总闸未开」）。
   const projectProgressMaster = useEnvStore((s) =>
     s.state.status === 'ready'
@@ -1074,6 +1206,14 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
       await saveProgressRow(PROJECT_PROGRESS_AGENT_ID, { enabled: v })
     } catch (e: unknown) {
       toastError(t('agents.projectProgress.rowSaveError'), errorMessage(e))
+    }
+  }
+  // 画像卡快捷开关：同上，切 row.enabled（总闸在 Labs，这里不写 env）。
+  const handleContactProfileToggle = async (v: boolean): Promise<void> => {
+    try {
+      await saveProgressRow(CONTACT_PROFILE_AGENT_ID, { enabled: v })
+    } catch (e: unknown) {
+      toastError(t('agents.contactProfile.rowSaveError'), errorMessage(e))
     }
   }
   // 预处理卡的启用态绑全局 env LLM_AGENT_ENABLED（响应式读，env 变即刷新徽标）。
@@ -1120,6 +1260,11 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
     () => agents.filter((a) => a.type === 'project_progress'),
     [agents]
   )
+  // WP6 — 联系人画像 agent（type='contact_profile'，后端 v63 播种单行）。
+  const contactProfileAgents = useMemo(
+    () => agents.filter((a) => a.type === 'contact_profile'),
+    [agents]
+  )
   // S5 — 完全自定义 agent（type='custom'），按 id 稳定排序。此前无此 filter → custom 行被
   // 静默丢弃；补上后 custom 卡片可见。
   const customAgents = useMemo(
@@ -1148,6 +1293,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const preprocessAgent = preprocessAgents[0] ?? null
   // 项目周报只有一行（后端播种）；抽屉编辑它。
   const projectProgressAgent = projectProgressAgents[0] ?? null
+  // 联系人画像只有一行（后端播种）；抽屉编辑它。
+  const contactProfileAgent = contactProfileAgents[0] ?? null
   // drawer 任一打开 → 锁列表滚动。
   const anyDrawerOpen =
     configAgent !== null ||
@@ -1155,7 +1302,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
     customDrawer !== null ||
     mainAssistantOpen ||
     preprocessOpen ||
-    projectProgressOpen
+    projectProgressOpen ||
+    contactProfileOpen
 
   // 三层各司其职：①外层 relative 不滚 → drawer 钉这层（不随列表滚）②滚动层 absolute inset:0
   // 承接滚动、**block 流非 flex**（子项自然高度、超出滚动，绝不压缩卡片）③内容层 flex column
@@ -1328,6 +1476,34 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
             </>
           )}
 
+          {/* ─── 联系人画像区（WP6）───────────────────────────────────────
+              仅当后端 v63 播种行存在时渲染（老库未迁移 → 不显，避免空区块）。 */}
+          {contactProfileAgent && (
+            <>
+              <div style={{ marginTop: 8 }}>
+                <h2
+                  style={{
+                    fontSize: 16,
+                    fontWeight: 600,
+                    color: 'rgb(var(--ink-fg))',
+                    letterSpacing: '-0.01em'
+                  }}
+                >
+                  {t('agents.contactProfile.section')}
+                </h2>
+                <p style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))', marginTop: 4 }}>
+                  {t('agents.contactProfile.sectionHint')}
+                </p>
+              </div>
+              <ContactProfileAgentCard
+                cfg={contactProfileAgent}
+                masterEnabled={contactProfileMaster}
+                onConfig={() => setContactProfileOpen(true)}
+                onToggle={(v) => void handleContactProfileToggle(v)}
+              />
+            </>
+          )}
+
           {/* ─── 完全自定义 Agents 区（S5）──────────────────────────────
               flag on 或已有 custom 行时展开 section header + 卡片；flag off 且无 custom 行
               时只留下方 NewAgentTile 禁用占位（字节级同现状）。 */}
@@ -1438,6 +1614,12 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         cfg={projectProgressAgent}
         open={projectProgressOpen}
         onClose={() => setProjectProgressOpen(false)}
+      />
+      <ContactProfileConfigDrawer
+        cfg={contactProfileAgent}
+        open={contactProfileOpen}
+        masterEnabled={contactProfileMaster}
+        onClose={() => setContactProfileOpen(false)}
       />
     </div>
   )

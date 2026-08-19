@@ -7,7 +7,7 @@
 // 文字、没有图标」。故这三个 pip 不补图标；`eyeoff` 有 path、真渲染，HiddenPip
 // 照原型带图标。
 
-import { EyeOff, Lock, LockOpen } from 'lucide-react'
+import { EyeOff, Lock, LockOpen, Sparkles } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
@@ -37,7 +37,7 @@ export function TwoWayBar({
   )
 }
 
-type PipTone = 'neutral' | 'ok' | 'info'
+type PipTone = 'neutral' | 'ok' | 'info' | 'critical'
 
 /** 原型 `ui.jsx::Pip size="sm"`（10.5px / 2px 5px / 细描边）的仓库映射：
  *  圆角走仓库 pill 惯例（v3 四档圆角里没有 5px 档）。 */
@@ -61,11 +61,28 @@ export function ContactPip({
           ? 'border-ok/25 bg-ok/[0.12] text-ok'
           : tone === 'info'
             ? 'border-info/25 bg-info/[0.12] text-info'
-            : 'border-ink-border bg-ink-fg/[0.05] text-ink-fg-1',
+            : // WP6 provenance 的「上次更新失败」（原型 `Pip tone="critical"`）：同一
+              // 底 12% / 边 25% 配方换失败色。
+              tone === 'critical'
+              ? 'border-fail/25 bg-fail/[0.12] text-fail'
+              : 'border-ink-border bg-ink-fg/[0.05] text-ink-fg-1',
         className
       )}
     >
       {icon}
+      {children}
+    </span>
+  )
+}
+
+/** 原型 `cui.jsx::AiMark` :115-122（sparkles + `--c-ai` 字 / 10% 底 / 25% 边）：
+ *  标一处「这不是你填的，是 AI 推断的」。radius 跟随 ContactPip 的既定映射
+ *  （v3 无 4/5px 档 → pill）。
+ *  消费方：档案头的「职务由画像推断」、组织关系区的「从邮件推断」。 */
+export function AiMark({ children }: { children: React.ReactNode }): React.ReactElement {
+  return (
+    <span className="inline-flex shrink-0 items-center gap-[3px] rounded-full border border-ai/25 bg-ai/10 px-[5px] py-px text-micro leading-4 text-ai">
+      <Sparkles size={9} aria-hidden />
       {children}
     </span>
   )
@@ -92,13 +109,17 @@ export function HiddenPip(): React.ReactElement {
   )
 }
 
-/** 详情页分区头（原型 `cui.jsx::SecHead`）：标题 + 计数 + 一根填满余宽的细线。 */
+/** 详情页分区头（原型 `cui.jsx::SecHead`）：图标 + 标题 + 计数 + 一根填满余宽的细线。
+ *  `icon` 是 slot 不是名字 —— 调用方自带 size/色（画像卡的「建议值」要 ai 紫、
+ *  「人物轨迹」要 ink-fg-2）。 */
 export function SecHead({
+  icon,
   title,
   count,
   right,
   className
 }: {
+  icon?: React.ReactNode
   title: string
   count?: number | string
   right?: React.ReactNode
@@ -106,6 +127,7 @@ export function SecHead({
 }): React.ReactElement {
   return (
     <div className={cn('mb-2.5 flex items-center gap-2', className)}>
+      {icon}
       <h3 className="shrink-0 text-meta font-semibold tracking-[-0.01em] text-ink-fg">{title}</h3>
       {count !== undefined ? (
         <span className="shrink-0 font-mono text-micro tabular-nums text-ink-fg-3">{count}</span>
