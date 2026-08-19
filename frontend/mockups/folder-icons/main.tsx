@@ -4,7 +4,8 @@
 //   · 主仓 design token（直接 import src/electron/renderer/index.css）
 //   · 主仓拖拽基座 @shared/components/ui/DragReorderList（FLIP 缺陷已修版，
 //     commit 35fd6c11；走它的 renderItem 逃生舱塞富内容，壳与交互内核一行没动）
-//   · 主仓 Switch primitive（@shared/components/ui/switch）
+//   · 主仓 Switch primitive（@shared/components/ui/switch，32×18 原尺寸）
+//     —— owner 已拍：两个 per-folder 开关只用它，早先并列试的「图标钮」形态删除
 //   · 主仓动效图标外壳 IconShell + AnimatedIconActiveProvider（24 个 folder
 //     图标的动效见 ./animated.tsx；开关用主仓现成的 BellIcon / BotIcon）
 //   · 侧边栏行的 authored CSS（.app-nav / .row / .row-selected / .acc-select），
@@ -13,6 +14,8 @@
 // mockup 里是假的：文件夹数据（真名假计数，见 data.ts）、保存链路（只打日志）。
 //
 // 🔴 两个开关的极性是从后端读出来的，不是按直觉设计的 —— 见页面底部「语义与出处」卡。
+// 🔴 内建 5 行是**纯展示**：图标不开放自定义（owner 已拍），沿用 Sidebar.tsx 的
+//    MAILBOX_ICON；整段仍画出来，是为了看清自定义文件夹在侧边栏里的位置与顺序。
 
 import {
   StrictMode,
@@ -32,11 +35,14 @@ import {
   AnimatedIconActiveProvider,
   FeatherIcon,
   FolderInputIcon,
+  FolderPlusIcon,
   FoldersIcon,
   SendIcon,
   ZapIcon,
   type AnimatedIconProps
 } from '@shared/components/icons'
+// 刷新版（本 mockup 按 lucide-react@1.16.0 重写）—— 只用于底部那张对比卡。
+import { FolderInputIcon24, FolderPlusIcon24, FoldersIcon24 } from './animated'
 import {
   DragReorderList,
   type ReorderItem,
@@ -51,8 +57,7 @@ import {
   COL_INDEX,
   PrefColumnHeader,
   PrefNotApplicable,
-  PrefToggle,
-  type ToggleStyle
+  PrefToggle
 } from './prefs'
 import { Tip } from './tip'
 
@@ -73,12 +78,9 @@ const BUILTIN_ICON: Record<string, (p: AnimatedIconProps) => React.ReactElement>
   folders: FoldersIcon
 }
 
-/** 内建行当前该用哪个图标组件：改过就用改的，没改过用 Sidebar 写死那个。 */
-function builtinIconOf(
-  row: BuiltinRow,
-  override: FolderIconKey | null
-): (p: AnimatedIconProps) => React.ReactElement {
-  return override ? folderIcon(override) : BUILTIN_ICON[row.icon]!
+/** 内建行的图标 —— 就是 Sidebar.tsx 写死那个，没有覆盖通道（owner 已拍不开放）。 */
+function builtinIconOf(row: BuiltinRow): (p: AnimatedIconProps) => React.ReactElement {
+  return BUILTIN_ICON[row.icon]!
 }
 
 /* ── 图标选择器 ─────────────────────────────────────────────────── */
@@ -87,8 +89,6 @@ interface PickerAnchor {
   key: string
   displayName: string
   rect: DOMRect
-  /** builtin 行的「默认」= 回到 Sidebar 写死那个，不是回到通用 Folder。 */
-  scope: 'folder' | 'builtin'
 }
 
 /** 24 格网格，一眼扫完；hover 任一格即播它自己的动效（预览）。
@@ -202,9 +202,7 @@ function IconPicker({
 
         {/* 落库存的就是这个 key，右边是它的动效说明。 */}
         <div className="mt-2 flex items-baseline gap-2 px-0.5">
-          <span className="shrink-0 font-mono text-meta text-ink-fg-2">
-            {shown ?? (anchor.scope === 'builtin' ? '（内建默认）' : 'folder')}
-          </span>
+          <span className="shrink-0 font-mono text-meta text-ink-fg-2">{shown ?? 'folder'}</span>
           <span className="min-w-0 flex-1 truncate text-meta text-ink-fg-3">
             {shown ? FOLDER_ICON_MOTION[shown] : '未设置，用写死的那个'}
           </span>
@@ -255,17 +253,39 @@ function FolderIconButton({
   )
 }
 
+/** 内建行的图标位 —— **纯展示**，没有按钮语义（owner 已拍不开放自定义）。
+ *  仍保留 hover 播动效：让 owner 看清它在侧边栏里是什么形状、怎么动。 */
+function BuiltinIconSlot({
+  Icon,
+  active
+}: {
+  Icon: (p: AnimatedIconProps) => React.ReactElement
+  active: boolean
+}): React.ReactElement {
+  return (
+    <Tip label="内建邮箱图标写死在 Sidebar.tsx，不开放自定义" className={`${COL_ICON} shrink-0`}>
+      <span className="grid h-7 w-7 shrink-0 place-items-center text-ink-fg-1">
+        <Icon size={15} strokeWidth={1.75} active={active} />
+      </span>
+    </Tip>
+  )
+}
+
 /** 行右侧的名字块：常态只显示显示名，hover 才淡出 imap 原始名（不占额外行高、不抖）。 */
 function RowName({
   label,
-  imapName
+  imapName,
+  badge
 }: {
   label: string
   imapName: string | null
+  /** 可选小标记（目前只有「存档」用，标它是 canonical mailbox 名）。 */
+  badge?: React.ReactNode
 }): React.ReactElement {
   return (
     <span className="flex min-w-0 flex-1 items-baseline gap-2">
       <span className="min-w-0 truncate text-body text-ink-fg">{label}</span>
+      {badge}
       <span className="min-w-0 flex-1 truncate font-mono text-meta text-ink-fg-3 opacity-0 transition-opacity duration-fast group-hover/row:opacity-100">
         {imapName ?? '本地视图，无 IMAP 名'}
       </span>
@@ -280,6 +300,27 @@ function RowCount({ count }: { count?: number }): React.ReactElement {
     >
       {count && count > 0 ? count.toLocaleString('en-US') : ''}
     </span>
+  )
+}
+
+/** 内建邮箱的一行 —— 与拖拽行同一套内边距/列宽，两段列才竖着对齐。
+ *  整行 hover 驱动图标动效（和真 Sidebar.NavRow 同一个 Context 通道）。 */
+function BuiltinRowItem({ row }: { row: BuiltinRow }): React.ReactElement {
+  const [hover, setHover] = useState(false)
+  return (
+    <li
+      onPointerEnter={() => setHover(true)}
+      onPointerLeave={() => setHover(false)}
+      className="group/row flex items-center gap-2.5 rounded-xl py-2 pl-2 pr-3 transition-colors duration-fast hover:bg-ink-2"
+    >
+      <BuiltinLockSlot />
+      <BuiltinIconSlot Icon={builtinIconOf(row)} active={hover} />
+      <RowName label={row.label} imapName={row.imapName} />
+      <PrefNotApplicable kind="notify" />
+      <PrefNotApplicable kind="ai" />
+      <RowCount count={row.count} />
+      <span className={`${COL_INDEX} shrink-0`} aria-hidden="true" />
+    </li>
   )
 }
 
@@ -354,22 +395,37 @@ function NavRow({
 
 /* ── 24 个候选一览（含动效说明，当验收清单用）───────────────────── */
 
+/** 主仓 `src/shared/components/icons/animated/` 里**已经存在**的三个 —— 它们同时
+ *  被 Sidebar 内建行用着，所以是唯一需要「刷新会不会影响别处」的三个。 */
+const IN_MAIN_REPO = new Set<FolderIconKey>(['folder-input', 'folder-plus', 'folders'])
+
 function IconGallery(): React.ReactElement {
   const [hover, setHover] = useState<FolderIconKey | null>(null)
   return (
     <div className="grid grid-cols-[repeat(auto-fill,minmax(230px,1fr))] gap-2">
       {FOLDER_ICON_KEYS.map((key) => {
         const Icon = folderIcon(key)
+        const inRepo = IN_MAIN_REPO.has(key)
         return (
           <div
             key={key}
             onMouseEnter={() => setHover(key)}
             onMouseLeave={() => setHover(null)}
-            className="flex items-center gap-2.5 rounded-[var(--r-ctl)] border border-ink-border bg-ink-1 px-2.5 py-2 transition-colors duration-fast hover:bg-ink-3"
+            className={[
+              'flex items-center gap-2.5 rounded-[var(--r-ctl)] border bg-ink-1 px-2.5 py-2 transition-colors duration-fast hover:bg-ink-3',
+              inRepo ? 'border-ai/45' : 'border-ink-border'
+            ].join(' ')}
           >
             <Icon size={17} strokeWidth={1.75} active={hover === key} />
             <span className="min-w-0 flex-1">
-              <span className="block truncate font-mono text-meta text-ink-fg-2">{key}</span>
+              <span className="flex items-baseline gap-1.5">
+                <span className="min-w-0 truncate font-mono text-meta text-ink-fg-2">{key}</span>
+                {inRepo ? (
+                  <span className="shrink-0 rounded-[3px] border border-ai/45 px-1 text-micro text-ai">
+                    主仓已有
+                  </span>
+                ) : null}
+              </span>
               <span className="block truncate text-meta text-ink-fg-3">
                 {FOLDER_ICON_MOTION[key]}
               </span>
@@ -377,6 +433,121 @@ function IconGallery(): React.ReactElement {
           </div>
         )
       })}
+    </div>
+  )
+}
+
+/* ── 主仓已有的三个：旧版 vs 刷新版对比 ─────────────────────────── */
+
+interface RefreshCase {
+  key: FolderIconKey
+  /** 主仓 src/shared/components/icons/animated/<key>.tsx 现在的样子。 */
+  Old: (p: AnimatedIconProps) => React.ReactElement
+  /** 本 mockup 按 lucide-react@1.16.0 重写的样子。 */
+  New: (p: AnimatedIconProps) => React.ReactElement
+  /** 几何是否真的漂了（逐字比对 src 的 d 串与 node_modules 的 __iconNode）。 */
+  drift: boolean
+  geom: string
+  motion: string
+  verdict: string
+}
+
+const REFRESH_CASES: readonly RefreshCase[] = [
+  {
+    key: 'folder-input',
+    Old: FolderInputIcon,
+    New: FolderInputIcon24,
+    drift: false,
+    geom: '三条 d 串与 1.16.0 __iconNode 逐字符相同（外壳 + M2 13h10 + m9 16 3-3-3-3）。',
+    motion: '同型：箭头组整体右移再归位，主仓 2px、刷新版 2.2px，肉眼无差。',
+    verdict: '不用刷 —— 它本来就是 1.16.0 的几何。'
+  },
+  {
+    key: 'folder-plus',
+    Old: FolderPlusIcon,
+    New: FolderPlusIcon24,
+    drift: false,
+    geom: '三条 d 串与 1.16.0 相同（只是 __iconNode 里加号在前、外壳在后，渲染无差）。',
+    motion: '同型：两笔 pathLength 描线，横竖错开 0.1s。',
+    verdict: '不用刷 —— 它本来就是 1.16.0 的几何。'
+  },
+  {
+    key: 'folders',
+    Old: FoldersIcon,
+    New: FoldersIcon24,
+    drift: true,
+    geom:
+      '🔴 真的不同。旧：前层 M20 17a2 2 0 0 0 2-2V9…（带耳朵的小文件夹，居中偏右），' +
+      '后层只有一条折线 M2 8v11a2 2 0 0 0 2 2h14。新：前层 M20 5a2 2 0 0 1 2 2v7…' +
+      '（方正、更大、右上角起手），后层 M3 8.268a2 2 0 0 0-1 1.738V19…（带圆角起手，读得出是第二个文件夹）。',
+    motion:
+      '也不同。旧：后层 opacity→0 + scale 0.9，整个消失；新：后层 opacity→0.35 保留，' +
+      '读起来是「前层滑出、后层退到身后」而不是「后层没了」。',
+    verdict: '这一个要刷 —— 24 格里它是唯一形状对不上其余 23 个的。'
+  }
+]
+
+function RefreshCompare(): React.ReactElement {
+  const [hover, setHover] = useState<FolderIconKey | null>(null)
+  return (
+    <div className="space-y-2.5">
+      {REFRESH_CASES.map((c) => (
+        <div
+          key={c.key}
+          onMouseEnter={() => setHover(c.key)}
+          onMouseLeave={() => setHover(null)}
+          className={[
+            'flex flex-wrap items-start gap-x-5 gap-y-3 rounded-[var(--r-ctl)] border bg-ink-1 px-3 py-3',
+            'transition-colors duration-fast',
+            c.drift ? 'border-warn/45' : 'border-ink-border'
+          ].join(' ')}
+        >
+          {/* 两枚放大到 36px 并排 —— 形状差异在 15px 上看不出来。 */}
+          <div className="flex shrink-0 items-center gap-3">
+            {(
+              [
+                ['主仓 src/', c.Old],
+                ['刷新版 1.16.0', c.New]
+              ] as const
+            ).map(([caption, Icon], i) => (
+              <span key={caption} className="flex w-[86px] flex-col items-center gap-1.5">
+                <span
+                  className={[
+                    'grid h-[56px] w-[56px] place-items-center rounded-[var(--r-ctl)] border',
+                    i === 1 && c.drift
+                      ? 'border-warn/45 bg-warn/10 text-ink-fg'
+                      : 'border-ink-border bg-ink-2 text-ink-fg-1'
+                  ].join(' ')}
+                >
+                  <Icon size={36} strokeWidth={1.5} active={hover === c.key} />
+                </span>
+                <span className="text-micro text-ink-fg-3">{caption}</span>
+              </span>
+            ))}
+          </div>
+
+          <div className="min-w-[280px] flex-1 space-y-1">
+            <div className="flex flex-wrap items-baseline gap-2">
+              <code className="text-meta text-ink-fg">{c.key}</code>
+              <span
+                className={[
+                  'rounded-[3px] border px-1 py-px text-micro',
+                  c.drift ? 'border-warn/45 text-warn' : 'border-ok/45 text-ok'
+                ].join(' ')}
+              >
+                {c.drift ? '几何确实漂了' : '几何已一致'}
+              </span>
+              <span className="text-micro text-ink-fg-3">鼠标移到本行即两枚同时播放</span>
+            </div>
+            <p className="text-meta leading-relaxed text-ink-fg-2">{c.geom}</p>
+            <p className="text-meta leading-relaxed text-ink-fg-3">{c.motion}</p>
+            <p className="text-meta leading-relaxed text-ink-fg-1">
+              <b className="font-medium text-ink-fg">结论：</b>
+              {c.verdict}
+            </p>
+          </div>
+        </div>
+      ))}
     </div>
   )
 }
@@ -421,14 +592,12 @@ const initialPrefs = (): Record<string, Pref> =>
 function App(): React.ReactElement {
   const [order, setOrder] = useState<string[]>(() => SYNCED_FOLDERS.map((f) => f.imapName))
   const [prefs, setPrefs] = useState<Record<string, Pref>>(initialPrefs)
-  const [builtinIcons, setBuiltinIcons] = useState<Record<string, FolderIconKey | null>>({})
   const [picker, setPicker] = useState<PickerAnchor | null>(null)
   const [active, setActive] = useState<string | null>('DMS&VvpO9lPRXgM-')
 
   // mockup 自己的观察开关，不是产品 UI。
   const [collapsed, setCollapsed] = useState(false)
   const [light, setLight] = useState(false)
-  const [toggleStyle, setToggleStyle] = useState<ToggleStyle>('icon')
   const [globalNotify, setGlobalNotify] = useState(true)
   const [globalAi, setGlobalAi] = useState(true)
   const [pushDot, setPushDot] = useState(false)
@@ -469,14 +638,9 @@ function App(): React.ReactElement {
   }, [])
 
   const openPicker = useCallback(
-    (
-      e: React.MouseEvent<HTMLButtonElement>,
-      key: string,
-      displayName: string,
-      scope: 'folder' | 'builtin'
-    ): void => {
+    (e: React.MouseEvent<HTMLButtonElement>, key: string, displayName: string): void => {
       const rect = e.currentTarget.getBoundingClientRect()
-      setPicker((cur) => (cur?.key === key ? null : { key, displayName, rect, scope }))
+      setPicker((cur) => (cur?.key === key ? null : { key, displayName, rect }))
     },
     []
   )
@@ -484,16 +648,11 @@ function App(): React.ReactElement {
   const reset = (): void => {
     setOrder(SYNCED_FOLDERS.map((f) => f.imapName))
     setPrefs(initialPrefs())
-    setBuiltinIcons({})
     setDirty(false)
     setPicker(null)
   }
 
-  const pickerValue = picker
-    ? picker.scope === 'builtin'
-      ? (builtinIcons[picker.key] ?? null)
-      : (prefs[picker.key]?.icon ?? null)
-    : null
+  const pickerValue = picker ? (prefs[picker.key]?.icon ?? null) : null
 
   return (
     <div className="min-h-screen bg-ink-1 px-8 py-7 text-ink-fg">
@@ -501,8 +660,9 @@ function App(): React.ReactElement {
         <header className="space-y-1">
           <h1 className="text-lg font-semibold">已同步文件夹配置 — 合并 mockup</h1>
           <p className="max-w-[860px] text-meta leading-relaxed text-ink-fg-3">
-            一行同时承载：拖拽手柄 · 图标（点开可换）· 文件夹名（hover 露 imap 原始名）· 通知开关 ·
-            AI 分类开关 · 邮件计数。右边侧边栏按同序同图标实时联动。 这份 mockup 是{' '}
+            自定义文件夹一行同时承载：拖拽手柄 · 图标（点开可换）· 文件夹名（hover 露 imap
+            原始名）· 通知开关 · AI 分类开关 · 邮件计数。内建 5 行只展示、不配置。
+            右边侧边栏按同序同图标实时联动。 这份 mockup 是{' '}
             <code className="text-ink-fg-2">folder_pref</code>{' '}
             落地前的验收面，页面最底部有落库预览与两个开关的语义出处。
           </p>
@@ -526,32 +686,6 @@ function App(): React.ReactElement {
                 待定
               </span>
             </MkCheck>
-            <span className="flex items-center gap-1.5">
-              <span className="text-ink-fg-3">开关控件：</span>
-              {(
-                [
-                  ['icon', '图标钮'],
-                  ['switch', 'Switch']
-                ] as const
-              ).map(([v, label]) => (
-                <button
-                  key={v}
-                  type="button"
-                  onClick={() => setToggleStyle(v)}
-                  className={[
-                    'rounded-[var(--r-ctl)] border px-2 py-0.5 transition-colors duration-fast',
-                    toggleStyle === v
-                      ? 'border-coral/45 bg-coral/12 text-ink-fg'
-                      : 'border-ink-border text-ink-fg-2 hover:bg-ink-3'
-                  ].join(' ')}
-                >
-                  {label}
-                </button>
-              ))}
-              <span className="text-ink-fg-3">
-                （二选一，等你拍：图标钮一眼看出「是哪个开关」，Switch 一眼看出「开没开」）
-              </span>
-            </span>
             <button
               type="button"
               onClick={reset}
@@ -587,52 +721,34 @@ function App(): React.ReactElement {
               </span>
             </div>
 
-            {/* ── 内建邮箱（不可拖、不可移除；图标是否开放待定）─────────── */}
+            {/* ── 内建邮箱（纯展示：不可拖、不可移除、图标不可换）───────── */}
             <div className="border-b border-ink-border-soft px-3 py-2.5">
               <div className="mb-1.5 flex flex-wrap items-baseline gap-x-2 gap-y-1">
                 <span className="text-body font-medium text-ink-fg">内建邮箱</span>
-                <span className="rounded-[3px] border border-warn/40 px-1 py-px text-micro text-warn">
-                  这块待你拍板
+                <span className="rounded-[3px] border border-ink-border px-1 py-px text-micro text-ink-fg-2">
+                  只读
                 </span>
                 <span className="text-meta text-ink-fg-2">
-                  顺序固定、不能移除；图标这里做成可换的，你看着实物决定要不要开放
+                  顺序固定、不能移除、图标不可换；列在这里是为了看清自定义文件夹接在它们后面
                 </span>
               </div>
 
               <PrefColumnHeader globalNotify={globalNotify} globalAi={globalAi} />
 
               <ul className="space-y-px">
-                {BUILTIN_ROWS.map((row) => {
-                  const override = builtinIcons[row.id] ?? null
-                  const Icon = builtinIconOf(row, override)
-                  return (
-                    <li
-                      key={row.id}
-                      // 与拖拽行同一套内边距/间距，两段列才竖着对齐。
-                      className="group/row flex items-center gap-2.5 rounded-xl py-2 pl-2 pr-3 transition-colors duration-fast hover:bg-ink-2"
-                    >
-                      <BuiltinLockSlot />
-                      <FolderIconButton
-                        Icon={Icon}
-                        name={row.label}
-                        open={picker?.key === row.id}
-                        onOpen={(e) => openPicker(e, row.id, row.label, 'builtin')}
-                      />
-                      <RowName label={row.label} imapName={row.imapName} />
-                      <PrefNotApplicable kind="notify" />
-                      <PrefNotApplicable kind="ai" />
-                      <RowCount count={row.count} />
-                      <span className={`${COL_INDEX} shrink-0`} aria-hidden="true" />
-                    </li>
-                  )
-                })}
+                {BUILTIN_ROWS.map((row) => (
+                  <BuiltinRowItem key={row.id} row={row} />
+                ))}
               </ul>
 
               <p className="mt-1.5 text-meta leading-relaxed text-ink-fg-3">
                 两个开关这里画的是「—」而不是「关」：后端两个 gate 都先判
                 <code className="mx-1 text-ink-fg-2">is_custom_folder_mailbox()</code>
                 ，标准邮箱直接跳过 —— 内建行 <b className="font-medium text-ink-fg-2">不受</b>{' '}
-                per-folder 开关约束，画成可关会骗人。
+                per-folder 开关约束，画成可关会骗人。图标同理只读：这 5 个写死在{' '}
+                <code className="text-ink-fg-2">Sidebar.tsx</code> 的{' '}
+                <code className="text-ink-fg-2">MAILBOX_ICON</code>，不进{' '}
+                <code className="text-ink-fg-2">folder_pref</code>。
               </p>
             </div>
 
@@ -644,6 +760,24 @@ function App(): React.ReactElement {
                   拖拽调顺序，点图标换图标，两个开关逐个文件夹配；侧边栏按此顺序显示
                 </span>
               </div>
+
+              {/* 存档：看着像内建入口，后端却按自定义文件夹处理 —— 这段解释一次。 */}
+              <p className="mb-2 rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5 py-2 text-meta leading-relaxed text-ink-fg-2">
+                <b className="font-medium text-ink-fg">「存档」为什么在这一段？</b>{' '}
+                它有工具栏「归档」按钮直达、名字也是写死的 canonical 常量（
+                <code className="text-ink-fg-2">mailbox_semantics.ARCHIVE_LABEL = &apos;存档&apos;</code>
+                ），看着像内建入口。但{' '}
+                <code className="text-ink-fg-2">STANDARD_MAILBOXES</code>{' '}
+                <b className="font-medium text-ink-fg">有意不含它</b>（
+                <code className="text-ink-fg-2">mailbox_semantics.py:52-54</code>，原话是让存档
+                「享受 L3 默认静默」），于是{' '}
+                <code className="text-ink-fg-2">is_custom_folder_mailbox(&apos;存档&apos;)</code> ={' '}
+                <code className="text-ink-fg-2">True</code> —— 两个 per-folder gate
+                对它逐字生效。所以它拿的是<b className="font-medium text-ink-fg">真开关</b>，
+                画在内建段给个「—」就等于界面说的和实际行为相反。 侧边栏里它也确实走{' '}
+                <code className="text-ink-fg-2">SidebarFolderTree</code>{' '}
+                （whitelist 文件夹树），不是内建 5 行之一。
+              </p>
 
               <PrefColumnHeader globalNotify={globalNotify} globalAi={globalAi} />
 
@@ -660,14 +794,25 @@ function App(): React.ReactElement {
                         Icon={folderIcon(f.icon)}
                         name={f.displayName}
                         open={picker?.key === f.imapName}
-                        onOpen={(e) => openPicker(e, f.imapName, f.displayName, 'folder')}
+                        onOpen={(e) => openPicker(e, f.imapName, f.displayName)}
                       />
-                      <RowName label={item.label} imapName={f.imapName} />
+                      <RowName
+                        label={item.label}
+                        imapName={f.imapName}
+                        badge={
+                          f.canonical ? (
+                            <Tip label="canonical mailbox 名，但后端按自定义文件夹处理 —— 见上方说明">
+                              <span className="shrink-0 rounded-[3px] border border-ink-border px-1 py-px text-micro text-ink-fg-2">
+                                canonical
+                              </span>
+                            </Tip>
+                          ) : undefined
+                        }
+                      />
                       <PrefToggle
                         kind="notify"
                         on={f.notify}
                         folderName={f.displayName}
-                        style={toggleStyle}
                         globalOff={!globalNotify}
                         onChange={(v) => setPref(f.imapName, { notify: v })}
                       />
@@ -675,7 +820,6 @@ function App(): React.ReactElement {
                         kind="ai"
                         on={f.ai}
                         folderName={f.displayName}
-                        style={toggleStyle}
                         globalOff={!globalAi}
                         onChange={(v) => setPref(f.imapName, { ai: v })}
                       />
@@ -736,7 +880,7 @@ function App(): React.ReactElement {
                 {BUILTIN_ROWS.map((row) => (
                   <NavRow
                     key={row.id}
-                    Icon={builtinIconOf(row, builtinIcons[row.id] ?? null)}
+                    Icon={builtinIconOf(row)}
                     label={row.label}
                     count={row.count}
                     collapsed={collapsed}
@@ -758,7 +902,10 @@ function App(): React.ReactElement {
               </nav>
             </div>
             <div className="max-w-[248px] space-y-2 text-meta leading-relaxed text-ink-fg-3">
-              <p>上面 5 行是内建邮箱，「归档」起的 6 行才是 SYNC_FOLDERS 里的自定义文件夹。</p>
+              <p>
+                上面 5 行是内建邮箱，「存档」起的 6 行才是 SYNC_FOLDERS
+                里的自定义文件夹（真 App 里这段由 <code>SidebarFolderTree</code> 渲染）。
+              </p>
               <p>
                 <b className="font-medium text-ink-fg-2">收起成 56px rail 时</b>
                 ：两个开关在侧边栏本来没有任何视觉体现（它们只改后台处理，不改外观）， rail
@@ -777,7 +924,10 @@ function App(): React.ReactElement {
           </h2>
           <p className="mb-3 max-w-[900px] text-meta leading-relaxed text-ink-fg-3">
             上面那一行配置，存进 <code className="text-ink-fg-2">sync_store.db</code> 就是下面这样。
-            🔴 注意第四列：UI 上写的是「AI 分类（开=跑）」，列名却是{' '}
+            主键<b className="font-medium text-ink-fg-2">用 IMAP 原始名</b>（已定）——
+            显示名会随服务端改名而变，IMAP 原名才是稳定标识。
+            <b className="font-medium text-ink-fg-2">内建 5 行不入表</b>：它们图标写死、两个 gate
+            也不看它们，没有任何一列有值可存。 🔴 注意第四列：UI 上写的是「AI 分类（开=跑）」，列名却是{' '}
             <code className="text-ink-fg-2">llm_disabled</code>，两者
             <b className="font-medium text-ink-fg-2">反向</b> —— 这是跟 FOLDER_LLM_DISABLED
             的黑名单语义对齐，落地时最容易写反的一处。
@@ -809,21 +959,6 @@ function App(): React.ReactElement {
                     </td>
                   </tr>
                 ))}
-                {BUILTIN_ROWS.map((row) => (
-                  <tr key={row.id} className="border-t border-ink-border bg-ink-1/60">
-                    <td className="px-3 py-1 text-ink-fg-3">
-                      {row.imapName ?? (
-                        <span className="text-warn">？（本地视图，没有 IMAP 名）</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-1 text-ink-fg-3">固定</td>
-                    <td className="px-3 py-1">
-                      {builtinIcons[row.id] ?? <span className="text-ink-fg-3">NULL</span>}
-                    </td>
-                    <td className="px-3 py-1 text-ink-fg-3">n/a</td>
-                    <td className="px-3 py-1 text-ink-fg-3">n/a</td>
-                  </tr>
-                ))}
               </tbody>
             </table>
           </div>
@@ -835,13 +970,11 @@ function App(): React.ReactElement {
             只管 icon / 两个开关），或者顺序整个搬进 folder_pref、SYNC_FOLDERS 退回纯白名单。
           </p>
           <p className="mt-2 max-w-[900px] text-meta leading-relaxed text-ink-fg-3">
-            表格下半段是内建 5 行。若你决定开放内建图标自定义：收件箱 / 发件箱 / 草稿箱还能借 IMAP
-            名当主键，但
-            <b className="font-medium text-warn">
-              「已标旗」「所有邮件」是本地视图、 压根没有 IMAP 文件夹
-            </b>
-            ，得另给合成主键（例如 <code className="text-ink-fg-2">__view:flagged</code>
-            ）。这是落地时要先拍的一件事。
+            内建 5 行不入表这条，顺带绕开了一个坑：「已标旗」「所有邮件」是本地视图、
+            <b className="font-medium text-ink-fg-2">压根没有 IMAP 文件夹</b>
+            ，真要给它们存配置就得再造一套合成主键（
+            <code className="text-ink-fg-2">__view:flagged</code>
+            ）。既然图标不开放，这套主键也不用造。
           </p>
         </section>
 
@@ -944,6 +1077,38 @@ function App(): React.ReactElement {
           </p>
           <IconGallery />
         </section>
+
+        {/* ── 主仓已有三个的刷新对比 ─────────────────────────────── */}
+        <section className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-5">
+          <h2 className="mb-1 text-body font-semibold">
+            主仓已有的三个 · 旧版 vs 刷新版（<span className="text-warn">要你看的就是这块</span>）
+          </h2>
+          <p className="mb-3 max-w-[900px] text-meta leading-relaxed text-ink-fg-3">
+            上面 24 格里有三个（<code className="text-ink-fg-2">folder-input</code> /{' '}
+            <code className="text-ink-fg-2">folder-plus</code> /{' '}
+            <code className="text-ink-fg-2">folders</code>）主仓
+            <code className="mx-1 text-ink-fg-2">src/shared/components/icons/animated/</code>
+            里早就有了，其中 <code className="text-ink-fg-2">folders</code> 还被 Sidebar
+            的「所有邮件」、<code className="text-ink-fg-2">folder-input</code> 被「收件箱」用着。
+            本 mockup 的 24 个统一按 <code className="text-ink-fg-2">lucide-react@1.16.0</code>{' '}
+            的 <code className="text-ink-fg-2">__iconNode</code> 写，所以先把这三个的新旧摆一起。
+            <b className="ml-1 font-medium text-ink-fg-2">
+              逐字符比对后的结论：三个里只有 folders 真的漂了
+            </b>
+            ，另外两个的 d 串与 1.16.0 完全相同 —— 也就是要动的只有一个文件。
+            <span className="ml-1">
+              （本 mockup 只把效果做出来给你看，<b className="font-medium text-ink-fg-2">没有改</b>{' '}
+              <code className="text-ink-fg-2">src/</code> 下那三个文件。）
+            </span>
+          </p>
+          <RefreshCompare />
+          <p className="mt-3 max-w-[900px] text-meta leading-relaxed text-ink-fg-3">
+            落地影响面：改{' '}
+            <code className="text-ink-fg-2">animated/folders.tsx</code> 会同时改到侧边栏「所有邮件」
+            那一行的图标 —— 这正是想要的（内建行与文件夹图标出自同一版 lucide），
+            但它是唯一一处会「改了 mockup 顺手改到线上界面」的地方，值得单独确认一次。
+          </p>
+        </section>
       </div>
 
       {picker ? (
@@ -951,21 +1116,11 @@ function App(): React.ReactElement {
           anchor={picker}
           value={pickerValue}
           onPick={(key) => {
-            if (picker.scope === 'builtin') {
-              setBuiltinIcons((cur) => ({ ...cur, [picker.key]: key }))
-              setDirty(true)
-            } else {
-              setPref(picker.key, { icon: key })
-            }
+            setPref(picker.key, { icon: key })
             setPicker(null)
           }}
           onReset={() => {
-            if (picker.scope === 'builtin') {
-              setBuiltinIcons((cur) => ({ ...cur, [picker.key]: null }))
-              setDirty(true)
-            } else {
-              setPref(picker.key, { icon: null })
-            }
+            setPref(picker.key, { icon: null })
             setPicker(null)
           }}
           onClose={() => setPicker(null)}

@@ -1,14 +1,23 @@
 // mockup 数据 —— 用真实邮箱里的文件夹，不用 Foo/Bar。
 //
 // 收件箱 / 发件箱 是本机 email_metadata.mailbox 里真实存在的两个（11544 / 1462
-// 封）；DMS固件发布、Teams 也是真实自定义文件夹（109 / 33 封）。归档、项目周报、
+// 封）；DMS固件发布、Teams 也是真实自定义文件夹（109 / 33 封）。存档是真实的
+// canonical mailbox（`ARCHIVE_LABEL = '存档'`，IMAP 原名 `Archive`）；项目周报、
 // 已办结、Newsletters 是同一邮箱风格的补充样本，让顺序/图标演示有足够行数。
 // imap_name 是 modified UTF-7 原始名（.env.example 里 SYNC_FOLDERS 的样例
 // `DMS&VvpO9lPRXgM-` 与这里逐字一致）。
+//
+// 🔴 存档为什么在「已同步文件夹」这一段而不在「内建邮箱」：见本文件底部
+//    ARCHIVE_IMAP_NAME 的注释，以及页面上同一段的说明。
 
 import type { FolderIconKey } from './icons'
 
-/** 内建邮箱行 —— 不在 SYNC_FOLDERS 里，位置与图标当前都写死在 Sidebar.tsx。 */
+/** 内建邮箱行 —— 不在 SYNC_FOLDERS 里，位置与图标写死在 Sidebar.tsx。
+ *
+ *  🔴 这 5 行**纯展示**：图标不开放自定义（owner 已拍），也不入 folder_pref。
+ *  与 Sidebar.tsx 的 `MAILBOX_ICON` 逐行同构（inbox/outbox/drafts/flagged/all），
+ *  改这里等于改不了真侧边栏 —— 真要换得去改那个常量。
+ *  注意「存档」**不在**这份表里：后端把它当自定义文件夹（见 ARCHIVE_IMAP_NAME）。 */
 export interface BuiltinRow {
   id: string
   label: string
@@ -16,7 +25,7 @@ export interface BuiltinRow {
   icon: 'folder-input' | 'send' | 'feather' | 'zap' | 'folders'
   count?: number
   /** 这一行在 IMAP 上对应什么。null = 它压根不是 IMAP 文件夹，是本地视图。
-   *  🔴 folder_pref 若以 imap_name 作 PK，这两行没有天然主键（见页面底部说明）。 */
+   *  只用于行上 hover 时显示；内建行不入 folder_pref，不需要主键。 */
   imapName: string | null
 }
 
@@ -28,11 +37,27 @@ export const BUILTIN_ROWS: readonly BuiltinRow[] = [
   { id: 'all', label: '所有邮件', icon: 'folders', count: 13148, imapName: null }
 ]
 
+/**
+ * 存档的 IMAP 原名。`src/services/mail_write.py:1094` 归档动作的落点就是它
+ * （`resolve_imap_folder('archive') or 'Archive'`），SQLite 里的 mailbox 写成
+ * canonical `存档`（`mailbox_semantics.ARCHIVE_LABEL`）。
+ *
+ * 🔴 它归「已同步文件夹」这一段，不归内建段 —— 依据是
+ * `mailbox_semantics.py:52` 的 `STANDARD_MAILBOXES` **有意不含存档**，于是
+ * `is_custom_folder_mailbox('存档') === true`，两个 per-folder gate
+ * （should_skip_feishu_for_folder / should_skip_llm_for_folder）对它逐字生效。
+ * 画进内建段给个「—」，界面说的就跟实际行为反了。
+ */
+export const ARCHIVE_IMAP_NAME = 'Archive'
+
 /** SYNC_FOLDERS 白名单里的自定义文件夹 —— 本次可排序、可换图标、可逐个配开关的就是这些。 */
 export interface SyncedFolder {
   imapName: string
   displayName: string
   count: number
+  /** true = 它是 mailbox_semantics 里的 canonical 名（目前只有「存档」），
+   *  界面上给个小标记 + 一句说明，免得看着像内建入口被误读。 */
+  canonical?: boolean
   /** null = 没设过，用兜底 Folder。 */
   icon: FolderIconKey | null
   /**
@@ -51,9 +76,10 @@ export interface SyncedFolder {
 
 export const SYNCED_FOLDERS: readonly SyncedFolder[] = [
   {
-    imapName: '&X1JoYw-',
-    displayName: '归档',
+    imapName: ARCHIVE_IMAP_NAME,
+    displayName: '存档',
     count: 2841,
+    canonical: true,
     icon: 'folder-archive',
     notify: false,
     ai: true
