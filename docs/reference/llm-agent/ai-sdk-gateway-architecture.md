@@ -1364,7 +1364,7 @@ Run active（含审批等待）时 Enter 入队不发请求；Run 真正 onFinis
 
 配套读面：`matter_get` 新增 `include='followup'`，返回结构化跟进配置（triggers 带 id / actions / 绑定 profile / instructions / 模型覆盖）—— 它是唯一发放 `trigger_id` 的读面，没有它 `matter_followup_mutate` 在结构上没法调用（同 `updates` ↔ `matter_review_update` 的关系）。
 
-`matter_followup_mutate` 的 class 是 `capability_change` 而非 matter 写家族的 `domain_write`：改的是一个**无人值守、有网络出口**的 run 的触发条件（这正是 `MAILAGENT_MATTER_AGENT_ENABLED` 至今默认关的理由）。代价是 im_chat（飞书）里改不了跟进节奏，owner 知情接受。两种 class 都挡住「跟进 run 改自己的跟进配置」。
+`matter_followup_mutate` 的 class 是 `capability_change` 而非 matter 写家族的 `domain_write`：改的是一个**无人值守、有网络出口**的 run 的触发条件。代价是 im_chat（飞书）里改不了跟进节奏，owner 知情接受。两种 class 都挡住「跟进 run 改自己的跟进配置」。
 
 ### 13.25.3 🔴 死键：本任务的核心发现
 

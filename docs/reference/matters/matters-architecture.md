@@ -97,7 +97,7 @@ run 起始解析一次并冻进 run context，pause / resume 复用同值。
 
 ### 1.3 matter 工具家族本身（13 件）
 
-`MAILAGENT_MATTERS_ENABLED` 门控、all-or-nothing：2 读（`matter_find` / `matter_get`）+
+事项工具家族恒注册（仍要求 mixed-family `ApprovalGuard`）：2 读（`matter_find` / `matter_get`）+
 9 写（`matter_create` / `matter_update` / 四个 `*_mutate` / `matter_add_note` /
 `matter_run_control` / `matter_review_update`）+ 1 提案 artifact（`matter_update_propose`，
 **只在 matter-run 语境注册**）+ `matter_suggest_related_resources`。
@@ -502,24 +502,14 @@ matter run 终态四值 `ok / noop / warn / fail`（+ `canceled`），映射单�
 
 ---
 
-## 6. 开关
+## 6. 启用与控制面
 
-**env flag 两个**（改后需重启后端 / app）：
+**2026-08-19 cutover**：事项域与事项跟进 Agent 的 venue env 总闸及全部载体已退役；
+router、gateway 工具、run spec、worker 与通知链恒接线。`/chat/config.mattersEnabled` 和
+`matterAgentEnabled` 作为兼容投影保留并恒为 `true`。
 
-| 开关 | 默认 | 载体 | 说明 |
-|---|---|---|---|
-| `MAILAGENT_MATTERS_ENABLED` | **true**（2026-08-12 cutover）| 四份：`src/config.py` · `ai_gateway_lifecycle.ts` · `matter_notifications.ts` · `.env.example` | 事项域总闸。显式 false = 导航项不渲染 + `/api/matters/*` 全 403 + gateway matter 工具家族不注册 |
-| `MAILAGENT_MATTER_AGENT_ENABLED` | **false** | 双份（Python + Node）| 跟进 Agent（runs / propose 端点 + `matter_followup` worker 分派 + spec assembler）。有意保持关：无人值守 + 有网络出口。off 时 updates / review REST 仍可用（清账既有 pending 提案）|
-
-语义是 **AND**：总闸 off 时第二个 flag 无意义（router 全 403 在前）。
-
-两个 flag 都收在设置 → Labs。🔴 `MAILAGENT_MATTERS_ENABLED` 已 cutover 默认 ON 却**仍留在
-Labs**，是对「Labs 只收默认 OFF 的灰度 flag」的**有意例外** —— 它没有第二个关它的界面，
-照字面撤条目会把唯一的应急回退开关删掉。撤之前先给它一个正式落点。
-
-🔴 gateway 侧的 `fetchAgentRunSpec` / `createAgentSession` 两个 hook 必须同时看
-`customAgentsEnabled || matterAgentEnabled` —— 只看前者会让关掉 custom agents 时事项跟进 run
-一并 404。
+自动运行的安全控制不变：事项跟进仍由每条 Matter 的 `agent_enabled`、触发器与排程控制；
+工具 class 腰带、connector 档位与 headless 写入限制继续生效。
 
 **owner 设置两项**（`agent_config.db` 的 `owner_settings`，**不是 env**，保存即生效）：
 

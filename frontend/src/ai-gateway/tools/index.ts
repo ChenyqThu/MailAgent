@@ -187,45 +187,6 @@ export interface BuildGatewayToolsOpts {
    *  calendar_event_rsvp / calendar_event_delete (edit-tier writes, D4 恒 HITL — always ask, no
    *  whitelist/免卡 channel). Off → not added → ToolSet byte-identical to the pre-epic set. */
   calendarToolsEnabled?: boolean
-  /** MAILAGENT_MATTERS_ENABLED (P3, extended by P4 D8) — the Matter tool family is all-or-nothing
-   *  with approvalGuard: two silent reads + the NINE domain_write tools (seven mutations + the two
-   *  review-side tools matter_run_control / matter_review_update). Class domain_write keeps them
-   *  registered in every owner-present venue and in the headless modes (where the always-ask edit
-   *  tier stashes → paused_handoff), and structurally OUT of a matter_followup run (D5). The same
-   *  flag also gates the run-only `matter_update_propose` below — a proposal tool without the
-   *  Matter domain behind it would be a dead end. Off (default) → not added → ToolSet
-   *  byte-identical to the pre-P3 set. */
-  matterToolsEnabled?: boolean
-  /** MAILAGENT_MATTER_AGENT_ENABLED (P4 D11) — the follow-up venue's kill-switch, threaded from
-   *  the lifecycle. The AUTHORITATIVE gate is the endpoint (a spec stamped runKind
-   *  'matter_followup' is refused 403 before any run starts), so a matterRun anchor can only exist
-   *  when the flag was on; this is the registration-side belt for a hand-built/future path that
-   *  builds a context without going through that door. Written `!== false` (planToolsEnabled
-   *  先例): the lifecycle ALWAYS threads the value, so an explicit false really does strip the
-   *  tool, while a harness cfg that omits it keeps the pre-P4 assembly semantics. */
-  matterAgentEnabled?: boolean
-  /** MAILAGENT_CONTACTS_ENABLED (Contact Directory WP7) — the contact tool family is
-   *  all-or-nothing with approvalGuard (calendar/matter precedent: a write tool cannot exist
-   *  without its guard, and registering only the reads would advertise half a capability): three
-   *  silent reads + three silent `artifact` proposal tools + three domain_write tools. The
-   *  proposal trio is ALSO the only output channel of a `contact_governance` run — the matrix row
-   *  admits them BY NAME (policy.ts CONTACT_PROPOSE_TOOLS) and denies every write class, so the
-   *  scan can propose a kind change but never apply one. Off (default — the flag ships off) →
-   *  not added → ToolSet byte-identical to the pre-WP7 set. */
-  contactToolsEnabled?: boolean
-  /** MAILAGENT_CONTACT_AGENT_ENABLED (WP7) — the governance venue's kill-switch, threaded from the
-   *  lifecycle. The AUTHORITATIVE gate is the endpoint (a spec stamped runKind
-   *  'contact_governance' is refused 403 before any run starts); here it additionally gates the
-   *  three PROPOSAL tools, because the proposal chain as a whole belongs to the agent flag: the
-   *  landing leg (POST /api/contacts/agent/proposals) is double-flag-gated server-side and the
-   *  review queue UI sits in the same domain, so with the agent off those three tools could only
-   *  ever return E_DISABLED — the matter_runs_list precedent («registering it with the flag off
-   *  would advertise a tool that can only ever return an error»). The read/write families are NOT
-   *  affected: they answer perfectly well with the agent off.
-   *  Written `!== false` (planToolsEnabled / matterAgentEnabled 先例): the lifecycle ALWAYS
-   *  threads the value, so an explicit false really does strip the trio, while a harness cfg that
-   *  omits it keeps the whole family. */
-  contactAgentEnabled?: boolean
   /** task 07-21 (MAILAGENT_NOTION_AGENT_TOOL) — when true AND approvalGuard is supplied, the
    *  notion_agent_chat tool is added: an edit-tier write (恒 HITL — external AI call to the
    *  notion-agent CLI, side effects on the Notion side, no whitelist/免卡 channel). Unlike the
@@ -601,24 +562,15 @@ export function buildGatewayTools(
       })
     )
   }
-  // Matters MVP P3 (D6) + P4 (D8) + 0813 批 R — the Matter family behind MAILAGENT_MATTERS_ENABLED.
-  // Mixed set (silent reads + edit-tier writes) → all-or-nothing on flag + guard (calendar 先例: a
-  // write tool cannot exist without its guard, and registering only the reads would advertise a half
-  // capability). CORE_UNGATED (no skill ownership) so applySkillGating never drops them; class
+  // Matters MVP P3 (D6) + P4 (D8) + 0813 批 R — core Matter family. Mixed set (silent reads +
+  // edit-tier writes) requires the guard. CORE_UNGATED (no skill ownership) so applySkillGating
+  // never drops them; class
   // read/domain_write (policy.ts), so the LAST assembly step keeps the writes in owner-present and
   // headless venues alike — and strips EVERY write inside a matter_followup run (D5). No
   // agentRunContext is threaded into the write factory: no per-agent whitelist may 免卡 a Matter
   // write, and matter_review_update's own policyEvaluate is a SERVER-fact seam, not a grant.
-  // flag-off (default) → not added → byte-identical to the pre-P3 set.
-  if (opts.matterToolsEnabled && opts.approvalGuard) {
-    // 0813 批 R — the read factory now takes the matter-agent flag: matter_runs_list mirrors the
-    // run REST face, which that flag gates server-side (flag off → the tool could only ever error).
-    Object.assign(
-      tools,
-      createMatterReadTools(opts.domain, collector, {
-        matterAgentEnabled: opts.matterAgentEnabled
-      })
-    )
+  if (opts.approvalGuard) {
+    Object.assign(tools, createMatterReadTools(opts.domain, collector))
     Object.assign(
       tools,
       createMatterWriteTools(opts.domain, collector, opts.approvalGuard, {
@@ -633,28 +585,20 @@ export function buildGatewayTools(
     // Matter, which run) comes from the server-assembled anchor, so outside that context there is
     // nothing for it to address. Guard-free by design (class artifact, silent — report_write
     // 先例): it writes a PENDING proposal the owner still has to review.
-    if (matterRun && opts.matterAgentEnabled !== false) {
+    if (matterRun) {
       Object.assign(tools, createMatterRunTools(opts.domain, collector, matterRun))
     }
   }
-  // Contact Directory WP7 — the contact family behind MAILAGENT_CONTACTS_ENABLED. Mixed set
-  // (3 silent reads + 3 silent artifact proposals + 3 domain_write) → all-or-nothing on flag +
-  // guard (calendar/matter 先例). CORE_UNGATED (no skill ownership) so neither applySkillGating
+  // Contact Directory WP7 — core contact family. Mixed set (3 silent reads + 3 silent artifact
+  // proposals + 3 domain_write) requires the guard. CORE_UNGATED (no skill ownership) so neither
+  // applySkillGating
   // pass drops them; class read/artifact/domain_write (policy.ts), so the LAST assembly step keeps
   // the reads + proposals inside a contact_governance run and strips EVERY write there. 🔴 No
   // agentRunContext is threaded into the write factory: no per-agent whitelist may 免卡 a
   // directory write (calendar 先例 — the factory wires no policyEvaluate at all).
-  // flag-off (default) → not added → byte-identical to the pre-WP7 set.
-  if (opts.contactToolsEnabled && opts.approvalGuard) {
+  if (opts.approvalGuard) {
     Object.assign(tools, createContactReadTools(opts.domain, collector))
-    // 🔴 The proposal trio rides the AGENT flag, not the directory flag: the landing leg
-    // (POST /api/contacts/agent/proposals) is double-flag-gated server-side and the review queue
-    // lives in the same domain, so with the agent off these three could only ever return
-    // E_DISABLED (matter_runs_list 先例). The reads and the direct writes below are unaffected —
-    // they answer fine with the agent off.
-    if (opts.contactAgentEnabled !== false) {
-      Object.assign(tools, createContactProposeTools(opts.domain, collector))
-    }
+    Object.assign(tools, createContactProposeTools(opts.domain, collector))
     Object.assign(
       tools,
       createContactWriteTools(opts.domain, collector, opts.approvalGuard, {
@@ -711,7 +655,7 @@ export function buildGatewayTools(
   // both skill-gating passes: the Matter flag is its sole capability switch, and no advertised or
   // mounted skill may accidentally hide it. It stays out of policy.ts by explicit adjudication;
   // the manual venue gate here plus classOfTool's fail-closed exec fallback form the two belts.
-  if (opts.matterToolsEnabled && opts.approvalGuard && contextMode === 'manual_chat') {
+  if (opts.approvalGuard && contextMode === 'manual_chat') {
     Object.assign(
       mounted,
       createMatterSuggestionTools(opts.domain, collector, opts.approvalGuard, {

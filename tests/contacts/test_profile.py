@@ -501,22 +501,6 @@ async def test_scheduled_tick_gates_and_failure_still_marks(db, monkeypatch):
             self.values[key] = value
 
     state = State()
-    called = False
-
-    def forbidden_config(_):
-        nonlocal called
-        called = True
-        raise AssertionError("env off must not read row config")
-
-    monkeypatch.setattr(profile, "get_contact_profile_agent_config", forbidden_config)
-    assert not await profile.run_scheduled_tick(
-        sync_store=state,
-        db_path=db,
-        settings=SimpleNamespace(contact_profile_enabled=False),
-        now=datetime(2026, 8, 19, 12, 0),
-    )
-    assert not called
-
     monkeypatch.setattr(
         profile,
         "get_contact_profile_agent_config",
@@ -525,7 +509,7 @@ async def test_scheduled_tick_gates_and_failure_still_marks(db, monkeypatch):
     assert not await profile.run_scheduled_tick(
         sync_store=state,
         db_path=db,
-        settings=SimpleNamespace(contact_profile_enabled=True),
+        settings=SimpleNamespace(),
         now=datetime(2026, 8, 19, 12, 0),
     )
 
@@ -542,7 +526,7 @@ async def test_scheduled_tick_gates_and_failure_still_marks(db, monkeypatch):
         await profile.run_scheduled_tick(
             sync_store=state,
             db_path=db,
-            settings=SimpleNamespace(contact_profile_enabled=True),
+            settings=SimpleNamespace(),
             now=datetime(2026, 8, 19, 12, 0),
             run_batch_fn=broken,
         )

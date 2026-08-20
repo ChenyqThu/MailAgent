@@ -4,16 +4,13 @@ Three things that a "挂了个 skill" claim actually depends on:
   · it is registered (a builder that nobody adds to the tuple is a no-op);
   · it is a ZERO-TOOL skill (the matter_* tools are CORE_UNGATED in the gateway — this skill must
     not pretend to own / unlock them);
-  · `default_enabled` follows MAILAGENT_MATTERS_ENABLED (advertising a matter workflow while the
-    feature is off teaches the model to call tools that are not registered).
+  · it is advertised by default because Matters is a permanent capability.
 
 The 「fragment 真的进 system prompt」leg lives in tests/api/test_chat.py (it needs the /chat/config
 endpoint, which owns the trusted-fragment whitelist).
 """
 
 from __future__ import annotations
-
-from types import SimpleNamespace
 
 import pytest
 
@@ -35,8 +32,7 @@ def _matters_skill():
     return next(item for item in build_manifest(None, generated_at="x").skills if item.name == "matters")
 
 
-def test_matters_builtin_is_registered_and_zero_tool(monkeypatch, _rebuild_builtins):
-    monkeypatch.setattr("src.api.deps.get_settings", lambda: SimpleNamespace(matters_enabled=True))
+def test_matters_builtin_is_registered_and_zero_tool(_rebuild_builtins):
     skill = _matters_skill()
     assert skill.tools == []
     assert skill.docs_path == "skills/matters/SKILL.md"
@@ -46,24 +42,15 @@ def test_matters_builtin_is_registered_and_zero_tool(monkeypatch, _rebuild_built
     assert "matter_get" in skill.prompt_fragment
 
 
-def test_matters_skill_default_follows_matters_flag(monkeypatch, tmp_path, _rebuild_builtins):
+def test_matters_skill_is_always_advertised(tmp_path, _rebuild_builtins):
     store = AgentConfigStore(str(tmp_path / "agent_config.db"))
-
-    monkeypatch.setattr("src.api.deps.get_settings", lambda: SimpleNamespace(matters_enabled=True))
     code_builtin_skills.cache_clear()
-    on = build_manifest(None, generated_at="x").skills
-    assert next(s for s in on if s.name == "matters").default_enabled is True
-    assert "matters" in advertised_skill_names(on, store)
-
-    monkeypatch.setattr("src.api.deps.get_settings", lambda: SimpleNamespace(matters_enabled=False))
-    code_builtin_skills.cache_clear()
-    off = build_manifest(None, generated_at="x").skills
-    assert next(s for s in off if s.name == "matters").default_enabled is False
-    assert "matters" not in advertised_skill_names(off, store)
+    skills = build_manifest(None, generated_at="x").skills
+    assert next(s for s in skills if s.name == "matters").default_enabled is True
+    assert "matters" in advertised_skill_names(skills, store)
 
 
-def test_matters_fragment_teaches_find_before_create_and_draft_only(monkeypatch, _rebuild_builtins):
-    monkeypatch.setattr("src.api.deps.get_settings", lambda: SimpleNamespace(matters_enabled=True))
+def test_matters_fragment_teaches_find_before_create_and_draft_only(_rebuild_builtins):
     fragment = _matters_skill().prompt_fragment
     # 重复检测：邮件工具栏的「创建事项」把去重职责交给了 agent（不再有 MatterLinkPopover 的
     # 重复候选面），所以「先查再建」必须写在恒注入的方法论里。
@@ -74,7 +61,7 @@ def test_matters_fragment_teaches_find_before_create_and_draft_only(monkeypatch,
     assert "until the tool result confirms it" in fragment
 
 
-def test_matters_fragment_tells_the_model_to_research_before_creating(monkeypatch, _rebuild_builtins):
+def test_matters_fragment_tells_the_model_to_research_before_creating(_rebuild_builtins):
     """0813 dogfood #4（owner：「创建事项…好像不会去检索 notion」）。
 
     「AI 调研创建」那条链根本不经过 ``create_research``（那是创建对话框的纯读端点）：它开的是
@@ -85,7 +72,6 @@ def test_matters_fragment_tells_the_model_to_research_before_creating(monkeypatc
     notion_agent skill，两者都是动态注册的；恒注入的方法论里写死一个工具名 = 工具面里没有它
     时就是在教模型调不存在的工具（回归网 R 系列的老失败模式）。故只许指「你自己的工具列表」。
     """
-    monkeypatch.setattr("src.api.deps.get_settings", lambda: SimpleNamespace(matters_enabled=True))
     fragment = _matters_skill().prompt_fragment
     assert "Creating a Matter is a research step" in fragment
     assert "Notion" in fragment

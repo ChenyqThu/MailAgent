@@ -35,15 +35,6 @@ def _ms(dt: datetime) -> int:
     return int(dt.timestamp() * 1000)
 
 
-@pytest.fixture(autouse=True)
-def matters_on(monkeypatch: pytest.MonkeyPatch):
-    """事项总闸默认关（灰度中）—— 本文件测的是开着时的行为，逐个用例显式关时另说。"""
-    from src.config import config
-
-    monkeypatch.setattr(config, "matters_enabled", True, raising=False)
-    return config
-
-
 @pytest.fixture
 def db(tmp_path: Path) -> Path:
     p = tmp_path / "t.db"
@@ -227,13 +218,6 @@ class TestFetchSelection:
     def test_archived_and_deleted_never_appear(self, db: Path):
         _matter(db, "MAT-0010", status="active", archived=True)
         _matter(db, "MAT-0011", status="active", deleted=True)
-        assert _fetch(db) == []
-
-    def test_flag_off_returns_nothing(self, db: Path, monkeypatch: pytest.MonkeyPatch):
-        from src.config import config
-
-        _matter(db, "MAT-0012", status="active")
-        monkeypatch.setattr(config, "matters_enabled", False, raising=False)
         assert _fetch(db) == []
 
     def test_cap_logs_how_many_were_dropped(self, db: Path):
@@ -493,25 +477,6 @@ class TestWorkerWiring:
         blocks = json.loads(store.get_report(rid)["blocks_json"])["blocks"]
         item = next(b for b in blocks if b["type"] == "matter_item")
         assert item["public_id"] == "MAT-0200" and item["next_action"] == "下一步动作"
-
-    def test_flag_off_report_has_no_matter_section(self, db: Path, monkeypatch: pytest.MonkeyPatch):
-        from src.config import config
-
-        _seed_email(db)
-        _matter(db, "MAT-0201", status="active")
-        monkeypatch.setattr(config, "matters_enabled", False, raising=False)
-        store = ReportStore(str(db))
-
-        async def fake(**kw):
-            return ReportDraft(headline="h", overview="ov", model="mk", matter_refs=["MAT-0201"])
-
-        rid = asyncio.run(run_report_once(store=store, db_path=str(db),
-                                          agent=store.get_agent("daily_email_digest"),
-                                          now=_NOW, agentic_fn=fake))
-        rep = store.get_report(rid)
-        assert rep["status"] == "ready"
-        blocks = json.loads(rep["blocks_json"])["blocks"]
-        assert not any(b["type"] == "matter_item" for b in blocks)
 
     def test_matter_fetch_exception_still_produces_report(
         self, db: Path, monkeypatch: pytest.MonkeyPatch

@@ -36,7 +36,6 @@ import {
   envFlagOn,
   pressHandlers
 } from './shared'
-import { useContactProfileEnabled } from '@shared/components/contacts/hooks'
 import { ConfigDrawer } from './drawers/ConfigDrawer'
 import { SearchConfigDrawer } from './drawers/SearchConfigDrawer'
 import { MainAssistantDrawer } from './drawers/MainAssistantDrawer'
@@ -953,27 +952,19 @@ function ProjectProgressAgentCard({
 // 的既有 flag 投影（useContactsEnabled）本来就走 /chat/config，同源才不会两处打架。
 function ContactProfileAgentCard({
   cfg,
-  masterEnabled,
   onConfig,
   onToggle
 }: {
   cfg: ReportAgentConfig
-  /** /chat/config 的 contactProfileEnabled（Labs flag + agent 行的合取由后端算）。 */
-  masterEnabled: boolean
   onConfig: () => void
-  /** 快捷开关：切 row.enabled（总闸未开 / web 时禁用不传）。 */
+  /** 快捷开关：切 row.enabled（web 时禁用不传）。 */
   onToggle?: (v: boolean) => void
 }): React.ReactElement {
   const { t } = useTranslation()
   const showcase = useAvatarHoverShowcase()
   const rowEnabled = cfg.enabled
-  // 徽标三态：总闸未开（中性）→ 总闸开且行启用（绿）→ 总闸开但行停用（灰）。
-  const badgeLabel = !masterEnabled
-    ? t('agents.contactProfile.masterOff')
-    : rowEnabled
-      ? t('agents.card.enabled')
-      : t('agents.card.disabled')
-  const badgeOn = masterEnabled && rowEnabled
+  const badgeLabel = rowEnabled ? t('agents.card.enabled') : t('agents.card.disabled')
+  const badgeOn = rowEnabled
   return (
     <div
       role="button"
@@ -1053,7 +1044,7 @@ function ContactProfileAgentCard({
       <span
         onClick={(e) => e.stopPropagation()}
         style={
-          !masterEnabled || IS_WEB || !onToggle
+          IS_WEB || !onToggle
             ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
             : { display: 'flex', flexShrink: 0 }
         }
@@ -1191,8 +1182,6 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const [projectProgressOpen, setProjectProgressOpen] = useState(false)
   // WP6 — 联系人画像配置抽屉开合（后端 v63 播种单行，只编辑、无新建）。
   const [contactProfileOpen, setContactProfileOpen] = useState(false)
-  // 画像卡总闸：/chat/config 的 contactProfileEnabled（不是 env —— 见卡片注释）。
-  const contactProfileMaster = useContactProfileEnabled().enabled
   // 项目周报卡的总闸绑 env PROJECT_PROGRESS_SYNC_ENABLED（响应式读，总闸未开 → 卡片显「总闸未开」）。
   const projectProgressMaster = useEnvStore((s) =>
     s.state.status === 'ready'
@@ -1497,7 +1486,6 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
               </div>
               <ContactProfileAgentCard
                 cfg={contactProfileAgent}
-                masterEnabled={contactProfileMaster}
                 onConfig={() => setContactProfileOpen(true)}
                 onToggle={(v) => void handleContactProfileToggle(v)}
               />
@@ -1618,7 +1606,6 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
       <ContactProfileConfigDrawer
         cfg={contactProfileAgent}
         open={contactProfileOpen}
-        masterEnabled={contactProfileMaster}
         onClose={() => setContactProfileOpen(false)}
       />
     </div>

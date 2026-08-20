@@ -1759,7 +1759,6 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
             skillInstallToolsEnabled: true,
             customAgentToolsEnabled: true,
             notionAgentToolsEnabled: true,
-            matterToolsEnabled: true,
             contextMode: mode,
             agentRunContext
           },
@@ -1785,6 +1784,9 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
   const EXPECTED_MATTER_FACE = [
     'calendar_event_get',
     'calendar_events_list',
+    'contact_get',
+    'contact_list_mails',
+    'contact_search',
     'email_attachment_text',
     'email_body',
     'email_get',
@@ -2112,7 +2114,6 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
             domain: minimalDomain(),
             writeToolsEnabled: true,
             approvalGuard: guard,
-            matterToolsEnabled: true,
             contextMode: mode,
             agentRunContext,
             dynamicTools
@@ -2342,25 +2343,11 @@ describe('matter_followup venue — a maximally granted profile still gets NO wr
 })
 
 describe('POST /api/ai/agent-run — matter_followup gating + Matter-anchored session (P4 D7/D11)', () => {
-  test('flag off → 403 E_DISABLED before any session is created', async () => {
+  test('the session is anchored to the Matter and stamped trigger_kind', async () => {
     const createAgentSession = vi.fn(() => 55)
     const base = await startWith({
       fetchAgentRunSpec: async () => makeMatterSpec(),
       createAgentSession
-      // matterAgentEnabled omitted → off
-    })
-    const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
-    expect(res.status).toBe(403)
-    expect((await res.json()).error).toBe('E_DISABLED')
-    expect(createAgentSession).not.toHaveBeenCalled()
-  })
-
-  test('flag on → the session is anchored to the Matter and stamped trigger_kind', async () => {
-    const createAgentSession = vi.fn(() => 55)
-    const base = await startWith({
-      fetchAgentRunSpec: async () => makeMatterSpec(),
-      createAgentSession,
-      matterAgentEnabled: true
     })
     const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
     expect(res.status).toBe(200)
@@ -2377,8 +2364,7 @@ describe('POST /api/ai/agent-run — matter_followup gating + Matter-anchored se
     const createAgentSession = vi.fn(() => 55)
     const base = await startWith({
       fetchAgentRunSpec: async () => makeSpec(),
-      createAgentSession,
-      matterAgentEnabled: true
+      createAgentSession
     })
     expect((await postAgentRun(base, { jobId: 7, claimToken: 'tok' })).status).toBe(200)
     const arg = createAgentSession.mock.calls[0][0] as Record<string, unknown>
@@ -2663,12 +2649,6 @@ describe('contact_governance — the governance venue (WP7)', () => {
             webToolsEnabled: true,
             calendarToolsEnabled: true,
             customAgentToolsEnabled: true,
-            contactToolsEnabled: true,
-            // 🔴 explicit true, mirroring production: a governance run only exists when the
-            // endpoint gate passed, i.e. when this flag is on — and the proposal trio (the run's
-            // ONLY output channel) is registration-gated on it, so a cfg that omitted it would be
-            // testing a combination the product cannot reach.
-            contactAgentEnabled: true,
             contextMode: mode,
             agentRunContext
           },
@@ -2707,6 +2687,11 @@ describe('contact_governance — the governance venue (WP7)', () => {
     'kos_list_pages',
     'kos_query',
     'kos_search',
+    'matter_attention_list',
+    'matter_find',
+    'matter_get',
+    'matter_runs_list',
+    'matter_tags_list',
     'plan_update'
   ]
 
@@ -2840,27 +2825,11 @@ describe('contact_governance — the governance venue (WP7)', () => {
     resetRuntimeToolClasses()
   })
 
-  test('endpoint gate: contactAgentEnabled off → 403 E_DISABLED BEFORE any session/run work', async () => {
+  test('the contact governance run proceeds and creates its session', async () => {
     const createAgentSession = vi.fn(() => 55)
     const base = await startWith({
       fetchAgentRunSpec: async () => makeContactSpec(),
       createAgentSession
-      // contactAgentEnabled omitted → off (the flag ships off)
-    })
-    const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
-    expect(res.status).toBe(403)
-    expect(((await res.json()) as { error: string }).error).toBe('E_DISABLED')
-    // 🔴 the gate is BEFORE the session pre-create: with the Python proposals endpoint refusing,
-    // a run would burn a full LLM turn only to lose its single output channel.
-    expect(createAgentSession).not.toHaveBeenCalled()
-  })
-
-  test('endpoint gate: contactAgentEnabled on → the run proceeds and the session is created', async () => {
-    const createAgentSession = vi.fn(() => 55)
-    const base = await startWith({
-      fetchAgentRunSpec: async () => makeContactSpec(),
-      createAgentSession,
-      contactAgentEnabled: true
     })
     const res = await postAgentRun(base, { jobId: 7, claimToken: 'tok' })
     expect(res.status).toBe(200)

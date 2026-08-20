@@ -154,8 +154,7 @@ describe('services:restart', () => {
   })
 })
 
-// WP7 dogfood 根因：gateway 的 flag 是启动快照，Labs 翻开关 + 重启后端后 gateway 没重建
-// → 治理 run 恒 403 E_DISABLED、contact 工具一件不注册。这四条锁住「成功才重建 / 失败不碰 /
+// 重启主后端后 embedded gateway 也必须重建。这四条锁住「成功才重建 / 失败不碰 /
 // 只管主后端」三条语义。
 describe('services:restart 连带重建 embedded gateway', () => {
   test('mail-sync 重启成功 → gateway 重建一次', async () => {

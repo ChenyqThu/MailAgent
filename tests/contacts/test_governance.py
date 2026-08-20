@@ -161,7 +161,7 @@ def test_daily_tick_fires_once(db):
         ).fetchone()[0] == 1
 
 
-def test_spec_shape_and_flag_gate(db, monkeypatch):
+def test_spec_shape(db, monkeypatch):
     import src.config as config_module
 
     _, path = db
@@ -176,8 +176,6 @@ def test_spec_shape_and_flag_gate(db, monkeypatch):
         config_module,
         "config",
         SimpleNamespace(
-            contacts_enabled=True,
-            contact_agent_enabled=True,
             sync_store_db_path=path,
         ),
     )
@@ -205,12 +203,6 @@ def test_spec_shape_and_flag_gate(db, monkeypatch):
     }
     assert "email" in governance.CONTACT_GOVERNANCE_SKILLS
     assert not any(key.startswith("grant") for key in spec["toolPolicy"])
-    config_module.config.contact_agent_enabled = False
-    with pytest.raises(ContactError) as exc_info:
-        governance.assemble_contact_governance_spec(job)
-    assert exc_info.value.code == "E_DISABLED"
-
-
 def test_scheduled_tick_uses_row_enabled_and_fire_hour(db, monkeypatch):
     import src.mail.new_watcher as watcher_module
 
@@ -220,9 +212,6 @@ def test_scheduled_tick_uses_row_enabled_and_fire_hour(db, monkeypatch):
         "WHERE id='contact_governance_agent'"
     )
     conn.commit()
-    monkeypatch.setattr(watcher_module.settings, "contacts_enabled", True)
-    monkeypatch.setattr(watcher_module.settings, "contact_agent_enabled", True)
-
     class FixedDateTime:
         hour = 4
 

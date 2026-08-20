@@ -12,9 +12,6 @@
 //     🔴 trigger_json 是**整列覆写不是 merge** → 两个字段必须一起发，只发一个会把
 //     另一个抹成缺省。
 //
-// 🔴 总闸不在这里：`MAILAGENT_CONTACT_PROFILE_ENABLED` 是 Labs 里的灰度 flag（写 .env
-// 要重启），与项目周报把总闸收进抽屉的做法有意不同 —— 抽屉里只出总闸**状态说明**，
-// 不出一个改了却要用户自己想起去重启的开关。
 import { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
@@ -77,13 +74,10 @@ function readSchedule(cfg: ReportAgentConfig | null): { fireHour: number; dailyL
 export function ContactProfileConfigDrawer({
   cfg,
   open,
-  masterEnabled,
   onClose
 }: {
   cfg: ReportAgentConfig | null
   open: boolean
-  /** /chat/config 的 contactProfileEnabled（Labs flag）；off → 只出说明，不禁编辑。 */
-  masterEnabled: boolean
   onClose: () => void
 }): React.ReactElement | null {
   const { t } = useTranslation()
@@ -225,23 +219,6 @@ export function ContactProfileConfigDrawer({
 
       <div className="scrollbar-thin" style={{ flex: 1, overflowY: 'auto', padding: 18 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 20 }}>
-          {/* 总闸状态说明（总闸本体在 Labs，改后需重启，故这里只说明不给开关）。 */}
-          <div
-            style={{
-              fontSize: 12.5,
-              color: masterEnabled ? 'rgb(var(--ink-fg-2))' : 'rgb(var(--c-warn, var(--ink-fg-1)))',
-              padding: '10px 12px',
-              borderRadius: 9,
-              background: 'rgb(var(--ink-1) / 0.5)',
-              border: '1px solid rgb(var(--ink-border-soft))',
-              lineHeight: 1.55
-            }}
-          >
-            {masterEnabled
-              ? t('agents.contactProfile.masterOnNote')
-              : t('agents.contactProfile.masterOffNote')}
-          </div>
-
           {/* 启用（row.enabled，保存即生效） */}
           <div
             className="flex items-center"

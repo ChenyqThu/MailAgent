@@ -41,7 +41,7 @@ EXPECTED_TOOLS = {
     "custom_agent": {},
     "skill_creator": {},
     # 0812 —— Matter follow-up methodology. Zero tools on purpose: the matter_* tools live in the
-    # gateway and are CORE_UNGATED there (their switch is MAILAGENT_MATTERS_ENABLED + approval),
+    # gateway and are CORE_UNGATED there (with approval guarding the mixed family),
     # so this skill teaches the method rather than unlocking a capability.
     "matters": {},
 }

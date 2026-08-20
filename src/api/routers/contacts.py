@@ -59,20 +59,6 @@ def _schedule_profile_task(coro) -> None:
     task.add_done_callback(_profile_tasks.discard)
 
 
-def require_contacts_enabled(settings=Depends(get_settings)) -> None:
-    if not bool(getattr(settings, "contacts_enabled", False)):
-        raise APIError(
-            "E_DISABLED", "Contact directory feature is disabled", source="sqlite"
-        )
-
-
-def require_contact_agent_enabled(settings=Depends(get_settings)) -> None:
-    if not bool(getattr(settings, "contact_agent_enabled", False)):
-        raise APIError(
-            "E_DISABLED", "Contact governance agent is disabled", source="sqlite"
-        )
-
-
 def get_contact_repository(settings=Depends(get_settings)) -> ContactRepository:
     return ContactRepository(settings.sync_store_db_path)
 
@@ -80,7 +66,7 @@ def get_contact_repository(settings=Depends(get_settings)) -> ContactRepository:
 router = APIRouter(
     prefix="/api/contacts",
     tags=["contacts"],
-    dependencies=[Depends(verify_cf_access), Depends(require_contacts_enabled)],
+    dependencies=[Depends(verify_cf_access)],
 )
 
 
@@ -124,7 +110,7 @@ def _json_dict(raw: Any) -> dict:
 # ---- backfill progress (🔴 必须排在 /{contact_id} 之前, 否则被 int 路径吃掉) ----
 
 
-@router.get("/suggestions", dependencies=[Depends(require_contact_agent_enabled)])
+@router.get("/suggestions")
 async def list_governance_suggestions(
     request: Request,
     status: str = Query("pending"),
@@ -157,7 +143,6 @@ async def list_governance_suggestions(
 
 @router.post(
     "/suggestions/{suggestion_id}/adopt",
-    dependencies=[Depends(require_contact_agent_enabled)],
 )
 async def adopt_governance_suggestion(
     suggestion_id: int,
@@ -179,7 +164,6 @@ async def adopt_governance_suggestion(
 
 @router.post(
     "/suggestions/{suggestion_id}/ignore",
-    dependencies=[Depends(require_contact_agent_enabled)],
 )
 async def ignore_governance_suggestion(
     suggestion_id: int,
@@ -196,7 +180,7 @@ async def ignore_governance_suggestion(
     return success_envelope(result, request=request)
 
 
-@router.post("/agent/run", dependencies=[Depends(require_contact_agent_enabled)])
+@router.post("/agent/run")
 async def run_contact_governance(
     request: Request,
     idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
@@ -214,11 +198,10 @@ async def run_contact_governance(
     return success_envelope(result, request=request)
 
 
-@router.get("/agent/status", dependencies=[Depends(require_contact_agent_enabled)])
+@router.get("/agent/status")
 async def contact_governance_status(
     request: Request,
     repo: ContactRepository = Depends(get_contact_repository),
-    settings=Depends(get_settings),
 ):
     conn = repo.connect()
     try:
@@ -240,7 +223,7 @@ async def contact_governance_status(
         conn.close()
     return success_envelope(
         {
-            "enabled": bool(settings.contacts_enabled and settings.contact_agent_enabled),
+            "enabled": True,
             "pending_count": pending,
             "last_fire_day": marker[0] if marker else None,
             "last_scan_at": latest[0] if latest else None,
@@ -251,7 +234,7 @@ async def contact_governance_status(
     )
 
 
-@router.get("/agent/history", dependencies=[Depends(require_contact_agent_enabled)])
+@router.get("/agent/history")
 async def contact_governance_history(
     request: Request,
     limit: int = Query(10, ge=1, le=50),
@@ -295,12 +278,7 @@ async def contact_governance_history(
 async def contact_profile_daily_summary(
     request: Request,
     repo: ContactRepository = Depends(get_contact_repository),
-    settings=Depends(get_settings),
 ):
-    if not bool(getattr(settings, "contact_profile_enabled", False)):
-        raise APIError(
-            "E_DISABLED", "Contact profile feature is disabled", source="sqlite"
-        )
     local_date = datetime.now().astimezone().date()
     start_ms = int(datetime.combine(local_date, datetime.min.time()).timestamp() * 1000)
     end_ms = int(
@@ -686,7 +664,6 @@ async def get_contact(
     request: Request,
     contact_id: int,
     repo: ContactRepository = Depends(get_contact_repository),
-    settings=Depends(get_settings),
 ):
     conn = repo.connect()
     try:
@@ -694,7 +671,7 @@ async def get_contact(
             _load_detail,
             conn,
             contact_id,
-            profile_enabled=bool(getattr(settings, "contact_profile_enabled", False)),
+            profile_enabled=True,
         )
     finally:
         conn.close()
@@ -708,10 +685,6 @@ async def refresh_contact_profile(
     repo: ContactRepository = Depends(get_contact_repository),
     settings=Depends(get_settings),
 ):
-    if not bool(getattr(settings, "contact_profile_enabled", False)):
-        raise APIError(
-            "E_DISABLED", "Contact profile feature is disabled", source="sqlite"
-        )
     try:
         claimed = contact_profile.claim_profile_run(str(repo.db_path), contact_id)
     except ContactError as exc:

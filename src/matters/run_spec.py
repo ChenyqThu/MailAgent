@@ -226,13 +226,6 @@ def fence_matter_excerpt(*, resource_id: Any, provider: Any, excerpt: str) -> st
     )
 
 
-def _flags_on(settings: Any) -> bool:
-    try:
-        return bool(settings.matters_enabled) and bool(settings.matter_agent_enabled)
-    except Exception:  # noqa: BLE001 — 配置读失败 fail-closed
-        return False
-
-
 def _default_settings() -> Any:
     from src.config import config
 
@@ -422,13 +415,11 @@ def _manifest_section(
 def assemble_matter_spec(job: Any, *, settings: Any = None) -> dict[str, Any]:
     """``matter_followup`` job → gateway 消费的权威 spec（D7 形状逐键）。
 
-    flag off / matter 或 run 行缺失 → ``MatterError('E_SPEC_AGENT_INVALID')``
+    matter 或 run 行缺失 → ``MatterError('E_SPEC_AGENT_INVALID')``
     （router 侧转 409，gateway 收到即放弃该 run，worker 标 failed —— 防绕）。
     """
     if settings is None:
         settings = _default_settings()
-    if not _flags_on(settings):
-        raise MatterError("E_SPEC_AGENT_INVALID", "matter agent feature is disabled")
     params = job.params or {}
     matter_id = params.get("matter_id")
     run_id = params.get("matter_run_id")

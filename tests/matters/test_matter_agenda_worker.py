@@ -61,7 +61,7 @@ def test_schedule_fire_marker_catchup_and_coalesced_consumption(tmp_path):
     state = FakeState()
     runs = FakeRuns(coalesced=True)
     worker = MatterAgendaWorker(
-        repository=repo, sync_store=state, matter_agent_enabled=True,
+        repository=repo, sync_store=state,
         clock_ms=lambda: NOW, run_service=runs,
     )
     assert worker._schedule_tick() == {matter["id"]}
@@ -72,7 +72,7 @@ def test_schedule_fire_marker_catchup_and_coalesced_consumption(tmp_path):
     assert len(runs.calls) == 1
 
     late = MatterAgendaWorker(
-        repository=repo, sync_store=FakeState(), matter_agent_enabled=True,
+        repository=repo, sync_store=FakeState(),
         clock_ms=lambda: NOW + 31 * 60 * 1000, run_service=FakeRuns(),
     )
     assert late._schedule_tick() == set()
@@ -96,7 +96,6 @@ def test_schedule_tick_enqueues_enabled_unbound_matter(tmp_path):
     worker = MatterAgendaWorker(
         repository=repo,
         sync_store=FakeState(),
-        matter_agent_enabled=True,
         clock_ms=lambda: NOW,
         run_service=runs,
     )
@@ -127,7 +126,7 @@ def test_retry_chain_manual_no_retry_schedule_backoff_and_terminal_episode(tmp_p
     manual = base.create_matter({"title": "manual"}, idempotency_key="m", source="test")["matter"]
     _insert_fail(path, manual["id"], 1, "manual", NOW - 10 * 60 * 1000)
     runs = FakeRuns()
-    worker = MatterAgendaWorker(repository=repo, sync_store=FakeState(), matter_agent_enabled=True, clock_ms=lambda: NOW, run_service=runs)
+    worker = MatterAgendaWorker(repository=repo, sync_store=FakeState(), clock_ms=lambda: NOW, run_service=runs)
     worker._retry_tick()
     assert runs.calls == []
     assert worker.attention.list_attention(public_id=manual["public_id"])[0]["kind"] == "run_failed"
@@ -170,7 +169,6 @@ def test_noop_scheduled_run_creates_no_retry_or_notification(tmp_path):
     worker = MatterAgendaWorker(
         repository=repo,
         sync_store=FakeState(),
-        matter_agent_enabled=True,
         clock_ms=lambda: NOW,
         run_service=FakeRuns(),
     )
@@ -199,7 +197,7 @@ def _matter_with_triggers(path, triggers):
 
 def _worker(repo, state):
     return MatterAgendaWorker(
-        repository=repo, sync_store=state, matter_agent_enabled=True,
+        repository=repo, sync_store=state,
         clock_ms=lambda: NOW, run_service=FakeRuns(),
     )
 

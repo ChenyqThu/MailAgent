@@ -84,12 +84,11 @@ function resolvePm2(): string | null {
   return null
 }
 
-/** WP7 dogfood 修复 — 「重启后端」连带重建内嵌 AI gateway。
+/** 「重启后端」连带重建内嵌 AI gateway。
  *
- *  gateway 的全部 flag（contactToolsEnabled / contactAgentEnabled / matterAgentEnabled …）
- *  是 startEmbeddedAiGateway() 里 envBool 求值一次的**启动快照**。Labs 翻开关 → env:set
- *  写 .env 并同步 process.env → services:restart 只重启 Python 两进程，gateway 沿用旧快照，
- *  于是治理 run 被 403 E_DISABLED、contact 工具一件不注册，用户只能退出整个 App 才生效。
+ *  gateway 的 env flag 是 startEmbeddedAiGateway() 里 envBool 求值一次的**启动快照**。
+ *  Labs 翻动仍属 gateway 的开关时，env:set 写 .env 并同步 process.env，但
+ *  services:restart 只重启 Python 两进程，因此这里也重建 gateway。
  *
  *  范围只取 mail-sync / all（RestartBanner 的开关生效路径）。serve-api 是「远程访问」页
  *  的专用重启，与 gateway flag 无关，不为它牺牲在途 chat run。

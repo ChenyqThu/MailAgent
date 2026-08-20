@@ -30,7 +30,7 @@ def env(tmp_path):
     path = tmp_path / "propose.db"
     SyncStore(str(path))
     settings = SimpleNamespace(
-        matters_enabled=True, matter_agent_enabled=True, sync_store_db_path=str(path)
+        sync_store_db_path=str(path)
     )
     run_service = MatterRunService(MatterRepository(path))
     app.dependency_overrides[verify_cf_access] = lambda: None
@@ -217,17 +217,6 @@ def test_propose_requires_started_run(env):
     assert response.json()["error"]["code"] == "E_INVALID_STATE"
 
 
-def test_propose_flag_gates(env):
-    client, settings, service, pid, run_id, _, _ = env
-    settings.matter_agent_enabled = False
-    response = client.post(_url(pid, run_id), json={"summary": "x", "changes": []})
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "E_DISABLED"
-    settings.matter_agent_enabled = True
-    settings.matters_enabled = False
-    response = client.post(_url(pid, run_id), json={"summary": "x", "changes": []})
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "E_DISABLED"
 
 
 def test_propose_carries_a_new_resource_link_over_the_wire(env):

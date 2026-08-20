@@ -68,9 +68,7 @@ import { __testing as eventsTesting, onSseEvent } from '../../src/electron/main/
 import { registerMatterNotifications } from '../../src/electron/main/matter_notifications'
 import { LOCAL_TOKEN_HEADER } from '../../src/electron/main/local_token'
 
-const FLAG = 'MAILAGENT_MATTERS_ENABLED'
 const API_PORT = 'MAILAGENT_API_PORT'
-const savedFlag = process.env[FLAG]
 const savedApiPort = process.env[API_PORT]
 
 function notifyEvent(): {
@@ -102,15 +100,12 @@ beforeEach(() => {
   mocks.isMinimizedMock.mockReset().mockReturnValue(false)
   mocks.isDestroyedMock.mockReset().mockReturnValue(false)
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })))
-  process.env[FLAG] = 'true'
   process.env[API_PORT] = '8317'
 })
 
 afterEach(() => {
   eventsTesting.reset()
   vi.unstubAllGlobals()
-  if (savedFlag == null) delete process.env[FLAG]
-  else process.env[FLAG] = savedFlag
   if (savedApiPort == null) delete process.env[API_PORT]
   else process.env[API_PORT] = savedApiPort
 })
@@ -175,14 +170,4 @@ describe('matter notifications', () => {
     })
   })
 
-  test('flag off registers no SSE tap', () => {
-    process.env[FLAG] = 'false'
-    const before = eventsTesting.sseEventTapCount()
-
-    registerMatterNotifications()
-
-    expect(eventsTesting.sseEventTapCount()).toBe(before)
-    eventsTesting.dispatchSseEvent(notifyEvent())
-    expect(mocks.notificationInstances).toHaveLength(0)
-  })
 })

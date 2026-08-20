@@ -104,7 +104,6 @@ describe('matter_followup_mutate — venue floor (class capability_change)', () 
     buildGatewayTools({
       domain: mockDomain(() => okEnvelope([])),
       approvalGuard: new ApprovalGuard(),
-      matterToolsEnabled: true,
       contextMode
     })
 
@@ -136,7 +135,6 @@ describe('matter_get — the followup read face', () => {
     const tools = buildGatewayTools({
       domain,
       approvalGuard: new ApprovalGuard(),
-      matterToolsEnabled: true,
       contextMode: 'manual_chat'
     })
     const exec = tools.matter_get.execute as (i: unknown, o: unknown) => Promise<unknown>

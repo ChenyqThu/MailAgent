@@ -35,14 +35,12 @@ class MatterAgendaWorker:
         *,
         repository: MatterRepository,
         sync_store: Any,
-        matter_agent_enabled: bool,
         notify_level_reader: Callable[[], str] | None = None,
         clock_ms: Callable[[], int] | None = None,
         run_service: MatterRunService | None = None,
     ):
         self.repository = repository
         self.sync_store = sync_store
-        self.matter_agent_enabled = matter_agent_enabled
         self.notify_level_reader = notify_level_reader or (lambda: "high")
         self.clock_ms = clock_ms or (lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
         self.attention = AttentionService(repository, clock_ms=self.clock_ms)
@@ -58,12 +56,11 @@ class MatterAgendaWorker:
 
     async def tick(self) -> None:
         changed: set[int] = set()
-        if self.matter_agent_enabled:
-            try:
-                await asyncio.to_thread(self._schedule_tick)
-                changed.update(await asyncio.to_thread(self._retry_tick))
-            except Exception as exc:  # noqa: BLE001
-                logger.exception(f"[matter-agenda] schedule/retry tick failed: {exc}")
+        try:
+            await asyncio.to_thread(self._schedule_tick)
+            changed.update(await asyncio.to_thread(self._retry_tick))
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(f"[matter-agenda] schedule/retry tick failed: {exc}")
         try:
             result = await asyncio.to_thread(self.attention.reconcile)
             changed.update(result["changed_matter_ids"])

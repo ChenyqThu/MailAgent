@@ -66,13 +66,7 @@ export function MattersTab(): React.ReactElement {
         </Row>
         <Row
           label={t('settings.matters.agent.label')}
-          helper={
-            // 🔴 跟进 Agent 是独立灰度（`MAILAGENT_MATTER_AGENT_ENABLED`）。关着的时候如实说
-            // 「当前未启用」而不是把按钮摆在那儿让人点开一个不生效的配置。
-            matterAgentEnabled
-              ? t('settings.matters.agent.helper')
-              : t('settings.matters.agent.disabled')
-          }
+          helper={t('settings.matters.agent.helper')}
         >
           <Button
             variant="outline"

@@ -28,7 +28,6 @@ def setup_subscription(tmp_path, monkeypatch):
     )
     watcher = new_watcher.NewWatcher.__new__(new_watcher.NewWatcher)
     watcher.sync_store = SimpleNamespace(db_path=str(path))
-    monkeypatch.setattr(new_watcher, "settings", SimpleNamespace(matters_enabled=True))
     return watcher, service, linked, path
 
 
@@ -61,14 +60,4 @@ async def test_thread_subscription_paused_does_not_link(setup_subscription):
     assert all(
         row["resource"]["external_key"] != "email:100"
         for row in service.list_resources(paused["matter"]["public_id"])
-    )
-
-
-@pytest.mark.asyncio
-async def test_thread_subscription_flag_off_returns_before_database_query(monkeypatch):
-    watcher = new_watcher.NewWatcher.__new__(new_watcher.NewWatcher)
-    watcher.sync_store = SimpleNamespace(db_path="/definitely/missing/database.db")
-    monkeypatch.setattr(new_watcher, "settings", SimpleNamespace(matters_enabled=False))
-    await watcher._maybe_link_matter_thread_subscriptions(
-        SimpleNamespace(thread_id="thread-1", subject="Ignored"), 101
     )

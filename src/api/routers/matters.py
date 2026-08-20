@@ -41,20 +41,6 @@ from src.matters.run_service import MatterRunService
 from src.matters.service import Actor, MatterError, MatterService
 
 
-def require_matters_enabled(settings=Depends(get_settings)) -> None:
-    if not bool(settings.matters_enabled):
-        raise APIError("E_DISABLED", "Matters feature is disabled", source="sqlite")
-
-
-def require_matter_agent_enabled(settings=Depends(get_settings)) -> None:
-    """P4 双 flag 门的第二道（runs/propose 面）。updates/review 面**有意不挂**——
-    agent flag 事后关掉时 owner 仍能评审/拒绝清账既有 pending 提案（D11）。"""
-    if not bool(getattr(settings, "matter_agent_enabled", False)):
-        raise APIError(
-            "E_DISABLED", "Matter agent feature is disabled", source="sqlite"
-        )
-
-
 def get_matter_service(settings=Depends(get_settings)) -> MatterService:
     return MatterService(MatterRepository(settings.sync_store_db_path))
 
@@ -79,7 +65,7 @@ def get_attention_service(settings=Depends(get_settings)) -> AttentionService:
 router = APIRouter(
     prefix="/api/matters",
     tags=["matters"],
-    dependencies=[Depends(verify_cf_access), Depends(require_matters_enabled)],
+    dependencies=[Depends(verify_cf_access)],
 )
 
 
@@ -488,7 +474,7 @@ class MatterFollowupMutateRequest(BaseModel):
 
 
 @router.patch(
-    "/{matter_id}/followup", dependencies=[Depends(require_matter_agent_enabled)]
+    "/{matter_id}/followup"
 )
 async def mutate_matter_followup(
     matter_id: str,
@@ -1099,7 +1085,7 @@ async def reject_update(
 
 
 @router.get(
-    "/{matter_id}/runs", dependencies=[Depends(require_matter_agent_enabled)]
+    "/{matter_id}/runs"
 )
 async def list_matter_runs(
     matter_id: str,
@@ -1123,7 +1109,6 @@ async def list_matter_runs(
 
 @router.get(
     "/{matter_id}/runs/{run_id}",
-    dependencies=[Depends(require_matter_agent_enabled)],
 )
 async def get_matter_run(
     matter_id: str,
@@ -1138,7 +1123,7 @@ async def get_matter_run(
 
 
 @router.post(
-    "/{matter_id}/runs", dependencies=[Depends(require_matter_agent_enabled)]
+    "/{matter_id}/runs"
 )
 async def create_matter_run(
     matter_id: str,
@@ -1161,7 +1146,6 @@ async def create_matter_run(
 
 @router.post(
     "/{matter_id}/runs/{run_id}/cancel",
-    dependencies=[Depends(require_matter_agent_enabled)],
 )
 async def cancel_matter_run(
     matter_id: str,
@@ -1294,6 +1278,6 @@ _internal_router.add_api_route(
     "/{matter_id}/attention/{signal_id}/notified",
     acknowledge_attention_notified,
     methods=["POST"],
-    dependencies=[Depends(verify_local_token), Depends(require_matters_enabled)],
+    dependencies=[Depends(verify_local_token)],
 )
 router.routes.extend(_internal_router.routes)

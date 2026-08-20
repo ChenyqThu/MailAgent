@@ -84,7 +84,7 @@ def test_url_fetch_cache_freshness_rest_and_context_fence(tmp_path):
         url_fetcher=fake_fetch,
     )
     public_id, resource_id = _create_url_resource(service)
-    settings = SimpleNamespace(matters_enabled=True, sync_store_db_path=str(path))
+    settings = SimpleNamespace(sync_store_db_path=str(path))
     app.dependency_overrides[verify_cf_access] = lambda: None
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_matter_service] = lambda: service

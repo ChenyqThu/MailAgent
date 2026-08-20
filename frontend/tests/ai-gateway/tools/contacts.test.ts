@@ -166,107 +166,22 @@ async function runWrite(
   return { asks, result: await exec(input, { toolCallId, messages: [], abortSignal: undefined }) }
 }
 
-describe('buildGatewayTools — MAILAGENT_CONTACTS_ENABLED gate', () => {
-  test('flag off (default) → no contact tools; ToolSet keys byte-identical to the un-flagged set', () => {
-    const base = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contextMode: 'manual_chat'
-    })
-    const flagOff = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: false,
-      contextMode: 'manual_chat'
-    })
-    expect(Object.keys(flagOff)).toEqual(Object.keys(base))
-    for (const name of ALL_CONTACT_TOOL_NAMES) {
-      expect(base[name], name).toBeUndefined()
-      expect(flagOff[name], name).toBeUndefined()
-    }
-  })
-
-  test('flag on but NO guard → no contact tools (the mixed family is all-or-nothing)', () => {
+describe('buildGatewayTools — contact tools are a default capability', () => {
+  test('without an approval guard, no contact tools register', () => {
     const tools = buildGatewayTools({
       domain: contactDomain(),
-      contactToolsEnabled: true,
       contextMode: 'manual_chat'
     })
     for (const name of ALL_CONTACT_TOOL_NAMES) expect(tools[name], name).toBeUndefined()
   })
 
-  test('flag on + guard → all nine register in manual chat', () => {
+  test('with an approval guard, all nine register in manual chat', () => {
     const tools = buildGatewayTools({
       domain: contactDomain(),
       approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
       contextMode: 'manual_chat'
     })
     for (const name of ALL_CONTACT_TOOL_NAMES) expect(tools[name], name).toBeDefined()
-  })
-
-  // 🔴 The proposal trio belongs to the AGENT flag's domain, not the directory flag's: the landing
-  // leg (POST /api/contacts/agent/proposals) is double-flag-gated server-side and the review queue
-  // lives in the same domain. With the agent off those three could only ever return E_DISABLED —
-  // so they are not registered at all (matter_runs_list 先例). Everything else keeps working:
-  // browsing the directory and fixing a contact's type do not need the governance agent.
-  test('CONTACTS on + CONTACT_AGENT off → the proposal trio is absent; reads + direct writes stay', () => {
-    const tools = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
-      contactAgentEnabled: false,
-      contextMode: 'manual_chat'
-    })
-    for (const name of GATEWAY_CONTACT_PROPOSE_TOOL_NAMES) {
-      expect(tools[name], `${name} must not be advertised with the agent off`).toBeUndefined()
-    }
-    for (const name of [
-      ...GATEWAY_CONTACT_READ_TOOL_NAMES,
-      ...GATEWAY_CONTACT_WRITE_TOOL_NAMES
-    ]) {
-      expect(tools[name], `${name} must be unaffected by the agent flag`).toBeDefined()
-    }
-  })
-
-  test('CONTACTS on + CONTACT_AGENT on → the proposal trio registers', () => {
-    const tools = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
-      contactAgentEnabled: true,
-      contextMode: 'manual_chat'
-    })
-    for (const name of ALL_CONTACT_TOOL_NAMES) expect(tools[name], name).toBeDefined()
-  })
-
-  test("an OMITTED contactAgentEnabled keeps the whole family (`!== false`, harness/pre-WP7 cfgs)", () => {
-    // The lifecycle always threads the value, so only a hand-built cfg lands here — and it must
-    // keep the pre-gate shape, exactly like planToolsEnabled / matterAgentEnabled.
-    const omitted = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
-      contextMode: 'manual_chat'
-    })
-    const explicitOn = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
-      contactAgentEnabled: true,
-      contextMode: 'manual_chat'
-    })
-    expect(Object.keys(omitted)).toEqual(Object.keys(explicitOn))
-  })
-
-  test('the agent flag alone registers nothing (it narrows the family, never creates it)', () => {
-    const tools = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactAgentEnabled: true,
-      contextMode: 'manual_chat'
-    })
-    for (const name of ALL_CONTACT_TOOL_NAMES) expect(tools[name], name).toBeUndefined()
   })
 })
 

@@ -167,7 +167,7 @@ def env(tmp_path):
     finally:
         conn.close()
     settings = SimpleNamespace(
-        matters_enabled=True, matter_agent_enabled=True, sync_store_db_path=str(path)
+        sync_store_db_path=str(path)
     )
     service = MatterRunService(MatterRepository(path))
     created = service.create_matter(

@@ -109,8 +109,6 @@ def test_contact_governance_terminal_records_suggestion_delta(env, monkeypatch):
     )
     claimed = repo.claim_next(types=repo.AGENT_JOB_TYPES)
     assert claimed is not None and claimed.job_id == job_id
-    monkeypatch.setattr(run_worker, "_contact_governance_flags_on", lambda: True)
-
     async def fake_poke(*args, **kwargs):
         with sqlite3.connect(repo.db_path) as conn:
             conn.execute(

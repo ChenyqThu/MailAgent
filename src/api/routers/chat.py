@@ -730,21 +730,12 @@ async def chat_config(request: Request):
             "sessionProvenanceEnabled": _hot_bool(
                 env_vals, "MAILAGENT_SESSION_PROVENANCE", True
             ),
-            # Matters P1 lane ② — pydantic 根开关的 renderer 投影。必须与
-            # /api/matters/* 的 require_matters_enabled 读取同一个冻结 settings
-            # 单例；不做 hot-read，避免 UI 显示入口但端点仍按旧值返回 E_DISABLED。
-            "mattersEnabled": bool(getattr(cfg, "matters_enabled", False)),
-            "matterAgentEnabled": bool(getattr(cfg, "matter_agent_enabled", False)),
-            # Contact Directory WP2 — 同 matters 的纪律: pydantic 冻结单例读 (与
-            # require_contacts_enabled 同源), 不做 hot-read, 避免 UI 显示入口但
-            # 端点仍按旧值返回 E_DISABLED。
-            "contactsEnabled": bool(getattr(cfg, "contacts_enabled", False)),
-            "contactProfileEnabled": bool(
-                getattr(cfg, "contact_profile_enabled", False)
-            ),
-            "contactAgentEnabled": bool(
-                getattr(cfg, "contact_agent_enabled", False)
-            ),
+            # 2026-08-19 cutover 后五个 venue env 闸退役；兼容旧 renderer，投影键保留恒 true。
+            "mattersEnabled": True,
+            "matterAgentEnabled": True,
+            "contactsEnabled": True,
+            "contactProfileEnabled": True,
+            "contactAgentEnabled": True,
             "triggerV2Enabled": _hot_bool(env_vals, "MAILAGENT_TRIGGER_V2", True),
             "calendarTriggerEnabled": _hot_bool(
                 env_vals, "MAILAGENT_CALENDAR_TRIGGER", True

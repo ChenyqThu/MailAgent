@@ -4,21 +4,17 @@
 > `.trellis/tasks/08-13-contact-directory/`（local-only）。设计权威 = 该 task 下的
 > `contacts/HANDOFF-通讯录设计规格.md` + 原型 `Contacts.html`（`c*.jsx`）。
 
-## 1. 定位与 flag 语义
+## 1. 定位与启用语义
 
 把「和我有邮件往来的人」变成第一类对象：零人工录入，由后台扫描器从
 `email_metadata` 确定性建库（人物档案 = 多邮箱锚点 + 往来账本 + 身份字段 +
 组织关系），一级导航「通讯录」（VIEW 组）双栏工作台消费。
 
-- **flag**：`MAILAGENT_CONTACTS_ENABLED`（默认 `false`，灰度 ship-off →
-  dogfood → cutover）。Python pydantic 单载体，🔴 字段名 `contacts_enabled` ≠
-  env 键 ⇒ 必须 `validation_alias`（pydantic v2 忽略 `Field(env=)`）。翻需重启后端。
-- on = new_watcher 挂扫描独立低频节拍（`MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC`
-  默认 120s，🔴 绝不挂 5s radar poll）+ `/api/contacts/*` 激活 + 导航渲染
-  （renderer 经 `/chat/config.contactsEnabled` 投影，**不直读 env**）。
-- off = 字节级 inert：`run_tick` 第一行返回（零 SQL）、端点全 403
-  `E_DISABLED`、CLI `mailagent contact backfill` 拒绝、导航不渲染且路由直达 =
-  404 空态（非空页）。**v54/v55 表结构与 flag 解耦恒在**。
+- **2026-08-19 cutover**：通讯录成为默认能力，旧 venue env 总闸与全部载体已退役。
+- `new_watcher` 恒挂扫描独立低频节拍（`MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC`
+  默认 120s，🔴 绝不挂 5s radar poll）+ `/api/contacts/*` 恒激活 + 导航恒渲染。
+  `/chat/config.contactsEnabled` 作为旧前端兼容投影保留并恒为 `true`。
+- **v54/v55 表结构恒在**；画像/治理自动运行仍由 Agents 页对应行的 `enabled` 控制。
 - 配套 env：`MAILAGENT_SELF_EMAILS`（逗号分隔 owner 历史自有地址，**兜底级**）。
   自有地址集 `resolve_self_addresses` = `USER_EMAIL` + 本键 + 库内 `is_self=1`
   联系人名下**全部锚点**（task 08-14 WP-3 起第三源是权威源，见 §4.1）；它决定
@@ -188,7 +184,7 @@ backfill 就收敛，不必等下个 tick）。
   relation 的 `manager_src='manual'` 恒拒。
 - owner 面是 `verify_cf_access`；Agent 落库腿
   `POST /api/contacts/agent/proposals` 单独挂 `verify_local_token`，不接受 CF JWT。
-  两腿都要求 `MAILAGENT_CONTACTS_ENABLED && MAILAGENT_CONTACT_AGENT_ENABLED`。
+  两腿恒接线；治理自动运行由 `contact_governance_agent.enabled` 行级控制。
 - `new_watcher` 在联系人提取后做每日 due 判定，marker =
   `contact_governance.last_fire_day`；只 enqueue 到现有 `AgentRunWorker`，不另起 worker。
   spec 的 `toolPolicy` 恒为 `{"allowedTools": []}`，不下发任何 grant 键。
@@ -292,10 +288,9 @@ backfill 就收敛，不必等下个 tick）。
 
 治理台三批已全部落地（2026-08-19）：Python 队列/扫描执行链/双腿 REST/提示词配置面（批①）、
 gateway 9 工具 + 第六 context mode `contact_governance`（批②，工具定义 `frontend/src/ai-gateway/tools/contacts.ts`、
-三道 belt 与审批档见 `feature-flags-rationale.md` 的 `MAILAGENT_CONTACT_AGENT_ENABLED` 条目）、
-列表头 ✨Agent 胶囊 + 抽屉两 tab + LabsTab 开关（批③，工具清单走零依赖叶子
+三道 belt 与审批档见 `feature-flags-rationale.md` 的退役记录）、
+列表头 ✨Agent 胶囊 + 抽屉两 tab（批③，工具清单走零依赖叶子
 `frontend/src/shared/lib/contactToolFace.ts`，三向闸 `contact_tool_face_leaf.test.ts`）。
 仍未做：手动创建无 email 联系人 / KOS person 页 / compose 收件人补全切读通讯录等，
-在 PRD §9 TODO 表登记。两个已知形态（有意保留，dogfood 后再议）：`contact_refresh_profile`
-在画像 flag off 时恒返 `E_DISABLED`；`contact_list_mails` 不返回 `message_id`（propose
-取证据要经 `email_get` 两跳，工具 description 已写明）。
+在 PRD §9 TODO 表登记。`contact_list_mails` 不返回 `message_id`（propose 取证据要经
+`email_get` 两跳，工具 description 已写明）。

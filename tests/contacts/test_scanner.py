@@ -257,23 +257,10 @@ def test_incremental_aggregates_match_ledger_recalc(db):
     assert after == before
 
 
-def test_flag_off_run_tick_is_byte_level_inert(tmp_path, monkeypatch):
-    """flag off: 零 SQL 零文件 —— 指到不存在的路径也绝不创建。"""
-    from src.config import config as settings
-    from src.contacts.scanner import run_tick
-
-    monkeypatch.setattr(settings, "contacts_enabled", False, raising=False)
-    ghost = tmp_path / "nope" / "ghost.db"
-    assert run_tick(str(ghost)) is None
-    assert not ghost.exists()
-    assert not ghost.parent.exists()
-
-
 def test_flag_on_run_tick_scans(db, monkeypatch):
     from src.config import config as settings
     from src.contacts.scanner import run_tick
 
-    monkeypatch.setattr(settings, "contacts_enabled", True, raising=False)
     # run_tick 内部经 resolve_self_addresses 读 settings → 注入测试口径
     monkeypatch.setattr(settings, "user_email", "me@corp.com", raising=False)
     monkeypatch.setattr(settings, "self_emails", "", raising=False)

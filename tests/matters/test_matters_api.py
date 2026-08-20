@@ -23,7 +23,7 @@ from src.matters.service import MatterService
 def client(tmp_path):
     path = tmp_path / "sync.db"
     SyncStore(str(path))
-    settings = SimpleNamespace(matters_enabled=True, sync_store_db_path=str(path))
+    settings = SimpleNamespace(sync_store_db_path=str(path))
     app.dependency_overrides[verify_cf_access] = lambda: None
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_matter_service] = lambda: MatterService(
@@ -79,20 +79,6 @@ def test_matter_rest_smoke(client):
     )
     assert restored.status_code == 200
     assert restored.json()["data"]["matter"]["deleted_at"] is None
-
-
-def test_flag_off_returns_disabled_envelope_for_all_methods(client):
-    http, settings = client
-    settings.matters_enabled = False
-    for method, path, kwargs in (
-        ("get", "/api/matters", {}),
-        ("post", "/api/matters", {"json": {"title": "x", "mutation": _mutation("x")}}),
-        ("get", "/api/matters/MAT-0001", {}),
-        ("get", "/api/matters/links/by-resource?provider=mailagent&keys=email:1", {}),
-    ):
-        response = getattr(http, method)(path, **kwargs)
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "E_DISABLED"
 
 
 def test_version_conflict_error_shape(client):

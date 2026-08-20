@@ -150,12 +150,11 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'calendar_event_reschedule',
   'calendar_event_rsvp',
   'calendar_event_delete',
-  // Matters MVP P3/P4 —— Matter 家族 12 件（behind MAILAGENT_MATTERS_ENABLED）：2 读 + 9 写 +
-  // 跟进 run 专属的 matter_update_propose。开关权在独立 flag（calendar 先例；Python 无 matter
-  // builtin skill，GATEWAY_SKILL_TOOLS 无映射），永不 skill-gated。
+  // Matters MVP P3/P4 —— Matter 家族 12 件：2 读 + 9 写 + 跟进 run 专属的
+  // matter_update_propose。Python 无 matter builtin skill，GATEWAY_SKILL_TOOLS 无映射，
+  // 永不 skill-gated。
   // 🔴 P3 落地时**漏了**这 12 个名字：完整性守护（每个 gateway 工具必被分类）本该当场变红，
-  // 却因为 skill_gating.test.ts 的 buildAllTools 没开 matterToolsEnabled 而静默放过 —— 两个
-  // 缺口互相抵消。P4 一次性补齐（名单 + 那处 buildAllTools），闭掉 handoff 遗留 #4。
+  // 却因为当时的测试装配未包含 Matter 家族而静默放过。P4 一次性补齐名单与装配闸。
   'matter_find',
   'matter_get',
   'matter_create',
@@ -168,19 +167,17 @@ export const CORE_UNGATED_GATEWAY_TOOLS: ReadonlySet<string> = new Set([
   'matter_run_control',
   'matter_review_update',
   'matter_update_propose',
-  // 0813 轮 3 批 R —— 三读 + 两处置写，同一族同一条纪律（开关权在 MAILAGENT_MATTERS_ENABLED，
-  // 无 skill 归属，永不 skill-gated）。
+  // 0813 轮 3 批 R —— 三读 + 两处置写，同一族同一条纪律（无 skill 归属）。
   'matter_attention_list',
   'matter_runs_list',
   'matter_tags_list',
   'matter_attention_triage',
   'matter_suggestion_resolve',
-  // task 08-14 —— 跟进配置的逐条编辑。同族同纪律（开关权在 MAILAGENT_MATTERS_ENABLED +
-  // MAILAGENT_INTERNAL_AGENT_TOOLS，无 skill 归属，永不 skill-gated）。
+  // task 08-14 —— 跟进配置的逐条编辑。同族同纪律（受
+  // MAILAGENT_INTERNAL_AGENT_TOOLS 控制，无 skill 归属）。
   'matter_followup_mutate',
-  // Contact Directory WP7 —— 通讯录家族 9 件（behind MAILAGENT_CONTACTS_ENABLED）：3 读 +
-  // 3 提案（artifact）+ 3 写。开关权在独立 flag（calendar / matter 先例；Python 无 contacts
-  // builtin skill，GATEWAY_SKILL_TOOLS 无映射），永不 skill-gated。
+  // Contact Directory WP7 —— 通讯录家族 9 件：3 读 + 3 提案（artifact）+ 3 写。
+  // Python 无 contacts builtin skill，GATEWAY_SKILL_TOOLS 无映射，永不 skill-gated。
   // 🔴 这一段与 policy.ts 的 9 条 class、tool_catalog.json 的 9 行必须同批加：漏 CORE_UNGATED
   // = skill_gating.test 的完整性守护红；漏 class = 静默 fail-close 成 exec（headless 全掉）。
   // 治理 run 尤其依赖它 —— 那条 run 的 skills 挂载集不含通讯录（本来也没有这个 skill），

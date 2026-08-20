@@ -6,7 +6,7 @@
 // 反方向同理：这里多写一个名字，界面就在向 owner 承诺一件不存在的能力。
 //
 // 🔴 这不是权威。权威是 gateway 真实装配出来的 ToolSet（tools/index.ts 的
-// `contactToolsEnabled` 三个 create* 块 + policy.ts 按 CLASS 推导的场地矩阵）。本表是那份
+// 三个 create* 块 + policy.ts 按 CLASS 推导的场地矩阵）。本表是那份
 // ToolSet 的**说明书**，二者的相等关系由 `frontend/tests/ai-gateway/contact_tool_face_leaf.test.ts`
 // 三向钉死：
 //   (a) 表里的每个名字都真的在**主对话**工具面里（不许有幽灵条目）；

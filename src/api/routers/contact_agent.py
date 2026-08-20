@@ -11,8 +11,6 @@ from src.api.auth import verify_local_token
 from src.api.routers.contacts import (
     _call,
     get_contact_repository,
-    require_contact_agent_enabled,
-    require_contacts_enabled,
 )
 from src.api.schemas.contacts import ContactGovernanceProposalRequest
 from src.contacts.governance import create_suggestion
@@ -21,11 +19,7 @@ from src.contacts.repository import ContactRepository
 router = APIRouter(
     prefix="/api/contacts/agent",
     tags=["contact-agent"],
-    dependencies=[
-        Depends(verify_local_token),
-        Depends(require_contacts_enabled),
-        Depends(require_contact_agent_enabled),
-    ],
+    dependencies=[Depends(verify_local_token)],
 )
 
 

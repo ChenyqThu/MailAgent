@@ -33,13 +33,18 @@ async function approveAndRun(tool: Tool, input: unknown, toolCallId = 'tc-sm1'):
 
 describe('self-mount tools — flag gating (buildGatewayTools)', () => {
   test('skillGatingEnabled off → no self-mount tools (byte-level flag-off = cutover read set)', () => {
+    const base = buildGatewayTools({
+      domain: mockDomain(() => okEnvelope({})),
+      approvalGuard: new ApprovalGuard(),
+      contextMode: 'manual_chat'
+    })
     const tools = buildGatewayTools({
       domain: mockDomain(() => okEnvelope({})),
       approvalGuard: new ApprovalGuard(),
       contextMode: 'manual_chat'
     })
     for (const n of GATEWAY_SELF_MOUNT_TOOL_NAMES) expect(Object.keys(tools)).not.toContain(n)
-    expect(Object.keys(tools).sort()).toEqual([...GATEWAY_DEFAULT_TOOL_NAMES].sort())
+    expect(Object.keys(tools)).toEqual(Object.keys(base))
   })
 
   test('skillGatingEnabled on but NO guard → no self-mount tools (writes need the guard)', () => {

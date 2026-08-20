@@ -34,7 +34,7 @@ def env(tmp_path):
         prompt="你说话简洁。", model="anthropic:claude-x",
     )
     settings = SimpleNamespace(
-        matters_enabled=True, matter_agent_enabled=True, sync_store_db_path=str(path)
+        sync_store_db_path=str(path)
     )
     service = MatterRunService(MatterRepository(path))
     created = service.create_matter(
@@ -125,18 +125,6 @@ def test_spec_unbound_profile_falls_back(env, tmp_path):
     # matter_instructions 仍进 persona 段（owner-authored）
     assert PERSONA_PREFIX in spec["prompt"]["taskPrompt"]
 
-
-def test_spec_flag_off_is_agent_invalid(env):
-    settings, _, _, _, job = env
-    settings.matter_agent_enabled = False
-    with pytest.raises(MatterError) as excinfo:
-        assemble_matter_spec(job, settings=settings)
-    assert excinfo.value.code == "E_SPEC_AGENT_INVALID"
-    settings.matter_agent_enabled = True
-    settings.matters_enabled = False
-    with pytest.raises(MatterError) as excinfo:
-        assemble_matter_spec(job, settings=settings)
-    assert excinfo.value.code == "E_SPEC_AGENT_INVALID"
 
 
 def test_spec_missing_run_is_agent_invalid(env):

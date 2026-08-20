@@ -315,15 +315,9 @@ def adopt_suggestion(conn: sqlite3.Connection, suggestion_id: int, *, now_ms: in
 
 
 def assemble_contact_governance_spec(job: Any) -> dict[str, Any]:
-    try:
-        from src.config import config
-        from src.contacts.governance_config import get_contact_governance_agent_config
+    from src.config import config
+    from src.contacts.governance_config import get_contact_governance_agent_config
 
-        enabled = bool(config.contacts_enabled) and bool(config.contact_agent_enabled)
-    except Exception:
-        enabled = False
-    if not enabled:
-        raise ContactError("E_DISABLED", "contact governance agent is disabled")
     params = job.params or {}
     cfg = get_contact_governance_agent_config(config.sync_store_db_path)
     spec = {

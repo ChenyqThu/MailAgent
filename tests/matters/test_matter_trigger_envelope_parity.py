@@ -59,7 +59,7 @@ def fixture_doc() -> dict:
 def client(tmp_path):
     path = tmp_path / "sync.db"
     SyncStore(str(path))
-    settings = SimpleNamespace(matters_enabled=True, sync_store_db_path=str(path))
+    settings = SimpleNamespace(sync_store_db_path=str(path))
     app.dependency_overrides[verify_cf_access] = lambda: None
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_matter_service] = lambda: MatterService(MatterRepository(path))

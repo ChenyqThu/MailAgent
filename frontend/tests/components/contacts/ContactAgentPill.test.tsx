@@ -1,10 +1,8 @@
 // @vitest-environment happy-dom
 //
-// WP7 —— ✨Agent 胶囊的**两层门**（`AgentPendingBadge.tsx:70-79` 教科书）：
-//   ① 渲染门：`MAILAGENT_CONTACT_AGENT_ENABLED` 关着时胶囊一个字节都不进 DOM；
-//   ② 查询门：同一个条件下待审数那条查询**根本不发** —— 关掉的 flag 不该每 60s 敲一次
-//      一个必然返回 E_DISABLED 的端点。
-// 只测 ① 会漏掉 ②（DOM 干净但后台在轮询，是灰度 flag 最典型的"关不干净"）。
+// WP7 —— ✨Agent 胶囊的**两层行级门**（`AgentPendingBadge.tsx:70-79` 教科书）：
+//   ① 渲染门：治理 agent 行未启用时胶囊一个字节都不进 DOM；
+//   ② 查询门：同一个条件下待审数查询根本不发，避免无意义轮询。
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, render, renderHook, screen, waitFor } from '@testing-library/react'

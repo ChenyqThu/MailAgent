@@ -583,38 +583,6 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
   // vite define (mirrors the openness flags). Explicit false → buildGatewayTools output
   // byte-identical to the pre-epic set.
   const calendarToolsEnabled = envBool('MAILAGENT_CALENDAR_AGENT_TOOLS', true)
-  // Matters MVP — MAILAGENT_MATTERS_ENABLED gates the whole matter tool family. Default ON
-  // (cutover 2026-08-12: owner ruled 事项 is a core feature and its nav entry ships visible); an
-  // explicit env false is the emergency rollback → the family is never registered, byte-identical
-  // to the pre-Matters set. main-env-only, NO vite define (mirrors the other tool-family flags).
-  // 🔴 Double carrier: the Python serve-api reads the SAME env via pydantic (matters_enabled — the
-  // /api/matters/* gate + the /chat/config projection the nav reads); both defaults MUST stay true
-  // together (tests/config/test_flag_cross_language.py).
-  const matterToolsEnabled = envBool('MAILAGENT_MATTERS_ENABLED', true)
-  // Matters MVP P4 (D11) — MAILAGENT_MATTER_AGENT_ENABLED gates the follow-up RUN venue: with it
-  // off, POST /api/ai/agent-run rejects a spec stamped runKind='matter_followup' (403 E_DISABLED,
-  // fail-closed) so no run ever starts. Default OFF (ship-off → dogfood → cutover 另拍, the island
-  // /MCP 模式). main-env-only, NO vite define (mirrors the other tool-family flags). 🔴 Double
-  // carrier: the Python serve-api reads the SAME env via pydantic (matter_agent_enabled — the runs
-  // /proposal REST gate + the worker); both defaults MUST stay false together
-  // (tests/config/test_flag_cross_language.py), else a run would start with no place to submit its
-  // proposal (or the endpoints would sit live with nothing able to reach them).
-  const matterAgentEnabled = envBool('MAILAGENT_MATTER_AGENT_ENABLED', false)
-  // Contact Directory WP7 — MAILAGENT_CONTACTS_ENABLED gates the whole contact tool family (3
-  // reads + 3 proposals + 3 writes). Default OFF (灰度未 cutover). main-env-only, NO vite define
-  // (mirrors the other tool-family flags). 🔴 Double carrier: the Python serve-api reads the SAME
-  // env via pydantic (contacts_enabled — the /api/contacts/* gate + the /chat/config projection
-  // the nav reads); both defaults MUST stay false together
-  // (tests/config/test_flag_cross_language.py), else the gateway would register tools whose every
-  // call 403s (or the endpoints would sit live with no tools able to reach them).
-  const contactToolsEnabled = envBool('MAILAGENT_CONTACTS_ENABLED', false)
-  // WP7 — MAILAGENT_CONTACT_AGENT_ENABLED gates the governance RUN venue: with it off, POST
-  // /api/ai/agent-run rejects a spec stamped runKind='contact_governance' (403 E_DISABLED,
-  // fail-closed) so no scan ever starts. Default OFF. 🔴 Double carrier with the Python pydantic
-  // `contact_agent_enabled` (the suggestions / proposals REST gate + the daily enqueue hook); both
-  // defaults MUST stay false together, else a run would start with no place to submit its
-  // proposals — the same failure shape as MAILAGENT_MATTER_AGENT_ENABLED's.
-  const contactAgentEnabled = envBool('MAILAGENT_CONTACT_AGENT_ENABLED', false)
   // task 07-21 — MAILAGENT_NOTION_AGENT_TOOL gates the notion_agent_chat tool (edit-tier 恒 HITL —
   // delegates a Notion request to the notion-agent CLI via serve-api /api/skills/invoke). Unlike the
   // other tool families this one is SKILL-gated (skill_gating maps it to the notion_agent skill), so
@@ -1270,16 +1238,6 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           skillCreatorToolsEnabled,
           // calendar epic 4.1/4.2 — calendar tools (MAILAGENT_CALENDAR_AGENT_TOOLS, default on).
           calendarToolsEnabled,
-          matterToolsEnabled,
-          // P4 (D11) — the follow-up kill-switch's registration-side belt (the endpoint gate is
-          // the authoritative one). ALWAYS threaded, so an explicit false really strips the tool.
-          matterAgentEnabled,
-          // Contact Directory WP7 — the contact family (MAILAGENT_CONTACTS_ENABLED, default off).
-          contactToolsEnabled,
-          // WP7 — the governance kill-switch's registration-side belt (the endpoint gate is the
-          // authoritative one). ALWAYS threaded, so an explicit false really strips the proposal
-          // trio; the reads + direct writes stay.
-          contactAgentEnabled,
           // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL, default on; skill-gated).
           notionAgentToolsEnabled,
           // S5 W3 — conversational custom-agent CRUD tools (MAILAGENT_CUSTOM_AGENTS_ENABLED, the same
@@ -1383,44 +1341,28 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
           }
         }
       : undefined,
-    // S4 W3 (ADR-003 D2) — pull the authoritative agent-run spec by jobId + claimToken.
-    // 🔴 Matter follow-up runs are headless runs too, and they have their own flag: gating this on
-    // customAgentsEnabled alone made every matter run 404 whenever custom agents were turned off
-    // (the Python spec pull had already been widened; this side had not).
-    // WP7 — the contact governance scan is a headless run too, and it has its own flag: the Python
-    // spec-pull gate (`_require_run_pull_flag`) already admits it, so gating this side on the
-    // other two alone would 404 every governance run whenever both were off.
-    fetchAgentRunSpec:
-      customAgentsEnabled || matterAgentEnabled || contactAgentEnabled
-        ? (jobId: number, claimToken: string) => domain.fetchAgentRunSpec(jobId, claimToken)
-        : undefined,
-    // S4 W3 (ADR-003 D3) — pre-create the ai_chat.db session (origin='agent') a headless run persists
-    // into. Wired only when custom agents are on. A create failure returns null (the run streams but
-    // persists nothing) rather than throwing → the endpoint degrades gracefully.
-    // P4 (D11) — the follow-up venue kill-switch consumed by handleAgentRun.
-    matterAgentEnabled,
-    // WP7 — the governance venue kill-switch consumed by handleAgentRun (same shape).
-    contactAgentEnabled,
-    createAgentSession:
-      customAgentsEnabled || matterAgentEnabled || contactAgentEnabled
-        ? (input: {
-            agentId: string
-            jobId: number
-            title: string
-            triggerId?: string | null
-            triggerKind?: string | null
-            triggerFiredAt?: number | null
-            /** P4 (D7) — Matter-anchored session for a follow-up run; omitted → general anchor. */
-            anchor?: { type: 'matter'; id: number }
-          }) => {
-            try {
-              return createAgentSession(input)
-            } catch (err) {
-              console.error('[ai-gateway] createAgentSession failed (run will be unsaved)', err)
-              return null
-            }
-          }
-        : undefined,
+    // Built-in matter/contact headless venues are always available after the 2026-08-19 cutover.
+    fetchAgentRunSpec: (jobId: number, claimToken: string) =>
+      domain.fetchAgentRunSpec(jobId, claimToken),
+    // Pre-create the ai_chat.db session a headless run persists into. A create failure returns null
+    // (the run streams but persists nothing) rather than throwing → the endpoint degrades gracefully.
+    createAgentSession: (input: {
+      agentId: string
+      jobId: number
+      title: string
+      triggerId?: string | null
+      triggerKind?: string | null
+      triggerFiredAt?: number | null
+      /** P4 (D7) — Matter-anchored session for a follow-up run; omitted → general anchor. */
+      anchor?: { type: 'matter'; id: number }
+    }) => {
+      try {
+        return createAgentSession(input)
+      } catch (err) {
+        console.error('[ai-gateway] createAgentSession failed (run will be unsaved)', err)
+        return null
+      }
+    },
     // Stage 2 PR-1 (task 08-01 messenger) — the im_chat entrypoint gate + its session hook.
     // imFeishuEnabled gates POST /api/ai/im-chat registration (off → 404, byte-identical);
     // createImSession pre-creates the origin='im' ai_chat.db session on a conversation's first
@@ -1599,15 +1541,10 @@ export async function stopEmbeddedAiGateway(): Promise<void> {
 }
 
 /**
- * WP7 dogfood 修复 — 停掉再重建 embedded gateway，让所有 flag 快照
- *（contactToolsEnabled / contactAgentEnabled / matterAgentEnabled / 全家）按**当前**
- * process.env 重新求值。
+ * 停掉再重建 embedded gateway，让启动时读取的 env 快照按**当前** process.env 重新求值。
  *
- * 背景：这些 flag 是 startEmbeddedAiGateway() 里 envBool 求值一次的**启动快照**，而
- * Labs 翻开关走的是 env:set（已同步 process.env，见 handlers/env.ts）+ services:restart
- *（只重启 Python 两进程）。gateway 不重建 → 治理 run 被 server.ts 的
- * `contactAgentEnabled !== true` 门 403 E_DISABLED，contact 工具也一件都不注册，
- * 用户只能整个退出 App 再开。
+ * Labs 翻动仍属 gateway 的开关时，env:set 会同步 process.env，但 services:restart
+ * 只重启 Python 两进程；因此需要显式重建 gateway。
  *
  * 端口不会变：listen 端口与 renderer 的 `?aiGatewayPort=` 同源 resolveAiGatewayPort()
  *（env 覆盖或固定默认值，非内核随机分配），所以 chat 面板不需要知道这次重启。

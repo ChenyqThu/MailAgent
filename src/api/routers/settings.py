@@ -157,16 +157,6 @@ _MANAGED_ENV_KEYS: List[str] = [
     "MAILAGENT_MEMORY_LAYERS",
     # Electron gateway 单载体；默认 OFF；需退出重开 App。
     "MAILAGENT_AG_UI_MIRROR",
-    # 事项（Matters MVP）：Python pydantic + Electron main 双载体；后端重启让导航与 REST
-    # 生效，AI 工具与原生通知要退出重开 App。
-    "MAILAGENT_MATTERS_ENABLED",
-    # 事项跟进 Agent：同双载体，且只在上面那个开着时有意义。
-    "MAILAGENT_MATTER_AGENT_ENABLED",
-    # 通讯录（Contact Directory WP1/WP2）：Python pydantic 单载体（导航/REST/扫描器
-    # 均读 serve-api 冻结单例与 /chat/config 投影）；默认 OFF；需重启后端。
-    "MAILAGENT_CONTACTS_ENABLED",
-    "MAILAGENT_CONTACT_PROFILE_ENABLED",
-    "MAILAGENT_CONTACT_AGENT_ENABLED",
     # — Notifications
     "FEISHU_NOTIFY_ENABLED",
     "FEISHU_APP_ID",

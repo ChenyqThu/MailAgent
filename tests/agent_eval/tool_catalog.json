@@ -98,7 +98,7 @@
     "matter_find":             { "domain": "matter",     "tier": "silent",  "write": false, "gateway_only": true, "headless_excluded": true, "tool_class": "read" },
     "matter_get":              { "domain": "matter",     "tier": "silent",  "write": false, "gateway_only": true, "headless_excluded": true, "tool_class": "read" },
     "matter_attention_list":   { "domain": "matter",     "tier": "silent",  "write": false, "gateway_only": true, "headless_excluded": true, "tool_class": "read" },
-    "matter_runs_list":        { "domain": "matter",     "tier": "silent",  "write": false, "gateway_only": true, "headless_excluded": true, "tool_class": "read", "note": "registers only when MAILAGENT_MATTER_AGENT_ENABLED is not false (the run REST face is flag-gated server-side)" },
+    "matter_runs_list":        { "domain": "matter",     "tier": "silent",  "write": false, "gateway_only": true, "headless_excluded": true, "tool_class": "read", "note": "part of the default Matter read face" },
     "matter_tags_list":        { "domain": "matter",     "tier": "silent",  "write": false, "gateway_only": true, "headless_excluded": true, "tool_class": "read" },
     "matter_suggest_related_resources": { "domain": "matter", "tier": "edit", "write": false, "gateway_only": true, "manual_only": true, "headless_excluded": true, "tool_class": "read", "note": "Matter-scoped discovery auto-allows silently; expand_reason forces an approval card" },
     "matter_create":           { "domain": "matter",     "tier": "edit",    "write": true, "gateway_only": true, "headless_excluded": true, "tool_class": "domain_write", "default_approval": "auto" },

@@ -37,7 +37,7 @@ def env(tmp_path):
         "profile-1", type="custom", enabled=True, title="跟进小助手"
     )
     settings = SimpleNamespace(
-        matters_enabled=True, matter_agent_enabled=True, sync_store_db_path=str(path)
+        sync_store_db_path=str(path)
     )
     run_service = MatterRunService(MatterRepository(path))
     app.dependency_overrides[verify_cf_access] = lambda: None
@@ -105,44 +105,6 @@ def test_runs_rest_roundtrip_and_coalesce(env):
     )
     assert canceled.status_code == 200
     assert canceled.json()["data"]["run"]["lifecycle_state"] == "canceled"
-
-
-def test_runs_surface_requires_agent_flag_but_updates_surface_does_not(env):
-    client, settings, service, pid, version = env
-    # 先在 flag on 时落一条 pending 提案
-    run = service.enqueue_run(
-        pid, expected_version=version, idempotency_key="k", source="desktop_ui"
-    )["run"]
-    assert service.mark_started(run["id"])
-    update_id = service.propose_update(pid, run["id"], {"summary": "s", "changes": []})[
-        "update_id"
-    ]
-    service.finish_run(run["id"], "ok")
-
-    settings.matter_agent_enabled = False
-    for method, url in (
-        ("get", f"/api/matters/{pid}/runs"),
-        ("get", f"/api/matters/{pid}/runs/{run['id']}"),
-    ):
-        response = getattr(client, method)(url)
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "E_DISABLED"
-    response = client.post(
-        f"/api/matters/{pid}/runs", json={"mutation": _mutation("r9")}
-    )
-    assert response.status_code == 403
-
-    # updates/review 面只挂 matters 闸：agent flag off 仍可清账
-    listed = client.get(f"/api/matters/{pid}/updates")
-    assert listed.status_code == 200
-    assert listed.json()["data"]["items"][0]["id"] == update_id
-    current = service.get_matter(pid)["matter"]["version"]
-    rejected = client.post(
-        f"/api/matters/{pid}/updates/{update_id}/reject",
-        json={"reason": "清账", "mutation": _mutation("rej", current)},
-    )
-    assert rejected.status_code == 200
-    assert rejected.json()["data"]["update"]["review_status"] == "rejected"
 
 
 def test_updates_accept_rest_shape(env):

@@ -79,20 +79,6 @@ CROSS_LANGUAGE_FLAGS = {
     # IM 上网独立开关（grill Q19=A，🔴 不做成 grant）：Node only（gateway ToolSet 的 im_chat
     # venue switch；Python 不读）。登记防改名漏一侧，真变双载体时在此加 _CHAT/_CONFIG。
     "MAILAGENT_IM_WEB_ENABLED": [_LIFECYCLE],
-    # Matter 跟进 Agent 总闸（Matters MVP P4 D11）：Node envBool（gateway POST /api/ai/agent-run
-    # 见 runKind='matter_followup' 的 spec 即按此 flag fail-closed 403）＋ pydantic（serve-api 的
-    # runs / proposal REST 门 + worker）—— 与 MCP_CONNECTORS 同形态的双载体。
-    # 🔴 双侧默认必须同为 false（灰度未 cutover）；翻默认两边一起翻，否则会出现「run 起得来但
-    # 提案端点 403（唯一产出通道没了、白烧一轮 LLM）」或反过来「端点开着却没有 run 能到达」。
-    "MAILAGENT_MATTER_AGENT_ENABLED": [_LIFECYCLE, _CONFIG],
-    # 通讯录总闸（Contact Directory WP1/WP2；WP7 批② 起**双载体**）：Python pydantic
-    # （serve-api /api/contacts 门 + /chat/config contactsEnabled 投影 + 扫描器 run_tick 门）
-    # ＋ Node envBool（gateway 九件 contact_* 工具的注册门）。
-    "MAILAGENT_CONTACTS_ENABLED": [_LIFECYCLE, _CONFIG],
-    # 通讯录治理 Agent 总闸（WP7）：Python pydantic（建议 / 提案双腿 REST 门 + 每日入队钩子）
-    # ＋ Node envBool（gateway POST /api/ai/agent-run 见 runKind='contact_governance' 的 spec
-    # 即按此 flag fail-closed 403）—— 与 MAILAGENT_MATTER_AGENT_ENABLED 同形态。
-    "MAILAGENT_CONTACT_AGENT_ENABLED": [_LIFECYCLE, _CONFIG],
 }
 
 # cutover 5 openness flag：Node envBool 默认 vs Python _hot_bool 字面量，须逐字相等。
@@ -187,12 +173,7 @@ def test_cutover_flag_defaults_consistent():
 # 「谁把默认悄悄翻了」= 红，cutover 是要人拍板的动作）。单载体没有 Node envBool
 # 可比对，所以不进 NODE_PYDANTIC_DUAL_CARRIER_FLAGS（那张表的 canary 会因
 # lifecycle 缺键而误红）。
-PYDANTIC_SINGLE_CARRIER_FLAGS = {
-    # env 键 → (pydantic 字段名, 期望默认)
-    # 通讯录画像（Contact Directory WP6）：灰度默认关。gateway 不读它（画像刷新走
-    # /api/contacts/{id}/profile/refresh，门在 Python 侧），故仍是单载体。
-    "MAILAGENT_CONTACT_PROFILE_ENABLED": ("contact_profile_enabled", False),
-}
+PYDANTIC_SINGLE_CARRIER_FLAGS = {}
 
 
 def test_pydantic_single_carrier_defaults_match_expected():
@@ -219,22 +200,9 @@ NODE_PYDANTIC_DUAL_CARRIER_FLAGS = {
     # env 键 → (pydantic 字段名, 两侧期望默认)
     # MCP connector 总闸：灰度未 cutover（ship-off → dogfood → cutover 另拍）。
     "MAILAGENT_MCP_CONNECTORS": ("mcp_connectors_enabled", False),
-    # Matters 域总闸：**cutover 2026-08-12**（owner 拍板事项为核心功能，一级导航默认显示）。
-    # 🔴 只翻这一条，下面的跟进 Agent 保持 false（无人值守 + 有网络出口，未获默认开授权）。
-    "MAILAGENT_MATTERS_ENABLED": ("matters_enabled", True),
-    # Matter 跟进 Agent 总闸（P4）：灰度未 cutover，两侧同为 false。
-    "MAILAGENT_MATTER_AGENT_ENABLED": ("matter_agent_enabled", False),
     # 飞书 IM 总闸（08-01 阶段 2）：**cutover 2026-08-04**（owner dogfood 通过）。翻默认漏一侧
     # = 「桥在跑但 gateway /api/ai/im-chat 404」或反过来「端点开着却没有桥来调」。
     "MAILAGENT_IM_FEISHU": ("im_feishu_enabled", True),
-    # 通讯录总闸（Contact Directory；WP7 批② 起双载体）：灰度未 cutover，两侧同为 false。
-    # 翻默认漏一侧 = 「gateway 注册了九件 contact_* 工具但每次调用都 E_DISABLED」或反过来
-    # 「/api/contacts/* 开着却没有工具能到达」。
-    "MAILAGENT_CONTACTS_ENABLED": ("contacts_enabled", False),
-    # 通讯录治理 Agent 总闸（WP7）：灰度未 cutover，两侧同为 false。漏一侧 =「扫描 run 起得来
-    # 但提案端点 E_DISABLED（唯一产出通道没了、白烧一轮 LLM）」或反过来「端点开着却没有 run
-    # 能到达」—— 与 MAILAGENT_MATTER_AGENT_ENABLED 同一失败形状。
-    "MAILAGENT_CONTACT_AGENT_ENABLED": ("contact_agent_enabled", False),
 }
 
 
@@ -273,19 +241,10 @@ def test_dual_carrier_node_pydantic_defaults_match_expected():
 # 上面两个用例只盯 ai_gateway_lifecycle.ts 这一个 Node 载体。同一个 env 键的默认值其实还能
 # 长在 main 进程别的模块、以及 renderer 的 Settings 开关里 —— 那两份不在任何闸下面。
 #
-# 🔴 实证（0812 matters cutover）：`MAILAGENT_MATTERS_ENABLED` 的默认值一共有**四份**手抄：
-#   ① src/config.py pydantic Field default          ← 上面的用例盯着
-#   ② ai_gateway_lifecycle.ts envBool               ← 上面的用例盯着
-#   ③ electron/main/matter_notifications.ts envBool ← 没人盯
-#   ④ settings/tabs/LabsTab.tsx 的 `values[KEY] ?? '<默认>'` ← 没人盯
-# ④ 漏改正是本轮修的真 bug（后端开着、Settings 开关渲染成关，还连带把依赖它的下一行误锁成
-# 「依赖未满足」）；③ 漏改则是「事项 UI 藏起来了、matter 通知照旧往桌面推」。两者都不报错。
 # =============================================================================
 
 # main 进程里除 lifecycle 外还读 envBool 的模块（新增一处就往这里加一行）。
-_EXTRA_NODE_ENVBOOL_SOURCES = [
-    p.REPO_ROOT / "frontend" / "src" / "electron" / "main" / "matter_notifications.ts",
-]
+_EXTRA_NODE_ENVBOOL_SOURCES = []
 
 LABS_TAB_TSX = (
     p.REPO_ROOT / "frontend" / "src" / "shared" / "components" / "settings" / "tabs" / "LabsTab.tsx"

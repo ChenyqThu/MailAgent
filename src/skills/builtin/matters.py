@@ -2,15 +2,13 @@
 
 🔴 这个 skill **不解锁任何工具**：``matter_*`` 十二件都在 gateway 的
 ``CORE_UNGATED_GATEWAY_TOOLS`` 里（``frontend/src/ai-gateway/tools/skill_gating.ts``），永不被
-skill→tool 门控 —— 它们的开关权在 ``MAILAGENT_MATTERS_ENABLED`` + 审批，不在这里。所以本 skill
+skill→tool 门控 —— 它们的安全边界在审批，不在这里。所以本 skill
 的价值是「教会 agent 怎么跟进一件事」，与 ``custom_agent`` 同形（``tools=[]``）。
 
 🔴 命名：仓内另有一个 headless run kind 叫 ``matter_followup``（``src/matters/run_spec.py`` /
 ``src/agents/run_worker.py``），**同名不同物**。skill 名取 ``matters``，别撞。
 
-``default_enabled`` 跟随 ``MAILAGENT_MATTERS_ENABLED``：事项功能没开时注入一段「怎么用事项工具」的
-方法论 = 教模型去调一组根本没注册的工具（capability hallucination）。flag 与本 skill 一样是重启语义
-（``code_builtin_skills()`` 是 ``lru_cache``），两者一致。
+``default_enabled`` 恒开：事项在 2026-08-19 cutover 后是默认能力。
 
 ⚠️ 本 fragment 是 **manual-only**（gateway ``systemPrompt.ts`` 的 ``!headlessAgentRun`` 门）；
 跟进 run 的对应物 = ``src/matters/run_spec.py`` 的 ``_RUN_METHODOLOGY``（0813 轮 3 O4，按
@@ -54,12 +52,7 @@ created, updated, or advanced until the tool result confirms it."""
 
 
 def _default_enabled() -> bool:
-    try:
-        from src.api.deps import get_settings
-
-        return bool(getattr(get_settings(), "matters_enabled", False))
-    except Exception:  # noqa: BLE001 — 配置读不到时保守不宣传（skill 面不该拖垮启动）
-        return False
+    return True
 
 
 def build_skill() -> BoundSkill:
