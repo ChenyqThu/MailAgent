@@ -31,6 +31,9 @@ CONTACT_SENIORITY_VALUES: Tuple[str, ...] = (
     "vp", "director", "lead", "manager", "staff",
 )
 
+#: 性别（owner 手动设置；未知保持 NULL，不硬凑）。
+CONTACT_GENDER_VALUES: Tuple[str, ...] = ("male", "female")
+
 #: 联系人类别 (§3.4 噪音治理)。
 CONTACT_KIND_VALUES: Tuple[str, ...] = ("person", "robot", "list")
 CONTACT_KIND_PERSON = CONTACT_KIND_VALUES[0]
@@ -61,6 +64,16 @@ CONTACT_LOCKABLE_FIELDS: Tuple[str, ...] = (
     "display_name", "formal_name", "organization", "department",
     "role_title", "phone", "function", "seniority",
 )
+
+
+# ==================== 画像值清洗 ====================
+
+_EVIDENCE_REF_RE = re.compile(r"\[id:\s*\d+\]")
+
+
+def strip_evidence_refs(value: str) -> str:
+    """剥离画像内联引证标记 [id:N]（容忍冒号后空格），并收敛残留的多余空白。"""
+    return " ".join(_EVIDENCE_REF_RE.sub("", value).split())
 
 
 # ==================== 词表匹配 ====================

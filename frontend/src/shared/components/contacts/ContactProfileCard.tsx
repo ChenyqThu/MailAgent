@@ -42,53 +42,43 @@ import { useActiveEmail } from '@shared/state/active-email'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { ContactPip, SecHead } from './parts'
+import { parseEvidenceRefs, stripEvidenceRefs } from './evidenceRefs'
 import {
   useAdoptProfileSuggestion,
   useIgnoreProfileSuggestion,
   useRefreshContactProfile
 } from './hooks'
 
-/** 画像正文里的内联证据引用。prompt 约定见 `src/contacts/profile_prompts.py`
- *  （HARD RULES 3「cite supporting email internal_id values inline, for example [id:123]」），
- *  在此之前前端把它当纯文本渲染 → 用户看到一屏 `[id:1000012991]` 字面量且点不动。
+/** 证据角标 —— 画像里**唯一**的引证长相，正文内联引用与轨迹的 `ev` 共用这一个。
  *
- *  🔒 这是本文件里**唯一**认识的 token，且它不构成 markdown/HTML 渲染：切段之后每一段仍走
- *  `{value}` 插值（React 转义）。`[id:abc]` / `[id:]` / 超出安全整数的超长数字都**不匹配或
- *  不成钮**，原样留在纯文本里。 */
-const EVIDENCE_REF_PATTERN = /\[id:(\d+)\]/g
-
-type InlineSegment = { kind: 'text'; value: string } | { kind: 'ref'; value: number }
-
-/** 把一段画像文本切成「纯文本段 / 证据引用段」。非法引用不产生 ref 段，其字面量随周围
- *  文本一起留在 text 段里。 */
-function parseEvidenceRefs(text: string): InlineSegment[] {
-  const segments: InlineSegment[] = []
-  let cursor = 0
-  for (const match of text.matchAll(EVIDENCE_REF_PATTERN)) {
-    const id = Number.parseInt(match[1] as string, 10)
-    // 🔴 超长数字（`[id:99999999999999999999]`）落在安全整数外 —— 不可能是真的 internal_id，
-    // 做成钮只会跳去一封不存在的邮件。跳过（不推进 cursor）＝ 它随后并入下一段纯文本。
-    if (!Number.isSafeInteger(id)) continue
-    const at = match.index
-    if (at > cursor) segments.push({ kind: 'text', value: text.slice(cursor, at) })
-    segments.push({ kind: 'ref', value: id })
-    cursor = at + match[0].length
-  }
-  if (cursor < text.length) segments.push({ kind: 'text', value: text.slice(cursor) })
-  return segments
+ *  引证是个角标，不是正文的一部分：早先两处都渲染成「⟨引号图标⟩证据 12345」的斜体钮
+ *  （轨迹那处还独占一行），一屏下来满是「证据 xxxxx」（dogfood 原话，投诉大头正是轨迹区）。
+ *  现在只留一个 9px 引号图标 —— 灰且半透明，hover 才回到全不透明；「证据 N」退到
+ *  `title` / `aria-label`（悬停可见、读屏可念），点击跳邮件一字未动。
+ *  `align-baseline` + 无文字 → 不撑行高、不占一截文本宽度。 */
+function EvidenceBadge({
+  internalId,
+  onEvidence
+}: {
+  internalId: number
+  onEvidence(internalId: number): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const label = t('contacts.profile.evidence', { ref: internalId })
+  return (
+    <button
+      type="button"
+      onClick={() => onEvidence(internalId)}
+      aria-label={label}
+      title={label}
+      className="mx-px inline-flex align-baseline text-ink-fg-3 opacity-50 transition-opacity duration-fast ease-standard hover:opacity-100"
+    >
+      <Quote size={9} aria-hidden />
+    </button>
+  )
 }
 
-/** chips 是不换行的短标签，塞不下引用钮（原型 `cdetail.jsx::ChipList` 就是纯展示 span，
- *  无点击无图标）→ 剥掉标记而不是留字面量。剥完把多出来的空隙收拢。 */
-function stripEvidenceRefs(text: string): string {
-  return text
-    .replace(EVIDENCE_REF_PATTERN, '')
-    .replace(/\s{2,}/g, ' ')
-    .trim()
-}
-
-/** 纯文本 + 内联证据钮。视觉与 evolution 的「证据 N」同族（Quote / italic / micro 灰），
- *  只去掉那边的块级上边距。 */
+/** 纯文本 + 内联证据角标。 */
 function InlineRefs({
   text,
   onEvidence
@@ -96,7 +86,6 @@ function InlineRefs({
   text: string
   onEvidence(internalId: number): void
 }): React.ReactElement {
-  const { t } = useTranslation()
   const segments = parseEvidenceRefs(text)
   // 没有引用（绝大多数段落）→ 原样一个文本节点，DOM 与改造前完全一致。
   if (!segments.some((segment) => segment.kind === 'ref')) return <>{text}</>
@@ -106,15 +95,7 @@ function InlineRefs({
         segment.kind === 'text' ? (
           segment.value
         ) : (
-          <button
-            key={index}
-            type="button"
-            onClick={() => onEvidence(segment.value)}
-            className="inline-flex items-center gap-1 whitespace-nowrap align-baseline text-meta italic text-ink-fg-3 transition-opacity duration-fast ease-standard hover:opacity-80"
-          >
-            <Quote size={10} aria-hidden />
-            {t('contacts.profile.evidence', { ref: segment.value })}
-          </button>
+          <EvidenceBadge key={index} internalId={segment.value} onEvidence={onEvidence} />
         )
       )}
     </>
@@ -174,7 +155,13 @@ function GhostAction({
   )
 }
 
-function ChipList({ items, tone }: { items: string[]; tone: 'ai' | 'neutral' }): React.ReactElement {
+function ChipList({
+  items,
+  tone
+}: {
+  items: string[]
+  tone: 'ai' | 'neutral'
+}): React.ReactElement {
   return (
     <div className="flex flex-wrap gap-1.5">
       {items.map((item) => (
@@ -201,43 +188,35 @@ function Evolution({
   items: ContactProfileEvolutionItem[]
   onEvidence(internalId: number): void
 }): React.ReactElement {
-  const { t } = useTranslation()
   return (
     <div className="flex flex-col">
       {items.map((item, index) => {
         const last = index === items.length - 1
         return (
           <div key={`${item.at}-${index}`} className="flex gap-[11px]">
-            <div className="relative flex w-[9px] shrink-0 justify-center">
-              <span
-                aria-hidden
-                className={cn(
-                  'absolute bottom-0 top-3 w-px',
-                  last ? 'bg-transparent' : 'bg-ink-border'
-                )}
-              />
-              <span
-                aria-hidden
-                className="relative mt-[5px] size-[7px] shrink-0 rounded-full border-[1.5px] border-ai/60 bg-ink-2"
-              />
+            {/* 圆点在一个与月份行等高的 line-box（`h-[1lh]` 跟着自己的 `text-micro` 走）里
+                做真居中，竖线接在那个 line-box 下方 —— 不再拿 `mt-[5px]` 去凑月份的基线：
+                月份行的实际行高取决于继承来的 strut，魔数一旦对不上整条轨道就偏。 */}
+            <div aria-hidden className="flex w-[9px] shrink-0 flex-col items-center">
+              <span className="flex h-[1lh] items-center text-micro">
+                <span className="size-[7px] rounded-full border-[1.5px] border-ai/60 bg-ink-2" />
+              </span>
+              <span className={cn('w-px flex-1', last ? 'bg-transparent' : 'bg-ink-border')} />
             </div>
             <div className={cn('min-w-0', last ? undefined : 'pb-3.5')}>
-              <span className="font-mono text-micro tracking-[0.02em] text-ink-fg-3">{item.at}</span>
+              {/* 块级而非 inline span：块的行高就是它自己的 `text-micro`（14px），与左轨道
+                  那个 `h-[1lh]` 严格同高；换字号两边一起动，不会再脱位。 */}
+              <div className="font-mono text-micro tracking-[0.02em] text-ink-fg-3">{item.at}</div>
               <div className="text-body leading-[1.6] text-ink-fg-1 [text-wrap:pretty]">
                 {/* prompt 要求 evolution 用 `ev` 而不是内联引用，但模型可能违规 —— 解析器兜底。 */}
                 <InlineRefs text={item.text} onEvidence={onEvidence} />
+                {/* `ev` 走同一个角标并紧跟文本行尾（早先是独立一行的斜体「证据 N」钮 ——
+                    owner 抱怨的「满篇证据 xxxxx」大头就在这儿）。
+                    用 `!= null` 而非真值判断 —— 0 是合法 id。 */}
+                {item.ev != null ? (
+                  <EvidenceBadge internalId={item.ev} onEvidence={onEvidence} />
+                ) : null}
               </div>
-              {/* `ev` 是证据邮件的 internal_id。用 `!= null` 而非真值判断 —— 0 是合法 id。 */}
-              {item.ev != null ? (
-                <button
-                  type="button"
-                  onClick={() => onEvidence(item.ev as number)}
-                  className="mt-[3px] inline-flex items-center gap-1 text-meta italic text-ink-fg-3 transition-opacity duration-fast ease-standard hover:opacity-80"
-                >
-                  <Quote size={10} aria-hidden />
-                  {t('contacts.profile.evidence', { ref: item.ev })}
-                </button>
-              ) : null}
             </div>
           </div>
         )
@@ -372,7 +351,11 @@ export function ContactProfileCard({
     void navigate({ to: '/' })
   }
 
-  const adoptOne = (field: ContactProfileSuggestionField, value: string): void => {
+  // 🔴 剥在写路径的入口，不是在调用点：老数据的建议值带 `[id: 54216]` 尾巴，写进身份字段
+  // 就把脏标记落库了（后端同批也在修采纳侧，两边幂等不冲突）。toast 同样报剥后值，
+  // 免得界面显示干净、回执却是脏的。
+  const adoptOne = (field: ContactProfileSuggestionField, rawValue: string): void => {
+    const value = stripEvidenceRefs(rawValue)
     adopt.mutate(
       { field, value },
       {
@@ -403,7 +386,8 @@ export function ContactProfileCard({
     let done = 0
     try {
       for (const item of pending) {
-        await adopt.mutateAsync({ field: item.field, value: item.value })
+        // 与 adoptOne 同一道剥离（这条路径不经过它）。
+        await adopt.mutateAsync({ field: item.field, value: stripEvidenceRefs(item.value) })
         done += 1
       }
       toastSuccess(t('contacts.toast.adoptedAll', { n: done }))
@@ -472,7 +456,10 @@ export function ContactProfileCard({
               {t(queued ? 'contacts.profile.queued' : 'contacts.profile.threshold')}
             </span>
             {generating ? (
-              <ContactPip tone="info" icon={<Loader2 size={9.5} aria-hidden className="animate-spin" />}>
+              <ContactPip
+                tone="info"
+                icon={<Loader2 size={9.5} aria-hidden className="animate-spin" />}
+              >
                 {t('contacts.profile.refreshing')}
               </ContactPip>
             ) : null}
@@ -510,7 +497,10 @@ export function ContactProfileCard({
         <Sparkles size={14} aria-hidden className="shrink-0 text-ai" />
         <span className="text-meta font-semibold text-ink-fg">{t('contacts.profile.title')}</span>
         {generating ? (
-          <ContactPip tone="info" icon={<Loader2 size={9.5} aria-hidden className="animate-spin" />}>
+          <ContactPip
+            tone="info"
+            icon={<Loader2 size={9.5} aria-hidden className="animate-spin" />}
+          >
             {t('contacts.profile.refreshing')}
           </ContactPip>
         ) : null}
@@ -596,7 +586,9 @@ export function ContactProfileCard({
               <SuggestRow
                 key={item.field}
                 label={t(SUGGESTION_LABEL_KEY[item.field])}
-                value={item.value}
+                // 老数据里的建议值带 `[id: 54216]` 尾巴（模型把内联引证写进了结构化字段）。
+                // 显示侧兜底剥掉 —— 产生 / 采纳侧由后端修。
+                value={stripEvidenceRefs(item.value)}
                 adoptLabel={t('contacts.profile.adopt')}
                 ignoreLabel={t('contacts.profile.ignore')}
                 busy={suggestBusy}

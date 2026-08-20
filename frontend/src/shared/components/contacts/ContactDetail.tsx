@@ -13,19 +13,24 @@ import {
   ChevronRight,
   EyeOff,
   Inbox,
+  Mars,
+  Minus,
   MoreHorizontal,
   Send,
-  UsersRound
+  UsersRound,
+  Venus
 } from 'lucide-react'
 
 import type {
   ContactEmailDto,
+  ContactGender,
   ContactLockableField,
   ContactMailDirection,
   ContactPatchBody
 } from '@shared/api/types/contact'
 import {
   CONTACT_FUNCTION_VALUES,
+  CONTACT_GENDER_VALUES,
   CONTACT_MAIL_DIRECTIONS,
   CONTACT_SENIORITY_VALUES
 } from '@shared/api/types/contact'
@@ -50,6 +55,7 @@ import { Monogram } from './Monogram'
 import {
   AiMark,
   ContactPip,
+  GenderPip,
   HiddenPip,
   KindPip,
   LockPill,
@@ -190,6 +196,54 @@ function EnumRow({
           ) : null}
         </div>
       ) : null}
+    </div>
+  )
+}
+
+// ── 性别行（三态图标 segmented）─────────────────────────────────────────────
+
+/** `null`（未知）在 SegmentedControl 里没法当值 —— 它是 `T extends string` 的泛型。
+ *  用一个只活在控件里的哨兵段，进出各转一次。 */
+const GENDER_SEGMENTS = ['unset', ...CONTACT_GENDER_VALUES] as const
+type GenderSegment = (typeof GENDER_SEGMENTS)[number]
+
+const GENDER_SEGMENT_ICON: Record<GenderSegment, typeof Minus> = {
+  unset: Minus,
+  male: Mars,
+  female: Venus
+}
+
+/** 性别行。owner 拍板要**图标按钮切换**而不是下拉 → 复用仓库统一的 SegmentedControl
+ *  （v0.7.2 dogfood 收敛出来的那一个），三段 = 未设置 / 男 / 女，点一下就 PATCH。
+ *
+ *  🔴 gender **不参与字段锁**（后端 `CONTACT_LOCKABLE_FIELDS` 里没有它，已豁免）
+ *  → 本行不渲染 LockPill；对应地 patch 的 onSuccess 也不能把它算进「已保存并锁定」。
+ *  🔴 图标是唯一的可见内容 → 每段都带 `ariaLabel`（SegmentedControl 会落到按钮的
+ *  aria-label 上），否则读屏念出来是三个空按钮。 */
+function GenderRow({
+  value,
+  onChange
+}: {
+  value: ContactGender | null
+  onChange(next: ContactGender | null): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center gap-2.5 py-1.5">
+      <span className="w-16 shrink-0 text-meta text-ink-fg-2">{t('contacts.field.gender')}</span>
+      <SegmentedControl<GenderSegment>
+        ariaLabel={t('contacts.field.gender')}
+        value={value ?? 'unset'}
+        onChange={(next) => onChange(next === 'unset' ? null : next)}
+        options={GENDER_SEGMENTS.map((segment) => {
+          const Icon = GENDER_SEGMENT_ICON[segment]
+          return {
+            value: segment,
+            label: <Icon size={13} aria-hidden />,
+            ariaLabel: t(`contacts.gender.${segment}`)
+          }
+        })}
+      />
     </div>
   )
 }
@@ -499,8 +553,11 @@ export function ContactDetail({
     mutationFn: (body: ContactPatchBody) => api.patch(contactId, body),
     onSuccess: async (result, body) => {
       await invalidate(contactId)
+      // 🔴 `gender` 与 `notes` 都**不落锁**（后端 CONTACT_LOCKABLE_FIELDS 里没有它们）——
+      // 漏掉这一层过滤会拿 `FIELD_LABEL_KEY['gender']`（undefined）去 t()，报出一句
+      // 「undefined 已保存并锁定」，而且那句话本身就是假的。
       const lockedFields = Object.keys(body).filter(
-        (field) => field !== 'notes'
+        (field) => field !== 'notes' && field !== 'gender'
       ) as ContactLockableField[]
       if (lockedFields.length > 0) {
         toastSuccess(t('contacts.toast.locked', { field: t(FIELD_LABEL_KEY[lockedFields[0]!]) }))
@@ -685,6 +742,8 @@ export function ContactDetail({
               {!bare && detail.formal_name && detail.formal_name !== detail.display_name ? (
                 <span className="shrink-0 text-aux text-ink-fg-2">{detail.formal_name}</span>
               ) : null}
+              {/* 性别贴着名字（是名字的属性），排在状态 pip 之前；档案头字号大一号。 */}
+              <GenderPip gender={detail.gender} size={13} />
               {locks.display_name != null ? (
                 <LockPill
                   locked
@@ -921,6 +980,11 @@ export function ContactDetail({
                 onToggleLock={() =>
                   setLock.mutate({ field: 'seniority', locked: locks.seniority == null })
                 }
+              />
+              {/* 未设置 = 传 null（后端 NULL 即未知）——「清空」和「没选过」是同一件事。 */}
+              <GenderRow
+                value={detail.gender}
+                onChange={(next) => patch.mutate({ gender: next })}
               />
             </div>
 

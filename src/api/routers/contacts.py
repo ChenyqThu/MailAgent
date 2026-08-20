@@ -40,7 +40,7 @@ from src.contacts.profile_config import get_contact_profile_agent_config
 from src.contacts.repository import ContactRepository
 from src.contacts.scanner import WATERMARK_KEY
 from src.contacts.service import ContactError
-from src.contacts.taxonomy import CONTACT_KIND_PERSON
+from src.contacts.taxonomy import CONTACT_KIND_PERSON, strip_evidence_refs
 
 VIEW_VALUES = ("known", "all")
 SORT_VALUES = ("density", "recent", "name")
@@ -489,7 +489,7 @@ async def list_contacts(
 
     sql = (
         "SELECT c.id, c.display_name, c.formal_name, c.organization, c.department, "
-        "  c.role_title, c.function, c.seniority, c.kind, c.hidden_at, c.is_self, "
+        "  c.role_title, c.function, c.seniority, c.gender, c.kind, c.hidden_at, c.is_self, "
         "  c.mail_count, c.sent_to_count, c.first_seen_at, c.last_seen_at, "
         # WP5 汇报线: manager id + self-join 显示名 (分组 label / 行菜单可用性;
         # m 对 c 是 1:1, GROUP BY c.id 下裸列取值恒定)。
@@ -650,6 +650,7 @@ def _load_detail(
         "role_title": row["role_title"],
         "function": row["function"],
         "seniority": row["seniority"],
+        "gender": row["gender"],
         "kind": row["kind"],
         "kind_locked_at": row["kind_locked_at"],
         "is_self": bool(row["is_self"]),
@@ -750,7 +751,7 @@ async def adopt_contact_profile_suggestion(
             contact_service.update_identity_fields,
             conn,
             contact_id,
-            {body.field: body.value},
+            {body.field: strip_evidence_refs(str(body.value))},
             now=now,
         )
         _call(

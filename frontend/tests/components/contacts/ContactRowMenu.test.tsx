@@ -58,6 +58,7 @@ function contact(overrides: Partial<ContactRowDto> = {}): ContactRowDto {
     manager_contact_id: null,
     manager_display_name: null,
     profile_summary: null,
+    gender: null,
     ...overrides
   }
 }
@@ -115,5 +116,37 @@ describe('通讯录行菜单 · 挂载点', () => {
     expect(screen.getByRole('menuitem', { name: '取消隐藏' }).className).not.toContain(
       'text-destructive'
     )
+  })
+})
+
+// 名字后的性别小图标。🔴 判据是「只有 male/female 才渲染」——「没填」不该在每行占位。
+describe('通讯录行 · 性别小图标', () => {
+  test('male / female 渲染带 title 的图标，未知与缺字段都不渲染', () => {
+    renderRow(contact({ gender: 'male' }), null)
+    expect(screen.getByTitle('男')).toBeTruthy()
+    expect(screen.queryByTitle('女')).toBeNull()
+
+    cleanup()
+    renderRow(contact({ gender: 'female' }), null)
+    expect(screen.getByTitle('女')).toBeTruthy()
+
+    // 🔴 判据是「一个性别图标都没渲染」，不是「没有『男』这个字」—— 值不合法时
+    // `t()` 会退回原样的 key（`contacts.gender.undefined`），按文案断言抓不到。
+    cleanup()
+    renderRow(contact({ gender: null }), null)
+    expect(screen.queryByRole('img')).toBeNull()
+
+    // 老后端 / 老缓存整个键都没有 —— 与 null 一样不渲染，不能漏出个瞎选的图标。
+    cleanup()
+    const { gender: _omit, ...withoutGender } = contact()
+    void _omit
+    renderRow(withoutGender as ContactRowDto, null)
+    expect(screen.queryByRole('img')).toBeNull()
+  })
+
+  test('图标只作弱标注：不占文本宽度，姓名行文本里没有「男」「女」字样', () => {
+    const { container } = renderRow(contact({ gender: 'male' }), null)
+    expect(screen.getByTitle('男').textContent).toBe('')
+    expect(container.textContent).not.toContain('男')
   })
 })

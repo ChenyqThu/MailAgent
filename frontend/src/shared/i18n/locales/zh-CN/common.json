@@ -6320,6 +6320,7 @@
       "fn": "职能",
       "level": "职级",
       "role": "职位署名",
+      "gender": "性别",
       "variantsHint": "自动收集，搜索时也会命中"
     },
     "enum": {
@@ -6344,6 +6345,11 @@
       "lead": "负责人",
       "manager": "经理",
       "staff": "专员"
+    },
+    "gender": {
+      "male": "男",
+      "female": "女",
+      "unset": "未设置"
     },
     "org": {
       "section": "组织关系",

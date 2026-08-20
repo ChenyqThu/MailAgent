@@ -157,6 +157,18 @@ def test_adopt_five_types_and_merge_only_returns_preview(db):
     assert conn.execute("SELECT merged_into FROM contact WHERE id=2").fetchone()[0] is None
 
 
+def test_adopt_identity_suggestion_strips_legacy_evidence_refs(db):
+    conn, _ = db
+    identity = _proposal(
+        conn,
+        payload={"field": "organization", "value": "ACME  Labs [id: 11]"},
+    )
+    governance.adopt_suggestion(conn, identity["id"], now_ms=3000)
+    assert conn.execute(
+        "SELECT organization FROM contact WHERE id=1"
+    ).fetchone()[0] == "ACME Labs"
+
+
 def test_blocked_guards_persist_reason(db):
     conn, _ = db
     former = _proposal(conn, "former_email", [1], {"email": "alice@example.com"})

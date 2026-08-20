@@ -33,6 +33,7 @@ class ContactPatchRequest(BaseModel):
     notes: Optional[str] = None
     function: Optional[str] = None
     seniority: Optional[str] = None
+    gender: Optional[str] = None
 
 
 class ContactLockRequest(BaseModel):

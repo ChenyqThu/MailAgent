@@ -17,7 +17,7 @@ import { formatMatterAgo } from '@shared/lib/matterDerive'
 import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
 
 import { Monogram } from './Monogram'
-import { ContactPip, HiddenPip, KindPip, SelfPip, TwoWayBar } from './parts'
+import { ContactPip, GenderPip, HiddenPip, KindPip, SelfPip, TwoWayBar } from './parts'
 import type { ContactDensity, ContactListRow } from './contactListModel'
 
 /** 治理动作的最小目标形状 —— ContactRowDto 与档案页的 detail 投影都满足它，
@@ -281,6 +281,8 @@ export function ContactVirtualRow({
             >
               {item.display_name ?? item.primary_email?.split('@')[0] ?? '—'}
             </span>
+            {/* 性别贴着名字（是名字的属性），排在状态 pip 之前。未知不渲染。 */}
+            <GenderPip gender={item.gender} />
             {item.is_self ? <SelfPip /> : null}
             <KindPip kind={item.kind} />
             {hidden ? <HiddenPip /> : null}

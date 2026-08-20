@@ -7,11 +7,11 @@
 // 文字、没有图标」。故这三个 pip 不补图标；`eyeoff` 有 path、真渲染，HiddenPip
 // 照原型带图标。
 
-import { EyeOff, Lock, LockOpen, Sparkles } from 'lucide-react'
+import { EyeOff, Lock, LockOpen, Mars, Sparkles, Venus } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
-import type { ContactKind } from '@shared/api/types/contact'
+import type { ContactGender, ContactKind } from '@shared/api/types/contact'
 
 /** 双向条（3px 细条，填充比 = 我发出 / 总往来）——「认识的人」的唯一视觉信号。 */
 export function TwoWayBar({
@@ -97,13 +97,47 @@ export function KindPip({ kind }: { kind: ContactKind }): React.ReactElement | n
   if (kind === 'person') return null
   // 原型 `cui.jsx::KindPip`：list = info 调，robot = neutral 调。
   return (
-    <ContactPip tone={kind === 'list' ? 'info' : 'neutral'}>{t(`contacts.kind.${kind}`)}</ContactPip>
+    <ContactPip tone={kind === 'list' ? 'info' : 'neutral'}>
+      {t(`contacts.kind.${kind}`)}
+    </ContactPip>
   )
 }
 
 export function SelfPip(): React.ReactElement {
   const { t } = useTranslation()
   return <ContactPip tone="ok">{t('contacts.badge.self')}</ContactPip>
+}
+
+/** 名字后的性别小图标（列表行与档案头共用）。
+ *
+ *  🔴 未知（null）**不渲染** —— 「没填」不该占一个位置，否则每行都挂一个灰点。
+ *  🔴 颜色克制：中性 `text-ink-fg-3`，不给男女配语义色 —— 那会把 SelfPip / KindPip /
+ *  HiddenPip 这些真正要看的状态信号压下去。文案只进 `title` / `aria-label`（悬停可见、
+ *  读屏可念），行里不占文本宽度。 */
+export function GenderPip({
+  gender,
+  size = 11
+}: {
+  gender: ContactGender | null
+  size?: number
+}): React.ReactElement | null {
+  const { t } = useTranslation()
+  // 判据写成「是不是这两个值之一」而不是「是不是 null」：`gender` 是后端投影字段，
+  // 老后端 / 老缓存里可能整个键都没有。按 null 判会让 undefined 漏进来，渲染出一个
+  // `contacts.gender.undefined` 的空标签 + 一个瞎选的图标。
+  if (gender !== 'male' && gender !== 'female') return null
+  const label = t(`contacts.gender.${gender}`)
+  const Icon = gender === 'male' ? Mars : Venus
+  return (
+    <span
+      role="img"
+      title={label}
+      aria-label={label}
+      className="inline-flex shrink-0 text-ink-fg-3"
+    >
+      <Icon size={size} aria-hidden />
+    </span>
+  )
 }
 
 export function HiddenPip(): React.ReactElement {

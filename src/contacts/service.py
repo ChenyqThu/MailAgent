@@ -24,6 +24,7 @@ from typing import Any, Dict, FrozenSet, Iterable, Mapping, Optional
 
 from src.contacts.taxonomy import (
     CONTACT_FUNCTION_VALUES,
+    CONTACT_GENDER_VALUES,
     CONTACT_KIND_VALUES,
     CONTACT_LOCKABLE_FIELDS,
     CONTACT_MANAGER_SRC_VALUES,
@@ -358,9 +359,10 @@ def ensure_self_bootstrap(
 
 # ==================== 字段级锁定 + 身份字段编辑 (WP2, v55) ====================
 
-#: 直落 contact 表列的可锁字段 (phone 落 contact_info_json.phone, 单独处理)。
+#: 直落 contact 表列的身份字段 (gender 不锁；phone 落 contact_info_json.phone)。
 _IDENTITY_COLUMN_FIELDS = (
     "display_name", "formal_name", "organization", "department", "role_title",
+    "gender",
 )
 
 
@@ -435,12 +437,12 @@ def update_identity_fields(
 
     - 除 ``notes`` 外, 本次提供的字段**保存即落锁** (含清空 —— 清空 + 锁 =
       「别再自动填回来」)。
-    - ``function`` / ``seniority`` 校验枚举 (None/空 = 清空)。
+    - ``function`` / ``seniority`` / ``gender`` 校验枚举 (None/空 = 清空)。
     - ``phone`` 物理落 ``contact_info_json.phone``。
     - ``role_title`` 变更时对**未锁且本次未显式提供**的 function/seniority 做
       词表派生 (派生是自动来源: 不落锁, 锁着的不碰 —— 主 session 裁决项 4)。
     """
-    unknown = set(fields) - set(CONTACT_LOCKABLE_FIELDS) - {"notes"}
+    unknown = set(fields) - set(CONTACT_LOCKABLE_FIELDS) - {"gender", "notes"}
     if unknown:
         raise ContactError(
             "E_INVALID_FIELD", f"unknown fields: {sorted(unknown)}",
@@ -455,10 +457,15 @@ def update_identity_fields(
     for field in _IDENTITY_COLUMN_FIELDS:
         if field in fields:
             value = _normalize_field_value(fields[field])
+            if field == "gender" and value is not None and value not in CONTACT_GENDER_VALUES:
+                raise ContactError(
+                    "E_INVALID_ARG", f"gender must be one of {CONTACT_GENDER_VALUES}",
+                )
             sets.append(f"{field} = ?")
             params.append(value)
             changed[field] = value
-            locks[field] = now
+            if field in CONTACT_LOCKABLE_FIELDS:
+                locks[field] = now
 
     for field, values in (
         ("function", CONTACT_FUNCTION_VALUES),

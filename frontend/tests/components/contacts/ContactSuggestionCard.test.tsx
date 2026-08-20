@@ -143,6 +143,22 @@ describe('ContactSuggestionCard · 五类结论句', () => {
     expect(screen.getByText('把 Sara Okafor 改判为机器人')).toBeTruthy()
   })
 
+  // 0819 dogfood：老数据的 payload 值带内联引证尾巴（`Procurement [id: 54216]`），
+  // 结论句是拿这些值拼的 → 显示侧剥掉。产生侧后端在修。
+  test('payload 值里的 [id: N] 尾巴不进结论句（含冒号后带空格的形态）', () => {
+    renderCard(
+      suggestion('identity', {
+        contact_ids: [3],
+        payload: { field: 'department', value: 'Procurement [id: 54216]' }
+      })
+    )
+    expect(screen.getByText('给 Sara Okafor 补上部门「Procurement」')).toBeTruthy()
+
+    cleanup()
+    renderCard(suggestion('former_email', { payload: { email: 'y.chen@ourco.test [id:41230]' } }))
+    expect(screen.getByText('把 y.chen@ourco.test 标为曾用邮箱')).toBeTruthy()
+  })
+
   test('置信度按百分比显示；为 null 时整段不渲染（不显示「置信度 null%」）', () => {
     renderCard(suggestion('kind', { payload: { kind: 'list' } }))
     expect(screen.getByText('置信度 82%')).toBeTruthy()
@@ -225,11 +241,23 @@ describe('ContactSuggestionCard · 模型产物纯文本渲染', () => {
     expect(container.textContent).toContain('<b>Procurement</b>, Meridian')
   })
 
+  // 0819 dogfood：`reason` 是模型散文，比结构化字段更容易带内联引证 → 显示侧剥掉。
+  // 🔒 `evidence[].quote` **不剥**：邮件原文引文，是有用的溯源展示。
+  test('reason 里的 [id: N] 剥掉，但 evidence 引文一字不动', () => {
+    renderCard(
+      suggestion('kind', {
+        contact_ids: [3],
+        payload: { kind: 'list', reason: '最近 4 封签名档都写着 Procurement [id: 54216]' },
+        evidence: [{ message_id: '<a@corp.test>', quote: '原文引文 [id:41230] 照抄' }]
+      })
+    )
+    expect(screen.getByText('最近 4 封签名档都写着 Procurement')).toBeTruthy()
+    expect(screen.getByText('原文引文 [id:41230] 照抄')).toBeTruthy()
+  })
+
   test('reason 有则渲染、无则整行不出现（没有源就不编一句理由出来）', () => {
     const why = '最近 4 封邮件的签名档都写着 Procurement'
-    renderCard(
-      suggestion('kind', { contact_ids: [3], payload: { kind: 'list', reason: why } })
-    )
+    renderCard(suggestion('kind', { contact_ids: [3], payload: { kind: 'list', reason: why } }))
     expect(screen.getByText(why)).toBeTruthy()
 
     cleanup()

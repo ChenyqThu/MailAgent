@@ -6320,6 +6320,7 @@
       "fn": "Function",
       "level": "Seniority",
       "role": "Title (as signed)",
+      "gender": "Gender",
       "variantsHint": "Collected automatically; searchable"
     },
     "enum": {
@@ -6344,6 +6345,11 @@
       "lead": "Lead",
       "manager": "Manager",
       "staff": "Staff"
+    },
+    "gender": {
+      "male": "Male",
+      "female": "Female",
+      "unset": "Not set"
     },
     "org": {
       "section": "Reporting",

@@ -75,6 +75,7 @@ from src.matters.models import (
 from src.matters.resource_identity import MatterError, normalize_resource_key
 from src.contacts.taxonomy import (
     CONTACT_FUNCTION_VALUES,
+    CONTACT_GENDER_VALUES,
     CONTACT_KIND_VALUES,
     CONTACT_MANAGER_SRC_VALUES,
     CONTACT_SENIORITY_VALUES,
@@ -534,6 +535,7 @@ CONTACT_TABLE_DDLS = (
         role_title TEXT NULL,
         function TEXT NULL CHECK (function IS NULL OR function {sql_check_clause(CONTACT_FUNCTION_VALUES)}),
         seniority TEXT NULL CHECK (seniority IS NULL OR seniority {sql_check_clause(CONTACT_SENIORITY_VALUES)}),
+        gender TEXT NULL CHECK (gender IS NULL OR gender {sql_check_clause(CONTACT_GENDER_VALUES)}),
         manager_contact_id INTEGER NULL REFERENCES contact(id) ON DELETE SET NULL,
         manager_src TEXT NULL CHECK (manager_src IS NULL OR manager_src {sql_check_clause(CONTACT_MANAGER_SRC_VALUES)}),
         kind TEXT NOT NULL DEFAULT 'person' CHECK (kind {sql_check_clause(CONTACT_KIND_VALUES)}),
@@ -1543,7 +1545,9 @@ class SyncStore:
     # v65 (2026-08-20): report_agent 播种 contact_governance_agent 专型行，
     #                trigger_json 默认 fire_hour=5，enabled=0。INSERT OR IGNORE 保证重放
     #                不覆盖 owner 已保存的启用、模型、提示词与排程。
-    DB_VERSION = 65
+    # v66 (2026-08-20): contact 增加 gender TEXT NULL，非空只允许 male/female。
+    #                幂等：ALTER 前 PRAGMA 探列；旧库由 service 层同值域校验兜底。
+    DB_VERSION = 66
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -4350,6 +4354,19 @@ class SyncStore:
                 raise SyncStoreMigrationError(
                     f"v65 migration (contact_governance_agent seed): {e}"
                 ) from e
+        # === v66: contact gender ===
+        if current_version < 66:
+            try:
+                _contact_cols_v66 = {
+                    row[1] for row in cursor.execute("PRAGMA table_info(contact)").fetchall()
+                }
+                if "gender" not in _contact_cols_v66:
+                    cursor.execute("ALTER TABLE contact ADD COLUMN gender TEXT NULL")
+                    logger.info("v66 migration: contact +gender")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "contact", {"gender"}, "v66 migration", e
+                )
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →

@@ -16,6 +16,7 @@ from src.contacts.taxonomy import (
     CONTACT_LOCKABLE_FIELDS,
     CONTACT_SUGGESTION_STATUS_VALUES,
     CONTACT_SUGGESTION_TYPE_VALUES,
+    strip_evidence_refs,
 )
 
 CONTACT_GOVERNANCE_JOB_TYPE = "contact_governance"
@@ -301,7 +302,11 @@ def adopt_suggestion(conn: sqlite3.Connection, suggestion_id: int, *, now_ms: in
     try:
         if suggestion["type"] == "identity":
             field = str(payload.get("field") or "")
-            contact_service.update_identity_fields(conn, contact_ids[0], {field: payload.get("value")}, now=now_ms)
+            value = payload.get("value")
+            normalized_value = strip_evidence_refs(str(value)) if value is not None else ""
+            contact_service.update_identity_fields(
+                conn, contact_ids[0], {field: normalized_value}, now=now_ms
+            )
         elif suggestion["type"] == "former_email":
             contact_service.mark_email_former(conn, contact_ids[0], str(payload.get("email") or ""), now=now_ms)
         elif suggestion["type"] == "relation":

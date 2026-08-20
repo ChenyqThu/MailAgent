@@ -22,6 +22,9 @@ export type ContactFunction = (typeof CONTACT_FUNCTION_VALUES)[number]
 export const CONTACT_SENIORITY_VALUES = ['vp', 'director', 'lead', 'manager', 'staff'] as const
 export type ContactSeniority = (typeof CONTACT_SENIORITY_VALUES)[number]
 
+export const CONTACT_GENDER_VALUES = ['male', 'female'] as const
+export type ContactGender = (typeof CONTACT_GENDER_VALUES)[number]
+
 export const CONTACT_LOCKABLE_FIELDS = [
   'display_name',
   'formal_name',
@@ -71,6 +74,7 @@ export interface ContactRowDto {
   role_title: string | null
   function: ContactFunction | null
   seniority: ContactSeniority | null
+  gender: ContactGender | null
   kind: ContactKind
   hidden_at: number | null
   is_self: boolean
@@ -127,6 +131,7 @@ export interface ContactDetailDto {
   role_title: string | null
   function: ContactFunction | null
   seniority: ContactSeniority | null
+  gender: ContactGender | null
   kind: ContactKind
   kind_locked_at: number | null
   is_self: boolean
@@ -301,6 +306,7 @@ export interface ContactPatchBody {
   notes?: string | null
   function?: ContactFunction | null
   seniority?: ContactSeniority | null
+  gender?: ContactGender | null
 }
 
 export interface ContactPatchResponse {

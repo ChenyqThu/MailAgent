@@ -58,16 +58,16 @@ def _conn(path):
 def _seed_contact(
     path, *, cid, name=None, formal_name=None, org=None, kind="person",
     hidden_at=None, is_self=0, mail=0, sent=0, first=None, last=None,
-    variants=None, emails=(),
+    variants=None, emails=(), gender=None,
 ):
     with _conn(path) as conn:
         conn.execute(
-            "INSERT INTO contact (id, display_name, formal_name, organization, kind, "
+            "INSERT INTO contact (id, display_name, formal_name, organization, gender, kind, "
             "hidden_at, is_self, mail_count, sent_to_count, first_seen_at, "
             "last_seen_at, name_variants_json, created_at, updated_at) "
-            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?, 1, 1)",
+            "VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?, 1, 1)",
             (
-                cid, name, formal_name, org, kind, hidden_at, is_self, mail, sent,
+                cid, name, formal_name, org, gender, kind, hidden_at, is_self, mail, sent,
                 first, last,
                 json.dumps(variants, ensure_ascii=False) if variants else None,
             ),
@@ -322,6 +322,16 @@ def test_detail_shape(client):
     assert http.get("/api/contacts/999").status_code == 404
 
 
+def test_gender_projects_in_list_and_detail(client):
+    http, _, path = client
+    _seed_contact(
+        path, cid=1, name="Echo", gender="male", sent=1, mail=1,
+        emails=(("echo@example.com", 1),),
+    )
+    assert _data(http.get("/api/contacts"))["items"][0]["gender"] == "male"
+    assert _data(http.get("/api/contacts/1"))["gender"] == "male"
+
+
 # ---- 字段编辑落锁 / 解锁 ----
 
 
@@ -400,6 +410,15 @@ def test_patch_rejects_bad_enum_and_unknown_field(client):
     assert resp.status_code == 400
     assert resp.json()["error"]["code"] == "E_INVALID_ARG"
     assert http.patch("/api/contacts/1", json={}).status_code == 400
+
+
+def test_patch_gender_accepts_domain_rejects_invalid_and_does_not_lock(client):
+    http, _, path = client
+    _seed_list_fixture(path)
+    data = _data(http.patch("/api/contacts/1", json={"gender": "female"}))
+    assert data["contact"]["gender"] == "female" and "gender" not in data["locks"]
+    resp = http.patch("/api/contacts/1", json={"gender": "unknown"})
+    assert resp.status_code == 400 and resp.json()["error"]["code"] == "E_INVALID_ARG"
 
 
 # ---- 治理写面 + 曾用守卫 ----
@@ -974,9 +993,9 @@ def test_profile_adopt_locks_and_ignore_only_current_round(client):
     _seed_contact(path, cid=1, name="Alice", emails=(("alice@x.com", 1),))
     document = {
         "summary": "Profile",
-        "formal_name": "Alice Zhang",
-        "department": "PMO",
-        "contact_info": {"phone": "+1 555"},
+        "formal_name": "Alice  Zhang [id: 1]",
+        "department": "PMO [id:2]",
+        "contact_info": {"phone": "+1  555 [id: 3]"},
     }
     with _conn(path) as conn:
         conn.execute(
@@ -989,10 +1008,13 @@ def test_profile_adopt_locks_and_ignore_only_current_round(client):
     assert {item["field"] for item in detail["profile"]["suggestions"]} == {
         "formal_name", "department", "phone",
     }
+    assert {item["field"]: item["value"] for item in detail["profile"]["suggestions"]} == {
+        "formal_name": "Alice Zhang", "department": "PMO", "phone": "+1 555",
+    }
     adopted = _data(
         http.post(
             "/api/contacts/1/profile/suggestions/adopt",
-            json={"field": "formal_name", "value": "Alice Zhang"},
+            json={"field": "formal_name", "value": "Alice  Zhang [id: 54216]"},
         )
     )
     assert adopted["formal_name"] == "Alice Zhang"

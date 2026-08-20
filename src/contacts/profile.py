@@ -28,7 +28,7 @@ from src.contacts.profile_prompts import (
     build_profile_system_prompt,
 )
 from src.contacts.repository import ContactRepository
-from src.contacts.taxonomy import CONTACT_KIND_PERSON
+from src.contacts.taxonomy import CONTACT_KIND_PERSON, strip_evidence_refs
 from src.llm_agent.client import LLMCallError, LLMClient
 from src.kos.client import KOSClient
 from src.repository.email_repository import EmailRepository
@@ -324,7 +324,7 @@ def _create_profile_identity_suggestions(
     suggestion_evidence = evidence_items[:3]
     for field in ("role_title", "department", "formal_name"):
         value = payload.get(field)
-        normalized_value = str(value).strip() if value is not None else ""
+        normalized_value = strip_evidence_refs(str(value)) if value is not None else ""
         if (
             not normalized_value
             or field in locks
@@ -497,6 +497,7 @@ async def generate_contact_profile(
                             mode=evidence.mode,
                             target_display_name=str(row["display_name"] or ""),
                             target_primary_email=primary_email,
+                            target_gender=str(row["gender"] or ""),
                             custom_prompt=cfg.prompt,
                         ),
                     }
@@ -757,7 +758,7 @@ def profile_projection(row: sqlite3.Row, *, configured: bool) -> Dict[str, Any]:
         ),
     )
     for field, value, current in candidates:
-        normalized = str(value).strip() if value is not None else ""
+        normalized = strip_evidence_refs(str(value)) if value is not None else ""
         if (
             not normalized
             or field in ignored_fields

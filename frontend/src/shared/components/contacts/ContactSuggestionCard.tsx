@@ -24,6 +24,7 @@ import type { ContactGovernanceSuggestion, ContactRowDto } from '@shared/api/typ
 import { cn } from '@shared/lib/cn'
 
 import { FIELD_LABEL_KEY } from './contactFields'
+import { stripEvidenceRefs } from './evidenceRefs'
 import { Monogram } from './Monogram'
 import { ContactPip } from './parts'
 
@@ -127,7 +128,9 @@ export function ContactSuggestionCard({
     }
   })()
 
-  const reason = text(payload.reason).trim()
+  // `reason` 是模型散文，比结构化字段更容易带内联引证 → 同样剥掉（stripEvidenceRefs 自带
+  // trim）。`evidence[].quote` **不剥**：那是邮件原文引文，不带标记，且是有用的溯源展示。
+  const reason = stripEvidenceRefs(text(payload.reason))
 
   return (
     <article
@@ -170,7 +173,11 @@ export function ContactSuggestionCard({
         ))}
       </div>
 
-      <div className="text-body leading-[1.55] text-ink-fg [text-wrap:pretty]">{headline}</div>
+      {/* 老数据的 payload 值带 `[id: 54216]` 尾巴（模型把内联引证写进了结构化字段）——
+          结论句是拿这些值拼的，显示侧剥掉；产生 / 采纳侧由后端修。 */}
+      <div className="text-body leading-[1.55] text-ink-fg [text-wrap:pretty]">
+        {stripEvidenceRefs(headline)}
+      </div>
 
       {reason !== '' ? (
         <div className="mt-[5px] text-meta leading-[1.6] text-ink-fg-2 [text-wrap:pretty]">

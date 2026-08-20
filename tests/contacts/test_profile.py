@@ -12,6 +12,7 @@ from src.contacts import profile
 from src.contacts.profile_config import ContactProfileAgentConfig
 from src.contacts.profile_config import get_contact_profile_agent_config
 from src.contacts.profile_prompts import PROFILE_TOOL_SCHEMA, build_profile_system_prompt
+from src.contacts.taxonomy import strip_evidence_refs
 from src.llm_agent.client import LLMResult
 from src.mail.sync_store import SyncStore
 
@@ -38,13 +39,14 @@ def _seed_contact(
     profile_status=None,
     profile_attempted_at=None,
     last_seen_at=None,
+    gender=None,
 ):
     with _conn(path) as conn:
         conn.execute(
             "INSERT INTO contact (id, display_name, kind, hidden_at, merged_into, is_self, "
             "mail_count, sent_to_count, profile_json, profile_updated_at, "
-            "profile_mail_count, profile_status, profile_attempted_at, last_seen_at, "
-            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1)",
+            "profile_mail_count, profile_status, profile_attempted_at, last_seen_at, gender, "
+            "created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,1,1)",
             (
                 contact_id,
                 f"Person {contact_id}",
@@ -60,6 +62,7 @@ def _seed_contact(
                 profile_status,
                 profile_attempted_at,
                 last_seen_at,
+                gender,
             ),
         )
         conn.execute(
@@ -260,11 +263,26 @@ def test_kos_reference_fence_query_and_budget(db):
     assert "…[truncated]" in reference_content
 
 
-def test_prompt_family_contains_skip_actions_and_custom_append():
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    [
+        ("Alice [id:123]", "Alice"),
+        ("Alice [id: 123]", "Alice"),
+        ("[id:1] Alice [id: 2]", "Alice"),
+        ("[id:123]", ""),
+        ("  Alice   Zhang  ", "Alice Zhang"),
+    ],
+)
+def test_strip_evidence_refs(raw, expected):
+    assert strip_evidence_refs(raw) == expected
+
+
+def test_prompt_family_contains_skip_actions_gender_rules_and_custom_append():
     first = build_profile_system_prompt(
         mode="first",
         target_display_name="Gary W",
         target_primary_email="gary.w@example.com",
+        target_gender="male",
         custom_prompt="owner tail",
     )
     incremental = build_profile_system_prompt(
@@ -278,10 +296,15 @@ def test_prompt_family_contains_skip_actions_and_custom_append():
     assert "强化 / 补充 / 修正 / 重构 / 不改" in incremental
     assert "BACKGROUND ONLY" in incremental
     assert '"ev": <primary evidence internal_id or null>' in first
-    assert "summary and other narrative fields" in first
+    assert "at most one [id:N] citation per sentence" in first
+    assert "Never include [id:N] in role_title" in first
     assert first.startswith("TARGET CONTACT")
     assert "Gary W" in first
     assert "gary.w@example.com" in first
+    assert "- gender: male" in first
+    assert "pronouns consistent with it" in first
+    assert "- gender:" not in incremental
+    assert "Do not use gendered pronouns (他/她/he/she/his/her)" in incremental
     assert "no target signal" in first
     assert "Never write a profile about anyone other than the TARGET CONTACT" in first
     assert "TARGET CONTACT remains the only person" in incremental
@@ -615,6 +638,51 @@ async def test_successful_profile_creates_identity_suggestion_for_difference(db)
     ]
     assert suggestions[0]["evidence"] == expected_evidence
     assert suggestions[1]["evidence"] == expected_evidence
+
+
+def test_profile_identity_suggestions_strip_refs_and_skip_empty(db):
+    _seed_contact(db, 1, mail_count=50)
+    _set_contact_identity(db, role_title="Coordinator", department="Operations")
+    _seed_mail(db, 1, 1, "Signature identity evidence. " * 20)
+    payload = _valid_payload()
+    payload.update(
+        {
+            "role_title": "Project  Manager [id: 1]",
+            "department": "[id:1]",
+            "formal_name": "Alice Zhang [id: 1]",
+        }
+    )
+    with _conn(db) as conn:
+        profile._create_profile_identity_suggestions(
+            conn,
+            contact_id=1,
+            payload=payload,
+            evidence=profile.ProfileEvidence(
+                mode="first",
+                user_content="",
+                mail_count=1,
+                substantive_chars=500,
+                first_internal_id=1,
+                last_internal_id=1,
+                internal_ids=(1,),
+            ),
+            now_ms=1_000,
+        )
+        conn.commit()
+    assert [item["payload"] for item in _identity_suggestions(db)] == [
+        {"field": "role_title", "value": "Project Manager"},
+        {"field": "formal_name", "value": "Alice Zhang"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_profile_prompt_receives_saved_gender(db):
+    _seed_contact(db, 1, mail_count=50, gender="female")
+    _seed_mail(db, 1, 1, "Substantive authored evidence. " * 20)
+    client = _FakeClient(_valid_payload())
+    assert profile.claim_profile_run(db, 1)
+    assert await profile.generate_contact_profile(db, 1, client=client) == "ok"
+    assert "- gender: female" in client.calls[0]["system_blocks"][0]["text"]
 
 
 @pytest.mark.asyncio
