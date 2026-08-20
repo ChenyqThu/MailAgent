@@ -14,6 +14,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
+import { CONTACT_TOOL_FACE_GROUPS } from '@shared/lib/contactToolFace'
+
 const { save, isSaving } = vi.hoisted(() => ({ save: vi.fn(), isSaving: false }))
 vi.mock('@shared/components/agents/hooks', () => ({
   useSetConfig: () => ({ save, isSaving })
@@ -109,17 +111,25 @@ describe('ContactGovernanceConfigDrawer · 工具清单（迁自工作台抽屉�
     expect(screen.getByText('contact_propose_merge')).toBeTruthy()
     expect(screen.getByText('contact_refresh_profile')).toBeTruthy()
     expect(screen.queryByText('contacts.search')).toBeNull()
-    expect(screen.getAllByText('读')).toHaveLength(3)
-    expect(screen.getAllByText('建议')).toHaveLength(3)
-    expect(screen.getAllByText('写（轻）')).toHaveLength(3)
-    // 副标说「它读、它提议」，同屏列着写工具 —— 必须说清那三件治理扫描拿不到。
+    // 计数从分组表推导而不是写死 —— 工具面扩编（如 chat 直写两件）时这里跟着叶子走，
+    // 幽灵/缺行由 contact_tool_face_leaf 三向闸负责，这里只管「每行都渲染了权限档」。
+    const countOf = (permission: string): number =>
+      CONTACT_TOOL_FACE_GROUPS.filter((group) => group.permission === permission).reduce(
+        (n, group) => n + group.tools.length,
+        0
+      )
+    expect(screen.getAllByText('读')).toHaveLength(countOf('read'))
+    expect(screen.getAllByText('建议')).toHaveLength(countOf('propose'))
+    expect(screen.getAllByText('写（轻）')).toHaveLength(countOf('write'))
+    // 副标说「它读、它提议」，同屏列着写工具 —— 必须说清那一组治理扫描拿不到。
     expect(
       screen.getByText(
-        '标「写（轻）」的三件只在主对话里可用，每天那轮治理扫描一件写工具都拿不到。'
+        '标「写（轻）」的那一组只在主对话里可用，每天那轮治理扫描一件写工具都拿不到。'
       )
     ).toBeTruthy()
     // Field label 已经报了件数，件数来自零依赖叶子而不是硬编码。
-    expect(screen.getByText('注入的工具 · 9 件')).toBeTruthy()
+    const totalTools = CONTACT_TOOL_FACE_GROUPS.reduce((n, group) => n + group.tools.length, 0)
+    expect(screen.getByText(`注入的工具 · ${totalTools} 件`)).toBeTruthy()
   })
 })
 
@@ -143,7 +153,10 @@ describe('ContactGovernanceConfigDrawer · 提示词（默认只读 + 追加段�
 
   test('写过追加段 → 回显它 + pill 切「已自定义」', () => {
     promptDoc.value = {
-      data: { content: '我们公司分三个事业部。', defaultContent: '你是 MailAgent 的通讯录管理员。' },
+      data: {
+        content: '我们公司分三个事业部。',
+        defaultContent: '你是 MailAgent 的通讯录管理员。'
+      },
       isPending: false,
       isError: false
     }
