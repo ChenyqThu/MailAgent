@@ -8,18 +8,18 @@
 //   · 工具 tab 列出真实 snake_case 工具名。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { listSuggestions, adoptSuggestion, ignoreSuggestion, runAgentScan, list } = vi.hoisted(
-  () => ({
+const { listSuggestions, adoptSuggestion, ignoreSuggestion, runAgentScan, list, agentStatus } =
+  vi.hoisted(() => ({
     listSuggestions: vi.fn(),
     adoptSuggestion: vi.fn(),
     ignoreSuggestion: vi.fn(),
     runAgentScan: vi.fn(),
-    list: vi.fn()
-  })
-)
+    list: vi.fn(),
+    agentStatus: vi.fn()
+  }))
 
 vi.mock('@shared/api/contacts', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@shared/api/contacts')>()
@@ -30,7 +30,8 @@ vi.mock('@shared/api/contacts', async (importOriginal) => {
       adoptSuggestion,
       ignoreSuggestion,
       runAgentScan,
-      list
+      list,
+      agentStatus
     })
   }
 })
@@ -92,6 +93,17 @@ function renderDrawer(over: { onMergePair?: (pair: [number, number]) => void } =
   return { onOpenChange }
 }
 
+/** 等 agent-status 那条查询真的落定再断言。
+ *  🔴 「什么都不该多渲染」这类否定断言如果在数据回来之前就跑，是**恒绿**的（把组件改坏也
+ *  不会红）—— 这个 helper 就是防那种装饰性断言：先确认 queryFn 被调用，再在 act 里 await
+ *  同一个 promise，让 react-query 的状态更新与重渲染都提交完。 */
+async function settleAgentStatus(): Promise<void> {
+  await waitFor(() => expect(agentStatus).toHaveBeenCalled())
+  await act(async () => {
+    await agentStatus.mock.results[0]?.value
+  })
+}
+
 beforeEach(() => {
   // 提示词编辑区走裸 fetch（`/agent/profile/docs/contact_agent`，与 matters 同源）——
   // 这里只需要让它落定，免得 happy-dom 在 teardown 时把在途请求 abort 成噪声。
@@ -103,6 +115,13 @@ beforeEach(() => {
     }))
   )
   list.mockResolvedValue({ items: [], total: 0 })
+  // 默认给「后端还没上这两个键」的形态 —— 老后端下抽屉必须什么都不多渲染。
+  agentStatus.mockResolvedValue({
+    enabled: true,
+    pending_count: 1,
+    last_fire_day: '2026-08-19',
+    last_scan_at: 1_755_600_000
+  })
   listSuggestions.mockImplementation(async ({ status }: { status: string }) =>
     status === 'pending' ? { items: [PENDING], next_cursor: null } : { items: [BLOCKED], next_cursor: null }
   )
@@ -187,6 +206,64 @@ describe('ContactAgentDrawer · 队列 tab', () => {
     fireEvent.click(screen.getByText('忽略'))
     await waitFor(() => expect(ignoreSuggestion).toHaveBeenCalledWith(11))
     expect(toastSuccess).toHaveBeenCalledWith('已忽略这条建议 · 下轮有新证据时可能再提')
+  })
+
+  // WP7 dogfood：治理 job failed（实测 E_DISABLED）之后抽屉里零呈现 —— 用户只看得见
+  // 「什么都没发生」，空队列被当成「没发现问题」。
+  test('上一轮扫描 failed → 队列顶部亮出错误码', async () => {
+    agentStatus.mockResolvedValue({
+      enabled: true,
+      pending_count: 0,
+      last_fire_day: '2026-08-19',
+      last_scan_at: 1_755_600_000,
+      last_scan_status: 'failed',
+      last_scan_error: 'E_DISABLED'
+    })
+    renderDrawer()
+
+    await waitFor(() => expect(screen.getByText(/上次治理扫描失败：E_DISABLED/)).toBeTruthy())
+    // 与「队列读取失败」是两回事，别混成一句。
+    expect(screen.queryByText('待审建议读取失败 · 这里显示的可能不是全部')).toBeNull()
+  })
+
+  test('上一轮还在跑 → 脚部标「上一次扫描还在跑」，不亮失败行', async () => {
+    agentStatus.mockResolvedValue({
+      enabled: true,
+      pending_count: 0,
+      last_fire_day: '2026-08-19',
+      last_scan_at: 1_755_600_000,
+      last_scan_status: 'running',
+      last_scan_error: null
+    })
+    renderDrawer()
+
+    await waitFor(() => expect(screen.getByText('上一次扫描还在跑')).toBeTruthy())
+    expect(screen.queryByText(/上次治理扫描失败/)).toBeNull()
+  })
+
+  // 🔴 两个键是 optional：后端没上线时 undefined → 一行都不许多渲染（可选链兜底）。
+  test('后端还没给这两个键 → 既不亮失败行也不亮进行中', async () => {
+    renderDrawer()
+    await settleAgentStatus()
+
+    expect(screen.queryByText(/上次治理扫描失败/)).toBeNull()
+    expect(screen.queryByText('上一次扫描还在跑')).toBeNull()
+  })
+
+  test('succeeded → 两行都不亮（成功不需要额外噪声）', async () => {
+    agentStatus.mockResolvedValue({
+      enabled: true,
+      pending_count: 1,
+      last_fire_day: '2026-08-19',
+      last_scan_at: 1_755_600_000,
+      last_scan_status: 'succeeded',
+      last_scan_error: null
+    })
+    renderDrawer()
+    await settleAgentStatus()
+
+    expect(screen.queryByText(/上次治理扫描失败/)).toBeNull()
+    expect(screen.queryByText('上一次扫描还在跑')).toBeNull()
   })
 
   test('「现在跑一次」：coalesced 时说复用那一轮，不谎报排了新队', async () => {

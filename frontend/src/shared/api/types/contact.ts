@@ -385,4 +385,10 @@ export interface ContactAgentStatus {
   last_fire_day: string | null
   /** 最近一次治理 job 的入队时间 (epoch 秒), 从没跑过 → null。 */
   last_scan_at: number | null
+  /** 最近一次治理 job 的终态。WP7 dogfood 修复：job failed 时抽屉里零呈现，用户只看得见
+   *  「什么都没发生」（实测是 `E_DISABLED`）。
+   *  🔴 optional —— 后端还没上这两个键时是 `undefined`，读侧一律可选链兜底、不渲染。 */
+  last_scan_status?: 'queued' | 'running' | 'succeeded' | 'failed' | null
+  /** failed 时的错误码 / 短讯（如 `E_DISABLED`）。 */
+  last_scan_error?: string | null
 }

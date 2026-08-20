@@ -48,6 +48,79 @@ import {
   useRefreshContactProfile
 } from './hooks'
 
+/** 画像正文里的内联证据引用。prompt 约定见 `src/contacts/profile_prompts.py`
+ *  （HARD RULES 3「cite supporting email internal_id values inline, for example [id:123]」），
+ *  在此之前前端把它当纯文本渲染 → 用户看到一屏 `[id:1000012991]` 字面量且点不动。
+ *
+ *  🔒 这是本文件里**唯一**认识的 token，且它不构成 markdown/HTML 渲染：切段之后每一段仍走
+ *  `{value}` 插值（React 转义）。`[id:abc]` / `[id:]` / 超出安全整数的超长数字都**不匹配或
+ *  不成钮**，原样留在纯文本里。 */
+const EVIDENCE_REF_PATTERN = /\[id:(\d+)\]/g
+
+type InlineSegment = { kind: 'text'; value: string } | { kind: 'ref'; value: number }
+
+/** 把一段画像文本切成「纯文本段 / 证据引用段」。非法引用不产生 ref 段，其字面量随周围
+ *  文本一起留在 text 段里。 */
+function parseEvidenceRefs(text: string): InlineSegment[] {
+  const segments: InlineSegment[] = []
+  let cursor = 0
+  for (const match of text.matchAll(EVIDENCE_REF_PATTERN)) {
+    const id = Number.parseInt(match[1] as string, 10)
+    // 🔴 超长数字（`[id:99999999999999999999]`）落在安全整数外 —— 不可能是真的 internal_id，
+    // 做成钮只会跳去一封不存在的邮件。跳过（不推进 cursor）＝ 它随后并入下一段纯文本。
+    if (!Number.isSafeInteger(id)) continue
+    const at = match.index
+    if (at > cursor) segments.push({ kind: 'text', value: text.slice(cursor, at) })
+    segments.push({ kind: 'ref', value: id })
+    cursor = at + match[0].length
+  }
+  if (cursor < text.length) segments.push({ kind: 'text', value: text.slice(cursor) })
+  return segments
+}
+
+/** chips 是不换行的短标签，塞不下引用钮（原型 `cdetail.jsx::ChipList` 就是纯展示 span，
+ *  无点击无图标）→ 剥掉标记而不是留字面量。剥完把多出来的空隙收拢。 */
+function stripEvidenceRefs(text: string): string {
+  return text
+    .replace(EVIDENCE_REF_PATTERN, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+}
+
+/** 纯文本 + 内联证据钮。视觉与 evolution 的「证据 N」同族（Quote / italic / micro 灰），
+ *  只去掉那边的块级上边距。 */
+function InlineRefs({
+  text,
+  onEvidence
+}: {
+  text: string
+  onEvidence(internalId: number): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const segments = parseEvidenceRefs(text)
+  // 没有引用（绝大多数段落）→ 原样一个文本节点，DOM 与改造前完全一致。
+  if (!segments.some((segment) => segment.kind === 'ref')) return <>{text}</>
+  return (
+    <>
+      {segments.map((segment, index) =>
+        segment.kind === 'text' ? (
+          segment.value
+        ) : (
+          <button
+            key={index}
+            type="button"
+            onClick={() => onEvidence(segment.value)}
+            className="inline-flex items-center gap-1 whitespace-nowrap align-baseline text-meta italic text-ink-fg-3 transition-opacity duration-fast ease-standard hover:opacity-80"
+          >
+            <Quote size={10} aria-hidden />
+            {t('contacts.profile.evidence', { ref: segment.value })}
+          </button>
+        )
+      )}
+    </>
+  )
+}
+
 /** 建议字段 → 身份信息区共用的标签键（同一个字段在两处必须叫同一个名字）。 */
 const SUGGESTION_LABEL_KEY: Record<ContactProfileSuggestionField, string> = {
   formal_name: 'contacts.field.formalName',
@@ -112,7 +185,7 @@ function ChipList({ items, tone }: { items: string[]; tone: 'ai' | 'neutral' }):
             tone === 'ai' ? 'border-ai/[0.22] bg-ai/[0.08]' : 'border-ink-border bg-ink-fg/[0.04]'
           )}
         >
-          {item}
+          {stripEvidenceRefs(item)}
         </span>
       ))}
     </div>
@@ -151,7 +224,8 @@ function Evolution({
             <div className={cn('min-w-0', last ? undefined : 'pb-3.5')}>
               <span className="font-mono text-micro tracking-[0.02em] text-ink-fg-3">{item.at}</span>
               <div className="text-body leading-[1.6] text-ink-fg-1 [text-wrap:pretty]">
-                {item.text}
+                {/* prompt 要求 evolution 用 `ev` 而不是内联引用，但模型可能违规 —— 解析器兜底。 */}
+                <InlineRefs text={item.text} onEvidence={onEvidence} />
               </div>
               {/* `ev` 是证据邮件的 internal_id。用 `!= null` 而非真值判断 —— 0 是合法 id。 */}
               {item.ev != null ? (
@@ -287,8 +361,14 @@ export function ContactProfileCard({
     })
   }
 
+  // 🔴 `{ navTarget: true }` 不是可选装饰：证据邮件常常不在收件箱列表当前加载窗口里
+  //（也可能被 view / Focused tab / 二值筛选挡在 orderedIds 之外）。少了它，
+  // useEmailListRows 的 active-reset 会在下一个微任务里把 active 抢回列表第一封 ——
+  // 正文闪一下目标邮件就跳走，表现正是 dogfood 报的「点击也无法跳转」。
+  // EmailDetail 本身按 id 独立取详情，豁免之后窗口外的邮件照样打得开。
+  // 先例：`agents/EmailSourcePanel.tsx` 的 openInbox（同样只有 internal_id、没有 mailbox）。
   const openEvidence = (internalId: number): void => {
-    setActiveEmail(internalId)
+    setActiveEmail(internalId, { navTarget: true })
     void navigate({ to: '/' })
   }
 
@@ -436,9 +516,10 @@ export function ContactProfileCard({
         ) : null}
       </div>
 
-      {/* 🔒 纯文本：`{}` 插值即转义，`whitespace-pre-wrap` 保住模型给的换行。 */}
+      {/* 🔒 纯文本：`{}` 插值即转义，`whitespace-pre-wrap` 保住模型给的换行。唯一的例外是
+          `[id:N]` 内联引用被切成证据钮（见 InlineRefs），其余一律不解析。 */}
       <p className="m-0 whitespace-pre-wrap text-body leading-[1.78] text-ink-fg/90 [text-wrap:pretty]">
-        {document.summary}
+        <InlineRefs text={document.summary} onEvidence={openEvidence} />
       </p>
 
       {document.topics.length > 0 ? (
@@ -459,7 +540,7 @@ export function ContactProfileCard({
         <div className="mt-3.5 flex gap-[9px] rounded-[var(--r-ctl)] bg-ink-fg/[0.025] px-3 py-2.5">
           <MessageSquare size={13} aria-hidden className="mt-0.5 shrink-0 text-ink-fg-2" />
           <span className="text-body leading-[1.65] text-ink-fg-1 [text-wrap:pretty]">
-            {document.communication_style}
+            <InlineRefs text={document.communication_style} onEvidence={openEvidence} />
           </span>
         </div>
       ) : null}
@@ -480,7 +561,12 @@ export function ContactProfileCard({
             <div key={`${index}-${text}`} className="flex items-start gap-[7px]">
               <HelpCircle size={12} aria-hidden className="mt-[3px] shrink-0 text-ink-fg-3" />
               <span className="text-meta leading-[1.6] text-ink-fg-3 [text-wrap:pretty]">
-                {t('contacts.profile.contradiction', { text })}
+                {/* 前缀「待澄清 · 」是本地化死文案，不含 `[id:N]`，所以整句一起过解析器
+                    即可，不必为此把这个 i18n key 拆成两半。 */}
+                <InlineRefs
+                  text={t('contacts.profile.contradiction', { text })}
+                  onEvidence={openEvidence}
+                />
               </span>
             </div>
           ))}

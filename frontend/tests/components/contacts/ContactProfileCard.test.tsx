@@ -140,6 +140,127 @@ describe('ContactProfileCard · 纯文本渲染（§8-WP6 验收）', () => {
   })
 })
 
+// WP7 dogfood：画像 prompt 要求正文内联引用证据（`[id:123]`），前端此前按纯文本渲染 →
+// owner 看到一屏 `[id:1000012991]` 字面量且点不动。切段成钮，但**只认这一个 token**。
+describe('ContactProfileCard · 内联证据引用 `[id:N]`', () => {
+  test('summary 里的 [id:N] 变成可点的证据钮，点击跳那封邮件', () => {
+    renderCard(
+      profileOf({
+        document: documentOf({
+          summary: '陈立牵头灰度方案 [id:53675]，并在上周确认排期 [id:41230]。',
+          evolution: []
+        })
+      })
+    )
+
+    // 字面量不再出现；两个引用各成一个钮。
+    expect(screen.queryByText(/\[id:53675\]/)).toBeNull()
+    const first = screen.getByText('证据 53675')
+    expect(screen.getByText('证据 41230')).toBeTruthy()
+    // 周围的纯文本一段不少（切段没吃掉文字）。
+    expect(screen.getByText(/陈立牵头灰度方案/)).toBeTruthy()
+    expect(screen.getByText(/并在上周确认排期/)).toBeTruthy()
+
+    fireEvent.click(first)
+    // 🔴 navTarget：证据邮件常在列表加载窗口外，不豁免会被 active-reset 抢回列表第一封。
+    expect(mockSetActive).toHaveBeenCalledWith(53675, { navTarget: true })
+    expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
+  })
+
+  test('沟通风格 / 待澄清 里的引用同样成钮', () => {
+    renderCard(
+      profileOf({
+        document: documentOf({
+          summary: '无引用。',
+          communication_style: '结论前置 [id:900]。',
+          contradictions: ['签名档与自述职务不一致 [id:901]'],
+          evolution: []
+        })
+      })
+    )
+
+    expect(screen.getByText('证据 900')).toBeTruthy()
+    expect(screen.getByText('证据 901')).toBeTruthy()
+    fireEvent.click(screen.getByText('证据 901'))
+    expect(mockSetActive).toHaveBeenCalledWith(901, { navTarget: true })
+  })
+
+  test('evolution.text 里的违规内联引用也兜底成钮（prompt 要求用 ev，但模型可能不听）', () => {
+    renderCard(
+      profileOf({
+        document: documentOf({
+          summary: '无引用。',
+          evolution: [{ at: '2026-05', text: '开始牵头灰度方案 [id:777]', ev: null }]
+        })
+      })
+    )
+
+    expect(screen.getByText('证据 777')).toBeTruthy()
+    expect(screen.queryByText(/\[id:777\]/)).toBeNull()
+  })
+
+  test('chips 里剥掉标记而不是留字面量（原型 chips 是纯展示 span，塞不下钮）', () => {
+    renderCard(
+      profileOf({
+        document: documentOf({
+          summary: '无引用。',
+          topics: ['支付通道联调 [id:555]'],
+          projects: ['灰度上线 [id:556]'],
+          evolution: []
+        })
+      })
+    )
+
+    expect(screen.getByText('支付通道联调')).toBeTruthy()
+    expect(screen.getByText('灰度上线')).toBeTruthy()
+    expect(screen.queryByText(/\[id:555\]/)).toBeNull()
+    // chip 不给点击入口 —— 不产生「证据 555」钮。
+    expect(screen.queryByText('证据 555')).toBeNull()
+    expect(screen.queryByText('证据 556')).toBeNull()
+  })
+
+  // 🔒 解析器是本文件唯一的富文本入口 —— 非法/敌意形态必须落回纯文本，不成钮也不炸。
+  test('注入与非法形态：<script> / [id:abc] / [id:] / 超长数字 一律原样纯文本，不产生钮', () => {
+    const hostile =
+      '<script>alert(1)</script> [id:abc] 与 [id:] 与 [id:99999999999999999999] 都该原样出现'
+    const { container } = (() => {
+      renderCard(
+        profileOf({
+          document: documentOf({
+            summary: hostile,
+            topics: [],
+            projects: [],
+            communication_style: null,
+            contradictions: [],
+            evolution: []
+          })
+        })
+      )
+      return { container: document.body }
+    })()
+
+    // 整段一字不改地在（说明一个 token 都没被切走）。
+    expect(screen.getByText(hostile)).toBeTruthy()
+    // 一个证据钮都不该出现。
+    expect(screen.queryByText(/^证据 /)).toBeNull()
+    // 依旧不解析 HTML。
+    expect(container.querySelector('script')).toBeNull()
+  })
+
+  test('相邻两个引用之间的空格保留（不粘成一坨）', () => {
+    renderCard(
+      profileOf({
+        document: documentOf({ summary: 'A [id:1] [id:2] B', evolution: [] })
+      })
+    )
+
+    expect(screen.getByText('证据 1')).toBeTruthy()
+    expect(screen.getByText('证据 2')).toBeTruthy()
+    const paragraph = screen.getByText('证据 1').closest('p')
+    expect(paragraph?.textContent).toBe('A 证据 1 证据 2 B')
+  })
+})
+
 describe('ContactProfileCard · 四种「没有画像」文案语义不混', () => {
   test('未开启：只给「到 Agents 页开启」，不给「立即生成」', () => {
     renderCard(profileOf({ document: null, status: 'unconfigured', eligible: false }))
@@ -251,7 +372,8 @@ describe('ContactProfileCard · provenance 与手动更新', () => {
     renderCard(profileOf())
 
     fireEvent.click(screen.getByText(/证据 53675/))
-    expect(mockSetActive).toHaveBeenCalledWith(53675)
+    // navTarget 豁免 useEmailListRows 的 active-reset（证据邮件常在列表加载窗口外）。
+    expect(mockSetActive).toHaveBeenCalledWith(53675, { navTarget: true })
     expect(mockNavigate).toHaveBeenCalledWith({ to: '/' })
   })
 })

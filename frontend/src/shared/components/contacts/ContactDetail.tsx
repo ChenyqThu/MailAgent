@@ -353,7 +353,10 @@ function ContactMailList({ contactId }: { contactId: number }): React.ReactEleme
                 key={mail.internal_id}
                 type="button"
                 onClick={() => {
-                  setActiveEmail(mail.internal_id)
+                  // 🔴 `{ navTarget: true }` 与画像卡的证据钮同因：往来邮件按定义大多在
+                  // 收件箱列表当前加载窗口之外，不豁免的话 useEmailListRows 的 active-reset
+                  // 会立刻把 active 抢回列表第一封（dogfood 报的「点击也无法跳转」）。
+                  setActiveEmail(mail.internal_id, { navTarget: true })
                   void navigate({ to: '/' })
                 }}
                 className="flex w-full items-start gap-2.5 rounded-[var(--r-row)] px-2.5 py-2 text-left transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.035]"
