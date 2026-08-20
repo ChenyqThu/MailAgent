@@ -31,6 +31,7 @@ import { ContactAgentToolFace } from './ContactAgentToolFace'
 import { ContactSuggestionCard } from './ContactSuggestionCard'
 import { SecHead } from './parts'
 import {
+  useContactAgentStatus,
   useContactList,
   useContactSuggestions,
   useContactsApi,
@@ -61,6 +62,14 @@ export function ContactAgentDrawer({
 
   const pending = useContactSuggestions('pending', open)
   const blocked = useContactSuggestions('blocked', open)
+  // WP7 dogfood 修复：治理 job failed 之后抽屉里零呈现 —— 用户点了「现在跑一次」，看到的
+  // 只是「什么都没发生」（实测 job 是 failed E_DISABLED）。这里读同一条 agent-status 查询
+  // （key 与胶囊徽标同源，react-query 去重，不多发请求）把终态显出来。
+  // 🔴 两个键都是 optional：后端还没上线时是 undefined → 一行都不渲染。
+  const agentStatus = useContactAgentStatus(open)
+  const lastScanStatus = agentStatus.data?.last_scan_status
+  const lastScanError = agentStatus.data?.last_scan_error
+  const scanInFlight = lastScanStatus === 'queued' || lastScanStatus === 'running'
   // 相关人名字/头像的查表源。🔴 有意**不传 limit**：按往来密度截断会正好丢掉建议指向的
   // 那类冷门行（机器人 / 刚换的新地址），而查不到名字的卡只能显示 `#id`。key 与工作台
   // 「全部」视图的列表查询同构，用户在那个视图时零额外请求。
@@ -175,6 +184,12 @@ export function ContactAgentDrawer({
                 {t('contacts.agent.loadFailed')}
               </p>
             ) : null}
+            {/* 扫描本身失败 ≠ 队列读取失败：前者是「这一轮压根没跑出来」，空队列是假象。 */}
+            {lastScanStatus === 'failed' ? (
+              <p className="mb-2 text-micro leading-[1.6] text-warn">
+                {t('contacts.agent.scanFailed', { error: lastScanError ?? '—' })}
+              </p>
+            ) : null}
             {queueEmpty ? (
               <EmptyState
                 icon={<CircleCheckBig size={20} strokeWidth={1.5} />}
@@ -218,6 +233,13 @@ export function ContactAgentDrawer({
           {t('contacts.agent.cadence')}
         </span>
         <span aria-hidden className="flex-1" />
+        {/* 上一轮还在队列/在跑时说明白 —— 否则再点一次只会被后端合流（coalesced），
+            用户看到的又是「什么都没发生」。 */}
+        {scanInFlight ? (
+          <span className="shrink-0 text-micro leading-[1.5] text-ink-fg-2">
+            {t('contacts.agent.scanInFlight')}
+          </span>
+        ) : null}
         <button
           type="button"
           disabled={run.isPending}

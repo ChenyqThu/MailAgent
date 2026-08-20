@@ -5860,6 +5860,8 @@
         "hint": "An invariant guard stopped these on adoption. They stay in the queue and nothing was written."
       },
       "loadFailed": "Could not load the review queue · what you see may be incomplete",
+      "scanFailed": "The last governance scan failed: {error} · an empty queue does not mean nothing was found",
+      "scanInFlight": "The previous scan is still running",
       "cadence": "Runs once a day with the incremental scan",
       "runNow": "Run a governance scan now",
       "running": "Scanning…",

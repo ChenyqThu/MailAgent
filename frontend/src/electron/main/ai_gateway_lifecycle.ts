@@ -137,6 +137,17 @@ interface ChatConfigResponse {
 
 let _handle: AiGatewayHandle | null = null
 
+// WP7 dogfood 修复 — before-quit 钩子只挂一次。startEmbeddedAiGateway 现在会被
+// restartEmbeddedAiGateway 二次调用（Labs「重启后端」连带重建 gateway），每启一次就
+// app.once() 一个新的 one-shot listener → 重启十次后 MaxListenersExceededWarning，
+// 且退出时把同一个幂等 stop 调十遍。挂钩与 handle 无关（stop 自己读当前 _handle），
+// 所以整个进程生命周期一次就够。
+let _quitHookRegistered = false
+// 连点两次「重启后端」的互斥：stop 把 _handle 置空后 start 里有多个 await，两条重启
+// 并发会双双走到 server.listen(同一个固定端口) → 第二条 EADDRINUSE reject。第二次调用
+// 直接复用在途 Promise（而不是排队再重启一次）——用户连点两下要的是「重启一次」。
+let _restarting: Promise<number | null> | null = null
+
 // ---------------------------------------------------------------------------
 // D1 (connector dogfood batch) — on-disk gateway log (handlers/translate.ts 同款: app logs dir +
 // JSON line via appendFileSync; logging never throws). Rationale: the gateway runs in the Electron
@@ -1552,15 +1563,67 @@ export async function startEmbeddedAiGateway(): Promise<number | null> {
     `[ai-gateway] embedded gateway listening on http://127.0.0.1:${handle.port}` +
       ` (health=${healthy ? 'ok' : 'pending'}, hasKey=${Boolean(apiKey)})`
   )
-  app.once('before-quit', () => {
-    void stopEmbeddedAiGateway()
-  })
+  if (!_quitHookRegistered) {
+    _quitHookRegistered = true
+    app.once('before-quit', () => {
+      void stopEmbeddedAiGateway()
+    })
+  }
   return handle.port
 }
 
-/** Gracefully stop the embedded gateway (before-quit / explicit teardown). */
+/** close() 的兜底等待上限。closeAllConnections() 之后 server.close 应当立刻回调；
+ *  这个 race 只是保证「重启」永远不会变成无限挂起（挂起 = gateway 永久死掉，比原
+ *  bug 更糟）。超时后 listen 若撞上未释放的端口会 EADDRINUSE，由调用方记录。 */
+const GATEWAY_CLOSE_TIMEOUT_MS = 3_000
+
+/** Gracefully stop the embedded gateway (before-quit / explicit teardown).
+ *
+ *  🔴 closeAllConnections()：server.close() 只停止 accept，**要等所有已建立连接结束**
+ *  才回调。chat 是长驻 SSE 流（detached runs 更是刻意不随客户端断开而中止），所以不强制
+ *  断连的话 close() 可能永远不回调。Labs「重启后端」本就是破坏性动作（有确认弹窗），
+ *  与 Python 两进程被 kill 的语义一致：在途 chat run 一并断掉。 */
 export async function stopEmbeddedAiGateway(): Promise<void> {
   const handle = _handle
   _handle = null
-  if (handle) await handle.close()
+  if (!handle) return
+  try {
+    handle.server.closeAllConnections()
+  } catch {
+    /* 老 Node / 已关闭的 server — 忽略，下面的 close 仍会跑 */
+  }
+  await Promise.race([
+    handle.close(),
+    new Promise<void>((resolve) => setTimeout(resolve, GATEWAY_CLOSE_TIMEOUT_MS))
+  ])
+}
+
+/**
+ * WP7 dogfood 修复 — 停掉再重建 embedded gateway，让所有 flag 快照
+ *（contactToolsEnabled / contactAgentEnabled / matterAgentEnabled / 全家）按**当前**
+ * process.env 重新求值。
+ *
+ * 背景：这些 flag 是 startEmbeddedAiGateway() 里 envBool 求值一次的**启动快照**，而
+ * Labs 翻开关走的是 env:set（已同步 process.env，见 handlers/env.ts）+ services:restart
+ *（只重启 Python 两进程）。gateway 不重建 → 治理 run 被 server.ts 的
+ * `contactAgentEnabled !== true` 门 403 E_DISABLED，contact 工具也一件都不注册，
+ * 用户只能整个退出 App 再开。
+ *
+ * 端口不会变：listen 端口与 renderer 的 `?aiGatewayPort=` 同源 resolveAiGatewayPort()
+ *（env 覆盖或固定默认值，非内核随机分配），所以 chat 面板不需要知道这次重启。
+ *
+ * 失败（例如端口尚未释放 → EADDRINUSE）返回 null 并由调用方记日志，不抛。
+ */
+export async function restartEmbeddedAiGateway(): Promise<number | null> {
+  if (_restarting) return _restarting
+  const run = (async (): Promise<number | null> => {
+    await stopEmbeddedAiGateway()
+    return startEmbeddedAiGateway()
+  })()
+  _restarting = run
+  try {
+    return await run
+  } finally {
+    if (_restarting === run) _restarting = null
+  }
 }

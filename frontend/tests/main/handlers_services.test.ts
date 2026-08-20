@@ -17,6 +17,13 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 const execaMock = vi.fn()
 const whichMock = vi.fn<(cmd: string, opts?: { nothrow?: boolean }) => string | null>()
 
+// WP7 dogfood 修复 — 「重启后端」连带重建 embedded gateway。真模块顶层拉 ai / @ai-sdk /
+// electron，node 环境载不动也不该载（services.ts 用动态 import 就是为了让它留在懒 chunk）。
+const { gatewayRestartMock } = vi.hoisted(() => ({ gatewayRestartMock: vi.fn() }))
+vi.mock('../../src/electron/main/ai_gateway_lifecycle', () => ({
+  restartEmbeddedAiGateway: () => gatewayRestartMock()
+}))
+
 vi.mock('execa', () => ({
   execa: (...args: unknown[]) => execaMock(...args)
 }))
@@ -48,6 +55,8 @@ beforeEach(async () => {
   vi.resetModules()
   execaMock.mockReset()
   whichMock.mockReset()
+  gatewayRestartMock.mockReset()
+  gatewayRestartMock.mockResolvedValue(8300)
   delete process.env.MAILAGENT_PM2_BIN
   svc = await import('../../src/electron/main/handlers/services')
 })
@@ -142,6 +151,51 @@ describe('services:restart', () => {
       ['restart', 'mail-sync'],
       expect.anything()
     )
+  })
+})
+
+// WP7 dogfood 根因：gateway 的 flag 是启动快照，Labs 翻开关 + 重启后端后 gateway 没重建
+// → 治理 run 恒 403 E_DISABLED、contact 工具一件不注册。这四条锁住「成功才重建 / 失败不碰 /
+// 只管主后端」三条语义。
+describe('services:restart 连带重建 embedded gateway', () => {
+  test('mail-sync 重启成功 → gateway 重建一次', async () => {
+    whichMock.mockReturnValue('/fake/bin/pm2')
+    execaMock.mockResolvedValue({ exitCode: 0, stdout: 'ok', stderr: '', timedOut: false })
+    const r = await svc.__test__.restartTarget('mail-sync')
+    expect(r.ok).toBe(true)
+    expect(gatewayRestartMock).toHaveBeenCalledTimes(1)
+  })
+
+  test('pm2 退出码非 0 → 不碰 gateway（Python 没起来时把 gateway 也打掉只会更糟）', async () => {
+    whichMock.mockReturnValue('/fake/bin/pm2')
+    execaMock.mockResolvedValue({ exitCode: 1, stdout: '', stderr: 'boom', timedOut: false })
+    const r = await svc.__test__.restartTarget('mail-sync')
+    expect(r.ok).toBe(false)
+    expect(gatewayRestartMock).not.toHaveBeenCalled()
+  })
+
+  test('pm2 根本没找到 → 不碰 gateway', async () => {
+    whichMock.mockReturnValue(null)
+    const r = await svc.__test__.restartTarget('mail-sync')
+    expect(r.error?.code).toBe('E_PM2_NOT_FOUND')
+    expect(gatewayRestartMock).not.toHaveBeenCalled()
+  })
+
+  test('serve-api 是「远程访问」专用重启，与 gateway flag 无关 → 不重建（不牺牲在途 chat run）', async () => {
+    whichMock.mockReturnValue('/fake/bin/pm2')
+    execaMock.mockResolvedValue({ exitCode: 0, stdout: 'ok', stderr: '', timedOut: false })
+    const r = await svc.__test__.restartTarget('serve-api')
+    expect(r.ok).toBe(true)
+    expect(gatewayRestartMock).not.toHaveBeenCalled()
+  })
+
+  test('gateway 重建自身失败不把 Python 侧的成功判成失败', async () => {
+    whichMock.mockReturnValue('/fake/bin/pm2')
+    execaMock.mockResolvedValue({ exitCode: 0, stdout: 'ok', stderr: '', timedOut: false })
+    gatewayRestartMock.mockRejectedValue(new Error('EADDRINUSE'))
+    const r = await svc.__test__.restartTarget('mail-sync')
+    expect(r.ok).toBe(true)
+    expect(r.error).toBeUndefined()
   })
 })
 

@@ -84,6 +84,31 @@ function resolvePm2(): string | null {
   return null
 }
 
+/** WP7 dogfood 修复 — 「重启后端」连带重建内嵌 AI gateway。
+ *
+ *  gateway 的全部 flag（contactToolsEnabled / contactAgentEnabled / matterAgentEnabled …）
+ *  是 startEmbeddedAiGateway() 里 envBool 求值一次的**启动快照**。Labs 翻开关 → env:set
+ *  写 .env 并同步 process.env → services:restart 只重启 Python 两进程，gateway 沿用旧快照，
+ *  于是治理 run 被 403 E_DISABLED、contact 工具一件不注册，用户只能退出整个 App 才生效。
+ *
+ *  范围只取 mail-sync / all（RestartBanner 的开关生效路径）。serve-api 是「远程访问」页
+ *  的专用重启，与 gateway flag 无关，不为它牺牲在途 chat run。
+ *
+ *  🔴 只在 Python 侧重启**成功**后调用 —— Python 没起来时把 gateway 也打掉只会更糟。
+ *  动态 import：ai_gateway_lifecycle 顶层拉 ai / @ai-sdk 重依赖，index.ts 也是靠动态
+ *  import 把它留在懒 chunk 里，这里静态 import 会把整块拽进 main bundle。
+ *  失败只记日志：Python 已经重启成功，不该因为 gateway 没起来把整个结果判成失败。 */
+async function restartGatewayAfterServices(target: ServiceTarget): Promise<void> {
+  if (target !== 'mail-sync' && target !== 'all') return
+  try {
+    const { restartEmbeddedAiGateway } = await import('../ai_gateway_lifecycle')
+    const port = await restartEmbeddedAiGateway()
+    console.log(`[services] embedded gateway restarted after ${target} (port=${port ?? 'failed'})`)
+  } catch (err) {
+    console.error('[services] embedded gateway restart failed (Python 侧已重启成功)', err)
+  }
+}
+
 async function restartTarget(target: ServiceTarget): Promise<ServiceRestartResult> {
   if (!VALID_TARGETS.has(target)) {
     return {
@@ -108,6 +133,7 @@ async function restartTarget(target: ServiceTarget): Promise<ServiceRestartResul
     const svcName: ServiceName = target === 'serve-api' ? 'serve-api' : 'serve'
     try {
       await getBackendLifecycle().restartService(svcName)
+      await restartGatewayAfterServices(target)
       return { ok: true, target, exitCode: 0, stdout: '', stderr: '' }
     } catch (err) {
       return {
@@ -164,6 +190,7 @@ async function restartTarget(target: ServiceTarget): Promise<ServiceRestartResul
     }
 
     const ok = result.exitCode === 0
+    if (ok) await restartGatewayAfterServices(target)
     return {
       ok,
       target,
