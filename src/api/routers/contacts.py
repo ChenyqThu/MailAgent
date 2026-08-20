@@ -11,6 +11,7 @@ import asyncio
 import json
 import sqlite3
 import time
+from datetime import datetime, timedelta
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Request
@@ -245,6 +246,90 @@ async def contact_governance_status(
             "last_scan_at": latest[0] if latest else None,
             "last_scan_status": latest[1] if latest else None,
             "last_scan_error": latest[2] if latest else None,
+        },
+        request=request,
+    )
+
+
+@router.get("/agent/history", dependencies=[Depends(require_contact_agent_enabled)])
+async def contact_governance_history(
+    request: Request,
+    limit: int = Query(10, ge=1, le=50),
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    conn = repo.connect()
+    try:
+        rows = conn.execute(
+            "SELECT job_id, status, created_at, started_at, finished_at, last_error, result_json "
+            "FROM async_jobs WHERE job_type=? ORDER BY job_id DESC LIMIT ?",
+            (contact_governance.CONTACT_GOVERNANCE_JOB_TYPE, limit),
+        ).fetchall()
+    finally:
+        conn.close()
+    items = []
+    for row in rows:
+        suggestions_created = None
+        if row["result_json"]:
+            try:
+                result = json.loads(row["result_json"])
+                value = result.get("suggestions_created") if isinstance(result, dict) else None
+                if isinstance(value, int) and not isinstance(value, bool) and value >= 0:
+                    suggestions_created = value
+            except (json.JSONDecodeError, TypeError):
+                pass
+        items.append(
+            {
+                "job_id": int(row["job_id"]),
+                "status": row["status"],
+                "created_at": row["created_at"],
+                "started_at": row["started_at"],
+                "finished_at": row["finished_at"],
+                "last_error": row["last_error"],
+                "suggestions_created": suggestions_created,
+            }
+        )
+    return success_envelope({"items": items}, request=request)
+
+
+@router.get("/profile/daily-summary")
+async def contact_profile_daily_summary(
+    request: Request,
+    repo: ContactRepository = Depends(get_contact_repository),
+    settings=Depends(get_settings),
+):
+    if not bool(getattr(settings, "contact_profile_enabled", False)):
+        raise APIError(
+            "E_DISABLED", "Contact profile feature is disabled", source="sqlite"
+        )
+    local_date = datetime.now().astimezone().date()
+    start_ms = int(datetime.combine(local_date, datetime.min.time()).timestamp() * 1000)
+    end_ms = int(
+        datetime.combine(local_date + timedelta(days=1), datetime.min.time()).timestamp()
+        * 1000
+    )
+    conn = repo.connect()
+    try:
+        row = conn.execute(
+            "SELECT COUNT(*) AS attempted, "
+            "COALESCE(SUM(CASE WHEN profile_status='ok' THEN 1 ELSE 0 END), 0) AS ok, "
+            "COALESCE(SUM(CASE WHEN profile_status='skipped' THEN 1 ELSE 0 END), 0) AS skipped, "
+            "COALESCE(SUM(CASE WHEN profile_status='failed' THEN 1 ELSE 0 END), 0) AS failed, "
+            "MAX(profile_attempted_at) AS last_attempted_at "
+            "FROM contact WHERE profile_attempted_at >= ? AND profile_attempted_at < ?",
+            (start_ms, end_ms),
+        ).fetchone()
+    finally:
+        conn.close()
+    cfg = get_contact_profile_agent_config(str(repo.db_path))
+    return success_envelope(
+        {
+            "date": local_date.isoformat(),
+            "attempted": int(row["attempted"] or 0),
+            "ok": int(row["ok"] or 0),
+            "skipped": int(row["skipped"] or 0),
+            "failed": int(row["failed"] or 0),
+            "last_attempted_at": row["last_attempted_at"],
+            "fire_hour": cfg.fire_hour,
         },
         request=request,
     )

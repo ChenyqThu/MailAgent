@@ -178,7 +178,7 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
         context_docs = []
     # v29: preprocess 行级 fallback 链。NULL/非法 → None（投影 null = 跟随全局
     # LLM_FALLBACK_MODELS —— 与 context_docs 不同, 不回填默认: "跟随全局"本身就是前端要显示
-    # 的态）；JSON list → list（[] = 显式不设兜底）。非 preprocess 一律 None（不用此字段）。
+    # 的态）；JSON list → list（[] = 显式不设兜底）。治理/画像专型 agent 复用同列。
     _raw_fb = agent.get("fallback_models_json")
     try:
         _parsed_fb = json.loads(_raw_fb) if _raw_fb else None
@@ -186,7 +186,7 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
             _parsed_fb = None
     except (json.JSONDecodeError, TypeError):
         _parsed_fb = None
-    if agent_type == "preprocess" and _parsed_fb is not None:
+    if agent_type in ("preprocess", "contact_profile", "contact_governance") and _parsed_fb is not None:
         fallback_models = [str(x) for x in _parsed_fb]
     else:
         fallback_models = None
@@ -226,9 +226,11 @@ def resolve_agent(agent: Dict[str, Any]) -> Dict[str, Any]:
     # v31: project_progress 单例行也用 trigger_json 存触发配置（email_filter 词汇，运行时走
     # ProjectProgressDetector 子串匹配）→ 投影 trigger 供 Settings 抽屉读 sender/subject。
     # tool_policy/budget 仍 custom-only（project_progress 执行不进 gateway，无工具/预算语义）。
-    # v63: contact_profile 单例行同款——trigger_json 存 {fire_hour, daily_limit} 字面配置，
+    # v63/v65: contact_profile / contact_governance 单例行同款——trigger_json 存字面配置，
     # 不投影则 owner PUT 后 GET 恒 null（抽屉存得进读不回，即下面 grant_connectors 点名的形态）。
-    _projects_trigger = agent_type in ("custom", "project_progress", "contact_profile")
+    _projects_trigger = agent_type in (
+        "custom", "project_progress", "contact_profile", "contact_governance"
+    )
     trigger = _parse_obj(agent.get("trigger_json")) if _projects_trigger else None
     if _is_custom:
         tool_policy = _parse_obj(agent.get("tool_policy_json"))

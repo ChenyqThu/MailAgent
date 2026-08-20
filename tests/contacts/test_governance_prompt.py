@@ -30,7 +30,9 @@ def test_prompt_default_override_and_empty_restore(tmp_path, monkeypatch):
         )
         assert custom.status_code == 200
         assert custom.json()["data"]["defaultContent"] == governance.default_governance_prompt()
-        assert governance._effective_prompt() == "CUSTOM GOVERNANCE"
+        assert governance._effective_prompt() == (
+            governance.default_governance_prompt() + "\n\nCUSTOM GOVERNANCE"
+        )
         restored = client.post(
             f"/api/agent/profile/docs/{CONTACT_AGENT_DOC_NAME}",
             json={"content": ""},

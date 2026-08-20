@@ -70,7 +70,7 @@ def _effective_prompt() -> str:
             CONTACT_AGENT_DOC_NAME, seed_if_absent=False
         )
         custom = (getattr(doc, "content", "") or "").strip()
-        return custom or _GOVERNANCE_PROMPT
+        return _GOVERNANCE_PROMPT + (f"\n\n{custom}" if custom else "")
     except Exception:
         return _GOVERNANCE_PROMPT
 
@@ -317,13 +317,16 @@ def adopt_suggestion(conn: sqlite3.Connection, suggestion_id: int, *, now_ms: in
 def assemble_contact_governance_spec(job: Any) -> dict[str, Any]:
     try:
         from src.config import config
+        from src.contacts.governance_config import get_contact_governance_agent_config
+
         enabled = bool(config.contacts_enabled) and bool(config.contact_agent_enabled)
     except Exception:
         enabled = False
     if not enabled:
         raise ContactError("E_DISABLED", "contact governance agent is disabled")
     params = job.params or {}
-    return {
+    cfg = get_contact_governance_agent_config(config.sync_store_db_path)
+    spec = {
         "jobId": job.job_id,
         "runKind": CONTACT_GOVERNANCE_JOB_TYPE,
         "agentId": "contact_governance_agent",
@@ -333,6 +336,7 @@ def assemble_contact_governance_spec(job: Any) -> dict[str, Any]:
             "firedAt": datetime.fromtimestamp(job.created_at, tz=timezone.utc).isoformat(),
         },
         "prompt": {"taskPrompt": _effective_prompt()},
+        "model": cfg.model or None,
         # 🔴 allowedTools 恒 []：治理 run 的工具面由 gateway 按 class 从 `contact_governance`
         # 矩阵行 + wrapCfgForAgentRun 的读面 belt 推导（读全给、写一个不给、只留三个建议通道），
         # 名单交集在这里没有合法用途；gateway 侧对 runKind='contact_governance' 也会强制 []。
@@ -344,6 +348,9 @@ def assemble_contact_governance_spec(job: Any) -> dict[str, Any]:
         "budget": {"maxRunSeconds": CONTACT_GOVERNANCE_MAX_RUN_SECONDS},
         "sessionTitle": "通讯录治理扫描",
     }
+    if cfg.fallback_models is not None:
+        spec["fallbackModels"] = list(cfg.fallback_models)
+    return spec
 
 
 def enqueue_governance_job(

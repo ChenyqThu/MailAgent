@@ -2,13 +2,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import asyncio
+from datetime import datetime as real_datetime
 from types import SimpleNamespace
 
 import pytest
 
 from src.contacts import governance
 from src.contacts.service import ContactError, set_manager
-from src.mail.new_watcher import _fire_contact_governance_if_due
+from src.mail.new_watcher import NewWatcher, _fire_contact_governance_if_due
 from src.mail.sync_store import SyncStore
 from src.sync.async_jobs import AsyncJob, AsyncJobRepository
 
@@ -159,11 +161,25 @@ def test_daily_tick_fires_once(db):
         ).fetchone()[0] == 1
 
 
-def test_spec_shape_and_flag_gate(monkeypatch):
+def test_spec_shape_and_flag_gate(db, monkeypatch):
     import src.config as config_module
 
+    _, path = db
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE report_agent SET model='provider:model', "
+            "fallback_models_json='[\"fallback:a\"]' "
+            "WHERE id='contact_governance_agent'"
+        )
+        conn.commit()
     monkeypatch.setattr(
-        config_module, "config", SimpleNamespace(contacts_enabled=True, contact_agent_enabled=True)
+        config_module,
+        "config",
+        SimpleNamespace(
+            contacts_enabled=True,
+            contact_agent_enabled=True,
+            sync_store_db_path=path,
+        ),
     )
     job = AsyncJob(
         job_id=7, job_type="contact_governance", target_kind="contact_directory",
@@ -174,6 +190,8 @@ def test_spec_shape_and_flag_gate(monkeypatch):
     )
     spec = governance.assemble_contact_governance_spec(job)
     assert spec["runKind"] == "contact_governance"
+    assert spec["model"] == "provider:model"
+    assert spec["fallbackModels"] == ["fallback:a"]
     # 🔴 WP7 批② —— toolPolicy 恰好两个键，多一个少一个都是安全语义变化：
     #   · allowedTools 恒 []（工具面由 gateway 按 class 推导，名单交集在这个 venue 没有合法用途）
     #   · skills = 挂载集。**不是可选润色**：gateway 的 per-agent skill MOUNT 门对任何带
@@ -191,6 +209,74 @@ def test_spec_shape_and_flag_gate(monkeypatch):
     with pytest.raises(ContactError) as exc_info:
         governance.assemble_contact_governance_spec(job)
     assert exc_info.value.code == "E_DISABLED"
+
+
+def test_scheduled_tick_uses_row_enabled_and_fire_hour(db, monkeypatch):
+    import src.mail.new_watcher as watcher_module
+
+    conn, path = db
+    conn.execute(
+        "UPDATE report_agent SET enabled=1, trigger_json='{\"fire_hour\":5}' "
+        "WHERE id='contact_governance_agent'"
+    )
+    conn.commit()
+    monkeypatch.setattr(watcher_module.settings, "contacts_enabled", True)
+    monkeypatch.setattr(watcher_module.settings, "contact_agent_enabled", True)
+
+    class FixedDateTime:
+        hour = 4
+
+        @classmethod
+        def now(cls):
+            return real_datetime(
+                2026,
+                8,
+                20,
+                cls.hour,
+                tzinfo=real_datetime.now().astimezone().tzinfo,
+            )
+
+    monkeypatch.setattr(watcher_module, "datetime", FixedDateTime)
+
+    fake = SimpleNamespace(
+        _last_contact_governance_check_at=None,
+        sync_store=SimpleNamespace(db_path=path),
+    )
+    asyncio.run(NewWatcher._contact_governance_tick(fake))
+    with sqlite3.connect(path) as check:
+        assert check.execute(
+            "SELECT COUNT(*) FROM async_jobs WHERE job_type='contact_governance'"
+        ).fetchone()[0] == 0
+
+    FixedDateTime.hour = 5
+    due = SimpleNamespace(
+        _last_contact_governance_check_at=None,
+        sync_store=SimpleNamespace(db_path=path),
+    )
+    asyncio.run(NewWatcher._contact_governance_tick(due))
+    with sqlite3.connect(path) as check:
+        assert check.execute(
+            "SELECT COUNT(*) FROM async_jobs WHERE job_type='contact_governance'"
+        ).fetchone()[0] == 1
+
+    conn.execute(
+        "UPDATE report_agent SET enabled=0 WHERE id='contact_governance_agent'"
+    )
+    conn.execute(
+        "DELETE FROM sync_state WHERE key=?",
+        (governance.CONTACT_GOVERNANCE_FIRE_KEY,),
+    )
+    conn.execute("DELETE FROM async_jobs WHERE job_type='contact_governance'")
+    conn.commit()
+    disabled = SimpleNamespace(
+        _last_contact_governance_check_at=None,
+        sync_store=SimpleNamespace(db_path=path),
+    )
+    asyncio.run(NewWatcher._contact_governance_tick(disabled))
+    with sqlite3.connect(path) as check:
+        assert check.execute(
+            "SELECT COUNT(*) FROM async_jobs WHERE job_type='contact_governance'"
+        ).fetchone()[0] == 0
 
 
 def test_default_prompt_has_five_categories_and_evidence_requirement():

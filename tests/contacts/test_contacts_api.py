@@ -10,6 +10,8 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
+from datetime import datetime
 from types import SimpleNamespace
 
 import pytest
@@ -964,6 +966,49 @@ def test_profile_refresh_env_flag_off(client):
     http, _, path = client
     _seed_contact(path, cid=1, name="Alice", emails=(("alice@x.com", 1),))
     response = http.post("/api/contacts/1/profile/refresh")
+    assert response.status_code == 403
+    assert response.json()["error"]["code"] == "E_DISABLED"
+
+
+def test_profile_daily_summary_aggregates_local_day_and_row_fire_hour(client):
+    http, settings, path = client
+    _enable_profile(path, settings)
+    now_ms = int(time.time() * 1000)
+    yesterday_ms = now_ms - 2 * 24 * 60 * 60 * 1000
+    for cid, status, attempted_at in (
+        (1, "ok", now_ms - 3000),
+        (2, "skipped", now_ms - 2000),
+        (3, "failed", now_ms - 1000),
+        (4, "ok", yesterday_ms),
+    ):
+        _seed_contact(path, cid=cid, name=f"C{cid}")
+        with _conn(path) as conn:
+            conn.execute(
+                "UPDATE contact SET profile_status=?, profile_attempted_at=? WHERE id=?",
+                (status, attempted_at, cid),
+            )
+            conn.commit()
+    with _conn(path) as conn:
+        conn.execute(
+            "UPDATE report_agent SET trigger_json='{\"fire_hour\":7,\"daily_limit\":50}' "
+            "WHERE id='contact_profile_agent'"
+        )
+        conn.commit()
+    data = _data(http.get("/api/contacts/profile/daily-summary"))
+    assert data == {
+        "date": datetime.now().astimezone().date().isoformat(),
+        "attempted": 3,
+        "ok": 1,
+        "skipped": 1,
+        "failed": 1,
+        "last_attempted_at": now_ms - 1000,
+        "fire_hour": 7,
+    }
+
+
+def test_profile_daily_summary_requires_profile_flag(client):
+    http, _, _ = client
+    response = http.get("/api/contacts/profile/daily-summary")
     assert response.status_code == 403
     assert response.json()["error"]["code"] == "E_DISABLED"
 

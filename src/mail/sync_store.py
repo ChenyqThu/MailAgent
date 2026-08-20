@@ -1540,7 +1540,10 @@ class SyncStore:
     #                evidence_fingerprint 支撑同批证据去重。
     #                幂等：CREATE TABLE/INDEX IF NOT EXISTS，重放结果不变。
     #                回滚：旧代码忽略本表；彻底清理需 DROP TABLE 后手工降版本。
-    DB_VERSION = 64
+    # v65 (2026-08-20): report_agent 播种 contact_governance_agent 专型行，
+    #                trigger_json 默认 fire_hour=5，enabled=0。INSERT OR IGNORE 保证重放
+    #                不覆盖 owner 已保存的启用、模型、提示词与排程。
+    DB_VERSION = 65
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -4314,6 +4317,38 @@ class SyncStore:
             except sqlite3.Error as e:
                 raise SyncStoreMigrationError(
                     f"v64 migration (contact_suggestion table): {e}"
+                ) from e
+        # === v65: Contact Governance 标准内建 agent 行 ===
+        if current_version < 65:
+            try:
+                _report_agent_cols_v65 = {
+                    row[1] for row in cursor.execute("PRAGMA table_info(report_agent)").fetchall()
+                }
+                _required_v65 = {
+                    "id", "type", "enabled", "title", "model", "prompt", "trigger_json", "updated_at"
+                }
+                if not _required_v65 <= _report_agent_cols_v65:
+                    missing = sorted(_required_v65 - _report_agent_cols_v65)
+                    raise SyncStoreMigrationError(
+                        f"v65 migration (contact_governance_agent seed): report_agent missing {missing}"
+                    )
+            except sqlite3.Error as e:
+                raise SyncStoreMigrationError(
+                    f"v65 migration (report_agent probe): {e}"
+                ) from e
+            try:
+                _governance_trigger = json.dumps({"fire_hour": 5}, ensure_ascii=False)
+                cursor.execute(
+                    "INSERT OR IGNORE INTO report_agent "
+                    "(id, type, enabled, title, model, prompt, trigger_json, updated_at) "
+                    "VALUES ('contact_governance_agent', 'contact_governance', 0, "
+                    "'通讯录治理', '', '', ?, ?)",
+                    (_governance_trigger, time.time()),
+                )
+                logger.info("v65 migration: contact_governance_agent seeded (enabled=0)")
+            except sqlite3.Error as e:
+                raise SyncStoreMigrationError(
+                    f"v65 migration (contact_governance_agent seed): {e}"
                 ) from e
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
