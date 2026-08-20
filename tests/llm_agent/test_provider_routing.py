@@ -321,15 +321,18 @@ def test_snapshot_failure_keeps_stale_snapshot(monkeypatch):
 
 
 def test_forced_tool_choice_extra_body_matrix():
-    assert pr.forced_tool_choice_extra_body("deepseek") == {
+    assert pr.forced_tool_choice_extra_body("deepseek", "anything") == {
         "thinking": {"type": "disabled"}
     }
-    # 其余协议（含 legacy 的 None / 空串）恒空 dict——merge 是 no-op
+    assert pr.forced_tool_choice_extra_body(
+        "openai-compatible", "deepseek-v4-flash"
+    ) == {"thinking": {"type": "disabled"}}
+    # 非 DeepSeek 模型的其余协议（含 legacy 的 None / 空串）恒空 dict——merge 是 no-op
     for proto in ("anthropic", "openai", "openai-compatible", "openrouter", "google", "", None):
-        assert pr.forced_tool_choice_extra_body(proto) == {}
+        assert pr.forced_tool_choice_extra_body(proto, "gpt-5.6") == {}
     # 返回副本：调用方 mutate 不污染单源表
-    leaked = pr.forced_tool_choice_extra_body("deepseek")
+    leaked = pr.forced_tool_choice_extra_body("deepseek", "deepseek-v4-pro")
     leaked["extra"] = 1
-    assert pr.forced_tool_choice_extra_body("deepseek") == {
+    assert pr.forced_tool_choice_extra_body("deepseek", "deepseek-v4-pro") == {
         "thinking": {"type": "disabled"}
     }

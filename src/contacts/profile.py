@@ -16,6 +16,7 @@ from loguru import logger
 
 from src.agents.fence import fence_email_envelope, fence_untrusted, sanitize_untrusted
 from src.config import config as app_config
+from src.contacts import governance
 from src.contacts import service as contact_service
 from src.contacts.profile_config import (
     ContactProfileAgentConfig,
@@ -53,6 +54,7 @@ class ProfileEvidence:
     substantive_chars: int
     first_internal_id: Optional[int]
     last_internal_id: Optional[int]
+    internal_ids: tuple[int, ...] = ()
 
 
 def _json_dict(raw: Any) -> Dict[str, Any]:
@@ -214,6 +216,7 @@ def build_profile_evidence(
         substantive_chars=substantive_chars,
         first_internal_id=min(ids) if ids else None,
         last_internal_id=max(ids) if ids else None,
+        internal_ids=tuple(ids),
     )
 
 
@@ -236,14 +239,36 @@ def _model_chain(cfg: ContactProfileAgentConfig) -> Optional[list[str]]:
 def _validate_payload(payload: Dict[str, Any], evidence: ProfileEvidence) -> Dict[str, Any]:
     validate(instance=payload, schema=PROFILE_TOOL_SCHEMA["input_schema"])
     if payload.get("skip") is True:
-        reason = str(payload.get("reason") or "insufficient evidence").strip()
+        reason_value = payload.get("reason")
+        reason = (
+            reason_value.strip()
+            if isinstance(reason_value, str) and reason_value.strip()
+            else "insufficient evidence"
+        )
         return {"skip": True, "reason": reason[:500]}
+    required_profile_keys = (
+        "summary",
+        "role_title",
+        "formal_name",
+        "department",
+        "topics",
+        "projects",
+        "communication_style",
+        "contact_info",
+        "evolution",
+        "contradictions",
+        "evidence_window",
+    )
+    missing_keys = [key for key in required_profile_keys if key not in payload]
+    if missing_keys:
+        raise ValidationError(
+            "non-skip profile is missing required fields: " + ", ".join(missing_keys)
+        )
     if not str(payload.get("summary") or "").strip():
         raise ValidationError("summary is required for a non-skip profile")
     normalized = dict(payload)
     normalized.pop("skip", None)
-    # schema 允许非 skip 产出带 "reason": null（见 profile_prompts oneOf 注释）——不入库。
-    normalized.pop("reason", None)
+    # schema 允许非 skip 产出带 "reason": null；分支校验后该字段不入库。
     normalized.pop("reason", None)
     normalized["evidence_window"] = {
         "from": evidence.first_internal_id,
@@ -255,6 +280,77 @@ def _validate_payload(payload: Dict[str, Any], evidence: ProfileEvidence) -> Dic
     if len(encoded) > 100_000:
         raise ValidationError("profile JSON exceeds 100000 characters")
     return normalized
+
+
+def _profile_identity_evidence(
+    conn: sqlite3.Connection, evidence: ProfileEvidence
+) -> list[dict[str, str]]:
+    items: list[dict[str, str]] = []
+    internal_ids = evidence.internal_ids or tuple(
+        internal_id
+        for internal_id in (evidence.first_internal_id, evidence.last_internal_id)
+        if internal_id is not None
+    )
+    for internal_id in dict.fromkeys(internal_ids):
+        row = conn.execute(
+            "SELECT m.message_id, m.subject, b.body_markdown "
+            "FROM email_metadata m LEFT JOIN email_body b ON b.internal_id=m.internal_id "
+            "WHERE m.internal_id=?",
+            (internal_id,),
+        ).fetchone()
+        if row is None:
+            continue
+        message_id = str(row["message_id"] or "").strip()
+        body = str(row["body_markdown"] or "")
+        quote = next((line.strip() for line in body.splitlines() if line.strip()), "")
+        if not quote:
+            quote = str(row["subject"] or "").strip()
+        if message_id and quote:
+            items.append({"message_id": message_id, "quote": quote[:500]})
+    return items
+
+
+def _create_profile_identity_suggestions(
+    conn: sqlite3.Connection,
+    *,
+    contact_id: int,
+    payload: Dict[str, Any],
+    evidence: ProfileEvidence,
+    now_ms: int,
+) -> None:
+    row = contact_service._require_contact(conn, contact_id)
+    locks = contact_service.parse_identity_locks(row["identity_locks_json"])
+    evidence_items = _profile_identity_evidence(conn, evidence)
+    suggestion_evidence = evidence_items[:3]
+    for field in ("role_title", "department", "formal_name"):
+        value = payload.get(field)
+        normalized_value = str(value).strip() if value is not None else ""
+        if (
+            not normalized_value
+            or field in locks
+            or normalized_value.casefold() == str(row[field] or "").strip().casefold()
+        ):
+            continue
+        if not suggestion_evidence:
+            logger.warning(
+                f"[contact-profile] contact={contact_id} identity suggestion skipped: "
+                f"no usable email evidence for {field}"
+            )
+            continue
+        try:
+            governance.create_suggestion(
+                conn,
+                suggestion_type="identity",
+                contact_ids=[contact_id],
+                payload={"field": field, "value": normalized_value},
+                evidence=suggestion_evidence,
+                now_ms=now_ms,
+            )
+        except Exception as exc:
+            logger.warning(
+                f"[contact-profile] contact={contact_id} identity suggestion failed "
+                f"for {field}: {exc}"
+            )
 
 
 def _anchor_tokens(value: Any) -> set[str]:
@@ -449,6 +545,19 @@ async def generate_contact_profile(
                     contact_id,
                 ),
             )
+            try:
+                _create_profile_identity_suggestions(
+                    conn,
+                    contact_id=contact_id,
+                    payload=payload,
+                    evidence=evidence,
+                    now_ms=now_ms,
+                )
+            except Exception as exc:
+                logger.warning(
+                    f"[contact-profile] contact={contact_id} identity suggestion stage "
+                    f"failed: {exc}"
+                )
         return "ok"
     except (LLMCallError, ValidationError, ValueError, TypeError, sqlite3.Error) as exc:
         _finish_failed(db_path, contact_id, now_ms=now_ms, error=str(exc))

@@ -468,10 +468,14 @@ class LLMClient:
             "tools": [_to_openai_tool(tool_schema)],
             "tool_choice": {"type": "function", "function": {"name": tool_name}},
         }
-        # classify 恒强制 tool_choice → 恒 merge per-protocol quirk（deepseek 须禁
-        # thinking 否则 400）。route=None（legacy 前缀路由）不注入，字节级不变。
+        # classify 恒强制 tool_choice → 恒 merge provider/model quirk（DeepSeek 须禁
+        # thinking）。route=None（legacy 前缀路由）不注入，字节级不变。
         if route is not None:
-            body.update(provider_routing.forced_tool_choice_extra_body(route.protocol))
+            body.update(
+                provider_routing.forced_tool_choice_extra_body(
+                    route.protocol, route.model_id
+                )
+            )
 
         t0 = time.monotonic()
         tool_args = ""
@@ -917,11 +921,13 @@ class LLMClient:
                 "tools": tools_payload,
                 "tool_choice": tool_choice,
             }
-            # 仅强制轮 merge per-protocol quirk（deepseek 禁 thinking）；auto 轮不注入
+            # 仅强制轮 merge provider/model quirk（DeepSeek 禁 thinking）；auto 轮不注入
             # ——保留 thinking 给推理用。route=None（legacy）不注入。
             if forced_final and route is not None:
                 body.update(
-                    provider_routing.forced_tool_choice_extra_body(route.protocol)
+                    provider_routing.forced_tool_choice_extra_body(
+                        route.protocol, route.model_id
+                    )
                 )
             turn = await self._openai_stream_turn(
                 http=http, path=path, body=body, model=model, ctx=f"iter={it}", route=route

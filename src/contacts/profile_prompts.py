@@ -10,15 +10,19 @@ PROFILE_TOOL_SCHEMA: Dict[str, Any] = {
     "name": PROFILE_TOOL_NAME,
     "description": (
         "Write one evidence-grounded contact profile, or return the explicit skip sentinel. "
+        "When skip is true, provide a non-empty reason; otherwise provide all 11 profile fields. "
         "Call this tool exactly once and never answer in plain text."
     ),
     "input_schema": {
         "type": "object",
         "additionalProperties": False,
+        # 刻意不在顶层使用 oneOf/anyOf/allOf/not：2026-08-19 真机事故确认，
+        # CRS/上游遇到 Anthropic tool input_schema 顶层组合子会返回空事件流。
+        # skip 与完整画像的分支语义下沉到 profile._validate_payload 写库前校验。
         "properties": {
             "skip": {"type": "boolean"},
-            # null 只为非 skip 分支放行（模型顺手输出 "reason": null）；skip 分支在
-            # oneOf 里另行收紧为非空字符串。
+            # null 为非 skip 分支放行（模型可能顺手输出 "reason": null）；分支语义
+            # 由 Python 校验，避免在 schema 顶层引入不抗上游漂移的组合子。
             "reason": {"type": ["string", "null"], "maxLength": 500},
             "summary": {"type": "string", "maxLength": 2000},
             "role_title": {"type": ["string", "null"]},
@@ -66,35 +70,6 @@ PROFILE_TOOL_SCHEMA: Dict[str, Any] = {
                 },
             },
         },
-        "oneOf": [
-            {
-                "required": ["skip", "reason"],
-                "properties": {
-                    "skip": {"const": True},
-                    "reason": {"type": "string", "minLength": 1},
-                },
-            },
-            {
-                # 非 skip 分支曾用 not-required 禁 reason —— 但模型被 prompt 提醒 skip 规则后
-                # 会顺手输出 "reason": null，required 判「属性存在」→ null 也撞禁令 → oneOf
-                # 全灭（2026-08-19 真机全员生成失败）。改成只允许 null：字符串 reason 仍拒
-                #（画像+理由的混合形态还是非法），无害的 null 放行、写库前 pop 掉。
-                "properties": {"skip": {"const": False}, "reason": {"type": "null"}},
-                "required": [
-                    "summary",
-                    "role_title",
-                    "formal_name",
-                    "department",
-                    "topics",
-                    "projects",
-                    "communication_style",
-                    "contact_info",
-                    "evolution",
-                    "contradictions",
-                    "evidence_window",
-                ]
-            },
-        ],
     },
 }
 

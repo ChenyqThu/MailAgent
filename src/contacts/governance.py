@@ -209,11 +209,19 @@ def create_suggestion(
     _guard_locked_fields(conn, suggestion_type, normalized_ids, payload, normalized_evidence)
     ids_json = _json(normalized_ids)
     fingerprint = evidence_fingerprint(normalized_evidence)
-    duplicate = conn.execute(
+    duplicate_sql = (
         "SELECT id, status FROM contact_suggestion WHERE type=? AND contact_ids_json=? "
         "AND evidence_fingerprint=? AND status IN ('pending','ignored','blocked') "
-        "ORDER BY id DESC LIMIT 1",
-        (suggestion_type, ids_json, fingerprint),
+    )
+    duplicate_params: tuple[Any, ...] = (suggestion_type, ids_json, fingerprint)
+    if suggestion_type == "identity":
+        # identity 建议是单字段粒度：同证据可分别更正多个字段。value 有意不进键，
+        # 保持「同字段建议一旦被忽略，不因 LLM 换措辞/新值而复活」的语义。
+        duplicate_sql += "AND json_extract(payload_json, '$.field')=? "
+        duplicate_params += (str(payload.get("field") or ""),)
+    duplicate = conn.execute(
+        duplicate_sql + "ORDER BY id DESC LIMIT 1",
+        duplicate_params,
     ).fetchone()
     if duplicate is not None:
         return {"id": int(duplicate["id"]), "created": False, "status": duplicate["status"]}

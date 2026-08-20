@@ -83,10 +83,11 @@ def _seed_mail(
     sender_email = sender_email or f"p{contact_id}@example.com"
     with _conn(path) as conn:
         conn.execute(
-            "INSERT INTO email_metadata (internal_id, subject, sender, sender_email, "
-            "date_received, mailbox) VALUES (?,?,?,?,?,?)",
+            "INSERT INTO email_metadata (internal_id, message_id, subject, sender, sender_email, "
+            "date_received, mailbox) VALUES (?,?,?,?,?,?,?)",
             (
                 internal_id,
+                f"message-{internal_id}",
                 subject,
                 f"Sender <{sender_email}>",
                 sender_email,
@@ -377,7 +378,62 @@ def _valid_payload():
     }
 
 
-def test_profile_schema_requires_structured_evolution_and_unambiguous_skip():
+def _set_contact_identity(
+    path,
+    *,
+    role_title="Project Manager",
+    department="PMO",
+    formal_name="Person 1",
+    locks=None,
+):
+    with _conn(path) as conn:
+        conn.execute(
+            "UPDATE contact SET role_title=?, department=?, formal_name=?, "
+            "identity_locks_json=? WHERE id=1",
+            (
+                role_title,
+                department,
+                formal_name,
+                json.dumps(locks) if locks else None,
+            ),
+        )
+        conn.commit()
+
+
+def _identity_suggestions(path):
+    with _conn(path) as conn:
+        rows = conn.execute(
+            "SELECT * FROM contact_suggestion WHERE type='identity' ORDER BY id"
+        ).fetchall()
+    return [
+        {
+            "id": row["id"],
+            "payload": json.loads(row["payload_json"]),
+            "evidence": json.loads(row["evidence_json"]),
+            "status": row["status"],
+        }
+        for row in rows
+    ]
+
+
+def _profile_evidence():
+    return profile.ProfileEvidence(
+        mode="first",
+        user_content="evidence",
+        mail_count=3,
+        substantive_chars=100,
+        first_internal_id=10,
+        last_internal_id=30,
+    )
+
+
+def test_profile_schema_has_no_top_level_combinators():
+    """2026-08-19 CRS 空事件流事故：顶层组合子会让 Anthropic 腿全灭。"""
+    schema = PROFILE_TOOL_SCHEMA["input_schema"]
+    assert not {"oneOf", "anyOf", "allOf", "not"} & schema.keys()
+
+
+def test_profile_schema_requires_structured_evolution_and_keeps_branch_logic_in_python():
     assert set(PROFILE_TOOL_SCHEMA["input_schema"]["properties"]) == {
         "skip",
         "reason",
@@ -403,23 +459,51 @@ def test_profile_schema_requires_structured_evolution_and_unambiguous_skip():
             schema=PROFILE_TOOL_SCHEMA["input_schema"],
         )
 
-    ambiguous_skip = _valid_payload()
-    ambiguous_skip.update({"skip": False, "reason": "not actually skipped"})
-    with pytest.raises(ValidationError):
-        validate(
-            instance=ambiguous_skip,
-            schema=PROFILE_TOOL_SCHEMA["input_schema"],
-        )
-
-    # 2026-08-19 真机全员生成失败的回归：prompt 强调 skip 规则后模型会顺手输出
-    # "skip": false 甚至 "reason": null —— 两者都必须放行（null 无害，写库前 pop），
-    # 只有字符串 reason（上面那条）保持非法。
+    # schema 只负责形状；模型顺手输出的显式 false / null 由 Python 分支校验处理。
     explicit_not_skip = _valid_payload()
     explicit_not_skip["skip"] = False
     validate(instance=explicit_not_skip, schema=PROFILE_TOOL_SCHEMA["input_schema"])
     null_reason = _valid_payload()
     null_reason.update({"skip": False, "reason": None})
     validate(instance=null_reason, schema=PROFILE_TOOL_SCHEMA["input_schema"])
+
+
+def test_validate_payload_accepts_skip_and_falls_back_for_empty_reason():
+    assert profile._validate_payload(
+        {"skip": True, "reason": "insufficient evidence"}, _profile_evidence()
+    ) == {"skip": True, "reason": "insufficient evidence"}
+
+    assert profile._validate_payload(
+        {"skip": True, "reason": "  "}, _profile_evidence()
+    ) == {"skip": True, "reason": "insufficient evidence"}
+    assert profile._validate_payload({"skip": True}, _profile_evidence()) == {
+        "skip": True,
+        "reason": "insufficient evidence",
+    }
+
+
+def test_validate_payload_accepts_complete_non_skip_and_removes_sentinel_fields():
+    payload = _valid_payload()
+    payload.update({"skip": False, "reason": None})
+
+    normalized = profile._validate_payload(payload, _profile_evidence())
+
+    assert "skip" not in normalized
+    assert "reason" not in normalized
+    assert normalized["evidence_window"] == {
+        "from": 10,
+        "to": 30,
+        "mail_count": 3,
+        "mode": "first",
+    }
+
+
+def test_validate_payload_reports_missing_non_skip_fields():
+    payload = _valid_payload()
+    del payload["department"]
+
+    with pytest.raises(ValidationError, match="department"):
+        profile._validate_payload(payload, _profile_evidence())
 
 
 @pytest.mark.asyncio
@@ -505,6 +589,109 @@ async def test_generation_g1_skip_fail_closed_skip_and_success(db):
         assert row["profile_model"] == "test:model"
         assert row["profile_error"] is None
         assert saved["evidence_window"]["mail_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_successful_profile_creates_identity_suggestion_for_difference(db):
+    _seed_contact(db, 1, mail_count=50)
+    _set_contact_identity(db, role_title="Coordinator", department="Operations")
+    _seed_mail(db, 1, 1, "Signature: Project Manager at PMO. " * 20)
+    assert profile.claim_profile_run(db, 1)
+
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(_valid_payload())
+    ) == "ok"
+
+    suggestions = _identity_suggestions(db)
+    assert [item["payload"] for item in suggestions] == [
+        {"field": "role_title", "value": "Project Manager"},
+        {"field": "department", "value": "PMO"},
+    ]
+    expected_evidence = [
+        {
+            "message_id": "message-1",
+            "quote": ("Signature: Project Manager at PMO. " * 20)[:500],
+        }
+    ]
+    assert suggestions[0]["evidence"] == expected_evidence
+    assert suggestions[1]["evidence"] == expected_evidence
+
+
+@pytest.mark.asyncio
+async def test_successful_profile_does_not_suggest_normalized_equal_identity(db):
+    _seed_contact(db, 1, mail_count=50)
+    _set_contact_identity(db, role_title="  project manager  ")
+    _seed_mail(db, 1, 1, "Identity evidence. " * 20)
+    assert profile.claim_profile_run(db, 1)
+
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(_valid_payload())
+    ) == "ok"
+    assert _identity_suggestions(db) == []
+
+
+@pytest.mark.asyncio
+async def test_successful_profile_does_not_suggest_locked_identity_field(db):
+    _seed_contact(db, 1, mail_count=50)
+    _set_contact_identity(
+        db, role_title="Coordinator", locks={"role_title": 1_000_000}
+    )
+    _seed_mail(db, 1, 1, "Signature: Project Manager. " * 20)
+    assert profile.claim_profile_run(db, 1)
+
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(_valid_payload())
+    ) == "ok"
+    assert _identity_suggestions(db) == []
+
+
+@pytest.mark.asyncio
+async def test_repeated_profile_run_does_not_revive_ignored_identity_suggestion(db):
+    _seed_contact(db, 1, mail_count=50)
+    _set_contact_identity(db, role_title="Coordinator")
+    _seed_mail(db, 1, 1, "Signature: Project Manager. " * 20)
+    assert profile.claim_profile_run(db, 1)
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(_valid_payload()), full_refresh=True
+    ) == "ok"
+    first = _identity_suggestions(db)[0]
+    with _conn(db) as conn:
+        profile.governance.ignore_suggestion(conn, first["id"], now_ms=2_000_000)
+        conn.commit()
+
+    assert profile.claim_profile_run(db, 1)
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(_valid_payload()), full_refresh=True
+    ) == "ok"
+
+    suggestions = _identity_suggestions(db)
+    assert len(suggestions) == 1
+    assert suggestions[0]["status"] == "ignored"
+
+
+@pytest.mark.asyncio
+async def test_identity_suggestion_failure_does_not_fail_profile(db, monkeypatch):
+    _seed_contact(db, 1, mail_count=50)
+    _set_contact_identity(db, role_title="Coordinator")
+    _seed_mail(db, 1, 1, "Signature: Project Manager. " * 20)
+    def fail_suggestion_stage(*args, **kwargs):
+        raise RuntimeError("queue unavailable")
+
+    monkeypatch.setattr(
+        profile, "_create_profile_identity_suggestions", fail_suggestion_stage
+    )
+    assert profile.claim_profile_run(db, 1)
+
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(_valid_payload())
+    ) == "ok"
+    with _conn(db) as conn:
+        row = conn.execute(
+            "SELECT profile_status, profile_json, profile_error FROM contact WHERE id=1"
+        ).fetchone()
+    assert row["profile_status"] == "ok"
+    assert json.loads(row["profile_json"])["role_title"] == "Project Manager"
+    assert row["profile_error"] is None
 
 
 @pytest.mark.asyncio

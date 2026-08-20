@@ -161,8 +161,10 @@ _FORCED_TOOL_CHOICE_EXTRA_BODY: Dict[str, Dict[str, Any]] = {
 }
 
 
-def forced_tool_choice_extra_body(protocol: Optional[str]) -> Dict[str, Any]:
-    """强制 tool_choice 时须 merge 进请求体的 per-protocol extra body（quirk 单源）。
+def forced_tool_choice_extra_body(
+    protocol: Optional[str], model_id: Optional[str]
+) -> Dict[str, Any]:
+    """强制 tool_choice 时须 merge 进请求体的 provider/model extra body（quirk 单源）。
 
     DeepSeek 官方端点实测（2026-07-13，api.deepseek.com，deepseek-v4-flash/-pro）：
     当前模型全系默认 thinking 模式，thinking 下强制指名 tool_choice
@@ -170,13 +172,16 @@ def forced_tool_choice_extra_body(protocol: Optional[str]) -> Dict[str, Any]:
     "Thinking mode does not support this tool_choice"；``enable_thinking:false``
     不被识别；唯一可行解 = 请求体加 ``{"thinking": {"type": "disabled"}}``。
 
-    语义注记：强制结构化输出本就不需要 thinking，禁用同时省 token。仅
-    ``protocol='deepseek'`` 生效——经 openai-compatible 中转接 DeepSeek 的行不覆盖
-    （协议判不出上游是 DeepSeek），作为已知限制记录在
-    docs/reference/llm-agent/llm-provider-registry.md §11。auto 轮不注入（保留
-    thinking 推理能力），由调用方（client.py）保证。
+    2026-08-19 又实测 opencode openai-compatible 中转的 deepseek-v4-flash 在
+    thinking 模式下强制 tool_choice 会返回空心参数，因此除 ``protocol='deepseek'``
+    外，也按 ``model_id`` 的 ``deepseek`` 前缀识别中转行。代价是会向
+    openai-compatible 请求体写入 DeepSeek 私有字段；透传型网关（如 opencode）无碍，
+    严格拒绝未知字段的网关可能报错。auto 轮仍不注入（保留 thinking 推理能力），
+    由调用方（client.py）保证。
     """
-    return dict(_FORCED_TOOL_CHOICE_EXTRA_BODY.get(protocol or "", {}))
+    is_deepseek_model = (model_id or "").lower().startswith("deepseek")
+    quirk_protocol = "deepseek" if is_deepseek_model else (protocol or "")
+    return dict(_FORCED_TOOL_CHOICE_EXTRA_BODY.get(quirk_protocol, {}))
 
 
 # ---------------------------------------------------------------------------

@@ -69,11 +69,33 @@ def test_evidence_validation_fail_closed(db, evidence, code):
     assert exc_info.value.code == code
 
 
-def test_fingerprint_dedupes_ignored_suggestion(db):
+def test_identity_dedupe_allows_two_fields_from_the_same_evidence(db):
+    conn, _ = db
+    organization = _proposal(
+        conn, payload={"field": "organization", "value": "ACME"}
+    )
+    department = _proposal(
+        conn, payload={"field": "department", "value": "Platform"}
+    )
+    assert organization["created"] is True
+    assert department["created"] is True
+    assert organization["id"] != department["id"]
+
+
+def test_identity_dedupe_reuses_same_field_and_evidence(db):
+    conn, _ = db
+    first = _proposal(conn)
+    second = _proposal(conn)
+    assert second == {"id": first["id"], "created": False, "status": "pending"}
+
+
+def test_identity_ignored_field_does_not_revive_for_a_new_value(db):
     conn, _ = db
     first = _proposal(conn)
     governance.ignore_suggestion(conn, first["id"], now_ms=2000)
-    second = _proposal(conn)
+    second = _proposal(
+        conn, payload={"field": "organization", "value": "ACME Corporation"}
+    )
     assert second == {"id": first["id"], "created": False, "status": "ignored"}
 
 
