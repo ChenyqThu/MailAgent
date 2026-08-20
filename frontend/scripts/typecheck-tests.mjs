@@ -27,10 +27,13 @@ const root = join(dirname(fileURLToPath(import.meta.url)), '..')
 const BASELINE = join(root, 'tests', 'typecheck-baseline.json')
 const update = process.argv.includes('--update')
 
-/** 跑 tsc 拿原始输出。tsc 有错时退出码非 0 —— 那是预期，不是失败。 */
+/** 跑 tsc 拿原始输出。tsc 有错时退出码非 0 —— 那是预期，不是失败。
+ *  🔴 不用 `node_modules/.bin/tsc`：那是 POSIX shell shim，Windows 上 spawnSync
+ *  直接 ENOENT（v2.17.0 首跑 Win CI 实证）。用 node 跑 typescript 包的 JS 入口。 */
 function runTsc() {
+  const tscJs = join(root, 'node_modules', 'typescript', 'bin', 'tsc')
   try {
-    execFileSync('node_modules/.bin/tsc', ['--noEmit', '-p', 'tsconfig.tests.json'], {
+    execFileSync(process.execPath, [tscJs, '--noEmit', '-p', 'tsconfig.tests.json'], {
       cwd: root,
       encoding: 'utf8',
       stdio: ['ignore', 'pipe', 'pipe']
