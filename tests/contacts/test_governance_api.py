@@ -107,6 +107,28 @@ def test_manual_run_idempotent_and_status(api):
     assert status.json()["data"]["enabled"] is True
 
 
+def test_agent_status_exposes_latest_scan_result(api):
+    client, _, path = api
+    empty = client.get("/api/contacts/agent/status")
+    assert empty.status_code == 200
+    assert empty.json()["data"]["last_scan_status"] is None
+    assert empty.json()["data"]["last_scan_error"] is None
+
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO async_jobs "
+            "(job_type, status, last_error, created_at, updated_at) "
+            "VALUES (?, 'failed', 'E_DISABLED', 123.0, 123.0)",
+            ("contact_governance",),
+        )
+        conn.commit()
+
+    failed = client.get("/api/contacts/agent/status")
+    assert failed.status_code == 200
+    assert failed.json()["data"]["last_scan_status"] == "failed"
+    assert failed.json()["data"]["last_scan_error"] == "E_DISABLED"
+
+
 def test_contact_agent_flag_is_second_gate(api):
     client, settings, _ = api
     settings.contact_agent_enabled = False

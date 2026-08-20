@@ -193,7 +193,8 @@ def test_spec_shape_and_flag_gate(monkeypatch):
     assert exc_info.value.code == "E_DISABLED"
 
 
-def test_default_prompt_has_five_constraints():
+def test_default_prompt_has_five_categories_and_evidence_requirement():
     prompt = governance.default_governance_prompt()
     assert "通讯录管理员" in prompt
     assert all(f"{number}." in prompt for number in range(1, 6))
+    assert "message_id" in prompt
