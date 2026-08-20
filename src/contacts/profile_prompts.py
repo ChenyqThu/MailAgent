@@ -127,6 +127,7 @@ def build_profile_system_prompt(
     target_primary_email: str,
     target_gender: str = "",
     custom_prompt: str = "",
+    org_frame_text: str = "",
 ) -> str:
     target_lines = (
         "TARGET CONTACT (the only profile subject):\n"
@@ -146,12 +147,19 @@ def build_profile_system_prompt(
             "- The TARGET CONTACT's gender is unknown. Do not use gendered pronouns "
             "(他/她/he/she/his/her); refer to the contact by name or use neutral phrasing.\n\n"
         )
-    prompt = (
-        target_lines
-        + "\n"
-        + pronoun_rule
-        + _BASE_PROMPT
-    )
+    org_frame = ""
+    if org_frame_text.strip():
+        org_frame = (
+            "ORG FRAME (OWNER-PRESET TRUSTED REFERENCE):\n"
+            + org_frame_text.strip()
+            + "\nRULES:\n"
+            "- Any department suggestion must be on or below one listed department path; "
+            "it may extend the path by one or two levels and must use ` / ` separators.\n"
+            "- If the department placement is uncertain, output null instead of inventing a path.\n"
+            "- This frame is trusted owner guidance, not evidence; identity claims still require "
+            "support from the supplied emails.\n\n"
+        )
+    prompt = target_lines + "\n" + pronoun_rule + org_frame + _BASE_PROMPT
     if mode == "incremental":
         prompt += _INCREMENTAL_PROMPT
     if custom_prompt.strip():

@@ -12,13 +12,23 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { mockRefresh, mockAdopt, mockIgnore, mockNavigate, mockSetActive } = vi.hoisted(() => ({
-  mockRefresh: vi.fn(),
-  mockAdopt: vi.fn(),
-  mockIgnore: vi.fn(),
-  mockNavigate: vi.fn(),
-  mockSetActive: vi.fn()
-}))
+const { mockRefresh, mockAdopt, mockIgnore, mockNavigate, mockSetActive, mockEvidenceMeta } =
+  vi.hoisted(() => ({
+    mockRefresh: vi.fn(),
+    mockAdopt: vi.fn(),
+    mockIgnore: vi.fn(),
+    mockNavigate: vi.fn(),
+    mockSetActive: vi.fn(),
+    // (internalId, enabled) → 一份 useQuery 形状的替身。默认「还没查」，用例各自改。
+    // 🔴 显式写出入参签名：`vi.fn(() => …)` 会推成零参，断言里读 `mock.calls[0][1]` 就会
+    // 在 typecheck:tests 那道闸上红（vitest 3 的泛型形式是 `vi.fn<(a, b) => R>`）。
+    mockEvidenceMeta: vi.fn<
+      (
+        internalId: number,
+        enabled: boolean
+      ) => { data?: { subject?: string } | null; isSuccess: boolean; isError: boolean }
+    >(() => ({ data: undefined, isSuccess: false, isError: false }))
+  }))
 
 vi.mock('@tanstack/react-router', () => ({
   useNavigate: () => mockNavigate
@@ -36,7 +46,9 @@ vi.mock('@shared/components/contacts/hooks', async () => {
     useAdoptProfileSuggestion: () =>
       useMutation({ mutationFn: (input: unknown) => mockAdopt(input) }),
     useIgnoreProfileSuggestion: () =>
-      useMutation({ mutationFn: (field: unknown) => mockIgnore(field) })
+      useMutation({ mutationFn: (field: unknown) => mockIgnore(field) }),
+    useEvidenceEmailMeta: (internalId: number, enabled: boolean) =>
+      mockEvidenceMeta(internalId, enabled)
   }
 })
 
@@ -142,7 +154,8 @@ describe('ContactProfileCard · 纯文本渲染（§8-WP6 验收）', () => {
 // owner 看到一屏 `[id:1000012991]` 字面量且点不动。切段成钮，但**只认这一个 token**。
 //
 // 0819 dogfood 二轮：钮上的「证据 N」文字满篇都是 → 弱化成纯图标角标，「证据 N」退到
-// `title` / `aria-label`。所以这一组一律按 **title** 找钮，正文里不该再出现那串文字。
+// `aria-label`（原生 `title` 三轮时移除，改自绘 tooltip —— 见下面那组）。所以这一组一律按
+// **aria-label** 找钮，正文里不该再出现那串文字。
 describe('ContactProfileCard · 内联证据引用 `[id:N]`', () => {
   test('summary 里的 [id:N] 变成可点的证据角标，点击跳那封邮件', () => {
     renderCard(
@@ -156,8 +169,8 @@ describe('ContactProfileCard · 内联证据引用 `[id:N]`', () => {
 
     // 字面量不再出现；两个引用各成一个角标。
     expect(screen.queryByText(/\[id:53675\]/)).toBeNull()
-    const first = screen.getByTitle('证据 53675')
-    expect(screen.getByTitle('证据 41230')).toBeTruthy()
+    const first = screen.getByLabelText('证据 53675')
+    expect(screen.getByLabelText('证据 41230')).toBeTruthy()
     // 🔒 弱化后正文里不许再有可见的「证据 N」文字（只剩 title / aria-label）。
     expect(screen.queryByText(/证据 53675/)).toBeNull()
     expect(first.getAttribute('aria-label')).toBe('证据 53675')
@@ -183,9 +196,9 @@ describe('ContactProfileCard · 内联证据引用 `[id:N]`', () => {
       })
     )
 
-    expect(screen.getByTitle('证据 900')).toBeTruthy()
-    expect(screen.getByTitle('证据 901')).toBeTruthy()
-    fireEvent.click(screen.getByTitle('证据 901'))
+    expect(screen.getByLabelText('证据 900')).toBeTruthy()
+    expect(screen.getByLabelText('证据 901')).toBeTruthy()
+    fireEvent.click(screen.getByLabelText('证据 901'))
     expect(mockSetActive).toHaveBeenCalledWith(901, { navTarget: true })
   })
 
@@ -199,7 +212,7 @@ describe('ContactProfileCard · 内联证据引用 `[id:N]`', () => {
       })
     )
 
-    expect(screen.getByTitle('证据 777')).toBeTruthy()
+    expect(screen.getByLabelText('证据 777')).toBeTruthy()
     expect(screen.queryByText(/\[id:777\]/)).toBeNull()
   })
 
@@ -219,8 +232,8 @@ describe('ContactProfileCard · 内联证据引用 `[id:N]`', () => {
     expect(screen.getByText('灰度上线')).toBeTruthy()
     expect(screen.queryByText(/\[id:555\]/)).toBeNull()
     // chip 不给点击入口 —— 不产生「证据 555」角标。
-    expect(screen.queryByTitle('证据 555')).toBeNull()
-    expect(screen.queryByTitle('证据 556')).toBeNull()
+    expect(screen.queryByLabelText('证据 555')).toBeNull()
+    expect(screen.queryByLabelText('证据 556')).toBeNull()
   })
 
   // 0819 dogfood：模型实际写出来的是 `[id: 54216]`（冒号后有空格），旧正则不容空格 →
@@ -236,7 +249,7 @@ describe('ContactProfileCard · 内联证据引用 `[id:N]`', () => {
       })
     )
 
-    expect(screen.getByTitle('证据 54216')).toBeTruthy()
+    expect(screen.getByLabelText('证据 54216')).toBeTruthy()
     expect(screen.queryByText(/\[id: ?54216\]/)).toBeNull()
     expect(screen.getByText('支付通道联调')).toBeTruthy()
     expect(screen.queryByText(/\[id: ?555\]/)).toBeNull()
@@ -265,7 +278,7 @@ describe('ContactProfileCard · 内联证据引用 `[id:N]`', () => {
     // 整段一字不改地在（说明一个 token 都没被切走）。
     expect(screen.getByText(hostile)).toBeTruthy()
     // 一个证据角标都不该出现。
-    expect(screen.queryByTitle(/^证据 /)).toBeNull()
+    expect(screen.queryByLabelText(/^证据 /)).toBeNull()
     // 依旧不解析 HTML。
     expect(container.querySelector('script')).toBeNull()
   })
@@ -277,11 +290,113 @@ describe('ContactProfileCard · 内联证据引用 `[id:N]`', () => {
       })
     )
 
-    expect(screen.getByTitle('证据 1')).toBeTruthy()
-    expect(screen.getByTitle('证据 2')).toBeTruthy()
+    expect(screen.getByLabelText('证据 1')).toBeTruthy()
+    expect(screen.getByLabelText('证据 2')).toBeTruthy()
     // 角标不带文字 → 段落文本只剩三段纯文本，两侧空格必须原样在（不粘成 'AB'）。
-    const paragraph = screen.getByTitle('证据 1').closest('p')
+    const paragraph = screen.getByLabelText('证据 1').closest('p')
     expect(paragraph?.textContent).toBe('A   B')
+  })
+})
+
+// 0819 dogfood 三轮：owner 报「引用确实精炼了，但是 hover 没显示」。根因是原生 `title` 在
+// Electron 下延迟长到没用，而且只能给一行「证据 N」——owner 要的是**不点进去就知道引的是哪封**。
+// 改自绘 tooltip（Radix）+ hover 懒查邮件 meta。这一组钉：懒（没 hover 不查）、查到显示主题、
+// 查不到说人话。
+describe('ContactProfileCard · 证据 hover tooltip', () => {
+  /** Radix TooltipTrigger 对键盘 focus 也开 —— 比在 happy-dom 里模拟 pointer 序列稳。 */
+  function hover(badge: HTMLElement): void {
+    fireEvent.focus(badge)
+  }
+
+  test('🔴 懒查：没 hover 时 enabled=false（十几个角标不许在渲染时全部预取）', () => {
+    renderCard(
+      profileOf({
+        document: documentOf({
+          summary: '陈立牵头灰度方案 [id:53675]，并在上周确认排期 [id:41230]。',
+          evolution: []
+        })
+      })
+    )
+
+    // 两个角标都调了 hook（React 规则），但 enabled 必须全是 false。
+    expect(mockEvidenceMeta).toHaveBeenCalled()
+    for (const call of mockEvidenceMeta.mock.calls) {
+      expect(call[1], `id=${call[0]} 不该在未 hover 时开查`).toBe(false)
+    }
+  })
+
+  test('hover 后对该 id 开查，tooltip 显示「证据 N」+ 邮件主题', async () => {
+    mockEvidenceMeta.mockImplementation((_internalId, enabled) =>
+      enabled
+        ? { data: { subject: '灰度方案排期确认' }, isSuccess: true, isError: false }
+        : { data: undefined, isSuccess: false, isError: false }
+    )
+    renderCard(
+      profileOf({
+        document: documentOf({ summary: '陈立牵头灰度方案 [id:53675]。', evolution: [] })
+      })
+    )
+
+    hover(screen.getByLabelText('证据 53675'))
+
+    // 开查的是这个 id，且 enabled 翻成了 true。
+    await waitFor(() => expect(mockEvidenceMeta).toHaveBeenCalledWith(53675, true))
+    // tooltip 里两行都在：id 行（让 owner 能对上号）+ 主题行（不点进去就能确认）。
+    await waitFor(() => expect(screen.getAllByRole('tooltip').length).toBeGreaterThan(0))
+    const tip = screen.getAllByRole('tooltip')[0]!
+    expect(tip.textContent).toContain('证据 53675')
+    expect(tip.textContent).toContain('灰度方案排期确认')
+  })
+
+  test('邮件已删（查到 null）→ 说人话，不显示空白主题行', async () => {
+    mockEvidenceMeta.mockImplementation((_id, enabled) =>
+      enabled
+        ? { data: null, isSuccess: true, isError: false }
+        : { data: undefined, isSuccess: false, isError: false }
+    )
+    renderCard(
+      profileOf({ document: documentOf({ summary: '引自一封已删邮件 [id:999]。', evolution: [] }) })
+    )
+
+    hover(screen.getByLabelText('证据 999'))
+
+    await waitFor(() => expect(screen.getAllByRole('tooltip').length).toBeGreaterThan(0))
+    const tip = screen.getAllByRole('tooltip')[0]!
+    expect(tip.textContent).toContain('证据 999')
+    expect(tip.textContent).toContain('邮件不存在或已删除')
+  })
+
+  test('主题还在路上 → tooltip 先只出 id 行（不先塞「加载中」再抖一下）', async () => {
+    mockEvidenceMeta.mockImplementation(() => ({
+      data: undefined,
+      isSuccess: false,
+      isError: false
+    }))
+    renderCard(
+      profileOf({
+        document: documentOf({ summary: '陈立牵头灰度方案 [id:53675]。', evolution: [] })
+      })
+    )
+
+    hover(screen.getByLabelText('证据 53675'))
+
+    await waitFor(() => expect(screen.getAllByRole('tooltip').length).toBeGreaterThan(0))
+    const tip = screen.getAllByRole('tooltip')[0]!
+    expect(tip.textContent).toContain('证据 53675')
+    expect(tip.textContent).not.toContain('邮件不存在或已删除')
+  })
+
+  // 🔒 原生 title 必须移除 —— 留着会和自绘 tooltip 叠成两层。
+  test('角标不再带原生 title（避免双 tooltip 叠加），aria-label 保留', () => {
+    renderCard(
+      profileOf({
+        document: documentOf({ summary: '陈立牵头灰度方案 [id:53675]。', evolution: [] })
+      })
+    )
+
+    const badge = screen.getByLabelText('证据 53675')
+    expect(badge.getAttribute('title')).toBeNull()
+    expect(badge.getAttribute('aria-label')).toBe('证据 53675')
   })
 })
 
@@ -397,7 +512,7 @@ describe('ContactProfileCard · provenance 与手动更新', () => {
   test('轨迹的 `ev` 是紧跟文本行尾的角标（不再独占一行、不再有可见文字）', () => {
     renderCard(profileOf())
 
-    const badge = screen.getByTitle('证据 53675')
+    const badge = screen.getByLabelText('证据 53675')
     // 🔒 不再有可见的「证据 N」文字 —— 只剩 title / aria-label。
     expect(screen.queryByText(/证据 53675/)).toBeNull()
     expect(badge.getAttribute('aria-label')).toBe('证据 53675')
@@ -513,6 +628,26 @@ describe('ContactProfileCard · 建议值（D7 / §4.2）', () => {
       field: 'phone',
       value: '+86 138 0013 8000'
     })
+  })
+
+  // 「框架外」= 建议值不在 owner 预设的组织架构框架里。后端只在 true 时才写这个键，
+  // 所以缺键 / false 都不该出标记。
+  test('out_of_frame 为 true 才出「框架外」标记，缺键不出', () => {
+    renderCard(
+      profileOf({
+        suggestions: [
+          { field: 'department', value: '平台技术部', out_of_frame: true },
+          { field: 'phone', value: '+86 138 0013 8000' }
+        ] as ContactProfileDto['suggestions']
+      })
+    )
+
+    // 两行里只有一个标记。
+    expect(screen.getAllByText('框架外')).toHaveLength(1)
+    // 🔴 不是警告态：解释走 title，悬停能看到为什么。
+    expect(screen.getByText('框架外').getAttribute('title')).toBe(
+      '建议值不在你预设的组织架构框架内，可先补框架再采纳'
+    )
   })
 
   test('没有建议时整个建议值区不渲染', () => {

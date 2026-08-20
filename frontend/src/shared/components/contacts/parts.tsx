@@ -44,16 +44,20 @@ type PipTone = 'neutral' | 'ok' | 'info' | 'warn' | 'critical'
 export function ContactPip({
   tone = 'neutral',
   icon,
+  title,
   children,
   className
 }: {
   tone?: PipTone
   icon?: React.ReactNode
+  /** 悬停解释（「框架外」那类需要一句话说清为什么的标记）。 */
+  title?: string
   children: React.ReactNode
   className?: string
 }): React.ReactElement {
   return (
     <span
+      title={title}
       className={cn(
         'inline-flex shrink-0 items-center gap-1 rounded-full border px-1.5 py-px text-micro leading-4',
         // 语义调的底/边比例照原型 `ui.jsx::Pip`（底 12% / 边 25%）。
@@ -137,6 +141,22 @@ export function GenderPip({
     >
       <Icon size={size} aria-hidden />
     </span>
+  )
+}
+
+/** 「框架外」——建议值落在 owner 预设的组织架构框架之外（治理 / 画像两处建议共用）。
+ *
+ *  🔴 **不是警告**：框架外不等于错，可能只是框架还没补全 → 走中性 pip，不用 warn 色。
+ *  真正的拦截态是 blocked（那才是 critical 红）。
+ *  🔴 判据写成 `!== true` 而不是 `!value`：`out_of_frame` 是可选键（后端只在 true 时才
+ *  写），缺键 / undefined / false 一律不渲染，将来变成三态也不会误显。 */
+export function OutOfFrameBadge({ value }: { value: unknown }): React.ReactElement | null {
+  const { t } = useTranslation()
+  if (value !== true) return null
+  return (
+    <ContactPip title={t('contacts.badge.outOfFrameHint')}>
+      {t('contacts.badge.outOfFrame')}
+    </ContactPip>
   )
 }
 

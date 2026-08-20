@@ -14,6 +14,8 @@ import { cn } from '@shared/lib/cn'
 export interface SuggestRowProps {
   /** 字段名（11px 弱字，在值上方）。调用方负责 i18n。 */
   label: string
+  /** 字段名右侧的标记位（通讯录的「框架外」）。可选 —— 没有就只有 label。 */
+  badge?: React.ReactNode
   /** 建议值（13.5→body，长值折行不撑破容器）。 */
   value: string
   adoptLabel: string
@@ -27,6 +29,7 @@ export interface SuggestRowProps {
 
 export function SuggestRow({
   label,
+  badge,
   value,
   adoptLabel,
   ignoreLabel,
@@ -44,7 +47,10 @@ export function SuggestRow({
     >
       <Sparkles size={13} aria-hidden className="mt-0.5 shrink-0 text-ai" />
       <div className="min-w-0 flex-1">
-        <div className="mb-0.5 text-micro text-ink-fg-2">{label}</div>
+        <div className="mb-0.5 flex items-center gap-1.5 text-micro text-ink-fg-2">
+          {label}
+          {badge}
+        </div>
         <div className="break-all text-body text-ink-fg">{value}</div>
       </div>
       <div className="flex shrink-0 items-center gap-1">

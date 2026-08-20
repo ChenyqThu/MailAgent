@@ -35,7 +35,7 @@ vi.mock('@shared/components/agents/AgentAvatar', () => ({
   AgentAvatar: () => <div />
 }))
 
-const { promptDoc, savePrompt } = vi.hoisted(() => ({
+const { promptDoc, savePrompt, orgFrameDoc, saveOrgFrame } = vi.hoisted(() => ({
   promptDoc: {
     value: {
       data: { content: '', defaultContent: '你是 MailAgent 的通讯录管理员。' } as
@@ -45,11 +45,22 @@ const { promptDoc, savePrompt } = vi.hoisted(() => ({
       isError: false
     }
   },
-  savePrompt: vi.fn()
+  savePrompt: vi.fn(),
+  // 组织架构框架：同机制的另一份 profile doc，只有 content（没有默认全文）。
+  orgFrameDoc: {
+    value: {
+      data: '' as string | undefined,
+      isPending: false,
+      isError: false
+    }
+  },
+  saveOrgFrame: vi.fn()
 }))
 vi.mock('@shared/components/contacts/hooks', () => ({
   useContactAgentPrompt: () => promptDoc.value,
-  useSaveContactAgentPrompt: () => ({ mutateAsync: savePrompt, isPending: false })
+  useSaveContactAgentPrompt: () => ({ mutateAsync: savePrompt, isPending: false }),
+  useContactOrgFrame: () => orgFrameDoc.value,
+  useSaveContactOrgFrame: () => ({ mutateAsync: saveOrgFrame, isPending: false })
 }))
 
 import i18n from '@shared/i18n'
@@ -95,8 +106,10 @@ beforeEach(() => {
     isPending: false,
     isError: false
   }
+  orgFrameDoc.value = { data: '', isPending: false, isError: false }
   save.mockResolvedValue(CFG)
   savePrompt.mockResolvedValue(undefined)
+  saveOrgFrame.mockResolvedValue(undefined)
 })
 
 afterEach(() => {
@@ -260,6 +273,74 @@ describe('ContactGovernanceConfigDrawer · 保存', () => {
     await waitFor(() => expect(screen.getByText(/E_INVALID_ARG: bad row/)).toBeTruthy())
     expect(savePrompt).not.toHaveBeenCalled()
     expect(onClose).not.toHaveBeenCalled()
+  })
+})
+
+// 组织架构框架 = 同机制的另一份 profile doc（`contact_org_frame`）。它与提示词追加段共用
+// 同一条「读失败不回写」纪律 —— 这份文档没有默认，空内容就是把 owner 的整份组织架构清掉。
+describe('ContactGovernanceConfigDrawer · 组织架构框架', () => {
+  function frameBox(): HTMLElement {
+    return screen.getByLabelText('组织架构框架')
+  }
+
+  test('回显库里的内容；placeholder 给出 ` / ` 分层的格式示例', () => {
+    orgFrameDoc.value = {
+      data: '# 部门框架\nEBG / ENBU / 产品部',
+      isPending: false,
+      isError: false
+    }
+    renderDrawer()
+
+    expect((frameBox() as HTMLTextAreaElement).value).toBe('# 部门框架\nEBG / ENBU / 产品部')
+    // 空库时才看得到 placeholder，但属性恒在 —— 直接读属性，不依赖渲染态。
+    expect(frameBox().getAttribute('placeholder')).toContain('EBG / ENBU / 产品部')
+    expect(frameBox().getAttribute('placeholder')).toContain('# 公司')
+  })
+
+  test('改了才发；没碰过不发（避免把没动的文档重写一遍）', async () => {
+    const { onClose } = renderDrawer()
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    expect(saveOrgFrame).not.toHaveBeenCalled()
+    expect(onClose).toHaveBeenCalled()
+
+    cleanup()
+    vi.clearAllMocks()
+    save.mockResolvedValue(CFG)
+    saveOrgFrame.mockResolvedValue(undefined)
+    renderDrawer()
+    fireEvent.change(frameBox(), { target: { value: 'EBG / 财务' } })
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() => expect(saveOrgFrame).toHaveBeenCalledWith('EBG / 财务'))
+  })
+
+  test('清空 = 不约束：空串照发（不是「没改」，也不是恢复默认）', async () => {
+    orgFrameDoc.value = { data: 'EBG / ENBU', isPending: false, isError: false }
+    renderDrawer()
+
+    fireEvent.change(frameBox(), { target: { value: '' } })
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() => expect(saveOrgFrame).toHaveBeenCalledWith(''))
+  })
+
+  test('🔴 编辑后才读失败 → 保存只写行，不拿半截草稿覆盖框架', async () => {
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    // 🔴 每次现造新 element（同上：引用相同 React 会 bail out，mock 换值也不重渲染）。
+    const view = (): React.ReactElement => (
+      <QueryClientProvider client={client}>
+        <ContactGovernanceConfigDrawer cfg={CFG} open onClose={vi.fn()} />
+      </QueryClientProvider>
+    )
+    const { rerender } = render(view())
+    fireEvent.change(frameBox(), { target: { value: '半截草稿' } })
+
+    orgFrameDoc.value = { data: undefined, isPending: false, isError: true }
+    rerender(view())
+    await waitFor(() => expect((frameBox() as HTMLTextAreaElement).disabled).toBe(true))
+
+    fireEvent.click(screen.getByText('保存'))
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    expect(saveOrgFrame).not.toHaveBeenCalled()
   })
 })
 

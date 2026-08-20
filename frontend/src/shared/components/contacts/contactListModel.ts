@@ -85,8 +85,13 @@ function attributeGroupOf(
       return item.organization
         ? { key: `org:${item.organization}`, label: item.organization }
         : null
-    case 'dept':
-      return item.department ? { key: `dept:${item.department}`, label: item.department } : null
+    case 'dept': {
+      // 部门是**路径**（`EBG / ENBU / 产品部`）→ 一级分组只看第一段，否则每条支线各成一组、
+      // 组多到没法扫。老数据没有 ` / ` 时第一段 = 整串，与改造前逐字一致（自然兼容）。
+      // 第一段为空（`  / ENBU` 这种脏值）视同未分组 —— 画一个空标题的组更糟。
+      const top = (item.department ?? '').split('/')[0]?.trim() ?? ''
+      return top === '' ? null : { key: `dept:${top}`, label: top }
+    }
     case 'fn':
       return item.function ? { key: `fn:${item.function}`, label: labels.fn(item.function) } : null
     case 'level':
@@ -121,6 +126,15 @@ function groupedRows(
     const bucket = groups.get(group.key) ?? { label: group.label, members: [] }
     bucket.members.push(item)
     groups.set(group.key, bucket)
+  }
+  // dept 档：一级组里混着多条支线（`EBG / ENBU / 产品部` 与 `EBG / 财务`），组内先按
+  // department 完整路径排，同支线的人才会挨在一起。同路径的相对次序 = 入参次序（当前 sort），
+  // 靠 Array#sort 的稳定性保住 —— 不必也不该在 comparator 里再比一次。
+  // 🔴 只在 dept 档生效：其余分组档的组内次序（= 当前 sort）一动不动。
+  if (groupBy === 'dept') {
+    for (const bucket of groups.values()) {
+      bucket.members.sort((a, b) => (a.department ?? '').localeCompare(b.department ?? '', 'zh'))
+    }
   }
   // 组内人数降序；`未分组` 恒末尾。
   const ordered = [...groups.entries()].sort((a, b) => b[1].members.length - a[1].members.length)

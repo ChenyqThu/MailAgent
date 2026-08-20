@@ -18,6 +18,13 @@ from src.agents.fence import fence_email_envelope, fence_untrusted, sanitize_unt
 from src.config import config as app_config
 from src.contacts import governance
 from src.contacts import service as contact_service
+from src.contacts.org_frame import (
+    OrgFrame,
+    department_in_frame,
+    load_org_frame,
+    normalize_department_path,
+    render_org_frame,
+)
 from src.contacts.profile_config import (
     ContactProfileAgentConfig,
     get_contact_profile_agent_config,
@@ -317,7 +324,9 @@ def _create_profile_identity_suggestions(
     payload: Dict[str, Any],
     evidence: ProfileEvidence,
     now_ms: int,
+    org_frame: Optional[OrgFrame] = None,
 ) -> None:
+    frame = org_frame if org_frame is not None else load_org_frame()
     row = contact_service._require_contact(conn, contact_id)
     locks = contact_service.parse_identity_locks(row["identity_locks_json"])
     evidence_items = _profile_identity_evidence(conn, evidence)
@@ -325,10 +334,15 @@ def _create_profile_identity_suggestions(
     for field in ("role_title", "department", "formal_name"):
         value = payload.get(field)
         normalized_value = strip_evidence_refs(str(value)) if value is not None else ""
+        if field == "department":
+            normalized_value = normalize_department_path(normalized_value)
+            current_value = normalize_department_path(row[field])
+        else:
+            current_value = str(row[field] or "").strip()
         if (
             not normalized_value
             or field in locks
-            or normalized_value.casefold() == str(row[field] or "").strip().casefold()
+            or normalized_value.casefold() == current_value.casefold()
         ):
             continue
         if not suggestion_evidence:
@@ -345,6 +359,7 @@ def _create_profile_identity_suggestions(
                 payload={"field": field, "value": normalized_value},
                 evidence=suggestion_evidence,
                 now_ms=now_ms,
+                org_frame=frame,
             )
         except Exception as exc:
             logger.warning(
@@ -448,6 +463,7 @@ async def generate_contact_profile(
     """生成一个画像；调用方已 claim running。所有失败 fail-closed 且不推进水位。"""
     now_ms = now_ms or int(time.time() * 1000)
     cfg = cfg or get_contact_profile_agent_config(db_path)
+    org_frame = load_org_frame()
     try:
         conn = ContactRepository(db_path).connect()
         try:
@@ -499,6 +515,7 @@ async def generate_contact_profile(
                             target_primary_email=primary_email,
                             target_gender=str(row["gender"] or ""),
                             custom_prompt=cfg.prompt,
+                            org_frame_text=render_org_frame(org_frame),
                         ),
                     }
                 ],
@@ -553,6 +570,7 @@ async def generate_contact_profile(
                     payload=payload,
                     evidence=evidence,
                     now_ms=now_ms,
+                    org_frame=org_frame,
                 )
             except Exception as exc:
                 logger.warning(
@@ -726,7 +744,13 @@ def _skip_meta(raw_error: Any) -> tuple[Optional[str], Optional[int]]:
     return reason, mail_count
 
 
-def profile_projection(row: sqlite3.Row, *, configured: bool) -> Dict[str, Any]:
+def profile_projection(
+    row: sqlite3.Row,
+    *,
+    configured: bool,
+    org_frame: Optional[OrgFrame] = None,
+) -> Dict[str, Any]:
+    frame = org_frame if org_frame is not None else load_org_frame()
     document = _json_dict(row["profile_json"])
     raw_status = row["profile_status"]
     if not configured:
@@ -759,6 +783,9 @@ def profile_projection(row: sqlite3.Row, *, configured: bool) -> Dict[str, Any]:
     )
     for field, value, current in candidates:
         normalized = strip_evidence_refs(str(value)) if value is not None else ""
+        if field == "department":
+            normalized = normalize_department_path(normalized)
+            current = normalize_department_path(current)
         if (
             not normalized
             or field in ignored_fields
@@ -766,7 +793,14 @@ def profile_projection(row: sqlite3.Row, *, configured: bool) -> Dict[str, Any]:
             or normalized == str(current or "").strip()
         ):
             continue
-        suggestions.append({"field": field, "value": normalized})
+        suggestion = {"field": field, "value": normalized}
+        if (
+            field == "department"
+            and not frame.is_empty
+            and not department_in_frame(frame, normalized)
+        ):
+            suggestion["out_of_frame"] = True
+        suggestions.append(suggestion)
 
     error, attempted_mail_count = _skip_meta(row["profile_error"])
     mail_count = int(row["mail_count"] or 0)

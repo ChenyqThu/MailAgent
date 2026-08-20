@@ -4444,6 +4444,10 @@
       "promptAppend": "提示词追加段",
       "promptAppendPlaceholder": "例如：公司背景、部门组织架构、常见的对外合作方 —— 这类长期不变的上下文写在这里。",
       "promptAppendNote": "默认提示词已经钉死「每条建议必须带邮件证据、身份字段只能提议不能直写」的纪律，追加段不会覆盖它。留空 = 只用默认。",
+      "orgFrame": "组织架构框架",
+      "orgFrameHint": "公司与部门的层级；用 ` / ` 分隔层级，框架外的信息写在竖线后",
+      "orgFramePlaceholder": "# 公司\nTP-Link System | tp-link.com.hk | 总部\nTP-Link | tp-link.com, omadanetworks.com\n\n# 部门框架\nEBG / ENBU / 产品部\n商用产品研发处 / 系统部",
+      "orgFrameNote": "留空 = 不约束：治理 Agent 照常提建议，只是不再判断「框架外」。填了之后，落在框架外的建议值会带一个「框架外」标记，你可以先补框架再采纳。",
       "tools": "注入的工具 · {count} 件",
       "toolsHint": "只读 · 由 gateway 实际装配的 ToolSet 决定",
       "queueNote": "这个 Agent 产出的建议在 通讯录 → 列表头「Agent」胶囊里排队等确认；它的运行历史也在那儿。",
@@ -6245,7 +6249,9 @@
       "self": "这是我",
       "hidden": "已隐藏",
       "dup": "疑似重复",
-      "emails": "{n} 个邮箱"
+      "emails": "{n} 个邮箱",
+      "outOfFrame": "框架外",
+      "outOfFrameHint": "建议值不在你预设的组织架构框架内，可先补框架再采纳"
     },
     "chip": {
       "open": "打开 {name} 的人物页",
@@ -6396,6 +6402,7 @@
       "projects": "共同项目",
       "evolution": "人物轨迹",
       "evidence": "证据 {ref}",
+      "evidenceMissing": "邮件不存在或已删除",
       "contradiction": "待澄清 · {text}",
       "provenance": "基于 {from}~{to} 的 {n} 封邮件 · {model} · {ago}",
       "refresh": "立即更新画像",

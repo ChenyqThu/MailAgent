@@ -51,6 +51,9 @@ export const qk = {
   email: {
     detail: (id: number | null) => ['email', id] as const,
     ai: (id: number | null) => ['email', id, 'ai'] as const,
+    /** 只要 meta（主题 / 发件人 / 日期），不要正文 —— 画像证据角标 hover 时懒查。
+     *  挂在 `['email', id, …]` 前缀下，跟着 detail 的失效一起过期。 */
+    meta: (id: number | null) => ['email', id, 'meta'] as const,
     translation: (id: number | null, lang: string) => ['email', id, 'translation', lang] as const,
     body: (id: number | null, format: string) => ['email', id, 'body', format] as const,
     bodyPreview: (id: number | null, format: string) =>
@@ -297,6 +300,8 @@ export const qk = {
     agentStatus: () => ['contacts', 'agent-status'] as const,
     // WP7 治理 agent 的系统提示词（agent_config.db 的 `contact_agent` 文档）。
     agentPrompt: () => ['contacts', 'agent-prompt'] as const,
+    // 组织架构框架（同机制的另一个 profile doc `contact_org_frame`）。
+    orgFrame: () => ['contacts', 'org-frame'] as const,
     // v2 工作台「运行」tab：治理扫描历史（limit 进 key —— 换条数就是另一份结果集）。
     agentHistory: (limit: number) => ['contacts', 'agent-history', limit] as const,
     // v2 工作台「运行」tab：画像批处理今日汇总（另一个 agent 行的只读镜子）。

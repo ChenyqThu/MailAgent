@@ -10,6 +10,14 @@ from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional, TypedDict
 
 from src.contacts import service as contact_service
+from src.contacts.org_frame import (
+    OrgFrame,
+    department_in_frame,
+    load_org_frame,
+    normalize_department_path,
+    organization_in_frame,
+    render_org_frame,
+)
 from src.contacts.service import ContactError, parse_identity_locks
 from src.contacts.taxonomy import (
     CONTACT_KIND_VALUES,
@@ -76,6 +84,8 @@ def default_governance_prompt() -> str:
 
 
 def _effective_prompt(*, use_kos: bool = True) -> str:
+    frame = load_org_frame()
+    custom = ""
     try:
         from src.agent_config.store import CONTACT_AGENT_DOC_NAME, get_agent_config_store
 
@@ -83,10 +93,19 @@ def _effective_prompt(*, use_kos: bool = True) -> str:
             CONTACT_AGENT_DOC_NAME, seed_if_absent=False
         )
         custom = (getattr(doc, "content", "") or "").strip()
-        prompt = _governance_prompt(use_kos=use_kos)
-        return prompt + (f"\n\n{custom}" if custom else "")
     except Exception:
-        return _governance_prompt(use_kos=use_kos)
+        pass
+    prompt = _governance_prompt(use_kos=use_kos)
+    compact_frame = render_org_frame(frame)
+    if compact_frame:
+        prompt += (
+            "\n\nORG FRAME（owner 预设可信参考）：\n"
+            f"{compact_frame}\n"
+            "规则：organization 必须从 Companies 的 canonical 名中选择；department "
+            "必须挂在某条 Departments 路径之下，可再深一两级，并统一使用 ` / ` 分隔。"
+            "不确定归属时不要提案，不要编造路径。框架不是证据，身份建议仍须邮件证据支撑。"
+        )
+    return prompt + (f"\n\n{custom}" if custom else "")
 
 
 def _json(value: Any) -> str:
@@ -198,16 +217,36 @@ def create_suggestion(
     evidence: Any,
     confidence: Optional[float] = None,
     now_ms: Optional[int] = None,
+    org_frame: Optional[OrgFrame] = None,
 ) -> dict[str, Any]:
     if suggestion_type not in CONTACT_SUGGESTION_TYPE_VALUES:
         raise ContactError("E_INVALID_SUGGESTION_TYPE", "invalid contact suggestion type")
     if not isinstance(payload, Mapping):
         raise ContactError("E_INVALID_PAYLOAD", "payload must be an object")
+    normalized_payload = dict(payload)
+    normalized_payload.pop("out_of_frame", None)
+    if suggestion_type == "identity":
+        field = str(normalized_payload.get("field") or "")
+        if field in {"department", "organization"}:
+            value = strip_evidence_refs(str(normalized_payload.get("value") or ""))
+            if field == "department":
+                value = normalize_department_path(value)
+            normalized_payload["value"] = value
+            frame = org_frame if org_frame is not None else load_org_frame()
+            in_frame = (
+                department_in_frame(frame, value)
+                if field == "department"
+                else organization_in_frame(frame, value)
+            )
+            if not frame.is_empty and not in_frame:
+                normalized_payload["out_of_frame"] = True
     if confidence is not None and not 0 <= float(confidence) <= 1:
         raise ContactError("E_INVALID_CONFIDENCE", "confidence must be between 0 and 1")
     normalized_ids = _normalized_contact_ids(conn, contact_ids)
     normalized_evidence = validate_evidence(conn, evidence)
-    _guard_locked_fields(conn, suggestion_type, normalized_ids, payload, normalized_evidence)
+    _guard_locked_fields(
+        conn, suggestion_type, normalized_ids, normalized_payload, normalized_evidence
+    )
     ids_json = _json(normalized_ids)
     fingerprint = evidence_fingerprint(normalized_evidence)
     duplicate_sql = (
@@ -219,7 +258,7 @@ def create_suggestion(
         # identity 建议是单字段粒度：同证据可分别更正多个字段。value 有意不进键，
         # 保持「同字段建议一旦被忽略，不因 LLM 换措辞/新值而复活」的语义。
         duplicate_sql += "AND json_extract(payload_json, '$.field')=? "
-        duplicate_params += (str(payload.get("field") or ""),)
+        duplicate_params += (str(normalized_payload.get("field") or ""),)
     duplicate = conn.execute(
         duplicate_sql + "ORDER BY id DESC LIMIT 1",
         duplicate_params,
@@ -233,7 +272,7 @@ def create_suggestion(
         (
             suggestion_type,
             ids_json,
-            _json(dict(payload)),
+            _json(normalized_payload),
             _json(normalized_evidence),
             fingerprint,
             float(confidence) if confidence is not None else None,

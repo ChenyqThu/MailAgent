@@ -8,6 +8,8 @@ import type { UseMutationResult } from '@tanstack/react-query'
 
 import { createContactsApi } from '@shared/api/contacts'
 import type { ContactProfileRefreshResult, ContactsApi } from '@shared/api/contacts'
+import type { EnrichedEmailMeta } from '@shared/api/types'
+import { useMailApi } from '@shared/hooks/useMailApi'
 import type {
   ContactAgentHistoryResponse,
   ContactAgentStatus,
@@ -320,6 +322,73 @@ export function useSaveContactAgentPrompt(): UseMutationResult<void, Error, stri
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: qk.contacts.agentPrompt() })
+    }
+  })
+}
+
+/** 画像证据角标 hover 时懒查那封邮件的 meta（主题用来让 owner 不点进去就能确认引的是哪封）。
+ *
+ *  🔴 走 `listEnriched({ internalIds })` 而不是 `email.get()`：后者的记录**带 body**，
+ *  一张画像卡可能有十几个角标，为了一行标题把正文搬过 IPC 不划算。`internalIds` 这个 filter
+ *  的注释里写的就是「已知 id 批量取 enriched 用」。
+ *  🔴 `enabled` 由 hover 驱动 —— 渲染画像时**不预取**，鼠标碰到哪个查哪个。
+ *  主题不会变 ⇒ staleTime 给到 5 分钟，同一角标反复 hover 只查一次。 */
+export function useEvidenceEmailMeta(
+  internalId: number,
+  enabled: boolean
+): ReturnType<typeof useQuery<EnrichedEmailMeta | null>> {
+  const api = useMailApi()
+  return useQuery({
+    queryKey: qk.email.meta(internalId),
+    queryFn: async (): Promise<EnrichedEmailMeta | null> => {
+      const rows = await api.email.listEnriched({ internalIds: [internalId], limit: 1 })
+      // 空数组 = 那封邮件已经不在库里（删了 / 还没同步到）→ null，由渲染侧说人话。
+      return rows[0] ?? null
+    },
+    enabled,
+    staleTime: 300_000,
+    retry: false
+  })
+}
+
+/** 组织架构框架（`agent_config.db` 的 `contact_org_frame` 文档）。与上面那对
+ *  `contact_agent` 是同一套通用 profile doc 端点，只换文档名 —— 名字两侧手写字符串是该
+ *  机制的现状（服务端也是白名单里的字面量），跟随。
+ *
+ *  🔴 与提示词不同，这份文档**没有内置默认**：它是 owner 自己的组织架构，空 = 不约束
+ *  （治理 agent 照常提建议，只是没有「框架外」这条判据）。所以这里只取 `content`，
+ *  不把端点顺带返回的 `defaultContent` 摆出来假装有个默认框架可回退。 */
+export function useContactOrgFrame(enabled: boolean): ReturnType<typeof useQuery<string>> {
+  return useQuery({
+    queryKey: qk.contacts.orgFrame(),
+    queryFn: async (): Promise<string> => {
+      const response = await fetch(`${resolveApiBaseUrl()}/agent/profile/docs/contact_org_frame`, {
+        credentials: 'include'
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+      const payload = (await response.json()) as { data?: { content?: string } }
+      return payload.data?.content ?? ''
+    },
+    enabled,
+    staleTime: 30_000
+  })
+}
+
+/** 保存组织架构框架。空内容 = 清空 = 不约束（不是「恢复默认」——没有默认）。 */
+export function useSaveContactOrgFrame(): UseMutationResult<void, Error, string> {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: async (content: string): Promise<void> => {
+      const response = await fetch(`${resolveApiBaseUrl()}/agent/profile/docs/contact_org_frame`, {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content })
+      })
+      if (!response.ok) throw new Error(`HTTP ${response.status}`)
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: qk.contacts.orgFrame() })
     }
   })
 }

@@ -204,6 +204,7 @@ export type ContactProfileSuggestionField = (typeof CONTACT_PROFILE_SUGGESTION_F
 export interface ContactProfileSuggestion {
   field: ContactProfileSuggestionField
   value: string
+  out_of_frame?: boolean
 }
 
 /** 画像派生态 (后端算, 前端只消费):

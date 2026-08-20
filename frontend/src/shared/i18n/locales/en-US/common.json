@@ -4444,6 +4444,10 @@
       "promptAppend": "Prompt addendum",
       "promptAppendPlaceholder": "e.g. company background, department structure, recurring external partners — long-lived context belongs here.",
       "promptAppendNote": "The default prompt already pins the rules that every suggestion cites mail evidence and that identity fields may only be proposed, never written directly; an addendum cannot override that. Empty = default only.",
+      "orgFrame": "Org frame",
+      "orgFrameHint": "Company and department hierarchy; separate levels with ` / `, put anything outside the frame after a pipe",
+      "orgFramePlaceholder": "# Companies\nTP-Link System | tp-link.com.hk | HQ\nTP-Link | tp-link.com, omadanetworks.com\n\n# Department frame\nEBG / ENBU / Product\nCommercial R&D / Systems",
+      "orgFrameNote": "Empty = no constraint: the governance agent still proposes, it just stops judging what is off-frame. Once set, suggestions landing outside it carry an “Off-frame” mark so you can extend the frame before adopting.",
       "tools": "Injected tools · {count}",
       "toolsHint": "Read-only · determined by the ToolSet the gateway actually assembles",
       "queueNote": "Suggestions from this agent queue up under Contacts → the “Agent” pill in the list header, and its run history lives there too.",
@@ -6245,7 +6249,9 @@
       "self": "This is me",
       "hidden": "Hidden",
       "dup": "Possible duplicate",
-      "emails": "{n} addresses"
+      "emails": "{n} addresses",
+      "outOfFrame": "Off-frame",
+      "outOfFrameHint": "This value falls outside the org frame you set. You can extend the frame before adopting it."
     },
     "chip": {
       "open": "Open {name}'s page",
@@ -6396,6 +6402,7 @@
       "projects": "Shared projects",
       "evolution": "Trajectory",
       "evidence": "Evidence {ref}",
+      "evidenceMissing": "That email is gone or was deleted",
       "contradiction": "Unresolved · {text}",
       "provenance": "From {n} messages, {from}–{to} · {model} · {ago}",
       "refresh": "Refresh profile",

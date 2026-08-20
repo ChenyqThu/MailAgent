@@ -124,6 +124,24 @@ def test_write_empty_content_400(client, fresh_agent_cfg):
     assert r.json()["error"]["code"] == "E_INVALID_ARG"
 
 
+def test_contact_org_frame_doc_is_writable_and_empty_restores_unconstrained(
+    client, fresh_agent_cfg
+):
+    from src.agent_config.store import CONTACT_ORG_FRAME_DOC_NAME
+
+    written = client.post(
+        f"/api/agent/profile/docs/{CONTACT_ORG_FRAME_DOC_NAME}",
+        json={"content": "# Departments\nA / B"},
+    )
+    assert written.status_code == 200
+    cleared = client.post(
+        f"/api/agent/profile/docs/{CONTACT_ORG_FRAME_DOC_NAME}",
+        json={"content": ""},
+    )
+    assert cleared.status_code == 200
+    assert cleared.json()["data"]["content"] == ""
+
+
 def test_write_rules_valid_passes(client, fresh_agent_cfg):
     r = client.post("/api/agent/profile/docs/rules", json={"content": "# RULES\n- Be concise."})
     assert r.status_code == 200

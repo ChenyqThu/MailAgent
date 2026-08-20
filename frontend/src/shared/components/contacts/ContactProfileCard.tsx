@@ -35,16 +35,23 @@ import type {
   ContactProfileSuggestionField
 } from '@shared/api/types/contact'
 import { SuggestRow } from '@shared/components/ui/suggest-row'
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger
+} from '@shared/components/ui/tooltip'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { formatMatterAgo } from '@shared/lib/matterDerive'
 import { useActiveEmail } from '@shared/state/active-email'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
-import { ContactPip, SecHead } from './parts'
+import { ContactPip, OutOfFrameBadge, SecHead } from './parts'
 import { parseEvidenceRefs, stripEvidenceRefs } from './evidenceRefs'
 import {
   useAdoptProfileSuggestion,
+  useEvidenceEmailMeta,
   useIgnoreProfileSuggestion,
   useRefreshContactProfile
 } from './hooks'
@@ -52,10 +59,15 @@ import {
 /** 证据角标 —— 画像里**唯一**的引证长相，正文内联引用与轨迹的 `ev` 共用这一个。
  *
  *  引证是个角标，不是正文的一部分：早先两处都渲染成「⟨引号图标⟩证据 12345」的斜体钮
- *  （轨迹那处还独占一行），一屏下来满是「证据 xxxxx」（dogfood 原话，投诉大头正是轨迹区）。
- *  现在只留一个 9px 引号图标 —— 灰且半透明，hover 才回到全不透明；「证据 N」退到
- *  `title` / `aria-label`（悬停可见、读屏可念），点击跳邮件一字未动。
- *  `align-baseline` + 无文字 → 不撑行高、不占一截文本宽度。 */
+ *  （轨迹那处还独占一行），一屏下来满是「证据 xxxxx」（dogfood 原话）。现在只留一个 9px
+ *  引号图标 —— 灰且半透明，hover 才回到全不透明；点击跳邮件一字未动。
+ *
+ *  🔴 **不用原生 `title`**：0819 dogfood owner 报「hover 没显示」。根因不是没写，是 Electron
+ *  下原生 tooltip 延迟长得没法用（`ui/HoverTip.tsx` 的文件头早就记了这条），而且它只能显示
+ *  一行「证据 N」，owner 要的是「不点进去就知道引的是哪封」。改用仓库的 Radix Tooltip
+ *  （`ui/tooltip.tsx` 里那条「更实质内容走 Radix」的分工），内容 = 证据 id + 邮件主题。
+ *  🔴 主题**hover 才查**（`open` 直接当 query 的 enabled）：一张卡十几个角标，渲染时预取
+ *  等于白拉十几次。主题先不在也照样出 tooltip（先显示 id），到了再补一行。 */
 function EvidenceBadge({
   internalId,
   onEvidence
@@ -64,17 +76,37 @@ function EvidenceBadge({
   onEvidence(internalId: number): void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const [open, setOpen] = useState(false)
   const label = t('contacts.profile.evidence', { ref: internalId })
+  const meta = useEvidenceEmailMeta(internalId, open)
+  const subject = meta.data?.subject?.trim()
   return (
-    <button
-      type="button"
-      onClick={() => onEvidence(internalId)}
-      aria-label={label}
-      title={label}
-      className="mx-px inline-flex align-baseline text-ink-fg-3 opacity-50 transition-opacity duration-fast ease-standard hover:opacity-100"
-    >
-      <Quote size={9} aria-hidden />
-    </button>
+    <Tooltip open={open} onOpenChange={setOpen}>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          onClick={() => onEvidence(internalId)}
+          aria-label={label}
+          className="mx-px inline-flex align-baseline text-ink-fg-3 opacity-50 transition-opacity duration-fast ease-standard hover:opacity-100"
+        >
+          <Quote size={9} aria-hidden />
+        </button>
+      </TooltipTrigger>
+      {/* `pointer-events-none` 跟随 HoverTip 的既定做法：这块是纯信息，不该在浮着的时候
+          把底下那行正文的点击 / hover 挡住（Radix 的 TooltipContent 默认是能接指针的）。 */}
+      <TooltipContent side="top" className="pointer-events-none max-w-[280px]">
+        <div className="font-mono text-micro text-ink-fg-3">{label}</div>
+        {/* 三态：查到主题 / 查不到（删了）/ 还在路上。最后一种什么都不加 —— 让 tooltip 先
+            以 id 单行出现，比先塞一行「加载中」再抖一下安静。 */}
+        {subject ? (
+          <div className="mt-0.5 truncate text-meta text-ink-fg">{subject}</div>
+        ) : meta.isSuccess || meta.isError ? (
+          <div className="mt-0.5 text-meta text-ink-fg-3">
+            {t('contacts.profile.evidenceMissing')}
+          </div>
+        ) : null}
+      </TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -492,127 +524,132 @@ export function ContactProfileCard({
   // ── 有画像（D4 叙事优先）────────────────────────────────────────────────────
   const suggestions = profile.suggestions
   return (
-    <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-[18px]">
-      <div className="mb-[11px] flex items-center gap-2">
-        <Sparkles size={14} aria-hidden className="shrink-0 text-ai" />
-        <span className="text-meta font-semibold text-ink-fg">{t('contacts.profile.title')}</span>
-        {generating ? (
-          <ContactPip
-            tone="info"
-            icon={<Loader2 size={9.5} aria-hidden className="animate-spin" />}
-          >
-            {t('contacts.profile.refreshing')}
-          </ContactPip>
-        ) : null}
-      </div>
+    // 证据角标的 tooltip 走 Radix，需要一个 Provider 祖先。整卡包一个（不是每个角标各包
+    // 一个）—— 角标只出现在这棵子树里。延迟跟随仓库既有取值（MessageTiming 200 / 干系人 220）。
+    <TooltipProvider delayDuration={200}>
+      <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 p-[18px]">
+        <div className="mb-[11px] flex items-center gap-2">
+          <Sparkles size={14} aria-hidden className="shrink-0 text-ai" />
+          <span className="text-meta font-semibold text-ink-fg">{t('contacts.profile.title')}</span>
+          {generating ? (
+            <ContactPip
+              tone="info"
+              icon={<Loader2 size={9.5} aria-hidden className="animate-spin" />}
+            >
+              {t('contacts.profile.refreshing')}
+            </ContactPip>
+          ) : null}
+        </div>
 
-      {/* 🔒 纯文本：`{}` 插值即转义，`whitespace-pre-wrap` 保住模型给的换行。唯一的例外是
+        {/* 🔒 纯文本：`{}` 插值即转义，`whitespace-pre-wrap` 保住模型给的换行。唯一的例外是
           `[id:N]` 内联引用被切成证据钮（见 InlineRefs），其余一律不解析。 */}
-      <p className="m-0 whitespace-pre-wrap text-body leading-[1.78] text-ink-fg/90 [text-wrap:pretty]">
-        <InlineRefs text={document.summary} onEvidence={openEvidence} />
-      </p>
+        <p className="m-0 whitespace-pre-wrap text-body leading-[1.78] text-ink-fg/90 [text-wrap:pretty]">
+          <InlineRefs text={document.summary} onEvidence={openEvidence} />
+        </p>
 
-      {document.topics.length > 0 ? (
-        <div className="mt-3.5">
-          <div className="mb-1.5 text-micro text-ink-fg-2">{t('contacts.profile.topics')}</div>
-          <ChipList items={document.topics} tone="ai" />
-        </div>
-      ) : null}
+        {document.topics.length > 0 ? (
+          <div className="mt-3.5">
+            <div className="mb-1.5 text-micro text-ink-fg-2">{t('contacts.profile.topics')}</div>
+            <ChipList items={document.topics} tone="ai" />
+          </div>
+        ) : null}
 
-      {document.projects.length > 0 ? (
-        <div className="mt-[11px]">
-          <div className="mb-1.5 text-micro text-ink-fg-2">{t('contacts.profile.projects')}</div>
-          <ChipList items={document.projects} tone="neutral" />
-        </div>
-      ) : null}
+        {document.projects.length > 0 ? (
+          <div className="mt-[11px]">
+            <div className="mb-1.5 text-micro text-ink-fg-2">{t('contacts.profile.projects')}</div>
+            <ChipList items={document.projects} tone="neutral" />
+          </div>
+        ) : null}
 
-      {document.communication_style ? (
-        <div className="mt-3.5 flex gap-[9px] rounded-[var(--r-ctl)] bg-ink-fg/[0.025] px-3 py-2.5">
-          <MessageSquare size={13} aria-hidden className="mt-0.5 shrink-0 text-ink-fg-2" />
-          <span className="text-body leading-[1.65] text-ink-fg-1 [text-wrap:pretty]">
-            <InlineRefs text={document.communication_style} onEvidence={openEvidence} />
-          </span>
-        </div>
-      ) : null}
+        {document.communication_style ? (
+          <div className="mt-3.5 flex gap-[9px] rounded-[var(--r-ctl)] bg-ink-fg/[0.025] px-3 py-2.5">
+            <MessageSquare size={13} aria-hidden className="mt-0.5 shrink-0 text-ink-fg-2" />
+            <span className="text-body leading-[1.65] text-ink-fg-1 [text-wrap:pretty]">
+              <InlineRefs text={document.communication_style} onEvidence={openEvidence} />
+            </span>
+          </div>
+        ) : null}
 
-      {document.evolution.length > 0 ? (
-        <div className="mt-4">
-          <SecHead
-            icon={<Milestone size={13} aria-hidden className="shrink-0 text-ink-fg-2" />}
-            title={t('contacts.profile.evolution')}
-          />
-          <Evolution items={document.evolution} onEvidence={openEvidence} />
-        </div>
-      ) : null}
+        {document.evolution.length > 0 ? (
+          <div className="mt-4">
+            <SecHead
+              icon={<Milestone size={13} aria-hidden className="shrink-0 text-ink-fg-2" />}
+              title={t('contacts.profile.evolution')}
+            />
+            <Evolution items={document.evolution} onEvidence={openEvidence} />
+          </div>
+        ) : null}
 
-      {document.contradictions.length > 0 ? (
-        <div className="mt-3.5 border-t border-ink-border-soft pt-[11px]">
-          {document.contradictions.map((text, index) => (
-            <div key={`${index}-${text}`} className="flex items-start gap-[7px]">
-              <HelpCircle size={12} aria-hidden className="mt-[3px] shrink-0 text-ink-fg-3" />
-              <span className="text-meta leading-[1.6] text-ink-fg-3 [text-wrap:pretty]">
-                {/* 前缀「待澄清 · 」是本地化死文案，不含 `[id:N]`，所以整句一起过解析器
+        {document.contradictions.length > 0 ? (
+          <div className="mt-3.5 border-t border-ink-border-soft pt-[11px]">
+            {document.contradictions.map((text, index) => (
+              <div key={`${index}-${text}`} className="flex items-start gap-[7px]">
+                <HelpCircle size={12} aria-hidden className="mt-[3px] shrink-0 text-ink-fg-3" />
+                <span className="text-meta leading-[1.6] text-ink-fg-3 [text-wrap:pretty]">
+                  {/* 前缀「待澄清 · 」是本地化死文案，不含 `[id:N]`，所以整句一起过解析器
                     即可，不必为此把这个 i18n key 拆成两半。 */}
-                <InlineRefs
-                  text={t('contacts.profile.contradiction', { text })}
-                  onEvidence={openEvidence}
-                />
-              </span>
-            </div>
-          ))}
-        </div>
-      ) : null}
-
-      {suggestions.length > 0 ? (
-        <div className="mt-4">
-          <SecHead
-            icon={<Sparkles size={13} aria-hidden className="shrink-0 text-ai" />}
-            title={t('contacts.profile.suggest')}
-            count={suggestions.length}
-            right={
-              <button
-                type="button"
-                disabled={suggestBusy}
-                onClick={() => void adoptAll()}
-                className="shrink-0 text-micro text-coral transition-opacity duration-fast ease-standard hover:opacity-80 disabled:pointer-events-none disabled:opacity-50"
-              >
-                {t('contacts.profile.adoptAll')}
-              </button>
-            }
-          />
-          {/* 采纳/忽略后该行从后端投影里消失 → 只做透明度过渡（红线：不许位移动画）。 */}
-          <div className="flex flex-col gap-[7px] transition-opacity duration-base ease-standard">
-            {suggestions.map((item) => (
-              <SuggestRow
-                key={item.field}
-                label={t(SUGGESTION_LABEL_KEY[item.field])}
-                // 老数据里的建议值带 `[id: 54216]` 尾巴（模型把内联引证写进了结构化字段）。
-                // 显示侧兜底剥掉 —— 产生 / 采纳侧由后端修。
-                value={stripEvidenceRefs(item.value)}
-                adoptLabel={t('contacts.profile.adopt')}
-                ignoreLabel={t('contacts.profile.ignore')}
-                busy={suggestBusy}
-                onAdopt={() => adoptOne(item.field, item.value)}
-                onIgnore={() => ignoreOne(item.field)}
-              />
+                  <InlineRefs
+                    text={t('contacts.profile.contradiction', { text })}
+                    onEvidence={openEvidence}
+                  />
+                </span>
+              </div>
             ))}
           </div>
-          <div className="mt-[7px] text-micro leading-[1.6] text-ink-fg-3">
-            {t('contacts.profile.suggestHint')}
-          </div>
-        </div>
-      ) : null}
+        ) : null}
 
-      <div className="mt-4">
-        <Provenance
-          document={document}
-          profile={profile}
-          busy={generating}
-          now={now}
-          locale={locale}
-          onRefresh={runRefresh}
-        />
+        {suggestions.length > 0 ? (
+          <div className="mt-4">
+            <SecHead
+              icon={<Sparkles size={13} aria-hidden className="shrink-0 text-ai" />}
+              title={t('contacts.profile.suggest')}
+              count={suggestions.length}
+              right={
+                <button
+                  type="button"
+                  disabled={suggestBusy}
+                  onClick={() => void adoptAll()}
+                  className="shrink-0 text-micro text-coral transition-opacity duration-fast ease-standard hover:opacity-80 disabled:pointer-events-none disabled:opacity-50"
+                >
+                  {t('contacts.profile.adoptAll')}
+                </button>
+              }
+            />
+            {/* 采纳/忽略后该行从后端投影里消失 → 只做透明度过渡（红线：不许位移动画）。 */}
+            <div className="flex flex-col gap-[7px] transition-opacity duration-base ease-standard">
+              {suggestions.map((item) => (
+                <SuggestRow
+                  key={item.field}
+                  label={t(SUGGESTION_LABEL_KEY[item.field])}
+                  badge={<OutOfFrameBadge value={item.out_of_frame} />}
+                  // 老数据里的建议值带 `[id: 54216]` 尾巴（模型把内联引证写进了结构化字段）。
+                  // 显示侧兜底剥掉 —— 产生 / 采纳侧由后端修。
+                  value={stripEvidenceRefs(item.value)}
+                  adoptLabel={t('contacts.profile.adopt')}
+                  ignoreLabel={t('contacts.profile.ignore')}
+                  busy={suggestBusy}
+                  onAdopt={() => adoptOne(item.field, item.value)}
+                  onIgnore={() => ignoreOne(item.field)}
+                />
+              ))}
+            </div>
+            <div className="mt-[7px] text-micro leading-[1.6] text-ink-fg-3">
+              {t('contacts.profile.suggestHint')}
+            </div>
+          </div>
+        ) : null}
+
+        <div className="mt-4">
+          <Provenance
+            document={document}
+            profile={profile}
+            busy={generating}
+            now={now}
+            locale={locale}
+            onRefresh={runRefresh}
+          />
+        </div>
       </div>
-    </div>
+    </TooltipProvider>
   )
 }

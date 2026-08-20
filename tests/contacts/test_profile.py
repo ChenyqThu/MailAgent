@@ -9,6 +9,7 @@ import pytest
 from jsonschema import ValidationError, validate
 
 from src.contacts import profile
+from src.contacts.org_frame import parse_org_frame
 from src.contacts.profile_config import ContactProfileAgentConfig
 from src.contacts.profile_config import get_contact_profile_agent_config
 from src.contacts.profile_prompts import PROFILE_TOOL_SCHEMA, build_profile_system_prompt
@@ -316,6 +317,25 @@ def test_prompt_family_contains_skip_actions_gender_rules_and_custom_append():
     assert "[id:N] citations may refer only to NEW EMAIL EVIDENCE" in first
     assert "never silently absorb contradictions" in incremental
     assert "repeated new citation that supports an existing claim means 强化" in incremental
+
+
+def test_profile_prompt_org_frame_injection_is_conditional():
+    without_frame = build_profile_system_prompt(
+        mode="first",
+        target_display_name="Alice",
+        target_primary_email="alice@example.com",
+    )
+    with_frame = build_profile_system_prompt(
+        mode="first",
+        target_display_name="Alice",
+        target_primary_email="alice@example.com",
+        org_frame_text="# Departments\nA / B",
+    )
+    assert "ORG FRAME" not in without_frame
+    assert "ORG FRAME" in with_frame
+    assert "A / B" in with_frame
+    assert "output null instead of inventing a path" in with_frame
+    assert with_frame.index("ORG FRAME") < with_frame.index("HARD RULES")
 
 
 def test_profile_config_hot_reads_row_and_bad_trigger_defaults(db):
@@ -673,6 +693,69 @@ def test_profile_identity_suggestions_strip_refs_and_skip_empty(db):
         {"field": "role_title", "value": "Project Manager"},
         {"field": "formal_name", "value": "Alice Zhang"},
     ]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("frame_text", "department", "expected_payload"),
+    [
+        (
+            "# Departments\nA / B",
+            "A/B/C [id:1]",
+            {"field": "department", "value": "A / B / C"},
+        ),
+        (
+            "# Departments\nA / B",
+            "X/Y [id:1]",
+            {"field": "department", "value": "X / Y", "out_of_frame": True},
+        ),
+        (
+            "",
+            "X/Y [id:1]",
+            {"field": "department", "value": "X / Y"},
+        ),
+    ],
+)
+async def test_profile_department_suggestion_frame_marking(
+    db, monkeypatch, frame_text, department, expected_payload
+):
+    frame = parse_org_frame(frame_text)
+    monkeypatch.setattr(profile, "load_org_frame", lambda: frame)
+    _seed_contact(db, 1, mail_count=50)
+    _set_contact_identity(db, role_title="Project Manager", department="Old")
+    _seed_mail(db, 1, 1, "Department identity evidence. " * 20)
+    payload = _valid_payload()
+    payload["department"] = department
+    assert profile.claim_profile_run(db, 1)
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(payload)
+    ) == "ok"
+    assert [item["payload"] for item in _identity_suggestions(db)] == [expected_payload]
+
+
+@pytest.mark.parametrize(
+    ("frame_text", "expected_out_of_frame"),
+    [
+        ("# Departments\nA / B", False),
+        ("# Departments\nX / Y", True),
+        ("", False),
+    ],
+)
+def test_profile_projection_department_frame_marking(
+    db, frame_text, expected_out_of_frame
+):
+    _seed_contact(db, 1, profile_json={**_valid_payload(), "department": "A/B/C"})
+    _set_contact_identity(db, department="Old")
+    with _conn(db) as conn:
+        row = conn.execute("SELECT * FROM contact WHERE id=1").fetchone()
+    projected = profile.profile_projection(
+        row, configured=True, org_frame=parse_org_frame(frame_text)
+    )
+    department = next(
+        item for item in projected["suggestions"] if item["field"] == "department"
+    )
+    assert department["value"] == "A / B / C"
+    assert department.get("out_of_frame", False) is expected_out_of_frame
 
 
 @pytest.mark.asyncio

@@ -26,7 +26,7 @@ import { cn } from '@shared/lib/cn'
 import { FIELD_LABEL_KEY } from './contactFields'
 import { stripEvidenceRefs } from './evidenceRefs'
 import { Monogram } from './Monogram'
-import { ContactPip } from './parts'
+import { ContactPip, OutOfFrameBadge } from './parts'
 
 /** 原型 `SUG_META` :7-13（icon + tone），键名换成 taxonomy 的 5 个值：原型的
  *  `field` / `former` 是展示层遗留，DB 的 CHECK 值域是 identity / former_email。 */
@@ -147,6 +147,9 @@ export function ContactSuggestionCard({
         {blocked ? (
           <ContactPip tone="critical">{t('contacts.suggestion.blocked')}</ContactPip>
         ) : null}
+        {/* 「框架外」是提示不是拦截：blocked 那条才是红的，这条恒中性，两者可以并存
+            （一条建议既落在框架外、又撞上字段锁）。 */}
+        <OutOfFrameBadge value={payload.out_of_frame} />
         {suggestion.confidence != null ? (
           <span className="shrink-0 text-micro tabular-nums text-ink-fg-3">
             {t('contacts.suggestion.confidence', {

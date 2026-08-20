@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.contacts import governance
+from src.contacts.org_frame import parse_org_frame
 from src.contacts.governance_config import get_contact_governance_agent_config
 from src.contacts.service import ContactError, set_manager
 from src.mail.new_watcher import NewWatcher, _fire_contact_governance_if_due
@@ -87,6 +88,60 @@ def test_identity_dedupe_reuses_same_field_and_evidence(db):
     first = _proposal(conn)
     second = _proposal(conn)
     assert second == {"id": first["id"], "created": False, "status": "pending"}
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "frame_text", "expected_payload"),
+    [
+        (
+            "department",
+            "A/B/C [id: 11]",
+            "# Departments\nA / B",
+            {"field": "department", "value": "A / B / C"},
+        ),
+        (
+            "department",
+            "X/Y [id: 11]",
+            "# Departments\nA / B",
+            {"field": "department", "value": "X / Y", "out_of_frame": True},
+        ),
+        (
+            "organization",
+            "Other [id: 11]",
+            "# Companies\nAcme | acme.example",
+            {"field": "organization", "value": "Other", "out_of_frame": True},
+        ),
+        (
+            "organization",
+            "Acme [id: 11]",
+            "# Companies\nAcme | acme.example",
+            {"field": "organization", "value": "Acme"},
+        ),
+        (
+            "department",
+            "X/Y [id: 11]",
+            "",
+            {"field": "department", "value": "X / Y"},
+        ),
+    ],
+)
+def test_identity_org_frame_normalization_and_soft_marking(
+    db, field, value, frame_text, expected_payload
+):
+    conn, _ = db
+    created = governance.create_suggestion(
+        conn,
+        suggestion_type="identity",
+        contact_ids=[1],
+        payload={"field": field, "value": value},
+        evidence=[{"message_id": "m-new", "quote": "identity evidence"}],
+        now_ms=1000,
+        org_frame=parse_org_frame(frame_text),
+    )
+    stored = conn.execute(
+        "SELECT payload_json FROM contact_suggestion WHERE id=?", (created["id"],)
+    ).fetchone()[0]
+    assert json.loads(stored) == expected_payload
 
 
 def test_identity_ignored_field_does_not_revive_for_a_new_value(db):

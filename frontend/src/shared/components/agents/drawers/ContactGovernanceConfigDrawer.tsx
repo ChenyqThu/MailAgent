@@ -39,14 +39,13 @@ import {
 import { ContactPip } from '@shared/components/contacts/parts'
 import {
   useContactAgentPrompt,
-  useSaveContactAgentPrompt
+  useContactOrgFrame,
+  useSaveContactAgentPrompt,
+  useSaveContactOrgFrame
 } from '@shared/components/contacts/hooks'
 import { useEnabledModels } from '@shared/hooks/useLlmModels'
 import { cn } from '@shared/lib/cn'
-import {
-  CONTACT_TOOL_FACE_GROUPS,
-  type ContactToolGroup
-} from '@shared/lib/contactToolFace'
+import { CONTACT_TOOL_FACE_GROUPS, type ContactToolGroup } from '@shared/lib/contactToolFace'
 import { errorMessage } from '@shared/lib/ipcErrors'
 
 import { AgentIdentityHeader } from '../AgentAvatar'
@@ -137,6 +136,9 @@ export function ContactGovernanceConfigDrawer({
   // 提示词文档：`content` = 追加段，`defaultContent` = 内置默认全文（只读展示）。
   const promptDoc = useContactAgentPrompt(open)
   const savePrompt = useSaveContactAgentPrompt()
+  // 组织架构框架：同机制的另一份 profile doc，没有默认全文，只有 owner 自己写的内容。
+  const orgFrameDoc = useContactOrgFrame(open)
+  const saveOrgFrame = useSaveContactOrgFrame()
 
   const [enabled, setEnabled] = useState(false)
   const [model, setModel] = useState('')
@@ -151,6 +153,8 @@ export function ContactGovernanceConfigDrawer({
   const [avatarDirty, setAvatarDirty] = useState(false)
   const [append, setAppend] = useState('')
   const [appendDirty, setAppendDirty] = useState(false)
+  const [orgFrame, setOrgFrame] = useState('')
+  const [orgFrameDirty, setOrgFrameDirty] = useState(false)
   const [defaultOpen, setDefaultOpen] = useState(false)
   const [err, setErr] = useState<string | null>(null)
   const [saveFailed, setSaveFailed] = useState(false)
@@ -188,9 +192,16 @@ export function ContactGovernanceConfigDrawer({
     setAppend(promptDoc.data.content)
     setAppendDirty(false)
   }, [open, promptDoc.data])
+
+  // 同上，另一条查询各自落定。
+  useEffect(() => {
+    if (!open || orgFrameDoc.data === undefined) return
+    setOrgFrame(orgFrameDoc.data)
+    setOrgFrameDirty(false)
+  }, [open, orgFrameDoc.data])
   /* eslint-enable react-hooks/set-state-in-effect */
 
-  const busy = isSaving || savePrompt.isPending
+  const busy = isSaving || savePrompt.isPending || saveOrgFrame.isPending
   const defaultContent = promptDoc.data?.defaultContent ?? ''
   const usingDefault = append.trim() === ''
 
@@ -230,6 +241,8 @@ export function ContactGovernanceConfigDrawer({
       await save(CONTACT_GOVERNANCE_AGENT_ID, patch)
       // 🔴 追加段读失败时那个框是一份空草稿 —— 不许拿它去覆盖 owner 可能已有的内容。
       if (appendDirty && !promptDoc.isError) await savePrompt.mutateAsync(append)
+      // 🔴 同一条纪律：框架读失败时不回写（空框 = 清空整份组织架构，代价比提示词更大）。
+      if (orgFrameDirty && !orgFrameDoc.isError) await saveOrgFrame.mutateAsync(orgFrame)
       onClose()
     } catch (e: unknown) {
       setErr(errorMessage(e))
@@ -485,9 +498,58 @@ export function ContactGovernanceConfigDrawer({
               style={{ ...inputStyle, resize: 'vertical', lineHeight: 1.6, fontSize: 13 }}
             />
             <div
-              style={{ fontSize: 11.5, color: 'rgb(var(--ink-fg-3))', marginTop: 6, lineHeight: 1.5 }}
+              style={{
+                fontSize: 11.5,
+                color: 'rgb(var(--ink-fg-3))',
+                marginTop: 6,
+                lineHeight: 1.5
+              }}
             >
               {t('agents.contactGovernance.promptAppendNote')}
+            </div>
+          </Field>
+
+          {/* 组织架构框架：owner 自己写的公司 / 部门层级，治理 Agent 拿它判「框架外」。
+              交互与上面的提示词追加段同构（同一份 inputStyle、同一条「读失败不回写」纪律），
+              少一个「默认全文」折叠 —— 这份文档没有默认。 */}
+          <Field
+            label={t('agents.contactGovernance.orgFrame')}
+            hint={t('agents.contactGovernance.orgFrameHint')}
+          >
+            {orgFrameDoc.isError ? (
+              <p className="mb-1.5 text-meta leading-[1.6] text-warn">
+                {t('contacts.agent.prompt.loadFailed')}
+              </p>
+            ) : null}
+            <textarea
+              value={orgFrame}
+              disabled={orgFrameDoc.isPending || orgFrameDoc.isError}
+              placeholder={t('agents.contactGovernance.orgFramePlaceholder')}
+              aria-label={t('agents.contactGovernance.orgFrame')}
+              onChange={(e) => {
+                setOrgFrame(e.target.value)
+                setOrgFrameDirty(true)
+              }}
+              rows={8}
+              className="scrollbar-thin"
+              style={{
+                ...inputStyle,
+                resize: 'vertical',
+                lineHeight: 1.7,
+                // 层级靠 ` / ` 对齐着读，等宽字体下才不会歪。
+                fontFamily: 'ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace',
+                fontSize: 12.5
+              }}
+            />
+            <div
+              style={{
+                fontSize: 11.5,
+                color: 'rgb(var(--ink-fg-3))',
+                marginTop: 6,
+                lineHeight: 1.5
+              }}
+            >
+              {t('agents.contactGovernance.orgFrameNote')}
             </div>
           </Field>
 

@@ -25,6 +25,7 @@ from src.agent_config.projections import (
 )
 from src.agent_config.store import (
     CONTACT_AGENT_DOC_NAME,
+    CONTACT_ORG_FRAME_DOC_NAME,
     INSTALLABLE_SOURCE_TYPES,
     MATTER_AGENT_DOC_NAME,
     MEMORY_DOC_NAME,
@@ -208,6 +209,7 @@ async def write_profile_doc(name: str, request: Request, body: Optional[dict[str
     if not content.strip() and name not in {
         MATTER_AGENT_DOC_NAME,
         CONTACT_AGENT_DOC_NAME,
+        CONTACT_ORG_FRAME_DOC_NAME,
     }:
         raise APIError("E_INVALID_ARG", "body.content must be a non-empty string",
                        http_status=400, source="sqlite")

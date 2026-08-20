@@ -31,6 +31,7 @@ function row(id: number, name: string): ContactRowDto {
     role_title: null,
     function: null,
     seniority: null,
+    gender: null,
     kind: 'person',
     hidden_at: null,
     is_self: false,
@@ -157,6 +158,40 @@ describe('ContactSuggestionCard · 五类结论句', () => {
     cleanup()
     renderCard(suggestion('former_email', { payload: { email: 'y.chen@ourco.test [id:41230]' } }))
     expect(screen.getByText('把 y.chen@ourco.test 标为曾用邮箱')).toBeTruthy()
+  })
+
+  // 「框架外」是提示不是拦截 —— 与 blocked（红）可以并存，且缺键时不出。
+  test('out_of_frame 为 true 才出「框架外」标记；与「已拦下」可并存', () => {
+    renderCard(
+      suggestion('identity', {
+        contact_ids: [3],
+        payload: { field: 'department', value: 'Legal', out_of_frame: true }
+      })
+    )
+    expect(screen.getByText('框架外')).toBeTruthy()
+    expect(screen.getByText('框架外').getAttribute('title')).toBe(
+      '建议值不在你预设的组织架构框架内，可先补框架再采纳'
+    )
+
+    // 缺键 = 不出（后端只在 true 时才写）。
+    cleanup()
+    renderCard(
+      suggestion('identity', { contact_ids: [3], payload: { field: 'department', value: 'Legal' } })
+    )
+    expect(screen.queryByText('框架外')).toBeNull()
+
+    // blocked + 框架外：两个标记各说各的事，不互相吞。
+    cleanup()
+    renderCard(
+      suggestion('identity', {
+        contact_ids: [3],
+        payload: { field: 'department', value: 'Legal', out_of_frame: true },
+        status: 'blocked',
+        block_reason: 'E_FIELD_LOCKED: identity field is locked: department'
+      })
+    )
+    expect(screen.getByText('已拦下')).toBeTruthy()
+    expect(screen.getByText('框架外')).toBeTruthy()
   })
 
   test('置信度按百分比显示；为 null 时整段不渲染（不显示「置信度 null%」）', () => {
