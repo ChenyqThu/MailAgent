@@ -80,14 +80,8 @@ const SCAN_TONE: Record<ScanStatus, 'ok' | 'critical' | 'info'> = {
   queued: 'info'
 }
 
-/** 时刻归一到毫秒。🔴 两个端点的单位**不同**且都已核对过后端：
- *  `agent/history` 的三个时刻来自 `async_jobs.created_at REAL`（epoch **秒**），
- *  `profile/daily-summary` 的 `last_attempted_at` 来自 `contact.profile_attempted_at`
- *  （epoch **毫秒**）。把秒当毫秒画会显示成 1970 年，反过来会显示成公元五万年。
- *  判据用 1e11（≈1973 年的毫秒 / 公元 5138 年的秒）—— 两个量程之间没有歧义带。 */
-function toMillis(value: number): number {
-  return value < 1e11 ? value * 1000 : value
-}
+// 时刻单位：三个端点（agent/status · agent/history · profile/daily-summary）对外契约
+// 已统一为 epoch 毫秒（async_jobs 的秒在服务端出口转换），前端不再归一。
 
 function ScanStatusPip({ status }: { status: ScanStatus }): React.ReactElement {
   const { t } = useTranslation()
@@ -185,9 +179,9 @@ function LastScanRow({
   )
 }
 
-/** 历史一行：时间 / 状态 / 产出 或 错误码。三列固定次序，扫一眼就能看出「哪天挂了」。
- *  🔴 没有「手动 / 定时」列 —— history 端点的行里没有触发来源字段，画一个只能靠猜的列
- *  比不画更坏。 */
+/** 历史一行：时间 / 状态 / 手动标记 / 产出 或 错误码。触发来源来自 history 端点的
+ *  `trigger_kind`（params_json 透传）；定时是常态不标，只有 manual 标一枚，老行缺字段
+ *  → null → 不标。 */
 function ScanHistoryRow({
   run,
   now,
@@ -201,9 +195,12 @@ function ScanHistoryRow({
   return (
     <div className="flex items-center gap-2 rounded-[var(--r-ctl)] px-[9px] py-1.5 odd:bg-ink-fg/[0.025]">
       <span className="w-[76px] shrink-0 font-mono text-micro tabular-nums text-ink-fg-2">
-        {whenLabel(toMillis(run.created_at), now)}
+        {whenLabel(run.created_at, now)}
       </span>
       <ScanStatusPip status={run.status} />
+      {run.trigger_kind === 'manual' ? (
+        <ContactPip tone="neutral">{t('contacts.agent.runs.manual')}</ContactPip>
+      ) : null}
       <span className="min-w-0 flex-1 truncate text-micro text-ink-fg-2">
         {run.last_error !== null && run.last_error !== '' ? (
           <code className="font-mono text-micro text-fail">{run.last_error}</code>
@@ -242,9 +239,7 @@ function ProfileBatchSection({
           {t('contacts.agent.runs.profileLoadFailed')}
         </p>
       ) : data === undefined ? (
-        <p className="text-micro leading-[1.6] text-ink-fg-3">
-          {t('contacts.agent.runs.loading')}
-        </p>
+        <p className="text-micro leading-[1.6] text-ink-fg-3">{t('contacts.agent.runs.loading')}</p>
       ) : (
         <>
           <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 px-3 py-2.5">
@@ -273,7 +268,7 @@ function ProfileBatchSection({
             <p className="mt-2 text-micro leading-[1.6] text-ink-fg-3">
               {data.last_attempted_at !== null
                 ? t('contacts.agent.runs.profileFoot', {
-                    last: whenLabel(toMillis(data.last_attempted_at), now),
+                    last: whenLabel(data.last_attempted_at, now),
                     hour: String(data.fire_hour).padStart(2, '0')
                   })
                 : t('contacts.agent.runs.profileFootNever', {
@@ -469,7 +464,10 @@ export function ContactAgentDrawer({
   const pendingItems = pending.data?.items ?? []
   const blockedItems = blocked.data?.items ?? []
   const queueEmpty =
-    !pending.isPending && !blocked.isPending && pendingItems.length === 0 && blockedItems.length === 0
+    !pending.isPending &&
+    !blocked.isPending &&
+    pendingItems.length === 0 &&
+    blockedItems.length === 0
   const busy = adopt.isPending || ignore.isPending
 
   const renderCard = (suggestion: ContactGovernanceSuggestion): React.ReactElement => (
@@ -522,7 +520,10 @@ export function ContactAgentDrawer({
           value={tab}
           onChange={setTab}
           options={[
-            { value: 'queue', label: t('contacts.agent.tab.queue', { count: pendingItems.length }) },
+            {
+              value: 'queue',
+              label: t('contacts.agent.tab.queue', { count: pendingItems.length })
+            },
             { value: 'runs', label: t('contacts.agent.tab.runs') }
           ]}
         />
@@ -581,7 +582,7 @@ export function ContactAgentDrawer({
             now={now}
             lastScanStatus={lastScanStatus}
             lastScanError={lastScanError}
-            lastScanAt={lastScanAt === null ? null : toMillis(lastScanAt)}
+            lastScanAt={lastScanAt}
             // 上一轮还在队列/在跑时也禁用 —— 否则再点一次只会被后端合流（coalesced），
             // 用户看到的又是「什么都没发生」。
             running={run.isPending || scanInFlight}

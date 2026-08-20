@@ -5906,6 +5906,7 @@
         "historyEmpty": "No governance scan has run yet.",
         "historyLoadFailed": "Could not load the scan history · “Last scan” above is still accurate",
         "produced": "{count} suggestions",
+        "manual": "manual",
         "loading": "Loading…",
         "profileTitle": "Profile batch",
         "profileToday": "Processed today",

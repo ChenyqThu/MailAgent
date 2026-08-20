@@ -145,7 +145,7 @@ beforeEach(() => {
     enabled: true,
     pending_count: 1,
     last_fire_day: '2026-08-19',
-    last_scan_at: 1_755_600_000
+    last_scan_at: 1_755_600_000_000
   })
   agentHistory.mockResolvedValue({ items: [] })
   profileDailySummary.mockResolvedValue({
@@ -158,7 +158,9 @@ beforeEach(() => {
     fire_hour: 4
   })
   listSuggestions.mockImplementation(async ({ status }: { status: string }) =>
-    status === 'pending' ? { items: [PENDING], next_cursor: null } : { items: [BLOCKED], next_cursor: null }
+    status === 'pending'
+      ? { items: [PENDING], next_cursor: null }
+      : { items: [BLOCKED], next_cursor: null }
   )
 })
 
@@ -215,7 +217,18 @@ describe('ContactAgentDrawer · 队列 tab', () => {
     adoptSuggestion.mockRejectedValue(error)
     listSuggestions.mockImplementation(async ({ status }: { status: string }) =>
       status === 'pending'
-        ? { items: [{ ...PENDING, id: 13, type: 'identity', contact_ids: [3], payload: { field: 'department', value: 'Legal' } }], next_cursor: null }
+        ? {
+            items: [
+              {
+                ...PENDING,
+                id: 13,
+                type: 'identity',
+                contact_ids: [3],
+                payload: { field: 'department', value: 'Legal' }
+              }
+            ],
+            next_cursor: null
+          }
         : { items: [], next_cursor: null }
     )
     renderDrawer()
@@ -251,7 +264,7 @@ describe('ContactAgentDrawer · 队列 tab', () => {
       enabled: true,
       pending_count: 0,
       last_fire_day: '2026-08-19',
-      last_scan_at: 1_755_600_000,
+      last_scan_at: 1_755_600_000_000,
       last_scan_status: 'failed',
       last_scan_error: 'E_DISABLED'
     })
@@ -275,7 +288,7 @@ describe('ContactAgentDrawer · 队列 tab', () => {
       enabled: true,
       pending_count: 1,
       last_fire_day: '2026-08-19',
-      last_scan_at: 1_755_600_000,
+      last_scan_at: 1_755_600_000_000,
       last_scan_status: 'succeeded',
       last_scan_error: null
     })
@@ -297,7 +310,12 @@ describe('ContactAgentDrawer · 运行 tab', () => {
   })
 
   test('「现在跑一次」：coalesced 时说复用那一轮，不谎报排了新队', async () => {
-    runAgentScan.mockResolvedValue({ job_id: 5, status: 'running', created: false, coalesced: true })
+    runAgentScan.mockResolvedValue({
+      job_id: 5,
+      status: 'running',
+      created: false,
+      coalesced: true
+    })
     renderDrawer()
     await openRunsTab()
 
@@ -313,7 +331,7 @@ describe('ContactAgentDrawer · 运行 tab', () => {
       enabled: true,
       pending_count: 0,
       last_fire_day: '2026-08-19',
-      last_scan_at: 1_755_600_000,
+      last_scan_at: 1_755_600_000_000,
       last_scan_status: 'running',
       last_scan_error: null
     })
@@ -332,7 +350,7 @@ describe('ContactAgentDrawer · 运行 tab', () => {
       enabled: true,
       pending_count: 0,
       last_fire_day: '2026-08-19',
-      last_scan_at: 1_755_600_000,
+      last_scan_at: 1_755_600_000_000,
       last_scan_status: 'failed',
       last_scan_error: 'E_DISABLED'
     })
@@ -340,36 +358,35 @@ describe('ContactAgentDrawer · 运行 tab', () => {
     await openRunsTab()
 
     await waitFor(() =>
-      expect(
-        screen.getByText('治理 Agent 行当前是停用状态 —— 到 Agents 页打开后再跑')
-      ).toBeTruthy()
+      expect(screen.getByText('治理 Agent 行当前是停用状态 —— 到 Agents 页打开后再跑')).toBeTruthy()
     )
   })
 
   test('历史列表：最近 10 轮，成功报产出条数，失败报错误码', async () => {
-    // 🔴 时刻是**秒**（`async_jobs.created_at REAL`）。用「一小时前」这个动态值，读侧归一
-    // 正确时时间列必是「今天 HH:mm」；若把秒当毫秒，这个数会落到 1970-01，标签变成
-    // 「01-xx」—— 下面的 `^今天 ` 断言会红（已做变异验证）。
-    const oneHourAgoSeconds = Math.floor(Date.now() / 1000) - 3600
+    // 时刻是 epoch **毫秒**（后端出口已把 async_jobs 的秒统一转换）。「一小时前」动态值
+    // → 时间列必是「今天 HH:mm」；单位再错一档会落到 1970 或公元五万年，`^今天 ` 断言会红。
+    const oneHourAgoMs = Date.now() - 3600_000
     agentHistory.mockResolvedValue({
       items: [
         {
           job_id: 9,
           status: 'succeeded',
-          created_at: oneHourAgoSeconds,
-          started_at: oneHourAgoSeconds + 1,
-          finished_at: oneHourAgoSeconds + 30,
+          created_at: oneHourAgoMs,
+          started_at: oneHourAgoMs + 1_000,
+          finished_at: oneHourAgoMs + 30_000,
           last_error: null,
-          suggestions_created: 3
+          suggestions_created: 3,
+          trigger_kind: 'manual'
         },
         {
           job_id: 8,
           status: 'failed',
-          created_at: oneHourAgoSeconds - 86_400,
+          created_at: oneHourAgoMs - 86_400_000,
           started_at: null,
           finished_at: null,
           last_error: 'E_LLM_TIMEOUT',
-          suggestions_created: null
+          suggestions_created: null,
+          trigger_kind: 'schedule'
         }
       ]
     })
@@ -379,6 +396,8 @@ describe('ContactAgentDrawer · 运行 tab', () => {
     await waitFor(() => expect(screen.getByText('治理扫描历史')).toBeTruthy())
     expect(agentHistory).toHaveBeenCalledWith({ limit: 10 })
     expect(screen.getByText('产出 3 条建议')).toBeTruthy()
+    // trigger_kind：manual 标一枚、schedule 是常态不标 —— 恰好一枚。
+    expect(screen.getAllByText('手动')).toHaveLength(1)
     expect(screen.getByText('E_LLM_TIMEOUT')).toBeTruthy()
     expect(screen.getByText(/^今天 /)).toBeTruthy()
     expect(screen.getByText(/^昨天 /)).toBeTruthy()

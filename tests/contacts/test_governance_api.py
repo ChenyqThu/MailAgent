@@ -150,10 +150,14 @@ def test_agent_history_contract_order_limit_and_suggestion_count(api):
     assert [item["status"] for item in items] == ["failed", "succeeded"]
     assert set(items[0]) == {
         "job_id", "status", "created_at", "started_at", "finished_at",
-        "last_error", "suggestions_created",
+        "last_error", "suggestions_created", "trigger_kind",
     }
     assert items[0]["suggestions_created"] is None
     assert items[1]["suggestions_created"] == 2
+    # async_jobs 存 epoch 秒，对外契约统一毫秒（daily-summary 同款）。
+    assert items[1]["created_at"] == 10_000
+    assert items[1]["started_at"] == 11_000
+    assert items[0]["trigger_kind"] is None
     assert client.get("/api/contacts/agent/history", params={"limit": 51}).status_code == 422
 
 

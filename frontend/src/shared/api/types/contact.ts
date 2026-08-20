@@ -34,8 +34,19 @@ export const CONTACT_LOCKABLE_FIELDS = [
 ] as const
 export type ContactLockableField = (typeof CONTACT_LOCKABLE_FIELDS)[number]
 
-export const CONTACT_SUGGESTION_TYPE_VALUES = ['merge', 'identity', 'former_email', 'relation', 'kind'] as const
-export const CONTACT_SUGGESTION_STATUS_VALUES = ['pending', 'adopted', 'ignored', 'blocked'] as const
+export const CONTACT_SUGGESTION_TYPE_VALUES = [
+  'merge',
+  'identity',
+  'former_email',
+  'relation',
+  'kind'
+] as const
+export const CONTACT_SUGGESTION_STATUS_VALUES = [
+  'pending',
+  'adopted',
+  'ignored',
+  'blocked'
+] as const
 
 // ---- REST payloads (src/api/routers/contacts.py) ----
 
@@ -407,6 +418,8 @@ export interface ContactAgentHistoryItem {
   /** 这轮产出的待审建议条数；后端算不出时 null → 界面显「—」，不显 0（0 是「跑完了没发现」，
    *  与「不知道」是两回事）。 */
   suggestions_created: number | null
+  /** 触发来源（params_json 的 trigger_kind：manual / schedule）；老行或缺失 → null。 */
+  trigger_kind?: string | null
 }
 
 /** GET /api/contacts/agent/history?limit=N */

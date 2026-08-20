@@ -6312,6 +6312,7 @@
         "historyEmpty": "还没有跑过治理扫描。",
         "historyLoadFailed": "扫描历史读取失败 · 上面的「上次扫描」仍然是准的",
         "produced": "产出 {count} 条建议",
+        "manual": "手动",
         "loading": "读取中…",
         "profileTitle": "画像批处理",
         "profileToday": "今日已处理",

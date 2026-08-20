@@ -243,7 +243,10 @@ async def contact_governance_status(
             "enabled": bool(settings.contacts_enabled and settings.contact_agent_enabled),
             "pending_count": pending,
             "last_fire_day": marker[0] if marker else None,
-            "last_scan_at": latest[0] if latest else None,
+            # async_jobs 时刻是 epoch 秒；对外契约统一毫秒（history/daily-summary 同款）。
+            "last_scan_at": int(float(latest[0]) * 1000)
+            if latest and latest[0] is not None
+            else None,
             "last_scan_status": latest[1] if latest else None,
             "last_scan_error": latest[2] if latest else None,
         },
@@ -260,12 +263,18 @@ async def contact_governance_history(
     conn = repo.connect()
     try:
         rows = conn.execute(
-            "SELECT job_id, status, created_at, started_at, finished_at, last_error, result_json "
+            "SELECT job_id, status, created_at, started_at, finished_at, last_error, "
+            "result_json, params_json "
             "FROM async_jobs WHERE job_type=? ORDER BY job_id DESC LIMIT ?",
             (contact_governance.CONTACT_GOVERNANCE_JOB_TYPE, limit),
         ).fetchall()
     finally:
         conn.close()
+
+    # async_jobs 的时刻列是 epoch 秒；对外契约统一毫秒（daily-summary 与前端时间处理同款）。
+    def _ms(value: Any) -> Optional[int]:
+        return int(float(value) * 1000) if value is not None else None
+
     items = []
     for row in rows:
         suggestions_created = None
@@ -277,15 +286,25 @@ async def contact_governance_history(
                     suggestions_created = value
             except (json.JSONDecodeError, TypeError):
                 pass
+        trigger_kind = None
+        if row["params_json"]:
+            try:
+                params = json.loads(row["params_json"])
+                raw_kind = params.get("trigger_kind") if isinstance(params, dict) else None
+                if isinstance(raw_kind, str) and raw_kind:
+                    trigger_kind = raw_kind
+            except (json.JSONDecodeError, TypeError):
+                pass
         items.append(
             {
                 "job_id": int(row["job_id"]),
                 "status": row["status"],
-                "created_at": row["created_at"],
-                "started_at": row["started_at"],
-                "finished_at": row["finished_at"],
+                "created_at": _ms(row["created_at"]),
+                "started_at": _ms(row["started_at"]),
+                "finished_at": _ms(row["finished_at"]),
                 "last_error": row["last_error"],
                 "suggestions_created": suggestions_created,
+                "trigger_kind": trigger_kind,
             }
         )
     return success_envelope({"items": items}, request=request)
