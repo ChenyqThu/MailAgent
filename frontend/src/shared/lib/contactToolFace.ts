@@ -56,7 +56,16 @@ export const CONTACT_TOOL_FACE_GROUPS: readonly ContactToolGroup[] = [
   {
     permission: 'write',
     governance: false,
-    tools: ['contact_set_kind', 'contact_mark_former_email', 'contact_refresh_profile']
+    // 后两件是「chat 里直接改身份字段 / 上级」（owner 拍板）。它们走的就是通讯录界面手动编辑
+    // 那两个端点，出厂同样 `ask` 弹卡；`governance: false` 对它们尤其要紧 —— 治理扫描能提议
+    // 改身份字段，但结构上永远改不了。
+    tools: [
+      'contact_set_kind',
+      'contact_mark_former_email',
+      'contact_refresh_profile',
+      'contact_update_fields',
+      'contact_set_manager'
+    ]
   }
 ]
 

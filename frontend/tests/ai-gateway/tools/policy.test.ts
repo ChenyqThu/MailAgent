@@ -749,13 +749,24 @@ describe('contact_governance — behavior belt across every tool class (WP7)', (
     ]) {
       expect(tools[name], `${name} must be stripped in contact_governance`).toBeUndefined()
     }
-    // named explicitly: the three direct contact writes the scan must never reach
+    // named explicitly: the five direct contact writes the scan must never reach. 🔴 The last two
+    // are the point of naming them at all — contact_update_fields / contact_set_manager write
+    // exactly what the governance rules say may only ever be SUGGESTED (identity fields, the
+    // reporting line; src/contacts/governance.py guard rule 1). The class sweep above already
+    // covers them, but a future refactor that reclassified one of them would only turn THIS
+    // assertion red with the name in the message.
     for (const name of [
       'contact_set_kind',
       'contact_mark_former_email',
-      'contact_refresh_profile'
+      'contact_refresh_profile',
+      'contact_update_fields',
+      'contact_set_manager'
     ]) {
       expect(tools[name], `${name} must be stripped in contact_governance`).toBeUndefined()
+      expect(
+        isToolClassAllowedInMode(classOfTool(name), 'contact_governance', MAX_GRANTS, undefined, name),
+        `${name} must be denied by the matrix row itself, under maximal grants and its own name`
+      ).toBe(false)
     }
   })
 

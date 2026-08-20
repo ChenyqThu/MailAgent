@@ -128,15 +128,20 @@ BUILTIN_TOOL_POLICIES: tuple[BuiltinToolPolicy, ...] = (
     BuiltinToolPolicy("matter_attention_triage", "matters", "auto"),
     BuiltinToolPolicy("matter_suggestion_resolve", "matters", "auto"),
     # ── B 组：通讯录直写（Contact Directory WP7）──────────────────────────────────
-    # 三件都只动 owner 自己那本通讯录的一列、且都可逆（分类改得回来、曾用标记同一端点撤销、
-    # 画像刷新只是重算派生文档）。出厂 ask 而不是跟 matter 家族的 auto：这本通讯录的身份字段
-    # 是 owner 自己的话（治理 Agent 结构上只能「建议」），直写面留一张卡才对得上这条纪律。
-    # 三件都 configurable —— owner dogfood 后想调 auto 就调。
+    # 五件都只动 owner 自己那本通讯录、且都可逆（分类改得回来、曾用标记同一端点撤销、
+    # 画像刷新只是重算派生文档、身份字段可再改、上级可重设/解除）。出厂 ask 而不是跟 matter
+    # 家族的 auto：这本通讯录的身份字段是 owner 自己的话（治理 Agent 结构上只能「建议」），
+    # 直写面留一张卡才对得上这条纪律。五件都 configurable —— owner dogfood 后想调 auto 就调。
     # 🔴 建议面（contact_propose_* 三件）**不进本表**：它们是 write:false 的 artifact 工具
     # （tool_catalog.json 同源），写的是待 owner 采纳的 pending 行，不进审批链。
     BuiltinToolPolicy("contact_set_kind", "contacts", "ask"),
     BuiltinToolPolicy("contact_mark_former_email", "contacts", "ask"),
     BuiltinToolPolicy("contact_refresh_profile", "contacts", "ask"),
+    # 身份字段 PATCH + 上级设置（owner 拍板「chat 里直接改字段方便多了」）。走的就是通讯录 UI
+    # 手动编辑那两个端点，语义逐字一致（保存即落锁 / 环检测由服务端管）——所以出厂同为 ask：
+    # 界面上那一下点击 = 这里的这张卡。
+    BuiltinToolPolicy("contact_update_fields", "contacts", "ask"),
+    BuiltinToolPolicy("contact_set_manager", "contacts", "ask"),
     # ── B 组：能力/身份面（全部有 history/rollback 补偿）─────────────────────────
     BuiltinToolPolicy("set_skill_enabled", "capability", "ask"),
     BuiltinToolPolicy("update_system_md", "capability", "ask"),

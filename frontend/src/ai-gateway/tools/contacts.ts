@@ -1,10 +1,22 @@
 // Contact Directory WP7 — the contact-directory tool face (`contact_*`).
 //
-// Nine tools in three families, all behind MAILAGENT_CONTACTS_ENABLED (+ the ApprovalGuard, so a
+// Eleven tools in three families, all behind MAILAGENT_CONTACTS_ENABLED (+ the ApprovalGuard, so a
 // write tool can never exist without its guard — the calendar/matter all-or-nothing precedent):
 //   · reads (silent)      contact_search / contact_get / contact_list_mails
 //   · proposals (silent)  contact_propose_update / contact_propose_merge / contact_propose_relation
 //   · writes (edit/preview) contact_set_kind / contact_mark_former_email / contact_refresh_profile
+//                           contact_update_fields / contact_set_manager
+//
+// 🔴 The last two are the 直写 half of the propose family (owner 拍板「加，chat 里直接改字段方便
+//    多了」): the identity fields and the reporting line used to be reachable only through
+//    propose → review queue → adopt, which is the right shape for an UNATTENDED scan and the wrong
+//    one for a manual chat where the owner is sitting right there. They hit the SAME two REST
+//    endpoints the directory UI's manual edit hits (PATCH /contacts/{id} + POST
+//    /contacts/{id}/manager), so their semantics are the UI's semantics by construction, not by
+//    a re-implementation that could drift — and the always-ask edit-tier card is what the owner's
+//    click on the UI field was: an in-person confirmation. The governance venue is UNAFFECTED:
+//    both are class `domain_write`, which the `contact_governance` matrix row denies before it
+//    ever reaches a grant, so the scan still only ever proposes.
 //
 // 🔴 The proposal family is built with `auditedReadTool` on the matter_update_propose precedent
 //    (class `artifact`, silent, no guard, no risk tier): what it writes is a PENDING
@@ -50,6 +62,16 @@ import {
 // RELATIVE import (not the @shared alias) so the pure-Node poc harness can load the gateway tools
 // — same rationale as calendar.ts / web.ts. contextSerializer is pure TS (no react/electron).
 import { fenceUntrusted, sanitizeProse } from '../../shared/assistant/context/contextSerializer'
+// 🔴 The function / seniority value domains and the PATCH wire shape are NOT hand-copied here:
+// `shared/api/types/contact.ts` is a zero-dependency leaf that already mirrors
+// `src/contacts/taxonomy.py` under a real gate (tests/config/test_contact_enum_parity.py), so a
+// third copy would be a third thing to forget. Relative import for the same poc-harness reason as
+// contextSerializer above (schemas.ts ↔ shared/api/types/matter is the existing precedent).
+import {
+  CONTACT_FUNCTION_VALUES,
+  CONTACT_SENIORITY_VALUES,
+  type ContactPatchBody
+} from '../../shared/api/types/contact'
 
 /** Names of the contact read tools (exported for tests + the eval catalog completeness gate,
  *  which statically extracts every GATEWAY_*_TOOL_NAMES array — a name that never appears in one
@@ -74,7 +96,9 @@ export const GATEWAY_CONTACT_PROPOSE_TOOL_NAMES = [
 export const GATEWAY_CONTACT_WRITE_TOOL_NAMES = [
   'contact_set_kind',
   'contact_mark_former_email',
-  'contact_refresh_profile'
+  'contact_refresh_profile',
+  'contact_update_fields',
+  'contact_set_manager'
 ] as const
 
 /** contact kinds — mirrors Python `src/contacts/taxonomy.py::CONTACT_KIND_VALUES` (the
@@ -207,6 +231,53 @@ const contactMarkFormerEmailSchema = z
   .strict()
 
 const contactRefreshProfileSchema = z.object({ contact_id: contactIdField }).strict()
+
+/** One free-text identity column. `null` = CLEAR it (the server normalizes ''/blank to NULL too,
+ *  but spelling null keeps "clear this" distinguishable from "I had nothing to say"). An ABSENT
+ *  key is neither — see contactUpdateFieldsSchema. */
+const identityTextField = z.string().trim().max(500).nullable()
+
+const contactUpdateFieldsSchema = z
+  .object({
+    contact_id: contactIdField,
+    display_name: identityTextField.optional(),
+    formal_name: identityTextField.optional(),
+    organization: identityTextField.optional(),
+    department: identityTextField.optional(),
+    role_title: identityTextField.optional(),
+    phone: identityTextField.optional(),
+    // 🔴 `notes` is deliberately ABSENT even though PATCH accepts it (owner 拍板 0819): this tool
+    //    writes WHOLE-FIELD replacements, so letting the model touch the owner's private
+    //    handwritten note means overwriting prose it has never read — a data-loss path, not an
+    //    edit. A future append-only note tool is the right shape for that; until then the note
+    //    stays a hand-written field. (It is also the one PATCH field with no lock, so nothing
+    //    would even flag the overwrite afterwards.)
+    function: z.enum(CONTACT_FUNCTION_VALUES).nullable().optional(),
+    seniority: z.enum(CONTACT_SENIORITY_VALUES).nullable().optional()
+  })
+  .strict()
+  // 🔴 「未提供」≠「置空」 is the endpoint's core distinction (router: model_dump(
+  // exclude_unset=True)), so a call carrying contact_id ALONE is not "clear everything" — it is a
+  // no-op the server answers with E_INVALID_ARG. Reject it here instead, at the schema, so the
+  // model gets a usable message rather than a domain error.
+  .superRefine((value, ctx) => {
+    if (Object.keys(value).length < 2) {
+      ctx.addIssue({
+        code: 'custom',
+        message: 'give at least one field to change besides contact_id'
+      })
+    }
+  })
+
+const contactSetManagerSchema = z
+  .object({
+    contact_id: contactIdField,
+    /** null = CLEAR the reporting line. Same word as the wire key, the server column
+     *  (`contact.manager_contact_id`) and `contact_propose_relation` — 同一概念固定同一个词,
+     *  so nobody has to translate "supervisor" into "manager" at one hop and back at the next. */
+    manager_contact_id: contactIdField.nullable()
+  })
+  .strict()
 
 // ── domain escape hatch ──────────────────────────────────────────────────────────────────────────
 
@@ -709,7 +780,7 @@ export function createContactProposeTools(
 }
 
 /**
- * The three直写 contact tools (class `domain_write`). Each writes ONE reversible column on the
+ * The five 直写 contact tools (class `domain_write`). Each writes reversible columns on the
  * owner's own directory, so they sit in the ordinary approval ladder — factory default `ask`
  * (src/agent_config/tool_prefs.py), owner-configurable to auto.
  *
@@ -803,5 +874,69 @@ export function createContactWriteTools(
     guard
   )
 
-  return { contact_set_kind, contact_mark_former_email, contact_refresh_profile }
+  const contact_update_fields = auditedWriteTool(
+    {
+      ...shared,
+      name: 'contact_update_fields',
+      description:
+        "Edit one contact's identity fields directly: display_name (the everyday name people " +
+        'call them), formal_name (the one on contracts and in systems), organization, ' +
+        'department, role_title, phone, plus the function and seniority classifications. Pass ' +
+        'ONLY the fields you are changing — an omitted field is left alone, while an explicit ' +
+        'null CLEARS it. At least one field besides contact_id is required. 🔴 Saving a field ' +
+        'also LOCKS it: automatic extraction will stop overwriting it, and re-saving a field the ' +
+        'owner already locked is allowed and simply refreshes that lock — this is exactly what ' +
+        'happens when the owner edits the same field by hand in the directory UI, which is why ' +
+        'this asks for confirmation every time. Use contact_propose_update instead when you are ' +
+        'only inferring a change from mail and want the owner to review it later; use this when ' +
+        'they have just told you what to put there.',
+      inputSchema: contactUpdateFieldsSchema,
+      risk: 'edit',
+      run: (input, { signal }) => {
+        // The wire body is the endpoint's body: only the keys the model actually spelled survive
+        // zod's parse, so "not provided" stays distinguishable from "set to null" all the way
+        // down to the router's model_dump(exclude_unset=True). `satisfies` pins the shape to the
+        // REST type instead of re-describing it.
+        const { contact_id: contactId, ...fields } = input
+        return domainRequest(domain, 'PATCH', contactPath(contactId), {
+          body: fields satisfies ContactPatchBody,
+          signal
+        })
+      }
+    },
+    collector,
+    guard
+  )
+
+  const contact_set_manager = auditedWriteTool(
+    {
+      ...shared,
+      name: 'contact_set_manager',
+      description:
+        "Set (or clear, with manager_contact_id=null) who this contact reports to. Only one " +
+        'side of the link is stored — to record "B reports to A" call this on B, and A then ' +
+        'shows B among their reports. Both ids must be live contacts; the server refuses a ' +
+        'contact reporting to themselves and refuses any link that would close a reporting ' +
+        'cycle. A link set here counts as owner-set, so the AI profile / governance scan will ' +
+        'not overwrite it. Use contact_propose_relation instead when you are inferring the ' +
+        'reporting line from mail and want the owner to review it.',
+      inputSchema: contactSetManagerSchema,
+      risk: 'edit',
+      run: (input, { signal }) =>
+        domainRequest(domain, 'POST', contactPath(input.contact_id, '/manager'), {
+          body: { manager_contact_id: input.manager_contact_id },
+          signal
+        })
+    },
+    collector,
+    guard
+  )
+
+  return {
+    contact_set_kind,
+    contact_mark_former_email,
+    contact_refresh_profile,
+    contact_update_fields,
+    contact_set_manager
+  }
 }

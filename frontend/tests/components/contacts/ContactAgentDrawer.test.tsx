@@ -11,6 +11,8 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
+import { CONTACT_TOOL_FACE_GROUPS } from '@shared/lib/contactToolFace'
+
 const { listSuggestions, adoptSuggestion, ignoreSuggestion, runAgentScan, list, agentStatus } =
   vi.hoisted(() => ({
     listSuggestions: vi.fn(),
@@ -285,14 +287,21 @@ describe('ContactAgentDrawer · 工具 tab', () => {
 
     expect(screen.getByText('contact_propose_merge')).toBeTruthy()
     expect(screen.getByText('contact_refresh_profile')).toBeTruthy()
+    expect(screen.getByText('contact_update_fields')).toBeTruthy()
+    expect(screen.getByText('contact_set_manager')).toBeTruthy()
     expect(screen.queryByText('contacts.search')).toBeNull()
-    expect(screen.getAllByText('读')).toHaveLength(3)
-    expect(screen.getAllByText('建议')).toHaveLength(3)
-    expect(screen.getAllByText('写（轻）')).toHaveLength(3)
-    // 副标说「它读、它提议」，同屏列着写工具 —— 必须说清那三件治理扫描拿不到。
+    // 每件工具一枚权限 chip —— 期望值从分组表推，而不是抄一个会过时的数字（0819 直写批
+    // 加两件写工具时，写死的 3 就是这里唯一红的地方，而它跟「界面对不对」毫无关系）。
+    // 名单本身对不对由 contact_tool_face_leaf.test.ts 三向钉死；这里管的是「每一行都渲染出来了」。
+    for (const group of CONTACT_TOOL_FACE_GROUPS) {
+      const label = { read: '读', propose: '建议', write: '写（轻）' }[group.permission]
+      expect(screen.getAllByText(label), label).toHaveLength(group.tools.length)
+      for (const tool of group.tools) expect(screen.getByText(tool), tool).toBeTruthy()
+    }
+    // 副标说「它读、它提议」，同屏列着写工具 —— 必须说清那一组治理扫描拿不到。
     expect(
       screen.getByText(
-        '标「写（轻）」的三件只在主对话里可用，每天那轮治理扫描一件写工具都拿不到。'
+        '标「写（轻）」的那一组只在主对话里可用，每天那轮治理扫描一件写工具都拿不到。'
       )
     ).toBeTruthy()
   })
