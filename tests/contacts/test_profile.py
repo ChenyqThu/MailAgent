@@ -337,6 +337,16 @@ def test_profile_schema_requires_structured_evolution_and_unambiguous_skip():
             schema=PROFILE_TOOL_SCHEMA["input_schema"],
         )
 
+    # 2026-08-19 真机全员生成失败的回归：prompt 强调 skip 规则后模型会顺手输出
+    # "skip": false 甚至 "reason": null —— 两者都必须放行（null 无害，写库前 pop），
+    # 只有字符串 reason（上面那条）保持非法。
+    explicit_not_skip = _valid_payload()
+    explicit_not_skip["skip"] = False
+    validate(instance=explicit_not_skip, schema=PROFILE_TOOL_SCHEMA["input_schema"])
+    null_reason = _valid_payload()
+    null_reason.update({"skip": False, "reason": None})
+    validate(instance=null_reason, schema=PROFILE_TOOL_SCHEMA["input_schema"])
+
 
 @pytest.mark.asyncio
 async def test_generation_g1_skip_fail_closed_skip_and_success(db):

@@ -17,7 +17,9 @@ PROFILE_TOOL_SCHEMA: Dict[str, Any] = {
         "additionalProperties": False,
         "properties": {
             "skip": {"type": "boolean"},
-            "reason": {"type": "string", "maxLength": 500},
+            # null 只为非 skip 分支放行（模型顺手输出 "reason": null）；skip 分支在
+            # oneOf 里另行收紧为非空字符串。
+            "reason": {"type": ["string", "null"], "maxLength": 500},
             "summary": {"type": "string", "maxLength": 2000},
             "role_title": {"type": ["string", "null"]},
             "formal_name": {"type": ["string", "null"]},
@@ -67,11 +69,17 @@ PROFILE_TOOL_SCHEMA: Dict[str, Any] = {
         "oneOf": [
             {
                 "required": ["skip", "reason"],
-                "properties": {"skip": {"const": True}},
+                "properties": {
+                    "skip": {"const": True},
+                    "reason": {"type": "string", "minLength": 1},
+                },
             },
             {
-                "not": {"required": ["reason"]},
-                "properties": {"skip": {"const": False}},
+                # 非 skip 分支曾用 not-required 禁 reason —— 但模型被 prompt 提醒 skip 规则后
+                # 会顺手输出 "reason": null，required 判「属性存在」→ null 也撞禁令 → oneOf
+                # 全灭（2026-08-19 真机全员生成失败）。改成只允许 null：字符串 reason 仍拒
+                #（画像+理由的混合形态还是非法），无害的 null 放行、写库前 pop 掉。
+                "properties": {"skip": {"const": False}, "reason": {"type": "null"}},
                 "required": [
                     "summary",
                     "role_title",

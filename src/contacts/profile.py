@@ -184,6 +184,8 @@ def _validate_payload(payload: Dict[str, Any], evidence: ProfileEvidence) -> Dic
         raise ValidationError("summary is required for a non-skip profile")
     normalized = dict(payload)
     normalized.pop("skip", None)
+    # schema 允许非 skip 产出带 "reason": null（见 profile_prompts oneOf 注释）——不入库。
+    normalized.pop("reason", None)
     normalized.pop("reason", None)
     normalized["evidence_window"] = {
         "from": evidence.first_internal_id,
