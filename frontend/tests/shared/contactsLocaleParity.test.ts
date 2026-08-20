@@ -30,16 +30,4 @@ describe('contacts locale parity', () => {
     expect(missingInEn, 'en-US 缺 key（该语言会渲染裸 key）').toEqual([])
     expect(missingInZh, 'zh-CN 缺 key（该语言会渲染裸 key）').toEqual([])
   })
-
-  test('settings.labs.contacts 三键两侧齐全', () => {
-    for (const locale of [zhCN, enUS] as Array<Record<string, unknown>>) {
-      const labs = (
-        ((locale.settings as Record<string, unknown>)?.labs ?? {}) as Record<string, unknown>
-      ).contacts as Record<string, unknown> | undefined
-      expect(labs, 'settings.labs.contacts 缺块').toBeTruthy()
-      for (const key of ['label', 'helper', 'restartHint']) {
-        expect(typeof labs?.[key], `settings.labs.contacts.${key}`).toBe('string')
-      }
-    }
-  })
 })

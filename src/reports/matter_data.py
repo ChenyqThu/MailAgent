@@ -93,14 +93,8 @@ def fetch_matter_briefs(
     （active|waiting|blocked）/ ``due_at`` 临期或逾期 / 有 open attention 信号 /
     有 pending 提案。
 
-    ``MAILAGENT_MATTERS_ENABLED=false`` → 恒返回 ``[]``（报告里整段不出现事项区）。
     取数异常 → 记日志返 ``[]``，**不抛**（报告不能因为事项挂了而生不出来）。
     """
-    from src.config import config as _cfg
-
-    if not getattr(_cfg, "matters_enabled", False):
-        return []
-
     start_ms = int(window_start.timestamp() * _MS)
     end_ms = int(window_end.timestamp() * _MS)
     due_soon_ms = end_ms + DUE_SOON_DAYS * 86_400 * _MS

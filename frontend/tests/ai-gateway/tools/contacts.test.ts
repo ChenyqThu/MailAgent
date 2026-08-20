@@ -88,7 +88,16 @@ const DETAIL = {
       last_seen_at: 2
     }
   ],
-  manager: { id: 3, display_name: '李四', formal_name: null, organization: 'Omada', role_title: 'Head', kind: 'person', mail_count: 10, primary_email: 'li@omada.test' },
+  manager: {
+    id: 3,
+    display_name: '李四',
+    formal_name: null,
+    organization: 'Omada',
+    role_title: 'Head',
+    kind: 'person',
+    mail_count: 10,
+    primary_email: 'li@omada.test'
+  },
   manager_src: 'manual',
   reports: [],
   peers: [],
@@ -202,107 +211,22 @@ async function runWrite(
   return { asks, result: await exec(input, { toolCallId, messages: [], abortSignal: undefined }) }
 }
 
-describe('buildGatewayTools — MAILAGENT_CONTACTS_ENABLED gate', () => {
-  test('flag off (default) → no contact tools; ToolSet keys byte-identical to the un-flagged set', () => {
-    const base = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contextMode: 'manual_chat'
-    })
-    const flagOff = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: false,
-      contextMode: 'manual_chat'
-    })
-    expect(Object.keys(flagOff)).toEqual(Object.keys(base))
-    for (const name of ALL_CONTACT_TOOL_NAMES) {
-      expect(base[name], name).toBeUndefined()
-      expect(flagOff[name], name).toBeUndefined()
-    }
-  })
-
-  test('flag on but NO guard → no contact tools (the mixed family is all-or-nothing)', () => {
+describe('buildGatewayTools — contact tools are a default capability', () => {
+  test('without an approval guard, no contact tools register', () => {
     const tools = buildGatewayTools({
       domain: contactDomain(),
-      contactToolsEnabled: true,
       contextMode: 'manual_chat'
     })
     for (const name of ALL_CONTACT_TOOL_NAMES) expect(tools[name], name).toBeUndefined()
   })
 
-  test('flag on + guard → all eleven register in manual chat', () => {
+  test('with an approval guard, all eleven register in manual chat', () => {
     const tools = buildGatewayTools({
       domain: contactDomain(),
       approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
       contextMode: 'manual_chat'
     })
     for (const name of ALL_CONTACT_TOOL_NAMES) expect(tools[name], name).toBeDefined()
-  })
-
-  // 🔴 The proposal trio belongs to the AGENT flag's domain, not the directory flag's: the landing
-  // leg (POST /api/contacts/agent/proposals) is double-flag-gated server-side and the review queue
-  // lives in the same domain. With the agent off those three could only ever return E_DISABLED —
-  // so they are not registered at all (matter_runs_list 先例). Everything else keeps working:
-  // browsing the directory and fixing a contact's type do not need the governance agent.
-  test('CONTACTS on + CONTACT_AGENT off → the proposal trio is absent; reads + direct writes stay', () => {
-    const tools = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
-      contactAgentEnabled: false,
-      contextMode: 'manual_chat'
-    })
-    for (const name of GATEWAY_CONTACT_PROPOSE_TOOL_NAMES) {
-      expect(tools[name], `${name} must not be advertised with the agent off`).toBeUndefined()
-    }
-    for (const name of [
-      ...GATEWAY_CONTACT_READ_TOOL_NAMES,
-      ...GATEWAY_CONTACT_WRITE_TOOL_NAMES
-    ]) {
-      expect(tools[name], `${name} must be unaffected by the agent flag`).toBeDefined()
-    }
-  })
-
-  test('CONTACTS on + CONTACT_AGENT on → the proposal trio registers', () => {
-    const tools = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
-      contactAgentEnabled: true,
-      contextMode: 'manual_chat'
-    })
-    for (const name of ALL_CONTACT_TOOL_NAMES) expect(tools[name], name).toBeDefined()
-  })
-
-  test("an OMITTED contactAgentEnabled keeps the whole family (`!== false`, harness/pre-WP7 cfgs)", () => {
-    // The lifecycle always threads the value, so only a hand-built cfg lands here — and it must
-    // keep the pre-gate shape, exactly like planToolsEnabled / matterAgentEnabled.
-    const omitted = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
-      contextMode: 'manual_chat'
-    })
-    const explicitOn = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactToolsEnabled: true,
-      contactAgentEnabled: true,
-      contextMode: 'manual_chat'
-    })
-    expect(Object.keys(omitted)).toEqual(Object.keys(explicitOn))
-  })
-
-  test('the agent flag alone registers nothing (it narrows the family, never creates it)', () => {
-    const tools = buildGatewayTools({
-      domain: contactDomain(),
-      approvalGuard: new ApprovalGuard(),
-      contactAgentEnabled: true,
-      contextMode: 'manual_chat'
-    })
-    for (const name of ALL_CONTACT_TOOL_NAMES) expect(tools[name], name).toBeUndefined()
   })
 })
 
@@ -311,7 +235,9 @@ describe('CONTACT_PROPOSE_TOOLS — the one hand-copied list', () => {
     // 🔴 policy.ts cannot import tools/contacts.ts (it is the class layer's zero-dependency root),
     // so the three names live in two places. This is the闸 that keeps them equal — without it a
     // renamed propose tool would silently stop being admitted in a governance run.
-    expect([...CONTACT_PROPOSE_TOOLS].sort()).toEqual([...GATEWAY_CONTACT_PROPOSE_TOOL_NAMES].sort())
+    expect([...CONTACT_PROPOSE_TOOLS].sort()).toEqual(
+      [...GATEWAY_CONTACT_PROPOSE_TOOL_NAMES].sort()
+    )
   })
 })
 
@@ -586,12 +512,13 @@ describe('contact writes — approval + the runtime mode belt', () => {
       approvalMode: 'auto-reversible'
     })
     const needsApproval = (t: Tool, input: unknown, id: string) =>
-      (
-        t.needsApproval as (i: unknown, o: { toolCallId: string }) => boolean | Promise<boolean>
-      )(input, { toolCallId: id })
-    expect(await needsApproval(tools.contact_set_kind, { contact_id: 12, kind: 'robot' }, 't1')).toBe(
-      true
-    )
+      (t.needsApproval as (i: unknown, o: { toolCallId: string }) => boolean | Promise<boolean>)(
+        input,
+        { toolCallId: id }
+      )
+    expect(
+      await needsApproval(tools.contact_set_kind, { contact_id: 12, kind: 'robot' }, 't1')
+    ).toBe(true)
     expect(
       await needsApproval(
         tools.contact_mark_former_email,
@@ -628,7 +555,8 @@ describe('contact writes — approval + the runtime mode belt', () => {
 describe('contact_update_fields — identity field PATCH', () => {
   const parse = (input: unknown): { success: boolean } => {
     const schema = (
-      createContactWriteTools(contactDomain(), [], new ApprovalGuard(), {}).contact_update_fields as {
+      createContactWriteTools(contactDomain(), [], new ApprovalGuard(), {})
+        .contact_update_fields as {
         inputSchema: { safeParse(i: unknown): { success: boolean } }
       }
     ).inputSchema
@@ -741,8 +669,7 @@ describe('contact_update_fields — identity field PATCH', () => {
 describe('contact_set_manager — the reporting line', () => {
   const parse = (input: unknown): { success: boolean } => {
     const schema = (
-      createContactWriteTools(contactDomain(), [], new ApprovalGuard(), {})
-        .contact_set_manager as {
+      createContactWriteTools(contactDomain(), [], new ApprovalGuard(), {}).contact_set_manager as {
         inputSchema: { safeParse(i: unknown): { success: boolean } }
       }
     ).inputSchema
@@ -758,9 +685,9 @@ describe('contact_set_manager — the reporting line', () => {
     // 曾短暂叫过 supervisor_contact_id，这条钉住那个别名不会悄悄复活成第二种写法。
     // 🔴 必须把**必填的** manager_contact_id 一起给：只传别名的话，拒绝来自「少了必填键」
     // 而不是「别名不被接受」，那样即使 schema 真的重新收下别名这条也照样绿（变异实测）。
-    expect(
-      parse({ contact_id: 12, manager_contact_id: 3, supervisor_contact_id: 3 }).success
-    ).toBe(false)
+    expect(parse({ contact_id: 12, manager_contact_id: 3, supervisor_contact_id: 3 }).success).toBe(
+      false
+    )
     // src 不在 wire 形状里（REST 面恒写 'manual'）
     expect(parse({ contact_id: 12, manager_contact_id: 3, src: 'manual' }).success).toBe(false)
   })
@@ -770,11 +697,7 @@ describe('contact_set_manager — the reporting line', () => {
     const tools = createContactWriteTools(methodCapturingDomain(capture), [], new ApprovalGuard(), {
       contextMode: 'manual_chat'
     })
-    await runWrite(
-      tools.contact_set_manager,
-      { contact_id: 12, manager_contact_id: 3 },
-      'tc-set'
-    )
+    await runWrite(tools.contact_set_manager, { contact_id: 12, manager_contact_id: 3 }, 'tc-set')
     await runWrite(
       tools.contact_set_manager,
       { contact_id: 12, manager_contact_id: null },
@@ -851,10 +774,9 @@ describe('the 直写 pair — approval floor + venue floor', () => {
       contextMode: 'contact_governance'
     })
     for (const name of PAIR) {
-      await expect(
-        runWrite(tools[name], INPUTS[name], `denied-${name}`),
-        name
-      ).rejects.toThrow(/E_CONTEXT_MODE_DENIED/)
+      await expect(runWrite(tools[name], INPUTS[name], `denied-${name}`), name).rejects.toThrow(
+        /E_CONTEXT_MODE_DENIED/
+      )
     }
     expect(capture).toEqual([])
   })
@@ -874,7 +796,10 @@ describe('the 直写 pair — approval floor + venue floor', () => {
       }
     } as Parameters<typeof buildGatewayTools>[0])
     // canary: this really is a governance assembly, not an empty/broken one
-    expect(tools.contact_propose_update, 'the propose channel is missing — not a real governance face').toBeDefined()
+    expect(
+      tools.contact_propose_update,
+      'the propose channel is missing — not a real governance face'
+    ).toBeDefined()
     for (const name of PAIR) expect(tools[name], name).toBeUndefined()
   })
 })

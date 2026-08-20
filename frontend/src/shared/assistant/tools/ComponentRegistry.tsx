@@ -184,8 +184,7 @@ export const componentRegistry: ComponentRegistry = createComponentRegistry([
     toolNames: ['calendar_event_reschedule', 'calendar_event_rsvp', 'calendar_event_delete'],
     render: CalendarApprovalCard
   },
-  // Matters MVP P3 — the matter write tools (behind MAILAGENT_MATTERS_ENABLED; a registration for
-  // a tool the gateway never emits is inert). One card, two jobs: an approval-paused part gets
+  // Matters MVP P3 — the matter write tools. One card, two jobs: an approval-paused part gets
   // real approve/reject buttons (matter_resource_mutate can force a card at any time, and per-tool
   // prefs let an owner set any of them to `ask` — without this they hit the buttonless
   // ToolTraceCard spinner, the v1.5.0 deadlock), and a COMPLETED part renders the write receipt +

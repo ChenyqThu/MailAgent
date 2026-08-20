@@ -4,8 +4,6 @@
 - 🔴 绝不挂 5s radar poll —— 独立 interval env (``MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC``),
   每 tick 有界批 (batch + 墙钟预算); 纯本地 SQLite (零 IMAP), 由 new_watcher 放
   ``asyncio.to_thread`` 跑, 不冻 event loop。
-- flag off (``MAILAGENT_CONTACTS_ENABLED``) = 字节级 inert: ``run_tick`` 第一行
-  返回, 零 SQL 零文件。
 - backfill = watermark 从 0 起步的同一段代码 (CLI ``mailagent contact backfill``
   只是不带预算的催跑, 不另起一条 bulk 路径)。
 
@@ -387,12 +385,7 @@ def run_scan(
 def run_tick(
     db_path: str, *, budget_sec: float = DEFAULT_TICK_BUDGET_SEC,
 ) -> Optional[Dict[str, Any]]:
-    """new_watcher 独立低频节拍入口。🔴 flag off = 字节级 inert: 不开库、不建
-    文件、零 SQL —— 第一行 settings 门挡掉一切。"""
-    from src.config import config as _settings
-
-    if not getattr(_settings, "contacts_enabled", False):
-        return None
+    """new_watcher 独立低频节拍入口。"""
     try:
         return run_scan(db_path, budget_sec=budget_sec)
     except Exception as e:  # 扫描失败只降级告警, 不打断 watcher 主循环

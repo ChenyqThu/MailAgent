@@ -1226,7 +1226,7 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_chat_queued_input_delivery
   // v26 → v27 — Matters MVP P3: widen anchor_type + coupling CHECK for matter sessions.
   // Same v13 discipline: FK OFF only outside a transaction, rebuild/swap in one immediate
   // transaction, restore every existing session index, then verify dependent-table integrity.
-  // The migration is structural and deliberately independent of MAILAGENT_MATTERS_ENABLED.
+  // The migration is structural and independent of runtime feature availability.
   if (current < 27 && isV27SessionShape(db)) {
     db.prepare(
       "INSERT OR REPLACE INTO chat_db_meta (key, value) VALUES ('schema_version', '27')"

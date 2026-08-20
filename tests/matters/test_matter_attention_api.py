@@ -28,7 +28,7 @@ def env(tmp_path):
     path = tmp_path / "attention-api.db"
     SyncStore(str(path))
     settings = SimpleNamespace(
-        matters_enabled=True, matter_agent_enabled=True, sync_store_db_path=str(path)
+        sync_store_db_path=str(path)
     )
     repo = MatterRepository(path)
     matter_service = MatterService(repo, clock_ms=lambda: NOW)

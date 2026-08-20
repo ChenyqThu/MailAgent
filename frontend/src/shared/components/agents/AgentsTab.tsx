@@ -38,7 +38,6 @@ import {
   pressHandlers
 } from './shared'
 import { useAgentsNavigation } from './navigation'
-import { useContactProfileEnabled } from '@shared/components/contacts/hooks'
 import { ConfigDrawer } from './drawers/ConfigDrawer'
 import { SearchConfigDrawer } from './drawers/SearchConfigDrawer'
 import { MainAssistantDrawer } from './drawers/MainAssistantDrawer'
@@ -1049,7 +1048,9 @@ function ContactAgentRowCard({
             {badgeLabel}
           </span>
         </div>
-        <div style={{ marginTop: 4, fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', lineHeight: 1.5 }}>
+        <div
+          style={{ marginTop: 4, fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', lineHeight: 1.5 }}
+        >
           {subtitle}
         </div>
       </div>
@@ -1197,8 +1198,6 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const [contactProfileOpen, setContactProfileOpen] = useState(false)
   // v2 — 通讯录治理配置抽屉开合（后端 v65 播种单行，只编辑、无新建）。
   const [contactGovernanceOpen, setContactGovernanceOpen] = useState(false)
-  // 画像卡总闸：/chat/config 的 contactProfileEnabled（不是 env —— 见卡片注释）。
-  const contactProfileMaster = useContactProfileEnabled().enabled
   // 项目周报卡的总闸绑 env PROJECT_PROGRESS_SYNC_ENABLED（响应式读，总闸未开 → 卡片显「总闸未开」）。
   const projectProgressMaster = useEnvStore((s) =>
     s.state.status === 'ready'
@@ -1545,29 +1544,21 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
                 </p>
               </div>
               {contactProfileAgent && (
-                // 画像卡：徽标三态（总闸未开 / 已启用 / 已停用）**逐字保持现状** ——
-                // 本批不改它已有的显示语义。
+                // 徽标只报行启停 —— 五个 venue env 闸已于 2026-08-19 cutover 退役，
+                // 「总闸未开」这类 flag 状态提示不再存在（owner 拍板）。
                 <ContactAgentRowCard
                   cfg={contactProfileAgent}
-                  badgeLabel={
-                    !contactProfileMaster
-                      ? t('agents.contactProfile.masterOff')
-                      : contactProfileAgent.enabled
-                        ? t('agents.card.enabled')
-                        : t('agents.card.disabled')
-                  }
-                  badgeOn={contactProfileMaster && contactProfileAgent.enabled}
-                  switchDisabled={!contactProfileMaster || IS_WEB}
+                  badgeLabel={t(
+                    contactProfileAgent.enabled ? 'agents.card.enabled' : 'agents.card.disabled'
+                  )}
+                  badgeOn={contactProfileAgent.enabled}
+                  switchDisabled={IS_WEB}
                   subtitle={t('agents.contactProfile.subtitle')}
                   onConfig={() => setContactProfileOpen(true)}
                   onToggle={(v) => void handleContactProfileToggle(v)}
                 />
               )}
               {contactGovernanceAgent && (
-                // 治理卡：徽标**只报行启停**，不出「总闸未开」这类 flag 状态提示
-                // （owner 拍板：`MAILAGENT_CONTACT_AGENT_ENABLED` 即将默认开并撤出 Labs，
-                // 现在就别再教用户一个马上会消失的概念）。字节级 flag 门不受影响 ——
-                // 通讯录列表头的 ✨Agent 胶囊与它上游那条查询照旧由 `useContactFlags` 门着。
                 <ContactAgentRowCard
                   cfg={contactGovernanceAgent}
                   badgeLabel={t(
@@ -1680,10 +1671,7 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         create={customDrawer?.mode === 'create'}
         onClose={() => setCustomDrawer(null)}
       />
-      <MainAssistantDrawer
-        open={mainAssistantOpen}
-        onClose={() => setMainAssistantOpen(false)}
-      />
+      <MainAssistantDrawer open={mainAssistantOpen} onClose={() => setMainAssistantOpen(false)} />
       <PreprocessConfigDrawer
         cfg={preprocessAgent}
         open={preprocessOpen}
@@ -1697,7 +1685,6 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
       <ContactProfileConfigDrawer
         cfg={contactProfileAgent}
         open={contactProfileOpen}
-        masterEnabled={contactProfileMaster}
         onClose={() => setContactProfileOpen(false)}
       />
       <ContactGovernanceConfigDrawer

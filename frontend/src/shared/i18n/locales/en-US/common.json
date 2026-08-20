@@ -1583,7 +1583,11 @@
       "tokensAfter": "After (estimated)",
       "model": "Model",
       "reason": "Reason",
-      "reasonValue": { "manual": "Manual", "threshold": "Threshold", "overflow": "Overflow recovery" }
+      "reasonValue": {
+        "manual": "Manual",
+        "threshold": "Threshold",
+        "overflow": "Overflow recovery"
+      }
     },
     "queuedInput": {
       "queued": "Will send after the current task finishes",
@@ -2186,8 +2190,8 @@
       "calendarChatNote": "This toggle only governs the outward Skill interface and capability declaration; the calendar tools in chat are controlled by the Calendar item under System capabilities.",
       "notionAgentMasterOff": "Master switch MAILAGENT_NOTION_AGENT_TOOL is off: even when enabled here, the notion_agent tool won't be registered in chat.",
       "skillCreatorChatNote": "This Skill provides workflow guidance; approval profiles for its 6 chat tools are under Connectors & Tools → Skill supply chain.",
-      "customAgentChatNote": "This Skill provides workflow guidance; approval profiles for its 7 chat tools are under Connectors & Tools → Custom Agent."
-      ,"sourceBuiltin": "Builtin · product trusted",
+      "customAgentChatNote": "This Skill provides workflow guidance; approval profiles for its 7 chat tools are under Connectors & Tools → Custom Agent.",
+      "sourceBuiltin": "Builtin · product trusted",
       "sourceUserCreated": "User-created",
       "sourceThirdParty": "Third-party",
       "currentHash": "Current package hash",
@@ -2940,28 +2944,6 @@
         "label": "AG-UI protocol mirror",
         "helper": "Expose the developer-oriented AG-UI protocol mirror endpoint for compatibility testing and debugging.",
         "restartHint": "Quit and reopen the App."
-      },
-      "matters": {
-        "label": "Matters",
-        "helper": "Collect one piece of work that is scattered across mail, meetings and documents into a Matter: state and next step, linked resources, stakeholders, timeline, and a chat that only sees this matter's evidence.",
-        "restartHint": "Restart the backend and Matters appears in the sidebar; the matter tools inside AI need an App restart."
-      },
-      "matterAgent": {
-        "helper": "Bind a follow-up agent to a matter: run it manually or on a schedule to diff changes read-only and propose an update you review item by item before anything is written. Adds attention signals and macOS notifications.",
-        "restartHint": "Requires Matters. Takes effect after a backend restart; native notifications need an App restart."
-      },
-      "contacts": {
-        "label": "Contacts",
-        "helper": "Build people dossiers from your mail history automatically: a two-way-exchange-first list, identity fields with per-field locks, linked mail and matters. Zero manual entry; all data stays local.",
-        "restartHint": "Restart the backend and Contacts appears in the sidebar; the first run scans your mail history in the background."
-      },
-      "contactProfile": {
-        "helper": "Write AI profiles for the contacts you exchange mail with (low-frequency batches, plus manual refresh for one person) and propose values read from signatures. It only reads mail; it never edits identity fields. Requires the contact directory.",
-        "restartHint": "Requires Contacts. Restart the backend to apply, then enable the Contact profiles agent on the Agents page."
-      },
-      "contactAgent": {
-        "helper": "Contacts governance agent: one scan a day alongside the incremental sync, looking for one person split across rows, stale identity fields, dead addresses and wrong classifications. It only produces suggestions for review — it never edits a field directly. Turning it on adds the ✨Agent entry to the contacts list header. Requires the contact directory.",
-        "restartHint": "Requires Contacts. Restart the backend to apply. The scan reads mail bodies; adopting anything is still one confirmation per suggestion in the review queue."
       }
     },
     "accounts": {
@@ -3408,7 +3390,16 @@
           "helper": "Comma-separated: critical, error, warning, info"
         }
       },
-      "matters": { "title": "Matter notifications", "helper": "Choose which matter signals can trigger native notifications.", "level": "Notification level", "high": "High value (default)", "all": "All", "off": "Off", "saved": "Matter notification setting saved", "failed": "Could not save matter notification setting" },
+      "matters": {
+        "title": "Matter notifications",
+        "helper": "Choose which matter signals can trigger native notifications.",
+        "level": "Notification level",
+        "high": "High value (default)",
+        "all": "All",
+        "off": "Off",
+        "saved": "Matter notification setting saved",
+        "failed": "Could not save matter notification setting"
+      },
       "page": {
         "eyebrow": "NOTIFICATIONS",
         "title": "Notifications",
@@ -4005,7 +3996,6 @@
       "agent": {
         "label": "Follow-up agent",
         "helper": "Built in, one instance: task contract, tool face and web-search tier.",
-        "disabled": "The follow-up agent is not enabled (its flag lives in Labs).",
         "open": "Open configuration"
       }
     }
@@ -4463,9 +4453,6 @@
     "contactProfile": {
       "subtitle": "Profiles written in low-frequency batches; any contact can be refreshed by hand",
       "configTitle": "Contact profiles · {title}",
-      "masterOff": "Master switch off",
-      "masterOnNote": "The master switch is on (MAILAGENT_CONTACT_PROFILE_ENABLED in Labs). The enable switch and schedule below take effect on save.",
-      "masterOffNote": "The master switch is off, so no profile runs. Turn on MAILAGENT_CONTACT_PROFILE_ENABLED under Settings → Labs (restart required). The enable switch and schedule here still save.",
       "enable": "Enable the profile agent",
       "enableHint": "Runs the batch on the schedule below (subject to the Labs master switch).",
       "schedule": "Schedule",
@@ -4909,8 +4896,17 @@
       "archived": "Archived",
       "trash": "Trash"
     },
-    "moduleTabs": { "list": "Matters", "board": "Board" },
-    "scope": { "all": "All", "open": "In progress", "done": "Completed", "archived": "Archived", "trash": "Trash" },
+    "moduleTabs": {
+      "list": "Matters",
+      "board": "Board"
+    },
+    "scope": {
+      "all": "All",
+      "open": "In progress",
+      "done": "Completed",
+      "archived": "Archived",
+      "trash": "Trash"
+    },
     "quick": {
       "attn": "Needs attention",
       "waiting": "Waiting on others",
@@ -4927,7 +4923,13 @@
       "planned": "Planned",
       "closed": "Done / canceled"
     },
-    "group": { "status": "Semantic status", "due": "Due date", "priority": "Priority", "tag": "Tag", "none": "No grouping" },
+    "group": {
+      "status": "Semantic status",
+      "due": "Due date",
+      "priority": "Priority",
+      "tag": "Tag",
+      "none": "No grouping"
+    },
     "groupHead": {
       "due": {
         "overdue": "Overdue",
@@ -4940,8 +4942,16 @@
       "collapsed": "Collapsed",
       "toggle": "Collapse or expand this group"
     },
-    "sort": { "rank": "Attention rank", "updated": "Last updated", "due": "Due date", "priority": "Priority" },
-    "dir": { "default": "Most urgent first", "reverse": "Reversed" },
+    "sort": {
+      "rank": "Attention rank",
+      "updated": "Last updated",
+      "due": "Due date",
+      "priority": "Priority"
+    },
+    "dir": {
+      "default": "Most urgent first",
+      "reverse": "Reversed"
+    },
     "filter": {
       "trigger": "Filter",
       "title": "Filter & sort",
@@ -4965,7 +4975,13 @@
       "summaryGroup": "Group {group}",
       "summarySort": "Sort {sort}"
     },
-    "list": { "searchInView": "Search in {view}…", "archived": "Archived", "trashDays": "Trash · purges in {count} days", "dueRelative": "Due {value}", "resize": "Resize matter list" },
+    "list": {
+      "searchInView": "Search in {view}…",
+      "archived": "Archived",
+      "trashDays": "Trash · purges in {count} days",
+      "dueRelative": "Due {value}",
+      "resize": "Resize matter list"
+    },
     "nextAction": {
       "action": "{title}",
       "waiting": "Waiting on {title}",
@@ -4987,8 +5003,45 @@
       "hintTrash": "Deleted matters stay here for 30 days and can be restored. Deleting a matter never deletes email, calendar, or external documents.",
       "hintSearch": "Try another keyword, or switch to All and search again."
     },
-    "focus": { "title": "Today needs your judgment", "summary": "{openCount} open matters · {attentionCount} attention signals · {reviewCount} update proposals to review", "attention": "Needs attention", "review": "Proposals to review", "dueSoon": "Due within 7 days / overdue", "nonext": "Missing next step", "reviewSection": "Review · Agent update proposals", "changeCount": "{count} changes", "hasField": "Includes status field changes", "sourceCount": "{count} sourced", "attentionSection": "Attention signals", "attentionHint": "Resolve / later / ignore", "attentionEmpty": "No attention signals", "attentionEmptyDetail": "Every open matter has a trustworthy current state and a clear next step or waiting reason.", "dueSection": "Due soon", "dueEmpty": "Nothing is due within 7 days" },
-    "attention": { "resolve": "Resolve", "snooze": "Remind later (3 days)", "snoozeShort": "Later", "dismiss": "Ignore this occurrence", "kind": { "wait_overdue": "Waiting overdue", "action_overdue": "Action overdue", "deadline_near": "Deadline near", "health_down": "Health declined", "needs_review": "Needs review", "run_failed": "Follow-up failed", "context_gap": "Context gap" }, "toast": { "resolved": "Signal resolved", "snoozed": "Reminder postponed · returns in 3 days", "dismissed": "Ignored this occurrence · this signal type may appear again", "failed": "Signal action failed" } },
+    "focus": {
+      "title": "Today needs your judgment",
+      "summary": "{openCount} open matters · {attentionCount} attention signals · {reviewCount} update proposals to review",
+      "attention": "Needs attention",
+      "review": "Proposals to review",
+      "dueSoon": "Due within 7 days / overdue",
+      "nonext": "Missing next step",
+      "reviewSection": "Review · Agent update proposals",
+      "changeCount": "{count} changes",
+      "hasField": "Includes status field changes",
+      "sourceCount": "{count} sourced",
+      "attentionSection": "Attention signals",
+      "attentionHint": "Resolve / later / ignore",
+      "attentionEmpty": "No attention signals",
+      "attentionEmptyDetail": "Every open matter has a trustworthy current state and a clear next step or waiting reason.",
+      "dueSection": "Due soon",
+      "dueEmpty": "Nothing is due within 7 days"
+    },
+    "attention": {
+      "resolve": "Resolve",
+      "snooze": "Remind later (3 days)",
+      "snoozeShort": "Later",
+      "dismiss": "Ignore this occurrence",
+      "kind": {
+        "wait_overdue": "Waiting overdue",
+        "action_overdue": "Action overdue",
+        "deadline_near": "Deadline near",
+        "health_down": "Health declined",
+        "needs_review": "Needs review",
+        "run_failed": "Follow-up failed",
+        "context_gap": "Context gap"
+      },
+      "toast": {
+        "resolved": "Signal resolved",
+        "snoozed": "Reminder postponed · returns in 3 days",
+        "dismissed": "Ignored this occurrence · this signal type may appear again",
+        "failed": "Signal action failed"
+      }
+    },
     "create": {
       "title": "Create matter",
       "fromEmailTitle": "Create matter from email",
@@ -5043,14 +5096,142 @@
         "nonBlocking": "Ignore these suggestions if none fit and continue creating."
       }
     },
-    "detail": { "empty": "Select a matter to view details", "created": "Created {date}", "due": "Due {date}", "noDue": "No due date", "agentUnbound": "No follow-up agent bound", "addTag": "Add tag", "title": "Matter title", "editTitle": "Edit matter title", "previousMatter": "Previous (K)", "nextMatter": "Next (J)", "type": "Matter type", "typeUnset": "No type", "typeSearchPlaceholder": "Search or create a type…", "typeCreate": "Create type “{name}”", "more": "More", "priority": "Matter priority", "status": "Matter status", "statusModalTitle": "Change business status", "statusModalSub": "Status changes are written to the timeline and become part of the Agent's context", "health": "Matter health", "trashedBanner": "Moved to trash · purged permanently in {count} days; linked email and external documents are untouched", "archivedBanner": "Archived {time} · archiving changes neither the business status nor the history", "waitingBoth": "Waiting on {names} · {context}", "waitingNames": "Waiting on {names}", "waitingContext": "Waiting · {context}", "waitingEdit": "Edit waiting reason", "waitingClear": "Clear waiting reason", "waitingPlaceholder": "Who or what are you waiting on?" },
-    "tags": { "pickerLabel": "Tags", "search": "Search or create tags", "create": "Create tag \"{name}\"", "manage": "Manage all tags…", "empty": "No matching tags", "emptyCreateHint": "No tags yet — type a name to create the first one", "styleToggle": "Style", "usageCount": "{count} uses", "managerTitle": "Manage tags", "managerDescription": "Click the marker on the left to change shape and color; renaming syncs to all matters, and deleting only removes the tag itself.", "renamePlaceholder": "Tag name", "style": "Change shape and color for {name}", "shape": "Shape", "color": "Color", "saveRename": "Rename {name}", "delete": "Delete {name}", "deleteConfirm": "Confirm delete", "deleteWarning": "This affects {count} matters.", "deletedDetail": "Deleted tag #{name} · affected {count} matters", "saved": "Tag updated", "renameSaved": "Tag renamed", "noTags": "No tags yet", "shapes": { "circle": "Dot", "ring": "Ring", "square": "Square", "diamond": "Diamond", "bar": "Bar" }, "colors": { "--c-accent": "Accent", "--c-info": "Info", "--c-ok": "Success", "--c-warn": "Warning", "--c-crit": "Critical", "--c-ai": "AI" } },
-    "tabs": { "state": "State", "context": "Context", "timeline": "Progress", "label": "Matter details", "runs": "Runs" },
-    "status": { "inbox": "Inbox", "planned": "Planned", "active": "Active", "waiting": "Waiting", "blocked": "Blocked", "monitoring": "Monitoring", "done": "Done", "canceled": "Canceled" },
-    "health": { "unknown": "Unknown", "on_track": "On track", "at_risk": "At risk", "off_track": "Off track" },
-    "actions": { "archive": "Archive", "restoreArchive": "Unarchive", "trash": "Move to trash", "restore": "Restore", "permanentDelete": "Delete permanently", "edit": "Edit", "save": "Save", "cancel": "Cancel", "removeTag": "Remove tag {tag}" },
-    "delete": { "title": "Delete matter permanently", "hint": "Enter {id} to confirm. This cannot be undone, but it will not delete email, calendar, or external documents." },
-    "state": { "title": "Current state", "noSummary": "No current summary yet.", "summaryGuard": "The follow-up agent can only propose updates; they land here once you accept them. You can also edit this directly.", "summaryUpdatedAt": "Updated {time}", "summaryBy": { "user": "Updated by you", "agent": "Updated by the follow-up agent", "system": "Updated by the system" }, "summaryPlaceholder": "Where does this stand right now — what is blocking it, what is next?", "titleAccepted": "Accepted", "freshnessStale": "Not updated for {count} days", "freshnessFresh": "Accepted by you {time}", "regenerate": "Regenerate summary", "descriptionLabel": "Background and goal", "noDescription": "No background and goal have been entered yet.", "backgroundLabel": "Background", "goalLabel": "Goal", "backgroundPlaceholder": "How did this come about? What constraints and settled conclusions are there?", "goalPlaceholder": "What must be true when this is done? (How you judge it goes in the completion criteria below.)", "markdownHint": "Markdown is supported.", "goalChecks": "Completion criteria", "goalChecksCount": "{done} of {total} done", "goalCheckAdd": "+ Add a checkable completion criterion; tick them all to move this to Done", "goalCheckPlaceholder": "e.g. Contract signed by both parties", "goalChecksAllDone": "All completion criteria are met — you can move this to Done", "pendingProposals": "{count} new proposals" },
+    "detail": {
+      "empty": "Select a matter to view details",
+      "created": "Created {date}",
+      "due": "Due {date}",
+      "noDue": "No due date",
+      "agentUnbound": "No follow-up agent bound",
+      "addTag": "Add tag",
+      "title": "Matter title",
+      "editTitle": "Edit matter title",
+      "previousMatter": "Previous (K)",
+      "nextMatter": "Next (J)",
+      "type": "Matter type",
+      "typeUnset": "No type",
+      "typeSearchPlaceholder": "Search or create a type…",
+      "typeCreate": "Create type “{name}”",
+      "more": "More",
+      "priority": "Matter priority",
+      "status": "Matter status",
+      "statusModalTitle": "Change business status",
+      "statusModalSub": "Status changes are written to the timeline and become part of the Agent's context",
+      "health": "Matter health",
+      "trashedBanner": "Moved to trash · purged permanently in {count} days; linked email and external documents are untouched",
+      "archivedBanner": "Archived {time} · archiving changes neither the business status nor the history",
+      "waitingBoth": "Waiting on {names} · {context}",
+      "waitingNames": "Waiting on {names}",
+      "waitingContext": "Waiting · {context}",
+      "waitingEdit": "Edit waiting reason",
+      "waitingClear": "Clear waiting reason",
+      "waitingPlaceholder": "Who or what are you waiting on?"
+    },
+    "tags": {
+      "pickerLabel": "Tags",
+      "search": "Search or create tags",
+      "create": "Create tag \"{name}\"",
+      "manage": "Manage all tags…",
+      "empty": "No matching tags",
+      "emptyCreateHint": "No tags yet — type a name to create the first one",
+      "styleToggle": "Style",
+      "usageCount": "{count} uses",
+      "managerTitle": "Manage tags",
+      "managerDescription": "Click the marker on the left to change shape and color; renaming syncs to all matters, and deleting only removes the tag itself.",
+      "renamePlaceholder": "Tag name",
+      "style": "Change shape and color for {name}",
+      "shape": "Shape",
+      "color": "Color",
+      "saveRename": "Rename {name}",
+      "delete": "Delete {name}",
+      "deleteConfirm": "Confirm delete",
+      "deleteWarning": "This affects {count} matters.",
+      "deletedDetail": "Deleted tag #{name} · affected {count} matters",
+      "saved": "Tag updated",
+      "renameSaved": "Tag renamed",
+      "noTags": "No tags yet",
+      "shapes": {
+        "circle": "Dot",
+        "ring": "Ring",
+        "square": "Square",
+        "diamond": "Diamond",
+        "bar": "Bar"
+      },
+      "colors": {
+        "--c-accent": "Accent",
+        "--c-info": "Info",
+        "--c-ok": "Success",
+        "--c-warn": "Warning",
+        "--c-crit": "Critical",
+        "--c-ai": "AI"
+      }
+    },
+    "tabs": {
+      "state": "State",
+      "context": "Context",
+      "timeline": "Progress",
+      "label": "Matter details",
+      "runs": "Runs"
+    },
+    "status": {
+      "inbox": "Inbox",
+      "planned": "Planned",
+      "active": "Active",
+      "waiting": "Waiting",
+      "blocked": "Blocked",
+      "monitoring": "Monitoring",
+      "done": "Done",
+      "canceled": "Canceled"
+    },
+    "health": {
+      "unknown": "Unknown",
+      "on_track": "On track",
+      "at_risk": "At risk",
+      "off_track": "Off track"
+    },
+    "actions": {
+      "archive": "Archive",
+      "restoreArchive": "Unarchive",
+      "trash": "Move to trash",
+      "restore": "Restore",
+      "permanentDelete": "Delete permanently",
+      "edit": "Edit",
+      "save": "Save",
+      "cancel": "Cancel",
+      "removeTag": "Remove tag {tag}"
+    },
+    "delete": {
+      "title": "Delete matter permanently",
+      "hint": "Enter {id} to confirm. This cannot be undone, but it will not delete email, calendar, or external documents."
+    },
+    "state": {
+      "title": "Current state",
+      "noSummary": "No current summary yet.",
+      "summaryGuard": "The follow-up agent can only propose updates; they land here once you accept them. You can also edit this directly.",
+      "summaryUpdatedAt": "Updated {time}",
+      "summaryBy": {
+        "user": "Updated by you",
+        "agent": "Updated by the follow-up agent",
+        "system": "Updated by the system"
+      },
+      "summaryPlaceholder": "Where does this stand right now — what is blocking it, what is next?",
+      "titleAccepted": "Accepted",
+      "freshnessStale": "Not updated for {count} days",
+      "freshnessFresh": "Accepted by you {time}",
+      "regenerate": "Regenerate summary",
+      "descriptionLabel": "Background and goal",
+      "noDescription": "No background and goal have been entered yet.",
+      "backgroundLabel": "Background",
+      "goalLabel": "Goal",
+      "backgroundPlaceholder": "How did this come about? What constraints and settled conclusions are there?",
+      "goalPlaceholder": "What must be true when this is done? (How you judge it goes in the completion criteria below.)",
+      "markdownHint": "Markdown is supported.",
+      "goalChecks": "Completion criteria",
+      "goalChecksCount": "{done} of {total} done",
+      "goalCheckAdd": "+ Add a checkable completion criterion; tick them all to move this to Done",
+      "goalCheckPlaceholder": "e.g. Contract signed by both parties",
+      "goalChecksAllDone": "All completion criteria are met — you can move this to Done",
+      "pendingProposals": "{count} new proposals"
+    },
     "item": {
       "addTitle": "Add matter item",
       "kind": "Type",
@@ -5061,16 +5242,48 @@
       "addKind": "Add {kind}",
       "openCount": "{count} open",
       "checklist": "{count} checklist items",
-      "status": { "open": "Not started", "in_progress": "In progress", "waiting": "Waiting", "blocked": "Blocked", "done": "Done", "canceled": "Canceled" },
+      "status": {
+        "open": "Not started",
+        "in_progress": "In progress",
+        "waiting": "Waiting",
+        "blocked": "Blocked",
+        "done": "Done",
+        "canceled": "Canceled"
+      },
       "waitingOn": "Waiting on {name}",
       "dueRelative": "Due {time}",
       "completedAt": "Completed {time}",
       "source": "Source",
       "editTitle": "Edit title",
       "deleteItem": "Delete item",
-      "kinds": { "action": "Action", "milestone": "Milestone", "decision": "Decision", "blocker": "Blocker", "question": "Question", "note": "Note" }
+      "kinds": {
+        "action": "Action",
+        "milestone": "Milestone",
+        "decision": "Decision",
+        "blocker": "Blocker",
+        "question": "Question",
+        "note": "Note"
+      }
     },
-    "timeline": { "filter": "Progress actor filter", "all": "All", "me": "Me", "agent": "Agent", "system": "System", "empty": "No progress under this filter yet.", "changedFields": "Changed: {fields}", "sectionTitle": "Progress", "derivedNotice": "This view is derived from existing records. Bind a follow-up agent to distill progress from emails and linked resources.", "dayToday": "Today", "dayYesterday": "Yesterday", "dayCount": "{count} entries", "auditLog": "Operation log", "auditLogHint": "Who touched which part of this matter and when. Append-only and immutable — for review and accountability, not daily reading.", "auditCount": "{count} entries", "auditFooter": "Field edits, agent runs and proposal decisions live in the operation log ({count} entries)", "auditOpen": "View operation log" },
+    "timeline": {
+      "filter": "Progress actor filter",
+      "all": "All",
+      "me": "Me",
+      "agent": "Agent",
+      "system": "System",
+      "empty": "No progress under this filter yet.",
+      "changedFields": "Changed: {fields}",
+      "sectionTitle": "Progress",
+      "derivedNotice": "This view is derived from existing records. Bind a follow-up agent to distill progress from emails and linked resources.",
+      "dayToday": "Today",
+      "dayYesterday": "Yesterday",
+      "dayCount": "{count} entries",
+      "auditLog": "Operation log",
+      "auditLogHint": "Who touched which part of this matter and when. Append-only and immutable — for review and accountability, not daily reading.",
+      "auditCount": "{count} entries",
+      "auditFooter": "Field edits, agent runs and proposal decisions live in the operation log ({count} entries)",
+      "auditOpen": "View operation log"
+    },
     "narrative": {
       "quoteTitle": "“{text}”",
       "quoteDoc": "“{text}”",
@@ -5079,7 +5292,14 @@
       "listSep": ", ",
       "itemFallbackKind": "item",
       "resourceFallbackKind": "resource",
-      "itemStatus": { "open": "Open", "in_progress": "In progress", "waiting": "Waiting", "blocked": "Blocked", "done": "Done", "canceled": "Canceled" },
+      "itemStatus": {
+        "open": "Open",
+        "in_progress": "In progress",
+        "waiting": "Waiting",
+        "blocked": "Blocked",
+        "done": "Done",
+        "canceled": "Canceled"
+      },
       "change": {
         "pair": "{field} {from} → {to}",
         "set": "{field} set to {to}",
@@ -5188,7 +5408,34 @@
         "truncated": "Excerpt only — open the matter for the full text"
       }
     },
-    "eventField": { "title": "Title", "background": "Background", "goal": "Goal", "description": "Background and goal (legacy)", "current_summary": "Current status summary", "status": "Status", "health": "Health", "priority": "Priority", "matter_type": "Type", "tags": "Tags", "goal_checks": "Done criteria", "due_at": "Due date", "waiting_context": "Waiting reason", "next_attention_at": "Next attention", "attention_reason": "Attention reason", "agent_profile_id": "Follow-up agent", "agent_enabled": "Follow-up toggle", "matter_instructions": "Matter instructions", "schedule_json": "Follow-up rules", "kind": "Item type", "completed_at": "Completed at", "display_name": "Name", "organization": "Organization", "role": "Role", "relationship": "Relationship", "is_waiting_on": "Waiting flag" },
+    "eventField": {
+      "title": "Title",
+      "background": "Background",
+      "goal": "Goal",
+      "description": "Background and goal (legacy)",
+      "current_summary": "Current status summary",
+      "status": "Status",
+      "health": "Health",
+      "priority": "Priority",
+      "matter_type": "Type",
+      "tags": "Tags",
+      "goal_checks": "Done criteria",
+      "due_at": "Due date",
+      "waiting_context": "Waiting reason",
+      "next_attention_at": "Next attention",
+      "attention_reason": "Attention reason",
+      "agent_profile_id": "Follow-up agent",
+      "agent_enabled": "Follow-up toggle",
+      "matter_instructions": "Matter instructions",
+      "schedule_json": "Follow-up rules",
+      "kind": "Item type",
+      "completed_at": "Completed at",
+      "display_name": "Name",
+      "organization": "Organization",
+      "role": "Role",
+      "relationship": "Relationship",
+      "is_waiting_on": "Waiting flag"
+    },
     "context": {
       "stakeholders": "Stakeholders",
       "unnamedStakeholder": "Unnamed stakeholder",
@@ -5202,12 +5449,19 @@
       "tierCore": "Core stakeholders",
       "tierOthers": "Other stakeholders",
       "tierDropToExpand": "Hover to expand",
-      "tierCoreEmpty": "No core stakeholders yet. Drag the people who decide where this goes here, or use the \u2606 on a card.",
+      "tierCoreEmpty": "No core stakeholders yet. Drag the people who decide where this goes here, or use the ☆ on a card.",
       "tierCoreDropHint": "Release to make core",
       "promoteStakeholder": "Mark as core stakeholder",
       "demoteStakeholder": "Remove from core stakeholders",
       "unnamed": "Unnamed",
-      "reorder": {"handle": "Drag to reorder or move group", "grip": "Reorder {label}, position {pos} of {count}", "grabbed": "{label} grabbed at position {pos} of {count}. Use arrow keys to move, Space to drop, Escape to cancel.", "dropped": "{label} dropped at position {pos} of {count}.", "moved": "{label} moved to position {pos} of {count}.", "cancelled": "Reorder cancelled. {label} is back at its original position."},
+      "reorder": {
+        "handle": "Drag to reorder or move group",
+        "grip": "Reorder {label}, position {pos} of {count}",
+        "grabbed": "{label} grabbed at position {pos} of {count}. Use arrow keys to move, Space to drop, Escape to cancel.",
+        "dropped": "{label} dropped at position {pos} of {count}.",
+        "moved": "{label} moved to position {pos} of {count}.",
+        "cancelled": "Reorder cancelled. {label} is back at its original position."
+      },
       "lastContact": "Last contact",
       "pinnedResources": "Pinned resources",
       "linkedResources": "Linked resources",
@@ -5219,9 +5473,27 @@
       "pin": "Pin",
       "unpin": "Unpin",
       "unavailable": "Unavailable",
-      "groups": { "mail": "Email and threads", "meetings": "Meetings", "documents": "Documents", "attachments": "Attachments and links" },
-      "kind": { "email": "Email", "thread": "Thread", "event": "Meeting", "doc": "Document", "file": "Attachment", "url": "Link" },
-      "fields": { "name": "Name", "email": "Email", "role": "Role", "organization": "Organization", "waiting": "Waiting" },
+      "groups": {
+        "mail": "Email and threads",
+        "meetings": "Meetings",
+        "documents": "Documents",
+        "attachments": "Attachments and links"
+      },
+      "kind": {
+        "email": "Email",
+        "thread": "Thread",
+        "event": "Meeting",
+        "doc": "Document",
+        "file": "Attachment",
+        "url": "Link"
+      },
+      "fields": {
+        "name": "Name",
+        "email": "Email",
+        "role": "Role",
+        "organization": "Organization",
+        "waiting": "Waiting"
+      },
       "injectionTitle": "What agents and conversations actually see",
       "injection": {
         "acceptedState": "Current accepted state",
@@ -5378,7 +5650,11 @@
       "visibilityChanged": "Resource visibility updated for every matter",
       "metadataOnlyConsequence": "Metadata only: the agent sees the title, revision and timestamps but never the body; existing cached excerpts and summaries stop updating.",
       "excludedConsequence": "Excluded: the agent cannot see this resource at all — not even its title or timestamps.",
-      "access": { "allowed": "Read allowed", "metadata_only": "Metadata only", "excluded": "Excluded" },
+      "access": {
+        "allowed": "Read allowed",
+        "metadata_only": "Metadata only",
+        "excluded": "Excluded"
+      },
       "source": "Source",
       "providerNames": {
         "mailagent": "Local mail library",
@@ -5521,15 +5797,305 @@
       "startFailed": "Refresh and try again",
       "runNowChatHint": "Follow this Matter up in an AI conversation — the whole exchange stays in the session history",
       "runNowPrompt": "Help me follow up on this Matter ({publicId} · {title}). Read its current state, open items, stakeholders and linked mail/documents first, then search for any new evidence; tell me what moved, where it is stuck and what the next step should be. If the Matter itself needs changing (status, action items, summary…), say what you are about to change before you change it — I will confirm on the approval card.",
-      "status": { "queued": "Queued", "running": "Running", "ok": "Complete", "noop": "No changes", "warn": "Partially degraded", "fail": "Failed", "canceled": "Canceled" }
+      "status": {
+        "queued": "Queued",
+        "running": "Running",
+        "ok": "Complete",
+        "noop": "No changes",
+        "warn": "Partially degraded",
+        "fail": "Failed",
+        "canceled": "Canceled"
+      }
     },
-    "runOverlay": { "runningTitle": "Follow-up running", "doneTitle": "Follow-up run", "capability": "Manual · Observe + advise", "proposal": "Proposal ready · {count} changes", "warn": "Proposal ready · partially degraded", "failed": "Run failed", "review": "Review" },
-    "review": { "noDirectSource": "No direct source", "goalChecksNoChange": "No substantive change to the completion criteria.", "goalChecksUnchanged": "{count} other criteria unchanged.", "changeReason": "Reason: {reason}", "changeKind": { "fact": { "label": "Fact", "hint": "Backed by a source — safe to record" }, "inference": { "label": "Inference", "hint": "The agent's reading — your call" }, "field": { "label": "Field change", "hint": "Rewrites official business state" }, "action": { "label": "Action item", "hint": "Adds or changes an action item" }, "resource": { "label": "Linked resource", "hint": "Formally links the resource to this matter" } }, "title": "Review update proposal", "heading": "Update proposal · {title}", "run": "Run #{id}", "confidence": "Confidence {value}%", "stale": "Baseline changed", "watermark": "Event range {from} → {to}", "proposedSummary": "Proposed current state", "finishEdit": "Finish editing", "editAccept": "Edit before accepting", "compare": "Compare accepted state", "changes": "Changes · {selected}/{total} selected", "clearAll": "Clear all", "selectAll": "Select all", "questions": "Questions from the agent", "staleHint": "The matter changed after this proposal was written — something it wants to edit has since been edited. Run the agent again on the current state.", "staleRerun": "Run the agent again", "staleReload": "The matter changed after this proposal was written and its data has been refreshed. Run the agent again on the current state.", "versionReload": "The matter changed and its latest version was refreshed. Reload, then retry.", "openCitation": "Open evidence #{id}", "pendingCitation": "Resource proposed here", "newResource": { "badge": "Will be linked", "untitled": "(untitled)", "hint": "This resource is attached to the matter only once you accept", "summaryByAgent": "Summary generated by the agent", "summaryFromMail": "Reuses the summary the email already has", "summaryPending": "No summary yet · generated on the next follow-up run" }, "rejectReason": "Rejection reason", "confirmReject": "Reject proposal", "editedArchive": "The original and edited proposal will both be retained", "rejectArchive": "Rejections are retained as future agent context", "reject": "Reject", "later": "Later", "acceptAll": "Accept all", "acceptSelected": "Accept {count} selected", "attention": "The follow-up agent proposed {count} changes for review" },
-    "trigger": { "kind": { "schedule": "Scheduled", "event": "Event", "condition": "Condition", "manual": "Manual" }, "event": { "resource_linked_mail": "A new email or thread is linked", "resource_doc_updated": "A linked document has a new version" }, "condition": { "action_overdue": "An open item is overdue", "health_down": "Health drops to at risk", "wait_overdue": "Waiting on someone for over 7 days" }, "hint": { "schedule": "Checks in on a fixed cadence", "event": "Runs only when new evidence arrives", "condition": "Runs only when a condition holds", "manual": "Runs only when you ask for a run" }, "toggle": "Enable this trigger", "remove": "Remove this trigger", "add": "Add a trigger", "manualAlways": "You can ask for a run any time in the matter conversation", "whenEvent": "When {event}", "activeHint": "{count} trigger(s) active — any one firing runs the agent once; only one run per time window, never twice.", "manualOnlyHint": "Manual only for now — the agent will not follow up on its own." },
-    "runActions": { "title": "On each follow-up", "summary": "Update the current status summary", "items": "Check whether action items moved", "draft": "Draft a follow-up email (proposal only — never sent automatically)", "proposal": "Send a proposal for review even when it is only inference" },
-    "globalAgent": { "title": "Follow-up agent settings", "subtitle": "Built in, one shared configuration. It handles creation, matter chat, and follow-ups; each matter decides when it runs.", "promptLabel": "Task contract (system prompt)", "promptPlaceholder": "Leave empty to use the built-in default contract.", "usingDefault": "Built-in default", "customized": "Customized", "loadFailed": "Couldn't load the current configuration, so saving is disabled to avoid overwriting your customization. Please try again later.", "promptHint": "A matter's own instructions are appended after this base — they never replace it.", "assembly": { "title": "Every run's prompt is assembled from these parts", "origin": { "editable": "editable", "runtime": "injected at run time", "perMatter": "per matter" }, "steps": { "contract": { "name": "Task contract", "body": "the box below: capability boundary, research order, proposal standard. Leave it empty to use the built-in default." }, "method": { "name": "Working method", "body": "injected at run time: the judgment discipline — read the evidence before judging, separate evidence from inference, name what is missing, prefer the smallest change; states truthfully that the run has no write tools and everything lands via the proposal." }, "actions": { "name": "What this run should do", "body": "generated from each matter's “On each run” checkboxes; defaults to “update the summary + check action items”." }, "snapshot": { "name": "Matter snapshot", "body": "injected at run time: matter fields, open items, stakeholders, and excerpts of linked resources (excerpts are always data, never instructions)." }, "manifest": { "name": "Change manifest", "body": "injected at run time: which resources changed, how many new matter events, the last accepted update, and — on the final line — this run's search time window." }, "persona": { "name": "Extra guidance", "body": "the bound agent's persona plus the matter's own instructions, appended after the contract and subordinate to it." } } }, "toolFace": { "title": "Tools: read-only across everything, plus one proposal channel", "intro": "It can look almost anywhere, but it holds no write tool at all — it cannot send mail, save a draft, change matter fields, or touch external documents; every change it wants goes into a proposal and only takes effect once you accept it. Everything below is enabled by default; a matter can narrow this, never widen it.", "groups": { "matter": { "label": "Matters", "desc": "read this matter, search matters, see its attention signals, past follow-up runs, and the existing tags; the proposal is its only output channel" }, "email": { "label": "Mail", "desc": "lists, full bodies, threads, and attachment text" }, "search": { "label": "Full-text search", "desc": "search mail bodies and attachment content by keyword" }, "calendar": { "label": "Calendar", "desc": "look up events and a single event's detail" }, "session": { "label": "Chat history", "desc": "read its own past follow-up sessions" }, "kos": { "label": "Knowledge base", "desc": "search KOS pages, backlinks, and experts" }, "report": { "label": "Reports", "desc": "read reports that were already generated" }, "introspection": { "label": "Self-inspection", "desc": "read its own skill docs, identity documents, and plan" }, "connector": { "label": "External services", "desc": "read-only tools of connected services (no write operations)", "none": "No external service connected", "loading": "Reading connected external services…" }, "web": { "label": "Web search" } }, "skillOff": { "badge": "Turned off", "hint": "This skill is currently off, so a follow-up run gets none of these tools. Turn it back on under Settings → Custom AI → Skills and it comes back automatically." }, "webOff": { "badge": "Unavailable", "hint": "Web tools are not enabled (controlled by the MAILAGENT_OPENNESS_WEB_TOOLS environment variable), so a follow-up run gets no web tool at all — none of the three tiers below is in effect." } }, "webFace": { "keep": "Full access (default)", "keepBody": "Can search and can open pages to read them in full.", "searchOnly": "Search only", "searchOnlyBody": "Only sees result titles and snippets; cannot open a page.", "off": "Off", "offBody": "No internet access at all.", "runningHint": "A change here does not affect a run already in progress — the tier is frozen when each run starts.", "loadFailed": "Could not read the current tier, so what is shown below may not be what is in effect.", "saveFailed": "Could not save the web search tier" }, "modelDefaults": { "title": "Default model", "intro": "Every matter's follow-up runs on the model set here, unless that matter overrides it under Follow-up rules \u2192 Advanced, or is bound to an agent that names its own model. Each change is saved on the spot \u2014 you don't need the Save button below.", "modelFollow": "No default (use the system-wide model)", "effortFollow": "No default", "fallbackFollow": "No default (use the system-wide backup chain)", "effortScopeHint": "This tier was picked for the model above: a matter that switches models without setting its own tier does not inherit it.", "fallbackHint": "If the main model fails before producing anything (model unavailable, missing credentials, upstream refusal), the follow-up is re-run once on the backup. A run that already streamed output, called a tool, or stopped at an approval is never re-run.", "loadFailed": "Could not read the current defaults, so what is shown below may not be what is in effect.", "saveFailed": "Could not save the default model" }, "restoreDefault": "Restore default", "open": "Global settings", "saved": "Settings saved", "saveFailed": "Could not save settings", "footerNote": "Changes apply to every matter; already-scheduled follow-ups run under the new configuration" },
-    "agentConfig": { "title": "Follow-up rules", "subtitle": "Capabilities come from the global Matter Agent; here you only decide when this matter triggers and what each run produces.", "builtinTitle": "Matter Agent · built in", "builtinSubtitle": "Handles creation, matter chat, and follow-ups; its prompt and tools live in one global configuration", "toggle": "Enable follow-ups", "triggerLabel": "Trigger", "advanced": "Advanced · appended on top of the global configuration", "profileLabel": "Agent that runs", "modelLabel": "Model", "modelFollow": "Follow the default (agent that runs \u2192 global settings \u2192 system model)", "effortFollow": "Follow the default (the tier set for the default model in global settings)", "effortNeedsModel": "Pick a model above first — the available tiers depend on it.", "fallbackLabel": "Backup model", "fallbackFollow": "Follow the default (agent that runs \u2192 the global settings chain)", "fallbackNone": "No backup", "fallbackHint": "If the main model fails before producing anything (model unavailable, missing credentials, upstream refusal), this follow-up is re-run once on the backup. A run that already streamed output, called a tool, or stopped at an approval is never re-run.", "instructionsLabel": "Matter instructions (appended)", "instructionsHint": "This text is appended after the global task contract and stays subordinate to it — it never replaces it. Leave empty to follow the global contract alone.", "instructionsPlaceholder": "e.g. Only track replies from Acme procurement; don't summarise the people on cc separately. Start every follow-up by naming who still hasn't replied, then state the current blocker in one sentence. As soon as they quote a price, list the amount and how long it is valid for.", "contractDisclosure": "View the global task contract in effect", "contractFailed": "Could not load the global task contract, so its full text can't be shown here. Open “Global settings” above to retry.", "contractEmpty": "No task contract text was returned. Open “Global settings” above to check.", "summaryActive": "Will trigger on “{plan}”; results land in Runs, and rewrites still need your acceptance", "summaryDisabled": "Disabled · never runs on its own", "open": "Configure follow-up rules", "stale": "This matter changed somewhere else. Saving now would overwrite that change.", "reload": "Reload", "saving": "Saving…", "save": "Save rules", "overrideCount": "{count} override(s)" },
-    "agentBinding": { "title": "Follow-up Agent", "builtin": "Built-in", "builtinOption": "Built-in (default model)", "useCustomAgent": "Use Custom Agent", "empty": "Create an agent in Custom AI to change the model or add a persona", "dangling": "The bound agent no longer exists", "plan": "Plan", "next": "Next", "last": "Last", "capability": "Capability limit: observe + advise; cannot send mail or modify external documents", "unbind": "Unbind", "recommended": "Recommended: weekdays at 09:00", "addSchedule": "Add schedule", "scheduleEdit": "Edit schedule" },
+    "runOverlay": {
+      "runningTitle": "Follow-up running",
+      "doneTitle": "Follow-up run",
+      "capability": "Manual · Observe + advise",
+      "proposal": "Proposal ready · {count} changes",
+      "warn": "Proposal ready · partially degraded",
+      "failed": "Run failed",
+      "review": "Review"
+    },
+    "review": {
+      "noDirectSource": "No direct source",
+      "goalChecksNoChange": "No substantive change to the completion criteria.",
+      "goalChecksUnchanged": "{count} other criteria unchanged.",
+      "changeReason": "Reason: {reason}",
+      "changeKind": {
+        "fact": {
+          "label": "Fact",
+          "hint": "Backed by a source — safe to record"
+        },
+        "inference": {
+          "label": "Inference",
+          "hint": "The agent's reading — your call"
+        },
+        "field": {
+          "label": "Field change",
+          "hint": "Rewrites official business state"
+        },
+        "action": {
+          "label": "Action item",
+          "hint": "Adds or changes an action item"
+        },
+        "resource": {
+          "label": "Linked resource",
+          "hint": "Formally links the resource to this matter"
+        }
+      },
+      "title": "Review update proposal",
+      "heading": "Update proposal · {title}",
+      "run": "Run #{id}",
+      "confidence": "Confidence {value}%",
+      "stale": "Baseline changed",
+      "watermark": "Event range {from} → {to}",
+      "proposedSummary": "Proposed current state",
+      "finishEdit": "Finish editing",
+      "editAccept": "Edit before accepting",
+      "compare": "Compare accepted state",
+      "changes": "Changes · {selected}/{total} selected",
+      "clearAll": "Clear all",
+      "selectAll": "Select all",
+      "questions": "Questions from the agent",
+      "staleHint": "The matter changed after this proposal was written — something it wants to edit has since been edited. Run the agent again on the current state.",
+      "staleRerun": "Run the agent again",
+      "staleReload": "The matter changed after this proposal was written and its data has been refreshed. Run the agent again on the current state.",
+      "versionReload": "The matter changed and its latest version was refreshed. Reload, then retry.",
+      "openCitation": "Open evidence #{id}",
+      "pendingCitation": "Resource proposed here",
+      "newResource": {
+        "badge": "Will be linked",
+        "untitled": "(untitled)",
+        "hint": "This resource is attached to the matter only once you accept",
+        "summaryByAgent": "Summary generated by the agent",
+        "summaryFromMail": "Reuses the summary the email already has",
+        "summaryPending": "No summary yet · generated on the next follow-up run"
+      },
+      "rejectReason": "Rejection reason",
+      "confirmReject": "Reject proposal",
+      "editedArchive": "The original and edited proposal will both be retained",
+      "rejectArchive": "Rejections are retained as future agent context",
+      "reject": "Reject",
+      "later": "Later",
+      "acceptAll": "Accept all",
+      "acceptSelected": "Accept {count} selected",
+      "attention": "The follow-up agent proposed {count} changes for review"
+    },
+    "trigger": {
+      "kind": {
+        "schedule": "Scheduled",
+        "event": "Event",
+        "condition": "Condition",
+        "manual": "Manual"
+      },
+      "event": {
+        "resource_linked_mail": "A new email or thread is linked",
+        "resource_doc_updated": "A linked document has a new version"
+      },
+      "condition": {
+        "action_overdue": "An open item is overdue",
+        "health_down": "Health drops to at risk",
+        "wait_overdue": "Waiting on someone for over 7 days"
+      },
+      "hint": {
+        "schedule": "Checks in on a fixed cadence",
+        "event": "Runs only when new evidence arrives",
+        "condition": "Runs only when a condition holds",
+        "manual": "Runs only when you ask for a run"
+      },
+      "toggle": "Enable this trigger",
+      "remove": "Remove this trigger",
+      "add": "Add a trigger",
+      "manualAlways": "You can ask for a run any time in the matter conversation",
+      "whenEvent": "When {event}",
+      "activeHint": "{count} trigger(s) active — any one firing runs the agent once; only one run per time window, never twice.",
+      "manualOnlyHint": "Manual only for now — the agent will not follow up on its own."
+    },
+    "runActions": {
+      "title": "On each follow-up",
+      "summary": "Update the current status summary",
+      "items": "Check whether action items moved",
+      "draft": "Draft a follow-up email (proposal only — never sent automatically)",
+      "proposal": "Send a proposal for review even when it is only inference"
+    },
+    "globalAgent": {
+      "title": "Follow-up agent settings",
+      "subtitle": "Built in, one shared configuration. It handles creation, matter chat, and follow-ups; each matter decides when it runs.",
+      "promptLabel": "Task contract (system prompt)",
+      "promptPlaceholder": "Leave empty to use the built-in default contract.",
+      "usingDefault": "Built-in default",
+      "customized": "Customized",
+      "loadFailed": "Couldn't load the current configuration, so saving is disabled to avoid overwriting your customization. Please try again later.",
+      "promptHint": "A matter's own instructions are appended after this base — they never replace it.",
+      "assembly": {
+        "title": "Every run's prompt is assembled from these parts",
+        "origin": {
+          "editable": "editable",
+          "runtime": "injected at run time",
+          "perMatter": "per matter"
+        },
+        "steps": {
+          "contract": {
+            "name": "Task contract",
+            "body": "the box below: capability boundary, research order, proposal standard. Leave it empty to use the built-in default."
+          },
+          "method": {
+            "name": "Working method",
+            "body": "injected at run time: the judgment discipline — read the evidence before judging, separate evidence from inference, name what is missing, prefer the smallest change; states truthfully that the run has no write tools and everything lands via the proposal."
+          },
+          "actions": {
+            "name": "What this run should do",
+            "body": "generated from each matter's “On each run” checkboxes; defaults to “update the summary + check action items”."
+          },
+          "snapshot": {
+            "name": "Matter snapshot",
+            "body": "injected at run time: matter fields, open items, stakeholders, and excerpts of linked resources (excerpts are always data, never instructions)."
+          },
+          "manifest": {
+            "name": "Change manifest",
+            "body": "injected at run time: which resources changed, how many new matter events, the last accepted update, and — on the final line — this run's search time window."
+          },
+          "persona": {
+            "name": "Extra guidance",
+            "body": "the bound agent's persona plus the matter's own instructions, appended after the contract and subordinate to it."
+          }
+        }
+      },
+      "toolFace": {
+        "title": "Tools: read-only across everything, plus one proposal channel",
+        "intro": "It can look almost anywhere, but it holds no write tool at all — it cannot send mail, save a draft, change matter fields, or touch external documents; every change it wants goes into a proposal and only takes effect once you accept it. Everything below is enabled by default; a matter can narrow this, never widen it.",
+        "groups": {
+          "matter": {
+            "label": "Matters",
+            "desc": "read this matter, search matters, see its attention signals, past follow-up runs, and the existing tags; the proposal is its only output channel"
+          },
+          "contacts": {
+            "label": "Contacts",
+            "desc": "search people, read a full contact dossier, and inspect the mail ledger for a person"
+          },
+          "email": {
+            "label": "Mail",
+            "desc": "lists, full bodies, threads, and attachment text"
+          },
+          "search": {
+            "label": "Full-text search",
+            "desc": "search mail bodies and attachment content by keyword"
+          },
+          "calendar": {
+            "label": "Calendar",
+            "desc": "look up events and a single event's detail"
+          },
+          "session": {
+            "label": "Chat history",
+            "desc": "read its own past follow-up sessions"
+          },
+          "kos": {
+            "label": "Knowledge base",
+            "desc": "search KOS pages, backlinks, and experts"
+          },
+          "report": {
+            "label": "Reports",
+            "desc": "read reports that were already generated"
+          },
+          "introspection": {
+            "label": "Self-inspection",
+            "desc": "read its own skill docs, identity documents, and plan"
+          },
+          "connector": {
+            "label": "External services",
+            "desc": "read-only tools of connected services (no write operations)",
+            "none": "No external service connected",
+            "loading": "Reading connected external services…"
+          },
+          "web": {
+            "label": "Web search"
+          }
+        },
+        "skillOff": {
+          "badge": "Turned off",
+          "hint": "This skill is currently off, so a follow-up run gets none of these tools. Turn it back on under Settings → Custom AI → Skills and it comes back automatically."
+        },
+        "webOff": {
+          "badge": "Unavailable",
+          "hint": "Web tools are not enabled (controlled by the MAILAGENT_OPENNESS_WEB_TOOLS environment variable), so a follow-up run gets no web tool at all — none of the three tiers below is in effect."
+        }
+      },
+      "webFace": {
+        "keep": "Full access (default)",
+        "keepBody": "Can search and can open pages to read them in full.",
+        "searchOnly": "Search only",
+        "searchOnlyBody": "Only sees result titles and snippets; cannot open a page.",
+        "off": "Off",
+        "offBody": "No internet access at all.",
+        "runningHint": "A change here does not affect a run already in progress — the tier is frozen when each run starts.",
+        "loadFailed": "Could not read the current tier, so what is shown below may not be what is in effect.",
+        "saveFailed": "Could not save the web search tier"
+      },
+      "modelDefaults": {
+        "title": "Default model",
+        "intro": "Every matter's follow-up runs on the model set here, unless that matter overrides it under Follow-up rules → Advanced, or is bound to an agent that names its own model. Each change is saved on the spot — you don't need the Save button below.",
+        "modelFollow": "No default (use the system-wide model)",
+        "effortFollow": "No default",
+        "fallbackFollow": "No default (use the system-wide backup chain)",
+        "effortScopeHint": "This tier was picked for the model above: a matter that switches models without setting its own tier does not inherit it.",
+        "fallbackHint": "If the main model fails before producing anything (model unavailable, missing credentials, upstream refusal), the follow-up is re-run once on the backup. A run that already streamed output, called a tool, or stopped at an approval is never re-run.",
+        "loadFailed": "Could not read the current defaults, so what is shown below may not be what is in effect.",
+        "saveFailed": "Could not save the default model"
+      },
+      "restoreDefault": "Restore default",
+      "open": "Global settings",
+      "saved": "Settings saved",
+      "saveFailed": "Could not save settings",
+      "footerNote": "Changes apply to every matter; already-scheduled follow-ups run under the new configuration"
+    },
+    "agentConfig": {
+      "title": "Follow-up rules",
+      "subtitle": "Capabilities come from the global Matter Agent; here you only decide when this matter triggers and what each run produces.",
+      "builtinTitle": "Matter Agent · built in",
+      "builtinSubtitle": "Handles creation, matter chat, and follow-ups; its prompt and tools live in one global configuration",
+      "toggle": "Enable follow-ups",
+      "triggerLabel": "Trigger",
+      "advanced": "Advanced · appended on top of the global configuration",
+      "profileLabel": "Agent that runs",
+      "modelLabel": "Model",
+      "modelFollow": "Follow the default (agent that runs → global settings → system model)",
+      "effortFollow": "Follow the default (the tier set for the default model in global settings)",
+      "effortNeedsModel": "Pick a model above first — the available tiers depend on it.",
+      "fallbackLabel": "Backup model",
+      "fallbackFollow": "Follow the default (agent that runs → the global settings chain)",
+      "fallbackNone": "No backup",
+      "fallbackHint": "If the main model fails before producing anything (model unavailable, missing credentials, upstream refusal), this follow-up is re-run once on the backup. A run that already streamed output, called a tool, or stopped at an approval is never re-run.",
+      "instructionsLabel": "Matter instructions (appended)",
+      "instructionsHint": "This text is appended after the global task contract and stays subordinate to it — it never replaces it. Leave empty to follow the global contract alone.",
+      "instructionsPlaceholder": "e.g. Only track replies from Acme procurement; don't summarise the people on cc separately. Start every follow-up by naming who still hasn't replied, then state the current blocker in one sentence. As soon as they quote a price, list the amount and how long it is valid for.",
+      "contractDisclosure": "View the global task contract in effect",
+      "contractFailed": "Could not load the global task contract, so its full text can't be shown here. Open “Global settings” above to retry.",
+      "contractEmpty": "No task contract text was returned. Open “Global settings” above to check.",
+      "summaryActive": "Will trigger on “{plan}”; results land in Runs, and rewrites still need your acceptance",
+      "summaryDisabled": "Disabled · never runs on its own",
+      "open": "Configure follow-up rules",
+      "stale": "This matter changed somewhere else. Saving now would overwrite that change.",
+      "reload": "Reload",
+      "saving": "Saving…",
+      "save": "Save rules",
+      "overrideCount": "{count} override(s)"
+    },
+    "agentBinding": {
+      "title": "Follow-up Agent",
+      "builtin": "Built-in",
+      "builtinOption": "Built-in (default model)",
+      "useCustomAgent": "Use Custom Agent",
+      "empty": "Create an agent in Custom AI to change the model or add a persona",
+      "dangling": "The bound agent no longer exists",
+      "plan": "Plan",
+      "next": "Next",
+      "last": "Last",
+      "capability": "Capability limit: observe + advise; cannot send mail or modify external documents",
+      "unbind": "Unbind",
+      "recommended": "Recommended: weekdays at 09:00",
+      "addSchedule": "Add schedule",
+      "scheduleEdit": "Edit schedule"
+    },
     "events": {
       "matter_created": "Matter created",
       "matter_updated": "Matter updated",
@@ -5604,7 +6170,9 @@
         "restore": "Restored from trash · business status unchanged"
       }
     },
-    "undo": { "action": "Undo" },
+    "undo": {
+      "action": "Undo"
+    },
     "shell": {
       "backToList": "Back to matter list"
     },
@@ -5623,12 +6191,32 @@
     }
   },
   "contacts": {
-    "nav": { "title": "Contacts" },
-    "list": { "count": "{count} people", "resize": "Drag to resize the list" },
-    "view": { "known": "People you email", "all": "All" },
-    "search": { "placeholder": "Search name, alias, email or org", "clear": "Clear search" },
-    "sort": { "label": "Sort", "density": "Exchange volume", "recent": "Most recent", "name": "Name" },
-    "density": { "label": "Density", "compact": "Compact", "comfortable": "Comfortable (with profile line)" },
+    "nav": {
+      "title": "Contacts"
+    },
+    "list": {
+      "count": "{count} people",
+      "resize": "Drag to resize the list"
+    },
+    "view": {
+      "known": "People you email",
+      "all": "All"
+    },
+    "search": {
+      "placeholder": "Search name, alias, email or org",
+      "clear": "Clear search"
+    },
+    "sort": {
+      "label": "Sort",
+      "density": "Exchange volume",
+      "recent": "Most recent",
+      "name": "Name"
+    },
+    "density": {
+      "label": "Density",
+      "compact": "Compact",
+      "comfortable": "Comfortable (with profile line)"
+    },
     "groupBy": {
       "label": "Group by",
       "none": "No grouping",
@@ -5648,14 +6236,28 @@
       "reportsOf": "Reports to {name}",
       "noManager": "No manager"
     },
-    "kind": { "person": "Person", "robot": "Robot", "list": "List" },
-    "badge": { "self": "This is me", "hidden": "Hidden", "dup": "Possible duplicate", "emails": "{n} addresses" },
+    "kind": {
+      "person": "Person",
+      "robot": "Robot",
+      "list": "List"
+    },
+    "badge": {
+      "self": "This is me",
+      "hidden": "Hidden",
+      "dup": "Possible duplicate",
+      "emails": "{n} addresses"
+    },
     "chip": {
       "open": "Open {name}'s page",
       "notInDirectory": "This address isn't in Contacts (no stub will be created)"
     },
-    "stat": { "exchange": "{n} messages · {sent} sent by me", "since": "Since {date} · last {ago}" },
-    "row": { "more": "More actions" },
+    "stat": {
+      "exchange": "{n} messages · {sent} sent by me",
+      "since": "Since {date} · last {ago}"
+    },
+    "row": {
+      "more": "More actions"
+    },
     "action": {
       "open": "Open profile",
       "compose": "New email",
@@ -5720,7 +6322,9 @@
       "role": "Title (as signed)",
       "variantsHint": "Collected automatically; searchable"
     },
-    "enum": { "clear": "Clear" },
+    "enum": {
+      "clear": "Clear"
+    },
     "fn": {
       "tech": "Engineering",
       "product": "Product",
@@ -5767,12 +6371,19 @@
       "copied": "Copied {email}"
     },
     "mail": {
-      "filter": { "all": "All", "from_them": "From them", "from_me": "From me", "from_third": "From others" },
+      "filter": {
+        "all": "All",
+        "from_them": "From them",
+        "from_me": "From me",
+        "from_third": "From others"
+      },
       "ccMark": "CC",
       "more": "Load more ({n} left)",
       "empty": "No messages yet"
     },
-    "matters": { "empty": "No matters reference them yet" },
+    "matters": {
+      "empty": "No matters reference them yet"
+    },
     "profile": {
       "title": "AI profile",
       "topics": "Recurring topics",

@@ -121,10 +121,11 @@ describe('buildGatewayTools × dynamicTools — matrix integration', () => {
   })
 
   test('a registration alone (no dynamicTools input) adds nothing to the assembly', () => {
+    const baseline = buildBase('manual_chat')
     registerRuntimeToolClass('mcp__notion__query', 'read')
     const built = buildBase('manual_chat')
     expect(built.mcp__notion__query).toBeUndefined()
-    expect(Object.keys(built).every((n) => GATEWAY_TOOL_CLASSES[n] !== undefined)).toBe(true)
+    expect(Object.keys(built)).toEqual(Object.keys(baseline))
   })
 
   test('a registered read-class dynamic tool registers in every mode (read row of the matrix)', () => {

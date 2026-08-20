@@ -1187,31 +1187,6 @@ async function handleAgentRun(
     return
   }
 
-  // Matters MVP P4 (D11) — the follow-up venue's kill-switch, enforced on the SERVER-assembled
-  // spec (the poke body carries no runKind). Fail-closed and BEFORE any session/run work: with the
-  // flag off the Python side 403s the proposal endpoint, so a run would burn a full LLM turn only
-  // to lose its single output channel. The Python worker maps this code onto the matter_run row.
-  if (spec.runKind === 'matter_followup' && cfg.matterAgentEnabled !== true) {
-    writeJson(res, 403, {
-      error: 'E_DISABLED',
-      hint: 'matter follow-up agent is disabled (MAILAGENT_MATTER_AGENT_ENABLED)'
-    })
-    return
-  }
-
-  // Contact Directory WP7 — the governance venue's kill-switch, same shape and same rationale as
-  // the matter gate above: enforced on the SERVER-assembled spec (the poke body carries no
-  // runKind), fail-closed on the exact `true`, and BEFORE any session/run work — with the flag off
-  // the Python side refuses POST /api/contacts/agent/proposals, so the scan would run a full LLM
-  // turn only to find its single output channel closed.
-  if (spec.runKind === 'contact_governance' && cfg.contactAgentEnabled !== true) {
-    writeJson(res, 403, {
-      error: 'E_DISABLED',
-      hint: 'contact governance agent is disabled (MAILAGENT_CONTACT_AGENT_ENABLED)'
-    })
-    return
-  }
-
   // Pre-create the persist session (origin='agent'). A failure degrades to a non-persisted run
   // rather than aborting (the tool loop + approval still work; only the history row is missing).
   let sessionId: number | null = spec.sessionId ?? null

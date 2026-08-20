@@ -37,8 +37,6 @@ def client(tmp_path):
     path = tmp_path / "sync.db"
     SyncStore(str(path))
     settings = SimpleNamespace(
-        contacts_enabled=True,
-        contact_profile_enabled=False,
         sync_store_db_path=str(path),
         user_email="",
         self_emails="",
@@ -86,33 +84,6 @@ def _seed_contact(
 def _data(resp):
     assert resp.status_code == 200, resp.text
     return resp.json()["data"]
-
-
-# ---- flag 门 ----
-
-
-def test_flag_off_every_endpoint_is_disabled(client):
-    http, settings, _ = client
-    settings.contacts_enabled = False
-    for method, url in (
-        ("GET", "/api/contacts"),
-        ("GET", "/api/contacts/1"),
-        ("GET", "/api/contacts/1/mails"),
-        ("GET", "/api/contacts/1/matters"),
-        ("GET", "/api/contacts/backfill/progress"),
-        ("PATCH", "/api/contacts/1"),
-        ("POST", "/api/contacts/1/hide"),
-        ("POST", "/api/contacts/1/kind"),
-        ("POST", "/api/contacts/1/self"),
-        ("POST", "/api/contacts/1/manager"),
-        ("POST", "/api/contacts/1/locks"),
-        ("POST", "/api/contacts/1/emails/primary"),
-        ("POST", "/api/contacts/1/emails/former"),
-        ("POST", "/api/contacts/resolve"),
-    ):
-        resp = http.request(method, url, json={} if method != "GET" else None)
-        assert resp.status_code == 403, (method, url, resp.status_code)
-        assert resp.json()["error"]["code"] == "E_DISABLED", (method, url)
 
 
 # ---- 列表: view 语义 + 三排序 + 搜索 ----
@@ -920,7 +891,6 @@ def test_list_carries_manager_fields(client):
 
 
 def _enable_profile(path, settings):
-    settings.contact_profile_enabled = True
     with _conn(path) as conn:
         conn.execute(
             "UPDATE report_agent SET enabled=1 WHERE id='contact_profile_agent'"
@@ -962,14 +932,6 @@ def test_profile_refresh_below_threshold_merged_and_duplicate(client, monkeypatc
     assert rejected.json()["error"]["code"] == "E_CONTACT_MERGED"
 
 
-def test_profile_refresh_env_flag_off(client):
-    http, _, path = client
-    _seed_contact(path, cid=1, name="Alice", emails=(("alice@x.com", 1),))
-    response = http.post("/api/contacts/1/profile/refresh")
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "E_DISABLED"
-
-
 def test_profile_daily_summary_aggregates_local_day_and_row_fire_hour(client):
     http, settings, path = client
     _enable_profile(path, settings)
@@ -1004,13 +966,6 @@ def test_profile_daily_summary_aggregates_local_day_and_row_fire_hour(client):
         "last_attempted_at": now_ms - 1000,
         "fire_hour": 7,
     }
-
-
-def test_profile_daily_summary_requires_profile_flag(client):
-    http, _, _ = client
-    response = http.get("/api/contacts/profile/daily-summary")
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "E_DISABLED"
 
 
 def test_profile_adopt_locks_and_ignore_only_current_round(client):

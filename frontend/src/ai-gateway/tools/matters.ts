@@ -165,11 +165,7 @@ function projectRun(run: Record<string, unknown>): Record<string, unknown> {
 
 export function createMatterReadTools(
   domain: MailAgentDomainClient,
-  collector: GatewayToolAuditCollector = [],
-  /** 0813 批 R — `matter_runs_list` mirrors the run REST face, which the matter-agent flag gates
-   *  server-side. Registering it with the flag off would advertise a tool that can only ever
-   *  return an error, so it follows the same `!== false` condition as matter_update_propose. */
-  opts: { matterAgentEnabled?: boolean } = {}
+  collector: GatewayToolAuditCollector = []
 ): Record<string, Tool> {
   const matter_find = auditedReadTool(
     {
@@ -267,29 +263,23 @@ export function createMatterReadTools(
     matter_tags_list
   }
 
-  if (opts.matterAgentEnabled !== false) {
-    reads.matter_runs_list = auditedReadTool(
-      {
-        name: 'matter_runs_list',
-        description:
-          "Read a Matter's follow-up run history: when each round ran, how it ended, and whether " +
-          'it produced a proposal (`update_id` — feed it to matter_get include:["updates"] to see ' +
-          'what was proposed). Use it to answer "did the follow-up run / why did it come back ' +
-          'empty" instead of starting another round. Run inputs are not returned.',
-        inputSchema: matterRunsListSchema,
-        run: async (input, signal) => {
-          const result = await domain.listMatterRuns(
-            input.public_id,
-            { limit: input.limit },
-            signal
-          )
-          const items = result.items ?? []
-          return { count: items.length, items: items.map(projectRun) }
-        }
-      },
-      collector
-    )
-  }
+  reads.matter_runs_list = auditedReadTool(
+    {
+      name: 'matter_runs_list',
+      description:
+        "Read a Matter's follow-up run history: when each round ran, how it ended, and whether " +
+        'it produced a proposal (`update_id` — feed it to matter_get include:["updates"] to see ' +
+        'what was proposed). Use it to answer "did the follow-up run / why did it come back ' +
+        'empty" instead of starting another round. Run inputs are not returned.',
+      inputSchema: matterRunsListSchema,
+      run: async (input, signal) => {
+        const result = await domain.listMatterRuns(input.public_id, { limit: input.limit }, signal)
+        const items = result.items ?? []
+        return { count: items.length, items: items.map(projectRun) }
+      }
+    },
+    collector
+  )
 
   return reads
 }

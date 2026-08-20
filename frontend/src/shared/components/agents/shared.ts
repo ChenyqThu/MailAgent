@@ -36,8 +36,7 @@ export const PROJECT_PROGRESS_AGENT_ID = 'project_progress_sync'
 // 与 project_progress 同款「单例行 + trigger_json 存字面配置」：这里存
 // {fire_hour, daily_limit}（每日批处理时刻 + 每轮人数上限），运行时由
 // `src/contacts/profile_config.py::get_contact_profile_agent_config` 行内热读。
-// 🔴 总闸不在 .env 面板而在 Labs（MAILAGENT_CONTACT_PROFILE_ENABLED），卡片/抽屉读
-// /chat/config 的 contactProfileEnabled —— 不走 useEnvStore（远程 web 端 env 只读）。
+// 2026-08-19 cutover 后 venue 恒启用；是否自动运行只看该行 enabled 与排程。
 export const CONTACT_PROFILE_AGENT_ID = 'contact_profile_agent'
 
 // 通讯录 agent 面 v2「通讯录治理」专型行 —— 后端 DB v65 播种单行（id 固定、

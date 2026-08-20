@@ -2,7 +2,6 @@ import { BrowserWindow, Notification } from 'electron'
 
 import { DEFAULT_API_PORT } from '@shared/lib/ports'
 import { onSseEvent } from './events_bridge'
-import { envBool } from './lib/env-bool'
 import { getLocalApiToken, LOCAL_TOKEN_HEADER } from './local_token'
 
 interface MatterNotifyData {
@@ -82,7 +81,6 @@ function handleSseEvent(payload: unknown): void {
 }
 
 export function registerMatterNotifications(): () => void {
-  if (!envBool('MAILAGENT_MATTERS_ENABLED', true)) return () => undefined
   return onSseEvent(handleSseEvent)
 }
 

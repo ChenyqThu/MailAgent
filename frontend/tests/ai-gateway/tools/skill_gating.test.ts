@@ -67,15 +67,13 @@ function buildAllTools() {
     // skill-gated (GATEWAY_SKILL_TOOLS notion_agent), so the FORWARD/REVERSE drift guards need it
     // built here to see it classified.
     notionAgentToolsEnabled: true,
-    // Matters MVP P3/P4 — the matter family (MAILAGENT_MATTERS_ENABLED). 🔴 P3 landed the nine
+    // Matters MVP P3/P4 — the default matter family. 🔴 P3 landed the nine
     // tools WITHOUT adding them here, which is exactly why the FORWARD guard below never noticed
     // that they were also missing from CORE_UNGATED_GATEWAY_TOOLS: two holes cancelling out. P4
     // closes both (handoff 遗留 #4).
-    matterToolsEnabled: true,
-    // Contact Directory WP7 — the nine contact tools (MAILAGENT_CONTACTS_ENABLED), CORE_UNGATED
-    // like the matter family. 🔴 Same red-letter rule: with the flag off here the FORWARD guard
-    // cannot see them, so a missing CORE_UNGATED entry would never turn red.
-    contactToolsEnabled: true,
+    // Contact Directory WP7 — the nine default contact tools, CORE_UNGATED
+    // like the matter family. The FORWARD guard must always see this default family so a missing
+    // CORE_UNGATED entry turns red.
     // S2 W0 — the drift guard reasons over the MANUAL-session universe (fail-closed default is
     // 'untrusted_trigger', which strips capability_change/outbound and would blind the guard).
     contextMode: 'manual_chat'
@@ -94,7 +92,6 @@ function buildAllTools() {
   const matterRun = buildGatewayTools({
     domain: mockDomain(() => okEnvelope([])),
     approvalGuard: new ApprovalGuard(),
-    matterToolsEnabled: true,
     contextMode: 'matter_followup',
     agentRunContext: {
       agentId: 'matter:MAT-000042',
@@ -289,10 +286,8 @@ describe('buildGatewayTools per-agent mount gating (S6 W3-1b)', () => {
       createAgentCallSession: () => 2,
       setAgentSessionJobId: () => undefined,
       calendarToolsEnabled: true,
-      matterToolsEnabled: true,
       // WP7 — the contact family is CORE_UNGATED, so this probe must build it too or the floor
       // sweep below would assert nine tools it never asked for.
-      contactToolsEnabled: true,
       contextMode: 'manual_chat', // manual probe isolates the mount gate from the mode floor
       agentRunContext: { agentId: 'dms', skills: [] }
     })

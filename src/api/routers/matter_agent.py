@@ -5,8 +5,7 @@
 
 🔴 鉴权 = ``verify_local_token``（仅本地 ephemeral token 腿，**不接受 CF JWT**，
 Remote Web 不可调 —— 同 ``/api/agent-runs`` 纪律：唯一调用方是 Electron 主进程内嵌
-gateway 的 domainClient，同机 loopback）。双 flag 门（matters + matter_agent）：
-任一 off → 403 E_DISABLED。
+gateway 的 domainClient，同机 loopback）。
 
 body = 工具入参原样（``{summary, changes[], open_questions?, confidence?}``，
 无 mutation 信封）；matter_id/run_id 全在 path —— run 语境盖章由 service 完成，
@@ -23,8 +22,6 @@ from src.api.auth import verify_local_token
 from src.api.routers.matters import (
     _call,
     get_matter_run_service,
-    require_matter_agent_enabled,
-    require_matters_enabled,
 )
 from src.api.schemas.matters import MatterProposalRequest
 from src.matters.run_service import MatterRunService
@@ -32,11 +29,7 @@ from src.matters.run_service import MatterRunService
 router = APIRouter(
     prefix="/api/matters",
     tags=["matter-agent"],
-    dependencies=[
-        Depends(verify_local_token),
-        Depends(require_matters_enabled),
-        Depends(require_matter_agent_enabled),
-    ],
+    dependencies=[Depends(verify_local_token)],
 )
 
 

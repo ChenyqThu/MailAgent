@@ -60,11 +60,11 @@ function makeCfg(overrides: Partial<ReportAgentConfig> = {}): ReportAgentConfig 
   } as ReportAgentConfig
 }
 
-function renderDrawer(cfg: ReportAgentConfig | null, masterEnabled = true): void {
+function renderDrawer(cfg: ReportAgentConfig | null): void {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   render(
     <QueryClientProvider client={client}>
-      <ContactProfileConfigDrawer cfg={cfg} open masterEnabled={masterEnabled} onClose={() => {}} />
+      <ContactProfileConfigDrawer cfg={cfg} open onClose={() => {}} />
     </QueryClientProvider>
   )
 }
@@ -205,24 +205,7 @@ describe('ContactProfileConfigDrawer · 参考 KOS', () => {
   })
 })
 
-describe('ContactProfileConfigDrawer · 启用与总闸', () => {
-  test('总闸未开时给出「去 Labs 开」的说明，但启用开关照常可存', async () => {
-    renderDrawer(makeCfg(), false)
-
-    expect(screen.getByText(/MAILAGENT_CONTACT_PROFILE_ENABLED/)).toBeTruthy()
-    fireEvent.click(screen.getByRole('switch', { name: '启用画像 Agent' }))
-    fireEvent.click(screen.getByText('保存'))
-
-    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1))
-    expect(mockSave.mock.calls[0]![1].enabled).toBe(true)
-  })
-
-  test('总闸已开时说明换成 on 的那句', () => {
-    renderDrawer(makeCfg(), true)
-
-    expect(screen.getByText(/总开关已开/)).toBeTruthy()
-  })
-
+describe('ContactProfileConfigDrawer · 启用', () => {
   // prompt_is_default 的行不该把「后端回填的默认」当成自定义存回去。
   test('未触碰提示词且行是默认时，patch 不带 prompt', async () => {
     renderDrawer(makeCfg({ prompt: '（后端回填的报告默认）', prompt_is_default: true }))

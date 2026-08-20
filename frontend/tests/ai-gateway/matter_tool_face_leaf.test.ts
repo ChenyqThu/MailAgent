@@ -140,8 +140,6 @@ function productionShapedCfg(
           customAgentToolsEnabled: true,
           customAgentCallEnabled: true,
           notionAgentToolsEnabled: true,
-          matterToolsEnabled: true,
-          matterAgentEnabled: true,
           contextMode: mode,
           agentRunContext,
           ...(dynamicTools ? { dynamicTools } : {}),

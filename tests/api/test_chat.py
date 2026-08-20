@@ -505,18 +505,12 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         # stub 无该字段 → False（fail-safe 走 legacy 投影，真实 config 恒有字段）。
         # pydantic 默认值本身由 test_provider_routing.test_flag_default_on_after_cutover pin。
         "providerRegistryEnabled": False,
-        # Matters P1 — 事项工作台入口门控（MAILAGENT_MATTERS_ENABLED，pydantic 默认已 cutover 翻 on
-        # 2026-08-12）；此处 pin 的与 providerRegistryEnabled 同形，是 getattr 兜底：stub 无该字段
-        # → False（真实 config 恒有字段；默认值本身由 tests/config/test_flag_cross_language.py pin）。
-        # （P1 commit a4c2ee1c 加进 /chat/config 时漏了本 pin，P2 session 补账。）
-        "mattersEnabled": False,
-        "matterAgentEnabled": False,
-        # Contact Directory WP2 — 通讯录入口门控（MAILAGENT_CONTACTS_ENABLED，pydantic 默认
-        # off 灰度中）；同上 getattr 兜底：stub 无该字段 → False（默认值本身由
-        # tests/config/test_flag_cross_language.py 的单载体登记 pin）。
-        "contactsEnabled": False,
-        "contactProfileEnabled": False,
-        "contactAgentEnabled": False,
+        # 2026-08-19 cutover：兼容投影键保留且恒 true。
+        "mattersEnabled": True,
+        "matterAgentEnabled": True,
+        "contactsEnabled": True,
+        "contactProfileEnabled": True,
+        "contactAgentEnabled": True,
         # 08-01 PR4 — MCP 连接区门控（MAILAGENT_MCP_CONNECTORS，pydantic 默认 off 灰度中）；
         # 同 providerRegistryEnabled 走 getattr 兜底：stub 无该字段 → False。
         "connectorToolsEnabled": False,
@@ -752,9 +746,8 @@ def test_chat_config_custom_agent_fragment_follows_skill_toggle(
     """W6 workflow guidance is code-owned and follows the advertised-skill enablement snapshot.
 
     🔴 `trustedSkillFragments == ""` 要成立，得把 TRUSTED_PROMPT_FRAGMENT_SKILLS 里**两个**
-    fragment 来源都显式关掉：matters 的 default_enabled 跟随 MAILAGENT_MATTERS_ENABLED，而该 flag
-    2026-08-12 已 cutover 默认 on —— 原来只关 custom_agent 就断言空串，靠的是「matters 默认 off」
-    这个已经不成立的巧合，不是本用例想测的东西。"""
+    fragment 来源都通过 store override 显式关掉；Matters 是恒启用能力，但用户仍可关闭其
+    advertised skill fragment。"""
     fresh_agent_cfg.set_enabled("custom_agent", False)
     fresh_agent_cfg.set_enabled("matters", False)
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
@@ -769,8 +762,8 @@ def test_chat_config_matters_skill_fragment_reaches_system_prompt(
     """0812 — 「挂一个事项跟进 skill」的真判据：它既要出现在 advertisedSkills，其 prompt_fragment
     还得进 trustedSkillFragments（后者是白名单，漏加 = skill 挂了但一句话也没进 system prompt）。
 
-    显式 set_enabled 而不是靠 default —— default_enabled 跟随 MAILAGENT_MATTERS_ENABLED（2026-08-12
-    起默认 on），这里要钉的是「advertised 之后 fragment 到底进不进 prompt」，两个方向都要自己摆出来。"""
+    显式 set_enabled 而不是靠 default，这里要钉的是「advertised 之后 fragment 到底进不进
+    prompt」，两个方向都要自己摆出来。"""
     fresh_agent_cfg.set_enabled("matters", True)
     with _config_client(monkeypatch, _ChatConfigStub()) as c:
         data = c.get("/api/chat/config").json()["data"]
@@ -1061,11 +1054,8 @@ def test_create_new_session_accepts_ai_sdk_kind(chat_client: TestClient) -> None
     assert r.json()["data"]["backend_kind"] == "ai-sdk"
 
 
-def test_open_matter_session_reuses_with_flag_off(
-    chat_client: TestClient, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """Matter anchor 是结构能力，不受 MAILAGENT_MATTERS_ENABLED 门控。"""
-    monkeypatch.setenv("MAILAGENT_MATTERS_ENABLED", "false")
+def test_open_matter_session_reuses(chat_client: TestClient) -> None:
+    """Matter anchor 是恒启用的结构能力。"""
     payload = {"anchorType": "matter", "matterId": 501, "backendKind": "ai-sdk"}
     first = chat_client.post("/api/chat/sessions", json=payload)
     second = chat_client.post("/api/chat/sessions", json=payload)

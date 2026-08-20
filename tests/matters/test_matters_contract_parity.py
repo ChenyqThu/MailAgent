@@ -345,9 +345,10 @@ def test_gateway_matter_get_include_enum_covers_every_branch_the_service_serves(
     )
 
 
-def test_chat_config_projects_the_same_pydantic_matters_flag_as_the_router_gate():
+def test_chat_config_keeps_legacy_matters_projection_always_true():
     source = inspect.getsource(chat.chat_config)
-    assert '"mattersEnabled": bool(getattr(cfg, "matters_enabled", False))' in source
+    assert '"mattersEnabled": True' in source
+    assert '"matterAgentEnabled": True' in source
     with pytest.raises(AssertionError, match="部分抽取"):
         ts_const_string_array(
             MATTER_TS,

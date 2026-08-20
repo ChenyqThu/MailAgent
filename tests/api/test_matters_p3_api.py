@@ -72,7 +72,7 @@ def matters_client(tmp_path):
     path = tmp_path / "p3-api.db"
     SyncStore(str(path))
     _seed_emails(str(path))
-    settings = SimpleNamespace(matters_enabled=True, sync_store_db_path=str(path))
+    settings = SimpleNamespace(sync_store_db_path=str(path))
     repo = EmailRepository(db_path=str(path), trigram_enabled=False)
     overrides = {
         verify_cf_access: lambda: None,
@@ -173,17 +173,6 @@ def test_context_snapshot_unknown_matter_404(matters_client):
     response = http.get("/api/matters/MAT-9999/context-snapshot")
     assert response.status_code == 404
     assert response.json()["error"]["code"] == "E_MATTER_NOT_FOUND"
-
-
-def test_context_snapshot_flag_off_rejected(matters_client):
-    http, settings = matters_client
-    created = _create_matter(http)
-    settings.matters_enabled = False
-    response = http.get(
-        f"/api/matters/{created['matter']['public_id']}/context-snapshot"
-    )
-    assert response.status_code == 403
-    assert response.json()["error"]["code"] == "E_DISABLED"
 
 
 # 0812 dogfood —— `POST /api/matters/{id}/chat-scope` 已随「本事项 / 全库」检索范围开关

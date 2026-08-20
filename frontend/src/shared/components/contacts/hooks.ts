@@ -112,28 +112,8 @@ export function useContactDetail(
   })
 }
 
-/** 画像总闸（`MAILAGENT_CONTACT_PROFILE_ENABLED` + agent 行 enabled 的合取，后端投影）。
- *  ⚠️ 不读 useEnvStore —— 远程 web 端 env 面只读且拿不到 .env，与 useContactsEnabled 同源同形。 */
-export function useContactProfileEnabled(): { enabled: boolean; loading: boolean } {
-  const query = useQuery({
-    queryKey: qk.contacts.profileConfig(),
-    queryFn: async (): Promise<boolean> => {
-      try {
-        const response = await fetch(`${resolveApiBaseUrl()}/chat/config`, {
-          credentials: 'include'
-        })
-        if (!response.ok) return false
-        const body = (await response.json()) as { data?: { contactProfileEnabled?: unknown } }
-        return body.data?.contactProfileEnabled === true
-      } catch {
-        return false
-      }
-    },
-    staleTime: 30_000,
-    retry: false
-  })
-  return { enabled: query.data === true, loading: query.isPending }
-}
+// useContactProfileEnabled 已随 2026-08-19 cutover 退役：画像 venue env 闸删除、
+// 投影键恒 true，画像卡徽标只报行启停 —— 零消费点后一并删除。
 
 /** 手动「立即更新画像」。202 即返回（生成在后端异步跑）；invalidate 让 detail 立刻
  *  读到 `status:'running'`，随后由上面的 3s 轮询接管到落地态。 */
@@ -154,7 +134,11 @@ export function useRefreshContactProfile(
  *  留在原位，所以只在成功后 invalidate，不预先把行摘掉。 */
 export function useAdoptProfileSuggestion(
   contactId: number
-): UseMutationResult<ContactDetailDto, Error, { field: ContactProfileSuggestionField; value: string }> {
+): UseMutationResult<
+  ContactDetailDto,
+  Error,
+  { field: ContactProfileSuggestionField; value: string }
+> {
   const api = useContactsApi()
   const invalidate = useInvalidateContact()
   return useMutation({

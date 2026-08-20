@@ -6,8 +6,7 @@ Subcommands:
   bulk 路径; 全程幂等, ``--rescan`` 从 0 全量重扫 (应急回切 / SELF_EMAILS 改动
   后收敛历史口径用)。
 
-写命令纪律: 真写需 token (``--dry-run`` 只报积压不写库、免 auth)。总闸
-``MAILAGENT_CONTACTS_ENABLED`` off 时拒绝 (与后台扫描同一 inert 语义)。
+写命令纪律: 真写需 token (``--dry-run`` 只报积压不写库、免 auth)。
 """
 
 from __future__ import annotations
@@ -60,16 +59,7 @@ def contact_backfill(
     if batch_size < 1:
         raise emit_cli_error(cli, CliInvalidArgError("--batch-size must be >= 1"))
 
-    # CLI-scoped cfg (尊重 --config/--db-path override, 见 CliContext 的
-    # _sync_global_cfg_from_cli 注记), 不读 import-time 全局单例。
     cfg = cli.cli_config
-    if not getattr(cfg, "contacts_enabled", False):
-        raise emit_cli_error(cli, CliError(
-            "通讯录未启用 (MAILAGENT_CONTACTS_ENABLED=false) —— backfill 与后台"
-            "扫描同一 inert 语义, 总闸关着不落库。",
-            hint="在 .env 设 MAILAGENT_CONTACTS_ENABLED=true 并重启后端后再跑。",
-        ))
-
     db_path = cfg.sync_store_db_path
 
     # 惯例对齐 (backfill / email 群同款, 见 email.py `_ = cli.sync_store  # 保证

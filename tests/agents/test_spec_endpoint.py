@@ -644,20 +644,6 @@ def test_approval_invalid_state_422(env, client):
     assert r.status_code == 422  # pydantic Literal 校验
 
 
-# ---------------------------------------------------------------------------
-# flag-off → 404
-# ---------------------------------------------------------------------------
-
-
-def test_flag_off_spec_404(env, client, monkeypatch):
-    monkeypatch.setattr(agent_runs, "_custom_agents_enabled", lambda: False)
-    _seed_custom(env.store, trigger=_CRON)
-    jid = _running_job(env.repo)
-    r = client.get(f"/api/agent-runs/{jid}/spec", headers={"X-Claim-Token": "tok-1"})
-    assert r.status_code == 404
-    assert r.json()["error"]["code"] == "E_NOT_FOUND"
-
-
 def test_flag_off_approval_404(env, client, monkeypatch):
     jid = _paused_job(env)
     monkeypatch.setattr(agent_runs, "_custom_agents_enabled", lambda: False)

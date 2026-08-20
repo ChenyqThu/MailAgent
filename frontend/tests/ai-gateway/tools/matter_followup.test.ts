@@ -55,11 +55,10 @@ function recordingDomain(payload: unknown = { ok: true }) {
   return { domain, calls }
 }
 
-function buildRunTools(over?: { matterToolsEnabled?: boolean; anchor?: typeof MATTER_RUN | null }) {
+function buildRunTools(over?: { anchor?: typeof MATTER_RUN | null }) {
   return buildGatewayTools({
     domain: mockDomain(() => okEnvelope([])),
     approvalGuard: new ApprovalGuard(),
-    matterToolsEnabled: over?.matterToolsEnabled ?? true,
     contextMode: 'matter_followup',
     agentRunContext: {
       agentId: 'matter:MAT-000042',
@@ -80,37 +79,14 @@ describe('matter_update_propose — registration is anchored to a run (D6)', () 
     ).toBeUndefined()
   })
 
-  test('no anchor → absent, even in the matter_followup mode with the flag on', () => {
+  test('no anchor → absent, even in the matter_followup mode', () => {
     expect(buildRunTools({ anchor: null }).matter_update_propose).toBeUndefined()
-  })
-
-  test('MAILAGENT_MATTERS_ENABLED off → absent even with an anchor (the family flag still rules)', () => {
-    expect(buildRunTools({ matterToolsEnabled: false }).matter_update_propose).toBeUndefined()
-  })
-
-  test('MAILAGENT_MATTER_AGENT_ENABLED explicitly false → absent (the registration-side belt)', () => {
-    const tools = buildGatewayTools({
-      domain: mockDomain(() => okEnvelope([])),
-      approvalGuard: new ApprovalGuard(),
-      matterToolsEnabled: true,
-      matterAgentEnabled: false,
-      contextMode: 'matter_followup',
-      agentRunContext: {
-        agentId: 'matter:MAT-000042',
-        allowedTools: [],
-        skills: ['email', 'search'],
-        matterRun: MATTER_RUN
-      }
-    })
-    expect(tools.matter_update_propose).toBeUndefined()
-    expect(tools.matter_get).toBeDefined() // only the run tool is withdrawn
   })
 
   test('a manual assembly never carries it (no run context exists there)', () => {
     const manual = buildGatewayTools({
       domain: mockDomain(() => okEnvelope([])),
       approvalGuard: new ApprovalGuard(),
-      matterToolsEnabled: true,
       contextMode: 'manual_chat'
     })
     expect(manual.matter_update_propose).toBeUndefined()
@@ -119,17 +95,15 @@ describe('matter_update_propose — registration is anchored to a run (D6)', () 
 })
 
 describe('matter_suggest_related_resources — manual-only dynamic approval', () => {
-  test('registers only for manual chat while the Matter flag is on', () => {
-    const build = (contextMode: AgentContextMode, matterToolsEnabled = true) =>
+  test('registers only for manual chat', () => {
+    const build = (contextMode: AgentContextMode) =>
       buildGatewayTools({
         domain: mockDomain(() => okEnvelope({ items: [] })),
         approvalGuard: new ApprovalGuard(),
-        matterToolsEnabled,
         contextMode
       })
 
     expect(build('manual_chat').matter_suggest_related_resources).toBeDefined()
-    expect(build('manual_chat', false).matter_suggest_related_resources).toBeUndefined()
     expect(build('im_chat').matter_suggest_related_resources).toBeUndefined()
     expect(build('untrusted_trigger').matter_suggest_related_resources).toBeUndefined()
     expect(build('cron_headless').matter_suggest_related_resources).toBeUndefined()
@@ -519,7 +493,6 @@ describe('email read tools — 0812: no Matter narrowing left in EITHER venue', 
     const tools = buildGatewayTools({
       domain,
       approvalGuard: new ApprovalGuard(),
-      matterToolsEnabled: true,
       contextMode: 'matter_followup',
       agentRunContext: {
         agentId: 'matter:MAT-000042',

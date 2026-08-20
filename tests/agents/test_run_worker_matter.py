@@ -1,6 +1,6 @@
 """AgentRunWorker 的 matter_followup 分派（Matters P4, D3/D4）。
 
-覆盖：flag off fail-closed / noop 短路不 poke / 终态四值映射（ok/noop/warn/fail）
+覆盖：noop 短路不 poke / 终态四值映射（ok/noop/warn/fail）
 / cancel 收敛 canceled / 孤儿收敛。gateway 全靠 mock httpx（同 test_run_worker.py）。
 """
 
@@ -24,7 +24,6 @@ def env(tmp_path, monkeypatch):
     SyncStore(str(db))
     repo = AsyncJobRepository(str(db))
     service = MatterRunService(MatterRepository(db))
-    monkeypatch.setattr(run_worker, "_matter_agent_flags_on", lambda: True)
     created = service.create_matter(
         {"title": "Worker Matter"}, idempotency_key="create", source="desktop_ui"
     )
@@ -85,21 +84,6 @@ def _pokes(calls):
 
 def _run(coro):
     return asyncio.run(coro)
-
-
-def test_flag_off_fails_closed(env, monkeypatch):
-    repo, service, pid, version = env
-    run, job = _enqueue_and_claim(service, repo, pid, version)
-    monkeypatch.setattr(run_worker, "_matter_agent_flags_on", lambda: False)
-    calls = _patch_client(monkeypatch)
-    worker = AgentRunWorker(repo=repo)
-    _run(worker._execute(job))
-
-    assert repo.get(job.job_id).status == "failed"
-    assert repo.get(job.job_id).last_error == "E_DISABLED"
-    row = service.get_run(run["id"])
-    assert row["status"] == "fail" and row["completed_at"] is not None
-    assert _pokes(calls) == []  # off → 连 gateway 都不碰
 
 
 def test_noop_short_circuit_does_not_poke_gateway(env, monkeypatch):

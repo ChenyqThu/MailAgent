@@ -544,9 +544,7 @@ async def run_scheduled_tick(
     now: Optional[datetime] = None,
     run_batch_fn: Callable[..., Any] = run_profile_batch,
 ) -> bool:
-    """一次热读 tick；env off 时不读画像配置、不碰画像库。"""
-    if not bool(getattr(settings, "contact_profile_enabled", False)):
-        return False
+    """一次热读 tick；行级 enabled 关闭时不跑画像。"""
     cfg = get_contact_profile_agent_config(db_path)
     if not cfg.row_exists or not cfg.enabled:
         return False

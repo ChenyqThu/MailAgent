@@ -766,17 +766,16 @@ class EmailNotionSyncApp:
                 )
 
             contact_profile_worker_task = None
-            if config.contact_profile_enabled:
-                from src.contacts import profile as contact_profile
-                contact_profile_worker_task = self._spawn_supervised(
-                    lambda: contact_profile.tick_loop(
-                        sync_store=self.watcher.sync_store,
-                        db_path=report_db_path,
-                        shutdown_event=self._shutdown_event,
-                    ),
-                    "contact_profile_worker",
-                )
-                logger.info("[contact-profile] worker enabled by env flag")
+            from src.contacts import profile as contact_profile
+            contact_profile_worker_task = self._spawn_supervised(
+                lambda: contact_profile.tick_loop(
+                    sync_store=self.watcher.sync_store,
+                    db_path=report_db_path,
+                    shutdown_event=self._shutdown_event,
+                ),
+                "contact_profile_worker",
+            )
+            logger.info("[contact-profile] worker enabled")
 
             # 附件文本抽取 worker（PR0：修复 email_attachment_text 队列停摆）。登记侧
             # (commit_email_with_body enqueue pending) 一直正常, 但长驻服务从未实现
@@ -832,56 +831,41 @@ class EmailNotionSyncApp:
                     "[agent] custom agent trigger worker enabled "
                     "(MAILAGENT_CUSTOM_AGENTS_ENABLED)"
                 )
-            # AgentRunWorker（Matters P4 起）：custom agents **或** matter 跟进 Agent
-            # 任一开着都要起 —— matter_followup job 与 agent_run 同族同 worker（D3
-            # 「不起第二个 poll worker」）；trigger worker 仍只归 custom agents。
-            if (
-                config.custom_agents_enabled
-                or (config.matters_enabled and config.matter_agent_enabled)
-                or (config.contacts_enabled and config.contact_agent_enabled)
-            ):
-                from src.agents.run_worker import AgentRunWorker
-                from src.sync.async_jobs import AsyncJobRepository
-                self.agent_run_worker = AgentRunWorker(
-                    repo=AsyncJobRepository(report_db_path),
-                    store=report_store,
-                )
-                agent_run_task = self._spawn_supervised(
-                    self.agent_run_worker.run, "agent_run"
-                )
-                logger.info(
-                    "[agent] agent run worker enabled "
-                    "(custom_agents=%s matter_agent=%s contact_agent=%s)"
-                    % (
-                        config.custom_agents_enabled,
-                        config.matter_agent_enabled,
-                        config.contact_agent_enabled,
-                    )
-                )
-            if config.matters_enabled:
-                from src.agent_config.store import AgentConfigStore, resolve_agent_config_db_path
-                from src.matters.repository import MatterRepository
-                from src.matters.worker import MatterAgendaWorker
+            # matter_followup / contact_governance 与 custom agent 共用同一 worker；
+            # 两个内建 venue 恒启用，因此 worker 恒启动，行级 enabled 仍在调度侧控制。
+            from src.agents.run_worker import AgentRunWorker
+            from src.sync.async_jobs import AsyncJobRepository
+            self.agent_run_worker = AgentRunWorker(
+                repo=AsyncJobRepository(report_db_path),
+                store=report_store,
+            )
+            agent_run_task = self._spawn_supervised(
+                self.agent_run_worker.run, "agent_run"
+            )
+            logger.info(
+                "[agent] agent run worker enabled (custom_agents=%s)"
+                % config.custom_agents_enabled
+            )
 
-                owner_store = AgentConfigStore(
-                    db_path=resolve_agent_config_db_path(report_db_path)
-                )
-                self.matter_agenda_worker = MatterAgendaWorker(
-                    repository=MatterRepository(report_db_path),
-                    sync_store=self.watcher.sync_store,
-                    matter_agent_enabled=bool(config.matter_agent_enabled),
-                    notify_level_reader=lambda: (
-                        owner_store.get_owner_setting("matter_notify_level") or "high"
-                    ),
-                )
-                matter_agenda_task = self._spawn_supervised(
-                    lambda: self.matter_agenda_worker.run(self._shutdown_event),
-                    "matter_agenda",
-                )
-                logger.info(
-                    "[matters] agenda worker enabled "
-                    f"(matter_agent={config.matter_agent_enabled})"
-                )
+            from src.agent_config.store import AgentConfigStore, resolve_agent_config_db_path
+            from src.matters.repository import MatterRepository
+            from src.matters.worker import MatterAgendaWorker
+
+            owner_store = AgentConfigStore(
+                db_path=resolve_agent_config_db_path(report_db_path)
+            )
+            self.matter_agenda_worker = MatterAgendaWorker(
+                repository=MatterRepository(report_db_path),
+                sync_store=self.watcher.sync_store,
+                notify_level_reader=lambda: (
+                    owner_store.get_owner_setting("matter_notify_level") or "high"
+                ),
+            )
+            matter_agenda_task = self._spawn_supervised(
+                lambda: self.matter_agenda_worker.run(self._shutdown_event),
+                "matter_agenda",
+            )
+            logger.info("[matters] agenda worker enabled")
 
             # 飞书对话 bot 长连接（08-01 阶段 2，flag MAILAGENT_IM_FEISHU，
             # cutover 2026-08-04 起默认开；没配凭证仍是零启动，见下面的 gate）。

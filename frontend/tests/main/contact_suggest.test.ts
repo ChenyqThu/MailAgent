@@ -83,7 +83,7 @@ function buildDb(): Database.Database {
 
 /**
  * 通讯录三表（DB v54）的最小但忠实的 DDL —— 只含 `DIRECTORY_SQL` 真正 SELECT
- * 的列。表结构与 `MAILAGENT_CONTACTS_ENABLED` 解耦恒在，故这里只造表不造 flag。
+ * 的列。表结构恒在，故这里只造表。
  */
 function addDirectory(db: Database.Database): void {
   db.exec(`

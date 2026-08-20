@@ -38,9 +38,6 @@ def api(tmp_path):
         )
         conn.commit()
     settings = SimpleNamespace(
-        contacts_enabled=True,
-        contact_agent_enabled=True,
-        contact_profile_enabled=False,
         sync_store_db_path=str(path),
         user_email="",
         self_emails="",
@@ -159,18 +156,3 @@ def test_agent_history_contract_order_limit_and_suggestion_count(api):
     assert items[1]["started_at"] == 11_000
     assert items[0]["trigger_kind"] is None
     assert client.get("/api/contacts/agent/history", params={"limit": 51}).status_code == 422
-
-
-def test_contact_agent_flag_is_second_gate(api):
-    client, settings, _ = api
-    settings.contact_agent_enabled = False
-    for method, url in (
-        ("GET", "/api/contacts/suggestions"),
-        ("POST", "/api/contacts/agent/run"),
-        ("GET", "/api/contacts/agent/status"),
-        ("GET", "/api/contacts/agent/history"),
-        ("POST", "/api/contacts/agent/proposals"),
-    ):
-        response = client.request(method, url, json={} if method == "POST" else None)
-        assert response.status_code == 403
-        assert response.json()["error"]["code"] == "E_DISABLED"

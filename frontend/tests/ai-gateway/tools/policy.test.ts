@@ -74,18 +74,15 @@ function buildAllTools(contextMode?: AgentContextMode) {
     // task 07-21 — notion-agent tool (MAILAGENT_NOTION_AGENT_TOOL), classified 'outbound' (edit-tier
     // 恒 HITL, un-grantable → stripped headless). Built here so the FULL-set drift guards see it.
     notionAgentToolsEnabled: true,
-    // Matters MVP P3 (D6) + P4 (D8) — eleven matter tools (MAILAGENT_MATTERS_ENABLED), classified
+    // Matters MVP P3 (D6) + P4 (D8) — eleven default matter tools, classified
     // read (2) + domain_write (9). The gateway class layer admits them in every venue incl.
     // headless — the real headless gate is the HEADLESS_TOOL_OPTIONS checkbox face (matter is
     // headless_excluded there) intersected in wrapCfgForAgentRun's allowedTools filter. The
     // twelfth, matter_update_propose, is run-context-only (see MATTER_RUN_ONLY_TOOLS).
-    matterToolsEnabled: true,
-    // Contact Directory WP7 — the nine contact tools (MAILAGENT_CONTACTS_ENABLED), classified
-    // read (3) + artifact (3 proposals) + domain_write (3). 🔴 Turning the flag on HERE is
-    // load-bearing: with it off the FORWARD/REVERSE drift guards below never see the family, so a
-    // missing GATEWAY_TOOL_CLASSES entry would fail-close to 'exec' and stay green — the exact
-    // two-holes-cancelling-out shape P3 hit with the matter family.
-    contactToolsEnabled: true,
+    // Contact Directory WP7 — the nine default contact tools, classified
+    // read (3) + artifact (3 proposals) + domain_write (3). The FORWARD/REVERSE drift guards
+    // below must always see this default family, otherwise a missing GATEWAY_TOOL_CLASSES entry
+    // could fail-close to 'exec' and stay green.
     ...(contextMode !== undefined ? { contextMode } : {})
   })
 }
@@ -105,7 +102,6 @@ function buildMatterRunTools() {
   return buildGatewayTools({
     domain: mockDomain(() => okEnvelope([])),
     approvalGuard: new ApprovalGuard(),
-    matterToolsEnabled: true,
     contextMode: 'matter_followup',
     agentRunContext: {
       agentId: 'matter:MAT-000042',
@@ -124,8 +120,6 @@ function buildContactGovernanceTools() {
     domain: mockDomain(() => okEnvelope([])),
     approvalGuard: new ApprovalGuard(),
     writeToolsEnabled: true,
-    contactToolsEnabled: true,
-    matterToolsEnabled: true,
     contextMode: 'contact_governance',
     agentRunContext: {
       agentId: 'contact_governance_agent',

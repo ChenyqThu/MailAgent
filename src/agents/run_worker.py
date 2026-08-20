@@ -56,33 +56,6 @@ class _GatewayPokeError(Exception):
         self.code = code
 
 
-def _matter_agent_flags_on() -> bool:
-    """matter_followup 执行前 pre-flight 热读（D11：matters AND matter_agent）。
-
-    读 pydantic 单例（重启生效语义与 flag 文档一致）；import/读失败 → fail-closed False
-    （job 收敛 failed E_DISABLED，不悬挂）。测试经 monkeypatch 本函数控制。
-    """
-    try:
-        from src.config import config
-
-        return bool(config.matters_enabled) and bool(
-            getattr(config, "matter_agent_enabled", False)
-        )
-    except Exception:  # noqa: BLE001 — 配置不可用 → 保守当 off
-        return False
-
-
-def _contact_governance_flags_on() -> bool:
-    try:
-        from src.config import config
-
-        return bool(config.contacts_enabled) and bool(
-            getattr(config, "contact_agent_enabled", False)
-        )
-    except Exception:
-        return False
-
-
 class AgentRunWorker:
     """agent_run / matter_followup 串行执行主循环（认领 → poke gateway → 写终态）。
 
@@ -153,9 +126,6 @@ class AgentRunWorker:
             await self._execute_matter(job)
             return
         job_id = job.job_id
-        if job.job_type == "contact_governance" and not _contact_governance_flags_on():
-            self._mark(job_id, "failed", last_error="E_DISABLED")
-            return
         suggestions_before = (
             self._contact_suggestion_count() if job.job_type == "contact_governance" else None
         )
@@ -210,7 +180,7 @@ class AgentRunWorker:
             logger.warning(f"[agent-run-worker] matter orphan sweep failed: {exc}")
 
     async def _execute_matter(self, job: "AsyncJob") -> None:
-        """matter_followup：flag pre-flight → 便宜比对（noop 短路不 poke）→ started CAS
+        """matter_followup：便宜比对（noop 短路不 poke）→ started CAS
         → poke→map 链 → 终态四值映射（ok/noop/warn/fail + canceled）。
 
         **绝不悬挂**：任何路径同时收敛 async job 终态 + matter_run 终态。
@@ -222,11 +192,6 @@ class AgentRunWorker:
             svc = self._matter_service()
             if not isinstance(run_id, int):
                 self._mark(job_id, "failed", last_error="E_MATTER_RUN_MISSING")
-                return
-            if not _matter_agent_flags_on():
-                # flag off → fail-closed（terminal，不悬挂；D11）。
-                svc.finish_run(run_id, "fail", error={"code": "E_DISABLED"})
-                self._mark(job_id, "failed", last_error="E_DISABLED")
                 return
             run = svc.get_run(run_id)
             matter_id = params.get("matter_id")

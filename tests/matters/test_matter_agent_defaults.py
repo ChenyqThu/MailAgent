@@ -90,7 +90,7 @@ def env(tmp_path, agent_cfg):
     finally:
         conn.close()
     settings = SimpleNamespace(
-        matters_enabled=True, matter_agent_enabled=True, sync_store_db_path=str(path)
+        sync_store_db_path=str(path)
     )
     service = MatterRunService(MatterRepository(path))
     counter = {"n": 0}

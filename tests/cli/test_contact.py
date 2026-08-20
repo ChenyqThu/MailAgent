@@ -1,4 +1,4 @@
-"""mailagent contact backfill — 总闸 gate / dry-run 免 auth / 真写 auth / 全链落库。"""
+"""mailagent contact backfill — dry-run 免 auth / 真写 auth / 全链落库。"""
 
 from __future__ import annotations
 
@@ -9,13 +9,6 @@ import pytest
 from tests.cli.conftest import extract_last_json_object
 
 
-@pytest.fixture
-def contacts_on(monkeypatch):
-    # CLI 每次 invoke 都从 env 重建 CLI-scoped Config (CliContext.from_flags) —— 走
-    # env 注入而非 setattr 全局单例 (后者会被 _sync_global_cfg_from_cli 冲掉)。
-    monkeypatch.setenv("MAILAGENT_CONTACTS_ENABLED", "true")
-
-
 def _invoke(cli_runner, db, args):
     from src.cli.main import app
 
@@ -24,17 +17,8 @@ def _invoke(cli_runner, db, args):
     )
 
 
-def test_backfill_refused_when_flag_off(cli_runner, cli_env, seeded_db):
-    # cli_env 不设 MAILAGENT_CONTACTS_ENABLED → pydantic 默认 False (灰度关)
-    result = _invoke(cli_runner, seeded_db, [])
-    assert result.exit_code == 1, result.output
-    payload = extract_last_json_object(result.output)
-    assert payload["status"] == "error"
-    assert "MAILAGENT_CONTACTS_ENABLED" in payload["error"]["message"]
-
-
 def test_backfill_dry_run_reports_backlog_without_auth(
-    cli_runner, cli_env, seeded_db, contacts_on,
+    cli_runner, cli_env, seeded_db,
 ):
     with sqlite3.connect(seeded_db) as conn:
         total = conn.execute("SELECT COUNT(*) FROM email_metadata").fetchone()[0]
@@ -49,14 +33,14 @@ def test_backfill_dry_run_reports_backlog_without_auth(
         assert conn.execute("SELECT COUNT(*) FROM contact").fetchone()[0] == 0
 
 
-def test_backfill_real_write_requires_auth(cli_runner, cli_env, seeded_db, contacts_on):
+def test_backfill_real_write_requires_auth(cli_runner, cli_env, seeded_db):
     # cli_env: API key 空 + 未 opt-in unauth writes → exit 4
     result = _invoke(cli_runner, seeded_db, [])
     assert result.exit_code == 4, result.output
 
 
 def test_backfill_scans_and_calibrates(
-    cli_runner, cli_env, seeded_db, contacts_on, monkeypatch,
+    cli_runner, cli_env, seeded_db, monkeypatch,
 ):
     monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
     with sqlite3.connect(seeded_db) as conn:
@@ -84,7 +68,7 @@ def test_backfill_scans_and_calibrates(
 
 
 def test_backfill_bootstraps_me_in_a_single_run(
-    cli_runner, cli_env, seeded_db, contacts_on, monkeypatch,
+    cli_runner, cli_env, seeded_db, monkeypatch,
 ):
     """🔴 「我」的引导在**一次** backfill 里就收敛 —— 这正是 `contact_backfill` 在
     扫描前后各引导一次的唯一理由 (全新库里 USER_EMAIL 那条联系人是本次扫描才建出来
@@ -155,7 +139,7 @@ def old_version_db(seeded_db):
 
 
 def test_backfill_dry_run_migrates_old_db_first(
-    cli_runner, cli_env, old_version_db, contacts_on,
+    cli_runner, cli_env, old_version_db,
 ):
     result = _invoke(cli_runner, old_version_db, ["--dry-run"])
     assert result.exit_code == 0, result.output
@@ -181,7 +165,7 @@ def test_backfill_dry_run_migrates_old_db_first(
 
 
 def test_backfill_real_run_migrates_old_db_then_scans(
-    cli_runner, cli_env, old_version_db, contacts_on, monkeypatch,
+    cli_runner, cli_env, old_version_db, monkeypatch,
 ):
     monkeypatch.setenv("MAILAGENT_CLI_ALLOW_UNAUTH_WRITES", "true")
     with sqlite3.connect(old_version_db) as conn:
@@ -203,7 +187,7 @@ def test_backfill_real_run_migrates_old_db_then_scans(
 
 
 def test_backfill_newer_db_fails_with_error_envelope(
-    cli_runner, cli_env, seeded_db, contacts_on,
+    cli_runner, cli_env, seeded_db,
 ):
     """库版本高于代码 (降级守卫) → 明确错误信封, 不裸喷 traceback; dry-run 同形。"""
     with sqlite3.connect(seeded_db) as conn:

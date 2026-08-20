@@ -130,7 +130,7 @@ def test_create_draft_endpoint_is_read_only_and_skips_unconfigured_notion(
     research_env,
 ):
     path, subject, source_body = research_env
-    settings = SimpleNamespace(matters_enabled=True, sync_store_db_path=str(path))
+    settings = SimpleNamespace(sync_store_db_path=str(path))
     notion_config = SimpleNamespace(notion_token="", email_database_id="")
     notion_calls: list[str] = []
 

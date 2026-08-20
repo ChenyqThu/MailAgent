@@ -76,10 +76,6 @@ function buildFace(
       approvalGuard: new ApprovalGuard(),
       writeToolsEnabled: true,
       calendarToolsEnabled: true,
-      matterToolsEnabled: true,
-      matterAgentEnabled: true,
-      contactToolsEnabled: true,
-      contactAgentEnabled: true,
       contextMode,
       ...(agentRunContext !== undefined ? { agentRunContext } : {})
     } as Parameters<typeof buildGatewayTools>[0],
@@ -119,10 +115,6 @@ async function realGovernanceFace(): Promise<string[]> {
           approvalGuard: new ApprovalGuard(),
           writeToolsEnabled: true,
           calendarToolsEnabled: true,
-          matterToolsEnabled: true,
-          matterAgentEnabled: true,
-          contactToolsEnabled: true,
-          contactAgentEnabled: true,
           contextMode: mode,
           agentRunContext
         } as Parameters<typeof buildGatewayTools>[0],

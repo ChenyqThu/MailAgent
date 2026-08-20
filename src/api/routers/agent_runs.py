@@ -175,55 +175,12 @@ def _custom_agents_enabled() -> bool:
         return False
 
 
-def _matter_agent_enabled() -> bool:
-    """Matters P4 双 flag（matters AND matter_agent）。异常 → fail-closed False。"""
-    from src.api.deps import get_settings
-
-    try:
-        settings = get_settings()
-        return bool(settings.matters_enabled) and bool(
-            getattr(settings, "matter_agent_enabled", False)
-        )
-    except Exception:  # noqa: BLE001 — 配置读失败 → 保守当 feature off
-        return False
-
-
-def _contact_governance_enabled() -> bool:
-    from src.api.deps import get_settings
-
-    try:
-        settings = get_settings()
-        return bool(settings.contacts_enabled) and bool(
-            getattr(settings, "contact_agent_enabled", False)
-        )
-    except Exception:
-        return False
-
-
 def _require_flag() -> None:
     """flag off → 404（feature 不存在；对齐 aguiMirror off 形状）。挂在 verify_local_token 之后。"""
     if not _custom_agents_enabled():
         raise APIError(
             "E_NOT_FOUND",
             "custom agents feature is disabled",
-            http_status=404,
-            source="agent-runs",
-        )
-
-
-def _require_run_pull_flag() -> None:
-    """spec pull 面的放宽版 flag 门（Matters P4）：custom agents **或** matter agent 任一
-    开着即放行 —— matter_followup job 的 spec 也走本端点，custom flag 单独关掉不该把
-    matter run 打成 404（matter 分支自身还有 assemble_matter_spec 的双 flag 409 防绕）。
-    两族全关 → 维持 404。"""
-    if not (
-        _custom_agents_enabled()
-        or _matter_agent_enabled()
-        or _contact_governance_enabled()
-    ):
-        raise APIError(
-            "E_NOT_FOUND",
-            "agent runs feature is disabled",
             http_status=404,
             source="agent-runs",
         )
@@ -534,7 +491,6 @@ async def get_run_spec(request: Request, job_id: int):
     （job 不存在或非 agent_run）· 409 E_SPEC_ALREADY_CLAIMED（重复 pull / 非 running）·
     409 E_SPEC_AGENT_INVALID（agent 坏配置）。双 pull 结构性只有一个 200。
     """
-    _require_run_pull_flag()
     claim_token = request.headers.get("X-Claim-Token") or ""
     if not claim_token:
         raise APIError(

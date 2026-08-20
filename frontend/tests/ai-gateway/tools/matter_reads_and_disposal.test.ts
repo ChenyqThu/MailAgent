@@ -136,18 +136,9 @@ describe('matter_runs_list — run history without the untrusted payload', () =>
     }
   })
 
-  test('registers only while the matter-agent flag is not off (the REST face is flag-gated)', () => {
+  test('registers as part of the default Matter read face', () => {
     const domain = mockDomain(() => okEnvelope({ items: [] }))
     expect(createMatterReadTools(domain).matter_runs_list).toBeDefined()
-    expect(
-      createMatterReadTools(domain, [], { matterAgentEnabled: true }).matter_runs_list
-    ).toBeDefined()
-    const off = createMatterReadTools(domain, [], { matterAgentEnabled: false })
-    expect(off.matter_runs_list).toBeUndefined()
-    // only that one is withdrawn — the rest of the read face is untouched.
-    expect(off.matter_find).toBeDefined()
-    expect(off.matter_attention_list).toBeDefined()
-    expect(off.matter_tags_list).toBeDefined()
   })
 })
 
@@ -261,7 +252,6 @@ describe('venue — reads reach a follow-up run, disposal writes never do', () =
     buildGatewayTools({
       domain: mockDomain(() => okEnvelope({ items: [] })),
       approvalGuard: new ApprovalGuard(),
-      matterToolsEnabled: true,
       contextMode,
       ...(contextMode === 'matter_followup'
         ? {
@@ -295,21 +285,4 @@ describe('venue — reads reach a follow-up run, disposal writes never do', () =
     }
   })
 
-  test('MAILAGENT_MATTERS_ENABLED off → none of the five exist', () => {
-    const off = buildGatewayTools({
-      domain: mockDomain(() => okEnvelope({ items: [] })),
-      approvalGuard: new ApprovalGuard(),
-      matterToolsEnabled: false,
-      contextMode: 'manual_chat'
-    })
-    for (const name of [
-      'matter_attention_list',
-      'matter_runs_list',
-      'matter_tags_list',
-      'matter_attention_triage',
-      'matter_suggestion_resolve'
-    ]) {
-      expect(off[name], name).toBeUndefined()
-    }
-  })
 })

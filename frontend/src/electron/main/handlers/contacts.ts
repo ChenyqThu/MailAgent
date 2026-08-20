@@ -32,9 +32,8 @@ interface ContactAggregate {
 /**
  * 通讯录 (contact / contact_email, DB v54) 的一行「人 × 地址」。
  *
- * 🔴 判据只能是「表在不在 / 查出来有没有行」—— 绝不在 main 里再读一份
- * `MAILAGENT_CONTACTS_ENABLED`：那个 flag 已有四个载体，加第五个是本仓明令
- * 禁止的形状；且两表与 flag **解耦恒在**（关着只是没有行）。
+ * 🔴 判据只能是「表在不在 / 查出来有没有行」；通讯录 venue 已恒启用，
+ * 两表与运行时开关解耦恒在。
  */
 interface DirectoryRow {
   display_name: string | null

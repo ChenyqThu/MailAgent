@@ -983,61 +983,9 @@ class Config(BaseSettings):
             "两侧默认必须同为 true，回退也一起翻。"
         ),
     )
-    matters_enabled: bool = Field(
-        default=True,
-        validation_alias="MAILAGENT_MATTERS_ENABLED",
-        description=(
-            "Matters/事项工作台总闸（一级导航「事项」+ /api/matters/* + matter 工具家族）。"
-            "默认开（2026-08-12 owner 拍板：事项是核心功能，一级导航默认显示）；env 显式 false "
-            "= 应急回退 → 导航项不渲染、matters router 全 403、gateway matter 工具家族不注册。"
-            "🔴 与 MAILAGENT_MATTER_AGENT_ENABLED 是两件事：跟进 Agent（无人值守 + 有网络出口）"
-            "仍默认关，本 flag 翻默认不带它一起翻。Restart required after changing it."
-        ),
-    )
-    matter_agent_enabled: bool = Field(
-        default=False,
-        validation_alias="MAILAGENT_MATTER_AGENT_ENABLED",
-        description=(
-            "Matter 跟进 Agent (P4) feature flag：runs/propose 端点 + matter_followup "
-            "worker 分派 + spec assembler。语义 AND：MAILAGENT_MATTERS_ENABLED off 时"
-            "本 flag 无意义（matters router 全 403 在前）。off 时 updates/review REST "
-            "仍可用（清账既有 pending 提案）。Restart required after changing it."
-        ),
-    )
-
     # =========================================================================
     # 通讯录 Contact Directory (task 08-13 WP1)
-    # 🔴 字段名 contacts_enabled ≠ env MAILAGENT_CONTACTS_ENABLED → 必须
-    #    validation_alias（pydantic v2 忽略 Field(env=)，见本类顶 model_config 注释）。
     # =========================================================================
-    contacts_enabled: bool = Field(
-        default=False,
-        validation_alias="MAILAGENT_CONTACTS_ENABLED",
-        description=(
-            "通讯录总闸（灰度默认关，ship-off → dogfood → cutover）。on = new_watcher "
-            "挂 L0+L1 提取扫描独立低频节拍（email_metadata → contact 三表账本/聚合）；"
-            "off = 字节级 inert（零 SQL 零 tick，CLI contact backfill 亦拒绝）。"
-            "schema (v54 三表) 与本 flag 解耦——表恒在，开关只管运行时行为。"
-            "Restart required after changing it."
-        ),
-    )
-    contact_profile_enabled: bool = Field(
-        default=False,
-        validation_alias="MAILAGENT_CONTACT_PROFILE_ENABLED",
-        description=(
-            "联系人 AI 画像总闸，默认关闭。与 report_agent 的 contact_profile_agent "
-            "enabled 行开关按 AND 生效；关闭时不启动画像 worker，手动 refresh 返回 E_DISABLED。"
-        ),
-    )
-    contact_agent_enabled: bool = Field(
-        default=False,
-        validation_alias="MAILAGENT_CONTACT_AGENT_ENABLED",
-        description=(
-            "通讯录治理 Agent 总闸，默认关闭。与 MAILAGENT_CONTACTS_ENABLED 按 AND "
-            "生效：控制每日治理扫描、治理建议双腿 REST 与 contact_governance 执行链；"
-            "关闭时表仍恒在，仅运行时字节级 inert。Restart required after changing it."
-        ),
-    )
     contact_extract_interval_sec: int = Field(
         default=120,
         validation_alias="MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC",

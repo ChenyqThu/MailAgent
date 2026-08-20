@@ -1583,7 +1583,11 @@
       "tokensAfter": "压缩后估计",
       "model": "模型",
       "reason": "原因",
-      "reasonValue": { "manual": "手动", "threshold": "阈值", "overflow": "溢出恢复" }
+      "reasonValue": {
+        "manual": "手动",
+        "threshold": "阈值",
+        "overflow": "溢出恢复"
+      }
     },
     "queuedInput": {
       "queued": "将在当前任务完成后发送",
@@ -2186,8 +2190,8 @@
       "calendarChatNote": "此开关只管对外 Skill 接口与能力声明；聊天中的日历工具由「系统能力」区的日历项控制。",
       "notionAgentMasterOff": "主开关 MAILAGENT_NOTION_AGENT_TOOL 已关闭：即使在此启用，聊天中也不会注册 notion_agent 工具。",
       "skillCreatorChatNote": "此 Skill 提供工作流指引；其驱动的 6 个 chat 工具审批档在「连接与工具 → Skill 供应链」。",
-      "customAgentChatNote": "此 Skill 提供工作流指引；其驱动的 7 个 chat 工具审批档在「连接与工具 → Custom Agent」。"
-      ,"sourceBuiltin": "内置 · 产品可信",
+      "customAgentChatNote": "此 Skill 提供工作流指引；其驱动的 7 个 chat 工具审批档在「连接与工具 → Custom Agent」。",
+      "sourceBuiltin": "内置 · 产品可信",
       "sourceUserCreated": "用户创建",
       "sourceThirdParty": "第三方",
       "currentHash": "当前包哈希",
@@ -2940,28 +2944,6 @@
         "label": "AG-UI 协议镜像",
         "helper": "开放面向开发者的 AG-UI 协议镜像端点，用于兼容性验证与调试。",
         "restartHint": "需退出重开 App。"
-      },
-      "matters": {
-        "label": "事项",
-        "helper": "把散在邮件、会议与文档里的一件事收成「事项」：状态与下一步、关联资料、干系人、时间线，以及一个只看本事项证据的对话。",
-        "restartHint": "重启后端后侧边栏出现「事项」；AI 里的事项工具要退出重开 App。"
-      },
-      "matterAgent": {
-        "helper": "给事项绑定跟进 Agent：手动或定时跑一次，只读地比对变化并提出更新提案，由你逐项审阅后才写入。附带需关注信号与 macOS 通知。",
-        "restartHint": "需先开启「事项」。重启后端后生效；原生通知要退出重开 App。"
-      },
-      "contacts": {
-        "label": "通讯录",
-        "helper": "从历史邮件自动建立人物档案：双向往来优先的列表、身份字段与逐字段锁定、关联邮件与事项。零手工录入，数据全在本地。",
-        "restartHint": "重启后端后侧边栏出现「通讯录」，首次会后台扫描历史邮件。"
-      },
-      "contactProfile": {
-        "helper": "为往来较多的联系人生成 AI 画像（低频批处理，单人也可手动生成），并从签名档提出可采纳的建议值。画像只读邮件，不改身份字段。需先开启通讯录。",
-        "restartHint": "需先开启「通讯录」。重启后端后生效；还要在 Agents 页启用「联系人画像」这个 Agent。"
-      },
-      "contactAgent": {
-        "helper": "通讯录治理 Agent：每天随增量扫描跑一次，找出同一个人被拆成多条、身份字段过时、地址已停用、分类错，只产出待审建议，不直接改任何字段。开启后通讯录列表头出现 ✨Agent 入口。需先开启通讯录。",
-        "restartHint": "需先开启「通讯录」。重启后端后生效；治理扫描要读邮件正文，采纳仍由你在待审队列里逐条确认。"
       }
     },
     "accounts": {
@@ -3408,7 +3390,16 @@
           "helper": "逗号分隔: critical, error, warning, info"
         }
       },
-      "matters": { "title": "事项通知", "helper": "控制本机原生通知的事项信号范围。", "level": "通知级别", "high": "高价值（默认）", "all": "全部", "off": "关闭", "saved": "事项通知设置已保存", "failed": "事项通知设置保存失败" },
+      "matters": {
+        "title": "事项通知",
+        "helper": "控制本机原生通知的事项信号范围。",
+        "level": "通知级别",
+        "high": "高价值（默认）",
+        "all": "全部",
+        "off": "关闭",
+        "saved": "事项通知设置已保存",
+        "failed": "事项通知设置保存失败"
+      },
       "page": {
         "eyebrow": "NOTIFICATIONS",
         "title": "通知",
@@ -4005,7 +3996,6 @@
       "agent": {
         "label": "跟进 Agent",
         "helper": "系统内置、全局一份：任务契约、工具面与网页检索档。",
-        "disabled": "跟进 Agent 当前未启用（灰度开关在「实验室」）。",
         "open": "打开配置"
       }
     }
@@ -4463,9 +4453,6 @@
     "contactProfile": {
       "subtitle": "低频批处理生成人物画像；单个联系人可在档案页手动更新",
       "configTitle": "联系人画像 · {title}",
-      "masterOff": "总闸未开",
-      "masterOnNote": "总开关已开（Labs 的 MAILAGENT_CONTACT_PROFILE_ENABLED）。下方启用开关与排程保存即生效。",
-      "masterOffNote": "总开关未开：画像不会运行。请到 设置 → Labs 打开 MAILAGENT_CONTACT_PROFILE_ENABLED（改后需重启后端）；这里的启用开关与排程会照常保存。",
       "enable": "启用画像 Agent",
       "enableHint": "开启后按下方排程低频跑批处理（受 Labs 总开关约束）。",
       "schedule": "排程",
@@ -5039,8 +5026,21 @@
       "snooze": "稍后提醒（3 天）",
       "snoozeShort": "稍后",
       "dismiss": "忽略本次",
-      "kind": { "wait_overdue": "等待逾期", "action_overdue": "行动逾期", "deadline_near": "临近截止", "health_down": "健康下降", "needs_review": "需要审阅", "run_failed": "跟进失败", "context_gap": "上下文缺口" },
-      "toast": { "resolved": "信号已解决", "snoozed": "已稍后提醒 · 3 天后重新出现", "dismissed": "已忽略本次 · 该类信号仍会再次出现", "failed": "信号操作失败" }
+      "kind": {
+        "wait_overdue": "等待逾期",
+        "action_overdue": "行动逾期",
+        "deadline_near": "临近截止",
+        "health_down": "健康下降",
+        "needs_review": "需要审阅",
+        "run_failed": "跟进失败",
+        "context_gap": "上下文缺口"
+      },
+      "toast": {
+        "resolved": "信号已解决",
+        "snoozed": "已稍后提醒 · 3 天后重新出现",
+        "dismissed": "已忽略本次 · 该类信号仍会再次出现",
+        "failed": "信号操作失败"
+      }
     },
     "create": {
       "title": "新建事项",
@@ -5149,10 +5149,29 @@
       "saved": "标签已更新",
       "renameSaved": "标签已重命名",
       "noTags": "还没有标签",
-      "shapes": { "circle": "圆点", "ring": "空心圈", "square": "方块", "diamond": "菱形", "bar": "竖条" },
-      "colors": { "--c-accent": "强调色", "--c-info": "信息色", "--c-ok": "成功色", "--c-warn": "警告色", "--c-crit": "严重色", "--c-ai": "AI 色" }
+      "shapes": {
+        "circle": "圆点",
+        "ring": "空心圈",
+        "square": "方块",
+        "diamond": "菱形",
+        "bar": "竖条"
+      },
+      "colors": {
+        "--c-accent": "强调色",
+        "--c-info": "信息色",
+        "--c-ok": "成功色",
+        "--c-warn": "警告色",
+        "--c-crit": "严重色",
+        "--c-ai": "AI 色"
+      }
     },
-    "tabs": { "state": "状态", "context": "上下文", "timeline": "进展", "label": "事项详情", "runs": "运行" },
+    "tabs": {
+      "state": "状态",
+      "context": "上下文",
+      "timeline": "进展",
+      "label": "事项详情",
+      "runs": "运行"
+    },
     "status": {
       "inbox": "收件",
       "planned": "计划中",
@@ -5163,7 +5182,12 @@
       "done": "已完成",
       "canceled": "已取消"
     },
-    "health": { "unknown": "未知", "on_track": "正常", "at_risk": "有风险", "off_track": "偏离" },
+    "health": {
+      "unknown": "未知",
+      "on_track": "正常",
+      "at_risk": "有风险",
+      "off_track": "偏离"
+    },
     "actions": {
       "archive": "归档",
       "restoreArchive": "取消归档",
@@ -5184,7 +5208,11 @@
       "noSummary": "还没有当前摘要。",
       "summaryGuard": "跟进 Agent 只能提出更新提案，接受后才会写进这里；你也可以直接编辑。",
       "summaryUpdatedAt": "更新于 {time}",
-      "summaryBy": { "user": "由你更新", "agent": "由跟进 Agent 更新", "system": "由系统更新" },
+      "summaryBy": {
+        "user": "由你更新",
+        "agent": "由跟进 Agent 更新",
+        "system": "由系统更新"
+      },
       "summaryPlaceholder": "写下这件事现在的状态：卡在哪、下一步是什么…",
       "titleAccepted": "已接受",
       "freshnessStale": "已 {count} 天未更新",
@@ -5426,7 +5454,14 @@
       "promoteStakeholder": "设为核心干系人",
       "demoteStakeholder": "移出核心干系人",
       "unnamed": "未命名",
-      "reorder": {"handle": "拖动排序 / 换组", "grip": "拖动排序：{label}，第 {pos} 位（共 {count} 位）", "grabbed": "已抓起 {label}，第 {pos} 位（共 {count} 位）。用方向键移动，空格放下，Esc 取消。", "dropped": "{label} 已放到第 {pos} 位（共 {count} 位）。", "moved": "{label} 已移到第 {pos} 位（共 {count} 位）。", "cancelled": "已取消排序，{label} 回到原位。"},
+      "reorder": {
+        "handle": "拖动排序 / 换组",
+        "grip": "拖动排序：{label}，第 {pos} 位（共 {count} 位）",
+        "grabbed": "已抓起 {label}，第 {pos} 位（共 {count} 位）。用方向键移动，空格放下，Esc 取消。",
+        "dropped": "{label} 已放到第 {pos} 位（共 {count} 位）。",
+        "moved": "{label} 已移到第 {pos} 位（共 {count} 位）。",
+        "cancelled": "已取消排序，{label} 回到原位。"
+      },
       "lastContact": "最近联系",
       "pinnedResources": "置顶资料",
       "linkedResources": "关联资料",
@@ -5762,180 +5797,305 @@
       "startFailed": "请刷新后重试",
       "runNowChatHint": "在 AI 对话里跟进这件事，过程留在会话记录里",
       "runNowPrompt": "帮我跟进这件事（{publicId} · {title}）。先读它当前的状态、开放项、干系人与已关联的邮件/文档，再检索最近有没有新证据；然后告诉我：有什么新进展、卡在哪、下一步该做什么。需要改事项本身（状态、行动项、摘要等）时，先说清楚要改什么再动手，我会在审批卡上确认。",
-      "status": { "queued": "排队中", "running": "运行中", "ok": "完成", "noop": "无变化", "warn": "部分降级", "fail": "失败", "canceled": "已取消" }
+      "status": {
+        "queued": "排队中",
+        "running": "运行中",
+        "ok": "完成",
+        "noop": "无变化",
+        "warn": "部分降级",
+        "fail": "失败",
+        "canceled": "已取消"
+      }
     },
-    "runOverlay": { "runningTitle": "跟进运行中", "doneTitle": "跟进运行", "capability": "手动触发 · 观察+建议", "proposal": "已产出提案 · {count} 项变化", "warn": "已产出提案 · 部分降级", "failed": "运行失败", "review": "审阅" },
-    "review": { "noDirectSource": "无直接来源", "goalChecksNoChange": "完成标志没有实质变化。", "goalChecksUnchanged": "其余 {count} 条不变。", "changeReason": "理由：{reason}", "changeKind": { "fact": { "label": "事实", "hint": "有来源支撑，可直接记录" }, "inference": { "label": "推断", "hint": "Agent 的解释，需你判断" }, "field": { "label": "字段变更", "hint": "会改写正式业务状态" }, "action": { "label": "行动项", "hint": "会新增或修改行动项" }, "resource": { "label": "关联资料", "hint": "会把资料正式关联到事项" } }, "title": "更新提案审阅", "heading": "更新提案 · {title}", "run": "运行 #{id}", "confidence": "置信 {value}%", "stale": "基线已变", "watermark": "事件范围 {from} → {to}", "proposedSummary": "提议的当前状态", "finishEdit": "完成编辑", "editAccept": "编辑后接受", "compare": "对比当前已接受状态", "changes": "逐项变化 · 已选 {selected}/{total}", "clearAll": "全部取消", "selectAll": "全部勾选", "questions": "Agent 提出的待解问题", "staleHint": "这份提案依据的事项内容已经变了，它要改的地方后来被改过。让 Agent 按最新情况重新跑一轮。", "staleRerun": "重新跑一轮", "staleReload": "这份提案依据的事项内容已经变了，事项数据已刷新。让 Agent 按最新情况重新跑一轮。", "versionReload": "事项已被更新，已刷新最新版本。请重载后重试。", "openCitation": "打开证据 #{id}", "pendingCitation": "本提案新建的资料", "newResource": { "badge": "将新建关联", "untitled": "（无标题）", "hint": "接受后这份资料才会关联进本事项", "summaryByAgent": "Agent 已生成的摘要", "summaryFromMail": "沿用邮件自带的摘要", "summaryPending": "还没有摘要 · 下次跟进运行时生成" }, "rejectReason": "拒绝原因", "confirmReject": "确认拒绝", "editedArchive": "Agent 原始提案与你编辑后的版本都会留档", "rejectArchive": "拒绝也会留档，并成为 Agent 后续的上下文", "reject": "拒绝", "later": "稍后", "acceptAll": "全部接受", "acceptSelected": "接受所选 {count} 项", "attention": "跟进 Agent 提出了 {count} 项变化，等待你审阅" },
-      "trigger": {
-        "kind": {
-          "schedule": "定时",
-          "event": "事件驱动",
-          "condition": "条件",
-          "manual": "手动"
+    "runOverlay": {
+      "runningTitle": "跟进运行中",
+      "doneTitle": "跟进运行",
+      "capability": "手动触发 · 观察+建议",
+      "proposal": "已产出提案 · {count} 项变化",
+      "warn": "已产出提案 · 部分降级",
+      "failed": "运行失败",
+      "review": "审阅"
+    },
+    "review": {
+      "noDirectSource": "无直接来源",
+      "goalChecksNoChange": "完成标志没有实质变化。",
+      "goalChecksUnchanged": "其余 {count} 条不变。",
+      "changeReason": "理由：{reason}",
+      "changeKind": {
+        "fact": {
+          "label": "事实",
+          "hint": "有来源支撑，可直接记录"
         },
-        "event": {
-          "resource_linked_mail": "关联了新的邮件或会话",
-          "resource_doc_updated": "关联文档有新版本"
+        "inference": {
+          "label": "推断",
+          "hint": "Agent 的解释，需你判断"
         },
-        "condition": {
-          "action_overdue": "有开放项已过期",
-          "health_down": "健康度变为有风险",
-          "wait_overdue": "等待某人超过 7 天"
+        "field": {
+          "label": "字段变更",
+          "hint": "会改写正式业务状态"
         },
-        "hint": {
-          "schedule": "按固定节奏检查一次",
-          "event": "有新证据到达时才跑",
-          "condition": "满足条件时才跑",
-          "manual": "只在你要求时跑一轮"
+        "action": {
+          "label": "行动项",
+          "hint": "会新增或修改行动项"
         },
-        "toggle": "启用这条触发",
-        "remove": "删除这条触发",
-        "add": "添加触发",
-        "manualAlways": "你随时可以在事项对话里让它跑一轮",
-        "whenEvent": "当{event}时",
-        "activeHint": "{count} 条触发生效，命中任意一条就跑一次；同一时间窗内只跑一次，不会重复触发。",
-        "manualOnlyHint": "当前只有手动运行，Agent 不会自己跟进。"
+        "resource": {
+          "label": "关联资料",
+          "hint": "会把资料正式关联到事项"
+        }
       },
-      "runActions": {
-        "title": "跟进时执行",
-        "summary": "更新当前状态摘要",
-        "items": "检查行动项是否有进展",
-        "draft": "起草跟进邮件（只写进提案，不会自动发送）",
-        "proposal": "即使只有推断也生成更新提案送审阅"
+      "title": "更新提案审阅",
+      "heading": "更新提案 · {title}",
+      "run": "运行 #{id}",
+      "confidence": "置信 {value}%",
+      "stale": "基线已变",
+      "watermark": "事件范围 {from} → {to}",
+      "proposedSummary": "提议的当前状态",
+      "finishEdit": "完成编辑",
+      "editAccept": "编辑后接受",
+      "compare": "对比当前已接受状态",
+      "changes": "逐项变化 · 已选 {selected}/{total}",
+      "clearAll": "全部取消",
+      "selectAll": "全部勾选",
+      "questions": "Agent 提出的待解问题",
+      "staleHint": "这份提案依据的事项内容已经变了，它要改的地方后来被改过。让 Agent 按最新情况重新跑一轮。",
+      "staleRerun": "重新跑一轮",
+      "staleReload": "这份提案依据的事项内容已经变了，事项数据已刷新。让 Agent 按最新情况重新跑一轮。",
+      "versionReload": "事项已被更新，已刷新最新版本。请重载后重试。",
+      "openCitation": "打开证据 #{id}",
+      "pendingCitation": "本提案新建的资料",
+      "newResource": {
+        "badge": "将新建关联",
+        "untitled": "（无标题）",
+        "hint": "接受后这份资料才会关联进本事项",
+        "summaryByAgent": "Agent 已生成的摘要",
+        "summaryFromMail": "沿用邮件自带的摘要",
+        "summaryPending": "还没有摘要 · 下次跟进运行时生成"
       },
-      "globalAgent": {
-        "title": "跟进 Agent 的全局配置",
-        "subtitle": "系统内置，全局只有一份。负责新建、事项对话与跟进；触发时机由每个事项自己的跟进规则决定。",
-        "promptLabel": "任务契约（system prompt）",
-        "promptPlaceholder": "留空则使用内置的默认任务契约。",
-        "usingDefault": "使用内置默认",
-        "customized": "已自定义",
-        "loadFailed": "读取失败，暂时无法显示当前配置，保存已禁用以避免覆盖你的自定义内容。请稍后重试。",
-        "promptHint": "事项级的「专属指令」是在这份基底之后追加，不会替换它。",
-        "assembly": {
-          "title": "每轮提示词由这几段拼成",
-          "origin": {
-            "editable": "可改",
-            "runtime": "运行时注入",
-            "perMatter": "事项级"
+      "rejectReason": "拒绝原因",
+      "confirmReject": "确认拒绝",
+      "editedArchive": "Agent 原始提案与你编辑后的版本都会留档",
+      "rejectArchive": "拒绝也会留档，并成为 Agent 后续的上下文",
+      "reject": "拒绝",
+      "later": "稍后",
+      "acceptAll": "全部接受",
+      "acceptSelected": "接受所选 {count} 项",
+      "attention": "跟进 Agent 提出了 {count} 项变化，等待你审阅"
+    },
+    "trigger": {
+      "kind": {
+        "schedule": "定时",
+        "event": "事件驱动",
+        "condition": "条件",
+        "manual": "手动"
+      },
+      "event": {
+        "resource_linked_mail": "关联了新的邮件或会话",
+        "resource_doc_updated": "关联文档有新版本"
+      },
+      "condition": {
+        "action_overdue": "有开放项已过期",
+        "health_down": "健康度变为有风险",
+        "wait_overdue": "等待某人超过 7 天"
+      },
+      "hint": {
+        "schedule": "按固定节奏检查一次",
+        "event": "有新证据到达时才跑",
+        "condition": "满足条件时才跑",
+        "manual": "只在你要求时跑一轮"
+      },
+      "toggle": "启用这条触发",
+      "remove": "删除这条触发",
+      "add": "添加触发",
+      "manualAlways": "你随时可以在事项对话里让它跑一轮",
+      "whenEvent": "当{event}时",
+      "activeHint": "{count} 条触发生效，命中任意一条就跑一次；同一时间窗内只跑一次，不会重复触发。",
+      "manualOnlyHint": "当前只有手动运行，Agent 不会自己跟进。"
+    },
+    "runActions": {
+      "title": "跟进时执行",
+      "summary": "更新当前状态摘要",
+      "items": "检查行动项是否有进展",
+      "draft": "起草跟进邮件（只写进提案，不会自动发送）",
+      "proposal": "即使只有推断也生成更新提案送审阅"
+    },
+    "globalAgent": {
+      "title": "跟进 Agent 的全局配置",
+      "subtitle": "系统内置，全局只有一份。负责新建、事项对话与跟进；触发时机由每个事项自己的跟进规则决定。",
+      "promptLabel": "任务契约（system prompt）",
+      "promptPlaceholder": "留空则使用内置的默认任务契约。",
+      "usingDefault": "使用内置默认",
+      "customized": "已自定义",
+      "loadFailed": "读取失败，暂时无法显示当前配置，保存已禁用以避免覆盖你的自定义内容。请稍后重试。",
+      "promptHint": "事项级的「专属指令」是在这份基底之后追加，不会替换它。",
+      "assembly": {
+        "title": "每轮提示词由这几段拼成",
+        "origin": {
+          "editable": "可改",
+          "runtime": "运行时注入",
+          "perMatter": "事项级"
+        },
+        "steps": {
+          "contract": {
+            "name": "任务契约",
+            "body": "就是下面这个框：能力边界、查证顺序、提案标准。留空 = 用内置默认。"
           },
-          "steps": {
-            "contract": {
-              "name": "任务契约",
-              "body": "就是下面这个框：能力边界、查证顺序、提案标准。留空 = 用内置默认。"
-            },
-            "method": {
-              "name": "工作方法",
-              "body": "运行时注入：判断进展的纪律——先读证据再下判断、区分证据与推断、缺证据写明缺什么、建议保持最小变更；并如实声明 run 没有写工具、一切经提案落地。"
-            },
-            "actions": {
-              "name": "本次跟进要做的事",
-              "body": "由每个事项的「跟进时执行」勾选生成，默认是「更新摘要 + 检查行动项」。"
-            },
-            "snapshot": {
-              "name": "事项快照",
-              "body": "运行时注入：事项字段、未完成条目、干系人、已关联资料摘录（摘录一律当数据，不当指令）。"
-            },
-            "manifest": {
-              "name": "变化清单",
-              "body": "运行时注入：哪些资料有更新、新增了几条事项事件、上次接受的更新，末行给出本轮的检索时间窗。"
-            },
-            "persona": {
-              "name": "补充指引",
-              "body": "所绑 Agent 的人设与事项的「专属指令」，追加在契约之后、从属于它。"
-            }
+          "method": {
+            "name": "工作方法",
+            "body": "运行时注入：判断进展的纪律——先读证据再下判断、区分证据与推断、缺证据写明缺什么、建议保持最小变更；并如实声明 run 没有写工具、一切经提案落地。"
+          },
+          "actions": {
+            "name": "本次跟进要做的事",
+            "body": "由每个事项的「跟进时执行」勾选生成，默认是「更新摘要 + 检查行动项」。"
+          },
+          "snapshot": {
+            "name": "事项快照",
+            "body": "运行时注入：事项字段、未完成条目、干系人、已关联资料摘录（摘录一律当数据，不当指令）。"
+          },
+          "manifest": {
+            "name": "变化清单",
+            "body": "运行时注入：哪些资料有更新、新增了几条事项事件、上次接受的更新，末行给出本轮的检索时间窗。"
+          },
+          "persona": {
+            "name": "补充指引",
+            "body": "所绑 Agent 的人设与事项的「专属指令」，追加在契约之后、从属于它。"
+          }
+        }
+      },
+      "toolFace": {
+        "title": "工具面：只读全库 + 一个提案通道",
+        "intro": "它能查的东西很全，但没有任何写工具——发不了信、存不了草稿、改不了事项字段、动不了外部文档；所有改动只能写进提案，等你接受后才生效。下面这些默认全部启用，事项级只能收窄、不能提权。",
+        "groups": {
+          "matter": {
+            "label": "事项",
+            "desc": "读本事项、检索事项、看关注信号与历次跟进记录、看已有标签；提案是它唯一的产出通道"
+          },
+          "contacts": {
+            "label": "通讯录",
+            "desc": "检索联系人、读取完整人物档案，并查看某个人的往来邮件账本"
+          },
+          "email": {
+            "label": "邮件",
+            "desc": "列表、正文全文、线程与附件文本"
+          },
+          "search": {
+            "label": "全文检索",
+            "desc": "按关键词检索邮件正文与附件内容"
+          },
+          "calendar": {
+            "label": "日历",
+            "desc": "查日程与单个事件详情"
+          },
+          "session": {
+            "label": "会话历史",
+            "desc": "查它自己过往的跟进会话"
+          },
+          "kos": {
+            "label": "知识库",
+            "desc": "检索 KOS 页面、反链与专家"
+          },
+          "report": {
+            "label": "报告",
+            "desc": "读已生成的日报/周报等"
+          },
+          "introspection": {
+            "label": "自省",
+            "desc": "读自己的技能说明、身份文档与执行计划"
+          },
+          "connector": {
+            "label": "外部服务",
+            "desc": "已连接服务的只读工具（不含任何写操作）",
+            "none": "未连接任何外部服务",
+            "loading": "正在读取已连接的外部服务…"
+          },
+          "web": {
+            "label": "网页检索"
           }
         },
-        "toolFace": {
-          "title": "工具面：只读全库 + 一个提案通道",
-          "intro": "它能查的东西很全，但没有任何写工具——发不了信、存不了草稿、改不了事项字段、动不了外部文档；所有改动只能写进提案，等你接受后才生效。下面这些默认全部启用，事项级只能收窄、不能提权。",
-          "groups": {
-            "matter": { "label": "事项", "desc": "读本事项、检索事项、看关注信号与历次跟进记录、看已有标签；提案是它唯一的产出通道" },
-            "email": { "label": "邮件", "desc": "列表、正文全文、线程与附件文本" },
-            "search": { "label": "全文检索", "desc": "按关键词检索邮件正文与附件内容" },
-            "calendar": { "label": "日历", "desc": "查日程与单个事件详情" },
-            "session": { "label": "会话历史", "desc": "查它自己过往的跟进会话" },
-            "kos": { "label": "知识库", "desc": "检索 KOS 页面、反链与专家" },
-            "report": { "label": "报告", "desc": "读已生成的日报/周报等" },
-            "introspection": { "label": "自省", "desc": "读自己的技能说明、身份文档与执行计划" },
-            "connector": {
-              "label": "外部服务",
-              "desc": "已连接服务的只读工具（不含任何写操作）",
-              "none": "未连接任何外部服务",
-              "loading": "正在读取已连接的外部服务…"
-            },
-            "web": { "label": "网页检索" }
-          },
-          "skillOff": {
-            "badge": "已关闭",
-            "hint": "这一族技能当前是关闭的，跟进 run 一件都挂不上。到 设置 → Custom AI → Skills 重新开启后自动恢复。"
-          },
-          "webOff": {
-            "badge": "不可用",
-            "hint": "联网工具未启用（由环境变量 MAILAGENT_OPENNESS_WEB_TOOLS 控制），跟进 run 拿不到任何网页工具，下面这三档当前都不生效。"
-          }
+        "skillOff": {
+          "badge": "已关闭",
+          "hint": "这一族技能当前是关闭的，跟进 run 一件都挂不上。到 设置 → Custom AI → Skills 重新开启后自动恢复。"
         },
-        "webFace": {
-          "keep": "全给（默认）",
-          "keepBody": "能搜索，也能打开网页读全文。",
-          "searchOnly": "仅搜索",
-          "searchOnlyBody": "只能看搜索结果的标题和摘要，打不开网页。",
-          "off": "关闭",
-          "offBody": "完全不上网。",
-          "runningHint": "改动对已经在跑的那一轮不生效——档位在每轮开始时就固定下来了。",
-          "loadFailed": "当前档位读取失败，下面显示的可能不是实际生效的值。",
-          "saveFailed": "网页检索档保存失败"
-        },
-        "modelDefaults": {
-          "title": "默认模型",
-          "intro": "所有事项的跟进都用这里的模型，除非某个事项在「跟进规则 → 高级」里单独覆盖，或者它绑了一个自己写了模型的 Agent。改一项存一项，不用点下面的保存。",
-          "modelFollow": "不设默认（用系统全局模型）",
-          "effortFollow": "不设默认",
-          "fallbackFollow": "不设默认（用系统全局兜底链）",
-          "effortScopeHint": "这一档是为上面这个模型选的：某个事项换了模型又没单独设强度时，不会把它带过去。",
-          "fallbackHint": "主模型还没产出任何内容就失败时（模型不可用、凭证缺失、上游直接拒绝），本次跟进自动改用它重跑一次。已经开始输出、已调用工具或已停在待确认上的跟进不会重跑。",
-          "loadFailed": "当前默认读取失败，下面显示的可能不是实际生效的值。",
-          "saveFailed": "默认模型保存失败"
-        },
-        "restoreDefault": "恢复默认",
-        "open": "全局配置",
-        "saved": "配置已保存",
-        "saveFailed": "配置保存失败",
-        "footerNote": "改动对所有事项生效，已排期的跟进按新配置执行"
+        "webOff": {
+          "badge": "不可用",
+          "hint": "联网工具未启用（由环境变量 MAILAGENT_OPENNESS_WEB_TOOLS 控制），跟进 run 拿不到任何网页工具，下面这三档当前都不生效。"
+        }
       },
-      "agentConfig": {
-        "title": "跟进规则",
-        "subtitle": "能力来自全局 Matter Agent，这里只定这件事什么时候触发、跑完做什么。",
-        "builtinTitle": "Matter Agent · 系统内置",
-        "builtinSubtitle": "负责新建、事项对话与跟进；prompt 与工具集在全局配置一份",
-        "toggle": "启用跟进",
-        "triggerLabel": "触发方式",
-        "advanced": "高级 · 在全局配置之上追加",
-        "profileLabel": "执行的 Agent",
-        "modelLabel": "模型",
-        "modelFollow": "跟随默认（执行的 Agent → 全局配置 → 系统模型）",
-        "effortFollow": "跟随默认（全局配置里为它的默认模型设的档）",
-        "effortNeedsModel": "先在上面选定模型 —— 可选档位按该模型的能力给。",
-        "fallbackLabel": "备用模型",
-        "fallbackFollow": "跟随默认（执行的 Agent → 全局配置的兜底链）",
-        "fallbackNone": "不设兜底",
+      "webFace": {
+        "keep": "全给（默认）",
+        "keepBody": "能搜索，也能打开网页读全文。",
+        "searchOnly": "仅搜索",
+        "searchOnlyBody": "只能看搜索结果的标题和摘要，打不开网页。",
+        "off": "关闭",
+        "offBody": "完全不上网。",
+        "runningHint": "改动对已经在跑的那一轮不生效——档位在每轮开始时就固定下来了。",
+        "loadFailed": "当前档位读取失败，下面显示的可能不是实际生效的值。",
+        "saveFailed": "网页检索档保存失败"
+      },
+      "modelDefaults": {
+        "title": "默认模型",
+        "intro": "所有事项的跟进都用这里的模型，除非某个事项在「跟进规则 → 高级」里单独覆盖，或者它绑了一个自己写了模型的 Agent。改一项存一项，不用点下面的保存。",
+        "modelFollow": "不设默认（用系统全局模型）",
+        "effortFollow": "不设默认",
+        "fallbackFollow": "不设默认（用系统全局兜底链）",
+        "effortScopeHint": "这一档是为上面这个模型选的：某个事项换了模型又没单独设强度时，不会把它带过去。",
         "fallbackHint": "主模型还没产出任何内容就失败时（模型不可用、凭证缺失、上游直接拒绝），本次跟进自动改用它重跑一次。已经开始输出、已调用工具或已停在待确认上的跟进不会重跑。",
-        "instructionsLabel": "事项专属指令（追加）",
-        "instructionsHint": "这段会追加在全局任务契约之后、从属于它，不会替换它。留空 = 只按全局任务契约跟进。",
-        "instructionsPlaceholder": "例：只盯 Acme 采购部的回复，其他抄送方的邮件不用单独总结。每次跟进先点名列出还没回复的人，再把当前卡点写成一句话。对方一旦给出报价，就把金额和有效期单独列出来。",
-        "contractDisclosure": "查看当前生效的全局任务契约",
-        "contractFailed": "全局任务契约读取失败，这里无法显示当前生效的全文。可打开上方「全局配置」重试。",
-        "contractEmpty": "当前没有取到任务契约全文。可打开上方「全局配置」查看。",
-        "summaryActive": "将按「{plan}」触发，结果进「运行」，改写仍需你接受",
-        "summaryDisabled": "已停用 · 不会自动运行",
-        "open": "配置跟进规则",
-        "stale": "这个事项在别处已被改动。直接保存会覆盖那次改动。",
-        "reload": "重新载入",
-        "saving": "保存中…",
-        "save": "保存规则",
-        "overrideCount": "{count} 项覆盖"
+        "loadFailed": "当前默认读取失败，下面显示的可能不是实际生效的值。",
+        "saveFailed": "默认模型保存失败"
       },
-    "agentBinding": { "title": "跟进 Agent", "builtin": "内置", "builtinOption": "内置（默认模型）", "useCustomAgent": "改用 Custom Agent", "empty": "可在 Custom AI 创建 Agent，以更换模型或添加人设", "dangling": "绑定的 Agent 已不存在", "plan": "计划", "next": "下次", "last": "上次", "capability": "能力上限 观察 + 建议，不能对外发信或改写外部文档", "unbind": "解绑", "recommended": "推荐：每个工作日 09:00", "addSchedule": "添加排程", "scheduleEdit": "编辑排程" },
+      "restoreDefault": "恢复默认",
+      "open": "全局配置",
+      "saved": "配置已保存",
+      "saveFailed": "配置保存失败",
+      "footerNote": "改动对所有事项生效，已排期的跟进按新配置执行"
+    },
+    "agentConfig": {
+      "title": "跟进规则",
+      "subtitle": "能力来自全局 Matter Agent，这里只定这件事什么时候触发、跑完做什么。",
+      "builtinTitle": "Matter Agent · 系统内置",
+      "builtinSubtitle": "负责新建、事项对话与跟进；prompt 与工具集在全局配置一份",
+      "toggle": "启用跟进",
+      "triggerLabel": "触发方式",
+      "advanced": "高级 · 在全局配置之上追加",
+      "profileLabel": "执行的 Agent",
+      "modelLabel": "模型",
+      "modelFollow": "跟随默认（执行的 Agent → 全局配置 → 系统模型）",
+      "effortFollow": "跟随默认（全局配置里为它的默认模型设的档）",
+      "effortNeedsModel": "先在上面选定模型 —— 可选档位按该模型的能力给。",
+      "fallbackLabel": "备用模型",
+      "fallbackFollow": "跟随默认（执行的 Agent → 全局配置的兜底链）",
+      "fallbackNone": "不设兜底",
+      "fallbackHint": "主模型还没产出任何内容就失败时（模型不可用、凭证缺失、上游直接拒绝），本次跟进自动改用它重跑一次。已经开始输出、已调用工具或已停在待确认上的跟进不会重跑。",
+      "instructionsLabel": "事项专属指令（追加）",
+      "instructionsHint": "这段会追加在全局任务契约之后、从属于它，不会替换它。留空 = 只按全局任务契约跟进。",
+      "instructionsPlaceholder": "例：只盯 Acme 采购部的回复，其他抄送方的邮件不用单独总结。每次跟进先点名列出还没回复的人，再把当前卡点写成一句话。对方一旦给出报价，就把金额和有效期单独列出来。",
+      "contractDisclosure": "查看当前生效的全局任务契约",
+      "contractFailed": "全局任务契约读取失败，这里无法显示当前生效的全文。可打开上方「全局配置」重试。",
+      "contractEmpty": "当前没有取到任务契约全文。可打开上方「全局配置」查看。",
+      "summaryActive": "将按「{plan}」触发，结果进「运行」，改写仍需你接受",
+      "summaryDisabled": "已停用 · 不会自动运行",
+      "open": "配置跟进规则",
+      "stale": "这个事项在别处已被改动。直接保存会覆盖那次改动。",
+      "reload": "重新载入",
+      "saving": "保存中…",
+      "save": "保存规则",
+      "overrideCount": "{count} 项覆盖"
+    },
+    "agentBinding": {
+      "title": "跟进 Agent",
+      "builtin": "内置",
+      "builtinOption": "内置（默认模型）",
+      "useCustomAgent": "改用 Custom Agent",
+      "empty": "可在 Custom AI 创建 Agent，以更换模型或添加人设",
+      "dangling": "绑定的 Agent 已不存在",
+      "plan": "计划",
+      "next": "下次",
+      "last": "上次",
+      "capability": "能力上限 观察 + 建议，不能对外发信或改写外部文档",
+      "unbind": "解绑",
+      "recommended": "推荐：每个工作日 09:00",
+      "addSchedule": "添加排程",
+      "scheduleEdit": "编辑排程"
+    },
     "events": {
       "matter_created": "创建事项",
       "matter_updated": "更新事项",
@@ -6010,7 +6170,9 @@
         "restore": "已从回收站恢复 · 业务状态不变"
       }
     },
-    "undo": { "action": "撤销" },
+    "undo": {
+      "action": "撤销"
+    },
     "shell": {
       "backToList": "返回事项清单"
     },
@@ -6029,12 +6191,32 @@
     }
   },
   "contacts": {
-    "nav": { "title": "通讯录" },
-    "list": { "count": "{count} 人", "resize": "拖动调整列表宽度" },
-    "view": { "known": "往来的人", "all": "全部" },
-    "search": { "placeholder": "搜索姓名 / 名字变体 / 邮箱 / 组织", "clear": "清空搜索" },
-    "sort": { "label": "排序", "density": "往来密度", "recent": "最近往来", "name": "姓名" },
-    "density": { "label": "密度", "compact": "紧凑", "comfortable": "宽松（显示画像摘要）" },
+    "nav": {
+      "title": "通讯录"
+    },
+    "list": {
+      "count": "{count} 人",
+      "resize": "拖动调整列表宽度"
+    },
+    "view": {
+      "known": "往来的人",
+      "all": "全部"
+    },
+    "search": {
+      "placeholder": "搜索姓名 / 名字变体 / 邮箱 / 组织",
+      "clear": "清空搜索"
+    },
+    "sort": {
+      "label": "排序",
+      "density": "往来密度",
+      "recent": "最近往来",
+      "name": "姓名"
+    },
+    "density": {
+      "label": "密度",
+      "compact": "紧凑",
+      "comfortable": "宽松（显示画像摘要）"
+    },
     "groupBy": {
       "label": "分组",
       "none": "不分组",
@@ -6054,14 +6236,28 @@
       "reportsOf": "{name} 的下级",
       "noManager": "未设上级"
     },
-    "kind": { "person": "人", "robot": "机器人", "list": "群发列表" },
-    "badge": { "self": "这是我", "hidden": "已隐藏", "dup": "疑似重复", "emails": "{n} 个邮箱" },
+    "kind": {
+      "person": "人",
+      "robot": "机器人",
+      "list": "群发列表"
+    },
+    "badge": {
+      "self": "这是我",
+      "hidden": "已隐藏",
+      "dup": "疑似重复",
+      "emails": "{n} 个邮箱"
+    },
     "chip": {
       "open": "打开 {name} 的人物页",
       "notInDirectory": "这个地址不在通讯录里（不为它建占位记录）"
     },
-    "stat": { "exchange": "往来 {n} 封 · 我发出 {sent}", "since": "{date} 起 · 最近 {ago}" },
-    "row": { "more": "更多操作" },
+    "stat": {
+      "exchange": "往来 {n} 封 · 我发出 {sent}",
+      "since": "{date} 起 · 最近 {ago}"
+    },
+    "row": {
+      "more": "更多操作"
+    },
     "action": {
       "open": "打开人物页",
       "compose": "写邮件",
@@ -6126,7 +6322,9 @@
       "role": "职位署名",
       "variantsHint": "自动收集，搜索时也会命中"
     },
-    "enum": { "clear": "清除" },
+    "enum": {
+      "clear": "清除"
+    },
     "fn": {
       "tech": "技术",
       "product": "产品",
@@ -6173,12 +6371,19 @@
       "copied": "已复制 {email}"
     },
     "mail": {
-      "filter": { "all": "全部", "from_them": "TA 发的", "from_me": "我发的", "from_third": "第三方发的" },
+      "filter": {
+        "all": "全部",
+        "from_them": "TA 发的",
+        "from_me": "我发的",
+        "from_third": "第三方发的"
+      },
       "ccMark": "抄送",
       "more": "加载更多（还有 {n} 封）",
       "empty": "没有关联邮件"
     },
-    "matters": { "empty": "还没有事项挂到 TA 身上" },
+    "matters": {
+      "empty": "还没有事项挂到 TA 身上"
+    },
     "profile": {
       "title": "AI 画像",
       "topics": "常聊议题",

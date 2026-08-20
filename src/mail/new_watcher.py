@@ -770,12 +770,7 @@ class NewWatcher:
         await self._contact_governance_tick()
 
     async def _contact_governance_tick(self):
-        """每日一次治理扫描 enqueue；env 与行 enabled 双门，按行级时刻触发。"""
-        if not (
-            getattr(settings, "contacts_enabled", False)
-            and getattr(settings, "contact_agent_enabled", False)
-        ):
-            return
+        """每日一次治理扫描 enqueue；按行级 enabled 与时刻触发。"""
         now = time.monotonic()
         last = self._last_contact_governance_check_at
         if last is not None and now - last < 300:
@@ -802,10 +797,9 @@ class NewWatcher:
             logger.warning(f"[contact-governance] daily tick failed: {exc}")
 
     async def _extract_contacts(self):
-        """通讯录 L0+L1 增量扫描 (MAILAGENT_CONTACTS_ENABLED, 默认关)。
+        """通讯录 L0+L1 增量扫描。
 
-        镜像 ``_reconcile_inbox`` 的独立低频节拍纪律: flag off = 字节级 inert
-        (零 SQL 零 import); 🔴 绝不挂 5s radar poll —— 独立 interval
+        镜像 ``_reconcile_inbox`` 的独立低频节拍纪律: 🔴 绝不挂 5s radar poll —— 独立 interval
         (``MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC``, 默认 120s), 每 tick 有界批
         (batch 500 + 墙钟预算, 见 scanner.DEFAULT_TICK_BUDGET_SEC), 积压时
         单 tick 多消化几批、追平后回低频。全程幂等 (backfill = watermark 从 0
@@ -814,8 +808,6 @@ class NewWatcher:
         纯本地 SQL 放 ``asyncio.to_thread``: BEGIN IMMEDIATE 的锁**等待**发生在
         工作线程, 不冻 event loop (镜像 read-reconcile 的收敛纪律)。
         """
-        if not getattr(settings, "contacts_enabled", False):
-            return
         interval = max(5, int(getattr(settings, "contact_extract_interval_sec", 120)))
         now = time.monotonic()
         last = self._last_contact_extract_at
@@ -823,7 +815,6 @@ class NewWatcher:
             return
         self._last_contact_extract_at = now
         try:
-            # 延迟 import: flag off 时不引入 contacts 域 (字节级 inert)。
             from src.contacts.scanner import run_tick
 
             stats = await asyncio.to_thread(run_tick, str(self.sync_store.db_path))
@@ -1893,8 +1884,6 @@ class NewWatcher:
     async def _maybe_link_matter_thread_subscriptions(
         self, email_obj: Email, internal_id: int
     ) -> None:
-        if not bool(getattr(settings, "matters_enabled", False)):
-            return
         thread_id = str(getattr(email_obj, "thread_id", "") or "").strip()
         if not thread_id:
             return
