@@ -58,6 +58,8 @@ function contact(overrides: Partial<ContactRowDto> = {}): ContactRowDto {
     manager_contact_id: null,
     manager_display_name: null,
     profile_summary: null,
+    profile_min: 50,
+    profile_eligible: false,
     gender: null,
     ...overrides
   }

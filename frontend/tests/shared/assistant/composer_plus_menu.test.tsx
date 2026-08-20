@@ -67,7 +67,10 @@ const MODELS: ComposerModelOption[] = [
     modelId: 'claude-sonnet-4-6',
     displayName: 'Claude Sonnet 4.6',
     capabilities: null,
-    maxOutput: null
+    // 与上面两个 null 同义：上游与目录都没标注 → 不渲染能力 badge、hover 能力卡不挂。
+    maxOutput: null,
+    contextWindow: null,
+    catalogMeta: null
   }
 ]
 
@@ -80,6 +83,11 @@ function stubControls(over: Partial<ChatComposerControls> = {}): ChatComposerCon
     mentions: [],
     onAddMention: vi.fn(),
     onRemoveMention: vi.fn(),
+    // 与邮件提及同构的空态（本闸不测 @ agent）。基对象里必须有，否则 `...over` 的 Partial
+    // 会把它变成可选，整个 controls 就不再是合法的 ChatComposerControls。
+    agentMentions: [],
+    onAddAgentMention: vi.fn(),
+    onRemoveAgentMention: vi.fn(),
     attachments: [],
     onAddAttachment: vi.fn(),
     onRemoveAttachment: vi.fn(),

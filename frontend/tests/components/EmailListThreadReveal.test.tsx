@@ -60,7 +60,18 @@ function renderRow(index: number, rows: ListRow[], revealThreadId: string | null
     revealThreadId
   }
   const { container } = render(
-    <VirtualRow index={index} style={{ top: 0, height: 60 }} ariaAttributes={{}} {...props} />
+    <VirtualRow
+      index={index}
+      style={{ top: 0, height: 60 }}
+      // react-window 每行注入的无障碍属性（1-based 序号 / 集合总数 / 列表项角色）——
+      // 真实渲染时由列表容器算好传进来，这里照它的口径给。
+      ariaAttributes={{
+        'aria-posinset': index + 1,
+        'aria-setsize': rows.length,
+        role: 'listitem'
+      }}
+      {...props}
+    />
   )
   return container.firstElementChild as HTMLElement
 }

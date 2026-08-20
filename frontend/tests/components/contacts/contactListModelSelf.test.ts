@@ -23,6 +23,7 @@ function row(id: number, patch: Partial<ContactRowDto> = {}): ContactRowDto {
     role_title: null,
     function: null,
     seniority: null,
+    gender: null,
     kind: 'person',
     hidden_at: null,
     is_self: false,
@@ -35,6 +36,8 @@ function row(id: number, patch: Partial<ContactRowDto> = {}): ContactRowDto {
     manager_contact_id: null,
     manager_display_name: null,
     profile_summary: null,
+    profile_min: 50,
+    profile_eligible: false,
     ...patch
   }
 }

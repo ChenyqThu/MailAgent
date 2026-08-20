@@ -34,16 +34,17 @@ await i18n.changeLanguage('zh-CN')
 // 不影响 React Query 缓存 (按 queryKey 索引), 但稳定单例仍是真实语义的忠实复刻。
 // discover 现走 React Query (['folder','discover'], 与 SidebarFolderTree 共用), 防
 // 重复拉取由 staleTime 承担 — 同一 QueryClient 内重 mount 命中缓存零请求。
-const mockDiscover = vi.fn<[], Promise<FolderDiscoverResult>>()
+const mockDiscover = vi.fn<() => Promise<FolderDiscoverResult>>()
 const mockSetWhitelist = vi.fn()
-const mockCreateFolder = vi.fn<[string | null, string], Promise<FolderManageResult>>()
-const mockRenameFolder = vi.fn<[string, string], Promise<FolderManageResult>>()
-const mockDeleteFolder = vi.fn<[string], Promise<FolderManageResult>>()
-const mockCleanup = vi.fn<[string], Promise<FolderCleanupResult>>()
+const mockCreateFolder =
+  vi.fn<(parentImapName: string | null, name: string) => Promise<FolderManageResult>>()
+const mockRenameFolder = vi.fn<(imapName: string, newName: string) => Promise<FolderManageResult>>()
+const mockDeleteFolder = vi.fn<(imapName: string) => Promise<FolderManageResult>>()
+const mockCleanup = vi.fn<(imapName: string) => Promise<FolderCleanupResult>>()
 // per-folder 配置 (v62). getPrefs 默认返回空 prefs — 白名单成员取不到行 = 全默认
 // (兜底图标 / 通知关 / AI 开), **不是错误**, 这正是真实首次进页面的形状。
-const mockGetPrefs = vi.fn<[], Promise<FolderPrefsResult>>()
-const mockSetPref = vi.fn<[string, FolderPrefPatch], Promise<FolderPref>>()
+const mockGetPrefs = vi.fn<() => Promise<FolderPrefsResult>>()
+const mockSetPref = vi.fn<(imapName: string, patch: FolderPrefPatch) => Promise<FolderPref>>()
 const stableApi = {
   folder: {
     discover: mockDiscover,

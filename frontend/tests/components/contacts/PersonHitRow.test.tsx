@@ -24,6 +24,7 @@ function row(overrides: Partial<ContactRowDto> = {}): ContactRowDto {
     role_title: null,
     function: null,
     seniority: null,
+    gender: null,
     kind: 'person',
     hidden_at: null,
     is_self: false,
@@ -33,7 +34,11 @@ function row(overrides: Partial<ContactRowDto> = {}): ContactRowDto {
     last_seen_at: null,
     email_count: 1,
     primary_email: 'alice@x.com',
+    manager_contact_id: null,
+    manager_display_name: null,
     profile_summary: null,
+    profile_min: 50,
+    profile_eligible: false,
     ...overrides
   }
 }

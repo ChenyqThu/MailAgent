@@ -58,6 +58,9 @@ function throwingRun(sessionId: number): PreparedChatRun {
     ] as unknown as MailAgentUIMessage[],
     sessionId,
     modelId: 'mock-model',
+    // 真的 prepareChatRun 在测试这条路径（cfg.createModel 注入假模型）上恒写 'anthropic'
+    // —— 见 resolveModelFactory 的 createModel 分支。protocol 只被带进持久化的 turn。
+    protocol: 'anthropic',
     auditEntries: [],
     toolNames: []
   }

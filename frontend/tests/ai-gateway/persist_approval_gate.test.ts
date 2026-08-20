@@ -87,6 +87,9 @@ function makeRun(
     rawMessages,
     sessionId: 42,
     modelId: 'claude-sonnet-4-6',
+    // 与 modelId 相符，也与真的 prepareChatRun 在假模型下的取值一致（resolveModelFactory 的
+    // createModel 分支恒 'anthropic'）。persistTurn 原样带走它。
+    protocol: 'anthropic',
     auditEntries: extra?.auditEntries ?? [],
     toolNames: [],
     ...(extra?.originalBody ? { originalBody: extra.originalBody } : {})

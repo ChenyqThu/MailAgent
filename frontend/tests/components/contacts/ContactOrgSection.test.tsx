@@ -51,6 +51,7 @@ function detailOf(overrides: Partial<ContactDetailDto> = {}): ContactDetailDto {
     role_title: null,
     function: null,
     seniority: null,
+    gender: null,
     kind: 'person',
     kind_locked_at: null,
     is_self: false,
@@ -81,7 +82,24 @@ function detailOf(overrides: Partial<ContactDetailDto> = {}): ContactDetailDto {
     manager_src: null,
     reports: [],
     peers: [],
-    profile: null,
+    // 本闸不关心画像，但 `profile` 是必填投影（不是 nullable）—— 给一份「未开启」的空投影，
+    // 而不是 null：后者与后端契约不符，只是以前没被 typecheck 看见。
+    profile: {
+      profile_updated_at: null,
+      profile_mail_count: 0,
+      profile_model: null,
+      profile_status: null,
+      profile_attempted_at: null,
+      profile_error: null,
+      attempted_mail_count: null,
+      status: 'unconfigured',
+      profile_min: 50,
+      eligible: false,
+      needed_mail_count: 50,
+      suggestions: [],
+      document: null,
+      profile_json: null
+    },
     ...overrides
   }
 }

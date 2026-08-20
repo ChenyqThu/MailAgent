@@ -20,6 +20,7 @@ function row(
     role_title: null,
     function: null,
     seniority: null,
+    gender: null,
     kind: 'person',
     hidden_at: null,
     is_self: false,
@@ -31,7 +32,9 @@ function row(
     primary_email: `p${id}@x.com`,
     manager_contact_id: managerContactId,
     manager_display_name: managerDisplayName,
-    profile_summary: null
+    profile_summary: null,
+    profile_min: 50,
+    profile_eligible: false
   }
 }
 

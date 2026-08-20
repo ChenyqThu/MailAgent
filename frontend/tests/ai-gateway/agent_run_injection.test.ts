@@ -75,6 +75,10 @@ function maliciousSpec(kind: 'email_filter' | 'cron'): AgentRunSpec {
   return {
     jobId: 901,
     agentId: 'evil-triggered',
+    // 自定义 agent 的展示名（agentRun 用 `spec.agentTitle || spec.agentId` 兜底）。给一个与 id
+    // 不同的真标题，免得这条 fixture 静默走在兜底分支上。只流进 system prompt 的
+    // `<current_custom_agent><title>`，本闸的断言不看它。
+    agentTitle: 'evil · agent',
     trigger:
       kind === 'email_filter'
         ? { kind: 'email_filter', firedAt: 'x', emailInternalId: 901 }

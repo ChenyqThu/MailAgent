@@ -26,6 +26,7 @@ const { ROWS, visitStore, listCalls } = vi.hoisted(() => {
       role_title: null,
       function: null,
       seniority: null,
+      gender: null,
       kind: 'person',
       hidden_at: null,
       is_self: false,

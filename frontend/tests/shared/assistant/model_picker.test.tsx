@@ -113,6 +113,11 @@ function controlsFor(
     mentions: [],
     onAddMention: vi.fn(),
     onRemoveMention: vi.fn(),
+    // 本闸只测模型选择器，不测 @ 提及 —— 与上面的邮件提及同构：空列表 + 空实现。
+    // （agentMentions 与 mentions 是两套：前者是可信本地 agent 配置，后者要过 body 解析。）
+    agentMentions: [],
+    onAddAgentMention: vi.fn(),
+    onRemoveAgentMention: vi.fn(),
     attachments: [],
     onAddAttachment: vi.fn(),
     onRemoveAttachment: vi.fn()

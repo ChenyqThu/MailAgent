@@ -1,0 +1,24 @@
+{
+  // 测试目录的类型闸。存在的理由：`tsconfig.web.json` 只 include `src/**`，而 vitest 用
+  // esbuild 抹掉类型照跑 —— 所以 `frontend/tests/` 里的 DTO fixture 缺字段、公共函数签名
+  // 改了调用点没跟上，**都不会红**，测试还会绿着装作没事（2026-08-18 排序批、2026-08-20
+  // gender 批各踩一次）。这份配置把 tests/ 也纳入 tsc 视野，堵住那个盲区。
+  //
+  // 🔴 严禁 `tsc -b`（build 模式会 emit，曾往 src 写进 1518 个文件并覆盖 tracked 文件）。
+  // 只用 `tsc --noEmit -p tsconfig.tests.json`，且下面显式 `composite: false` + `noEmit`
+  // 双保险 —— 从 web 配置 extends 会继承 `composite: true`，那是 emit 的开关。
+  "extends": "./tsconfig.web.json",
+  "include": ["tests/**/*", "src/shared/**/*", "src/electron/**/*", "src/web/**/*"],
+  "compilerOptions": {
+    "composite": false,
+    "noEmit": true,
+    "types": ["vitest/globals", "node"],
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@renderer/*": ["src/electron/renderer/*"],
+      "@shared/*": ["src/shared/*"],
+      "@main/*": ["src/electron/main/*"]
+    }
+  }
+}

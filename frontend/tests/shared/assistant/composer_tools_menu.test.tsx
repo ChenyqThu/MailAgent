@@ -85,7 +85,12 @@ function skill(partial: Partial<SkillSummary> & { name: string }): SkillSummary 
     available: partial.available ?? true,
     unavailableReason: partial.unavailableReason ?? null,
     toolCount: partial.toolCount ?? 2,
-    scopes: partial.scopes ?? []
+    scopes: partial.scopes ?? [],
+    // 三个都只对「装出来的」skill 有意义（sourceType 默认 builtin）：内建 skill 没有安装目录、
+    // 不参与信任态、也没有安装错误 —— 全 null 就是内建行的真实形状。
+    installDir: partial.installDir ?? null,
+    trustState: partial.trustState ?? null,
+    lastError: partial.lastError ?? null
   }
 }
 
@@ -112,7 +117,11 @@ const NOTION: ConnectorSummary = {
   credential: null,
   flow: null,
   server_url: 'https://mcp.notion.test/mcp',
-  transport: 'http'
+  transport: 'http',
+  // Notion 是**直连轨**（自建 MCP 打官方端点）→ 行侧既成事实 source='custom_mcp'；
+  // 它与目录 track='direct' 相符，所以没有「已被取代」（superseded 只在行=composio/目录=direct 时为真）。
+  source: 'custom_mcp',
+  superseded_by_catalog: false
 }
 
 const TOOLS_LABEL = 'chat.tools.label'
