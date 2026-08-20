@@ -23,6 +23,7 @@ from src.api.app import app
 from src.api.auth import verify_cf_access
 from src.api.deps import get_settings
 from src.api.routers import contacts as contacts_router
+from src.contacts import profile as contact_profile
 from src.api.routers.contacts import get_contact_repository
 from src.contacts.repository import ContactRepository
 from src.contacts.scanner import WATERMARK_KEY
@@ -929,9 +930,14 @@ def test_profile_refresh_below_threshold_merged_and_duplicate(client, monkeypatc
     http, settings, path = client
     _enable_profile(path, settings)
     _seed_contact(path, cid=1, name="Tiny", mail=1, emails=(("tiny@x.com", 1),))
-    monkeypatch.setattr(
-        contacts_router, "_schedule_profile_task", lambda coro: coro.close()
-    )
+    generated = []
+
+    def fake_generate(*args, **kwargs):
+        generated.append((args, kwargs))
+        return object()
+
+    monkeypatch.setattr(contact_profile, "generate_contact_profile", fake_generate)
+    monkeypatch.setattr(contacts_router, "_schedule_profile_task", lambda _: None)
     response = http.post("/api/contacts/1/profile/refresh")
     assert response.status_code == 202
     assert response.json()["data"] == {
@@ -939,6 +945,7 @@ def test_profile_refresh_below_threshold_merged_and_duplicate(client, monkeypatc
         "status": "running",
         "started": True,
     }
+    assert generated[0][1]["full_refresh"] is True
     duplicate = http.post("/api/contacts/1/profile/refresh")
     assert duplicate.status_code == 202
     assert duplicate.json()["data"]["started"] is False

@@ -644,6 +644,7 @@ async def refresh_contact_profile(
                 cfg=cfg,
                 user_email=getattr(settings, "user_email", ""),
                 self_emails=getattr(settings, "self_emails", ""),
+                full_refresh=True,
             )
         )
     return success_envelope(

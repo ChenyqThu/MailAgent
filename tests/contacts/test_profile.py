@@ -70,7 +70,17 @@ def _seed_contact(
         conn.commit()
 
 
-def _seed_mail(path, contact_id: int, internal_id: int, body, *, subject="Subject"):
+def _seed_mail(
+    path,
+    contact_id: int,
+    internal_id: int,
+    body,
+    *,
+    subject="Subject",
+    sender_email=None,
+    role="sender",
+):
+    sender_email = sender_email or f"p{contact_id}@example.com"
     with _conn(path) as conn:
         conn.execute(
             "INSERT INTO email_metadata (internal_id, subject, sender, sender_email, "
@@ -78,8 +88,8 @@ def _seed_mail(path, contact_id: int, internal_id: int, body, *, subject="Subjec
             (
                 internal_id,
                 subject,
-                f"Person {contact_id} <p{contact_id}@example.com>",
-                f"p{contact_id}@example.com",
+                f"Sender <{sender_email}>",
+                sender_email,
                 f"2026-08-{min(internal_id, 28):02d}T10:00:00+00:00",
                 "INBOX",
             ),
@@ -92,8 +102,8 @@ def _seed_mail(path, contact_id: int, internal_id: int, body, *, subject="Subjec
             )
         conn.execute(
             "INSERT INTO contact_email_link (email_id, internal_id, role, seen_at) "
-            "VALUES (?,?, 'sender', ?)",
-            (contact_id, internal_id, internal_id * 1000),
+            "VALUES (?,?, ?, ?)",
+            (contact_id, internal_id, role, internal_id * 1000),
         )
         conn.commit()
 
@@ -180,10 +190,51 @@ def test_evidence_budget_none_body_incremental_and_fence(db, monkeypatch):
     assert incremental.first_internal_id == 2
     assert "BACKGROUND ONLY; DO NOT CITE" in incremental.user_content
 
+    with _conn(db) as conn:
+        refreshed = profile.build_profile_evidence(
+            conn, contact_id=1, db_path=db, full_refresh=True
+        )
+    assert refreshed.mode == "first"
+    assert refreshed.mail_count == 2
+    assert refreshed.first_internal_id == 1
+    assert "BACKGROUND ONLY; DO NOT CITE" not in refreshed.user_content
+
+
+def test_evidence_prioritizes_target_authored_before_participation(db):
+    _seed_contact(db, 1, mail_count=25)
+    _seed_mail(db, 1, 1, "Target-authored signal " * 30)
+    for internal_id in range(2, 26):
+        _seed_mail(
+            db,
+            1,
+            internal_id,
+            f"Broadcast {internal_id} " * 30,
+            sender_email="owner@example.com",
+            role="cc",
+        )
+
+    with _conn(db) as conn:
+        evidence = profile.build_profile_evidence(conn, contact_id=1, db_path=db)
+
+    assert evidence.mail_count == profile.PROFILE_EVIDENCE_MAIL_LIMIT
+    assert evidence.first_internal_id == 1
+    assert evidence.last_internal_id == 25
+    assert "Broadcast 6" not in evidence.user_content
+    assert evidence.user_content.index("Target-authored signal") < evidence.user_content.index("Broadcast 25")
+
 
 def test_prompt_family_contains_skip_actions_and_custom_append():
-    first = build_profile_system_prompt(mode="first", custom_prompt="owner tail")
-    incremental = build_profile_system_prompt(mode="incremental")
+    first = build_profile_system_prompt(
+        mode="first",
+        target_display_name="Gary W",
+        target_primary_email="gary.w@example.com",
+        custom_prompt="owner tail",
+    )
+    incremental = build_profile_system_prompt(
+        mode="incremental",
+        target_display_name="Gary W",
+        target_primary_email="gary.w@example.com",
+    )
     assert '{"skip": true' in first
     assert "owner tail" in first
     assert "强化 / 补充 / 修正 / 重构 / 不改" not in first
@@ -191,6 +242,12 @@ def test_prompt_family_contains_skip_actions_and_custom_append():
     assert "BACKGROUND ONLY" in incremental
     assert '"ev": <primary evidence internal_id or null>' in first
     assert "summary and other narrative fields" in first
+    assert first.startswith("TARGET CONTACT")
+    assert "Gary W" in first
+    assert "gary.w@example.com" in first
+    assert "no target signal" in first
+    assert "Never write a profile about anyone other than the TARGET CONTACT" in first
+    assert "TARGET CONTACT remains the only person" in incremental
 
 
 def test_profile_config_hot_reads_row_and_bad_trigger_defaults(db):
@@ -249,7 +306,7 @@ def _valid_payload():
     return {
         "summary": "长期负责项目协调 [id:1]",
         "role_title": "Project Manager",
-        "formal_name": "Alice Zhang",
+        "formal_name": "Person 1",
         "department": "PMO",
         "topics": ["交付"],
         "projects": ["Atlas"],
@@ -315,11 +372,12 @@ async def test_generation_g1_skip_fail_closed_skip_and_success(db):
     assert profile.claim_profile_run(db, 1)
     assert await profile.generate_contact_profile(
         db, 1, client=_FakeClient({"skip": True, "reason": "too weak"})
-    ) == "skipped"
+    ) == "ok"
     with _conn(db) as conn:
         row = conn.execute("SELECT * FROM contact WHERE id=1").fetchone()
         assert row["profile_mail_count"] == 40
-        assert row["profile_status"] == "skipped"
+        assert row["profile_status"] == "ok"
+        assert json.loads(row["profile_json"])["summary"] == "previous"
 
     assert profile.claim_profile_run(db, 1)
     assert await profile.generate_contact_profile(
@@ -333,6 +391,80 @@ async def test_generation_g1_skip_fail_closed_skip_and_success(db):
         assert row["profile_model"] == "test:model"
         assert row["profile_error"] is None
         assert saved["evidence_window"]["mail_count"] == 1
+
+
+@pytest.mark.asyncio
+async def test_anchor_mismatch_fails_without_overwriting_profile_or_watermark(db):
+    previous = {
+        "summary": "Existing profile",
+        "evidence_window": {"from": 1, "to": 7, "mail_count": 7, "mode": "first"},
+    }
+    _seed_contact(
+        db,
+        1,
+        mail_count=50,
+        profile_json=previous,
+        profile_mail_count=40,
+        profile_status="ok",
+    )
+    _seed_mail(db, 1, 8, "Fresh target evidence " * 30)
+    assert profile.claim_profile_run(db, 1)
+    mismatched = _valid_payload()
+    mismatched["formal_name"] = "Lucien Chen"
+
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(mismatched)
+    ) == "failed"
+    with _conn(db) as conn:
+        row = conn.execute("SELECT * FROM contact WHERE id=1").fetchone()
+        assert json.loads(row["profile_json"]) == previous
+        assert row["profile_mail_count"] == 40
+        assert row["profile_status"] == "failed"
+        assert json.loads(row["profile_error"]) == {
+            "reason": "anchor_mismatch",
+            "profiled": "Lucien Chen",
+        }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("formal_name", ["Personality", "p1 Rivera"])
+async def test_anchor_match_accepts_display_substring_and_email_localpart(db, formal_name):
+    _seed_contact(db, 1, mail_count=50)
+    _seed_mail(db, 1, 1, "Target evidence " * 30)
+    assert profile.claim_profile_run(db, 1)
+    payload = _valid_payload()
+    payload["formal_name"] = formal_name
+
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(payload)
+    ) == "ok"
+
+
+@pytest.mark.asyncio
+async def test_existing_profile_g1_skip_restores_ok_without_moving_watermark(db):
+    previous = {
+        "summary": "Existing profile",
+        "evidence_window": {"from": 1, "to": 7, "mail_count": 7, "mode": "first"},
+    }
+    _seed_contact(
+        db,
+        1,
+        mail_count=50,
+        profile_json=previous,
+        profile_mail_count=40,
+        profile_status="ok",
+    )
+    _seed_mail(db, 1, 8, "short")
+    assert profile.claim_profile_run(db, 1)
+
+    assert await profile.generate_contact_profile(
+        db, 1, client=_FakeClient(_valid_payload())
+    ) == "ok"
+    with _conn(db) as conn:
+        row = conn.execute("SELECT * FROM contact WHERE id=1").fetchone()
+        assert row["profile_status"] == "ok"
+        assert json.loads(row["profile_json"]) == previous
+        assert row["profile_mail_count"] == 40
 
 
 def test_profile_due_once_and_catchup():

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 import sqlite3
 import time
 from dataclasses import dataclass
@@ -78,23 +79,43 @@ def build_profile_evidence(
     user_email: str = "",
     self_emails: str = "",
     email_repo: Optional[EmailRepository] = None,
+    full_refresh: bool = False,
 ) -> ProfileEvidence:
     """拼 first/incremental 两区证据；incremental 以旧 evidence_window.to 为水位。"""
     row = contact_service._require_contact(conn, contact_id)
     existing_profile = _json_dict(row["profile_json"])
-    mode = "incremental" if existing_profile else "first"
+    mode = "incremental" if existing_profile and not full_refresh else "first"
     min_internal_id = _previous_watermark(existing_profile) if mode == "incremental" else None
     self_addresses = contact_service.resolve_self_addresses(
         conn, user_email=user_email, extra_raw=self_emails
     )
-    page = contact_service.list_contact_mail_rows(
+    authored_page = contact_service.list_contact_mail_rows(
         conn,
         contact_id,
         self_addresses=self_addresses,
+        direction="from_them",
         limit=PROFILE_EVIDENCE_MAIL_LIMIT,
         min_internal_id=min_internal_id,
     )
-    rows = page["rows"]
+    authored_rows = list(authored_page["rows"])
+    rows = authored_rows
+    if len(rows) < PROFILE_EVIDENCE_MAIL_LIMIT:
+        all_page = contact_service.list_contact_mail_rows(
+            conn,
+            contact_id,
+            self_addresses=self_addresses,
+            limit=PROFILE_EVIDENCE_MAIL_LIMIT * 2,
+            min_internal_id=min_internal_id,
+        )
+        selected_ids = {int(mail["internal_id"]) for mail in rows}
+        for mail in all_page["rows"]:
+            internal_id = int(mail["internal_id"])
+            if internal_id in selected_ids:
+                continue
+            rows.append(mail)
+            selected_ids.add(internal_id)
+            if len(rows) >= PROFILE_EVIDENCE_MAIL_LIMIT:
+                break
     per_mail_budget = PROFILE_EVIDENCE_CHAR_BUDGET // PROFILE_EVIDENCE_MAIL_LIMIT
     repo = email_repo or EmailRepository(db_path)
     envelopes: list[str] = []
@@ -176,16 +197,57 @@ def _validate_payload(payload: Dict[str, Any], evidence: ProfileEvidence) -> Dic
     return normalized
 
 
-def _finish_skipped(db_path: str, contact_id: int, *, now_ms: int, reason: str, mail_count: int) -> None:
+def _anchor_tokens(value: Any) -> set[str]:
+    return {
+        token
+        for token in re.findall(r"[^\W_]+", str(value or "").casefold())
+        if len(token) >= 2
+    }
+
+
+def _profile_matches_contact(
+    payload: Dict[str, Any], row: sqlite3.Row, email_anchors: list[str]
+) -> bool:
+    profiled_name = payload.get("formal_name")
+    if profiled_name is None or not str(profiled_name).strip():
+        return True
+    profiled_tokens = _anchor_tokens(profiled_name)
+    signals = _anchor_tokens(row["display_name"]) | _anchor_tokens(row["formal_name"])
+    for email in email_anchors:
+        localpart = str(email).partition("@")[0].casefold()
+        if len(localpart) >= 2:
+            signals.add(localpart)
+    return any(
+        left == right or left in right or right in left
+        for left in profiled_tokens
+        for right in signals
+    )
+
+
+def _finish_skipped(
+    db_path: str, contact_id: int, *, now_ms: int, reason: str, mail_count: int
+) -> str:
     payload = json.dumps(
         {"reason": reason[:500], "mail_count": int(mail_count)}, ensure_ascii=False
     )
     with ContactRepository(db_path).transaction() as conn:
+        row = contact_service._require_contact(conn, contact_id)
+        if row["profile_json"] is not None:
+            conn.execute(
+                "UPDATE contact SET profile_status='ok', profile_attempted_at=?, "
+                "profile_error=NULL, updated_at=? WHERE id=?",
+                (now_ms, now_ms, contact_id),
+            )
+            logger.info(
+                f"[contact-profile] contact={contact_id} kept existing profile after skip: {reason}"
+            )
+            return "ok"
         conn.execute(
             "UPDATE contact SET profile_status='skipped', profile_attempted_at=?, "
             "profile_error=?, updated_at=? WHERE id=?",
             (now_ms, payload, now_ms, contact_id),
         )
+    return "skipped"
 
 
 def _finish_failed(db_path: str, contact_id: int, *, now_ms: int, error: str) -> None:
@@ -225,6 +287,7 @@ async def generate_contact_profile(
     now_ms: Optional[int] = None,
     user_email: str = "",
     self_emails: str = "",
+    full_refresh: bool = False,
 ) -> str:
     """生成一个画像；调用方已 claim running。所有失败 fail-closed 且不推进水位。"""
     now_ms = now_ms or int(time.time() * 1000)
@@ -234,24 +297,37 @@ async def generate_contact_profile(
         try:
             row = contact_service._require_contact(conn, contact_id)
             mail_count_snapshot = int(row["mail_count"] or 0)
+            primary_email_row = conn.execute(
+                "SELECT email_normalized FROM contact_email WHERE contact_id=? "
+                "ORDER BY is_primary DESC, id ASC LIMIT 1",
+                (contact_id,),
+            ).fetchone()
+            primary_email = str(primary_email_row[0]) if primary_email_row else ""
+            email_anchors = [
+                str(email_row[0])
+                for email_row in conn.execute(
+                    "SELECT email_normalized FROM contact_email WHERE contact_id=?",
+                    (contact_id,),
+                ).fetchall()
+            ]
             evidence = build_profile_evidence(
                 conn,
                 contact_id=contact_id,
                 db_path=db_path,
                 user_email=user_email,
                 self_emails=self_emails,
+                full_refresh=full_refresh,
             )
         finally:
             conn.close()
         if evidence.substantive_chars < PROFILE_G1_MIN_CHARS:
-            _finish_skipped(
+            return _finish_skipped(
                 db_path,
                 contact_id,
                 now_ms=now_ms,
                 reason="pre-LLM evidence shorter than 200 characters",
                 mail_count=evidence.mail_count,
             )
-            return "skipped"
 
         own_client = client is None
         llm = client or LLMClient()
@@ -261,7 +337,10 @@ async def generate_contact_profile(
                     {
                         "type": "text",
                         "text": build_profile_system_prompt(
-                            mode=evidence.mode, custom_prompt=cfg.prompt
+                            mode=evidence.mode,
+                            target_display_name=str(row["display_name"] or ""),
+                            target_primary_email=primary_email,
+                            custom_prompt=cfg.prompt,
                         ),
                     }
                 ],
@@ -275,14 +354,24 @@ async def generate_contact_profile(
                 await llm.close()
         payload = _validate_payload(dict(result.tool_input or {}), evidence)
         if payload.get("skip") is True:
-            _finish_skipped(
+            return _finish_skipped(
                 db_path,
                 contact_id,
                 now_ms=now_ms,
                 reason=str(payload["reason"]),
                 mail_count=evidence.mail_count,
             )
-            return "skipped"
+        if not _profile_matches_contact(payload, row, email_anchors):
+            profiled_name = str(payload.get("formal_name") or "")[:500]
+            error = json.dumps(
+                {"reason": "anchor_mismatch", "profiled": profiled_name},
+                ensure_ascii=False,
+            )
+            _finish_failed(db_path, contact_id, now_ms=now_ms, error=error)
+            logger.warning(
+                f"[contact-profile] contact={contact_id} anchor mismatch: {profiled_name}"
+            )
+            return "failed"
         encoded = json.dumps(payload, ensure_ascii=False)
         with ContactRepository(db_path).transaction() as conn:
             conn.execute(
