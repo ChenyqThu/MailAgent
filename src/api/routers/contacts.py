@@ -231,7 +231,7 @@ async def contact_governance_status(
             (contact_governance.CONTACT_GOVERNANCE_FIRE_KEY,),
         ).fetchone()
         latest = conn.execute(
-            "SELECT created_at FROM async_jobs WHERE job_type=? "
+            "SELECT created_at, status, last_error FROM async_jobs WHERE job_type=? "
             "ORDER BY job_id DESC LIMIT 1",
             (contact_governance.CONTACT_GOVERNANCE_JOB_TYPE,),
         ).fetchone()
@@ -243,6 +243,8 @@ async def contact_governance_status(
             "pending_count": pending,
             "last_fire_day": marker[0] if marker else None,
             "last_scan_at": latest[0] if latest else None,
+            "last_scan_status": latest[1] if latest else None,
+            "last_scan_error": latest[2] if latest else None,
         },
         request=request,
     )
