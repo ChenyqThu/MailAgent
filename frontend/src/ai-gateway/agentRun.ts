@@ -188,6 +188,7 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
   // partial/junk `matter` key can never mint a half-anchor (a scope filter without a runId would
   // silently register a propose tool that cannot address any run).
   const matterRun = matterRunFromSpec(spec)
+  const specUseKos = (spec as AgentRunSpec & { useKos?: unknown }).useKos
   return {
     agentId: spec.agentId,
     allowedTools: Array.isArray(allowedRaw)
@@ -210,7 +211,9 @@ export function agentRunContextFromSpec(spec: AgentRunSpec, jobId?: number): Age
     ...(matterRun !== undefined ? { matterRun } : {}),
     // WP7 — same conditional-include discipline: only a spec STAMPED contact_governance mints the
     // flag, so every other run's context object is byte-identical to the pre-WP7 shape.
-    ...(spec.runKind === CONTACT_GOVERNANCE_RUN_KIND ? { contactGovernanceRun: true } : {})
+    ...(spec.runKind === CONTACT_GOVERNANCE_RUN_KIND
+      ? { contactGovernanceRun: true, useKos: specUseKos !== false }
+      : {})
   }
 }
 
@@ -375,6 +378,7 @@ export function wrapCfgForAgentRun(
       const built = cfg.buildTools?.(collector, approvalMode, mode, ctx) ?? {}
       const matterReadFace = ctx.matterRun != null
       const contactReadFace = ctx.contactGovernanceRun === true
+      const contactUseKos = (ctx as AgentRunContext & { useKos?: boolean }).useKos !== false
       // The tier was resolved ONCE at run start and frozen onto the context (so a pause→resume
       // rebuild reads the same value the fresh spawn did). Absent → the default, which is what
       // every pre-dogfood context carries.
@@ -392,6 +396,7 @@ export function wrapCfgForAgentRun(
           continue
         }
         if (contactReadFace) {
+          if (!contactUseKos && name.startsWith('kos_')) continue
           if (cls === 'read' || CONTACT_PROPOSE_TOOLS.has(name)) out[name] = t
           continue
         }

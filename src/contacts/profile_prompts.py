@@ -115,10 +115,22 @@ ANTI-HALLUCINATION:
 - summary must be at most 2000 characters; topics and projects must each contain at most 7 items.
 - Each evolution item must be {"at": "YYYY-MM", "text": "one concise trajectory description", "ev": <primary evidence internal_id or null>}. Use ev instead of an inline [id:N] citation for that evolution item's primary evidence.
 
+PROFILE CONTENT DISCIPLINE:
+- Facts are table stakes; TEXTURE is the value. Capture the TARGET CONTACT's recurring viewpoints, what they advocate or resist, what motivates their attention, and what they are actively driving, but only when email evidence supports it.
+- summary is an executive summary of the current state of play: who this person is, their role, what they are driving now, and their working intersection with the owner. A reader who sees only summary should understand that state of play.
+- communication_style means communication and working style: expression patterns plus recurring stance tendencies and concerns. Promote a signal here only when it recurs across multiple emails.
+- topics should name what the TARGET CONTACT is driving or cares about, not a bag of dry nouns.
+- Separate stable patterns from one-off events. summary and communication_style contain only patterns repeated across multiple emails; a single-email signal belongs in evolution as an event-level observation or is omitted, never promoted into a personality or style claim.
+
 ATTRIBUTION:
 - Do not turn a sender's unilateral claim, forwarded text, quoted text, or marketing copy into a fact about this contact.
 - Unconfirmed matters must be phrased as "正在讨论" or "待确认" and retain evidence citations.
 - formal_name, department, role_title, and phone are suggestions only; never claim they were written to identity fields.
+
+KOS REFERENCE DISCIPLINE:
+- KOS_REFERENCE is background context and may be stale. It is never evidence.
+- [id:N] citations may refer only to NEW EMAIL EVIDENCE. Never cite or attribute a claim to KOS_REFERENCE.
+- Identity-field assertions still require supporting email evidence. If KOS_REFERENCE conflicts with newer email evidence, prefer the newer email and record the unresolved conflict in contradictions.
 """
 
 _INCREMENTAL_PROMPT = """
@@ -127,7 +139,8 @@ INCREMENTAL UPDATE:
 - For each existing profile claim, choose exactly one action concept: 强化 / 补充 / 修正 / 重构 / 不改.
 - NEW EMAIL EVIDENCE is the only citable region and contains internal_id values.
 - EXISTING PROFILE (BACKGROUND ONLY; DO NOT CITE) is background only. Never cite it and never treat it as new evidence.
-- Preserve still-supported facts, record genuine changes in evolution, and put unresolved conflicts in contradictions.
+- Rewrite compiled truth only for substantively new information. A repeated new citation that supports an existing claim means 强化: preserve the claim and optionally add the new citation rather than rewriting it.
+- Preserve still-supported facts, record genuine changes in evolution, and never silently absorb contradictions; put unresolved conflicts in contradictions.
 """
 
 

@@ -21,6 +21,7 @@ class ContactProfileAgentConfig:
     prompt: str = ""
     fire_hour: int = 4
     daily_limit: int = 50
+    use_kos: bool = True
 
 
 def get_contact_profile_agent_config(db_path: str) -> ContactProfileAgentConfig:
@@ -57,18 +58,28 @@ def get_contact_profile_agent_config(db_path: str) -> ContactProfileAgentConfig:
 
     fire_hour = 4
     daily_limit = 50
+    use_kos = True
     raw_trigger = row["trigger_json"]
     if raw_trigger:
         try:
             trigger = json.loads(raw_trigger)
             if isinstance(trigger, dict):
-                candidate_hour = int(trigger.get("fire_hour", fire_hour))
-                candidate_limit = int(trigger.get("daily_limit", daily_limit))
-                if 0 <= candidate_hour <= 23:
-                    fire_hour = candidate_hour
-                if candidate_limit > 0:
-                    daily_limit = candidate_limit
-        except (json.JSONDecodeError, TypeError, ValueError):
+                candidate_use_kos = trigger.get("use_kos", use_kos)
+                try:
+                    candidate_hour = int(trigger.get("fire_hour", fire_hour))
+                    if 0 <= candidate_hour <= 23:
+                        fire_hour = candidate_hour
+                except (TypeError, ValueError):
+                    pass
+                try:
+                    candidate_limit = int(trigger.get("daily_limit", daily_limit))
+                    if candidate_limit > 0:
+                        daily_limit = candidate_limit
+                except (TypeError, ValueError):
+                    pass
+                if isinstance(candidate_use_kos, bool):
+                    use_kos = candidate_use_kos
+        except (json.JSONDecodeError, TypeError):
             pass
 
     return ContactProfileAgentConfig(
@@ -79,4 +90,5 @@ def get_contact_profile_agent_config(db_path: str) -> ContactProfileAgentConfig:
         prompt=str(row["prompt"] or ""),
         fire_hour=fire_hour,
         daily_limit=daily_limit,
+        use_kos=use_kos,
     )

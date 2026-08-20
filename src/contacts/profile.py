@@ -14,7 +14,7 @@ from typing import Any, Callable, Dict, Optional
 from jsonschema import ValidationError, validate
 from loguru import logger
 
-from src.agents.fence import fence_email_envelope
+from src.agents.fence import fence_email_envelope, fence_untrusted, sanitize_untrusted
 from src.config import config as app_config
 from src.contacts import service as contact_service
 from src.contacts.profile_config import (
@@ -29,6 +29,7 @@ from src.contacts.profile_prompts import (
 from src.contacts.repository import ContactRepository
 from src.contacts.taxonomy import CONTACT_KIND_PERSON
 from src.llm_agent.client import LLMCallError, LLMClient
+from src.kos.client import KOSClient
 from src.repository.email_repository import EmailRepository
 
 PROFILE_MIN = 50
@@ -36,6 +37,8 @@ PROFILE_INCREMENTAL_MIN = 10
 PROFILE_REFRESH_DAYS = 30
 PROFILE_EVIDENCE_MAIL_LIMIT = 20
 PROFILE_EVIDENCE_CHAR_BUDGET = 40_000
+PROFILE_KOS_REFERENCE_CHAR_BUDGET = 3_000
+PROFILE_KOS_TIMEOUT_SECONDS = 5.0
 PROFILE_G1_MIN_CHARS = 200
 PROFILE_SUMMARY_LIST_MAX = 120
 PROFILE_LAST_FIRE_KEY = "contact_profile_last_fire"
@@ -71,6 +74,45 @@ def _previous_watermark(profile: Dict[str, Any]) -> Optional[int]:
         return None
 
 
+def _kos_reference(
+    *,
+    display_name: str,
+    primary_email: str,
+    client: Optional[KOSClient] = None,
+) -> str:
+    kos = client or KOSClient(timeout_seconds=PROFILE_KOS_TIMEOUT_SECONDS)
+    if not kos.configured:
+        logger.debug("[contact-profile] KOS reference skipped: not configured")
+        return ""
+    query = " ".join(part for part in (display_name.strip(), primary_email.strip()) if part)
+    if not query:
+        logger.debug("[contact-profile] KOS reference skipped: empty identity query")
+        return ""
+    try:
+        hits = kos.query(query, limit=5)
+    except Exception as exc:  # noqa: BLE001 — KOS is optional background; profile must fail-open
+        logger.debug(f"[contact-profile] KOS reference skipped: {exc}")
+        return ""
+    compact_hits = [
+        {
+            key: hit.get(key)
+            for key in ("title", "slug", "chunk_text", "effective_date", "updated_at")
+            if hit.get(key) not in (None, "")
+        }
+        for hit in hits
+        if isinstance(hit, dict)
+    ]
+    if not compact_hits:
+        return ""
+    content = sanitize_untrusted(
+        json.dumps(compact_hits, ensure_ascii=False, separators=(",", ":"))
+    )
+    if len(content) > PROFILE_KOS_REFERENCE_CHAR_BUDGET:
+        marker = "…[truncated]"
+        content = content[: PROFILE_KOS_REFERENCE_CHAR_BUDGET - len(marker)] + marker
+    return fence_untrusted("KOS_REFERENCE", content)
+
+
 def build_profile_evidence(
     conn: sqlite3.Connection,
     *,
@@ -80,9 +122,17 @@ def build_profile_evidence(
     self_emails: str = "",
     email_repo: Optional[EmailRepository] = None,
     full_refresh: bool = False,
+    use_kos: bool = False,
+    kos_client: Optional[KOSClient] = None,
 ) -> ProfileEvidence:
     """拼 first/incremental 两区证据；incremental 以旧 evidence_window.to 为水位。"""
     row = contact_service._require_contact(conn, contact_id)
+    primary_email_row = conn.execute(
+        "SELECT email_normalized FROM contact_email WHERE contact_id=? "
+        "ORDER BY is_primary DESC, id ASC LIMIT 1",
+        (contact_id,),
+    ).fetchone()
+    primary_email = str(primary_email_row[0]) if primary_email_row else ""
     existing_profile = _json_dict(row["profile_json"])
     mode = "incremental" if existing_profile and not full_refresh else "first"
     min_internal_id = _previous_watermark(existing_profile) if mode == "incremental" else None
@@ -141,6 +191,14 @@ def build_profile_evidence(
         ids.append(internal_id)
 
     sections: list[str] = []
+    if use_kos:
+        reference = _kos_reference(
+            display_name=str(row["display_name"] or ""),
+            primary_email=primary_email,
+            client=kos_client,
+        )
+        if reference:
+            sections.append("KOS REFERENCE (BACKGROUND ONLY; DO NOT CITE):\n" + reference)
     if mode == "incremental":
         sections.append(
             "EXISTING PROFILE (BACKGROUND ONLY; DO NOT CITE):\n"
@@ -319,6 +377,7 @@ async def generate_contact_profile(
                 user_email=user_email,
                 self_emails=self_emails,
                 full_refresh=full_refresh,
+                use_kos=cfg.use_kos,
             )
         finally:
             conn.close()

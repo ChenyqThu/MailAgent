@@ -19,6 +19,7 @@ class ContactGovernanceAgentConfig:
     model: str = ""
     fallback_models: Optional[List[str]] = None
     fire_hour: int = 5
+    use_kos: bool = True
 
 
 def get_contact_governance_agent_config(db_path: str) -> ContactGovernanceAgentConfig:
@@ -54,15 +55,22 @@ def get_contact_governance_agent_config(db_path: str) -> ContactGovernanceAgentC
             fallback_models = None
 
     fire_hour = 5
+    use_kos = True
     raw_trigger = row["trigger_json"]
     if raw_trigger:
         try:
             trigger = json.loads(raw_trigger)
             if isinstance(trigger, dict):
-                candidate = int(trigger.get("fire_hour", fire_hour))
-                if 0 <= candidate <= 23:
-                    fire_hour = candidate
-        except (json.JSONDecodeError, TypeError, ValueError):
+                candidate_use_kos = trigger.get("use_kos", use_kos)
+                try:
+                    candidate = int(trigger.get("fire_hour", fire_hour))
+                    if 0 <= candidate <= 23:
+                        fire_hour = candidate
+                except (TypeError, ValueError):
+                    pass
+                if isinstance(candidate_use_kos, bool):
+                    use_kos = candidate_use_kos
+        except (json.JSONDecodeError, TypeError):
             pass
 
     return ContactGovernanceAgentConfig(
@@ -71,4 +79,5 @@ def get_contact_governance_agent_config(db_path: str) -> ContactGovernanceAgentC
         model=str(row["model"] or "").strip(),
         fallback_models=fallback_models,
         fire_hour=fire_hour,
+        use_kos=use_kos,
     )
