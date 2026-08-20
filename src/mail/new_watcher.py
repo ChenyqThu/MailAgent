@@ -770,7 +770,7 @@ class NewWatcher:
         await self._contact_governance_tick()
 
     async def _contact_governance_tick(self):
-        """每日一次治理扫描 enqueue；双 flag off 时首行返回、零 SQL 零 import。"""
+        """每日一次治理扫描 enqueue；env 与行 enabled 双门，按行级时刻触发。"""
         if not (
             getattr(settings, "contacts_enabled", False)
             and getattr(settings, "contact_agent_enabled", False)
@@ -781,8 +781,18 @@ class NewWatcher:
         if last is not None and now - last < 300:
             return
         self._last_contact_governance_check_at = now
-        day = time.strftime("%Y-%m-%d", time.localtime())
         try:
+            from src.contacts.governance_config import get_contact_governance_agent_config
+
+            cfg = await asyncio.to_thread(
+                get_contact_governance_agent_config, str(self.sync_store.db_path)
+            )
+            if not cfg.row_exists or not cfg.enabled:
+                return
+            local_now = datetime.now().astimezone()
+            if local_now.hour < cfg.fire_hour:
+                return
+            day = local_now.date().isoformat()
             fired = await asyncio.to_thread(
                 _fire_contact_governance_if_due, str(self.sync_store.db_path), day
             )

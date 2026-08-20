@@ -23,6 +23,7 @@ import asyncio
 import json
 import os
 import secrets
+import sqlite3
 import time
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
@@ -155,6 +156,9 @@ class AgentRunWorker:
         if job.job_type == "contact_governance" and not _contact_governance_flags_on():
             self._mark(job_id, "failed", last_error="E_DISABLED")
             return
+        suggestions_before = (
+            self._contact_suggestion_count() if job.job_type == "contact_governance" else None
+        )
         status = "failed"
         result: Optional[dict] = None
         last_error: Optional[str] = None
@@ -170,6 +174,11 @@ class AgentRunWorker:
         except Exception as exc:  # noqa: BLE001 — 兜底：任何未预期异常也不留 running
             logger.error(f"[agent-run-worker] execute crash job_id={job_id}: {exc}", exc_info=True)
             status, result, last_error = "failed", None, f"E_WORKER_CRASH: {type(exc).__name__}"
+        if suggestions_before is not None:
+            suggestions_after = self._contact_suggestion_count()
+            if suggestions_after is not None:
+                result = dict(result) if isinstance(result, dict) else {}
+                result["suggestions_created"] = max(0, suggestions_after - suggestions_before)
         self._mark(job_id, status, result=result, last_error=last_error)
         # 终态落库后推灵动岛「运行结果」通知（completed/error）。绝不放在 _mark 前（通知失败不得
         # 影响 job 终态）、也不放进 _mark（那是纯 DB 写, 无 agent/触发源上下文）。终态已落库，
@@ -414,6 +423,18 @@ class AgentRunWorker:
         except Exception as exc:  # noqa: BLE001 — mark 失败只 log（下轮 recover 兜底不了本条, 但不杀 worker）
             logger.error(f"[agent-run-worker] mark_terminal failed job_id={job_id}: {exc}")
         self._stats[status] = self._stats.get(status, 0) + 1
+
+    def _contact_suggestion_count(self) -> Optional[int]:
+        try:
+            conn = sqlite3.connect(str(self.repo.db_path), timeout=5.0)
+            try:
+                row = conn.execute("SELECT COUNT(*) FROM contact_suggestion").fetchone()
+                return int(row[0]) if row is not None else 0
+            finally:
+                conn.close()
+        except sqlite3.Error as exc:
+            logger.warning(f"[agent-run-worker] contact suggestion count failed: {exc}")
+            return None
 
     # ── 灵动岛「运行结果」通知（S5 W1, ADR-004 P7）──────────────────────────────────
 

@@ -5,6 +5,7 @@ gateway 端点 W3 才存在 → 全靠 mock httpx.AsyncClient。断言 async_job
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 import httpx
 import pytest
@@ -95,6 +96,42 @@ def test_completed_maps_to_succeeded(env, monkeypatch):
     assert "approval_state" not in job.result
     # claim_token 已写入
     assert worker.stats["succeeded"] == 1
+
+
+def test_contact_governance_terminal_records_suggestion_delta(env, monkeypatch):
+    repo, store = env
+    job_id, _ = repo.enqueue(
+        job_type="contact_governance",
+        target_kind="contact_directory",
+        target_key="global",
+        params={"trigger_kind": "manual"},
+        idempotency_key="contact-governance-delta",
+    )
+    claimed = repo.claim_next(types=repo.AGENT_JOB_TYPES)
+    assert claimed is not None and claimed.job_id == job_id
+    monkeypatch.setattr(run_worker, "_contact_governance_flags_on", lambda: True)
+
+    async def fake_poke(*args, **kwargs):
+        with sqlite3.connect(repo.db_path) as conn:
+            conn.execute(
+                "INSERT INTO contact_suggestion "
+                "(type, contact_ids_json, payload_json, evidence_json, evidence_fingerprint, "
+                "status, created_at) VALUES ('identity','[1]','{}','[]','fp','pending',1)"
+            )
+            conn.commit()
+        return {"ok": True, "outcome": "completed", "sessionId": 12}
+
+    worker = AgentRunWorker(repo=repo, store=store)
+    monkeypatch.setattr(worker, "_poke_gateway", fake_poke)
+
+    async def no_announce(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(worker, "_announce_terminal", no_announce)
+    _run(worker._execute(repo.get(job_id)))
+    job = repo.get(job_id)
+    assert job.status == "succeeded"
+    assert job.result["suggestions_created"] == 1
 
 
 def test_paused_handoff_is_succeeded_with_pending_approval(env, monkeypatch):

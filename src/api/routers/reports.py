@@ -295,11 +295,14 @@ async def set_config(request: Request, agent_id: str, body: Optional[dict[str, A
     if existing is None:
         raise APIError("E_NOT_FOUND", f"report_agent {agent_id!r} not found", source="sqlite")
     try:
-        normalized_raw = normalize_agent_config_patch(
-            raw,
-            stored_trigger=existing.get("trigger_json"),
-            agent_type=existing.get("type"),
-        )
+        if existing.get("type") in ("contact_profile", "contact_governance"):
+            normalized_raw = dict(raw)
+        else:
+            normalized_raw = normalize_agent_config_patch(
+                raw,
+                stored_trigger=existing.get("trigger_json"),
+                agent_type=existing.get("type"),
+            )
         db_patch = wire.config_patch_to_db(normalized_raw)
     except ValueError as exc:
         raise APIError("E_INVALID_ARG", str(exc), source="sqlite")

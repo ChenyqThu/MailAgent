@@ -379,6 +379,27 @@ def test_set_config_normal_patch_unaffected_by_validation(report_client: TestCli
     assert r.json()["data"]["title"] == "X"
 
 
+def test_contact_governance_config_roundtrips_literal_schedule_and_model_chain(
+    report_client: TestClient,
+) -> None:
+    r = report_client.put(
+        "/api/report-agents/contact_governance_agent",
+        json={
+            "enabled": True,
+            "model": "provider:model",
+            "fallback_models": ["fallback:a"],
+            "trigger": {"fire_hour": 9},
+        },
+    )
+    assert r.status_code == 200, r.text
+    data = r.json()["data"]
+    assert data["type"] == "contact_governance"
+    assert data["enabled"] is True
+    assert data["model"] == "provider:model"
+    assert data["fallback_models"] == ["fallback:a"]
+    assert data["trigger"] == {"fire_hour": 9}
+
+
 # ---------------------------------------------------------------------------
 # create agent (POST /report-agents) + tools_json 投影
 # ---------------------------------------------------------------------------

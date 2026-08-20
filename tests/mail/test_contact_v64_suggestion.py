@@ -11,7 +11,8 @@ def _columns(path):
 def test_v64_fresh_database_has_governance_queue(tmp_path):
     path = tmp_path / "sync.db"
     store = SyncStore(str(path))
-    assert store.DB_VERSION == 64
+    assert store.DB_VERSION == SyncStore.DB_VERSION
+    assert store.DB_VERSION >= 65
     assert _columns(path) == {
         "id", "type", "contact_ids_json", "payload_json", "evidence_json",
         "evidence_fingerprint", "confidence", "status", "block_reason",
@@ -32,6 +33,6 @@ def test_v63_to_v64_replay_and_idempotency(tmp_path):
     SyncStore(str(path))
     assert "evidence_fingerprint" in _columns(path)
     with sqlite3.connect(path) as conn:
-        assert conn.execute(
+        assert int(conn.execute(
             "SELECT value FROM sync_state WHERE key='db_version'"
-        ).fetchone()[0] == "64"
+        ).fetchone()[0]) == SyncStore.DB_VERSION

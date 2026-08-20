@@ -129,6 +129,34 @@ def test_agent_status_exposes_latest_scan_result(api):
     assert failed.json()["data"]["last_scan_error"] == "E_DISABLED"
 
 
+def test_agent_history_contract_order_limit_and_suggestion_count(api):
+    client, _, path = api
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "INSERT INTO async_jobs "
+            "(job_type, status, result_json, last_error, created_at, updated_at, started_at, finished_at) "
+            "VALUES ('contact_governance', 'succeeded', ?, NULL, 10, 12, 11, 12)",
+            ('{"suggestions_created":2}',),
+        )
+        conn.execute(
+            "INSERT INTO async_jobs "
+            "(job_type, status, result_json, last_error, created_at, updated_at) "
+            "VALUES ('contact_governance', 'failed', NULL, 'E_DISABLED', 20, 20)"
+        )
+        conn.commit()
+    response = client.get("/api/contacts/agent/history", params={"limit": 2})
+    assert response.status_code == 200
+    items = response.json()["data"]["items"]
+    assert [item["status"] for item in items] == ["failed", "succeeded"]
+    assert set(items[0]) == {
+        "job_id", "status", "created_at", "started_at", "finished_at",
+        "last_error", "suggestions_created",
+    }
+    assert items[0]["suggestions_created"] is None
+    assert items[1]["suggestions_created"] == 2
+    assert client.get("/api/contacts/agent/history", params={"limit": 51}).status_code == 422
+
+
 def test_contact_agent_flag_is_second_gate(api):
     client, settings, _ = api
     settings.contact_agent_enabled = False
@@ -136,6 +164,7 @@ def test_contact_agent_flag_is_second_gate(api):
         ("GET", "/api/contacts/suggestions"),
         ("POST", "/api/contacts/agent/run"),
         ("GET", "/api/contacts/agent/status"),
+        ("GET", "/api/contacts/agent/history"),
         ("POST", "/api/contacts/agent/proposals"),
     ):
         response = client.request(method, url, json={} if method == "POST" else None)
