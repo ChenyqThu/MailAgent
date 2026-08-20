@@ -392,3 +392,38 @@ export interface ContactAgentStatus {
   /** failed 时的错误码 / 短讯（如 `E_DISABLED`）。 */
   last_scan_error?: string | null
 }
+
+/** 一轮治理扫描（`async_jobs` 里 job_type=contact_governance 的一行）。
+ *  🔴 三个时刻是 **epoch 秒**（`async_jobs.created_at REAL`），与下面 daily-summary 的
+ *  `last_attempted_at`（毫秒，`contact.profile_attempted_at INTEGER`）不同单位 —— 读侧
+ *  统一过一次归一，别把秒当毫秒画成 1970 年。 */
+export interface ContactAgentHistoryItem {
+  job_id: number
+  status: 'queued' | 'running' | 'succeeded' | 'failed'
+  created_at: number
+  started_at: number | null
+  finished_at: number | null
+  last_error: string | null
+  /** 这轮产出的待审建议条数；后端算不出时 null → 界面显「—」，不显 0（0 是「跑完了没发现」，
+   *  与「不知道」是两回事）。 */
+  suggestions_created: number | null
+}
+
+/** GET /api/contacts/agent/history?limit=N */
+export interface ContactAgentHistoryResponse {
+  items: ContactAgentHistoryItem[]
+}
+
+/** GET /api/contacts/profile/daily-summary —— 画像批处理今日汇总（工作台里的只读镜子）。
+ *  三档计数直接映射 `profile_status`：ok / skipped（证据不足）/ failed。 */
+export interface ContactProfileDailySummary {
+  date: string
+  attempted: number
+  ok: number
+  skipped: number
+  failed: number
+  /** 最近一轮的时刻（**epoch 毫秒**，见上面的单位注释）；从没跑过 → null。 */
+  last_attempted_at: number | null
+  /** 下一轮排程时刻，读 `contact_profile_agent` 行 trigger_json 的 fire_hour。 */
+  fire_hour: number
+}

@@ -21,6 +21,7 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { ContactAgentDrawer } from './ContactAgentDrawer'
 import { ContactDetail } from './ContactDetail'
 import { ContactListPane } from './ContactListPane'
+import { readLastContactVisit, writeLastContactVisit } from './contactLastVisit'
 import { MergeContactsDialog } from './MergeContactsDialog'
 import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
 import {
@@ -84,7 +85,9 @@ export function ContactsWorkspace(): React.ReactElement | null {
   const api = useContactsApi()
   const invalidate = useInvalidateContact()
 
-  const [view, setView] = useState<ContactView>('known')
+  // v2 任务 ③「记住上次离开的位置」：视图必须在 mount 时就恢复（用 useState 初值而不是
+  // effect），否则会先按默认视图拉一次列表、再切过去拉第二次 —— 冷启动多一次请求 + 一次跳版。
+  const [view, setView] = useState<ContactView>(() => readLastContactVisit()?.view ?? 'known')
   const [sort, setSort] = useState<ContactSort>('density')
   const [groupBy, setGroupBy] = useState<ContactGroupBy>('none')
   const [density, setDensity] = useState<ContactDensity>('compact')
@@ -162,9 +165,16 @@ export function ContactsWorkspace(): React.ReactElement | null {
   // 用 `items.length` 会在「全部」视图关掉 chips 时报出一个列表里根本不存在的数。
   const visibleCount = orderedIds.length
 
-  const selectContact = useCallback((id: number | null): void => {
-    setSelectedId(id)
-  }, [])
+  // v2 任务 ③：选中一个真实联系人时把「id + 当时的视图」写进记录；取消选中
+  // （`id === null`）**不清记录** —— 记录留着，下次冷启动按「当前视图的可见集里找不找得到」
+  // 重新判定，找不到自然退化成选第一条（照 MattersWorkspace 的同一条纪律）。
+  const selectContact = useCallback(
+    (id: number | null): void => {
+      setSelectedId(id)
+      if (id !== null) writeLastContactVisit({ id, view })
+    },
+    [view]
+  )
   useContactKeyboardNav(orderedIds, selectedId, selectContact)
 
   // WP4 人物页直达通道（PersonChip / ⌘K「人」组 → useContactNavigation.open(id) →
@@ -179,6 +189,29 @@ export function ContactsWorkspace(): React.ReactElement | null {
     setSelectedId(navigationTarget)
     clearNavigationTarget()
   }, [clearNavigationTarget, navigationTarget])
+
+  // v2 任务 ③ 冷启动初选：列表第一次落定时恢复上次那个人；记录缺失或那个人已经不在可见集里
+  // （被合并 / 被隐藏 / 改判成机器人）→ 退化成选列表第一个。只跑一次（`initialSelectionApplied`
+  // 守卫），之后用户的每一次选中都由 `selectContact` 负责。
+  // 🔴 深链（⌘K / PersonChip）压过冷启动初选：那条 intent 已经点名了要看谁。
+  // 🔴 判据用 `orderedIds` 而不是 `items` —— 前者才是**实际列出**的行（过了 chips 与分组
+  // 折叠），恢复出一个用户在列表里看不见的选中等于把详情页钉在一个找不到的人身上。
+  const [initialSelectionApplied, setInitialSelectionApplied] = useState(false)
+  useEffect(() => {
+    if (initialSelectionApplied || !list.isSuccess) return
+    setInitialSelectionApplied(true)
+    if (navigationTarget !== null) return
+    // 🔴 这里走 `setSelectedId` 而不是 `selectContact`：恢复与退化都**不是用户的选择**，
+    // 不该回写记录。尤其退化那条 —— 把「列表恰好第一行」写成用户的上次位置，会把一条还
+    // 可能有用的记录（那个人只是暂时不在这个视图里）永久覆盖掉。
+    const stored = readLastContactVisit()
+    if (stored !== null && orderedIds.includes(stored.id)) {
+      setSelectedId(stored.id)
+      return
+    }
+    const first = orderedIds[0]
+    if (first !== undefined) setSelectedId(first)
+  }, [initialSelectionApplied, list.isSuccess, navigationTarget, orderedIds])
 
   // ── 治理写面（行菜单与档案头共用同一套 handler + toast + 失效）──────────────
   const hideMutation = useMutation({

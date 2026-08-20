@@ -195,10 +195,17 @@ export function buildContactRows(options: BuildOptions): ContactListRow[] {
   return rows
 }
 
+/** 联系人行在某个密度档下的高度。骨架屏要按可视高度算行数，手头没有 `row` 却仍需要这个
+ *  数 —— 🔴 那种场景**不能**用下面的 `rowHeightFor(undefined, density)`：`undefined` 分支是
+ *  「行还没取到」的兜底，恒回 compact，会把 comfortable 档的骨架画成 52 高然后跳版。 */
+export function contactRowHeight(density: ContactDensity): number {
+  return density === 'comfortable' ? CONTACT_ROW_HEIGHT_COMFORTABLE : CONTACT_ROW_HEIGHT_COMPACT
+}
+
 export function rowHeightFor(row: ContactListRow | undefined, density: ContactDensity): number {
   if (!row) return CONTACT_ROW_HEIGHT_COMPACT
   if (row.type === 'header') return CONTACT_GROUP_HEADER_HEIGHT
-  return density === 'comfortable' ? CONTACT_ROW_HEIGHT_COMFORTABLE : CONTACT_ROW_HEIGHT_COMPACT
+  return contactRowHeight(density)
 }
 
 /** 键盘 j/k 走的有序 id（跳过组头与折叠段）。 */

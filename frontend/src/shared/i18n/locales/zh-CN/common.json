@@ -4432,9 +4432,31 @@
       "envSaveError": "保存启用状态失败",
       "rowSaveError": "保存预处理配置失败"
     },
+    "contactSection": {
+      "title": "通讯录",
+      "hint": "两个只读邮件的低频 Agent：一个写人物画像，一个提治理建议。都不直接改身份字段。"
+    },
+    "contactGovernance": {
+      "subtitle": "每天随邮件增量扫一次，提合并 / 补字段 / 曾用邮箱建议，排队等你确认",
+      "configTitle": "通讯录治理 · {title}",
+      "enable": "启用治理 Agent",
+      "enableHint": "停用后每日扫描不跑，工作台里手点「现在跑一次」会返回 E_DISABLED。",
+      "schedule": "排程",
+      "scheduleHint": "每天固定时刻随邮件增量跑一次治理扫描",
+      "dailyHour": "每日运行时刻（0–23 点）",
+      "prompt": "系统提示词",
+      "promptHint": "默认提示词只读；你写的追加段接在它之后",
+      "promptDefaultToggle": "查看默认提示词",
+      "promptAppend": "提示词追加段",
+      "promptAppendPlaceholder": "例如：公司背景、部门组织架构、常见的对外合作方 —— 这类长期不变的上下文写在这里。",
+      "promptAppendNote": "默认提示词已经钉死「每条建议必须带邮件证据、身份字段只能提议不能直写」的纪律，追加段不会覆盖它。留空 = 只用默认。",
+      "tools": "注入的工具 · {count} 件",
+      "toolsHint": "只读 · 由 gateway 实际装配的 ToolSet 决定",
+      "queueNote": "这个 Agent 产出的建议在 通讯录 → 列表头「Agent」胶囊里排队等确认；它的运行历史也在那儿。",
+      "errFireHour": "每日运行时刻要是 0 到 23 之间的整数",
+      "rowSaveError": "保存治理 Agent 配置失败"
+    },
     "contactProfile": {
-      "section": "联系人画像",
-      "sectionHint": "低频批量读取你与某人的往来邮件，写一段人物画像（角色 / 常聊议题 / 沟通风格 / 人物轨迹），并从签名档提出可采纳的建议值。只读邮件，不改身份字段。",
       "subtitle": "低频批处理生成人物画像；单个联系人可在档案页手动更新",
       "configTitle": "联系人画像 · {title}",
       "masterOff": "总闸未开",
@@ -6248,15 +6270,17 @@
     },
     "agent": {
       "title": "通讯录 Agent",
-      "subtitle": "通讯录作为内置工具注入 · 它读、它提议，你确认",
+      "subtitle": "它读、它提议，你确认",
       "pill": "Agent",
       "pillTitle": "通讯录 Agent · 待审治理建议",
       "pendingBadge": "{count} 条待审建议",
       "close": "关闭",
       "tab": {
         "queue": "待审建议 {count}",
-        "tools": "它能做什么"
+        "runs": "运行"
       },
+      "gotoConfig": "模型、排程、提示词、工具清单 —— 都在 Agents 页的「通讯录治理」卡里",
+      "gotoConfigCta": "去配置",
       "empty": {
         "title": "没有待审建议",
         "hint": "Agent 每天随邮件增量跑一次治理扫描；发现同人、缺字段、停用地址时会在这里排队。"
@@ -6267,12 +6291,40 @@
       },
       "loadFailed": "待审建议读取失败 · 这里显示的可能不是全部",
       "scanFailed": "上次治理扫描失败：{error} · 队列里没有新建议不代表没发现问题",
-      "scanInFlight": "上一次扫描还在跑",
-      "cadence": "每天随增量扫描自动跑一次",
       "runNow": "现在跑一次治理扫描",
       "running": "扫描中…",
+      "runs": {
+        "runNote": "点了只是排入队列，不等扫描结束；结果落在下面的历史里。平时每天随邮件增量自动跑一次。",
+        "lastScan": "上次扫描",
+        "status": {
+          "queued": "排队中",
+          "running": "进行中",
+          "succeeded": "成功",
+          "failed": "失败"
+        },
+        "detailOk": "产出 {count} 条待审建议",
+        "detailRunning": "正在读增量邮件与通讯录…",
+        "detailDisabled": "治理 Agent 行当前是停用状态 —— 到 Agents 页打开后再跑",
+        "detailFailed": "这一轮没有跑完，错误码见上",
+        "today": "今天 {time}",
+        "yesterday": "昨天 {time}",
+        "historyTitle": "治理扫描历史",
+        "historyEmpty": "还没有跑过治理扫描。",
+        "historyLoadFailed": "扫描历史读取失败 · 上面的「上次扫描」仍然是准的",
+        "produced": "产出 {count} 条建议",
+        "loading": "读取中…",
+        "profileTitle": "画像批处理",
+        "profileToday": "今日已处理",
+        "profileUnit": "人",
+        "profileOk": "成功 {count}",
+        "profileSkipped": "证据不足 {count}",
+        "profileFailed": "失败 {count}",
+        "profileFoot": "最近一轮 {last} · 下轮排程 每天 {hour}:00",
+        "profileFootNever": "今天还没跑过 · 下轮排程 每天 {hour}:00",
+        "profileLoadFailed": "画像批处理汇总读取失败",
+        "skippedNote": "「证据不足」不是失败：往来邮件没到阈值、或模型判定材料不足以下结论时会主动拒写，档案页照常显示未生成态。"
+      },
       "tools": {
-        "title": "注入的工具",
         "footnote": "参数见实现侧工具签名；propose_ 开头的三件只写入待审队列，不动正式字段。",
         "governanceOff": "标「写（轻）」的三件只在主对话里可用，每天那轮治理扫描一件写工具都拿不到。"
       },
@@ -6293,13 +6345,6 @@
         "contact_refresh_profile": "触发一次画像生成"
       },
       "prompt": {
-        "title": "系统提示词",
-        "hint": "这是治理扫描每轮任务提示词里可改的那一段；身份文档与工具说明由系统另行拼接，不在这个框里。",
-        "label": "任务提示词",
-        "placeholder": "留空 = 跟随代码里的默认提示词",
-        "save": "保存",
-        "saving": "保存中…",
-        "restoreDefault": "恢复默认",
         "usingDefault": "跟随默认",
         "customized": "已自定义",
         "loadFailed": "提示词读取失败 · 先别保存，那会用一份空草稿覆盖已有内容"

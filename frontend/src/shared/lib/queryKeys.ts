@@ -296,7 +296,11 @@ export const qk = {
     // WP7 胶囊徽标 + 抽屉脚（待审数 / 最近扫描时间 / flag 态，一个端点拿全）。
     agentStatus: () => ['contacts', 'agent-status'] as const,
     // WP7 治理 agent 的系统提示词（agent_config.db 的 `contact_agent` 文档）。
-    agentPrompt: () => ['contacts', 'agent-prompt'] as const
+    agentPrompt: () => ['contacts', 'agent-prompt'] as const,
+    // v2 工作台「运行」tab：治理扫描历史（limit 进 key —— 换条数就是另一份结果集）。
+    agentHistory: (limit: number) => ['contacts', 'agent-history', limit] as const,
+    // v2 工作台「运行」tab：画像批处理今日汇总（另一个 agent 行的只读镜子）。
+    profileDailySummary: () => ['contacts', 'profile-daily-summary'] as const
   },
 
   contactSuggest: (debounced: string, exclude: readonly string[]) =>

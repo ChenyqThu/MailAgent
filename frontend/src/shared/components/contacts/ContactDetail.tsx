@@ -45,6 +45,7 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 
 import { ContactOrgSection } from './ContactOrgSection'
 import { ContactProfileCard } from './ContactProfileCard'
+import { ContactDetailSkeleton } from './ContactSkeleton'
 import { Monogram } from './Monogram'
 import {
   AiMark,
@@ -540,7 +541,13 @@ export function ContactDetail({
   })
 
   if (!detail) {
-    return <div className="h-full min-h-0 overflow-y-auto scrollbar-none" />
+    // 拉取中 → 骨架占住版式（v2 任务 ③）；落定却没有 detail（404 / 请求失败）→ 维持原来的
+    // 空壳：那时候画骨架就是在假装「马上就好」，而实际上永远不会来。
+    return detailQuery.isPending ? (
+      <ContactDetailSkeleton />
+    ) : (
+      <div className="h-full min-h-0 overflow-y-auto scrollbar-none" />
+    )
   }
 
   const locks = detail.identity_locks

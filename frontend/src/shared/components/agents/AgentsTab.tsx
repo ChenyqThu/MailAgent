@@ -29,6 +29,7 @@ import { errorMessage } from '@shared/lib/ipcErrors'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError } from '@shared/state/toast'
 import {
+  CONTACT_GOVERNANCE_AGENT_ID,
   CONTACT_PROFILE_AGENT_ID,
   IS_WEB,
   PRESS_SCALE,
@@ -36,6 +37,7 @@ import {
   envFlagOn,
   pressHandlers
 } from './shared'
+import { useAgentsNavigation } from './navigation'
 import { useContactProfileEnabled } from '@shared/components/contacts/hooks'
 import { ConfigDrawer } from './drawers/ConfigDrawer'
 import { SearchConfigDrawer } from './drawers/SearchConfigDrawer'
@@ -43,6 +45,7 @@ import { MainAssistantDrawer } from './drawers/MainAssistantDrawer'
 import { PreprocessConfigDrawer } from './drawers/PreprocessConfigDrawer'
 import { ProjectProgressConfigDrawer } from './drawers/ProjectProgressConfigDrawer'
 import { ContactProfileConfigDrawer } from './drawers/ContactProfileConfigDrawer'
+import { ContactGovernanceConfigDrawer } from './drawers/ContactGovernanceConfigDrawer'
 import { AgentAvatar } from './AgentAvatar'
 import { useAvatarHoverShowcase } from './useAvatarHoverShowcase'
 import { MainAssistantCard } from './MainAssistantCard'
@@ -945,35 +948,36 @@ function ProjectProgressAgentCard({
   )
 }
 
-// ─── 联系人画像卡（type='contact_profile'，task 08-13 WP6）────────────────────
-// 与项目周报卡同型（后端 DB v63 播种单行，无新建 / 删除；启用态 = row.enabled，快捷开关
-// 与抽屉都改它，保存即生效），**唯一差别是总闸的数据源**：项目周报读 env
-// PROJECT_PROGRESS_SYNC_ENABLED，画像读 /chat/config 的 contactProfileEnabled ——
-// ⚠️ 不用 useEnvStore：那是本地 .env 面板，远程 web 端只读且拿不到值，而 contacts 域
-// 的既有 flag 投影（useContactsEnabled）本来就走 /chat/config，同源才不会两处打架。
-function ContactProfileAgentCard({
+// ─── 通讯录区的两张专型卡（画像 type='contact_profile' / 治理 type='contact_governance'）──
+// 与项目周报卡同型（后端播种单行，无新建 / 删除；启用态 = row.enabled，快捷开关与抽屉都改它，
+// 保存即生效）。
+//
+// 🔴 v2 起两张卡共用这一个组件：它们逐属性同形（padding / radius / 头像 42 / 徽标 / 右侧快捷
+// Switch），复制第二份 90 行只会让「改了一张忘了另一张」变成必然。
+// 🔴 组件本身**不懂任何 flag 语义** —— 徽标文案 / 徽标亮不亮 / 开关禁不禁由调用方算好传进来。
+// 两张卡的总闸语义不同（画像三态含「总闸未开」；治理只报行启停，见调用点注释），把判据留在
+// 组件里就得在这里长出一个 flag 分支。
+function ContactAgentRowCard({
   cfg,
-  masterEnabled,
+  badgeLabel,
+  badgeOn,
+  switchDisabled,
+  subtitle,
   onConfig,
   onToggle
 }: {
   cfg: ReportAgentConfig
-  /** /chat/config 的 contactProfileEnabled（Labs flag + agent 行的合取由后端算）。 */
-  masterEnabled: boolean
+  badgeLabel: string
+  /** 徽标是否走「已启用」的绿调（false = 中性灰）。 */
+  badgeOn: boolean
+  switchDisabled: boolean
+  subtitle: string
   onConfig: () => void
-  /** 快捷开关：切 row.enabled（总闸未开 / web 时禁用不传）。 */
+  /** 快捷开关：切 row.enabled。 */
   onToggle?: (v: boolean) => void
 }): React.ReactElement {
-  const { t } = useTranslation()
   const showcase = useAvatarHoverShowcase()
   const rowEnabled = cfg.enabled
-  // 徽标三态：总闸未开（中性）→ 总闸开且行启用（绿）→ 总闸开但行停用（灰）。
-  const badgeLabel = !masterEnabled
-    ? t('agents.contactProfile.masterOff')
-    : rowEnabled
-      ? t('agents.card.enabled')
-      : t('agents.card.disabled')
-  const badgeOn = masterEnabled && rowEnabled
   return (
     <div
       role="button"
@@ -1046,14 +1050,14 @@ function ContactProfileAgentCard({
           </span>
         </div>
         <div style={{ marginTop: 4, fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', lineHeight: 1.5 }}>
-          {t('agents.contactProfile.subtitle')}
+          {subtitle}
         </div>
       </div>
       {/* span stopPropagation 防止点开关连带触发卡片 onConfig（同其余专型卡）。 */}
       <span
         onClick={(e) => e.stopPropagation()}
         style={
-          !masterEnabled || IS_WEB || !onToggle
+          switchDisabled || !onToggle
             ? { opacity: 0.5, pointerEvents: 'none', display: 'flex', flexShrink: 0 }
             : { display: 'flex', flexShrink: 0 }
         }
@@ -1191,6 +1195,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const [projectProgressOpen, setProjectProgressOpen] = useState(false)
   // WP6 — 联系人画像配置抽屉开合（后端 v63 播种单行，只编辑、无新建）。
   const [contactProfileOpen, setContactProfileOpen] = useState(false)
+  // v2 — 通讯录治理配置抽屉开合（后端 v65 播种单行，只编辑、无新建）。
+  const [contactGovernanceOpen, setContactGovernanceOpen] = useState(false)
   // 画像卡总闸：/chat/config 的 contactProfileEnabled（不是 env —— 见卡片注释）。
   const contactProfileMaster = useContactProfileEnabled().enabled
   // 项目周报卡的总闸绑 env PROJECT_PROGRESS_SYNC_ENABLED（响应式读，总闸未开 → 卡片显「总闸未开」）。
@@ -1214,6 +1220,14 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
       await saveProgressRow(CONTACT_PROFILE_AGENT_ID, { enabled: v })
     } catch (e: unknown) {
       toastError(t('agents.contactProfile.rowSaveError'), errorMessage(e))
+    }
+  }
+  // 治理卡快捷开关：同上。
+  const handleContactGovernanceToggle = async (v: boolean): Promise<void> => {
+    try {
+      await saveProgressRow(CONTACT_GOVERNANCE_AGENT_ID, { enabled: v })
+    } catch (e: unknown) {
+      toastError(t('agents.contactGovernance.rowSaveError'), errorMessage(e))
     }
   }
   // 预处理卡的启用态绑全局 env LLM_AGENT_ENABLED（响应式读，env 变即刷新徽标）。
@@ -1265,6 +1279,11 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
     () => agents.filter((a) => a.type === 'contact_profile'),
     [agents]
   )
+  // v2 — 通讯录治理 agent（type='contact_governance'，后端 v65 播种单行）。
+  const contactGovernanceAgents = useMemo(
+    () => agents.filter((a) => a.type === 'contact_governance'),
+    [agents]
+  )
   // S5 — 完全自定义 agent（type='custom'），按 id 稳定排序。此前无此 filter → custom 行被
   // 静默丢弃；补上后 custom 卡片可见。
   const customAgents = useMemo(
@@ -1295,6 +1314,8 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
   const projectProgressAgent = projectProgressAgents[0] ?? null
   // 联系人画像只有一行（后端播种）；抽屉编辑它。
   const contactProfileAgent = contactProfileAgents[0] ?? null
+  // 通讯录治理只有一行（后端播种）；抽屉编辑它。
+  const contactGovernanceAgent = contactGovernanceAgents[0] ?? null
   // drawer 任一打开 → 锁列表滚动。
   const anyDrawerOpen =
     configAgent !== null ||
@@ -1303,7 +1324,32 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
     mainAssistantOpen ||
     preprocessOpen ||
     projectProgressOpen ||
-    contactProfileOpen
+    contactProfileOpen ||
+    contactGovernanceOpen
+
+  // 跨页直达：通讯录工作台抽屉的脚部「去配置」在 store 里点名一个 agent id 后 navigate 到
+  // 这里，本 effect 消费即清。
+  // 🔴 必须等 `isLoading` 落定再消费 —— 刚 navigate 过来时配置查询还在途、两个 agent 都是
+  // null，此刻就清 intent 等于把这条深链吃掉（点了「去配置」只换了个页面，抽屉不开）。
+  // 🔴 落定后目标行仍不在（老库没播种）时**只清 intent 不开抽屉**：弹一个 cfg=null 的空
+  // 抽屉比什么都不做更糟。
+  const navigationTargetAgentId = useAgentsNavigation((state) => state.targetAgentId)
+  const clearAgentsNavigation = useAgentsNavigation((state) => state.clear)
+  useEffect(() => {
+    if (navigationTargetAgentId === null || isLoading) return
+    if (navigationTargetAgentId === CONTACT_GOVERNANCE_AGENT_ID && contactGovernanceAgent) {
+      setContactGovernanceOpen(true)
+    } else if (navigationTargetAgentId === CONTACT_PROFILE_AGENT_ID && contactProfileAgent) {
+      setContactProfileOpen(true)
+    }
+    clearAgentsNavigation()
+  }, [
+    clearAgentsNavigation,
+    contactGovernanceAgent,
+    contactProfileAgent,
+    isLoading,
+    navigationTargetAgentId
+  ])
 
   // 三层各司其职：①外层 relative 不滚 → drawer 钉这层（不随列表滚）②滚动层 absolute inset:0
   // 承接滚动、**block 流非 flex**（子项自然高度、超出滚动，绝不压缩卡片）③内容层 flex column
@@ -1476,9 +1522,12 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
             </>
           )}
 
-          {/* ─── 联系人画像区（WP6）───────────────────────────────────────
-              仅当后端 v63 播种行存在时渲染（老库未迁移 → 不显，避免空区块）。 */}
-          {contactProfileAgent && (
+          {/* ─── 通讯录区（v2：画像 + 治理两张卡）─────────────────────────
+              区标题从「联系人画像」升成「通讯录」（原型裁量 6）：这个区现在有两张卡，
+              继续叫画像会让治理卡看起来像画像的附属。
+              每张卡各自按「后端播种行是否存在」渲染（老库未迁移 → 不显，避免空卡）；
+              两行都没有时整个区不出（避免空区块，同项目周报区纪律）。 */}
+          {(contactProfileAgent || contactGovernanceAgent) && (
             <>
               <div style={{ marginTop: 8 }}>
                 <h2
@@ -1489,18 +1538,48 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
                     letterSpacing: '-0.01em'
                   }}
                 >
-                  {t('agents.contactProfile.section')}
+                  {t('agents.contactSection.title')}
                 </h2>
                 <p style={{ fontSize: 13, color: 'rgb(var(--ink-fg-2))', marginTop: 4 }}>
-                  {t('agents.contactProfile.sectionHint')}
+                  {t('agents.contactSection.hint')}
                 </p>
               </div>
-              <ContactProfileAgentCard
-                cfg={contactProfileAgent}
-                masterEnabled={contactProfileMaster}
-                onConfig={() => setContactProfileOpen(true)}
-                onToggle={(v) => void handleContactProfileToggle(v)}
-              />
+              {contactProfileAgent && (
+                // 画像卡：徽标三态（总闸未开 / 已启用 / 已停用）**逐字保持现状** ——
+                // 本批不改它已有的显示语义。
+                <ContactAgentRowCard
+                  cfg={contactProfileAgent}
+                  badgeLabel={
+                    !contactProfileMaster
+                      ? t('agents.contactProfile.masterOff')
+                      : contactProfileAgent.enabled
+                        ? t('agents.card.enabled')
+                        : t('agents.card.disabled')
+                  }
+                  badgeOn={contactProfileMaster && contactProfileAgent.enabled}
+                  switchDisabled={!contactProfileMaster || IS_WEB}
+                  subtitle={t('agents.contactProfile.subtitle')}
+                  onConfig={() => setContactProfileOpen(true)}
+                  onToggle={(v) => void handleContactProfileToggle(v)}
+                />
+              )}
+              {contactGovernanceAgent && (
+                // 治理卡：徽标**只报行启停**，不出「总闸未开」这类 flag 状态提示
+                // （owner 拍板：`MAILAGENT_CONTACT_AGENT_ENABLED` 即将默认开并撤出 Labs，
+                // 现在就别再教用户一个马上会消失的概念）。字节级 flag 门不受影响 ——
+                // 通讯录列表头的 ✨Agent 胶囊与它上游那条查询照旧由 `useContactFlags` 门着。
+                <ContactAgentRowCard
+                  cfg={contactGovernanceAgent}
+                  badgeLabel={t(
+                    contactGovernanceAgent.enabled ? 'agents.card.enabled' : 'agents.card.disabled'
+                  )}
+                  badgeOn={contactGovernanceAgent.enabled}
+                  switchDisabled={IS_WEB}
+                  subtitle={t('agents.contactGovernance.subtitle')}
+                  onConfig={() => setContactGovernanceOpen(true)}
+                  onToggle={(v) => void handleContactGovernanceToggle(v)}
+                />
+              )}
             </>
           )}
 
@@ -1620,6 +1699,11 @@ export function AgentsTab({ onOpenReports }: { onOpenReports: () => void }): Rea
         open={contactProfileOpen}
         masterEnabled={contactProfileMaster}
         onClose={() => setContactProfileOpen(false)}
+      />
+      <ContactGovernanceConfigDrawer
+        cfg={contactGovernanceAgent}
+        open={contactGovernanceOpen}
+        onClose={() => setContactGovernanceOpen(false)}
       />
     </div>
   )

@@ -336,6 +336,16 @@ export interface ContactProfileTrigger {
   daily_limit: number
 }
 
+/** v2「通讯录治理」单例行的 trigger_json —— 与上面的画像 trigger 同款用法（字面配置列，
+ *  不进 `parse_trigger`），但**只有一个字段**：治理扫描一次跑完增量、不按人计费，没有
+ *  「每轮人数上限」这回事。
+ *  🔴 同样是整列覆写不是 merge —— 只有一个字段也要按整列写。
+ *  读侧的运行时形状检查在 `ContactGovernanceConfigDrawer::readFireHour`（同上，读面 union
+ *  不收它，免得毁掉十来处按判别式的收窄）。 */
+export interface ContactGovernanceTrigger {
+  fire_hour: number
+}
+
 export type CustomAgentTriggerV2Entry = CustomAgentTrigger extends infer Trigger
   ? Trigger extends { v: 1 }
     ? Omit<Trigger, 'v'> & { id?: string; enabled: boolean }
@@ -472,7 +482,12 @@ export interface ReportConfigPatch {
    *  null = 清空该配置；object = 覆写。仅 type='custom' 有意义
    *  （project_progress 借 email_filter 词汇、contact_profile 借 ContactProfileTrigger
    *  字面字段各存自己的单例配置，两者都不走 parse_trigger）。 */
-  trigger?: CustomAgentTrigger | TriggerSetV2 | ContactProfileTrigger | null
+  trigger?:
+    | CustomAgentTrigger
+    | TriggerSetV2
+    | ContactProfileTrigger
+    | ContactGovernanceTrigger
+    | null
   tool_policy?: CustomAgentToolPolicy | null
   budget?: CustomAgentBudget | null
   avatar?: AgentAvatarConfig | null
