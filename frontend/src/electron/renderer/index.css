@@ -5170,6 +5170,15 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   animation: agents-shimmer 1.4s linear infinite;
 }
 
+/* 通讯录骨架屏（ContactSkeleton.tsx）—— 铺满整屏的那一处，reduced-motion 下必须停。
+ * 🔴 有意只关停自己的 .contact-skel，**不动全局 .shimmer**：那个类另有十几处消费方
+ * （报告卡 / 抽屉懒加载字段等），本批无权替它们改行为。.folder-skel 早有同款局部关停。 */
+@media (prefers-reduced-motion: reduce) {
+  .contact-skel {
+    animation: none;
+  }
+}
+
 @keyframes agents-email-flash {
   0% { box-shadow: 0 0 0 2px rgb(var(--c-accent)); background: rgb(var(--c-accent) / 0.10); }
   100% { box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0); background: rgb(var(--c-accent) / 0); }

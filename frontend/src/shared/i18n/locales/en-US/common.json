@@ -4432,9 +4432,31 @@
       "envSaveError": "Failed to save enable state",
       "rowSaveError": "Failed to save preprocessing config"
     },
+    "contactSection": {
+      "title": "Contacts",
+      "hint": "Two low-frequency agents that only read mail: one writes people profiles, one proposes directory fixes. Neither edits identity fields directly."
+    },
+    "contactGovernance": {
+      "subtitle": "Scans once a day with the incremental mail sync and queues merge / missing-field / former-address suggestions for you to confirm",
+      "configTitle": "Contacts governance · {title}",
+      "enable": "Enable the governance agent",
+      "enableHint": "While disabled the daily scan does not run, and “Run a scan now” in the workbench returns E_DISABLED.",
+      "schedule": "Schedule",
+      "scheduleHint": "One governance scan per day at a fixed hour, alongside the incremental mail sync",
+      "dailyHour": "Daily run hour (0-23)",
+      "prompt": "System prompt",
+      "promptHint": "The default prompt is read-only; your addendum is appended after it",
+      "promptDefaultToggle": "View the default prompt",
+      "promptAppend": "Prompt addendum",
+      "promptAppendPlaceholder": "e.g. company background, department structure, recurring external partners — long-lived context belongs here.",
+      "promptAppendNote": "The default prompt already pins the rules that every suggestion cites mail evidence and that identity fields may only be proposed, never written directly; an addendum cannot override that. Empty = default only.",
+      "tools": "Injected tools · {count}",
+      "toolsHint": "Read-only · determined by the ToolSet the gateway actually assembles",
+      "queueNote": "Suggestions from this agent queue up under Contacts → the “Agent” pill in the list header, and its run history lives there too.",
+      "errFireHour": "The daily run hour must be a whole number between 0 and 23",
+      "rowSaveError": "Could not save the governance agent configuration"
+    },
     "contactProfile": {
-      "section": "Contact profiles",
-      "sectionHint": "Batch-reads your exchanges with a person to write a profile (role, recurring topics, communication style, trajectory) and proposes values read from signatures. It only reads mail; it never edits identity fields.",
       "subtitle": "Profiles written in low-frequency batches; any contact can be refreshed by hand",
       "configTitle": "Contact profiles · {title}",
       "masterOff": "Master switch off",
@@ -5842,15 +5864,17 @@
     },
     "agent": {
       "title": "Contacts agent",
-      "subtitle": "Contacts injected as a built-in tool · it reads, it proposes, you confirm",
+      "subtitle": "It reads, it proposes, you confirm",
       "pill": "Agent",
       "pillTitle": "Contacts agent · governance suggestions to review",
       "pendingBadge": "{count} suggestions awaiting review",
       "close": "Close",
       "tab": {
         "queue": "To review {count}",
-        "tools": "What it can do"
+        "runs": "Runs"
       },
+      "gotoConfig": "Model, schedule, prompt and tool list all live on the “Contacts governance” card in Agents",
+      "gotoConfigCta": "Configure",
       "empty": {
         "title": "Nothing to review",
         "hint": "The agent runs one governance scan a day alongside the incremental mail sync; duplicates, missing fields and dead addresses queue up here."
@@ -5861,12 +5885,40 @@
       },
       "loadFailed": "Could not load the review queue · what you see may be incomplete",
       "scanFailed": "The last governance scan failed: {error} · an empty queue does not mean nothing was found",
-      "scanInFlight": "The previous scan is still running",
-      "cadence": "Runs once a day with the incremental scan",
       "runNow": "Run a governance scan now",
       "running": "Scanning…",
+      "runs": {
+        "runNote": "This only queues a scan — it does not wait for it to finish. The result lands in the history below. Normally it runs once a day alongside the incremental mail sync.",
+        "lastScan": "Last scan",
+        "status": {
+          "queued": "Queued",
+          "running": "Running",
+          "succeeded": "Succeeded",
+          "failed": "Failed"
+        },
+        "detailOk": "Produced {count} suggestions to review",
+        "detailRunning": "Reading new mail and the directory…",
+        "detailDisabled": "The governance agent row is disabled — turn it on in Agents, then run it again",
+        "detailFailed": "This run did not finish; see the error code above",
+        "today": "Today {time}",
+        "yesterday": "Yesterday {time}",
+        "historyTitle": "Governance scan history",
+        "historyEmpty": "No governance scan has run yet.",
+        "historyLoadFailed": "Could not load the scan history · “Last scan” above is still accurate",
+        "produced": "{count} suggestions",
+        "loading": "Loading…",
+        "profileTitle": "Profile batch",
+        "profileToday": "Processed today",
+        "profileUnit": "people",
+        "profileOk": "Written {count}",
+        "profileSkipped": "Not enough evidence {count}",
+        "profileFailed": "Failed {count}",
+        "profileFoot": "Last round {last} · next scheduled daily at {hour}:00",
+        "profileFootNever": "No round today yet · next scheduled daily at {hour}:00",
+        "profileLoadFailed": "Could not load the profile batch summary",
+        "skippedNote": "“Not enough evidence” is not a failure: when the traffic is below threshold, or the model judges the material too thin to conclude, it declines to write and the dossier keeps showing the not-generated state."
+      },
       "tools": {
-        "title": "Injected tools",
         "footnote": "See the implementation for exact signatures; the three propose_ tools only write to the review queue, never to the record itself.",
         "governanceOff": "The three light-write tools are available in the main chat only — the daily governance scan gets no write tool at all."
       },
@@ -5887,13 +5939,6 @@
         "contact_refresh_profile": "Trigger one profile generation"
       },
       "prompt": {
-        "title": "System prompt",
-        "hint": "This is the editable segment of the task prompt used by each governance scan; identity documents and tool descriptions are assembled separately, outside this box.",
-        "label": "Task prompt",
-        "placeholder": "Leave empty to follow the built-in default prompt",
-        "save": "Save",
-        "saving": "Saving…",
-        "restoreDefault": "Restore default",
         "usingDefault": "Following the default",
         "customized": "Customized",
         "loadFailed": "Could not load the prompt · don't save yet, that would overwrite it with an empty draft"

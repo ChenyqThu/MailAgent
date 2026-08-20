@@ -38,6 +38,7 @@ import { SegmentedControl } from '@shared/components/ui/segmented'
 import { toastInfo } from '@shared/state/toast'
 
 import { BackfillBar } from './BackfillBar'
+import { ContactListSkeleton } from './ContactSkeleton'
 import { ContactVirtualRow, type ContactRowActions, type ContactRowsProps } from './ContactRow'
 import {
   rowHeightFor,
@@ -356,6 +357,11 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
             title={t('contacts.empty.library')}
             hint={t('contacts.empty.libraryHint')}
           />
+        ) : props.loading && props.rows.length === 0 ? (
+          // 冷启动骨架。🔴 只在**没有任何行**时出：`useContactList` 带
+          // `placeholderData:(prev)=>prev`，切视图 / 改搜索时上一份数据还在，那时候把列表
+          // 换成骨架等于把已经能看的内容藏起来（比留旧数据更糟）。
+          <ContactListSkeleton density={props.density} />
         ) : (
           <List<ContactRowsProps>
             rowComponent={ContactVirtualRow}

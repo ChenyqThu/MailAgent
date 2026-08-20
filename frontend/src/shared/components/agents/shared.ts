@@ -40,6 +40,15 @@ export const PROJECT_PROGRESS_AGENT_ID = 'project_progress_sync'
 // /chat/config 的 contactProfileEnabled —— 不走 useEnvStore（远程 web 端 env 只读）。
 export const CONTACT_PROFILE_AGENT_ID = 'contact_profile_agent'
 
+// 通讯录 agent 面 v2「通讯录治理」专型行 —— 后端 DB v65 播种单行（id 固定、
+// type='contact_governance'）。与画像行同款「单例行 + trigger_json 存字面配置」，这里只存
+// {fire_hour}（每日扫描时刻）—— 治理扫描一次跑完增量、不按人计费，没有第二个字段。
+// 🔴 总闸是 Labs 的 MAILAGENT_CONTACT_AGENT_ENABLED，卡片/抽屉读 /chat/config 投影出来的
+// `contactAgentEnabled`（`useContactFlags`，已与通讯录总闸取过合取）—— 不走 useEnvStore。
+// 🔴 与治理台抽屉共用这一个常量（`components/contacts/ContactAgentDrawer.tsx` 的脚部跳转
+// 用它点名要打开哪张卡的配置抽屉）。
+export const CONTACT_GOVERNANCE_AGENT_ID = 'contact_governance_agent'
+
 // 0813 主 Agent（默认助手）的编辑器派生/换一换种子 —— 主 agent 不走 id 派生外观（未配置时
 // 落 OFFICIAL_ASSISTANT_AVATAR），种子只喂 shuffle 递进。卡片与抽屉共用同一个值，否则同一个
 // 「换一换」在两处会走出两条不同的序列。

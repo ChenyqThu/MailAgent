@@ -9,8 +9,10 @@ import type { UseMutationResult } from '@tanstack/react-query'
 import { createContactsApi } from '@shared/api/contacts'
 import type { ContactProfileRefreshResult, ContactsApi } from '@shared/api/contacts'
 import type {
+  ContactAgentHistoryResponse,
   ContactAgentStatus,
   ContactBackfillProgress,
+  ContactProfileDailySummary,
   ContactDetailDto,
   ContactListResponse,
   ContactMailDirection,
@@ -238,13 +240,50 @@ export function useContactAgentStatus(
   })
 }
 
-/** 采纳 / 忽略 / 手动扫描之后的统一失效：两条队列 + 徽标计数。 */
+/** v2 工作台「运行」tab 的治理扫描历史。
+ *  🔴 `retry:false` —— 后端批还没合并时这个端点是 404，重试三次只是把「加载失败」拖慢
+ *  三倍；一次失败即进 error 态，由调用方渲染一行提示（红线：契约未上线不炸页面）。 */
+export const CONTACT_AGENT_HISTORY_LIMIT = 10
+
+export function useContactAgentHistory(
+  enabled: boolean
+): ReturnType<typeof useQuery<ContactAgentHistoryResponse>> {
+  const api = useContactsApi()
+  return useQuery({
+    queryKey: qk.contacts.agentHistory(CONTACT_AGENT_HISTORY_LIMIT),
+    queryFn: () => api.agentHistory({ limit: CONTACT_AGENT_HISTORY_LIMIT }),
+    enabled,
+    retry: false,
+    staleTime: 30_000
+  })
+}
+
+/** v2 工作台「运行」tab 的画像批处理只读镜子。同样 `retry:false` + 只在抽屉开着时发。
+ *  🔴 有意**不**在这里给画像行的开关：那个开关在 Agents 页的「联系人画像」卡上，两处都能
+ *  改会立刻分裂出「哪个是权威」（原型裁量 5）。 */
+export function useContactProfileDailySummary(
+  enabled: boolean
+): ReturnType<typeof useQuery<ContactProfileDailySummary>> {
+  const api = useContactsApi()
+  return useQuery({
+    queryKey: qk.contacts.profileDailySummary(),
+    queryFn: () => api.profileDailySummary(),
+    enabled,
+    retry: false,
+    staleTime: 30_000
+  })
+}
+
+/** 采纳 / 忽略 / 手动扫描之后的统一失效：两条队列 + 徽标计数 + 扫描历史。
+ *  🔴 历史也要失效 —— 手点「现在跑一次」之后历史里立刻多一行 queued，不失效的话
+ *  用户看到的又是「什么都没发生」（WP7 dogfood 的同一个坑）。 */
 export function useInvalidateContactSuggestions(): () => Promise<void> {
   const queryClient = useQueryClient()
   return async () => {
     await Promise.all([
       queryClient.invalidateQueries({ queryKey: ['contacts', 'suggestions'] }),
-      queryClient.invalidateQueries({ queryKey: qk.contacts.agentStatus() })
+      queryClient.invalidateQueries({ queryKey: qk.contacts.agentStatus() }),
+      queryClient.invalidateQueries({ queryKey: ['contacts', 'agent-history'] })
     ])
   }
 }

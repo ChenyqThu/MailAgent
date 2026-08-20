@@ -5,9 +5,11 @@
 
 import { request } from './http_client'
 import type {
+  ContactAgentHistoryResponse,
   ContactAgentRunResult,
   ContactAgentStatus,
   ContactBackfillProgress,
+  ContactProfileDailySummary,
   ContactDetailDto,
   ContactFunction,
   ContactKind,
@@ -109,6 +111,10 @@ export interface ContactsApi {
    *  则 `coalesced:true`），不等扫描结束。 */
   runAgentScan(): Promise<ContactAgentRunResult>
   agentStatus(): Promise<ContactAgentStatus>
+  /** v2 工作台「运行」tab 的治理扫描历史（最近 N 轮，默认 10）。 */
+  agentHistory(options?: { limit?: number }): Promise<ContactAgentHistoryResponse>
+  /** v2 工作台「运行」tab 的画像批处理只读镜子（另一个 agent 行的今日汇总）。 */
+  profileDailySummary(): Promise<ContactProfileDailySummary>
 }
 
 // re-export 常用类型给消费方（列表/详情组件不必逐个去 types/contact 拿）。
@@ -216,6 +222,14 @@ export function createContactsApi(baseUrl: string): ContactsApi {
     },
     agentStatus() {
       return request(baseUrl, 'GET', '/contacts/agent/status')
+    },
+    agentHistory(options = {}) {
+      return request(baseUrl, 'GET', '/contacts/agent/history', {
+        query: { limit: options.limit }
+      })
+    },
+    profileDailySummary() {
+      return request(baseUrl, 'GET', '/contacts/profile/daily-summary')
     }
   }
 }

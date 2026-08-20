@@ -1,7 +1,12 @@
-// 通讯录 Agent 治理台抽屉（WP7；原型 `cagent.jsx::AgentDrawer` :49-134）。
+// 通讯录 Agent **工作台**抽屉（v2 重构；原型 `mockups/contact-agent-v2/workbench.tsx`）。
 //
-// 右侧 460px 抽屉，两个 tab：待审建议（卡流）/ 它能做什么（工具面 + 系统提示词）。
-// 脚：节拍说明 +「现在跑一次治理扫描」。
+// v2 的职责重切（owner dogfood 后拍板）：配置整体搬去 Agents 页的「通讯录治理」卡，这个
+// 460px 抽屉只回答两件事 ——
+//   ① 有什么等我确认（「待审建议」tab）
+//   ② 它最近跑得怎么样（「运行」tab）
+// 原来的第三个 tab「它能做什么」（工具清单 + 提示词编辑器）整段搬走；脚上原来那个
+// 「现在跑一次治理扫描」上移进「运行」tab 的第一屏（它是运行面的主动作，挂在脚上时两个
+// tab 都看得见它，语义上只属于其中一个），脚位换成去 Agents 页的跳转行。
 //
 // 🔴 队列 tab 渲染**两批**：pending + blocked。后端 `list_suggestions` 只收单个
 // status，所以是两条查询。blocked = 采纳时被不变量守卫拦下的行（服务端主动把它写成
@@ -12,33 +17,372 @@
 // （§4.2 纪律，与画像建议值同一条）。
 //
 // 🔴 merge 类的「采纳」不落合并：服务端把这条标 adopted 并交回**升序归一**的 id 对，
-// 前端据此关抽屉 + 直入合并预览（唯一的人工确认路径，原型 `capp.jsx:365` 同款）。
+// 前端据此关抽屉 + 直入合并预览（唯一的人工确认路径）。
+//
+// 🔴 「上次扫描失败」出现在**两处**且口径一致：建议 tab 顶部一句短警示（空队列不等于
+// 没发现问题）+ 运行 tab 的「上次扫描」整行（带错误码与下一步）。两处读的是同一条
+// agent-status 查询，不会各说各话。
 
 import { useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
+import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { CircleCheckBig, Loader2, RefreshCw, ShieldAlert, Sparkles, X } from 'lucide-react'
+import {
+  ArrowRight,
+  CircleCheckBig,
+  CircleDot,
+  Loader2,
+  RefreshCw,
+  ShieldAlert,
+  Sparkles,
+  UserSearch,
+  X
+} from 'lucide-react'
 
-import type { ContactGovernanceSuggestion } from '@shared/api/types/contact'
+import type {
+  ContactAgentHistoryItem,
+  ContactGovernanceSuggestion
+} from '@shared/api/types/contact'
 import { Drawer } from '@shared/components/ui/drawer'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SegmentedControl } from '@shared/components/ui/segmented'
+import { useAgentsNavigation } from '@shared/components/agents/navigation'
+// 🔴 单源：治理行 id 与画像行 id 并排住在 `agents/shared.ts`（零依赖常量叶子），不在
+// contacts 侧另抄一份 —— 抄一份就等于两处 id 可以各自漂。
+import { CONTACT_GOVERNANCE_AGENT_ID } from '@shared/components/agents/shared'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { formatMatterAgo } from '@shared/lib/matterDerive'
 import { toastError, toastInfo, toastSuccess } from '@shared/state/toast'
 
-import { ContactAgentToolFace } from './ContactAgentToolFace'
 import { ContactSuggestionCard } from './ContactSuggestionCard'
-import { SecHead } from './parts'
+import { ContactPip, SecHead } from './parts'
 import {
+  useContactAgentHistory,
   useContactAgentStatus,
   useContactList,
+  useContactProfileDailySummary,
   useContactSuggestions,
   useContactsApi,
   useInvalidateContactSuggestions
 } from './hooks'
 
-type AgentTab = 'queue' | 'tools'
+type AgentTab = 'queue' | 'runs'
+
+/** 治理 job 的读态。`queued` 与 `running` 在界面上是同一档（「还没有结果」），但值域
+ *  必须四值齐全 —— 漏一个就会掉进「未知状态不渲染」的静默分支。 */
+type ScanStatus = ContactAgentHistoryItem['status']
+
+const SCAN_TONE: Record<ScanStatus, 'ok' | 'critical' | 'info'> = {
+  succeeded: 'ok',
+  failed: 'critical',
+  running: 'info',
+  queued: 'info'
+}
+
+/** 时刻归一到毫秒。🔴 两个端点的单位**不同**且都已核对过后端：
+ *  `agent/history` 的三个时刻来自 `async_jobs.created_at REAL`（epoch **秒**），
+ *  `profile/daily-summary` 的 `last_attempted_at` 来自 `contact.profile_attempted_at`
+ *  （epoch **毫秒**）。把秒当毫秒画会显示成 1970 年，反过来会显示成公元五万年。
+ *  判据用 1e11（≈1973 年的毫秒 / 公元 5138 年的秒）—— 两个量程之间没有歧义带。 */
+function toMillis(value: number): number {
+  return value < 1e11 ? value * 1000 : value
+}
+
+function ScanStatusPip({ status }: { status: ScanStatus }): React.ReactElement {
+  const { t } = useTranslation()
+  const settled = status === 'succeeded' || status === 'failed'
+  return (
+    <ContactPip
+      tone={SCAN_TONE[status]}
+      icon={
+        settled ? (
+          <CircleDot size={9.5} aria-hidden />
+        ) : (
+          <Loader2 size={9.5} aria-hidden className="animate-spin" />
+        )
+      }
+    >
+      {t(`contacts.agent.runs.status.${status}`)}
+    </ContactPip>
+  )
+}
+
+/** 「今天 04:00」「昨天 04:00」「08-15 04:00」—— 历史列表一列放得下的最短形式。
+ *  相对时间（「3 小时前」）留给「上次扫描」那一行：那里问的是新鲜度，这里问的是「哪天挂了」。 */
+function useWhenLabel(): (ms: number, now: number) => string {
+  const { t, i18n } = useTranslation()
+  const locale = i18n.language || 'zh-CN'
+  return (ms, now) => {
+    const at = new Date(ms)
+    const today = new Date(now)
+    const hm = at.toLocaleTimeString(locale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    })
+    const sameDay = (a: Date, b: Date): boolean =>
+      a.getFullYear() === b.getFullYear() &&
+      a.getMonth() === b.getMonth() &&
+      a.getDate() === b.getDate()
+    if (sameDay(at, today)) return t('contacts.agent.runs.today', { time: hm })
+    if (sameDay(at, new Date(now - 86_400_000))) {
+      return t('contacts.agent.runs.yesterday', { time: hm })
+    }
+    const md = at.toLocaleDateString(locale, { month: '2-digit', day: '2-digit' })
+    return `${md} ${hm}`
+  }
+}
+
+/* ── 运行 tab ─────────────────────────────────────────────────────────── */
+
+/** 上次扫描状态行。三档各自说清「下一步该做什么」：失败带错误码 + 一句人话
+ *  （`E_DISABLED` 的人话是「行停用了，去 Agents 页开」，不是干巴巴一个码）；
+ *  成功说产出几条；进行中不给假进度条。 */
+function LastScanRow({
+  status,
+  error,
+  at,
+  produced,
+  now
+}: {
+  status: ScanStatus
+  error: string | null
+  /** epoch 毫秒；未知 → null（不画一个假时间）。 */
+  at: number | null
+  produced: number | null
+  now: number
+}): React.ReactElement {
+  const { t, i18n } = useTranslation()
+  const detail =
+    status === 'succeeded'
+      ? t('contacts.agent.runs.detailOk', { count: produced ?? 0 })
+      : status === 'failed'
+        ? error === 'E_DISABLED'
+          ? t('contacts.agent.runs.detailDisabled')
+          : t('contacts.agent.runs.detailFailed')
+        : t('contacts.agent.runs.detailRunning')
+
+  return (
+    <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 px-3 py-2.5">
+      <div className="flex items-center gap-2">
+        <span className="shrink-0 text-meta font-medium text-ink-fg">
+          {t('contacts.agent.runs.lastScan')}
+        </span>
+        <ScanStatusPip status={status} />
+        {error !== null && error !== '' ? (
+          <code className="shrink-0 font-mono text-micro text-fail">{error}</code>
+        ) : null}
+        <span aria-hidden className="flex-1" />
+        {at !== null ? (
+          <span className="shrink-0 text-micro tabular-nums text-ink-fg-3">
+            {formatMatterAgo(at, now, i18n.language || 'zh-CN')}
+          </span>
+        ) : null}
+      </div>
+      <p className="mt-1 text-micro leading-[1.6] text-ink-fg-2 [text-wrap:pretty]">{detail}</p>
+    </div>
+  )
+}
+
+/** 历史一行：时间 / 状态 / 产出 或 错误码。三列固定次序，扫一眼就能看出「哪天挂了」。
+ *  🔴 没有「手动 / 定时」列 —— history 端点的行里没有触发来源字段，画一个只能靠猜的列
+ *  比不画更坏。 */
+function ScanHistoryRow({
+  run,
+  now,
+  whenLabel
+}: {
+  run: ContactAgentHistoryItem
+  now: number
+  whenLabel: (ms: number, now: number) => string
+}): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="flex items-center gap-2 rounded-[var(--r-ctl)] px-[9px] py-1.5 odd:bg-ink-fg/[0.025]">
+      <span className="w-[76px] shrink-0 font-mono text-micro tabular-nums text-ink-fg-2">
+        {whenLabel(toMillis(run.created_at), now)}
+      </span>
+      <ScanStatusPip status={run.status} />
+      <span className="min-w-0 flex-1 truncate text-micro text-ink-fg-2">
+        {run.last_error !== null && run.last_error !== '' ? (
+          <code className="font-mono text-micro text-fail">{run.last_error}</code>
+        ) : run.status === 'succeeded' && run.suggestions_created !== null ? (
+          t('contacts.agent.runs.produced', { count: run.suggestions_created })
+        ) : (
+          '—'
+        )}
+      </span>
+    </div>
+  )
+}
+
+/** 画像批处理小节 —— 另一个 agent 行（`contact_profile_agent`）的**只读镜子**。
+ *  🔴 这里不放开关：那行的开关在 Agents 页「联系人画像」卡上，两处都能改会立刻分裂出
+ *  「哪个是权威」（原型裁量 5）。 */
+function ProfileBatchSection({
+  now,
+  whenLabel
+}: {
+  now: number
+  whenLabel: (ms: number, now: number) => string
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const summary = useContactProfileDailySummary(true)
+  const data = summary.data
+
+  return (
+    <div>
+      <SecHead
+        icon={<UserSearch size={13} aria-hidden className="shrink-0 text-ink-fg-2" />}
+        title={t('contacts.agent.runs.profileTitle')}
+      />
+      {summary.isError ? (
+        <p className="text-micro leading-[1.6] text-warn">
+          {t('contacts.agent.runs.profileLoadFailed')}
+        </p>
+      ) : data === undefined ? (
+        <p className="text-micro leading-[1.6] text-ink-fg-3">
+          {t('contacts.agent.runs.loading')}
+        </p>
+      ) : (
+        <>
+          <div className="rounded-[var(--r-card)] border border-ink-border bg-ink-2 px-3 py-2.5">
+            <div className="flex items-baseline gap-2">
+              <span className="text-meta text-ink-fg-1">
+                {t('contacts.agent.runs.profileToday')}
+              </span>
+              <span className="font-mono text-aux font-semibold tabular-nums text-ink-fg">
+                {data.attempted}
+              </span>
+              <span className="text-meta text-ink-fg-2">
+                {t('contacts.agent.runs.profileUnit')}
+              </span>
+            </div>
+            <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+              <ContactPip tone="ok">
+                {t('contacts.agent.runs.profileOk', { count: data.ok })}
+              </ContactPip>
+              <ContactPip>
+                {t('contacts.agent.runs.profileSkipped', { count: data.skipped })}
+              </ContactPip>
+              <ContactPip tone={data.failed > 0 ? 'critical' : 'neutral'}>
+                {t('contacts.agent.runs.profileFailed', { count: data.failed })}
+              </ContactPip>
+            </div>
+            <p className="mt-2 text-micro leading-[1.6] text-ink-fg-3">
+              {data.last_attempted_at !== null
+                ? t('contacts.agent.runs.profileFoot', {
+                    last: whenLabel(toMillis(data.last_attempted_at), now),
+                    hour: String(data.fire_hour).padStart(2, '0')
+                  })
+                : t('contacts.agent.runs.profileFootNever', {
+                    hour: String(data.fire_hour).padStart(2, '0')
+                  })}
+            </p>
+          </div>
+          <p className="mt-[7px] text-micro leading-[1.6] text-ink-fg-3">
+            {t('contacts.agent.runs.skippedNote')}
+          </p>
+        </>
+      )}
+    </div>
+  )
+}
+
+function RunsTab({
+  now,
+  lastScanStatus,
+  lastScanError,
+  lastScanAt,
+  running,
+  onRun
+}: {
+  now: number
+  lastScanStatus: ScanStatus | null
+  lastScanError: string | null
+  lastScanAt: number | null
+  running: boolean
+  onRun: () => void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const whenLabel = useWhenLabel()
+  const history = useContactAgentHistory(true)
+  const runs = history.data?.items ?? []
+  // 「上次扫描」那一行的产出条数只有历史端点知道（agent-status 不带它）——
+  // 取历史第一条里 job 相同的那次；取不到就不报数（0 与「不知道」是两回事）。
+  const latestRun = runs[0]
+  const produced =
+    latestRun !== undefined && latestRun.status === lastScanStatus
+      ? latestRun.suggestions_created
+      : null
+
+  return (
+    <div className="flex flex-col gap-4">
+      <div>
+        {/* 主动作上移进运行 tab 的第一屏：整宽、accent soft 底，是这一屏唯一的写入口。 */}
+        <button
+          type="button"
+          disabled={running}
+          onClick={onRun}
+          className="inline-flex w-full items-center justify-center gap-1.5 rounded-[var(--r-ctl)] border border-coral/30 bg-coral/10 px-3 py-2 text-body font-medium text-coral transition-colors duration-fast ease-standard hover:bg-coral/[0.17] disabled:pointer-events-none disabled:opacity-60"
+        >
+          {running ? (
+            <Loader2 size={14} aria-hidden className="animate-spin" />
+          ) : (
+            <RefreshCw size={14} aria-hidden />
+          )}
+          {t(running ? 'contacts.agent.running' : 'contacts.agent.runNow')}
+        </button>
+        <p className="mt-1.5 text-micro leading-[1.6] text-ink-fg-3">
+          {t('contacts.agent.runs.runNote')}
+        </p>
+        {lastScanStatus !== null ? (
+          <div className="mt-2.5">
+            <LastScanRow
+              status={lastScanStatus}
+              error={lastScanError}
+              at={lastScanAt}
+              produced={produced}
+              now={now}
+            />
+          </div>
+        ) : null}
+      </div>
+
+      <div>
+        <SecHead
+          icon={<RefreshCw size={13} aria-hidden className="shrink-0 text-ink-fg-2" />}
+          title={t('contacts.agent.runs.historyTitle')}
+          count={history.isSuccess ? runs.length : undefined}
+        />
+        {history.isError ? (
+          <p className="text-micro leading-[1.6] text-warn">
+            {t('contacts.agent.runs.historyLoadFailed')}
+          </p>
+        ) : history.isPending ? (
+          <p className="text-micro leading-[1.6] text-ink-fg-3">
+            {t('contacts.agent.runs.loading')}
+          </p>
+        ) : runs.length === 0 ? (
+          <p className="text-micro leading-[1.6] text-ink-fg-3">
+            {t('contacts.agent.runs.historyEmpty')}
+          </p>
+        ) : (
+          <div className="flex flex-col">
+            {runs.map((run) => (
+              <ScanHistoryRow key={run.job_id} run={run} now={now} whenLabel={whenLabel} />
+            ))}
+          </div>
+        )}
+      </div>
+
+      <ProfileBatchSection now={now} whenLabel={whenLabel} />
+    </div>
+  )
+}
+
+/* ── 抽屉本体 ─────────────────────────────────────────────────────────── */
 
 export interface ContactAgentDrawerProps {
   open: boolean
@@ -56,9 +400,13 @@ export function ContactAgentDrawer({
   onMergePair
 }: ContactAgentDrawerProps): React.ReactElement {
   const { t } = useTranslation()
+  const navigate = useNavigate()
   const api = useContactsApi()
   const invalidate = useInvalidateContactSuggestions()
+  const openAgentConfig = useAgentsNavigation((state) => state.openConfig)
   const [tab, setTab] = useState<AgentTab>('queue')
+  // render 期不许调 Date.now()（react-hooks/purity）—— ContactDetail 同款快照模式。
+  const [now] = useState(() => Date.now())
 
   const pending = useContactSuggestions('pending', open)
   const blocked = useContactSuggestions('blocked', open)
@@ -67,8 +415,9 @@ export function ContactAgentDrawer({
   // （key 与胶囊徽标同源，react-query 去重，不多发请求）把终态显出来。
   // 🔴 两个键都是 optional：后端还没上线时是 undefined → 一行都不渲染。
   const agentStatus = useContactAgentStatus(open)
-  const lastScanStatus = agentStatus.data?.last_scan_status
-  const lastScanError = agentStatus.data?.last_scan_error
+  const lastScanStatus = agentStatus.data?.last_scan_status ?? null
+  const lastScanError = agentStatus.data?.last_scan_error ?? null
+  const lastScanAt = agentStatus.data?.last_scan_at ?? null
   const scanInFlight = lastScanStatus === 'queued' || lastScanStatus === 'running'
   // 相关人名字/头像的查表源。🔴 有意**不传 limit**：按往来密度截断会正好丢掉建议指向的
   // 那类冷门行（机器人 / 刚换的新地址），而查不到名字的卡只能显示 `#id`。key 与工作台
@@ -151,6 +500,9 @@ export function ContactAgentDrawer({
         </span>
         <div className="min-w-0 flex-1">
           <div className="text-aux font-semibold text-ink-fg">{t('contacts.agent.title')}</div>
+          {/* v2 把副标的前半句「通讯录作为内置工具注入」删了（i18n 值改，key 不变）——
+              那是在讲工具面，而工具面已经搬去 Agents 页；留着它会让人在这个抽屉里找一个
+              不存在的清单。 */}
           <div className="mt-px text-micro text-ink-fg-2">{t('contacts.agent.subtitle')}</div>
         </div>
         <button
@@ -171,7 +523,7 @@ export function ContactAgentDrawer({
           onChange={setTab}
           options={[
             { value: 'queue', label: t('contacts.agent.tab.queue', { count: pendingItems.length }) },
-            { value: 'tools', label: t('contacts.agent.tab.tools') }
+            { value: 'runs', label: t('contacts.agent.tab.runs') }
           ]}
         />
       </div>
@@ -184,7 +536,8 @@ export function ContactAgentDrawer({
                 {t('contacts.agent.loadFailed')}
               </p>
             ) : null}
-            {/* 扫描本身失败 ≠ 队列读取失败：前者是「这一轮压根没跑出来」，空队列是假象。 */}
+            {/* 扫描本身失败 ≠ 队列读取失败：前者是「这一轮压根没跑出来」，空队列是假象。
+                同一件事在「运行」tab 有整行的详版，这里只留一句短警示，口径一致。 */}
             {lastScanStatus === 'failed' ? (
               <p className="mb-2 text-micro leading-[1.6] text-warn">
                 {t('contacts.agent.scanFailed', { error: lastScanError ?? '—' })}
@@ -224,36 +577,38 @@ export function ContactAgentDrawer({
             )}
           </>
         ) : (
-          <ContactAgentToolFace />
+          <RunsTab
+            now={now}
+            lastScanStatus={lastScanStatus}
+            lastScanError={lastScanError}
+            lastScanAt={lastScanAt === null ? null : toMillis(lastScanAt)}
+            // 上一轮还在队列/在跑时也禁用 —— 否则再点一次只会被后端合流（coalesced），
+            // 用户看到的又是「什么都没发生」。
+            running={run.isPending || scanInFlight}
+            onRun={() => run.mutate()}
+          />
         )}
       </div>
 
-      <div className="flex shrink-0 items-center gap-2 border-t border-ink-border-soft px-4 py-[11px]">
-        <span className="text-micro leading-[1.5] text-ink-fg-3">
-          {t('contacts.agent.cadence')}
+      {/* 脚：原来放「现在跑一次」，v2 换成去 Agents 页的跳转行 —— 配置搬走了，这里必须有
+          一条明说「去哪儿改」的路，否则用户会在这个抽屉里找一个不存在的入口。 */}
+      <button
+        type="button"
+        onClick={() => {
+          openAgentConfig(CONTACT_GOVERNANCE_AGENT_ID)
+          onOpenChange(false)
+          void navigate({ to: '/agents', search: { tab: 'agents' } })
+        }}
+        className="flex shrink-0 items-center gap-2 border-t border-ink-border-soft px-4 py-[11px] text-left transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.04]"
+      >
+        <span className="min-w-0 flex-1 text-micro leading-[1.5] text-ink-fg-2">
+          {t('contacts.agent.gotoConfig')}
         </span>
-        <span aria-hidden className="flex-1" />
-        {/* 上一轮还在队列/在跑时说明白 —— 否则再点一次只会被后端合流（coalesced），
-            用户看到的又是「什么都没发生」。 */}
-        {scanInFlight ? (
-          <span className="shrink-0 text-micro leading-[1.5] text-ink-fg-2">
-            {t('contacts.agent.scanInFlight')}
-          </span>
-        ) : null}
-        <button
-          type="button"
-          disabled={run.isPending}
-          onClick={() => run.mutate()}
-          className="inline-flex shrink-0 items-center gap-1.5 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1 text-meta text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3 disabled:pointer-events-none disabled:opacity-60"
-        >
-          {run.isPending ? (
-            <Loader2 size={12} aria-hidden className="animate-spin" />
-          ) : (
-            <RefreshCw size={12} aria-hidden />
-          )}
-          {t(run.isPending ? 'contacts.agent.running' : 'contacts.agent.runNow')}
-        </button>
-      </div>
+        <span className="inline-flex shrink-0 items-center gap-1 text-meta text-coral">
+          {t('contacts.agent.gotoConfigCta')}
+          <ArrowRight size={12} aria-hidden />
+        </span>
+      </button>
     </Drawer>
   )
 }
