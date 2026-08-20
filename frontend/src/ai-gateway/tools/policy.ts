@@ -256,14 +256,22 @@ export const GATEWAY_TOOL_CLASSES: Record<string, GatewayToolClass> = {
   // surface an attention signal or a resource suggestion but never quietly clear it.
   matter_attention_triage: 'domain_write',
   matter_suggestion_resolve: 'domain_write',
-  // Contact Directory WP7 — the three直写 contact tools. domain_write on purpose: each one writes
-  // a single reversible column on the owner's own directory (kind can be set back; a former-email
-  // mark is undone by the same endpoint; a profile refresh only recomputes a derived document).
+  // Contact Directory WP7 — the 直写 contact tools. domain_write on purpose: each one writes
+  // reversible columns on the owner's own directory (kind can be set back; a former-email
+  // mark is undone by the same endpoint; a profile refresh only recomputes a derived document;
+  // an identity field is re-editable and a manager link is re-settable/clearable).
   // The class is ALSO what keeps them out of a governance run — that row denies domain_write
   // outright, so the scan can propose a kind change but never apply one.
   contact_set_kind: 'domain_write',
   contact_mark_former_email: 'domain_write',
   contact_refresh_profile: 'domain_write',
+  // The two direct-edit tools (owner 拍板「chat 里直接改字段」). Same class for the same reason:
+  // they hit the SAME endpoints as the directory UI's manual edit (PATCH /contacts/{id} and
+  // POST /contacts/{id}/manager) and are equally reversible — and the class is what keeps the
+  // unattended governance scan structurally unable to reach them, so identity fields and the
+  // reporting line remain propose-only for the scan even though a manual chat may now set them.
+  contact_update_fields: 'domain_write',
+  contact_set_manager: 'domain_write',
   // task 08-14 — 跟进配置的逐条编辑。🔴 有意**不是** domain_write：改的是一个无人值守、有网络
   // 出口的 run 的触发条件，与 internal_agent_update 同待遇（PRD D8）。代价是 im_chat 里改不了
   // 跟进节奏 —— owner 知情接受。两种 class 都挡住「跟进 run 改自己的跟进配置」。

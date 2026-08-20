@@ -1102,6 +1102,8 @@
       "contact_set_kind": "修改联系人分类",
       "contact_mark_former_email": "标记曾用邮箱",
       "contact_refresh_profile": "重新生成联系人画像",
+      "contact_update_fields": "修改联系人资料",
+      "contact_set_manager": "设置联系人上级",
       "notion_agent_chat": "咨询 Notion Agent",
       "plan_update": "更新计划",
       "suggest_followups": "准备追问建议"
@@ -6327,7 +6329,7 @@
       },
       "tools": {
         "footnote": "参数见实现侧工具签名；propose_ 开头的三件只写入待审队列，不动正式字段。",
-        "governanceOff": "标「写（轻）」的三件只在主对话里可用，每天那轮治理扫描一件写工具都拿不到。"
+        "governanceOff": "标「写（轻）」的那一组只在主对话里可用，每天那轮治理扫描一件写工具都拿不到。"
       },
       "perm": {
         "read": "读",
@@ -6343,7 +6345,9 @@
         "contact_propose_relation": "提上级建议，进待审队列",
         "contact_set_kind": "改判 person / robot / list，可直写，可撤销",
         "contact_mark_former_email": "把一个地址标为曾用，不删数据",
-        "contact_refresh_profile": "触发一次画像生成"
+        "contact_refresh_profile": "触发一次画像生成",
+        "contact_update_fields": "直接改身份字段（姓名 / 组织 / 职位 / 电话 / 手记…），保存即落锁，恒弹卡",
+        "contact_set_manager": "直接设置或解除上级，服务端管环检测，恒弹卡"
       },
       "prompt": {
         "usingDefault": "跟随默认",

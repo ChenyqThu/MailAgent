@@ -1102,6 +1102,8 @@
       "contact_set_kind": "Set contact type",
       "contact_mark_former_email": "Mark former address",
       "contact_refresh_profile": "Refresh contact profile",
+      "contact_update_fields": "Edit contact details",
+      "contact_set_manager": "Set contact manager",
       "notion_agent_chat": "Ask the Notion agent",
       "plan_update": "Update plan",
       "suggest_followups": "Suggesting follow-ups"
@@ -5921,7 +5923,7 @@
       },
       "tools": {
         "footnote": "See the implementation for exact signatures; the three propose_ tools only write to the review queue, never to the record itself.",
-        "governanceOff": "The three light-write tools are available in the main chat only — the daily governance scan gets no write tool at all."
+        "governanceOff": "The light-write tools are available in the main chat only — the daily governance scan gets no write tool at all."
       },
       "perm": {
         "read": "Read",
@@ -5937,7 +5939,9 @@
         "contact_propose_relation": "Propose a manager link, queued for review",
         "contact_set_kind": "Reclassify person / robot / list — direct write, reversible",
         "contact_mark_former_email": "Mark one address as former; no data deleted",
-        "contact_refresh_profile": "Trigger one profile generation"
+        "contact_refresh_profile": "Trigger one profile generation",
+        "contact_update_fields": "Edit identity fields directly (name / org / title / phone / notes…); saving also locks the field, always asks",
+        "contact_set_manager": "Set or clear the manager directly; the server guards against cycles, always asks"
       },
       "prompt": {
         "usingDefault": "Following the default",

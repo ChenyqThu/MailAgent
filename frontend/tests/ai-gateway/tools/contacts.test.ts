@@ -8,6 +8,7 @@ import { describe, expect, test } from 'vitest'
 import type { Tool } from 'ai'
 
 import { buildGatewayTools } from '../../../src/ai-gateway/tools'
+import { MailAgentDomainClient } from '../../../src/ai-gateway/python/domainClient'
 import {
   createContactProposeTools,
   createContactReadTools,
@@ -19,7 +20,7 @@ import {
 import { CONTACT_PROPOSE_TOOLS } from '../../../src/ai-gateway/tools/policy'
 import { ApprovalGuard } from '../../../src/ai-gateway/security/approval'
 import type { GatewayToolAuditCollector } from '../../../src/ai-gateway/tools/types'
-import { mockDomain, okEnvelope, runTool } from './_helpers'
+import { errEnvelope, mockDomain, okEnvelope, runTool } from './_helpers'
 
 const ALL_CONTACT_TOOL_NAMES = [
   ...GATEWAY_CONTACT_READ_TOOL_NAMES,
@@ -148,6 +149,41 @@ function reads(collector: GatewayToolAuditCollector = []) {
   return createContactReadTools(contactDomain(), collector)
 }
 
+/** The two direct-edit tools need the HTTP METHOD in the assertion (PATCH /contacts/{id} is the
+ *  same URL as GET /contacts/{id} — asserting the URL alone would pass even if the tool issued a
+ *  read), and `mockDomain`'s responder只收 (url, body). Rather than widen that shared helper's
+ *  signature — every other tool test calls it — this builds the same client with a fetchImpl that
+ *  records the method too. */
+interface WireCall {
+  method: string
+  url: string
+  body?: string
+}
+
+function methodCapturingDomain(
+  capture: WireCall[],
+  responder: (call: WireCall) => { status?: number; json: unknown } = () => okEnvelope({ ok: true })
+): MailAgentDomainClient {
+  const fetchImpl = (async (input: string | URL | Request, init?: RequestInit) => {
+    const call: WireCall = {
+      method: String(init?.method ?? 'GET'),
+      url: String(input),
+      body: init?.body as string | undefined
+    }
+    capture.push(call)
+    const r = responder(call)
+    return new Response(JSON.stringify(r.json), {
+      status: r.status ?? 200,
+      headers: { 'Content-Type': 'application/json' }
+    })
+  }) as unknown as typeof fetch
+  return new MailAgentDomainClient({
+    baseUrl: 'http://127.0.0.1:8200/api',
+    localToken: 't',
+    fetchImpl
+  })
+}
+
 /** needsApproval-then-execute, the way streamText drives an approval-gated write. */
 async function runWrite(
   tool: Tool,
@@ -195,7 +231,7 @@ describe('buildGatewayTools — MAILAGENT_CONTACTS_ENABLED gate', () => {
     for (const name of ALL_CONTACT_TOOL_NAMES) expect(tools[name], name).toBeUndefined()
   })
 
-  test('flag on + guard → all nine register in manual chat', () => {
+  test('flag on + guard → all eleven register in manual chat', () => {
     const tools = buildGatewayTools({
       domain: contactDomain(),
       approvalGuard: new ApprovalGuard(),
@@ -519,6 +555,30 @@ describe('contact writes — approval + the runtime mode belt', () => {
     expect(capture[2].url).toBe('http://127.0.0.1:8200/api/contacts/12/profile/refresh')
   })
 
+  test('the two direct-edit writes ask too, on their own endpoints', async () => {
+    const capture: WireCall[] = []
+    const tools = createContactWriteTools(methodCapturingDomain(capture), [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    const patch = await runWrite(
+      tools.contact_update_fields,
+      { contact_id: 12, role_title: 'AE' },
+      'tc-d'
+    )
+    expect(patch.asks).toBe(true)
+    expect(capture[0].method).toBe('PATCH')
+    expect(capture[0].url).toBe('http://127.0.0.1:8200/api/contacts/12')
+
+    const manager = await runWrite(
+      tools.contact_set_manager,
+      { contact_id: 12, manager_contact_id: 3 },
+      'tc-e'
+    )
+    expect(manager.asks).toBe(true)
+    expect(capture[1].method).toBe('POST')
+    expect(capture[1].url).toBe('http://127.0.0.1:8200/api/contacts/12/manager')
+  })
+
   test("'auto-reversible' does not relax the two edit-tier writes; only the preview-tier refresh", async () => {
     const guard = new ApprovalGuard()
     const tools = createContactWriteTools(contactDomain(), [], guard, {
@@ -555,5 +615,266 @@ describe('contact writes — approval + the runtime mode belt', () => {
       runWrite(tools.contact_set_kind, { contact_id: 12, kind: 'robot' }, 'tc-denied')
     ).rejects.toThrow(/E_CONTEXT_MODE_DENIED/)
     expect(capture).toEqual([]) // no domain call was made
+  })
+})
+
+// ── the 直写 pair (owner 拍板「chat 里直接改字段方便多了」) ────────────────────────────────────
+//
+// Both hit the SAME REST endpoints the directory UI's manual edit hits (PATCH /contacts/{id} and
+// POST /contacts/{id}/manager), so the load-bearing assertions here are about the WIRE — that the
+// tool is a thin envelope and not a second implementation that could drift from the UI's
+// semantics — plus the two safety facts (always-ask in manual, structurally denied in the
+// governance venue).
+describe('contact_update_fields — identity field PATCH', () => {
+  const parse = (input: unknown): { success: boolean } => {
+    const schema = (
+      createContactWriteTools(contactDomain(), [], new ApprovalGuard(), {}).contact_update_fields as {
+        inputSchema: { safeParse(i: unknown): { success: boolean } }
+      }
+    ).inputSchema
+    return schema.safeParse(input)
+  }
+
+  test('🔴 contact_id alone is rejected at the schema — "未提供" is not "clear everything"', () => {
+    expect(parse({ contact_id: 12 }).success).toBe(false)
+    // one field is enough, and it is enough for EVERY field (no privileged key)
+    for (const field of [
+      'display_name',
+      'formal_name',
+      'organization',
+      'department',
+      'role_title',
+      'phone'
+    ]) {
+      expect(parse({ contact_id: 12, [field]: 'x' }).success, field).toBe(true)
+    }
+    // an explicit null IS a change (clear the field), so it satisfies the "at least one" rule
+    expect(parse({ contact_id: 12, organization: null }).success).toBe(true)
+  })
+
+  test('🔴 `notes` is structurally unrepresentable — 整字段覆盖不该碰 owner 的私有手记', () => {
+    // The endpoint ACCEPTS notes (ContactPatchRequest has it); the tool deliberately does not
+    // expose it (owner 拍板 0819). This tool replaces a whole field, so writing notes would mean
+    // overwriting prose the model never read — data loss, not an edit. An append-only note tool
+    // is the right shape if that need shows up. 🔴 The assertion pairs with a positive case so a
+    // schema that rejected EVERYTHING would not read as "notes is blocked".
+    expect(parse({ contact_id: 12, notes: 'AI 觉得该记一笔' }).success).toBe(false)
+    expect(parse({ contact_id: 12, notes: null }).success).toBe(false)
+    expect(parse({ contact_id: 12, role_title: 'AE', notes: 'x' }).success).toBe(false)
+    expect(parse({ contact_id: 12, role_title: 'AE' }).success).toBe(true)
+  })
+
+  test('schema shape: strict keys, positive int id, enum-checked function/seniority', () => {
+    expect(parse({ contact_id: 12, kind: 'robot' }).success).toBe(false) // not a PATCH field
+    expect(parse({ contact_id: 12, name: 'x' }).success).toBe(false) // not a column at all
+    expect(parse({ contact_id: 0, role_title: 'AE' }).success).toBe(false)
+    expect(parse({ contact_id: -3, role_title: 'AE' }).success).toBe(false)
+    expect(parse({ contact_id: '12', role_title: 'AE' }).success).toBe(false)
+    expect(parse({ contact_id: 12, function: 'tech' }).success).toBe(true)
+    expect(parse({ contact_id: 12, function: 'sales' }).success).toBe(false)
+    expect(parse({ contact_id: 12, seniority: 'director' }).success).toBe(true)
+    expect(parse({ contact_id: 12, seniority: 'ic' }).success).toBe(false)
+    // null clears an enum column too
+    expect(parse({ contact_id: 12, function: null }).success).toBe(true)
+  })
+
+  test('the PATCH body carries ONLY the spelled keys — an omitted field is not sent as null', async () => {
+    const capture: WireCall[] = []
+    const tools = createContactWriteTools(methodCapturingDomain(capture), [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await runWrite(
+      tools.contact_update_fields,
+      { contact_id: 12, role_title: 'Account Executive', department: null },
+      'tc-patch'
+    )
+    // 🔴 The router splits "provided" from "not provided" with model_dump(exclude_unset=True):
+    // a key present with null CLEARS the column (and locks it), a key that never appears is left
+    // untouched. Sending the whole object with nulls would silently wipe six fields per call.
+    expect(JSON.parse(capture[0].body ?? '{}')).toEqual({
+      role_title: 'Account Executive',
+      department: null
+    })
+    expect(capture[0].method).toBe('PATCH')
+  })
+
+  test('🔴 a LOCKED field is passed straight through, and the server-refreshed locks come back', async () => {
+    // Lock semantics are the UI's, verbatim, because it is the same endpoint: PATCH does not
+    // refuse a locked field — it overwrites it and re-stamps the lock ("保存即落锁", service.py
+    // update_identity_fields). The tool must therefore NOT invent a client-side refusal, and it
+    // must hand the refreshed lock map back so the model can see what it just pinned.
+    // (DETAIL.identity_locks already marks `organization` as owner-locked.)
+    const capture: WireCall[] = []
+    const domain = methodCapturingDomain(capture, () =>
+      okEnvelope({
+        fields: { organization: 'Omada Networks' },
+        locks: { organization: 1_770_000_000_000 },
+        contact: DETAIL
+      })
+    )
+    const tools = createContactWriteTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    const { result } = await runWrite(
+      tools.contact_update_fields,
+      { contact_id: 12, organization: 'Omada Networks' },
+      'tc-locked'
+    )
+    expect(JSON.parse(capture[0].body ?? '{}')).toEqual({ organization: 'Omada Networks' })
+    expect((result as { locks: Record<string, number> }).locks.organization).toBe(1_770_000_000_000)
+  })
+
+  test('a server-side field rejection surfaces as a tool error, unmodified', async () => {
+    const capture: WireCall[] = []
+    const domain = methodCapturingDomain(capture, () =>
+      errEnvelope('E_INVALID_ARG', 'function must be one of (...)', 400)
+    )
+    const tools = createContactWriteTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await expect(
+      runWrite(tools.contact_update_fields, { contact_id: 12, role_title: 'AE' }, 'tc-4xx')
+    ).rejects.toThrow(/E_INVALID_ARG/)
+  })
+})
+
+describe('contact_set_manager — the reporting line', () => {
+  const parse = (input: unknown): { success: boolean } => {
+    const schema = (
+      createContactWriteTools(contactDomain(), [], new ApprovalGuard(), {})
+        .contact_set_manager as {
+        inputSchema: { safeParse(i: unknown): { success: boolean } }
+      }
+    ).inputSchema
+    return schema.safeParse(input)
+  }
+
+  test('schema: both ids required, manager nullable, nothing else accepted', () => {
+    expect(parse({ contact_id: 12, manager_contact_id: 3 }).success).toBe(true)
+    expect(parse({ contact_id: 12, manager_contact_id: null }).success).toBe(true)
+    expect(parse({ contact_id: 12 }).success).toBe(false) // omission ≠ clearing
+    expect(parse({ contact_id: 12, manager_contact_id: 0 }).success).toBe(false)
+    // 0819 收尾：输入键 === wire 键 === 服务端列名 === contact_propose_relation 的用词。
+    // 曾短暂叫过 supervisor_contact_id，这条钉住那个别名不会悄悄复活成第二种写法。
+    // 🔴 必须把**必填的** manager_contact_id 一起给：只传别名的话，拒绝来自「少了必填键」
+    // 而不是「别名不被接受」，那样即使 schema 真的重新收下别名这条也照样绿（变异实测）。
+    expect(
+      parse({ contact_id: 12, manager_contact_id: 3, supervisor_contact_id: 3 }).success
+    ).toBe(false)
+    // src 不在 wire 形状里（REST 面恒写 'manual'）
+    expect(parse({ contact_id: 12, manager_contact_id: 3, src: 'manual' }).success).toBe(false)
+  })
+
+  test('sets the link, and null CLEARS it — both on the wire key the server expects', async () => {
+    const capture: WireCall[] = []
+    const tools = createContactWriteTools(methodCapturingDomain(capture), [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await runWrite(
+      tools.contact_set_manager,
+      { contact_id: 12, manager_contact_id: 3 },
+      'tc-set'
+    )
+    await runWrite(
+      tools.contact_set_manager,
+      { contact_id: 12, manager_contact_id: null },
+      'tc-clear'
+    )
+    expect(capture[0].url).toBe('http://127.0.0.1:8200/api/contacts/12/manager')
+    expect(JSON.parse(capture[0].body ?? '{}')).toEqual({ manager_contact_id: 3 })
+    // 🔴 null must reach the wire as an explicit null (that is how the server clears the link);
+    // dropping the key would make "解除上级" a silent no-op.
+    expect(JSON.parse(capture[1].body ?? '{}')).toEqual({ manager_contact_id: null })
+    // `src` is NOT in the wire shape — the REST face always writes 'manual' server-side.
+    expect(JSON.parse(capture[0].body ?? '{}').src).toBeUndefined()
+  })
+
+  test("the server's cycle guard is not re-implemented here — its 4xx becomes the tool error", async () => {
+    const capture: WireCall[] = []
+    const domain = methodCapturingDomain(capture, () =>
+      errEnvelope('E_MANAGER_CYCLE', 'would create a reporting cycle', 400)
+    )
+    const tools = createContactWriteTools(domain, [], new ApprovalGuard(), {
+      contextMode: 'manual_chat'
+    })
+    await expect(
+      runWrite(tools.contact_set_manager, { contact_id: 12, manager_contact_id: 3 }, 'tc-cyc')
+    ).rejects.toThrow(/E_MANAGER_CYCLE/)
+    expect(capture).toHaveLength(1) // one attempt, no client-side pre-check, no retry
+  })
+})
+
+describe('the 直写 pair — approval floor + venue floor', () => {
+  const PAIR = ['contact_update_fields', 'contact_set_manager'] as const
+  const INPUTS: Record<(typeof PAIR)[number], unknown> = {
+    contact_update_fields: { contact_id: 12, role_title: 'AE' },
+    contact_set_manager: { contact_id: 12, manager_contact_id: 3 }
+  }
+
+  test("'auto-reversible' never relaxes them (edit tier, no policyEvaluate seam)", async () => {
+    const tools = createContactWriteTools(contactDomain(), [], new ApprovalGuard(), {
+      contextMode: 'manual_chat',
+      approvalMode: 'auto-reversible'
+    })
+    for (const name of PAIR) {
+      const needsApproval = tools[name].needsApproval as (
+        i: unknown,
+        o: { toolCallId: string }
+      ) => boolean | Promise<boolean>
+      expect(await needsApproval(INPUTS[name], { toolCallId: `ar-${name}` }), name).toBe(true)
+    }
+  })
+
+  test("the owner's explicit 'auto' tier is what makes them card-free (they ARE configurable)", async () => {
+    // The counterpart of the assertion above: the pair is factory-`ask` (tool_prefs.py), not
+    // 恒-ask. A test that only proved "always true" would also pass on a hard-coded floor and
+    // would hide the difference from email_prepare_send / run_command.
+    const tools = createContactWriteTools(contactDomain(), [], new ApprovalGuard(), {
+      contextMode: 'manual_chat',
+      toolApprovalPrefs: {
+        contact_update_fields: { tier: 'auto', source: 'owner' },
+        contact_set_manager: { tier: 'auto', source: 'owner' }
+      }
+    })
+    for (const name of PAIR) {
+      const needsApproval = tools[name].needsApproval as (
+        i: unknown,
+        o: { toolCallId: string }
+      ) => boolean | Promise<boolean>
+      expect(await needsApproval(INPUTS[name], { toolCallId: `auto-${name}` }), name).toBe(false)
+    }
+  })
+
+  test('🔴 runtime belt: both hard-reject inside a governance run and make NO domain call', async () => {
+    const capture: WireCall[] = []
+    const tools = createContactWriteTools(methodCapturingDomain(capture), [], new ApprovalGuard(), {
+      contextMode: 'contact_governance'
+    })
+    for (const name of PAIR) {
+      await expect(
+        runWrite(tools[name], INPUTS[name], `denied-${name}`),
+        name
+      ).rejects.toThrow(/E_CONTEXT_MODE_DENIED/)
+    }
+    expect(capture).toEqual([])
+  })
+
+  test('🔴 registration belt: the governance ToolSet never contains them in the first place', () => {
+    const tools = buildGatewayTools({
+      domain: contactDomain(),
+      approvalGuard: new ApprovalGuard(),
+      contactToolsEnabled: true,
+      contactAgentEnabled: true,
+      contextMode: 'contact_governance',
+      agentRunContext: {
+        agentId: 'contact_governance_agent',
+        allowedTools: [],
+        skills: ['email', 'search'],
+        contactGovernanceRun: true
+      }
+    } as Parameters<typeof buildGatewayTools>[0])
+    // canary: this really is a governance assembly, not an empty/broken one
+    expect(tools.contact_propose_update, 'the propose channel is missing — not a real governance face').toBeDefined()
+    for (const name of PAIR) expect(tools[name], name).toBeUndefined()
   })
 })
