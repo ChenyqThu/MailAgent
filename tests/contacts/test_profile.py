@@ -223,6 +223,42 @@ def test_evidence_prioritizes_target_authored_before_participation(db):
     assert evidence.user_content.index("Target-authored signal") < evidence.user_content.index("Broadcast 25")
 
 
+def test_kos_reference_fence_query_and_budget(db):
+    _seed_contact(db, 1, mail_count=1)
+    _seed_mail(db, 1, 1, "Evidence " * 100)
+
+    class FakeKos:
+        configured = True
+
+        def __init__(self):
+            self.queries = []
+
+        def query(self, query, *, limit):
+            self.queries.append((query, limit))
+            return [{"title": "Person 1", "slug": "people/person-1", "chunk_text": "K" * 5000}]
+
+    kos = FakeKos()
+    with _conn(db) as conn:
+        evidence = profile.build_profile_evidence(
+            conn,
+            contact_id=1,
+            db_path=db,
+            use_kos=True,
+            kos_client=kos,
+        )
+
+    assert kos.queries == [("Person 1 p1@example.com", 5)]
+    assert "KOS REFERENCE (BACKGROUND ONLY; DO NOT CITE)" in evidence.user_content
+    assert "UNTRUSTED_KOS_REFERENCE_START" in evidence.user_content
+    assert "UNTRUSTED_KOS_REFERENCE_END" in evidence.user_content
+    reference_content = evidence.user_content.split("UNTRUSTED_KOS_REFERENCE_START\n", 1)[1].split(
+        "\nUNTRUSTED_KOS_REFERENCE_END", 1
+    )[0]
+    assert profile.PROFILE_KOS_REFERENCE_CHAR_BUDGET == 3000
+    assert len(reference_content) <= 3000
+    assert "…[truncated]" in reference_content
+
+
 def test_prompt_family_contains_skip_actions_and_custom_append():
     first = build_profile_system_prompt(
         mode="first",
@@ -248,6 +284,14 @@ def test_prompt_family_contains_skip_actions_and_custom_append():
     assert "no target signal" in first
     assert "Never write a profile about anyone other than the TARGET CONTACT" in first
     assert "TARGET CONTACT remains the only person" in incremental
+    assert "Facts are table stakes; TEXTURE is the value" in first
+    assert "executive summary of the current state of play" in first
+    assert "recurs across multiple emails" in first
+    assert "single-email signal belongs in evolution" in first
+    assert "KOS_REFERENCE is background context and may be stale" in first
+    assert "[id:N] citations may refer only to NEW EMAIL EVIDENCE" in first
+    assert "never silently absorb contradictions" in incremental
+    assert "repeated new citation that supports an existing claim means 强化" in incremental
 
 
 def test_profile_config_hot_reads_row_and_bad_trigger_defaults(db):
@@ -256,6 +300,7 @@ def test_profile_config_hot_reads_row_and_bad_trigger_defaults(db):
     assert initial.enabled is False
     assert initial.fire_hour == 4
     assert initial.daily_limit == 50
+    assert initial.use_kos is True
     with _conn(db) as conn:
         conn.execute(
             "UPDATE report_agent SET enabled=1, model='provider:model', "
@@ -270,6 +315,18 @@ def test_profile_config_hot_reads_row_and_bad_trigger_defaults(db):
     assert updated.prompt == "tail"
     assert updated.fire_hour == 4
     assert updated.daily_limit == 50
+    assert updated.use_kos is True
+
+    with _conn(db) as conn:
+        conn.execute(
+            "UPDATE report_agent SET trigger_json=? WHERE id='contact_profile_agent'",
+            (json.dumps({"fire_hour": "bad", "daily_limit": "bad", "use_kos": False}),),
+        )
+        conn.commit()
+    disabled = get_contact_profile_agent_config(db)
+    assert disabled.fire_hour == 4
+    assert disabled.daily_limit == 50
+    assert disabled.use_kos is False
 
 
 def test_model_chain_double_follow_semantics(monkeypatch):
@@ -289,8 +346,10 @@ def test_model_chain_double_follow_semantics(monkeypatch):
 class _FakeClient:
     def __init__(self, payload):
         self.payload = payload
+        self.calls = []
 
     async def classify(self, **kwargs):
+        self.calls.append(kwargs)
         return LLMResult(
             tool_input=self.payload,
             input_tokens=1,
@@ -319,6 +378,21 @@ def _valid_payload():
 
 
 def test_profile_schema_requires_structured_evolution_and_unambiguous_skip():
+    assert set(PROFILE_TOOL_SCHEMA["input_schema"]["properties"]) == {
+        "skip",
+        "reason",
+        "summary",
+        "role_title",
+        "formal_name",
+        "department",
+        "topics",
+        "projects",
+        "communication_style",
+        "contact_info",
+        "evolution",
+        "contradictions",
+        "evidence_window",
+    }
     validate(instance=_valid_payload(), schema=PROFILE_TOOL_SCHEMA["input_schema"])
 
     string_evolution = _valid_payload()
@@ -346,6 +420,36 @@ def test_profile_schema_requires_structured_evolution_and_unambiguous_skip():
     null_reason = _valid_payload()
     null_reason.update({"skip": False, "reason": None})
     validate(instance=null_reason, schema=PROFILE_TOOL_SCHEMA["input_schema"])
+
+
+@pytest.mark.asyncio
+async def test_kos_failure_is_fail_open_and_uses_five_second_timeout(db, monkeypatch):
+    _seed_contact(db, 1, mail_count=50)
+    _seed_mail(db, 1, 1, "Evidence " * 100)
+    constructor_args = []
+
+    class BrokenKos:
+        configured = True
+
+        def query(self, query, *, limit):
+            raise RuntimeError("kos unavailable")
+
+    def fake_kos_client(*, timeout_seconds):
+        constructor_args.append(timeout_seconds)
+        return BrokenKos()
+
+    monkeypatch.setattr(profile, "KOSClient", fake_kos_client)
+    llm = _FakeClient(_valid_payload())
+    assert profile.claim_profile_run(db, 1)
+    assert await profile.generate_contact_profile(
+        db,
+        1,
+        cfg=ContactProfileAgentConfig(row_exists=True, enabled=True, use_kos=True),
+        client=llm,
+    ) == "ok"
+    assert constructor_args == [profile.PROFILE_KOS_TIMEOUT_SECONDS]
+    assert profile.PROFILE_KOS_TIMEOUT_SECONDS <= 5.0
+    assert "KOS REFERENCE" not in llm.calls[0]["user_content"]
 
 
 @pytest.mark.asyncio

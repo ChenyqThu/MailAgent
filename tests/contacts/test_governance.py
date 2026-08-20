@@ -9,6 +9,7 @@ from types import SimpleNamespace
 import pytest
 
 from src.contacts import governance
+from src.contacts.governance_config import get_contact_governance_agent_config
 from src.contacts.service import ContactError, set_manager
 from src.mail.new_watcher import NewWatcher, _fire_contact_governance_if_due
 from src.mail.sync_store import SyncStore
@@ -192,6 +193,9 @@ def test_spec_shape_and_flag_gate(db, monkeypatch):
     assert spec["runKind"] == "contact_governance"
     assert spec["model"] == "provider:model"
     assert spec["fallbackModels"] == ["fallback:a"]
+    assert spec["useKos"] is True
+    assert "kos_search / kos_get_page" in spec["prompt"]["taskPrompt"]
+    assert "KOS 是参考，不是证据" in spec["prompt"]["taskPrompt"]
     # 🔴 WP7 批② —— toolPolicy 恰好两个键，多一个少一个都是安全语义变化：
     #   · allowedTools 恒 []（工具面由 gateway 按 class 推导，名单交集在这个 venue 没有合法用途）
     #   · skills = 挂载集。**不是可选润色**：gateway 的 per-agent skill MOUNT 门对任何带
@@ -209,6 +213,43 @@ def test_spec_shape_and_flag_gate(db, monkeypatch):
     with pytest.raises(ContactError) as exc_info:
         governance.assemble_contact_governance_spec(job)
     assert exc_info.value.code == "E_DISABLED"
+
+
+def test_governance_use_kos_hot_read_default_and_spec_disable(db, monkeypatch):
+    import src.config as config_module
+
+    _, path = db
+    initial = get_contact_governance_agent_config(path)
+    assert initial.use_kos is True
+    with sqlite3.connect(path) as conn:
+        conn.execute(
+            "UPDATE report_agent SET enabled=1, trigger_json=? "
+            "WHERE id='contact_governance_agent'",
+            (json.dumps({"fire_hour": "bad", "use_kos": False}),),
+        )
+        conn.commit()
+    cfg = get_contact_governance_agent_config(path)
+    assert cfg.fire_hour == 5
+    assert cfg.use_kos is False
+    monkeypatch.setattr(
+        config_module,
+        "config",
+        SimpleNamespace(
+            contacts_enabled=True,
+            contact_agent_enabled=True,
+            sync_store_db_path=path,
+        ),
+    )
+    job = AsyncJob(
+        job_id=8, job_type="contact_governance", target_kind="contact_directory",
+        target_key="global", params={"trigger_kind": "schedule"}, status="queued",
+        idempotency_key=None, created_at=1.0, updated_at=1.0,
+        progress_done=0, progress_total=0, checkpoint_internal_id=None,
+        result=None, last_error=None, started_at=None, finished_at=None,
+    )
+    spec = governance.assemble_contact_governance_spec(job)
+    assert spec["useKos"] is False
+    assert "kos_search / kos_get_page" not in spec["prompt"]["taskPrompt"]
 
 
 def test_scheduled_tick_uses_row_enabled_and_fire_hour(db, monkeypatch):

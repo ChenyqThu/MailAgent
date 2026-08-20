@@ -44,6 +44,10 @@ _GOVERNANCE_PROMPT = """你是 MailAgent 的通讯录管理员。任务：读新
 - 换邮箱成对提：先找交接句，再比对签名与同线程接续，说明哪个转正、哪个标曾用。
 - 宁缺毋滥：每轮只提有把握的少数几条；不确定不提，不猜，不删数据，一切保持可逆。"""
 
+_GOVERNANCE_KOS_GUIDANCE = """KOS 背景参考：
+- 对涉及身份、职位、组织的判断，先用 kos_search / kos_get_page 查此人的 wiki 页作背景参考。
+- KOS 是参考，不是证据；每条建议的 evidence 仍必须是邮件 message_id 与最短命中原文。"""
+
 
 class ContactGovernanceSuggestion(TypedDict):
     id: int
@@ -58,11 +62,19 @@ class ContactGovernanceSuggestion(TypedDict):
     decided_at: Optional[int]
 
 
+def _governance_prompt(*, use_kos: bool) -> str:
+    return (
+        _GOVERNANCE_PROMPT + f"\n\n{_GOVERNANCE_KOS_GUIDANCE}"
+        if use_kos
+        else _GOVERNANCE_PROMPT
+    )
+
+
 def default_governance_prompt() -> str:
-    return _GOVERNANCE_PROMPT
+    return _governance_prompt(use_kos=True)
 
 
-def _effective_prompt() -> str:
+def _effective_prompt(*, use_kos: bool = True) -> str:
     try:
         from src.agent_config.store import CONTACT_AGENT_DOC_NAME, get_agent_config_store
 
@@ -70,9 +82,10 @@ def _effective_prompt() -> str:
             CONTACT_AGENT_DOC_NAME, seed_if_absent=False
         )
         custom = (getattr(doc, "content", "") or "").strip()
-        return _GOVERNANCE_PROMPT + (f"\n\n{custom}" if custom else "")
+        prompt = _governance_prompt(use_kos=use_kos)
+        return prompt + (f"\n\n{custom}" if custom else "")
     except Exception:
-        return _GOVERNANCE_PROMPT
+        return _governance_prompt(use_kos=use_kos)
 
 
 def _json(value: Any) -> str:
@@ -335,7 +348,8 @@ def assemble_contact_governance_spec(job: Any) -> dict[str, Any]:
             "kind": str(params.get("trigger_kind") or "schedule"),
             "firedAt": datetime.fromtimestamp(job.created_at, tz=timezone.utc).isoformat(),
         },
-        "prompt": {"taskPrompt": _effective_prompt()},
+        "prompt": {"taskPrompt": _effective_prompt(use_kos=cfg.use_kos)},
+        "useKos": cfg.use_kos,
         "model": cfg.model or None,
         # 🔴 allowedTools 恒 []：治理 run 的工具面由 gateway 按 class 从 `contact_governance`
         # 矩阵行 + wrapCfgForAgentRun 的读面 belt 推导（读全给、写一个不给、只留三个建议通道），

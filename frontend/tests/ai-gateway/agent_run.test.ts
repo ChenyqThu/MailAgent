@@ -2634,9 +2634,10 @@ function makeContactSpec(over?: Partial<AgentRunSpec>): AgentRunSpec {
     // ADMITS domain_write) if anything read the ladder instead of runKind.
     trigger: { kind: 'schedule', firedAt: '2026-08-19T02:00:00Z' },
     toolPolicy: { ...CONTACT_GOVERNANCE_TOOL_POLICY } as AgentRunSpec['toolPolicy'],
+    useKos: true,
     sessionTitle: '通讯录治理扫描',
     ...over
-  })
+  } as Partial<AgentRunSpec>)
 }
 
 describe('contact_governance — the governance venue (WP7)', () => {
@@ -2729,6 +2730,7 @@ describe('contact_governance — the governance venue (WP7)', () => {
       })
     )
     expect(ctx.contactGovernanceRun).toBe(true)
+    expect((ctx as typeof ctx & { useKos?: boolean }).useKos).toBe(true)
     expect(ctx.allowedTools).toEqual([]) // the list has no legal use in this venue
     expect(ctx.skills).toEqual(['email']) // the mount list IS honoured (it only ever narrows)
     // a plain cron spec keeps the pre-WP7 object shape — the key is absent, not false.
@@ -2743,6 +2745,27 @@ describe('contact_governance — the governance venue (WP7)', () => {
       new AbortController().signal
     )
     expect(seenTools[0].sort()).toEqual(EXPECTED_CONTACT_FACE)
+  })
+
+  test('useKos false strips every kos_* tool while true keeps the KOS read face', async () => {
+    const enabledTools: string[][] = []
+    await runHeadlessAgent(
+      contactCfg(enabledTools),
+      { jobId: 7, spec: makeContactSpec({ useKos: true } as Partial<AgentRunSpec>), sessionId: null },
+      new AbortController().signal
+    )
+    expect(enabledTools[0].some((name) => name.startsWith('kos_'))).toBe(true)
+
+    const disabledTools: string[][] = []
+    await runHeadlessAgent(
+      contactCfg(disabledTools),
+      { jobId: 8, spec: makeContactSpec({ useKos: false } as Partial<AgentRunSpec>), sessionId: null },
+      new AbortController().signal
+    )
+    expect(disabledTools[0].some((name) => name.startsWith('kos_'))).toBe(false)
+    expect(disabledTools[0].sort()).toEqual(
+      EXPECTED_CONTACT_FACE.filter((name) => !name.startsWith('kos_'))
+    )
   })
 
   test('a tampered spec (max grants + hostile allowedTools) changes nothing', async () => {
