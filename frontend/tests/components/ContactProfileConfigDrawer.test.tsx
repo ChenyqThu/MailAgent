@@ -1,11 +1,12 @@
 // @vitest-environment happy-dom
 //
 // WP6 —— 联系人画像配置抽屉。重点锁**排程的 round-trip**：
-// `{fire_hour, daily_limit}` 存在 trigger_json 里，读回来要回填到同两个输入框。
+// `{fire_hour, daily_limit, use_kos}` 存在 trigger_json 里，读回来要回填到对应控件。
 // 这条闸的由来：`wire.resolve_agent` 起初不投影 contact_profile 的 trigger（`_projects_trigger`
 // 只含 custom / project_progress），于是「存得进读不回」—— 抽屉保存 6 点，重开又显示 4 点，
 // 真值却是 6。后端补投影后由这条测试守住，别再退回去。
-// 另外锁：trigger_json 是**整列覆写**，所以两个字段必须一起发；未触碰排程时不发 trigger。
+// 另外锁：trigger_json 是**整列覆写**，所以同列每个字段都要一起发；未触碰时不发 trigger。
+// `use_kos`（参考 KOS）单列一个 describe，见文件下半部分。
 import { afterEach, beforeAll, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
@@ -103,16 +104,23 @@ describe('ContactProfileConfigDrawer · 排程 round-trip', () => {
     expect(capInput().value).toBe('50')
   })
 
-  // 🔴 trigger_json 是整列覆写不是 merge：只改时刻也必须把上限一起发，否则上限被抹回缺省。
-  test('只改时刻，保存时两个字段一起发', async () => {
-    renderDrawer(makeCfg({ trigger: { fire_hour: 6, daily_limit: 120 } as never }))
+  // 🔴 trigger_json 是整列覆写不是 merge：只改时刻也必须把**同列的每个字段**一起发，
+  // 否则没改的那些被抹回缺省。
+  test('只改时刻，保存时同列三个字段一起发', async () => {
+    renderDrawer(
+      makeCfg({ trigger: { fire_hour: 6, daily_limit: 120, use_kos: false } as never })
+    )
 
     fireEvent.change(hourInput(), { target: { value: '9' } })
     fireEvent.click(screen.getByText('保存'))
 
     await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1))
     expect(mockSave.mock.calls[0]![0]).toBe('contact_profile_agent')
-    expect(mockSave.mock.calls[0]![1].trigger).toEqual({ fire_hour: 9, daily_limit: 120 })
+    expect(mockSave.mock.calls[0]![1].trigger).toEqual({
+      fire_hour: 9,
+      daily_limit: 120,
+      use_kos: false
+    })
   })
 
   test('没碰排程时 patch 不带 trigger（PATCH 缺席 = 不动列）', async () => {
@@ -122,6 +130,58 @@ describe('ContactProfileConfigDrawer · 排程 round-trip', () => {
 
     await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1))
     expect(mockSave.mock.calls[0]![1]).not.toHaveProperty('trigger')
+  })
+})
+
+// 「参考 KOS」= 同一列 trigger_json 的第三个字面字段（后端行级开关）。两件真会出错的事：
+//   ① **缺字段默认开** —— 老行的 trigger_json 里没有 `use_kos`，读成关会让一个从没被关过的
+//      开关在界面上显示成「关着」，owner 会以为功能没生效；
+//   ② 只动这个开关时，同列的 fire_hour / daily_limit 必须原样写回（整列覆写）。
+describe('ContactProfileConfigDrawer · 参考 KOS', () => {
+  function kosSwitch(): HTMLElement {
+    return screen.getByRole('switch', { name: '参考 KOS 资料' })
+  }
+
+  test('🔴 trigger 里没有 use_kos（老行）→ 开关显示「开」', () => {
+    renderDrawer(makeCfg({ trigger: { fire_hour: 6, daily_limit: 120 } as never }))
+
+    expect(kosSwitch().getAttribute('aria-checked')).toBe('true')
+  })
+
+  test('trigger 整个缺失（未投影）→ 同样显示「开」', () => {
+    renderDrawer(makeCfg({ trigger: null }))
+
+    expect(kosSwitch().getAttribute('aria-checked')).toBe('true')
+  })
+
+  test('存过 false → 如实回显「关」（证明上面两条不是因为恒真）', () => {
+    renderDrawer(
+      makeCfg({ trigger: { fire_hour: 6, daily_limit: 120, use_kos: false } as never })
+    )
+
+    expect(kosSwitch().getAttribute('aria-checked')).toBe('false')
+  })
+
+  test('野值（不是 boolean）→ 回落到开，不把字符串当真值', () => {
+    renderDrawer(
+      makeCfg({ trigger: { fire_hour: 6, daily_limit: 120, use_kos: 'no' } as never })
+    )
+
+    expect(kosSwitch().getAttribute('aria-checked')).toBe('true')
+  })
+
+  test('🔴 只关 KOS 开关，保存时把同列的时刻与上限原样一起发', async () => {
+    renderDrawer(makeCfg({ trigger: { fire_hour: 6, daily_limit: 120 } as never }))
+
+    fireEvent.click(kosSwitch())
+    fireEvent.click(screen.getByText('保存'))
+
+    await waitFor(() => expect(mockSave).toHaveBeenCalledTimes(1))
+    expect(mockSave.mock.calls[0]![1].trigger).toEqual({
+      fire_hour: 6,
+      daily_limit: 120,
+      use_kos: false
+    })
   })
 
   test('越界的时刻拒绝保存并给出反馈', async () => {

@@ -325,7 +325,7 @@ export type CustomAgentTrigger =
  *  是与 project_progress 同类的「拿 trigger_json 当自由配置列」用法：字面存每日批处理
  *  时刻与每轮人数上限，运行时由 `src/contacts/profile_config.py` 行内热读，不进
  *  `parse_trigger`（PUT /report-agents 不深校验 trigger，见 routers/reports.py::set_config）。
- *  🔴 整列覆写不是 merge：写的时候两个字段必须一起给。
+ *  🔴 整列覆写不是 merge：写的时候**每个字段都必须一起给**（少给一个就把它抹成缺省）。
  *
  *  只加进 `ReportConfigPatch`（写面）**不加进 `ReportAgentConfig`**（读面）：读面那个
  *  union 有十来处消费方按 `.v` / `.kind` 判别式收窄，把一个没有判别字段的成员塞进去会
@@ -334,16 +334,21 @@ export type CustomAgentTrigger =
 export interface ContactProfileTrigger {
   fire_hour: number
   daily_limit: number
+  /** 生成画像前先查此人的 KOS（gbrain）wiki 作背景参考。
+   *  🔴 **缺字段默认 true**（读侧回落，与后端同口径）—— 老行没有这个字段，读成 false 会让
+   *  一个从没被关过的开关在界面上显示成「关着」。写侧恒给（整列覆写）。 */
+  use_kos: boolean
 }
 
 /** v2「通讯录治理」单例行的 trigger_json —— 与上面的画像 trigger 同款用法（字面配置列，
- *  不进 `parse_trigger`），但**只有一个字段**：治理扫描一次跑完增量、不按人计费，没有
- *  「每轮人数上限」这回事。
- *  🔴 同样是整列覆写不是 merge —— 只有一个字段也要按整列写。
- *  读侧的运行时形状检查在 `ContactGovernanceConfigDrawer::readFireHour`（同上，读面 union
+ *  不进 `parse_trigger`），但**没有「每轮人数上限」**：治理扫描一次跑完增量、不按人计费。
+ *  🔴 同样是整列覆写不是 merge —— 两个字段都要按整列写。
+ *  读侧的运行时形状检查在 `ContactGovernanceConfigDrawer::readTrigger`（同上，读面 union
  *  不收它，免得毁掉十来处按判别式的收窄）。 */
 export interface ContactGovernanceTrigger {
   fire_hour: number
+  /** 治理扫描先查此人的 KOS（gbrain）wiki 再提身份建议。缺字段默认 true（同上）。 */
+  use_kos: boolean
 }
 
 export type CustomAgentTriggerV2Entry = CustomAgentTrigger extends infer Trigger

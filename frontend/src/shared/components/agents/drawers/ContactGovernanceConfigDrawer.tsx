@@ -65,6 +65,9 @@ const FALLBACK_NONE = '__none__'
 
 /** 排程缺省 —— 与后端治理配置的 dataclass 默认同值（行没配 trigger_json 时就按它跑）。 */
 const DEFAULT_FIRE_HOUR = 4
+/** 🔴 「参考 KOS」缺字段默认 **true**（与后端同口径）：老行的 trigger_json 里没有这个键，
+ *  读成 false 会让一个从没被关过的开关在界面上显示成「关着」。 */
+const DEFAULT_USE_KOS = true
 
 const PERMISSION_TONE: Record<ContactToolGroup['permission'], 'neutral' | 'info' | 'warn'> = {
   read: 'neutral',
@@ -74,15 +77,24 @@ const PERMISSION_TONE: Record<ContactToolGroup['permission'], 'neutral' | 'info'
 
 const TOOL_FACE_COUNT = CONTACT_TOOL_FACE_GROUPS.reduce((n, group) => n + group.tools.length, 0)
 
-/** 从 trigger_json 读字面排程字段。这行的 trigger **不是** `CustomAgentTrigger` 判别式
+/** 从 trigger_json 读字面配置字段。这行的 trigger **不是** `CustomAgentTrigger` 判别式
  *  （没有 `v`/`kind`），故 `ReportAgentConfig['trigger']` 的静态类型对不上 —— 在这里就地
  *  过一次 `unknown` 并做运行时形状检查（同 `ContactProfileConfigDrawer::readSchedule`）。 */
-function readFireHour(cfg: ReportAgentConfig | null): number {
-  const raw = cfg?.trigger as unknown as { fire_hour?: unknown } | null | undefined
+function readTrigger(cfg: ReportAgentConfig | null): { fireHour: number; useKos: boolean } {
+  const raw = cfg?.trigger as unknown as
+    | { fire_hour?: unknown; use_kos?: unknown }
+    | null
+    | undefined
   const hour = raw?.fire_hour
-  return typeof hour === 'number' && Number.isInteger(hour) && hour >= 0 && hour <= 23
-    ? hour
-    : DEFAULT_FIRE_HOUR
+  const kos = raw?.use_kos
+  return {
+    fireHour:
+      typeof hour === 'number' && Number.isInteger(hour) && hour >= 0 && hour <= 23
+        ? hour
+        : DEFAULT_FIRE_HOUR,
+    // 只有明确的 boolean 才算数：缺字段 / null / 野值一律回落 true。
+    useKos: typeof kos === 'boolean' ? kos : DEFAULT_USE_KOS
+  }
 }
 
 /** 只读工具清单 —— 迁自退役的 `ContactAgentToolFace`，行样式与 i18n key 一字未改。 */
@@ -132,6 +144,8 @@ export function ContactGovernanceConfigDrawer({
   const [fallbackModel, setFallbackModel] = useState<string>(FALLBACK_FOLLOW_GLOBAL)
   const [fallbackModelDirty, setFallbackModelDirty] = useState(false)
   const [fireHour, setFireHour] = useState(DEFAULT_FIRE_HOUR)
+  const [useKos, setUseKos] = useState(DEFAULT_USE_KOS)
+  // trigger_json 这一列的脏标记（时刻与 KOS 开关共用 —— 整列覆写，改一个就得把另一个也写回）。
   const [scheduleDirty, setScheduleDirty] = useState(false)
   const [avatar, setAvatar] = useState<AgentAvatarConfig | null>(null)
   const [avatarDirty, setAvatarDirty] = useState(false)
@@ -155,7 +169,9 @@ export function ContactGovernanceConfigDrawer({
           : cfg.fallback_models[0]
     )
     setFallbackModelDirty(false)
-    setFireHour(readFireHour(cfg))
+    const trigger = readTrigger(cfg)
+    setFireHour(trigger.fireHour)
+    setUseKos(trigger.useKos)
     setScheduleDirty(false)
     setAvatar(cfg.avatar ?? null)
     setAvatarDirty(false)
@@ -207,8 +223,8 @@ export function ContactGovernanceConfigDrawer({
             ? []
             : [fallbackModel]
     }
-    // 🔴 trigger_json 整列覆写：只有一个字段也按整列写。
-    if (scheduleDirty) patch.trigger = { fire_hour: fireHour }
+    // 🔴 trigger_json 整列覆写：两个字段一起发，少发一个会把它抹回缺省。
+    if (scheduleDirty) patch.trigger = { fire_hour: fireHour, use_kos: useKos }
     if (avatarDirty) patch.avatar = avatar
     try {
       await save(CONTACT_GOVERNANCE_AGENT_ID, patch)
@@ -299,27 +315,56 @@ export function ContactGovernanceConfigDrawer({
             />
           </Field>
 
-          {/* 排程。治理扫描一次跑完增量、不按人计费 → 只有时刻，没有「每轮上限」。 */}
+          {/* 排程 + 参考 KOS（同一列 trigger_json 的两个字面字段）。
+              治理扫描一次跑完增量、不按人计费 → 有时刻，没有「每轮上限」。 */}
           <Field
             label={t('agents.contactGovernance.schedule')}
             hint={t('agents.contactGovernance.scheduleHint')}
           >
-            <div className="flex items-center" style={{ gap: 10 }}>
-              <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
-                {t('agents.contactGovernance.dailyHour')}
-              </span>
-              <input
-                type="number"
-                min={0}
-                max={23}
-                aria-label={t('agents.contactGovernance.dailyHour')}
-                value={fireHour}
-                onChange={(e) => {
-                  setFireHour(Number(e.target.value))
-                  setScheduleDirty(true)
-                }}
-                style={{ ...inputStyle, width: 110 }}
-              />
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              <div className="flex items-center" style={{ gap: 10 }}>
+                <span style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))', flex: 1 }}>
+                  {t('agents.contactGovernance.dailyHour')}
+                </span>
+                <input
+                  type="number"
+                  min={0}
+                  max={23}
+                  aria-label={t('agents.contactGovernance.dailyHour')}
+                  value={fireHour}
+                  onChange={(e) => {
+                    setFireHour(Number(e.target.value))
+                    setScheduleDirty(true)
+                  }}
+                  style={{ ...inputStyle, width: 110 }}
+                />
+              </div>
+              {/* 参考 KOS —— 同住 trigger_json，所以放在这个 Field 里、共用 scheduleDirty。 */}
+              <div className="flex items-center" style={{ gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))' }}>
+                    {t('agents.contactGovernance.useKos')}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      color: 'rgb(var(--ink-fg-3))',
+                      marginTop: 2,
+                      lineHeight: 1.5
+                    }}
+                  >
+                    {t('agents.contactGovernance.useKosHint')}
+                  </div>
+                </div>
+                <Switch
+                  on={useKos}
+                  ariaLabel={t('agents.contactGovernance.useKos')}
+                  onChange={(v) => {
+                    setUseKos(v)
+                    setScheduleDirty(true)
+                  }}
+                />
+              </div>
             </div>
           </Field>
 

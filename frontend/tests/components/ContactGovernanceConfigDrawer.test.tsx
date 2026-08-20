@@ -4,7 +4,8 @@
 //   ① 工具清单从工作台抽屉搬到这里，内容一字未改（真实 snake_case 名 + 三档权限 + 两句脚注）；
 //   ② 提示词是「默认全文只读 + 追加段编辑」，**不是**全文替换 —— 回显的是 `content` 原样，
 //      把 defaultContent 灌进编辑框会在下一次保存时把默认物化成用户自定义；
-//   ③ 保存是两次串行调用（agent 行 + profile doc），trigger_json **整列覆写**只发 {fire_hour}；
+//   ③ 保存是两次串行调用（agent 行 + profile doc），trigger_json **整列覆写**发
+//      {fire_hour, use_kos} 全套；
 //   ④ 提示词读失败时那个框是空草稿 —— 保存**不许**拿它覆盖 owner 已有的内容。
 //
 // 🔴 抽屉里没有任何「总闸未开 / 已开」说明段（owner 08-19 拍板）：下面有一条否定断言钉住它，
@@ -170,7 +171,7 @@ describe('ContactGovernanceConfigDrawer · 提示词（默认只读 + 追加段�
 })
 
 describe('ContactGovernanceConfigDrawer · 保存', () => {
-  test('两次串行调用：agent 行 + profile doc；trigger 整列覆写只发 fire_hour', async () => {
+  test('两次串行调用：agent 行 + profile doc；trigger 整列覆写发全套字段', async () => {
     renderDrawer()
     fireEvent.change(screen.getByLabelText('每日运行时刻（0–23 点）'), { target: { value: '7' } })
     fireEvent.change(screen.getByLabelText('提示词追加段'), {
@@ -180,9 +181,10 @@ describe('ContactGovernanceConfigDrawer · 保存', () => {
     fireEvent.click(screen.getByText('保存'))
 
     await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    // 🔴 `use_kos` 没被碰过也要一起发：整列覆写下漏发就把它抹回缺省。
     expect(save).toHaveBeenCalledWith('contact_governance_agent', {
       enabled: true,
-      trigger: { fire_hour: 7 }
+      trigger: { fire_hour: 7, use_kos: true }
     })
     await waitFor(() => expect(savePrompt).toHaveBeenCalledWith('我们公司分三个事业部。'))
   })
@@ -258,6 +260,52 @@ describe('ContactGovernanceConfigDrawer · 保存', () => {
     await waitFor(() => expect(screen.getByText(/E_INVALID_ARG: bad row/)).toBeTruthy())
     expect(savePrompt).not.toHaveBeenCalled()
     expect(onClose).not.toHaveBeenCalled()
+  })
+})
+
+// 「参考 KOS」= 同一列 trigger_json 的第二个字面字段（后端行级开关）。同画像抽屉那条纪律：
+// 缺字段默认**开**（老行没有这个键，读成关会让一个从没被关过的开关显示成「关着」），
+// 且只动这个开关时 fire_hour 必须原样写回。
+describe('ContactGovernanceConfigDrawer · 参考 KOS', () => {
+  function kosSwitch(): HTMLElement {
+    return screen.getByRole('switch', { name: '参考 KOS 资料' })
+  }
+
+  test('🔴 trigger 里没有 use_kos（老行）→ 开关显示「开」', () => {
+    renderDrawer()
+    expect(kosSwitch().getAttribute('aria-checked')).toBe('true')
+  })
+
+  test('存过 false → 如实回显「关」（证明上一条不是恒真）', () => {
+    renderDrawer({
+      ...CFG,
+      trigger: { fire_hour: 4, use_kos: false }
+    } as unknown as ReportAgentConfig)
+    expect(kosSwitch().getAttribute('aria-checked')).toBe('false')
+  })
+
+  test('野值（不是 boolean）→ 回落到开', () => {
+    renderDrawer({
+      ...CFG,
+      trigger: { fire_hour: 4, use_kos: 'no' }
+    } as unknown as ReportAgentConfig)
+    expect(kosSwitch().getAttribute('aria-checked')).toBe('true')
+  })
+
+  test('🔴 只关 KOS 开关，保存时把同列的时刻原样一起发', async () => {
+    renderDrawer({
+      ...CFG,
+      trigger: { fire_hour: 6, use_kos: true }
+    } as unknown as ReportAgentConfig)
+
+    fireEvent.click(kosSwitch())
+    fireEvent.click(screen.getByText('保存'))
+
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1))
+    expect(save).toHaveBeenCalledWith('contact_governance_agent', {
+      enabled: true,
+      trigger: { fire_hour: 6, use_kos: false }
+    })
   })
 })
 

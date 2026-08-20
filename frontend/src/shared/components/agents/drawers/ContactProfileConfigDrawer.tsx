@@ -7,10 +7,11 @@
 //     （model 空串 = 跟随全局 LLM_MODEL；fallback null = 跟随全局、[] = 显式不设）。
 //   • 提示词追加段（row.prompt）——`prompt_is_default` 语义同 ConfigDrawer：
 //     未触碰且后端回填的是默认 → 回传 null（不把默认物化成自定义）。
-//   • 每日时刻 / 每轮上限 —— 存 trigger_json 的字面字段 {fire_hour, daily_limit}
-//     （运行时由 `src/contacts/profile_config.py` 行内热读）。
-//     🔴 trigger_json 是**整列覆写不是 merge** → 两个字段必须一起发，只发一个会把
-//     另一个抹成缺省。
+//   • 每日时刻 / 每轮上限 / 参考 KOS —— 存 trigger_json 的字面字段
+//     {fire_hour, daily_limit, use_kos}（运行时由 `src/contacts/profile_config.py` 行内热读）。
+//     🔴 trigger_json 是**整列覆写不是 merge** → 三个字段必须一起发，少发一个会把
+//     它抹成缺省。所以三者共用同一个 `scheduleDirty`（它是 trigger_json 这一列的脏标记，
+//     不只是「排程」的）—— 只改 KOS 开关也会连 fire_hour/daily_limit 一起原样写回。
 //
 // 🔴 总闸不在这里：`MAILAGENT_CONTACT_PROFILE_ENABLED` 是 Labs 里的灰度 flag（写 .env
 // 要重启），与项目周报把总闸收进抽屉的做法有意不同 —— 抽屉里只出总闸**状态说明**，
@@ -49,19 +50,27 @@ const FALLBACK_NONE = '__none__'
  *  行没配 trigger_json（或字段缺失）时后端就是按这两个值跑，UI 也照这个回落显示。 */
 const DEFAULT_FIRE_HOUR = 4
 const DEFAULT_DAILY_LIMIT = 50
+/** 🔴 「参考 KOS」缺字段默认 **true**（与后端同口径）：老行的 trigger_json 里没有这个键，
+ *  读成 false 会让一个从没被关过的开关在界面上显示成「关着」。 */
+const DEFAULT_USE_KOS = true
 
 /** 从 trigger_json 读字面排程字段。这行的 trigger **不是** `CustomAgentTrigger` 判别式
  *  （没有 `v`/`kind`），故 `ReportAgentConfig['trigger']` 的静态类型对不上 —— 在这里就地
  *  过一次 `unknown` 并做运行时形状检查，而不是把这个无判别字段的成员塞进那个 union
  *  （会让十来处按 `.v`/`.kind` 收窄的消费方全部失去收窄）。
  *  值域外 / 缺字段一律回落到与 `profile_config.py` dataclass 同值的缺省。 */
-function readSchedule(cfg: ReportAgentConfig | null): { fireHour: number; dailyLimit: number } {
+function readSchedule(cfg: ReportAgentConfig | null): {
+  fireHour: number
+  dailyLimit: number
+  useKos: boolean
+} {
   const raw = cfg?.trigger as unknown as
-    | { fire_hour?: unknown; daily_limit?: unknown }
+    | { fire_hour?: unknown; daily_limit?: unknown; use_kos?: unknown }
     | null
     | undefined
   const hour = raw?.fire_hour
   const limit = raw?.daily_limit
+  const kos = raw?.use_kos
   return {
     fireHour:
       typeof hour === 'number' && Number.isInteger(hour) && hour >= 0 && hour <= 23
@@ -70,7 +79,9 @@ function readSchedule(cfg: ReportAgentConfig | null): { fireHour: number; dailyL
     dailyLimit:
       typeof limit === 'number' && Number.isInteger(limit) && limit > 0
         ? limit
-        : DEFAULT_DAILY_LIMIT
+        : DEFAULT_DAILY_LIMIT,
+    // 只有明确的 boolean 才算数：缺字段 / null / 野值一律回落 true。
+    useKos: typeof kos === 'boolean' ? kos : DEFAULT_USE_KOS
   }
 }
 
@@ -99,6 +110,8 @@ export function ContactProfileConfigDrawer({
   const [promptDirty, setPromptDirty] = useState(false)
   const [fireHour, setFireHour] = useState(DEFAULT_FIRE_HOUR)
   const [dailyLimit, setDailyLimit] = useState(DEFAULT_DAILY_LIMIT)
+  const [useKos, setUseKos] = useState(DEFAULT_USE_KOS)
+  // trigger_json 这一列的脏标记（三个字段共用，见文件头注释）。
   const [scheduleDirty, setScheduleDirty] = useState(false)
   const [avatar, setAvatar] = useState<AgentAvatarConfig | null>(null)
   const [avatarDirty, setAvatarDirty] = useState(false)
@@ -126,6 +139,7 @@ export function ContactProfileConfigDrawer({
     const schedule = readSchedule(cfg)
     setFireHour(schedule.fireHour)
     setDailyLimit(schedule.dailyLimit)
+    setUseKos(schedule.useKos)
     setScheduleDirty(false)
     setAvatar(cfg.avatar ?? null)
     setAvatarDirty(false)
@@ -174,8 +188,10 @@ export function ContactProfileConfigDrawer({
     // 未触碰且后端回填的是默认 → 回传 null（不把默认物化成自定义），同 ConfigDrawer。
     if (promptDirty) patch.prompt = prompt
     else if (!cfg.prompt_is_default) patch.prompt = cfg.prompt
-    // 🔴 两个字段一起发：trigger_json 整列覆写，只发一个会把另一个抹回缺省。
-    if (scheduleDirty) patch.trigger = { fire_hour: fireHour, daily_limit: dailyLimit }
+    // 🔴 三个字段一起发：trigger_json 整列覆写，少发一个会把它抹回缺省。
+    if (scheduleDirty) {
+      patch.trigger = { fire_hour: fireHour, daily_limit: dailyLimit, use_kos: useKos }
+    }
     if (avatarDirty) patch.avatar = avatar
     try {
       await save(CONTACT_PROFILE_AGENT_ID, patch)
@@ -318,6 +334,32 @@ export function ContactProfileConfigDrawer({
                     setScheduleDirty(true)
                   }}
                   style={{ ...inputStyle, width: 110 }}
+                />
+              </div>
+              {/* 参考 KOS —— 同住 trigger_json，所以放在这个 Field 里、共用 scheduleDirty。 */}
+              <div className="flex items-center" style={{ gap: 10 }}>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12.5, color: 'rgb(var(--ink-fg-2))' }}>
+                    {t('agents.contactProfile.useKos')}
+                  </div>
+                  <div
+                    style={{
+                      fontSize: 11.5,
+                      color: 'rgb(var(--ink-fg-3))',
+                      marginTop: 2,
+                      lineHeight: 1.5
+                    }}
+                  >
+                    {t('agents.contactProfile.useKosHint')}
+                  </div>
+                </div>
+                <Switch
+                  on={useKos}
+                  ariaLabel={t('agents.contactProfile.useKos')}
+                  onChange={(v) => {
+                    setUseKos(v)
+                    setScheduleDirty(true)
+                  }}
                 />
               </div>
             </div>
