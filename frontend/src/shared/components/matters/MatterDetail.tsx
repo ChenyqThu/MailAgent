@@ -91,6 +91,7 @@ import { MatterContextTab } from './MatterContextTab'
 import { MatterDatePicker } from './MatterDatePicker'
 import { ResourceDrawer } from './ResourceDrawer'
 import { MatterRunsPane } from './MatterRunsPane'
+import { MatterDetailSkeleton } from './MatterSkeleton'
 import { MatterTagChip } from './MatterTagMarker'
 import { MatterTagManagerModal } from './MatterTagManagerModal'
 import { MatterTagPicker } from './MatterTagPicker'
@@ -299,6 +300,13 @@ export function MatterDetail({
     // 缓存配方同 useEmailListRows（速赢包 §2）: 详情三件套的实时性靠写侧
     // refreshMatter（invalidate detail 前缀）与 `matter.changed` SSE, 不靠 15s staleTime
     // —— 后者只会让「切走再回 / 在两条事项间来回点」每次都重拉。
+    //
+    // task 08-20 P0-2 —— `placeholderData: (prev) => prev`: 换选中事项时 key 变，data 会塌成
+    // undefined、整个详情面缩成一行「加载中」（跳转体验最差的一处）。留住上一条的内容，等新
+    // 数据到达再整体换掉。🔴 占位期间 `matter` 是**上一条**的（public_id / version 都是旧的），
+    // 所以下方渲染整棵树 `pointer-events-none`：否则一次点击会带着新 `matterId` + 旧
+    // `expectedVersion` 发出去（乐观锁必然打回，还会顺手刷一遍缓存）。
+    placeholderData: (previous) => previous,
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000
   })
@@ -306,15 +314,19 @@ export function MatterDetail({
   const chatOpen = Boolean(matter && assistantVisible && activeMatterChatId === matter.id)
   const items = detail.data?.items ?? []
   const timeline = detail.data?.timeline ?? []
+  // 这两条与 detail 同步换：只给 detail 加占位的话，切换瞬间会出现「标题还是上一条、上下文
+  // 却空了」的混搭态（比整体停一拍更容易被读成数据丢了）。
   const resources = useQuery({
     queryKey: qk.matters.resources(matterId),
     queryFn: () => api.listResources(matterId, { includeUnavailable: true }),
+    placeholderData: (previous) => previous,
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000
   })
   const stakeholders = useQuery({
     queryKey: qk.matters.stakeholders(matterId),
     queryFn: () => api.listStakeholders(matterId),
+    placeholderData: (previous) => previous,
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000
   })
@@ -641,13 +653,9 @@ export function MatterDetail({
     }
   })
 
-  if (detail.isLoading || !matter) {
-    return (
-      <div className="grid h-full place-items-center text-body text-ink-fg-2">
-        {t('common.loading')}
-      </div>
-    )
-  }
+  // task 08-20 P0-2 —— 第一次进来（没有上一条可留）出骨架，不再是一行「加载中」文字。
+  // 有 `placeholderData` 之后这条分支只覆盖「首次加载 / 拿不到数据」两种情况。
+  if (!matter) return <MatterDetailSkeleton />
 
   /**
    * 0813 dogfood #17b —— 详情头的「立即跟进」改成**开一场对话**（owner：「类似邮件详情页的
@@ -729,7 +737,16 @@ export function MatterDetail({
 
   return (
     // `relative` is the containing block for the narrow-layout chat overlay below.
-    <div className="relative flex h-full min-w-0 bg-ink-0/35">
+    <div
+      className={cn(
+        'relative flex h-full min-w-0 bg-ink-0/35 transition-opacity duration-fast',
+        // 占位期（显示的还是上一条事项）：压暗一档表示「在换了」，并**冻结交互** ——
+        // 此刻 `matterId` 已是新的、`matter.version` 还是旧的，任何一次写都会带着这对
+        // 不匹配的组合发出去。等新数据到达自然解冻（一般一两百毫秒）。
+        detail.isPlaceholderData && 'pointer-events-none opacity-60'
+      )}
+      aria-busy={detail.isPlaceholderData || undefined}
+    >
       <article className="flex h-full min-w-0 flex-1 flex-col">
         <header className="border-b border-ink-border px-5 py-4">
           <div className="flex items-start gap-3">

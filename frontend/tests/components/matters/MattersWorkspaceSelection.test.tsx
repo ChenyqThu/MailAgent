@@ -125,10 +125,12 @@ vi.mock('@shared/components/matters/MatterTagManagerModal', () => ({
 
 const { MattersWorkspace } = await import('@shared/components/matters/MattersWorkspace')
 const { useMatterNavigation } = await import('@shared/components/matters/navigation')
+const { resetMatterWorkspace, useMatterWorkspace } =
+  await import('@shared/components/matters/matterWorkspaceStore')
 
-function renderWorkspace(): void {
+function renderWorkspace(): ReturnType<typeof render> {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(
+  return render(
     <QueryClientProvider client={client}>
       <MattersWorkspace />
     </QueryClientProvider>
@@ -138,6 +140,10 @@ function renderWorkspace(): void {
 beforeEach(() => {
   lastSelectedStore.value = null
   useMatterNavigation.setState({ targetPublicId: null })
+  // 🔴 task 08-20：tab / 选中 / 搜索 / 筛选 / 冷启动标记搬进了**模块级** store（就是为了
+  // 「切走再回还是上一屏」），它会跨用例存活 —— 不复位的话第二个用例一上来就已经落在
+  // 上一个用例留下的 tab 与选中上。
+  resetMatterWorkspace()
 })
 afterEach(cleanup)
 
@@ -197,6 +203,56 @@ describe('MattersWorkspace — V3-11 记住上次选中', () => {
     const detail = await screen.findByTestId('matter-detail')
     await waitFor(() => expect(detail.getAttribute('data-matter-id')).toBe(B.public_id))
     expect(useMatterNavigation.getState().targetPublicId).toBeNull()
+  })
+})
+
+// task 08-20 P0-3 —— 「切走再回直接是上一屏」。旧结构里这些状态是 `MattersWorkspace` 的
+// useState，路由离开整树卸载就复位：回来先渲染一帧看板、再由冷启动 effect 翻到清单（肉眼可见
+// 的抖动），搜索词与筛选一并丢失。
+describe('MattersWorkspace — 状态提升（task 08-20）', () => {
+  test('卸载再挂载：tab / 选中 / 搜索 全部保留，且不重跑冷启动初选', async () => {
+    lastSelectedStore.value = A.public_id
+    const first = renderWorkspace()
+    expect((await screen.findByTestId('matter-detail')).getAttribute('data-matter-id')).toBe(
+      A.public_id
+    )
+
+    // 用户改了搜索词、又手动选了另一条（模拟一屏「工作现场」）。
+    useMatterWorkspace.getState().setSearch('ship')
+    useMatterWorkspace.getState().selectMatter(B.public_id)
+    // 把 localStorage seed 掰回 A —— 它只是**冷启动** seed，运行时权威在 store。重挂时若又跑
+    // 一遍冷启动初选，选中会被这颗 seed 冲回 A（这正是下面最后一条断言要挡的东西）。
+    lastSelectedStore.value = A.public_id
+
+    // 路由切走 = 整树卸载。
+    first.unmount()
+    renderWorkspace()
+
+    // 回来直接就是那一屏：清单 tab、选中 B、搜索词还在 —— 中间没有「先看板后清单」的翻转。
+    const list = await screen.findByTestId('matter-list')
+    expect(list.getAttribute('data-selected-id')).toBe(B.public_id)
+    expect(screen.getByRole('tab', { name: '事项' }).getAttribute('aria-selected')).toBe('true')
+    expect(useMatterWorkspace.getState().search).toBe('ship')
+
+    // 🔴 等这一遍的 `/matters` 落地再断言一次：冷启动初选**只做一次**，重挂时它若再跑一遍，
+    // 选中会被悄悄冲回「上次选中」记录里的 A。（不等的话查询还没回来，effect 根本没机会跑，
+    // 断言会恒绿。）
+    await waitFor(() => expect(list.getAttribute('data-matter-count')).toBe('2'))
+    expect(useMatterWorkspace.getState().selectedId).toBe(B.public_id)
+  })
+})
+
+// task 08-20 P0-2 —— 看板的冷启动同样不许出误导空态：`matters=[]` 时真看板四个 tile 全是 0、
+// 关注区还会写一句「全部处理完了」。
+describe('MattersWorkspace — 看板冷启动骨架（task 08-20）', () => {
+  test('数据到达前出看板骨架，到达后才换成真看板', async () => {
+    renderWorkspace()
+
+    expect(screen.getByTestId('matter-board-skeleton')).toBeTruthy()
+    expect(screen.queryByTestId('matter-focus')).toBeNull()
+
+    expect(await screen.findByTestId('matter-focus')).toBeTruthy()
+    expect(screen.queryByTestId('matter-board-skeleton')).toBeNull()
   })
 })
 

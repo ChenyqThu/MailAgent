@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
+import { List, useDynamicRowHeight } from 'react-window'
+import type { ListImperativeAPI, RowComponentProps } from 'react-window'
 import { useTranslation } from 'react-i18next'
 import {
   Archive,
@@ -73,7 +75,9 @@ import type {
   MatterSortKey,
   MatterStatusGroup
 } from './matterListQuery'
+import { MatterListSkeleton, MATTER_ROW_HEIGHT_ESTIMATE } from './MatterSkeleton'
 import { MatterTagMarker } from './MatterTagMarker'
+import { useMatterWorkspace } from './matterWorkspaceStore'
 import {
   MATTER_HEALTH_ICONS,
   MATTER_HEALTH_TEXT_CLASS,
@@ -99,6 +103,9 @@ const AVATAR_STACK_MAX = 3
 /** 收件箱同款：筛选+分组+排序 20+ 行比基座默认的 288 高一截；Popmenu 仍按视口可用空间
  *  二次夹取，窗口矮时退化成面板内滚动（EmailListHeader 的先例注释同款理由）。 */
 const FILTER_MENU_MAX_HEIGHT = 640
+/** 虚拟列表量到真实可视高度之前的回落视口（px）。取一个接近常见窗口高度的数：0（库默认）
+ *  会让首帧只渲染 overscan 那几行、量到之后再补齐，肉眼可见地「先出三行再长出来」。 */
+const DEFAULT_LIST_VIEWPORT_HEIGHT = 720
 
 /** V3-05 组头的语气色 —— `MatterTone` 五档 + 组头专属的第六档 accent（设计 H3§2 里
  *  「需要你推进」那一行）。neutral 走 `--ink-fg-2`，与设计 `GroupHead` 的 `c` 同口径。 */
@@ -140,11 +147,21 @@ interface MatterListProps {
   /** 待审阅徽标的口径 —— 复用工作台既有的 pendingUpdates 查询，清单不自己发请求。 */
   updates?: MatterUpdateIndex
   search: string
+  /** 首屏还在拉数据（task 08-20 P0-2）。🔴 只有它 + 「一行都没有」才出骨架：工作台的列表
+   *  查询带 `placeholderData: keepPreviousData`，切范围/改筛选时上一批行还在，那时候把列表换成
+   *  骨架等于把已经能看的内容藏起来。**加载中永远不许出「暂无事项」空态** —— 那是误导。 */
+  loading?: boolean
   onSearchChange(value: string): void
   onSelect(matter: Matter): void
   onCreate(): void
   onManageTags(): void
 }
+
+/** 虚拟列表的行模型 —— 组头与事项行都是「一行」，一起参与虚拟化（否则组头不进 List，
+ *  分组维度下滚动位置会与内容错位）。 */
+type MatterListRowItem =
+  | { kind: 'head'; key: string; group: MatterGroup; collapsed: boolean }
+  | { kind: 'matter'; key: string; matter: Matter }
 
 export function MatterList({
   matters,
@@ -157,6 +174,7 @@ export function MatterList({
   attention,
   updates,
   search,
+  loading = false,
   onSearchChange,
   onSelect,
   onCreate,
@@ -174,7 +192,12 @@ export function MatterList({
   const [mountedNow] = useState(() => Date.now())
   const now = nowProp ?? mountedNow
   // V3-05 —— 折叠态按组 key 存（key 自带维度前缀，见 matterListQuery::MatterGroup）。
-  const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
+  // task 08-20：搬进工作台 store —— 本组件随 tab 切换卸载重挂，自持一份等于「去看板转一圈
+  // 回来，手动折叠的组全展开了」。
+  const collapsed = useMatterWorkspace((state) => state.collapsedGroups)
+  const toggleGroup = useMatterWorkspace((state) => state.toggleGroup)
+  const clearCollapsedGroups = useMatterWorkspace((state) => state.clearCollapsedGroups)
+  const expandGroups = useMatterWorkspace((state) => state.expandGroups)
   const locale = i18n.language || 'zh-CN'
   const scopeLabel = t(`matters.scope.${query.scope}`)
   const activeN = activeMatterFilterCount(query)
@@ -201,9 +224,14 @@ export function MatterList({
   }, [groups])
 
   // 维度切换 = 组的命名空间整个换了，旧折叠态不再有意义（H3§2「组切换时重置」）。
+  // 🔴 判据是「维度真的变了」而不是「本 effect 跑了一次」：折叠态提升进 store 之后，挂载时
+  // 无脑清一次等于「去看板转一圈回来，手动折叠的组全展开了」—— 正是本批要修的那类丢失。
+  const previousGroupRef = useRef(query.group)
   useEffect(() => {
-    setCollapsed((previous) => (previous.size === 0 ? previous : new Set<string>()))
-  }, [query.group])
+    if (previousGroupRef.current === query.group) return
+    previousGroupRef.current = query.group
+    clearCollapsedGroups()
+  }, [clearCollapsedGroups, query.group])
 
   // 🔴 选中项落进折叠组时自动展开该组（reveal-on-navigate）：详情页的上/下条导航按分组后的
   // 视觉序走，不展开的话「下一条」会选中一个屏幕上根本看不见的行。只在**选中项变化**时触发
@@ -212,26 +240,79 @@ export function MatterList({
   // 与折叠态无关，见 MattersWorkspace 的 effect）。
   useEffect(() => {
     if (!selectedId) return
-    setCollapsed((previous) => {
-      if (previous.size === 0) return previous
-      const next = new Set(previous)
-      let changed = false
-      for (const group of groupsRef.current) {
-        if (!next.has(group.key)) continue
-        if (!group.matters.some((matter) => matter.public_id === selectedId)) continue
-        next.delete(group.key)
-        changed = true
-      }
-      return changed ? next : previous
-    })
-  }, [selectedId])
+    expandGroups(
+      groupsRef.current
+        .filter((group) => group.matters.some((matter) => matter.public_id === selectedId))
+        .map((group) => group.key)
+    )
+  }, [expandGroups, selectedId])
 
-  const toggleGroup = (key: string): void =>
-    setCollapsed((previous) => {
-      const next = new Set(previous)
-      if (!next.delete(key)) next.add(key)
-      return next
-    })
+  // ── 虚拟化（task 08-20 P1-5）───────────────────────────────────────────────
+  // 组头与事项行摊平成**一维行序列**再交给 react-window：组头留在 List 外面（比如做成
+  // sticky 的兄弟节点）会让滚动坐标与内容对不上。分组头因此**不再 sticky** —— 虚拟行是
+  // 绝对定位的兄弟节点，`position: sticky` 只在自己那一行的盒子里生效，加了也没有效果
+  // （owner dogfood 清单里记了这条视觉退让；要找回来得另做「浮在 List 之上的一层组头」）。
+  const rows = useMemo((): MatterListRowItem[] => {
+    const flat: MatterListRowItem[] = []
+    for (const group of groups) {
+      const groupCollapsed = collapsed.has(group.key)
+      if (group.kind !== 'all') {
+        flat.push({ kind: 'head', key: `head/${group.key}`, group, collapsed: groupCollapsed })
+      }
+      if (groupCollapsed) continue
+      for (const matter of group.matters) {
+        // 🔴 key 带组前缀：标签维度下同一事项会出现在多个组里（H3§2），只用 public_id 会撞。
+        flat.push({ kind: 'matter', key: `${group.key}/${matter.public_id}`, matter })
+      }
+    }
+    return flat
+  }, [collapsed, groups])
+
+  // 行高**不预算**：清单行是 2–4 行的可变高度（narrow 变体 / 有没有第三行），任何一份手抄
+  // 的几何表都会随样式漂掉。react-window v2 的 `useDynamicRowHeight` 用 ResizeObserver 量
+  // 真实行高，`MATTER_ROW_HEIGHT_ESTIMATE` 只是「还没量到的行」的估值（滚动条长度 + 首帧
+  // 窗口大小）。key = 行序列签名：行集一变，index→高度 的对应关系就失效，整份缓存作废重量。
+  const rowsSignature = useMemo(() => rows.map((row) => row.key).join('|'), [rows])
+  const rowHeight = useDynamicRowHeight({
+    defaultRowHeight: MATTER_ROW_HEIGHT_ESTIMATE,
+    key: rowsSignature
+  })
+  const listRef = useRef<ListImperativeAPI | null>(null)
+  // 选中项换了就把它滚进视口：虚拟化之后视口外的行**根本不在 DOM 里**，详情页 j/k 上下条
+  // 导航若不带滚动，用户会看到清单原地不动、详情却换了一条。每个选中值只滚一次
+  // （`scrolledSelectionRef`），列表刷新不会把用户滚回去；找不到那一行（比如它所在的组还没
+  // 被上面的 reveal-on-navigate 展开）就先不滚，等 rows 变了这个 effect 再试一次。
+  const scrolledSelectionRef = useRef<string | null>(null)
+  useEffect(() => {
+    if (!selectedId) {
+      scrolledSelectionRef.current = null
+      return
+    }
+    if (scrolledSelectionRef.current === selectedId) return
+    const index = rows.findIndex(
+      (row) => row.kind === 'matter' && row.matter.public_id === selectedId
+    )
+    if (index < 0) return
+    scrolledSelectionRef.current = selectedId
+    listRef.current?.scrollToRow({ index, align: 'auto' })
+  }, [rows, selectedId])
+
+  const rowProps = useMemo(
+    (): MatterVirtualRowProps => ({
+      rows,
+      tags,
+      selectedId,
+      attention,
+      updates,
+      narrow,
+      hideId,
+      now,
+      locale,
+      onSelect,
+      onToggleGroup: toggleGroup
+    }),
+    [attention, hideId, locale, narrow, now, onSelect, rows, selectedId, tags, toggleGroup, updates]
+  )
 
   const patch = (partial: Partial<MatterListQuery>): void => onQueryChange({ ...query, ...partial })
   const toggleQuick = (key: MatterQuickFilter): void =>
@@ -553,50 +634,26 @@ export function MatterList({
           maxHeight={FILTER_MENU_MAX_HEIGHT}
         />
       </div>
-      <div className="min-h-0 flex-1 overflow-y-auto scrollbar-thin">
-        {/* V3-05 行内分组 —— 空组不渲染（groupMatters 已过滤），`none` 维度只出一个无头的组。 */}
-        {groups.map((group) => {
-          const groupCollapsed = collapsed.has(group.key)
-          return (
-            <div key={group.key}>
-              {group.kind === 'all' ? null : (
-                <MatterGroupHead
-                  group={group}
-                  tag={
-                    group.kind === 'tag'
-                      ? tags.find((definition) => definition.name === group.tagName)
-                      : undefined
-                  }
-                  collapsed={groupCollapsed}
-                  onToggle={() => toggleGroup(group.key)}
-                />
-              )}
-              {groupCollapsed
-                ? null
-                : group.matters.map((matter) => (
-                    // 🔴 key 带组前缀：标签维度下同一事项会出现在多个组里（H3§2），
-                    // 只用 public_id 会撞 React key。
-                    <MatterRow
-                      key={`${group.key}/${matter.public_id}`}
-                      matter={matter}
-                      selected={selectedId === matter.public_id}
-                      signals={openAttentionFor(matter, attention)}
-                      pendingCount={
-                        updates
-                          ?.get(matter.public_id)
-                          ?.filter((update) => update.review_status === 'pending').length ?? 0
-                      }
-                      narrow={narrow}
-                      hideId={hideId}
-                      now={now}
-                      locale={locale}
-                      onSelect={() => onSelect(matter)}
-                    />
-                  ))}
-            </div>
-          )
-        })}
-        {matters.length === 0 ? (
+      <div className="min-h-0 flex-1">
+        {/* V3-05 行内分组 —— 空组不渲染（groupMatters 已过滤），`none` 维度只出一个无头的组；
+            组头与事项行一起进虚拟列表（见上方 rows 的注释）。 */}
+        {matters.length > 0 ? (
+          <List<MatterVirtualRowProps>
+            listRef={listRef}
+            rowComponent={MatterVirtualRow}
+            rowCount={rows.length}
+            rowHeight={rowHeight}
+            rowProps={rowProps}
+            // 量到真实高度之前的回落视口（happy-dom 无 ResizeObserver，测试也吃这个值）：
+            // 取一个接近常见窗口的数，首帧就渲染「一屏左右」的行，而不是先出 3 行再补齐。
+            defaultHeight={DEFAULT_LIST_VIEWPORT_HEIGHT}
+            className="scrollbar-thin"
+            style={{ height: '100%' }}
+          />
+        ) : loading ? (
+          // 🔴 加载中出骨架，**绝不**出「暂无事项」空态：那句话会被读成「你没有事项」。
+          <MatterListSkeleton />
+        ) : (
           <EmptyState
             icon={<EmptyIcon size={22} />}
             title={
@@ -642,9 +699,85 @@ export function MatterList({
               ) : null
             }
           />
-        ) : null}
+        )}
       </div>
     </section>
+  )
+}
+
+/** 虚拟行的 props 面（`rowProps`；react-window 会在其中任一值变化时重渲染可见行）。 */
+interface MatterVirtualRowProps {
+  rows: readonly MatterListRowItem[]
+  tags: readonly MatterTagDefinition[]
+  selectedId: string | null
+  attention?: MatterAttentionIndex
+  updates?: MatterUpdateIndex
+  narrow: boolean
+  hideId: boolean
+  now: number
+  locale: string
+  onSelect(matter: Matter): void
+  onToggleGroup(key: string): void
+}
+
+/**
+ * react-window 行渲染器：`style`（绝对定位 + translateY）必须原样落到最外层元素上。
+ *
+ * 🔴 **不写 height**：`useDynamicRowHeight` 档下 List 有意不下发高度，行由内容自然撑开、
+ * 再被 ResizeObserver 量回去；这里自己补一个高度就等于把估值焊死，量出来的永远是估值。
+ */
+function MatterVirtualRow({
+  index,
+  style,
+  rows,
+  tags,
+  selectedId,
+  attention,
+  updates,
+  narrow,
+  hideId,
+  now,
+  locale,
+  onSelect,
+  onToggleGroup
+}: RowComponentProps<MatterVirtualRowProps>): React.ReactElement {
+  const row = rows[index]
+  if (!row) return <div style={style} />
+  if (row.kind === 'head') {
+    const group = row.group
+    return (
+      <div style={style}>
+        <MatterGroupHead
+          group={group}
+          tag={
+            group.kind === 'tag'
+              ? tags.find((definition) => definition.name === group.tagName)
+              : undefined
+          }
+          collapsed={row.collapsed}
+          onToggle={() => onToggleGroup(group.key)}
+        />
+      </div>
+    )
+  }
+  const matter = row.matter
+  return (
+    <div style={style}>
+      <MatterRow
+        matter={matter}
+        selected={selectedId === matter.public_id}
+        signals={openAttentionFor(matter, attention)}
+        pendingCount={
+          updates?.get(matter.public_id)?.filter((update) => update.review_status === 'pending')
+            .length ?? 0
+        }
+        narrow={narrow}
+        hideId={hideId}
+        now={now}
+        locale={locale}
+        onSelect={() => onSelect(matter)}
+      />
+    </div>
   )
 }
 
@@ -683,10 +816,14 @@ function FilterChip({
  * 密度：清单默认 336px 宽（已是 `narrow` 变体、行本身就三行），故组头**只有一层**内边距、
  * 不叠 padding，且不吃行的水平内边距（`px-3` vs 行的 `px-4`，chevron 恰好挂在标题左侧）。
  *
- * 遮挡：粘住时要挡住从下面滚过去的行，但**不叠一层不透明底**（清单面本身是 `bg-ink-1/55` 的
- * 玻璃，压一块实心 ink-1 会变成突兀的色块 —— EmailDetail 的 sticky 标题栏踩过并记了这一条）。
- * 改成「比面板密一档的同色 + backdrop 磨砂」：设计 `GroupHead` 的 `backdropFilter: saturate`
- * 同一路子，穿过其下的行被磨成毛玻璃而不是靠不透明度硬盖。
+ * 遮挡：原本是粘性条（`sticky top-0`），要挡住从下面滚过去的行，所以**不叠一层不透明底**
+ * （清单面本身是 `bg-ink-1/55` 的玻璃，压一块实心 ink-1 会变成突兀的色块 —— EmailDetail 的
+ * sticky 标题栏踩过并记了这一条），改成「比面板密一档的同色 + backdrop 磨砂」：设计
+ * `GroupHead` 的 `backdropFilter: saturate` 同一路子。
+ *
+ * 🔴 task 08-20 起清单虚拟化，行是绝对定位的兄弟节点 ⇒ `sticky` 在这里不可能生效（粘的
+ * 参照系变成了它自己那一行的盒子），故把 `sticky top-0 z-10` 摘掉，不留一个骗人的类名。
+ * 磨砂底保留：它现在的作用是把组头与行区分开，不再是遮挡。
  */
 function MatterGroupHead({
   group,
@@ -707,7 +844,7 @@ function MatterGroupHead({
       onClick={onToggle}
       aria-expanded={!collapsed}
       title={t('matters.groupHead.toggle')}
-      className="sticky top-0 z-10 flex h-[29px] w-full items-center gap-1.5 border-b border-ink-border bg-ink-1/80 px-3 text-left backdrop-blur-xl backdrop-saturate-150 transition-colors duration-fast hover:bg-ink-3/70"
+      className="flex h-[29px] w-full items-center gap-1.5 border-b border-ink-border bg-ink-1/80 px-3 text-left backdrop-blur-xl backdrop-saturate-150 transition-colors duration-fast hover:bg-ink-3/70"
     >
       <Chevron size={11} className="shrink-0 text-ink-fg-3" />
       {group.kind === 'tag' ? (

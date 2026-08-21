@@ -1,9 +1,13 @@
 // @vitest-environment happy-dom
 //
-// V3-05 行内分组的**渲染侧**闸（模型侧在 matterGroups.test.ts）：粘性组头出不出、折叠开关、
+// V3-05 行内分组的**渲染侧**闸（模型侧在 matterGroups.test.ts）：组头出不出、折叠开关、
 // 以及「选中项所在的组不会停在折叠态」这条裁定 —— 折叠是纯视图动作，不许把选中项藏起来。
+//
+// task 08-20 起清单虚拟化，组头与事项行一起进 react-window 的行序列（组头因此**不再 sticky**，
+// 绝对定位的行里 sticky 不可能生效）；折叠态搬进 `matterWorkspaceStore`（模块级 ⇒ 每个用例前
+// 必须复位，否则上一个用例折叠的组会带到下一个）。
 
-import { afterEach, describe, expect, test, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import type { Matter } from '@shared/api/types/matter'
@@ -11,9 +15,11 @@ import i18n from '@shared/i18n'
 import { MatterList } from '@shared/components/matters/MatterList'
 import { DEFAULT_MATTER_LIST_QUERY } from '@shared/components/matters/matterListQuery'
 import type { MatterGroupMode } from '@shared/components/matters/matterListQuery'
+import { resetMatterWorkspace } from '@shared/components/matters/matterWorkspaceStore'
 
 await i18n.changeLanguage('zh-CN')
 
+beforeEach(() => resetMatterWorkspace())
 afterEach(() => cleanup())
 
 const alpha = matter({ public_id: 'MAT-0001', title: 'Alpha', status: 'active' })
@@ -26,11 +32,13 @@ function head(label: string, expanded: boolean): HTMLElement {
 }
 
 describe('MatterList 行内分组', () => {
-  test('按语义状态出粘性组头（组名 + 计数），命中不到的档整条不渲染', () => {
+  test('按语义状态出组头（组名 + 计数）且组头本身也是虚拟行，命中不到的档整条不渲染', () => {
     renderList()
 
     const needyou = head('需要你推进', true)
-    expect(needyou.className).toContain('sticky')
+    // 🔴 组头进的是 react-window 的行序列（外层包一层带 data-react-window-index 的行容器），
+    // 不是浮在列表之上的第二套 DOM —— 组头留在 List 外面会让滚动坐标与内容对不上。
+    expect(needyou.parentElement?.hasAttribute('data-react-window-index')).toBe(true)
     expect(needyou.textContent).toContain('1')
     expect(head('受阻', true)).toBeTruthy()
     // 「等待对方」「监控中」等空档不出现
@@ -72,6 +80,20 @@ describe('MatterList 行内分组', () => {
     rerender(list({ group: 'status' }))
 
     expect(screen.getByText('Beta')).toBeTruthy()
+  })
+
+  // task 08-20 —— 折叠态提升进 store 的**行为**理由：MatterList 随 tab 切换卸载重挂，
+  // 状态留在组件里就等于「去看板转一圈回来，手动折叠的组全展开了」。
+  test('卸载再挂载：手动折叠的组仍是折叠的（维度没变就不复位）', () => {
+    const first = renderList()
+    fireEvent.click(head('受阻', true))
+    expect(screen.queryByText('Beta')).toBeNull()
+
+    first.unmount()
+    renderList()
+
+    expect(screen.queryByText('Beta')).toBeNull()
+    expect(head('受阻', false)).toBeTruthy()
   })
 
   test('不分组维度下没有组头，行照常渲染', () => {

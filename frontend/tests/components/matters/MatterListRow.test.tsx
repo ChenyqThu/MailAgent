@@ -10,6 +10,7 @@ import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import type { Matter, MatterAttentionSignal, MatterUpdateSummary } from '@shared/api/types/matter'
 import i18n from '@shared/i18n'
 import { DEFAULT_MATTER_LIST_QUERY } from '@shared/components/matters/matterListQuery'
+import { resetMatterWorkspace } from '@shared/components/matters/matterWorkspaceStore'
 
 const { MatterList } = await import('@shared/components/matters/MatterList')
 
@@ -21,6 +22,8 @@ const DAY = 86_400_000
 beforeEach(() => {
   vi.useFakeTimers()
   vi.setSystemTime(NOW)
+  // task 08-20：清单的折叠态住在模块级 store（跨用例存活），每个用例前复位。
+  resetMatterWorkspace()
 })
 
 afterEach(() => {

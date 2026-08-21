@@ -44,10 +44,21 @@ const selectMatterFlags = (
 })
 
 /** 事项总闸 + 事项 Agent 闸。数据源是与通讯录**共享**的那一次 `/chat/config`
- *  （`useAppConfig`：单 key 单请求；失败即 error 而不是缓存成「已禁用」）。 */
-export function useMatterFlags(): { mattersEnabled: boolean; matterAgentEnabled: boolean } {
+ *  （`useAppConfig`：单 key 单请求；失败即 error 而不是缓存成「已禁用」）。
+ *
+ *  🔴 `flagsPending` 区分的是「还不知道开没开」与「确定关着」—— 两者的 `mattersEnabled`
+ *  都是 false，但前者该出骨架、后者该渲染 null（task 08-20 P0-3：整页 `return null` 的白屏）。
+ *  取 `isPending` 而不是 `!isSuccess`：请求进 error 态时按「关着」处理，否则永远停在骨架。 */
+export function useMatterFlags(): {
+  mattersEnabled: boolean
+  matterAgentEnabled: boolean
+  flagsPending: boolean
+} {
   const query = useAppConfig(selectMatterFlags)
-  return query.data ?? { mattersEnabled: false, matterAgentEnabled: false }
+  return {
+    ...(query.data ?? { mattersEnabled: false, matterAgentEnabled: false }),
+    flagsPending: query.isPending
+  }
 }
 
 export function useMattersEnabled(): boolean {

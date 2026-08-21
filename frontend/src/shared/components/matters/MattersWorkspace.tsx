@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react'
 import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Ban, Plus } from 'lucide-react'
@@ -15,6 +15,11 @@ import { MatterCreateDialog } from './MatterCreateDialog'
 import { MatterDetail } from './MatterDetail'
 import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
+import {
+  MatterBoardSkeleton,
+  MatterDetailSkeleton,
+  MattersWorkspaceSkeleton
+} from './MatterSkeleton'
 import { MatterTagManagerModal } from './MatterTagManagerModal'
 import {
   useAttentionAction,
@@ -24,7 +29,8 @@ import {
   usePendingMatterUpdates
 } from './hooks'
 import { refreshMatter } from './matterMutation'
-import { readLastSelectedMatterId, writeLastSelectedMatterId } from './matterLastSelected'
+import { readLastSelectedMatterId } from './matterLastSelected'
+import { useMatterWorkspace } from './matterWorkspaceStore'
 import {
   applyMatterListQuery,
   DEFAULT_MATTER_LIST_QUERY,
@@ -32,15 +38,8 @@ import {
   MATTER_TAB_ICONS,
   MATTER_TABS,
   matterInScope,
-  matterScopeOf,
   matterScopeParams,
   orderedMatterIds
-} from './matterListQuery'
-import type {
-  MatterListQuery,
-  MatterQuickFilter,
-  MatterScopeFields,
-  MatterTab
 } from './matterListQuery'
 import { listMatterTagsSafely, MATTER_TAGS_QUERY_KEY } from './matterTags'
 import { useMatterNavigation } from './navigation'
@@ -101,19 +100,35 @@ function writeMatterListWidth(width: number): void {
 export function MattersWorkspace(): React.ReactElement | null {
   const { t } = useTranslation()
   const api = useMattersApi()
-  const { mattersEnabled: enabled, matterAgentEnabled } = useMatterFlags()
+  const { mattersEnabled: enabled, matterAgentEnabled, flagsPending } = useMatterFlags()
   const queryClient = useQueryClient()
   // V3-01 —— 左侧 176px 视图列删除，12 档 view 收敛成「事项 / 看板」两 tab + 查询模型
   // （matterListQuery.ts）。默认落看板（≙ 旧默认 view 'focus'）；有有效的「记住上次选中」
   // 记录时 V3-11 的冷启动 effect（见下方 `initialSelectionApplied`）会把它改成 'list'。
-  const [tab, setTab] = useState<MatterTab>('board')
-  const [query, setQuery] = useState<MatterListQuery>(DEFAULT_MATTER_LIST_QUERY)
-  const [selectedId, setSelectedId] = useState<string | null>(null)
-  const [search, setSearch] = useState('')
+  //
+  // task 08-20 P0-3 —— 这一组（tab / query / search / selectedId / 折叠组 / 冷启动标记）住在
+  // **模块级 store**（matterWorkspaceStore.ts）：本组件随路由切换整树卸载，放 useState 就是
+  // 「每次进事项页都先渲染一帧看板、等 `/matters` 回来再翻到清单」的抖动本体，搜索词与筛选
+  // 也一并丢。视觉/几何类的本地状态（拖拽宽度、弹窗开关）仍留在组件里 —— 它们没有跨进入的
+  // 连续性诉求。
+  const tab = useMatterWorkspace((state) => state.tab)
+  const setTab = useMatterWorkspace((state) => state.setTab)
+  const query = useMatterWorkspace((state) => state.query)
+  const setQuery = useMatterWorkspace((state) => state.setQuery)
+  const selectedId = useMatterWorkspace((state) => state.selectedId)
+  const search = useMatterWorkspace((state) => state.search)
+  const setSearch = useMatterWorkspace((state) => state.setSearch)
+  const selectMatter = useMatterWorkspace((state) => state.selectMatter)
+  const revealMatter = useMatterWorkspace((state) => state.revealMatter)
+  const jumpToQuickFilter = useMatterWorkspace((state) => state.applyQuickFilter)
   // V3-11 —— 冷启动的「记住上次选中 / 选第一条」只做一次：数据首次就绪后跑一遍下方 effect
   // 就把这个翻 true，之后 `visible`/`liveMatters` 再怎么变都不再重新挑选（否则用户手动选了
-  // 别的事项后，任何一次列表刷新都会把选中悄悄冲回「第一条」）。
-  const [initialSelectionApplied, setInitialSelectionApplied] = useState(false)
+  // 别的事项后，任何一次列表刷新都会把选中悄悄冲回「第一条」）。住在 store 里 ⇒ 切走再回也
+  // 不会重挑一次（那正是「回来时选中被冲掉」的老毛病）。
+  const initialSelectionApplied = useMatterWorkspace((state) => state.initialSelectionApplied)
+  const markInitialSelectionApplied = useMatterWorkspace(
+    (state) => state.markInitialSelectionApplied
+  )
   // 快捷筛选「有到期 / 逾期」的基准时刻，挂载时冻结（react-hooks/purity），与 MatterList 同模式。
   const [now] = useState(() => Date.now())
   const [matterListWidth, setMatterListWidth] = useState(readMatterListWidth)
@@ -137,14 +152,6 @@ export function MattersWorkspace(): React.ReactElement | null {
     previousCursor: string
     previousUserSelect: string
   } | null>(null)
-
-  // V3-11 —— 「选中事项时写入」（设计 H3§1）：只在选中一条真实事项时持久化，取消选中
-  // （`publicId === null`，例如下方「选中项掉出可见集就丢选中」守卫）不清空记录 —— 记录仍
-  // 留着，下次冷启动按「当前 scope 可见集里找不找得到」重新判定，找不到自然退化成选第一条。
-  const selectMatter = useCallback((publicId: string | null): void => {
-    setSelectedId(publicId)
-    if (publicId) writeLastSelectedMatterId(publicId)
-  }, [])
 
   const finishMatterListResize = useCallback((target: HTMLDivElement, pointerId: number): void => {
     const drag = resizeDragRef.current
@@ -231,7 +238,10 @@ export function MattersWorkspace(): React.ReactElement | null {
   const tagsQuery = useQuery({
     queryKey: MATTER_TAGS_QUERY_KEY,
     queryFn: () => listMatterTagsSafely(api),
-    enabled: enabled && tab === 'list',
+    // task 08-20 P0-3 —— 去掉 `tab === 'list'` 闸：它把标签请求推迟到「切到清单那一刻」，
+    // 于是筛选菜单第一次打开时标签面板还是空的。这份缓存是全局共享的（MatterDetail 用同一个
+    // key），5 分钟 staleTime + 低频写，早发一次的成本远小于晚到一层的抖动。
+    enabled,
     // 标签定义是低频写（标签管理弹窗写完直接 invalidate MATTER_TAGS_QUERY_KEY）。
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000
@@ -281,6 +291,13 @@ export function MattersWorkspace(): React.ReactElement | null {
   const boardBadge =
     attentionItems.filter((signal) => signal.state === 'open').length + reviewPendingCount
 
+  // 行点击的回调要引用稳定：它进 MatterList 的 `rowProps`，每次 render 换一个新函数会让
+  // react-window 把可见行全部重渲一遍（虚拟化省下来的那点开销正好还回去）。
+  const handleSelectMatter = useCallback(
+    (matter: Matter): void => selectMatter(matter.public_id),
+    [selectMatter]
+  )
+
   const attentionAction = useAttentionAction()
 
   const handleAttentionAction = (
@@ -297,26 +314,9 @@ export function MattersWorkspace(): React.ReactElement | null {
     )
   }
 
-  // 展示某个具体事项（看板卡片 / 深链 / 新建落点）时，把筛选复位到「该事项可见」的最小
-  // 状态：本仓有「选中项掉出可见集就丢选中」守卫（下方 effect），保留旧筛选会让跳转当场
-  // 被守卫吞掉。scope 按事项自身状态推（trash > archived > done > open）。
-  const revealMatter = useCallback(
-    (matter: MatterScopeFields & { public_id: string }): void => {
-      setTab('list')
-      setSearch('')
-      setQuery({ ...DEFAULT_MATTER_LIST_QUERY, scope: matterScopeOf(matter) })
-      selectMatter(matter.public_id)
-    },
-    [selectMatter]
-  )
-
-  // V3-13 —— 看板 tile 的跳转载荷：切到「事项」tab 并套用对应快捷筛选预设（设计
-  // `onJump(['attn'])` = `setQ({...Q0, filters})`，其余条件一并复位）。
-  const jumpToQuickFilter = useCallback((quick: MatterQuickFilter): void => {
-    setSearch('')
-    setQuery({ ...DEFAULT_MATTER_LIST_QUERY, quick: [quick] })
-    setTab('list')
-  }, [])
+  // 「展示某个具体事项」（看板卡片 / 深链 / 新建落点）与「看板 tile 跳转」都是 store 里的
+  // 组合 action（`revealMatter` / `applyQuickFilter`，见 matterWorkspaceStore.ts）：它们要
+  // 一次改动 tab + 筛选 + 选中三项，拆成三次 setState 会多渲染两帧中间态。
 
   // V3-11 —— 冷启动「记住上次选中 / 选第一条」（设计 H3§1），只跑一次（见
   // `initialSelectionApplied` 声明处的理由）。
@@ -329,9 +329,13 @@ export function MattersWorkspace(): React.ReactElement | null {
   // `DEFAULT_MATTER_LIST_QUERY` 现算一遍（不读 `visible`/`query` 这两个可能已被用户改动的
   // 活变量）——owner 拍板：不为了凑一个恢复结果去偷偷切用户的 scope/筛选；存的那条如果已被
   // 归档/删除/推进到 done，就在这份候选集里缺席，自然退化成「无记录 → 选第一条」。
-  useEffect(() => {
+  //
+  // 🔴 task 08-20：这一条用 `useLayoutEffect`。状态提升已经消掉了「每次进入都翻一遍」，剩下
+  // 每个应用会话的**第一次**：数据落地那一帧 tab 还是 'board'，普通 effect 会让真看板先被画
+  // 出来一帧再翻到清单。layout effect 在浏览器绘制前跑完，那一帧不会上屏。
+  useLayoutEffect(() => {
     if (initialSelectionApplied || !liveList.isSuccess) return
-    setInitialSelectionApplied(true)
+    markInitialSelectionApplied()
     if (navigationTarget) return
     const candidates = applyMatterListQuery(
       liveMatters,
@@ -350,9 +354,11 @@ export function MattersWorkspace(): React.ReactElement | null {
     initialSelectionApplied,
     liveList.isSuccess,
     liveMatters,
+    markInitialSelectionApplied,
     navigationTarget,
     queryContext,
-    selectMatter
+    selectMatter,
+    setTab
   ])
 
   // 「选中项掉出可见集就丢选中」守卫（旧左轨语义的等价保留）。scope 数据未就绪（archived/
@@ -386,11 +392,17 @@ export function MattersWorkspace(): React.ReactElement | null {
     onError: (error) => toastError(t('matters.toast.createFailed'), errorMessage(error))
   })
 
-  if (!enabled) return null
+  // task 08-20 P0-3 —— 总闸**未知**（`/chat/config` 还在飞）时出整页骨架，而不是白屏：
+  // 事项页的 chunk 有 591KB，加上这一次请求，`return null` 那段白屏肉眼可见。
+  // 🔴 确定「事项已禁用」时仍然 null —— 骨架的意思是「马上就有内容」，对一个关掉的模块永远
+  // 等不到，那是欺骗（也是为什么判据取 `flagsPending` 而不是 `!enabled`）。
+  if (!enabled) return flagsPending ? <MattersWorkspaceSkeleton tab={tab} /> : null
 
   const selected = selectedId
     ? (scopeRows.find((matter) => matter.public_id === selectedId) ?? null)
     : null
+  // 首屏还没有任何行 = 冷启动，出骨架；有行（含 keepPreviousData 留下的上一批）就照常渲染。
+  const rowsPending = scopeOnServer ? scopedList.isPending : liveList.isPending
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -447,7 +459,11 @@ export function MattersWorkspace(): React.ReactElement | null {
       </div>
 
       <div className="min-h-0 flex-1">
-        {tab === 'board' ? (
+        {tab === 'board' && rowsPending && liveMatters.length === 0 ? (
+          // 看板冷启动 —— 不出真看板：`matters=[]` 时四个 tile 全是 0、关注区还会显示一句
+          // 「全部处理完了」，那是**误导性空态**（与清单的「暂无事项」同一类问题）。
+          <MatterBoardSkeleton />
+        ) : tab === 'board' ? (
           <MatterFocus
             matters={liveMatters}
             signals={attentionItems}
@@ -482,8 +498,9 @@ export function MattersWorkspace(): React.ReactElement | null {
                 attention={attentionIndex}
                 updates={updateIndex}
                 search={search}
+                loading={rowsPending}
                 onSearchChange={setSearch}
-                onSelect={(matter: Matter) => selectMatter(matter.public_id)}
+                onSelect={handleSelectMatter}
                 onCreate={() => setCreateOpen(true)}
                 onManageTags={() => setTagManagerOpen(true)}
               />
@@ -560,6 +577,10 @@ export function MattersWorkspace(): React.ReactElement | null {
                   }
                   onReviewOpened={() => setReviewTarget(null)}
                 />
+              ) : rowsPending && scopeRows.length === 0 ? (
+                // 冷启动还没有行 ⇒ 也还没有选中项，这时候的「未选中事项」是误导（用户什么都
+                // 还没来得及点）。与清单列同步出骨架，等行到了冷启动初选会自己选中一条。
+                <MatterDetailSkeleton />
               ) : (
                 <div className="grid h-full place-items-center p-8 text-center text-body text-ink-fg-2">
                   <div>

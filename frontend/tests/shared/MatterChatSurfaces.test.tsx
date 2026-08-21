@@ -95,6 +95,7 @@ vi.mock('@shared/state/toast', () => ({
 
 const { MatterDetail } = await import('@shared/components/matters/MatterDetail')
 const { MattersWorkspace } = await import('@shared/components/matters/MattersWorkspace')
+const { resetMatterWorkspace } = await import('@shared/components/matters/matterWorkspaceStore')
 
 await i18n.changeLanguage('zh-CN')
 
@@ -177,6 +178,9 @@ function renderDetail(): ReturnType<typeof render> {
 beforeEach(() => {
   vi.clearAllMocks()
   window.localStorage.clear()
+  // task 08-20：工作台的 tab / 选中 / 搜索 / 筛选住在**模块级** store（跨用例存活），
+  // 不复位的话每个用例都从上一个用例留下的那一屏开始。
+  resetMatterWorkspace()
   mattersEnabled.value = true
   matterAgentEnabled.value = false
   useAIChatPanel.setState({ visible: false, matterTarget: null, matterConversationEpoch: 0 })
@@ -518,8 +522,12 @@ describe('MattersWorkspace — resizable matter list', () => {
 // V3-04（v3 信息架构，改判 R3-#2）—— 轮 3 删的是「标签作为**导航入口**」（左轨「使用中标签」
 // 整段），owner 拍板本轮把标签作为**临时筛选条件**放回筛选菜单：这是有意反转，不是回滚。
 // 原来那条「listTags 永不被调用」的反向闸随之重写成正向语义：标签数据只喂筛选菜单的二级
-// 面板（打开列表面才请求），列表旁**不再有**任何标签导航轨；在面板里勾选一个标签会生成
-// 可删的条件 chip。改回「标签轨」渲染路径、或把面板拆掉，这条都会红。
+// 面板，列表旁**不再有**任何标签导航轨；在面板里勾选一个标签会生成可删的条件 chip。改回
+// 「标签轨」渲染路径、或把面板拆掉，这条都会红。
+//
+// task 08-20 P0-3 —— 「看板 tab 不请求标签」那条断言随 `enabled: tab === 'list'` 闸一起删了：
+// 那道闸把标签请求推迟到「切到清单那一刻」，于是筛选菜单第一次打开时标签面板还是空的。它管的
+// 是**请求时机**，与本 describe 要守的「标签不是导航轨」无关。
 describe('MattersWorkspace — tags are a filter facet, not a nav rail (V3-04)', () => {
   test('tag definitions feed the filter menu; no tag rail exists outside it', async () => {
     mattersApi.list.mockResolvedValue({ items: [{ ...matter(), tags: ['合规'] }] })
@@ -536,9 +544,6 @@ describe('MattersWorkspace — tags are a filter facet, not a nav rail (V3-04)',
         <MattersWorkspace />
       </QueryClientProvider>
     )
-
-    // 看板 tab（默认落点）不请求标签 —— 标签数据是列表筛选面的私有依赖。
-    expect(mattersApi.listTags).not.toHaveBeenCalled()
 
     fireEvent.click(await screen.findByRole('tab', { name: '事项' }))
     expect(await screen.findByText('Vendor launch')).toBeTruthy()

@@ -5179,6 +5179,13 @@ html[data-theme-vt='circle-blur']::view-transition-new(root) {
   }
 }
 
+/* 事项骨架屏（MatterSkeleton.tsx）—— 同上，自己的关停开关，不动全局 .shimmer。 */
+@media (prefers-reduced-motion: reduce) {
+  .matter-skel {
+    animation: none;
+  }
+}
+
 @keyframes agents-email-flash {
   0% { box-shadow: 0 0 0 2px rgb(var(--c-accent)); background: rgb(var(--c-accent) / 0.10); }
   100% { box-shadow: 0 0 0 2px rgb(var(--c-accent) / 0); background: rgb(var(--c-accent) / 0); }
