@@ -196,6 +196,7 @@ def test_chat_config_enabled_models_configured(monkeypatch: pytest.MonkeyPatch) 
         user_md_compile_enabled = False
         standing_docs_editor_enabled = True
         custom_agents_enabled = False
+        notion_oauth_enabled = True
 
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatCfg())
 
@@ -237,6 +238,7 @@ def test_chat_config_enabled_models_not_configured(monkeypatch: pytest.MonkeyPat
         user_md_compile_enabled = False
         standing_docs_editor_enabled = True
         custom_agents_enabled = False
+        notion_oauth_enabled = True
 
     monkeypatch.setattr("src.api.routers.chat.get_settings", lambda: _ChatCfg())
 

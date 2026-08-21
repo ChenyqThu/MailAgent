@@ -948,6 +948,7 @@ class _ChatCfg:
     standing_docs_editor_enabled = True
     custom_agents_enabled = False
     llm_provider_registry_enabled = False
+    notion_oauth_enabled = True
 
 
 def _stub_chat_config(monkeypatch, cfg) -> None:

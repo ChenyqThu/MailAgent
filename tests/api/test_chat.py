@@ -404,6 +404,7 @@ class _ChatConfigStub:
     standing_docs_editor_enabled = True
     memory_md_budget_chars = 5000
     custom_agents_enabled = True  # E3 cutover（2026-07-06）：pydantic 默认 True → /config.customAgentsEnabled 默认开
+    notion_oauth_enabled = True  # task 08-20：pydantic 默认 True（kill-switch）
 
 
 def _config_client(
@@ -475,6 +476,8 @@ def test_chat_config_defaults(monkeypatch: pytest.MonkeyPatch) -> None:
         "userMdCompileEnabled": True,
         # standing-docs-editor flag（default True；4f4f71f2 加进 /chat/config）。
         "standingDocsEditorEnabled": True,
+        # Notion OAuth 入口显隐 flag（MAILAGENT_NOTION_OAUTH，默认 ON；kill-switch）。
+        "notionOauthEnabled": True,
         # S2 W1 — exec 策略管理页显隐 flag（MAILAGENT_OPENNESS_EXEC_TOOLS，E3 cutover 默认 ON）。
         "execPolicyEnabled": True,
         # S2 W4b — Settings「Skill 安装」区显隐 flag（MAILAGENT_OPENNESS_SKILL_INSTALL，E3 cutover 默认 ON）。
