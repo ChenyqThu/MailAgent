@@ -111,13 +111,18 @@ def _outbox_stats(lt_30m: int = 0, gt_30m: int = 0):
 def _build_app(
     *, alerter, backend_origin="applescript",
     outbox_stats=None, state=None, watcher_stats=None,
+    notify_center=None, redis_consumer=None,
 ):
     """EmailNotionSyncApp.__new__ + 只挂 _check_and_alert 需要的属性
-    (镜像 tests/mail/test_expansion_loop.py 的既有 pattern)。"""
+    (镜像 tests/mail/test_expansion_loop.py 的既有 pattern)。
+
+    task 08-20: ``notify_center`` 默认 None = 只有飞书一个出口 → 上面所有既有
+    用例的行为逐字不变 (通知中心分支整段短路)。"""
     from src.service import EmailNotionSyncApp
 
     app = EmailNotionSyncApp.__new__(EmailNotionSyncApp)
     app.alerter = alerter
+    app._notify_center = notify_center
     watcher = MagicMock()
     watcher.get_stats.return_value = watcher_stats or {
         "consecutive_errors": 0,
@@ -127,7 +132,7 @@ def _build_app(
     }
     watcher.sync_store = _FakeStateStore(state)
     app.watcher = watcher
-    app.redis_consumer = None
+    app.redis_consumer = redis_consumer
     app.backend = SimpleNamespace(backend_origin=backend_origin)
     stats = outbox_stats if outbox_stats is not None else _outbox_stats()
     app.outbox_repo = SimpleNamespace(get_stats=lambda: stats)
@@ -585,6 +590,214 @@ def test_record_start_history_appends_and_prunes_48h():
     app._record_start_history()
     stored = json.loads(app.watcher.sync_store.state["service.start_history"])
     assert len(stored) == 3
+
+
+# ---------------------------------------------------------------------------
+# task 08-20-notification-center 步骤 4c — 系统告警 → 通知中心 (design §8.b)
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def notify_db(tmp_path):
+    """真实 sync_store.db (含 v68 notification 表 + email_metadata)。"""
+    from src.mail.sync_store import SyncStore
+
+    path = tmp_path / "sync_store.db"
+    SyncStore(str(path))
+    return str(path)
+
+
+def _center(db_path):
+    from src.notify.center import NotifyCenter
+
+    return NotifyCenter(db_path)
+
+
+def _notifications(db_path, dedupe_key=None):
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        sql = "SELECT * FROM notification"
+        args: tuple = ()
+        if dedupe_key is not None:
+            sql += " WHERE dedupe_key=?"
+            args = (dedupe_key,)
+        return [dict(r) for r in conn.execute(sql + " ORDER BY id", args).fetchall()]
+
+
+class _RecordingLogger:
+    """记录 logger 调用 —— 3 个 try/except 段 (davmail burst / outbox / 重启频次)
+    会把 AttributeError **吞成一行 debug**, 只断言「函数没抛」抓不到漏掉的
+    `if self.alerter` 守卫 (风险 #2)。这里直接断言那三段一声不吭。"""
+
+    def __init__(self):
+        self.messages: list[tuple[str, str]] = []
+
+    def _record(self, level):
+        def _log(msg, *a, **kw):
+            self.messages.append((level, str(msg)))
+        return _log
+
+    def __getattr__(self, name):
+        return self._record(name)
+
+
+def test_no_sink_at_all_returns_early():
+    """两个出口都不在 (alerter=None + 通知中心=None) → 老行为: 直接 return."""
+    app = _build_app(alerter=None, notify_center=None)
+    asyncio.run(app._check_and_alert())
+    app.watcher.get_stats.assert_not_called()
+
+
+def test_alerter_none_full_path_never_raises_and_publishes(
+    notify_db, monkeypatch,
+):
+    """🔴 风险 #2 主用例: ALERT_ENABLED=false 的默认安装 (alerter=None) 下,
+    `_check_and_alert` **整个函数**要跑完 —— 任意一处漏掉 `if self.alerter`
+    守卫都会 AttributeError (段外直接抛, 段内被 try 吞成一行 debug)。
+
+    同时验收断链修复: 四个状态型告警各落一条 system 通知。
+    """
+    from src import service as service_module
+
+    # 全部判据同时成立: 连续错误 / 不健康 / 死信 / 雷达挂 / redis 断 / outbox 积压
+    # / 24h 重启超阈值 / davmail fetch 突增 (fetch_failed 行喂真实 email_metadata)
+    with sqlite3.connect(notify_db) as conn:
+        for i in range(3):
+            conn.execute(
+                "INSERT INTO email_metadata (internal_id, sync_status, "
+                "backend_origin, updated_at) VALUES (?, 'fetch_failed', "
+                "'davmail', ?)",
+                (i + 1, time.time()),
+            )
+    monkeypatch.setattr(service_module.config, "sync_store_db_path", notify_db)
+    rec = _RecordingLogger()
+    monkeypatch.setattr(service_module, "logger", rec)
+
+    now = time.time()
+    app = _build_app(
+        alerter=None,
+        notify_center=_center(notify_db),
+        backend_origin="davmail",
+        outbox_stats=_outbox_stats(60, 50),
+        redis_consumer=SimpleNamespace(
+            get_stats=lambda: {"connected": False, "last_error": "boom"}
+        ),
+        watcher_stats=_stats(
+            dead_letter=10, healthy=False, radar_available=False, consecutive=3
+        ),
+        state={"service.start_history": json.dumps(
+            [now - i * 600 for i in range(6)]
+        )},
+    )
+
+    asyncio.run(app._check_and_alert())
+
+    swallowed = [m for m in rec.messages if "failed" in m[1]]
+    assert swallowed == [], (
+        f"try/except 段吞掉了异常 (多半是漏了 if self.alerter 守卫): {swallowed}"
+    )
+    keys = {row["dedupe_key"] for row in _notifications(notify_db)}
+    assert keys == {
+        "alert:service_unhealthy", "alert:dead_letters",
+        "alert:radar_unavailable", "alert:outbox_backlog",
+    }
+
+
+def test_service_unhealthy_enter_once_then_silent_then_recover(notify_db):
+    """默认安装 (无飞书): ENTER → 一条 critical; 静默轮不刷屏; RECOVER → resolved."""
+    app = _build_app(
+        alerter=None,
+        notify_center=_center(notify_db),
+        watcher_stats=_stats(healthy=False),
+    )
+    for _ in range(3):
+        asyncio.run(app._check_and_alert())
+
+    rows = _notifications(notify_db, "alert:service_unhealthy")
+    assert len(rows) == 1
+    assert rows[0]["severity"] == "critical"
+    assert rows[0]["category"] == "system"
+    assert rows[0]["state"] == "open"
+    assert rows[0]["recurrence_no"] == 1, "静默轮不得计次 (nc 水位失效 = 每 60s 刷一条)"
+    # nc 水位落在独立命名空间, 不碰飞书那份
+    assert app.watcher.sync_store.state["alert.nc.service_unhealthy.active"] == "1"
+    assert "alert.service_unhealthy.active" not in app.watcher.sync_store.state
+
+    app.watcher.get_stats.return_value = _stats()
+    asyncio.run(app._check_and_alert())
+    rows = _notifications(notify_db, "alert:service_unhealthy")
+    assert len(rows) == 1 and rows[0]["state"] == "resolved"
+
+
+def test_feishu_and_notify_center_keep_separate_watermarks(notify_db):
+    """🔴 §8.b 各记水位: 飞书投递失败 → 每轮重发 (老行为一字不动); 通知中心
+    落库成功 → 只落一条。共用一份水位会让一边把另一边永久静默。"""
+    alerter = _SignatureFakeAlerter(delivered=False)
+    app = _build_app(
+        alerter=alerter,
+        notify_center=_center(notify_db),
+        watcher_stats=_stats(dead_letter=10),
+    )
+    for _ in range(3):
+        asyncio.run(app._check_and_alert())
+
+    assert alerter.method_calls.count(("alert_dead_letters", 10, 5)) == 3
+    rows = _notifications(notify_db, "alert:dead_letters")
+    assert len(rows) == 1 and rows[0]["recurrence_no"] == 1
+    assert app.watcher.sync_store.state == {
+        "alert.nc.dead_letters.active": "1",
+        "alert.nc.dead_letters.last_alerted_value": "10.0",
+        "alert.nc.dead_letters.entered_at": (
+            app.watcher.sync_store.state["alert.nc.dead_letters.entered_at"]
+        ),
+    }, "飞书那份水位不得被写 (投递失败 = 下轮要重发)"
+
+
+def test_notify_center_failure_does_not_break_alert_loop(tmp_path, monkeypatch):
+    """通知中心落库炸 (库里没这张表) → 只 warning, 飞书链路照常送达."""
+    from src import service as service_module
+    from src.notify.center import NotifyCenter
+
+    broken = tmp_path / "empty.db"
+    sqlite3.connect(str(broken)).close()  # 空库: 没有 notification 表
+    rec = _RecordingLogger()
+    monkeypatch.setattr(service_module, "logger", rec)
+
+    alerter = _SignatureFakeAlerter()
+    app = _build_app(
+        alerter=alerter,
+        notify_center=NotifyCenter(str(broken)),
+        watcher_stats=_stats(dead_letter=10),
+    )
+    asyncio.run(app._check_and_alert())
+
+    assert ("alert_dead_letters", 10, 5) in alerter.method_calls
+    assert any(
+        lvl == "warning" and "alert publish failed" in msg
+        for lvl, msg in rec.messages
+    )
+    # 落库失败不得 commit 水位 → 下轮还会重试
+    assert app.watcher.sync_store.state.get("alert.nc.dead_letters.active") is None
+
+
+def test_episode_flag_off_degrades_to_publish_every_round(notify_db, monkeypatch):
+    """MAILAGENT_ALERT_EPISODE=false → nc 水位同样退化成「越阈值就 ENTER」:
+    每轮 publish 一次 → dedupe 计次 (design §8.b 写实接受的劣化, 不加特判)。"""
+    from src import service as service_module
+
+    monkeypatch.setattr(service_module.config, "alert_episode_enabled", False)
+    app = _build_app(
+        alerter=None,
+        notify_center=_center(notify_db),
+        watcher_stats=_stats(dead_letter=10),
+    )
+    for _ in range(3):
+        asyncio.run(app._check_and_alert())
+
+    rows = _notifications(notify_db, "alert:dead_letters")
+    assert len(rows) == 1, "同 dedupe_key 恒一行 (计次不新开)"
+    assert rows[0]["recurrence_no"] == 3
+    assert app.watcher.sync_store.state == {}, "flag-off 不碰 sync_state"
 
 
 def test_count_recent_starts_tolerates_garbage_state():

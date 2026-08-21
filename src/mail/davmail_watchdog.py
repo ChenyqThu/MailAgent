@@ -123,12 +123,23 @@ class DavMailWatchdog:
         auto_restart_cooldown: int = _AUTO_RESTART_COOLDOWN_SECS,
         auto_restart_max_per_day: int = _AUTO_RESTART_MAX_PER_DAY,
         episodes: Optional[AlertEpisodeTracker] = None,
+        notify_center: Optional[NotifyCenter] = None,
     ) -> None:
         self.sync_store = sync_store
         # task 07-14: token 门槛告警的 episode 判定器 (由 service.py 注入, 带
         # MAILAGENT_ALERT_EPISODE flag)。未注入 (老调用方 / 单测) → disabled
         # tracker = 判据成立就告 = 老行为, 零行为变化。
         self.episodes = episodes or AlertEpisodeTracker(sync_store, enabled=False)
+        # task 08-20-notification-center §7/§8.b: critical 组同时写通知中心 (由
+        # service.py 注入; 未注入 = 老调用方 / 单测 → None = 只发飞书, 零行为变化)。
+        # token 门槛是**唯一 episode 化**的一项 → 通知中心侧要自己的水位 (`nc.`
+        # 前缀), 否则飞书没配 / 投递失败时 self.episodes 永不 commit → 每轮 60s
+        # 重发一次 publish; 其余四项 (imap/smtp/login/oauth) 是 `_announced_*`
+        # 内存态 announce-once, 与投递结果无关, 并列写入即可。
+        self.notify_center = notify_center
+        self._nc_episodes = AlertEpisodeTracker(
+            sync_store, enabled=self.episodes.enabled
+        )
         self.alerter = alerter
         self.davmail_root = Path(davmail_root)
         self.token_path = self.davmail_root / "token" / "token.dat"
@@ -623,40 +634,77 @@ class DavMailWatchdog:
         token_age_days: Optional[float],
         oauth_error: Optional[str],
     ) -> None:
-        if self.alerter is None:
+        # task 08-20-notification-center §8.b: 出口有两个 —— 飞书 alerter (默认
+        # 安装是 None) 与通知中心。老 guard 会让默认安装连判定都不跑 (critical 组
+        # 在铃铛里永远是空的) → 放宽为「至少一个出口在场」, 段内飞书调用逐点守卫。
+        if self.alerter is None and self.notify_center is None:
             return
 
         # 1. 进程死亡（IMAP/SMTP 连续 ≥3 失败一次性告警，恢复后重置）
         if self._consecutive_imap_fails >= _PROCESS_DOWN_THRESHOLD:
             if not self._announced_process_down_imap:
-                await self.alerter.alert_davmail_process_down(
-                    self._consecutive_imap_fails, self.imap_port, "IMAP"
+                if self.alerter is not None:
+                    await self.alerter.alert_davmail_process_down(
+                        self._consecutive_imap_fails, self.imap_port, "IMAP"
+                    )
+                await self._notify_davmail_alert(
+                    "imap_down",
+                    title="DavMail IMAP 不可达",
+                    body=(
+                        f"IMAP :{self.imap_port} 连续 "
+                        f"{self._consecutive_imap_fails} 次探测失败, "
+                        "davmail 进程可能已死, 邮件同步已停摆。"
+                    ),
                 )
                 self._announced_process_down_imap = True
         elif imap_ok and self._announced_process_down_imap:
-            await self.alerter.alert_davmail_process_recovered("IMAP")
+            if self.alerter is not None:
+                await self.alerter.alert_davmail_process_recovered("IMAP")
+            await self._notify_davmail_resolve("imap_down")
             self._announced_process_down_imap = False
 
         if self._consecutive_smtp_fails >= _PROCESS_DOWN_THRESHOLD:
             if not self._announced_process_down_smtp:
-                await self.alerter.alert_davmail_process_down(
-                    self._consecutive_smtp_fails, self.smtp_port, "SMTP"
+                if self.alerter is not None:
+                    await self.alerter.alert_davmail_process_down(
+                        self._consecutive_smtp_fails, self.smtp_port, "SMTP"
+                    )
+                await self._notify_davmail_alert(
+                    "smtp_down",
+                    title="DavMail SMTP 不可达",
+                    body=(
+                        f"SMTP :{self.smtp_port} 连续 "
+                        f"{self._consecutive_smtp_fails} 次探测失败, 发信不可用。"
+                    ),
                 )
                 self._announced_process_down_smtp = True
         elif smtp_ok and self._announced_process_down_smtp:
-            await self.alerter.alert_davmail_process_recovered("SMTP")
+            if self.alerter is not None:
+                await self.alerter.alert_davmail_process_recovered("SMTP")
+            await self._notify_davmail_resolve("smtp_down")
             self._announced_process_down_smtp = False
 
         # 1b. IMAP LOGIN 劣化 (L2a): 连续 ≥阈值失败一次性告警, 恢复后通知
         #     (announce-once-until-cleared, 镜像进程 down/recovered 模式)
         if self._consecutive_login_fails >= self.login_fail_threshold:
             if not self._announced_login_degraded:
-                await self.alerter.alert_davmail_login_degraded(
-                    self._consecutive_login_fails, self.login_fail_threshold
+                if self.alerter is not None:
+                    await self.alerter.alert_davmail_login_degraded(
+                        self._consecutive_login_fails, self.login_fail_threshold
+                    )
+                await self._notify_davmail_alert(
+                    "login_degraded",
+                    title="DavMail IMAP LOGIN 劣化",
+                    body=(
+                        f"端口可达但 LOGIN 连续失败 {self._consecutive_login_fails} "
+                        f"次 (阈值 {self.login_fail_threshold}), token 可能已失效。"
+                    ),
                 )
                 self._announced_login_degraded = True
         elif login_ok and self._announced_login_degraded:
-            await self.alerter.alert_davmail_login_recovered()
+            if self.alerter is not None:
+                await self.alerter.alert_davmail_login_recovered()
+            await self._notify_davmail_resolve("login_degraded")
             self._announced_login_degraded = False
 
         # 2. Token 过期门槛 — episode 化 (task 07-14): 原来每轮 (60s) 都告, 只靠
@@ -682,7 +730,9 @@ class DavMailWatchdog:
                 "davmail_token", token_age_days, TOKEN_WARN_DAYS
             )
             if crit in (episode.ENTER, episode.ESCALATE):
-                if await self.alerter.alert_davmail_token_critical(token_age_days):
+                if self.alerter is not None and await self.alerter.alert_davmail_token_critical(
+                    token_age_days
+                ):
                     self.episodes.commit(
                         "davmail_token_critical", crit, token_age_days
                     )
@@ -692,7 +742,9 @@ class DavMailWatchdog:
                     if warn in (episode.ENTER, episode.ESCALATE):
                         self.episodes.commit("davmail_token", warn, token_age_days)
             elif warn in (episode.ENTER, episode.ESCALATE):
-                if await self.alerter.alert_davmail_token_expiring(token_age_days):
+                if self.alerter is not None and await self.alerter.alert_davmail_token_expiring(
+                    token_age_days
+                ):
                     self.episodes.commit("davmail_token", warn, token_age_days)
 
             # 严重度回落 (≥87 → [80,87)): 不是恢复, 不发消息, 只复位 marker 让它
@@ -701,12 +753,93 @@ class DavMailWatchdog:
                 self.episodes.commit("davmail_token_critical", crit, token_age_days)
             # 真·恢复: age < 80 (重走 OAuth 后 token.dat 刷新 → age 归零) 才发。
             if warn == episode.RECOVER:
-                if await self.alerter.alert_recovery("DavMail OAuth token"):
+                if self.alerter is not None and await self.alerter.alert_recovery(
+                    "DavMail OAuth token"
+                ):
                     self.episodes.commit("davmail_token", warn, token_age_days)
+
+            # 通知中心 (critical 组只收 token_critical): 独立水位 `nc.` 前缀,
+            # 落库成功即 commit。条目的真值条件就是「age ≥ 87」→ 回落到
+            # [80,87) 判 RECOVER 时收掉条目 (飞书那边不发"恢复"消息是因为消息
+            # 会误导, 这里只是收掉一张卡片, 语义相符)。M1 不做 warning 档
+            # token 通知 —— [80,87) 区间铃铛里没有条目, 是已知边界。
+            nc_crit = self._nc_episodes.evaluate(
+                "nc.davmail_token_critical", token_age_days, TOKEN_CRITICAL_DAYS
+            )
+            if nc_crit in (episode.ENTER, episode.ESCALATE):
+                if await self._notify_davmail_alert(
+                    "token_critical",
+                    title=f"DavMail token 已 {token_age_days:.0f} 天未刷新",
+                    body=(
+                        f"token.dat age={token_age_days:.1f}d "
+                        f"(critical 门槛 {TOKEN_CRITICAL_DAYS}d), 到期后收发信全停, "
+                        "需重走 OAuth。"
+                    ),
+                ):
+                    self._nc_episodes.commit(
+                        "nc.davmail_token_critical", nc_crit, token_age_days
+                    )
+            elif nc_crit == episode.RECOVER:
+                if await self._notify_davmail_resolve("token_critical"):
+                    self._nc_episodes.commit(
+                        "nc.davmail_token_critical", nc_crit, token_age_days
+                    )
 
         # 3. OAuth 失败：只在出现新错误时报（同一行不重复）
         if oauth_error and oauth_error != self._prev.get("oauth_error"):
-            await self.alerter.alert_davmail_oauth_failure(oauth_error)
+            if self.alerter is not None:
+                await self.alerter.alert_davmail_oauth_failure(oauth_error)
+            # 无恢复信号 (日志里不会出现「OAuth 又好了」) → 只发不收; 用户读掉即
+            # 清徽标, resolve 留给 M2 的单条动作。
+            await self._notify_davmail_alert(
+                "oauth_failure",
+                title="DavMail OAuth 失败",
+                body=oauth_error[:240],
+            )
+
+    async def _notify_davmail_alert(
+        self, sub: str, *, title: str, body: str
+    ) -> bool:
+        """DavMail critical 告警 → 通知中心 (task 08-20-notification-center §7)。
+
+        返回**是否落库成功** —— episode 化的挂点 (token_critical) 据此决定要不要
+        commit 水位 (episode.py 的两阶段提交纪律: 没送达就别标已告警);
+        `_announced_*` 内存态挂点忽略返回值 (与飞书调用同款 announce-once)。
+
+        落库失败仅 warning: watchdog 巡检循环绝不能被 SQLite 打挂。
+        """
+        center = self.notify_center
+        if center is None:
+            return False
+        try:
+            await asyncio.to_thread(
+                center.publish,
+                category="system",
+                source="davmail",
+                title=title,
+                body=body,
+                severity="critical",
+                dedupe_key=f"alert:davmail:{sub}",
+                payload={"link": {"type": "route", "to": "/admin/kanban"}},
+            )
+            return True
+        except Exception as e:  # noqa: BLE001 — 通知落库失败不影响巡检
+            logger.warning(f"[notify-center] davmail alert failed ({sub}): {e}")
+            return False
+
+    async def _notify_davmail_resolve(self, sub: str) -> bool:
+        """状态恢复 → 收掉对应通知条目 (open|snoozed → resolved)。"""
+        center = self.notify_center
+        if center is None:
+            return False
+        try:
+            await asyncio.to_thread(
+                center.resolve_by_dedupe, f"alert:davmail:{sub}"
+            )
+            return True
+        except Exception as e:  # noqa: BLE001 — 同上
+            logger.warning(f"[notify-center] davmail resolve failed ({sub}): {e}")
+            return False
 
     async def _update_throttle_pause(self, throttle_count: int) -> None:
         """EWS throttle burst → uid-backfill pause flag 的置位/心跳/复位。

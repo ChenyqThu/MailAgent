@@ -171,6 +171,11 @@ class EmailNotionSyncApp:
             outbox_repo=self.outbox_repo,
         )
 
+        # 通知中心写面 (task 08-20-notification-center, design §8.b): 只持 db_path,
+        # 不开连接。🔴 **恒在场、无 flag** —— 飞书 alerter 要 ALERT_ENABLED + webhook
+        # 才构造 (默认安装 = None), 通知中心是默认安装唯一能收到系统告警的地方。
+        self._notify_center = NotifyCenter(config.sync_store_db_path)
+
         # 飞书告警通知
         self.alerter = None
         if config.alert_enabled and config.alert_feishu_webhook_url:
@@ -318,6 +323,9 @@ class EmailNotionSyncApp:
                 episodes=AlertEpisodeTracker(
                     self.watcher.sync_store, enabled=config.alert_episode_enabled
                 ),
+                # task 08-20: critical 组同时落通知中心 (默认安装没配飞书时,
+                # 铃铛是唯一出口)
+                notify_center=self._notify_center,
             )
             if self.stats_reporter:
                 self.stats_reporter.add_collector(
@@ -1132,7 +1140,13 @@ class EmailNotionSyncApp:
 
     async def _check_and_alert(self):
         """执行一次告警检查"""
-        if not self.alerter:
+        # task 08-20-notification-center §8.b: 出口有两个 —— 飞书 alerter (需
+        # ALERT_ENABLED + webhook, 默认安装是 None) 与通知中心 (恒在场)。老 guard
+        # `if not self.alerter: return` 会让默认安装**连判定都不跑**, 系统告警在
+        # 铃铛里永远是空的 —— 这正是本专项要修的断链。放宽为「至少一个出口在场」,
+        # 段内每处飞书调用改由 `self.alerter` 逐点守卫 (🔴 漏一处 = 告警循环
+        # AttributeError 每 60s 刷一次日志)。
+        if not self.alerter and self._notify_center is None:
             return
 
         stats = self.watcher.get_stats()
@@ -1147,23 +1161,40 @@ class EmailNotionSyncApp:
         episodes = AlertEpisodeTracker(
             self.watcher.sync_store, enabled=config.alert_episode_enabled
         )
+        # task 08-20 §8.b「各记水位」: 通知中心用**第二个 tracker**, key 加 `nc.`
+        # 前缀 (状态落 sync_state['alert.nc.*'], 与飞书那份互不干扰)。两份水位必须
+        # 分开 —— 飞书侧 commit 挂「投递成功」(飞书挂了要重发), 通知中心侧 commit
+        # 挂「落库成功」(表就是收件箱, 落库即送达); 共用一份会让一边的投递失败把
+        # 另一边永久静默。飞书链路的 evaluate/commit 一行不动。
+        nc_episodes = AlertEpisodeTracker(
+            self.watcher.sync_store, enabled=config.alert_episode_enabled
+        )
 
         # 1. 连续错误检查 (半状态型: 成功即归零 → 不接 episode, 行为不变)
         consecutive = stats.get("consecutive_errors", 0)
-        if consecutive >= 3:
+        if consecutive >= 3 and self.alerter:
             last_err = ""
             await self.alerter.alert_consecutive_errors(consecutive, last_err)
 
         # 2. 服务不健康 (布尔态 → 纯 edge-triggered, 只有 ENTER/SILENT/RECOVER)
-        action = episodes.evaluate_flag(
-            "service_unhealthy", not stats.get("healthy", True)
-        )
+        unhealthy = not stats.get("healthy", True)
+        action = episodes.evaluate_flag("service_unhealthy", unhealthy)
         if action == episode_mod.ENTER:
-            if await self.alerter.alert_service_unhealthy(consecutive):
+            if self.alerter and await self.alerter.alert_service_unhealthy(consecutive):
                 episodes.commit("service_unhealthy", action, 1.0)
         elif action == episode_mod.RECOVER:
-            if await self.alerter.alert_recovery("服务健康检查"):
+            if self.alerter and await self.alerter.alert_recovery("服务健康检查"):
                 episodes.commit("service_unhealthy", action, 0.0)
+        await self._notify_alert_episode(
+            nc_episodes,
+            "service_unhealthy",
+            value=1.0 if unhealthy else 0.0,
+            threshold=1.0,
+            boolean=True,
+            severity="critical",
+            title="服务健康检查未通过",
+            body=f"主循环健康检查失败 (连续错误 {consecutive} 次)。",
+        )
 
         # 3. dead_letter 累积
         sync_store_stats = stats.get("sync_store", {})
@@ -1172,7 +1203,7 @@ class EmailNotionSyncApp:
             "dead_letters", dead_count, config.alert_dead_letter_threshold
         )
         if action in (episode_mod.ENTER, episode_mod.ESCALATE):
-            if await self.alerter.alert_dead_letters(
+            if self.alerter and await self.alerter.alert_dead_letters(
                 dead_count, config.alert_dead_letter_threshold
             ):
                 episodes.commit("dead_letters", action, dead_count)
@@ -1189,23 +1220,43 @@ class EmailNotionSyncApp:
                 except Exception as e:
                     logger.debug(f"[island-hook] dead_letter dispatch failed: {e}")
         elif action == episode_mod.RECOVER:
-            if await self.alerter.alert_recovery("死信队列"):
+            if self.alerter and await self.alerter.alert_recovery("死信队列"):
                 episodes.commit("dead_letters", action, dead_count)
+        await self._notify_alert_episode(
+            nc_episodes,
+            "dead_letters",
+            value=dead_count,
+            threshold=config.alert_dead_letter_threshold,
+            title=f"死信队列积压 {dead_count} 封",
+            body=(
+                f"sync_status='dead_letter' 的邮件已达 {dead_count} 封 "
+                f"(阈值 {config.alert_dead_letter_threshold})。"
+            ),
+        )
 
         # 4. 雷达不可用 (布尔态 → 纯 edge-triggered)
         radar_available = stats.get("radar", {}).get("available", True)
         action = episodes.evaluate_flag("radar_unavailable", not radar_available)
         if action == episode_mod.ENTER:
-            if await self.alerter.alert_radar_unavailable():
+            if self.alerter and await self.alerter.alert_radar_unavailable():
                 episodes.commit("radar_unavailable", action, 1.0)
         elif action == episode_mod.RECOVER:
-            if await self.alerter.alert_recovery("SQLite 雷达"):
+            if self.alerter and await self.alerter.alert_recovery("SQLite 雷达"):
                 episodes.commit("radar_unavailable", action, 0.0)
+        await self._notify_alert_episode(
+            nc_episodes,
+            "radar_unavailable",
+            value=0.0 if radar_available else 1.0,
+            threshold=1.0,
+            boolean=True,
+            title="SQLite 雷达不可用",
+            body="邮件雷达探测失败, 新邮件可能已停止入库。",
+        )
 
         # 5. Redis 断连检查
         if self.redis_consumer:
             rc_stats = self.redis_consumer.get_stats()
-            if rc_stats.get("connected") is False:
+            if rc_stats.get("connected") is False and self.alerter:
                 await self.alerter.alert_redis_disconnected(
                     rc_stats.get("last_error", "unknown")
                 )
@@ -1215,7 +1266,7 @@ class EmailNotionSyncApp:
         # E4 WP2: ① 裸 sqlite3.connect 包 asyncio.to_thread (timeout=5.0 意味 WAL
         # 锁竞争下最坏阻塞事件循环 5s); ② 修真 bug: send_alert 签名是 content=,
         # 原 message= kwarg 触发即 TypeError (该告警从未成功发出过)。
-        if self.backend and self.backend.backend_origin == "davmail":
+        if self.backend and self.backend.backend_origin == "davmail" and self.alerter:
             try:
                 def _count_recent_fetch_failed() -> int:
                     import sqlite3 as _sql
@@ -1262,13 +1313,26 @@ class EmailNotionSyncApp:
                 config.alert_outbox_backlog_threshold + 1,
             )
             if action in (episode_mod.ENTER, episode_mod.ESCALATE):
-                if await self.alerter.alert_outbox_backlog(
+                if self.alerter and await self.alerter.alert_outbox_backlog(
                     aged_pending, config.alert_outbox_backlog_threshold
                 ):
                     episodes.commit("outbox_backlog", action, aged_pending)
             elif action == episode_mod.RECOVER:
-                if await self.alerter.alert_recovery("Outbox 积压"):
+                if self.alerter and await self.alerter.alert_recovery("Outbox 积压"):
                     episodes.commit("outbox_backlog", action, aged_pending)
+            await self._notify_alert_episode(
+                nc_episodes,
+                "outbox_backlog",
+                value=aged_pending,
+                # 门槛 +1 与飞书侧逐字一致 —— 两份水位必须盯同一个判据, 否则
+                # 边界值上一边告一边不告。
+                threshold=config.alert_outbox_backlog_threshold + 1,
+                title=f"Outbox 积压 {aged_pending} 条",
+                body=(
+                    f"行龄 ≥5min 仍 pending 的 outbox 条目 {aged_pending} 条 "
+                    f"(阈值 {config.alert_outbox_backlog_threshold})。"
+                ),
+            )
         except Exception as e:
             logger.debug(f"[alert] outbox backlog check failed: {e}")
 
@@ -1286,7 +1350,7 @@ class EmailNotionSyncApp:
             import time as _time
 
             count_24h = self._count_recent_starts(24 * 3600)
-            if count_24h > self.RESTART_FREQ_THRESHOLD_PER_DAY:
+            if count_24h > self.RESTART_FREQ_THRESHOLD_PER_DAY and self.alerter:
                 now = _time.time()
                 last_alert_ts = 0.0
                 raw_last = self.watcher.sync_store.get_state(
@@ -1311,6 +1375,62 @@ class EmailNotionSyncApp:
                         )
         except Exception as e:
             logger.debug(f"[alert] restart frequency check failed: {e}")
+
+    async def _notify_alert_episode(
+        self,
+        nc_episodes: AlertEpisodeTracker,
+        key: str,
+        *,
+        value: float,
+        threshold: float,
+        boolean: bool = False,
+        title: str,
+        body: str,
+        severity: str = "warn",
+    ) -> None:
+        """状态型告警 → 通知中心 (task 08-20-notification-center, design §8.b)。
+
+        与飞书 alerter 并列的第二个出口, **各记各的水位**: 判定用 `nc.` 前缀的
+        tracker key (sync_state['alert.nc.*']), ENTER/ESCALATE → publish、RECOVER
+        → resolve_by_dedupe, 落库成功才 commit —— 通知中心的「投递」就是落库
+        (表即收件箱), 不需要像飞书那样等网络返回。
+
+        🔴 evaluate 与 commit 的 key 都在本方法内加前缀, 调用方只给裸 key ——
+        两处手抄 `nc.` 前缀漂移 = 永远重发或永久静默。
+
+        `boolean=True` 走 ``evaluate_flag`` (布尔态无「恶化」维度)。落库失败仅
+        warning: 告警循环绝不能被 SQLite 打挂 (飞书链路照常走它自己的分支)。
+        """
+        center = self._notify_center
+        if center is None:
+            return
+        nc_key = f"nc.{key}"
+        action = (
+            nc_episodes.evaluate_flag(nc_key, value >= threshold)
+            if boolean
+            else nc_episodes.evaluate(nc_key, value, threshold)
+        )
+        if action == episode_mod.SILENT:
+            return
+        dedupe_key = f"alert:{key}"
+        try:
+            if action == episode_mod.RECOVER:
+                await asyncio.to_thread(center.resolve_by_dedupe, dedupe_key)
+            else:  # ENTER / ESCALATE —— 同一条 dedupe_key 计次, 不刷屏
+                await asyncio.to_thread(
+                    center.publish,
+                    category="system",
+                    source="system_alert",
+                    title=title,
+                    body=body,
+                    severity=severity,
+                    dedupe_key=dedupe_key,
+                    payload={"link": {"type": "route", "to": "/admin/kanban"}},
+                )
+        except Exception as e:  # noqa: BLE001 — 通知落库失败不影响告警循环
+            logger.warning(f"[notify-center] alert publish failed ({key}): {e}")
+            return
+        nc_episodes.commit(nc_key, action, value)
 
     async def _stats_reporter_loop(self):
         """看板统计上报循环"""

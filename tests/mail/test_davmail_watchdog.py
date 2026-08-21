@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import sqlite3
 import time
 import unittest.mock as um
 from datetime import datetime
@@ -28,6 +29,7 @@ from src.mail.davmail_watchdog import (
     _OAUTH_FAIL_RE,
 )
 from src.mail.sync_store import SyncStore
+from src.notify.center import NotifyCenter
 from src.notify.episode import AlertEpisodeTracker
 
 
@@ -1363,3 +1365,135 @@ async def test_write_state_persists_login_fail_threshold(
     await _patch_probe(wd, imap_ok=True, smtp_ok=True)
     await wd._tick()
     assert sync_store.get_state("davmail.login_fail_threshold") == "5"
+
+
+# ────────────────────────────────────────────────────────────────
+# task 08-20-notification-center 步骤 4c — critical 组 → 通知中心
+# ────────────────────────────────────────────────────────────────
+
+
+def _notifications(sync_store: SyncStore, dedupe_key: str | None = None):
+    with sqlite3.connect(str(sync_store.db_path)) as conn:
+        conn.row_factory = sqlite3.Row
+        sql = "SELECT * FROM notification"
+        args: tuple = ()
+        if dedupe_key is not None:
+            sql += " WHERE dedupe_key=?"
+            args = (dedupe_key,)
+        return [dict(r) for r in conn.execute(sql + " ORDER BY id", args).fetchall()]
+
+
+def _center(sync_store: SyncStore) -> NotifyCenter:
+    return NotifyCenter(sync_store.db_path)
+
+
+async def test_no_notify_center_keeps_alerter_none_early_return(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """两个出口都不在 → _evaluate_alerts 老行为 (整段早退, 连 announce 都不置)."""
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root
+    )
+    await _patch_probe(wd, imap_ok=False, smtp_ok=False)
+    for _ in range(3):
+        await wd._tick()
+    assert wd._announced_process_down_imap is False
+    assert _notifications(sync_store) == []
+
+
+async def test_process_down_publishes_critical_notification_without_alerter(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """默认安装 (ALERT_ENABLED=false → alerter=None): critical 组照样进铃铛,
+    announce-once 语义不变 (静默轮不刷屏), 恢复时条目转 resolved。"""
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=False, smtp_ok=False)
+    for _ in range(4):  # 3 次到阈值 + 1 次仍 down
+        await wd._tick()
+
+    rows = _notifications(sync_store)
+    assert {r["dedupe_key"] for r in rows} == {
+        "alert:davmail:imap_down", "alert:davmail:smtp_down"
+    }
+    imap_row = _notifications(sync_store, "alert:davmail:imap_down")[0]
+    assert imap_row["severity"] == "critical"
+    assert imap_row["category"] == "system"
+    assert imap_row["source"] == "davmail"
+    assert imap_row["recurrence_no"] == 1, "announce-once: 仍 down 的轮次不得计次"
+    assert imap_row["state"] == "open"
+
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert all(r["state"] == "resolved" for r in _notifications(sync_store))
+
+
+async def test_token_critical_notification_keeps_own_watermark(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """🔴 §8.b: token 是唯一 episode 化的一项 —— 飞书不在场时 self.episodes 永不
+    commit (每轮重判 ENTER), 通知中心必须用自己的 `nc.` 水位, 否则每 60s 计次一次。"""
+    write_token(age_seconds=89 * 86400)
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(4):
+        await wd._tick()
+
+    rows = _notifications(sync_store, "alert:davmail:token_critical")
+    assert len(rows) == 1 and rows[0]["recurrence_no"] == 1
+    assert rows[0]["severity"] == "critical"
+    # 飞书那份水位没被碰 (没投递过 = 下次配上飞书仍会告)
+    assert sync_store.get_state("alert.nc.davmail_token_critical.active") == "1"
+    assert sync_store.get_state("alert.davmail_token_critical.active") is None
+
+    # 重走 OAuth → age 归零 → 条目收掉 + nc 水位复位
+    write_token(age_seconds=0)
+    await wd._tick()
+    rows = _notifications(sync_store, "alert:davmail:token_critical")
+    assert rows[0]["state"] == "resolved"
+    assert sync_store.get_state("alert.nc.davmail_token_critical.active") == "0"
+
+
+async def test_oauth_failure_publishes_notification(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """OAuth 失败 (无恢复信号 → 只发不收); 同一行不重复 = 不计次."""
+    write_log(
+        "2026-08-21 10:00:00,000 ERROR davmail "
+        "AADSTS700003 refresh token invalid\n"
+    )
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+
+    rows = _notifications(sync_store, "alert:davmail:oauth_failure")
+    assert len(rows) == 1 and rows[0]["recurrence_no"] == 1
+    assert rows[0]["severity"] == "critical"
+
+
+async def test_notify_center_failure_does_not_break_watchdog(
+    sync_store: SyncStore, davmail_root: Path, tmp_path: Path
+):
+    """通知落库炸 (空库没有 notification 表) → 巡检照跑, 飞书 announce 照常."""
+    broken = tmp_path / "empty.db"
+    sqlite3.connect(str(broken)).close()
+    alerter = _FakeAlerter()
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=alerter, davmail_root=davmail_root,  # type: ignore[arg-type]
+        notify_center=NotifyCenter(str(broken)),
+    )
+    await _patch_probe(wd, imap_ok=False, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+    assert len([c for c in alerter.calls if c[0] == "alert_davmail_process_down"]) == 1
+    assert wd._announced_process_down_imap is True
