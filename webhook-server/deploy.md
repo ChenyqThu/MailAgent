@@ -6,7 +6,7 @@
 |------|------|
 | 服务器 | 腾讯云 Ubuntu (170.106.181.89) |
 | IP | 170.106.181.89 |
-| 域名 | mailagent.chenge.ink |
+| 域名 | **mailagent-api.chenge.ink**（2026-08-21 起；原 mailagent.chenge.ink 已被 CF Pages 官网占用，POST 全 405）|
 | SSL | Cloudflare Proxied (Full 模式) + 服务端自签证书 |
 | Python | 3.9+ |
 | 应用端口 | 8100 (Nginx 反代) |

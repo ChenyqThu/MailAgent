@@ -59,7 +59,9 @@ import { writePatch, type EnvSetResult } from './handlers/env'
 export const NOTION_OAUTH_CLIENT_ID_DEFAULT = '3c3d872b-594c-8168-871b-0037807be46f'
 
 /** exchange 代理默认地址；env `NOTION_OAUTH_PROXY_URL` 覆盖（调试 / 部署方案 B）。 */
-export const NOTION_OAUTH_PROXY_URL_DEFAULT = 'https://mailagent.chenge.ink'
+// 🔴 mailagent.chenge.ink 已被 CF Pages 官网占用（2026-08-21 实测 POST 全 405），
+// API 面走独立子域 mailagent-api（Nginx → VPS:8100）。
+export const NOTION_OAUTH_PROXY_URL_DEFAULT = 'https://mailagent-api.chenge.ink'
 
 /** Redirect URI 白名单端口（与服务端 exchange 白名单、Notion 控制台注册值三处同值，
  *  仅这两条）。host 用 `localhost` 不用字面 IP —— RFC 8252 首选 127.0.0.1，但 Notion
