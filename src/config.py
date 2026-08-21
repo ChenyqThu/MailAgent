@@ -869,14 +869,16 @@ class Config(BaseSettings):
 
     # C1: async_jobs 子系统 —— 长任务 (batch resync / backfill) 走统一 daemon API。
     # POST /api/jobs enqueue → serve 进程内 JobWorker 串行 claim + 执行 (复用
-    # LongTaskContext checkpoint/熔断) + SSE job.progress 进度。默认关闭灰度期。
+    # LongTaskContext checkpoint/熔断) + SSE job.progress 进度。2026-08-20 结束
+    # C1 灰度, 默认启用 (通知中心专项 M1 依赖 job 终态挂点产生持久化通知)。
     # 详见 docs/reference/architecture/backend-service-migration-matrix.md C1 + plan §C1。
     mailagent_async_jobs_enabled: bool = Field(
-        default=False, env="MAILAGENT_ASYNC_JOBS_ENABLED",
+        default=True, env="MAILAGENT_ASYNC_JOBS_ENABLED",
         description=(
-            "是否启用 async_jobs 长任务子系统 (serve 进程内 JobWorker)。默认 false 灰度期 —— "
-            "关闭时 POST /api/jobs 仍可 enqueue 但无 worker 执行 (行保持 queued)。"
-            "CLI 长任务 (email resync --range / backfill) 不受影响, 仍走 LongTaskContext 直跑。"
+            "是否启用 async_jobs 长任务子系统 (serve 进程内 JobWorker)。默认 true "
+            "(2026-08-20 结束 C1 灰度) —— 关闭时 POST /api/jobs 仍可 enqueue 但无 worker "
+            "执行 (行保持 queued)。CLI 长任务 (email resync --range / backfill) 不受影响, "
+            "仍走 LongTaskContext 直跑。"
         ),
     )
     mailagent_async_jobs_poll_interval_sec: int = Field(

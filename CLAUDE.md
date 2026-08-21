@@ -142,6 +142,7 @@
 | `MAILAGENT_AGENT_PLUGINS` | `true` | Agent Plugins 1.0 导入 / 导出 + 会前准备模板。🔴 导入强制 `enabled=false` 落地 |
 | `MAILAGENT_INTERNAL_AGENT_TOOLS` | `true` | 主 agent 可读写四类**内建** agent 配置 + 事项跟进逐条配置。写工具恒 ask；白名单字段须有真实消费点 |
 | `FEISHU_NOTIFY_ENABLED` / `REDIS_EVENTS_ENABLED` / `ALERT_ENABLED` | `false` | 通知 / 事件消费 / 告警 |
+| `MAILAGENT_ASYNC_JOBS_ENABLED` | `true` | async_jobs 长任务子系统总闸（serve 进程内 JobWorker，`POST /api/jobs` 消费方）。2026-08-20 结束 C1 灰度翻默认；关闭时仍可 enqueue 但无 worker 执行。CLI 长任务不受影响 |
 
 必填项：**硬必填仅 `USER_EMAIL`**；`MAIL_ACCOUNT_NAME` 有默认 `Exchange` 但需与实际账户名一致；Notion 三键（`NOTION_TOKEN` / `EMAIL_DATABASE_ID` / `CALENDAR_DATABASE_ID`）**可选**，空 = 本地-only 模式。全部可调项见 [`.env.example`](./.env.example)。
 
