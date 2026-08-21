@@ -84,22 +84,27 @@ vi.mock('@shared/components/matters/matterLastSelected', () => ({
   }
 }))
 
-vi.mock('@shared/components/matters/hooks', () => ({
-  useMattersApi: () => ({
-    // MattersWorkspace 冷启动只发一个无参数的 `list()`（liveMatters）——照真实服务端
-    // 默认子句 `deleted_at IS NULL AND archived_at IS NULL` 过滤，C（已归档）不进活跃集。
-    list: async () => {
-      const items = TEST_MATTERS.filter(
-        (matter) => matter.archived_at == null && matter.deleted_at == null
-      )
-      return { items, total: items.length }
-    }
-  }),
-  useMatterFlags: () => ({ mattersEnabled: true, matterAgentEnabled: false }),
-  usePendingMatterUpdates: () => ({ data: undefined, isLoading: false }),
-  useGlobalAttention: () => ({ data: { items: [] } }),
-  useAttentionAction: () => ({ mutate: vi.fn() })
-}))
+vi.mock('@shared/components/matters/hooks', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@shared/components/matters/hooks')>()
+  return {
+    // options 工厂用真实现（liveList 的 key/缓存配方单源, 抄进 mock 就成第二份镜像）。
+    matterLiveListOptions: actual.matterLiveListOptions,
+    useMattersApi: () => ({
+      // MattersWorkspace 冷启动只发一个 `list({limit:100})`（liveMatters）——照真实服务端
+      // 默认子句 `deleted_at IS NULL AND archived_at IS NULL` 过滤，C（已归档）不进活跃集。
+      list: async () => {
+        const items = TEST_MATTERS.filter(
+          (matter) => matter.archived_at == null && matter.deleted_at == null
+        )
+        return { items, total: items.length }
+      }
+    }),
+    useMatterFlags: () => ({ mattersEnabled: true, matterAgentEnabled: false }),
+    usePendingMatterUpdates: () => ({ data: undefined, isLoading: false }),
+    useGlobalAttention: () => ({ data: { items: [] } }),
+    useAttentionAction: () => ({ mutate: vi.fn() })
+  }
+})
 
 vi.mock('@shared/components/matters/MatterFocus', () => ({
   MatterFocus: () => <div data-testid="matter-focus" />

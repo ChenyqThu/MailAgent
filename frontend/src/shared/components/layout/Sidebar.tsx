@@ -4,9 +4,10 @@
 // caret + collapse chevron). Avatar monogram visible only in collapsed
 // mode. Three section groups, EXACTLY: MAILBOXES, AI AGENTS, VIEW
 // (DESIGN.md §2.11 lint rule #2: three and only three section headers).
-// Bottom strip: 设置. The whole shell mounts on every page that
-// uses it (InboxLayout / SearchLayout / PageFrame); cross-page state
-// (collapsed) survives in localStorage + storage event (state/nav-shell).
+// Bottom strip: 设置. Since task 08-20-perf-shell-prefetch-sidebar §② the
+// shell is a RootLayout singleton (AppShell) — mounted ONCE per window,
+// surviving route changes; collapsed state still persists in localStorage +
+// storage event (state/nav-shell) for cross-window sync.
 //
 // Visual class names (`app-nav`, `app-nav-account`, `app-nav-avatar-row`,
 // `app-nav-section-header`, `app-nav-section-spacer`, `app-nav-keep`,
@@ -17,7 +18,7 @@
 import { cloneElement, isValidElement, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
-import { useNavigate, useRouterState } from '@tanstack/react-router'
+import { useNavigate, useRouter, useRouterState } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import { ChevronDown, ChevronLeft, ChevronRight } from 'lucide-react'
 
@@ -66,6 +67,11 @@ interface NavRowProps {
    *  样式/显隐由 authored CSS `.nav-collapsed-badge` 按 data-collapsed 切换；
    *  `app-nav-keep` 豁免 §2.11 收起态 span 隐藏规则。0/undefined 不渲染。 */
   collapsedBadge?: number
+  /** hover/focus 意图预载 (task 08-20-perf-shell-prefetch-sidebar §①): 全仓没有
+   *  TanStack <Link>, router 的 defaultPreload:'intent' 对 button+navigate 入口
+   *  实际不触发 —— 大 chunk 的入口 (事项/通讯录) 用这个槽补 hover 预载。幂等
+   *  (preloadRoute 自去重), 失败由调用方静默。 */
+  onHover?: () => void
 }
 
 /** Inject `shrink-0` on the Lucide svg so it doesn't compress in flex
@@ -120,7 +126,8 @@ function NavRow({
   right,
   disabled,
   title,
-  collapsedBadge
+  collapsedBadge,
+  onHover
 }: NavRowProps): React.ReactElement {
   // 整行 hover/focus 经 AnimatedIconActiveProvider（zero-DOM Context）驱动行内
   // AnimatedIcon 播放/复位 —— 不靠脆弱的 motion variant 传播（根因见
@@ -153,9 +160,15 @@ function NavRow({
     <button
       type="button"
       onClick={onClick}
-      onPointerEnter={() => setIconActive(true)}
+      onPointerEnter={() => {
+        setIconActive(true)
+        onHover?.()
+      }}
       onPointerLeave={() => setIconActive(false)}
-      onFocus={() => setIconActive(true)}
+      onFocus={() => {
+        setIconActive(true)
+        onHover?.()
+      }}
       onBlur={() => setIconActive(false)}
       className={cn(
         'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-[var(--r-ctl)]',
@@ -285,6 +298,12 @@ export function Sidebar(): React.ReactElement {
   const { t } = useTranslation()
   const mailApi = useMailApi()
   const navigate = useNavigate()
+  const routerInstance = useRouter()
+  // hover 意图预载 (§①): 事项/通讯录是最大的两个懒 chunk (591KB/184KB), hover 即开始
+  // 下载, 点击时通常已在本地。preloadRoute 自去重; 失败静默 (预载不该产生可见错误)。
+  const preloadOnHover = (to: '/matters' | '/contacts') => (): void => {
+    void routerInstance.preloadRoute({ to }).catch(() => {})
+  }
   const collapsed = useNavCollapsed((s) => s.collapsed)
   const toggleCollapsed = useNavCollapsed((s) => s.toggle)
   const sessionProvenanceEnabled = useSessionProvenanceEnabled()
@@ -605,6 +624,7 @@ export function Sidebar(): React.ReactElement {
               label={t('matters.nav')}
               selected={pathname === '/matters'}
               onClick={() => void navigate({ to: '/matters' })}
+              onHover={preloadOnHover('/matters')}
               title={collapsed ? t('matters.nav') : undefined}
               right={<MatterAttentionBadge count={matterAttentionCount} />}
               collapsedBadge={matterAttentionCount}
@@ -687,6 +707,7 @@ export function Sidebar(): React.ReactElement {
               title={collapsed ? t('contacts.nav.title') : undefined}
               selected={pathname === '/contacts'}
               onClick={() => navigate({ to: '/contacts' })}
+              onHover={preloadOnHover('/contacts')}
             />
           ) : null}
         </nav>

@@ -105,6 +105,39 @@ export function useContactList(options: {
  *  服务端按 keyset 续页；小于这个数会让「刚进页面就要续拉」变成常态。 */
 export const CONTACT_LIST_PAGE_SIZE = 200
 
+/** 工作台主列表 (keyset 分页) 的 options 单源 —— useContactListPaged 与启动预热
+ *  (lib/startupPrefetch T2 的 prefetchInfiniteQuery 首页) 共用: key / queryFn /
+ *  分页参数 / 缓存配方一体, 预热写进缓存的必然被工作台首挂命中 (防 key 漂移)。 */
+export function contactListPagedOptions(
+  api: ContactsApi,
+  view: ContactView,
+  q: string,
+  sort: ContactSort
+): {
+  queryKey: ReturnType<typeof qk.contacts.listPaged>
+  queryFn: (context: { pageParam: unknown }) => Promise<ContactListResponse>
+  initialPageParam: string | undefined
+  getNextPageParam: (lastPage: ContactListResponse) => string | undefined
+  staleTime: number
+  gcTime: number
+} {
+  return {
+    queryKey: qk.contacts.listPaged(view, q, sort),
+    queryFn: ({ pageParam }) =>
+      api.list({
+        view,
+        q: q || undefined,
+        sort,
+        limit: CONTACT_LIST_PAGE_SIZE,
+        cursor: pageParam as string | undefined
+      }),
+    initialPageParam: undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
+  }
+}
+
 /** 工作台主列表（keyset 分页）。
  *
  *  `placeholderData: (prev) => prev` 在 infinite query 上的形态一致：切视图 / 改搜索词
@@ -117,20 +150,8 @@ export function useContactListPaged(options: {
 }): ReturnType<typeof useInfiniteQuery<ContactListResponse, Error>> {
   const api = useContactsApi()
   return useInfiniteQuery({
-    queryKey: qk.contacts.listPaged(options.view, options.q, options.sort),
-    queryFn: ({ pageParam }) =>
-      api.list({
-        view: options.view,
-        q: options.q || undefined,
-        sort: options.sort,
-        limit: CONTACT_LIST_PAGE_SIZE,
-        cursor: pageParam
-      }),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    ...contactListPagedOptions(api, options.view, options.q, options.sort),
     enabled: options.enabled,
-    staleTime: 5 * 60_000,
-    gcTime: 15 * 60_000,
     placeholderData: (previous) => previous
   })
 }

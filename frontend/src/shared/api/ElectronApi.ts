@@ -381,7 +381,7 @@ class ElectronFolderApi implements FolderApi {
   // 多文件夹同步 (P3) — discover/whitelist 走 Main→daemon→serve-api 转发 (D1)。
   // 用 envelope 形态过 IPC 边界以保住 error.code (非 davmail → E_INVALID_ARG, 给
   // FolderPicker 门控)。
-  async discover(opts?: { counts?: boolean }): Promise<FolderDiscoverResult> {
+  async discover(opts?: { counts?: boolean; refresh?: boolean }): Promise<FolderDiscoverResult> {
     const env = (await invoker()('folder:discover', opts)) as WriteEnvelope<FolderDiscoverResult>
     return unwrap(env)
   }

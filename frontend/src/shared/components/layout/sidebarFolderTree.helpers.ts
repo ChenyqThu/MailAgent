@@ -7,6 +7,7 @@
 // 顺序), 同层级内 (roots 与每个节点的 children) 按其下标排序; 层级挂载不受影响。
 
 import type { FolderInfo } from '@shared/api/types'
+import { decodeImapUtf7 } from '@shared/lib/imapUtf7'
 
 /** sidebar 内部树节点 — FolderInfo 子集 + children + 层级 display_name 路径。 */
 export interface SidebarFolderNode {
@@ -19,8 +20,44 @@ export interface SidebarFolderNode {
   /** 根→本节点的 display_name 段 (末段 = displayName), 列表面包屑用。 */
   path: string[]
   children: SidebarFolderNode[]
-  /** discover 未就绪/失败时退化平铺的节点, display_name 未解码 → 禁用点击。 */
-  isDisabled?: boolean
+}
+
+/** discover 未就绪时的本地 seed (task 08-20-perf-shell-prefetch-sidebar §③) ——
+ *  从 whitelist (imap 原始名, SYNC_FOLDERS 数组序) 合成 FolderInfo 子集, 喂给
+ *  buildSidebarFolderTree 走与正式树**完全相同**的建树 + orderIndex 排序路径
+ *  (🔴 顺序红线: 数组序 = 用户自定义显示顺序, 两棵树同源同序, 切换零跳变)。
+ *
+ *  display_name = decodeImapUtf7(imap_name) —— 与后端两处同源同值:
+ *  ① discover 的 display_name (imap_client.py `decode_imap_utf7(imap_name)`);
+ *  ② `email_metadata.mailbox` (davmail 落库同一函数)。所以 seed 行**可点**:
+ *  fullDisplayName 过滤 key 与正式树逐字一致, discover 回来只换引用不换语义。
+ *
+ *  delimiter 按 davmail 实况假定 '/' (真 delimiter 只在 LIST 响应里有; 假定错时
+ *  parent 推导不出 → 全平铺顶层 + label 显完整路径, 优雅降级不误挂)。parent 取
+ *  「'/' 前缀里最长的 whitelist 成员」= discover 树 nearestSyncedParent 在 '/'
+ *  delimiter 下的结果, 避免 discover 回来后层级跳变。编码段内不含字面 '/'
+ *  (modified-BASE64 用 ',' 代 '/'), 按 '/' 切 imap_name 不会切进编码段。 */
+export function buildSeedFolderInfos(whitelistOrder: readonly string[]): FolderInfo[] {
+  const members = new Set(whitelistOrder)
+  const nearestParent = (imapName: string): string | null => {
+    let idx = imapName.lastIndexOf('/')
+    while (idx > 0) {
+      const prefix = imapName.slice(0, idx)
+      if (members.has(prefix)) return prefix
+      idx = prefix.lastIndexOf('/')
+    }
+    return null
+  }
+  return whitelistOrder.map((imapName) => ({
+    imap_name: imapName,
+    display_name: decodeImapUtf7(imapName),
+    delimiter: '/',
+    special_use: null,
+    is_system: false,
+    has_children: false,
+    parent: nearestParent(imapName),
+    message_count: null
+  }))
 }
 
 export function buildSidebarFolderTree(

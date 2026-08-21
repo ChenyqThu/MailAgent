@@ -36,6 +36,11 @@ class _StubConfig:
 def folder_client(monkeypatch, tmp_path) -> Iterator[TestClient]:
     cfg = _StubConfig()
     app.dependency_overrides[get_settings] = lambda: cfg
+    # discover 有 60s TTL 进程内缓存 (模块级单例) —— 每个 case 前清空, 否则上一个
+    # case 的 folders 会跨 case 串味 (spy 类断言尤其会被缓存吃掉)。
+    from src.api.routers.folder import _reset_discover_cache
+
+    _reset_discover_cache()
     monkeypatch.setattr(
         "src.mail.backend.imap_client.list_folders",
         lambda c, with_counts=True: _fake_folders(),
@@ -105,6 +110,87 @@ class TestDiscover:
         r = folder_client.get("/api/folder/discover", params={"counts": "true"})
         assert r.status_code == 200, r.text
         assert captured["with_counts"] is True
+
+
+class TestDiscoverTtlCache:
+    """task 08-20-perf-shell-prefetch-sidebar §③ — discover 的 60s TTL 进程内缓存。"""
+
+    def _spy(self, monkeypatch):
+        calls = {"n": 0}
+
+        def _fake(c, with_counts=True):
+            calls["n"] += 1
+            return _fake_folders()
+
+        monkeypatch.setattr("src.mail.backend.imap_client.list_folders", _fake)
+        return calls
+
+    def test_second_call_within_ttl_hits_cache(self, folder_client, monkeypatch):
+        """TTL 内第二次调用不真连 IMAP (变异验证: 去掉缓存则 n==2 → 红)。"""
+        calls = self._spy(monkeypatch)
+        assert folder_client.get("/api/folder/discover").status_code == 200
+        assert folder_client.get("/api/folder/discover").status_code == 200
+        assert calls["n"] == 1
+
+    def test_refresh_true_bypasses_cache(self, folder_client, monkeypatch):
+        """?refresh=true 穿透缓存真连 IMAP, 并回填缓存供后续命中。"""
+        calls = self._spy(monkeypatch)
+        folder_client.get("/api/folder/discover")
+        folder_client.get("/api/folder/discover", params={"refresh": "true"})
+        assert calls["n"] == 2
+        # refresh 回填 → 紧随其后的普通调用命中新缓存
+        folder_client.get("/api/folder/discover")
+        assert calls["n"] == 2
+
+    def test_cache_key_includes_counts(self, folder_client, monkeypatch):
+        """counts=true/false 两种负载不同形, 各自独立缓存。"""
+        calls = self._spy(monkeypatch)
+        folder_client.get("/api/folder/discover")
+        folder_client.get("/api/folder/discover", params={"counts": "true"})
+        assert calls["n"] == 2
+
+    def test_ttl_expiry_refetches(self, folder_client, monkeypatch):
+        """过 TTL 后再调用重新真连 (monotonic 时钟前拨模拟)。"""
+        calls = self._spy(monkeypatch)
+        folder_client.get("/api/folder/discover")
+        import src.api.routers.folder as folder_mod
+
+        real_monotonic = folder_mod.time.monotonic
+        monkeypatch.setattr(
+            folder_mod.time, "monotonic", lambda: real_monotonic() + 61.0
+        )
+        folder_client.get("/api/folder/discover")
+        assert calls["n"] == 2
+
+    def test_cached_response_still_recomputes_whitelist(self, folder_client):
+        """只缓存 list_folders 原始结果 —— is_synced/whitelist 每请求现算, 白名单
+        改动不吃 TTL (否则设置页勾选后 Sidebar 最多滞后 60s)。"""
+        folder_client._cfg.sync_folders = ""
+        r1 = folder_client.get("/api/folder/discover")
+        assert r1.json()["data"]["whitelist"] == []
+        folder_client._cfg.sync_folders = '["Jira"]'
+        r2 = folder_client.get("/api/folder/discover")  # 命中缓存 (同 counts key)
+        data = r2.json()["data"]
+        assert data["whitelist"] == ["Jira"]
+        jira = next(f for f in data["folders"] if f["imap_name"] == "Jira")
+        assert jira["is_synced"] is True
+
+    def test_error_not_cached(self, folder_client, monkeypatch):
+        """失败不缓存 —— 下一次调用重试真连而不是 60s 内一直回错。"""
+        state = {"n": 0}
+
+        def _flaky(c, with_counts=True):
+            state["n"] += 1
+            if state["n"] == 1:
+                raise ConnectionError("imap down")
+            return _fake_folders()
+
+        monkeypatch.setattr("src.mail.backend.imap_client.list_folders", _flaky)
+        r1 = folder_client.get("/api/folder/discover")
+        assert r1.status_code in (500, 502) or r1.json().get("error")
+        r2 = folder_client.get("/api/folder/discover")
+        assert r2.status_code == 200, r2.text
+        assert state["n"] == 2
 
 
 class TestWhitelist:

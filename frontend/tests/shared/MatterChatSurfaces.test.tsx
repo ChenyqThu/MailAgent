@@ -60,6 +60,12 @@ const { mattersApi, chatApi, mailApi, mattersEnabled, matterAgentEnabled } = vi.
 }))
 
 vi.mock('@shared/components/matters/hooks', () => ({
+  // liveList options 工厂 —— MattersWorkspace 展开它取 key/queryFn。这里给最小桩
+  // (key 形状不重要, 本套件只关心 chat 面), queryFn 走上面的 mattersApi。
+  matterLiveListOptions: (api: { list: (o?: unknown) => Promise<unknown> }) => ({
+    queryKey: ['matters', 'list'],
+    queryFn: () => api.list({ limit: 100 })
+  }),
   useMattersApi: () => mattersApi,
   useMatterChatApi: () => chatApi,
   useMattersEnabled: () => mattersEnabled.value,

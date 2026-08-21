@@ -32,6 +32,7 @@ import {
   useNavigate
 } from '@tanstack/react-router'
 
+import { AppShell } from './components/layout/AppShell'
 import { InboxLayout } from './components/layout/InboxLayout'
 import { Skeleton } from './components/feedback/LoadingSkeleton'
 import { useActiveEmail } from './state/active-email'
@@ -184,7 +185,12 @@ function RootLayout(): React.ReactElement {
   useMatterNotificationNavigation()
   return (
     <>
-      <Outlet />
+      {/* 外壳单例 (§②, task 08-20-perf-shell-prefetch-sidebar): TitleBar/Sidebar/
+          StatusBar 只在这里渲染一次, 路由切换只换 <Outlet/> 的中间内容区 ——
+          Sidebar (含文件夹树) 不再逐路由 remount。 */}
+      <AppShell>
+        <Outlet />
+      </AppShell>
       <GlobalShortcuts />
       <KeyboardHelpModal />
       <CommandPalette />
@@ -200,7 +206,9 @@ function RootLayout(): React.ReactElement {
 }
 
 function RouteLoadingSkeleton(): React.ReactElement {
-  return <Skeleton rows={6} className="h-full w-full p-6" width="2/3" />
+  // 外壳单例后 pending 态渲染在中间内容槽 (TitleBar/Sidebar 保持在场) —— 自带
+  // flex-1 吃满剩余宽度; 旧 w-full 在 flex 行里按容器全宽算会把 Sidebar 挤溢出。
+  return <Skeleton rows={6} className="h-full flex-1 min-w-0 p-6" width="2/3" />
 }
 
 const rootRoute = createRootRoute({ component: RootLayout })

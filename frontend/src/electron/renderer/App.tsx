@@ -22,6 +22,7 @@ import { ToastContainer } from '@shared/components/Toast'
 import { UpdateReadyBanner } from '@shared/components/UpdateReadyBanner'
 import { useApiReadyRefresh } from '@shared/hooks/useApiReadyRefresh'
 import { useEventBridge } from '@shared/hooks/useEventBridge'
+import { useStartupPrefetch } from '@shared/hooks/useStartupPrefetch'
 import { usePopoutMode } from '@shared/state/popout-mode'
 
 const PopoutShell = lazy(() =>
@@ -42,6 +43,15 @@ function EventBridgeMount(): null {
  *  一次、自身无 UI。 */
 function ApiReadyRefreshMount(): null {
   useApiReadyRefresh()
+  return null
+}
+
+/** 启动预热 (task 08-20-perf-shell-prefetch-sidebar §①) — T0 让位邮件首屏; T1 邮件
+ *  列表首次成功 + idle 后预载 matters/contacts chunk; T2 serve-api 就绪 + 再一次 idle
+ *  后预热两个工作台的列表数据。范式同 EventBridgeMount (QueryClient 内、单挂、无 UI);
+ *  只挂 inbox shell —— popout 绕过 router, 邮件列表 query 也不在, 预热无意义。 */
+function StartupPrefetchMount(): null {
+  useStartupPrefetch()
   return null
 }
 
@@ -133,6 +143,7 @@ export default function App(): React.ReactElement {
                 RootLayout (see `src/shared/router-instance.tsx`) — they
                 call useNavigate(), which must resolve inside
                 RouterProvider, not as its sibling here. */}
+            <StartupPrefetchMount />
             <AppRouter />
             {/* Auto-update §6 (gap B) — proactive "新版本已就绪" floating card.
                 Inbox-shell ONLY (inside the non-popout branch): the popout is a

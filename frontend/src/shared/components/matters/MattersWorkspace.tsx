@@ -22,6 +22,7 @@ import {
 } from './MatterSkeleton'
 import { MatterTagManagerModal } from './MatterTagManagerModal'
 import {
+  matterLiveListOptions,
   useAttentionAction,
   useGlobalAttention,
   useMatterFlags,
@@ -175,16 +176,12 @@ export function MattersWorkspace(): React.ReactElement | null {
   )
 
   // 活跃行（deleted/archived 皆 NULL）—— 看板、open/done 两个 scope、提案扇出都吃这一份。
+  // options 单源在 matterLiveListOptions（与启动预热共用, 防 key 漂移）; 缓存配方
+  // 的理由见工厂头注。placeholderData 让筛选 scope 切换时旧行原地留着（data 不塌成
+  // undefined → 列表不闪空态）。
   const liveList = useQuery({
-    queryKey: qk.matters.list(),
-    queryFn: () => api.list({ limit: 100 }),
+    ...matterLiveListOptions(api),
     enabled,
-    // 缓存配方同 useEmailListRows（速赢包 §2）: 事项页切走即整树卸载, 30s staleTime +
-    // 默认 refetchOnMount 让「切走一会儿再切回」必定冷拉一遍; 写侧已由 refreshMatter /
-    // `matter.changed` SSE 精准失效, 所以这里可以放长。placeholderData 让筛选 scope 切换
-    // 时旧行原地留着（data 不塌成 undefined → 列表不闪空态）。
-    staleTime: 5 * 60_000,
-    gcTime: 15 * 60_000,
     placeholderData: keepPreviousData
   })
   const liveMatters = useMemo(() => liveList.data?.items ?? [], [liveList.data])

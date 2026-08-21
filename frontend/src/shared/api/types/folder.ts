@@ -115,7 +115,9 @@ export interface FolderApi {
   // 多文件夹同步 (P3, davmail-only). discover 走 serve-api (IMAP LIST); 本地经
   // daemon 转发, 远程 HttpApi 直连。非 davmail 后端 serve-api 返回 400
   // E_INVALID_ARG → 抛带 code 的 Error (前端据此 gate)。
-  discover(opts?: { counts?: boolean }): Promise<FolderDiscoverResult>
+  /** `refresh: true` 穿透服务端 60s TTL 缓存强制真连 IMAP (设置页文件夹管理用);
+   *  缺省 false = 普通消费者 (Sidebar 树) 吃缓存。 */
+  discover(opts?: { counts?: boolean; refresh?: boolean }): Promise<FolderDiscoverResult>
   getWhitelist(): Promise<FolderWhitelistResult>
   /** 覆盖式保存白名单 (imap 原始名)。**入参数组序 = 权威显示顺序**; 返回去重
    *  保序后的列表 + restart_required (集合变化才 true)。 */

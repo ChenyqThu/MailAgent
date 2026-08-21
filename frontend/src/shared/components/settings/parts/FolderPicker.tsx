@@ -560,7 +560,11 @@ export function FolderPicker(): React.ReactElement {
   // 选择/展示不依赖精确计数, count 缺失时 UI 已 null-safe (badge/typeof 守卫)。
   const discoverQuery = useQuery({
     queryKey: qk.folder.discover(),
-    queryFn: () => mailApi.folder.discover({ counts: false }),
+    // refresh:true — 文件夹管理是「要拿 Exchange 真实状态」的消费者: 每次真正发出的
+    // 请求 (首拉 staleTime 过期 / 手动刷新 refetch / CRUD 后 invalidate) 都穿透
+    // serve-api 的 60s TTL 缓存。SidebarFolderTree 同 key 但 refresh 缺省 false 吃
+    // 缓存 —— react-query 按发起 fetch 的 observer 取 queryFn, 两个消费点互不干扰。
+    queryFn: () => mailApi.folder.discover({ counts: false, refresh: true }),
     enabled: !envGated,
     staleTime: 10 * 60_000,
     gcTime: 15 * 60_000,

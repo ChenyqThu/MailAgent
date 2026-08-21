@@ -441,11 +441,12 @@ export class HttpApi implements MailApi {
   // 抛带 code 的 Error, FolderPicker 据此切门控态。远程 web 直连这些端点 (与本地
   // daemon 转发同 wire)。
   folder = {
-    discover: (opts?: { counts?: boolean }): Promise<FolderDiscoverResult> =>
+    discover: (opts?: { counts?: boolean; refresh?: boolean }): Promise<FolderDiscoverResult> =>
       this.req<FolderDiscoverResult>('GET', '/folder/discover', {
         // 后端默认 counts=false (issue #45: 大邮箱逐文件夹 STATUS 分钟级);
         // 显式传以保持 wire 清晰, counts:true 仍可 opt-in。
-        query: { counts: opts?.counts ?? false }
+        // refresh=true 穿透服务端 60s TTL 缓存 (设置页文件夹管理用)。
+        query: { counts: opts?.counts ?? false, refresh: opts?.refresh ?? false }
       }),
 
     getWhitelist: (): Promise<FolderWhitelistResult> =>

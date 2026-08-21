@@ -32,9 +32,11 @@ import type {
 
 // counts 默认 false, 对齐 serve-api / imap_client 新默认 (issue #45: 大邮箱逐文件夹
 // STATUS 分钟级); 显式 counts:true 仍可 opt-in。
-export function runFolderDiscover(counts = false): Promise<FolderDiscoverResult> {
+// refresh 默认 false = 吃 serve-api 的 60s TTL 缓存; true 穿透强制真连 IMAP
+// (设置页文件夹管理的手动刷新 / CRUD 后 refetch)。
+export function runFolderDiscover(counts = false, refresh = false): Promise<FolderDiscoverResult> {
   return daemonRequest<FolderDiscoverResult>('GET', '/folder/discover', {
-    query: { counts }
+    query: { counts, refresh }
   })
 }
 
@@ -90,8 +92,13 @@ export function registerFolderHandlers(): void {
   // 过 IPC 保住 error.code (davmail 门控)。
   ipcMain.handle(
     'folder:discover',
-    async (_evt, opts?: { counts?: boolean }): Promise<WriteEnvelope<FolderDiscoverResult>> =>
-      envelopeFromCli<FolderDiscoverResult>(runFolderDiscover(opts?.counts ?? false))
+    async (
+      _evt,
+      opts?: { counts?: boolean; refresh?: boolean }
+    ): Promise<WriteEnvelope<FolderDiscoverResult>> =>
+      envelopeFromCli<FolderDiscoverResult>(
+        runFolderDiscover(opts?.counts ?? false, opts?.refresh ?? false)
+      )
   )
   ipcMain.handle(
     'folder:getWhitelist',
@@ -201,7 +208,11 @@ export function registerFolderHandlers(): void {
         }
       }
       if (typeof patch !== 'object' || patch === null || Array.isArray(patch)) {
-        return { ok: false, code: 'E_INVALID_ARG', message: 'folder:setPref requires a patch object' }
+        return {
+          ok: false,
+          code: 'E_INVALID_ARG',
+          message: 'folder:setPref requires a patch object'
+        }
       }
       return envelopeFromCli<FolderPref>(runFolderSetPref(imapName, patch as FolderPrefPatch))
     }

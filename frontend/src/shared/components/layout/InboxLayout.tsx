@@ -1,5 +1,9 @@
-// Sprint 2 shell: TitleBar / Sidebar / EmailList / EmailDetail / StatusBar.
-// Layout per DESIGN.md §3: 240 (sidebar) + 340 (list) + flex-1 (detail).
+// Inbox 内容区: EmailList + EmailDetail (master-detail) + AI dock。
+// Layout per DESIGN.md §3: 340 (list) + flex-1 (detail)。
+//
+// task 08-20-perf-shell-prefetch-sidebar §② — TitleBar/Sidebar/StatusBar 已提升为
+// RootLayout 的 AppShell 单例, 本组件退化为内容区: 顶层节点直接是 AppShell 中间
+// flex 行的 flex item (master-detail 容器 + AssistantChatDock 兄弟位)。
 //
 // S3 W2 — the legacy right-rail AIChatPanel drawer (squeeze column + width
 // tween + resize handle + drawer overlay) is deleted with the legacy runtime;
@@ -15,9 +19,6 @@ import { useIsBelowLg } from '@shared/hooks/useMediaQuery'
 import { useActiveEmail } from '@shared/state/active-email'
 import { useEmailFilter } from '@shared/state/email-filter'
 
-import { TitleBar } from './TitleBar'
-import { Sidebar } from './Sidebar'
-import { StatusBar } from './StatusBar'
 import { EmailList } from '../email/EmailList'
 import { EmailDetail } from '../email/EmailDetail'
 import { AssistantChatDock } from '@shared/assistant/modal/AssistantChatDock'
@@ -125,51 +126,48 @@ export function InboxLayout(): React.ReactElement {
   // double-firing two handlers (LIFO + non-consuming open() would have
   // navigated AND opened the palette on the same press).
   return (
-    <div className="flex flex-col h-full text-ink-fg">
-      <TitleBar />
-      <div className="flex flex-1 min-h-0">
-        <Sidebar />
-        {/* master-detail 容器 — relative 给 <lg 时 EmailDetail 的 absolute 覆盖
-            提供定位上下文（只盖 list, 不盖 Sidebar）。≥lg 内部
-            list(340) + detail(flex-1) 并排；<lg list 占满, detail 覆盖(选中) /
-            hidden(未选中)。 */}
-        <div className="relative flex flex-1 min-h-0 min-w-0">
-          {/* #6 — EmailList 宽度 wrapper: ≥lg 固定 listWidth (拖右缘调整 + localStorage
-              记忆), <lg 列表占满 (单栏切换, 不挂手柄)。EmailList 自身已改 w-full 由本层控宽;
-              拖拽期 mousemove 直接写本 div 的 style.width 跟手, mouseup 才落 state。 */}
-          <div
-            ref={listWrapperRef}
-            className={cn('relative flex min-h-0', belowLg ? 'w-full' : 'lg:shrink-0')}
-            style={belowLg ? undefined : { width: listWidth }}
-          >
-            <EmailList />
-            {!belowLg && (
-              <div
-                role="separator"
-                aria-orientation="vertical"
-                aria-label={t('list.resizeHandle', '调整列表宽度')}
-                tabIndex={0}
-                onMouseDown={startListResize}
-                onKeyDown={resizeListByKey}
-                className="absolute top-0 right-0 z-10 h-full w-1 cursor-col-resize hover:bg-accent/40 focus-visible:bg-accent/60 focus:outline-none transition-colors"
-              />
-            )}
-          </div>
-          <div
-            className={cn(
-              'flex min-h-0',
-              belowLg ? (activeId !== null ? 'absolute inset-0 z-30' : 'hidden') : 'flex-1 min-w-0'
-            )}
-          >
-            <EmailDetail internalId={activeId} />
-          </div>
+    <>
+      {/* master-detail 容器 — AppShell 中间 flex 行的直接 flex item。relative 给
+          <lg 时 EmailDetail 的 absolute 覆盖提供定位上下文（只盖 list, 不盖
+          Sidebar）。≥lg 内部 list(340) + detail(flex-1) 并排；<lg list 占满,
+          detail 覆盖(选中) / hidden(未选中)。 */}
+      <div className="relative flex flex-1 min-h-0 min-w-0">
+        {/* #6 — EmailList 宽度 wrapper: ≥lg 固定 listWidth (拖右缘调整 + localStorage
+            记忆), <lg 列表占满 (单栏切换, 不挂手柄)。EmailList 自身已改 w-full 由本层控宽;
+            拖拽期 mousemove 直接写本 div 的 style.width 跟手, mouseup 才落 state。 */}
+        <div
+          ref={listWrapperRef}
+          className={cn('relative flex min-h-0', belowLg ? 'w-full' : 'lg:shrink-0')}
+          style={belowLg ? undefined : { width: listWidth }}
+        >
+          <EmailList />
+          {!belowLg && (
+            <div
+              role="separator"
+              aria-orientation="vertical"
+              aria-label={t('list.resizeHandle', '调整列表宽度')}
+              tabIndex={0}
+              onMouseDown={startListResize}
+              onKeyDown={resizeListByKey}
+              className="absolute top-0 right-0 z-10 h-full w-1 cursor-col-resize hover:bg-accent/40 focus-visible:bg-accent/60 focus:outline-none transition-colors"
+            />
+          )}
         </div>
-        {/* assistant-modal — dock 内嵌在 master-detail 行内：sidebar 模式 = 可调宽 flex 列（挤压正文）；
-            floating 模式 = 自身 position:fixed 脱流（0 flow 占位，不挤压）；最小化 = hidden。
-            渲染在行内（非 portal）正是为了让 sidebar 能真正挤压正文 —— 也是它不能提到
-            RootLayout 做全局单例的原因（见 AssistantChatDock 头注释）。 */}
-        <AssistantChatDock />
+        <div
+          className={cn(
+            'flex min-h-0',
+            belowLg ? (activeId !== null ? 'absolute inset-0 z-30' : 'hidden') : 'flex-1 min-w-0'
+          )}
+        >
+          <EmailDetail internalId={activeId} />
+        </div>
       </div>
+      {/* assistant-modal — dock 内嵌在 master-detail 行内（AppShell 中行的兄弟位）：
+          sidebar 模式 = 可调宽 flex 列（挤压正文）；floating 模式 = 自身
+          position:fixed 脱流（0 flow 占位，不挤压）；最小化 = hidden。渲染在行内
+          （非 portal）正是为了让 sidebar 能真正挤压正文 —— 也是它不能提到
+          RootLayout 做全局单例的原因（见 AssistantChatDock 头注释）。 */}
+      <AssistantChatDock />
       {/* Sprint 17 — 旧 Sprint 5 fixed BatchActionBar 移除. floating bar
           (Sprint 12 设计, components/email/BatchActionBar.tsx) 由 EmailList
           portal 到 document.body, 不再需要在 chrome 这层 mount. */}
@@ -177,7 +175,6 @@ export function InboxLayout(): React.ReactElement {
           行内渲染（见上），sidebar 才能挤压正文；这里**不再**第二次挂 AssistantChatModal——之前
           重复挂载导致两个 dock + 两个 useGeneralChat，底部那个挂在 flex-col 根上撑满宽度把列表/正文顶没。 */}
       <ChatModalFab />
-      <StatusBar />
-    </div>
+    </>
   )
 }

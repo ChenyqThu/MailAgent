@@ -20,6 +20,8 @@
 
 from __future__ import annotations
 
+import threading
+import time
 from typing import TYPE_CHECKING, Optional
 
 from fastapi import APIRouter, Depends, Query, Request
@@ -99,6 +101,25 @@ def _current_whitelist(cfg: "Config") -> list[str]:
     return DavMailBackend._parse_custom_folders(cfg)
 
 
+# discover 的 60s TTL 进程内缓存 (task 08-20-perf-shell-prefetch-sidebar §③)。
+# IMAP LIST 是秒级真连, 而 discover 有多个消费点 (常驻 Sidebar 树 + 设置页 FolderPicker
+# + onboarding), 无缓存时每次都新开 IMAP 会话。cache key = counts 参数 (两种负载不同形);
+# ``?refresh=true`` 穿透 (设置页文件夹管理的手动刷新 / CRUD 后 refetch 走它, 见
+# FolderPicker.tsx)。只缓存 list_folders 的原始结果 — is_synced / whitelist 每请求现算
+# (热读 .env), 白名单改动**不吃** TTL。
+# 线程纪律: 读写都发生在 event loop 上 (to_thread 里只跑 list_folders), 单线程本无竞态;
+# 锁是防未来有人把缓存写挪进线程的护栏。
+_DISCOVER_CACHE_TTL_SEC = 60.0
+_discover_cache: "dict[bool, tuple[float, list]]" = {}
+_discover_cache_lock = threading.Lock()
+
+
+def _reset_discover_cache() -> None:
+    """测试钩子: 清空 discover TTL 缓存 (模块级单例, 不清则跨 case 串味)。"""
+    with _discover_cache_lock:
+        _discover_cache.clear()
+
+
 @router.get("/discover", dependencies=[Depends(verify_cf_access)])
 async def folder_discover(
     request: Request,
@@ -106,24 +127,38 @@ async def folder_discover(
     counts: bool = Query(
         False, description="是否逐文件夹 STATUS 邮件数 (大邮箱慢, 默认关闭, opt-in)"
     ),
+    refresh: bool = Query(
+        False, description="穿透 60s TTL 缓存强制真连 IMAP (设置页文件夹管理用)"
+    ),
 ):
     """发现 Exchange 全部文件夹 (LIST → 层级树 + special-use + 邮件数)。davmail-only。
 
     data = {folders: [扁平含 is_synced/parent/has_children], tree: [嵌套], whitelist: [已同步 imap_name]}。
     ``counts`` 默认 False (issue #45: 大邮箱逐文件夹 STATUS 分钟级); 传
     ``?counts=true`` 显式 opt-in 取 message_count。
+    ``refresh=false`` 时命中 60s TTL 进程内缓存则不连 IMAP (Sidebar 树 / 普通消费者);
+    ``?refresh=true`` 强制真连并回填缓存 (设置页文件夹管理)。
     """
     _require_davmail(cfg)
     from src.mail.backend.imap_client import build_folder_tree, list_folders
 
-    try:
-        # 🔴 必须 to_thread: list_folders = LIST + 逐文件夹 STATUS (每 op 60s 超时
-        # 上限), davmail 慢窗口时同步直调会把 uvicorn event loop 冻结数分钟 —
-        # serve-api 全部端点无响应 (dogfood round 3 "启动不起来"/"chat 加载不出"
-        # 的根因之一, 2026-06-13 实锤)。
-        folders = await _asyncio.to_thread(list_folders, cfg, with_counts=counts)
-    except Exception as e:  # noqa: BLE001 — IMAP/连接失败统一上报
-        raise APIError("E_UPSTREAM", f"folder discover failed: {e}", source="imap")
+    folders = None
+    if not refresh:
+        with _discover_cache_lock:
+            hit = _discover_cache.get(counts)
+        if hit is not None and (time.monotonic() - hit[0]) < _DISCOVER_CACHE_TTL_SEC:
+            folders = hit[1]
+    if folders is None:
+        try:
+            # 🔴 必须 to_thread: list_folders = LIST + 逐文件夹 STATUS (每 op 60s 超时
+            # 上限), davmail 慢窗口时同步直调会把 uvicorn event loop 冻结数分钟 —
+            # serve-api 全部端点无响应 (dogfood round 3 "启动不起来"/"chat 加载不出"
+            # 的根因之一, 2026-06-13 实锤)。
+            folders = await _asyncio.to_thread(list_folders, cfg, with_counts=counts)
+        except Exception as e:  # noqa: BLE001 — IMAP/连接失败统一上报
+            raise APIError("E_UPSTREAM", f"folder discover failed: {e}", source="imap")
+        with _discover_cache_lock:
+            _discover_cache[counts] = (time.monotonic(), folders)
     # whitelist 返回 SYNC_FOLDERS 原序 —— 数组序 = 用户自定义显示顺序 (设置页顺序
     # 列表 seed / 侧边栏排序都以它为权威), 不得 sorted() 重排。
     whitelist = _current_whitelist(cfg)

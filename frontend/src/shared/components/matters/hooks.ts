@@ -9,6 +9,7 @@ import type {
   MatterAttentionListResponse,
   MatterAttentionSignal,
   MattersApi,
+  MatterListResponse,
   MatterMutationOptions,
   MatterNotifyLevel,
   MatterNotifyLevelResponse,
@@ -28,6 +29,25 @@ import { useMatterMutation } from './matterMutation'
 
 export function useMattersApi(): MattersApi {
   return useMemo(() => createMattersApi(resolveApiBaseUrl()), [])
+}
+
+/** 工作台「活跃行」主列表的 options 单源 —— MattersWorkspace 的 liveList 与
+ *  启动预热 (lib/startupPrefetch T2) 共用: key / queryFn / 缓存配方一体, 预热写进
+ *  缓存的必然被页面首挂命中 (防「key 漂移预热了个寂寞」)。
+ *  缓存配方同 useEmailListRows (速赢包 §2): staleTime 5min + gcTime 15min, 写侧由
+ *  refreshMatter / `matter.changed` SSE 精准失效, 所以可以放长。 */
+export function matterLiveListOptions(api: MattersApi): {
+  queryKey: ReturnType<typeof qk.matters.list>
+  queryFn: () => Promise<MatterListResponse>
+  staleTime: number
+  gcTime: number
+} {
+  return {
+    queryKey: qk.matters.list(),
+    queryFn: () => api.list({ limit: 100 }),
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
+  }
 }
 
 /** P3 — the Matter Chat surface's own serve-api face (context snapshot / scope audit / undo).
@@ -191,10 +211,10 @@ export function useGlobalAttention(enabled = true): UseQueryResult<MatterAttenti
     queryKey: globalAttentionKey(),
     queryFn: () => api.listAttention('open'),
     enabled,
-    // 缓存配方同 useEmailListRows（速赢包 §2）: Sidebar 每次路由切换都 remount
-    // （它不是单例，InboxLayout / PageFrame 各渲染一份）→ 15s staleTime + 默认
-    // refetchOnMount 让徽标每切一次页就重拉一次。信号的实时性靠 `matter.attention`
-    // SSE 精准失效（useEventBridge），不靠短 staleTime。
+    // 缓存配方同 useEmailListRows（速赢包 §2）。(Sidebar 已提升为 RootLayout 单例
+    // —— task 08-20-perf-shell-prefetch-sidebar §② —— 路由切换不再 remount, 长
+    // staleTime 的收益从「防切页重拉」变成纯兜底。) 信号的实时性靠
+    // `matter.attention` SSE 精准失效（useEventBridge），不靠短 staleTime。
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000
   })

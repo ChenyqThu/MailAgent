@@ -23,7 +23,10 @@ import {
 
 import i18n from '../../src/shared/i18n'
 import type { FolderInfo } from '../../src/shared/api/types'
-import { buildSidebarFolderTree } from '../../src/shared/components/layout/sidebarFolderTree.helpers'
+import {
+  buildSeedFolderInfos,
+  buildSidebarFolderTree
+} from '../../src/shared/components/layout/sidebarFolderTree.helpers'
 
 await i18n.changeLanguage('zh-CN')
 
@@ -124,6 +127,51 @@ describe('buildSidebarFolderTree — 纯函数', () => {
     const folders = [fi('A', 'Alpha', null, 1), fi('B', 'Beta', null, 2)]
     const tree = buildSidebarFolderTree(folders, ['B', 'GONE', 'A'])
     expect(tree.map((n) => n.imapName)).toEqual(['B', 'A'])
+  })
+})
+
+// ── seed 树 (task 08-20-perf-shell-prefetch-sidebar §③) ────────────────────
+describe('buildSeedFolderInfos — discover 未就绪的本地 seed', () => {
+  test('display_name = decodeImapUtf7(imap_name) (= email_metadata.mailbox 的值)', () => {
+    const seeds = buildSeedFolderInfos(['DMS&VvpO9lPRXgM-', 'Jira'])
+    expect(seeds.map((s) => s.display_name)).toEqual(['DMS固件发布', 'Jira'])
+    expect(seeds.map((s) => s.imap_name)).toEqual(['DMS&VvpO9lPRXgM-', 'Jira'])
+  })
+
+  test('🔴 顺序红线: seed 树同层级按 whitelist 数组序, 绝不按名排序', () => {
+    // 自定义序 (Zeta 在 Alpha 前) 与字母序相反 —— sorted() 类变异必红。
+    const tree = buildSidebarFolderTree(buildSeedFolderInfos(['Zeta', 'Alpha', 'Mid']), [
+      'Zeta',
+      'Alpha',
+      'Mid'
+    ])
+    expect(tree.map((n) => n.imapName)).toEqual(['Zeta', 'Alpha', 'Mid'])
+  })
+
+  test("parent 取 '/' 前缀里最长的 whitelist 成员 → 层级与 discover 树一致", () => {
+    const wl = ['Proj', 'Proj/Q2']
+    const tree = buildSidebarFolderTree(buildSeedFolderInfos(wl), wl)
+    expect(tree).toHaveLength(1)
+    expect(tree[0].imapName).toBe('Proj')
+    expect(tree[0].children.map((n) => n.imapName)).toEqual(['Proj/Q2'])
+    // 叶子名切末段, 过滤 key 用完整 display_name (与 discover 树同构)。
+    expect(tree[0].children[0].displayName).toBe('Q2')
+    expect(tree[0].children[0].fullDisplayName).toBe('Proj/Q2')
+  })
+
+  test('中间层未勾选 → 挂到更上层的 whitelist 祖先 (同 nearestSyncedParent 语义)', () => {
+    const wl = ['A', 'A/B/C'] // A/B 不在 whitelist
+    const tree = buildSidebarFolderTree(buildSeedFolderInfos(wl), wl)
+    expect(tree).toHaveLength(1)
+    expect(tree[0].imapName).toBe('A')
+    expect(tree[0].children.map((n) => n.imapName)).toEqual(['A/B/C'])
+  })
+
+  test('父不在 whitelist → 顶层平铺 (不丢)', () => {
+    const wl = ['Proj/Q2']
+    const tree = buildSidebarFolderTree(buildSeedFolderInfos(wl), wl)
+    expect(tree).toHaveLength(1)
+    expect(tree[0].fullDisplayName).toBe('Proj/Q2')
   })
 })
 
@@ -230,6 +278,35 @@ describe('SidebarFolderTree — 渲染 + 过滤', () => {
       expect(s.customMailbox).toBe('DMS固件发布')
       expect(s.customMailboxPath).toEqual(['DMS固件发布'])
     })
+  })
+
+  // ── seed 树 (§③): discover 未就绪时立即可见**可点**, 不再灰掉平铺 imap_name ──
+  test('discover 未就绪 → seed 行已解码可点, 点击即过滤 (老降级态是灰掉不可点)', async () => {
+    mockGetWhitelist.mockResolvedValue({ folders: ['DMS&VvpO9lPRXgM-'] })
+    mockDiscover.mockReturnValue(new Promise(() => {})) // 永不 resolve = discover 在途
+    renderTree()
+    // 解码后的 display_name 立即渲染 (老降级态显示未解码 imap_name)。
+    const row = await screen.findByText('DMS固件发布')
+    const button = row.closest('button')!
+    expect(button.disabled).toBe(false)
+    fireEvent.click(row)
+    await waitFor(() => {
+      const s = useEmailFilter.getState()
+      // 过滤 key = 解码后完整 display_name (= email_metadata.mailbox), 与正式树一致。
+      expect(s.customMailbox).toBe('DMS固件发布')
+    })
+  })
+
+  test('seed 顺序 = whitelist 数组序 (discover 在途, 🔴 不按名排)', async () => {
+    // 自定义序与字母序相反 —— 把渲染序断言在 DOM 顺序上, sorted() 变异必红。
+    mockGetWhitelist.mockResolvedValue({ folders: ['Zeta', 'Alpha'] })
+    mockDiscover.mockReturnValue(new Promise(() => {}))
+    const { container } = renderTree()
+    await screen.findByText('Zeta')
+    const labels = Array.from(container.querySelectorAll('button.row span.flex-1')).map(
+      (el) => el.textContent
+    )
+    expect(labels).toEqual(['Zeta', 'Alpha'])
   })
 
   test('选中文件夹 → row-selected class', async () => {

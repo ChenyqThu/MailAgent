@@ -1,14 +1,13 @@
-// Sprint 6 §2.2 — shared wrapper for the secondary routes (/admin · /llm
-// · /calendar · /settings). Same chrome as InboxLayout / SearchLayout
-// (TitleBar 36px + Sidebar 240px + StatusBar 24px) but the content slot
-// owns its own scroll container so dashboards can grow vertically without
-// flexing siblings.
+// Sprint 6 §2.2 — shared content wrapper for the secondary routes (/admin ·
+// /llm · /calendar · /settings · /sessions · /agents · /matters · /contacts).
+//
+// task 08-20-perf-shell-prefetch-sidebar §② — TitleBar/Sidebar/StatusBar 已提升为
+// RootLayout 的 AppShell 单例, 本组件退化为内容容器: <main> (自管滚动, dashboards
+// 纵向增长不 flex 兄弟) + 可选 rightDock, 两者都是 AppShell 中间 flex 行的直接
+// flex item。保留组件本身 (9 个路由 Layout 消费 ariaLabel / mainClassName /
+// rightDock 语义), 只是不再渲染壳。
 
 import { cn } from '@shared/lib/cn'
-
-import { Sidebar } from './Sidebar'
-import { StatusBar } from './StatusBar'
-import { TitleBar } from './TitleBar'
 
 interface PageFrameProps {
   children: React.ReactNode
@@ -37,21 +36,13 @@ export function PageFrame({
   rightDock
 }: PageFrameProps): React.ReactElement {
   return (
-    // Sprint 18 review — 移除老 `bg-ink-0`. 旧 Sprint 6 代码在 PageFrame 顶层
-    // 强制 opaque 背景, 把 body::before 的 wallpaper (--wallpaper aurora
-    // gradient) 完全遮住, 导致主 Sidebar 的 `.glass` 半透 + backdrop-filter
-    // 失去 wallpaper 这一层 source-of-truth → 看起来"没玻璃效果". 跟
-    // InboxLayout 一致只写 `text-ink-fg`, 把 wallpaper 透出来.
-    <div className="flex flex-col h-full text-ink-fg">
-      <TitleBar />
-      <div className="flex flex-1 min-h-0">
-        <Sidebar />
-        <main aria-label={ariaLabel} className={cn(mainClassName ?? DEFAULT_MAIN)}>
-          {children}
-        </main>
-        {rightDock}
-      </div>
-      <StatusBar />
-    </div>
+    // <main> 与 rightDock 是 AppShell 中间 flex 行的直接 flex item —— dock 的
+    // sidebar 模式靠这个兄弟位吃宽度 / 挤压正文 (见 AssistantChatDock 头注释)。
+    <>
+      <main aria-label={ariaLabel} className={cn(mainClassName ?? DEFAULT_MAIN)}>
+        {children}
+      </main>
+      {rightDock}
+    </>
   )
 }

@@ -7,6 +7,9 @@
 //
 // 数据源: getWhitelist (imap 原始名) + discover (display_name/count/parent)。只渲染
 // whitelist ⊆ 的文件夹; 用 parent 链还原层级 (父未勾但子勾 → 子升顶层, 不丢)。
+// discover 未就绪时用本地 seed 树兜底 (task 08-20-perf-shell-prefetch-sidebar §③):
+// whitelist 逐项 decodeImapUtf7 合成 display_name (与 email_metadata.mailbox 同源
+// 同值), 立即**可点**; discover 回来后换正式树 (同 orderIndex 排序, 零跳变)。
 // 收起态(56px)由全局 .app-nav[data-collapsed] CSS 接管 (label/chevron span 自动
 // 隐藏, 只剩 folder 图标 + title tooltip), 本组件不特判收起态。
 //
@@ -29,7 +32,11 @@ import { cn } from '@shared/lib/cn'
 import { AnimatedIconActiveProvider, FolderGlyph } from '@shared/components/icons'
 import { HoverTip } from '@shared/components/ui/HoverTip'
 
-import { buildSidebarFolderTree, type SidebarFolderNode } from './sidebarFolderTree.helpers'
+import {
+  buildSeedFolderInfos,
+  buildSidebarFolderTree,
+  type SidebarFolderNode
+} from './sidebarFolderTree.helpers'
 
 // 顶层默认显示上限, 超出折成「展开更多 (+N)」(照 mockup nav-more)。
 const COLLAPSE_THRESHOLD = 5
@@ -83,53 +90,32 @@ function SidebarFolderRow({
   const selected = activeMailbox === node.fullDisplayName
   const count = node.count ?? 0
 
-  const isDisabled = node.isDisabled === true
-
   // 收起态时 HoverTip 接管名称浮现 → 不再设原生 title= (避免双 tooltip, 同
-  // Sidebar.maybeWrapTip 语义)。展开态保留原生 title (含 disabled 提示)。
-  const nativeTitle = collapsed
-    ? undefined
-    : isDisabled
-      ? t('nav.folderTree.disabledTip', {
-          defaultValue: '等待文件夹信息加载后可点击',
-          context: node.imapName
-        })
-      : node.fullDisplayName
-
-  // 收起态 tooltip 文案: 禁用行用 disabledTip, 否则用叶子全路径名 (= 原 title)。
-  const collapsedTip = isDisabled
-    ? t('nav.folderTree.disabledTip', {
-        defaultValue: '等待文件夹信息加载后可点击',
-        context: node.imapName
-      })
-    : node.fullDisplayName
+  // Sidebar.maybeWrapTip 语义)。展开态保留原生 title。
+  // (seed 树的 display_name 已本地解码 → 不再有「等待加载」的 disabled 行。)
+  const nativeTitle = collapsed ? undefined : node.fullDisplayName
 
   return (
     <>
       {maybeWrapFolderTip(
         collapsed,
-        collapsedTip,
+        node.fullDisplayName,
         <button
           type="button"
-          onClick={() => {
-            if (!isDisabled) onSelect(node)
-          }}
+          onClick={() => onSelect(node)}
           onPointerEnter={() => setIconActive(true)}
           onPointerLeave={() => setIconActive(false)}
           onFocus={() => setIconActive(true)}
           onBlur={() => setIconActive(false)}
-          disabled={isDisabled}
           title={nativeTitle}
           // 缩进用 paddingLeft (depth*14); 收起态 CSS 用 padding-inline 覆盖, 缩进自然消失。
           style={depth > 0 ? { paddingLeft: `${8 + depth * 14}px` } : undefined}
           className={cn(
             'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-[var(--r-ctl)]',
             'text-body text-left transition-colors duration-fast',
-            isDisabled
-              ? 'opacity-50 cursor-not-allowed text-ink-fg-2'
-              : selected
-                ? 'row-selected acc-select text-ink-fg font-medium'
-                : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
+            selected
+              ? 'row-selected acc-select text-ink-fg font-medium'
+              : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
           )}
         >
           {/* expand chevron — 仅父节点; <span> 非 app-nav-keep, 收起态自动隐藏。 */}
@@ -233,10 +219,12 @@ export function SidebarFolderTree(): React.ReactElement | null {
   const whitelist = React.useMemo(() => whitelistData?.folders ?? [], [whitelistData])
   const hasWhitelist = whitelist.length > 0
 
-  // discover — 仅在有白名单时拉, 长缓存。失败/门控静默 (folder 名仍可从 whitelist
-  // 兜底, 但无 display_name/count → 退化用 imap_name)。counts:false (issue #45) —
-  // 大邮箱逐文件夹 STATUS 分钟级; 树只需 display_name/层级, count 缺失 null-safe
-  // (count ?? 0 → badge 仅 >0 渲染)。与 FolderPicker 共用缓存, counts 语义保持一致。
+  // discover — 仅在有白名单时拉 (enabled 判据是 whitelist query 的 data, 缓存有值
+  // **首帧即真** → 重挂载不再等一轮 whitelist 网络往返, 冷启动才有真串行), 长缓存。
+  // 失败/门控静默 (seed 树仍在场, 见下)。counts:false (issue #45) — 大邮箱逐文件夹
+  // STATUS 分钟级; 树只需 display_name/层级, count 缺失 null-safe (count ?? 0 →
+  // badge 仅 >0 渲染)。与 FolderPicker 共用缓存 key (它发的请求带 refresh=true
+  // 穿透服务端 60s TTL; 这里缺省 false 吃缓存), counts 语义保持一致。
   const { data: discoverData } = useQuery({
     queryKey: qk.folder.discover(),
     queryFn: () => mailApi.folder.discover({ counts: false }),
@@ -252,23 +240,16 @@ export function SidebarFolderTree(): React.ReactElement | null {
     if (folders && folders.length > 0) {
       return buildSidebarFolderTree(folders, whitelist)
     }
-    // discover 未就绪/失败 — 退化平铺显示 imap_name; display_name 未解码所以禁用
-    // 点击 (用 imap_name 过滤永不匹配解码后 mailbox → 空列表, 比不响应更糟)。
-    // 已是 whitelist 原序 (= 自定义显示顺序), 无需再排。
-    return whitelist.map((imapName) => ({
-      imapName,
-      displayName: imapName,
-      fullDisplayName: imapName,
-      count: null,
-      path: [imapName],
-      children: [],
-      isDisabled: true
-    }))
+    // discover 未就绪/失败 — 本地 seed 树 (§③): whitelist 逐项 decodeImapUtf7 合成
+    // display_name (与 email_metadata.mailbox 同源同值 → **可点**, 过滤 key 正确),
+    // 走同一条 buildSidebarFolderTree 路径 (🔴 同 orderIndex 排序, discover 回来零跳变)。
+    return buildSidebarFolderTree(buildSeedFolderInfos(whitelist), whitelist)
   }, [hasWhitelist, discoverData, whitelist])
 
-  // per-folder 图标 (v62 folder_pref) — 与设置页共用 ['folder','prefs'] 缓存。仅在有白名单
-  // 时拉；失败/缺行静默退回兜底图标 (图标是观感, 不该让整棵树跟着挂)。
-  const prefMap = useFolderPrefMap(hasWhitelist)
+  // per-folder 图标 (v62 folder_pref) — 与设置页共用 ['folder','prefs'] 缓存。无条件
+  // 并发拉 (§③ 拆串行: 纯本地 SQLite 读, 不依赖 whitelist, 不必排在它后面)；
+  // 失败/缺行静默退回兜底图标 (图标是观感, 不该让整棵树跟着挂)。
+  const prefMap = useFolderPrefMap()
   const iconKeys = React.useMemo<ReadonlyMap<string, string | null>>(() => {
     const m = new Map<string, string | null>()
     for (const [imapName, pref] of prefMap) m.set(imapName, pref.icon)
