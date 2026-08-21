@@ -3000,6 +3000,77 @@
     "accounts": {
       "notion": {
         "title": "Notion 集成",
+        "manual": {
+          "title": "手动填写 Token 与数据库 ID",
+          "helper": "自建 internal integration 或需要指定其它数据库时用。"
+        },
+        "oauth": {
+          "connect": {
+            "label": "连接 Notion",
+            "helper": "在浏览器里授权一次即可，可顺带复制官方模板；完成后 Token 与两个数据库 ID 自动写入，无需手填。",
+            "button": "连接 Notion"
+          },
+          "connectedUnknownWorkspace": "已连接 Notion",
+          "connectedHelper": "已通过 Notion 授权连接。「从本机移除连接」只清本机配置；Notion 侧的授权需要到 Notion 的「设置 → 我的连接」里撤销。",
+          "reauthorize": "重新授权",
+          "cancel": "取消",
+          "dismiss": "知道了",
+          "doneDetail": "已连接。邮件库「{emailDb}」，日历库「{calendarDb}」。重启后端后开始同步到 Notion。",
+          "phase": {
+            "waitingCallback": "已在浏览器打开 Notion 授权页，请在那里完成授权（本页保持打开）。",
+            "exchanging": "正在换取访问令牌…",
+            "discovering": "正在识别邮件库与日历库…",
+            "needSelection": "需要你选择要使用的数据库。",
+            "writing": "正在写入配置…",
+            "done": "授权完成。",
+            "error": "授权未完成。"
+          },
+          "error": {
+            "clientIdMissing": "本机没有可用的 Notion 集成 ID，无法发起授权。请更新到新版本或手动填写。",
+            "portUnavailable": "本机 9280 与 9281 端口都被占用，收不到 Notion 的回调。关掉占用这两个端口的程序后重试。",
+            "browserOpenFailed": "打不开系统浏览器，授权未发起。",
+            "denied": "你在 Notion 页面取消了授权，原有配置未改动。",
+            "timeout": "5 分钟内没有完成授权，本次已取消，原有配置未改动。",
+            "cancelled": "授权已取消，原有配置未改动。",
+            "invalidGrant": "授权码已失效（多为等待过久），请重新授权。",
+            "upstreamError": "Notion 侧换取令牌失败，请稍后重试。",
+            "notConfigured": "授权服务暂不可用，请稍后重试，或先用下方手动填写。",
+            "rateLimited": "短时间内尝试次数过多，请等一分钟再试。",
+            "invalidRedirectUri": "回调地址未被授权服务接受，请更新到新版本。",
+            "networkError": "网络不可达，换取令牌失败，原有配置未改动。",
+            "invalidResponse": "授权服务返回了无法识别的内容，原有配置未改动。",
+            "discoveryFailed": "读取 Notion 数据库失败。请重新授权，并确认已把需要的页面授权给 MailAgent。",
+            "noDatabasesFound": "在已授权的内容里没找到数据库。请重新授权并选择复制模板，或勾选包含邮件库、日历库的页面。",
+            "selectionInvalid": "所选数据库不可用（可能已被改动或不再可见），请重新选择。",
+            "envWriteFailed": "配置写入失败，原有配置未改动（详见应用日志）。",
+            "unknown": "授权未完成，原有配置未改动。"
+          },
+          "select": {
+            "title": "选择要使用的数据库",
+            "description": "下面是本次授权能访问到的数据库。各选一个：邮件同步写入邮件库，会议邀请写入日历库。",
+            "emailGroup": "邮件库",
+            "calendarGroup": "日历库",
+            "empty": "没有可用的候选。",
+            "untitled": "（未命名）",
+            "cancel": "取消授权",
+            "confirm": "使用所选数据库",
+            "warnings": "缺少可选字段：{fields}（只影响 AI 分类等可选功能，可以先用）",
+            "reason": {
+              "otherRole": "不是这一类的库（字段签名不匹配）",
+              "missing": "缺少必需字段：{fields}",
+              "unknown": "无法识别用途：字段签名既不匹配邮件库也不匹配日历库"
+            }
+          },
+          "remove": {
+            "button": "从本机移除连接",
+            "title": "从本机移除连接",
+            "description": "将清除本机保存的 Notion Token、邮件库与日历库 ID，以及 workspace 信息；Notion 侧的授权仍然存在，如需彻底撤销请到 Notion 的「设置 → 我的连接」里移除 MailAgent。已同步到 Notion 的邮件不受影响。",
+            "cancel": "取消",
+            "confirm": "移除连接",
+            "done": "已从本机移除连接",
+            "failTitle": "移除失败"
+          }
+        },
         "disabledNotice": "Notion 未配置：镜像同步 / 项目周报 / 日历同步已停用，邮件仅在本地同步（列表、搜索、AI 分类等本地功能不受影响）。填齐 Token 与邮件数据库 ID 并重启后启用。后补配置只同步新邮件，历史邮件不回填（可用 mailagent email resync 逐封补推）。",
         "token": {
           "label": "Notion Token",

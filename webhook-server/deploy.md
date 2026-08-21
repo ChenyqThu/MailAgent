@@ -45,7 +45,16 @@ REDIS_URL=redis://:VHBMaW5rUmVkaXNTZWN1cmUyMDI1@localhost:6379
 REDIS_DB=2
 WEBHOOK_SECRET=<openssl rand -hex 32 生成>
 QUEUE_TTL_DAYS=7
+
+# Notion OAuth exchange 代理（/api/oauth/notion/exchange）
+# 来自 Notion 开发者门户的 public integration；两项都留空 = 端点恒返 503 not_configured
+NOTION_OAUTH_CLIENT_ID=<Notion public integration 的 OAuth client ID>
+NOTION_OAUTH_CLIENT_SECRET=<同一集成的 OAuth client secret>
 ```
+
+> 🔴 `NOTION_OAUTH_CLIENT_SECRET` 只存在于本机 `.env`，**不进仓库、不进桌面 App 分发包**——
+> 这是该代理端点存在的唯一理由。疑似被滥用时在 Notion 门户轮换 secret 即可让所有仿冒
+> 客户端失效（已换到 token 的正版用户不受影响，同步直连 Notion 不经本代理）。
 
 ## 3. PM2 启动
 
@@ -113,6 +122,20 @@ ln -sf /etc/nginx/sites-available/mailagent.chenge.ink.conf /etc/nginx/sites-ena
 nginx -t && systemctl reload nginx
 ```
 
+**🔴 真实客户端 IP header（`/api/oauth/notion/exchange` 的限流依据）**：该端点按客户端 IP
+做内存令牌桶（10 次/分），取值顺序 `CF-Connecting-IP` → `X-Real-IP` → 直连 peer，**不解析
+客户端自带的 `X-Forwarded-For`**。上线前需确认（用真实链路 CF → Nginx → :8100 实测，
+两个不同来源 IP 应各自计数、不共享桶）：
+
+- 上面的 `proxy_set_header X-Real-IP $remote_addr;` 仍在（这是本机 Nginx 注入的可信值）；
+- Nginx 当前**不会**剥离或覆写客户端自带的 `CF-Connecting-IP`。绕过 Cloudflare 直连源站 IP
+  的请求可以伪造该头绕过限流——若要堵，需只放行 Cloudflare 段进 443，或让 Nginx 对非 CF
+  来源覆写该头。风险等级见任务 prd.md「安全定位与风险接受声明」（已接受配额滥用风险）。
+
+> 注：uvicorn 默认 `proxy_headers=True` 且信任 127.0.0.1 的 peer，会用 `X-Forwarded-For`
+> 改写 `request.client.host`（取最右侧非可信项 = Nginx 追加的 `$remote_addr`）。所以兜底
+> 分支拿到的仍是 Nginx 观察到的地址，不是客户端随便填的值。
+
 ## 5. SSL 说明
 
 服务器使用自签证书（10 年有效），Cloudflare 负责公网 SSL 终止：
@@ -171,6 +194,17 @@ curl -X POST "https://mailagent.chenge.ink/webhook/notion?event=flag_changed" \
 
 # 检查 Redis 队列
 redis-cli -a <REDIS_PASSWORD> -n 2 LLEN "mailagent:<database_id>:events"
+
+# Notion OAuth 代理（无需 WEBHOOK_SECRET）：假 code + 白名单 redirect_uri
+# 配好凭证 → {"error":"invalid_grant"}（上游拒了假 code = 链路通）；未配凭证 → {"error":"not_configured"}
+curl -s -X POST https://mailagent.chenge.ink/api/oauth/notion/exchange \
+  -H "Content-Type: application/json" \
+  -d '{"code":"fake","redirect_uri":"http://localhost:9280/oauth/notion/callback"}'
+
+# 非白名单 redirect_uri 必须被拒 → {"error":"invalid_redirect_uri"}（HTTP 403）
+curl -s -X POST https://mailagent.chenge.ink/api/oauth/notion/exchange \
+  -H "Content-Type: application/json" \
+  -d '{"code":"fake","redirect_uri":"https://evil.example.com/cb"}'
 ```
 
 ---

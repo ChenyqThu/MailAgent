@@ -49,6 +49,10 @@ Notion is **optional**: MailAgent stores email bodies and attachments in a local
 
 If you do want a Notion mirror, MailAgent needs two Notion databases: one for email, one for the calendar. **You must create these two databases in Notion first and set up their fields per the tables below**—the field names and types must match exactly, or sync will fail.
 
+:::tip[Desktop App users have a faster path]
+This page covers **manually filling in the Token + Database IDs**, for the scenario on this page (running the backend from source, no desktop App GUI) or advanced users who want an internal integration. If you're using the [desktop App](/en/101/install-app/) (most users), the settings page has a "Connect Notion" button: one click opens your system browser to complete OAuth authorization. On the authorization page, choosing "Use the template provided by the developer" auto-duplicates a template with the email + calendar databases already fielded, and the App auto-detects both databases and writes the config—no manual Token entry or digging a database ID out of a URL required. Choosing "Select existing pages" instead brings you back to the App to pick each database from a dropdown, also without manual IDs. Both paths write the same set of config values (`NOTION_TOKEN` / `EMAIL_DATABASE_ID` / `CALENDAR_DATABASE_ID`); the sync pipeline doesn't distinguish the source.
+:::
+
 ### 2a. Create the Integration and get the Token
 
 1. Open [www.notion.so/my-integrations](https://www.notion.so/my-integrations) in your browser.

@@ -3,7 +3,7 @@ from notion_client import AsyncClient
 from typing import Dict, Any, List, Optional, Set
 from loguru import logger
 
-from src.config import config
+from src.config import config, configured_data_source_id
 
 # Notion File Upload API 支持的扩展名（官方文档）
 # https://developers.notion.com/docs/uploading-small-files
@@ -38,6 +38,27 @@ def _is_cf_waf_block(err: BaseException) -> bool:
     return "have been blocked" in text or "cf-error" in text
 
 
+async def resolve_data_source_id(client: AsyncClient, database_id: str) -> str:
+    """database_id → data_source_id 解析单源（无缓存；缓存由调用方按需加）。
+
+    顺序：显式配置（``EMAIL_DATA_SOURCE_ID`` / ``CALENDAR_DATA_SOURCE_ID``，OAuth
+    授权时按用户选中的 data source 写入）优先；没配才 ``databases.retrieve`` 取
+    ``data_sources[0]``（存量单 data source 库的老行为）。
+
+    一个 database 含多个 data source 时盲取第一个会写错数据源 —— ``src/`` 下所有
+    解析点都走这里，别再各自手写 ``data_sources[0]``（task 08-20 Lane 5；
+    ``scripts/dev`` 与 ``scripts/archive`` 的一次性脚本有意未收编）。
+    """
+    explicit = configured_data_source_id(database_id)
+    if explicit:
+        return explicit
+    db = await client.databases.retrieve(database_id=database_id)
+    data_sources = db.get("data_sources", [])
+    if not data_sources:
+        raise ValueError(f"No data sources found for database {database_id}")
+    return data_sources[0]["id"]
+
+
 class NotionClient:
     """Notion API 客户端封装。
 
@@ -66,7 +87,8 @@ class NotionClient:
         """从 database_id 解析 data_source_id（带缓存）
 
         Notion API 2025-09-03 版本要求使用 data_source_id 替代 database_id
-        进行查询和页面创建操作。
+        进行查询和页面创建操作。解析规则单源 ``resolve_data_source_id``
+        （显式配置优先，其次 data_sources[0]）。
 
         Args:
             database_id: Notion 数据库 ID
@@ -75,11 +97,7 @@ class NotionClient:
             对应的 data_source_id
         """
         if database_id not in self._ds_id_cache:
-            db = await self.client.databases.retrieve(database_id)
-            data_sources = db.get("data_sources", [])
-            if not data_sources:
-                raise ValueError(f"No data sources found for database {database_id}")
-            self._ds_id_cache[database_id] = data_sources[0]["id"]
+            self._ds_id_cache[database_id] = await resolve_data_source_id(self.client, database_id)
             logger.debug(f"Resolved data_source_id: {database_id} -> {self._ds_id_cache[database_id]}")
         return self._ds_id_cache[database_id]
 

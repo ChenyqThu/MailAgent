@@ -1,0 +1,65 @@
+{
+  "$comment": "Notion 两库字段契约的唯一机器可读单源（task 08-20 Notion OAuth）。🔴 内容以写入侧代码为准，不以 CLAUDE.md 的表为准（那张表 2026-08-20 实勘证实过时：代码真名是 Priority / Processing Status / Action Type，非 AI Priority / AI Review Status / AI Action）。消费点：① TS 校验器 notionDbSchema.ts（库发现/选择器判定）；② Python parity 闸 tests/notion/test_schema_contract_parity.py（email required 档 ↔ src/notion/pages.py::_build_properties + threads.py Parent Item 的写入集合双向对账；calendar required 档 ↔ src/calendar_notion/sync.py::_build_properties 字面量存在性）。两档语义：requiredProperties = 默认开启的同步路径会写的字段（缺失即校验不过、页面创建会被 Notion 400）；recommendedProperties = 仅可选功能（LLM agent 等，src/llm_agent/notion_writer.py::_build_props）写的字段（缺失只 warn 不拦，UI 提示但允许选用）。signature = 库角色识别判据（design.md：邮件库 = Subject(title)+Message ID；日历库 = Event ID+Time(date)）。",
+  "notionVersion": "2025-09-03",
+  "databases": {
+    "email": {
+      "requiredProperties": [
+        { "name": "Subject", "type": "title", "signature": true },
+        { "name": "Message ID", "type": "rich_text", "signature": true },
+        { "name": "Thread ID", "type": "rich_text", "signature": false },
+        { "name": "From", "type": "email", "signature": false },
+        { "name": "From Name", "type": "rich_text", "signature": false },
+        { "name": "To", "type": "rich_text", "signature": false },
+        { "name": "CC", "type": "rich_text", "signature": false },
+        { "name": "Date", "type": "date", "signature": false },
+        { "name": "Parent Item", "type": "relation", "signature": false },
+        { "name": "Sub-item", "type": "relation", "signature": false },
+        { "name": "Mailbox", "type": "select", "signature": false },
+        { "name": "Is Read", "type": "checkbox", "signature": false },
+        { "name": "Is Flagged", "type": "checkbox", "signature": false },
+        { "name": "Has Attachments", "type": "checkbox", "signature": false },
+        { "name": "Processing Status", "type": "select", "signature": false },
+        { "name": "ID", "type": "number", "signature": false },
+        { "name": "Original EML", "type": "files", "signature": false }
+      ],
+      "recommendedProperties": [
+        { "name": "AI Summary", "type": "rich_text", "signature": false },
+        { "name": "Key Points", "type": "rich_text", "signature": false },
+        { "name": "Category", "type": "select", "signature": false },
+        { "name": "Language", "type": "select", "signature": false },
+        { "name": "Sender Priority", "type": "select", "signature": false },
+        { "name": "Action Required", "type": "checkbox", "signature": false },
+        { "name": "Action Type", "type": "select", "signature": false },
+        { "name": "Priority", "type": "select", "signature": false },
+        { "name": "Urgency Reason", "type": "rich_text", "signature": false },
+        { "name": "Mail Actions", "type": "multi_select", "signature": false },
+        { "name": "Reply Suggestion", "type": "rich_text", "signature": false },
+        { "name": "Related Project", "type": "rich_text", "signature": false },
+        { "name": "Daily Digests", "type": "relation", "signature": false }
+      ]
+    },
+    "calendar": {
+      "requiredProperties": [
+        { "name": "Title", "type": "title", "signature": false },
+        { "name": "Event ID", "type": "rich_text", "signature": true },
+        { "name": "Calendar", "type": "select", "signature": false },
+        { "name": "Time", "type": "date", "signature": true },
+        { "name": "Is All Day", "type": "checkbox", "signature": false },
+        { "name": "会议状态", "type": "select", "signature": false },
+        { "name": "日程类型", "type": "select", "signature": false },
+        { "name": "Is Recurring", "type": "checkbox", "signature": false },
+        { "name": "Attendee Count", "type": "number", "signature": false },
+        { "name": "Sync Status", "type": "select", "signature": false },
+        { "name": "Last Synced", "type": "date", "signature": false },
+        { "name": "Location", "type": "rich_text", "signature": false },
+        { "name": "URL", "type": "url", "signature": false },
+        { "name": "Organizer", "type": "rich_text", "signature": false },
+        { "name": "Organizer Email", "type": "email", "signature": false },
+        { "name": "Attendees", "type": "rich_text", "signature": false },
+        { "name": "Recurrence Rule", "type": "rich_text", "signature": false },
+        { "name": "Last Modified", "type": "date", "signature": false }
+      ],
+      "recommendedProperties": []
+    }
+  }
+}

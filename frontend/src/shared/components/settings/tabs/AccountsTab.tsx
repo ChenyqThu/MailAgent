@@ -40,11 +40,15 @@ import { qk } from '@shared/lib/queryKeys'
 import { useRestartStore } from '@shared/state/restart'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
+import { notionOauthAvailable } from '@shared/lib/notionOauthIpc'
+
+import { fetchNotionOauthEnabled } from '../custom-ai/shared'
 import { PageHeader } from '../parts/PageHeader'
 import { Section } from '../parts/Section'
 import { EnvField } from '../parts/EnvField'
 import { AdvancedDisclosure } from '../parts/AdvancedDisclosure'
 import { FolderPicker } from '../parts/FolderPicker'
+import { NotionConnection } from '../parts/NotionConnection'
 
 /** backend 值域/平台过滤单源 = @shared/lib/mailBackend (禁止此处再写字面量表)。 */
 type MailBackend = MailBackendKind
@@ -707,6 +711,75 @@ function SignatureSection(): React.ReactElement {
   )
 }
 
+/** Notion 集成 Section —— OAuth 入口（flag-on 且在 Electron 里）+ 手填三键。
+ *
+ *  task 08-20：手填路径**一行不改**地保留（internal integration 用户 / 高级用户
+ *  fallback），只是在 OAuth 可用时收进「手动填写」折叠区。flag-off 或远程 web
+ *  构建（无 IPC，起不了 loopback）→ 维持现状：三个字段平铺，无折叠、无按钮。 */
+function NotionSection(): React.ReactElement {
+  const { t } = useTranslation()
+  // hooks 无条件调用（flag 是数据不是条件）—— 同 StandingDocsSection 的姿态。
+  const { data: flagEnabled } = useQuery<boolean>({
+    queryKey: qk.chat.config('notionOauthEnabled'),
+    queryFn: fetchNotionOauthEnabled,
+    staleTime: 30_000,
+    retry: false
+  })
+  // default-ON flag：查询在途 (undefined) 先不渲染入口，落定 false 才永久隐藏。
+  // notionOauthAvailable(): 远程 web 没有 IPC 桥，渲染一个点了必然报错的按钮更糟。
+  const oauthUi = flagEnabled === true && notionOauthAvailable()
+
+  const manualFields = (
+    <>
+      <EnvField
+        envKey="NOTION_TOKEN"
+        control="password"
+        label={t('settings.accounts.notion.token.label')}
+        helper={t('settings.accounts.notion.token.helper')}
+        placeholder={t('settings.accounts.notion.token.placeholder') ?? undefined}
+      />
+      <EnvField
+        envKey="EMAIL_DATABASE_ID"
+        control="text"
+        label={t('settings.accounts.notion.databaseId.label')}
+        helper={t('settings.accounts.notion.databaseId.helper')}
+      />
+      {/* Windows 日历整体出范围（2026-08-13 拍板）→ 日历库 ID 字段一并隐藏 */}
+      {calendarUiEnabled(detectUiPlatform()) && (
+        <EnvField
+          envKey="CALENDAR_DATABASE_ID"
+          control="text"
+          label={t('settings.accounts.notion.calendarDatabaseId.label')}
+          helper={t('settings.accounts.notion.calendarDatabaseId.helper')}
+        />
+      )}
+    </>
+  )
+
+  return (
+    <Section title={t('settings.accounts.notion.title')}>
+      <NotionDisabledNotice />
+      {oauthUi ? (
+        <>
+          <NotionConnection />
+          <AdvancedDisclosure
+            label={t('settings.accounts.notion.manual.title', {
+              defaultValue: '手动填写 Token 与数据库 ID'
+            })}
+            helper={t('settings.accounts.notion.manual.helper', {
+              defaultValue: '自建 internal integration 或需要指定其它数据库时用。'
+            })}
+          >
+            {manualFields}
+          </AdvancedDisclosure>
+        </>
+      ) : (
+        manualFields
+      )}
+    </Section>
+  )
+}
+
 export function AccountsTab(): React.ReactElement {
   const { t } = useTranslation()
 
@@ -719,31 +792,7 @@ export function AccountsTab(): React.ReactElement {
           defaultValue: 'Notion 集成凭据与邮件源账户配置。'
         })}
       />
-      <Section title={t('settings.accounts.notion.title')}>
-        <NotionDisabledNotice />
-        <EnvField
-          envKey="NOTION_TOKEN"
-          control="password"
-          label={t('settings.accounts.notion.token.label')}
-          helper={t('settings.accounts.notion.token.helper')}
-          placeholder={t('settings.accounts.notion.token.placeholder') ?? undefined}
-        />
-        <EnvField
-          envKey="EMAIL_DATABASE_ID"
-          control="text"
-          label={t('settings.accounts.notion.databaseId.label')}
-          helper={t('settings.accounts.notion.databaseId.helper')}
-        />
-        {/* Windows 日历整体出范围（2026-08-13 拍板）→ 日历库 ID 字段一并隐藏 */}
-        {calendarUiEnabled(detectUiPlatform()) && (
-          <EnvField
-            envKey="CALENDAR_DATABASE_ID"
-            control="text"
-            label={t('settings.accounts.notion.calendarDatabaseId.label')}
-            helper={t('settings.accounts.notion.calendarDatabaseId.helper')}
-          />
-        )}
-      </Section>
+      <NotionSection />
 
       <MailSourceSection />
 

@@ -28,6 +28,19 @@ export const MANAGED_ENV_KEYS = [
   'NOTION_TOKEN',
   'EMAIL_DATABASE_ID',
   'CALENDAR_DATABASE_ID',
+  // Notion OAuth 接入 (task 08-20) —— 「连接 Notion」成功后 main 侧与 token/两库 ID
+  // 一起原子 patch 写入的 workspace 展示信息 (AccountsTab 已连接态显示 workspace 名)。
+  // 非 secret 明文; Python 不读 (display-only)。🔴 NOTION_REFRESH_TOKEN 有意不存在
+  // (prd 拍板不落盘, 401 一律重新授权)。
+  'NOTION_WORKSPACE_ID',
+  'NOTION_WORKSPACE_NAME',
+  // 选中的两个 data source id (task 08-20 Lane 5)。Notion 2025-09-03 起 database 是容器、
+  // schema 在 data source；库选择器按 data source 粒度选, 而 Python 侧解析历来盲取
+  // data_sources[0] —— 一个 database 含多个 data source 时会写错数据源。OAuth 把选中的
+  // data source id 与两库 ID 一起原子写入, Python resolve_data_source_id 优先读它。
+  // 非 secret 明文; 单 data source 库留空即老行为。
+  'EMAIL_DATA_SOURCE_ID',
+  'CALENDAR_DATA_SOURCE_ID',
   'USER_EMAIL',
   'MAIL_ACCOUNT_NAME',
   'MAIL_INBOX_NAME',

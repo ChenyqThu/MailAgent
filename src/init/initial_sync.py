@@ -683,9 +683,10 @@ class InitialSync:
         start_cursor = None
         query_count = 0
 
-        # Resolve data_source_id
-        _db_info = await self.notion_sync.client.client.databases.retrieve(self.notion_sync.client.email_db_id)
-        _data_source_id = _db_info["data_sources"][0]["id"]
+        # Resolve data_source_id（走 NotionClient 的解析单源：显式配置优先，其次 data_sources[0]）
+        _data_source_id = await self.notion_sync.client.get_data_source_id(
+            self.notion_sync.client.email_db_id
+        )
 
         while has_more:
             query_params = {

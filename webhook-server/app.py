@@ -14,6 +14,8 @@ import os
 import re
 import secrets
 import time
+import urllib.error
+import urllib.request
 import uuid
 import base64
 from pathlib import Path as FilePath
@@ -78,6 +80,7 @@ tags_metadata = [
     {"name": "指令 API", "description": "外部系统（Openclaw 等）调用的指令接口，支持发送指令和查询执行结果"},
     {"name": "Notion Webhook", "description": "接收 Notion Automation 的 webhook 回调"},
     {"name": "运维", "description": "健康检查和队列统计"},
+    {"name": "OAuth 代理", "description": "桌面 App 的 Notion 授权码换 token 代理（client_secret 只在服务端）"},
 ]
 
 app = FastAPI(
@@ -790,6 +793,269 @@ async def admin_stats(request: Request):
         stats[db_id] = QueueInfo(queue=key, pending=length)
 
     return StatsResponse(queues=stats, total_queues=len(stats))
+
+
+# ── Notion OAuth Exchange Proxy ──────────────────────────────────────────
+# 桌面 App 的 Notion 公开集成「授权码换 token」代理。
+# 唯一安全目标：client_secret 不进分发包。本端点**不认证客户端身份**（Notion 无
+# PKCE，本集成实质是 public client），残余风险与止损见任务
+# .trellis/tasks/08-20-notion-oauth-onboarding/prd.md「安全定位与风险接受声明」。
+# 无状态：不写 Redis、不缓存任何 token；日志只记 outcome + 来源 IP + 时间戳。
+
+NOTION_OAUTH_CLIENT_ID = os.getenv("NOTION_OAUTH_CLIENT_ID", "")
+NOTION_OAUTH_CLIENT_SECRET = os.getenv("NOTION_OAUTH_CLIENT_SECRET", "")
+NOTION_TOKEN_URL = "https://api.notion.com/v1/oauth/token"
+NOTION_OAUTH_VERSION = "2025-09-03"
+
+# 精确匹配白名单，只有这两条（与 Notion 门户注册的 redirect URI 一致）
+# 🔴 用 localhost 不是 127.0.0.1：Notion 控制台拒收字面 IP 的 redirect URI（owner 实操确认），
+#    集成已按 localhost 注册。App 侧 loopback server 双栈监听 127.0.0.1 + ::1。
+NOTION_OAUTH_REDIRECT_URIS = frozenset({
+    "http://localhost:9280/oauth/notion/callback",
+    "http://localhost:9281/oauth/notion/callback",
+})
+
+OAUTH_MAX_BODY_BYTES = 4096
+OAUTH_MAX_CODE_LEN = 512
+OAUTH_UPSTREAM_TIMEOUT_SEC = 10  # 连接 / 读取共用 socket 超时
+OAUTH_MAX_RESPONSE_BYTES = 64 * 1024
+OAUTH_RATE_LIMIT_PER_MIN = 10
+OAUTH_RATE_WINDOW_SEC = 60
+OAUTH_RATE_BUCKET_MAX = 1024  # 桶数上限，超过则清理已满（= 闲置 ≥ 窗口）的桶
+OAUTH_MAX_CONCURRENT = 4  # 出站并发上限，防止代理被当放大器
+
+# 🔴 限流与并发闸都是**单 worker 前提**（PM2 单进程 uvicorn，见 ecosystem.config.js）。
+#    改成多 worker / 多实例时这里必须重设计（进程内计数会按 worker 数放大）。
+_oauth_rate_buckets: Dict[str, tuple] = {}  # ip -> (tokens, last_refill_monotonic)
+_oauth_semaphore: Optional[asyncio.Semaphore] = None
+
+
+class NotionOAuthExchangeResponse(BaseModel):
+    """授权码换 token 结果（allowlist DTO）
+
+    只回传 App 有消费点的字段；owner / icon / bot_id / refresh_token 一律不出代理。
+    """
+    access_token: str = Field(..., description="Notion integration access token")
+    workspace_id: str = Field(..., description="授权 workspace 的 ID")
+    workspace_name: Optional[str] = Field(None, description="workspace 显示名（可能为空）")
+    duplicated_template_id: Optional[str] = Field(
+        None,
+        description="用户在授权页选择复制模板时返回的页面 ID；未复制模板时为空",
+    )
+
+
+class _NotionTokenError(Exception):
+    """上游换 token 失败。detail 仅进服务端日志，不含 code / token / 响应体。"""
+
+    def __init__(self, error_code: str, status_code: int, detail: str = ""):
+        super().__init__(error_code)
+        self.error_code = error_code
+        self.status_code = status_code
+        self.detail = detail
+
+
+def _log_oauth_exchange(outcome: str, client_ip: str, detail: str = ""):
+    """记一条 exchange 审计行。
+
+    🔴 只允许 outcome + 来源 IP + 时间戳（+ 上游 HTTP 状态这类非敏感 detail）。
+    绝不记 code / access_token / 上游响应体。
+    """
+    suffix = f" detail={detail}" if detail else ""
+    print(
+        f"[{time.strftime('%Y-%m-%dT%H:%M:%S%z')}] oauth_exchange "
+        f"outcome={outcome} ip={client_ip}{suffix}",
+        flush=True,
+    )
+
+
+def _oauth_error(error_code: str, status_code: int) -> JSONResponse:
+    """稳定错误码响应。不回传 Notion 原始错误描述（细节只进服务端日志）。"""
+    return JSONResponse(status_code=status_code, content={"error": error_code})
+
+
+def _oauth_client_ip(request: Request) -> str:
+    """限流用的客户端 IP。
+
+    只认边缘 / 本机反代注入的头：`CF-Connecting-IP`（Cloudflare）→ `X-Real-IP`
+    （Nginx `$remote_addr`）→ 直连 peer。🔴 不解析客户端自带的 `X-Forwarded-For`
+    （可任意伪造，用它限流等于没限）。部署侧需确认 Nginx 对非 CF 来源覆写/剥离
+    `CF-Connecting-IP`，详 deploy.md。
+    """
+    for header in ("CF-Connecting-IP", "X-Real-IP"):
+        value = request.headers.get(header, "").strip()
+        if value:
+            return value
+    return request.client.host if request.client else "unknown"
+
+
+def _oauth_rate_allow(client_ip: str) -> bool:
+    """按 IP 的内存令牌桶：容量 10，每 60s 匀速回满。"""
+    now = time.monotonic()
+    tokens, last = _oauth_rate_buckets.get(client_ip, (float(OAUTH_RATE_LIMIT_PER_MIN), now))
+    tokens = min(
+        float(OAUTH_RATE_LIMIT_PER_MIN),
+        tokens + (now - last) * OAUTH_RATE_LIMIT_PER_MIN / OAUTH_RATE_WINDOW_SEC,
+    )
+    if tokens < 1.0:
+        _oauth_rate_buckets[client_ip] = (tokens, now)
+        return False
+    _oauth_rate_buckets[client_ip] = (tokens - 1.0, now)
+    if len(_oauth_rate_buckets) > OAUTH_RATE_BUCKET_MAX:
+        # 闲置超过一个窗口 = 桶必然已满，删掉等价于下次新建
+        for ip in [k for k, (_, ts) in _oauth_rate_buckets.items() if now - ts > OAUTH_RATE_WINDOW_SEC]:
+            del _oauth_rate_buckets[ip]
+    return True
+
+
+def _get_oauth_semaphore() -> asyncio.Semaphore:
+    """懒建 semaphore：必须在运行中的 loop 里创建（py3.9 下模块级创建会绑错 loop）。"""
+    global _oauth_semaphore
+    if _oauth_semaphore is None:
+        _oauth_semaphore = asyncio.Semaphore(OAUTH_MAX_CONCURRENT)
+    return _oauth_semaphore
+
+
+def _notion_token_exchange(code: str, redirect_uri: str) -> Dict[str, Any]:
+    """阻塞调用 Notion token 端点（由 asyncio.to_thread 包起来跑）。
+
+    stdlib urllib，不引新依赖。失败一律抛 _NotionTokenError。
+    """
+    payload = json.dumps({
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": redirect_uri,
+    }).encode("utf-8")
+    basic = base64.b64encode(
+        f"{NOTION_OAUTH_CLIENT_ID}:{NOTION_OAUTH_CLIENT_SECRET}".encode("utf-8")
+    ).decode("ascii")
+    req = urllib.request.Request(
+        NOTION_TOKEN_URL,
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Basic {basic}",
+            "Content-Type": "application/json",
+            "Notion-Version": NOTION_OAUTH_VERSION,
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=OAUTH_UPSTREAM_TIMEOUT_SEC) as resp:
+            raw = resp.read(OAUTH_MAX_RESPONSE_BYTES + 1)
+    except urllib.error.HTTPError as e:
+        # 上游 4xx = 授权码无效 / 过期 / redirect 不匹配 / 凭证错；5xx = Notion 侧故障
+        if 400 <= e.code < 500:
+            raise _NotionTokenError("invalid_grant", 400, f"upstream_status={e.code}")
+        raise _NotionTokenError("upstream_error", 502, f"upstream_status={e.code}")
+    except urllib.error.URLError:
+        raise _NotionTokenError("upstream_error", 502, "upstream_unreachable")
+    except OSError:
+        # socket 超时等（urlopen 的 timeout 走这里）
+        raise _NotionTokenError("upstream_error", 502, "upstream_io_error")
+
+    if len(raw) > OAUTH_MAX_RESPONSE_BYTES:
+        raise _NotionTokenError("upstream_error", 502, "upstream_body_too_large")
+    try:
+        data = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise _NotionTokenError("upstream_error", 502, "upstream_body_not_json")
+    if not isinstance(data, dict) or not isinstance(data.get("access_token"), str):
+        raise _NotionTokenError("upstream_error", 502, "upstream_missing_access_token")
+    return data
+
+
+@app.post(
+    "/api/oauth/notion/exchange",
+    response_model=NotionOAuthExchangeResponse,
+    tags=["OAuth 代理"],
+    summary="Notion 授权码换 token",
+)
+async def notion_oauth_exchange(request: Request):
+    """用 Notion 授权码换 access token（桌面 App 调用，**无需** WEBHOOK_SECRET 认证）。
+
+    存在的唯一理由：`client_secret` 不能进分发包，所以换 token 这一步由服务端代做。
+    本端点无状态——不落库、不缓存 token，拿到即原样回给发起方。
+
+    ## 请求体
+
+    ```json
+    {"code": "<授权回调带回的 code>", "redirect_uri": "<回调实际使用的 loopback URI>"}
+    ```
+
+    `redirect_uri` 必须精确等于白名单里的一条：
+    `http://localhost:9280/oauth/notion/callback` 或 `...:9281/...`。
+
+    ## 错误码
+
+    | HTTP | error | 含义 |
+    |------|-------|------|
+    | 400 | `invalid_grant` | 上游拒绝（code 无效/过期/已用过、redirect 不匹配、凭证错） |
+    | 400 / 413 | `invalid_request` | body 不是合法 JSON、缺字段、code 超长 / body 超 4KB |
+    | 403 | `invalid_redirect_uri` | redirect_uri 不在白名单 |
+    | 429 | `rate_limited` | 单 IP 超 10 次/分，或出站并发已满 |
+    | 502 | `upstream_error` | Notion 不可达 / 超时 / 响应异常 |
+    | 503 | `not_configured` | 服务端未配 `NOTION_OAUTH_CLIENT_ID` / `_SECRET` |
+    """
+    client_ip = _oauth_client_ip(request)
+
+    if not _oauth_rate_allow(client_ip):
+        _log_oauth_exchange("rate_limited", client_ip)
+        return _oauth_error("rate_limited", 429)
+
+    content_length = request.headers.get("content-length", "")
+    if content_length.isdigit() and int(content_length) > OAUTH_MAX_BODY_BYTES:
+        _log_oauth_exchange("invalid_request", client_ip, "body_too_large")
+        return _oauth_error("invalid_request", 413)
+
+    raw_body = await request.body()
+    if len(raw_body) > OAUTH_MAX_BODY_BYTES:
+        _log_oauth_exchange("invalid_request", client_ip, "body_too_large")
+        return _oauth_error("invalid_request", 413)
+
+    try:
+        body = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        _log_oauth_exchange("invalid_request", client_ip, "body_not_json")
+        return _oauth_error("invalid_request", 400)
+
+    code = body.get("code") if isinstance(body, dict) else None
+    redirect_uri = body.get("redirect_uri") if isinstance(body, dict) else None
+    if not isinstance(code, str) or not code or not isinstance(redirect_uri, str):
+        _log_oauth_exchange("invalid_request", client_ip, "missing_fields")
+        return _oauth_error("invalid_request", 400)
+    if len(code) > OAUTH_MAX_CODE_LEN:
+        _log_oauth_exchange("invalid_request", client_ip, "code_too_long")
+        return _oauth_error("invalid_request", 400)
+
+    if redirect_uri not in NOTION_OAUTH_REDIRECT_URIS:
+        _log_oauth_exchange("invalid_redirect_uri", client_ip)
+        return _oauth_error("invalid_redirect_uri", 403)
+
+    if not NOTION_OAUTH_CLIENT_ID or not NOTION_OAUTH_CLIENT_SECRET:
+        _log_oauth_exchange("not_configured", client_ip)
+        return _oauth_error("not_configured", 503)
+
+    semaphore = _get_oauth_semaphore()
+    if semaphore.locked():
+        _log_oauth_exchange("rate_limited", client_ip, "concurrency_full")
+        return _oauth_error("rate_limited", 429)
+
+    await semaphore.acquire()
+    try:
+        data = await asyncio.to_thread(_notion_token_exchange, code, redirect_uri)
+    except _NotionTokenError as e:
+        _log_oauth_exchange(e.error_code, client_ip, e.detail)
+        return _oauth_error(e.error_code, e.status_code)
+    finally:
+        semaphore.release()
+
+    _log_oauth_exchange("ok", client_ip)
+    return NotionOAuthExchangeResponse(
+        access_token=data["access_token"],
+        workspace_id=data.get("workspace_id") or "",
+        workspace_name=data.get("workspace_name"),
+        duplicated_template_id=data.get("duplicated_template_id"),
+    )
 
 
 # ── Dashboard ────────────────────────────────────────────────────────────

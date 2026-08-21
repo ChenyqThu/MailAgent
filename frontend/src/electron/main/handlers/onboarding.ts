@@ -209,6 +209,12 @@ export const ONBOARDING_WRITABLE_KEYS = [
   'MAIL_ACCOUNT_NAME'
 ] as const
 
+/** 掩码占位值（`***`）—— env:get 对 SECRET_ENV_KEYS 的固定回显形态（handlers/env.ts）。
+ *  向导表单里出现它只意味着「这一项本来就有值、用户没改」，绝不能当新值写回去：
+ *  写进去 = 用一串星号覆盖掉真 token（task 08-20 起 Notion token 可能是 OAuth 期间由
+ *  main 直接写入的，renderer 手里永远只有掩码/空）。空串同理（既有语义：不写）。 */
+const MASKED_SECRET_RE = /^\*+$/
+
 export type PluginKey = 'island' | 'llm' | 'digest' | 'calendar'
 
 /** 插件勾选 → config.py env flag。值写 'true'/'false' 字符串 (pydantic bool 解析)。
@@ -236,10 +242,13 @@ export function buildCompletePatch(
 } {
   const patch: Record<string, string> = {}
 
-  // 1) 核心账户字段 (trim, 空串丢弃)。
+  // 1) 核心账户字段 (trim, 空串丢弃, 掩码值丢弃 —— 见 MASKED_SECRET_RE)。
   for (const key of ONBOARDING_WRITABLE_KEYS) {
     const v = (cfg as Record<string, unknown>)[key]
-    if (typeof v === 'string' && v.trim() !== '') patch[key] = v.trim()
+    if (typeof v !== 'string') continue
+    const trimmed = v.trim()
+    if (trimmed === '' || MASKED_SECRET_RE.test(trimmed)) continue
+    patch[key] = trimmed
   }
 
   // 2) backend — 值域/平台合法性单源 @shared/lib/mailBackend: 脏值或平台外值
@@ -263,7 +272,11 @@ export function buildCompletePatch(
     }
     patch['DAVMAIL_POC_MODE'] = cfg.DAVMAIL_POC_MODE === 'true' ? 'true' : 'false'
     const cipher = cfg.DAVMAIL_POC_CIPHER_KEY
-    if (typeof cipher === 'string' && cipher.trim() !== '') {
+    if (
+      typeof cipher === 'string' &&
+      cipher.trim() !== '' &&
+      !MASKED_SECRET_RE.test(cipher.trim())
+    ) {
       patch['DAVMAIL_POC_CIPHER_KEY'] = cipher.trim()
     }
   }

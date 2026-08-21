@@ -49,6 +49,10 @@ Notion 是**可选的**：MailAgent 的邮件正文和附件以本地 SQLite 为
 
 如果你需要 Notion 镜像，MailAgent 要用到两个 Notion 数据库：一个存邮件，一个存日历。**这两个库需要你先在 Notion 里建好，并按下表配齐字段**——字段名和类型必须对得上，否则同步会失败。
 
+:::tip[桌面 App 用户有更快的路径]
+本页讲的是**手填 Token + Database ID**，适用于本页场景（从源码跑后端，没有桌面 App 图形界面）或想用 internal integration 的进阶用户。如果你用的是[桌面 App](/101/install-app/)（多数用户），设置页有「连接 Notion」按钮：点一下跳系统浏览器完成 OAuth 授权，授权页选「使用开发者提供的模板」会自动复制配好字段的邮件库 + 日历库，App 自动识别两个库并写入配置，全程不用手填 Token、也不用从 URL 里抠数据库 ID；选「使用已有页面」则回到 App 后从下拉列表里选库，同样免手填。两条路径最终写入的是同一组配置（`NOTION_TOKEN` / `EMAIL_DATABASE_ID` / `CALENDAR_DATABASE_ID`），同步管线不区分来源。
+:::
+
 ### 2a. 创建 Integration，拿 Token
 
 1. 浏览器打开 [www.notion.so/my-integrations](https://www.notion.so/my-integrations)。

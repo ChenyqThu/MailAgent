@@ -65,6 +65,21 @@ export async function fetchStandingDocsEditorEnabled(): Promise<boolean> {
   }
 }
 
+/** Fetch notionOauthEnabled from serve-api /chat/config (task 08-20 Notion OAuth 入口 kill-switch，
+ *  只门控「连接 Notion」按钮显隐)。default-ON flag，同 standingDocs 姿态：
+ *  未配置 / 端点不可达（如 onboarding 阶段 serve-api 未起）→ 显示入口。 */
+export async function fetchNotionOauthEnabled(): Promise<boolean> {
+  try {
+    const resp = await fetch(`${resolveApiBaseUrl()}/chat/config`, { credentials: 'include' })
+    if (!resp.ok) return true
+    const body = (await resp.json()) as { data?: { notionOauthEnabled?: unknown } }
+    // Explicit false → hide. undefined/null/true → show (default ON).
+    return body?.data?.notionOauthEnabled !== false
+  } catch {
+    return true
+  }
+}
+
 /** Fetch execPolicyEnabled from serve-api /chat/config. Returns false (hide) when not configured
  *  or unreachable — this flag is default-OFF (unlike standingDocs), so absence means "not enabled". */
 export async function fetchExecPolicyEnabled(): Promise<boolean> {

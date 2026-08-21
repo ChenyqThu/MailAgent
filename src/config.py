@@ -76,6 +76,13 @@ class Config(BaseSettings):
     # calendar_notion_enabled()，勿在消费点各自 if config.notion_token 漂移）
     notion_token: str = Field(default="", env="NOTION_TOKEN")
     email_database_id: str = Field(default="", env="EMAIL_DATABASE_ID")
+    # 2025-09-03 起 database 是容器、schema 在 data source，一个 database 可含多个
+    # data source。解析侧历来恒取 data_sources[0]，而 OAuth 库选择器是按 data source
+    # 粒度让用户选的 —— 选中非第一个时 Python 会解析到另一个数据源、静默写错地方。
+    # 故 OAuth 授权成功时把选中的 data source id 一并写 env，解析侧优先用它。
+    # 空 = 存量单 data source 用户，行为与加这两个键之前逐字节一致。判定统一走模块级
+    # configured_data_source_id()，勿在消费点各自 if。
+    email_data_source_id: str = Field(default="", env="EMAIL_DATA_SOURCE_ID")
 
     # 用户配置
     user_email: str = Field(..., env="USER_EMAIL")
@@ -150,6 +157,8 @@ class Config(BaseSettings):
 
     # 日历同步配置
     calendar_database_id: str = Field(default="", env="CALENDAR_DATABASE_ID")
+    # 日历库的显式 data_source_id（同 email_data_source_id，见其注释）。
+    calendar_data_source_id: str = Field(default="", env="CALENDAR_DATA_SOURCE_ID")
     calendar_name: str = Field(default="日历", env="CALENDAR_NAME")
     calendar_past_days: int = Field(default=7, env="CALENDAR_PAST_DAYS")
     calendar_future_days: int = Field(default=90, env="CALENDAR_FUTURE_DAYS")
@@ -617,6 +626,16 @@ class Config(BaseSettings):
             "Settings 身份文档编辑器总开关（默认开）。开时 AI tab 出现「身份文档 / Standing Context」"
             "section，列出 SOUL/AGENT/RULES/USER 4 个文档，支持查看 + 手动编辑 + 版本历史/rollback。"
             "flag-off → section 字节级不渲染（DOM 无此区块）。singleton 读 —— 翻 flag 需重启 serve-api。"
+        ),
+    )
+    notion_oauth_enabled: bool = Field(
+        default=True, validation_alias="MAILAGENT_NOTION_OAUTH",
+        description=(
+            "Notion OAuth 接入入口总开关（task 08-20，默认开，kill-switch）。只门控设置页 / "
+            "onboarding 的「连接 Notion」OAuth 入口显隐；关掉不影响已写入的 NOTION_TOKEN / 库 ID "
+            "配置继续生效（notion_enabled 判据不变），手填路径照旧。经 /chat/config 投影 "
+            "notionOauthEnabled 给前端（照抄 standing_docs_editor 链路）。"
+            "singleton 读 —— 翻 flag 需重启 serve-api。"
         ),
     )
 
@@ -1297,3 +1316,35 @@ def calendar_notion_enabled(cfg: "Config | None" = None) -> bool:
     return bool(
         (c.notion_token or "").strip() and (c.calendar_database_id or "").strip()
     )
+
+
+def _normalize_notion_id(value: str) -> str:
+    """Notion id 归一：去连字符 + 小写（同一 id 有带/不带 dash 两种写法）。"""
+    return (value or "").replace("-", "").strip().lower()
+
+
+def configured_data_source_id(database_id: str, cfg: "Config | None" = None) -> str:
+    """查 database_id 对应的**显式配置** data_source_id；未配置 / 不匹配返回 ""。
+
+    背景（task 08-20 Lane 5）：Notion 2025-09-03 语义下 database 是容器、schema 在
+    data source，一个 database 可含多个 data source。全仓的解析点历来恒取
+    ``data_sources[0]``，而 OAuth 库选择器是按 data source 粒度让用户选的 ——
+    用户选中的不是第一个时，Python 侧解析到另一个数据源，同步静默写错地方。
+    OAuth 授权成功时把选中的 data source id 一并写进 env（EMAIL_DATA_SOURCE_ID /
+    CALENDAR_DATA_SOURCE_ID），解析点先查这里，命中就跳过 API 解析。
+
+    返回 "" 时调用方走原来的 ``databases.retrieve`` → ``data_sources[0]`` 路径
+    （存量用户全是单 data source，行为逐字节不变）。
+    """
+    c = cfg if cfg is not None else config
+    target = _normalize_notion_id(database_id)
+    if not target:
+        return ""
+    for db_id, ds_id in (
+        (c.email_database_id, c.email_data_source_id),
+        (c.calendar_database_id, c.calendar_data_source_id),
+    ):
+        ds_id = (ds_id or "").strip()
+        if ds_id and _normalize_notion_id(db_id) == target:
+            return ds_id
+    return ""

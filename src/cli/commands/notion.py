@@ -20,7 +20,7 @@ from src.cli.exceptions import (
     CliNotFoundError,
 )
 from src.cli.output import apply_local_output as _apply_local_output, emit, emit_cli_error
-from src.notion.client import NotionClient
+from src.notion.client import NotionClient, resolve_data_source_id
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -807,11 +807,8 @@ async def _write_task_page(cli, fields, email_page_id: str, subject: str, sender
     """写日程库 page: Title/日程类型/优先级/Time/Description + Email Inbox relation."""
     client = cli.notion_sync.client.client  # AsyncClient
     db_id = cli.cli_config.calendar_database_id
-    db = await client.databases.retrieve(database_id=db_id)
-    ds_list = db.get("data_sources") or []
-    if not ds_list:
-        raise RuntimeError(f"日程库 {db_id} 无 data_source")
-    ds_id = ds_list[0]["id"]
+    # 解析规则单源 resolve_data_source_id（CALENDAR_DATA_SOURCE_ID 优先，其次 data_sources[0]）
+    ds_id = await resolve_data_source_id(client, db_id)
 
     props: dict = {
         "Title": {"title": [{"text": {"content": fields.task_title}}]},

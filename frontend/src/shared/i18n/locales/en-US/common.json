@@ -3000,6 +3000,77 @@
     "accounts": {
       "notion": {
         "title": "Notion integration",
+        "manual": {
+          "title": "Enter token and database IDs manually",
+          "helper": "For a self-built internal integration, or when you need to point at different databases."
+        },
+        "oauth": {
+          "connect": {
+            "label": "Connect Notion",
+            "helper": "Authorize once in your browser (you can duplicate the official template on the way). The token and both database IDs are written automatically — nothing to paste.",
+            "button": "Connect Notion"
+          },
+          "connectedUnknownWorkspace": "Notion connected",
+          "connectedHelper": "Connected via Notion authorization. \"Remove connection from this Mac\" only clears local config; to revoke on Notion's side, go to Notion → Settings → My connections.",
+          "reauthorize": "Re-authorize",
+          "cancel": "Cancel",
+          "dismiss": "Got it",
+          "doneDetail": "Connected. Email database \"{emailDb}\", calendar database \"{calendarDb}\". Restart the backend to start syncing to Notion.",
+          "phase": {
+            "waitingCallback": "The Notion authorization page is open in your browser — finish it there (keep this window open).",
+            "exchanging": "Exchanging the authorization code…",
+            "discovering": "Identifying the email and calendar databases…",
+            "needSelection": "Pick which databases to use.",
+            "writing": "Writing configuration…",
+            "done": "Authorization complete.",
+            "error": "Authorization did not complete."
+          },
+          "error": {
+            "clientIdMissing": "No Notion integration ID is available on this machine, so authorization cannot start. Update the app or fill the fields manually.",
+            "portUnavailable": "Ports 9280 and 9281 are both in use, so the Notion callback cannot be received. Close whatever holds them and retry.",
+            "browserOpenFailed": "Could not open the system browser; authorization was not started.",
+            "denied": "You cancelled on the Notion page. Existing configuration is unchanged.",
+            "timeout": "Authorization was not completed within 5 minutes and has been cancelled. Existing configuration is unchanged.",
+            "cancelled": "Authorization cancelled. Existing configuration is unchanged.",
+            "invalidGrant": "The authorization code expired (usually after waiting too long). Please authorize again.",
+            "upstreamError": "Notion failed to issue a token. Please retry later.",
+            "notConfigured": "The authorization service is unavailable right now. Retry later, or use the manual fields below.",
+            "rateLimited": "Too many attempts in a short window. Wait a minute and retry.",
+            "invalidRedirectUri": "The callback address was rejected by the authorization service. Please update the app.",
+            "networkError": "Network unreachable; the token exchange failed. Existing configuration is unchanged.",
+            "invalidResponse": "The authorization service returned something unrecognizable. Existing configuration is unchanged.",
+            "discoveryFailed": "Reading Notion databases failed. Authorize again and make sure the pages you need are shared with MailAgent.",
+            "noDatabasesFound": "No database was found in what you authorized. Authorize again and duplicate the template, or select pages that contain the email and calendar databases.",
+            "selectionInvalid": "The selected database is not usable (it may have changed or is no longer visible). Please pick again.",
+            "envWriteFailed": "Writing the configuration failed; existing configuration is unchanged (see the app log).",
+            "unknown": "Authorization did not complete. Existing configuration is unchanged."
+          },
+          "select": {
+            "title": "Pick the databases to use",
+            "description": "These are the databases this authorization can reach. Pick one of each: emails go to the email database, meeting invites to the calendar database.",
+            "emailGroup": "Email database",
+            "calendarGroup": "Calendar database",
+            "empty": "No candidates available.",
+            "untitled": "(untitled)",
+            "cancel": "Cancel authorization",
+            "confirm": "Use selected databases",
+            "warnings": "Missing optional fields: {fields} (only affects optional features such as AI classification — usable as is)",
+            "reason": {
+              "otherRole": "Not this kind of database (field signature does not match)",
+              "missing": "Missing required fields: {fields}",
+              "unknown": "Purpose unrecognized: the field signature matches neither the email nor the calendar database"
+            }
+          },
+          "remove": {
+            "button": "Remove connection from this Mac",
+            "title": "Remove connection from this Mac",
+            "description": "This clears the Notion token, both database IDs, and workspace info stored on this machine. The authorization still exists on Notion's side — to revoke it fully, go to Notion → Settings → My connections and remove MailAgent. Emails already synced to Notion are unaffected.",
+            "cancel": "Cancel",
+            "confirm": "Remove connection",
+            "done": "Connection removed from this Mac",
+            "failTitle": "Removal failed"
+          }
+        },
         "disabledNotice": "Notion is not configured: mirror sync, project weekly reports, and calendar sync are disabled. Emails sync locally only (list, search, and AI classification still work). Fill in the token and email database ID, then restart to enable. Configuring later only syncs new emails; historical emails are not backfilled (use mailagent email resync to push them individually).",
         "token": {
           "label": "Notion token",

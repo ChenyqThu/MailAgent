@@ -59,6 +59,14 @@ _MANAGED_ENV_KEYS: List[str] = [
     "NOTION_TOKEN",
     "EMAIL_DATABASE_ID",
     "CALENDAR_DATABASE_ID",
+    # Notion OAuth 接入 (task 08-20) —— 连接成功后 main 侧原子写入的 workspace 展示
+    # 信息 (display-only, Python 不读)。镜像 env-keys.ts。
+    "NOTION_WORKSPACE_ID",
+    "NOTION_WORKSPACE_NAME",
+    # 选中的 data source id (task 08-20 Lane 5) —— OAuth 与两库 ID 一起原子写入。
+    # Python 解析侧 (resolve_data_source_id) 读它跳过 data_sources[0] 盲取。
+    "EMAIL_DATA_SOURCE_ID",
+    "CALENDAR_DATA_SOURCE_ID",
     "USER_EMAIL",
     "MAIL_ACCOUNT_NAME",
     "MAIL_INBOX_NAME",

@@ -42,6 +42,9 @@ import { registerKosStatsHandlers } from './handlers/kos_stats'
 import { registerCalendarHandlers } from './handlers/calendar'
 import { registerSettingsHandlers } from './handlers/settings'
 import { registerNotionAgentHandlers } from './handlers/notion_agent'
+// task 08-20 — Notion OAuth 授权内核 (loopback 回调 + exchange 代理换 token +
+// data source 库发现 + NOTION_OAUTH_ENV_KEYS 原子写)。token 明文永不过 renderer IPC。
+import { registerNotionOauthHandlers } from './notion_oauth'
 import { registerPromptHandlers } from './handlers/prompts'
 // Sprint 8 §2.2 — electron-updater bridge (auto-updater state + IPC).
 import { registerUpdaterHandlers } from './handlers/updater'
@@ -434,6 +437,9 @@ app.whenReady().then(async () => {
   // Notion Agent CLI config bridge — Settings page reads/edits the bound
   // Custom Agent + default model in ~/.notionagents/notion_account.json.
   registerNotionAgentHandlers()
+  // task 08-20 — Notion OAuth (notionOauth:start/cancel/listDatabases/
+  // selectDatabases/removeConnection + notionOauth:status push)。
+  registerNotionOauthHandlers()
   registerPromptHandlers()
   // Sprint 8 §2.2 — electron-updater bridge.
   //

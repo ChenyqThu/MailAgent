@@ -9,6 +9,8 @@ CLI 调用的导出: get_all_pages / extract_page_info / archive_page
 
 from notion_client import AsyncClient
 
+from src.notion.client import resolve_data_source_id
+
 
 async def get_all_pages(client: AsyncClient, database_id: str):
     """获取数据库中所有页面（处理分页）"""
@@ -16,9 +18,8 @@ async def get_all_pages(client: AsyncClient, database_id: str):
     has_more = True
     start_cursor = None
 
-    # Resolve data_source_id
-    db_info = await client.databases.retrieve(database_id)
-    data_source_id = db_info["data_sources"][0]["id"]
+    # Resolve data_source_id（单源 resolve_data_source_id：显式配置优先，其次 data_sources[0]）
+    data_source_id = await resolve_data_source_id(client, database_id)
 
     while has_more:
         query_params = {"data_source_id": data_source_id, "page_size": 100}

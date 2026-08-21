@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest'
 import {
   buildClearPatch,
   buildCompletePatch,
+  buildCoreConfigPatch,
   isLikelyDoubleWriter,
   isPathInside,
   parseActiveEnvKeys,
@@ -106,6 +107,48 @@ describe('buildCompletePatch', () => {
     })
     expect(patch['CALENDAR_DATABASE_ID']).toBe('cal123')
     expect(patch['MAIL_ACCOUNT_NAME']).toBeUndefined()
+  })
+
+  // task 08-20 Notion OAuth — 「未改动则保留」：向导里 Notion 授权成功后, token 由
+  // main 直接写进 .env, renderer 手里只有空值 (没展示过) 或掩码 (`***`, 若某处回填了
+  // env:get 的脱敏值)。两者都**不能**进 patch —— 写进去就是拿空/星号覆盖真 token。
+  it('never overwrites a secret with the redaction mask (OAuth-written token survives)', () => {
+    const { patch } = buildCompletePatch({
+      USER_EMAIL: 'a@b.com',
+      NOTION_TOKEN: '***',
+      EMAIL_DATABASE_ID: ''
+    })
+    expect(patch['NOTION_TOKEN']).toBeUndefined()
+    expect(patch['EMAIL_DATABASE_ID']).toBeUndefined()
+    expect(patch['USER_EMAIL']).toBe('a@b.com')
+  })
+
+  it('same for the davmail cipher secret (masked value is not a new value)', () => {
+    const { patch } = buildCompletePatch({
+      USER_EMAIL: 'a@b.com',
+      MAILAGENT_BACKEND: 'davmail',
+      DAVMAIL_POC_MODE: 'false',
+      DAVMAIL_POC_CIPHER_KEY: '******'
+    })
+    expect(patch['DAVMAIL_POC_CIPHER_KEY']).toBeUndefined()
+  })
+
+  // 端到端形态回归 (prd 验收 5): 向导里 OAuth 写完 → 用户继续走完向导点「开始同步」,
+  // commitConfig 用的正是 buildCoreConfigPatch。此时表单里 Notion 三键都是空串
+  // (buildCompleteConfig 恒填 '' 而非 undefined), patch 里一个 Notion 键都不许有。
+  it('commitConfig patch after an OAuth-written .env touches no Notion key', () => {
+    const { patch, missing } = buildCoreConfigPatch({
+      NOTION_TOKEN: '',
+      EMAIL_DATABASE_ID: '',
+      USER_EMAIL: 'a@b.com',
+      MAILAGENT_BACKEND: 'davmail',
+      DAVMAIL_POC_MODE: 'true'
+    })
+    expect(missing).toEqual([])
+    expect(
+      Object.keys(patch).filter((k) => k.includes('NOTION') || k.includes('DATABASE'))
+    ).toEqual([])
+    expect(patch['USER_EMAIL']).toBe('a@b.com')
   })
 
   it('PLUGIN_FLAG_MAP points at the agreed config.py keys', () => {

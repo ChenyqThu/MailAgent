@@ -10,6 +10,7 @@ from notion_client import AsyncClient
 from src.config import config
 from src.models import CalendarEvent, EventStatus
 from src.calendar_notion.description_parser import DescriptionParser
+from src.notion.client import resolve_data_source_id
 
 
 class CalendarNotionSync:
@@ -22,13 +23,13 @@ class CalendarNotionSync:
         self._ds_id: Optional[str] = None
 
     async def _get_data_source_id(self) -> str:
-        """获取日历数据库的 data_source_id（带缓存）"""
+        """获取日历数据库的 data_source_id（带缓存）
+
+        解析规则单源 ``resolve_data_source_id``：CALENDAR_DATA_SOURCE_ID 配了就直接用
+        （OAuth 按用户选中的 data source 写入），没配才取 data_sources[0]。
+        """
         if self._ds_id is None:
-            db = await self.client.databases.retrieve(self.database_id)
-            data_sources = db.get("data_sources", [])
-            if not data_sources:
-                raise ValueError(f"No data sources found for database {self.database_id}")
-            self._ds_id = data_sources[0]["id"]
+            self._ds_id = await resolve_data_source_id(self.client, self.database_id)
         return self._ds_id
 
     async def sync_event(self, event: CalendarEvent) -> Tuple[str, str]:

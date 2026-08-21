@@ -12,6 +12,7 @@ from collections import defaultdict
 from typing import Dict, List
 
 from src.config import config
+from src.notion.client import resolve_data_source_id
 
 
 class Colors:
@@ -87,9 +88,8 @@ class NotionDBCleaner:
         has_more = True
         start_cursor = None
 
-        # Resolve data_source_id
-        db_info = await self.notion_client.databases.retrieve(config.email_database_id)
-        data_source_id = db_info["data_sources"][0]["id"]
+        # Resolve data_source_id（单源 resolve_data_source_id：显式配置优先，其次 data_sources[0]）
+        data_source_id = await resolve_data_source_id(self.notion_client, config.email_database_id)
 
         while has_more:
             query_params = {

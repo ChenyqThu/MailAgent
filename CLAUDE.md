@@ -124,6 +124,7 @@
 | `MAILAGENT_ALERT_EPISODE` | `true` | 状态型告警的 episode 语义：进异常告一次 → 静默 → 值翻倍才再告 → 恢复发 recovery |
 | `MAILAGENT_CALENDAR_AGENT_TOOLS` | `true` | gateway 5 个日历工具（2 读 + 改期 / RSVP / 删除）。三个写工具出厂默认弹卡 |
 | `MAILAGENT_NOTION_AGENT_TOOL` | `true` | `notion_agent_chat` 工具（委派 notion-agent CLI，edit-tier 出厂弹卡）。⚠️ 真开关是 Skills 里的 `notion_agent` 条目，本 flag 只是 kill-switch |
+| `MAILAGENT_NOTION_OAUTH` | `true` | Notion OAuth 授权入口显隐（kill-switch）；只门控设置页/onboarding 入口，不影响已写入配置 |
 | `MAILAGENT_MCP_CONNECTORS` | `false` | MCP connector 总闸（灰度中）。双轨：Notion / Atlassian 自建直连 + 其余 14 家 Composio；per-tool 三档 `auto\|ask\|off` |
 | `MAILAGENT_MEMORY_LAYERS` | `false` | memory.md 分层抽取（5 层 + 兜底），按层预算截断。🔴 只门控写侧，读侧判据是文档结构 |
 | `MAILAGENT_SKILL_CATALOG_PROMPT` | `false` | 技能名单注入 system prompt 可缓存前缀（仅 manual chat）。🔴 是导航用的能力事实，**不是**权威开关态 |
@@ -249,11 +250,14 @@ mailagent email resync 53675 --dry-run -o json
 
 ## Notion 数据库结构
 
-**邮件数据库**必需字段：`Subject`(Title) · `Message ID`(Text,去重) · `Thread ID`(Text,线程) · `From`(Email) / `From Name`(Text) · `To` / `CC`(Text) · `Date`(Date) · `Parent Item`(Relation self,线程头) · `Mailbox`(Select) · `Is Read` / `Is Flagged` / `Has Attachments`(Checkbox) · `AI Action`(Select) · `AI Priority`(Select: Critical/Urgent/Important/Normal/Low) · `AI Review Status`(Select: Pending/Reviewed)。
+**邮件数据库**必需字段（同步默认路径会写的）：`Subject`(Title) · `Message ID`(Text,去重) · `Thread ID`(Text,线程) · `From`(Email) / `From Name`(Text) · `To` / `CC`(Text) · `Date`(Date) · `Parent Item` / `Sub-item`(Relation self,线程) · `Mailbox`(Select) · `Is Read` / `Is Flagged` / `Has Attachments`(Checkbox) · `Processing Status`(Select: 未处理/AI Reviewed/已同步/草稿已创建/已完成) · `ID`(Number) · `Original EML`(Files)。可选（LLM 分类写入，缺失只降级不阻断）：`Priority`(Select: 🔴 紧急/🟡 重要/🟢 一般/⚪ 低) · `Action Type`(Select) · `AI Summary` / `Key Points` / `Urgency Reason`(Text) 等。
+> ⚠️ 2026-08-20 更正：本表旧版写的 `AI Action` / `AI Priority`(Critical…) / `AI Review Status`(Pending/Reviewed) 是从未与代码对齐的旧名——写入侧真名以上为准。
 
-**日历数据库**必需字段：`Title`(Title) · `Event ID`(Text,去重) · `Time`(Date,起止) · `URL`(URL,Teams) · `Location`(Text) · `Organizer`(Text) · `Status`(Select)。
+**日历数据库**必需字段：`Title`(Title) · `Event ID`(Text,去重) · `Time`(Date,起止) · `URL`(URL,Teams) · `Location`(Text) · `Organizer`(Text) / `Organizer Email`(Email) · `会议状态`(Select: None/Confirmed/Tentative/Cancelled，**不是** `Status` 也不是 status 类型) · `日程类型`(Select) · `Calendar` / `Sync Status`(Select) · `Is All Day` / `Is Recurring`(Checkbox) · `Attendees` / `Recurrence Rule`(Text) · `Attendee Count`(Number) · `Last Synced` / `Last Modified`(Date)。
 
 > 改 email DB schema（加/改 select option）→ 同步改 `src/llm_agent/schema.py` 并跑 `pytest tests/llm_agent/test_schema.py`（有 `schema-consistency-reviewer` subagent 校验四处一致性）。
+
+> Notion OAuth 授权路径（一键连接 + 模板复制）下，两库必需字段的机器可读单源是 `frontend/src/shared/lib/notionDbSchema.contract.json`；本节保留为人类可读摘要。
 
 ## 常见问题
 

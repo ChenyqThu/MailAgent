@@ -83,3 +83,11 @@ MAILAGENT_CALENDAR_TRIGGER
 MAILAGENT_SKILL_CATALOG_PROMPT
 MAILAGENT_SKILL_SELF_MOUNT
 MAILAGENT_STANDING_CONTEXT_ENABLED
+# Notion OAuth 接入 (task 08-20)：四键全部 Electron main / renderer 侧消费，Python 不读。
+# WORKSPACE 两键 = OAuth 成功后 main 原子写入的展示信息 (受管白名单有、config.py 无字段)；
+# PROXY_URL = notion_oauth.ts process.env 读的 exchange 代理覆盖 (调试 knob 不进 UI)；
+# CLIENT_ID = notion_oauth.ts process.env 读的公开集成 client_id 覆盖 (公开标识非密钥)。
+NOTION_WORKSPACE_ID
+NOTION_WORKSPACE_NAME
+NOTION_OAUTH_PROXY_URL
+NOTION_OAUTH_CLIENT_ID
