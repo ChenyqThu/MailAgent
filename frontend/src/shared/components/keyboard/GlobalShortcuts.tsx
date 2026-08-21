@@ -15,7 +15,7 @@ import { useNavigate } from '@tanstack/react-router'
 import i18n from '@shared/i18n'
 
 import { useShortcut } from '@shared/hooks/useShortcut'
-import { openChatModal } from '@shared/state/ai-chat-panel'
+import { toggleChatModal } from '@shared/state/ai-chat-panel'
 import { useCommandPalette } from '@shared/state/command-palette'
 import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { useNavCollapsed } from '@shared/state/nav-shell'
@@ -43,9 +43,12 @@ export function GlobalShortcuts(): null {
     void navigate({ to: '/settings', search: { tab: 'general' } })
   }, [navigate])
 
-  // assistant-modal: ⌘J 展开 chat modal（⌘L 的旧侧边面板 toggle 随 legacy 面板退役）。
-  const openModal = useCallback(() => {
-    openChatModal()
+  // assistant-modal: ⌘J 开关 chat dock（⌘L 的旧侧边面板 toggle 随 legacy 面板退役）。
+  // 与上面 ⌘K 同理 —— 只开不关会逼用户改用 Esc / 点 FAB 才能收回，第二次 ⌘J 应该收回。
+  // ⌘ 组合键自动跳过 editable-target gating（useShortcut），所以在 chat 输入框里打字时
+  // 按 ⌘J 一样能收起 dock。
+  const toggleModal = useCallback(() => {
+    toggleChatModal()
   }, [])
 
   // ⌘O — MailAgent 通用 agent 视图 (/sessions)。legacy Cmd+O centered dialog 已随
@@ -70,7 +73,7 @@ export function GlobalShortcuts(): null {
   useShortcut('?', openHelp)
   useShortcut('cmd+k', togglePalette)
   useShortcut('cmd+,', goSettings)
-  useShortcut('cmd+j', openModal)
+  useShortcut('cmd+j', toggleModal)
   useShortcut('cmd+o', toggleGeneral)
   // ⌘N — 写新邮件 (居中模态, ComposeNewModal 挂 RootLayout)。global scope: 任意
   // 页面可开, 与全局侧边栏「写邮件」按钮一致。editable context 默认 short-circuit,

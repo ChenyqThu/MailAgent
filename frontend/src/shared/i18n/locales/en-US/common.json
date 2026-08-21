@@ -480,7 +480,7 @@
       "delete": "Delete",
       "translate": "Translate this email",
       "toggleBatchSelect": "Toggle batch select",
-      "openAiPanel": "Open AI chat",
+      "openAiPanel": "Toggle AI chat",
       "sendChat": "Send AI message",
       "newChat": "New AI conversation",
       "toggleIsland": "Toggle Dynamic Island",

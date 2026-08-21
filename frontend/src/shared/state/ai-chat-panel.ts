@@ -219,7 +219,8 @@ export function openAIChatSession(
 }
 
 // ── assistant-modal (新大版本) — non-React entry points for the FAB / shortcuts / fullscreen jump ──
-/** Open (expand) the AI chat modal in its cached dock mode. Called by the FAB + ⌘J. */
+/** Open (expand) the AI chat modal in its cached dock mode. Called by the FAB
+ *  (⌘J goes through toggleChatModal below). */
 export function openChatModal(): void {
   const state = useAIChatPanel.getState()
   state.clearMatterChat()
@@ -228,6 +229,17 @@ export function openChatModal(): void {
 /** Minimise the modal back to the FAB (keeps the cached mode; next open restores it). */
 export function hideChatModal(): void {
   useAIChatPanel.getState().hideChatModal()
+}
+/** ⌘J — 开关 dock：展开中则收回 FAB，否则按缓存的 dock mode 展开。
+ *
+ *  语义完全复用上面两个入口（开的那支照旧走 clearMatterChat —— ⌘J 是「通用」唤出，
+ *  不继承上一次的事项身份）；关的那支只翻 visible，缓存的 dock mode 与会话内容都不动。 */
+export function toggleChatModal(): void {
+  if (useAIChatPanel.getState().visible) {
+    hideChatModal()
+  } else {
+    openChatModal()
+  }
 }
 /** fullscreen jump — park the session id for AgentViewLayout to select on mount; the caller does the
  *  router navigate + hideChatModal(). */

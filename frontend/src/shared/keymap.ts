@@ -222,7 +222,9 @@ export const SHORTCUTS: ReadonlyArray<ShortcutDef> = [
   // ── Chat ──────────────────────────────────────────────────────────────
   {
     // S3 W2 — legacy 侧边面板的 ⌘L toggle 随 legacy runtime 退役；真实绑定
-    // 是 ⌘J (GlobalShortcuts useShortcut('cmd+j', openModal) → chat modal)。
+    // 是 ⌘J (GlobalShortcuts useShortcut('cmd+j', toggleModal) → chat dock)。
+    // 0821 owner dogfood：⌘J 由「只开」改为**开关**，文案随之改成「开关侧边 AI 对话」。
+    // id 保持 openAiPanel（外部引用 / 测试的稳定标识），改的是行为与 label。
     id: 'openAiPanel',
     spec: 'cmd+j',
     display: '⌘J',
