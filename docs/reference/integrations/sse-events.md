@@ -138,6 +138,12 @@ es.addEventListener('mailagent', e => {
 踩坑活证据）；perf-sse-realtime 批起它增发 `public_ids`，消费端优先定向失效、拿不到才
 回落全量。新增 matter 事件一律跟 `matter.changed` / `matter.run.changed` 走 public_id。
 
+### 通知中心
+
+| event_type | 触发 | data 字段 |
+|---|---|---|
+| `notification.changed` | `NotifyCenter`（`src/notify/center.py`）各写方法（publish / resolve_by_dedupe / mark_read / mark_all_read / snooze / resolve）commit 之后 | `{category?: string}` —— 仅定位提示，批量 flush 时可省略。🔴 **payload 不携带任何行 id、不携带业务实体**（`matter.attention` 曾只发内部数字 id 前端对不上、被迫全量失效的教训见上，本事件干脆不发 id；防回加闸见前端 `notification.changed` publish 单测）|
+
 > 前端契约：`frontend/src/shared/api/types/events.ts` 的 `SSE_EVENT_TYPES` 与后端
 > `safe_publish` 字面量集合恒等，一致性闸
 > `frontend/tests/shared/api/sseEventTypes.contract.test.ts`（从 Python 源码抽取，

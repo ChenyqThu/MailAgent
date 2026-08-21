@@ -44,6 +44,7 @@ import {
   matterRunsKey
 } from '@shared/components/matters/hooks'
 import { refreshMatter } from '@shared/components/matters/matterMutation'
+import { refreshNotifications } from '@shared/components/notifications/notificationMutation'
 
 const DEBOUNCE_MS = 200
 
@@ -258,6 +259,12 @@ export function useEventBridge(): void {
         debounceInvalidate(`matters:changed:${publicId}`, () => {
           void refreshMatter(queryClient, publicId)
         })
+        return
+      }
+      // 统一通知中心（08-20）—— payload 只是 hint（design §4.1: 不携带行 id/业务
+      // 数据），前端一律 refetch 通知前缀。断线兜底另有 60s 轮询，事件只是加速。
+      if (ev.event_type === 'notification.changed') {
+        debounceInvalidate('notifications:changed', () => refreshNotifications(queryClient))
         return
       }
       const directives = planInvalidation(ev.event_type, ev.internal_id, ev.data)

@@ -323,5 +323,15 @@ export const qk = {
     // thread member. Shares React-Query cache with anything else on the id.
     list: (id: number) => ['attachment', id, 'list'] as const,
     dataUrl: (id: string | number) => ['attachment', id, 'dataUrl'] as const
+  },
+
+  // 统一通知中心（08-20-notification-center M1）。`all()` 是失效前缀 —— SSE
+  // `notification.changed` 与写操作成功后都失效这一个 key，list/unreadCount 挂在
+  // 它下面跟着过期。
+  notifications: {
+    all: () => ['notifications'] as const,
+    list: (category: string | null, state: string) =>
+      ['notifications', category ?? 'all', state] as const,
+    unreadCount: () => ['notifications', 'unread-count'] as const
   }
 } as const

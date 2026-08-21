@@ -42,7 +42,9 @@ export const SSE_EVENT_TYPES = [
   // 通讯录（R1-3: 扫描 tick / 画像 / 建议采纳）
   'contact.changed',
   // custom agent run 生命周期（R1-5）
-  'agent.run.changed'
+  'agent.run.changed',
+  // 统一通知中心（08-20）：SSE 只当刷新信号, payload 不含行 id
+  'notification.changed'
 ] as const
 
 /** Sprint 16 — SSE event types. 后端 publish 点见 src/events/publisher.py
