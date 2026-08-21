@@ -32,6 +32,7 @@ from loguru import logger
 
 from src.agents.run_state import derive_agent_run_state
 from src.agents.trigger import Budget, parse_budget
+from src.notify.center import NotifyCenter
 
 if TYPE_CHECKING:
     from src.reports.store import ReportStore
@@ -82,6 +83,8 @@ class AgentRunWorker:
         self._title_resolver = title_resolver or self._default_title_resolver
         self._timeout_resolver = timeout_resolver or self._default_timeout_resolver
         self._matter_service_cache = None
+        # 通知中心写面（只持 db_path，不开连接；per-call connect 在 NotifyCenter 内部）。
+        self._notify_center = NotifyCenter(self.repo.db_path)
         self._stop_event = asyncio.Event()
         self._stats = {"claimed": 0, "succeeded": 0, "failed": 0}
 
@@ -425,15 +428,18 @@ class AgentRunWorker:
             logger.warning(f"[agent-run-worker] contact suggestion count failed: {exc}")
             return None
 
-    # ── 灵动岛「运行结果」通知（S5 W1, ADR-004 P7）──────────────────────────────────
+    # ── 终态「运行结果」通知：通知中心落库 + 灵动岛（S5 W1, ADR-004 P7）──────────────
 
     async def _announce_terminal(
         self, job: "AsyncJob", status: str, result: Optional[dict], last_error: Optional[str]
     ) -> None:
-        """终态后推灵动岛「运行结果」通知（completed/error）。**通知失败仅 warning 绝不影响 job 终态**。
+        """终态后发「运行结果」通知（completed/error）：通知中心落库 + 灵动岛卡片，两条并存。
+        **通知失败仅 warning 绝不影响 job 终态**。
 
         读态经 ``derive_agent_run_state`` 单源判定（P6）：``completed`` → kind=completed；``failed``
-        → kind=error；``paused_*`` → **不发**（审批卡链路已 announce，防双卡）。POST loopback serve-api
+        → kind=error；``paused_*`` / ``skipped`` → **两条都不发**（审批卡链路已 announce，防双卡；
+        且 ``succeeded + outcome='paused_handoff'`` 不是「成功完成」，绝不得落成 completed 通知）。
+        岛卡走 POST loopback serve-api
         ``/api/island/agent/announce``（本地 token）；端点自身双 flag（island_agent_enabled +
         ping_island_enabled）no-op 语义在服务端保持不变（此处不重复门控，off 时端点静默 no-op）。
         """
@@ -454,10 +460,49 @@ class AgentRunWorker:
         agent_id = str((job.params or {}).get("agent_id") or job.target_key or "")
         title, summary = self._announce_text(job, agent_id, kind, result, last_error)
         session_id = self._session_id_of(result)
+        await self._publish_notification(job, kind, agent_id, title, summary, session_id)
         try:
             await self._post_announce(kind, session_id, title, summary)
         except Exception as exc:  # noqa: BLE001 — 通知失败绝不影响 job 终态（已在 _mark 落库）
             logger.warning(f"[agent-run-worker] island announce failed job_id={job.job_id}: {exc}")
+
+    async def _publish_notification(
+        self, job: "AsyncJob", kind: str, agent_id: str, title: str, summary: str, session_id: int
+    ) -> None:
+        """通知中心双写（task 08-20-notification-center M1 信源之一, design §7 行 1）。
+
+        与岛卡并存而非替代：岛是瞬时的（错过即丢），通知中心先落库、重启后仍可见。
+        文案 / session 与岛卡**同源**（上游 `_announce_text` / `_session_id_of` 的产物直接复用）。
+        契约：category=results（`contact_governance` → reviews，那是「待审阅的建议」不是运行结果）；
+        severity completed=info / failed=warn；dedupe_key 成功按 job（每次运行各一条）、失败按 agent
+        （同 agent 连败合并计次，08-02 F4「重复失败」纪律同旨）。
+
+        🔴 通知失败仅 warning，绝不影响 job 终态（`_execute` :157-160 同款纪律）——
+        ``NotifyCenter.publish`` 自身正常 raise（单测友好），吞在挂点侧。
+        """
+        link = (
+            {"type": "session", "sessionId": session_id}
+            if session_id > 0
+            else {"type": "route", "to": "/agents", "search": {"tab": "agents"}}
+        )
+        try:
+            await asyncio.to_thread(
+                self._notify_center.publish,
+                category="reviews" if job.job_type == "contact_governance" else "results",
+                source="agent_run",
+                title=title,
+                body=summary,
+                severity="info" if kind == "completed" else "warn",
+                dedupe_key=(
+                    f"agent_run:{job.job_id}" if kind == "completed"
+                    else f"agent_run_failed:{agent_id}"
+                ),
+                payload={"link": link},
+            )
+        except Exception as exc:  # noqa: BLE001 — 通知失败绝不影响 job 终态（已在 _mark 落库）
+            logger.warning(
+                f"[agent-run-worker] notify publish failed job_id={job.job_id}: {exc}"
+            )
 
     def _announce_text(
         self, job: "AsyncJob", agent_id: str, kind: str, result: Optional[dict], last_error: Optional[str]

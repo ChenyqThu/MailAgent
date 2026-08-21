@@ -5,6 +5,7 @@ gateway 端点 W3 才存在 → 全靠 mock httpx.AsyncClient。断言 async_job
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 
 import httpx
@@ -385,3 +386,118 @@ def test_announce_failure_does_not_block_terminal(env, monkeypatch):
     job = repo.get(job_id)
     assert job.status == "succeeded"
     assert job.result["outcome"] == "completed"
+
+
+# ---------------------------------------------------------------------------
+# 通知中心双写（task 08-20-notification-center 步骤 4a, design §7 行 1）
+# —— 与岛卡并存：岛瞬时、通知中心落库。契约 category/severity/dedupe_key/deep-link。
+# ---------------------------------------------------------------------------
+
+
+def _notifications(repo: AsyncJobRepository) -> list:
+    conn = sqlite3.connect(str(repo.db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM notification ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def test_completed_publishes_result_notification(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": True, "outcome": "completed", "sessionId": 7, "summary": "跑完了",
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+    _run(worker._execute(repo.get(job_id)))
+
+    rows = _notifications(repo)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["category"] == "results"
+    assert row["severity"] == "info"
+    assert row["source"] == "agent_run"
+    assert row["dedupe_key"] == f"agent_run:{job_id}"  # 成功按 job（每次运行各一条）
+    assert row["state"] == "open" and row["read_at"] is None
+    assert "DMS" in row["title"] and row["body"] == "跑完了"  # 文案与岛卡同源
+    assert json.loads(row["payload_json"])["link"] == {"type": "session", "sessionId": 7}
+
+
+def test_failed_publishes_warn_notification_keyed_by_agent(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": False, "outcome": "error", "error": "E_BUDGET_TIME",
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+    _run(worker._execute(repo.get(job_id)))
+
+    rows = _notifications(repo)
+    assert len(rows) == 1
+    assert rows[0]["category"] == "results"
+    assert rows[0]["severity"] == "warn"
+    assert rows[0]["dedupe_key"] == "agent_run_failed:dms"  # 失败按 agent（连败合并计次）
+    assert "E_BUDGET_TIME" in rows[0]["body"]
+    # 无 sessionId → deep-link 退化到 Agents 区列表
+    assert json.loads(rows[0]["payload_json"])["link"] == {
+        "type": "route", "to": "/agents", "search": {"tab": "agents"},
+    }
+
+
+def test_paused_handoff_publishes_no_notification(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": True, "outcome": "paused_handoff", "sessionId": 5,
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+    _run(worker._execute(repo.get(job_id)))
+
+    # 🔴 succeeded + paused_handoff 不是「成功完成」（derive_agent_run_state 口径）
+    assert _notifications(repo) == []
+    assert repo.get(job_id).result["approval_state"] == "pending"  # 终态仍正确
+
+
+def test_contact_governance_notification_lands_in_reviews(env, monkeypatch):
+    repo, store = env
+    job_id, _ = repo.enqueue(
+        job_type="contact_governance", target_kind="contact_directory",
+        target_key="global", params={"trigger_kind": "manual"},
+        idempotency_key="contact-governance-notify",
+    )
+    worker = AgentRunWorker(repo=repo, store=store)
+
+    async def no_island(*a, **k):
+        return None
+
+    monkeypatch.setattr(worker, "_post_announce", no_island)
+    _run(worker._announce_terminal(
+        repo.get(job_id), "succeeded",
+        {"outcome": "completed", "summary": "新增 2 条建议"}, None,
+    ))
+
+    rows = _notifications(repo)
+    assert len(rows) == 1
+    assert rows[0]["category"] == "reviews"  # 待审阅的建议 ≠ 运行结果
+    assert rows[0]["dedupe_key"] == f"agent_run:{job_id}"
+
+
+def test_notify_publish_failure_does_not_block_terminal_or_island(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    calls = _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": True, "outcome": "completed", "sessionId": 3,
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+
+    def boom(**kwargs):
+        raise RuntimeError("notification table gone")
+
+    monkeypatch.setattr(worker._notify_center, "publish", boom)
+    _run(worker._execute(repo.get(job_id)))
+
+    # publish 抛异常被挂点吞：job 终态与岛卡都不受牵连
+    assert repo.get(job_id).status == "succeeded"
+    assert len(_announce_calls(calls)) == 1
+    assert _notifications(repo) == []
