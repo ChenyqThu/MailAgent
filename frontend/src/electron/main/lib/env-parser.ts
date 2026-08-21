@@ -87,6 +87,12 @@ function maybeQuote(value: string): string {
   return value
 }
 
+/**
+ * 🔴 同名 key 出现多次时 **末次胜** —— 与后端读 .env 的 python-dotenv 对齐
+ * （dotenv_values 按行顺序写 dict，后者覆盖前者）。首次胜会让两侧读到不同的值：
+ * 设置页显示并写入前一行，后端却生效后一行 ⇒ 用户改了 UI 不生效、且无处可查。
+ * 手写 .env 出现重复行并不罕见（同一个键在两个段落各写一次），所以这里对齐而不是假设不会发生。
+ */
 export function parseEnv(text: string): EnvParsed {
   const trailingNewline = text.endsWith('\n')
   const body = trailingNewline ? text.slice(0, -1) : text
@@ -118,7 +124,7 @@ export function parseEnv(text: string): EnvParsed {
           trailingComment: trailing ?? null,
           raw
         })
-        if (!index.has(key)) index.set(key, i)
+        index.set(key, i)
         return
       }
       const mU = raw.match(KV_UNQUOTED_RE)
@@ -132,7 +138,7 @@ export function parseEnv(text: string): EnvParsed {
           trailingComment: trailing ?? null,
           raw
         })
-        if (!index.has(key)) index.set(key, i)
+        index.set(key, i)
         return
       }
     }

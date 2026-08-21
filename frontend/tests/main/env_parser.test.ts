@@ -79,6 +79,24 @@ describe('parseEnv classification', () => {
     expect(toRecord(parsed).NOTION_TOKEN).toBe('plain_no_quotes')
   })
 
+  // 🔴 同名 key 重复：读和写都必须落在最后一行，因为后端读 .env 的 python-dotenv 就是
+  // 末次胜。首次胜会让设置页显示/写入前一行、后端却生效后一行 —— 用户改了不生效。
+  // 实际踩到过：userData 的 .env 里 DAVMAIL_SENT_FOLDER 一处空值一处 Sent。
+  test('同名 key 重复出现：读与写都落在最后一行（对齐 python-dotenv）', () => {
+    const dup = `DAVMAIL_SENT_FOLDER=
+NOTION_TOKEN=ntn_abc
+DAVMAIL_SENT_FOLDER=Sent
+`
+    const parsed = parseEnv(dup)
+    expect(toRecord(parsed).DAVMAIL_SENT_FOLDER).toBe('Sent')
+
+    const next = mergeEnv(parsed, { DAVMAIL_SENT_FOLDER: 'Archive' })
+    expect(serializeEnv(next)).toBe(`DAVMAIL_SENT_FOLDER=
+NOTION_TOKEN=ntn_abc
+DAVMAIL_SENT_FOLDER=Archive
+`)
+  })
+
   test('no-trailing-newline fixture preserves the missing newline on round-trip', () => {
     const parsed = parseEnv(FIXTURES.noTrailingNL)
     expect(parsed.trailingNewline).toBe(false)
@@ -106,9 +124,7 @@ describe('mergeEnv — write semantics', () => {
     const before = FIXTURES.mixed.split('\n')
     const after = out.split('\n')
     expect(after.length).toBe(before.length)
-    const diffs = before
-      .map((line, i) => [line, after[i]] as const)
-      .filter(([a, b]) => a !== b)
+    const diffs = before.map((line, i) => [line, after[i]] as const).filter(([a, b]) => a !== b)
     expect(diffs.length).toBe(1)
     expect(diffs[0][1]).toBe('NOTION_TOKEN=ntn_new')
   })
