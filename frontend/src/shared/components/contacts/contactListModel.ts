@@ -10,11 +10,25 @@
 //   视图**（「往来的人」里自己不是往来对象，后端已排除）。任何分组档都先摘出去，
 //   剩下的走上面的原有逻辑 —— 没有 self 行时输出与该改动前逐字相同。
 
-import type { ContactRowDto, ContactView } from '@shared/api/types/contact'
+import type { ContactRowDto, ContactSort, ContactView } from '@shared/api/types/contact'
 
 export type ContactGroupBy = 'none' | 'company' | 'dept' | 'fn' | 'level' | 'manager'
 export type ContactDensity = 'compact' | 'comfortable'
 export type ContactKindBucket = 'person' | 'robot' | 'list' | 'hidden'
+
+// 三个显示档位的**运行时**清单。菜单渲染（`ContactListPane`）与持久化时的野值校验
+// （`contactListPrefs`）读同一份 —— 同一组字面量抄成两处，加一档就会漏一处
+// （新档位存进 localStorage 后被校验判成野值、每次回来都被打回默认）。
+export const CONTACT_SORTS: readonly ContactSort[] = ['density', 'recent', 'name']
+export const CONTACT_GROUP_BYS: readonly ContactGroupBy[] = [
+  'none',
+  'company',
+  'dept',
+  'fn',
+  'level',
+  'manager'
+]
+export const CONTACT_DENSITIES: readonly ContactDensity[] = ['compact', 'comfortable']
 
 export const CONTACT_ROW_HEIGHT_COMPACT = 52
 export const CONTACT_ROW_HEIGHT_COMFORTABLE = 68

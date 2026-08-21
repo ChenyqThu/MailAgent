@@ -4,8 +4,8 @@
 // 名字变体）→ 关联邮件（角色过滤 + 加载更多）→ 关联事项。
 // 危险操作全收进「更多操作」菜单（🔒 不放行内悬浮危险钮）；「合并」不渲染（WP3）。
 
-import { useEffect, useMemo, useRef, useState } from 'react'
-import { useInfiniteQuery, useMutation } from '@tanstack/react-query'
+import { memo, useEffect, useMemo, useRef, useState } from 'react'
+import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
@@ -43,7 +43,6 @@ import { SegmentedControl } from '@shared/components/ui/segmented'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
 import { formatMatterAgo } from '@shared/lib/matterDerive'
-import { qk } from '@shared/lib/queryKeys'
 import { openNewCompose } from '@shared/state/compose-new'
 import { useActiveEmail } from '@shared/state/active-email'
 import { toastError, toastSuccess } from '@shared/state/toast'
@@ -63,11 +62,15 @@ import {
   SelfPip,
   TwoWayBar
 } from './parts'
-import { useContactDetail, useContactMatters, useContactsApi, useInvalidateContact } from './hooks'
+import {
+  useContactDetail,
+  useContactMails,
+  useContactMatters,
+  useContactsApi,
+  useInvalidateContact
+} from './hooks'
 import { FIELD_LABEL_KEY } from './contactFields'
 import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
-
-const MAIL_PAGE_SIZE = 6
 
 function fmtMonth(ms: number, locale: string): string {
   return new Intl.DateTimeFormat(locale, { year: 'numeric', month: 'short' }).format(ms)
@@ -348,22 +351,23 @@ function EmailAnchorRow({
 
 // ── 关联邮件 ──────────────────────────────────────────────────────────────────
 
-function ContactMailList({ contactId }: { contactId: number }): React.ReactElement {
+/** 🔴 `direction` 由 `ContactDetail` 持有（waterfall 拆解）：顶层要用同一个方向声明同一条
+ *  查询，两处的 queryKey 才是同一个 —— 状态留在这里的话顶层只能猜一个方向，猜错就是白发一次。 */
+function ContactMailList({
+  contactId,
+  direction,
+  onDirectionChange
+}: {
+  contactId: number
+  direction: ContactMailDirection
+  onDirectionChange(direction: ContactMailDirection): void
+}): React.ReactElement {
   const { t, i18n } = useTranslation()
-  const api = useContactsApi()
   const navigate = useNavigate()
   const setActiveEmail = useActiveEmail((state) => state.setActive)
-  const [direction, setDirection] = useState<ContactMailDirection>('all')
   // render 期不许调 Date.now()（react-hooks/purity）—— 挂载时取一次快照。
   const [now] = useState(() => Date.now())
-  const query = useInfiniteQuery({
-    queryKey: qk.contacts.mails(contactId, direction),
-    queryFn: ({ pageParam }) =>
-      api.listMails(contactId, { direction, cursor: pageParam, limit: MAIL_PAGE_SIZE }),
-    initialPageParam: undefined as string | undefined,
-    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
-    staleTime: 30_000
-  })
+  const query = useContactMails(contactId, direction)
   const items = useMemo(() => (query.data?.pages ?? []).flatMap((page) => page.items), [query.data])
   const total = query.data?.pages[0]?.total ?? 0
   const remaining = Math.max(0, total - items.length)
@@ -377,7 +381,7 @@ function ContactMailList({ contactId }: { contactId: number }): React.ReactEleme
             size="sm"
             ariaLabel={t('contacts.section.mails')}
             value={direction}
-            onChange={(next) => setDirection(next)}
+            onChange={(next) => onDirectionChange(next)}
             options={CONTACT_MAIL_DIRECTIONS.map((value) => ({
               value,
               label: t(`contacts.mail.filter.${value}`)
@@ -521,7 +525,7 @@ export interface ContactDetailProps {
   onMergeRequest?: () => void
 }
 
-export function ContactDetail({
+function ContactDetailView({
   contactId,
   onBack,
   actions,
@@ -536,6 +540,14 @@ export function ContactDetail({
   const detail = detailQuery.data
   // render 期不许调 Date.now()（react-hooks/purity）—— MatterDetail 同款快照模式。
   const [now] = useState(() => Date.now())
+  const [mailDirection, setMailDirection] = useState<ContactMailDirection>('all')
+
+  // 🔴 waterfall 拆解（task 08-20 P0-3）：关联邮件 / 关联事项这两条查询在**早返回之前**声明
+  //   —— 它们原先只挂在下方的两个子组件上，而那两个组件在 `!detail` 时根本没被渲染，于是
+  //   「detail 到达」成了它们的发车信号（首屏 4 跳的最后一跳）。声明到这里之后三条并发。
+  //   子组件用同一 queryKey 各自再声明一次，react-query 按 key 去重 ⇒ 请求数不变。
+  useContactMails(contactId, mailDirection)
+  useContactMatters(contactId, true)
 
   const [nameEditing, setNameEditing] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
@@ -1035,10 +1047,19 @@ export function ContactDetail({
           {detail.kind === 'person' ? <ContactOrgSection detail={detail} /> : null}
 
           {/* ── 关联邮件 / 关联事项 ── */}
-          <ContactMailList contactId={contactId} />
+          <ContactMailList
+            contactId={contactId}
+            direction={mailDirection}
+            onDirectionChange={setMailDirection}
+          />
           <ContactMatterList contactId={contactId} />
         </div>
       </div>
     </div>
   )
 }
+
+/** 🔴 `memo` 不是装饰（task 08-20 P1-6）：这棵树上千行，而它的 props 全部来自
+ *  `ContactsWorkspace` —— 那边每敲一个搜索字符 / 每次任意 state 变动都会重渲染一遍。
+ *  props 侧的配套在调用方：`actions` 与两个回调都已是稳定引用，否则 memo 恒失效。 */
+export const ContactDetail = memo(ContactDetailView)

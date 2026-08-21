@@ -33,8 +33,7 @@ function renderPane(
   const props: ContactListPaneProps = {
     view: 'known',
     onViewChange: vi.fn(),
-    q: '',
-    onQChange: vi.fn(),
+    onSearchChange: vi.fn(),
     sort: 'density',
     onSortChange: vi.fn(),
     groupBy: 'none',

@@ -18,6 +18,7 @@ import type {
   ContactDetailDto,
   ContactListResponse,
   ContactMailDirection,
+  ContactMailsResponse,
   ContactMattersResponse,
   ContactProfileSuggestionField,
   ContactSort,
@@ -204,6 +205,31 @@ export function useIgnoreProfileSuggestion(
   })
 }
 
+/** 详情页「关联邮件」首屏页大小（旧 `ContactDetail::MAIL_PAGE_SIZE`，随查询一起搬过来）。 */
+export const CONTACT_MAIL_PAGE_SIZE = 6
+
+/** 关联邮件（keyset 分页）。
+ *
+ *  🔴 有**两个**声明点：`ContactDetail` 顶层 + 它内部的 `ContactMailList`。顶层那次是
+ *  waterfall 拆解（task 08-20 P0-3）—— 这条查询原先写在「detail 没到就早返回骨架」之后的
+ *  子组件里，等于「detail 回来了才开始拉邮件」（首屏 4 跳的最后一跳）；声明到顶层后它在
+ *  mount 那一刻就与 detail 并发发出。子组件那次是它自己的数据源，两处同 queryKey ⇒
+ *  react-query 按 key 去重，仍然只有一次请求、一份缓存。 */
+export function useContactMails(
+  contactId: number,
+  direction: ContactMailDirection
+): ReturnType<typeof useInfiniteQuery<ContactMailsResponse, Error>> {
+  const api = useContactsApi()
+  return useInfiniteQuery({
+    queryKey: qk.contacts.mails(contactId, direction),
+    queryFn: ({ pageParam }) =>
+      api.listMails(contactId, { direction, cursor: pageParam, limit: CONTACT_MAIL_PAGE_SIZE }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    staleTime: 30_000
+  })
+}
+
 export function useContactMatters(
   contactId: number | null,
   enabled: boolean
@@ -217,6 +243,22 @@ export function useContactMatters(
   })
 }
 
+/** 「本会话已经见过 drained」的闩（task 08-20 P3-10）。
+ *
+ *  端点判据是 `scanned >= total`（`routers/contacts.py::backfill_progress`，两条
+ *  `COUNT(*) FROM email_metadata`），扫完之后条本身不显示（`BackfillBar:18`）——
+ *  再问下去就是每次进通讯录为一条不显示的条多发一次请求。
+ *
+ *  🔴 有意**不**落 localStorage：`drained` 并不单调（新邮件进来 total 先涨、水位线还没跟上时
+ *  会翻回 false），把它写进磁盘等于永久藏掉这条进度条。会话级闩最多让「开着应用时来了一大批
+ *  新邮件」那一次不显示进度，重启即恢复。 */
+let backfillDrainedSeen = false
+
+/** 测试用复位 —— 模块级闩会跨用例存活，不复位就是用例间互相污染（照 `resetMatterWorkspace`）。 */
+export function resetBackfillDrainedLatch(): void {
+  backfillDrainedSeen = false
+}
+
 /** BackfillBar：未 drained 时 5s 轮询，drained 后停（可关，关了不影响扫描）。 */
 export function useBackfillProgress(
   enabled: boolean
@@ -224,8 +266,14 @@ export function useBackfillProgress(
   const api = useContactsApi()
   return useQuery({
     queryKey: qk.contacts.progress(),
-    queryFn: () => api.backfillProgress(),
-    enabled,
+    queryFn: async () => {
+      const progress = await api.backfillProgress()
+      if (progress.drained) backfillDrainedSeen = true
+      return progress
+    },
+    // 见过一次 drained 就整条查询关掉：本次挂载靠下面的 refetchInterval 停轮询，
+    // **之后**每次重新进页面靠这个闩不再发第一次请求。
+    enabled: enabled && !backfillDrainedSeen,
     refetchInterval: (query) => (query.state.data?.drained === false ? 5_000 : false),
     // 未 drained 的实时性由上面的 5s 轮询负责; staleTime 只决定「重新挂载要不要立刻再拉」
     // —— 4s 等于每次进页面都为一条进度条多发一次请求（drained 后那条还不显示）。

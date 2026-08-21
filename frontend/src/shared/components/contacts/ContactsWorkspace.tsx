@@ -21,7 +21,9 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { ContactAgentDrawer } from './ContactAgentDrawer'
 import { ContactDetail } from './ContactDetail'
 import { ContactListPane } from './ContactListPane'
+import { ContactDetailSkeleton, ContactListSkeleton } from './ContactSkeleton'
 import { readLastContactVisit, writeLastContactVisit } from './contactLastVisit'
+import { readContactListPrefs, writeContactListPrefs } from './contactListPrefs'
 import { MergeContactsDialog } from './MergeContactsDialog'
 import type { ContactGovernanceTarget, ContactRowActions } from './ContactRow'
 import {
@@ -52,7 +54,9 @@ const CONTACT_LIST_WIDTH_STEP = 16
 // 详情最小 430 + 收起态导航 52 才放得下双栏）。学 MattersWorkspace 的注释纪律：
 // 用同一个数字的两份拷贝必须互相指认，漂了两处会各说各话。
 const WORKSPACE_STACKED_QUERY = '(max-width: 860px)'
-const SEARCH_DEBOUNCE_MS = 250
+/** 双栏骨架（config 加载中）与真实布局共用同一份 grid 类，几何不对就是白闪一下再跳版。 */
+const WORKSPACE_GRID_CLASS =
+  'grid h-full min-h-0 grid-cols-[var(--contact-list-width)_6px_minmax(430px,1fr)] max-[860px]:grid-cols-1'
 
 function clampListWidth(width: number): number {
   return Math.min(MAX_CONTACT_LIST_WIDTH, Math.max(MIN_CONTACT_LIST_WIDTH, width))
@@ -88,16 +92,23 @@ export function ContactsWorkspace(): React.ReactElement | null {
   // v2 任务 ③「记住上次离开的位置」：视图必须在 mount 时就恢复（用 useState 初值而不是
   // effect），否则会先按默认视图拉一次列表、再切过去拉第二次 —— 冷启动多一次请求 + 一次跳版。
   const [view, setView] = useState<ContactView>(() => readLastContactVisit()?.view ?? 'known')
-  const [sort, setSort] = useState<ContactSort>('density')
-  const [groupBy, setGroupBy] = useState<ContactGroupBy>('none')
-  const [density, setDensity] = useState<ContactDensity>('compact')
-  const [qInput, setQInput] = useState('')
+  // 排序 / 分组 / 密度同样在 mount 时就恢复（task 08-20 P3-10）：`sort` 进列表的 queryKey，
+  // 复位成默认档 = 另一个 key = 改过排序再回来必定冷取 + 骨架。三档一起持久化，写回见
+  // 下面三个 setter（state 是运行时权威，localStorage 只是 seed —— 同 contactLastVisit）。
+  const [prefs, setPrefs] = useState(readContactListPrefs)
+  const { sort, groupBy, density } = prefs
   const [q, setQ] = useState('')
   const [kindFilter, setKindFilter] = useState<ReadonlySet<ContactKindBucket>>(
     () => new Set<ContactKindBucket>(['person', 'robot', 'list', 'hidden'])
   )
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
-  const [selectedId, setSelectedId] = useState<number | null>(null)
+  // 🔴 冷启动初值就带上「上次选中的人」（task 08-20 P0-3）：老写法初值恒 null、等列表回来的
+  // effect 才产生 selectedId ⇒ 详情排在列表**后面**发（首屏 4 跳里的第 3 跳）。深链
+  // （⌘K / PersonChip）比记录更明确，优先用它 —— 否则会先按记录拉一份马上被顶掉的详情。
+  // 列表回来后仍要对账：那个人可能已被合并 / 隐藏 / 改判（见下方初选 effect）。
+  const [selectedId, setSelectedId] = useState<number | null>(
+    () => useContactNavigation.getState().targetContactId ?? readLastContactVisit()?.id ?? null
+  )
   const [selectionMode, setSelectionMode] = useState(false)
   const [checkedIds, setCheckedIds] = useState<ReadonlySet<number>>(() => new Set())
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
@@ -120,11 +131,23 @@ export function ContactsWorkspace(): React.ReactElement | null {
     previousUserSelect: string
   } | null>(null)
 
-  // 搜索防抖 → 服务端 q（主 session 裁决项 6：搜索走服务端 LIKE，即输即搜）。
+  // 三个显示档位的写回：state 变了就落盘一次（写在 effect 里而不是 setter 里 —— state
+  // updater 必须是纯函数，StrictMode 下会被调用两次）。
   useEffect(() => {
-    const timer = window.setTimeout(() => setQ(qInput.trim()), SEARCH_DEBOUNCE_MS)
-    return () => window.clearTimeout(timer)
-  }, [qInput])
+    writeContactListPrefs(prefs)
+  }, [prefs])
+  const setSort = useCallback(
+    (next: ContactSort) => setPrefs((previous) => ({ ...previous, sort: next })),
+    []
+  )
+  const setGroupBy = useCallback(
+    (next: ContactGroupBy) => setPrefs((previous) => ({ ...previous, groupBy: next })),
+    []
+  )
+  const setDensity = useCallback(
+    (next: ContactDensity) => setPrefs((previous) => ({ ...previous, density: next })),
+    []
+  )
 
   const list = useContactListPaged({ view, q, sort, enabled })
   const items = useMemo(() => (list.data?.pages ?? []).flatMap((page) => page.items), [list.data])
@@ -196,37 +219,41 @@ export function ContactsWorkspace(): React.ReactElement | null {
   // 视图的列表里根本不存在。
   const navigationTarget = useContactNavigation((state) => state.targetContactId)
   const clearNavigationTarget = useContactNavigation((state) => state.clear)
+  const [initialSelectionApplied, setInitialSelectionApplied] = useState(false)
   useEffect(() => {
     if (navigationTarget === null) return
     setSelectedId(navigationTarget)
     clearNavigationTarget()
+    // 🔴 深链一旦落地就把冷启动初选记成「已经做过」：intent 已经点名了要看谁，而下面那条
+    // effect 的守卫读的是 `navigationTarget` —— 这里刚把它清掉，列表晚一步落定时它已是 null，
+    // 守卫就拦不住了（会把用户点名的那个人换成记录里的 / 列表第一个）。
+    setInitialSelectionApplied(true)
   }, [clearNavigationTarget, navigationTarget])
 
-  // v2 任务 ③ 冷启动初选：列表第一次落定时恢复上次那个人；记录缺失或那个人已经不在可见集里
-  // （被合并 / 被隐藏 / 改判成机器人）→ 退化成选列表第一个。只跑一次（`initialSelectionApplied`
-  // 守卫），之后用户的每一次选中都由 `selectContact` 负责。
-  // 🔴 深链（⌘K / PersonChip）压过冷启动初选：那条 intent 已经点名了要看谁。
+  // v2 任务 ③ 冷启动初选，现在是**对账**（task 08-20 P0-3 之后）：上次那个人已经在 mount 时
+  // 进了 selectedId（见上面的 useState 初值），列表第一次落定时只需确认它还在可见集里；不在
+  // （被合并 / 被隐藏 / 改判成机器人）或压根没有记录 → 退化成选列表第一个。只跑一次
+  // （`initialSelectionApplied` 守卫），之后用户的每一次选中都由 `selectContact` 负责。
   // 🔴 判据用 `orderedIds` 而不是 `items` —— 前者才是**实际列出**的行（过了 chips 与分组
-  // 折叠），恢复出一个用户在列表里看不见的选中等于把详情页钉在一个找不到的人身上。
-  const [initialSelectionApplied, setInitialSelectionApplied] = useState(false)
+  // 折叠），留着一个用户在列表里看不见的选中等于把详情页钉在一个找不到的人身上。
   useEffect(() => {
     if (initialSelectionApplied || !list.isSuccess) return
     setInitialSelectionApplied(true)
     if (navigationTarget !== null) return
-    // 🔴 这里走 `setSelectedId` 而不是 `selectContact`：恢复与退化都**不是用户的选择**，
+    // 🔴 这里走 `setSelectedId` 而不是 `selectContact`：保留与退化都**不是用户的选择**，
     // 不该回写记录。尤其退化那条 —— 把「列表恰好第一行」写成用户的上次位置，会把一条还
     // 可能有用的记录（那个人只是暂时不在这个视图里）永久覆盖掉。
     const stored = readLastContactVisit()
-    if (stored !== null && orderedIds.includes(stored.id)) {
-      setSelectedId(stored.id)
-      return
-    }
-    const first = orderedIds[0]
-    if (first !== undefined) setSelectedId(first)
+    if (stored !== null && orderedIds.includes(stored.id)) return
+    setSelectedId(orderedIds[0] ?? null)
   }, [initialSelectionApplied, list.isSuccess, navigationTarget, orderedIds])
 
   // ── 治理写面（行菜单与档案头共用同一套 handler + toast + 失效）──────────────
-  const hideMutation = useMutation({
+  // 🔴 只解构 `mutate`（task 08-20 P1-6）：react-query v5 的 `useMutation` **每次 render 都
+  // 返回一个新对象**，把整个返回值放进下面 `actions` 的依赖数组 = 那份 useMemo 永不命中 ⇒
+  // `actions` 每次都是新引用 ⇒ 摊进 rowProps 后 react-window 的浅比较全线失效（可见行全量
+  // 重渲染）+ 详情页的 memo 恒失效。`mutate` 本身是 v5 保证的稳定引用。
+  const { mutate: hideContact } = useMutation({
     mutationFn: (input: { id: number; hidden: boolean; name: string }) =>
       api.hide(input.id, input.hidden),
     onSuccess: async (_result, input) => {
@@ -239,7 +266,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
     },
     onError: (error) => toastError(t('contacts.toast.saveFailed'), errorMessage(error))
   })
-  const kindMutation = useMutation({
+  const { mutate: setContactKind } = useMutation({
     mutationFn: (input: { id: number; kind: 'person' | 'robot' | 'list' }) =>
       api.setKind(input.id, input.kind),
     onSuccess: async (_result, input) => {
@@ -248,7 +275,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
     },
     onError: (error) => toastError(t('contacts.toast.saveFailed'), errorMessage(error))
   })
-  const selfMutation = useMutation({
+  const { mutate: setContactSelf } = useMutation({
     mutationFn: (input: { id: number; isSelf: boolean }) => api.setSelf(input.id, input.isSelf),
     onSuccess: async (_result, input) => {
       await invalidate(input.id)
@@ -308,10 +335,10 @@ export function ContactsWorkspace(): React.ReactElement | null {
           }
         })()
       },
-      onSetKind: (item, kind) => kindMutation.mutate({ id: item.id, kind }),
-      onToggleSelf: (item) => selfMutation.mutate({ id: item.id, isSelf: !item.is_self }),
+      onSetKind: (item, kind) => setContactKind({ id: item.id, kind }),
+      onToggleSelf: (item) => setContactSelf({ id: item.id, isSelf: !item.is_self }),
       onToggleHidden: (item) =>
-        hideMutation.mutate({
+        hideContact({
           id: item.id,
           hidden: item.hidden_at == null,
           name: item.display_name ?? item.primary_email ?? ''
@@ -319,8 +346,30 @@ export function ContactsWorkspace(): React.ReactElement | null {
       onEnterSelection: enterSelection,
       onToggleCheck: toggleCheck
     }),
-    [api, enterSelection, hideMutation, kindMutation, selectContact, selfMutation, t, toggleCheck]
+    [
+      api,
+      enterSelection,
+      hideContact,
+      selectContact,
+      setContactKind,
+      setContactSelf,
+      t,
+      toggleCheck
+    ]
   )
+
+  // 下面三个回调都必须是稳定引用：`toggleGroup` 会被摊进 rowProps（浅比较），另外两个是
+  // memo 过的 `ContactDetail` 的 props（写成内联箭头 = 每次 render 一个新函数 = memo 恒失效）。
+  const toggleGroup = useCallback((groupKey: string): void => {
+    setCollapsedGroups((previous) => ({
+      ...previous,
+      [groupKey]: !isGroupCollapsed(previous, groupKey)
+    }))
+  }, [])
+  const backToList = useCallback((): void => selectContact(null), [selectContact])
+  const requestMerge = useCallback((): void => {
+    if (selectedId !== null) setMergeState({ sourceId: selectedId, pair: null })
+  }, [selectedId])
 
   const finishListResize = useCallback((target: HTMLDivElement, pointerId: number): void => {
     const drag = resizeDragRef.current
@@ -343,8 +392,25 @@ export function ContactsWorkspace(): React.ReactElement | null {
     []
   )
 
-  // flags query 加载中渲染 null；确认 off 后 = 404 空态（裁决项 1）。
-  if (loading) return null
+  // flags query 加载中渲染整页骨架（task 08-20 P2-7）：这一跳原先 `return null` = 白屏，而
+  // `/chat/config` 失败会指数退避重试最多约 7s（useAppConfig `retry:3`）—— 那段白屏是真实存在
+  // 的。确认 off 后 = 404 空态（裁决项 1）。
+  if (loading) {
+    return (
+      <div
+        className={WORKSPACE_GRID_CLASS}
+        style={{ '--contact-list-width': `${listWidth}px` } as React.CSSProperties}
+      >
+        <div className="min-h-0 bg-ink-1/55">
+          <ContactListSkeleton density={density} />
+        </div>
+        <div aria-hidden />
+        <div className="min-h-0 max-[860px]:hidden">
+          <ContactDetailSkeleton />
+        </div>
+      </div>
+    )
+  }
   if (!enabled) {
     return (
       <EmptyState
@@ -359,7 +425,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
   return (
     <div
       ref={workspaceGridRef}
-      className="grid h-full min-h-0 grid-cols-[var(--contact-list-width)_6px_minmax(430px,1fr)] max-[860px]:grid-cols-1"
+      className={WORKSPACE_GRID_CLASS}
       style={{ '--contact-list-width': `${listWidth}px` } as React.CSSProperties}
     >
       <div className={cn('min-h-0', selectedId !== null && 'max-[860px]:hidden')}>
@@ -369,8 +435,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
             setView(next)
             selectContact(null)
           }}
-          q={qInput}
-          onQChange={setQInput}
+          onSearchChange={setQ}
           sort={sort}
           onSortChange={setSort}
           groupBy={groupBy}
@@ -399,12 +464,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
           onMergePair={(pair) => setMergeState({ sourceId: null, pair })}
           menuOpenId={menuOpenId}
           onMenuOpenChange={setMenuOpenId}
-          onToggleGroup={(groupKey) =>
-            setCollapsedGroups((previous) => ({
-              ...previous,
-              [groupKey]: !isGroupCollapsed(previous, groupKey)
-            }))
-          }
+          onToggleGroup={toggleGroup}
           actions={actions}
           agentEnabled={contactAgentEnabled}
           pendingCount={agentStatus.data?.pending_count ?? 0}
@@ -463,10 +523,10 @@ export function ContactsWorkspace(): React.ReactElement | null {
         {selectedId !== null ? (
           <ContactDetail
             contactId={selectedId}
-            onBack={() => selectContact(null)}
+            onBack={backToList}
             actions={actions}
             showBack={stacked}
-            onMergeRequest={() => setMergeState({ sourceId: selectedId, pair: null })}
+            onMergeRequest={requestMerge}
           />
         ) : (
           <EmptyState

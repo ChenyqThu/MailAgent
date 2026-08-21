@@ -12,7 +12,7 @@
 // 🔴 图标：`sortdesc` 在原型的 ICON_PATHS 里没有 path、渲染成空按钮，故排序钮
 // 沿用 lucide `ArrowUpDown`；密度钮按原型用 `Layers` / `ListChecks`。
 
-import { useCallback, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { List } from 'react-window'
 import {
@@ -41,6 +41,8 @@ import { BackfillBar } from './BackfillBar'
 import { ContactListSkeleton } from './ContactSkeleton'
 import { ContactVirtualRow, type ContactRowActions, type ContactRowsProps } from './ContactRow'
 import {
+  CONTACT_GROUP_BYS,
+  CONTACT_SORTS,
   rowHeightFor,
   shouldFetchNextContactPage,
   type ContactDensity,
@@ -50,8 +52,9 @@ import {
 } from './contactListModel'
 
 const KIND_BUCKETS: readonly ContactKindBucket[] = ['person', 'robot', 'list', 'hidden']
-const SORTS: readonly ContactSort[] = ['density', 'recent', 'name']
-const GROUP_BYS: readonly ContactGroupBy[] = ['none', 'company', 'dept', 'fn', 'level', 'manager']
+
+/** 搜索防抖（主 session 裁决项 6：搜索走服务端 LIKE，即输即搜）。 */
+const SEARCH_DEBOUNCE_MS = 250
 
 /** 分组钮的图标随当前分组变化（原型 `GROUP_BY[group].icon`；manager 档 =
  *  原型 'users'，其 path 即 lucide `Users` 双人形）。 */
@@ -70,8 +73,11 @@ const TOOL_BUTTON_CLASS =
 export interface ContactListPaneProps {
   view: ContactView
   onViewChange(view: ContactView): void
-  q: string
-  onQChange(q: string): void
+  /** 防抖后的搜索词（已 trim）。🔴 输入框自身的状态**在本组件内部**（task 08-20 P1-6）：
+   *  它原先住在 `ContactsWorkspace`，于是每敲一个字符整个工作台（列表可见行 + 千行详情树）
+   *  重渲染一次 —— 防抖只挡住了网络请求，挡不住渲染。
+   *  🔴 传进来的回调必须是稳定引用（否则下面那条防抖 effect 每次父层重渲染都会重开计时器）。 */
+  onSearchChange(q: string): void
   sort: ContactSort
   onSortChange(sort: ContactSort): void
   groupBy: ContactGroupBy
@@ -111,10 +117,18 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
   const { t } = useTranslation()
   const [sortMenuOpen, setSortMenuOpen] = useState(false)
   const [groupMenuOpen, setGroupMenuOpen] = useState(false)
+  const [qInput, setQInput] = useState('')
   const sortTriggerRef = useRef<HTMLButtonElement>(null)
   const groupTriggerRef = useRef<HTMLButtonElement>(null)
 
-  const { hasMore, onLoadMore, rows } = props
+  const { hasMore, onLoadMore, onSearchChange, rows } = props
+
+  // 搜索防抖 → 上行给 workspace 当查询条件（主 session 裁决项 6：搜索走服务端 LIKE，即输即搜）。
+  useEffect(() => {
+    const timer = window.setTimeout(() => onSearchChange(qInput.trim()), SEARCH_DEBOUNCE_MS)
+    return () => window.clearTimeout(timer)
+  }, [onSearchChange, qInput])
+
   // 续拉阈值走 `shouldFetchNextContactPage`（纯函数，见那里的注释）。react-query 的
   // infinite query 对重复 fetchNextPage 幂等（in-flight 时是 no-op），这里只再挡一道 hasMore。
   const handleRowsRendered = useCallback(
@@ -132,7 +146,7 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
 
   const sortItems: PopmenuItem[] = [
     { kind: 'label', id: 'sort-label', label: t('contacts.sort.label') },
-    ...SORTS.map(
+    ...CONTACT_SORTS.map(
       (sort): PopmenuItem => ({
         kind: 'radio',
         id: `sort-${sort}`,
@@ -144,7 +158,7 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
   ]
   const groupItems: PopmenuItem[] = [
     { kind: 'label', id: 'group-label', label: t('contacts.groupBy.label') },
-    ...GROUP_BYS.map(
+    ...CONTACT_GROUP_BYS.map(
       (groupBy): PopmenuItem => ({
         kind: 'radio',
         id: `group-${groupBy}`,
@@ -156,9 +170,9 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
   ]
 
   const filtersAllOff = props.view === 'all' && props.kindFilter.size === 0
-  const searchEmpty = !props.loading && props.rows.length === 0 && props.q.trim() !== ''
+  const searchEmpty = !props.loading && props.rows.length === 0 && qInput.trim() !== ''
   const libraryEmpty =
-    !props.loading && props.rows.length === 0 && props.q.trim() === '' && !filtersAllOff
+    !props.loading && props.rows.length === 0 && qInput.trim() === '' && !filtersAllOff
 
   const GroupIcon = GROUP_ICONS[props.groupBy]
   const DensityIcon = props.density === 'compact' ? Layers : ListChecks
@@ -225,17 +239,17 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
           <label className="flex h-7 min-w-0 flex-1 items-center gap-[7px] rounded-[var(--r-ctl)] border border-ink-border bg-ink-2 px-2.5">
             <Search size={13} aria-hidden className="shrink-0 text-ink-fg-3" />
             <input
-              value={props.q}
-              onChange={(event) => props.onQChange(event.target.value)}
+              value={qInput}
+              onChange={(event) => setQInput(event.target.value)}
               placeholder={t('contacts.search.placeholder')}
               aria-label={t('contacts.search.placeholder')}
               className="min-w-0 flex-1 bg-transparent text-body text-ink-fg outline-none placeholder:text-ink-fg-3"
             />
-            {props.q !== '' ? (
+            {qInput !== '' ? (
               <button
                 type="button"
                 aria-label={t('contacts.search.clear')}
-                onClick={() => props.onQChange('')}
+                onClick={() => setQInput('')}
                 className="grid size-5 shrink-0 place-items-center rounded-[var(--r-ctl)] text-ink-fg-3 transition-colors duration-fast ease-standard hover:bg-ink-fg/[0.08] hover:text-ink-fg-1"
               >
                 <X size={11} />
@@ -354,12 +368,12 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
           <EmptyState
             fill
             icon={<Search size={20} strokeWidth={1.5} />}
-            title={t('contacts.empty.search', { q: props.q.trim() })}
+            title={t('contacts.empty.search', { q: qInput.trim() })}
             hint={t('contacts.empty.searchHint')}
             action={
               <button
                 type="button"
-                onClick={() => props.onQChange('')}
+                onClick={() => setQInput('')}
                 className="rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1 text-meta text-ink-fg-1 transition-colors duration-fast ease-standard hover:bg-ink-3"
               >
                 {t('contacts.search.clear')}
