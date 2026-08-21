@@ -30,7 +30,16 @@ import type { PersistentSettings } from '@shared/api/types'
 /** 默认 fallback 周期 (ms). settings 未加载完时用. */
 const DEFAULT_FALLBACK_MS = 60_000
 
-export function usePollingFallback(): number | false {
+export interface PollingFallbackOptions {
+  /** perf-sse-realtime R3 — SSE connected 时不归零而改用这个**长间隔**保险轮询 (ms)。
+   *
+   *  背景: 总线显式 lossy (inprocess_bus 队列满即丢 / 重连无 catch-up), connected
+   *  即关一切轮询 ⇒ 丢一条 email.synced 该数据面就永久卡死。缺省 undefined = 保持
+   *  原语义 (connected → false), **仅邮件主列表启用** —— 其他调用点行为不变。 */
+  connectedIntervalMs?: number
+}
+
+export function usePollingFallback(options?: PollingFallbackOptions): number | false {
   const mailApi = useMailApi()
   const sseState = useEventsStatusStore((s) => s.status.state)
 
@@ -40,11 +49,12 @@ export function usePollingFallback(): number | false {
     staleTime: 5 * 60_000 // settings 不常变, 5 分钟够
   })
 
-  if (sseState === 'connected') return false
-
   const interval = settings?.pollIntervalSec
-  // 用户显式 disabled
+  // 用户显式 disabled — 完全静默, 保险轮询也尊重这个开关。
   if (interval === 0) return false
+
+  if (sseState === 'connected') return options?.connectedIntervalMs ?? false
+
   // 未加载完 或 fallback 给个默认值
   const sec = typeof interval === 'number' && interval > 0 ? interval : DEFAULT_FALLBACK_MS / 1000
   return sec * 1000

@@ -395,6 +395,24 @@ def _profile_matches_contact(
     )
 
 
+def _publish_contact_changed(contact_id: int, *, scope: str) -> None:
+    """画像态落库后广播 ``contact.changed``（perf-sse-realtime R1-3）。
+
+    🔴 只在**事务提交后**调（与 ``matter.changed`` 同纪律 —— 事件先到、DB 后提交
+    会让前端 refetch 读到旧值）。lossy 总线, 吞错; 前端失效
+    ``['contacts','list']`` 前缀 + ``['contacts','detail',id]``。
+    """
+    try:
+        from src.events.publisher import safe_publish
+        safe_publish(
+            "contact.changed",
+            data={"scope": scope, "contact_ids": [int(contact_id)]},
+            source="contact-profile",
+        )
+    except Exception:
+        pass
+
+
 def _finish_skipped(
     db_path: str, contact_id: int, *, now_ms: int, reason: str, mail_count: int
 ) -> str:
@@ -412,13 +430,17 @@ def _finish_skipped(
             logger.info(
                 f"[contact-profile] contact={contact_id} kept existing profile after skip: {reason}"
             )
-            return "ok"
-        conn.execute(
-            "UPDATE contact SET profile_status='skipped', profile_attempted_at=?, "
-            "profile_error=?, updated_at=? WHERE id=?",
-            (now_ms, payload, now_ms, contact_id),
-        )
-    return "skipped"
+            result = "ok"
+        else:
+            conn.execute(
+                "UPDATE contact SET profile_status='skipped', profile_attempted_at=?, "
+                "profile_error=?, updated_at=? WHERE id=?",
+                (now_ms, payload, now_ms, contact_id),
+            )
+            result = "skipped"
+    # 提交后广播 (画像状态变化也要让打开中的 detail 面即时看到)。
+    _publish_contact_changed(contact_id, scope="profile")
+    return result
 
 
 def _finish_failed(db_path: str, contact_id: int, *, now_ms: int, error: str) -> None:
@@ -428,6 +450,7 @@ def _finish_failed(db_path: str, contact_id: int, *, now_ms: int, error: str) ->
             "profile_error=?, updated_at=? WHERE id=?",
             (now_ms, error[:1000], now_ms, contact_id),
         )
+    _publish_contact_changed(contact_id, scope="profile")
 
 
 def claim_profile_run(db_path: str, contact_id: int, *, now_ms: Optional[int] = None) -> bool:
@@ -577,6 +600,8 @@ async def generate_contact_profile(
                     f"[contact-profile] contact={contact_id} identity suggestion stage "
                     f"failed: {exc}"
                 )
+        # 提交后广播: 画像生成完成, detail/list 即时刷新 (不等 3s 轮询)。
+        _publish_contact_changed(contact_id, scope="profile")
         return "ok"
     except (LLMCallError, ValidationError, ValueError, TypeError, sqlite3.Error) as exc:
         _finish_failed(db_path, contact_id, now_ms=now_ms, error=str(exc))

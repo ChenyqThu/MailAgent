@@ -126,6 +126,9 @@ class AgentRunWorker:
             await self._execute_matter(job)
             return
         job_id = job.job_id
+        # perf-sse-realtime R1-5: claim 后即广播 running (matter_followup 不在此发 ——
+        # 它走 MatterRunService 的 matter.run.changed)。lossy, 吞错。
+        self._publish_run_changed(job_id, "running", agent_id=job.target_key)
         suggestions_before = (
             self._contact_suggestion_count() if job.job_type == "contact_governance" else None
         )
@@ -388,6 +391,27 @@ class AgentRunWorker:
         except Exception as exc:  # noqa: BLE001 — mark 失败只 log（下轮 recover 兜底不了本条, 但不杀 worker）
             logger.error(f"[agent-run-worker] mark_terminal failed job_id={job_id}: {exc}")
         self._stats[status] = self._stats.get(status, 0) + 1
+        # 终态落库后广播 (含 paused 审批面: 待审批计数/红点由此即时刷新)。
+        self._publish_run_changed(job_id, status)
+
+    @staticmethod
+    def _publish_run_changed(
+        job_id: int, status: str, *, agent_id: Optional[str] = None
+    ) -> None:
+        """agent_run 状态迁移 → ``agent.run.changed``（perf-sse-realtime R1-5）。
+
+        payload 只带定位字段 (job_id/status/agent_id), 是 invalidation hint 不是数据 ——
+        前端失效 agent-runs 计数/列表 + agentUnread。lossy 总线, 吞错不影响 run 终态。
+        """
+        try:
+            from src.events.publisher import safe_publish
+
+            data: dict = {"job_id": job_id, "status": status}
+            if agent_id:
+                data["agent_id"] = agent_id
+            safe_publish("agent.run.changed", data=data, source="agent-run-worker")
+        except Exception:
+            pass
 
     def _contact_suggestion_count(self) -> Optional[int]:
         try:

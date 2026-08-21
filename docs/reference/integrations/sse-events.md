@@ -69,6 +69,7 @@ es.addEventListener('mailagent', e => {
 
 | event_type | 触发 | data 字段 |
 |---|---|---|
+| `email.new` | `new_watcher` 三处 `save_email` 成功（主 poll / inbox-reconcile 补抓 / 草稿对账新增）——**入库即发**，不等 AI/Notion 管线 | 单封: `{mailbox}` + `internal_id`；一轮多封聚合一条批量 wire: `internal_id=null` + `{internal_ids: number[]≤200, ids_truncated, mailboxes}`（与 issue #58 入向已读回收同契约）。初始同步 `initial_sync.py` 不经过这些调用点 ⇒ 不发 |
 | `email.synced` | `SyncStore.mark_synced_v3` 调用成功 | `{notion_page_id: str}` |
 | `email.failed` | `SyncStore._update_for_retry` 写入 fetch_failed/failed status | `{status, retry_count, next_retry_at, error}` |
 | `email.dead_letter` | 邮件重试达到上限，进 dead_letter | `{retry_count, error}` |
@@ -90,24 +91,57 @@ es.addEventListener('mailagent', e => {
 | `llm.failed` | `mark_failed` 重试中 | `{retry_count, next_retry_at, error}` |
 | `llm.gave_up` | `mark_failed` 达上限 | `{retry_count, error}` |
 
+### 文件夹
+
+| event_type | 触发 | data 字段 |
+|---|---|---|
+| `folder.changed` | `MailWriteService` folder CRUD/cleanup（create/rename/delete/cleanup_local_folder）+ `SyncStore` folder_pref 写（upsert/rename/delete，仅真动了行才发） | `{action: 'create'\|'rename'\|'delete'\|'cleanup'\|'pref'\|'pref_rename'\|'pref_delete', imap_name}` |
+
+> 历史：`folder.synced` 已死 —— 发布方 `src/folder_sync/` 退役后前端订阅空转半年，
+> perf-sse-realtime 批把订阅改名 `folder.changed` 并补齐发布点。
+
 ### 日历同步
 
 | event_type | 触发 | data 字段 |
 |---|---|---|
-| `calendar.synced` | `CalendarSyncWorker` reconcile 落库有实际变化（upsert/软删 > 0；无变化不发） | `{calendar: str, upserted: int, soft_deleted: int}` |
+| `calendar.synced` | ① `CalendarSyncWorker` reconcile 落库有实际变化（upsert/软删 > 0；无变化不发）② REST 写面 `src/api/routers/calendar.py`（create/update/delete/rsvp 成功后 + sync-trigger 整轮聚合、有变化才发）。⚠️ REST 写走 CalDAV，本地 SQLite 行要等下轮 reconcile —— 事件只是失效 hint | `{calendar: str, upserted: int, soft_deleted: int}` |
+
+### 通讯录
+
+| event_type | 触发 | data 字段 |
+|---|---|---|
+| `contact.changed` | ① 扫描 tick `scanner.run_scan`（processed>0 才发，一轮聚合一条）② 画像 `profile.py` 三个 finish 点（ok/skipped/failed，事务提交后）③ 建议采纳/忽略端点（governance adopt + profile suggestion adopt/ignore） | `{scope: 'scan'\|'profile'\|'governance_adopt'\|'profile_suggestion', contact_ids?: number[]}`（scan 不带 id —— 一轮触到几十人）|
+
+### Run 生命周期
+
+| event_type | 触发 | data 字段 |
+|---|---|---|
+| `agent.run.changed` | `run_queue.enqueue_agent_run`（queued）/ `AgentRunWorker`（running + 终态）/ agent-runs API（审批结算 + cancel）。matter_followup job **不发**本事件（走 `matter.run.changed`） | `{job_id, status, agent_id?}` —— invalidation hint，前端刷 agent-runs 计数/列表 + agentUnread |
+| `matter.run.changed` | `MatterRunService` lifecycle 迁移（enqueue 新行 / mark_started / finish_run 终态 / cancel），事务提交后发；幂等重放与 coalesce 不发 | `{public_id: str, run_id: int}`（🔴 public_id 硬规则，见下）|
+
+> `chat.run.changed`（chat run 起止）**尚未落地**：chat run 注册表活在 AI SDK gateway
+> （Node 进程内存，`frontend/src/ai-gateway/activeRuns.ts`），Python 侧无迁移点可挂；
+> 落地需 gateway → `POST 127.0.0.1:9200/api/events/publish`（`_local_token_ok` 同道鉴权）。
+> 现状缓解：run 结束已有 `chat:turn-persisted` IPC 广播（事件驱动），run/active 探针仅在
+> run 活跃期间轮询（Electron 有广播时 30s，web 3s）。
 
 ### Matter
 
 | event_type | 触发 | data 字段 |
 |---|---|---|
 | `matter.changed` | `MatterService._transaction()` 在**事务提交后**，本次落了至少一条 `matter_event` 的每个事项各一条 | `{public_id: str}`（`MAT-0012`）|
-| `matter.attention` | `MatterAgendaWorker` 单次 tick 内有 episode 新开、关闭、升档或 snooze 到期 | `{matter_ids: number[]}`；每 tick 最多一条聚合失效事件 |
+| `matter.attention` | `MatterAgendaWorker` 单次 tick 内有 episode 新开、关闭、升档或 snooze 到期 | `{matter_ids: number[], public_ids: string[]}`；每 tick 最多一条聚合失效事件。`public_ids` 是 perf-sse-realtime 批补的（映射失败时为 `[]`，消费端回落全量失效）；`matter_ids`（内部数字主键）保留一版不删 |
 | `matter.notify` | worker 判定 open episode 符合 owner 通知级别且尚未收到投递 ACK | `{matter_id, public_id, matter_title, signal_id, kind, severity, why}`；`last_notified_at` 只由 `/notified` ACK 写入 |
 
-🔴 **两种 matter 事件的 id space 不同，别混用**：`matter.changed` 发 **public_id**（前端
-缓存键用的就是它 ⇒ 可定向失效）；`matter.attention` 发**内部数字主键** `matter.id`
-（前端对不上 ⇒ 只能按形状全量失效，见 `useEventBridge.ts` 那处注释）。新增 matter 事件
-一律跟 `matter.changed` 走 public_id。
+🔴 **matter 系事件的 payload 一律用 public_id**（前端缓存键用的就是它 ⇒ 可定向失效）。
+`matter.attention` 曾只发内部数字主键 `matter.id`（前端对不上 ⇒ 被迫按形状全量失效，
+踩坑活证据）；perf-sse-realtime 批起它增发 `public_ids`，消费端优先定向失效、拿不到才
+回落全量。新增 matter 事件一律跟 `matter.changed` / `matter.run.changed` 走 public_id。
+
+> 前端契约：`frontend/src/shared/api/types/events.ts` 的 `SSE_EVENT_TYPES` 与后端
+> `safe_publish` 字面量集合恒等，一致性闸
+> `frontend/tests/shared/api/sseEventTypes.contract.test.ts`（从 Python 源码抽取，
+> 抽取失败必红）。新增/退役事件 = 后端发布点 + TS 数组 + 本文档表三处同步。
 
 `matter.changed` 的语义边界：
 - 判据是「真的落了一条 `matter_event`」 —— 幂等重放不落事件 ⇒ **不发**

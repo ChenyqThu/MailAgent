@@ -15,11 +15,10 @@ import { useTranslation } from 'react-i18next'
 import type { AgentRunState, ReportAgentConfig } from '@shared/api/types'
 import { AgentAvatar } from '@shared/components/agents/AgentAvatar'
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
-import {
-  projectAgentCallState,
-  type AgentCallProjectedState
-} from '@shared/lib/agentCallState'
+import { projectAgentCallState, type AgentCallProjectedState } from '@shared/lib/agentCallState'
 import { errorMessage } from '@shared/lib/ipcErrors'
+import { useMailApi } from '@shared/hooks/useMailApi'
+import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import { resolveAiGatewayBaseUrl } from '../../runtime/flags'
 import { ApprovalActions, CardFrame, TerminalBanner } from '../_cardShell'
 import { deriveCardPhase } from '../_cardShell.lib'
@@ -109,7 +108,9 @@ function parseResult(value: unknown, args: AgentCallArgs): AgentCallView | null 
     return null
   }
   const status = row.status as AgentCallView['status']
-  if (!['queued', 'running', 'waiting_approval', 'completed', 'failed', 'stopped'].includes(status)) {
+  if (
+    !['queued', 'running', 'waiting_approval', 'completed', 'failed', 'stopped'].includes(status)
+  ) {
     return null
   }
   const error = asRecord(row.error)
@@ -135,7 +136,8 @@ function parseResult(value: unknown, args: AgentCallArgs): AgentCallView | null 
 
 function inputReferences(args: AgentCallArgs, sessionId?: number): AgentCallReference[] {
   const refs: AgentCallReference[] = []
-  if (typeof args.source_session_id === 'number') refs.push({ type: 'session', id: args.source_session_id })
+  if (typeof args.source_session_id === 'number')
+    refs.push({ type: 'session', id: args.source_session_id })
   for (const id of args.email_internal_ids ?? []) refs.push({ type: 'email', id })
   for (const id of args.email_thread_ids ?? []) refs.push({ type: 'email', id })
   for (const id of args.calendar_event_ids ?? []) refs.push({ type: 'calendar', id })
@@ -238,6 +240,10 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
     setView((current) => (current ? projectedView(body.data as AgentRunPoll, current) : current))
   }, [view?.jobId])
 
+  // perf-sse-realtime R1-5: 活跃 run 的刷新以 `agent.run.changed` SSE 为主
+  // (job_id 命中即拉一次), connected 时轮询降为 30s 兜底; 无桥/断线保持 3s。
+  const sseConnected = useEventsStatusStore((s) => s.status.state === 'connected')
+  const mailApi = useMailApi()
   useEffect(() => {
     if (!view || !['queued', 'running', 'waiting_approval'].includes(view.status)) return
     let cancelled = false
@@ -246,12 +252,18 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
         if (!cancelled) setActionError(errorMessage(error))
       })
     }
-    const timer = window.setInterval(poll, POLL_MS)
+    const timer = window.setInterval(poll, sseConnected ? 30_000 : POLL_MS)
+    const unsubscribe = mailApi.events.onEvent((ev) => {
+      if (ev.event_type !== 'agent.run.changed') return
+      if ((ev.data as { job_id?: unknown })?.job_id !== view.jobId) return
+      poll()
+    })
     return () => {
       cancelled = true
       window.clearInterval(timer)
+      unsubscribe()
     }
-  }, [view?.status, view?.jobId, refreshRun])
+  }, [view?.status, view?.jobId, refreshRun, sseConnected, mailApi])
 
   const openSession = (): void => {
     if (!view) return
@@ -455,7 +467,9 @@ export function CustomAgentCallCard(props: ToolCallMessagePartProps): React.JSX.
               className="inline-flex h-7 items-center gap-1 rounded-md border border-danger/30 bg-danger/10 px-2.5 text-aux text-danger transition-opacity duration-fast hover:opacity-80 disabled:opacity-40"
             >
               <Square size={11} fill="currentColor" />
-              {t(view.status === 'queued' ? 'chat.agentCallCard.cancel' : 'chat.agentCallCard.stop')}
+              {t(
+                view.status === 'queued' ? 'chat.agentCallCard.cancel' : 'chat.agentCallCard.stop'
+              )}
             </button>
           )}
         </div>

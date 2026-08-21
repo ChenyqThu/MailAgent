@@ -379,6 +379,24 @@ def run_scan(
         if budget_sec is not None and (time.monotonic() - started) > budget_sec:
             break
     totals["duration_ms"] = int((time.monotonic() - started) * 1000)
+    # perf-sse-realtime R1-3: 扫描真消化了邮件才广播 (processed=0 的空 tick 不发) ——
+    # 计数/last_seen/新建人/新邮箱锚点都会动列表投影, 前端只做 ['contacts','list']
+    # 前缀失效, 不带 id (一轮可能触到几十个联系人, 逐 id 无意义)。聚合一轮一条;
+    # lossy 总线, 吞错不阻断扫描。
+    if totals["processed"] > 0:
+        try:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "contact.changed",
+                data={
+                    "scope": "scan",
+                    "contacts_created": totals["contacts_created"],
+                    "links_inserted": totals["links_inserted"],
+                },
+                source="contact-scanner",
+            )
+        except Exception:
+            pass
     return totals
 
 

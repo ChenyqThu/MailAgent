@@ -222,8 +222,11 @@ export function useEmailListRows(): UseEmailListRowsReturn {
   // a useInfiniteQuery cursor chain in the renderer.
   const fetchLimit = Math.min(pageCount * PAGE_SIZE, MAX_PAGES * PAGE_SIZE)
   // Sprint 16 — 主推送从 SSE 来 (useEventBridge invalidate ['emails']);
-  // pollingInterval 仅作为 SSE 断线 fallback. SSE connected 时 fallback=false.
-  const pollingInterval = usePollingFallback()
+  // pollingInterval 仅作为 SSE 断线 fallback. perf-sse-realtime R3: connected 时
+  // 不再完全归零, 保留 240s 保险轮询 —— 总线是 lossy 的 (队列满即丢 + 重连无
+  // catch-up), 丢一条 email.synced 不该让主列表永久停在旧数据 (B3 结构性风险,
+  // inprocess_bus 头注自己定的「状态类事件必须自带轮询兜底」纪律)。仅主列表启用。
+  const pollingInterval = usePollingFallback({ connectedIntervalMs: 240_000 })
   // `placeholderData: keepPreviousData` — limit 升级 / view 切换时保留上一次
   // 结果, `<List>` 不会因为 data=undefined 暂态卸载, 滚动位置稳定. 配合下方
   // 70% 阈值预加载, 用户感知不到分页边界. (react-best-practices · Client

@@ -374,6 +374,8 @@ def adopt_suggestion(conn: sqlite3.Connection, suggestion_id: int, *, now_ms: in
             "error": {"code": exc.code, "message": exc.message},
         }
     result = {"id": suggestion_id, "status": "adopted", "decided_at": now_ms}
+    # 采纳动到的联系人 (router 据此在事务提交后发 contact.changed 定向失效)。
+    result["contact_ids"] = list(contact_ids)
     if suggestion["type"] == "merge":
         result["merge_pair"] = contact_ids
     return result

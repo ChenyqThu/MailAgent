@@ -22,6 +22,7 @@ import { useAppConfig } from '@shared/hooks/useAppConfig'
 import type { AppConfigFlags } from '@shared/hooks/useAppConfig'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
+import { useEventsStatusStore } from '@shared/state/eventsStatus'
 
 import { useMatterMutation } from './matterMutation'
 
@@ -65,7 +66,9 @@ export function useMattersEnabled(): boolean {
   return useMatterFlags().mattersEnabled
 }
 
-const runKey = (matterId: string) => [...qk.matters.detail(matterId), 'runs'] as const
+/** 事项 runs 列表缓存键。导出给 useEventBridge：`matter.run.changed` SSE（payload 带
+ *  public_id）到达时定向失效, 让 30s 兜底轮询之外的实时刷新走事件。 */
+export const matterRunsKey = (matterId: string) => [...qk.matters.detail(matterId), 'runs'] as const
 export const globalAttentionKey = () => [...qk.matters.all(), 'attention', 'open'] as const
 export const matterAttentionKey = (matterId: string) =>
   [...qk.matters.detail(matterId), 'attention', 'open'] as const
@@ -97,20 +100,40 @@ export function matterChangedPublicId(data: unknown): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null
 }
 
+/** `matter.attention` payload 的 public_ids（perf-sse-realtime：worker 起增发
+ *  `public_ids`, 让消费端从「按形状全量失效」升级成定向失效）。
+ *
+ *  返 null = 拿不到可用的 public_ids（老格式 / 后端映射失败发了空数组 / 畸形）——
+ *  调用方**必须**回落全量失效：这条事件的语义是「有信号变了」, 漏刷 = 角标停在旧值,
+ *  与 `matterChangedPublicId` 的「宁可漏刷」相反（那条有 refreshMatter 精确清单兜底）。 */
+export function matterAttentionPublicIds(data: unknown): string[] | null {
+  if (data == null || typeof data !== 'object') return null
+  const raw = (data as { public_ids?: unknown }).public_ids
+  if (!Array.isArray(raw)) return null
+  const ids = raw.filter((v): v is string => typeof v === 'string' && v.length > 0)
+  return ids.length > 0 ? ids : null
+}
+
 export function useMatterRuns(
   matterId: string,
   enabled = true
 ): UseQueryResult<MatterRunListResponse> {
   const api = useMattersApi()
+  // perf-sse-realtime R1-5: SSE 在场时实时性靠 `matter.run.changed`（useEventBridge
+  // 定向失效 matterRunsKey），活跃 run 的轮询降为 30s 兜底（lossy 总线丢一条也会
+  // 在一个兜底周期内自愈）；SSE 不在（web 无桥 / 断线）保持原 2s。
+  const sseConnected = useEventsStatusStore((s) => s.status.state === 'connected')
   return useQuery({
-    queryKey: runKey(matterId),
+    queryKey: matterRunsKey(matterId),
     queryFn: () => api.listRuns(matterId),
     enabled,
     refetchInterval: (query) =>
       query.state.data?.items.some(
         (run) => run.lifecycle_state === 'queued' || run.lifecycle_state === 'running'
       )
-        ? 2000
+        ? sseConnected
+          ? 30_000
+          : 2000
         : false
   })
 }
@@ -281,7 +304,7 @@ export function useStartMatterRun(
   return useMatterMutation({
     matterId,
     mutationFn: (options: MatterMutationOptions) => api.startRun(matterId, options),
-    onSuccess: () => client.invalidateQueries({ queryKey: runKey(matterId) })
+    onSuccess: () => client.invalidateQueries({ queryKey: matterRunsKey(matterId) })
   })
 }
 

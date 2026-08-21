@@ -430,6 +430,15 @@ async def sync_trigger(
             http_status=502, source="cli",
         ) from exc
 
+    # 手动 sync 真落了变化才发 (对齐 worker「无变化不发」), 整轮聚合一条。
+    upserted = sum(int(r.get("upserted") or 0) for r in data.get("results", []))
+    soft_deleted = sum(
+        int(r.get("soft_deleted") or 0) for r in data.get("results", [])
+    )
+    if upserted + soft_deleted > 0:
+        _publish_calendar_synced(
+            calendar_name, upserted=upserted, soft_deleted=soft_deleted
+        )
     return success_envelope(data, request=request, source="cli")
 
 
@@ -556,6 +565,32 @@ def _audit_write(request: Request, action: str, **fields: object) -> None:
     logger.info("[calendar-write] action=%s actor=%s %s", action, actor, detail)
 
 
+def _publish_calendar_synced(
+    calendar_name: Optional[str], *, upserted: int = 0, soft_deleted: int = 0
+) -> None:
+    """REST 写成功后发 ``calendar.synced``（perf-sse-realtime R1-4）。
+
+    复用 CalendarSyncWorker `_emit_calendar_changed` 的事件形状
+    ``{calendar, upserted, soft_deleted}`` —— 前端只做 ``['calendar']`` 前缀失效,
+    不读字段。本地 SQLite 行要等下轮 CalDAV reconcile 才落, 事件只是失效 hint
+    (lossy 总线, 正确性靠 60s 轮询兜底)。吞错不阻断写路径。
+    """
+    try:
+        from src.events.publisher import safe_publish
+
+        safe_publish(
+            "calendar.synced",
+            data={
+                "calendar": calendar_name or "",
+                "upserted": int(upserted),
+                "soft_deleted": int(soft_deleted),
+            },
+            source="calendar-api",
+        )
+    except Exception:
+        pass
+
+
 # ===========================================================================
 # POST /api/calendar/events — CalendarService.create_event (CalDAV PUT)
 # ===========================================================================
@@ -626,6 +661,7 @@ async def create_event(
         ) from exc
 
     _audit_write(request, "create", uid=data.get("ical_uid"), summary=summary)
+    _publish_calendar_synced(data.get("calendar_name"), upserted=1)
     return success_envelope(data, request=request, source="cli")
 
 
@@ -756,6 +792,7 @@ async def update_event(
         ) from exc
 
     _audit_write(request, action, uid=event_id, recurrence_id=recurrence_id)
+    _publish_calendar_synced(data.get("calendar_name"), upserted=1)
     return success_envelope(data, request=request, source="cli")
 
 
@@ -796,6 +833,9 @@ async def delete_event(
         ) from exc
 
     _audit_write(request, "delete", uid=event_id, calendar_name=calendar_name)
+    _publish_calendar_synced(
+        data.get("calendar_name") or calendar_name, soft_deleted=1
+    )
     return success_envelope(data, request=request, source="cli")
 
 
@@ -883,6 +923,7 @@ async def event_rsvp(
             response_status=response_status,
             to_email=result.get("to_email"),
         )
+        _publish_calendar_synced(None, upserted=1)
     return success_envelope(data, request=request, source="cli")
 
 

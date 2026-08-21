@@ -34,10 +34,14 @@ import {
   collectMainListIds
 } from '@shared/lib/emailInvalidation'
 import type { SseEvent } from '@shared/api/types'
+import { qk } from '@shared/lib/queryKeys'
 import {
   globalAttentionKey,
   isMatterAttentionDetailKey,
-  matterChangedPublicId
+  matterAttentionKey,
+  matterAttentionPublicIds,
+  matterChangedPublicId,
+  matterRunsKey
 } from '@shared/components/matters/hooks'
 import { refreshMatter } from '@shared/components/matters/matterMutation'
 
@@ -166,16 +170,80 @@ export function useEventBridge(): void {
         debounceInvalidate('matters:global-attention', () =>
           queryClient.invalidateQueries({ queryKey: globalAttentionKey() })
         )
-        // 🔴 事件**带** matter_ids（`worker.py` 的 `safe_publish("matter.attention", …)`），这里
-        // 仍做按形状的全量失效，是因为**两侧 id space 不同**：payload 里是内部数字主键
-        // `matter.id`，而这些缓存键用的是 `publicId` 字符串（`MAT-0001`）。要定向失效，得让
-        // 后端改发 public_id 或前端维护 id→publicId 映射 —— 那是契约改动，不是这里能就地决定的。
-        // 在那之前，全量失效是唯一不会漏刷的选择（漏刷 = 信号角标停在旧值）。
-        debounceInvalidate('matters:detail-attention', () =>
-          queryClient.invalidateQueries({
-            predicate: (query) => isMatterAttentionDetailKey(query.queryKey)
-          })
+        // perf-sse-realtime: worker 起 payload 增发 `public_ids`（与缓存键同 id space）
+        // → 定向失效每个事项的 detail attention。拿不到（老格式事件在途 / 后端映射
+        // 失败发空）→ 回落按形状全量失效 —— 这条事件**不许漏刷**（漏刷 = 信号角标
+        // 停在旧值），与 matter.changed 的「宁可漏刷」纪律相反。
+        const publicIds = matterAttentionPublicIds(ev.data)
+        if (publicIds) {
+          for (const pid of publicIds) {
+            debounceInvalidate(`matters:attention:${pid}`, () =>
+              queryClient.invalidateQueries({ queryKey: matterAttentionKey(pid) })
+            )
+          }
+        } else {
+          debounceInvalidate('matters:detail-attention', () =>
+            queryClient.invalidateQueries({
+              predicate: (query) => isMatterAttentionDetailKey(query.queryKey)
+            })
+          )
+        }
+        return
+      }
+      // R2 — matter.notify: main 进程负责系统通知（matter_notifications.ts, 不动），
+      // renderer 侧顺手刷 attention 面（该信号刚达到通知级别 = 角标/列表必然变了）。
+      // payload 恒带 public_id（sse-events.md 表）, 缺失时只刷全局列表。
+      if (ev.event_type === 'matter.notify') {
+        debounceInvalidate('matters:global-attention', () =>
+          queryClient.invalidateQueries({ queryKey: globalAttentionKey() })
         )
+        const notifyPid = matterChangedPublicId(ev.data)
+        if (notifyPid) {
+          debounceInvalidate(`matters:attention:${notifyPid}`, () =>
+            queryClient.invalidateQueries({ queryKey: matterAttentionKey(notifyPid) })
+          )
+        }
+        return
+      }
+      // R1-5 — matter run lifecycle（queued/running/终态/取消, payload 带 public_id）:
+      // 定向失效该事项的 runs 列表, 是 useMatterRuns 降频到 30s 后的实时通道。
+      if (ev.event_type === 'matter.run.changed') {
+        const runPid = matterChangedPublicId(ev.data)
+        if (!runPid) return
+        debounceInvalidate(`matters:runs:${runPid}`, () =>
+          queryClient.invalidateQueries({ queryKey: matterRunsKey(runPid) })
+        )
+        return
+      }
+      // R1-5 — custom agent run 生命周期（queued/running/终态/审批结算）: 红点面
+      // （待审批计数 + agent 未读）与 agent-runs 历史/列表都可能动。payload 只是
+      // hint, 不做 per-job 定向（这些 key 不按 job 分片）。
+      if (ev.event_type === 'agent.run.changed') {
+        debounceInvalidate('agent-runs:all', () =>
+          queryClient.invalidateQueries({ queryKey: qk.agentRuns.all() })
+        )
+        debounceInvalidate('chat:agent-unread', () =>
+          queryClient.invalidateQueries({ queryKey: qk.chat.agentUnread() })
+        )
+        return
+      }
+      // R1-3 — contact.changed（扫描 tick / 画像完成 / 建议采纳）: 列表前缀 +（带
+      // contact_ids 时）逐 id detail 前缀。⚠️ 通讯录域的正确性兜底是列表 staleTime
+      // 与手动刷新 —— 本分支只是加速, 不得假设事件必达。
+      if (ev.event_type === 'contact.changed') {
+        debounceInvalidate('contacts:list', () =>
+          queryClient.invalidateQueries({ queryKey: ['contacts', 'list'] })
+        )
+        const contactIds = Array.isArray((ev.data as { contact_ids?: unknown })?.contact_ids)
+          ? ((ev.data as { contact_ids: unknown[] }).contact_ids.filter(
+              (v): v is number => typeof v === 'number' && Number.isFinite(v)
+            ) as number[])
+          : []
+        for (const id of contactIds) {
+          debounceInvalidate(`contacts:detail:${id}`, () =>
+            queryClient.invalidateQueries({ queryKey: ['contacts', 'detail', id] })
+          )
+        }
         return
       }
       // S1 — 事项本体的变更（owner 在 UI 里改的 / agent 工具改的 / 跟进 run 落的提案）。

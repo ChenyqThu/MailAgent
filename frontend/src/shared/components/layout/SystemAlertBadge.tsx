@@ -1,6 +1,8 @@
 // roadmap §4.5 — top-bar red/orange dot badge.
 //
-// 5s polls admin:systemAlerts (direct sqlite read, ~1ms). Displays:
+// Event-driven via SSE (outbox/llm failure events → useEventBridge invalidates
+// admin:systemAlerts) with a 60s poll as the lossy-bus fallback while
+// connected; degrades to the original 5s poll when SSE is down. Displays:
 //   - red dot + count when any critical alerts
 //   - orange dot + count when only warning alerts
 //   - hidden when zero
@@ -24,6 +26,7 @@ import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useMailApi } from '@shared/hooks/useMailApi'
+import { useEventsStatusStore } from '@shared/state/eventsStatus'
 
 const LEVEL_META: Record<SystemAlertItem['level'], { Icon: typeof ShieldAlert; cls: string }> = {
   critical: { Icon: ShieldAlert, cls: 'text-fail' },
@@ -50,11 +53,15 @@ export function SystemAlertBadge(): React.ReactElement | null {
     from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
     enterDuration: DUR.fast
   })
+  // perf-sse-realtime R2 — 事件驱动为主 (outbox.failed/dead_letter + llm.failed/
+  // gave_up 经 useEventBridge 失效本 key), SSE connected 时轮询降为 60s 兜底
+  // (lossy 总线丢事件的自愈通道, usePollingFallback 同型写法); 断线/无桥保持 5s。
+  const sseConnected = useEventsStatusStore((s) => s.status.state === 'connected')
   const q = useQuery({
     queryKey: qk.admin.systemAlerts(),
     queryFn: () => mailApi.admin.systemAlerts(),
     staleTime: 4_000,
-    refetchInterval: 5_000
+    refetchInterval: sseConnected ? 60_000 : 5_000
   })
 
   const total = (q.data?.critical_count ?? 0) + (q.data?.warning_count ?? 0)

@@ -65,7 +65,19 @@ class MatterAgendaWorker:
             result = await asyncio.to_thread(self.attention.reconcile)
             changed.update(result["changed_matter_ids"])
             if changed:
-                safe_publish("matter.attention", data={"matter_ids": sorted(changed)})
+                # perf-sse-realtime: payload 增发 public_ids —— 前端缓存键用的是
+                # publicId 字符串, 之前只发内部数字主键 matter_ids 导致消费端只能按
+                # 形状全量失效 (sse-events.md 记为踩坑活证据)。matter_ids 保留一版
+                # (SSE 是对外可观察面, 不做无预告的字段删除)。
+                safe_publish(
+                    "matter.attention",
+                    data={
+                        "matter_ids": sorted(changed),
+                        "public_ids": await asyncio.to_thread(
+                            self._public_ids_for, sorted(changed)
+                        ),
+                    },
+                )
             level = await asyncio.to_thread(self._notify_level)
             notifications = await asyncio.to_thread(
                 self.attention.eligible_notifications, level
@@ -86,6 +98,27 @@ class MatterAgendaWorker:
                 )
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"[matter-agenda] attention tick failed: {exc}")
+
+    def _public_ids_for(self, matter_ids: list[int]) -> list[str]:
+        """内部数字主键 → public_id（``matter.attention`` payload 用, 保持输入序）。
+
+        失败返 [] —— 消费端 (useEventBridge) 拿不到 public_ids 时回落按形状全量失效,
+        与旧行为等价, 不会漏刷。
+        """
+        if not matter_ids:
+            return []
+        try:
+            with self.repository.connect() as conn:
+                placeholders = ",".join("?" for _ in matter_ids)
+                rows = conn.execute(
+                    f"SELECT id, public_id FROM matter WHERE id IN ({placeholders})",
+                    matter_ids,
+                ).fetchall()
+            by_id = {int(row["id"]): str(row["public_id"]) for row in rows}
+            return [by_id[i] for i in matter_ids if i in by_id]
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(f"[matter-agenda] public_id mapping failed: {exc}")
+            return []
 
     def _notify_level(self) -> str:
         try:

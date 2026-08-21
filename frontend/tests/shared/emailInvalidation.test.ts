@@ -141,7 +141,14 @@ describe('collectMainListIds', () => {
 
 describe('planInvalidation', () => {
   test('mailbox write events: main-list + mailboxes + supplements + email detail', () => {
-    for (const t of ['email.synced', 'email.flag_changed', 'email.failed', 'email.dead_letter']) {
+    // email.new (perf-sse-realtime R1-1) 与 synced 同组: save_email 落库即上列表。
+    for (const t of [
+      'email.new',
+      'email.synced',
+      'email.flag_changed',
+      'email.failed',
+      'email.dead_letter'
+    ]) {
       expect(planInvalidation(t, 42)).toEqual([
         { kind: 'main-list' },
         { kind: 'key', key: ['mailboxes'] },
@@ -150,6 +157,25 @@ describe('planInvalidation', () => {
         { kind: 'key', key: ['email', 42] }
       ])
     }
+  })
+
+  test('email.new 批量 wire (一轮 poll 聚合) 复用 issue #58 batch 路由', () => {
+    // new_watcher 多封时发 internal_id=null + data.internal_ids —— 与入向已读
+    // 回收同契约, per-id detail 失效 + 门控 supplements 免费复用。
+    expect(
+      planInvalidation('email.new', null, {
+        internal_ids: [11, 22],
+        ids_truncated: false,
+        mailboxes: ['收件箱']
+      })
+    ).toEqual([
+      { kind: 'main-list' },
+      { kind: 'key', key: ['mailboxes'] },
+      { kind: 'supplements' },
+      { kind: 'thread-members' },
+      { kind: 'key', key: ['email', 11] },
+      { kind: 'key', key: ['email', 22] }
+    ])
   })
 
   test('mailbox write with no internal_id drops supplements + detail', () => {
@@ -224,8 +250,30 @@ describe('planInvalidation', () => {
     ])
   })
 
-  test('folder.synced stays a plain folder invalidation', () => {
-    expect(planInvalidation('folder.synced', null)).toEqual([{ kind: 'key', key: ['folder'] }])
+  test('folder.changed routes to the folder prefix (revives the dead folder.synced branch)', () => {
+    expect(
+      planInvalidation('folder.changed', null, { action: 'rename', imap_name: 'Projects/X' })
+    ).toEqual([{ kind: 'key', key: ['folder'] }])
+    // 旧名字后端已无发布点 → 不再处理 (types/events.ts 同步删除, 契约闸锁死)。
+    expect(planInvalidation('folder.synced', null)).toEqual([])
+  })
+
+  test('outbox failure events light the admin dead-letter + alert badge keys (R2)', () => {
+    for (const t of ['outbox.failed', 'outbox.dead_letter']) {
+      expect(planInvalidation(t, null)).toEqual([
+        { kind: 'key', key: ['admin', 'deadLetter'] },
+        { kind: 'key', key: ['admin', 'systemAlerts'] }
+      ])
+    }
+  })
+
+  test('llm failure events light the alert badge + llm stats keys (R2)', () => {
+    for (const t of ['llm.failed', 'llm.gave_up']) {
+      expect(planInvalidation(t, null)).toEqual([
+        { kind: 'key', key: ['admin', 'systemAlerts'] },
+        { kind: 'key', key: ['llm', 'stats'] }
+      ])
+    }
   })
 
   test('calendar.synced invalidates the whole calendar prefix once', () => {
@@ -235,7 +283,9 @@ describe('planInvalidation', () => {
   })
 
   test('unhandled events are no-ops (matches the old silent branch)', () => {
-    for (const t of ['outbox.enqueued', 'outbox.failed', 'llm.failed', 'llm.gave_up', 'nonsense']) {
+    // matter.* / contact.* / *.run.changed 在 useEventBridge 分发, job.* 在
+    // resyncJob.ts —— 对本 planner 都是 no-op。
+    for (const t of ['outbox.enqueued', 'job.progress', 'matter.changed', 'nonsense']) {
       expect(planInvalidation(t, 7)).toEqual([])
     }
   })
@@ -335,6 +385,9 @@ describe('planInvalidation — batch internal_ids (issue #58 inbound read reconc
       ['outbox.done', null],
       ['llm.success', 7],
       ['folder.synced', null],
+      ['folder.changed', null],
+      ['outbox.failed', null],
+      ['llm.gave_up', null],
       ['calendar.synced', null],
       ['outbox.enqueued', 7],
       ['nonsense', null]

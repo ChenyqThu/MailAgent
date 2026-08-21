@@ -6,6 +6,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { resolveApiBaseUrl } from '@shared/hooks/useLlmModels'
 import { qk } from '@shared/lib/queryKeys'
 import { isSessionUnread } from '@shared/lib/chatUnread'
+import { useEventsStatusStore } from '@shared/state/eventsStatus'
 import type {
   AgentRunHistoryItem,
   AgentRunPendingCount,
@@ -377,18 +378,27 @@ export function useAgentPluginsEnabled(): boolean {
  *  → 所有红点面字节级不渲染。读失败（flag off / 不可达）→ 服务端已守读优雅降级返 EMPTY。 */
 export function useAgentPendingCount(enabled: boolean): AgentRunPendingCount {
   const api = useMailApi()
+  // perf-sse-realtime R1-5: `agent.run.changed` SSE (useEventBridge 失效
+  // qk.agentRuns.all() 前缀) 承担实时性, connected 时轮询降为 30s 兜底; 无桥保持 5s。
+  const sseConnected = useEventsStatusStore((s) => s.status.state === 'connected')
   const q = useQuery({
     queryKey: qk.agentRuns.pendingCount(),
     queryFn: () => api.report.pendingCount(),
     enabled,
     staleTime: 4_000,
-    refetchInterval: enabled ? 5_000 : false
+    refetchInterval: enabled ? (sseConnected ? 30_000 : 5_000) : false
   })
   return q.data ?? EMPTY_PENDING_COUNT
 }
 
-export function useAgentUnreadCount(enabled: boolean): { total: number; byAgent: Record<string, number> } {
+export function useAgentUnreadCount(enabled: boolean): {
+  total: number
+  byAgent: Record<string, number>
+} {
   const api = useMailApi()
+  // 同 useAgentPendingCount: agent.run.changed 事件失效 qk.chat.agentUnread(),
+  // connected 时 30s 兜底。
+  const sseConnected = useEventsStatusStore((s) => s.status.state === 'connected')
   const q = useQuery({
     queryKey: qk.chat.agentUnread(),
     queryFn: async () => {
@@ -404,7 +414,7 @@ export function useAgentUnreadCount(enabled: boolean): { total: number; byAgent:
     },
     enabled,
     staleTime: 4_000,
-    refetchInterval: enabled ? 5_000 : false
+    refetchInterval: enabled ? (sseConnected ? 30_000 : 5_000) : false
   })
   return q.data ?? EMPTY_UNREAD_COUNT
 }

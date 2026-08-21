@@ -289,6 +289,25 @@ class ComposeSendResult:
     warnings: list[str]
 
 
+def _publish_folder_changed(action: str, imap_name: str) -> None:
+    """folder CRUD/cleanup 成功后发 ``folder.changed`` SSE (perf-sse-realtime R1-2)。
+
+    复活前端 ``['folder']`` invalidate 分支 (原 ``folder.synced`` 订阅自
+    ``src/folder_sync/`` 退役后已零发布点)。lossy 总线, 吞错不阻断写路径;
+    SidebarFolderTree 的 usePollingFallback 兜底仍在。
+    """
+    try:
+        from src.events.publisher import safe_publish
+
+        safe_publish(
+            "folder.changed",
+            data={"action": action, "imap_name": imap_name},
+            source="mail_write.folder",
+        )
+    except Exception:
+        pass
+
+
 def _split_addrs(addrs: str) -> list[str]:
     """split RFC 822 to/cc 字段提纯 email. 对齐 handlers._split_addrs (getaddresses
     正确处理 quoted display name + Outlook semicolon)."""
@@ -1175,6 +1194,7 @@ class MailWriteService:
         child_imap = reader.build_child_imap_name(parent_imap, name)
         if not reader.create_folder(child_imap):
             raise ServiceError(f"创建文件夹失败 (IMAP CREATE {child_imap!r})")
+        _publish_folder_changed("create", child_imap)
         return FolderMutationResult(action="create", imap_name=child_imap)
 
     def cleanup_local_folder(self, imap_name: str, *, actor: Actor) -> FolderMutationResult:
@@ -1199,6 +1219,7 @@ class MailWriteService:
         require_write_auth(actor)
         affected = self._delete_local_mailbox_rows(label)
         wl_changed = self._remove_whitelist_entry(imap_name)
+        _publish_folder_changed("cleanup", imap_name)
         return FolderMutationResult(
             action="cleanup", imap_name=imap_name,
             affected_local_rows=affected, restart_required=wl_changed,
@@ -1232,6 +1253,7 @@ class MailWriteService:
         # 🔴 folder_pref 的 PK 是 imap 路径 —— 不跟着搬, 那一行当场变孤儿, 图标和
         # 两个开关静默丢失且没有任何报错 (下次 gate 读不到行 → 悄悄回落默认)。
         self._ctx.sync_store.rename_folder_pref(imap_name, new_imap)
+        _publish_folder_changed("rename", new_imap)
         return FolderMutationResult(
             action="rename", imap_name=imap_name, new_imap_name=new_imap,
             affected_local_rows=affected, restart_required=wl_changed,
@@ -1254,6 +1276,7 @@ class MailWriteService:
         # 文件夹在 Exchange 上没了 → pref 行再无对应物, 清掉 (对称于 cleanup_local_folder
         # **保留** pref: 那只是取消同步, 文件夹还在, 重新勾选时该拿回自己设的图标/开关)。
         self._ctx.sync_store.delete_folder_pref(imap_name)
+        _publish_folder_changed("delete", imap_name)
         return FolderMutationResult(
             action="delete", imap_name=imap_name, affected_local_rows=affected,
             restart_required=wl_changed,

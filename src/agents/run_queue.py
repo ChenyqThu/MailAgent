@@ -110,4 +110,15 @@ def enqueue_agent_run(
             f"[agent-run] enqueued agent={agent_id} kind={trigger_kind} "
             f"job_id={job_id} fire_key={fire_key}"
         )
+        # perf-sse-realtime R1-5: queued 即广播 (前端 agent-runs 列表/红点面失效)。
+        # lossy 总线, 吞错; 正确性靠前端降频后的兜底轮询。
+        try:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "agent.run.changed",
+                data={"job_id": job_id, "agent_id": agent_id, "status": "queued"},
+                source="run-queue",
+            )
+        except Exception:
+            pass
     return job_id, was_created

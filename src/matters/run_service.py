@@ -364,7 +364,10 @@ class MatterRunService(MatterService):
             row = conn.execute(
                 "SELECT * FROM matter_run WHERE id=?", (run_id,)
             ).fetchone()
-            return {"run": self._project_run(conn, dict(row)), "coalesced": False}
+            result = {"run": self._project_run(conn, dict(row)), "coalesced": False}
+        # 新 queued run 落库+挂上 job 后广播 (幂等重放/coalesce 不发 —— 无新行)。
+        self._publish_run_changed(run_id, public_id)
+        return result
 
     def cancel_run(
         self,
@@ -409,6 +412,7 @@ class MatterRunService(MatterService):
                     logger.warning(f"[matter-run] cancel job CAS failed: {exc}")
                     cas_won = False
             if cas_won:
+                canceled_result = None
                 with self._transaction() as conn:
                     cursor = conn.execute(
                         "UPDATE matter_run SET canceled_at=?, "
@@ -421,7 +425,11 @@ class MatterRunService(MatterService):
                         row = conn.execute(
                             "SELECT * FROM matter_run WHERE id=?", (run_id,)
                         ).fetchone()
-                        return {"run": self._project_run(conn, dict(row))}
+                        canceled_result = {"run": self._project_run(conn, dict(row))}
+                if canceled_result is not None:
+                    # 提交后广播 queued→canceled。
+                    self._publish_run_changed(run_id, public_id)
+                    return canceled_result
             refreshed = self.get_run(run_id)
             if refreshed is None:
                 raise MatterError("E_CHILD_NOT_FOUND", f"run {run_id} not found")
@@ -442,6 +450,8 @@ class MatterRunService(MatterService):
             ).fetchone()
             run = dict(row)
             projection = self._project_run(conn, run)
+        # 提交后广播 running→cancel_requested (前端 runs 列表即时显示「取消中」)。
+        self._publish_run_changed(run_id, public_id)
         self._post_run_stop(run.get("chat_session_id"))
         return {"run": projection}
 
@@ -552,6 +562,36 @@ class MatterRunService(MatterService):
 
     # ── worker 终态 helpers（D3/D4）────────────────────────────────────────────
 
+    def _publish_run_changed(
+        self, run_id: int, public_id: Optional[str] = None
+    ) -> None:
+        """run lifecycle 迁移 → ``matter.run.changed``（perf-sse-realtime R1-5）。
+
+        🔴 payload 用 **public_id**（sse-events.md 硬规则 —— 前端缓存键
+        ``['matters','detail',publicId,'runs']`` 用的就是它, 内部数字 id 对不上）。
+        只在事务提交后调; lossy 总线, 吞错; 前端降频后的 30s 兜底轮询仍在。
+        """
+        try:
+            if public_id is None:
+                with self.repository.connect() as conn:
+                    row = conn.execute(
+                        "SELECT m.public_id FROM matter_run mr "
+                        "JOIN matter m ON m.id = mr.matter_id WHERE mr.id=?",
+                        (run_id,),
+                    ).fetchone()
+                if row is None:
+                    return
+                public_id = str(row["public_id"])
+            from src.events.publisher import safe_publish
+
+            safe_publish(
+                "matter.run.changed",
+                data={"public_id": public_id, "run_id": int(run_id)},
+                source="matter-run",
+            )
+        except Exception:
+            pass
+
     def mark_started(self, run_id: int) -> bool:
         """started_at CAS。撞 ``uq_matter_run_one_active``（同 matter 另有活跃 run）→ False。"""
         now = self.clock_ms()
@@ -563,9 +603,12 @@ class MatterRunService(MatterService):
                     "AND canceled_at IS NULL",
                     (now, run_id),
                 )
-                return cursor.rowcount == 1
+                started = cursor.rowcount == 1
         except sqlite3.IntegrityError:
             return False
+        if started:
+            self._publish_run_changed(run_id)
+        return started
 
     def finish_run(
         self,
@@ -626,7 +669,9 @@ class MatterRunService(MatterService):
                 f"UPDATE matter_run SET {assignments} WHERE id=?",
                 (*sets.values(), run_id),
             )
-            return True
+        # 事务提交后广播终态 (ok/noop/warn/fail/canceled)。
+        self._publish_run_changed(run_id)
+        return True
 
     def update_id_for_run(self, run_id: int) -> Optional[int]:
         with self.repository.connect() as conn:

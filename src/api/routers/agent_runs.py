@@ -542,6 +542,17 @@ async def set_approval_state(request: Request, job_id: int, body: _ApprovalState
             f"job {job_id} has no pending approval to settle",
             http_status=409, source="agent-runs",
         )
+    if code != "idempotent":
+        # perf-sse-realtime R1-5: 审批结算即广播 (待审批计数/红点即时归零)。吞错。
+        try:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "agent.run.changed",
+                data={"job_id": job_id, "status": f"approval_{body.state}"},
+                source="agent-runs-api",
+            )
+        except Exception:
+            pass
     return success_envelope(
         {"jobId": job_id, "approvalState": body.state, "idempotent": code == "idempotent"},
         request=request, source="agent-runs",
@@ -669,6 +680,16 @@ async def cancel_agent_run(request: Request, job_id: int):
         expect_status="queued",
     )
     if cancelled:
+        # perf-sse-realtime R1-5: 取消即广播 (worker 未 claim → 不会再有终态事件)。
+        try:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "agent.run.changed",
+                data={"job_id": job_id, "status": "aborted"},
+                source="agent-runs-api",
+            )
+        except Exception:
+            pass
         return success_envelope({"cancelled": True}, request=request, source="agent-runs")
     current = repo.get(job_id)
     return success_envelope(

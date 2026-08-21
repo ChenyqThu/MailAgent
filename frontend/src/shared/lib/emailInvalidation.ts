@@ -185,8 +185,9 @@ function isBatchTruncated(
 /**
  * Map an SSE event_type (+ internal_id, + optional event `data`) to the
  * invalidation directives the event bridge should run. Unhandled events
- * (outbox.enqueued / outbox.failed / llm.failed / …) return [] — same as the
- * previous no-op branch.
+ * (outbox.enqueued / job.* / matter.* / …) return [] — same as the previous
+ * no-op branch (matter.* / contact.* / *.run.changed route in useEventBridge,
+ * job.* in resyncJob.ts).
  *
  * A 'supplements' directive is only emitted when there are internal_ids to gate
  * on; without any there is nothing to scope the containment check to, so the
@@ -205,6 +206,13 @@ export function planInvalidation(
     // Any mailbox-level write: list ordering / row state / mailbox counts can
     // all move. Main list + counts always; the changed email's detail + any
     // supplement holding it, id-gated.
+    //
+    // email.new (perf-sse-realtime R1-1) rides the same group: a freshly saved
+    // row must appear in the list + bump mailbox counts immediately instead of
+    // waiting for the pipeline-end email.synced (tens of seconds to minutes).
+    // Its batch wire (internal_id null + data.internal_ids, poll-round
+    // aggregated server-side) reuses the issue #58 batch routing below as-is.
+    case 'email.new':
     case 'email.synced':
     case 'email.failed':
     case 'email.dead_letter':
@@ -278,9 +286,28 @@ export function planInvalidation(
       }
       return out
     }
-    // folder sync — unrelated to the ['emails'] fan-out, unchanged.
-    case 'folder.synced':
+    // folder writes (perf-sse-realtime R1-2) — CRUD/cleanup in mail_write.py +
+    // folder_pref upsert/rename/delete in sync_store.py. Replaces the dead
+    // 'folder.synced' subscription (its src/folder_sync/ publisher was retired,
+    // leaving SidebarFolderTree's SSE-gated poll with no event to lean on).
+    // ['folder'] prefix covers discover / whitelist / prefs.
+    case 'folder.changed':
       return [{ kind: 'key', key: ['folder'] }]
+    // outbox delivery failures (R2) — the admin dead-letter list + the TitleBar
+    // SystemAlertBadge read these; both were pure polls before.
+    case 'outbox.failed':
+    case 'outbox.dead_letter':
+      return [
+        { kind: 'key', key: ['admin', 'deadLetter'] },
+        { kind: 'key', key: ['admin', 'systemAlerts'] }
+      ]
+    // LLM pipeline failures (R2) — alert badge + the LLM dashboard stats.
+    case 'llm.failed':
+    case 'llm.gave_up':
+      return [
+        { kind: 'key', key: ['admin', 'systemAlerts'] },
+        { kind: 'key', key: ['llm', 'stats'] }
+      ]
     // calendar sync tick landed changes (CalendarSyncWorker) — prefix
     // invalidate every ['calendar', …] family (events / syncStatus / names /
     // event detail / recurring). While the calendar pane is closed this only

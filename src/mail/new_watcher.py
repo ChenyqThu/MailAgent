@@ -146,6 +146,49 @@ READ_RECONCILE_CHUNK_BUDGET_SEC = 3.0
 KOS_RETRY_BATCH_PER_TICK = 3
 
 
+def _publish_email_new(rows: List[tuple], *, source: str = "new_watcher") -> None:
+    """新邮件 save_email 落库后发 ``email.new`` —— 入库即上列表, 不等 AI/Notion 管线。
+
+    ``rows`` = [(internal_id, mailbox), ...] 本轮真正**新建**的行 (merge 进已有行不算)。
+
+    发布节流取舍 (perf-sse-realtime R1-1): **每轮聚合成一条事件**而不是每封一条 ——
+    单封时走 internal_id 单值 wire, 多封时走 issue #58 已有的批量 wire
+    (internal_id=null + data.internal_ids, 前端 emailInvalidation 的 batch 分支免费
+    复用, 超 cap 置 ids_truncated 由前端退化成 ['email'] 前缀失效)。初始批量同步
+    (``src/init/initial_sync.py``) 与 backfill **不经过这里** (它们直调 save_email /
+    save_emails_batch, 不发事件) —— 3000 封初始灌库天然打不到事件桥; 本入口最坏是
+    离线后追赶的一个 poll 窗口 (受 DAVMAIL_FOLDER_SIZE_LIMIT 截断), 一轮一条不刷屏。
+    lossy 总线纪律: 事件只是加速, 正确性靠前端保险轮询/staleTime 兜底。
+    """
+    if not rows:
+        return
+    try:
+        from src.events.publisher import safe_publish
+
+        if len(rows) == 1:
+            internal_id, mailbox = rows[0]
+            safe_publish(
+                "email.new",
+                internal_id=internal_id,
+                data={"mailbox": mailbox},
+                source=source,
+            )
+            return
+        ids = [iid for iid, _ in rows]
+        safe_publish(
+            "email.new",
+            data={
+                # cap 复用入向已读回收的 wire 契约 (前端 MAX_BATCH_IDS=200 同值镜像)
+                "internal_ids": ids[:READ_RECONCILE_EVENT_ID_CAP],
+                "ids_truncated": len(ids) > READ_RECONCILE_EVENT_ID_CAP,
+                "mailboxes": sorted({mb for _, mb in rows if mb}),
+            },
+            source=source,
+        )
+    except Exception:
+        pass
+
+
 def should_skip_feishu_for_folder(mailbox: str, notify_enabled: frozenset) -> bool:
     """L3 通知降噪: 自定义文件夹**默认不通知**, 仅 notify_enabled 内的才通知。
 
@@ -653,6 +696,8 @@ class NewWatcher:
 
                 # 任一封写库失败 → 本轮不推进游标 (失败那封会随游标推进永久出窗)。
                 save_failed = False
+                # 本轮真正新建的行 → 聚合一条 email.new (见 _publish_email_new)。
+                saved_new_rows: List[tuple] = []
 
                 if new_emails:
                     logger.info(f"SQLite found {len(new_emails)} new emails")
@@ -712,11 +757,15 @@ class NewWatcher:
                                 f"NOT advanced, window retried next poll"
                             )
                             continue
+                        saved_new_rows.append((internal_id, payload['mailbox']))
                         logger.debug(
                             f"Added email {internal_id} to SyncStore "
                             f"(pending, origin={backend_origin or 'applescript'}, "
                             f"imap_uid={email_meta.get('imap_uid')})"
                         )
+
+                # 新邮件入库即广播 (email.new): 失败与否不影响游标语义, 只是失效 hint。
+                _publish_email_new(saved_new_rows)
 
                 # 4. 更新 last_max_row_id（立即持久化）— 仅成功 (含**合法**空成功) 时推进;
                 # None = get_new_emails 失败 (含 FolderFetchError), save_failed = 有邮件
@@ -1357,6 +1406,7 @@ class NewWatcher:
 
         saved = 0
         merged = 0
+        saved_rows: List[tuple] = []
         for meta in result.missing:
             payload = {
                 "internal_id": meta["internal_id"],
@@ -1385,6 +1435,9 @@ class NewWatcher:
                     # 造成的重复"补抓"会被虚假累计成 recovered, 让这个数字失去意义。
                     if self.sync_store.get(meta["internal_id"]) is not None:
                         saved += 1
+                        saved_rows.append(
+                            (meta["internal_id"], payload["mailbox"])
+                        )
                     else:
                         merged += 1
                 else:
@@ -1396,6 +1449,8 @@ class NewWatcher:
                 logger.error(f"[inbox-reconcile] save_email raised: {e}")
 
         if saved:
+            # 补回的行同样即时广播 (来源标记 inbox-reconcile, 一轮聚合一条不刷屏)。
+            _publish_email_new(saved_rows, source="inbox-reconcile")
             try:
                 total = int(
                     self.sync_store.get_state(self._RECONCILE_RECOVERED_KEY) or 0
@@ -1482,6 +1537,7 @@ class NewWatcher:
             logger.warning(f"[drafts] reconcile failed (main loop unaffected): {e}")
             return
 
+        added_draft_rows: List[tuple] = []
         for email_meta in to_add:
             internal_id = email_meta.get('internal_id')
             try:
@@ -1518,9 +1574,12 @@ class NewWatcher:
                     if email_meta.get(key) is not None:
                         payload[key] = email_meta.get(key)
                 self.sync_store.save_email(payload)
+                added_draft_rows.append((internal_id, payload['mailbox']))
                 logger.debug(f"[drafts] added draft {internal_id} (pending)")
             except Exception as e:
                 logger.warning(f"[drafts] save new draft {internal_id} failed: {e}")
+        # 新草稿同样即时广播 (草稿箱列表/badge 不再等下一轮兜底轮询)。
+        _publish_email_new(added_draft_rows, source="drafts-reconcile")
 
         for internal_id in to_delete:
             try:

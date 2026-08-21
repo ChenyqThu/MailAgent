@@ -39,8 +39,14 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 
 import { isOwnRun } from './ownRuns'
 
-/** Poll cadence while a background run is live (fallback for a missed broadcast + web parity). */
+/** Poll cadence while a background run is live (fallback for a missed broadcast + web parity).
+ *  perf-sse-realtime: with the 'chat:turn-persisted' IPC broadcast available (Electron) the
+ *  settle door is event-driven, so the poll is pure insurance → 30s; web has no broadcast
+ *  (poll IS the only channel) → keep 3s. Note this poll only runs at all while a background
+ *  run is active (refetchInterval gates on data.active), so its steady-state cost was already
+ *  zero — the downshift only trims the in-run window. */
 const ACTIVE_RUN_POLL_MS = 3_000
+const ACTIVE_RUN_POLL_WITH_BROADCAST_MS = 30_000
 
 /** codex r2 [C] — settled-run memory cap. Ids are UUIDs (no cross-session ambiguity), so the set
  *  only needs to outlive the broadcast↔poll double-observation of one run; FIFO-trim keeps it
@@ -114,7 +120,12 @@ export function useBackgroundChatRun(opts: UseBackgroundChatRunOptions): {
     enabled: probeEnabled,
     retry: false,
     refetchOnWindowFocus: true,
-    refetchInterval: (query) => (query.state.data?.active === true ? ACTIVE_RUN_POLL_MS : false)
+    refetchInterval: (query) =>
+      query.state.data?.active === true
+        ? mailApi.chat.onTurnPersisted != null
+          ? ACTIVE_RUN_POLL_WITH_BROADCAST_MS
+          : ACTIVE_RUN_POLL_MS
+        : false
   })
   const probedRunId = runActiveQ.data?.runId ?? null
   const active = probeEnabled && runActiveQ.data?.active === true

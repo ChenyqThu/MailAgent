@@ -514,8 +514,11 @@ class OutboxRepository:
             conn.close()
         # Sprint 15 Stage 2: SSE publish (silent on failure)
         from src.events.publisher import safe_publish
+        # 字面量三元而非 f"outbox.{new_status}": 事件名一致性闸靠源码抽取字面量
+        # (frontend/tests/shared/api/sseEventTypes.contract.test.ts), 拼接名对抽取器不可见。
+        event = "outbox.dead_letter" if new_status == "dead_letter" else "outbox.failed"
         safe_publish(
-            f"outbox.{new_status}",  # outbox.failed or outbox.dead_letter
+            event,
             data={
                 "outbox_id": outbox_id,
                 "attempts": new_attempts,

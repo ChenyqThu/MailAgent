@@ -129,6 +129,26 @@ def _json_dict(raw: Any) -> dict:
     return data if isinstance(data, dict) else {}
 
 
+def _publish_contact_changed(contact_ids: list, *, scope: str) -> None:
+    """建议采纳等写点落库后广播 ``contact.changed``（perf-sse-realtime R1-3）。
+
+    🔴 只在事务提交后调（``matter.changed`` 同纪律）。lossy 总线, 吞错;
+    前端失效 ``['contacts','list']`` 前缀 + 每个 id 的 ``['contacts','detail',id]``。
+    """
+    try:
+        from src.events.publisher import safe_publish
+        safe_publish(
+            "contact.changed",
+            data={
+                "scope": scope,
+                "contact_ids": [int(i) for i in contact_ids if isinstance(i, int)],
+            },
+            source="contacts-api",
+        )
+    except Exception:
+        pass
+
+
 # ---- backfill progress (🔴 必须排在 /{contact_id} 之前, 否则被 int 路径吃掉) ----
 
 
@@ -185,6 +205,9 @@ async def adopt_governance_suggestion(
     error = result.pop("error", None)
     if error:
         raise APIError(error["code"], error["message"], source="sqlite")
+    _publish_contact_changed(
+        result.get("contact_ids") or [], scope="governance_adopt"
+    )
     return success_envelope(result, request=request)
 
 
@@ -937,6 +960,7 @@ async def adopt_contact_profile_suggestion(
             now=now,
         )
         detail = _call(_load_detail, conn, contact_id)
+    _publish_contact_changed([contact_id], scope="profile_suggestion")
     return success_envelope(detail, request=request)
 
 
@@ -962,6 +986,7 @@ async def ignore_contact_profile_suggestion(
             now_ms=_now_ms(),
         )
         detail = _call(_load_detail, conn, contact_id)
+    _publish_contact_changed([contact_id], scope="profile_suggestion")
     return success_envelope(detail, request=request)
 
 

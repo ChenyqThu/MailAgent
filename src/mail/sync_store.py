@@ -5217,6 +5217,17 @@ class SyncStore:
                 return None
         if row is None:
             return None
+        # perf-sse-realtime R1-2: pref 写(图标/通知/AI 开关)即广播, 前端 ['folder']
+        # 前缀 invalidate (含 ['folder','prefs']) 让侧边栏/设置页即时同步。吞错。
+        try:
+            from src.events.publisher import safe_publish
+            safe_publish(
+                "folder.changed",
+                data={"action": "pref", "imap_name": imap_name},
+                source="sync_store.folder_pref",
+            )
+        except Exception:
+            pass
         return {
             "imap_name": row["imap_name"],
             "mailbox_label": row["mailbox_label"],
@@ -5266,12 +5277,24 @@ class SyncStore:
                         (child_new, decode_imap_utf7(child_new), child["imap_name"]),
                     )
                 conn.commit()
-                return (cur1.rowcount or 0) + len(children)
+                moved = (cur1.rowcount or 0) + len(children)
             except sqlite3.Error as e:
                 logger.warning(
                     f"[folder-pref] rename {old_imap!r}→{new_imap!r} failed: {e}"
                 )
                 return 0
+        if moved:
+            # 同 upsert_folder_pref: pref 行真的搬动了才广播 (无行迁移 = 无可见变化)。
+            try:
+                from src.events.publisher import safe_publish
+                safe_publish(
+                    "folder.changed",
+                    data={"action": "pref_rename", "imap_name": new_imap},
+                    source="sync_store.folder_pref",
+                )
+            except Exception:
+                pass
+        return moved
 
     def delete_folder_pref(self, imap_name: str) -> int:
         """文件夹被真删除后清掉 pref 行 (精确 + 子文件夹前缀)。返回删除行数。
@@ -5290,10 +5313,22 @@ class SyncStore:
                     (imap_name, imap_name + "/%"),
                 )
                 conn.commit()
-                return cur.rowcount or 0
+                deleted = cur.rowcount or 0
             except sqlite3.Error as e:
                 logger.warning(f"[folder-pref] delete {imap_name!r} failed: {e}")
                 return 0
+        if deleted:
+            # 同 upsert_folder_pref: 真删了行才广播。
+            try:
+                from src.events.publisher import safe_publish
+                safe_publish(
+                    "folder.changed",
+                    data={"action": "pref_delete", "imap_name": imap_name},
+                    source="sync_store.folder_pref",
+                )
+            except Exception:
+                pass
+        return deleted
 
     # ==================== v8: 置顶 / pin ====================
 
