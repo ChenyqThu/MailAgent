@@ -12,16 +12,28 @@
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
-import { Activity, AlertCircle, CheckCircle2, Database, RefreshCw, Trash2 } from 'lucide-react'
+import {
+  Activity,
+  AlertCircle,
+  CheckCircle2,
+  ChevronDown,
+  ChevronUp,
+  Database,
+  RefreshCw,
+  Send,
+  Trash2
+} from 'lucide-react'
 
-import type { DeadLetterItem } from '@shared/api/types'
+import type { AdminStatsData, DeadLetterItem } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
 import { cn } from '@shared/lib/cn'
 import { DavMailHealthCard } from '@shared/components/admin/DavMailHealthCard'
+import { SystemHealthRow } from '@shared/components/admin/SystemHealthRow'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { Loader } from '@shared/components/ui/loader'
 import { NumberTicker } from '@shared/components/ui/number-ticker'
+import { Sparkline } from '@shared/components/ui/sparkline'
 import { SkeletonRow } from '@shared/components/feedback/LoadingSkeleton'
 import {
   Dialog,
@@ -174,6 +186,151 @@ function StatusHistogram({ counts }: { counts: Record<string, number> }): React.
   )
 }
 
+/** 派发队列卡。三个量分别回答不同的问题：
+ *  by_status = 队列里有什么；by_target = 卡在哪一端（mailapp / notion）；
+ *  age_buckets = **pending 行**有多老（3 条卡了半小时比 30 条刚进队列糟得多）。 */
+function OutboxCard({
+  outbox
+}: {
+  outbox: NonNullable<AdminStatsData['outbox']>
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const byStatus = outbox.by_status ?? {}
+  const byTarget = Object.entries(outbox.by_target ?? {})
+  const ages = outbox.age_buckets ?? {}
+  const AGE_ORDER = ['lt_1m', 'lt_5m', 'lt_30m', 'gt_30m'] as const
+  const pending = byStatus['pending'] ?? 0
+  const failed = byStatus['failed'] ?? 0
+  const dead = byStatus['dead_letter'] ?? 0
+
+  return (
+    <section className="space-y-3" data-testid="admin-outbox">
+      <h2 className="text-lead text-ink-fg font-medium flex items-center gap-2">
+        <Send size={16} strokeWidth={1.75} className="text-coral" />
+        {t('admin.outbox.title')}
+      </h2>
+      {outbox._source === 'error' ? (
+        // 读失败要如实说 —— 画一排 0 会被当成「队列是空的」。
+        <div className="rounded-md border border-warn/30 bg-warn/10 p-3 text-aux text-warn">
+          {t('admin.outbox.unavailable')}
+          <span className="text-meta font-mono text-ink-fg-2 ml-2">{outbox._error}</span>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+            <StatCard label={t('admin.outbox.pending')} value={pending} />
+            <StatCard label={t('admin.outbox.processing')} value={byStatus['processing'] ?? 0} />
+            <StatCard
+              label={t('admin.outbox.failed')}
+              value={failed}
+              hint={failed > 0 ? t('admin.failureQueueHint') : undefined}
+            />
+            <StatCard label={t('admin.outbox.deadLetter')} value={dead} />
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
+              <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
+                {t('admin.outbox.ageDist')}
+              </div>
+              <div className="grid grid-cols-2 gap-x-3 gap-y-0.5 text-meta font-mono">
+                {AGE_ORDER.map((k) => (
+                  <div key={k} className="flex items-center justify-between">
+                    <span className="text-ink-fg-1">{t(`admin.outboxAge.${k}`)}</span>
+                    <span
+                      className={cn(
+                        'tabular-nums',
+                        // 半小时还没派出去 = 该看一眼 FanoutWorker 是不是停了。
+                        k === 'gt_30m' && (ages[k] ?? 0) > 0 ? 'text-fail' : 'text-ink-fg'
+                      )}
+                    >
+                      {(ages[k] ?? 0).toLocaleString('en-US')}
+                    </span>
+                  </div>
+                ))}
+              </div>
+              <div className="text-meta text-ink-fg-3 mt-2">{t('admin.outbox.ageHint')}</div>
+            </div>
+            <div className="rounded-md border border-coral/30 bg-coral/5 p-3">
+              <div className="text-micro font-mono uppercase text-ink-fg-2 mb-3">
+                {t('admin.outbox.byTarget')}
+              </div>
+              <div className="space-y-1.5">
+                {byTarget.length === 0 ? (
+                  <div className="text-meta text-ink-fg-3">—</div>
+                ) : (
+                  byTarget.map(([target, n]) => (
+                    <div key={target} className="flex items-center justify-between text-aux">
+                      <span className="text-ink-fg-1">{target}</span>
+                      <span className="font-mono tabular-nums text-ink-fg">
+                        {n.toLocaleString('en-US')}
+                      </span>
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+    </section>
+  )
+}
+
+/** v4 路由趋势：两条 sparkline（p99 与回落比例）+ 各自的最新值。
+ *  `p99_ms` 是每小时桶内**最大**的窗口 p99（对 p99 求平均没有意义）。 */
+function V4Trend({
+  trend,
+  hours
+}: {
+  trend: NonNullable<AdminStatsData['v4_rollout']>['trend']
+  hours: number
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const points = trend ?? []
+  // 一个点画不出趋势（一条竖线 / 一个孤点），如实说「快照还不够」。
+  if (points.length < 2) {
+    return (
+      <div className="rounded-md border border-coral/30 bg-coral/5 p-3 text-aux text-ink-fg-3">
+        {t('admin.v4TrendEmpty')}
+      </div>
+    )
+  }
+  const last = points[points.length - 1]
+  return (
+    <div
+      className="rounded-md border border-coral/30 bg-coral/5 p-3 space-y-3"
+      data-testid="v4-trend"
+    >
+      <div className="text-micro font-mono uppercase text-ink-fg-2">
+        {t('admin.v4Trend', { n: hours })}
+      </div>
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-aux">
+            <span className="text-ink-fg-1">{t('admin.v4TrendP99')}</span>
+            <span className="font-mono tabular-nums text-ink-fg">{last.p99_ms.toFixed(1)}ms</span>
+          </div>
+          <Sparkline points={points.map((p) => p.p99_ms)} className="text-coral" width={220} />
+        </div>
+        <div className="space-y-1">
+          <div className="flex items-center justify-between text-aux">
+            <span className="text-ink-fg-1">{t('admin.v4TrendFallback')}</span>
+            <span
+              className={cn(
+                'font-mono tabular-nums',
+                last.fallback_pct > 0 ? 'text-warn' : 'text-ink-fg'
+              )}
+            >
+              {last.fallback_pct.toFixed(1)}%
+            </span>
+          </div>
+          <Sparkline points={points.map((p) => p.fallback_pct)} className="text-warn" width={220} />
+        </div>
+      </div>
+    </div>
+  )
+}
+
 interface DeadLetterRowProps {
   item: DeadLetterItem
   onRetry: (id: number) => void
@@ -320,6 +477,8 @@ export function AdminPage(): React.ReactElement {
   const [deletePending, setDeletePending] = useState<Set<number>>(new Set())
   // Row awaiting the delete confirm dialog (null = dialog closed).
   const [deleteTarget, setDeleteTarget] = useState<DeadLetterItem | null>(null)
+  // 死信明细默认收起（正常态 0 条，展开只为排查）。
+  const [deadLetterOpen, setDeadLetterOpen] = useState(false)
 
   const healthQ = useQuery({
     queryKey: qk.admin.health(),
@@ -387,6 +546,7 @@ export function AdminPage(): React.ReactElement {
 
   const stats = statsQ.data?.sync_store
   const v4 = statsQ.data?.v4_rollout
+  const outbox = statsQ.data?.outbox
 
   return (
     <div className="px-6 py-5 space-y-6 min-h-full">
@@ -398,6 +558,10 @@ export function AdminPage(): React.ReactElement {
         </h1>
         {healthQ.data && <HealthPill healthy={healthQ.data.healthy} />}
       </header>
+
+      {/* 「健康一眼看」状态行 —— 与 /admin/llm 同一个组件同一份数据源（复用本页
+          已有的 health / stats / davmailHealth query key，不新开轮询）。 */}
+      <SystemHealthRow />
 
       {/* roadmap §4.5 — DavMail backend health (hidden when watchdog hasn't ticked) */}
       <DavMailHealthCard />
@@ -496,6 +660,10 @@ export function AdminPage(): React.ReactElement {
         </section>
       )}
 
+      {/* 派发队列 (outbox) —— 所有 mutating intent 的必经之路。数据一直在
+          admin stats 的返回体里，只是此前前端类型没声明 → 队列积压在 UI 上完全不可见。 */}
+      {outbox && <OutboxCard outbox={outbox} />}
+
       {/* v4 rollout — SQLite-SSoT routing performance */}
       {v4 && (v4.from_sqlite_hit > 0 || v4.fallback_miss > 0 || v4.fallback_error > 0) && (
         <section className="space-y-3">
@@ -513,10 +681,14 @@ export function AdminPage(): React.ReactElement {
               hint={v4._staleness_seconds ? `staleness ${v4._staleness_seconds}s` : undefined}
             />
           </div>
+          {/* 最新一条快照只是一个瞬时值，看不出「在变好还是变坏」；序列本来就在
+              v4_rollout_stats 里（60s 窗口一行），此前从没读过。 */}
+          <V4Trend trend={v4.trend ?? []} hours={v4.trend_hours ?? 24} />
         </section>
       )}
 
-      {/* Dead-letter queue */}
+      {/* Dead-letter queue —— 50 行明细改「计数 + 展开」：正常态是 0 条，把一张
+          可能 50 行的表铺在首屏挤掉上面所有指标，只为看一个多半是 0 的数。 */}
       <section className="space-y-3">
         <h2 className="text-lead text-ink-fg font-medium flex items-center gap-2">
           <AlertCircle
@@ -526,6 +698,25 @@ export function AdminPage(): React.ReactElement {
           />
           {t('admin.deadLetter')}
           <span className="text-meta font-mono text-ink-fg-2">({dlQ.data?.length ?? 0})</span>
+          {(dlQ.data?.length ?? 0) > 0 && (
+            <button
+              type="button"
+              onClick={(): void => setDeadLetterOpen((v) => !v)}
+              aria-expanded={deadLetterOpen}
+              data-testid="dead-letter-toggle"
+              className={cn(
+                'ml-auto inline-flex items-center gap-1 px-2 py-1 rounded text-aux',
+                'text-ink-fg-1 hover:text-ink-fg transition-colors duration-fast'
+              )}
+            >
+              {deadLetterOpen ? (
+                <ChevronUp size={13} strokeWidth={2} />
+              ) : (
+                <ChevronDown size={13} strokeWidth={2} />
+              )}
+              {t(deadLetterOpen ? 'admin.deadLetterCollapse' : 'admin.deadLetterExpand')}
+            </button>
+          )}
         </h2>
         <div className="rounded-md border border-coral/30 bg-coral/5 overflow-hidden">
           {dlQ.isLoading ? (
@@ -540,6 +731,17 @@ export function AdminPage(): React.ReactElement {
               title={t('admin.noDeadLetter')}
               hint={t('admin.noDeadLetterHint')}
             />
+          ) : !deadLetterOpen ? (
+            // 收起态仍然说清「有多少 / 最近一条多久前」—— 折叠的是明细，不是事实。
+            <div className="px-3 py-2.5 text-aux text-ink-fg-1 flex items-center gap-2 flex-wrap">
+              <span className="font-mono tabular-nums text-fail">{dlQ.data?.length ?? 0}</span>
+              <span>{t('admin.deadLetter')}</span>
+              {dlQ.data?.[0] && (
+                <span className="text-meta text-ink-fg-3">
+                  {t('admin.col.updated')} {formatRelative(dlQ.data[0].updated_at, t)}
+                </span>
+              )}
+            </div>
           ) : (
             <table className="w-full text-aux">
               <thead className="bg-ink-fg/[0.06]">

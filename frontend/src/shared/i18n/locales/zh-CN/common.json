@@ -1786,9 +1786,53 @@
     "statusDist": "状态分布",
     "byMailbox": "按邮箱",
     "v4Rollout": "v4 SQLite-SSoT 灰度",
+    "v4Trend": "近 {n} 小时趋势",
+    "v4TrendP99": "路由 p99",
+    "v4TrendFallback": "回落比例",
+    "v4TrendEmpty": "暂无足够的快照",
     "deadLetter": "死信队列",
     "noDeadLetter": "无死信邮件",
     "noDeadLetterHint": "所有同步失败的邮件已重试成功;系统运行正常",
+    "deadLetterExpand": "展开明细",
+    "deadLetterCollapse": "收起明细",
+    "healthRow": {
+      "title": "系统健康",
+      "backend": "后端",
+      "up": "正常",
+      "dbDown": "DB 不可读",
+      "unreachable": "不可达",
+      "dbVersion": "DB 版本",
+      "davmail": {
+        "ok": "正常",
+        "warning": "警告",
+        "critical": "严重",
+        "unknown": "未启动"
+      },
+      "deadLetter": "死信",
+      "outbox": "待派发",
+      "outboxHint": "email_outbox 里 pending 的条数与最老一条的年龄档",
+      "kosDead": "KOS 需人工",
+      "kosDeadHint": "全量口径,不随时间范围变",
+      "agentPending": "待审批",
+      "alerts": "严重告警"
+    },
+    "outbox": {
+      "title": "派发队列 (outbox)",
+      "pending": "待派发",
+      "processing": "派发中",
+      "failed": "失败",
+      "deadLetter": "死信",
+      "byTarget": "按目标 (不含已完成)",
+      "ageDist": "待派发年龄",
+      "ageHint": "只统计 pending 行",
+      "unavailable": "读取失败"
+    },
+    "outboxAge": {
+      "lt_1m": "<1m",
+      "lt_5m": "<5m",
+      "lt_30m": "<30m",
+      "gt_30m": ">30m"
+    },
     "col": {
       "subject": "标题",
       "sender": "发件人",
@@ -1813,6 +1857,13 @@
     "cacheTokens": "缓存 token",
     "cacheTokensCreation": "写入",
     "cacheTokensRead": "命中",
+    "byModel": "按模型拆分",
+    "byModelCol": {
+      "model": "模型",
+      "rows": "处理数",
+      "tokens": "token",
+      "latency": "平均耗时"
+    },
     "selftest": "Self-test",
     "selftestPending": "测试中…",
     "selftestOk": "网关健康",

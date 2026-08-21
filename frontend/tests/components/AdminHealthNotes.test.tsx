@@ -91,7 +91,9 @@ describe('AdminPage — E4 health notes', () => {
     deadLetterListFn.mockResolvedValue([])
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('v41')).toBeTruthy())
+    // 顶部健康行与下方 DB 版本卡都会渲染 v41（摘要 + 明细两层，task
+    // 08-20-perf-dashboards）→ 用 getAllByText 锚定「健康条已渲染」这件事。
+    await waitFor(() => expect(screen.getAllByText('v41').length).toBeGreaterThan(0))
     expect(screen.queryByText(i18n.t('admin.healthNotes'))).toBeNull()
   })
 
@@ -101,7 +103,7 @@ describe('AdminPage — E4 health notes', () => {
     deadLetterListFn.mockResolvedValue([])
     renderPage()
 
-    await waitFor(() => expect(screen.getByText('v41')).toBeTruthy())
+    await waitFor(() => expect(screen.getAllByText('v41').length).toBeGreaterThan(0))
     expect(screen.queryByText(/undefined/)).toBeNull()
   })
 
@@ -117,6 +119,8 @@ describe('AdminPage — E4 health notes', () => {
     // queryByText(...)===null straight away would pass against the loading skeleton.
     await waitFor(() => expect(screen.getByText('expected v41')).toBeTruthy())
     expect(screen.queryByText('vnull')).toBeNull()
-    expect(screen.getByText('—')).toBeTruthy()
+    // 顶部健康行也会给出「—」（db_version / 死信 / outbox 都取不到值），故这里
+    // 断言「至少有一个破折号」而不是「只有一个」——被测的事实是「没渲染成 vnull」。
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
   })
 })

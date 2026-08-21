@@ -254,6 +254,7 @@ async def llm_stats(
                 "days": days,
                 "since_ts": since_ts,
                 "cost": _zero_cost(),
+                "by_model": [],
                 "_source": "table_missing",
             }
             return success_envelope(data, request=request, source="sqlite")
@@ -295,6 +296,35 @@ async def llm_stats(
             "avg_latency_ms": int(cost_row["avg_ms"] or 0),
             "success_rows": rows_n,
         }
+
+        # task 08-20-perf-dashboards §2.6 — 按 model 拆分 (同一个窗口 + 同一个
+        # status='success' 口径, 只多一条 GROUP BY)。全表 rollup 回答「花了多少」,
+        # 这一段回答「花在谁身上」—— 换模型 / 加 fallback 后成本归属只能靠它。
+        # model 为空 (老行没记) → 归到 '(unknown)', 不丢行。
+        by_model_rows = conn.execute(
+            f"""SELECT COALESCE(NULLIF(model, ''), '(unknown)')  AS model,
+                       COUNT(*)                                   AS rows_n,
+                       COALESCE(SUM(input_tokens), 0)             AS in_tok,
+                       COALESCE(SUM(output_tokens), 0)            AS out_tok,
+                       COALESCE(SUM(cache_read_input_tokens), 0)  AS cache_read,
+                       COALESCE(AVG(latency_ms), 0)               AS avg_ms
+                  FROM llm_processing
+                 {where} {'AND' if where else 'WHERE'} status='success'
+                 GROUP BY 1
+                 ORDER BY in_tok + out_tok DESC""",
+            params,
+        ).fetchall()
+        by_model = [
+            {
+                "model": r["model"],
+                "rows": int(r["rows_n"]),
+                "input_tokens": int(r["in_tok"] or 0),
+                "output_tokens": int(r["out_tok"] or 0),
+                "cache_read_input_tokens": int(r["cache_read"] or 0),
+                "avg_latency_ms": int(r["avg_ms"] or 0),
+            }
+            for r in by_model_rows
+        ]
     finally:
         conn.close()
 
@@ -304,6 +334,7 @@ async def llm_stats(
         "days": days,
         "since_ts": since_ts,
         "cost": cost,
+        "by_model": by_model,
         "_source": "live_query",
     }
     return success_envelope(data, request=request, source="sqlite")

@@ -1786,9 +1786,53 @@
     "statusDist": "Status distribution",
     "byMailbox": "By mailbox",
     "v4Rollout": "v4 SQLite-SSoT rollout",
+    "v4Trend": "Last {n}h trend",
+    "v4TrendP99": "Route p99",
+    "v4TrendFallback": "Fallback rate",
+    "v4TrendEmpty": "Not enough snapshots yet",
     "deadLetter": "Dead-letter",
     "noDeadLetter": "No dead-letter emails",
     "noDeadLetterHint": "All sync failures recovered; the pipeline is healthy.",
+    "deadLetterExpand": "Show rows",
+    "deadLetterCollapse": "Hide rows",
+    "healthRow": {
+      "title": "System health",
+      "backend": "Backend",
+      "up": "Up",
+      "dbDown": "DB unreadable",
+      "unreachable": "Unreachable",
+      "dbVersion": "DB version",
+      "davmail": {
+        "ok": "OK",
+        "warning": "Warning",
+        "critical": "Critical",
+        "unknown": "Not started"
+      },
+      "deadLetter": "Dead-letter",
+      "outbox": "Outbox pending",
+      "outboxHint": "Pending rows in email_outbox and the age band of the oldest one",
+      "kosDead": "KOS manual",
+      "kosDeadHint": "All-time count; does not follow the range chips",
+      "agentPending": "Approvals",
+      "alerts": "Critical alerts"
+    },
+    "outbox": {
+      "title": "Dispatch queue (outbox)",
+      "pending": "Pending",
+      "processing": "Processing",
+      "failed": "Failed",
+      "deadLetter": "Dead-letter",
+      "byTarget": "By target (excludes done)",
+      "ageDist": "Pending age",
+      "ageHint": "Pending rows only",
+      "unavailable": "Read failed"
+    },
+    "outboxAge": {
+      "lt_1m": "<1m",
+      "lt_5m": "<5m",
+      "lt_30m": "<30m",
+      "gt_30m": ">30m"
+    },
     "col": {
       "subject": "Subject",
       "sender": "Sender",
@@ -1813,6 +1857,13 @@
     "cacheTokens": "Cache tokens",
     "cacheTokensCreation": "Write",
     "cacheTokensRead": "Hit",
+    "byModel": "By model",
+    "byModelCol": {
+      "model": "Model",
+      "rows": "Calls",
+      "tokens": "Tokens",
+      "latency": "Avg latency"
+    },
     "selftest": "Self-test",
     "selftestPending": "Testing…",
     "selftestOk": "Gateway healthy",

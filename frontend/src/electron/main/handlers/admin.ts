@@ -1,16 +1,22 @@
 // Sprint 6 §2.2 — admin dashboard IPC handlers.
 //
 // Surface for `/admin` route:
-//   - admin:health           — `mailagent admin health -o json` (read, no auth)
-//   - admin:stats            — `mailagent admin stats -o json` (read, no auth)
-//   - admin:deadLetterList   — `mailagent admin dead-letter list --limit N` (read)
+//   - admin:health           — GET /api/admin/health      (read, 本机 serve-api)
+//   - admin:stats            — GET /api/admin/stats       (read, 本机 serve-api)
+//   - admin:deadLetterList   — GET /api/admin/dead-letter (read, 本机 serve-api)
 //   - admin:deadLetterRetry  — `mailagent admin dead-letter retry <id>` (write+auth)
 //   - admin:deadLetterDelete — `mailagent admin dead-letter delete <id> --yes` (write+auth)
 //   - admin:cleanupDeadLetter — `mailagent admin cleanup-deadletter --older-than N`
 //                              + `--no-dry-run --yes` (write+auth)
 //
-// Read handlers return raw `data` (the CLI envelope is already unwrapped
-// by `callCli`). Write handlers return `WriteEnvelope<T>` so the renderer
+// 🔴 三个读 handler 走**常驻 serve-api loopback**（daemonRead，task
+// 08-20-perf-dashboards）而不是 fork CLI：一次 fork = Python 冷启 ~500ms-1s，且
+// `admin stats` 的 CLI 路径顺带跑 SyncStore.__init__ 的 129 条 CREATE IF NOT EXISTS
+// + 迁移梯（每刷新一次看板就跟 mail-sync 抢一次写锁）。serve-api 的对应端点是纯
+// SELECT，~5ms。IPC 面与返回形状不变，renderer 零改动。
+//
+// Read handlers return raw `data` (serve-api 的 envelope 已由 daemonRead 拆开)。
+// Write handlers return `WriteEnvelope<T>` so the renderer
 // gets the structured `{ ok, data | code+message+hint }` shape that
 // survives the IPC boundary (Sprint 5 §2.2 envelope contract).
 
@@ -21,10 +27,10 @@ import { basename, dirname } from 'path'
 import { TOKEN_CRITICAL_DAYS, TOKEN_WARN_DAYS } from '@shared/lib/davmailThresholds'
 import { callCli } from '../cli_runner'
 import type { AdminHealthData } from '@shared/api/types'
-import { getDb } from '../db'
+import { daemonRead } from '../daemon_api'
+import { getDb, resolveDbPath } from '../db'
 import { ensureInternalId, envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 
-const READ_TIMEOUT_MS = 15_000
 const WRITE_TIMEOUT_MS = 60_000
 
 /** Re-exported from the shared type (itself derived from admin-health.schema.json) instead of
@@ -74,11 +80,16 @@ export interface DeadLetterItem {
 }
 
 export async function runAdminHealth(): Promise<AdminHealthData> {
-  return (await callCli(['admin', 'health'], { timeoutMs: READ_TIMEOUT_MS })) as AdminHealthData
+  const data = await daemonRead<AdminHealthData>('/admin/health')
+  // 🔴 `db_path` 是 serve-api 有意 redact 的一个字段（C9「不回显绝对 db_path」——
+  // host 文件布局属于部署细节，远程 web 不该拿到）。桌面这一侧本来就知道路径，且
+  // AdminPage 的「可访问」卡片把它当 hint 渲染，所以在 main 进程本地补回，而不是
+  // 让它从桌面看板上凭空消失，也不是把它塞进 wire 让远程也拿到。
+  return { ...data, db_path: resolveDbPath() }
 }
 
 export async function runAdminStats(): Promise<AdminStatsData> {
-  return (await callCli(['admin', 'stats'], { timeoutMs: READ_TIMEOUT_MS })) as AdminStatsData
+  return daemonRead<AdminStatsData>('/admin/stats')
 }
 
 export interface DeadLetterListOpts {
@@ -87,14 +98,13 @@ export interface DeadLetterListOpts {
 }
 
 export async function runDeadLetterList(opts: DeadLetterListOpts = {}): Promise<DeadLetterItem[]> {
-  const args = ['admin', 'dead-letter', 'list']
-  if (opts.limit !== undefined) args.push('--limit', String(opts.limit))
-  if (opts.mailbox) args.push('--mailbox', opts.mailbox)
-  const out = await callCli(args, { timeoutMs: READ_TIMEOUT_MS })
-  // CLI returns either `[...]` directly (newer) or `{items: [...]}` shape
-  // depending on flag passthrough; normalize so the renderer always sees an
-  // array.
-  if (Array.isArray(out)) return out as DeadLetterItem[]
+  const query: Record<string, string> = {}
+  if (opts.limit !== undefined) query['limit'] = String(opts.limit)
+  if (opts.mailbox) query['mailbox'] = opts.mailbox
+  const out = await daemonRead<DeadLetterItem[]>('/admin/dead-letter', { query })
+  // serve-api 返回裸数组；仍保留 `{items: [...]}` 归一（这道兜底跟着数据形状走，
+  // 不跟着传输端走，且它挡的是「上游改形状」而不是「CLI 特有的 flag 透传」）。
+  if (Array.isArray(out)) return out
   if (out && typeof out === 'object' && Array.isArray((out as { items?: unknown }).items)) {
     return (out as { items: DeadLetterItem[] }).items
   }

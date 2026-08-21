@@ -31,6 +31,7 @@ from src.cli.output import apply_local_output, emit, emit_cli_error
 # imap_uidvalidity/backend_origin 三列). 导入而非硬编码, 后续 ALTER TABLE 升版本时不会漏改 CLI 端.
 from src.mail.sync_store import SyncStore as _SyncStore
 from src.services import admin_health as _health
+from src.services import admin_stats as _admin_stats
 
 if TYPE_CHECKING:
     from src.cli.context import CliContext
@@ -141,52 +142,12 @@ def admin_stats(
 
 
 def _build_v4_rollout_section(cli: "CliContext") -> dict:
-    """读最新 v4_rollout_stats 行 + staleness 判定 (PR-4 R-06).
+    """读最新 v4_rollout_stats 行 + staleness 判定 + 近 24h 趋势 (PR-4 R-06).
 
-    返回值:
-        无数据时 ``{_source: 'no_data_yet'}``
-        有数据时 含 from_sqlite_hit / fallback_miss / fallback_error /
-        route_latency_p99_ms / body_miss_internal_ids / _snapshot_at /
-        _staleness_seconds / _warn_stale (when > 300)
+    组装体单源在 ``src.services.admin_stats`` —— 桌面看板已改走 serve-api 取这份
+    数据 (task 08-20-perf-dashboards), 两个传输端必须给同一份 section。
     """
-    import time as _time
-
-    try:
-        store = cli.sync_store
-        latest = store.get_latest_v4_rollout()
-    except Exception as exc:  # pragma: no cover - DB 异常
-        return {
-            "_source": "error",
-            "_error": f"{type(exc).__name__}: {exc}",
-        }
-
-    if latest is None:
-        return {
-            "_source": "no_data_yet",
-            "_hint": "PM2 mail-sync 启动后约 1 min 会写第一条快照",
-        }
-
-    flushed_at = latest.get("flushed_at", 0)
-    now = _time.time()
-    staleness = max(0, int(now - flushed_at)) if flushed_at else None
-
-    out = {
-        "from_sqlite_hit": latest.get("from_sqlite_hit", 0),
-        "fallback_miss": latest.get("fallback_miss", 0),
-        "fallback_error": latest.get("fallback_error", 0),
-        "route_latency_p99_ms": latest.get("route_latency_p99_ms", 0.0),
-        "body_miss_internal_ids": latest.get("body_miss_internal_ids", []),
-        "window_seconds": latest.get("window_seconds", 60),
-        "_snapshot_at": flushed_at,
-        "_staleness_seconds": staleness,
-        "_source": "stats_reporter_last_snapshot",
-    }
-    if staleness is not None and staleness > 300:
-        out["_warn_stale"] = (
-            f"Last snapshot is {staleness}s old (> 300s threshold); "
-            f"check if mail-sync watcher / flush loop is alive"
-        )
-    return out
+    return _admin_stats.build_v4_rollout_section(cli.cli_config.sync_store_db_path)
 
 
 def _render_stats_text(data: dict) -> None:
@@ -1337,24 +1298,12 @@ app.add_typer(config_app, name="config")
 
 
 def _build_outbox_section(cli: "CliContext") -> dict:
-    """OutboxRepository.get_stats() → admin stats outbox section."""
-    try:
-        from src.sync.outbox import OutboxRepository
-        cfg = cli.cli_config
-        repo = OutboxRepository(cfg.sync_store_db_path)
-        stats = repo.get_stats()
-        return {
-            "_source": "live_query",
-            "total": stats.total,
-            "by_status": stats.by_status,
-            "by_target": stats.by_target,
-            "age_buckets": stats.age_buckets,
-        }
-    except Exception as exc:
-        return {
-            "_source": "error",
-            "_error": f"{type(exc).__name__}: {exc}",
-        }
+    """OutboxRepository.get_stats() → admin stats outbox section.
+
+    组装体单源在 ``src.services.admin_stats`` (与 v4_rollout 同一个理由: serve-api
+    要出同一份 section 给桌面看板)。
+    """
+    return _admin_stats.build_outbox_section(cli.cli_config.sync_store_db_path)
 
 
 @app.command("fts-health")

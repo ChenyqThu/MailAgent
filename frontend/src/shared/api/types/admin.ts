@@ -41,8 +41,36 @@ export interface AdminStatsData {
     route_latency_p99_ms: number
     body_miss_internal_ids: number[]
     window_seconds: number
+    /** 近 `trend_hours` 小时的按小时分桶序列（`v4_rollout_stats` 早就有 60s 窗口行，
+     *  此前只取最新一条 → 一个孤零零的瞬时值看不出「在变好还是变坏」）。
+     *  `p99_ms` 是桶内**最大**的窗口 p99（对 p99 求平均没意义）。 */
+    trend?: Array<{
+      /** 桶起点 epoch **秒**。 */
+      bucket_start: number
+      p99_ms: number
+      /** (fallback_miss + fallback_error) / 总路由数 × 100。 */
+      fallback_pct: number
+      samples: number
+    }>
+    trend_hours?: number
     _staleness_seconds?: number
     _source?: string
+  }
+  /** Sprint 15 `email_outbox` 队列分布。两个生产者（CLI `admin stats` /
+   *  serve-api `GET /api/admin/stats`）自始至终都在返回它，只是这个类型以前没声明
+   *  → 看板拿不到，「有没有 intent 卡在队列里」这件事在 UI 上完全不可见。
+   *  组装体单源 `src/services/admin_stats.py::build_outbox_section`。 */
+  outbox?: {
+    /** 台账全部行数（含 done）。 */
+    total?: number
+    /** pending / processing / done / failed / dead_letter；键可能缺席，按 0 处理。 */
+    by_status?: Record<string, number>
+    /** 仅 pending/processing/failed 的 mailapp / notion 分布（done 不计）。 */
+    by_target?: Record<string, number>
+    /** **pending 行**的年龄分布：lt_1m / lt_5m / lt_30m / gt_30m。 */
+    age_buckets?: Record<string, number>
+    _source?: string
+    _error?: string
   }
 }
 

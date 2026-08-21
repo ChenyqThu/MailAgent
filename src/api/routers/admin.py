@@ -36,6 +36,7 @@ from src.mail.davmail_watchdog import (
     LOGIN_FAIL_THRESHOLD as _watchdog_login_fail_threshold,
 )
 from src.services import admin_health as _health
+from src.services import admin_stats as _admin_stats
 from src.services.admin_service import AdminService
 from src.services.errors import ServiceError
 from src.services.guards import Actor
@@ -263,21 +264,28 @@ async def admin_stats(
     _: None = Depends(verify_cf_access),
     repo: "EmailRepository" = Depends(get_repository),
 ):
-    """邮件 sync_status 分布等运行统计 (镜像 ``mailagent admin stats`` 的 sync_store section)。
+    """邮件 sync_status 分布等运行统计 (镜像 ``mailagent admin stats``)。
 
-    返回 data = {sync_store: {total_emails, by_status, by_mailbox, failure_queue,
-    last_max_row_id, last_sync_time, db_size_mb, db_size_bytes, _source}} (AdminStatsData
-    / admin-stats.schema.json)。watcher / handlers / v4_rollout / outbox 等 section 不在
-    本次范围 (前端 admin.stats 只刚需 sync_store 分布)。
+    返回 data = {sync_store: {...}, v4_rollout: {...}, outbox: {...}} (AdminStatsData
+    / admin-stats.schema.json)。watcher / handlers 两段 CLI 侧至今是
+    ``not_implemented_in_pr2`` 占位, 无数据可给, 故本端点不发。
 
-    C6 (read endpoint must not mutate): **不再实例化 SyncStore** —— 其 __init__ 会跑
+    v4_rollout / outbox 两段 (task 08-20-perf-dashboards) 与 CLI **同一个组装体**
+    ``src.services.admin_stats`` —— 桌面看板已从 fork CLI 改走本端点, 少一段就是看板上
+    少一块卡。
+
+    C6 (read endpoint must not mutate): **不实例化 SyncStore** —— 其 __init__ 会跑
     _ensure_directory() + _init_database() (CREATE TABLE IF NOT EXISTS / 迁移 / 写
-    db_version), 等于 GET 读端点改 schema 并与 mail-sync 争写锁。改为经 ``repo._connect()``
-    (与其它读端点同源, 短命只读连接) 直查, 复刻 SyncStore.get_stats() 的纯 SELECT,
-    不触发任何 DDL/migration。表缺失 (trimmed 库) → 与 get_stats 一致汇成 0, 不抛。
+    db_version), 等于 GET 读端点改 schema 并与 mail-sync 争写锁。sync_store 段经
+    ``repo._connect()`` (与其它读端点同源, 短命只读连接) 直查, 复刻 SyncStore.get_stats()
+    的纯 SELECT; 另两段同样只跑 SELECT (admin_stats 模块自带只读约束)。表缺失
+    (trimmed 库) → 汇成 0 / 结构化占位, 不抛。
     """
-    sync_store_section = _read_sync_store_section(repo)
-    data = {"sync_store": sync_store_section}
+    data = {
+        "sync_store": _read_sync_store_section(repo),
+        "v4_rollout": _admin_stats.build_v4_rollout_section(repo.db_path),
+        "outbox": _admin_stats.build_outbox_section(repo.db_path),
+    }
     return success_envelope(data, request=request, source="sqlite")
 
 

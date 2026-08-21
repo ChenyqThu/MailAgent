@@ -5,7 +5,8 @@
 //
 // 🔴 门控照 DavMailHealthCard 先例（admin/DavMailHealthCard.tsx:78-90）：
 //   ① 返回类型 `React.ReactElement | null`，gate 封在组件内，父组件无条件挂一行；
-//   ② 先 `isLoading || !data` 再判 gate —— loading 期也 null，不闪空壳；
+//   ② 先判「有没有数据」再判 gate —— 门控没到手时不渲染内容，不闪空壳。唯一例外是
+//      上一轮已知 gate=active 的机器（换 range 那一下），给占位骨架保住高度；
 //   ③ **判据在后端算**，前端只读 `data.gate` 这一个三态值，不自己拼（不去数缺了哪个键）。
 //
 // 🔴 issue #64：gate 不满足**不再一律隐藏**。原本 `if (!data.enabled) return null` 让
@@ -29,16 +30,36 @@
 // 图表沿用本页既有纪律：手搓 SVG，不引 recharts / d3。
 
 import { useTranslation } from 'react-i18next'
-import { useQuery } from '@tanstack/react-query'
+import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from '@tanstack/react-query'
 import { AlertTriangle, Database } from 'lucide-react'
 
-import type { KosIngestGate } from '@shared/api/types'
+import type { KosIngestGate, KosStatsData } from '@shared/api/types'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
-import { cn } from '@shared/lib/cn'
 import { NumberTicker } from '@shared/components/ui/number-ticker'
+import { Sparkline } from '@shared/components/ui/sparkline'
+import { SkeletonCard } from '@shared/components/feedback/LoadingSkeleton'
 
 import { StatCard } from './StatCard'
+
+/** 三态门控的唯一解析处。后端不守约（`gate` 字段缺席）时退回 `enabled` 的老语义 ——
+ *  宁可少说也不误报（同下方 healthOk 的 typeof guard 纪律）。 */
+function resolveGate(data: KosStatsData): KosIngestGate {
+  return data.gate ?? (data.enabled ? 'active' : 'flag_off')
+}
+
+/** 这台机器**上一轮**（任意 range）拿到的 gate，直接读缓存不发请求。
+ *
+ *  两个用途（task 08-20-perf-dashboards）：
+ *   - `flag_off` → 换 range / 重挂载都不再发请求、不再轮询。入库默认关 = 绝大多数
+ *     机器，它们此前每 60s 白烧一次取数，而整区一行 DOM 都不渲染。
+ *   - `active`  → 冷启那一下渲染占位骨架而不是整区消失（下方 §① 的判据）。 */
+function cachedGate(qc: QueryClient): KosIngestGate | null {
+  for (const [, data] of qc.getQueriesData<KosStatsData>({ queryKey: qk.kos.stats() })) {
+    if (data) return resolveGate(data)
+  }
+  return null
+}
 
 function fmtNumber(n: number): string {
   return n.toLocaleString('en-US')
@@ -59,39 +80,6 @@ function fmtAgo(ts: number | null | undefined): string | null {
   if (sec < 3600) return `${Math.floor(sec / 60)}m`
   if (sec < 86400) return `${Math.floor(sec / 3600)}h`
   return `${Math.floor(sec / 86400)}d`
-}
-
-/** 按天 pushed 序列的迷你折线。空序列渲染一条基线，保持卡片高度稳定。 */
-function Sparkline({
-  points,
-  className
-}: {
-  points: number[]
-  className?: string
-}): React.ReactElement {
-  const w = 120
-  const h = 28
-  const max = Math.max(1, ...points)
-  const step = points.length > 1 ? w / (points.length - 1) : w
-  const d =
-    points.length === 0
-      ? `M0 ${h} L${w} ${h}`
-      : points
-          .map(
-            (v, i) =>
-              `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)} ${(h - (v / max) * h).toFixed(1)}`
-          )
-          .join(' ')
-  return (
-    <svg
-      width={w}
-      height={h}
-      viewBox={`0 0 ${w} ${h}`}
-      className={cn('overflow-visible', className)}
-    >
-      <path d={d} fill="none" stroke="currentColor" strokeWidth={1.5} strokeLinejoin="round" />
-    </svg>
-  )
 }
 
 /** 区标题。两个分支（正常 / 缺凭据）共用，保证「区块还在」这件事一眼可见。
@@ -146,24 +134,50 @@ function GateMissingNotice({ missingKeys }: { missingKeys: string[] }): React.Re
   )
 }
 
+/** 已知这台机器有入库区、但当前 range 的数据还没到手时的占位（四张卡的高度）。
+ *  不画标题也不给 `kos-ingest-section` testid —— 它不是「区渲染出来了」。 */
+function IngestSkeleton(): React.ReactElement {
+  return (
+    <section className="space-y-3" aria-hidden data-testid="kos-ingest-skeleton">
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+        <SkeletonCard />
+      </div>
+    </section>
+  )
+}
+
 export function KosIngestSection({ days }: { days: number }): React.ReactElement | null {
   const { t } = useTranslation()
   const mailApi = useMailApi()
+  const qc = useQueryClient()
+  // 已知这台机器没开入库 → 连请求都不发（enabled=false 会让新 range 的 key 保持无
+  // 数据，下面 §① 照旧整区不渲染）。第一轮响应回来后 useQuery 的订阅会触发重渲染，
+  // 这里就读得到缓存里的 gate 了。
+  const ingestOff = cachedGate(qc) === 'flag_off'
 
   const statsQ = useQuery({
     queryKey: qk.kos.statsDays(days),
     queryFn: () => mailApi.kos.stats(days),
     staleTime: 30_000,
-    refetchInterval: 60_000
+    enabled: !ingestOff,
+    refetchInterval: ingestOff ? false : 60_000,
+    // 换 range 时留旧数据 + 后台刷新，整区不再卸载重来（同 LlmDashboardPage）。
+    placeholderData: keepPreviousData
   })
 
-  // ① loading / 无数据（含取数失败）→ null。放在 gate 之前：门控还没到手
-  //    时任何渲染都可能是在给未启用的机器画空壳。
-  if (statsQ.isLoading || !statsQ.data) return null
+  // ① 还没有数据（真·冷启 / 取数失败）→ 判据是「这台机器到底有没有这块区」：
+  //    - 上一轮已知 active（换 range、5 分钟内重进）→ 占位骨架，保住高度不塌版；
+  //    - 一无所知（首次进入）→ 仍整区不渲染。入库默认关 = 绝大多数机器，给它们
+  //      先闪一块骨架再抹掉，比什么都不显示更糟。
+  if (!statsQ.data) {
+    return cachedGate(qc) === 'active' ? <IngestSkeleton /> : null
+  }
   const data = statsQ.data
-  // ② 门控三态。后端不守约（字段缺席）时退回修复前的行为，而不是把整区当成缺凭据 ——
-  //    宁可少说也不误报（同下方 healthOk 的 typeof guard 纪律）。
-  const gate: KosIngestGate = data.gate ?? (data.enabled ? 'active' : 'flag_off')
+  // ② 门控三态（解析见 resolveGate）。
+  const gate: KosIngestGate = resolveGate(data)
   // ③ 用户没开入库 → 整区一行 DOM 都不渲染（默认关的机器不该多出一块东西）。
   if (gate === 'flag_off') return null
   // ④ 开着但凭据缺 → 显因，不再静默消失（issue #64）。

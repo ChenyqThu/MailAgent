@@ -124,6 +124,7 @@
 - **serve-api 崩溃自拉起（`backend_lifecycle.ts`）**：指数退避 re-spawn（1→2→5→10→30s）+ crash-loop 断路器（`MAX_CRASH_RESTARTS=5`）。serve-api 保持软门控（不升级硬依赖）。
 - **async_jobs（C1，`src/sync/`）**：长任务（batch_resync/backfill）不复用 outbox（outbox=字段级 merge intent；job=带 checkpoint/熔断/进度的过程）。`POST /api/jobs` enqueue 幂等（`ON CONFLICT(idempotency_key) DO NOTHING`）+ `GET /api/jobs/{id}` 查询 + `job.*` SSE 进度。执行进程 = **serve**（非 serve-api，长任务不依赖软门控端点）。
 - **前端 daemon 转发（D1）**：`daemon_api.daemonRequest` 复用 web SPA 同款 `http_client.request` + 注入本地 token；`write_ops.ts` 6 forwarder + `draft.ts` 3 compose forwarder **mirror HttpApi**；renderer 走 IPC 零改动。
+- **仪表盘读也走 daemon（task 08-20-perf-dashboards）**：`daemon_api.daemonRead`（GET + 传输层失败重试恰一次，**不回落 CLI**）接管 `llm:stats` / `kos:stats` / `admin:health` / `admin:stats` / `admin:deadLetterList` 五个读 IPC。此前它们每次取数 fork 一个 `mailagent`（Python 冷启 ~500ms-1s），且 `admin stats` 的 CLI 路径顺带跑 `SyncStore.__init__` 的 129 条 `CREATE IF NOT EXISTS` + 迁移梯 —— 每刷新一次看板就跟 mail-sync 抢一次写锁。`llm:selftest` **有意留在 CLI**（主动按钮、低频、30s gateway 往返）。配套：`GET /api/admin/stats` 补齐 `v4_rollout` / `outbox` 两段（组装体单源 `src/services/admin_stats.py`，CLI 同源），否则换传输端会让看板少两块卡。
 
 ## 关键文件地图
 

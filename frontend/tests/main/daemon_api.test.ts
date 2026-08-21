@@ -21,7 +21,7 @@ vi.mock('../../src/electron/main/local_token', () => ({
   LOCAL_TOKEN_HEADER: 'X-MailAgent-Local-Token'
 }))
 
-import { daemonRequest, daemonRequestWithMeta } from '../../src/electron/main/daemon_api'
+import { daemonRead, daemonRequest, daemonRequestWithMeta } from '../../src/electron/main/daemon_api'
 
 beforeEach(() => {
   mockRequest.mockReset()
@@ -124,5 +124,47 @@ describe('daemonRequestWithMeta — baseUrl + 本地 token header + meta 透传'
     const apiErr = Object.assign(new Error('flag off'), { code: 'E_NOT_FOUND' })
     mockRequestWithMeta.mockRejectedValueOnce(apiErr)
     await expect(daemonRequestWithMeta('GET', '/agent-runs')).rejects.toBe(apiErr)
+  })
+})
+
+// task 08-20-perf-dashboards — daemonRead：仪表盘五个读 IPC 的传输端。
+// 唯一新增的失败模式是「serve-api 正在重启」，故传输层失败重试恰一次；业务错误
+// 不重试（重一次结果一样，只把看板的错误态往后拖）。
+describe('daemonRead — GET + 传输层失败重试恰一次', () => {
+  test('成功路径：一次 GET，返回 data 原样', async () => {
+    mockRequest.mockResolvedValueOnce({ healthy: true })
+    const out = await daemonRead('/admin/health')
+    expect(mockRequest).toHaveBeenCalledTimes(1)
+    expect(mockRequest).toHaveBeenCalledWith(
+      'http://127.0.0.1:8200/api',
+      'GET',
+      '/admin/health',
+      expect.objectContaining({ headers: { 'X-MailAgent-Local-Token': 'test-token-abc' } })
+    )
+    expect(out).toEqual({ healthy: true })
+  })
+
+  test('E_NETWORK → 重试一次；第二次成功就当没发生过', async () => {
+    mockRequest.mockRejectedValueOnce(
+      Object.assign(new Error('ECONNREFUSED'), { code: 'E_NETWORK' })
+    )
+    mockRequest.mockResolvedValueOnce({ total: 1 })
+    const out = await daemonRead('/admin/stats')
+    expect(mockRequest).toHaveBeenCalledTimes(2)
+    expect(out).toEqual({ total: 1 })
+  })
+
+  test('E_NETWORK 连着两次 → 抛出，不再试第三次（不引 CLI fallback）', async () => {
+    const err = Object.assign(new Error('ECONNREFUSED'), { code: 'E_NETWORK' })
+    mockRequest.mockRejectedValue(err)
+    await expect(daemonRead('/admin/stats')).rejects.toBe(err)
+    expect(mockRequest).toHaveBeenCalledTimes(2)
+  })
+
+  test('业务错误 (E_INVALID_ARG) 不重试', async () => {
+    const err = Object.assign(new Error('days 0 invalid'), { code: 'E_INVALID_ARG' })
+    mockRequest.mockRejectedValueOnce(err)
+    await expect(daemonRead('/llm/stats', { query: { days: '0' } })).rejects.toBe(err)
+    expect(mockRequest).toHaveBeenCalledTimes(1)
   })
 })

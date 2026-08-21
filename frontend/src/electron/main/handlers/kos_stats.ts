@@ -1,18 +1,16 @@
 // issue #59 R7 — KOS 入库台账 IPC handler (read-only).
 //
 // Surface for the `/llm` dashboard's「知识库入库」section:
-//   - kos:stats — `mailagent kos stats --days N -o json` (read, no auth)
+//   - kos:stats — GET /api/kos/stats?days=N (read, 本机 serve-api)
 //
-// Mirrors handlers/llm_stats.ts one-for-one: same clamp, same read timeout,
-// same "the CLI owns the aggregation" division of labour. The SQL lives once
-// in `src/kos/stats.py`; CLI and serve-api both call it, so the desktop and
-// remote-web dashboards can't drift.
+// Mirrors handlers/llm_stats.ts one-for-one: same clamp, same transport
+// (daemonRead → 常驻 serve-api, task 08-20-perf-dashboards; 此前 fork CLI, 与
+// llm:stats 并发两次 Python 冷启 = /llm 挂载即 ~1s)。聚合 SQL 只有一份, 在
+// `src/kos/stats.py`; CLI 与 serve-api 都调它, 桌面与远程 web 看板不会漂移。
 
 import { ipcMain } from 'electron'
 
-import { callCli } from '../cli_runner'
-
-const READ_TIMEOUT_MS = 15_000
+import { daemonRead } from '../daemon_api'
 
 /** `sync_state` 的 `kos.health.*` 投影; 从未探活过 → 整个对象为 null。
  *  渲染侧不要只判 null —— 上游曾返回「对象在、字段全 null」的形状。 */
@@ -73,12 +71,10 @@ export interface KosStatsData {
 }
 
 export async function runKosStats(days = 7): Promise<KosStatsData> {
-  // Clamp to the CLI-supported range (1..365) up front — same reasoning as
-  // llm:stats: the backend would error anyway, no point burning a subprocess.
+  // Clamp to the backend-supported range (1..365) up front — same reasoning as
+  // llm:stats: days=0 是 E_INVALID_ARG, 夹一下就不用把这个错误摆到看板上。
   const d = Math.max(1, Math.min(365, Math.floor(days)))
-  return (await callCli(['kos', 'stats', '--days', String(d)], {
-    timeoutMs: READ_TIMEOUT_MS
-  })) as KosStatsData
+  return daemonRead<KosStatsData>('/kos/stats', { query: { days: String(d) } })
 }
 
 export function registerKosStatsHandlers(): void {

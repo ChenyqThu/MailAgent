@@ -1,16 +1,19 @@
 // Sprint 6 §2.2 — admin IPC handler contract.
 //
-// Mocks `callCli` to exercise:
-//   - argv shape for health / stats / dead-letter list / retry / cleanup
-//   - read commands carry no auth + cap at 15s timeout
+// Mocks `callCli` + `daemonRead` to exercise:
+//   - 读 (health / stats / dead-letter list) 走本机 serve-api 的端点与 query
+//   - argv shape for dead-letter retry / delete / cleanup (写仍走 CLI)
 //   - dead-letter retry flips to write+auth
 //   - envelope shape on success / CliError / unknown rejection
-//   - deadLetterList normalizes both `[...]` and `{items: [...]}` CLI shapes
+//   - deadLetterList normalizes both `[...]` and `{items: [...]}` shapes
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import Database from 'better-sqlite3'
 
-const { mockCallCli } = vi.hoisted(() => ({ mockCallCli: vi.fn() }))
+const { mockCallCli, mockDaemonRead } = vi.hoisted(() => ({
+  mockCallCli: vi.fn(),
+  mockDaemonRead: vi.fn()
+}))
 
 vi.mock('../../src/electron/main/cli_runner', async () => {
   const actual = await vi.importActual<typeof import('../../src/electron/main/cli_runner')>(
@@ -18,6 +21,8 @@ vi.mock('../../src/electron/main/cli_runner', async () => {
   )
   return { ...actual, callCli: mockCallCli }
 })
+
+vi.mock('../../src/electron/main/daemon_api', () => ({ daemonRead: mockDaemonRead }))
 
 // runDavmailHealth/runSystemAlerts 直读 better-sqlite3 (不走 callCli) — 换成
 // in-memory fixture db (contact_suggest.test.ts 同款套路)。
@@ -43,44 +48,72 @@ import {
 
 beforeEach(() => {
   mockCallCli.mockReset()
+  mockDaemonRead.mockReset()
 })
 
 afterEach(() => {
   vi.restoreAllMocks()
 })
 
-describe('admin handlers — read', () => {
-  test('runAdminHealth forwards no flags + 15s timeout', async () => {
-    mockCallCli.mockResolvedValue({ healthy: true } as unknown)
+// task 08-20-perf-dashboards — 三个读 handler 改走本机 serve-api (daemonRead)。
+// 断言「打了哪个端点」+「一次 CLI fork 都没有」：后者才是这批的收益本体
+// (fork = Python 冷启 ~500ms-1s, 且 admin stats 的 CLI 路径顺带跑 129 条
+// CREATE IF NOT EXISTS 抢 mail-sync 的写锁)。
+describe('admin handlers — read (serve-api loopback)', () => {
+  test('runAdminHealth 打 GET /admin/health, 不 fork CLI', async () => {
+    mockDaemonRead.mockResolvedValue({ healthy: true } as unknown)
     await runAdminHealth()
-    expect(mockCallCli).toHaveBeenCalledWith(['admin', 'health'], { timeoutMs: 15_000 })
+    expect(mockDaemonRead).toHaveBeenCalledWith('/admin/health')
+    expect(mockCallCli).not.toHaveBeenCalled()
   })
 
-  test('runAdminStats forwards no flags + 15s timeout', async () => {
-    mockCallCli.mockResolvedValue({})
+  test('runAdminHealth 本地补回 serve-api 有意 redact 的 db_path', async () => {
+    mockDaemonRead.mockResolvedValue({ healthy: true } as unknown)
+    const out = await runAdminHealth()
+    // C9: web 面不回显绝对路径; 桌面这侧自己知道, AdminPage 的「可访问」卡把它当
+    // hint 渲染 —— 换传输端不该让它凭空消失。
+    expect(out.db_path).toBe(':memory:')
+  })
+
+  test('runAdminStats 打 GET /admin/stats, 不 fork CLI', async () => {
+    mockDaemonRead.mockResolvedValue({})
     await runAdminStats()
-    expect(mockCallCli).toHaveBeenCalledWith(['admin', 'stats'], { timeoutMs: 15_000 })
+    expect(mockDaemonRead).toHaveBeenCalledWith('/admin/stats')
+    expect(mockCallCli).not.toHaveBeenCalled()
   })
 
-  test('runDeadLetterList composes --limit + --mailbox', async () => {
-    mockCallCli.mockResolvedValue([])
+  test('runDeadLetterList 把 limit / mailbox 转成 query', async () => {
+    mockDaemonRead.mockResolvedValue([])
     await runDeadLetterList({ limit: 25, mailbox: '收件箱' })
-    expect(mockCallCli).toHaveBeenCalledWith(
-      ['admin', 'dead-letter', 'list', '--limit', '25', '--mailbox', '收件箱'],
-      { timeoutMs: 15_000 }
-    )
+    expect(mockDaemonRead).toHaveBeenCalledWith('/admin/dead-letter', {
+      query: { limit: '25', mailbox: '收件箱' }
+    })
+  })
+
+  test('runDeadLetterList 无参 → 空 query (让后端用默认 limit)', async () => {
+    mockDaemonRead.mockResolvedValue([])
+    await runDeadLetterList()
+    expect(mockDaemonRead).toHaveBeenCalledWith('/admin/dead-letter', { query: {} })
   })
 
   test('runDeadLetterList normalizes {items} wrapper shape', async () => {
-    mockCallCli.mockResolvedValue({ items: [{ internal_id: 1, subject: 'x' }] })
+    mockDaemonRead.mockResolvedValue({ items: [{ internal_id: 1, subject: 'x' }] })
     const out = await runDeadLetterList({ limit: 5 })
     expect(out).toEqual([{ internal_id: 1, subject: 'x' }])
   })
 
-  test('runDeadLetterList returns [] when CLI returns malformed object', async () => {
-    mockCallCli.mockResolvedValue({ not_items: 1 })
+  test('runDeadLetterList returns [] on malformed object', async () => {
+    mockDaemonRead.mockResolvedValue({ not_items: 1 })
     const out = await runDeadLetterList()
     expect(out).toEqual([])
+  })
+
+  test('serve-api 不可达 → 原样抛, 不静默回落 CLI', async () => {
+    mockDaemonRead.mockRejectedValue(
+      Object.assign(new Error('connect ECONNREFUSED'), { code: 'E_NETWORK' })
+    )
+    await expect(runAdminStats()).rejects.toThrow('connect ECONNREFUSED')
+    expect(mockCallCli).not.toHaveBeenCalled()
   })
 })
 

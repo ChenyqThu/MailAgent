@@ -1,8 +1,14 @@
 // Sprint 6 §2.2 — LLM dashboard IPC handlers (read-only).
 //
 // Surface for `/llm` route:
-//   - llm:stats     — `mailagent llm stats --days N -o json` (read, no auth)
+//   - llm:stats     — GET /api/llm/stats?days=N (read, 本机 serve-api)
 //   - llm:selftest  — `mailagent llm selftest -o json` (read, no auth, no token)
+//
+// 🔴 stats 走**常驻 serve-api loopback**（daemonRead，task 08-20-perf-dashboards）:
+// 看板挂载 + 60s 轮询 + 每次换 7d/30d/90d 都取一次，走 CLI 就是每次 fork 一个
+// Python（冷启 ~500ms-1s）。serve-api 那侧是同一份 SQL 的纯 SELECT，~5ms。
+// selftest **有意留在 CLI**：主动按钮、低频、要跑真实 gateway 往返（30s timeout），
+// fork 开销在它面前可以忽略。
 //
 // Distinct from `llm:run` (handlers/write_ops.ts) which is a write op for
 // a single email re-run; that channel stays as-is. Dashboard only needs
@@ -12,9 +18,9 @@
 import { ipcMain } from 'electron'
 
 import { callCli } from '../cli_runner'
+import { daemonRead } from '../daemon_api'
 import type { LlmSelfTestData, LlmStatsData } from '@shared/api/types/llm'
 
-const READ_TIMEOUT_MS = 15_000
 const SELFTEST_TIMEOUT_MS = 30_000
 
 /** `mailagent llm stats -o json` data block. Re-exported from the shared type rather than
@@ -30,12 +36,10 @@ export type { LlmStatsData }
 export type { LlmSelfTestData }
 
 export async function runLlmStats(days = 7): Promise<LlmStatsData> {
-  // Clamp days to the CLI-supported range (1..365); the backend would error
-  // anyway but doing it up front avoids burning a subprocess.
+  // Clamp days to the backend-supported range (1..365); serve-api rejects
+  // days=0 with E_INVALID_ARG, and the clamp keeps that error off the dashboard.
   const d = Math.max(1, Math.min(365, Math.floor(days)))
-  return (await callCli(['llm', 'stats', '--days', String(d)], {
-    timeoutMs: READ_TIMEOUT_MS
-  })) as LlmStatsData
+  return daemonRead<LlmStatsData>('/llm/stats', { query: { days: String(d) } })
 }
 
 export async function runLlmSelfTest(): Promise<LlmSelfTestData> {

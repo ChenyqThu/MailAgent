@@ -410,3 +410,43 @@ describe('KosIngestSection — 最近成功推送', () => {
     expect(screen.queryByText('暂无记录')).toBeNull()
   })
 })
+
+// task 08-20-perf-dashboards —「进看板要等半天」的 KOS 侧两个成本：
+//   ① 入库默认关的机器每 60s 白烧一次取数，而整区一行 DOM 都不渲染；
+//   ② 换 7d/30d/90d 时整区先消失再长回来（下方内容跟着上跳）。
+describe('KosIngestSection — 取数门控与换 range 不塌版', () => {
+  /** 与顶部 renderUi 的区别：共用一个 QueryClient 且 gcTime 非 0 —— 这两条正是
+   *  「上一轮的 gate 还在不在缓存里」的前提，用 gcTime:0 测等于把被测行为抹掉。 */
+  function renderWithClient(days: number) {
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    const ui = (d: number) =>
+      createElement(QueryClientProvider, { client: qc }, createElement(KosIngestSection, { days: d }))
+    const utils = render(ui(days))
+    return { ...utils, setDays: (d: number) => utils.rerender(ui(d)) }
+  }
+
+  test('gate=flag_off：换 range 不再发第二次请求（这台机器没这块区）', async () => {
+    statsFn.mockResolvedValue(sampleStats({ enabled: false, gate: 'flag_off' }))
+    const { setDays, container } = renderWithClient(7)
+
+    await waitFor(() => expect(statsFn).toHaveBeenCalledTimes(1))
+    setDays(30)
+    await new Promise((r) => setTimeout(r, 20))
+
+    expect(statsFn).toHaveBeenCalledTimes(1)
+    expect(container.textContent).toBe('')
+  })
+
+  test('gate=active：换 range 期间旧数据留屏，不塌回空', async () => {
+    statsFn.mockResolvedValue(sampleStats())
+    const { setDays } = renderWithClient(7)
+
+    await waitFor(() => expect(screen.queryByText('120')).not.toBeNull())
+    // 新 range 的请求悬着不 resolve —— 没有 keepPreviousData 的话这一刻整区消失。
+    statsFn.mockReturnValue(new Promise(() => {}))
+    setDays(30)
+
+    expect(screen.queryByTestId('kos-ingest-section')).not.toBeNull()
+    expect(screen.queryByText('120')).not.toBeNull()
+  })
+})

@@ -14,7 +14,7 @@
 
 import { useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { qk } from '@shared/lib/queryKeys'
 import { Activity, Sparkles, Zap } from 'lucide-react'
 
@@ -23,6 +23,7 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { cn } from '@shared/lib/cn'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SkeletonCard } from '@shared/components/feedback/LoadingSkeleton'
+import { SystemHealthRow } from '@shared/components/admin/SystemHealthRow'
 import { NumberTicker } from '@shared/components/ui/number-ticker'
 import { toastError, toastSuccess } from '@shared/state/toast'
 
@@ -139,6 +140,56 @@ function StatusDonut({ counts }: { counts: Record<string, number> }): React.Reac
   )
 }
 
+/** 按 model 的成本拆分。全表 rollup 回答「花了多少」，这张表回答「花在谁身上」——
+ *  换模型 / 加 fallback 链之后，成本归属只能靠它。
+ *
+ *  🔴 只有 serve-api 发 `by_model`（CLI `llm stats` 那份手抄 SQL 还没有这段），
+ *  所以字段缺席 = 老后端，整块不渲染，而不是画一张空表。 */
+function ByModelTable({
+  rows
+}: {
+  rows: NonNullable<LlmStatsData['by_model']>
+}): React.ReactElement {
+  const { t } = useTranslation()
+  return (
+    <div className="rounded-md border border-coral/30 bg-coral/5 p-3 space-y-2">
+      <div className="text-micro font-mono uppercase text-ink-fg-2">{t('llm.byModel')}</div>
+      <table className="w-full text-aux" data-testid="llm-by-model">
+        <thead>
+          <tr className="text-micro font-mono uppercase text-ink-fg-3 text-left">
+            <th className="font-normal py-1">{t('llm.byModelCol.model')}</th>
+            <th className="font-normal py-1 text-right">{t('llm.byModelCol.rows')}</th>
+            <th className="font-normal py-1 text-right">{t('llm.byModelCol.tokens')}</th>
+            <th className="font-normal py-1 text-right">{t('llm.byModelCol.latency')}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((r) => (
+            <tr key={r.model} className="border-t border-ink-border-soft">
+              <td className="py-1 pr-2 text-ink-fg truncate max-w-[220px]" title={r.model}>
+                {r.model}
+              </td>
+              <td className="py-1 text-right font-mono tabular-nums text-ink-fg-1">
+                {fmtNumber(r.rows)}
+              </td>
+              <td
+                className="py-1 text-right font-mono tabular-nums text-ink-fg-1"
+                // 悬停给出入/出的拆分：一个合计数看不出是被长上下文还是长回答吃掉的。
+                title={`in ${fmtNumber(r.input_tokens)} · out ${fmtNumber(r.output_tokens)} · cache_read ${fmtNumber(r.cache_read_input_tokens)}`}
+              >
+                {fmtTokens(r.input_tokens + r.output_tokens)}
+              </td>
+              <td className="py-1 text-right font-mono tabular-nums text-ink-fg-1">
+                {fmtMs(r.avg_latency_ms)}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
 // Simple gauge (0..100) for cache hit rate.
 //
 // Sprint 7 Day 1 (Sprint 6 review opus LOW carry-forward) — widen the
@@ -186,7 +237,11 @@ export function LlmDashboardPage(): React.ReactElement {
     queryKey: qk.llm.statsDays(days),
     queryFn: () => mailApi.llm.stats(days),
     staleTime: 30_000,
-    refetchInterval: 60_000
+    refetchInterval: 60_000,
+    // 换 7d/30d/90d = 换 queryKey = 全新缓存, 没有这一行就 isLoading→整个成本区
+    // 卸载回骨架再长回来（task 08-20-perf-dashboards P1）。留旧数据 + 后台刷新,
+    // 数字原地更新, 版面不跳。
+    placeholderData: keepPreviousData
   })
 
   const selftestMut = useMutation({
@@ -261,6 +316,10 @@ export function LlmDashboardPage(): React.ReactElement {
           </button>
         </div>
       </header>
+
+      {/* 「健康一眼看」状态行 —— 与 /admin/kanban 同一个组件同一份数据源。
+          放在最上面：来看成本之前先知道「系统现在要不要动手」。 */}
+      <SystemHealthRow />
 
       {/* Self-test result — the probe answers "is the gateway configured", and `reasons`
           names the exact missing key. A toast alone loses it a few seconds later. */}
@@ -366,6 +425,12 @@ export function LlmDashboardPage(): React.ReactElement {
               </div>
             </div>
           </section>
+
+          {(data.by_model?.length ?? 0) > 0 && (
+            <section>
+              <ByModelTable rows={data.by_model ?? []} />
+            </section>
+          )}
         </>
       )}
 

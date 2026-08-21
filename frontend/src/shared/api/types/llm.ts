@@ -17,6 +17,20 @@ export interface LlmStatsData {
     avg_latency_ms: number
     success_rows: number
   }
+  /** 同一窗口、同一个 `status='success'` 口径下按 model 拆开（task 08-20-perf-dashboards）。
+   *  全表 rollup 回答「花了多少」，这一段回答「花在谁身上」—— 换模型 / 加 fallback 链
+   *  之后成本归属只能靠它。按 tokens 降序；`model` 为空的老行归到 `'(unknown)'`。
+   *
+   *  🔴 只有 serve-api（`src/api/routers/llm.py`）发它；`mailagent llm stats` 那份手抄
+   *  SQL 至今没有这段，所以字段是可选的 —— 桌面看板已改走 serve-api，CLI 仍是旧形状。 */
+  by_model?: Array<{
+    model: string
+    rows: number
+    input_tokens: number
+    output_tokens: number
+    cache_read_input_tokens: number
+    avg_latency_ms: number
+  }>
   /** How the numbers were obtained — `'live_query'` normally, `'table_missing'` when the
    *  `llm_processing` table doesn't exist yet (fresh install / pre-v37 DB), in which case
    *  every count above is a zero placeholder, not a measurement.

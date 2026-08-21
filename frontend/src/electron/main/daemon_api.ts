@@ -60,6 +60,30 @@ export function daemonRequest<T>(
   })
 }
 
+/** serve-api 重启 / 冷启窗口里的一次短重试延时（task 08-20-perf-dashboards）。 */
+const READ_RETRY_DELAY_MS = 250
+
+/**
+ * 读端点变体：GET + 传输层失败重试**恰一次**（task 08-20-perf-dashboards）。
+ *
+ * 仪表盘的五个读 IPC 从 fork CLI 改走本机 serve-api 后，唯一新增的失败模式是
+ * 「serve-api 正在重启」——这个窗口只有几百毫秒，重试一次就能盖住，避免看板在后端
+ * 自拉起时闪一次错误态。**只重 `E_NETWORK`**（传输层）：业务错误（E_INVALID_ARG /
+ * E_NOT_FOUND …）重试一次结果一样，只会把错误态延后 250ms。
+ *
+ * 🔴 不做 CLI fallback —— 那正是本批要拆掉的东西（fork 一次 Python ~500ms-1s + 全量
+ * schema init 抢写锁）。serve-api 不可达时诚实抛错，前端两个看板都已有错误态。
+ */
+export async function daemonRead<T>(path: string, opts: RequestOptions = {}): Promise<T> {
+  try {
+    return await daemonRequest<T>('GET', path, opts)
+  } catch (err) {
+    if ((err as { code?: string } | null)?.code !== 'E_NETWORK') throw err
+    await new Promise((resolve) => setTimeout(resolve, READ_RETRY_DELAY_MS))
+    return daemonRequest<T>('GET', path, opts)
+  }
+}
+
 /** task 07-21 — `daemonRequest` 的分页变体：不丢弃 envelope.meta（如 `total`/`limit`/
  *  `offset`），供 `report:listRuns` IPC 透传给 renderer 做滚动加载/总数展示。 */
 export function daemonRequestWithMeta<T>(
