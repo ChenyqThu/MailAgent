@@ -424,6 +424,7 @@ from src.api.routers import (  # noqa: E402
     llm_providers,
     matter_agent,
     matters,
+    notifications,
     reports,
     settings,
     skills,
@@ -448,6 +449,10 @@ app.include_router(email_views.router)
 app.include_router(jobs.router)
 app.include_router(reports.router)
 app.include_router(matters.router)
+# 统一通知中心 (task 08-20-notification-center) — /api/notifications* 列表/未读数/
+# 已读写面 (M1)。鉴权同 matters/reports (verify_cf_access, 远程 CF Access / 本地
+# ephemeral token 两腿都过)；无 flag 门控 (owner 拍板不设灰度开关, design §8.e)。
+app.include_router(notifications.router)
 # Contact Directory WP2 (task 08-13) — /api/contacts* 列表聚合/详情/关联/治理写面。
 # WP7 治理建议落库腿仅接受 verify_local_token。
 app.include_router(contact_agent.router)
