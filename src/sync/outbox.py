@@ -16,6 +16,8 @@ Echo prevention（避免 Notion → handler → outbox → fanout → Notion 回
     pending → processing → done           ← 派发成功
                          → failed → (retry) ← attempts < max
                                   → dead_letter ← attempts ≥ max
+             processing → pending / dead_letter ← FanoutWorker 启动时回收孤儿
+                                                  (recover_orphaned_processing)
 
 退避序列: 60s / 5min / 15min / 1h / 2h（与 LLMProcessingStore / sync_store 一致）
 
@@ -550,6 +552,109 @@ class OutboxRepository:
             return cursor.rowcount > 0
         finally:
             conn.close()
+
+    # 孤儿回收写进 last_error 的固定前缀（与 async_jobs 的 'E_ORPHANED' 同风格）。
+    # 三种去向各一个前缀 —— 事后诊断能一眼分清「重排队了」「太老不敢重放」「毒丸配额耗尽」，
+    # 也让 `WHERE last_error LIKE 'E_ORPHANED%'` 一把捞出所有崩溃残留。
+    ORPHAN_REQUEUED_ERROR = "E_ORPHANED_REQUEUED: worker died mid-processing, requeued"
+    ORPHAN_STALE_ERROR = "E_ORPHANED_STALE: worker died mid-processing, intent too old to replay"
+    ORPHAN_POISON_ERROR = "E_ORPHANED_POISON: worker died mid-processing, retry budget exhausted"
+
+    def recover_orphaned_processing(
+        self,
+        *,
+        stale_after_sec: float = 3600.0,
+        max_attempts: int = 5,
+    ) -> Dict[str, int]:
+        """``FanoutWorker`` 启动时回收残留 processing（上次进程死亡留下），返回各分支条数。
+
+        ``poll_ready`` 只扫 pending / failed-ready，``mark_processing`` 之后进程若被杀
+        （退出 / 崩溃 / SIGKILL），该行**永久**停在 processing —— 不重试、不进 dead_letter；
+        而 ``get_stats`` 的 age_buckets 只统计 pending ⇒ 积压告警对它完全盲视。这是静默丢
+        intent，本方法是唯一出口。
+
+        🔴 只在 worker 启动时调，**不设「停机多久算卡死」阈值**：孤儿只由进程死亡产生，而进程
+        死亡后必须重启才能继续干活 ⇒ 启动时回收覆盖 100% 的产生场景；且启动那一刻绝无
+        in-flight（单 worker 语义 —— ``concurrency`` 是 asyncio 内并发不是多进程），不存在
+        误杀活跃行的可能。做成每轮 tick 检查反而要引入一个会误杀的时长阈值。
+
+        按 **intent 年龄**分流（``updated_at`` 距今）：
+        - ≤ ``stale_after_sec`` → pending + attempts+1，交回既有重试梯子。
+        - > ``stale_after_sec`` → dead_letter。🔴 outbox 的 payload 是「把 target 设成这个值」
+          的**绝对意图**不是增量：一条几个月前的 flag_sync 现在重放，会拿陈旧值覆盖用户后来的
+          手动修改。陈旧孤儿进 dead_letter 是**有意的保守** —— 可见、可被 ``retry_dead_letter``
+          手动救回，而不是盲目重放。
+
+        回收目标是 pending 而非 failed+退避：孤儿不是「失败」而是「没等到结果」，用户重启后期待
+        flag 尽快落地，不该再等 60s 退避。毒丸保护改由 attempts+1 提供 —— 若某条 intent 执行
+        必然杀死进程，不增 attempts 会形成「启动→回收→崩溃→启动」的无限循环；增了则配额耗尽
+        后进 dead_letter，有上限且告警可见。代价是一次无辜中断吃掉一次重试配额（正常场景下这条
+        intent 下次启动即成功，配额不累积）。
+
+        🔴 配额耗尽的新鲜孤儿（``attempts + 1 >= max_attempts``）与陈旧孤儿一样进 dead_letter：
+        少了这一档，attempts 就只是个没人读的计数器、上面那个无限循环依然成立 —— 毒丸永远走不到
+        ``mark_failed``，没有任何别处会把它推向终态。
+
+        Returns: ``{"requeued": n, "dead_lettered": m}``.
+        """
+        now = time.time()
+        cutoff = now - stale_after_sec
+        conn = self._connect()
+        try:
+            # 两条 UPDATE 的 WHERE 互斥且各自完整（不依赖先后顺序），都带 status='processing'
+            # 守护 —— 绝不碰 pending / failed / done / dead_letter 行。
+            # 🔴 SET 里的表达式读的是**更新前**的行值（SQLite 语义）：CASE 里的 updated_at 与
+            # attempts + 1 都不受同一句 SET 影响。
+            cursor = conn.execute(
+                """
+                UPDATE email_outbox
+                   SET status = 'dead_letter',
+                       last_error = CASE WHEN updated_at <= ? THEN ? ELSE ? END,
+                       next_retry_at = NULL,
+                       updated_at = ?
+                 WHERE status = 'processing'
+                   AND (updated_at <= ? OR attempts + 1 >= ?)
+                """,
+                (
+                    cutoff,
+                    self.ORPHAN_STALE_ERROR,
+                    self.ORPHAN_POISON_ERROR,
+                    now,
+                    cutoff,
+                    max_attempts,
+                ),
+            )
+            dead_lettered = cursor.rowcount
+            cursor = conn.execute(
+                """
+                UPDATE email_outbox
+                   SET status = 'pending',
+                       attempts = attempts + 1,
+                       last_error = ?,
+                       next_retry_at = NULL,
+                       updated_at = ?
+                 WHERE status = 'processing'
+                   AND updated_at > ?
+                   AND attempts + 1 < ?
+                """,
+                (self.ORPHAN_REQUEUED_ERROR, now, cutoff, max_attempts),
+            )
+            requeued = cursor.rowcount
+            conn.commit()
+        finally:
+            conn.close()
+
+        if requeued or dead_lettered:
+            logger.warning(
+                f"[outbox] recovered {requeued + dead_lettered} orphaned processing row(s): "
+                f"{requeued} → pending (attempts+1), {dead_lettered} → dead_letter "
+                f"(older than {stale_after_sec:.0f}s, or retry budget exhausted)"
+            )
+        # 🔴 有意不发 SSE：本方法只在 worker 启动那一刻跑，而 SSE 是 Redis pub/sub 的
+        # fire-and-forget（不落库）—— 那时前端 / 看板还没订阅，发了也没人收。且这不是实时状态
+        # 变化通知而是启动期一次性对账；回收结果走 warning 日志 + fanout-worker 的 starting 行，
+        # dead_letter 行照常出现在 list_dead_letter() / get_stats()。不是漏了。
+        return {"requeued": requeued, "dead_lettered": dead_lettered}
 
     # ------------------------------------------------------------
     # 读: stats (admin queue-depth / stats --section outbox)

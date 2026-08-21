@@ -6,6 +6,8 @@
 - poll_ready：FIFO + pending/failed-ready 共采 + target filter + limit
 - mark_processing / mark_done / mark_failed (含 退避 + dead_letter)
 - retry_dead_letter / list_by_internal_id / list_dead_letter / get
+- recover_orphaned_processing：新鲜孤儿 requeue / 陈旧孤儿 dead_letter / 毒丸配额耗尽
+  / 非 processing 行不受影响
 - get_stats by_status / by_target / age_buckets
 """
 
@@ -18,9 +20,7 @@ import pytest
 
 from src.mail.sync_store import SyncStore
 from src.sync.outbox import (
-    OutboxEntry,
     OutboxRepository,
-    OutboxStats,
     _backoff_next_retry_at,
     _BACKOFF_SECONDS,
 )
@@ -430,6 +430,143 @@ class TestStateTransitions:
         oid = repo.enqueue(internal_id=1001, op_type="flag_sync", target="mailapp", payload={})
         # pending → retry_dead_letter 应为 no-op
         assert repo.retry_dead_letter(oid) is False
+
+
+# ============================================================
+# recover_orphaned_processing
+# ============================================================
+
+def _force_processing(repo, outbox_id, *, age_sec: float = 0.0, attempts: int = 0):
+    """把一行伪造成「worker mark_processing 之后进程被杀」的残留态.
+
+    age_sec = updated_at 距今多久（分流判据）; attempts = 之前已消耗的重试配额。
+    """
+    conn = sqlite3.connect(repo.db_path)
+    try:
+        conn.execute(
+            "UPDATE email_outbox SET status='processing', attempts=?, updated_at=? "
+            "WHERE outbox_id=?",
+            (attempts, time.time() - age_sec, outbox_id),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
+class TestRecoverOrphanedProcessing:
+    def test_fresh_orphan_requeued_with_attempt_bump(self, repo):
+        oid = repo.enqueue(
+            internal_id=1001, op_type="flag_sync", target="mailapp", payload={"is_read": True}
+        )
+        _force_processing(repo, oid, age_sec=10)
+
+        assert repo.recover_orphaned_processing() == {"requeued": 1, "dead_lettered": 0}
+
+        entry = repo.get(oid)
+        assert entry.status == "pending"
+        assert entry.attempts == 1          # 毒丸保护: 每次回收吃一次配额
+        assert entry.next_retry_at is None  # 孤儿不是"失败", 不该再等退避
+        assert entry.last_error.startswith("E_ORPHANED_REQUEUED")
+
+    def test_requeued_orphan_becomes_pollable(self, repo):
+        """回收的意义: processing 孤儿 poll_ready 扫不到, 回收后重新进 FIFO 队列."""
+        oid = repo.enqueue(internal_id=1001, op_type="flag_sync", target="mailapp", payload={})
+        _force_processing(repo, oid, age_sec=10)
+        assert repo.poll_ready(limit=10) == []
+
+        repo.recover_orphaned_processing()
+
+        assert [e.outbox_id for e in repo.poll_ready(limit=10)] == [oid]
+
+    def test_stale_orphan_dead_lettered(self, repo):
+        """陈旧 intent 是绝对意图不是增量, 重放会覆盖用户后来的手改 → 保守归档."""
+        oid = repo.enqueue(internal_id=1001, op_type="flag_sync", target="mailapp", payload={})
+        _force_processing(repo, oid, age_sec=7200)  # 默认阈值 3600
+
+        assert repo.recover_orphaned_processing() == {"requeued": 0, "dead_lettered": 1}
+
+        entry = repo.get(oid)
+        assert entry.status == "dead_letter"
+        assert entry.attempts == 0  # 终态, 不消耗配额
+        assert entry.last_error.startswith("E_ORPHANED_STALE")
+
+    def test_threshold_splits_fresh_from_stale(self, repo):
+        """同一次回收里按年龄分流两条路."""
+        fresh = repo.enqueue(internal_id=1001, op_type="flag_sync", target="mailapp", payload={})
+        stale = repo.enqueue(internal_id=1002, op_type="flag_sync", target="mailapp", payload={})
+        _force_processing(repo, fresh, age_sec=10)
+        _force_processing(repo, stale, age_sec=120)
+
+        result = repo.recover_orphaned_processing(stale_after_sec=60)
+
+        assert result == {"requeued": 1, "dead_lettered": 1}
+        assert repo.get(fresh).status == "pending"
+        assert repo.get(stale).status == "dead_letter"
+
+    def test_poison_pill_dead_lettered_when_budget_exhausted(self, repo):
+        """新鲜但配额已耗尽 → dead_letter, 否则「启动→回收→崩溃→启动」无限循环."""
+        oid = repo.enqueue(internal_id=1001, op_type="flag_sync", target="mailapp", payload={})
+        _force_processing(repo, oid, age_sec=10, attempts=4)  # 4+1 >= max_attempts=5
+
+        assert repo.recover_orphaned_processing(max_attempts=5) == {
+            "requeued": 0, "dead_lettered": 1,
+        }
+
+        entry = repo.get(oid)
+        assert entry.status == "dead_letter"
+        assert entry.last_error.startswith("E_ORPHANED_POISON")
+
+    def test_last_attempt_under_budget_still_requeued(self, repo):
+        """配额边界的另一侧: 3+1 < 5 仍回收成 pending."""
+        oid = repo.enqueue(internal_id=1001, op_type="flag_sync", target="mailapp", payload={})
+        _force_processing(repo, oid, age_sec=10, attempts=3)
+
+        assert repo.recover_orphaned_processing(max_attempts=5)["requeued"] == 1
+        assert repo.get(oid).attempts == 4
+
+    def test_non_processing_rows_untouched(self, repo):
+        """pending / failed / done / dead_letter 一律不碰 —— 哪怕它们很"老"."""
+        oid_pending = repo.enqueue(
+            internal_id=1001, op_type="flag_sync", target="mailapp", payload={}
+        )
+        oid_failed = repo.enqueue(
+            internal_id=1002, op_type="flag_sync", target="mailapp", payload={}
+        )
+        repo.mark_failed(oid_failed, "boom", max_attempts=5)
+        oid_done = repo.enqueue(
+            internal_id=1003, op_type="flag_sync", target="mailapp", payload={}
+        )
+        repo.mark_processing(oid_done)
+        repo.mark_done(oid_done)
+        oid_dl = repo.enqueue(
+            internal_id=1004, op_type="flag_sync", target="mailapp", payload={}
+        )
+        for _ in range(5):
+            repo.mark_failed(oid_dl, "x", max_attempts=5)
+
+        # 把所有行的 updated_at 推到很久以前, 排除"只是因为够新才没被碰"
+        conn = sqlite3.connect(repo.db_path)
+        try:
+            conn.execute("UPDATE email_outbox SET updated_at = ?", (time.time() - 99999,))
+            conn.commit()
+        finally:
+            conn.close()
+
+        assert repo.recover_orphaned_processing() == {"requeued": 0, "dead_lettered": 0}
+
+        assert repo.get(oid_pending).status == "pending"
+        assert repo.get(oid_pending).attempts == 0
+        failed = repo.get(oid_failed)
+        assert failed.status == "failed"
+        assert failed.attempts == 1
+        assert failed.last_error == "boom"
+        assert failed.next_retry_at is not None  # 退避没被清掉
+        assert repo.get(oid_done).status == "done"
+        assert repo.get(oid_dl).status == "dead_letter"
+        assert repo.get(oid_dl).last_error == "x"
+
+    def test_empty_table_returns_zeros(self, repo):
+        assert repo.recover_orphaned_processing() == {"requeued": 0, "dead_lettered": 0}
 
 
 # ============================================================

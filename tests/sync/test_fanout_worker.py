@@ -8,6 +8,7 @@
 - mark_processing race condition: 另一 worker 已抢到, 当前 skip
 - dead_letter 晋升: attempts ≥ max
 - stop() 退出主循环
+- run() 启动时回收上次进程死亡残留的 processing 孤儿
 
 测试用真实 OutboxRepository + 真实 sync_store v10 schema, 但 fanout
 本身用 mock 替代（不真调 AppleScript / Notion）。
@@ -261,3 +262,68 @@ class TestLifecycle:
         await worker._tick()
         mailapp_fanout.execute.assert_not_called()
         assert worker.stats["polled"] == 0
+
+
+# ============================================================
+# 启动时孤儿回收
+# ============================================================
+
+async def _run_until_first_tick(worker):
+    """跑 run() 一小段（够启动回收 + 至少一轮 tick）再 stop."""
+    async def trigger_stop():
+        await asyncio.sleep(0.1)
+        worker.stop()
+
+    await asyncio.gather(worker.run(), trigger_stop())
+
+
+class TestStartupOrphanRecovery:
+    async def test_fresh_orphan_recovered_and_dispatched(
+        self, repo, worker, mailapp_fanout
+    ):
+        """mark_processing 后进程被杀的残留行, 重启后应被捡回来并真的派发掉."""
+        oid = repo.enqueue(
+            internal_id=1001, op_type="flag_sync", target="mailapp", payload={"is_read": True}
+        )
+        repo.mark_processing(oid)          # 模拟「派发中被 SIGKILL」
+        assert repo.poll_ready(limit=10) == []  # 现状: 主循环扫不到它
+
+        await _run_until_first_tick(worker)
+
+        mailapp_fanout.execute.assert_called_once()
+        entry = repo.get(oid)
+        assert entry.status == "done"
+        assert entry.attempts == 1  # 回收吃掉一次配额
+
+    async def test_stale_orphan_dead_lettered_not_replayed(
+        self, repo, mailapp_fanout, notion_fanout
+    ):
+        """超过 stale_processing_sec 的孤儿直接归档, 绝不重放陈旧意图."""
+        oid = repo.enqueue(
+            internal_id=1001, op_type="flag_sync", target="mailapp", payload={"is_read": True}
+        )
+        repo.mark_processing(oid)
+        conn = sqlite3.connect(repo.db_path)
+        try:
+            conn.execute(
+                "UPDATE email_outbox SET updated_at = ? WHERE outbox_id = ?",
+                (time.time() - 5, oid),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        worker = FanoutWorker(
+            outbox_repo=repo,
+            mailapp_fanout=mailapp_fanout,
+            notion_fanout=notion_fanout,
+            poll_interval_sec=1,
+            batch_size=10,
+            concurrency=3,
+            max_attempts=3,
+            stale_processing_sec=1.0,
+        )
+        await _run_until_first_tick(worker)
+
+        mailapp_fanout.execute.assert_not_called()
+        assert repo.get(oid).status == "dead_letter"

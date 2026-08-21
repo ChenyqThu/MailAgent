@@ -11,6 +11,8 @@
     4. 异常 → mark_failed (兜底)
 
 并发：默认 3 并发（同时处理 3 条 outbox，跨 target）.
+启动：`run()` 先回收上次进程死亡残留的 processing 孤儿（poll_ready 扫不到它们，
+      不回收 = 静默丢 intent），见 `OutboxRepository.recover_orphaned_processing`。
 关闭：`stop()` 设置 stop_event，主 loop 退出。
 
 详见 SPRINT15-HANDOFF.md §3.3 + plan Stage 1.3.
@@ -19,7 +21,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import Any, Optional
+from typing import Optional
 
 from loguru import logger
 
@@ -39,6 +41,7 @@ class FanoutWorker:
         batch_size: int = 10,
         concurrency: int = 3,
         max_attempts: int = 5,
+        stale_processing_sec: float = 3600.0,
     ):
         self.outbox_repo = outbox_repo
         self.mailapp_fanout = mailapp_fanout
@@ -47,6 +50,10 @@ class FanoutWorker:
         self.batch_size = batch_size
         self.concurrency = concurrency
         self.max_attempts = max_attempts
+        # 孤儿 intent 超过这个年龄就不重放、直接 dead_letter（理由见
+        # OutboxRepository.recover_orphaned_processing）。构造参数而非 env 开关：
+        # 没有已知调优需求，不值得扩散到 config + .env.example + CLAUDE.md 三处。
+        self.stale_processing_sec = stale_processing_sec
 
         self._stop_event = asyncio.Event()
         self._sem: Optional[asyncio.Semaphore] = None
@@ -69,10 +76,19 @@ class FanoutWorker:
     async def run(self) -> None:
         """主循环. 调用方 asyncio.create_task(worker.run())."""
         self._sem = asyncio.Semaphore(self.concurrency)
+        # 启动即回收上次进程死亡残留的 processing 孤儿：启动那一刻绝无 in-flight，
+        # 所以不需要（也不该有）「跑了多久算卡死」这种会误杀的阈值。有回收发生时
+        # repository 侧已 logger.warning，这里只把条数并进 starting 行。
+        recovered = self.outbox_repo.recover_orphaned_processing(
+            stale_after_sec=self.stale_processing_sec,
+            max_attempts=self.max_attempts,
+        )
         logger.info(
             f"[fanout-worker] starting poll_interval={self.poll_interval_sec}s "
             f"batch={self.batch_size} concurrency={self.concurrency} "
-            f"max_attempts={self.max_attempts}"
+            f"max_attempts={self.max_attempts} "
+            f"(recovered {recovered['requeued']} + dead-lettered "
+            f"{recovered['dead_lettered']} orphaned processing row(s))"
         )
 
         while not self._stop_event.is_set():
