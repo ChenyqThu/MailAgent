@@ -70,7 +70,9 @@ vi.mock('@shared/components/matters/hooks', () => ({
     matterAgentEnabled: matterAgentEnabled.value
   }),
   useMatterRuns: () => ({ data: undefined, isLoading: false }),
-  useMatterUpdates: () => ({ data: undefined, isLoading: false }),
+  useMatterPendingUpdates: () => ({ data: undefined, isLoading: false }),
+  // 工作台侧的同一份聚合（详情用的是它的切片）——两个面共用一个请求，桩也一起给。
+  usePendingMatterUpdates: () => ({ data: undefined, isLoading: false }),
   useStartMatterRun: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
   useMatterAgentProfiles: () => ({ data: [], isLoading: false }),
   // P5 lane ②：MattersWorkspace/MatterDetail 又多消费三个 attention hook。本测试只看

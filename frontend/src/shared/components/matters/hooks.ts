@@ -1,4 +1,4 @@
-import { useMemo } from 'react'
+import { useCallback, useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UseMutationResult, UseQueryResult } from '@tanstack/react-query'
 
@@ -12,10 +12,10 @@ import type {
   MatterMutationOptions,
   MatterNotifyLevel,
   MatterNotifyLevelResponse,
+  MatterPendingUpdatesResponse,
   MatterRunListResponse,
   MatterRunStartResult,
-  MatterUpdateListResponse,
-  MatterUpdateReviewStatus
+  MatterUpdate
 } from '@shared/api/types/matter'
 import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
 import { useAppConfig } from '@shared/hooks/useAppConfig'
@@ -55,7 +55,6 @@ export function useMattersEnabled(): boolean {
 }
 
 const runKey = (matterId: string) => [...qk.matters.detail(matterId), 'runs'] as const
-const updateKey = (matterId: string) => [...qk.matters.detail(matterId), 'updates'] as const
 export const globalAttentionKey = () => [...qk.matters.all(), 'attention', 'open'] as const
 export const matterAttentionKey = (matterId: string) =>
   [...qk.matters.detail(matterId), 'attention', 'open'] as const
@@ -105,17 +104,51 @@ export function useMatterRuns(
   })
 }
 
-export function useMatterUpdates(
-  matterId: string,
-  reviewStatus: MatterUpdateReviewStatus = 'pending',
+/** 待审提案的**唯一**取数口：一个请求覆盖全部活跃事项（`GET /api/matters/updates`）。
+ *
+ *  🔴 工作台与详情页共用同一个 key ⇒ react-query 只发一次请求。这正是本批要消掉的东西：
+ *  原来工作台按事项扇出 `listUpdates` + 按提案扇出 `getUpdate`（N + P 个请求），详情页
+ *  另发一次自己的 `listUpdates` —— 一次进入就能把 6 个 loopback 连接槽占满。
+ *  🔴 参数（key / staleTime / gcTime）只在这里写一份：两处各写一份 = 两个观察者的新鲜度
+ *  判据不一致，「谁先挂载谁说了算」的抖动。 */
+function pendingUpdatesOptions(api: MattersApi): {
+  queryKey: readonly unknown[]
+  queryFn: () => Promise<MatterPendingUpdatesResponse>
+  staleTime: number
+  gcTime: number
+} {
+  return {
+    queryKey: qk.matters.pendingUpdates(),
+    queryFn: () => api.listPendingUpdates(),
+    // 提案的实时性靠写侧 refreshMatter / `matter.changed` SSE 精准失效（见 matterMutation.ts），
+    // 不靠短 staleTime —— 后者只会让「切走再切回」每次重拉。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
+  }
+}
+
+export function usePendingMatterUpdates(
   enabled = true
-): UseQueryResult<MatterUpdateListResponse> {
+): UseQueryResult<MatterPendingUpdatesResponse> {
   const api = useMattersApi()
-  return useQuery({
-    queryKey: [...updateKey(matterId), reviewStatus],
-    queryFn: () => api.listUpdates(matterId, reviewStatus),
-    enabled
-  })
+  return useQuery({ ...pendingUpdatesOptions(api), enabled })
+}
+
+const NO_UPDATES: MatterUpdate[] = []
+
+/** 上面那份聚合缓存的**单事项切片**（详情页用）。不是第二个请求：同 key ⇒ 同一份数据，
+ *  select 只在客户端切一刀。 */
+export function useMatterPendingUpdates(
+  matterId: string,
+  enabled = true
+): UseQueryResult<MatterUpdate[]> {
+  const api = useMattersApi()
+  const select = useCallback(
+    (data: MatterPendingUpdatesResponse): MatterUpdate[] =>
+      data.items.find((entry) => entry.matter_public_id === matterId)?.updates ?? NO_UPDATES,
+    [matterId]
+  )
+  return useQuery({ ...pendingUpdatesOptions(api), enabled, select })
 }
 
 export function useGlobalAttention(enabled = true): UseQueryResult<MatterAttentionListResponse> {

@@ -28,7 +28,7 @@ vi.mock('@shared/components/matters/hooks', () => ({
     matterAgentEnabled: matterAgentEnabled.value
   }),
   useMatterRuns: () => ({ data: undefined, isLoading: false }),
-  useMatterUpdates: () => ({ data: undefined, isLoading: false }),
+  useMatterPendingUpdates: () => ({ data: undefined, isLoading: false }),
   useStartMatterRun: () => ({ mutate: vi.fn(), mutateAsync: vi.fn(), isPending: false }),
   useMatterAgentProfiles: () => ({ data: [], isLoading: false }),
   useMatterAttention: () => ({ data: undefined, isLoading: false })

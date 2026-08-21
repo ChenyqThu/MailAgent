@@ -18,6 +18,7 @@ import type {
   MatterTagListResponse,
   MatterTagMutationResult,
   MatterDuplicateCandidate,
+  MatterPendingUpdatesResponse,
   MatterRelation,
   MatterResourceAttachment,
   MatterResourceCandidateResult,
@@ -533,6 +534,11 @@ export function createMattersApi(baseUrl: string): MattersApi {
         `/matters/${segment(matterId)}/updates/${segment(updateId)}`
       )
       return result.update
+    },
+    listPendingUpdates(): Promise<MatterPendingUpdatesResponse> {
+      return request(baseUrl, 'GET', '/matters/updates', {
+        query: { review_status: 'pending' }
+      })
     },
     acceptUpdate(matterId, updateId, input, options): Promise<MatterMutationResult> {
       return request(

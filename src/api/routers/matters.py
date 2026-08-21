@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Header, Query, Request
@@ -331,6 +332,27 @@ async def lookup_links_by_resource(
         raise APIError("E_INVALID_ARG", "keys must contain 1-50 resource keys", source="sqlite")
     result = _call(service.lookup_resource_links, provider.strip().lower(), key_values)
     return success_envelope({"results": result}, request=request)
+
+
+@router.get("/updates")
+async def list_live_updates(
+    request: Request,
+    review_status: str = Query(default="pending"),
+    limit: int = Query(default=200, ge=1, le=500),
+    service: MatterService = Depends(get_matter_service),
+):
+    """全部活跃事项的提案聚合（工作台看板 / 清单角标 / 待审阅区的唯一数据源）。
+
+    🔴 路由位置必须留在 `GET /{matter_id}` **之前** —— 那条路由会把 `/api/matters/updates`
+    当成 `matter_id='updates'` 吃掉（FastAPI 按注册序匹配），挪到下面的 Updates 评审面
+    分节里 = 这个端点当场 404。同理 `/attention` `/tags` 也都在上面。
+
+    逐事项的 `GET /{matter_id}/updates` 保留不动（契约 additive）。
+    """
+    result = await asyncio.to_thread(
+        _call, service.list_live_updates, review_status=review_status, limit=limit
+    )
+    return success_envelope(result, request=request, meta_extra={"limit": limit})
 
 
 @router.get("/{public_id}/export")

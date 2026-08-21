@@ -39,7 +39,6 @@
   "tests/components/AgentPendingBadge.test.tsx": 1,
   "tests/components/AgentView.test.tsx": 2,
   "tests/components/ChatHistoryPopover.test.tsx": 1,
-  "tests/components/ComposePanelDraftEdit.test.tsx": 1,
   "tests/components/EmailDetailPin.test.tsx": 1,
   "tests/components/EmailRow.test.tsx": 1,
   "tests/components/EnsureSessionIdentity.test.ts": 1,

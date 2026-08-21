@@ -53,7 +53,8 @@ import type {
   MatterResourceListItem,
   MatterStakeholder,
   MatterStatus,
-  MatterTagDefinition
+  MatterTagDefinition,
+  MatterUpdateSummary
 } from '@shared/api/types/matter'
 import { preview } from '@shared/components/agents/schedule/occurrences'
 import { sentenceText } from '@shared/components/agents/schedule/sentence'
@@ -128,8 +129,8 @@ import {
   useMatterAgentProfiles,
   useMatterAttention,
   useMatterFlags,
+  useMatterPendingUpdates,
   useMatterRuns,
-  useMatterUpdates,
   useMattersApi,
   useStartMatterRun
 } from './hooks'
@@ -242,7 +243,9 @@ export function MatterDetail({
   }, [moreOpen])
   const { matterAgentEnabled } = useMatterFlags()
   const runsQuery = useMatterRuns(matterId, matterAgentEnabled)
-  const updatesQuery = useMatterUpdates(matterId, 'pending', matterAgentEnabled)
+  // 本事项的待审提案 = 工作台那份跨事项聚合缓存的切片，**不是**第二个请求
+  // （同 query key ⇒ react-query 只发一次；原来这里另发一次 `/{id}/updates`）。
+  const updatesQuery = useMatterPendingUpdates(matterId, matterAgentEnabled)
   const startRun = useStartMatterRun(matterId)
   const profilesQuery = useMatterAgentProfiles(matterAgentEnabled)
   const matterAttentionQuery = useMatterAttention(matterId)
@@ -331,7 +334,21 @@ export function MatterDetail({
   )
   const tagsByName = useMemo(() => matterTagMap(tagItems), [tagItems])
   const runs = runsQuery.data?.items ?? []
-  const updates = updatesQuery.data?.items ?? []
+  // 🔴 归档 / 回收站里的事项**不在**聚合端点的口径里（它只查活跃事项），但归档前留下的
+  // 待审提案还挂在那儿，而清账入口只有详情页这一个（同 D11「agent flag 关掉仍可清账」）。
+  // 所以非活跃事项退回逐事项取一次；活跃事项（进入事项页的常规路径）这条查询恒 disabled，
+  // 一个请求都不多发。
+  const matterIsLive = matter ? matter.archived_at == null && matter.deleted_at == null : true
+  const inactiveUpdates = useQuery({
+    queryKey: [...qk.matters.detail(matterId), 'updates', 'pending'],
+    queryFn: () => api.listUpdates(matterId, 'pending'),
+    enabled: matterAgentEnabled && !matterIsLive,
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
+  })
+  const updates: MatterUpdateSummary[] = matterIsLive
+    ? (updatesQuery.data ?? [])
+    : (inactiveUpdates.data?.items ?? [])
   const detailAttention = matterAttentionQuery.data?.items ?? attentionSignals
   const profiles = profilesQuery.data ?? []
   const activeRun = runs.find(

@@ -3074,6 +3074,48 @@ class MatterService:
                 )
             return {"items": items, "next_cursor": next_cursor}
 
+    def list_live_updates(
+        self,
+        *,
+        review_status: str = "pending",
+        limit: int = 200,
+    ) -> dict[str, Any]:
+        """跨事项的提案聚合（工作台一次进入只发这一个请求，替代 N + P 次逐条取）。
+
+        返回的是**完整**提案行（含 `changes`）——看板待审阅卡要数引用条数、判有没有字段级
+        变化（`MatterFocus` 的 `update.changes`），只给摘要的话前端还得对每条再取一次，
+        N+1 就没消掉。
+
+        🔴 `change_count` 必须在这里补上：它是派生字段（不是表列），原来只有 `list_updates_page`
+        的摘要投影产出，而详情页的提案横幅与看板卡都读它 —— 少补一个键，那两处当场变成
+        「变化 undefined 项」。
+        """
+        self._require_value(
+            "review_status", review_status, MATTER_UPDATE_REVIEW_STATUSES
+        )
+        with self.repository.connect() as conn:
+            grouped = self.repository.list_live_matter_updates(
+                conn, review_status=review_status, limit=limit
+            )
+        return {
+            "items": [
+                {
+                    "matter_public_id": public_id,
+                    "updates": [
+                        {
+                            **update,
+                            "change_count": len(update["changes"] or []),
+                            # 表列是 0/1；摘要投影与前端 `MatterUpdate.is_stale: boolean`
+                            # 都按真布尔，这里跟着归一（新契约不留 0/1 与 true/false 两种真值）。
+                            "is_stale": bool(update["is_stale"]),
+                        }
+                        for update in updates
+                    ],
+                }
+                for public_id, updates in grouped.items()
+            ]
+        }
+
     def get_update_detail(self, public_id: str, update_id: int) -> dict[str, Any]:
         with self.repository.connect() as conn:
             matter = self._require_matter(conn, public_id)

@@ -226,6 +226,41 @@ class MatterRepository:
         ).fetchall()
         return [self._update_row(row) for row in rows]
 
+    def list_live_matter_updates(
+        self,
+        conn: sqlite3.Connection,
+        *,
+        review_status: str,
+        limit: int,
+    ) -> dict[str, list[dict[str, Any]]]:
+        """活跃事项 × 某一评审状态的提案的**批量**投影（键 = `public_id`）。
+
+        🔴 存在的理由与 `list_stakeholder_summaries` 同一条列表性能铁律：事项工作台的看板
+        徽标 / 清单角标 / 待审阅区要的是「全部活跃事项的待审提案」，逐事项取会把一次进入
+        放大成 N + P 次 HTTP 往返（`frontend/ARCHITECTURE.md` §7.1-7.2）。
+
+        「活跃」= `deleted_at IS NULL AND archived_at IS NULL`，与列表端点的默认子句同口径
+        （归档 / 回收站里的提案不进待审阅面）。事项间按 `updated_at DESC` 排（与列表默认序
+        同口径 —— 看板待审阅区的卡片顺序由它决定），同一事项内 `id DESC`（新提案在前，与
+        `MatterService.list_updates_page` 同口径：详情页拿 `updates[0]` 当「当前提案」）。
+        """
+        rows = conn.execute(
+            "SELECT matter.public_id AS matter_public_id, matter_update.* "
+            "FROM matter_update JOIN matter ON matter.id=matter_update.matter_id "
+            "WHERE matter_update.review_status=? "
+            "AND matter.deleted_at IS NULL AND matter.archived_at IS NULL "
+            "ORDER BY matter.updated_at DESC, matter.id DESC, matter_update.id DESC "
+            "LIMIT ?",
+            (review_status, limit),
+        ).fetchall()
+        grouped: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            update = self._update_row(row)
+            # JOIN 带进来的事项标识不属于 matter_update 的投影，取出来当分组键。
+            public_id = str(update.pop("matter_public_id"))
+            grouped.setdefault(public_id, []).append(update)
+        return grouped
+
     def list_matters(
         self,
         conn: sqlite3.Connection,

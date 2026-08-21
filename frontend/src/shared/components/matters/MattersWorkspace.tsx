@@ -3,7 +3,7 @@ import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tansta
 import { useTranslation } from 'react-i18next'
 import { Ban, Plus } from 'lucide-react'
 
-import type { Matter, MatterCreateInput, MatterUpdate } from '@shared/api/types/matter'
+import type { Matter, MatterCreateInput } from '@shared/api/types/matter'
 import { useMediaQuery } from '@shared/hooks/useMediaQuery'
 import { cn } from '@shared/lib/cn'
 import { errorMessage } from '@shared/lib/ipcErrors'
@@ -16,7 +16,13 @@ import { MatterDetail } from './MatterDetail'
 import { MatterFocus } from './MatterFocus'
 import { MatterList } from './MatterList'
 import { MatterTagManagerModal } from './MatterTagManagerModal'
-import { useAttentionAction, useGlobalAttention, useMatterFlags, useMattersApi } from './hooks'
+import {
+  useAttentionAction,
+  useGlobalAttention,
+  useMatterFlags,
+  useMattersApi,
+  usePendingMatterUpdates
+} from './hooks'
 import { refreshMatter } from './matterMutation'
 import { readLastSelectedMatterId, writeLastSelectedMatterId } from './matterLastSelected'
 import {
@@ -204,29 +210,20 @@ export function MattersWorkspace(): React.ReactElement | null {
     }
     return index
   }, [attentionItems])
-  const pendingUpdates = useQuery({
-    queryKey: qk.matters.pendingUpdates(),
-    queryFn: async (): Promise<Array<{ matterId: string; updates: MatterUpdate[] }>> =>
-      Promise.all(
-        liveMatters
-          .filter((matter) => matter.archived_at == null && matter.deleted_at == null)
-          .map(async (matter) => {
-            const summaries = await api.listUpdates(matter.public_id, 'pending')
-            const updates = await Promise.all(
-              summaries.items.map((update) => api.getUpdate(matter.public_id, update.id))
-            )
-            return { matterId: matter.public_id, updates }
-          })
-      ),
-    enabled: enabled && matterAgentEnabled && liveMatters.length > 0,
-    // 🔴 这条 queryFn 是 N+1 扇出（N 条事项 → N + P 个请求），根治（服务端聚合端点）在
-    // `perf-matters-request-fanout`；这里只把 15s 抬到 5min，先止住「离开 15s 再切回就把
-    // 整轮风暴重放一遍、把 6 个连接槽占满」。提案的实时性靠 refreshMatter 的失效清单。
-    staleTime: 5 * 60_000
-  })
+  // 待审提案：**一个**请求覆盖全部活跃事项（服务端聚合端点 `GET /matters/updates`）。
+  // 原来这里是 N+1 扇出（每条事项一次 listUpdates + 每条提案一次 getUpdate，上限 100+），
+  // 把 6 个 loopback 连接槽占满、详情的前台请求全排它后面。「活跃」的判据同时也从这里的
+  // 客户端过滤搬到了服务端（`deleted_at IS NULL AND archived_at IS NULL`，同一口径），
+  // 顺带修掉「queryFn 闭包捕获 liveMatters 但 key 里没有它」的脱钩 —— queryFn 现在不依赖
+  // 任何组件状态，key 与数据自然对齐。
+  const pendingUpdates = usePendingMatterUpdates(enabled && matterAgentEnabled)
   const updateIndex = useMemo(
     () =>
-      new Map((pendingUpdates.data ?? []).map((entry) => [entry.matterId, entry.updates] as const)),
+      new Map(
+        (pendingUpdates.data?.items ?? []).map(
+          (entry) => [entry.matter_public_id, entry.updates] as const
+        )
+      ),
     [pendingUpdates.data]
   )
   // 标签定义只喂筛选菜单的「标签」二级面板（V3-04：标签作为**临时筛选条件**回归 ——

@@ -847,6 +847,18 @@ export interface MatterUpdateListResponse {
   items: MatterUpdateSummary[]
   next_cursor: number | null
 }
+/** 跨事项的待审提案聚合（`GET /api/matters/updates`）。
+ *
+ *  🔴 一条事项一个条目、提案是**完整**行（不是摘要）：看板待审阅卡要读 `changes`
+ *  数引用条数、判有没有字段级变化。这正是它替代掉的那轮 N+1（每条事项一次
+ *  `listUpdates` + 每条提案一次 `getUpdate`）存在的理由。 */
+export interface MatterPendingUpdatesEntry {
+  matter_public_id: string
+  updates: MatterUpdate[]
+}
+export interface MatterPendingUpdatesResponse {
+  items: MatterPendingUpdatesEntry[]
+}
 export interface MatterUpdateAcceptInput {
   selected_change_ids: string[]
   edited_changes?: Array<{
@@ -1206,6 +1218,7 @@ export interface MattersApi {
     reviewStatus?: MatterUpdateReviewStatus
   ): Promise<MatterUpdateListResponse>
   getUpdate(matterId: string, updateId: number): Promise<MatterUpdate>
+  listPendingUpdates(): Promise<MatterPendingUpdatesResponse>
   acceptUpdate(
     matterId: string,
     updateId: number,

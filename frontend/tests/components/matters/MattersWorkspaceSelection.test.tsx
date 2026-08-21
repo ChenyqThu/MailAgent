@@ -96,6 +96,7 @@ vi.mock('@shared/components/matters/hooks', () => ({
     }
   }),
   useMatterFlags: () => ({ mattersEnabled: true, matterAgentEnabled: false }),
+  usePendingMatterUpdates: () => ({ data: undefined, isLoading: false }),
   useGlobalAttention: () => ({ data: { items: [] } }),
   useAttentionAction: () => ({ mutate: vi.fn() })
 }))
