@@ -97,7 +97,10 @@ export interface ContactRowDto {
 
 export interface ContactListResponse {
   items: ContactRowDto[]
+  /** 当前筛选条件下的**全量**命中数（不受 limit / cursor 影响）——头部计数用。 */
   total: number
+  /** keyset 游标（不透明串）。`null` = 没有下一页；不传 `limit` 时恒 `null`。 */
+  next_cursor: string | null
 }
 
 export interface ContactEmailDto {

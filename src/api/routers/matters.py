@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from functools import lru_cache
 from typing import Any, Callable
 
 from fastapi import APIRouter, Depends, Header, Query, Request
@@ -42,8 +43,20 @@ from src.matters.run_service import MatterRunService
 from src.matters.service import Actor, MatterError, MatterService
 
 
+@lru_cache(maxsize=4)
+def _build_matter_service(db_path: str) -> MatterService:
+    """按 db_path 缓存 service (对照 `src/api/deps.py:49` 的 EmailRepository 单例)。
+
+    🔴 缓存的是**对象不是连接**: MatterService 只持 repository + clock + url_fetcher,
+    而 MatterRepository 只持 db_path, 每次 `connect()` 开一条短命连接 —— 所以既与
+    mail-sync writer 在 WAL 下并发安全, 也与读端点的 `asyncio.to_thread` 并发安全
+    (连接不跨线程)。maxsize=4: 测试里多个 tmp db 轮换, 单槽等于白缓存。
+    """
+    return MatterService(MatterRepository(db_path))
+
+
 def get_matter_service(settings=Depends(get_settings)) -> MatterService:
-    return MatterService(MatterRepository(settings.sync_store_db_path))
+    return _build_matter_service(str(settings.sync_store_db_path))
 
 
 def get_matter_create_research_service(
@@ -59,8 +72,14 @@ def get_matter_run_service(settings=Depends(get_settings)) -> MatterRunService:
     return MatterRunService(MatterRepository(settings.sync_store_db_path))
 
 
+@lru_cache(maxsize=4)
+def _build_attention_service(db_path: str) -> AttentionService:
+    """同 `_build_matter_service`: 缓存对象不缓存连接。"""
+    return AttentionService(MatterRepository(db_path))
+
+
 def get_attention_service(settings=Depends(get_settings)) -> AttentionService:
-    return AttentionService(MatterRepository(settings.sync_store_db_path))
+    return _build_attention_service(str(settings.sync_store_db_path))
 
 
 router = APIRouter(
@@ -75,6 +94,18 @@ def _call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         return fn(*args, **kwargs)
     except MatterError as exc:
         raise APIError(exc.code, exc.message, hint=exc.hint, source="sqlite") from exc
+
+
+async def _acall(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
+    """读端点专用: `_call` 挪到线程池跑 (范式 `src/api/routers/email.py:598`)。
+
+    🔴 uvicorn 单 worker 单事件循环, 而这些 handler 是**阻塞** sqlite3 调用 —— 留在
+    循环上就是 head-of-line: 同进程一条 0.7s 的 IMAP 端点能把并发的列表请求整段压住
+    (lane-D 实测)。连接在 MatterRepository 里开内关不跨线程, 与 service 单例并存安全。
+    写 handler 有意不动: 它们持 `BEGIN IMMEDIATE` 写锁, 串行本来就是想要的行为,
+    挪线程只会让写锁竞争更难推理。
+    """
+    return await asyncio.to_thread(_call, fn, *args, **kwargs)
 
 
 def _mutation_args(
@@ -158,7 +189,7 @@ async def list_global_attention(
     service: AttentionService = Depends(get_attention_service),
 ):
     return success_envelope(
-        {"items": _call(service.list_attention, state=state, kind=kind)},
+        {"items": await _acall(service.list_attention, state=state, kind=kind)},
         request=request,
     )
 
@@ -249,7 +280,7 @@ async def list_matters(
     sort: str = Query(default="updated_at", pattern="^(updated_at|created_at)$"),
     service: MatterService = Depends(get_matter_service),
 ):
-    result = _call(
+    result = await _acall(
         service.list_matters,
         filters={
             "q": q,
@@ -296,7 +327,9 @@ async def find_duplicate_candidates(
     service: MatterService = Depends(get_matter_service),
 ):
     return success_envelope(
-        {"items": _call(service.duplicate_candidates, body)}, request=request
+        # POST 但零写入 (只查重), 跟读端点同样挪出事件循环。
+        {"items": await _acall(service.duplicate_candidates, body)},
+        request=request,
     )
 
 
@@ -330,7 +363,7 @@ async def lookup_links_by_resource(
     key_values = [value.strip() for value in keys.split(",") if value.strip()]
     if not key_values or len(key_values) > 50:
         raise APIError("E_INVALID_ARG", "keys must contain 1-50 resource keys", source="sqlite")
-    result = _call(service.lookup_resource_links, provider.strip().lower(), key_values)
+    result = await _acall(service.lookup_resource_links, provider.strip().lower(), key_values)
     return success_envelope({"results": result}, request=request)
 
 
@@ -349,9 +382,7 @@ async def list_live_updates(
 
     逐事项的 `GET /{matter_id}/updates` 保留不动（契约 additive）。
     """
-    result = await asyncio.to_thread(
-        _call, service.list_live_updates, review_status=review_status, limit=limit
-    )
+    result = await _acall(service.list_live_updates, review_status=review_status, limit=limit)
     return success_envelope(result, request=request, meta_extra={"limit": limit})
 
 
@@ -365,7 +396,7 @@ async def export_matter_endpoint(
     """事项导出（P7）。资料**只导出引用不导出正文** —— 外部系统仍是内容权威，
     而且资料正文是按不可信数据处理的，不该被搬到一个没有围栏的地方。"""
     if format == "markdown":
-        text = _call(export_matter_markdown, service, public_id)
+        text = await _acall(export_matter_markdown, service, public_id)
         return PlainTextResponse(
             text,
             headers={
@@ -373,7 +404,9 @@ async def export_matter_endpoint(
             },
             media_type="text/markdown; charset=utf-8",
         )
-    return success_envelope(_call(export_matter, service, public_id), request=request)
+    return success_envelope(
+        await _acall(export_matter, service, public_id), request=request
+    )
 
 
 @router.get("/tags")
@@ -381,7 +414,7 @@ async def list_matter_tags(
     request: Request,
     service: MatterService = Depends(get_matter_service),
 ):
-    return success_envelope({"items": _call(service.list_tags)}, request=request)
+    return success_envelope({"items": await _acall(service.list_tags)}, request=request)
 
 
 @router.put("/tags/{name}")
@@ -449,7 +482,7 @@ async def get_matter(
     include_values = [
         value.strip() for value in (include or "").split(",") if value.strip()
     ]
-    result = _call(service.get_matter, matter_id, include=include_values)
+    result = await _acall(service.get_matter, matter_id, include=include_values)
     return success_envelope(result, request=request)
 
 
@@ -460,7 +493,7 @@ async def get_matter_context_snapshot(
     service: MatterService = Depends(get_matter_service),
 ):
     return success_envelope(
-        _call(service.context_snapshot, matter_id), request=request
+        await _acall(service.context_snapshot, matter_id), request=request
     )
 
 
@@ -620,7 +653,7 @@ async def list_items(
     include_deleted: bool = False,
     service: MatterService = Depends(get_matter_service),
 ):
-    items = _call(
+    items = await _acall(
         service.list_items,
         matter_id,
         kind=kind,
@@ -711,7 +744,7 @@ async def get_timeline(
     limit: int = Query(default=50, ge=1, le=100),
     service: MatterService = Depends(get_matter_service),
 ):
-    result = _call(service.timeline, matter_id, cursor=cursor, limit=limit)
+    result = await _acall(service.timeline, matter_id, cursor=cursor, limit=limit)
     return success_envelope(result, request=request, meta_extra={"limit": limit})
 
 
@@ -741,7 +774,7 @@ async def list_resources(
     sub_state: str | None = None, include_unavailable: bool = True,
     service: MatterService = Depends(get_matter_service),
 ):
-    items = _call(
+    items = await _acall(
         service.list_resources, matter_id, kind=kind, pinned=pinned,
         access_policy=access_policy, sub_state=sub_state,
     )
@@ -758,7 +791,8 @@ async def list_resource_candidates(
     """只读候选（G-14「关联资料」弹窗）。与 `resource-suggestions/discover` 同引擎但零写入 ——
     打开弹窗不该在事项上留下任何痕迹。"""
     return success_envelope(
-        _call(service.list_resource_candidates, matter_id, limit=limit), request=request
+        await _acall(service.list_resource_candidates, matter_id, limit=limit),
+        request=request,
     )
 
 
@@ -769,7 +803,8 @@ async def list_resource_attachments(
 ):
     """本事项已关联邮件里的附件，一次批量取（G-14 tab ③）。"""
     return success_envelope(
-        _call(service.list_resource_attachments, matter_id, limit=limit), request=request
+        await _acall(service.list_resource_attachments, matter_id, limit=limit),
+        request=request,
     )
 
 
@@ -795,7 +830,7 @@ async def list_resource_versions(
 ):
     """资料版本轨迹（V3-22）：只读历史版本快照，当前版本在 resource 行上。"""
     return success_envelope(
-        _call(service.list_resource_versions, matter_id, resource_id, limit=limit),
+        await _acall(service.list_resource_versions, matter_id, resource_id, limit=limit),
         request=request,
     )
 
@@ -908,7 +943,7 @@ async def list_stakeholders(
     matter_id: str, request: Request, waiting_only: bool = False, include_deleted: bool = False,
     service: MatterService = Depends(get_matter_service),
 ):
-    return success_envelope({"items": _call(service.list_stakeholders, matter_id, waiting_only=waiting_only, include_deleted=include_deleted)}, request=request)
+    return success_envelope({"items": await _acall(service.list_stakeholders, matter_id, waiting_only=waiting_only, include_deleted=include_deleted)}, request=request)
 
 
 @router.post("/{matter_id}/stakeholders")
@@ -976,7 +1011,7 @@ async def list_relations(
     matter_id: str, request: Request, direction: str = "both", relation_type: str | None = Query(default=None, alias="type"),
     service: MatterService = Depends(get_matter_service),
 ):
-    return success_envelope({"items": _call(service.list_relations, matter_id, direction=direction, relation_type=relation_type)}, request=request)
+    return success_envelope({"items": await _acall(service.list_relations, matter_id, direction=direction, relation_type=relation_type)}, request=request)
 
 
 @router.post("/{matter_id}/relations")
@@ -1032,7 +1067,7 @@ async def list_updates(
     limit: int = Query(default=50, ge=1, le=100),
     service: MatterService = Depends(get_matter_service),
 ):
-    result = _call(
+    result = await _acall(
         service.list_updates_page,
         matter_id,
         review_status=review_status,
@@ -1051,7 +1086,7 @@ async def get_update(
     service: MatterService = Depends(get_matter_service),
 ):
     return success_envelope(
-        _call(service.get_update_detail, matter_id, update_id), request=request
+        await _acall(service.get_update_detail, matter_id, update_id), request=request
     )
 
 
@@ -1118,7 +1153,7 @@ async def list_matter_runs(
     trigger_kind: str | None = None,
     service: MatterRunService = Depends(get_matter_run_service),
 ):
-    result = _call(
+    result = await _acall(
         service.list_runs,
         matter_id,
         cursor=cursor,
@@ -1138,7 +1173,7 @@ async def get_matter_run(
     request: Request,
     service: MatterRunService = Depends(get_matter_run_service),
 ):
-    run = _call(service.get_run_projection, matter_id, run_id)
+    run = await _acall(service.get_run_projection, matter_id, run_id)
     return success_envelope(
         {"run": run, "lifecycle_state": run["lifecycle_state"]}, request=request
     )
@@ -1192,7 +1227,7 @@ async def list_matter_attention(
 ):
     return success_envelope(
         {
-            "items": _call(
+            "items": await _acall(
                 service.list_attention,
                 public_id=matter_id,
                 state=state,

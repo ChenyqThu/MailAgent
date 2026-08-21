@@ -8,10 +8,12 @@
 from __future__ import annotations
 
 import asyncio
+import base64
 import json
 import sqlite3
 import time
 from datetime import datetime, timedelta
+from functools import lru_cache
 from typing import Any, Callable, Optional
 
 from fastapi import APIRouter, Depends, Header, Query, Request
@@ -59,8 +61,20 @@ def _schedule_profile_task(coro) -> None:
     task.add_done_callback(_profile_tasks.discard)
 
 
+@lru_cache(maxsize=4)
+def _build_contact_repository(db_path: str) -> ContactRepository:
+    """按 db_path 缓存 repo 实例 (对照 `src/api/deps.py:49` 的 EmailRepository 单例)。
+
+    🔴 缓存的是**对象不是连接** —— `ContactRepository` 只持 db_path, 每次 `connect()`
+    仍开一条短命连接 (WAL 下与 mail-sync writer 并发安全, 也就与 `asyncio.to_thread`
+    的多线程并发安全: 连接不跨线程)。maxsize=4 而非 1: 测试里多个 tmp db 轮换,
+    单槽会让每个用例都重建 (行为不变, 只是白缓存)。
+    """
+    return ContactRepository(db_path)
+
+
 def get_contact_repository(settings=Depends(get_settings)) -> ContactRepository:
-    return ContactRepository(settings.sync_store_db_path)
+    return _build_contact_repository(str(settings.sync_store_db_path))
 
 
 router = APIRouter(
@@ -78,6 +92,14 @@ def _call(fn: Callable[..., Any], *args: Any, **kwargs: Any) -> Any:
         if exc.code == "E_PRIMARY_EMAIL_CANNOT_BE_FORMER":
             hint = "先把另一个地址设为主邮箱，再把这个地址标为曾用"
         raise APIError(exc.code, exc.message, hint=hint, source="sqlite") from exc
+
+
+# 🔴 读端点的取数一律包成同步 `_query()` 再 `await asyncio.to_thread(_query)`
+# (范式 `src/api/routers/email.py:598`)。uvicorn 单 worker 单事件循环, 这些 handler
+# 全是**阻塞** sqlite3 调用 —— 留在循环上就是 head-of-line: 同进程一条 0.7s 的 IMAP
+# 端点能把并发的列表请求整段压住 (lane-D 实测)。连接在 `_query` 内开内关, 不跨线程,
+# 所以与 `repo` 单例并存是安全的。
+# 写 handler 有意不动: 它们持 `BEGIN IMMEDIATE` 写锁, 串行本来就是想要的行为。
 
 
 def _now_ms() -> int:
@@ -127,17 +149,21 @@ async def list_governance_suggestions(
             raise APIError(
                 "E_INVALID_ARG", "cursor must be '<timestamp>:<id>'", source="sqlite"
             ) from exc
-    conn = repo.connect()
-    try:
-        result = _call(
-            contact_governance.list_suggestions,
-            conn,
-            status=status,
-            limit=limit,
-            cursor=cursor_pair,
-        )
-    finally:
-        conn.close()
+
+    def _query() -> Any:
+        conn = repo.connect()
+        try:
+            return _call(
+                contact_governance.list_suggestions,
+                conn,
+                status=status,
+                limit=limit,
+                cursor=cursor_pair,
+            )
+        finally:
+            conn.close()
+
+    result = await asyncio.to_thread(_query)
     return success_envelope(result, request=request)
 
 
@@ -203,24 +229,28 @@ async def contact_governance_status(
     request: Request,
     repo: ContactRepository = Depends(get_contact_repository),
 ):
-    conn = repo.connect()
-    try:
-        pending = int(
-            conn.execute(
-                "SELECT COUNT(*) FROM contact_suggestion WHERE status='pending'"
-            ).fetchone()[0]
-        )
-        marker = conn.execute(
-            "SELECT value FROM sync_state WHERE key=?",
-            (contact_governance.CONTACT_GOVERNANCE_FIRE_KEY,),
-        ).fetchone()
-        latest = conn.execute(
-            "SELECT created_at, status, last_error FROM async_jobs WHERE job_type=? "
-            "ORDER BY job_id DESC LIMIT 1",
-            (contact_governance.CONTACT_GOVERNANCE_JOB_TYPE,),
-        ).fetchone()
-    finally:
-        conn.close()
+    def _query() -> tuple[int, Any, Any]:
+        conn = repo.connect()
+        try:
+            pending_count = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM contact_suggestion WHERE status='pending'"
+                ).fetchone()[0]
+            )
+            fire_marker = conn.execute(
+                "SELECT value FROM sync_state WHERE key=?",
+                (contact_governance.CONTACT_GOVERNANCE_FIRE_KEY,),
+            ).fetchone()
+            latest_job = conn.execute(
+                "SELECT created_at, status, last_error FROM async_jobs WHERE job_type=? "
+                "ORDER BY job_id DESC LIMIT 1",
+                (contact_governance.CONTACT_GOVERNANCE_JOB_TYPE,),
+            ).fetchone()
+        finally:
+            conn.close()
+        return pending_count, fire_marker, latest_job
+
+    pending, marker, latest = await asyncio.to_thread(_query)
     return success_envelope(
         {
             "enabled": True,
@@ -243,16 +273,19 @@ async def contact_governance_history(
     limit: int = Query(10, ge=1, le=50),
     repo: ContactRepository = Depends(get_contact_repository),
 ):
-    conn = repo.connect()
-    try:
-        rows = conn.execute(
-            "SELECT job_id, status, created_at, started_at, finished_at, last_error, "
-            "result_json, params_json "
-            "FROM async_jobs WHERE job_type=? ORDER BY job_id DESC LIMIT ?",
-            (contact_governance.CONTACT_GOVERNANCE_JOB_TYPE, limit),
-        ).fetchall()
-    finally:
-        conn.close()
+    def _query() -> list[sqlite3.Row]:
+        conn = repo.connect()
+        try:
+            return conn.execute(
+                "SELECT job_id, status, created_at, started_at, finished_at, last_error, "
+                "result_json, params_json "
+                "FROM async_jobs WHERE job_type=? ORDER BY job_id DESC LIMIT ?",
+                (contact_governance.CONTACT_GOVERNANCE_JOB_TYPE, limit),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    rows = await asyncio.to_thread(_query)
 
     # async_jobs 的时刻列是 epoch 秒；对外契约统一毫秒（daily-summary 与前端时间处理同款）。
     def _ms(value: Any) -> Optional[int]:
@@ -304,20 +337,25 @@ async def contact_profile_daily_summary(
         datetime.combine(local_date + timedelta(days=1), datetime.min.time()).timestamp()
         * 1000
     )
-    conn = repo.connect()
-    try:
-        row = conn.execute(
-            "SELECT COUNT(*) AS attempted, "
-            "COALESCE(SUM(CASE WHEN profile_status='ok' THEN 1 ELSE 0 END), 0) AS ok, "
-            "COALESCE(SUM(CASE WHEN profile_status='skipped' THEN 1 ELSE 0 END), 0) AS skipped, "
-            "COALESCE(SUM(CASE WHEN profile_status='failed' THEN 1 ELSE 0 END), 0) AS failed, "
-            "MAX(profile_attempted_at) AS last_attempted_at "
-            "FROM contact WHERE profile_attempted_at >= ? AND profile_attempted_at < ?",
-            (start_ms, end_ms),
-        ).fetchone()
-    finally:
-        conn.close()
-    cfg = get_contact_profile_agent_config(str(repo.db_path))
+
+    def _query() -> tuple[sqlite3.Row, Any]:
+        conn = repo.connect()
+        try:
+            summary_row = conn.execute(
+                "SELECT COUNT(*) AS attempted, "
+                "COALESCE(SUM(CASE WHEN profile_status='ok' THEN 1 ELSE 0 END), 0) AS ok, "
+                "COALESCE(SUM(CASE WHEN profile_status='skipped' THEN 1 ELSE 0 END), 0) AS skipped, "
+                "COALESCE(SUM(CASE WHEN profile_status='failed' THEN 1 ELSE 0 END), 0) AS failed, "
+                "MAX(profile_attempted_at) AS last_attempted_at "
+                "FROM contact WHERE profile_attempted_at >= ? AND profile_attempted_at < ?",
+                (start_ms, end_ms),
+            ).fetchone()
+        finally:
+            conn.close()
+        # 配置也读 sqlite (agent_config.db), 跟着一起进线程。
+        return summary_row, get_contact_profile_agent_config(str(repo.db_path))
+
+    row, cfg = await asyncio.to_thread(_query)
     return success_envelope(
         {
             "date": local_date.isoformat(),
@@ -338,26 +376,31 @@ async def backfill_progress(
     repo: ContactRepository = Depends(get_contact_repository),
 ):
     """扫描进度 = watermark 覆盖的 email_metadata 行数 / 总行数 (廉价查询)。"""
-    conn = repo.connect()
-    try:
-        row = conn.execute(
-            "SELECT value FROM sync_state WHERE key=?", (WATERMARK_KEY,)
-        ).fetchone()
+
+    def _query() -> tuple[int, int]:
+        conn = repo.connect()
         try:
-            watermark = int(row[0]) if row else 0
-        except (TypeError, ValueError):
-            watermark = 0
-        total = int(
-            conn.execute("SELECT COUNT(*) FROM email_metadata").fetchone()[0]
-        )
-        scanned = int(
-            conn.execute(
-                "SELECT COUNT(*) FROM email_metadata WHERE internal_id <= ?",
-                (watermark,),
-            ).fetchone()[0]
-        )
-    finally:
-        conn.close()
+            row = conn.execute(
+                "SELECT value FROM sync_state WHERE key=?", (WATERMARK_KEY,)
+            ).fetchone()
+            try:
+                watermark = int(row[0]) if row else 0
+            except (TypeError, ValueError):
+                watermark = 0
+            total_rows = int(
+                conn.execute("SELECT COUNT(*) FROM email_metadata").fetchone()[0]
+            )
+            scanned_rows = int(
+                conn.execute(
+                    "SELECT COUNT(*) FROM email_metadata WHERE internal_id <= ?",
+                    (watermark,),
+                ).fetchone()[0]
+            )
+        finally:
+            conn.close()
+        return scanned_rows, total_rows
+
+    scanned, total = await asyncio.to_thread(_query)
     return success_envelope(
         {"scanned": scanned, "total": total, "drained": scanned >= total},
         request=request,
@@ -408,18 +451,24 @@ async def resolve_contacts(
             "JOIN contact c ON c.id = ce.contact_id "
             f"WHERE ce.email_normalized IN ({placeholders})"
         )
-        conn = repo.connect()
-        try:
-            for row in conn.execute(sql, wanted):
-                chip_by_email[row["q_email"]] = {
-                    "id": row["id"],
-                    "display_name": row["display_name"],
-                    "formal_name": row["formal_name"],
-                    "kind": row["kind"],
-                    "primary_email": row["primary_email"],
-                }
-        finally:
-            conn.close()
+
+        def _query() -> dict[str, dict]:
+            found: dict[str, dict] = {}
+            conn = repo.connect()
+            try:
+                for row in conn.execute(sql, wanted):
+                    found[row["q_email"]] = {
+                        "id": row["id"],
+                        "display_name": row["display_name"],
+                        "formal_name": row["formal_name"],
+                        "kind": row["kind"],
+                        "primary_email": row["primary_email"],
+                    }
+            finally:
+                conn.close()
+            return found
+
+        chip_by_email = await asyncio.to_thread(_query)
     items = {
         raw: (chip_by_email.get(norm) if norm else None)
         for raw, norm in normalized_by_input.items()
@@ -429,6 +478,97 @@ async def resolve_contacts(
 
 # ---- 列表 (一条聚合 SQL) ----
 
+#: 联系人主邮箱 (无显式主时退化最小地址) —— resolve 端点同款相关子查询。
+#: 列表 / 详情 / 组织关系三处共用一份, `{alias}` 是外层 contact 的别名。
+_PRIMARY_EMAIL_SQL = (
+    "(SELECT COALESCE(MAX(CASE WHEN pe.is_primary = 1 "
+    "    THEN pe.email_normalized END), MIN(pe.email_normalized)) "
+    " FROM contact_email pe WHERE pe.contact_id = {alias}.id)"
+)
+_PRIMARY_EMAIL_SQL_C = _PRIMARY_EMAIL_SQL.format(alias="c")
+
+#: keyset 游标里那几列在 SELECT 里的列名前缀 (投影时剔除, 不进对外行形状)。
+_CURSOR_COL_PREFIX = "_ks"
+
+#: 每种 sort 的排序键 = (SQL 表达式, 方向) 有序元组; 游标就是这些表达式在末行的取值。
+#: 🔴 三条纪律:
+#:   ① 末位恒 `c.id` —— keyset 必须是**全序**, 否则并列行翻页时会重复或漏掉
+#:      (density 前三列在活库里大面积并列: sent_to_count=1 的就有几百人)。
+#:   ② 键表达式恒非 NULL (`COALESCE(last_seen_at,-1)`) —— `x < NULL` 是 NULL 不是
+#:      真, 留一个可空键 = 那一段行永远翻不过去。-1 与 DESC 下 NULL 排最后同位
+#:      (epoch 毫秒恒 > 0), 排序结果与老 SQL 逐行一致。
+#:   ③ 游标值**从 SELECT 出来的同一份表达式取**(见 `_CURSOR_COL_PREFIX`), 不在
+#:      Python 侧照抄一遍取值逻辑 —— 那就是「同一事实第二处手抄」。
+#: arity 三档互不相同 (4/3/2), 故换了 sort 还拿旧游标必被 arity 校验挡下。
+_LIST_SORT_KEYS: dict[str, tuple[tuple[str, str], ...]] = {
+    "density": (
+        ("c.sent_to_count", "DESC"),
+        ("c.mail_count", "DESC"),
+        ("COALESCE(c.last_seen_at, -1)", "DESC"),
+        ("c.id", "ASC"),
+    ),
+    "recent": (
+        ("COALESCE(c.last_seen_at, -1)", "DESC"),
+        ("c.mail_count", "DESC"),
+        ("c.id", "ASC"),
+    ),
+    # 裸邮箱按主邮箱兜底比较 (老 SQL 同款); 末尾 '' 让「无名且无邮箱」也拿得到
+    # 非 NULL 键 —— 它在 ASC 下仍排最前, 与老 SQL 的 NULL 同位。
+    "name": (
+        (
+            "COALESCE(c.display_name, "
+            + _PRIMARY_EMAIL_SQL_C
+            + ", '') COLLATE NOCASE",
+            "ASC",
+        ),
+        ("c.id", "ASC"),
+    ),
+}
+
+
+def _encode_list_cursor(values: list[Any]) -> str:
+    """游标 = base64url(JSON 数组)。
+
+    🔴 不用 matters 那种 `'<a>:<b>'`: name 排序的键是**用户姓名字符串**, 里面完全
+    可能带冒号, 分隔符方案在那一档上是错的。
+    """
+    raw = json.dumps(values, ensure_ascii=False, separators=(",", ":"))
+    return base64.urlsafe_b64encode(raw.encode("utf-8")).decode("ascii").rstrip("=")
+
+
+def _decode_list_cursor(cursor: str, arity: int) -> list[Any]:
+    try:
+        padded = cursor + "=" * (-len(cursor) % 4)
+        values = json.loads(base64.urlsafe_b64decode(padded.encode("ascii")).decode("utf-8"))
+    except (TypeError, ValueError) as exc:  # binascii.Error / UnicodeDecodeError 都是 ValueError
+        raise APIError("E_INVALID_ARG", "cursor is malformed", source="sqlite") from exc
+    if not isinstance(values, list) or len(values) != arity:
+        raise APIError(
+            "E_INVALID_ARG", "cursor does not match the requested sort", source="sqlite"
+        )
+    return values
+
+
+def _keyset_where(
+    keys: tuple[tuple[str, str], ...], values: list[Any]
+) -> tuple[str, list[Any]]:
+    """「严格排在游标之后」的词典序谓词 (行值比较的展开式)。
+
+    SQLite 3.15+ 的行值 `(a,b) < (?,?)` 只在方向一致时可用, 而这里 DESC/ASC 混排,
+    故展开成 OR 链 —— 也顺带不吃 sqlite 版本的运气。
+    """
+    clauses: list[str] = []
+    params: list[Any] = []
+    for index, (expr, direction) in enumerate(keys):
+        parts = []
+        for prev_index, (prev_expr, _) in enumerate(keys[:index]):
+            parts.append(f"{prev_expr} = ?")
+            params.append(values[prev_index])
+        parts.append(f"{expr} {'<' if direction == 'DESC' else '>'} ?")
+        params.append(values[index])
+        clauses.append("(" + " AND ".join(parts) + ")")
+    return "(" + " OR ".join(clauses) + ")", params
+
 
 @router.get("")
 async def list_contacts(
@@ -437,6 +577,7 @@ async def list_contacts(
     q: Optional[str] = Query(None),
     sort: str = Query("density"),
     limit: Optional[int] = Query(None),
+    cursor: Optional[str] = Query(None),
     repo: ContactRepository = Depends(get_contact_repository),
     settings=Depends(get_settings),
 ):
@@ -480,44 +621,86 @@ async def list_contacts(
         )
         params.extend([pattern] * 5)
 
-    order = {
-        # SQLite DESC 天然把 NULL 排最后 (NULL 视为最小), 不需要 NULLS LAST。
-        "density": "c.sent_to_count DESC, c.mail_count DESC, c.last_seen_at DESC",
-        "recent": "c.last_seen_at DESC, c.mail_count DESC",
-        "name": "COALESCE(c.display_name, primary_email) COLLATE NOCASE ASC, c.id ASC",
-    }[sort]
+    keys = _LIST_SORT_KEYS[sort]
+    where_sql = " AND ".join(where)
+    # total 独立成一条**只碰 contact 表**的 COUNT: WHERE 一字不差 (那两个 LEFT JOIN
+    # 不筛行, GROUP BY c.id 每个命中的 c 恰好一行), 所以 `total` 与老代码的
+    # `len(rows)` 逐值相同 —— 但不再需要把全表捞进 Python 才数得出来。
+    count_sql = f"SELECT COUNT(*) FROM contact c WHERE {where_sql}"
+    count_params = list(params)
 
+    item_where = where_sql
+    item_params = list(params)
+    if cursor:
+        keyset_sql, keyset_params = _keyset_where(
+            keys, _decode_list_cursor(cursor, len(keys))
+        )
+        item_where = f"{item_where} AND {keyset_sql}"
+        item_params.extend(keyset_params)
+
+    order = ", ".join(f"{expr} {direction}" for expr, direction in keys)
+    cursor_cols = "".join(
+        f", {expr} AS {_CURSOR_COL_PREFIX}{index}"
+        for index, (expr, _) in enumerate(keys)
+    )
     sql = (
         "SELECT c.id, c.display_name, c.formal_name, c.organization, c.department, "
         "  c.role_title, c.function, c.seniority, c.gender, c.kind, c.hidden_at, c.is_self, "
         "  c.mail_count, c.sent_to_count, c.first_seen_at, c.last_seen_at, "
         # WP5 汇报线: manager id + self-join 显示名 (分组 label / 行菜单可用性;
-        # m 对 c 是 1:1, GROUP BY c.id 下裸列取值恒定)。
-        "  c.manager_contact_id, m.display_name AS manager_display_name, c.profile_json, "
-        "  COUNT(ce.id) AS email_count, "
-        "  COALESCE(MAX(CASE WHEN ce.is_primary = 1 THEN ce.email_normalized END), "
-        "    MIN(ce.email_normalized)) AS primary_email "
+        # m 对 c 是 1:1, 每个 c 恰好配到一行 m)。
+        "  c.manager_contact_id, m.display_name AS manager_display_name, "
+        # 🔴 只取 `$.summary` 不整块搬 `profile_json` (活库 616 行读出 141KB 只为产出
+        # ≤6KB)。归一/截断仍归 Python 的 `profile_summary_from_text` —— 空白折叠后再截
+        # 120 字符这件事 SQL 的 substr 复刻不出来, 想省那点带宽就得改对外文案语义。
+        "  json_extract(c.profile_json, '$.summary') AS profile_summary_raw, "
+        # 两列聚合改相关子查询: 老写法 `LEFT JOIN contact_email + GROUP BY c.id` 要先把
+        # 全部命中行分完组才排得了序, LIMIT 形同虚设; 拆开后 LIMIT 能提前收工
+        # (EQP: SEARCH c USING INDEX idx_contact_known + 只对页内行跑子查询)。
+        "  (SELECT COUNT(*) FROM contact_email ce WHERE ce.contact_id = c.id) AS email_count, "
+        f"  {_PRIMARY_EMAIL_SQL_C} AS primary_email"
+        f"{cursor_cols} "
         "FROM contact c "
         "LEFT JOIN contact m ON m.id = c.manager_contact_id "
-        "LEFT JOIN contact_email ce ON ce.contact_id = c.id "
-        f"WHERE {' AND '.join(where)} "
-        "GROUP BY c.id "
+        f"WHERE {item_where} "
         f"ORDER BY {order}"
     )
-    conn = repo.connect()
-    try:
-        rows = conn.execute(sql, params).fetchall()
-    finally:
-        conn.close()
-    total = len(rows)
     if limit is not None:
+        # +1 = 「还有没有下一页」的探针 (多取的那行只用来判断, 不进 items)。
+        sql += " LIMIT ?"
+        item_params.append(limit + 1)
+
+    def _query() -> tuple[list[sqlite3.Row], int]:
+        conn = repo.connect()
+        try:
+            page = conn.execute(sql, item_params).fetchall()
+            matched = int(conn.execute(count_sql, count_params).fetchone()[0])
+        finally:
+            conn.close()
+        return page, matched
+
+    rows, total = await asyncio.to_thread(_query)
+    has_more = limit is not None and len(rows) > limit
+    if has_more:
         rows = rows[:limit]
+    next_cursor = (
+        _encode_list_cursor(
+            [rows[-1][f"{_CURSOR_COL_PREFIX}{index}"] for index in range(len(keys))]
+        )
+        if has_more and rows
+        else None
+    )
+    hidden_cols = {"profile_summary_raw"}
     items = [
         {
-            **{key: row[key] for key in row.keys() if key != "profile_json"},
+            **{
+                key: row[key]
+                for key in row.keys()
+                if key not in hidden_cols and not key.startswith(_CURSOR_COL_PREFIX)
+            },
             "is_self": bool(row["is_self"]),
-            "profile_summary": contact_profile.profile_summary_for_list(
-                row["profile_json"]
+            "profile_summary": contact_profile.profile_summary_from_text(
+                row["profile_summary_raw"]
             ),
             "profile_min": contact_profile.PROFILE_MIN,
             "profile_eligible": (
@@ -530,18 +713,11 @@ async def list_contacts(
         for row in rows
     ]
     return success_envelope(
-        {"items": items, "total": total}, request=request
+        {"items": items, "total": total, "next_cursor": next_cursor}, request=request
     )
 
 
 # ---- 详情 ----
-
-#: 联系人主邮箱 (无显式主时退化最小地址) —— resolve 端点同款相关子查询。
-_PRIMARY_EMAIL_SQL = (
-    "(SELECT COALESCE(MAX(CASE WHEN pe.is_primary = 1 "
-    "    THEN pe.email_normalized END), MIN(pe.email_normalized)) "
-    " FROM contact_email pe WHERE pe.contact_id = {alias}.id)"
-)
 
 #: 组织关系投影的行字段 (裁决 4 最小集 + primary_email/kind —— Monogram 色相
 #: 锚点 = 主邮箱 (D10), 分区头「写邮件并抄送上级」需要上级主邮箱)。
@@ -685,16 +861,14 @@ async def get_contact(
     contact_id: int,
     repo: ContactRepository = Depends(get_contact_repository),
 ):
-    conn = repo.connect()
-    try:
-        detail = _call(
-            _load_detail,
-            conn,
-            contact_id,
-            profile_enabled=True,
-        )
-    finally:
-        conn.close()
+    def _query() -> dict:
+        conn = repo.connect()
+        try:
+            return _call(_load_detail, conn, contact_id, profile_enabled=True)
+        finally:
+            conn.close()
+
+    detail = await asyncio.to_thread(_query)
     return success_envelope(detail, request=request)
 
 
@@ -820,25 +994,27 @@ async def list_contact_mails(
                 "E_INVALID_ARG", "cursor must be '<timestamp>:<id>'", source="sqlite"
             ) from exc
 
-    conn = repo.connect()
-    try:
-        self_addresses = contact_service.resolve_self_addresses(
-            conn,
-            user_email=getattr(settings, "user_email", ""),
-            extra_raw=getattr(settings, "self_emails", ""),
-        )
-        page = _call(
-            contact_service.list_contact_mail_rows,
-            conn,
-            contact_id,
-            self_addresses=self_addresses,
-            direction=direction,
-            cursor_pair=cursor_pair,
-            limit=limit,
-        )
-    finally:
-        conn.close()
+    def _query() -> dict:
+        conn = repo.connect()
+        try:
+            self_addresses = contact_service.resolve_self_addresses(
+                conn,
+                user_email=getattr(settings, "user_email", ""),
+                extra_raw=getattr(settings, "self_emails", ""),
+            )
+            return _call(
+                contact_service.list_contact_mail_rows,
+                conn,
+                contact_id,
+                self_addresses=self_addresses,
+                direction=direction,
+                cursor_pair=cursor_pair,
+                limit=limit,
+            )
+        finally:
+            conn.close()
 
+    page = await asyncio.to_thread(_query)
     rows = page["rows"]
     items = [
         {
@@ -872,21 +1048,24 @@ async def list_contact_matters(
     contact_id: int,
     repo: ContactRepository = Depends(get_contact_repository),
 ):
-    conn = repo.connect()
-    try:
-        _call(contact_service._require_contact, conn, contact_id)
-        rows = conn.execute(
-            "SELECT ms.matter_id, ms.role, m.public_id, m.title, m.status, "
-            "  m.archived_at "
-            "FROM matter_stakeholder ms "
-            "JOIN matter m ON m.id = ms.matter_id "
-            "WHERE ms.contact_id = ? AND ms.deleted_at IS NULL "
-            "  AND m.deleted_at IS NULL "
-            "ORDER BY m.updated_at DESC",
-            (contact_id,),
-        ).fetchall()
-    finally:
-        conn.close()
+    def _query() -> list[sqlite3.Row]:
+        conn = repo.connect()
+        try:
+            _call(contact_service._require_contact, conn, contact_id)
+            return conn.execute(
+                "SELECT ms.matter_id, ms.role, m.public_id, m.title, m.status, "
+                "  m.archived_at "
+                "FROM matter_stakeholder ms "
+                "JOIN matter m ON m.id = ms.matter_id "
+                "WHERE ms.contact_id = ? AND ms.deleted_at IS NULL "
+                "  AND m.deleted_at IS NULL "
+                "ORDER BY m.updated_at DESC",
+                (contact_id,),
+            ).fetchall()
+        finally:
+            conn.close()
+
+    rows = await asyncio.to_thread(_query)
     items = [
         {
             "matter_id": row["matter_id"],

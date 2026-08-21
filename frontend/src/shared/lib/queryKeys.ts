@@ -278,6 +278,12 @@ export const qk = {
   contacts: {
     all: () => ['contacts'] as const,
     list: (view: string, q: string, sort: string) => ['contacts', 'list', view, q, sort] as const,
+    // 工作台主列表的分页版（keyset cursor）。与上面 `list` **分开的 key**：同一份数据
+    // 两种形状（单页 vs pages 数组），共用一个 key 会让 useQuery 与 useInfiniteQuery
+    // 互相读到对方的缓存结构。前缀仍是 ['contacts','list'] ⇒ 写侧那一次 invalidate
+    // 照旧同时命中两者。
+    listPaged: (view: string, q: string, sort: string) =>
+      ['contacts', 'list', 'paged', view, q, sort] as const,
     detail: (contactId: number) => ['contacts', 'detail', contactId] as const,
     mails: (contactId: number, role: string) =>
       ['contacts', 'detail', contactId, 'mails', role] as const,

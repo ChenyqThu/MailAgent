@@ -51,6 +51,9 @@ export interface ContactsApi {
     sort?: ContactSort
     /** WP4 (⌘K「人」组): 排序后截断 items; total 仍为全量命中数（「+n more」）。 */
     limit?: number
+    /** keyset 游标（上一页的 `next_cursor` 原样回传）。不传 `limit` 时服务端一次给全，
+     *  没有游标可翻 —— 契约 additive，老调用方一字不改。 */
+    cursor?: string
   }): Promise<ContactListResponse>
   get(contactId: number): Promise<ContactDetailDto>
   /** WP4 互链: 批量精确解析（键 = 原输入串, null = 不在库）。上限 100。 */
@@ -132,7 +135,13 @@ export function createContactsApi(baseUrl: string): ContactsApi {
   return {
     list(options = {}) {
       return request(baseUrl, 'GET', '/contacts', {
-        query: { view: options.view, q: options.q, sort: options.sort, limit: options.limit }
+        query: {
+          view: options.view,
+          q: options.q,
+          sort: options.sort,
+          limit: options.limit,
+          cursor: options.cursor
+        }
       })
     },
     get(contactId) {
@@ -199,9 +208,14 @@ export function createContactsApi(baseUrl: string): ContactsApi {
       })
     },
     ignoreProfileSuggestion(contactId, field) {
-      return request(baseUrl, 'POST', `/contacts/${segment(contactId)}/profile/suggestions/ignore`, {
-        body: { field }
-      })
+      return request(
+        baseUrl,
+        'POST',
+        `/contacts/${segment(contactId)}/profile/suggestions/ignore`,
+        {
+          body: { field }
+        }
+      )
     },
     backfillProgress() {
       return request(baseUrl, 'GET', '/contacts/backfill/progress')

@@ -10,12 +10,12 @@
 // `localStorage` 本身就取不到 —— 拆出独立小模块正是为了让这条闸不依赖那个环境限制。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
-import { act, cleanup, render, screen, waitFor } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
 import type { ContactRowDto } from '@shared/api/types/contact'
 
-const { ROWS, visitStore, listCalls } = vi.hoisted(() => {
+const { ROWS, visitStore, listCalls, listTotal } = vi.hoisted(() => {
   function person(id: number, name: string): ContactRowDto {
     return {
       id,
@@ -46,7 +46,9 @@ const { ROWS, visitStore, listCalls } = vi.hoisted(() => {
   return {
     ROWS: [person(101, '张三'), person(102, '李四'), person(103, '王五')],
     visitStore: { value: null as { id: number; view: 'known' | 'all' } | null },
-    listCalls: [] as Array<{ view: string }>
+    listCalls: [] as Array<{ view: string }>,
+    // 服务端报的全量命中数（可 > 已加载的 ROWS.length —— 分页后就是这个形态）。
+    listTotal: { value: 3 }
   }
 })
 
@@ -61,22 +63,45 @@ vi.mock('@shared/components/contacts/hooks', () => ({
   useContactFlags: () => ({ contactsEnabled: true, contactAgentEnabled: false, loading: false }),
   useContactsApi: () => ({ get: vi.fn(), hide: vi.fn(), setKind: vi.fn(), setSelf: vi.fn() }),
   useInvalidateContact: () => async () => undefined,
-  useContactList: (options: { view: string }) => {
+  useContactListPaged: (options: { view: string }) => {
     listCalls.push({ view: options.view })
-    return { data: { items: ROWS, total: ROWS.length }, isPending: false, isSuccess: true }
+    return {
+      data: { pages: [{ items: ROWS, total: listTotal.value, next_cursor: null }] },
+      isPending: false,
+      isSuccess: true,
+      fetchNextPage: vi.fn(),
+      hasNextPage: false,
+      isFetchingNextPage: false
+    }
   },
   useBackfillProgress: () => ({ data: undefined }),
   useContactAgentStatus: () => ({ data: undefined })
 }))
 
-// 列表面只回报它收到的 selectedId —— 编排对不对看这一个属性就够。
+// 列表面只回报它收到的 selectedId / total，另外把 kind chips 的回调摆成可点的按钮
+// —— 编排对不对看这几样就够，行渲染各有自己的测试文件。
+const KIND_BUCKETS = ['person', 'robot', 'list', 'hidden'] as const
+
 vi.mock('@shared/components/contacts/ContactListPane', () => ({
-  ContactListPane: (props: { selectedId: number | null; total: number }) => (
+  ContactListPane: (props: {
+    selectedId: number | null
+    total: number
+    onKindFilterToggle: (bucket: 'person' | 'robot' | 'list' | 'hidden') => void
+  }) => (
     <div
       data-testid="contact-list-pane"
       data-selected-id={props.selectedId ?? ''}
       data-total={props.total}
-    />
+    >
+      {KIND_BUCKETS.map((bucket) => (
+        <button
+          key={bucket}
+          type="button"
+          data-testid={`kind-${bucket}`}
+          onClick={() => props.onKindFilterToggle(bucket)}
+        />
+      ))}
+    </div>
   )
 }))
 vi.mock('@shared/components/contacts/ContactDetail', () => ({
@@ -115,6 +140,7 @@ function selectedId(): string {
 beforeEach(() => {
   visitStore.value = null
   listCalls.length = 0
+  listTotal.value = ROWS.length
   useContactNavigation.getState().clear()
 })
 
@@ -160,5 +186,30 @@ describe('ContactsWorkspace · 冷启动选中', () => {
     })
     renderWorkspace()
     await waitFor(() => expect(selectedId()).toBe('102'))
+  })
+})
+
+describe('ContactsWorkspace · 头部计数', () => {
+  function headerTotal(): string {
+    return screen.getByTestId('contact-list-pane').getAttribute('data-total') ?? ''
+  }
+
+  test('分页只加载了一部分时报服务端的全量命中数，不报「已加载」', async () => {
+    // 616 人的库里首屏只拉回 3 行 —— 老写法（orderedIds.length）会把头部写成 3。
+    listTotal.value = 616
+    renderWorkspace()
+    await waitFor(() => expect(headerTotal()).toBe('616'))
+  })
+
+  test('本地把已加载的行藏起来时回到「实际列出」口径', async () => {
+    // 「全部」视图关掉全部 chips = 一行都不列 ⇒ 报 0，而不是服务端那个 3。
+    visitStore.value = { id: 101, view: 'all' }
+    renderWorkspace()
+    await waitFor(() => expect(headerTotal()).toBe('3'))
+    // chips 是 ContactListPane 的交互（这里是桩），点桩上的按钮驱动 workspace state。
+    for (const bucket of KIND_BUCKETS) {
+      fireEvent.click(screen.getByTestId(`kind-${bucket}`))
+    }
+    await waitFor(() => expect(headerTotal()).toBe('0'))
   })
 })

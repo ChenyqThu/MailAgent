@@ -12,7 +12,7 @@
 // 🔴 图标：`sortdesc` 在原型的 ICON_PATHS 里没有 path、渲染成空按钮，故排序钮
 // 沿用 lucide `ArrowUpDown`；密度钮按原型用 `Layers` / `ListChecks`。
 
-import { useRef, useState } from 'react'
+import { useCallback, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { List } from 'react-window'
 import {
@@ -42,6 +42,7 @@ import { ContactListSkeleton } from './ContactSkeleton'
 import { ContactVirtualRow, type ContactRowActions, type ContactRowsProps } from './ContactRow'
 import {
   rowHeightFor,
+  shouldFetchNextContactPage,
   type ContactDensity,
   type ContactGroupBy,
   type ContactKindBucket,
@@ -83,6 +84,10 @@ export interface ContactListPaneProps {
   /** 当前视图（含搜索与 chips 过滤）实际列出的联系人数 —— 头部计数。 */
   total: number
   loading: boolean
+  /** 滚到接近底部时续拉下一页（keyset 分页）。 */
+  onLoadMore(): void
+  /** 还有没有下一页 —— 没有就不必挂滚动回调。 */
+  hasMore: boolean
   progress: ContactBackfillProgress | undefined
   selectedId: number | null
   selectionMode: boolean
@@ -108,6 +113,17 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
   const [groupMenuOpen, setGroupMenuOpen] = useState(false)
   const sortTriggerRef = useRef<HTMLButtonElement>(null)
   const groupTriggerRef = useRef<HTMLButtonElement>(null)
+
+  const { hasMore, onLoadMore, rows } = props
+  // 续拉阈值走 `shouldFetchNextContactPage`（纯函数，见那里的注释）。react-query 的
+  // infinite query 对重复 fetchNextPage 幂等（in-flight 时是 no-op），这里只再挡一道 hasMore。
+  const handleRowsRendered = useCallback(
+    (range: { stopIndex: number }): void => {
+      if (!hasMore) return
+      if (shouldFetchNextContactPage(range.stopIndex, rows.length)) onLoadMore()
+    },
+    [hasMore, onLoadMore, rows.length]
+  )
 
   // manager 档的菜单 label 是特例映射（裁决 7：不动 §5 key 表，
   // `contacts.group.byManager` 已在两 locale），其余保持 groupBy 模板。
@@ -368,6 +384,7 @@ export function ContactListPane(props: ContactListPaneProps): React.ReactElement
             rowCount={props.rows.length}
             rowHeight={(index: number) => rowHeightFor(props.rows[index], props.density)}
             rowProps={rowProps}
+            onRowsRendered={handleRowsRendered}
             className="scrollbar-none"
             style={{ height: '100%' }}
           />

@@ -21,7 +21,7 @@
   出向 `sent_to_count`、关联邮件方向三分、compose 收件人补全的排除。改后
   `mailagent contact backfill --rescan` 收敛。
 
-## 2. 数据模型（SyncStore v54 + v55 + v59）
+## 2. 数据模型（SyncStore v54 + v55 + v59 + v67）
 
 DDL 单源 = `src/mail/sync_store.py::CONTACT_TABLE_DDLS` / `CONTACT_INDEX_DDLS`
 （🔴 独立常量组只从 v54 块执行，**不进 `MATTER_*_DDLS`** —— 那组会对老库在
@@ -48,10 +48,18 @@ v44–v50 各块整组重放，新表混进去炸梯子）。
   下一轮扫描就可能被自动提取覆盖。回退代价见 `DB_VERSION` 注记（不能只降版本号，
   旧代码读 `c.name_en` 会 `no such column`）。
 - 组织关系两列（`manager_contact_id` FK `ON DELETE SET NULL` + `manager_src`
-  CHECK `manual|auto`）随 v54 一次建齐；**无 manager 索引**（有意取舍：联系人千行
-  量级全表扫可接受，不为它 bump DB_VERSION）。
+  CHECK `manual|auto`）随 v54 一次建齐。
+- **v67**（2026-08-20 读路径性能批）：`contact` 表本体从「一条索引都没有」补到三条
+  —— `idx_contact_known(kind, is_self, hidden_at, sent_to_count DESC)`（默认视图那组
+  等值/IS NULL 条件 + 密度序首列）、`idx_contact_manager(manager_contact_id)`（详情
+  reports 腿）、`idx_contact_org(organization)`（详情 peers 腿）。此前列表主查询是
+  `SCAN c` + TEMP B-TREE、一次详情三次全表扫；v54 那条「不为 manager 索引 bump
+  DB_VERSION」的取舍**已作废**（列表加 keyset 分页后，LIMIT 要能提前收工就必须有
+  可用于排序的索引）。DDL 单源 `CONTACT_V67_INDEXES`，🔴 **不进
+  `CONTACT_INDEX_DDLS`**（那组由 v54 块执行，老库整组重放会炸 —— v52 教训）。
 - 迁移回归：`tests/matters/test_contact_v54_migration.py` +
-  `test_contact_v55_locks.py` + `test_contact_v59_formal_name.py`。
+  `test_contact_v55_locks.py` + `test_contact_v59_formal_name.py` +
+  `test_contact_v67_indexes.py`。
 
 ### 2.1 三个「名字」字段的分工（WP-6 A 厘清）
 
@@ -157,13 +165,17 @@ backfill 就收敛，不必等下个 tick）。
 
 门卫 `require_contacts_enabled`（off 全 403）+ `verify_cf_access`；错误经
 `ContactError` → `_call` → `APIError`（码表在 `src/api/app.py::ERROR_CODE_TO_HTTP`）。
-🔴 列表是**一条聚合 SQL**（行字段一次给齐 + 主邮箱/邮箱数/manager self-join，
+🔴 列表是**一条 SQL 出齐一行**（主邮箱/邮箱数走相关子查询，manager self-join，
 禁逐行取数）；`/backfill/progress` 与 `/resolve` 字面路径声明在 `/{contact_id}`
 之前。写 schema 刻意无 CAS / 幂等信封（治理写全幂等且低频）。
 
+🔴 **读 handler 一律 `await asyncio.to_thread(_query)`**（2026-08-20 起）：uvicorn 单
+worker 单事件循环，裸阻塞 sqlite3 留在循环上就是 head-of-line。写 handler 有意不动
+（持 `BEGIN IMMEDIATE` 写锁，串行是想要的行为）。
+
 | 端点 | 语义 |
 |---|---|
-| `GET ""` | 列表（view `known`[= 双向往来的人，排 robot/单向/hidden/**「我」**] / `all`[只排墓碑] + q + sort 三值 + limit 截断[⌘K 用，total 仍全量]）|
+| `GET ""` | 列表（view `known`[= 双向往来的人，排 robot/单向/hidden/**「我」**] / `all`[只排墓碑] + q + sort 三值 + **keyset 分页**）|
 | `GET /backfill/progress` | watermark 覆盖行数 / 总行数 |
 | `POST /resolve` | 批量精确解析（WP4 互链 chip；键 = 原输入串，null = 不在库；上限 100）|
 | `GET /{id}` · `GET /{id}/mails` · `GET /{id}/matters` | 详情（含 §6 组织关系投影）· 人-邮件账本分页（§5.1 方向三分）· 关联事项反查 |
@@ -171,6 +183,27 @@ backfill 就收敛，不必等下个 tick）。
 | `POST /{id}/hide` / `kind` / `self` / `manager` / `merge` / `emails/primary` / `emails/former` | 治理写（全部薄端点进 service 守卫）|
 | `GET /suggestions` · `POST /suggestions/{id}/adopt|ignore` | WP7 owner 待审队列；blocked 先落状态/原因再返回 4xx；merge adopt 只返预览 pair |
 | `POST /agent/run` · `GET /agent/status` | WP7 手动 enqueue（事务外、活跃 run 合并、幂等键）· flag/pending/最近扫描摘要 |
+
+### 5.0 列表分页契约（2026-08-20，additive）
+
+`GET /api/contacts` 的 `limit` / `cursor` 都是**可选**；不传 `limit` = 一次返回全量
+（老行为逐字节不变，远程 web 与 gateway 工具照旧）。传 `limit` 则：
+
+- 服务端 `LIMIT limit+1` 探下一页，返回体多一个 `next_cursor`（`null` = 到底了）；
+- `total` 恒是**全量命中数**（独立 `SELECT COUNT(*) FROM contact c WHERE <同一 WHERE>`，
+  不受 limit/cursor 影响）—— 头部计数与「+n more」都读它；
+- 游标是 **base64url(JSON 数组)** 的不透明串，值 = 该 sort 的排序键在末行的取值。
+  🔴 不用 matters 的 `"<a>:<b>"`：`name` 档的键是用户姓名，里面可能带冒号。
+
+排序键单源 `_LIST_SORT_KEYS`，三档 arity 各不相同（density 4 / recent 3 / name 2）⇒
+换了 sort 还拿旧游标必被 arity 校验挡下（400），不会静默按错的键翻页。三条纪律：
+末位恒 `c.id`（keyset 必须全序，否则并列行翻页会重复/丢失）、键表达式恒非 NULL
+（`COALESCE(last_seen_at,-1)`，`x < NULL` 是 NULL 不是真）、游标值从 SELECT 出来的
+**同一份表达式**取（列名前缀 `_ks`，投影时剔除，不进对外行形状）。
+
+`profile_json` 不再整块搬进 Python：SQL 只取 `json_extract(…,'$.summary')`，归一与
+120 字符截断留在 `profile_summary_from_text`（空白折叠后再截 N 这件事 SQL 的 substr
+复刻不出来，而截断长度是对外可见的文案语义）。
 
 ### 5.2 WP7 治理 Agent
 
@@ -241,7 +274,7 @@ backfill 就收敛，不必等下个 tick）。
 
 - **工作台**：`ContactsWorkspace`（双栏 280–560 可拖宽，860px 单列折叠推拉）→
   `ContactListPane`（视图/搜索/分组/排序/密度 + 虚拟滚动 react-window 定高 +
-  多选条）→ `ContactDetail`（档案头 / 画像卡引导态 / 身份信息与锁 / **组织关系
+  多选条 + 滚到 ~70% 续拉下一页）→ `ContactDetail`（档案头 / 画像卡引导态 / 身份信息与锁 / **组织关系
   `ContactOrgSection`**[person，08-14 起 self 也渲染] / 关联邮件[方向四 tab，
   §5.1] / 关联事项）。
 - **分组**：`contactListModel.ts` 纯模型（组 = 成员数降序、`未分组` 恒末尾、组头
@@ -268,6 +301,14 @@ backfill 就收敛，不必等下个 tick）。
 - **picker（WP3）**：`MatterStakeholderPicker` 单页化读 `/api/contacts`；
   `PersonPicker` 纯展示（数据调用方自取），merge 步骤 1 / 干系人多选 / WP5 指定
   上级三处共用。
+- **列表数据供给（2026-08-20）**：主列表走 `useContactListPaged`（`useInfiniteQuery`，
+  首屏 `CONTACT_LIST_PAGE_SIZE=200` + keyset 续页，key `qk.contacts.listPaged`，前缀仍是
+  `['contacts','list']` ⇒ 写侧那一次 invalidate 照旧同时命中单页版）。单页版
+  `useContactList` 留给弹层，🔴 **调用方必须自己传 `limit`** —— 不传 = 服务端返回全表
+  （活库「全部」视图 1.17MB）。唯一有意不传的是 `ContactAgentDrawer` 的目录查表源
+  （要按任意 id 反查名字，按密度截断会正好丢掉建议指向的冷门行）。
+  头部计数 = 「本地有没有把已加载的行藏起来（chips/折叠）」二选一：藏了报实际列出数，
+  没藏报服务端 `total` —— 全部加载完时两者恒相等。
 - i18n：`contacts.*` 子树两 locale 逐 key 相等闸
   `frontend/tests/shared/contactsLocaleParity.test.ts`；🔴 本仓 i18next-icu，
   插值是 **ICU 单花括号**（`{name}`），勿改 `{{name}}`。
@@ -275,8 +316,10 @@ backfill 就收敛，不必等下个 tick）。
 ## 8. 测试与闸
 
 - Python：`tests/contacts/`（taxonomy / scanner / service / identity locks /
-  org relations / **self identity** / REST 面）+ 迁移
-  `tests/matters/test_contact_v54_migration.py`、`test_contact_v55_locks.py`。
+  org relations / **self identity** / REST 面 / **keyset 分页三档等价 + 并列不重不漏 +
+  游标 arity 校验 + 行形状不漏内部列**）+ 迁移
+  `tests/matters/test_contact_v54_migration.py`、`test_contact_v55_locks.py`、
+  `test_contact_v67_indexes.py`。
 - 跨语言闸：`tests/config/test_contact_enum_parity.py`（taxonomy 枚举/可锁字段 ↔
   TS `types/contact.ts`）。
 - 前端：`frontend/tests/components/contacts/`（列表多选条 / merge 模型 /

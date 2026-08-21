@@ -129,17 +129,18 @@ export function MergeContactsDialog({
     return () => window.clearTimeout(timer)
   }, [searchInput])
 
+  // 带 limit 请求（同 ContactOrgSection 的选人弹层）：只渲染前 `MERGE_CANDIDATE_CAP`
+  // 条，就别把整张通讯录搬过来。
   const listQuery = useContactList({
     view: 'all',
     q: search,
     sort: 'density',
-    enabled: open && step === 'pick'
+    enabled: open && step === 'pick',
+    limit: MERGE_CANDIDATE_CAP
   })
   const candidates = useMemo(
     () =>
-      (listQuery.data?.items ?? [])
-        .filter((row) => row.id !== aId)
-        .slice(0, MERGE_CANDIDATE_CAP),
+      (listQuery.data?.items ?? []).filter((row) => row.id !== aId).slice(0, MERGE_CANDIDATE_CAP),
     [aId, listQuery.data]
   )
 
@@ -370,7 +371,8 @@ export function MergeContactsDialog({
                           <span
                             className={cn(
                               'truncate font-mono text-meta text-ink-fg',
-                              !isPrimary && isFormerChecked(email.address) &&
+                              !isPrimary &&
+                                isFormerChecked(email.address) &&
                                 'text-ink-fg-2 line-through'
                             )}
                           >
@@ -566,4 +568,3 @@ function MergeSideCard({
     </div>
   )
 }
-

@@ -56,6 +56,8 @@ function renderPane(over: Partial<ContactListPaneProps>): void {
     rows: [],
     total: 0,
     loading: false,
+    onLoadMore: vi.fn(),
+    hasMore: false,
     progress: undefined,
     selectedId: null,
     selectionMode: false,

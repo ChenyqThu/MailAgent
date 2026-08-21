@@ -712,12 +712,18 @@ async def tick_loop(
             continue
 
 
-def profile_summary_for_list(raw_profile: Any) -> Optional[str]:
-    summary = str(_json_dict(raw_profile).get("summary") or "").replace("\r", " ").replace("\n", " ")
-    summary = " ".join(summary.split())
-    if not summary:
+def profile_summary_from_text(summary: Any) -> Optional[str]:
+    """列表行摘要的**归一 + 截断单源**: 折叠所有空白成单空格, 再截 120 字符。
+
+    列表 SQL 已改成 `json_extract(profile_json,'$.summary')` 直接取这一段, 但归一
+    留在 Python: 「先折叠空白再截 N 字符」用 SQL 的 substr 复刻不出来 (substr 先截,
+    折叠后长度就短于 N), 而截断长度是对外可见的文案语义。
+    """
+    text = str(summary or "").replace("\r", " ").replace("\n", " ")
+    text = " ".join(text.split())
+    if not text:
         return None
-    return summary[:PROFILE_SUMMARY_LIST_MAX]
+    return text[:PROFILE_SUMMARY_LIST_MAX]
 
 
 def profile_feature_configured(conn: sqlite3.Connection, *, env_enabled: bool) -> bool:

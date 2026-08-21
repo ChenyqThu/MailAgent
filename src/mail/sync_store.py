@@ -592,6 +592,34 @@ CONTACT_INDEX_DDLS = (
     "CREATE INDEX IF NOT EXISTS idx_link_mail ON contact_email_link(internal_id)",
 )
 
+# v67: contact **表本体**的三条索引 (v54 建表起一直是零索引 —— 列表 SCAN c + TEMP
+# B-TREE, 详情的 reports/peers 两腿各 SCAN r 一次)。
+#   · idx_contact_known  → 默认视图那组等值/IS NULL 条件 + 密度序的第一列
+#                          (EQP: SEARCH c USING INDEX … + LAST 3 TERMS 局部排序)
+#   · idx_contact_manager→ 详情 reports 腿 `WHERE manager_contact_id = ?`
+#   · idx_contact_org    → 详情 peers 腿 `WHERE organization = ?`
+# 🔴 有意**不进** CONTACT_INDEX_DDLS: 那一组会被 v54 块对老库执行, 而它是「三表刚
+# 建完」的语境; 本组只从 v67 块执行 (新库走满梯子同样经 v67 拿到)。同 v52 教训 ——
+# 组内顺序碰巧成立不等于安全 (见 MATTER_STAKEHOLDER_CONTACT_INDEX_DDL 头注)。
+# 形状是 (索引名, DDL) 而不是裸 DDL 串: `_migration_guard_index` 要按名字复查
+# sqlite_master, 名字**写在 DDL 旁边**比从 DDL 里 split 出来安全 (抽错了会静默把
+# 「真失败」当成「已在位」放过去)。
+CONTACT_V67_INDEXES = (
+    (
+        "idx_contact_known",
+        "CREATE INDEX IF NOT EXISTS idx_contact_known "
+        "ON contact(kind, is_self, hidden_at, sent_to_count DESC)",
+    ),
+    (
+        "idx_contact_manager",
+        "CREATE INDEX IF NOT EXISTS idx_contact_manager ON contact(manager_contact_id)",
+    ),
+    (
+        "idx_contact_org",
+        "CREATE INDEX IF NOT EXISTS idx_contact_org ON contact(organization)",
+    ),
+)
+
 
 # ==================== folder_pref DDL single source (v62) ====================
 # 已同步文件夹的 per-folder 配置 (图标 + 通知开关 + AI 开关)。🔴 独立成组, **不进**
@@ -997,6 +1025,11 @@ class SyncStoreMigrationError(RuntimeError):
        拒绝启动防旧代码静默降级新库。
     调用方 (src/service.py EmailNotionSyncApp.__init__) 捕获后 fail-fast 退出。
     """
+
+
+#: 本进程已经完整 init 过的库文件, 键 = (绝对路径, st_dev, st_ino)。
+#: 见 `SyncStore._init_database_impl` 里的门闩注释; 测试要重放迁移时可以 `.clear()`。
+_INITIALIZED_DBS: set[tuple] = set()
 
 
 def _folder_pref_seed_rows() -> list:
@@ -1547,7 +1580,19 @@ class SyncStore:
     #                不覆盖 owner 已保存的启用、模型、提示词与排程。
     # v66 (2026-08-20): contact 增加 gender TEXT NULL，非空只允许 male/female。
     #                幂等：ALTER 前 PRAGMA 探列；旧库由 service 层同值域校验兜底。
-    DB_VERSION = 66
+    # v67 (2026-08-20, 通讯录读路径性能): contact 表补三条索引 —— idx_contact_known /
+    #                idx_contact_manager / idx_contact_org。DDL 单源
+    #                `CONTACT_V67_INDEX_DDLS`（🔴 不进 `CONTACT_INDEX_DDLS`，理由见该
+    #                常量头注 = v52 的同一条教训）。
+    #                背景：contact 自 v54 建表起一条索引都没有，列表主查询 `SCAN c` +
+    #                TEMP B-TREE、详情的 reports/peers 两腿各扫一次全表。2495 行时无感，
+    #                线性增长无兜底；本批同时给列表加了 keyset 分页，LIMIT 要真能提前
+    #                收工就得有序可用的索引。
+    #                幂等：CREATE INDEX IF NOT EXISTS + `_migration_guard_index` 复查
+    #                sqlite_master（索引仍缺失才算真失败，version 不前进）。重放结果不变。
+    #                回滚（回退 v67）：索引是纯读优化，旧代码不认识也不受影响，**只降
+    #                版本号是安全的**；要清干净再 `DROP INDEX idx_contact_known` 等三条。
+    DB_VERSION = 67
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -1588,6 +1633,17 @@ class SyncStore:
         finally:
             conn.close()
 
+    def _init_latch_key(self) -> Optional[tuple]:
+        """进程内 init 门闩的键 = (绝对路径, st_dev, st_ino)。
+
+        文件不存在 (首次建库) 或 stat 失败 → None = 不走门闩, 老老实实跑完整 init。
+        """
+        try:
+            stat = self.db_path.stat()
+        except OSError:
+            return None
+        return (str(self.db_path.resolve()), stat.st_dev, stat.st_ino)
+
     def _init_database(self):
         """初始化数据库表结构（v3 架构）
 
@@ -1627,6 +1683,8 @@ class SyncStore:
         # 把 db_version 静默降回、或按旧语义误写新 schema)。前端 backend_lifecycle.ts
         # 的 EXPECTED_DB_VERSION 门控是 `>=` 容错 (不会拦更新的库), Python 侧在这里
         # fail-fast 是有意行为 —— 两者不冲突 (TS 照常开窗, serve 拒起并留明确日志)。
+        # 🔴 守卫必须排在下面的进程内门闩**之前**: 门闩只跳过 DDL 重放, 不能顺带
+        # 把「库被更新版本的 app 迁过了」这件事也跳过去。
         if current_version > self.DB_VERSION:
             # raise 由 _init_database 外层兜底 close 连接 (ROLLBACK), 这里不重复 close
             raise SyncStoreMigrationError(
@@ -1635,6 +1693,21 @@ class SyncStore:
                 f"请升级 App, 或从 backups/ 恢复与当前版本匹配的数据库备份 "
                 f"(拒绝启动以防旧代码降级新库)。"
             )
+
+        # 进程内门闩: 同一个库文件已经在本进程里跑完过一遍完整 init, 且它现在正好停在
+        # 本版本 —— 后面那一百多条 `CREATE … IF NOT EXISTS` + PRAGMA 探列全是空转。
+        # serve-api 每个请求 new 一个 ServiceContext ⇒ new 一个 SyncStore, 活库 log
+        # 实测 37 秒内跑了 16 次全量 init, 全在共享的事件循环上。
+        # 🔴 门闩键含 (dev, ino): 测试常「同一路径删掉重建」, 只按路径记会让第二个库
+        #    静默拿不到建表。
+        # 🔴 条件里的 `current_version == self.DB_VERSION` 是第二道保险: 库被人手工
+        #    降版(迁移重放测试的标准手法)后必须重跑迁移, 不能被门闩挡住。
+        latch_key = self._init_latch_key()
+        if latch_key is not None and latch_key in _INITIALIZED_DBS:
+            if current_version == self.DB_VERSION:
+                conn.close()
+                return
+            _INITIALIZED_DBS.discard(latch_key)
 
         if current_version < 3:
             # v3 需要迁移，检查是否已有 email_metadata 表
@@ -4367,6 +4440,14 @@ class SyncStore:
                 _migration_guard_columns(
                     cursor, "contact", {"gender"}, "v66 migration", e
                 )
+        # === v67: contact 表本体的三条读路径索引 ===
+        if current_version < 67:
+            for _index_name_v67, _ddl_v67 in CONTACT_V67_INDEXES:
+                try:
+                    cursor.execute(_ddl_v67)
+                except sqlite3.OperationalError as e:
+                    _migration_guard_index(cursor, _index_name_v67, "v67 migration", e)
+            logger.info("v67 migration: contact indexes ensured")
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
@@ -4379,6 +4460,12 @@ class SyncStore:
 
         conn.commit()
         conn.close()
+        # 只有全程跑到这里 (= 迁移全成功且版本已落库) 才记门闩; 任何一块 raise 都不会
+        # 走到这, 下次构造照常重跑。键在 commit 后重取: 首次建库时进函数那会儿文件还
+        # 不存在, 拿不到 inode。
+        latch_key = self._init_latch_key()
+        if latch_key is not None:
+            _INITIALIZED_DBS.add(latch_key)
         logger.debug(f"Database tables initialized (v{self.DB_VERSION})")
 
     # ==================== 同步状态操作 ====================

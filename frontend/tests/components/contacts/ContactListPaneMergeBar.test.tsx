@@ -7,7 +7,10 @@ import { afterEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import i18n from '@shared/i18n'
-import { ContactListPane, type ContactListPaneProps } from '@shared/components/contacts/ContactListPane'
+import {
+  ContactListPane,
+  type ContactListPaneProps
+} from '@shared/components/contacts/ContactListPane'
 import type { ContactRowActions } from '@shared/components/contacts/ContactRow'
 
 await i18n.changeLanguage('zh-CN')
@@ -23,7 +26,10 @@ const actions: ContactRowActions = {
   onToggleCheck: vi.fn()
 }
 
-function renderPane(checkedIds: ReadonlySet<number>, onMergePair: (pair: [number, number]) => void) {
+function renderPane(
+  checkedIds: ReadonlySet<number>,
+  onMergePair: (pair: [number, number]) => void
+) {
   const props: ContactListPaneProps = {
     view: 'known',
     onViewChange: vi.fn(),
@@ -41,6 +47,8 @@ function renderPane(checkedIds: ReadonlySet<number>, onMergePair: (pair: [number
     rows: [],
     total: 0,
     loading: false,
+    onLoadMore: vi.fn(),
+    hasMore: false,
     progress: undefined,
     selectedId: null,
     selectionMode: true,

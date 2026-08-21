@@ -228,3 +228,13 @@ export function orderedContactIds(rows: readonly ContactListRow[]): number[] {
   for (const row of rows) if (row.type === 'contact') ids.push(row.item.id)
   return ids
 }
+
+/** keyset 续拉的触发判据：渲染到 ~70% 或距底 8 行（取更早的那个）就该取下一页。
+ *  阈值照 `useEmailListRows.handleRowsRendered`，两处列表同一手感。
+ *
+ *  🔴 单拎成纯函数是为了能测：挂在 react-window 的 `onRowsRendered` 上就只能靠真实布局
+ *  测量触发，而 happy-dom 里行高恒 0 —— 那种测法要么恒绿要么恒红，两样都不说明问题。 */
+export function shouldFetchNextContactPage(stopIndex: number, rowCount: number): boolean {
+  if (rowCount <= 0) return false
+  return stopIndex >= Math.min(Math.floor(rowCount * 0.7), rowCount - 8)
+}

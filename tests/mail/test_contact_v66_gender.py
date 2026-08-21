@@ -41,4 +41,6 @@ def test_v66_gender_column_fresh_replay_and_idempotency(tmp_path):
 
     SyncStore(str(path))
     SyncStore(str(path))
-    assert "gender" in _columns(path) and _version(path) == SyncStore.DB_VERSION == 66
+    # 版本判据用 `>= 66`: 本用例盯的是 gender 列迁移, 不该在每次 bump DB_VERSION 时
+    # 跟着改数字 (== 常量那种写法在 v67 那次 bump 上当场红了)。
+    assert "gender" in _columns(path) and _version(path) >= 66

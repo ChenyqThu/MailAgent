@@ -230,6 +230,112 @@ def test_list_without_limit_is_unchanged(client):
     _seed_list_fixture(path)
     data = _data(http.get("/api/contacts"))
     assert len(data["items"]) == data["total"] == 3
+    # 不传 limit = 一次给全 ⇒ 没有下一页可翻 (契约 additive: 远程 web 老客户端照旧)。
+    assert data["next_cursor"] is None
+
+
+# ---- 列表 keyset 分页 (task 08-20 性能批) ----
+
+
+def _page_all(http, *, sort, page_size, view="known"):
+    """按 next_cursor 翻到底, 返回 (全部 id 序, 翻页次数)。"""
+    ids: list[int] = []
+    cursor = None
+    pages = 0
+    while True:
+        params = {"sort": sort, "limit": page_size, "view": view}
+        if cursor is not None:
+            params["cursor"] = cursor
+        page = _data(http.get("/api/contacts", params=params))
+        ids.extend(item["id"] for item in page["items"])
+        pages += 1
+        cursor = page["next_cursor"]
+        if cursor is None:
+            return ids, pages
+        assert pages < 50, "cursor 没收敛"
+
+
+@pytest.mark.parametrize("sort", ["density", "recent", "name"])
+def test_keyset_pagination_reproduces_the_unpaged_order(client, sort):
+    """三档排序: 一页 1 条翻到底 == 不分页那一次的顺序, 且 total 恒是全量命中数。"""
+    http, _, path = client
+    _seed_list_fixture(path)
+    whole = _data(http.get("/api/contacts", params={"sort": sort}))
+    expected = [item["id"] for item in whole["items"]]
+
+    paged, pages = _page_all(http, sort=sort, page_size=1)
+    assert paged == expected
+    assert pages == len(expected)  # 末页 next_cursor 必须为 None, 不多翻一页空的
+
+
+def test_keyset_pagination_survives_ties(client):
+    """density 前三列大面积并列时也不重不漏 —— 末位 c.id 那一档兜底的就是这个。
+    (活库里 sent_to_count=1 的有几百人, 只按前三列做游标会在并列段原地打转。)"""
+    http, _, path = client
+    for cid in range(1, 8):
+        _seed_contact(
+            path, cid=cid, name=f"Tie{cid}", sent=1, mail=1, last=None,
+            emails=((f"tie{cid}@x.com", 1),),
+        )
+    paged, _ = _page_all(http, sort="density", page_size=2)
+    assert paged == [1, 2, 3, 4, 5, 6, 7]
+
+
+def test_keyset_pagination_survives_case_insensitive_name_ties(client):
+    """name 档的排序键带 COLLATE NOCASE —— 只差大小写的名字在排序上**相等**,
+    游标比较必须用同一个 collation 再靠 c.id 收尾, 否则那一段会原地打转或整段跳过。"""
+    http, _, path = client
+    for cid, name in ((1, "alice"), (2, "Alice"), (3, "ALICE"), (4, "bob")):
+        _seed_contact(
+            path, cid=cid, name=name, sent=1, mail=1,
+            emails=((f"n{cid}@x.com", 1),),
+        )
+    paged, _ = _page_all(http, sort="name", page_size=1)
+    assert paged == [1, 2, 3, 4]
+
+
+def test_keyset_pagination_carries_filters(client):
+    http, _, path = client
+    _seed_list_fixture(path)
+    # 搜索 + 视图与游标共存 (WHERE 每页都重新拼, 游标只是「排在谁之后」)。
+    # 「全部」视图 density 序 = sent_to_count 降序 9/5/4/3/2/1/0。
+    paged, _ = _page_all(http, sort="density", page_size=1, view="all")
+    assert paged == [2, 1, 5, 4, 6, 7, 3]
+    page = _data(
+        http.get("/api/contacts", params={"q": "alice", "limit": 1})
+    )
+    assert [item["id"] for item in page["items"]] == [1]
+    assert page["next_cursor"] is None
+
+
+def test_list_rejects_malformed_and_mismatched_cursor(client):
+    http, _, path = client
+    _seed_list_fixture(path)
+    assert http.get("/api/contacts", params={"cursor": "not-base64!!"}).status_code == 400
+    density_cursor = _data(
+        http.get("/api/contacts", params={"limit": 1})
+    )["next_cursor"]
+    # 换了 sort 还拿旧游标: 三档 arity 不同 (4/3/2) ⇒ 必被挡下, 不会静默按错的键翻页。
+    assert http.get(
+        "/api/contacts", params={"sort": "name", "cursor": density_cursor}
+    ).status_code == 400
+
+
+def test_list_row_shape_has_no_internal_cursor_columns(client):
+    """游标键是 SELECT 出来的额外列, 不许漏进对外行形状。"""
+    http, _, path = client
+    _seed_list_fixture(path)
+    item = _data(http.get("/api/contacts", params={"limit": 1}))["items"][0]
+    assert not [key for key in item if key.startswith("_")]
+    assert "profile_json" not in item and "profile_summary_raw" not in item
+    # WP5/WP6 既有行字段一个不少。
+    assert {
+        "id", "display_name", "formal_name", "organization", "department",
+        "role_title", "function", "seniority", "gender", "kind", "hidden_at",
+        "is_self", "mail_count", "sent_to_count", "first_seen_at", "last_seen_at",
+        "manager_contact_id", "manager_display_name", "email_count",
+        "primary_email", "profile_summary", "profile_min", "profile_eligible",
+    } == set(item)
 
 
 # ---- 批量精确解析 (WP4: POST /resolve) ----

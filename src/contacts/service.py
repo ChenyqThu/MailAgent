@@ -150,10 +150,25 @@ def list_contact_mail_rows(
         filters.append("internal_id > ?")
         filter_params.append(int(min_internal_id))
 
-    total_sql = f"SELECT COUNT(*) FROM ({inner}) t"
-    if filters:
-        total_sql += f" WHERE {' AND '.join(filters)}"
-    total = int(conn.execute(total_sql, [*inner_params, *filter_params]).fetchone()[0])
+    # total 腿: 只在**真需要方向**时才把派生表物化第二遍。
+    # 无方向过滤 (首屏默认 direction='all') 时计数只是「这个人挂了多少封不同的邮件」,
+    # 用不着 email_metadata, 也用不着 GROUP BY 出 subject/sender 那一整行 —— 活库最重
+    # 的联系人 (11,554 条 link) 实测 110ms → 1.8ms, 且全库 2494 人逐一对拍取值相同
+    # (账本行的 internal_id 有 FK + ON DELETE CASCADE 指 email_metadata, 拿掉那个 JOIN
+    # 不会多数出已删邮件; 活库孤儿行实测 0 条)。
+    if direction == "all":
+        total_sql = (
+            "SELECT COUNT(DISTINCT l.internal_id) FROM contact_email_link l "
+            "JOIN contact_email ce ON ce.id = l.email_id WHERE ce.contact_id = ?"
+        )
+        total_params: list[Any] = [contact_id]
+        if min_internal_id is not None:
+            total_sql += " AND l.internal_id > ?"
+            total_params.append(int(min_internal_id))
+    else:
+        total_sql = f"SELECT COUNT(*) FROM ({inner}) t WHERE {' AND '.join(filters)}"
+        total_params = [*inner_params, *filter_params]
+    total = int(conn.execute(total_sql, total_params).fetchone()[0])
 
     item_filters = list(filters)
     item_params: list[Any] = [*inner_params, *filter_params]

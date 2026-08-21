@@ -152,7 +152,19 @@ function PersonPickDialog({
     return () => window.clearTimeout(timer)
   }, [searchInput])
 
-  const listQuery = useContactList({ view: 'all', q: search, sort: 'density', enabled: open })
+  // 🔴 带 limit 请求：弹层本来就只渲染前 `PICK_CANDIDATE_CAP` 条，不传 limit 等于
+  // 为了 200 条候选把整张通讯录（活库「全部」视图 ≈900KB）搬过来，每个防抖搜索词
+  // 还在缓存里留一份。
+  // 代价说清楚：截断从「过滤后取前 N」变成「取前 N 再过滤」，候选里的机器人 / 隐藏
+  // 行会占掉名额。活库实测 density 前 200 全是 person 且未隐藏（占用 0 条），且候选
+  // 不够时用户本来就该用搜索框 —— 拿一次全表来避免这个边角不划算。
+  const listQuery = useContactList({
+    view: 'all',
+    q: search,
+    sort: 'density',
+    enabled: open,
+    limit: PICK_CANDIDATE_CAP
+  })
   // 池过滤照原型：person / 非隐藏；exclude 不渲染（本人）。
   // 🔴 task 08-14 WP-3 起不再排除 is_self —— owner「上下级也无法关联我」：
   // 「我」得能被选成别人的上级、也得能出现在候选里。

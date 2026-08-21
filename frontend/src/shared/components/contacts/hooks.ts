@@ -3,7 +3,7 @@
 // /api/contacts 的 require_contacts_enabled 读同一个冻结单例）。
 
 import { useMemo } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { useInfiniteQuery, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import type { UseMutationResult } from '@tanstack/react-query'
 
 import { createContactsApi } from '@shared/api/contacts'
@@ -69,20 +69,65 @@ export function useContactsEnabled(): { enabled: boolean; loading: boolean } {
   return { enabled: flags.contactsEnabled, loading: flags.loading }
 }
 
+/** 单页列表（选人弹层 / 治理抽屉用）。工作台主列表走下面的 `useContactListPaged`。
+ *
+ *  🔴 `limit` 不是可选的装饰：不传 = 服务端一次返回全表（「全部」视图实测 900KB）。
+ *  每个消费者都该按自己真正要渲染的条数传一个上限 —— 弹层本来就只显示前 N 条。 */
 export function useContactList(options: {
   view: ContactView
   q: string
   sort: ContactSort
   enabled: boolean
+  limit?: number
 }): ReturnType<typeof useQuery<ContactListResponse>> {
   const api = useContactsApi()
   return useQuery({
-    queryKey: qk.contacts.list(options.view, options.q, options.sort),
-    queryFn: () => api.list({ view: options.view, q: options.q || undefined, sort: options.sort }),
+    queryKey: [...qk.contacts.list(options.view, options.q, options.sort), options.limit ?? null],
+    queryFn: () =>
+      api.list({
+        view: options.view,
+        q: options.q || undefined,
+        sort: options.sort,
+        limit: options.limit
+      }),
     enabled: options.enabled,
     // 缓存配方同 useEmailListRows（速赢包 §2）: 切走再切回 <5min 直接命中缓存（无网络、
     // 无骨架），gcTime 15min 防「离开一会儿回来整份被 GC → 完整冷加载」。写侧靠
     // useInvalidateContact 精确失效，不靠短 staleTime。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
+    placeholderData: (previous) => previous
+  })
+}
+
+/** 工作台主列表首屏页大小。200 ≈ 一屏能滚几轮的量（活库 known 视图共 616 人），
+ *  服务端按 keyset 续页；小于这个数会让「刚进页面就要续拉」变成常态。 */
+export const CONTACT_LIST_PAGE_SIZE = 200
+
+/** 工作台主列表（keyset 分页）。
+ *
+ *  `placeholderData: (prev) => prev` 在 infinite query 上的形态一致：切视图 / 改搜索词
+ *  时上一份 pages 留在原位（列表不闪骨架），新结果到达原地替换 —— 与单页版同一配方。 */
+export function useContactListPaged(options: {
+  view: ContactView
+  q: string
+  sort: ContactSort
+  enabled: boolean
+}): ReturnType<typeof useInfiniteQuery<ContactListResponse, Error>> {
+  const api = useContactsApi()
+  return useInfiniteQuery({
+    queryKey: qk.contacts.listPaged(options.view, options.q, options.sort),
+    queryFn: ({ pageParam }) =>
+      api.list({
+        view: options.view,
+        q: options.q || undefined,
+        sort: options.sort,
+        limit: CONTACT_LIST_PAGE_SIZE,
+        cursor: pageParam
+      }),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.next_cursor ?? undefined,
+    enabled: options.enabled,
     staleTime: 5 * 60_000,
     gcTime: 15 * 60_000,
     placeholderData: (previous) => previous

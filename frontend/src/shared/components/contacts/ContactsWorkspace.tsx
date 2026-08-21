@@ -36,7 +36,7 @@ import {
   useBackfillProgress,
   useContactAgentStatus,
   useContactFlags,
-  useContactList,
+  useContactListPaged,
   useContactsApi,
   useInvalidateContact
 } from './hooks'
@@ -126,8 +126,15 @@ export function ContactsWorkspace(): React.ReactElement | null {
     return () => window.clearTimeout(timer)
   }, [qInput])
 
-  const list = useContactList({ view, q, sort, enabled })
-  const items = useMemo(() => list.data?.items ?? [], [list.data])
+  const list = useContactListPaged({ view, q, sort, enabled })
+  const items = useMemo(() => (list.data?.pages ?? []).flatMap((page) => page.items), [list.data])
+  // 服务端报的全量命中数（分页后 items.length 只是「已加载」）。
+  const matchedCount = list.data?.pages[0]?.total ?? 0
+  const { fetchNextPage, hasNextPage, isFetchingNextPage } = list
+  const loadMore = useCallback((): void => {
+    if (!hasNextPage || isFetchingNextPage) return
+    void fetchNextPage()
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage])
   const progress = useBackfillProgress(enabled)
   // 🔴 治理 flag 关 → `enabled:false`：不发请求、不起 60s 轮询，胶囊也不进 DOM
   // （两层门，`AgentPendingBadge.tsx:70-79` 先例）。
@@ -164,6 +171,11 @@ export function ContactsWorkspace(): React.ReactElement | null {
   // 头部计数 = 当前视图**实际列出**的人数（原型 `clist.jsx` 的 `total` 同口径）。
   // 用 `items.length` 会在「全部」视图关掉 chips 时报出一个列表里根本不存在的数。
   const visibleCount = orderedIds.length
+  // 🔴 分页之后 `visibleCount` 只覆盖**已加载**的行 ——「通讯录 616」会缩成「通讯录 200」。
+  // 判据就一句：本地管线有没有把已加载的行藏起来（chips 关掉 / 分组折叠）。
+  //   · 藏了 → 报实际列出的数（= 上面那条老语义，一字不变）
+  //   · 没藏 → 报服务端的全量命中数（全部加载完时两者恒相等）
+  const headerCount = visibleCount < items.length ? visibleCount : matchedCount
 
   // v2 任务 ③：选中一个真实联系人时把「id + 当时的视图」写进记录；取消选中
   // （`id === null`）**不清记录** —— 记录留着，下次冷启动按「当前视图的可见集里找不找得到」
@@ -375,8 +387,10 @@ export function ContactsWorkspace(): React.ReactElement | null {
             })
           }
           rows={rows}
-          total={visibleCount}
+          total={headerCount}
           loading={list.isPending}
+          onLoadMore={loadMore}
+          hasMore={hasNextPage}
           progress={progress.data}
           selectedId={selectedId}
           selectionMode={selectionMode}

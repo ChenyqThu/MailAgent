@@ -415,8 +415,9 @@ export function ContactAgentDrawer({
   const lastScanAt = agentStatus.data?.last_scan_at ?? null
   const scanInFlight = lastScanStatus === 'queued' || lastScanStatus === 'running'
   // 相关人名字/头像的查表源。🔴 有意**不传 limit**：按往来密度截断会正好丢掉建议指向的
-  // 那类冷门行（机器人 / 刚换的新地址），而查不到名字的卡只能显示 `#id`。key 与工作台
-  // 「全部」视图的列表查询同构，用户在那个视图时零额外请求。
+  // 那类冷门行（机器人 / 刚换的新地址），而查不到名字的卡只能显示 `#id`。
+  // （工作台主列表 2026-08-20 起改走分页的 `useContactListPaged`，两者不再共享缓存 ——
+  //  这一整份目录是打开抽屉时的一次性代价，抽屉不开就不发。）
   const directory = useContactList({ view: 'all', q: '', sort: 'density', enabled: open })
 
   const personById = new Map((directory.data?.items ?? []).map((row) => [row.id, row]))
