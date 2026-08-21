@@ -94,6 +94,11 @@ def get_service_ctx() -> "ServiceContext":
     一份 ctx (fresh NotionSync → fresh client) 即匹配旧 fork 的 per-call 隔离, 且远比
     fork 整个 Python 进程便宜。其余 dep (email_repo/sync_store) 是 per-call 连接, 重建
     成本可忽略。
+
+    例外 (task 08-20): ``ctx.backend`` 不跟着 per-request —— 它经
+    ``src.services.context._process_backend`` 进程级复用 (同步 imaplib 不绑 loop,
+    IMAP 连接 per-operation 不共享), 免去每写请求 1.3-3.6s 的 create_backend +
+    probe_readiness 慢链。loop 隔离理由只属于 NotionSync, ctx 其余部分维持原样。
     """
     from src.config import config as _config_singleton
     from src.services.context import ServiceContext

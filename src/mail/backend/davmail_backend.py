@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING, Optional, Union
 
 from loguru import logger
 
+from src.mail import draft_tombstones
 from src.mail.backend.base import (
     FolderFetchError,
     IMailBackend,
@@ -2053,6 +2054,22 @@ class DavMailBackend(IMailBackend):
                 local_uids = set(local.keys())
                 to_delete.extend(local[u] for u in sorted(local_uids - remote_uids))
                 new_uids = sorted(remote_uids - local_uids)
+                if new_uids:
+                    # 删除墓碑过滤 (task 08-20 回弹竞态): serve-api 进程的
+                    # delete_draft 本地行先删、EXPUNGE 后置 —— 窗口内 tick 会把
+                    # 「远端还在 + 本地没了」的 uid 当新草稿拉回 (新 internal_id,
+                    # 用户要删第二次)。墓碑经共享 sync_state KV 跨进程可见,
+                    # TTL 30s; 过期后恢复既有自愈 (IMAP 删失败的残留仍拉回)。
+                    # 过滤放 header FETCH 之前, 连 fetch 都省掉。
+                    tombstoned = draft_tombstones.active_uids(self.sync_store)
+                    if tombstoned:
+                        skipped = sorted(set(new_uids) & tombstoned)
+                        if skipped:
+                            logger.info(
+                                f"[davmail-backend] drafts reconcile: skip "
+                                f"tombstoned uids={skipped} (delete in flight)"
+                            )
+                            new_uids = [u for u in new_uids if u not in tombstoned]
                 if new_uids:
                     uid_csv = ",".join(str(u) for u in new_uids)
                     # _fetch_new_in_folder 内部会再 SELECT 同 folder (幂等, 同

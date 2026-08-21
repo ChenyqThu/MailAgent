@@ -2258,6 +2258,16 @@ class MailWriteService:
 
         require_write_auth(actor)
 
+        # ── 删除墓碑 (task 08-20 回弹竞态): 本地删行**之前**先落 uid 墓碑
+        # (共享 sync_state KV, TTL 30s), 让 mail-sync 进程的 reconcile_drafts
+        # 在「本地已删、EXPUNGE 未落」窗口内不把远端残留 uid 当新草稿拉回
+        # (回弹 = 新 internal_id, 用户要删第二次)。COM 行无 reconcile_drafts,
+        # 不需要。record 内部吞错 (失败仅 warning, 不阻断删除)。 ──
+        if not row_is_com:
+            from src.mail.draft_tombstones import record as _record_draft_tombstone
+
+            _record_draft_tombstone(self._ctx.sync_store, int(imap_uid))
+
         # ── 本地先删 + SSE: UI 即时移除行 + badge 减一 (events_bridge 对
         # email.synced 宽 invalidate ['emails']+['mailboxes'])。 ──
         local_deleted = True

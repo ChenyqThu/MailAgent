@@ -685,18 +685,18 @@ export function ComposePanelInner({
 
   const sendMut = useMutation({
     mutationFn: async () => mailApi.email.send(await buildComposePayload()),
-    onSuccess: async () => {
+    onSuccess: () => {
       toastSuccess(t('compose.toast.sendOk'))
       setSendOpen(false)
       setDirty(false)
       // draft-edit 发送成功后删掉原草稿 (替换语义: 发出的是 mode='new' 独立邮件, 原草稿仍在)。
+      // task 08-20: 不再 await —— 删草稿 IMAP 慢链 (2.5-5.4s) 曾把发送反馈拖到
+      // ~11.5s 转圈。后台执行, 失败仅 toast (邮件已发出, 残留草稿用户可手动删)。
       if (isDraftEdit) {
-        try {
-          await mailApi.email.deleteDraft(internalId)
-        } catch {
-          /* 草稿删除失败不阻断: 邮件已发出, 残留草稿用户可手动删 */
-        }
-        invalidateLists()
+        void mailApi.email
+          .deleteDraft(internalId)
+          .catch(() => toastError(t('compose.toast.draftDeleteFail')))
+          .finally(() => invalidateLists())
       }
       onClose()
     },
@@ -714,12 +714,17 @@ export function ComposePanelInner({
   })
 
   // 草稿编辑「放弃」= 删除草稿 (IMAP \\Deleted + 本地行清理)。
+  // 乐观删除 (task 08-20): onMutate 即关面板 + 提示 —— IMAP 慢链 (实测 2.5-5.4s)
+  // 全部后台化, 列表由 SSE + invalidateLists 最终一致。失败仅 toast: 服务端本地行
+  // 先删且不因 IMAP 失败抛错, 真失败 (auth/网络) 时残留由 reconcile 自愈, 重删即可。
   const deleteMut = useMutation({
     mutationFn: () => mailApi.email.deleteDraft(internalId),
-    onSuccess: () => {
+    onMutate: () => {
       toastSuccess(t('compose.toast.draftDeleted'))
-      invalidateLists()
       onClose()
+    },
+    onSuccess: () => {
+      invalidateLists()
     },
     onError: (err: unknown) => {
       const e = asWriteError(err)

@@ -10,12 +10,14 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 import pytest
 
+from src.mail import draft_tombstones
 from src.mail.backend.davmail_backend import DavMailBackend
 from src.mail.new_watcher import NewWatcher
 from src.mail.sync_store import SyncStore
@@ -374,6 +376,55 @@ def test_uidvalidity_change_full_rebuild(patch_session):
     assert to_delete == [11]
     assert [i["imap_uid"] for i in to_add] == [201]
     assert b._kv["folder_uidvalidity:Drafts"] == "9"
+
+
+# ============================================================
+# 删除墓碑 — delete_draft (serve-api 进程) × reconcile (mail-sync 进程)
+# 回弹竞态 (task 08-20-perf-draft-delete)
+# ============================================================
+
+def test_reconcile_skips_tombstoned_uid(patch_session):
+    """复现 2026-08-20 回弹竞态: delete_draft 本地行已删 (local 无该 uid)、IMAP
+    EXPUNGE 未落 (远端仍有该 uid) → 窗口内 reconcile 不得把它当新草稿拉回
+    (回弹 = 新 internal_id, 用户要手动删第二次)。墓碑经 sync_state KV 跨进程可见。"""
+    fake = FakeImap(7, [38784], {38784: ("m-del", "d-del")})
+    kv = {"folder_uidvalidity:Drafts": "7", "drafts_uidnext": "38785"}
+    b = _backend(fake, local={}, kv=kv)
+    draft_tombstones.record(b.sync_store, 38784)  # delete_draft 删本地行前写入
+    patch_session(b)
+    to_add, to_delete = b.reconcile_drafts()
+    assert to_add == []        # 墓碑 uid 不回弹
+    assert to_delete == []
+    assert fake.fetched == []  # 过滤在 header FETCH 之前, 连 fetch 都不发
+
+
+def test_reconcile_tombstone_expired_readds(patch_session):
+    """TTL 过期后恢复既有自愈语义: IMAP 删失败留下的 Exchange 残留仍被拉回本地
+    (用户重删即可) —— 墓碑只挡短窗口, 不改自愈契约。"""
+    fake = FakeImap(7, [38784], {38784: ("m-del", "d-del")})
+    kv = {"folder_uidvalidity:Drafts": "7", "drafts_uidnext": "38785"}
+    b = _backend(fake, local={}, kv=kv)
+    draft_tombstones.record(
+        b.sync_store, 38784,
+        now=time.time() - draft_tombstones.TOMBSTONE_TTL_SEC - 1,
+    )
+    patch_session(b)
+    to_add, _ = b.reconcile_drafts()
+    assert [i["imap_uid"] for i in to_add] == [38784]
+
+
+def test_reconcile_tombstone_only_filters_listed_uid(patch_session):
+    """墓碑只挡被删 uid, 同窗口其它新草稿照常入库 (不误伤)。"""
+    fake = FakeImap(
+        7, [38784, 38790],
+        {38784: ("m-del", "d-del"), 38790: ("m-new", "d-new")},
+    )
+    kv = {"folder_uidvalidity:Drafts": "7", "drafts_uidnext": "38785"}
+    b = _backend(fake, local={}, kv=kv)
+    draft_tombstones.record(b.sync_store, 38784)
+    patch_session(b)
+    to_add, _ = b.reconcile_drafts()
+    assert [i["imap_uid"] for i in to_add] == [38790]
 
 
 # ============================================================
@@ -1053,3 +1104,42 @@ def test_delete_draft_imap_row_cross_mode_com_reader_no_raise(tmp_path):
     reader.delete_draft_by_anchor.assert_not_called()
     svc._ctx.email_repo.delete_email_full.assert_called_once_with(10)
     assert result.local_deleted is True and result.imap_uid == 77
+
+
+def test_delete_draft_records_tombstone_before_local_delete(tmp_path):
+    """task 08-20 回弹竞态: 本地删行**之前**先落 uid 墓碑 —— 顺序反了会留一条
+    「本地已删 + 无墓碑」的缝, mail-sync 进程恰好 tick 到就照样回弹。"""
+    svc = _delete_service(tmp_path)
+    store = svc._ctx.sync_store
+    store.save_email({
+        "internal_id": 11, "subject": "d", "sender": "me@x", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "davmail", "imap_uid": 88,
+    })
+    seen: dict = {}
+    svc._ctx.email_repo.delete_email_full.side_effect = lambda i: seen.setdefault(
+        "tomb_at_local_delete", draft_tombstones.active_uids(store)
+    )
+    reader = MagicMock()
+    reader.delete_message.return_value = True
+    svc._folder_imap_reader = MagicMock(return_value=reader)
+
+    svc.delete_draft(11, actor=_actor())
+    assert 88 in seen["tomb_at_local_delete"]           # 删本地行时墓碑已就位
+    assert 88 in draft_tombstones.active_uids(store)    # 事后仍在 TTL 内
+
+
+def test_delete_draft_com_row_no_tombstone(tmp_path):
+    """outlook_com 行无 reconcile_drafts (有意缺席) → 不写墓碑。"""
+    svc = _delete_service(tmp_path)
+    store = svc._ctx.sync_store
+    store.save_email({
+        "internal_id": 12, "subject": "d", "sender": "me@x", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "outlook_com",
+        "message_id": "com-d12@x", "entry_id": "EID-12",
+    })
+    reader = MagicMock(spec=["delete_draft_by_anchor"])
+    reader.delete_draft_by_anchor.return_value = True
+    svc._folder_imap_reader = MagicMock(return_value=reader)
+
+    svc.delete_draft(12, actor=_actor())
+    assert draft_tombstones.active_uids(store) == set()

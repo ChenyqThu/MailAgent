@@ -80,7 +80,11 @@ describe('ComposePanel — 草稿编辑态 (draft-edit)', () => {
     expect(mockEmailBody).toHaveBeenCalledWith(99, { format: 'html' })
   })
 
-  test('发送 → email.send(mode=new, importance=high) → 成功后 deleteDraft', async () => {
+  test('发送 → email.send(mode=new, importance=high) → deleteDraft 后台执行不阻塞关闭', async () => {
+    // task 08-20: 删草稿 IMAP 慢链 (2.5-5.4s) 曾把发送反馈拖到 ~11.5s —— 现在
+    // 发送成功即关面板, deleteDraft 后台跑。用 pending promise 断言顺序。
+    let resolveDelete!: (v: unknown) => void
+    mockDeleteDraft.mockImplementation(() => new Promise((r) => (resolveDelete = r)))
     const onClose = vi.fn()
     renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={onClose} />)
     await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
@@ -93,12 +97,15 @@ describe('ComposePanel — 草稿编辑态 (draft-edit)', () => {
     // D1 Bug A — draft-edit 发送带草稿行自己的 id, 服务端据此恢复回复线程 linkage。
     expect(arg.sourceDraftId).toBe(99)
     expect(arg.to).toEqual(['chenyq.thu@gmail.com'])
-    // 发送成功后删原草稿 (替换语义) + 关闭
+    // 发送成功后删原草稿 (替换语义); deleteDraft 还 pending, 面板已关 (不再 await)
     await waitFor(() => expect(mockDeleteDraft).toHaveBeenCalledWith(99))
-    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(onClose).toHaveBeenCalled()
+    await act(async () => resolveDelete({ success: true }))
   })
 
-  test('删除 → 二次确认弹窗 → 确认后才 deleteDraft (草稿改 DB 需确认)', async () => {
+  test('删除 → 二次确认弹窗 → 确认后 deleteDraft + 面板即关 (乐观, 不等 IMAP 慢链)', async () => {
+    let resolveDelete!: (v: unknown) => void
+    mockDeleteDraft.mockImplementation(() => new Promise((r) => (resolveDelete = r)))
     const onClose = vi.fn()
     renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={onClose} />)
     await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
@@ -107,10 +114,11 @@ describe('ComposePanel — 草稿编辑态 (draft-edit)', () => {
     expect(mockDeleteDraft).not.toHaveBeenCalled()
     const dialog = await screen.findByRole('dialog')
     expect(within(dialog).getByText('删除草稿？')).toBeTruthy()
-    // 弹窗内确认 → deleteDraft
+    // 弹窗内确认 → deleteDraft 发起; task 08-20 乐观删除: 请求还 pending 面板已关
     fireEvent.click(within(dialog).getByRole('button', { name: /^删除$/ }))
     await waitFor(() => expect(mockDeleteDraft).toHaveBeenCalledWith(99))
-    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(onClose).toHaveBeenCalled()
+    await act(async () => resolveDelete({ success: true }))
   })
 })
 
