@@ -1,7 +1,8 @@
 """v67 —— contact 表本体的三条读路径索引 (task 08-20 通讯录后端性能批)。
 
 盯四件事:
-① 新库满梯子后三条索引全在, 且 db_version = 67;
+① 新库满梯子后三条索引全在, 且 db_version 推到当前 `SyncStore.DB_VERSION`
+   (动态取值 —— 后续批次 bump schema 时本文件不用改);
 ② v66 老库升级 (退回 66 + DROP 三条索引) 能补上, 数据一行不动;
 ③ 重入幂等 (版本拨回 66 重跑不炸、结果不变);
 ④ 失败不落 version: 索引名被别人占了 → 迁移 raise, 版本停在 66。
@@ -62,7 +63,7 @@ def test_fresh_db_has_all_three_indexes(tmp_path):
     path = tmp_path / "fresh.db"
     SyncStore(str(path))
     assert V67_INDEX_NAMES <= _contact_indexes(path)
-    assert _version(path) == "67"
+    assert _version(path) == str(SyncStore.DB_VERSION)
 
 
 def test_v66_upgrade_adds_indexes_without_touching_rows(tmp_path):
@@ -79,7 +80,7 @@ def test_v66_upgrade_adds_indexes_without_touching_rows(tmp_path):
 
     SyncStore(str(path))
     assert V67_INDEX_NAMES <= _contact_indexes(path)
-    assert _version(path) == "67"
+    assert _version(path) == str(SyncStore.DB_VERSION)
     with sqlite3.connect(path) as conn:
         row = conn.execute(
             "SELECT display_name, mail_count, sent_to_count FROM contact WHERE id=1"
@@ -99,7 +100,7 @@ def test_replay_is_idempotent(tmp_path):
     _INITIALIZED_DBS.clear()
     SyncStore(str(path))
     assert _contact_indexes(path) == before
-    assert _version(path) == "67"
+    assert _version(path) == str(SyncStore.DB_VERSION)
 
 
 def test_index_name_taken_by_other_object_fails_without_bumping_version(tmp_path):

@@ -86,7 +86,8 @@ import { getLocalApiToken, LOCAL_TOKEN_ENV } from './local_token'
 // v64: contact_suggestion 治理待审队列 (WP7, 08-19).
 // v65: contact_governance_agent seed (Contact Agent v2, 08-20).
 // v66: contact.gender (08-20).
-export const EXPECTED_DB_VERSION = 67 // contact 表三条读路径索引
+// v67: contact 表三条读路径索引 (通讯录后端性能批, 08-20).
+export const EXPECTED_DB_VERSION = 68 // notification 通知中心持久化条目表
 
 /** 就绪判据的关键表子集 (02-landing-plan.md P1-6)。admin.py REQUIRED_TABLES 更全,
  *  但开窗门控只需保证「邮件读写主路径」已建: 元数据 / 正文 SSoT / outbox +

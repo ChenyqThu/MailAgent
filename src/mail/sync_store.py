@@ -82,6 +82,13 @@ from src.contacts.taxonomy import (
     CONTACT_SUGGESTION_STATUS_VALUES,
     CONTACT_SUGGESTION_TYPE_VALUES,
 )
+# 通知中心值域单源 (零依赖叶子, 见该模块头注): notification 表的三处 CHECK 引它,
+# 不手抄字符串。src/notify/__init__.py 为空 ⇒ 这条 import 不拖 feishu/island 依赖链。
+from src.notify.center_models import (
+    NOTIFICATION_CATEGORY_VALUES,
+    NOTIFICATION_SEVERITY_VALUES,
+    NOTIFICATION_STATE_VALUES,
+)
 from src.mail.email_address import derive_sender_email
 
 
@@ -692,6 +699,61 @@ CONTACT_SUGGESTION_INDEX_DDLS = (
     "CREATE INDEX IF NOT EXISTS idx_contact_suggestion_evidence_fingerprint "
     "ON contact_suggestion(evidence_fingerprint)",
 )
+
+
+# ==================== Notification center DDL (v68) ====================
+# 统一通知中心的持久化条目表 (task 08-20-notification-center, design §2)。
+# 🔴 独立成组, **不进** MATTER_TABLE_DDLS / MATTER_INDEX_DDLS / CONTACT_*_DDLS ——
+# 那几组会被各自域的多个旧迁移块 (v44/v45/v46/v49/v50/v54/v64 …) 对老库整组重放,
+# 且 MATTER_TABLE_DDLS 还有下标依赖 (v45 块按 [2]/[3] 取用); 混进去等于给
+# v44..v67 每一个中间版本各加一个新炸点。本组只从 v68 块执行一次 (新库走满迁移
+# 梯子同样经 v68 拿到) —— v52 索引教训的直接应用。
+# CHECK 值域经 sql_check_clause 引自 src/notify/center_models.py (零依赖叶子,
+# 枚举唯一权威), 不手抄字符串。
+#
+# 列语义 (完整表在 design §2.3):
+#   dedupe_key    去重键, 各信源自定 (如 `agent_run:{job_id}`)。**活跃期内唯一**,
+#                 重复触发走计次 (recurrence_no+1) 而不是刷屏开新行。
+#   recurrence_no 第几次。跨代续接: resolved 之后再来会开新行, 计数从上一代 +1。
+#   state         open/snoozed/resolved/dismissed。🔴 **已读是独立轴 read_at**,
+#                 不是 state 的一个值 —— 「看过了」与「处理完了」分开 (PRD 基线 2)。
+#   snoozed_until 毫秒。到期唤醒是**读侧口径** (state='snoozed' 且已过期视同 open,
+#                 见 design §8.d), 没有后台 tick 会把 state 改回 open。
+#   *_at          全部毫秒整数 (clock_ms 注入, 同 matters), **不是** time.time() 秒。
+NOTIFICATION_TABLE_DDLS = (
+    f"""CREATE TABLE IF NOT EXISTS notification (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        category TEXT NOT NULL CHECK (category {sql_check_clause(NOTIFICATION_CATEGORY_VALUES)}),
+        source TEXT NOT NULL,
+        severity TEXT NOT NULL DEFAULT 'info' CHECK (severity {sql_check_clause(NOTIFICATION_SEVERITY_VALUES)}),
+        state TEXT NOT NULL DEFAULT 'open' CHECK (state {sql_check_clause(NOTIFICATION_STATE_VALUES)}),
+        dedupe_key TEXT NOT NULL,
+        recurrence_no INTEGER NOT NULL DEFAULT 1,
+        title TEXT NOT NULL,
+        body TEXT NOT NULL DEFAULT '',
+        payload_json TEXT NULL CHECK (payload_json IS NULL OR json_valid(payload_json)),
+        first_created_at INTEGER NOT NULL,
+        last_event_at INTEGER NOT NULL,
+        read_at INTEGER NULL,
+        snoozed_until INTEGER NULL,
+        resolved_at INTEGER NULL,
+        dismissed_at INTEGER NULL
+    )""",
+)
+
+NOTIFICATION_INDEX_DDLS = (
+    # 去重的数据库最终防线: 同 dedupe_key 同时最多一条活跃行。🔴 partial 条件里的
+    # 「活跃」口径必须与 publish 的判据**逐字一致** (照抄 uq_matter_attention_active)。
+    "CREATE UNIQUE INDEX IF NOT EXISTS uq_notification_active_dedupe "
+    "ON notification(dedupe_key) WHERE state IN ('open','snoozed')",
+    # 列表面: tab 过滤 + 时间排序。
+    "CREATE INDEX IF NOT EXISTS idx_notification_list "
+    "ON notification(category, state, last_event_at)",
+    # 未读数: partial index 只覆盖未读活跃行 (铃铛徽标是最高频读)。
+    "CREATE INDEX IF NOT EXISTS idx_notification_unread "
+    "ON notification(category) WHERE read_at IS NULL AND state IN ('open','snoozed')",
+)
+
 
 #: ``upsert_folder_pref`` 的"这个字段不改"哨兵。不能用 ``None`` —— ``icon=None`` 是
 #: **合法值** (清除图标, 回到前端兜底), 与"不改"必须分得开。
@@ -1592,7 +1654,26 @@ class SyncStore:
     #                sqlite_master（索引仍缺失才算真失败，version 不前进）。重放结果不变。
     #                回滚（回退 v67）：索引是纯读优化，旧代码不认识也不受影响，**只降
     #                版本号是安全的**；要清干净再 `DROP INDEX idx_contact_known` 等三条。
-    DB_VERSION = 67
+    # v68 (2026-08-21, 统一通知中心 M1): 新表 notification —— 后台任务完成 / 待办 /
+    #                系统告警的**持久化**通知条目 (区别于 3 秒即逝的 toast)。DDL 单源
+    #                `NOTIFICATION_TABLE_DDLS` / `NOTIFICATION_INDEX_DDLS`
+    #                (🔴 不进 MATTER_*/CONTACT_* 两组, 理由见该常量头注 = v52 教训),
+    #                CHECK 值域引 `src/notify/center_models.py`。
+    #                语义: 通知中心是第一公民 (先落库, SSE 只当刷新信号), 断线 / 重启
+    #                后可回放; 灵动岛 / macOS 通知 / 飞书是后续阶段的投影目标, 本版本
+    #                一个都不动。
+    #                数据规则: 时间列全是**毫秒**整数 (与 matters 一致, 不是 time.time()
+    #                的秒); `read_at` 是与 state 正交的独立轴 (已读 ≠ 已处理);
+    #                同 `dedupe_key` 同时只允许一条活跃行 (state IN open/snoozed),
+    #                由 partial unique `uq_notification_active_dedupe` 兜底 —— 重复触发
+    #                走计次 (recurrence_no+1) 而不是开新行。无播种数据。
+    #                幂等: CREATE TABLE / CREATE INDEX IF NOT EXISTS, 表与索引同块
+    #                (新表首建, 无 v52 式「列还不存在」炸点)。重放结果不变。
+    #                回滚 (回退 v68): 旧代码完全不认识 notification 表, **只降版本号是
+    #                安全的** (表留着不碍事); 要清干净再 `DROP TABLE notification`。
+    #                🔴 revert 期间产生的通知**不补** —— 信源事件已经过去, 这是「先落库」
+    #                模型的自然边界。
+    DB_VERSION = 68
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -4448,6 +4529,19 @@ class SyncStore:
                 except sqlite3.OperationalError as e:
                     _migration_guard_index(cursor, _index_name_v67, "v67 migration", e)
             logger.info("v67 migration: contact indexes ensured")
+        # === v68: notification 通知中心 ===
+        # 语义 / 数据规则 / 回滚代价见 DB_VERSION 注记与 NOTIFICATION_TABLE_DDLS 头注。
+        # 表与索引同块同 try: 纯新表首建, 不存在 v52 式「索引先于列」的错位面。
+        if current_version < 68:
+            try:
+                for ddl in NOTIFICATION_TABLE_DDLS:
+                    cursor.execute(ddl)
+                for ddl in NOTIFICATION_INDEX_DDLS:
+                    cursor.execute(ddl)
+            except sqlite3.Error as e:
+                raise SyncStoreMigrationError(
+                    f"v68 migration (notification table): {e}"
+                ) from e
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →
