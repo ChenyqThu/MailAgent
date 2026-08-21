@@ -293,7 +293,11 @@ export function MatterDetail({
   const detail = useQuery({
     queryKey: qk.matters.detail(matterId),
     queryFn: () => api.get(matterId, ['items', 'timeline']),
-    staleTime: 15_000
+    // 缓存配方同 useEmailListRows（速赢包 §2）: 详情三件套的实时性靠写侧
+    // refreshMatter（invalidate detail 前缀）与 `matter.changed` SSE, 不靠 15s staleTime
+    // —— 后者只会让「切走再回 / 在两条事项间来回点」每次都重拉。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
   })
   const matter = detail.data?.matter
   const chatOpen = Boolean(matter && assistantVisible && activeMatterChatId === matter.id)
@@ -302,17 +306,21 @@ export function MatterDetail({
   const resources = useQuery({
     queryKey: qk.matters.resources(matterId),
     queryFn: () => api.listResources(matterId, { includeUnavailable: true }),
-    staleTime: 15_000
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
   })
   const stakeholders = useQuery({
     queryKey: qk.matters.stakeholders(matterId),
     queryFn: () => api.listStakeholders(matterId),
-    staleTime: 15_000
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
   })
   const tagsQuery = useQuery<{ items: MatterTagDefinition[] }>({
     queryKey: MATTER_TAGS_QUERY_KEY,
     queryFn: () => listMatterTagsSafely(api),
-    staleTime: 30_000
+    // 与 MattersWorkspace 的同一份标签缓存（同 key）——两处参数保持一致。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
   })
   const resourceItems = resources.data ?? []
   const hasSuggestedResources = resourceItems.some((item) => item.link.confirmed_at === null)

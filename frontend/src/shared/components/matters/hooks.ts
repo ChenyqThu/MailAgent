@@ -18,6 +18,8 @@ import type {
   MatterUpdateReviewStatus
 } from '@shared/api/types/matter'
 import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
+import { useAppConfig } from '@shared/hooks/useAppConfig'
+import type { AppConfigFlags } from '@shared/hooks/useAppConfig'
 import { useMailApi } from '@shared/hooks/useMailApi'
 import { qk } from '@shared/lib/queryKeys'
 
@@ -33,29 +35,18 @@ export function useMatterChatApi(): MatterChatApi {
   return useMemo(() => createMatterChatApi(resolveApiBaseUrl()), [])
 }
 
+/** 模块级 = 引用稳定（select 每次换新函数会让 react-query 每次重算投影）。 */
+const selectMatterFlags = (
+  flags: AppConfigFlags
+): { mattersEnabled: boolean; matterAgentEnabled: boolean } => ({
+  mattersEnabled: flags.mattersEnabled,
+  matterAgentEnabled: flags.matterAgentEnabled
+})
+
+/** 事项总闸 + 事项 Agent 闸。数据源是与通讯录**共享**的那一次 `/chat/config`
+ *  （`useAppConfig`：单 key 单请求；失败即 error 而不是缓存成「已禁用」）。 */
 export function useMatterFlags(): { mattersEnabled: boolean; matterAgentEnabled: boolean } {
-  const query = useQuery({
-    queryKey: qk.matters.config(),
-    queryFn: async (): Promise<{ mattersEnabled: boolean; matterAgentEnabled: boolean }> => {
-      try {
-        const response = await fetch(`${resolveApiBaseUrl()}/chat/config`, {
-          credentials: 'include'
-        })
-        if (!response.ok) return { mattersEnabled: false, matterAgentEnabled: false }
-        const body = (await response.json()) as {
-          data?: { mattersEnabled?: unknown; matterAgentEnabled?: unknown }
-        }
-        return {
-          mattersEnabled: body.data?.mattersEnabled === true,
-          matterAgentEnabled: body.data?.matterAgentEnabled === true
-        }
-      } catch {
-        return { mattersEnabled: false, matterAgentEnabled: false }
-      }
-    },
-    staleTime: 30_000,
-    retry: false
-  })
+  const query = useAppConfig(selectMatterFlags)
   return query.data ?? { mattersEnabled: false, matterAgentEnabled: false }
 }
 
@@ -133,7 +124,12 @@ export function useGlobalAttention(enabled = true): UseQueryResult<MatterAttenti
     queryKey: globalAttentionKey(),
     queryFn: () => api.listAttention('open'),
     enabled,
-    staleTime: 15_000
+    // 缓存配方同 useEmailListRows（速赢包 §2）: Sidebar 每次路由切换都 remount
+    // （它不是单例，InboxLayout / PageFrame 各渲染一份）→ 15s staleTime + 默认
+    // refetchOnMount 让徽标每切一次页就重拉一次。信号的实时性靠 `matter.attention`
+    // SSE 精准失效（useEventBridge），不靠短 staleTime。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
   })
 }
 
@@ -146,7 +142,9 @@ export function useMatterAttention(
     queryKey: matterAttentionKey(matterId),
     queryFn: () => api.listMatterAttention(matterId, 'open'),
     enabled,
-    staleTime: 15_000
+    // 同上（SSE 失效 + 事项写入连带 detail 前缀失效，缓存可以放长）。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
   })
 }
 
@@ -209,7 +207,9 @@ export function useNotifyLevel(enabled = true): UseQueryResult<MatterNotifyLevel
     queryKey: notifyLevelKey(),
     queryFn: () => api.getNotifyLevel(),
     enabled,
-    staleTime: 30_000
+    // 写侧 useSetNotifyLevel 直接 setQueryData 回写 → 读侧缓存可以放长。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
   })
 }
 

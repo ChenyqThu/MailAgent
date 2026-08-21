@@ -1,6 +1,6 @@
-// 通讯录 hooks（task 08-13 WP2）。flag 投影镜像 components/matters/hooks.ts 的
-// useMatterFlags（/chat/config 投影、staleTime 30s、retry:false、catch→false ——
-// 🔴 不直读 env，与 /api/contacts 的 require_contacts_enabled 读同一个冻结单例）。
+// 通讯录 hooks（task 08-13 WP2）。flag 投影与 components/matters/hooks.ts 的
+// useMatterFlags 共用 `useAppConfig` 那一次 `/chat/config`（🔴 不直读 env，与
+// /api/contacts 的 require_contacts_enabled 读同一个冻结单例）。
 
 import { useMemo } from 'react'
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
@@ -26,6 +26,8 @@ import type {
   ContactView
 } from '@shared/api/types/contact'
 import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
+import { useAppConfig } from '@shared/hooks/useAppConfig'
+import type { AppConfigFlags } from '@shared/hooks/useAppConfig'
 import { qk } from '@shared/lib/queryKeys'
 
 export function useContactsApi(): ContactsApi {
@@ -38,36 +40,22 @@ export interface ContactFlags {
   loading: boolean
 }
 
-/** 通讯录总闸 + 治理 Agent 闸的**双 flag 投影**（WP7；形状照 matters 的
- *  `useMatterFlags`）。一次 `/chat/config` 取两个字段，共用 `qk.contacts.config()`
- *  这一个缓存 —— 两条独立 fetch 会各自缓存，同一份 flag 在两个面上显示成两个值。
- *  🔴 治理 Agent 的语义是 **AND**：后端 `/api/contacts/suggestions` 先过 router 级
+/** 🔴 治理 Agent 的语义是 **AND**：后端 `/api/contacts/suggestions` 先过 router 级
  *  `require_contacts_enabled`、再过端点级 `require_contact_agent_enabled`，所以
- *  `contactAgentEnabled` 在这里也取合取，UI 不会显示一个必然 E_DISABLED 的入口。 */
+ *  `contactAgentEnabled` 在这里取合取，UI 不会显示一个必然 E_DISABLED 的入口。
+ *  模块级 = 引用稳定（见 useAppConfig 的 select 约定）。 */
+const selectContactFlags = (
+  flags: AppConfigFlags
+): { contactsEnabled: boolean; contactAgentEnabled: boolean } => ({
+  contactsEnabled: flags.contactsEnabled,
+  contactAgentEnabled: flags.contactsEnabled && flags.contactAgentEnabled
+})
+
+/** 通讯录总闸 + 治理 Agent 闸的**双 flag 投影**（WP7；形状照 matters 的
+ *  `useMatterFlags`）。数据源是与事项**共享**的那一次 `/chat/config`（`useAppConfig`：
+ *  单 key 单请求，启动阶段不再同端点发两遍；失败即 error 而不是缓存成「已禁用」）。 */
 export function useContactFlags(): ContactFlags {
-  const query = useQuery({
-    queryKey: qk.contacts.config(),
-    queryFn: async (): Promise<{ contactsEnabled: boolean; contactAgentEnabled: boolean }> => {
-      try {
-        const response = await fetch(`${resolveApiBaseUrl()}/chat/config`, {
-          credentials: 'include'
-        })
-        if (!response.ok) return { contactsEnabled: false, contactAgentEnabled: false }
-        const body = (await response.json()) as {
-          data?: { contactsEnabled?: unknown; contactAgentEnabled?: unknown }
-        }
-        const contactsEnabled = body.data?.contactsEnabled === true
-        return {
-          contactsEnabled,
-          contactAgentEnabled: contactsEnabled && body.data?.contactAgentEnabled === true
-        }
-      } catch {
-        return { contactsEnabled: false, contactAgentEnabled: false }
-      }
-    },
-    staleTime: 30_000,
-    retry: false
-  })
+  const query = useAppConfig(selectContactFlags)
   return {
     contactsEnabled: query.data?.contactsEnabled === true,
     contactAgentEnabled: query.data?.contactAgentEnabled === true,
@@ -92,7 +80,11 @@ export function useContactList(options: {
     queryKey: qk.contacts.list(options.view, options.q, options.sort),
     queryFn: () => api.list({ view: options.view, q: options.q || undefined, sort: options.sort }),
     enabled: options.enabled,
-    staleTime: 15_000,
+    // 缓存配方同 useEmailListRows（速赢包 §2）: 切走再切回 <5min 直接命中缓存（无网络、
+    // 无骨架），gcTime 15min 防「离开一会儿回来整份被 GC → 完整冷加载」。写侧靠
+    // useInvalidateContact 精确失效，不靠短 staleTime。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
     placeholderData: (previous) => previous
   })
 }
@@ -110,7 +102,9 @@ export function useContactDetail(
     // 落地态即停 —— 不另开 job 键（画像态本来就是 detail 投影的一部分，多一个键就多
     // 一个会与 detail 打架的真源）。形态照 useBackfillProgress 的 refetchInterval。
     refetchInterval: (query) => (query.state.data?.profile?.status === 'running' ? 3_000 : false),
-    staleTime: 15_000
+    // 同 useContactList 的配方（画像 running 时由上面的 3s 轮询接管，与 staleTime 无关）。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
   })
 }
 
@@ -188,7 +182,9 @@ export function useBackfillProgress(
     queryFn: () => api.backfillProgress(),
     enabled,
     refetchInterval: (query) => (query.state.data?.drained === false ? 5_000 : false),
-    staleTime: 4_000
+    // 未 drained 的实时性由上面的 5s 轮询负责; staleTime 只决定「重新挂载要不要立刻再拉」
+    // —— 4s 等于每次进页面都为一条进度条多发一次请求（drained 后那条还不显示）。
+    staleTime: 60_000
   })
 }
 

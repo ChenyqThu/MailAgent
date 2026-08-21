@@ -20,6 +20,7 @@ import { ErrorBoundary } from '@shared/components/ErrorBoundary'
 import { Skeleton } from '@shared/components/feedback/LoadingSkeleton'
 import { ToastContainer } from '@shared/components/Toast'
 import { UpdateReadyBanner } from '@shared/components/UpdateReadyBanner'
+import { useApiReadyRefresh } from '@shared/hooks/useApiReadyRefresh'
 import { useEventBridge } from '@shared/hooks/useEventBridge'
 import { usePopoutMode } from '@shared/state/popout-mode'
 
@@ -36,6 +37,14 @@ function EventBridgeMount(): null {
   return null
 }
 
+/** 速赢包 §4c — serve-api 软门控就绪 (main 广播 'mailagent:api-ready') 后失效 serve-api
+ *  系 query。与 EventBridgeMount 同理住在这里: 需要 QueryClient、每个 App 生命周期只挂
+ *  一次、自身无 UI。 */
+function ApiReadyRefreshMount(): null {
+  useApiReadyRefresh()
+  return null
+}
+
 export default function App(): React.ReactElement {
   // The client lives in a useState so HMR doesn't recreate it on every
   // edit (would lose the in-flight cache). One QueryClient per renderer
@@ -49,6 +58,9 @@ export default function App(): React.ReactElement {
             // refetchInterval at the per-query level; everything else
             // (mailbox list, AI fields) stays cached until invalidated.
             staleTime: 30_000,
+            // 速赢包 §1 —— gcTime 默认 5min: 切走超过 5 分钟(日常最常见的窗口)缓存被回收,
+            // 切回等于完整冷加载。桌面 app 是常驻进程, 用内存换体验把回收推到 30min。
+            gcTime: 30 * 60_000,
             refetchOnWindowFocus: false,
             retry: 1
           }
@@ -107,6 +119,9 @@ export default function App(): React.ReactElement {
         {/* EventBridge needs QueryClient but doesn't read router state,
             so it stays here regardless of popout vs inbox shell. */}
         <EventBridgeMount />
+        {/* 同上: 只依赖 QueryClient, popout / inbox 两种 shell 都要 (popout 里的
+            事项/通讯录数据同样走 serve-api)。 */}
+        <ApiReadyRefreshMount />
         {isPopout ? (
           <Suspense fallback={<Skeleton rows={6} className="h-full w-full p-6" width="2/3" />}>
             <PopoutShell />

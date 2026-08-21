@@ -37,7 +37,13 @@ const appMock = { isPackaged: false } as {
 appMock.on = vi.fn()
 appMock.quit = vi.fn()
 
-vi.mock('electron', () => ({ app: appMock }))
+// serve-api 软门控就绪时会向所有窗口广播 'mailagent:api-ready' (速赢包 §4b) → 需要
+// BrowserWindow.getAllWindows。fakeWindows 由各测试填, 默认空数组 (无窗口 = 不发)。
+const windowSend = vi.fn()
+const fakeWindows: Array<{ isDestroyed(): boolean; webContents: { send: typeof windowSend } }> = []
+const browserWindowMock = { getAllWindows: () => fakeWindows }
+
+vi.mock('electron', () => ({ app: appMock, BrowserWindow: browserWindowMock }))
 
 // ---- child_process.spawn mock ----------------------------------------------
 
@@ -567,6 +573,25 @@ describe('serve-api 软门控 — waitReady 只 gate serve (向后兼容硬约�
     // 软门控是 fire-and-forget; 轮一小会儿等它置 ready。
     await vi.waitFor(() => expect(mgr.getServiceState('serve-api')).toBe('ready'), { timeout: 500 })
     expect(apiProbe).toHaveBeenCalled()
+  })
+
+  test('serve-api 就绪 → 向所有窗口广播 mailagent:api-ready (renderer 据此重取被打空的 query)', async () => {
+    appMock.isPackaged = true
+    enableGate()
+    fakeWindows.push(
+      { isDestroyed: () => false, webContents: { send: windowSend } },
+      // 已销毁的窗口跳过 (send 会抛 Object has been destroyed)。
+      { isDestroyed: () => true, webContents: { send: windowSend } }
+    )
+    const mgr = new BackendLifecycleManager({
+      pollIntervalMs: 1,
+      apiReadyTimeoutMs: 1000,
+      apiProbe: vi.fn(async () => true)
+    })
+    mgr.start()
+    await vi.waitFor(() => expect(mgr.getServiceState('serve-api')).toBe('ready'), { timeout: 500 })
+    expect(windowSend.mock.calls).toEqual([['mailagent:api-ready']])
+    fakeWindows.length = 0
   })
 
   test('serve-api 永不就绪 → 软门控超时标 serve-api failed (只 warn, 不影响 serve)', async () => {

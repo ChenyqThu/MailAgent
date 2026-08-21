@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
+import { keepPreviousData, useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { useTranslation } from 'react-i18next'
 import { Ban, Plus } from 'lucide-react'
 
@@ -166,7 +166,13 @@ export function MattersWorkspace(): React.ReactElement | null {
     queryKey: qk.matters.list(),
     queryFn: () => api.list({ limit: 100 }),
     enabled,
-    staleTime: 30_000
+    // 缓存配方同 useEmailListRows（速赢包 §2）: 事项页切走即整树卸载, 30s staleTime +
+    // 默认 refetchOnMount 让「切走一会儿再切回」必定冷拉一遍; 写侧已由 refreshMatter /
+    // `matter.changed` SSE 精准失效, 所以这里可以放长。placeholderData 让筛选 scope 切换
+    // 时旧行原地留着（data 不塌成 undefined → 列表不闪空态）。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
+    placeholderData: keepPreviousData
   })
   const liveMatters = useMemo(() => liveList.data?.items ?? [], [liveList.data])
   // V3-03 —— archived/trash 两个 scope 的行**必须**由服务端参数取回：服务端默认子句
@@ -177,7 +183,9 @@ export function MattersWorkspace(): React.ReactElement | null {
     queryKey: qk.matters.list(query.scope),
     queryFn: () => api.list({ ...matterScopeParams(query.scope), limit: 100 }),
     enabled: enabled && scopeOnServer,
-    staleTime: 30_000
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000,
+    placeholderData: keepPreviousData
   })
   const scopeRows = scopeOnServer ? (scopedList.data?.items ?? []) : liveMatters
   const scopeReady = scopeOnServer ? scopedList.isSuccess : liveList.isSuccess
@@ -211,7 +219,10 @@ export function MattersWorkspace(): React.ReactElement | null {
           })
       ),
     enabled: enabled && matterAgentEnabled && liveMatters.length > 0,
-    staleTime: 15_000
+    // 🔴 这条 queryFn 是 N+1 扇出（N 条事项 → N + P 个请求），根治（服务端聚合端点）在
+    // `perf-matters-request-fanout`；这里只把 15s 抬到 5min，先止住「离开 15s 再切回就把
+    // 整轮风暴重放一遍、把 6 个连接槽占满」。提案的实时性靠 refreshMatter 的失效清单。
+    staleTime: 5 * 60_000
   })
   const updateIndex = useMemo(
     () =>
@@ -224,7 +235,9 @@ export function MattersWorkspace(): React.ReactElement | null {
     queryKey: MATTER_TAGS_QUERY_KEY,
     queryFn: () => listMatterTagsSafely(api),
     enabled: enabled && tab === 'list',
-    staleTime: 30_000
+    // 标签定义是低频写（标签管理弹窗写完直接 invalidate MATTER_TAGS_QUERY_KEY）。
+    staleTime: 5 * 60_000,
+    gcTime: 15 * 60_000
   })
   const tagDefinitions = tagsQuery.data?.items ?? []
 

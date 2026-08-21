@@ -296,9 +296,7 @@ const connectorsRoute = createRoute({
   beforeLoad: ({ search }) => {
     throw redirect({
       to: '/settings',
-      search: search.item
-        ? { tab: 'connectors', item: search.item }
-        : { tab: 'connectors' },
+      search: search.item ? { tab: 'connectors', item: search.item } : { tab: 'connectors' },
       replace: true
     })
   }
@@ -439,7 +437,14 @@ export const router = createRouter({
   ]),
   basepath: _routerBasepath,
   history: isPackagedFileProtocol ? createMemoryHistory({ initialEntries: ['/'] }) : undefined,
-  defaultPreload: false,
+  // 速赢包 §3 —— 除 `/`（InboxLayout 静态 import）外全部是 lazyRouteComponent，chunk 最大
+  // 591 KB（MattersLayout）。'intent' = hover/focus 侧边栏入口就开始下载对应 chunk，点击时
+  // 通常已在本地；50ms 延迟避免鼠标划过一排入口就把整棵路由树全拉下来。
+  defaultPreload: 'intent',
+  defaultPreloadDelay: 50,
+  // 默认 1000ms 意味着 chunk 在 1s 内下载完就**完全没有**视觉反馈（点了没反应的死区）；
+  // 150ms 是「不闪一下就消失」与「点击有回应」之间的常用折中。
+  defaultPendingMs: 150,
   defaultPendingComponent: RouteLoadingSkeleton
 })
 

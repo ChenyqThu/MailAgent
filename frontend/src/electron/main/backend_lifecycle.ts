@@ -36,7 +36,7 @@
 // 用户环境态 + 该独立于 Electron 常驻, 由 runbook 教用户 pm2 托管)。
 
 import { execFileSync, spawn, type ChildProcess } from 'child_process'
-import { app } from 'electron'
+import { app, BrowserWindow } from 'electron'
 import {
   createWriteStream,
   existsSync,
@@ -52,6 +52,7 @@ import { dirname, join } from 'path'
 import Database from 'better-sqlite3'
 
 import { resolveAiGatewayPort } from '../../ai-gateway/config'
+import { API_READY_CHANNEL } from '@shared/lib/ipcChannels'
 import { DEFAULT_API_PORT, DEFAULT_SSE_PORT } from '@shared/lib/ports'
 import { getMailagentCommand } from './cli_runner'
 import { STALE_CMD_MARKER } from './py_cli_bootstrap'
@@ -298,6 +299,20 @@ export function probeApiHealth(port: number = DEFAULT_API_PORT): Promise<boolean
     })
     req.on('error', () => done(false))
   })
+}
+
+/** serve-api 首次就绪 → 广播给所有窗口 (events_bridge.broadcast 同形状)。
+ *  尽力而为: 渲染进程已销毁 / 单测里 electron 只 mock 了 app —— 广播失败绝不能反过来
+ *  打断软门控的就绪判定。 */
+function broadcastApiReady(): void {
+  try {
+    for (const win of BrowserWindow.getAllWindows()) {
+      if (win.isDestroyed()) continue
+      win.webContents.send(API_READY_CHANNEL)
+    }
+  } catch {
+    /* 窗口已拆 / BrowserWindow 不可用 — 忽略 */
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -971,6 +986,10 @@ export class BackendLifecycleManager {
         if (svc.state === 'starting') {
           svc.state = 'ready'
           svc.restartAttempts = 0 // C2: 一次成功就绪 → 清零崩溃计数 (断路器复位)
+          // 软门控不阻塞开窗 ⇒ renderer 挂载时 serve-api 常常还没起, 事项/通讯录/工作台
+          // flag 那几族 query 打空 (flag 打空曾被缓存成「已禁用」空态)。这里把「现在可以
+          // 打了」告诉 renderer, 由 useApiReadyRefresh 失效对应 query 重来一次。
+          broadcastApiReady()
         }
         return
       }
