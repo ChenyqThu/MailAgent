@@ -10,6 +10,12 @@ export default defineConfig({
     include: ['tests/**/*.test.{ts,tsx,cjs}'],
     environment: 'node',
     pool: 'forks', // better-sqlite3 + native bindings prefer process isolation
+    // 默认 5000ms 对本仓的重计算用例太紧：bot-avatar/shapes 的取景窗上界那几条要把
+    // 全部形状 × 全表情 × gaze 四角都 renderAvatar 一遍（单文件跑就近 5s），
+    // CustomAgentTab 的 findByRole 等待型用例同理。528 个测试文件在 forks 池里互抢 CPU 时
+    // 它们会零星越线 —— 单跑恒绿、全量随机红，典型的资源饥饿而非断言失效。
+    // 抬阈值不掩盖回归：真回归是断言失败，超时只反映机器有多忙（CI runner 比本机更慢）。
+    testTimeout: 20_000,
     // 全局 setup：在 happy-dom 组件测试里强制 reduced-motion，让 GSAP 动画
     // no-op（详见 tests/setup.ts）。node 环境测试自动跳过。
     setupFiles: ['./tests/setup.ts'],
