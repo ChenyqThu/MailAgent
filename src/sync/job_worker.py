@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING
 from loguru import logger
 
 from src.events.publisher import safe_publish
+from src.notify.center import NotifyCenter
 
 if TYPE_CHECKING:
     from src.config import Config
@@ -33,6 +34,27 @@ if TYPE_CHECKING:
 
 # 每 N 个 unit 刷一次进度 (async_jobs 写 + SSE)。stop 检查每 unit 都做 (廉价)。
 _PROGRESS_STRIDE = 10
+
+# 通知中心文案 (task 08-20-notification-center, design §7「维护族 job 终态」行)。
+# job_type 未登记时回落 job_type 原样 (前向兼容, 新 runner 上线不必同步改这里)。
+_JOB_TYPE_LABELS = {
+    "resync": "重传 Notion",
+    "backfill_body": "回填正文",
+    "backfill_metadata": "回填元数据",
+}
+_JOB_STATUS_LABELS = {
+    "succeeded": "已完成",
+    "partial_failure": "部分失败",
+    "failed": "失败",
+    "aborted": "已中止",
+}
+# design §7: failed/partial_failure=warn；succeeded/aborted=info。
+_JOB_STATUS_SEVERITY = {
+    "succeeded": "info",
+    "aborted": "info",
+    "partial_failure": "warn",
+    "failed": "warn",
+}
 
 
 class JobWorker:
@@ -48,6 +70,8 @@ class JobWorker:
         self.repo = repo
         self.config = config
         self.poll_interval_sec = poll_interval_sec
+        # 发布入口单源 (design §3.1): 构造只收 db_path, 不复用重 SyncStore 实例。
+        self._notify_center = NotifyCenter(self.repo.db_path)
 
         self._stop_event = asyncio.Event()
         self._stats = {"claimed": 0, "succeeded": 0, "partial_failure": 0,
@@ -143,6 +167,7 @@ class JobWorker:
                 data={"job_id": job_id, "error": f"{type(e).__name__}: {e}"},
                 source="job-worker",
             )
+            self._notify_terminal(job, status="failed", error=f"{type(e).__name__}: {e}")
             return
 
         status = summary_to_status(summary)
@@ -162,7 +187,52 @@ class JobWorker:
             data={"job_id": job_id, "status": status, "summary": result},
             source="job-worker",
         )
+        self._notify_terminal(job, status=status, summary=result)
         logger.info(f"[job-worker] job_id={job_id} done status={status} {result}")
+
+    def _notify_terminal(
+        self,
+        job: "AsyncJob",
+        *,
+        status: str,
+        summary: dict | None = None,
+        error: str | None = None,
+    ) -> None:
+        """落一条 job 终态通知 (design §7「维护族 job 终态」行)。
+
+        文案读 ``status`` (LongTaskSummary 派生), 不读 SSE 事件名 —— partial_failure/
+        aborted 都走 ``job.done`` 但文案分别是「部分失败」「已中止」。通知路径绝不影响
+        job 终态 (design §3.3 纪律, run_worker.py:157-160 同款): 整段 try 吞 + warning。
+        """
+        try:
+            label = _JOB_TYPE_LABELS.get(job.job_type, job.job_type)
+            status_label = _JOB_STATUS_LABELS.get(status, status)
+            if summary is not None:
+                body = (
+                    f"成功 {summary.get('succeeded', 0)} · "
+                    f"失败 {summary.get('failed', 0)} · "
+                    f"跳过 {summary.get('skipped', 0)}（共 {summary.get('total', 0)}）"
+                )
+            else:
+                body = f"执行异常：{error}" if error else ""
+            self._notify_center.publish(
+                category="results",
+                source="job",
+                title=f"{label}{status_label}",
+                body=body,
+                severity=_JOB_STATUS_SEVERITY.get(status, "warn"),
+                dedupe_key=f"job:{job.job_type}:{job.job_id}",
+                payload={
+                    "link": {"type": "route", "to": "/admin/kanban"},
+                    "job_id": job.job_id,
+                    "job_type": job.job_type,
+                    "status": status,
+                },
+            )
+        except Exception as e:  # noqa: BLE001 — 通知路径绝不影响 job 终态
+            logger.warning(
+                f"[job-worker] notify_center publish failed job_id={job.job_id}: {e}"
+            )
 
     def _make_progress_hook(self, job_id: int):
         """返回 on_unit_done 回调: 每 stride 个 unit 刷 async_jobs 进度 + SSE;
