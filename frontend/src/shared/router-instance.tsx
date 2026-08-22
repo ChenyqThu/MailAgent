@@ -48,6 +48,10 @@ import { GlobalShortcuts } from './components/keyboard/GlobalShortcuts'
 import { KeyboardHelpModal } from './components/keyboard/KeyboardHelpModal'
 import { ComposeNewModal } from './components/email/compose/ComposeNewModal'
 import { useMatterNavigation } from './components/matters/navigation'
+// task 08-20-notification-center M2 批 B4 — 系统通知点击深跳：main 的通知 fanout 经
+// 'notifications:navigate' 送来通知行 payload，这里用**单源解析器**收窄（不另抄判据）。
+import { resolveNotificationLink } from './components/notifications/navigation'
+import { requestOpenAgentSession } from './state/ai-chat-panel'
 import type { DeeplinkTarget } from './lib/deeplink_target'
 import { calendarUiEnabled, detectUiPlatform } from './lib/mailBackend'
 
@@ -173,6 +177,57 @@ function useMatterNotificationNavigation(): void {
   }, [navigate])
 }
 
+/**
+ * task 08-20-notification-center M2 批 B4 — 系统通知（macOS Notification）点击深跳。
+ * main 的 notification_fanout 聚焦主窗口后经 'notifications:navigate' 送来
+ * `{ id, payload }`（payload = 通知行 payload_json）；这里只落地 M1 的两个 link 型
+ * （session / route，与 NotificationPanel.activate 同口径），其余型（report /
+ * contact_queue / matter / updater_restart）的落地动作归通知面板批 —— 系统通知点击
+ * 对它们退化为「仅聚焦主窗口」（main 侧已做），不在此处抄第二份落地逻辑。
+ */
+function useNotificationClickNavigation(): void {
+  const navigate = useNavigate()
+  useEffect(() => {
+    const notificationsApi = (
+      window as unknown as {
+        api?: {
+          notifications?: {
+            onNavigate(handler: (payload: unknown) => void): () => void
+          }
+        }
+      }
+    ).api?.notifications
+    if (!notificationsApi) return
+
+    return notificationsApi.onNavigate((raw) => {
+      if (!raw || typeof raw !== 'object') return
+      const payload = (raw as { payload?: unknown }).payload
+      if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return
+      const link = resolveNotificationLink(payload as Record<string, unknown>)
+      if (!link) return
+      if (link.type === 'session') {
+        requestOpenAgentSession(link.sessionId)
+        void navigate({ to: '/sessions' })
+        return
+      }
+      if (link.type === 'route') {
+        switch (link.to) {
+          case '/agents': {
+            // `/agents` 的 validateSearch 要求 tab 三档之一（NotificationPanel 同口径）。
+            const tab = link.search?.tab
+            const safeTab = tab === 'reports' || tab === 'chats' ? tab : 'agents'
+            void navigate({ to: '/agents', search: { tab: safeTab } })
+            return
+          }
+          case '/admin/kanban':
+            void navigate({ to: '/admin/kanban' })
+            return
+        }
+      }
+    })
+  }, [navigate])
+}
+
 // Popmenu showcase（dev-only 审批物, ⌃⇧P 开）。生产构建时 Vite 把 import.meta.env.DEV
 // 换成 false → 三元折成 null, 这个动态 import 不可达, 不进 chunk 图也不渲染。
 const PopmenuShowcaseMount = import.meta.env.DEV
@@ -183,6 +238,7 @@ function RootLayout(): React.ReactElement {
   useDeeplinkRouter()
   useGeneralAgentMenu()
   useMatterNotificationNavigation()
+  useNotificationClickNavigation()
   return (
     <>
       {/* 外壳单例 (§②, task 08-20-perf-shell-prefetch-sidebar): TitleBar/Sidebar/

@@ -100,6 +100,8 @@ import {
 import { getLlmApiKey, getLlmBaseUrl, getLlmModel } from './llm_settings'
 import { resolveApiPort } from './backend_lifecycle'
 import { getLocalApiToken } from './local_token'
+// task 08-20-notification-center M2 批 B4 — chat run 完成 → 通知中心 loopback publish。
+import { maybeNotifyChatRunFinished } from './notification_fanout'
 // task 07-21 — the env kill-switch parser lives in a pure lib module (pinned by a
 // lightweight vitest; the Python side src/skills/invoke.py mirrors its truth table).
 import { envBool } from './lib/env-bool'
@@ -331,6 +333,10 @@ function persistTurn(turn: PersistTurnInput): void {
   } catch (err) {
     console.error('[ai-gateway] chat:turn-persisted broadcast failed (persist landed OK)', err)
   }
+  // task 08-20-notification-center M2 批 B4 — 通知中心双写（broadcast 本体一字不动）。
+  // 判据（headless-only + origin='agent' 排除）与写实边界见 maybeNotifyChatRunFinished
+  // 头注（notification_fanout.ts）；getSession 注入让判定留在纯可测模块里。
+  maybeNotifyChatRunFinished(turn, getSession)
 }
 
 /** Poll /health until it answers ok (or attempts exhausted). Confirms the embedded

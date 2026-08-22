@@ -49,6 +49,8 @@ import type { ProgressInfo, UpdateInfo } from 'electron-updater'
 // honour CJS require for mocked modules; a static import is what
 // `vi.mock('./settings')` intercepts cleanly.
 import { readSettings } from './settings'
+// task 08-20-notification-center M2 批 B4 — 更新就绪 → 通知中心 loopback publish。
+import { publishNotificationToCenter } from '../notification_fanout'
 
 /** Auto-check tick after launch (production only). Gives the user a few
  *  seconds of unblocked UI before the network handshake fires. */
@@ -247,6 +249,23 @@ export function bindAutoUpdater(updater: AutoUpdaterLike): void {
       latestVersion: info.version,
       downloadPercent: 100,
       message: info.releaseName ?? null
+    })
+    // task 08-20-notification-center M2 批 B4 — 持久化「更新就绪」通知（通知中心 design
+    // §7 updater 行）。「启动补发」走的就是本监听：updater 状态机是进程内存态（重启即
+    // 清零 idle，「启动时已是 downloaded」在现实现里不存在），重启后 re-check →
+    // re-download（差分/缓存秒回）会再次发出 update-downloaded → 同 key 再 publish，
+    // 服务端 dedupe 吸收成计次 —— 即风险清单 4「downloaded 可重入 + dedupe 吸收」的
+    // 落地形状。serve-api 未起 → helper 内只 log 不重试，绝不影响 updater 状态机。
+    void publishNotificationToCenter({
+      category: 'system',
+      source: 'updater',
+      severity: 'info',
+      title: `新版本 v${info.version} 已就绪`,
+      body:
+        (info.releaseName && info.releaseName !== info.version ? `${info.releaseName} — ` : '') +
+        '更新已下载完成，重启应用即可安装。',
+      dedupeKey: `app_update:${info.version}`,
+      payload: { link: { type: 'updater_restart' } }
     })
   })
   updater.on('error', (err: Error) => {
