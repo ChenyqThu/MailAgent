@@ -66,6 +66,7 @@ vi.mock('@tanstack/react-router', () => ({ useNavigate: () => navigate }))
 import i18n from '@shared/i18n'
 import { ContactAgentDrawer } from '@shared/components/contacts/ContactAgentDrawer'
 import { useAgentsNavigation } from '@shared/components/agents/navigation'
+import { useContactNavigation } from '@shared/components/contacts/navigation'
 import type { ContactGovernanceSuggestion } from '@shared/api/types/contact'
 
 await i18n.changeLanguage('zh-CN')
@@ -96,22 +97,27 @@ const BLOCKED: ContactGovernanceSuggestion = {
   decided_at: 1_754_100_000_000
 }
 
-function renderDrawer(over: { onMergePair?: (pair: [number, number]) => void } = {}): {
+function renderDrawer(
+  over: { onMergePair?: (pair: [number, number]) => void; open?: boolean } = {}
+): {
   onOpenChange: ReturnType<typeof vi.fn>
+  /** 切 `open` prop 而不重新挂载——测试「抽屉恒挂载」下的 tab 记忆/重置行为。 */
+  rerender: (open: boolean) => void
 } {
   const onOpenChange = vi.fn()
   const client = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  render(
+  const renderOpen = (open: boolean): React.ReactElement => (
     <QueryClientProvider client={client}>
       <ContactAgentDrawer
-        open
+        open={open}
         onOpenChange={onOpenChange}
         onOpenPerson={vi.fn()}
         onMergePair={over.onMergePair ?? vi.fn()}
       />
     </QueryClientProvider>
   )
-  return { onOpenChange }
+  const view = render(renderOpen(over.open ?? true))
+  return { onOpenChange, rerender: (open) => view.rerender(renderOpen(open)) }
 }
 
 /** 切到「运行」tab 并等它的两条查询落定。 */
@@ -133,6 +139,9 @@ async function settleAgentStatus(): Promise<void> {
 
 beforeEach(() => {
   useAgentsNavigation.getState().clear()
+  // queueNonce 只增不减（navigation.ts 的设计），跨用例必须清零，否则「nonce 变化」这个
+  // 判据在下一个用例开局就已经是「变了」——尤其命中「nonce 不变」那条否定断言时会假绿。
+  useContactNavigation.setState({ queueNonce: 0, queueRequested: false })
   // 提示词编辑区已搬去 Agents 页配置抽屉，这个抽屉不再发那条裸 fetch；stub 一个兜底的
   // fetch 只是免得 happy-dom 在 teardown 时把任何在途请求 abort 成噪声。
   vi.stubGlobal(
@@ -457,5 +466,40 @@ describe('ContactAgentDrawer · 脚部跳转', () => {
     expect(useAgentsNavigation.getState().targetAgentId).toBe('contact_governance_agent')
     expect(onOpenChange).toHaveBeenCalledWith(false)
     expect(navigate).toHaveBeenCalledWith({ to: '/agents', search: { tab: 'agents' } })
+  })
+})
+
+// M3 批 C4：通知中心 `contact_queue` 深链要把 tab 切回「待审建议」——抽屉恒挂载，
+// 靠不了 `open` prop 的边沿，改订阅 store 里的自增 nonce（navigation.ts）。
+describe('ContactAgentDrawer · 通知深链切 tab', () => {
+  test('抽屉已经开着时深链再来一条（nonce 变化）→ tab 切回待审建议', async () => {
+    renderDrawer()
+    await waitFor(() => expect(screen.getByText('待审建议 1')).toBeTruthy())
+
+    await openRunsTab()
+    expect(screen.getByText('现在跑一次治理扫描')).toBeTruthy()
+
+    act(() => {
+      useContactNavigation.getState().openQueue()
+    })
+
+    // 🔴 「待审建议 1」是 tab 按钮本身的标签，两个 tab 都常驻可见，不能拿它判活跃 tab；
+    // 用 tab **body** 里只在队列 tab 才画的内容（PENDING 那条建议的类型名）。
+    await waitFor(() => expect(screen.getByText('合并同人')).toBeTruthy())
+    expect(screen.queryByText('现在跑一次治理扫描')).toBeNull()
+  })
+
+  test('手动切 tab 后 close/reopen（nonce 不变）→ tab 保留上次值', async () => {
+    const { rerender } = renderDrawer()
+    await waitFor(() => expect(screen.getByText('待审建议 1')).toBeTruthy())
+
+    await openRunsTab()
+    expect(screen.getByText('现在跑一次治理扫描')).toBeTruthy()
+
+    rerender(false)
+    rerender(true)
+
+    expect(screen.getByText('现在跑一次治理扫描')).toBeTruthy()
+    expect(screen.queryByText('合并同人')).toBeNull()
   })
 })

@@ -18,6 +18,13 @@ interface ContactNavigationState {
   clear(): void
   /** true = 有一条「打开治理队列抽屉」的待办意图（通知中心 `contact_queue` link）。 */
   queueRequested: boolean
+  /**
+   * 每次 `openQueue()` 严格递增，`clearQueue()` **不重置**（M3 批 C4）。
+   * `ContactAgentDrawer` 恒挂载，`queueRequested` 这个布尔沿在「抽屉已经开着时
+   * 再点一条通知」的场景里不会翻转（本来就是 true→true）；订阅这个 nonce 才能在
+   * 那种场景下也感知到「又来了一条深链意图」，切回「待审建议」tab。
+   */
+  queueNonce: number
   openQueue(): void
   clearQueue(): void
 }
@@ -27,6 +34,7 @@ export const useContactNavigation = create<ContactNavigationState>((set) => ({
   open: (targetContactId) => set({ targetContactId }),
   clear: () => set({ targetContactId: null }),
   queueRequested: false,
-  openQueue: () => set({ queueRequested: true }),
+  queueNonce: 0,
+  openQueue: () => set((state) => ({ queueRequested: true, queueNonce: state.queueNonce + 1 })),
   clearQueue: () => set({ queueRequested: false })
 }))

@@ -55,3 +55,19 @@ describe('useContactNavigation — 治理队列轴', () => {
     useContactNavigation.getState().clearQueue()
   })
 })
+
+// M3 批 C4 —— `queueNonce`：抽屉恒挂载，`queueRequested` 的布尔沿在「抽屉已经开着时
+// 再来一条深链」场景里不会翻转（true→true），必须有个只增不减的计数器让消费方感知到
+// 「又来了一条」。
+describe('useContactNavigation — queueNonce', () => {
+  test('openQueue() 严格递增；clearQueue() 不重置', () => {
+    const before = useContactNavigation.getState().queueNonce
+    useContactNavigation.getState().openQueue()
+    expect(useContactNavigation.getState().queueNonce).toBe(before + 1)
+    useContactNavigation.getState().clearQueue()
+    expect(useContactNavigation.getState().queueNonce).toBe(before + 1)
+    useContactNavigation.getState().openQueue()
+    expect(useContactNavigation.getState().queueNonce).toBe(before + 2)
+    useContactNavigation.getState().clearQueue()
+  })
+})

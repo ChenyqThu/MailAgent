@@ -23,7 +23,7 @@
 // 没发现问题）+ 运行 tab 的「上次扫描」整行（带错误码与下一步）。两处读的是同一条
 // agent-status 查询，不会各说各话。
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
@@ -47,6 +47,7 @@ import { Drawer } from '@shared/components/ui/drawer'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SegmentedControl } from '@shared/components/ui/segmented'
 import { useAgentsNavigation } from '@shared/components/agents/navigation'
+import { useContactNavigation } from '@shared/components/contacts/navigation'
 // 🔴 单源：治理行 id 与画像行 id 并排住在 `agents/shared.ts`（零依赖常量叶子），不在
 // contacts 侧另抄一份 —— 抄一份就等于两处 id 可以各自漂。
 import { CONTACT_GOVERNANCE_AGENT_ID } from '@shared/components/agents/shared'
@@ -400,6 +401,15 @@ export function ContactAgentDrawer({
   const invalidate = useInvalidateContactSuggestions()
   const openAgentConfig = useAgentsNavigation((state) => state.openConfig)
   const [tab, setTab] = useState<AgentTab>('queue')
+  // 通知中心 `contact_queue` 深链要把 tab 切回「待审建议」——但抽屉**恒挂载**
+  // （ContactsWorkspace 只切 `open` prop），backdrop 外的铃铛在抽屉已经开着时也能点，
+  // 所以不能靠 `open` 的边沿判断：抽屉已经开着时再点一条通知，`open` 根本不会变化。
+  // 改订阅 store 里的自增 nonce（每次 openQueue() 递增，clearQueue 不重置）——不管抽屉
+  // 当前开没开，nonce 一变就切，覆盖「深链拉开」与「已开着时再来一条」两种时序。
+  const queueNonce = useContactNavigation((state) => state.queueNonce)
+  useEffect(() => {
+    setTab('queue')
+  }, [queueNonce])
   // render 期不许调 Date.now()（react-hooks/purity）—— ContactDetail 同款快照模式。
   const [now] = useState(() => Date.now())
 
