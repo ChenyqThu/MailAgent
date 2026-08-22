@@ -9,7 +9,9 @@ import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
-import { Bell } from 'lucide-react'
+// 08-20 — 图标从 Bell 换成 ClipboardCheck：铃铛已归统一通知中心（同排两个铃铛会误导，
+// design §6.1）；本徽标的语义是「待审批」，剪贴板打勾更贴。M2 收编进通知中心后本组件退场。
+import { ClipboardCheck } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
@@ -55,7 +57,10 @@ export function AgentPendingCountBadge({ count }: { count: number }): React.Reac
 }
 
 /** 相对时间（"N 分钟前"）：run 触发/结束时间 → 一行摘要。epoch 秒或毫秒容错。 */
-function relTime(t: (k: string, o?: Record<string, unknown>) => string, ts: number | null | undefined): string {
+function relTime(
+  t: (k: string, o?: Record<string, unknown>) => string,
+  ts: number | null | undefined
+): string {
   if (ts == null) return ''
   const ms = ts < 1e12 ? ts * 1000 : ts
   const diff = Date.now() - ms
@@ -138,7 +143,7 @@ function TitleBarAgentPendingBadgeInner({ total }: { total: number }): React.Rea
         )}
       >
         <span className="relative inline-flex">
-          <Bell size={11} strokeWidth={2.25} />
+          <ClipboardCheck size={11} strokeWidth={2.25} />
           <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5">
             <span className="absolute inset-0 rounded-full bg-fail opacity-75 animate-ping" />
             <span className="absolute inset-0 rounded-full bg-fail" />
@@ -161,7 +166,9 @@ function TitleBarAgentPendingBadgeInner({ total }: { total: number }): React.Rea
                 {t('agents.custom.runs.titleBar.kicker')}
               </div>
               <div className="mt-0.5 flex items-center gap-2">
-                <span className="text-aux text-ink-fg">{t('agents.custom.runs.titleBar.title')}</span>
+                <span className="text-aux text-ink-fg">
+                  {t('agents.custom.runs.titleBar.title')}
+                </span>
                 <span className="px-1.5 rounded text-micro font-mono bg-fail/15 text-fail border border-fail/40 tabular-nums">
                   {total}
                 </span>

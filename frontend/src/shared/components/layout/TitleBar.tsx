@@ -24,6 +24,7 @@ import { LocalePicker } from './LocalePicker'
 import { SurfacePickerPopover } from './SurfacePickerPopover'
 import { SystemAlertBadge } from './SystemAlertBadge'
 import { TitleBarAgentPendingBadge } from '../agents/AgentPendingBadge'
+import { NotificationBellBadge } from '../notifications/NotificationBellBadge'
 import { ThemePickerPopover } from './ThemePickerPopover'
 import { UpdateIndicator } from './UpdateIndicator'
 
@@ -93,6 +94,10 @@ export function TitleBar(): React.ReactElement {
         <TitleBarAgentPendingBadge />
         {/* 07-04 — 检测到新版本时出更新 icon (强调色配置左侧); 无更新时 null。 */}
         <UpdateIndicator />
+        {/* 08-20 — 统一通知中心铃铛（右簇第 4 位, 即三个条件徽标之后、帮助按钮之前,
+            mockup 同序）。恒渲染: 未读 0 时是素图标按钮, 未读 > 0 升级成 accent 计数
+            徽标; 点击开通知面板。 */}
+        <NotificationBellBadge />
         <button
           type="button"
           onClick={openKeyboardHelp}

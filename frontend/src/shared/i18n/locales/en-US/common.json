@@ -6724,5 +6724,27 @@
       "openPerson": "Open {name}",
       "evidenceTitle": "Email evidence · {messageId}"
     }
+  },
+  "notifications": {
+    "kicker": "Notification center",
+    "title": "Notifications",
+    "tooltip": "Notifications · {count} unread",
+    "tooltipEmpty": "Notifications",
+    "unreadChip": "{count} unread",
+    "markAllRead": "Mark all as read",
+    "unreadDot": "Unread",
+    "recurrence": "×{count}",
+    "recurrenceTitle": "This notification recurred {count} times",
+    "loading": "Loading…",
+    "error": "Failed to load notifications",
+    "empty": {
+      "title": "No new notifications",
+      "hint": "Background task results show up here"
+    },
+    "group": {
+      "today": "Today",
+      "yesterday": "Yesterday",
+      "earlier": "Earlier"
+    }
   }
 }

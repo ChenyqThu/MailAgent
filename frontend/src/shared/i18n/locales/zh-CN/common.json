@@ -6724,5 +6724,27 @@
       "openPerson": "打开 {name}",
       "evidenceTitle": "邮件证据 · {messageId}"
     }
+  },
+  "notifications": {
+    "kicker": "通知中心",
+    "title": "通知",
+    "tooltip": "通知中心 · {count} 条未读",
+    "tooltipEmpty": "通知中心",
+    "unreadChip": "未读 {count}",
+    "markAllRead": "全部标为已读",
+    "unreadDot": "未读",
+    "recurrence": "×{count}",
+    "recurrenceTitle": "同类通知已发生 {count} 次",
+    "loading": "加载中…",
+    "error": "通知加载失败",
+    "empty": {
+      "title": "没有新通知",
+      "hint": "后台任务完成后会出现在这里"
+    },
+    "group": {
+      "today": "今天",
+      "yesterday": "昨天",
+      "earlier": "更早"
+    }
   }
 }
