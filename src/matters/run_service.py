@@ -26,6 +26,8 @@ from typing import Any, Mapping, Optional
 import httpx
 from loguru import logger
 
+from src.notify.center import NotifyCenter
+
 from .events import UPDATE_PROPOSED
 from .attention import AttentionFact, AttentionService
 from .models import MATTER_CHANGE_KINDS, MATTER_RUN_STATUSES, MatterRunTrigger
@@ -43,6 +45,13 @@ _DEFAULT_AI_GATEWAY_PORT = 8300
 _RUN_STOP_TIMEOUT_SEC = 5.0
 
 MATTER_FOLLOWUP_JOB_TYPE = "matter_followup"
+
+#: 通知中心行的 `source` 值（design §2.3 的信源枚举）。
+#: 🔴 写成常量而不是字面量是有原因的：时间线 i18n 闸
+#: (`frontend/tests/shared/matterTimelineModel.test.ts`) 会把 `src/matters/*.py` 里所有
+#: `source="…"` 字面量当成 **matter_event 的 source** 抽走、要求配一条事件来源文案。
+#: 这里的 source 是 notification 行的，与事件来源是两回事，不该进那份文案表。
+_NOTIFY_SOURCE = "matter"
 
 # lifecycle 七值（status 四值 + 三过程态）；REST 与前端只认它（D3）。
 MATTER_RUN_LIFECYCLE_STATES = (
@@ -141,6 +150,8 @@ class MatterRunService(MatterService):
 
             job_repo = AsyncJobRepository(str(repository.db_path))
         self.job_repo = job_repo
+        #: 通知中心写面（只持 db_path，不开连接；per-call connect 在 NotifyCenter 内部）。
+        self._notify_center = NotifyCenter(str(repository.db_path))
         #: 提案 provider 白名单要问「总闸开没开 + 哪些 connector 连着」。None = 惰性取
         #: 全局 config（镜像 run_spec._default_settings 的 settings=None 习语），测试可注入。
         self._settings = settings
@@ -826,7 +837,40 @@ class MatterRunService(MatterService):
                 ),
                 now,
             )
-            return {"update_id": update_id, "dropped": dropped}
+        # 🔴 事务 **commit 之后**才发通知（`_flush_changed` 同款纪律）：事务内发 =
+        # 通知先到、DB 后提交，用户点进面板看不到那条提案；而且 NotifyCenter 另开连接写
+        # 同一个库，事务里调会直接撞 `database is locked`（BEGIN IMMEDIATE 还没提交）。
+        self._publish_update_notification(
+            str(matter["public_id"]), str(matter["title"]), update_id, summary
+        )
+        return {"update_id": update_id, "dropped": dropped}
+
+    def _publish_update_notification(
+        self, public_id: str, matter_title: str, update_id: int, summary: Optional[str]
+    ) -> None:
+        """提案落库 → 通知中心「待审阅」条目（task 08-20-notification-center, design §7）。
+
+        与同事务开的 `needs_review` attention 信号并存：那是事项内的关注信号，这是
+        全局收件面的一条待审阅。整段吞异常 —— 提案已经提交了，通知失败不该让这次写
+        看起来失败（`MatterService._flush_changed` 同款纪律）。
+        """
+        try:
+            self._notify_center.publish(
+                category="reviews",
+                source=_NOTIFY_SOURCE,
+                title=f"{matter_title} · 有新提案待审阅",
+                body=(summary or "").strip(),
+                severity="info",
+                dedupe_key=f"matter_update:{update_id}",
+                payload={
+                    "link": {"type": "matter", "publicId": public_id},
+                    "update_id": update_id,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — 通知失败不反噬已提交的提案
+            logger.warning(
+                f"[matter-run] notify publish failed update_id={update_id}: {exc}"
+            )
 
     def _validate_changes(
         self,

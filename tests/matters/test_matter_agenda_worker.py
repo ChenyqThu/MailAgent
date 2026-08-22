@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 from datetime import datetime, timezone
@@ -321,3 +322,148 @@ def test_manual_trigger_never_auto_fires(tmp_path):
     ])
     worker = _worker(repo, FakeState())
     assert worker._schedule_tick() == set()
+
+
+# ==================== 通知中心：关注信号并列写入（design §8.c，信源 ③）====================
+# 🔴 通知中心**不当第二个 ack 消费者** —— `last_notified_at` 归 macOS 通知链独占。
+
+
+def _notifications(path):
+    conn = sqlite3.connect(str(path))
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM notification ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def _capture_events(monkeypatch):
+    """收集两条链发出的 SSE：worker 的 matter.notify + NotifyCenter 的 notification.changed。"""
+    import src.matters.worker as worker_mod
+    import src.notify.center as center_mod
+
+    events: list = []
+
+    def record(event_type, data=None, **kwargs):
+        events.append((event_type, data))
+
+    monkeypatch.setattr(worker_mod, "safe_publish", record)
+    monkeypatch.setattr(center_mod, "safe_publish", record)
+    return events
+
+
+def _matter_with_health(path, title, health):
+    repo = MatterRepository(path)
+    service = MatterService(repo, clock_ms=lambda: NOW)
+    matter = service.create_matter(
+        {"title": title}, idempotency_key=f"create-{title}", source="test"
+    )["matter"]
+    with sqlite3.connect(str(path)) as conn:
+        conn.execute(
+            "UPDATE matter SET health=? WHERE id=?", (health, matter["id"])
+        )
+        conn.commit()
+    return repo, matter
+
+
+def test_attention_notify_writes_notification_center_in_parallel(tmp_path, monkeypatch):
+    path = tmp_path / "attn-notify.db"
+    SyncStore(str(path))
+    repo, matter = _matter_with_health(path, "偏离计划的事项", "off_track")
+    events = _capture_events(monkeypatch)
+    worker = MatterAgendaWorker(
+        repository=repo, sync_store=FakeState(),
+        clock_ms=lambda: NOW, run_service=FakeRuns(),
+    )
+    asyncio.run(worker.tick())
+
+    rows = _notifications(path)
+    assert len(rows) == 1
+    row = rows[0]
+    with sqlite3.connect(str(path)) as conn:
+        signal_id, notified_at = conn.execute(
+            "SELECT id, last_notified_at FROM matter_attention"
+        ).fetchone()
+    assert row["category"] == "action_required" and row["severity"] == "critical"
+    assert row["source"] == "matter"
+    assert row["dedupe_key"] == f"matter_attention:{signal_id}"
+    assert row["title"] == "偏离计划的事项" and "健康度" in row["body"]
+    assert json.loads(row["payload_json"])["link"] == {
+        "type": "matter", "publicId": matter["public_id"],
+    }
+    # 🔴 水位归 macOS 通知链独占：并列写入不碰 last_notified_at（碰了对面就永远收不到）
+    assert notified_at is None
+    # macOS 链的 matter.notify 照发（行为零变化）
+    assert [e for e in events if e[0] == "matter.notify"], "matter.notify 必须照旧发出"
+
+
+def test_attention_notification_severity_maps_straight_through(tmp_path, monkeypatch):
+    """severity 值域两侧同为 info/warn/critical → 直通，不需要映射表。"""
+    path = tmp_path / "attn-severity.db"
+    SyncStore(str(path))
+    repo = MatterRepository(path)
+    service = MatterService(repo, clock_ms=lambda: NOW)
+    expected = {}
+    for severity in ("info", "warn", "critical"):
+        matter = service.create_matter(
+            {"title": f"事项-{severity}"}, idempotency_key=f"c-{severity}", source="test"
+        )["matter"]
+        # context_gap 是事件驱动信号：reconcile 不碰它，能原样活到 eligible 那一步
+        signal = MatterAgendaWorker(
+            repository=repo, sync_store=FakeState(), clock_ms=lambda: NOW,
+            run_service=FakeRuns(),
+        ).attention.open_signal(
+            matter_id=matter["id"], kind="context_gap", subject_key="ctx",
+            severity=severity, why=f"缺资料-{severity}",
+        )
+        expected[f"matter_attention:{signal['id']}"] = severity
+
+    _capture_events(monkeypatch)
+    worker = MatterAgendaWorker(
+        repository=repo, sync_store=FakeState(), clock_ms=lambda: NOW,
+        run_service=FakeRuns(), notify_level_reader=lambda: "all",
+    )
+    asyncio.run(worker.tick())
+
+    got = {row["dedupe_key"]: row["severity"] for row in _notifications(path)}
+    assert got == expected
+
+
+def test_attention_batch_emits_single_changed_event(tmp_path, monkeypatch):
+    """一轮多条信号 → 通知逐条落库，刷新信号只发一条（design §3.2 批量写）。"""
+    path = tmp_path / "attn-batch.db"
+    SyncStore(str(path))
+    repo, _ = _matter_with_health(path, "风险一", "off_track")
+    _matter_with_health(path, "风险二", "off_track")
+    events = _capture_events(monkeypatch)
+    worker = MatterAgendaWorker(
+        repository=repo, sync_store=FakeState(),
+        clock_ms=lambda: NOW, run_service=FakeRuns(),
+    )
+    asyncio.run(worker.tick())
+
+    assert len(_notifications(path)) == 2
+    changed = [e for e in events if e[0] == "notification.changed"]
+    assert len(changed) == 1
+    assert changed[0][1] == {"category": "action_required"}
+
+
+def test_attention_notification_failure_does_not_break_macos_chain(tmp_path, monkeypatch):
+    path = tmp_path / "attn-boom.db"
+    SyncStore(str(path))
+    repo, _ = _matter_with_health(path, "写通知会炸", "off_track")
+    events = _capture_events(monkeypatch)
+    worker = MatterAgendaWorker(
+        repository=repo, sync_store=FakeState(),
+        clock_ms=lambda: NOW, run_service=FakeRuns(),
+    )
+
+    def boom(**kwargs):
+        raise RuntimeError("notification table gone")
+
+    monkeypatch.setattr(worker._notify_center, "publish", boom)
+    asyncio.run(worker.tick())
+
+    assert _notifications(path) == []
+    assert [e for e in events if e[0] == "matter.notify"], "macOS 链不受通知中心失败牵连"
+    assert [e for e in events if e[0] == "notification.changed"] == []

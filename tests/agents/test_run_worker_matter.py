@@ -7,6 +7,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import sqlite3
 
 import pytest
 
@@ -310,6 +312,159 @@ def test_second_active_run_cas_fails_with_run_active(env, monkeypatch):
     assert repo.get(job.job_id).last_error == "E_RUN_ACTIVE"
     assert service.get_run(run["id"])["status"] == "fail"
     assert _pokes(calls) == []
+
+
+# ---------------------------------------------------------------------------
+# 通知中心：matter_followup 硬失败（无提案）→ results/warn
+# （task 08-20-notification-center M2 信源 ④，design §7 缺口 ④）
+# 🔴 warn ≠ failed：提案已交出、只是收尾报错的那轮**有产出**，不发失败通知。
+# ---------------------------------------------------------------------------
+
+
+def _notifications(service):
+    conn = sqlite3.connect(str(service.repository.db_path))
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM notification ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def test_hard_failure_without_proposal_publishes_warn_notification(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+    _patch_client(
+        monkeypatch,
+        resp=_FakeResp(200, {"ok": False, "outcome": "error", "error": "E_BUDGET_TIME"}),
+    )
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    rows = _notifications(service)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["category"] == "results" and row["severity"] == "warn"
+    assert row["source"] == "matter"
+    assert row["dedupe_key"] == f"matter_followup_failed:{run['matter_id']}"
+    assert "Worker Matter" in row["title"] and "E_BUDGET_TIME" in row["body"]
+    assert json.loads(row["payload_json"])["link"] == {"type": "matter", "publicId": pid}
+
+
+def test_warn_after_proposal_publishes_no_failure_notification(env, monkeypatch):
+    """🔴 0813 dogfood #17 的通知面版本：提案已交出 ⇒ 有产出，不得说成失败。"""
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+
+    def propose():
+        service.propose_update(pid, run["id"], {"summary": "有发现", "changes": []})
+
+    _patch_client(
+        monkeypatch,
+        resp=_FakeResp(200, {
+            "ok": False, "outcome": "error", "error": "E_AGENT",
+            "errorMessage": "stream closed unexpectedly",
+        }),
+        on_poke=propose,
+    )
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    assert service.get_run(run["id"])["status"] == "warn"  # 前置：这轮记的是 warn
+    # 提案那条 reviews 通知照发（信源 ②），失败通知一条都不许有
+    assert [r["dedupe_key"] for r in _notifications(service)] == [
+        f"matter_update:{service.update_id_for_run(run['id'])}"
+    ]
+
+
+def test_transport_failure_without_proposal_publishes_warn_notification(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+
+    class _Boom:
+        def __init__(self, *a, **k):
+            pass
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *a):
+            return False
+
+        async def post(self, url, json=None, headers=None):
+            raise run_worker.httpx.TimeoutException("boom")
+
+    monkeypatch.setattr(run_worker.httpx, "AsyncClient", _Boom)
+    worker = AgentRunWorker(repo=repo)
+    _run(worker._execute(job))
+
+    assert service.get_run(run["id"])["status"] == "fail"
+    rows = _notifications(service)
+    assert len(rows) == 1 and "E_RUN_TIMEOUT" in rows[0]["body"]
+    assert rows[0]["dedupe_key"] == f"matter_followup_failed:{run['matter_id']}"
+
+
+def test_worker_crash_publishes_warn_notification(env, monkeypatch):
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+    _patch_client(monkeypatch)
+    worker = AgentRunWorker(repo=repo)
+    svc = worker._matter_service()
+    monkeypatch.setattr(
+        svc, "mark_started",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    _run(worker._execute(job))
+
+    assert repo.get(job.job_id).last_error.startswith("E_WORKER_CRASH")
+    rows = _notifications(service)
+    assert len(rows) == 1
+    assert rows[0]["dedupe_key"] == f"matter_followup_failed:{run['matter_id']}"
+    assert "E_WORKER_CRASH" in rows[0]["body"]
+
+
+def test_crash_after_proposal_publishes_no_failure_notification(env, monkeypatch):
+    """崩溃兜底那条路径**不看**有没有提案就记 fail —— 通知这一侧必须自己判。
+
+    真实形态就是 0813 dogfood #17 的那一种：提案已经交出去了，收尾阶段才炸。
+    """
+    repo, service, pid, version = env
+    run, job = _enqueue_and_claim(service, repo, pid, version)
+
+    def propose():
+        service.propose_update(pid, run["id"], {"summary": "有发现", "changes": []})
+
+    _patch_client(
+        monkeypatch,
+        resp=_FakeResp(200, {"ok": True, "outcome": "completed"}),
+        on_poke=propose,
+    )
+    worker = AgentRunWorker(repo=repo)
+    monkeypatch.setattr(
+        worker, "_map_matter_response",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("boom")),
+    )
+    _run(worker._execute(job))
+
+    assert repo.get(job.job_id).last_error.startswith("E_WORKER_CRASH")  # 前置：走的是崩溃路径
+    # 提案那条 reviews 通知在，失败通知一条都不许有
+    assert [r["dedupe_key"] for r in _notifications(service)] == [
+        f"matter_update:{service.update_id_for_run(run['id'])}"
+    ]
+
+
+def test_repeated_failures_of_same_matter_are_counted_not_stacked(env, monkeypatch):
+    repo, service, pid, version = env
+    for key in ("f1", "f2"):
+        _, job = _enqueue_and_claim(service, repo, pid, version, key=key)
+        _patch_client(
+            monkeypatch,
+            resp=_FakeResp(200, {"ok": False, "outcome": "error", "error": "E_AGENT"}),
+        )
+        _run(AgentRunWorker(repo=repo)._execute(job))
+
+    rows = _notifications(service)
+    assert len(rows) == 1  # 同 matter 连败合并成一条
+    assert rows[0]["recurrence_no"] == 2
 
 
 def test_orphan_sweep_converges_failed_job_runs(env, monkeypatch):

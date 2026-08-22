@@ -261,6 +261,51 @@ class AgentRunWorker:
             self._mark(
                 job_id, "failed", last_error=f"E_WORKER_CRASH: {type(exc).__name__}"
             )
+            if isinstance(run_id, int):
+                self._publish_matter_failure(
+                    run_id, f"E_WORKER_CRASH: {type(exc).__name__}"
+                )
+
+    def _publish_matter_failure(self, run_id: int, code: str) -> None:
+        """matter_followup **硬失败且无提案** → results/warn 通知（design §7 缺口 ④）。
+
+        matter_followup 不经 `_announce_terminal`（`_execute` 提前分派走了），所以这条
+        跟进链此前零通知面 —— 失败只能翻运行历史才看得见。
+
+        🔴 判据是「**没有**提案」，在这里单点判定（三个调用点不各判一遍）：
+        `_map_matter_response` 的 ``warn`` = 提案已交出、只是收尾报错，那轮**有产出**，
+        把它说成失败正是 0813 dogfood #17 的老毛病。dedupe_key 按 matter：同一事项连败
+        合并计次，不刷屏。整段吞异常 —— job/run 终态都已落库，通知不得反噬。
+        """
+        try:
+            svc = self._matter_service()
+            if svc.update_id_for_run(run_id) is not None:
+                return  # 有提案 = 有产出（warn 语义），不是失败
+            run = svc.get_run(run_id) or {}
+            matter_id = run.get("matter_id")
+            if matter_id is None:
+                return
+            with svc.repository.connect() as conn:
+                matter = svc.repository.get_matter_by_id(conn, int(matter_id))
+            if matter is None:
+                return
+            self._notify_center.publish(
+                category="results",
+                source="matter",
+                title=f"{matter['title']} · 跟进失败",
+                body=f"本轮跟进没有产出提案：{code}",
+                severity="warn",
+                dedupe_key=f"matter_followup_failed:{matter_id}",
+                payload={
+                    "link": {"type": "matter", "publicId": matter["public_id"]},
+                    "run_id": run_id,
+                    "error_code": code,
+                },
+            )
+        except Exception as exc:  # noqa: BLE001 — 通知路径绝不影响 run/job 终态
+            logger.warning(
+                f"[agent-run-worker] notify publish matter failure run_id={run_id}: {exc}"
+            )
 
     def _finish_matter_transport_failure(
         self, svc, run_id: int, job_id: int, code: str
@@ -283,6 +328,7 @@ class AgentRunWorker:
             return
         svc.finish_run(run_id, "fail", error={"code": code})
         self._mark(job_id, "failed", last_error=code)
+        self._publish_matter_failure(run_id, code)
 
     @staticmethod
     def _matter_error_payload(code: str, resp: dict) -> dict[str, Any]:
@@ -385,6 +431,7 @@ class AgentRunWorker:
             run_id, "fail", error=error_payload, chat_session_id=session_id
         )
         self._mark(job_id, "failed", last_error=err)
+        self._publish_matter_failure(run_id, err)
 
     def _mark(
         self, job_id: int, status: str, *, result: Optional[dict] = None, last_error: Optional[str] = None
@@ -437,8 +484,9 @@ class AgentRunWorker:
         **通知失败仅 warning 绝不影响 job 终态**。
 
         读态经 ``derive_agent_run_state`` 单源判定（P6）：``completed`` → kind=completed；``failed``
-        → kind=error；``paused_*`` / ``skipped`` → **两条都不发**（审批卡链路已 announce，防双卡；
-        且 ``succeeded + outcome='paused_handoff'`` 不是「成功完成」，绝不得落成 completed 通知）。
+        → kind=error；``paused_pending`` → **只落通知中心的「待审批」待办**（岛/审批卡链路已
+        announce 过瞬时卡，再推一张就是双卡）；其余 ``paused_*`` / ``skipped`` → 两条都不发
+        （``succeeded + outcome='paused_handoff'`` 不是「成功完成」，绝不得落成 completed 通知）。
         岛卡走 POST loopback serve-api
         ``/api/island/agent/announce``（本地 token）；端点自身双 flag（island_agent_enabled +
         ping_island_enabled）no-op 语义在服务端保持不变（此处不重复门控，off 时端点静默 no-op）。
@@ -451,13 +499,16 @@ class AgentRunWorker:
             )
         except Exception:  # noqa: BLE001 — 读态推导失败 → 保守不发
             return
+        agent_id = str((job.params or {}).get("agent_id") or job.target_key or "")
+        if state == "paused_pending":
+            await self._publish_paused_notification(job, agent_id, result)
+            return
         if state == "completed":
             kind = "completed"
         elif state == "failed":
             kind = "error"
         else:
-            return  # paused_* → 审批链路已 announce, 不重发
-        agent_id = str((job.params or {}).get("agent_id") or job.target_key or "")
+            return  # paused_approved/rejected/expired / skipped → 两条都不发
         title, summary = self._announce_text(job, agent_id, kind, result, last_error)
         session_id = self._session_id_of(result)
         await self._publish_notification(job, kind, agent_id, title, summary, session_id)
@@ -480,11 +531,19 @@ class AgentRunWorker:
         🔴 通知失败仅 warning，绝不影响 job 终态（`_execute` :157-160 同款纪律）——
         ``NotifyCenter.publish`` 自身正常 raise（单测友好），吞在挂点侧。
         """
-        link = (
-            {"type": "session", "sessionId": session_id}
-            if session_id > 0
-            else {"type": "route", "to": "/agents", "search": {"tab": "agents"}}
-        )
+        link = self._notification_link(session_id)
+        # 终态到达 = 这条 run 的「待审批」待办不再待办 → 先归档再发终态通知（顺序要紧：
+        # 反过来会让面板上先多一条、下一次 refetch 才少一条）。无活跃行时 resolve 返 0，
+        # 不抛；单独 try 是为了让 resolve 失败也不吃掉终态那一条。
+        try:
+            await asyncio.to_thread(
+                self._notify_center.resolve_by_dedupe,
+                f"agent_run_paused:{job.job_id}",
+            )
+        except Exception as exc:  # noqa: BLE001 — 归档失败只留 warning
+            logger.warning(
+                f"[agent-run-worker] notify resolve paused failed job_id={job.job_id}: {exc}"
+            )
         try:
             await asyncio.to_thread(
                 self._notify_center.publish,
@@ -504,10 +563,59 @@ class AgentRunWorker:
                 f"[agent-run-worker] notify publish failed job_id={job.job_id}: {exc}"
             )
 
-    def _announce_text(
-        self, job: "AsyncJob", agent_id: str, kind: str, result: Optional[dict], last_error: Optional[str]
-    ) -> tuple[str, str]:
-        """岛卡 title/summary：title=「{agent 名} · {触发源}」；summary=结果摘要 / 错误码。"""
+    async def _publish_paused_notification(
+        self, job: "AsyncJob", agent_id: str, result: Optional[dict]
+    ) -> None:
+        """paused_pending → 「待审批」待办通知（design §7 行 2）。
+
+        岛卡/审批卡是瞬时的（错过即丢），这里只落库不推岛 —— 两者并存不是重复，
+        重推岛才是双卡。category=action_required（这是要人处理的待办，不是运行结果）；
+        dedupe_key 按 **job** 而不是按 agent：每条待审批都要逐条能点，合并计次会把
+        「三条 run 等着批」压成一条。同 job 走到终态时由 `_publish_notification`
+        的 `resolve_by_dedupe` 归档。
+
+        🔴 通知失败仅 warning，绝不影响 job 终态（`_publish_notification` 同款纪律）。
+        """
+        title = self._run_title(job, agent_id)
+        session_id = self._session_id_of(result)
+        try:
+            await asyncio.to_thread(
+                self._notify_center.publish,
+                category="action_required",
+                source="agent_run",
+                title=title,
+                body=self._paused_body(result),
+                severity="warn",
+                dedupe_key=f"agent_run_paused:{job.job_id}",
+                payload={"link": self._notification_link(session_id)},
+            )
+        except Exception as exc:  # noqa: BLE001 — 通知失败绝不影响 job 终态（已在 _mark 落库）
+            logger.warning(
+                f"[agent-run-worker] notify publish paused failed job_id={job.job_id}: {exc}"
+            )
+
+    @staticmethod
+    def _paused_body(result: Optional[dict]) -> str:
+        """待审批摘要：有 TTL 才写有效期 —— 取不到就不写，不硬造一个期限。"""
+        try:
+            ttl_sec = int(float((result or {}).get("approvalTtlSec")))
+        except (TypeError, ValueError):
+            ttl_sec = 0
+        if ttl_sec >= 60:
+            return f"等待审批（{ttl_sec // 60} 分钟内有效）"
+        return "等待审批"
+
+    @staticmethod
+    def _notification_link(session_id: int) -> dict:
+        """通知条目 deep-link：有会话进会话，没有则退化到 Agents 区列表。"""
+        return (
+            {"type": "session", "sessionId": session_id}
+            if session_id > 0
+            else {"type": "route", "to": "/agents", "search": {"tab": "agents"}}
+        )
+
+    def _run_title(self, job: "AsyncJob", agent_id: str) -> str:
+        """通知/岛卡标题「{agent 名} · {触发源}」—— 终态卡与待审批卡同源。"""
         name = self._title_resolver(job) or agent_id or "Agent"
         trigger_kind = str((job.params or {}).get("trigger_kind") or "")
         trigger_label = {
@@ -519,7 +627,13 @@ class AgentRunWorker:
         }.get(
             trigger_kind, trigger_kind or "触发"
         )
-        title = f"{name} · {trigger_label}"
+        return f"{name} · {trigger_label}"
+
+    def _announce_text(
+        self, job: "AsyncJob", agent_id: str, kind: str, result: Optional[dict], last_error: Optional[str]
+    ) -> tuple[str, str]:
+        """岛卡 title/summary：title=「{agent 名} · {触发源}」；summary=结果摘要 / 错误码。"""
+        title = self._run_title(job, agent_id)
         if kind == "completed":
             summary = str((result or {}).get("summary") or "").strip() or "运行已完成"
         else:

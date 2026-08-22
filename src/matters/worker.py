@@ -11,6 +11,8 @@ from loguru import logger
 
 from src.agents.schedule_rule import parse_anchor, parse_rule, prev_occurrence
 from src.events.publisher import safe_publish
+from src.notify.center import NotifyCenter
+from src.notify.center_models import NOTIFICATION_SEVERITY_VALUES
 
 from .attention import AttentionService
 from .models import MatterRunTrigger
@@ -23,6 +25,13 @@ from .triggers import (
     marker_key,
     parse_trigger_set,
 )
+
+#: 通知中心行的 `source` 值（design §2.3 的信源枚举）。
+#: 🔴 写成常量而不是字面量：时间线 i18n 闸
+#: (`frontend/tests/shared/matterTimelineModel.test.ts`) 会把 `src/matters/*.py` 里所有
+#: `source="…"` 字面量当成 **matter_event 的 source** 抽走、要求配一条事件来源文案。
+#: 这里的 source 是 notification 行的，与事件来源是两回事。
+_NOTIFY_SOURCE = "matter"
 
 TICK_SECONDS = 60
 CATCHUP_WINDOW = timedelta(minutes=30)
@@ -45,6 +54,8 @@ class MatterAgendaWorker:
         self.clock_ms = clock_ms or (lambda: int(datetime.now(timezone.utc).timestamp() * 1000))
         self.attention = AttentionService(repository, clock_ms=self.clock_ms)
         self.run_service = run_service or MatterRunService(repository, clock_ms=self.clock_ms)
+        #: 通知中心写面（只持 db_path，不开连接；per-call connect 在 NotifyCenter 内部）。
+        self._notify_center = NotifyCenter(str(repository.db_path))
 
     async def run(self, shutdown_event: asyncio.Event) -> None:
         while not shutdown_event.is_set():
@@ -82,6 +93,7 @@ class MatterAgendaWorker:
             notifications = await asyncio.to_thread(
                 self.attention.eligible_notifications, level
             )
+            published = 0
             for signal in notifications:
                 matter = signal["matter"]
                 safe_publish(
@@ -96,8 +108,54 @@ class MatterAgendaWorker:
                         "why": signal["why"],
                     },
                 )
+                if await asyncio.to_thread(self._publish_attention_notification, signal):
+                    published += 1
+            if published:
+                # 批量写：循环里各条 emit_event=False，末尾统一 flush 一条刷新信号
+                # （design §3.2；一轮开十条信号不该让前端失效十次）。
+                self._notify_center.emit_changed(category="action_required")
         except Exception as exc:  # noqa: BLE001
             logger.exception(f"[matter-agenda] attention tick failed: {exc}")
+
+    def _publish_attention_notification(self, signal: dict[str, Any]) -> bool:
+        """关注信号 → 通知中心 action_required 条目（design §7 / §8.c）。返回是否落库。
+
+        🔴 **不当第二个 ack 消费者**：`last_notified_at` 是 macOS 通知链
+        (`frontend/.../matter_notifications.ts`) 的单一投递水位，这里绝不读它、不写它、
+        也不调 `acknowledge_notified` —— 谁先 ack，另一个就永远收不到。通知中心落库即
+        持久（表就是收件箱），本就不需要「投递成功才 ack」；两条链共用同一份 eligible
+        列表、同一轮并列写入即可，macOS 侧行为零变化。
+
+        severity 直通：`MatterAttentionSeverity` 与通知中心值域同为 info/warn/critical
+        （center_models.py:37-39 已注记「无需映射表」），认不出的值 fail-safe 记 warn
+        而不是丢掉这条信号。
+        """
+        try:
+            matter = signal["matter"]
+            severity = str(signal.get("severity") or "")
+            self._notify_center.publish(
+                category="action_required",
+                source=_NOTIFY_SOURCE,
+                title=str(matter["title"]),
+                body=str(signal.get("why") or ""),
+                severity=(
+                    severity if severity in NOTIFICATION_SEVERITY_VALUES else "warn"
+                ),
+                dedupe_key=f"matter_attention:{int(signal['id'])}",
+                payload={
+                    "link": {"type": "matter", "publicId": matter["public_id"]},
+                    "matter_id": signal["matter_id"],
+                    "signal_id": signal["id"],
+                    "kind": signal["kind"],
+                },
+                emit_event=False,
+            )
+            return True
+        except Exception as exc:  # noqa: BLE001 — 通知失败不阻断本轮其余信号 / macOS 链
+            logger.warning(
+                f"[matter-agenda] notify publish failed signal={signal.get('id')}: {exc}"
+            )
+            return False
 
     def _public_ids_for(self, matter_ids: list[int]) -> list[str]:
         """内部数字主键 → public_id（``matter.attention`` payload 用, 保持输入序）。

@@ -326,3 +326,88 @@ def test_schedule_enqueue_uses_occurrence_idempotency_and_trigger(env):
         trigger_kind="schedule",
     )
     assert replay["run"]["id"] == result["run"]["id"]
+
+
+# ── 通知中心：提案落库 → reviews 待审阅（task 08-20-notification-center 信源 ②）──
+
+
+def _propose(service, pid, *, summary="季度目标要调"):
+    run = service.enqueue_run(pid, idempotency_key=f"nc-{summary}", source="desktop_ui")["run"]
+    assert service.mark_started(run["id"])
+    return run, service.propose_update(pid, run["id"], {"summary": summary, "changes": []})
+
+
+def _notifications(path):
+    conn = sqlite3.connect(path)
+    conn.row_factory = sqlite3.Row
+    try:
+        return [dict(r) for r in conn.execute("SELECT * FROM notification ORDER BY id")]
+    finally:
+        conn.close()
+
+
+def test_propose_publishes_review_notification(env):
+    service, pid, _, path, _ = env
+    _, result = _propose(service, pid)
+
+    rows = _notifications(path)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["category"] == "reviews" and row["severity"] == "info"
+    assert row["source"] == "matter"
+    assert row["dedupe_key"] == f"matter_update:{result['update_id']}"
+    assert "Run Matter" in row["title"] and row["body"] == "季度目标要调"
+    assert json.loads(row["payload_json"])["link"] == {"type": "matter", "publicId": pid}
+
+
+def test_propose_notification_is_published_after_commit(env, monkeypatch):
+    """🔴 事务内发 = 通知先到、DB 后提交 —— 面板点进去看不到那条提案。
+
+    判据不是「调用顺序」而是「publish 那一刻别的连接能不能读到 update 行」。
+    """
+    service, pid, _, path, _ = env
+    seen: list = []
+    real = service._notify_center.publish
+
+    def spy(**kwargs):
+        conn = sqlite3.connect(path)
+        try:
+            seen.append(conn.execute("SELECT COUNT(*) FROM matter_update").fetchone()[0])
+        finally:
+            conn.close()
+        return real(**kwargs)
+
+    monkeypatch.setattr(service._notify_center, "publish", spy)
+    _propose(service, pid)
+    assert seen == [1]  # publish 时提案已经 commit 可见
+
+
+def test_propose_survives_notification_failure(env, monkeypatch):
+    service, pid, _, path, _ = env
+
+    def boom(**kwargs):
+        raise RuntimeError("notification table gone")
+
+    monkeypatch.setattr(service._notify_center, "publish", boom)
+    _, result = _propose(service, pid)
+
+    # 提案已提交：返回值与库里的行都在，通知失败不反噬
+    assert result["update_id"] is not None
+    assert _notifications(path) == []
+    with sqlite3.connect(path) as conn:
+        assert conn.execute(
+            "SELECT review_status FROM matter_update WHERE id=?", (result["update_id"],)
+        ).fetchone()[0] == "pending"
+
+
+def test_all_dropped_proposal_publishes_nothing(env):
+    """全剔 + 无 summary → 根本没落 Update，自然也不该有待审阅通知。"""
+    service, pid, _, path, _ = env
+    run = service.enqueue_run(pid, idempotency_key="nc-dropped", source="desktop_ui")["run"]
+    assert service.mark_started(run["id"])
+    result = service.propose_update(
+        pid, run["id"],
+        {"changes": [{"id": "chg_01", "kind": "fact", "text": "无源", "sources": []}]},
+    )
+    assert result["update_id"] is None and result["dropped"]
+    assert _notifications(path) == []

@@ -445,7 +445,7 @@ def test_failed_publishes_warn_notification_keyed_by_agent(env, monkeypatch):
     }
 
 
-def test_paused_handoff_publishes_no_notification(env, monkeypatch):
+def test_paused_handoff_never_publishes_completed_notification(env, monkeypatch):
     repo, store = env
     job_id = _claim_agent_job(repo)
     _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
@@ -454,8 +454,12 @@ def test_paused_handoff_publishes_no_notification(env, monkeypatch):
     worker = AgentRunWorker(repo=repo, store=store)
     _run(worker._execute(repo.get(job_id)))
 
-    # 🔴 succeeded + paused_handoff 不是「成功完成」（derive_agent_run_state 口径）
-    assert _notifications(repo) == []
+    # 🔴 succeeded + paused_handoff 不是「成功完成」（derive_agent_run_state 口径）——
+    # M2 起它落一条「待审批」待办（见 test_paused_pending_publishes_action_required_todo），
+    # 但**永不得**落成 results 那条「运行完成」。
+    assert [(r["category"], r["dedupe_key"]) for r in _notifications(repo)] == [
+        ("action_required", f"agent_run_paused:{job_id}")
+    ]
     assert repo.get(job_id).result["approval_state"] == "pending"  # 终态仍正确
 
 
@@ -481,6 +485,105 @@ def test_contact_governance_notification_lands_in_reviews(env, monkeypatch):
     assert len(rows) == 1
     assert rows[0]["category"] == "reviews"  # 待审阅的建议 ≠ 运行结果
     assert rows[0]["dedupe_key"] == f"agent_run:{job_id}"
+
+
+def test_paused_pending_publishes_action_required_todo(env, monkeypatch):
+    """M2 信源 ①：等审批 = 待办条目（action_required），且**不推岛**（审批卡已 announce）。"""
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    calls = _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": True, "outcome": "paused_handoff", "sessionId": 5,
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+    _run(worker._execute(repo.get(job_id)))
+
+    rows = _notifications(repo)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["category"] == "action_required"  # 待办, 不是运行结果
+    assert row["severity"] == "warn"
+    assert row["source"] == "agent_run"
+    assert row["dedupe_key"] == f"agent_run_paused:{job_id}"  # 逐条待办, 不按 agent 合并
+    assert "DMS" in row["title"] and row["body"] == "等待审批"  # 无 TTL → 不硬造期限
+    assert json.loads(row["payload_json"])["link"] == {"type": "session", "sessionId": 5}
+    assert _announce_calls(calls) == []  # 岛卡链路不变（防双卡）
+
+
+def test_paused_body_carries_approval_ttl_when_gateway_reports_it(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": True, "outcome": "paused_handoff", "sessionId": 5, "approvalTtlSec": 1800,
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+    _run(worker._execute(repo.get(job_id)))
+
+    assert _notifications(repo)[0]["body"] == "等待审批（30 分钟内有效）"
+
+
+def test_terminal_resolves_pending_approval_todo_before_publishing(env, monkeypatch):
+    """审批处理完 run 走向终态 → 待办先归档、再落终态条目（顺序反了面板会先多一条）。"""
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    worker = AgentRunWorker(repo=repo, store=store)
+
+    async def no_island(*a, **k):
+        return None
+
+    monkeypatch.setattr(worker, "_post_announce", no_island)
+    # ① 先落一条「待审批」待办
+    _run(worker._announce_terminal(
+        repo.get(job_id), "succeeded",
+        {"outcome": "paused_handoff", "approval_state": "pending", "sessionId": 5}, None,
+    ))
+    assert [r["dedupe_key"] for r in _notifications(repo)] == [
+        f"agent_run_paused:{job_id}"
+    ]
+
+    order: list = []
+    center = worker._notify_center
+    real_resolve, real_publish = center.resolve_by_dedupe, center.publish
+
+    def rec_resolve(dedupe_key, **kw):
+        order.append(("resolve", dedupe_key))
+        return real_resolve(dedupe_key, **kw)
+
+    def rec_publish(**kw):
+        order.append(("publish", kw["dedupe_key"]))
+        return real_publish(**kw)
+
+    monkeypatch.setattr(center, "resolve_by_dedupe", rec_resolve)
+    monkeypatch.setattr(center, "publish", rec_publish)
+    # ② 同 job 到达终态
+    _run(worker._announce_terminal(
+        repo.get(job_id), "succeeded", {"outcome": "completed", "sessionId": 5}, None,
+    ))
+
+    assert order == [
+        ("resolve", f"agent_run_paused:{job_id}"),
+        ("publish", f"agent_run:{job_id}"),
+    ]
+    by_key = {r["dedupe_key"]: r for r in _notifications(repo)}
+    assert by_key[f"agent_run_paused:{job_id}"]["state"] == "resolved"
+    assert by_key[f"agent_run:{job_id}"]["state"] == "open"
+
+
+def test_resolve_failure_does_not_swallow_terminal_notification(env, monkeypatch):
+    repo, store = env
+    job_id = _claim_agent_job(repo)
+    _patch_client_capturing(monkeypatch, gateway_resp=_FakeResp(200, {
+        "ok": True, "outcome": "completed", "sessionId": 7,
+    }))
+    worker = AgentRunWorker(repo=repo, store=store)
+
+    def boom(dedupe_key, **kw):
+        raise RuntimeError("resolve blew up")
+
+    monkeypatch.setattr(worker._notify_center, "resolve_by_dedupe", boom)
+    _run(worker._execute(repo.get(job_id)))
+
+    # 归档失败被单独吞：终态那一条照发（两段 try 的意义）
+    assert [r["dedupe_key"] for r in _notifications(repo)] == [f"agent_run:{job_id}"]
 
 
 def test_notify_publish_failure_does_not_block_terminal_or_island(env, monkeypatch):
