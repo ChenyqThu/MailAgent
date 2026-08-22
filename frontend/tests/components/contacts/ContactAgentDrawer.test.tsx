@@ -374,7 +374,9 @@ describe('ContactAgentDrawer · 运行 tab', () => {
   test('历史列表：最近 10 轮，成功报产出条数，失败报错误码', async () => {
     // 时刻是 epoch **毫秒**（后端出口已把 async_jobs 的秒统一转换）。「一小时前」动态值
     // → 时间列必是「今天 HH:mm」；单位再错一档会落到 1970 或公元五万年，`^今天 ` 断言会红。
-    const oneHourAgoMs = Date.now() - 3600_000
+    // 🔴 夹到今天 00:00：本地 00:00-01:00 之间跑测试时天真的 -1h 会落到昨天，断言必红。
+    const startOfTodayMs = new Date().setHours(0, 0, 0, 0)
+    const oneHourAgoMs = Math.max(startOfTodayMs, Date.now() - 3600_000)
     agentHistory.mockResolvedValue({
       items: [
         {
