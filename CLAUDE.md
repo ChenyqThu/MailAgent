@@ -47,7 +47,7 @@
 | 存档/草稿箱 + 多文件夹同步（folder_sync） | 动 folder 同步前 | [`folder-sync/multi-folder-sync-design.md`](./docs/reference/folder-sync/multi-folder-sync-design.md) + [`folder-sync/folder-ui-prd.md`](./docs/reference/folder-sync/folder-ui-prd.md) |
 | Webhook / SSE / Openclaw / Notion API（集成面） | 动 webhook-server / 事件流 / 飞书回调前 | [`integrations/`](./docs/reference/integrations/) |
 | 邮件搜索（**单核 CORE#1** + Query DSL + FTS5 + agentic） | 改搜索语法 / 检索引擎 / agentic 前 | [`search/search-query-syntax.md`](./docs/reference/search/search-query-syntax.md) |
-| 灵动岛 Ping Island 集成 | 动通知/ack 中心前 | `~/.claude/plans/ultrathink-session-curious-cloud.md` |
+| 灵动岛 Ping Island 集成（**移除评估已完成，暂缓执行**） | 动岛相关代码前 / 启动删岛前必读 | [`remove-ping-island/README.md`](./docs/plans/remove-ping-island/README.md)（docs/plans，含 4 批次清单 + 预拍板项） |
 | 前端动效 + 列表性能铁律（Electron renderer） | 动前端列表/正文/动效前 | [`frontend/ARCHITECTURE.md`](./frontend/ARCHITECTURE.md) §7.1-7.2 + [`frontend/docs/motion-gsap.md`](./frontend/docs/motion-gsap.md) |
 | **灵动 Bot 头像**（状态化 SVG 单源模块 + v2 参数化 3D 引擎） | 动 `bot-avatar/` 模块 / AgentAvatar / 头像编辑器 / TurnPresence / avatar_json schema / 主 agent 身份前 | [`frontend/docs/bot-avatar.md`](./frontend/docs/bot-avatar.md) |
 | **前端设计体系 v3「原生材质」**（token SSoT = index.css） | 改主题/token/选中态/圆角/装饰层前 | [`frontend/DESIGN.md`](./frontend/DESIGN.md)（v3 节）+ 落地台账 [`theme-v3-native-material/README.md`](./docs/plans/theme-v3-native-material/README.md) |
