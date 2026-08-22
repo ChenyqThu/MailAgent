@@ -153,37 +153,14 @@ function useGeneralAgentMenu(): void {
   }, [navigate])
 }
 
-function useMatterNotificationNavigation(): void {
-  const navigate = useNavigate()
-  useEffect(() => {
-    const mattersApi = (
-      window as unknown as {
-        api?: {
-          matters?: {
-            onNavigate(handler: (payload: unknown) => void): () => void
-          }
-        }
-      }
-    ).api?.matters
-    if (!mattersApi) return
-
-    return mattersApi.onNavigate((payload) => {
-      if (!payload || typeof payload !== 'object') return
-      const publicId = (payload as { publicId?: unknown }).publicId
-      if (typeof publicId !== 'string' || publicId.length === 0) return
-      useMatterNavigation.getState().open(publicId)
-      void navigate({ to: '/matters' })
-    })
-  }, [navigate])
-}
-
 /**
  * task 08-20-notification-center M2 批 B4 — 系统通知（macOS Notification）点击深跳。
  * main 的 notification_fanout 聚焦主窗口后经 'notifications:navigate' 送来
- * `{ id, payload }`（payload = 通知行 payload_json）；这里只落地 M1 的两个 link 型
- * （session / route，与 NotificationPanel.activate 同口径），其余型（report /
- * contact_queue / matter / updater_restart）的落地动作归通知面板批 —— 系统通知点击
- * 对它们退化为「仅聚焦主窗口」（main 侧已做），不在此处抄第二份落地逻辑。
+ * `{ id, payload }`（payload = 通知行 payload_json）；这里落地 session / route /
+ * matter 三型（与 NotificationPanel.activate 同口径；matter 型是 M3 批 C1 老
+ * `matters:navigate` 链退役后 macOS 通知进事项的唯一入口），其余型（report /
+ * contact_queue / updater_restart）的系统通知点击退化为「仅聚焦主窗口」（main 侧
+ * 已做），不在此处抄第二份落地逻辑。
  */
 function useNotificationClickNavigation(): void {
   const navigate = useNavigate()
@@ -208,6 +185,11 @@ function useNotificationClickNavigation(): void {
       if (link.type === 'session') {
         requestOpenAgentSession(link.sessionId)
         void navigate({ to: '/sessions' })
+        return
+      }
+      if (link.type === 'matter') {
+        useMatterNavigation.getState().open(link.publicId)
+        void navigate({ to: '/matters' })
         return
       }
       if (link.type === 'route') {
@@ -237,7 +219,6 @@ const PopmenuShowcaseMount = import.meta.env.DEV
 function RootLayout(): React.ReactElement {
   useDeeplinkRouter()
   useGeneralAgentMenu()
-  useMatterNotificationNavigation()
   useNotificationClickNavigation()
   return (
     <>

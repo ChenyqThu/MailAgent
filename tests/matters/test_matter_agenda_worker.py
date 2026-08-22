@@ -324,8 +324,11 @@ def test_manual_trigger_never_auto_fires(tmp_path):
     assert worker._schedule_tick() == set()
 
 
-# ==================== 通知中心：关注信号并列写入（design §8.c，信源 ③）====================
-# 🔴 通知中心**不当第二个 ack 消费者** —— `last_notified_at` 归 macOS 通知链独占。
+# ==================== 通知中心：关注信号写入 + 投递水位自 ack（M3 批 C1）====================
+# 老 macOS 弹窗链（matter_notifications.ts + /notified ack 端点）已退役：弹窗唯一路径 =
+# NC 行 → main 的 notification_fanout。`last_notified_at` 由 worker 在 eligible 循环内
+# 自 ack —— NC 落库成功才写（两阶段）；needs_review（NC 有意跳过）无条件写；
+# 没 ack 的信号留在 eligible，下一 tick 重试（NC dedupe 吸收为计次）。
 
 
 def _notifications(path):
@@ -366,7 +369,7 @@ def _matter_with_health(path, title, health):
     return repo, matter
 
 
-def test_attention_notify_writes_notification_center_in_parallel(tmp_path, monkeypatch):
+def test_attention_notify_writes_notification_center_and_acks_watermark(tmp_path, monkeypatch):
     path = tmp_path / "attn-notify.db"
     SyncStore(str(path))
     repo, matter = _matter_with_health(path, "偏离计划的事项", "off_track")
@@ -391,9 +394,10 @@ def test_attention_notify_writes_notification_center_in_parallel(tmp_path, monke
     assert json.loads(row["payload_json"])["link"] == {
         "type": "matter", "publicId": matter["public_id"],
     }
-    # 🔴 水位归 macOS 通知链独占：并列写入不碰 last_notified_at（碰了对面就永远收不到）
-    assert notified_at is None
-    # macOS 链的 matter.notify 照发（行为零变化）
+    # NC 落库成功 → worker 同轮自 ack（老 ack 端点已退役，水位不再依赖 App 在场；
+    # 断链时代的症状是信号永留 eligible → NC 每 tick 计次 → fanout 每分钟重弹）
+    assert notified_at == NOW
+    # renderer 消费面的 matter.notify 照发（attention 角标/列表靠它刷新）
     assert [e for e in events if e[0] == "matter.notify"], "matter.notify 必须照旧发出"
 
 
@@ -431,7 +435,9 @@ def test_attention_notification_severity_maps_straight_through(tmp_path, monkeyp
 
 def test_attention_notification_skips_needs_review_but_keeps_other_kinds(tmp_path, monkeypatch):
     """`needs_review` 信号不进通知中心 (提案审阅由 run_service 的 reviews 条目精准覆盖)；
-    其余 kind (如 context_gap) 仍照发。macOS 的 `matter.notify` 链不受影响，两者都照发。
+    其余 kind (如 context_gap) 仍照发。renderer 消费的 `matter.notify` 不受影响，两者都照发。
+    🔴 needs_review 虽被 NC 跳过，投递水位也必须**无条件** ack —— 不 ack 就永留
+    eligible，`matter.notify` 每 tick 重发。
 
     🔴 needs_review 必须走真实的 `matter_update(review_status='pending')` 事实产生
     （`_collect_facts` 现场生成，不是 `open_signal` 直插）——`needs_review` 不在
@@ -473,11 +479,18 @@ def test_attention_notification_skips_needs_review_but_keeps_other_kinds(tmp_pat
     rows = _notifications(path)
     # 唯一落库的一条就是 context_gap 那条；needs_review 一条都不该有
     assert [row["dedupe_key"] for row in rows] == [f"matter_attention:{gap_signal['id']}"]
-    # macOS 链两条信号都照发（不受通知中心跳过 needs_review 影响）
+    # renderer 侧两条信号的 matter.notify 都照发（不受通知中心跳过 needs_review 影响）
     matter_notify_kinds = {
         e[1]["kind"] for e in events if e[0] == "matter.notify"
     }
     assert matter_notify_kinds == {"needs_review", "context_gap"}
+    # 两条都已写投递水位：context_gap 在 NC 落库成功后 ack；needs_review 无条件 ack
+    with sqlite3.connect(str(path)) as conn:
+        watermarks = dict(
+            conn.execute("SELECT kind, last_notified_at FROM matter_attention").fetchall()
+        )
+    assert watermarks["needs_review"] is not None
+    assert watermarks["context_gap"] is not None
 
 
 def test_attention_batch_emits_single_changed_event(tmp_path, monkeypatch):
@@ -516,5 +529,50 @@ def test_attention_notification_failure_does_not_break_macos_chain(tmp_path, mon
     asyncio.run(worker.tick())
 
     assert _notifications(path) == []
-    assert [e for e in events if e[0] == "matter.notify"], "macOS 链不受通知中心失败牵连"
+    assert [e for e in events if e[0] == "matter.notify"], "matter.notify 不受通知中心失败牵连"
     assert [e for e in events if e[0] == "notification.changed"] == []
+    # 🔴 两阶段：NC 落库失败 → 不写投递水位，信号留在 eligible，下一 tick 重试
+    with sqlite3.connect(str(path)) as conn:
+        notified_at = conn.execute(
+            "SELECT last_notified_at FROM matter_attention"
+        ).fetchone()[0]
+    assert notified_at is None
+
+
+def test_reconcile_watermark_reset_republishes_as_recurrence_bump(tmp_path, monkeypatch):
+    """reconcile 清水位（severity 升档）→ 信号重新 eligible → NC 同 dedupe 行计次 +1 并再 ack。
+
+    这是「重新提醒」链路：fanout 的防重键是 `${id}:${recurrenceNo}`，recurrence 变化
+    才会再弹一次 macOS 通知 —— 升档必须走到 NC 计次并把水位写回，缺一环用户就
+    看不到第二次提醒（或每 tick 被骚扰）。
+    """
+    path = tmp_path / "attn-rebump.db"
+    SyncStore(str(path))
+    repo, _ = _matter_with_health(path, "先有风险后偏离", "at_risk")
+    _capture_events(monkeypatch)
+    worker = MatterAgendaWorker(
+        repository=repo, sync_store=FakeState(), clock_ms=lambda: NOW,
+        run_service=FakeRuns(), notify_level_reader=lambda: "all",
+    )
+    asyncio.run(worker.tick())
+    first = _notifications(path)
+    assert [row["recurrence_no"] for row in first] == [1]
+    assert first[0]["severity"] == "warn"
+    with sqlite3.connect(str(path)) as conn:
+        assert (
+            conn.execute("SELECT last_notified_at FROM matter_attention").fetchone()[0]
+            == NOW
+        )
+        conn.execute("UPDATE matter SET health='off_track'")
+        conn.commit()
+
+    asyncio.run(worker.tick())
+    rows = _notifications(path)
+    assert len(rows) == 1, "同 dedupe_key 必须计次，不许开第二行"
+    assert rows[0]["recurrence_no"] == 2
+    assert rows[0]["severity"] == "critical"
+    with sqlite3.connect(str(path)) as conn:
+        notified_at = conn.execute(
+            "SELECT last_notified_at FROM matter_attention"
+        ).fetchone()[0]
+    assert notified_at == NOW, "重新 publish 后水位要再写回（否则每 tick 重发）"

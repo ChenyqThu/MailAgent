@@ -32,7 +32,6 @@ import { registerChatLocalBridge } from './chat_local_bridge'
 import { getChatDb } from './chat_db'
 import { registerWriteOpsHandlers } from './handlers/write_ops'
 import { startEventsBridge } from './events_bridge'
-import { registerMatterNotifications } from './matter_notifications'
 // task 08-20-notification-center M2 批 B4 — 通知中心 macOS 原生通知 fanout
 // (critical / action_required 档上系统通知; 水位=注册时刻, 存量未读不弹)。
 import { registerNotificationFanout } from './notification_fanout'
@@ -426,7 +425,6 @@ app.whenReady().then(async () => {
   // Sprint 16 — 主进程持久连接 mail-sync 本地 SSE endpoint, 通过 IPC broadcast
   // 把事件转发给 renderer; 替换 EmailList / Sidebar 5s 硬轮询. 失败自动指数退避
   // 重连, renderer 通过 events:status 看连接状态决定是否启用 fallback polling.
-  registerMatterNotifications()
   registerNotificationFanout()
   startEventsBridge()
   // Sprint 6 §2.2 — admin dashboard / LLM dashboard / calendar list /

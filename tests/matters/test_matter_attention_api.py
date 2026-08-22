@@ -12,7 +12,7 @@ os.environ.setdefault("MAILAGENT_API_DEV", "true")
 os.environ.setdefault("MAILAGENT_API_HOST", "127.0.0.1")
 
 from src.api.app import app
-from src.api.auth import verify_cf_access, verify_local_token
+from src.api.auth import verify_cf_access
 from src.api.deps import get_settings
 from src.api.routers.matters import get_attention_service, get_matter_service
 from src.mail.sync_store import SyncStore
@@ -34,7 +34,6 @@ def env(tmp_path):
     matter_service = MatterService(repo, clock_ms=lambda: NOW)
     attention = AttentionService(repo, clock_ms=lambda: NOW)
     app.dependency_overrides[verify_cf_access] = lambda: None
-    app.dependency_overrides[verify_local_token] = lambda: None
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[get_matter_service] = lambda: matter_service
     app.dependency_overrides[get_attention_service] = lambda: attention
@@ -47,7 +46,7 @@ def _mutation(key):
     return {"source": "desktop_ui", "idempotency_key": key}
 
 
-def test_attention_rest_triage_ack_and_no_version_bump(env):
+def test_attention_rest_triage_and_no_version_bump(env):
     client, path, matter_service, attention = env
     created = client.post(
         "/api/matters", json={"title": "Attention API", "mutation": _mutation("create")}
@@ -96,16 +95,6 @@ def test_attention_rest_triage_ack_and_no_version_bump(env):
     )
     assert resolved.status_code == 200
 
-    reopened = attention.open_signal(
-        matter_id=matter["id"], kind="run_failed", subject_key="run:9",
-        severity="critical", why="运行失败",
-    )
-    ack = client.post(
-        f"/api/matters/{matter['public_id']}/attention/{reopened['id']}/notified"
-    )
-    assert ack.status_code == 200
-    assert ack.json()["data"]["last_notified_at"] == NOW
-
 
 def test_attention_snooze_accepts_an_explicit_until(env):
     """0813 轮 3 批 R —— gateway 的 ``matter_attention_triage`` 走的是 **explicit ``until``**，
@@ -149,18 +138,6 @@ def test_attention_snooze_accepts_an_explicit_until(env):
     )
     assert past.status_code == 400
     assert past.json()["error"]["code"] == "E_INVALID_ARG"
-
-
-def test_notified_endpoint_uses_local_token_without_cf_dependency():
-    route = next(
-        route
-        for route in app.routes
-        if getattr(route, "path", "")
-        == "/api/matters/{matter_id}/attention/{signal_id}/notified"
-    )
-    dependency_calls = {dependency.call for dependency in route.dependant.dependencies}
-    assert verify_local_token in dependency_calls
-    assert verify_cf_access not in dependency_calls
 
 
 def test_matter_notify_level_default_put_and_validation(env, tmp_path, monkeypatch):

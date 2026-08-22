@@ -1,13 +1,13 @@
 import type { ElectronAPI } from '@electron-toolkit/preload'
 
-interface MatterNavigatePayload {
-  publicId: string
-  signalId: number | string
+interface NotificationNavigatePayload {
+  id: number
+  payload: unknown
 }
 
 interface MailAgentPreloadApi {
-  matters: {
-    onNavigate(handler: (payload: MatterNavigatePayload) => void): () => void
+  notifications: {
+    onNavigate(handler: (payload: NotificationNavigatePayload) => void): () => void
   }
 }
 

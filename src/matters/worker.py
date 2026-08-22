@@ -108,8 +108,17 @@ class MatterAgendaWorker:
                         "why": signal["why"],
                     },
                 )
+                if signal.get("kind") == MatterAttentionKind.NEEDS_REVIEW:
+                    # 通知中心有意不发 needs_review（提案审阅由 run_service 的 reviews
+                    # 条目精准覆盖），但必须无条件 ack —— 否则信号永留 eligible，
+                    # `matter.notify` 每 tick 重发。
+                    await asyncio.to_thread(self._ack_notified, signal)
+                    continue
                 if await asyncio.to_thread(self._publish_attention_notification, signal):
                     published += 1
+                    # 两阶段投递：NC 落库成功才写水位；失败不 ack ⇒ 下一 tick 重试，
+                    # NC dedupe 把重试吸收为计次。
+                    await asyncio.to_thread(self._ack_notified, signal)
             if published:
                 # 批量写：循环里各条 emit_event=False，末尾统一 flush 一条刷新信号
                 # （design §3.2；一轮开十条信号不该让前端失效十次）。
@@ -120,23 +129,15 @@ class MatterAgendaWorker:
     def _publish_attention_notification(self, signal: dict[str, Any]) -> bool:
         """关注信号 → 通知中心 action_required 条目（design §7 / §8.c）。返回是否落库。
 
-        🔴 **不当第二个 ack 消费者**：`last_notified_at` 是 macOS 通知链
-        (`frontend/.../matter_notifications.ts`) 的单一投递水位，这里绝不读它、不写它、
-        也不调 `acknowledge_notified` —— 谁先 ack，另一个就永远收不到。通知中心落库即
-        持久（表就是收件箱），本就不需要「投递成功才 ack」；两条链共用同一份 eligible
-        列表、同一轮并列写入即可，macOS 侧行为零变化。
+        两阶段投递（`src/im/worker.py::_notify_publish` 同款）：返回 True 调用方才写
+        `last_notified_at` 水位；落库失败不 ack ⇒ 信号留在 eligible，下一 tick 重试。
+        macOS 弹窗由 main 的 notification_fanout 消费 `notification.changed` 承担，
+        通知中心行是唯一弹窗来源。`needs_review` 的跳过判定在 `tick`（跳过也要 ack）。
 
         severity 直通：`MatterAttentionSeverity` 与通知中心值域同为 info/warn/critical
         （center_models.py:37-39 已注记「无需映射表」），认不出的值 fail-safe 记 warn
         而不是丢掉这条信号。
-
-        🔴 `needs_review` 跳过不发：提案落库时 `MatterRunService._publish_update_notification`
-        已经在同一事件上发过一条更精准的 reviews 条目（带 matter link）。两条通知面向
-        同一个「有提案待审阅」事件，这里再发一条 action_required 是重复——去重交给
-        reviews 侧，这里直接跳过（macOS `matter.notify` 链不受影响，仍照发，见 `tick`）。
         """
-        if signal.get("kind") == MatterAttentionKind.NEEDS_REVIEW:
-            return False
         try:
             matter = signal["matter"]
             severity = str(signal.get("severity") or "")
@@ -163,6 +164,22 @@ class MatterAgendaWorker:
                 f"[matter-agenda] notify publish failed signal={signal.get('id')}: {exc}"
             )
             return False
+
+    def _ack_notified(self, signal: dict[str, Any]) -> None:
+        """写 `last_notified_at` 投递水位（老 macOS 弹窗链退役后由 worker 自 ack）。
+
+        🔴 死锁纪律：`acknowledge_notified` 自己开事务自己 commit，与 NC publish 的
+        独立连接 `BEGIN IMMEDIATE` 前后串行、绝不嵌套。失败只告警：信号留在
+        eligible，下一 tick 重发（NC dedupe 吸收为计次）。
+        """
+        try:
+            self.attention.acknowledge_notified(
+                signal["matter"]["public_id"], int(signal["id"])
+            )
+        except Exception as exc:  # noqa: BLE001 — ack 失败不阻断本轮其余信号
+            logger.warning(
+                f"[matter-agenda] attention ack failed signal={signal.get('id')}: {exc}"
+            )
 
     def _public_ids_for(self, matter_ids: list[int]) -> list[str]:
         """内部数字主键 → public_id（``matter.attention`` payload 用, 保持输入序）。

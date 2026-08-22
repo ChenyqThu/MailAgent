@@ -191,8 +191,8 @@ export function useEventBridge(): void {
         }
         return
       }
-      // R2 — matter.notify: main 进程负责系统通知（matter_notifications.ts, 不动），
-      // renderer 侧顺手刷 attention 面（该信号刚达到通知级别 = 角标/列表必然变了）。
+      // R2 — matter.notify: macOS 弹窗归 notification_fanout（通知中心行），本事件
+      // 只供 renderer 刷 attention 面（该信号刚达到通知级别 = 角标/列表必然变了）。
       // payload 恒带 public_id（sse-events.md 表）, 缺失时只刷全局列表。
       if (ev.event_type === 'matter.notify') {
         debounceInvalidate('matters:global-attention', () =>

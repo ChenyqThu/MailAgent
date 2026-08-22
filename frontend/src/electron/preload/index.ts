@@ -1,11 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import { electronAPI } from '@electron-toolkit/preload'
 
-interface MatterNavigatePayload {
-  publicId: string
-  signalId: number | string
-}
-
 // task 08-20-notification-center M2 批 B4 — 系统通知点击深跳。payload 是通知行的
 // payload_json（deep-link 在 payload.link），renderer 侧经单源解析器收窄，这里不校验。
 interface NotificationNavigatePayload {
@@ -14,18 +9,6 @@ interface NotificationNavigatePayload {
 }
 
 const api = {
-  matters: {
-    onNavigate(handler: (payload: MatterNavigatePayload) => void): () => void {
-      const listener = (
-        _event: Electron.IpcRendererEvent,
-        payload: MatterNavigatePayload
-      ): void => {
-        handler(payload)
-      }
-      ipcRenderer.on('matters:navigate', listener)
-      return () => ipcRenderer.removeListener('matters:navigate', listener)
-    }
-  },
   notifications: {
     onNavigate(handler: (payload: NotificationNavigatePayload) => void): () => void {
       const listener = (

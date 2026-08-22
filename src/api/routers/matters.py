@@ -12,7 +12,7 @@ from fastapi.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
 from src.api.app import APIError, success_envelope
-from src.api.auth import verify_cf_access, verify_local_token
+from src.api.auth import verify_cf_access
 from src.api.deps import get_settings
 from src.api.schemas.matters import (
     MatterCreateRequest,
@@ -1317,24 +1317,3 @@ async def dismiss_attention(
         ),
         request=request,
     )
-
-
-async def acknowledge_attention_notified(
-    matter_id: str,
-    signal_id: int,
-    request: Request,
-    service: AttentionService = Depends(get_attention_service),
-):
-    return success_envelope(
-        _call(service.acknowledge_notified, matter_id, signal_id), request=request
-    )
-
-
-_internal_router = APIRouter(prefix="/api/matters", tags=["matters"])
-_internal_router.add_api_route(
-    "/{matter_id}/attention/{signal_id}/notified",
-    acknowledge_attention_notified,
-    methods=["POST"],
-    dependencies=[Depends(verify_local_token)],
-)
-router.routes.extend(_internal_router.routes)
