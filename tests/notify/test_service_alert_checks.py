@@ -847,6 +847,54 @@ def test_no_redis_consumer_publishes_nothing(notify_db):
     assert _notifications(notify_db, "alert:redis_disconnected") == []
 
 
+def _publish_worker_alert(center, dedupe_key: str, severity: str = "critical"):
+    center.publish(
+        category="system", source="worker", title=dedupe_key, body="",
+        severity=severity, dedupe_key=dedupe_key,
+    )
+
+
+def test_spawn_supervised_resolves_stale_crashloop_notification(notify_db):
+    """M3-C2 ②: crash-loop 后 supervise 直接 return, 到进程重启为止不再跑 →
+    服务启动 spawn 就是唯一的自然恢复信号「这个 worker 又活了」。
+
+    只收自己那条 crashloop；crash 条目 (会自愈, 恢复信号是连续存活达标) 与别的
+    worker 的条目一律不动。
+    """
+    center = _center(notify_db)
+    _publish_worker_alert(center, "alert:worker_crashloop:fanout")
+    _publish_worker_alert(center, "alert:worker_crashloop:calendar_sync")
+    _publish_worker_alert(center, "alert:worker_crash:fanout", severity="warn")
+    app = _build_app(alerter=None, notify_center=center)
+
+    async def _spawn_and_stop():
+        app._shutdown_event = asyncio.Event()
+        app._shutdown_event.set()  # worker 一起来就干净退出 (只验 spawn 前的归档)
+        task = app._spawn_supervised(app._shutdown_event.wait, "fanout")
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(_spawn_and_stop())
+
+    by_key = {r["dedupe_key"]: r for r in _notifications(notify_db)}
+    assert by_key["alert:worker_crashloop:fanout"]["state"] == "resolved"
+    assert by_key["alert:worker_crashloop:calendar_sync"]["state"] == "open"
+    assert by_key["alert:worker_crash:fanout"]["state"] == "open"
+
+
+def test_spawn_supervised_without_notify_center_still_spawns(notify_db):
+    """老调用方 / 单测 (notify_center=None): 归档整段短路, spawn 行为不变。"""
+    app = _build_app(alerter=None, notify_center=None)
+
+    async def _spawn_and_stop():
+        app._shutdown_event = asyncio.Event()
+        app._shutdown_event.set()
+        task = app._spawn_supervised(app._shutdown_event.wait, "fanout")
+        await asyncio.wait_for(task, timeout=2)
+
+    asyncio.run(_spawn_and_stop())
+    assert app.watcher.sync_store.state["worker.fanout.status"] == "stopped"
+
+
 def test_count_recent_starts_tolerates_garbage_state():
     app = _build_app(
         alerter=_SignatureFakeAlerter(),

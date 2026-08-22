@@ -783,31 +783,65 @@ class DavMailWatchdog:
                 ):
                     self.episodes.commit("davmail_token", warn, token_age_days)
 
-            # 通知中心 (critical 组只收 token_critical): 独立水位 `nc.` 前缀,
-            # 落库成功即 commit。条目的真值条件就是「age ≥ 87」→ 回落到
-            # [80,87) 判 RECOVER 时收掉条目 (飞书那边不发"恢复"消息是因为消息
-            # 会误导, 这里只是收掉一张卡片, 语义相符)。M1 不做 warning 档
-            # token 通知 —— [80,87) 区间铃铛里没有条目, 是已知边界。
+            # 通知中心: 两档 (80d warning / 87d critical) 共用**一条**条目
+            # (dedupe_key `alert:davmail:token`), 结构与上面飞书那份 1:1 ——
+            #   nc.davmail_token          (80d) = episode 本体, 决定条目的生死
+            #                                     (ENTER 开条目, RECOVER 收条目)
+            #   nc.davmail_token_critical (87d) = 严重度升级标记, 只决定这次 publish
+            #                                     用 critical 还是 warn
+            # 共用 key 让升档天然表达成「同一条目 severity 只升不降 + 未读化」
+            # (NotifyCenter._bump), 而不是在铃铛里堆两条讲同一个 token 的条目。
+            # 降档 (≥87 → [80,87)) 不收条目 —— warning 档判据仍成立, 只复位 marker,
+            # 与飞书侧「不是恢复, 不发消息」同判据; 真恢复 (age<80, 重走 OAuth 后
+            # token.dat 刷新) 才 resolve。水位独立 (`nc.` 前缀), 落库成功即 commit。
             nc_crit = self._nc_episodes.evaluate(
                 "nc.davmail_token_critical", token_age_days, TOKEN_CRITICAL_DAYS
             )
+            nc_warn = self._nc_episodes.evaluate(
+                "nc.davmail_token", token_age_days, TOKEN_WARN_DAYS
+            )
+            nc_title = f"DavMail token 已 {token_age_days:.0f} 天未刷新"
             if nc_crit in (episode.ENTER, episode.ESCALATE):
                 if await self._notify_davmail_alert(
-                    "token_critical",
-                    title=f"DavMail token 已 {token_age_days:.0f} 天未刷新",
+                    "token",
+                    title=nc_title,
                     body=(
                         f"token.dat age={token_age_days:.1f}d "
-                        f"(critical 门槛 {TOKEN_CRITICAL_DAYS}d), 到期后收发信全停, "
+                        f"(critical 门槛 {TOKEN_CRITICAL_DAYS:.0f}d), 到期后收发信全停, "
                         "需重走 OAuth。"
                     ),
                 ):
                     self._nc_episodes.commit(
                         "nc.davmail_token_critical", nc_crit, token_age_days
                     )
-            elif nc_crit == episode.RECOVER:
-                if await self._notify_davmail_resolve("token_critical"):
+                    # 这条 critical 就是 token episode 的告知 → 一并标记, 否则
+                    # warning 档永远 inactive, 将来 age 归零就发不出 resolve。
+                    if nc_warn in (episode.ENTER, episode.ESCALATE):
+                        self._nc_episodes.commit(
+                            "nc.davmail_token", nc_warn, token_age_days
+                        )
+            elif nc_warn in (episode.ENTER, episode.ESCALATE):
+                if await self._notify_davmail_alert(
+                    "token",
+                    title=nc_title,
+                    body=(
+                        f"token.dat age={token_age_days:.1f}d "
+                        f"(warning 门槛 {TOKEN_WARN_DAYS:.0f}d), 建议尽快重走 OAuth; "
+                        f"到 {TOKEN_CRITICAL_DAYS:.0f}d 后收发信将全停。"
+                    ),
+                    severity="warn",
+                ):
                     self._nc_episodes.commit(
-                        "nc.davmail_token_critical", nc_crit, token_age_days
+                        "nc.davmail_token", nc_warn, token_age_days
+                    )
+            if nc_crit == episode.RECOVER:
+                self._nc_episodes.commit(
+                    "nc.davmail_token_critical", nc_crit, token_age_days
+                )
+            if nc_warn == episode.RECOVER:
+                if await self._notify_davmail_resolve("token"):
+                    self._nc_episodes.commit(
+                        "nc.davmail_token", nc_warn, token_age_days
                     )
 
         # 3. OAuth 失败：只在出现新错误时报（同一行不重复）
@@ -823,11 +857,11 @@ class DavMailWatchdog:
             )
 
     async def _notify_davmail_alert(
-        self, sub: str, *, title: str, body: str
+        self, sub: str, *, title: str, body: str, severity: str = "critical"
     ) -> bool:
-        """DavMail critical 告警 → 通知中心 (task 08-20-notification-center §7)。
+        """DavMail 告警 → 通知中心 (task 08-20-notification-center §7)。
 
-        返回**是否落库成功** —— episode 化的挂点 (token_critical) 据此决定要不要
+        返回**是否落库成功** —— episode 化的挂点 (token 两档) 据此决定要不要
         commit 水位 (episode.py 的两阶段提交纪律: 没送达就别标已告警);
         `_announced_*` 内存态挂点忽略返回值 (与飞书调用同款 announce-once)。
 
@@ -843,7 +877,7 @@ class DavMailWatchdog:
                 source="davmail",
                 title=title,
                 body=body,
-                severity="critical",
+                severity=severity,
                 dedupe_key=f"alert:davmail:{sub}",
                 payload={"link": {"type": "route", "to": "/admin/kanban"}},
             )
@@ -912,6 +946,19 @@ class DavMailWatchdog:
                 )
                 if self.alerter is not None:
                     await self.alerter.alert_davmail_ews_throttling(throttle_count)
+                # 通知中心 (M3-C2): 与飞书调用并列的第二个出口 —— 默认安装
+                # (ALERT_ENABLED=false) 此前只有 /admin/system-alerts 合成得出这档,
+                # 摘掉 SystemAlertBadge 后就只剩铃铛。announce-once 与 pause 同源,
+                # 无独立水位。
+                await self._notify_davmail_alert(
+                    "ews_throttle",
+                    title="EWS 限流中",
+                    body=(
+                        f"5 分钟内检测到 {throttle_count} 次 EWS throttle, "
+                        "uid-mapper backfill 已自动暂停; 限流消退后自动恢复。"
+                    ),
+                    severity="warn",
+                )
         elif self._announced_throttle_burst and throttle_count == 0:
             # 完全干净一轮才解除，避免抖动
             self.sync_store.set_state(PAUSE_KEY, "false")
@@ -921,3 +968,5 @@ class DavMailWatchdog:
                 "[davmail-watchdog] EWS throttle cleared — uid-mapper backfill "
                 "resumed"
             )
+            # 解除 = 明确的恢复信号 (与 pause 复位同一判据) → 收掉条目。
+            await self._notify_davmail_resolve("ews_throttle")

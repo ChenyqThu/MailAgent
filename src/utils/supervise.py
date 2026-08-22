@@ -23,6 +23,11 @@ consecutive_errors>=5 的自我放弃路径) 会让 task 悄悄死掉、功能�
 20 个顶层 worker 共用本模块, 停摆意味着整个功能面静默死掉。两个出口都可为
 None (老调用方 / 单测 = 行为零变化)。
 
+crash 条目的**恢复信号** = (重) 启动后连续存活满 ``healthy_after_sec`` (每轮
+一个独立计时 task, 见 ``_resolve_crash_when_healthy``) → 条目转 resolved, 通知
+面不留自愈完的脏条目; crashloop 条目的恢复信号是服务重启 (挂
+``service._spawn_supervised``, 因为 crash-loop 后本函数直接 return 不再跑)。
+
 心跳/状态经注入的 ``state_writer`` 在**状态跃迁时**写
 ``worker.<name>.{status,last_started_at,restart_count,last_error}`` 键
 (落 sync_state → 跨进程可见, ``mailagent admin health`` / ``/api/admin/health``
@@ -36,6 +41,7 @@ None (老调用方 / 单测 = 行为零变化)。
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import time
 from datetime import datetime, timezone
 from typing import Awaitable, Callable, Optional, Sequence
@@ -135,12 +141,44 @@ async def supervise(
         except Exception as e:  # noqa: BLE001 — 通知落库失败绝不影响重启流程
             logger.warning(f"[supervise:{name}] notify {sub} failed: {e}")
 
+    async def _resolve_crash_when_healthy() -> None:
+        """连续存活 ≥ healthy_after_sec → 收掉这个 worker 的 crash 条目。
+
+        🔴 挂点只能在这里 (每轮启动后的独立计时), **不能**挂下方「crash 计数
+        重置」那处 (alive >= healthy_after_sec 分支): 执行到那里意味着 worker
+        刚又死了一次, 那一刻收条目等于把活跃故障标成已解决。
+        crash-loop 条目不在此收 —— 那条的语义是「已放弃重启」, 恢复信号是服务
+        重启 (挂点在 service._spawn_supervised)。
+        """
+        await asyncio.sleep(healthy_after_sec)
+        try:
+            await asyncio.to_thread(
+                notify_center.resolve_by_dedupe, f"alert:worker_crash:{name}"
+            )
+        except Exception as e:  # noqa: BLE001 — 同 _safe_notify: 通知路径不影响本体
+            logger.warning(f"[supervise:{name}] notify resolve crash failed: {e}")
+
+    async def _stop_health_timer(timer: "Optional[asyncio.Task]") -> None:
+        """三条退出路径 (worker 返回 / 抛异常 / supervise 自身被 cancel) 共用的
+        清理: cancel 后**等它真的结束**, 否则 loop 立刻关闭会留下
+        "Task was destroyed but it is pending" 噪音。"""
+        if timer is None or timer.done():
+            return
+        timer.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await timer
+
     while True:
         _write("status", "running")
         _write("last_started_at", _utcnow_iso())
         _write("restart_count", restart_count)
         started = time.monotonic()
         error: Optional[BaseException] = None
+        health_timer = (
+            asyncio.create_task(_resolve_crash_when_healthy())
+            if notify_center is not None
+            else None
+        )
         try:
             await coro_factory()
         except asyncio.CancelledError:
@@ -149,6 +187,9 @@ async def supervise(
             raise
         except Exception as e:  # noqa: BLE001 — supervise 的全部意义就是接住一切
             error = e
+        finally:
+            # 本轮已结束 (含 shutdown 早退与 CancelledError 传播) → 计时不再作数。
+            await _stop_health_timer(health_timer)
 
         if error is None and one_shot:
             # one-shot 正常跑完 (不论 shutdown 与否) = 任务完成, 非死亡。

@@ -124,7 +124,7 @@ core 的 CAS 兜底（同 `until` 的 snooze 重放落到同一终态；已关�
 | agent run 终态 completed/failed | `src/agents/run_worker.py::_announce_terminal`（判定后经 `_publish_notification` 双写，与灵动岛卡片并存不替代） | results（`contact_governance` job → reviews：那是「待审阅的建议」不是运行结果） | completed=info；failed=warn | 成功 `agent_run:{job_id}`；失败 `agent_run_failed:{agent_id}`（同 agent 连败合并计次） |
 | 维护族 job 终态（resync/backfill 等） | `src/sync/job_worker.py::_notify_terminal`（`_execute` 正常终态与 runner crash 两条路径各一处挂点） | results | succeeded/aborted=info；failed/partial_failure=warn | `job:{job_type}:{job_id}` |
 | 系统告警 episode（4 key） | `src/service.py::_check_and_alert` 各 ENTER/ESCALATE/RECOVER 分支旁调用 `_notify_alert_episode` | system | `service_unhealthy`=critical；`dead_letters`/`radar_unavailable`/`outbox_backlog`=warn | `alert:{episode_key}` |
-| DavMail watchdog critical | `src/mail/davmail_watchdog.py::_evaluate_alerts` 经 `_notify_davmail_alert` / `_notify_davmail_resolve` | system | critical | `alert:davmail:{sub}`，sub ∈ imap_down/smtp_down/login_degraded/token_critical/oauth_failure |
+| DavMail watchdog critical | `src/mail/davmail_watchdog.py::_evaluate_alerts` 经 `_notify_davmail_alert` / `_notify_davmail_resolve` | system | critical | `alert:davmail:{sub}`，sub ∈ imap_down/smtp_down/login_degraded/token/oauth_failure |
 
 **读态纪律**：agent run 的完成/失败文案经 `derive_agent_run_state`（`src/agents/run_state.py`）
 单源判定；job 侧文案读 `status` 字段而不是 SSE 事件名——`partial_failure` / `aborted` 都走
@@ -148,6 +148,16 @@ core 的 CAS 兜底（同 `until` 的 snooze 重放落到同一终态；已关�
 | KOS 推送放弃（`status='dead'`） | `kos/ingest_log.py::_notify_dead` | system | warn | `kos_ingest:dead`（聚合计次） |
 | 应用更新已下载就绪 | Electron main `handlers/updater.ts`（`update-downloaded` 监听内），经 `publishNotificationToCenter` loopback | system | info | `app_update:{version}`（重启后 re-download 再触发由 dedupe 吸收） |
 | chat 对话完成（headless 非 agent 会话，dormant） | `ai_gateway_lifecycle.ts::persistTurn` → `notification_fanout.ts::maybeNotifyChatRunFinished` | results | info | `chat_session:{sessionId}:finished`（详见 §9 决策③，生产近乎不触发） |
+
+### M3-C2（补齐 System / Action Required 两 tab，为摘掉 TitleBar 旧徽标做前置）
+
+| 信源 / 归档 | 挂点 | 说明 |
+|---|---|---|
+| DavMail token warning 档（80-87d） | `davmail_watchdog.py::_evaluate_alerts` token 段 | 与 critical 档**共用一条** `alert:davmail:token`：`nc.davmail_token`（80d）是 episode 本体管条目生死，`nc.davmail_token_critical`（87d）只是严重度升级标记。跨 87d → 同一条 severity 升 critical + 未读化（`_bump`）；降回 [80,87) 不收条目（warning 判据仍成立），age<80 才 resolve。对齐 `/admin/system-alerts` 合成的 token aging 档 |
+| EWS throttling（进入 / 解除） | `davmail_watchdog.py::_update_throttle_pause`，与飞书 `alert_davmail_ews_throttling` 并列 | `alert:davmail:ews_throttle`，system/warn。announce-once 与 uid-backfill pause flag **同判据**（进入 burst 置位时 publish、完全干净一轮复位时 resolve），不另立水位 |
+| worker crash 自动归档 | `src/utils/supervise.py::supervise` 每轮（重）启动起一个健康计时 task | 连续存活满 `healthy_after_sec`（默认 300s）→ `resolve_by_dedupe('alert:worker_crash:{name}')`。🔴 归档**不能**挂「crash 计数重置」那处——执行到那里意味着 worker 刚又死了一次。计时 task 在 worker 返回 / 抛异常 / supervise 被 cancel 三条路径都被 cancel 并 await 回收（不留 pending task） |
+| worker crash-loop 自动归档 | `src/service.py::_spawn_supervised`（spawn 前） | crash-loop 后 supervise 直接 return，该 worker 到进程重启为止不再跑 → **服务启动是唯一自然恢复信号**。20 个 worker 逐个 spawn 不会刷事件：`resolve_by_dedupe` 只在真有活跃行时才 emit |
+| 审批 TTL 过期归档 | `run_worker.py::_sweep_expired_paused_notifications`（主循环空闲轮，≥60s 一次） | `paused_expired` 是纯读侧派生（有意不写库、无跃迁点）→ 只能按龄重算：扫 action_required 活跃行前 100 条，`dedupe_key` 前缀命中且 `derive_agent_run_state=='paused_expired'`（job 行已被清理同样按过期处理，与读态单源的 fail-closed 姿态一致）→ resolve。**不新增常驻 tick**，只归档不 publish 不未读化 |
 
 **告警「各记水位」**：通知中心用**第二个** `AlertEpisodeTracker`（key 加 `nc.` 前缀，状态落
 `sync_state['alert.nc.*']`），与飞书告警的水位完全独立——飞书侧 commit 挂「投递成功」（网络
@@ -241,10 +251,12 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
   `useState<AgentTab>('queue')`，若抽屉已挂载且用户之前切到过「运行记录」tab，再次点通知
   只会打开抽屉而不会把 tab 切回「待审建议」。修复约 3 行（tab 状态需响应 `queueRequested`），
   留到后续批次。
-- **crash 类通知无自动 resolve**：`supervise.py` 只在 crash / crash-loop 时 `publish`，worker
-  按 `healthy_after_sec`（默认 300s）重置崩溃计数、恢复健康后**没有**对应的
-  `resolve_by_dedupe` 调用——条目要靠用户在面板手动点「标记已处理」清掉。
 - **`chat_run` 信源现状 dormant**：见 §9 决策③，判据收窄后生产近乎不产生这类通知。
+- **OAuth 失败条目只发不收**：日志里不会出现「OAuth 又好了」，无恢复信号可挂——用户读掉即清
+  徽标，要清条目走面板「标记已处理」。
+- **升级过 M3-C2 的库里可能留一条孤儿 `alert:davmail:token_critical`**：token 通知的 dedupe_key
+  由 `token_critical` 归并成 `token`，旧 key 的活跃行不会再被 resolve（只可能出现在 M1-M2 期间
+  真的报过 ≥87d token 的库上）。面板手动「标记已处理」即可。
 - **KOS dead 通知的 deep-link 实际不可跳转**：`kos/ingest_log.py` 发的 link 是
   `{type:'route', to:'/settings', search:{tab:'integrations'}}`，但前端白名单
   `NOTIFICATION_ROUTE_TARGETS` 只有 `/agents`、`/admin/kanban`（`/settings` 未加入，

@@ -18,6 +18,11 @@ task 08-20-notification-center M2-B2 追加 (第二个出口 = 通知中心):
   - crash-loop 停摆 → 一条 critical 条目 (与 crash 条目相互独立)
   - alerter=None (默认安装) 照样发 —— 这正是缺口本身
   - publish 抛异常不影响重启逻辑
+
+M3-C2 追加 (crash 条目的恢复信号 = 连续存活达标):
+  - 重启后活满 healthy_after_sec → crash 条目转 resolved
+  - 活不到就又死 → 条目保持活跃 (计时被本轮死亡取消)
+  - shutdown / cancel / 无 notify_center 三路径都不留悬挂计时 task
 """
 from __future__ import annotations
 
@@ -508,6 +513,168 @@ async def test_notify_center_failure_does_not_break_restart(tmp_path):
     assert calls["n"] == 2, "通知落库失败不得阻断重启"
     shutdown.set()
     await asyncio.wait_for(task, timeout=2)
+
+
+async def _lingering_tasks() -> list:
+    """本测试之外还活着的 task（健康计时不许悬挂）。"""
+    await asyncio.sleep(0)  # 给已 cancel 的 task 一次被调度收尾的机会
+    return [
+        t for t in asyncio.all_tasks()
+        if t is not asyncio.current_task() and not t.done()
+    ]
+
+
+async def test_health_timer_resolves_crash_notification_when_worker_recovers(
+    notify_db,
+):
+    """M3-C2 ①: 重启后连续存活满 healthy_after_sec → crash 条目自动转 resolved
+    (面板不留自愈完的脏条目)。"""
+    shutdown = asyncio.Event()
+    calls = {"n": 0}
+
+    async def worker():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        await shutdown.wait()
+
+    task = asyncio.create_task(
+        supervise(
+            worker, "calendar_sync",
+            shutdown_event=shutdown,
+            backoff=(0.0,),
+            healthy_after_sec=0.05,
+            notify_center=_center(notify_db),
+        )
+    )
+    for _ in range(300):
+        rows = _notifications(notify_db)
+        if rows and rows[0]["state"] == "resolved":
+            break
+        await asyncio.sleep(0.01)
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    rows = _notifications(notify_db)
+    assert len(rows) == 1
+    assert rows[0]["dedupe_key"] == "alert:worker_crash:calendar_sync"
+    assert rows[0]["state"] == "resolved"
+    assert rows[0]["resolved_at"] is not None
+    assert await _lingering_tasks() == []
+
+
+async def test_health_timer_does_not_resolve_while_worker_keeps_dying(notify_db):
+    """每次存活都不到 healthy_after_sec → 计时恒被本轮死亡取消, 条目保持活跃。"""
+    shutdown = asyncio.Event()
+
+    async def worker():
+        raise RuntimeError("always dead")
+
+    await asyncio.wait_for(
+        supervise(
+            worker, "fanout",
+            shutdown_event=shutdown,
+            backoff=(0.0,),
+            max_crashloop=3,
+            healthy_after_sec=30.0,  # 远大于本测试时长 → 永远达不到健康
+            notify_center=_center(notify_db),
+        ),
+        timeout=2,
+    )
+    rows = {r["dedupe_key"]: r for r in _notifications(notify_db)}
+    assert rows["alert:worker_crash:fanout"]["state"] == "open"
+    assert rows["alert:worker_crashloop:fanout"]["state"] == "open"
+    assert await _lingering_tasks() == []
+
+
+async def test_health_timer_cleaned_up_on_shutdown_and_cancel(notify_db):
+    """三条退出路径里的两条 (shutdown 干净退出 / supervise 自身被 cancel):
+    计时 task 必须被回收 —— 悬挂会在 loop 关闭时留 pending-task 噪音。"""
+    shutdown = asyncio.Event()
+
+    async def worker():
+        await shutdown.wait()
+
+    task = asyncio.create_task(
+        supervise(
+            worker, "quiet_shutdown",
+            shutdown_event=shutdown,
+            healthy_after_sec=30.0,
+            notify_center=_center(notify_db),
+        )
+    )
+    await asyncio.sleep(0.05)
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=2)
+    assert await _lingering_tasks() == []
+
+    async def sleeper():
+        await asyncio.sleep(3600)
+
+    cancel_shutdown = asyncio.Event()
+    task2 = asyncio.create_task(
+        supervise(
+            sleeper, "quiet_cancel",
+            shutdown_event=cancel_shutdown,
+            healthy_after_sec=30.0,
+            notify_center=_center(notify_db),
+        )
+    )
+    await asyncio.sleep(0.05)
+    task2.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task2
+    assert await _lingering_tasks() == []
+    assert _notifications(notify_db) == []  # 干净退出/取消都不是故障
+
+
+async def test_no_health_timer_without_notify_center():
+    """notify_center=None (老调用方 / 单测): 不起计时 task, 行为零变化。"""
+    shutdown = asyncio.Event()
+
+    async def worker():
+        await shutdown.wait()
+
+    task = asyncio.create_task(
+        supervise(
+            worker, "no_center",
+            shutdown_event=shutdown,
+            healthy_after_sec=0.01,
+        )
+    )
+    await asyncio.sleep(0.05)
+    assert [t for t in await _lingering_tasks() if t is not task] == []
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=2)
+
+
+async def test_health_timer_failure_does_not_break_supervise(tmp_path):
+    """计时到点时通知落库炸 (空库没有 notification 表) → worker 照常存活。"""
+    from src.notify.center import NotifyCenter
+
+    broken = tmp_path / "empty.db"
+    sqlite3.connect(str(broken)).close()
+    shutdown = asyncio.Event()
+    ticks = {"n": 0}
+
+    async def worker():
+        while not shutdown.is_set():
+            ticks["n"] += 1
+            await asyncio.sleep(0.01)
+
+    task = asyncio.create_task(
+        supervise(
+            worker, "w_timer_fail",
+            shutdown_event=shutdown,
+            healthy_after_sec=0.01,
+            notify_center=NotifyCenter(str(broken)),
+        )
+    )
+    await asyncio.sleep(0.1)
+    assert ticks["n"] > 1, "计时 task 落库失败不得影响 worker"
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=2)
+    assert await _lingering_tasks() == []
 
 
 async def test_clean_shutdown_publishes_nothing(notify_db):

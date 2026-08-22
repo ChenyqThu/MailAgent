@@ -420,6 +420,7 @@ class EmailNotionSyncApp:
         """
         from src.utils.supervise import supervise
 
+        self._resolve_worker_crashloop(name)
         return asyncio.create_task(
             supervise(
                 coro_factory,
@@ -434,6 +435,26 @@ class EmailNotionSyncApp:
             ),
             name=f"supervise:{name}",
         )
+
+    def _resolve_worker_crashloop(self, name: str) -> None:
+        """spawn 前收掉该 worker 上一条 crash-loop 通知 (M3-C2)。
+
+        crash-loop 判定后 supervise 直接 return, 该 worker 到进程重启为止不再跑
+        → **服务启动是唯一的自然恢复信号**「这个 worker 又活了」。
+        (crash 条目的恢复信号在 supervise 内部: 连续存活达标。)
+
+        同步调用: spawn 全发生在 startup, 不在任何事务内 (NotifyCenter 独立连接
+        BEGIN IMMEDIATE, 挂进未提交事务会确定性卡满 busy_timeout)。事件不批量
+        收口 —— ``resolve_by_dedupe`` 只在**真有活跃行**时才 emit, 正常启动
+        (20 个 worker 全无 crash-loop 遗留) 一条事件都不发。
+        """
+        center = self._notify_center
+        if center is None:
+            return
+        try:
+            center.resolve_by_dedupe(f"alert:worker_crashloop:{name}")
+        except Exception as e:  # noqa: BLE001 — 通知归档失败绝不阻断 worker 启动
+            logger.warning(f"[notify-center] worker crashloop resolve failed ({name}): {e}")
 
     def _record_start_history(self) -> None:
         """E4 WP2: 本次启动时间戳追加进 sync_state['service.start_history'].

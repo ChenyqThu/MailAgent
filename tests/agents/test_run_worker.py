@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sqlite3
+import time
 
 import httpx
 import pytest
@@ -584,6 +585,105 @@ def test_resolve_failure_does_not_swallow_terminal_notification(env, monkeypatch
 
     # 归档失败被单独吞：终态那一条照发（两段 try 的意义）
     assert [r["dedupe_key"] for r in _notifications(repo)] == [f"agent_run:{job_id}"]
+
+
+def _paused_todo(repo, worker, *, agent_id: str = "dms") -> int:
+    """造一条真实的「待审批」待办：job 落 paused_handoff 终态 + 通知条目。"""
+    job_id = _claim_agent_job(repo, agent_id=agent_id)
+    result = {"outcome": "paused_handoff", "approval_state": "pending", "sessionId": 5}
+    repo.mark_terminal(job_id, status="succeeded", result=result)
+    _run(worker._announce_terminal(repo.get(job_id), "succeeded", result, None))
+    assert [r["dedupe_key"] for r in _notifications(repo)] == [
+        f"agent_run_paused:{job_id}"
+    ]
+    return job_id
+
+
+def test_sweep_archives_todo_only_after_approval_ttl_expires(env):
+    """M3-C2 ⑤: `paused_expired` 纯读侧派生（无写路径可挂）→ 只能按龄重算。
+
+    TTL 内一动不动；过期后归档（只 resolve，不 publish 不未读化）。
+    """
+    repo, store = env
+    worker = AgentRunWorker(repo=repo, store=store)
+    job_id = _paused_todo(repo, worker)
+
+    _run(worker._sweep_expired_paused_notifications())
+    row = _notifications(repo)[0]
+    assert row["state"] == "open", "TTL 内仍可批 —— 不许提前收掉待办"
+    assert row["read_at"] is None and row["recurrence_no"] == 1
+
+    # 审批已过期（默认 TTL 30min）
+    expired = AgentRunWorker(
+        repo=repo, store=store, now_fn=lambda: time.time() + 3600
+    )
+    _run(expired._sweep_expired_paused_notifications())
+    rows = _notifications(repo)
+    assert len(rows) == 1, "只归档, 不新开条目"
+    assert rows[0]["state"] == "resolved" and rows[0]["dedupe_key"] == (
+        f"agent_run_paused:{job_id}"
+    )
+    assert rows[0]["recurrence_no"] == 1, "归档不得未读化/计次"
+
+
+def test_sweep_is_idempotent_and_leaves_other_action_items_alone(env):
+    """已归档的条目再扫不炸；非 agent_run_paused 的 action_required 条目不碰。"""
+    repo, store = env
+    worker = AgentRunWorker(repo=repo, store=store)
+    _paused_todo(repo, worker)
+    worker._notify_center.publish(
+        category="action_required", source="matter", title="事项待跟进",
+        dedupe_key="matter_attention:7",
+    )
+
+    clock = {"t": time.time() + 3600}
+    expired = AgentRunWorker(repo=repo, store=store, now_fn=lambda: clock["t"])
+    _run(expired._sweep_expired_paused_notifications())
+    clock["t"] += 120  # 越过扫描节拍 → 第二次真的会扫
+    _run(expired._sweep_expired_paused_notifications())
+
+    by_key = {r["dedupe_key"]: r for r in _notifications(repo)}
+    assert by_key["matter_attention:7"]["state"] == "open"
+    assert len([k for k in by_key if k.startswith("agent_run_paused:")]) == 1
+
+
+def test_sweep_throttled_to_one_pass_per_interval(env):
+    """寄生主循环空闲轮（5s 一次）→ 必须自己节流, 否则每 5s 一次全扫。"""
+    repo, store = env
+    worker = AgentRunWorker(repo=repo, store=store)
+    _paused_todo(repo, worker)
+
+    base = time.time() + 3600
+    expired = AgentRunWorker(repo=repo, store=store, now_fn=lambda: base)
+    calls: list = []
+    real_list = expired._notify_center.list
+    expired._notify_center.list = lambda **kw: (  # type: ignore[method-assign]
+        calls.append(kw) or real_list(**kw)
+    )
+    for _ in range(3):
+        _run(expired._sweep_expired_paused_notifications())
+
+    assert len(calls) == 1, "同一节拍窗口内只扫一次"
+    assert calls[0] == {
+        "category": "action_required", "state": "open", "limit": 100,
+    }, "扫描有界: 只看 action_required 活跃行头部窗口"
+
+
+def test_sweep_archives_todo_when_job_row_is_gone(env):
+    """job 行已被清理 → 条目再也点不动, 按读态单源同款 fail-closed 归档。"""
+    repo, store = env
+    worker = AgentRunWorker(repo=repo, store=store)
+    job_id = _paused_todo(repo, worker)
+    conn = sqlite3.connect(str(repo.db_path))
+    with conn:
+        conn.execute("DELETE FROM async_jobs WHERE job_id=?", (job_id,))
+    conn.close()
+
+    expired = AgentRunWorker(
+        repo=repo, store=store, now_fn=lambda: time.time() + 3600
+    )
+    _run(expired._sweep_expired_paused_notifications())
+    assert _notifications(repo)[0]["state"] == "resolved"
 
 
 def test_notify_publish_failure_does_not_block_terminal_or_island(env, monkeypatch):

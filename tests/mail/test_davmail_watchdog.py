@@ -1387,6 +1387,13 @@ def _center(sync_store: SyncStore) -> NotifyCenter:
     return NotifyCenter(sync_store.db_path)
 
 
+def _mark_read(sync_store: SyncStore, notification_id: int) -> None:
+    with sqlite3.connect(str(sync_store.db_path)) as conn:
+        conn.execute(
+            "UPDATE notification SET read_at=1 WHERE id=?", (notification_id,)
+        )
+
+
 async def test_no_notify_center_keeps_alerter_none_early_return(
     sync_store: SyncStore, davmail_root: Path
 ):
@@ -1445,7 +1452,7 @@ async def test_token_critical_notification_keeps_own_watermark(
     for _ in range(4):
         await wd._tick()
 
-    rows = _notifications(sync_store, "alert:davmail:token_critical")
+    rows = _notifications(sync_store, "alert:davmail:token")
     assert len(rows) == 1 and rows[0]["recurrence_no"] == 1
     assert rows[0]["severity"] == "critical"
     # 飞书那份水位没被碰 (没投递过 = 下次配上飞书仍会告)
@@ -1455,9 +1462,106 @@ async def test_token_critical_notification_keeps_own_watermark(
     # 重走 OAuth → age 归零 → 条目收掉 + nc 水位复位
     write_token(age_seconds=0)
     await wd._tick()
-    rows = _notifications(sync_store, "alert:davmail:token_critical")
+    rows = _notifications(sync_store, "alert:davmail:token")
     assert rows[0]["state"] == "resolved"
+    assert sync_store.get_state("alert.nc.davmail_token.active") == "0"
+
+
+async def test_token_warning_tier_publishes_warn_then_upgrades_to_critical(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """M3-C2 ③: [80,87) 也要有条目 (摘掉 SystemAlertBadge 后这档只剩铃铛)。
+
+    两档共用一条 dedupe_key → 跨 87 天时**同一条**升 critical 且重新未读化
+    (severity 只升不降 + _bump), 不是并排两条讲同一个 token。
+    """
+    write_token(age_seconds=int(81 * 86400))
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(3):
+        await wd._tick()
+
+    rows = _notifications(sync_store, "alert:davmail:token")
+    assert len(rows) == 1, "warning 档 announce-once (nc 水位), 不每轮刷"
+    assert rows[0]["severity"] == "warn"
+    assert rows[0]["category"] == "system" and rows[0]["source"] == "davmail"
+    assert "80" in rows[0]["body"]
+    assert sync_store.get_state("alert.nc.davmail_token.active") == "1"
+
+    # 用户已读了这条 warning, 然后 token 熬过 87d 门槛
+    _mark_read(sync_store, rows[0]["id"])
+    write_token(age_seconds=int(88 * 86400))
+    await wd._tick()
+
+    rows = _notifications(sync_store, "alert:davmail:token")
+    assert len(rows) == 1, "升档走同一条 (共用 dedupe_key)"
+    assert rows[0]["severity"] == "critical"
+    assert rows[0]["recurrence_no"] == 2
+    assert rows[0]["read_at"] is None, "🔴 升档必须重新未读化 (用户要再看见一次)"
+    assert "到期后收发信全停" in rows[0]["body"]
+
+
+async def test_token_downgrade_keeps_entry_and_recovers_only_below_warn(
+    sync_store: SyncStore, davmail_root: Path, write_token
+):
+    """≥87 → [80,87) 不是恢复 (warning 判据仍成立) → 条目留着, 只复位 marker;
+    真恢复 (age<80) 才收条目。"""
+    write_token(age_seconds=int(89 * 86400))
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
+        episodes=AlertEpisodeTracker(sync_store),
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    assert _notifications(sync_store, "alert:davmail:token")[0]["severity"] == "critical"
+
+    write_token(age_seconds=int(82 * 86400))  # 降档 (只可能是换了 token 又没换全)
+    await wd._tick()
+    row = _notifications(sync_store, "alert:davmail:token")[0]
+    assert row["state"] == "open", "降档不收条目"
     assert sync_store.get_state("alert.nc.davmail_token_critical.active") == "0"
+    assert sync_store.get_state("alert.nc.davmail_token.active") == "1"
+
+    write_token(age_seconds=0)  # 重走 OAuth
+    await wd._tick()
+    assert _notifications(sync_store, "alert:davmail:token")[0]["state"] == "resolved"
+    assert sync_store.get_state("alert.nc.davmail_token.active") == "0"
+
+
+async def test_ews_throttle_publishes_warn_and_resolves_on_clear(
+    sync_store: SyncStore, davmail_root: Path, write_log
+):
+    """M3-C2 ④: throttle 进入/解除是干净的成对钩子 (与 pause flag 同判据) →
+    进入 publish warn、完全干净一轮 resolve。默认安装 (alerter=None) 照样发。"""
+    now = time.time()
+    lines = []
+    for off in (200, 150, 100, 50):
+        ts = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(now - off))
+        lines.append(f"{ts},000 ERROR EWSThrottlingException")
+    write_log("\n".join(lines))
+    wd = DavMailWatchdog(
+        sync_store=sync_store, alerter=None, davmail_root=davmail_root,
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    await wd._tick()
+    await wd._tick()  # 仍在 burst
+
+    rows = _notifications(sync_store, "alert:davmail:ews_throttle")
+    assert len(rows) == 1 and rows[0]["recurrence_no"] == 1, "announce-once, 不每轮刷"
+    assert rows[0]["severity"] == "warn"
+    assert rows[0]["category"] == "system" and rows[0]["source"] == "davmail"
+    assert "4" in rows[0]["body"]
+
+    write_log("")  # 完全干净一轮 → 解除
+    await wd._tick()
+    assert sync_store.get_state("davmail_uid_backfill_paused") == "false"
+    assert _notifications(sync_store, "alert:davmail:ews_throttle")[0]["state"] == "resolved"
 
 
 async def test_oauth_failure_publishes_notification(

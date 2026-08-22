@@ -47,6 +47,11 @@ _HTTP_MARGIN_SEC = 30
 _CONNECT_TIMEOUT_SEC = 10.0
 # 岛通知短连接超时（fire-and-forget 语义，失败不阻断 job 终态）。
 _ANNOUNCE_TIMEOUT_SEC = 5.0
+# 「待审批」待办通知的 dedupe_key 前缀（publish / resolve / 过期归档三处共用一个常量）。
+_PAUSED_DEDUPE_PREFIX = "agent_run_paused:"
+# 审批 TTL 过期归档的扫描节拍与窗口（寄生主循环空闲轮，不新增 tick）。
+_PAUSED_SWEEP_INTERVAL_SEC = 60.0
+_PAUSED_SWEEP_SCAN_LIMIT = 100
 
 
 class _GatewayPokeError(Exception):
@@ -85,6 +90,8 @@ class AgentRunWorker:
         self._matter_service_cache = None
         # 通知中心写面（只持 db_path，不开连接；per-call connect 在 NotifyCenter 内部）。
         self._notify_center = NotifyCenter(self.repo.db_path)
+        # 上一次「审批过期归档」扫描时刻（0 = 启动后第一次空闲轮就扫一次）。
+        self._paused_sweep_at = 0.0
         self._stop_event = asyncio.Event()
         self._stats = {"claimed": 0, "succeeded": 0, "failed": 0}
 
@@ -116,6 +123,7 @@ class AgentRunWorker:
                 await self._execute(job)  # 自身吞尽异常, 恒写终态（下方保证）
                 continue  # claim 到 → 立即下一轮（可能还有 queued）
 
+            await self._sweep_expired_paused_notifications()
             try:
                 await asyncio.wait_for(self._stop_event.wait(), timeout=self.poll_interval_sec)
             except asyncio.TimeoutError:
@@ -538,7 +546,7 @@ class AgentRunWorker:
         try:
             await asyncio.to_thread(
                 self._notify_center.resolve_by_dedupe,
-                f"agent_run_paused:{job.job_id}",
+                f"{_PAUSED_DEDUPE_PREFIX}{job.job_id}",
             )
         except Exception as exc:  # noqa: BLE001 — 归档失败只留 warning
             logger.warning(
@@ -586,13 +594,88 @@ class AgentRunWorker:
                 title=title,
                 body=self._paused_body(result),
                 severity="warn",
-                dedupe_key=f"agent_run_paused:{job.job_id}",
+                dedupe_key=f"{_PAUSED_DEDUPE_PREFIX}{job.job_id}",
                 payload={"link": self._notification_link(session_id)},
             )
         except Exception as exc:  # noqa: BLE001 — 通知失败绝不影响 job 终态（已在 _mark 落库）
             logger.warning(
                 f"[agent-run-worker] notify publish paused failed job_id={job.job_id}: {exc}"
             )
+
+    # ── 审批 TTL 过期 → 归档待办通知（M3-C2）────────────────────────────────────
+
+    async def _sweep_expired_paused_notifications(self) -> None:
+        """把审批已过期的「待审批」待办条目归档（只 resolve，不 publish 不未读化）。
+
+        归档的另外两处（run 走到终态 / 审批结算端点）都挂在**写路径**上，唯独
+        「审批 TTL 过期」没有写路径可挂：`paused_expired` 是纯读侧派生，有意不写库
+        也没有跃迁点（run_state.py 模块头：stash GC 是 gateway 进程内的惰性内存操作，
+        不可靠作回写触发器）。⇒ 只能按龄重算。
+
+        寄生本 worker 现有 poll 节拍（**不新增常驻 tick / 线程**）：只在空闲轮跑，
+        且最多每 `_PAUSED_SWEEP_INTERVAL_SEC` 一次；扫描有界 —— 只看 action_required
+        的活跃行前 `_PAUSED_SWEEP_SCAN_LIMIT` 条（待审批条目恒 ≤ TTL 龄，落在按
+        last_event_at desc 的头部窗口内，与 /pending-count 的扫 100 行同款口径）。
+        """
+        now = self.now_fn()
+        if now - self._paused_sweep_at < _PAUSED_SWEEP_INTERVAL_SEC:
+            return
+        self._paused_sweep_at = now
+        try:
+            listed = await asyncio.to_thread(
+                self._notify_center.list,
+                category="action_required",
+                state="open",
+                limit=_PAUSED_SWEEP_SCAN_LIMIT,
+            )
+        except Exception as exc:  # noqa: BLE001 — 通知路径绝不影响 worker 主循环
+            logger.warning(f"[agent-run-worker] paused sweep list failed: {exc}")
+            return
+        for item in listed.items:
+            dedupe_key = str(item.get("dedupe_key") or "")
+            if not dedupe_key.startswith(_PAUSED_DEDUPE_PREFIX):
+                continue
+            try:
+                job_id = int(dedupe_key[len(_PAUSED_DEDUPE_PREFIX):])
+            except ValueError:
+                continue
+            if not self._approval_expired(job_id):
+                continue
+            try:
+                await asyncio.to_thread(
+                    self._notify_center.resolve_by_dedupe, dedupe_key
+                )
+            except Exception as exc:  # noqa: BLE001 — 同上
+                logger.warning(
+                    f"[agent-run-worker] paused sweep resolve failed job_id={job_id}: {exc}"
+                )
+
+    def _approval_expired(self, job_id: int) -> bool:
+        """这条 run 的审批是否已过期作废（读态单源 `derive_agent_run_state`）。
+
+        job 行已不在（历史清理）→ 同样按过期处理：读态单源自己对「无据可证仍可批」
+        就是 fail-closed 判 `paused_expired`（run_state.py:100），条目留着也点不动。
+        """
+        try:
+            job = self.repo.get(job_id)
+        except Exception as exc:  # noqa: BLE001 — 读不到就这轮不动它, 下轮再说
+            logger.warning(f"[agent-run-worker] paused sweep read failed job_id={job_id}: {exc}")
+            return False
+        if job is None:
+            return True
+        try:
+            state = derive_agent_run_state(
+                {
+                    "status": job.status,
+                    "result": job.result,
+                    "finished_at": job.finished_at,
+                    "updated_at": job.updated_at,
+                },
+                now_fn=self.now_fn,
+            )
+        except Exception:  # noqa: BLE001 — 推导不了 → 保守不动（与终态挂点同姿态）
+            return False
+        return state == "paused_expired"
 
     @staticmethod
     def _paused_body(result: Optional[dict]) -> str:
