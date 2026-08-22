@@ -928,7 +928,14 @@ export function appendLengthTruncationWarning(
  */
 export function makePersistOnFinish(
   cfg: AiGatewayConfig,
-  run: PreparedChatRun
+  run: PreparedChatRun,
+  opts?: {
+    /** task 08-20-notification-center M3 C3 — 客户端是否已断开。🔴 **必须是 getter，不能是布尔
+     *  快照**：断开可以发生在构造 onFinish 之后、turn 落库之前的任意时刻（drain 中途关面板正是
+     *  本功能要覆盖的场景），构造时求值恒得 false。省略 = 调用点不提供该信号（见 PersistTurnInput
+     *  .detached）。 */
+    isClientGone?: () => boolean
+  }
 ): UIMessageStreamOnFinishCallback<MailAgentUIMessage> {
   return async ({ responseMessage, isAborted, finishReason }) => {
     if (isAborted || !cfg.persistTurn) return
@@ -1010,7 +1017,9 @@ export function makePersistOnFinish(
       contextTokens: lastStepContextTokens(steps),
       toolCalls: run.auditEntries,
       // codex r2 [C] — per-run settle dedup: the broadcast carries this runId to the renderer.
-      runId: run.runId ?? null
+      runId: run.runId ?? null,
+      // M3 C3 — 求值时刻是**此刻**（turn 落库前），不是 makePersistOnFinish 的构造时刻。
+      detached: opts?.isClientGone?.() === true
     }
     try {
       await cfg.persistTurn(turn)

@@ -334,8 +334,9 @@ function persistTurn(turn: PersistTurnInput): void {
     console.error('[ai-gateway] chat:turn-persisted broadcast failed (persist landed OK)', err)
   }
   // task 08-20-notification-center M2 批 B4 — 通知中心双写（broadcast 本体一字不动）。
-  // 判据（headless-only + origin='agent' 排除）与写实边界见 maybeNotifyChatRunFinished
-  // 头注（notification_fanout.ts）；getSession 注入让判定留在纯可测模块里。
+  // 判据（M3 C3 起：turn.detached + origin='agent' 排除）与写实边界见
+  // maybeNotifyChatRunFinished 头注（notification_fanout.ts）；getSession 注入让判定留在
+  // 纯可测模块里。
   maybeNotifyChatRunFinished(turn, getSession)
 }
 

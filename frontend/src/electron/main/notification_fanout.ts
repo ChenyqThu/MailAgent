@@ -14,8 +14,8 @@
 //    后台也该被打断的档）；其余类目铃铛徽标已呈现，不上系统通知。
 //    水位（防重启轰炸）：模块内存 lastEventAt 游标，注册时刻初始化 —— 启动前的
 //    存量未读**不弹**；只弹水位之后的新事件，弹后推进水位；(id, recurrenceNo)
-//    seen set 防同轮重弹。照 matter_notifications.ts 骨架：不判 App 前台（对齐
-//    现状，macOS 自行降噪）；全吞异常，绝不影响 SSE 桥的其他消费者。
+//    seen set 防同轮重弹。不判 App 前台（macOS 自行降噪）；全吞异常，绝不影响
+//    SSE 桥的其他消费者。
 
 import { BrowserWindow, Notification } from 'electron'
 
@@ -23,7 +23,7 @@ import { DEFAULT_API_PORT } from '@shared/lib/ports'
 import { onSseEvent } from './events_bridge'
 import { getLocalApiToken, LOCAL_TOKEN_HEADER } from './local_token'
 
-// ---- loopback 基座（matter_notifications.ts 同款） ------------------------
+// ---- loopback 基座 --------------------------------------------------------
 
 function resolveApiBaseUrl(): string {
   const raw = process.env.MAILAGENT_API_PORT
@@ -87,6 +87,9 @@ export async function publishNotificationToCenter(input: NotifyCenterPublishInpu
 export interface ChatRunTurnRef {
   sessionId: number | null
   runId?: string | null
+  /** 落库那一刻客户端已断开 = detached run 在后台跑完（gateway 的 handleChat clientGone
+   *  经 makePersistOnFinish 求值，见 PersistTurnInput.detached）。 */
+  detached?: boolean
 }
 
 /** `ChatSession`（@shared/chat_model）的本模块消费子集。 */
@@ -98,24 +101,23 @@ export interface ChatSessionRef {
 /**
  * chat run 完成的通知中心双写判定 + 发布。
  *
- * 🔴 骚扰面红线：`chat:turn-persisted` 每次 turn persist 都广播，照字面接会把每条
- * 手动对话都变成通知。detached 判据调研结论（写实）：真正的「renderer 已断开」信号
- * `clientGone` 只活在 server.ts handleChat 的请求闭包里，未穿进 PersistTurnInput
- * （穿进来要动 gateway 核心 config.ts / chatRun.ts / server.ts，超出本批文件面）；
- * ActiveRunRegistry 只存 runId/sessionId/startedAt，无客户端在场信息；
- * MAILAGENT_CHAT_DETACHED_RUNS 是 drain 模式开关，不是逐 turn 信号。⇒ 按任务退化
- * 路径只接 **headless persist（turn.runId == null）**——server.ts 只在 /api/ai/chat
- * 与 /decide resume 两处 stamp run.runId，headless agent-run 的 lease
- * （handleAgentRun）从不回填 run.runId。
+ * 🔴 骚扰面红线：`chat:turn-persisted` 每次 turn persist 都广播，照字面接会把每条手动
+ * 对话都变成通知。判据只有一个：**`turn.detached === true`** —— 落库那一刻客户端已断开，
+ * 即用户切走会话 / 关了面板而 run 在后台跑完（M3 C3 起 gateway 的 handleChat clientGone
+ * 经 makePersistOnFinish 的 getter 穿进 PersistTurnInput）。用户盯着面板看完的回合
+ * detached 恒 false，不发。
  *
- * 🔴 再收一档（宁可少发不可多发）：origin='agent' 的 headless run（custom agent
- * 定时/邮件触发、matter followup、custom_agent_call 子会话）终态已由 Python
- * run_worker 的 M1 通知信源覆盖（`agent_run:{job_id}` / `agent_run_failed:{agent_id}`
- * / matter 失败键，run_worker.py::_announce_terminal），这里再发 = 每个 run 双条 ⇒
- * 排除。排除后本挂点只覆盖「无 lease 的非 agent persist」——生产近乎不触发，属有意
- * 保守；待 gateway 核心把 clientGone/detached 穿进 PersistTurnInput 后，判定放宽为
- * detached 手动 run 即可（dedupe 键契约按 design `chat_run:{sessionId}:{runId}` /
- * 退化 `chat_session:{sessionId}:finished` 预留）。
+ * 🔴 `MAILAGENT_CHAT_DETACHED_RUNS` 关闭时 `clientGone` 根本不武装、且信号与 detached 相与
+ * ⇒ `turn.detached` 恒 false ⇒ 本挂点恒不发。语义正确：flag off 时客户端断开即 abort 掉
+ * 这一回合，压根没有「后台完成」这回事。
+ *
+ * 🔴 再收一档（宁可少发不可多发）：origin='agent' 的会话（custom agent 定时/邮件触发、
+ * matter followup、custom_agent_call 子会话）终态已由 Python run_worker 的 M1 通知信源
+ * 覆盖（`agent_run:{job_id}` / `agent_run_failed:{agent_id}` / matter 失败键，
+ * run_worker.py::_announce_terminal），这里再发 = 每个 run 双条 ⇒ 排除。
+ *
+ * dedupe 键 = `chat_run:{sessionId}:{runId}`（design §7）；无 lease 的 persist 退化为
+ * `chat_session:{sessionId}:finished`（同一会话的多次后台完成合并计次）。
  *
  * `getSessionById` 由调用点注入（lifecycle 传 chat_db.getSession）——判定留在本
  * 叶子模块可单测，不把 better-sqlite3 图拖进来。永不 throw。
@@ -125,18 +127,21 @@ export function maybeNotifyChatRunFinished(
   getSessionById: (sessionId: number) => ChatSessionRef | null
 ): void {
   try {
-    if (turn.sessionId == null || turn.runId != null) return
+    if (turn.sessionId == null || turn.detached !== true) return
     const session = getSessionById(turn.sessionId)
     if (session?.origin === 'agent') return
     const sessionTitle = typeof session?.title === 'string' ? session.title.trim() : ''
-    // runId 恒 null（上方早退），dedupe 键恒为退化形（design §7 末行）。
+    const runId = typeof turn.runId === 'string' && turn.runId.length > 0 ? turn.runId : null
     void publishNotificationToCenter({
       category: 'results',
       source: 'chat_run',
       severity: 'info',
       title: sessionTitle.length > 0 ? sessionTitle : 'AI 对话完成',
       body: 'AI 已在后台完成回复。',
-      dedupeKey: `chat_session:${turn.sessionId}:finished`,
+      dedupeKey:
+        runId != null
+          ? `chat_run:${turn.sessionId}:${runId}`
+          : `chat_session:${turn.sessionId}:finished`,
       payload: { link: { type: 'session', sessionId: turn.sessionId } }
     })
   } catch (err) {

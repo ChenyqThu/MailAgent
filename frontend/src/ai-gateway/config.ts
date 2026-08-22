@@ -124,6 +124,12 @@ export interface PersistTurnInput {
    *  forwards it on the 'chat:turn-persisted' broadcast so the renderer settle door dedups per RUN
    *  (never by time window). null/omitted = unleased persist (headless agent run / harness cfg). */
   runId?: string | null
+  /** task 08-20-notification-center M3 C3 — 「这一回合完成时客户端已断开」= detached run 在后台跑完。
+   *  由 handleChat 的 clientGone 经 makePersistOnFinish 的 isClientGone getter 求值（求值时刻 =
+   *  onFinish，不是构造时刻）。MAILAGENT_CHAT_DETACHED_RUNS 关闭时恒 false —— 那时断开即 abort，
+   *  没有「后台完成」这回事。omitted = 不知道 / 不适用（server-side approval drain、headless
+   *  agent run、harness cfg）。唯一消费者：notification_fanout 的 chat run 完成通知判据。 */
+  detached?: boolean
 }
 
 export interface GatewayQueuedInput {

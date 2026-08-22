@@ -146,6 +146,11 @@ async function handleChat(
       clientGone = true
     })
   }
+  // task 08-20-notification-center M3 C3 — 「turn 落库时客户端已断开」信号，穿给 makePersistOnFinish
+  // → PersistTurnInput.detached → chat run 完成通知的判据。🔴 getter（求值推迟到 onFinish），
+  // 且与 `detached` 相与：flag off 时 clientGone 只是写路径上的一个 tail race（断开已 abort 掉这
+  // 一回合），不是「后台完成」，恒不发通知。
+  const isClientGone = (): boolean => detached && clientGone
   const body = await readJsonBody(req)
   // Phase 06-parity — session reload + a 12k context snapshot can push a legit turn past the old
   // 64KB cap; answer an explicit 413 rather than a misleading "messages[] required" 400 (codex review).
@@ -304,7 +309,7 @@ async function handleChat(
       console.error('[ai-gateway] /api/ai/chat stream error', error)
       return msg
     },
-    onFinish: makePersistOnFinish(cfg, run)
+    onFinish: makePersistOnFinish(cfg, run, { isClientGone })
   }
 
   // codex r2 [C] — the response advertises the run's lease id so the renderer transport can record
@@ -378,7 +383,10 @@ async function handleChat(
       const deferred: unknown[] = []
       let rawError: unknown = null
       let finishEvent: FinishEvent | null = null
-      const persistFinish = makePersistOnFinish(cfg, run)
+      // M3 C3 — 同一份 isClientGone：manual_chat + 自动压缩（两开关均默认 on）走的是**这条**
+      // overflow-aware drain，streamOptions.onFinish 在此被 finishEvent 收集器覆盖，漏传这里
+      // 等于主路径上 detached 恒 false。
+      const persistFinish = makePersistOnFinish(cfg, run, { isClientGone })
       try {
         const stream = run.result.toUIMessageStream({
           ...streamOptions,

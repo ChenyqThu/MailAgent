@@ -5,12 +5,13 @@
 //      永不 reject）；
 //   ② updater update-downloaded 挂点的 publish 形状 + 「启动补发」= 重启后 re-download
 //      再触发同 key publish（服务端 dedupe 吸收 —— 这里断言的是同 key 属性）；
-//   ③ chat 挂点两向：manual turn（runId 非 null）不发 / headless persist 发；
-//      origin='agent' 排除（Python run_worker 信源已覆盖，双发 = 骚扰面红线）；
+//   ③ chat 挂点两向（M3 C3 起判据 = turn.detached）：客户端还在 / 无 detached 信号不发，
+//      detached run 发（per-run dedupe 键，无 lease 退化 session 级）；origin='agent'
+//      排除（Python run_worker 信源已覆盖，双发 = 骚扰面红线）；
 //   ④ fanout：档位过滤（critical / action_required 之外不弹）、水位（注册前存量不弹）、
 //      (id, recurrenceNo) seen set、debounce 合并连发、click 聚焦 + 深跳。
 //
-// harness 照 matter_notifications.test.ts（同一 SSE 桥、同一 Notification mock 形状）。
+// harness：mock SSE 桥 + Notification（构造参数捕获形状）。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 
@@ -277,26 +278,34 @@ describe('updater update-downloaded → notification center', () => {
   })
 })
 
-describe('chat turn persist → notification center (headless-only 判定)', () => {
+// M3 C3 — 判据从「headless persist（runId==null）」换成「turn.detached === true」（用户切走
+// 会话 / 关面板后 run 在后台跑完）。detached 信号由 gateway 的 clientGone 穿进 PersistTurnInput。
+describe('chat turn persist → notification center (detached 判定)', () => {
   const getSessionSpy = vi.fn()
 
   beforeEach(() => {
     getSessionSpy.mockReset().mockReturnValue({ title: '整理周报', origin: null })
   })
 
-  test('manual turn (leased runId) does NOT publish — 骚扰面红线', () => {
-    maybeNotifyChatRunFinished({ sessionId: 5, runId: 'run-1' }, getSessionSpy)
+  test('attached turn (客户端还在) does NOT publish — 骚扰面红线', () => {
+    maybeNotifyChatRunFinished({ sessionId: 5, runId: 'run-1', detached: false }, getSessionSpy)
     expect(fetch).not.toHaveBeenCalled()
     expect(getSessionSpy).not.toHaveBeenCalled()
   })
 
-  test('unsaved session (sessionId null) does NOT publish', () => {
-    maybeNotifyChatRunFinished({ sessionId: null, runId: null }, getSessionSpy)
+  test('detached 缺省（不提供该信号的调用点 / flag off）does NOT publish', () => {
+    maybeNotifyChatRunFinished({ sessionId: 5, runId: 'run-1' }, getSessionSpy)
+    maybeNotifyChatRunFinished({ sessionId: 5, runId: null }, getSessionSpy)
     expect(fetch).not.toHaveBeenCalled()
   })
 
-  test('headless persist (runId null, non-agent session) publishes the session link shape', async () => {
-    maybeNotifyChatRunFinished({ sessionId: 5, runId: null }, getSessionSpy)
+  test('unsaved session (sessionId null) does NOT publish', () => {
+    maybeNotifyChatRunFinished({ sessionId: null, runId: null, detached: true }, getSessionSpy)
+    expect(fetch).not.toHaveBeenCalled()
+  })
+
+  test('detached run (non-agent session) publishes with the per-run dedupe key', async () => {
+    maybeNotifyChatRunFinished({ sessionId: 5, runId: 'run-1', detached: true }, getSessionSpy)
     await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
     expect(publishBodies()[0]).toEqual({
       category: 'results',
@@ -304,20 +313,26 @@ describe('chat turn persist → notification center (headless-only 判定)', () 
       severity: 'info',
       title: '整理周报',
       body: 'AI 已在后台完成回复。',
-      dedupe_key: 'chat_session:5:finished',
+      dedupe_key: 'chat_run:5:run-1',
       payload: { link: { type: 'session', sessionId: 5 } }
     })
   })
 
+  test('detached run 无 lease（runId null）→ 退化为 session 级 dedupe 键', async () => {
+    maybeNotifyChatRunFinished({ sessionId: 5, runId: null, detached: true }, getSessionSpy)
+    await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
+    expect(publishBodies()[0].dedupe_key).toBe('chat_session:5:finished')
+  })
+
   test("origin='agent' session does NOT publish (Python run_worker 信源已覆盖)", () => {
     getSessionSpy.mockReturnValue({ title: '每日摘要', origin: 'agent' })
-    maybeNotifyChatRunFinished({ sessionId: 7, runId: null }, getSessionSpy)
+    maybeNotifyChatRunFinished({ sessionId: 7, runId: 'run-2', detached: true }, getSessionSpy)
     expect(fetch).not.toHaveBeenCalled()
   })
 
   test('missing/blank session title degrades to fallback copy (不硬造)', async () => {
     getSessionSpy.mockReturnValue(null)
-    maybeNotifyChatRunFinished({ sessionId: 9, runId: null }, getSessionSpy)
+    maybeNotifyChatRunFinished({ sessionId: 9, runId: null, detached: true }, getSessionSpy)
     await vi.waitFor(() => expect(publishBodies()).toHaveLength(1))
     expect(publishBodies()[0].title).toBe('AI 对话完成')
   })
@@ -327,7 +342,7 @@ describe('chat turn persist → notification center (headless-only 判定)', () 
       throw new Error('db closed')
     })
     expect(() =>
-      maybeNotifyChatRunFinished({ sessionId: 5, runId: null }, getSessionSpy)
+      maybeNotifyChatRunFinished({ sessionId: 5, runId: null, detached: true }, getSessionSpy)
     ).not.toThrow()
     expect(fetch).not.toHaveBeenCalled()
   })
