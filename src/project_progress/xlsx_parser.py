@@ -33,7 +33,10 @@ from collections import Counter
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Set, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Set, Tuple, Union
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 # pandas 延迟到实际解析 xlsx 时 import (见 _parse_date_or_note /
 # _read_sheet_with_dual_header / parse_xlsx_v2)。本模块被 CLI project-progress 命令组

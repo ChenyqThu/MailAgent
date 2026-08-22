@@ -58,6 +58,7 @@ if TYPE_CHECKING:
     from src.config import Config
     from src.mail.sync_store import SyncStore
     from src.notify.alert import FeishuAlertNotifier
+    from src.notify.center import NotifyCenter
 
 
 _OAUTH_FAIL_RE = re.compile(

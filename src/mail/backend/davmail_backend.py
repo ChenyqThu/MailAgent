@@ -66,6 +66,7 @@ from src.mail.backend.types import (
 
 if TYPE_CHECKING:
     from src.config import Config
+    from src.mail.backend.types import InboxReconcileResult
     from src.mail.sync_store import SyncStore
 
 # RFC 4315 APPENDUID response: [APPENDUID uidvalidity uid]

@@ -31,6 +31,7 @@ from pathlib import Path
 from loguru import logger
 from src.config import calendar_notion_enabled, config, notion_enabled
 from src.notify import episode as episode_mod
+from src.notify.center import NotifyCenter
 from src.notify.episode import AlertEpisodeTracker
 from src.utils.logger import setup_logger
 

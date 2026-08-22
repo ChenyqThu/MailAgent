@@ -1,7 +1,10 @@
 import asyncio
 from notion_client import AsyncClient
-from typing import Dict, Any, List, Optional, Set
+from typing import TYPE_CHECKING, Dict, Any, List, Optional, Set
 from loguru import logger
+
+if TYPE_CHECKING:
+    import aiohttp
 
 from src.config import config, configured_data_source_id
 

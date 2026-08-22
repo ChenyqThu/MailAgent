@@ -15,6 +15,10 @@ dev = [
     "pytest-asyncio>=0.21",
     "jsonschema>=4.18,<5",
     "referencing>=0.30",
+    # F821 未定义名闸（tests/config/test_python_undefined_names.py）的运行时依赖：
+    # 2026-08-22 service.py 漏 NotifyCenter import 潜伏到装机首启才 NameError 炸死
+    # 主服务——测试从不构造 App，这类错只有静态扫描拦得住。
+    "ruff>=0.4",
 ]
 cli = [
     "typer>=0.12,<0.14",
