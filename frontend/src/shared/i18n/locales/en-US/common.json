@@ -4198,16 +4198,6 @@
       "downloading": "Downloading update · {percent}%",
       "downloaded": "Version v{version} ready · click to install",
       "error": "Update download failed · click to retry"
-    },
-    "alerts": {
-      "kicker": "System Health",
-      "title": "System Alerts",
-      "aria": "{count, plural, one {# active system alert} other {# active system alerts}}",
-      "tooltip": "{count, plural, one {# active alert} other {# active alerts}} · click for details",
-      "critical": "{count} critical",
-      "warning": "{count} warning",
-      "goToBoard": "Open system board",
-      "asOf": "as of {time}"
     }
   },
   "surface": {
@@ -4895,13 +4885,6 @@
         "rememberDomainHint": "Creates a domain whitelist entry for this agent's unattended runs, so future access to this domain skips approval. Tick only for sources you trust.",
         "approvalExpired": "Approval expired (timeout or app restart); this run was not executed.",
         "decideFailed": "Decision failed",
-        "titleBar": {
-          "tooltip": "{count} execution(s) awaiting approval",
-          "aria": "{count} agent execution(s) awaiting approval",
-          "title": "Awaiting approval",
-          "kicker": "AGENT APPROVAL",
-          "empty": "Nothing awaiting approval."
-        },
         "state": {
           "queued": "Queued",
           "running": "Running",
@@ -6729,6 +6712,8 @@
     "kicker": "Notification center",
     "title": "Notifications",
     "tooltip": "Notifications · {count} unread",
+    "tooltipPending": "Notifications · {count} awaiting action",
+    "tooltipBoth": "Notifications · {count} unread · {pending} awaiting action",
     "tooltipEmpty": "Notifications",
     "unreadChip": "{count} unread",
     "markAllRead": "Mark all as read",

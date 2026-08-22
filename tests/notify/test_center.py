@@ -296,6 +296,44 @@ def test_unread_count_by_severity_counts_expired_snooze(center, clock):
     assert counts["by_severity"]["critical"] == 1 and counts["total"] == 1
 
 
+# ==================== 活跃轴 open_by_category (M3 批 C5) ====================
+
+
+def test_open_by_category_ignores_read(center):
+    """🔴 本轴与未读轴的**语义差**就是它存在的理由: 已读但仍活跃的行照样计入。
+
+    收编 `AgentPendingBadge` 后铃铛靠它保留 level 型指示 —— 只有未读轴的话
+    「读了通知但没去批」会让徽标清零, 而审批还挂着。
+    """
+    pending = _publish(center, dedupe_key="p", category="action_required",
+                       source="agent_run", severity="warn")
+    _publish(center, dedupe_key="r", category="results")
+    center.mark_read(pending.id)
+    counts = center.unread_count()
+    assert counts["by_category"]["action_required"] == 0  # 已读 → 未读轴掉了
+    assert counts["open_by_category"] == {
+        "action_required": 1, "reviews": 0, "results": 1, "system": 0,
+    }  # 活跃轴不受 read 影响, 四类恒全
+
+
+def test_open_by_category_drops_closed_rows(center):
+    """resolve / dismiss 掉的行两轴同时消失 (level 指示要能被「标记已处理」清掉)。"""
+    _publish(center, dedupe_key="p", category="action_required", source="agent_run")
+    assert center.unread_count()["open_by_category"]["action_required"] == 1
+    center.resolve_by_dedupe("p", emit_event=False)
+    assert center.unread_count()["open_by_category"]["action_required"] == 0
+
+
+def test_open_by_category_follows_snooze_read_predicate(center, clock):
+    """与 total/bySeverity 同一个 `_OPEN_PREDICATE`: 未到期 snoozed 不算, 到期算。"""
+    result = _publish(center, dedupe_key="p", category="action_required",
+                      source="agent_run")
+    center.snooze(result.id, until_ms=T0 + 60_000)
+    assert center.unread_count()["open_by_category"]["action_required"] == 0
+    clock.now = T0 + 61_000
+    assert center.unread_count()["open_by_category"]["action_required"] == 1
+
+
 def test_get_projection_and_missing(center):
     """`get()` 供 POST /publish 回单条投影 (publish 只回 id/created/计次)。"""
     link = {"link": {"type": "route", "to": "/x"}}

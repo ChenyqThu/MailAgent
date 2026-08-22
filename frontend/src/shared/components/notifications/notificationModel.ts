@@ -77,17 +77,29 @@ export function tabUnread(
 
 // ─── 铃铛徽标（M2）─────────────────────────────────────────────────────────
 
-/** 铃铛的三档呈现判据。`unread === null` = 计数还没到（或请求失败）→ 调用方**不渲染
- *  计数点**（不闪一个假的 0）。`critical` = 未读里有 critical → 红点档（SystemAlertBadge
- *  的 fail 配方），否则 accent 计数点。 */
+/** 铃铛的呈现判据。`unread === null` = 计数还没到（或请求失败）→ 调用方**不渲染
+ *  计数点**（不闪一个假的 0）。`critical` = 未读里有 critical → 红点档（fail 配方），
+ *  否则 accent 计数点。
+ *
+ *  `pendingActionCount` 是 M3 批 C5 收编 `AgentPendingBadge` 带进来的第三档：待办
+ *  （`action_required` 的**活跃**行）是 **level 型**指示，与 edge 型的未读数不是一
+ *  回事 —— 用户读了通知但没去批时未读掉到 0，而审批仍挂着，铃铛得留一个持久的点。
+ *  返回计数而不是布尔：判据是 `> 0`，但 tooltip 要报数，两处各读一次同一个字段会
+ *  分裂口径。 */
 export function bellBadgeState(counts: NotificationUnreadCount | undefined): {
   unread: number | null
   critical: boolean
+  pendingActionCount: number
 } {
-  if (!counts) return { unread: null, critical: false }
-  // `?? 0`：`bySeverity` 是 M2 才加的字段，比前端旧的服务端不发它 —— 缺字段时退化成
-  // 计数点，而不是 undefined > 0 的静默 false（同结果，但这里写明是有意的降级）。
-  return { unread: counts.total, critical: (counts.bySeverity?.critical ?? 0) > 0 }
+  if (!counts) return { unread: null, critical: false, pendingActionCount: 0 }
+  // `?? 0`：`bySeverity` / `openByCategory` 分别是 M2 / M3 才加的字段，比前端旧的
+  // 服务端不发它们 —— 缺字段时退化成「无红点 / 无待办点」，而不是 undefined > 0 的
+  // 静默 false（同结果，但这里写明是有意的降级）。
+  return {
+    unread: counts.total,
+    critical: (counts.bySeverity?.critical ?? 0) > 0,
+    pendingActionCount: counts.openByCategory?.action_required ?? 0
+  }
 }
 
 // ─── snooze 档位（M2）──────────────────────────────────────────────────────

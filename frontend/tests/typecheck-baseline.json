@@ -36,7 +36,6 @@
   "tests/ai-gateway/tools/notion_agent.test.ts": 1,
   "tests/ai-gateway/tools/self_mount.test.ts": 1,
   "tests/components/AgentConversationDegrade.test.tsx": 2,
-  "tests/components/AgentPendingBadge.test.tsx": 1,
   "tests/components/AgentView.test.tsx": 2,
   "tests/components/ChatHistoryPopover.test.tsx": 1,
   "tests/components/EmailDetailPin.test.tsx": 1,

@@ -180,7 +180,9 @@ export interface AdminApi {
    *  read, ~1ms). Returns enabled=false when watchdog hasn't ticked. */
   davmailHealth(): Promise<DavMailHealthData>
   /** Current active system alerts derived from davmail health + (future)
-   *  other sources. Polled by SystemAlertBadge every 5s. */
+   *  other sources. Polled by the admin board's SystemHealthRow every 30s
+   *  (the TitleBar badge that used to poll it every 5s was folded into the
+   *  notification bell, M3-C5). */
   systemAlerts(): Promise<SystemAlertsData>
   /** E4 §4.2 — 导出诊断包 (仅 Electron 本地: 打包近 7 天日志 + 脱敏配置快照 +
    *  health/db_check/manifest, 弹保存对话框让用户选路径)。**可选方法** —— 远程 HTTP

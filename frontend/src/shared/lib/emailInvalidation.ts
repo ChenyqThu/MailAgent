@@ -293,15 +293,15 @@ export function planInvalidation(
     // ['folder'] prefix covers discover / whitelist / prefs.
     case 'folder.changed':
       return [{ kind: 'key', key: ['folder'] }]
-    // outbox delivery failures (R2) — the admin dead-letter list + the TitleBar
-    // SystemAlertBadge read these; both were pure polls before.
+    // outbox delivery failures (R2) — the admin dead-letter list + the admin
+    // board's system-alert row read these; both were pure polls before.
     case 'outbox.failed':
     case 'outbox.dead_letter':
       return [
         { kind: 'key', key: ['admin', 'deadLetter'] },
         { kind: 'key', key: ['admin', 'systemAlerts'] }
       ]
-    // LLM pipeline failures (R2) — alert badge + the LLM dashboard stats.
+    // LLM pipeline failures (R2) — system alerts + the LLM dashboard stats.
     case 'llm.failed':
     case 'llm.gave_up':
       return [

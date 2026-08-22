@@ -442,32 +442,47 @@ class NotifyCenter:
         )
 
     def unread_count(self) -> Dict[str, Any]:
-        """铃铛徽标口径: {"total", "by_category", "by_severity"} (两轴键恒全)。
+        """铃铛徽标口径: {"total", "by_category", "by_severity", "open_by_category"}
+        (三轴键恒全)。
 
-        两轴出自**同一条** GROUP BY 查询 —— 口径 (``_UNREAD_PREDICATE``) 按构造
-        就一致, 不会出现「换个查询漏了到期 snoozed」的分裂。by_severity 供铃铛的
-        critical 红点档用 (未读里有 critical → 红点, 否则计数点)。
+        三轴出自**同一条** GROUP BY 查询 —— 口径按构造就一致, 不会出现「换个查询
+        漏了到期 snoozed」的分裂。by_severity 供铃铛的 critical 红点档用 (未读里有
+        critical → 红点, 否则计数点)。
+
+        🔴 ``open_by_category`` 与前两轴的语义差是本方法的要点 (M3 批 C5, 收编
+        TitleBar 旧徽标): 未读是 **edge + 人工消费型** (看过一眼就掉), 而被收编的
+        `AgentPendingBadge` 是 **level 型** (审批挂着数字就在)。只留未读轴的话
+        「读了通知但没去批」= 徽标清零而待办还挂着 —— 铃铛据此多一档持久指示。
+        故本轴按 ``_OPEN_PREDICATE`` 统计, **不带** read 过滤。
         """
         now = self.clock_ms()
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT category, severity, COUNT(*) AS n FROM notification "
-                f"WHERE {_UNREAD_PREDICATE} GROUP BY category, severity",
+                "SELECT category, severity, (read_at IS NULL) AS is_unread, "
+                f"COUNT(*) AS n FROM notification WHERE {_OPEN_PREDICATE} "
+                "GROUP BY category, severity, is_unread",
                 {"now": now},
             ).fetchall()
         finally:
             conn.close()
         by_category = {value: 0 for value in NOTIFICATION_CATEGORY_VALUES}
         by_severity = {value: 0 for value in NOTIFICATION_SEVERITY_VALUES}
+        open_by_category = {value: 0 for value in NOTIFICATION_CATEGORY_VALUES}
         for row in rows:
             count = int(row["n"])
-            by_category[row["category"]] += count
-            by_severity[row["severity"]] += count
+            open_by_category[row["category"]] += count
+            # 未读 = 活跃里 read_at IS NULL 的那一半, 按定义等价于
+            # ``_UNREAD_PREDICATE`` (= read_at IS NULL AND _OPEN_PREDICATE) ——
+            # 分组多带一维就够, 不为第二轴再跑一条 SQL (口径分裂的常见来源)。
+            if row["is_unread"]:
+                by_category[row["category"]] += count
+                by_severity[row["severity"]] += count
         return {
             "total": sum(by_category.values()),
             "by_category": by_category,
             "by_severity": by_severity,
+            "open_by_category": open_by_category,
         }
 
     def get(self, notification_id: int) -> Dict[str, Any]:

@@ -127,6 +127,24 @@ def test_unread_count_by_severity(client, notify_center):
     assert sum(data["bySeverity"].values()) == data["total"]
 
 
+def test_unread_count_open_by_category_axis(client, notify_center):
+    """C5: openByCategory 轴 —— 铃铛收编 AgentPendingBadge 后的 level 型指示。
+
+    wire 上是第三条键恒全的轴, 且**不随 read 掉**(这正是它与 byCategory 的分工)。
+    """
+    pending = _publish(notify_center, category="action_required", dedupe_key="p1")
+    _publish(notify_center, category="results", dedupe_key="r1")
+    client.post(f"/api/notifications/{pending.id}/read")
+    data = client.get("/api/notifications/unread-count").json()["data"]
+    assert data["byCategory"]["action_required"] == 0  # 已读 → 未读轴掉了
+    assert data["openByCategory"] == {
+        "action_required": 1,
+        "reviews": 0,
+        "results": 1,
+        "system": 0,
+    }
+
+
 # ==================== POST /api/notifications/read-all ====================
 
 

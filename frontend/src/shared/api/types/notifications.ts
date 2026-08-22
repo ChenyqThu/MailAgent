@@ -62,11 +62,16 @@ export interface NotificationListResult {
   offset: number
 }
 
-/** `GET /notifications/unread-count`。四类恒全（服务端补零），无需 `?? 0`。 */
+/** `GET /notifications/unread-count`。各轴键恒全（服务端补零），无需 `?? 0`。 */
 export interface NotificationUnreadCount {
   total: number
   byCategory: Record<NotificationCategory, number>
   /** 铃铛 critical 红点档的数据源（M2）：未读里有 critical → 红，否则计数点。
    *  与 `byCategory` 同出一条 GROUP BY，口径按构造一致。三档恒全（服务端补零）。 */
   bySeverity: Record<NotificationSeverity, number>
+  /** **活跃**行数（open + 到期 snoozed），**不随已读掉**（M3 批 C5）。
+   *  与前两轴的语义差就是它存在的理由：未读是 edge 型（看过一眼就掉），而收编进
+   *  铃铛的 `AgentPendingBadge` 是 level 型（审批挂着数字就在）——「读了通知但没去批」
+   *  时铃铛靠这一轴保留一档持久指示。 */
+  openByCategory: Record<NotificationCategory, number>
 }

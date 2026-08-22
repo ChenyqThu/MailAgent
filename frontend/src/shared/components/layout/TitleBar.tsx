@@ -22,8 +22,6 @@ import { openKeyboardHelp } from '@shared/state/keyboard-help'
 import { AccentPickerPopover } from './AccentPickerPopover'
 import { LocalePicker } from './LocalePicker'
 import { SurfacePickerPopover } from './SurfacePickerPopover'
-import { SystemAlertBadge } from './SystemAlertBadge'
-import { TitleBarAgentPendingBadge } from '../agents/AgentPendingBadge'
 import { NotificationBellBadge } from '../notifications/NotificationBellBadge'
 import { ThemePickerPopover } from './ThemePickerPopover'
 import { UpdateIndicator } from './UpdateIndicator'
@@ -83,20 +81,19 @@ export function TitleBar(): React.ReactElement {
         </button>
       </div>
 
-      {/* Right cluster · System alerts · Accent · Theme · Locale. Same idea:
-          keep the wrapper draggable, only the individual buttons mark
-          themselves as `no-drag`. AccentPicker / ThemeCycle / LocalePicker
-          / SystemAlertBadge each set WebkitAppRegion: 'no-drag' on their
-          <button> element. SystemAlertBadge renders null when no alerts. */}
+      {/* Right cluster · Update · Notifications · Accent · Theme · Locale. Same
+          idea: keep the wrapper draggable, only the individual buttons mark
+          themselves as `no-drag`. AccentPicker / ThemeCycle / LocalePicker /
+          NotificationBellBadge each set WebkitAppRegion: 'no-drag' on their
+          <button> element. */}
       <div className="flex items-center gap-2 sm:gap-3 shrink-0 text-meta font-mono text-ink-fg-2">
-        <SystemAlertBadge />
-        {/* S6 W2（P5 红点链 ④）— custom-agent 待审批全局徽标；flag off / 无待审批 → null（不轮询）。 */}
-        <TitleBarAgentPendingBadge />
         {/* 07-04 — 检测到新版本时出更新 icon (强调色配置左侧); 无更新时 null。 */}
         <UpdateIndicator />
-        {/* 08-20 — 统一通知中心铃铛（右簇第 4 位, 即三个条件徽标之后、帮助按钮之前,
-            mockup 同序）。恒渲染: 未读 0 时是素图标按钮, 未读 > 0 升级成 accent 计数
-            徽标; 点击开通知面板。 */}
+        {/* 08-20 — 统一通知中心铃铛。恒渲染: 未读 0 时是素图标按钮, 未读 > 0 升级成 accent
+            计数徽标; 点击开通知面板。M3 批 C5 起它是右簇**唯一**的告警/待办入口 —— 原先
+            并排的 SystemAlertBadge (系统告警) 与 TitleBarAgentPendingBadge (agent 待审批)
+            已收编: 两者的内容分别落在面板的 System / Action Required tab, 待办的 level 型
+            指示落在铃铛的待办点上。 */}
         <NotificationBellBadge />
         <button
           type="button"

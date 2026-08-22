@@ -134,8 +134,11 @@ async def get_unread_count(
     """铃铛徽标数据源 (design §5 `GET /unread-count`, `agent_runs.py` 的
     `{total, byAgent}` 形状同款)。
 
-    `bySeverity` 是铃铛的 critical 红点档数据源 (未读里有 critical → 红点, 否则
-    计数点); 与 `byCategory` 同出一条 GROUP BY, 口径按构造一致。
+    三轴同出一条 GROUP BY, 口径按构造一致:
+
+    - `byCategory` / `bySeverity`: **未读**轴 (`bySeverity.critical > 0` → 铃铛红点档);
+    - `openByCategory`: **活跃**轴 (不带 read 过滤) —— 收编 `AgentPendingBadge` 后铃铛
+      要保留一档 level 型指示: 未读读掉了、待办还挂着时仍要看得见 (M3 批 C5)。
     """
     result = await _acall(center.unread_count)
     return success_envelope(
@@ -143,6 +146,7 @@ async def get_unread_count(
             "total": result["total"],
             "byCategory": result["by_category"],
             "bySeverity": result["by_severity"],
+            "openByCategory": result["open_by_category"],
         },
         request=request,
     )

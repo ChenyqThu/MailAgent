@@ -1,8 +1,8 @@
 // 07-04 update-indicator — TitleBar 右簇「更新」icon 按钮.
 //
 // 检测到新版本时在右簇 (强调色配置左侧) 条件渲染一个 icon 按钮, 只读
-// useUpdaterStore (main 状态机经 App.tsx 单订阅 broadcast 全程驱动), 与
-// SystemAlertBadge 同款「无内容 return null」条件渲染范式:
+// useUpdaterStore (main 状态机经 App.tsx 单订阅 broadcast 全程驱动), 走
+// 「无内容 return null」的条件渲染范式:
 //   available → Download icon, 点击触发 api.updater.download()
 //   downloading → Loader2 旋转 (tooltip 带百分比), 不可点
 //   downloaded → RotateCcw (仓内 install/重启语汇, 强调色点缀), 点击

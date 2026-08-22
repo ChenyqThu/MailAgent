@@ -4198,16 +4198,6 @@
       "downloading": "正在下载更新 · {percent}%",
       "downloaded": "新版本 v{version} 已就绪 · 点击安装",
       "error": "更新下载失败 · 点击重试"
-    },
-    "alerts": {
-      "kicker": "系统健康",
-      "title": "系统告警",
-      "aria": "{count} 条活动系统告警",
-      "tooltip": "{count} 条活动告警 · 点击查看详情",
-      "critical": "严重 {count}",
-      "warning": "警告 {count}",
-      "goToBoard": "前往系统看板",
-      "asOf": "更新于 {time}"
     }
   },
   "surface": {
@@ -4895,13 +4885,6 @@
         "rememberDomainHint": "为该 Agent 的无人值守运行创建一条域名白名单，此后访问该域名免审批。仅对你信任的来源勾选。",
         "approvalExpired": "审批已失效（超时或应用重启），此次运行未执行。",
         "decideFailed": "决策失败",
-        "titleBar": {
-          "tooltip": "{count} 个待审批执行",
-          "aria": "{count} 个 agent 执行待审批",
-          "title": "待审批执行",
-          "kicker": "AGENT 审批",
-          "empty": "暂无待审批。"
-        },
         "state": {
           "queued": "排队中",
           "running": "运行中",
@@ -6729,6 +6712,8 @@
     "kicker": "通知中心",
     "title": "通知",
     "tooltip": "通知中心 · {count} 条未读",
+    "tooltipPending": "通知中心 · {count} 项待办",
+    "tooltipBoth": "通知中心 · {count} 条未读 · {pending} 项待办",
     "tooltipEmpty": "通知中心",
     "unreadChip": "未读 {count}",
     "markAllRead": "全部标为已读",

@@ -373,7 +373,7 @@ export function useAgentPluginsEnabled(): boolean {
   return q.data === true
 }
 
-/** S6 W2（P5 红点链）— 全局 + per-agent 待审批（paused_pending）计数，5s 轮询（SystemAlertBadge 先例）。
+/** S6 W2（P5 红点链）— 全局 + per-agent 待审批（paused_pending）计数，5s 轮询。
  *  enabled=false（flag off / customAgentsEnabled=false）→ 不发请求、不轮询、恒返 {total:0,byAgent:{}}
  *  → 所有红点面字节级不渲染。读失败（flag off / 不可达）→ 服务端已守读优雅降级返 EMPTY。 */
 export function useAgentPendingCount(enabled: boolean): AgentRunPendingCount {

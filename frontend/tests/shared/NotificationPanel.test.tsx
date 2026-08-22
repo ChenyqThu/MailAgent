@@ -66,7 +66,8 @@ vi.mock('@shared/components/notifications/hooks', () => ({
     data: {
       total: 5,
       byCategory: { action_required: 2, reviews: 0, results: 3, system: 0 },
-      bySeverity: { info: 3, warn: 2, critical: 0 }
+      bySeverity: { info: 3, warn: 2, critical: 0 },
+      openByCategory: { action_required: 2, reviews: 0, results: 3, system: 0 }
     }
   }),
   useMarkNotificationRead: () => ({ mutate: hoisted.markRead }),

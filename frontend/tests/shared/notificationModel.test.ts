@@ -118,7 +118,8 @@ describe('通知面板 tab', () => {
   const counts: NotificationUnreadCount = {
     total: 8,
     byCategory: { action_required: 3, reviews: 0, results: 4, system: 0 },
-    bySeverity: { info: 5, warn: 3, critical: 0 }
+    bySeverity: { info: 5, warn: 3, critical: 0 },
+    openByCategory: { action_required: 4, reviews: 1, results: 4, system: 0 }
   }
 
   it('tabUnread：all 取服务端 total（不在前端把 byCategory 加起来）', () => {
@@ -142,19 +143,32 @@ describe('bellBadgeState', () => {
   const withSeverity = (critical: number, total = critical): NotificationUnreadCount => ({
     total,
     byCategory: { action_required: 0, reviews: 0, results: 0, system: total },
-    bySeverity: { info: 0, warn: 0, critical }
+    bySeverity: { info: 0, warn: 0, critical },
+    openByCategory: { action_required: 0, reviews: 0, results: 0, system: total }
   })
 
   it('计数未到 → unread=null（调用方据此不渲染计数点，而不是闪一个假的 0）', () => {
-    expect(bellBadgeState(undefined)).toEqual({ unread: null, critical: false })
+    expect(bellBadgeState(undefined)).toEqual({
+      unread: null,
+      critical: false,
+      pendingActionCount: 0
+    })
   })
 
   it('未读为 0 → unread=0 且不是红点档', () => {
-    expect(bellBadgeState(withSeverity(0, 0))).toEqual({ unread: 0, critical: false })
+    expect(bellBadgeState(withSeverity(0, 0))).toEqual({
+      unread: 0,
+      critical: false,
+      pendingActionCount: 0
+    })
   })
 
   it('未读里有 critical → 红点档', () => {
-    expect(bellBadgeState(withSeverity(2, 5))).toEqual({ unread: 5, critical: true })
+    expect(bellBadgeState(withSeverity(2, 5))).toEqual({
+      unread: 5,
+      critical: true,
+      pendingActionCount: 0
+    })
   })
 
   it('只有 warn/info → 计数点档（红点是「有严重的事」，不是「有事」）', () => {
@@ -162,17 +176,47 @@ describe('bellBadgeState', () => {
       bellBadgeState({
         total: 6,
         byCategory: { action_required: 1, reviews: 2, results: 3, system: 0 },
-        bySeverity: { info: 4, warn: 2, critical: 0 }
+        bySeverity: { info: 4, warn: 2, critical: 0 },
+        openByCategory: { action_required: 1, reviews: 2, results: 3, system: 0 }
       })
-    ).toEqual({ unread: 6, critical: false })
+    ).toEqual({ unread: 6, critical: false, pendingActionCount: 1 })
   })
 
-  it('服务端还没上 bySeverity（比前端旧）→ 退化成计数点，不炸', () => {
+  it('服务端还没上 bySeverity / openByCategory（比前端旧）→ 退化，不炸', () => {
     const legacy = {
       total: 3,
       byCategory: { action_required: 0, reviews: 0, results: 3, system: 0 }
     } as NotificationUnreadCount
-    expect(bellBadgeState(legacy)).toEqual({ unread: 3, critical: false })
+    expect(bellBadgeState(legacy)).toEqual({
+      unread: 3,
+      critical: false,
+      pendingActionCount: 0
+    })
+  })
+
+  // 🔴 C5 收编 AgentPendingBadge 的核心判据：待办是 **level 型**（挂着就在），未读是
+  // **edge 型**（读过就掉）。桩里 total=0 而 openByCategory.action_required=2 —— 这正是
+  // 「读了通知但没去批」的真实形状，只看未读轴的实现在这里会得到 0。
+  it('未读清零但仍有活跃待办 → pendingActionCount 保留（level 型不随已读掉）', () => {
+    expect(
+      bellBadgeState({
+        total: 0,
+        byCategory: { action_required: 0, reviews: 0, results: 0, system: 0 },
+        bySeverity: { info: 0, warn: 0, critical: 0 },
+        openByCategory: { action_required: 2, reviews: 1, results: 0, system: 0 }
+      })
+    ).toEqual({ unread: 0, critical: false, pendingActionCount: 2 })
+  })
+
+  it('活跃的只有别的类目 → 没有待办（reviews/results 不进待办点）', () => {
+    expect(
+      bellBadgeState({
+        total: 0,
+        byCategory: { action_required: 0, reviews: 0, results: 0, system: 0 },
+        bySeverity: { info: 0, warn: 0, critical: 0 },
+        openByCategory: { action_required: 0, reviews: 3, results: 4, system: 1 }
+      }).pendingActionCount
+    ).toBe(0)
   })
 })
 
