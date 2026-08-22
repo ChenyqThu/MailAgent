@@ -260,6 +260,55 @@ def test_mark_all_read_category_scope(center):
     }
 
 
+# ==================== 未读计数两轴 + 单条读 (M2 批 B1) ====================
+
+
+def test_unread_count_by_severity_axis(center):
+    """bySeverity 轴 (铃铛 critical 红点档数据源) 与 byCategory 同口径。"""
+    _publish(center, dedupe_key="a", category="results", severity="info")
+    _publish(center, dedupe_key="b", category="system", source="system_alert",
+             severity="critical")
+    _publish(center, dedupe_key="c", category="system", source="system_alert",
+             severity="warn")
+    read_one = _publish(center, dedupe_key="d", category="system",
+                        source="system_alert", severity="critical")
+    center.mark_read(read_one.id)  # 已读不计
+    counts = center.unread_count()
+    assert counts["total"] == 3
+    assert counts["by_severity"] == {"info": 1, "warn": 1, "critical": 1}
+    assert counts["by_category"]["system"] == 2
+    # 两轴同口径: resolved 行在两边同时消失
+    center.resolve_by_dedupe("b", emit_event=False)
+    counts = center.unread_count()
+    assert counts["by_severity"] == {"info": 1, "warn": 1, "critical": 0}
+    assert counts["by_category"]["system"] == 1
+    assert counts["total"] == 2
+
+
+def test_unread_count_by_severity_counts_expired_snooze(center, clock):
+    """到期 snoozed 视同 open —— bySeverity 与 total 必须一起把它算进来。"""
+    result = _publish(center, dedupe_key="s", category="system",
+                      source="system_alert", severity="critical")
+    center.snooze(result.id, until_ms=T0 + 60_000)
+    assert center.unread_count()["by_severity"]["critical"] == 0  # 未到期
+    clock.now = T0 + 61_000
+    counts = center.unread_count()
+    assert counts["by_severity"]["critical"] == 1 and counts["total"] == 1
+
+
+def test_get_projection_and_missing(center):
+    """`get()` 供 POST /publish 回单条投影 (publish 只回 id/created/计次)。"""
+    link = {"link": {"type": "route", "to": "/x"}}
+    result = _publish(center, dedupe_key="g", payload=link)
+    projected = center.get(result.id)
+    assert projected["id"] == result.id
+    assert projected["state"] == "open"
+    assert projected["payload"] == link
+    with pytest.raises(NotifyCenterError) as exc:
+        center.get(999_999)
+    assert exc.value.code == "E_NOT_FOUND"
+
+
 # ==================== 事件形状防回加闸 + commit-then-emit ====================
 
 

@@ -442,21 +442,52 @@ class NotifyCenter:
         )
 
     def unread_count(self) -> Dict[str, Any]:
-        """铃铛徽标口径: {"total": int, "by_category": {category: int}} (四类恒全)。"""
+        """铃铛徽标口径: {"total", "by_category", "by_severity"} (两轴键恒全)。
+
+        两轴出自**同一条** GROUP BY 查询 —— 口径 (``_UNREAD_PREDICATE``) 按构造
+        就一致, 不会出现「换个查询漏了到期 snoozed」的分裂。by_severity 供铃铛的
+        critical 红点档用 (未读里有 critical → 红点, 否则计数点)。
+        """
         now = self.clock_ms()
         conn = self._connect()
         try:
             rows = conn.execute(
-                "SELECT category, COUNT(*) AS n FROM notification "
-                f"WHERE {_UNREAD_PREDICATE} GROUP BY category",
+                "SELECT category, severity, COUNT(*) AS n FROM notification "
+                f"WHERE {_UNREAD_PREDICATE} GROUP BY category, severity",
                 {"now": now},
             ).fetchall()
         finally:
             conn.close()
         by_category = {value: 0 for value in NOTIFICATION_CATEGORY_VALUES}
+        by_severity = {value: 0 for value in NOTIFICATION_SEVERITY_VALUES}
         for row in rows:
-            by_category[row["category"]] = int(row["n"])
-        return {"total": sum(by_category.values()), "by_category": by_category}
+            count = int(row["n"])
+            by_category[row["category"]] += count
+            by_severity[row["severity"]] += count
+        return {
+            "total": sum(by_category.values()),
+            "by_category": by_category,
+            "by_severity": by_severity,
+        }
+
+    def get(self, notification_id: int) -> Dict[str, Any]:
+        """按 id 取单条投影; 不存在 → E_NOT_FOUND。
+
+        `POST /publish` 用 (publish 返回 PublishResult 只有 id/created/计次,
+        而 REST 契约要回单条投影)。
+        """
+        conn = self._connect()
+        try:
+            row = conn.execute(
+                "SELECT * FROM notification WHERE id=?", (notification_id,)
+            ).fetchone()
+        finally:
+            conn.close()
+        if row is None:
+            raise NotifyCenterError(
+                "E_NOT_FOUND", f"notification {notification_id} not found"
+            )
+        return self._project(row)
 
     # ==================== 投影 ====================
 
