@@ -81,6 +81,10 @@ class _SignatureFakeAlerter:
     async def alert_consecutive_errors(self, count, last_error):
         self.method_calls.append(("alert_consecutive_errors", count, last_error))
 
+    async def alert_redis_disconnected(self, error):
+        # 未接 episode (靠 alerter 内存冷却) → 调用方不读返回值, 与真实签名一致
+        self.method_calls.append(("alert_redis_disconnected", error))
+
     async def alert_recovery(self, component):
         self.method_calls.append(("alert_recovery", component))
         return self.delivered
@@ -700,6 +704,7 @@ def test_alerter_none_full_path_never_raises_and_publishes(
     assert keys == {
         "alert:service_unhealthy", "alert:dead_letters",
         "alert:radar_unavailable", "alert:outbox_backlog",
+        "alert:redis_disconnected",
     }
 
 
@@ -798,6 +803,48 @@ def test_episode_flag_off_degrades_to_publish_every_round(notify_db, monkeypatch
     assert len(rows) == 1, "同 dedupe_key 恒一行 (计次不新开)"
     assert rows[0]["recurrence_no"] == 3
     assert app.watcher.sync_store.state == {}, "flag-off 不碰 sync_state"
+
+
+def test_redis_disconnect_enters_once_then_recovers(notify_db):
+    """M2-B2 ⑤: Redis 断连的姊妹判据 episode 化 —— 断连一条 warn, 静默轮不
+    刷屏, 重连后收掉。飞书那条 (无 episode, 靠内存冷却) 行为不变。"""
+    alerter = _SignatureFakeAlerter()
+    connected = {"v": False}
+    app = _build_app(
+        alerter=alerter,
+        notify_center=_center(notify_db),
+        redis_consumer=SimpleNamespace(
+            get_stats=lambda: {
+                "connected": connected["v"], "last_error": "connection refused"
+            }
+        ),
+    )
+    for _ in range(3):
+        asyncio.run(app._check_and_alert())
+
+    rows = _notifications(notify_db, "alert:redis_disconnected")
+    assert len(rows) == 1
+    assert rows[0]["severity"] == "warn"
+    assert rows[0]["category"] == "system"
+    assert rows[0]["recurrence_no"] == 1, "静默轮不得计次"
+    assert "connection refused" in rows[0]["body"]
+    # 飞书侧不变: 每轮都调 (它自己有 300s 内存冷却, 不接 episode)
+    assert sum(
+        1 for c in alerter.method_calls if c[0] == "alert_redis_disconnected"
+    ) == 3
+
+    connected["v"] = True
+    asyncio.run(app._check_and_alert())
+    assert _notifications(notify_db, "alert:redis_disconnected")[0][
+        "state"
+    ] == "resolved"
+
+
+def test_no_redis_consumer_publishes_nothing(notify_db):
+    """未启用 Redis 事件 (consumer=None) → 不判定、不落条目。"""
+    app = _build_app(alerter=None, notify_center=_center(notify_db))
+    asyncio.run(app._check_and_alert())
+    assert _notifications(notify_db, "alert:redis_disconnected") == []
 
 
 def test_count_recent_starts_tolerates_garbage_state():

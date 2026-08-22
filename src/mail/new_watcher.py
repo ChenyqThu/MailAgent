@@ -2102,12 +2102,58 @@ class NewWatcher:
                         dry_run=False,
                     )
                     logger.info(f"[pp-hook] done: {summary.as_log_line()}")
+                    await self._notify_project_progress(
+                        internal_id, status=summary.status, error=summary.error
+                    )
                 except Exception as e:
                     logger.warning(f"[pp-hook] background task failed: {e}")
+                    await self._notify_project_progress(
+                        internal_id, status="failed", error=str(e)
+                    )
 
             self._track_bg_task(asyncio.create_task(_bg()))
         except Exception as e:
             logger.warning(f"[pp-hook] dispatch failed: {e}")
+
+    async def _notify_project_progress(
+        self, internal_id: int, *, status: str, error: Optional[str]
+    ) -> None:
+        """项目周报自动同步的失败 / 恢复 → 通知中心（task 08-20-notification-center）。
+
+        无人值守的 fire-and-forget 链路：失败此前只有一行 log，连飞书都没有。
+
+        🔴 判据是 ``summary.status`` 而不是「有没有抛异常」—— runner 的多数失败
+        路径（附件解析失败 / 全部项目写失败）**正常返回** status='failed'，只接
+        except 分支会漏掉大半失败面。``skipped``（幂等命中 / 无匹配附件）既不算
+        失败也不算恢复：它在真正写 Notion 之前就短路了，证明不了链路已好。
+
+        落库失败只 warning：通知路径绝不影响主同步流程。
+        """
+        if status not in ("failed", "completed"):
+            return
+        from src.notify.center import NotifyCenter
+
+        center = NotifyCenter(str(self.sync_store.db_path))
+        dedupe_key = "project_progress_sync_failed"
+        try:
+            if status == "completed":
+                await asyncio.to_thread(center.resolve_by_dedupe, dedupe_key)
+                return
+            await asyncio.to_thread(
+                center.publish,
+                category="results",
+                source="project_progress",
+                title="项目周报自动同步失败",
+                body=(
+                    f"邮件 internal_id={internal_id} 触发的周报同步未完成: "
+                    f"{(error or '未知错误')[:240]}"
+                ),
+                severity="warn",
+                dedupe_key=dedupe_key,
+                payload={"link": {"type": "route", "to": "/admin/kanban"}},
+            )
+        except Exception as e:  # noqa: BLE001 — 通知落库失败不影响同步流程
+            logger.warning(f"[pp-hook] notify center failed: {e}")
 
     # ---- per-folder L2/L3 gate 的行内热读解析 (v62) --------------------------
     #

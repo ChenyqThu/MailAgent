@@ -12,10 +12,17 @@
   - shutdown 置位后的正常返回 → 干净退出不重启
   - state_writer / alerter 自身抛异常不影响 supervise 本体
   - 单 worker 死不影响同 loop 其他 worker (隔离性)
+
+task 08-20-notification-center M2-B2 追加 (第二个出口 = 通知中心):
+  - 单崩 → 一条 warn 条目; 连崩计次不刷屏
+  - crash-loop 停摆 → 一条 critical 条目 (与 crash 条目相互独立)
+  - alerter=None (默认安装) 照样发 —— 这正是缺口本身
+  - publish 抛异常不影响重启逻辑
 """
 from __future__ import annotations
 
 import asyncio
+import sqlite3
 
 import pytest
 
@@ -347,3 +354,177 @@ async def test_one_worker_death_does_not_affect_others():
 
     shutdown.set()
     await asyncio.wait_for(healthy_task, timeout=2)
+
+
+# ---------------------------------------------------------------------------
+# task 08-20-notification-center M2-B2 — worker crash / crash-loop 进通知中心
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def notify_db(tmp_path):
+    """真实 sync_store.db (含 v68 notification 表)."""
+    from src.mail.sync_store import SyncStore
+
+    path = tmp_path / "sync_store.db"
+    SyncStore(str(path))
+    return str(path)
+
+
+def _center(db_path):
+    from src.notify.center import NotifyCenter
+
+    return NotifyCenter(db_path)
+
+
+def _notifications(db_path):
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        return [
+            dict(r)
+            for r in conn.execute(
+                "SELECT * FROM notification ORDER BY id"
+            ).fetchall()
+        ]
+
+
+async def test_crash_publishes_warn_notification_without_alerter(notify_db):
+    """🔴 缺口本体: 默认安装 (alerter=None) 也要发 —— crash 此前完全不可见。
+
+    连崩计次不刷屏 (同一 worker 恒一条)。
+    """
+    shutdown = asyncio.Event()
+    calls = {"n": 0}
+
+    async def worker():
+        calls["n"] += 1
+        if calls["n"] <= 2:
+            raise RuntimeError("boom")
+        await shutdown.wait()
+
+    task = asyncio.create_task(
+        supervise(
+            worker, "calendar_sync",
+            shutdown_event=shutdown,
+            backoff=(0.0,),
+            alerter=None,
+            notify_center=_center(notify_db),
+        )
+    )
+    for _ in range(200):
+        if calls["n"] >= 3:
+            break
+        await asyncio.sleep(0.01)
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=2)
+
+    rows = _notifications(notify_db)
+    assert len(rows) == 1, "同一 worker 连崩计次, 不新开条目"
+    assert rows[0]["dedupe_key"] == "alert:worker_crash:calendar_sync"
+    assert rows[0]["severity"] == "warn"
+    assert rows[0]["category"] == "system"
+    assert rows[0]["source"] == "worker"
+    assert rows[0]["recurrence_no"] == 2, "第二次崩溃应计次"
+    assert "calendar_sync" in rows[0]["title"]
+    assert "RuntimeError" in rows[0]["body"]
+
+
+async def test_crashloop_stop_publishes_critical_notification(notify_db):
+    """crash-loop 放弃重启 = 功能面停摆 → 独立的 critical 条目 (与 crash 条目并存)."""
+    shutdown = asyncio.Event()
+
+    async def worker():
+        raise RuntimeError("always dead")
+
+    await asyncio.wait_for(
+        supervise(
+            worker, "fanout",
+            shutdown_event=shutdown,
+            backoff=(0.0,),
+            max_crashloop=3,
+            notify_center=_center(notify_db),
+        ),
+        timeout=2,
+    )
+
+    rows = {r["dedupe_key"]: r for r in _notifications(notify_db)}
+    assert set(rows) == {"alert:worker_crash:fanout", "alert:worker_crashloop:fanout"}
+    assert rows["alert:worker_crashloop:fanout"]["severity"] == "critical"
+    assert rows["alert:worker_crashloop:fanout"]["recurrence_no"] == 1
+    # 前两次是普通 crash (warn), 第三次直接进 crashloop
+    assert rows["alert:worker_crash:fanout"]["severity"] == "warn"
+    assert rows["alert:worker_crash:fanout"]["recurrence_no"] == 2
+
+
+async def test_one_shot_failure_publishes_notification(notify_db):
+    """one-shot 任务失败不重试 → 也要留一条 (uid_backfill 类静默失败)."""
+    shutdown = asyncio.Event()
+
+    async def worker():
+        raise ValueError("backfill exploded")
+
+    await asyncio.wait_for(
+        supervise(
+            worker, "uid_backfill",
+            shutdown_event=shutdown,
+            one_shot=True,
+            notify_center=_center(notify_db),
+        ),
+        timeout=2,
+    )
+    rows = _notifications(notify_db)
+    assert len(rows) == 1
+    assert rows[0]["dedupe_key"] == "alert:worker_crash:uid_backfill"
+    assert "ValueError" in rows[0]["body"]
+
+
+async def test_notify_center_failure_does_not_break_restart(tmp_path):
+    """通知落库炸 (空库没有 notification 表) → 重启逻辑照跑, 不吞 worker."""
+    from src.notify.center import NotifyCenter
+
+    broken = tmp_path / "empty.db"
+    sqlite3.connect(str(broken)).close()
+    shutdown = asyncio.Event()
+    calls = {"n": 0}
+
+    async def worker():
+        calls["n"] += 1
+        if calls["n"] == 1:
+            raise RuntimeError("boom")
+        await shutdown.wait()
+
+    task = asyncio.create_task(
+        supervise(
+            worker, "w_notify_fail",
+            shutdown_event=shutdown,
+            backoff=(0.0,),
+            notify_center=NotifyCenter(str(broken)),
+        )
+    )
+    for _ in range(200):
+        if calls["n"] >= 2:
+            break
+        await asyncio.sleep(0.01)
+    assert calls["n"] == 2, "通知落库失败不得阻断重启"
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=2)
+
+
+async def test_clean_shutdown_publishes_nothing(notify_db):
+    """干净退出 (shutdown 置位后返回) 不是故障 → 零条目."""
+    shutdown = asyncio.Event()
+
+    async def worker():
+        await shutdown.wait()
+
+    task = asyncio.create_task(
+        supervise(
+            worker, "quiet",
+            shutdown_event=shutdown,
+            notify_center=_center(notify_db),
+        )
+    )
+    await asyncio.sleep(0.05)
+    shutdown.set()
+    await asyncio.wait_for(task, timeout=2)
+    assert _notifications(notify_db) == []

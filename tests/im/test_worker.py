@@ -200,6 +200,138 @@ async def test_no_alerter_is_not_a_crash():
     await w._alert_tick(force=True)  # 不抛
 
 
+# ── 通知中心（task 08-20-notification-center M2-B2）─────────────────────────
+#
+# 🔴 缺口本体：失联告警的唯一出口是飞书自己 —— 飞书挂了就发不出去（悖论）。
+# 通知中心是与之并列的第二个出口，且默认安装（ALERT_ENABLED=false）里它是唯一的。
+
+
+@pytest.fixture
+def notify_db(tmp_path):
+    """真实 sync_store.db（含 v68 notification 表）。"""
+    from src.mail.sync_store import SyncStore
+
+    path = tmp_path / "sync_store.db"
+    SyncStore(str(path))
+    return str(path)
+
+
+def _center(db_path):
+    from src.notify.center import NotifyCenter
+
+    return NotifyCenter(db_path)
+
+
+def _notifications(db_path):
+    import sqlite3
+
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        return [
+            dict(r)
+            for r in conn.execute("SELECT * FROM notification ORDER BY id").fetchall()
+        ]
+
+
+@pytest.mark.asyncio
+async def test_notify_center_enters_escalates_and_recovers_without_alerter(notify_db):
+    """默认安装（alerter=None）：ENTER 一条 warn → 静默轮不刷屏 → 升 critical
+    （同一条，severity 只升不降）→ 连上后条目转 resolved。"""
+    store = FakeStateStore()
+    w = FeishuImWorker(
+        cfg=_cfg(), sync_store=store, alerter=None, episodes=None,
+        notify_center=_center(notify_db),
+    )
+
+    w._unavailable_since = time.monotonic() - (im_worker.UNAVAILABLE_ALERT_SEC + 1)
+    await w._alert_tick(force=True)
+    rows = _notifications(notify_db)
+    assert len(rows) == 1
+    assert rows[0]["dedupe_key"] == "alert:im_feishu_unavailable"
+    assert rows[0]["category"] == "system"
+    assert rows[0]["source"] == "im_feishu"
+    assert rows[0]["severity"] == "warn"
+    assert rows[0]["recurrence_no"] == 1
+
+    # episode 内无显著变化 → 不计次（否则 30s 一次未读化 = 骚扰）
+    w._unavailable_since = time.monotonic() - (im_worker.UNAVAILABLE_ALERT_SEC + 20)
+    await w._alert_tick(force=True)
+    assert _notifications(notify_db)[0]["recurrence_no"] == 1
+
+    # 越 critical 门槛 → 同一条升级
+    w._unavailable_since = time.monotonic() - (im_worker.UNAVAILABLE_CRITICAL_SEC + 1)
+    await w._alert_tick(force=True)
+    rows = _notifications(notify_db)
+    assert len(rows) == 1, "严重度升级不开第二条"
+    assert rows[0]["severity"] == "critical"
+    assert rows[0]["recurrence_no"] == 2
+
+    # 连上了 → 收掉
+    w._clear_unavailable()
+    await w._alert_tick(force=True)
+    assert _notifications(notify_db)[0]["state"] == "resolved"
+
+
+@pytest.mark.asyncio
+async def test_critical_downgrade_is_not_a_notify_center_recovery(notify_db):
+    """严重度回落到 [5min, 30min) 仍是坏的 → 条目不得被收掉。"""
+    store = FakeStateStore()
+    w = FeishuImWorker(
+        cfg=_cfg(), sync_store=store, alerter=None, episodes=None,
+        notify_center=_center(notify_db),
+    )
+    w._unavailable_since = time.monotonic() - (im_worker.UNAVAILABLE_CRITICAL_SEC + 1)
+    await w._alert_tick(force=True)
+    w._unavailable_since = time.monotonic() - (im_worker.UNAVAILABLE_ALERT_SEC + 60)
+    await w._alert_tick(force=True)
+    assert _notifications(notify_db)[0]["state"] == "open"
+
+
+@pytest.mark.asyncio
+async def test_feishu_and_notify_center_keep_separate_watermarks(notify_db):
+    """🔴 各记水位：飞书投递失败 → 每轮重发（老行为一字不动）；通知中心落库
+    成功 → 只一条。共用一份水位会让一边把另一边永久静默。"""
+    store = FakeStateStore()
+    alerter = FakeAlerter(delivered=False)
+    w = FeishuImWorker(
+        cfg=_cfg(), sync_store=store, alerter=alerter,
+        episodes=AlertEpisodeTracker(store, enabled=True),
+        notify_center=_center(notify_db),
+    )
+    w._unavailable_since = time.monotonic() - (im_worker.UNAVAILABLE_ALERT_SEC + 1)
+    await w._alert_tick(force=True)
+    await w._alert_tick(force=True)
+
+    assert len(alerter.alerts) == 2, "飞书侧仍是重发（未投递成功不 commit）"
+    rows = _notifications(notify_db)
+    assert len(rows) == 1 and rows[0]["recurrence_no"] == 1
+    assert store.data.get(f"alert.nc.{im_state.EPISODE_UNAVAILABLE}.active") == "1"
+    assert store.data.get(f"alert.{im_state.EPISODE_UNAVAILABLE}.active") != "1"
+
+
+@pytest.mark.asyncio
+async def test_notify_center_failure_does_not_break_feishu_path(tmp_path):
+    """通知落库炸（空库没有 notification 表）→ 飞书告警照常送达，不抛。"""
+    import sqlite3
+
+    from src.notify.center import NotifyCenter
+
+    broken = tmp_path / "empty.db"
+    sqlite3.connect(str(broken)).close()
+    store = FakeStateStore()
+    alerter = FakeAlerter()
+    w = FeishuImWorker(
+        cfg=_cfg(), sync_store=store, alerter=alerter,
+        episodes=AlertEpisodeTracker(store, enabled=True),
+        notify_center=NotifyCenter(str(broken)),
+    )
+    w._unavailable_since = time.monotonic() - (im_worker.UNAVAILABLE_ALERT_SEC + 1)
+    await w._alert_tick(force=True)
+    assert len(alerter.alerts) == 1
+    # 落库失败不得 commit nc 水位 → 下轮还会重试
+    assert store.data.get(f"alert.nc.{im_state.EPISODE_UNAVAILABLE}.active") is None
+
+
 # ── ready 超时守望 + 单飞行铁律（2026-08-04 真机事故回归）────────────────────
 #
 # 事故时间线：packaged 冷 import 2min17s → conn.start() 30s ready 超时 → worker

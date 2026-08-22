@@ -453,8 +453,22 @@ class DavMailWatchdog:
                     await self.alerter.alert_davmail_restart_storm(
                         len(self._restart_times), self.auto_restart_max_per_day
                     )
+                # task 08-20-notification-center M2-B2: 与 crash-loop 同构的
+                # 「自动恢复已放弃, 需人工」—— 默认安装 (无飞书) 此前完全不可见。
+                await self._notify_davmail_alert(
+                    "restart_storm",
+                    title="DavMail 自动重启已停止",
+                    body=(
+                        f"24h 内已自动重启 {len(self._restart_times)} 次 (上限 "
+                        f"{self.auto_restart_max_per_day}), 停止自动重启, "
+                        "需人工排查 (多半是 token 失效要重走 OAuth)。"
+                    ),
+                )
                 self._announced_restart_storm = True
             return
+        if self._announced_restart_storm:
+            # 24h 窗口滚出 → 自动重启重新可用 = 明确的恢复信号, 收掉条目。
+            await self._notify_davmail_resolve("restart_storm")
         self._announced_restart_storm = False
 
         # 成败都进冷却: callback 失败时避免每轮 (60s) 刷重启
@@ -484,8 +498,19 @@ class DavMailWatchdog:
                 f"[davmail-watchdog] 自动恢复成功 ({detail}) — 冷却 "
                 f"{self.auto_restart_cooldown // 60} 分钟内不再触发"
             )
+            # 上一次失败的条目在这里收掉 (重启成功 = 明确的恢复信号)。
+            await self._notify_davmail_resolve("auto_restart_failed")
         else:
             logger.error(f"[davmail-watchdog] 自动恢复失败: {detail}")
+            # 连续失败计次不刷屏 (dedupe_key 恒一条)。
+            await self._notify_davmail_alert(
+                "auto_restart_failed",
+                title="DavMail 自动恢复失败",
+                body=(
+                    f"IMAP LOGIN 连续 {fails} 次失败后执行自动重启, 未成功: "
+                    f"{detail}。冷却 {self.auto_restart_cooldown // 60} 分钟后重试。"
+                ),
+            )
         if self.alerter is not None:
             await self.alerter.alert_davmail_auto_restart(
                 ok, detail, fails, self.auto_restart_cooldown // 60

@@ -5,9 +5,13 @@
   - 行 disabled（row.enabled=0）→ 不派发；
   - 行 enabled + trigger 命中 → 派发；子串-sender / 正则-subject 语义（复用 detector）；
   - 行不存在（老库）→ 回退 env 构造（auto_sync + env sender/subject）。
+
+task 08-20-notification-center M2-B2 追加（本文件末节）：派发出去的后台任务
+**结果**进通知中心 —— 无人值守链路失败此前只有一行 log。
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import sqlite3
 import types
@@ -141,4 +145,147 @@ def test_missing_row_env_auto_off_no_dispatch(tmp_path, monkeypatch):
     db = _empty_db(tmp_path)
     assert not _dispatched(
         monkeypatch, hook_active=True, db_path=db, email=_email("x@x.com", "[weekly] hi")
+    )
+
+
+# ── 后台任务结果 → 通知中心（task 08-20-notification-center M2-B2）──────────
+
+
+def _notify_db(tmp_path):
+    """真实 sync_store.db（含 v68 notification 表）。"""
+    from src.mail.sync_store import SyncStore
+
+    path = tmp_path / "sync_store.db"
+    SyncStore(str(path))
+    return str(path)
+
+
+def _notifications(db_path):
+    with sqlite3.connect(db_path) as conn:
+        conn.row_factory = sqlite3.Row
+        return [
+            dict(r)
+            for r in conn.execute("SELECT * FROM notification ORDER BY id").fetchall()
+        ]
+
+
+def _run_hook_bg(monkeypatch, *, tmp_path, notify_db, results):
+    """派发 hook 并把它起的后台协程真的跑掉；``results`` 是每次调用的返回值
+    （``Exception`` 实例 = 抛出）。"""
+    import src.project_progress.runner as runner_mod
+
+    db = _make_db_with_row(tmp_path, enabled=True, subject=r"\[weekly\]", sender="")
+
+    w = NewWatcher.__new__(NewWatcher)
+    w._progress_hook_active = True
+    w._agent_db_path = str(db)
+    w.sync_store = types.SimpleNamespace(db_path=notify_db)
+
+    pending = list(results)
+
+    class _FakeRunner:
+        async def sync_from_email(self, **_kw):
+            outcome = pending.pop(0)
+            if isinstance(outcome, Exception):
+                raise outcome
+            return outcome
+
+    monkeypatch.setattr(runner_mod, "ProjectProgressRunner", lambda *a, **k: _FakeRunner())
+    monkeypatch.setattr(w, "_track_bg_task", lambda t: None)
+
+    real_create_task = nw_mod.asyncio.create_task
+    coros: list = []
+    monkeypatch.setattr(
+        nw_mod.asyncio, "create_task", lambda coro: coros.append(coro) or "task"
+    )
+    for _ in results:
+        w._maybe_trigger_project_progress_hook(
+            _email("weekly@corp.com", "[weekly] hi"), 42, "page-id"
+        )
+    monkeypatch.setattr(nw_mod.asyncio, "create_task", real_create_task)
+
+    async def _drain():
+        for coro in coros:
+            await coro
+
+    asyncio.run(_drain())
+
+
+def _summary(status, error=None):
+    from src.project_progress.runner import SyncSummary
+
+    return SyncSummary(internal_id=42, status=status, error=error)
+
+
+def test_returned_failed_status_publishes_notification(tmp_path, monkeypatch):
+    """🔴 判据是 summary.status —— runner 的多数失败路径**不抛异常**，
+    只接 except 分支会漏掉大半失败面。"""
+    notify_db = _notify_db(tmp_path)
+    _run_hook_bg(
+        monkeypatch,
+        tmp_path=tmp_path,
+        notify_db=notify_db,
+        results=[_summary("failed", "parse_xlsx failed: bad zip")],
+    )
+    rows = _notifications(notify_db)
+    assert len(rows) == 1
+    assert rows[0]["dedupe_key"] == "project_progress_sync_failed"
+    assert rows[0]["category"] == "results"
+    assert rows[0]["severity"] == "warn"
+    assert rows[0]["source"] == "project_progress"
+    assert "parse_xlsx failed" in rows[0]["body"]
+
+
+def test_raised_exception_also_publishes_and_aggregates(tmp_path, monkeypatch):
+    """抛异常同样进通知；连续失败聚合计次，不刷屏。"""
+    notify_db = _notify_db(tmp_path)
+    _run_hook_bg(
+        monkeypatch,
+        tmp_path=tmp_path,
+        notify_db=notify_db,
+        results=[RuntimeError("notion 502"), _summary("failed", "all projects failed")],
+    )
+    rows = _notifications(notify_db)
+    assert len(rows) == 1, "同 dedupe_key 恒一行"
+    assert rows[0]["recurrence_no"] == 2
+    assert "all projects failed" in rows[0]["body"], "文案刷新为最近一次"
+
+
+def test_success_resolves_previous_failure(tmp_path, monkeypatch):
+    """下一次成功 = 恢复 → 收掉条目。"""
+    notify_db = _notify_db(tmp_path)
+    _run_hook_bg(
+        monkeypatch,
+        tmp_path=tmp_path,
+        notify_db=notify_db,
+        results=[_summary("failed", "boom"), _summary("completed")],
+    )
+    rows = _notifications(notify_db)
+    assert len(rows) == 1 and rows[0]["state"] == "resolved"
+
+
+def test_skipped_status_is_neither_failure_nor_recovery(tmp_path, monkeypatch):
+    """skipped（幂等命中 / 无匹配附件）在写 Notion 之前就短路了 —— 证明不了
+    链路已好，不得收掉失败条目，也不新开条目。"""
+    notify_db = _notify_db(tmp_path)
+    _run_hook_bg(
+        monkeypatch,
+        tmp_path=tmp_path,
+        notify_db=notify_db,
+        results=[_summary("failed", "boom"), _summary("skipped")],
+    )
+    rows = _notifications(notify_db)
+    assert len(rows) == 1 and rows[0]["state"] == "open"
+    assert rows[0]["recurrence_no"] == 1
+
+
+def test_notify_center_failure_does_not_break_hook(tmp_path, monkeypatch):
+    """通知落库炸（空库没有 notification 表）→ 后台任务照常收尾，不抛。"""
+    broken = tmp_path / "empty.db"
+    sqlite3.connect(str(broken)).close()
+    _run_hook_bg(
+        monkeypatch,
+        tmp_path=tmp_path,
+        notify_db=str(broken),
+        results=[_summary("failed", "boom")],
     )

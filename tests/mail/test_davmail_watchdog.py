@@ -1481,6 +1481,93 @@ async def test_oauth_failure_publishes_notification(
     assert rows[0]["severity"] == "critical"
 
 
+async def test_restart_storm_publishes_critical_and_resolves_when_window_rolls(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """M2-B2: 「自动恢复已放弃, 需人工」与 crash-loop 同构 —— 默认安装
+    (alerter=None) 此前完全不可见。24h 窗口滚出 = 明确恢复信号 → 收掉条目。"""
+    wd, restart_calls = _make_restart_wd(
+        sync_store,
+        davmail_root,
+        None,
+        restart_ok=False,
+        auto_restart_cooldown=0,
+        auto_restart_max_per_day=2,
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(6):
+        await wd._tick()
+
+    assert len(restart_calls) == 2, "达上限后停止自动重启 (老行为不变)"
+    storm = _notifications(sync_store, "alert:davmail:restart_storm")
+    assert len(storm) == 1, "风暴条目只一条 (announce-once)"
+    assert storm[0]["severity"] == "critical"
+    assert storm[0]["category"] == "system"
+    assert storm[0]["source"] == "davmail"
+    assert storm[0]["state"] == "open"
+
+    # 24h 窗口滚出 → 自动重启重新可用
+    wd._restart_times = []
+    wd._last_auto_restart_ts = 0.0
+    await wd._tick()
+    assert _notifications(sync_store, "alert:davmail:restart_storm")[0][
+        "state"
+    ] == "resolved"
+
+
+async def test_auto_restart_failure_publishes_then_resolves_on_success(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """重启失败 → 一条 critical (连续失败计次不刷屏); 之后重启成功 → 收掉。"""
+    wd, _calls = _make_restart_wd(
+        sync_store,
+        davmail_root,
+        None,
+        restart_ok=False,
+        auto_restart_cooldown=0,
+        notify_center=_center(sync_store),
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(4):
+        await wd._tick()
+
+    rows = _notifications(sync_store, "alert:davmail:auto_restart_failed")
+    assert len(rows) == 1, "同一条计次, 不新开"
+    assert rows[0]["severity"] == "critical"
+    assert rows[0]["recurrence_no"] == 2, "第 4 轮的第二次失败应计次"
+    assert "exit 1" in rows[0]["body"]
+
+    async def _ok_restart():
+        return (True, "exit 0")
+
+    wd.restart_callback = _ok_restart  # type: ignore[assignment]
+    await wd._tick()
+    assert _notifications(sync_store, "alert:davmail:auto_restart_failed")[0][
+        "state"
+    ] == "resolved"
+
+
+async def test_restart_storm_notification_absent_without_center(
+    sync_store: SyncStore, davmail_root: Path
+):
+    """未注入通知中心 (老调用方 / 单测) → 零条目, 飞书链路一字不动。"""
+    alerter = _FakeAlerter()
+    wd, _calls = _make_restart_wd(
+        sync_store,
+        davmail_root,
+        alerter,
+        restart_ok=False,
+        auto_restart_cooldown=0,
+        auto_restart_max_per_day=2,
+    )
+    await _patch_probe(wd, imap_ok=True, smtp_ok=True)
+    for _ in range(6):
+        await wd._tick()
+    assert [c for c in alerter.calls if c[0] == "alert_davmail_restart_storm"]
+    assert _notifications(sync_store) == []
+
+
 async def test_notify_center_failure_does_not_break_watchdog(
     sync_store: SyncStore, davmail_root: Path, tmp_path: Path
 ):

@@ -17,6 +17,12 @@ consecutive_errors>=5 的自我放弃路径) 会让 task 悄悄死掉、功能�
 - ``one_shot=True`` (如 uid_backfill): 只观测不重启 —— 正常返回记
   ``completed``, 异常记 ``failed`` + 告警一次。
 
+告警有**两个出口**且互不依赖 (task 08-20-notification-center M2-B2): 飞书
+``alerter`` (需 ALERT_ENABLED + webhook, 默认安装是 None) 与 ``notify_center``
+(通知中心, 恒在场)。🔴 默认安装下 worker crash-loop 此前**完全不可见** ——
+20 个顶层 worker 共用本模块, 停摆意味着整个功能面静默死掉。两个出口都可为
+None (老调用方 / 单测 = 行为零变化)。
+
 心跳/状态经注入的 ``state_writer`` 在**状态跃迁时**写
 ``worker.<name>.{status,last_started_at,restart_count,last_error}`` 键
 (落 sync_state → 跨进程可见, ``mailagent admin health`` / ``/api/admin/health``
@@ -61,6 +67,7 @@ async def supervise(
     state_writer: Optional[Callable[[str, str], object]] = None,
     one_shot: bool = False,
     healthy_after_sec: float = HEALTHY_AFTER_SEC,
+    notify_center=None,
 ) -> None:
     """监督一个 worker 协程: 挂了重启, crash-loop 停摆, 状态跃迁落 state_writer.
 
@@ -79,6 +86,8 @@ async def supervise(
         one_shot: True = 只跑一次 (uid_backfill 类), 异常只记日志 + 告警 +
             终态, 不重启。
         healthy_after_sec: 存活超过该秒数视为健康, 重置 crash 计数。
+        notify_center: ``NotifyCenter`` (可 None = 不写通知中心)。与 alerter 并列
+            的第二个出口, 落库失败绝不影响重启流程。
     """
     crash_count = 0
     restart_count = 0
@@ -98,6 +107,33 @@ async def supervise(
             await getattr(alerter, method_name)(*args)
         except Exception as e:  # noqa: BLE001 — 告警失败绝不影响重启流程
             logger.warning(f"[supervise:{name}] alert {method_name} failed: {e}")
+
+    async def _safe_notify(
+        sub: str, *, title: str, body: str, severity: str
+    ) -> None:
+        """worker 死亡 → 通知中心 (task 08-20-notification-center)。
+
+        与 ``_safe_alert`` 并列的第二个出口, 两者互不 gate: 默认安装没有飞书,
+        这里就是 crash-loop 唯一能被看见的地方。落库失败只 warning ——
+        通知路径绝不影响重启逻辑。
+        """
+        if notify_center is None:
+            return
+        try:
+            await asyncio.to_thread(
+                notify_center.publish,
+                category="system",
+                source="worker",
+                title=title,
+                body=body,
+                severity=severity,
+                # 同一 worker 连崩计次 (不刷屏); crash 与 crashloop 是两条独立
+                # 条目 —— 前者「挂了但会自愈」, 后者「已放弃, 需人工」。
+                dedupe_key=f"alert:worker_{sub}:{name}",
+                payload={"link": {"type": "route", "to": "/admin/kanban"}},
+            )
+        except Exception as e:  # noqa: BLE001 — 通知落库失败绝不影响重启流程
+            logger.warning(f"[supervise:{name}] notify {sub} failed: {e}")
 
     while True:
         _write("status", "running")
@@ -148,6 +184,12 @@ async def supervise(
             # one-shot 异常: 只观测不重启 (重启对一次性任务没有意义)。
             _write("status", "failed")
             await _safe_alert("alert_worker_crashed", name, reason, 1)
+            await _safe_notify(
+                "crash",
+                title=f"一次性任务 {name} 执行失败",
+                body=f"任务不会自动重试, 需人工处理。错误: {reason}",
+                severity="warn",
+            )
             return
 
         alive = time.monotonic() - started
@@ -163,11 +205,29 @@ async def supervise(
                 f"crashes — stopping restarts (worker down until service restart)"
             )
             await _safe_alert("alert_worker_crashloop_stopped", name, crash_count)
+            await _safe_notify(
+                "crashloop",
+                title=f"后台 worker {name} 已停止重启",
+                body=(
+                    f"连续 {crash_count} 次快速崩溃, 已放弃重启 —— 该功能面将"
+                    f"停摆到服务重启为止。最近错误: {reason}"
+                ),
+                severity="critical",
+            )
             return
 
         delay = float(backoff[min(crash_count - 1, len(backoff) - 1)])
         _write("status", "crashed")
         await _safe_alert("alert_worker_crashed", name, reason, crash_count)
+        await _safe_notify(
+            "crash",
+            title=f"后台 worker {name} 异常退出",
+            body=(
+                f"第 {crash_count} 次崩溃 (上限 {max_crashloop}), "
+                f"{delay:.0f}s 后自动重启。最近错误: {reason}"
+            ),
+            severity="warn",
+        )
         logger.warning(
             f"[supervise:{name}] restarting in {delay:.0f}s "
             f"(crash #{crash_count}/{max_crashloop})"

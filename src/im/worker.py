@@ -57,6 +57,7 @@ from src.im.lark_api import fetch_bot_identity, wrap_card_action_handler
 from src.im.logfmt import describe_error
 from src.im.preflight import detect_pm2_conflict
 from src.im.state import ImFeishuState
+from src.notify.episode import AlertEpisodeTracker
 
 # 监控 tick（秒）—— 连接状态跃迁的探测粒度。纯内存判断，1s 很便宜。
 MONITOR_POLL_SEC = 1.0
@@ -158,11 +159,22 @@ class FeishuImWorker:
         alerter: Any = None,
         episodes: Any = None,
         debug: bool = False,
+        notify_center: Any = None,
     ) -> None:
         self.cfg = cfg
         self.state = ImFeishuState(sync_store)
         self.alerter = alerter
         self.episodes = episodes
+        # task 08-20-notification-center M2-B2：失联告警的唯一出口是飞书自己 ——
+        # 飞书挂了，告警也发不出去（悖论）。通知中心是与之并列的第二个出口，
+        # 恒在场；未注入（老调用方 / 单测）= None = 行为零变化。
+        self.notify_center = notify_center
+        # 各记水位（design §8.b）：`nc.` 前缀的第二个 tracker。飞书那份 commit 挂
+        # 「投递成功」，没配飞书时永不 commit → 共用一份会让通知中心每 30s 重发。
+        self._nc_episodes = AlertEpisodeTracker(
+            sync_store,
+            enabled=getattr(episodes, "enabled", True),
+        )
         self._debug = debug
 
         self._stopping = False
@@ -490,12 +502,16 @@ class FeishuImWorker:
         if not force and (now - self._last_alert_tick) < ALERT_TICK_SEC:
             return
         self._last_alert_tick = now
-        if self.episodes is None or self.alerter is None:
-            return
 
         seconds = 0.0 if self._unavailable_since is None else now - self._unavailable_since
         reason_text = _REASON_TEXT.get(self._unavailable_reason, self._unavailable_reason)
         minutes = seconds / 60.0
+
+        # 通知中心（第二个出口，与飞书互不 gate —— 飞书失联时它才是唯一能看见的地方）
+        await self._notify_unavailable(seconds, reason_text, minutes)
+
+        if self.episodes is None or self.alerter is None:
+            return
 
         crit = self.episodes.evaluate(
             im_state.EPISODE_UNAVAILABLE_CRITICAL, seconds, UNAVAILABLE_CRITICAL_SEC
@@ -532,6 +548,88 @@ class FeishuImWorker:
             # alert_recovery 是 warning 级 —— info 级会被 ALERT_LEVELS 门吞掉
             if await self._recovery("飞书对话长连接"):
                 self.episodes.commit(im_state.EPISODE_UNAVAILABLE, warn, seconds)
+
+    async def _notify_unavailable(
+        self, seconds: float, reason_text: str, minutes: float
+    ) -> None:
+        """失联 episode → 通知中心（task 08-20-notification-center M2-B2）。
+
+        建模与飞书那段**同构**：一个 episode 本体（``…_disconnected``）+ 一个
+        severity marker（``…_critical``），只是水位落在 ``nc.`` 前缀下、投递判据
+        改成「落库成功」（表就是收件箱，不需要等网络返回）。
+
+        条目**只有一条**（``alert:im_feishu_unavailable``）—— 严重度升级由
+        ``publish`` 的「severity 只升不降」吸收，不开第二条。
+        """
+        center = self.notify_center
+        if center is None:
+            return
+        from src.notify import episode as episode_mod
+
+        crit = self._nc_episodes.evaluate(
+            f"nc.{im_state.EPISODE_UNAVAILABLE_CRITICAL}",
+            seconds,
+            UNAVAILABLE_CRITICAL_SEC,
+        )
+        warn = self._nc_episodes.evaluate(
+            f"nc.{im_state.EPISODE_UNAVAILABLE}", seconds, UNAVAILABLE_ALERT_SEC
+        )
+        escalating = (episode_mod.ENTER, episode_mod.ESCALATE)
+
+        if crit in escalating:
+            if await self._notify_publish("critical", reason_text, minutes):
+                self._nc_episodes.commit(
+                    f"nc.{im_state.EPISODE_UNAVAILABLE_CRITICAL}", crit, seconds
+                )
+                # 同飞书段：critical 这一条同时就是 episode 本体的告知，一并标记，
+                # 否则本体永远 inactive → 将来恢复了收不掉条目。
+                if warn in escalating:
+                    self._nc_episodes.commit(
+                        f"nc.{im_state.EPISODE_UNAVAILABLE}", warn, seconds
+                    )
+        elif warn in escalating:
+            if await self._notify_publish("warn", reason_text, minutes):
+                self._nc_episodes.commit(
+                    f"nc.{im_state.EPISODE_UNAVAILABLE}", warn, seconds
+                )
+
+        # 严重度回落（≥30min → [5,30)）：仍是坏的，只复位 marker，不动条目。
+        if crit == episode_mod.RECOVER:
+            self._nc_episodes.commit(
+                f"nc.{im_state.EPISODE_UNAVAILABLE_CRITICAL}", crit, seconds
+            )
+        # 真·恢复：连上了 → 收掉条目。
+        if warn == episode_mod.RECOVER:
+            try:
+                await asyncio.to_thread(
+                    center.resolve_by_dedupe, "alert:im_feishu_unavailable"
+                )
+            except Exception as e:  # noqa: BLE001 — 通知失败绝不拖垮 worker
+                logger.warning(f"[im-feishu] 通知中心恢复失败: {describe_error(e)}")
+                return
+            self._nc_episodes.commit(
+                f"nc.{im_state.EPISODE_UNAVAILABLE}", warn, seconds
+            )
+
+    async def _notify_publish(
+        self, severity: str, reason_text: str, minutes: float
+    ) -> bool:
+        """返回**是否落库成功** —— 两阶段提交靠它决定要不要 commit 水位。"""
+        try:
+            await asyncio.to_thread(
+                self.notify_center.publish,
+                category="system",
+                source="im_feishu",
+                title=f"飞书对话 bot 已失联 {minutes:.0f} 分钟",
+                body=f"原因: {reason_text}。飞书里暂时指挥不动 MailAgent。",
+                severity=severity,
+                dedupe_key="alert:im_feishu_unavailable",
+                payload={"link": {"type": "route", "to": "/admin/kanban"}},
+            )
+            return True
+        except Exception as e:  # noqa: BLE001 — 通知失败绝不拖垮 worker
+            logger.warning(f"[im-feishu] 通知中心落库失败: {describe_error(e)}")
+            return False
 
     async def _send(self, level: str, title: str, content: str) -> bool:
         try:

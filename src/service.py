@@ -413,8 +413,8 @@ class EmailNotionSyncApp:
     def _spawn_supervised(self, coro_factory, name: str, *, one_shot: bool = False):
         """E4 WP1: worker 协程包 supervise 后 create_task (顶层 task 统一入口).
 
-        挂 → 全栈日志 + (alerter 配置时) 飞书告警 + 指数退避重启; 连续
-        crash-loop → 停该 worker 保持醒目告警, 不拖垮进程。状态跃迁写
+        挂 → 全栈日志 + (alerter 配置时) 飞书告警 + 通知中心条目 + 指数退避
+        重启; 连续 crash-loop → 停该 worker 保持醒目告警, 不拖垮进程。状态跃迁写
         sync_state 'worker.<name>.*' 键, admin health 双面 (CLI /
         /api/admin/health) 跨进程直读。
         """
@@ -428,6 +428,9 @@ class EmailNotionSyncApp:
                 alerter=self.alerter,
                 state_writer=self.watcher.sync_store.set_state,
                 one_shot=one_shot,
+                # task 08-20-notification-center: 20 个顶层 worker 共用这一处 —
+                # 默认安装 (无飞书) 的 crash-loop 此前完全不可见。
+                notify_center=self._notify_center,
             ),
             name=f"supervise:{name}",
         )
@@ -897,6 +900,9 @@ class EmailNotionSyncApp:
                             self.watcher.sync_store,
                             enabled=config.alert_episode_enabled,
                         ),
+                        # task 08-20-notification-center: 失联告警的唯一出口是
+                        # 飞书自己 —— 飞书挂了发不出去。通知中心是第二个出口。
+                        notify_center=self._notify_center,
                     )
                     im_feishu_task = self._spawn_supervised(
                         self.im_feishu_worker.run, "im_feishu"
@@ -1253,13 +1259,25 @@ class EmailNotionSyncApp:
             body="邮件雷达探测失败, 新邮件可能已停止入库。",
         )
 
-        # 5. Redis 断连检查
+        # 5. Redis 断连检查 (飞书侧维持原样: 无 episode, 靠 alerter 内存冷却)
         if self.redis_consumer:
             rc_stats = self.redis_consumer.get_stats()
-            if rc_stats.get("connected") is False and self.alerter:
-                await self.alerter.alert_redis_disconnected(
-                    rc_stats.get("last_error", "unknown")
-                )
+            disconnected = rc_stats.get("connected") is False
+            last_error = rc_stats.get("last_error", "unknown")
+            if disconnected and self.alerter:
+                await self.alerter.alert_redis_disconnected(last_error)
+            await self._notify_alert_episode(
+                nc_episodes,
+                "redis_disconnected",
+                value=1.0 if disconnected else 0.0,
+                threshold=1.0,
+                boolean=True,
+                title="Redis 事件消费已断连",
+                body=(
+                    f"Notion webhook → Redis → Mail.app 的实时事件链路已断: "
+                    f"{last_error}"
+                ),
+            )
 
         # 6. davmail fetch 突增 (Sprint 16 收尾): davmail mode 下检查最近 10min
         # 进入 fetch_failed 的邮件数, 超阈值 → 飞书告警 (alerter 内置 cooldown 防刷)
