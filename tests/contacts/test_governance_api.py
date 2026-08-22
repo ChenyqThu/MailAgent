@@ -74,6 +74,39 @@ def test_agent_leg_create_owner_list_and_ignore(api):
     assert ignored.json()["data"]["status"] == "ignored"
 
 
+def test_agent_leg_create_publishes_pending_notification_after_commit(api):
+    """通知中心接线 (task 08-20-notification-center 返工): propose_contact_governance
+    在 `with repo.transaction()` 块 commit 之后才调用 notify_pending_suggestion——
+    端点走真实 TestClient + 真实 ContactRepository, 覆盖了返工要修的那条调用链。"""
+    client, _, path = api
+    created = client.post("/api/contacts/agent/proposals", json=_proposal_payload())
+    assert created.status_code == 200, created.text
+
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM notification ORDER BY id").fetchall()
+    assert len(rows) == 1
+    row = dict(rows[0])
+    assert row["category"] == "reviews"
+    assert row["dedupe_key"] == "contact_suggestion:pending"
+    assert row["recurrence_no"] == 1
+
+
+def test_agent_leg_duplicate_proposal_does_not_bump_notification(api):
+    client, _, path = api
+    first = client.post("/api/contacts/agent/proposals", json=_proposal_payload())
+    second = client.post("/api/contacts/agent/proposals", json=_proposal_payload())
+    assert first.status_code == second.status_code == 200
+    assert first.json()["data"]["created"] is True
+    assert second.json()["data"]["created"] is False
+
+    with sqlite3.connect(path) as conn:
+        conn.row_factory = sqlite3.Row
+        rows = conn.execute("SELECT * FROM notification ORDER BY id").fetchall()
+    assert len(rows) == 1
+    assert dict(rows[0])["recurrence_no"] == 1
+
+
 def test_blocked_adopt_commits_before_4xx(api):
     client, _, path = api
     created = client.post(

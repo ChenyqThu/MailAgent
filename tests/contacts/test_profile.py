@@ -459,6 +459,12 @@ def _identity_suggestions(path):
     ]
 
 
+def _fetch_notifications(path):
+    with _conn(path) as conn:
+        rows = conn.execute("SELECT * FROM notification ORDER BY id").fetchall()
+    return [dict(r) for r in rows]
+
+
 def _profile_evidence():
     return profile.ProfileEvidence(
         mode="first",
@@ -659,6 +665,16 @@ async def test_successful_profile_creates_identity_suggestion_for_difference(db)
     assert suggestions[0]["evidence"] == expected_evidence
     assert suggestions[1]["evidence"] == expected_evidence
 
+    # 通知中心接线 (task 08-20-notification-center 返工): notify_pending_suggestion
+    # 必须在 `with ContactRepository(db_path).transaction()` 块 commit 之后才被调用,
+    # 按两条 created=True 的建议各计次一次 —— 聚合到同一行, recurrence_no=2。
+    rows = _fetch_notifications(db)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["category"] == "reviews"
+    assert row["dedupe_key"] == "contact_suggestion:pending"
+    assert row["recurrence_no"] == 2
+
 
 def test_profile_identity_suggestions_strip_refs_and_skip_empty(db):
     _seed_contact(db, 1, mail_count=50)
@@ -673,7 +689,7 @@ def test_profile_identity_suggestions_strip_refs_and_skip_empty(db):
         }
     )
     with _conn(db) as conn:
-        profile._create_profile_identity_suggestions(
+        created_count = profile._create_profile_identity_suggestions(
             conn,
             contact_id=1,
             payload=payload,
@@ -689,10 +705,13 @@ def test_profile_identity_suggestions_strip_refs_and_skip_empty(db):
             now_ms=1_000,
         )
         conn.commit()
+    assert created_count == 2  # role_title + formal_name (department 引用剥离后为空, 跳过)
     assert [item["payload"] for item in _identity_suggestions(db)] == [
         {"field": "role_title", "value": "Project Manager"},
         {"field": "formal_name", "value": "Alice Zhang"},
     ]
+    # 本函数不再自己发通知 (调用方在 commit 之后按返回的 created_count 决定调用次数)。
+    assert _fetch_notifications(db) == []
 
 
 @pytest.mark.asyncio

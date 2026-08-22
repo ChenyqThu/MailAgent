@@ -38,6 +38,7 @@ from src.reports.worker import (
     _period_bounds,
     _sum_counts,
     run_report_once,
+    tick_loop,
 )
 
 _BJ = timezone(timedelta(hours=8))
@@ -908,6 +909,214 @@ class TestRunReportOnce:
         asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
                                     now=_NOW, agentic_fn=spy))
         assert seen["context_docs"] == ["soul"]
+
+
+# ============================================================
+# 通知中心接线 (task 08-20-notification-center M2 批 B3b, design §7「报告生成完成」行)
+# ============================================================
+
+def _fetch_notifications(db: Path) -> list[dict]:
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM notification ORDER BY id").fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+class TestReportNotifications:
+    async def _mock_sum(self, **kw):
+        return ReportDraft(headline="今日概览", overview="今日概览", model="mk",
+                            input_tokens=1, output_tokens=1)
+
+    async def _mock_agg(self, **kw):
+        return ReportDraft(headline="本周概览", overview="本周概览", model="mk")
+
+    def test_ready_notifies_results_info(self, db: Path):
+        _insert(db, 1, labels=_labels())
+        store = ReportStore(str(db))
+        agent = store.get_agent("daily_email_digest")
+        rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
+                                          now=_NOW, summarize_fn=self._mock_sum,
+                                          agentic_fn=self._mock_sum))
+        rows = _fetch_notifications(db)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["category"] == "results"
+        assert row["severity"] == "info"
+        assert row["source"] == "report"
+        assert row["dedupe_key"] == f"report:{rid}"
+        assert "已生成" in row["title"]
+        assert "今日概览" in row["body"]
+        payload = json.loads(row["payload_json"])
+        assert payload["link"] == {"type": "report", "reportId": rid}
+
+    def test_empty_notifies_info(self, db: Path):
+        store = ReportStore(str(db))
+        rid = asyncio.run(run_report_once(store=store, db_path=str(db),
+                                          agent=store.get_agent("daily_email_digest"),
+                                          now=_NOW, summarize_fn=self._mock_sum))
+        rows = _fetch_notifications(db)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["severity"] == "info"
+        assert row["dedupe_key"] == f"report:{rid}"
+        assert "无新内容" in row["title"]
+
+    def test_fallback_notifies_info_with_degraded_wording(self, db: Path):
+        """LLM 失败降级仍是 status=ready → severity=info，但文案须点明「降级」。"""
+        _insert(db, 1, labels=_labels())
+        store = ReportStore(str(db))
+
+        async def boom(**kw):
+            raise RuntimeError("LLM down")
+
+        asyncio.run(run_report_once(store=store, db_path=str(db),
+                                    agent=store.get_agent("daily_email_digest"),
+                                    now=_NOW, summarize_fn=boom, agentic_fn=boom))
+        rows = _fetch_notifications(db)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["severity"] == "info"
+        assert "降级" in row["title"]
+        assert "AI 摘要生成失败" in row["body"]
+
+    def test_failed_notifies_warn(self, db: Path, monkeypatch):
+        def boom(*a, **kw):
+            raise RuntimeError("db exploded")
+
+        monkeypatch.setattr("src.reports.worker.rdata.fetch_report_briefs", boom)
+        store = ReportStore(str(db))
+        rid = asyncio.run(run_report_once(store=store, db_path=str(db),
+                                          agent=store.get_agent("daily_email_digest"),
+                                          now=_NOW))
+        rows = _fetch_notifications(db)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["category"] == "results"
+        assert row["severity"] == "warn"
+        assert row["dedupe_key"] == f"report:{rid}"
+        assert "生成失败" in row["title"]
+        assert "db exploded" in row["body"]
+
+    def test_weekly_ready_notifies_info(self, db: Path):
+        store = ReportStore(str(db))
+        for d in ["2026-05-26", "2026-05-27"]:
+            sub_rid = f"daily_email_digest:daily:{d}"
+            store.create_report(report_id=sub_rid, agent_id="daily_email_digest", cadence="daily",
+                                report_date=d, window_start="s", window_end="e")
+            store.finish_report(sub_rid, status="ready",
+                                blocks_json=json.dumps([{"type": "overview", "text": f"{d} 概览"}]),
+                                counts_json=json.dumps({"total": 10, "replied": 2}), headline=d)
+        store.update_agent("weekly_email_digest", {"timezone": "Asia/Shanghai"})
+        wk = store.get_agent("weekly_email_digest")
+        rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=wk,
+                                          now=_NOW, aggregate_fn=self._mock_agg))
+        rows = _fetch_notifications(db)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["category"] == "results"
+        assert row["severity"] == "info"
+        assert row["dedupe_key"] == f"report:{rid}"
+
+    def test_weekly_empty_notifies_info(self, db: Path):
+        store = ReportStore(str(db))
+        store.update_agent("weekly_email_digest", {"timezone": "Asia/Shanghai"})
+        wk = store.get_agent("weekly_email_digest")
+        asyncio.run(run_report_once(store=store, db_path=str(db), agent=wk,
+                                    now=_NOW, aggregate_fn=self._mock_agg))
+        rows = _fetch_notifications(db)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["severity"] == "info"
+        assert "无新内容" in row["title"]
+        assert "没有可综合" in row["body"]
+
+    def test_weekly_failed_notifies_warn(self, db: Path, monkeypatch):
+        store = ReportStore(str(db))
+        store.update_agent("weekly_email_digest", {"timezone": "Asia/Shanghai"})
+        wk = store.get_agent("weekly_email_digest")
+
+        def boom(*a, **kw):
+            raise RuntimeError("range query exploded")
+
+        monkeypatch.setattr(store, "list_reports_in_range", boom)
+        rid = asyncio.run(run_report_once(store=store, db_path=str(db), agent=wk,
+                                          now=_NOW, aggregate_fn=self._mock_agg))
+        rows = _fetch_notifications(db)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["severity"] == "warn"
+        assert row["dedupe_key"] == f"report:{rid}"
+        assert "生成失败" in row["title"]
+        assert "range query exploded" in row["body"]
+
+    def test_rerun_same_slot_bumps_recurrence(self, db: Path):
+        """同 slot 重跑 (INSERT OR REPLACE) → 同 dedupe_key 计次, 不是两行。"""
+        store = ReportStore(str(db))
+        agent = store.get_agent("daily_email_digest")
+        asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
+                                    now=_NOW, summarize_fn=self._mock_sum))
+        asyncio.run(run_report_once(store=store, db_path=str(db), agent=agent,
+                                    now=_NOW, summarize_fn=self._mock_sum))
+        rows = _fetch_notifications(db)
+        assert len(rows) == 1
+        assert rows[0]["recurrence_no"] == 2
+
+    def test_notify_publish_failure_does_not_break_report_generation(self, db: Path, monkeypatch):
+        """design §3.3 纪律同款: 通知路径抛异常不得影响报告生成终态。"""
+        _insert(db, 1, labels=_labels())
+        store = ReportStore(str(db))
+
+        def boom(*a, **kw):
+            raise RuntimeError("notify center down")
+
+        monkeypatch.setattr("src.reports.worker.NotifyCenter.publish", boom)
+        rid = asyncio.run(run_report_once(store=store, db_path=str(db),
+                                          agent=store.get_agent("daily_email_digest"),
+                                          now=_NOW, summarize_fn=self._mock_sum,
+                                          agentic_fn=self._mock_sum))
+        rep = store.get_report(rid)
+        assert rep["status"] == "ready"
+        assert _fetch_notifications(db) == []
+
+    def test_reclaim_notifies_warn_aggregated(self, db: Path):
+        """reclaim_stale_generating 孤儿回收 (design §7 第二个 failed 产地) → 聚合通知。"""
+
+        class _Store:
+            def list_agents(self):
+                return []
+
+            def reclaim_stale_generating(self):
+                return 2
+
+        class _Sync:
+            def get_state(self, k):
+                return None
+
+            def set_state(self, k, v):
+                return True
+
+        async def _go():
+            ev = asyncio.Event()
+            task = asyncio.create_task(tick_loop(
+                sync_store=_Sync(), store=_Store(), db_path=str(db),
+                shutdown_event=ev, interval_sec=0,
+            ))
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            ev.set()
+            await asyncio.wait_for(task, timeout=2)
+
+        asyncio.run(_go())
+        rows = _fetch_notifications(db)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["category"] == "results"
+        assert row["severity"] == "warn"
+        assert row["dedupe_key"] == "report:reclaim_stale"
+        assert "2" in row["body"]
 
 
 # ============================================================

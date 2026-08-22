@@ -17,6 +17,7 @@ from loguru import logger
 
 from src.agents import schedule_rule
 from src.config import config
+from src.notify.center import NotifyCenter
 from src.reports import data as rdata
 from src.reports.assembler import assemble_fallback_doc, assemble_report_doc
 from src.reports.agent_tools import kos_is_available
@@ -35,6 +36,76 @@ FIRE_WINDOW_MIN = 30
 TICK_INTERVAL_SEC = 60
 
 _DEFAULT_WINDOW_HOURS = {"daily": 24, "weekly": 168, "monthly": 720}
+
+# 通知中心文案 (task 08-20-notification-center, design §7「报告生成完成」行)。
+_CADENCE_LABELS = {"daily": "日报", "weekly": "周报", "monthly": "月报"}
+
+
+def _notify_report_terminal(
+    db_path: str, *, rid: str, cadence: str, status: str,
+    headline: str = "", error: str = "",
+) -> None:
+    """落一条报告终态通知。dedupe_key=report:{rid} —— 同 slot 重跑 (INSERT OR REPLACE)
+
+    对应计次。design §7 口径: ready/empty=info、failed=warn；ready 但带 error
+    (LLM 失败降级) 文案与纯 ready 区分开，severity 仍是 info（降级仍产出了报告）。
+    通知路径绝不影响报告生成终态 (run_worker.py:157-160 同款纪律): 整段 try 吞 + warning。
+    """
+    try:
+        label = _CADENCE_LABELS.get(cadence, cadence)
+        if status == "empty":
+            title = f"{label}无新内容"
+            body = headline or "这段时间没有新邮件"
+            severity = "info"
+        elif status == "failed":
+            title = f"{label}生成失败"
+            body = error or "报告生成异常"
+            severity = "warn"
+        elif error:
+            title = f"{label}已生成（AI 摘要降级）"
+            body = f"AI 摘要生成失败，已降级为基础统计。{headline}".strip()
+            severity = "info"
+        else:
+            title = f"{label}已生成"
+            body = headline or ""
+            severity = "info"
+        NotifyCenter(db_path).publish(
+            category="results",
+            source="report",
+            severity=severity,
+            title=title,
+            body=body,
+            dedupe_key=f"report:{rid}",
+            payload={
+                "link": {"type": "report", "reportId": rid},
+                "report_id": rid,
+                "cadence": cadence,
+                "status": status,
+            },
+        )
+    except Exception as e:  # noqa: BLE001 — 通知路径绝不影响报告生成终态
+        logger.warning(f"[report] notify_center publish failed report_id={rid}: {e}")
+
+
+def _notify_reclaimed(db_path: str, count: int) -> None:
+    """回收的孤儿 generating 报告 → results/warn 聚合通知 (design §7 第二个 failed 产地)。
+
+    reclaim_stale_generating 只返回回收行数、无具体 report_id，故用固定 dedupe_key
+    聚合累计计次 (NotifyCenter 的 recurrence_no 自然承担「第几次」)，不为此新增读点
+    去查具体哪些行。
+    """
+    try:
+        NotifyCenter(db_path).publish(
+            category="results",
+            source="report",
+            severity="warn",
+            title="报告生成器异常退出",
+            body=f"{count} 份报告因进程中断被自动标记为失败，可在报告列表重新生成",
+            dedupe_key="report:reclaim_stale",
+            payload={"link": {"type": "route", "to": "/admin/kanban"}, "count": count},
+        )
+    except Exception as e:  # noqa: BLE001 — 通知路径绝不影响 tick 循环
+        logger.warning(f"[report] notify_center publish failed (reclaim): {e}")
 
 
 def _report_id(agent_id: str, cadence: str, report_date: str) -> str:
@@ -221,6 +292,10 @@ async def run_report_once(
                 rid, status="empty", counts_json=counts_json,
                 headline="这段时间没有新邮件",
             )
+            _notify_report_terminal(
+                db_path, rid=rid, cadence=cadence, status="empty",
+                headline="这段时间没有新邮件",
+            )
             logger.info(f"[report] {rid} empty (no emails in window)")
             return rid
 
@@ -249,6 +324,10 @@ async def run_report_once(
                 headline=doc.derive_headline(), model=draft.model,
                 input_tokens=draft.input_tokens, output_tokens=draft.output_tokens,
             )
+            _notify_report_terminal(
+                db_path, rid=rid, cadence=cadence, status="ready",
+                headline=doc.derive_headline(),
+            )
             logger.info(
                 f"[report] {rid} ready (model={draft.model} "
                 f"in={draft.input_tokens} out={draft.output_tokens} blocks={len(doc.blocks)})"
@@ -265,10 +344,18 @@ async def run_report_once(
                 rid, status="ready", blocks_json=doc.to_json(), counts_json=counts_json,
                 headline=doc.derive_headline(), error=f"summarize_failed: {str(e)[:200]}",
             )
+            _notify_report_terminal(
+                db_path, rid=rid, cadence=cadence, status="ready",
+                headline=doc.derive_headline(),
+                error=f"summarize_failed: {str(e)[:200]}",
+            )
         return rid
     except Exception as e:  # noqa: BLE001
         logger.error(f"[report] {rid} failed: {e}")
         store.finish_report(rid, status="failed", error=str(e)[:300])
+        _notify_report_terminal(
+            db_path, rid=rid, cadence=cadence, status="failed", error=str(e)[:300],
+        )
         return rid
 
 
@@ -542,6 +629,10 @@ async def _run_aggregate(
             store.finish_report(
                 rid, status="empty", headline=f"这段时间没有可综合的{sub_unit}"
             )
+            _notify_report_terminal(
+                db_path, rid=rid, cadence=cadence, status="empty",
+                headline=f"这段时间没有可综合的{sub_unit}",
+            )
             logger.info(f"[report] {rid} empty (no {sub_cadence} reports in period)")
             return rid
         _warn_if_last_day_missing(
@@ -597,6 +688,11 @@ async def _run_aggregate(
             input_tokens=draft.input_tokens, output_tokens=draft.output_tokens,
             error=("" if model_used else "aggregate_fallback"),
         )
+        _notify_report_terminal(
+            db_path, rid=rid, cadence=cadence, status="ready",
+            headline=doc.derive_headline(),
+            error=("" if model_used else "aggregate_fallback"),
+        )
         logger.info(
             f"[report] {rid} ready (aggregate {len(subs)} {sub_cadence}, missing={missing})"
         )
@@ -604,6 +700,9 @@ async def _run_aggregate(
     except Exception as e:  # noqa: BLE001
         logger.error(f"[report] {rid} aggregate failed: {e}")
         store.finish_report(rid, status="failed", error=str(e)[:300])
+        _notify_report_terminal(
+            db_path, rid=rid, cadence=cadence, status="failed", error=str(e)[:300],
+        )
         return rid
 
 
@@ -640,6 +739,7 @@ async def tick_loop(
                     logger.warning(
                         f"[report] reclaimed {reclaimed} orphaned generating report(s) → failed"
                     )
+                    _notify_reclaimed(db_path, reclaimed)
             except Exception as e:  # noqa: BLE001 — 回收失败不阻塞正常 tick
                 logger.debug(f"[report] reclaim_stale_generating failed: {e}")
             for agent in store.list_agents():

@@ -9,6 +9,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Iterable, Mapping, Optional, TypedDict
 
+from loguru import logger
+
 from src.contacts import service as contact_service
 from src.contacts.org_frame import (
     OrgFrame,
@@ -279,7 +281,54 @@ def create_suggestion(
             int(now_ms if now_ms is not None else time.time() * 1000),
         ),
     )
+    # 🔴 通知**不**在这里发: create_suggestion 恒运行在调用方尚未提交的写事务内
+    # (profile.py `with ContactRepository(db_path).transaction() as conn:` /
+    # contact_agent.py `with repo.transaction() as conn:`，均 BEGIN IMMEDIATE 立即持锁)。
+    # 若在此处调 NotifyCenter (独立连接, 自己的 BEGIN IMMEDIATE) 会与外层未释放的写锁
+    # 循环等待: 外层 commit 等 create_suggestion 返回 → create_suggestion 等 NotifyCenter →
+    # NotifyCenter 等外层的锁 —— 结构性死锁, 不是「事务短所以竞争窗口小」能救的
+    # (task 08-20-notification-center 返工记录, 见
+    # test_create_suggestion_returns_fast_and_never_calls_notify_directly /
+    # test_publish_inside_open_transaction_raises_locked)。调用方须在 **commit 之后**
+    # 对 created=True 的结果调 notify_pending_suggestion(db_path)。
     return {"id": int(cursor.lastrowid), "created": True, "status": "pending"}
+
+
+def notify_pending_suggestion(db_path: str) -> None:
+    """新增一条待审建议后 → reviews/info 聚合通知 (design §7「contact 治理建议队列常驻计次」行)。
+
+    🔴 调用时机纪律: 必须在建议已经 commit 之后调用 (调用方按 create_suggestion 返回的
+    created=True 决定是否调用)。走独立连接查询 + 独立连接 publish，两次都是全新连接、
+    不复用调用方的 conn —— 若在调用方未提交的事务内部调用会死锁 (见 create_suggestion
+    头注)。pending 计数用新连接查询, 此时外层已提交, 计数天然含刚插入的这条。
+    dedupe_key 固定为 ``contact_suggestion:pending`` —— 每条新建议都计次到同一活跃行
+    (NotifyCenter 的 recurrence_no 承担「第几条」)。通知路径绝不影响建议入库
+    (design §3.3 同款纪律): 整段 try 吞 + warning。
+    """
+    try:
+        count_conn = sqlite3.connect(db_path, timeout=5)
+        try:
+            pending = int(
+                count_conn.execute(
+                    "SELECT COUNT(*) FROM contact_suggestion WHERE status='pending'"
+                ).fetchone()[0]
+            )
+        finally:
+            count_conn.close()
+
+        from src.notify.center import NotifyCenter
+
+        NotifyCenter(db_path).publish(
+            category="reviews",
+            source="contact",
+            severity="info",
+            title="通讯录待审建议",
+            body=f"当前有 {pending} 条待审建议等待处理",
+            dedupe_key="contact_suggestion:pending",
+            payload={"link": {"type": "contact_queue"}, "pending": pending},
+        )
+    except Exception as e:  # noqa: BLE001 — 通知路径绝不影响建议入库
+        logger.warning(f"[contact-governance] notify_center publish failed: {e}")
 
 
 def _decode_suggestion(row: sqlite3.Row) -> ContactGovernanceSuggestion:

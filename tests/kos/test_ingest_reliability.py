@@ -327,6 +327,87 @@ class TestLedgerRecords:
 
 
 # ============================================================
+# 通知中心接线 (task 08-20-notification-center M2 批 B3b, design §7「KOS 推送放弃 dead」行)
+# ============================================================
+
+def _notifications(db_path: str) -> list[dict]:
+    conn = sqlite3.connect(db_path)
+    conn.row_factory = sqlite3.Row
+    try:
+        rows = conn.execute("SELECT * FROM notification ORDER BY id").fetchall()
+    finally:
+        conn.close()
+    return [dict(r) for r in rows]
+
+
+class TestDeadNotification:
+    def test_permanent_error_notifies_dead(self, tmp_path):
+        db = _db(_store(tmp_path))
+        status = ingest_log.record_failure(
+            db, 1, "sources/email/1", "E_KOS_UNAUTHORIZED", "401", "producer", False
+        )
+        assert status == "dead"
+
+        rows = _notifications(db)
+        assert len(rows) == 1
+        row = rows[0]
+        assert row["category"] == "system"
+        assert row["severity"] == "warn"
+        assert row["source"] == "kos"
+        assert row["dedupe_key"] == "kos_ingest:dead"
+        assert "internal_id=1" in row["body"] and "E_KOS_UNAUTHORIZED" in row["body"]
+        import json as _json
+        payload = _json.loads(row["payload_json"])
+        assert payload["link"] == {"type": "route", "to": "/settings", "search": {"tab": "integrations"}}
+
+    def test_retry_exhausted_dead_notifies(self, tmp_path):
+        db = _db(_store(tmp_path))
+        for _ in range(2):
+            ingest_log.record_failure(db, 1, "s", "E_KOS_NETWORK", "x", "producer", True,
+                                      max_attempts=2)
+        status = ingest_log.record_failure(
+            db, 1, "s", "E_KOS_NETWORK", "x", "producer", True, max_attempts=2
+        )
+        assert status == "dead"
+        rows = _notifications(db)
+        assert len(rows) == 1
+        assert rows[0]["severity"] == "warn"
+
+    def test_failed_not_dead_does_not_notify(self, tmp_path):
+        db = _db(_store(tmp_path))
+        status = ingest_log.record_failure(
+            db, 1, "s", "E_KOS_NETWORK", "x", "producer", True
+        )
+        assert status == "failed"
+        assert _notifications(db) == []
+
+    def test_two_distinct_dead_events_aggregate_and_bump_recurrence(self, tmp_path):
+        """design §3.2: 聚合到同一 dedupe_key, 不逐条开行 (骚扰面对策)。"""
+        db = _db(_store(tmp_path))
+        ingest_log.record_failure(db, 1, "s1", "E_KOS_UNAUTHORIZED", "401", "producer", False)
+        ingest_log.record_failure(db, 2, "s2", "E_KOS_NOT_CONFIGURED", "no cfg", "producer", False)
+
+        rows = _notifications(db)
+        assert len(rows) == 1
+        assert rows[0]["recurrence_no"] == 2
+        assert "internal_id=2" in rows[0]["body"]  # 文案刷新为最新一次
+
+    def test_notify_publish_failure_does_not_break_ledger_write(self, tmp_path, monkeypatch):
+        from src.notify.center import NotifyCenter
+
+        def boom(*a, **kw):
+            raise RuntimeError("notify center down")
+
+        monkeypatch.setattr(NotifyCenter, "publish", boom)
+        db = _db(_store(tmp_path))
+        status = ingest_log.record_failure(
+            db, 1, "s", "E_KOS_UNAUTHORIZED", "401", "producer", False
+        )
+        assert status == "dead"
+        assert _row(db, 1)["status"] == "dead"
+
+
+# ============================================================
 # producer 三态 + 台账双写 (验收 1)
 # ============================================================
 

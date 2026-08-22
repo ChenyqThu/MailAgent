@@ -32,6 +32,9 @@ import time
 from datetime import datetime
 from typing import Optional
 
+from loguru import logger
+
+from src.notify.center import NotifyCenter
 
 # ---- 错误码分类 (PRD §2.2 / D3) ---------------------------------------------
 # 永久类: 直接终态 dead, 不占重试预算 (重试 100 次也不会好: 配置/凭据/协议问题)。
@@ -237,9 +240,37 @@ def record_failure(
              now, new_count, next_at, error_code, source),
         )
         conn.commit()
+        if new_status == "dead":
+            _notify_dead(db_path, internal_id=internal_id, slug=slug, error_code=error_code)
         return new_status
     finally:
         conn.close()
+
+
+def _notify_dead(db_path: str, *, internal_id: int, slug: str, error_code: str) -> None:
+    """推送放弃 (status='dead') → system/warn 聚合通知 (design §7「KOS 推送放弃 dead」行)。
+
+    dedupe_key 固定为 kos_ingest:dead —— 每条新 dead 都计次到同一活跃行 (聚合计次,
+    不逐条开行); 通知路径绝不影响台账写入 (design §3.3 同款纪律): 整段 try 吞 + warning。
+    link 落 /settings?tab=integrations (frontend/src/shared/router-instance.tsx
+    SETTINGS_TABS 含 'integrations'; KOS 能力面板挂在该 tab 下)。
+    """
+    try:
+        NotifyCenter(db_path).publish(
+            category="system",
+            source="kos",
+            severity="warn",
+            title="KOS 推送放弃",
+            body=f"internal_id={internal_id} slug={slug} 错误码：{error_code}",
+            dedupe_key="kos_ingest:dead",
+            payload={
+                "link": {"type": "route", "to": "/settings", "search": {"tab": "integrations"}},
+                "internal_id": internal_id,
+                "error_code": error_code,
+            },
+        )
+    except Exception as e:  # noqa: BLE001 — 通知路径绝不影响台账写入
+        logger.warning(f"[kos-ingest-log] notify_center publish failed internal_id={internal_id}: {e}")
 
 
 def due_retry_count(db_path: str, now: Optional[float] = None) -> int:

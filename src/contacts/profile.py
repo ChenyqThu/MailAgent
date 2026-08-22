@@ -325,12 +325,20 @@ def _create_profile_identity_suggestions(
     evidence: ProfileEvidence,
     now_ms: int,
     org_frame: Optional[OrgFrame] = None,
-) -> None:
+) -> int:
+    """返回本次真正新建 (created=True) 的建议数。
+
+    通知中心接线 (task 08-20-notification-center 返工): 这里**不**在 conn 仍处于外层
+    事务时调用 ``governance.notify_pending_suggestion`` —— 那会与外层未提交的写锁死锁
+    (governance.create_suggestion 头注)。调用方须在其 ``with ... transaction()`` 块
+    退出 (commit 完成) 之后，按本函数返回值决定调用几次 notify_pending_suggestion。
+    """
     frame = org_frame if org_frame is not None else load_org_frame()
     row = contact_service._require_contact(conn, contact_id)
     locks = contact_service.parse_identity_locks(row["identity_locks_json"])
     evidence_items = _profile_identity_evidence(conn, evidence)
     suggestion_evidence = evidence_items[:3]
+    created_count = 0
     for field in ("role_title", "department", "formal_name"):
         value = payload.get(field)
         normalized_value = strip_evidence_refs(str(value)) if value is not None else ""
@@ -352,7 +360,7 @@ def _create_profile_identity_suggestions(
             )
             continue
         try:
-            governance.create_suggestion(
+            result = governance.create_suggestion(
                 conn,
                 suggestion_type="identity",
                 contact_ids=[contact_id],
@@ -361,11 +369,14 @@ def _create_profile_identity_suggestions(
                 now_ms=now_ms,
                 org_frame=frame,
             )
+            if result.get("created"):
+                created_count += 1
         except Exception as exc:
             logger.warning(
                 f"[contact-profile] contact={contact_id} identity suggestion failed "
                 f"for {field}: {exc}"
             )
+    return created_count
 
 
 def _anchor_tokens(value: Any) -> set[str]:
@@ -587,7 +598,7 @@ async def generate_contact_profile(
                 ),
             )
             try:
-                _create_profile_identity_suggestions(
+                created_count = _create_profile_identity_suggestions(
                     conn,
                     contact_id=contact_id,
                     payload=payload,
@@ -596,12 +607,17 @@ async def generate_contact_profile(
                     org_frame=org_frame,
                 )
             except Exception as exc:
+                created_count = 0
                 logger.warning(
                     f"[contact-profile] contact={contact_id} identity suggestion stage "
                     f"failed: {exc}"
                 )
         # 提交后广播: 画像生成完成, detail/list 即时刷新 (不等 3s 轮询)。
         _publish_contact_changed(contact_id, scope="profile")
+        # 通知中心: 必须在上面的 with 块 commit 之后才能调 (否则与其写锁死锁, 见
+        # governance.create_suggestion 头注); 每条真正新建的建议各计次一次。
+        for _ in range(created_count):
+            governance.notify_pending_suggestion(db_path)
         return "ok"
     except (LLMCallError, ValidationError, ValueError, TypeError, sqlite3.Error) as exc:
         _finish_failed(db_path, contact_id, now_ms=now_ms, error=str(exc))

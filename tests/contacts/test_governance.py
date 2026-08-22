@@ -90,6 +90,163 @@ def test_identity_dedupe_reuses_same_field_and_evidence(db):
     assert second == {"id": first["id"], "created": False, "status": "pending"}
 
 
+# ==================== 通知中心接线 (task 08-20-notification-center M2 批 B3b, 返工) ====================
+# design §7「contact 治理建议队列常驻计次」行。
+#
+# 🔴 返工记录 (2026-08-21): 最初实现在 create_suggestion 内部直接调用发通知——
+# create_suggestion 恒运行在调用方尚未提交的写事务里 (profile.py 的
+# `with ContactRepository(db_path).transaction() as conn:` / contact_agent.py 的
+# `with repo.transaction() as conn:`，两者都是 BEGIN IMMEDIATE 立即持写锁)。在这层
+# 事务内部再开 NotifyCenter 的独立连接抢 BEGIN IMMEDIATE，形成循环等待：外层 commit
+# 等 create_suggestion 返回 → create_suggestion 等 NotifyCenter → NotifyCenter 等外层
+# 的锁。这是结构性死锁，不是"事务短所以竞争窗口小"能救的——生产环境每次真实调用都会
+# 卡满 busy_timeout 才返回，且通知从未发出去。
+#
+# 修法: create_suggestion 只做 INSERT + 返回 created，不再碰通知；通知移到调用方
+# `with` 块退出 (commit 完成) 之后，按 created 是否为真调用
+# `governance.notify_pending_suggestion(db_path)`（独立、全新连接，不复用调用方 conn）。
+
+
+def _fetch_notifications(db_path: str) -> list[dict]:
+    nconn = sqlite3.connect(db_path)
+    nconn.row_factory = sqlite3.Row
+    try:
+        rows = nconn.execute("SELECT * FROM notification ORDER BY id").fetchall()
+    finally:
+        nconn.close()
+    return [dict(r) for r in rows]
+
+
+def _patch_notify_center_fast_timeout(monkeypatch) -> None:
+    """把 NotifyCenter 内部连接的 busy_timeout 缩短到亚秒级——仅用于让「事务内调用会
+    卡住」的红测试快跑，不改生产默认 (NotifyCenter._connect 硬编码 timeout=30.0 /
+    busy_timeout=30000)。"""
+    from src.notify.center import NotifyCenter
+
+    def _fast_connect(self):
+        conn = sqlite3.connect(self.db_path, timeout=0.2)
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA busy_timeout = 200")
+        return conn
+
+    monkeypatch.setattr(NotifyCenter, "_connect", _fast_connect)
+
+
+def test_publish_inside_open_transaction_raises_locked(db, monkeypatch):
+    """钉住死锁机制本身: 外层 conn 持有未提交的写事务时, 任何人在其内部尝试
+    NotifyCenter.publish (独立连接 BEGIN IMMEDIATE) 都会抢不到锁而抛
+    OperationalError('database is locked')——这正是最初实现的运行时症状
+    (被 create_suggestion 自己的 try/except 吞掉, 表现为「通知永远发不出去」)。"""
+    from src.notify.center import NotifyCenter
+
+    _patch_notify_center_fast_timeout(monkeypatch)
+    conn, path = db
+    result = _proposal(conn)  # INSERT 已执行, conn 仍处于未提交的隐式写事务
+    assert result["created"] is True
+
+    with pytest.raises(sqlite3.OperationalError, match="locked"):
+        NotifyCenter(path).publish(
+            category="reviews", source="contact", title="t",
+            dedupe_key="contact_suggestion:pending",
+        )
+
+
+def test_create_suggestion_returns_fast_and_never_calls_notify_directly(db, monkeypatch):
+    """回归闸: create_suggestion 不再在内部调用 notify_pending_suggestion——
+    用 spy 直接断言调用关系 (比计时更确定), 同时用缩短的 busy_timeout 兜底断言
+    耗时远低于「卡在锁上」的量级 (双重信号, 变异验证时任一个都应该翻红)。"""
+    called = []
+    monkeypatch.setattr(governance, "notify_pending_suggestion", lambda *a, **kw: called.append(a))
+    _patch_notify_center_fast_timeout(monkeypatch)
+
+    import time as _time
+
+    conn, _path = db
+    started = _time.monotonic()
+    result = _proposal(conn)
+    elapsed = _time.monotonic() - started
+
+    assert result["created"] is True
+    assert called == []  # create_suggestion 自己从不调用 notify_pending_suggestion
+    assert elapsed < 0.1  # 远低于 200ms 的 fast busy_timeout —— 没有尝试抢外层的写锁
+
+
+def test_notify_pending_suggestion_after_commit_publishes(db):
+    """修法路径: commit 之后再调用 notify_pending_suggestion, 独立连接不再有锁竞争。"""
+    conn, path = db
+    result = _proposal(conn)
+    conn.commit()
+    assert result["created"] is True
+
+    governance.notify_pending_suggestion(path)
+
+    rows = _fetch_notifications(path)
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["category"] == "reviews"
+    assert row["severity"] == "info"
+    assert row["source"] == "contact"
+    assert row["dedupe_key"] == "contact_suggestion:pending"
+    assert "1" in row["body"]
+    payload = json.loads(row["payload_json"])
+    assert payload["link"] == {"type": "contact_queue"}
+
+
+def test_notify_pending_suggestion_bumps_recurrence_for_each_created_call(db):
+    """聚合计次: 调用方对每条 created=True 的建议各调一次, dedupe_key 聚合到同一行。"""
+    conn, path = db
+    organization = _proposal(conn, payload={"field": "organization", "value": "ACME"})
+    department = _proposal(conn, payload={"field": "department", "value": "Platform"})
+    conn.commit()
+    assert organization["created"] is True
+    assert department["created"] is True
+
+    governance.notify_pending_suggestion(path)
+    governance.notify_pending_suggestion(path)
+
+    rows = _fetch_notifications(path)
+    assert len(rows) == 1  # 聚合到同一行, 不是两行
+    row = rows[0]
+    assert row["recurrence_no"] == 2
+    assert "2" in row["body"]
+
+
+def test_duplicate_suggestion_created_false_is_the_caller_gate(db):
+    """created=False 时调用方 (profile.py / contact_agent.py) 不该再调
+    notify_pending_suggestion——这里只验证 create_suggestion 的返回值门禁本身正确
+    (调用方门禁逻辑见 tests/contacts/test_profile.py / test_governance_api.py)。"""
+    conn, path = db
+    first = _proposal(conn)
+    second = _proposal(conn)
+    conn.commit()
+    assert first["created"] is True
+    assert second["created"] is False
+
+    governance.notify_pending_suggestion(path)  # 只有 first 该触发, 调用方只调一次
+
+    rows = _fetch_notifications(path)
+    assert len(rows) == 1
+    assert rows[0]["recurrence_no"] == 1
+
+
+def test_notify_publish_failure_does_not_break_suggestion_creation(db, monkeypatch):
+    """notify_pending_suggestion 自身吞异常, 不影响调用方的其余逻辑。"""
+    from src.notify.center import NotifyCenter
+
+    conn, path = db
+
+    def boom(*a, **kw):
+        raise RuntimeError("notify center down")
+
+    monkeypatch.setattr(NotifyCenter, "publish", boom)
+    result = _proposal(conn)
+    conn.commit()
+    assert result["created"] is True
+
+    governance.notify_pending_suggestion(path)  # 不应抛出
+    assert _fetch_notifications(path) == []
+
+
 @pytest.mark.parametrize(
     ("field", "value", "frame_text", "expected_payload"),
     [

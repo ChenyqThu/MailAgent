@@ -13,7 +13,7 @@ from src.api.routers.contacts import (
     get_contact_repository,
 )
 from src.api.schemas.contacts import ContactGovernanceProposalRequest
-from src.contacts.governance import create_suggestion
+from src.contacts.governance import create_suggestion, notify_pending_suggestion
 from src.contacts.repository import ContactRepository
 
 router = APIRouter(
@@ -40,4 +40,9 @@ async def propose_contact_governance(
             confidence=body.confidence,
             now_ms=int(time.time() * 1000),
         )
+    # 通知中心: 必须在 with 块 commit 之后调用 —— repo.transaction() 是
+    # BEGIN IMMEDIATE 立即持写锁, 块内调用 NotifyCenter (独立连接自己的
+    # BEGIN IMMEDIATE) 会与这把锁循环等待死锁 (governance.create_suggestion 头注)。
+    if result.get("created"):
+        notify_pending_suggestion(repo.db_path)
     return success_envelope(result, request=request, source="contact-agent")
