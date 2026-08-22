@@ -32,6 +32,7 @@
 | 报告 Agent 系统（日/周/月 + custom artifact） | 动 `src/reports/` / 报告 / Custom AI Agents 区前 | [`remote-chat-report/report-agent-prd.md`](./docs/reference/remote-chat-report/report-agent-prd.md) |
 | **Matters（事项）**（把「一件要推进的事」变成第一类对象） | 动 `src/matters/` / 事项前端 / 跟进 Agent / `matter_*` 表前 | [`matters/matters-architecture.md`](./docs/reference/matters/matters-architecture.md)（索引 [`matters/index.md`](./docs/reference/matters/index.md)） |
 | **通讯录 Contact Directory**（人级主键 + email 锚点账本） | 动 `src/contacts/` / `contact*` 三表 / `/api/contacts` / 通讯录前端 / compose 预填前 | [`contacts/contact-directory.md`](./docs/reference/contacts/contact-directory.md) |
+| **统一通知中心**（铃铛 + 持久化通知面，泛化 matter_attention 状态模型） | 动 `src/notify/center*` / `notification` 表 / 通知铃铛面板前 | [`notify-center/notification-center.md`](./docs/reference/notify-center/notification-center.md) |
 | Calendar Module（CalDAV → SQLite SSoT） | 动日历同步 / `calendar_event` 表前 | [`calendar/calendar-ops.md`](./docs/reference/calendar/calendar-ops.md) + [`calendar/calendar-module-prd.md`](./docs/reference/calendar/calendar-module-prd.md) |
 | v4 SQLite-SSoT（body/附件 SSoT + FTS5 全文搜索） | 动 `EmailRepository` / 双写 / 搜索前 | [`architecture/v4-ssot-ops.md`](./docs/reference/architecture/v4-ssot-ops.md) + [`architecture/architecture_v4_sqlite_ssot.md`](./docs/reference/architecture/architecture_v4_sqlite_ssot.md) |
 | 后端服务层（`src/services/` 统一写面 + async-jobs + 双层鉴权） | 改写操作（flag/resync/archive/pin/llm/compose/send）/ 加传输端 / 动 `src/services/` 前 | [`architecture/service-layer-architecture.md`](./docs/reference/architecture/service-layer-architecture.md) + `~/.claude/plans/cli-streamed-brook.md` |
@@ -221,7 +222,7 @@ sqlite3 data/sync_store.db "SELECT COUNT(*) FROM email_metadata WHERE sync_statu
 
 | 目录/模块 | 职责 |
 |------|------|
-| `src/notify/feishu.py` / `alert.py` | 飞书应用机器人通知（Card 2.0 form 交互）/ 飞书告警机器人 |
+| `src/notify/feishu.py` / `alert.py` / `center.py` | 飞书应用机器人通知（Card 2.0 form 交互）/ 飞书告警机器人 / 统一通知中心写面（`NotifyCenter`，持久化通知表，详见文档地图） |
 | `src/events/redis_consumer.py` / `handlers.py` | Redis BLPOP 消费者 / Webhook 事件处理器（flag_changed/ai_reviewed/completed/create_draft/query_mail/fetch_mail_content/search_email_bodies/page_updated）|
 | `src/notion/` | I-07 后 facade 拆分：`sync.py`(facade) + `client.py` + `pages.py` + `threads.py` + `queries.py` + `_common.py`。外部统一 `from src.notion.sync import NotionSync, CreateEmailFromSqliteResult, BEIJING_TZ`，勿直接 import 子组件 |
 | `src/calendar_notion/` | `sync.py` 日历→Notion · `caldav_reader.py` CalDAV 读 · `meeting_sync.py` 邮件 .ics → calendar_event |

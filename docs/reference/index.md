@@ -20,5 +20,6 @@
 | [`packaging/`](./packaging/index.md) | 打包 / 发布 / Onboarding —— 前后端一体化 .app 打包、发布、新老用户 onboarding。 |
 | [`web-remote/`](./web-remote/index.md) | V2 远程访问运维 —— Cloudflare Tunnel + serve-api + PWA 远程访问上线。 |
 | [`integrations/`](./integrations/index.md) | 集成面（Webhook / SSE / Openclaw / Notion） —— 对外集成的 API 与回调契约。 |
+| [`notify-center/`](./notify-center/index.md) | 统一通知中心 —— 铃铛 + 持久化通知面，后台任务完成/待办/系统告警的第一公民载体。 |
 | [`search/`](./search/index.md) | 邮件搜索 —— 搜索 Query DSL 的双端契约。 |
 | [`ops/`](./ops/index.md) | 运维 / 验收 —— 跨子系统的运维 Runbook 与真机验收。 |
