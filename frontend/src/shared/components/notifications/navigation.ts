@@ -14,7 +14,7 @@
 // 通道、一个直调 updater IPC），但**解析**这一步仍然只有这一处。
 
 /** 允许的 route 目标。值 = TanStack Router 的路由 path 字面量。 */
-export const NOTIFICATION_ROUTE_TARGETS = ['/agents', '/admin/kanban'] as const
+export const NOTIFICATION_ROUTE_TARGETS = ['/agents', '/admin/kanban', '/settings'] as const
 export type NotificationRouteTarget = (typeof NOTIFICATION_ROUTE_TARGETS)[number]
 
 export type NotificationLink =

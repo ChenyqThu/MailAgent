@@ -30,6 +30,14 @@ describe('resolveNotificationLink — 真实信源形状', () => {
     })
   })
 
+  it('KOS dead：/settings 带 integrations tab（ingest_log.py 的真实 link 形状）', () => {
+    expect(
+      resolveNotificationLink({
+        link: { type: 'route', to: '/settings', search: { tab: 'integrations' } }
+      })
+    ).toEqual({ type: 'route', to: '/settings', search: { tab: 'integrations' } })
+  })
+
   // M2 批 B5 的四型（design §6.4 表）——每一型都对应一个真实落地动作，解析错了就是
   // 「点了没反应」或「跳到别处」。
   it('报告完成：report 型带不透明 id', () => {
@@ -81,7 +89,7 @@ describe('resolveNotificationLink — 拒绝的形状（一律 null = 只标已�
     ['sessionId 为负', { link: { type: 'session', sessionId: -1 } }],
     ['sessionId 非整数', { link: { type: 'session', sessionId: 1.5 } }],
     ['route 缺 to', { link: { type: 'route' } }],
-    ['route 目标不在白名单', { link: { type: 'route', to: '/settings' } }],
+    ['route 目标不在白名单', { link: { type: 'route', to: '/matters' } }],
     ['route 目标是外链', { link: { type: 'route', to: 'https://example.test' } }],
     ['report 缺 reportId', { link: { type: 'report' } }],
     [
