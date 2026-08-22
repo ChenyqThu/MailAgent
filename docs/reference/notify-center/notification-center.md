@@ -1,8 +1,9 @@
-# 统一通知中心（task 08-20-notification-center，M1+M2）
+# 统一通知中心（task 08-20-notification-center，M1+M2+M3）
 
 > 常青参考：描述通知中心「现在如何」。过程产物（PRD / 技术设计 / 执行计划 / 调研）在
-> `.trellis/tasks/08-20-notification-center/`（local-only）；design.md 里的 M3 是**未来
-> 计划**，本文只写 M1/M2 已落地的现状，两者不要混读。
+> `.trellis/tasks/08-20-notification-center/`（local-only）；M1/M2/M3 已全部落地（灵动岛
+> 投影与飞书投影两项评估后缓行/跳过，见 §9 决策⑤⑥），本文按落地后的现状描述，design.md
+> 里标注的分期只作追溯参考。
 
 ## 1. 定位
 
@@ -22,8 +23,16 @@ M1 范围：3 个信源（agent run 终态、维护族 job 终态、系统告警
 
 M2 范围（已落地）：全量信源补齐（agents/matters/reports/contacts/kos 域 + 系统告警缺口五类
 + Electron main 两类，见 §6）+ snooze/resolve 动作端点 + 5 tab 面板 + hover 菜单 + 铃铛
-critical 红点档 + 六型 deep-link + macOS 原生通知 fanout（§7）。`AgentPendingBadge` /
-`SystemAlertBadge` 收编进铃铛仍未做，留到 dogfood 后（见 §10）。
+critical 红点档 + 六型 deep-link + macOS 原生通知 fanout（§7）。
+
+M3 范围（已落地，六个 commit：C1-C5 五个功能批 + 一个测试修复）：matter attention macOS 弹窗链收敛为
+worker 自 ack → 通知中心 → fanout 单链，退役老 `matter_notifications.ts` 转发链（§6
+M2 表 matter attention 行 / §9 决策②）；`contact_queue` 深链的抽屉 tab 复位；chat
+detached run 完成信源从 dormant 转为实际触发（§9 决策③）；系统告警自愈闭环（crash/
+crash-loop 自动 resolve、DavMail token/throttle 信源补齐、审批 TTL 过期归档，见 §6
+M3-C2 表）；TitleBar 旧徽标 `AgentPendingBadge` / `SystemAlertBadge` 收编进铃铛，
+`unread-count` 新增 `openByCategory` 轴支撑铃铛的待办持久点（§7）。灵动岛与飞书两处
+fanout 投影评估后分别判定跳过 / 缓行，未纳入本批，见 §9 决策⑤⑥。
 
 ## 2. 数据模型：`notification` 表（v68）
 
@@ -102,7 +111,7 @@ id、前端对不上被迫全量失效的教训——本事件干脆不发 id）
 | 端点 | 语义 |
 |---|---|
 | `GET /api/notifications` | `category?` / `state`（默认 `open`，含到期 snoozed）/ `unreadOnly?` / `limit`(1-100,默认50) / `offset`。`meta` 带 `count/total/limit/offset/unread`；非法枚举 400 `E_INVALID_ARG` |
-| `GET /api/notifications/unread-count` | `{total, byCategory, bySeverity}`——三轴出自**同一条** GROUP BY，口径按构造一致；`bySeverity` 是铃铛 critical 红点档的数据源 |
+| `GET /api/notifications/unread-count` | `{total, byCategory, bySeverity, openByCategory}`——四轴出自**同一条** GROUP BY（多带 `is_unread` 一维），口径按构造一致；`byCategory`/`bySeverity` 是**未读**轴（`bySeverity.critical>0` → 铃铛红点档），`openByCategory` 是**活跃**轴（`_OPEN_PREDICATE`，不带 `read_at` 过滤），供铃铛 `pendingActionCount` 待办持久点用（M3-C5，见 §7） |
 | `POST /api/notifications/read-all` | body `{category?}`，天然幂等，返回 `{updated}` |
 | `POST /api/notifications/{id}/read` | 单条已读，天然幂等，返回单条投影 |
 | `POST /api/notifications/{id}/snooze` | `mutation` 信封 + `until`(epoch ms) / `preset`（仅 `3d`，复用 `matters.SNOOZE_3D_MS`）二选一 + `Idempotency-Key` header 一致校验；CAS 只许活跃行，已关条目 409 `E_INVALID_STATE` |
@@ -137,7 +146,7 @@ core 的 CAS 兜底（同 `until` 的 snooze 重放落到同一终态；已关�
 | agent run 暂停待审批 | `run_worker.py::_publish_paused_notification`（`derive_agent_run_state=='paused_pending'` 时；终态到达先 `resolve_by_dedupe` 归档再发终态通知） | action_required | warn | `agent_run_paused:{job_id}`（逐条，不合并——用户要能逐条点） |
 | matter_followup 硬失败且无提案 | `run_worker.py::_publish_matter_failure`（三个失败调用点单点判定：`update_id_for_run` 有值=已有提案→不发） | results | warn | `matter_followup_failed:{matter_id}` |
 | matter 提案（`UPDATE_PROPOSED`） | `matters/run_service.py::_publish_update_notification`，事务 **commit 后**调用（同事务内调会与 `NotifyCenter` 的 `BEGIN IMMEDIATE` 死锁） | reviews | info | `matter_update:{update_id}` |
-| matter attention 信号 | `matters/worker.py::_publish_attention_notification`，与 `safe_publish('matter.notify')` **并列写入**、不碰 `last_notified_at` 水位；`needs_review` 跳过不发（已由上一行的提案通知覆盖）；一轮批量末尾只 `emit_changed` 一次 | action_required | 直通 signal severity（认不出的值 fail-safe 记 warn） | `matter_attention:{signal_id}` |
+| matter attention 信号 | `matters/worker.py::_publish_attention_notification`，`tick` 内两阶段自 ack：NC 落库成功才写 `last_notified_at`（M3-C1，取代已退役的 `matter_notifications.ts` 弹窗链，见 §9 决策②；落库失败不 ack，下一 tick 重试由 NC dedupe 吸收为计次）；`needs_review` 跳过不发但**无条件** ack（否则永留 eligible 每 tick 重发）；一轮批量末尾只 `emit_changed` 一次 | action_required | 直通 signal severity（认不出的值 fail-safe 记 warn） | `matter_attention:{signal_id}` |
 | worker crash / crash-loop | `src/utils/supervise.py::supervise`（`notify_center` 可选参数，20 个顶层 worker 共用；一次性任务失败也走 crash 分支） | system | crash=warn；crash-loop 停摆=critical | `alert:worker_crash:{name}` / `alert:worker_crashloop:{name}` |
 | IM 飞书对话 bot 失联 | `src/im/worker.py::_notify_unavailable`（与飞书 episode 同构，第二个 `nc.` 前缀 tracker 各记水位——飞书失联时它是唯一出口） | system | ≥5min=warn，≥30min 升 critical（severity 只升不降） | `alert:im_feishu_unavailable`（一条条目，不开第二条） |
 | DavMail 自动重启停摆 / 自动恢复失败 | `davmail_watchdog.py`，复用 M1 的 `_notify_davmail_alert` / `_notify_davmail_resolve` | system | critical | `alert:davmail:restart_storm` / `alert:davmail:auto_restart_failed` |
@@ -147,7 +156,7 @@ core 的 CAS 兜底（同 `until` 的 snooze 重放落到同一终态；已关�
 | 通讯录治理建议新增 | `contacts/governance.py::notify_pending_suggestion`，调用方（`contact_agent.py` / `profile.py`）必须在写事务 **commit 之后**调用（同事务内调用实测 30s busy_timeout 死锁，已钉回归测试） | reviews | info | `contact_suggestion:pending`（队列常驻聚合计次，body 报当前 pending 数） |
 | KOS 推送放弃（`status='dead'`） | `kos/ingest_log.py::_notify_dead` | system | warn | `kos_ingest:dead`（聚合计次） |
 | 应用更新已下载就绪 | Electron main `handlers/updater.ts`（`update-downloaded` 监听内），经 `publishNotificationToCenter` loopback | system | info | `app_update:{version}`（重启后 re-download 再触发由 dedupe 吸收） |
-| chat 对话完成（headless 非 agent 会话，dormant） | `ai_gateway_lifecycle.ts::persistTurn` → `notification_fanout.ts::maybeNotifyChatRunFinished` | results | info | `chat_session:{sessionId}:finished`（详见 §9 决策③，生产近乎不触发） |
+| chat detached run 完成 | `PersistTurnInput.detached`（onFinish 时刻经 `isClientGone` getter 求值，而非构造时快照；overflow-aware drain 与普通 streamOptions 两处 `makePersistOnFinish` 均接线）→ `notification_fanout.ts::maybeNotifyChatRunFinished` | results | info | `chat_run:{sessionId}:{runId}`（M3-C3 起随 `MAILAGENT_CHAT_DETACHED_RUNS` 实际触发，详见 §9 决策③；`approvalResume`/`agentRun`/`aguiRoute` 三处不传信号，恒不发） |
 
 ### M3-C2（补齐 System / Action Required 两 tab，为摘掉 TitleBar 旧徽标做前置）
 
@@ -174,10 +183,21 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
 
 ## 7. 前端（`frontend/src/shared/components/notifications/`）
 
-- **铃铛** `NotificationBellBadge.tsx`：挂 TitleBar 右簇（`AgentPendingBadge` / `SystemAlertBadge`
-  之后）。恒渲染，未读为 0 时是素图标按钮，未读 > 0 升级成 accent 计数徽标（配方照
-  `SystemAlertBadge`，上限 `99+`）；未读数请求未完成/失败时不显示计数点（不闪假 0）。
-  面板用 `createPortal` 送到 `document.body`（逃 TitleBar `backdrop-filter` 层叠上下文）。
+- **铃铛** `NotificationBellBadge.tsx`：M3-C5 起是 TitleBar 右簇**唯一**的告警/待办
+  入口——`SystemAlertBadge`（系统告警）与 `TitleBarAgentPendingBadge`（agent 待审批）
+  两枚旧徽标已从 TitleBar 摘除，内容分别归到面板的 System / Action Required tab
+  呈现（`SystemAlertBadge` 组件与测试整体删除，`/admin/system-alerts` 端点与
+  `SystemHealthRow` 消费面保留；`AgentPendingBadge` 只删 TitleBar 导出，`PendingDot` /
+  `AgentPendingCountBadge` / agents 域内部消费点全保留）。恒渲染，未读为 0 时是素图标
+  按钮，未读 > 0 升级成 accent 计数徽标（原 `SystemAlertBadge` 配方，上限 `99+`）；
+  未读数请求未完成/失败时不显示计数点（不闪假 0）。面板用 `createPortal` 送到
+  `document.body`（逃 TitleBar `backdrop-filter` 层叠上下文）。
+- **待办持久点** `bellBadgeState().pendingActionCount`：读 `unread-count.openByCategory`
+  的 `action_required` 值。这一轴不带 `read_at` 过滤，是 **level 型**语义——审批只要
+  还没批，条目就一直算数；与未读数的 **edge 型**语义（看过一眼就掉）正交。收编
+  `AgentPendingBadge` 前，「待审批」是一枚独立徽标、天然是持久点；收编后若只留未读轴，
+  用户点开面板扫一遍未读清零，审批却还没批，铃铛会误报「没事了」——这一档补的就是这个
+  缺口，铃铛因此在未读数之外再留一个持久点（tooltip/aria 报数）。
 - **未读数** `useNotificationUnreadCount`（`hooks.ts`）：`staleTime=4s` + `refetchInterval=60s`
   兜底轮询——SSE 是主通道，60s 只是断线/远程 web 构建（`HttpApi.onEvent` 恒 no-op）的保险丝，
   🔴 不是 5s（那是 perf epic 正在消灭的轮询风暴模板）。
@@ -195,9 +215,9 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
 - **铃铛红点档**：`bellBadgeState()` 读 `unread-count.bySeverity`，未读里有 `critical` →
   红点（`SystemAlertBadge` 的 fail 配方），否则 accent 计数点。
 - **deep-link** `navigation.ts::resolveNotificationLink`：判别 union 的单源解析器，支持六
-  型——`session`（跳会话）/ `route`（白名单仅 `/agents`、`/admin/kanban`；🔴 `/settings`
-  **不在**白名单，KOS dead 通知的 `/settings?tab=integrations` link 因此点击只标已读不跳转，
-  见 §10）/ `report`（store-intent `useReportNavigation`，`ReportsTab` 挂载时消费）/
+  型——`session`（跳会话）/ `route`（白名单 `/agents`、`/admin/kanban`、`/settings`，
+  最后一个是 KOS dead 通知 `/settings?tab=integrations` 的落点，`77984a4a` 补入）/
+  `report`（store-intent `useReportNavigation`，`ReportsTab` 挂载时消费）/
   `contact_queue`（`useContactNavigation` 的第二条轴，打开 `ContactAgentDrawer`）/ `matter`
   （现成 `useMatterNavigation`）/ `updater_restart`（直调 `api.updater.quitAndInstall()`，
   内建 `state!=='downloaded'` 守卫防误退出）。未知 type / 字段缺失 / 不在白名单 → 返回
@@ -229,45 +249,68 @@ evaluate/commit 代码一行未动。两处入口 guard 从「无 alerter 直接
    `database is locked`，后者实测卡满 30s busy_timeout 且通知丢失（已钉死锁回归测试）。
    统一处置：`create_suggestion` / `_publish_update_notification` **不**在内部发布，改为
    调用方在 `with ... transaction()` 块退出（commit 完成）之后再调用。
-2. **`needs_review` attention 信号在通知中心侧去重，交给 reviews 条目。** 提案落库
-   （`_publish_update_notification`）与 `needs_review` 关注信号（`_publish_attention_notification`）
-   面向同一个「有新提案待审阅」事件；`matters/worker.py` 判 `kind==NEEDS_REVIEW` 直接跳过
-   不发 action_required 条目，去重后审阅统一走 reviews（带 matter 链接更精准）。macOS
-   `matter.notify` 链不受影响，仍按原样并列写入。
-3. **chat 完成通知只接 headless 非 agent 会话，现状 dormant。** 真正的「渲染进程已断开」
-   信号（`clientGone`）未穿进 `PersistTurnInput`，判定退化为 `turn.runId == null`
-   （headless persist）；再排除 `session.origin === 'agent'`——那类会话终态已由
-   `run_worker.py` 的 M1 信源覆盖，照字面接会双发。两层收窄后本挂点在生产近乎不触发，
-   是有意保守；待 gateway 核心把 detached 信号穿进 `PersistTurnInput` 后再放宽。
+2. **`needs_review` attention 信号在通知中心侧去重，交给 reviews 条目；M3 起也随之
+   失去 macOS 弹窗。** 提案落库（`_publish_update_notification`）与 `needs_review`
+   关注信号（`_publish_attention_notification`）面向同一个「有新提案待审阅」事件；
+   `matters/worker.py` 判 `kind==NEEDS_REVIEW` 直接跳过不发 action_required 条目，
+   去重后审阅统一走 reviews（带 matter 链接更精准）。M2 阶段 macOS `matter.notify`
+   链（`matter_notifications.ts`）与通知中心并列写入、独立弹窗，`needs_review` 仍会
+   弹一条系统通知；M3-C1 退役该老链、`notification_fanout` 成为 matter attention
+   唯一弹窗来源后，`needs_review` 不再产生任何系统通知——面板 reviews 条目 + matter
+   UI 是唯一呈现。可逆：需要时在 worker 侧放开该分支的 publish 即可恢复弹窗。
+3. **chat 完成通知的判据经历「dormant → 激活」两阶段，M3-C3 已激活。** M2 阶段真正的
+   「渲染进程已断开」信号（`clientGone`）未穿进 `PersistTurnInput`，判定只能退化为
+   `turn.runId == null`（headless persist）再排除 `session.origin === 'agent'`，两层
+   收窄后生产近乎不触发，是有意保守。M3-C3 把 `clientGone` 改造成 `PersistTurnInput.
+   detached` 字段，在 `onFinish` 时刻经 `isClientGone` getter 求值（而非构造时快照）；
+   `handleChat` 的两处 `makePersistOnFinish`（overflow-aware drain 与普通
+   streamOptions）都接线——只接一处会让功能在生产主路径（drain）恒 dormant。fanout
+   判据换成 `turn.detached`，dedupe key 也从 `chat_session:{sessionId}:finished` 切成
+   `chat_run:{sessionId}:{runId}`；`approvalResume` / `agentRun` / `aguiRoute` 三条路径
+   各有正当理由不传该信号，恒不发。`MAILAGENT_CHAT_DETACHED_RUNS` 关闭时 `clientGone`
+   不武装，判据退化回恒 false，行为等同 M2。
 4. **paused 待办的归档点在 approval-state 端点，不在 run 终态路径。** 审批结算走
    `POST /api/agent-runs/{id}/approval-state` 后 run 不再回到 `_announce_terminal`，
    `agent_run_paused:{job_id}` 待办会永远挂着；`set_approval_state` 在 `code` 落到
    `ok`/`idempotent` 两个终态出口后统一调用 `resolve_by_dedupe`（幂等，吞异常）。
+5. **灵动岛投影跳过，不随 M3 一并做。** `_post_announce` 保持现状——无水位、也不与通知
+   中心去重，agent run 终态会同时出现在岛卡与铃铛/面板。这不是遗漏：岛整体处于「移除
+   评估已完成、暂缓执行」状态（[`docs/plans/remove-ping-island/README.md`](../../plans/remove-ping-island/README.md)），
+   为岛投影单独做一次收敛、再在岛退场时整段删除，是重复劳动；已把它记为该退役计划
+   批 1 的漏项（README §2.4），跟随岛的退场节奏一次性处理，不在通知中心专项内提前动。
+6. **飞书告警投影缓行，留独立批，不在本次 M3 内做。** 评估过的改造面：约 5 个文件、
+   40 处调用点，比 M2 任何一批都大；飞书是两阶段投递水位（`episode.py` 投递成功才
+   commit），通知中心侧目前没有对应字段能表达“已投给飞书”，候选方案是在 `sync_state`
+   开一个 `notify.fanout.feishu.<dedupe_key>` 键记水位（不需要 bump `DB_VERSION`）。
+   风险集中在告警链——这是全仓最讲“fail-open”纪律的一段代码，投影改造出错的代价是
+   丢真实告警而不是丢一条便利通知。现状是 `nc.` 前缀的第二个 `AlertEpisodeTracker`
+   与飞书告警的水位各记各的、并列运转正常（§6「告警『各记水位』」），唯一代价是两侧
+   触发阈值需要手工对齐（`service.py` 注释里已自认这点），可接受，故不急于合并。
 
 ## 10. 已知遗留
 
-- **`ContactAgentDrawer` 深链 tab 不复位**：`contact_queue` link 只置位
-  `useContactNavigation.queueRequested` → `setAgentOpen(true)`，抽屉内部 tab 是独立
-  `useState<AgentTab>('queue')`，若抽屉已挂载且用户之前切到过「运行记录」tab，再次点通知
-  只会打开抽屉而不会把 tab 切回「待审建议」。修复约 3 行（tab 状态需响应 `queueRequested`），
-  留到后续批次。
-- **`chat_run` 信源现状 dormant**：见 §9 决策③，判据收窄后生产近乎不产生这类通知。
 - **OAuth 失败条目只发不收**：日志里不会出现「OAuth 又好了」，无恢复信号可挂——用户读掉即清
   徽标，要清条目走面板「标记已处理」。
 - **升级过 M3-C2 的库里可能留一条孤儿 `alert:davmail:token_critical`**：token 通知的 dedupe_key
   由 `token_critical` 归并成 `token`，旧 key 的活跃行不会再被 resolve（只可能出现在 M1-M2 期间
   真的报过 ≥87d token 的库上）。面板手动「标记已处理」即可。
-- **KOS dead 通知的 deep-link 实际不可跳转**：`kos/ingest_log.py` 发的 link 是
-  `{type:'route', to:'/settings', search:{tab:'integrations'}}`，但前端白名单
-  `NOTIFICATION_ROUTE_TARGETS` 只有 `/agents`、`/admin/kanban`（`/settings` 未加入，
-  `notificationNavigation.test.ts` 已显式钉死这一断言）——点击这类通知只会标记已读，不会
-  跳转到设置页；需要时补白名单一行即可。
 
-## 11. 展望（M3，计划中，未落地）
+> 以下项目已随 M3 修复，不再是遗留：`ContactAgentDrawer` 深链 tab 不复位（M3-C4，
+> `queueNonce` 自增让抽屉响应重复点击）；`chat_run` 信源现状 dormant（M3-C3，见 §9
+> 决策③）；`AgentPendingBadge` / `SystemAlertBadge` 收编进铃铛未做（M3-C5，见 §7）；
+> worker crash 通知无自动 resolve（M3-C2，健康计时任务满 `healthy_after_sec` 后
+> `resolve_by_dedupe`）。
 
-灵动岛 `_post_announce`、macOS 系统通知、飞书告警降级为 publish 之后的 fanout 投影；轮询
-徽标改事件驱动；`AgentPendingBadge` / `SystemAlertBadge` 收编进铃铛（保留红点权重逻辑，
-先并行一版 dogfood 再摘除旧徽标）。M3 依赖 `08-20-perf-sse-realtime` 的事件补发面。
+## 11. 展望
+
+design.md 规划的 M1/M2/M3 三个分期均已完成或裁决（M3 六个 commit 见 §1）。design.md
+§11 原定的「M3 投影与收敛」拆成三项分别处理：
+
+- 灵动岛 `_post_announce` 投影——**跳过**，跟随灵动岛整体退场一次性处理，见 §9 决策⑤。
+- 飞书告警投影——**缓行**，留独立批，见 §9 决策⑥（候选方案与风险已写明）。
+- 轮询徽标改事件驱动——TitleBar 旧徽标已直接收编进铃铛（M3-C5），不再是独立的轮询
+  徽标；铃铛自身仍保留 60s 兜底轮询（§7），依赖 `08-20-perf-sse-realtime` 的事件补发
+  面把这道保险丝进一步收紧留给 perf epic 节奏，不在本专项范围内。
 
 ## 12. 测试与闸
 

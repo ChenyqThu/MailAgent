@@ -38,6 +38,7 @@
 |---|---|---|
 | `src/service.py` | :339-373 / :707-741 / :949-952 / :1210-1221 | island 初始化链 + 3 后台任务 + dead-letter 岛卡 hook（≈70 行） |
 | `src/mail/new_watcher.py` | :1840,:1869-1870,:2191-2192 + `_maybe_dispatch_island_received/reviewed` (:2410-2475) | 邮件到达/LLM 判定派发 hook（≈70 行） |
+| `src/agents/run_worker.py` | :516 调用 + :666-675 方法体 | `_post_announce` agent run 终态岛推送（M3 盘点补录：批 1 删 `src/api/routers/island.py` 后它会对不存在的路由每次终态发一次 404 loopback + warning，必须随批 1 同删；通知中心 `_publish_notification` 与它并列独立，不受影响） |
 | `src/events/handlers.py` | :493-505 | MailCompleted 岛派发 |
 | `src/calendar_sync/reminder.py` | :8-13,:82-110 | 会前提醒岛派发（其余日历逻辑不动） |
 | `src/config.py` | :890-950 等 | 13 个 island/digest Field（≈60 行） |

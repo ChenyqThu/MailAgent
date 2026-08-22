@@ -10,7 +10,7 @@ ephemeral token 两腿都过——`auth.py` 里本地 token 是它内置的第�
 `matters.router` / `reports.router` / `jobs.router` 口径一致；`POST /publish` 是
 Electron main 侧信源专用的 internal face，挂 **`verify_local_token` 单腿**（不接受
 CF JWT → 远程用户无法凭空写通知行），走独立 `_internal_router` 再 `routes.extend`
-到主 router（`matters.py` 的 `/attention/{id}/notified` 同款写法）。
+到主 router。
 
 写面全部经 `src.notify.center.NotifyCenter`（发布入口单源, PRD 基线 4）; 本文件只做
 query/body 解析 + `NotifyCenterError` → `APIError` 的错误码转换 + 投影转 camelCase wire。
@@ -323,8 +323,7 @@ async def publish_notification(
 
 
 # internal face 单独一条路由: 主 router 整体挂 `verify_cf_access`, 而 publish 只认
-# 本地 token (远程 CF 用户不得凭空写通知行) —— 同一 prefix 下换鉴权只能这样拆
-# (`matters.py` 的 `/attention/{signal_id}/notified` 先例)。
+# 本地 token (远程 CF 用户不得凭空写通知行) —— 同一 prefix 下换鉴权只能这样拆。
 _internal_router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 _internal_router.add_api_route(
     "/publish",
