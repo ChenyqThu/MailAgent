@@ -429,6 +429,57 @@ def test_attention_notification_severity_maps_straight_through(tmp_path, monkeyp
     assert got == expected
 
 
+def test_attention_notification_skips_needs_review_but_keeps_other_kinds(tmp_path, monkeypatch):
+    """`needs_review` 信号不进通知中心 (提案审阅由 run_service 的 reviews 条目精准覆盖)；
+    其余 kind (如 context_gap) 仍照发。macOS 的 `matter.notify` 链不受影响，两者都照发。
+
+    🔴 needs_review 必须走真实的 `matter_update(review_status='pending')` 事实产生
+    （`_collect_facts` 现场生成，不是 `open_signal` 直插）——`needs_review` 不在
+    `EVENT_DRIVEN_ATTENTION_KINDS` 里，`reconcile()` 会按事实表校验它；直插一条无
+    backing fact 的 needs_review 信号会被 reconcile 当成陈旧信号在本轮就地 resolve
+    掉，测试会在还没测到 `_publish_attention_notification` 之前就假阳性通过。
+    """
+    path = tmp_path / "attn-needs-review.db"
+    SyncStore(str(path))
+    repo = MatterRepository(path)
+    service = MatterService(repo, clock_ms=lambda: NOW)
+    m_review = service.create_matter(
+        {"title": "有提案待审阅"}, idempotency_key="c-review", source="test"
+    )["matter"]
+    m_gap = service.create_matter(
+        {"title": "缺资料"}, idempotency_key="c-gap", source="test"
+    )["matter"]
+    with sqlite3.connect(str(path)) as conn:
+        conn.execute(
+            "INSERT INTO matter_update (matter_id, review_status, anchored_matter_version, "
+            "created_by_kind, created_at) VALUES (?, 'pending', 1, 'agent', ?)",
+            (m_review["id"], NOW),
+        )
+        conn.commit()
+    gap_signal = MatterAgendaWorker(
+        repository=repo, sync_store=FakeState(), clock_ms=lambda: NOW, run_service=FakeRuns(),
+    ).attention.open_signal(
+        matter_id=m_gap["id"], kind="context_gap", subject_key="ctx",
+        severity="warn", why="缺资料",
+    )
+
+    events = _capture_events(monkeypatch)
+    worker = MatterAgendaWorker(
+        repository=repo, sync_store=FakeState(), clock_ms=lambda: NOW,
+        run_service=FakeRuns(), notify_level_reader=lambda: "all",
+    )
+    asyncio.run(worker.tick())
+
+    rows = _notifications(path)
+    # 唯一落库的一条就是 context_gap 那条；needs_review 一条都不该有
+    assert [row["dedupe_key"] for row in rows] == [f"matter_attention:{gap_signal['id']}"]
+    # macOS 链两条信号都照发（不受通知中心跳过 needs_review 影响）
+    matter_notify_kinds = {
+        e[1]["kind"] for e in events if e[0] == "matter.notify"
+    }
+    assert matter_notify_kinds == {"needs_review", "context_gap"}
+
+
 def test_attention_batch_emits_single_changed_event(tmp_path, monkeypatch):
     """一轮多条信号 → 通知逐条落库，刷新信号只发一条（design §3.2 批量写）。"""
     path = tmp_path / "attn-batch.db"

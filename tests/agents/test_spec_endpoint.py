@@ -31,6 +31,7 @@ from fastapi.testclient import TestClient  # noqa: E402
 from src.api.app import app  # noqa: E402
 import src.api.routers.agent_runs as agent_runs  # noqa: E402
 from src.mail.sync_store import SyncStore  # noqa: E402
+from src.notify.center import NotifyCenter  # noqa: E402
 from src.reports.store import ReportStore  # noqa: E402
 from src.sync.async_jobs import AsyncJobRepository  # noqa: E402
 
@@ -636,6 +637,98 @@ def test_approval_missing_job_404(env, client):
     r = client.post("/api/agent-runs/999999/approval-state", json={"state": "approved"})
     assert r.status_code == 404
     assert r.json()["error"]["code"] == "E_SPEC_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# approval-state 结算 → 归档通知中心待办（task 08-20-notification-center M2 B6）
+# ---------------------------------------------------------------------------
+
+
+def _notification_row(env, dedupe_key):
+    conn = sqlite3.connect(str(env.db))
+    conn.row_factory = sqlite3.Row
+    try:
+        return conn.execute(
+            "SELECT * FROM notification WHERE dedupe_key=?", (dedupe_key,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+
+def test_approval_settle_resolves_paused_notification(env, client):
+    """结算成功（'ok' 出口）→ 对应 agent_run_paused 待办被归档为 resolved。"""
+    jid = _paused_job(env)
+    dedupe_key = f"agent_run_paused:{jid}"
+    NotifyCenter(str(env.db)).publish(
+        category="action_required", source="agent_run",
+        title="待审批", body="等待用户确认", dedupe_key=dedupe_key,
+    )
+    assert _notification_row(env, dedupe_key)["state"] == "open"
+
+    r = client.post(f"/api/agent-runs/{jid}/approval-state", json={"state": "approved"})
+
+    assert r.status_code == 200
+    row = _notification_row(env, dedupe_key)
+    assert row["state"] == "resolved"
+    assert row["resolved_at"] is not None
+
+
+def test_approval_settle_idempotent_also_resolves(env, client):
+    """结算幂等（'idempotent' 出口）同样归档——第二次同值请求再调一次 resolve_by_dedupe 安全。"""
+    jid = _paused_job(env)
+    dedupe_key = f"agent_run_paused:{jid}"
+    NotifyCenter(str(env.db)).publish(
+        category="action_required", source="agent_run",
+        title="待审批", body="等待用户确认", dedupe_key=dedupe_key,
+    )
+    client.post(f"/api/agent-runs/{jid}/approval-state", json={"state": "rejected"})
+    assert _notification_row(env, dedupe_key)["state"] == "resolved"
+
+    r2 = client.post(f"/api/agent-runs/{jid}/approval-state", json={"state": "rejected"})
+
+    assert r2.status_code == 200
+    assert r2.json()["data"]["idempotent"] is True
+    assert _notification_row(env, dedupe_key)["state"] == "resolved"
+
+
+def test_approval_settle_no_active_notification_is_noop(env, client):
+    """没有对应的待办行（从未开过 / 已归档过）→ resolve_by_dedupe 返 0，结算响应仍 200。"""
+    jid = _paused_job(env)
+    r = client.post(f"/api/agent-runs/{jid}/approval-state", json={"state": "approved"})
+    assert r.status_code == 200
+    assert r.json()["data"]["approvalState"] == "approved"
+
+
+def test_approval_settle_notify_failure_does_not_break_response(env, client, monkeypatch):
+    """归档失败被吞——审批结算响应本身（含 result_json 写入）不受影响。"""
+    jid = _paused_job(env)
+
+    def boom(self, dedupe_key, *, emit_event=True):
+        raise RuntimeError("notification table gone")
+
+    monkeypatch.setattr(agent_runs.NotifyCenter, "resolve_by_dedupe", boom)
+
+    r = client.post(f"/api/agent-runs/{jid}/approval-state", json={"state": "approved"})
+
+    assert r.status_code == 200
+    assert r.json()["data"]["approvalState"] == "approved"
+    assert env.repo.get(jid).result["approval_state"] == "approved"
+
+
+def test_approval_conflict_409_does_not_resolve_notification(env, client):
+    """409（未结算成功）不归档——待办应保持 open。"""
+    jid = _paused_job(env)
+    dedupe_key = f"agent_run_paused:{jid}"
+    NotifyCenter(str(env.db)).publish(
+        category="action_required", source="agent_run",
+        title="待审批", body="等待用户确认", dedupe_key=dedupe_key,
+    )
+    client.post(f"/api/agent-runs/{jid}/approval-state", json={"state": "approved"})
+    r = client.post(f"/api/agent-runs/{jid}/approval-state", json={"state": "rejected"})
+
+    assert r.status_code == 409
+    # 已被首次 approved 结算归档；本次 409 请求不应再动它（保持 resolved 不是又一次 no-op 归档）
+    assert _notification_row(env, dedupe_key)["state"] == "resolved"
 
 
 def test_approval_invalid_state_422(env, client):

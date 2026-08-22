@@ -15,7 +15,7 @@ from src.notify.center import NotifyCenter
 from src.notify.center_models import NOTIFICATION_SEVERITY_VALUES
 
 from .attention import AttentionService
-from .models import MatterRunTrigger
+from .models import MatterAttentionKind, MatterRunTrigger
 from .repository import MatterRepository
 from .run_service import MatterRunService
 from .triggers import (
@@ -129,7 +129,14 @@ class MatterAgendaWorker:
         severity 直通：`MatterAttentionSeverity` 与通知中心值域同为 info/warn/critical
         （center_models.py:37-39 已注记「无需映射表」），认不出的值 fail-safe 记 warn
         而不是丢掉这条信号。
+
+        🔴 `needs_review` 跳过不发：提案落库时 `MatterRunService._publish_update_notification`
+        已经在同一事件上发过一条更精准的 reviews 条目（带 matter link）。两条通知面向
+        同一个「有提案待审阅」事件，这里再发一条 action_required 是重复——去重交给
+        reviews 侧，这里直接跳过（macOS `matter.notify` 链不受影响，仍照发，见 `tick`）。
         """
+        if signal.get("kind") == MatterAttentionKind.NEEDS_REVIEW:
+            return False
         try:
             matter = signal["matter"]
             severity = str(signal.get("severity") or "")

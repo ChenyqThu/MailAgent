@@ -45,6 +45,7 @@ from src.agents.trigger import (
 from src.api.app import APIError, success_envelope
 from src.api.auth import verify_cf_access, verify_local_token
 from src.api.deps import get_job_repo, get_report_store, get_repository
+from src.notify.center import NotifyCenter
 from src.sync.async_jobs import AsyncJob
 from src.chat.db import ChatDb
 
@@ -553,6 +554,15 @@ async def set_approval_state(request: Request, job_id: int, body: _ApprovalState
             )
         except Exception:
             pass
+    # 通知中心归档 (task 08-20-notification-center M2 B6): code 到这一步只剩 'ok'/'idempotent'，
+    # 两者都代表 approval_state 已落到终态 —— 归档 run_worker 在 paused_pending 时开的
+    # action_required 待办 (dedupe_key=f"agent_run_paused:{job_id}")。复用 job_repo 的 db_path
+    # (与 async_jobs 同库，无需引入 settings 依赖)。无活跃行 (已归档过 / 从未开过) 返 0 不抛；
+    # 吞异常 —— 通知失败不影响审批结算本身的响应。
+    try:
+        NotifyCenter(get_job_repo().db_path).resolve_by_dedupe(f"agent_run_paused:{job_id}")
+    except Exception:
+        logger.warning(f"approval-state settle: resolve_by_dedupe failed for job {job_id}")
     return success_envelope(
         {"jobId": job_id, "approvalState": body.state, "idempotent": code == "idempotent"},
         request=request, source="agent-runs",
