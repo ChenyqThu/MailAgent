@@ -6732,6 +6732,22 @@
     "tooltipEmpty": "Notifications",
     "unreadChip": "{count} unread",
     "markAllRead": "Mark all as read",
+    "tabsAria": "Notification categories",
+    "tab": {
+      "all": "All",
+      "action_required": "Action",
+      "reviews": "Reviews",
+      "results": "Results",
+      "system": "System"
+    },
+    "menu": {
+      "trigger": "More actions",
+      "snooze": "Snooze",
+      "snoozeHour": "In 1 hour",
+      "snoozeTomorrow": "Tomorrow morning",
+      "snoozeThreeDays": "In 3 days",
+      "resolve": "Mark as resolved"
+    },
     "unreadDot": "Unread",
     "recurrence": "×{count}",
     "recurrenceTitle": "This notification recurred {count} times",

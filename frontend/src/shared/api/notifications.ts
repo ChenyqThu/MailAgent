@@ -2,7 +2,8 @@
 // 工厂形状：`createNotificationsApi(baseUrl)`，请求走 shared/api/http_client 的 envelope 解包
 // （baseUrl 已含 `/api`，所以这里的 path 是 `/notifications…`）。
 //
-// M1 只有四个端点（design §5）；snooze / resolve / publish 是 M2，不预先摆空方法。
+// M2 追加 snooze / resolve 两个动作端点（design §5）；`publish` 是 Electron main 侧的
+// internal face（loopback + 本地 token），renderer 永远不调，故这里仍不摆。
 
 import { request, requestWithMeta } from './http_client'
 import type {
@@ -29,6 +30,30 @@ export interface NotificationsApi {
   /** 不传 category = 全部类别。返回被标记的行数。 */
   readAll(category?: NotificationCategory): Promise<{ updated: number }>
   markRead(notificationId: number): Promise<NotificationItem>
+  /** 稍后提醒。`untilMs` 是**显式 epoch 毫秒**：服务端也收 `preset`，但那套预设只有
+   *  `3d` 一档，而「明天早上」这类档位本就该按**用户本地时区**算 —— 换算留在前端
+   *  （`notificationModel.ts::snoozeUntilMs`），wire 上只传算好的时刻。 */
+  snooze(notificationId: number, untilMs: number): Promise<NotificationItem>
+  /** 标记已处理。与「已读」是两个独立轴：resolve 不动 `readAt`。 */
+  resolve(notificationId: number): Promise<NotificationItem>
+}
+
+let fallbackKeyCounter = 0
+
+/** mutation 信封（`src/api/schemas/matters.py::MutationEnvelope`，通知端点复用同一个
+ *  DTO）+ 与之一致的 `Idempotency-Key` header —— 服务端逐字比对两者，不一致直接
+ *  `E_IDEMPOTENCY_CONFLICT`。形状照 `api/matters.ts::mutationRequest`；`expected_version`
+ *  / `reason` 是可选字段，通知动作两者都没有，故不发（StrictModel 只禁多字段，不要求
+ *  显式 null）。 */
+function mutationRequest(): { body: Record<string, unknown>; headers: Record<string, string> } {
+  const idempotencyKey =
+    typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function'
+      ? crypto.randomUUID()
+      : `notification-${Date.now()}-${(fallbackKeyCounter += 1)}`
+  return {
+    body: { mutation: { source: 'desktop_ui', idempotency_key: idempotencyKey } },
+    headers: { 'Idempotency-Key': idempotencyKey }
+  }
 }
 
 /** meta 里的计数字段。老服务端/测试桩缺字段时回落 `fallback`，不硬造数字也不 NaN。 */
@@ -78,6 +103,19 @@ export function createNotificationsApi(baseUrl: string): NotificationsApi {
 
     markRead(notificationId: number): Promise<NotificationItem> {
       return request(baseUrl, 'POST', `/notifications/${notificationId}/read`)
+    },
+
+    snooze(notificationId: number, untilMs: number): Promise<NotificationItem> {
+      const { body, headers } = mutationRequest()
+      return request(baseUrl, 'POST', `/notifications/${notificationId}/snooze`, {
+        body: { ...body, until: untilMs },
+        headers
+      })
+    },
+
+    resolve(notificationId: number): Promise<NotificationItem> {
+      const { body, headers } = mutationRequest()
+      return request(baseUrl, 'POST', `/notifications/${notificationId}/resolve`, { body, headers })
     }
   }
 }

@@ -1,6 +1,6 @@
 // Sprint 20 — 报告 tab：master 列表（cadence 过滤 + 状态徽标）+ 详情（BlockRenderer
 // + generating/failed/empty 态）。窄屏单栏 + 返回栈。移植自 ~/Downloads/agents/reports.jsx。
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { Check, Trash2, X } from 'lucide-react'
 
@@ -14,6 +14,7 @@ import { BlockRenderer } from './BlockRenderer'
 import { EmailSourcePanel } from './EmailSourcePanel'
 import { CadencePill, ReportIcon, StatusBadge } from './primitives'
 import { AgentAvatar } from './AgentAvatar'
+import { useReportNavigation } from './reportNavigation'
 import {
   FIXED_RENDER,
   fmtClock,
@@ -794,6 +795,21 @@ export function ReportsTab(): React.ReactElement {
     setPicked(id)
     if (narrow) setMobileDetail(true)
   }
+
+  // 跨页直达：通知中心的「报告完成」条目在 store 里点名一份报告后 navigate 到
+  // `/agents?tab=reports`，本 effect 消费即清（reportNavigation.ts 头注写了为什么走
+  // store-intent 而不是搜索参数）。
+  // 🔴 不等列表落定：`picked` 只是一个 id，命中与否由下面的 `selected` 每次现算 ——
+  // 提前落下反而免掉「先闪一眼列表第一份再跳走」。那份报告始终不在列表里（分页没翻到 /
+  // 已被删）时它就一直不命中，选中自然停在第一份，不弹空详情。
+  const navigationTargetReportId = useReportNavigation((state) => state.targetReportId)
+  const clearReportNavigation = useReportNavigation((state) => state.clear)
+  useEffect(() => {
+    if (navigationTargetReportId === null) return
+    setPicked(navigationTargetReportId)
+    if (narrow) setMobileDetail(true)
+    clearReportNavigation()
+  }, [clearReportNavigation, narrow, navigationTargetReportId])
   const onRetry = (): void => {
     if (selected && !isRunning) void run(selected.agent_id, { cadence: selected.cadence })
   }

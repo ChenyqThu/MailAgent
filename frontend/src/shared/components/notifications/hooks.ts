@@ -42,13 +42,17 @@ export function useNotificationUnreadCount(): UseQueryResult<NotificationUnreadC
   })
 }
 
-/** 面板列表。M1 只有 All（category=null）+ 活跃态（state='open'，含到期 snoozed）；
- *  `enabled` 由面板开合驱动 —— 关着的时候一次都不拉（AgentPendingBadge 的「不白拉」精神）。 */
-export function useNotificationList(open: boolean): UseQueryResult<NotificationListResult> {
+/** 面板列表。活跃态（state='open'，含到期 snoozed）+ 当前 tab 的 category（null = All）；
+ *  `enabled` 由面板开合驱动 —— 关着的时候一次都不拉（AgentPendingBadge 的「不白拉」精神）。
+ *  category 进 queryKey：切 tab = 另一份结果集，各自缓存、来回切不重取。 */
+export function useNotificationList(
+  open: boolean,
+  category: NotificationCategory | null
+): UseQueryResult<NotificationListResult> {
   const api = useNotificationsApi()
   return useQuery({
-    queryKey: qk.notifications.list(null, 'open'),
-    queryFn: () => api.list({ state: 'open', limit: 50 }),
+    queryKey: qk.notifications.list(category, 'open'),
+    queryFn: () => api.list({ state: 'open', limit: 50, category: category ?? undefined }),
     enabled: open,
     staleTime: 4_000
   })
@@ -64,7 +68,8 @@ export function useMarkNotificationRead(): UseMutationResult<NotificationItem, E
   })
 }
 
-/** 全部已读。`category` 省略 = 全部类别（M1 面板只有 All，恒省略）。 */
+/** 全部已读。`category` 省略 = 全部类别；面板传当前 tab 的 category —— 标的是用户正
+ *  看着的那一份（All tab 才是全部）。 */
 export function useMarkAllNotificationsRead(): UseMutationResult<
   { updated: number },
   Error,
@@ -74,6 +79,33 @@ export function useMarkAllNotificationsRead(): UseMutationResult<
   const client = useQueryClient()
   return useMutation({
     mutationFn: (category?: NotificationCategory) => api.readAll(category),
+    onSuccess: () => refreshNotifications(client)
+  })
+}
+
+/** 稍后提醒（M2）。`until` 由调用方按本地时区算好（`notificationModel.ts::snoozeUntilMs`）。
+ *  成功后条目从 open 列表消失（服务端列表默认 state='open'，未到期 snoozed 不在内）。
+ *  零乐观更新：失败时条目留在原位（与 markRead 同一条纪律）。 */
+export function useSnoozeNotification(): UseMutationResult<
+  NotificationItem,
+  Error,
+  { id: number; untilMs: number }
+> {
+  const api = useNotificationsApi()
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, untilMs }: { id: number; untilMs: number }) => api.snooze(id, untilMs),
+    onSuccess: () => refreshNotifications(client)
+  })
+}
+
+/** 标记已处理（M2）。与「已读」是两个独立轴 —— resolve 不动 readAt，条目从徽标里消失
+ *  是 state 的效果。 */
+export function useResolveNotification(): UseMutationResult<NotificationItem, Error, number> {
+  const api = useNotificationsApi()
+  const client = useQueryClient()
+  return useMutation({
+    mutationFn: (notificationId: number) => api.resolve(notificationId),
     onSuccess: () => refreshNotifications(client)
   })
 }

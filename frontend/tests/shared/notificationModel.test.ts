@@ -1,12 +1,26 @@
-// 通知面板分日口径的行为测试（task 08-20-notification-center 步骤 7）。
+// 通知面板纯呈现逻辑的行为测试（task 08-20-notification-center 步骤 7 + M2 批 B5）。
 //
 // 为什么值得测：分日判据是「当地零点之差」而不是 `(now - ts) / 86400000`。后者在跨夏令时
 // 那天差一小时，会把昨晚的条目错分进「今天」—— 这类错误在界面上只表现为组头站错队，肉眼
-// 极难发现，回归也不会有别的测试拦住。
+// 极难发现，回归也不会有别的测试拦住。snooze 档位换算同理（且错的时刻要等一小时后才看
+// 得出来）。
+//
+// 时区由 vitest.config.ts 钉死 America/Los_Angeles —— 下面的夏令时用例（2026-03-08 前拨 /
+// 2026-11-01 回拨）因此在任何机器上都真的跨 DST，不是形式主义。
 
 import { describe, expect, it } from 'vitest'
 
-import { dayBucketOf, groupByDay } from '@shared/components/notifications/notificationModel'
+import type { NotificationUnreadCount } from '@shared/api/types/notifications'
+import { NOTIFICATION_CATEGORY_VALUES } from '@shared/api/types/notifications'
+import {
+  NOTIFICATION_TAB_IDS,
+  bellBadgeState,
+  dayBucketOf,
+  groupByDay,
+  snoozeUntilMs,
+  tabCategory,
+  tabUnread
+} from '@shared/components/notifications/notificationModel'
 
 /** 本地时区的某天某点（测试跟随运行机器的时区，与被测函数同口径）。 */
 function at(y: number, m: number, d: number, hh: number, mm = 0): number {
@@ -80,5 +94,134 @@ describe('groupByDay', () => {
       now
     )
     expect(groups.map((g) => g.bucket)).toEqual(['today', 'yesterday', 'today'])
+  })
+})
+
+// ─── tab 值域（M2）─────────────────────────────────────────────────────────
+
+describe('通知面板 tab', () => {
+  it('tab 集 = 「全部」+ 四个 category，顺序跟随值域单源', () => {
+    expect(NOTIFICATION_TAB_IDS).toEqual(['all', ...NOTIFICATION_CATEGORY_VALUES])
+    // 每个 category 恰好一个 tab —— 漏一个 = 那类通知在面板里没有入口。
+    expect(NOTIFICATION_TAB_IDS.length).toBe(NOTIFICATION_CATEGORY_VALUES.length + 1)
+  })
+
+  it('tabCategory：all → null（不过滤），其余 → 自身', () => {
+    expect(tabCategory('all')).toBeNull()
+    for (const category of NOTIFICATION_CATEGORY_VALUES) {
+      expect(tabCategory(category)).toBe(category)
+    }
+  })
+
+  // 🔴 桩里 total(8) **有意**不等于 byCategory 之和(7)：真实服务端两者一致，那样的桩会
+  // 让「all 取 total」与「all 把四类加起来」两种实现都绿 —— 恒绿装饰。
+  const counts: NotificationUnreadCount = {
+    total: 8,
+    byCategory: { action_required: 3, reviews: 0, results: 4, system: 0 },
+    bySeverity: { info: 5, warn: 3, critical: 0 }
+  }
+
+  it('tabUnread：all 取服务端 total（不在前端把 byCategory 加起来）', () => {
+    expect(tabUnread('all', counts)).toBe(8)
+  })
+
+  it('tabUnread：类目 tab 取该类目', () => {
+    expect(tabUnread('action_required', counts)).toBe(3)
+    expect(tabUnread('reviews', counts)).toBe(0)
+  })
+
+  it('tabUnread：计数还没到 → 0（不渲染计数）', () => {
+    expect(tabUnread('all', undefined)).toBe(0)
+    expect(tabUnread('system', undefined)).toBe(0)
+  })
+})
+
+// ─── 铃铛徽标判据（M2）─────────────────────────────────────────────────────
+
+describe('bellBadgeState', () => {
+  const withSeverity = (critical: number, total = critical): NotificationUnreadCount => ({
+    total,
+    byCategory: { action_required: 0, reviews: 0, results: 0, system: total },
+    bySeverity: { info: 0, warn: 0, critical }
+  })
+
+  it('计数未到 → unread=null（调用方据此不渲染计数点，而不是闪一个假的 0）', () => {
+    expect(bellBadgeState(undefined)).toEqual({ unread: null, critical: false })
+  })
+
+  it('未读为 0 → unread=0 且不是红点档', () => {
+    expect(bellBadgeState(withSeverity(0, 0))).toEqual({ unread: 0, critical: false })
+  })
+
+  it('未读里有 critical → 红点档', () => {
+    expect(bellBadgeState(withSeverity(2, 5))).toEqual({ unread: 5, critical: true })
+  })
+
+  it('只有 warn/info → 计数点档（红点是「有严重的事」，不是「有事」）', () => {
+    expect(
+      bellBadgeState({
+        total: 6,
+        byCategory: { action_required: 1, reviews: 2, results: 3, system: 0 },
+        bySeverity: { info: 4, warn: 2, critical: 0 }
+      })
+    ).toEqual({ unread: 6, critical: false })
+  })
+
+  it('服务端还没上 bySeverity（比前端旧）→ 退化成计数点，不炸', () => {
+    const legacy = {
+      total: 3,
+      byCategory: { action_required: 0, reviews: 0, results: 3, system: 0 }
+    } as NotificationUnreadCount
+    expect(bellBadgeState(legacy)).toEqual({ unread: 3, critical: false })
+  })
+})
+
+// ─── snooze 档位换算（M2）──────────────────────────────────────────────────
+
+describe('snoozeUntilMs', () => {
+  const HOUR = 60 * 60 * 1000
+
+  it('1 小时后 = 真实流逝一小时（春季前拨那天钟点因此从 01:30 跳到 03:30）', () => {
+    const plain = at(2026, 8, 21, 14, 30)
+    expect(snoozeUntilMs('hour', plain) - plain).toBe(HOUR)
+    // 2026-03-08 02:00 PST → 03:00 PDT：01:30 加一小时的墙上时间是 03:30 而不是 02:30。
+    const beforeSpringForward = at(2026, 3, 8, 1, 30)
+    expect(new Date(snoozeUntilMs('hour', beforeSpringForward)).getHours()).toBe(3)
+  })
+
+  it('明天早上 = 次日 08:00 本地时区', () => {
+    const result = snoozeUntilMs('tomorrow', at(2026, 8, 21, 14, 30))
+    const d = new Date(result)
+    expect([d.getMonth() + 1, d.getDate()]).toEqual([8, 22])
+    expect([d.getHours(), d.getMinutes()]).toEqual([8, 0])
+  })
+
+  it('明天早上：凌晨点的也是**明天**，不是几小时后的今天早上', () => {
+    const d = new Date(snoozeUntilMs('tomorrow', at(2026, 8, 21, 3, 0)))
+    expect([d.getDate(), d.getHours()]).toEqual([22, 8])
+  })
+
+  it('🔴 明天早上跨夏令时回拨日仍是 08:00（加固定 24h 会算成 07:00）', () => {
+    // 2026-11-01 回拨：Oct 31 20:00 PDT 的「明天早上」= Nov 1 08:00 PST，实际流逝 13 小时。
+    const now = at(2026, 10, 31, 20, 0)
+    const result = snoozeUntilMs('tomorrow', now)
+    const d = new Date(result)
+    expect([d.getDate(), d.getHours()]).toEqual([1, 8])
+    expect(result - now).toBe(13 * HOUR)
+  })
+
+  it('🔴 3 天后 = 同一墙上钟点（回拨周里真实流逝 73 小时，不是 72）', () => {
+    const now = at(2026, 10, 31, 12, 0)
+    const result = snoozeUntilMs('threeDays', now)
+    const d = new Date(result)
+    expect([d.getMonth() + 1, d.getDate(), d.getHours()]).toEqual([11, 3, 12])
+    expect(result - now).toBe(73 * HOUR)
+  })
+
+  it('三档都落在未来（服务端 snooze 拒收过去时刻 → 400）', () => {
+    const now = at(2026, 8, 21, 23, 59)
+    for (const preset of ['hour', 'tomorrow', 'threeDays'] as const) {
+      expect(snoozeUntilMs(preset, now)).toBeGreaterThan(now)
+    }
   })
 })

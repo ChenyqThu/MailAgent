@@ -1,13 +1,16 @@
-// 通知面板内容（task 08-20-notification-center 步骤 7；design §6.3，视觉基线 = owner
-// 拍板的 mockup「MailAgent 通知中心」Main/Empty）。
+// 通知面板内容（task 08-20-notification-center 步骤 7 + M2 批 B5；design §6.3，视觉基线 =
+// owner 拍板的 mockup「MailAgent 通知中心」Main/Empty）。
 //
 // 壳（portal / theme-popover 几何 / 出入场动画）在 `NotificationBellBadge.tsx`，这里只画内容：
-//   Header（kicker + 标题 + 未读 chip + 全部标为已读） → 列表（按本地时区分「今天/昨天/更早」）
-//   → 空态。
-// M1 **不渲染 tab 行**（design §6.3：5 tab 是 M2；mockup 画的是终局形态）。分日、相对时间、
-// 图标/色调映射全是纯前端呈现逻辑 —— 后端 list 契约不变、不加分组参数。
+//   Header（kicker + 标题 + 未读 chip + 全部标为已读） → tab 行（全部 + 四个 category）
+//   → 列表（按本地时区分「今天/昨天/更早」）→ 空态。
+// 分日、相对时间、图标/色调映射全是纯前端呈现逻辑 —— 后端 list 契约不变、不加分组参数。
+//
+// M2 补上的三件：① 5 个 tab + per-tab 未读数（`byCategory`，与徽标同一条查询）；
+// ② 每条 hover 出 `⋯` → Snooze / 标记已处理；③ deep-link 从两型扩到六型（解析仍在
+// `navigation.ts` 单源，这里只负责「解析结果 → 落地动作」的那一跳）。
 
-import { useMemo, useState } from 'react'
+import { useMemo, useRef, useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
@@ -16,6 +19,7 @@ import {
   CheckCheck,
   FileText,
   Info,
+  MoreHorizontal,
   ShieldAlert,
   SquarePen
 } from 'lucide-react'
@@ -24,10 +28,33 @@ import type { NotificationCategory, NotificationItem } from '@shared/api/types/n
 import { cn } from '@shared/lib/cn'
 import { ageLabel } from '@shared/lib/ageLabel'
 import { requestOpenAgentSession } from '@shared/state/ai-chat-panel'
+import { Popmenu, type PopmenuItem } from '@shared/components/ui/Popmenu'
+import { SegmentedControl } from '@shared/components/ui/segmented'
+import { useMailApi } from '@shared/hooks/useMailApi'
+import { useReportNavigation } from '@shared/components/agents/reportNavigation'
+import { useContactNavigation } from '@shared/components/contacts/navigation'
+import { useMatterNavigation } from '@shared/components/matters/navigation'
 
-import { useMarkAllNotificationsRead, useMarkNotificationRead, useNotificationList } from './hooks'
+import {
+  useMarkAllNotificationsRead,
+  useMarkNotificationRead,
+  useNotificationList,
+  useNotificationUnreadCount,
+  useResolveNotification,
+  useSnoozeNotification
+} from './hooks'
 import { resolveNotificationLink } from './navigation'
-import { RELATIVE_WINDOW_MS, groupByDay } from './notificationModel'
+import {
+  NOTIFICATION_TAB_IDS,
+  RELATIVE_WINDOW_MS,
+  SNOOZE_PRESETS,
+  groupByDay,
+  snoozeUntilMs,
+  tabCategory,
+  tabUnread,
+  type NotificationTabId,
+  type SnoozePreset
+} from './notificationModel'
 
 type Tone = 'coral' | 'ai' | 'ok' | 'fail' | 'info'
 
@@ -74,18 +101,34 @@ function metaOf(item: NotificationItem): { Icon: typeof Bell; tone: Tone } {
   return CATEGORY_META[item.category]
 }
 
+/** Snooze 档位 → i18n key（档位值域单源在 notificationModel，这里只映射文案）。 */
+const SNOOZE_LABEL_KEY: Record<SnoozePreset, string> = {
+  hour: 'notifications.menu.snoozeHour',
+  tomorrow: 'notifications.menu.snoozeTomorrow',
+  threeDays: 'notifications.menu.snoozeThreeDays'
+}
+
 function NotificationRow({
   item,
   nowMs,
-  onActivate
+  menuOpen,
+  onMenuOpenChange,
+  onActivate,
+  onSnooze,
+  onResolve
 }: {
   item: NotificationItem
   /** 由面板统一注入的「此刻」（见 NotificationPanel 里 nowMs 的取法）—— 逐行各读一次
    *  `Date.now()` 会让同一屏的相对时间基准不一致，也过不了 react-hooks/purity。 */
   nowMs: number
+  menuOpen: boolean
+  onMenuOpenChange(id: number | null): void
   onActivate(item: NotificationItem): void
+  onSnooze(item: NotificationItem, preset: SnoozePreset): void
+  onResolve(item: NotificationItem): void
 }): React.ReactElement {
   const { t } = useTranslation()
+  const moreRef = useRef<HTMLButtonElement>(null)
   const { Icon, tone } = metaOf(item)
   const unread = item.readAt == null
   const toneClass = TONE_CLASS[tone]
@@ -98,83 +141,161 @@ function NotificationRow({
           minute: '2-digit'
         })
 
+  // 行菜单不带图标：ContactRow 的行菜单（本仓唯一同形先例）也是纯文字，Popmenu 的前置
+  // 16px 槽留空即可（几何契约要求槽恒在，不要求填东西）。
+  const menuItems: PopmenuItem[] = [
+    {
+      kind: 'submenu',
+      id: 'snooze',
+      label: t('notifications.menu.snooze'),
+      items: SNOOZE_PRESETS.map((preset) => ({
+        kind: 'action' as const,
+        id: preset,
+        label: t(SNOOZE_LABEL_KEY[preset]),
+        onSelect: () => onSnooze(item, preset)
+      }))
+    },
+    {
+      kind: 'action',
+      id: 'resolve',
+      label: t('notifications.menu.resolve'),
+      onSelect: () => onResolve(item)
+    }
+  ]
+
   return (
-    <button
-      type="button"
-      onClick={() => onActivate(item)}
+    <div
       className={cn(
-        'w-full flex gap-2.5 px-4 py-2.5 text-left border-b border-[var(--hairline)]',
-        'last:border-b-0 transition-colors duration-fast hover:bg-ink-3'
+        'group relative flex items-start gap-2.5 px-4 py-2.5',
+        'border-b border-[var(--hairline)] last:border-b-0',
+        'transition-colors duration-fast',
+        menuOpen ? 'bg-ink-3' : 'hover:bg-ink-3'
       )}
     >
-      <span
-        className={cn(
-          'relative w-[26px] h-[26px] mt-px shrink-0 rounded-lg flex items-center justify-center',
-          unread ? toneClass.icon : toneClass.iconRead
-        )}
+      <button
+        type="button"
+        onClick={() => onActivate(item)}
+        className="flex min-w-0 flex-1 gap-2.5 text-left"
       >
-        <Icon size={14} strokeWidth={2} />
-        {/* 未读角标：贴在图标容器右上角（不占独立 gutter 列），2px 面板底色 ring 把它从
-            图标底衬里切出来 —— ring 色必须是面板实底 ink-2（.glass-pop 的 background）。 */}
-        {unread && (
-          <span
-            className="absolute -top-[3px] -right-[3px] w-[7px] h-[7px] rounded-full bg-coral/100"
-            style={{ boxShadow: '0 0 0 2px rgb(var(--ink-2))' }}
-            title={t('notifications.unreadDot')}
-            aria-label={t('notifications.unreadDot')}
-          />
-        )}
+        <span
+          className={cn(
+            'relative w-[26px] h-[26px] mt-px shrink-0 rounded-lg flex items-center justify-center',
+            unread ? toneClass.icon : toneClass.iconRead
+          )}
+        >
+          <Icon size={14} strokeWidth={2} />
+          {/* 未读角标：贴在图标容器右上角（不占独立 gutter 列），2px 面板底色 ring 把它从
+              图标底衬里切出来 —— ring 色必须是面板实底 ink-2（.glass-pop 的 background）。 */}
+          {unread && (
+            <span
+              className="absolute -top-[3px] -right-[3px] w-[7px] h-[7px] rounded-full bg-coral/100"
+              style={{ boxShadow: '0 0 0 2px rgb(var(--ink-2))' }}
+              title={t('notifications.unreadDot')}
+              aria-label={t('notifications.unreadDot')}
+            />
+          )}
+        </span>
+
+        <span className="flex-1 min-w-0 flex flex-col">
+          <span className="flex items-baseline justify-between gap-2">
+            <span
+              className={cn(
+                'text-aux truncate',
+                unread ? 'font-medium text-ink-fg' : 'text-ink-fg-1'
+              )}
+            >
+              {item.title}
+            </span>
+            <span className="flex items-baseline gap-1.5 shrink-0">
+              {item.recurrenceNo > 1 && (
+                <span
+                  className={cn(
+                    'px-[5px] rounded border text-micro font-mono tabular-nums',
+                    toneClass.chip
+                  )}
+                  title={t('notifications.recurrenceTitle', { count: item.recurrenceNo })}
+                >
+                  {t('notifications.recurrence', { count: item.recurrenceNo })}
+                </span>
+              )}
+              <span className="text-micro font-mono text-ink-fg-3">{time}</span>
+            </span>
+          </span>
+          {item.body && (
+            <span
+              className={cn(
+                'text-meta mt-0.5 line-clamp-2',
+                unread ? 'text-ink-fg-2' : 'text-ink-fg-2/75'
+              )}
+            >
+              {item.body}
+            </span>
+          )}
+        </span>
+      </button>
+
+      {/* hover 唯一动作钮：更多。占位恒在、只淡入淡出（绝对定位浮在行上会盖住时间戳）。 */}
+      <span className="-mr-1 shrink-0">
+        <button
+          ref={moreRef}
+          type="button"
+          aria-label={t('notifications.menu.trigger')}
+          title={t('notifications.menu.trigger')}
+          onClick={(event) => {
+            event.stopPropagation()
+            onMenuOpenChange(menuOpen ? null : item.id)
+          }}
+          className={cn(
+            'mt-px grid size-6 place-items-center rounded-[var(--r-ctl)] text-ink-fg-2 opacity-0',
+            'transition-opacity duration-fast ease-standard',
+            'hover:bg-ink-fg/[0.08] hover:text-ink-fg focus-visible:opacity-100 group-hover:opacity-100',
+            menuOpen && 'opacity-100'
+          )}
+        >
+          <MoreHorizontal size={13} />
+        </button>
       </span>
 
-      <span className="flex-1 min-w-0 flex flex-col">
-        <span className="flex items-baseline justify-between gap-2">
-          <span
-            className={cn(
-              'text-aux truncate',
-              unread ? 'font-medium text-ink-fg' : 'text-ink-fg-1'
-            )}
-          >
-            {item.title}
-          </span>
-          <span className="flex items-baseline gap-1.5 shrink-0">
-            {item.recurrenceNo > 1 && (
-              <span
-                className={cn(
-                  'px-[5px] rounded border text-micro font-mono tabular-nums',
-                  toneClass.chip
-                )}
-                title={t('notifications.recurrenceTitle', { count: item.recurrenceNo })}
-              >
-                {t('notifications.recurrence', { count: item.recurrenceNo })}
-              </span>
-            )}
-            <span className="text-micro font-mono text-ink-fg-3">{time}</span>
-          </span>
-        </span>
-        {item.body && (
-          <span
-            className={cn(
-              'text-meta mt-0.5 line-clamp-2',
-              unread ? 'text-ink-fg-2' : 'text-ink-fg-2/75'
-            )}
-          >
-            {item.body}
-          </span>
-        )}
-      </span>
-    </button>
+      {/* 🔴 portal 档不是可选项：列表是 `overflow-y-auto` 容器，行内 absolute 的菜单会被
+          容器整块裁掉（贴底那几行等于点不出菜单）。portal 档另有一处配套 —— 铃铛的
+          outside-click / Esc 判定要放行 `[data-popmenu-portal]`，见 NotificationBellBadge。 */}
+      {menuOpen ? (
+        <Popmenu
+          open
+          onClose={() => onMenuOpenChange(null)}
+          ariaLabel={t('notifications.menu.trigger')}
+          items={menuItems}
+          triggerRef={moreRef}
+          portal
+          align="end"
+          width={208}
+        />
+      ) : null}
+    </div>
   )
 }
 
 export function NotificationPanel({ onClose }: { onClose(): void }): React.ReactElement {
   const { t } = useTranslation()
   const navigate = useNavigate()
-  const list = useNotificationList(true)
+  const api = useMailApi()
+  const [tab, setTab] = useState<NotificationTabId>('all')
+  const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
+  const category = tabCategory(tab)
+  const list = useNotificationList(true, category)
+  // 与铃铛徽标**同一条查询**（同 queryKey，react-query 去重不多发请求）：tab 上的未读数、
+  // 头部 chip、「全部已读」的可用性全读它，三处口径因此不会各说各话。
+  const counts = useNotificationUnreadCount()
   const markRead = useMarkNotificationRead()
   const markAllRead = useMarkAllNotificationsRead()
+  const snooze = useSnoozeNotification()
+  const resolve = useResolveNotification()
+  const openReport = useReportNavigation((state) => state.open)
+  const openContactQueue = useContactNavigation((state) => state.openQueue)
+  const openMatter = useMatterNavigation((state) => state.open)
 
   const items = list.data?.items ?? []
-  const unread = list.data?.unread ?? 0
+  const unread = tabUnread(tab, counts.data)
   // 「此刻」的基准：优先取本次数据的落地时刻（React Query 的纯值，随每次 refetch 前进），
   // 首帧无数据时回落面板打开的时刻。🔴 不在 render 里直读 `Date.now()` —— 那是不纯调用
   // (react-hooks/purity)，而且逐处各读一次会让分日与相对时间用两个不同的 now。
@@ -188,24 +309,63 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
     const link = resolveNotificationLink(item.payload)
     if (!link) return // 无 link / 未知型 → 只标已读，面板不动（design §6.4）
     onClose()
-    if (link.type === 'session') {
-      requestOpenAgentSession(link.sessionId)
-      void navigate({ to: '/sessions' })
-      return
-    }
-    switch (link.to) {
-      case '/agents': {
-        // `/agents` 的 validateSearch 要求 tab 是三档之一；非法值按路由自身口径归 agents。
-        const tab = link.search?.tab
-        const safeTab = tab === 'reports' || tab === 'chats' ? tab : 'agents'
-        void navigate({ to: '/agents', search: { tab: safeTab } })
+    switch (link.type) {
+      case 'session':
+        requestOpenAgentSession(link.sessionId)
+        void navigate({ to: '/sessions' })
         return
-      }
-      case '/admin/kanban':
-        void navigate({ to: '/admin/kanban' })
+      case 'report':
+        // store-intent → ReportsTab 挂载/更新时消费即清（reportNavigation.ts 头注解释了
+        // 为什么不走 `?report=` 搜索参数）。
+        openReport(link.reportId)
+        void navigate({ to: '/agents', search: { tab: 'reports' } })
         return
+      case 'contact_queue':
+        openContactQueue()
+        void navigate({ to: '/contacts' })
+        return
+      case 'matter':
+        openMatter(link.publicId)
+        void navigate({ to: '/matters' })
+        return
+      case 'updater_restart':
+        // 现成守卫：`updater.ts` 在 state !== 'downloaded' 时直接 no-op，不会误退出。
+        void api.updater.quitAndInstall()
+        return
+      case 'route':
+        switch (link.to) {
+          case '/agents': {
+            // `/agents` 的 validateSearch 要求 tab 是三档之一；非法值按路由自身口径归 agents。
+            const target = link.search?.tab
+            const safeTab = target === 'reports' || target === 'chats' ? target : 'agents'
+            void navigate({ to: '/agents', search: { tab: safeTab } })
+            return
+          }
+          case '/admin/kanban':
+            void navigate({ to: '/admin/kanban' })
+            return
+        }
     }
   }
+
+  const tabOptions = NOTIFICATION_TAB_IDS.map((id) => {
+    const label = t(`notifications.tab.${id}`)
+    const count = tabUnread(id, counts.data)
+    return {
+      value: id,
+      ariaLabel: label,
+      label: (
+        <span className="flex items-center gap-1">
+          <span>{label}</span>
+          {count > 0 && (
+            <span className="font-mono text-micro tabular-nums text-ink-fg-3">
+              {count > 99 ? '99+' : count}
+            </span>
+          )}
+        </span>
+      )
+    }
+  })
 
   return (
     <>
@@ -226,7 +386,9 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
         <button
           type="button"
           disabled={unread === 0 || markAllRead.isPending}
-          onClick={() => markAllRead.mutate(undefined)}
+          // 标的是**当前 tab**（All tab 才是全部）：按钮就在 tab 行上方，标掉用户看不见的
+          // 另外四个类目会让「未读数没清零」变成一件说不清的事。
+          onClick={() => markAllRead.mutate(category ?? undefined)}
           className={cn(
             'flex items-center gap-1.5 shrink-0 pt-[18px] text-meta text-ink-fg-2',
             'transition-colors duration-fast hover:text-ink-fg',
@@ -236,6 +398,20 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
           <CheckCheck size={12} strokeWidth={2} />
           {t('notifications.markAllRead')}
         </button>
+      </div>
+
+      {/* tab 行。段宽自适应文本（**不 fluid**）：380px 面板里 5 段等分只有 ~70px，英文
+          locale 的 "Reviews"+计数放不下会挤成两行；横向溢出时容器自己滚（无滚动条）。 */}
+      <div className="px-3 pt-2 pb-2 border-b border-ink-border-soft overflow-x-auto scrollbar-none">
+        <SegmentedControl<NotificationTabId>
+          value={tab}
+          onChange={(next) => {
+            setTab(next)
+            setMenuOpenId(null)
+          }}
+          options={tabOptions}
+          ariaLabel={t('notifications.tabsAria')}
+        />
       </div>
 
       {list.isPending ? (
@@ -272,7 +448,22 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
                 {t(`notifications.group.${group.bucket}`)}
               </div>
               {group.items.map((item) => (
-                <NotificationRow key={item.id} item={item} nowMs={nowMs} onActivate={activate} />
+                <NotificationRow
+                  key={item.id}
+                  item={item}
+                  nowMs={nowMs}
+                  menuOpen={menuOpenId === item.id}
+                  onMenuOpenChange={setMenuOpenId}
+                  onActivate={activate}
+                  onSnooze={(target, preset) => {
+                    setMenuOpenId(null)
+                    snooze.mutate({ id: target.id, untilMs: snoozeUntilMs(preset, Date.now()) })
+                  }}
+                  onResolve={(target) => {
+                    setMenuOpenId(null)
+                    resolve.mutate(target.id)
+                  }}
+                />
               ))}
             </div>
           ))}

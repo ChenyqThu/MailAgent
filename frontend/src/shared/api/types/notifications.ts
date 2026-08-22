@@ -66,4 +66,7 @@ export interface NotificationListResult {
 export interface NotificationUnreadCount {
   total: number
   byCategory: Record<NotificationCategory, number>
+  /** 铃铛 critical 红点档的数据源（M2）：未读里有 critical → 红，否则计数点。
+   *  与 `byCategory` 同出一条 GROUP BY，口径按构造一致。三档恒全（服务端补零）。 */
+  bySeverity: Record<NotificationSeverity, number>
 }

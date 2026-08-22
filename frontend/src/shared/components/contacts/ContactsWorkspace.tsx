@@ -217,6 +217,21 @@ export function ContactsWorkspace(): React.ReactElement | null {
   // MattersWorkspace 的 `allMatters.some(...)` 闸）：detail 按 id 独立拉
   // （GET /contacts/{id}），hidden/robot 的人物页也要能打开，而它们在 known
   // 视图的列表里根本不存在。
+  // 治理队列直达（通知中心 `contact_queue` link → openQueue() → navigate('/contacts')）。
+  // 与人物页直达是同一个 store 的两条独立轴，各清各的。
+  // 🔴 必须等 flag 落定再消费（`loading`）：刚 navigate 过来时 app-config 还在途，
+  // `contactAgentEnabled` 恒 false —— 此刻消费等于把这条深链吃掉（点了通知只换了个页面，
+  // 抽屉不开）。AgentsTab 消费 agent intent 时踩的是同一个坑。
+  // 🔴 落定后 flag 仍是关的（抽屉根本没挂载）时**只清 intent**：把 `agentOpen` 置 true 会
+  // 留下一个谁也看不见的 true，等用户日后打开 flag 时抽屉自己弹出来。
+  const queueRequested = useContactNavigation((state) => state.queueRequested)
+  const clearQueueRequest = useContactNavigation((state) => state.clearQueue)
+  useEffect(() => {
+    if (!queueRequested || loading) return
+    if (contactAgentEnabled) setAgentOpen(true)
+    clearQueueRequest()
+  }, [clearQueueRequest, contactAgentEnabled, loading, queueRequested])
+
   const navigationTarget = useContactNavigation((state) => state.targetContactId)
   const clearNavigationTarget = useContactNavigation((state) => state.clear)
   const [initialSelectionApplied, setInitialSelectionApplied] = useState(false)

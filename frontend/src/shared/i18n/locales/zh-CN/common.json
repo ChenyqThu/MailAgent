@@ -6732,6 +6732,22 @@
     "tooltipEmpty": "通知中心",
     "unreadChip": "未读 {count}",
     "markAllRead": "全部标为已读",
+    "tabsAria": "通知分类",
+    "tab": {
+      "all": "全部",
+      "action_required": "待办",
+      "reviews": "审阅",
+      "results": "结果",
+      "system": "系统"
+    },
+    "menu": {
+      "trigger": "更多操作",
+      "snooze": "稍后提醒",
+      "snoozeHour": "1 小时后",
+      "snoozeTomorrow": "明天早上",
+      "snoozeThreeDays": "3 天后",
+      "resolve": "标记为已处理"
+    },
     "unreadDot": "未读",
     "recurrence": "×{count}",
     "recurrenceTitle": "同类通知已发生 {count} 次",
