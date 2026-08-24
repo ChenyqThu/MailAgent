@@ -8,7 +8,7 @@
 
 import { ipcMain } from 'electron'
 
-import { daemonRequest } from '../daemon_api'
+import { daemonRead, daemonRequest } from '../daemon_api'
 import { envelopeFromCli, type WriteEnvelope } from '../lib/envelope'
 import type {
   FolderApi,
@@ -25,23 +25,27 @@ import type {
 // ---- 多文件夹同步 (P3) — discover/whitelist (daemon → serve-api 转发) ---------
 //
 // 这三个不直读 SQLite (discover 要现连 IMAP LIST, whitelist 读/写 .env), 故经
-// daemonRequest 转发到本机 serve-api in-process service (D1 架构, 注本地 token),
-// 与远程 web 的 HttpApi 同 wire。serve-api 对非 davmail 后端返回 400 E_INVALID_ARG
-// → daemonRequest 抛 ApiError{code} → envelopeFromCli 收成 {ok:false,code} 过 IPC →
-// ElectronApi.unwrap 重抛带 code → FolderPicker 据此切门控态。
+// daemon 转发到本机 serve-api in-process service (D1 架构, 注本地 token), 与远程 web
+// 的 HttpApi 同 wire。serve-api 对非 davmail 后端返回 400 E_INVALID_ARG → 抛
+// ApiError{code} → envelopeFromCli 收成 {ok:false,code} 过 IPC → ElectronApi.unwrap
+// 重抛带 code → FolderPicker 据此切门控态。
+//
+// 🔴 两个读走 daemonRead (E_NETWORK 重试一次), 写仍走 daemonRequest: 冷启时 renderer
+// 比 serve-api 先起, 而侧边栏文件夹树在开窗那一瞬就发 whitelist —— 首拉打空则整段树
+// 不渲染。业务错误 (上面那条 E_INVALID_ARG) 不重试, 门控态不被拖慢。
 
 // counts 默认 false, 对齐 serve-api / imap_client 新默认 (issue #45: 大邮箱逐文件夹
 // STATUS 分钟级); 显式 counts:true 仍可 opt-in。
 // refresh 默认 false = 吃 serve-api 的 60s TTL 缓存; true 穿透强制真连 IMAP
 // (设置页文件夹管理的手动刷新 / CRUD 后 refetch)。
 export function runFolderDiscover(counts = false, refresh = false): Promise<FolderDiscoverResult> {
-  return daemonRequest<FolderDiscoverResult>('GET', '/folder/discover', {
+  return daemonRead<FolderDiscoverResult>('/folder/discover', {
     query: { counts, refresh }
   })
 }
 
 export function runFolderGetWhitelist(): Promise<FolderWhitelistResult> {
-  return daemonRequest<FolderWhitelistResult>('GET', '/folder/whitelist')
+  return daemonRead<FolderWhitelistResult>('/folder/whitelist')
 }
 
 export function runFolderSetWhitelist(imapNames: string[]): Promise<FolderSetWhitelistResult> {

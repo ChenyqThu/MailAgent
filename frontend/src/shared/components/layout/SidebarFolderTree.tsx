@@ -204,13 +204,23 @@ export function SidebarFolderTree(): React.ReactElement | null {
   // 收起态 — 内建行收起态 hover 出 tooltip; 文件夹行对齐 (Fix: 自定义文件夹收起无 tip)。
   const collapsed = useNavCollapsed((s) => s.collapsed)
 
-  const pollingInterval = usePollingFallback()
+  // connectedIntervalMs — SSE 连上后不归零而留 5min 保险轮询 (邮件主列表 a5953a13
+  // 同纪律)。whitelist 一旦打空整段树就消失, 而 SSE 秒级连上就会把兜底轮询清掉,
+  // 于是「等下一次轮询」这条退路在自定义文件夹这里原本是不存在的。
+  const pollingInterval = usePollingFallback({ connectedIntervalMs: 300_000 })
 
   // whitelist — 轻量 (.env 读), 常拉。空 → 不发 discover (省 IMAP LIST/STATUS)。
+  //
+  // 🔴 retry 按错误码: 它是开窗那一瞬最早发出的 serve-api query, 冷启时 renderer 常比
+  // serve-api 先起 → 首拉 E_NETWORK, 而全局 retry:1 一秒内两发就废完; 失败即整段树不
+  // 渲染 (下方 hasWhitelist 门), AppShell 单例化后 Sidebar 也不再随路由 remount 自愈。
+  // 业务错误 (非 davmail 后端的 E_INVALID_ARG) 重试结果一样, 只会把门控态拖慢 → 不重。
   const { data: whitelistData } = useQuery({
     queryKey: qk.folder.whitelist(),
     queryFn: () => mailApi.folder.getWhitelist(),
     staleTime: 30_000,
+    retry: (failureCount, error) =>
+      (error as { code?: string } | null)?.code === 'E_NETWORK' && failureCount < 5,
     refetchInterval: pollingInterval,
     refetchIntervalInBackground: false
   })

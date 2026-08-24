@@ -7,7 +7,7 @@
 //      各发一次，正撞 serve-api 最没起来的一瞬）；
 //   2. 🔴 拉不到 = 抛错，**不再**吞成 `{enabled:false}`。旧写法对 react-query 是一次
 //      成功响应，"后端还没起" 被当事实缓存住 → 事项/通讯录渲染成「已禁用」空态；
-//   3. main 广播 `mailagent:api-ready` → renderer 失效三族 serve-api query；卸载时
+//   3. main 广播 `mailagent:api-ready` → renderer 失效四族 serve-api query；卸载时
 //      解除监听（本仓有 subscribe 不 dispose → listener 泄漏的前科）。
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
@@ -128,7 +128,7 @@ describe('fetchAppConfigFlags — 失败即抛（启动竞态的命脉）', () =
 })
 
 describe('useApiReadyRefresh — serve-api 就绪广播的落点', () => {
-  test('收到 mailagent:api-ready → 失效 flag / 事项 / 通讯录三族；卸载时解除监听', () => {
+  test('收到 mailagent:api-ready → 失效 flag / 事项 / 通讯录 / 文件夹四族；卸载时解除监听', () => {
     let captured: ((...args: unknown[]) => void) | null = null
     const dispose = vi.fn()
     const on = vi.fn((channel: string, fn: (...args: unknown[]) => void) => {
@@ -152,7 +152,13 @@ describe('useApiReadyRefresh — serve-api 就绪广播的落点', () => {
     expect(captured).not.toBeNull()
     captured!()
     const keys = invalidate.mock.calls.map(([arg]) => (arg as { queryKey: unknown }).queryKey)
-    expect(keys).toEqual([APP_CONFIG_QUERY_KEY, qk.matters.all(), qk.contacts.all()])
+    // folder 是后补的第四族（侧边栏自定义文件夹树的 whitelist 冷启打空后整段消失）。
+    expect(keys).toEqual([
+      APP_CONFIG_QUERY_KEY,
+      qk.matters.all(),
+      qk.contacts.all(),
+      qk.folder.all()
+    ])
 
     view.unmount()
     expect(dispose).toHaveBeenCalledTimes(1)
