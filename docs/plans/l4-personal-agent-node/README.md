@@ -188,3 +188,14 @@ matter_item 状态机一等对象 + 五段契约 + delegate-not-assignee；设�
 | [05 LobeHub/lobe-chat](./research/05-lobehub-lobe-chat.md) | fork 零 delta；license 禁衍生分发；pathScopeAudit/状态分组/Expertise/IM 矩阵/gatekeeper | B1/B3/B4、C1、搭车批 |
 | [06 邻接开源版图](./research/06-oss-adjacent-landscape.md) | 11 项目三选一；Inbox Zero 学费与竞品警觉；Letta MemFS；booking 四表；agent-inbox 契约 | D5、B3、A5、E0 |
 | [07 Notion database+agent](./research/07-notion-database-agent.md) | 三套 agent 身份模型；🔴 状态机是「手搓」的（数据约定软 vs Linear 协议硬）；session 挂任务行；无 claim/propose 原语；A2 五条设计约束 + 单向投影对接形态 | A2、WS-D4'、批次 3 |
+
+---
+
+## 7. 来自通讯录 epic 的移交需求（2026-08-24）
+
+> 通讯录 epic（`08-13-contact-directory`）收尾盘点时，owner 拍板「合适 L4 的移交 L4」。以下两条后置需求排期未定，登记在此供未来批次拆解时纳入考虑，不代表已排入 §3/§4 的既有 workstream。
+
+| # | 需求 | 来源 | 说明 |
+|---|---|---|---|
+| L4-C1 | **KOS person 实体页 / 人-邮件边** | `.trellis/tasks/08-13-contact-directory/prd.md` §8 Q6、§9 TODO-4 | 通讯录 MVP 有意不进 KOS。现通讯录已有人级主键（`contact` 表）与 email 锚点账本（`contact_email`/`contact_email_link`），KOS 侧若做 person 实体页可直接以 `contact_id` 为锚，不必另起身份判据。注意事项：KOS ingest 三层开关（`MAILAGENT_KOS_INGEST_ENABLED` / `_CONSUMER_ENABLED` / `_L1_HOT_BLOCK_ENABLED`）默认全 OFF，`KOS_REQUIRE_LABELED` 与 LLM hook 的抢跑竞态未修（见 CLAUDE.md「关键开关现状」与 MEMORY `project_kos_hook_race_llm_labels`）；排期需独立拍板，且应先于此项动手前解决那处竞态。 |
+| L4-C2 | **画像 standing 常驻注入 chat / matters run prompt** | 同 PRD §8 Q9、§9 TODO-7 | 范围已收窄：tool-result 路径已闭环（`contact_get` 工具返回的画像文本套 `UNTRUSTED_CONTACT_PROFILE` fence），本条只剩「standing 常驻注入」半条——即把联系人画像常驻挂进 chat system prompt 或 matters run spec，而非仅在工具调用结果里出现。硬约束：不可信内容（画像文本源自邮件正文提取）进 system prompt 面必须做注入面审计。与 L4 的 agent 融合方向（standing context 分层，见 `MAILAGENT_STANDING_CONTEXT_ENABLED` / SOUL-AGENT-RULES-USER 分层）天然同域，建议纳入 L4 规划一起设计，不单独排。 |
