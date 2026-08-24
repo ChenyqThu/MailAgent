@@ -5569,6 +5569,69 @@ class SyncStore:
                 conn.rollback()
                 return False
 
+    def finalize_draft_append(
+        self,
+        internal_id: int,
+        *,
+        imap_uid: int,
+        imap_uidvalidity: Optional[int] = None,
+    ) -> Optional[bool]:
+        """后台 IMAP APPEND 成功回填 (task 08-20 draft-save 批2 异步保存)。
+
+        镜像行先落库 (无 uid, sync_status='synced'), APPEND 后台完成后把 APPENDUID
+        落行并置 pending 让 watcher 重 fetch 规范正文 — 语义与 reconcile 的
+        ``_update_draft_row_uid`` 同构 (那条链在行先有、uid 后到时同样适用)。
+
+        Returns:
+            True  已回填 (行在);
+            False 行已不在 (期间被 replace/删除) — 调用方应清理刚 APPEND 的远端孤儿;
+            None  SQL 错误 — 调用方**不要**清远端 (行可能仍在, reconcile 同
+                  Message-ID 归并会兜底补 uid)。
+        """
+        with self._connection() as conn:
+            try:
+                cur = conn.execute(
+                    "UPDATE email_metadata SET imap_uid = ?, "
+                    "imap_uidvalidity = COALESCE(?, imap_uidvalidity), "
+                    "sync_status = 'pending', sync_error = NULL, "
+                    "next_retry_at = NULL, updated_at = ? "
+                    "WHERE internal_id = ?",
+                    (imap_uid, imap_uidvalidity, time.time(), internal_id),
+                )
+                conn.commit()
+                return cur.rowcount == 1
+            except sqlite3.Error as e:
+                logger.error(
+                    f"Failed to finalize draft append for {internal_id}: {e}"
+                )
+                conn.rollback()
+                return None
+
+    def mark_draft_append_failed(self, internal_id: int, error: str) -> bool:
+        """后台 IMAP APPEND 失败标记 (task 08-20 draft-save 批2 异步保存)。
+
+        行保留 (本地即真身), sync_error 落「未同步」诊断; sync_status 不动
+        (维持 'synced' — 本地内容完整, 不进 watcher 重试机)。用户再次保存该草稿
+        = 新 APPEND + replace 本地旧行, 即重试闭环。
+
+        Returns: True=已标记; False=行已不在 (被 replace/删除, 无需再通知) 或 SQL 错。
+        """
+        with self._connection() as conn:
+            try:
+                cur = conn.execute(
+                    "UPDATE email_metadata SET sync_error = ?, updated_at = ? "
+                    "WHERE internal_id = ?",
+                    (f"draft append 未同步: {(error or '')[:300]}", time.time(), internal_id),
+                )
+                conn.commit()
+                return cur.rowcount == 1
+            except sqlite3.Error as e:
+                logger.error(
+                    f"Failed to mark draft append failure for {internal_id}: {e}"
+                )
+                conn.rollback()
+                return False
+
     def toggle_pin(self, internal_id: int) -> Optional[bool]:
         """翻转置顶状态。
 

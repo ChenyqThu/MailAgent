@@ -211,7 +211,9 @@ def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
         msg["Bcc"] = _sanitize_header(", ".join(draft.bcc))
     msg["Subject"] = _sanitize_header(draft.subject or "(no subject)")
     msg["Date"] = formatdate(localtime=True)
-    msg["Message-ID"] = make_msgid(domain="mailagent.local")
+    # 预分配 Message-ID (异步 APPEND 的镜像行 merge key) 优先; 值由调用方同样以
+    # make_msgid 生成, 不经 _sanitize_header (天然干净, 保字节一致)。
+    msg["Message-ID"] = draft.message_id or make_msgid(domain="mailagent.local")
 
     # threading 头: forward 是独立邮件, 不写 In-Reply-To / References.
     if draft.mode != "forward":

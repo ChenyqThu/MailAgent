@@ -1134,6 +1134,10 @@ async def compose_draft(
             svc.compose_draft,
             req,
             actor=Actor(kind="http", authenticated=True, label="cf-access"),
+            # task 08-20 draft-save 批2: serve 进程常驻 → IMAP APPEND (4-28s) 后台化,
+            # 本地镜像先落库即返回 (appended_uid=None, uid 后台落行)。CLI 恒同步
+            # (短命进程 daemon 线程随退出即死)。
+            defer_append=True,
         )
     except ServiceError as exc:
         _raise_from_service_error(exc)

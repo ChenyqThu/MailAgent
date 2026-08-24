@@ -861,6 +861,36 @@ def test_filter_recent_rows_keeps_fresh(tmp_path):
 
 
 # ============================================================
+# 批2 异步 APPEND 安全前提 #1 (task 08-20 draft-save): 无 imap_uid 的本地
+# 草稿行 (镜像先行, APPEND 后台未落/失败/进程中途退出) 绝不能被 reconcile 清 —
+# to_delete 只从 _folder_imap_uid_map 派生, 行不进 map 就进不了 to_delete。
+# ============================================================
+
+def test_uid_map_excludes_null_uid_rows_and_mid_map_includes_them(tmp_path):
+    store = SyncStore(str(tmp_path / "t.db"))
+    store.save_email({
+        "internal_id": 1_000_000_001, "message_id": "has-uid@x", "subject": "a",
+        "sender": "me@x", "mailbox": "草稿箱", "sync_status": "synced",
+        "backend_origin": "davmail", "imap_uid": 5,
+    })
+    store.save_email({
+        "internal_id": 1_000_000_002, "message_id": "pending-append@x",
+        "subject": "b", "sender": "me@x", "mailbox": "草稿箱",
+        "sync_status": "synced", "backend_origin": "davmail", "imap_uid": None,
+    })
+    b = DavMailBackend.__new__(DavMailBackend)
+    b.sync_store = store
+    # 保护本体: 无 uid 行不进 local map ⇒ 不可能进 to_delete (「远端已删」误判)
+    assert b._folder_imap_uid_map("草稿箱") == {5: 1_000_000_001}
+    # uid 后置落行的另一半前提: message_id map **必须**含无 uid 行 — APPEND 落地
+    # 后 reconcile 按同 Message-ID 归并把 uid 补进该行 (_update_draft_row_uid),
+    # 而不是另建重复行 (进程中途退出的自愈路径)。
+    mid_map = b._draft_message_id_map("草稿箱")
+    assert mid_map.get("pending-append@x") == 1_000_000_002
+    assert mid_map.get("has-uid@x") == 1_000_000_001
+
+
+# ============================================================
 # compose_draft 即时落库 (_mirror_draft_locally)
 # ============================================================
 

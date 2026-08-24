@@ -193,8 +193,10 @@ class _SvcSpy:
                 "reply_source": "sqlite:llm_processing.labels_json",
                 "reply_html": "<p>r</p>", "forward_intro_html": None, "dry_run": True}
 
-    def compose_draft(self, request, *, actor):
-        self.calls.append(("compose_draft", request, {"actor": actor}))
+    def compose_draft(self, request, *, actor, defer_append=False):
+        self.calls.append(
+            ("compose_draft", request, {"actor": actor, "defer_append": defer_append})
+        )
         if _SvcSpy._raise is not None:
             raise _SvcSpy._raise
         return ComposeDraftResult(

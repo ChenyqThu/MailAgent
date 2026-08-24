@@ -117,7 +117,7 @@ class _ComposeSpy:
         self.requests: list = []
         _ComposeSpy.instances.append(self)
 
-    def compose_draft(self, request, *, actor):
+    def compose_draft(self, request, *, actor, defer_append=False):
         self.requests.append(request)
         return ComposeDraftResult(
             internal_id=request.internal_id, drafts_folder="Drafts",

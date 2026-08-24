@@ -2202,13 +2202,21 @@ class MailWriteService:
         }
 
     def compose_draft(
-        self, request: "ComposeRequest", *, actor: Actor
+        self, request: "ComposeRequest", *, actor: Actor, defer_append: bool = False
     ) -> ComposeDraftResult:
         """创建草稿 (backend.append_draft)。搬自 ``email_draft`` execute 行 1700-1779。
 
         compose **不做** pm2 检测 (原 CLI 无 → 无 ``allow_concurrent``)。顺序: 构造 draft →
         forward 收件人校验 → ``require_write_auth`` → append_draft (token 校验留 CLI 适配器,
         更早; 顺序差异同 A3 archive 决策, 测试不可见)。
+
+        ``defer_append=True`` (task 08-20 draft-save 批2, serve-api 专用): 本地优先 —
+        预分配 Message-ID → 先 ``_mirror_draft_locally`` (本地行即真身, 无 uid,
+        sync_status='synced') → replace 旧行 → **立即返回成功**; IMAP APPEND (实测
+        4-28s) 挪后台线程, 成功后 uid 落行 + pending refetch, 失败则行保留 + 「未同步」
+        标记 + 通知中心。仅 davmail backend 且 drafts_sync_enabled 时生效 (镜像是
+        本地真身的前提); 其余组合回退同步路径。🔴 CLI 恒同步 — 短命进程的 daemon
+        线程随退出即死, 异步会静默丢 APPEND。
         """
         draft, warnings, _quote = self._prepare_draft(
             request, allow_missing_reply=False, split_quote=False
@@ -2219,6 +2227,52 @@ class MailWriteService:
             )
 
         require_write_auth(actor)
+
+        cfg = self._ctx.config
+        deferred = (
+            defer_append
+            and getattr(cfg, "mailagent_backend", "applescript") == "davmail"
+            and bool(getattr(cfg, "drafts_sync_enabled", True))
+        )
+        if deferred:
+            from email.utils import make_msgid
+
+            # 预分配 Message-ID: 镜像行与后台 APPEND 的 MIME 必须同 key —
+            # reconcile 同 Message-ID 归并 (uid 后置落行) / merge 防重复行都靠它。
+            draft.message_id = make_msgid(domain="mailagent.local")
+            mirror = self._mirror_draft_locally(draft, None)
+            if mirror is not None:
+                replaced_id: Optional[int] = None
+                if request.mode == "new" and request.source_draft_id is not None:
+                    replaced_id = self._replace_source_draft(request.source_draft_id)
+
+                def _bg_append() -> None:
+                    self._append_draft_in_background(draft, mirror.internal_id)
+
+                threading.Thread(
+                    target=_bg_append, name="compose-append-draft", daemon=True
+                ).start()
+                return ComposeDraftResult(
+                    internal_id=request.internal_id,
+                    drafts_folder=(
+                        getattr(self._ctx.backend, "drafts_folder", None) or "Drafts"
+                    ),
+                    appended_uid=None,
+                    method="imap_append_deferred",
+                    mode=request.mode,
+                    to_count=len(draft.to),
+                    cc_count=len(draft.cc),
+                    attachments=len(draft.attachments),
+                    warnings=warnings,
+                    mirror_internal_id=mirror.internal_id,
+                    mirror_attachment_ids=mirror.attachment_ids,
+                    replaced_source_draft_id=replaced_id,
+                )
+            # 镜像失败 = 本地无真身, 返回成功即撒谎 → 回退同步 APPEND 路径
+            # (预分配 message_id 留在 draft 上无害, builder 直接用)。
+            logger.warning(
+                "[compose] deferred mirror failed — fall back to synchronous append"
+            )
 
         result = self._ctx.backend.append_draft(draft)
         if not result.success:
@@ -2259,9 +2313,14 @@ class MailWriteService:
         (慢链实测 2.5-5.4s, 不拖保存响应; 失败由 reconcile 拉回残留行, 重存即可)。
 
         判别: 行存在且 mailbox 是草稿箱 (防误删非草稿行); 行不存在 → 幂等跳过。
-        davmail 行无 imap_uid (AppleScript 存量) → 整体跳过 — 没有墓碑/远端锚,
-        只删本地必被 reconcile 拉回, 不如保留旧行为 (重复行)。任何异常吞 +
-        warning, 不影响保存成功语义。Returns: 实际删除的行 id, 未删 → None。
+        无 imap_uid 行分两类 (批2 异步 APPEND 起):
+        - davmail-origin (异步镜像行, APPEND 未落/失败): 远端要么无物, 要么由
+          后台 append 线程按 rowcount-0 清孤儿 — **本地删即完成替换**, 不落墓碑
+          不走远端删, 顺带收掉「未同步」通知 (重存 = 重试闭环)。
+        - 其余 (AppleScript 存量) → 整体跳过 — 没有墓碑/远端锚, 只删本地必被
+          reconcile 拉回, 不如保留旧行为 (重复行)。
+        任何异常吞 + warning, 不影响保存成功语义。Returns: 实际删除的行 id,
+        未删 → None。
         """
         try:
             meta = self._ctx.sync_store.get(source_draft_id)
@@ -2278,6 +2337,16 @@ class MailWriteService:
             entry_id = meta.get("entry_id")
             message_id = meta.get("message_id")
             if not row_is_com and not imap_uid:
+                if meta.get("backend_origin") == "davmail":
+                    self._delete_local_draft_row(
+                        source_draft_id, source="compose_replace"
+                    )
+                    self._resolve_append_failure_notice(source_draft_id)
+                    logger.info(
+                        f"[compose-replace] local-only draft {source_draft_id} "
+                        "replaced (无 uid 异步镜像行, 远端由后台链清理)"
+                    )
+                    return source_draft_id
                 logger.warning(
                     f"[compose-replace] source_draft_id={source_draft_id} 缺 imap_uid "
                     "(存量行?) — 跳过替换删除 (无墓碑/远端锚, 删本地必回弹)"
@@ -2289,23 +2358,7 @@ class MailWriteService:
 
                 _record_draft_tombstone(self._ctx.sync_store, int(imap_uid))
 
-            try:
-                self._ctx.email_repo.delete_email_full(source_draft_id)
-            except Exception as e:  # noqa: BLE001 — 本地残留交 reconcile 清
-                logger.warning(
-                    f"[compose-replace] local delete failed (reconcile 兜底): {e}"
-                )
-            try:
-                from src.events.publisher import safe_publish
-
-                safe_publish(
-                    "email.synced",
-                    internal_id=source_draft_id,
-                    data={"deleted": True, "mailbox": "草稿箱"},
-                    source="compose_replace",
-                )
-            except Exception:
-                pass
+            self._delete_local_draft_row(source_draft_id, source="compose_replace")
 
             def _remote_delete() -> None:
                 try:
@@ -2346,6 +2399,158 @@ class MailWriteService:
             )
             return None
 
+    def _delete_local_draft_row(self, internal_id: int, *, source: str) -> bool:
+        """本地草稿行删 + ``email.synced`` deleted SSE (publish 恒在事务外 —
+        delete_email_full 自管事务, safe_publish 在其 commit 之后)。Returns local_deleted。"""
+        local_deleted = True
+        try:
+            self._ctx.email_repo.delete_email_full(internal_id)
+        except Exception as e:  # noqa: BLE001 — 本地残留交 reconcile 清
+            logger.warning(
+                f"[{source}] local delete failed internal_id={internal_id} "
+                f"(reconcile 兜底): {e}"
+            )
+            local_deleted = False
+        try:
+            from src.events.publisher import safe_publish
+
+            safe_publish(
+                "email.synced",
+                internal_id=internal_id,
+                data={"deleted": True, "mailbox": "草稿箱"},
+                source=source,
+            )
+        except Exception:
+            pass
+        return local_deleted
+
+    def _resolve_append_failure_notice(self, internal_id: int) -> None:
+        """收掉该草稿行的「未同步」通知 (best-effort) — 行被替换/删除即重试闭环达成
+        或用户已弃, 条目不该再挂着。"""
+        try:
+            from src.notify.center import NotifyCenter
+
+            NotifyCenter(str(self._ctx.config.sync_store_db_path)).resolve_by_dedupe(
+                f"draft_append_failed:{internal_id}"
+            )
+        except Exception:  # noqa: BLE001 — 通知收口失败不影响主链
+            pass
+
+    def _append_draft_in_background(self, draft, mirror_internal_id: int) -> None:
+        """后台 IMAP APPEND (task 08-20 draft-save 批2 异步保存)。
+
+        保存响应已按「本地镜像 = 真身」返回成功; 这里把 EML 送上 Exchange:
+        - 成功 → ``finalize_draft_append`` 落 uid + 置 pending (watcher 重 fetch
+          规范正文 → synced, 即「(pending refetch) → Draft synced」既有链); 行已
+          不在 (期间被 replace / 用户删除) → 删刚 APPEND 的远端孤儿 + 落墓碑。
+        - 失败 → 行保留 + sync_error「未同步」标记 + NotifyCenter 系统通知
+          (publish 自管事务, 恒在本方法任何写之外)。
+        - App 中途退出 = 线程随进程死: 行无 uid 但 reconcile 的 local map 只含
+          有 uid 行 (``_folder_imap_uid_map`` 的 ``imap_uid IS NOT NULL``), 不会被
+          清; 若 APPEND 已落而 uid 未记, reconcile 按同 Message-ID 归并补 uid。
+        任何异常吞 + warning — 后台链绝不影响已返回的保存成功语义。
+        """
+        try:
+            try:
+                result = self._ctx.backend.append_draft(draft)
+            except Exception as e:  # noqa: BLE001 — append_draft 自吞异常, 双保险
+                self._mark_deferred_append_failed(mirror_internal_id, draft, str(e))
+                return
+            if not result.success:
+                self._mark_deferred_append_failed(
+                    mirror_internal_id, draft, result.error or "unknown"
+                )
+                return
+            if not result.appended_uid:
+                # 成功但 APPENDUID 缺失: 行保持无 uid, 交 reconcile 同 Message-ID
+                # 归并补 (uid 到位后同样走 pending refetch)。
+                logger.warning(
+                    f"[compose-append] APPENDUID missing "
+                    f"internal_id={mirror_internal_id}; 交 reconcile 归并"
+                )
+                return
+            ok = self._ctx.sync_store.finalize_draft_append(
+                mirror_internal_id,
+                imap_uid=int(result.appended_uid),
+                imap_uidvalidity=result.appended_uidvalidity,
+            )
+            if ok is False:
+                # 行已不在 → 刚上去的远端副本是孤儿, 先墓碑 (防 reconcile 在删除
+                # 落地前把它拉回) 再删。
+                from src.mail.draft_tombstones import record as _record_draft_tombstone
+
+                _record_draft_tombstone(
+                    self._ctx.sync_store, int(result.appended_uid)
+                )
+                reader = self._folder_imap_reader()
+                imap_delete = getattr(reader, "delete_message", None)
+                if imap_delete is None or not imap_delete(
+                    "drafts", int(result.appended_uid)
+                ):
+                    logger.warning(
+                        f"[compose-append] orphan remote draft "
+                        f"uid={result.appended_uid} delete failed "
+                        "(墓碑过期后 reconcile 会拉回, 用户重删即可)"
+                    )
+                else:
+                    logger.info(
+                        f"[compose-append] mirror row {mirror_internal_id} 已被"
+                        f"替换/删除 → 远端孤儿 uid={result.appended_uid} 已清"
+                    )
+                return
+            if ok is None:
+                return  # SQL 错: 不清远端 (行大概率仍在), reconcile 归并兜底补 uid
+            logger.info(
+                f"[compose-append] draft uploaded internal_id={mirror_internal_id} "
+                f"uid={result.appended_uid} (pending refetch)"
+            )
+        except Exception as e:  # noqa: BLE001 — 后台线程兜底
+            logger.warning(
+                f"[compose-append] background append failed "
+                f"internal_id={mirror_internal_id}: {e}"
+            )
+
+    def _mark_deferred_append_failed(
+        self, internal_id: int, draft, error: str
+    ) -> None:
+        """后台 APPEND 失败面: 行标「未同步」+ 通知中心系统条目。
+
+        publish 恒在事务外 — ``mark_draft_append_failed`` 已 commit 才调 publish
+        (NotifyCenter 自开连接自管事务)。行已不在 (被 replace/删除) → 不标不扰:
+        草稿已有新版或已弃。
+        """
+        logger.warning(
+            f"[compose-append] draft append failed internal_id={internal_id}: {error}"
+        )
+        marked = False
+        try:
+            marked = self._ctx.sync_store.mark_draft_append_failed(internal_id, error)
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                f"[compose-append] mark failed-row internal_id={internal_id}: {e}"
+            )
+        if not marked:
+            return
+        try:
+            from src.notify.center import NotifyCenter
+
+            subject = (draft.subject or "").strip() or "(无主题)"
+            NotifyCenter(str(self._ctx.config.sync_store_db_path)).publish(
+                category="system",
+                source="compose",
+                title="草稿未同步到服务器",
+                body=(
+                    f"「{subject[:80]}」已保存在本地草稿箱, 上传 Exchange 失败: "
+                    f"{(error or '未知错误')[:240]}。再次保存该草稿即可重试。"
+                ),
+                severity="warn",
+                dedupe_key=f"draft_append_failed:{internal_id}",
+            )
+        except Exception as e:  # noqa: BLE001 — 通知落库失败不影响标记语义
+            logger.warning(
+                f"[compose-append] notify center failed internal_id={internal_id}: {e}"
+            )
+
     def _mirror_draft_locally(self, draft, result) -> Optional["_MirrorDraftInfo"]:
         """草稿即时落库 — 保存成功立刻进 email_metadata (mailbox='草稿箱', pending)。
 
@@ -2360,14 +2565,33 @@ class MailWriteService:
         task 08-12 — COM 无 UID, 且 reconcile_drafts 有意缺席, 本地镜像是唯一
         入库路径) + DRAFTS_SYNC_ENABLED。任何失败仅 warning — 草稿已成功落
         Exchange/Outlook, 本地镜像晚到由 reconcile 补 (davmail) 或重开补 (COM)。
+
+        ``result=None`` = 异步保存的先行镜像 (task 08-20 draft-save 批2): APPEND
+        还没跑, uid 未知 — message_id 用 draft.message_id 预分配值 (与后台 APPEND
+        的 MIME 同 key), sync_status 落 **'synced'** 而非 'pending' (无 uid 时
+        watcher 取件必失败徒增重试噪音; uid 后台落行时 finalize 翻 'pending'
+        重 fetch)。本地行即真身, 镜像失败调用方回退同步路径。
         """
         try:
-            com_entry_id = getattr(result, "entry_id", None)
-            if not result.appended_uid and not com_entry_id:
-                return  # AppleScript 路径 / APPENDUID 缺失 → 交给 reconcile
+            deferred = result is None
+            if deferred:
+                com_entry_id = None
+                mirror_message_id = (
+                    (draft.message_id or "").strip().strip("<>") or None
+                )
+                if not mirror_message_id:
+                    # 异步镜像必须有 merge key (reconcile 归并 / 防重复行), 缺失
+                    # 视为镜像失败 → 调用方回退同步 APPEND。
+                    logger.warning("[compose] deferred mirror without message_id")
+                    return None
+            else:
+                com_entry_id = getattr(result, "entry_id", None)
+                if not result.appended_uid and not com_entry_id:
+                    return None  # AppleScript 路径 / APPENDUID 缺失 → 交给 reconcile
+                mirror_message_id = result.message_id
             cfg = self._ctx.config
             if not bool(getattr(cfg, "drafts_sync_enabled", True)):
-                return
+                return None
             from datetime import datetime
 
             store = self._ctx.sync_store
@@ -2387,7 +2611,7 @@ class MailWriteService:
                 thread_id = in_reply_to_mid
             payload = {
                 "internal_id": internal_id,
-                "message_id": result.message_id,
+                "message_id": mirror_message_id,
                 "subject": draft.subject or "",
                 "sender": getattr(cfg, "user_email", "") or "",
                 "sender_name": "",
@@ -2398,9 +2622,11 @@ class MailWriteService:
                 "is_read": True,
                 "is_flagged": False,
                 "thread_id": thread_id,
-                "sync_status": "pending",
+                # deferred: 本地即真身 → 'synced' (docstring); 同步路径维持
+                # 'pending' 让 watcher 按 uid 快路径重 fetch 规范正文。
+                "sync_status": "synced" if deferred else "pending",
                 "backend_origin": "outlook_com" if com_entry_id else "davmail",
-                "imap_uid": result.appended_uid,
+                "imap_uid": None if deferred else result.appended_uid,
             }
             if com_entry_id:
                 payload["entry_id"] = str(com_entry_id)
@@ -2414,12 +2640,13 @@ class MailWriteService:
                 # draft-edit 再保存时不再跑 12s 全文 FETCH 探测 (replace 语义下每次
                 # 保存都换新行, 不写哨兵 = 每次保存都探测一遍)。
                 payload["draft_in_reply_to"] = ""
-            if result.appended_uidvalidity is not None:
+            if not deferred and result.appended_uidvalidity is not None:
                 payload["imap_uidvalidity"] = result.appended_uidvalidity
             store.save_email(payload)
             logger.info(
                 f"[compose] draft mirrored locally internal_id={internal_id} "
-                f"uid={result.appended_uid} entry_id={com_entry_id!r}"
+                f"uid={payload['imap_uid']} entry_id={com_entry_id!r}"
+                f"{' (deferred append)' if deferred else ''}"
             )
             # 正文 + 附件立即落 email_body/email_attachment SSoT —— 正文是本地撰写
             # 的 (draft.reply_html, 前端 getSanitizedHtml 已含引用), 附件字节此刻就
@@ -2476,7 +2703,7 @@ class MailWriteService:
                             fetched_source="compose",
                         ),
                         attachment_payloads,
-                        message_id=result.message_id,
+                        message_id=mirror_message_id,
                     ) or {}
             except Exception as e:  # noqa: BLE001 — 正文镜像失败由 watcher refetch 兜底
                 logger.warning(f"[compose] draft body mirror failed (watcher 兜底): {e}")
@@ -2519,18 +2746,39 @@ class MailWriteService:
         imap_uid = meta.get("imap_uid")
         entry_id = meta.get("entry_id")
         message_id = meta.get("message_id")
+        # 批2 异步镜像行 (davmail-origin 无 uid: APPEND 未落/失败): 本地即真身,
+        # 本地删即删 — 远端无物或由后台 append 线程按 rowcount-0 清孤儿; 不落
+        # 墓碑不走 IMAP 链。修复副作用: 此前这类行点删除会 E_INVALID_ARG,
+        # 失败草稿除重存外无法移除。
+        row_is_local_only = (
+            not row_is_com
+            and not imap_uid
+            and meta.get("backend_origin") == "davmail"
+        )
         if row_is_com:
             if not entry_id and not message_id:
                 raise ServiceInvalidArgError(
                     f"草稿 {internal_id} 缺 entry_id/message_id 定位锚, "
                     "无法定位 Outlook 草稿"
                 )
-        elif not imap_uid:
+        elif not imap_uid and not row_is_local_only:
             raise ServiceInvalidArgError(
                 f"草稿 {internal_id} 缺 imap_uid (AppleScript 存量行?), 无法定位 Exchange 草稿"
             )
 
         require_write_auth(actor)
+
+        if row_is_local_only:
+            local_deleted = self._delete_local_draft_row(
+                internal_id, source="delete_draft"
+            )
+            self._resolve_append_failure_notice(internal_id)
+            logger.info(
+                f"[delete-draft] local-only draft internal_id={internal_id} done (无 uid)"
+            )
+            return DeleteDraftResult(
+                internal_id=internal_id, imap_uid=0, local_deleted=local_deleted
+            )
 
         # ── 删除墓碑 (task 08-20 回弹竞态): 本地删行**之前**先落 uid 墓碑
         # (共享 sync_state KV, TTL 30s), 让 mail-sync 进程的 reconcile_drafts

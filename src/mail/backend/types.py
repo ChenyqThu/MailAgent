@@ -123,6 +123,12 @@ class DraftRequest:
     in_reply_to: Optional[str] = None
     references: Optional[str] = None
 
+    # 预分配 Message-ID (含尖括号, make_msgid 形)。task 08-20 draft-save 批2 异步
+    # APPEND: 本地镜像行先落库, 必须与随后后台 APPEND 出去的 MIME 同一个
+    # Message-ID — 它是 reconcile 同 Message-ID 归并 (uid 后置落行) 与 save_email
+    # merge 防重复行的 key。None = builder 自行 make_msgid (既有行为)。
+    message_id: Optional[str] = None
+
     # Drafts 文件夹 (留 None 走 backend 默认: AppleScript Mail.app 默认 Drafts, DavMail probe 探测结果)
     drafts_folder: Optional[str] = None
 

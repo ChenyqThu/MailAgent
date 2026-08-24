@@ -224,12 +224,25 @@ def test_replace_skips_non_draft_mailbox_row(svc, publishes):
     assert svc._reader.deleted == []
 
 
-def test_replace_skips_row_without_imap_uid(svc, publishes):
-    """AppleScript 存量行无 uid → 无墓碑/远端锚, 删本地必回弹 — 整体跳过。"""
+def test_replace_row_without_uid_split_by_origin(svc, publishes):
+    """无 uid 行按 backend_origin 分流 (批2 异步 APPEND 起):
+    davmail-origin = 异步镜像行 → 本地删即替换 (无墓碑无远端删);
+    非 davmail (AppleScript 存量, 远端有物无锚) → 仍整体跳过, 删本地必回弹。"""
     _seed_old_draft(svc._ctx.sync_store, imap_uid=None)
     result = _save(svc, _draft_edit_request())
-    assert result.replaced_source_draft_id is None
-    assert OLD_DRAFT_IID not in svc._ctx.email_repo.deleted
+    assert result.replaced_source_draft_id == OLD_DRAFT_IID
+    assert OLD_DRAFT_IID in svc._ctx.email_repo.deleted
+    assert OLD_UID not in active_uids(svc._ctx.sync_store)
+    assert svc._reader.deleted == []
+
+    legacy_iid = OLD_DRAFT_IID + 1
+    _seed_old_draft(
+        svc._ctx.sync_store, internal_id=legacy_iid,
+        message_id="legacy-mid@x", imap_uid=None, backend_origin="applescript",
+    )
+    result2 = _save(svc, _draft_edit_request(source_draft_id=legacy_iid))
+    assert result2.replaced_source_draft_id is None
+    assert legacy_iid not in svc._ctx.email_repo.deleted
 
 
 def test_replace_not_triggered_without_source_draft_id(svc, publishes):
