@@ -6402,10 +6402,6 @@
       "filters": "No contacts match the current filters",
       "filtersHint": "Try a different filter combination."
     },
-    "disabled": {
-      "title": "Page not found or not enabled",
-      "hint": "Contacts is not enabled. Turn it on in Settings → Labs, then restart the backend."
-    },
     "detail": {
       "bareOnly": "Address only",
       "addName": "Add a name",

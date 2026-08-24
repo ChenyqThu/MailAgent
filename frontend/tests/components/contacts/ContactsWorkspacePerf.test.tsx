@@ -30,7 +30,6 @@ const {
   prefsStore,
   listCalls,
   listState,
-  flagsState,
   rowRenders,
   detailRenders
 } = vi.hoisted(() => {
@@ -95,7 +94,6 @@ const {
     },
     listCalls: [] as Array<{ view: string; q: string; sort: string }>,
     listState: { pending: false },
-    flagsState: { loading: false },
     rowRenders: { count: 0 },
     detailRenders: { count: 0 }
   }
@@ -117,11 +115,6 @@ vi.mock('@shared/components/contacts/contactListPrefs', () => ({
 }))
 
 vi.mock('@shared/components/contacts/hooks', () => ({
-  useContactFlags: () => ({
-    contactsEnabled: true,
-    contactAgentEnabled: false,
-    loading: flagsState.loading
-  }),
   useContactsApi: () => API,
   useInvalidateContact: () => async () => undefined,
   useContactListPaged: (options: { view: string; q: string; sort: string }) => {
@@ -183,7 +176,6 @@ beforeEach(() => {
   prefsStore.value = { sort: 'density', groupBy: 'none', density: 'compact' }
   listCalls.length = 0
   listState.pending = false
-  flagsState.loading = false
   rowRenders.count = 0
   detailRenders.count = 0
   useContactNavigation.getState().clear()
@@ -261,17 +253,6 @@ describe('ContactsWorkspace · waterfall', () => {
     )
     // 退化**不回写**记录（v2 任务 ③ 的老纪律，不该被本批改掉）。
     expect(visitStore.value).toEqual({ id: 999, view: 'known' })
-  })
-})
-
-describe('ContactsWorkspace · 首屏占位', () => {
-  test('flag 还没回来时是骨架不是白屏', () => {
-    // `/chat/config` 失败会指数退避重试（useAppConfig `retry:3`）—— 老写法 `return null`
-    // 的那段白屏最长能有几秒，而这一跳本来就该有占位。
-    flagsState.loading = true
-    renderWorkspace()
-    expect(screen.getByTestId('contact-list-skeleton')).toBeTruthy()
-    expect(screen.getByTestId('contact-detail-skeleton')).toBeTruthy()
   })
 })
 

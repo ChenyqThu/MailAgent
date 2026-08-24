@@ -15,9 +15,8 @@
 //      叶子 `@shared/lib/contactToolFace`）。
 //
 // 🔴 这里**没有**任何「总闸未开 / 已开」的状态说明段（owner 08-19 拍板，压过画像抽屉先例）：
-// `MAILAGENT_CONTACT_AGENT_ENABLED` 即将默认开并撤出 Labs，现在再教用户一个马上会消失的概念
-// 只是噪声。字节级 flag 门不受影响 —— 通讯录列表头的 ✨Agent 胶囊与它上游的查询照旧由
-// `useContactFlags` 门着，这里撤的只是给用户看的提示文案。
+// `MAILAGENT_CONTACT_AGENT_ENABLED` 已随五个 venue env 闸一起退役，治理台恒启用，教用户一个
+// 已经不存在的概念只是噪声。
 //
 // 🔴 保存是**两次串行调用**（agent 行 + profile doc），任一失败如实报错、不关抽屉、不吞：
 // 一个抽屉两个后端载体是事实，把它藏起来只会让「保存成功但提示词没存上」变成静默缺陷。

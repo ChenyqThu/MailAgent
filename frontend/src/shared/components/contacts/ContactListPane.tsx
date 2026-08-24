@@ -105,8 +105,8 @@ export interface ContactListPaneProps {
   onMenuOpenChange(id: number | null): void
   onToggleGroup(groupKey: string): void
   actions: ContactRowActions
-  /** WP7 治理台入口。🔴 `MAILAGENT_CONTACT_AGENT_ENABLED` 关着时**整个胶囊不进 DOM**
-   *  （上游那条 status 查询也不发 —— 两层门，`AgentPendingBadge` 先例）。 */
+  /** WP7 治理台入口。2026-08-19 cutover 后总闸已退役，唯一调用方（Workspace）恒传 true；
+   *  胶囊显隐只由本 prop 门控。 */
   agentEnabled: boolean
   /** 待审建议数；`0` 只去掉徽标，胶囊照常在（原型 `sugCount>0 &&` 只门徽标）。 */
   pendingCount: number

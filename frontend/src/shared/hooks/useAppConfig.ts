@@ -1,6 +1,6 @@
 // serve-api `/chat/config` 的**工作台 flag 投影**（事项 + 通讯录），单 key 单请求。
 //
-// 为什么收敛成一个模块（速赢包 §4a）：`useMatterFlags` 与 `useContactFlags` 打的是同一个
+// 为什么收敛成一个模块（速赢包 §4a）：`useMatterFlags` 与 `useContactsEnabled` 打的是同一个
 // `/chat/config`，却各用一个 queryKey（`qk.matters.config()` / `qk.contacts.config()`）⇒
 // 启动阶段同一请求发两遍、互不复用。这里改成同 queryKey + 同 queryFn，两个 hook 各自
 // `select` 投影一个切片（`useLlmModels` 的模型面探针共享是同一套做法）。

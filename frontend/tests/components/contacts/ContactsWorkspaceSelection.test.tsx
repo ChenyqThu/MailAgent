@@ -60,7 +60,6 @@ vi.mock('@shared/components/contacts/contactLastVisit', () => ({
 }))
 
 vi.mock('@shared/components/contacts/hooks', () => ({
-  useContactFlags: () => ({ contactsEnabled: true, contactAgentEnabled: false, loading: false }),
   useContactsApi: () => ({ get: vi.fn(), hide: vi.fn(), setKind: vi.fn(), setSelf: vi.fn() }),
   useInvalidateContact: () => async () => undefined,
   useContactListPaged: (options: { view: string }) => {

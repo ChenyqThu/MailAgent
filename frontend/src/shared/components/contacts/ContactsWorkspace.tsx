@@ -2,8 +2,7 @@
 // 可拖宽（localStorage 持久化 + 拖拽中只写 CSS 变量零 re-render）+ 详情列
 // minmax(430px,1fr)；断点 **860px**（设计实测值，两处一致：grid 的
 // `max-[860px]:grid-cols-1` 与 WORKSPACE_STACKED_QUERY —— 镜像不猜数）；单列态
-// 折叠用 `hidden`（display:none 保滚动位）。flag off 路由直达 = 404 空态
-// （主 session 裁决项 1：设计 §7 明文，压过 matters 的 return null 先例）。
+// 折叠用 `hidden`（display:none 保滚动位）。
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useMutation } from '@tanstack/react-query'
@@ -21,7 +20,6 @@ import { toastError, toastSuccess } from '@shared/state/toast'
 import { ContactAgentDrawer } from './ContactAgentDrawer'
 import { ContactDetail } from './ContactDetail'
 import { ContactListPane } from './ContactListPane'
-import { ContactDetailSkeleton, ContactListSkeleton } from './ContactSkeleton'
 import { readLastContactVisit, writeLastContactVisit } from './contactLastVisit'
 import { readContactListPrefs, writeContactListPrefs } from './contactListPrefs'
 import { MergeContactsDialog } from './MergeContactsDialog'
@@ -37,7 +35,6 @@ import {
 import {
   useBackfillProgress,
   useContactAgentStatus,
-  useContactFlags,
   useContactListPaged,
   useContactsApi,
   useInvalidateContact
@@ -85,7 +82,6 @@ function writeListWidth(width: number): void {
 
 export function ContactsWorkspace(): React.ReactElement | null {
   const { t } = useTranslation()
-  const { contactsEnabled: enabled, contactAgentEnabled, loading } = useContactFlags()
   const api = useContactsApi()
   const invalidate = useInvalidateContact()
 
@@ -149,7 +145,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
     []
   )
 
-  const list = useContactListPaged({ view, q, sort, enabled })
+  const list = useContactListPaged({ view, q, sort, enabled: true })
   const items = useMemo(() => (list.data?.pages ?? []).flatMap((page) => page.items), [list.data])
   // 服务端报的全量命中数（分页后 items.length 只是「已加载」）。
   const matchedCount = list.data?.pages[0]?.total ?? 0
@@ -158,10 +154,8 @@ export function ContactsWorkspace(): React.ReactElement | null {
     if (!hasNextPage || isFetchingNextPage) return
     void fetchNextPage()
   }, [fetchNextPage, hasNextPage, isFetchingNextPage])
-  const progress = useBackfillProgress(enabled)
-  // 🔴 治理 flag 关 → `enabled:false`：不发请求、不起 60s 轮询，胶囊也不进 DOM
-  // （两层门，`AgentPendingBadge.tsx:70-79` 先例）。
-  const agentStatus = useContactAgentStatus(enabled && contactAgentEnabled)
+  const progress = useBackfillProgress(true)
+  const agentStatus = useContactAgentStatus(true)
 
   const rows = useMemo(
     () =>
@@ -219,18 +213,13 @@ export function ContactsWorkspace(): React.ReactElement | null {
   // 视图的列表里根本不存在。
   // 治理队列直达（通知中心 `contact_queue` link → openQueue() → navigate('/contacts')）。
   // 与人物页直达是同一个 store 的两条独立轴，各清各的。
-  // 🔴 必须等 flag 落定再消费（`loading`）：刚 navigate 过来时 app-config 还在途，
-  // `contactAgentEnabled` 恒 false —— 此刻消费等于把这条深链吃掉（点了通知只换了个页面，
-  // 抽屉不开）。AgentsTab 消费 agent intent 时踩的是同一个坑。
-  // 🔴 落定后 flag 仍是关的（抽屉根本没挂载）时**只清 intent**：把 `agentOpen` 置 true 会
-  // 留下一个谁也看不见的 true，等用户日后打开 flag 时抽屉自己弹出来。
   const queueRequested = useContactNavigation((state) => state.queueRequested)
   const clearQueueRequest = useContactNavigation((state) => state.clearQueue)
   useEffect(() => {
-    if (!queueRequested || loading) return
-    if (contactAgentEnabled) setAgentOpen(true)
+    if (!queueRequested) return
+    setAgentOpen(true)
     clearQueueRequest()
-  }, [clearQueueRequest, contactAgentEnabled, loading, queueRequested])
+  }, [clearQueueRequest, queueRequested])
 
   const navigationTarget = useContactNavigation((state) => state.targetContactId)
   const clearNavigationTarget = useContactNavigation((state) => state.clear)
@@ -407,36 +396,6 @@ export function ContactsWorkspace(): React.ReactElement | null {
     []
   )
 
-  // flags query 加载中渲染整页骨架（task 08-20 P2-7）：这一跳原先 `return null` = 白屏，而
-  // `/chat/config` 失败会指数退避重试最多约 7s（useAppConfig `retry:3`）—— 那段白屏是真实存在
-  // 的。确认 off 后 = 404 空态（裁决项 1）。
-  if (loading) {
-    return (
-      <div
-        className={WORKSPACE_GRID_CLASS}
-        style={{ '--contact-list-width': `${listWidth}px` } as React.CSSProperties}
-      >
-        <div className="min-h-0 bg-ink-1/55">
-          <ContactListSkeleton density={density} />
-        </div>
-        <div aria-hidden />
-        <div className="min-h-0 max-[860px]:hidden">
-          <ContactDetailSkeleton />
-        </div>
-      </div>
-    )
-  }
-  if (!enabled) {
-    return (
-      <EmptyState
-        fill
-        icon={<UsersRound size={22} strokeWidth={1.5} />}
-        title={t('contacts.disabled.title')}
-        hint={t('contacts.disabled.hint')}
-      />
-    )
-  }
-
   return (
     <div
       ref={workspaceGridRef}
@@ -481,7 +440,7 @@ export function ContactsWorkspace(): React.ReactElement | null {
           onMenuOpenChange={setMenuOpenId}
           onToggleGroup={toggleGroup}
           actions={actions}
-          agentEnabled={contactAgentEnabled}
+          agentEnabled
           pendingCount={agentStatus.data?.pending_count ?? 0}
           onOpenAgent={() => setAgentOpen(true)}
         />
@@ -565,15 +524,13 @@ export function ContactsWorkspace(): React.ReactElement | null {
           selectContact(winnerId)
         }}
       />
-      {/* WP7 治理台。🔴 flag 关 → 连组件都不挂载（内部三条查询字节级不发）。 */}
-      {contactAgentEnabled ? (
-        <ContactAgentDrawer
-          open={agentOpen}
-          onOpenChange={setAgentOpen}
-          onOpenPerson={selectContact}
-          onMergePair={(pair) => setMergeState({ sourceId: null, pair })}
-        />
-      ) : null}
+      {/* WP7 治理台。恒挂载，内部查询/可见性都由 `open`/`agentOpen` 一处门控。 */}
+      <ContactAgentDrawer
+        open={agentOpen}
+        onOpenChange={setAgentOpen}
+        onOpenPerson={selectContact}
+        onMergePair={(pair) => setMergeState({ sourceId: null, pair })}
+      />
     </div>
   )
 }

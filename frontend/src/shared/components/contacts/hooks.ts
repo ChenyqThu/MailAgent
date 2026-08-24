@@ -35,39 +35,17 @@ export function useContactsApi(): ContactsApi {
   return useMemo(() => createContactsApi(resolveApiBaseUrl()), [])
 }
 
-export interface ContactFlags {
-  contactsEnabled: boolean
-  contactAgentEnabled: boolean
-  loading: boolean
-}
+/** 模块级 = 引用稳定（见 useAppConfig 的 select 约定）。 */
+const selectContactsEnabled = (flags: AppConfigFlags): boolean => flags.contactsEnabled
 
-/** 🔴 治理 Agent 的语义是 **AND**：后端 `/api/contacts/suggestions` 先过 router 级
- *  `require_contacts_enabled`、再过端点级 `require_contact_agent_enabled`，所以
- *  `contactAgentEnabled` 在这里取合取，UI 不会显示一个必然 E_DISABLED 的入口。
- *  模块级 = 引用稳定（见 useAppConfig 的 select 约定）。 */
-const selectContactFlags = (
-  flags: AppConfigFlags
-): { contactsEnabled: boolean; contactAgentEnabled: boolean } => ({
-  contactsEnabled: flags.contactsEnabled,
-  contactAgentEnabled: flags.contactsEnabled && flags.contactAgentEnabled
-})
-
-/** 通讯录总闸 + 治理 Agent 闸的**双 flag 投影**（WP7；形状照 matters 的
- *  `useMatterFlags`）。数据源是与事项**共享**的那一次 `/chat/config`（`useAppConfig`：
- *  单 key 单请求，启动阶段不再同端点发两遍；失败即 error 而不是缓存成「已禁用」）。 */
-export function useContactFlags(): ContactFlags {
-  const query = useAppConfig(selectContactFlags)
-  return {
-    contactsEnabled: query.data?.contactsEnabled === true,
-    contactAgentEnabled: query.data?.contactAgentEnabled === true,
-    loading: query.isPending
-  }
-}
-
-/** 总闸单读（WP2 起的既有签名，5 个调用点原样保留）。 */
+/** 总闸单读（WP2 起的既有签名，5 个调用点原样保留）。数据源是与事项**共享**的那一次
+ *  `/chat/config`（`useAppConfig`：单 key 单请求，启动阶段不再同端点发两遍；失败即
+ *  error 而不是缓存成「已禁用」）。2026-08-19 cutover 后 `contactsEnabled` 恒 true
+ *  （后端硬编码），但 `/chat/config` 往返与 `loading` 语义仍然是真实的 —— 后端还没起来时
+ *  不该把「还没拉到」误判成「已禁用」。 */
 export function useContactsEnabled(): { enabled: boolean; loading: boolean } {
-  const flags = useContactFlags()
-  return { enabled: flags.contactsEnabled, loading: flags.loading }
+  const query = useAppConfig(selectContactsEnabled)
+  return { enabled: query.data === true, loading: query.isPending }
 }
 
 /** 单页列表（选人弹层 / 治理抽屉用）。工作台主列表走下面的 `useContactListPaged`。

@@ -18,7 +18,7 @@ import { fetchAppConfigFlags, APP_CONFIG_QUERY_KEY } from '@shared/hooks/useAppC
 import { useApiReadyRefresh } from '@shared/hooks/useApiReadyRefresh'
 import { API_READY_CHANNEL } from '@shared/lib/ipcChannels'
 import { useMatterFlags } from '@shared/components/matters/hooks'
-import { useContactFlags } from '@shared/components/contacts/hooks'
+import { useContactsEnabled } from '@shared/components/contacts/hooks'
 import { qk } from '@shared/lib/queryKeys'
 
 const CONFIG_BODY = {
@@ -54,14 +54,13 @@ describe('useAppConfig — 事项 / 通讯录共享同一次 /chat/config', () =
 
     function Probe(): React.ReactElement {
       const { mattersEnabled, matterAgentEnabled } = useMatterFlags()
-      const { contactsEnabled, contactAgentEnabled } = useContactFlags()
+      const { enabled: contactsEnabled } = useContactsEnabled()
       return (
         <div
           data-testid="probe"
           data-matters={String(mattersEnabled)}
           data-matter-agent={String(matterAgentEnabled)}
           data-contacts={String(contactsEnabled)}
-          data-contact-agent={String(contactAgentEnabled)}
         />
       )
     }
@@ -79,7 +78,6 @@ describe('useAppConfig — 事项 / 通讯录共享同一次 /chat/config', () =
     const probe = screen.getByTestId('probe')
     expect(probe.getAttribute('data-matters')).toBe('true')
     expect(probe.getAttribute('data-matter-agent')).toBe('true')
-    expect(probe.getAttribute('data-contact-agent')).toBe('true')
     const configCalls = mockFetch.mock.calls.filter(([input]) =>
       String(input).includes('/chat/config')
     )
