@@ -6592,6 +6592,11 @@
       "suggestionAdopted": "已采纳这条建议",
       "suggestionIgnored": "已忽略这条建议 · 下轮有新证据时可能再提",
       "suggestionBlocked": "建议未采纳 · 已留在队列里，没有写入任何字段",
+      "bulkAdopted": "已采纳 {count} 条建议",
+      "bulkIgnored": "已忽略 {count} 条建议",
+      "bulkMergeSkipped": "{count} 条合并建议需逐条人工确认",
+      "bulkBlocked": "{count} 条被守卫拦下，留在「被拦下的建议」里",
+      "bulkRemaining": "还剩 {count} 条待审 · 再点一次接着清",
       "scanQueued": "治理扫描已排入队列 · 跑完后新建议会出现在这里",
       "scanCoalesced": "已有一轮治理扫描在跑 · 复用那一轮，没有重复排队",
       "promptSaved": "系统提示词已保存 · 下一轮扫描生效",
@@ -6618,6 +6623,16 @@
         "title": "被拦下的建议",
         "hint": "采纳时被不变量守卫挡住，留在队列里，没有写入任何字段。"
       },
+      "bulk": {
+        "prompt": "{count} 条待审建议",
+        "adopt": "全部采纳",
+        "ignore": "全部忽略",
+        "confirmAdopt": "确认采纳这 {count} 条？",
+        "confirmIgnore": "确认忽略这 {count} 条？",
+        "confirm": "确认",
+        "cancel": "取消"
+      },
+      "queueTruncated": "已显示 {shown} / 共 {total} 条 · 整批处置对全部待审生效",
       "loadFailed": "待审建议读取失败 · 这里显示的可能不是全部",
       "scanFailed": "上次治理扫描失败：{error} · 队列里没有新建议不代表没发现问题",
       "runNow": "现在跑一次治理扫描",

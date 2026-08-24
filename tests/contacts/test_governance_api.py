@@ -126,6 +126,54 @@ def test_blocked_adopt_commits_before_4xx(api):
     assert row[2] is not None
 
 
+def test_bulk_adopt_returns_200_with_classified_summary(api):
+    """整批口恒 200：merge 进 skipped、被守卫拦下的进 blocked，其余照常采纳
+    （逐条 adopt 的 4xx 语义在这里不适用 —— 一条被拦不该把整批结果打回去）。"""
+    client, _, path = api
+    identity = client.post("/api/contacts/agent/proposals", json=_proposal_payload())
+    merge = client.post(
+        "/api/contacts/agent/proposals",
+        json={**_proposal_payload("merge"), "contact_ids": [1, 1], "payload": {}},
+    )
+    former = client.post(
+        "/api/contacts/agent/proposals",
+        json=_proposal_payload("former_email", {"email": "alice@example.com"}),
+    )
+    assert identity.status_code == merge.status_code == former.status_code == 200
+
+    response = client.post("/api/contacts/suggestions/bulk", json={"action": "adopt"})
+    assert response.status_code == 200, response.text
+    data = response.json()["data"]
+    assert data["action"] == "adopt"
+    assert data["adopted"] == 1
+    assert data["ignored"] == 0
+    assert data["skipped"] == [
+        {"id": merge.json()["data"]["id"], "reason": "merge_requires_manual_confirmation"}
+    ]
+    assert [item["id"] for item in data["blocked"]] == [former.json()["data"]["id"]]
+    assert data["remaining"] == 1  # merge 那条仍待人工确认
+    assert data["contact_ids"] == [1]
+
+    with sqlite3.connect(path) as conn:
+        assert conn.execute("SELECT organization FROM contact WHERE id=1").fetchone()[0] == "ACME"
+
+
+def test_bulk_ignore_on_empty_queue_is_200_with_zero_summary(api):
+    client, _, _ = api
+    response = client.post("/api/contacts/suggestions/bulk", json={"action": "ignore"})
+    assert response.status_code == 200
+    data = response.json()["data"]
+    assert (data["adopted"], data["ignored"], data["remaining"]) == (0, 0, 0)
+    assert data["blocked"] == [] and data["skipped"] == []
+
+
+def test_bulk_rejects_unknown_action(api):
+    client, _, _ = api
+    response = client.post("/api/contacts/suggestions/bulk", json={"action": "delete"})
+    assert 400 <= response.status_code < 500
+    assert response.json()["error"]["code"] == "E_INVALID_ARG"
+
+
 def test_manual_run_idempotent_and_status(api):
     client, _, _ = api
     first = client.post("/api/contacts/agent/run", headers={"Idempotency-Key": "run-1"})

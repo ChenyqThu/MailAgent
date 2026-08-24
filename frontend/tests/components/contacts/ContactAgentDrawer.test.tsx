@@ -20,6 +20,7 @@ const {
   listSuggestions,
   adoptSuggestion,
   ignoreSuggestion,
+  bulkResolveSuggestions,
   runAgentScan,
   list,
   agentStatus,
@@ -29,6 +30,7 @@ const {
   listSuggestions: vi.fn(),
   adoptSuggestion: vi.fn(),
   ignoreSuggestion: vi.fn(),
+  bulkResolveSuggestions: vi.fn(),
   runAgentScan: vi.fn(),
   list: vi.fn(),
   agentStatus: vi.fn(),
@@ -44,6 +46,7 @@ vi.mock('@shared/api/contacts', async (importOriginal) => {
       listSuggestions,
       adoptSuggestion,
       ignoreSuggestion,
+      bulkResolveSuggestions,
       runAgentScan,
       list,
       agentStatus,
@@ -305,6 +308,114 @@ describe('ContactAgentDrawer · 队列 tab', () => {
     await settleAgentStatus()
 
     expect(screen.queryByText(/上次治理扫描失败/)).toBeNull()
+  })
+})
+
+describe('ContactAgentDrawer · 队列 tab 整批处置', () => {
+  const BULK_RESULT = {
+    action: 'adopt' as const,
+    adopted: 2,
+    ignored: 0,
+    blocked: [],
+    skipped: [{ id: 11, reason: 'merge_requires_manual_confirmation' }],
+    remaining: 1,
+    contact_ids: [1]
+  }
+
+  test('提示条 / tab 计数走服务端全量口径，加载不全时说清已显示几条', async () => {
+    // 队列端点服务端分页（默认 50 条一页）：已加载 1 条、全量 7 条 —— 两个数字长期
+    // 不一致正是「tab 数字与胶囊徽标各说各话」的病根，整批口按全量走。
+    agentStatus.mockResolvedValue({
+      enabled: true,
+      pending_count: 7,
+      last_fire_day: '2026-08-19',
+      last_scan_at: 1_755_600_000_000
+    })
+    renderDrawer()
+
+    await waitFor(() => expect(screen.getByText('7 条待审建议')).toBeTruthy())
+    expect(screen.getByText('待审建议 7')).toBeTruthy()
+    expect(screen.getByText('已显示 1 / 共 7 条 · 整批处置对全部待审生效')).toBeTruthy()
+  })
+
+  test('全量与已加载一致时不显示「已显示 X / 共 N 条」', async () => {
+    renderDrawer() // 默认 mock: pending_count 1，已加载 1 条
+    await waitFor(() => expect(screen.getByText('1 条待审建议')).toBeTruthy())
+
+    expect(screen.queryByText(/已显示 /)).toBeNull()
+  })
+
+  test('二次确认：先点「全部采纳」不发请求，取消后回到两颗按钮', async () => {
+    renderDrawer()
+    await waitFor(() => expect(screen.getByText('全部采纳')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('全部采纳'))
+    await waitFor(() => expect(screen.getByText('确认采纳这 1 条？')).toBeTruthy())
+    expect(bulkResolveSuggestions).not.toHaveBeenCalled()
+
+    fireEvent.click(screen.getByText('取消'))
+    await waitFor(() => expect(screen.getByText('全部采纳')).toBeTruthy())
+    expect(bulkResolveSuggestions).not.toHaveBeenCalled()
+  })
+
+  test('确认后才发整批采纳，成功即重新拉队列', async () => {
+    bulkResolveSuggestions.mockResolvedValue({ ...BULK_RESULT, skipped: [], remaining: 0 })
+    renderDrawer()
+    await waitFor(() => expect(screen.getByText('全部采纳')).toBeTruthy())
+    const before = listSuggestions.mock.calls.length
+
+    fireEvent.click(screen.getByText('全部采纳'))
+    fireEvent.click(await screen.findByText('确认'))
+
+    await waitFor(() => expect(bulkResolveSuggestions).toHaveBeenCalledWith('adopt'))
+    // 零乐观更新：以服务端落定后重新拉队列为判据（invalidate 生效）。
+    await waitFor(() => expect(listSuggestions.mock.calls.length).toBeGreaterThan(before))
+    expect(toastSuccess).toHaveBeenCalledWith('已采纳 2 条建议', undefined)
+  })
+
+  test('merge 被跳过如实说，且不把同一批条目当成「还剩」再报一遍', async () => {
+    bulkResolveSuggestions.mockResolvedValue(BULK_RESULT)
+    renderDrawer()
+    await waitFor(() => expect(screen.getByText('全部采纳')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('全部采纳'))
+    fireEvent.click(await screen.findByText('确认'))
+
+    await waitFor(() =>
+      expect(toastSuccess).toHaveBeenCalledWith(
+        '已采纳 2 条建议',
+        '1 条合并建议需逐条人工确认'
+      )
+    )
+  })
+
+  test('整批忽略：同样要二次确认，动作传 ignore', async () => {
+    bulkResolveSuggestions.mockResolvedValue({
+      action: 'ignore' as const,
+      adopted: 0,
+      ignored: 3,
+      blocked: [],
+      skipped: [],
+      remaining: 0,
+      contact_ids: []
+    })
+    renderDrawer()
+    await waitFor(() => expect(screen.getByText('全部忽略')).toBeTruthy())
+
+    fireEvent.click(screen.getByText('全部忽略'))
+    expect(screen.getByText('确认忽略这 1 条？')).toBeTruthy()
+    fireEvent.click(screen.getByText('确认'))
+
+    await waitFor(() => expect(bulkResolveSuggestions).toHaveBeenCalledWith('ignore'))
+    expect(toastSuccess).toHaveBeenCalledWith('已忽略 3 条建议', undefined)
+  })
+
+  test('队列空 → 不渲染整批提示条（没有可处置的东西）', async () => {
+    listSuggestions.mockResolvedValue({ items: [], next_cursor: null })
+    renderDrawer()
+    await waitFor(() => expect(screen.getByText('没有待审建议')).toBeTruthy())
+
+    expect(screen.queryByText('全部采纳')).toBeNull()
   })
 })
 

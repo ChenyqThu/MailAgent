@@ -33,6 +33,16 @@ CONTACT_GOVERNANCE_JOB_TYPE = "contact_governance"
 CONTACT_GOVERNANCE_MAX_RUN_SECONDS = 1800
 CONTACT_GOVERNANCE_FIRE_KEY = "contact_governance.last_fire_day"
 
+#: 整批处置的两个动作。值域在 `bulk_resolve_suggestions` 校验（非法值 → 400
+#: E_INVALID_ARG，跟随本面 view/sort/kind 的错误形状），REST schema 只承载形状。
+CONTACT_SUGGESTION_BULK_ACTIONS = ("adopt", "ignore")
+#: 一次整批处置最多带多少条。范围是**服务端全量 pending**（前端分页拉不齐 id，按已加载页
+#: 做只会清一半积压），所以上限是服务端的事：500 ≈ 几十轮扫描的积压，够清空常见队列，
+#: 又挡住一个事务里塞进几千条。没清完的条数由返回值的 ``remaining`` 如实交代。
+CONTACT_SUGGESTION_BULK_MAX = 500
+#: merge 类**不进整批采纳**：真合并要人工走合并预览二次确认（逐条 adopt 也只校验不执行）。
+CONTACT_SUGGESTION_BULK_SKIP_MERGE = "merge_requires_manual_confirmation"
+
 #: 治理 run 要 MOUNT 的 skill 族（工具面投影，WP7 批② gateway 侧接线时补齐）。
 #: 🔴 不是可选的润色：gateway 的 per-agent skill MOUNT 门（S6 W3-1b）对任何带 agentRunContext
 #: 的 run 都会跑一遍 `applySkillGating(gated, spec.toolPolicy.skills ?? [])`，缺这个键 = 零挂载
@@ -379,6 +389,47 @@ def ignore_suggestion(conn: sqlite3.Connection, suggestion_id: int, *, now_ms: i
     return {"id": suggestion_id, "status": "ignored", "decided_at": now_ms}
 
 
+def _apply_adoption(
+    conn: sqlite3.Connection, suggestion: ContactGovernanceSuggestion, *, now_ms: int
+) -> None:
+    """按 type 把一条建议落进主表（不动 contact_suggestion 行本身）。
+
+    守卫拦下时抛 ContactError —— 调用方决定把这一行标 blocked 之后是抛 4xx（逐条口）
+    还是继续处理批里的下一条（整批口）。merge 只校验形状不执行合并：真合并的唯一路径
+    是人工走合并预览二次确认。
+    """
+    contact_ids, payload = suggestion["contact_ids"], suggestion["payload"]
+    if suggestion["type"] == "identity":
+        field = str(payload.get("field") or "")
+        value = payload.get("value")
+        normalized_value = strip_evidence_refs(str(value)) if value is not None else ""
+        contact_service.update_identity_fields(
+            conn, contact_ids[0], {field: normalized_value}, now=now_ms
+        )
+    elif suggestion["type"] == "former_email":
+        contact_service.mark_email_former(conn, contact_ids[0], str(payload.get("email") or ""), now=now_ms)
+    elif suggestion["type"] == "relation":
+        manager_id = payload.get("manager_id")
+        contact_service.set_manager(conn, contact_ids[0], int(manager_id) if manager_id is not None else None, src="auto", now_ms=now_ms)
+    elif suggestion["type"] == "kind":
+        kind = str(payload.get("kind") or "")
+        if kind not in CONTACT_KIND_VALUES:
+            raise ContactError("E_INVALID_KIND", "invalid contact kind")
+        contact_service.set_kind(conn, contact_ids[0], kind, now=now_ms)
+    elif suggestion["type"] == "merge" and len(contact_ids) != 2:
+        raise ContactError("E_INVALID_CONTACT_IDS", "merge requires exactly two contacts")
+
+
+def _mark_decided(
+    conn: sqlite3.Connection, suggestion_id: int, status: str, *, now_ms: int,
+    block_reason: Optional[str] = None,
+) -> None:
+    conn.execute(
+        "UPDATE contact_suggestion SET status=?, block_reason=?, decided_at=? WHERE id=?",
+        (status, block_reason, now_ms, suggestion_id),
+    )
+
+
 def adopt_suggestion(conn: sqlite3.Connection, suggestion_id: int, *, now_ms: int) -> dict[str, Any]:
     row = conn.execute("SELECT * FROM contact_suggestion WHERE id=?", (suggestion_id,)).fetchone()
     if row is None:
@@ -386,35 +437,14 @@ def adopt_suggestion(conn: sqlite3.Connection, suggestion_id: int, *, now_ms: in
     if row["status"] != "pending":
         raise ContactError("E_INVALID_STATE", "only pending suggestions can be adopted")
     suggestion = _decode_suggestion(row)
-    contact_ids, payload = suggestion["contact_ids"], suggestion["payload"]
+    contact_ids = suggestion["contact_ids"]
     try:
-        if suggestion["type"] == "identity":
-            field = str(payload.get("field") or "")
-            value = payload.get("value")
-            normalized_value = strip_evidence_refs(str(value)) if value is not None else ""
-            contact_service.update_identity_fields(
-                conn, contact_ids[0], {field: normalized_value}, now=now_ms
-            )
-        elif suggestion["type"] == "former_email":
-            contact_service.mark_email_former(conn, contact_ids[0], str(payload.get("email") or ""), now=now_ms)
-        elif suggestion["type"] == "relation":
-            manager_id = payload.get("manager_id")
-            contact_service.set_manager(conn, contact_ids[0], int(manager_id) if manager_id is not None else None, src="auto", now_ms=now_ms)
-        elif suggestion["type"] == "kind":
-            kind = str(payload.get("kind") or "")
-            if kind not in CONTACT_KIND_VALUES:
-                raise ContactError("E_INVALID_KIND", "invalid contact kind")
-            contact_service.set_kind(conn, contact_ids[0], kind, now=now_ms)
-        elif suggestion["type"] == "merge" and len(contact_ids) != 2:
-            raise ContactError("E_INVALID_CONTACT_IDS", "merge requires exactly two contacts")
-        conn.execute(
-            "UPDATE contact_suggestion SET status='adopted', block_reason=NULL, decided_at=? WHERE id=?",
-            (now_ms, suggestion_id),
-        )
+        _apply_adoption(conn, suggestion, now_ms=now_ms)
+        _mark_decided(conn, suggestion_id, "adopted", now_ms=now_ms)
     except ContactError as exc:
-        conn.execute(
-            "UPDATE contact_suggestion SET status='blocked', block_reason=?, decided_at=? WHERE id=?",
-            (f"{exc.code}: {exc.message}", now_ms, suggestion_id),
+        _mark_decided(
+            conn, suggestion_id, "blocked", now_ms=now_ms,
+            block_reason=f"{exc.code}: {exc.message}",
         )
         return {
             "id": suggestion_id,
@@ -428,6 +458,80 @@ def adopt_suggestion(conn: sqlite3.Connection, suggestion_id: int, *, now_ms: in
     if suggestion["type"] == "merge":
         result["merge_pair"] = contact_ids
     return result
+
+
+def bulk_resolve_suggestions(
+    conn: sqlite3.Connection, *, action: str, now_ms: int
+) -> dict[str, Any]:
+    """整批采纳 / 整批忽略待审建议 —— 范围是服务端全量 pending，调用方不传 id。
+
+    🔴 逐条不整批失败：批里某条被不变量守卫拦下时按逐条口同款标 blocked 并计入
+    ``blocked``，**不打断**剩下几十条（整批的价值就是清积压，一条挡住全批回滚等于没有
+    整批口）。merge 类进 ``skipped`` 不采纳，理由同 ``_apply_adoption``。
+
+    ``ignore`` 收全部（含 merge）—— 忽略没有主表副作用。
+
+    整批共用调用方传进来的 conn/事务（router 层 ``with repo.transaction()``），
+    ``contact.changed`` 由 router 在**提交之后**广播（事务内不发事件）。
+    """
+    if action not in CONTACT_SUGGESTION_BULK_ACTIONS:
+        raise ContactError(
+            "E_INVALID_ARG", f"action must be one of {CONTACT_SUGGESTION_BULK_ACTIONS}"
+        )
+    # 排序与 list_suggestions 逐字同款：超过上限时先处置用户正看着的那一页，
+    # 剩下的由 remaining 交代（再点一次接着清）。
+    rows = conn.execute(
+        "SELECT * FROM contact_suggestion WHERE status='pending' "
+        "ORDER BY created_at DESC, id DESC LIMIT ?",
+        (CONTACT_SUGGESTION_BULK_MAX,),
+    ).fetchall()
+    adopted = 0
+    ignored = 0
+    blocked: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    touched_contact_ids: set[int] = set()
+    for row in rows:
+        suggestion = _decode_suggestion(row)
+        suggestion_id = suggestion["id"]
+        if action == "ignore":
+            _mark_decided(conn, suggestion_id, "ignored", now_ms=now_ms)
+            ignored += 1
+            continue
+        if suggestion["type"] == "merge":
+            skipped.append(
+                {"id": suggestion_id, "reason": CONTACT_SUGGESTION_BULK_SKIP_MERGE}
+            )
+            continue
+        try:
+            _apply_adoption(conn, suggestion, now_ms=now_ms)
+        except ContactError as exc:
+            _mark_decided(
+                conn, suggestion_id, "blocked", now_ms=now_ms,
+                block_reason=f"{exc.code}: {exc.message}",
+            )
+            blocked.append(
+                {"id": suggestion_id, "code": exc.code, "message": exc.message}
+            )
+            continue
+        _mark_decided(conn, suggestion_id, "adopted", now_ms=now_ms)
+        adopted += 1
+        touched_contact_ids.update(suggestion["contact_ids"])
+    remaining = int(
+        conn.execute(
+            "SELECT COUNT(*) FROM contact_suggestion WHERE status='pending'"
+        ).fetchone()[0]
+    )
+    return {
+        "action": action,
+        "adopted": adopted,
+        "ignored": ignored,
+        "blocked": blocked,
+        "skipped": skipped,
+        # 处置后仍待审的条数（上限截断 + merge 跳过都会留下东西），前端据此知道没清完。
+        "remaining": remaining,
+        # 采纳动到的联系人 (router 据此在事务提交后发 contact.changed 定向失效)。
+        "contact_ids": sorted(touched_contact_ids),
+    }
 
 
 def assemble_contact_governance_spec(job: Any) -> dict[str, Any]:

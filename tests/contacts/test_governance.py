@@ -396,6 +396,81 @@ def test_blocked_guards_persist_reason(db):
     assert result["error"]["code"] == "E_MANAGER_CYCLE"
 
 
+def test_bulk_adopt_skips_merge_blocks_guarded_and_keeps_going(db):
+    """整批采纳：merge 归 skipped（仍 pending）、被守卫拦下的归 blocked，
+    都**不打断**批里其余几条 —— 一条挡住全批回滚等于没有整批口。"""
+    conn, _ = db
+    identity = _proposal(conn)
+    merge = _proposal(conn, "merge", [1, 2], {})
+    # former_email 指向唯一主邮箱 → 采纳时被 E_PRIMARY_EMAIL_CANNOT_BE_FORMER 拦下。
+    former = _proposal(conn, "former_email", [1], {"email": "alice@example.com"})
+    kind = _proposal(conn, "kind", [2], {"kind": "robot"})
+
+    result = governance.bulk_resolve_suggestions(conn, action="adopt", now_ms=5000)
+
+    assert result["action"] == "adopt"
+    assert result["adopted"] == 2
+    assert result["ignored"] == 0
+    assert result["skipped"] == [
+        {"id": merge["id"], "reason": governance.CONTACT_SUGGESTION_BULK_SKIP_MERGE}
+    ]
+    assert [item["id"] for item in result["blocked"]] == [former["id"]]
+    assert result["blocked"][0]["code"] == "E_PRIMARY_EMAIL_CANNOT_BE_FORMER"
+    # merge 那条还留在队列里等人工确认 → remaining 记它一条。
+    assert result["remaining"] == 1
+    assert result["contact_ids"] == [1, 2]
+
+    statuses = dict(
+        conn.execute("SELECT id, status FROM contact_suggestion").fetchall()
+    )
+    assert statuses[identity["id"]] == "adopted"
+    assert statuses[kind["id"]] == "adopted"
+    assert statuses[merge["id"]] == "pending"
+    assert statuses[former["id"]] == "blocked"
+    # 真的写进了主表（不是只翻了建议行的状态）。
+    assert conn.execute("SELECT organization FROM contact WHERE id=1").fetchone()[0] == "ACME"
+    assert conn.execute("SELECT kind FROM contact WHERE id=2").fetchone()[0] == "robot"
+
+
+def test_bulk_ignore_marks_everything_including_merge(db):
+    """忽略没有主表副作用，merge 也一起收 —— 与采纳口的分叉只在 adopt 这一侧。"""
+    conn, _ = db
+    _proposal(conn)
+    _proposal(conn, "merge", [1, 2], {})
+
+    result = governance.bulk_resolve_suggestions(conn, action="ignore", now_ms=5100)
+
+    assert (result["ignored"], result["adopted"]) == (2, 0)
+    assert result["skipped"] == [] and result["blocked"] == []
+    assert result["remaining"] == 0
+    # 主表零副作用，也就没有可失效的联系人。
+    assert result["contact_ids"] == []
+    assert [row[0] for row in conn.execute("SELECT status FROM contact_suggestion")] == [
+        "ignored",
+        "ignored",
+    ]
+
+
+def test_bulk_truncates_at_limit_and_reports_remaining(db, monkeypatch):
+    conn, _ = db
+    monkeypatch.setattr(governance, "CONTACT_SUGGESTION_BULK_MAX", 2)
+    # 三条各指一个人：同证据同类型同人会被 create_suggestion 判重合成一条。
+    for contact_id in (1, 2, 3):
+        _proposal(conn, "kind", [contact_id], {"kind": "robot"})
+
+    result = governance.bulk_resolve_suggestions(conn, action="ignore", now_ms=5200)
+
+    assert result["ignored"] == 2
+    assert result["remaining"] == 1
+
+
+def test_bulk_rejects_unknown_action(db):
+    conn, _ = db
+    with pytest.raises(ContactError) as exc_info:
+        governance.bulk_resolve_suggestions(conn, action="delete", now_ms=5300)
+    assert exc_info.value.code == "E_INVALID_ARG"
+
+
 def test_daily_tick_fires_once(db):
     conn, path = db
     conn.commit()

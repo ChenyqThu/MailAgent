@@ -16,6 +16,11 @@
 // 🔴 零乐观更新：采纳/忽略都只在服务端落定后失效缓存，失败时那张卡留在原位
 // （§4.2 纪律，与画像建议值同一条）。
 //
+// 🔴 整批口（「全部采纳」/「全部忽略」）的范围是**服务端全量 pending**，不是已加载的那
+// 一页 —— 队列端点服务端分页（默认 50 条），前端拉不齐 id，按已加载页做只会清一半积压。
+// 因此队列这一屏所有计数（tab 数字、提示条、底部「已显示 X / 共 N 条」）一律读
+// agent-status 的 `pending_count`，与抽屉外的胶囊徽标同口径。
+//
 // 🔴 merge 类的「采纳」不落合并：服务端把这条标 adopted 并交回**升序归一**的 id 对，
 // 前端据此关抽屉 + 直入合并预览（唯一的人工确认路径）。
 //
@@ -29,6 +34,7 @@ import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
   ArrowRight,
+  CheckCheck,
   CircleCheckBig,
   CircleDot,
   Loader2,
@@ -36,13 +42,17 @@ import {
   ShieldAlert,
   Sparkles,
   UserSearch,
-  X
+  X,
+  XCircle
 } from 'lucide-react'
 
 import type {
   ContactAgentHistoryItem,
-  ContactGovernanceSuggestion
+  ContactGovernanceSuggestion,
+  ContactSuggestionBulkAction,
+  ContactSuggestionBulkResult
 } from '@shared/api/types/contact'
+import { CONTACT_SUGGESTION_BULK_SKIP_MERGE } from '@shared/api/types/contact'
 import { Drawer } from '@shared/components/ui/drawer'
 import { EmptyState } from '@shared/components/feedback/EmptyState'
 import { SegmentedControl } from '@shared/components/ui/segmented'
@@ -378,6 +388,101 @@ function RunsTab({
   )
 }
 
+/* ── 队列 tab：整批处置 ───────────────────────────────────────────────── */
+
+/** 「全部采纳」/「全部忽略」提示条（形态照 matters 的
+ *  `MatterSuggestedResourceBulkActions`：列表顶部一条，逐条按钮保留）。
+ *
+ *  🔴 计数用 agent-status 的 `pending_count`（服务端全量），不是已加载页的条数 ——
+ *  队列端点服务端分页（默认 50 条一页），拿 items.length 当计数会在积压超过一页时少报，
+ *  而整批口处置的正是全量。
+ *
+ *  两个动作都要二次确认：先点按钮 → 同一条上换成「确认…？」→ 再点才发（会话列表的行内
+ *  删除确认同款，不为一次确认拉一个弹窗）。 */
+function QueueBulkActions({
+  pendingCount,
+  busy,
+  runningAction,
+  onRun
+}: {
+  pendingCount: number
+  busy: boolean
+  runningAction: ContactSuggestionBulkAction | null
+  onRun(action: ContactSuggestionBulkAction): void
+}): React.ReactElement {
+  const { t } = useTranslation()
+  const [armed, setArmed] = useState<ContactSuggestionBulkAction | null>(null)
+
+  const fire = (action: ContactSuggestionBulkAction): void => {
+    setArmed(null)
+    onRun(action)
+  }
+
+  return (
+    <div className="mb-[9px] flex flex-wrap items-center gap-2 rounded-[var(--r-card)] border border-ai/25 bg-ai/[0.06] px-3 py-2">
+      <Sparkles size={13} aria-hidden className="shrink-0 text-ai" />
+      <span className="min-w-0 flex-1 text-meta text-ink-fg-1">
+        {armed === null
+          ? t('contacts.agent.bulk.prompt', { count: pendingCount })
+          : t(
+              armed === 'adopt'
+                ? 'contacts.agent.bulk.confirmAdopt'
+                : 'contacts.agent.bulk.confirmIgnore',
+              { count: pendingCount }
+            )}
+      </span>
+      {armed === null ? (
+        <>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setArmed('adopt')}
+            className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] bg-ai px-2.5 py-1 text-meta font-medium text-white disabled:opacity-50"
+          >
+            {runningAction === 'adopt' ? (
+              <Loader2 size={11} aria-hidden className="animate-spin" />
+            ) : (
+              <CheckCheck size={11} aria-hidden />
+            )}
+            {t('contacts.agent.bulk.adopt')}
+          </button>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => setArmed('ignore')}
+            className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1 text-meta text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3 disabled:opacity-50"
+          >
+            {runningAction === 'ignore' ? (
+              <Loader2 size={11} aria-hidden className="animate-spin" />
+            ) : (
+              <XCircle size={11} aria-hidden />
+            )}
+            {t('contacts.agent.bulk.ignore')}
+          </button>
+        </>
+      ) : (
+        <>
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => fire(armed)}
+            className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] bg-ai px-2.5 py-1 text-meta font-medium text-white disabled:opacity-50"
+          >
+            {t('contacts.agent.bulk.confirm')}
+          </button>
+          <button
+            type="button"
+            onClick={() => setArmed(null)}
+            className="inline-flex items-center gap-1 rounded-[var(--r-ctl)] border border-ink-border px-2.5 py-1 text-meta text-ink-fg-2 transition-colors duration-fast ease-standard hover:bg-ink-3"
+          >
+            {t('contacts.agent.bulk.cancel')}
+          </button>
+        </>
+      )}
+    </div>
+  )
+}
+
 /* ── 抽屉本体 ─────────────────────────────────────────────────────────── */
 
 export interface ContactAgentDrawerProps {
@@ -461,6 +566,35 @@ export function ContactAgentDrawer({
     onError: (error) => toastError(t('contacts.toast.saveFailed'), errorMessage(error))
   })
 
+  // 整批口：范围是服务端全量 pending（不传 id），逐条口保留。汇总里的 blocked / skipped
+  // 不是错误，但也不能不说 —— 「点了全部采纳，队列却没清空」必须当场解释清楚。
+  const bulk = useMutation({
+    mutationFn: (action: ContactSuggestionBulkAction) => api.bulkResolveSuggestions(action),
+    onSuccess: async (result: ContactSuggestionBulkResult) => {
+      await invalidate()
+      const mergeSkipped = result.skipped.filter(
+        (item) => item.reason === CONTACT_SUGGESTION_BULK_SKIP_MERGE
+      ).length
+      // remaining 里已经含 merge 那几条，减掉才是「这一轮没轮到的」（上限截断），
+      // 否则同一批条目会被两句话各报一次。
+      const leftover = Math.max(0, result.remaining - mergeSkipped)
+      const notes = [
+        mergeSkipped > 0 ? t('contacts.toast.bulkMergeSkipped', { count: mergeSkipped }) : null,
+        result.blocked.length > 0
+          ? t('contacts.toast.bulkBlocked', { count: result.blocked.length })
+          : null,
+        leftover > 0 ? t('contacts.toast.bulkRemaining', { count: leftover }) : null
+      ].filter((note): note is string => note !== null)
+      toastSuccess(
+        result.action === 'adopt'
+          ? t('contacts.toast.bulkAdopted', { count: result.adopted })
+          : t('contacts.toast.bulkIgnored', { count: result.ignored }),
+        notes.length > 0 ? notes.join(' · ') : undefined
+      )
+    },
+    onError: (error) => toastError(t('contacts.toast.saveFailed'), errorMessage(error))
+  })
+
   const run = useMutation({
     mutationFn: () => api.runAgentScan(),
     onSuccess: async (result) => {
@@ -479,7 +613,11 @@ export function ContactAgentDrawer({
     !blocked.isPending &&
     pendingItems.length === 0 &&
     blockedItems.length === 0
-  const busy = adopt.isPending || ignore.isPending
+  const busy = adopt.isPending || ignore.isPending || bulk.isPending
+  // 🔴 待审计数以服务端全量为准（`pending_count`），不是已加载页的 length —— 队列端点
+  // 服务端分页（默认 50 条一页），两个口径长期不一致正是「tab 数字与胶囊徽标各说各话」
+  // 的病根。后端没给这个键时（老后端）退回已加载条数。
+  const pendingCount = agentStatus.data?.pending_count ?? pendingItems.length
 
   const renderCard = (suggestion: ContactGovernanceSuggestion): React.ReactElement => (
     <ContactSuggestionCard
@@ -533,7 +671,7 @@ export function ContactAgentDrawer({
           options={[
             {
               value: 'queue',
-              label: t('contacts.agent.tab.queue', { count: pendingItems.length })
+              label: t('contacts.agent.tab.queue', { count: pendingCount })
             },
             { value: 'runs', label: t('contacts.agent.tab.runs') }
           ]}
@@ -563,6 +701,14 @@ export function ContactAgentDrawer({
               />
             ) : (
               <>
+                {pendingItems.length > 0 ? (
+                  <QueueBulkActions
+                    pendingCount={pendingCount}
+                    busy={busy}
+                    runningAction={bulk.isPending ? bulk.variables : null}
+                    onRun={(action) => bulk.mutate(action)}
+                  />
+                ) : null}
                 {/* 采纳/忽略后该卡从服务端投影里消失 → 只做透明度过渡（红线：不许位移动画）。 */}
                 <div
                   className={cn(
@@ -572,6 +718,17 @@ export function ContactAgentDrawer({
                 >
                   {pendingItems.map(renderCard)}
                 </div>
+                {/* 服务端分页（默认 50 条一页）：加载到的比全量少时说清楚，别让「全部采纳」
+                    看起来只对着眼前这几张卡。这里不做翻页/无限滚动 —— 整批口就是为清积压
+                    准备的，剩下的再点一次接着清。 */}
+                {pendingCount > pendingItems.length ? (
+                  <p className="mt-2 text-micro leading-[1.6] text-ink-fg-3">
+                    {t('contacts.agent.queueTruncated', {
+                      shown: pendingItems.length,
+                      total: pendingCount
+                    })}
+                  </p>
+                ) : null}
                 {blockedItems.length > 0 ? (
                   <div className="mt-4">
                     <SecHead

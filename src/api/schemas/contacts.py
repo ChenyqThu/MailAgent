@@ -91,6 +91,17 @@ class ContactProfileSuggestionIgnoreRequest(BaseModel):
     field: str = Field(min_length=1)
 
 
+class ContactSuggestionBulkRequest(BaseModel):
+    """整批采纳 / 忽略待审建议。**不带 id 列表** —— 范围是服务端全量 pending
+    (队列是分页的, 按已加载页做只会清一半积压)。
+
+    动作值域跟随本面惯例在域函数 (``governance.bulk_resolve_suggestions``) 校验,
+    非法值 → 400 E_INVALID_ARG (与 view/sort/kind 同一种错误形状, 不用 pydantic 422)。
+    """
+
+    action: str = Field(min_length=1)
+
+
 class ContactGovernanceEvidence(BaseModel):
     message_id: str = Field(min_length=1)
     quote: str = Field(min_length=1, max_length=5000)

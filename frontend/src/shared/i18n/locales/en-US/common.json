@@ -6592,6 +6592,11 @@
       "suggestionAdopted": "Suggestion adopted",
       "suggestionIgnored": "Suggestion dismissed · may return with new evidence",
       "suggestionBlocked": "Not adopted · it stays in the queue and nothing was written",
+      "bulkAdopted": "Adopted {count} suggestions",
+      "bulkIgnored": "Dismissed {count} suggestions",
+      "bulkMergeSkipped": "{count} merge suggestions need one-by-one confirmation",
+      "bulkBlocked": "{count} stopped by a guard · see “Blocked suggestions”",
+      "bulkRemaining": "{count} still awaiting review · press again to keep going",
       "scanQueued": "Governance scan queued · new suggestions land here when it finishes",
       "scanCoalesced": "A governance scan is already running · reusing that one, nothing queued twice",
       "promptSaved": "System prompt saved · takes effect on the next scan",
@@ -6618,6 +6623,16 @@
         "title": "Blocked suggestions",
         "hint": "An invariant guard stopped these on adoption. They stay in the queue and nothing was written."
       },
+      "bulk": {
+        "prompt": "{count} suggestions to review",
+        "adopt": "Adopt all",
+        "ignore": "Dismiss all",
+        "confirmAdopt": "Adopt all {count}?",
+        "confirmIgnore": "Dismiss all {count}?",
+        "confirm": "Confirm",
+        "cancel": "Cancel"
+      },
+      "queueTruncated": "Showing {shown} of {total} · bulk actions apply to every pending suggestion",
       "loadFailed": "Could not load the review queue · what you see may be incomplete",
       "scanFailed": "The last governance scan failed: {error} · an empty queue does not mean nothing was found",
       "runNow": "Run a governance scan now",

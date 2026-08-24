@@ -389,6 +389,31 @@ export interface ContactSuggestionIgnoreResult {
   decided_at: number
 }
 
+/** POST /api/contacts/suggestions/bulk 的动作。 */
+export type ContactSuggestionBulkAction = 'adopt' | 'ignore'
+
+/** merge 类在整批采纳里的跳过理由 (真合并的唯一路径是人工走合并预览二次确认)。
+ *  手抄自 `src/contacts/governance.py::CONTACT_SUGGESTION_BULK_SKIP_MERGE` —— 漂了
+ *  只会让那句「N 条合并建议需逐条确认」不出现, 不影响处置结果。 */
+export const CONTACT_SUGGESTION_BULK_SKIP_MERGE = 'merge_requires_manual_confirmation'
+
+/** 整批处置的分类汇总。HTTP 恒 200 —— 被守卫拦下的进 `blocked`、merge 类进 `skipped`,
+ *  逐条如实分类, 不整批打回。
+ *  🔴 范围是**服务端全量 pending**, 前端不传 id (队列分页拉不齐 id, 按已加载页做只会
+ *  清一半积压); 上限截断后没做完的条数由 `remaining` 交代。 */
+export interface ContactSuggestionBulkResult {
+  action: ContactSuggestionBulkAction
+  adopted: number
+  ignored: number
+  blocked: { id: number; code: string; message: string }[]
+  /** `reason` 目前只有 CONTACT_SUGGESTION_BULK_SKIP_MERGE。 */
+  skipped: { id: number; reason: string }[]
+  /** 处置之后仍待审的条数 (上限截断 + merge 跳过的都在里面)。 */
+  remaining: number
+  /** 采纳动到的联系人 (服务端据此发 contact.changed)。ignore 恒空。 */
+  contact_ids: number[]
+}
+
 /** POST /api/contacts/agent/run —— 只入队, 不等结果。`coalesced` = 已有一轮
  *  queued/running, 复用了它。 */
 export interface ContactAgentRunResult {

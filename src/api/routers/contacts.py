@@ -34,6 +34,7 @@ from src.api.schemas.contacts import (
     ContactProfileSuggestionIgnoreRequest,
     ContactResolveRequest,
     ContactSelfRequest,
+    ContactSuggestionBulkRequest,
 )
 from src.contacts import service as contact_service
 from src.contacts import profile as contact_profile
@@ -226,6 +227,32 @@ async def ignore_governance_suggestion(
             suggestion_id,
             now_ms=_now_ms(),
         )
+    return success_envelope(result, request=request)
+
+
+@router.post("/suggestions/bulk")
+async def bulk_resolve_governance_suggestions(
+    request: Request,
+    body: ContactSuggestionBulkRequest,
+    repo: ContactRepository = Depends(get_contact_repository),
+):
+    """整批采纳 / 忽略待审建议 —— 范围是服务端全量 pending, body 只带动作。
+
+    HTTP 恒 200（含「一条都没做」）：被守卫拦下的进 `data.blocked`、merge 类进
+    `data.skipped`，逐条如实分类。逐条 adopt 那条 4xx 语义在这里不适用 —— 整批里
+    一条被拦不该把另外几十条的结果一起打回去。
+    """
+    with repo.transaction() as conn:
+        result = _call(
+            contact_governance.bulk_resolve_suggestions,
+            conn,
+            action=body.action,
+            now_ms=_now_ms(),
+        )
+    # 🔴 事务提交之后才广播（`_publish_contact_changed` 头注同纪律）；
+    # ignore 不动主表, contact_ids 为空 → 不发。
+    if result["contact_ids"]:
+        _publish_contact_changed(result["contact_ids"], scope="governance_bulk_adopt")
     return success_envelope(result, request=request)
 
 

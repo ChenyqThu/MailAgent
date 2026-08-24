@@ -26,6 +26,8 @@ import type {
   ContactSeniority,
   ContactSort,
   ContactSuggestionAdoptResult,
+  ContactSuggestionBulkAction,
+  ContactSuggestionBulkResult,
   ContactSuggestionIgnoreResult,
   ContactSuggestionListResponse,
   ContactSuggestionStatus,
@@ -110,6 +112,12 @@ export interface ContactsApi {
    *  调用方 catch 后失效队列，那条会从 `blocked` 列表里读回来。 */
   adoptSuggestion(suggestionId: number): Promise<ContactSuggestionAdoptResult>
   ignoreSuggestion(suggestionId: number): Promise<ContactSuggestionIgnoreResult>
+  /** WP7 整批处置。🔴 **不传 id** —— 范围是服务端全量 pending（队列是分页的，按已加载页
+   *  做只会清一半积压）。HTTP 恒 200：merge 类进 `skipped`、被守卫拦下的进 `blocked`，
+   *  没做完的条数看 `remaining`。 */
+  bulkResolveSuggestions(
+    action: ContactSuggestionBulkAction
+  ): Promise<ContactSuggestionBulkResult>
   /** WP7「现在跑一次」。只入队（幂等：当天同一个 Idempotency-Key + 已有 queued/running
    *  则 `coalesced:true`），不等扫描结束。 */
   runAgentScan(): Promise<ContactAgentRunResult>
@@ -230,6 +238,9 @@ export function createContactsApi(baseUrl: string): ContactsApi {
     },
     ignoreSuggestion(suggestionId) {
       return request(baseUrl, 'POST', `/contacts/suggestions/${segment(suggestionId)}/ignore`)
+    },
+    bulkResolveSuggestions(action) {
+      return request(baseUrl, 'POST', '/contacts/suggestions/bulk', { body: { action } })
     },
     runAgentScan() {
       return request(baseUrl, 'POST', '/contacts/agent/run')
