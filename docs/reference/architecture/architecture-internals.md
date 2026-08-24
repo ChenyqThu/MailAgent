@@ -518,7 +518,7 @@ log4j.logger.davmail=INFO
 
 **详见**：[`docs/multi-folder-sync-prd.md`](../folder-sync/multi-folder-sync-prd.md) · [`docs/multi-folder-sync-design.md`](../folder-sync/multi-folder-sync-design.md) · [`docs/multi-folder-sync-handoff.md`](../../archive/2026-06/multi-folder-sync-handoff.md) · 看板 [`docs/multi-folder-sync-matrix.md`](../folder-sync/multi-folder-sync-matrix.md)。
 
-## 跨语言手抄常量的一致性闸（可复用模式，现存二十二闸）
+## 跨语言手抄常量的一致性闸（可复用模式，现存二十四闸）
 
 **问题形态**：一个常量 / 派生表 / 集合，在 Python 与 TypeScript（或多个 TS 文件）里各有一份**手抄**镜像。
 类型系统跨不过语言边界，import 也跨不过 —— 于是改一处、漏另一处，**测试全绿、编译干净、运行时静默错**。
@@ -552,9 +552,10 @@ log4j.logger.davmail=INFO
    闸失效等于没有闸，而且没人会发现。所以抽取器只认当前的单行习语，重构者被迫回来同步更新抽取器，
    顺手核对镜像仍一致。
 
-**现存二十二闸**（前四条是原有的，中间八条随 issue #68 补齐，再四条随 08-02 custom-agent review 补齐，
+**现存二十四闸**（前四条是原有的，中间八条随 issue #68 补齐，再四条随 08-02 custom-agent review 补齐，
 再两条随 08-01 MCP connector PR3 补齐，再一条随 08-05 列表筛选/排序菜单重做补齐，
-一条随 08-06 connector 双轨目录补齐，末两条随 08-20 perf epic 补齐）：
+一条随 08-06 connector 双轨目录补齐，再两条随 08-20 perf epic 补齐，
+末两条随 08-24 通讯录收尾批补齐）：
 
 | 镜像的东西 | 镜像在哪几处 | 闸 | 漏改的后果 |
 |---|---|---|---|
@@ -580,6 +581,8 @@ log4j.logger.davmail=INFO
 | SSE 事件名全集（08-20 perf epic） | `frontend/src/shared/api/types/events.ts::SSE_EVENT_TYPES`（TS 契约数组，28 个）· Python 侧无单一常量表——真源是散布各模块的 `safe_publish("…")` 字面量 | `frontend/tests/shared/api/sseEventTypes.contract.test.ts`（**双向**对拍：正则抽取三种发布写法[字面量 / `event = "a" if … else "b"` / 内联三元首实参] + 20 个 pinned 发布文件的抽取下限 + 禁 `safe_publish(f"…")` 动态拼名；抽取失败必红——首跑即抓到藏在内联三元里的 `llm.gave_up`） | 后端新增事件前端不知道 → renderer 路由 default 静默丢弃（`folder.synced` 曾以死订阅形态存在数月，文件夹树 fallback 是假的）；TS 侧多余成员 = 把枚举当契约读的人拿到幻觉 |
 | IMAP modified UTF-7 解码（08-20 perf epic） | `src/mail/backend/imap_utf7.py`（Python 真源：discover 的 display_name 与 `email_metadata.mailbox` 落库值都出自它）· `frontend/src/shared/lib/imapUtf7.ts`（Sidebar seed 树的 TS 镜像，跨进程/跨语言消灭不掉） | `frontend/tests/shared/lib/imapUtf7.test.ts`（6 组共享向量固定 Python 现算产物逐字对拍，样本与 `tests/api/test_folder_discover.py` fixture 同批；一处已知良性分歧[非法 base64 段]在测试注释里写明） | 解码分歧 = seed 树的过滤 key 与库内 mailbox 值不一致 → 点文件夹列表过滤错/过滤空，discover 回来又「自愈」——症状间歇且不可复现 |
 | connector 目录 **track** 词表（08-06 双轨）+ track↔source 双射 | `src/connectors/catalog.py::CONNECTOR_TRACKS`（canonical）+ `TRACK_TO_SOURCE`（两套词表的**唯一**对接点）· `frontend/src/shared/api/types/connector.ts::ConnectorTrack`（编译期类型联合，无运行时值可 import） | `tests/config/test_connector_contract_parity.py` ③c（跨语言有序相等）+ `tests/connectors/test_catalog_tracks.py::test_track_and_source_are_a_bijection`（**Python 内**：`TRACK_TO_SOURCE` 的值恰好铺满 `store.CONNECTOR_SOURCES`） | TS 少一档 → 新轨道的目录卡走进 default 分支：`direct` 卡被当 `composio` 卡渲染成「先填 Composio key」的 disabled 态，而那一轨恰恰**不需要 key** ⇒ 一整家结构上连不上，且没有任何报错指向真因。双射漏一边 → `row_is_off_track` 把一整轨的**正确**行判成「已被目录取代」，把 owner 诱导去断开重连一个本来就对的连接 |
+| 通讯录 kind / 可锁字段词表（08-24 通讯录收尾批） | `src/contacts/taxonomy.py::CONTACT_KIND_VALUES`/`CONTACT_LOCKABLE_FIELDS`（Python 单源）· `frontend/src/ai-gateway/tools/contacts.ts` 局部未导出 const `CONTACT_KINDS`/`CONTACT_IDENTITY_FIELDS`（chat 写工具的 `z.enum` 输入白名单；同文件另两个枚举 `CONTACT_FUNCTION/SENIORITY_VALUES` 走 `shared/api/types/contact.ts` 导入，已有 `tests/config/test_contact_enum_parity.py` 盖） | `frontend/tests/ai-gateway/contact_taxonomy_mirror.test.ts`（两侧都文本抽取——TS 侧 const 未导出、Python 侧 import 不到；集合相等，唯一消费点 `z.enum` 与序无关） | Python 加 kind / 可锁字段而 TS 不动 → chat 写工具对该值恒报「非法参数」，模型与用户都以为是自己填错，没有任何指向词表漂移的报错 |
+| compose 补全 `DIRECTORY_SQL`（逐字镜像，跨进程跨语言） | `frontend/src/electron/main/handlers/contacts.ts::DIRECTORY_SQL`（桌面 electron main 的通讯录 lane）· `src/repository/email_repository.py::_CONTACT_DIRECTORY_SQL`（远程 web `GET /api/email/contacts` 同款取数） | `frontend/tests/main/contact_directory_sql_mirror.test.ts`（两侧文本抽取字节级相等——两份文件注释本就自标「逐字同款必须同步改」，此前只有注释无闸） | 两份劈叉 = 桌面与远程 web 的收件人补全语义分裂（merged/hidden/is_self 排除集、曾用邮箱标记各判各的），两边各自看都自洽、零报错 |
 
 **什么时候必须建新闸**：你要在**第二处**手抄一个已有的常量 / 枚举 / 派生表，且两处无法共享同一个源
 （跨语言 / 跨部署 / 跨构件种类 / 跨进程 / 打包边界）。每闸的成本都在 100-200 行量级，

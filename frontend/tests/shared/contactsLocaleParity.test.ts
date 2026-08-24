@@ -31,3 +31,28 @@ describe('contacts locale parity', () => {
     expect(missingInZh, 'zh-CN 缺 key（该语言会渲染裸 key）').toEqual([])
   })
 })
+
+// `agents.contactProfile` / `agents.contactGovernance` 是「事项」大 tab 下画像配置抽屉 /
+// 治理配置抽屉的文案子树 —— 与上面的 `contacts` 子树是两棵不同的树（不同 tab、不同抽屉），
+// 从没被上面那条测试覆盖过（task 08-24 收尾批，PRD §B-3 补的存量缺口）。
+describe('agents.contactProfile / agents.contactGovernance locale parity', () => {
+  test.each(['contactProfile', 'contactGovernance'] as const)(
+    'zh-CN 与 en-US 的 agents.%s 子树 key 集合完全一致',
+    (subtree) => {
+      const zh = (zhCN as Record<string, unknown>).agents as Record<string, unknown> | undefined
+      const en = (enUS as Record<string, unknown>).agents as Record<string, unknown> | undefined
+      // canary：agents 顶层块或子树整个消失（改名/搬家）必须红，不许平凡绿。
+      expect(zh, 'zh-CN 缺 agents 顶层块').toBeTruthy()
+      expect(en, 'en-US 缺 agents 顶层块').toBeTruthy()
+      expect(zh?.[subtree], `zh-CN 缺 agents.${subtree} 子树`).toBeTruthy()
+      expect(en?.[subtree], `en-US 缺 agents.${subtree} 子树`).toBeTruthy()
+
+      const zhKeys = new Set(flattenKeys(zh?.[subtree], `agents.${subtree}`))
+      const enKeys = new Set(flattenKeys(en?.[subtree], `agents.${subtree}`))
+      const missingInEn = [...zhKeys].filter((key) => !enKeys.has(key))
+      const missingInZh = [...enKeys].filter((key) => !zhKeys.has(key))
+      expect(missingInEn, 'en-US 缺 key（该语言会渲染裸 key）').toEqual([])
+      expect(missingInZh, 'zh-CN 缺 key（该语言会渲染裸 key）').toEqual([])
+    }
+  )
+})
