@@ -42,19 +42,32 @@ export function useNotificationUnreadCount(): UseQueryResult<NotificationUnreadC
   })
 }
 
-/** 面板列表。活跃态（state='open'，含到期 snoozed）+ 当前 tab 的 category（null = All）；
- *  `enabled` 由面板开合驱动 —— 关着的时候一次都不拉（AgentPendingBadge 的「不白拉」精神）。
- *  category 进 queryKey：切 tab = 另一份结果集，各自缓存、来回切不重取。 */
-export function useNotificationList(
-  open: boolean,
-  category: NotificationCategory | null
-): UseQueryResult<NotificationListResult> {
+/** 面板一屏的条数。服务端上限 100；50 是 design §5 的默认档。 */
+const LIST_LIMIT = 50
+
+/** 面板列表的 key/queryFn 配方。**单独抽出来**是为了启动预热（`startupPrefetch.ts` 的 T2）
+ *  与面板读的是同一份缓存 —— 预热若在第二处手抄 key 或参数，写进去的是另一条 query，
+ *  面板首挂照样冷加载（contactListPagedOptions 同款理由）。 */
+export function notificationListOptions(api: NotificationsApi): {
+  queryKey: ReturnType<typeof qk.notifications.list>
+  queryFn: () => Promise<NotificationListResult>
+  staleTime: number
+} {
+  return {
+    queryKey: qk.notifications.list('open'),
+    queryFn: () => api.list({ state: 'open', limit: LIST_LIMIT }),
+    staleTime: 4_000
+  }
+}
+
+/** 面板列表。活跃态（state='open'，含到期 snoozed）**全类目一份**；`enabled` 由面板开合
+ *  驱动 —— 关着的时候不主动重取（启动预热已经把这份缓存放好了，打开即有内容）。
+ *  🔴 不按 tab 分查询：切 tab 是前端过滤（`notificationModel::filterByTab`）。 */
+export function useNotificationList(open: boolean): UseQueryResult<NotificationListResult> {
   const api = useNotificationsApi()
   return useQuery({
-    queryKey: qk.notifications.list(category, 'open'),
-    queryFn: () => api.list({ state: 'open', limit: 50, category: category ?? undefined }),
-    enabled: open,
-    staleTime: 4_000
+    ...notificationListOptions(api),
+    enabled: open
   })
 }
 

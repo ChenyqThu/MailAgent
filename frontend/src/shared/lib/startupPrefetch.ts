@@ -7,10 +7,12 @@
 //         button+navigate ⇒ defaultPreload:'intent' 实际不触发 —— 这里 + Sidebar 的
 //         onHover 预载一起补上这个缺口)。
 //   T2 —— serve-api 可达 (mailagent:api-ready 广播 / SSE connected / config 缓存已
-//         在场) **且已过 T1** + 再一次 idle → prefetch 事项主列表 + 通讯录首页。
+//         在场) **且已过 T1** + 再一次 idle → prefetch 事项主列表 + 通讯录首页 + 通知面板列表。
 //         🔴 T2 挂在 T1 的 idle 回调之后: 预热必须让位邮件首屏 (红线), api-ready
 //         早到也等邮件列表先落地。
 //         🔴 不预热 pendingUpdates —— 纯投机的扇出面, 不在启动窗口抢 loopback 连接。
+//         通知列表不属于「纯投机」: 铃铛是用户高频主动打开的面, 且预热的就是打开后
+//         第一屏本身 (一条请求, 不扇出)。
 //
 // options 与两个工作台**同源** (matterLiveListOptions / contactListPagedOptions):
 // key / queryFn / 缓存配方一体, 预热出来的缓存必然被页面首挂命中。
@@ -24,10 +26,12 @@ import type { Query, QueryClient } from '@tanstack/react-query'
 
 import { createContactsApi } from '@shared/api/contacts'
 import { createMattersApi } from '@shared/api/matters'
+import { createNotificationsApi } from '@shared/api/notifications'
 import { readLastContactVisit } from '@shared/components/contacts/contactLastVisit'
 import { readContactListPrefs } from '@shared/components/contacts/contactListPrefs'
 import { contactListPagedOptions } from '@shared/components/contacts/hooks'
 import { matterLiveListOptions } from '@shared/components/matters/hooks'
+import { notificationListOptions } from '@shared/components/notifications/hooks'
 import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
 import { APP_CONFIG_QUERY_KEY, fetchAppConfigFlags } from '@shared/hooks/useAppConfig'
 import { EMAIL_QUERY_ROOT } from '@shared/lib/emailInvalidation'
@@ -101,7 +105,7 @@ export function startStartupPrefetch(io: StartupPrefetchIo): () => void {
   }
 }
 
-/** T2 数据预热: flags 门控后 prefetch 事项主列表 + 通讯录首页。
+/** T2 数据预热: flags 门控后 prefetch 事项主列表 + 通讯录首页, 外加通知面板首屏。
  *  view/sort 读 localStorage —— 与 ContactsWorkspace 的 mount 初值同源
  *  (readLastContactVisit / readContactListPrefs), q 恒 '' (工作台初值)。 */
 export async function prefetchWorkspaceData(queryClient: QueryClient): Promise<void> {
@@ -109,7 +113,11 @@ export async function prefetchWorkspaceData(queryClient: QueryClient): Promise<v
     queryKey: APP_CONFIG_QUERY_KEY,
     queryFn: fetchAppConfigFlags
   })
-  const tasks: Array<Promise<unknown>> = []
+  const tasks: Array<Promise<unknown>> = [
+    // 通知中心无 flag (design §8.e), 无条件预热。gcTime 30min + 面板 staleTime 4s ⇒
+    // 首开面板立刻有内容, 同时后台静默刷新一次。
+    queryClient.prefetchQuery(notificationListOptions(createNotificationsApi(resolveApiBaseUrl())))
+  ]
   if (flags.mattersEnabled) {
     tasks.push(
       queryClient.prefetchQuery(matterLiveListOptions(createMattersApi(resolveApiBaseUrl())))

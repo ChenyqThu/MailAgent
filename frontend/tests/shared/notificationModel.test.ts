@@ -16,6 +16,7 @@ import {
   NOTIFICATION_TAB_IDS,
   bellBadgeState,
   dayBucketOf,
+  filterByTab,
   groupByDay,
   snoozeUntilMs,
   tabCategory,
@@ -134,6 +135,29 @@ describe('通知面板 tab', () => {
   it('tabUnread：计数还没到 → 0（不渲染计数）', () => {
     expect(tabUnread('all', undefined)).toBe(0)
     expect(tabUnread('system', undefined)).toBe(0)
+  })
+
+  // 切 tab 的过滤在前端做（列表恒拉全类目一份）：漏过滤 = 每个 tab 都显示全部条目。
+  describe('filterByTab', () => {
+    const rows = [
+      { id: 1, category: 'results' as const },
+      { id: 2, category: 'action_required' as const },
+      { id: 3, category: 'system' as const },
+      { id: 4, category: 'action_required' as const }
+    ]
+
+    it('all → 原样返回（含顺序）', () => {
+      expect(filterByTab(rows, 'all').map((r) => r.id)).toEqual([1, 2, 3, 4])
+    })
+
+    it('类目 tab → 只留该类目，保持服务端排序', () => {
+      expect(filterByTab(rows, 'action_required').map((r) => r.id)).toEqual([2, 4])
+      expect(filterByTab(rows, 'system').map((r) => r.id)).toEqual([3])
+    })
+
+    it('该类目一条都没有 → 空（面板据此走空态，而不是显示别的类目）', () => {
+      expect(filterByTab(rows, 'reviews')).toEqual([])
+    })
   })
 })
 

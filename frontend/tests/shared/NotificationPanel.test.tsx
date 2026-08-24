@@ -1,13 +1,16 @@
 // @vitest-environment happy-dom
 
 // 通知面板 M2 交互的接线测试（批 B5）。纯函数那几条（分日 / 档位换算 / tab 值域 / 铃铛
-// 判据）在 notificationModel.test.ts；这里测的是**只有真渲染才会暴露**的三件：
-//   ① 切 tab 真的把 category 传给了列表查询（漏传的表现是「切了 tab 列表没变」）；
+// 判据）在 notificationModel.test.ts；这里测的是**只有真渲染才会暴露**的四件：
+//   ① 切 tab 在**本地**过滤同一份数据（列表查询不带 category —— 加载体验批把按 tab 分
+//      查询收敛掉了，回退的表现是切 tab 又开始各自白屏）；
 //   ② hover 菜单点得动，Snooze 档位传的是前端算好的 epoch 毫秒（不是 preset 字符串）；
-//   ③ 条目点击按 link 型分流到对应的落地动作（report 走 store-intent + /agents?tab=reports）。
+//   ③ 条目点击按 link 型分流到对应的落地动作（report 走 store-intent + /agents?tab=reports）；
+//   ④ 首次加载渲染骨架行（不是一行「加载中」文字）。
 //
-// 数据层整块 mock 掉（`./hooks`）：这三件事都与真实请求无关，接了真 fetch 只会把测试
-// 变成「能不能连上服务端」。
+// 数据层整块 mock 掉（`./hooks`）：这些事都与真实请求无关，接了真 fetch 只会把测试
+// 变成「能不能连上服务端」。「切 tab 不发第二次请求」那条要看真请求，另在
+// notificationPanelSingleQuery.test.tsx。
 
 import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
@@ -19,6 +22,8 @@ const hoisted = vi.hoisted(() => ({
   navigate: vi.fn(),
   quitAndInstall: vi.fn(),
   listSpy: vi.fn(),
+  /** 每个用例可改写的列表桩态（默认：一条 report 型通知，已加载完）。 */
+  listState: { items: null as unknown[] | null, isPending: false },
   markRead: vi.fn(),
   markAllRead: vi.fn(),
   snooze: vi.fn(),
@@ -53,10 +58,16 @@ const item = (over: Partial<NotificationItem> = {}): NotificationItem => ({
 const NOW = new Date(2026, 7, 21, 14, 30).getTime()
 
 vi.mock('@shared/components/notifications/hooks', () => ({
-  useNotificationList: (open: boolean, category: string | null) => {
-    hoisted.listSpy(open, category)
+  // 🔴 单参签名（open）是被测契约的一部分：category 若回到入参，就是「按 tab 分查询」
+  // 的回退 —— 下面的 listSpy 断言逐字盯着这件事。
+  useNotificationList: (...args: unknown[]) => {
+    hoisted.listSpy(...args)
+    if (hoisted.listState.isPending) {
+      return { data: undefined, dataUpdatedAt: 0, isPending: true, isError: false }
+    }
+    const items = (hoisted.listState.items as NotificationItem[] | null) ?? [item()]
     return {
-      data: { items: [item()], total: 1, unread: 1, limit: 50, offset: 0 },
+      data: { items, total: items.length, unread: 1, limit: 50, offset: 0 },
       dataUpdatedAt: NOW,
       isPending: false,
       isError: false
@@ -84,6 +95,8 @@ await i18n.changeLanguage('zh-CN')
 
 beforeEach(() => {
   vi.clearAllMocks()
+  hoisted.listState.items = null
+  hoisted.listState.isPending = false
   useReportNavigation.getState().clear()
 })
 
@@ -96,12 +109,27 @@ describe('NotificationPanel — tab 行', () => {
     expect(tabs.map((el) => el.textContent)).toEqual(['全部5', '待办2', '审阅', '结果3', '系统'])
   })
 
-  test('切 tab → 列表查询带上该 category（默认 All 不带）', () => {
+  test('切 tab → 本地过滤同一份数据，查询不带 category', () => {
+    hoisted.listState.items = [
+      item({ id: 1, category: 'results', title: '日报已生成' }),
+      item({ id: 2, category: 'action_required', title: '有一条审批待处理' }),
+      item({ id: 3, category: 'system', title: '同步异常' })
+    ]
     render(<NotificationPanel onClose={vi.fn()} />)
-    expect(hoisted.listSpy).toHaveBeenLastCalledWith(true, null)
+    // All：三条都在
+    expect(screen.getByText('日报已生成')).toBeTruthy()
+    expect(screen.getByText('有一条审批待处理')).toBeTruthy()
+    expect(screen.getByText('同步异常')).toBeTruthy()
 
     fireEvent.click(screen.getByRole('tab', { name: '待办' }))
-    expect(hoisted.listSpy).toHaveBeenLastCalledWith(true, 'action_required')
+    expect(screen.getByText('有一条审批待处理')).toBeTruthy()
+    expect(screen.queryByText('日报已生成')).toBeNull()
+    expect(screen.queryByText('同步异常')).toBeNull()
+
+    // 🔴 全程只有 `open` 一个入参：tab 不进查询 = 5 个 tab 共用一份缓存、切 tab 不重取。
+    // 把 category 加回入参（按 tab 分键的回退形状）这里必红。
+    expect(hoisted.listSpy.mock.calls.every((call) => call.length === 1)).toBe(true)
+    expect(hoisted.listSpy).toHaveBeenLastCalledWith(true)
   })
 
   test('「全部标为已读」标的是当前 tab（All = 全部 → undefined）', () => {
@@ -156,6 +184,31 @@ describe('NotificationPanel — 行菜单', () => {
     const now = new Date()
     const expected = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 8)
     expect(until.getTime()).toBe(expected.getTime())
+  })
+})
+
+describe('NotificationPanel — 首次加载', () => {
+  test('isPending → 渲染骨架行（不是一行「加载中」文字，也不是空态）', () => {
+    hoisted.listState.isPending = true
+    render(<NotificationPanel onClose={vi.fn()} />)
+
+    expect(screen.getByTestId('notification-list-skeleton')).toBeTruthy()
+    // 空态与骨架互斥：数据还没来就说「没有新通知」是最糟的一种误导。
+    expect(screen.queryByText('没有新通知')).toBeNull()
+  })
+
+  test('加载完 → 骨架让位真实行', () => {
+    render(<NotificationPanel onClose={vi.fn()} />)
+    expect(screen.queryByTestId('notification-list-skeleton')).toBeNull()
+    expect(screen.getByText('日报已生成')).toBeTruthy()
+  })
+
+  // 头部与 tab 行在数据到达前就能用（全部标为已读读的是另一条查询）—— 骨架只吃列表体。
+  test('骨架期间头部与 tab 行照常渲染', () => {
+    hoisted.listState.isPending = true
+    render(<NotificationPanel onClose={vi.fn()} />)
+    expect(screen.getAllByRole('tab').length).toBe(5)
+    expect(screen.getByRole('button', { name: /全部标为已读/ })).toBeTruthy()
   })
 })
 

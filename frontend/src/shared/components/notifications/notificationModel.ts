@@ -59,9 +59,21 @@ export function groupByDay<T extends { lastEventAt: number }>(
 export const NOTIFICATION_TAB_IDS = ['all', ...NOTIFICATION_CATEGORY_VALUES] as const
 export type NotificationTabId = (typeof NOTIFICATION_TAB_IDS)[number]
 
-/** tab → list 查询的 `category` 参数（`all` = 不过滤）。 */
+/** tab → `category`（`all` = 无类目）。写操作（「全部标为已读」）按它取范围。 */
 export function tabCategory(tab: NotificationTabId): NotificationCategory | null {
   return tab === 'all' ? null : tab
+}
+
+/** tab → 本地过滤。🔴 列表查询恒拉全类目那一份，切 tab 不发第二次请求 —— 按 tab 分查询
+ *  会让 5 个 tab 各持一份缓存、各自冷 fetch 各自白屏，而 All 的结果本就含全部类别。
+ *  代价写实：某类目的条目排在 All 的前 N 条之外时，该 tab 也看不到它（改前是每 tab 各
+ *  取 N 条）。N=50 的量级下这是可接受的取舍。 */
+export function filterByTab<T extends { category: NotificationCategory }>(
+  items: readonly T[],
+  tab: NotificationTabId
+): readonly T[] {
+  const category = tabCategory(tab)
+  return category === null ? items : items.filter((item) => item.category === category)
 }
 
 /** tab 上的未读数。`all` 取 total，其余取该类目 —— 两者同出服务端一条 GROUP BY，

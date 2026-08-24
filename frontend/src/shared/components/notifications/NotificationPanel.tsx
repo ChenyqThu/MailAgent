@@ -44,10 +44,12 @@ import {
   useSnoozeNotification
 } from './hooks'
 import { resolveNotificationLink } from './navigation'
+import { NotificationListSkeleton } from './NotificationSkeleton'
 import {
   NOTIFICATION_TAB_IDS,
   RELATIVE_WINDOW_MS,
   SNOOZE_PRESETS,
+  filterByTab,
   groupByDay,
   snoozeUntilMs,
   tabCategory,
@@ -282,7 +284,9 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
   const [tab, setTab] = useState<NotificationTabId>('all')
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
   const category = tabCategory(tab)
-  const list = useNotificationList(true, category)
+  // 一条查询喂五个 tab：拉的是全类目那一份，切 tab 只在下面本地过滤 —— 面板打开即有内容
+  // （启动预热已把这份缓存放好），切 tab 不再各自冷加载各自白屏。
+  const list = useNotificationList(true)
   // 与铃铛徽标**同一条查询**（同 queryKey，react-query 去重不多发请求）：tab 上的未读数、
   // 头部 chip、「全部已读」的可用性全读它，三处口径因此不会各说各话。
   const counts = useNotificationUnreadCount()
@@ -294,7 +298,10 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
   const openContactQueue = useContactNavigation((state) => state.openQueue)
   const openMatter = useMatterNavigation((state) => state.open)
 
-  const items = list.data?.items ?? []
+  const allItems = list.data?.items
+  // tab 过滤在前端做；未读计数不走这里（读服务端 `byCategory`，见下面的 tabOptions）——
+  // 两条口径分家是有意的：过滤的是「这一屏能看到的」，计数报的是「服务端一共有多少」。
+  const items = useMemo(() => filterByTab(allItems ?? [], tab), [allItems, tab])
   const unread = tabUnread(tab, counts.data)
   // 「此刻」的基准：优先取本次数据的落地时刻（React Query 的纯值，随每次 refetch 前进），
   // 首帧无数据时回落面板打开的时刻。🔴 不在 render 里直读 `Date.now()` —— 那是不纯调用
@@ -415,9 +422,7 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
       </div>
 
       {list.isPending ? (
-        <div className="px-4 py-8 text-center text-meta text-ink-fg-3">
-          {t('notifications.loading')}
-        </div>
+        <NotificationListSkeleton />
       ) : list.isError ? (
         <div className="px-4 py-8 text-center text-meta text-ink-fg-3">
           {t('notifications.error')}

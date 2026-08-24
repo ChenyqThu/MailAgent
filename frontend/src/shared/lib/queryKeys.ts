@@ -330,8 +330,10 @@ export const qk = {
   // 它下面跟着过期。
   notifications: {
     all: () => ['notifications'] as const,
-    list: (category: string | null, state: string) =>
-      ['notifications', category ?? 'all', state] as const,
+    // 🔴 category **不进 key**：面板恒拉全类目那一份，切 tab 是纯前端过滤
+    // （notificationModel::filterByTab）。按 tab 分键等于 5 份缓存各自冷 fetch、
+    // 各自白屏，而 All 的那一份本来就含全部类别。
+    list: (state: string) => ['notifications', 'list', state] as const,
     unreadCount: () => ['notifications', 'unread-count'] as const
   }
 } as const

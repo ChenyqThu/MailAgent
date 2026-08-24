@@ -7,8 +7,9 @@
 //      preloadRoute / prefetch 一个都不能发 (api-ready 早到也不行)。
 //   2. T1 (chunk) 在 email success + idle 后; T2 (数据) 还要再等 api-ready + 第二次 idle。
 //   3. dispose 后一切熄火 (StrictMode 双挂 / App 卸载不漏定时器)。
-//   4. prefetchWorkspaceData 写进缓存的 key 与两个工作台的读 key 完全同源
-//      (matterLiveListOptions / contactListPagedOptions + localStorage 同源初值)。
+//   4. prefetchWorkspaceData 写进缓存的 key 与页面的读 key 完全同源
+//      (matterLiveListOptions / contactListPagedOptions + localStorage 同源初值,
+//      notificationListOptions)。key 漂了 = 预热白做, 页面照样冷加载。
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
 import { QueryClient } from '@tanstack/react-query'
@@ -24,11 +25,21 @@ import { qk } from '@shared/lib/queryKeys'
 // ── 模块 mock: T2 数据预热的 api 工厂与 localStorage 读侧 ──────────────────
 const mockMatterList = vi.fn(async () => ({ items: [], total: 0 }))
 const mockContactList = vi.fn(async () => ({ items: [], total: 0, next_cursor: null }))
+const mockNotificationList = vi.fn(async () => ({
+  items: [],
+  total: 0,
+  unread: 0,
+  limit: 50,
+  offset: 0
+}))
 vi.mock('@shared/api/matters', () => ({
   createMattersApi: () => ({ list: mockMatterList })
 }))
 vi.mock('@shared/api/contacts', () => ({
   createContactsApi: () => ({ list: mockContactList })
+}))
+vi.mock('@shared/api/notifications', () => ({
+  createNotificationsApi: () => ({ list: mockNotificationList })
 }))
 // 与 ContactsWorkspace 的 mount 初值同源: view 来自 lastVisit, sort 来自 listPrefs。
 vi.mock('@shared/components/contacts/contactLastVisit', () => ({
@@ -41,6 +52,7 @@ vi.mock('@shared/components/contacts/contactListPrefs', () => ({
 afterEach(() => {
   mockMatterList.mockClear()
   mockContactList.mockClear()
+  mockNotificationList.mockClear()
 })
 
 // ── 假 IO: 手动扳机驱动时序 ────────────────────────────────────────────────
@@ -200,6 +212,17 @@ describe('prefetchWorkspaceData — 与工作台读 key 同源', () => {
     await prefetchWorkspaceData(qc)
     expect(mockMatterList).not.toHaveBeenCalled()
     expect(mockContactList).not.toHaveBeenCalled()
+  })
+
+  // 通知中心没有 flag（design §8.e）：两个工作台都关着也照样预热 —— 铃铛恒在。
+  test('通知面板首屏无条件预热，key 与面板 hook 逐字一致', async () => {
+    const qc = seededClient({ mattersEnabled: false, contactsEnabled: false })
+    await prefetchWorkspaceData(qc)
+    expect(mockNotificationList).toHaveBeenCalledTimes(1)
+    // 参数同源：活跃态 + 50 条，**不带 category**（面板恒拉全类目一份，切 tab 本地过滤）。
+    expect(mockNotificationList).toHaveBeenCalledWith({ state: 'open', limit: 50 })
+    // key 同源断言：面板的 useNotificationList 读的就是这个 key，漂了就等于没预热。
+    expect(qc.getQueryData(qk.notifications.list('open'))).toMatchObject({ items: [], total: 0 })
   })
 
   test('只开通讯录 → 只预热通讯录', async () => {
