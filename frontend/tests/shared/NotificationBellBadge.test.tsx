@@ -11,7 +11,7 @@
 // 数据层整块 mock（`./hooks`）：本组件对通知面板只做开合，请求真假与这三档无关。
 
 import { afterEach, describe, expect, test, vi } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import i18n from '../../src/shared/i18n'
 import type { NotificationUnreadCount } from '../../src/shared/api/types/notifications'
@@ -83,5 +83,30 @@ describe('NotificationBellBadge — 待办点（level 型指示）', () => {
     expect(screen.queryByTestId('notification-pending-dot')).toBeNull()
     expect(button.textContent).toBe('')
     expect(button.getAttribute('aria-label')).toBe('通知中心')
+  })
+})
+
+describe('NotificationBellBadge — 面板落点', () => {
+  // 铃铛在右簇**簇首**，右边还挂着帮助按钮和三个 picker；`.theme-popover` 写死的
+  // right:12px 会把 380px 面板整个推到视口右上角（偏出约一个面板宽）。
+  test('面板右缘对齐铃铛实测位置，而不是 CSS 的 right:12px', () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1000, configurable: true })
+    const button = renderWith(counts(0, 0))
+    button.getBoundingClientRect = (): DOMRect =>
+      ({
+        x: 880,
+        y: 6,
+        top: 6,
+        left: 880,
+        right: 900,
+        bottom: 28,
+        width: 20,
+        height: 22,
+        toJSON: () => ({})
+      }) as DOMRect
+
+    fireEvent.click(button)
+    const panel = screen.getByRole('dialog')
+    expect(panel.style.right).toBe('100px')
   })
 })

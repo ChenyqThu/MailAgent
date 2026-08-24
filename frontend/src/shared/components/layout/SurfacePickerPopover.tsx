@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
+import { useAnchoredPopover } from '@shared/hooks/useAnchoredPopover'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useAppearance, type SurfaceStyle } from '@shared/state/appearance'
 
@@ -39,15 +40,14 @@ export function SurfacePickerPopover(): React.ReactElement {
   const setSurface = useAppearance((s) => s.setSurface)
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
-  // popover 相对 trigger 右对齐（替代旧硬编码 right:52px —— 那个值与本按钮实际位置不符
-  // 会偏位，codex review LOW）。开弹时按按钮右缘算 right，对齐 AccentPicker 手法。
-  const [anchorRight, setAnchorRight] = useState<number | null>(null)
   // popover 出入场：无 backdrop，从右上微展开；scopeRef 兼作 outside-click 容器。
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
     backdrop: false,
     from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
     enterDuration: DUR.fast
   })
+  // 右对齐本按钮（替代旧硬编码 right:52px —— 那个值与本按钮实际位置不符会偏位）。
+  const placement = useAnchoredPopover(triggerRef, scopeRef, shouldRender)
 
   useEffect(() => {
     if (!open) return
@@ -73,13 +73,7 @@ export function SurfacePickerPopover(): React.ReactElement {
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => {
-          if (!open && triggerRef.current) {
-            const r = triggerRef.current.getBoundingClientRect()
-            setAnchorRight(Math.max(8, Math.round(window.innerWidth - r.right)))
-          }
-          setOpen((o) => !o)
-        }}
+        onClick={() => setOpen((o) => !o)}
         title={t('titleBar.surface.tooltip')}
         aria-label={t('titleBar.surface.aria')}
         aria-haspopup="dialog"
@@ -105,7 +99,7 @@ export function SurfacePickerPopover(): React.ReactElement {
             className="theme-popover glass-pop"
             style={
               {
-                ...(anchorRight != null ? { right: `${anchorRight}px` } : { right: '52px' }),
+                ...(placement ? { right: placement.right } : {}),
                 width: '220px',
                 WebkitAppRegion: 'no-drag'
               } as React.CSSProperties

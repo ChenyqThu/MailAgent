@@ -17,6 +17,7 @@ import { useTranslation } from 'react-i18next'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
+import { useAnchoredPopover } from '@shared/hooks/useAnchoredPopover'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useAppearance, type AccentId } from '@shared/state/appearance'
 
@@ -48,9 +49,6 @@ export function AccentPickerPopover(): React.ReactElement {
   const accent = useAppearance((s) => s.accent)
   const setAccent = useAppearance((s) => s.setAccent)
   const [open, setOpen] = useState(false)
-  // popover 相对 trigger 右对齐（替代 .theme-popover 写死的 right:12px —— 那个值与本按钮
-  // 实际位置不符导致弹层偏右；开弹时按按钮右缘算 right，跟随按钮）。
-  const [anchorRight, setAnchorRight] = useState<number | null>(null)
   const triggerRef = useRef<HTMLButtonElement>(null)
   // popover 出入场：无 backdrop，从右上微展开；scopeRef 兼作 outside-click 容器。
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
@@ -58,6 +56,8 @@ export function AccentPickerPopover(): React.ReactElement {
     from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
     enterDuration: DUR.fast
   })
+  // 右对齐本按钮（替代 .theme-popover 写死的 right:12px —— 那个值只对簇内最右的按钮成立）。
+  const placement = useAnchoredPopover(triggerRef, scopeRef, shouldRender)
 
   useEffect(() => {
     if (!open) return
@@ -83,13 +83,7 @@ export function AccentPickerPopover(): React.ReactElement {
       <button
         ref={triggerRef}
         type="button"
-        onClick={() => {
-          if (!open && triggerRef.current) {
-            const r = triggerRef.current.getBoundingClientRect()
-            setAnchorRight(Math.max(8, Math.round(window.innerWidth - r.right)))
-          }
-          setOpen((o) => !o)
-        }}
+        onClick={() => setOpen((o) => !o)}
         title={t('titleBar.accent.tooltip')}
         aria-label={t('titleBar.accent.aria')}
         aria-haspopup="dialog"
@@ -125,7 +119,7 @@ export function AccentPickerPopover(): React.ReactElement {
             style={
               {
                 WebkitAppRegion: 'no-drag',
-                ...(anchorRight != null ? { right: `${anchorRight}px` } : {})
+                ...(placement ? { right: placement.right } : {})
               } as React.CSSProperties
             }
           >

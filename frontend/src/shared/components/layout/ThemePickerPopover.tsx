@@ -13,6 +13,7 @@ import { Monitor, Moon, Sun } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
+import { useAnchoredPopover } from '@shared/hooks/useAnchoredPopover'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 import { useAppearance, type ThemeMode } from '@shared/state/appearance'
 
@@ -41,6 +42,8 @@ export function ThemePickerPopover(): React.ReactElement {
     from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
     enterDuration: DUR.fast
   })
+  // 右对齐本按钮（替代旧硬编码 right:88px —— 魔数一旦右簇改构成就错位）。
+  const placement = useAnchoredPopover(triggerRef, scopeRef, shouldRender)
 
   useEffect(() => {
     if (!open) return
@@ -104,7 +107,7 @@ export function ThemePickerPopover(): React.ReactElement {
             className="theme-popover glass-pop"
             style={
               {
-                right: '88px',
+                ...(placement ? { right: placement.right } : {}),
                 width: '180px',
                 WebkitAppRegion: 'no-drag'
               } as React.CSSProperties

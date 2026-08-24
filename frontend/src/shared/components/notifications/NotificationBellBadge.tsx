@@ -15,7 +15,9 @@
 // critical：两档在同一枚图标上必须一眼分得开。
 //
 // popover 用 createPortal 送到 <body>：TitleBar 有 backdrop-filter，会给 fixed 子元素造一个
-// 层叠上下文，浮层留在里面会被裁（AccentPickerPopover 同款理由）。
+// 层叠上下文，浮层留在里面会被裁（AccentPickerPopover 同款理由）。横向落点走
+// `useAnchoredPopover`（`.theme-popover` 写死的 right:12px 只对簇内最右的按钮成立，铃铛在
+// 簇首会整整偏出一个面板宽）。
 
 import { useEffect, useRef, useState } from 'react'
 import { createPortal } from 'react-dom'
@@ -24,6 +26,7 @@ import { Bell } from 'lucide-react'
 
 import { cn } from '@shared/lib/cn'
 import { DUR } from '@shared/lib/gsap'
+import { useAnchoredPopover } from '@shared/hooks/useAnchoredPopover'
 import { useExitAnimation } from '@shared/hooks/useExitAnimation'
 
 import { NotificationPanel } from './NotificationPanel'
@@ -52,11 +55,15 @@ export function NotificationBellBadge(): React.ReactElement {
   const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const triggerRef = useRef<HTMLButtonElement>(null)
+  // 出入场档比旁边几个 picker 重一档：这块面板 380×~520，picker 的 264px 小卡那套
+  // （y:-6 / DUR.fast）套上来等于没动效。转轴仍是右上角 —— 面板右缘对齐铃铛，展开方向
+  // 与视觉来源一致。
   const { shouldRender, scopeRef } = useExitAnimation<HTMLDivElement>(open, {
     backdrop: false,
-    from: { autoAlpha: 0, y: -6, scale: 0.97, transformOrigin: 'top right' },
-    enterDuration: DUR.fast
+    from: { autoAlpha: 0, y: -8, scale: 0.97, transformOrigin: 'top right' },
+    enterDuration: DUR.base
   })
+  const placement = useAnchoredPopover(triggerRef, scopeRef, shouldRender)
 
   const unreadQuery = useNotificationUnreadCount()
   // 未加载 / 请求失败 → unread 为 null（不是 0）：下面据此不渲染计数点。
@@ -160,7 +167,15 @@ export function NotificationBellBadge(): React.ReactElement {
             role="dialog"
             aria-label={t('notifications.title')}
             className="theme-popover glass-pop flex flex-col"
-            style={{ width: 380, WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+            style={
+              {
+                width: 380,
+                // 短窗口下面板不撞视口底：根收口后，面板里唯一的滚动区（列表）自己降档
+                // （它是 overflow-y-auto 的 flex 子项，min-height 解析为 0 会跟着缩）。
+                ...(placement ? { right: placement.right, maxHeight: placement.maxHeight } : {}),
+                WebkitAppRegion: 'no-drag'
+              } as React.CSSProperties
+            }
           >
             <NotificationPanel onClose={() => setOpen(false)} />
           </div>,
