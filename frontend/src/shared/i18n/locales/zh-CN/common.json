@@ -189,6 +189,7 @@
     "subjectPlaceholder": "（无主题）",
     "send": "发送",
     "saveDraft": "保存草稿",
+    "savedAt": "已保存 {time}",
     "discard": "丢弃",
     "cancel": "取消",
     "close": "关闭",

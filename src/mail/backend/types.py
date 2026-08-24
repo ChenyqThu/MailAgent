@@ -135,6 +135,13 @@ class DraftRequest:
     # reply* 一般为空. davmail builder 用 multipart/mixed 嵌套 alternative + 各 attachment.
     attachments: list[tuple[str, bytes, str]] = field(default_factory=list)
 
+    # 内联图部件 (filename, content_bytes, mime_type, content_id) — draft-edit 保真集
+    # (task 08-20 draft-save D2): 正文 html 引用 cid:{content_id} 的库内 inline 附件。
+    # builder 仅在最终 html 确实引用该 cid 时以 multipart/related 编回对应 part
+    # (本地路径 src 已由 _embed_local_inline_images 另行嵌入新 cid, 原 cid 未被引用
+    # 则跳过, 不产孤儿 part)。
+    inline_attachments: list[tuple[str, bytes, str, str]] = field(default_factory=list)
+
     # 邮件重要性 (high / normal / low, 大小写不敏感). high/low 写 Importance + X-Priority +
     # X-MSMail-Priority 三组业界标准头 (Outlook/Exchange 都认); normal/None/其它 不写头.
     importance: Optional[str] = None

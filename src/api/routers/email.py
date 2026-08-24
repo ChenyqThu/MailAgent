@@ -1150,6 +1150,12 @@ async def compose_draft(
         "attachments": result.attachments,
         "warnings": result.warnings,
         "dry_run": False,
+        # task 08-20 draft-save C-1 replace: 前端保存成功后把替换锚 (sourceDraftId)
+        # 与附件引用换到本地镜像新行 — 旧行已删, 漏换则第二次保存回退成新建/引用
+        # 解析失败。镜像失败时 mirror_internal_id=None (前端保持旧锚, 降级可接受)。
+        "mirror_internal_id": result.mirror_internal_id,
+        "mirror_attachment_ids": result.mirror_attachment_ids,
+        "replaced_source_draft_id": result.replaced_source_draft_id,
     }
     return success_envelope(data, request=request, source="cli")
 

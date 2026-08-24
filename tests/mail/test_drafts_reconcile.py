@@ -941,7 +941,9 @@ def test_mirror_draft_locally_thread_root_reply(tmp_path):
 
 
 def test_mirror_draft_locally_new_mode_no_linkage(tmp_path):
-    """mode='new' 无 threading 头 → linkage 列 NULL + thread_id 维持 None (现状)。"""
+    """mode='new' 无 threading 头 → draft_in_reply_to 落负缓存哨兵 '' (task 08-20
+    draft-save A2: 镜像行是自己 build 的 MIME, 无头是确定事实, 再保存不必探测),
+    其余 linkage 列 NULL + thread_id 维持 None。"""
     from src.mail.backend.types import DraftAppendResult, DraftRequest
 
     svc = _mirror_service(tmp_path)
@@ -954,7 +956,7 @@ def test_mirror_draft_locally_new_mode_no_linkage(tmp_path):
     rows = svc._ctx.sync_store.get_pending_emails(limit=10)
     row = svc._ctx.sync_store.get(rows[0]["internal_id"])
     assert row["thread_id"] is None
-    assert row["draft_in_reply_to"] is None
+    assert row["draft_in_reply_to"] == ""
     assert row["draft_references"] is None
     assert row["draft_source_internal_id"] is None
 

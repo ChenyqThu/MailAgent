@@ -16,12 +16,15 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { cleanup, render } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { mockGet, mockAiFields, mockTranslate, mockAbortTranslate } = vi.hoisted(() => ({
-  mockGet: vi.fn(),
-  mockAiFields: vi.fn(),
-  mockTranslate: vi.fn(),
-  mockAbortTranslate: vi.fn()
-}))
+const { mockGet, mockBody, mockSettingsGet, mockAiFields, mockTranslate, mockAbortTranslate } =
+  vi.hoisted(() => ({
+    mockGet: vi.fn(),
+    mockBody: vi.fn(),
+    mockSettingsGet: vi.fn(),
+    mockAiFields: vi.fn(),
+    mockTranslate: vi.fn(),
+    mockAbortTranslate: vi.fn()
+  }))
 
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
@@ -31,13 +34,17 @@ vi.mock('@shared/hooks/useMailApi', () => ({
       listMailboxes: vi.fn(),
       listByThread: vi.fn().mockResolvedValue([]),
       get: mockGet,
-      body: vi.fn(),
+      body: mockBody,
       aiFields: mockAiFields,
       search: vi.fn(),
-      resync: vi.fn()
+      resync: vi.fn(),
+      draft: vi.fn(),
+      send: vi.fn(),
+      deleteDraft: vi.fn()
     },
     attachment: { list: vi.fn().mockResolvedValue([]), localPath: vi.fn() },
-    ai: { translate: mockTranslate, abortTranslate: mockAbortTranslate }
+    ai: { translate: mockTranslate, abortTranslate: mockAbortTranslate },
+    settings: { get: mockSettingsGet }
   })
 }))
 
@@ -57,6 +64,8 @@ beforeEach(() => {
   // Default: every email resolves to null. The renderer then shows the
   // empty shell — the abort-cleanup path doesn't depend on detail data.
   mockGet.mockResolvedValue(null)
+  mockBody.mockResolvedValue({ content: '', format: 'html' })
+  mockSettingsGet.mockResolvedValue({ userEmail: 'me@acme.com', signature: null })
   mockAiFields.mockResolvedValue(null)
 })
 
@@ -143,5 +152,38 @@ describe('EmailDetail — switch-email translation abort (REVIEW-LOG M-3)', () =
     expect(mockAbortTranslate).toHaveBeenCalledTimes(2)
     expect(mockAbortTranslate).toHaveBeenNthCalledWith(1, 101)
     expect(mockAbortTranslate).toHaveBeenNthCalledWith(2, 102)
+  })
+})
+
+describe('EmailDetail — draft-edit 在 replace 删行后的存活 (task 08-20 draft-save)', () => {
+  const DRAFT_ROW = {
+    internal_id: 99,
+    subject: 'D',
+    sender: 'me@acme.com',
+    to_addr: 'a@x.com',
+    cc_addr: '',
+    mailbox: '草稿箱',
+    is_read: true,
+    is_important: false,
+    attachments: []
+  }
+
+  test('detail 重取 404 (replace 已删旧行) 但缓存仍是草稿行 → 不换错误壳, composer 保持挂载', async () => {
+    const { act, screen } = await import('@testing-library/react')
+    mockGet.mockResolvedValue(DRAFT_ROW)
+    const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+    render(
+      <QueryClientProvider client={qc}>
+        <EmailDetail internalId={99} />
+      </QueryClientProvider>
+    )
+    await screen.findByLabelText('compose-panel')
+    // C-1 replace: 保存后服务端删掉行 99 → email.synced 失效 → detail 重取 404
+    mockGet.mockRejectedValue(Object.assign(new Error('not found'), { code: 'E_NOT_FOUND' }))
+    await act(async () => {
+      await qc.invalidateQueries({ queryKey: ['email', 99] })
+    })
+    // 编辑器不被 unmount (换错误壳 = 编辑增量随之丢失)
+    expect(screen.getByLabelText('compose-panel')).toBeTruthy()
   })
 })

@@ -260,6 +260,23 @@ def build_outgoing_mime(cfg: "Config", draft: DraftRequest) -> bytes:
         # 引用原文里的本地内联图路径 → 重新以 cid: 内嵌 (multipart/related), 否则
         # 收件端裂图 (入库时 cid 已被改写成 attachments/{id}/{file} 本地相对路径)。
         body_html, inline_parts = _embed_local_inline_images(cfg, body_html)
+        # draft-edit 保真集 (task 08-20 D2): 正文仍引用 cid:{content_id} 的库内
+        # inline 部件 (入库 cid 重写未命中的存量草稿) 重新编回对应 MIME part。
+        # 判据 = 最终 html 真的引用该 cid — 本地路径 src 已被上面改写为新 cid,
+        # 原 cid 未被引用则跳过, 不产孤儿 part。
+        for att in draft.inline_attachments or []:
+            try:
+                filename, content, mime_type, content_id = att
+            except (ValueError, TypeError):
+                logger.warning(f"[sender] skip malformed inline attachment entry: {att!r}")
+                continue
+            if not content_id or f"cid:{content_id}" not in body_html:
+                continue
+            maintype, _, subtype = (mime_type or "application/octet-stream").partition("/")
+            inline_parts.append(
+                (f"<{content_id}>", content, maintype or "application",
+                 subtype or "octet-stream", filename)
+            )
         msg.add_alternative(body_html, subtype="html")
         if inline_parts:
             html_part = msg.get_payload()[-1]  # 刚 add 的 text/html part

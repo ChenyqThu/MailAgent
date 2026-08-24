@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import asyncio
 import re
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Optional
 
@@ -260,6 +262,26 @@ class ComposeDraftResult:
     cc_count: int
     attachments: int
     warnings: list[str]
+    # task 08-20 draft-save C-1 replace: 本地镜像新行 id + {原始 filename → 新行
+    # attachment_id} 映射 (前端保存后换替换锚/附件引用用; 镜像失败 → None/{});
+    # replaced_source_draft_id = 被替换删除的旧草稿行 id (未触发 replace → None)。
+    # 仅 serve-api 面消费, CLI emit data 形状不变 (schema additionalProperties 兼容)。
+    mirror_internal_id: Optional[int] = None
+    mirror_attachment_ids: dict[str, int] = field(default_factory=dict)
+    replaced_source_draft_id: Optional[int] = None
+
+
+@dataclass
+class _MirrorDraftInfo:
+    """``_mirror_draft_locally`` 成功回执 (service 内部)。
+
+    ``attachment_ids`` = {调用方原始 filename → 新行 email_attachment.id}
+    (``commit_email_with_body`` 返回值原样) — 前端保存后把 chips 的
+    stage_id/attachment_id 引用换到新行, 下次保存 (replace 已删旧行) 才解析得到。
+    """
+
+    internal_id: int
+    attachment_ids: dict[str, int] = field(default_factory=dict)
 
 
 @dataclass
@@ -425,6 +447,7 @@ def _compose_reply_draft(
     forward_intro_text: Optional[str] = None,
     forward_intro_html: Optional[str] = None,
     attachments: Optional[list] = None,
+    inline_attachments: Optional[list] = None,
     self_email: Optional[str] = None,
     importance: Optional[str] = None,
     source_linkage: Optional[dict] = None,
@@ -497,6 +520,7 @@ def _compose_reply_draft(
             in_reply_to=in_reply_to,
             references=references,
             attachments=attachments or [],
+            inline_attachments=inline_attachments or [],
             importance=importance,
         )
 
@@ -585,6 +609,7 @@ def _compose_reply_draft(
         in_reply_to=in_reply_to,
         references=references,
         attachments=attachments or [],
+        inline_attachments=inline_attachments or [],
         importance=importance,
     )
 
@@ -1725,26 +1750,34 @@ class MailWriteService:
 
     def _resolve_attachment_refs(
         self, refs: list, *, total_so_far: int = 0
-    ) -> list:
-        """把 ``ComposeRequest.attachments`` 引用解析成 (filename, bytes, mime) 三元组。
+    ) -> tuple[list, list]:
+        """把 ``ComposeRequest.attachments`` 引用解析成 ``(常规三元组, inline 四元组)``。
+
+        常规项 = (filename, bytes, mime); inline 项 = (filename, bytes, mime,
+        content_id) — attachment_id 引用命中库内 ``is_inline=1`` 且带 content_id 的
+        行时分流 (task 08-20 draft-save D2 隐藏保真集: 出站 MIME 编回 cid part,
+        不进 Content-Disposition: attachment 列表)。
 
         三种 ref 形态见 ComposeRequest.attachments 注释 (stage_id / attachment_id /
         local_path)。显式引用 = 用户明确要带的附件 — 任何解析失败 / 超 cap 直接
         ``ServiceInvalidArgError`` **不静默跳过** (区别于 forward 自动收集的
         warn+skip: 静默丢用户点名的附件等于数据丢失)。cap 与自动收集共用
-        ``MAX_COMPOSE_ATTACH_BYTES``, ``total_so_far`` 传入已收集部分的字节数。
+        ``MAX_COMPOSE_ATTACH_BYTES``, ``total_so_far`` 传入已收集部分的字节数,
+        inline 部件同样计入 (都进出站 EML)。
         """
         from pathlib import Path
 
         from src.services.compose_staging import guess_mime, read_staged
 
         out: list = []
+        inline_out: list = []
         total = total_so_far
         for ref in refs:
             if not isinstance(ref, dict):
                 raise ServiceInvalidArgError(
                     f"attachment ref 必须是 dict, got {type(ref).__name__}"
                 )
+            inline_cid: Optional[str] = None
             if "stage_id" in ref:
                 staged = read_staged(self._ctx.config, str(ref["stage_id"] or ""))
                 if staged is None:
@@ -1768,6 +1801,11 @@ class MailWriteService:
                     )
                 filename = rec.filename
                 mime = rec.content_type or "application/octet-stream"
+                # D2 隐藏保真集: inline 行 (正文 cid 引用的图) 分流 — getattr 兜底
+                # 是给测试 stub (SimpleNamespace 无这两个字段) 的, 真实
+                # AttachmentRecord 恒有。
+                if getattr(rec, "is_inline", False) and getattr(rec, "content_id", None):
+                    inline_cid = str(rec.content_id)
             elif "local_path" in ref:
                 # 仅 CLI in-process 信任面 (--attach); serve-api adapter 拒绝该形态。
                 p = Path(str(ref["local_path"] or ""))
@@ -1788,8 +1826,11 @@ class MailWriteService:
                     f" (加入 {filename!r} 时溢出)"
                 )
             total += len(data)
-            out.append((filename, data, mime))
-        return out
+            if inline_cid:
+                inline_out.append((filename, data, mime, inline_cid))
+            else:
+                out.append((filename, data, mime))
+        return out, inline_out
 
     def _prepare_draft(
         self,
@@ -1846,7 +1887,32 @@ class MailWriteService:
                     f"{draft_row.get('mailbox')!r}) — 忽略 linkage 回退零线程派生"
                 )
             else:
-                if not (draft_row.get("draft_in_reply_to") or "").strip():
+                # D3 兜底硬闸 (task 08-20 draft-save 四连修): 源草稿行有非 derived
+                # 附件而请求整个省略 attachments 键 → 拒绝 — 否则产出的替换 EML
+                # 静默丢附件 (forward 权威列表铁律的 draft-edit 对应物)。显式 []
+                # = 用户明确移除全部附件, 放行。读取失败不阻断 (guard 是纵深防御)。
+                if request.attachments is None:
+                    try:
+                        existing_atts = [
+                            a
+                            for a in self._ctx.email_repo.get_attachments(
+                                request.source_draft_id
+                            )
+                            if getattr(a, "derived_from", None) is None
+                        ]
+                    except Exception:  # noqa: BLE001 — 附件表读取失败时守卫退让
+                        existing_atts = []
+                    if existing_atts:
+                        raise ServiceInvalidArgError(
+                            f"草稿 {request.source_draft_id} 有 "
+                            f"{len(existing_atts)} 个附件, 请求未带 attachments 键 "
+                            "— 拒绝静默产出无附件草稿 (显式传 attachments, "
+                            "[] 表示移除全部)"
+                        )
+                # A2 负缓存: draft_in_reply_to 三态 — NULL=未探测 (走 heal 全文
+                # FETCH), ''=已探测确认无 threading 头 (哨兵, 不再取件), 非空=已知
+                # linkage。旧判据 or ""/strip 会把哨兵当 NULL 每次保存重跑 12s 探测。
+                if draft_row.get("draft_in_reply_to") is None:
                     healed = self._heal_draft_linkage(
                         request.source_draft_id, draft_row, persist=persist_heal
                     )
@@ -1939,12 +2005,16 @@ class MailWriteService:
                     reply_html = f"{reply_html}{q_html}" if reply_html else q_html
 
         # 显式附件引用 → bytes 三元组, 追加在 forward 自动收集之后 (forward 显式时
-        # 自动收集已跳过, attachments 为空)。cap 跨两来源共享。
+        # 自动收集已跳过, attachments 为空)。cap 跨两来源共享。inline 部件 (D2
+        # 隐藏保真集) 单独成列 — 出站 MIME 编回 multipart/related cid part, 不进
+        # Content-Disposition: attachment 列表。
+        inline_attachments: list = []
         if request.attachments:
-            attachments = attachments + self._resolve_attachment_refs(
+            resolved_refs, inline_attachments = self._resolve_attachment_refs(
                 request.attachments,
                 total_so_far=sum(len(a[1]) for a in attachments),
             )
+            attachments = attachments + resolved_refs
 
         draft = _compose_reply_draft(
             record, internal_id=internal_id, mode=mode,
@@ -1956,6 +2026,7 @@ class MailWriteService:
             forward_intro_text=forward_intro_text,
             forward_intro_html=forward_intro_html,
             attachments=attachments,
+            inline_attachments=inline_attachments,
             self_email=self._ctx.config.user_email,
             importance=request.importance,
             source_linkage=source_linkage,
@@ -1998,7 +2069,18 @@ class MailWriteService:
             # message_id fallback 命中也不回写 imap_uid 元数据 (codex 批次3 finding —
             # persist_heal=False 已不写 linkage, 但取件侧 _update_sync_store_uid 仍会
             # 侧写 SQLite, 违反 compose_plan「无写」契约字面)。persist=True 保持现状回填。
+            # 计时证据面 (task 08-20 draft-save A2): 全文 FETCH 实测可达 12s 级,
+            # 归因日志留在这里, 负缓存哨兵生效后本段对同一草稿只跑一次。
+            t0 = time.monotonic()
+            logger.info(
+                f"[compose] draft linkage probe start internal_id={internal_id} "
+                "(davmail 全文 FETCH)"
+            )
             content = fetch(internal_id, update_uid=persist) or {}
+            logger.info(
+                f"[compose] draft linkage probe fetch done internal_id={internal_id} "
+                f"elapsed={time.monotonic() - t0:.2f}s"
+            )
             source = content.get("source") or ""
             if not source:
                 return None
@@ -2016,6 +2098,26 @@ class MailWriteService:
                 own_message_id=draft_row.get("message_id"),
             )
             if not irt:
+                # A2 负缓存 (task 08-20 draft-save): 取件成功且确认无可用 threading
+                # 头 → 写哨兵 '' (NULL=未探测 / ''=已探测无结果), 下次保存不再全文
+                # FETCH。取件失败路径 (上方 source 为空) 不写 — 瞬时故障要能重试。
+                if persist:
+                    try:
+                        self._ctx.sync_store.update_draft_linkage(
+                            internal_id,
+                            draft_in_reply_to="",
+                            draft_references=None,
+                            draft_source_internal_id=None,
+                        )
+                        logger.info(
+                            f"[compose] draft linkage probe negative-cached "
+                            f"internal_id={internal_id} (无 threading 头)"
+                        )
+                    except Exception as e:  # noqa: BLE001 — 哨兵写失败仅多跑一次探测
+                        logger.warning(
+                            f"[compose] draft linkage sentinel write failed "
+                            f"internal_id={internal_id}: {e}"
+                        )
                 return None
             src_iid: Optional[int] = None
             try:
@@ -2122,7 +2224,15 @@ class MailWriteService:
         if not result.success:
             raise ServiceError(f"草稿创建失败: {result.error}")
 
-        self._mirror_draft_locally(draft, result)
+        mirror = self._mirror_draft_locally(draft, result)
+
+        # C-1 replace 语义 (task 08-20 draft-save 四连修): draft-edit (mode='new'
+        # + source_draft_id 在场) 保存成功后删被编辑的旧草稿行 — 修「每次保存多
+        # 一封草稿」。顺序: APPEND 成功 → 本地镜像新行 → 删旧行。失败吞错 (最坏
+        # 回到修复前行为: 旧行残留成重复)。
+        replaced_id: Optional[int] = None
+        if request.mode == "new" and request.source_draft_id is not None:
+            replaced_id = self._replace_source_draft(request.source_draft_id)
 
         return ComposeDraftResult(
             internal_id=request.internal_id,
@@ -2134,9 +2244,109 @@ class MailWriteService:
             cc_count=len(draft.cc),
             attachments=len(draft.attachments),
             warnings=warnings,
+            mirror_internal_id=mirror.internal_id if mirror else None,
+            mirror_attachment_ids=mirror.attachment_ids if mirror else {},
+            replaced_source_draft_id=replaced_id,
         )
 
-    def _mirror_draft_locally(self, draft, result) -> None:
+    def _replace_source_draft(self, source_draft_id: int) -> Optional[int]:
+        """C-1 replace: 保存成功后移除被编辑的旧草稿行 (task 08-20 draft-save)。
+
+        与 ``delete_draft`` 同构三步 (顺序同): ① uid 落删除墓碑 (eab60643 同款
+        竞态 — EXPUNGE 未落窗口内 reconcile_drafts 不把远端残留 uid 当新草稿拉回);
+        ② 本地行 ``delete_email_full`` + ``email.synced`` SSE (publish 恒在事务外,
+        delete_email_full 自管事务); ③ 远端 IMAP ``\\Deleted``+EXPUNGE **后台化**
+        (慢链实测 2.5-5.4s, 不拖保存响应; 失败由 reconcile 拉回残留行, 重存即可)。
+
+        判别: 行存在且 mailbox 是草稿箱 (防误删非草稿行); 行不存在 → 幂等跳过。
+        davmail 行无 imap_uid (AppleScript 存量) → 整体跳过 — 没有墓碑/远端锚,
+        只删本地必被 reconcile 拉回, 不如保留旧行为 (重复行)。任何异常吞 +
+        warning, 不影响保存成功语义。Returns: 实际删除的行 id, 未删 → None。
+        """
+        try:
+            meta = self._ctx.sync_store.get(source_draft_id)
+            if not meta:
+                return None  # 已删/不存在 → 幂等
+            if not is_drafts_mailbox(meta.get("mailbox")):
+                logger.warning(
+                    f"[compose-replace] source_draft_id={source_draft_id} 不是草稿箱行 "
+                    f"(mailbox={meta.get('mailbox')!r}) — 跳过替换删除"
+                )
+                return None
+            row_is_com = meta.get("backend_origin") == "outlook_com"
+            imap_uid = meta.get("imap_uid")
+            entry_id = meta.get("entry_id")
+            message_id = meta.get("message_id")
+            if not row_is_com and not imap_uid:
+                logger.warning(
+                    f"[compose-replace] source_draft_id={source_draft_id} 缺 imap_uid "
+                    "(存量行?) — 跳过替换删除 (无墓碑/远端锚, 删本地必回弹)"
+                )
+                return None
+
+            if not row_is_com:
+                from src.mail.draft_tombstones import record as _record_draft_tombstone
+
+                _record_draft_tombstone(self._ctx.sync_store, int(imap_uid))
+
+            try:
+                self._ctx.email_repo.delete_email_full(source_draft_id)
+            except Exception as e:  # noqa: BLE001 — 本地残留交 reconcile 清
+                logger.warning(
+                    f"[compose-replace] local delete failed (reconcile 兜底): {e}"
+                )
+            try:
+                from src.events.publisher import safe_publish
+
+                safe_publish(
+                    "email.synced",
+                    internal_id=source_draft_id,
+                    data={"deleted": True, "mailbox": "草稿箱"},
+                    source="compose_replace",
+                )
+            except Exception:
+                pass
+
+            def _remote_delete() -> None:
+                try:
+                    reader = self._folder_imap_reader()
+                    if row_is_com:
+                        com_delete = getattr(reader, "delete_draft_by_anchor", None)
+                        if com_delete is None or not com_delete(
+                            entry_id=entry_id, message_id=message_id
+                        ):
+                            logger.warning(
+                                f"[compose-replace] COM delete failed "
+                                f"entry_id={entry_id!r} (本地已删; 残留可手动清)"
+                            )
+                        return
+                    imap_delete = getattr(reader, "delete_message", None)
+                    if imap_delete is None or not imap_delete("drafts", int(imap_uid)):
+                        logger.warning(
+                            f"[compose-replace] IMAP delete failed uid={imap_uid} "
+                            "(本地已删; Exchange 残留由 reconcile 拉回, 重存即可)"
+                        )
+                except Exception as e:  # noqa: BLE001 — 后台线程兜底
+                    logger.warning(
+                        f"[compose-replace] remote delete failed "
+                        f"internal_id={source_draft_id}: {e}"
+                    )
+
+            threading.Thread(
+                target=_remote_delete, name="compose-replace-expunge", daemon=True
+            ).start()
+            logger.info(
+                f"[compose-replace] old draft internal_id={source_draft_id} "
+                f"uid={imap_uid} entry_id={entry_id!r} replaced (remote expunge 后台)"
+            )
+            return source_draft_id
+        except Exception as e:  # noqa: BLE001 — 替换失败不影响保存成功语义
+            logger.warning(
+                f"[compose-replace] source_draft_id={source_draft_id} failed: {e}"
+            )
+            return None
+
+    def _mirror_draft_locally(self, draft, result) -> Optional["_MirrorDraftInfo"]:
         """草稿即时落库 — 保存成功立刻进 email_metadata (mailbox='草稿箱', pending)。
 
         不等 reconcile 的 STATUS 探测: davmail 对 Drafts folder 有缓存, 新 APPEND
@@ -2198,6 +2408,12 @@ class MailWriteService:
                 payload["draft_in_reply_to"] = in_reply_to_mid
                 payload["draft_references"] = references_chain
                 payload["draft_source_internal_id"] = draft.internal_id_for_threading
+            else:
+                # A2 负缓存哨兵 (task 08-20 draft-save): 镜像行是我们自己 build 的
+                # MIME, 无 threading 头是确定事实 → 直写 '' (已探测无结果), 该行被
+                # draft-edit 再保存时不再跑 12s 全文 FETCH 探测 (replace 语义下每次
+                # 保存都换新行, 不写哨兵 = 每次保存都探测一遍)。
+                payload["draft_in_reply_to"] = ""
             if result.appended_uidvalidity is not None:
                 payload["imap_uidvalidity"] = result.appended_uidvalidity
             store.save_email(payload)
@@ -2205,36 +2421,71 @@ class MailWriteService:
                 f"[compose] draft mirrored locally internal_id={internal_id} "
                 f"uid={result.appended_uid} entry_id={com_entry_id!r}"
             )
-            # 正文立即落 email_body SSoT —— 正文是本地撰写的 (draft.reply_html, 前端
-            # getSanitizedHtml 已含引用), 直接写本地, 草稿保存后秒开即可读。否则要等
-            # watcher 下个 poll 按 imap_uid 从 davmail Drafts 回捞 body (davmail 对
-            # Drafts folder 有 STATUS 缓存, 实测迟到 1-2 分钟 → 用户秒开看到空正文)。
+            # 正文 + 附件立即落 email_body/email_attachment SSoT —— 正文是本地撰写
+            # 的 (draft.reply_html, 前端 getSanitizedHtml 已含引用), 附件字节此刻就
+            # 在内存 (D1: 旧实现第三参恒 [], 本地镜像行零附件 → 窗口内 draft-edit
+            # 缓存到零附件 detail 后每次保存真丢), 一次到位。inline 部件带
+            # content_id/is_inline 入行, 正文里的 cid: 引用同步改写为新行本地相对
+            # 路径 (与 watcher 入库口径一致 — _rewrite_cid_to_local)。
             # 独立 try: 正文写失败不影响 metadata 镜像; watcher refetch 覆盖为规范版。
+            attachment_ids: dict[str, int] = {}
             try:
-                html = draft.reply_html or ""
-                if html:
-                    from src.converter.html_to_markdown import html_to_markdown
-                    from src.repository.email_repository import BodyPayload
+                from src.converter.html_to_markdown import html_to_markdown
+                from src.repository.attachment_store import AttachmentStore
+                from src.repository.email_repository import (
+                    AttachmentPayload,
+                    BodyPayload,
+                )
+                from src.repository.storage_payload_builder import (
+                    _rewrite_cid_to_local,
+                )
 
+                attachment_payloads = [
+                    AttachmentPayload(filename=fn, content=data, content_type=mime)
+                    for fn, data, mime in (draft.attachments or [])
+                ]
+                cid_to_filename: dict[str, str] = {}
+                for fn, data, mime, cid in (draft.inline_attachments or []):
+                    attachment_payloads.append(
+                        AttachmentPayload(
+                            filename=fn, content=data, content_type=mime,
+                            content_id=cid, is_inline=True,
+                        )
+                    )
+                    if cid:
+                        cid_to_filename[cid] = AttachmentStore.sanitize_filename(fn)
+                html = draft.reply_html or ""
+                has_inline = False
+                if html and cid_to_filename:
+                    html, has_inline = _rewrite_cid_to_local(
+                        html, internal_id, cid_to_filename
+                    )
+                if html or attachment_payloads:
                     try:
                         md = html_to_markdown(html) or (draft.reply_text or "")
                     except Exception:  # noqa: BLE001 — markdown 仅供 FTS, 失败退化纯文本
                         md = draft.reply_text or ""
-                    self._ctx.email_repo.commit_email_with_body(
+                    attachment_ids = self._ctx.email_repo.commit_email_with_body(
                         internal_id,
                         BodyPayload(
                             html=html,
                             markdown=md,
                             body_format="html",
+                            has_inline_images=has_inline
+                            or bool(draft.inline_attachments),
                             fetched_source="compose",
                         ),
-                        [],
+                        attachment_payloads,
                         message_id=result.message_id,
-                    )
+                    ) or {}
             except Exception as e:  # noqa: BLE001 — 正文镜像失败由 watcher refetch 兜底
                 logger.warning(f"[compose] draft body mirror failed (watcher 兜底): {e}")
+            return _MirrorDraftInfo(
+                internal_id=internal_id, attachment_ids=attachment_ids
+            )
         except Exception as e:  # noqa: BLE001 — 镜像失败不影响草稿创建成功语义
             logger.warning(f"[compose] draft local mirror failed (reconcile 兜底): {e}")
+            return None
 
     def delete_draft(self, internal_id: int, *, actor: Actor) -> DeleteDraftResult:
         """删除草稿 (本地行先删 + SSE 即时刷, IMAP \\Deleted+EXPUNGE 后置)。

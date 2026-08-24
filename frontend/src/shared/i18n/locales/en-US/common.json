@@ -189,6 +189,7 @@
     "subjectPlaceholder": "(no subject)",
     "send": "Send",
     "saveDraft": "Save draft",
+    "savedAt": "Saved {time}",
     "discard": "Discard",
     "cancel": "Cancel",
     "close": "Close",

@@ -257,13 +257,18 @@ def test_selfheal_fetch_raises_falls_back(tmp_path):
     _assert_zero_derivation(draft)
 
 
-def test_selfheal_mime_without_threading_headers_falls_back(tmp_path):
-    """非回复草稿 (MIME 无 In-Reply-To) → 零派生, 不回写。"""
+def test_selfheal_mime_without_threading_headers_writes_sentinel(tmp_path):
+    """非回复草稿 (MIME 无 In-Reply-To) → 零派生 + 负缓存哨兵 '' (task 08-20
+    draft-save A2): 探测结论落库, 第二次保存不再全文 FETCH。"""
     svc = _service(tmp_path, mime=NO_THREADING_MIME)
     iid = _seed_legacy_draft(svc._ctx.sync_store)
     draft, _, _ = _prepare(svc, iid)
     _assert_zero_derivation(draft)
-    assert svc._ctx.sync_store.get(iid)["draft_in_reply_to"] is None
+    assert svc._ctx.sync_store.get(iid)["draft_in_reply_to"] == ""
+    # 哨兵生效: 再次消费不取件 (NULL=未探测 / ''=已探测无结果)
+    draft2, _, _ = _prepare(svc, iid)
+    _assert_zero_derivation(draft2)
+    assert svc._ctx.backend.fetch_email_content_by_id.call_count == 1
 
 
 def test_selfheal_skipped_on_applescript_backend(tmp_path):
@@ -285,7 +290,8 @@ def test_selfheal_skipped_on_non_draft_row(tmp_path):
 
 
 def test_selfheal_self_referencing_mime_rejected(tmp_path):
-    """取回的 MIME In-Reply-To 指向草稿自己 → 校验拒, 零派生不回写。"""
+    """取回的 MIME In-Reply-To 指向草稿自己 → 校验拒, 零派生; 落负缓存哨兵 ''
+    (同一草稿字节重探测结论不会变, 不必每次保存重跑 12s FETCH — A2)。"""
     bad_mime = (
         f"Message-ID: <{DRAFT_MID}>\r\n"
         f"In-Reply-To: <{DRAFT_MID}>\r\n"
@@ -295,7 +301,7 @@ def test_selfheal_self_referencing_mime_rejected(tmp_path):
     iid = _seed_legacy_draft(svc._ctx.sync_store)
     draft, _, _ = _prepare(svc, iid)
     _assert_zero_derivation(draft)
-    assert svc._ctx.sync_store.get(iid)["draft_in_reply_to"] is None
+    assert svc._ctx.sync_store.get(iid)["draft_in_reply_to"] == ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────

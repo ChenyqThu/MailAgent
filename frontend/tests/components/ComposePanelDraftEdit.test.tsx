@@ -9,20 +9,29 @@ import { afterEach, beforeEach, describe, expect, test, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-const { mockDraftPlan, mockSend, mockDeleteDraft, mockSettingsGet, mockEmailGet, mockEmailBody } =
-  vi.hoisted(() => ({
-    mockDraftPlan: vi.fn(),
-    mockSend: vi.fn(),
-    mockDeleteDraft: vi.fn(),
-    mockSettingsGet: vi.fn(),
-    mockEmailGet: vi.fn(),
-    mockEmailBody: vi.fn()
-  }))
+const {
+  mockDraftPlan,
+  mockDraft,
+  mockSend,
+  mockDeleteDraft,
+  mockSettingsGet,
+  mockEmailGet,
+  mockEmailBody
+} = vi.hoisted(() => ({
+  mockDraftPlan: vi.fn(),
+  mockDraft: vi.fn(),
+  mockSend: vi.fn(),
+  mockDeleteDraft: vi.fn(),
+  mockSettingsGet: vi.fn(),
+  mockEmailGet: vi.fn(),
+  mockEmailBody: vi.fn()
+}))
 
 vi.mock('@shared/hooks/useMailApi', () => ({
   useMailApi: () => ({
     email: {
       draftPlan: mockDraftPlan,
+      draft: mockDraft,
       send: mockSend,
       deleteDraft: mockDeleteDraft,
       get: mockEmailGet,
@@ -62,6 +71,7 @@ beforeEach(() => {
   mockSettingsGet.mockResolvedValue({ userEmail: 'me@acme.com', signature: null })
   mockEmailGet.mockResolvedValue(DRAFT)
   mockEmailBody.mockResolvedValue({ content: '<p>草稿正文ABC</p>', format: 'html' })
+  mockDraft.mockResolvedValue({ success: true, mirror_internal_id: null })
   mockSend.mockResolvedValue({ sent: true })
   mockDeleteDraft.mockResolvedValue({ success: true })
 })
@@ -205,7 +215,7 @@ describe('ComposePanel — D5 富文本混合门 (draft-edit)', () => {
     expect(mockSend.mock.calls[0][0].bodyHtml as string).toContain('纯文本草稿内容MD')
   })
 
-  test('草稿已有附件 → attachment_id 引用 chips + send payload 带 refs (inline/derived 不算)', async () => {
+  test('草稿已有附件 → attachment_id 引用 chips + send payload 带 refs (inline 走隐藏保真集, derived 不算)', async () => {
     mockEmailGet.mockResolvedValue({
       ...DRAFT,
       attachments: [
@@ -222,6 +232,83 @@ describe('ComposePanel — D5 富文本混合门 (draft-edit)', () => {
     fireEvent.click(screen.getByRole('button', { name: /^发送$/ }))
     fireEvent.click(screen.getByRole('button', { name: /确认发送/ }))
     await waitFor(() => expect(mockSend).toHaveBeenCalledTimes(1))
-    expect(mockSend.mock.calls[0][0].attachments).toEqual([{ attachment_id: 7 }])
+    // task 08-20 D2: inline 部件 (id 8) 随隐藏保真集进 refs — 不进 tray 但必须过线,
+    // 否则替换保存的 EML 有 cid 引用无 part; derived (id 9) 仍排除。
+    expect(mockSend.mock.calls[0][0].attachments).toEqual([
+      { attachment_id: 7 },
+      { attachment_id: 8 }
+    ])
+  })
+})
+
+describe('ComposePanel — 保存按钮 + C-1 replace 锚 (task 08-20 draft-save)', () => {
+  test('draft-edit 显示保存按钮, 存后不关闭, payload 带 sourceDraftId + 显式 attachments 键', async () => {
+    const onClose = vi.fn()
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={onClose} />)
+    await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
+    fireEvent.click(screen.getByRole('button', { name: /^保存草稿$/ }))
+    await waitFor(() => expect(mockDraft).toHaveBeenCalledTimes(1))
+    const arg = mockDraft.mock.calls[0][0]
+    expect(arg).toMatchObject({ internalId: 99, mode: 'new', sourceDraftId: 99 })
+    // D3 — draft-edit 恒发显式 attachments 键 (含空数组): 键省略时服务端无从区分
+    // 「没有附件」与「客户端漏传」。
+    expect(arg.attachments).toEqual([])
+    // 存后留在编辑态 (新建 compose 才存后关闭)
+    expect(onClose).not.toHaveBeenCalled()
+  })
+
+  test('保存成功后 sourceDraftId/附件引用 换到镜像新行 (第二次保存替换锚不失效)', async () => {
+    mockEmailGet.mockResolvedValue({
+      ...DRAFT,
+      attachments: [
+        { id: 7, filename: 'plan.xlsx', size_bytes: 2048, is_inline: false, derived_from: null },
+        { id: 8, filename: 'logo.png', size_bytes: 100, is_inline: true, derived_from: null }
+      ]
+    })
+    mockDraft.mockResolvedValue({
+      success: true,
+      mirror_internal_id: 1000000123,
+      mirror_attachment_ids: { 'plan.xlsx': 501, 'logo.png': 502 },
+      replaced_source_draft_id: 99
+    })
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={() => {}} />)
+    await waitFor(() => expect(screen.getByText('plan.xlsx')).toBeTruthy())
+
+    fireEvent.click(screen.getByRole('button', { name: /^保存草稿$/ }))
+    await waitFor(() => expect(mockDraft).toHaveBeenCalledTimes(1))
+    expect(mockDraft.mock.calls[0][0]).toMatchObject({ internalId: 99, sourceDraftId: 99 })
+    expect(mockDraft.mock.calls[0][0].attachments).toEqual([
+      { attachment_id: 7 },
+      { attachment_id: 8 }
+    ])
+
+    // 第二次保存: 锚 + 附件引用全部指向镜像新行 (旧行 99 已被 replace 删掉)
+    fireEvent.click(screen.getByRole('button', { name: /^保存草稿$/ }))
+    await waitFor(() => expect(mockDraft).toHaveBeenCalledTimes(2))
+    const second = mockDraft.mock.calls[1][0]
+    expect(second).toMatchObject({ internalId: 1000000123, sourceDraftId: 1000000123 })
+    expect(second.attachments).toEqual([{ attachment_id: 501 }, { attachment_id: 502 }])
+  })
+
+  test('守卫与按钮双入口单飞: 保存 in-flight 时守卫「保存草稿」不发第二次 APPEND', async () => {
+    let resolveDraft!: (v: unknown) => void
+    mockDraft.mockImplementation(() => new Promise((r) => (resolveDraft = r)))
+    const onClose = vi.fn()
+    renderWithClient(<ComposePanelInner internalId={99} mode="draft-edit" onClose={onClose} />)
+    await waitFor(() => expect(screen.getByText('chenyq.thu@gmail.com')).toBeTruthy())
+    // 改主题标脏 → ESC 会弹离开守卫
+    fireEvent.change(screen.getByLabelText('主题'), { target: { value: '改过的主题' } })
+    fireEvent.click(screen.getByRole('button', { name: /^保存草稿$/ }))
+    await waitFor(() => expect(mockDraft).toHaveBeenCalledTimes(1))
+    // in-flight 中经 ESC 走离开守卫 → 弹未保存确认
+    fireEvent.keyDown(window, { key: 'Escape' })
+    const dialog = await screen.findByRole('dialog')
+    fireEvent.click(within(dialog).getByRole('button', { name: /^保存草稿$/ }))
+    // 单飞: 复用同一 in-flight promise, 不发第二次 APPEND
+    expect(mockDraft).toHaveBeenCalledTimes(1)
+    await act(async () => resolveDraft({ success: true, mirror_internal_id: null }))
+    // 守卫续跑 proceed (ESC 的 proceed = onClose)
+    await waitFor(() => expect(onClose).toHaveBeenCalled())
+    expect(mockDraft).toHaveBeenCalledTimes(1)
   })
 })

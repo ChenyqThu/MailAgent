@@ -115,7 +115,13 @@ const RECIPIENT_FOLD_LIMIT = 12
 function chipContactOf(
   resolved: Record<string, ContactChipDto | null> | undefined,
   addr: string
-): { id: number; displayName: string | null; formalName: string | null; primaryEmail: string | null; kind: ContactChipDto['kind'] } | null {
+): {
+  id: number
+  displayName: string | null
+  formalName: string | null
+  primaryEmail: string | null
+  kind: ContactChipDto['kind']
+} | null {
   const hit = resolved?.[addr.trim().toLowerCase()]
   if (!hit) return null
   return {
@@ -958,7 +964,12 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
     )
   }
 
-  if (detailQ.isError || !detailQ.data) {
+  // task 08-20 draft-save C-1: replace 保存会删掉正在编辑的旧草稿行 (锚换镜像新行),
+  // 随后 email.synced 失效 → detail 重取 404 → isError, 但缓存里仍有旧数据。此时
+  // 若那是草稿箱行 = 正在编辑的 compose 会话, 不能换成错误壳 (会把编辑器连同未保
+  // 存增量一起 unmount) — 凭 stale data 落进下方 draft-edit 分支 (面板有自己的
+  // 一次性回填, 不再读 detail)。其余场景错误壳行为不变。
+  if (!detailQ.data || (detailQ.isError && !isDraftsMailbox(detailQ.data.mailbox))) {
     return (
       <EmptyShell>
         <div className="text-aux text-fail">
@@ -1329,9 +1340,7 @@ export function EmailDetail({ internalId }: Props): React.ReactElement {
                         </span>
                       ) : chipsActive && fromAddr.includes('@') ? (
                         <span className="flex flex-wrap items-center gap-1.5">
-                          {fromName && (
-                            <span className="font-medium text-ink-fg">{fromName}</span>
-                          )}
+                          {fromName && <span className="font-medium text-ink-fg">{fromName}</span>}
                           <PersonChip contact={null} addr={fromAddr} />
                         </span>
                       ) : (

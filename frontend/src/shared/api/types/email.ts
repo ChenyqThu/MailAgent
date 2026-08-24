@@ -244,7 +244,9 @@ export interface ComposeDraftOpts {
   /** D1 Bug A — 草稿行自己的 internal_id, 仅 mode='new' (draft-edit 保存/发送) 有意义:
    *  服务端读该行 draft_in_reply_to/draft_references/thread_id 恢复回复线程头,
    *  linkage 空则回退现状零派生。HTTP body key 逐字 `sourceDraftId` (serve-api
-   *  _compose_request_from_body 直读; 非 int 静默置 None)。 */
+   *  _compose_request_from_body 直读; 非 int 静默置 None)。task 08-20 起 draft
+   *  保存还按它执行 replace: 服务端删该旧行 (墓碑 + 本地删 + EXPUNGE 后台化),
+   *  响应带 mirror_internal_id / mirror_attachment_ids 供前端换锚。 */
   sourceDraftId?: number
 }
 

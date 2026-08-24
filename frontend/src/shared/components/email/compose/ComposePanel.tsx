@@ -10,7 +10,8 @@
 //     (显式收件人/正文、零线程派生)。
 //
 // 写操作:
-//   - 保存草稿 → email.draft (IMAP APPEND, re-entrant) — 仅 reply/forward。
+//   - 保存草稿 → email.draft (IMAP APPEND, re-entrant)。draft-edit 走 replace 语义
+//     (task 08-20: 服务端删旧行建新行, 本地锚随响应换新), 存后留在编辑态。
 //   - 发送 → SendConfirmDialog → email.send (SMTP, irreversible); draft-edit 发送成功后
 //     删掉原草稿 (替换语义)。
 //   - 放弃/删除 → reply/forward「丢弃」: 临时内容未持久化 → 直接关闭, 不确认;
@@ -220,6 +221,12 @@ export function ComposePanelInner({
   const [cc, setCc] = useState<string[]>([])
   const [bcc, setBcc] = useState<string[]>([])
   const [subject, setSubject] = useState('')
+  // C-1 replace 锚 (task 08-20 draft-save) — draft-edit 保存成功后服务端删旧行、
+  // 建本地镜像新行, 本地锚随响应的 mirror_internal_id 换新 (漏换 = 第二次保存
+  // 替换锚失效回退成新建 + 附件引用指向已删行)。非 draft-edit 恒等于 internalId。
+  const [draftRowId, setDraftRowId] = useState(internalId)
+  // draft-edit「已保存 HH:MM」轻提示 (存后留在编辑态, 顶栏常驻最近保存时间)。
+  const [lastSavedAt, setLastSavedAt] = useState<Date | null>(null)
   const [importance, setImportance] = useState<ComposeImportance>('normal')
   const [ccVisible, setCcVisible] = useState(false)
   const [bccVisible, setBccVisible] = useState(false)
@@ -241,6 +248,11 @@ export function ComposePanelInner({
   const [splitQuote, setSplitQuote] = useState(false)
   // D6 — 附件 chips (staged 上传 + draft-edit 回填 + forward hydrate 的库内已有附件)。
   const [attachList, setAttachList] = useState<ComposeAttachmentChip[]>([])
+  // D2 隐藏保真集 (task 08-20 draft-save) — 草稿正文引用的 inline 部件 (cid:) 不进
+  // AttachmentTray 显示, 但随 refs 带走: 服务端把对应 MIME part 重新编入出站 EML
+  // (否则替换保存后的草稿有 cid 引用无 part, 内联图确定性丢)。filename 用于保存后
+  // 按 mirror_attachment_ids 换到新行引用。
+  const [inlineRefs, setInlineRefs] = useState<Array<{ id: number; filename: string }>>([])
   // codex F1 — forward 原附件 hydration 状态机: 打开即补拉原邮件非 inline 附件成
   // 可移除 {attachment_id} chips (显式权威列表契约); pending/error 期间发送硬阻断,
   // error 给错误条 + 重试 (置回 'pending' 重跑 effect)。非 forward 恒 'done' 不参与。
@@ -430,6 +442,13 @@ export function ComposePanelInner({
             attachmentId: a.id
           }))
         )
+      }
+      // D2 — inline 部件进隐藏保真集 (不显示为 chip, 但随 payload refs 带走)。
+      const inlineParts = (d.detail?.attachments ?? []).filter(
+        (a) => a.is_inline && a.derived_from == null
+      )
+      if (inlineParts.length > 0) {
+        setInlineRefs(inlineParts.map((a) => ({ id: a.id, filename: a.filename })))
       }
       setPlanApplied(true)
       return
@@ -624,13 +643,18 @@ export function ComposePanelInner({
       })
     }
     // D1 refs: staged → {stage_id}, 库内已有 → {attachment_id} (snake_case 契约字面)。
-    const refs: ComposeAttachmentRef[] = attachList
-      .filter((a) => a.status === 'done')
-      .map((a) =>
-        a.stageId != null ? { stage_id: a.stageId } : { attachment_id: a.attachmentId as number }
-      )
+    // draft-edit 追加 D2 隐藏保真集 (inline 部件, 不显示为 chip 但必须过线)。
+    const refs: ComposeAttachmentRef[] = [
+      ...attachList
+        .filter((a) => a.status === 'done')
+        .map((a) =>
+          a.stageId != null ? { stage_id: a.stageId } : { attachment_id: a.attachmentId as number }
+        ),
+      ...inlineRefs.map((a) => ({ attachment_id: a.id }))
+    ]
     return {
-      internalId,
+      // draft-edit 用替换锚 (保存后旧行已删, 锚随 mirror_internal_id 换新行)。
+      internalId: isDraftEdit ? draftRowId : internalId,
       mode: wireMode,
       to,
       cc,
@@ -640,13 +664,18 @@ export function ComposePanelInner({
       forceSubject: true,
       bodyHtml: getSanitizedHtml(),
       importance,
-      ...(mode === 'forward' || refs.length > 0 ? { attachments: refs } : {}),
+      // D3 兜底闸 — draft-edit 恒发显式 attachments 键 (含空数组): 键省略时服务端
+      // 无从区分「没有附件」与「客户端漏传」, 会静默产出无附件 EML (服务端另有
+      // 拒绝守卫, 这里是权威列表的表达面, 同 forward 契约)。
+      ...(mode === 'forward' || isDraftEdit || refs.length > 0 ? { attachments: refs } : {}),
       // D1 Bug A — draft-edit 保存/发送带草稿行自己的 id: 服务端读该行 draft_in_reply_to/
-      // draft_references/thread_id 恢复回复线程, linkage 空回退零派生 (契约 sourceDraftId)。
-      ...(isDraftEdit ? { sourceDraftId: internalId } : {})
+      // draft_references/thread_id 恢复回复线程, linkage 空回退零派生 (契约 sourceDraftId);
+      // C-1 起服务端还按它执行替换删除 (旧行 → 墓碑 + 本地删 + EXPUNGE 后台)。
+      ...(isDraftEdit ? { sourceDraftId: draftRowId } : {})
     }
   }, [
     internalId,
+    draftRowId,
     wireMode,
     mode,
     isDraftEdit,
@@ -657,19 +686,46 @@ export function ComposePanelInner({
     getSanitizedHtml,
     importance,
     attachList,
+    inlineRefs,
     fwdAttachState,
     t
   ])
 
   const saveMut = useMutation({
     mutationFn: async () => mailApi.email.draft(await buildComposePayload()),
-    // 不在此处 onClose —— 关闭由调用方决定: 顶部「保存草稿」按钮存后关闭 (per-call
-    // onSuccess), 离开守卫「保存草稿」存后继续原动作 (mutateAsync resolve → proceed)。
-    // 存成功即 baseline 复位 (dirty=false), 守卫 mutateAsync 才能干净地续跑。
-    onSuccess: () => {
+    // 不在此处 onClose —— 关闭由调用方决定: 顶部「保存草稿」按钮 新建关闭 /
+    // draft-edit 留在编辑态, 离开守卫「保存草稿」存后继续原动作 (mutateAsync
+    // resolve → proceed)。存成功即 baseline 复位 (dirty=false)。
+    onSuccess: (data) => {
       toastSuccess(t('compose.toast.draftOk'))
       invalidateLists()
       setDirty(false)
+      if (isDraftEdit) {
+        setLastSavedAt(new Date())
+        // C-1 replace — 服务端删旧行建镜像新行: 替换锚 + 附件引用一并换到新行
+        // (旧行的 attachment_id 已随行删除, 不换则下次保存引用解析失败)。镜像
+        // 失败时 mirror_internal_id 为 null → 保持旧锚 (降级: 下次保存回退新建)。
+        const d = (data ?? {}) as {
+          mirror_internal_id?: number | null
+          mirror_attachment_ids?: Record<string, number> | null
+        }
+        if (typeof d.mirror_internal_id === 'number') {
+          setDraftRowId(d.mirror_internal_id)
+          const idMap = d.mirror_attachment_ids ?? {}
+          setAttachList((prev) =>
+            prev.map((c) => {
+              const nid = idMap[c.filename]
+              return typeof nid === 'number' ? { ...c, attachmentId: nid, stageId: undefined } : c
+            })
+          )
+          setInlineRefs((prev) =>
+            prev.map((r) => {
+              const nid = idMap[r.filename]
+              return typeof nid === 'number' ? { ...r, id: nid } : r
+            })
+          )
+        }
+      }
     },
     onError: (err: unknown) => {
       const e = asWriteError(err)
@@ -692,9 +748,10 @@ export function ComposePanelInner({
       // draft-edit 发送成功后删掉原草稿 (替换语义: 发出的是 mode='new' 独立邮件, 原草稿仍在)。
       // task 08-20: 不再 await —— 删草稿 IMAP 慢链 (2.5-5.4s) 曾把发送反馈拖到
       // ~11.5s 转圈。后台执行, 失败仅 toast (邮件已发出, 残留草稿用户可手动删)。
+      // 删除目标 = 替换锚 draftRowId (保存过一次后原 internalId 行已被 replace 删掉)。
       if (isDraftEdit) {
         void mailApi.email
-          .deleteDraft(internalId)
+          .deleteDraft(draftRowId)
           .catch(() => toastError(t('compose.toast.draftDeleteFail')))
           .finally(() => invalidateLists())
       }
@@ -718,7 +775,8 @@ export function ComposePanelInner({
   // 全部后台化, 列表由 SSE + invalidateLists 最终一致。失败仅 toast: 服务端本地行
   // 先删且不因 IMAP 失败抛错, 真失败 (auth/网络) 时残留由 reconcile 自愈, 重删即可。
   const deleteMut = useMutation({
-    mutationFn: () => mailApi.email.deleteDraft(internalId),
+    // 目标 = 替换锚 draftRowId (draft-edit 保存过一次后原行已被 replace 删掉)。
+    mutationFn: () => mailApi.email.deleteDraft(draftRowId),
     onMutate: () => {
       toastSuccess(t('compose.toast.draftDeleted'))
       onClose()
@@ -737,7 +795,17 @@ export function ComposePanelInner({
 
   // T6 Bug C — 离开守卫。saveDraft=mutateAsync (resolve=成功续跑, reject=留守)。
   // 解构出稳定成员 (guardClose/handle/回调 稳定引用, unsavedOpen/saving 是值) 供 hook 依赖。
-  const saveDraftAsync = useCallback(() => saveMut.mutateAsync(), [saveMut])
+  // 单飞 (task 08-20 draft-save): 顶部「保存草稿」按钮与离开守卫两个入口共用 —
+  // in-flight 复用同一 promise, 防双 APPEND (replace 语义下双 APPEND = 两行新草稿)。
+  const saveInflightRef = useRef<Promise<unknown> | null>(null)
+  const saveDraftAsync = useCallback(() => {
+    if (!saveInflightRef.current) {
+      saveInflightRef.current = saveMut.mutateAsync().finally(() => {
+        saveInflightRef.current = null
+      })
+    }
+    return saveInflightRef.current
+  }, [saveMut])
   const {
     guardClose,
     handle: guardHandle,
@@ -909,19 +977,37 @@ export function ComposePanelInner({
           )}
           {isDraftEdit ? t('compose.deleteDraft') : t('compose.discard')}
         </button>
-        {!isDraftEdit && (
-          <button
-            type="button"
-            onClick={() => saveMut.mutate(undefined, { onSuccess: () => onClose() })}
-            disabled={busy || uploadsPending || fwdAttachBlocked}
-            className="gbtn"
-            style={{ height: '34px' }}
-          >
-            {saveMut.isPending ? (
-              <Loader2 size={13} strokeWidth={2} className="animate-spin" />
-            ) : null}
-            {t('compose.saveDraft')}
-          </button>
+        {/* 保存草稿 — draft-edit 也有 (task 08-20 draft-save B: 原「改完就发」设计
+            把唯一保存路径留给离开守卫弹框)。draft-edit 语义 = 存后留在编辑态
+            (replace 保存, 锚换新行); 其余模式维持存后关闭。走单飞 saveDraftAsync,
+            与离开守卫共用 in-flight。 */}
+        <button
+          type="button"
+          onClick={() => {
+            if (isDraftEdit) {
+              saveDraftAsync().catch(() => {})
+            } else {
+              saveDraftAsync().then(
+                () => onClose(),
+                () => {}
+              )
+            }
+          }}
+          disabled={busy || uploadsPending || fwdAttachBlocked}
+          className="gbtn"
+          style={{ height: '34px' }}
+        >
+          {saveMut.isPending ? (
+            <Loader2 size={13} strokeWidth={2} className="animate-spin" />
+          ) : null}
+          {t('compose.saveDraft')}
+        </button>
+        {isDraftEdit && lastSavedAt && (
+          <span className="text-meta font-mono text-ink-fg-3">
+            {t('compose.savedAt', {
+              time: lastSavedAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+            })}
+          </span>
         )}
         <span className="w-px h-5 bg-ink-border-soft mx-1" aria-hidden />
         <button
