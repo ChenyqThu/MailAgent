@@ -130,7 +130,7 @@ def list_contact_mail_rows(
         "SELECT m.internal_id AS internal_id, m.subject AS subject, "
         "  m.sender AS sender, m.sender_name AS sender_name, "
         "  m.mailbox AS mailbox, m.date_received AS date_received, "
-        "  m.is_read AS is_read, "
+        "  m.is_read AS is_read, m.message_id AS message_id, "
         "  COALESCE(MAX(l.seen_at), 0) AS seen_at, "
         "  GROUP_CONCAT(DISTINCT l.role) AS roles, "
         f"  {direction_sql} AS direction "

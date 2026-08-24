@@ -334,6 +334,8 @@ gateway 9 工具 + 第六 context mode `contact_governance`（批②，工具定
 三道 belt 与审批档见 `feature-flags-rationale.md` 的退役记录）、
 列表头 ✨Agent 胶囊 + 抽屉两 tab（批③，工具清单走零依赖叶子
 `frontend/src/shared/lib/contactToolFace.ts`，三向闸 `contact_tool_face_leaf.test.ts`）。
-仍未做：手动创建无 email 联系人 / KOS person 页 / compose 收件人补全切读通讯录等，
-在 PRD §9 TODO 表登记。`contact_list_mails` 不返回 `message_id`（propose 取证据要经
-`email_get` 两跳，工具 description 已写明）。
+仍未做：手动创建无 email 联系人 / KOS person 实体页（已移交
+[L4 个人 Agent 节点 epic](../../plans/l4-personal-agent-node/README.md) 规划）等，在 PRD §9
+TODO 表登记。compose 收件人补全切读通讯录已落地（commit `04e21cfe`）：通讯录 lane（15s TTL，
+策展身份优先）与邮件头聚合 lane（10min cache，兜底）双 lane 合流。`contact_list_mails`
+行投影已带 `message_id`（task 08-24 A），propose 取证据不再需要经 `email_get` 换一跳。

@@ -644,8 +644,9 @@ def _seed_mail_links(path, *, senders=None):
             sender, sender_email = senders[internal_id]
             conn.execute(
                 "INSERT INTO email_metadata (internal_id, subject, sender, "
-                "sender_email, date_received, mailbox) VALUES (?,?,?,?,?, '收件箱')",
-                (internal_id, subject, sender, sender_email, ts),
+                "sender_email, date_received, mailbox, message_id) "
+                "VALUES (?,?,?,?,?, '收件箱', ?)",
+                (internal_id, subject, sender, sender_email, ts, f"<mid-{internal_id}@x.com>"),
             )
         email_id = conn.execute(
             "SELECT id FROM contact_email WHERE email_normalized='alice@x.com'"
@@ -684,6 +685,11 @@ def test_contact_mails_direction_split_and_pagination(client):
     assert data["items"][1]["roles"] == ["cc", "to"]
     assert {i["internal_id"]: i["direction"] for i in data["items"]} == {
         101: "from_them", 102: "from_me", 103: "from_third",
+    }
+    # message_id 随行投影直出 (task 08-24 A): propose 证据链不再需要
+    # contact_list_mails → internal_id → email_get 两跳换 message_id。
+    assert {i["internal_id"]: i["message_id"] for i in data["items"]} == {
+        101: "<mid-101@x.com>", 102: "<mid-102@x.com>", 103: "<mid-103@x.com>",
     }
 
     for direction, expected in (

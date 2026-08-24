@@ -123,6 +123,7 @@ const DETAIL = {
 
 const MAIL_ROW = {
   internal_id: 51201,
+  message_id: '<atlas-51201@omada.test>',
   subject: 'Atlas rollout',
   sender: 'zhang@omada.test',
   sender_name: '张三',
@@ -279,6 +280,9 @@ describe('contact reads — wire shape + projection', () => {
     expect(out.total).toBe(42)
     expect(out.next_cursor).toBe('1760000000000:51201')
     expect(out.items[0].internal_id).toBe(51201)
+    // task 08-24 A: message_id comes straight off the row, no email_get hop needed for
+    // proposal evidence.
+    expect(out.items[0].message_id).toBe('<atlas-51201@omada.test>')
     expect(out.items[0].roles).toEqual(['cc', 'to'])
     expect(out.items[0].direction).toBe('from_them')
   })

@@ -1077,6 +1077,7 @@ async def list_contact_mails(
             "mailbox": row["mailbox"],
             "date_received": row["date_received"],
             "is_read": bool(row["is_read"]),
+            "message_id": row["message_id"],
             "seen_at": row["seen_at"] or None,
             # roles 保留: 方向轴之外, cc 降级为行内次要标记 (owner 拍板 A 方案 ——
             # 「谁发的」与「to/cc」是正交两维, cc 不再占 tab 轴)。

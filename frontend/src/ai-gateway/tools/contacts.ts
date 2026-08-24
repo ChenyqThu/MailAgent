@@ -157,8 +157,9 @@ const contactListMailsSchema = z
   .strict()
 
 /** One email citation. `message_id` is the RFC Message-ID (not the internal id) — it comes off
- *  email_list_filter / email_get / email_search_fulltext rows; the server refuses a proposal whose
- *  evidence does not resolve to a stored email. `quote` is stored truncated to 500 chars. */
+ *  contact_list_mails / email_list_filter / email_get / email_search_fulltext rows; the server
+ *  refuses a proposal whose evidence does not resolve to a stored email. `quote` is stored
+ *  truncated to 500 chars. */
 const contactEvidenceSchema = z
   .object({
     message_id: z.string().trim().min(1).max(500),
@@ -561,7 +562,7 @@ export function createContactReadTools(
         'broadcasters, hidden rows and the owner themselves are excluded); "all" = every ' +
         'non-merged row, which is where you find robots, mailing lists and the owner. Omit ' +
         '`query` to browse the population by `sort` (density = most corresponded-with first). ' +
-        'Returns identity columns plus traffic statistics; call contact_get for one person\'s ' +
+        "Returns identity columns plus traffic statistics; call contact_get for one person's " +
         'full record including their profile.',
       inputSchema: contactSearchSchema,
       run: async (input, signal) => {
@@ -616,13 +617,13 @@ export function createContactReadTools(
     {
       name: 'contact_list_mails',
       description:
-        "List the emails linking this contact to the owner, newest first. `direction` splits " +
+        'List the emails linking this contact to the owner, newest first. `direction` splits ' +
         'them three ways: "from_them" = they wrote it, "from_me" = the owner wrote it to them, ' +
         '"from_third" = someone else wrote it and they were on the recipient list. Rows carry ' +
-        '`internal_id` — feed it to email_get / email_body to read the mail itself, and to ' +
-        "email_get for the `message_id` a proposal's evidence has to cite. Paginate with " +
-        '`cursor` from `next_cursor`. Subjects and sender names are shown as plain metadata; the ' +
-        'mail bodies are not returned here.',
+        '`internal_id` — feed it to email_get / email_body to read the mail itself — and ' +
+        "`message_id`, which is the id a proposal's evidence has to cite directly, no extra " +
+        'lookup needed. Paginate with `cursor` from `next_cursor`. Subjects and sender names are ' +
+        'shown as plain metadata; the mail bodies are not returned here.',
       inputSchema: contactListMailsSchema,
       run: async (input, signal) => {
         const result = await domainRequest<{
@@ -642,6 +643,7 @@ export function createContactReadTools(
             const row = (item ?? {}) as Record<string, unknown>
             return {
               internal_id: num(row.internal_id),
+              message_id: str(row.message_id),
               subject: prose(row.subject),
               sender: prose(row.sender),
               sender_name: prose(row.sender_name),
@@ -835,7 +837,7 @@ export function createContactWriteTools(
       ...shared,
       name: 'contact_mark_former_email',
       description:
-        'Mark one of a contact\'s addresses as FORMER (they left that address behind), or clear ' +
+        "Mark one of a contact's addresses as FORMER (they left that address behind), or clear " +
         'the mark with former=false. History is untouched — the old address keeps its mail ' +
         'count; the mark is what stops it being offered when composing. The address must ' +
         'already belong to this contact, and the primary address cannot be marked former: ' +
@@ -857,7 +859,7 @@ export function createContactWriteTools(
       ...shared,
       name: 'contact_refresh_profile',
       description:
-        "Kick off a fresh AI profile for one contact (re-reads their mail and rewrites the " +
+        'Kick off a fresh AI profile for one contact (re-reads their mail and rewrites the ' +
         'summary / topics / evolution). It returns as soon as the job is claimed — the new ' +
         'profile is NOT in the response; read it with contact_get once the status leaves ' +
         '"running". A second call while one is already running is a no-op (started=false). ' +
@@ -913,7 +915,7 @@ export function createContactWriteTools(
       ...shared,
       name: 'contact_set_manager',
       description:
-        "Set (or clear, with manager_contact_id=null) who this contact reports to. Only one " +
+        'Set (or clear, with manager_contact_id=null) who this contact reports to. Only one ' +
         'side of the link is stored — to record "B reports to A" call this on B, and A then ' +
         'shows B among their reports. Both ids must be live contacts; the server refuses a ' +
         'contact reporting to themselves and refuses any link that would close a reporting ' +
