@@ -18,7 +18,9 @@ import {
   dayBucketOf,
   filterByTab,
   groupByDay,
+  historyTimeOf,
   snoozeUntilMs,
+  sortByHistoryTime,
   tabCategory,
   tabUnread
 } from '@shared/components/notifications/notificationModel'
@@ -95,6 +97,51 @@ describe('groupByDay', () => {
       now
     )
     expect(groups.map((g) => g.bucket)).toEqual(['today', 'yesterday', 'today'])
+  })
+})
+
+// ─── 历史（已处理）视图 ─────────────────────────────────────────────────────
+
+describe('历史视图的时间轴', () => {
+  const now = at(2026, 8, 21, 14, 30)
+  const row = (
+    id: number,
+    lastEventAt: number,
+    resolvedAt: number | null
+  ): { id: number; lastEventAt: number; resolvedAt: number | null } => ({
+    id,
+    lastEventAt,
+    resolvedAt
+  })
+
+  it('处理时刻优先，缺失时回落最后事件时刻', () => {
+    expect(historyTimeOf(row(1, at(2026, 8, 20, 9, 0), at(2026, 8, 21, 9, 0)))).toBe(
+      at(2026, 8, 21, 9, 0)
+    )
+    expect(historyTimeOf(row(2, at(2026, 8, 20, 9, 0), null))).toBe(at(2026, 8, 20, 9, 0))
+  })
+
+  it('🔴 按处理时刻重排：服务端的 last_event_at 顺序在这条轴上是错的', () => {
+    // 1 号事件更早但刚处理完，2 号事件更晚却早就处理掉了 —— 两条轴给出相反的顺序。
+    const sorted = sortByHistoryTime([
+      row(2, at(2026, 8, 21, 10, 0), at(2026, 8, 21, 10, 5)),
+      row(1, at(2026, 8, 20, 9, 0), at(2026, 8, 21, 13, 0))
+    ])
+    expect(sorted.map((r) => r.id)).toEqual([1, 2])
+  })
+
+  it('返回新数组（query 缓存里的那一份不被原地改）', () => {
+    const input = [row(1, at(2026, 8, 21, 9, 0), null)]
+    const sorted = sortByHistoryTime(input)
+    expect(sorted).not.toBe(input)
+    expect(input.map((r) => r.id)).toEqual([1])
+  })
+
+  it('分日跟着换轴：昨天发生、今天处理的行落在「今天」', () => {
+    const rows = [row(1, at(2026, 8, 20, 23, 30), at(2026, 8, 21, 9, 0))]
+    // 默认轴（last_event_at）会把它分进昨天 —— 而行上显示的是今天 09:00 的处理时刻。
+    expect(groupByDay(rows, now).map((g) => g.bucket)).toEqual(['yesterday'])
+    expect(groupByDay(rows, now, historyTimeOf).map((g) => g.bucket)).toEqual(['today'])
   })
 })
 

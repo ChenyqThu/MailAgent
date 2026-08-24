@@ -15,9 +15,11 @@ import { useNavigate } from '@tanstack/react-router'
 import { useTranslation } from 'react-i18next'
 import {
   AlertTriangle,
+  ArrowLeft,
   Bell,
   CheckCheck,
   FileText,
+  History,
   Info,
   MoreHorizontal,
   ShieldAlert,
@@ -38,6 +40,7 @@ import { useMatterNavigation } from '@shared/components/matters/navigation'
 import {
   useMarkAllNotificationsRead,
   useMarkNotificationRead,
+  useNotificationHistoryList,
   useNotificationList,
   useNotificationUnreadCount,
   useResolveNotification,
@@ -51,7 +54,9 @@ import {
   SNOOZE_PRESETS,
   filterByTab,
   groupByDay,
+  historyTimeOf,
   snoozeUntilMs,
+  sortByHistoryTime,
   tabCategory,
   tabUnread,
   type NotificationTabId,
@@ -113,6 +118,7 @@ const SNOOZE_LABEL_KEY: Record<SnoozePreset, string> = {
 function NotificationRow({
   item,
   nowMs,
+  history = false,
   menuOpen,
   onMenuOpenChange,
   onActivate,
@@ -123,6 +129,8 @@ function NotificationRow({
   /** 由面板统一注入的「此刻」（见 NotificationPanel 里 nowMs 的取法）—— 逐行各读一次
    *  `Date.now()` 会让同一屏的相对时间基准不一致，也过不了 react-hooks/purity。 */
   nowMs: number
+  /** 历史（已处理）视图：行是终态，既没有可做的动作也没有未读态，时间读处理时刻。 */
+  history?: boolean
   menuOpen: boolean
   onMenuOpenChange(id: number | null): void
   onActivate(item: NotificationItem): void
@@ -132,13 +140,16 @@ function NotificationRow({
   const { t } = useTranslation()
   const moreRef = useRef<HTMLButtonElement>(null)
   const { Icon, tone } = metaOf(item)
-  const unread = item.readAt == null
+  // 历史行一律按已读画：那条 `readAt` 对已处理的行没有消费点（未读数只统计活跃行），
+  // 在这里亮一颗未读点只会让人以为还有事要做。
+  const unread = !history && item.readAt == null
   const toneClass = TONE_CLASS[tone]
-  const age = nowMs - item.lastEventAt
+  const timeMs = history ? historyTimeOf(item) : item.lastEventAt
+  const age = nowMs - timeMs
   const time =
     age < RELATIVE_WINDOW_MS
       ? ageLabel(t, age)
-      : new Date(item.lastEventAt).toLocaleTimeString(undefined, {
+      : new Date(timeMs).toLocaleTimeString(undefined, {
           hour: '2-digit',
           minute: '2-digit'
         })
@@ -236,27 +247,31 @@ function NotificationRow({
         </span>
       </button>
 
-      {/* hover 唯一动作钮：更多。占位恒在、只淡入淡出（绝对定位浮在行上会盖住时间戳）。 */}
-      <span className="-mr-1 shrink-0">
-        <button
-          ref={moreRef}
-          type="button"
-          aria-label={t('notifications.menu.trigger')}
-          title={t('notifications.menu.trigger')}
-          onClick={(event) => {
-            event.stopPropagation()
-            onMenuOpenChange(menuOpen ? null : item.id)
-          }}
-          className={cn(
-            'mt-px grid size-6 place-items-center rounded-[var(--r-ctl)] text-ink-fg-2 opacity-0',
-            'transition-opacity duration-fast ease-standard',
-            'hover:bg-ink-fg/[0.08] hover:text-ink-fg focus-visible:opacity-100 group-hover:opacity-100',
-            menuOpen && 'opacity-100'
-          )}
-        >
-          <MoreHorizontal size={13} />
-        </button>
-      </span>
+      {/* hover 唯一动作钮：更多。占位恒在、只淡入淡出（绝对定位浮在行上会盖住时间戳）。
+          🔴 历史视图整块不渲染（而不是藏起来）—— 已处理是终态，Snooze / 标记已处理都无从
+          谈起，留一个看不见但可聚焦的按钮等于给键盘用户挂一条死路。 */}
+      {!history && (
+        <span className="-mr-1 shrink-0">
+          <button
+            ref={moreRef}
+            type="button"
+            aria-label={t('notifications.menu.trigger')}
+            title={t('notifications.menu.trigger')}
+            onClick={(event) => {
+              event.stopPropagation()
+              onMenuOpenChange(menuOpen ? null : item.id)
+            }}
+            className={cn(
+              'mt-px grid size-6 place-items-center rounded-[var(--r-ctl)] text-ink-fg-2 opacity-0',
+              'transition-opacity duration-fast ease-standard',
+              'hover:bg-ink-fg/[0.08] hover:text-ink-fg focus-visible:opacity-100 group-hover:opacity-100',
+              menuOpen && 'opacity-100'
+            )}
+          >
+            <MoreHorizontal size={13} />
+          </button>
+        </span>
+      )}
 
       {/* 🔴 portal 档不是可选项：列表是 `overflow-y-auto` 容器，行内 absolute 的菜单会被
           容器整块裁掉（贴底那几行等于点不出菜单）。portal 档另有一处配套 —— 铃铛的
@@ -283,10 +298,17 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
   const api = useMailApi()
   const [tab, setTab] = useState<NotificationTabId>('all')
   const [menuOpenId, setMenuOpenId] = useState<number | null>(null)
+  // 历史（已处理）视图。「标记为已处理」之后条目从活跃列表消失，行还在库里（resolve 只改
+  // state 不删行）—— 这个开关就是它唯一的入口。
+  const [history, setHistory] = useState(false)
   const category = tabCategory(tab)
   // 一条查询喂五个 tab：拉的是全类目那一份，切 tab 只在下面本地过滤 —— 面板打开即有内容
   // （启动预热已把这份缓存放好），切 tab 不再各自冷加载各自白屏。
-  const list = useNotificationList(true)
+  const activeList = useNotificationList(true)
+  // 历史那份是独立 key、只在历史态才拉；活跃那份**不关掉** —— 来回切视图不该把已经在手
+  // 的活跃缓存冲掉再冷取一遍。
+  const historyList = useNotificationHistoryList(history)
+  const list = history ? historyList : activeList
   // 与铃铛徽标**同一条查询**（同 queryKey，react-query 去重不多发请求）：tab 上的未读数、
   // 头部 chip、「全部已读」的可用性全读它，三处口径因此不会各说各话。
   const counts = useNotificationUnreadCount()
@@ -301,7 +323,11 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
   const allItems = list.data?.items
   // tab 过滤在前端做；未读计数不走这里（读服务端 `byCategory`，见下面的 tabOptions）——
   // 两条口径分家是有意的：过滤的是「这一屏能看到的」，计数报的是「服务端一共有多少」。
-  const items = useMemo(() => filterByTab(allItems ?? [], tab), [allItems, tab])
+  const items = useMemo(() => {
+    const filtered = filterByTab(allItems ?? [], tab)
+    // 历史视图显示的是处理时刻，排序跟着换（否则组头与行上的时间会打架，见 model 头注）。
+    return history ? sortByHistoryTime(filtered) : filtered
+  }, [allItems, tab, history])
   const unread = tabUnread(tab, counts.data)
   // 「此刻」的基准：优先取本次数据的落地时刻（React Query 的纯值，随每次 refetch 前进），
   // 首帧无数据时回落面板打开的时刻。🔴 不在 render 里直读 `Date.now()` —— 那是不纯调用
@@ -309,10 +335,15 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
   const [openedAt] = useState(() => Date.now())
   const nowMs = list.dataUpdatedAt || openedAt
   // 分组只随数据/基准变，不随每次 render 重算。
-  const groups = useMemo(() => groupByDay(items, nowMs), [items, nowMs])
+  const groups = useMemo(
+    () => groupByDay(items, nowMs, history ? historyTimeOf : undefined),
+    [items, nowMs, history]
+  )
 
   const activate = (item: NotificationItem): void => {
-    if (item.readAt == null) markRead.mutate(item.id)
+    // 历史视图是只读的：不回写 readAt（已处理行不进任何徽标口径，标它没有消费点），
+    // 但点击照常按 link 跳转 —— 「找回那条通知」的下一步多半就是去看它指向的东西。
+    if (!history && item.readAt == null) markRead.mutate(item.id)
     const link = resolveNotificationLink(item.payload)
     if (!link) return // 无 link / 未知型 → 只标已读，面板不动（design §6.4）
     onClose()
@@ -357,7 +388,9 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
 
   const tabOptions = NOTIFICATION_TAB_IDS.map((id) => {
     const label = t(`notifications.tab.${id}`)
-    const count = tabUnread(id, counts.data)
+    // 🔴 历史态不挂计数：这条计数是**活跃未读**口径（服务端 unread-count 只统计活跃行），
+    // 挂在一屏已处理条目上方会读成「这个 tab 里有 3 条」而其实一条都不在眼前。
+    const count = history ? 0 : tabUnread(id, counts.data)
     return {
       value: id,
       ariaLabel: label,
@@ -382,29 +415,55 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
             {t('notifications.kicker')}
           </div>
           <div className="flex items-center gap-2">
-            <span className="text-aux text-ink-fg">{t('notifications.title')}</span>
-            {unread > 0 && (
+            <span className="text-aux text-ink-fg">
+              {history ? t('notifications.history.title') : t('notifications.title')}
+            </span>
+            {!history && unread > 0 && (
               <span className="px-1.5 rounded border border-coral/40 bg-coral/15 text-micro font-mono text-coral tabular-nums">
                 {t('notifications.unreadChip', { count: unread })}
               </span>
             )}
           </div>
         </div>
-        <button
-          type="button"
-          disabled={unread === 0 || markAllRead.isPending}
-          // 标的是**当前 tab**（All tab 才是全部）：按钮就在 tab 行上方，标掉用户看不见的
-          // 另外四个类目会让「未读数没清零」变成一件说不清的事。
-          onClick={() => markAllRead.mutate(category ?? undefined)}
-          className={cn(
-            'flex items-center gap-1.5 shrink-0 pt-[18px] text-meta text-ink-fg-2',
-            'transition-colors duration-fast hover:text-ink-fg',
-            'disabled:opacity-40 disabled:cursor-default disabled:hover:text-ink-fg-2'
+        <div className="flex shrink-0 items-center gap-3 pt-[18px]">
+          {/* 「全部标为已读」只在活跃态出：它清的是未读徽标，而历史里的行早就不进任何
+              徽标口径了 —— 摆在那儿只会是一颗按了没反应的按钮。 */}
+          {!history && (
+            <button
+              type="button"
+              disabled={unread === 0 || markAllRead.isPending}
+              // 标的是**当前 tab**（All tab 才是全部）：按钮就在 tab 行上方，标掉用户看不见的
+              // 另外四个类目会让「未读数没清零」变成一件说不清的事。
+              onClick={() => markAllRead.mutate(category ?? undefined)}
+              className={cn(
+                'flex items-center gap-1.5 text-meta text-ink-fg-2',
+                'transition-colors duration-fast hover:text-ink-fg',
+                'disabled:opacity-40 disabled:cursor-default disabled:hover:text-ink-fg-2'
+              )}
+            >
+              <CheckCheck size={12} strokeWidth={2} />
+              {t('notifications.markAllRead')}
+            </button>
           )}
-        >
-          <CheckCheck size={12} strokeWidth={2} />
-          {t('notifications.markAllRead')}
-        </button>
+          <button
+            type="button"
+            onClick={() => {
+              setHistory((on) => !on)
+              setMenuOpenId(null)
+            }}
+            className={cn(
+              'flex items-center gap-1.5 text-meta text-ink-fg-2',
+              'transition-colors duration-fast hover:text-ink-fg'
+            )}
+          >
+            {history ? (
+              <ArrowLeft size={12} strokeWidth={2} />
+            ) : (
+              <History size={12} strokeWidth={2} />
+            )}
+            {history ? t('notifications.history.back') : t('notifications.history.open')}
+          </button>
+        </div>
       </div>
 
       {/* tab 行。段宽自适应文本（**不 fluid**）：380px 面板里 5 段等分只有 ~70px，英文
@@ -433,8 +492,12 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
             <Bell size={20} strokeWidth={1.75} />
           </div>
           <div className="flex flex-col items-center gap-[3px]">
-            <div className="text-aux text-ink-fg-1">{t('notifications.empty.title')}</div>
-            <div className="text-meta text-ink-fg-3">{t('notifications.empty.hint')}</div>
+            <div className="text-aux text-ink-fg-1">
+              {t(history ? 'notifications.history.empty.title' : 'notifications.empty.title')}
+            </div>
+            <div className="text-meta text-ink-fg-3">
+              {t(history ? 'notifications.history.empty.hint' : 'notifications.empty.hint')}
+            </div>
           </div>
         </div>
       ) : (
@@ -457,6 +520,7 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
                   key={item.id}
                   item={item}
                   nowMs={nowMs}
+                  history={history}
                   menuOpen={menuOpenId === item.id}
                   onMenuOpenChange={setMenuOpenId}
                   onActivate={activate}

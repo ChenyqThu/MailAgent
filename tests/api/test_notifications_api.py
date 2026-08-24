@@ -92,6 +92,23 @@ def test_list_invalid_state_returns_400(client, notify_center):
     assert resp.json()["error"]["code"] == "E_INVALID_ARG"
 
 
+def test_list_state_resolved_serves_history_view(client, notify_center):
+    """面板「已处理」历史视图走的就是这条 query（前端独立 query key）。"""
+    live = _publish(notify_center, dedupe_key="live")
+    handled = _publish(notify_center, dedupe_key="handled")
+    notify_center.resolve(handled.id)
+
+    resp = client.get("/api/notifications", params={"state": "resolved"})
+    assert resp.status_code == 200
+    items = resp.json()["data"]
+    assert [item["id"] for item in items] == [handled.id]
+    assert items[0]["state"] == "resolved"
+    assert items[0]["resolvedAt"] is not None  # 行上显示的处理时刻来自这个字段
+
+    # 活跃那条视图不受影响（两个 lane 各取各的）
+    assert [item["id"] for item in client.get("/api/notifications").json()["data"]] == [live.id]
+
+
 def test_list_unread_only_filters(client, notify_center):
     r1 = _publish(notify_center, dedupe_key="a")
     _publish(notify_center, dedupe_key="b")

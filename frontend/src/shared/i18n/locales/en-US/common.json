@@ -6748,6 +6748,15 @@
       "snoozeThreeDays": "In 3 days",
       "resolve": "Mark as resolved"
     },
+    "history": {
+      "open": "Resolved",
+      "back": "Back",
+      "title": "Resolved",
+      "empty": {
+        "title": "No resolved notifications yet",
+        "hint": "Notifications you mark as resolved stay here"
+      }
+    },
     "unreadDot": "Unread",
     "recurrence": "×{count}",
     "recurrenceTitle": "This notification recurred {count} times",

@@ -36,19 +36,40 @@ export function dayBucketOf(eventMs: number, nowMs: number): DayBucket {
 }
 
 /** 按分日切段。**保持入参顺序**（服务端已按 `last_event_at DESC` 排好，这里不重排）；
- *  同一 bucket 只有相邻时才合段 —— 顺序乱掉时宁可切出两段可见的异常，也不静默重排掩盖。 */
+ *  同一 bucket 只有相邻时才合段 —— 顺序乱掉时宁可切出两段可见的异常，也不静默重排掩盖。
+ *
+ *  `timeOf` 是分日读哪条时间轴：默认 `lastEventAt`（= 服务端的排序键）。历史（已处理）
+ *  视图显示的是处理时刻，那边连排序一起换到 `historyTimeOf`，组头才不会与行上的时间打架。 */
 export function groupByDay<T extends { lastEventAt: number }>(
   items: readonly T[],
-  nowMs: number
+  nowMs: number,
+  timeOf: (item: T) => number = (item) => item.lastEventAt
 ): Array<{ bucket: DayBucket; items: T[] }> {
   const out: Array<{ bucket: DayBucket; items: T[] }> = []
   for (const item of items) {
-    const bucket = dayBucketOf(item.lastEventAt, nowMs)
+    const bucket = dayBucketOf(timeOf(item), nowMs)
     const tail = out[out.length - 1]
     if (tail && tail.bucket === bucket) tail.items.push(item)
     else out.push({ bucket, items: [item] })
   }
   return out
+}
+
+// ─── 历史（已处理）视图 ─────────────────────────────────────────────────────
+
+/** 历史视图的时间轴：**处理时刻**优先（用户在这里找的是「我什么时候把它处理掉的」），
+ *  缺 `resolvedAt` 的行回落最后事件时刻。 */
+export function historyTimeOf(item: { resolvedAt: number | null; lastEventAt: number }): number {
+  return item.resolvedAt ?? item.lastEventAt
+}
+
+/** 历史列表按处理时刻倒序。🔴 排序必须跟着显示的那条轴换：服务端恒按 `last_event_at DESC`
+ *  出行，而「事件早、处理晚」的行在两条轴上顺序不同 —— 只换显示不换排序，会切出两段
+ *  「今天」。返回新数组（不原地改 query 缓存里的那一份）。 */
+export function sortByHistoryTime<T extends { resolvedAt: number | null; lastEventAt: number }>(
+  items: readonly T[]
+): T[] {
+  return [...items].sort((a, b) => historyTimeOf(b) - historyTimeOf(a))
 }
 
 // ─── tab 值域（M2）─────────────────────────────────────────────────────────

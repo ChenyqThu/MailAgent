@@ -6748,6 +6748,15 @@
       "snoozeThreeDays": "3 天后",
       "resolve": "标记为已处理"
     },
+    "history": {
+      "open": "已处理",
+      "back": "返回",
+      "title": "已处理",
+      "empty": {
+        "title": "还没有已处理的通知",
+        "hint": "标记为已处理的通知会留在这里"
+      }
+    },
     "unreadDot": "未读",
     "recurrence": "×{count}",
     "recurrenceTitle": "同类通知已发生 {count} 次",

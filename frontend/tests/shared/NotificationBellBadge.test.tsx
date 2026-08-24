@@ -57,6 +57,46 @@ afterEach(() => {
   hoisted.unreadData = undefined
 })
 
+// owner dogfood 反馈②：未读时顶部提示太弱。形态从「整枚按钮换成计数药丸」改成图标右上角
+// 的叠加式数字角标（danger 红）。下面盯的是角标真的在、数上限收得住、critical 有加强档。
+describe('NotificationBellBadge — 未读数字角标', () => {
+  test('未读 > 0 → 铃铛右上角挂数字角标', () => {
+    renderWith(counts(3, 0))
+    const badge = screen.getByTestId('notification-unread-badge')
+    expect(badge.textContent).toBe('3')
+    expect(badge.className).toContain('bg-fail') // danger token，不是 accent
+  })
+
+  test('未读 ≥ 100 → 收成 99+（角标不被数字撑破）', () => {
+    renderWith(counts(100, 0))
+    expect(screen.getByTestId('notification-unread-badge').textContent).toBe('99+')
+    cleanup()
+    // 边界另一侧：99 仍是实数。
+    renderWith(counts(99, 0))
+    expect(screen.getByTestId('notification-unread-badge').textContent).toBe('99')
+  })
+
+  test('critical 未读 → 同一枚角标加强一档（多一圈同色光晕），且不带动画', () => {
+    renderWith(counts(2, 0, 1))
+    const badge = screen.getByTestId('notification-unread-badge')
+    // 加强 = 多一圈描边，而不是换色 / 加动画（标题栏常驻的东西不该动）。
+    expect(badge.style.boxShadow).toContain('--c-fail')
+    expect(badge.className).not.toContain('animate')
+  })
+
+  test('普通未读 → 只有底色描边，没有 critical 那圈光晕', () => {
+    renderWith(counts(2, 0))
+    expect(screen.getByTestId('notification-unread-badge').style.boxShadow).not.toContain(
+      '--c-fail'
+    )
+  })
+
+  test('未读 0 → 没有角标（不闪一个 0）', () => {
+    renderWith(counts(0, 2))
+    expect(screen.queryByTestId('notification-unread-badge')).toBeNull()
+  })
+})
+
 describe('NotificationBellBadge — 待办点（level 型指示）', () => {
   test('未读 0 + 有活跃待办 → 素图标上挂持久待办点，tooltip 报待办数', () => {
     const button = renderWith(counts(0, 2))

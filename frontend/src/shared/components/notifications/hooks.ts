@@ -16,6 +16,7 @@ import type {
   NotificationCategory,
   NotificationItem,
   NotificationListResult,
+  NotificationListState,
   NotificationUnreadCount
 } from '@shared/api/types/notifications'
 import { resolveApiBaseUrl } from '@shared/components/settings/custom-ai/shared'
@@ -48,14 +49,17 @@ const LIST_LIMIT = 50
 /** 面板列表的 key/queryFn 配方。**单独抽出来**是为了启动预热（`startupPrefetch.ts` 的 T2）
  *  与面板读的是同一份缓存 —— 预热若在第二处手抄 key 或参数，写进去的是另一条 query，
  *  面板首挂照样冷加载（contactListPagedOptions 同款理由）。 */
-export function notificationListOptions(api: NotificationsApi): {
+export function notificationListOptions(
+  api: NotificationsApi,
+  state: NotificationListState = 'open'
+): {
   queryKey: ReturnType<typeof qk.notifications.list>
   queryFn: () => Promise<NotificationListResult>
   staleTime: number
 } {
   return {
-    queryKey: qk.notifications.list('open'),
-    queryFn: () => api.list({ state: 'open', limit: LIST_LIMIT }),
+    queryKey: qk.notifications.list(state),
+    queryFn: () => api.list({ state, limit: LIST_LIMIT }),
     staleTime: 4_000
   }
 }
@@ -67,6 +71,20 @@ export function useNotificationList(open: boolean): UseQueryResult<NotificationL
   const api = useNotificationsApi()
   return useQuery({
     ...notificationListOptions(api),
+    enabled: open
+  })
+}
+
+/** 历史（已处理）列表。**独立 key**（`list('resolved')`）+ `enabled` 只在历史态开 ——
+ *  活跃态那份缓存不受影响，来回切视图不会互相把对方冲掉。
+ *
+ *  只拉 `resolved`：`dismissed` 是用户主动丢弃的条目，保持不可见才是它的语义。
+ *  单独一个 hook（而不是给 `useNotificationList` 加参数）是有意的：活跃列表的
+ *  「恒单参」签名本身是一道回归闸（防 category 回到入参 = 按 tab 分查询的回退）。 */
+export function useNotificationHistoryList(open: boolean): UseQueryResult<NotificationListResult> {
+  const api = useNotificationsApi()
+  return useQuery({
+    ...notificationListOptions(api, 'resolved'),
     enabled: open
   })
 }

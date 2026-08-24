@@ -432,6 +432,32 @@ def test_list_filters_and_counts(center, clock):
     assert exc.value.code == "E_INVALID_ARG"
 
 
+def test_list_resolved_is_the_history_lane(center, clock, db_path):
+    """``state='resolved'`` = 面板的「已处理」历史视图数据源。
+
+    🔴 dismissed **不进**这条 lane: 那是用户主动丢弃的条目, 保持不可见才是它的
+    语义 (与 resolved 的「处理完了但要留痕」是两件事)。
+    """
+    keep = _publish(center, dedupe_key="live")
+    gone = _publish(center, dedupe_key="handled")
+    clock.now = T0 + 5_000
+    center.resolve(gone.id)
+    dropped = _publish(center, dedupe_key="dropped")
+    with sqlite3.connect(db_path) as conn:  # dismiss 动作端点仍未开放, 直接摆状态
+        conn.execute(
+            "UPDATE notification SET state='dismissed', dismissed_at=? WHERE id=?",
+            (T0 + 5_000, dropped.id),
+        )
+
+    history = center.list(state="resolved")
+    assert [item["id"] for item in history.items] == [gone.id]
+    assert history.items[0]["resolved_at"] == T0 + 5_000
+    assert history.total == 1
+    assert history.unread == 1  # unread 轴恒是活跃口径 (剩下那条活跃未读), 不随 state 过滤走
+
+    assert [item["id"] for item in center.list(state="open").items] == [keep.id]
+
+
 def test_list_projection_payload(center, db_path):
     _publish(center, dedupe_key="a", payload={"link": {"type": "session", "sessionId": "s1"}})
     _publish(center, dedupe_key="b")

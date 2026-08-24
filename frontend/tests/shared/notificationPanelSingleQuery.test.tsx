@@ -137,6 +137,30 @@ describe('通知面板的列表请求', () => {
     expect(screen.getByTestId('notification-list-skeleton')).toBeTruthy()
   })
 
+  // 历史（已处理）视图：独立 key + enabled 只在历史态。回退形状（与活跃列表共用一条
+  // 查询 / 共用一个 key）在这里表现为「进历史把 open 那份缓存冲掉」——切回来会再取一次。
+  test('进历史才拉 resolved，且不冲掉 open 那份缓存', async () => {
+    const client = makeClient()
+    renderPanel(client)
+    expect(await screen.findByText('日报已生成')).toBeTruthy()
+    expect(hoisted.list).toHaveBeenCalledTimes(1)
+    expect(hoisted.list).toHaveBeenCalledWith({ state: 'open', limit: 50 })
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '已处理' }))
+    })
+    expect(hoisted.list).toHaveBeenCalledTimes(2)
+    expect(hoisted.list).toHaveBeenLastCalledWith({ state: 'resolved', limit: 50 })
+    expect(client.getQueryData(qk.notifications.list('open'))).toBeTruthy()
+
+    // 切回活跃：那份缓存还在（staleTime 4s 内）⇒ 不再发第三次请求。
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: '返回' }))
+    })
+    expect(screen.getByText('日报已生成')).toBeTruthy()
+    expect(hoisted.list).toHaveBeenCalledTimes(2)
+  })
+
   // key 形状改过（category 出 key）之后，失效前缀是否还罩得住这条查询 —— 罩不住的表现是
   // 「SSE 来了 / 标了已读，面板纹丝不动」，而不会有任何类型错误。
   test('refreshNotifications 的前缀失效仍然覆盖列表查询', async () => {

@@ -1,18 +1,19 @@
 // TitleBar 统一通知铃铛（task 08-20-notification-center 步骤 7；design §6.1）。
 //
 // **恒渲染**。通知中心没有 flag（owner 2026-08-20 拍板不做灰度，design §8.e），铃铛是常驻
-// 入口 —— 未读为 0 时退化成一枚素图标按钮（与旁边的快捷键帮助按钮同款），未读 > 0 才升级成
-// accent 计数徽标（bg/15 + border/40 + 12px mono tabular-nums）。计数**加载完成前不显示计数
-// 点**（请求失败同理）：不闪一个假的 0，也不因为通知面挂了就让 chrome 少一个按钮。
+// 入口 —— 按钮本身恒是一枚素图标（与旁边的快捷键帮助按钮同款），未读落在图标右上角的**叠加
+// 式数字角标**上（danger 红 + 标题栏底色描边）。计数**加载完成前不显示角标**（请求失败同理）：
+// 不闪一个假的 0，也不因为通知面挂了就让 chrome 少一个按钮。
 //
-// M2 加了**红点档**：未读里有 critical（`bySeverity.critical > 0`）时整枚徽标换成 fail 配方
-// + 图标上一颗 pulse 红点 ——「红 = 有严重的事」。
+// 角标形态是 2026-08-24 dogfood 的直接结论：此前「未读 > 0 → 整枚按钮换成一颗计数药丸」在
+// 标题栏一排素图标里读不出来（owner 原话「顶部提示太弱」）。critical（`bySeverity.critical > 0`）
+// 在同一枚角标上**加强一档**：外面多一圈同色光晕，**不加动画** —— 标题栏常驻的东西不该动。
 //
 // M3 批 C5 收编了 TitleBar 的另外两枚徽标（SystemAlertBadge / AgentPendingBadge），随之补了
 // 第三档 **待办点**：`openByCategory.action_required > 0` 且未读为 0 时，素图标上挂一颗**静态**
 // warn 圆点。理由是被收编的审批徽标是 **level 型**（挂着就在），而未读数是 **edge 型**（看过
-// 一眼就掉）—— 只留未读的话「读了通知但没去批」会让 chrome 上什么都不剩。pulse 红点仍专属
-// critical：两档在同一枚图标上必须一眼分得开。
+// 一眼就掉）—— 只留未读的话「读了通知但没去批」会让 chrome 上什么都不剩。数字角标在场时它
+// 不出：同一个角位上两枚点会分不清「几条未读」和「几项待办」。
 //
 // popover 用 createPortal 送到 <body>：TitleBar 有 backdrop-filter，会给 fixed 子元素造一个
 // 层叠上下文，浮层留在里面会被裁（AccentPickerPopover 同款理由）。横向落点走
@@ -115,47 +116,47 @@ export function NotificationBellBadge(): React.ReactElement {
         aria-haspopup="dialog"
         aria-expanded={open}
         style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+        // 按钮的 chrome **不随未读变**（与右侧相邻的快捷键帮助按钮同款: rounded / p-1.5 /
+        // ink-fg-2）—— 未读全部落在下面那枚叠加角标上。原先「未读 > 0 换成一颗计数药丸」
+        // 的形态在标题栏里太轻，一屏 chrome 里读不出来 (owner 2026-08-24 dogfood)。
         className={cn(
-          'group flex items-center transition-colors duration-fast',
-          hasUnread
-            ? // 徽标态: rounded-md / bg·border /15·/40 / 12px mono。
-              // critical 未读 → fail 档，否则 accent 计数点。
-              cn(
-                'gap-1.5 px-2 py-0.5 rounded-md border text-meta font-mono',
-                critical
-                  ? 'border-fail/40 bg-fail/15 text-fail hover:bg-fail/25'
-                  : 'border-coral/40 bg-coral/15 text-coral hover:bg-coral/25'
-              )
-            : // 素图标态: 与右侧相邻的快捷键帮助按钮同款 (rounded / p-1.5 / ink-fg-2)
-              'justify-center p-1.5 rounded text-ink-fg-2 hover:text-ink-fg-1 hover:bg-ink-3 active:bg-ink-4'
+          'group relative flex items-center justify-center p-1.5 rounded transition-colors duration-fast',
+          'text-ink-fg-2 hover:text-ink-fg-1 hover:bg-ink-3 active:bg-ink-4'
         )}
       >
-        {hasUnread ? (
-          <>
-            <span className="relative inline-flex">
-              <Bell size={12} strokeWidth={2.25} />
-              {/* pulse 红点只在 critical 档。 */}
-              {critical && (
-                <span className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5">
-                  <span className="absolute inset-0 rounded-full bg-fail opacity-75 animate-ping" />
-                  <span className="absolute inset-0 rounded-full bg-fail" />
-                </span>
-              )}
-            </span>
-            <span className="tabular-nums">{unread > COUNT_CAP ? `${COUNT_CAP}+` : unread}</span>
-          </>
-        ) : (
-          <span className="relative inline-flex">
-            <Bell size={13} strokeWidth={2} />
-            {/* 待办点：**静态**（不 ping）—— pulse 是 critical 的专属信号；几何沿用上面
-                critical 红点的角标位与尺寸，只换 token。 */}
-            {showPendingDot && (
-              <span
-                className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-warn"
-                data-testid="notification-pending-dot"
-                aria-hidden
-              />
+        <span className="relative inline-flex">
+          <Bell size={13} strokeWidth={2} />
+          {/* 待办点：**静态**（不 ping）；只在没有计数角标时出场。 */}
+          {showPendingDot && (
+            <span
+              className="absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full bg-warn"
+              data-testid="notification-pending-dot"
+              aria-hidden
+            />
+          )}
+        </span>
+        {hasUnread && (
+          // 叠加式计数角标（经典 notification badge）。绝对定位到按钮 padding 里，不参与
+          // 布局 ⇒ 撑不高 TitleBar。底色 fail = 本仓 danger token；前景走 accent-fg（每个
+          // 主题各自的 on-danger 前景）—— 写死 text-white 在深色主题的浅红底上过不了对比度。
+          // 数字本身 aria-hidden：aria-label 已经把未读数报过一遍，不重复播报。
+          <span
+            data-testid="notification-unread-badge"
+            aria-hidden
+            className={cn(
+              'absolute -top-0.5 -right-0.5 min-w-[15px] rounded-full px-[3px]',
+              'bg-fail text-accent-fg text-[9.5px] leading-[15px] font-mono font-semibold',
+              'text-center tabular-nums'
             )}
+            style={{
+              // 1.5px 标题栏底色描边把数字从铃铛笔画里切出来（面板里的未读点同款手法）；
+              // critical 再叠一圈同色光晕 = 加强一档，**不加动画**。
+              boxShadow: critical
+                ? '0 0 0 1.5px rgb(var(--ink-1)), 0 0 0 3.5px rgb(var(--c-fail) / 0.4)'
+                : '0 0 0 1.5px rgb(var(--ink-1))'
+            }}
+          >
+            {unread > COUNT_CAP ? `${COUNT_CAP}+` : unread}
           </span>
         )}
       </button>

@@ -22,8 +22,11 @@ const hoisted = vi.hoisted(() => ({
   navigate: vi.fn(),
   quitAndInstall: vi.fn(),
   listSpy: vi.fn(),
+  historySpy: vi.fn(),
   /** 每个用例可改写的列表桩态（默认：一条 report 型通知，已加载完）。 */
   listState: { items: null as unknown[] | null, isPending: false },
+  /** 历史（已处理）列表的桩态，默认一条 resolved 行。 */
+  historyState: { items: null as unknown[] | null },
   markRead: vi.fn(),
   markAllRead: vi.fn(),
   snooze: vi.fn(),
@@ -73,6 +76,22 @@ vi.mock('@shared/components/notifications/hooks', () => ({
       isError: false
     }
   },
+  // 历史那份是独立查询（独立 key + enabled 只在历史态）：spy 记的是 enabled 入参，
+  // 「默认不拉、进历史才拉」逐条断言它。
+  useNotificationHistoryList: (...args: unknown[]) => {
+    hoisted.historySpy(...args)
+    const items = (hoisted.historyState.items as NotificationItem[] | null) ?? [
+      // 🔴 默认这条**未读**（readAt: null）：已处理的行照样可能没被读过，而「历史是只读的
+      // 一屏」正是靠它才测得出来 —— 桩成已读的话不回写已读会平凡地成立。
+      item({ id: 9, state: 'resolved', title: '已处理的告警', resolvedAt: NOW - 10_000 })
+    ]
+    return {
+      data: { items, total: items.length, unread: 0, limit: 50, offset: 0 },
+      dataUpdatedAt: NOW,
+      isPending: false,
+      isError: false
+    }
+  },
   useNotificationUnreadCount: () => ({
     data: {
       total: 5,
@@ -97,6 +116,7 @@ beforeEach(() => {
   vi.clearAllMocks()
   hoisted.listState.items = null
   hoisted.listState.isPending = false
+  hoisted.historyState.items = null
   useReportNavigation.getState().clear()
 })
 
@@ -209,6 +229,112 @@ describe('NotificationPanel — 首次加载', () => {
     render(<NotificationPanel onClose={vi.fn()} />)
     expect(screen.getAllByRole('tab').length).toBe(5)
     expect(screen.getByRole('button', { name: /全部标为已读/ })).toBeTruthy()
+  })
+})
+
+// 「标记为已处理」之后条目从活跃列表消失、行还留在库里（resolve 只改 state）——
+// owner dogfood 反馈①：那之后就再也找不回来了。历史视图是它唯一的入口，下面这几条
+// 盯的是「入口真的通、且是**只读**的一屏」。
+describe('NotificationPanel — 历史（已处理）视图', () => {
+  test('默认不拉历史；点「已处理」才拉，列表换成已处理条目', () => {
+    render(<NotificationPanel onClose={vi.fn()} />)
+    expect(hoisted.historySpy).toHaveBeenLastCalledWith(false)
+    expect(screen.getByText('日报已生成')).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: '已处理' }))
+
+    expect(hoisted.historySpy).toHaveBeenLastCalledWith(true)
+    expect(screen.getByText('已处理的告警')).toBeTruthy()
+    expect(screen.queryByText('日报已生成')).toBeNull()
+  })
+
+  test('返回 → 回到活跃列表（历史查询随之关掉）', () => {
+    render(<NotificationPanel onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '已处理' }))
+    fireEvent.click(screen.getByRole('button', { name: '返回' }))
+
+    expect(hoisted.historySpy).toHaveBeenLastCalledWith(false)
+    expect(screen.getByText('日报已生成')).toBeTruthy()
+  })
+
+  test('历史行是终态：没有动作菜单；未读点也不画（哪怕行本身 readAt 为 null）', () => {
+    hoisted.historyState.items = [
+      item({ id: 9, state: 'resolved', title: '已处理的告警', readAt: null, resolvedAt: NOW })
+    ]
+    render(<NotificationPanel onClose={vi.fn()} />)
+    expect(screen.getByLabelText('未读')).toBeTruthy() // 活跃态：这一条有未读点
+
+    fireEvent.click(screen.getByRole('button', { name: '已处理' }))
+
+    expect(screen.queryByRole('button', { name: '更多操作' })).toBeNull()
+    expect(screen.queryByLabelText('未读')).toBeNull()
+  })
+
+  test('历史行显示的是**处理时刻**，不是最后事件时刻', () => {
+    // 事件发生在 5 小时前、10 分钟前才被处理：两条轴落在不同的相对时间上。
+    hoisted.historyState.items = [
+      item({
+        id: 9,
+        state: 'resolved',
+        title: '已处理的告警',
+        lastEventAt: NOW - 5 * 60 * 60 * 1000,
+        resolvedAt: NOW - 10 * 60 * 1000
+      })
+    ]
+    render(<NotificationPanel onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '已处理' }))
+
+    expect(screen.getByText('10 分钟前')).toBeTruthy()
+    expect(screen.queryByText('5 小时前')).toBeNull()
+  })
+
+  test('历史态点条目只跳转、不回写已读（这一屏是只读的）', () => {
+    const onClose = vi.fn()
+    render(<NotificationPanel onClose={onClose} />)
+    fireEvent.click(screen.getByRole('button', { name: '已处理' }))
+
+    fireEvent.click(screen.getByText('已处理的告警'))
+
+    expect(hoisted.markRead).not.toHaveBeenCalled()
+    expect(hoisted.navigate).toHaveBeenCalledWith({ to: '/agents', search: { tab: 'reports' } })
+    expect(onClose).toHaveBeenCalled()
+  })
+
+  test('历史态：tab 不挂未读计数，「全部标为已读」也不出', () => {
+    render(<NotificationPanel onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '已处理' }))
+
+    // 计数是**活跃未读**口径，挂在一屏已处理条目上方会读成「这个 tab 里有 2 条」。
+    expect(screen.getAllByRole('tab').map((el) => el.textContent)).toEqual([
+      '全部',
+      '待办',
+      '审阅',
+      '结果',
+      '系统'
+    ])
+    expect(screen.queryByRole('button', { name: /全部标为已读/ })).toBeNull()
+  })
+
+  test('历史为空 → 专属空态文案（不是活跃态那句）', () => {
+    hoisted.historyState.items = []
+    render(<NotificationPanel onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '已处理' }))
+
+    expect(screen.getByText('还没有已处理的通知')).toBeTruthy()
+    expect(screen.queryByText('没有新通知')).toBeNull()
+  })
+
+  test('历史态照常按 tab 过滤（用同一个前端过滤器）', () => {
+    hoisted.historyState.items = [
+      item({ id: 9, state: 'resolved', category: 'system', title: '已处理的告警' }),
+      item({ id: 10, state: 'resolved', category: 'results', title: '已处理的日报' })
+    ]
+    render(<NotificationPanel onClose={vi.fn()} />)
+    fireEvent.click(screen.getByRole('button', { name: '已处理' }))
+    fireEvent.click(screen.getByRole('tab', { name: '系统' }))
+
+    expect(screen.getByText('已处理的告警')).toBeTruthy()
+    expect(screen.queryByText('已处理的日报')).toBeNull()
   })
 })
 
