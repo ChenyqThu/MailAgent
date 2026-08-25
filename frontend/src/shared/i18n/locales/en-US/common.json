@@ -694,7 +694,12 @@
     "section": {
       "mailboxes": "Mailboxes",
       "aiAgents": "AI Agents",
-      "view": "View"
+      "view": "View",
+      "folders": "Folders"
+    },
+    "domain": {
+      "mail": "Mail",
+      "ops": "Ops"
     },
     "composeNew": "Compose",
     "inbox": "Inbox",

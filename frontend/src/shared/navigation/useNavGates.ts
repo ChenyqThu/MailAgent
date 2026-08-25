@@ -27,3 +27,24 @@ export function useVisibleNavEntries(): readonly NavEntry[] {
   const gates = useNavGates()
   return useMemo(() => NAV_ENTRIES.filter((e) => gates[e.gate]), [gates])
 }
+
+/** 非组件上下文（deeplink handler 等 hooks 求不了值的地方）的门控求值。
+ *
+ *  calendar 是纯平台判定，这里能给出真值；matters / contacts 的真值在后端
+ *  `/chat/config` 投影（react-query hook），非组件上下文取不到 —— 放行，由目标路由
+ *  自己的空态兜底（`/contacts` 直达时 ContactsWorkspace 渲染 404 空态，见
+ *  router-instance 的 contactsRoute 注释）。deeplink 加新 kind 时给 entry 标 gate
+ *  即自动接上这道闸，不再在 handler 里手写平台判定（Step R check ② 的通用解）。 */
+export function resolveStaticNavGate(gate: NavGate): boolean {
+  switch (gate) {
+    case 'always':
+      return true
+    case 'never':
+      return false
+    case 'calendar':
+      return calendarUiEnabled(detectUiPlatform())
+    case 'matters':
+    case 'contacts':
+      return true
+  }
+}

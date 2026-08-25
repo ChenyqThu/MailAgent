@@ -18,8 +18,9 @@
 // 变化，联合类型传不进去，所以必须逐个 case 落地）。switch 对 NavPath 全覆盖，加一个新
 // 路径漏了 case 会在 typecheck 当场红。
 //
-// domain / rail / panel 三个维度：panel 是「二级栏里的分组与序」（Step R 即现状的三段 +
-// 底栏），rail 是「方案 B 的 56px 图标导轨格」（Step B 才消费，本步只声明）。
+// domain / rail / panel 三个维度（Step B 起全部被消费）：rail 是 56px 图标导轨格
+// （格的脸 = NAV_DOMAINS 的域标签/域图标），panel 是域二级栏（DomainPanel）里本域
+// 条目的序；`navActiveDomain` 由路由推导当前域。
 
 // 🔴 有意是 `.ts` + `createElement` 而不是 `.tsx`：本模块是**数据**不是组件文件。写成 JSX
 // 会被 react-refresh / react-display-name 判成「导出了组件的文件」，逼着把这些纯函数拆到
@@ -32,15 +33,18 @@ import type { EmailView } from '@shared/state/email-filter'
 import type { DeeplinkTarget } from '@shared/lib/deeplink_target'
 import { SHORTCUTS } from '@shared/keymap'
 import {
+  BotIcon,
   BriefcaseBusinessIcon,
   CalendarCheckIcon,
-  CalendarDaysIcon,
+  ChartColumnIncreasingIcon,
   ChartLineIcon,
   ChartPieIcon,
   GripIcon,
   MAILBOX_ICON_COMPONENT,
+  MailCheckIcon,
   SettingsIcon,
   SparklesIcon,
+  SunIcon,
   UsersRoundIcon
 } from '@shared/components/icons'
 
@@ -83,18 +87,24 @@ export type NavBadgeKind =
 
 export interface NavBadgeSpec {
   readonly kind: NavBadgeKind
-  /** 收起态（56px rail）要不要显数字角标。所有邮件是几千级大数字，角标失去信号
-   *  价值还占位 —— 现状就是不显，转录时保留。 */
-  readonly collapsed: boolean
+  /** 导轨格（56px rail）要不要显数字角标（Step B 起 rail 常驻，这一位从「收起态才
+   *  显」改叙述为「rail 显不显」，值逐条沿用）。所有邮件是几千级大数字，角标失去
+   *  信号价值还占位 —— 不显；没有 rail 落位的条目（草稿箱/已标旗）这一位不被读。 */
+  readonly rail: boolean
 }
-
-/** 二级栏分组。Step R = 现状侧栏的三段 + 底栏；Step B 换成域内分组时改这里。 */
-export type NavPanelSection = 'mailboxes' | 'agents' | 'view' | 'bottom'
 
 /** keymap.ts 里的 binding id（组合键仍以 keymap 为准，registry 只引用它）。 */
 export type NavShortcutId = 'settings' | 'generalAgent'
 
 export type NavLabel = { readonly i18nKey: string } | { readonly literal: string }
+
+/** 域元数据（方案 B 导轨格的脸）：格标签与格图标是**域**的身份，不是域内某条 entry 的
+ *  身份 —— 邮件格画信封（域概念），面板里的收件箱行才画收件托盘（视图概念）。 */
+export interface NavDomainMeta {
+  readonly label: NavLabel
+  /** 同 NavEntry.icon 的 D6 契约：只返回裸组件。 */
+  readonly icon: () => ReactElement
+}
 
 export interface NavMatch {
   /** pathname 全等即选中。 */
@@ -119,10 +129,10 @@ export interface NavEntry {
   /** 选中态判据。缺省 = `pathname === to`。 */
   readonly match?: NavMatch
   readonly badge?: NavBadgeSpec
-  /** 二级栏（Step R = 现状侧栏）里的落位。缺席 = 不在二级栏出现。
+  /** 域二级栏（DomainPanel）里的落位：序在**本域**内比较（Step B 起面板按域切换，
+   *  跨域不同行没有相对序可言）。缺席 = 不在二级栏出现。
    *  `kbd` = 行尾显组合键（只有设置行这么做，⌘O 的会话行有意不显）。 */
   readonly panel?: {
-    readonly section: NavPanelSection
     readonly order: number
     readonly kbd?: boolean
   }
@@ -156,7 +166,7 @@ const ENTRIES = [
     id: 'today',
     domain: 'today',
     label: { i18nKey: 'nav.today' },
-    icon: () => createElement(CalendarDaysIcon),
+    icon: () => createElement(SunIcon),
     gate: 'never',
     rail: { order: 0 }
   },
@@ -171,8 +181,8 @@ const ENTRIES = [
     icon: () => createElement(MAILBOX_ICON_COMPONENT.inbox),
     gate: 'always',
     match: { exact: ['/'] },
-    badge: { kind: 'inboxUnread', collapsed: true },
-    panel: { section: 'mailboxes', order: 0 },
+    badge: { kind: 'inboxUnread', rail: true },
+    panel: { order: 0 },
     rail: { order: 1 },
     deeplinkKind: 'email'
   },
@@ -185,7 +195,7 @@ const ENTRIES = [
     icon: () => createElement(MAILBOX_ICON_COMPONENT.outbox),
     gate: 'always',
     match: { exact: ['/'] },
-    panel: { section: 'mailboxes', order: 1 }
+    panel: { order: 1 }
   },
   {
     id: 'mail.drafts',
@@ -196,8 +206,8 @@ const ENTRIES = [
     icon: () => createElement(MAILBOX_ICON_COMPONENT.drafts),
     gate: 'always',
     match: { exact: ['/'] },
-    badge: { kind: 'draftsTotal', collapsed: true },
-    panel: { section: 'mailboxes', order: 2 }
+    badge: { kind: 'draftsTotal', rail: false },
+    panel: { order: 2 }
   },
   {
     id: 'mail.flagged',
@@ -208,8 +218,8 @@ const ENTRIES = [
     icon: () => createElement(MAILBOX_ICON_COMPONENT.flagged),
     gate: 'always',
     match: { exact: ['/'] },
-    badge: { kind: 'flaggedTotal', collapsed: true },
-    panel: { section: 'mailboxes', order: 3 }
+    badge: { kind: 'flaggedTotal', rail: false },
+    panel: { order: 3 }
   },
   {
     id: 'mail.all',
@@ -220,8 +230,8 @@ const ENTRIES = [
     icon: () => createElement(MAILBOX_ICON_COMPONENT.all),
     gate: 'always',
     match: { exact: ['/'] },
-    badge: { kind: 'allTotal', collapsed: false },
-    panel: { section: 'mailboxes', order: 4 }
+    badge: { kind: 'allTotal', rail: false },
+    panel: { order: 4 }
   },
 
   // ── AI AGENTS 段 ────────────────────────────────────────────────────────
@@ -233,8 +243,8 @@ const ENTRIES = [
     icon: () => createElement(BriefcaseBusinessIcon),
     gate: 'matters',
     match: { exact: ['/matters'] },
-    badge: { kind: 'matterAttention', collapsed: true },
-    panel: { section: 'agents', order: 0 },
+    badge: { kind: 'matterAttention', rail: true },
+    panel: { order: 0 },
     rail: { order: 3 },
     palette: { order: 30, metaI18nKey: 'palette.jump.mattersMeta' },
     preloadOnHover: true
@@ -248,7 +258,7 @@ const ENTRIES = [
     icon: () => createElement(SparklesIcon, { className: 'text-coral' }),
     gate: 'always',
     match: { exact: ['/sessions'] },
-    panel: { section: 'agents', order: 1 },
+    panel: { order: 0 },
     palette: { order: 10, metaI18nKey: 'palette.jump.generalAgentMeta' },
     shortcutId: 'generalAgent'
   },
@@ -260,8 +270,8 @@ const ENTRIES = [
     icon: () => createElement(GripIcon),
     gate: 'always',
     match: { exact: ['/agents'] },
-    badge: { kind: 'agentUnread', collapsed: true },
-    panel: { section: 'agents', order: 2 },
+    badge: { kind: 'agentUnread', rail: true },
+    panel: { order: 1 },
     rail: { order: 5 },
     palette: { order: 40, metaI18nKey: 'palette.jump.customAiMeta' },
     notificationRoute: true
@@ -277,7 +287,7 @@ const ENTRIES = [
     icon: () => createElement(ChartPieIcon),
     gate: 'always',
     match: { exact: ['/llm'], prefix: ['/admin/llm'] },
-    panel: { section: 'view', order: 0 },
+    panel: { order: 0 },
     palette: { order: 50, metaI18nKey: 'palette.jump.llmMeta' },
     deeplinkKind: 'llm'
   },
@@ -289,7 +299,7 @@ const ENTRIES = [
     icon: () => createElement(ChartLineIcon),
     gate: 'always',
     match: { exact: ['/admin/kanban', '/admin'] },
-    panel: { section: 'view', order: 1 },
+    panel: { order: 1 },
     rail: { order: 10 },
     palette: {
       order: 20,
@@ -308,7 +318,7 @@ const ENTRIES = [
     // Windows 日历整体出范围（2026-08-13 拍板，平台判定不看 backend）。
     gate: 'calendar',
     match: { exact: ['/calendar'], prefix: ['/admin/calendar'] },
-    panel: { section: 'view', order: 2 },
+    panel: { order: 0 },
     rail: { order: 2 },
     palette: { order: 25, metaI18nKey: 'palette.jump.calendarMeta' },
     deeplinkKind: 'calendar'
@@ -321,7 +331,7 @@ const ENTRIES = [
     icon: () => createElement(UsersRoundIcon),
     gate: 'contacts',
     match: { exact: ['/contacts'] },
-    panel: { section: 'view', order: 3 },
+    panel: { order: 0 },
     rail: { order: 4 },
     palette: {
       order: 60,
@@ -340,7 +350,7 @@ const ENTRIES = [
     icon: () => createElement(SettingsIcon),
     gate: 'always',
     match: { exact: ['/settings'] },
-    panel: { section: 'bottom', order: 0, kbd: true },
+    panel: { order: 0, kbd: true },
     rail: { order: 11 },
     palette: { order: 70, metaI18nKey: 'palette.jump.settingsMeta' },
     notificationRoute: true,
@@ -348,6 +358,27 @@ const ENTRIES = [
     shortcutId: 'settings'
   }
 ] as const satisfies readonly NavEntry[]
+
+/** 域元数据 —— 导轨格的标签与图标（键域 = NavDomain 全集，少一个域编不过）。
+ *  邮件/日历/事项/通讯录/Agents 的格图标是**域**的脸；单入口域（日历/事项/通讯录）
+ *  沿用该入口的既有图标身份，不为导轨另造第二个 glyph。 */
+export const NAV_DOMAINS: Record<NavDomain, NavDomainMeta> = {
+  today: { label: { i18nKey: 'nav.today' }, icon: () => createElement(SunIcon) },
+  mail: { label: { i18nKey: 'nav.domain.mail' }, icon: () => createElement(MailCheckIcon) },
+  calendar: { label: { i18nKey: 'nav.calendar' }, icon: () => createElement(CalendarCheckIcon) },
+  matters: { label: { i18nKey: 'matters.nav' }, icon: () => createElement(BriefcaseBusinessIcon) },
+  contacts: {
+    label: { i18nKey: 'contacts.nav.title' },
+    icon: () => createElement(UsersRoundIcon)
+  },
+  // 专有名词，两个 locale 都是 "Agents"（同 LLM Dashboard 先例，不造 i18n 键）。
+  agents: { label: { literal: 'Agents' }, icon: () => createElement(BotIcon) },
+  ops: {
+    label: { i18nKey: 'nav.domain.ops' },
+    icon: () => createElement(ChartColumnIncreasingIcon)
+  },
+  settings: { label: { i18nKey: 'nav.settings' }, icon: () => createElement(SettingsIcon) }
+}
 
 type NavEntries = typeof ENTRIES
 export type NavEntryId = NavEntries[number]['id']
@@ -425,14 +456,34 @@ export function isNavEntryActive(entry: NavEntry, pathname: string): boolean {
   return match.prefix?.some((p) => pathname.startsWith(p)) === true
 }
 
-/** 某个 section 的条目（已按 order 排序）。传入的 entries 应是门控过滤后的。 */
-export function navPanelSection(
+/** 域标签（导轨格 / 域面板头共用）。 */
+export function navDomainLabel(domain: NavDomain, t: NavTranslate): string {
+  const label = NAV_DOMAINS[domain].label
+  return 'i18nKey' in label ? t(label.i18nKey) : label.literal
+}
+
+/** 导轨格投影（已按 rail.order 排序）。传入的 entries 应是门控过滤后的。 */
+export function navRailEntries(entries: readonly NavEntry[]): readonly NavEntry[] {
+  return entries
+    .filter((e) => e.rail !== undefined)
+    .sort((a, b) => (a.rail?.order ?? 0) - (b.rail?.order ?? 0))
+}
+
+/** 某个域的二级栏条目（已按 panel.order 排序）。传入的 entries 应是门控过滤后的。 */
+export function navDomainPanelEntries(
   entries: readonly NavEntry[],
-  section: NavPanelSection
+  domain: NavDomain
 ): readonly NavEntry[] {
   return entries
-    .filter((e) => e.panel?.section === section)
+    .filter((e) => e.domain === domain && e.panel !== undefined)
     .sort((a, b) => (a.panel?.order ?? 0) - (b.panel?.order ?? 0))
+}
+
+/** 当前路由归属的域（导轨选中格 + 面板显示哪个域）。判据 = 门控过滤后**任一**条目
+ *  的选中态命中（`/sessions` 因此归 agents 域，虽然它没有导轨格）。无命中（理论上
+ *  只有 popout 之类的非路由场景）→ null，调用方自己给缺省。 */
+export function navActiveDomain(entries: readonly NavEntry[], pathname: string): NavDomain | null {
+  return entries.find((e) => isNavEntryActive(e, pathname))?.domain ?? null
 }
 
 /** ⌘K jump 段的条目（已按 order 排序）。 */
@@ -486,6 +537,16 @@ export function navigateToNavEntry(navigate: NavigateFn, entry: NavEntry): void 
       return exhaustive
     }
   }
+}
+
+/** Custom AI 区（`/agents`）的 tab 直达。DomainPanel 的「报告 / Chats」轻量子入口
+ *  （它们不是一级入口，不占 NavEntry —— 与文件夹树同类）走这里拿落点；path 字面量
+ *  按本文件头的纪律只允许出现在 registry。`agents` entry 自身的 tab=agents 落点仍在
+ *  `navigateToNavEntry` 的 '/agents' case。 */
+export type AgentsSubTab = 'reports' | 'chats'
+
+export function navigateToAgentsTab(navigate: NavigateFn, tab: AgentsSubTab): void {
+  void navigate({ to: '/agents', search: { tab } })
 }
 
 /** hover 意图预载（`preloadOnHover` 的两个大 chunk 入口）。幂等 + 失败静默 ——

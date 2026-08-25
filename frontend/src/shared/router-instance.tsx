@@ -54,9 +54,11 @@ import { resolveNotificationLink } from './components/notifications/navigation'
 import { requestOpenAgentSession } from './state/ai-chat-panel'
 // 一级入口单源（task 08-24-l4-nav-shell Step R）：deeplink 的落点与「AI → General Agent」
 // 菜单项的目标都从 registry 取，不在这里第二次写死 path。
-import { navEntry, navigateToNavEntry, NAV_DEEPLINK_PATH } from './navigation/registry'
+import { NAV_ENTRIES, navEntry, navigateToNavEntry, NAV_DEEPLINK_PATH } from './navigation/registry'
+import { resolveStaticNavGate } from './navigation/useNavGates'
+import { navigateNotificationRoute } from './components/notifications/navigation'
 import type { DeeplinkTarget } from './lib/deeplink_target'
-import { calendarUiEnabled, detectUiPlatform } from './lib/mailBackend'
+import { clampSettingsTab, type SettingsTab } from './lib/settingsTabs'
 
 // F6 — mailagent:// deeplink target。形状单源自 @shared/lib/deeplink_target（issue #68：
 // 此前这里 inline 抄一份，理由是"renderer 不能 import main 模块" —— 属实，但正解是把类型
@@ -85,6 +87,11 @@ function useDeeplinkRouter(): void {
     const handler = (...args: unknown[]): void => {
       const target = args[1] as DeeplinkTarget
       if (!target || typeof target !== 'object') return
+      // 门控通用解（Step R check ②）：kind 对应 entry 的 gate 在非组件上下文求值 ——
+      // calendar 的 Windows 出范围判定（2026-08-13 拍板）由此自动生效，深链静默忽略；
+      // deeplink 加新 kind 时给 entry 标 gate 即接上，不再在这里手写平台判定。
+      const gateEntry = NAV_ENTRIES.find((e) => e.deeplinkKind === target.kind)
+      if (gateEntry !== undefined && !resolveStaticNavGate(gateEntry.gate)) return
       // 目标 path 从 nav registry 查（`NAV_DEEPLINK_PATH` 的键域 = DeeplinkTarget['kind']
       // 全集，少一个 kind 编译期就红）；search 的形状按 kind 各不相同，仍逐个落地。
       switch (target.kind) {
@@ -95,9 +102,6 @@ function useDeeplinkRouter(): void {
           }
           break
         case 'calendar': {
-          // Windows 日历整体出范围（2026-08-13 拍板）—— 深链静默忽略,
-          // 防外部 mailagent:// 链接把用户带进已隐藏的日历面。
-          if (!calendarUiEnabled(detectUiPlatform())) break
           const v = (CALENDAR_VIEWS as readonly string[]).includes(target.view ?? '')
             ? (target.view as CalendarView)
             : 'week'
@@ -110,13 +114,12 @@ function useDeeplinkRouter(): void {
         case 'llm':
           void router.navigate({ to: NAV_DEEPLINK_PATH.llm })
           break
-        case 'settings': {
-          const t = (SETTINGS_TABS as readonly string[]).includes(target.view ?? '')
-            ? (target.view as SettingsTab)
-            : 'general'
-          void router.navigate({ to: NAV_DEEPLINK_PATH.settings, search: { tab: t } })
+        case 'settings':
+          void router.navigate({
+            to: NAV_DEEPLINK_PATH.settings,
+            search: { tab: clampSettingsTab(target.view) }
+          })
           break
-        }
       }
     }
     // @electron-toolkit ipcRenderer.on 返回 cleanup fn (removeListener wrapper).
@@ -200,18 +203,9 @@ function useNotificationClickNavigation(): void {
         return
       }
       if (link.type === 'route') {
-        switch (link.to) {
-          case '/agents': {
-            // `/agents` 的 validateSearch 要求 tab 三档之一（NotificationPanel 同口径）。
-            const tab = link.search?.tab
-            const safeTab = tab === 'reports' || tab === 'chats' ? tab : 'agents'
-            void navigate({ to: '/agents', search: { tab: safeTab } })
-            return
-          }
-          case '/admin/kanban':
-            void navigate({ to: '/admin/kanban' })
-            return
-        }
+        // 落地 switch 单源在 notifications/navigation.ts（与 NotificationPanel 共用，
+        // Step R check ① 的两份手抄 switch 收敛 + `/settings` case 补齐在那边）。
+        navigateNotificationRoute(navigate, link)
       }
     })
   }, [navigate])
@@ -414,24 +408,10 @@ const adminCalendarRoute = createRoute({
 
 // Sprint 18 §PR C — `?tab=` deep-link. Validated enum so a malformed link
 // (`/settings?tab=rogue`) silently falls back to "general" rather than
-// rendering a blank pane. Tab order mirrors SettingsRail (the user-facing
-// nav). The cast through `as SettingsTab` after the includes() check is
-// safe — includes() narrows on string literals.
-export const SETTINGS_TABS = [
-  'general',
-  'accounts',
-  'sync',
-  'ai',
-  'connectors',
-  'matters',
-  'notifications',
-  'integrations',
-  'realtime',
-  'remote',
-  'island',
-  'labs'
-] as const
-export type SettingsTab = (typeof SETTINGS_TABS)[number]
+// rendering a blank pane. 枚举本体自 Step B 起下沉到零依赖叶子
+// `@shared/lib/settingsTabs`（通知落地也要 clamp 它，留在这里是 import 环）；
+// 这里 re-export 保住既有消费方（SettingsShell 等）的 import 路径。
+export { SETTINGS_TABS, type SettingsTab } from './lib/settingsTabs'
 export interface SettingsSearch {
   tab: SettingsTab
   item?: string
@@ -445,11 +425,9 @@ const settingsRoute = createRoute({
     'SettingsLayout'
   ),
   validateSearch: (search: Record<string, unknown>): SettingsSearch => {
-    const t = search.tab
-    const tab: SettingsTab =
-      typeof t === 'string' && (SETTINGS_TABS as readonly string[]).includes(t)
-        ? (t as SettingsTab)
-        : 'general'
+    // clamp 走叶子的 `clampSettingsTab` —— 通知落地 / deeplink 都调它, 路由这里
+    // 再手抄一遍判据就又是一处会漂的镜像 (check, Step B)。
+    const tab: SettingsTab = clampSettingsTab(search.tab)
     const item = search.item
     return typeof item === 'string' && item.length > 0 ? { tab, item } : { tab }
   }

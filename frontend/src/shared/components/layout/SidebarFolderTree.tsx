@@ -1,17 +1,15 @@
-// 多文件夹同步 (P3) — Sidebar MAILBOXES 段的「自定义文件夹树」(界面③)。
+// 多文件夹同步 (P3) — 邮件域二级栏的「自定义文件夹树」(界面③)。
 //
-// 照 mockup ③(docs/mockups/multi-folder-sync/index.html §s3): 在「收件箱/发件箱/
-// 存档/草稿箱/已标旗/所有邮件」之后追加已勾选(whitelist)文件夹, 树形缩进 + 展开
-// 收起 chevron, 点击 setCustomMailbox(display_name) 过滤列表, 选中态 coral pill,
-// 过长时「展开更多/折叠」。🔴 三段铁律: 文件夹挂 MAILBOXES 段内, 绝不新增 header。
+// task 08-24-l4-nav-shell Step B: 方案 B 板把它从 MAILBOXES 段内分出独立的
+// FOLDERS 段（段头随本组件渲染, whitelist 空时整段消失 —— 隔离不变量不变）。
+// 折叠 = DomainPanel 整体显隐 (rail 常驻), 本组件不再有「收起态行形态」——
+// 老 56px icon-only 行的 HoverTip / collapsed 特判随之退役。
 //
 // 数据源: getWhitelist (imap 原始名) + discover (display_name/count/parent)。只渲染
 // whitelist ⊆ 的文件夹; 用 parent 链还原层级 (父未勾但子勾 → 子升顶层, 不丢)。
 // discover 未就绪时用本地 seed 树兜底 (task 08-20-perf-shell-prefetch-sidebar §③):
 // whitelist 逐项 decodeImapUtf7 合成 display_name (与 email_metadata.mailbox 同源
 // 同值), 立即**可点**; discover 回来后换正式树 (同 orderIndex 排序, 零跳变)。
-// 收起态(56px)由全局 .app-nav[data-collapsed] CSS 接管 (label/chevron span 自动
-// 隐藏, 只剩 folder 图标 + title tooltip), 本组件不特判收起态。
 //
 // 隔离不变量: whitelist 空 → 整段不渲染任何行 (= 现状, 不破坏既有 Sidebar 行)。
 
@@ -27,10 +25,9 @@ import { useMailApi } from '@shared/hooks/useMailApi'
 import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { useEmailFilter } from '@shared/state/email-filter'
 import { useMailbox } from '@shared/state/mailbox'
-import { useNavCollapsed } from '@shared/state/nav-shell'
 import { cn } from '@shared/lib/cn'
 import { AnimatedIconActiveProvider, FolderGlyph } from '@shared/components/icons'
-import { HoverTip } from '@shared/components/ui/HoverTip'
+import { navEntry, navigateToNavEntry } from '@shared/navigation/registry'
 
 import {
   buildSeedFolderInfos,
@@ -41,42 +38,22 @@ import {
 // 顶层默认显示上限, 超出折成「展开更多 (+N)」(照 mockup nav-more)。
 const COLLAPSE_THRESHOLD = 5
 
-/** 收起态(56px)给文件夹行补 HoverTip — 临摹 Sidebar.maybeWrapTip: 内建行收起态
- *  靠 HoverTip(side="right" portal) 浮现名称 (Electron 原生 title= 不可靠)。仅在
- *  collapsed 时包裹 (展开态 label 已可见, 不包 = 不变); portal 让 chip 升到
- *  document.body, 不被 56px 窄 <aside> + overflow 裁剪。 */
-function maybeWrapFolderTip(
-  collapsed: boolean,
-  title: string,
-  child: React.ReactElement
-): React.ReactElement {
-  if (!collapsed) return child
-  return (
-    <HoverTip text={title} side="right" portal className="w-full">
-      {child}
-    </HoverTip>
-  )
-}
-
 interface SidebarFolderRowProps {
   node: SidebarFolderNode
   depth: number
   activeMailbox: string | null
-  collapsed: boolean
   expanded: ReadonlySet<string>
-  /** imap_name → `folder_pref.icon`（lucide kebab 名）。取不到 = 没设过 → 兜底 folder。
-   *  🔴 收起态 56px rail 上只剩这个图标，是它区分各文件夹的唯一线索。 */
+  /** imap_name → `folder_pref.icon`（lucide kebab 名）。取不到 = 没设过 → 兜底 folder。 */
   iconKeys: ReadonlyMap<string, string | null>
   onSelect: (node: SidebarFolderNode) => void
   onToggleExpand: (imapName: string) => void
 }
 
-/** 单行 NavRow 风格 + 递归子节点。临摹 Sidebar.NavRow / CountRight 的视觉语言。 */
+/** 单行 NavRow 风格 + 递归子节点。临摹 DomainPanel.NavRow / CountRight 的视觉语言。 */
 function SidebarFolderRow({
   node,
   depth,
   activeMailbox,
-  collapsed,
   expanded,
   iconKeys,
   onSelect,
@@ -90,88 +67,79 @@ function SidebarFolderRow({
   const selected = activeMailbox === node.fullDisplayName
   const count = node.count ?? 0
 
-  // 收起态时 HoverTip 接管名称浮现 → 不再设原生 title= (避免双 tooltip, 同
-  // Sidebar.maybeWrapTip 语义)。展开态保留原生 title。
-  // (seed 树的 display_name 已本地解码 → 不再有「等待加载」的 disabled 行。)
-  const nativeTitle = collapsed ? undefined : node.fullDisplayName
-
   return (
     <>
-      {maybeWrapFolderTip(
-        collapsed,
-        node.fullDisplayName,
-        <button
-          type="button"
-          onClick={() => onSelect(node)}
-          onPointerEnter={() => setIconActive(true)}
-          onPointerLeave={() => setIconActive(false)}
-          onFocus={() => setIconActive(true)}
-          onBlur={() => setIconActive(false)}
-          title={nativeTitle}
-          // 缩进用 paddingLeft (depth*14); 收起态 CSS 用 padding-inline 覆盖, 缩进自然消失。
-          style={depth > 0 ? { paddingLeft: `${8 + depth * 14}px` } : undefined}
-          className={cn(
-            'row relative w-full flex items-center gap-2.5 px-2 py-1 rounded-[var(--r-ctl)]',
-            'text-body text-left transition-colors duration-fast',
-            selected
-              ? 'row-selected acc-select text-ink-fg font-medium'
-              : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
-          )}
-        >
-          {/* expand chevron — 仅父节点; <span> 非 app-nav-keep, 收起态自动隐藏。 */}
-          {hasChildren ? (
-            <span
-              role="button"
-              tabIndex={-1}
-              aria-label={
-                isOpen
-                  ? t('nav.folderTree.collapse', { defaultValue: '收起' })
-                  : t('nav.folderTree.expand', { defaultValue: '展开' })
-              }
-              onClick={(e) => {
-                e.stopPropagation()
-                onToggleExpand(node.imapName)
-              }}
-              // #16 命中区扩展 — 视觉仍 16px，但 ::before 把可点区域纵向撑到
-              // 整行高度、横向 +4px，不放大可见 swatch 故不压到父行选中左光条
-              // (row-selected::before left:-8px) 也不与父行选中区视觉重合。
-              className="shrink-0 -ml-1 relative inline-flex items-center justify-center w-4 h-4 rounded text-ink-fg-2 hover:text-ink-fg before:absolute before:-inset-y-1 before:-inset-x-0.5 before:content-['']"
-            >
-              <ChevronRight
-                size={12}
-                strokeWidth={2}
-                className={cn('transition-transform duration-fast', isOpen && 'rotate-90')}
-              />
-            </span>
-          ) : depth > 0 ? (
-            <span className="shrink-0 w-4 h-4" aria-hidden="true" />
-          ) : null}
-
-          {/* 用户在设置页挑的图标；没设过 / key 不认识 → FolderGlyph 兜底回默认 folder。
-              🔴 svg 必须是 button 的直接子节点（FolderGlyph 与 Provider 都不加 DOM）——
-              收起态 56px rail 的图标放大规则选的就是 `button > svg`。 */}
-          <AnimatedIconActiveProvider active={iconActive}>
-            <FolderGlyph
-              iconKey={iconKeys.get(node.imapName)}
-              size={15}
-              strokeWidth={1.75}
-              className="shrink-0"
+      <button
+        type="button"
+        onClick={() => onSelect(node)}
+        onPointerEnter={() => setIconActive(true)}
+        onPointerLeave={() => setIconActive(false)}
+        onFocus={() => setIconActive(true)}
+        onBlur={() => setIconActive(false)}
+        title={node.fullDisplayName}
+        // 缩进用 paddingLeft (depth*14)。
+        style={depth > 0 ? { paddingLeft: `${8 + depth * 14}px` } : undefined}
+        className={cn(
+          'row relative w-full flex items-center gap-2 h-[30px] px-2 rounded-[var(--r-ctl)]',
+          'text-body text-left transition-colors duration-fast',
+          selected
+            ? 'row-selected acc-select text-ink-fg font-medium'
+            : 'text-ink-fg-1 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4'
+        )}
+      >
+        {/* expand chevron — 仅父节点。 */}
+        {hasChildren ? (
+          <span
+            role="button"
+            tabIndex={-1}
+            aria-label={
+              isOpen
+                ? t('nav.folderTree.collapse', { defaultValue: '收起' })
+                : t('nav.folderTree.expand', { defaultValue: '展开' })
+            }
+            onClick={(e) => {
+              e.stopPropagation()
+              onToggleExpand(node.imapName)
+            }}
+            // #16 命中区扩展 — 视觉仍 16px，但 ::before 把可点区域纵向撑到
+            // 整行高度、横向 +4px，不放大可见 swatch 故不压到父行选中左光条
+            // (.nav-panel .row-selected::before left:-6px) 也不与父行选中区视觉重合。
+            className="shrink-0 -ml-1 relative inline-flex items-center justify-center w-4 h-4 rounded text-ink-fg-2 hover:text-ink-fg before:absolute before:-inset-y-1 before:-inset-x-0.5 before:content-['']"
+          >
+            <ChevronRight
+              size={12}
+              strokeWidth={2}
+              className={cn('transition-transform duration-fast', isOpen && 'rotate-90')}
             />
-          </AnimatedIconActiveProvider>
-          <span className="flex-1 truncate">{node.displayName}</span>
-          {count > 0 ? (
-            selected ? (
-              <span className="text-[10px] leading-none font-mono tabular-nums px-1 py-px rounded-[3px] border border-coral/30 bg-coral/15 text-ink-fg">
-                {count.toLocaleString('en-US')}
-              </span>
-            ) : (
-              <span className="text-meta font-mono text-ink-fg-2 tabular-nums">
-                {count.toLocaleString('en-US')}
-              </span>
-            )
-          ) : null}
-        </button>
-      )}
+          </span>
+        ) : depth > 0 ? (
+          <span className="shrink-0 w-4 h-4" aria-hidden="true" />
+        ) : null}
+
+        {/* 用户在设置页挑的图标；没设过 / key 不认识 → FolderGlyph 兜底回默认 folder。
+              🔴 svg 必须是 button 的直接子节点（FolderGlyph 与 Provider 都不加 DOM）——
+              行内结构契约（测试断言 `button > svg`），别多包一层。 */}
+        <AnimatedIconActiveProvider active={iconActive}>
+          <FolderGlyph
+            iconKey={iconKeys.get(node.imapName)}
+            size={15}
+            strokeWidth={1.75}
+            className="shrink-0"
+          />
+        </AnimatedIconActiveProvider>
+        <span className="flex-1 truncate">{node.displayName}</span>
+        {count > 0 ? (
+          selected ? (
+            <span className="text-[10px] leading-none font-mono tabular-nums px-1 py-px rounded-[3px] border border-coral/30 bg-coral/15 text-ink-fg">
+              {count.toLocaleString('en-US')}
+            </span>
+          ) : (
+            <span className="text-meta font-mono text-ink-fg-2 tabular-nums">
+              {count.toLocaleString('en-US')}
+            </span>
+          )
+        ) : null}
+      </button>
 
       {hasChildren && isOpen
         ? node.children.map((child) => (
@@ -180,7 +148,6 @@ function SidebarFolderRow({
               node={child}
               depth={depth + 1}
               activeMailbox={activeMailbox}
-              collapsed={collapsed}
               expanded={expanded}
               iconKeys={iconKeys}
               onSelect={onSelect}
@@ -192,7 +159,8 @@ function SidebarFolderRow({
   )
 }
 
-/** MAILBOXES 段内的自定义文件夹树。whitelist 空 → 渲染 null (隔离不变量)。 */
+/** 邮件域面板 FOLDERS 段的自定义文件夹树（段头随本组件渲染）。
+ *  whitelist 空 → 渲染 null (隔离不变量)。 */
 export function SidebarFolderTree(): React.ReactElement | null {
   const { t } = useTranslation()
   const mailApi = useMailApi()
@@ -201,8 +169,10 @@ export function SidebarFolderTree(): React.ReactElement | null {
   const setActiveMailbox = useMailbox((s) => s.setActive)
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  // 收起态 — 内建行收起态 hover 出 tooltip; 文件夹行对齐 (Fix: 自定义文件夹收起无 tip)。
-  const collapsed = useNavCollapsed((s) => s.collapsed)
+  // 邮件列表路由 = 收件箱 entry 的落点（Step B 收掉本文件的 `/` 字面量，
+  // Step R check ③）。`.to` 是字面量类型 '/'，下面的相等判断零成本。
+  const inboxEntry = navEntry('mail.inbox')
+  const mailPath = inboxEntry.to
 
   // connectedIntervalMs — SSE 连上后不归零而留 5min 保险轮询 (邮件主列表 a5953a13
   // 同纪律)。whitelist 一旦打空整段树就消失, 而 SSE 秒级连上就会把兜底轮询清掉,
@@ -285,10 +255,11 @@ export function SidebarFolderTree(): React.ReactElement | null {
       setCustomMailbox(node.fullDisplayName, node.path)
       // StatusBar mailbox 段保持同步 (仿 Sidebar.handleViewClick)。
       setActiveMailbox(node.fullDisplayName)
-      // 非邮件路由时跳回收件箱列表 (EmailList 据 customMailbox 过滤; 不动 view)。
-      if (pathname !== '/') void navigate({ to: '/' })
+      // 非邮件路由时跳回收件箱列表 (EmailList 据 customMailbox 过滤; URL 落
+      // `?view=inbox` 与老 `navigate({to:'/'})` 经 validateSearch 后同值)。
+      if (pathname !== mailPath) navigateToNavEntry(navigate, inboxEntry)
     },
-    [setCustomMailbox, setActiveMailbox, navigate, pathname]
+    [setCustomMailbox, setActiveMailbox, navigate, pathname, mailPath, inboxEntry]
   )
 
   if (!hasWhitelist || tree.length === 0) return null
@@ -297,21 +268,25 @@ export function SidebarFolderTree(): React.ReactElement | null {
   const visible = overflow && !showAll ? tree.slice(0, COLLAPSE_THRESHOLD) : tree
   const hiddenCount = tree.length - COLLAPSE_THRESHOLD
 
-  // 自定义文件夹高亮仅在邮件列表路由 (`/`) 有效。切到非邮件主视图 (Custom AI
+  // 自定义文件夹高亮仅在邮件列表路由有效。切到非邮件主视图 (Custom AI
   // Agents /agents · 报告 · 日历 · 设置 · 会话历史 等) 时 customMailbox 不走 setView
-  // 清除 → 残留会导致与目标区双高亮。与内建 MAILBOXES 行的 `onInbox` 选中态门控
-  // (Sidebar.tsx selectedView) 对齐: 仅 pathname==='/' 时按 customMailbox 高亮。
-  const activeMailbox = pathname === '/' ? customMailbox : null
+  // 清除 → 残留会导致与目标区双高亮。与内建 MAILBOXES 行的选中态门控
+  // (DomainPanel.renderEntry) 对齐: 仅邮件列表路由时按 customMailbox 高亮。
+  const activeMailbox = pathname === mailPath ? customMailbox : null
 
   return (
     <>
+      {/* FOLDERS 段头 — 方案 B 板把自定义文件夹从 MAILBOXES 段分出独立段；
+          随本组件渲染 ⇒ whitelist 空时段头一并消失。 */}
+      <h2 className="nav-panel-sechdr text-micro font-mono uppercase">
+        {t('nav.section.folders')}
+      </h2>
       {visible.map((node) => (
         <SidebarFolderRow
           key={node.imapName}
           node={node}
           depth={0}
           activeMailbox={activeMailbox}
-          collapsed={collapsed}
           expanded={expanded}
           iconKeys={iconKeys}
           onSelect={handleSelect}
@@ -322,7 +297,7 @@ export function SidebarFolderTree(): React.ReactElement | null {
         <button
           type="button"
           onClick={() => setShowAll((s) => !s)}
-          className="row w-full flex items-center gap-2.5 px-2 py-1 rounded-[var(--r-ctl)] text-body text-left text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4 transition-colors duration-fast"
+          className="row w-full flex items-center gap-2 h-[30px] px-2 rounded-[var(--r-ctl)] text-body text-left text-ink-fg-2 hover:bg-ink-3 hover:text-ink-fg active:bg-ink-4 transition-colors duration-fast"
         >
           {showAll ? (
             <ChevronDown size={13} strokeWidth={2} className="shrink-0 rotate-180" />

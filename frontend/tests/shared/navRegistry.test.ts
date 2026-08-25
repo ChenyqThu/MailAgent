@@ -18,13 +18,16 @@ import enUS from '../../src/shared/i18n/locales/en-US/common.json'
 import { SHORTCUTS } from '../../src/shared/keymap'
 import {
   NAV_DEEPLINK_PATH,
+  NAV_DOMAINS,
   NAV_ENTRIES,
   NOTIFICATION_ROUTE_TARGETS,
   isNavEntryActive,
+  navActiveDomain,
   navEntry,
   navPaletteEntries,
   navShortcutDisplay,
-  navShortcutSpec
+  navShortcutSpec,
+  type NavDomain
 } from '../../src/shared/navigation/registry'
 
 function lookup(locale: Record<string, unknown>, key: string): unknown {
@@ -40,11 +43,11 @@ describe('nav registry — 条目自身的不变量', () => {
     expect(new Set(ids).size).toBe(ids.length)
   })
 
-  test('同一段内 panel.order 不重复（重复 = 顺序变成数组序的巧合）', () => {
+  test('同一域内 panel.order 不重复（重复 = 顺序变成数组序的巧合）', () => {
     const seen = new Set<string>()
     for (const entry of NAV_ENTRIES) {
       if (!entry.panel) continue
-      const key = `${entry.panel.section}#${entry.panel.order}`
+      const key = `${entry.domain}#${entry.panel.order}`
       expect(seen.has(key), `重复的 panel 落位: ${key}`).toBe(false)
       seen.add(key)
     }
@@ -171,6 +174,36 @@ describe('nav registry — i18n key 在两个 locale 都在', () => {
           expect(lookup(locale, key), `${name} 缺 ${key}`).toBeTruthy()
         }
       }
+    }
+  })
+
+  test('域标签（导轨格 / 面板头）在两个 locale 都在（today 预留域除外）', () => {
+    for (const [domain, meta] of Object.entries(NAV_DOMAINS)) {
+      if (domain === 'today') continue
+      if (!('i18nKey' in meta.label)) continue
+      for (const [name, locale] of locales) {
+        expect(lookup(locale, meta.label.i18nKey), `${name} 缺 ${meta.label.i18nKey}`).toBeTruthy()
+      }
+    }
+  })
+})
+
+describe('nav registry — 域推导（导轨选中格 = 面板域）', () => {
+  test('每条路由归它该归的域；/sessions 无导轨格但归 agents 域', () => {
+    const cases: ReadonlyArray<[string, NavDomain]> = [
+      ['/', 'mail'],
+      ['/sessions', 'agents'],
+      ['/agents', 'agents'],
+      ['/matters', 'matters'],
+      ['/contacts', 'contacts'],
+      ['/admin/calendar', 'calendar'],
+      ['/admin/llm', 'ops'],
+      ['/admin/kanban', 'ops'],
+      ['/admin', 'ops'],
+      ['/settings', 'settings']
+    ]
+    for (const [pathname, domain] of cases) {
+      expect(navActiveDomain(NAV_ENTRIES, pathname), pathname).toBe(domain)
     }
   })
 })

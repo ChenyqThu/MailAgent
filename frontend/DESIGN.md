@@ -83,8 +83,8 @@ without ever going pure black.
 | Token              | Hex       | Use                                                |
 |--------------------|-----------|----------------------------------------------------|
 | `ink-0`            | `#0E1013` | Outermost canvas; title bar; root `<html>` bg     |
-| `ink-1`            | `#15181D` | Sidebar; bottom status bar; batch bar              |
-| `ink-2`            | `#1A1E24` | Email list column; AI panel base                   |
+| `ink-1`            | `#15181D` | Nav 域面板 (DomainPanel); bottom status bar; batch bar |
+| `ink-2`            | `#1A1E24` | Nav 图标导轨 (IconRail); email list column; AI panel base |
 | `ink-3`            | `#1F242B` | Detail pane; hover surface for rows / buttons      |
 | `ink-4`            | `#262C35` | AI user-bubble bg; raised affordance (v3: selected row → `--sel-wash` wash, no longer an `ink-4` flood — §18) |
 | `ink-5`            | `#2E343E` | Reserved — popover / menu surface above `ink-4`   |
@@ -301,6 +301,42 @@ export const useAppearance = create<Store>((set) => ({
 }));
 ```
 
+### 2.11 Nav shell — IconRail + DomainPanel（方案 B，2026-08-24 task 08-24-l4-nav-shell Step B）
+
+> 编号钉在 2.11：全仓代码注释（index.css / layout 组件 / 测试）历史上一直引用
+> 「DESIGN.md §2.11」作为 nav shell contract 的锚点，沿用编号让那些引用继续成立。
+> 老 §2.11（单栏 240↔56 双宽态、三段 11 行、收起态 icon-only 行）**已整体退役**。
+
+**形态**：`Sidebar.tsx`（组装层 + 数据层）= AppShell 中行的**单个** flex item
+（`<aside data-app-nav class="app-nav">`，内部 flex row），装两列：
+
+- **IconRail（56px，常驻不折叠）** — 域切换导轨。顶部 41px 头（26px monogram 头像，
+  hairline 底边与相邻列头共线）；域格 = 40×40 按钮（icon 19px）+ 9px 标签，格间 2px；
+  选中格 = accent wash（90deg 0.18→0.08）圆角 10px pill + accent 字色；数字角标
+  （`.railbadge`，13px 高 / 9px 字号 / 99+ 截断）骑 icon 右上角；底部沉「运维」「设置」
+  （icon 18px，格间 6px，距底 10px）。格序（首版）：邮件 / 日历 / 事项 / 通讯录 /
+  Agents ＋ 底部 运维 / 设置；「今日」registry 预留（`gate:'never'`，批次 2 翻开）。
+- **DomainPanel（232px，可折叠）** — 域二级栏，随域换内容。41px 头（域名 13px/600 +
+  域级动作位：邮件域 = 账号邮箱 11px + 折叠钮；其余域 = 折叠钮）。邮件域 = 写邮件
+  CTA（32px accent 填充居中）+ MAILBOXES 五视图行 + FOLDERS 自定义文件夹树；
+  matters / calendar / contacts / ops / settings 域首版 = 最小面板（registry panel
+  投影行）；agents 域另有「报告 / Chats」轻量 tab 直达行。
+
+**明度序**（画布定稿，token 化）：rail `ink-2`(26) → panel `ink-1`(21) → 列表 →
+正文，从左到右渐暗；亮色主题随 token 自动翻。
+
+**折叠模型**：`data-collapsed` 挂 `.app-nav` 根 = **面板显隐**（width 232→0 +
+visibility hidden，rail 常驻）。localStorage 键 `mailagent.nav.collapsed` 不换、
+值语义兼容；`<lg`(1024) 强制收起沿用（state/nav-shell.ts）。展开/收起入口 =
+面板头折叠钮 + 点击**当前域**的导轨格。`--app-nav-w` = 288px / 56px（batch bar 联动）。
+
+**单源与契约**：条目/域元数据单源 `@shared/navigation/registry`（NavEntry 的
+`rail`/`panel` 落位 + `NAV_DOMAINS` 域标签/域图标）；渲染期闸
+`tests/components/sidebar-contract.test.tsx`（registry ↔ 导轨投影 ↔ 域面板投影
+三方一致 + `[data-app-nav]` 唯一 + `.row-selected ≤ 1`）。行内结构契约：icon svg
+必须是 button / `.railbtn` 的**直接子节点**（Provider 零 DOM）。域推导 =
+`navActiveDomain(pathname)`（`/sessions` 归 agents 域）。
+
 ---
 
 ## 3. Typography
@@ -347,7 +383,7 @@ exploit heavily for timestamps and counts.
 
 ### 3.3 Section headers — English UPPERCASE mono on purpose
 
-Sidebar groups (`MAILBOXES` / `ACCOUNTS` / `AI AGENTS` / `TOOLS` / `OPS`),
+Nav 域面板 section headers (`MAILBOXES` / `FOLDERS` — 方案 B 后只剩邮件域这两段),
 right-panel tabs (`AI` / `Thread` / `Sync`), detail-pane card headers
 (`AI FIELDS · 11` / `ATTACHMENTS · 2` / `SYNC STATE`) are all **English
 small-caps mono**. This is deliberate, not a localization gap:
@@ -381,7 +417,8 @@ If a future section header *must* be Chinese: bump to `text-aux` 14px (not
   is 16, Linear 12. We've chosen the tight end intentionally.
 - Section vertical rhythm: 24–32px between major detail-pane blocks
   (`mt-6` / `mt-7` / `mt-8`).
-- Sidebar group spacing: `my-3 mx-4 border-t` between groups.
+- Nav 域面板 section rhythm: `.nav-panel-sechdr` 自带 `14px 12px 6px`（方案 B 后
+  不再用 spacer border 分段）。
 - Custom layout tokens:
   - `titlebar` = 36px
   - `statusbar` = 24px
@@ -452,8 +489,9 @@ in the mockup that translates to a shadcn-ui-extended React component.
 | Mockup component        | shadcn / production              | Notes                                  |
 |-------------------------|----------------------------------|----------------------------------------|
 | TitleBar (36px)         | self-written + `BrowserWindow` `titleBarStyle: 'hiddenInset'` | red/yellow/green from system; right side has `IslandIndicator` |
-| Sidebar item            | `<NavLink>` + `<Tooltip>`        | collapsed mode (40px wide) reduces to icon + count |
-| Sidebar section header  | `<SectionHeader>` (custom)       | `text-micro` mono uppercase; **English** |
+| Nav rail cell           | `IconRail` (custom)              | 40×40 icon + 9px label; badge 骑角 (§2.11) |
+| Nav panel row           | `DomainPanel.NavRow` (custom)    | 30px 高; selected = `--sel-wash` + 左光条 |
+| Nav section header      | `.nav-panel-sechdr` (authored)   | `text-micro` mono uppercase; **English** |
 | EmailRow                | `<EmailRow>` (custom)            | virtualized with `react-window`        |
 | Unread dot              | inline span                       | 1.5px / `bg-coral`                      |
 | AILabel chip            | shadcn `<Badge>` w/ 5 variants    | `crit / urg / impt / norm / low`        |
@@ -1786,7 +1824,7 @@ opaque", not a coincidence). Consequences worth knowing:
 - `ShimmerText` (thinking shimmer), `DotMatrix` connecting dots. (**2026-07-15 update, harness-chat lane B:** the random-rotation `ThinkingPhrases` component was retired — the chat status line is now truth-driven via `TurnStatusLine`/`useTurnStage` [stops on idle/writing/awaiting-approval, never spins while stalled/errored] and consecutive tool calls fold into `ToolGroupCard`; both still use only `ShimmerText`/`DotMatrix`, no new vocabulary — see `docs/motion-gsap.md` §9.1.) (**2026-08-13 update, living-bot-avatar WP5:** `TurnStatusLine` was absorbed into `TurnPresence` — the in-flow status row is now an animated `BotAvatar` + the same truth-driven text discipline; `DotMatrix` is retired **from the message flow only**, and stays in the composer-side `ThreadRunStatusBar`.)
 - **Bot avatar loop motion** (`shared/bot-avatar/`, 2026-08-13; v2 parametric-3D engine same day): the state-driven head-turn/blink/expression/gaze/ambient loop is a sanctioned duration-tier exemption (like Strands) — transition easing is engine-internal, NOT the GSAP spring whitelist's concern. Static tier is the default everywhere; `animated` exists at exactly 3 sites (TurnPresence 28px, panel header 20px, editor preview 48px) — adding an animated site requires a perf review. v2 note: ambient-active states (slowDrift breathing) keep animated instances redrawing at a 30fps cap instead of settling — an intentional cost confined to those 3 sites. Reduced-motion short-circuits in JS to the static tier. See `docs/bot-avatar.md`.
 - All GSAP orchestration: inbox-tab indicator slide, settings-panel fade-in, thinking-block height auto↔0, and everything in `docs/motion-gsap.md` §8.
-- Sidebar collapse `transition-[width]` (240↔56 / chat 260↔48) — layout-property animation is existing product behavior.
+- Nav panel collapse `transition: width`（方案 B 起 288↔56 = DomainPanel 232→0 显隐，rail 常驻；chat 260↔48）— layout-property animation is existing product behavior.
 - Row hover / press feedback; approval-card phase-pill state transitions.
 - List-performance rules (ARCHITECTURE §7.1) — unaffected by v3.
 

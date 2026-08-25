@@ -1,19 +1,23 @@
-// Sprint 11 V1.4 — nav shell collapsed-state store.
+// nav shell collapsed-state store (Sprint 11 V1.4 起; task 08-24-l4-nav-shell
+// Step B 起语义 = DomainPanel 显隐)。
 //
-// DESIGN.md §2.11 contract:
-//   - 240px (expanded) ↔ 56px (collapsed)
-//   - persists to localStorage["mailagent.nav.collapsed"]
+// 方案 B contract（DESIGN.md §2.11）：
+//   - collapsed = 域二级栏（232px DomainPanel）收起；56px IconRail 常驻不折叠
+//     ⇒ shell 总宽 288px (expanded) ↔ 56px (collapsed)
+//   - persists to localStorage["mailagent.nav.collapsed"] —— 键与值语义与老单栏
+//     时代兼容（true 从「整栏收成 56px icon rail」平滑映射为「面板收起只剩
+//     rail」，都是「最小导航」，老用户的偏好原值直读，无迁移代码）
 //   - cross-window sync via the `storage` event so a pop-out compose /
 //     detail window stays in lockstep with the main inbox window
 //
 // 批 E-3 (RESPONSIVE-XCUT-02 / LAYOUT-CHROME-01) — responsive auto-collapse.
 // The *effective* collapsed state is `belowLg || userCollapsed`:
-//   - belowLg     = viewport < lg(1024); forces the 56px icon rail so the
+//   - belowLg     = viewport < lg(1024); forces the rail-only shell so the
 //                   chrome never breaks on narrow widths. Reuses ALL existing
 //                   `[data-collapsed='true']` CSS — no new authored rules.
 //   - userCollapsed = the user's manual fold preference (persisted), honoured
-//                   at ≥lg. Toggling at <lg flips the pref but the rail stays
-//                   forced (the row is already an icon-only rail there).
+//                   at ≥lg. Toggling at <lg flips the pref but the panel stays
+//                   forced-hidden (the shell is already rail-only there).
 //
 // Mirrors the broadcast convention used by appearance.ts (theme/accent).
 // The module-level `storage` + `matchMedia` listeners install once per
@@ -23,15 +27,13 @@ import { create } from 'zustand'
 
 const KEY = 'mailagent.nav.collapsed'
 
-// Sidebar widths — must stay in sync with `.app-nav` width in index.css
-// (240px expanded / 56px collapsed; DESIGN.md §2.11). The sidebar itself is
-// sized by `.app-nav[data-collapsed]` in CSS; this store mirrors the same
-// width into the `--app-nav-w` custom property so detached fixed-position
-// chrome that cannot read the zustand store — notably `#batch-bar.floating`
-// (index.css §"Floating batch action bar") — reflows in lockstep when the
-// sidebar collapses. Without it the batch bar stuck at the 240px fallback and
-// floated ~184px right of its column once the sidebar shrank to 56px.
-const NAV_W_EXPANDED = '240px'
+// Shell widths — must stay in sync with `.nav-rail`(56) + `.nav-panel`(232)
+// in index.css. The shell itself is sized by authored CSS; this store mirrors
+// the same width into the `--app-nav-w` custom property so detached
+// fixed-position chrome that cannot read the zustand store — notably
+// `#batch-bar.floating` (index.css §"Floating batch action bar") — reflows in
+// lockstep when the panel collapses.
+const NAV_W_EXPANDED = '288px'
 const NAV_W_COLLAPSED = '56px'
 
 // <lg auto-collapse breakpoint — aligns with Tailwind `lg`(1024) and the

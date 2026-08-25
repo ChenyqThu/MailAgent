@@ -46,7 +46,7 @@ import {
   useResolveNotification,
   useSnoozeNotification
 } from './hooks'
-import { resolveNotificationLink } from './navigation'
+import { navigateNotificationRoute, resolveNotificationLink } from './navigation'
 import { NotificationListSkeleton } from './NotificationSkeleton'
 import {
   NOTIFICATION_TAB_IDS,
@@ -371,18 +371,10 @@ export function NotificationPanel({ onClose }: { onClose(): void }): React.React
         void api.updater.quitAndInstall()
         return
       case 'route':
-        switch (link.to) {
-          case '/agents': {
-            // `/agents` 的 validateSearch 要求 tab 是三档之一；非法值按路由自身口径归 agents。
-            const target = link.search?.tab
-            const safeTab = target === 'reports' || target === 'chats' ? target : 'agents'
-            void navigate({ to: '/agents', search: { tab: safeTab } })
-            return
-          }
-          case '/admin/kanban':
-            void navigate({ to: '/admin/kanban' })
-            return
-        }
+        // 落地 switch 单源在 ./navigation（与系统通知点击共用；含 `/settings` case 与
+        // `default: never` 穷尽闸）。
+        navigateNotificationRoute(navigate, link)
+        return
     }
   }
 

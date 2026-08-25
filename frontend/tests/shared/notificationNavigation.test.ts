@@ -4,9 +4,12 @@
 // 松了 → 一条畸形/未来版本的 link 让条目点下去乱跳或抛异常；紧了 → 真实信源发的 link 点不
 // 动。两侧都只在人工点击时才暴露，故这里对着 M1 三个信源真会发的形状逐条钉住。
 
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 
-import { resolveNotificationLink } from '@shared/components/notifications/navigation'
+import {
+  navigateNotificationRoute,
+  resolveNotificationLink
+} from '@shared/components/notifications/navigation'
 
 describe('resolveNotificationLink — 真实信源形状', () => {
   it('agent run 终态：session 型（run_worker.py 有 session_id 时）', () => {
@@ -107,5 +110,50 @@ describe('resolveNotificationLink — 拒绝的形状（一律 null = 只标已�
     expect(
       resolveNotificationLink({ link: { type: 'route', to: '/agents', search: 'tab' } })
     ).toEqual({ type: 'route', to: '/agents', search: null })
+  })
+})
+
+// route 型的落地 switch（task 08-24-l4-nav-shell Step B 收敛单源 + 补 `/settings` case）。
+// 此前两份手抄 switch 都漏 `/settings`：kos 死信通知过白名单却落不了地，点了只标已读。
+describe('navigateNotificationRoute — route 型落地', () => {
+  type NavigateArg = { to: string; search?: Record<string, unknown> }
+  function run(link: ReturnType<typeof resolveNotificationLink>): NavigateArg | undefined {
+    const navigate = vi.fn()
+    if (!link || link.type !== 'route') throw new Error('expected route link')
+    navigateNotificationRoute(navigate as never, link)
+    return navigate.mock.calls.at(-1)?.[0] as NavigateArg | undefined
+  }
+
+  it('KOS dead：/settings 带 integrations tab → 落 settings 页对应 tab', () => {
+    expect(
+      run(
+        resolveNotificationLink({
+          link: { type: 'route', to: '/settings', search: { tab: 'integrations' } }
+        })
+      )
+    ).toEqual({ to: '/settings', search: { tab: 'integrations' } })
+  })
+
+  it('/settings 的非法 tab clamp 到 general（与路由 validateSearch 同口径）', () => {
+    expect(
+      run(
+        resolveNotificationLink({
+          link: { type: 'route', to: '/settings', search: { tab: 'rogue' } }
+        })
+      )
+    ).toEqual({ to: '/settings', search: { tab: 'general' } })
+  })
+
+  it('/agents 的非法 tab 归 agents；/admin/kanban 无 search', () => {
+    expect(
+      run(
+        resolveNotificationLink({
+          link: { type: 'route', to: '/agents', search: { tab: 'rogue' } }
+        })
+      )
+    ).toEqual({ to: '/agents', search: { tab: 'agents' } })
+    expect(run(resolveNotificationLink({ link: { type: 'route', to: '/admin/kanban' } }))).toEqual({
+      to: '/admin/kanban'
+    })
   })
 })

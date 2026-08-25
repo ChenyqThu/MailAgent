@@ -405,11 +405,11 @@ describe('SidebarFolderTree — per-folder 图标 (v62 folder_pref.icon)', () =>
     await waitFor(() => expect(iconPathsOf(container, 'Jira')).toContain(FOLDER_BODY_D))
   })
 
-  // 🔴 收起态 (56px rail) 的收益全押在这条结构契约上: index.css §2.11 的放大规则选的是
-  // `nav button > svg`, 隐藏文字的规则选的是 `button > span:not(.app-nav-keep)`。
-  // 图标外面多包一层 (哪怕是 <span>) → 收起态图标不放大; 名称若挂上 app-nav-keep →
-  // 收起态还留着文字。两条都不报错、不影响展开态, 只有真收起才看得见。
-  test('图标是 button 的直接子节点 + 名称在会被收起态隐掉的普通 span 里', async () => {
+  // 结构契约: 图标 svg 必须是 button 的**直接子节点**、名称在普通 span 里 (不挂
+  // 豁免类)。方案 B 后 (task 08-24-l4-nav-shell Step B) 老收起态 CSS 已退役, 但
+  // 这条结构仍是行内 authored 选择器 (`button > svg`) 与 §2.11 三方一致闸的前提 —
+  // 多包一层不报错、不影响当下渲染, 只在下一个依赖直子结构的规则上静默失效。
+  test('图标是 button 的直接子节点 + 名称在普通 span 里', async () => {
     twoFolders()
     mockGetPrefs.mockResolvedValue({
       prefs: [

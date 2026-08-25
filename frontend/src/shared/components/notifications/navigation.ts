@@ -22,6 +22,10 @@ import {
   NOTIFICATION_ROUTE_TARGETS,
   type NotificationRouteTarget
 } from '@shared/navigation/registry'
+// 只引类型：本模块运行时不依赖 router。
+import type { useNavigate } from '@tanstack/react-router'
+
+import { clampSettingsTab } from '@shared/lib/settingsTabs'
 
 export { NOTIFICATION_ROUTE_TARGETS, type NotificationRouteTarget }
 
@@ -86,4 +90,41 @@ export function resolveNotificationLink(
   }
 
   return null
+}
+
+type NavigateFn = ReturnType<typeof useNavigate>
+
+/**
+ * route 型链接的落地 switch —— **单源**（task 08-24-l4-nav-shell Step B，Step R check ①）。
+ * 此前 NotificationPanel 与 router-instance（系统通知点击）各手抄一份，且两份都漏了
+ * `/settings` case：kos ingest_log 的死信通知（`/settings?tab=integrations`）过得了白名单
+ * 却落不了地，点了只标已读哪也不去。收敛成一份 + `default: never` 穷尽闸 ——
+ * registry 白名单再加档而这里漏 case 时 typecheck 当场红，不再静默吞。
+ *
+ * search 逐 case clamp（TanStack validateSearch 的口径在类型层进不来，值层各路由
+ * 自己还会再验一遍）。
+ */
+export function navigateNotificationRoute(
+  navigate: NavigateFn,
+  link: Extract<NotificationLink, { type: 'route' }>
+): void {
+  switch (link.to) {
+    case '/agents': {
+      // `/agents` 的 validateSearch 要求 tab 三档之一；非法值按路由自身口径归 agents。
+      const tab = link.search?.tab
+      const safeTab = tab === 'reports' || tab === 'chats' ? tab : 'agents'
+      void navigate({ to: '/agents', search: { tab: safeTab } })
+      return
+    }
+    case '/admin/kanban':
+      void navigate({ to: '/admin/kanban' })
+      return
+    case '/settings':
+      void navigate({ to: '/settings', search: { tab: clampSettingsTab(link.search?.tab) } })
+      return
+    default: {
+      const exhaustive: never = link.to
+      return exhaustive
+    }
+  }
 }
