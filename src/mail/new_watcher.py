@@ -439,6 +439,8 @@ class NewWatcher:
         self._last_inbox_reconcile_at: Optional[float] = None
         # 通讯录 L0+L1 提取扫描 (task 08-13) 的独立低频节拍游标, 同上解耦 5s poll。
         self._last_contact_extract_at: Optional[float] = None
+        # 通讯录日历第三源 (task 08-24 #4) 的节拍游标 —— 与上面那条是两条独立节拍。
+        self._last_contact_calendar_scan_at: Optional[float] = None
         self._last_contact_governance_check_at: Optional[float] = None
         # KOS 失败重试 (issue #59, 第 6c 步) 的不健康冷却截止 (monotonic 秒):
         # 探活失败后到此刻之前整段跳过, 不必每个 5s tick 都对着倒掉的 KOS 探活。
@@ -816,6 +818,9 @@ class NewWatcher:
         # 10. 通讯录 L0+L1 提取扫描 (task 08-13 WP1, 默认关) — 独立低频节拍,
         # 纯本地 SQLite (零 IMAP 命令), 消化 email_metadata → 通讯录三表。
         await self._extract_contacts()
+        # 10b. 通讯录日历第三源 (task 08-24 #4) — 又一条独立低频节拍, 纯本地 SQLite
+        # (读 calendar_event, 零 CalDAV 调用)。
+        await self._scan_calendar_contacts()
         await self._contact_governance_tick()
 
     async def _contact_governance_tick(self):
@@ -876,6 +881,43 @@ class NewWatcher:
                 )
         except Exception as e:
             logger.warning(f"[contact-extract] tick failed (skip cycle): {e}")
+
+    async def _scan_calendar_contacts(self):
+        """通讯录日历第三源: calendar_event 与会者 → contact 三列 (task 08-24 #4)。
+
+        节拍纪律与 ``_extract_contacts`` 同款 (🔴 绝不挂 5s radar poll), 但是**另一条**
+        游标与 interval (``MAILAGENT_CONTACT_CALENDAR_INTERVAL_SEC``, 默认 900s):
+        这一轮是窗口内全量重算 (calendar_event 是可变表, 改期/取消会回写既有行),
+        比邮件那条增量扫描重, 频率低一档。
+
+        运行前提 = 日历同步开着; 关掉时 ``calendar_event`` 是陈旧快照, 重算出来的
+        「下一场会议」只会是过时事实 —— 整段跳过, 不写。
+        """
+        if not getattr(settings, "calendar_caldav_sync_enabled", False):
+            return
+        interval = max(60, int(getattr(settings, "contact_calendar_interval_sec", 900)))
+        now = time.monotonic()
+        last = self._last_contact_calendar_scan_at
+        if last is not None and (now - last) < interval:
+            return
+        self._last_contact_calendar_scan_at = now
+        try:
+            from src.contacts.calendar_scan import run_tick
+
+            stats = await asyncio.to_thread(run_tick, str(self.sync_store.db_path))
+            if stats and (
+                stats["contacts_created"] or stats["contacts_updated"]
+                or stats["contacts_reset"]
+            ):
+                logger.info(
+                    f"[contact-calendar] occurrences={stats['occurrences']} "
+                    f"participants={stats['participants']} "
+                    f"contacts+={stats['contacts_created']} "
+                    f"updated={stats['contacts_updated']} "
+                    f"reset={stats['contacts_reset']}"
+                )
+        except Exception as e:
+            logger.warning(f"[contact-calendar] tick failed (skip cycle): {e}")
 
     async def _reconcile_inbound_read(self):
         """入向「未读→已读」单向回收 (davmail-only, MAILAGENT_INBOUND_READ_RECONCILE_ENABLED)。

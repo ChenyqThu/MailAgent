@@ -333,9 +333,29 @@ def test_list_row_shape_has_no_internal_cursor_columns(client):
         "id", "display_name", "formal_name", "organization", "department",
         "role_title", "function", "seniority", "gender", "kind", "hidden_at",
         "is_self", "mail_count", "sent_to_count", "first_seen_at", "last_seen_at",
+        "meeting_count", "last_met_at", "next_meeting_at",
         "manager_contact_id", "manager_display_name", "email_count",
         "primary_email", "profile_summary", "profile_min", "profile_eligible",
     } == set(item)
+
+
+def test_calendar_fields_reach_list_and_detail(client):
+    """v69 日历三列 (meeting_count / last_met_at / next_meeting_at) 两个读面都要透出。"""
+    http, _, path = client
+    _seed_contact(path, cid=1, name="Alice", sent=5, mail=20, emails=(("alice@x.com", 1),))
+    with _conn(path) as conn:
+        conn.execute(
+            "UPDATE contact SET meeting_count=3, last_met_at=1700000000000, "
+            "next_meeting_at=1800000000000 WHERE id=1"
+        )
+        conn.commit()
+
+    item = _data(http.get("/api/contacts", params={"view": "all"}))["items"][0]
+    detail = _data(http.get("/api/contacts/1"))
+    for row in (item, detail):
+        assert row["meeting_count"] == 3
+        assert row["last_met_at"] == 1700000000000
+        assert row["next_meeting_at"] == 1800000000000
 
 
 # ---- 批量精确解析 (WP4: POST /resolve) ----

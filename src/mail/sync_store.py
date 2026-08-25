@@ -564,6 +564,12 @@ CONTACT_TABLE_DDLS = (
         sent_to_count INTEGER NOT NULL DEFAULT 0,
         first_seen_at INTEGER NULL,
         last_seen_at INTEGER NULL,
+        -- v69 日历第三源的聚合缓存 (src/contacts/calendar_scan.py 全量重算, 非增量)。
+        -- 🔴 时间列与本表其余时间列同单位 = epoch **毫秒** (calendar_event 存的是
+        -- epoch 秒 REAL, 边界处换算) —— 前端把 contact 的时间列一律按 ms 渲染。
+        meeting_count INTEGER NOT NULL DEFAULT 0,
+        last_met_at INTEGER NULL,
+        next_meeting_at INTEGER NULL,
         merged_into INTEGER NULL REFERENCES contact(id),
         created_at INTEGER NOT NULL,
         updated_at INTEGER NOT NULL
@@ -1673,7 +1679,19 @@ class SyncStore:
     #                安全的** (表留着不碍事); 要清干净再 `DROP TABLE notification`。
     #                🔴 revert 期间产生的通知**不补** —— 信源事件已经过去, 这是「先落库」
     #                模型的自然边界。
-    DB_VERSION = 68
+    # v69 (2026-08-24, L4 批次 1 · 通讯录日历第三源): contact 增加 meeting_count /
+    #                last_met_at / next_meeting_at 三列。写者唯一 =
+    #                `src/contacts/calendar_scan.py` (独立低频节拍, 全量重算)。
+    #                数据规则: 两个时间列是 epoch **毫秒** (与本表 first_seen_at /
+    #                last_seen_at 同单位), 尽管来源 `calendar_event.dtstart_utc` 是
+    #                epoch 秒 REAL —— 换算在扫描器边界做, 表内不留两种单位。
+    #                语义: 三列是**可全量重算的聚合缓存**, 不是第二真源 (镜像
+    #                mail_count / sent_to_count 的纪律); calendar_event 是可变表
+    #                (改期 / 取消 / 软删会回写既有行), 所以不用 watermark 增量。
+    #                幂等: ALTER 前 PRAGMA 探列 (三列各判各的), 重放结果不变。
+    #                回滚 (回退 v69): 旧代码不认识这三列, **只降版本号是安全的**
+    #                (列留着不碍事; SQLite 要清干净得重建 contact 表, 不值当)。
+    DB_VERSION = 69
     def __init__(self, db_path: str = "data/sync_store.db"):
         """初始化同步存储
 
@@ -4542,6 +4560,33 @@ class SyncStore:
                 raise SyncStoreMigrationError(
                     f"v68 migration (notification table): {e}"
                 ) from e
+        # === v69: contact 日历三字段 (meeting_count / last_met_at / next_meeting_at) ===
+        # 语义 / 单位 / 回滚代价见 DB_VERSION 注记。三列各判各的: 半程失败重跑时
+        # 已加的那一列不会再 ALTER 一次。
+        if current_version < 69:
+            _contact_calendar_cols = (
+                ("meeting_count", "INTEGER NOT NULL DEFAULT 0"),
+                ("last_met_at", "INTEGER NULL"),
+                ("next_meeting_at", "INTEGER NULL"),
+            )
+            try:
+                _contact_cols_v69 = {
+                    row[1] for row in cursor.execute("PRAGMA table_info(contact)").fetchall()
+                }
+                _added_v69 = []
+                for _col_v69, _type_v69 in _contact_calendar_cols:
+                    if _col_v69 not in _contact_cols_v69:
+                        cursor.execute(
+                            f"ALTER TABLE contact ADD COLUMN {_col_v69} {_type_v69}"
+                        )
+                        _added_v69.append(_col_v69)
+                if _added_v69:
+                    logger.info(f"v69 migration: contact +{','.join(_added_v69)}")
+            except (sqlite3.OperationalError, sqlite3.IntegrityError) as e:
+                _migration_guard_columns(
+                    cursor, "contact",
+                    {name for name, _ in _contact_calendar_cols}, "v69 migration", e,
+                )
         # 更新数据库版本 —— E0-WP3: 只有**全部迁移成功**才会执行到这里。任何迁移块
         # 真失败都会 raise (见 _migration_guard_columns/_migration_guard_index),
         # 沿栈中断本函数 → 本 INSERT 与末尾 commit 都不执行, version 停在旧值 →

@@ -1016,6 +1016,18 @@ class Config(BaseSettings):
             "墙钟预算），积压时单 tick 多消化几批、追平后回低频。"
         ),
     )
+    contact_calendar_interval_sec: int = Field(
+        default=900,
+        validation_alias="MAILAGENT_CONTACT_CALENDAR_INTERVAL_SEC",
+        description=(
+            "通讯录**日历第三源**（与会者 → contact 三列 meeting_count / last_met_at "
+            "/ next_meeting_at）的独立低频周期（秒），默认 900。🔴 绝不挂 5s radar "
+            "poll。与 MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC 是两条独立节拍：这一条"
+            "是**全量重算**（calendar_event 是可变表，改期/取消会回写既有行，水位增量"
+            "不适用），所以频率比邮件扫描低一档。运行前提 CALENDAR_CALDAV_SYNC_ENABLED，"
+            "关掉时本节拍整段跳过。"
+        ),
+    )
     self_emails: str = Field(
         default="",
         validation_alias="MAILAGENT_SELF_EMAILS",

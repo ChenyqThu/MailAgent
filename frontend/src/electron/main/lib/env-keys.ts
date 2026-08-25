@@ -106,6 +106,9 @@ export const MANAGED_ENV_KEYS = [
   // 不该藏的一类。挂 CalendarSyncWorker 60s poll (davmail CalDAV 路径), AccountsTab
   // 日历面 davmail 分支; 无岛 / PING_ISLAND_ENABLED 关时静默 fail-open。
   'CALENDAR_REMINDER_LEAD_MINUTES',
+  // MAILAGENT_CONTACT_CALENDAR_INTERVAL_SEC 有意不受管 (08-24 复核拍板): 同族
+  // CONTACT_EXTRACT_INTERVAL_SEC 一致的「调参 knob 不进白名单」姿态, 零 UI 消费点,
+  // 手改 .env 生效。勿因「白名单先行」再加回 —— 那次加入基于 research 错误前提, 已回退。
 
   // — 多文件夹同步窗口 (SyncTab「自定义文件夹同步」区)。config.py folder_sync_past_days
   // / folder_sync_max_messages Field。SYNC_FOLDERS 白名单本身走 folder whitelist API

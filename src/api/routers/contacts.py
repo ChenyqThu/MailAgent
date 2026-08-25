@@ -697,6 +697,8 @@ async def list_contacts(
         "SELECT c.id, c.display_name, c.formal_name, c.organization, c.department, "
         "  c.role_title, c.function, c.seniority, c.gender, c.kind, c.hidden_at, c.is_self, "
         "  c.mail_count, c.sent_to_count, c.first_seen_at, c.last_seen_at, "
+        # v69 日历第三源的三列 (epoch 毫秒, 与 first/last_seen_at 同单位)。
+        "  c.meeting_count, c.last_met_at, c.next_meeting_at, "
         # WP5 汇报线: manager id + self-join 显示名 (分组 label / 行菜单可用性;
         # m 对 c 是 1:1, 每个 c 恰好配到一行 m)。
         "  c.manager_contact_id, m.display_name AS manager_display_name, "
@@ -893,6 +895,10 @@ def _load_detail(
         "sent_to_count": row["sent_to_count"],
         "first_seen_at": row["first_seen_at"],
         "last_seen_at": row["last_seen_at"],
+        # v69 日历第三源 (src/contacts/calendar_scan.py 全量重算; epoch 毫秒)。
+        "meeting_count": row["meeting_count"],
+        "last_met_at": row["last_met_at"],
+        "next_meeting_at": row["next_meeting_at"],
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
         "emails": emails,

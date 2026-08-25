@@ -12,7 +12,8 @@
 
 - **2026-08-19 cutover**：通讯录成为默认能力，旧 venue env 总闸与全部载体已退役。
 - `new_watcher` 恒挂扫描独立低频节拍（`MAILAGENT_CONTACT_EXTRACT_INTERVAL_SEC`
-  默认 120s，🔴 绝不挂 5s radar poll）+ `/api/contacts/*` 恒激活 + 导航恒渲染。
+  默认 120s，🔴 绝不挂 5s radar poll；日历第三源是**另一条**节拍，见 §3.1）+
+  `/api/contacts/*` 恒激活 + 导航恒渲染。
   `/chat/config.contactsEnabled` 作为旧前端兼容投影保留并恒为 `true`。
 - **v54/v55 表结构恒在**；画像/治理自动运行仍由 Agents 页对应行的 `enabled` 控制。
 - 配套 env：`MAILAGENT_SELF_EMAILS`（逗号分隔 owner 历史自有地址，**兜底级**）。
@@ -21,7 +22,7 @@
   出向 `sent_to_count`、关联邮件方向三分、compose 收件人补全的排除。改后
   `mailagent contact backfill --rescan` 收敛。
 
-## 2. 数据模型（SyncStore v54 + v55 + v59 + v67）
+## 2. 数据模型（SyncStore v54 + v55 + v59 + v67 + v69）
 
 DDL 单源 = `src/mail/sync_store.py::CONTACT_TABLE_DDLS` / `CONTACT_INDEX_DDLS`
 （🔴 独立常量组只从 v54 块执行，**不进 `MATTER_*_DDLS`** —— 那组会对老库在
@@ -57,9 +58,15 @@ v44–v50 各块整组重放，新表混进去炸梯子）。
   DB_VERSION」的取舍**已作废**（列表加 keyset 分页后，LIMIT 要能提前收工就必须有
   可用于排序的索引）。DDL 单源 `CONTACT_V67_INDEXES`，🔴 **不进
   `CONTACT_INDEX_DDLS`**（那组由 v54 块执行，老库整组重放会炸 —— v52 教训）。
+- **v69**（2026-08-24，L4 批次 1 接线批）：`contact` + `meeting_count` /
+  `last_met_at` / `next_meeting_at` 三列 —— 日历第三源的**聚合缓存**（写者唯一 =
+  `src/contacts/calendar_scan.py`，全量重算可自愈，不是第二真源，同 `mail_count`
+  纪律）。🔴 两个时间列与本表其余时间列同单位 = epoch **毫秒**，而来源
+  `calendar_event.dtstart_utc` 是 epoch **秒**（REAL）—— 换算钉在扫描器边界，
+  表内不留两种单位。回退（降回 v68）只降版本号是安全的：旧代码不认识这三列。
 - 迁移回归：`tests/matters/test_contact_v54_migration.py` +
   `test_contact_v55_locks.py` + `test_contact_v59_formal_name.py` +
-  `test_contact_v67_indexes.py`。
+  `test_contact_v67_indexes.py` + `test_contact_v69_calendar_fields.py`。
 
 ### 2.1 三个「名字」字段的分工（WP-6 A 厘清）
 
@@ -101,6 +108,32 @@ owner 的二分是**正式名**（系统 / 合同上的那个，中文或英文�
   账本 0 条）。现在它和别人一样进 `contact` / `contact_email_link`。
 - 引导：`run_scan` 自解析自有集时，先 `service.ensure_self_bootstrap` 再
   `resolve_self_addresses`（顺序不可换，见 §4.1）。
+
+### 3.1 日历第三源（`src/contacts/calendar_scan.py`，L4 批次 1 #4）
+
+邮件两源（sender / to+cc）之外的第三源：`calendar_event` 的与会者 → L0 建档 +
+`contact` 三列聚合缓存（v69）。
+
+- 节拍：`new_watcher._scan_calendar_contacts`，独立 env
+  `MAILAGENT_CONTACT_CALENDAR_INTERVAL_SEC`（默认 900s，下限 60s；🔴 **绝不挂 5s
+  radar poll**）。运行前提 `CALENDAR_CALDAV_SYNC_ENABLED`，关掉时整段跳过（日历表
+  是陈旧快照，重算出来的「下一场会议」只会是过时事实）。纯本地 SQLite，零 CalDAV 调用。
+- 🔴 **全量重算，不用 watermark**：`email_metadata` 能用水位是因为它 insert-only；
+  `calendar_event` 是**可变表**（改期 / 取消 / 软删回写既有行），且 `next_meeting_at`
+  本身就是随时间流逝会变的量。窗口 = 过去 180d / 未来 60d，**窗口是语义的一部分**
+  （`meeting_count` 读作「最近半年见了几次」而不是历史总次数）。
+- 口径三分（按 RRULE 展开后的 occurrence 算，不是一行事件算一次）：已结束的进
+  `meeting_count` / `last_met_at`；尚未开始的取最早进 `next_meeting_at`；**正在进行中
+  的两边都不算**。CANCELLED 与软删事件不计；会议取消/改期出窗后三列退回默认值
+  （0 / NULL / NULL）—— 少了这一步三列就成了「只增不减」的谎。
+- 参与者 = ATTENDEE ∪ ORGANIZER（活库实测 163 个事件里有 7 个 organizer 不在
+  ATTENDEE 列表里）。身份判据仍**只有归一 email**：与会者 CN 只在**新建**那一行当
+  种子，不覆盖既有联系人的姓名；**无邮箱的与会者不产生任何 contact 行**。已有联系人
+  只被写这三列 + `updated_at`。
+- 幂等：同一份数据重跑零写（`updated_at` 也不动），只在真有行变化时广播
+  `contact.changed`（`scope='calendar_scan'`，不带 `contact_ids` ⇒ 只失效列表前缀）。
+- 读面：`/api/contacts` 列表行与 `/api/contacts/{id}` 详情都透出三列；**UI 展示尚未做**
+  （数据先行），`frontend/src/shared/api/types/contact.ts` 的 DTO 也还没跟进这三个字段。
 
 ## 4. 治理写面（`src/contacts/service.py`，唯一写侧）
 
@@ -315,11 +348,11 @@ worker 单事件循环，裸阻塞 sqlite3 留在循环上就是 head-of-line。
 
 ## 8. 测试与闸
 
-- Python：`tests/contacts/`（taxonomy / scanner / service / identity locks /
-  org relations / **self identity** / REST 面 / **keyset 分页三档等价 + 并列不重不漏 +
-  游标 arity 校验 + 行形状不漏内部列**）+ 迁移
+- Python：`tests/contacts/`（taxonomy / scanner / **日历第三源三列口径与幂等** /
+  service / identity locks / org relations / **self identity** / REST 面 /
+  **keyset 分页三档等价 + 并列不重不漏 + 游标 arity 校验 + 行形状不漏内部列**）+ 迁移
   `tests/matters/test_contact_v54_migration.py`、`test_contact_v55_locks.py`、
-  `test_contact_v67_indexes.py`。
+  `test_contact_v67_indexes.py`、`test_contact_v69_calendar_fields.py`。
 - 跨语言闸：`tests/config/test_contact_enum_parity.py`（taxonomy 枚举/可锁字段 ↔
   TS `types/contact.ts`）。
 - 前端：`frontend/tests/components/contacts/`（列表多选条 / merge 模型 /

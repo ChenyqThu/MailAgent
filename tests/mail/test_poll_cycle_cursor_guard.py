@@ -84,6 +84,7 @@ def _watcher(tmp_path: Path, backend_result):
     w._process_llm_retry_queue = _stub("llm_retry")
     w._detect_and_sync_flag_changes = _stub("flags")
     w._extract_contacts = _stub("contacts")
+    w._scan_calendar_contacts = _stub("calendar_contacts")
     w._contact_governance_tick = _stub("contact_governance")
     return w
 

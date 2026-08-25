@@ -109,6 +109,7 @@ _MANAGED_ENV_KEYS: List[str] = [
     "CALENDAR_CALDAV_SYNC_WINDOW_FUTURE_DAYS",
     # 会前提醒提前量 (Lane 2 #4, 分钟, 默认 10; AccountsTab 日历面 davmail 分支)。
     "CALENDAR_REMINDER_LEAD_MINUTES",
+    # MAILAGENT_CONTACT_CALENDAR_INTERVAL_SEC 有意不受管 (08-24 复核, 见 env-keys.ts 同位注释)。
     # — Folder sync (多文件夹同步窗口; SYNC_FOLDERS 白名单走 folder API 不在此列。
     # FOLDER_NOTIFY_ENABLED / FOLDER_LLM_DISABLED 有意不受管 —— JSON 裸文本框是
     # 错解, 正解 = 文件夹 UI per-folder 双勾, 排后续版本, 见 env-keys.ts 同位注释)
