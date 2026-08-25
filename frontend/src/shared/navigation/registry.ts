@@ -479,6 +479,14 @@ export function navDomainPanelEntries(
     .sort((a, b) => (a.panel?.order ?? 0) - (b.panel?.order ?? 0))
 }
 
+/** 域有没有二级栏（0825 dogfood 拍板）：单入口域（日历/事项/通讯录/设置）自己就是
+ *  list + page 的完整呈现，面板只剩一行重复格身份的行，没有导航价值 —— 不渲染。
+ *  判据从 registry 派生（本域 panel 行 >1），域内容将来长出第二条 entry 时面板
+ *  自动回来，不用改这里。 */
+export function navDomainHasPanel(entries: readonly NavEntry[], domain: NavDomain): boolean {
+  return navDomainPanelEntries(entries, domain).length > 1
+}
+
 /** 当前路由归属的域（导轨选中格 + 面板显示哪个域）。判据 = 门控过滤后**任一**条目
  *  的选中态命中（`/sessions` 因此归 agents 域，虽然它没有导轨格）。无命中（理论上
  *  只有 popout 之类的非路由场景）→ null，调用方自己给缺省。 */

@@ -26,6 +26,7 @@ import { usePollingFallback } from '@shared/hooks/usePollingFallback'
 import { isDraftsMailbox, isInboxMailbox, mailboxForView } from '@shared/lib/mailboxSemantics'
 import {
   navActiveDomain,
+  navDomainHasPanel,
   navigateToNavEntry,
   preloadNavEntry,
   type NavBadgeKind,
@@ -69,6 +70,8 @@ export function Sidebar(): React.ReactElement {
   // 当前域（导轨选中格 + 面板内容）。无命中回落邮件域 —— registry 覆盖全部路由，
   // 理论上只在测试路由树缺路由时走到。
   const activeDomain = navActiveDomain(navEntries, pathname) ?? 'mail'
+  // 单入口域无二级栏（0825 dogfood 拍板，判据见 registry.navDomainHasPanel）。
+  const hasPanel = navDomainHasPanel(navEntries, activeDomain)
 
   // Mailbox counts — SSE driven (useEventBridge invalidate ['mailboxes']);
   // polling 作 SSE 断线 fallback.
@@ -158,9 +161,10 @@ export function Sidebar(): React.ReactElement {
   }
 
   /** 导轨格点击：切域 = 导航到该格的 entry；点当前域的格 = 折叠/展开面板
-   *  （快捷路径；显式入口是 rail 底部的 RailToggle，0825 dogfood 补）。 */
+   *  （快捷路径；显式入口是 rail 底部的 RailToggle，0825 dogfood 补）。
+   *  无面板域没有可开合的东西 —— 点当前格退化为重导航（回该域默认落点）。 */
   const handleRailCellClick = (entry: NavEntry): void => {
-    if (entry.domain === activeDomain) {
+    if (entry.domain === activeDomain && hasPanel) {
       toggleCollapsed()
       return
     }
@@ -172,8 +176,13 @@ export function Sidebar(): React.ReactElement {
   }
 
   /** 导轨头像点击：面板收起时先展开（popover 需要面板在场才有锚定处），再开
-   *  账户菜单 —— 老收起态的同款 idiom（延一拍让宽度过渡先起步）。 */
+   *  账户菜单 —— 老收起态的同款 idiom（延一拍让宽度过渡先起步）。
+   *  无面板域连锚定处都没有 —— 直接去账户设置（popover 里唯一动作的落点）。 */
   const handleAvatarClick = (): void => {
+    if (!hasPanel) {
+      void navigate({ to: '/settings', search: { tab: 'accounts' } })
+      return
+    }
     if (collapsed) {
       setCollapsed(false)
       window.setTimeout(() => setAccountOpen(true), 60)
@@ -196,32 +205,34 @@ export function Sidebar(): React.ReactElement {
         monogram={account.monogram}
         accountTitle={t('nav.account.tooltip', { email: accountEmail ?? account.localPart })}
         panelCollapsed={collapsed}
-        showPanelToggle={!forcedCollapsed}
+        showPanelToggle={!forcedCollapsed && hasPanel}
         onPanelToggle={toggleCollapsed}
         onAvatarClick={handleAvatarClick}
         onCellClick={handleRailCellClick}
         onCellHover={handleEntryHover}
       />
-      <DomainPanel
-        domain={activeDomain}
-        entries={navEntries}
-        badgeValue={badgeValue}
-        onEntryClick={handleEntryClick}
-        onEntryHover={handleEntryHover}
-        onUnreadBadgeClick={handleUnreadBadgeClick}
-        onCollapse={toggleCollapsed}
-        account={account}
-        accountEmail={accountEmail}
-        accountOpen={accountOpen}
-        onAccountOpenChange={setAccountOpen}
-        onAddAccount={() => {
-          setAccountOpen(false)
-          // Sprint 18 PR C — `/settings` requires `tab` search param. Land
-          // the user on Accounts since that's where they came to set up
-          // a new account.（有意保留的路径字面量：非 entry 默认落点，Step R 定案⑤）
-          void navigate({ to: '/settings', search: { tab: 'accounts' } })
-        }}
-      />
+      {hasPanel && (
+        <DomainPanel
+          domain={activeDomain}
+          entries={navEntries}
+          badgeValue={badgeValue}
+          onEntryClick={handleEntryClick}
+          onEntryHover={handleEntryHover}
+          onUnreadBadgeClick={handleUnreadBadgeClick}
+          onCollapse={toggleCollapsed}
+          account={account}
+          accountEmail={accountEmail}
+          accountOpen={accountOpen}
+          onAccountOpenChange={setAccountOpen}
+          onAddAccount={() => {
+            setAccountOpen(false)
+            // Sprint 18 PR C — `/settings` requires `tab` search param. Land
+            // the user on Accounts since that's where they came to set up
+            // a new account.（有意保留的路径字面量：非 entry 默认落点，Step R 定案⑤）
+            void navigate({ to: '/settings', search: { tab: 'accounts' } })
+          }}
+        />
+      )}
     </aside>
   )
 }

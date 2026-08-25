@@ -314,11 +314,11 @@ describe('IconRail ↔ nav registry 投影', () => {
     navigate.mockRestore()
   })
 
-  test('点当前域的格 = 折叠/展开面板，不导航', async () => {
-    const { container, router } = await renderShell('/matters')
+  test('点当前域的格 = 折叠/展开面板，不导航（有面板域）', async () => {
+    const { container, router } = await renderShell('/')
     const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
     const cell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
-      (c) => c.querySelector('.raillabel')?.textContent === '事项'
+      (c) => c.querySelector('.raillabel')?.textContent === '邮件'
     )!
     expect(useNavCollapsed.getState().collapsed).toBe(false)
     fireEvent.click(cell)
@@ -326,6 +326,18 @@ describe('IconRail ↔ nav registry 投影', () => {
     fireEvent.click(cell)
     expect(useNavCollapsed.getState().collapsed).toBe(false)
     expect(navigate).not.toHaveBeenCalled()
+    navigate.mockRestore()
+  })
+
+  test('无面板域点当前格 = 重导航，不动折叠偏好', async () => {
+    const { container, router } = await renderShell('/matters')
+    const navigate = vi.spyOn(router, 'navigate').mockImplementation(async () => {})
+    const cell = Array.from(container.querySelectorAll('[data-nav-rail] .nav-rail-cell')).find(
+      (c) => c.querySelector('.raillabel')?.textContent === '事项'
+    )!
+    fireEvent.click(cell)
+    expect(useNavCollapsed.getState().collapsed).toBe(false)
+    expect(navigate.mock.calls.at(-1)?.[0]).toMatchObject({ to: '/matters' })
     navigate.mockRestore()
   })
 })
@@ -347,16 +359,19 @@ describe('DomainPanel ↔ nav registry 投影', () => {
     expect(panelRowLabels(container)).toEqual(['MailAgent', 'Custom Agent', '报告', 'Chats'])
   })
 
-  test('其余各域：面板行 = registry 该域投影（逐域）', async () => {
-    for (const [path, domain] of [
-      ['/matters', 'matters'],
-      ['/contacts', 'contacts'],
-      ['/admin/calendar', 'calendar'],
-      ['/admin/llm', 'ops'],
-      ['/settings', 'settings']
-    ] as const) {
+  test('运维域：面板行 = registry 投影', async () => {
+    const { container } = await renderShell('/admin/llm')
+    expect(panelRowLabels(container)).toEqual(projectedPanel('ops'))
+  })
+
+  // 0825 dogfood 拍板：单入口域（日历/事项/通讯录/设置）自己就是 list + page 呈现，
+  // 一行的面板没有导航价值 —— 不渲染。判据派生自 registry（navDomainHasPanel），
+  // 这些域长出第二条 entry 后本测试会红，届时按新形态改期望即可。
+  test('单入口域：不渲染面板（rail 开合按钮同隐）', async () => {
+    for (const path of ['/matters', '/contacts', '/admin/calendar', '/settings'] as const) {
       const { container } = await renderShell(path)
-      expect(panelRowLabels(container), path).toEqual(projectedPanel(domain))
+      expect(container.querySelector('[data-nav-panel]'), path).toBeNull()
+      expect(container.querySelector('.nav-rail-toggle'), path).toBeNull()
       cleanup()
     }
   })
