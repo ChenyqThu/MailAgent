@@ -13,6 +13,15 @@ import type { CalendarEventOccurrence } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
 import { shortTime } from './lib/format'
 import { extractMeetingLink, openMeetingLink } from './lib/meeting-link'
+import { useEventDrag } from './hooks/useEventDrag'
+import type { DragMode } from './lib/timeGrid'
+import type { CalendarTimeOverride } from '@shared/state/calendar-time-override'
+
+export interface EventRescheduleInput {
+  startIso: string
+  endIso: string
+  mode: DragMode
+}
 
 interface EventBlockProps {
   event: CalendarEventOccurrence
@@ -26,6 +35,10 @@ interface EventBlockProps {
   totalCols?: number
   selected?: boolean
   onClick?: () => void
+  /** Lane C (#5) — 拖拽改期/改时长的提交口. 不传 = 不可拖 (非组织者 / 无写能力). */
+  onReschedule?: (next: EventRescheduleInput) => void
+  /** 乐观 override 生效期内的显示时间 (服务端还没回填时屏幕上的真相). */
+  timeOverride?: CalendarTimeOverride | null
 }
 
 // F32 — shortTime 抽到 ./lib/format
@@ -43,20 +56,38 @@ export function EventBlock({
   col = 0,
   totalCols = 1,
   selected = false,
-  onClick
+  onClick,
+  onReschedule,
+  timeOverride = null
 }: EventBlockProps): React.ReactElement {
   const { t } = useTranslation()
   const untitled = t('calendar.shared.untitled', '未命名事件')
-  const h = Math.max(heightPx - 2, 22)
+  // 乐观 override 期内, 显示与拖拽基准都以 override 为准 —— 屏幕上看到的时间
+  // 就是再拖一次的起点, 也是提交出去的绝对时间.
+  const startIso = timeOverride?.startIso ?? event.occurrence_start_iso
+  const endIso = timeOverride?.endIso ?? event.occurrence_end_iso
+  const drag = useEventDrag({
+    startMs: Date.parse(startIso),
+    endMs: Date.parse(endIso),
+    topPx,
+    enabled: !!onReschedule,
+    onCommit: ({ startMs, endMs, mode }) =>
+      onReschedule?.({
+        startIso: new Date(startMs).toISOString(),
+        endIso: new Date(endMs).toISOString(),
+        mode
+      })
+  })
+  const h = Math.max(heightPx + drag.heightDeltaPx - 2, 22)
   const widthPct = 100 / Math.max(totalCols, 1)
   const leftPct = col * widthPct
   const short = h <= 30
-  const isPast = new Date(event.occurrence_end_iso) < new Date()
+  const isPast = new Date(endIso) < new Date()
   const meeting = hasMeetingLink(event)
   // 阶段2·2.5 — hover 浮出 Join 小钮 (occurrence 无 description, 凭 url/location).
   const joinLink = extractMeetingLink({ url: event.url, location: event.location })
-  const startTxt = shortTime(event.occurrence_start_iso)
-  const endTxt = shortTime(event.occurrence_end_iso)
+  const startTxt = shortTime(startIso)
+  const endTxt = shortTime(endIso)
   const titleAttr = `${event.summary || untitled}\n${startTxt} – ${endTxt}${event.location ? '\n' + event.location : ''}`
 
   return (
@@ -69,12 +100,19 @@ export function EventBlock({
       data-resp={(event.response_status || '').toUpperCase()}
       data-status={(event.status || '').toUpperCase()}
       style={{
-        top: `${topPx}px`,
+        top: `${topPx + drag.offsetPx}px`,
         height: `${h}px`,
         left: `calc(${leftPct}% + 2px)`,
-        width: `calc(${widthPct}% - 4px)`
+        width: `calc(${widthPct}% - 4px)`,
+        // 拖拽中浮到并发邻块之上, 光标跟手 (静息态不改, 免得整片块看着都能拖).
+        ...(drag.isDragging ? { zIndex: 6, cursor: 'grabbing' } : null)
       }}
-      onClick={onClick}
+      onPointerDown={(e) => drag.startDrag(e, 'move')}
+      onClick={() => {
+        // 真拖拽之后浏览器仍会补一发 click — 吞掉, 否则松手就把抽屉开了.
+        if (drag.consumeClickSuppression()) return
+        onClick?.()
+      }}
       onKeyDown={(e) => {
         if (e.key === 'Enter' || e.key === ' ') {
           e.preventDefault()
@@ -98,6 +136,8 @@ export function EventBlock({
         <button
           type="button"
           className="evt-join"
+          // 想点 Join 时手抖几 px 不该把会议改期掉 — 这颗钮不参与拖拽起手.
+          onPointerDown={(e) => e.stopPropagation()}
           onClick={(e) => {
             e.stopPropagation()
             openMeetingLink(joinLink)
@@ -108,6 +148,26 @@ export function EventBlock({
           <Video size={10} strokeWidth={2.4} aria-hidden />
           {t('calendar.join.short', 'Join')}
         </button>
+      )}
+      {onReschedule && (
+        // 底缘改时长手柄. 纯交互热区 (无描边无底色), 靠 ns-resize 光标提示;
+        // 尺寸小于 15min 一格 (12px) 免得盖住块内文本.
+        <div
+          className="evt-resize"
+          aria-hidden
+          onPointerDown={(e) => {
+            e.stopPropagation()
+            drag.startDrag(e, 'resize')
+          }}
+          style={{
+            position: 'absolute',
+            left: 0,
+            right: 0,
+            bottom: 0,
+            height: '6px',
+            cursor: 'ns-resize'
+          }}
+        />
       )}
     </div>
   )

@@ -10,8 +10,11 @@ import { ChevronLeft, ChevronRight } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { CalendarQueryError } from '../CalendarQueryError'
-import { EventBlock } from '../EventBlock'
+import { EventBlock, type EventRescheduleInput } from '../EventBlock'
 import { isTodayLocal, pad, shortTime, ymd } from '../lib/format'
+import { occurrenceKey } from '../lib/key-nav'
+import { canRsvpFor } from '../lib/rsvp'
+import { HOUR_PX } from '../lib/timeGrid'
 import { DOW_EN_FULL, weekdayMin } from '../lib/weekdays'
 import {
   addDays,
@@ -23,6 +26,10 @@ import {
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import {
+  useCalendarTimeOverrides,
+  type CalendarTimeOverride
+} from '@shared/state/calendar-time-override'
 
 import { CalendarViewEmpty } from './CalendarViewEmpty'
 import { TimelineSkeleton } from './TimelineSkeleton'
@@ -38,9 +45,12 @@ interface Props {
   /** F5 — selected event key (= ``${id}-${occurrence_start_iso}``) 用于
    *  EventBlock selected 高亮 + F4/Q13 rail 行锚点. */
   selectedKey?: string | null
+  /** Lane C (#5) — 拖拽改期提交口 (Layout 持 mutation, 切视图不丢). 不传 = 只读. */
+  onReschedule?: (occ: CalendarEventOccurrence, next: EventRescheduleInput) => void
+  /** 判组织者用 — 与 drawer 的编辑门控同一判据 (非组织者只能 RSVP, 不能改期). */
+  userEmail?: string | null
 }
 
-const HOUR_PX = 48
 const GRID_COLS_ONE = '56px 1fr'
 
 // F32 — pad/ymd/shortTime/isSameDay/isTodayLocal 抽到 ../lib/format
@@ -136,11 +146,15 @@ export function DayView({
   calendarName,
   selectedCalendars,
   onSelect,
-  selectedKey = null
+  selectedKey = null,
+  onReschedule,
+  userEmail = null
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [now, setNow] = useState(() => new Date())
+  // Lane C (#5) — 拖完 10s 内以本地 override 定位/显示 (服务端还没回填).
+  const timeOverrides = useCalendarTimeOverrides((s) => s.overrides)
 
   const selectedDate = useMemo(() => date ?? todayStartLocal(), [date])
   const [miniMonth, setMiniMonth] = useState<Date>(() => startOfMonth(selectedDate))
@@ -213,6 +227,12 @@ export function DayView({
   const timed = dayEvents.filter((e) => !e.is_all_day)
   const laid = layoutDay(timed)
   const total = dayEvents.length
+
+  // Lane C (#5) — timeline 与左栏行是同屏两处, override 期内必须显示同一个时间.
+  // 恒走 occurrenceKey: override 是 useEventReschedule 用它写进去的, 这里手抄一份
+  // 就等于用两把尺子 —— 一旦形状变了 override 静默失配 (块弹回旧时间, 无报错).
+  const overrideOf = (occ: CalendarEventOccurrence): CalendarTimeOverride | null =>
+    timeOverrides[occurrenceKey(occ)] ?? null
 
   const dayMs = dayStart.getTime()
   const isToday = isTodayLocal(selectedDate)
@@ -294,7 +314,8 @@ export function DayView({
               <span className="dr-bar" />
               <div className="min-w-0 flex-1">
                 <div className="dr-time">
-                  {shortTime(occ.occurrence_start_iso)} – {shortTime(occ.occurrence_end_iso)}
+                  {shortTime(overrideOf(occ)?.startIso ?? occ.occurrence_start_iso)} –{' '}
+                  {shortTime(overrideOf(occ)?.endIso ?? occ.occurrence_end_iso)}
                 </div>
                 <div className={cn('dr-title truncate', !occ.summary && 'empty-field')}>
                   {occ.summary || t('calendar.shared.untitled', '未命名事件')}
@@ -368,14 +389,18 @@ export function DayView({
                     <div key={h} className="hour-cell" />
                   ))}
                   {laid.map(({ occ, col, totalCols }) => {
-                    const startMs = Date.parse(occ.occurrence_start_iso)
-                    const endMs = Date.parse(occ.occurrence_end_iso)
+                    const key = occurrenceKey(occ)
+                    const override = overrideOf(occ)
+                    const startMs = Date.parse(override?.startIso ?? occ.occurrence_start_iso)
+                    const endMs = Date.parse(override?.endIso ?? occ.occurrence_end_iso)
                     const topPx = ((startMs - dayMs) / 3_600_000) * HOUR_PX
                     const heightPx = ((endMs - startMs) / 3_600_000) * HOUR_PX
-                    const sel = selectedKey === `${occ.id}-${occ.occurrence_start_iso}`
+                    const sel = selectedKey === key
+                    // 非组织者改不动 (服务端也会拒), 不给必失败的拖拽手感.
+                    const canDrag = !!onReschedule && !canRsvpFor(occ.organizer, userEmail)
                     return (
                       <EventBlock
-                        key={`b-${occ.id}-${occ.occurrence_start_iso}`}
+                        key={`b-${key}`}
                         event={occ}
                         topPx={topPx}
                         heightPx={heightPx}
@@ -383,6 +408,8 @@ export function DayView({
                         totalCols={totalCols}
                         selected={sel}
                         onClick={() => onSelect(occ)}
+                        timeOverride={override}
+                        onReschedule={canDrag ? (next) => onReschedule?.(occ, next) : undefined}
                       />
                     )
                   })}

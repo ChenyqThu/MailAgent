@@ -17,6 +17,9 @@ import { create } from 'zustand'
 
 export interface UndoEntry {
   id: number
+  /** toast 图标语义 (删除 = 垃圾桶 / 改期 = 时钟). 默认 'delete'.
+   *  存字符串不存 ReactNode — state 要保持纯 serializable. */
+  kind?: 'delete' | 'reschedule'
   title: string
   subtitle?: string
   /** 撤销窗口长度 (ms). 5 秒 = mockup 标准. */

@@ -8,7 +8,7 @@
 // PageFrame 的 scroll container.
 
 import { useRef } from 'react'
-import { Trash2 } from 'lucide-react'
+import { CalendarClock, Trash2 } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 
 import { DUR, gsap, useGSAP } from '@shared/lib/gsap'
@@ -61,7 +61,11 @@ function UndoToast({ item, onUndo }: { item: UndoEntry; onUndo: () => void }): R
   return (
     <div ref={rootRef} className="undo-toast glass-pop" role="status">
       <span className="undo-ic" aria-hidden>
-        <Trash2 size={15} strokeWidth={2} />
+        {item.kind === 'reschedule' ? (
+          <CalendarClock size={15} strokeWidth={2} />
+        ) : (
+          <Trash2 size={15} strokeWidth={2} />
+        )}
       </span>
       <div className="undo-txt">
         <div className="undo-t1">{item.title}</div>

@@ -6,8 +6,11 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useTranslation } from 'react-i18next'
 
 import { CalendarQueryError } from '../CalendarQueryError'
-import { EventBlock } from '../EventBlock'
+import { EventBlock, type EventRescheduleInput } from '../EventBlock'
 import { isTodayLocal, pad, ymd } from '../lib/format'
+import { occurrenceKey } from '../lib/key-nav'
+import { canRsvpFor } from '../lib/rsvp'
+import { HOUR_PX } from '../lib/timeGrid'
 import { DOW_EN } from '../lib/weekdays'
 import {
   useCalendarEventsInWindow,
@@ -17,6 +20,7 @@ import {
 } from '../hooks/useCalendarEvents'
 import type { CalendarEventOccurrence } from '@shared/api/types'
 import { cn } from '@shared/lib/cn'
+import { useCalendarTimeOverrides } from '@shared/state/calendar-time-override'
 
 import { CalendarViewEmpty } from './CalendarViewEmpty'
 import { TimelineSkeleton } from './TimelineSkeleton'
@@ -32,9 +36,12 @@ interface Props {
   /** F5 — selected event key (= ``${id}-${occurrence_start_iso}``) 由 Layout
    *  传, view 比对来高亮 selected event block. */
   selectedKey?: string | null
+  /** Lane C (#5) — 拖拽改期提交口 (Layout 持 mutation, 切视图不丢). 不传 = 只读. */
+  onReschedule?: (occ: CalendarEventOccurrence, next: EventRescheduleInput) => void
+  /** 判组织者用 — 与 drawer 的编辑门控同一判据 (非组织者只能 RSVP, 不能改期). */
+  userEmail?: string | null
 }
 
-const HOUR_PX = 48
 const GRID_COLS = '56px repeat(7, 1fr)'
 
 // F32 — ymd/pad/isSameDay/isTodayLocal 抽到 ../lib/format
@@ -44,11 +51,15 @@ export function WeekView({
   calendarName,
   selectedCalendars,
   onSelect,
-  selectedKey = null
+  selectedKey = null,
+  onReschedule,
+  userEmail = null
 }: Props): React.ReactElement {
   const { t } = useTranslation()
   const scrollRef = useRef<HTMLDivElement | null>(null)
   const [now, setNow] = useState(() => new Date())
+  // Lane C (#5) — 拖完 10s 内以本地 override 定位/显示 (服务端还没回填).
+  const timeOverrides = useCalendarTimeOverrides((s) => s.overrides)
 
   // refresh now-line each minute
   useEffect(() => {
@@ -204,14 +215,21 @@ export function WeekView({
                 ))}
                 {/* events */}
                 {laid.map(({ occ, col, totalCols }) => {
-                  const startMs = Date.parse(occ.occurrence_start_iso)
-                  const endMs = Date.parse(occ.occurrence_end_iso)
+                  // 恒走 occurrenceKey: override 是 useEventReschedule 用它写进去的,
+                  // 这里手抄一份就等于用两把尺子 —— 一旦形状变了 override 静默失配
+                  // (块弹回旧时间, 无报错).
+                  const key = occurrenceKey(occ)
+                  const override = timeOverrides[key] ?? null
+                  const startMs = Date.parse(override?.startIso ?? occ.occurrence_start_iso)
+                  const endMs = Date.parse(override?.endIso ?? occ.occurrence_end_iso)
                   const topPx = ((startMs - dayMs) / 3_600_000) * HOUR_PX
                   const heightPx = ((endMs - startMs) / 3_600_000) * HOUR_PX
-                  const selected = selectedKey === `${occ.id}-${occ.occurrence_start_iso}`
+                  const selected = selectedKey === key
+                  // 非组织者改不动 (服务端也会拒), 不给必失败的拖拽手感.
+                  const canDrag = !!onReschedule && !canRsvpFor(occ.organizer, userEmail)
                   return (
                     <EventBlock
-                      key={`${occ.id}-${occ.occurrence_start_iso}`}
+                      key={key}
                       event={occ}
                       topPx={topPx}
                       heightPx={heightPx}
@@ -219,6 +237,8 @@ export function WeekView({
                       totalCols={totalCols}
                       selected={selected}
                       onClick={() => onSelect(occ)}
+                      timeOverride={override}
+                      onReschedule={canDrag ? (next) => onReschedule?.(occ, next) : undefined}
                     />
                   )
                 })}

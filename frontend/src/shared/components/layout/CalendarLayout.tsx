@@ -22,6 +22,7 @@ import { CalendarToolbar, type CalendarView } from '../calendar/CalendarToolbar'
 import { EventDetailDrawer } from '../calendar/EventDetailDrawer'
 import { UndoToastStack } from '../calendar/UndoToastStack'
 import { useCalendarShortcuts } from '../calendar/hooks/useCalendarShortcuts'
+import { useEventReschedule } from '../calendar/hooks/useEventReschedule'
 import {
   pickSyncHead,
   relativeTime,
@@ -169,6 +170,17 @@ export function CalendarLayout(): React.ReactElement {
     staleTime: 5 * 60_000
   })
   const recurringCount = recurringList?.length ?? null
+
+  // Lane C (#5) — 拖拽改期: mutation 挂在 Layout (5s 撤销窗口内切视图不丢);
+  // userEmail 判组织者 (与 drawer 编辑门控同判据), 与 drawer 共用 settings 缓存.
+  const reschedule = useEventReschedule()
+  const { data: settings } = useQuery({
+    queryKey: qk.settings.all(),
+    queryFn: () => mailApi.settings.get(),
+    staleTime: 5 * 60_000
+  })
+  const userEmail = settings?.userEmail ?? null
+  const onReschedule = caps.write ? reschedule : undefined
 
   // F19/Q6 — 健康优先选行统一走 pickSyncHead (与 Toolbar sync-pill /
   // CalendarViewEmpty 同源, 孤儿行场景不再上绿下红同屏矛盾).
@@ -329,6 +341,8 @@ export function CalendarLayout(): React.ReactElement {
                   selectedCalendars={selectedCalendars}
                   onSelect={handleSelect}
                   selectedKey={selectedKey}
+                  onReschedule={onReschedule}
+                  userEmail={userEmail}
                 />
               </CalendarErrorBoundary>
             )}
@@ -339,6 +353,8 @@ export function CalendarLayout(): React.ReactElement {
                   selectedCalendars={selectedCalendars}
                   onSelect={handleSelect}
                   selectedKey={selectedKey}
+                  onReschedule={onReschedule}
+                  userEmail={userEmail}
                 />
               </CalendarErrorBoundary>
             )}
